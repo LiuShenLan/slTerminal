@@ -67,7 +67,10 @@ pub(crate) fn prepare_gui_process() -> std::io::Result<()> {
 
 /// 与 GPUI 主显示器 DPI 查询同源的缩放预取:原生窗口创建前拿到 scale,
 /// 首窗尺寸不漂(开窗后改名/重排的代价是二次 SetWindowPos)。
-#[allow(dead_code)] // 消费点 = M3.2 startup_geometry(116×30 基准网格反推像素尺寸)。
+///
+/// 消费点 = `app_shell::windowing::startup_geometry::preferred_size`
+/// (09 篇 M10.7 出口验收:首窗创建前主屏 DPI 一步到位;运行时多显示器
+/// DPI 变化整包交 GPUI 平台层,不 fork 窗口库)。
 pub(crate) fn primary_display_scale() -> Option<f32> {
     use windows_sys::Win32::Foundation::POINT;
     use windows_sys::Win32::Graphics::Gdi::{MONITOR_DEFAULTTOPRIMARY, MonitorFromPoint};

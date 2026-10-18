@@ -42,6 +42,8 @@ pub(crate) mod settings_pane;
 pub(crate) mod theme;
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod ui_tests;
+// 窗口视效 + 壁纸(09 篇 M10.7):模糊材质/透明度纪律/有界壁纸加载。
+pub(crate) mod wallpaper;
 pub(crate) mod windowing;
 pub(crate) mod workspace;
 

@@ -354,8 +354,13 @@ impl SettingsPane {
         cx.notify();
     }
 
+    /// 滑块拖动快路径(09 篇点 41):只改视效全局与壳色 alpha,
+    /// 不读设置文件、不重建壁纸纹理;落盘等停手后的 commit。
     pub(super) fn preview_opacity(&mut self, value: f32, cx: &mut Context<'_, Self>) {
         self.runtime.opacity = value.clamp(0.0, 1.0);
+        crate::app_shell::wallpaper::set_opacity_live(self.runtime.opacity, cx);
+        crate::app_shell::theme::reapply_shell_opacity(cx);
+        cx.refresh_windows();
         cx.notify();
     }
 

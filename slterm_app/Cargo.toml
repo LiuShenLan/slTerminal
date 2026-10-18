@@ -177,6 +177,12 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_IO",
     # 全机进程快照(process_snapshot::windows::NtQuerySystemInformation)。
     "Wdk_System_SystemInformation",
+    # 窗口材质 gate(09 篇 M10.7):RtlGetVersion 判真实 build;
+    # OSVERSIONINFOW 是同一查询的输出结构。
+    "Wdk_System_SystemServices",
+    "Win32_System_SystemInformation",
+    # 窗口材质(09 篇 M10.7):DwmSetWindowAttribute/DwmEnableBlurBehindWindow。
+    "Win32_Graphics_Dwm",
     # 快照原生回归对拍:GetProcessTimes(process_snapshot 测试)。
     "Win32_System_Threading",
     # 托盘线程隐藏窗口的模块句柄(GetModuleHandleW,09 篇 M10.3)。

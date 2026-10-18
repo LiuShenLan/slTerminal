@@ -10,10 +10,7 @@ pub(super) mod startup_geometry;
 use std::path::PathBuf;
 use std::sync::mpsc;
 
-use gpui::{
-    App, AppContext as _, Bounds, Size, WindowBackgroundAppearance, WindowBounds, WindowOptions,
-    px, size,
-};
+use gpui::{App, AppContext as _, Bounds, Size, WindowBounds, WindowOptions, px, size};
 use gpui_component::{Root, TitleBar};
 
 use super::SltermShellEvent;
@@ -99,8 +96,10 @@ pub(crate) fn workspace_window_options(
         window_min_size: Some(size(px(MIN_WINDOW_SIZE.0), px(MIN_WINDOW_SIZE.1)).min(&bounds.size)),
         titlebar: Some(TitleBar::title_bar_options()),
         app_id: Some(brand::WINDOWS_APP_ID.to_owned()),
-        // 仅暗色 + 不透明底:壁纸/acrylic 归 09 篇。
-        window_background: WindowBackgroundAppearance::Opaque,
+        // 首帧即平台 backdrop(09 篇 M10.7):Mica/MicaAlt 原生枚举、
+        // Aero/Acrylic 走 Blurred;None 也保留透明交换链——GPUI Windows
+        // 渲染器按枚举选清屏 alpha,Opaque 会盖死透明度与材质。
+        window_background: crate::app_shell::wallpaper::initial_background_appearance(cx),
         focus,
         ..Default::default()
     }
@@ -161,8 +160,15 @@ pub(crate) fn open_initial_window(
         cx.new(|cx| Root::new(workspace, window, cx))
     });
     match result {
-        Ok(handle) if deferred_show => first_frame::present_then_show(handle.into(), cx),
-        Ok(_) => {}
+        Ok(handle) => {
+            // 视效落窗(09 篇 M10.7):应用原生 AccentPolicy/DWMSBT 并启动
+            // 壁纸加载。只改背景外观与绘制,不 show/activate——静默窗口的
+            // `apply_start_hidden` 形态不被覆盖。
+            crate::app_shell::wallpaper::refresh(cx);
+            if deferred_show {
+                first_frame::present_then_show(handle.into(), cx);
+            }
+        }
         Err(error) => {
             log::error!("failed to open main window: {error}");
             super::try_write_stderr(format_args!("failed to open main window: {error}"));
@@ -220,16 +226,26 @@ mod windowing_tests {
 
     /// 静默启动只改 `show`/`focus` 两轴,且不进入 present-then-show 链;
     /// 常规启动保持可视 + 聚焦形态(M3.1 首帧纪律不变)。
+    ///
+    /// M10.7 缝合点:视效初始化只写背景外观,不得回写 `show`/`focus`。
+    /// 这里把透明背景提前放进 options,验证 `apply_start_hidden` 的
+    /// show/focus=false 仍是最终形态。
     #[test]
     fn start_hidden_hides_the_window_and_skips_first_frame_present() {
         let mut hidden = WindowOptions {
             show: true,
             focus: true,
+            window_background: gpui::WindowBackgroundAppearance::Transparent,
             ..Default::default()
         };
         apply_start_hidden(&mut hidden, true);
         assert!(!hidden.show, "静默启动不得显示窗口");
         assert!(!hidden.focus, "静默启动不得抢焦点");
+        assert_eq!(
+            hidden.window_background,
+            gpui::WindowBackgroundAppearance::Transparent,
+            "视效背景外观不得被静默启动改写"
+        );
         assert!(
             !first_frame::defer_show(&mut hidden),
             "未曝光窗口不进入 present-then-show"
@@ -238,10 +254,15 @@ mod windowing_tests {
         let mut visible = WindowOptions {
             show: true,
             focus: true,
+            window_background: gpui::WindowBackgroundAppearance::Transparent,
             ..Default::default()
         };
         apply_start_hidden(&mut visible, false);
         assert!(visible.show && visible.focus, "常规启动形态不变");
+        assert_eq!(
+            visible.window_background,
+            gpui::WindowBackgroundAppearance::Transparent
+        );
     }
 
     /// 启动命令必须原样保留程序与参数(逐字,不经 shell 二次解析)。

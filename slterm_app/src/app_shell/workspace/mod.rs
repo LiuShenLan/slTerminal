@@ -612,6 +612,8 @@ impl SltermWorkspace {
                 // 每个终端视图(字体/字号/连字/选中复制/调色板热应用)。
                 let settings = cx.global::<crate::app_shell::config::Settings>().clone();
                 self.apply_settings_to_terminals(&settings, cx);
+                // 09 篇 M10.7:视效与 token 同一帧热应用(模糊/透明度/壁纸)。
+                crate::app_shell::wallpaper::refresh(cx);
                 self.sync_window_title(window, cx);
                 cx.refresh_windows();
                 cx.notify();
@@ -1520,6 +1522,9 @@ impl Render for SltermWorkspace {
             .on_action(cx.listener(|this, _: &SaveFile, _, cx| {
                 this.save_active_file(cx);
             }))
+            // 09 篇 M10.7:整窗壁纸垫在 chrome 之下(与系统 Mica/Aero 同一
+            // 层次语义);非整窗模式此层不绘制,由终端内容区的卡层承担。
+            .child(crate::app_shell::wallpaper::window_layer(cx))
             // 自绘标题栏(05 篇):活跃 tab 展示名 + 三钮 + 拖拽区。
             .child(title_bar)
             // 主行:ActivityBar(46px) + 侧栏内容区(可开合/拖宽) + 终端主区。
@@ -1549,6 +1554,11 @@ impl Render for SltermWorkspace {
                             .min_w_0()
                             .min_h_0()
                             .relative()
+                            // 窗口不透明度已在壳底色层(Root token)生效;终端
+                            // 默认格保持透明,由该层透出,避免同一区域二次
+                            // alpha 叠加。壁纸在底色之上、单元格之下;整窗
+                            // 模式此层不绘制。
+                            .child(crate::app_shell::wallpaper::card_layer(cx))
                             .children(content),
                     ),
             )

@@ -5,7 +5,7 @@
 //! 以及承载 `Changed` 热应用后的全局事实源。设置页写入后经
 //! [`Settings::from_runtime`] 重建并 `cx.set_global`——消费方始终读同一份。
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use gpui::Global;
 
@@ -13,7 +13,7 @@ use crate::app_shell::editor_theme::{self, EditorThemeTokens};
 use crate::gpui_terminal::colors::Palette;
 use crate::i18n::{LanguagePreference, UiLanguage};
 use crate::theme_library::ThemeLibraryStore;
-use slterm_settings::{RawSettings, RuntimeSettings, ThemeUiColors};
+use slterm_settings::{BlurMode, RawSettings, RuntimeSettings, ThemeEffects, ThemeUiColors};
 
 /// 默认字号:11.25pt × 4/3 = 15px(与上游配置缺省同链)。
 const DEFAULT_FONT_SIZE_PX: f32 = 15.0;
@@ -50,6 +50,20 @@ pub struct Settings {
     /// 静默启动(09 篇 M10.6):与 `tray` 合取决定首窗是否隐藏;
     /// 显式 CLI 启动(`--working-directory`/`-e`)恒不静默。
     pub silent_start: bool,
+    /// 窗口背景材质(D09-1 五档,默认 None;自定义主题可声明默认,
+    /// 用户显式值恒权威)。
+    pub blur: BlurMode,
+    /// 窗口不透明度:只透壳底色与终端默认背景,文字层恒不透明。
+    pub opacity: f32,
+    /// 壁纸路径;None = 无壁纸。加载/缩放/内存预算归 wallpaper 模块。
+    pub background_image: Option<PathBuf>,
+    /// 壁纸自身透明度,独立于窗口 opacity。
+    pub background_image_opacity: f32,
+    /// 壁纸 fit/alignment 存原文,解析归渲染层。
+    pub background_image_fit: Option<String>,
+    pub background_image_alignment: Option<String>,
+    /// 壁纸铺满整窗(含侧栏/标题栏)而非仅终端内容区。
+    pub background_image_cover_chrome: bool,
 }
 
 impl Global for Settings {}
@@ -100,7 +114,8 @@ impl Settings {
             .filter(|family| !family.is_empty())
             .map(str::to_owned)
             .unwrap_or_else(|| crate::app_shell::assets::REQUIRED_FONT_FAMILY.to_owned());
-        let (palette, ui) = resolve_theme(runtime, theme_root);
+        let (palette, ui, effects) = resolve_theme(runtime, theme_root);
+        let (opacity, blur) = effective_material(runtime, effects.as_ref());
         Settings {
             font_family: family.clone(),
             font_bold_family: family.clone(),
@@ -117,6 +132,13 @@ impl Settings {
             language: LanguagePreference::from(runtime.language).resolved(),
             tray: runtime.tray,
             silent_start: runtime.silent_start,
+            blur,
+            opacity,
+            background_image: runtime.background_image.as_deref().map(PathBuf::from),
+            background_image_opacity: runtime.background_image_opacity,
+            background_image_fit: runtime.background_image_fit.clone(),
+            background_image_alignment: runtime.background_image_alignment.clone(),
+            background_image_cover_chrome: runtime.background_image_cover_chrome,
         }
     }
 
@@ -148,9 +170,13 @@ impl Settings {
 /// `theme_foreground` 是显式前景覆盖,作用于终端正文。主题解析失败不把
 /// 启动/热应用升级成故障——回退内置目录默认(D06-3 的 linear)。
 ///
-/// 返回(终端调色板, UI 语义槽):编辑器的 `EditorThemeTokens` 从同一
-/// 分支装配,主题切换时三消费方与终端同步热应用。
-fn resolve_theme(runtime: &RuntimeSettings, theme_root: Option<&Path>) -> (Palette, ThemeUiColors) {
+/// 返回(终端调色板, UI 语义槽, 自定义主题视效缺省):编辑器的
+/// `EditorThemeTokens` 从同一分支装配,主题切换时消费方与终端同步热应用。
+/// 视效缺省只用于用户未显式写过的 opacity/blur(09 篇 M10.7)。
+fn resolve_theme(
+    runtime: &RuntimeSettings,
+    theme_root: Option<&Path>,
+) -> (Palette, ThemeUiColors, Option<ThemeEffects>) {
     if let Some(id) = runtime.custom_theme.as_deref() {
         let store = theme_root.map_or_else(ThemeLibraryStore::default, ThemeLibraryStore::new);
         match store.load(id).and_then(|document| {
@@ -163,6 +189,7 @@ fn resolve_theme(runtime: &RuntimeSettings, theme_root: Option<&Path>) -> (Palet
                 return (
                     Palette::from_definition(&definition, runtime.theme_foreground),
                     ui,
+                    Some(definition.effects),
                 );
             }
             Err(error) => {
@@ -174,7 +201,31 @@ fn resolve_theme(runtime: &RuntimeSettings, theme_root: Option<&Path>) -> (Palet
         Palette::from_term_theme(runtime.theme.term_theme(), runtime.theme_foreground),
         // 内置主题的 UI 语义槽 = 评审过的 ReviewedPalette 镜像。
         ThemeUiColors::from_palette(runtime.theme.reviewed_palette()),
+        None,
     )
+}
+
+/// 有效材质:用户显式写过的值(含显式 1.0 / none)恒权威;未写过时
+/// 可由自定义主题文档提供缺省,再退运行时默认。
+fn effective_material(
+    runtime: &RuntimeSettings,
+    effects: Option<&ThemeEffects>,
+) -> (f32, BlurMode) {
+    let opacity = if runtime.opacity_is_explicit() {
+        runtime.opacity
+    } else {
+        effects
+            .and_then(|effects| effects.opacity)
+            .unwrap_or(runtime.opacity)
+    };
+    let blur = if runtime.blur_is_explicit() {
+        runtime.blur
+    } else {
+        effects
+            .and_then(|effects| effects.blur)
+            .unwrap_or(runtime.blur)
+    };
+    (opacity.clamp(0.0, 1.0), blur)
 }
 
 #[cfg(test)]
@@ -349,6 +400,35 @@ mod config_tests {
             r#"{"session":{"silent_start":false},"system":{"tray":true}}"#,
         ));
         assert!(!no_silent.start_hidden());
+    }
+
+    /// D09-1:主题文档的视效缺省只填用户没写过的键;显式值(含 1.0/none)
+    /// 保持权威。
+    #[test]
+    fn custom_theme_effects_fill_only_unset_material_values() {
+        let directory = tempfile::tempdir().unwrap();
+        let themes = directory.path().join("themes");
+        let store = crate::theme_library::ThemeLibraryStore::new(&themes);
+        let mut definition =
+            slterm_settings::ThemeDefinition::from_builtin(slterm_settings::ThemeName::Nord);
+        definition.name = "Effects".to_owned();
+        definition.effects.opacity = Some(0.72);
+        definition.effects.blur = Some(BlurMode::Mica);
+        let document = crate::theme_library::from_definition(&definition).unwrap();
+        let stored = store.import(&document).unwrap();
+        let id = stored.id().unwrap();
+
+        let inherited = runtime(&format!(r#"{{"appearance": {{"custom_theme": "{id}"}}}}"#));
+        let settings = Settings::from_runtime_with_theme_root(&inherited, Some(&themes));
+        assert!((settings.opacity - 0.72).abs() < 1e-6, "缺省继承主题视效");
+        assert_eq!(settings.blur, BlurMode::Mica);
+
+        let explicit = runtime(&format!(
+            r#"{{"appearance": {{"custom_theme": "{id}", "opacity": 1.0, "blur": "none"}}}}"#
+        ));
+        let settings = Settings::from_runtime_with_theme_root(&explicit, Some(&themes));
+        assert!((settings.opacity - 1.0).abs() < 1e-6, "显式 1.0 必须权威");
+        assert_eq!(settings.blur, BlurMode::None, "显式 none 必须权威");
     }
 
     #[test]
