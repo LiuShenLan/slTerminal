@@ -10,7 +10,14 @@
     "image_decode_failed": "Could not decode the image: {error}",
     "truncated": "File exceeds 8 MB; showing a truncated read-only prefix.",
     "invalid_encoding": "File is not valid UTF-8; opened read-only.",
-    "read_only": "Read-only"
+    "read_only": "Read-only",
+    "close_title": "Unsaved changes",
+    "save": "Save",
+    "discard": "Don't save",
+    "cancel": "Cancel",
+    "save_failed": "Could not save the file: {error}",
+    "save_changed": "The file changed on disk after opening; it was not overwritten.",
+    "save_read_only": "The document is read-only and cannot be saved."
   },
   "language": {
     "system": "System"

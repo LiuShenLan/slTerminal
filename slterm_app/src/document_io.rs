@@ -4,7 +4,6 @@
 //! UTF-8 多字节中缝时回退到完整字符边界,后续 decode 不会看到半个字符。
 
 use std::io::{self, Read};
-use std::path::Path;
 
 pub(crate) fn read_prefix(
     reader: &mut impl Read,
@@ -24,13 +23,6 @@ pub(crate) fn read_prefix(
         bytes.truncate(error.valid_up_to());
     }
     Ok((bytes, truncated))
-}
-
-/// 本地文件的有界前缀读取(文档/源码 tab 的载入入口)。
-pub(crate) fn read_path_prefix(path: &Path, limit: usize) -> io::Result<(Vec<u8>, bool)> {
-    let mut file = std::fs::File::open(path)?;
-    let declared_size = file.metadata()?.len();
-    read_prefix(&mut file, declared_size, limit)
 }
 
 #[cfg(test)]
@@ -80,19 +72,5 @@ mod document_io_tests {
         let (bytes, truncated) = read_prefix(&mut &b"abcd"[..], 4, 4).unwrap();
         assert!(!truncated);
         assert_eq!(bytes, b"abcd");
-    }
-
-    /// 路径入口与 reader 入口同语义(临时文件隔离)。
-    #[test]
-    fn path_reader_bounds_and_reports_truncation() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("sample.txt");
-        std::fs::write(&path, b"abcdef").unwrap();
-        let (bytes, truncated) = read_path_prefix(&path, 4).unwrap();
-        assert_eq!(bytes, b"abcd");
-        assert!(truncated);
-        let (bytes, truncated) = read_path_prefix(&path, 8).unwrap();
-        assert_eq!(bytes, b"abcdef");
-        assert!(!truncated);
     }
 }

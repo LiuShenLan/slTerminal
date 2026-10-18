@@ -10,7 +10,14 @@
     "image_decode_failed": "图片解码失败：{error}",
     "truncated": "文件超过 8 MB，已截断为只读前缀。",
     "invalid_encoding": "文件不是有效 UTF-8，已只读打开。",
-    "read_only": "只读"
+    "read_only": "只读",
+    "close_title": "未保存的更改",
+    "save": "保存",
+    "discard": "不保存",
+    "cancel": "取消",
+    "save_failed": "无法保存文件：{error}",
+    "save_changed": "文件在打开后已被外部修改，未覆盖磁盘内容。",
+    "save_read_only": "文档处于只读状态，无法保存。"
   },
   "language": {
     "system": "跟随系统"

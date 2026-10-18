@@ -56,11 +56,11 @@ use slterm_split::{
 };
 
 use super::SltermShellEvent;
+use super::file_editor::SaveFile;
 use super::settings_pane::{SettingsPane, SettingsPaneEvent};
 use super::windowing::{WorkspaceStartup, startup_geometry};
 use crate::agent_host::AgentHub;
 use crate::ai_hook::AiHookEvent;
-use crate::brand;
 use crate::gpui_terminal::view::{TerminalLaunch, TerminalView, TerminalViewEvent};
 use crate::runtime_api::{RuntimeHub, SINGLE_WINDOW_ID};
 use crate::session::LaunchSession;
@@ -196,6 +196,11 @@ pub struct SltermWorkspace {
     /// M7.5 把同一 clone 交给 `RuntimeServer`;在那之前本 hub 只有壳内
     /// 发布源,无外部订阅者。
     runtime_hub: RuntimeHub,
+    /// 文件 tab 的变更观察(键 = 稳定 TabId):编辑器键入/保存完成时刷新
+    /// 侧栏与窗口标题的脏标记。关闭 tab 时随条目一并释放。
+    file_observations: HashMap<TabId, Subscription>,
+    /// 脏关闭确认在途的 tab:同一时刻只允许一个确认框。
+    pending_file_close: Option<TabId>,
 }
 
 /// 键:pane id(方向导航要拿所有叶子的屏幕矩形算最近邻)。
@@ -301,6 +306,8 @@ impl SltermWorkspace {
             agent_hub: AgentHub::new(),
             session_persistence: Self::new_session_persistence(),
             runtime_hub,
+            file_observations: HashMap::new(),
+            pending_file_close: None,
         };
         let restored = plan
             .session
@@ -636,6 +643,7 @@ impl SltermWorkspace {
         self.split_bounds
             .borrow_mut()
             .retain(|(tab, _), _| *tab != entry.id);
+        self.file_observations.remove(&entry.id);
         Some(entry)
     }
 
@@ -710,43 +718,6 @@ impl SltermWorkspace {
             });
             true
         });
-    }
-
-    /// 窗口标题 = 活跃 tab 展示名(任务栏可见);无 tab 时回退品牌名。
-    fn sync_window_title(&self, window: &mut Window, cx: &App) {
-        let title = self.active_tab_title(cx);
-        window.set_window_title(&format!("{title} — {}", brand::NAME));
-    }
-
-    /// 活跃 tab 展示名:自定义名优先,否则取聚焦 pane 的既有终端标题。
-    /// 07 篇 TabPresentation 落地后,这一处取值面替换为其派生结果。
-    pub(super) fn active_tab_title(&self, cx: &App) -> String {
-        self.tabs
-            .get(self.active)
-            .map(|_| self.tab_title(self.active, cx))
-            .unwrap_or_else(|| brand::NAME.to_owned())
-    }
-
-    /// 单个 tab 的展示名(侧栏 tab 行与标题栏同源)。
-    fn tab_title(&self, tab_ix: usize, cx: &App) -> String {
-        let Some(entry) = self.tabs.get(tab_ix) else {
-            return brand::NAME.to_owned();
-        };
-        if let Some(custom) = &entry.meta.custom_name {
-            return custom.clone();
-        }
-        match &entry.tab {
-            WorkspaceTab::Terminal { panes, focused, .. } => panes
-                .iter()
-                .find(|pane| pane.id == *focused)
-                .map(|pane| pane.view.read(cx).title.clone())
-                .filter(|title| !title.is_empty())
-                .unwrap_or_else(|| "shell".to_owned()),
-            WorkspaceTab::Settings { view, .. } => view.read(cx).title(cx).to_string(),
-            WorkspaceTab::Document { view } => view.read(cx).tab_title(),
-            WorkspaceTab::Code { view } => view.read(cx).tab_title(cx),
-            WorkspaceTab::Image { view } => view.read(cx).title.clone(),
-        }
     }
 
     /// 创建一个 pane 实体(分配 id、spawn 会话、挂宿主订阅、写注册表);
@@ -1356,16 +1327,15 @@ impl SltermWorkspace {
                 let handle = view.read(cx).focus_handle.clone();
                 window.focus(&handle, cx);
             }
-            WorkspaceTab::Document { view } => {
-                let handle = view.read(cx).focus_handle(cx);
-                window.focus(&handle, cx);
+            WorkspaceTab::Document { .. }
+            | WorkspaceTab::Code { .. }
+            | WorkspaceTab::Image { .. } => {
+                // 文件 tab 的焦点分派归 documents.rs(图片臂无可编辑面,
+                // 返回 None 即不迁移焦点)。
+                if let Some(handle) = self.file_tab_focus_handle(&entry.tab, cx) {
+                    window.focus(&handle, cx);
+                }
             }
-            WorkspaceTab::Code { view } => {
-                let handle = view.read(cx).focus_handle(cx);
-                window.focus(&handle, cx);
-            }
-            // 图片 tab 无可编辑面,焦点不迁移(关闭后回落到幸存终端)。
-            WorkspaceTab::Image { .. } => {}
         }
     }
 
@@ -1772,18 +1742,12 @@ impl Render for SltermWorkspace {
         let content = match self.tabs.get(self.active).map(|entry| &entry.tab) {
             Some(WorkspaceTab::Terminal { .. }) => Some(self.render_terminal_tab(self.active, cx)),
             Some(WorkspaceTab::Settings { view, .. }) => Some(view.clone().into_any_element()),
-            // 文档 tab 的外层选择器独立于文本视图:测试与诊断按 tab 类型定位。
-            Some(WorkspaceTab::Document { view }) => Some(
-                div()
-                    .debug_selector(|| "slterm-document-tab".to_owned())
-                    .size_full()
-                    .min_w_0()
-                    .min_h_0()
-                    .child(view.clone())
-                    .into_any_element(),
-            ),
-            Some(WorkspaceTab::Code { view }) => Some(view.clone().into_any_element()),
-            Some(WorkspaceTab::Image { view }) => Some(view.clone().into_any_element()),
+            // 文件 tab 的渲染分派(含各变体外层选择器)归 documents.rs。
+            Some(
+                tab @ (WorkspaceTab::Document { .. }
+                | WorkspaceTab::Code { .. }
+                | WorkspaceTab::Image { .. }),
+            ) => self.render_file_tab(tab),
             None => None,
         };
         // 侧栏三件套:ActivityBar + tab 列表/双槽内容区 + 宽度拖拽热区。
@@ -1867,6 +1831,10 @@ impl Render for SltermWorkspace {
             }))
             .on_action(cx.listener(|this, _: &OpenSettings, window, cx| {
                 this.open_settings_tab(window, cx);
+            }))
+            // Ctrl+S:活跃可编辑源码 tab 的保存入口(07 篇保存链)。
+            .on_action(cx.listener(|this, _: &SaveFile, _, cx| {
+                this.save_active_file(cx);
             }))
             // 自绘标题栏(05 篇):活跃 tab 展示名 + 三钮 + 拖拽区。
             .child(title_bar)
@@ -1966,6 +1934,8 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("ctrl-shift-tab", SelectPreviousTab, None),
         KeyBinding::new("ctrl-shift-b", ToggleSidebar, None),
         KeyBinding::new("ctrl-,", OpenSettings, None),
+        // 07 篇编辑器动作:源码态保存。Ctrl+C 仍保留为终端中断,不在此表。
+        KeyBinding::new("ctrl-s", SaveFile, None),
     ]);
 }
 

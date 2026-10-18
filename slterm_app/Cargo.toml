@@ -68,7 +68,13 @@ clap = { version = "4.2.7", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 # 屏幕规则正则:逐规则编译一次进缓存,detect 热路径只跑匹配。
+# 文档图片 URL 重写(07 篇 M8.3 预览)同样复用该正则栈。
 regex = "1"
+# Markdown mdast 解析(07 篇 M8.2 编辑器内核:Outline/Projection/块结构单源)。
+# 版本与上游固定基线逐字一致,AST 语义(含 math_flow)才可照抄。
+markdown = "=1.0.0"
+# Markdown 实体解码(Projection 可见文本 ↔ 源码 span 双向映射)。
+html-escape = "0.2.14"
 # keymap/sequence.rs 的修饰键位族(与 core 同版本族)。
 bitflags = "2.4.1"
 # 事件信箱/session_pump 的异步通道与 Stream(event_mailbox.rs 随迁形态)。

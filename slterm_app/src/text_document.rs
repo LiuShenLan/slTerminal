@@ -1,8 +1,8 @@
 //! 渲染无关的文本快照(07 篇):编码/行尾/快照比对的单点。
 //!
 //! 本地文件与 gitshow(HEAD 字节)共用同一快照通路;`read_only` 是**类型层**
-//! 合同——encode 入口直接拒绝,不靠 UI 层自觉(07 篇边界条 6)。M8.1 只点亮
-//! 只读臂;M8.2 的可编辑 Document 复用同一结构,保存链按 `verify` 拒绝覆盖。
+//! 合同——encode 入口直接拒绝,不靠 UI 层自觉(07 篇边界条 6)。可编辑
+//! `Document`(M8.2)复用同一结构,保存链按 `verify` 拒绝覆盖外部修改。
 
 use std::io;
 use std::sync::Arc;
@@ -14,13 +14,10 @@ pub(crate) const MAX_BYTES: usize = 8 * 1024 * 1024;
 pub(crate) struct TextSnapshot {
     pub text: String,
     /// 载入原文逐字节副本——保存前比对的权威。
-    #[allow(dead_code)] // 消费点 = M8.2 保存链 verify(本步只读,无写回)。
     pub bytes: Arc<[u8]>,
     /// UTF-8 BOM 保留往返。
-    #[allow(dead_code)] // 消费点 = M8.2 保存链 encode。
     pub bom: bool,
     /// CRLF 行尾保留往返。
-    #[allow(dead_code)] // 消费点 = M8.2 保存链 encode。
     pub crlf: bool,
     /// 超限截断 → 强制只读。
     pub truncated: bool,
@@ -29,7 +26,6 @@ pub(crate) struct TextSnapshot {
     pub read_only: bool,
 }
 
-#[allow(dead_code)] // 消费点 = M8.2 保存链三态(本步只读,无写回)。
 #[derive(Debug)]
 pub(crate) enum SaveError {
     Changed,
@@ -86,7 +82,6 @@ impl TextSnapshot {
         }
     }
 
-    #[allow(dead_code)] // 消费点 = M8.2 保存链(本步只读;只读拒绝合同已由用例锁定)。
     pub(crate) fn encode(&self, text: &str) -> Result<Vec<u8>, SaveError> {
         if self.read_only {
             return Err(SaveError::ReadOnly);
@@ -110,7 +105,6 @@ impl TextSnapshot {
         Ok(bytes)
     }
 
-    #[allow(dead_code)] // 消费点 = M8.2 保存链(保存前磁盘快照比对)。
     pub(crate) fn verify(&self, current: &[u8]) -> Result<(), SaveError> {
         if current == self.bytes.as_ref() {
             Ok(())

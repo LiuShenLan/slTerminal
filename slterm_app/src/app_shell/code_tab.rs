@@ -1,8 +1,8 @@
-//! 代码文件 tab(07 篇):M8.1 只读臂 = 普通源码 + gitshow。
+//! 代码文件 tab(07 篇):普通源码(可编辑)+ gitshow 只读臂。
 //!
 //! 普通源码与 gitshow 共用 [`TextFileView`] 快照通路;两者的区别只在数据源
-//! (磁盘前缀 / HEAD blob)与标题后缀(`<name> @ HEAD`)。可编辑态与三栏
-//! Git 合并归 M8.2/M8.5,本步 `Input` 恒 disabled。
+//! (磁盘前缀 / HEAD blob)与标题后缀(`<name> @ HEAD`)。M8.2 起普通源码
+//! 源码态可编辑可存;三栏 Git 合并归 M8.5。
 //!
 //! 扩展名 → 语言映射表是「视图值集」单点:`viewable_file` 与 openable_in_app
 //! 的源码判定同源(07 篇照抄点 17,fileViewers 注册表值集并入)。
@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use gpui::{
     App, AppContext as _, Context, Entity, FocusHandle, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, Styled as _, Window, div,
+    ParentElement as _, Render, Styled as _, Subscription, Task, Window, div,
 };
 
 use super::file_editor::TextFileView;
@@ -79,6 +79,9 @@ pub struct CodeTabView {
     /// gitshow 只读臂:标题追加 `@ HEAD`,复用同路径时不与普通 tab 混淆。
     git_show: bool,
     file: Entity<TextFileView>,
+    /// 内层编辑器的变更转发:脏标记/保存完成时让外层 tab 也 notify,
+    /// 工作区再经观察刷新侧栏标题与窗口标题。
+    _file_observation: Subscription,
 }
 
 impl CodeTabView {
@@ -102,14 +105,35 @@ impl CodeTabView {
         let file = if git_show {
             cx.new(|cx| TextFileView::new_git_head(file_path, language, window, cx))
         } else {
-            // M8.1 只读臂:可编辑态在 M8.2 翻 false。
-            cx.new(|cx| TextFileView::new(file_path, language, true, window, cx))
+            // M8.2:普通源码 = 可编辑源码态;只读仍由快照合同兜底。
+            cx.new(|cx| TextFileView::new(file_path, language, false, window, cx))
         };
+        let observation = cx.observe_in(&file, window, |_, _, _, cx| {
+            // 内层脏标记/保存状态变化 → 外层重渲;工作区经 observe 外层
+            // 刷新 tab 标题。
+            cx.notify();
+        });
         Self {
             path,
             git_show,
             file,
+            _file_observation: observation,
         }
+    }
+
+    /// 脏标记(关闭确认数据源;gitshow 恒 false)。
+    pub fn is_dirty(&self, cx: &App) -> bool {
+        self.file.read(cx).is_dirty()
+    }
+
+    /// 保存中(关闭确认在此态不弹窗)。
+    pub fn is_saving(&self, cx: &App) -> bool {
+        self.file.read(cx).is_saving()
+    }
+
+    /// 触发保存;返回值 = 是否成功落盘且无新草稿。
+    pub fn save(&mut self, cx: &mut Context<'_, Self>) -> Task<bool> {
+        self.file.update(cx, |file, cx| file.save(cx))
     }
 
     /// 同路径普通源码 tab 的重开命中(草稿保留归 M8.2,本步只重读盘)。
@@ -131,8 +155,7 @@ impl CodeTabView {
         }
     }
 
-    /// 只读合同(测试与 M8.2 关闭确认共用)。
-    #[allow(dead_code)] // 消费点 = M8.2 关闭确认;M8.1 出口用例经 workspace 只读断言。
+    /// 只读合同(测试与关闭/保存路由共用)。
     pub fn is_read_only(&self, cx: &App) -> bool {
         self.file.read(cx).is_read_only()
     }
@@ -149,6 +172,12 @@ impl CodeTabView {
     #[cfg(all(test, feature = "gpui-test-support"))]
     pub fn text_for_test(&self, cx: &App) -> Option<String> {
         self.file.read(cx).text_for_test()
+    }
+
+    /// 测试专用:输入实体当前文本(含未保存草稿)。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub fn input_text_for_test(&self, cx: &App) -> String {
+        self.file.read(cx).input_text_for_test(cx)
     }
 }
 

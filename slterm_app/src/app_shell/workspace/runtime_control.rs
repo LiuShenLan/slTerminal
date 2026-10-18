@@ -674,8 +674,24 @@ impl SltermWorkspace {
     }
 
     /// 关闭任意 tab(活跃 tab 快捷键与 runtime `tab.close` 共用)。
-    /// 逐 pane 显式 shutdown,不留孤儿 PTY;最后一个 tab = 关窗。
+    ///
+    /// 脏文件 tab 先走确认路径(documents.rs);确认/保存在途期间关闭被
+    /// 拦截,避免草稿被静默丢弃。
     pub(super) fn close_tab_at(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if self.guard_file_tab_close(index, window, cx) {
+            return;
+        }
+        self.finish_close_tab(index, window, cx);
+    }
+
+    /// 确认后的实际摘除:逐 pane 显式 shutdown,不留孤儿 PTY;最后一个
+    /// tab = 关窗。脏确认流程只在本方法放行后到达。
+    pub(super) fn finish_close_tab(
         &mut self,
         index: usize,
         window: &mut Window,
