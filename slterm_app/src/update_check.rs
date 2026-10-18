@@ -38,6 +38,9 @@ const UPDATE_STATE_FILE: &str = "update_state.json";
 const REMIND_LATER_SECS: u64 = 3 * 24 * 60 * 60;
 /// release JSON 正文上限:正常响应远小于此,防御异常大响应。
 const RELEASE_BODY_LIMIT: u64 = 2 * 1024 * 1024;
+/// 首个 Inno 安装基版本(D12-4):更早的历史安装(Tauri 时代)不构成
+/// 可更新对象,更新链只提示「需手动重装」,绝不自动下载/安装。
+pub(crate) const FIRST_INSTALLER_VERSION: &str = "0.3.0";
 
 /// 进程内提示状态写锁:与文件锁组成双闸(同进程串行 + 跨进程互斥)。
 static UPDATE_STATE_LOCK: Mutex<()> = Mutex::new(());
@@ -59,6 +62,9 @@ pub(crate) struct UpdateCheckResult {
     pub current: String,
     pub latest: String,
     pub update_available: bool,
+    /// 当前安装早于首个 Inno 安装基:`asset` 即使存在也不得自动安装,
+    /// 提示文案改为「需手动重装」。
+    pub manual_reinstall: bool,
     pub asset: Option<UpdateAsset>,
 }
 
@@ -198,6 +204,7 @@ fn deliver_cached(deliver: &mut impl FnMut(UpdateCheckResult)) {
             current: env!("CARGO_PKG_VERSION").into(),
             latest: asset.version.clone(),
             update_available: true,
+            manual_reinstall: requires_manual_reinstall(env!("CARGO_PKG_VERSION")),
             asset: Some(asset),
         });
     }
@@ -239,6 +246,7 @@ pub(crate) fn check_now() -> Result<UpdateCheckResult, String> {
     let update_available = can_install_version(&release.version)?;
     Ok(UpdateCheckResult {
         update_available,
+        manual_reinstall: requires_manual_reinstall(&current),
         current,
         latest: release.version,
         asset: release.asset,
@@ -255,6 +263,7 @@ pub(crate) fn check_from(agent: &ureq::Agent, url: &str) -> Result<UpdateCheckRe
     let update_available = can_install_version(&release.version)?;
     Ok(UpdateCheckResult {
         update_available,
+        manual_reinstall: requires_manual_reinstall(&current),
         current,
         latest: release.version,
         asset: release.asset,
@@ -473,6 +482,12 @@ fn version_is_installable(latest: &str, current: &str, rehearsal: bool) -> bool 
     is_newer(latest, current) || (rehearsal && latest == current)
 }
 
+/// 当前安装早于首个 Inno 安装基(D12-4):Tauri 时代安装基无法被 setup.exe
+/// 覆盖,更新链只提示手动重装,自动下载/安装必须保持关闭。
+pub(crate) fn requires_manual_reinstall(current: &str) -> bool {
+    is_newer(FIRST_INSTALLER_VERSION, current)
+}
+
 /// 点分段数值比较("0.7.10" > "0.7.9");段内后缀忽略("1.0.0-rc1" = [1,0,0])。
 pub(crate) fn is_newer(latest: &str, current: &str) -> bool {
     fn segments(version: &str) -> Vec<u64> {
@@ -522,6 +537,16 @@ mod update_check_tests {
         assert!(!is_newer("0.7.0", "0.7.0"));
         assert!(!is_newer("0.6.9", "0.7.0"));
         assert!(!is_newer("0.7.0-rc1", "0.7.0"));
+    }
+
+    #[test]
+    fn installs_older_than_the_first_inno_base_require_manual_reinstall() {
+        for old in ["0.2.0", "0.2.99", "0.1.0"] {
+            assert!(super::requires_manual_reinstall(old), "{old}");
+        }
+        for current in ["0.3.0", "0.3.1", "1.0.0"] {
+            assert!(!super::requires_manual_reinstall(current), "{current}");
+        }
     }
 
     #[test]

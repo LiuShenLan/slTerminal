@@ -4,11 +4,13 @@
 //! `SLTERM_RUNTIME_ENDPOINT`,后者优先于 `runtime.port` 端口文件;显式 env
 //! 存在但非法时不回落端口文件(语义红线:不允许「指了 A 却悄悄连 B」)。
 //!
-//! 单实例启动全序:LifetimeFileLock(拿不到 = 有主)→ PING 既有端点
+//! 单实例启动全序:LifetimeFileLock(拿不到 = 有主)→ 存活探测既有端点
 //! (通 = 有活实例)→ bind 127.0.0.1:0 → 原子写端口文件 → serve 线程 →
-//! 登记 `CHILD_ENDPOINT`。Drop 只删自己仍是最新的记录。二次启动不再建窗,
-//! 经 ATTACH + `tab.new` 把「聚焦现有唯一窗 + 新开 tab」交给首实例后退出;
-//! 陈旧端口文件由 400ms connect 超时兜底接管,移交降级从不挂起。
+//! 登记 `CHILD_ENDPOINT`。Drop 只删自己仍是最新的记录。二次启动不再建窗:
+//! 首发形态经 `window.focus` + `tab.new` 把「聚焦现有唯一窗 + 新开 tab」
+//! 交给首实例后退出(D12-5 回落面关闭);开启 `legacy-attach` feature 时
+//! 改回 ATTACH + `tab.new`。陈旧端口文件由 400ms connect 超时兜底接管,
+//! 移交降级从不挂起。
 //!
 //! 端口文件内容 `"<port> <128bit-token> <protocol_version>\n"`,token 属
 //! 能力边界:类型层隔离在 `Endpoint`,日志一律不插值。
@@ -212,7 +214,12 @@ fn try_open_tab_existing_at(
     dir: Option<&Path>,
     shell: Option<&str>,
 ) -> bool {
+    #[cfg(feature = "legacy-attach")]
     if legacy_request_at("ATTACH", port_path).is_none() {
+        return false;
+    }
+    #[cfg(not(feature = "legacy-attach"))]
+    if !focus_existing_window_at(port_path) {
         return false;
     }
     let Some(endpoint) = endpoint_for_path(port_path) else {
@@ -222,6 +229,16 @@ fn try_open_tab_existing_at(
         .is_some_and(|response| response.ok)
 }
 
+/// D12-5 首发形态的交接唤醒:版本化 `window.focus` 语义等价于旧 ATTACH
+/// (最小化先还原再前置);UI owner 回执后才继续 `tab.new`。
+#[cfg(not(feature = "legacy-attach"))]
+fn focus_existing_window_at(port_path: Option<&Path>) -> bool {
+    let Some(endpoint) = endpoint_for_path(port_path) else {
+        return false;
+    };
+    request_to(&endpoint, "window.focus", serde_json::json!({})).is_some_and(|response| response.ok)
+}
+
 fn endpoint_for_path(port_path: Option<&Path>) -> Option<Endpoint> {
     match port_path {
         Some(path) => read_endpoint_from(path),
@@ -229,12 +246,28 @@ fn endpoint_for_path(port_path: Option<&Path>) -> Option<Endpoint> {
     }
 }
 
+/// 存活探测:开启 `legacy-attach` 时用 PING,首发形态用版本化
+/// `runtime.describe`;失败一律视为无活实例。
+fn endpoint_is_alive(endpoint: &Endpoint) -> bool {
+    #[cfg(feature = "legacy-attach")]
+    {
+        legacy_request_to("PING", endpoint).is_some()
+    }
+    #[cfg(not(feature = "legacy-attach"))]
+    {
+        request_to(endpoint, "runtime.describe", serde_json::json!({}))
+            .is_some_and(|response| response.ok)
+    }
+}
+
+#[cfg(feature = "legacy-attach")]
 fn legacy_request_at(verb: &str, port_path: Option<&Path>) -> Option<()> {
     let endpoint = endpoint_for_path(port_path)?;
     legacy_request_to(verb, &endpoint)
 }
 
 /// legacy 移交探测:connect/读写在 HANDOVER_* 超时内完成,失败即降级。
+#[cfg(feature = "legacy-attach")]
 fn legacy_request_to(verb: &str, endpoint: &Endpoint) -> Option<()> {
     let mut stream =
         TcpStream::connect_timeout(&endpoint_addr(endpoint), HANDOVER_CONNECT_TIMEOUT).ok()?;
@@ -334,8 +367,7 @@ impl RuntimeServer {
         if path
             .as_ref()
             .and_then(|path| read_endpoint_from(path))
-            .and_then(|endpoint| legacy_request_to("PING", &endpoint))
-            .is_some()
+            .is_some_and(|endpoint| endpoint_is_alive(&endpoint))
         {
             log::info!("Runtime API server already running; this instance stays client-only");
             return None;
@@ -621,9 +653,9 @@ mod server_tests {
         )
     }
 
-    /// 端口文件写入、PING 与 Drop 清理构成一条闭环;私有实例不落盘。
+    /// 端口文件写入、存活探测与 Drop 清理构成一条闭环;私有实例不落盘。
     #[test]
-    fn server_writes_endpoint_answers_ping_and_drop_removes_only_its_own_record() {
+    fn server_writes_endpoint_answers_liveness_probe_and_drop_removes_only_its_own_record() {
         let directory = tempfile::tempdir().expect("tempdir");
         let path = directory.path().join(PORT_FILE_NAME);
         let (sink, _events) = capturing_sink();
@@ -635,7 +667,7 @@ mod server_tests {
             Some(&endpoint),
             "CHILD_ENDPOINT 已登记"
         );
-        assert!(legacy_request_to("PING", &endpoint).is_some());
+        assert!(endpoint_is_alive(&endpoint));
 
         drop(server);
         assert!(!path.exists(), "Drop 删除自己仍是最新的记录");
@@ -650,7 +682,7 @@ mod server_tests {
         assert!(server.port_file.is_none());
         assert!(server._owner_lock.is_none());
         assert_eq!(read_endpoint().as_ref(), Some(&server.endpoint));
-        assert!(legacy_request_to("PING", &server.endpoint).is_some());
+        assert!(endpoint_is_alive(&server.endpoint));
 
         let mut env = HashMap::from([(ENDPOINT_ENV.to_owned(), "old endpoint".to_owned())]);
         apply_child_endpoint(&mut env);
@@ -661,7 +693,7 @@ mod server_tests {
 
         let mut wrong = server.endpoint.clone();
         wrong.token = "00000000000000000000000000000000".into();
-        assert!(legacy_request_to("PING", &wrong).is_none());
+        assert!(!endpoint_is_alive(&wrong));
 
         drop(server);
         apply_child_endpoint(&mut env);
@@ -710,7 +742,7 @@ mod server_tests {
         let current = read_endpoint_from(&path).expect("rewritten record");
         assert_eq!(current, server.endpoint);
         assert_ne!(server.endpoint, stale, "陈旧记录被新端点替换");
-        assert!(legacy_request_to("PING", &current).is_some());
+        assert!(endpoint_is_alive(&current));
     }
 
     /// Drop 只删自己的记录;别进程写入的新记录保留。
@@ -730,7 +762,9 @@ mod server_tests {
         assert_eq!(read_endpoint_from(&path), Some(replacement));
     }
 
-    /// 移交链:ATTACH 先到(聚焦窗口),tab.new 带 cwd/shell 随后到。
+    /// 移交链(legacy-attach 开启):ATTACH 先到(聚焦窗口),
+    /// tab.new 带 cwd/shell 随后到。
+    #[cfg(feature = "legacy-attach")]
     #[test]
     fn handover_sends_attach_then_a_versioned_tab_new() {
         let directory = tempfile::tempdir().expect("tempdir");
@@ -775,6 +809,71 @@ mod server_tests {
         ));
         let (saw_attach, handover) = responder.join().expect("responder");
         assert!(saw_attach, "ATTACH 必须先于 tab.new");
+        let (cwd, shell_id) = handover.expect("tab.new");
+        assert_eq!(cwd.as_deref(), Some(workdir.as_path()));
+        assert_eq!(
+            shell_id.as_deref(),
+            Some("powershell"),
+            "shell id 去空白后透传"
+        );
+    }
+
+    /// 移交链(D12-5 首发形态):window.focus 先到,tab.new 随后到;
+    /// 全程不出现 legacy Attach 事件。
+    #[cfg(not(feature = "legacy-attach"))]
+    #[test]
+    fn handover_focuses_then_opens_a_versioned_tab() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join(PORT_FILE_NAME);
+        let workdir = directory.path().join("work");
+        std::fs::create_dir_all(&workdir).expect("workdir");
+        let (sink, events) = capturing_sink();
+        let _server =
+            RuntimeServer::spawn_at(sink, RuntimeHub::new(), Some(path.clone())).expect("server");
+
+        let responder = {
+            std::thread::spawn(move || {
+                let mut saw_focus = false;
+                let mut handover = None;
+                while let Ok(callback) = events.recv() {
+                    match callback {
+                        super::super::RuntimeCallback::Attach => {
+                            panic!("legacy ATTACH 在首发形态必须关闭")
+                        }
+                        super::super::RuntimeCallback::Control(dispatch) => {
+                            match &dispatch.command {
+                                super::super::RuntimeCommand::Focus { window_id, pane_id } => {
+                                    assert!(window_id.is_none() && pane_id.is_none());
+                                    saw_focus = true;
+                                    dispatch.respond(Ok(serde_json::json!({
+                                        "action": { "window_id": 1 }
+                                    })));
+                                }
+                                super::super::RuntimeCommand::NewTab { cwd, shell_id, .. } => {
+                                    handover = Some((cwd.clone(), shell_id.clone()));
+                                    dispatch.respond(Ok(serde_json::json!({
+                                        "action": { "window_id": 1, "pane_id": 9 }
+                                    })));
+                                }
+                                other => panic!("handover 只允许 focus/tab.new: {other:?}"),
+                            }
+                        }
+                    }
+                    if saw_focus && handover.is_some() {
+                        break;
+                    }
+                }
+                (saw_focus, handover)
+            })
+        };
+
+        assert!(try_open_tab_existing_at(
+            Some(&path),
+            Some(&workdir),
+            Some("  powershell  ")
+        ));
+        let (saw_focus, handover) = responder.join().expect("responder");
+        assert!(saw_focus, "window.focus 必须先于 tab.new");
         let (cwd, shell_id) = handover.expect("tab.new");
         assert_eq!(cwd.as_deref(), Some(workdir.as_path()));
         assert_eq!(

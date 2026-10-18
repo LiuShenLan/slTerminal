@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/LiuShenLan/slTerminal/docs/runtime-api-v1.schema.json",
+  "$id": "https://github.com/LiuShenLan/slTerminal/assets/runtime-api-v1.schema.json",
   "title": "slTerminal Runtime API v1 frames",
   "description": "JSON Lines request, response, and event frames for the authenticated local runtime control plane.",
   "type": "object",

@@ -112,18 +112,38 @@ impl SltermWorkspace {
         )
         .resolved();
         let title = language.pick("发现新版本", "Update available");
-        let body_zh = format!(
-            "{} v{} 已发布(当前 v{})",
-            crate::brand::NAME,
-            result.latest,
-            result.current
-        );
-        let body_en = format!(
-            "{} v{} is available (current v{})",
-            crate::brand::NAME,
-            result.latest,
-            result.current
-        );
+        // D12-4:早于首个 Inno 安装基的历史安装不能被自动覆盖,提示手动重装。
+        let (body_zh, body_en) = if result.manual_reinstall {
+            (
+                format!(
+                    "{} v{} 已发布;当前 v{} 需手动重装(旧安装基不支持自动更新)",
+                    crate::brand::NAME,
+                    result.latest,
+                    result.current
+                ),
+                format!(
+                    "{} v{} is available; current v{} requires a manual reinstall (legacy install base cannot auto-update)",
+                    crate::brand::NAME,
+                    result.latest,
+                    result.current
+                ),
+            )
+        } else {
+            (
+                format!(
+                    "{} v{} 已发布(当前 v{})",
+                    crate::brand::NAME,
+                    result.latest,
+                    result.current
+                ),
+                format!(
+                    "{} v{} is available (current v{})",
+                    crate::brand::NAME,
+                    result.latest,
+                    result.current
+                ),
+            )
+        };
         crate::platform::notifications::show(title, language.pick(&body_zh, &body_en));
         log::info!(
             "update-check: v{} available (current v{})",
@@ -131,7 +151,10 @@ impl SltermWorkspace {
             result.current
         );
 
-        if !slterm_settings::RuntimeSettings::load().auto_download_updates {
+        // 旧安装基只提示手动重装,绝不后台预取/自动安装。
+        if result.manual_reinstall
+            || !slterm_settings::RuntimeSettings::load().auto_download_updates
+        {
             return;
         }
         let Some(asset) = result.asset else {

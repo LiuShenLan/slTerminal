@@ -1,5 +1,7 @@
 [package]
 name = "slterm"
+# 首发版本线续 0.3.0(D12-4):更新链对 <0.3.0 一律视为需手动重装。
+version = "0.3.0"
 edition.workspace = true
 rust-version.workspace = true
 
@@ -42,6 +44,9 @@ gpui-test-support = ["gpui/test-support", "gpui-component/test-support"]
 # 本地假 release 服务器演练通道(09 篇 M10.5 采纳点 34):只用于 debug
 # 验收/发布彩排;`update_check::test_source` 在 release 构建下编译期拒绝。
 update-test-source = []
+# 旧式回落协议面(D12-5):首行非 JSON 的 ATTACH/PING。首发默认关闭,
+# 单实例移交与存活探测改走版本化 JSON;开启后接受旧客户端回落行。
+legacy-attach = []
 
 [dependencies]
 # GPUI 钉版与 URL/rev 一致性纪律见根 Cargo.toml 固定基线注释块。

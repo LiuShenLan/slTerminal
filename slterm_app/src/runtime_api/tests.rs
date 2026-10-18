@@ -233,7 +233,7 @@ fn api_error_details_stay_optional_on_the_wire() {
 #[test]
 fn protocol_schema_matches_envelope_constants() {
     let schema: Value =
-        serde_json::from_str(include_str!("../../../docs/runtime-api-v1.schema.json"))
+        serde_json::from_str(include_str!("../../../assets/runtime-api-v1.schema.json"))
             .expect("protocol schema must stay valid JSON");
     assert_eq!(schema["properties"]["protocol"]["const"], PROTOCOL_NAME);
     assert_eq!(schema["properties"]["version"]["const"], PROTOCOL_VERSION);

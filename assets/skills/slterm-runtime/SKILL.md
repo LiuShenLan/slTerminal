@@ -180,4 +180,4 @@ Example intent mapping:
 - On `runtime_unavailable` or a missing capability, report the boundary. Do not simulate success through GUI automation.
 - `pane.run` is trustworthy only when it returns a supported OSC 133 exit code. `pane.procs` is local-only.
 
-See the packaged `docs/runtime-api-v1.schema.json` for protocol details.
+See the packaged `assets/runtime-api-v1.schema.json` for protocol details.

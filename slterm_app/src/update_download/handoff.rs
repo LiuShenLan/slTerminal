@@ -528,6 +528,10 @@ pub(crate) fn apply_scheduled_at(paths: &PreparePaths) -> bool {
     if crate::platform::distribution::current().externally_managed() {
         return false;
     }
+    // D12-4:早于首个 Inno 安装基的当前版本不允许自动安装。
+    if crate::update_check::requires_manual_reinstall(env!("CARGO_PKG_VERSION")) {
+        return false;
+    }
     let path = paths.root.join("updates/install-next.json");
     let Some(asset) = read_json::<UpdateAsset>(&path) else {
         return false;

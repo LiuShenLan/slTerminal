@@ -28,7 +28,7 @@ pub(crate) struct Case {
 
 fn document_path(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../docs/corpus")
+        .join("../assets/corpus")
         .join(name)
 }
 

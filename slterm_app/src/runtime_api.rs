@@ -173,7 +173,8 @@ pub(super) const FEATURES: &[&str] = &[
 ];
 
 /// describe 的协议 Schema 相对路径字段:协议内容,不是文档引用。
-pub(super) const SCHEMA_PATH: &str = "docs/runtime-api-v1.schema.json";
+/// 相对安装根目录;随包资产落 `assets/`(D12-3),安装器与 zip 同布局。
+pub(super) const SCHEMA_PATH: &str = "assets/runtime-api-v1.schema.json";
 
 /// 请求信封:JSON Lines 首行。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1047,7 +1048,8 @@ pub enum RuntimeCallback {
 /// 单形态事件汇:闭包桥进壳事件队列(壳侧驱动方归 M7.5 接线)。
 pub(crate) type EventSink = Arc<dyn Fn(RuntimeCallback) + Send + Sync>;
 
-/// ATTACH 派发(fire-and-forget)。
+/// ATTACH 派发(fire-and-forget);仅 `legacy-attach` feature 下接线。
+#[cfg(feature = "legacy-attach")]
 pub(super) fn emit_attach(sink: &EventSink) {
     sink(RuntimeCallback::Attach);
 }

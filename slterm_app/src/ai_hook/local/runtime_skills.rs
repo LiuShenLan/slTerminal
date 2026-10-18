@@ -1,6 +1,6 @@
 //! runtime skill 资产投放(04 篇 M7.4,安装器家族 03 篇形态)。
 //!
-//! 资产 = `docs/skills/slterm-runtime/SKILL.md` + `agents/openai.yaml`,编译期
+//! 资产 = `assets/skills/slterm-runtime/SKILL.md` + `agents/openai.yaml`,编译期
 //! `include_str!` 内嵌。归属判定沿用安装器家族纪律:
 //!
 //! - 指纹 = SKILL.md 与 openai.yaml 的 SHA-256 联合摘要;marker 文件
@@ -12,9 +12,9 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-const RUNTIME_SKILL_MD: &str = include_str!("../../../../docs/skills/slterm-runtime/SKILL.md");
+const RUNTIME_SKILL_MD: &str = include_str!("../../../../assets/skills/slterm-runtime/SKILL.md");
 const RUNTIME_SKILL_OPENAI_YAML: &str =
-    include_str!("../../../../docs/skills/slterm-runtime/agents/openai.yaml");
+    include_str!("../../../../assets/skills/slterm-runtime/agents/openai.yaml");
 /// 目录内 marker:内容 = 联合指纹。
 const RUNTIME_SKILL_MARKER: &str = ".slterm-managed";
 /// skill 目录名(B-4 改名映射)。

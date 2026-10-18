@@ -17,13 +17,14 @@ use serde_json::{Value, json};
 
 use super::agent_api;
 use super::command::{ParsedMethod, SubscribeParams, WaitParams, parse_method, wait_matches};
+#[cfg(feature = "legacy-attach")]
+use super::emit_attach;
 use super::orchestrate;
 use super::run_wait::wait_run_phased;
 use super::{
     ApiError, ApiEvent, ApiRequest, ApiResponse, CAPABILITIES, COMMAND_TIMEOUT, EventSink,
     FEATURES, IO_TIMEOUT, MAX_CLIENTS, MAX_REQUEST_BYTES, PROTOCOL_NAME, PROTOCOL_VERSION,
-    RuntimeCommand, RuntimeDispatch, RuntimeHub, SCHEMA_PATH, SUPPORTED_VERSIONS, emit_attach,
-    emit_control,
+    RuntimeCommand, RuntimeDispatch, RuntimeHub, SCHEMA_PATH, SUPPORTED_VERSIONS, emit_control,
 };
 
 /// accept 循环:按 `MAX_CLIENTS` 计数,每连接一线程,配额随连接线程 Drop 归还。
@@ -89,9 +90,18 @@ pub(super) fn handle_connection(
         );
     }
 
-    // 首行非 JSON → legacy 移交探测(ATTACH/PING);token 不符静默丢弃。
+    // 首行非 JSON:首发默认静默丢弃(D12-5 回落面关闭);开启 legacy-attach
+    // 后走 ATTACH/PING 探测,token 不符仍静默丢弃。
     if !line.trim_start().starts_with('{') {
-        return handle_legacy(&mut stream, &line, token, sink);
+        #[cfg(feature = "legacy-attach")]
+        {
+            return handle_legacy(&mut stream, &line, token, sink);
+        }
+        #[cfg(not(feature = "legacy-attach"))]
+        {
+            let _ = (token, sink);
+            return Ok(());
+        }
     }
 
     let raw: Value = match serde_json::from_str(&line) {
@@ -185,6 +195,7 @@ pub(super) fn handle_connection(
 }
 
 /// legacy 首行:ATTACH(唤醒/还原窗口,fire-and-forget)/ PING(token 不符静默)。
+#[cfg(feature = "legacy-attach")]
 pub(super) fn handle_legacy(
     stream: &mut TcpStream,
     line: &str,
@@ -1040,6 +1051,7 @@ mod transport_tests {
         assert_eq!(response.error.expect("error").code, "request_too_large");
     }
 
+    #[cfg(feature = "legacy-attach")]
     #[test]
     fn legacy_attach_notifies_sink_and_acknowledges() {
         let (sink, events) = sink_channel();
@@ -1054,6 +1066,7 @@ mod transport_tests {
         ));
     }
 
+    #[cfg(feature = "legacy-attach")]
     #[test]
     fn legacy_ping_acknowledges_without_attach_event() {
         let (sink, events) = sink_channel();
@@ -1064,6 +1077,7 @@ mod transport_tests {
         assert!(events.try_recv().is_err());
     }
 
+    #[cfg(feature = "legacy-attach")]
     #[test]
     fn legacy_wrong_token_is_silently_dropped() {
         let (sink, events) = sink_channel();
@@ -1071,6 +1085,24 @@ mod transport_tests {
         let response = exchange(address, "ATTACH sk-test-wrong-token");
         assert!(response.is_empty());
         assert!(events.try_recv().is_err());
+    }
+
+    /// D12-5 首发面:未开启 legacy-attach 时非 JSON 首行静默丢弃,
+    /// 不产生事件也不回写任何字节。
+    #[cfg(not(feature = "legacy-attach"))]
+    #[test]
+    fn legacy_lines_are_silently_dropped_without_the_feature() {
+        for line in [
+            format!("ATTACH {TEST_TOKEN}"),
+            format!("PING {TEST_TOKEN}"),
+            "ATTACH sk-test-wrong-token".to_owned(),
+        ] {
+            let (sink, events) = sink_channel();
+            let address = spawn_single_connection_server(TEST_TOKEN, sink, RuntimeHub::new());
+            let response = exchange(address, &line);
+            assert!(response.is_empty(), "{line}");
+            assert!(events.try_recv().is_err(), "{line}");
+        }
     }
 
     #[test]
@@ -1091,6 +1123,7 @@ mod transport_tests {
         assert_eq!(active.load(Ordering::Acquire), 0);
     }
 
+    #[cfg(feature = "legacy-attach")]
     #[test]
     fn serve_accepts_connections_and_answers_legacy_ping() {
         let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind serve listener");
@@ -1224,7 +1257,7 @@ mod transport_tests {
     #[test]
     fn schema_method_enum_matches_describe_capabilities() {
         let schema: Value =
-            serde_json::from_str(include_str!("../../../docs/runtime-api-v1.schema.json"))
+            serde_json::from_str(include_str!("../../../assets/runtime-api-v1.schema.json"))
                 .expect("protocol schema must stay valid JSON");
         let methods: Vec<&str> = schema["$defs"]["request"]["properties"]["method"]["enum"]
             .as_array()
@@ -1514,7 +1547,7 @@ mod transport_tests {
     #[test]
     fn capabilities_schema_and_routing_table_are_three_way_consistent() {
         let schema: Value =
-            serde_json::from_str(include_str!("../../../docs/runtime-api-v1.schema.json"))
+            serde_json::from_str(include_str!("../../../assets/runtime-api-v1.schema.json"))
                 .expect("protocol schema must stay valid JSON");
         let methods: Vec<&str> = schema["$defs"]["request"]["properties"]["method"]["enum"]
             .as_array()
