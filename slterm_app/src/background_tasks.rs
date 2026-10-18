@@ -6,6 +6,8 @@
 //! 一次性/事件驱动任务由调用方在后台执行器上触发;零新增常驻 OS 定时器。
 //!
 //! 注册任务:
+//! - `planBalance`:套餐余量查询(执行体归 10 篇 plan_balance;订阅方 = 壳
+//!   启动链,M10.12 接线);
 //! - `agentScreenWatchdog`:1 Hz 屏幕看门狗与托盘快照同拍(订阅方 = workspace);
 //! - `autoUpdateCheck`:启动一次性更新检查,`interval_sec` 即启动延迟秒数
 //!   (12s 契约值);立即段(水合/缓存提示)不受延迟影响;
@@ -19,6 +21,8 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
+/// 套餐余量查询(09 篇注册表条目归 09 锚点,执行体归 10 篇 plan_balance)。
+pub(crate) const PLAN_BALANCE: &str = "planBalance";
 /// 屏幕看门狗 + 托盘快照(同拍融合,见 `workspace::pumps`)。
 pub(crate) const AGENT_SCREEN_WATCHDOG: &str = "agentScreenWatchdog";
 /// 启动一次性更新检查。
@@ -40,9 +44,8 @@ pub(crate) enum TaskSchedule {
 
 /// 进程级执行体:在 GPUI background executor 上 spawn。
 ///
-/// 当前三个任务都需要 UI/调用方上下文,统一走订阅方自驱(`executor: None`);
-/// 该类型为后续进程级任务(planBalance 归 10 篇)保留注册表契约。
-#[allow(dead_code)] // 消费点 = 10 篇 planBalance 执行体。
+/// `planBalance` 以 `Some(poll_once_executor)` 走进程级执行体;其余任务需要
+/// UI/调用方上下文,统一走订阅方自驱(`executor: None`)。
 pub(crate) type TaskExecutor = fn();
 
 /// 任务元数据(静态切片条目)。
@@ -96,6 +99,16 @@ pub(crate) const SETTINGS_KEY: &str = "backgroundTasks";
 /// 任务注册表(元数据单点)——同序 zip [`RUNTIMES`],等长由测试锁死。
 pub(crate) static TASKS: &[TaskDef] = &[
     TaskDef {
+        task_id: PLAN_BALANCE,
+        title: "套餐余量查询",
+        interval_min: 10,
+        interval_max: 3600,
+        interval_default: 10,
+        enabled_default: true,
+        executor: Some(crate::plan_balance::poll_once_executor),
+        schedule: TaskSchedule::Interval,
+    },
+    TaskDef {
         task_id: AGENT_SCREEN_WATCHDOG,
         title: "屏幕看门狗/托盘快照",
         interval_min: 1,
@@ -129,7 +142,8 @@ pub(crate) static TASKS: &[TaskDef] = &[
 ];
 
 /// 运行时内存配置存储(静态引用见 [`RUNTIMES`];原子量需要具名 static)。
-static RUNTIME_STORE: [TaskRuntime; 3] = [
+static RUNTIME_STORE: [TaskRuntime; 4] = [
+    TaskRuntime::new(true, 10),
     TaskRuntime::new(true, 1),
     TaskRuntime::new(true, 12),
     TaskRuntime::new(true, 0),
@@ -330,9 +344,9 @@ mod background_task_tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::{
-        AGENT_SCREEN_WATCHDOG, AUTO_UPDATE_CHECK, AUTO_UPDATE_DOWNLOAD, RUNTIMES, SETTINGS_KEY,
-        TASKS, TaskRunOutcome, TaskSchedule, apply_config, begin, interval_sec, reset_for_test,
-        run_once, subscribe,
+        AGENT_SCREEN_WATCHDOG, AUTO_UPDATE_CHECK, AUTO_UPDATE_DOWNLOAD, PLAN_BALANCE, RUNTIMES,
+        SETTINGS_KEY, TASKS, TaskRunOutcome, TaskSchedule, apply_config, begin, interval_sec,
+        reset_for_test, run_once, subscribe,
     };
 
     fn counter() -> Arc<AtomicUsize> {
@@ -352,13 +366,26 @@ mod background_task_tests {
         assert_eq!(
             ids,
             [
+                PLAN_BALANCE,
                 AGENT_SCREEN_WATCHDOG,
                 AUTO_UPDATE_CHECK,
                 AUTO_UPDATE_DOWNLOAD
             ]
         );
 
-        let watchdog = &TASKS[0];
+        // planBalance:套餐余量查询——默认 10s,合法 10–3600,进程级执行体。
+        let plan = &TASKS[0];
+        assert_eq!(plan.schedule, TaskSchedule::Interval);
+        assert_eq!(plan.interval_min, 10);
+        assert_eq!(plan.interval_default, 10);
+        assert_eq!(plan.interval_max, 3600);
+        assert!(plan.enabled_default);
+        assert!(
+            plan.executor.is_some(),
+            "planBalance 执行体归 10 篇 plan_balance"
+        );
+
+        let watchdog = &TASKS[1];
         assert_eq!(watchdog.schedule, TaskSchedule::Interval);
         assert_eq!(watchdog.interval_min, 1);
         assert_eq!(watchdog.interval_default, 1);
@@ -366,7 +393,7 @@ mod background_task_tests {
         assert!(watchdog.enabled_default);
         assert!(watchdog.executor.is_none(), "看门狗由 workspace 订阅自驱");
 
-        let check = &TASKS[1];
+        let check = &TASKS[2];
         assert_eq!(check.schedule, TaskSchedule::Once);
         assert_eq!(check.interval_min, 12);
         assert_eq!(check.interval_default, 12);
@@ -378,7 +405,7 @@ mod background_task_tests {
             std::time::Duration::from_secs(12)
         );
 
-        let download = &TASKS[2];
+        let download = &TASKS[3];
         assert_eq!(download.schedule, TaskSchedule::OnDemand);
         assert!(download.executor.is_none());
 
@@ -421,11 +448,11 @@ mod background_task_tests {
             super::has_subscribers(AGENT_SCREEN_WATCHDOG),
             "尚有订阅者时保持轮询"
         );
-        assert!(RUNTIMES[0].running.load(Ordering::Relaxed));
+        assert!(RUNTIMES[1].running.load(Ordering::Relaxed));
 
         drop(second);
         assert!(!super::has_subscribers(AGENT_SCREEN_WATCHDOG));
-        assert!(!RUNTIMES[0].running.load(Ordering::Relaxed), "订阅归零即停");
+        assert!(!RUNTIMES[1].running.load(Ordering::Relaxed), "订阅归零即停");
         assert_eq!(
             run_once(AGENT_SCREEN_WATCHDOG, || Ok(())),
             TaskRunOutcome::Inactive
@@ -464,8 +491,8 @@ mod background_task_tests {
         reset_for_test();
         let _subscription = subscribe(AGENT_SCREEN_WATCHDOG).expect("已注册");
         let before = (
-            RUNTIMES[0].enabled.load(Ordering::Relaxed),
-            RUNTIMES[0].interval_sec.load(Ordering::Relaxed),
+            RUNTIMES[1].enabled.load(Ordering::Relaxed),
+            RUNTIMES[1].interval_sec.load(Ordering::Relaxed),
         );
         assert_eq!(
             run_once(AGENT_SCREEN_WATCHDOG, || Err("模拟失败".to_owned())),
@@ -483,8 +510,8 @@ mod background_task_tests {
         assert_eq!(
             before,
             (
-                RUNTIMES[0].enabled.load(Ordering::Relaxed),
-                RUNTIMES[0].interval_sec.load(Ordering::Relaxed)
+                RUNTIMES[1].enabled.load(Ordering::Relaxed),
+                RUNTIMES[1].interval_sec.load(Ordering::Relaxed)
             ),
             "单轮失败不得落成持久失败态"
         );
@@ -512,7 +539,7 @@ mod background_task_tests {
     fn config_changes_take_effect_without_restarting_the_loop() {
         reset_for_test();
         let _subscription = subscribe(AGENT_SCREEN_WATCHDOG).expect("已注册");
-        let running = RUNTIMES[0].running.load(Ordering::Relaxed);
+        let running = RUNTIMES[1].running.load(Ordering::Relaxed);
         assert!(running, "订阅激活后驱动循环存活");
 
         apply_config(AGENT_SCREEN_WATCHDOG, Some(false), Some(5)).expect("合法配置");
@@ -529,7 +556,7 @@ mod background_task_tests {
             "重新启用后同一循环继续工作"
         );
         assert_eq!(
-            RUNTIMES[0].running.load(Ordering::Relaxed),
+            RUNTIMES[1].running.load(Ordering::Relaxed),
             running,
             "改配不得重建驱动循环"
         );

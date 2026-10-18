@@ -352,6 +352,107 @@ mod secrets_tests {
         }
     }
 
+    // ---- SecretBytes::as_bytes 借出白名单(B60) ----
+
+    /// 允许借出 SecretBytes 字节的调用点(10 篇):仅凭据域请求头组装与
+    /// 句柄自身语义用例;新增调用点须回 10 篇登记后加入白名单。
+    const AS_BYTES_WHITELIST: [&str; 4] = [
+        "secrets.rs",
+        "ai_providers.rs",
+        "plan_balance/deepseek.rs",
+        "plan_balance/kimi.rs",
+    ];
+
+    /// 取 `:` 前的标识符(用于识别 SecretBytes 绑定)。
+    fn identifier_before(text: &str, end: usize) -> Option<&str> {
+        let prefix = text[..end].trim_end();
+        let start = prefix
+            .rfind(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
+            .map(|index| index + 1)
+            .unwrap_or(0);
+        let name = &prefix[start..];
+        (!name.is_empty()).then_some(name)
+    }
+
+    /// 文件中以 SecretBytes 类型绑定的变量名:形参(`name: &SecretBytes`)、
+    /// 构造(`let name = SecretBytes::new`)与凭据读取函数返回值。
+    fn secret_bytes_bindings(source: &str) -> Vec<String> {
+        const LOADERS: [&str; 4] = [
+            "SecretBytes::new",
+            "load_api_key",
+            "load_generic_secret",
+            "load_secret",
+        ];
+        let mut names = Vec::new();
+        for line in source.lines() {
+            for pattern in [": &SecretBytes", ": SecretBytes"] {
+                for (start, _) in line.match_indices(pattern) {
+                    if let Some(name) = identifier_before(line, start) {
+                        names.push(name.to_owned());
+                    }
+                }
+            }
+            if let Some(let_index) = line.find("let ")
+                && LOADERS.iter().any(|loader| line.contains(loader))
+            {
+                let rest = line[let_index + "let ".len()..].trim();
+                let name: String = rest
+                    .chars()
+                    .take_while(|character| character.is_ascii_alphanumeric() || *character == '_')
+                    .collect();
+                if !name.is_empty() {
+                    names.push(name);
+                }
+            }
+        }
+        names.sort();
+        names.dedup();
+        names
+    }
+
+    /// SecretBytes 借出点静态扫描:非白名单文件的 `name.as_bytes()` 与链式
+    /// 借出一律拒绝(B60 防旁路扩散;白名单语义见 10 篇测试点)。
+    #[test]
+    fn secret_bytes_as_bytes_borrow_sites_are_whitelisted() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        collect_rust_sources(&root, &mut files);
+        let mut inspected_sites = 0usize;
+        for path in files {
+            let relative = path
+                .strip_prefix(&root)
+                .expect("源码路径在 src 下")
+                .to_string_lossy()
+                .replace('\\', "/");
+            let source = std::fs::read_to_string(&path).expect("读取源码");
+            let whitelisted = AS_BYTES_WHITELIST.contains(&relative.as_str());
+            for binding in secret_bytes_bindings(&source) {
+                let needle = format!("{binding}.as_bytes()");
+                for _ in source.match_indices(needle.as_str()) {
+                    inspected_sites += 1;
+                    assert!(
+                        whitelisted,
+                        "{relative}: SecretBytes 借出点 {needle} 不在白名单(仅请求头组装/句柄语义用例)"
+                    );
+                }
+            }
+            // 链式借出(接收者不是简单标识符)同样受限;白名单文件内部放行。
+            for line in source.lines() {
+                if line.contains("SecretBytes") && line.contains(".as_bytes()") {
+                    inspected_sites += 1;
+                    assert!(
+                        whitelisted,
+                        "{relative}: SecretBytes 链式借出不在白名单: {line}"
+                    );
+                }
+            }
+        }
+        assert!(
+            inspected_sites >= 3,
+            "扫描面失效:未命中预期的 SecretBytes 借出点(白名单或检测规则需复核)"
+        );
+    }
+
     // ---- 凭据域边界(日志层):任何日志不得插值 token ----
 
     static CAPTURED_LOGS: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());

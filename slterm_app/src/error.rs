@@ -15,6 +15,9 @@ pub enum AppError {
     Pty(std::io::Error),
     /// GPUI 开窗/消息循环失败。
     Gpui(anyhow::Error),
+    /// 领域内部失败(plan_balance 查询/解析等)。消息为用户可见语义,
+    /// 禁止携带凭据值(10 篇 SEC-18 红线)。
+    Unknown(String),
 }
 
 impl fmt::Display for AppError {
@@ -23,6 +26,7 @@ impl fmt::Display for AppError {
             Self::Io(error) => write!(f, "io error: {error}"),
             Self::Pty(error) => write!(f, "pty error: {error}"),
             Self::Gpui(error) => write!(f, "gpui error: {error}"),
+            Self::Unknown(message) => write!(f, "unknown error: {message}"),
         }
     }
 }
@@ -32,6 +36,7 @@ impl std::error::Error for AppError {
         match self {
             Self::Io(error) | Self::Pty(error) => Some(error),
             Self::Gpui(error) => Some(error.as_ref()),
+            Self::Unknown(_) => None,
         }
     }
 }
@@ -69,6 +74,17 @@ mod error_tests {
         for error in [io, pty, gpui] {
             assert!(std::error::Error::source(&error).is_some());
         }
+    }
+
+    /// 领域内部失败包:消息原样透出,无底层 source(不伪装成 io/gpui 错误)。
+    #[test]
+    fn unknown_package_carries_the_domain_message_without_a_source() {
+        let error = AppError::Unknown("套餐 kimi 查询失败: HTTP 500".into());
+        assert_eq!(
+            error.to_string(),
+            "unknown error: 套餐 kimi 查询失败: HTTP 500"
+        );
+        assert!(std::error::Error::source(&error).is_none());
     }
 
     #[test]

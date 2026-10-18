@@ -93,6 +93,10 @@ pub(crate) mod markdown;
 // 系统 toast 投递在 platform::notifications。
 pub(crate) mod notify;
 pub(crate) mod panic;
+// 套餐余量与后台轮询(10 篇 M10.11):user 层 settings.json 来源 + 双套餐查询
+// 注册表 + 快照槽/watch 推送 + GPUI executor 执行体;查询语义 F10 原样。
+#[allow(dead_code)] // UI 消费点归 M10.12;执行体已挂 background_tasks 注册表。
+pub(crate) mod plan_balance;
 pub(crate) mod platform;
 pub(crate) mod process_tree;
 // provider 连通性测试语义化结果(08 篇):UI 边界再转本地化文案。
