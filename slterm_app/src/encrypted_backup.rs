@@ -463,7 +463,12 @@ fn add_themes(root: &Path, entries: &mut Vec<BackupEntry>) -> Result<(), String>
         let bytes = fs::read(&path).map_err(|error| format!("读取主题文件失败: {error}"))?;
         // 导入侧复验同一判据;坏文档在导出侧即不入包。
         if crate::theme_library::ThemeDocument::from_json_bytes(&bytes).is_err() {
-            log::warn!(target: "audit", "备份跳过无有效主题文档: {}", path.display());
+            tracing::warn!(
+                target: crate::audit::TARGET,
+                operation = "backup_skip_invalid_theme",
+                "备份跳过无有效主题文档: {}",
+                path.display()
+            );
             continue;
         }
         entries.push(BackupEntry {

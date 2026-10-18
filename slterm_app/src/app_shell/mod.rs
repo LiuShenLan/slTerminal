@@ -202,6 +202,10 @@ pub fn run_shell(initial_cwd: Option<PathBuf>, initial_command: Option<Program>)
         crate::update_check::start_gpui(cx, move |result| {
             let _ = update_events.send(SltermShellEvent::UpdateAvailable(result));
         });
+        // 套餐余量轮询(10 篇 M10.12/C34):注册表订阅 + 后台循环,首轮立即
+        // 执行,此后按注册表节拍(默认 10s);订阅守卫随任务存活,Drop 退订。
+        // 阻塞 HTTP 全程在 background executor,UI 线程零阻塞。
+        crate::plan_balance::start_background_poll(cx.background_executor().clone());
         // 静默启动(09 篇 M10.6):仅无显式 CLI 启动时参与;窗口以隐藏
         // 形态创建,托盘「显示」经 M10.4 focus facade 回窗。
         let start_hidden = starts_hidden(restore_tabs, cx.global::<config::Settings>());

@@ -303,9 +303,11 @@ pub(super) fn apply(agent: AgentHook, enabled: bool) -> io::Result<()> {
             if let InstallOutcome::Suspended { suspicious_command } =
                 ensure_claude_hooks(review_statusline_command)
             {
-                log::warn!(
-                    target: "audit",
-                    "ai_hook: claude statusLine 原命令命中审查词表,自愈跳过(零写盘): {suspicious_command}"
+                tracing::warn!(
+                    target: crate::audit::TARGET,
+                    operation = "statusline_review",
+                    result = "suspended",
+                    "SEC-12 claude statusLine 原命令命中审查词表,自愈跳过(零写盘): {suspicious_command}"
                 );
             }
         }

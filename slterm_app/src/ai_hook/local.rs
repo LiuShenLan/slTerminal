@@ -116,9 +116,11 @@ fn suspicious_statusline_pattern(command: &str) -> Option<&'static str> {
 pub(crate) fn review_statusline_command(raw: &str) -> InstallGate {
     match suspicious_statusline_pattern(raw) {
         Some(pattern) => {
-            log::warn!(
-                target: "audit",
-                "statusline 原命令命中可疑模式 {pattern}(SEC-12 审查,暂停安装待用户确认): {raw}"
+            tracing::warn!(
+                target: crate::audit::TARGET,
+                operation = "statusline_review",
+                pattern = %pattern,
+                "SEC-12 statusline 原命令命中审查词表,暂停安装待用户确认: {raw}"
             );
             InstallGate::Suspended {
                 suspicious_command: raw.to_owned(),
@@ -235,7 +237,8 @@ fn ensure_claude_hooks_in(
     let Ok(raw) = serde_json::to_string_pretty(&root) else {
         return InstallOutcome::Conflict;
     };
-    match write_atomic(&path, &raw) {
+    // SEC-17:user 层 settings.json 写入唯一路径 = 审计包装。
+    match crate::audit::write_user_settings(&path, &raw, "ai_hook::ensure_claude_hooks") {
         Ok(()) => {
             log::info!("ai_hook: claude hooks installed into {}", path.display());
             InstallOutcome::Installed
@@ -341,7 +344,12 @@ pub(super) fn remove_claude_hooks_at(dir: &Path) -> std::io::Result<bool> {
         serde_json::from_str(&raw).map_err(|e| std::io::Error::other(e.to_string()))?;
     let changed = remove_claude_hooks_from(&mut root);
     if changed {
-        write_atomic(&path, &serde_json::to_string_pretty(&root)?)?;
+        // SEC-17:卸载同样是 user 层 settings.json 写入,必须审计留痕。
+        crate::audit::write_user_settings(
+            &path,
+            &serde_json::to_string_pretty(&root)?,
+            "ai_hook::remove_claude_hooks",
+        )?;
     }
     Ok(changed)
 }
@@ -552,6 +560,9 @@ fn helper_command() -> Option<String> {
 }
 
 /// 临时文件 + rename 写盘:读者永远看不到写了一半的文件,崩溃留下原文件。
+///
+/// 只用于 codex/kimi 等非 claude 配置文件;user 层 `~/.claude/settings.json`
+/// 恒走 [`crate::audit::write_user_settings`](SEC-17 唯一写路径)。
 fn write_atomic(path: &Path, data: &str) -> std::io::Result<()> {
     // 临时文件名带上进程号。多个实例各自守着同一份 `settings.json` 自愈,
     // 共用一个固定 tmp 名就会互相踩:A 写 tmp、B 覆盖同一个 tmp、A rename

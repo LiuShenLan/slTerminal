@@ -156,7 +156,8 @@ fn save_merged_locked(path: &Path, updates: &[(&str, Value)]) -> io::Result<()> 
     {
         log::warn!("settings .bak 备份失败: {error}");
     }
-    crate::atomic_file::write(path, text.as_bytes())
+    // SEC-17:设置写唯一路径 = 审计包装(operation/source/result 留痕)。
+    crate::audit::write_settings(path, &text, "settings_store::save_merged_locked")
 }
 
 /// 白名单校验:更新键必须是注册表 leaf 键或域外段名;未知键拒绝落盘。
@@ -217,7 +218,10 @@ fn recover_corrupted(path: &Path) -> LoadResult {
     };
     // 备份数据重整为 pretty 形态重建主文件;损坏原件已在 quarantine 中保留。
     let text = json::to_string_pretty(&backup);
-    if let Err(error) = crate::atomic_file::write(path, text.as_bytes()) {
+    // SEC-17:损坏恢复重建同样经审计包装(唯一写路径)。
+    if let Err(error) =
+        crate::audit::write_settings(path, &text, "settings_store::recover_corrupted")
+    {
         log::warn!("settings.json 从 .bak 重建失败: {error}");
     }
     LoadResult {

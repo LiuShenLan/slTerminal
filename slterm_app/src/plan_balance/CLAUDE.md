@@ -25,7 +25,9 @@
 
 ## 步骤接缝
 
-- 壳启动链须订阅 `planBalance` 并在后台执行器上按节拍驱动(M10.12)。
+- 壳启动链已接(M10.12):`app_shell::run_shell` → `start_background_poll`
+  (注册表订阅 + GPUI background executor 循环;首轮立即,后续按注册表节拍;
+  任务 Drop = 退订;enabled 门控走 `background_tasks` 原子量)。
 - UI 展示/刷新入口消费 `current_snapshot()` / `subscribe()` /
-  `refresh_plan_balance()`,归 M10.12。
+  `refresh_plan_balance()`,归 06 设置页/HUD。
 - 真实 provider API 出网豁免登记于 `.claude/test-exemptions.md`(M10.11 条)。

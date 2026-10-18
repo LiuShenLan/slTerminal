@@ -14,6 +14,9 @@
 pub(crate) mod app_shell;
 // 持久化小原语(原子写/文件锁):ai_hook 安装器与各域状态写共用。
 pub(crate) mod atomic_file;
+// 安全审计通道(10 篇 M10.12;SEC-12/13/17):tracing target "audit";
+// 设置写唯一包装(user 层 settings.json + app 设置)+ SEC-13 哈希对账事件。
+pub(crate) mod audit;
 // M4.5 单 pane 宿主:事件泵派发与 AgentActivity/AnswerInbox 归属。
 pub(crate) mod agent_host;
 // 后台任务注册表(09 篇 M10.8):元数据单点、订阅生命周期、重入闸门与

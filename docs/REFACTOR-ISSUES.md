@@ -86,7 +86,7 @@
 | B56 | **终端默认背景仍是壳底色 token**：网格区未绘制 `Settings.palette.background`，默认格透出 Root 壳色。 | `view/element.rs` 容器底色层 | M10.7 | 02/06 篇若引入独立终端卡底色，在卡层之上、单元格之下补单层（直接叠加会二次 alpha）。 |
 | B57 | **live opacity 预览与并发 Changed 边界**：拖拽期间恰有其它设置触发 `Changed`，`wallpaper::refresh` 会用已持久化值覆盖预览（概率低）。 | `settings_pane/persistence.rs` `preview_opacity` | M10.7 | live 值并入全局或给 refresh 加预览旁路。 |
 | B58 | **禁用态循环语义待裁定**：有订阅但 `enabled=false` 时看门狗循环仍按节拍唤醒跳过执行（自愈形态）；旧后端禁用即退出。当前无任务配置 UI 不可达。 | `workspace/pumps.rs` 看门狗 | M10.8 | 06 接入禁用/启用时裁定是否保留该形态。 |
-| B59 | **凭据域「业务只经 secrets 门面」无编译期/扫描门禁**：`platform::credentials` 为 `pub(crate)`，旁路仅靠文档纪律。 | `platform/credentials.rs` | M10.9 | M10.12 加源码扫描守卫（禁止 secrets.rs 外引用 platform::credentials）。 |
+| B59 | ~~**凭据域「业务只经 secrets 门面」无编译期/扫描门禁**：`platform::credentials` 为 `pub(crate)`，旁路仅靠文档纪律。~~（M10.12 已加 `platform_credential_backend_is_reachable_only_through_the_secrets_facade` 源码扫描守卫）。 | `platform/credentials.rs` | M10.9 | 已闭环。 |
 | B60 | **`SecretBytes::as_bytes` 调用点白名单未守卫**：设计测试点要求「域内借出仅限白名单调用点」。 | `secrets.rs` | M10.9 | M10.11 落 as_bytes 调用点扫描断言。 |
 | B61 | **真 Credential Manager 用例依赖用户凭据库**：默认随 lib_tests 运行（隔离 target + Drop 清理）；无凭据库的服务账户 CI 会失败。 | `secrets.rs` 测试 | M10.9 | 若 CI 化改环境变量门控并登记豁免。 |
 | B62 | **备份 `add_themes` 非法主题静默跳过**：仅 audit 日志，备份会缺该类文件；若要硬失败需改。 | `encrypted_backup.rs` `add_themes` | M10.10 | 安全边界内取舍，登记。 |
@@ -129,10 +129,10 @@
 | C28 | **`update-check` CLI 诊断子命令未加**（任务标注可选）。 | 后续 | 排障需要时在 `cli.rs` 挂。 |
 | C29 | **`.slterm-update.slterm-lock` 启动残留**：锁权威是内核句柄，空文件无害（上游同构）。 | 产品取舍 | 如需零残留正常退出时删除。 |
 | C30 | **`backgroundTasks` 段未进 06 设置键注册表**：当前只落运行时原子量与 `apply_config`（测试覆盖）。 | 06 设置页 / M10.11 | 随 planBalance/任务配置 UI 落地时正式登记该段。 |
-| C31 | **日志边界测试用 `log::Log` 而非 tracing**：仓库当前无 tracing 依赖；M10.12 引入 audit target 后需补 tracing 捕获断言。 | M10.12 | 扩展或迁移该用例。 |
+| C31 | ~~**日志边界测试用 `log::Log` 而非 tracing**：仓库当前无 tracing 依赖；M10.12 引入 audit target 后需补 tracing 捕获断言。~~（M10.12 已补：`logs_never_contain_credential_plaintext` 同时断言 tracing 捕获与 tracing→log 桥接）。 | M10.12 | 已闭环。 |
 | C32 | **`RestorePoint` 无 loader**：names 私有且无 open，仅能撤回本次会话返回的句柄；跨重启恢复点清单/撤回归 06 设置页 UI 决策（上游同限制）。 | 06 UI | 落 `RestorePoint::open(path, passphrase)` 或维持会话内撤回语义。 |
 | C33 | **备份 `collect` 整单失败需 UI 展示**：settings/providers 不可解析时整单失败（安全取向），UI 须明示避免误以为成功。 | 06 UI | 随 D10-4 设置页安全分区落地。 |
-| C34 | **planBalance 生产启动链未接**：注册表条目与 executor 已就绪，但生产无订阅/poller 循环（当前仅 L1 进程内驱动）。 | M10.12 | 壳启动 `subscribe` + `background_spawn` 循环按 interval 调 `poll_once_executor`；UI 消费 `current_snapshot` + `subscribe`。 |
+| C34 | ~~**planBalance 生产启动链未接**：注册表条目与 executor 已就绪，但生产无订阅/poller 循环（当前仅 L1 进程内驱动）。~~（M10.12 已接：`app_shell::run_shell` → `plan_balance::start_background_poll`；虚拟时钟用例锁定节拍/enabled 门控/Drop 退订）。UI 消费 `current_snapshot` + `subscribe` 归 06。 | M10.12 | 启动链已闭环。 |
 
 ## D. 已修（存档，防重复登记）
 

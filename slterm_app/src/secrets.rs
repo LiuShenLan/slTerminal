@@ -453,6 +453,41 @@ mod secrets_tests {
         );
     }
 
+    // ---- 凭据域门禁(B59):platform::credentials 仅 secrets 门面可达 ----
+
+    /// 全仓源码扫描:凭据管理器后端引用只允许出现在 `secrets.rs`。
+    /// `platform::credentials` 为 `pub(crate)`,旁路仅靠文档纪律不够——本用例
+    /// 把「业务只经 secrets 门面」降为可机验断言。
+    #[test]
+    fn platform_credential_backend_is_reachable_only_through_the_secrets_facade() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        collect_rust_sources(&root, &mut files);
+        // 禁词拆分书写,避免扫描器自命中(本文件即白名单)。
+        let needle = concat!("platform::", "credentials");
+        let mut facade_references = 0usize;
+        for path in files {
+            let relative = path
+                .strip_prefix(&root)
+                .expect("源码路径在 src 下")
+                .to_string_lossy()
+                .replace('\\', "/");
+            let source = std::fs::read_to_string(&path).expect("读取源码");
+            if relative == "secrets.rs" {
+                facade_references += source.matches(needle).count();
+                continue;
+            }
+            assert!(
+                !source.contains(needle),
+                "{relative}: 旁路引用 {needle};凭据管理器只许经 secrets.rs 门面"
+            );
+        }
+        assert!(
+            facade_references >= 2,
+            "扫描面失效:secrets.rs 未引用凭据管理器后端"
+        );
+    }
+
     // ---- 凭据域边界(日志层):任何日志不得插值 token ----
 
     static CAPTURED_LOGS: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
@@ -498,6 +533,8 @@ mod secrets_tests {
             log::set_logger(&CAPTURE_LOGGER).expect("安装测试日志捕获层");
             log::set_max_level(log::LevelFilter::Trace);
         });
+        // C31:tracing 捕获层(线程级,不占全局 logger 槽位)。
+        let tracing_capture = crate::audit::test_support::capture_events();
 
         const TOKEN: &str = "sk-test-log-boundary-17f3";
         let store = MemoryCredentialStore::default();
@@ -526,15 +563,49 @@ mod secrets_tests {
             "credential boundary probe: target={}",
             "Slterm/Test/probe"
         );
+        // C31:审计事件走 tracing 通道;`log-always` 无条件桥接落同一日志栈
+        // ——这里同时验证「tracing 捕获」与「log 桥接」两形态。
+        tracing::warn!(
+            target: crate::audit::TARGET,
+            operation = "credential_boundary_probe",
+            "SEC-17 credential boundary probe via tracing: target={}",
+            "Slterm/Test/probe"
+        );
         let captured = CAPTURED_LOGS.lock().expect("日志捕获锁");
         assert!(
             captured.iter().any(|(target, message)| target == "audit"
                 && message.contains("credential boundary probe")),
             "捕获层未生效"
         );
+        assert!(
+            captured.iter().any(|(target, message)| target == "audit"
+                && message.contains("probe via tracing")),
+            "tracing→log 桥接未生效(生产审计会丢事件)"
+        );
         for (target, message) in captured.iter() {
             assert!(!target.contains(TOKEN), "日志 target 泄露凭据: {target}");
             assert!(!message.contains(TOKEN), "日志内容泄露凭据: {message}");
         }
+        // 释放捕获锁:后续审计事件会经 log 桥接再次进入捕获层。
+        drop(captured);
+
+        // 审计包装写入的内容含假凭据:事件只留路径/字段,不得带内容值。
+        let directory = tempfile::tempdir().expect("创建临时目录");
+        let audit_path = directory.path().join("settings.json");
+        crate::audit::write_user_settings(
+            &audit_path,
+            &format!("{{\"env\":{{\"ANTHROPIC_AUTH_TOKEN\":\"{TOKEN}\"}}}}"),
+            "secrets::logs_never_contain_credential_plaintext",
+        )
+        .expect("审计包装写入");
+        let tracing_text = tracing_capture.text();
+        assert!(
+            tracing_text.contains("audit"),
+            "tracing 捕获未命中 audit target: {tracing_text}"
+        );
+        assert!(
+            !tracing_text.contains(TOKEN),
+            "tracing 审计事件泄露凭据: {tracing_text}"
+        );
     }
 }

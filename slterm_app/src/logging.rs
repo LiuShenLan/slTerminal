@@ -24,9 +24,12 @@ const EXTRA_LOG_TARGETS_ENV: &str = "SLTERM_EXTRA_LOG_TARGETS";
 #[allow(dead_code)] // 随 debug_log 的调用点(04 篇 runtime 诊断链)接线。
 const DEBUG_LOG_ENV: &str = "SLTERM_DEBUG_LOG";
 
-/// 常驻放行 target:自家两 crate。gpui/依赖树的 Error/Warn 在 max_level=Trace
-/// 时放行(见 is_allowed_target),常态不刷屏。
-const ALLOWED_TARGETS: &[&str] = &["slterm_terminal", "slterm"];
+/// 常驻放行 target:自家两 crate + 安全审计通道。gpui/依赖树的 Error/Warn 在
+/// max_level=Trace 时放行(见 is_allowed_target),常态不刷屏。
+///
+/// `audit` = 10 篇 M10.12 SEC-12/13/17 唯一通道(tracing target 经 log 桥接
+/// 落到本 logger);取证面不随常态档位静默。
+const ALLOWED_TARGETS: &[&str] = &["slterm_terminal", "slterm", "audit"];
 
 /// 诊断辅助:写 data_dir 下的 debug 日志,`SLTERM_DEBUG_LOG` 显式开启才落盘。
 /// 给启动期/发布形态下没法走 log crate 的环节用(开关读取有 OnceLock 缓存)。

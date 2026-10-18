@@ -68,6 +68,10 @@ vte = { version = "0.15.0", default-features = false, features = ["std", "ansi"]
 # (宏内部专用),业务侧必须直连 anyhow 本体。
 anyhow = "1"
 log = "0.4"
+# 安全审计通道(10 篇 M10.12):SEC-12/13/17 唯一形态 = tracing target
+# "audit";`log-always` 让事件无条件桥接进既有 log 栈(单日志栈,不重复
+# 初始化)——审计取证不因任何 tracing subscriber 装配而丢事件。
+tracing = { version = "0.1", features = ["log-always"] }
 # ai_hook 信封/载荷解析(helper 不重编码,JSON 工作全在宿主侧)。
 serde_json = "1"
 # CLI 双人格 clap 面(04 篇 M7.4):同 exe 子命令与 GUI 参数共用一份定义,
@@ -137,6 +141,11 @@ image = { version = "0.25", default-features = false, features = ["bmp", "gif", 
 # Windows 系统代理读取(09 篇 M10.5):HKCU Internet Settings 的
 # ProxyEnable/ProxyServer/ProxyOverride;不走 ureq 的 win-system-proxy。
 winreg = "0.56"
+
+[dev-dependencies]
+# 审计事件格式断言(10 篇 M10.12/C31):测试内作用域订阅器只开 fmt 层,
+# 不引入全局 subscriber(生产仍走 tracing→log 单栈桥接)。
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }
 
 [build-dependencies]
 # i18n 静态生成器(06 篇):目录遍历由语言注册表驱动,故构建期依赖设置 crate。

@@ -252,6 +252,42 @@ pub(crate) fn poll_once_executor() {
     apply_snapshot(new);
 }
 
+/// 启动 planBalance 生产轮询(C34,壳启动链唯一入口)。
+///
+/// 注册表订阅随任务存活,Drop 即退订;首轮立即执行,此后按注册表节拍
+/// (默认 10s,`apply_config` 直写原子量下一轮生效)。每轮经注册表
+/// `run_once` 门控 enabled/订阅/重入;阻塞 HTTP 全程在 GPUI background
+/// executor,UI 线程零阻塞。UI 消费侧读 [`current_snapshot`]/[`subscribe`]。
+pub(crate) fn start_background_poll(executor: gpui::BackgroundExecutor) {
+    spawn_background_poll(executor, poll_once_executor).detach();
+}
+
+/// 循环本体参数化执行体:生产传 [`poll_once_executor`],测试注入计数器
+/// 并持有返回的 `Task` 以验证 Drop 退订。
+fn spawn_background_poll(
+    executor: gpui::BackgroundExecutor,
+    poll: impl Fn() + Send + 'static,
+) -> gpui::Task<()> {
+    let subscription = crate::background_tasks::subscribe(crate::background_tasks::PLAN_BALANCE)
+        .expect("planBalance must be registered in TASKS");
+    executor.clone().spawn(async move {
+        // 订阅守卫随任务存活:任务取消/执行器销毁 → Drop 退订。
+        let _subscription = subscription;
+        loop {
+            // 每轮重读节拍:改配直写原子量,下一轮即生效。
+            let interval =
+                crate::background_tasks::interval_sec(crate::background_tasks::PLAN_BALANCE).max(1);
+            crate::background_tasks::run_once(crate::background_tasks::PLAN_BALANCE, || {
+                poll();
+                Ok(())
+            });
+            executor
+                .timer(std::time::Duration::from_secs(interval))
+                .await;
+        }
+    })
+}
+
 /// 立即刷新(旧语义原样):恒返回 Ok——单来源失败保留旧值,错误不冒泡。
 /// 调用方须在 GPUI background executor 上执行(阻塞 HTTP)。
 #[allow(dead_code)] // 消费点 = M10.12 设置页/托盘刷新入口;本步由用例锁定恒 Ok 语义。
@@ -751,13 +787,18 @@ mod plan_balance_tests {
         collect_rust_sources(&src.join("plan_balance"), &mut files);
         assert!(files.len() >= 5, "扫描面应覆盖 plan_balance 全部源文件");
 
-        // 禁词拆分书写,避免扫描器自命中。
+        // 禁词拆分书写,避免扫描器自命中(本文件同属扫描面)。
         let forbidden = [
             concat!("Credential", "Store"),
             concat!("WindowsCredential", "Store"),
             concat!("load_generic_", "secret"),
             concat!("load_api_", "key"),
+            concat!("save_api_", "key"),
+            concat!("credential_", "target"),
             concat!("platform::", "credentials"),
+            // 凭据库命名空间与 provider 元数据模块均不得进入本通道。
+            concat!("Slterm/", "AI/"),
+            concat!("crate::ai_", "providers"),
         ];
         let mut saw_user_settings_key = false;
         for path in files {
@@ -783,6 +824,11 @@ mod plan_balance_tests {
             concat!("ANTHROPIC_BASE_", "URL"),
             concat!(".cl", "aude"),
             concat!("home_", "dir"),
+            // user 层读取链关键字:settings.json 路径解析与 env 提取。
+            "settings.json",
+            concat!("settings_", "path"),
+            concat!("resolve_", "env"),
+            concat!("crate::plan_", "balance"),
         ] {
             assert!(
                 !providers.contains(needle),
@@ -792,6 +838,70 @@ mod plan_balance_tests {
         assert!(
             providers.contains(concat!("Credential", "Store")),
             "ai_providers 凭据通道应经凭据库 trait(双通道另一侧)"
+        );
+    }
+}
+
+/// 生产启动链接线(C34):虚拟时钟下验证订阅/节拍/enabled 门控/Drop 退订。
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod scheduling_tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    use gpui::TestAppContext;
+
+    use super::spawn_background_poll;
+    use crate::background_tasks;
+
+    /// 首轮立即执行;后续按注册表 interval 节拍;禁用门控即时生效;
+    /// Task Drop = 循环取消 = 订阅归零。
+    #[gpui::test]
+    fn startup_loop_follows_registry_interval_and_unsubscribes_on_drop(cx: &mut TestAppContext) {
+        background_tasks::reset_for_test();
+        super::reset_for_test();
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&calls);
+        let task = spawn_background_poll(cx.executor(), move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+        });
+        assert!(
+            background_tasks::has_subscribers(background_tasks::PLAN_BALANCE),
+            "驱动循环应持有注册表订阅"
+        );
+
+        // 首轮立即执行(公式:无订阅不轮询 → 本轮 Ran)。
+        cx.executor().run_until_parked();
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "启动后应立即拉取一轮");
+
+        // 默认节拍 10s:未到点不触发,到点触发。
+        cx.executor().advance_clock(Duration::from_secs(9));
+        cx.executor().run_until_parked();
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "9s 时不得提前轮询");
+        cx.executor().advance_clock(Duration::from_secs(1));
+        cx.executor().run_until_parked();
+        assert_eq!(calls.load(Ordering::SeqCst), 2, "10s 到点必须轮询");
+
+        // enabled 门控走注册表原子量:禁用后循环照常拍但执行体跳过。
+        background_tasks::apply_config(background_tasks::PLAN_BALANCE, Some(false), None)
+            .expect("合法配置");
+        cx.executor().advance_clock(Duration::from_secs(10));
+        cx.executor().run_until_parked();
+        assert_eq!(calls.load(Ordering::SeqCst), 2, "禁用态不得执行轮询执行体");
+
+        background_tasks::apply_config(background_tasks::PLAN_BALANCE, Some(true), None)
+            .expect("合法配置");
+        cx.executor().advance_clock(Duration::from_secs(10));
+        cx.executor().run_until_parked();
+        assert_eq!(calls.load(Ordering::SeqCst), 3, "重新启用后恢复轮询");
+
+        // Drop 任务 = 取消循环 = 订阅守卫 Drop。
+        drop(task);
+        cx.executor().run_until_parked();
+        assert!(
+            !background_tasks::has_subscribers(background_tasks::PLAN_BALANCE),
+            "任务销毁必须退订"
         );
     }
 }
