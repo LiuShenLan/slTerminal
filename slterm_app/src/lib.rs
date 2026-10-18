@@ -20,10 +20,18 @@ pub(crate) mod agent_host;
 // OSC 133 匹配器消费归 05 篇 M5.3,设置/会话面归 05/06 篇。
 #[allow(dead_code)]
 pub(crate) mod ai_agents;
+// AI assistant 触发链(08 篇 M9.2):便宜门链纯函数、独立配置与建议条
+// 数据形态;建议条渲染与请求发送归 M9.5。
+#[allow(dead_code)]
+pub(crate) mod ai_assistant;
 // 事件通道已由 M4.5 接线;安装/检视面(settings.rs 等)的消费点归 06 篇
 // 设置域,桥接资产与自愈入口在 M4.3 落盘但尚无壳侧调用方。
 #[allow(dead_code)]
 pub(crate) mod ai_hook;
+// provider 元数据与凭据引用(08 篇 M9.2;凭据纪律锚点归 10 篇):
+// 十三家预设、尾四掩码、注入式凭据读写;设置页消费归 M9.5/06。
+#[allow(dead_code)]
+pub(crate) mod ai_providers;
 // 会话注册表写入已由 M5.5 SessionStart 边接线;扫描列表/手动恢复面板的
 // 消费点归后续(命令面板)。
 #[allow(dead_code)]
@@ -68,12 +76,18 @@ pub(crate) mod logging;
 pub(crate) mod panic;
 pub(crate) mod platform;
 pub(crate) mod process_tree;
+// provider 连通性测试语义化结果(08 篇):UI 边界再转本地化文案。
+#[allow(dead_code)]
+pub(crate) mod provider_test;
 // Runtime 控制面(04 篇 M7):版本化信封 + loopback JSON Lines 传输;
 // RuntimeHub/方法族/CLI/单实例移交归 M7.2–M7.5 继续接线。
 pub(crate) mod runtime_api;
 // 非 TTY pane.exec 执行器(04 篇):argv 无 shell 展开、双流并行排水、
 // 超时整树回收;UI owner 以 `spawn` 把结果 respond 回 transport。
 pub(crate) mod runtime_exec;
+// 凭据域消费接口(10 篇 M9.2 过渡形态):trait + 出域句柄;真实
+// Windows 凭据管理器三原语归 M10.9。
+pub(crate) mod secrets;
 pub(crate) mod session;
 // 侧栏文件树模型族(07 篇 M8.4):目录枚举/gitignore/文件名搜索/git 快照。
 // 模型与渲染完全分层;WSL/SVN 臂已裁。

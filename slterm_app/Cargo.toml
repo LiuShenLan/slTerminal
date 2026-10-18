@@ -83,6 +83,8 @@ markdown = "=1.0.0"
 html-escape = "0.2.14"
 # keymap/sequence.rs 的修饰键位族(与 core 同版本族)。
 bitflags = "2.4.1"
+# 凭据出域句柄即用即焚(10 篇锚点;M9.2 先落消费接口 trait)。
+zeroize = "1"
 # 事件信箱/session_pump 的异步通道与 Stream(event_mailbox.rs 随迁形态)。
 futures = "0.3"
 # first_frame 取原生 HWND 走 raw-window-handle(与 gpui 内部同版本族),
