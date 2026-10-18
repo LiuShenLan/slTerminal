@@ -25,6 +25,8 @@
 
 /// 07 篇 M8.1:文件打开路由(openable_in_app → Image/Document/Code)。
 mod documents;
+/// 07 篇 M8.4:侧栏文件树渲染 + 路径栏 + 拖放。
+mod file_tree;
 /// 04 篇 M7.5:Runtime 写命令在 Workspace 上的执行器。
 mod runtime_control;
 pub(crate) mod runtime_projection;
@@ -56,6 +58,7 @@ use slterm_split::{
 };
 
 use super::SltermShellEvent;
+use super::file_drop::FileTreeDrag;
 use super::file_editor::SaveFile;
 use super::settings_pane::{SettingsPane, SettingsPaneEvent};
 use super::windowing::{WorkspaceStartup, startup_geometry};
@@ -201,6 +204,8 @@ pub struct SltermWorkspace {
     file_observations: HashMap<TabId, Subscription>,
     /// 脏关闭确认在途的 tab:同一时刻只允许一个确认框。
     pending_file_close: Option<TabId>,
+    /// 侧栏文件树视图状态(07 篇 M8.4;explorer 槽内容)。
+    file_tree: file_tree::FileTreeState,
 }
 
 /// 键:pane id(方向导航要拿所有叶子的屏幕矩形算最近邻)。
@@ -308,7 +313,10 @@ impl SltermWorkspace {
             runtime_hub,
             file_observations: HashMap::new(),
             pending_file_close: None,
+            file_tree: file_tree::FileTreeState::new(window, cx),
         };
+        // 搜索框变更订阅要 workspace 实体已存在;文件树其余状态由构造给出。
+        workspace.install_file_tree_events(window, cx);
         let restored = plan
             .session
             .as_ref()
@@ -1512,6 +1520,7 @@ impl SltermWorkspace {
             };
             let pane_id = pane.id;
             let store = self.pane_bounds.clone();
+            let drop_view = pane.view.clone();
             // 满卡路径也记录窗口坐标:方向导航与拖拽命中依赖上一帧矩形,
             // 不能只在进入分屏递归后才得到边界。
             return div()
@@ -1520,6 +1529,12 @@ impl SltermWorkspace {
                 .min_h_0()
                 .relative()
                 .debug_selector(move || format!("slterm-pane-{}", pane_id.0))
+                // 文件树拖放落点(07 篇 M8.4 交界 43):路径原文进 PTY。
+                .on_drop(move |drag: &FileTreeDrag, _, cx| {
+                    if let Some(bytes) = crate::side_panel::drop_text_for_path(&drag.path_text) {
+                        drop_view.update(cx, |view, cx| view.drop_path_text(bytes, cx));
+                    }
+                })
                 .child(pane.view.clone())
                 .child(
                     canvas(
@@ -1575,12 +1590,20 @@ impl SltermWorkspace {
                         .inset_0()
                         .bg(cx.theme().background.opacity(0.35))
                 });
+                let drop_view = pane.view.clone();
                 div()
                     .size_full()
                     .min_w_0()
                     .min_h_0()
                     .relative()
                     .debug_selector(move || format!("slterm-pane-{}", id.0))
+                    // 文件树拖放落点(07 篇 M8.4 交界 43):路径原文进 PTY。
+                    .on_drop(move |drag: &FileTreeDrag, _, cx| {
+                        if let Some(bytes) = crate::side_panel::drop_text_for_path(&drag.path_text)
+                        {
+                            drop_view.update(cx, |view, cx| view.drop_path_text(bytes, cx));
+                        }
+                    })
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |this, _: &MouseDownEvent, window, cx| {

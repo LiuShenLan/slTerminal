@@ -131,4 +131,6 @@ windows-sys = { version = "0.59", features = [
     "Win32_UI_Input_KeyboardAndMouse",
     # MessageBoxW(启动错误弹面/panic 钩)、SendMessageW(首帧 present-then-show)。
     "Win32_UI_WindowsAndMessaging",
+    # SHFileOperationW(回收站删除)与 ShellExecuteW(系统处理器打开)。
+    "Win32_UI_Shell",
 ] }

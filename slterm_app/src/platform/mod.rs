@@ -5,6 +5,8 @@
 
 pub mod dirs;
 pub(crate) mod elevation;
+// 系统文件操作(07 篇 M8.4):回收站删除 + 系统处理器打开。
+pub(crate) mod file_operations;
 pub(crate) mod keyboard;
 // 系统 locale 探测源文件(src/platform/locale.rs)经 `i18n::locale` 的
 // `#[path]` 复编进查询核心;此处不再二次挂模块(独立合同 workspace 复编

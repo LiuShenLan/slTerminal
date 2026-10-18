@@ -13,6 +13,8 @@
 ## 步骤接缝
 
 - M8.1 只落只读面:仓库根解析 + HEAD 文件字节(gitshow 数据源)。
+- M8.4 起 `command` 对 `side_panel` 开放:文件树过滤索引与 git 状态快照共用
+  同一子进程构造口(无第二执行体)。
 - M8.5 接 status/diff/hunks/rollback/unstage 四方法与 04 篇
   `verify_repository`/`verify_revision` 核对;旧 git2 语义资产(LRU 仓库缓存 BE-09、
   不扫 ignored CP-008、rename 双检、rollback 三方字节一致)在该步转对照用例。

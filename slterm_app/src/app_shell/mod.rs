@@ -27,6 +27,8 @@ pub(crate) mod code_tab;
 pub(crate) mod config;
 // 文档/图片 tab + openable_in_app 路由单判定(07 篇 M8.1)。
 pub(crate) mod doc_tabs;
+// 文件树拖放载荷 + 独立幽灵预览(07 篇 M8.4)。
+pub(crate) mod file_drop;
 // 文本文件视图骨架(07 篇 M8.1 只读;M8.2 接编辑内核)。
 pub(crate) mod file_editor;
 // 布局转换对(「布局单点」);消费点 = M5.5 快照/恢复闭环。

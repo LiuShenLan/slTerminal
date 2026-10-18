@@ -62,6 +62,9 @@ pub(crate) mod runtime_api;
 // 超时整树回收;UI owner 以 `spawn` 把结果 respond 回 transport。
 pub(crate) mod runtime_exec;
 pub(crate) mod session;
+// 侧栏文件树模型族(07 篇 M8.4):目录枚举/gitignore/文件名搜索/git 快照。
+// 模型与渲染完全分层;WSL/SVN 臂已裁。
+pub(crate) mod side_panel;
 // settings.json 写通道适配层(06 篇 M6.1):白名单校验/保存锁/原子写/.bak/
 // 损坏三态;`slterm-settings` 保持值权威与零生产依赖。
 pub(crate) mod settings_store;

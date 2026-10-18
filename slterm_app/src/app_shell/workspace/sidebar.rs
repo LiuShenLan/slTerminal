@@ -397,11 +397,16 @@ impl SltermWorkspace {
     ///
     /// tab 列表不随双槽全空而消失——它是切换 tab 与拖拽停靠的入口;
     /// collapsed 才整列隐藏(由 workspace 根判定)。
-    pub(super) fn render_sidebar_content(&self, cx: &mut Context<'_, Self>) -> AnyElement {
+    pub(super) fn render_sidebar_content(&mut self, cx: &mut Context<'_, Self>) -> AnyElement {
         let layout = derive_layout(&self.sidebar);
         let views_open = layout != SidebarLayout::Hidden && !self.sidebar.collapsed;
         let top_open = self.sidebar.active_view_top.is_some();
         let bottom_open = self.sidebar.active_view_bottom.is_some();
+        // 视图内容需要 `&mut self`(文件树轮询/路径栏);先求值再进链式
+        // 闭包,避免多个闭包同时借 self。
+        let top_view = top_open.then(|| self.render_view_slot(SidebarZone::Top, cx));
+        let bottom_view = bottom_open.then(|| self.render_view_slot(SidebarZone::Bottom, cx));
+        let tabs = self.render_tab_list(cx);
         div()
             .id("sidebar-column")
             .debug_selector(|| "sidebar-column".to_owned())
@@ -412,7 +417,7 @@ impl SltermWorkspace {
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
                 this.update_tab_drag(event, window, cx);
             }))
-            .child(self.render_tab_list(cx))
+            .child(tabs)
             .when(views_open, |column| {
                 column.child(
                     div()
@@ -424,9 +429,7 @@ impl SltermWorkspace {
                         .flex()
                         .flex_col()
                         .bg(cx.theme().sidebar)
-                        .when(top_open, |area| {
-                            area.child(self.render_view_slot(SidebarZone::Top, cx))
-                        })
+                        .children(top_view)
                         .when(top_open && bottom_open, |area| {
                             area.child(
                                 div()
@@ -436,9 +439,7 @@ impl SltermWorkspace {
                                     .bg(cx.theme().sidebar_border),
                             )
                         })
-                        .when(bottom_open, |area| {
-                            area.child(self.render_view_slot(SidebarZone::Bottom, cx))
-                        }),
+                        .children(bottom_view),
                 )
             })
             .into_any_element()
@@ -498,46 +499,64 @@ impl SltermWorkspace {
             .into_any_element()
     }
 
-    /// 单槽占位:标题行 + 归属提示。真实视图挂载点归 03/07 篇。
-    fn render_view_slot(&self, zone: SidebarZone, cx: &mut Context<'_, Self>) -> AnyElement {
+    /// 单槽内容挂载点。explorer = 文件树(07 篇 M8.4);其余视图保持
+    /// M5.3b 占位(内容归对应分片)。
+    fn render_view_slot(&mut self, zone: SidebarZone, cx: &mut Context<'_, Self>) -> AnyElement {
         let Some(id) = self.sidebar.active_in(zone) else {
             return div().into_any_element();
         };
-        let title = id.title();
+        let selector = format!("sidebar-slot-{}-{}", zone.as_str(), id.id_str());
+        let body = if id == SideViewId::Explorer {
+            self.render_file_tree(cx)
+        } else {
+            div()
+                .flex_1()
+                .min_h_0()
+                .w_full()
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .h(px(30.0))
+                        .px(px(10.0))
+                        .flex_shrink_0()
+                        .flex()
+                        .items_center()
+                        .text_size(px(12.0))
+                        .text_color(cx.theme().sidebar_foreground)
+                        .child(id.title()),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .px(px(10.0))
+                        .py(px(8.0))
+                        .text_size(px(12.0))
+                        .text_color(cx.theme().muted_foreground)
+                        .child(id.content_owner()),
+                )
+                .into_any_element()
+        };
         div()
-            .id(SharedString::from(format!(
-                "sidebar-slot-{}-{}",
-                zone.as_str(),
-                id.id_str()
-            )))
-            .debug_selector(move || format!("sidebar-slot-{}-{}", zone.as_str(), id.id_str()))
+            .id(SharedString::from(selector.clone()))
+            .debug_selector(move || selector)
             .flex_1()
             .min_h_0()
             .w_full()
             .flex()
             .flex_col()
-            .child(
-                div()
-                    .h(px(30.0))
-                    .px(px(10.0))
-                    .flex_shrink_0()
-                    .flex()
-                    .items_center()
-                    .text_size(px(12.0))
-                    .text_color(cx.theme().sidebar_foreground)
-                    .child(title),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .px(px(10.0))
-                    .py(px(8.0))
-                    .text_size(px(12.0))
-                    .text_color(cx.theme().muted_foreground)
-                    .child(id.content_owner()),
-            )
+            .child(body)
             .into_any_element()
+    }
+
+    /// explorer 槽当前可见(内容渲染/跟随 cwd 的单一判据)。
+    pub(super) fn explorer_open(&self) -> bool {
+        !self.sidebar.collapsed
+            && self
+                .sidebar
+                .active_in(SideViewId::Explorer.zone())
+                .is_some_and(|id| id == SideViewId::Explorer)
     }
 
     /// 宽度拖拽热区:内容区右缘 4px 竖条。

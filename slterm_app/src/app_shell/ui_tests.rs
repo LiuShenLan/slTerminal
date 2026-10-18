@@ -27,6 +27,7 @@ use crate::session::{AgentSession, LaunchSession, WindowState, load_from};
 use slterm_terminal::event_loop::Msg as EventLoopMsg;
 
 mod file_editor_tests;
+mod file_tree_tests;
 mod hooks_tests;
 mod runtime_control_tests;
 mod runtime_projection_tests;

@@ -461,6 +461,15 @@ impl TerminalView {
         self.pending_agent_command.as_deref()
     }
 
+    /// 文件树拖放落点(07 篇 M8.4 交界 43):路径文本直写 PTY。
+    ///
+    /// 不走 bracketed-paste 哨兵:载荷是「路径 + 尾随空格」的粘贴形态,
+    /// 没有换行,也不该被当成一段粘贴文本(哨兵会改变部分 shell 的行编辑
+    /// 行为)。引用/控制字符规则在 `side_panel::drop_text_for_path` 单点。
+    pub(crate) fn drop_path_text(&mut self, bytes: Vec<u8>, cx: &mut Context<'_, Self>) {
+        self.write_input(bytes, cx);
+    }
+
     /// 输入后回到底部并请求重绘。
     fn write_input(&mut self, bytes: Vec<u8>, cx: &mut Context<'_, Self>) {
         if let Some(session) = &self.session {

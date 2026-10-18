@@ -4,7 +4,7 @@
 //! git2,操作面统一走 git CLI 子进程(上游子进程形态)。本步(M8.1)只立只读面:
 //! 仓库根解析 + HEAD 文件字节——`gitshow` 只读臂的数据源。status/diff/hunks/
 //! rollback/unstage 四方法执行归 M8.5 联调;本模块保留统一执行器形状:
-//! 单构造口 [`git_command`],每命令 `--no-optional-locks`(07 篇边界条 7,
+//! 单构造口 [`command`],每命令 `--no-optional-locks`(07 篇边界条 7,
 //! 禁触发 index 锁与后台 gc),argv 不经 shell,Windows 挂 CREATE_NO_WINDOW。
 //!
 //! 旧 git2 语义资产(五份因果档案)转测试保留,按步骤迁移:本步迁移
@@ -44,7 +44,10 @@ impl std::fmt::Display for GitError {
 impl std::error::Error for GitError {}
 
 /// 子进程统一构造口:全局 flag 必须位于子命令之前。
-fn git_command(cwd: &Path) -> Command {
+///
+/// `pub(crate)`:07 篇 side_panel 的 git 状态快照与文件树过滤索引共用本
+/// 构造口(D07-1 子进程统一,无第二执行体)。
+pub(crate) fn command(cwd: &Path) -> Command {
     let mut command = Command::new("git");
     command.arg("--no-optional-locks").arg("-C").arg(cwd);
     crate::platform::process::hidden_command(&mut command);
@@ -63,7 +66,7 @@ pub(crate) fn repository_root(path: &Path) -> Result<PathBuf, GitError> {
             .filter(|parent| !parent.as_os_str().is_empty())
             .unwrap_or_else(|| Path::new("."))
     };
-    let output = git_command(cwd)
+    let output = command(cwd)
         .args(["rev-parse", "--show-toplevel"])
         .output()
         .map_err(|error| GitError::Unavailable(format!("无法运行 git: {error}")))?;
@@ -88,7 +91,7 @@ pub(crate) fn head_file(path: &Path, limit: usize) -> Result<(Vec<u8>, bool), Gi
     // 同属占位文案,但前者连 show 的输入都没有。
     verify_head(&root)?;
     let spec = format!("HEAD:{relative}");
-    let mut child = git_command(&root)
+    let mut child = command(&root)
         .args(["show", &spec])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -126,7 +129,7 @@ pub(crate) fn head_file(path: &Path, limit: usize) -> Result<(Vec<u8>, bool), Gi
 
 /// HEAD 可解析性(尚无提交 = `UnbornBranch` 的 CLI 等价物)。
 fn verify_head(root: &Path) -> Result<(), GitError> {
-    let output = git_command(root)
+    let output = command(root)
         .args(["rev-parse", "--verify", "--quiet", "HEAD"])
         .output()
         .map_err(|error| GitError::Unavailable(format!("无法运行 git: {error}")))?;
@@ -171,7 +174,7 @@ mod git_read_tests {
     /// 命令形态守卫:每条 git 都带 `--no-optional-locks`(边界条 7 不可谈判)。
     #[test]
     fn every_command_disables_optional_locks() {
-        let command = git_command(Path::new("D:/repo"));
+        let command = command(Path::new("D:/repo"));
         let args: Vec<String> = command
             .get_args()
             .map(|arg| arg.to_string_lossy().into_owned())

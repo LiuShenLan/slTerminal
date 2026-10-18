@@ -41,6 +41,27 @@
     "copy_path": "Copy path",
     "copy_name": "Copy file name"
   },
+  "files": {
+    "search_placeholder": "Filter files...",
+    "search_running": "Building file index...",
+    "search_failed": "File search failed",
+    "search_count": "{count} results",
+    "search_limited": "Showing the first {count} results",
+    "search_empty": "No matching files",
+    "empty_reading": "Reading directory...",
+    "empty_failed": "Could not read this directory",
+    "empty_failed_hint": "Refresh to retry.",
+    "empty_directory": "This directory is empty",
+    "empty_no_root": "Choose a directory to browse files",
+    "root_unavailable": "The selected directory is unavailable",
+    "following_directory": "The selected directory is unavailable; following the current directory",
+    "path_placeholder": "Enter a directory path",
+    "path_edit": "Edit path",
+    "path_open": "Open",
+    "path_failed": "Could not open this directory: {error}",
+    "path_unavailable": "Directory unavailable",
+    "refresh": "Refresh"
+  },
   "language": {
     "system": "System"
   },
