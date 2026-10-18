@@ -233,6 +233,16 @@ impl SidebarState {
     }
 }
 
+/// 启动几何用的侧栏总宽:collapsed 时只剩 ActivityBar(内容区与拖拽热区
+/// 不占布局),与首帧渲染同源——恢复的宽度/开合态不能等首帧后再改网格。
+pub(crate) fn chrome_width(state: &SidebarState) -> f32 {
+    if state.collapsed {
+        ACTIVITY_BAR_SIZE
+    } else {
+        ACTIVITY_BAR_SIZE + state.width + SIDEBAR_RESIZE_HANDLE_WIDTH
+    }
+}
+
 /// 将宽度钳到旧栈区间;非有限数回退最小宽度(旧栈 clamp 同语义)。
 pub(super) fn clamp_width(width: f32) -> f32 {
     if !width.is_finite() {

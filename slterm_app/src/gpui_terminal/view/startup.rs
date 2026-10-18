@@ -138,6 +138,7 @@ impl TerminalView {
             cwd: initial_cwd,
             error,
             exited: None,
+            pending_agent_command: None,
             origin: point(px(0.0), px(0.0)),
             cell_width: cell_w,
             line_height: line_h,

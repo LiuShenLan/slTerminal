@@ -10,8 +10,9 @@
 //! 3. 关 pane 的结局由 `RemoveOutcome` 三态裁定:`WasRoot` 关整个 tab、
 //!    `Collapsed(id)` 兄弟收编且焦点交幸存子树首叶;壳不自行散判。被摘
 //!    pane 立即显式 `shutdown`;建树挂不上时立即回收 pane,不留孤儿 PTY。
-//! 4. 布局持久化只经 session schema(M5.5 快照/恢复接线);本模块运行时树
-//!    与持久化树的转换只走 `session_restore` 一对纯函数。
+//! 4. 布局持久化只经 session schema(M5.5 快照/恢复已接线,见
+//!    `session_persistence`/`session_recovery`);本模块运行时树与持久化
+//!    树的转换只走 `session_restore` 一对纯函数。
 //!
 //! ## 壳层职责(M5.3)
 //!
@@ -22,6 +23,8 @@
 //! 结构性变化经 `TerminalView::mark_structural_resize` 同步下发,不进尾沿
 //! 去抖)。
 
+pub(crate) mod session_persistence;
+pub(crate) mod session_recovery;
 pub(crate) mod sidebar;
 mod split_drag;
 mod tab_drag;
@@ -55,6 +58,8 @@ use crate::brand;
 use crate::gpui_terminal::view::{TerminalLaunch, TerminalView, TerminalViewEvent};
 use crate::session::LaunchSession;
 use crate::terminal_registry::{self, PaneSessionMeta};
+use session_persistence::{SaveReason, SessionPersistence};
+use session_recovery::StartupPlan;
 use sidebar::{SidebarResizeDrag, SidebarState};
 use split_drag::SplitDrag;
 use tab_drag::TabDrag;
@@ -83,8 +88,9 @@ gpui::actions!(
 pub struct TerminalPane {
     pub id: PaneId,
     /// 用户重命名(持久化归 05 session 叶;M5.3 无重命名 UI,恒 None)。
-    #[allow(dead_code)] // 消费点 = 快照(05 篇 M5.5)/侧栏展示(M5.3b)。
     pub custom_name: Option<String>,
+    /// 本 pane 创建时冻结的启动身份;快照逐叶落盘(M5.5)。
+    pub launch: Option<LaunchSession>,
     pub view: Entity<TerminalView>,
     _subscription: Subscription,
 }
@@ -110,10 +116,8 @@ pub struct TabMeta {
     /// 用户命名;标题栏展示名第一优先源(M5.3b)。
     pub custom_name: Option<String>,
     /// 用户色标;侧栏色标消费归后续步骤。
-    #[allow(dead_code)]
     pub color: Option<Rgb>,
-    /// 建 tab 时冻结的启动身份;消费点 = M5.5 快照。
-    #[allow(dead_code)]
+    /// 建 tab 时冻结的启动身份;快照与恢复(M5.5)消费。
     pub launch: Option<LaunchSession>,
 }
 
@@ -155,6 +159,8 @@ pub struct SltermWorkspace {
     window_commands: Vec<title_bar::TitleBarCommand>,
     /// 每 pane 的 agent 宿主(AgentActivity/AnswerInbox 归属表)。
     agent_hub: AgentHub,
+    /// 单窗口会话写盘状态机(latest/saved 双快照、无变化跳过、提权隔离)。
+    session_persistence: SessionPersistence,
 }
 
 /// 键:pane id(方向导航要拿所有叶子的屏幕矩形算最近邻)。
@@ -209,19 +215,37 @@ fn shell_display_name(program: &str) -> String {
         .unwrap_or_else(|| program.to_owned())
 }
 
+/// 运行时启动参数里已冻结的 shell → 持久化启动身份。`shell=None`(生产
+/// 分屏走 core 探测链)没有可冻结的命令,快照落 `None`,恢复回默认启动。
+fn launch_session_from_terminal_launch(launch: &TerminalLaunch) -> Option<LaunchSession> {
+    let TerminalLaunch::Local {
+        cwd,
+        shell: Some(shell),
+        ..
+    } = launch
+    else {
+        return None;
+    };
+    Some(launch_session_of(shell, cwd.as_deref()))
+}
+
 impl SltermWorkspace {
     pub fn new(
         window: &mut Window,
         shell_rx: mpsc::Receiver<SltermShellEvent>,
         ai_events: Option<mpsc::Receiver<AiHookEvent>>,
         startup: WorkspaceStartup,
+        plan: StartupPlan,
         cx: &mut Context<'_, Self>,
     ) -> Self {
+        // 侧栏宽度先于 spawn 网格入账:恢复的宽度若在首帧后才生效,会先按
+        // 默认宽度触发一次 ConPTY resize(D05-3/D05-1 回放顺序)。
+        let sidebar = sidebar::reconcile_views(&plan.sidebar, &sidebar::SideViewId::ALL);
         // 开窗 resize 异步落地前,先按目标几何谓出 spawn 网格(启动零 resize)。
         let initial_grid = startup_geometry::prepare_initial_grid(
             window,
             cx,
-            startup_geometry::STARTUP_SIDEBAR_WIDTH,
+            sidebar::chrome_width(&sidebar),
             true,
         );
         let mut workspace = SltermWorkspace {
@@ -234,34 +258,58 @@ impl SltermWorkspace {
             split_bounds: Rc::new(RefCell::new(HashMap::new())),
             split_drag: None,
             tab_drag: None,
-            sidebar: SidebarState::default(),
+            sidebar,
             sidebar_resize: None,
             #[cfg(all(test, feature = "gpui-test-support"))]
             window_commands: Vec::new(),
             agent_hub: AgentHub::new(),
+            session_persistence: Self::new_session_persistence(),
         };
-        match startup {
-            WorkspaceStartup::NewTerminal { cwd } => {
-                workspace.add_terminal_tab(cwd, None, false, window, cx);
+        let restored = plan
+            .session
+            .as_ref()
+            .is_some_and(|session| workspace.try_restore_session(session, window, cx));
+        if !restored {
+            match startup {
+                WorkspaceStartup::NewTerminal { cwd } => {
+                    workspace.add_terminal_tab(cwd, None, false, window, cx);
+                }
+                WorkspaceStartup::LaunchTerminal { cwd, command } => {
+                    // `-e` 语义:命令本体即 pane 的启动进程(不是默认 shell
+                    // 里再注入一条命令)——冻结进 launch,会话恢复照此重建。
+                    // 显式命令通道:core 跳过三家白名单并做裸名 PATH 路径化
+                    // (SEC-01 豁免论证见 `Options::explicit_command`)。
+                    let name = command.program().to_owned();
+                    let shell = slterm_terminal::tty::Shell::new(
+                        command.program().to_owned(),
+                        command.args().to_vec(),
+                    );
+                    workspace.add_terminal_tab(cwd, Some((shell, name)), true, window, cx);
+                }
             }
-            WorkspaceStartup::LaunchTerminal { cwd, command } => {
-                // `-e` 语义:命令本体即 pane 的启动进程(不是默认 shell 里
-                // 再注入一条命令)——冻结进 launch,会话恢复照此重建。显式
-                // 命令通道:core 跳过三家白名单并做裸名 PATH 路径化(SEC-01
-                // 豁免论证见 `Options::explicit_command`)。
-                let name = command.program().to_owned();
-                let shell = slterm_terminal::tty::Shell::new(
-                    command.program().to_owned(),
-                    command.args().to_vec(),
-                );
-                workspace.add_terminal_tab(cwd, Some((shell, name)), true, window, cx);
-            }
+        }
+        // 测试构建不启用会话注册表写入(真实数据目录隔离);生产启用。
+        if !cfg!(all(test, feature = "gpui-test-support")) {
+            workspace.agent_hub.enable_session_registry();
         }
         workspace.start_shell_event_pump(shell_rx, cx);
         workspace.start_ai_hook_pump(ai_events, cx);
         workspace.start_agent_screen_watchdog(cx);
+        workspace.start_autosave_pump(cx);
+        workspace.install_window_close_save(window, cx);
         workspace.sync_window_title(window, cx);
         workspace
+    }
+
+    /// 生产 = 真实写盘;测试 = 空写。虚拟时钟推进 1s 会驱动自动保存泵,
+    /// 测试写真实 `%APPDATA%` 违反隔离红线;需要观察快照的用例经
+    /// `set_session_writer_for_test` 注入捕获器。
+    fn new_session_persistence() -> SessionPersistence {
+        if cfg!(all(test, feature = "gpui-test-support")) {
+            SessionPersistence::with_writer(Rc::new(|_| Ok(())), true)
+        } else {
+            SessionPersistence::default()
+        }
     }
 
     /// 建一个 Terminal tab(cwd + 可选的显式 shell 身份),并聚焦其 pane。
@@ -396,6 +444,8 @@ impl SltermWorkspace {
         }
         self.remove_tab_entry(self.active);
         if self.tabs.is_empty() {
+            // 空会话干净落盘:下次启动不恢复,也不把这次关标签误判成崩溃。
+            self.save_on_tabs_closed(window, cx);
             window.remove_window();
             return;
         }
@@ -417,6 +467,79 @@ impl SltermWorkspace {
             .borrow_mut()
             .retain(|(tab, _), _| *tab != entry.id);
         Some(entry)
+    }
+
+    /// 1 Hz 自动保存泵(05 篇数据流):节奏与 agent 看门狗同源,前台线程
+    /// 拍快照、状态机判无变化/写盘。失败只 warn,终端不受影响。
+    fn start_autosave_pump(&mut self, cx: &mut Context<'_, Self>) {
+        let executor = cx.background_executor().clone();
+        cx.spawn(async move |this, cx| {
+            loop {
+                executor.timer(Duration::from_secs(1)).await;
+                let Ok(()) = this.update(cx, |workspace, cx| workspace.autosave_tick(cx)) else {
+                    return;
+                };
+            }
+        })
+        .detach();
+    }
+
+    /// 一拍自动保存:快照 → 状态机 → 失败 warn。首次成功快照的
+    /// `boot_attempts = 0` 由 `snapshot_session` 的规范形态保证。
+    fn autosave_tick(&mut self, cx: &mut Context<'_, Self>) {
+        let window_state = Self::current_window_state(cx);
+        let session = self.snapshot_session(window_state, cx);
+        if let Err(error) = self
+            .session_persistence
+            .save(Some(session), SaveReason::Checkpoint)
+        {
+            log::warn!("session checkpoint: {error}");
+        }
+    }
+
+    /// 单窗:取第一个窗口的当前尺寸/最大化态(无窗口 = 不写 window 段)。
+    fn current_window_state(cx: &mut App) -> Option<crate::session::WindowState> {
+        let handle = cx.windows().first().copied()?;
+        handle
+            .update(cx, |_, window, _| {
+                session_recovery::capture_window_state(window)
+            })
+            .ok()
+    }
+
+    /// 关窗终局笔:1 Hz 快照恒 false,这一笔才 `clean_exit = true`。
+    fn save_on_window_close(&mut self, window: &Window, cx: &App) {
+        let session =
+            self.snapshot_session(Some(session_recovery::capture_window_state(window)), cx);
+        if let Err(error) = self
+            .session_persistence
+            .save(Some(session), SaveReason::WindowClose)
+        {
+            log::warn!("could not persist final terminal session: {error}");
+        }
+    }
+
+    /// 最后 tab 关闭:空快照干净落盘(空会话不恢复)。
+    fn save_on_tabs_closed(&mut self, window: &Window, cx: &App) {
+        let session =
+            self.snapshot_session(Some(session_recovery::capture_window_state(window)), cx);
+        if let Err(error) = self
+            .session_persistence
+            .save(Some(session), SaveReason::TabsClosed)
+        {
+            log::warn!("could not persist empty workspace: {error}");
+        }
+    }
+
+    /// 系统关窗(Alt+F4/OS 关闭请求)先落终局快照;关窗即退出。
+    fn install_window_close_save(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        let handle = cx.entity().downgrade();
+        window.on_window_should_close(cx, move |window, cx| {
+            let _ = handle.update(cx, |workspace, cx| {
+                workspace.save_on_window_close(window, cx);
+            });
+            true
+        });
     }
 
     /// 窗口标题 = 活跃 tab 展示名(任务栏可见);无 tab 时回退品牌名。
@@ -463,6 +586,7 @@ impl SltermWorkspace {
     ) -> TerminalPane {
         let pane_id = PaneId(self.next_pane);
         self.next_pane = self.next_pane.saturating_add(1);
+        let launch_identity = launch_session_from_terminal_launch(&launch);
         let view = cx.new(|cx| TerminalView::new(pane_id, grid, launch, window, cx));
         let subscription = cx.subscribe_in(&view, window, Self::on_terminal_event);
         // 注册表写入点 1/2(spawn 侧;另一侧 = close_pane)。
@@ -472,6 +596,7 @@ impl SltermWorkspace {
         TerminalPane {
             id: pane_id,
             custom_name: None,
+            launch: launch_identity,
             view,
             _subscription: subscription,
         }
@@ -640,6 +765,8 @@ impl SltermWorkspace {
                 self.forget_pane(pane_id);
                 self.remove_tab_entry(tab_index);
                 if self.tabs.is_empty() {
+                    // 同 close_active_tab:最后 tab 关闭 = 空会话终局笔。
+                    self.save_on_tabs_closed(window, cx);
                     window.remove_window();
                     return;
                 }

@@ -11,16 +11,6 @@ use gpui::{App, Pixels, Size, Window, px, size};
 
 use crate::gpui_terminal::view::TerminalView;
 
-/// 启动侧栏宽度 = ActivityBar + 内容区默认宽度 + 拖拽热区;与
-/// `SltermWorkspace` 首帧布局同源(会话恢复的宽度回放归 M5.5,届时覆盖
-/// 该参数而非重启布局规则)。
-pub(in crate::app_shell) const STARTUP_SIDEBAR_WIDTH: f32 = {
-    use crate::app_shell::workspace::sidebar::{
-        ACTIVITY_BAR_SIZE, SIDEBAR_RESIZE_HANDLE_WIDTH, SIDEBAR_WIDTH_DEFAULT,
-    };
-    ACTIVITY_BAR_SIZE + SIDEBAR_WIDTH_DEFAULT + SIDEBAR_RESIZE_HANDLE_WIDTH
-};
-
 fn chrome_size(sidebar_width: f32) -> Size<Pixels> {
     // 侧栏、沟槽、终端 padding,外加既有的 2px 圆整余量。
     size(

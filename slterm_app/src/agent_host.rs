@@ -10,17 +10,19 @@
 //!   workspace 的钩子泵在 GPUI foreground executor 上调用;
 //! - 屏幕是有限权威观察:只有 `allows_screen()` 的 pane 才吃屏幕样本,
 //!   采样节奏由 workspace 的 1 Hz 看门狗统一驱动,不在每个输出事件上跑规则;
-//! - 本步不写会话注册表、不发通知;屏幕规则引擎只读(用户覆盖热加载归
-//!   `ai_agents` 自身)。
+//! - 屏幕规则引擎只读(用户覆盖热加载归 `ai_agents` 自身)。
 //!
-//! 缝合点(后阶段件,不在 M4.5 落地):
-//! - 宿主随 `TerminalPane` 持有归 05 篇 M5.3(届时 `AgentHub` 退成薄查询面);
-//! - `session` 反填的恢复注入消费归 05 篇 M5.5(`restore_agent` 只构造命令);
+//! 缝合点(M5.5 已接):
+//! - `SessionStart` 边把会话身份写进 `ai_sessions` 注册表:写盘在后台线程,
+//!   生产路径由 workspace 显式启用;宿主本身不碰磁盘。
+//! - 恢复注入:workspace 恢复 tab 时先 `seed_session`,再让视图
+//!   `restore_agent` 构造并提交 resume 命令;
 //! - 回答展示(收件箱正文)归 07 篇;
-//! - TurnDone/NeedsAttention 状态边 → 通知漏斗归 09 篇 M10.1;
-//! - 会话注册表写入(`ai_sessions::record_hook_session`)归 05 篇 M5.5。
+//! - TurnDone/NeedsAttention 状态边 → 通知漏斗归 09 篇 M10.1。
 
 use std::collections::HashMap;
+use std::path::PathBuf;
+use std::rc::Rc;
 
 use slterm_split::PaneId;
 
@@ -31,6 +33,11 @@ use crate::ai_hook::{
     AgentActivity, AiHookEvent, AiHookKind, GateVerdict, accept_for_pane, reorder_batch,
 };
 use crate::assistant_answer::{AnswerInbox, AnswerSnapshot};
+use crate::session::AgentSession;
+
+/// 会话身份注册表写入通道(生产 = 后台线程 + `ai_sessions::record_hook_session`;
+/// 测试可注入捕获器,禁止触碰真实数据目录)。
+pub(crate) type SessionStartRecorder = Rc<dyn Fn(&AiHookEvent)>;
 
 /// 一个 pane 的 agent 宿主状态。
 pub(crate) struct AgentPaneHost {
@@ -42,8 +49,9 @@ pub(crate) struct AgentPaneHost {
     /// 屏幕采样与未来徽标的程序身份:hook 事件为权威来源;无 hook 的
     /// pane 才允许由屏幕 chrome 兜底识别(见 `observe_screen`)。
     program: Option<String>,
-    /// hook 反填的 `(source, session_id)`;恢复注入消费归 05 篇 M5.5。
-    session: Option<(String, String)>,
+    /// hook 反填的会话身份;快照落布局叶的 `agent` 字段,恢复注入据此
+    /// 重建 resume 命令。
+    session: Option<AgentSession>,
 }
 
 impl AgentPaneHost {
@@ -88,8 +96,28 @@ impl AgentPaneHost {
             self.session = None;
         } else {
             self.program = Some(event.source.clone());
-            if let Some(id) = event.session_id.as_deref() {
-                self.session = Some((event.source.clone(), id.to_owned()));
+            if event.session_id.is_some() || event.session_file.is_some() {
+                // 同一会话的后续事件可能只带 id 或只带原生文件:两个缺省
+                // 字段都沿用同来源的既有值,一次半量更新不能抹掉恢复线索。
+                let previous = self
+                    .session
+                    .as_ref()
+                    .filter(|session| session.source == event.source);
+                let session_id = event
+                    .session_id
+                    .clone()
+                    .or_else(|| previous.and_then(|session| session.session_id.clone()));
+                let session_file = event
+                    .session_file
+                    .clone()
+                    .or_else(|| previous.and_then(|session| session.session_file.clone()));
+                if session_id.is_some() || session_file.is_some() {
+                    self.session = Some(AgentSession {
+                        source: event.source.clone(),
+                        session_id,
+                        session_file,
+                    });
+                }
             }
         }
         true
@@ -147,12 +175,9 @@ impl AgentPaneHost {
         self.program.as_deref()
     }
 
-    /// hook 反填的会话身份(恢复注入消费归 05 篇 M5.5)。
-    #[allow(dead_code)]
-    pub(crate) fn session(&self) -> Option<(&str, &str)> {
-        self.session
-            .as_ref()
-            .map(|(source, id)| (source.as_str(), id.as_str()))
+    /// hook 反填的会话身份(快照/恢复注入的权威来源)。
+    pub(crate) fn session(&self) -> Option<&AgentSession> {
+        self.session.as_ref()
     }
 
     /// 最新回答快照(展示归 07 篇)。
@@ -173,11 +198,41 @@ impl AgentPaneHost {
 #[derive(Default)]
 pub(crate) struct AgentHub {
     hosts: HashMap<PaneId, AgentPaneHost>,
+    /// 生产路径由 workspace 显式启用;未启用 = 纯内存宿主(测试默认态)。
+    record_session_start: Option<SessionStartRecorder>,
 }
 
 impl AgentHub {
     pub(crate) fn new() -> Self {
         Self::default()
+    }
+
+    /// 生产启动时启用注册表写入。测试不调用:会话身份可能来自任意信封,
+    /// 让默认宿主直连真实数据目录会破坏测试隔离。
+    pub(crate) fn enable_session_registry(&mut self) {
+        self.record_session_start = Some(Rc::new(|event: &AiHookEvent| {
+            let Some(id) = event.session_id.clone() else {
+                return;
+            };
+            let source = event.source.clone();
+            let file = event.session_file.as_deref().map(PathBuf::from);
+            // 写盘（锁 + fsync）不在前台线程上做;失败只 warn。
+            let _ = std::thread::Builder::new()
+                .name("slterm-ai-sessions".to_owned())
+                .spawn(move || {
+                    if let Err(error) =
+                        crate::ai_sessions::record_hook_session(&source, &id, file, None)
+                    {
+                        log::warn!("agent session index: could not record {source} {id}: {error}");
+                    }
+                });
+        }));
+    }
+
+    /// 测试注入点:替换注册表写入通道(不触盘)。
+    #[cfg(test)]
+    pub(crate) fn set_session_start_recorder(&mut self, recorder: SessionStartRecorder) {
+        self.record_session_start = Some(recorder);
     }
 
     pub(crate) fn register(&mut self, pane_id: PaneId) {
@@ -186,6 +241,26 @@ impl AgentHub {
 
     pub(crate) fn remove(&mut self, pane_id: PaneId) {
         self.hosts.remove(&pane_id);
+    }
+
+    /// 恢复注入:把保存的会话身份放回宿主。hook 到达后照常覆盖/清除。
+    pub(crate) fn seed_session(&mut self, pane_id: PaneId, session: AgentSession) {
+        if let Some(host) = self.hosts.get_mut(&pane_id) {
+            host.session = Some(session);
+        }
+    }
+
+    /// 快照用的会话身份:hook 精确身份优先;无 hook 的 pane 退到已识别
+    /// 的前台程序名(仍可在 claude 上按目录 `--continue`)。
+    pub(crate) fn session_agent(&self, pane_id: PaneId) -> Option<AgentSession> {
+        let host = self.hosts.get(&pane_id)?;
+        host.session().cloned().or_else(|| {
+            host.program.as_ref().map(|source| AgentSession {
+                source: source.clone(),
+                session_id: None,
+                session_file: None,
+            })
+        })
     }
 
     /// 读端(徽标/runtime 快照消费归 05 篇 M5.3 / 04 篇 M7;测试经此断言)。
@@ -221,8 +296,16 @@ impl AgentHub {
                 );
                 continue;
             };
-            if host.handle_hook(&event) {
+            let changed = host.handle_hook(&event);
+            if changed {
                 accepted += 1;
+            }
+            // 只在事件真的被接纳后记账:被门拒收的伪造身份不得进注册表。
+            if changed
+                && event.kind == AiHookKind::SessionStart
+                && let Some(recorder) = &self.record_session_start
+            {
+                recorder(&event);
             }
         }
         accepted
@@ -302,6 +385,89 @@ mod host_tests {
         );
         // 另一个 pane 的收件箱不得串台。
         assert!(hub.host(PaneId(4)).unwrap().latest_answer().is_none());
+    }
+
+    /// SessionStart 边写注册表:只有被接纳的事件才进写入通道;SessionEnd
+    /// 清掉宿主里的恢复身份。
+    #[test]
+    fn session_start_edges_reach_the_registry_recorder() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let mut hub = AgentHub::new();
+        hub.register(PaneId(7));
+        let recorded = Rc::new(RefCell::new(Vec::new()));
+        hub.set_session_start_recorder({
+            let recorded = Rc::clone(&recorded);
+            Rc::new(move |event: &AiHookEvent| {
+                recorded
+                    .borrow_mut()
+                    .push(event.session_id.clone().unwrap_or_default());
+            })
+        });
+        // 未注册 pane 的伪造信封被丢弃,不得进注册表。
+        let spoofed = event(
+            "claude",
+            Some(9),
+            r#"{"hook_event_name":"SessionStart","session_id":"spoofed"}"#,
+        );
+        assert_eq!(hub.dispatch(vec![spoofed], None), 0);
+        assert!(recorded.borrow().is_empty());
+
+        let start = event(
+            "claude",
+            Some(7),
+            r#"{"hook_event_name":"SessionStart","session_id":"registered-1"}"#,
+        );
+        assert_eq!(hub.dispatch(vec![start], None), 1);
+        assert_eq!(recorded.borrow().as_slice(), ["registered-1".to_owned()]);
+        assert_eq!(
+            hub.session_agent(PaneId(7))
+                .and_then(|agent| agent.session_id),
+            Some("registered-1".to_owned())
+        );
+
+        // 后续事件只带原生文件时,id 不被抹掉(半量更新按字段合并)。
+        let mut file_only = prompt_submit("ignored", 7);
+        file_only.session_id = None;
+        file_only.session_file = Some("/sessions/rollout-2026-09-21.jsonl".into());
+        assert_eq!(hub.dispatch(vec![file_only], None), 1);
+        let merged = hub.session_agent(PaneId(7)).unwrap();
+        assert_eq!(merged.session_id.as_deref(), Some("registered-1"));
+        assert_eq!(
+            merged.session_file.as_deref(),
+            Some("/sessions/rollout-2026-09-21.jsonl")
+        );
+
+        let end = event(
+            "claude",
+            Some(7),
+            r#"{"hook_event_name":"SessionEnd","session_id":"registered-1"}"#,
+        );
+        assert_eq!(hub.dispatch(vec![end], None), 1);
+        assert!(hub.session_agent(PaneId(7)).is_none(), "会话结束后身份清空");
+    }
+
+    /// 恢复注入先入宿主:快照立刻能取到;无 hook 的 pane 退到程序名。
+    #[test]
+    fn seeded_restore_identity_is_visible_to_snapshots() {
+        let mut hub = AgentHub::new();
+        hub.register(PaneId(3));
+        hub.seed_session(
+            PaneId(3),
+            AgentSession {
+                source: "codex".into(),
+                session_id: Some("thread-7".into()),
+                session_file: None,
+            },
+        );
+        assert_eq!(
+            hub.session_agent(PaneId(3)).unwrap().session_id.as_deref(),
+            Some("thread-7")
+        );
+        // 未登记会话的 pane:无身份。
+        hub.register(PaneId(4));
+        assert!(hub.session_agent(PaneId(4)).is_none());
     }
 
     #[test]

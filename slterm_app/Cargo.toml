@@ -83,6 +83,8 @@ windows-sys = { version = "0.59", features = [
     "Win32_Graphics_Gdi",
     # console 归一化(SetConsoleCtrlHandler)与 panic 报告的 GetConsoleCP。
     "Win32_System_Console",
+    # 提权态探针(OpenProcessToken 的 TOKEN_QUERY + TokenElevation)。
+    "Win32_Security",
     # 命名管道服务器(ai_hook::windows;PIPE_ACCESS_INBOUND 在 FileSystem,
     # ConnectNamedPipe/ReadFile 的 OVERLAPPED 引用经 Win32_System_IO)。
     "Win32_System_Pipes",

@@ -139,6 +139,8 @@ pub struct TerminalView {
     pub cwd: String,
     pub(super) error: Option<String>,
     pub(super) exited: Option<String>,
+    /// 冷恢复待提交的 AI CLI resume 命令;会话恢复注入的唯一落点。
+    pub(super) pending_agent_command: Option<String>,
     pub(super) origin: Point<Pixels>,
     pub(super) cell_width: Pixels,
     pub(super) line_height: Pixels,
@@ -363,6 +365,46 @@ impl TerminalView {
         if let Some(session) = &self.session {
             session.notifier.notify(bytes);
         }
+    }
+
+    /// 恢复注入:按保存的 [`crate::session::AgentSession`] 重建 resume 命令。
+    ///
+    /// 异形 id / 无 resume 语法的来源由 `AgentSession::resume_command` 拒收
+    /// (SEC 注入面),此时只恢复布局、不上屏任何命令。命令在 pane spawn 后
+    /// 立即写进 ConPTY 输入缓冲:shell 启动期输入由控制台缓冲保留,不依赖
+    /// 额外的 prompt 检测状态机。
+    pub(crate) fn restore_agent(
+        &mut self,
+        agent: &crate::session::AgentSession,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(command) = agent.resume_command() else {
+            log::debug!(
+                "agent restore: no safe resume command for source {}",
+                agent.source
+            );
+            return;
+        };
+        self.pending_agent_command = Some(command);
+        self.flush_pending_agent_command(cx);
+    }
+
+    /// 提交待恢复命令(幂等;无会话/会话已退出时保留待提交态)。
+    fn flush_pending_agent_command(&mut self, cx: &mut Context<'_, Self>) {
+        if self.pending_agent_command.is_none() || self.exited.is_some() || self.session.is_none() {
+            return;
+        }
+        let command = self
+            .pending_agent_command
+            .take()
+            .expect("pending command checked above");
+        self.write_input(format!("{command}\r").into_bytes(), cx);
+    }
+
+    /// 测试专用:待提交的恢复命令(无 = 已提交或未构造)。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn pending_agent_command(&self) -> Option<&str> {
+        self.pending_agent_command.as_deref()
     }
 
     /// 输入后回到底部并请求重绘。

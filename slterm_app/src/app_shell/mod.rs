@@ -72,6 +72,10 @@ pub(crate) enum SltermShellEvent {
 /// 关窗即退出(跨领域不变量 5):`QuitMode::LastWindowClosed` + 无 mux 驻留臂,
 /// 最后一窗关闭 = 进程退出。
 pub fn run_shell(initial_cwd: Option<PathBuf>, initial_command: Option<Program>) {
+    // 会话恢复决策在开窗前完成(05 篇 M5.5):窗口尺寸/侧栏宽度要先进
+    // 窗口定形与 spawn 网格;CLI 显式 cwd/-e 启动只回放几何、不恢复 tabs。
+    let restore_tabs = initial_command.is_none() && initial_cwd.is_none();
+    let startup_plan = workspace::session_recovery::prepare_startup(restore_tabs);
     let (shell_tx, shell_rx) = mpsc::channel();
     let open_urls_tx = shell_tx.clone();
     // 进程级 hook 管道(单实例,非 per-pane):必须在首个 PTY spawn 之前发布
@@ -86,7 +90,14 @@ pub fn run_shell(initial_cwd: Option<PathBuf>, initial_command: Option<Program>)
     });
     application.run(move |cx| {
         init(cx);
-        windowing::open_initial_window(cx, shell_rx, ai_events, initial_cwd, initial_command);
+        windowing::open_initial_window(
+            cx,
+            shell_rx,
+            ai_events,
+            initial_cwd,
+            initial_command,
+            startup_plan,
+        );
     });
     // run 返回 = 最后窗口已关闭;Drop 完成自连唤醒 + join。
     drop(pipe_server);

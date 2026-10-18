@@ -24,7 +24,8 @@ pub(crate) mod ai_agents;
 // 设置域,桥接资产与自愈入口在 M4.3 落盘但尚无壳侧调用方。
 #[allow(dead_code)]
 pub(crate) mod ai_hook;
-// 会话发现消费点归 05 篇恢复注入(M5.5)/命令面板;本步只落扫描与注册表。
+// 会话注册表写入已由 M5.5 SessionStart 边接线;扫描列表/手动恢复面板的
+// 消费点归后续(命令面板)。
 #[allow(dead_code)]
 pub(crate) mod ai_sessions;
 // 沙箱放行集消费点归 07 篇文件域;设置页展示归 05/06。

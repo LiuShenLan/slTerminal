@@ -183,7 +183,11 @@ impl SltermWorkspace {
             match command {
                 TitleBarCommand::Minimize => _window.minimize_window(),
                 TitleBarCommand::MaximizeToggle => _window.zoom_window(),
-                TitleBarCommand::Close => _window.remove_window(),
+                TitleBarCommand::Close => {
+                    // 自绘关闭钮绕过了 OS 关闭请求,终局快照在这里补。
+                    self.save_on_window_close(_window, cx);
+                    _window.remove_window();
+                }
             }
         }
     }

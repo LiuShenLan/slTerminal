@@ -8,8 +8,8 @@
 //!
 //! 布局持久化单点:运行时树与持久化树之间的转换只有
 //! `app_shell::session_restore` 的一对纯函数;本模块只定义 schema 与存取。
-//! 快照泵/启动恢复归 M5.5,本步未消费的存取包装先允许 dead_code。
-#![allow(dead_code)] // 消费点 = M5.5 快照/恢复闭环(session_persistence/session_recovery)。
+//! 快照泵/启动恢复归 M5.5;少数设计稿锚定的全局路径包装在生产链上
+//! 由显式 `_at` 路径替代,逐项标注 dead_code 原因。
 
 use std::path::{Path, PathBuf};
 
@@ -63,6 +63,35 @@ pub struct AgentSession {
     pub session_file: Option<String>,
 }
 
+impl AgentSession {
+    /// 恢复时敲进 shell 的命令行;无法安全构造(未知来源、异形 id、codex
+    /// 缺 id)时返回 `None`,宁可只恢复布局也不上屏可疑字节。
+    ///
+    /// session id 是不可信的 hook/文件输入:`AgentKind::resume_command` 先做
+    /// 字符集与长度校验,绝不加引号硬拼(SEC 注入面)。命令形状与
+    /// `ai_sessions::AiSession::resume_command`(手动恢复面板)保持一致。
+    pub fn resume_command(&self) -> Option<String> {
+        let agent = crate::ai_agents::AgentKind::parse(&self.source)?;
+        if agent == crate::ai_agents::AgentKind::Codex
+            && let Some(id) = self.session_file.as_deref().and_then(codex_rollout_id)
+        {
+            return agent.resume_command(id);
+        }
+        match self.session_id.as_deref() {
+            // Pi 的 `pid-` 前缀是进程身份而非可恢复会话身份。
+            Some(id) if agent == crate::ai_agents::AgentKind::Pi && id.starts_with("pid-") => None,
+            Some(id) => agent.resume_command(id),
+            // claude 无 id(hook 未装、OSC 认出的启动):`--continue` 恢复
+            // 当前目录最近一次对话——pane 的 cwd 已经先被恢复,语义正好。
+            None if agent == crate::ai_agents::AgentKind::Claude => {
+                Some("claude --continue".to_owned())
+            }
+            // codex 没有按目录 continue 的形式,缺 id 只能放弃接续。
+            _ => None,
+        }
+    }
+}
+
 /// 持久化布局树:叶带逐 pane 启动环境,Split 带轴 + 第一个孩子占比。
 /// 占比用千分比整数——自动保存的变化检测与文件 diff 不被 f32 序列化噪声
 /// 绊倒,与上游同因。
@@ -90,7 +119,47 @@ pub enum LayoutSession {
     },
 }
 
+/// 恢复注入需要的叶数据(布局单点访问面)。恢复侧只消费本结构,不直接
+/// 解构 `LayoutSession` 变体——持久化树形状仍只在 schema 与转换对里出现。
+#[derive(Debug, Clone, Copy)]
+pub struct PaneData<'a> {
+    pub cwd: &'a str,
+    pub custom_name: Option<&'a str>,
+    pub agent: Option<&'a AgentSession>,
+    pub launch: Option<&'a LaunchSession>,
+}
+
 impl LayoutSession {
+    /// 缺省布局的规范形态:单 pane at `cwd`(`TabSession.layout = None`
+    /// 的恢复路径不得自行拼变体)。
+    pub fn single_pane(cwd: impl Into<String>) -> Self {
+        Self::Pane {
+            cwd: cwd.into(),
+            custom_name: None,
+            agent: None,
+            launch: None,
+        }
+    }
+
+    /// 叶数据;`Split` 节点返回 `None`。与 [`Self::leaves`] 配对使用:
+    /// `leaves()` 给出 DFS 序,`pane_data()` 给出逐叶启动环境。
+    pub fn pane_data(&self) -> Option<PaneData<'_>> {
+        match self {
+            Self::Pane {
+                cwd,
+                custom_name,
+                agent,
+                launch,
+            } => Some(PaneData {
+                cwd,
+                custom_name: custom_name.as_deref(),
+                agent: agent.as_ref(),
+                launch: launch.as_ref(),
+            }),
+            Self::Split { .. } => None,
+        }
+    }
+
     /// 树内 pane(叶)数。
     pub fn pane_count(&self) -> usize {
         match self {
@@ -225,7 +294,7 @@ impl Session {
 }
 
 /// 数据目录里的规范落点(目录解析归 01 篇 `platform::dirs`)。
-fn session_path() -> PathBuf {
+pub(crate) fn session_path() -> PathBuf {
     crate::platform::dirs::data_dir().join("session.json")
 }
 
@@ -236,6 +305,7 @@ fn parse(data: &str) -> Option<Session> {
 }
 
 /// 从数据目录读取上次会话;缺失、损坏或版本不符都视为无会话。
+#[allow(dead_code)] // 设计稿锚定 API;生产启动走显式路径(测试可注入 tempdir)。
 pub fn load() -> Option<Session> {
     load_from(&session_path())
 }
@@ -269,6 +339,7 @@ pub fn should_restore(session: &Session) -> bool {
 
 /// 收尾时的最后一笔:先打 `clean_exit = true` 再落盘。所有正常退出路径
 /// 都必须走这里,否则下次启动会把这次退出误判成崩溃。
+#[allow(dead_code)] // 设计稿锚定 API;生产收尾走 SessionPersistence(需无变化跳过)。
 pub fn save_final(session: &mut Session) {
     if let Err(error) = save_final_at(&session_path(), session) {
         log::warn!("Could not persist final terminal session: {error}");
@@ -290,11 +361,12 @@ pub fn was_crash(session: &Session) -> bool {
 ///
 /// 必须挪走而不是留在原地:启动一成功,一秒后的自动保存就会把
 /// `session.json` 盖掉,那份「一恢复就崩」的现场是唯一的诊断材料。
+#[allow(dead_code)] // 设计稿锚定 API;生产启动走显式路径(测试可注入 tempdir)。
 pub fn quarantine() -> Option<PathBuf> {
     quarantine_at(&session_path())
 }
 
-fn quarantine_at(path: &Path) -> Option<PathBuf> {
+pub(crate) fn quarantine_at(path: &Path) -> Option<PathBuf> {
     let to = path.with_file_name("session.crashed.json");
     std::fs::copy(path, &to).ok()?;
     let _ = std::fs::remove_file(path);
@@ -313,13 +385,14 @@ pub fn valid_dir(cwd: &str) -> Option<PathBuf> {
 }
 
 /// 恢复尝试前先把计数落盘,这样恢复过程中崩溃会被断路器记到。
+#[allow(dead_code)] // 设计稿锚定 API;生产启动走显式路径(测试可注入 tempdir)。
 pub fn mark_boot_attempt(session: &mut Session) {
     if let Err(error) = mark_boot_attempt_at(&session_path(), session) {
         log::warn!("Could not persist boot attempt count: {error}");
     }
 }
 
-fn mark_boot_attempt_at(path: &Path, session: &mut Session) -> std::io::Result<()> {
+pub(crate) fn mark_boot_attempt_at(path: &Path, session: &mut Session) -> std::io::Result<()> {
     session.boot_attempts = session.boot_attempts.saturating_add(1);
     save_compact_to(path, session)
 }
@@ -625,6 +698,134 @@ mod schema_tests {
         let value = serde_json::to_value(&tab).expect("必须可序列化");
         assert_eq!(value["color"], serde_json::json!([1, 2, 3]));
         assert_eq!(serde_json::from_value::<TabSession>(value).unwrap(), tab);
+    }
+
+    /// 恢复命令逐来源精确构造;异形 id 一律拒收,不拼可疑字节进 shell。
+    #[test]
+    fn agent_resume_commands_are_exact_and_injection_safe() {
+        let agent = |source: &str, id: Option<&str>, file: Option<&str>| AgentSession {
+            source: source.into(),
+            session_id: id.map(str::to_owned),
+            session_file: file.map(str::to_owned),
+        };
+        assert_eq!(
+            agent("claude", Some("abc-123"), None)
+                .resume_command()
+                .as_deref(),
+            Some("claude --resume abc-123")
+        );
+        assert_eq!(
+            agent("claude", None, None).resume_command().as_deref(),
+            Some("claude --continue"),
+            "claude 缺 id 时按目录 continue"
+        );
+        assert_eq!(
+            agent("codex", Some("abc-123"), None)
+                .resume_command()
+                .as_deref(),
+            Some("codex resume abc-123")
+        );
+        assert_eq!(
+            agent("gemini", Some("abc"), None)
+                .resume_command()
+                .as_deref(),
+            Some("gemini --resume abc")
+        );
+        assert_eq!(agent("codex", None, None).resume_command(), None);
+        assert_eq!(
+            agent("aider", Some("abc"), None).resume_command(),
+            None,
+            "无 resume 语法的来源"
+        );
+        assert_eq!(
+            agent("pi", Some("pid-42"), None).resume_command(),
+            None,
+            "进程身份不是会话身份"
+        );
+        for id in ["abc; rm -rf /", "", "a b", "id\nnext"] {
+            assert_eq!(
+                agent("claude", Some(id), None).resume_command(),
+                None,
+                "异形 id 必须拒收:{id:?}"
+            );
+        }
+        assert_eq!(
+            agent("claude", Some(&"a".repeat(65)), None).resume_command(),
+            None,
+            "超长 id 拒收"
+        );
+        // 未知来源不猜命令。
+        assert_eq!(
+            agent("unknown-cli", Some("abc"), None).resume_command(),
+            None
+        );
+    }
+
+    /// codex 的原生 rollout 文件优先于缺 id 的 session_id 槽:thread uuid
+    /// 从合法文件名尾部解析,路径本身也不进入 shell。
+    #[test]
+    fn codex_resume_prefers_the_native_rollout_identity() {
+        const THREAD: &str = "0199a213-c2a4-7cf5-8f6b-d746fbb6e86c";
+        let file = format!("/sessions/rollout-2026-09-21T10-00-00-{THREAD}.jsonl");
+        let agent = AgentSession {
+            source: "codex".into(),
+            session_id: None,
+            session_file: Some(file),
+        };
+        assert_eq!(
+            agent.resume_command(),
+            Some(format!("codex resume {THREAD}"))
+        );
+        let hostile = AgentSession {
+            source: "codex".into(),
+            session_id: None,
+            session_file: Some("/sessions/rollout-x; calc.jsonl".into()),
+        };
+        assert_eq!(hostile.resume_command(), None, "异形文件名不得进命令");
+    }
+
+    /// 缺省布局(`TabSession.layout = None`)的规范形态:单 pane at cwd。
+    #[test]
+    fn a_missing_layout_normalizes_to_a_single_pane() {
+        let layout = LayoutSession::single_pane("D:/work");
+        assert_eq!(layout.pane_count(), 1);
+        assert_eq!(layout.first_cwd(), "D:/work");
+        let data = layout.pane_data().expect("单 pane 必须可读");
+        assert_eq!(data.cwd, "D:/work");
+        assert_eq!(data.launch, None);
+    }
+
+    /// 叶数据访问面与 `leaves()` 的 DFS 序一一配对,恢复侧不必解构变体。
+    #[test]
+    fn pane_data_pairs_with_the_depth_first_leaf_order() {
+        let layout = LayoutSession::Split {
+            axis: SplitAxis::LeftRight,
+            ratio_permille: 500,
+            first: Box::new(LayoutSession::Pane {
+                cwd: "a".into(),
+                custom_name: Some("前端".into()),
+                agent: None,
+                launch: Some(LaunchSession::Default),
+            }),
+            second: Box::new(LayoutSession::Pane {
+                cwd: "b".into(),
+                custom_name: None,
+                agent: None,
+                launch: None,
+            }),
+        };
+        let data: Vec<_> = layout
+            .leaves()
+            .iter()
+            .filter_map(|leaf| leaf.pane_data())
+            .collect();
+        assert_eq!(data.len(), 2);
+        assert_eq!(data[0].cwd, "a");
+        assert_eq!(data[0].custom_name, Some("前端"));
+        assert_eq!(data[0].launch, Some(&LaunchSession::Default));
+        assert_eq!(data[1].cwd, "b");
+        assert_eq!(data[1].launch, None);
+        assert!(layout.pane_data().is_none(), "Split 节点无叶数据");
     }
 
     #[test]

@@ -4,6 +4,8 @@
 //! `Unavailable` 而非 panic)时本组起不来——起不来先查钉版与 feature 接线,
 //! 不要先动断言。
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -11,8 +13,9 @@ use gpui::{AppContext as _, Modifiers, MouseButton, TestAppContext, VisualTestCo
 use gpui_component::Root;
 use slterm_split::PaneId;
 
-use super::windowing::WorkspaceStartup;
-use super::workspace::sidebar::SideViewId;
+use super::windowing::{WorkspaceStartup, workspace_window_options};
+use super::workspace::session_recovery::{StartupPlan, capture_window_state, prepare_startup_at};
+use super::workspace::sidebar::{SideViewId, SidebarState};
 use super::workspace::title_bar::TitleBarCommand;
 use super::workspace::{
     CloseActivePane, CloseActiveTab, NewTerminalTab, SelectNextTab, SelectPreviousTab,
@@ -20,7 +23,8 @@ use super::workspace::{
 };
 use crate::ai_hook::AiHookEvent;
 use crate::cli::Program;
-use crate::session::LaunchSession;
+use crate::session::{AgentSession, LaunchSession, WindowState, load_from};
+use slterm_terminal::event_loop::Msg as EventLoopMsg;
 
 /// 与生产 init 同序的测试子集(11 篇模板同形):内嵌 Maple 在测试文本系统
 /// 不栅格化真实字形,20MB 注册纯属拖慢,测试不挂。
@@ -66,20 +70,30 @@ fn open_workspace_with_command(
     VisualTestContext,
     mpsc::Sender<AiHookEvent>,
 ) {
+    open_workspace_with_startup(
+        cx,
+        WorkspaceStartup::LaunchTerminal { cwd: None, command },
+        StartupPlan::fresh(),
+    )
+}
+
+/// 以任意启动变体 + 恢复计划开窗(会话恢复 E2E 用例专用)。
+fn open_workspace_with_startup(
+    cx: &mut TestAppContext,
+    startup: WorkspaceStartup,
+    plan: StartupPlan,
+) -> (
+    gpui::Entity<SltermWorkspace>,
+    VisualTestContext,
+    mpsc::Sender<AiHookEvent>,
+) {
     bootstrap(cx);
     let (_tx, rx) = mpsc::channel();
     let (ai_tx, ai_rx) = mpsc::channel();
     let mut slot = None;
     let (_root, window) = cx.add_window_view(|window, cx| {
-        let workspace = cx.new(|cx| {
-            SltermWorkspace::new(
-                window,
-                rx,
-                Some(ai_rx),
-                WorkspaceStartup::LaunchTerminal { cwd: None, command },
-                cx,
-            )
-        });
+        let workspace =
+            cx.new(|cx| SltermWorkspace::new(window, rx, Some(ai_rx), startup, plan, cx));
         slot = Some(workspace.clone());
         Root::new(workspace, window, cx)
     });
@@ -1029,5 +1043,268 @@ fn launch_terminal_tab_freezes_the_full_command_into_meta(cx: &mut TestAppContex
             cwd: None,
             shell_id: None,
         }
+    );
+}
+
+// ── M5.5 快照 / 恢复闭环 ──
+
+/// 冷恢复夹具:两 tab、tab0 左右分屏、逐叶 cwd/launch/agent、侧栏双槽与
+/// 窗口态全部写进磁盘 session.json(崩溃形态 `clean_exit=false`)。
+fn write_crash_snapshot(path: &std::path::Path, cwd1: &str, cwd2: &str) {
+    let profile = |cwd: &str| {
+        serde_json::json!({
+            "kind": "profile",
+            "name": "missing-shell",
+            "command": "slterm-test-missing-shell-executable",
+            "args": [],
+            "cwd": cwd
+        })
+    };
+    let session = serde_json::json!({
+        "version": 1,
+        "boot_attempts": 0,
+        "active_tab": 1,
+        "tabs": [
+            {
+                "cwd": cwd2,
+                "custom_name": "后端",
+                "color": [97, 175, 239],
+                "launch": profile(cwd1),
+                "layout": {
+                    "kind": "split",
+                    "axis": "left_right",
+                    "ratio_permille": 618,
+                    "first": {
+                        "kind": "pane",
+                        "cwd": cwd1,
+                        "agent": { "source": "claude", "session_id": "restored-session" },
+                        "launch": profile(cwd1)
+                    },
+                    "second": {
+                        "kind": "pane",
+                        "cwd": cwd2,
+                        "custom_name": "日志",
+                        "launch": profile(cwd2)
+                    }
+                },
+                "active_pane": 1
+            },
+            {
+                "cwd": cwd2,
+                "active_pane": 0,
+                "layout": {
+                    "kind": "pane",
+                    "cwd": cwd2,
+                    "launch": profile(cwd2)
+                }
+            }
+        ],
+        "window": { "width": 1024, "height": 640, "maximized": false },
+        "sidebar": {
+            "collapsed": false,
+            "active_view_top": "explorer",
+            "active_view_bottom": "agent_files",
+            "width": 312.0
+        },
+        "clean_exit": false
+    });
+    std::fs::write(path, serde_json::to_string_pretty(&session).unwrap()).unwrap();
+}
+
+/// 「崩溃恢复 → 一秒内现场」E2E:崩溃快照 → 启动计划(计数/隔离判定)→
+/// 逐叶 spawn 建树 → 首帧布局/tab/分屏/cwd/侧栏恢复 → 首拍自动保存归零
+/// 断路器并原样续写现场。
+#[gpui::test]
+fn crashed_snapshot_restores_tabs_split_cwd_and_sidebar_within_one_tick(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let cwd1 = dir.path().join("one");
+    let cwd2 = dir.path().join("two");
+    std::fs::create_dir_all(&cwd1).unwrap();
+    std::fs::create_dir_all(&cwd2).unwrap();
+    let cwd1 = cwd1.to_string_lossy().into_owned();
+    let cwd2 = cwd2.to_string_lossy().into_owned();
+    let path = dir.path().join("session.json");
+    write_crash_snapshot(&path, &cwd1, &cwd2);
+
+    let plan = prepare_startup_at(&path, true);
+    let expected_tabs = plan.session.as_ref().expect("应恢复").tabs.clone();
+    let (workspace, mut window, _ai) =
+        open_workspace_with_startup(cx, WorkspaceStartup::NewTerminal { cwd: None }, plan);
+
+    // 恢复前先计数落盘(断路器材料)。
+    assert_eq!(
+        load_from(&path).unwrap().boot_attempts,
+        1,
+        "恢复尝试必须先计数"
+    );
+    assert_eq!(workspace.read_with(cx, |ws, _| ws.tab_count()), 2);
+    assert_eq!(
+        workspace.read_with(cx, |ws, _| ws.active_tab_index()),
+        1,
+        "会话里的活跃 tab 回放"
+    );
+
+    // panes == 树叶:tab0 两叶、tab1 单叶;DFS 序分配 pane id。
+    let (panes0, leaves0) = workspace
+        .read_with(cx, |ws, _| ws.tab_snapshot(0))
+        .expect("tab0 必须恢复");
+    assert_eq!(panes0, leaves0, "恢复路径 panes == 树叶");
+    assert_eq!(leaves0, vec![PaneId(1), PaneId(2)]);
+    let (panes1, leaves1) = workspace
+        .read_with(cx, |ws, _| ws.tab_snapshot(1))
+        .expect("tab1 必须恢复");
+    assert_eq!(panes1, leaves1);
+    assert_eq!(leaves1, vec![PaneId(3)]);
+
+    // 逐叶 cwd 按 DFS 配对注入。
+    assert_eq!(
+        workspace.read_with(cx, |ws, cx| ws.pane_cwd_for_test(0, 0, cx)),
+        Some(cwd1.clone())
+    );
+    assert_eq!(
+        workspace.read_with(cx, |ws, cx| ws.pane_cwd_for_test(0, 1, cx)),
+        Some(cwd2.clone())
+    );
+    assert_eq!(
+        workspace.read_with(cx, |ws, cx| ws.pane_cwd_for_test(1, 0, cx)),
+        Some(cwd2.clone())
+    );
+
+    // 侧栏骨架态(D05-3)随现场恢复。
+    let sidebar = workspace.read_with(cx, |ws, _| *ws.sidebar_state());
+    assert_eq!(
+        sidebar,
+        SidebarState {
+            collapsed: false,
+            active_view_top: Some(SideViewId::Explorer),
+            active_view_bottom: Some(SideViewId::AgentFiles),
+            width: 312.0,
+        }
+    );
+
+    // agent 恢复身份在 hook 确认前已进宿主(快照可续接)。
+    let agent = workspace
+        .read_with(cx, |ws, _| ws.agent_session_for_test(PaneId(1)))
+        .expect("恢复的 agent 身份必须进宿主");
+    assert_eq!(agent.source, "claude");
+    assert_eq!(agent.session_id.as_deref(), Some("restored-session"));
+
+    // 首帧:活跃 tab1 的 pane 绘制;切回 tab0 后两叶都有真实矩形。
+    window.refresh().unwrap();
+    draw_frame(&mut window);
+    assert!(window.debug_bounds("slterm-pane-3").is_some());
+    window.dispatch_action(SelectPreviousTab);
+    window.run_until_parked();
+    draw_frame(&mut window);
+    for selector in ["slterm-pane-1", "slterm-pane-2"] {
+        assert!(
+            window.debug_bounds(selector).is_some(),
+            "{selector} 必须绘制(恢复的树形生效)"
+        );
+    }
+
+    // 一秒内现场:首拍自动保存(boot_attempts=0)与恢复的 tabs 字段级相等。
+    let captured = Rc::new(RefCell::new(None));
+    workspace.update(cx, |ws, _| {
+        let captured = Rc::clone(&captured);
+        ws.set_session_writer_for_test(Rc::new(move |session: &crate::session::Session| {
+            *captured.borrow_mut() = Some(session.clone());
+            Ok(())
+        }));
+    });
+    workspace.update(cx, |ws, cx| ws.autosave_tick_for_test(cx));
+    let saved = captured.borrow().clone().expect("首拍必须写盘");
+    assert_eq!(saved.boot_attempts, 0, "首次成功快照归零断路器");
+    assert_eq!(saved.tabs, expected_tabs, "恢复的头一秒即回到现场");
+    assert_eq!(saved.sidebar, sidebar);
+    assert!(saved.window.is_some(), "快照带窗口尺寸");
+}
+
+/// 快照 = 导出同 schema:pretty 导出文件经 `load_from` 回读字段级相等。
+#[gpui::test]
+fn export_workspace_is_the_snapshot_schema_read_back(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("slterm-workspace.json");
+
+    window.update(|window, cx| {
+        workspace
+            .read(cx)
+            .export_workspace(&path, window, cx)
+            .unwrap();
+    });
+    let exported = load_from(&path).expect("导出文件必须可回读");
+    let snapshot = window.update(|window, cx| {
+        workspace
+            .read(cx)
+            .snapshot_for_test(Some(capture_window_state(window)), cx)
+    });
+    assert_eq!(exported, snapshot, "导出与快照字段级相等");
+}
+
+/// D05-1:窗口尺寸/最大化态进快照,并在窗口定形前原样回放。
+#[gpui::test]
+fn window_state_persists_and_replays_before_window_creation(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    let state = window.update(|window, _| capture_window_state(window));
+    assert!(state.width > 0 && state.height > 0);
+    let snapshot = workspace.read_with(cx, |ws, cx| ws.snapshot_for_test(Some(state), cx));
+    assert_eq!(snapshot.window, Some(state), "窗口态随快照持久化");
+
+    let replay = WindowState {
+        width: 1024,
+        height: 640,
+        maximized: true,
+    };
+    let options =
+        cx.update(|cx| workspace_window_options(cx, false, Some(replay), &SidebarState::default()));
+    let bounds = options.window_bounds.expect("窗口定形必须有 bounds");
+    let gpui::WindowBounds::Maximized(bounds) = bounds else {
+        panic!("最大化态必须在定形前回放");
+    };
+    assert_eq!(bounds.size, gpui::size(px(1024.0), px(640.0)));
+
+    let options =
+        cx.update(|cx| workspace_window_options(cx, false, None, &SidebarState::default()));
+    assert!(matches!(
+        options.window_bounds,
+        Some(gpui::WindowBounds::Windowed(_))
+    ));
+}
+
+/// 恢复注入:AgentSession → resume 命令写进 PTY;异形 id 不上屏。
+#[gpui::test]
+fn restored_agent_command_is_injected_and_hostile_ids_are_rejected(cx: &mut TestAppContext) {
+    let (workspace, _window) = open_workspace(cx);
+    let view = workspace.read_with(cx, |ws, _| ws.first_pane_view().unwrap());
+    let receiver = view.update(cx, |view, _| {
+        let (session, receiver) = crate::gpui_terminal::session::test_session();
+        view.session = Some(session);
+        receiver
+    });
+
+    let agent = AgentSession {
+        source: "claude".into(),
+        session_id: Some("abc-123".into()),
+        session_file: None,
+    };
+    view.update(cx, |view, cx| view.restore_agent(&agent, cx));
+    match receiver.try_recv().expect("恢复命令必须写进 PTY") {
+        EventLoopMsg::Input(bytes) => {
+            assert_eq!(&*bytes, b"claude --resume abc-123\r");
+        }
+        other => panic!("unexpected message: {other:?}"),
+    }
+
+    let hostile = AgentSession {
+        source: "claude".into(),
+        session_id: Some("abc; calc".into()),
+        session_file: None,
+    };
+    view.update(cx, |view, cx| view.restore_agent(&hostile, cx));
+    assert!(receiver.try_recv().is_err(), "异形 id 不得写进 shell");
+    assert!(
+        view.read_with(cx, |view, _| view.pending_agent_command().is_none()),
+        "拒收后不保留待提交命令"
     );
 }
