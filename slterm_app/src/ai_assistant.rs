@@ -147,14 +147,12 @@ impl AssistantConfig {
             return Some(Self::default());
         }
         let mut config = Self::default();
-        let mut recognized = false;
         for line in text.lines() {
             let line = line.trim();
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
             let (key, value) = line.split_once('=')?;
-            recognized = true;
             let value = value.trim();
             match key.trim() {
                 "enabled" => config.enabled = matches!(value, "on" | "true" | "1"),
@@ -169,7 +167,8 @@ impl AssistantConfig {
                 _ => {}
             }
         }
-        recognized.then_some(config)
+        // 只有注释/空白行也是合法文件(回默认),不算损坏。
+        Some(config)
     }
 
     /// 单行值清洗:去控制字符与首尾空白,防一个值把配置文件写出多行。
@@ -833,6 +832,11 @@ mod ai_assistant_tests {
         assert_eq!(config.model, "m1");
         assert_eq!(config.ignored_exit_codes, vec![2, 3]);
         assert!(!AssistantConfig::parse("enabled=false\n").unwrap().enabled);
+        // 纯注释文件不是损坏:回默认值。
+        assert_eq!(
+            AssistantConfig::parse("# only a comment\n"),
+            Some(AssistantConfig::default())
+        );
     }
 
     #[test]
