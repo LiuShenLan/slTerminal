@@ -22,6 +22,8 @@ use slterm_split::{PaneId, RemoveOutcome, SplitTree, TabId};
 
 use super::SltermShellEvent;
 use super::windowing::{WorkspaceStartup, startup_geometry};
+use crate::agent_host::AgentHub;
+use crate::ai_hook::AiHookEvent;
 use crate::gpui_terminal::view::{TerminalLaunch, TerminalView, TerminalViewEvent};
 use crate::terminal_registry::{self, PaneSessionMeta};
 
@@ -75,6 +77,9 @@ pub struct SltermWorkspace {
     /// SplitBoundsStore:M3 恒空,机制先立(05 篇终态键 = (tab 下标, 节点路径))。
     #[allow(dead_code)]
     split_bounds: SplitBoundsMap,
+    /// 每 pane 的 agent 宿主(AgentActivity/AnswerInbox 归属表)。M4.5 挂
+    /// workspace 层;M5.3 三件套挂载时随 `TerminalPane` 收敛。
+    agent_hub: AgentHub,
 }
 
 /// SplitBoundsStore 容器形态(05 篇契约):键 = (tab 下标, 分屏节点路径)。
@@ -84,6 +89,7 @@ impl SltermWorkspace {
     pub fn new(
         window: &mut Window,
         shell_rx: mpsc::Receiver<SltermShellEvent>,
+        ai_events: Option<mpsc::Receiver<AiHookEvent>>,
         startup: WorkspaceStartup,
         cx: &mut Context<'_, Self>,
     ) -> Self {
@@ -102,6 +108,7 @@ impl SltermWorkspace {
             initial_grid,
             pane_bounds: Rc::new(RefCell::new(HashMap::new())),
             split_bounds: Rc::new(RefCell::new(HashMap::new())),
+            agent_hub: AgentHub::new(),
         };
         match startup {
             WorkspaceStartup::NewTerminal { cwd } => {
@@ -121,6 +128,8 @@ impl SltermWorkspace {
             }
         }
         workspace.start_shell_event_pump(shell_rx, cx);
+        workspace.start_ai_hook_pump(ai_events, cx);
+        workspace.start_agent_screen_watchdog(cx);
         workspace
     }
 
@@ -179,6 +188,8 @@ impl SltermWorkspace {
         let subscription = cx.subscribe_in(&view, window, Self::on_terminal_event);
         // 注册表写入点 1/2(spawn 侧;另一侧 = close_pane)。
         terminal_registry::register(pane_id, PaneSessionMeta::default());
+        // agent 宿主同纪律:只在 pane 创建/关闭两处增删。
+        self.agent_hub.register(pane_id);
         TerminalPane {
             id: pane_id,
             custom_name: None,
@@ -236,6 +247,7 @@ impl SltermWorkspace {
                     pane.view.read(cx).shutdown();
                 }
                 terminal_registry::remove(pane_id);
+                self.agent_hub.remove(pane_id);
                 self.pane_bounds.borrow_mut().remove(&pane_id);
                 self.tabs.remove(tab_index);
                 if self.tabs.is_empty() {
@@ -263,6 +275,7 @@ impl SltermWorkspace {
                     *zoomed = false;
                 }
                 terminal_registry::remove(pane_id);
+                self.agent_hub.remove(pane_id);
                 self.pane_bounds.borrow_mut().remove(&pane_id);
                 cx.notify();
             }
@@ -294,6 +307,18 @@ impl SltermWorkspace {
         self.initial_grid
     }
 
+    /// 测试专用:活跃 tab 首个 pane id(hook 泵路由断言的锚点)。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn first_pane_id(&self) -> Option<PaneId> {
+        self.tab_panes(self.active).next().map(|pane| pane.id)
+    }
+
+    /// 测试专用:单 pane 的 agent 仲裁状态(事件泵端到端断言端)。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn agent_status(&self, pane_id: PaneId) -> Option<crate::ai_agents::AgentStatus> {
+        self.agent_hub.host(pane_id).map(|host| host.status())
+    }
+
     /// 键盘焦点交活跃 tab 的聚焦 pane。
     fn focus_active(&self, window: &mut Window, cx: &mut Context<'_, Self>) {
         let Some(entry) = self.tabs.get(self.active) else {
@@ -307,6 +332,107 @@ impl SltermWorkspace {
                 }
             }
         }
+    }
+
+    /// 焦点 pane:信封缺 `SLTERM_PANE_ID` 时的唯一回退目标(M3 单 pane)。
+    fn focused_pane(&self) -> Option<PaneId> {
+        // M3 单变体;M5 扩 WorkspaceTab 后此处随分派面重写。
+        self.tabs
+            .get(self.active)
+            .map(|entry| &entry.tab)
+            .map(|WorkspaceTab::Terminal { focused, .. }| *focused)
+    }
+
+    /// AI hook 事件泵(M4.5,照上游 agents.rs 形态):管道服务线程写进程内
+    /// mpsc,后台定时器每 75ms 唤醒一次,前台线程排空并与 UI 状态合并。
+    /// 单批上限 64;满批说明下游有积压,退 1ms 让出渲染。
+    ///
+    /// 前台只做状态更新:解析与阻塞读都在管道线程,本任务只消费已解析事件。
+    fn start_ai_hook_pump(
+        &mut self,
+        receiver: Option<mpsc::Receiver<AiHookEvent>>,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(receiver) = receiver else {
+            return;
+        };
+        let executor = cx.background_executor().clone();
+        cx.spawn(async move |this, cx| {
+            let mut backlog = false;
+            loop {
+                executor
+                    .timer(Duration::from_millis(if backlog { 1 } else { 75 }))
+                    .await;
+                let mut events = Vec::new();
+                let mut disconnected = false;
+                while events.len() < 64 {
+                    match receiver.try_recv() {
+                        Ok(event) => events.push(event),
+                        Err(mpsc::TryRecvError::Empty) => break,
+                        Err(mpsc::TryRecvError::Disconnected) => {
+                            disconnected = true;
+                            break;
+                        }
+                    }
+                }
+                backlog = events.len() == 64;
+                if events.is_empty() {
+                    if disconnected {
+                        return;
+                    }
+                    continue;
+                }
+                let Ok(()) = this.update(cx, |workspace, _cx| {
+                    // 严格 pane 路由 + 仲裁在宿主内完成;UI 消费(页签徽标/
+                    // attention)归 05/09 篇,M4.5 不产生视图态。
+                    let focused = workspace.focused_pane();
+                    workspace.agent_hub.dispatch(events, focused);
+                }) else {
+                    return;
+                };
+                if disconnected {
+                    return;
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// 1 Hz 屏幕看门狗(照上游形态):逐 pane 取终端网格末尾样本喂仲裁器,
+    /// 给无 hook 的客户端补位、纠正丢边的 hook 状态。
+    ///
+    /// 节奏刻意与输出解耦:每个 `Wakeup` 上跑规则会在输出洪流下放大成本,
+    /// 而屏幕证据只需要拍帧级频率;`allows_screen()` 的 pane 由宿主内判定。
+    fn start_agent_screen_watchdog(&mut self, cx: &mut Context<'_, Self>) {
+        let executor = cx.background_executor().clone();
+        cx.spawn(async move |this, cx| {
+            loop {
+                executor.timer(Duration::from_secs(1)).await;
+                let Ok(()) = this.update(cx, |workspace, cx| {
+                    for (pane_id, screen) in workspace.screen_samples(cx) {
+                        workspace.agent_hub.observe_screen(pane_id, &screen);
+                    }
+                }) else {
+                    return;
+                };
+            }
+        })
+        .detach();
+    }
+
+    /// 每个终端 pane 的屏幕观察窗口(最近至多 24 行,与屏幕规则注意力区
+    /// 窗口同源)。无会话或零几何的 pane 跳过。
+    fn screen_samples(&self, cx: &App) -> Vec<(PaneId, String)> {
+        let mut samples = Vec::new();
+        for entry in &self.tabs {
+            let WorkspaceTab::Terminal { panes, .. } = &entry.tab;
+            for pane in panes {
+                if let Some(screen) = pane.view.read(cx).agent_screen_sample() {
+                    samples.push((pane.id, screen));
+                }
+            }
+        }
+        samples
     }
 
     /// 壳事件泵(照上游 residency.rs 形态):120ms 节奏排空通道,前台线程

@@ -3,25 +3,66 @@
 //! 平台收敛纪律(03 篇边界 8):`windows-sys` 命名管道/进程身份核验只允许
 //! 出现在本文件;协议解析、事件门、仲裁器平台无关。
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use super::local::helper_path;
 use crate::ai_hook::{AiHookEvent, HOOK_EXE_ENV, PIPE_ENV, parse_envelope};
 
 // ─── 管道服务器 ─────────────────────────────────────────────────────────
 
-/// GPUI 形态(唯一形态;上游 winit EventLoopProxy 通道随 legacy-shell 整支
-/// 裁剪)。GPUI 有自己的事件循环,但 hook 解析与管道所有权完全一致。
-/// workspace 在 foreground executor 上排空这条通道,按同一稳定 pane id 合同
-/// 路由。
-///
-/// 消费点归 M4.5(壳侧接线 GPUI foreground executor);本步只落通道本体。
-#[allow(dead_code)]
-pub fn spawn_gpui_server() -> std::sync::mpsc::Receiver<AiHookEvent> {
-    let (tx, rx) = std::sync::mpsc::channel();
-    spawn_pipe_server(move |event| tx.send(event).is_ok());
-    rx
+/// 管道服务线程句柄。随应用进程生命周期存活(单实例、非 per-pane);
+/// `shutdown`/Drop 确定性停止并 join,测试与关窗路径都不留 detached 线程。
+pub struct PipeServer {
+    name: String,
+    stop: Arc<AtomicBool>,
+    join: Option<std::thread::JoinHandle<()>>,
 }
 
-fn spawn_pipe_server(sink: impl Fn(AiHookEvent) -> bool + Send + 'static) {
+impl PipeServer {
+    /// 停止 accept 循环并等待线程退出。
+    ///
+    /// accept 线程绝大多数时间阻塞在 `ConnectNamedPipe` 上,停止位本身唤不醒
+    /// 它:先置停止位,再以客户端形态自连一次把阻塞的调用顶回来;线程建立
+    /// 连接之后先看停止位、立即退出。自连与「实例尚未创建」存在竞态,所以
+    /// 有界重试到线程真正结束——串行测试纪律要求 join 可确定性返回,不许
+    /// 泄漏后台线程(0xC0000409 类调度断言的温床)。
+    pub fn shutdown(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        let Some(join) = self.join.take() else {
+            return;
+        };
+        for _ in 0..100 {
+            if join.is_finished() {
+                break;
+            }
+            // 写打开即 helper 的客户端形态;失败说明实例正在换手,下一轮再试。
+            let _ = std::fs::OpenOptions::new().write(true).open(&self.name);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let _ = join.join();
+    }
+}
+
+impl Drop for PipeServer {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
+
+/// GPUI 形态(唯一形态;上游 winit EventLoopProxy 通道随 legacy-shell 整支
+/// 裁剪)。GPUI 有自己的事件循环,但 hook 解析与管道所有权完全一致:
+/// 返回的接收端由 workspace 的钩子泵在 foreground executor 上排空,按同一
+/// 稳定 pane id 合同路由。服务端线程只做阻塞 I/O 与解析,绝不碰 UI 状态。
+///
+/// 返回句柄必须活到应用退出:启动链持有它,关窗后 Drop 完成线程回收。
+pub fn spawn_gpui_server() -> (std::sync::mpsc::Receiver<AiHookEvent>, PipeServer) {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let server = spawn_pipe_server(move |event| tx.send(event).is_ok());
+    (rx, server)
+}
+
+fn spawn_pipe_server(sink: impl Fn(AiHookEvent) -> bool + Send + 'static) -> PipeServer {
     let name = format!(r"\\.\pipe\slterm-notify-{}", std::process::id());
     // SAFETY: 单线程启动期;此刻还没有别的线程读环境变量。
     unsafe {
@@ -36,17 +77,27 @@ fn spawn_pipe_server(sink: impl Fn(AiHookEvent) -> bool + Send + 'static) {
             std::env::set_var(HOOK_EXE_ENV, &p);
         };
     }
-    if let Err(err) = std::thread::Builder::new()
-        .name("slterm-ai-pipe".into())
-        .spawn(move || serve(&name, sink))
-    {
-        log::warn!("ai_hook: failed to spawn pipe server: {err}");
-    }
+    let stop = Arc::new(AtomicBool::new(false));
+    let join = {
+        let serve_name = name.clone();
+        let serve_stop = Arc::clone(&stop);
+        match std::thread::Builder::new()
+            .name("slterm-ai-pipe".into())
+            .spawn(move || serve(&serve_name, sink, &serve_stop))
+        {
+            Ok(join) => Some(join),
+            Err(err) => {
+                log::warn!("ai_hook: failed to spawn pipe server: {err}");
+                None
+            }
+        }
+    };
+    PipeServer { name, stop, join }
 }
 
 /// Accept 循环。每次连接一个全新管道实例:竞态换实例的客户端会看到几个
 /// 微秒的打开失败并重试(helper 重试约 100ms——在这个消息速率下是永恒)。
-fn serve(name: &str, sink: impl Fn(AiHookEvent) -> bool) {
+fn serve(name: &str, sink: impl Fn(AiHookEvent) -> bool, stop: &AtomicBool) {
     use windows_sys::Win32::Foundation::{
         CloseHandle, ERROR_PIPE_CONNECTED, GetLastError, INVALID_HANDLE_VALUE,
     };
@@ -60,6 +111,12 @@ fn serve(name: &str, sink: impl Fn(AiHookEvent) -> bool) {
 
     let wide: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
     loop {
+        // 停止位在实例创建前先看一眼:shutdown 的重试自连可能恰好落在
+        // 「上一实例已断开、下一实例未建」的空档,此时打开会失败;这一眼
+        // 让线程在下一轮立即退出,不依赖唤醒连接成功。
+        if stop.load(Ordering::SeqCst) {
+            return;
+        }
         // SAFETY: `wide` 以 NUL 结尾且活得比这次调用长。空安全属性 =
         // 默认 DACL,仅同用户可访问。
         let pipe = unsafe {
@@ -84,6 +141,16 @@ fn serve(name: &str, sink: impl Fn(AiHookEvent) -> bool) {
         let connected = unsafe { ConnectNamedPipe(pipe, std::ptr::null_mut()) } != 0
             || unsafe { GetLastError() } == ERROR_PIPE_CONNECTED;
         if connected {
+            // 唤醒连接(shutdown 的自连)不带载荷:只看停止位就走,不解析
+            // 空消息、也不把这当作一次真实投递。
+            if stop.load(Ordering::SeqCst) {
+                // SAFETY: `pipe` 是本帧持有的有效句柄。
+                unsafe {
+                    DisconnectNamedPipe(pipe);
+                    CloseHandle(pipe);
+                }
+                return;
+            }
             // 客户端身份必须在断开连接之前问:这是内核对「谁在写这条管道」
             // 的回答,载荷里自报的任何 pid 都可以伪造,这个不行。helper 此刻
             // 一定还活着(它正连着我们),所以随后的祖先链查询能命中。
@@ -135,7 +202,7 @@ fn serve(name: &str, sink: impl Fn(AiHookEvent) -> bool) {
     }
 }
 
-/// 单条消息的处理结果(管道 mock 层的测试面;真机端到端归 M4.5)。
+/// 单条消息的处理结果(单元测试面;真机端到端链路见 `e2e_tests`)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Dispatch {
     Delivered,

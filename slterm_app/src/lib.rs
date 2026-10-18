@@ -14,10 +14,14 @@
 pub(crate) mod app_shell;
 // 持久化小原语(原子写/文件锁):ai_hook 安装器与各域状态写共用。
 pub(crate) mod atomic_file;
-// M4.2 协议与仲裁层:消费点归 M4.5(壳侧管道接线)/05 篇(pane 宿主),
-// 接线落地后摘除本 allow。
-#[allow(dead_code)] // 消费点归 M4.5(屏幕观察)/05 篇(仲裁器)。
+// M4.5 单 pane 宿主:事件泵派发与 AgentActivity/AnswerInbox 归属。
+pub(crate) mod agent_host;
+// 屏幕规则与身份面已由 agent_host 的看门狗消费;`parse_command` 等
+// OSC 133 匹配器消费归 05 篇 M5.3,设置/会话面归 05/06 篇。
+#[allow(dead_code)]
 pub(crate) mod ai_agents;
+// 事件通道已由 M4.5 接线;安装/检视面(settings.rs 等)的消费点归 06 篇
+// 设置域,桥接资产与自愈入口在 M4.3 落盘但尚无壳侧调用方。
 #[allow(dead_code)]
 pub(crate) mod ai_hook;
 // 会话发现消费点归 05 篇恢复注入(M5.5)/命令面板;本步只落扫描与注册表。

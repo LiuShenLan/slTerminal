@@ -20,6 +20,7 @@ use std::sync::Arc;
 
 use slterm_terminal::event::{Event as TermEvent, Notify as _, WindowSize};
 use slterm_terminal::event_loop::Msg;
+use slterm_terminal::grid::Dimensions as _;
 use slterm_terminal::grid::Scroll;
 use slterm_terminal::index::{Column, Line, Point as TermPoint, Side};
 use slterm_terminal::render::{CellMetrics, TerminalViewport, ViewportTracker};
@@ -326,7 +327,10 @@ impl TerminalView {
                     cx.notify();
                 }
             }
-            // 命令边界:03 篇 agent/运行时消费点。M3 最小消费=不产生视图态。
+            // 命令边界:agent 的 `begin_command`/`command_finished` 与 OSC 133
+            // 首 token 匹配需要 Enter 时刻的命令行捕获(补全域归 M9),缝合点
+            // 归 05 篇 M5.3;M4.5 的屏幕采样走 workspace 的 1 Hz 看门狗,
+            // 不在此事件上跑规则(输出洪流下每字节 detect 成本不成立)。
             TermEvent::CommandStart | TermEvent::CommandDone { .. } => {}
             TermEvent::Notify(_) => {}
             // 视觉闪烁与声音归 09 篇。
@@ -437,6 +441,24 @@ impl TerminalView {
 
     pub fn grid_cols(&self) -> usize {
         self.cols
+    }
+
+    /// 屏幕观察窗口:终端网格末尾最多 24 行(与屏幕规则注意力区窗口同源)。
+    ///
+    /// 消费点 = workspace 的 1 Hz agent 看门狗(M4.5);刻意不挂在每个
+    /// `Wakeup` 上——规则匹配随输出洪流放大,屏幕证据只需要拍帧级频率。
+    /// 无会话/零几何(尚未布局)返回 `None`。
+    pub(crate) fn agent_screen_sample(&self) -> Option<String> {
+        let session = self.session.as_ref()?;
+        let term = session.term.lock();
+        let lines = term.screen_lines();
+        let columns = term.columns();
+        if lines == 0 || columns == 0 {
+            return None;
+        }
+        let start = TermPoint::new(Line((lines - lines.min(24)) as i32), Column(0));
+        let end = TermPoint::new(Line(lines as i32 - 1), Column(columns.saturating_sub(1)));
+        Some(term.bounds_to_string(start, end))
     }
 
     /// 复制选区并返回是否实际写入剪贴板。`notify` 表示显式复制

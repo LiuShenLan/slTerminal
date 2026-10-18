@@ -68,6 +68,7 @@ pub(crate) fn workspace_window_options(cx: &App, focus: bool) -> WindowOptions {
 pub(crate) fn open_initial_window(
     cx: &mut App,
     shell_rx: mpsc::Receiver<SltermShellEvent>,
+    ai_events: mpsc::Receiver<crate::ai_hook::AiHookEvent>,
     initial_cwd: Option<PathBuf>,
     initial_command: Option<Program>,
 ) {
@@ -83,7 +84,8 @@ pub(crate) fn open_initial_window(
     let deferred_show = first_frame::defer_show(&mut options);
     let result = cx.open_window(options, move |window, cx| {
         window.set_window_title(brand::NAME);
-        let workspace = cx.new(|cx| SltermWorkspace::new(window, shell_rx, startup, cx));
+        let workspace =
+            cx.new(|cx| SltermWorkspace::new(window, shell_rx, Some(ai_events), startup, cx));
         cx.new(|cx| Root::new(workspace, window, cx))
     });
     match result {

@@ -72,6 +72,10 @@ pub(crate) enum SltermShellEvent {
 pub fn run_shell(initial_cwd: Option<PathBuf>, initial_command: Option<Program>) {
     let (shell_tx, shell_rx) = mpsc::channel();
     let open_urls_tx = shell_tx.clone();
+    // 进程级 hook 管道(单实例,非 per-pane):必须在首个 PTY spawn 之前发布
+    // `SLTERM_NOTIFY_PIPE`——ConPTY 合并当前进程环境,全部 pane 的子进程树
+    // 天然携带作用域闸门。句柄活到事件循环退出,关窗后确定性回收 accept 线程。
+    let (ai_events, pipe_server) = crate::ai_hook::spawn_gpui_server();
     let application = gpui_platform::application()
         .with_assets(assets::SltermAssets)
         .with_quit_mode(QuitMode::LastWindowClosed);
@@ -80,8 +84,10 @@ pub fn run_shell(initial_cwd: Option<PathBuf>, initial_command: Option<Program>)
     });
     application.run(move |cx| {
         init(cx);
-        windowing::open_initial_window(cx, shell_rx, initial_cwd, initial_command);
+        windowing::open_initial_window(cx, shell_rx, ai_events, initial_cwd, initial_command);
     });
+    // run 返回 = 最后窗口已关闭;Drop 完成自连唤醒 + join。
+    drop(pipe_server);
 }
 
 /// 组件库/内嵌字体/主题/终端切片/工作区的一次性初始化。

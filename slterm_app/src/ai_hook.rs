@@ -7,10 +7,13 @@
 //! `SLTERM_HOOK_LOG` 诊断桥接投递而不记载荷;`GateVerdict` 在应用调试日志里
 //! 解释每一条被拒事件。
 //!
-//! 本步(M4.3)落盘范围:安装权威(installation)+ 9 家安装器与 SEC-12
-//! 审查门(local/*)+ 桥接资产(bridges/res)+ 设置页发现面(integrations)。
-//! 壳侧接线(GPUI foreground executor 排水、`AgentActivity` 挂 pane 宿主、
-//! config_guard 挂 app 生命周期)归 M4.5/05 篇;设置页消费归 06 篇。
+//! 落盘范围:协议/载荷/事件门/仲裁(M4.2)、安装权威与 9 家安装器(M4.3)、
+//! 壳侧事件通道(M4.5:命名管道线程 → 进程内 mpsc → GPUI foreground
+//! 排水 → `AgentActivity`/`AnswerInbox` 的 pane 宿主)。
+//!
+//! 缝合点(不在本模块消费):设置页数据源消费 `integrations::inspect()` 归
+//! 06 篇;`config_guard` 随设置域启动链挂接归 06 篇;通知漏斗消费
+//! TurnDone/NeedsAttention 两个状态边归 09 篇 M10.1。
 
 mod bridges;
 mod event;
@@ -24,18 +27,15 @@ mod payload;
 mod protocol;
 mod windows;
 
-// re-export 面是 M4.5/05/09 篇的缝合点(壳侧排水、pane 宿主、通知漏斗);
-// 本步(crate 内尚无壳消费)静默 unused,测试经这些路径消费。
-#[allow(unused_imports)]
+// re-export 面是壳侧/05/09 篇的缝合点(事件排水、pane 宿主、通知漏斗)。
 pub(crate) use event::CodexHookMode;
-#[allow(unused_imports)]
 pub use event::{
-    AiBackgroundTasks, AiHookCapabilities, AiHookEvent, AiHookKind, AiPermissionMode,
-    AiTurnOutcome, AttentionContext, capabilities_for,
+    AiBackgroundTasks, AiHookEvent, AiHookKind, AiPermissionMode, AiTurnOutcome, AttentionContext,
 };
-#[allow(unused_imports)]
+#[allow(unused_imports)] // 能力表消费点归 09 篇通知漏斗 / 04 篇 runtime 快照。
+pub use event::{AiHookCapabilities, capabilities_for};
+pub(crate) use lifecycle::AgentActivity;
 pub use ordering::GateVerdict;
-#[allow(unused_imports)]
 pub(crate) use ordering::{accept_for_pane, reorder_batch};
 pub(crate) use protocol::parse_envelope;
 
@@ -126,13 +126,16 @@ const CLAUDE_EVENTS: [&str; 10] = [
     "SessionEnd",
 ];
 
-#[allow(unused_imports)] // 消费点归 M4.5 壳侧接线。
+// 壳侧启动链的唯一进程级入口(M4.5);返回句柄随 `run_shell` 作用域存活。
 pub use windows::spawn_gpui_server;
 
-/// config_guard 落盘本体在 local;消费点归 M4.5 壳侧启动链。
+/// config_guard 落盘本体在 local;消费点归 06 篇设置域启动链
+/// (`ai_hooks` 全局开关落定后按授权自愈,本步不接线)。
 #[allow(unused_imports)]
 pub use local::spawn_config_guard;
 
+#[cfg(test)]
+mod e2e_tests;
 #[cfg(test)]
 mod ownership_tests {
     use super::*;
