@@ -354,7 +354,7 @@ fn terminal_launch_from_session(launch: &LaunchSession, cwd: Option<PathBuf>) ->
 
 /// pane 的持久化 cwd:终端报告优先,shell 尚未上报时回退启动身份里的
 /// 出生目录(恢复后首拍快照不会把目录丢成空串)。
-fn pane_cwd(pane: &super::TerminalPane, cx: &App) -> String {
+pub(super) fn pane_cwd(pane: &super::TerminalPane, cx: &App) -> String {
     let reported = pane.view.read(cx).cwd.clone();
     if !reported.is_empty() {
         return reported;

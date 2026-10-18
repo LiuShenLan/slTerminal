@@ -68,7 +68,6 @@
             "agent.paste",
             "agent.read",
             "agent.wait",
-            "window.create",
             "window.close",
             "window.focus",
             "tab.new",
@@ -89,20 +88,8 @@
             "pane.wait",
             "git.status",
             "git.diff",
-            "git.history",
-            "git.stage",
-            "git.unstage",
-            "git.commit",
-            "git.fetch",
-            "git.pull",
-            "git.push",
-            "tab.focus",
-            "tab.open",
-            "tab.read",
-            "conversation.read",
-            "conversation.send",
-            "conversation.choose",
-            "conversation.key"
+            "git.rollback",
+            "git.unstage"
           ]
         },
         "params": {
@@ -117,8 +104,7 @@
               "method": {
                 "enum": [
                   "runtime.describe",
-                  "runtime.snapshot",
-                  "window.create"
+                  "runtime.snapshot"
                 ]
               }
             }
@@ -596,13 +582,8 @@
                 "enum": [
                   "git.status",
                   "git.diff",
-                  "git.history",
-                  "git.stage",
-                  "git.unstage",
-                  "git.commit",
-                  "git.fetch",
-                  "git.pull",
-                  "git.push"
+                  "git.rollback",
+                  "git.unstage"
                 ]
               }
             }
@@ -620,12 +601,8 @@
             "properties": {
               "method": {
                 "enum": [
-                  "git.stage",
-                  "git.unstage",
-                  "git.commit",
-                  "git.fetch",
-                  "git.pull",
-                  "git.push"
+                  "git.rollback",
+                  "git.unstage"
                 ]
               }
             }
@@ -642,142 +619,6 @@
                     "pattern": "^[0-9a-fA-F]{64}$"
                   }
                 }
-              }
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "method": {
-                "const": "git.commit"
-              }
-            }
-          },
-          "then": {
-            "properties": {
-              "params": {
-                "required": [
-                  "message"
-                ],
-                "properties": {
-                  "message": {
-                    "type": "string",
-                    "pattern": "\\S"
-                  }
-                }
-              }
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "method": {
-                "const": "tab.focus"
-              }
-            }
-          },
-          "then": {
-            "properties": {
-              "params": {
-                "$ref": "#/$defs/tab_identity_params"
-              }
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "method": {
-                "const": "tab.open"
-              }
-            }
-          },
-          "then": {
-            "properties": {
-              "params": {
-                "$ref": "#/$defs/tab_open_params"
-              }
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "method": {
-                "const": "tab.read"
-              }
-            }
-          },
-          "then": {
-            "properties": {
-              "params": {
-                "$ref": "#/$defs/tab_read_params"
-              }
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "method": {
-                "const": "conversation.read"
-              }
-            }
-          },
-          "then": {
-            "properties": {
-              "params": {
-                "$ref": "#/$defs/conversation_read_params"
-              }
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "method": {
-                "const": "conversation.send"
-              }
-            }
-          },
-          "then": {
-            "properties": {
-              "params": {
-                "$ref": "#/$defs/conversation_send_params"
-              }
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "method": {
-                "const": "conversation.choose"
-              }
-            }
-          },
-          "then": {
-            "properties": {
-              "params": {
-                "$ref": "#/$defs/conversation_choose_params"
-              }
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "method": {
-                "const": "conversation.key"
-              }
-            }
-          },
-          "then": {
-            "properties": {
-              "params": {
-                "$ref": "#/$defs/conversation_key_params"
               }
             }
           }
@@ -2081,7 +1922,6 @@
         "process_id",
         "app_version",
         "protocol_version",
-        "detached_windows",
         "windows"
       ],
       "properties": {
@@ -2098,10 +1938,6 @@
         },
         "protocol_version": {
           "const": 1
-        },
-        "detached_windows": {
-          "type": "integer",
-          "minimum": 0
         },
         "windows": {
           "type": "array",
@@ -2123,7 +1959,6 @@
       "required": [
         "id",
         "focused",
-        "session_exempt",
         "active_tab",
         "focused_pane_id",
         "tabs"
@@ -2134,9 +1969,6 @@
           "minimum": 0
         },
         "focused": {
-          "type": "boolean"
-        },
-        "session_exempt": {
           "type": "boolean"
         },
         "active_tab": {
@@ -2167,7 +1999,6 @@
         "kind",
         "bell",
         "focused_pane_id",
-        "zoomed_pane_id",
         "layout",
         "panes"
       ],
@@ -2184,12 +2015,7 @@
         },
         "kind": {
           "enum": [
-            "shell",
-            "profile",
-            "ssh",
-            "document",
-            "image",
-            "code",
+            "terminal",
             "settings"
           ]
         },
@@ -2225,12 +2051,9 @@
           }
         },
         "tab_id": {
-          "type": "string",
-          "pattern": "^[a-fA-F0-9]{32}$",
-          "description": "Ephemeral identity, preserved by reorder and split. Absent on older runtimes."
-        },
-        "file": {
-          "$ref": "#/$defs/tab_file"
+          "type": "integer",
+          "minimum": 1,
+          "description": "Stable tab identity from slterm-split TabId; preserved by reorder and split. Absent on older runtimes."
         }
       },
       "additionalProperties": false
@@ -2296,7 +2119,6 @@
         "title",
         "cwd",
         "branch",
-        "ssh_destination",
         "running_program",
         "task_state",
         "state_change_seq"
@@ -2317,12 +2139,6 @@
         },
         "branch": {
           "type": "string"
-        },
-        "ssh_destination": {
-          "type": [
-            "string",
-            "null"
-          ]
         },
         "running_program": {
           "type": [
@@ -2740,9 +2556,6 @@
         },
         "exit_reason": {
           "type": "string"
-        },
-        "screen": {
-          "$ref": "#/$defs/terminal_screen_v1"
         }
       },
       "additionalProperties": false
@@ -2759,434 +2572,11 @@
           "minimum": 1
         },
         "tab_id": {
-          "type": "string",
-          "pattern": "^[a-fA-F0-9]{32}$"
+          "type": "integer",
+          "minimum": 1
         }
       },
       "additionalProperties": false
-    },
-    "tab_read_params": {
-      "type": "object",
-      "required": [
-        "window_id",
-        "tab_id"
-      ],
-      "properties": {
-        "window_id": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "tab_id": {
-          "type": "string",
-          "pattern": "^[a-fA-F0-9]{32}$"
-        },
-        "offset": {
-          "type": "integer",
-          "minimum": 0,
-          "maximum": 16777216
-        },
-        "limit": {
-          "type": "integer",
-          "minimum": 4,
-          "maximum": 65536
-        },
-        "revision": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128
-        }
-      },
-      "additionalProperties": false,
-      "allOf": [
-        {
-          "if": {
-            "required": [
-              "offset"
-            ],
-            "properties": {
-              "offset": {
-                "minimum": 1
-              }
-            }
-          },
-          "then": {
-            "required": [
-              "revision"
-            ]
-          }
-        }
-      ]
-    },
-    "tab_open_params": {
-      "type": "object",
-      "required": [
-        "window_id",
-        "path"
-      ],
-      "properties": {
-        "window_id": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "path": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 4096,
-          "description": "Absolute path on the computer; only in-app readable files are accepted."
-        }
-      },
-      "additionalProperties": false
-    },
-    "tab_file": {
-      "type": "object",
-      "required": [
-        "path",
-        "remote",
-        "dirty",
-        "saving",
-        "ready"
-      ],
-      "properties": {
-        "path": {
-          "type": "string"
-        },
-        "remote": {
-          "type": "boolean"
-        },
-        "dirty": {
-          "type": "boolean"
-        },
-        "saving": {
-          "type": "boolean"
-        },
-        "ready": {
-          "type": "boolean"
-        },
-        "revision": {
-          "type": "integer",
-          "minimum": 0
-        }
-      },
-      "additionalProperties": false
-    },
-    "conversation_identity": {
-      "type": "object",
-      "required": [
-        "kind",
-        "session_id"
-      ],
-      "properties": {
-        "kind": {
-          "enum": [
-            "codex",
-            "claude"
-          ]
-        },
-        "session_id": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128
-        },
-        "epoch": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "minimum": 0
-        }
-      },
-      "additionalProperties": false
-    },
-    "conversation_read_params": {
-      "type": "object",
-      "required": [
-        "window_id",
-        "pane_id",
-        "identity"
-      ],
-      "properties": {
-        "window_id": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "pane_id": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "identity": {
-          "$ref": "#/$defs/conversation_identity"
-        },
-        "before": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "minimum": 0
-        },
-        "revision": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "maxLength": 128
-        }
-      },
-      "additionalProperties": false
-    },
-    "conversation_send_params": {
-      "type": "object",
-      "required": [
-        "window_id",
-        "pane_id",
-        "identity",
-        "text"
-      ],
-      "properties": {
-        "window_id": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "pane_id": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "identity": {
-          "allOf": [
-            {
-              "$ref": "#/$defs/conversation_identity"
-            },
-            {
-              "required": [
-                "epoch"
-              ],
-              "properties": {
-                "epoch": {
-                  "type": "integer",
-                  "minimum": 0
-                }
-              }
-            }
-          ]
-        },
-        "text": {
-          "type": "string",
-          "minLength": 1
-        }
-      },
-      "additionalProperties": false
-    },
-    "conversation_choose_params": {
-      "type": "object",
-      "required": [
-        "window_id",
-        "pane_id",
-        "identity",
-        "prompt_id",
-        "option"
-      ],
-      "properties": {
-        "window_id": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "pane_id": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "identity": {
-          "allOf": [
-            {
-              "$ref": "#/$defs/conversation_identity"
-            },
-            {
-              "required": [
-                "epoch"
-              ],
-              "properties": {
-                "epoch": {
-                  "type": "integer",
-                  "minimum": 0
-                }
-              }
-            }
-          ]
-        },
-        "prompt_id": {
-          "type": "string",
-          "pattern": "^[a-f0-9]{64}$"
-        },
-        "option": {
-          "type": "integer",
-          "minimum": 0,
-          "maximum": 8
-        }
-      },
-      "additionalProperties": false
-    },
-    "conversation_key_params": {
-      "type": "object",
-      "required": [
-        "window_id",
-        "pane_id",
-        "identity",
-        "key"
-      ],
-      "properties": {
-        "window_id": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "pane_id": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "identity": {
-          "allOf": [
-            {
-              "$ref": "#/$defs/conversation_identity"
-            },
-            {
-              "required": [
-                "epoch"
-              ],
-              "properties": {
-                "epoch": {
-                  "type": "integer",
-                  "minimum": 0
-                }
-              }
-            }
-          ]
-        },
-        "key": {
-          "type": "string",
-          "enum": [
-            "Ctrl+C",
-            "Esc",
-            "Tab",
-            "←",
-            "→",
-            "↑",
-            "↓"
-          ]
-        }
-      },
-      "additionalProperties": false
-    },
-    "terminal_screen_v1": {
-      "type": "object",
-      "required": [
-        "version",
-        "columns",
-        "rows",
-        "palette",
-        "cursor"
-      ],
-      "properties": {
-        "version": {
-          "const": 1
-        },
-        "columns": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 400
-        },
-        "rows": {
-          "type": "array",
-          "minItems": 1,
-          "maxItems": 200,
-          "items": {
-            "type": "array",
-            "minItems": 1,
-            "maxItems": 400,
-            "items": {
-              "type": "array",
-              "prefixItems": [
-                {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 256
-                },
-                {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 2
-                },
-                {
-                  "type": "integer",
-                  "minimum": -269,
-                  "maximum": 16777215
-                },
-                {
-                  "type": "integer",
-                  "minimum": -269,
-                  "maximum": 16777215
-                },
-                {
-                  "type": "integer",
-                  "minimum": 0,
-                  "maximum": 63
-                }
-              ],
-              "minItems": 5,
-              "maxItems": 5
-            }
-          }
-        },
-        "palette": {
-          "type": "array",
-          "maxItems": 269,
-          "items": {
-            "type": "array",
-            "prefixItems": [
-              {
-                "type": "integer",
-                "minimum": 0,
-                "maximum": 268
-              },
-              {
-                "type": "integer",
-                "minimum": 0,
-                "maximum": 16777215
-              }
-            ],
-            "minItems": 2,
-            "maxItems": 2
-          }
-        },
-        "cursor": {
-          "type": "array",
-          "prefixItems": [
-            {
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 399
-            },
-            {
-              "type": "integer",
-              "minimum": 0
-            },
-            {
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 1
-            }
-          ],
-          "minItems": 3,
-          "maxItems": 3
-        },
-        "wrapped": {
-          "type": "array",
-          "minItems": 1,
-          "maxItems": 200,
-          "items": {
-            "type": "boolean"
-          },
-          "description": "Optional soft-wrap flag per physical row, preserving logical lines during phone-only reflow."
-        }
-      },
-      "additionalProperties": false,
-      "description": "At most 40000 cells and 128 KiB UTF-8 glyphs; each glyph <=256 UTF-8 bytes. Row widths must equal columns. Color <0 references -(palette index+1); otherwise RGB. Flags: bold=1, italic=2, underline=4, strike=8, dim=16, hidden=32. Cursor is [x,y,visible]. Oversized grids return screen_too_large, never a silently cropped frame."
     }
   }
 }

@@ -134,9 +134,13 @@ pub struct TerminalView {
     pub marked_text: Option<String>,
     pub ime_bounds: Bounds<Pixels>,
     pub title: String,
-    /// shell 集成 `SLTERM|cwd|branch` 标题上报 / OSC 7 的工作目录;
+    /// shell 集成 `SLTERM|cwd|branch|program` 标题上报 / OSC 7 的工作目录;
     /// tab 标签的第一优先来源。
     pub cwd: String,
+    /// 标题协议里的分支字段(05/04 篇 runtime 快照消费);OSC 7 不动它。
+    pub branch: String,
+    /// 标题协议里的前台程序名;runtime 快照的 `running_program` 来源。
+    pub running_program: Option<String>,
     pub(super) error: Option<String>,
     pub(super) exited: Option<String>,
     /// 冷恢复待提交的 AI CLI resume 命令;会话恢复注入的唯一落点。
@@ -305,6 +309,9 @@ impl TerminalView {
     /// 消费须先查归篇表,不在此自由发挥。
     pub(super) fn process_event(&mut self, event: TermEvent, cx: &mut Context<'_, Self>) {
         let cwd_changed = cwd_report::apply(&mut self.cwd, &event);
+        // 标题协议的第二/三段(branch/program)与 cwd 同一信封;OSC 7 只
+        // 携带目录,不得清掉这两项。
+        cwd_report::apply_title_metadata(&mut self.branch, &mut self.running_program, &event);
         match event {
             TermEvent::Wakeup => {
                 if self.output_visible {

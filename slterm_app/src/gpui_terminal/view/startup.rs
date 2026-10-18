@@ -136,6 +136,8 @@ impl TerminalView {
             ime_bounds: Bounds::default(),
             title: initial_title,
             cwd: initial_cwd,
+            branch: String::new(),
+            running_program: None,
             error,
             exited: None,
             pending_agent_command: None,

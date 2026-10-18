@@ -23,6 +23,7 @@
 //! 结构性变化经 `TerminalView::mark_structural_resize` 同步下发,不进尾沿
 //! 去抖)。
 
+pub(crate) mod runtime_projection;
 pub(crate) mod session_persistence;
 pub(crate) mod session_recovery;
 pub(crate) mod sidebar;
@@ -57,6 +58,7 @@ use crate::agent_host::AgentHub;
 use crate::ai_hook::AiHookEvent;
 use crate::brand;
 use crate::gpui_terminal::view::{TerminalLaunch, TerminalView, TerminalViewEvent};
+use crate::runtime_api::{RuntimeHub, SINGLE_WINDOW_ID};
 use crate::session::LaunchSession;
 use crate::terminal_registry::{self, PaneSessionMeta};
 use session_persistence::{SaveReason, SessionPersistence};
@@ -172,6 +174,11 @@ pub struct SltermWorkspace {
     agent_hub: AgentHub,
     /// 单窗口会话写盘状态机(latest/saved 双快照、无变化跳过、提权隔离)。
     session_persistence: SessionPersistence,
+    /// 04 篇 Runtime 状态权威:渲染前置投影入账,hub 判等去重。
+    ///
+    /// M7.5 把同一 clone 交给 `RuntimeServer`;在那之前本 hub 只有壳内
+    /// 发布源,无外部订阅者。
+    runtime_hub: RuntimeHub,
 }
 
 /// 键:pane id(方向导航要拿所有叶子的屏幕矩形算最近邻)。
@@ -275,6 +282,7 @@ impl SltermWorkspace {
             window_commands: Vec::new(),
             agent_hub: AgentHub::new(),
             session_persistence: Self::new_session_persistence(),
+            runtime_hub: RuntimeHub::new(),
         };
         let restored = plan
             .session
@@ -901,6 +909,10 @@ impl SltermWorkspace {
             }
             TerminalViewEvent::Exited => {
                 if let Some(pane_id) = self.locate_pane(view) {
+                    // 真实 PTY 退出是首个终态事件;随后 close_pane 的关闭
+                    // 墓碑不得覆盖它(等待方错误码应是 pane_exited)。
+                    self.runtime_hub
+                        .record_pane_exited(SINGLE_WINDOW_ID, pane_id.0);
                     self.close_pane(pane_id, window, cx);
                 }
             }
@@ -927,6 +939,9 @@ impl SltermWorkspace {
         }) else {
             return;
         };
+        // 用户关闭是显式生命周期事件;下一帧投影缺该 pane,hub 不再重复记。
+        self.runtime_hub
+            .record_pane_closed(SINGLE_WINDOW_ID, pane_id.0);
         let outcome = match &mut self.tabs[tab_index].tab {
             WorkspaceTab::Terminal { tree, .. } => tree.remove_leaf(pane_id),
             WorkspaceTab::Settings { .. } => return,
@@ -1201,6 +1216,20 @@ impl SltermWorkspace {
         self.tab_panes(self.active)
             .next()
             .map(|pane| pane.view.clone())
+    }
+
+    /// 04 篇 M7.2:渲染前把 Workspace 投影入账。hub 只发布语义变化,
+    /// 事件循环空转/光标闪烁重复渲染不烧 revision、不刷订阅方。
+    fn publish_runtime_snapshot(&self, cx: &App) {
+        let snapshot = runtime_projection::project_workspace(self, cx);
+        self.runtime_hub.publish(snapshot);
+    }
+
+    /// M7.5 `RuntimeServer::spawn_callback` 接线点:服务端与壳共享同一
+    /// 状态权威(同一 `Arc<Mutex<HubState>>`),不是第二份拷贝。
+    #[allow(dead_code)] // 消费点 = M7.5 RuntimeServer 接线。
+    pub(crate) fn runtime_hub(&self) -> RuntimeHub {
+        self.runtime_hub.clone()
     }
 
     /// 测试专用:spawn 网格只读(启动零 resize 锚的断言端)。
@@ -1700,6 +1729,9 @@ impl SltermWorkspace {
 
 impl Render for SltermWorkspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
+        // 04 篇 M7.2:状态变化统一在渲染路径入账——任何 cx.notify 触发的
+        // 重绘都会带上一份最新投影;判等去重保证空转帧零成本。
+        self.publish_runtime_snapshot(cx);
         let content = match self.tabs.get(self.active).map(|entry| &entry.tab) {
             Some(WorkspaceTab::Terminal { .. }) => Some(self.render_terminal_tab(self.active, cx)),
             Some(WorkspaceTab::Settings { view, .. }) => Some(view.clone().into_any_element()),
