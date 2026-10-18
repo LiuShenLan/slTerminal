@@ -85,6 +85,7 @@
 | B55 | **壁纸设置 UI 缺失**：只有 opacity 滑块/blur 下拉，无 background_image 路径选择与 fit/alignment 控件；目前只能经 settings.json 或主题写入。 | `settings_pane.rs` | M10.7 | 归 06 篇补壁纸选择 + 预览控件（`load_preview` 已备）。 |
 | B56 | **终端默认背景仍是壳底色 token**：网格区未绘制 `Settings.palette.background`，默认格透出 Root 壳色。 | `view/element.rs` 容器底色层 | M10.7 | 02/06 篇若引入独立终端卡底色，在卡层之上、单元格之下补单层（直接叠加会二次 alpha）。 |
 | B57 | **live opacity 预览与并发 Changed 边界**：拖拽期间恰有其它设置触发 `Changed`，`wallpaper::refresh` 会用已持久化值覆盖预览（概率低）。 | `settings_pane/persistence.rs` `preview_opacity` | M10.7 | live 值并入全局或给 refresh 加预览旁路。 |
+| B58 | **禁用态循环语义待裁定**：有订阅但 `enabled=false` 时看门狗循环仍按节拍唤醒跳过执行（自愈形态）；旧后端禁用即退出。当前无任务配置 UI 不可达。 | `workspace/pumps.rs` 看门狗 | M10.8 | 06 接入禁用/启用时裁定是否保留该形态。 |
 
 ## C. 计划内（归后续子步/阶段，重构完成时验证）
 
@@ -103,7 +104,7 @@
 | C11 | **i18n 合同独立 workspace CI 登记**：`tools/slterm-i18n-contract` 不在根 workspace，clippy/CI 不覆盖。 | 12 篇打包/CI 清单 | |
 | C12 | **旧栈语义资产转测试保留**：git2 五份语义资产（D07-1 裁定转对照用例）。 | 07/M11 | |
 | C13 | **docs/ 临时稿删除 + 篇号锚点清理**（与 A3 联动）。 | M11 | |
-| C14 | **设计措辞修正**：05 篇「窗口边缘」应为「内容区外圈」；04 篇 `reorder_batch` 签名稿与上游不符（已照源）；08 篇 `note_bell` 上游不存在（未落）；04 篇 generation 等待错误码口径（实现按设计稿 `agent_identity_mismatch`/`agent_exited`）；08 篇 D08-2 待沉淀仍写「M9.3 落地时拍板」而 DECISIONS 已裁（文档漂移）；08 篇 `compile_formula` 签名草案与上游实源不符（已按源码照抄）；08 篇 #44 `draw_overlays` 未迁，M9.5 自绘 paint pass（设计稿应标注归属）；09 篇 §6 duration 值域（Default|Short|Long）与 06 已落六档不一致（实现按六档消费，persistent 无系统常驻档）；09 篇 M10.2 出口只写「agent 退出清进度」，实现按任务书补 TurnDone/pane 关闭清除（doc 待回登）；09 篇 `focus_window(cx)`/`focus_pane(pane,cx)` 为多窗注册表签名，与单窗 GPUI（窗口更新回调内不可再 update）冲突，实现改为显式 `&mut Window` 落点、目标选择/平台调用仍单点；09 篇 `PreparedUpdate::commit(&self)` 实为 `commit(&mut self, windows: &[Session])`，`RELEASE_DOWNLOAD_PREFIX` 落 `update_check.rs` 而非 `update_download`（M11 原位收敛）；09 篇 row 35 写 `.lnk`「静默参数」但 CLI 无静默旗标（实现按设置两条件；doc 待删措辞或另立 `--silent`）。 | 设计稿 | 重构末统一订正。 |
+| C14 | **设计措辞修正**：05 篇「窗口边缘」应为「内容区外圈」；04 篇 `reorder_batch` 签名稿与上游不符（已照源）；08 篇 `note_bell` 上游不存在（未落）；04 篇 generation 等待错误码口径（实现按设计稿 `agent_identity_mismatch`/`agent_exited`）；08 篇 D08-2 待沉淀仍写「M9.3 落地时拍板」而 DECISIONS 已裁（文档漂移）；08 篇 `compile_formula` 签名草案与上游实源不符（已按源码照抄）；08 篇 #44 `draw_overlays` 未迁，M9.5 自绘 paint pass（设计稿应标注归属）；09 篇 §6 duration 值域（Default|Short|Long）与 06 已落六档不一致（实现按六档消费，persistent 无系统常驻档）；09 篇 M10.2 出口只写「agent 退出清进度」，实现按任务书补 TurnDone/pane 关闭清除（doc 待回登）；09 篇 `focus_window(cx)`/`focus_pane(pane,cx)` 为多窗注册表签名，与单窗 GPUI（窗口更新回调内不可再 update）冲突，实现改为显式 `&mut Window` 落点、目标选择/平台调用仍单点；09 篇 `PreparedUpdate::commit(&self)` 实为 `commit(&mut self, windows: &[Session])`，`RELEASE_DOWNLOAD_PREFIX` 落 `update_check.rs` 而非 `update_download`（M11 原位收敛）；09 篇 row 35 写 `.lnk`「静默参数」但 CLI 无静默旗标（实现按设置两条件；doc 待删措辞或另立 `--silent`）；09 篇 TaskDef 无一次性/按需形态，实现新增 `TaskSchedule`（Once/OnDemand，M11 回登）。 | 设计稿 | 重构末统一订正。 |
 | C15 | **`D04-3 windowing_behavior` 未设键**：单窗行为硬编码 `SINGLE_WINDOW_ID`。 | 12 篇随 settings 面统一裁定 | |
 | C16 | **`request_once_bounded` 无消费方**（插件宿主）。 | M9.5/M10 | |
 | C17 | **`ProviderTestOutcome` 文案本地化**（展示边界）。 | M9.5 | |
@@ -119,6 +120,7 @@
 | C27 | **更新弹窗/安装授权步未落**：`UpdateAvailable`/`DownloadStatus`/`ready_path`/`prepare/commit`/`schedule`/`mark_prompted` 均已就绪待接。 | 后续 | 消费面清单见 M10.5 报告缝合点。 |
 | C28 | **`update-check` CLI 诊断子命令未加**（任务标注可选）。 | 后续 | 排障需要时在 `cli.rs` 挂。 |
 | C29 | **`.slterm-update.slterm-lock` 启动残留**：锁权威是内核句柄，空文件无害（上游同构）。 | 产品取舍 | 如需零残留正常退出时删除。 |
+| C30 | **`backgroundTasks` 段未进 06 设置键注册表**：当前只落运行时原子量与 `apply_config`（测试覆盖）。 | 06 设置页 / M10.11 | 随 planBalance/任务配置 UI 落地时正式登记该段。 |
 
 ## D. 已修（存档，防重复登记）
 
