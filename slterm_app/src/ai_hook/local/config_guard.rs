@@ -31,7 +31,8 @@ impl Drop for ConfigGuard {
     }
 }
 
-/// 消费点归 M4.5 壳侧启动链(挂 app 生命周期);本步只落本体。
+/// 消费点归 06 篇设置域启动链(挂 app 生命周期,`ai_hooks` 开关落定后
+/// 按授权自愈);M4.5 只接事件通道,本步只落本体。
 pub fn spawn_config_guard() -> Option<ConfigGuard> {
     let (wake, receive) = mpsc::sync_channel(1);
     let stop = Arc::new(AtomicBool::new(false));
