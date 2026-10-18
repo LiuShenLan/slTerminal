@@ -292,6 +292,20 @@
       "unsaved": "Unsaved"
     }
   },
+  "notify": {
+    "bell": "Terminal bell",
+    "command_finished": "Command finished in {seconds}s",
+    "command_failed": "Command failed after {seconds}s (exit {code})",
+    "turn_done": "Turn finished; waiting for your next instruction",
+    "turn_attention": "Waiting for your confirmation or input",
+    "turn_failed": "Request failed. Check the terminal for details.",
+    "turn_failed_reason": "Request failed: {error}",
+    "turn_incomplete": "The answer is incomplete. Check the terminal for details.",
+    "turn_ended": "The turn ended.",
+    "recovery_restored": "Restored {count} tab(s).",
+    "recovery_crashed": "Restored {count} tab(s) after an unclean shutdown.",
+    "recovery_quarantined": "Repeated restore failures; the saved scene was moved to {path}"
+  },
   "terminal": {
     "ai_analyzing": "Analyzing failure…",
     "ai_fix_hint": "Ctrl+. paste · Esc dismiss"

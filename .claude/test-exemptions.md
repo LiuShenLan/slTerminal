@@ -51,6 +51,7 @@
 | 整窗关闭的真实 OS 手势（Alt+F4/系统菜单关闭） | embedded 虚拟窗口无 OS 级关窗注入通道；`simulate_close` 走真实 `on_window_should_close` 回调（含脏守卫与确认框），但 OS 手势到回调的一段不可自动化 | L4 `closing_the_window_with_dirty_files_confirms_first`（拦截/取消/保存落盘）+ `shell_window_mounts_root_and_draws`；真实 Alt+F4 由构建产物人工验收 | 07 篇 M8.5 登记 |
 | AI assistant 真实模型 HTTP 请求（`ai_assistant::send_model_request` 四协议族出网） | 真实外部 API + 凭据依赖，测试进程不发出境请求；协议字段/响应解析可纯函数化的部分已覆盖 | L1 `should_suggest`/危险词表/`redact_secrets`/`parse_fix`/`request_target` 与 `fallback_api_key` 用例 + L4 `ai_fix_bar_pastes_only_and_drops_stale_responses`（Pending/Ready/粘贴/过期 seq）+ 构建产物人工实测（配置 provider 后一条失败命令得到建议条） | 08 篇 M9.5 登记 |
 | terminal_math 覆盖层上屏后的像素级字形观感（公式落点/抗锯齿/裁剪边） | 位图与布局可在 L1 逐像素/几何断言，但最终屏幕合成由 GPUI 文本与图像管线在真实 DPI 下完成，虚拟窗口不能代表字形观感 | L1 `math_overlay_tests`（扫描/投影/掩码/fit 计划）+ `math_render_tests`（位图合成预算）+ L4 `math_overlay_paint_leaves_grid_and_copy_source_untouched`（真实绘制一帧后网格/复制不变）+ 构建产物人工目测（`$x^2$`、`\\[ \\]` 块、宽字符） | 08 篇 M9.5 登记 |
+| 真实系统 toast 投递与 AUMID 注册（WinRT `Show` 跨进程 RPC + `HKCU\Software\Classes\AppUserModelId` 写） | 真实投递会污染开发机通知中心、依赖桌面会话与通知开关，且系统抑制/AUMID 生效不可从测试进程断言；测试构建显式短路真实投递 | 漏斗策略 L1 全量（前台门控/闪烁先行/全局与 pane 节流/失败 episode/160 截断/时长 XML 映射）+ `notify-test` 诊断命令真机逐段打印（注册/时长/投递，构建产物实跑 exit 0）+ 构建产物人工 smoke（系统通知中心可见 slTerminal banner 且点击回窗） | 09 篇 M10.1 登记 |
 
 > 原豁免表中 `FileWatcher::start`/`notify_watch` 与 `claude_history` 命令包装两项已按 D6 从豁免重分类为补测，不再列入豁免表。  
 > **SEC-17 豁免已撤销（TQ-COV-05 翻案）**：`tracing::warn!(target: "audit")` 已由 `tracing-test` 断言锁死，豁免行删除。

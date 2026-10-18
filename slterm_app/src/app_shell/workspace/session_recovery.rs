@@ -52,6 +52,36 @@ impl StartupPlan {
     }
 }
 
+/// 恢复结果一次性汇总文案(09 篇 M10.1 消费 05 篇 M5.5 / 清单 A10):
+/// 恢复成功按标签数提示(崩溃现场多一句来源说明);断路器隔离给出现场
+/// 路径;无恢复且无隔离 = None(全新启动不打扰)。
+pub(crate) fn recovery_notice(
+    restored_tabs: Option<usize>,
+    crashed: bool,
+    quarantined: Option<&Path>,
+    language: crate::i18n::UiLanguage,
+) -> Option<String> {
+    use crate::i18n::Message;
+
+    match restored_tabs {
+        Some(tabs) if tabs > 0 => {
+            let count = tabs.to_string();
+            let message = if crashed {
+                Message::NotifyRecoveryCrashed
+            } else {
+                Message::NotifyRecoveryRestored
+            };
+            Some(language.format(message, &[("count", &count)]))
+        }
+        _ => quarantined.map(|path| {
+            language.format(
+                Message::NotifyRecoveryQuarantined,
+                &[("path", &path.display().to_string())],
+            )
+        }),
+    }
+}
+
 /// 生产启动入口:数据目录 `session.json`。
 pub(crate) fn prepare_startup(restore_tabs: bool) -> StartupPlan {
     prepare_startup_at(&crate::session::session_path(), restore_tabs)
@@ -545,6 +575,37 @@ mod session_recovery_tests {
         assert_eq!(shell.args(), &["-NoLogo".to_owned()]);
         assert_eq!(shell_name.as_deref(), Some("pwsh"));
         assert!(explicit_command, "Profile 按显式命令通道重建");
+    }
+
+    /// 恢复汇总文案(A10):普通恢复/崩溃恢复/断路器隔离三态,全新启动
+    /// 静默;零标签不生成提示。
+    #[test]
+    fn recovery_notice_summarizes_restore_outcomes_and_stays_quiet_on_fresh_start() {
+        use crate::i18n::UiLanguage;
+
+        assert_eq!(
+            recovery_notice(Some(3), false, None, UiLanguage::EnUs).as_deref(),
+            Some("Restored 3 tab(s).")
+        );
+        assert_eq!(
+            recovery_notice(Some(2), true, None, UiLanguage::EnUs).as_deref(),
+            Some("Restored 2 tab(s) after an unclean shutdown.")
+        );
+        assert_eq!(
+            recovery_notice(
+                None,
+                false,
+                Some(Path::new("D:/data/session.crashed.json")),
+                UiLanguage::ZhCn
+            )
+            .as_deref(),
+            Some("连续多次启动未完成恢复，已跳过；现场保存在 D:/data/session.crashed.json")
+        );
+        assert_eq!(recovery_notice(None, false, None, UiLanguage::EnUs), None);
+        assert_eq!(
+            recovery_notice(Some(0), false, None, UiLanguage::EnUs),
+            None
+        );
     }
 
     /// CLI 显式启动(cwd/-e)不碰恢复:不计数、不隔离、不交会话。

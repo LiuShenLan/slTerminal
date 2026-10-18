@@ -67,9 +67,50 @@ impl SltermWorkspace {
             SltermShellEvent::RuntimeControl(dispatch) => {
                 self.execute_runtime_dispatch(dispatch, window, cx);
             }
+            // 09 篇 M10.1:toast 点击回窗。四路回窗的统一 facade 归 M10.4;
+            // 单窗下本步先按「激活唯一主窗 + 选中所在 tab + 聚焦 pane」落地。
+            SltermShellEvent::NotificationFocus(pane) => {
+                window.activate_window();
+                if let Some(pane_id) = pane {
+                    self.focus_notification_pane(pane_id, window, cx);
+                }
+                cx.notify();
+            }
+            // 权限确认动作按钮的回传通道:确认语义归 10 篇安全半程,本片
+            // 只保证事件可达(当前无消费方,落日志取证)。
+            SltermShellEvent::NotificationChoice {
+                pane_id,
+                request_id,
+                choice,
+            } => {
+                log::debug!(
+                    "notify: choice {choice} for confirmation {request_id} on pane={} (consumer lands with the M10 security half)",
+                    pane_id.0
+                );
+            }
             // 消费(右键「在此处打开」)归 09 篇。
             SltermShellEvent::OpenDirectories(_) => {}
         }
+    }
+
+    /// toast 点击的 pane 级回窗:找到所在 tab,切换为活跃并聚焦该 pane。
+    fn focus_notification_pane(
+        &mut self,
+        pane_id: PaneId,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(tab_ix) = self.tabs.iter().position(|entry| match &entry.tab {
+            WorkspaceTab::Terminal { tree, .. } => tree.contains(pane_id),
+            _ => false,
+        }) else {
+            // pane 已关闭:只保留窗口前置,不猜目标。
+            return;
+        };
+        if tab_ix != self.active {
+            self.activate_tab(tab_ix, window, cx);
+        }
+        self.focus_pane(tab_ix, pane_id, window, cx);
     }
 
     /// 执行一条写命令并回执;Exec 是异步执行器,自行 respond。

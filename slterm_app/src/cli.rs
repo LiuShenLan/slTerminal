@@ -65,6 +65,9 @@ pub enum Subcommands {
     Pane(PaneOptions),
     /// Inspect and drive the AI agents running in panes.
     Agent(AgentOptions),
+    /// Diagnose the native notification pipeline: AUMID registration,
+    /// configured duration, and a synchronous test toast.
+    NotifyTest,
 }
 
 /// `-e` 启动命令(M3 形态:启动链一次性消费;serde 持久化面归 05 篇)。
@@ -977,6 +980,7 @@ mod cli_tests {
             vec!["window", "close", "1"],
             vec!["tab", "close", "0", "--window", "1"],
             vec!["ctl", "describe"],
+            vec!["notify-test"],
         ] {
             let cli = parse_args(args.clone())
                 .unwrap_or_else(|error| panic!("{args:?} should parse: {error}"));

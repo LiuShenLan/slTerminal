@@ -11,6 +11,8 @@ pub(crate) mod keyboard;
 // 补全路径拼写(08 篇 M9.1):大小写语义与回写分隔符;shell 引用仍归
 // slterm_completions 的 command_context。
 pub(crate) mod local_paths;
+// 原生通知(AUMID 注册 + WinRT toast MTA worker,09 篇 M10.1)。
+pub(crate) mod notifications;
 // 系统 locale 探测源文件(src/platform/locale.rs)经 `i18n::locale` 的
 // `#[path]` 复编进查询核心;此处不再二次挂模块(独立合同 workspace 复编
 // 同一份实现,不引入应用壳)。

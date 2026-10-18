@@ -292,6 +292,20 @@
       "unsaved": "未保存"
     }
   },
+  "notify": {
+    "bell": "终端响铃",
+    "command_finished": "命令完成（{seconds} 秒）",
+    "command_failed": "命令失败（{seconds} 秒，退出码 {code}）",
+    "turn_done": "回合完成，等待下一条指令",
+    "turn_attention": "需要你的确认或输入",
+    "turn_failed": "请求失败，详情见终端。",
+    "turn_failed_reason": "请求失败：{error}",
+    "turn_incomplete": "回答未完成，详情见终端。",
+    "turn_ended": "回合结束。",
+    "recovery_restored": "已恢复 {count} 个标签。",
+    "recovery_crashed": "上次未正常退出，已恢复 {count} 个标签。",
+    "recovery_quarantined": "连续多次启动未完成恢复，已跳过；现场保存在 {path}"
+  },
   "terminal": {
     "ai_analyzing": "正在分析失败原因…",
     "ai_fix_hint": "Ctrl+. 贴入 · Esc 关闭"

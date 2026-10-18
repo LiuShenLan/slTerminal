@@ -291,6 +291,8 @@ pub(crate) fn run_cli(command: Subcommands) -> i32 {
             crate::cli::AgentCommand::Read(options) => options.output.pretty,
             crate::cli::AgentCommand::Wait(options) => options.output.pretty,
         },
+        // notify-test 直接打印诊断文本,不产出 JSON 响应。
+        Subcommands::NotifyTest => false,
     };
 
     let outcome = match command {
@@ -300,6 +302,9 @@ pub(crate) fn run_cli(command: Subcommands) -> i32 {
         Subcommands::Tab(options) => super::shortcuts::tab(options),
         Subcommands::Pane(options) => super::shortcuts::pane(options),
         Subcommands::Agent(options) => super::shortcuts::agent(options),
+        // 同步诊断通道(09 篇采纳点 18):注册 + 时长 + 投递逐段打印,
+        // 不启动 GUI、不依赖运行中的实例。
+        Subcommands::NotifyTest => return crate::platform::notifications::notify_test(),
     };
     match outcome {
         Ok(()) => 0,

@@ -51,6 +51,7 @@ use std::path::PathBuf;
 use std::sync::mpsc;
 
 use gpui::{App, QuitMode};
+use slterm_split::PaneId;
 
 use crate::cli::Program;
 
@@ -78,6 +79,14 @@ pub(crate) enum SltermShellEvent {
     RuntimeControl(std::sync::Arc<crate::runtime_api::RuntimeDispatch>),
     /// 消费(右键「在此处打开」/on_open_urls 落盘)归 09 篇;M3 只登记发送端。
     OpenDirectories(Vec<String>),
+    /// toast 点击回窗(09 篇 M10.1;M10.4 窗口 facade 接管四路回窗)。
+    NotificationFocus(Option<PaneId>),
+    /// 权限确认 toast 的动作按钮回传(M10 安全半程消费;本片只交付通道面)。
+    NotificationChoice {
+        pane_id: PaneId,
+        request_id: u64,
+        choice: usize,
+    },
 }
 
 /// 在当前线程启动 GPUI 运行时并打开主窗口,阻塞直至 UI 退出。
@@ -124,6 +133,10 @@ pub fn run_shell(initial_cwd: Option<PathBuf>, initial_command: Option<Program>)
     // `SLTERM_NOTIFY_PIPE`——ConPTY 合并当前进程环境,全部 pane 的子进程树
     // 天然携带作用域闸门。句柄活到事件循环退出,关窗后确定性回收 accept 线程。
     let (ai_events, pipe_server) = crate::ai_hook::spawn_gpui_server();
+    // 通知通道开机位(09 篇 M10.1):toast 点击回投走同一壳事件队列;
+    // AUMID 预注册幂等,必须早于第一条通知。
+    crate::notify::init_gpui_activation(shell_tx.clone());
+    crate::platform::notifications::prepare();
     let application = gpui_platform::application()
         .with_assets(assets::SltermAssets)
         .with_quit_mode(QuitMode::LastWindowClosed);

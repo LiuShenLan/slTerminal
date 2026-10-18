@@ -215,6 +215,9 @@ pub struct SltermWorkspace {
     window_close_confirmed: bool,
     /// 侧栏文件树视图状态(07 篇 M8.4;explorer 槽内容)。
     file_tree: file_tree::FileTreeState,
+    /// 窗口激活态订阅(09 篇 M10.1):通知漏斗前台门控的唯一写入源。
+    /// 字段本身只为持有订阅生命周期。
+    _window_activation: Subscription,
 }
 
 /// 键:pane id(方向导航要拿所有叶子的屏幕矩形算最近邻)。
@@ -284,6 +287,12 @@ impl SltermWorkspace {
             sidebar::chrome_width(&sidebar),
             true,
         );
+        // 通知漏斗前台门控(09 篇 M10.1):初始态取开窗激活态,此后由窗口
+        // 激活态订阅持续刷新;漏斗据此丢弃聚焦期间的打扰。
+        crate::notify::set_foreground(window.is_window_active());
+        let window_activation = cx.observe_window_activation(window, |_workspace, window, _cx| {
+            crate::notify::set_foreground(window.is_window_active());
+        });
         let mut workspace = SltermWorkspace {
             tabs: Vec::new(),
             active: 0,
@@ -306,6 +315,7 @@ impl SltermWorkspace {
             pending_file_close: None,
             window_close_confirmed: false,
             file_tree: file_tree::FileTreeState::new(window, cx),
+            _window_activation: window_activation,
         };
         // 搜索框变更订阅要 workspace 实体已存在;文件树其余状态由构造给出。
         workspace.install_file_tree_events(window, cx);
@@ -331,6 +341,26 @@ impl SltermWorkspace {
                     workspace.add_terminal_tab(cwd, Some((shell, name)), true, window, cx);
                 }
             }
+        }
+        // 恢复结果一次性汇总(09 篇 M10.1 缝合 05 篇 M5.5 / 清单 A10):
+        // 恢复成功按标签数提示(崩溃现场多一句来源说明);断路器隔离时给
+        // 出挪走的现场路径。启动期用户虽在前台,但日志不可见,故走直发
+        // 通道而非漏斗(前台门控会丢弃这条非打扰信息)。
+        let restored_tabs = restored.then_some(workspace.tabs.len());
+        let language = cx
+            .try_global::<crate::app_shell::config::Settings>()
+            .map(|settings| settings.language)
+            .unwrap_or(crate::i18n::UiLanguage::EnUs);
+        if let Some(text) = session_recovery::recovery_notice(
+            restored_tabs,
+            plan.crashed,
+            plan.quarantined.as_deref(),
+            language,
+        ) {
+            crate::platform::notifications::show(
+                crate::brand::NAME,
+                &crate::notify::clamp_toast_body(&text),
+            );
         }
         // 测试构建不启用会话注册表写入(真实数据目录隔离);生产启用。
         if !cfg!(all(test, feature = "gpui-test-support")) {

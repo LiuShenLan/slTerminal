@@ -145,6 +145,15 @@ impl SltermWorkspace {
                     // 04 篇 M7.5:SessionEnd 关闭 managed agent、TurnDone
                     // 完成委派回传,然后统一入账(等待方随快照唤醒)。
                     workspace.process_agent_lifecycle_events(&accepted, cx);
+                    // 09 篇 M10.1 缝合 M4.5:TurnDone/NeedsAttention 两状态边
+                    // → 通知漏斗(前台门控/节流/时长全在漏斗内)。
+                    for event in &accepted {
+                        if let Some((notification, pane_id)) =
+                            crate::notify::from_accepted_hook(event, focused)
+                        {
+                            crate::notify::deliver_gpui(&notification, pane_id);
+                        }
+                    }
                     workspace.publish_runtime_snapshot(cx);
                 }) else {
                     return;

@@ -82,6 +82,9 @@ pub(crate) mod math;
 // 数学适配(MathRun/measure/fit)与终端覆盖层共用引擎单点。
 #[allow(dead_code)] // 阅读器渲染接线归 07 篇后续步骤;本步交付模型与数学适配。
 pub(crate) mod markdown;
+// 通知中心单一漏斗(09 篇 M10.1):六变体、去重/节流/失败冷却/前台门控;
+// 系统 toast 投递在 platform::notifications。
+pub(crate) mod notify;
 pub(crate) mod panic;
 pub(crate) mod platform;
 pub(crate) mod process_tree;
