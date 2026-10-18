@@ -1,0 +1,4 @@
+interface:
+  display_name: "slTerminal Runtime"
+  short_description: "Control slTerminal panes and delegate tasks to terminal agents"
+  default_prompt: "Use $slterm-runtime to inspect my terminal workspace, resolve the intended pane or agent, and carry out the requested actions through the Runtime API."

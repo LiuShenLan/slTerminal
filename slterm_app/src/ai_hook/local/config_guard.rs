@@ -67,10 +67,29 @@ fn heal_all() {
     // 全局开关短路经由 AgentHook::enabled 逐家生效(独立键 > 全局键 > 默认
     // 两家——M1 键域钉死的语义);显式开了某家的用户不因全局关闭被回拆。
     settings::heal_enabled(&raw);
-    // runtime skills 挂点(归 08 篇):skill 资产与逐家落盘随 08 落地,本步只留
-    // 挂载位。挂点必须留在 heal_all 锁内,与 hook 自愈同一授权快照;08 落地时
-    // 进 skill 自愈前先过全局门:`raw.bool_on(AgentHook::GLOBAL_SETTINGS_KEY)
-    // != Some(false)`(全局显式关闭不进 skill 自愈)。
+    // runtime skill 自愈(04 篇 M7.4):与 hook 自愈同一授权快照;全局显式
+    // 关闭(`slterm_ai_hooks=false`)不进 skill 自愈。只为已有配置目录的
+    // agent 投放,单家失败不阻断另一家。
+    if raw.bool_on(AgentHook::GLOBAL_SETTINGS_KEY) != Some(false) {
+        for (agent, path, result) in super::runtime_skills::ensure_runtime_skills() {
+            match result {
+                Ok(super::runtime_skills::ManagedSkillInstall::Installed) => {
+                    log::info!(
+                        "ai_hook: installed {agent} runtime skill at {}",
+                        path.display()
+                    )
+                }
+                Ok(super::runtime_skills::ManagedSkillInstall::Current) => {}
+                Ok(super::runtime_skills::ManagedSkillInstall::Conflict) => log::warn!(
+                    "ai_hook: preserving edited or unmanaged {agent} runtime skill near {}",
+                    path.display()
+                ),
+                Err(error) => {
+                    log::warn!("ai_hook: failed to install {agent} runtime skill: {error}")
+                }
+            }
+        }
+    }
 }
 
 fn config_guard(tx: mpsc::SyncSender<()>, rx: mpsc::Receiver<()>, stop: Arc<AtomicBool>) {

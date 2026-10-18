@@ -16,6 +16,7 @@ mod cursor;
 mod extended;
 mod kimi;
 mod managed_files;
+mod runtime_skills;
 pub(super) mod settings;
 
 use codex_hooks::{ensure_codex_hooks, remove_codex_hooks};

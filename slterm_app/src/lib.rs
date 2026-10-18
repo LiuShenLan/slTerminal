@@ -68,22 +68,30 @@ pub(crate) mod theme_library;
 use std::error::Error;
 
 /// 启动链(13 篇「启动链」节,序固定,逐环因果见各环节注释):
-/// boot_trace 锚点 → CLI 解析 → panic 钩 → console 准备 → 日志 → run_shell。
+/// boot_trace 锚点 → CLI 解析/同 exe 分流 → panic 钩 → console 准备 → 日志 → run_shell。
+///
+/// 04 篇 M7.4 方案 A:带子命令 = CLI 客户端人格(请求-响应后退出,不初始化
+/// GUI 子系统);无子命令 = GUI 启动。
 ///
 /// 上游对照剪枝:helper 拦截(ai_session_identity)归 03;环境双名导入层消亡;
 /// mux probe / 单实例移交归 04/M7(M3 二次启动 = 双进程过渡态,13 篇开放问题 3)。
 pub fn run() -> Result<(), Box<dyn Error>> {
+    use clap::Parser as _;
+
     // 第一句:启动剖析 t=0 锚点(core 侧 PTY 段共用同一开关,见 slterm_terminal)。
     boot_trace("main enter");
 
-    // CLI 只保 --working-directory/-e 两参;clap 资源/动词全量面归 04 篇重建。
-    let options = match cli::parse_env_args() {
-        Ok(options) => options,
-        Err(error) => {
-            platform::startup::report_error(&error, true);
-            return Err(error.into());
-        }
+    // clap 统一承载 --help/--version 与解析拒绝的退出码语义。
+    let cli = match cli::Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(error) => error.exit(),
     };
+    // CLI 人格:响应一律 JSON,退出码由 run_cli 决定;control plane 是给
+    // pane 里的 AI CLI 用的,不启动 GUI/日志/窗口。
+    if let Some(command) = cli.subcommands {
+        std::process::exit(crate::runtime_api::run_cli(command));
+    }
+    let options = cli.startup_options();
     boot_trace("cli parsed");
 
     // panic 钩先于一切子系统:启动期 panic 必须有弹面 + 持久日志,不能静默消失。

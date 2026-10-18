@@ -54,6 +54,9 @@ anyhow = "1"
 log = "0.4"
 # ai_hook 信封/载荷解析(helper 不重编码,JSON 工作全在宿主侧)。
 serde_json = "1"
+# CLI 双人格 clap 面(04 篇 M7.4):同 exe 子命令与 GUI 参数共用一份定义,
+# --help/版本/参数拒绝由 clap 统一产出(版本照 D04 基线 4.2.7)。
+clap = { version = "4.2.7", features = ["derive"] }
 # 屏幕规则 TOML 反序列化(规则资源随仓,声明式规则改不动代码)。
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"

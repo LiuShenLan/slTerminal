@@ -75,6 +75,10 @@ pub fn apply(env: &mut HashMap<String, String>, pane_id: impl Display) {
             }
         }
     }
+
+    // 端点注入必须排在末位(04 篇改造节 2):继承来的旧端点一律作废,
+    // 子进程只指向「正在为它提供控制面的那个实例」。
+    crate::runtime_api::apply_child_endpoint(env);
 }
 
 fn env_value<'a>(env: &'a HashMap<String, String>, name: &str) -> Option<&'a str> {

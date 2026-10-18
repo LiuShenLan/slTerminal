@@ -11,13 +11,21 @@
 //! 产物,不存在第二份私有状态拷贝。
 
 mod agent_api;
+// CLI 客户端(04 篇 M7.4):请求-响应人格;与外部客户端走同一条序列化协议。
+mod cli;
 mod command;
 mod git;
 mod orchestrate;
 mod run_wait;
 mod server;
+mod shortcuts;
 mod terminal_read;
 mod transport;
+
+/// CLI 人格入口(M7.4):同 exe 分流后请求-响应并退出。
+pub(crate) use cli::run_cli;
+/// 子进程端点注入(03 篇 `agent_env::apply` 末位消费)。
+pub(crate) use server::apply_child_endpoint;
 
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
