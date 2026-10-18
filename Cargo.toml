@@ -21,10 +21,30 @@ debug = 0
 strip = "symbols"
 incremental = false
 codegen-units = 1
-# 发布包体积预算:安装包 <30MB。冷代码按体积编译;渲染/塑形/布局/VT 热路径
-# 逐个钉回 O3——热路径钉包清单随依赖迁入时建立,数值归首版实测校准(体积
-# 预算钉测试一并落地)。改动 profile 体积相关数值必须重跑体积钉测试。
+# 发布包体积预算(D12-2):2026-10-18 全量功能态 release 实测(本 profile 状态)
+# setup.exe 17.07 MiB / 便携 zip 22.21 MiB;以「实测值 + 15% 裕度」钉在
+# scripts/tests/package-release.tests.ps1(实测值、校准日期、裕度在该测试注释
+# 内登记)。冷代码(协议栈、序列化、CLI 等)按体积编译;渲染/塑形/布局/VT
+# 热路径在下方 [profile.release.package] 逐个钉回 O3。超预算即红;收紧预算
+# 永远合法,放宽须在提交信息说明原因。改动 profile 体积相关数值必须重跑
+# 体积钉测试。
 opt-level = "s"
+
+# 热路径钉包清单:渲染(resvg/image)+ 塑形(rustybuzz/ttf-parser)+ 布局(taffy)
+# + VT 与终端核心(slterm_terminal)+ 壳(slterm/gpui/gpui-component/smol)。
+# 主 crate 以 16 个 codegen unit 并行编译(同 O3),其余依赖维持单 unit 的
+# thin LTO 体积收益。清单随架构演进重登记并重跑钉测试。
+[profile.release.package]
+resvg = { opt-level = 3 }
+rustybuzz = { opt-level = 3 }
+taffy = { opt-level = 3 }
+ttf-parser = { opt-level = 3 }
+smol = { opt-level = 3 }
+gpui = { opt-level = 3 }
+gpui-component = { opt-level = 3 }
+slterm_terminal = { opt-level = 3 }
+slterm = { opt-level = 3, codegen-units = 16 }
+image = { opt-level = 3 }
 
 # Debug 壳仍要承担真实终端负载:GPUI 布局/字体塑形和 VT 解析若以
 # opt-level 0 运行,窗口拖拽与持续输入都会出现发布版没有的延迟。
