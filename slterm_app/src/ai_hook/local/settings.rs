@@ -1,4 +1,4 @@
-//! hook 检视与串行化设置操作,与 config_guard / 未来 CLI(04 篇)共用。
+//! hook 检视与串行化设置操作,与 config_guard / 未来 CLI 共用。
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -270,7 +270,7 @@ pub(crate) fn set_enabled(agent: AgentHook, enabled: bool) -> io::Result<()> {
         }
     }
     // 先持久化授权:别的实例拿到锁后只会看到最新授权。settings.json 全仓
-    // 唯一写入口 = 应用侧写通道(校验/保存锁/原子写/.bak,06 篇 M6.1)。
+    // 唯一写入口 = 应用侧写通道(校验/保存锁/原子写/.bak)。
     crate::settings_store::save_settings_blocking(&[(
         agent.settings_key(),
         slterm_settings::json::Value::Bool(enabled),
@@ -459,7 +459,7 @@ pub(super) fn apply_with_confirmation(
 }
 
 /// 自愈入口:逐家按授权快照补装(只补缺失,不覆盖)。返回失败清单供
-/// config_guard 的失败边通道消费(08 篇 M9.3);自愈语义与日志不变。
+/// config_guard 的失败边通道消费;自愈语义与日志不变。
 pub(super) fn heal_enabled(raw: &RawSettings) -> Vec<AgentHook> {
     let mut failures = Vec::new();
     for agent in AgentHook::ALL {

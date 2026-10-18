@@ -1,4 +1,4 @@
-//! 命令行面(04 篇 M7.4):同 exe 双人格。
+//! 命令行面:同 exe 双人格。
 //!
 //! - 带子命令(`ctl` / `env` / `window` / `tab` / `pane` / `agent`)= CLI 客户端,
 //!   请求-响应后退出;输出一律 JSON(`--pretty` 只改排版)。
@@ -49,7 +49,7 @@ pub struct Cli {
     pub subcommands: Option<Subcommands>,
 }
 
-/// 同 exe 子命令面。其余领域的子命令(设置/安装器)归各自篇,本步不立。
+/// 同 exe 子命令面。其余领域的子命令(设置/安装器)归各自模块,本步不立。
 #[derive(Subcommand, Debug)]
 pub enum Subcommands {
     /// Full protocol surface for scripts and long-lived integrations.
@@ -80,10 +80,10 @@ pub struct SetupAiOptions {
     pub remove: bool,
 }
 
-/// `-e` 启动命令(M3 形态:启动链一次性消费;serde 持久化面归 05 篇)。
+/// `-e` 启动命令(启动链一次性消费;serde 持久化面归会话域)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Program {
-    /// 无参形态:启动链只产 `WithArgs`;本变体为 05 篇 LaunchSession 预埋。
+    /// 无参形态:启动链只产 `WithArgs`;本变体为 `LaunchSession` 预埋。
     #[allow(dead_code)]
     Just(String),
     WithArgs {

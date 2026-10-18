@@ -1,4 +1,4 @@
-//! 凭据域门面(10 篇 M10.9)。
+//! 凭据域门面。
 //!
 //! 三层:
 //! - [`SecretBytes`]:出域句柄,`Zeroizing` 即用即焚,`Debug` 只报长度;
@@ -79,7 +79,7 @@ pub(crate) fn delete_generic_secret(target: &str) -> io::Result<()> {
     credentials::delete(target)
 }
 
-/// 凭据后端消费接口(10 篇三原语的应用层投影)。
+/// 凭据后端消费接口(三原语的应用层投影)。
 ///
 /// 生产实现 = [`WindowsCredentialStore`];测试经注入 mock 断言「先写凭据
 /// 后回写引用」「先删凭据再删元数据」等调用契约。`exists` 默认经 `load`
@@ -363,8 +363,8 @@ mod secrets_tests {
 
     // ---- SecretBytes::as_bytes 借出白名单(B60) ----
 
-    /// 允许借出 SecretBytes 字节的调用点(10 篇):仅凭据域请求头组装与
-    /// 句柄自身语义用例;新增调用点须回 10 篇登记后加入白名单。
+    /// 允许借出 SecretBytes 字节的调用点:仅凭据域请求头组装与
+    /// 句柄自身语义用例;新增调用点须登记后加入白名单。
     const AS_BYTES_WHITELIST: [&str; 4] = [
         "secrets.rs",
         "ai_providers.rs",
@@ -420,7 +420,7 @@ mod secrets_tests {
     }
 
     /// SecretBytes 借出点静态扫描:非白名单文件的 `name.as_bytes()` 与链式
-    /// 借出一律拒绝(B60 防旁路扩散;白名单语义见 10 篇测试点)。
+    /// 借出一律拒绝(B60 防旁路扩散;白名单语义见测试用例)。
     #[test]
     fn secret_bytes_as_bytes_borrow_sites_are_whitelisted() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");

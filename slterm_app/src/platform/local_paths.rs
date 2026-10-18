@@ -2,7 +2,7 @@
 //!
 //! 匹配与引用分离纪律:本模块只决定「候选值如何拼写」;shell 的引用与
 //! 转义合同唯一归 `slterm_completions::command_context::CommandContext::candidate`
-//! (08 篇边界 3),此处不复制第二套。
+//! (边界 3),此处不复制第二套。
 
 use slterm_completions::command_context::ShellSyntax;
 

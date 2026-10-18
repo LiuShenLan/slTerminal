@@ -18,12 +18,12 @@
 - **测试隔离**:`cfg(test)` 构建短路真实投递(`show`/`dispatch`),系统面
   由 `.claude/test-exemptions.md` 登记、`notify-test` 诊断命令与人工 smoke
   兜底。
-- **图标待接**:IconUri 物化所需 PNG 资产归 12 篇发布面;当前只在数据
+- **图标待接**:IconUri 物化所需 PNG 资产归发布面;当前只在数据
   目录/exe 旁发现 `toast_icon.png`/`slterm.png` 时写入，无资产则无 logo。
 
 ## 步骤接缝
 
 - 壳启动 `prepare()` 预注册;`crate::notify::deliver_gpui*` 是唯一漏斗
   投递入口;`slterm notify-test` 是同步诊断命令(注册→时长→投递逐段 OK)。
-- 动作按钮回传 `SltermShellEvent::NotificationChoice`;确认语义归 10 篇
-  安全半程。toast 点击回窗经 `NotificationFocus`(M10.4 facade 接管四路)。
+- 动作按钮回传 `SltermShellEvent::NotificationChoice`;确认语义归
+  安全半程。toast 点击回窗经 `NotificationFocus`(`windowing` facade 接管四路)。

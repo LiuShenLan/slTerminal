@@ -74,6 +74,7 @@
 - 生命周期:`pane_closed` / `pane_exited` / `agent_exited` /
   `agent_replaced` / `agent_closed` / `agent_name_conflict` /
   `agent_identity_mismatch`
+- agent 启动:`agent_launch_unsupported` / `agent_resume_unsupported`
 - 执行:`runtime_unavailable` / `runtime_timeout` /
   `invalid_runtime_response` / `submission_outcome_unknown` / `timeout`
 - run:`exit_code_unavailable` / `run_start_timeout` / `run_aborted`
@@ -88,6 +89,11 @@
 输入类方法(`pane.prompt`/`pane.paste`/`agent.prompt`/`agent.paste`/
 `agent.delegate`)在传输或解析失败时返回 `submission_outcome_unknown`:
 输入可能已送达,先读目标状态再决定是否重试,不盲目重复投递。
+
+`agent.start`/`agent.fork` 的可冷启动 kind 集合与 schema 的
+`$defs.launch_agent_kind.enum` 完全一致(单一真值源,不在此复制清单);
+kind 已登记但未核实冷启动命令时返回 `agent_launch_unsupported`,未知
+kind 仍返回 `invalid_params`。
 
 ## CLI 入口
 

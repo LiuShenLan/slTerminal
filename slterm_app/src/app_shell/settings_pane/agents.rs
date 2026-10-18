@@ -1,8 +1,8 @@
-//! 设置中心 Agent 组 hooks 页(06 篇轨二 + 03 篇安装权威联调)。
+//! 设置中心 Agent 组 hooks 页(配置编辑轨 + 安装权威联调)。
 //!
 //! 两条轨道在这里汇合而不交叉:
 //! - 轨一(接入偏好):每 agent 的 `AgentHook` 键经设置页统一写通道落盘;
-//!   安装/卸载由 03 篇安装权威执行(设置页不直接改 provider 文件)。
+//!   安装/卸载由安装权威执行(设置页不直接改 provider 文件)。
 //! - 轨二(配置编辑):数据源 = `integrations::inspect()` 的 installed/
 //!   needs_repair/helper_missing 三态与 config_path;编辑器只编辑用户/第三方
 //!   handler,slterm marker 认领组只读展示,保存时由 `HooksDocument` 原样保留。
@@ -1589,7 +1589,7 @@ fn can_toggle(row: &AgentIntegration) -> bool {
         || (row.executable.is_some() && row.inspection.available && !row.inspection.helper_missing)
 }
 
-/// 品牌名是专有名词,不做翻译(显示名单点;身份枚举归 03 篇后续收口)。
+/// 品牌名是专有名词,不做翻译(显示名单点;身份枚举见 `AgentHook`)。
 fn agent_name(agent: AgentHook) -> &'static str {
     match agent {
         AgentHook::Claude => "Claude Code",

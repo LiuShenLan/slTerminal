@@ -1,6 +1,6 @@
 //! 有界本地 Git 发现:补全请求的后台数据源。
 //!
-//! 双预算纪律(08 篇):3s 总时限 + 1MB 输出上限,两次元数据读取
+//! 双预算纪律:3s 总时限 + 1MB 输出上限,两次元数据读取
 //! (`config --null --get-regexp` 哨兵 + `for-each-ref` 一次取全)共用;
 //! Snapshot 2s TTL + generation 代次失效;取消令牌在每个子进程之间检查。
 //! 语义层(slterm_completions::semantic)只描述来源,本模块才做真实 I/O。

@@ -1,11 +1,11 @@
-//! AI provider 元数据与凭据引用(08 篇 M9.2;凭据纪律锚点归 10 篇)。
+//! AI provider 元数据与凭据引用(凭据纪律归 secrets 域)。
 //!
 //! 文件边界即凭据边界:provider 元数据独立于设置主文件——后者是用户可编辑
 //! 的运行态文件,而凭据需要稳定身份,绝不能与普通设置同文件序列化。
 //! `providers.json` 里只有引用字段(`api_key_set`/`api_key_hint`),明文
 //! 永不入 store,文件可整份展示/备份/diff 而无泄露。
 //!
-//! 凭据读写经 [`CredentialStore`] 注入消费(10 篇三原语的应用层投影);
+//! 凭据读写经 [`CredentialStore`] 注入消费(凭据管理器三原语的应用层投影);
 //! 真实 Windows 凭据管理器实现归 M10.9,本步用 mock 断言调用契约。
 
 use std::io;
@@ -385,14 +385,14 @@ pub(crate) fn remove_provider(
     remove_provider_at(credentials, store, id, &store_path())
 }
 
-/// 显式路径版本(测试注入):删除顺序固定为「先凭据、后元数据、再落盘」。
+/// 显式路径版本(测试注入):删除顺序固定为「先定位、再凭据、后元数据、
+/// 再落盘」;不存在的 id 零凭据调用。
 pub(crate) fn remove_provider_at(
     credentials: &dyn CredentialStore,
     store: &mut ProviderStore,
     id: &str,
     path: &Path,
 ) -> io::Result<()> {
-    delete_api_key(credentials, id)?;
     let Some(index) = store
         .providers
         .iter()
@@ -403,6 +403,7 @@ pub(crate) fn remove_provider_at(
             "provider not found",
         ));
     };
+    delete_api_key(credentials, id)?;
     store.providers.remove(index);
     if store.active_id == id {
         store.active_id = store
@@ -834,6 +835,23 @@ mod ai_providers_tests {
         assert_eq!(store.active_id, "preset-openai");
         assert_eq!(load_at(&path), store, "删除后元数据应已原子落盘");
         assert!(load_api_key(&credentials, "custom-1").unwrap().is_none());
+    }
+
+    #[test]
+    fn remove_provider_missing_id_never_calls_credentials_or_touches_disk() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(STORE_FILE);
+        let credentials = MockCredentials::default();
+        let mut store = load_at(&path);
+        let before = store.clone();
+        let error = remove_provider_at(&credentials, &mut store, "missing", &path).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+        assert!(
+            credentials.calls().is_empty(),
+            "不存在的 id 不得触发凭据删除"
+        );
+        assert_eq!(store, before, "不存在的 id 不得改内存");
+        assert!(!path.exists(), "不存在的 id 不得落盘");
     }
 
     #[test]

@@ -1,7 +1,7 @@
-//! 编辑器语义槽装配(07 篇 M8.5 改造节 8;06 篇缝合点 2)。
+//! 编辑器语义槽装配(编辑器渲染的语义槽消费;槽值来自设置主题体系)。
 //!
 //! 消费侧唯一装配点:编辑器/gutter/diff 只引用 [`EditorThemeTokens`] 字段,
-//! 禁裸颜色字面量。槽值单源在 06 篇 `ReviewedPalette` / `ThemeUiColors`;
+//! 禁裸颜色字面量。槽值单源在 `ReviewedPalette` / `ThemeUiColors`;
 //! 本模块只做语义命名与派生(派生规则只在这里实现一次)。
 //!
 //! 装配时机 = `Settings::from_runtime`(启动读与设置页热应用同一路径);
@@ -69,7 +69,7 @@ fn composite_selection(background: Rgb8, selection: [u8; 4]) -> Rgb8 {
     out
 }
 
-/// 低权重派生:前景语义色向背景混合(与 06 篇选区合成同一 CSS 式算法)。
+/// 低权重派生:前景语义色向背景混合(与选区合成同一 CSS 式算法)。
 fn mix_rgb(background: Rgb8, foreground: Rgb8, weight: f32) -> Rgb8 {
     let weight = weight.clamp(0.0, 1.0);
     let mut out = [0; 3];

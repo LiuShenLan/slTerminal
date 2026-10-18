@@ -1,7 +1,7 @@
 #Requires -Version 7
-# Win32 输入矩阵回放测试(11 篇「win32 输入基线矩阵」夹具;13 篇改造节 4 承接)。
+# Win32 输入矩阵回放测试(「win32 输入基线矩阵」夹具;键位编码改造承接)。
 #
-# 被测对象 = slterm keymap 三路径编码器端到端(13 篇锚点):PostMessage 逐键驱动
+# 被测对象 = slterm keymap 三路径编码器端到端:PostMessage 逐键驱动
 # 最小化 slterm.exe(不抢焦点——用户在别处打字时也可安全运行)→ GPUI KeyDownEvent
 # → on_key_down 分发 → keymap 编码 → PTY → 侧载 OpenConsole → 探针进程
 # (node reader,即 Claude Code 的输入路径)stdin 字节 → hex 拼接 → 与入库基线
@@ -16,7 +16,7 @@
 # chord 覆盖需前台 SendInput + 值守空闲机,保持人工步骤(test-exemptions 实机
 # 验收点)。
 #
-# 基线治理(11 篇状态机):基线文件 git 追踪;语义变更时「代码 + 基线」同提交,
+# 基线治理(输入矩阵状态机):基线文件 git 追踪;语义变更时「代码 + 基线」同提交,
 # 禁单独提交基线(防静默放宽);任何数值变更须在提交信息说明触发原因。
 param(
     [switch]$Record,
@@ -31,8 +31,7 @@ public class PM {
 }
 '@
 
-# 仓库根 = 脚本所在目录的上一级;exe 默认 debug 构建产物(13 篇:M3 起首个
-# 可驱动目标)。
+# 仓库根 = 脚本所在目录的上一级;exe 默认 debug 构建产物(首个可驱动目标)。
 $root = Split-Path -Parent $PSScriptRoot
 if ($Exe -eq '') { $Exe = Join-Path $root 'target\debug\slterm.exe' }
 # 运行期 log 落 .tmp/(gitignore 已覆盖,勿入库)。

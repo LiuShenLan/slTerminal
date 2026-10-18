@@ -1,4 +1,4 @@
-//! Runtime 请求参数族、输入校验与方法路由(04 篇锚点)。
+//! Runtime 请求参数族、输入校验与方法路由。
 //!
 //! 参数校验全部在 transport 侧、任何 UI 动作之前完成:`deny_unknown_fields`
 //! 由各 `*Params` 结构承担;数值区间/字符边界/控制字符由本模块的
@@ -594,7 +594,7 @@ pub(crate) fn validate_prompt(text: &str) -> Result<(), ApiError> {
 }
 
 /// 内部多行文本(chat message):保留换行,但仍不能把 ESC/NUL 送进终端。
-#[allow(dead_code)] // 消费点 = 03/08 篇内部 send-to-chat 链(M8 接线)。
+#[allow(dead_code)] // 消费点 = 内部 send-to-chat 链(M8 接线)。
 pub(crate) fn validate_chat_message(text: &str) -> Result<(), ApiError> {
     validate_multiline_text(text, "chat message")
 }

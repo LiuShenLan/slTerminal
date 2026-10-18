@@ -6,9 +6,9 @@
 //! 不会产生重复页。
 //!
 //! 路由 id 只追加不重用(旧入口指向的页面不因重排漂移);视觉顺序由
-//! `order` 单独裁定,与 id 解耦。页集合按 06 篇重排:全局组
+//! `order` 单独裁定,与 id 解耦。页集合重排后全局组在上:
 //! application/appearance/profiles/interaction/advanced/localization/reset;
-//! Agent 组页面在 03 篇 inspect 联调后经同一 `register` 入口追加。
+//! Agent 组页面经 inspect 联调后由同一 `register` 入口追加。
 
 use std::sync::{Mutex, OnceLock};
 
@@ -18,7 +18,7 @@ use crate::i18n::Message;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SettingsPageGroup {
     Global,
-    /// Agent 组页面(03 篇 inspect 联调,06 篇双轨缝合)。
+    /// Agent 组页面(inspect 联调,双轨缝合)。
     Agent,
 }
 
@@ -175,7 +175,7 @@ mod registry_tests {
                 "reset",
                 "agents",
             ],
-            "06 篇页集合重排:全局组在上,Agent 组(hooks 页)在下"
+            "页集合重排:全局组在上,Agent 组(hooks 页)在下"
         );
         assert_eq!(
             get_all_in(SettingsPageGroup::Global).len(),

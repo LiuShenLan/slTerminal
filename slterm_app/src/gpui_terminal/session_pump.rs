@@ -1,6 +1,6 @@
 //! 会话事件泵:把终端事件公平送达所属视图。
 //!
-//! 上游 SSH 阶段泵随 `TerminalLaunch::Ssh` 消亡一并裁剪(06 篇重设计时另立)。
+//! 上游 SSH 阶段泵随 `TerminalLaunch::Ssh` 消亡一并裁剪(按理想终态重设计时另立)。
 use super::view::TerminalView;
 use futures::StreamExt as _;
 use gpui::Context;

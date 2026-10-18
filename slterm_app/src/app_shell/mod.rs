@@ -2,7 +2,7 @@
 //! `app_shell`,层级压平一格——无旧壳对照,旧名失去参照对象)。
 //!
 //! 壳即前端:壳内状态权威雏形 = `SltermWorkspace` 直持 pane 实体与展示态,
-//! 无投影层(13 篇改造节 2;RuntimeHub facade 缝归 M7.2)。
+//! 无投影层(RuntimeHub facade 缝归 `runtime_projection`)。
 
 // 编译期拦截(照上游随迁):裸 println!/eprintln! 在无效标准句柄上 panic;
 // console 子系统下句柄通常有效,拦截宏仍保留——诊断统一走 try_write_stderr 单点。
@@ -22,31 +22,31 @@ macro_rules! eprintln {
 }
 
 pub(crate) mod assets;
-// 源码文件 tab(07 篇 M8.1):普通源码与 gitshow 只读臂。
+// 源码文件 tab:普通源码与 gitshow 只读臂。
 pub(crate) mod code_tab;
 pub(crate) mod config;
-// 通用 diff 对照面(07 篇 M8.5;双栏只读)。
+// 通用 diff 对照面(双栏只读)。
 pub(crate) mod diff_tab;
 // 冲突三栏合并面(base/ours/theirs 只读 + 采用版本)。
 pub(crate) mod merge_tab;
-// 文档/图片 tab + openable_in_app 路由单判定(07 篇 M8.1)。
+// 文档/图片 tab + openable_in_app 路由单判定。
 pub(crate) mod doc_tabs;
-// 编辑器语义槽装配(07 篇 M8.5;颜色单源 = 06 篇 UI token)。
+// 编辑器语义槽装配(颜色单源 = UI token)。
 pub(crate) mod editor_theme;
-// 文件树拖放载荷 + 独立幽灵预览(07 篇 M8.4)。
+// 文件树拖放载荷 + 独立幽灵预览。
 pub(crate) mod file_drop;
-// 文本文件视图骨架(07 篇 M8.1 只读;M8.2 接编辑内核)。
+// 文本文件视图骨架(只读视图与编辑内核)。
 pub(crate) mod file_editor;
 // B8:外部文件系统事件监听(树根递归 + 打开文件父目录;有界唤醒前台)。
 pub(crate) mod fs_watch;
 // 布局转换对(「布局单点」);消费点 = M5.5 快照/恢复闭环。
 pub(crate) mod session_restore;
-// GUI 设置页(06 篇):左导航 + 右表单 + 路由式搜索 + 统一写通道。
+// GUI 设置页:左导航 + 右表单 + 路由式搜索 + 统一写通道。
 pub(crate) mod settings_pane;
 pub(crate) mod theme;
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod ui_tests;
-// 窗口视效 + 壁纸(09 篇 M10.7):模糊材质/透明度纪律/有界壁纸加载。
+// 窗口视效 + 壁纸:模糊材质/透明度纪律/有界壁纸加载。
 pub(crate) mod wallpaper;
 pub(crate) mod windowing;
 pub(crate) mod workspace;
@@ -72,20 +72,20 @@ pub(crate) fn try_write_stderr(args: fmt::Arguments<'_>) {
 /// 壳跨线程唤醒事件(上游同名枚举裁剪:Tray*/Notification*/SshPrompt/
 /// UpdateAvailable 臂不迁)。
 ///
-/// M3 变体收窄为三个,生产者/消费归各篇:
-/// - `RuntimeControl` 载荷是 04 篇 M7.3 锚定的 `Arc<RuntimeDispatch>`;
+/// M3 变体收窄为三个,生产者/消费归各领域模块:
+/// - `RuntimeControl` 载荷是 `Arc<RuntimeDispatch>`;
 ///   生产者 = M7.5 `RuntimeServer::spawn_callback`,UI owner 执行后 respond;
-/// - `OpenDirectories` 的消费(on_open_urls/右键「在此处打开」)归 09 篇,
+/// - `OpenDirectories` 的消费(on_open_urls/右键「在此处打开」)归窗口/平台域,
 ///   M3 登记不接线。
 #[allow(dead_code)] // M7.5 接线前仅 `MuxAttach` 无生产者;逐变体注释为证。
 pub(crate) enum SltermShellEvent {
-    /// 预埋缝(13 篇缝合点 9):生产者归 04 篇 M7.5 RuntimeServer::spawn_callback。
+    /// 预埋缝:生产者 = `RuntimeServer::spawn_callback`。
     MuxAttach,
     /// 写命令派发:UI owner 执行后经 `RuntimeDispatch::respond` 回执。
     RuntimeControl(std::sync::Arc<crate::runtime_api::RuntimeDispatch>),
-    /// 消费(右键「在此处打开」/on_open_urls 落盘)归 09 篇;M3 只登记发送端。
+    /// 消费(右键「在此处打开」/on_open_urls 落盘)归窗口/平台域;本步只登记发送端。
     OpenDirectories(Vec<String>),
-    /// toast 点击回窗(09 篇 M10.1;M10.4 窗口 facade 接管四路回窗)。
+    /// toast 点击回窗(窗口 facade 接管四路回窗)。
     /// 托盘左键/菜单「显示」同样走这条单窗回窗语义(M10.3)。
     NotificationFocus(Option<PaneId>),
     /// 权限确认 toast 的动作按钮回传(M10 安全半程消费;本片只交付通道面)。
@@ -94,9 +94,9 @@ pub(crate) enum SltermShellEvent {
         request_id: u64,
         choice: usize,
     },
-    /// 托盘「退出」(09 篇 M10.3):与关窗同一条退出链(终局快照 + 退出)。
+    /// 托盘「退出」:与关窗同一条退出链(终局快照 + 退出)。
     TrayQuit,
-    /// 后台更新检查结果(09 篇 M10.5):提示 + 按 `auto_download_updates`
+    /// 后台更新检查结果:提示 + 按 `auto_download_updates`
     /// 预取安装包。安装授权仍需用户经 handoff 两阶段流程提交。
     UpdateAvailable(crate::update_check::UpdateCheckResult),
     /// B38:AI hook 自愈失败边(类别 + agent,不含合成命令)。消费 = 进程级
@@ -104,7 +104,7 @@ pub(crate) enum SltermShellEvent {
     AiHookAlert(crate::ai_assistant::HookFailureKind),
 }
 
-/// 本次启动是否静默(09 篇 M10.6)。
+/// 本次启动是否静默。
 ///
 /// 设置两条件(`silent_start && tray`)由 [`config::Settings::start_hidden`]
 /// 单点判定;显式 CLI 启动(`--working-directory`/`-e`)恒不静默——用户
@@ -128,10 +128,10 @@ fn tray_command_event(command: crate::tray::GpuiTrayCommand) -> SltermShellEvent
 /// 关窗即退出(跨领域不变量 5):`QuitMode::LastWindowClosed` + 无 mux 驻留臂,
 /// 最后一窗关闭 = 进程退出。
 pub fn run_shell(initial_cwd: Option<PathBuf>, initial_command: Option<Program>) {
-    // 后台任务运行时复位(09 篇 M10.8):静态初值即注册表默认值,这里显式
+    // 后台任务运行时复位:静态初值即注册表默认值,这里显式
     // 再对齐一次,保证同进程重启测试/后续配置载入从确定态出发。
     crate::background_tasks::reset_defaults();
-    // 安装守卫(09 篇 M10.5):安装事务进行中时不启动常驻资源;预约安装
+    // 安装守卫:安装事务进行中时不启动常驻资源;预约安装
     // 在此执行,成功后本进程立即退出,由 helper 覆盖安装后重启。
     match crate::update_download::handoff::installation_in_progress() {
         Ok(true) => {
@@ -144,7 +144,7 @@ pub fn run_shell(initial_cwd: Option<PathBuf>, initial_command: Option<Program>)
     if crate::update_download::handoff::apply_scheduled() {
         return;
     }
-    // 会话恢复决策在开窗前完成(05 篇 M5.5):窗口尺寸/侧栏宽度要先进
+    // 会话恢复决策在开窗前完成:窗口尺寸/侧栏宽度要先进
     // 窗口定形与 spawn 网格;CLI 显式 cwd/-e 启动只回放几何、不恢复 tabs。
     let restore_tabs = initial_command.is_none() && initial_cwd.is_none();
     let mut startup_plan = workspace::session_recovery::prepare_startup(restore_tabs);
@@ -170,7 +170,7 @@ pub fn run_shell(initial_cwd: Option<PathBuf>, initial_command: Option<Program>)
     };
     let (shell_tx, shell_rx) = mpsc::channel();
     let open_urls_tx = shell_tx.clone();
-    // 04 篇 M7.5:单实例控制面先于窗口创建。hub 是壳与服务端共享的同一份
+    // 单实例控制面先于窗口创建。hub 是壳与服务端共享的同一份
     // 状态权威;回调把 ATTACH/Control 桥进壳事件队列。
     let runtime_hub = crate::runtime_api::RuntimeHub::new();
     let runtime_server = {
@@ -211,18 +211,18 @@ pub fn run_shell(initial_cwd: Option<PathBuf>, initial_command: Option<Program>)
             let _ = shell_events.send(SltermShellEvent::AiHookAlert(alert));
         }
     });
-    // 通知通道开机位(09 篇 M10.1):toast 点击回投走同一壳事件队列;
+    // 通知通道开机位:toast 点击回投走同一壳事件队列;
     // AUMID 预注册幂等,必须早于第一条通知。
     crate::notify::init_gpui_activation(shell_tx.clone());
     crate::platform::notifications::prepare();
-    // 托盘命令回调(09 篇 M10.3):托盘线程只经此把用户动作送回壳事件队列。
+    // 托盘命令回调:托盘线程只经此把用户动作送回壳事件队列。
     crate::tray::init_gpui({
         let shell_events = shell_tx.clone();
         move |command| {
             let _ = shell_events.send(tray_command_event(command));
         }
     });
-    // 启动更新检查(09 篇 M10.5/M10.8):GPUI background executor 载体,
+    // 启动更新检查:GPUI background executor 载体,
     // 立即水合 + 缓存提示,12s 一次性延迟后联网;结果经壳事件队列回 UI。
     let update_events = shell_tx.clone();
     let application = gpui_platform::application()
@@ -233,16 +233,16 @@ pub fn run_shell(initial_cwd: Option<PathBuf>, initial_command: Option<Program>)
     });
     application.run(move |cx| {
         init(cx);
-        // 更新检查(09 篇 M10.5/M10.8):注册表 Once 任务,12s 启动延迟契约
+        // 更新检查:注册表 Once 任务,12s 启动延迟契约
         // 由 `background_tasks::startup_delay` 单点给出;立即段先水合缓存态。
         crate::update_check::start_gpui(cx, move |result| {
             let _ = update_events.send(SltermShellEvent::UpdateAvailable(result));
         });
-        // 套餐余量轮询(10 篇 M10.12/C34):注册表订阅 + 后台循环,首轮立即
+        // 套餐余量轮询(C34):注册表订阅 + 后台循环,首轮立即
         // 执行,此后按注册表节拍(默认 10s);订阅守卫随任务存活,Drop 退订。
         // 阻塞 HTTP 全程在 background executor,UI 线程零阻塞。
         crate::plan_balance::start_background_poll(cx.background_executor().clone());
-        // 静默启动(09 篇 M10.6):仅无显式 CLI 启动时参与;窗口以隐藏
+        // 静默启动:仅无显式 CLI 启动时参与;窗口以隐藏
         // 形态创建,托盘「显示」经 M10.4 focus facade 回窗。
         let start_hidden = starts_hidden(restore_tabs, cx.global::<config::Settings>());
         windowing::open_initial_window(
@@ -261,7 +261,7 @@ pub fn run_shell(initial_cwd: Option<PathBuf>, initial_command: Option<Program>)
             crate::update_download::handoff::acknowledge_restore(update_restored_windows);
         }
     });
-    // 托盘收尾(09 篇 M10.3):先删图标再退进程,否则任务栏残影要等
+    // 托盘收尾:先删图标再退进程,否则任务栏残影要等
     // 用户悬停才消失;join 保证删图标先于进程退出。
     crate::tray::shutdown();
     // run 返回 = 最后窗口已关闭;Drop 完成自连唤醒 + join。
@@ -285,7 +285,7 @@ fn init(cx: &mut App) {
 
 fn register_bundled_fonts(cx: &App) {
     // 在组件解析字体前注册内嵌 Maple:系统等宽字体无 NF 图标码点,提示符会出
-    // 方框;跨机器字形同源是截图/UI 测试可比对的前提。导入字体目录归 06 篇。
+    // 方框;跨机器字形同源是截图/UI 测试可比对的前提。导入字体目录归设置体系。
     if let Err(error) = cx
         .text_system()
         .add_fonts(vec![Cow::Borrowed(assets::REQUIRED_FONT_BYTES)])

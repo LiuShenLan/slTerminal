@@ -34,7 +34,7 @@ impl Drop for ConfigGuard {
     }
 }
 
-/// 消费点归 06 篇设置域启动链(挂 app 生命周期,`ai_hooks` 开关落定后
+/// 消费点归设置域启动链(挂 app 生命周期,`ai_hooks` 开关落定后
 /// 按授权自愈);M4.5 只接事件通道,本步只落本体。
 ///
 /// 失败边呈现回调只拿到 [`HookFailureKind`](不含合成命令),由壳启动链转成
@@ -87,7 +87,7 @@ fn heal_all(failure_gate: &mut TriggerGate, on_alert: &(impl Fn(HookFailureKind)
     for agent in settings::heal_enabled(&raw) {
         failures.push(install_failure(agent));
     }
-    // runtime skill 自愈(04 篇 M7.4):与 hook 自愈同一授权快照;全局显式
+    // runtime skill 自愈:与 hook 自愈同一授权快照;全局显式
     // 关闭(`slterm_ai_hooks=false`)不进 skill 自愈。只为已有配置目录的
     // agent 投放,单家失败不阻断另一家。
     if raw.bool_on(AgentHook::GLOBAL_SETTINGS_KEY) != Some(false) {
@@ -117,7 +117,7 @@ fn heal_all(failure_gate: &mut TriggerGate, on_alert: &(impl Fn(HookFailureKind)
 }
 
 /// hook 安装/修复失败的失败边投影。命令描述只参与规则表判定
-/// (08 篇 `should_suggest`),不对应用户输入的历史命令。
+/// (`should_suggest`),不对应用户输入的历史命令。
 fn install_failure(agent: AgentHook) -> HookFailure {
     HookFailure {
         command: format!("slterm-hook install {}", agent.settings_key()),
@@ -151,7 +151,7 @@ fn settings_failure() -> HookFailure {
     }
 }
 
-/// 失败边消费点(08 篇 M9.3 / D08-2):一条自愈失败进入 AI assistant
+/// 失败边消费点(D08-2):一条自愈失败进入 AI assistant
 /// 触发闸门。配置每轮失败读一次;同一轮的多条失败共享同一 `now`,冷却
 /// 保证只投第一条。默认关时 [`evaluate_hook_failure`] 不碰闸门。
 fn report_heal_failures(

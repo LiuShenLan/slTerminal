@@ -1,4 +1,4 @@
-//! Runtime 写命令的终端侧入口(04 篇 M7.5)。
+//! Runtime 写命令的终端侧入口。
 //!
 //! Workspace 只在 UI owner 上调用这些方法:输入经既有 `write_input` /
 //! bracketed-paste 通路进 PTY,读取直读真实 Grid 尾部。`RuntimeAgent`/

@@ -1,4 +1,4 @@
-//! 命名 Agent 方法族:解析、查询、等待与事务型 worktree 准备(04 篇锚点)。
+//! 命名 Agent 方法族:解析、查询、等待与事务型 worktree 准备。
 //!
 //! `agent.start` / `agent.fork` 的冷启动命令只放官方文档核实过拼法的 CLI;
 //! identity 全程 generation 绑定:退出重开不会把任务投给新会话。`agent.fork`
@@ -20,7 +20,7 @@ use super::{
     ApiError, ApiRequest, ApiResponse, EventSink, MAX_READ_LINES, RuntimeCommand, RuntimeHub,
     RuntimeWaitState,
 };
-use crate::ai_agents::AgentKind;
+use crate::ai_agents::{AgentKind, launchable_kinds};
 use crate::git_worktree::{WorktreeProvenance, WorktreeRequest, WorktreeTransaction};
 
 #[derive(Debug, Deserialize)]
@@ -268,15 +268,18 @@ fn verified_agent_launch(
                 "the agent kind or session id does not have a verified resume command",
             )
         })?,
-        None => kind.start_command().ok_or_else(|| {
-            ApiError::new(
+        None if launchable_kinds().any(|launchable| launchable == kind) => kind
+            .start_command()
+            .expect("launchable kinds always expose a cold-start command"),
+        None => {
+            return Err(ApiError::new(
                 "agent_launch_unsupported",
                 format!(
                     "cold start is not verified for agent kind {:?}",
                     kind.slug()
                 ),
-            )
-        })?,
+            ));
+        }
     };
     Ok((kind, resume_session_id, command))
 }
@@ -665,4 +668,66 @@ pub(super) fn agent_start_request(
             "resume_session_id": resume_session_id
         }),
     )
+}
+
+#[cfg(test)]
+mod agent_api_tests {
+    use super::*;
+    use serde_json::Value;
+
+    fn schema_launch_kinds() -> Vec<String> {
+        let schema: Value =
+            serde_json::from_str(include_str!("../../../assets/runtime-api-v1.schema.json"))
+                .expect("runtime API schema must stay valid JSON");
+        schema["$defs"]["launch_agent_kind"]["enum"]
+            .as_array()
+            .expect("launch_agent_kind enum")
+            .iter()
+            .map(|slug| slug.as_str().expect("launch agent kind slug").to_owned())
+            .collect()
+    }
+
+    /// schema 的 launch_agent_kind 枚举与 `launchable_kinds()` 必须逐项相等:
+    /// 任一侧新增/删除可冷启动 kind 而另一侧未同步,此用例即红。
+    #[test]
+    fn launch_agent_kind_schema_equals_cold_start_capability() {
+        let mut declared = schema_launch_kinds();
+        let mut launchable: Vec<String> = launchable_kinds()
+            .map(|kind| kind.slug().to_owned())
+            .collect();
+        declared.sort_unstable();
+        launchable.sort_unstable();
+        assert_eq!(
+            declared, launchable,
+            "schema 枚举必须等于 start_command() 可用的 kind 集合"
+        );
+
+        for slug in declared {
+            let kind = AgentKind::parse(&slug).expect("schema slug 必须是已登记 kind");
+            assert_eq!(kind.slug(), slug, "schema slug 必须是规范 slug");
+            assert!(
+                kind.start_command().is_some(),
+                "schema slug {slug} 必须带有核实过的冷启动命令"
+            );
+            let (resolved, session_id, command) =
+                verified_agent_launch(&slug, None).expect("schema slug 必须可冷启动");
+            assert_eq!(resolved, kind);
+            assert_eq!(session_id, None);
+            assert_eq!(Some(command), kind.start_command());
+        }
+    }
+
+    /// 合法 kind 但未核实冷启动 → `agent_launch_unsupported`;未知 slug →
+    /// `invalid_params`。两种语义不得混用。
+    #[test]
+    fn valid_kind_without_cold_start_reports_launch_unsupported() {
+        assert_eq!(AgentKind::parse("gemini"), Some(AgentKind::Gemini));
+        assert_eq!(AgentKind::Gemini.start_command(), None);
+        let error = verified_agent_launch("gemini", None).expect_err("gemini has no cold start");
+        assert_eq!(error.code, "agent_launch_unsupported");
+
+        let error =
+            verified_agent_launch("not-an-agent", None).expect_err("unknown slug must fail");
+        assert_eq!(error.code, "invalid_params");
+    }
 }

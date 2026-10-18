@@ -1,4 +1,4 @@
-//! Git 方法族收口(04 篇改造节 5;子进程执行体归 07 篇 git 域)。
+//! Git 方法族收口(子进程执行体归 git 域)。
 //!
 //! 暴露面 = `git.status|diff|rollback|unstage` 四方法。校验形态照抄上游
 //! 防陈旧三板斧:显式 pane + `expected_cwd`;服务端收到后重查 pane cwd 与
@@ -6,7 +6,7 @@
 //! 不一致即 `git_stale`。路径参数是纯 argv 元素,永不解释为 shell 命令或
 //! glob(执行侧统一 `--literal-pathspecs`)。
 //!
-//! M7.3 只落协议面:请求解析/校验/陈旧判定;07 篇子进程封装接线后由 UI
+//! 只落协议面:请求解析/校验/陈旧判定;git 子进程封装接线后由 UI
 //! owner 执行,`--no-optional-locks` 纪律归 07。
 
 use std::path::Path;

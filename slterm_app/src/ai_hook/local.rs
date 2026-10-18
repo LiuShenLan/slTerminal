@@ -25,7 +25,7 @@ pub use config_guard::spawn_config_guard_with;
 
 static ANNOUNCED: AtomicBool = AtomicBool::new(false);
 
-/// 首次落盘公告:哨兵文件保证跨进程一次性。toast 展示归 09 篇窗口收尾,
+/// 首次落盘公告:哨兵文件保证跨进程一次性。toast 展示归窗口收尾,
 /// 本步先落哨兵与日志(09 据此决定要不要补 toast)。
 fn announce() {
     if ANNOUNCED.swap(true, Ordering::Relaxed) {
@@ -54,7 +54,7 @@ fn claim_setup_announcement(directory: &Path) -> std::io::Result<bool> {
 // ─── SEC-12 statusline 审查门(旧栈 hooks 域审计三件套合流)──────────────
 
 /// 安装审查门的裁决:`Proceed` 正常走;`Suspended` 命中可疑原命令,携带原文
-/// 供设置页二次确认(消费归 06 篇),确认路径改传恒 `Proceed` 的 gate。
+/// 供设置页二次确认(消费归设置域),确认路径改传恒 `Proceed` 的 gate。
 pub(crate) enum InstallGate {
     Proceed,
     /// 命中可疑原命令,返回原文供 UI 二次确认(零写盘)。
@@ -74,7 +74,7 @@ pub enum InstallOutcome {
 }
 
 /// 可疑模式表:(小写模式串, 展示名)——下载器 + PowerShell 任意执行系。
-/// 词表语义演化登记归 10 篇审计域口径,此处只放初版词表。
+/// 词表语义演化登记归审计域口径,此处只放初版词表。
 const SUSPICIOUS_PATTERNS: &[(&str, &str)] = &[
     ("curl", "curl"),
     ("wget", "wget"),
@@ -110,7 +110,7 @@ fn suspicious_statusline_pattern(command: &str) -> Option<&'static str> {
         .map(|(_, name)| *name)
 }
 
-/// SEC-12 审查门(调用点):命中即审计留痕(target "audit",通道归 10 篇)
+/// SEC-12 审查门(调用点):命中即审计留痕(target "audit",归审计通道)
 /// 并 Suspended 携带命令原文;未命中 Proceed。仅作用于「我们即将接管的
 /// statusLine 原命令」;不再静默放行(旧「仅记录不阻断」语义已作废)。
 pub(crate) fn review_statusline_command(raw: &str) -> InstallGate {

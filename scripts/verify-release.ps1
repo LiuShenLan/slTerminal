@@ -15,7 +15,7 @@ if ([string]::IsNullOrWhiteSpace($Directory)) {
 }
 $Directory = [IO.Path]::GetFullPath($Directory)
 
-# 发布资产合同(12 篇):安装器主形态 + 便携副形态,单名无别名。
+# 发布资产合同:安装器主形态 + 便携副形态,单名无别名。
 if ($Version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') {
     throw "版本号必须是三数值段:$Version"
 }

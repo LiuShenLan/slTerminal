@@ -54,7 +54,7 @@ fn fit_preflight_size(preferred: Size<Pixels>, cx: &App) -> Size<Pixels> {
     )
 }
 
-/// 启动网格:M3 恒默认画布(持久化网格恢复归 05 篇会话链)。
+/// 启动网格:恒默认画布(持久化网格恢复归会话链)。
 fn startup_grid() -> (f32, f32) {
     (
         f32::from(TerminalView::DEFAULT_GRID_COLUMNS),

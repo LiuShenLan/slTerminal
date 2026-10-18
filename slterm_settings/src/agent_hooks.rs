@@ -1,7 +1,7 @@
 //! 每 CLI 的 hook 接入偏好段。缺键继承全局兜底开关,全部挂在
 //! settings.json 的 `agent_hooks` 段内(段嵌套形态)。
 //!
-//! 安装权威(03 篇 ensure_*_hooks 族)读 `enabled` 做接入/卸载决策;
+//! 安装权威(`ensure_*_hooks` 族)读 `enabled` 做接入/卸载决策;
 //! `all_updates`/`setup_updates` 是 CLI setup 与恢复默认路径的写盘入口,
 //! JSON 化后值形态 = 真布尔(不再是 txt 时代的 "1"/"0" 字符串)。
 

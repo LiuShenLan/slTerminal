@@ -1,8 +1,8 @@
 //! 自绘窗口标题栏:活跃 tab 展示名 + 最小化/最大化/关闭三钮 + 拖拽区。
 //!
-//! 05 篇壳重建(窗口三钮消息归 09 篇窗口域,本步按 GPUI 窗口 API 直连留缝):
+//! 壳重建(窗口三钮消息归窗口域,本步按 GPUI 窗口 API 直连留缝):
 //! - 标题数据源 = 活跃 tab 的展示名,当前取 `TabMeta.custom_name` 或聚焦
-//!   pane 的既有终端标题;07 篇 TabPresentation 落地后替换这一处取值。
+//!   pane 的既有终端标题;`TabPresentation` 落地后替换这一处取值。
 //! - 拖拽区 = GPUI `WindowControlArea::Drag`(Windows 原生 HTCAPTION,
 //!   双击最大化由系统处理,不自挂双击 handler 防二次 toggle)。
 //! - 三钮 = 原生 `WindowControlArea::Min/Max/Close`;Windows 由系统完成
@@ -28,7 +28,7 @@ pub(super) const TITLE_BAR_HEIGHT: f32 = 34.0;
 const WINDOW_BUTTON_WIDTH: f32 = 38.0;
 const WINDOW_BUTTON_HEIGHT: f32 = 26.0;
 
-/// 窗口三钮命令。09 篇窗口域接入消息总线后,本枚举即其载荷形状。
+/// 窗口三钮命令。窗口域接入消息总线后,本枚举即其载荷形状。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TitleBarCommand {
     Minimize,
@@ -248,7 +248,7 @@ fn title_bar_button(
 mod title_bar_tests {
     use super::*;
 
-    /// 命令枚举是 09 篇窗口域的载荷形状:三值封闭,不可静默扩维。
+    /// 命令枚举是窗口域的载荷形状:三值封闭,不可静默扩维。
     #[test]
     fn title_bar_commands_are_a_closed_three_value_set() {
         let commands = [

@@ -1,4 +1,4 @@
-//! git 状态快照(07 篇照抄点 21;SVN/tortoise 臂已砍)。
+//! git 状态快照(照抄点 21;SVN/tortoise 臂已砍)。
 //!
 //! 执行体与 `crate::git` 共用子进程构造口(D07-1 已裁「git 子进程统一」):
 //! porcelain v2 解析收敛到 `crate::git::parse_status`(唯一实现),本模块只

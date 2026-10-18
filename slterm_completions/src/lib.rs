@@ -8,7 +8,7 @@
 //! * 内建来源:文件、目录、静态字符串表。
 //! * `Span`/`Suggestion`/`SemanticSuggestion`/`SuggestionKind` 候选值族。
 //!
-//! 迁入裁剪(依据设计文档 08 篇):color feature(LS_COLORS 样式)
+//! 迁入裁剪:color feature(LS_COLORS 样式)
 //! 整砍;SSH/WSL 语义源变体与选项表整砍;unix 平台小分支收敛为 Windows
 //! 形态;Posix 方言保留(B.21:Git Bash/MSYS 场景)。
 

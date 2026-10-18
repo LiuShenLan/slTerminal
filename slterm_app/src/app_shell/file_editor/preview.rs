@@ -1,4 +1,4 @@
-//! Markdown 渲染态与虚拟化(07 篇 M8.3 照抄点 6/13)。
+//! Markdown 渲染态与虚拟化(照上游同构)。
 //!
 //! 块清单来自 `Outline`(与大纲/源码 span 同一份 AST);`gpui::list` 只物化
 //! 视口内与 overscan 行,屏外块槽置 `None`。每帧 prepaint 回收未挂载块的

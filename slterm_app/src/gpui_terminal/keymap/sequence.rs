@@ -13,7 +13,7 @@
 //!   `keymap/win32.rs` 从 GPUI 键名重造并专管;`keymap.rs` 在进入本构建器前
 //!   已完成 win32/kitty 分流,本函数永远在 kitty 位激活时被调
 //!   (`use_win32_input_mode` 此时恒 false),臂即死码。
-//! - **runtime_api 族不迁**(`build_runtime_*`,归 04 篇 M7);
+//! - **runtime_api 族不迁**(`build_runtime_*`,归 runtime_api);
 //!   `build_focus_loss_key_ups` 不迁(上游 GPUI 壳无消费点,焦点丢失合成
 //!   key-up 只被旧壳触摸路径调用);`Key::Dead` 随组合路径臂裁。
 
@@ -178,11 +178,11 @@ pub(super) fn use_win32_input_mode(mode: TermMode) -> bool {
 /// 记录翻译成 CR(即使 UnicodeChar 是 LF),其他 Windows 读者(Codex、
 /// PSReadLine)必须保留原生记录。
 ///
-/// M3 留位(13 篇 keymap 节):`program` 恒 `None`——agent 检测归 03 篇,
-/// 上游 `AgentKind::parse(program) == Claude` 的特判臂随 03 篇回填;回填前
+/// M3 留位:`program` 恒 `None`——agent 检测归 AI 集成域,
+/// 上游 `AgentKind::parse(program) == Claude` 的特判臂随 AI 集成域回填;回填前
 /// Windows 上 win32 模式恒保原生记录。
 pub(super) fn shift_enter_as_lf(program: Option<&str>, mode: TermMode) -> bool {
-    // 03 篇回填前参数不消费(Windows-only:!cfg!(windows) 臂随定位约束消亡)。
+    // 回填前参数不消费(Windows-only:!cfg!(windows) 臂随定位约束消亡)。
     let _ = program;
     !mode.intersects(TermMode::KITTY_KEYBOARD_PROTOCOL) && !use_win32_input_mode(mode)
 }
@@ -629,7 +629,7 @@ fn is_control_character(text: &str) -> bool {
 }
 
 /// 平台无关测试:kitty/legacy 编码器只消费 [`KeyInput`] 的可移植字段——
-/// 「单一跨平台编码器」合同的可见形态。runtime_api 族(归 04 篇)与
+/// 「单一跨平台编码器」合同的可见形态。runtime_api 族(归 runtime_api)与
 /// focus_loss 族(GPUI 壳无消费点)的用例不迁。
 #[cfg(test)]
 mod vt_tests {
@@ -755,7 +755,7 @@ mod vt_tests {
         );
     }
 
-    /// M3 行为钉(13 篇留位):agent 检测归 03 篇,回填前 `program` 不消费——
+    /// M3 行为钉(留位):agent 检测归 AI 集成域,回填前 `program` 不消费——
     /// Windows 上 win32 记录模式恒保原生 Shift+Enter 记录,kitty 协商或传统
     /// VT 下 Shift+Enter 是 LF。
     #[test]

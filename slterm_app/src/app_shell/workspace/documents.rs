@@ -1,4 +1,4 @@
-//! 文件打开路由与文件 tab 生命周期(07 篇 M8.1)。
+//! 文件打开路由与文件 tab 生命周期。
 //!
 //! 路由单判定在 `doc_tabs::openable_in_app`;本模块只做「判定结果 → tab 变体」
 //! 的落地与同路径重开命中:
@@ -10,7 +10,7 @@
 //! 未命中 → 交系统处理器(M8.4 file_tree 入口裁定)
 //! ```
 //!
-//! 三个文件 tab 都不进 session 快照(快照只收 Terminal tab,05 篇合同),
+//! 三个文件 tab 都不进 session 快照(快照只收 Terminal tab),
 //! 关闭只走统一的 `close_tab_at`——纯视图 drop,无 PTY/进程生命周期。
 //! gitshow 只读臂复用 `WorkspaceTab::Code`,数据源是 HEAD blob。
 
@@ -100,7 +100,7 @@ impl FileViewHandle {
 }
 
 impl SltermWorkspace {
-    /// 文件打开路由(07 篇「打开路由」数据流)。
+    /// 文件打开路由。
     #[allow(dead_code)] // 消费点 = M8.4 file_tree 双击入口;M8.1 出口用例经此直调。
     pub(crate) fn open_document_path(
         &mut self,
@@ -404,7 +404,7 @@ impl SltermWorkspace {
     }
 
     /// 活跃 tab 展示名:自定义名优先,否则取聚焦 pane 的既有终端标题。
-    /// 07 篇 TabPresentation 落地后,这一处取值面替换为其派生结果。
+    /// `TabPresentation` 落地后,这一处取值面替换为其派生结果。
     pub(super) fn active_tab_title(&self, cx: &App) -> String {
         self.tabs
             .get(self.active)
@@ -502,7 +502,7 @@ impl SltermWorkspace {
     }
 
     /// 渲染激活位同步:只有活跃文件 tab 物化预览资产;切走的 tab 释放
-    /// 块槽/图片解码,草稿与撤销历史保留(07 篇「预览虚拟化与资产释放」)。
+    /// 块槽/图片解码,草稿与撤销历史保留(预览虚拟化与资产释放)。
     pub(super) fn sync_file_render_activity(
         &mut self,
         window: &mut Window,

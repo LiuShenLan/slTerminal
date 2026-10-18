@@ -1,4 +1,4 @@
-//! 单窗口会话写盘状态机(05 篇 M5.5;上游 `SessionPersistence` 裁剪)。
+//! 单窗口会话写盘状态机(上游 `SessionPersistence` 裁剪)。
 //!
 //! 机制照抄、语义单窗化:
 //! - `latest` / `saved` 双快照:1 Hz `Checkpoint` 只在内容变化时落盘;

@@ -47,9 +47,73 @@ fn pipe_server_shutdown_joins_the_accept_thread() {
     let _serial = serial();
     let (receiver, mut server) = spawn_gpui_server();
     drop(receiver);
+    let started = std::time::Instant::now();
     server.shutdown();
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "无客户端时 shutdown 应立即返回"
+    );
     // 幂等:join 已取走,再次调用只置停止位。
     server.shutdown();
+}
+
+/// B2 防复发:客户端连上后保持句柄、不写不关,serve 线程阻塞在 `ReadFile`;
+/// shutdown 必须取消该同步 I/O 并在 2s 内返回(不能依赖客户端配合关闭)。
+#[test]
+fn pipe_server_shutdown_cancels_a_client_blocking_readfile() {
+    use windows_sys::Win32::Foundation::{CloseHandle, GENERIC_WRITE, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Storage::FileSystem::{CreateFileW, OPEN_EXISTING};
+
+    let _serial = serial();
+    let (_receiver, mut server) = spawn_gpui_server();
+    let pipe = std::env::var(PIPE_ENV).expect("启动管道服务必须发布管道名");
+    let wide: Vec<u16> = pipe.encode_utf16().chain(Some(0)).collect();
+
+    // 以 helper 同形态的客户端连接并故意保持句柄:不写、不关,服务线程
+    // 处理完连接后阻塞在 ReadFile 上。
+    let mut client = INVALID_HANDLE_VALUE;
+    for _ in 0..200 {
+        // SAFETY: `wide` 以 NUL 结尾且活得比这次调用长;空安全属性 =
+        // 默认 DACL,仅同用户可访问。
+        client = unsafe {
+            CreateFileW(
+                wide.as_ptr(),
+                GENERIC_WRITE,
+                0,
+                std::ptr::null(),
+                OPEN_EXISTING,
+                0,
+                std::ptr::null_mut(),
+            )
+        };
+        if client != INVALID_HANDLE_VALUE {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_ne!(
+        client, INVALID_HANDLE_VALUE,
+        "客户端必须在 1s 内连上命名管道"
+    );
+
+    // 负载裕度(非断言放宽):连接建立后 serve 线程才从 ConnectNamedPipe
+    // 返回并进入 ReadFile;这里只等调度落位,确保用例覆盖的是 ReadFile 取消。
+    std::thread::sleep(Duration::from_millis(100));
+
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let shutdown = std::thread::spawn(move || {
+        server.shutdown();
+        let _ = done_tx.send(());
+    });
+    let returned = done_rx.recv_timeout(Duration::from_secs(2));
+    // 先关客户端句柄再断言:即使取消路径回归、shutdown 超时,ReadFile 也能
+    // 读到 EOF 让 serve 线程退出,用例失败但不留挂起线程或泄漏句柄。
+    // SAFETY: `client` 是上面成功打开的有效句柄,且只关一次。
+    unsafe {
+        CloseHandle(client);
+    }
+    assert!(returned.is_ok(), "shutdown 未能在 2s 内取消阻塞的 ReadFile");
+    shutdown.join().expect("shutdown 线程不得 panic");
 }
 
 /// 起服务 → helper 形态写一条 PromptSubmit → 事件通道收取 → pane 归属仲裁。

@@ -1,4 +1,4 @@
-//! 非 TTY 的 pane 进程执行(04 篇锚点,02 篇平台件只消费)。
+//! 非 TTY 的 pane 进程执行(平台件只消费)。
 //!
 //! `pane.run` 仍把命令送进现有交互 shell;这里刻意走独立 child:stdout /
 //! stderr 可分开捕获,也不改变 shell history、cwd 或环境。公开参数是 argv

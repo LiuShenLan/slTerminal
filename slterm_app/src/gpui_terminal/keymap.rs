@@ -210,7 +210,7 @@ fn kitty_sequence(ks: &Keystroke, mode: &TermMode) -> Option<Vec<u8>> {
         location: KeyLocation::Standard,
         repeat: false,
         key_without_modifiers,
-        // GPUI 无带修饰文本通道;associated-text 臂对 GPUI 键退化(13 篇 C-4)。
+        // GPUI 无带修饰文本通道;associated-text 臂对 GPUI 键退化(C-4)。
         text_with_all_modifiers: None,
     };
     let mut modifiers = ModifiersState::empty();
@@ -225,7 +225,7 @@ fn kitty_sequence(ks: &Keystroke, mode: &TermMode) -> Option<Vec<u8>> {
 /// (alt+f4 关窗 / alt+space 系统菜单)。其余修饰组合保留终端语义。
 ///
 /// 上游的 `Platform::current() == Windows` 判定随 Windows-only 定位退化为
-/// 恒真,不再带平台分支(13 篇照抄清单:alt+f4/alt+space 放行系统)。
+/// 恒真,不再带平台分支(照抄清单:alt+f4/alt+space 放行系统)。
 pub(super) fn is_native_window_shortcut(ks: &Keystroke) -> bool {
     let mods = &ks.modifiers;
     mods.alt
@@ -884,9 +884,9 @@ mod tests {
         }
     }
 
-    /// M3 行为钉(13 篇留位):agent 检测归 03 篇,回填前 `program` 参数
+    /// M3 行为钉(留位):agent 检测归 AI 集成域,回填前 `program` 参数
     /// 不消费——claude 的 LF 回退特判未落地,win32 记录模式下 shift+enter
-    /// 与 codex/pwsh 同果(原生记录)。上游 claude→LF 的断言随 03 篇恢复。
+    /// 与 codex/pwsh 同果(原生记录)。上游 claude→LF 的断言随 AI 集成域恢复。
     #[test]
     fn claude_newline_fallback_defers_to_agent_detection_m3() {
         let key = Keystroke::parse("shift-enter").unwrap();

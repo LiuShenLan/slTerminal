@@ -1,4 +1,4 @@
-//! Runtime 控制面(04 篇锚点):版本化信封、状态权威 `RuntimeHub` 与协议类型族。
+//! Runtime 控制面:版本化信封、状态权威 `RuntimeHub` 与协议类型族。
 //!
 //! M7.2 落点:snapshot/pane/agent/run 类型族、`RuntimeHub`(发布判等/盖戳/
 //! 订阅有界/生命周期/managed agents/run 等待表)。M7.3 补齐 `RuntimeCommand`
@@ -11,7 +11,7 @@
 //! 产物,不存在第二份私有状态拷贝。
 
 mod agent_api;
-// CLI 客户端(04 篇 M7.4):请求-响应人格;与外部客户端走同一条序列化协议。
+// CLI 客户端:请求-响应人格;与外部客户端走同一条序列化协议。
 mod cli;
 mod command;
 pub(crate) mod git;
@@ -32,7 +32,7 @@ pub(crate) use cli::run_cli;
 pub(crate) use command::capture_process_tree;
 /// 单实例控制面服务端(随壳生命周期持有)。
 pub(crate) use server::RuntimeServer;
-/// 子进程端点注入(03 篇 `agent_env::apply` 末位消费)。
+/// 子进程端点注入(`agent_env::apply` 末位消费)。
 pub(crate) use server::apply_child_endpoint;
 /// 二次启动移交(M7.5):40 × 25ms 重试环后把启动交给首实例。
 pub(crate) use server::handover_to_existing_instance;
@@ -53,7 +53,7 @@ use slterm_split::TabId;
 use crate::ai_agents::AgentKind;
 use crate::git_worktree::WorktreeProvenance;
 
-/// 协议名:01 篇禁名门禁的「协议兼容名」语境,旧品牌名不得回流。
+/// 协议名:禁名门禁的「协议兼容名」语境,旧品牌名不得回流。
 pub const PROTOCOL_NAME: &str = "slterm.runtime";
 /// 当前协议版本;不匹配即 `protocol_version_mismatch`,不做静默降级。
 pub const PROTOCOL_VERSION: u16 = 1;
@@ -104,7 +104,7 @@ pub(super) const RUN_PROGRESS_PROBE_INTERVAL: Duration = Duration::from_millis(5
 pub(super) const TAIL_SCAN_EXTRA_LINES: usize = 200;
 /// 委派在途容量与 worker_output 截断字符数。
 pub(super) const MAX_PENDING_DELEGATIONS: usize = 128;
-#[allow(dead_code)] // 消费点 = RuntimeHub::complete_delegations_for_turn(03 篇回合链 M7.5)。
+#[allow(dead_code)] // 消费点 = RuntimeHub::complete_delegations_for_turn(回合链)。
 pub(super) const MAX_DELEGATION_RESULT_CHARS: usize = 4_000;
 /// 订阅通道容量:跟不上消费速度的订阅方被断开,不反压 UI 线程。
 const SUBSCRIBER_CAPACITY: usize = 16;
@@ -116,7 +116,7 @@ const COMPLETED_RUN_CACHE: usize = 256;
 #[allow(dead_code)] // 消费点 = RuntimeHub::register_agent(壳在 agent 启动时调用,M7.5)。
 static NEXT_AGENT_ID: AtomicU64 = AtomicU64::new(1);
 
-/// 首发能力面(与协议 Schema 的方法枚举单源;裁剪点见 04 篇改造节)。
+/// 首发能力面(与协议 Schema 的方法枚举单源;裁剪点见协议裁剪表)。
 pub(super) const CAPABILITIES: &[&str] = &[
     "runtime.describe",
     "runtime.snapshot",
@@ -366,7 +366,7 @@ pub(super) enum RuntimeWaitState {
     Settled,
 }
 
-/// 状态来源值集与 03 篇 `AgentStatusSource` 对齐。
+/// 状态来源值集与 `AgentStatusSource` 对齐。
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeAgentStateSource {
@@ -388,7 +388,7 @@ pub struct RuntimeAgent {
     /// managed agent 的 checkout 来源(`agent.fork` 事务产出)。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub worktree: Option<WorktreeProvenance>,
-    /// 身份事实单源 = 03 篇 `AgentKind::slug`。
+    /// 身份事实单源 = `AgentKind::slug`。
     pub kind: String,
     pub display_name: String,
     pub session_id: Option<String>,
@@ -705,7 +705,7 @@ pub struct RuntimeWindow {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RuntimeTab {
-    /// 05 篇 `TabId` 锚点:跨重排稳定身份,序列化为 u64。
+    /// `TabId` 锚点:跨重排稳定身份,序列化为 u64。
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -759,7 +759,7 @@ pub enum RuntimeLayout {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RuntimePane {
-    /// `PaneId.0`(05 篇全 workspace 唯一)。
+    /// `PaneId.0`(全 workspace 唯一)。
     pub id: u64,
     pub active: bool,
     pub title: String,
@@ -1090,19 +1090,19 @@ struct HubState {
     managed_agents: HashMap<String, RuntimeManagedAgent>,
     next_delegation: u64,
     pending_delegations: HashMap<String, PendingDelegation>,
-    #[allow(dead_code)] // 消费点 = take_delegation_callback(03 篇回合链 M7.5)。
+    #[allow(dead_code)] // 消费点 = take_delegation_callback(回合链)。
     pending_delegation_callbacks: VecDeque<RuntimeDelegationCallback>,
 }
 
 /// 在途委派:回执是外部可见身份,`target_name` 只用于回传文案。
-#[allow(dead_code)] // 消费点 = complete_delegations_for_turn(03 篇回合链 M7.5)。
+#[allow(dead_code)] // 消费点 = complete_delegations_for_turn(回合链)。
 struct PendingDelegation {
     receipt: RuntimeDelegationReceipt,
     target_name: String,
 }
 
-/// 一次完成回传:由 provider 回合结束边生成,消费归 03 篇回合完成链。
-#[allow(dead_code)] // 消费点 = 03 篇回合完成链(M7.5 接线)。
+/// 一次完成回传:由 provider 回合结束边生成,消费归回合完成链。
+#[allow(dead_code)] // 消费点 = 回合完成链。
 pub(crate) struct RuntimeDelegationCallback {
     pub(crate) task_id: String,
     pub(crate) origin: RuntimeDelegationEndpoint,
@@ -1498,7 +1498,7 @@ impl RuntimeHub {
 
     /// 把 provider `TurnDone` 边转成完成回传。provider 不携带 task id,
     /// 「每目标 generation 单在途」就是关联边界;离开该边界即不可关联。
-    #[allow(dead_code)] // 消费点 = 03 篇 hook 回合完成链(M7.5 接线)。
+    #[allow(dead_code)] // 消费点 = hook 回合完成链。
     pub(crate) fn complete_delegations_for_turn(&self, event: &crate::ai_hook::AiHookEvent) {
         if event.kind != crate::ai_hook::AiHookKind::TurnDone || event.active_background_tasks() > 0
         {
@@ -1584,7 +1584,7 @@ impl RuntimeHub {
 
     /// 取本目标 generation 的完成回传。origin 身份在取出时重验:同 pane
     /// 已换成别的 generation/session 时丢弃,不回传给新会话。
-    #[allow(dead_code)] // 消费点 = 03 篇回合完成链(M7.5 接线)。
+    #[allow(dead_code)] // 消费点 = 回合完成链。
     pub(crate) fn take_delegation_callback(
         &self,
         agent_id: &str,
@@ -1683,7 +1683,7 @@ impl RuntimeHub {
     }
 }
 
-/// `state_change_seq` 盖戳。05 篇 `PaneId` 全 workspace 唯一,记账键收窄为
+/// `state_change_seq` 盖戳。`PaneId` 全 workspace 唯一,记账键收窄为
 /// pane id 单维:上一快照同 pane 状态未变 → 保留旧计数;变了 → +1;首见 → 1。
 fn stamp_state_change_seq(previous: Option<&RuntimeSnapshot>, next: &mut RuntimeSnapshot) {
     let mut before = HashMap::new();

@@ -12,8 +12,8 @@
 //! 排水 → `AgentActivity`/`AnswerInbox` 的 pane 宿主)。
 //!
 //! 缝合点(不在本模块消费):设置页数据源消费 `integrations::inspect()` 归
-//! 06 篇;`config_guard` 随设置域启动链挂接归 06 篇;通知漏斗消费
-//! TurnDone/NeedsAttention 两个状态边归 09 篇 M10.1。
+//! 设置域;`config_guard` 随设置域启动链挂接;通知漏斗消费
+//! TurnDone/NeedsAttention 两个状态边归 `notify`。
 
 mod bridges;
 /// 设置页 hooks 编辑域(轨二):用户/第三方 handler 可编辑,marker 认领组只读。
@@ -29,12 +29,12 @@ mod payload;
 mod protocol;
 mod windows;
 
-// re-export 面是壳侧/05/09 篇的缝合点(事件排水、pane 宿主、通知漏斗)。
+// re-export 面是壳侧、工作区与通知域的缝合点(事件排水、pane 宿主、通知漏斗)。
 pub(crate) use event::CodexHookMode;
 pub use event::{
     AiBackgroundTasks, AiHookEvent, AiHookKind, AiPermissionMode, AiTurnOutcome, AttentionContext,
 };
-#[allow(unused_imports)] // 能力表消费点归 09 篇通知漏斗 / 04 篇 runtime 快照。
+#[allow(unused_imports)] // 能力表消费点归通知漏斗 / runtime 快照。
 pub use event::{AiHookCapabilities, capabilities_for};
 pub(crate) use lifecycle::AgentActivity;
 pub use ordering::GateVerdict;

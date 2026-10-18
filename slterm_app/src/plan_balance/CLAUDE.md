@@ -16,12 +16,12 @@
   失败保留旧值不推;`refresh_plan_balance` 恒 Ok,错误不冒泡到 UI。
 - **推送形态 = 模块级 watch channel(D10-3)**:多消费者各自订阅,值本体在
   `SNAPSHOT`;有界 1 槽合并连续推送,唤醒后读最新快照。
-- **执行面**:`poll_once_executor: fn()` 由 09 篇 `background_tasks` 的
+- **执行面**:`poll_once_executor: fn()` 由 `background_tasks` 的
   `planBalance` 条目(默认 10s,合法 10–3600s)驱动;阻塞 HTTP(ureq)全程在
   GPUI background executor,不占 UI 线程。
 - **`SecretBytes::as_bytes` 借出白名单(B60)**:仅 `secrets.rs` /
   `ai_providers.rs`(句柄语义用例)与 `plan_balance/deepseek.rs` /
-  `plan_balance/kimi.rs`(请求头组装);新增调用点须先登记 10 篇。
+  `plan_balance/kimi.rs`(请求头组装);新增调用点须先登记凭据域。
 
 ## 步骤接缝
 

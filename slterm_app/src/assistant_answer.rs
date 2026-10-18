@@ -1,8 +1,8 @@
-//! 助手回答投影(03 篇锚点模块)。
+//! 助手回答投影。
 //!
 //! 本步(M4.4)落地范围:`AssistantAnswer` 三态本体(hook 事件协议解析的
 //! 直接产出物)+ `AnswerInbox` 按 `(provider, session)` 收编归属 +
-//! `conversation` 有界 transcript 投影。挂 pane 宿主归 05 篇,展示归 07 篇;
+//! `conversation` 有界 transcript 投影。挂 pane 宿主归工作区,展示归阅读器;
 //! 原则不变:不从屏幕猜测回答,只投影 provider 给出的原文。
 
 use std::fmt;
@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-// 有界 transcript 投影(消费归 07 篇阅读器);本步仅落投影与预算契约。
+// 有界 transcript 投影(消费归阅读器);本步仅落投影与预算契约。
 #[allow(dead_code)]
 mod conversation;
 

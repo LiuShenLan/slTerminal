@@ -1,11 +1,11 @@
-//! 键位收口(07 篇 M8.5;spec 采纳点 29–32 JSON 载体化)。
+//! 键位收口(键位 JSON 载体化)。
 //!
 //! `settings.json` 的 `keybind` 域外段(M6.1 已登记 `KEYBIND_SEGMENT`)是
 //! 用户绑定单源:元素 `{combo, action}`、行序即优先级、整表替换。本模块
 //! 负责:
 //! - 宽容解析/整表写回(纯函数 + 设置写通道);
 //! - [`EDITABLE_ACTIONS`] = 设置面可重绑动作集中表(编辑器域 + 工作区域,
-//!   跨域动作仍归各自篇,表内只收本仓真实存在的 GPUI action);
+//!   跨域动作仍归各自领域,表内只收本仓真实存在的 GPUI action);
 //! - [`STATIC_DEFAULT_COMBOS`] = 默认绑定镜像(恢复默认 / Unbind 精确收回);
 //! - **保留键红线**:`Ctrl+C`(终端中断透传)与 `Ctrl+Shift+C`(复制)在
 //!   [`RESERVED_ROWS`] 只读登记,用户表任何覆盖/改绑尝试被拒绝。
@@ -160,7 +160,7 @@ pub(super) const STATIC_DEFAULT_COMBOS: &[(&str, &str)] = &[
     ("ctrl+/", "toggle_source"),
 ];
 
-/// 工作区静态默认绑定(05 篇 M5.3;键位照抄上游)。
+/// 工作区静态默认绑定(键位照抄上游)。
 ///
 /// `Ctrl+S` 只在 `FileEditor` 上下文注册(file_editor::init):无 context 的
 /// 全局绑定会吞掉终端焦点下的 Ctrl+S(保留键红线;M8.5 收口)。
@@ -179,7 +179,7 @@ pub(super) fn default_workspace_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-shift-tab", SelectPreviousTab, None),
         KeyBinding::new("ctrl-shift-b", ToggleSidebar, None),
         KeyBinding::new("ctrl-,", OpenSettings, None),
-        // 07 篇编辑器动作:源码态保存/双模态切换只在文件编辑上下文生效。
+        // 编辑器动作:源码态保存/双模态切换只在文件编辑上下文生效。
         KeyBinding::new("ctrl-s", SaveFile, Some("FileEditor")),
         KeyBinding::new("ctrl-/", ToggleSource, Some("FileEditor")),
     ]

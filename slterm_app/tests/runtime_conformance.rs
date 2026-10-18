@@ -1,4 +1,4 @@
-//! Runtime API 行为级端到端(00-roadmap M7 出口 / 04 篇 M7.5)。
+//! Runtime API 行为级端到端。
 //!
 //! 条件跳过:需要真实桌面会话 + 预构建的 `slterm.exe`(经 `SLTERM_E2E_EXE`
 //! 显式指定;CI 无桌面/无产物时打印 SKIP 并计通过,登记于

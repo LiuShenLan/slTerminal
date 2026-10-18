@@ -271,7 +271,7 @@ mod navigation_tests {
             .unwrap_or_else(|| panic!("{id} 必须已注册"))
     }
 
-    /// 06 篇页集合终表:全局组在上,Agent 组 hooks 页(03 篇 inspect 联调)
+    /// 页集合终表:全局组在上,Agent 组 hooks 页(inspect 联调)
     /// 在下;SSH/network 随 SSH 砍,providers/keymap/mobile/backup/about
     /// 不在本阶段。
     #[test]

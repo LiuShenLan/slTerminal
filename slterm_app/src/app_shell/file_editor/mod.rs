@@ -1,5 +1,5 @@
-//! 文本文件视图与编辑内核宿主(07 篇):M8.1 只读骨架 → M8.2 源码态可编辑
-//! → M8.3 双模态预览与 chrome。
+//! 文本文件视图与编辑内核宿主:只读骨架 → 源码态可编辑
+//! → 双模态预览与 chrome。
 //!
 //! 载入:本地文件经 [`Document`](document::Document) 有界读 + 快照解码;
 //! gitshow 的 HEAD 字节经同一 `TextSnapshot` 通路,encode 层拒绝写回。
@@ -23,7 +23,7 @@ mod block_structure;
 mod chrome;
 mod document;
 mod edit_history;
-/// 07 篇 M8.5:git gutter(行标)。
+/// git gutter(行标)。
 pub(crate) mod gutter;
 #[allow(dead_code)] // 消费点 = 预览图片解码 LRU(虚拟行资产纪律)。
 mod image_cache;
@@ -495,7 +495,7 @@ impl TextFileView {
     /// 重新读盘(同路径再次打开 / 外部修改确认后)。
     ///
     /// 脏/保存中/载入中一律拒绝:草稿与撤销历史不得被重读盘静默覆盖
-    /// (07 篇数据流「同路径重开保留草稿」)。
+    /// (同路径重开保留草稿)。
     pub fn reload(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
         if self.dirty || self.saving || self.loading {
             return;
@@ -909,7 +909,7 @@ impl Render for TextFileView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
         self.restore_edit_cursor(window, cx);
         // 编辑器语义槽单源:正文底色/次要文字取自 `EditorThemeTokens`,
-        // 不直接用组件库调色(07 篇改造节 8 的消费纪律)。
+        // 不直接用组件库调色(编辑器语义槽消费纪律)。
         let tokens = cx.global::<Settings>().editor_theme;
         let background = crate::gpui_terminal::colors::from_rgb8(tokens.background);
         let border = cx.theme().border;
@@ -1260,7 +1260,7 @@ fn load_document(
         TextSource::GitHead => {
             let (bytes, truncated) =
                 git::head_file(path, MAX_BYTES).map_err(|error| error.to_string())?;
-            // HEAD 字节一律只读:gitshow 不提供写回语义(07 篇改造节 5)。
+            // HEAD 字节一律只读:gitshow 不提供写回语义。
             Ok((
                 LoadedDocument::Head(TextSnapshot::decode_prefix(bytes, true, truncated)),
                 None,

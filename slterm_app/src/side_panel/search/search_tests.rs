@@ -1,4 +1,4 @@
-//! 文件名搜索用例(07 篇照抄点 21;WSL 用例已裁)。
+//! 文件名搜索用例(照抄点 21;WSL 用例已裁)。
 
 use super::matching::BestMatches;
 use super::*;

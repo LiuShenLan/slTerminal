@@ -169,6 +169,10 @@ M12/R5（2026-10-18）：B8 新增 fs-notify 监听器（树根递归 + 打开�
 
 M12/R6（2026-10-19）：B7 键位热重绑（启动键位基线快照 + 整表重建 + 设置页录制/清除/恢复默认）、B10 冲突三栏合并器（git stage 1/2/3 有界读取 + 三栏只读视图 + 脏草稿拒绝采用）、B11 文件树 CRUD（新建文件/目录/重命名，重命名遇打开 tab 安全拒绝）、B17 编辑器 chrome 全屏 + reader-focus、B18 主题编辑器字距/字重/布局/blur 控件、B19 主题包导入导出 UI、B20 侧栏标题 i18n、B55 壁纸设置 UI（路径/fit/对齐/cover/透明度 + 缩略图预览）、B73 侧栏 Nav/Commit/AgentFiles 三视图、C6 hooks 五型表单（user 层）、C8 工作区导出 UI（后台写盘）、B38 失败边进程级通知（只带类别/agent，不直出合成命令）。
 
+M12/R7（2026-10-19）：A8 侧栏双槽比例（`SidebarState.ratio_permille` 100–900 + 拖拽分隔条，随 session 快照持久化）、A14 静默启动联动 `tray=1` 并提示、A15 Acrylic 在 22H2+ 走系统 backdrop `DWMSBT_TRANSIENTWINDOW`（DesktopAcrylicController 默认材质的 DWM 等价路径；失败/旧系统回退 WCA state 4，不引入 WinAppSDK）、C7 非聚焦 pane veil 接主题 `effects.veil` 开关、C27+B52 更新弹窗与安装授权两步（打开即 `mark_prompted`，稍后/跳过落盘；下载→授权→prepare/commit 或 schedule）、C33 加密备份导出 UI（类别 + masked 口令 + 后台整单收集/密封，失败明示）、C17 `ProviderTestOutcome` 中英文案、B40 ghost 按 `suggestion_edit` 替换区间与折行绘制、B41 公式编译移出 Term 锁（扫描/计划两阶段）、B42 底部弹窗与 AI 条堆叠布局、C23 四协议族本地 mock HTTP 用例。
+
+M12/R8（2026-10-19）：A3+B75/C13 全仓「NN 篇」锚点清理归零（源码/测试/脚本/模块文档）、B2 `PipeServer::shutdown` 以 `CancelSynchronousIo` + 有界等待硬化、B5 设置损坏隔离件改时间戳多代、B13 `atomic_file::write` 替换前复制目标 owner/group/DACL、B14 `RuntimeServer` serve 线程停止位 + 自连唤醒 + join、B23 `launchable_kinds` 单一真值源与 schema/文档一致性守卫、B24 `git_worktree` 未登记错误码收敛到 `invalid_state`/`action_failed`、B28 clap 精确 pin `=4.6.7`、B30 窄 pnpm-workspace 解析器替换 `serde_yaml`（移除 unsafe-libyaml）、B31 删除 `scoped_history` 死分支并保留未知命令通用兜底、B32 `remove_provider_at` 先查 id 再删凭据、B39 terminal_math 测试拆六个子模块、B76 test-exemptions 按载体重审、C9 注册表后台写入线程断言。
+
 ## E. 验收纪律补记
 
 - 自 M8.3 起验收同时跑两形态 clippy（`--workspace` 与 `-p slterm --features gpui-test-support`）——此前无 feature 形态遗漏了 M6 起的三处测试端红灯。

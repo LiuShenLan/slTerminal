@@ -18,7 +18,7 @@ path = "src/lib.rs"
 # 消费,不抬 workspace 层:nucleo-matcher(fuzzy 评分与高亮索引)/unicase
 # (大小写折叠)/unicode-segmentation(grapheme 对齐的 match_indices)。
 # 上游 color feature(nu-ansi-term/lscolors)随 LS_COLORS 样式分支整砍——
-# ANSI 样式在 GPUI 自绘弹窗无消费端(08 篇不采纳点)。
+# ANSI 样式在 GPUI 自绘弹窗无消费端(裁剪不采纳点)。
 [dependencies]
 nucleo-matcher = "0.3"
 unicase = "2.9"

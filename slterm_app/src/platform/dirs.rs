@@ -1,4 +1,4 @@
-//! 用户目录解析(01 篇锚点:照上游 platform/dirs.rs 落位)。
+//! 用户目录解析(照上游 platform/dirs.rs 落位)。
 //!
 //! 路径优先级唯一权威在 slterm_settings(`SLTERM_CONFIG_DIR` → 空串视为未设置 →
 //! `%APPDATA%\slterm`,D2 裁决值);本模块只缓存应用侧解析结果,不推导优先级。
@@ -42,7 +42,7 @@ pub fn data_dir() -> &'static Path {
 
 fn resolve_data_dir() -> PathBuf {
     // settings.json、runtime 发现、session、history、导入字体共用同一目录;
-    // 零依赖 settings crate 持有环境/OS 解析,app 侧只缓存(01 篇缝合点 1)。
+    // 零依赖 settings crate 持有环境/OS 解析,app 侧只缓存(缝合点 1)。
     #[cfg(not(test))]
     let dir = slterm_settings::settings_dir();
     // 测试构建默认隔离(B1):lib_tests 绝不写真实 `%APPDATA%\slterm`。

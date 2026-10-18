@@ -21,19 +21,19 @@ const LOG_PATH_ENV: &str = "SLTERM_LOG";
 const EXTRA_LOG_TARGETS_ENV: &str = "SLTERM_EXTRA_LOG_TARGETS";
 
 /// 环境变量:debug_log 的落盘开关(诊断辅助,非生产日志通道)。
-#[allow(dead_code)] // 随 debug_log 的调用点(04 篇 runtime 诊断链)接线。
+#[allow(dead_code)] // 随 debug_log 的调用点(runtime 诊断链)接线。
 const DEBUG_LOG_ENV: &str = "SLTERM_DEBUG_LOG";
 
 /// 常驻放行 target:自家两 crate + 安全审计通道。gpui/依赖树的 Error/Warn 在
 /// max_level=Trace 时放行(见 is_allowed_target),常态不刷屏。
 ///
-/// `audit` = 10 篇 M10.12 SEC-12/13/17 唯一通道(tracing target 经 log 桥接
+/// `audit` = SEC-12/13/17 唯一通道(tracing target 经 log 桥接
 /// 落到本 logger);取证面不随常态档位静默。
 const ALLOWED_TARGETS: &[&str] = &["slterm_terminal", "slterm", "audit"];
 
 /// 诊断辅助:写 data_dir 下的 debug 日志,`SLTERM_DEBUG_LOG` 显式开启才落盘。
 /// 给启动期/发布形态下没法走 log crate 的环节用(开关读取有 OnceLock 缓存)。
-#[allow(dead_code)] // 调用点(启动期文件/进程诊断)归 03/04 篇接线。
+#[allow(dead_code)] // 调用点(启动期文件/进程诊断)归启动与 runtime 接线。
 pub(crate) fn debug_log(message: impl AsRef<str>) {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     if !*ENABLED.get_or_init(|| {
@@ -71,7 +71,7 @@ fn extra_log_targets() -> &'static [String] {
     })
 }
 
-/// 初始化 logger。verbosity 旗标(-v/-q 抬降档位)归 04 篇 CLI 重建后接线;
+/// 初始化 logger。verbosity 旗标(-v/-q 抬降档位)归 CLI 重建后接线;
 /// M3 恒定 Warn——无旗标时可调面为空,静默优先于刷屏。
 pub fn initialize() -> Result<Option<PathBuf>, log::SetLoggerError> {
     log::set_max_level(LevelFilter::Warn);

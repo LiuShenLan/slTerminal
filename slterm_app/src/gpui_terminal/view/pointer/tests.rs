@@ -1,6 +1,6 @@
 //! 指针交互的虚拟窗口集成测试:真实命中派发 → 选区 → 剪贴板。
 //!
-//! 走 11 篇 builder 模板:draw 后读回写好的布局字段取真实坐标,事件经
+//! 走 builder 模板:draw 后读回写好的布局字段取真实坐标,事件经
 //! `simulate_*` 命中测试派发,不直接调 handler。
 
 use super::*;
@@ -69,7 +69,7 @@ fn cell_point(view: &TerminalView, col: usize, row: usize, x_frac: f32) -> Point
 }
 
 /// 拖选渲染出的文本:按下 → 移动 → 松手,选区内容命中注入的文本;
-/// `copy_selection` 落剪贴板(02 篇缝合点 8 的 M3 形态)。
+/// `copy_selection` 落剪贴板(缝合点 8 的 M3 形态)。
 #[gpui::test]
 fn drag_selects_rendered_text_and_copies(cx: &mut TestAppContext) {
     let (terminal, mut window) = open(cx);
@@ -101,7 +101,7 @@ fn drag_selects_rendered_text_and_copies(cx: &mut TestAppContext) {
     assert!(copied);
     let clipboard = window.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()));
     assert_eq!(clipboard.as_deref(), Some("hello"));
-    // 复制后选区即清(02 篇缝合点 8 合同)。
+    // 复制后选区即清(缝合点 8 合同)。
     let cleared = terminal.read_with(&window, |view, _| {
         view.session
             .as_ref()

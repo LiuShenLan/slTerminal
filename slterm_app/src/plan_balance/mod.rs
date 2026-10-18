@@ -1,4 +1,4 @@
-//! 套餐余量模块(10 篇 M10.11,F10 查询语义原样;单进程 GPUI 形态)。
+//! 套餐余量模块(F10 查询语义原样;单进程 GPUI 形态)。
 //!
 //! 读 user 层 `~/.claude/settings.json` 的 env 判定套餐(Anthropic 兼容端点),
 //! 定时轮询外部 API,把余量快照经模块级 watch channel 推给多消费者(D10-3)。
@@ -14,7 +14,7 @@
 //!   变化;失败保留旧值不动不推;
 //! - `refresh_plan_balance` 恒返回 Ok:单来源失败按槽位语义保留旧值,错误不
 //!   冒泡到 UI 线程;
-//! - 执行面:`poll_once_executor` 是 `fn()` 执行体,由 09 篇 `background_tasks`
+//! - 执行面:`poll_once_executor` 是 `fn()` 执行体,由 `background_tasks`
 //!   `planBalance` 条目在 GPUI background executor 上驱动;ureq 纯阻塞 HTTP
 //!   全程在后台线程,UI 线程零阻塞。
 
@@ -247,7 +247,7 @@ fn notify_update_subscribers() {
     });
 }
 
-// ── 执行面(09 篇 background_tasks `planBalance` 条目消费) ──
+// ── 执行面(background_tasks `planBalance` 条目消费) ──
 
 /// 后台任务执行体(F12 语义随迁,载体换 GPUI executor):一轮拉取 + 快照应用。
 /// 签名收敛为 `fn()`;阻塞 HTTP 由调用方在 GPUI background executor 上执行。
@@ -779,7 +779,7 @@ mod plan_balance_tests {
         assert_eq!(current_snapshot()[0].updated_at, 1000);
     }
 
-    // ── 双通道裁定守卫(10 篇测试点清单) ──
+    // ── 双通道裁定守卫(测试点清单) ──
 
     fn collect_rust_sources(root: &Path, files: &mut Vec<PathBuf>) {
         for entry in std::fs::read_dir(root).expect("读取源码目录") {

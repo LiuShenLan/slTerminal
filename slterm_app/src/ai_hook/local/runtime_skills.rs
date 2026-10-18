@@ -1,4 +1,4 @@
-//! runtime skill 资产投放(04 篇 M7.4,安装器家族 03 篇形态)。
+//! runtime skill 资产投放(安装器家族形态)。
 //!
 //! 资产 = `assets/skills/slterm-runtime/SKILL.md` + `agents/openai.yaml`,编译期
 //! `include_str!` 内嵌。归属判定沿用安装器家族纪律:
@@ -135,7 +135,7 @@ fn ensure_runtime_skill(dir: &Path) -> io::Result<ManagedSkillInstall> {
 }
 
 /// 卸载只删除自己所有的那一套;用户编辑过 → `Conflict` 保留原文件。
-#[allow(dead_code)] // 消费点 = 设置页卸载/setup-ai verb(03/06 篇后续接线)。
+#[allow(dead_code)] // 消费点 = 设置页卸载/setup-ai verb(后续接线)。
 pub(super) fn remove_runtime_skill(dir: &Path) -> io::Result<ManagedSkillRemoval> {
     let Some(marker) = read_skill_marker(dir) else {
         return Ok(ManagedSkillRemoval::Absent);

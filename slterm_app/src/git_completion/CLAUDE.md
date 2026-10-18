@@ -4,7 +4,7 @@
 
 - **双预算不可放宽**:3s 总时限 + 1MB 输出上限,两次元数据读取共用;
   超限/取消即降级为空结果,不猜、不重试。
-- **`--no-optional-locks` 经 07 篇 facade**:本模块不得自行拼 Git 命令行;
+- **`--no-optional-locks` 经 git facade**:本模块不得自行拼 Git 命令行;
   只读操作不得触发 index 锁或后台 gc。
 - **`completion.snapshot=true` sentinel**:保证无相关配置时
   `git config --get-regexp` 也返回 0,空配置不是读取失败。

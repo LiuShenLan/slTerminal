@@ -13,7 +13,7 @@
   `AnyWindowHandle::update`,故 facade 以显式 `&mut Window` 落点。目标选择与
   平台调用仍由本模块唯一承担。
 - **还原语义(B46)**:最小化 → `IsIconic` → `SW_RESTORE` → 前置;正常窗口
-  只前置。顺序由 `focus_steps` 纯函数锁死,真实 Win32 面按 11 篇豁免走
+  只前置。顺序由 `focus_steps` 纯函数锁死,真实 Win32 面按豁免走
   构建产物 smoke。
 - **HWND 单源**:开窗时 `publish_window` 发布句柄;任务栏闪烁/进度只经
   `window_hwnd` 查询。虚拟窗口无原生句柄 → None,调用方按 0 兜底。

@@ -1,6 +1,6 @@
 //! 指针交互:选区、鼠标协议上报、滚轮滚动、选区拖拽自动回滚。
 //!
-//! M3 裁剪(归篇见 13 篇字段节):滚动条 overlay 族(scrollbar_thumb/grab/
+//! M3 裁剪(归属见字段节):滚动条 overlay 族(scrollbar_thumb/grab/
 //! drag,归 M5 随分屏渲染扩)、补全浮层族(08)、OSC8 链接族(07/09 裁定)、
 //! focus_follows_mouse(06 设置键)、Ctrl+滚轮字号缩放(06,保留消费不缩放)。
 

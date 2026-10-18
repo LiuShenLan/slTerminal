@@ -1,4 +1,4 @@
-//! 任务栏进度(09 篇 M10.2):OSC 9;4 → Windows 任务栏。
+//! 任务栏进度:OSC 9;4 → Windows 任务栏。
 //!
 //! OSC 9;4 是 ConEmu 定的序列,Windows 任务栏原生就有这套语义
 //! (`ITaskbarList3::SetProgressState`/`SetProgressValue`),所以这条链路在
@@ -12,7 +12,7 @@
 //!
 //! 路由是进程级单显示(单窗单实例):任务栏只有一条进度条,只反映活跃 tab
 //! 的聚焦 pane([`TaskbarState`]);命令收尾/agent 退出/pane 关闭即清,不留残条。
-//! 真实 COM 投递面按 11 篇豁免登记走人工 smoke,纯映射与状态机在 L1 全覆盖。
+//! 真实 COM 投递面按豁免登记走人工 smoke,纯映射与状态机在 L1 全覆盖。
 
 use slterm_split::PaneId;
 
@@ -116,7 +116,7 @@ impl TaskbarState {
 }
 
 /// 测试构建不触真实 COM:虚拟窗口没有原生 HWND,且任务栏是进程级外部状态,
-/// 不可重复。记录调用序列,供工作区清除路径断言;真实投递面照 11 篇豁免
+/// 不可重复。记录调用序列,供工作区清除路径断言;真实投递面照豁免
 /// 走构建产物人工 smoke。
 #[cfg(all(test, feature = "gpui-test-support"))]
 static APPLIED: std::sync::Mutex<Vec<(isize, TaskProgress)>> = std::sync::Mutex::new(Vec::new());

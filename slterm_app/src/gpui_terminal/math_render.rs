@@ -1,4 +1,4 @@
-//! 公式位图的 GPUI 呈现(08 篇 M9.5 终端覆盖层绘制面)。
+//! 公式位图的 GPUI 呈现(终端覆盖层绘制面)。
 //!
 //! 管线与 markdown 阅读器同源:`compile_formula` 产出后端无关绘制指令 →
 //! `MathGlyphRasterizer` 按物理像素把整条公式合成为 BGRA 位图 →

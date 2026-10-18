@@ -1,4 +1,4 @@
-//! 壁纸异步加载/代际失效/壳色纪律(09 篇 M10.7;gpui-test-support 门控)。
+//! 壁纸异步加载/代际失效/壳色纪律(gpui-test-support 门控)。
 
 use std::path::PathBuf;
 use std::sync::Arc;

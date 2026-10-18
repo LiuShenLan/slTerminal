@@ -1,4 +1,4 @@
-# 独立安装 helper(09 篇 M10.5:两阶段 handoff 的 helper 侧)。
+# 独立安装 helper(两阶段 handoff 的 helper 侧)。
 # 在事务目录内运行,位于被替换的安装目录之外。
 # 应用只有在 ready.json 之后写 commit.json 才授予安装权威;否则本脚本
 # 回滚路径收尾并退出,绝不自行安装。

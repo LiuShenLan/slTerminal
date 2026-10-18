@@ -1,7 +1,7 @@
 //! native hooks(codex native / cursor / copilot / grok)与结果元数据回归。
 //!
 //! 迁移裁剪:上游本文件中经 `crate::notify::Notification` 断言通知形态的
-//! 部分整体归 09 篇通知漏斗(M10.1)回补——本步只钉解析与仲裁语义;通知
+//! 部分整体归通知漏斗回补——本步只钉解析与仲裁语义;通知
 //! 形态的消费点尚不存在,此处不留半套断言。
 use super::*;
 use crate::ai_agents::{AgentStatus, AgentStatusSource};
@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 
 #[test]
 fn non_successful_turns_are_classified_from_result_metadata() {
-    // 通知形态断言(失败 vs 静默)归 09 篇;此处只钉 AiTurnOutcome 分类。
+    // 通知形态断言(失败 vs 静默)归通知漏斗;此处只钉 AiTurnOutcome 分类。
     for (reason, expected) in [
         ("error", AiTurnOutcome::Failed),
         ("aborted", AiTurnOutcome::Cancelled),
@@ -202,7 +202,7 @@ fn codex_native_hooks_resume_the_transcript_thread_not_the_runtime_group() {
             );
             assert_eq!(event.session_id.as_deref(), Some(THREAD));
             assert_eq!(event.session_file.as_deref(), Some(transcript.as_str()));
-            // 「session_file → codex resume 命令」的消费断言随 05 篇恢复注入
+            // 「session_file → codex resume 命令」的消费断言随会话恢复注入
             // (AgentSession)回补;rollout id 提取本身由 crate::session 单测钉。
         }
     }
@@ -294,7 +294,7 @@ fn compaction_does_not_mark_an_active_turn_idle_and_native_stop_supplies_the_ans
 
 #[test]
 fn kimi_failure_and_interrupt_have_distinct_outcomes() {
-    // 通知形态断言(成功/失败/静默)归 09 篇;此处钉 outcome 与错误文案。
+    // 通知形态断言(成功/失败/静默)归通知漏斗;此处钉 outcome 与错误文案。
     for (event_name, expected) in [
         ("Stop", AiTurnOutcome::Succeeded),
         ("StopFailure", AiTurnOutcome::Failed),

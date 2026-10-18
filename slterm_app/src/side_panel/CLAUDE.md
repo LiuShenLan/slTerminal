@@ -2,7 +2,7 @@
 
 ## 决策与红线
 
-- **模型/渲染分层**(07 篇照抄点 21):本目录只持数据与状态转换;渲染只经
+- **模型/渲染分层**(照抄点 21):本目录只持数据与状态转换;渲染只经
   `file_rows()` 按行号取。禁止在模型里引入 gpui 类型。
 - **单子进程执行体**(D07-1):gitignore 过滤索引与 git 状态快照都走
   `crate::git::command`;每命令 `--no-optional-locks` 不可谈判。目录枚举不
@@ -26,7 +26,7 @@
 
 ## 文档外契约
 
-- 图标载体选型(07 篇开放问题 4 本步关闭):内嵌 Nerd Font 字形
+- 图标载体选型(开放问题 4 本步关闭):内嵌 Nerd Font 字形
   (`icons.rs`,字形来自 `REQUIRED_FONT_FAMILY` 的 cmap);颜色一律继承渲染行
   的主题 token,模型层不出现颜色。svg/位图不进本模块。
 - 回收站:Windows `SHFileOperationW` + `FOF_ALLOWUNDO`,单点在

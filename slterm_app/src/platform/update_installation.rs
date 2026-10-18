@@ -1,4 +1,4 @@
-//! 安装器 handoff 的原生路径与进程身份(09 篇 M10.5 采纳点 32)。
+//! 安装器 handoff 的原生路径与进程身份。
 //!
 //! 事务持久化与 commit 授权仍在 `update_download::handoff`;本模块只做
 //! 平台面:路径规范化、宿主进程创建身份、PowerShell helper 物化与启动、

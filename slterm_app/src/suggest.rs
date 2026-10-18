@@ -1,12 +1,12 @@
-//! 补全/建议引擎:ghost 余量与弹窗候选的计算核心(08 篇 M9.1)。
+//! 补全/建议引擎:ghost 余量与弹窗候选的计算核心。
 //!
 //! 从上游 `display/suggest_engine.rs` + `display/command_completion.rs` +
 //! `display/completion.rs` 收敛为自由函数:不持有窗口、渲染器或执行器状态。
-//! 两个呈现形态(GPUI ghost/popup,M9.5 接线)共用同一套数据源与排序规则,
+//! 两个呈现形态(GPUI ghost/popup 接线)共用同一套数据源与排序规则,
 //! 避免第二套平行实现。
 //!
-//! 环境抽象收敛为本地单态:补全面对的**永远是本机**文件系统与 PATH
-//! (08 篇改造节 2)。上游基线中 WSL/SSH 的「走错机器不是补不出来,是补出
+//! 环境抽象收敛为本地单态:补全面对的**永远是本机**文件系统与 PATH。
+//! 上游基线中 WSL/SSH 的「走错机器不是补不出来,是补出
 //! 另一台机器上的路径」教训保留在此形态下:跨机器分支已无对象,不重新引入。
 
 use std::collections::HashSet;
@@ -19,7 +19,7 @@ use slterm_completions::{SemanticSuggestion, SuggestionKind};
 use crate::directory_history::DirectoryHistory;
 use crate::history::{HistoryScope, SltermHistory};
 
-/// 补全样式本体归 06 篇键域枚举,本篇只再导出(与上游同形态)。
+/// 补全样式本体归键域枚举,此处只再导出(与上游同形态)。
 pub(crate) use slterm_settings::CompletionStyleName as CompletionStyle;
 
 /// 弹窗候选来源;驱动右侧 tag 与图标四态。
@@ -31,7 +31,7 @@ pub(crate) enum SltermCompletionKind {
     File,
 }
 
-/// 弹窗列表的一行(08 篇锚点:呈现条目唯一定义处)。
+/// 弹窗列表的一行(呈现条目唯一定义处)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SltermCompletionItem {
     /// 展示文本(可能左省略)。
@@ -462,7 +462,7 @@ fn suggest_collect(
 
 /// 已提交命令行的首词 → 程序身份:小写、剥路径与常见 Windows 启动后缀。
 ///
-/// AI assistant 判定表与侧栏图标共用同一份身份(08 篇缝合点 2)。
+/// AI assistant 判定表与侧栏图标共用同一份身份(缝合点 2)。
 pub(crate) fn extract_program(line: &str) -> Option<String> {
     let first = line.split_whitespace().next()?;
     let base = first

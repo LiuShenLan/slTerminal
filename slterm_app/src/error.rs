@@ -1,6 +1,6 @@
-//! 通用错误类型(01 篇类型锚点:`slterm_app::error`,全 crate 共享)。
+//! 通用错误类型(`slterm_app::error`,全 crate 共享)。
 //!
-//! M3 最小面:io / pty / gpui 三包。新增变体先回 01 篇锚点表登记归属,
+//! 最小面:io / pty / gpui 三包。新增变体先在类型锚点表登记归属,
 //! 禁领域各自另立 envelope。
 
 use std::fmt;
@@ -16,7 +16,7 @@ pub enum AppError {
     /// GPUI 开窗/消息循环失败。
     Gpui(anyhow::Error),
     /// 领域内部失败(plan_balance 查询/解析等)。消息为用户可见语义,
-    /// 禁止携带凭据值(10 篇 SEC-18 红线)。
+    /// 禁止携带凭据值(SEC-18 红线)。
     Unknown(String),
 }
 

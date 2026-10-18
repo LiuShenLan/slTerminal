@@ -4,7 +4,7 @@
 //! toast 或应用单例:宿主 Drop 则定时器一并 Drop。
 //!
 //! 与上游的形态差:上游 `CopyFeedback` 自成实体(方法收 `Context<'_, Self>`);
-//! 本仓它是 `TerminalView` 的平铺字段(13 篇 M3 字段集),故方法泛化到宿主
+//! 本仓它是 `TerminalView` 的平铺字段(字段集),故方法泛化到宿主
 //! 实体上下文,经 `slot` 访问器回指自身——测试仍以 CopyFeedback 自成实体
 //! 运行(`slot = |s| s`),行为与上游逐字一致。
 

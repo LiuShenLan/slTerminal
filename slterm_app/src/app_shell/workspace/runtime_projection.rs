@@ -1,12 +1,12 @@
-//! Workspace → RuntimeSnapshot 投影(04 篇 M7.2,05 篇共建)。
+//! Workspace → RuntimeSnapshot 投影。
 //!
 //! 纯读取:不持有第二份状态、不改 workspace。`RuntimeHub::publish` 负责
 //! 盖戳与判等;本模块产出的 `state_change_seq` 恒 0,`active_run`/`last_run`
-//! 待 02 篇 OSC 133 记账链(M9)回填。
+//! 待 OSC 133 记账链回填。
 //!
 //! 不变式:snapshot pane 集合 == Terminal tab 树叶集合;`PaneId.0` 直出协议;
 //! Settings/Document/Code/Image 无 pane/layout(纯视图 tab,不进会话快照)。
-//! 文件 tab 的 kind 取 `WorkspaceTab` 变体 snake_case(07 篇 M8.1):document/
+//! 文件 tab 的 kind 取 `WorkspaceTab` 变体 snake_case:document/
 //! code/image。
 
 use gpui::App;
@@ -58,7 +58,7 @@ pub(crate) fn project_workspace(workspace: &SltermWorkspace, cx: &App) -> Runtim
                                 branch: view.branch.clone(),
                                 running_program: view.running_program.clone(),
                                 agent: host.and_then(runtime_agent),
-                                // 六态唯一投影:03 篇仲裁器的首版桥(见映射函数)。
+                                // 六态唯一投影:仲裁器的首版桥(见映射函数)。
                                 task_state: host.map_or(RuntimeTaskState::Idle, |host| {
                                     runtime_task_state(host.status())
                                 }),
@@ -153,7 +153,7 @@ fn runtime_layout(tree: &SplitTree<PaneId>) -> RuntimeLayout {
     }
 }
 
-/// 03 篇 `AgentStatus` → 协议六态。03 无边界的等待输入/失败细分:
+/// `AgentStatus` → 协议六态。`AgentStatus` 无等待输入/失败的细分边界:
 /// Blocked(权限/提问屏幕)归 attention;Failed 只由 run 记账链产生。
 pub(super) fn runtime_task_state(status: AgentStatus) -> RuntimeTaskState {
     match status {

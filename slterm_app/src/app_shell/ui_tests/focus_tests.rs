@@ -1,7 +1,7 @@
-//! 09 篇 M10.4:窗口管理 facade 的壳层回落用例。
+//! 窗口管理 facade 的壳层回落用例。
 //!
 //! 真实 Win32 还原/前置面(IsIconic/SW_RESTORE/SetForegroundWindow)按
-//! 11 篇豁免走构建产物 smoke;这里断言四路回窗经 facade 落到正确目标:
+//! 测试豁免走构建产物 smoke;这里断言四路回窗经 facade 落到正确目标:
 //! 平台激活态变化 + tab/pane 选择。
 
 use gpui::TestAppContext;
@@ -35,7 +35,7 @@ fn legacy_attach_focuses_the_single_window(cx: &mut TestAppContext) {
 }
 
 /// toast 动作按钮也是四路回窗之一:点击确认按钮先回窗到来源 pane,
-/// 确认语义本身归 10 篇安全半程(本步只断言回窗落点)。
+/// 确认语义本身归安全确认半程(本步只断言回窗落点)。
 #[gpui::test]
 fn action_button_choice_returns_to_the_named_pane(cx: &mut TestAppContext) {
     let (workspace, mut window) = open_workspace(cx);

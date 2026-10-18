@@ -1,6 +1,6 @@
 //! 键位真实分发与 IME 可测面的虚拟窗口集成测试。
 //!
-//! 纪律(11 篇「键绑定真实分发测试锚」):产品键盘语义(复制/中断/粘贴/
+//! 纪律:产品键盘语义(复制/中断/粘贴/
 //! 翻页/放行)一律以「注入按键 → 观测动作」端到端锚定——事件经
 //! `window.dispatch_event` 真实派发(完整 keymap 匹配 + 焦点链),禁直接
 //! 调 `on_key_down`。解析层断言归 keymap.rs 的解析矩阵,不在这里重复。
@@ -197,7 +197,7 @@ fn ctrl_shift_c_copies_selection_and_feedback_expires_on_controlled_clock(cx: &m
     assert!(!terminal.read_with(&window, |view, _| view.copy_feedback.is_copied()));
 }
 
-/// D13-1 默认语义(13 篇待沉淀,按默认实现):无选区的 ctrl+shift+c
+/// D13-1 默认语义(待沉淀,按默认实现):无选区的 ctrl+shift+c
 /// 静默吞——剪贴板不动、PTY 零字节、不冒泡、无反馈。
 #[gpui::test]
 fn ctrl_shift_c_without_selection_is_swallowed_silently(cx: &mut TestAppContext) {
@@ -211,7 +211,7 @@ fn ctrl_shift_c_without_selection_is_swallowed_silently(cx: &mut TestAppContext)
     };
     let propagate = press(&mut window, key("c", modifiers));
     // D13-1:吞语义——stop_propagation 无负反馈(负反馈/透传中断的权衡
-    // 与截止口径见 13 篇待沉淀决策,改语义先过那条裁决)。
+    // 与截止口径见待沉淀决策,改语义先过那条裁决)。
     assert!(!propagate, "复制键永不冒泡入应用族");
     assert_eq!(clipboard_text(&mut window).as_deref(), Some("sentinel"));
     assert!(pty_bytes(&rx).is_empty());

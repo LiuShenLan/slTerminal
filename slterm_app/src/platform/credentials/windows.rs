@@ -1,4 +1,4 @@
-//! Win32 凭据管理器原语(10 篇 M10.9)。
+//! Win32 凭据管理器原语。
 //!
 //! `CredReadW`/`CredWriteW`/`CredDeleteW` + `CRED_TYPE_GENERIC` +
 //! `CRED_PERSIST_LOCAL_MACHINE`。错误归一:读取命中 `ERROR_NOT_FOUND` →

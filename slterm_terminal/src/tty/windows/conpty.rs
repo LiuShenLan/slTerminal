@@ -49,7 +49,7 @@ pub(crate) const CONPTY_WIN11_MIN_BUILD: u32 = 21376;
 const CONPTY_DLL_BYTES: &[u8] = include_bytes!("../../../vendor/conpty/conpty.dll");
 const OPENCONSOLE_EXE_BYTES: &[u8] = include_bytes!("../../../vendor/conpty/OpenConsole.exe");
 
-/// ConPTY 后端状态（回退可观测；壳 toast 降级提示数据源，消费归 09 篇）。
+/// ConPTY 后端状态（回退可观测；壳 toast 降级提示数据源，消费归壳层）。
 ///
 /// `fallback_reason` 与 warn 日志同一来源变量——日志与查询面零漂移。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -157,7 +157,7 @@ impl Drop for ConptyLibrary {
 
 impl ConptyApi {
     /// `sideload` 来自 `Options.conpty_sideload`（壳读 settings 键注入，
-    /// 键域归 06 篇；core 不内嵌设置文件读取——上游读 slterm_settings.txt
+    /// 键域归 `slterm_settings`；core 不内嵌设置文件读取——上游读 slterm_settings.txt
     /// 的 `openconsole=off` 形态不迁）。`build_number` 由
     /// `get_windows_build_number` 注入，决定 Win10 提取臂是否启用。
     ///
@@ -578,7 +578,7 @@ fn convert_custom_env(
         // 终端能力固定注入（custom 之后、继承之前，只补缺不覆盖——custom
         // 同名键优先）：TERM/COLORTERM 宣告 256 色与 truecolor，TERM_PROGRAM
         // 标识终端身份；AI CLI 依赖此宣告启用全色（SLTERM_PANE_ID 等变量族
-        // 由壳组装进 custom_env，归 03 篇定义，core 只负责注入时机）。
+        // 由壳定义并组装进 custom_env，core 只负责注入时机）。
         // env_is_complete 不叠加：完整块来自会话持久化快照（快照自身已含
         // 这些键），一字不差恢复是 complete 的契约。
         for (key, value) in FIXED_ENV_INJECTIONS {

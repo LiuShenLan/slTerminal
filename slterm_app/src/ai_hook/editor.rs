@@ -1,4 +1,4 @@
-//! 设置页 hooks 编辑域(轨二,06 篇双轨缝合)。
+//! 设置页 hooks 编辑域(双轨缝合)。
 //!
 //! 双轨不交叉的判据 = marker 归属:含 slterm-hook 命令的 matcher 组归
 //! 安装器专属,编辑器只读、保存时从磁盘原样保留;编辑域限用户/第三方
@@ -6,7 +6,7 @@
 //! 校验失败零写盘;非法 JSON / 非对象根一律拒绝编辑,绝不「修复式覆盖」。
 //!
 //! 编辑面是 claude 用户层 `~/.claude/settings.json`(设置页无 project 上下文;
-//! user/project/local 三层完整编辑面归 03 篇)。数据源与安装动作归
+//! user/project/local 三层完整编辑面归 AI 集成域)。数据源与安装动作归
 //! `integrations`/`local`,本模块只做文档级读-改-写。
 
 use std::path::{Path, PathBuf};

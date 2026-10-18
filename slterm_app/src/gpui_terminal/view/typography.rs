@@ -3,9 +3,9 @@
 //! 终端视图与其元素必须共用同一条设备像素取整规则;把 shaping、宽、高、
 //! 行高策略收口在此,spawn 网格才不会漂离首帧 prepaint(启动零 resize 锚)。
 //!
-//! M3 常量锚(06 篇设置键回填点):`CellWidthModeName` 恒 Compact(函数签名
+//! M3 常量锚(设置键回填点):`CellWidthModeName` 恒 Compact(函数签名
 //! 保 mode 参,调用点传死)、`font_offset` 恒 (0,0)、行高倍率恒 None——
-//! 上游这三项来自设置文件,本仓 M3 Settings 白名单(13 篇)未收,取常量
+//! 上游这三项来自设置文件,本仓 M3 Settings 白名单未收,取常量
 //! 保「所有度量路径同值」的合同。
 
 use gpui::{
@@ -17,9 +17,9 @@ use slterm_settings::CellWidthModeName;
 use crate::app_shell::assets::REQUIRED_FONT_FAMILY;
 use crate::app_shell::config::Settings;
 
-/// M3 传死的字宽模式(06 篇换设置键真读)。
+/// M3 传死的字宽模式(换设置键真读)。
 pub(super) const M3_CELL_WIDTH_MODE: CellWidthModeName = CellWidthModeName::Compact;
-/// M3 传死的字体偏移(逻辑像素;上游 Windows 默认 (0,4) 随 06 篇设置键回填)。
+/// M3 传死的字体偏移(逻辑像素;上游 Windows 默认 (0,4) 随设置键回填)。
 pub(super) const M3_FONT_OFFSET: (f32, f32) = (0.0, 0.0);
 
 /// 逗号分隔字族链解析:去空白、去空项、保序去重。

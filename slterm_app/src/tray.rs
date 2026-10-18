@@ -1,4 +1,4 @@
-//! 系统托盘常驻图标 + agent attention 状态(09 篇 M10.3)。
+//! 系统托盘常驻图标 + agent attention 状态。
 //!
 //! 终端最常见的姿态是「压在别的窗口底下跑着 agent」:任务栏闪烁会被忽略、
 //! toast 会过期,而托盘图标一直在。任一 agent 停下来等输入时图标翻转成
@@ -192,7 +192,7 @@ pub(crate) fn set_enabled(enabled: bool) {
         shared.enabled = enabled;
         changed
     };
-    // 测试构建绝不建真窗口/真线程:托盘交互按 11 篇豁免走构建产物 smoke。
+    // 测试构建绝不建真窗口/真线程:托盘交互按豁免走构建产物 smoke。
     if enabled && !cfg!(test) {
         ensure_thread();
     }
@@ -646,7 +646,7 @@ mod win {
 
         // SAFETY: 菜单由本函数持有/销毁。owner 前置 + WM_NULL 保留
         // TrackPopupMenu 在托盘场景中点外部收合的行为;Win32 焦点调用
-        // 收在 09 篇 M10.4 facade。
+        // 收在 windowing facade。
         unsafe {
             let menu = build_native_menu(&entries);
             if menu.is_null() {

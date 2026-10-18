@@ -1,10 +1,10 @@
 //! 终端垂直切片根(模块名映射:上游 gpui_shell/terminal → gpui_terminal,
 //! 层级压平一格)。
 //!
-//! 边界(13 篇不可变更项 2):本模块之外不出现 `slterm_terminal` 类型;
+//! 边界(不可变更项 2):本模块之外不出现 `slterm_terminal` 类型;
 //! `slterm_terminal` 之内不出现 GPUI 类型。唯一例外缝:app_shell 经
 //! `session::local_options` 的 `tty::Options`/`tty::Shell` 参数面接触
-//! (13 篇锚定的 seam)。
+//! (锚定的 seam)。
 
 pub mod colors;
 pub(crate) mod copy_feedback;
@@ -12,9 +12,9 @@ pub(crate) mod cursor_painter;
 pub(crate) mod element;
 pub(crate) mod event_mailbox;
 pub(crate) mod keymap;
-/// 08 篇 M9.5:公式覆盖层的 term 锁内扫描/绘制计划与 paint pass。
+/// 公式覆盖层的 term 锁内扫描/绘制计划与 paint pass。
 pub(crate) mod math_overlay;
-/// 08 篇 M9.5:公式位图的 GPUI 呈现(有界缓存 + 基线吸附)。
+/// 公式位图的 GPUI 呈现(有界缓存 + 基线吸附)。
 pub(crate) mod math_render;
 pub(crate) mod mouse_protocol;
 pub(crate) mod session;

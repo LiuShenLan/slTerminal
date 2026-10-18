@@ -37,14 +37,14 @@ pub struct Options {
     /// - When `false`: Arguments will be passed raw without additional escaping.
     pub escape_args: bool,
 
-    /// ConPTY 侧载开关：由壳读 settings 键注入（键域归 06 篇），core 不内嵌
+    /// ConPTY 侧载开关：由壳读 settings 键注入（键域归 `slterm_settings`），core 不内嵌
     /// 路径推导。置位时优先 exe 旁完整文件对 /（Win10）NuGet 提取的
     /// conpty.dll + OpenConsole.exe，缺失回退系统 API。默认 true——侧载
     /// host 避免 in-box resize 视口重发怪癖与老 Win10 鼠标转发缺失；单文件
     /// exe 发布形态下 Win10 提取链必须默认可达。
     pub conpty_sideload: bool,
 
-    /// ConPTY 输入模式能力矩阵（DTO 字段语义归 02 篇锚定）：壳读 settings
+    /// ConPTY 输入模式能力矩阵（DTO 字段语义由本层锚定）：壳读 settings
     /// 键注入；默认矩阵 = 现状三态零漂移（0x1/0x2/0x4 开、0x8 关）。
     pub conpty_input_modes: windows::ConptyInputModes,
 
@@ -53,7 +53,7 @@ pub struct Options {
     /// SEC-01 论证：白名单防的是「配置注入偷换 shell」（settings 文件等
     /// 信任边界外的数据）；`-e` 参数是用户本人在命令行当场指定，能写 CLI
     /// 参数的攻击者已具任意执行能力，白名单在此不构成防御。壳只为 `-e`
-    /// 来源置位；settings 键（06 篇）恒 `false`。
+    /// 来源置位；settings 键恒 `false`。
     pub explicit_command: bool,
 }
 

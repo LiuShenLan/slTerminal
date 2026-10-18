@@ -4,7 +4,7 @@
 
 - **D07-1 已裁:git 子进程统一**。旧栈 `src-tauri/src/git/` 的 git2 封装不移植;本模块以
   git CLI 子进程重实现操作面(上游子进程形态),消费面自始单一数据源。
-- **每命令 `--no-optional-locks`**(07 篇边界条 7,不可谈判):读操作不得触发 index 锁或
+- **每命令 `--no-optional-locks`**(边界条 7,不可谈判):读操作不得触发 index 锁或
   后台 gc;flag 必须位于子命令之前。
 - **argv 不经 shell**,Windows 一律挂 `CREATE_NO_WINDOW`;路径参数是纯 argv 元素。
 - **HEAD 错误分类契约**:`head_file` 先 `verify_head`(unborn 判定)再

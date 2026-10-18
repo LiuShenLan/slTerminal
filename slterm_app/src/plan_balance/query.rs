@@ -1,4 +1,4 @@
-//! 套餐查询注册表(10 篇 M10.11,F10 语义原样):URL 匹配集 + fetch trait;静态切片。
+//! 套餐查询注册表(F10 语义原样):URL 匹配集 + fetch trait;静态切片。
 //!
 //! 查询语义零改动:URL 归一化只小写化 + 去尾斜杠(规格字面,不加 trim);
 //! ureq 为纯阻塞 HTTP,调用方负责后台执行器;错误消息只含 planId + 错误
@@ -63,7 +63,7 @@ pub(crate) fn query_err(plan_id: &str, error: ureq::Error) -> AppError {
 }
 
 /// 单请求本地 HTTP 服务:端到端验证请求形态(方法/路径/Authorization)与
-/// 响应解析,不出网、不依赖真实 API(11 篇测试形态)。
+/// 响应解析,不出网、不依赖真实 API(测试形态)。
 #[cfg(test)]
 pub(crate) mod test_support {
     use std::io::{Read, Write};

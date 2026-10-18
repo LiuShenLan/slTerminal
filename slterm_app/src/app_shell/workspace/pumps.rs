@@ -1,4 +1,4 @@
-//! 工作区后台泵与窗口收尾(05 篇):自动保存 / AI hook / 屏幕看门狗 /
+//! 工作区后台泵与窗口收尾:自动保存 / AI hook / 屏幕看门狗 /
 //! 壳事件队列 / 系统关窗。
 //!
 //! 从 `mod.rs` 拆出只为文件行数预算;各泵的节奏与因果注释随实现迁移,
@@ -15,7 +15,7 @@ use crate::ai_hook::AiHookEvent;
 use crate::background_tasks;
 
 impl SltermWorkspace {
-    /// 1 Hz 自动保存泵(05 篇数据流):节奏与 agent 看门狗同源,前台线程
+    /// 1 Hz 自动保存泵:节奏与 agent 看门狗同源,前台线程
     /// 拍快照、状态机判无变化/写盘。失败只 warn,终端不受影响。
     pub(super) fn start_autosave_pump(&mut self, cx: &mut Context<'_, Self>) {
         let executor = cx.background_executor().clone();
@@ -140,13 +140,13 @@ impl SltermWorkspace {
                 }
                 let Ok(()) = this.update(cx, |workspace, cx| {
                     // 严格 pane 路由 + 仲裁在宿主内完成;UI 消费(页签徽标/
-                    // attention)归 05/09 篇,M4.5 不产生视图态。
+                    // attention)归工作区/窗口域,本步不产生视图态。
                     let focused = workspace.focused_pane();
                     let (_, accepted) = workspace.agent_hub.dispatch_lifecycle(events, focused);
-                    // 04 篇 M7.5:SessionEnd 关闭 managed agent、TurnDone
+                    // SessionEnd 关闭 managed agent、TurnDone
                     // 完成委派回传,然后统一入账(等待方随快照唤醒)。
                     workspace.process_agent_lifecycle_events(&accepted, cx);
-                    // 09 篇 M10.1 缝合 M4.5:TurnDone/NeedsAttention 两状态边
+                    // 通知漏斗:TurnDone/NeedsAttention 两状态边
                     // → 通知漏斗(前台门控/节流/时长全在漏斗内)。
                     for event in &accepted {
                         if let Some((notification, pane_id)) =
@@ -167,7 +167,7 @@ impl SltermWorkspace {
         .detach();
     }
 
-    /// 1 Hz 屏幕看门狗(照上游形态,09 篇 M10.8 收编进后台任务注册表):
+    /// 1 Hz 屏幕看门狗(照上游形态,收编进后台任务注册表):
     /// 逐 pane 取终端网格末尾样本喂仲裁器,给无 hook 的客户端补位、纠正
     /// 丢边的 hook 状态。
     ///
@@ -215,12 +215,12 @@ impl SltermWorkspace {
         for (pane_id, screen) in self.screen_samples(cx) {
             self.agent_hub.observe_screen(pane_id, &screen);
         }
-        // 托盘快照搭同一拍(09 篇 M10.3):秒级延迟对托盘无感,
+        // 托盘快照搭同一拍:秒级延迟对托盘无感,
         // 内容相等时 `tray::update` 内部直接返回(天然去抖)。
         self.publish_tray_snapshot(cx);
     }
 
-    /// 托盘 1 Hz 快照推送(09 篇 M10.3):语言与托盘开关取全局设置;
+    /// 托盘 1 Hz 快照推送:语言与托盘开关取全局设置;
     /// 关闭态只在翻转时删图标(线程留驻),开启态每拍都投递挂载请求,
     /// 让 `NIM_ADD` 失败(explorer 未就绪)借该节拍自愈(B54)。
     pub(super) fn publish_tray_snapshot(&self, cx: &App) {
@@ -233,7 +233,7 @@ impl SltermWorkspace {
     }
 
     /// 托盘与侧栏读取同一 pane 事实源(AgentHub):只收已识别为 AI CLI 的
-    /// pane;身份查不到时不进托盘菜单(09 篇 source classification)。
+    /// pane;身份查不到时不进托盘菜单。
     /// 单窗化后窗口目标塌缩为唯一主窗,pane 即完整路由信息。
     fn tray_agents(&self, cx: &App) -> Vec<crate::tray::TrayAgent> {
         let mut agents = Vec::new();

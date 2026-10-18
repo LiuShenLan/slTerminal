@@ -1,8 +1,8 @@
-//! 壁纸尺寸与对齐的纯数学面,独立于 GPUI 渲染(09 篇 M10.7)。
+//! 壁纸尺寸与对齐的纯数学面,独立于 GPUI 渲染。
 //!
 //! 照上游 `renderer/image_layout.rs` 裁剪:只保留壁纸消费的 fit/alignment
 //! 解析与 `wallpaper_rect`;主题编辑器的下拉语义(settings_value/next)
-//! 归 06 篇,不在此重复。
+//! 归设置主题体系,不在此重复。
 
 /// 壁纸适应模式(CSS background-size 语义)。
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]

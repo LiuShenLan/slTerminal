@@ -1,4 +1,4 @@
-//! managed agent 生命周期入口(04 篇 M7.5 壳侧接线)。
+//! managed agent 生命周期入口(壳侧接线)。
 //!
 //! pane 关闭已由 `record_pane_closed/exited` 统一收口;本模块补 SessionEnd
 //! 边:provider 会话结束时 pane 还在,注册表必须随事件关闭,`agent.wait`

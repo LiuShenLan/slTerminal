@@ -1,4 +1,4 @@
-//! WinRT toast 投递与 AUMID 注册(09 篇 M10.1,照上游平台层裁剪)。
+//! WinRT toast 投递与 AUMID 注册(照上游平台层裁剪)。
 //!
 //! 常驻 MTA worker 持有全部 WinRT 对象:Show 是跨进程 RPC,永不上事件
 //! 循环;成功 Show 不足以让 Activated 回调存活,活通知对象必须保留
@@ -24,7 +24,7 @@ use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, REG_SZ, RegSetKeyV
 
 use super::{ToastAction, ToastActivation};
 
-/// AppUserModelID(toast 归因/任务栏归组;值锚点归 01 篇 P-3)。
+/// AppUserModelID(toast 归因/任务栏归组;值锚点归 P-3)。
 pub(super) const AUMID: &str = crate::brand::WINDOWS_APP_ID;
 
 /// worker 队列上限:满即丢(通知是 best-effort,不阻塞调用方)。

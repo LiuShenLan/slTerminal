@@ -1,10 +1,10 @@
-//! 品牌常量表(01 篇类型锚点:`slterm_app::brand`,归属权登记在 01 篇,
-//! 各篇只消费不重复定义)。
+//! 品牌常量表(`slterm_app::brand`,归属权登记于类型锚点表,
+//! 各领域只消费不重复定义)。
 
 /// 产品名:窗口标题、panic 弹面标题、CLI 帮助(归 04)与安装器(归 12)共用。
 pub const NAME: &str = "slTerminal";
 
-/// Windows AppUserModelID(P-3):toast 归因与任务栏归组归 09 篇消费,
+/// Windows AppUserModelID(P-3):toast 归因与任务栏归组归通知与任务栏域消费,
 /// 开窗 `app_id` 由 app_shell 直接使用。
 pub const WINDOWS_APP_ID: &str = "com.slterminal.terminal";
 

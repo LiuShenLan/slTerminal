@@ -1,8 +1,8 @@
 //! PTY 会话接线:`Term` + `EventLoop` + ConPTY,全部来自 `slterm_terminal`。
 //!
 //! 事件出口是 futures channel,GPUI 前台任务可 `await` 事件。SSH 变体消亡
-//! (13 篇:`TerminalLaunch::Ssh` 不再存在,上游 `spawn_ssh`/stages/
-//! remote_reader 一并裁剪——06 篇按理想终态重设计时另立)。
+//! (`TerminalLaunch::Ssh` 不再存在,上游 `spawn_ssh`/stages/
+//! remote_reader 一并裁剪——按理想终态重设计时另立)。
 
 use std::sync::Arc;
 
@@ -52,8 +52,8 @@ pub struct TerminalSession {
     pub term: Arc<FairMutex<Term<EventProxy>>>,
     pub notifier: Notifier,
     pub(super) native_prompt: super::event_mailbox::NativePromptState,
-    /// PTY 直系 shell PID;关闭确认的 `busy_child(shell_pid)` 判据归 02 篇。
-    #[allow(dead_code)] // M3 仅观测;关闭确认消费点归 05 篇。
+    /// PTY 直系 shell PID;关闭确认的 `busy_child(shell_pid)` 判据归 PTY 域。
+    #[allow(dead_code)] // M3 仅观测;关闭确认消费点归工作区。
     pub shell_pid: u32,
     /// EventLoop 句柄(M2 裁决:`spawn` 返回 must_use 句柄,Drop 兜底发
     /// Shutdown + join)。会话必须持证:句柄随会话 Drop,后台线程才跟 pane
@@ -101,7 +101,7 @@ pub(crate) fn test_session() -> (
 /// `explicit_command`:`-e` 显式命令通道——裸名经 core
 /// `resolve_explicit_command` PATH 路径化(含 PATHEXT 补全),并在
 /// `Options` 置位跳过三家白名单(SEC-01 豁免论证见该字段);settings 键
-/// 来源(06 篇)必须传 `false`。解析失败直接 Err(「PATH 中找不到
+/// 来源(设置键)必须传 `false`。解析失败直接 Err(「PATH 中找不到
 /// 命令」),由调用方并入 spawn 错误通道呈现。
 pub(super) fn local_options(
     shell: Option<tty::Shell>,
@@ -127,11 +127,11 @@ pub(super) fn local_options(
     if let Err(error) = tty::refresh_environment(&mut options) {
         log::warn!("环境快照合并失败,回退进程环境继承: {error}");
     }
-    // conpty_sideload 硬编码 true(06 篇换设置键真读时此处是唯一换点;
+    // conpty_sideload 硬编码 true(换设置键真读时此处是唯一换点;
     // core `Options::default()` 同值,显式写出是登记锚)。
     options.conpty_sideload = true;
     // 固定身份/能力注入:core `setup_env` 只写 TERM/COLORTERM;身份组、
-    // CLI 发现与端点注入统一走 03 篇 `agent_env::apply` 末位(04 篇
+    // CLI 发现与端点注入统一走 `agent_env::apply` 末位(runtime_api
     // CHILD_ENDPOINT 在 apply 末尾注入,早于首个 PTY spawn 即已登记)。
     options.env.insert("TERM".into(), "xterm-256color".into());
     options.env.insert("COLORTERM".into(), "truecolor".into());

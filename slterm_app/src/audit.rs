@@ -1,4 +1,4 @@
-//! 安全审计通道(10 篇 M10.12;SEC-12/13/17)。
+//! 安全审计通道(SEC-12/13/17)。
 //!
 //! 通道唯一形态 = tracing target [`TARGET`](`"audit"`)。生产不装 tracing
 //! subscriber——tracing 的 `log-always` feature 无条件把事件桥接进既有进程

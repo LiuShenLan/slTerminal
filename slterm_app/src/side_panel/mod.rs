@@ -1,4 +1,4 @@
-//! 侧栏文件树模型族(07 篇 M8.4):目录树快照 / git 状态 / 文件名搜索。
+//! 侧栏文件树模型族:目录树快照 / git 状态 / 文件名搜索。
 //!
 //! 模型与渲染完全分层(照抄点 21):
 //! - 本模块只持有数据与状态转换,渲染侧只按行号读 [`SidePanel::file_rows`];
@@ -7,7 +7,7 @@
 //! - WSL guest 臂、SVN/tortoise 臂、git 写操作全部裁掉(SSH/WSL/SVN 不迁,
 //!   边界条 9;写操作归 M8.5)。
 //!
-//! 快照流(07 篇「文件树快照流」):聚焦 pane cwd 变化 / 显式刷新
+//! 快照流(「文件树快照流」):聚焦 pane cwd 变化 / 显式刷新
 //! → `needs_refresh` 重臂 → 后台快照 worker(generation 守卫防串台)
 //! → 枚举 + gitignore 过滤索引 + git 状态快照 → `sync` 收割落地。
 //! 目录内容**不做定时重扫**(照上游 2026-08-21 裁定):触发点只有明确
@@ -628,12 +628,12 @@ impl SidePanel {
 /// `Path`:要写的是 shell 里的拼写,转一圈宿主路径语义可能改写它。
 ///
 /// 默认引用形态 = PowerShell(产品默认 shell);多路径/跨 shell 形态走
-/// [`drop_text_for_paths`](07 篇交界 43)。
+/// [`drop_text_for_paths`](交界 43)。
 pub(crate) fn drop_text_for_path(path: &str) -> Option<Vec<u8>> {
     drop_text_for_paths(&[path.to_owned()], PathQuote::PowerShell).map(String::into_bytes)
 }
 
-/// 目标 shell 的引用规则(多 shell 形态归 02 篇交界 43 消费;
+/// 目标 shell 的引用规则(多 shell 形态归 PTY 域交界 43 消费;
 /// 本步默认 PowerShell,其余变体由用例锁定)。
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug)]

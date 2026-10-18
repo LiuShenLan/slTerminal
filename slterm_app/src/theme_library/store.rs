@@ -22,7 +22,7 @@ pub const MAX_CUSTOM_THEMES: usize = 128;
 /// 自定义主题文件后缀。
 pub const THEME_FILE_SUFFIX: &str = ".slterm-theme.json";
 
-/// 保存前置条件:只允许在观测到的事实上写入。四态由 06 篇锚定;
+/// 保存前置条件:只允许在观测到的事实上写入。四态由设置域锚定;
 /// 生产编辑器当前用 `Absent`/`Unchanged` 两态,`Exact`/`Any` 由测试与
 /// 后续导入器消费。
 #[allow(dead_code)]

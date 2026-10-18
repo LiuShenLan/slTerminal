@@ -1,6 +1,6 @@
 //! 广播输入的视图侧边界:把用户输入以**语义**上报给宿主。
 //!
-//! 合同全貌(13 篇):
+//! 合同全貌:
 //! - **发送方向**(`write_user_*`):先按本 pane 的模式编码并写 PTY,再 emit
 //!   一条语义事件。emit 是无条件的,广播开关的判定在宿主(M5),视图这边
 //!   不留第二份记账。
@@ -29,7 +29,7 @@ pub enum TerminalInput {
 impl TerminalView {
     /// 编码器路径的用户按键:本 pane 照原样写入,同时把 keystroke 上报。
     /// 与上游的形态差:`cursor_animation.note_encoded_key` 不迁——光标动画
-    /// 不在 M3 字段集(13 篇),随其归篇回填时恢复调用点。
+    /// 不在 M3 字段集,随其归属回填时恢复调用点。
     pub(super) fn write_user_key(
         &mut self,
         keystroke: gpui::Keystroke,

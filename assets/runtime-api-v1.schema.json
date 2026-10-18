@@ -1131,7 +1131,7 @@
         "omp",
         "kimi"
       ],
-      "description": "Agent kinds with an officially verified interactive cold-start command."
+      "description": "Agent kinds with an officially verified interactive cold-start command. This enum is exactly the cold-start-capable set; other registered kinds remain valid protocol input and are rejected by the runtime with agent_launch_unsupported."
     },
     "agent_target_params": {
       "type": "object",

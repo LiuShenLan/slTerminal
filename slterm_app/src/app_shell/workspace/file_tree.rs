@@ -1,4 +1,4 @@
-//! 侧栏文件树渲染与交互(07 篇 M8.4;照抄点 21/22/23/27)。
+//! 侧栏文件树渲染与交互(照上游同构)。
 //!
 //! 模型/渲染分层:本文件只按行号读 [`side_panel::SidePanel::file_rows`],
 //! 不持有任何树结构。行几何以上游旧壳 `panel_layout` 为基准(34px 行距、
@@ -55,7 +55,7 @@ pub(super) const ROW_WASH_INSET: f32 = 2.0;
 pub(super) const DRAWER_TEXT_INSET: f32 = 4.0;
 
 /// 右键菜单状态:挂 workspace 根渲染,不受抽屉裁剪与推出动画影响
-/// (07 篇照抄点 23)。
+/// (照上游同构)。
 pub(super) struct FileTreeContextMenu {
     pub(super) path: PathBuf,
     /// 目标条目是目录:新建动作落在目录内;文件目标落其父目录。
@@ -392,7 +392,7 @@ impl SltermWorkspace {
                         .text_size(px(12.0)),
                 ),
             )
-            // 搜索选项三钮(07 篇 M8.4 缝合点):匹配大小写/全字/正则。
+            // 搜索选项三钮:匹配大小写/全字/正则。
             .child(
                 Button::new("file-tree-search-case")
                     .debug_selector(|| "file-tree-search-case".to_owned())

@@ -1,4 +1,4 @@
-//! settings.json 读写适配层(06 篇 M6.1):写通道 = 白名单校验 → 段级浅合并
+//! settings.json 读写适配层:写通道 = 白名单校验 → 段级浅合并
 //! → 原子写 → .bak;读侧 = 缺失/损坏/正常三态。
 //!
 //! 分层:值模型与键注册表归 `slterm-settings`(零生产依赖);保存锁、.bak、
@@ -8,7 +8,8 @@
 //!
 //! 损坏三态(与 session 同纪律:读侧回退、写侧拒绝):
 //! - 缺失 → 默认值,不标记;
-//! - 损坏 → 原文件 quarantine 为 `settings.corrupted.json`,再尝试 .bak 重建;
+//! - 损坏 → 原文件 quarantine 为 `settings.corrupted-<stamp>.json`
+//!   (多代隔离,不覆盖上一份诊断件),再尝试 .bak 重建;
 //! - 正常 → 读取返回。
 //!
 //! 损坏文件绝不原地修复式覆盖:先隔离保留诊断材料,重建只发生在损坏件
@@ -239,11 +240,38 @@ fn recover_corrupted(path: &Path) -> LoadResult {
     }
 }
 
-/// 隔离损坏文件:`settings.json` → `settings.corrupted.json`(copy + remove,
-/// 与 session 的 `session.crashed.json` 同形态)。返回隔离文件路径。
+/// 隔离损坏文件:`settings.json` → `settings.corrupted-<stamp>.json`
+/// (copy + remove,与 session 的 `session.crashed.json` 同形态)。
+/// 多代隔离:纳秒时间戳区分每次损坏;同 stamp 冲突时追加序号。
+/// 返回隔离文件路径;copy 失败不删除原文件。
 fn quarantine(path: &Path) -> Option<PathBuf> {
+    quarantine_at(path, now_stamp())
+}
+
+/// 纳秒时间戳(相对 UNIX_EPOCH);系统时钟早于纪元时回退 0。
+fn now_stamp() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0)
+}
+
+/// 显式 stamp 入口:测试可注入确定性时间戳。
+fn quarantine_at(path: &Path, stamp: u128) -> Option<PathBuf> {
     let stem = path.file_stem()?.to_str()?;
-    let target = path.with_file_name(format!("{stem}.corrupted.json"));
+    let mut sequence = 0u32;
+    let target = loop {
+        let candidate = if sequence == 0 {
+            path.with_file_name(format!("{stem}.corrupted-{stamp}.json"))
+        } else {
+            path.with_file_name(format!("{stem}.corrupted-{stamp}-{sequence}.json"))
+        };
+        // 同 stamp 已有隔离件时追加序号,绝不覆盖上一代诊断材料。
+        if !candidate.exists() {
+            break candidate;
+        }
+        sequence = sequence.checked_add(1)?;
+    };
     std::fs::copy(path, &target).ok()?;
     std::fs::remove_file(path).ok()?;
     Some(target)
@@ -285,6 +313,23 @@ mod settings_store_tests {
 
     fn read_tree(path: &Path) -> Value {
         json::parse(&std::fs::read(path).unwrap()).unwrap()
+    }
+
+    /// 当前目录下的多代隔离件(按文件名排序)。
+    fn quarantine_files(directory: &Path) -> Vec<PathBuf> {
+        let mut files: Vec<PathBuf> = std::fs::read_dir(directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| {
+                        name.starts_with("settings.corrupted-") && name.ends_with(".json")
+                    })
+            })
+            .collect();
+        files.sort();
+        files
     }
 
     // ---- 写通道:校验/浅合并/原子写/.bak ----
@@ -444,7 +489,7 @@ mod settings_store_tests {
         assert_eq!(
             tree.get(keys::KEYBIND_SEGMENT),
             Some(&second),
-            "07 篇 keybind 段整表替换,不与旧数组浅合并"
+            "keybind 段整表替换,不与旧数组浅合并"
         );
         assert_eq!(tree.get(keys::CONPTY_INPUT_MODES_SEGMENT), Some(&modes));
     }
@@ -603,7 +648,7 @@ mod settings_store_tests {
 
     #[test]
     fn corrupt_file_is_quarantined_and_rebuilt_from_backup() {
-        let (_directory, path) = fixture();
+        let (directory, path) = fixture();
         let corrupt = "{ not json";
         write_json(&path, corrupt);
         write_json(
@@ -617,8 +662,9 @@ mod settings_store_tests {
             ThemeName::Nord
         );
         // 损坏原件完整保留在隔离文件里。
-        let quarantined = path.with_file_name("settings.corrupted.json");
-        assert_eq!(std::fs::read_to_string(&quarantined).unwrap(), corrupt);
+        let quarantined = quarantine_files(directory.path());
+        assert_eq!(quarantined.len(), 1);
+        assert_eq!(std::fs::read_to_string(&quarantined[0]).unwrap(), corrupt);
         // 主文件已从 .bak 重建(非原地覆盖损坏件)。
         let rebuilt = read_tree(&path);
         assert_eq!(
@@ -634,29 +680,30 @@ mod settings_store_tests {
 
     #[test]
     fn corrupt_file_without_backup_reports_defaults_and_keeps_quarantine() {
-        let (_directory, path) = fixture();
+        let (directory, path) = fixture();
         let corrupt = "definitely not json {{{";
         write_json(&path, corrupt);
         let loaded = load_settings_at(&path).unwrap();
         assert!(loaded.corrupted);
         assert_eq!(loaded.data.keys().count(), 0, "无 .bak 时回默认");
-        assert_eq!(
-            std::fs::read_to_string(path.with_file_name("settings.corrupted.json")).unwrap(),
-            corrupt
-        );
+        let quarantined = quarantine_files(directory.path());
+        assert_eq!(quarantined.len(), 1);
+        assert_eq!(std::fs::read_to_string(&quarantined[0]).unwrap(), corrupt);
         assert!(!path.exists(), "损坏件已隔离,主路径待下次写入重建");
     }
 
     #[test]
     fn double_corruption_reports_corruption_and_keeps_both_originals() {
-        let (_directory, path) = fixture();
+        let (directory, path) = fixture();
         write_json(&path, "not json {{{");
         write_json(&backup_path(&path), "also corrupt ###");
         let loaded = load_settings_at(&path).unwrap();
         assert!(loaded.corrupted);
         assert_eq!(loaded.data.keys().count(), 0);
+        let quarantined = quarantine_files(directory.path());
+        assert_eq!(quarantined.len(), 1);
         assert_eq!(
-            std::fs::read_to_string(path.with_file_name("settings.corrupted.json")).unwrap(),
+            std::fs::read_to_string(&quarantined[0]).unwrap(),
             "not json {{{"
         );
         assert_eq!(
@@ -666,14 +713,69 @@ mod settings_store_tests {
         );
     }
 
+    /// 多代隔离:每次损坏都保留一份诊断件,后一次不得覆盖前一次。
     #[test]
-    fn parseable_non_object_root_is_treated_as_corrupted() {
-        let (_directory, path) = fixture();
-        write_json(&path, "[1, 2, 3]");
-        let loaded = load_settings_at(&path).unwrap();
-        assert!(loaded.corrupted);
-        assert_eq!(loaded.data.keys().count(), 0);
-        assert!(path.with_file_name("settings.corrupted.json").exists());
+    fn consecutive_corruptions_keep_every_quarantined_generation() {
+        let (directory, path) = fixture();
+        for corrupt in ["first corruption", "second corruption"] {
+            write_json(&path, corrupt);
+            let loaded = load_settings_at(&path).unwrap();
+            assert!(loaded.corrupted);
+        }
+        let quarantined = quarantine_files(directory.path());
+        assert_eq!(quarantined.len(), 2, "两次损坏必须产生两个隔离件");
+        let contents: Vec<String> = quarantined
+            .iter()
+            .map(|file| std::fs::read_to_string(file).unwrap())
+            .collect();
+        assert_eq!(contents, ["first corruption", "second corruption"]);
+        assert!(!path.exists(), "第二次损坏件同样已隔离");
+    }
+
+    /// 同 stamp 冲突时追加序号,不覆盖同代诊断件。
+    #[test]
+    fn quarantine_at_uses_a_sequence_suffix_for_the_same_stamp() {
+        let (directory, path) = fixture();
+        write_json(&path, "generation one");
+        let first = quarantine_at(&path, 42).unwrap();
+        write_json(&path, "generation two");
+        let second = quarantine_at(&path, 42).unwrap();
+        assert_ne!(first, second);
+        assert_eq!(std::fs::read_to_string(&first).unwrap(), "generation one");
+        assert_eq!(std::fs::read_to_string(&second).unwrap(), "generation two");
+        assert!(
+            first
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .ends_with("corrupted-42.json")
+        );
+        assert!(
+            second
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .ends_with("corrupted-42-1.json")
+        );
+        assert_eq!(quarantine_files(directory.path()).len(), 2);
+    }
+
+    #[test]
+    fn parseable_non_object_root_is_treated_as_corrupted_across_generations() {
+        let (directory, path) = fixture();
+        for corrupt in ["[1, 2, 3]", "[4, 5, 6]"] {
+            write_json(&path, corrupt);
+            let loaded = load_settings_at(&path).unwrap();
+            assert!(loaded.corrupted);
+            assert_eq!(loaded.data.keys().count(), 0);
+        }
+        let quarantined = quarantine_files(directory.path());
+        assert_eq!(quarantined.len(), 2, "根非对象也必须多代隔离");
+        let contents: Vec<String> = quarantined
+            .iter()
+            .map(|file| std::fs::read_to_string(file).unwrap())
+            .collect();
+        assert_eq!(contents, ["[1, 2, 3]", "[4, 5, 6]"]);
     }
 
     #[test]
@@ -728,6 +830,6 @@ mod settings_store_tests {
             RuntimeSettings::from_raw(&reloaded.data).theme,
             ThemeName::Linear
         );
-        assert!(!legacy_dir.path().join("settings.corrupted.json").exists());
+        assert!(quarantine_files(legacy_dir.path()).is_empty());
     }
 }

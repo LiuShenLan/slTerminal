@@ -6,7 +6,7 @@
 
 ## Context
 
-02 篇 M2.4 出口 = ConPTY 集成用例真机 `--test-threads=1` 全绿 + 真机门禁清单（Win10 捆绑、flags 三态、claude 全屏滚轮、DA1 身份验证）执行记录。集成层落 `slterm_terminal/tests/pty_integration_tests.rs`（独立 target，与 lib_tests 并存），本 note 记录真机侧无法进代码的判定与实测事实。
+M2.4 出口 = ConPTY 集成用例真机 `--test-threads=1` 全绿 + 真机门禁清单（Win10 捆绑、flags 三态、claude 全屏滚轮、DA1 身份验证）执行记录。集成层落 `slterm_terminal/tests/pty_integration_tests.rs`（独立 target，与 lib_tests 并存），本 note 记录真机侧无法进代码的判定与实测事实。
 
 ## Evidence
 
@@ -31,11 +31,11 @@
 
 门禁清单逐项结论：
 
-- **flags 三态**：本机两臂实测——in-box 系统臂（build 26300 ≥ 21376）默认矩阵 0x7（0x1|0x2|0x4，CreatePseudoConsole 无 E_INVALIDARG 重试，0x4 生效）；bundled OpenConsole 臂 0x7（侧载恒启用 0x4）。老 Win10 系统臂 0x3 本机不可实测——L1 矩阵守卫（`flags_win10_19041_system_returns_0x3` 等）钉死，移交 Win10 真机复测（12 篇发布核验链）。
+- **flags 三态**：本机两臂实测——in-box 系统臂（build 26300 ≥ 21376）默认矩阵 0x7（0x1|0x2|0x4，CreatePseudoConsole 无 E_INVALIDARG 重试，0x4 生效）；bundled OpenConsole 臂 0x7（侧载恒启用 0x4）。老 Win10 系统臂 0x3 本机不可实测——L1 矩阵守卫（`flags_win10_19041_system_returns_0x3` 等）钉死，移交 Win10 真机复测（发布核验链）。
 - **Win10 捆绑**：本机 Win11 不激活提取臂（`should_bundle(26300)=false`）。回退臂存在性真机实证：exe 旁无文件对时 `conpty_status` = attempted+bundled:false+reason（用例 1 断言钉死）；提取链幂等（`ensure_extracted`/`write_if_size_differs`）由 L1 tempdir 用例覆盖。Win10 真机激活（提取→侧载→Defender 首扫税）移交 Win10 实机复测。
 - **DA1 身份**：集成用例实证 bundled 臂应答 = `\x1b[?64;22c`（D02-1 统一身份钉死，priming/Term 自答/代答三处同值）。in-box 臂 conhost 自答为宿主行为，不经 core。
 - **claude 全屏滚轮**：未执行。M2 全程纯库态，无可驱动 exe；滚轮链路（壳输入翻译 → SGR mouse report → 0x8 passthrough 门禁）须 M3 壳层就位后真机人工复测。本机 claude.exe 已在（`C:\Users\liush\.local\bin\claude.exe`），M3 复测环境就绪。0x8 默认关的守卫在 L1（`conpty_flags_default_matrix_matches_legacy_tristate`），启用 0x8 的人工实测门禁不变。
-- **win32_input_matrix 基线语义**：脚本本体归 11 篇/M3。基线语义登记——三编码路径：kitty 协议 / Win32 input mode（0x4，键事件 INPUT_RECORD）/ legacy VT；chord（组合键）人工步骤保留。门禁点：0x4 门控链（bundled 恒开、系统臂 build ≥ 21376、`E_INVALIDARG` 重试臂降级自门控）；本机两臂 0x4 均生效（集成用例真跑实证）。
+- **win32_input_matrix 基线语义**：脚本本体归 M3 输入矩阵夹具。基线语义登记——三编码路径：kitty 协议 / Win32 input mode（0x4，键事件 INPUT_RECORD）/ legacy VT；chord（组合键）人工步骤保留。门禁点：0x4 门控链（bundled 恒开、系统臂 build ≥ 21376、`E_INVALIDARG` 重试臂降级自门控）；本机两臂 0x4 均生效（集成用例真跑实证）。
 
 ## Rejected alternatives
 

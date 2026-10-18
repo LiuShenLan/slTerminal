@@ -40,6 +40,7 @@ pub(crate) fn write(path: &Path, contents: &[u8]) -> io::Result<()> {
         file.write_all(contents)?;
         file.sync_all()?;
         drop(file);
+        copy_target_acl(path, &temporary);
         replace(&temporary, path)
     })();
 
@@ -167,6 +168,72 @@ impl Drop for LifetimeFileLock {
     }
 }
 
+/// 尽力保留目标文件已有的 owner/group/DACL。
+///
+/// 临时文件只继承父目录的默认 ACL;若目标原本带显式 ACE,直接 rename 会让
+/// 这些 ACE 丢失。复制失败只记 warn、**不阻断写**:写成功优先,ACL 保留是
+/// 尽力而为。目标不存在时跳过(新文件继承父目录默认 ACL)。
+fn copy_target_acl(target: &Path, temporary: &Path) {
+    use std::os::windows::ffi::OsStrExt;
+    use std::ptr;
+
+    use windows_sys::Win32::Foundation::{ERROR_SUCCESS, LocalFree};
+    use windows_sys::Win32::Security::Authorization::{
+        GetNamedSecurityInfoW, SE_FILE_OBJECT, SetNamedSecurityInfoW,
+    };
+    use windows_sys::Win32::Security::{
+        DACL_SECURITY_INFORMATION, GROUP_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION,
+        PSECURITY_DESCRIPTOR,
+    };
+
+    if !target.exists() {
+        return;
+    }
+
+    let wide =
+        |path: &Path| -> Vec<u16> { path.as_os_str().encode_wide().chain(Some(0)).collect() };
+    let source: Vec<u16> = wide(target);
+    let destination: Vec<u16> = wide(temporary);
+    let information =
+        OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION;
+    let mut owner = ptr::null_mut();
+    let mut group = ptr::null_mut();
+    let mut dacl = ptr::null_mut();
+    let mut descriptor: PSECURITY_DESCRIPTOR = ptr::null_mut();
+    // 安全描述符缓冲区由系统分配,成功后必须 LocalFree。
+    let read = unsafe {
+        GetNamedSecurityInfoW(
+            source.as_ptr(),
+            SE_FILE_OBJECT,
+            information,
+            &mut owner,
+            &mut group,
+            &mut dacl,
+            ptr::null_mut(),
+            &mut descriptor,
+        )
+    };
+    if read != ERROR_SUCCESS {
+        log::warn!("读取目标 ACL 失败(error {read});继续写入,新文件沿用父目录默认 ACL");
+        return;
+    }
+    let written = unsafe {
+        SetNamedSecurityInfoW(
+            destination.as_ptr(),
+            SE_FILE_OBJECT,
+            information,
+            owner,
+            group,
+            dacl,
+            ptr::null(),
+        )
+    };
+    unsafe { LocalFree(descriptor) };
+    if written != ERROR_SUCCESS {
+        log::warn!("复制目标 ACL 失败(error {written});继续写入,ACL 保留降级为尽力而为");
+    }
+}
+
 /// MoveFileExW + REPLACE_EXISTING:读者永远看不到撕裂文件,崩溃留下原件。
 pub(crate) fn replace(source: &Path, destination: &Path) -> io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
@@ -196,7 +263,59 @@ pub(crate) fn replace(source: &Path, destination: &Path) -> io::Result<()> {
 
 #[cfg(test)]
 mod atomic_file_tests {
+    use std::path::Path;
+
     use super::{try_lifetime_lock, try_lock, write};
+
+    /// 读取 DACL 的 SDDL 字符串(仅测试断言用)。
+    fn dacl_sddl(path: &Path) -> Option<String> {
+        use std::os::windows::ffi::OsStrExt;
+        use std::ptr;
+
+        use windows_sys::Win32::Foundation::{ERROR_SUCCESS, LocalFree};
+        use windows_sys::Win32::Security::Authorization::{
+            ConvertSecurityDescriptorToStringSecurityDescriptorW, GetNamedSecurityInfoW,
+            SDDL_REVISION_1, SE_FILE_OBJECT,
+        };
+        use windows_sys::Win32::Security::{DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR};
+
+        let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+        let mut descriptor: PSECURITY_DESCRIPTOR = ptr::null_mut();
+        let read = unsafe {
+            GetNamedSecurityInfoW(
+                wide.as_ptr(),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION,
+                ptr::null_mut(),
+                ptr::null_mut(),
+                ptr::null_mut(),
+                ptr::null_mut(),
+                &mut descriptor,
+            )
+        };
+        if read != ERROR_SUCCESS {
+            return None;
+        }
+        let mut text: *mut u16 = ptr::null_mut();
+        let mut length = 0u32;
+        let converted = unsafe {
+            ConvertSecurityDescriptorToStringSecurityDescriptorW(
+                descriptor,
+                SDDL_REVISION_1,
+                DACL_SECURITY_INFORMATION,
+                &mut text,
+                &mut length,
+            )
+        };
+        unsafe { LocalFree(descriptor) };
+        if converted == 0 {
+            return None;
+        }
+        let value =
+            unsafe { String::from_utf16_lossy(std::slice::from_raw_parts(text, length as usize)) };
+        unsafe { LocalFree(text as _) };
+        Some(value)
+    }
 
     #[test]
     fn atomic_write_replaces_and_locks_are_exclusive() {
@@ -220,5 +339,60 @@ mod atomic_file_tests {
         drop(owner);
         assert!(!lock_file.exists(), "正常释放后锁文件必须删除(B78/C29)");
         assert!(try_lifetime_lock(&path).unwrap().is_some());
+    }
+
+    /// 写失败路径不得残留临时文件。
+    #[test]
+    fn failed_replace_removes_the_temporary_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.json");
+        // 目标为目录:MoveFileExW 无法用它替换文件,写入必然失败。
+        std::fs::create_dir(&path).unwrap();
+        assert!(write(&path, b"content").is_err());
+        let leftovers: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name.contains(".slterm-tmp-"))
+            .collect();
+        assert!(leftovers.is_empty(), "失败后残留临时文件: {leftovers:?}");
+        assert!(path.is_dir(), "失败不得破坏目标");
+    }
+
+    /// 原子替换必须保留目标文件原有的显式 DACL(B13)。
+    ///
+    /// 无显式 ACE 时 ACL 完全由父目录继承,复制与否不可区分;先用系统自带
+    /// `icacls` 加一条显式 ACE 再比对。icacls 不可用或加 ACE 失败时跳过。
+    #[test]
+    fn replacement_preserves_an_explicit_target_acl() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.json");
+        write(&path, b"before").unwrap();
+        let granted = std::process::Command::new("icacls")
+            .arg(&path)
+            .args(["/grant", "*S-1-1-0:(R)"])
+            .output();
+        match granted {
+            Ok(output) if output.status.success() => {}
+            Ok(output) => {
+                eprintln!(
+                    "skip: icacls 未能添加显式 ACE: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                return;
+            }
+            Err(error) => {
+                eprintln!("skip: icacls 不可用: {error}");
+                return;
+            }
+        }
+        let before = dacl_sddl(&path).expect("读取目标 DACL");
+        assert!(
+            before.contains("(A;"),
+            "icacls 应写入显式 ACE,实际 SDDL: {before}"
+        );
+        write(&path, b"after").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"after");
+        let after = dacl_sddl(&path).expect("读取替换后 DACL");
+        assert_eq!(after, before, "原子替换必须保留目标的显式 DACL");
     }
 }

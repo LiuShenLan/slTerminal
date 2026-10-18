@@ -1,9 +1,9 @@
-//! 分隔条拖拽 overlay(05 篇 M5.3 数据流「分隔条拖拽状态机」)。
+//! 分隔条拖拽 overlay(分隔条拖拽状态机)。
 //!
 //! 因果链:指针移动只更新 [`SplitDrag`] 的预览值与全窗 overlay;pane flex
 //! 树继续用提交比例,终端网格与 PTY 都不追预览。松手才 `commit_ratio`
 //! 写回树节点并走结构性 resize 同步下发——高频事件不重排网格,避免
-//! Term 与 ConPTY 在拖拽期间反复 rewrap(02 篇 TTY 尺寸链交界)。
+//! Term 与 ConPTY 在拖拽期间反复 rewrap(TTY 尺寸链交界)。
 //!
 //! 关闭区:原始比例越界(低于 `CLOSE_MARGIN` 或高于 `1 - CLOSE_MARGIN`)
 //! 时预览线钉在边缘、显示关闭高亮;松手仅当被挤压侧是单叶才走

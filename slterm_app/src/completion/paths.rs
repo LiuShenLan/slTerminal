@@ -1,6 +1,6 @@
 //! 路径来源:语义候选与裸行共用同一次文件遍历。
 //!
-//! shell 转义只由 `slterm_completions::command_context` 负责(08 篇边界 3);
+//! shell 转义只由 `slterm_completions::command_context` 负责(边界 3);
 //! 本模块只决定「查哪个目录、是否只要目录、候选如何拼写」。
 
 use slterm_completions::command_context::{CommandContext, ShellSyntax};

@@ -1,4 +1,4 @@
-//! CLI 客户端(04 篇 M7.4):同 exe 双人格的请求-响应侧。
+//! CLI 客户端:同 exe 双人格的请求-响应侧。
 //!
 //! CLI 与任何外部客户端走**同一条**序列化协议:同一 `ApiRequest`/`ApiResponse`
 //! 信封、同一端点发现、同一身份逐字段校验。CLI 不进程内调用处理器,
@@ -59,7 +59,7 @@ pub(super) fn request_once(
 }
 
 /// 插件入口:请求/响应双侧上限,整次交换共用一个 deadline。
-#[allow(dead_code)] // 消费点 = 未来插件宿主(04 篇扩展位),与 CLI 共用同一协议。
+#[allow(dead_code)] // 消费点 = 未来插件宿主(扩展位),与 CLI 共用同一协议。
 pub(crate) fn request_once_bounded(
     method: &str,
     params: Value,
@@ -304,7 +304,7 @@ pub(crate) fn run_cli(command: Subcommands) -> i32 {
         Subcommands::Tab(options) => super::shortcuts::tab(options),
         Subcommands::Pane(options) => super::shortcuts::pane(options),
         Subcommands::Agent(options) => super::shortcuts::agent(options),
-        // 同步诊断通道(09 篇采纳点 18):注册 + 时长 + 投递逐段打印,
+        // 同步诊断通道:注册 + 时长 + 投递逐段打印,
         // 不启动 GUI、不依赖运行中的实例。
         Subcommands::NotifyTest => return crate::platform::notifications::notify_test(),
         // 卸载器入口(B69):不启动 GUI、不依赖运行中实例。

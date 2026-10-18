@@ -1,4 +1,4 @@
-//! 运行期 Agent 的事务型 Git worktree 创建(07 篇边界,04 篇消费)。
+//! 运行期 Agent 的事务型 Git worktree 创建(文件域边界,agent.fork 消费)。
 //!
 //! `agent.fork` 先在 transport 线程解析源目录并建出 branch + worktree,再把
 //! 新路径交给 UI owner 启动 Tab/PTY。事务语义只有一条:**只回滚本事务证明
@@ -14,9 +14,92 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::runtime_api::ApiError;
+
+/// worktree 事务的失败分类。对外错误码只允许落在 Runtime API 已登记集合
+/// (`invalid_state` / `action_failed` 与既有 git 错误码);历史内部码经
+/// [`Self::legacy_code`] 写入 `details.internal_code`,诊断分类不丢。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FailureKind {
+    // 已登记语义:对外码与内部码一致。
+    InvalidBase,
+    InvalidBranch,
+    GitUnavailable,
+    DirtySource,
+    BranchConflict,
+    WorktreePathConflict,
+    // 历史内部码:收敛到 invalid_state / action_failed。
+    NotAGitWorktree,
+    GitQueryFailed,
+    UnsupportedRepository,
+    BranchCreateFailed,
+    WorktreeCreateFailed,
+    WorktreeRollbackFailed,
+    BranchRollbackFailed,
+    ParentCreateFailed,
+    PathInspectionFailed,
+}
+
+impl FailureKind {
+    /// 内部码 → 对外码。纯映射,表驱动测试锁死并与文档登记集合比对。
+    fn public_code(self) -> &'static str {
+        match self {
+            Self::InvalidBase => "invalid_base",
+            Self::InvalidBranch => "invalid_branch",
+            Self::GitUnavailable => "git_unavailable",
+            Self::DirtySource => "dirty_source",
+            Self::BranchConflict => "branch_conflict",
+            Self::WorktreePathConflict => "worktree_path_conflict",
+            Self::NotAGitWorktree | Self::UnsupportedRepository => "invalid_state",
+            Self::GitQueryFailed
+            | Self::BranchCreateFailed
+            | Self::WorktreeCreateFailed
+            | Self::WorktreeRollbackFailed
+            | Self::BranchRollbackFailed
+            | Self::ParentCreateFailed
+            | Self::PathInspectionFailed => "action_failed",
+        }
+    }
+
+    /// 历史内部码;已登记语义返回 None,details 不重复记录。
+    fn legacy_code(self) -> Option<&'static str> {
+        Some(match self {
+            Self::NotAGitWorktree => "not_a_git_worktree",
+            Self::GitQueryFailed => "git_query_failed",
+            Self::UnsupportedRepository => "unsupported_repository",
+            Self::BranchCreateFailed => "branch_create_failed",
+            Self::WorktreeCreateFailed => "worktree_create_failed",
+            Self::WorktreeRollbackFailed => "worktree_rollback_failed",
+            Self::BranchRollbackFailed => "branch_rollback_failed",
+            Self::ParentCreateFailed => "worktree_parent_create_failed",
+            Self::PathInspectionFailed => "worktree_path_inspection_failed",
+            Self::InvalidBase
+            | Self::InvalidBranch
+            | Self::GitUnavailable
+            | Self::DirtySource
+            | Self::BranchConflict
+            | Self::WorktreePathConflict => return None,
+        })
+    }
+}
+
+/// 本模块构造 `ApiError` 的统一出口:对外码收敛,历史内部码进 details。
+fn worktree_error(kind: FailureKind, message: impl Into<String>, context: Value) -> ApiError {
+    let mut details = match context {
+        Value::Object(map) => map,
+        other => {
+            let mut map = serde_json::Map::new();
+            map.insert("context".to_owned(), other);
+            map
+        }
+    };
+    if let Some(legacy) = kind.legacy_code() {
+        details.insert("internal_code".to_owned(), json!(legacy));
+    }
+    ApiError::new(kind.public_code(), message).details(Value::Object(details))
+}
 
 /// worktree 归属记录:写进 managed agent 与快照,外部客户端据此知道
 /// Agent 的 checkout 从哪来、归谁所有。
@@ -67,37 +150,37 @@ impl WorktreeTransaction {
         let source_root = git_text(
             &request.source_cwd,
             ["rev-parse", "--show-toplevel"],
-            "not_a_git_worktree",
+            FailureKind::NotAGitWorktree,
             "source_cwd is not inside a Git worktree",
         )?;
         let source_root = PathBuf::from(source_root);
         let common_dir = PathBuf::from(git_text(
             &source_root,
             ["rev-parse", "--path-format=absolute", "--git-common-dir"],
-            "git_query_failed",
+            FailureKind::GitQueryFailed,
             "failed to resolve the repository common directory",
         )?);
         let repo_root = common_dir.parent().map(Path::to_path_buf).ok_or_else(|| {
-            ApiError::new(
-                "unsupported_repository",
+            worktree_error(
+                FailureKind::UnsupportedRepository,
                 "the Git common directory does not have a parent worktree",
+                json!({ "git_common_dir": common_dir }),
             )
-            .details(json!({ "git_common_dir": common_dir }))
         })?;
 
         if !request.allow_dirty_source {
             let status = git_text(
                 &source_root,
                 ["status", "--porcelain=v1", "--untracked-files=normal"],
-                "git_query_failed",
+                FailureKind::GitQueryFailed,
                 "failed to inspect source worktree changes",
             )?;
             if !status.is_empty() {
-                return Err(ApiError::new(
-                    "dirty_source",
+                return Err(worktree_error(
+                    FailureKind::DirtySource,
                     "source worktree has uncommitted changes; commit them or explicitly allow a dirty source",
-                )
-                .details(json!({ "source_root": source_root, "status": status })));
+                    json!({ "source_root": source_root, "status": status }),
+                ));
             }
         }
 
@@ -116,7 +199,7 @@ impl WorktreeTransaction {
                 OsString::from("--end-of-options"),
                 OsString::from(verify),
             ],
-            "invalid_base",
+            FailureKind::InvalidBase,
             "base does not resolve to a Git commit",
         )?;
 
@@ -134,15 +217,17 @@ impl WorktreeTransaction {
             }
             None => {
                 let repo_name = repo_root.file_name().ok_or_else(|| {
-                    ApiError::new(
-                        "unsupported_repository",
+                    worktree_error(
+                        FailureKind::UnsupportedRepository,
                         "the main repository worktree does not have a directory name",
+                        json!({}),
                     )
                 })?;
                 let parent = repo_root.parent().ok_or_else(|| {
-                    ApiError::new(
-                        "unsupported_repository",
+                    worktree_error(
+                        FailureKind::UnsupportedRepository,
                         "the main repository worktree does not have a parent directory",
+                        json!({}),
                     )
                 })?;
                 let mut container = repo_name.to_os_string();
@@ -152,28 +237,28 @@ impl WorktreeTransaction {
         };
         match std::fs::symlink_metadata(&path) {
             Ok(_) => {
-                return Err(ApiError::new(
-                    "worktree_path_conflict",
+                return Err(worktree_error(
+                    FailureKind::WorktreePathConflict,
                     "the target worktree path already exists",
-                )
-                .details(json!({ "path": path })));
+                    json!({ "path": path }),
+                ));
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => {
-                return Err(ApiError::new(
-                    "worktree_path_inspection_failed",
+                return Err(worktree_error(
+                    FailureKind::PathInspectionFailed,
                     "failed to inspect the target worktree path",
-                )
-                .details(json!({ "path": path, "reason": error.to_string() })));
+                    json!({ "path": path, "reason": error.to_string() }),
+                ));
             }
         }
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|error| {
-                ApiError::new(
-                    "worktree_parent_create_failed",
+                worktree_error(
+                    FailureKind::ParentCreateFailed,
                     "failed to create the worktree parent directory",
+                    json!({ "path": parent, "reason": error.to_string() }),
                 )
-                .details(json!({ "path": parent, "reason": error.to_string() }))
             })?;
         }
 
@@ -226,7 +311,7 @@ impl WorktreeTransaction {
             )?;
             if !output.status.success() {
                 return Err(git_failure(
-                    "worktree_rollback_failed",
+                    FailureKind::WorktreeRollbackFailed,
                     "failed to remove the worktree created by this request",
                     &output,
                     json!({ "path": self.provenance.path }),
@@ -249,7 +334,7 @@ impl WorktreeTransaction {
         )?;
         if !output.status.success() {
             return Err(git_failure(
-                "branch_create_failed",
+                FailureKind::BranchCreateFailed,
                 "failed to create the worktree branch",
                 &output,
                 json!({
@@ -274,7 +359,7 @@ impl WorktreeTransaction {
         )?;
         if !output.status.success() {
             return Err(git_failure(
-                "worktree_create_failed",
+                FailureKind::WorktreeCreateFailed,
                 "failed to create the Git worktree",
                 &output,
                 json!({
@@ -302,7 +387,7 @@ impl WorktreeTransaction {
         )?;
         if !output.status.success() {
             return Err(git_failure(
-                "branch_rollback_failed",
+                FailureKind::BranchRollbackFailed,
                 "failed to remove the branch created by this request",
                 &output,
                 json!({ "branch": self.provenance.branch }),
@@ -325,14 +410,17 @@ fn ensure_git_available() -> Result<(), ApiError> {
         .arg("--version")
         .output()
         .map_err(|error| {
-            ApiError::new("git_unavailable", "Git executable is unavailable")
-                .details(json!({ "reason": error.to_string() }))
+            worktree_error(
+                FailureKind::GitUnavailable,
+                "Git executable is unavailable",
+                json!({ "reason": error.to_string() }),
+            )
         })?;
     if output.status.success() {
         Ok(())
     } else {
         Err(git_failure(
-            "git_unavailable",
+            FailureKind::GitUnavailable,
             "Git executable could not report its version",
             &output,
             json!({}),
@@ -350,14 +438,17 @@ fn validate_branch(branch: &str) -> Result<(), ApiError> {
         .args(["check-ref-format", "--branch", branch])
         .output()
         .map_err(|error| {
-            ApiError::new("git_unavailable", "Git executable is unavailable")
-                .details(json!({ "reason": error.to_string() }))
+            worktree_error(
+                FailureKind::GitUnavailable,
+                "Git executable is unavailable",
+                json!({ "reason": error.to_string() }),
+            )
         })?;
     if output.status.success() {
         Ok(())
     } else {
         Err(git_failure(
-            "invalid_branch",
+            FailureKind::InvalidBranch,
             "branch is not a valid Git branch name",
             &output,
             json!({ "branch": branch }),
@@ -378,13 +469,13 @@ fn ensure_branch_absent(cwd: &Path, branch: &str) -> Result<(), ApiError> {
     )?;
     match output.status.code() {
         Some(1) => Ok(()),
-        Some(0) => Err(ApiError::new(
-            "branch_conflict",
+        Some(0) => Err(worktree_error(
+            FailureKind::BranchConflict,
             "the target worktree branch already exists",
-        )
-        .details(json!({ "branch": branch }))),
+            json!({ "branch": branch }),
+        )),
         _ => Err(git_failure(
-            "git_query_failed",
+            FailureKind::GitQueryFailed,
             "failed to determine whether the target branch exists",
             &output,
             json!({ "branch": branch }),
@@ -395,21 +486,21 @@ fn ensure_branch_absent(cwd: &Path, branch: &str) -> Result<(), ApiError> {
 fn git_text<const N: usize>(
     cwd: &Path,
     args: [&str; N],
-    code: &str,
+    kind: FailureKind,
     message: &str,
 ) -> Result<String, ApiError> {
-    git_text_os(cwd, args.map(OsString::from), code, message)
+    git_text_os(cwd, args.map(OsString::from), kind, message)
 }
 
 fn git_text_os<const N: usize>(
     cwd: &Path,
     args: [OsString; N],
-    code: &str,
+    kind: FailureKind,
     message: &str,
 ) -> Result<String, ApiError> {
     let output = run_git_os(cwd, args)?;
     if !output.status.success() {
-        return Err(git_failure(code, message, &output, json!({ "cwd": cwd })));
+        return Err(git_failure(kind, message, &output, json!({ "cwd": cwd })));
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
@@ -425,18 +516,30 @@ where
         .args(args)
         .output()
         .map_err(|error| {
-            ApiError::new("git_unavailable", "failed to execute Git")
-                .details(json!({ "cwd": cwd, "reason": error.to_string() }))
+            worktree_error(
+                FailureKind::GitUnavailable,
+                "failed to execute Git",
+                json!({ "cwd": cwd, "reason": error.to_string() }),
+            )
         })
 }
 
-fn git_failure(code: &str, message: &str, output: &Output, context: serde_json::Value) -> ApiError {
-    ApiError::new(code, message).details(json!({
-        "status": output.status.code(),
-        "stdout": String::from_utf8_lossy(&output.stdout).trim(),
-        "stderr": String::from_utf8_lossy(&output.stderr).trim(),
-        "context": context
-    }))
+fn git_failure(
+    kind: FailureKind,
+    message: &str,
+    output: &Output,
+    context: serde_json::Value,
+) -> ApiError {
+    worktree_error(
+        kind,
+        message,
+        json!({
+            "status": output.status.code(),
+            "stdout": String::from_utf8_lossy(&output.stdout).trim(),
+            "stderr": String::from_utf8_lossy(&output.stderr).trim(),
+            "context": context
+        }),
+    )
 }
 
 fn attach_rollback(mut error: ApiError, rollback: Result<(), ApiError>) -> ApiError {
@@ -628,6 +731,268 @@ mod git_worktree_tests {
             "unexpected code {}",
             error.code
         );
+    }
+
+    /// `assets/runtime-control-api.md` 错误码段登记的全部 snake_case 码。
+    /// 反引号里的方法名(`pane.prompt` 等)含 `.`,不在错误码集合内。
+    fn documented_error_codes() -> Vec<String> {
+        let document = include_str!("../../assets/runtime-control-api.md");
+        let section = document
+            .split_once("## 错误码")
+            .and_then(|(_, rest)| rest.split_once("\n## "))
+            .map(|(section, _)| section)
+            .expect("runtime-control-api.md must contain an error code section");
+        section
+            .split('`')
+            .skip(1)
+            .step_by(2)
+            .map(str::trim)
+            .filter(|token| {
+                !token.is_empty()
+                    && token
+                        .chars()
+                        .all(|ch| ch.is_ascii_lowercase() || ch == '_' || ch.is_ascii_digit())
+            })
+            .map(str::to_owned)
+            .collect()
+    }
+
+    /// 原内部码 → 对外码的纯映射:任一映射漂移或落回未登记码,即红。
+    #[test]
+    fn legacy_worktree_codes_converge_to_documented_api_codes() {
+        let documented = documented_error_codes();
+        let cases = [
+            (
+                FailureKind::NotAGitWorktree,
+                "invalid_state",
+                Some("not_a_git_worktree"),
+            ),
+            (
+                FailureKind::GitQueryFailed,
+                "action_failed",
+                Some("git_query_failed"),
+            ),
+            (
+                FailureKind::UnsupportedRepository,
+                "invalid_state",
+                Some("unsupported_repository"),
+            ),
+            (
+                FailureKind::BranchCreateFailed,
+                "action_failed",
+                Some("branch_create_failed"),
+            ),
+            (
+                FailureKind::WorktreeCreateFailed,
+                "action_failed",
+                Some("worktree_create_failed"),
+            ),
+            (
+                FailureKind::WorktreeRollbackFailed,
+                "action_failed",
+                Some("worktree_rollback_failed"),
+            ),
+            (
+                FailureKind::BranchRollbackFailed,
+                "action_failed",
+                Some("branch_rollback_failed"),
+            ),
+            (
+                FailureKind::ParentCreateFailed,
+                "action_failed",
+                Some("worktree_parent_create_failed"),
+            ),
+            (
+                FailureKind::PathInspectionFailed,
+                "action_failed",
+                Some("worktree_path_inspection_failed"),
+            ),
+            (FailureKind::InvalidBase, "invalid_base", None),
+            (FailureKind::InvalidBranch, "invalid_branch", None),
+            (FailureKind::GitUnavailable, "git_unavailable", None),
+            (FailureKind::DirtySource, "dirty_source", None),
+            (FailureKind::BranchConflict, "branch_conflict", None),
+            (
+                FailureKind::WorktreePathConflict,
+                "worktree_path_conflict",
+                None,
+            ),
+        ];
+        for (kind, public, legacy) in cases {
+            assert_eq!(kind.public_code(), public, "{kind:?}");
+            assert_eq!(kind.legacy_code(), legacy, "{kind:?}");
+            assert!(
+                documented.iter().any(|code| code == public),
+                "错误码 {public} 未在 runtime-control-api.md 错误码段登记"
+            );
+        }
+    }
+
+    /// 真实可触发分支的错误码必须全部落在文档登记集合内;收敛码的
+    /// message 与 details 保留原诊断。
+    #[test]
+    fn worktree_failure_codes_stay_within_documented_set() {
+        let documented = documented_error_codes();
+        let mut errors = Vec::new();
+
+        // 非 git 目录 → invalid_state。
+        let plain = tempfile::tempdir().expect("create plain directory");
+        errors.push(
+            WorktreeTransaction::prepare(WorktreeRequest {
+                source_cwd: plain.path().to_path_buf(),
+                agent_name: "reviewer".into(),
+                branch: Some("slterm/not-a-repo".into()),
+                base: None,
+                path: Some(plain.path().join("worktrees").join("not-a-repo")),
+                allow_dirty_source: false,
+            })
+            .expect_err("plain directory must be rejected"),
+        );
+
+        // 脏源 → dirty_source。
+        let dirty = test_repository();
+        std::fs::write(dirty.path().join("untracked.txt"), "dirty").expect("write untracked file");
+        errors.push(
+            WorktreeTransaction::prepare(WorktreeRequest {
+                source_cwd: dirty.path().to_path_buf(),
+                agent_name: "reviewer".into(),
+                branch: Some("slterm/dirty-reviewer".into()),
+                base: None,
+                path: Some(dirty.path().join("worktrees").join("dirty")),
+                allow_dirty_source: false,
+            })
+            .expect_err("dirty source must be rejected"),
+        );
+
+        // 分支冲突与目标路径冲突。
+        let repository = test_repository();
+        assert!(
+            git_output(repository.path(), ["branch", "slterm/taken"])
+                .status
+                .success()
+        );
+        errors.push(
+            WorktreeTransaction::prepare(WorktreeRequest {
+                source_cwd: repository.path().to_path_buf(),
+                agent_name: "taken".into(),
+                branch: Some("slterm/taken".into()),
+                base: None,
+                path: Some(repository.path().join("worktrees").join("taken")),
+                allow_dirty_source: false,
+            })
+            .expect_err("existing branch must be rejected"),
+        );
+        let occupied = repository.path().join("occupied");
+        std::fs::create_dir_all(&occupied).expect("create occupied dir");
+        errors.push(
+            WorktreeTransaction::prepare(WorktreeRequest {
+                source_cwd: repository.path().to_path_buf(),
+                agent_name: "occupied".into(),
+                branch: Some("slterm/occupied".into()),
+                base: None,
+                path: Some(occupied),
+                allow_dirty_source: false,
+            })
+            .expect_err("occupied path must be rejected"),
+        );
+
+        // 目标路径探测/父目录创建失败 → action_failed(具体内部码依
+        // 平台错误分类而定,只锁定对外码与诊断留存)。目标放在独立目录,
+        // 避免污染源仓库的 dirty 判定。
+        let target_root = tempfile::tempdir().expect("create target directory");
+        let blocker = target_root.path().join("blocker");
+        std::fs::write(&blocker, "file").expect("write blocker file");
+        errors.push(
+            WorktreeTransaction::prepare(WorktreeRequest {
+                source_cwd: repository.path().to_path_buf(),
+                agent_name: "blocked".into(),
+                branch: Some("slterm/blocked".into()),
+                base: None,
+                path: Some(blocker.join("worktree")),
+                allow_dirty_source: false,
+            })
+            .expect_err("path through a file must be rejected"),
+        );
+
+        // git 不可用 → git_unavailable。
+        {
+            let _path = EmptyPathGuard::new();
+            errors.push(
+                WorktreeTransaction::prepare(WorktreeRequest {
+                    source_cwd: repository.path().to_path_buf(),
+                    agent_name: "no-git".into(),
+                    branch: Some("slterm/no-git".into()),
+                    base: None,
+                    path: Some(repository.path().join("worktrees").join("no-git")),
+                    allow_dirty_source: false,
+                })
+                .expect_err("missing Git must be rejected"),
+            );
+        }
+
+        let codes: Vec<&str> = errors.iter().map(|error| error.code.as_str()).collect();
+        assert_eq!(
+            codes,
+            [
+                "invalid_state",
+                "dirty_source",
+                "branch_conflict",
+                "worktree_path_conflict",
+                "action_failed",
+                "git_unavailable",
+            ]
+        );
+        for error in &errors {
+            assert!(
+                documented.iter().any(|code| code == &error.code),
+                "未登记错误码 {} (message={})",
+                error.code,
+                error.message
+            );
+        }
+        // 收敛码:原内部码与原因留在 details,message 原样。
+        assert_eq!(
+            errors[0]
+                .details
+                .as_ref()
+                .and_then(|details| details["internal_code"].as_str()),
+            Some("not_a_git_worktree")
+        );
+        assert_eq!(errors[0].message, "source_cwd is not inside a Git worktree");
+        let action_failed = errors[4].details.as_ref().expect("action_failed details");
+        assert!(
+            action_failed["internal_code"].is_string(),
+            "action_failed 必须保留内部诊断码: {action_failed}"
+        );
+        assert!(
+            action_failed["reason"].is_string(),
+            "action_failed 必须保留失败原因: {action_failed}"
+        );
+    }
+
+    /// 进程级 PATH 置空以注入「git 不可用」;全量测试串行纪律保证用例间
+    /// 互斥,Drop 恢复原值,panic 也不泄漏。
+    struct EmptyPathGuard(Option<std::ffi::OsString>);
+
+    impl EmptyPathGuard {
+        fn new() -> Self {
+            let previous = std::env::var_os("PATH");
+            // SAFETY: 测试按 --test-threads=1 串行执行,进程级环境变量无并发读写。
+            unsafe { std::env::set_var("PATH", "") };
+            Self(previous)
+        }
+    }
+
+    impl Drop for EmptyPathGuard {
+        fn drop(&mut self) {
+            // SAFETY: 同上,恢复进入用例前的进程级状态。
+            unsafe {
+                match self.0.take() {
+                    Some(previous) => std::env::set_var("PATH", previous),
+                    None => std::env::remove_var("PATH"),
+                }
+            }
+        }
     }
 
     fn test_repository() -> tempfile::TempDir {

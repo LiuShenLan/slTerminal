@@ -1,4 +1,4 @@
-//! 后台任务注册表(09 篇 M10.8):元数据静态切片 + 运行时原子量 + 订阅生命周期。
+//! 后台任务注册表:元数据静态切片 + 运行时原子量 + 订阅生命周期。
 //!
 //! 收编旧双端调度器(前端 interval + 后端 poller)的契约面:任务元数据单点、
 //! 无订阅不轮询、单轮重入闸门、失败只记日志不落失败态。执行载体换成 GPUI
@@ -6,7 +6,7 @@
 //! 一次性/事件驱动任务由调用方在后台执行器上触发;零新增常驻 OS 定时器。
 //!
 //! 注册任务:
-//! - `planBalance`:套餐余量查询(执行体归 10 篇 plan_balance;订阅方 = 壳
+//! - `planBalance`:套餐余量查询(执行体归 plan_balance;订阅方 = 壳
 //!   启动链,M10.12 接线);
 //! - `agentScreenWatchdog`:1 Hz 屏幕看门狗与托盘快照同拍(订阅方 = workspace);
 //! - `autoUpdateCheck`:启动一次性更新检查,`interval_sec` 即启动延迟秒数
@@ -21,7 +21,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
-/// 套餐余量查询(09 篇注册表条目归 09 锚点,执行体归 10 篇 plan_balance)。
+/// 套餐余量查询(注册表条目归后台任务注册表,执行体归 plan_balance)。
 pub(crate) const PLAN_BALANCE: &str = "planBalance";
 /// 屏幕看门狗 + 托盘快照(同拍融合,见 `workspace::pumps`)。
 pub(crate) const AGENT_SCREEN_WATCHDOG: &str = "agentScreenWatchdog";
@@ -51,7 +51,7 @@ pub(crate) type TaskExecutor = fn();
 /// 任务元数据(静态切片条目)。
 ///
 /// 字段为设置页/注册表校验的单点元数据;本步无用户可配任务,消费点归
-/// 06 设置页与 10 篇 planBalance,故允许暂未读取。
+/// 设置页与 planBalance,故允许暂未读取。
 #[allow(dead_code)]
 pub(crate) struct TaskDef {
     pub task_id: &'static str,
@@ -284,7 +284,7 @@ pub(crate) fn run_once(task_id: &str, work: impl FnOnce() -> Result<(), String>)
 /// 运行期改配:先校验边界,再直写原子量。不重建驱动循环;禁用只让下一轮
 /// 变成 `Inactive`,重新启用后同一循环继续工作。
 ///
-/// 消费点归 06 设置页 / 10 篇 planBalance;本步只锁定原子量语义与边界。
+/// 消费点归设置页 / planBalance;本步只锁定原子量语义与边界。
 #[allow(dead_code)]
 pub(crate) fn apply_config(
     task_id: &str,
@@ -380,10 +380,7 @@ mod background_task_tests {
         assert_eq!(plan.interval_default, 10);
         assert_eq!(plan.interval_max, 3600);
         assert!(plan.enabled_default);
-        assert!(
-            plan.executor.is_some(),
-            "planBalance 执行体归 10 篇 plan_balance"
-        );
+        assert!(plan.executor.is_some(), "planBalance 执行体归 plan_balance");
 
         let watchdog = &TASKS[1];
         assert_eq!(watchdog.schedule, TaskSchedule::Interval);

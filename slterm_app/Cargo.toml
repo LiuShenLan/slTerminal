@@ -22,7 +22,7 @@ path = "src/main.rs"
 name = "lib_tests"
 path = "src/lib.rs"
 
-# console 子系统对照目标(11 篇;13 篇开放问题 2 已裁「保留重设」):
+# console 子系统对照目标(开放问题 2 已裁「保留重设」):
 # 与本体同 console 子系统形态,Ctrl+C 继承语义的独立回归锚。
 # 运行纪律(spawn 子进程发真 Ctrl+C,串行):
 # `cargo test -p slterm --test windows_console_startup -- --test-threads=1`。
@@ -30,7 +30,7 @@ path = "src/lib.rs"
 name = "windows_console_startup"
 path = "tests/windows_console_startup.rs"
 
-# Runtime API 行为级端到端(00-roadmap M7 出口;04 篇 M7.5):
+# Runtime API 行为级端到端:
 # 真实桌面 + 预构建 exe 才执行,`SLTERM_E2E_EXE` 未设置时打印 SKIP 计通过
 # (条件跳过登记于 .claude/test-exemptions.md)。
 [[test]]
@@ -38,11 +38,11 @@ name = "runtime_conformance"
 path = "tests/runtime_conformance.rs"
 
 [features]
-# 一条 feature 同时打开 gpui 与 gpui-component 的测试支持(11 篇锚定);
+# 一条 feature 同时打开 gpui 与 gpui-component 的测试支持;
 # UI 测试全部 `#[cfg(all(test, feature = "gpui-test-support"))]` 双门控,
 # feature 未开时虚拟窗口用例整体不编译,生产构建不带测试夹具。
 gpui-test-support = ["gpui/test-support", "gpui-component/test-support"]
-# 本地假 release 服务器演练通道(09 篇 M10.5 采纳点 34):只用于 debug
+# 本地假 release 服务器演练通道:只用于 debug
 # 验收/发布彩排;`update_check::test_source` 在 release 构建下编译期拒绝。
 update-test-source = []
 # 旧式回落协议面(D12-5):首行非 JSON 的 ATTACH/PING。首发默认关闭,
@@ -60,12 +60,10 @@ slterm_terminal = { path = "../slterm_terminal" }
 slterm-settings = { path = "../slterm_settings" }
 # PaneId/TabId + SplitTree 分屏树(纯数据 core,M3 workspace 雏形挂接)。
 slterm-split = { path = "../slterm_split" }
-# 补全匹配/语义引擎(core crate,08 篇 M9.1):独立轻量库,应用层只消费候选。
+# 补全匹配/语义引擎(core crate):独立轻量库,应用层只消费候选。
 slterm_completions = { path = "../slterm_completions" }
 # workspace 选择器 glob 语义(只读 package.json/yaml 声明,不执行项目代码)。
 glob = "0.3.4"
-# pnpm-workspace.yaml 的 packages 列表解析(声明式只读,不导入项目代码)。
-serde_yaml = "0.9"
 # vte 类型面(Color/CursorShape/NamedColor/Rgb + 测试注入 Processor):
 # core 刻意不再导出(「解析器不经本 crate 再导出」),壳侧同名钉版,
 # 版本/feature 必须与 slterm_terminal/Cargo.toml 逐字一致,跨 crate 类型才同一。
@@ -74,7 +72,7 @@ vte = { version = "0.15.0", default-features = false, features = ["std", "ansi"]
 # (宏内部专用),业务侧必须直连 anyhow 本体。
 anyhow = "1"
 log = "0.4"
-# 安全审计通道(10 篇 M10.12):SEC-12/13/17 唯一形态 = tracing target
+# 安全审计通道:SEC-12/13/17 唯一形态 = tracing target
 # "audit";`log-always` 让事件无条件桥接进既有 log 栈(单日志栈,不重复
 # 初始化)——审计取证不因任何 tracing subscriber 装配而丢事件。
 # B67:若未来装配全局 subscriber,必须同时移除 `log-always` 或让 subscriber
@@ -82,22 +80,23 @@ log = "0.4"
 tracing = { version = "0.1", features = ["log-always"] }
 # ai_hook 信封/载荷解析(helper 不重编码,JSON 工作全在宿主侧)。
 serde_json = "1"
-# CLI 双人格 clap 面(04 篇 M7.4):同 exe 子命令与 GUI 参数共用一份定义,
-# --help/版本/参数拒绝由 clap 统一产出(版本照 D04 基线 4.2.7)。
-clap = { version = "4.2.7", features = ["derive"] }
+# CLI 双人格 clap 面:同 exe 子命令与 GUI 参数共用一份定义,
+# --help/版本/参数拒绝由 clap 统一产出。B28:精确 pin 到当前构建/测试基线
+# (Cargo.lock 实解析 4.6.7),避免 caret 漂移改变 --help/解析语义。
+clap = { version = "=4.6.7", features = ["derive"] }
 # 屏幕规则 TOML 反序列化(规则资源随仓,声明式规则改不动代码)。
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 # 屏幕规则正则:逐规则编译一次进缓存,detect 热路径只跑匹配。
-# 文档图片 URL 重写(07 篇 M8.3 预览)同样复用该正则栈。
+# 文档图片 URL 重写(预览)同样复用该正则栈。
 regex = "1"
-# Markdown mdast 解析(07 篇 M8.2 编辑器内核:Outline/Projection/块结构单源)。
+# Markdown mdast 解析(编辑器内核:Outline/Projection/块结构单源)。
 # 版本与上游固定基线逐字一致,AST 语义(含 math_flow)才可照抄。
 markdown = "=1.0.0"
 # Markdown 实体解码(Projection 可见文本 ↔ 源码 span 双向映射;数学引擎的
 # 传输层实体解码共用同一实现)。
 html-escape = "0.2.14"
-# 自含 markdown 文档模型(08 篇 M9.5):CommonMark + GFM 事件流,
+# 自含 markdown 文档模型:CommonMark + GFM 事件流,
 # `ENABLE_MATH` 给出 math_flow/math_text,数学片段进管线 B。
 # 版本与上游固定基线一致(0.13),关闭默认 feature 避免无关扩展。
 pulldown-cmark = { version = "0.13", default-features = false }
@@ -105,7 +104,7 @@ pulldown-cmark = { version = "0.13", default-features = false }
 # 不与 tokio 耦合,依赖树小。
 # socks-proxy:更新器把注册表 `socks=` 解析成 socks5:// 后需要真实握手。
 ureq = { version = "3", features = ["json", "socks-proxy"] }
-# 数学引擎(08 篇 M9.4):TeX 事件流解析。版本与上游重构基线逐字一致
+# 数学引擎:TeX 事件流解析。版本与上游重构基线逐字一致
 # (pulldown-latex =0.7.1),事件语义/兼容重写才可照抄。
 pulldown-latex = "=0.7.1"
 # OpenType MATH 表访问(轴高/分式/根号/伸缩字形)。固定 0.25.1,
@@ -119,9 +118,9 @@ unicode-width = "0.2.0"
 ahash = { version = "0.8.6", features = ["no-rng"] }
 # keymap/sequence.rs 的修饰键位族(与 core 同版本族)。
 bitflags = "2.4.1"
-# 凭据出域句柄即用即焚(10 篇锚点;M9.2 先落消费接口 trait)。
+# 凭据出域句柄即用即焚(M9.2 先落消费接口 trait)。
 zeroize = "1"
-# 加密备份(10 篇 M10.10):AES-256-GCM 密封 + Argon2id 口令派生。版本与
+# 加密备份:AES-256-GCM 密封 + Argon2id 口令派生。版本与
 # 上游固定基线逐字一致(派生参数组作契约数值随迁)。
 aes-gcm = "0.11"
 argon2 = "0.6.0-rc.8"
@@ -141,29 +140,29 @@ sha2 = "0.11"
 base64 = "0.22"
 tempfile = "3"
 notify = "7"
-# 主题包 ZIP(06 篇 M6.3):Manifest + 整包有界检查 + 导出。
+# 主题包 ZIP:Manifest + 整包有界检查 + 导出。
 # 版本与 feature 对齐上游主题栈;deflate 走 zlib-rs,不引入 C 依赖。
 zip = { version = "=4.6.1", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 # 主题包资源签名校验:只开主题包允许的静态图片格式。
 image = { version = "0.25", default-features = false, features = ["bmp", "gif", "jpeg", "png", "webp"] }
-# Windows 系统代理读取(09 篇 M10.5):HKCU Internet Settings 的
+# Windows 系统代理读取:HKCU Internet Settings 的
 # ProxyEnable/ProxyServer/ProxyOverride;不走 ureq 的 win-system-proxy。
 winreg = "0.56"
 
 [dev-dependencies]
-# 审计事件格式断言(10 篇 M10.12/C31):测试内作用域订阅器只开 fmt 层,
+# 审计事件格式断言(C31):测试内作用域订阅器只开 fmt 层,
 # 不引入全局 subscriber(生产仍走 tracing→log 单栈桥接)。
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }
 
 [build-dependencies]
-# i18n 静态生成器(06 篇):目录遍历由语言注册表驱动,故构建期依赖设置 crate。
+# i18n 静态生成器:目录遍历由语言注册表驱动,故构建期依赖设置 crate。
 slterm-settings = { path = "../slterm_settings" }
 # 翻译目录 JSON 解析(嵌套键展平 + 类型拒绝)。
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 [target.'cfg(windows)'.dependencies]
-# WinRT toast(09 篇 M10.1):XmlDocument/ToastNotification/ToastNotificationManager
+# WinRT toast:XmlDocument/ToastNotification/ToastNotificationManager
 # 与 MTA COM 初始化。版本与上游固定基线逐字一致(=0.61.3),features 只开投递
 # 所需面;Win32 注册表/闪烁仍走 windows-sys(见下)。
 windows = { version = "=0.61.3", features = [
@@ -172,18 +171,18 @@ windows = { version = "=0.61.3", features = [
     "UI_Notifications",
     "Win32_Foundation",
     "Win32_System_Com",
-    # 开机启动 .lnk(09 篇 M10.6):IShellLinkW/IPersistFile 的 COM 写读;
+    # 开机启动 .lnk:IShellLinkW/IPersistFile 的 COM 写读;
     # GetPath 的 WIN32_FIND_DATAW 参数需要 Storage 面。
     "Win32_Storage_FileSystem",
     "Win32_UI_Shell",
-    # 凭据管理器原语(10 篇 M10.9):CredReadW/CredWriteW/CredDeleteW/
+    # 凭据管理器原语:CredReadW/CredWriteW/CredDeleteW/
     # CredFree 与 CREDENTIALW。
     "Win32_Security_Credentials",
 ] }
 windows-sys = { version = "0.59", features = [
-    # AUMID 注册(RegSetKeyValueW,09 篇 M10.1)。
+    # AUMID 注册(RegSetKeyValueW)。
     "Win32_System_Registry",
-    # 任务栏进度(ITaskbarList3 的 CoInitializeEx/CoCreateInstance,09 篇 M10.2)。
+    # 任务栏进度(ITaskbarList3 的 CoInitializeEx/CoCreateInstance)。
     "Win32_System_Com",
     "Win32_Foundation",
     # MonitorFromPoint(开窗前 DPI 预取)。
@@ -194,24 +193,28 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_Console",
     # 提权态探针(OpenProcessToken 的 TOKEN_QUERY + TokenElevation)。
     "Win32_Security",
+    # atomic_file 原子替换前复制目标 owner/group/DACL
+    # (GetNamedSecurityInfoW/SetNamedSecurityInfoW;LocalFree 在 0.59 归
+    # Win32_Foundation,本清单已启用)。
+    "Win32_Security_Authorization",
     # 命名管道服务器(ai_hook::windows;PIPE_ACCESS_INBOUND 在 FileSystem,
     # ConnectNamedPipe/ReadFile 的 OVERLAPPED 引用经 Win32_System_IO)。
     "Win32_System_Pipes",
-    # pane.exec 一次性子进程整树回收(Job Object,04 篇 M7.3)。
+    # pane.exec 一次性子进程整树回收(Job Object)。
     "Win32_System_JobObjects",
     "Win32_Storage_FileSystem",
     "Win32_System_IO",
     # 全机进程快照(process_snapshot::windows::NtQuerySystemInformation)。
     "Wdk_System_SystemInformation",
-    # 窗口材质 gate(09 篇 M10.7):RtlGetVersion 判真实 build;
+    # 窗口材质 gate:RtlGetVersion 判真实 build;
     # OSVERSIONINFOW 是同一查询的输出结构。
     "Wdk_System_SystemServices",
     "Win32_System_SystemInformation",
-    # 窗口材质(09 篇 M10.7):DwmSetWindowAttribute/DwmEnableBlurBehindWindow。
+    # 窗口材质:DwmSetWindowAttribute/DwmEnableBlurBehindWindow。
     "Win32_Graphics_Dwm",
     # 快照原生回归对拍:GetProcessTimes(process_snapshot 测试)。
     "Win32_System_Threading",
-    # 托盘线程隐藏窗口的模块句柄(GetModuleHandleW,09 篇 M10.3)。
+    # 托盘线程隐藏窗口的模块句柄(GetModuleHandleW)。
     "Win32_System_LibraryLoader",
     "Win32_UI_HiDpi",
     # GetAsyncKeyState(VK_LBUTTON):resize 手势门控(view/layout.rs)。

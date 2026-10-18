@@ -34,7 +34,7 @@ pub(crate) const FLAG_WIN32_INPUT_MODE: u32 = 0x4;
 const FLAG_RESIZE_QUIRK: u32 = 0x2;
 const FLAG_PASSTHROUGH_MODE: u32 = 0x8;
 
-/// ConPTY 输入模式能力矩阵（设置键 DTO；段形态归 06 篇键域，core 锚定字段
+/// ConPTY 输入模式能力矩阵（设置键 DTO；段形态归 `slterm_settings` 键域，core 锚定字段
 /// 语义与默认三态）。壳读 settings 键经 `Options::conpty_input_modes` 注入；
 /// 默认矩阵 = 现状三态，零默认漂移。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

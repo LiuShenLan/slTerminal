@@ -1,4 +1,4 @@
-//! 进程级启动准备 + 开机启动/静默启动(09 篇 M10.6)。
+//! 进程级启动准备 + 开机启动/静默启动。
 //!
 //! 裁剪对照上游 `platform/startup.rs`:macOS locale/通知准备、
 //! unix 登录项整支消亡(多平台整包砍);保留 console 归一化、首帧
@@ -8,7 +8,7 @@
 //!   (`IShellLinkW` 幂等重写,免注册表/免管理员);设置页与安装器管理
 //!   同一快捷方式。
 //! - **静默启动** = `silent_start && tray` 两条件合取。关窗即退定位下
-//!   上游 `hide_window_on_close` 因子恒真、从公式消去(09 篇改造节 1);
+//!   上游 `hide_window_on_close` 因子恒真、从公式消去(改造节 1);
 //!   无托盘的隐藏进程没有任何回窗入口,故托盘是硬前提。
 
 mod console;
@@ -18,12 +18,12 @@ use std::path::{Path, PathBuf};
 
 use slterm_settings::RuntimeSettings;
 
-/// 便携版不在 PATH 时,非 PTY 子进程回退到本 exe 的环境变量(01 篇 C 表
-/// `SLTERM_CLI`)。常量本体先在启动链落位;agent_env 模块(03 篇)迁入时归位,
+/// 便携版不在 PATH 时,非 PTY 子进程回退到本 exe 的环境变量(C 表
+/// `SLTERM_CLI`)。常量本体先在启动链落位;agent_env 模块迁入时归位,
 /// per-pane 环境组装是 `SLTERM_PANE_ID` 那条链的邻居。
 pub(crate) const CLI_ENV: &str = "SLTERM_CLI";
 
-/// 快捷方式文件名(01 篇 P-8:系统面品牌字符串归 09;与安装器同一路径)。
+/// 快捷方式文件名(P-8:系统面品牌字符串归平台域;与安装器同一路径)。
 const SHORTCUT_FILE_NAME: &str = "slTerminal.lnk";
 
 /// 启动失败上弹面(logger 未起时的最后通知手段);调用方同时把错误返回 stderr。
@@ -31,7 +31,7 @@ pub(crate) fn report_error(error: &dyn std::fmt::Display, gui_launch: bool) {
     crate::panic::report_startup_error(error, gui_launch);
 }
 
-/// 静默启动判定(09 篇 M10.6):设置两条件合取。
+/// 静默启动判定:设置两条件合取。
 ///
 /// 消费点 = 启动真值表测试;壳侧持有的是 GUI 视图 `Settings`,经
 /// [`start_hidden_for`] 共用同一公式,不重复折算 `RuntimeSettings`。
@@ -47,7 +47,7 @@ pub(crate) fn start_hidden_for(silent_start: bool, tray: bool) -> bool {
 
 /// 在任何 worker/终端子进程存在之前,完成进程级 GUI 状态归一化。
 ///
-/// D04-1 console 子系统下的语义反转三刀(13 篇改造节 1,因果链照抄):
+/// D04-1 console 子系统下的语义反转三刀(因果链照抄):
 /// - AttachConsole 臂消亡:console 子系统进程出生即继承父控制台(双击启动由
 ///   系统分配新控制台),显式 Attach 失去对象。
 /// - FreeConsole 臂消亡:console 子系统下从 pwsh/cmd 启动,父 shell 同步等待
@@ -69,7 +69,7 @@ pub(crate) fn prepare_gui_process() -> std::io::Result<()> {
 /// 首窗尺寸不漂(开窗后改名/重排的代价是二次 SetWindowPos)。
 ///
 /// 消费点 = `app_shell::windowing::startup_geometry::preferred_size`
-/// (09 篇 M10.7 出口验收:首窗创建前主屏 DPI 一步到位;运行时多显示器
+/// (出口验收:首窗创建前主屏 DPI 一步到位;运行时多显示器
 /// DPI 变化整包交 GPUI 平台层,不 fork 窗口库)。
 pub(crate) fn primary_display_scale() -> Option<f32> {
     use windows_sys::Win32::Foundation::POINT;
@@ -91,7 +91,7 @@ pub(crate) fn primary_display_scale() -> Option<f32> {
     }
 }
 
-// ─── 开机启动 .lnk(09 篇 M10.6) ────────────────────────────────────────
+// ─── 开机启动 .lnk ────────────────────────────────────────
 
 /// 登录启动快捷方式的内容(与 COM 对象解耦,写读 round-trip 的断言面)。
 ///
@@ -116,7 +116,7 @@ pub(crate) struct Shortcut {
 /// 存在」视为成功(NotFound→Ok 的删除语义)。
 pub fn set_launch_at_login(enabled: bool) -> std::io::Result<()> {
     // 测试构建不碰真实 Startup 文件夹:写读 round-trip 经 `_at` 形态注入
-    // tempdir;真实目录由构建产物 smoke 覆盖(11 篇豁免登记)。
+    // tempdir;真实目录由构建产物 smoke 覆盖(豁免登记)。
     if cfg!(test) {
         return Ok(());
     }
@@ -160,9 +160,9 @@ pub(crate) fn set_launch_at_login_at(
     write_shortcut(path.to_path_buf(), shortcut.clone())
 }
 
-/// 读取快捷方式内容(09 篇 M10.6 round-trip 断言端;生产读侧只需
+/// 读取快捷方式内容(round-trip 断言端;生产读侧只需
 /// [`launch_at_login`] 的存在判定)。
-#[allow(dead_code)] // 消费点 = .lnk 写读 round-trip 测试与安装器核验(11 篇)。
+#[allow(dead_code)] // 消费点 = .lnk 写读 round-trip 测试与安装器核验(豁免登记)。
 pub(crate) fn read_shortcut_at(path: &Path) -> std::io::Result<Shortcut> {
     read_shortcut(path.to_path_buf())
 }
@@ -184,7 +184,7 @@ fn startup_shortcut() -> std::io::Result<PathBuf> {
     }
 }
 
-/// COM 对象全部释放后才反初始化(09 篇 M10.1 生命周期红线,反序实测
+/// COM 对象全部释放后才反初始化(生命周期红线,反序实测
 /// 0xc0000005)。专用 STA 线程隔离调用线程的公寓状态——GPUI 主线程已被
 /// `OleInitialize` 初始化,测试线程的公寓状态也不可控。
 fn with_com<T, F>(work: F) -> std::io::Result<T>

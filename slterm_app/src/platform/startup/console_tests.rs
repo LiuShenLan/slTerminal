@@ -1,8 +1,8 @@
 //! console 属性是进程全局的:每个场景跑在一次性子进程里(整文件随上游随迁,
 //! 环境变量改名 `SLTERM_*`)。
 //!
-//! 承载形态(13 篇开放问题 2,2026-10-09 裁决「保留重设」):由独立
-//! `windows_console_startup` target(11 篇)经 #[path] 挂载,单挂载——
+//! 承载形态(开放问题 2,2026-10-09 裁决「保留重设」):由独立
+//! `windows_console_startup` target 经 #[path] 挂载,单挂载——
 //! 挂载点即 `console_tests::` 前缀,下方 TEST 常量与挂载点耦合,迁挂同步改。
 //! `super::prepare_console_for_gui` 经独立 target crate root 的 re-export
 //! 解析(上游同形态薄适配)。

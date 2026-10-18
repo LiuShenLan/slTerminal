@@ -1,6 +1,6 @@
 //! Windows 命名管道传输。为已解析的事件供给内核进程身份。
 //!
-//! 平台收敛纪律(03 篇边界 8):`windows-sys` 命名管道/进程身份核验只允许
+//! 平台收敛纪律:`windows-sys` 命名管道/进程身份核验只允许
 //! 出现在本文件;协议解析、事件门、仲裁器平台无关。
 
 use std::sync::Arc;
@@ -24,21 +24,51 @@ impl PipeServer {
     ///
     /// accept 线程绝大多数时间阻塞在 `ConnectNamedPipe` 上,停止位本身唤不醒
     /// 它:先置停止位,再以客户端形态自连一次把阻塞的调用顶回来;线程建立
-    /// 连接之后先看停止位、立即退出。自连与「实例尚未创建」存在竞态,所以
-    /// 有界重试到线程真正结束——串行测试纪律要求 join 可确定性返回,不许
-    /// 泄漏后台线程(0xC0000409 类调度断言的温床)。
+    /// 连接之后先看停止位、立即退出。已连接的客户端若保持连接不写不关,
+    /// 线程则阻塞在 `ReadFile` 上,自连永远打不进去——此时用
+    /// `CancelSynchronousIo` 定点取消该线程在途的同步 I/O(`ReadFile` 返回 0,
+    /// 循环顶部的停止位随即让它退出)。自连与实例创建存在竞态、取消也只在
+    /// I/O 恰好进行中才生效,所以两者放在原有的 100×5ms 预算内一起重试。
+    ///
+    /// 串行测试纪律要求 shutdown 可确定性返回:循环后再用有界等待确认线程
+    /// 退出才 join,极端情况下也不挂死调用方(关窗路径)。
     pub fn shutdown(&mut self) {
+        use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
+        use windows_sys::Win32::System::IO::CancelSynchronousIo;
+        use windows_sys::Win32::System::Threading::WaitForSingleObject;
+
         self.stop.store(true, Ordering::SeqCst);
         let Some(join) = self.join.take() else {
             return;
+        };
+        // 裸线程句柄只用于定点取消/等待,不接管所有权:join 仍在下面持有,
+        // 句柄在 join 存活期间有效。
+        let thread = {
+            use std::os::windows::io::AsRawHandle;
+            join.as_raw_handle()
         };
         for _ in 0..100 {
             if join.is_finished() {
                 break;
             }
-            // 写打开即 helper 的客户端形态;失败说明实例正在换手,下一轮再试。
+            // SAFETY: `thread` 来自上面的 join,在 join 存活期内有效;线程没有
+            // 在途同步 I/O 时内核只返回失败,不改变线程状态。
+            unsafe {
+                CancelSynchronousIo(thread as _);
+            }
+            // 写打开即 helper 的客户端形态;失败说明实例正在换手或已被真实
+            // 客户端占用,下一轮再试。
             let _ = std::fs::OpenOptions::new().write(true).open(&self.name);
             std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        // 有界确认退出:正常路径取消/自连已让线程返回,这里只补一个调度裕度。
+        // 2s 仍不退出(内核取消失败等病态竞态)时记录 warn 并放弃 join——这是
+        // 最后兜底,绝不挂死调用方(关窗路径)。该线程只做管道 I/O 与解析、已
+        // 不再持有 UI 状态,且进程即将退出由系统回收,故该分支的 detach 可接受;
+        // 常规路径不得走到这里,不构成对线程泄漏的放行。
+        if unsafe { WaitForSingleObject(thread as _, 2000) } != WAIT_OBJECT_0 {
+            log::warn!("ai_hook: pipe server thread did not exit after cancellation; detaching");
+            return;
         }
         let _ = join.join();
     }

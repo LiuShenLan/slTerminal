@@ -1,9 +1,9 @@
 //! 执行元数据:补全请求在后台可安全复用的本机执行环境。
 //!
-//! 上游 `Execution` 有进程/远程两态;源收敛后只剩本机进程单态
-//! (08 篇改造节 2):`prepare()` 是本地直通,不再有远程传输冻结。Git 读取
-//! 统一走 07 篇 `git::command` 构造口(每命令 `--no-optional-locks`)与
-//! 08 篇 3s/1MB 可取消预算。
+//! 上游 `Execution` 有进程/远程两态;源收敛后只剩本机进程单态:
+//! `prepare()` 是本地直通,不再有远程传输冻结。Git 读取
+//! 统一走 `git::command` 构造口(每命令 `--no-optional-locks`)与
+//! 3s/1MB 可取消预算。
 
 use std::path::Path;
 use std::time::Instant;

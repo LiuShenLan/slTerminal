@@ -1,4 +1,4 @@
-//! 自含 Markdown 文档模型(08 篇 M9.5,管线 B)。
+//! 自含 Markdown 文档模型(管线 B)。
 //!
 //! 本模块只拥有解析与解析结果——不渲染、不持窗口、不接触终端。阅读器
 //! (数学适配见 [`math_run`])消费这里的值。
@@ -9,7 +9,7 @@
 //!
 //! 数学片段(`FormattedTextLine::DisplayMath` / `FragmentContent::Math`)是
 //! 引擎的唯二入口:markdown 与终端定位公式的方式不同,但都不允许独立
-//! 规范化/解析/排版(08 篇边界 6)。
+//! 规范化/解析/排版(边界 6)。
 
 use std::collections::VecDeque;
 use std::fmt;
@@ -19,9 +19,9 @@ use std::sync::Arc;
 pub(crate) mod math_run;
 pub(crate) mod parser;
 
-#[allow(unused_imports)] // 消费点 = 07 篇阅读器接线;本步由用例锁定语义。
+#[allow(unused_imports)] // 消费点 = 阅读器接线;本步由用例锁定语义。
 pub(crate) use math_run::{MathRun, fit_math_run, measure_math};
-#[allow(unused_imports)] // 消费点 = 07 篇阅读器接线;本步由用例锁定语义。
+#[allow(unused_imports)] // 消费点 = 阅读器接线;本步由用例锁定语义。
 pub(crate) use parser::parse_markdown;
 
 /// 片段携带的字重。解析器只会产出 `Bold`;完整刻度用于渲染层映射字重,

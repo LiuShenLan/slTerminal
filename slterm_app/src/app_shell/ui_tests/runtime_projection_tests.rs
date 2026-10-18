@@ -1,4 +1,4 @@
-//! 04 篇 M7.2:Workspace → RuntimeSnapshot 投影与 hub 入账(虚拟窗口)。
+//! Workspace → RuntimeSnapshot 投影与 hub 入账(虚拟窗口)。
 //!
 //! 断言面 = 单窗口收编、pane 集合 == 树叶集合、投影不盖戳、publish 首见
 //! 计数从 1 起且重复投影不烧 revision。

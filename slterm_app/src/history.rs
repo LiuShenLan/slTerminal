@@ -1,6 +1,6 @@
 //! fish 式本地命令历史:jsonl 追加 + `BTreeMap` 前缀范围索引。
 //!
-//! 单进程本机形态下历史只有本地单池(08 篇改造节 2):远程作用域随定位
+//! 单进程本机形态下历史只有本地单池:远程作用域随定位
 //! 约束整砍,`HistoryScope` 仅保留 `Local`。池容器仍保留 `HashMap` 形态,
 //! 为未来若引入新的执行环境留出分池位;当前 `normalized()` 塌缩为单值。
 //!
@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 /// 单池上限;超出后淘汰最旧条目。
 const HISTORY_MAX: usize = 5_000;
 
-/// 本地历史文件名(01 篇 C 节改名映射)。
+/// 本地历史文件名(改名映射)。
 pub(crate) const HISTORY_FILE: &str = "history.jsonl";
 
 /// 历史作用域。远程变体已随源收敛整砍,仅剩本地单态。

@@ -1,4 +1,4 @@
-//! run 记账(04 篇 / 02 篇 OSC 133 缝合):run id 单调分配与完成结果。
+//! run 记账(OSC 133 缝合):run id 单调分配与完成结果。
 //!
 //! 只认 OSC 133;D 携带的真实 exit code;CommandStart 未观测则如实标
 //! `Unavailable`,绝不伪造 0。本文件独立成模块,避免主协议文件越过行数预算。

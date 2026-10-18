@@ -1,4 +1,4 @@
-//! git gutter(07 篇 M8.5 新建):按行标记增/改/删。
+//! git gutter(行标):按行标记增/改/删。
 //!
 //! 数据源与文件树 git 快照同一子进程执行体(D07-1):`crate::git` 的
 //! `file_status` + `file_hunks`,每命令 `--no-optional-locks`。文件级状态是

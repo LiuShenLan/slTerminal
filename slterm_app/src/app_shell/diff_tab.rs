@@ -1,4 +1,4 @@
-//! 通用 diff 对照面(07 篇 M8.5 新建;D07-2 已裁双栏)。
+//! 通用 diff 对照面(双栏只读对照)。
 //!
 //! 左 HEAD / 右工作区,两栏都是**只读** `InputState`;数据经
 //! `TextSnapshot::decode_prefix(.., read_only=true, ..)` 有界载入,
@@ -6,7 +6,7 @@
 //! 辅助。hunk 导航 = 上一/下一处更改,双栏同步滚动到对应行。
 //!
 //! 落位:`WorkspaceTab::Code` 的只读臂(`CodeTabView` 的 Diff 模式),
-//! 不新增 05 篇 tab 变体(07 篇边界条 3 默认)。
+//! 不新增 tab 变体。
 
 use std::path::{Path, PathBuf};
 
@@ -25,7 +25,7 @@ use crate::git;
 use crate::i18n::Message;
 use crate::text_document::{MAX_BYTES, TextSnapshot};
 
-/// diff 数据源(签名稿 07 篇改造节 4)。
+/// diff 数据源(HEAD ↔ 工作区 / 任意文本对)。
 #[derive(Clone, Debug)]
 #[allow(dead_code)] // 消费点 = BlobPair 预留臂(纯内存对照,当前无生产入口)。
 pub enum DiffSource {

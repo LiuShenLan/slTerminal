@@ -1,7 +1,7 @@
 //! 终端调色板:`Palette` 类型 + 暗色默认 + vte `Color` → GPUI `Rgba` 解析面。
 //!
 //! 默认值与上游 deep-space 暗色主题逐字段一致(D06-3:M3 只保一份内置暗色,
-//! 仅暗色定位约束);主题矫正器(`TerminalColorResolver`)归 06 篇。
+//! 仅暗色定位约束);主题矫正器(`TerminalColorResolver`)归设置域。
 //!
 //! 解析顺序:OSC 4/10/11 的运行时覆盖(`Term::colors()`)优先,其次是
 //! `Palette` 静态值。

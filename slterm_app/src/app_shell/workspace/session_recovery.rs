@@ -1,10 +1,10 @@
-//! 单窗口会话快照与冷恢复(05 篇 M5.5;上游 `session_recovery` 裁剪)。
+//! 单窗口会话快照与冷恢复(上游 `session_recovery` 裁剪)。
 //!
 //! 快照侧只收 Terminal tab,叶数据经 `session_restore` 转换对落成持久化
 //! 树;恢复侧先按 DFS 序逐叶 spawn,再用同一配对建树——「panes 的 id 集合
 //! == 树叶集合」不变式在恢复路径同样成立。
 //!
-//! 启动序(05 篇数据流):
+//! 启动序:
 //! `load → should_restore →(否)quarantine → mark_boot_attempt → 逐 tab
 //! restore_tab → 首帧`。窗口尺寸/侧栏宽度在开窗定形前应用(D05-1 回放):
 //! 本模块只产出 [`StartupPlan`],定形消费在 `windowing`。
@@ -52,7 +52,7 @@ impl StartupPlan {
     }
 }
 
-/// 恢复结果一次性汇总文案(09 篇 M10.1 消费 05 篇 M5.5 / 清单 A10):
+/// 恢复结果一次性汇总文案:
 /// 恢复成功按标签数提示(崩溃现场多一句来源说明);断路器隔离给出现场
 /// 路径;无恢复且无隔离 = None(全新启动不打扰)。
 pub(crate) fn recovery_notice(
@@ -151,7 +151,7 @@ impl SltermWorkspace {
         let mut tabs = Vec::new();
         let mut active_out = 0usize;
         for (ix, entry) in self.tabs.iter().enumerate() {
-            // 快照只收 Terminal tab(05 篇合同):设置/文档类 tab 不进会话。
+            // 快照只收 Terminal tab:设置/文档类 tab 不进会话。
             let WorkspaceTab::Terminal {
                 panes,
                 tree,

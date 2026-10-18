@@ -1,4 +1,4 @@
-//! markdown 阅读器的数学适配(08 篇管线 B,`MathRun`/`measure_math`/
+//! markdown 阅读器的数学适配(管线 B,`MathRun`/`measure_math`/
 //! `fit_math_run`)。
 //!
 //! 引擎/缓存/字体全部来自 `crate::math`;本模块只决定一条公式在阅读列里

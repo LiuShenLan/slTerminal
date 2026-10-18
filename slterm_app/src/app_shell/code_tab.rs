@@ -1,13 +1,13 @@
-//! 代码文件 tab(07 篇):普通源码(可编辑)+ gitshow 只读臂 + 通用 diff
+//! 代码文件 tab:普通源码(可编辑)+ gitshow 只读臂 + 通用 diff
 //! 只读臂 + 冲突三栏合并臂。
 //!
 //! 普通源码与 gitshow 共用 [`TextFileView`] 快照通路;两者的区别只在数据源
 //! (磁盘前缀 / HEAD blob)与标题后缀(`<name> @ HEAD`)。M8.2 起普通源码
-//! 源码态可编辑可存;M8.5 的通用 diff 落本视图的 Diff 模式(不新增 05 篇
-//! tab 变体,07 篇边界条 3);冲突 gutter 点击落 Merge 模式(base/ours/theirs)。
+//! 源码态可编辑可存;通用 diff 落本视图的 Diff 模式(不新增
+//! tab 变体);冲突 gutter 点击落 Merge 模式(base/ours/theirs)。
 //!
 //! 扩展名 → 语言映射表是「视图值集」单点:`viewable_file` 与 openable_in_app
-//! 的源码判定同源(07 篇照抄点 17,fileViewers 注册表值集并入)。
+//! 的源码判定同源(fileViewers 注册表值集并入)。
 
 use std::path::{Path, PathBuf};
 
@@ -125,7 +125,7 @@ impl CodeTabView {
         Self::new_with_source(path, false, window, cx)
     }
 
-    /// gitshow 只读臂:HEAD 字节 + 恒定只读(07 篇改造节 5)。
+    /// gitshow 只读臂:HEAD 字节 + 恒定只读。
     pub fn new_git_show(path: PathBuf, window: &mut Window, cx: &mut Context<'_, Self>) -> Self {
         Self::new_with_source(path, true, window, cx)
     }

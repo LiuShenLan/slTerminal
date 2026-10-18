@@ -10,11 +10,11 @@
 //! - 段内键白名单 [`whitelist`] = 注册表 leaf 键集合;
 //! - 重置清单 [`reset_keys`] = `resettable = true` 的 leaf 键集合。
 //!
-//! 域外顶层段(不占注册表条目,结构与消费归归属篇锚定,[`EXTERNAL_SEGMENTS`]):
-//! - [`KEYBIND_SEGMENT`]:键位绑定数组,归 07 篇锚定结构,写通道整表替换
-//!   语义由 07 消费;段名常量由 07 域模块引用,禁二次字面量。
-//! - [`CONPTY_INPUT_MODES_SEGMENT`]:ConPTY 输入模式矩阵,归 02 篇锚定,
-//!   段名常量由 02 域模块引用。
+//! 域外顶层段(不占注册表条目,结构与消费由所属领域锚定,[`EXTERNAL_SEGMENTS`]):
+//! - [`KEYBIND_SEGMENT`]:键位绑定数组,由键位绑定领域锚定结构,写通道整表替换
+//!   语义由其消费;段名常量由该领域模块引用,禁二次字面量。
+//! - [`CONPTY_INPUT_MODES_SEGMENT`]:ConPTY 输入模式矩阵,由 ConPTY 输入领域锚定,
+//!   段名常量由该领域模块引用。
 //!
 //! 写通道顶层白名单 = [`segment_whitelist`] = 域段 + 域外段。
 
@@ -403,13 +403,13 @@ pub static KEYS: &[SettingsKeyDef] = &[
     ),
 ];
 
-/// 域外顶层段键名:keybind(07 篇锚定结构;写通道整表替换)。
+/// 域外顶层段键名:keybind(键位绑定锚定结构;写通道整表替换)。
 pub const KEYBIND_SEGMENT: &str = "keybind";
 
-/// 域外顶层段键名:conpty_input_modes(02 篇锚定矩阵)。
+/// 域外顶层段键名:conpty_input_modes(ConPTY 输入模式锚定矩阵)。
 pub const CONPTY_INPUT_MODES_SEGMENT: &str = "conpty_input_modes";
 
-/// 全部域外顶层段(不占注册表 leaf 条目,结构归归属篇)。
+/// 全部域外顶层段(不占注册表 leaf 条目,结构由所属领域锚定)。
 pub const EXTERNAL_SEGMENTS: [&str; 2] = [KEYBIND_SEGMENT, CONPTY_INPUT_MODES_SEGMENT];
 
 /// 域外段判定:写通道按段整体替换,不做段内 leaf 校验。
@@ -527,11 +527,11 @@ mod registry_tests {
         assert!(lookup("unknown_key").is_none());
         assert!(
             lookup(KEYBIND_SEGMENT).is_none(),
-            "keybind 是 07 篇域外段,不占注册表条目"
+            "keybind 是键位绑定域外段,不占注册表条目"
         );
         assert!(
             lookup(CONPTY_INPUT_MODES_SEGMENT).is_none(),
-            "conpty_input_modes 是 02 篇域外段,不占注册表条目"
+            "conpty_input_modes 是 ConPTY 输入模式域外段,不占注册表条目"
         );
     }
 
@@ -577,7 +577,7 @@ mod registry_tests {
                 def.key
             );
         }
-        // 段内白名单与域外段不相交:域外段结构归归属篇,不走 leaf 校验。
+        // 段内白名单与域外段不相交:域外段结构由所属领域锚定,不走 leaf 校验。
         for key in whitelist() {
             assert!(!is_external_segment(key), "域外段混入 leaf 白名单: {key}");
         }

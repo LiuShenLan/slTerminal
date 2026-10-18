@@ -1,4 +1,4 @@
-//! Runtime 端点发现、单实例服务端与二次启动移交(04 篇 M7)。
+//! Runtime 端点发现、单实例服务端与二次启动移交。
 //!
 //! 三级发现:`CHILD_ENDPOINT`(进程级)优先于显式
 //! `SLTERM_RUNTIME_ENDPOINT`,后者优先于 `runtime.port` 端口文件;显式 env
@@ -21,16 +21,18 @@ use std::fmt;
 use std::io::{self, BufRead, BufReader, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::transport;
 use super::{ApiRequest, ApiResponse, EventSink, PROTOCOL_VERSION, RuntimeHub};
 
-/// 端口文件名(01 篇 D 节:文件名不变,目录 = 设置数据目录)。
+/// 端口文件名(文件名不变,目录 = 设置数据目录)。
 pub(super) const PORT_FILE_NAME: &str = "runtime.port";
 
-/// 显式端点环境变量(01 篇 C 节);值形态 `"<port> <token>"`。
+/// 显式端点环境变量;值形态 `"<port> <token>"`。
 pub(crate) const ENDPOINT_ENV: &str = "SLTERM_RUNTIME_ENDPOINT";
 
 /// 本进程作为宿主时的端点;serve 线程 spawn 成功后登记。
@@ -44,6 +46,8 @@ const HANDOVER_IO_TIMEOUT: Duration = Duration::from_millis(700);
 /// 双启动抢锁重试环:D04-2 契约数值 40 × 25ms。
 const HANDOVER_ATTEMPTS: u32 = 40;
 const HANDOVER_RETRY_DELAY: Duration = Duration::from_millis(25);
+/// Drop 自连唤醒阻塞 accept 的 connect 上限;只是解阻塞手段,失败即忽略。
+const STOP_WAKE_CONNECT_TIMEOUT: Duration = Duration::from_millis(400);
 
 /// 端点发现结果:port + 128bit token。
 #[derive(Clone, PartialEq, Eq)]
@@ -63,7 +67,7 @@ impl fmt::Debug for Endpoint {
     }
 }
 
-/// 端口文件所在路径(settings data_dir 单点,01 篇 D 节)。
+/// 端口文件所在路径(settings data_dir 单点)。
 pub(super) fn port_file() -> PathBuf {
     crate::platform::dirs::data_dir().join(PORT_FILE_NAME)
 }
@@ -325,11 +329,15 @@ fn handover_loop(attempts: u32, delay: Duration, mut attempt: impl FnMut() -> bo
     false
 }
 
-/// 单实例 Runtime 控制面服务端(随壳生命周期持有,Drop 删端口文件)。
+/// 单实例 Runtime 控制面服务端(随壳生命周期持有,Drop 停 serve 线程并删端口文件)。
 pub struct RuntimeServer {
     endpoint: Endpoint,
     /// `None` = 私有实例(env-only 发现;测试/嵌套用)。
     port_file: Option<PathBuf>,
+    /// serve 线程停止位;置位后 accept 循环退出。
+    stop: Arc<AtomicBool>,
+    /// serve 线程句柄(Drop 唤醒并 join;失败路径不产出句柄)。
+    join: Option<JoinHandle<()>>,
     /// OS 句柄锁:进程死即释放,健康进程永不被超时回收。
     _owner_lock: Option<crate::atomic_file::LifetimeFileLock>,
 }
@@ -387,21 +395,25 @@ impl RuntimeServer {
         }
 
         let server_token = endpoint.token.clone();
-        let spawned = std::thread::Builder::new()
+        let stop = Arc::new(AtomicBool::new(false));
+        let serve_stop = stop.clone();
+        let join = std::thread::Builder::new()
             .name("slterm-runtime-api".to_owned())
-            .spawn(move || transport::serve(listener, server_token, sink, hub))
-            .is_ok();
-        if !spawned {
+            .spawn(move || transport::serve(listener, serve_stop, server_token, sink, hub));
+        let Ok(join) = join else {
+            // 线程未启动 = 监听 socket 随闭包释放;端口文件记账回滚。
             if let Some(path) = path.as_ref() {
                 let _ = std::fs::remove_file(path);
             }
             return None;
-        }
+        };
         register_child_endpoint(Some(endpoint.clone()));
         log::info!("Runtime API listening on 127.0.0.1:{}", endpoint.port);
         Some(Self {
             endpoint,
             port_file: path,
+            stop,
+            join: Some(join),
             _owner_lock: owner_lock,
         })
     }
@@ -409,7 +421,16 @@ impl RuntimeServer {
 
 impl Drop for RuntimeServer {
     fn drop(&mut self) {
-        // 不删别的进程更新的发现记录:只有文件仍是自己的端点才回收。
+        // 顺序:置停止位 → 自连唤醒阻塞的 accept → join serve 线程。
+        // 客户端处理线程各自有读写超时,不随 join 等待。
+        self.stop.store(true, Ordering::Release);
+        let _ =
+            TcpStream::connect_timeout(&endpoint_addr(&self.endpoint), STOP_WAKE_CONNECT_TIMEOUT);
+        if let Some(join) = self.join.take() {
+            let _ = join.join();
+        }
+
+        // 线程已停:不删别的进程更新的发现记录,只有文件仍是自己的端点才回收。
         if let Some(path) = self.port_file.as_ref()
             && read_endpoint_from(path).as_ref() == Some(&self.endpoint)
         {
@@ -672,6 +693,51 @@ mod server_tests {
         drop(server);
         assert!(!path.exists(), "Drop 删除自己仍是最新的记录");
         assert!(read_endpoint().is_none(), "Drop 清空 CHILD_ENDPOINT");
+    }
+
+    /// B14 防复发:Drop 必须停 serve 线程、释放监听 socket,不留阻塞 accept。
+    #[test]
+    fn drop_stops_the_serve_thread_and_releases_the_listening_port() {
+        let (sink, _events) = capturing_sink();
+        let server =
+            RuntimeServer::spawn_at(sink, RuntimeHub::new(), None).expect("private server");
+        let address = endpoint_addr(&server.endpoint);
+        drop(server);
+
+        // join 已在 Drop 内完成:连接最终必须被拒(监听 socket 已释放)。
+        let deadline = std::time::Instant::now() + Duration::from_secs(1);
+        loop {
+            match TcpStream::connect_timeout(&address, Duration::from_millis(50)) {
+                Err(_) => break,
+                Ok(stream) => {
+                    drop(stream);
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "Drop 后 1 秒内 serve 线程必须退出并释放监听端口"
+                    );
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+            }
+        }
+    }
+
+    /// B14 防复发:挂起不说话的客户端只占客户端线程,Drop 不得等它。
+    #[test]
+    fn drop_is_not_dragged_by_an_open_client_connection() {
+        let (sink, _events) = capturing_sink();
+        let server =
+            RuntimeServer::spawn_at(sink, RuntimeHub::new(), None).expect("private server");
+        // 连接后不发送任何字节:客户端处理线程阻塞在首行读取(有读超时)。
+        let client = TcpStream::connect(endpoint_addr(&server.endpoint)).expect("client connect");
+
+        let started = std::time::Instant::now();
+        drop(server);
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "Drop 只 join serve 线程,不等客户端线程;实际 {:?}",
+            started.elapsed()
+        );
+        drop(client);
     }
 
     #[test]

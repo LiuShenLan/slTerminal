@@ -157,7 +157,7 @@ pub fn apply_updates(tree: &Value, updates: &[(&str, Value)]) -> Value {
     };
     for (key, value) in updates {
         if keys::is_external_segment(key) {
-            // 域外段:结构与消费归归属篇,写通道只做整段替换。
+            // 域外段:结构与消费由所属领域锚定,写通道只做整段替换。
             root.set(key, value.clone());
             continue;
         }
@@ -185,7 +185,7 @@ pub type Rgb8 = [u8; 3];
 /// 带显式 alpha 的 UI 语义槽位色。
 pub type Rgba8 = [u8; 4];
 
-/// session schema 引用的可持久化颜色(05 篇消费:`TabSession.color`)。
+/// session schema 引用的可持久化颜色(`TabSession.color` 消费)。
 /// 值模型零序列化:落盘形态(三元数组)由应用侧适配层表达。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct Rgb(pub u8, pub u8, pub u8);
@@ -724,7 +724,7 @@ pub struct RuntimeSettings {
     pub terminal_proxy: bool,
     /// 新进程是否刷新注册表环境变量;关 = 继承启动进程环境。
     pub refresh_environment: bool,
-    /// 默认 shell 的原始 id 往返;解析归 02 篇 shell 检测层。
+    /// 默认 shell 的原始 id 往返;解析归 `slterm_terminal` shell 检测层。
     pub shell: Option<String>,
     pub startup_directory: Option<String>,
     /// AI 内联补全 ghost text。
@@ -758,7 +758,7 @@ pub struct RuntimeSettings {
     pub tray: bool,
     /// 托盘可用且启用时,首窗以隐藏形态启动。
     pub silent_start: bool,
-    /// 开机启动;归 09 篇消费。
+    /// 开机启动;归壳层启动项消费。
     pub launch_at_login: bool,
     /// 窗口背景材质(D06-4:五材质枚举,默认 None)。
     pub blur: BlurMode,

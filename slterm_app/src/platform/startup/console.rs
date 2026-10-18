@@ -2,7 +2,7 @@
 //! 随迁,语义零改动;环境变量改名归测试文件)。
 //!
 //! 测试承载:lib 树不内嵌挂载——独立 `windows_console_startup` target
-//! (11 篇,13 篇开放问题 2 已裁「保留重设」)经 #[path] 挂载本文件与
+//! (开放问题 2 已裁「保留重设」)经 #[path] 挂载本文件与
 //! `startup/console_tests.rs`,单挂载形态与上游一致。
 
 pub(crate) fn prepare_console_for_gui() -> std::io::Result<()> {

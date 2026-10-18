@@ -1,4 +1,4 @@
-//! GitHub 公共 latest-release 重定向独立于 REST 配额(09 篇采纳点 26 附注)。
+//! GitHub 公共 latest-release 重定向独立于 REST 配额。
 //!
 //! 因果链(上游 note `2026-09-23-public-release-fallback.md` 口径随迁):
 //! 共享出口 IP 的 REST 配额耗尽时,启动与手动检查会同时 403/429,即使

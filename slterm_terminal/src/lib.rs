@@ -45,4 +45,4 @@ pub(crate) fn pty_trace(label: &str) {
 }
 
 // 解析器不经本 crate 再导出（上游 `pub use vte` 不迁）：各模块直接
-// `use vte::…` 引用，公共面只露 02 篇出口集合的领域类型。
+// `use vte::…` 引用，公共面只露领域出口类型。

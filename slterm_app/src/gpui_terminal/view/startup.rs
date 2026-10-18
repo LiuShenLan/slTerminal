@@ -13,7 +13,7 @@ impl TerminalView {
         cx: &mut Context<'_, Self>,
     ) -> Self {
         // 字体、调色板与终端启动配置来自全局 Settings(bootstrap 装载)。
-        // M3 Settings 白名单外项取模块常量(06 篇设置键回填点):
+        // M3 Settings 白名单外项取模块常量(设置键回填点):
         // 字宽模式恒 Compact、偏移恒 (0,0)、行高倍率恒 None、shell 恒 None
         // (走 core pwsh→powershell→cmd 探测链)。
         let (

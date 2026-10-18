@@ -1,4 +1,4 @@
-//! Runtime 写命令的 UI owner 执行器(04 篇 M7.5)。
+//! Runtime 写命令的 UI owner 执行器。
 //!
 //! 用虚拟窗口 + `test_session` 顶替真 PTY:命令经壳事件队列派发,断言
 //! 回包形状(`action` + 提交后 `snapshot`)与终端字节落点。

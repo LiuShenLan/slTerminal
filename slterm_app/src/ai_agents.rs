@@ -1,4 +1,4 @@
-//! AI CLI 身份、可恢复性与屏幕状态识别(03 篇锚点模块)。
+//! AI CLI 身份、可恢复性与屏幕状态识别。
 //!
 //! hook 是最高置信度的生命周期来源;本模块补齐 hook 覆盖不到的空档:包装
 //! 进程身份、无 hook API 的 agent、以及粗粒度「回合完成」回调无法区分的交互
@@ -306,6 +306,15 @@ impl AgentKind {
             _ => return None,
         })
     }
+}
+
+/// 可冷启动集合的唯一真值源 = `start_command()` 为 Some 的 kind。
+/// Runtime API schema 的 `$defs.launch_agent_kind.enum` 必须与该集合
+/// 完全一致(契约测试守卫);新增可冷启动 kind 只需补 `start_command()`。
+pub(crate) fn launchable_kinds() -> impl Iterator<Item = AgentKind> {
+    AgentKind::ALL
+        .into_iter()
+        .filter(|kind| kind.start_command().is_some())
 }
 
 fn valid_session_id(id: &str) -> Option<()> {

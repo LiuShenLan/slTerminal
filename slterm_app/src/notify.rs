@@ -1,8 +1,8 @@
-//! 通知中心单一漏斗(09 篇 M10.1)。
+//! 通知中心单一漏斗。
 //!
 //! 一切值得用户注意的信号(BEL / OSC 9 / OSC 133;D / hook 生命周期)归一到
 //! [`Notification`] 六变体;新增来源 = 新变体,新增输出 = [`Funnel::plan`] 里
-//! 新一行。投递纪律(09 篇边界 4):
+//! 新一行。投递纪律(边界 4):
 //!
 //! - **失焦门控先行**:窗口聚焦中全部丢弃——用户已看见终端,视觉 bell 覆盖
 //!   该场景;门控收在漏斗入口,调用点不需要重复判断;
@@ -14,7 +14,7 @@
 //! - 任何投递失败只落日志:通知是 best-effort,永不影响终端。
 //!
 //! 系统 toast 走 `platform::notifications` 的常驻 MTA worker(跨进程 RPC
-//! 不上事件循环)。真实投递面按 09 篇「真实面登记豁免」由 `notify-test`
+//! 不上事件循环)。真实投递面按「真实面登记豁免」由 `notify-test`
 //! 诊断命令与新机人工 smoke 兜底。
 
 use std::collections::HashMap;
@@ -31,11 +31,11 @@ use crate::i18n::{Message, UiLanguage};
 use crate::platform::notifications::{ToastAction, ToastActivation};
 
 /// 一条值得注意的事件。漏斗不认事件文本里的关键字:来源标注一律问
-/// `AgentKind::parse`(03 篇 CLI profile 单点),避免按散文猜来源。
+/// `AgentKind::parse`(CLI profile 单点),避免按散文猜来源。
 #[derive(Debug, Clone)]
 pub(crate) enum Notification {
-    /// BEL:AI CLI 回合完成的主信号(02 篇 OSC/BEL 上抛接线后消费)。
-    #[allow(dead_code)] // 消费点 = 02 篇 BEL 上抛接线;当前生产源 = hook/恢复。
+    /// BEL:AI CLI 回合完成的主信号(OSC/BEL 上抛接线后消费)。
+    #[allow(dead_code)] // 消费点 = BEL 上抛接线;当前生产源 = hook/恢复。
     Bell { program: Option<String> },
     /// OSC 133;C/D 跟踪的命令完成(被 hook 覆盖时不再通知)。
     CommandDone {
@@ -49,18 +49,18 @@ pub(crate) enum Notification {
         exit_code: i32,
     },
     /// OSC 9 自由文本(Claude Code 等 iTerm2 通知通道)。
-    #[allow(dead_code)] // 消费点 = 02 篇 OSC 9 上抛接线;当前生产源 = hook/恢复。
+    #[allow(dead_code)] // 消费点 = OSC 9 上抛接线;当前生产源 = hook/恢复。
     Text {
         body: String,
         program: Option<String>,
     },
-    /// 03 篇 TurnDone/NeedsAttention;`attention` = 等用户确认/输入。
+    /// TurnDone/NeedsAttention;`attention` = 等用户确认/输入。
     AiTurn {
         program: String,
         message: Option<String>,
         attention: bool,
     },
-    /// 03 篇:provider 停止但回答未确认成功。
+    /// provider 停止但回答未确认成功。
     AiTurnIssue {
         program: String,
         message: Option<String>,
@@ -76,7 +76,7 @@ pub(crate) enum Notification {
 impl Notification {
     /// 命令收尾归一:非零退出无条件成失败(含短命令);被 hook 确认过的
     /// 短成功命令不再通知(hook 覆盖是权威)。
-    #[allow(dead_code)] // 消费点 = 02 篇 OSC 133;D 完成边接线(C1);先落纯函数。
+    #[allow(dead_code)] // 消费点 = OSC 133;D 完成边接线(C1);先落纯函数。
     pub(crate) fn command_finished(
         program: Option<String>,
         duration: Duration,
@@ -94,7 +94,7 @@ impl Notification {
             .then_some(Self::CommandDone { program, duration })
     }
 
-    /// 03 篇 hook 事件 → 通知。在飞后台任务未清时回合结束不提示;取消
+    /// hook 事件 → 通知。在飞后台任务未清时回合结束不提示;取消
     /// 静默;provider 报错/截断落 `AiTurnIssue`;pi/omp 的旧桥缺结果元数据
     /// 时按「未确认成功」处理。
     pub(crate) fn from_ai_hook(
@@ -158,7 +158,7 @@ impl Notification {
     }
 
     /// 仅做来源分类:应用内偏好不得静默系统通知,也不得按正文猜 AI。
-    #[allow(dead_code)] // 消费点 = 05/06 篇壳内通知面(本片只交付系统通道)。
+    #[allow(dead_code)] // 消费点 = 壳内通知面(本片只交付系统通道)。
     pub(crate) fn is_ai(&self) -> bool {
         let program = match self {
             Self::AiTurn { .. } | Self::AiTurnIssue { .. } => return true,
@@ -269,7 +269,7 @@ fn turn_issue_text(outcome: AiTurnOutcome, message: Option<&str>, language: UiLa
 /// hook 未确认的命令最短通知时长:快的 `ls` 类命令不该整天闪任务栏。
 pub(crate) const COMMAND_NOTIFY_MIN: Duration = Duration::from_secs(10);
 
-/// 瞥读层正文上限(09 篇采纳点 15)。
+/// 瞥读层正文上限。
 pub(crate) const TOAST_BODY_MAX_CHARS: usize = 160;
 
 /// 单行预览:空白折叠成空格、超限幂等截断并留一个 `…`。只多读一个字符
@@ -556,8 +556,8 @@ pub(crate) fn deliver_startup_summary(notification: &Notification, cx: &App) {
 
 /// 单一投递入口:前台门控 → 节流计划 → 闪烁先行 → 系统 toast。
 /// `confirmation` = 权限确认的 (request_id, 候选标签),动作按钮直达
-/// 03 篇 confirmation 链(确认语义归 10 篇安全半程)。HWND 查询经 09 篇
-/// M10.4 facade(单窗单实例的唯一读口)。
+/// confirmation 链(确认语义归安全半程)。HWND 查询经
+/// `windowing` facade(单窗单实例的唯一读口)。
 pub(crate) fn deliver_gpui_with_choices(
     notification: &Notification,
     pane_id: PaneId,
@@ -712,7 +712,7 @@ mod notification_tests {
         );
     }
 
-    /// 03 篇边映射:在飞后台任务/取消静默;失败与截断是 issue;pi/omp
+    /// 边映射:在飞后台任务/取消静默;失败与截断是 issue;pi/omp
     /// 旧桥缺结果元数据按未确认成功;NeedsAttention 带 attention。
     #[test]
     fn hook_edges_map_to_ai_turn_and_issue_notifications() {

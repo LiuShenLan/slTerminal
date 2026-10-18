@@ -1,4 +1,4 @@
-//! 窗口管理 facade(09 篇 M10.4):四路回窗的编译期单一实现点。
+//! 窗口管理 facade:四路回窗的编译期单一实现点。
 //!
 //! 四路 = toast 点击、托盘回窗、toast 动作按钮、legacy ATTACH。四者最终都
 //! 汇到 [`focus`]:调用方只传目标(窗口 / 窗内 pane),窗口还原、前置与
@@ -6,7 +6,7 @@
 //! 焦点原语不得出现在别处(门禁用例
 //! `win32_focus_calls_only_live_in_the_facade`)。
 //!
-//! **设计签名适配。** 09 篇改造节 1 的 `focus_window(cx)`/`focus_pane(pane,
+//! **设计签名适配。** `focus_window(cx)`/`focus_pane(pane,
 //! cx)` 写在上游多窗注册表语境;单窗壳的壳事件泵已持有 `&mut Window`,
 //! 且 GPUI 禁止在窗口更新回调内再次 `AnyWindowHandle::update`(窗口已被
 //! take)。故 facade 以显式 `&mut Window` 落点;目标选择与平台调用仍由本
@@ -14,7 +14,7 @@
 //!
 //! **还原语义(B46)。** 「显示窗口」= 最小化则 `IsIconic → SW_RESTORE`,
 //! 再 `SetForegroundWindow`;正常窗口直接前置。判定纯函数化为
-//! [`focus_steps`] 供 L1 断言;真实 Win32 面按 11 篇豁免走构建产物 smoke。
+//! [`focus_steps`] 供 L1 断言;真实 Win32 面按豁免走构建产物 smoke。
 //!
 //! **HWND 单源。** 开窗时 [`publish_window`] 发布原生句柄;任务栏进度/闪烁
 //! 统一经 [`window_hwnd`] 查询。虚拟窗口(测试)无原生句柄 → None,调用方

@@ -4,7 +4,7 @@
 //!
 //! 内嵌 Maple 字体常驻于此(上游 font_install.rs `REQUIRED_FONT_BYTES` 裁剪形态):
 //! 系统等宽字体无 NF 图标码点,内嵌字形同源是跨机器截图/UI 测试可比对的前提。
-//! 用户导入字体目录(`imported_font_files`)归 06 篇。
+//! 用户导入字体目录(`imported_font_files`)归设置体系。
 
 use std::borrow::Cow;
 

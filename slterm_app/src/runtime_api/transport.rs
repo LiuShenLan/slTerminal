@@ -8,7 +8,8 @@
 
 use std::io::{BufRead, BufReader, Error as IoError, Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -27,12 +28,31 @@ use super::{
     RuntimeCommand, RuntimeDispatch, RuntimeHub, SCHEMA_PATH, SUPPORTED_VERSIONS, emit_control,
 };
 
+mod audit;
+
 /// accept 循环:按 `MAX_CLIENTS` 计数,每连接一线程,配额随连接线程 Drop 归还。
-#[allow(dead_code)] // 消费点 = M7.5 `RuntimeServer::spawn_at` 的 serve 线程。
-pub(super) fn serve(listener: TcpListener, token: String, sink: EventSink, hub: RuntimeHub) {
-    let active = std::sync::Arc::new(AtomicUsize::new(0));
-    for stream in listener.incoming() {
-        let Ok(stream) = stream else { continue };
+/// `stop` 置位后退出(循环头与 accept 返回后各查一次);阻塞中的 accept 由
+/// `RuntimeServer::drop` 自连本机端口唤醒,不做非阻塞轮询。
+pub(super) fn serve(
+    listener: TcpListener,
+    stop: Arc<AtomicBool>,
+    token: String,
+    sink: EventSink,
+    hub: RuntimeHub,
+) {
+    let active = Arc::new(AtomicUsize::new(0));
+    loop {
+        if stop.load(Ordering::Acquire) {
+            return;
+        }
+        let stream = match listener.accept() {
+            Ok((stream, _peer)) => stream,
+            Err(_) => continue,
+        };
+        // Drop 的自连唤醒连接只用于解除 accept 阻塞,不再派发处理线程。
+        if stop.load(Ordering::Acquire) {
+            return;
+        }
         let Some(guard) = admit_client(&active) else {
             continue;
         };
@@ -230,7 +250,7 @@ pub(super) fn runtime_description() -> Value {
         // 附加参数能力无法从 capabilities 探测:旧版静默忽略未知 after_seq
         // 仍带竞态,严格客户端必须检查 feature 串。
         "features": FEATURES,
-        // 环境契约:让外部客户端探测变量名而不是硬编码;实现归 03 篇
+        // 环境契约:让外部客户端探测变量名而不是硬编码;实现归 AI 集成域
         // `agent_env`。remote_marker 随 SSH 整支不迁。
         "env": {
             "term_program": crate::agent_env::TERM_PROGRAM,
@@ -406,98 +426,12 @@ pub(super) fn dispatch_connection(
     sink: &EventSink,
     hub: &RuntimeHub,
 ) -> Result<(), IoError> {
-    audit_command(&request_id, &command);
+    audit::audit_command(&request_id, &command);
     let response = match dispatch_runtime_command(command, sink, hub) {
         Ok(result) => ApiResponse::success(request_id, result),
         Err(error) => ApiResponse::failure(request_id, error),
     };
     write_response(stream, &response)
-}
-
-fn audit_command(request_id: &str, command: &RuntimeCommand) {
-    match command {
-        RuntimeCommand::SendKey {
-            window_id,
-            pane_id,
-            key,
-            modifiers,
-            repeat,
-        } => {
-            log::info!(
-                "runtime pane.send_key request_id={request_id} window_id={window_id:?} pane_id={pane_id} key={} shift={} alt={} control={} repeat={repeat}",
-                key.as_str(),
-                modifiers.shift,
-                modifiers.alt,
-                modifiers.control
-            );
-        }
-        RuntimeCommand::AgentStart {
-            window_id,
-            pane_id,
-            name,
-            kind,
-            session_id,
-            worktree,
-            ..
-        } => {
-            log::info!(
-                "runtime agent.start request_id={request_id} window_id={window_id:?} pane_id={pane_id:?} name={name} kind={} resume={} worktree={}",
-                kind.slug(),
-                session_id.is_some(),
-                worktree.is_some()
-            );
-        }
-        RuntimeCommand::AgentFork { name, kind, .. } => {
-            log::info!(
-                "runtime agent.fork request_id={request_id} name={name} kind={}",
-                kind.slug()
-            );
-        }
-        RuntimeCommand::AgentPrompt {
-            agent,
-            generation,
-            text,
-            submit,
-        } => {
-            log::info!(
-                "runtime agent.prompt request_id={request_id} agent={agent} generation={generation:?} submit={submit} prompt_bytes={}",
-                text.len()
-            );
-        }
-        RuntimeCommand::AgentPaste {
-            agent,
-            generation,
-            text,
-            submit,
-        } => {
-            log::info!(
-                "runtime agent.paste request_id={request_id} agent={agent} generation={generation:?} submit={submit} paste_bytes={}",
-                text.len()
-            );
-        }
-        RuntimeCommand::AgentRead {
-            agent,
-            generation,
-            lines,
-        } => {
-            log::info!(
-                "runtime agent.read request_id={request_id} agent={agent} generation={generation:?} lines={lines}"
-            );
-        }
-        RuntimeCommand::Exec {
-            window_id,
-            pane_id,
-            argv,
-            timeout_ms,
-            max_output_bytes,
-        } => {
-            log::info!(
-                "runtime pane.exec request_id={request_id} window_id={window_id:?} pane_id={pane_id} argv_len={} timeout_ms={timeout_ms} max_output_bytes={max_output_bytes}",
-                argv.len()
-            );
-        }
-        _ => {}
-    }
 }
 
 /// 执行一个已经解析的 Runtime 原语。普通请求与编排步骤共享这里,worktree
@@ -1129,10 +1063,23 @@ mod transport_tests {
         let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind serve listener");
         let address = listener.local_addr().expect("serve address");
         let (sink, _events) = sink_channel();
-        // serve 无停机语义(随进程生命周期,M7.5);测试线程随测试进程退出回收。
-        std::thread::spawn(move || serve(listener, TEST_TOKEN.to_owned(), sink, RuntimeHub::new()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let serve_stop = stop.clone();
+        let handle = std::thread::spawn(move || {
+            serve(
+                listener,
+                serve_stop,
+                TEST_TOKEN.to_owned(),
+                sink,
+                RuntimeHub::new(),
+            )
+        });
         let response = exchange(address, &format!("PING {TEST_TOKEN}"));
         assert_eq!(response, "OK\n");
+        // 置位后自连唤醒 accept,serve 线程必须退出,不留测试线程。
+        stop.store(true, Ordering::Release);
+        let _ = TcpStream::connect_timeout(&address, Duration::from_millis(400));
+        handle.join().expect("serve 线程随停止位退出");
     }
 
     #[test]
@@ -1148,7 +1095,7 @@ mod transport_tests {
         assert_eq!(description["schema"], SCHEMA_PATH);
     }
 
-    /// 设计稿 04 篇首发 capability 面逐字钉死;顺序即协议公布序。
+    /// 首发 capability 面逐字钉死;顺序即协议公布序。
     #[test]
     fn describe_capabilities_match_first_release_surface() {
         let expected = [

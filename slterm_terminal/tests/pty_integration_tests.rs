@@ -281,7 +281,7 @@ impl Drop for DrivenTerm {
 /// cmd.exe 真 spawn 全链:写命令读回显与输出、resize 经 ConPTY 生效
 /// (conhost 窗口宽度探针直读)、Shutdown 关闭链不挂起。顺带钉死回退臂
 /// 可观测性:侧载尝试后未落到 bundled 时 `fallback_reason` 必须有值
-/// (Win10 回退 toast 的数据源,02 篇状态观测契约)。
+/// (Win10 回退 toast 的数据源,状态观测契约)。
 #[test]
 fn conpty_spawn_write_read_resize_close_full_chain() {
     let _guard = integration_lock();
@@ -361,7 +361,7 @@ fn cleanup_dir(dir: &std::path::Path) {
 /// shell:pwsh/powershell 臂带 `-EncodedCommand` 集成脚本,bringup 即发射
 /// OSC 7/9;9(→ `Event::CwdReport` cwd 报告)与 OSC 133;A(→
 /// `Term::slterm_add_prompt_mark` 语义 prompt 标记,事件序保序、不发外部
-/// 事件——02 篇「133;A 恢复注入闸门由语义 prompt 模型替代」);包装
+/// 事件——「133;A 恢复注入闸门由语义 prompt 模型替代」);包装
 /// prompt 的 OSC 133;D → `Event::CommandDone`。本机无 pwsh/powershell 时
 /// 探测链回退 cmd(无集成注入),登记跳过不算失败。
 #[test]

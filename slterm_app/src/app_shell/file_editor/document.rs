@@ -1,4 +1,4 @@
-//! 文档载入与条件保存(07 篇 M8.2)。
+//! 文档载入与条件保存。
 //!
 //! 保存链 = 磁盘快照逐字节比对(`TextSnapshot::verify`)→ 编码回写
 //! (`encode`,BOM/CRLF 往返)→ 原子替换(`atomic_file::write`)。任一步失败

@@ -1428,5 +1428,4 @@ pub(crate) fn plan_overlay_draw(
 }
 
 #[cfg(test)]
-#[path = "terminal_math/tests.rs"]
 mod tests;

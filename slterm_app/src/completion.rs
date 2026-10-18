@@ -1,6 +1,6 @@
 //! 应用补全入口:管理共享来源和请求快照,不持有窗口、终端网格或执行器。
 //!
-//! 分层(08 篇):`Session` 按 pane 持有来源缓存(Git/scripts),`Request`
+//! 分层:`Session` 按 pane 持有来源缓存(Git/scripts),`Request`
 //! 只收当前输入快照与已确认执行环境,后台计算;补全不上按键热路径。
 //! 源收敛后只剩本机单态:远程连接池、WSL/SSH 作用域与文件整支不迁。
 
@@ -67,7 +67,7 @@ impl Session {
 
     /// 构造一次补全请求;方言是输入事实,未证明时只接受通用字面量。
     ///
-    /// 参数数量由 08 篇请求快照契约固定;打包成结构只会把同一组事实藏进
+    /// 参数数量由请求快照契约固定;打包成结构只会把同一组事实藏进
     /// 临时类型,不降低调用方理解成本。
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn request_at(
@@ -193,131 +193,84 @@ impl Request {
         if cancellation.is_cancelled() {
             return Candidates::default();
         }
-        if self.semantic.is_some() && semantic.is_none() {
-            return self.scoped_history(cancellation);
-        }
-        if let Some(candidates) = semantic {
-            let mut candidates: Vec<slterm_completions::SemanticSuggestion> =
-                candidates.into_iter().map(Into::into).collect();
-            if let Some(context) = self.semantic.as_ref().filter(|context| {
-                matches!(
-                    context.source,
-                    Source::Paths { .. } | Source::RevisionsAndPaths { .. }
-                )
-            }) {
-                candidates.extend(paths::complete(
+        let Some(candidates) = semantic else {
+            // 无语义上下文(未知命令/方言无法判定)时由通用引擎兜底;
+            // 语义上下文存在但来源不可用(如 Git 缓存缺失)返回空候选,
+            // 绝不回退本会话历史 —— 历史候选不会凭空复活。
+            if self.semantic.is_none() {
+                let sources = shared();
+                return suggest::calculate(
+                    &SuggestSources {
+                        history: &sources.history,
+                        directories: &sources.directories,
+                        commands: &sources.commands,
+                        enabled: true,
+                        style: self.style,
+                    },
                     &Input {
                         cwd: &self.cwd,
                         env: &self.env,
                         line: &self.line,
                     },
                     self.syntax,
-                    &shared().directories,
-                    self.style,
-                    Some(context),
                     &|| cancellation.is_cancelled(),
-                ));
+                );
             }
-            // 历史只给仍然有效的语义候选提权,不能复活已删除的分支/脚本。
-            if !candidates.is_empty() {
-                let recent = {
-                    let history = shared()
-                        .history
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner);
-                    history
-                        .hint_with_cancel(&self.env.history_scope(), &self.line, &|| {
-                            cancellation.is_cancelled()
-                        })
-                        .map(|suffix| format!("{}{suffix}", self.line))
-                };
-                if let Some(recent) = recent
-                    && let Some(index) = candidates.iter().position(|candidate| {
-                        let candidate = &candidate.suggestion;
-                        self.line.get(..candidate.span.start).is_some_and(|head| {
-                            recent.strip_prefix(head) == Some(candidate.value.as_str())
-                        })
-                    })
-                {
-                    candidates[..=index].rotate_right(1);
-                }
-            }
-            if cancellation.is_cancelled() {
-                return Candidates::default();
-            }
-            return suggest::semantic_candidates_at(
-                &self.line,
-                self.cursor,
-                self.style,
-                candidates,
-            );
-        }
-        let sources = shared();
-        suggest::calculate(
-            &SuggestSources {
-                history: &sources.history,
-                directories: &sources.directories,
-                commands: &sources.commands,
-                enabled: true,
-                style: self.style,
-            },
-            &Input {
-                cwd: &self.cwd,
-                env: &self.env,
-                line: &self.line,
-            },
-            self.syntax,
-            &|| cancellation.is_cancelled(),
-        )
-    }
-
-    /// 语义来源不可用(取消/读盘失败)时退到本会话历史;光标不在行尾时不猜。
-    fn scoped_history(&self, cancellation: &Cancellation) -> Candidates {
-        if self.cursor != self.line.len() {
             return Candidates::default();
-        }
-        let history = shared()
-            .history
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let commands = if self.style == crate::suggest::CompletionStyle::Popup {
-            history
-                .search_with_cancel(&self.env.history_scope(), &self.line, 8, &|| {
-                    cancellation.is_cancelled()
-                })
-                .into_iter()
-                .map(str::to_owned)
-                .collect::<Vec<_>>()
-        } else {
-            history
-                .hint_with_cancel(&self.env.history_scope(), &self.line, &|| {
-                    cancellation.is_cancelled()
-                })
-                .map(|suffix| format!("{}{suffix}", self.line))
-                .into_iter()
-                .collect()
         };
-        drop(history);
+        let mut candidates: Vec<slterm_completions::SemanticSuggestion> =
+            candidates.into_iter().map(Into::into).collect();
+        if let Some(context) = self.semantic.as_ref().filter(|context| {
+            matches!(
+                context.source,
+                Source::Paths { .. } | Source::RevisionsAndPaths { .. }
+            )
+        }) {
+            candidates.extend(paths::complete(
+                &Input {
+                    cwd: &self.cwd,
+                    env: &self.env,
+                    line: &self.line,
+                },
+                self.syntax,
+                &shared().directories,
+                self.style,
+                Some(context),
+                &|| cancellation.is_cancelled(),
+            ));
+        }
+        // 历史只给仍然有效的语义候选提权,不能复活已删除的分支/脚本。
+        if !candidates.is_empty() {
+            let recent = {
+                let history = shared()
+                    .history
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                history
+                    .hint_with_cancel(&self.env.history_scope(), &self.line, &|| {
+                        cancellation.is_cancelled()
+                    })
+                    .map(|suffix| format!("{}{suffix}", self.line))
+            };
+            if let Some(recent) = recent
+                && let Some(index) = candidates.iter().position(|candidate| {
+                    let candidate = &candidate.suggestion;
+                    self.line.get(..candidate.span.start).is_some_and(|head| {
+                        recent.strip_prefix(head) == Some(candidate.value.as_str())
+                    })
+                })
+            {
+                candidates[..=index].rotate_right(1);
+            }
+        }
         if cancellation.is_cancelled() {
             return Candidates::default();
         }
-        let candidates = commands
-            .into_iter()
-            .filter(|line| line.len() <= 4096 && !line.chars().any(char::is_control))
-            .map(|value| {
-                slterm_completions::Suggestion {
-                    value,
-                    span: slterm_completions::Span::new(0, self.line.len()),
-                    ..Default::default()
-                }
-                .into()
-            })
-            .collect();
         suggest::semantic_candidates_at(&self.line, self.cursor, self.style, candidates)
     }
 }
 
-/// 缓存键 = cwd + env + line + style + 命令代际(08 篇数据流节)。
+/// 缓存键 = cwd + env + line + style + 命令代际。
 pub(crate) fn cache_key(
     cwd: &str,
     env: &SuggestEnv,
@@ -725,6 +678,35 @@ mod completion_tests {
         assert_eq!(result.completion_items[0].insert, "a");
     }
 
+    /// B31 防复发:语义来源为 Branches 但 Git 缓存缺失时返回空候选,
+    /// 绝不回退本会话历史 —— 历史候选不会凭空复活。
+    #[test]
+    fn missing_git_cache_for_semantic_source_never_falls_back_to_history() {
+        insert_history_for_test("git switch slterm-history-only");
+        // 前缀非空:CommandContext 把最后一个词当编辑目标,才能命中 Branches。
+        let line = "git switch s";
+        let semantic = SemanticContext::parse(line, line.len(), ShellSyntax::Posix)
+            .expect("git switch 应有语义上下文");
+        assert!(matches!(semantic.source, Source::Branches { .. }));
+        let request = Request {
+            cwd: ".".into(),
+            env: SuggestEnv::Local,
+            line: line.into(),
+            cursor: line.len(),
+            style: CompletionStyle::Popup,
+            git: None,
+            semantic: Some(semantic),
+            scripts: None,
+            syntax: ShellSyntax::Posix,
+        };
+        let result = request.calculate(&Cancellation::default());
+        assert!(
+            result.completion_items.is_empty(),
+            "Git 缓存缺失不得回收历史候选"
+        );
+        assert!(result.suggestion.is_empty());
+    }
+
     #[test]
     fn command_position_and_file_sources_use_the_shared_engine() {
         let directory = tempfile::tempdir().unwrap();
@@ -749,7 +731,7 @@ mod completion_tests {
         );
     }
 
-    /// 源收敛门禁:补全域不得残留远程/SSH 池符号(08 篇改造节 2)。
+    /// 源收敛门禁:补全域不得残留远程/SSH 池符号。
     ///
     /// 用 `concat!` 拼出禁词,测试源自身不会命中;`include_str!` 固定读取
     /// 本片落盘源码,不依赖工作目录或文件系统扫描。
