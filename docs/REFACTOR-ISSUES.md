@@ -63,6 +63,7 @@
 | B36 | **`TestAppContext::test_window` 私有**：L4 OS 拖出断言改为解析器注入探针，`external_drag_files` 真断言受限。 | `ui_tests/file_tree_tests` | M8.4 | 上游 API 变化时补真断言。 |
 | B37 | **`Execution::prepare()` 恒 true**：若未来恢复远程/嵌套执行环境需重新引入冻结握手（设计已裁，仅记录接缝）。 | `completion/metadata.rs` | M9.1 | 留锚。 |
 | B38 | **失败边合成命令偏技术化**：`HookFailure.command` 形如 `slterm-hook install slterm_ai_hooks_claude`，只宜作上下文不宜直接呈现。 | `ai_assistant.rs` `HookFailure` | M9.3 | M9.5 呈现层只作上下文，不直出。 |
+| B39 | **`terminal_math/tests.rs` 1970 行贴近 2000 硬限**：后续追加用例前须先拆分。 | `terminal_math/tests.rs` | M9.4 | 拆子模块（按 M8.2 ui_tests 先例）。 |
 
 ## C. 计划内（归后续子步/阶段，重构完成时验证）
 
@@ -81,7 +82,7 @@
 | C11 | **i18n 合同独立 workspace CI 登记**：`tools/slterm-i18n-contract` 不在根 workspace，clippy/CI 不覆盖。 | 12 篇打包/CI 清单 | |
 | C12 | **旧栈语义资产转测试保留**：git2 五份语义资产（D07-1 裁定转对照用例）。 | 07/M11 | |
 | C13 | **docs/ 临时稿删除 + 篇号锚点清理**（与 A3 联动）。 | M11 | |
-| C14 | **设计措辞修正**：05 篇「窗口边缘」应为「内容区外圈」；04 篇 `reorder_batch` 签名稿与上游不符（已照源）；08 篇 `note_bell` 上游不存在（未落）；04 篇 generation 等待错误码口径（实现按设计稿 `agent_identity_mismatch`/`agent_exited`）；08 篇 D08-2 待沉淀仍写「M9.3 落地时拍板」而 DECISIONS 已裁（文档漂移）。 | 设计稿 | 重构末统一订正。 |
+| C14 | **设计措辞修正**：05 篇「窗口边缘」应为「内容区外圈」；04 篇 `reorder_batch` 签名稿与上游不符（已照源）；08 篇 `note_bell` 上游不存在（未落）；04 篇 generation 等待错误码口径（实现按设计稿 `agent_identity_mismatch`/`agent_exited`）；08 篇 D08-2 待沉淀仍写「M9.3 落地时拍板」而 DECISIONS 已裁（文档漂移）；08 篇 `compile_formula` 签名草案与上游实源不符（已按源码照抄）；08 篇 #44 `draw_overlays` 未迁，M9.5 自绘 paint pass（设计稿应标注归属）。 | 设计稿 | 重构末统一订正。 |
 | C15 | **`D04-3 windowing_behavior` 未设键**：单窗行为硬编码 `SINGLE_WINDOW_ID`。 | 12 篇随 settings 面统一裁定 | |
 | C16 | **`request_once_bounded` 无消费方**（插件宿主）。 | M9.5/M10 | |
 | C17 | **`ProviderTestOutcome` 文案本地化**（展示边界）。 | M9.5 | |
@@ -89,6 +90,7 @@
 | C19 | **`load/save_final/quarantine/mark_boot_attempt` targeted allow**：设计锚定 API 保留，生产走 `_at` 显式路径。 | 11 篇复核 | |
 | C20 | **老会话文件叶/tab 无 launch**：首拍快照规范化为 `Some(Default)`（语义等价，字段形态变化）。 | 记录 | 无迁移义务。 |
 | C21 | **失败边投影形态与设计缝合点差异**：设计称失败边「默认取 assistant_answer 投影进入闸门」，但 `AssistantAnswer` 是 pane 级回答投影，config_guard 失败为进程级且无回答原文；实现投影为 `HookFailure{command, program}`。 | M9.5 | 明确失败边是否经 `AnswerInbox` 展示 notice。 |
+| C22 | **`SnapCell` 无 DIM 标志**：终端覆盖层的推理样式过滤需要 DIM。 | M9.5 | 在 `RenderSnapshot::capture` 同一锁窗口从 Term cell Flags 构造 `OverlayCell`，或给 `SnapCell` 增 `dim: bool`。 |
 
 ## D. 已修（存档，防重复登记）
 
