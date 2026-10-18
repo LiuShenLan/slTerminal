@@ -7,11 +7,12 @@
 use std::sync::mpsc;
 use std::time::Duration;
 
-use gpui::{AppContext as _, TestAppContext, VisualTestContext};
+use gpui::{AppContext as _, Modifiers, MouseButton, TestAppContext, VisualTestContext, point, px};
 use gpui_component::Root;
+use slterm_split::PaneId;
 
 use super::windowing::WorkspaceStartup;
-use super::workspace::SltermWorkspace;
+use super::workspace::{CloseActivePane, SltermWorkspace, SplitRight, ToggleZoom};
 use crate::ai_hook::AiHookEvent;
 
 /// 与生产 init 同序的测试子集(11 篇模板同形):内嵌 Maple 在测试文本系统
@@ -153,6 +154,238 @@ fn ai_hook_pump_routes_event_to_the_owning_pane_host(cx: &mut TestAppContext) {
     window.run_until_parked();
     let status = workspace.read_with(cx, |ws, _| ws.agent_status(pane_id));
     assert_eq!(status, Some(crate::ai_agents::AgentStatus::Working));
+}
+
+/// 画一帧并清 arena(现有 UI 测试的统一收尾姿势)。
+fn draw_frame(window: &mut VisualTestContext) {
+    window.update(|window, cx| {
+        window.draw(cx).clear(cx);
+    });
+}
+
+/// 不变式「panes == 树叶」路径 1/3:新建 tab。
+#[gpui::test]
+fn new_terminal_tab_keeps_panes_equal_to_tree_leaves(cx: &mut TestAppContext) {
+    let (workspace, _window) = open_workspace(cx);
+    let (panes, leaves, focused, zoomed) = workspace
+        .read_with(cx, |ws, _| ws.active_tab_snapshot())
+        .expect("新 tab 必须有活跃终端");
+    assert_eq!(panes, leaves, "panes 与树叶必须恒等");
+    assert_eq!(panes.len(), 1);
+    assert_eq!(focused, panes[0]);
+    assert!(!zoomed);
+}
+
+/// 不变式「panes == 树叶」路径 2/3 + L4 渲染关键路径:split 后真实分屏树
+/// 渲染出两个 pane 元素(两处 debug_bounds 非零)。
+#[gpui::test]
+fn split_renders_two_panes_and_keeps_panes_equal_to_tree_leaves(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    window.dispatch_action(SplitRight);
+    window.run_until_parked();
+    window.refresh().unwrap();
+    draw_frame(&mut window);
+
+    let (panes, leaves, focused, zoomed) = workspace
+        .read_with(cx, |ws, _| ws.active_tab_snapshot())
+        .expect("活跃终端必须存在");
+    assert_eq!(panes, leaves, "split 后 panes 与树叶必须恒等");
+    assert_eq!(panes.len(), 2);
+    assert_eq!(focused, panes[1], "split 后焦点交新 pane");
+    assert!(!zoomed);
+
+    for selector in ["slterm-pane-1", "slterm-pane-2"] {
+        let bounds = window
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("{selector} 必须绘制"));
+        assert!(
+            bounds.size.width > px(0.0) && bounds.size.height > px(0.0),
+            "{selector} 矩形必须非零: {bounds:?}"
+        );
+    }
+}
+
+/// 不变式「panes == 树叶」路径 3/3:关 pane(收编路径)。
+#[gpui::test]
+fn close_pane_keeps_panes_equal_to_tree_leaves(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    window.dispatch_action(SplitRight);
+    window.run_until_parked();
+    window.dispatch_action(CloseActivePane);
+    window.run_until_parked();
+    window.refresh().unwrap();
+    draw_frame(&mut window);
+
+    let (panes, leaves, focused, zoomed) = workspace
+        .read_with(cx, |ws, _| ws.active_tab_snapshot())
+        .expect("活跃终端必须存在");
+    assert_eq!(panes, leaves, "关 pane 后 panes 与树叶必须恒等");
+    assert_eq!(panes, vec![PaneId(1)], "兄弟收编而非关 tab");
+    assert_eq!(focused, PaneId(1), "焦点交幸存子树首叶");
+    assert!(!zoomed);
+}
+
+/// zoom 特例:满卡只渲染聚焦 pane;toggle 两次回到分屏。
+#[gpui::test]
+fn zoom_renders_only_the_focused_pane_and_toggles_back(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    window.dispatch_action(SplitRight);
+    window.run_until_parked();
+    window.refresh().unwrap();
+    draw_frame(&mut window);
+    assert!(window.debug_bounds("slterm-pane-1").is_some());
+    assert!(window.debug_bounds("slterm-pane-2").is_some());
+
+    window.dispatch_action(ToggleZoom);
+    window.run_until_parked();
+    window.refresh().unwrap();
+    draw_frame(&mut window);
+    let (_, _, focused, zoomed) = workspace
+        .read_with(cx, |ws, _| ws.active_tab_snapshot())
+        .expect("活跃终端必须存在");
+    assert!(zoomed, "第一次 toggle 进入满卡");
+    assert_eq!(focused, PaneId(2));
+    assert!(window.debug_bounds("slterm-pane-2").is_some());
+    assert!(
+        window.debug_bounds("slterm-pane-1").is_none(),
+        "满卡路径只渲染聚焦 pane"
+    );
+
+    window.dispatch_action(ToggleZoom);
+    window.run_until_parked();
+    window.refresh().unwrap();
+    draw_frame(&mut window);
+    let (_, _, _, zoomed) = workspace
+        .read_with(cx, |ws, _| ws.active_tab_snapshot())
+        .expect("活跃终端必须存在");
+    assert!(!zoomed, "第二次 toggle 回到分屏");
+    assert!(window.debug_bounds("slterm-pane-1").is_some());
+    assert!(window.debug_bounds("slterm-pane-2").is_some());
+}
+
+/// 满卡内点击聚焦 pane(选字起手)不得解除 zoom。
+#[gpui::test]
+fn clicking_the_zoomed_pane_keeps_zoom(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    window.dispatch_action(SplitRight);
+    window.run_until_parked();
+    window.dispatch_action(ToggleZoom);
+    window.run_until_parked();
+    window.refresh().unwrap();
+    draw_frame(&mut window);
+
+    let pane = window
+        .debug_bounds("slterm-pane-2")
+        .expect("满卡 pane 必须绘制");
+    let center = pane.center();
+    window.simulate_mouse_down(center, MouseButton::Left, Modifiers::default());
+    window.simulate_mouse_up(center, MouseButton::Left, Modifiers::default());
+    window.run_until_parked();
+
+    let (_, _, focused, zoomed) = workspace
+        .read_with(cx, |ws, _| ws.active_tab_snapshot())
+        .expect("活跃终端必须存在");
+    assert!(zoomed, "点击已聚焦 pane 不应退出满卡");
+    assert_eq!(focused, PaneId(2));
+}
+
+/// 单 pane 无缩放语义:toggle 是空操作(05 篇 zoom 状态机)。
+#[gpui::test]
+fn zoom_is_a_no_op_with_a_single_pane(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    window.dispatch_action(ToggleZoom);
+    window.run_until_parked();
+    let (_, _, _, zoomed) = workspace
+        .read_with(cx, |ws, _| ws.active_tab_snapshot())
+        .expect("活跃终端必须存在");
+    assert!(!zoomed);
+}
+
+/// 分隔条拖拽关键路径:overlay 预览不动提交比例/pane 几何;松手 commit
+/// 后几何生效(05 篇「拖拽提交流」)。
+#[gpui::test]
+fn divider_drag_previews_without_reflow_and_commits_geometry(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    window.dispatch_action(SplitRight);
+    window.run_until_parked();
+    window.refresh().unwrap();
+    draw_frame(&mut window);
+
+    let ratio_before = workspace.read_with(cx, |ws, _| ws.active_split_ratio().unwrap());
+    let first_before = workspace.read_with(cx, |ws, _| ws.pane_bounds_of(PaneId(1)).unwrap());
+    let divider = window
+        .debug_bounds("split-divider-0-[]")
+        .expect("分隔条命中区必须绘制");
+    let start = divider.center();
+
+    window.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+    draw_frame(&mut window);
+    let target = point(start.x + px(60.0), start.y);
+    window.simulate_mouse_move(target, MouseButton::Left, Modifiers::default());
+    draw_frame(&mut window);
+
+    // 预览期间:overlay 出现;提交比例与 pane 几何不动(终端网格零重排)。
+    assert!(
+        window.debug_bounds("split-drag-line").is_some(),
+        "拖拽预览线必须绘制"
+    );
+    let ratio_during = workspace.read_with(cx, |ws, _| ws.active_split_ratio().unwrap());
+    assert_eq!(ratio_during, ratio_before, "预览不得改提交比例");
+    let first_during = workspace.read_with(cx, |ws, _| ws.pane_bounds_of(PaneId(1)).unwrap());
+    assert_eq!(
+        first_during.size.width, first_before.size.width,
+        "预览不得重排 pane/终端网格"
+    );
+
+    window.simulate_mouse_up(target, MouseButton::Left, Modifiers::default());
+    window.run_until_parked();
+    window.refresh().unwrap();
+    draw_frame(&mut window);
+
+    let ratio_after = workspace.read_with(cx, |ws, _| ws.active_split_ratio().unwrap());
+    assert!(
+        ratio_after > ratio_before + 0.01,
+        "松手提交后比例生效: {ratio_before} -> {ratio_after}"
+    );
+    let first_after = workspace.read_with(cx, |ws, _| ws.pane_bounds_of(PaneId(1)).unwrap());
+    assert!(
+        first_after.size.width > first_before.size.width,
+        "松手后第一 pane 几何应变宽"
+    );
+}
+
+/// 拖拽进入关闭区:松手走 `close_pane` 收编,panes == 树叶不变式不破。
+#[gpui::test]
+fn dragging_divider_into_close_zone_closes_the_squeezed_pane(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    window.dispatch_action(SplitRight);
+    window.run_until_parked();
+    window.refresh().unwrap();
+    draw_frame(&mut window);
+
+    let first_before = workspace.read_with(cx, |ws, _| ws.pane_bounds_of(PaneId(1)).unwrap());
+    let divider = window
+        .debug_bounds("split-divider-0-[]")
+        .expect("分隔条命中区必须绘制");
+    let start = divider.center();
+    window.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+    draw_frame(&mut window);
+    // 指针压到第一 pane 左缘:原始比例低于 CLOSE_MARGIN,进入关闭区。
+    let target = point(first_before.origin.x + px(2.0), start.y);
+    window.simulate_mouse_move(target, MouseButton::Left, Modifiers::default());
+    draw_frame(&mut window);
+    window.simulate_mouse_up(target, MouseButton::Left, Modifiers::default());
+    window.run_until_parked();
+    window.refresh().unwrap();
+    draw_frame(&mut window);
+
+    let (panes, leaves, focused, zoomed) = workspace
+        .read_with(cx, |ws, _| ws.active_tab_snapshot())
+        .expect("活跃终端必须存在");
+    assert_eq!(panes, leaves, "拖拽关闭后 panes 与树叶必须恒等");
+    assert_eq!(panes, vec![PaneId(2)], "被挤压的首 pane 关闭、兄弟收编");
+    assert_eq!(focused, PaneId(2), "焦点保持在幸存 pane");
+    assert!(!zoomed);
 }
 
 /// M4.5 屏幕看门狗:1 Hz 拍帧取网格末尾窗口,身份与规则命中后写入仲裁器。

@@ -1,0 +1,1130 @@
+//! 工作区:tabs/pane 生命周期的唯一属主(05 篇三件套锚点)。
+//!
+//! ## 分屏 pane 生命周期合同
+//!
+//! 1. 每个 Terminal tab 持有 `panes`(实体属主,无序按 id 查)+ `tree`
+//!    (`slterm_split` 布局树,叶 = pane id)+ `focused`;**panes 的 id 集合
+//!    == 树的叶集合**,贯穿新建 tab / split / close 全路径。
+//! 2. pane id 全 workspace 唯一、终生不复用;分配权威 = 本模块单调计数器
+//!    `next_pane` / `next_tab`(newtype 不持全局态)。
+//! 3. 关 pane 的结局由 `RemoveOutcome` 三态裁定:`WasRoot` 关整个 tab、
+//!    `Collapsed(id)` 兄弟收编且焦点交幸存子树首叶;壳不自行散判。被摘
+//!    pane 立即显式 `shutdown`;建树挂不上时立即回收 pane,不留孤儿 PTY。
+//! 4. 布局持久化只经 session schema(M5.5 快照/恢复接线);本模块运行时树
+//!    与持久化树的转换只走 `session_restore` 一对纯函数。
+//!
+//! ## 壳层职责(M5.3)
+//!
+//! 壳层只做四件事:按**提交比例**渲染递归、canvas 探针回写节点/pane 矩形、
+//! 分隔条拖拽 overlay、松手提交。分屏语义(比例/树变换)全由 `slterm_split`
+//! 裁定,壳层不重算。渲染只读提交比例,`preview_ratio`/`dragging` 只喂
+//! overlay 与分隔条跟随——拖拽期间终端网格零重排(02 篇 TTY 尺寸链交界:
+//! 结构性变化经 `TerminalView::mark_structural_resize` 同步下发,不进尾沿
+//! 去抖)。
+
+mod split_drag;
+
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
+use std::sync::mpsc;
+use std::time::Duration;
+
+use gpui::prelude::FluentBuilder as _;
+use gpui::{
+    App, AppContext as _, Bounds, Context, Entity, FocusHandle, InteractiveElement as _,
+    IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _,
+    Pixels, Render, SharedString, Styled as _, Subscription, Window, canvas, div, px, relative,
+};
+use gpui_component::{ActiveTheme as _, TitleBar};
+use slterm_settings::Rgb;
+use slterm_split::{
+    DIVIDER_GAP, HIT_SLOP, PaneId, RemoveOutcome, SplitDirection, SplitNav, SplitTree, TabId,
+    nav_target,
+};
+
+use super::SltermShellEvent;
+use super::windowing::{WorkspaceStartup, startup_geometry};
+use crate::agent_host::AgentHub;
+use crate::ai_hook::AiHookEvent;
+use crate::gpui_terminal::view::{TerminalLaunch, TerminalView, TerminalViewEvent};
+use crate::session::LaunchSession;
+use crate::terminal_registry::{self, PaneSessionMeta};
+use split_drag::SplitDrag;
+
+gpui::actions!(
+    slterm_workspace,
+    [
+        SplitRight,
+        SplitDown,
+        ToggleZoom,
+        FocusPaneLeft,
+        FocusPaneRight,
+        FocusPaneUp,
+        FocusPaneDown,
+        CloseActivePane,
+    ]
+);
+
+/// 一个终端 pane:视图实体 + 宿主订阅。id 全 workspace 唯一、终生不复用
+/// (03 篇 hook 的 `SLTERM_PANE_ID` 环境值与此同源)。
+pub struct TerminalPane {
+    pub id: PaneId,
+    /// 用户重命名(持久化归 05 session 叶;M5.3 无重命名 UI,恒 None)。
+    #[allow(dead_code)] // 消费点 = 快照(05 篇 M5.5)/侧栏展示(M5.3b)。
+    pub custom_name: Option<String>,
+    pub view: Entity<TerminalView>,
+    _subscription: Subscription,
+}
+
+/// 唯一合法 tab 类型集(面板封闭的 Rust 落点)。M5.3 只有 Terminal 变体;
+/// Settings/Document/Code 等变体归 06/07 篇按片落地。
+pub enum WorkspaceTab {
+    Terminal {
+        /// 实体属主,无序按 id 查。见模块头生命周期合同。
+        panes: Vec<TerminalPane>,
+        /// 叶 = pane id。
+        tree: SplitTree<PaneId>,
+        /// 键盘焦点与 split/close 作用对象。
+        focused: PaneId,
+        /// 聚焦 pane 满卡(内存态,快照不含);任何结构性操作先解除。
+        zoomed: bool,
+    },
+}
+
+/// tab 级展示态元数据(05 篇锚点;持久化四字段形态)。
+#[derive(Default)]
+#[allow(dead_code)] // 消费点 = 侧栏展示(M5.3b)与快照(M5.5);M5.3a 只立形态。
+pub struct TabMeta {
+    pub custom_name: Option<String>,
+    pub color: Option<Rgb>,
+    pub launch: Option<LaunchSession>,
+}
+
+/// tab + 展示态元数据同槽存放(单 Vec 消下同标耦合)。
+pub struct TabEntry {
+    /// 稳定身份:跨排序/活跃切换不变;消费面 = 侧栏(M5.3b)/dock(M5.4)。
+    #[allow(dead_code)]
+    pub id: TabId,
+    pub tab: WorkspaceTab,
+    #[allow(dead_code)] // 消费点同 `TabMeta`。
+    pub meta: TabMeta,
+}
+
+/// 壳内状态权威:直持 pane 实体与展示态,无投影层(13 篇改造节 2)。
+pub struct SltermWorkspace {
+    tabs: Vec<TabEntry>,
+    /// 位置索引(活跃定位);TabId 为稳定身份。
+    active: usize,
+    /// 单调分配器(PaneId/TabId 唯一性权威)。多窗扩展时按窗口分段(04 篇)。
+    next_pane: u64,
+    next_tab: u64,
+    /// spawn 网格:开窗定形后由 `prepare_initial_grid` 反推,首个 pane 的
+    /// 出生几何(启动零 resize 锚)。
+    initial_grid: (u16, u16),
+    /// PaneBoundsStore:canvas 探针 prepaint 回写(键 = pane id)。
+    pane_bounds: PaneBoundsStore,
+    /// SplitBoundsStore:canvas 探针 prepaint 回写(键 = (tab 下标, 节点路径))。
+    split_bounds: SplitBoundsStore,
+    /// 进行中的分隔条拖拽;`None` = 无手势。
+    split_drag: Option<SplitDrag>,
+    /// 每 pane 的 agent 宿主(AgentActivity/AnswerInbox 归属表)。
+    agent_hub: AgentHub,
+}
+
+/// 键:pane id(方向导航要拿所有叶子的屏幕矩形算最近邻)。
+type PaneBoundsStore = Rc<RefCell<HashMap<PaneId, Bounds<Pixels>>>>;
+/// 键:(tab 下标, 分屏节点路径)。路径语义同 `slterm_split::Divider`。
+type SplitBoundsStore = Rc<RefCell<HashMap<(usize, Vec<bool>), Bounds<Pixels>>>>;
+
+/// GPUI `Bounds` → `slterm_split::Rect`(同为窗口逻辑像素坐标系)。
+fn to_split_rect(bounds: &Bounds<Pixels>) -> slterm_split::Rect {
+    slterm_split::Rect::new(
+        f32::from(bounds.origin.x),
+        f32::from(bounds.origin.y),
+        f32::from(bounds.size.width),
+        f32::from(bounds.size.height),
+    )
+}
+
+impl SltermWorkspace {
+    pub fn new(
+        window: &mut Window,
+        shell_rx: mpsc::Receiver<SltermShellEvent>,
+        ai_events: Option<mpsc::Receiver<AiHookEvent>>,
+        startup: WorkspaceStartup,
+        cx: &mut Context<'_, Self>,
+    ) -> Self {
+        // 开窗 resize 异步落地前,先按目标几何谓出 spawn 网格(启动零 resize)。
+        let initial_grid = startup_geometry::prepare_initial_grid(
+            window,
+            cx,
+            startup_geometry::M3_SIDEBAR_WIDTH,
+            true,
+        );
+        let mut workspace = SltermWorkspace {
+            tabs: Vec::new(),
+            active: 0,
+            next_pane: 1,
+            next_tab: 1,
+            initial_grid,
+            pane_bounds: Rc::new(RefCell::new(HashMap::new())),
+            split_bounds: Rc::new(RefCell::new(HashMap::new())),
+            split_drag: None,
+            agent_hub: AgentHub::new(),
+        };
+        match startup {
+            WorkspaceStartup::NewTerminal { cwd } => {
+                workspace.add_terminal_tab(cwd, None, false, window, cx);
+            }
+            WorkspaceStartup::LaunchTerminal { cwd, command } => {
+                // `-e` 语义:命令本体即 pane 的启动进程(不是默认 shell 里
+                // 再注入一条命令)——冻结进 launch,会话恢复照此重建。显式
+                // 命令通道:core 跳过三家白名单并做裸名 PATH 路径化(SEC-01
+                // 豁免论证见 `Options::explicit_command`)。
+                let name = command.program().to_owned();
+                let shell = slterm_terminal::tty::Shell::new(
+                    command.program().to_owned(),
+                    command.args().to_vec(),
+                );
+                workspace.add_terminal_tab(cwd, Some((shell, name)), true, window, cx);
+            }
+        }
+        workspace.start_shell_event_pump(shell_rx, cx);
+        workspace.start_ai_hook_pump(ai_events, cx);
+        workspace.start_agent_screen_watchdog(cx);
+        workspace
+    }
+
+    /// 建一个 Terminal tab(cwd + 可选的显式 shell 身份),并聚焦其 pane。
+    fn add_terminal_tab(
+        &mut self,
+        cwd: Option<std::path::PathBuf>,
+        shell: Option<(slterm_terminal::tty::Shell, String)>,
+        explicit_command: bool,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let launch = match shell {
+            Some((shell, name)) => TerminalLaunch::Local {
+                cwd,
+                shell: Some(shell),
+                shell_name: Some(name),
+                explicit_command,
+            },
+            None => TerminalLaunch::Local {
+                cwd,
+                shell: None,
+                shell_name: None,
+                explicit_command,
+            },
+        };
+        let pane = self.new_pane(self.initial_grid, launch, window, cx);
+        let focused = pane.id;
+        let tab_id = TabId(self.next_tab);
+        self.next_tab = self.next_tab.saturating_add(1);
+        self.tabs.push(TabEntry {
+            id: tab_id,
+            tab: WorkspaceTab::Terminal {
+                panes: vec![pane],
+                tree: SplitTree::leaf(focused),
+                focused,
+                zoomed: false,
+            },
+            meta: TabMeta::default(),
+        });
+        self.active = self.tabs.len() - 1;
+        self.focus_active(window, cx);
+    }
+
+    /// 创建一个 pane 实体(分配 id、spawn 会话、挂宿主订阅、写注册表);
+    /// 调用方决定它进新 tab 还是接进某棵分屏树。
+    fn new_pane(
+        &mut self,
+        grid: (u16, u16),
+        launch: TerminalLaunch,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> TerminalPane {
+        let pane_id = PaneId(self.next_pane);
+        self.next_pane = self.next_pane.saturating_add(1);
+        let view = cx.new(|cx| TerminalView::new(pane_id, grid, launch, window, cx));
+        let subscription = cx.subscribe_in(&view, window, Self::on_terminal_event);
+        // 注册表写入点 1/2(spawn 侧;另一侧 = close_pane)。
+        terminal_registry::register(pane_id, PaneSessionMeta::default());
+        // agent 宿主同纪律:只在 pane 创建/关闭两处增删。
+        self.agent_hub.register(pane_id);
+        TerminalPane {
+            id: pane_id,
+            custom_name: None,
+            view,
+            _subscription: subscription,
+        }
+    }
+
+    /// 分屏新 pane 的启动身份:cwd 继承聚焦 pane;默认 shell 走 core 探测链。
+    ///
+    /// 测试隔离:UI 测试用必败命令顶替真 shell(真 PTY 线程会跨测试存活,
+    /// wake 已换线程的 executor 任务直接 fail-fast——11 篇测试纪律)。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    fn split_launch(cwd: Option<std::path::PathBuf>) -> TerminalLaunch {
+        TerminalLaunch::Local {
+            cwd,
+            shell: Some(slterm_terminal::tty::Shell::new(
+                "slterm-test-missing-shell-executable".into(),
+                Vec::new(),
+            )),
+            shell_name: None,
+            explicit_command: false,
+        }
+    }
+
+    #[cfg(not(all(test, feature = "gpui-test-support")))]
+    fn split_launch(cwd: Option<std::path::PathBuf>) -> TerminalLaunch {
+        TerminalLaunch::Local {
+            cwd,
+            shell: None,
+            shell_name: None,
+            explicit_command: false,
+        }
+    }
+
+    /// 在聚焦 pane 上开分屏:新 pane 继承聚焦 pane 的 cwd,spawn 网格按
+    /// 切割方向对半预估——首帧 prepaint 回写真实矩形后自动收敛。
+    fn split_focused(
+        &mut self,
+        direction: SplitDirection,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Option<PaneId> {
+        let active = self.active;
+        let entry = self.tabs.get(active)?;
+        let WorkspaceTab::Terminal { panes, focused, .. } = &entry.tab;
+        let focused = *focused;
+        let anchor = panes.iter().find(|pane| pane.id == focused)?;
+        let (cols, rows, cwd) = {
+            let view = anchor.view.read(cx);
+            (
+                view.grid_cols() as u16,
+                view.grid_rows() as u16,
+                view.cwd.clone(),
+            )
+        };
+        let grid = match direction {
+            SplitDirection::LeftRight => ((cols / 2).max(2), rows.max(2)),
+            SplitDirection::TopBottom => (cols.max(2), (rows / 2).max(2)),
+        };
+        let cwd = (!cwd.is_empty()).then(|| std::path::PathBuf::from(cwd));
+        let launch = Self::split_launch(cwd);
+        let pane = self.new_pane(grid, launch, window, cx);
+        let new_id = pane.id;
+
+        let attached = match self.tabs.get_mut(active) {
+            Some(entry) => {
+                let WorkspaceTab::Terminal {
+                    panes,
+                    tree,
+                    focused,
+                    zoomed,
+                } = &mut entry.tab;
+                // 建树挂不上 = 失败路径:立即回收 pane,不留孤儿 PTY。
+                if tree.split_leaf(*focused, new_id, direction, 0.5) {
+                    panes.push(pane);
+                    *focused = new_id;
+                    *zoomed = false;
+                    true
+                } else {
+                    pane.view.read(cx).shutdown();
+                    false
+                }
+            }
+            None => {
+                pane.view.read(cx).shutdown();
+                false
+            }
+        };
+        if !attached {
+            self.forget_pane(new_id);
+            return None;
+        }
+        self.mark_structural_resize(active, cx);
+        self.focus_active(window, cx);
+        cx.notify();
+        Some(new_id)
+    }
+
+    /// 结构性布局变化:让 tab 内每个 pane 的下一次网格观测直接下发到 Term
+    /// 与 ConPTY,不进尾沿去抖。
+    ///
+    /// 分屏创建/关闭、zoom 切换都属此列——几何只改一次,去抖没有可合并的
+    /// 后续帧,而多等的每一毫秒都是 Term(已按新网格渲染)与 ConPTY(仍是
+    /// 旧几何)不一致的窗口期:这段时间到达的字节按旧宽度进网格,等提交时
+    /// 本地 reflow 与 conhost rewrap 各折一套行数,提示符与回显就此错开。
+    fn mark_structural_resize(&mut self, tab_ix: usize, cx: &mut App) {
+        let Some(entry) = self.tabs.get(tab_ix) else {
+            return;
+        };
+        let WorkspaceTab::Terminal { panes, .. } = &entry.tab;
+        let views: Vec<_> = panes.iter().map(|pane| pane.view.clone()).collect();
+        for view in views {
+            view.update(cx, |view, _| view.mark_structural_resize());
+        }
+    }
+
+    /// 视图事件白集:标题变化重绘;会话结束走关 pane 状态机;
+    /// 用户输入的广播扇出归 M5(本次不接)。
+    fn on_terminal_event(
+        &mut self,
+        view: &Entity<TerminalView>,
+        event: &TerminalViewEvent,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        match event {
+            TerminalViewEvent::TitleChanged => {
+                cx.notify();
+            }
+            TerminalViewEvent::Exited => {
+                if let Some(pane_id) = self.locate_pane(view) {
+                    self.close_pane(pane_id, window, cx);
+                }
+            }
+            TerminalViewEvent::UserInput(_) => {}
+        }
+    }
+
+    fn locate_pane(&self, view: &Entity<TerminalView>) -> Option<PaneId> {
+        self.tabs.iter().find_map(|entry| match &entry.tab {
+            WorkspaceTab::Terminal { panes, .. } => panes
+                .iter()
+                .find(|pane| pane.view == *view)
+                .map(|pane| pane.id),
+        })
+    }
+
+    /// 关 pane 状态机(05 篇锚定):摘除 → 立即显式 shutdown → 焦点交幸存
+    /// 首叶;唯一叶子关闭 = 关 tab = 无 tab 时关窗(M3 语义保留)。
+    fn close_pane(&mut self, pane_id: PaneId, window: &mut Window, cx: &mut Context<'_, Self>) {
+        let Some(tab_index) = self.tabs.iter().position(|entry| match &entry.tab {
+            WorkspaceTab::Terminal { tree, .. } => tree.contains(pane_id),
+        }) else {
+            return;
+        };
+        let outcome = match &mut self.tabs[tab_index].tab {
+            WorkspaceTab::Terminal { tree, .. } => tree.remove_leaf(pane_id),
+        };
+        match outcome {
+            RemoveOutcome::NotFound => {}
+            RemoveOutcome::WasRoot => {
+                if let Some(pane) = self.tab_panes(tab_index).find(|pane| pane.id == pane_id) {
+                    pane.view.read(cx).shutdown();
+                }
+                self.forget_pane(pane_id);
+                self.tabs.remove(tab_index);
+                if self.tabs.is_empty() {
+                    window.remove_window();
+                    return;
+                }
+                if tab_index < self.active {
+                    self.active -= 1;
+                } else {
+                    self.active = self.active.min(self.tabs.len() - 1);
+                }
+                self.focus_active(window, cx);
+                cx.notify();
+            }
+            RemoveOutcome::Collapsed(next_focus) => {
+                {
+                    let WorkspaceTab::Terminal {
+                        panes,
+                        focused,
+                        zoomed,
+                        ..
+                    } = &mut self.tabs[tab_index].tab;
+                    if let Some(position) = panes.iter().position(|pane| pane.id == pane_id) {
+                        let pane = panes.remove(position);
+                        // 被摘 pane 立即显式 shutdown,不等 Drop 兜底。
+                        pane.view.read(cx).shutdown();
+                    }
+                    if *focused == pane_id {
+                        *focused = next_focus;
+                    }
+                    *zoomed = false;
+                }
+                self.forget_pane(pane_id);
+                self.mark_structural_resize(tab_index, cx);
+                if tab_index == self.active {
+                    self.focus_active(window, cx);
+                }
+                cx.notify();
+            }
+        }
+    }
+
+    /// 索引与宿主表的统一摘除点(注册表写入点 2/2 的对偶)。
+    fn forget_pane(&mut self, pane_id: PaneId) {
+        terminal_registry::remove(pane_id);
+        self.agent_hub.remove(pane_id);
+        self.pane_bounds.borrow_mut().remove(&pane_id);
+    }
+
+    fn tab_panes(&self, tab_index: usize) -> impl Iterator<Item = &TerminalPane> {
+        self.tabs
+            .get(tab_index)
+            .map(|entry| match &entry.tab {
+                WorkspaceTab::Terminal { panes, .. } => panes.as_slice(),
+            })
+            .unwrap_or(&[])
+            .iter()
+    }
+
+    /// 聚焦另一个 pane(点击上报或方向导航落点)。点同一个 pane 不解除
+    /// zoom(满卡里点击终端选字不应退出满卡);点别的 pane 先解除 zoom,
+    /// 属结构性几何变化,走同步下发。
+    fn focus_pane(
+        &mut self,
+        tab_ix: usize,
+        pane_id: PaneId,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let was_zoomed = {
+            let Some(entry) = self.tabs.get_mut(tab_ix) else {
+                return;
+            };
+            let WorkspaceTab::Terminal {
+                panes,
+                focused,
+                zoomed,
+                ..
+            } = &mut entry.tab;
+            if !panes.iter().any(|pane| pane.id == pane_id) || *focused == pane_id {
+                return;
+            }
+            let was_zoomed = *zoomed;
+            *focused = pane_id;
+            *zoomed = false;
+            was_zoomed
+        };
+        if tab_ix == self.active {
+            if was_zoomed {
+                self.mark_structural_resize(tab_ix, cx);
+            }
+            self.focus_active(window, cx);
+        }
+        cx.notify();
+    }
+
+    /// 方向导航:按上一帧 pane 矩形找目标方向最近邻(非对齐轴 4 倍漂移
+    /// 惩罚归 `slterm_split::nav_target`)。缩放态先退出缩放再导航,pane
+    /// 矩形读缩放前记录的上一帧。
+    fn navigate_pane(&mut self, nav: SplitNav, window: &mut Window, cx: &mut Context<'_, Self>) {
+        let active = self.active;
+        let (focused_id, rects, was_zoomed) = {
+            let Some(entry) = self.tabs.get(active) else {
+                return;
+            };
+            let WorkspaceTab::Terminal {
+                panes,
+                focused,
+                zoomed,
+                ..
+            } = &entry.tab;
+            if panes.len() < 2 {
+                return;
+            }
+            let bounds = self.pane_bounds.borrow();
+            let rects: Vec<(PaneId, slterm_split::Rect)> = panes
+                .iter()
+                .filter_map(|pane| {
+                    bounds
+                        .get(&pane.id)
+                        .map(|bounds| (pane.id, to_split_rect(bounds)))
+                })
+                .collect();
+            (*focused, rects, *zoomed)
+        };
+        if was_zoomed {
+            if let Some(WorkspaceTab::Terminal { zoomed, .. }) =
+                self.tabs.get_mut(active).map(|entry| &mut entry.tab)
+            {
+                *zoomed = false;
+            }
+            self.mark_structural_resize(active, cx);
+        }
+        if let Some(target) = nav_target(&rects, focused_id, nav) {
+            self.focus_pane(active, target, window, cx);
+        } else {
+            cx.notify();
+        }
+    }
+
+    /// 聚焦 pane 满卡缩放开关(05 篇 zoom 状态机;单 pane 无缩放语义)。
+    /// 几何从半卡跳整卡属一次性结构变化,走同步下发。
+    fn toggle_zoom(&mut self, cx: &mut Context<'_, Self>) {
+        let active = self.active;
+        let toggled = match self.tabs.get_mut(active).map(|entry| &mut entry.tab) {
+            Some(WorkspaceTab::Terminal { panes, zoomed, .. }) if panes.len() > 1 => {
+                *zoomed = !*zoomed;
+                true
+            }
+            _ => false,
+        };
+        if toggled {
+            self.mark_structural_resize(active, cx);
+            cx.notify();
+        }
+    }
+
+    /// 测试专用:活跃 tab 的 (panes id, 树叶, focused, zoomed) 快照。
+    /// 「panes == 树叶」不变式的断言端。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn active_tab_snapshot(&self) -> Option<(Vec<PaneId>, Vec<PaneId>, PaneId, bool)> {
+        let entry = self.tabs.get(self.active)?;
+        let WorkspaceTab::Terminal {
+            panes,
+            tree,
+            focused,
+            zoomed,
+        } = &entry.tab;
+        Some((
+            panes.iter().map(|pane| pane.id).collect(),
+            tree.leaves(),
+            *focused,
+            *zoomed,
+        ))
+    }
+
+    /// 测试专用:活跃 tab 根节点的提交比例(单叶 = None)。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn active_split_ratio(&self) -> Option<f32> {
+        let WorkspaceTab::Terminal { tree, .. } = &self.tabs.get(self.active)?.tab;
+        match tree {
+            SplitTree::Split { ratio, .. } => Some(*ratio),
+            SplitTree::Leaf(_) => None,
+        }
+    }
+
+    /// 测试专用:pane 矩形上一帧记录(canvas 探针回写端)。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn pane_bounds_of(&self, pane_id: PaneId) -> Option<Bounds<Pixels>> {
+        self.pane_bounds.borrow().get(&pane_id).copied()
+    }
+
+    /// 测试专用:活跃 tab 首个 pane 的视图实体。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn first_pane_view(&self) -> Option<Entity<TerminalView>> {
+        self.tab_panes(self.active)
+            .next()
+            .map(|pane| pane.view.clone())
+    }
+
+    /// 测试专用:spawn 网格只读(启动零 resize 锚的断言端)。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn initial_grid(&self) -> (u16, u16) {
+        self.initial_grid
+    }
+
+    /// 测试专用:活跃 tab 首个 pane id(hook 泵路由断言的锚点)。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn first_pane_id(&self) -> Option<PaneId> {
+        self.tab_panes(self.active).next().map(|pane| pane.id)
+    }
+
+    /// 测试专用:单 pane 的 agent 仲裁状态(事件泵端到端断言端)。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn agent_status(&self, pane_id: PaneId) -> Option<crate::ai_agents::AgentStatus> {
+        self.agent_hub.host(pane_id).map(|host| host.status())
+    }
+
+    /// 键盘焦点交活跃 tab 的聚焦 pane。
+    fn focus_active(&self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        let Some(entry) = self.tabs.get(self.active) else {
+            return;
+        };
+        match &entry.tab {
+            WorkspaceTab::Terminal { panes, focused, .. } => {
+                if let Some(pane) = panes.iter().find(|pane| pane.id == *focused) {
+                    let handle: FocusHandle = pane.view.read(cx).focus_handle.clone();
+                    window.focus(&handle, cx);
+                }
+            }
+        }
+    }
+
+    /// 焦点 pane:信封缺 `SLTERM_PANE_ID` 时的唯一回退目标。
+    fn focused_pane(&self) -> Option<PaneId> {
+        self.tabs
+            .get(self.active)
+            .map(|entry| &entry.tab)
+            .map(|WorkspaceTab::Terminal { focused, .. }| *focused)
+    }
+
+    /// AI hook 事件泵(M4.5,照上游 agents.rs 形态):管道服务线程写进程内
+    /// mpsc,后台定时器每 75ms 唤醒一次,前台线程排空并与 UI 状态合并。
+    /// 单批上限 64;满批说明下游有积压,退 1ms 让出渲染。
+    ///
+    /// 前台只做状态更新:解析与阻塞读都在管道线程,本任务只消费已解析事件。
+    fn start_ai_hook_pump(
+        &mut self,
+        receiver: Option<mpsc::Receiver<AiHookEvent>>,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(receiver) = receiver else {
+            return;
+        };
+        let executor = cx.background_executor().clone();
+        cx.spawn(async move |this, cx| {
+            let mut backlog = false;
+            loop {
+                executor
+                    .timer(Duration::from_millis(if backlog { 1 } else { 75 }))
+                    .await;
+                let mut events = Vec::new();
+                let mut disconnected = false;
+                while events.len() < 64 {
+                    match receiver.try_recv() {
+                        Ok(event) => events.push(event),
+                        Err(mpsc::TryRecvError::Empty) => break,
+                        Err(mpsc::TryRecvError::Disconnected) => {
+                            disconnected = true;
+                            break;
+                        }
+                    }
+                }
+                backlog = events.len() == 64;
+                if events.is_empty() {
+                    if disconnected {
+                        return;
+                    }
+                    continue;
+                }
+                let Ok(()) = this.update(cx, |workspace, _cx| {
+                    // 严格 pane 路由 + 仲裁在宿主内完成;UI 消费(页签徽标/
+                    // attention)归 05/09 篇,M4.5 不产生视图态。
+                    let focused = workspace.focused_pane();
+                    workspace.agent_hub.dispatch(events, focused);
+                }) else {
+                    return;
+                };
+                if disconnected {
+                    return;
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// 1 Hz 屏幕看门狗(照上游形态):逐 pane 取终端网格末尾样本喂仲裁器,
+    /// 给无 hook 的客户端补位、纠正丢边的 hook 状态。
+    ///
+    /// 节奏刻意与输出解耦:每个 `Wakeup` 上跑规则会在输出洪流下放大成本,
+    /// 而屏幕证据只需要拍帧级频率;`allows_screen()` 的 pane 由宿主内判定。
+    fn start_agent_screen_watchdog(&mut self, cx: &mut Context<'_, Self>) {
+        let executor = cx.background_executor().clone();
+        cx.spawn(async move |this, cx| {
+            loop {
+                executor.timer(Duration::from_secs(1)).await;
+                let Ok(()) = this.update(cx, |workspace, cx| {
+                    for (pane_id, screen) in workspace.screen_samples(cx) {
+                        workspace.agent_hub.observe_screen(pane_id, &screen);
+                    }
+                }) else {
+                    return;
+                };
+            }
+        })
+        .detach();
+    }
+
+    /// 每个终端 pane 的屏幕观察窗口(最近至多 24 行,与屏幕规则注意力区
+    /// 窗口同源)。无会话或零几何的 pane 跳过。
+    fn screen_samples(&self, cx: &App) -> Vec<(PaneId, String)> {
+        let mut samples = Vec::new();
+        for entry in &self.tabs {
+            let WorkspaceTab::Terminal { panes, .. } = &entry.tab;
+            for pane in panes {
+                if let Some(screen) = pane.view.read(cx).agent_screen_sample() {
+                    samples.push((pane.id, screen));
+                }
+            }
+        }
+        samples
+    }
+
+    /// 壳事件泵(照上游 residency.rs 形态):120ms 节奏排空通道,前台线程
+    /// 派发。M3 事件族均无消费者(预埋缝,见 SltermShellEvent 逐变体注释)——
+    /// 泵本体先立,消费臂归各篇。
+    fn start_shell_event_pump(
+        &mut self,
+        rx: mpsc::Receiver<SltermShellEvent>,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let executor = cx.background_executor().clone();
+        cx.spawn(async move |_this, cx| {
+            loop {
+                executor.timer(Duration::from_millis(120)).await;
+                let mut events = Vec::new();
+                while let Ok(event) = rx.try_recv() {
+                    events.push(event);
+                }
+                if events.is_empty() {
+                    continue;
+                }
+                cx.update(|_cx| {
+                    for event in events {
+                        match event {
+                            // 预埋缝:生产者归 04 篇 M7。
+                            SltermShellEvent::MuxAttach => {}
+                            SltermShellEvent::RuntimeControl => {}
+                            // 消费(右键「在此处打开」)归 09 篇。
+                            SltermShellEvent::OpenDirectories(_) => {}
+                        }
+                    }
+                });
+            }
+        })
+        .detach();
+    }
+
+    /// Terminal tab 的内容区:zoom 或单叶 → 聚焦 pane 满卡直渲(M3 路径
+    /// 保留为特例);否则按分屏树递归铺陈。
+    fn render_terminal_tab(&self, tab_ix: usize, cx: &mut Context<'_, Self>) -> gpui::AnyElement {
+        let Some(WorkspaceTab::Terminal {
+            tree,
+            panes,
+            focused,
+            zoomed,
+        }) = self.tabs.get(tab_ix).map(|entry| &entry.tab)
+        else {
+            return div().into_any_element();
+        };
+        if *zoomed || tree.is_leaf() {
+            let pane = panes
+                .iter()
+                .find(|pane| pane.id == *focused)
+                .or_else(|| panes.first());
+            let Some(pane) = pane else {
+                return div().into_any_element();
+            };
+            let pane_id = pane.id;
+            let store = self.pane_bounds.clone();
+            // 满卡路径也记录窗口坐标:方向导航与拖拽命中依赖上一帧矩形,
+            // 不能只在进入分屏递归后才得到边界。
+            return div()
+                .size_full()
+                .min_w_0()
+                .min_h_0()
+                .relative()
+                .debug_selector(move || format!("slterm-pane-{}", pane_id.0))
+                .child(pane.view.clone())
+                .child(
+                    canvas(
+                        move |bounds, _, _| {
+                            store.borrow_mut().insert(pane_id, bounds);
+                        },
+                        |_, _, _, _| (),
+                    )
+                    .absolute()
+                    .inset_0(),
+                )
+                .into_any_element();
+        }
+        let mut path = Vec::new();
+        self.render_split_node(tab_ix, tree, &mut path, panes, *focused, cx)
+    }
+
+    /// 递归渲染分屏树。Split 节点 = flex 容器:first 占 `relative(ratio)`、
+    /// 分隔条固定 `DIVIDER_GAP`、second 吃剩余(与 `slterm_split::layout`
+    /// 的切割数学等价到 ±divider×ratio ≤ 2px;比例在提交时按真实视口吸附
+    /// 整格,不累积漂移)。
+    ///
+    /// 渲染永远读**提交比例**:拖拽预览只走 overlay,终端网格零重排。
+    /// 节点视口与 pane 矩形经 canvas prepaint 回写帧记录,供拖拽换算与
+    /// 方向导航消费。
+    fn render_split_node(
+        &self,
+        tab_ix: usize,
+        node: &SplitTree<PaneId>,
+        path: &mut Vec<bool>,
+        panes: &[TerminalPane],
+        focused: PaneId,
+        cx: &mut Context<'_, Self>,
+    ) -> gpui::AnyElement {
+        match node {
+            SplitTree::Leaf(id) => {
+                let id = *id;
+                let Some(pane) = panes.iter().find(|pane| pane.id == id) else {
+                    return div().into_any_element();
+                };
+                let store = self.pane_bounds.clone();
+                let is_focused = id == focused;
+                // 非聚焦 pane 压暗(05 篇开放问题 1 默认带 veil;主题开关
+                // 归 06 键域)。veil 只盖终端区,不压暗分屏分隔条。
+                let veil = (!is_focused).then(|| {
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .bg(cx.theme().background.opacity(0.35))
+                });
+                div()
+                    .size_full()
+                    .min_w_0()
+                    .min_h_0()
+                    .relative()
+                    .debug_selector(move || format!("slterm-pane-{}", id.0))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _: &MouseDownEvent, window, cx| {
+                            this.focus_pane(tab_ix, id, window, cx);
+                        }),
+                    )
+                    // canvas 探针量整个叶子:方向导航与 dock 命中读的是 pane
+                    // 矩形。absolute + inset_0 不参与布局,纯观测。
+                    .child(
+                        canvas(
+                            move |bounds, _, _| {
+                                store.borrow_mut().insert(id, bounds);
+                            },
+                            |_, _, _, _| (),
+                        )
+                        .absolute()
+                        .inset_0(),
+                    )
+                    .child(
+                        div()
+                            .size_full()
+                            .min_w_0()
+                            .min_h_0()
+                            .relative()
+                            .child(pane.view.clone())
+                            .children(veil),
+                    )
+                    .into_any_element()
+            }
+            SplitTree::Split {
+                direction,
+                ratio,
+                dragging,
+                first,
+                second,
+                ..
+            } => {
+                let direction = *direction;
+                // 交互拖拽走轻量 overlay;这里保持提交比例,避免每次高频
+                // 指针事件都重建/重排两侧终端网格。
+                let show_ratio = *ratio;
+                let dragging = *dragging;
+                let key = (tab_ix, path.clone());
+                let store = self.split_bounds.clone();
+                let probe = canvas(
+                    move |bounds, _, _| {
+                        store.borrow_mut().insert(key.clone(), bounds);
+                    },
+                    |_, _, _, _| (),
+                )
+                .absolute()
+                .inset_0();
+
+                path.push(false);
+                let first_el = self.render_split_node(tab_ix, first, path, panes, focused, cx);
+                path.pop();
+                path.push(true);
+                let second_el = self.render_split_node(tab_ix, second, path, panes, focused, cx);
+                path.pop();
+
+                let drag_path = path.clone();
+                let drag_start_ratio = *ratio;
+                let selector_path = drag_path.clone();
+                let divider_id =
+                    SharedString::from(format!("split-divider-{tab_ix}-{drag_path:?}"));
+                let bar_color = if dragging {
+                    cx.theme().primary
+                } else {
+                    cx.theme().border.opacity(0.35)
+                };
+                // 视觉线 DIVIDER_GAP,命中区向两侧各扩 HIT_SLOP(旧壳同参)。
+                let hit = div()
+                    .id(divider_id)
+                    .debug_selector(move || format!("split-divider-{tab_ix}-{selector_path:?}"))
+                    .absolute()
+                    .map(|hit| match direction {
+                        SplitDirection::LeftRight => hit
+                            .top_0()
+                            .bottom_0()
+                            .left(px(-HIT_SLOP))
+                            .w(px(DIVIDER_GAP + HIT_SLOP * 2.0))
+                            .cursor_col_resize(),
+                        SplitDirection::TopBottom => hit
+                            .left_0()
+                            .right_0()
+                            .top(px(-HIT_SLOP))
+                            .h(px(DIVIDER_GAP + HIT_SLOP * 2.0))
+                            .cursor_row_resize(),
+                    })
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                            this.split_drag = Some(SplitDrag {
+                                tab: tab_ix,
+                                path: drag_path.clone(),
+                                direction,
+                                preview_ratio: drag_start_ratio,
+                                close_target: None,
+                                last_notified: std::time::Instant::now(),
+                            });
+                            if let Some(WorkspaceTab::Terminal { tree, .. }) =
+                                this.tabs.get_mut(tab_ix).map(|entry| &mut entry.tab)
+                                && let Some(SplitTree::Split {
+                                    preview_ratio,
+                                    dragging,
+                                    ..
+                                }) = tree.node_mut(&drag_path)
+                            {
+                                *preview_ratio = None;
+                                *dragging = true;
+                            }
+                            cx.notify();
+                        }),
+                    );
+                let divider = div()
+                    .relative()
+                    .flex_shrink_0()
+                    .map(|bar| match direction {
+                        SplitDirection::LeftRight => bar.w(px(DIVIDER_GAP)).h_full(),
+                        SplitDirection::TopBottom => bar.h(px(DIVIDER_GAP)).w_full(),
+                    })
+                    .bg(bar_color)
+                    .child(hit);
+
+                div()
+                    .size_full()
+                    .relative()
+                    .flex()
+                    .map(|el| match direction {
+                        SplitDirection::LeftRight => el.flex_row(),
+                        SplitDirection::TopBottom => el.flex_col(),
+                    })
+                    .child(probe)
+                    .child(
+                        div()
+                            .min_w_0()
+                            .min_h_0()
+                            .map(|el| match direction {
+                                SplitDirection::LeftRight => el.h_full().w(relative(show_ratio)),
+                                SplitDirection::TopBottom => el.w_full().h(relative(show_ratio)),
+                            })
+                            .child(first_el),
+                    )
+                    .child(divider)
+                    .child(div().flex_1().min_w_0().min_h_0().child(second_el))
+                    .into_any_element()
+            }
+        }
+    }
+}
+
+impl Render for SltermWorkspace {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
+        let content = match self.tabs.get(self.active).map(|entry| &entry.tab) {
+            Some(WorkspaceTab::Terminal { .. }) => Some(self.render_terminal_tab(self.active, cx)),
+            None => None,
+        };
+        // 分隔条拖拽 overlay 与全窗指针罩层(同 tab_drag 的捕获模式:罩层
+        // 独占指针,移动喂预览、松开提交/关闭)。overlay 在内容之上、罩层
+        // 之下;顺序即绘制序。
+        let split_overlay = self.split_drag_visual(cx);
+        let drag_direction = self.split_drag.as_ref().map(|drag| drag.direction);
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .relative()
+            .on_action(cx.listener(|this, _: &SplitRight, window, cx| {
+                this.split_focused(SplitDirection::LeftRight, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &SplitDown, window, cx| {
+                this.split_focused(SplitDirection::TopBottom, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &ToggleZoom, _, cx| {
+                this.toggle_zoom(cx);
+            }))
+            .on_action(cx.listener(|this, _: &FocusPaneLeft, window, cx| {
+                this.navigate_pane(SplitNav::Left, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &FocusPaneRight, window, cx| {
+                this.navigate_pane(SplitNav::Right, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &FocusPaneUp, window, cx| {
+                this.navigate_pane(SplitNav::Up, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &FocusPaneDown, window, cx| {
+                this.navigate_pane(SplitNav::Down, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &CloseActivePane, window, cx| {
+                if let Some(pane_id) = this.focused_pane() {
+                    this.close_pane(pane_id, window, cx);
+                }
+            }))
+            // 标题栏系统底座(13 篇缝合点 11):gpui-component TitleBar 承载
+            // 窗口标题与三钮;自绘标题栏演化归 05/09。
+            .child(TitleBar::new())
+            .child(div().flex_1().min_h_0().relative().children(content))
+            .children(split_overlay)
+            .when_some(drag_direction, |root, direction| {
+                root.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .occlude()
+                        .map(|mask| match direction {
+                            SplitDirection::LeftRight => mask.cursor_col_resize(),
+                            SplitDirection::TopBottom => mask.cursor_row_resize(),
+                        })
+                        .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                            this.update_split_drag(event, window, cx);
+                        }))
+                        .on_mouse_up(
+                            MouseButton::Left,
+                            cx.listener(|this, event: &MouseUpEvent, window, cx| {
+                                this.finish_split_drag(event.position, window, cx);
+                            }),
+                        ),
+                )
+            })
+    }
+}
+
+/// 工作区级键绑定(05 篇 M5.3;键位照抄上游:ctrl-shift-d 左右、
+/// ctrl-shift-s 上下、ctrl-shift-enter 缩放、ctrl-alt+方向切聚焦、
+/// ctrl-shift-w 关聚焦 pane)。在 `gpui_component::init` 之后调用一次。
+pub fn init(cx: &mut App) {
+    use gpui::KeyBinding;
+    cx.bind_keys([
+        KeyBinding::new("ctrl-shift-d", SplitRight, None),
+        KeyBinding::new("ctrl-shift-s", SplitDown, None),
+        KeyBinding::new("ctrl-shift-enter", ToggleZoom, None),
+        KeyBinding::new("ctrl-alt-left", FocusPaneLeft, None),
+        KeyBinding::new("ctrl-alt-right", FocusPaneRight, None),
+        KeyBinding::new("ctrl-alt-up", FocusPaneUp, None),
+        KeyBinding::new("ctrl-alt-down", FocusPaneDown, None),
+        KeyBinding::new("ctrl-shift-w", CloseActivePane, None),
+    ]);
+}
+
+#[cfg(test)]
+mod workspace_tests {
+    use super::*;
+
+    /// 满卡路径与分屏递归共用同一坐标换算:GPUI Bounds → slterm_split Rect
+    /// 保持左上原点与宽高逐字段一致。
+    #[test]
+    fn bounds_to_split_rect_keeps_origin_and_size() {
+        let bounds = Bounds::new(
+            gpui::point(px(10.0), px(20.0)),
+            gpui::size(px(300.0), px(200.0)),
+        );
+        let rect = to_split_rect(&bounds);
+        assert_eq!((rect.x, rect.y, rect.w, rect.h), (10.0, 20.0, 300.0, 200.0));
+    }
+}
