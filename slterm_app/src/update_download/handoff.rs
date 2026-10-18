@@ -1,4 +1,4 @@
-//! 两阶段安装 handoff 与 restore ticket(09 篇 M10.5 采纳点 31–32)。
+//! 两阶段安装 handoff 与 restore ticket。
 //!
 //! 事务目录里的文件是持久证据,崩溃后状态可重建:
 //! ```text
@@ -14,11 +14,10 @@
 //! 崩溃遗留的未 commit 事务(孤儿 plan / ready 无 commit)按 cancel 安全
 //! 默认收尾——绝不因为「文件存在」就授权安装。
 //!
-//! **未消费件登记。** 09 篇 M10.5 交付完整链面(检查→下载→handoff 文件
-//! 机),安装授权 UI 尚归更新弹窗步:prepare/commit/restore_ticket/
-//! acknowledge_restore/schedule/apply_scheduled 当前只由 L1 测试消费。
-//! 这些 API 是 M10.5 出口的机器可验面,故整模块豁免 dead_code;消费点
-//! 接线时逐个删除本豁免。
+//! **消费面。** prepare/commit/schedule 已由更新弹窗的安装授权步消费
+//! (R7 C27);restore_ticket/acknowledge_restore/apply_scheduled 由启动链
+//! 消费(M12/R4 B53)。其余仅测试消费的机器可验 API 仍由整模块
+//! dead_code 豁免兜住;消费点接线时逐个删除本豁免。
 #![allow(dead_code)]
 
 use std::io::{self, Read as _};
@@ -35,7 +34,7 @@ use crate::update_check::UpdateAsset;
 
 /// 事务 schema;与 `handoff.ps1` 内联校验值一致。
 const PLAN_SCHEMA: u32 = 1;
-/// helper 从启动到 ready 的等待预算(09 篇契约值照抄上游 Windows 分支)。
+/// helper 从启动到 ready 的等待预算(契约值照抄上游 Windows 分支)。
 const PREPARE_TIMEOUT: Duration = Duration::from_secs(30);
 /// 工作区快照上限:单窗应用远小于此,防御损坏/恶意文件。
 const MAX_WORKSPACE_WINDOWS: usize = 32;

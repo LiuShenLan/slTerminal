@@ -1,4 +1,4 @@
-//! 会话 schema 与持久化(05 篇 M5.2 锚点);同时承载 03 篇会话身份校验。
+//! 会话 schema 与持久化;同时承载会话身份校验。
 //!
 //! session.json 只回答「下次启动恢复成什么样」:1 Hz 快照持续写盘、启动前
 //! 断路器计数、收尾最后一笔标记正常退出;不承担驻留/多窗语义。格式版本从
@@ -49,7 +49,7 @@ pub enum SplitAxis {
     TopBottom,
 }
 
-/// 快照瞬间仍在 pane 前台运行的 AI CLI 对话身份(字段级消费归 03 篇)。
+/// 快照瞬间仍在 pane 前台运行的 AI CLI 对话身份(字段级消费归 AI 集成域)。
 /// 只存安全启动描述——来源名 + 会话 id + 原生会话文件,不存正文、不存启动
 /// 参数原文。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -194,7 +194,7 @@ impl LayoutSession {
     }
 }
 
-/// `Rgb` 值模型零 serde(06 篇契约),落盘形态固定为三元数组,由本适配层
+/// `Rgb` 值模型零 serde(设置契约),落盘形态固定为三元数组,由本适配层
 /// 表达;`None` 落为 null。
 mod rgb_triplet {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -260,8 +260,9 @@ pub struct Session {
     pub tabs: Vec<TabSession>,
     #[serde(default)]
     pub window: Option<WindowState>,
-    /// 侧栏骨架态(D05-3 已裁归 session):collapsed/width/双槽 active view。
-    /// 字段追加走 `serde(default)` 免升版;老文件缺整段回默认(schema 版本不变)。
+    /// 侧栏骨架态(D05-3 已裁归 session):collapsed/width/双槽 active view/
+    /// 双槽比例。字段追加走 `serde(default)` 免升版;老文件缺整段回默认
+    /// (schema 版本不变)。
     #[serde(default, deserialize_with = "deserialize_sidebar")]
     pub sidebar: SidebarState,
     /// 1 Hz 自动保存恒 false,只有正常收尾的最后一笔写 true;老文件缺省
@@ -293,7 +294,7 @@ impl Session {
     }
 }
 
-/// 数据目录里的规范落点(目录解析归 01 篇 `platform::dirs`)。
+/// 数据目录里的规范落点(目录解析归 `platform::dirs`)。
 pub(crate) fn session_path() -> PathBuf {
     crate::platform::dirs::data_dir().join("session.json")
 }
@@ -487,7 +488,7 @@ mod identity_tests {
 mod schema_tests {
     use super::*;
 
-    /// 05 篇 JSON 实例即夹具:快照形态 = 导出形态(同一 schema)。
+    /// JSON 实例即夹具:快照形态 = 导出形态(同一 schema)。
     const WORKSPACE: &str = r#"{
       "version": 1,
       "boot_attempts": 0,
@@ -578,6 +579,11 @@ mod schema_tests {
         );
         assert_eq!(session.sidebar.active_view_bottom, None);
         assert_eq!(session.sidebar.width, 250.0);
+        assert_eq!(
+            session.sidebar.ratio_permille,
+            crate::app_shell::workspace::sidebar::SIDEBAR_SPLIT_RATIO_DEFAULT,
+            "缺省双槽比例回 50/50"
+        );
         let tab = &session.tabs[0];
         assert_eq!(tab.custom_name, None);
         assert_eq!(tab.color, None);
@@ -599,7 +605,8 @@ mod schema_tests {
             "collapsed": true,
             "active_view_top": "explorer",
             "active_view_bottom": "agent_files",
-            "width": 312.5
+            "width": 312.5,
+            "ratio_permille": 618
           }
         }"#;
         let session = parse(json).expect("侧栏段必须可解析");
@@ -610,6 +617,7 @@ mod schema_tests {
             Some(SideViewId::AgentFiles)
         );
         assert_eq!(session.sidebar.width, 312.5);
+        assert_eq!(session.sidebar.ratio_permille, 618, "双槽比例字段级往返");
 
         let reprinted = serde_json::to_string_pretty(&session).expect("必须可序列化");
         assert_eq!(parse(&reprinted), Some(session), "字段级往返相等");
@@ -627,13 +635,41 @@ mod schema_tests {
             "collapsed": false,
             "active_view_top": "agent_files",
             "active_view_bottom": "obsolete",
-            "width": 9999.0
+            "width": 9999.0,
+            "ratio_permille": 2000
           }
         }"#;
         let session = parse(json).expect("脏侧栏段必须回退而不是拒收");
         assert_eq!(session.sidebar.active_view_top, None, "错槽视图置空");
         assert_eq!(session.sidebar.active_view_bottom, None, "未注册视图置空");
         assert_eq!(session.sidebar.width, 500.0, "宽度钳到上限");
+        assert_eq!(session.sidebar.ratio_permille, 900, "比例钳到上限");
+    }
+
+    /// 侧栏段内缺 `ratio_permille`(老文件追加字段前的形态)回默认 50/50,
+    /// 不影响其余字段。
+    #[test]
+    fn a_sidebar_section_without_a_ratio_takes_the_default() {
+        let json = r#"{
+          "version": 1,
+          "active_tab": 0,
+          "tabs": [],
+          "sidebar": {
+            "collapsed": false,
+            "active_view_top": "nav",
+            "active_view_bottom": "agent_files",
+            "width": 250.0
+          }
+        }"#;
+        let session = parse(json).expect("缺比例字段必须可解析");
+        assert_eq!(
+            session.sidebar.ratio_permille,
+            crate::app_shell::workspace::sidebar::SIDEBAR_SPLIT_RATIO_DEFAULT
+        );
+        assert_eq!(
+            session.sidebar.active_view_bottom,
+            Some(crate::app_shell::workspace::sidebar::SideViewId::AgentFiles)
+        );
     }
 
     /// 侧栏段为 null 时回默认,不炸整份会话。

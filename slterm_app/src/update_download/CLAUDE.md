@@ -18,9 +18,10 @@
   `restored.json` 留档防重放。
 - **安装目录归属**:安装器管理的安装(旁置 `unins000.exe`)才允许自覆盖;
   便携 zip 走下载页手动替换。
-- **未消费件**:安装授权 UI 尚未接线;恢复入口已接(`run_shell` 启动链
-  消费 `restore_ticket`,建窗后 `acknowledge_restore`,M12/R4 B53)。
-  handoff 与平台安装模块的 dead_code 豁免随接线逐个删除。
+- **消费面**:更新弹窗已接 `prepare/commit/schedule`(R7 C27);恢复入口
+  已接(`run_shell` 启动链消费 `restore_ticket`,建窗后
+  `acknowledge_restore`,M12/R4 B53)。handoff 与平台安装模块的其余
+  dead_code 豁免随消费点逐个删除。
 
 ## 步骤接缝
 

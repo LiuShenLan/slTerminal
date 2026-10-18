@@ -148,6 +148,7 @@ pub(crate) fn localized_input_placeholder(key: &str, language: UiLanguage) -> Sh
         "font_family" => language.text(Message::SettingsPlaceholderFontFamily),
         "font_size" => language.text(Message::SettingsPlaceholderFontSize),
         "startup_directory" => language.text(Message::SettingsPlaceholderStartupDirectory),
+        "backup_passphrase" => language.text(Message::SettingsBackupPassphrasePlaceholder),
         _ => "",
     };
     SharedString::from(text)

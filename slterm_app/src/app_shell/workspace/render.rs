@@ -1,4 +1,4 @@
-//! 工作区渲染下沉面(05 篇壳层职责):终端 tab 内容区与分屏树递归。
+//! 工作区渲染下沉面(壳层职责):终端 tab 内容区与分屏树递归。
 //!
 //! 从 `mod.rs` 拆出只为文件行数预算;职责与不变量不变——渲染永远读
 //! **提交比例**,拖拽预览只走 overlay,终端网格零重排。
@@ -73,7 +73,7 @@ impl SltermWorkspace {
                 .min_h_0()
                 .relative()
                 .debug_selector(move || format!("slterm-pane-{}", pane_id.0))
-                // 文件树拖放落点(07 篇 M8.4 交界 43):路径原文进 PTY。
+                // 文件树拖放落点:路径原文进 PTY。
                 .on_drop(move |drag: &FileTreeDrag, _, cx| {
                     if let Some(bytes) = crate::side_panel::drop_text_for_path(&drag.path_text) {
                         drop_view.update(cx, |view, cx| view.drop_path_text(bytes, cx));
@@ -126,12 +126,17 @@ impl SltermWorkspace {
                 let store = self.pane_bounds.clone();
                 let is_focused = id == ctx.focused;
                 let tab_ix = ctx.tab_ix;
-                // 非聚焦 pane 压暗(05 篇开放问题 1 默认带 veil;主题开关
-                // 归 06 键域)。veil 只盖终端区,不压暗分屏分隔条。
-                let veil = (!is_focused).then(|| {
+                // 非聚焦 pane 压暗:开关来自 Settings.veil,
+                // 自定义主题 effects.veil 显式值权威。veil 只盖终端区,
+                // 不压暗分屏分隔条;关闭时完全不绘制压暗层。
+                let veil_enabled = cx
+                    .try_global::<crate::app_shell::config::Settings>()
+                    .is_none_or(|settings| settings.veil);
+                let veil = (!is_focused && veil_enabled).then(|| {
                     div()
                         .absolute()
                         .inset_0()
+                        .debug_selector(move || format!("pane-veil-{}", id.0))
                         .bg(cx.theme().background.opacity(0.35))
                 });
                 let drop_view = pane.view.clone();
@@ -141,7 +146,7 @@ impl SltermWorkspace {
                     .min_h_0()
                     .relative()
                     .debug_selector(move || format!("slterm-pane-{}", id.0))
-                    // 文件树拖放落点(07 篇 M8.4 交界 43):路径原文进 PTY。
+                    // 文件树拖放落点:路径原文进 PTY。
                     .on_drop(move |drag: &FileTreeDrag, _, cx| {
                         if let Some(bytes) = crate::side_panel::drop_text_for_path(&drag.path_text)
                         {

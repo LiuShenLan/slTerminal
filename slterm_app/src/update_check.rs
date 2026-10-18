@@ -1,4 +1,4 @@
-//! 启动/手动更新检查(GitHub Releases,09 篇 M10.5 采纳点 23–26)。
+//! 启动/手动更新检查(GitHub Releases)。
 //!
 //! 全程 best-effort:断网、坏 JSON、GitHub 限流一律落 debug 日志,不弹错、
 //! 不阻塞 UI。启动检查是后台任务注册表的 12s 一次性任务,等首窗与首个
@@ -23,11 +23,10 @@ mod fallback;
 #[cfg(any(test, feature = "update-test-source"))]
 pub(crate) mod test_source;
 
-/// GitHub Releases 坐标(12 篇发布面登记值;本模块只消费)。
+/// GitHub Releases 坐标(发布面登记值;本模块只消费)。
 pub(crate) const RELEASES_API: &str =
     "https://api.github.com/repos/LiuShenLan/slTerminal/releases/latest";
-/// 手动下载页;消费点 = 更新弹窗的「前往下载」与无可安装资产时的提示。
-#[allow(dead_code)]
+/// 手动下载页;消费点 = 更新弹窗的「打开下载页」与无可安装资产时的提示。
 pub(crate) const RELEASES_PAGE: &str = "https://github.com/LiuShenLan/slTerminal/releases";
 /// 安装包下载前缀;资产合同与检查/下载两侧共享同一常量。
 pub(crate) const RELEASE_DOWNLOAD_PREFIX: &str =
@@ -333,14 +332,18 @@ pub(crate) fn should_prompt(version: &str) -> bool {
     should_prompt_at(&update_state_path(), version, now_secs())
 }
 
-/// 更新弹窗打开即记 prompted(消费者归更新提示步)。
-#[allow(dead_code)]
+/// 更新弹窗 UI 用例:断言状态文件落盘的唯一路径入口。
+#[cfg(all(test, feature = "gpui-test-support"))]
+pub(crate) fn update_state_path_for_test() -> PathBuf {
+    update_state_path()
+}
+
+/// 更新弹窗打开即记 prompted(消费者 = 更新提示步)。
 pub(crate) fn mark_prompted(version: &str) -> Result<(), String> {
     update_prompt_state_at(&update_state_path(), |state| state.mark_prompted(version))
 }
 
 /// 「稍后提醒」:now + 3 天;只影响该版本。
-#[allow(dead_code)]
 pub(crate) fn remind_later(version: &str) -> Result<(), String> {
     let now = now_secs();
     update_prompt_state_at(&update_state_path(), |state| {
@@ -349,7 +352,6 @@ pub(crate) fn remind_later(version: &str) -> Result<(), String> {
 }
 
 /// 跳过该版本(记录落盘;下次启动仍按 is_newer 再判,上游行为保留)。
-#[allow(dead_code)]
 pub(crate) fn skip_version(version: &str) -> Result<(), String> {
     update_prompt_state_at(&update_state_path(), |state| state.skip(version))
 }
@@ -423,7 +425,7 @@ fn valid_version(version: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'+'))
 }
 
-/// slTerminal 单一资产合同(09 篇改造节 7:三元组塌缩,无 legacy 品牌回退)。
+/// slTerminal 单一资产合同(改造节 7:三元组塌缩,无 legacy 品牌回退)。
 pub(crate) fn windows_x64_installer_names(version: &str) -> [String; 1] {
     [format!("slTerminal-v{version}-windows-x64-setup.exe")]
 }

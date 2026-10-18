@@ -6,7 +6,7 @@ mod completion;
 mod cwd_report;
 pub(super) mod layout;
 pub(super) mod pointer;
-/// 04 篇 M7.5:Runtime 写命令在 UI owner 上的终端侧执行入口。
+/// Runtime 写命令在 UI owner 上的终端侧执行入口。
 pub(super) mod runtime_control;
 pub(super) mod startup;
 pub(super) mod typography;
@@ -87,9 +87,9 @@ fn restart_cursor_blink_phase(cursor_visible: &mut bool, cursor_blink_epoch: &mu
     *cursor_blink_epoch
 }
 
-/// 终端视图对宿主(Workspace)暴露的状态变化。M3 白集(13 篇改造节);
+/// 终端视图对宿主(Workspace)暴露的状态变化。M3 白集;
 /// FocusRequested/RequestClose/Bell/Notification/Progress/菜单等臂归各自
-/// 分篇回填。
+/// 分模块回填。
 pub enum TerminalViewEvent {
     /// OSC 标题/cwd 变化,宿主应刷新 Tab 标题。
     TitleChanged,
@@ -107,11 +107,11 @@ pub enum TerminalViewEvent {
     /// OSC 133;D:命令结束。宿主收尾 AgentActivity 并发布快照。
     CommandFinished,
     /// OSC 9;4 任务进度(五态已映射,规范外码已归清除)。宿主按「活跃 tab
-    /// 的聚焦 pane」路由到任务栏(09 篇 M10.2)。
+    /// 的聚焦 pane」路由到任务栏。
     ProgressChanged(crate::taskbar::TaskProgress),
 }
 
-/// 会话种类。M3 只剩本地 shell:上游 `Ssh` 变体消亡(13 篇,06 篇按理想
+/// 会话种类。M3 只剩本地 shell:上游 `Ssh` 变体消亡(按理想
 /// 终态重设计时另立)。
 ///
 /// `shell` 是 Tab 创建时已经裁定好的启动命令。不能只传 cwd 再在
@@ -133,7 +133,7 @@ pub enum TerminalLaunch {
 pub struct TerminalView {
     pub pane_id: PaneId,
     pub session: Option<TerminalSession>,
-    /// PTY 创建时冻结的环境/cwd 快照(04 篇 `pane.exec` 唯一复用面)。
+    /// PTY 创建时冻结的环境/cwd 快照(`pane.exec` 唯一复用面)。
     pub(crate) exec_context: Option<crate::runtime_exec::PaneExecContext>,
     pub focus_handle: FocusHandle,
     pub font: Font,
@@ -141,18 +141,18 @@ pub struct TerminalView {
     pub font_italic: Font,
     pub font_bold_italic: Font,
     pub font_size: Pixels,
-    #[allow(dead_code)] // 设置热应用换字体时重读(06 篇);M3 构造期消费后闲置。
+    #[allow(dead_code)] // 设置热应用换字体时重读;M3 构造期消费后闲置。
     pub ligatures: bool,
     /// 单元格偏移取物理像素语义(对齐 crossfont 合同),在 GPUI shaped
-    /// 实际字形之后施加。M3 恒 (0,0)(06 篇设置键回填)。
+    /// 实际字形之后施加。M3 恒 (0,0)(设置键回填)。
     font_offset_x: f32,
     font_offset_y: f32,
     /// 主题行高倍率:`None` 保留 shaped 字体度量;`Some` 作用于逻辑字号。
     line_height_multiplier: Option<f32>,
     pub palette: Arc<Palette>,
-    /// 每 pane 一份的公式覆盖层状态(08 篇 M9.5;终端仍是真值)。
+    /// 每 pane 一份的公式覆盖层状态(终端仍是真值)。
     pub(crate) math_overlay: super::math_overlay::MathOverlay,
-    /// 补全关闭/缓存状态(08 篇 M9.5):键、抑制行、弹窗请求位与候选。
+    /// 补全关闭/缓存状态:键、抑制行、弹窗请求位与候选。
     pub(crate) suggest: crate::suggest::SuggestState,
     /// 按键镜像的当前输入行与光标(终端行编辑器不暴露 buffer)。
     pub(crate) suggest_line: String,
@@ -184,7 +184,7 @@ pub struct TerminalView {
     /// shell 集成 `SLTERM|cwd|branch|program` 标题上报 / OSC 7 的工作目录;
     /// tab 标签的第一优先来源。
     pub cwd: String,
-    /// 标题协议里的分支字段(05/04 篇 runtime 快照消费);OSC 7 不动它。
+    /// 标题协议里的分支字段(工作区与 runtime 快照消费);OSC 7 不动它。
     pub branch: String,
     /// 标题协议里的前台程序名;runtime 快照的 `running_program` 来源。
     pub running_program: Option<String>,
@@ -354,8 +354,8 @@ impl TerminalView {
             .unwrap_or_default()
     }
 
-    /// 事件白集(M3,13 篇锚定):每条臂的归篇见 13 篇改造节;新增事件
-    /// 消费须先查归篇表,不在此自由发挥。
+    /// 事件白集(M3):每条臂的归属见改造节;新增事件
+    /// 消费须先查归属表,不在此自由发挥。
     pub(super) fn process_event(&mut self, event: TermEvent, cx: &mut Context<'_, Self>) {
         let cwd_changed = cwd_report::apply(&mut self.cwd, &event);
         // 标题协议的第二/三段(branch/program)与 cwd 同一信封;OSC 7 只
@@ -374,7 +374,7 @@ impl TerminalView {
             TermEvent::Title(title) => {
                 // `SLTERM|cwd|branch` 标题协议:cwd 已由上面的 cwd_report
                 // 摘走;协议串不是窗口标题,更不是 tab 名。branch 字段的
-                // 消费归 05 篇 chrome,M3 不存。
+                // 消费归工作区 chrome,M3 不存。
                 if cwd_changed {
                     crate::completion::record_directory(&self.cwd);
                 }
@@ -464,7 +464,7 @@ impl TerminalView {
                 }
             }
             TermEvent::Notify(_) => {}
-            // 视觉闪烁与声音归 09 篇。
+            // 视觉闪烁与声音归通知域。
             TermEvent::Bell => {}
             // OSC 9;4:程序自报任务进度。解析层不收窄状态码,宽容映射收在
             // 消费层(`taskbar::TaskProgress::from_osc`):规范外码归清除。
@@ -550,7 +550,7 @@ impl TerminalView {
         self.pending_agent_command.as_deref()
     }
 
-    /// 文件树拖放落点(07 篇 M8.4 交界 43):路径文本直写 PTY。
+    /// 文件树拖放落点(交界 43):路径文本直写 PTY。
     ///
     /// 不走 bracketed-paste 哨兵:载荷是「路径 + 尾随空格」的粘贴形态,
     /// 没有换行,也不该被当成一段粘贴文本(哨兵会改变部分 shell 的行编辑
@@ -684,7 +684,7 @@ impl TerminalView {
         true
     }
 
-    /// 粘贴入口。M3 无多行确认(归 03/09 篇):文本直入;bracketed-paste
+    /// 粘贴入口。M3 无多行确认(归 AI 集成与通知域):文本直入;bracketed-paste
     /// 哨兵与注入过滤在 `paste_now_impl`。
     pub fn paste(&mut self, _window: &mut Window, cx: &mut Context<'_, Self>) {
         let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
@@ -712,7 +712,7 @@ impl TerminalView {
         }
     }
 
-    /// M3 键位分发:白名单按 13 篇改造节 3。分发判定唯一点 = 本函数的
+    /// M3 键位分发:白名单按改造节 3。分发判定唯一点 = 本函数的
     /// 快捷键层;编码器(`keymap`)零特例——Ctrl+C 不在快捷键层出现,
     /// ctrl_char('c')=0x03 经编码器恒透传(定位约束 7)。
     fn on_key_down(
@@ -738,7 +738,7 @@ impl TerminalView {
             match ks.key.as_str() {
                 "c" => {
                     // D13-1 默认语义:无选区也 stop_propagation 静默吞——
-                    // 复制键永不入 PTY;负反馈/透传中断的权衡见 13 篇待沉淀。
+                    // 复制键永不入 PTY;负反馈/透传中断的权衡见待沉淀决策。
                     self.copy_selection(true, window, cx);
                     cx.stop_propagation();
                     return;
@@ -758,7 +758,7 @@ impl TerminalView {
                 _ => {}
             }
         }
-        // 08 篇 M9.5:AI 建议条键语义优先于补全(Esc 先撤条),再是补全
+        // AI 建议条键语义优先于补全(Esc 先撤条),再是补全
         // 导航/接受。两条路径消费按键时都不进入编码器。
         if self.handle_ai_fix_key(ks, cx) {
             cx.stop_propagation();
@@ -803,7 +803,7 @@ impl TerminalView {
 
         // 编码器路径:Some(bytes) → 写 PTY + 上报语义输入;None(纯文本键)
         // 落 IME 管道(`replace_text_in_range` → write_user_text)照旧。
-        // `running_program` 恒 None——agent 检测归 03 篇,签名留位。
+        // `running_program` 恒 None——agent 检测归 AI 集成域,签名留位。
         if let Some(bytes) = keymap::encode_for_program(ks, &mode, None) {
             keymap::trace_enter(ks, &mode, &bytes);
             // 按键镜像只更新输入快照;候选重算在后台,不占按键热路径。
@@ -1020,14 +1020,25 @@ impl Render for TerminalView {
             root = root.child(div().p_4().child(error.clone()));
         } else {
             root = root.child(TerminalElement::new(cx.entity()));
-            // 补全弹窗(08 篇 M9.5):与 ghost 同源候选;渲染只读状态。
+            // 底部浮层统一收进 bottom 锚定的 flex column:自上而下为
+            // 补全弹窗、AI 建议条、退出横幅。列式布局保证两者并存时永不
+            // 重叠——AI 条换行变高时,弹窗整体上移。
+            let mut bottom_stack = div()
+                .id("slterm-bottom-stack")
+                .debug_selector(|| "slterm-bottom-stack".to_owned())
+                .absolute()
+                .bottom(px(8.0))
+                .left(px(8.0))
+                .right(px(8.0))
+                .flex()
+                .flex_col()
+                .items_start()
+                .gap(px(8.0));
+            // 补全弹窗:与 ghost 同源候选;渲染只读状态。
             if !self.suggest.completion_items.is_empty() {
                 let mut list = div()
                     .id("slterm-completion-popup")
                     .debug_selector(|| "slterm-completion-popup".to_owned())
-                    .absolute()
-                    .bottom(px(64.0))
-                    .left_2()
                     .w(px(420.0))
                     .max_h(px(220.0))
                     .overflow_hidden()
@@ -1053,9 +1064,9 @@ impl Render for TerminalView {
                             )),
                     );
                 }
-                root = root.child(list);
+                bottom_stack = bottom_stack.child(list);
             }
-            // AI 建议条(08 篇 M9.5):Pending 显 analyzing;Ready 是图标 +
+            // AI 建议条:Pending 显 analyzing;Ready 是图标 +
             // 命令 + 解释 + 键位提示;一律只贴不执行。
             if let Some(bar) = self.ai_fix_bar() {
                 let language = cx
@@ -1075,14 +1086,11 @@ impl Render for TerminalView {
                     text.push_str(language.text(Message::TerminalAiFixHint));
                     text
                 };
-                root = root.child(
+                bottom_stack = bottom_stack.child(
                     div()
                         .id("slterm-ai-fix-bar")
                         .debug_selector(|| "slterm-ai-fix-bar".to_owned())
-                        .absolute()
-                        .bottom_2()
-                        .left_2()
-                        .right_2()
+                        .w_full()
                         .px_3()
                         .py_2()
                         .rounded_md()
@@ -1095,11 +1103,8 @@ impl Render for TerminalView {
                 );
             }
             if let Some(exited) = &self.exited {
-                root = root.child(
+                bottom_stack = bottom_stack.child(
                     div()
-                        .absolute()
-                        .bottom_2()
-                        .left_2()
                         .px_2()
                         .py_1()
                         .rounded_md()
@@ -1108,6 +1113,7 @@ impl Render for TerminalView {
                         .child(exited.clone()),
                 );
             }
+            root = root.child(bottom_stack);
         }
         root
     }

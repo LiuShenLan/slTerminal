@@ -19,5 +19,7 @@
 
 ## 步骤接缝
 
-- 壳启动 `spawn_once` 投递 `UpdateAvailable`;安装授权 UI 归更新弹窗步。
+- 壳启动 `spawn_once` 投递 `UpdateAvailable`;更新弹窗打开即
+  `mark_prompted`,「稍后提醒」/「跳过此版本」经 `remind_later`/
+  `skip_version` 落盘(R7 C27/B52)。
 - `fallback` 消费 `SHA256SUMS`;`assets` 的资产名同时被下载侧合同复用。

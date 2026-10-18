@@ -508,6 +508,86 @@ fn theme_editor_saves_advanced_typography_layout_and_blur(cx: &mut TestAppContex
     );
 }
 
+/// C7:非聚焦窗格压暗开关随主题文档 round-trip;Reset/模板切换遵循既有字段模式。
+#[gpui::test]
+fn theme_editor_pane_veil_switch_round_trips_through_the_library(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    let directory = tempfile::tempdir().unwrap();
+    let settings_path = directory.path().join("settings.json");
+    let pane = open_theme_editor_at(cx, &workspace, &mut window, settings_path);
+    cx.update(|cx| {
+        assert_eq!(
+            pane.read(cx)
+                .theme_editor_draft_for_test()
+                .unwrap()
+                .effects
+                .veil,
+            None,
+            "内置模板未设置 veil(界面显示为开)"
+        );
+    });
+
+    // 关闭开关 → 草稿显式 false。
+    window.update(|_window, cx| {
+        pane.update(cx, |pane, cx| {
+            pane.set_theme_editor_veil_for_test(false, cx);
+        });
+    });
+    cx.update(|cx| {
+        assert_eq!(
+            pane.read(cx)
+                .theme_editor_draft_for_test()
+                .unwrap()
+                .effects
+                .veil,
+            Some(false)
+        );
+    });
+
+    let saved = window.update(|window, cx| {
+        pane.update(cx, |pane, cx| {
+            pane.save_theme_editor_for_test(false, window, cx)
+        })
+    });
+    assert!(
+        saved,
+        "保存必须成功: {:?}",
+        cx.update(|cx| pane
+            .read(cx)
+            .theme_editor_error_for_test()
+            .map(str::to_owned))
+    );
+    let document = read_single_theme_document(directory.path());
+    assert_eq!(
+        document.definition().unwrap().effects.veil,
+        Some(false),
+        "关闭状态必须写入主题文档并可回读"
+    );
+    assert_eq!(
+        document.to_value()["effects"]["veil"].as_bool(),
+        Some(false)
+    );
+
+    // Reset 回到基线;模板切换回到新模板的「未设置」。
+    window.update(|window, cx| {
+        pane.update(cx, |pane, cx| {
+            pane.set_theme_editor_veil_for_test(true, cx);
+            pane.reset_theme_editor_for_test(window, cx);
+            assert_eq!(
+                pane.theme_editor_draft_for_test().unwrap().effects.veil,
+                Some(false),
+                "Reset 必须回到已保存基线"
+            );
+            pane.switch_theme_template_for_test(3, window, cx);
+            assert_eq!(
+                pane.theme_editor_draft_for_test().unwrap().effects.veil,
+                None,
+                "模板切换后回到模板快照的未设置状态"
+            );
+        });
+    });
+}
+
 /// Apply:已有运行时键即时生效;无运行时键的字段只留在主题文档。
 #[gpui::test]
 fn theme_editor_apply_publishes_runtime_keys_and_keeps_document_only_fields(

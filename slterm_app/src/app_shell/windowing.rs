@@ -23,7 +23,7 @@ use crate::platform::startup::first_frame;
 use crate::runtime_api::RuntimeHub;
 use crate::session::WindowState;
 
-/// 首窗的启动形态(13 篇 M3 两变体)。
+/// 首窗的启动形态(新终端 / 新终端并执行命令两变体)。
 pub(crate) enum WorkspaceStartup {
     /// 新终端(可带显式 cwd)。
     NewTerminal { cwd: Option<PathBuf> },
@@ -70,7 +70,7 @@ fn fit_to_display(
     ))
 }
 
-/// 窗口定形唯一函数(13 篇缝合点 11:M5.5 回放 = 定形前覆盖 preferred_size,
+/// 窗口定形唯一函数(会话恢复回放 = 定形前覆盖 preferred_size,
 /// 不改调用序)。M3 单形态 = Regular。
 pub(crate) fn workspace_window_options(
     cx: &App,
@@ -96,16 +96,17 @@ pub(crate) fn workspace_window_options(
         window_min_size: Some(size(px(MIN_WINDOW_SIZE.0), px(MIN_WINDOW_SIZE.1)).min(&bounds.size)),
         titlebar: Some(TitleBar::title_bar_options()),
         app_id: Some(brand::WINDOWS_APP_ID.to_owned()),
-        // 首帧即平台 backdrop(09 篇 M10.7):Mica/MicaAlt 原生枚举、
-        // Aero/Acrylic 走 Blurred;None 也保留透明交换链——GPUI Windows
-        // 渲染器按枚举选清屏 alpha,Opaque 会盖死透明度与材质。
+        // 首帧即平台 backdrop:Mica/MicaAlt/Acrylic(22H2+)
+        // 走系统 backdrop 通道,其中 Acrylic 由壳侧改写为 TRANSIENTWINDOW;
+        // Aero 与旧系统 Acrylic 走 Blurred;None 也保留透明交换链——GPUI
+        // Windows 渲染器按枚举选清屏 alpha,Opaque 会盖死透明度与材质。
         window_background: crate::app_shell::wallpaper::initial_background_appearance(cx),
         focus,
         ..Default::default()
     }
 }
 
-/// 静默启动的窗口形态(09 篇 M10.6):不显示、不抢焦点。
+/// 静默启动的窗口形态:不显示、不抢焦点。
 ///
 /// 隐藏窗口不进入 present-then-show 链——该链只为「即将曝光」的窗口
 /// 防首帧黑窗;托盘「显示」时 GPUI `activate_window` 消费首窗 placement
@@ -118,7 +119,7 @@ fn apply_start_hidden(options: &mut WindowOptions, start_hidden: bool) {
 }
 
 /// 启动链调一次的开窗入口:命令行 `-e` → LaunchTerminal;有 cwd →
-/// NewTerminal;否则消费启动恢复计划(会话恢复归 05 篇 M5.5)。
+/// NewTerminal;否则消费启动恢复计划(见 `session_recovery`)。
 #[allow(clippy::too_many_arguments)] // 启动链参数逐项显式(单一调用点),不折叠中间结构体。
 pub(crate) fn open_initial_window(
     cx: &mut App,
@@ -144,7 +145,7 @@ pub(crate) fn open_initial_window(
     let deferred_show = first_frame::defer_show(&mut options);
     let result = cx.open_window(options, move |window, cx| {
         window.set_window_title(brand::NAME);
-        // HWND 发布单点(09 篇 M10.4):任务栏闪烁/进度经 facade 查询。
+        // HWND 发布单点:任务栏闪烁/进度经 facade 查询。
         crate::windowing::focus::publish_window(window);
         let workspace = cx.new(|cx| {
             SltermWorkspace::new(
@@ -161,7 +162,7 @@ pub(crate) fn open_initial_window(
     });
     match result {
         Ok(handle) => {
-            // 视效落窗(09 篇 M10.7):应用原生 AccentPolicy/DWMSBT 并启动
+            // 视效落窗:应用原生 AccentPolicy/DWMSBT 并启动
             // 壁纸加载。只改背景外观与绘制,不 show/activate——静默窗口的
             // `apply_start_hidden` 形态不被覆盖。
             crate::app_shell::wallpaper::refresh(cx);

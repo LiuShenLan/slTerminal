@@ -1,6 +1,6 @@
 //! 原生主题编辑器:草稿/基线双快照 + 首次保存恒 fork。
 //!
-//! 承重语义(06 篇):
+//! 承重语义:
 //! - 编辑器持有具体 `draft`(编辑中的值)与 `baseline`(最近已持久化快照,
 //!   回滚/脏判定基准);模板切换只替换 draft,源主题与已持久化运行时不动。
 //! - 首次保存恒 fork:无论模板是内置还是他人自定义主题,都经
@@ -21,6 +21,7 @@ use gpui::{
 use gpui_component::button::Button;
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::select::{Select, SelectEvent, SelectState};
+use gpui_component::switch::Switch;
 use gpui_component::{ActiveTheme as _, Disableable as _, IndexPath, h_flex, v_flex};
 use slterm_settings::{
     BlurMode, Rgb8, ThemeDefinition, ThemeName, foreground_recommendations, format_hex_rgb,
@@ -719,6 +720,19 @@ impl SettingsPane {
         cx.notify();
     }
 
+    /// 非聚焦窗格压暗开关;只改草稿,保存时随主题文档落盘。
+    fn on_theme_editor_veil_toggled(&mut self, enabled: bool, cx: &mut Context<'_, Self>) {
+        let Some(editor) = self.theme_editor.as_mut() else {
+            return;
+        };
+        if editor.save_busy || editor.draft.effects.veil == Some(enabled) {
+            return;
+        }
+        editor.draft.effects.veil = Some(enabled);
+        editor.saved = false;
+        cx.notify();
+    }
+
     /// 取色推荐点选(原色恒第一;候选只供建议)。
     pub(super) fn set_theme_color(
         &mut self,
@@ -1255,6 +1269,24 @@ impl SettingsPane {
                                 ),
                             cx,
                         ),
+                    )
+                    .child(
+                        self.row(
+                            language.text(Message::SettingsAppearanceVeil),
+                            language.text(Message::SettingsAppearanceVeilDescription),
+                            div()
+                                .debug_selector(|| "theme-editor-veil".to_owned())
+                                .child(
+                                    Switch::new("theme-editor-veil")
+                                        .checked(draft.effects.veil.unwrap_or(true))
+                                        .on_click(cx.listener(
+                                            |this, checked: &bool, _window, cx| {
+                                                this.on_theme_editor_veil_toggled(*checked, cx);
+                                            },
+                                        )),
+                                ),
+                            cx,
+                        ),
                     ),
             )
             .child(
@@ -1614,5 +1646,14 @@ impl SettingsPane {
             .read(cx)
             .selected_index(cx)
             .map(|path| path.row)
+    }
+
+    /// 模拟压暗开关点击(与 `Switch::on_click` 同一处理入口)。
+    pub(crate) fn set_theme_editor_veil_for_test(
+        &mut self,
+        enabled: bool,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.on_theme_editor_veil_toggled(enabled, cx);
     }
 }

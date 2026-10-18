@@ -503,6 +503,8 @@ impl ThemeLayout {
 pub struct ThemeEffects {
     pub opacity: Option<f32>,
     pub blur: Option<BlurMode>,
+    /// 非聚焦窗格是否绘制压暗层;`None` = 跟随内置默认(开启)。
+    pub veil: Option<bool>,
     pub cursor_shape: Option<CursorShapeName>,
     pub background_image: Option<String>,
     pub background_image_opacity: Option<f32>,

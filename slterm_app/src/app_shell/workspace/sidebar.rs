@@ -1,4 +1,4 @@
-//! 侧栏骨架:ActivityBar + 上下双槽内容区(05 篇 D05-2 已裁双槽形态)。
+//! 侧栏骨架:ActivityBar + 上下双槽内容区。
 //!
 //! 槽位状态机照旧栈侧栏 R1-R9 纯函数语义移植:
 //! - R1/R2(`toggle_view_pure`):点击未打开视图 = 打开并隐式替换同槽旧视图;
@@ -8,18 +8,22 @@
 //! - R9(`reconcile_views`):持久化恢复时把未注册或错槽的 active view 置空;
 //!   「缺失注册 id 补按钮」由封闭集每帧重建按钮列表机械保证,无需追加状态。
 //!
-//! 本步只落骨架与占位:视图内容归 03/07 篇,图标归 06 篇;按钮换区排序
-//! (旧栈 R6-R8)归后续步骤。`SidebarState` 的四字段是 session schema 的
+//! 本步只落骨架与占位:视图内容归各视图模块,图标归主题体系;按钮换区排序
+//! (旧栈 R6-R8)归后续步骤。`SidebarState` 的字段是 session schema 的
 //! 持久化面(D05-3 已裁归 session),既有字段追加一律走 `serde(default)`。
 //!
 //! 视图形状收缩为封闭集 [`SideViewId`]:按钮列表由 [`side_view_defs`] 每帧
 //! 重建,槽位归属由 [`SideViewId::zone`] 单点裁定(本步无拖拽换区)。
+//!
+//! A8:双槽同时打开时按 `ratio_permille` 分配高度,中间分隔条可拖拽。
+//! 拖拽沿用宽度热区的 overlay 方案:手势期间只改千分比并重绘,终端网格
+//! 零重排、不触发即时写盘(1 Hz 快照自然持久化)。
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     AnyElement, Context, InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent,
     MouseMoveEvent, ParentElement as _, SharedString, StatefulInteractiveElement as _, Styled as _,
-    div, px,
+    canvas, div, px,
 };
 use gpui_component::{ActiveTheme as _, Icon, IconName};
 use serde::{Deserialize, Serialize};
@@ -42,6 +46,14 @@ pub(crate) const SIDEBAR_WIDTH_DEFAULT: f32 = 250.0;
 pub(super) const SIDEBAR_WIDTH_MIN: f32 = 160.0;
 /// 侧栏内容区最大宽度(旧栈同值)。
 pub(super) const SIDEBAR_WIDTH_MAX: f32 = 500.0;
+/// 双槽高度比例默认值(旧栈 splitRatio 50/50)。
+pub(crate) const SIDEBAR_SPLIT_RATIO_DEFAULT: u16 = 500;
+/// 上槽最小占比:防止任一槽被拖到不可用高度。
+pub(super) const SIDEBAR_SPLIT_RATIO_MIN: u16 = 100;
+/// 上槽最大占比(下槽至少保留 10%)。
+pub(super) const SIDEBAR_SPLIT_RATIO_MAX: u16 = 900;
+/// 双槽分隔条命中带高度(视觉线居中 1px,整带可拖)。
+const SIDEBAR_SPLIT_DIVIDER_HEIGHT: f32 = 5.0;
 
 /// 侧栏半区标识。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,8 +83,8 @@ pub(super) enum SidebarLayout {
 
 /// 侧栏视图封闭集(旧栈注册序:nav/explorer/commit/agentFiles)。
 ///
-/// 内容归属:nav 数据源归 D05-2 所在篇,explorer/commit 归 07 篇,
-/// agentFiles 归 03 篇。图标归 06 篇,本步只登记 id + title。
+/// 内容归属:nav 数据源归导航树,explorer/commit 归文件树与提交视图,
+/// agentFiles 归 AI 集成。图标归主题体系,本步只登记 id + title。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum SideViewId {
@@ -135,7 +147,7 @@ impl SideViewId {
     }
 }
 
-/// side view 注册项骨架:id + title;icon 归 06 篇。
+/// side view 注册项骨架:id + title;icon 归主题体系。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct SideViewDef {
     pub id: SideViewId,
@@ -150,26 +162,29 @@ pub(super) fn side_view_defs() -> [SideViewDef; 4] {
     })
 }
 
-/// 侧栏骨架态:collapsed/width/双槽 active view。
+/// 侧栏骨架态:collapsed/width/双槽 active view/双槽高度比例。
 ///
 /// D05-3 已裁归 session:字段直接进 session schema 跟现场恢复,不是设置域
-/// 偏好。宽度用 f32 逻辑像素,载入时 clamp 到旧栈区间。
+/// 偏好。宽度用 f32 逻辑像素,载入时 clamp 到旧栈区间;双槽比例用千分比
+/// 整数(上槽占比),与分屏树 `ratio_permille` 同口径,避免 f32 序列化噪声。
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub(crate) struct SidebarState {
     pub collapsed: bool,
     pub active_view_top: Option<SideViewId>,
     pub active_view_bottom: Option<SideViewId>,
     pub width: f32,
+    pub ratio_permille: u16,
 }
 
 impl Default for SidebarState {
-    /// 旧栈 DEFAULT_OPEN:上槽默认打开导航树,下槽空,侧栏展开。
+    /// 旧栈 DEFAULT_OPEN:上槽默认打开导航树,下槽空,侧栏展开,比例 50/50。
     fn default() -> Self {
         Self {
             collapsed: false,
             active_view_top: Some(SideViewId::Nav),
             active_view_bottom: None,
             width: SIDEBAR_WIDTH_DEFAULT,
+            ratio_permille: SIDEBAR_SPLIT_RATIO_DEFAULT,
         }
     }
 }
@@ -188,6 +203,9 @@ impl<'de> Deserialize<'de> for SidebarState {
             active_view_top: Option<String>,
             active_view_bottom: Option<String>,
             width: f32,
+            /// 按 f32 收脏值:整数/小数/越界都先收敛到 u16 千分比,只有
+            /// 类型级损坏(字符串落数字槽)才拒收整份会话。
+            ratio_permille: f32,
         }
 
         impl Default for RawSidebar {
@@ -198,6 +216,7 @@ impl<'de> Deserialize<'de> for SidebarState {
                     active_view_top: defaults.active_view_top.map(|id| id.id_str().to_owned()),
                     active_view_bottom: None,
                     width: defaults.width,
+                    ratio_permille: f32::from(defaults.ratio_permille),
                 }
             }
         }
@@ -211,6 +230,7 @@ impl<'de> Deserialize<'de> for SidebarState {
                 .as_deref()
                 .and_then(SideViewId::from_id),
             width: clamp_width(raw.width),
+            ratio_permille: clamp_ratio(raw.ratio_permille),
         };
         Ok(reconcile_views(&state, &SideViewId::ALL))
     }
@@ -242,6 +262,28 @@ pub(super) fn clamp_width(width: f32) -> f32 {
         return SIDEBAR_WIDTH_MIN;
     }
     width.clamp(SIDEBAR_WIDTH_MIN, SIDEBAR_WIDTH_MAX)
+}
+
+/// 双槽比例收敛:四舍五入到整千分比并钳到 [100, 900];非有限值回默认
+/// 50/50(脏会话文件/异常指针坐标不得把某个槽压成零高度)。
+pub(super) fn clamp_ratio(value: f32) -> u16 {
+    if !value.is_finite() {
+        return SIDEBAR_SPLIT_RATIO_DEFAULT;
+    }
+    value.round().clamp(
+        f32::from(SIDEBAR_SPLIT_RATIO_MIN),
+        f32::from(SIDEBAR_SPLIT_RATIO_MAX),
+    ) as u16
+}
+
+/// 指针 y → 上槽占比千分比。`top`/`height` = 侧栏内容区(`sidebar-area`)
+/// 的上一帧矩形;指针越过区域上下缘时由 [`clamp_ratio`] 收敛到边界。
+/// 高度退化(未布局/为 0)回默认比例,不产生除零。
+pub(super) fn sidebar_split_ratio_at(pointer_y: f32, top: f32, height: f32) -> u16 {
+    if !pointer_y.is_finite() || !top.is_finite() || !height.is_finite() || height <= 0.0 {
+        return SIDEBAR_SPLIT_RATIO_DEFAULT;
+    }
+    clamp_ratio((pointer_y - top) / height * 1000.0)
 }
 
 /// R1/R2:点击视图开关。打开动作同时解除 collapsed——点了按钮就是要看内容。
@@ -288,6 +330,7 @@ pub(super) fn reconcile_views(state: &SidebarState, registered: &[SideViewId]) -
         active_view_top: valid(SidebarZone::Top, state.active_view_top),
         active_view_bottom: valid(SidebarZone::Bottom, state.active_view_bottom),
         width: clamp_width(state.width),
+        ratio_permille: clamp_ratio(f32::from(state.ratio_permille)),
     }
 }
 
@@ -303,8 +346,12 @@ pub(super) fn dragged_width(drag: &SidebarResizeDrag, pointer_x: f32) -> f32 {
     clamp_width(drag.start_width + pointer_x - drag.start_x)
 }
 
+/// 进行中的双槽分隔条拖拽。比例由指针在 `sidebar-area` 内的相对 y 直接
+/// 求得(见 [`sidebar_split_ratio_at`]),故除手势标记外无需起始量。
+pub(super) struct SidebarSplitDrag;
+
 impl SltermWorkspace {
-    /// ActivityBar:封闭集按钮区。按钮图标归 06 篇,本步用标题首字占位,
+    /// ActivityBar:封闭集按钮区。按钮图标归主题体系,本步用标题首字占位,
     /// active 态 = 选中底色 + 左侧指示条(旧栈 ActivityBar 同形)。
     pub(super) fn render_activity_bar(&self, cx: &mut Context<'_, Self>) -> AnyElement {
         let state = self.sidebar;
@@ -366,7 +413,7 @@ impl SltermWorkspace {
                         this.toggle_sidebar_view(def.id, cx);
                     }))
             }))
-            // 底部配置钮:设置 tab 的唯一常驻入口(05 篇 M5.3b 登记项)。
+            // 底部配置钮:设置 tab 的唯一常驻入口。
             .child(div().flex_1())
             .child(
                 div()
@@ -403,11 +450,23 @@ impl SltermWorkspace {
         let views_open = layout != SidebarLayout::Hidden && !self.sidebar.collapsed;
         let top_open = self.sidebar.active_view_top.is_some();
         let bottom_open = self.sidebar.active_view_bottom.is_some();
+        let split = top_open && bottom_open;
+        // 双槽同时打开时按千分比分配高度;单槽独占整个内容区。
+        let ratio = self.sidebar.ratio_permille;
+        let (top_grow, bottom_grow) = if split {
+            (f32::from(ratio), f32::from(1000u16.saturating_sub(ratio)))
+        } else {
+            (1.0, 1.0)
+        };
         // 视图内容需要 `&mut self`(文件树轮询/路径栏);先求值再进链式
         // 闭包,避免多个闭包同时借 self。
-        let top_view = top_open.then(|| self.render_view_slot(SidebarZone::Top, cx));
-        let bottom_view = bottom_open.then(|| self.render_view_slot(SidebarZone::Bottom, cx));
+        let top_view = top_open.then(|| self.render_view_slot(SidebarZone::Top, top_grow, cx));
+        let bottom_view =
+            bottom_open.then(|| self.render_view_slot(SidebarZone::Bottom, bottom_grow, cx));
         let tabs = self.render_tab_list(cx);
+        // 只观测的内容区矩形:分隔条拖拽把指针 y 换算成千分比时读取上一帧
+        // 区域,不参与布局(absolute + inset_0)。
+        let split_bounds = self.sidebar_split_bounds.clone();
         div()
             .id("sidebar-column")
             .debug_selector(|| "sidebar-column".to_owned())
@@ -430,14 +489,45 @@ impl SltermWorkspace {
                         .flex()
                         .flex_col()
                         .bg(cx.theme().sidebar)
+                        .child(
+                            canvas(
+                                move |bounds, _, _| {
+                                    *split_bounds.borrow_mut() = Some(bounds);
+                                },
+                                |_, _, _, _| (),
+                            )
+                            .absolute()
+                            .inset_0(),
+                        )
                         .children(top_view)
-                        .when(top_open && bottom_open, |area| {
+                        .when(split, |area| {
+                            let divider_hover = cx.theme().primary.opacity(0.15);
                             area.child(
                                 div()
-                                    .h(px(1.0))
+                                    .id("sidebar-split-divider")
+                                    .debug_selector(|| "sidebar-split-divider".to_owned())
+                                    .h(px(SIDEBAR_SPLIT_DIVIDER_HEIGHT))
                                     .w_full()
                                     .flex_shrink_0()
-                                    .bg(cx.theme().sidebar_border),
+                                    .flex()
+                                    .flex_col()
+                                    .justify_center()
+                                    .cursor_row_resize()
+                                    // 拖拽热区 5px,视觉线保持 1px。
+                                    .hover(move |style| style.bg(divider_hover))
+                                    .child(div().h(px(1.0)).w_full().bg(cx.theme().sidebar_border))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                                            // 与宽度拖拽互斥:同一时刻只允许一个手势。
+                                            if this.sidebar_resize.is_some() {
+                                                return;
+                                            }
+                                            this.sidebar_split_drag = Some(SidebarSplitDrag);
+                                            cx.stop_propagation();
+                                            cx.notify();
+                                        }),
+                                    ),
                             )
                         })
                         .children(bottom_view),
@@ -446,7 +536,7 @@ impl SltermWorkspace {
             .into_any_element()
     }
 
-    /// 侧栏 tab 列表(05 篇:左侧垂直 tab 侧边栏)。
+    /// 侧栏 tab 列表(左侧垂直 tab 侧边栏)。
     ///
     /// 行是 tab 拖拽的源:按下进入待命态,越过阈值后拖进终端区停靠。
     /// 徽章/新建钮/折叠槽与右键菜单归后续步骤。
@@ -501,7 +591,14 @@ impl SltermWorkspace {
     }
 
     /// 单槽内容挂载点:按封闭集分派到各视图渲染函数(B73)。
-    fn render_view_slot(&mut self, zone: SidebarZone, cx: &mut Context<'_, Self>) -> AnyElement {
+    /// `grow` = flex 增长因子(双槽时按千分比,单槽 1.0);basis 归零保证
+    /// 两槽严格按比例分高,不被内容固有高度带偏。
+    fn render_view_slot(
+        &mut self,
+        zone: SidebarZone,
+        grow: f32,
+        cx: &mut Context<'_, Self>,
+    ) -> AnyElement {
         let Some(id) = self.sidebar.active_in(zone) else {
             return div().into_any_element();
         };
@@ -515,7 +612,9 @@ impl SltermWorkspace {
         div()
             .id(SharedString::from(selector.clone()))
             .debug_selector(move || selector)
-            .flex_1()
+            .flex_basis(px(0.0))
+            .flex_grow(grow)
+            .flex_shrink_1()
             .min_h_0()
             .w_full()
             .flex()
@@ -558,6 +657,10 @@ impl SltermWorkspace {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                    // 与双槽分隔条拖拽互斥:同一时刻只允许一个手势。
+                    if this.sidebar_split_drag.is_some() {
+                        return;
+                    }
                     this.sidebar_resize = Some(SidebarResizeDrag {
                         start_x: f32::from(event.position.x),
                         start_width: this.sidebar.width,
@@ -593,6 +696,31 @@ impl SltermWorkspace {
         })
     }
 
+    /// 双槽分隔条拖拽期间的全窗指针罩层(与宽度拖拽同套路):移动实时
+    /// 换算比例;松手/按键失配即收尾。
+    pub(super) fn render_sidebar_split_overlay(
+        &self,
+        cx: &mut Context<'_, Self>,
+    ) -> Option<AnyElement> {
+        self.sidebar_split_drag.as_ref().map(|_| {
+            div()
+                .absolute()
+                .inset_0()
+                .occlude()
+                .cursor_row_resize()
+                .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
+                    this.update_sidebar_split_drag(event, cx);
+                }))
+                .on_mouse_up(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, cx| {
+                        this.finish_sidebar_split_drag(cx);
+                    }),
+                )
+                .into_any_element()
+        })
+    }
+
     fn toggle_sidebar_view(&mut self, id: SideViewId, cx: &mut Context<'_, Self>) {
         self.sidebar = toggle_view_pure(&self.sidebar, id);
         cx.notify();
@@ -615,6 +743,37 @@ impl SltermWorkspace {
 
     fn finish_sidebar_resize(&mut self, cx: &mut Context<'_, Self>) {
         if self.sidebar_resize.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    /// 分隔条拖拽的指针移动:按 `sidebar-area` 上一帧矩形把指针 y 换算成
+    /// 上槽千分比。只改 `SidebarState` 并重绘——不触碰 pane/pane 树,终端
+    /// 网格零重排;持久化由 1 Hz 自动保存快照自然带走,不在此写盘。
+    fn update_sidebar_split_drag(&mut self, event: &MouseMoveEvent, cx: &mut Context<'_, Self>) {
+        if event.pressed_button != Some(MouseButton::Left) {
+            self.finish_sidebar_split_drag(cx);
+            return;
+        }
+        if self.sidebar_split_drag.is_none() {
+            return;
+        }
+        let Some(bounds) = *self.sidebar_split_bounds.borrow() else {
+            return;
+        };
+        let ratio = sidebar_split_ratio_at(
+            f32::from(event.position.y),
+            f32::from(bounds.origin.y),
+            f32::from(bounds.size.height),
+        );
+        if self.sidebar.ratio_permille != ratio {
+            self.sidebar.ratio_permille = ratio;
+            cx.notify();
+        }
+    }
+
+    fn finish_sidebar_split_drag(&mut self, cx: &mut Context<'_, Self>) {
+        if self.sidebar_split_drag.take().is_some() {
             cx.notify();
         }
     }
@@ -656,6 +815,7 @@ mod sidebar_state_tests {
             active_view_top: top,
             active_view_bottom: bottom,
             width: SIDEBAR_WIDTH_DEFAULT,
+            ratio_permille: SIDEBAR_SPLIT_RATIO_DEFAULT,
         }
     }
 
@@ -754,6 +914,69 @@ mod sidebar_state_tests {
     fn reconcile_keeps_registered_views_in_their_slots() {
         let clean = state(Some(SideViewId::Nav), Some(SideViewId::AgentFiles));
         assert_eq!(reconcile_views(&clean, &SideViewId::ALL), clean);
+    }
+
+    /// A8:reconcile 保留合法双槽比例,越界值收敛到 [100, 900]。
+    #[test]
+    fn reconcile_preserves_and_clamps_the_split_ratio() {
+        let mut clean = state(Some(SideViewId::Nav), Some(SideViewId::AgentFiles));
+        clean.ratio_permille = 618;
+        assert_eq!(
+            reconcile_views(&clean, &SideViewId::ALL).ratio_permille,
+            618
+        );
+
+        clean.ratio_permille = 5000;
+        assert_eq!(
+            reconcile_views(&clean, &SideViewId::ALL).ratio_permille,
+            SIDEBAR_SPLIT_RATIO_MAX
+        );
+        clean.ratio_permille = 0;
+        assert_eq!(
+            reconcile_views(&clean, &SideViewId::ALL).ratio_permille,
+            SIDEBAR_SPLIT_RATIO_MIN
+        );
+    }
+
+    /// A8:比例收敛边界——上下限、越界、非有限值与四舍五入。
+    #[test]
+    fn clamp_ratio_converges_to_the_usable_band() {
+        assert_eq!(clamp_ratio(100.0), SIDEBAR_SPLIT_RATIO_MIN);
+        assert_eq!(clamp_ratio(900.0), SIDEBAR_SPLIT_RATIO_MAX);
+        assert_eq!(clamp_ratio(99.4), SIDEBAR_SPLIT_RATIO_MIN);
+        assert_eq!(clamp_ratio(-500.0), SIDEBAR_SPLIT_RATIO_MIN);
+        assert_eq!(clamp_ratio(5000.0), SIDEBAR_SPLIT_RATIO_MAX);
+        assert_eq!(clamp_ratio(617.6), 618, "四舍五入到整千分比");
+        assert_eq!(clamp_ratio(f32::NAN), SIDEBAR_SPLIT_RATIO_DEFAULT);
+        assert_eq!(clamp_ratio(f32::INFINITY), SIDEBAR_SPLIT_RATIO_DEFAULT);
+        assert_eq!(clamp_ratio(f32::NEG_INFINITY), SIDEBAR_SPLIT_RATIO_DEFAULT);
+    }
+
+    /// A8:指针 y → 上槽千分比;区域上下缘外收敛,退化高度回默认。
+    #[test]
+    fn pointer_y_maps_to_a_clamped_split_ratio() {
+        // 内容区 top=100、高 600:y=400 位于 50%。
+        assert_eq!(sidebar_split_ratio_at(400.0, 100.0, 600.0), 500);
+        // y=250 → 25%。
+        assert_eq!(sidebar_split_ratio_at(250.0, 100.0, 600.0), 250);
+        // 越过上缘/下缘:钳到 10% / 90%。
+        assert_eq!(
+            sidebar_split_ratio_at(-5_000.0, 100.0, 600.0),
+            SIDEBAR_SPLIT_RATIO_MIN
+        );
+        assert_eq!(
+            sidebar_split_ratio_at(5_000.0, 100.0, 600.0),
+            SIDEBAR_SPLIT_RATIO_MAX
+        );
+        // 未布局/零高/非有限坐标不产生除零,回默认。
+        assert_eq!(
+            sidebar_split_ratio_at(400.0, 100.0, 0.0),
+            SIDEBAR_SPLIT_RATIO_DEFAULT
+        );
+        assert_eq!(
+            sidebar_split_ratio_at(f32::NAN, 100.0, 600.0),
+            SIDEBAR_SPLIT_RATIO_DEFAULT
+        );
     }
 
     /// 封闭集解析:已注册短名可用,未知 id 回 None,旧 camelCase 兼容。

@@ -114,6 +114,69 @@ fn commit_view_renders_injected_snapshot_and_empty_state(cx: &mut TestAppContext
     );
 }
 
+/// A8:双槽打开时渲染可拖拽分隔条;拖拽实时改比例并落在钳制区间,期间
+/// 终端网格零重排;关掉一个槽后比例保留、分隔条消失。
+#[gpui::test]
+fn sidebar_split_divider_drags_the_slot_ratio(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    window.refresh().unwrap();
+    draw_frame(&mut window);
+    assert!(
+        window.debug_bounds("sidebar-split-divider").is_none(),
+        "单槽时没有分隔条"
+    );
+
+    // 默认上槽 nav;打开下槽 agent_files 成双槽。
+    click_selector(&mut window, "sidebar-view-btn-agent_files");
+    draw_frame(&mut window);
+    let divider = window
+        .debug_bounds("sidebar-split-divider")
+        .expect("双槽打开时必须有拖拽分隔条");
+    let pane_before = workspace
+        .read_with(cx, |ws, _| ws.pane_bounds_of(PaneId(1)))
+        .expect("终端 pane 必须有矩形");
+
+    let start = divider.center();
+    window.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+    draw_frame(&mut window);
+    // 指针下移:上槽比例增大,overlay 实时生效。
+    let target = point(start.x, start.y + px(100.0));
+    window.simulate_mouse_move(target, MouseButton::Left, Modifiers::default());
+    draw_frame(&mut window);
+    let during = workspace.read_with(cx, |ws, _| ws.sidebar_state().ratio_permille);
+    assert!(during > 500, "拖拽应实时增大上槽比例: {during}");
+    let pane_during = workspace
+        .read_with(cx, |ws, _| ws.pane_bounds_of(PaneId(1)))
+        .expect("终端 pane 矩形仍在");
+    assert_eq!(
+        pane_during.size, pane_before.size,
+        "拖拽侧栏分隔条不得重排终端网格"
+    );
+
+    window.simulate_mouse_up(target, MouseButton::Left, Modifiers::default());
+    window.run_until_parked();
+    draw_frame(&mut window);
+    let ratio = workspace.read_with(cx, |ws, _| ws.sidebar_state().ratio_permille);
+    assert!(
+        (100..=900).contains(&ratio),
+        "比例必须落在钳制区间: {ratio}"
+    );
+    assert!(ratio > 500);
+
+    // 关闭下槽:比例保留,分隔条消失。
+    click_selector(&mut window, "sidebar-view-btn-agent_files");
+    draw_frame(&mut window);
+    assert!(
+        window.debug_bounds("sidebar-split-divider").is_none(),
+        "单槽不显示分隔条"
+    );
+    assert_eq!(
+        workspace.read_with(cx, |ws, _| ws.sidebar_state().ratio_permille),
+        ratio,
+        "关闭一个槽不得重置比例"
+    );
+}
+
 /// B73 AgentFiles:注入目录替身,存在/缺失目录都保留行位。
 #[gpui::test]
 fn agent_files_view_renders_cached_directories_with_missing_placeholder(cx: &mut TestAppContext) {

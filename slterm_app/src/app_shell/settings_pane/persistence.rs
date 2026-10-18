@@ -298,10 +298,22 @@ impl SettingsPane {
                         self.refresh_agents(cx);
                     }
                     PersistJob::Save {
-                        close_theme_editor: true,
+                        updates,
+                        close_theme_editor,
                         ..
                     } => {
-                        self.theme_editor = None;
+                        if *close_theme_editor {
+                            self.theme_editor = None;
+                        }
+                        // A14:静默启动联动写入成功后保留提示条;其它普通
+                        // 保存仍清空上一笔状态(主题应用路径维持原语义)。
+                        if updates.iter().any(|(key, value)| {
+                            *key == "silent_start" && matches!(value, Value::Bool(true))
+                        }) {
+                            self.status = Some(SettingsStatus::SilentStartTrayEnabled);
+                        } else if !*close_theme_editor {
+                            self.status = None;
+                        }
                     }
                     _ => {
                         self.status = None;
@@ -512,6 +524,21 @@ impl SettingsPane {
             let _ = window;
             return;
         }
+        if key == "silent_start" && value {
+            // A14:静默启动依赖托盘恢复窗口,同一笔写任务内联动开启托盘;
+            // 关闭 silent_start 不反向改 tray。
+            self.try_persist(
+                &[
+                    ("silent_start", Value::Bool(true)),
+                    ("tray", Value::Bool(true)),
+                ],
+                cx,
+            );
+            self.status = Some(SettingsStatus::SilentStartTrayEnabled);
+            cx.notify();
+            let _ = window;
+            return;
+        }
         self.try_persist(&[(key, Value::Bool(value))], cx);
         self.status = None;
         cx.notify();
@@ -607,7 +634,7 @@ impl SettingsPane {
         cx.notify();
     }
 
-    /// 滑块拖动快路径(09 篇点 41):只改视效全局与壳色 alpha,
+    /// 滑块拖动快路径:只改视效全局与壳色 alpha,
     /// 不读设置文件、不重建壁纸纹理;落盘等停手后的 commit。
     pub(super) fn preview_opacity(&mut self, value: f32, cx: &mut Context<'_, Self>) {
         self.runtime.opacity = value.clamp(0.0, 1.0);

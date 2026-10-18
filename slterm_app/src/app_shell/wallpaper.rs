@@ -1,6 +1,6 @@
-//! 窗口视效:背景模糊材质 / 窗口透明度 / 壁纸(09 篇 M10.7)。
+//! 窗口视效:背景模糊材质 / 窗口透明度 / 壁纸。
 //!
-//! 三条语义边界(09 篇边界 11):
+//! 三条语义边界:
 //! - 模糊只走 GPUI `WindowBackgroundAppearance` 平台通道;壳侧额外落
 //!   Windows 原生 AccentPolicy/DWMSBT 两通道,切换档显式互斥清理。
 //! - 透明度只透壳底色与终端默认背景;文字与彩色单元背景保持不透明。
@@ -318,9 +318,11 @@ pub(crate) fn preview_rect(
 
 /// 开窗参数用:首帧即走平台 backdrop,不必等 `refresh` 补第二次。
 ///
-/// Mica/MicaAlt 在 22H2(22621)走原生枚举;1809(17763)+ 回退经典
-/// 模糊;更老系统与 `None` 一律透明交换链——GPUI Windows 渲染器按
-/// `Opaque` 固定 alpha=1 清屏,保留透明才能让绘制像素的 alpha 生效。
+/// Mica/MicaAlt 在 22H2(22621)走原生枚举;Acrylic 在 22H2+ 先借
+/// `MicaBackdrop` 占住系统 backdrop 通道,再由壳侧改写为
+/// `DWMSBT_TRANSIENTWINDOW`;1809(17763)+ 回退经典模糊;更老系统与
+/// `None` 一律透明交换链——GPUI Windows 渲染器按 `Opaque` 固定
+/// alpha=1 清屏,保留透明才能让绘制像素的 alpha 生效。
 pub(crate) fn initial_background_appearance(cx: &App) -> WindowBackgroundAppearance {
     let blur = cx
         .try_global::<Settings>()
@@ -336,10 +338,21 @@ fn background_appearance(blur: BlurMode) -> WindowBackgroundAppearance {
     background_appearance_for(blur, build)
 }
 
-/// 纯函数 gate:build 决定 Mica 档位走原生枚举还是 AccentPolicy 回退。
+/// 纯函数 gate:build 决定各档位走原生枚举还是 AccentPolicy 回退。
+///
+/// Acrylic 在 22H2+ 返回 `MicaBackdrop` 只是借用 GPUI 的「系统 backdrop
+/// 通道」:GPUI 先写入一个系统 backdrop 态,随后
+/// `apply_windows_accent_policy` 会把它改写为 `DWMSBT_TRANSIENTWINDOW`。
+/// WinAppSDK `DesktopAcrylicController` 的默认 Acrylic 在 DWM 侧就是
+/// 该系统 backdrop,故二者视觉等价,无需引入 WinAppSDK 依赖(本仓无
+/// `Microsoft.UI.*` WinRT 面,WinRT 激活还需随包 bootstrap DLL 与运行时
+/// 元数据,且公开文档不提供接口 IID,无法安全手写 COM vtable)。
+/// 旧系统没有该系统 backdrop,仍以 `Blurred` 走 WCA Acrylic 回退。
 fn background_appearance_for(blur: BlurMode, build: u32) -> WindowBackgroundAppearance {
     match blur {
-        BlurMode::Aero | BlurMode::Acrylic => WindowBackgroundAppearance::Blurred,
+        BlurMode::Aero => WindowBackgroundAppearance::Blurred,
+        BlurMode::Acrylic if build >= 22_621 => WindowBackgroundAppearance::MicaBackdrop,
+        BlurMode::Acrylic => WindowBackgroundAppearance::Blurred,
         BlurMode::Mica if build >= 22_621 => WindowBackgroundAppearance::MicaBackdrop,
         BlurMode::MicaAlt if build >= 22_621 => WindowBackgroundAppearance::MicaAltBackdrop,
         BlurMode::Mica | BlurMode::MicaAlt if build >= 17_763 => {
@@ -448,6 +461,25 @@ struct MaterialPlan {
     apply_accent: bool,
 }
 
+/// 该档位是否请求原生系统 backdrop。
+///
+/// Acrylic 在 22H2+ 与 Mica 共用同一条系统 backdrop 通道(材质值
+/// `DWMSBT_TRANSIENTWINDOW`),旧系统没有该通道,只能走 WCA 回退。
+#[cfg(windows)]
+fn system_backdrop_requested(
+    blur: BlurMode,
+    appearance: WindowBackgroundAppearance,
+    build: u32,
+) -> bool {
+    if blur == BlurMode::Acrylic {
+        return build >= 22_621;
+    }
+    matches!(
+        appearance,
+        WindowBackgroundAppearance::MicaBackdrop | WindowBackgroundAppearance::MicaAltBackdrop
+    )
+}
+
 #[cfg(windows)]
 fn material_plan(
     blur: BlurMode,
@@ -455,18 +487,22 @@ fn material_plan(
     build: u32,
     system_available: bool,
 ) -> MaterialPlan {
-    use windows_sys::Win32::Graphics::Dwm::{DWMSBT_MAINWINDOW, DWMSBT_NONE, DWMSBT_TABBEDWINDOW};
+    use windows_sys::Win32::Graphics::Dwm::{
+        DWMSBT_MAINWINDOW, DWMSBT_NONE, DWMSBT_TABBEDWINDOW, DWMSBT_TRANSIENTWINDOW,
+    };
 
-    let system_requested = matches!(
-        appearance,
-        WindowBackgroundAppearance::MicaBackdrop | WindowBackgroundAppearance::MicaAltBackdrop
-    );
+    let system_requested = system_backdrop_requested(blur, appearance, build);
     // 公开 system-backdrop 属性仅存在于 22621+;旧系统连「清回 NONE」也不写。
+    // Acrylic 的原生材质即 `DWMSBT_TRANSIENTWINDOW`(与 WinAppSDK
+    // DesktopAcrylicController 默认视觉在 DWM 侧等价)。
     let backdrop = if build >= 22_621 {
-        Some(match appearance {
-            WindowBackgroundAppearance::MicaBackdrop => DWMSBT_MAINWINDOW,
-            WindowBackgroundAppearance::MicaAltBackdrop => DWMSBT_TABBEDWINDOW,
-            _ => DWMSBT_NONE,
+        Some(match blur {
+            BlurMode::Acrylic => DWMSBT_TRANSIENTWINDOW,
+            _ => match appearance {
+                WindowBackgroundAppearance::MicaBackdrop => DWMSBT_MAINWINDOW,
+                WindowBackgroundAppearance::MicaAltBackdrop => DWMSBT_TABBEDWINDOW,
+                _ => DWMSBT_NONE,
+            },
         })
     } else {
         None
@@ -505,10 +541,15 @@ fn material_plan(
 /// | Aero | state 3 + 玻璃色调 | DWMSBT_NONE |
 /// | Mica | 全零 | DWMSBT_MAINWINDOW |
 /// | Mica Alt | 全零 | DWMSBT_TABBEDWINDOW |
-/// | Acrylic | state 4 | DWMSBT_NONE |
+/// | Acrylic (22H2+) | 失败时 state 4 | DWMSBT_TRANSIENTWINDOW |
+/// | Acrylic (旧系统) | state 4 | 不写(无该属性) |
 ///
 /// 两条通道必须互斥:同时开系统 backdrop 与 Acrylic 时 DWM 行为未定义
 /// (实测 backdrop 吞 Acrylic),故每档都把另一条显式写回中性值。
+///
+/// Acrylic 在 22H2+ 直接走系统 backdrop `DWMSBT_TRANSIENTWINDOW`,与
+/// WinAppSDK `DesktopAcrylicController` 的默认视觉在 DWM 侧等价;系统
+/// backdrop 写入失败时清回 `DWMSBT_NONE` 并叠 WCA state 4 兜底。
 #[cfg(windows)]
 fn apply_windows_accent_policy(
     window: &Window,
@@ -518,8 +559,8 @@ fn apply_windows_accent_policy(
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     use windows_sys::Win32::Foundation::BOOL;
     use windows_sys::Win32::Graphics::Dwm::{
-        DWM_BB_ENABLE, DWM_BLURBEHIND, DWMWA_SYSTEMBACKDROP_TYPE, DwmEnableBlurBehindWindow,
-        DwmSetWindowAttribute,
+        DWM_BB_ENABLE, DWM_BLURBEHIND, DWMSBT_NONE, DWMWA_SYSTEMBACKDROP_TYPE,
+        DwmEnableBlurBehindWindow, DwmSetWindowAttribute,
     };
     use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -618,11 +659,22 @@ fn apply_windows_accent_policy(
             std::mem::size_of::<i32>() as u32,
         )
     });
-    let system_requested = matches!(
-        appearance,
-        WindowBackgroundAppearance::MicaBackdrop | WindowBackgroundAppearance::MicaAltBackdrop
-    );
+    let system_requested = system_backdrop_requested(blur, appearance, build);
     let system_available = system_requested && backdrop_result.is_some_and(|result| result >= 0);
+    // 系统 backdrop 写入失败时显式清回 NONE,避免旧 backdrop 残留;
+    // 随后的 final 计划会落下 WCA state 4 兜底,不出现透明空洞。
+    if system_requested && !system_available {
+        let none = DWMSBT_NONE;
+        // SAFETY: hwnd 来自当前存活窗口,值在调用期间保持有效。
+        unsafe {
+            DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_SYSTEMBACKDROP_TYPE as u32,
+                &none as *const _ as *const core::ffi::c_void,
+                std::mem::size_of::<i32>() as u32,
+            );
+        }
+    }
     let plan = material_plan(blur, appearance, build, system_available);
     if plan.apply_accent {
         apply_accent(
@@ -728,7 +780,7 @@ fn paint_wallpaper(bounds: Bounds<Pixels>, under_chrome: bool, window: &mut Wind
         bounds
     };
     let image_bounds = image_bounds(wp, anchor, window.scale_factor().max(0.5));
-    // M10.7 终端区尚无圆角卡几何(06 篇卡几何消费未接),四角恒零。
+    // 终端区尚无圆角卡几何(卡几何消费未接),四角恒零。
     if let Err(error) = window.paint_image(
         bounds,
         image_bounds,
@@ -765,9 +817,8 @@ mod window_effect_tests {
         let cases = [
             (BlurMode::None, Appearance::Transparent),
             (BlurMode::Aero, Appearance::Blurred),
-            (BlurMode::Acrylic, Appearance::Blurred),
         ];
-        for build in [0, 17_762, 17_763, 20_000, 22_620, 22_621] {
+        for build in [0, 17_762, 17_763, 19_045, 20_000, 22_620, 22_621] {
             for (blur, expected) in cases {
                 assert_eq!(
                     background_appearance_for(blur, build),
@@ -775,6 +826,18 @@ mod window_effect_tests {
                     "{blur:?} @ build {build}",
                 );
             }
+            // Acrylic 22H2+ 借系统 backdrop 通道(GPUI 先写 MicaBackdrop,
+            // 壳侧随后改写为 TRANSIENTWINDOW);旧系统回退 WCA Acrylic。
+            let expected_acrylic = if build >= 22_621 {
+                Appearance::MicaBackdrop
+            } else {
+                Appearance::Blurred
+            };
+            assert_eq!(
+                background_appearance_for(BlurMode::Acrylic, build),
+                expected_acrylic,
+                "Acrylic @ build {build}",
+            );
             let expected_mica = if build >= 22_621 {
                 Appearance::MicaBackdrop
             } else if build >= 17_763 {
@@ -828,7 +891,7 @@ mod window_effect_tests {
     fn material_plan_keeps_the_two_native_channels_mutually_exclusive() {
         use WindowBackgroundAppearance as Appearance;
         use windows_sys::Win32::Graphics::Dwm::{
-            DWMSBT_MAINWINDOW, DWMSBT_NONE, DWMSBT_TABBEDWINDOW,
+            DWMSBT_MAINWINDOW, DWMSBT_NONE, DWMSBT_TABBEDWINDOW, DWMSBT_TRANSIENTWINDOW,
         };
 
         // None:两条通道都写中性值;不碰 backdrop(22621 以下)。
@@ -849,11 +912,27 @@ mod window_effect_tests {
         assert!(plan.apply_accent);
         assert_eq!(plan.backdrop, Some(DWMSBT_NONE));
 
-        // Acrylic:先清旧层再写 state 4。
-        let plan = material_plan(BlurMode::Acrylic, Appearance::Blurred, 22_621, false);
+        // Acrylic 22H2+ 原生系统 backdrop:先清旧 WCA 层,写
+        // TRANSIENTWINDOW,成功时不再叠 AccentPolicy。
+        let plan = material_plan(BlurMode::Acrylic, Appearance::MicaBackdrop, 22_621, true);
         assert!(plan.clear_accent_first);
+        assert_eq!(plan.backdrop, Some(DWMSBT_TRANSIENTWINDOW));
+        assert!(!plan.apply_accent, "系统 backdrop 成功时双通道互斥");
         assert_eq!((plan.accent_state, plan.accent_color), (4, 0x0100_0000));
-        assert_eq!(plan.backdrop, Some(DWMSBT_NONE));
+        assert!(!plan.blur_behind);
+
+        // Acrylic 22H2+ 系统 backdrop 失败:清回 NONE 后落 WCA state 4。
+        let plan = material_plan(BlurMode::Acrylic, Appearance::MicaBackdrop, 22_621, false);
+        assert_eq!(plan.backdrop, Some(DWMSBT_TRANSIENTWINDOW));
+        assert!(plan.apply_accent);
+        assert_eq!((plan.accent_state, plan.accent_color), (4, 0x0100_0000));
+
+        // Acrylic 旧系统(19045):无 system-backdrop 属性,只走 WCA state 4。
+        let plan = material_plan(BlurMode::Acrylic, Appearance::Blurred, 19_045, false);
+        assert_eq!(plan.backdrop, None, "旧系统不写不存在的属性");
+        assert!(plan.apply_accent);
+        assert!(plan.clear_accent_first);
+        assert_eq!(plan.accent_state, 4);
 
         // Mica 成功:只写 DWMSBT,AccentPolicy 保持全零且不再叠加。
         let plan = material_plan(BlurMode::Mica, Appearance::MicaBackdrop, 22_621, true);

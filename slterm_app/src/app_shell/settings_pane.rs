@@ -5,7 +5,7 @@
 //! (测试注入路径走同函数的 `_at` 形态;白名单校验 → 段级浅合并 → 原子写
 //! → .bak)。
 //!
-//! 三纪律(06 篇跨领域合同):
+//! 三纪律(设置页跨领域合同):
 //! - 预览不脏盘:滑条拖动只改内存态(本页 `runtime` + 全局 `Settings`),
 //!   松手才归一化提交;
 //! - 提交可回滚:写失败时用最近一次成功读盘的 `persisted` 快照复位控件;
@@ -15,6 +15,7 @@
 //! 显示项与占位符,不重建控件实体(重建会丢焦点/编辑值/undo/订阅)。
 
 mod agents;
+mod backup;
 mod design;
 mod localization;
 mod navigation;
@@ -42,7 +43,7 @@ use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::scroll::ScrollableElement as _;
 use gpui_component::select::{SelectEvent, SelectState};
 use gpui_component::slider::{SliderEvent, SliderState};
-use gpui_component::{ActiveTheme as _, Icon, IconName, v_flex};
+use gpui_component::{ActiveTheme as _, Icon, IconName, WindowExt as _, v_flex};
 use slterm_settings::json::Value;
 use slterm_settings::keys::KEYBIND_SEGMENT;
 use slterm_settings::{
@@ -52,6 +53,7 @@ use slterm_settings::{
 
 use crate::app_shell::config::Settings;
 use crate::app_shell::workspace::keyboard_bindings;
+use crate::encrypted_backup::{BackupSelection, MIN_PASSPHRASE_CHARS};
 use crate::i18n::Message;
 use crate::theme_library::package::{Author, CheckedPackage, export_package};
 use design::{
@@ -86,6 +88,8 @@ const WALLPAPER_ALIGNMENT_VALUES: [&str; 9] = [
 const THEME_PACKAGE_AUTHOR: &str = crate::brand::NAME;
 const THEME_PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
 const THEME_PACKAGE_LICENSE: &str = "GPL-3.0";
+/// 加密备份导出对话框的建议文件名。
+const BACKUP_FILE_NAME: &str = "slterm-backup.slterm-backup";
 
 /// 一个固定下拉:键、实体、稳定值表(选中索引 → 持久化值)。
 struct SelectEntry {
@@ -115,6 +119,8 @@ pub(crate) enum SettingsStatus {
     Reset { backup: Option<PathBuf> },
     /// 写盘/读取失败。
     Failed(String),
+    /// 静默启动开启时已联动开启常驻托盘(A14)。
+    SilentStartTrayEnabled,
     /// 主题包导入成功;`name` = 库内消歧后的显示名。
     ThemeImported { name: String },
     /// 主题包导出成功;`path` = 成品输出路径。
@@ -123,6 +129,10 @@ pub(crate) enum SettingsStatus {
     ThemeImportFailed(String),
     /// 主题包导出失败(读取主题/写包原因)。
     ThemeExportFailed(String),
+    /// 加密备份导出成功;`path` = 成品输出路径。
+    BackupExported { path: PathBuf },
+    /// 加密备份导出失败(收集/密封/写盘或前置校验原因);整单失败。
+    BackupFailed(String),
 }
 
 impl SettingsStatus {
@@ -133,6 +143,7 @@ impl SettingsStatus {
                 | Self::Failed(_)
                 | Self::ThemeImportFailed(_)
                 | Self::ThemeExportFailed(_)
+                | Self::BackupFailed(_)
         )
     }
 
@@ -149,6 +160,9 @@ impl SettingsStatus {
             Self::Failed(error) => {
                 language.format(Message::SettingsStatusOperationFailed, &[("error", error)])
             }
+            Self::SilentStartTrayEnabled => language
+                .text(Message::SettingsAdvancedSilentStartTrayHint)
+                .to_owned(),
             Self::ThemeImported { name } => {
                 language.format(Message::SettingsStatusThemeImported, &[("name", name)])
             }
@@ -164,6 +178,13 @@ impl SettingsStatus {
                 Message::SettingsStatusThemeExportFailed,
                 &[("error", error)],
             ),
+            Self::BackupExported { path } => {
+                let path = path.display().to_string();
+                language.format(Message::SettingsBackupExported, &[("path", &path)])
+            }
+            Self::BackupFailed(error) => {
+                language.format(Message::SettingsBackupFailedDetail, &[("error", error)])
+            }
         }
     }
 }
@@ -173,7 +194,7 @@ pub(crate) struct SettingsPane {
     pub(crate) focus_handle: FocusHandle,
     /// 本页读写目标(生产 = 默认数据目录;测试注入 tempdir 路径)。
     settings_target: SettingsTarget,
-    /// hooks 页数据源/安装权威目标(生产 = 03 篇默认解析;测试注入假 home)。
+    /// hooks 页数据源/安装权威目标(生产 = hook 安装权威默认解析;测试注入假 home)。
     hooks_target: agents::HooksTarget,
     /// Agent 组 hooks 页状态(inspect 行 + 编辑文档)。
     agents: agents::AgentSettingsState,
@@ -195,6 +216,14 @@ pub(crate) struct SettingsPane {
     font_family_input: Entity<InputState>,
     font_size_input: Entity<InputState>,
     startup_directory_input: Entity<InputState>,
+    /// C33:加密备份类别选择(纯 UI 态,默认仅设置;不写设置键)。
+    backup_selection: BackupSelection,
+    /// C33:备份口令输入(masked);值只留用户输入,不另存字段。
+    backup_passphrase: Entity<InputState>,
+    /// C33:口令占位符当前渲染语言(热切换只换占位符,不重建实体)。
+    backup_passphrase_language: UiLanguage,
+    /// C33:导出在途忙态(含路径对话框阶段,防重复点击/重入)。
+    backup_busy: bool,
     status: Option<SettingsStatus>,
     /// 恢复默认的二次确认(第一次点击只武装)。
     reset_armed: bool,
@@ -236,7 +265,7 @@ pub(crate) struct SettingsPane {
 }
 
 /// 设置页读写目标。生产走 `settings_store` 的默认入口;测试注入显式
-/// 路径,绝不触碰真实数据目录(11 篇隔离纪律)。
+/// 路径,绝不触碰真实数据目录(测试隔离纪律)。
 #[derive(Clone)]
 enum SettingsTarget {
     Default,
@@ -404,7 +433,7 @@ impl SettingsPane {
                 )
             }
         };
-        // 开机启动显示以实际 .lnk 为准(09 篇 M10.6):安装器与设置页管理
+        // 开机启动显示以实际 .lnk 为准:安装器与设置页管理
         // 同一 Startup 快捷方式,设置键只承载最近一次用户意图。测试注入
         // 目标(tempdir)不读取真实 Startup 文件夹。
         if using_default_target {
@@ -448,6 +477,12 @@ impl SettingsPane {
                 cx,
             );
         });
+        // 备份口令:masked 输入,不参与设置持久化。
+        let backup_passphrase = cx.new(|cx| {
+            InputState::new(window, cx)
+                .masked(true)
+                .placeholder(localized_input_placeholder("backup_passphrase", language))
+        });
 
         let scroll_speed_slider =
             Self::create_scroll_speed_slider(&persisted, window, cx, &mut subscriptions);
@@ -482,6 +517,10 @@ impl SettingsPane {
             font_family_input,
             font_size_input,
             startup_directory_input,
+            backup_selection: BackupSelection::default(),
+            backup_passphrase,
+            backup_passphrase_language: language,
+            backup_busy: false,
             status,
             reset_armed: false,
             persist_queue: std::collections::VecDeque::new(),
@@ -1526,7 +1565,7 @@ impl SettingsPane {
             "advanced" => self.page_advanced(window, cx).into_any_element(),
             "localization" => self.page_localization(window, cx).into_any_element(),
             "reset" => self.page_reset(window, cx).into_any_element(),
-            // application:品牌位;关于/赞助入口归 12 篇。
+            // application:品牌位;关于/赞助入口归应用信息页。
             _ => self.page_application(window, cx).into_any_element(),
         };
         div()
@@ -1784,6 +1823,52 @@ impl SettingsPane {
 
     pub(crate) fn theme_export_busy_for_test(&self) -> bool {
         self.theme_export_busy
+    }
+
+    // ── C33 加密备份 ──
+
+    /// 设置类别选择集(空集用于前置校验用例)。
+    pub(crate) fn set_backup_selection_for_test(&mut self, selection: BackupSelection) {
+        self.backup_selection = selection;
+    }
+
+    /// 写入备份口令输入(测试驱动路径)。
+    pub(crate) fn set_backup_passphrase_for_test(
+        &mut self,
+        passphrase: &str,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.backup_passphrase
+            .update(cx, |state, cx| state.set_value(passphrase, window, cx));
+    }
+
+    /// 走按钮入口(含路径对话框);测试可模拟选择/取消。
+    pub(crate) fn export_backup_for_test(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.export_backup(window, cx);
+    }
+
+    /// 绕过路径对话框直接执行(选定路径后的统一入口)。
+    pub(crate) fn start_backup_export_for_test(
+        &mut self,
+        path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.start_backup_export(path, window, cx);
+    }
+
+    pub(crate) fn backup_busy_for_test(&self) -> bool {
+        self.backup_busy
+    }
+
+    /// 忙态注入:验证重复点击/重入门。
+    pub(crate) fn set_backup_busy_for_test(&mut self, busy: bool) {
+        self.backup_busy = busy;
     }
 
     /// B7:当前用户在 `keybind` 段的内存表(写回后与磁盘同形)。

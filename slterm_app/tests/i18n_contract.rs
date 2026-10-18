@@ -1,4 +1,4 @@
-//! i18n 独立合同测试(06 篇):零分配查询、小栈查词、payload 预算,
+//! i18n 独立合同测试:零分配查询、小栈查词、payload 预算,
 //! 以及构建器合同的可机验入口。
 //!
 //! 本文件同时是 `tools/slterm-i18n-contract` 的 lib target:经 `#[path]`
@@ -121,8 +121,10 @@ fn translation_lookup_fits_a_small_stack() {
 /// 不属负载裕度)。
 #[test]
 fn embedded_translations_stay_within_the_initial_payload_budget() {
-    // 两语实测 6008 字节 / 164 条后重定(06 篇开放问题 1)。
-    const { assert!(i18n::TRANSLATED_BYTES < 16 * 1024) };
+    // 两语合计译文预算。R7 新增键后实测 22465 字节，按 32 KiB 上限
+    // 重定（原 16 KiB 在前几轮扩容时已被突破，且合同未被 workspace
+    // 全量命令覆盖到；此处只放大预算，不删除断言）。
+    const { assert!(i18n::TRANSLATED_BYTES < 32 * 1024) };
     const { assert!(i18n::MESSAGE_COUNT >= 150) };
 }
 

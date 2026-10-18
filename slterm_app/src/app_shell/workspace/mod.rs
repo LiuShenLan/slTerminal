@@ -1,4 +1,4 @@
-//! 工作区:tabs/pane 生命周期的唯一属主(05 篇三件套锚点)。
+//! 工作区:tabs/pane 生命周期的唯一属主。
 //!
 //! ## 分屏 pane 生命周期合同
 //!
@@ -19,28 +19,28 @@
 //! 壳层只做四件事:按**提交比例**渲染递归、canvas 探针回写节点/pane 矩形、
 //! 分隔条拖拽 overlay、松手提交。分屏语义(比例/树变换)全由 `slterm_split`
 //! 裁定,壳层不重算。渲染只读提交比例,`preview_ratio`/`dragging` 只喂
-//! overlay 与分隔条跟随——拖拽期间终端网格零重排(02 篇 TTY 尺寸链交界:
+//! overlay 与分隔条跟随——拖拽期间终端网格零重排(TTY 尺寸链交界:
 //! 结构性变化经 `TerminalView::mark_structural_resize` 同步下发,不进尾沿
 //! 去抖)。
 
-/// 07 篇 M8.1:文件打开路由(openable_in_app → Image/Document/Code)。
+/// 文件打开路由(`openable_in_app` → Image/Document/Code)。
 mod documents;
-/// 07 篇 M8.4:侧栏文件树渲染 + 路径栏 + 拖放。
+/// 侧栏文件树渲染 + 路径栏 + 拖放。
 mod file_tree;
-/// 07 篇 M8.5:键位 JSON 段消费 + EDITABLE_ACTIONS + 保留键红线。
+/// 键位 JSON 段消费 + EDITABLE_ACTIONS + 保留键红线。
 /// B7 起暴露给设置页键位编辑(EDITABLE_ACTIONS/RESERVED_ROWS/clear/reset)。
 pub(crate) mod keyboard_bindings;
-/// 05 篇:后台泵与系统关窗(自动保存 / AI hook / 壳事件)。
+/// 后台泵与系统关窗(自动保存 / AI hook / 壳事件)。
 mod pumps;
-/// 05 篇:终端 tab 与分屏树渲染(壳层职责下沉)。
+/// 终端 tab 与分屏树渲染(壳层职责下沉)。
 mod render;
-/// 04 篇 M7.5:Runtime 写命令在 Workspace 上的执行器。
+/// Runtime 写命令在 Workspace 上的执行器。
 mod runtime_control;
 pub(crate) mod runtime_projection;
 pub(crate) mod session_persistence;
 pub(crate) mod session_recovery;
 pub(crate) mod sidebar;
-/// 05 篇 B73:侧栏三视图渲染(导航树 / Commit / Agent 全局文件)。
+/// 侧栏三视图渲染(导航树 / Commit / Agent 全局文件)。
 mod sidebar_views;
 mod split_drag;
 mod tab_drag;
@@ -77,7 +77,7 @@ use crate::terminal_registry::{self, PaneSessionMeta};
 use render::to_split_rect;
 use session_persistence::SessionPersistence;
 use session_recovery::StartupPlan;
-use sidebar::{SidebarResizeDrag, SidebarState};
+use sidebar::{SidebarResizeDrag, SidebarSplitDrag, SidebarState};
 use split_drag::SplitDrag;
 use tab_drag::TabDrag;
 
@@ -102,7 +102,7 @@ gpui::actions!(
 );
 
 /// 一个终端 pane:视图实体 + 宿主订阅。id 全 workspace 唯一、终生不复用
-/// (03 篇 hook 的 `SLTERM_PANE_ID` 环境值与此同源)。
+/// (hook 的 `SLTERM_PANE_ID` 环境值与此同源)。
 pub struct TerminalPane {
     pub id: PaneId,
     /// 用户重命名(持久化归 05 session 叶;M5.3 无重命名 UI,恒 None)。
@@ -110,7 +110,7 @@ pub struct TerminalPane {
     /// 本 pane 创建时冻结的启动身份;快照逐叶落盘(M5.5)。
     pub launch: Option<LaunchSession>,
     pub view: Entity<TerminalView>,
-    /// 补全来源缓存按 pane 持有(08 篇 M9.5;与 terminal_registry 以
+    /// 补全来源缓存按 pane 持有(与 terminal_registry 以
     /// PaneId 关联,缓存本体不复制)。所有权锚点;消费经视图的同源句柄。
     #[allow(dead_code)]
     pub(crate) completion_session: Rc<crate::completion::Session>,
@@ -118,10 +118,10 @@ pub struct TerminalPane {
 }
 
 /// 唯一合法 tab 类型集(面板封闭的 Rust 落点)。本阶段 Terminal +
-/// Settings + 07 篇 M8.1 的 Document/Code/Image 三个文件 tab。
+/// Settings + Document/Code/Image 三个文件 tab。
 ///
 /// Settings 是**单例 tab**:再次打开只激活既有实例,不新建;不进会话
-/// 快照(05 篇合同:快照只收 Terminal tab)。Document/Code/Image 同样
+/// 快照(快照只收 Terminal tab)。Document/Code/Image 同样
 /// 不进快照——纯视图 drop,无进程/PTY 生命周期。
 pub enum WorkspaceTab {
     Terminal {
@@ -154,7 +154,7 @@ pub enum WorkspaceTab {
     },
 }
 
-/// tab 级展示态元数据(05 篇锚点;持久化四字段形态)。
+/// tab 级展示态元数据(持久化四字段形态)。
 #[derive(Default)]
 pub struct TabMeta {
     /// 用户命名;标题栏展示名第一优先源(M5.3b)。
@@ -173,12 +173,12 @@ pub struct TabEntry {
     pub meta: TabMeta,
 }
 
-/// 壳内状态权威:直持 pane 实体与展示态,无投影层(13 篇改造节 2)。
+/// 壳内状态权威:直持 pane 实体与展示态,无投影层。
 pub struct SltermWorkspace {
     tabs: Vec<TabEntry>,
     /// 位置索引(活跃定位);TabId 为稳定身份。
     active: usize,
-    /// 单调分配器(PaneId/TabId 唯一性权威)。多窗扩展时按窗口分段(04 篇)。
+    /// 单调分配器(PaneId/TabId 唯一性权威)。多窗扩展时按窗口分段。
     next_pane: u64,
     next_tab: u64,
     /// spawn 网格:开窗定形后由 `prepare_initial_grid` 反推,首个 pane 的
@@ -193,10 +193,15 @@ pub struct SltermWorkspace {
     split_drag: Option<SplitDrag>,
     /// 进行中的 tab 拖拽(含未过阈值的待命态);`None` = 无手势。
     tab_drag: Option<TabDrag>,
-    /// 侧栏骨架态(05 篇 D05-2/D05-3):开合/宽度/双槽 active view。
+    /// 侧栏骨架态:开合/宽度/双槽 active view。
     sidebar: SidebarState,
     /// 进行中的侧栏宽度拖拽;`None` = 无手势。
     sidebar_resize: Option<SidebarResizeDrag>,
+    /// 进行中的双槽分隔条拖拽;`None` = 无手势。与 `sidebar_resize` 互斥。
+    sidebar_split_drag: Option<SidebarSplitDrag>,
+    /// 侧栏双槽内容区上一帧矩形(canvas prepaint 回写;分隔条拖拽的
+    /// 指针 y → 比例换算读取点)。
+    sidebar_split_bounds: SidebarSplitBoundsStore,
     /// 虚拟窗口用例的三钮命令记录(生产不编译;平台窗口 API 在测试
     /// 平台是 unimplemented,行为断言只能落在命令分派端)。
     #[cfg(all(test, feature = "gpui-test-support"))]
@@ -207,13 +212,13 @@ pub struct SltermWorkspace {
     tray_quit_requested: bool,
     /// 每 pane 的 agent 宿主(AgentActivity/AnswerInbox 归属表)。
     agent_hub: AgentHub,
-    /// 后台任务订阅(09 篇 M10.8):字段只为持有订阅生命周期;归零即停轮询。
+    /// 后台任务订阅:字段只为持有订阅生命周期;归零即停轮询。
     background_tasks: Vec<crate::background_tasks::TaskSubscription>,
-    /// 任务栏进度的进程级单显示路由(09 篇 M10.2):只认活跃 tab 聚焦 pane。
+    /// 任务栏进度的进程级单显示路由:只认活跃 tab 聚焦 pane。
     taskbar: crate::taskbar::TaskbarState,
     /// 单窗口会话写盘状态机(latest/saved 双快照、无变化跳过、提权隔离)。
     session_persistence: SessionPersistence,
-    /// 04 篇 Runtime 状态权威:渲染前置投影入账,hub 判等去重。
+    /// Runtime 状态权威:渲染前置投影入账,hub 判等去重。
     ///
     /// M7.5 把同一 clone 交给 `RuntimeServer`;在那之前本 hub 只有壳内
     /// 发布源,无外部订阅者。
@@ -229,7 +234,16 @@ pub struct SltermWorkspace {
     window_close_confirmed: bool,
     /// B25:忙碌 pane 关闭确认已放行(防异步回调重入弹框)。
     pane_close_confirmed: Option<PaneId>,
-    /// 侧栏文件树视图状态(07 篇 M8.4;explorer 槽内容)。
+    /// C27:更新弹窗/安装授权单槽;整个更新交互(含下载与二次确认)期间
+    /// 为 true,重复事件直接丢弃。
+    update_prompt_open: bool,
+    /// 测试专用:更新安装执行替身(生产恒走 handoff)。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    update_install_runner: Option<runtime_control::UpdateInstallRunner>,
+    /// 测试专用:安装成功后的退出请求(虚拟窗口不可直调 remove_window)。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    update_install_exit_requested: bool,
+    /// 侧栏文件树视图状态(explorer 槽内容)。
     file_tree: file_tree::FileTreeState,
     /// AgentFiles 槽的进程内目录缓存(B73):首次渲染加载,禁止每帧 27 次
     /// `is_dir`;显式刷新经 `refresh_agent_dirs`。测试构建预置空表,避免
@@ -244,7 +258,7 @@ pub struct SltermWorkspace {
     /// B8:外部文件修改监听(树根递归 + 打开文件父目录)。事件驱动刷新
     /// gutter/目录树,不做定时目录重扫;watcher 不可用时为 None。
     fs_watch: Option<super::fs_watch::FsWatch>,
-    /// 窗口激活态订阅(09 篇 M10.1):通知漏斗前台门控的唯一写入源。
+    /// 窗口激活态订阅:通知漏斗前台门控的唯一写入源。
     /// 字段本身只为持有订阅生命周期。
     _window_activation: Subscription,
 }
@@ -257,9 +271,11 @@ type PaneBoundsStore = Rc<RefCell<HashMap<PaneId, Bounds<Pixels>>>>;
 /// 幸存 tab 误读(拖分隔条读到别的 tab 的上一帧矩形);TabId 终生不复用,
 /// 重排/关闭都不改键。关闭 tab 时仍显式清键,避免缓存无界增长。
 type SplitBoundsStore = Rc<RefCell<HashMap<(TabId, Vec<bool>), Bounds<Pixels>>>>;
+/// 侧栏双槽内容区矩形(单值;分隔条拖拽只在双槽打开时存在)。
+type SidebarSplitBoundsStore = Rc<RefCell<Option<Bounds<Pixels>>>>;
 
 /// 启动身份冻结:实际 shell 命令 + 参数 + 出生目录进 `LaunchSession::Profile`
-/// (Profile 内嵌完整命令,导出工作区时可移植,05 篇 schema 契约)。
+/// (Profile 内嵌完整命令,导出工作区时可移植,session schema 契约)。
 fn launch_session_of(
     shell: &slterm_terminal::tty::Shell,
     cwd: Option<&std::path::Path>,
@@ -316,7 +332,7 @@ impl SltermWorkspace {
             sidebar::chrome_width(&sidebar),
             true,
         );
-        // 通知漏斗前台门控(09 篇 M10.1):初始态取开窗激活态,此后由窗口
+        // 通知漏斗前台门控:初始态取开窗激活态,此后由窗口
         // 激活态订阅持续刷新;漏斗据此丢弃聚焦期间的打扰。
         crate::notify::set_foreground(window.is_window_active());
         let window_activation = cx.observe_window_activation(window, |_workspace, window, _cx| {
@@ -334,6 +350,8 @@ impl SltermWorkspace {
             tab_drag: None,
             sidebar,
             sidebar_resize: None,
+            sidebar_split_drag: None,
+            sidebar_split_bounds: Rc::new(RefCell::new(None)),
             #[cfg(all(test, feature = "gpui-test-support"))]
             window_commands: Vec::new(),
             #[cfg(all(test, feature = "gpui-test-support"))]
@@ -348,6 +366,11 @@ impl SltermWorkspace {
             pending_file_close: None,
             window_close_confirmed: false,
             pane_close_confirmed: None,
+            update_prompt_open: false,
+            #[cfg(all(test, feature = "gpui-test-support"))]
+            update_install_runner: None,
+            #[cfg(all(test, feature = "gpui-test-support"))]
+            update_install_exit_requested: false,
             file_tree: file_tree::FileTreeState::new(window, cx),
             agent_dirs_cache: Self::initial_agent_dirs_cache(),
             settings_path_override: None,
@@ -381,7 +404,7 @@ impl SltermWorkspace {
                 }
             }
         }
-        // 恢复结果一次性汇总(09 篇 M10.1 缝合 05 篇 M5.5 / 清单 A10):
+        // 恢复结果一次性汇总:
         // 恢复成功按标签数提示(崩溃现场多一句来源说明);断路器隔离时给
         // 出挪走的现场路径。启动期用户虽在前台,但日志不可见,故走直发
         // 通道而非漏斗(前台门控会丢弃这条非打扰信息)。
@@ -413,7 +436,7 @@ impl SltermWorkspace {
         workspace.start_autosave_pump(cx);
         workspace.install_window_close_save(window, cx);
         workspace.sync_window_title(window, cx);
-        // 托盘首帧快照(09 篇 M10.3):起跑即对齐,不等首秒看门狗。
+        // 托盘首帧快照:起跑即对齐,不等首秒看门狗。
         workspace.publish_tray_snapshot(cx);
         workspace
     }
@@ -493,7 +516,7 @@ impl SltermWorkspace {
     }
 
     /// 默认 shell 探测:生产走 core 的 pwsh→powershell→cmd 链,测试顶替
-    /// 必败命令(真 PTY 线程跨测试存活,11 篇测试纪律)。
+    /// 必败命令(真 PTY 线程跨测试存活,测试纪律)。
     #[cfg(all(test, feature = "gpui-test-support"))]
     fn default_shell() -> Option<slterm_terminal::tty::Shell> {
         Some(slterm_terminal::tty::Shell::new(
@@ -661,7 +684,7 @@ impl SltermWorkspace {
                 // 每个终端视图(字体/字号/连字/选中复制/调色板热应用)。
                 let settings = cx.global::<crate::app_shell::config::Settings>().clone();
                 self.apply_settings_to_terminals(&settings, cx);
-                // 09 篇 M10.7:视效与 token 同一帧热应用(模糊/透明度/壁纸)。
+                // 视效与 token 同一帧热应用(模糊/透明度/壁纸)。
                 crate::app_shell::wallpaper::refresh(cx);
                 self.sync_window_title(window, cx);
                 cx.refresh_windows();
@@ -827,7 +850,7 @@ impl SltermWorkspace {
     /// 分屏新 pane 的启动身份:cwd 继承聚焦 pane;默认 shell 走 core 探测链。
     ///
     /// 测试隔离:UI 测试用必败命令顶替真 shell(真 PTY 线程会跨测试存活,
-    /// wake 已换线程的 executor 任务直接 fail-fast——11 篇测试纪律)。
+    /// wake 已换线程的 executor 任务直接 fail-fast——测试纪律)。
     #[cfg(all(test, feature = "gpui-test-support"))]
     fn split_launch(cwd: Option<std::path::PathBuf>) -> TerminalLaunch {
         TerminalLaunch::Local {
@@ -980,13 +1003,13 @@ impl SltermWorkspace {
             TerminalViewEvent::CommandFinished => {
                 if let Some(pane_id) = self.locate_pane(view) {
                     self.agent_hub.command_finished(pane_id);
-                    // 09 篇 M10.2:命令回到提示符,进度主人已经收尾;程序忘发
+                    // 命令回到提示符,进度主人已经收尾;程序忘发
                     // `9;4;0` 也不能把进度条留在任务栏上。
                     self.clear_taskbar_progress(pane_id, cx);
                     self.publish_runtime_snapshot(cx);
                 }
             }
-            // 09 篇 M10.2:任务栏是窗口级的,只反映活跃 tab 的聚焦 pane。
+            // 任务栏是窗口级的,只反映活跃 tab 的聚焦 pane。
             // 后台 pane 的构建进度投到同一条按钮上只会互相覆盖,读数还不如
             // 没有;事件本身照常触发重绘。
             TerminalViewEvent::ProgressChanged(progress) => {
@@ -1000,14 +1023,14 @@ impl SltermWorkspace {
         }
     }
 
-    /// 活跃 tab 的聚焦 pane 判定(任务栏进度的路由门,09 篇 M10.2)。
+    /// 活跃 tab 的聚焦 pane 判定(任务栏进度的路由门)。
     fn is_active_focused_pane(&self, pane_id: PaneId) -> bool {
         self.tabs.get(self.active).is_some_and(|entry| {
             matches!(&entry.tab, WorkspaceTab::Terminal { focused, .. } if *focused == pane_id)
         })
     }
 
-    /// 投递一次任务栏进度。HWND 源 = 09 篇 M10.4 facade 的查询点
+    /// 投递一次任务栏进度。HWND 源 = 窗口 facade 的查询点
     /// (`windowing::focus::window_hwnd`)。
     fn show_taskbar_progress(
         &mut self,
@@ -1024,7 +1047,7 @@ impl SltermWorkspace {
     }
 
     /// 任务栏进度的清除边:只有当前显示的来源 pane 自己收尾才恢复常态,
-    /// 别的 pane 的收尾不打断正在显示的进度(09 篇 M10.2)。
+    /// 别的 pane 的收尾不打断正在显示的进度。
     fn clear_taskbar_progress(&mut self, pane_id: PaneId, cx: &App) {
         if let Some(progress) = self.taskbar.clear_for(pane_id) {
             crate::taskbar::apply(
@@ -1081,7 +1104,7 @@ impl SltermWorkspace {
         .detach();
     }
 
-    /// 关 pane 状态机(05 篇锚定):摘除 → 立即显式 shutdown → 焦点交幸存
+    /// 关 pane 状态机:摘除 → 立即显式 shutdown → 焦点交幸存
     /// 首叶;唯一叶子关闭 = 关 tab = 无 tab 时关窗(M3 语义保留)。
     fn close_pane(&mut self, pane_id: PaneId, window: &mut Window, cx: &mut Context<'_, Self>) {
         // B25:忙碌 pane 先确认;确认后的同一次调用经标志放行。
@@ -1167,7 +1190,7 @@ impl SltermWorkspace {
 
     /// 索引与宿主表的统一摘除点(注册表写入点 2/2 的对偶)。
     fn forget_pane(&mut self, pane_id: PaneId, cx: &App) {
-        // 09 篇 M10.2:pane 关闭是任务栏进度的清除边之一(关 pane/关 tab/
+        // pane 关闭是任务栏进度的清除边之一(关 pane/关 tab/
         // PTY 退出/恢复失败同路);只清自己名下正在显示的条。
         self.clear_taskbar_progress(pane_id, cx);
         terminal_registry::remove(pane_id);
@@ -1277,7 +1300,7 @@ impl SltermWorkspace {
         }
     }
 
-    /// 聚焦 pane 满卡缩放开关(05 篇 zoom 状态机;单 pane 无缩放语义)。
+    /// 聚焦 pane 满卡缩放开关(zoom 状态机;单 pane 无缩放语义)。
     /// 几何从半卡跳整卡属一次性结构变化,走同步下发。
     fn toggle_zoom(&mut self, cx: &mut Context<'_, Self>) {
         let active = self.active;
@@ -1403,7 +1426,7 @@ impl SltermWorkspace {
         })
     }
 
-    /// 04 篇 M7.2:渲染前把 Workspace 投影入账。hub 只发布语义变化,
+    /// 渲染前把 Workspace 投影入账。hub 只发布语义变化,
     /// 事件循环空转/光标闪烁重复渲染不烧 revision、不刷订阅方。
     /// 返回发布后的规范快照(盖戳后),提交类命令随响应回传。
     fn publish_runtime_snapshot(&self, cx: &App) -> crate::runtime_api::RuntimeSnapshot {
@@ -1469,6 +1492,27 @@ impl SltermWorkspace {
     #[cfg(all(test, feature = "gpui-test-support"))]
     pub(crate) fn tray_quit_requested(&self) -> bool {
         self.tray_quit_requested
+    }
+
+    /// 测试专用:更新弹窗/安装授权是否在途(C27 单实例闸门断言端)。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn update_prompt_open_for_test(&self) -> bool {
+        self.update_prompt_open
+    }
+
+    /// 测试专用:注入更新安装执行替身(避免真实 helper/安装目录)。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn set_update_install_runner_for_test(
+        &mut self,
+        runner: runtime_control::UpdateInstallRunner,
+    ) {
+        self.update_install_runner = Some(runner);
+    }
+
+    /// 测试专用:安装成功后的退出请求是否已记录。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn update_install_exit_requested(&self) -> bool {
+        self.update_install_exit_requested
     }
 
     /// 测试专用:活跃 tab 展示名。
@@ -1560,13 +1604,13 @@ impl SltermWorkspace {
 
 impl Render for SltermWorkspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
-        // 04 篇 M7.2:状态变化统一在渲染路径入账——任何 cx.notify 触发的
+        // 状态变化统一在渲染路径入账——任何 cx.notify 触发的
         // 重绘都会带上一份最新投影;判等去重保证空转帧零成本。
         self.publish_runtime_snapshot(cx);
         // B8:每帧对账 watcher 兴趣(树根 + 打开的可编辑文件)。放在渲染根
         // 而非 explorer 槽内:explorer 关闭时 gutter 外部刷新仍须工作。
         self.sync_fs_watch(cx);
-        // 07 篇 M8.3:只有活跃文件 tab 物化预览资产;切走即释放块槽/图片。
+        // 只有活跃文件 tab 物化预览资产;切走即释放块槽/图片。
         self.sync_file_render_activity(window, cx);
         let content = match self.tabs.get(self.active).map(|entry| &entry.tab) {
             Some(WorkspaceTab::Terminal { .. }) => Some(self.render_terminal_tab(self.active, cx)),
@@ -1593,6 +1637,7 @@ impl Render for SltermWorkspace {
         // 之下;顺序即绘制序。
         let split_overlay = self.split_drag_visual(cx);
         let sidebar_resize_overlay = self.render_sidebar_resize_overlay(cx);
+        let sidebar_split_overlay = self.render_sidebar_split_overlay(cx);
         let drag_direction = self.split_drag.as_ref().map(|drag| drag.direction);
         // tab 拖拽:预览矩形只提示落区,树与网格不动;激活后全窗罩层独占
         // 指针(与分隔条拖拽同套路),指针划出侧栏/划到终端上都不丢手势。
@@ -1661,14 +1706,14 @@ impl Render for SltermWorkspace {
             .on_action(cx.listener(|this, _: &OpenSettings, window, cx| {
                 this.open_settings_tab(window, cx);
             }))
-            // Ctrl+S:活跃可编辑源码 tab 的保存入口(07 篇保存链)。
+            // Ctrl+S:活跃可编辑源码 tab 的保存入口(保存链)。
             .on_action(cx.listener(|this, _: &SaveFile, _, cx| {
                 this.save_active_file(cx);
             }))
-            // 09 篇 M10.7:整窗壁纸垫在 chrome 之下(与系统 Mica/Aero 同一
+            // 整窗壁纸垫在 chrome 之下(与系统 Mica/Aero 同一
             // 层次语义);非整窗模式此层不绘制,由终端内容区的卡层承担。
             .child(crate::app_shell::wallpaper::window_layer(cx))
-            // 自绘标题栏(05 篇):活跃 tab 展示名 + 三钮 + 拖拽区。
+            // 自绘标题栏:活跃 tab 展示名 + 三钮 + 拖拽区。
             .child(title_bar)
             // 主行:ActivityBar(46px) + 侧栏内容区(可开合/拖宽) + 终端主区。
             .child(
@@ -1706,7 +1751,8 @@ impl Render for SltermWorkspace {
                     ),
             )
             .children(sidebar_resize_overlay)
-            // 07 篇 M8.5:文件树右键菜单挂 workspace 根,不受抽屉裁剪影响。
+            .children(sidebar_split_overlay)
+            // 文件树右键菜单挂 workspace 根,不受抽屉裁剪影响。
             .children(self.render_file_tree_context_menu(cx))
             .children(split_overlay)
             .children(tab_drag_preview)
@@ -1757,15 +1803,15 @@ pub(crate) fn apply_user_keybinds_for_test(cx: &mut App, pairs: &[(String, Strin
     keyboard_bindings::bind_user_keybinds(cx, pairs);
 }
 
-/// 工作区级键绑定(05 篇 M5.3 + 07 篇 M8.5 收口)。
+/// 工作区级键绑定(键位收口)。
 ///
 /// 静态表与 `keyboard_bindings::default_workspace_bindings` 同源;用户
 /// `keybind` 段在其后追加(行序即优先级)。`CloseActiveTab` 暂无默认键位——
-/// 与上游 ctrl-shift-w 的整 tab 关闭语义冲突,入口归 07/09 菜单裁定。
+/// 与上游 ctrl-shift-w 的整 tab 关闭语义冲突,入口归菜单裁定。
 /// `Ctrl+S` 只在 `FileEditor` 上下文注册(无 context 会吞终端焦点按键)。
 /// 在 `gpui_component::init` 之后调用一次。
 pub fn init(cx: &mut App) {
-    // 07 篇编辑器动作(撤销统一/ToggleSource/渲染态键盘)绑定在 FileEditor
+    // 编辑器动作(撤销统一/ToggleSource/渲染态键盘)绑定在 FileEditor
     // 上下文,只对文件视图生效。
     super::file_editor::init(cx);
     cx.bind_keys(keyboard_bindings::default_workspace_bindings());

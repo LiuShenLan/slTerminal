@@ -1,4 +1,4 @@
-//! GPUI 壳终端的公式覆盖层(08 篇 M9.5,管线 A 呈现端)。
+//! GPUI 壳终端的公式覆盖层(管线 A 呈现端)。
 //!
 //! 探测/持久化/fit/几何全部复用 `terminal_math`(单一权威);本文件只做
 //! 三件事:在 term 锁内组织一帧的扫描与绘制计划、把覆盖掩码交给格子绘制
@@ -55,6 +55,23 @@ struct FormulaCandidate {
     overlay: FormulaOverlay,
     prepared: PreparedFormula,
     plan: OverlayDrawPlan,
+}
+
+/// term 锁内完成的扫描产物:全部为 owned 数据,不借用网格。
+///
+/// 拆成两阶段的目的是把首次公式编译(`prepare_overlays` → `state.layout`)
+/// 移出 `Term` 锁:第一阶段只在锁内读网格;第二阶段在锁外做 CPU 密集的
+/// 编译与几何计划,不再接触 `Term`。
+pub(crate) struct ScannedMathFrame {
+    size: MathViewport,
+    font_pixel_size: f32,
+    pixels_per_point: f32,
+    reflow_inline: bool,
+    selection: Option<SelectionRange>,
+    viewport_origin: Line,
+    overlays: Vec<FormulaOverlay>,
+    /// Vi/矩形/语义选择保留源码:扫描阶段已清空投影,计划阶段直接产出空帧。
+    source_only: bool,
 }
 
 /// term 锁内产生、锁外消费的候选帧。位图合成不能在 term 锁内访问,
@@ -225,26 +242,17 @@ pub(crate) fn grid_math_viewport(
 }
 
 impl MathOverlay {
-    /// session 暂不可用时也要立即清掉上一帧投影;输入命中发生在 paint 之外,
-    /// 不能等下一次有 term 的扫描再修正旧坐标。
-    pub(crate) fn clear_frame(
-        &mut self,
-        size: &MathViewport,
-        pixels_per_point: f32,
-    ) -> PendingMathFrame {
-        self.state.update_projection(&[], &[], false);
-        PendingMathFrame::empty(*size, pixels_per_point)
-    }
-
-    /// 每帧的扫描 + 预编 + 几何计划。必须在 term 锁内调用。
-    pub(crate) fn plan_frame<T: EventListener>(
+    /// 第一阶段:只在 term 锁内做依赖网格的扫描,返回 owned 数据。
+    ///
+    /// 本阶段不编译公式,因此 PTY 网格锁不会被首次 TeX 编译拖住。
+    pub(crate) fn scan_frame<T: EventListener>(
         &mut self,
         term: &Term<T>,
         size: &MathViewport,
         palette: &Palette,
         font_pixel_size: f32,
         pixels_per_point: f32,
-    ) -> PendingMathFrame {
+    ) -> ScannedMathFrame {
         let alt_screen = term.mode().contains(TermMode::ALT_SCREEN);
         let selection = term
             .selection
@@ -257,7 +265,18 @@ impl MathOverlay {
                     matches!(selection.ty, SelectionType::Block | SelectionType::Semantic)
                 }))
         {
-            return self.clear_frame(size, pixels_per_point);
+            // 与旧路径一致:命中区域在 paint 之外,投影必须立即清掉。
+            self.state.update_projection(&[], &[], false);
+            return ScannedMathFrame {
+                size: *size,
+                font_pixel_size,
+                pixels_per_point,
+                reflow_inline: false,
+                selection: None,
+                viewport_origin: Line(0),
+                overlays: Vec::new(),
+                source_only: true,
+            };
         }
 
         let origin = term.viewport_origin_for(size.screen_lines());
@@ -279,11 +298,39 @@ impl MathOverlay {
             cursor,
             default_foreground,
         );
+        ScannedMathFrame {
+            size: *size,
+            font_pixel_size,
+            pixels_per_point,
+            // TUI/备用屏继续拥有固定列坐标,但公式覆盖本身仍可用。
+            reflow_inline: !alt_screen,
+            selection,
+            viewport_origin: origin,
+            overlays,
+            source_only: false,
+        }
+    }
+
+    /// 第二阶段:预编 + 几何计划。不接收 `Term`,必须在 term 锁外调用。
+    pub(crate) fn plan_frame(&mut self, scanned: ScannedMathFrame) -> PendingMathFrame {
+        let ScannedMathFrame {
+            size,
+            font_pixel_size,
+            pixels_per_point,
+            reflow_inline,
+            selection,
+            viewport_origin,
+            overlays,
+            source_only,
+        } = scanned;
+        if source_only {
+            return PendingMathFrame::empty(size, pixels_per_point);
+        }
 
         let prepared = terminal_math::prepare_overlays(
             &mut self.state,
             &overlays,
-            size,
+            &size,
             font_pixel_size,
             pixels_per_point,
         );
@@ -299,7 +346,7 @@ impl MathOverlay {
                     &mut self.state,
                     &overlay,
                     &prepared,
-                    size,
+                    &size,
                     pixels_per_point,
                 )?;
                 Some(FormulaCandidate {
@@ -311,12 +358,11 @@ impl MathOverlay {
             .collect();
         PendingMathFrame {
             candidates,
-            size: *size,
+            size,
             pixels_per_point,
-            // TUI/备用屏继续拥有固定列坐标,但公式覆盖本身仍可用。
-            reflow_inline: !alt_screen,
+            reflow_inline,
             selection,
-            viewport_origin: origin,
+            viewport_origin,
         }
     }
 
@@ -655,7 +701,8 @@ mod math_overlay_tests {
         rows: usize,
     ) -> MathFrame {
         let size = grid_math_viewport(cols, rows, 8.0, 16.0);
-        let pending = overlay.plan_frame(term, &size, &Palette::default(), 16.0, 1.0);
+        let scanned = overlay.scan_frame(term, &size, &Palette::default(), 16.0, 1.0);
+        let pending = overlay.plan_frame(scanned);
         overlay.finalize_frame_with(pending, |_, _| true)
     }
 
@@ -727,12 +774,14 @@ mod math_overlay_tests {
         let size = grid_math_viewport(32, 4, 8.0, 16.0);
 
         let mut all_overlay = MathOverlay::default();
-        let all_pending = all_overlay.plan_frame(&term, &size, &Palette::default(), 16.0, 1.0);
+        let all_scanned = all_overlay.scan_frame(&term, &size, &Palette::default(), 16.0, 1.0);
+        let all_pending = all_overlay.plan_frame(all_scanned);
         let all = all_overlay.finalize_frame_with(all_pending, |_, _| true);
 
         let mut filtered_overlay = MathOverlay::default();
-        let filtered_pending =
-            filtered_overlay.plan_frame(&term, &size, &Palette::default(), 16.0, 1.0);
+        let filtered_scanned =
+            filtered_overlay.scan_frame(&term, &size, &Palette::default(), 16.0, 1.0);
+        let filtered_pending = filtered_overlay.plan_frame(filtered_scanned);
         let filtered = filtered_overlay
             .finalize_frame_with(filtered_pending, |source, _| source.as_ref() != "x");
 
@@ -866,7 +915,8 @@ mod math_overlay_tests {
         assert!(projected.project_cell(0, source_suffix, 20).unwrap() < source_suffix);
 
         let size = grid_math_viewport(20, 4, 8.0, 16.0);
-        let pending = overlay.clear_frame(&size, 1.0);
+        overlay.state.update_projection(&[], &[], false);
+        let pending = PendingMathFrame::empty(size, 1.0);
         let cleared = overlay.finalize_frame_with(pending, |_, _| true);
 
         assert!(cleared.is_empty());
@@ -956,5 +1006,61 @@ mod math_overlay_tests {
         assert!(!frame.is_empty(), "带 TeX 白名单命令的裸括号必须出覆盖层");
         assert_eq!(frame.source(0), r"\sqrt{x^2+y^2}");
         assert!(!frame.plan(0).display_style);
+    }
+
+    /// 结构断言「编译阶段不持锁」:扫描完成后由另一线程独占 `Term` 锁
+    /// 200ms,主线程序列执行第二阶段 `plan_frame`,不得被该锁阻塞。
+    ///
+    /// 首次 TeX 编译被刻意排除在计时外(先预热一次):本用例守的是锁边界,
+    /// 不是编译速度。
+    #[test]
+    fn plan_phase_does_not_wait_for_the_term_lock() {
+        use std::sync::{Arc, Mutex};
+        use std::time::{Duration, Instant};
+
+        let term = Arc::new(Mutex::new(term_with(16, 4, &[r"\[x\]", "", "prompt"])));
+        let size = grid_math_viewport(16, 4, 8.0, 16.0);
+        let mut overlay = MathOverlay::default();
+
+        // 预热编译缓存,让第二阶段只测锁边界。
+        {
+            let guard = term.lock().unwrap();
+            let scanned = overlay.scan_frame(&guard, &size, &Palette::default(), 16.0, 1.0);
+            drop(guard);
+            let pending = overlay.plan_frame(scanned);
+            let warm = overlay.finalize_frame_with(pending, |_, _| true);
+            assert!(!warm.is_empty(), "预热帧应含公式");
+        }
+
+        let scanned = {
+            let guard = term.lock().unwrap();
+            overlay.scan_frame(&guard, &size, &Palette::default(), 16.0, 1.0)
+        };
+
+        // 150ms < 200ms 持锁时间:既留出调度裕度,又能区分「等锁」与
+        // 「锁外计划」。这是结构判据的时间预算,不是语义放宽。
+        let hold_time = Duration::from_millis(200);
+        let (locked_tx, locked_rx) = std::sync::mpsc::channel();
+        let holder = {
+            let term = Arc::clone(&term);
+            std::thread::spawn(move || {
+                let _guard = term.lock().unwrap();
+                locked_tx.send(()).unwrap();
+                std::thread::sleep(hold_time);
+            })
+        };
+        locked_rx.recv().unwrap();
+
+        let started = Instant::now();
+        let pending = overlay.plan_frame(scanned);
+        let elapsed = started.elapsed();
+        holder.join().unwrap();
+
+        assert!(
+            elapsed < Duration::from_millis(150),
+            "plan_frame 仍在等待 Term 锁:耗时 {elapsed:?},持锁 {hold_time:?}"
+        );
+        let frame = overlay.finalize_frame_with(pending, |_, _| true);
+        assert!(!frame.is_empty(), "锁外计划仍应产出公式帧");
     }
 }

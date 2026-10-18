@@ -1,4 +1,4 @@
-//! 口令保护的本地加密备份(10 篇 M10.10)。
+//! 口令保护的本地加密备份。
 //!
 //! 本模块刻意不遍历用户 home 目录:下方白名单即导出与导入的安全边界
 //! (白名单即安全边界,枚举即授权)。AI 会话库、环境变量、凭据库、token
@@ -14,13 +14,13 @@
 //! 恢复序:先完整鉴权(`open`)→ `validate_archive` 全量校验 → 才允许
 //! 任何落盘。校验任何一条不过整单拒写,半份不可信报文零副作用。
 //!
-//! 类别清单与敏感键剥除表按 06 篇键域终态重定(D10-2):设置/会话/自定义
+//! 类别清单与敏感键剥除表按键域终态重定(D10-2):设置/会话/自定义
 //! 主题/命令历史/目录历史/provider 元数据六类;凭据值永不入包(provider
 //! 文档只保留引用字段与尾四掩码)。
 //!
-//! 消费点:UI 入口归 06 设置页安全分区(D10-4,恢复点清单同面);本步只落
-//! 引擎与 L1 用例,生产接缝 = [`collect`]/[`seal`]/[`restore`]/
-//! [`recovery::restore_selected`]/[`recovery::undo`]。
+//! 消费点:设置页安全分区的加密备份导出已接(C33:类别选择 + masked 口令 +
+//! 后台整单收集/密封/原子写,失败明示);恢复与撤回 UI 尚未接线,其生产接缝
+//! 保持 [`restore`]/[`recovery::restore_selected`]/[`recovery::undo`]。
 
 use std::collections::HashSet;
 use std::fs;
@@ -42,15 +42,15 @@ const ARCHIVE_VERSION: u32 = 1;
 const SALT_LEN: usize = 16;
 const NONCE_LEN: usize = 12;
 const KEY_LEN: usize = 32;
-/// 口令最小长度(chars 计数,契约数值随上游基线)。
-const MIN_PASSPHRASE_CHARS: usize = 8;
+/// 口令最小长度(chars 计数,契约数值随上游基线);UI 前置校验同源引用。
+pub(crate) const MIN_PASSPHRASE_CHARS: usize = 8;
 
 /// 自定义主题文件名后缀(与主题库持久化规则同源)。
 const THEME_FILE_SUFFIX: &str = ".slterm-theme.json";
 
 /// 敏感键字面量表(D10-2 按 06 键域终态重定)。
 ///
-/// 06 篇键域终态不含任何凭据键——凭据值只允许存在于 Windows 凭据管理器,
+/// 键域终态不含任何凭据键——凭据值只允许存在于 Windows 凭据管理器,
 /// `providers.json` 只存引用字段(`api_key_set`/`api_key_hint`)与元数据。
 /// 本表是导出清洗与导入复验共用的第二道防线:手改文档塞入的凭据字段一律
 /// 在进出备份两面被剥除/拒绝。比较口径 = 去首尾空白后 ASCII 小写精确匹配;
@@ -136,6 +136,18 @@ impl BackupSelection {
             BackupCategory::DirectoryHistory => &mut self.directory_history,
             BackupCategory::Providers => &mut self.providers,
         } = enabled;
+    }
+
+    /// 读取单类别选中态(UI 开关渲染与 `set` 共用同一字段映射)。
+    pub(crate) fn get(self, category: BackupCategory) -> bool {
+        match category {
+            BackupCategory::Settings => self.settings,
+            BackupCategory::Session => self.session,
+            BackupCategory::Themes => self.themes,
+            BackupCategory::CommandHistory => self.command_history,
+            BackupCategory::DirectoryHistory => self.directory_history,
+            BackupCategory::Providers => self.providers,
+        }
     }
 
     pub(crate) fn from_categories(categories: impl IntoIterator<Item = BackupCategory>) -> Self {
@@ -718,6 +730,7 @@ mod encrypted_backup_tests {
         };
         selection.set(BackupCategory::Session, true);
         selection.set(BackupCategory::Themes, true);
+        assert!(selection.get(BackupCategory::Session));
         assert_eq!(
             selection.categories().collect::<Vec<_>>(),
             vec![BackupCategory::Session, BackupCategory::Themes]
@@ -728,6 +741,7 @@ mod encrypted_backup_tests {
         );
         selection.set(BackupCategory::Session, false);
         assert!(!selection.session);
+        assert!(!selection.get(BackupCategory::Session));
     }
 
     #[test]

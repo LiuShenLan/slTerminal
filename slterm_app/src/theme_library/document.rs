@@ -251,6 +251,8 @@ impl ThemeDocument {
             .filter(|value| !value.is_null())
             .map(|_| number(effects, "opacity").map(|value| value as f32 / 100.0))
             .transpose()?;
+        // null/缺失 = 跟随内置默认(开启);显式布尔值权威。
+        definition.effects.veil = effects.get("veil").and_then(Value::as_bool);
         definition.effects.blur = match effects.get("blur") {
             None | Some(Value::Null) => None,
             Some(value) => Some(
@@ -521,6 +523,7 @@ pub fn from_definition(definition: &ThemeDefinition) -> Result<ThemeDocument, Do
             "material": if definition.effects.blur.is_some_and(BlurMode::enabled) { "glass" } else { "solid" },
             "blur": definition.effects.blur.map(BlurMode::settings_value),
             "opacity": definition.effects.opacity.map(|value| value * 100.0),
+            "veil": definition.effects.veil,
             "background_image": definition.effects.background_image.as_deref(),
             "background_image_opacity": definition.effects.background_image_opacity.map(|value| value * 100.0),
             "background_image_fit": definition.effects.background_image_fit.as_deref(),
@@ -737,6 +740,14 @@ fn validate_effects(value: &Value) -> Result<(), DocumentError> {
     {
         return Err(DocumentError::Invalid(
             "effects.background_image_cover_chrome must be boolean or null".to_owned(),
+        ));
+    }
+    if let Some(value) = object.get("veil")
+        && !value.is_null()
+        && !value.is_boolean()
+    {
+        return Err(DocumentError::Invalid(
+            "effects.veil must be boolean or null".to_owned(),
         ));
     }
     if let Some(cursor_shape) = object.get("cursor_shape")
@@ -1135,6 +1146,7 @@ mod document_tests {
         source.layout.padding_x = Some(12.0);
         source.layout.padding_y = Some(6.0);
         source.effects.blur = Some(BlurMode::Acrylic);
+        source.effects.veil = Some(false);
         let document = from_definition(&source).unwrap();
         let decoded = document.definition().unwrap();
         assert_eq!(decoded.name, source.name);
@@ -1161,6 +1173,32 @@ mod document_tests {
         let updated = document.with_definition(&edited).unwrap();
         assert_eq!(updated.definition().unwrap().terminal.foreground, [1, 2, 3]);
         assert_eq!(updated.to_value()["extensions"]["vendor"]["x"], 1);
+    }
+
+    /// C7:非聚焦 pane 压暗开关经文档往返;缺省 null 保持「未设置」语义。
+    #[test]
+    fn pane_veil_round_trips_absent_and_explicit_values() {
+        let mut definition = ThemeDefinition::from_builtin(ThemeName::Nord);
+        let document = from_definition(&definition).unwrap();
+        assert_eq!(document.to_value()["effects"]["veil"], Value::Null);
+        assert_eq!(document.definition().unwrap().effects.veil, None);
+
+        for veil in [false, true] {
+            definition.effects.veil = Some(veil);
+            let document = from_definition(&definition).unwrap();
+            assert_eq!(document.to_value()["effects"]["veil"].as_bool(), Some(veil));
+            let bytes = document.to_json_bytes().unwrap();
+            let decoded = ThemeDocument::from_json_bytes(&bytes).unwrap();
+            assert_eq!(decoded.definition().unwrap().effects.veil, Some(veil));
+        }
+
+        // 非布尔值是信封错误,不静默折算成默认值。
+        let mut value = from_definition(&definition).unwrap().to_value();
+        value["effects"]["veil"] = json!("off");
+        assert!(matches!(
+            ThemeDocument::from_value(value),
+            Err(DocumentError::Invalid(message)) if message.contains("effects.veil")
+        ));
     }
 
     #[test]

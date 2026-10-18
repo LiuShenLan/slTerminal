@@ -13,6 +13,7 @@ use gpui_component::switch::Switch;
 use gpui_component::{ActiveTheme as _, Disableable as _, Sizable as _, h_flex, v_flex};
 
 use crate::app_shell::workspace::keyboard_bindings;
+use crate::encrypted_backup::BackupCategory;
 use crate::i18n::Message;
 
 use super::SettingsPane;
@@ -92,6 +93,28 @@ impl SettingsPane {
             )
             .into_any_element();
         self.row(label, desc, control, cx).into_any_element()
+    }
+
+    /// 加密备份类别开关行:选中态只存设置页内存,不写设置键。
+    fn backup_category_row(
+        &self,
+        category: BackupCategory,
+        debug_id: &'static str,
+        label: &'static str,
+        cx: &Context<'_, Self>,
+    ) -> AnyElement {
+        let checked = self.backup_selection.get(category);
+        let control = div()
+            .debug_selector(move || debug_id.to_owned())
+            .child(Switch::new(debug_id).checked(checked).on_click(cx.listener(
+                move |this, checked: &bool, _, cx| {
+                    this.backup_selection.set(category, *checked);
+                    this.status = None;
+                    cx.notify();
+                },
+            )))
+            .into_any_element();
+        self.row(label, "", control, cx).into_any_element()
     }
 
     pub(super) fn slider_row(
@@ -819,11 +842,17 @@ impl SettingsPane {
 
     pub(super) fn page_advanced(
         &mut self,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> gpui::Div {
+        self.sync_backup_passphrase_placeholder(window, cx);
         let language = self.language(cx);
         let export_workspace_label = language.text(Message::SettingsAdvancedExportWorkspaceAction);
+        let export_backup_label = if self.backup_busy {
+            language.text(Message::SettingsBackupExportBusy)
+        } else {
+            language.text(Message::SettingsBackupExport)
+        };
         v_flex()
             .w_full()
             .gap(px(SETTINGS_GROUP_GAP))
@@ -921,6 +950,74 @@ impl SettingsPane {
                         self.runtime.terminal_proxy,
                         cx,
                     )),
+            )
+            // C33:加密备份导出(恢复/撤回入口不在本步范围)。
+            .child(
+                self.group(language.text(Message::SettingsBackupGroup), cx)
+                    .child(self.backup_category_row(
+                        BackupCategory::Settings,
+                        "settings-backup-category-settings",
+                        language.text(Message::SettingsBackupCategorySettings),
+                        cx,
+                    ))
+                    .child(self.backup_category_row(
+                        BackupCategory::Session,
+                        "settings-backup-category-session",
+                        language.text(Message::SettingsBackupCategorySession),
+                        cx,
+                    ))
+                    .child(self.backup_category_row(
+                        BackupCategory::Themes,
+                        "settings-backup-category-themes",
+                        language.text(Message::SettingsBackupCategoryThemes),
+                        cx,
+                    ))
+                    .child(self.backup_category_row(
+                        BackupCategory::CommandHistory,
+                        "settings-backup-category-command_history",
+                        language.text(Message::SettingsBackupCategoryCommandHistory),
+                        cx,
+                    ))
+                    .child(self.backup_category_row(
+                        BackupCategory::DirectoryHistory,
+                        "settings-backup-category-directory_history",
+                        language.text(Message::SettingsBackupCategoryDirectoryHistory),
+                        cx,
+                    ))
+                    .child(self.backup_category_row(
+                        BackupCategory::Providers,
+                        "settings-backup-category-providers",
+                        language.text(Message::SettingsBackupCategoryProviders),
+                        cx,
+                    ))
+                    .child(
+                        self.row(
+                            language.text(Message::SettingsBackupPassphrase),
+                            language.text(Message::SettingsBackupPassphraseDescription),
+                            div()
+                                .debug_selector(|| "settings-backup-passphrase".to_owned())
+                                .w(px(SETTINGS_SELECT_WIDTH))
+                                .child(Input::new(&self.backup_passphrase)),
+                            cx,
+                        ),
+                    )
+                    .child(
+                        self.row(
+                            language.text(Message::SettingsBackupExport),
+                            language.text(Message::SettingsBackupExportDescription),
+                            div()
+                                .debug_selector(|| "settings-backup-export".to_owned())
+                                .child(
+                                    Button::new("settings-backup-export-btn")
+                                        .label(export_backup_label)
+                                        .disabled(self.backup_busy)
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.export_backup(window, cx);
+                                        })),
+                                ),
+                            cx,
+                        ),
+                    ),
             )
     }
 }

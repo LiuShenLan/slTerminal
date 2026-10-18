@@ -26,6 +26,7 @@ use crate::cli::Program;
 use crate::session::{AgentSession, LaunchSession, WindowState, load_from};
 use slterm_terminal::event_loop::Msg as EventLoopMsg;
 
+mod backup_tests;
 mod file_editor_chrome_tests;
 mod file_editor_tests;
 mod file_tree_tests;
@@ -38,10 +39,11 @@ mod sidebar_views_tests;
 mod taskbar_tests;
 mod theme_tests;
 mod tray_tests;
+mod update_tests;
 mod wallpaper_tests;
 mod workspace_export_tests;
 
-/// 与生产 init 同序的测试子集(11 篇模板同形):内嵌 Maple 在测试文本系统
+/// 与生产 init 同序的测试子集:内嵌 Maple 在测试文本系统
 /// 不栅格化真实字形,20MB 注册纯属拖慢,测试不挂。
 fn bootstrap(cx: &mut TestAppContext) {
     cx.update(|cx| {
@@ -260,6 +262,41 @@ fn split_renders_two_panes_and_keeps_panes_equal_to_tree_leaves(cx: &mut TestApp
     }
 }
 
+/// C7:非聚焦 pane 压暗层接主题开关;关闭时压暗元素完全不绘制。
+#[gpui::test]
+fn non_focused_pane_veil_follows_the_theme_switch(cx: &mut TestAppContext) {
+    let (_workspace, mut window) = open_workspace(cx);
+    window.dispatch_action(SplitRight);
+    window.run_until_parked();
+    window.refresh().unwrap();
+    draw_frame(&mut window);
+
+    assert!(
+        cx.update(|cx| cx.global::<super::config::Settings>().veil),
+        "内置默认必须开启"
+    );
+    assert!(
+        window.debug_bounds("pane-veil-1").is_some(),
+        "非聚焦 pane 必须绘制压暗层"
+    );
+    assert!(
+        window.debug_bounds("pane-veil-2").is_none(),
+        "聚焦 pane 不得压暗"
+    );
+
+    cx.update(|cx| {
+        let mut settings = cx.global::<super::config::Settings>().clone();
+        settings.veil = false;
+        cx.set_global(settings);
+    });
+    window.refresh().unwrap();
+    draw_frame(&mut window);
+    assert!(
+        window.debug_bounds("pane-veil-1").is_none(),
+        "开关关闭后不得绘制压暗层"
+    );
+}
+
 /// 不变式「panes == 树叶」路径 3/3:关 pane(收编路径)。
 #[gpui::test]
 fn close_pane_keeps_panes_equal_to_tree_leaves(cx: &mut TestAppContext) {
@@ -344,7 +381,7 @@ fn clicking_the_zoomed_pane_keeps_zoom(cx: &mut TestAppContext) {
     assert_eq!(focused, PaneId(2));
 }
 
-/// 单 pane 无缩放语义:toggle 是空操作(05 篇 zoom 状态机)。
+/// 单 pane 无缩放语义:toggle 是空操作(zoom 状态机)。
 #[gpui::test]
 fn zoom_is_a_no_op_with_a_single_pane(cx: &mut TestAppContext) {
     let (workspace, mut window) = open_workspace(cx);
@@ -357,7 +394,7 @@ fn zoom_is_a_no_op_with_a_single_pane(cx: &mut TestAppContext) {
 }
 
 /// 分隔条拖拽关键路径:overlay 预览不动提交比例/pane 几何;松手 commit
-/// 后几何生效(05 篇「拖拽提交流」)。
+/// 后几何生效(拖拽提交流)。
 #[gpui::test]
 fn divider_drag_previews_without_reflow_and_commits_geometry(cx: &mut TestAppContext) {
     let (workspace, mut window) = open_workspace(cx);
@@ -639,8 +676,8 @@ fn settings_opacity_preview_survives_a_concurrent_persist(cx: &mut TestAppContex
     });
 }
 
-/// 开机启动开关(09 篇 M10.6):测试构建由平台层短路真实 Startup 写入,
-/// 设置键仍经统一写通道落盘;真系统副作用按 11 篇豁免走构建产物 smoke。
+/// 开机启动开关:测试构建由平台层短路真实 Startup 写入,
+/// 设置键仍经统一写通道落盘;真系统副作用按测试豁免走构建产物 smoke。
 #[gpui::test]
 fn launch_at_login_toggle_persists_the_setting_key(cx: &mut TestAppContext) {
     let (workspace, mut window) = open_workspace(cx);
@@ -674,6 +711,86 @@ fn launch_at_login_toggle_persists_the_setting_key(cx: &mut TestAppContext) {
             assert!(pane.read(cx).status_for_test().is_none());
         });
     }
+}
+
+/// A14:开启静默启动在同一笔写任务内联动 tray 并给出提示;
+/// 关闭 silent_start 不反向改 tray。
+#[gpui::test]
+fn silent_start_toggle_enables_tray_in_the_same_write_and_reports_the_hint(
+    cx: &mut TestAppContext,
+) {
+    let (workspace, mut window) = open_workspace(cx);
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("settings.json");
+    let pane = open_settings_at(cx, &workspace, &mut window, path.clone());
+    window.refresh().unwrap();
+    draw_frame(&mut window);
+
+    window.update(|window, cx| {
+        pane.update(cx, |pane, cx| {
+            pane.toggle_for_test("silent_start", true, window, cx);
+        });
+    });
+    window.run_until_parked();
+    let tree = slterm_settings::json::parse(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(
+        tree.get("session")
+            .and_then(|section| section.get("silent_start"))
+            .and_then(|value| value.as_bool()),
+        Some(true),
+        "silent_start 必须落盘"
+    );
+    assert_eq!(
+        tree.get("system")
+            .and_then(|section| section.get("tray"))
+            .and_then(|value| value.as_bool()),
+        Some(true),
+        "开启静默启动必须同笔写入 tray=true"
+    );
+    cx.update(|cx| {
+        let pane = pane.read(cx);
+        assert!(pane.runtime_for_test().silent_start);
+        assert!(pane.runtime_for_test().tray, "回读后运行时托盘必须为开");
+        let status = pane.status_for_test().expect("必须提示托盘已联动开启");
+        assert_eq!(
+            status,
+            &super::settings_pane::SettingsStatus::SilentStartTrayEnabled
+        );
+        assert!(!status.is_error());
+        let language = pane.language_for_test();
+        let expected = match language {
+            crate::i18n::UiLanguage::ZhCn => "已同时开启常驻系统托盘：静默启动需要在托盘中恢复窗口",
+            crate::i18n::UiLanguage::EnUs => {
+                "System tray enabled as well: silent start needs the tray to restore the window"
+            }
+        };
+        assert_eq!(status.text(language), expected);
+    });
+
+    window.update(|window, cx| {
+        pane.update(cx, |pane, cx| {
+            pane.toggle_for_test("silent_start", false, window, cx);
+        });
+    });
+    window.run_until_parked();
+    let tree = slterm_settings::json::parse(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(
+        tree.get("session")
+            .and_then(|section| section.get("silent_start"))
+            .and_then(|value| value.as_bool()),
+        Some(false),
+        "关闭 silent_start 必须落盘"
+    );
+    assert_eq!(
+        tree.get("system")
+            .and_then(|section| section.get("tray"))
+            .and_then(|value| value.as_bool()),
+        Some(true),
+        "关闭静默启动不得反向关闭托盘"
+    );
+    cx.update(|cx| {
+        assert!(pane.read(cx).status_for_test().is_none());
+    });
 }
 
 /// `Changed` 驱动热应用:字号提交后,已打开终端视图立即换字号(字体
@@ -1499,7 +1616,8 @@ fn write_crash_snapshot(path: &std::path::Path, cwd1: &str, cwd2: &str) {
             "collapsed": false,
             "active_view_top": "explorer",
             "active_view_bottom": "agent_files",
-            "width": 312.0
+            "width": 312.0,
+            "ratio_permille": 618
         },
         "clean_exit": false
     });
@@ -1574,6 +1692,7 @@ fn crashed_snapshot_restores_tabs_split_cwd_and_sidebar_within_one_tick(cx: &mut
             active_view_top: Some(SideViewId::Explorer),
             active_view_bottom: Some(SideViewId::AgentFiles),
             width: 312.0,
+            ratio_permille: 618,
         }
     );
 
@@ -1704,7 +1823,7 @@ fn restored_agent_command_is_injected_and_hostile_ids_are_rejected(cx: &mut Test
     );
 }
 
-/// 07 篇 M8.5:用户 keybind 段在启动后追加绑定,可重绑工作区动作;
+/// 用户 keybind 段在启动后追加绑定,可重绑工作区动作;
 /// 保留键条目(即使同表出现)被准入门拒绝,不产生任何绑定。
 #[gpui::test]
 fn user_keybind_segment_rebinds_without_touching_reserved_keys(cx: &mut TestAppContext) {

@@ -1,4 +1,4 @@
-//! 壳侧全局 `Settings`(13 篇锚点):`RuntimeSettings` 的 GUI 消费视图。
+//! 壳侧全局 `Settings`:`RuntimeSettings` 的 GUI 消费视图。
 //!
 //! 值权威在 `slterm-settings`;本结构只做两件事:把宽容解析后的运行时
 //! 设置折算成终端/壳直接消费的形态(字体四族、逻辑字号、调色板、滚速),
@@ -32,11 +32,11 @@ pub struct Settings {
     pub ligatures: bool,
     /// 暗色单份(仅暗色定位;D06-3)。
     pub palette: Palette,
-    /// 编辑器语义槽(源码态/gutter/diff 的配色单源,07 篇改造节 8)。
+    /// 编辑器语义槽(源码态/gutter/diff 的配色单源)。
     pub editor_theme: EditorThemeTokens,
     /// 选区完成即复制。
     pub copy_on_select: bool,
-    /// 补全呈现形态(08 篇 M9.5:Inline/Popup/Hybrid,本体归 06 键域)。
+    /// 补全呈现形态(Inline/Popup/Hybrid;设置值本体归 `slterm-settings` 键域)。
     pub completion_style: slterm_settings::CompletionStyleName,
     /// AI 内联补全 ghost 开关。
     pub ghost: bool,
@@ -44,10 +44,10 @@ pub struct Settings {
     /// 解析后的界面语言(System 档的 locale 协商只在此处发生一次;
     /// 渲染路径读缓存,不再逐帧探测系统 locale)。
     pub language: UiLanguage,
-    /// 常驻系统托盘图标(09 篇 M10.3):1 Hz 节拍按此值增删图标,
+    /// 常驻系统托盘图标:1 Hz 节拍按此值增删图标,
     /// 线程留驻不随开关销毁。
     pub tray: bool,
-    /// 静默启动(09 篇 M10.6):与 `tray` 合取决定首窗是否隐藏;
+    /// 静默启动:与 `tray` 合取决定首窗是否隐藏;
     /// 显式 CLI 启动(`--working-directory`/`-e`)恒不静默。
     pub silent_start: bool,
     /// 窗口背景材质(D09-1 五档,默认 None;自定义主题可声明默认,
@@ -55,6 +55,9 @@ pub struct Settings {
     pub blur: BlurMode,
     /// 窗口不透明度:只透壳底色与终端默认背景,文字层恒不透明。
     pub opacity: f32,
+    /// 非聚焦 pane 压暗层开关。用户设置域无独立键:自定义主题
+    /// `effects.veil` 显式值权威,未声明/无自定义主题/解析失败 = 开启。
+    pub veil: bool,
     /// 壁纸路径;None = 无壁纸。加载/缩放/内存预算归 wallpaper 模块。
     pub background_image: Option<PathBuf>,
     /// 壁纸自身透明度,独立于窗口 opacity。
@@ -64,6 +67,8 @@ pub struct Settings {
     pub background_image_alignment: Option<String>,
     /// 壁纸铺满整窗(含侧栏/标题栏)而非仅终端内容区。
     pub background_image_cover_chrome: bool,
+    /// 发现新版本后是否允许后台预取安装包(安装授权仍归更新弹窗)。
+    pub auto_download_updates: bool,
 }
 
 impl Global for Settings {}
@@ -94,7 +99,7 @@ impl Settings {
     }
 
     /// 宽容解析后的运行时设置 → 壳消费视图。字体四族共用同一字族链
-    /// (粗体/斜体字族键不在本篇白名单);字号缺省 = 15px;连字 Theme 档
+    /// (粗体/斜体字族键不在字体键白名单);字号缺省 = 15px;连字 Theme 档
     /// 在主题 typography 落地前按「开」处理(与 `Ligatures::enabled(None)`
     /// 同语义)。
     pub fn from_runtime(runtime: &RuntimeSettings) -> Self {
@@ -116,6 +121,11 @@ impl Settings {
             .unwrap_or_else(|| crate::app_shell::assets::REQUIRED_FONT_FAMILY.to_owned());
         let (palette, ui, effects) = resolve_theme(runtime, theme_root);
         let (opacity, blur) = effective_material(runtime, effects.as_ref());
+        // 无自定义主题(含解析失败)恒为开启;不伪造 settings.json 键。
+        let veil = effects
+            .as_ref()
+            .and_then(|effects| effects.veil)
+            .unwrap_or(true);
         Settings {
             font_family: family.clone(),
             font_bold_family: family.clone(),
@@ -134,15 +144,17 @@ impl Settings {
             silent_start: runtime.silent_start,
             blur,
             opacity,
+            veil,
             background_image: runtime.background_image.as_deref().map(PathBuf::from),
             background_image_opacity: runtime.background_image_opacity,
             background_image_fit: runtime.background_image_fit.clone(),
             background_image_alignment: runtime.background_image_alignment.clone(),
             background_image_cover_chrome: runtime.background_image_cover_chrome,
+            auto_download_updates: runtime.auto_download_updates,
         }
     }
 
-    /// 静默启动判定(09 篇 M10.6):公式单点在 `platform::startup`,
+    /// 静默启动判定:公式单点在 `platform::startup`,
     /// 壳视图只提供两个设置位,不重复实现合取。
     pub fn start_hidden(&self) -> bool {
         crate::platform::startup::start_hidden_for(self.silent_start, self.tray)
@@ -172,7 +184,7 @@ impl Settings {
 ///
 /// 返回(终端调色板, UI 语义槽, 自定义主题视效缺省):编辑器的
 /// `EditorThemeTokens` 从同一分支装配,主题切换时消费方与终端同步热应用。
-/// 视效缺省只用于用户未显式写过的 opacity/blur(09 篇 M10.7)。
+/// 视效缺省只用于用户未显式写过的 opacity/blur。
 fn resolve_theme(
     runtime: &RuntimeSettings,
     theme_root: Option<&Path>,
@@ -429,6 +441,53 @@ mod config_tests {
         let settings = Settings::from_runtime_with_theme_root(&explicit, Some(&themes));
         assert!((settings.opacity - 1.0).abs() < 1e-6, "显式 1.0 必须权威");
         assert_eq!(settings.blur, BlurMode::None, "显式 none 必须权威");
+    }
+
+    /// C7:veil 无用户设置键;自定义主题显式值权威,其余路径恒开启。
+    #[test]
+    fn pane_veil_defaults_on_and_follows_the_custom_theme_switch() {
+        assert!(Settings::default().veil, "内置目录默认开启");
+        let builtin = runtime(r#"{"appearance": {"theme": "Nord"}}"#);
+        assert!(
+            Settings::from_runtime(&builtin).veil,
+            "内置主题不提供 veil 覆盖"
+        );
+
+        let directory = tempfile::tempdir().unwrap();
+        let themes = directory.path().join("themes");
+        let store = crate::theme_library::ThemeLibraryStore::new(&themes);
+        let import = |name: &str, veil: Option<bool>| {
+            let mut definition =
+                slterm_settings::ThemeDefinition::from_builtin(slterm_settings::ThemeName::Nord);
+            definition.name = name.to_owned();
+            definition.effects.veil = veil;
+            let document = crate::theme_library::from_definition(&definition).unwrap();
+            store.import(&document).unwrap().id().unwrap().to_owned()
+        };
+        let off_id = import("Veil Off", Some(false));
+        let default_id = import("Veil Default", None);
+
+        let off = runtime(&format!(
+            r#"{{"appearance": {{"custom_theme": "{off_id}"}}}}"#
+        ));
+        assert!(
+            !Settings::from_runtime_with_theme_root(&off, Some(&themes)).veil,
+            "主题显式关闭必须生效"
+        );
+        let default = runtime(&format!(
+            r#"{{"appearance": {{"custom_theme": "{default_id}"}}}}"#
+        ));
+        assert!(
+            Settings::from_runtime_with_theme_root(&default, Some(&themes)).veil,
+            "主题未声明 veil 时回默认开启"
+        );
+
+        // 缺失主题(解析失败)不得把启动/热应用升级成故障,veil 回默认开启。
+        let missing = runtime(r#"{"appearance": {"custom_theme": "nope"}}"#);
+        assert!(
+            Settings::from_runtime_with_theme_root(&missing, Some(&themes)).veil,
+            "解析失败回默认开启"
+        );
     }
 
     #[test]

@@ -1,4 +1,4 @@
-//! AI assistant 触发链(08 篇 M9.2):命令失败后的判定纯函数族、独立配置
+//! AI assistant 触发链:命令失败后的判定纯函数族、独立配置
 //! 文件与建议条数据形态。
 //!
 //! 这条路径跑在每次命令失败上,不能吵:先过便宜门链(冷却 → 开关 →
@@ -295,7 +295,7 @@ impl TriggerGate {
     }
 }
 
-/// hook 失败边的一次失败事实(08 篇改造节 9 / D08-2)。config_guard 自愈
+/// hook 失败边的一次失败事实(D08-2)。config_guard 自愈
 /// 失败不是 shell 命令失败,没有真实退出码与最后命令;这里把失败操作投影
 /// 成触发链能消费的参数:`command` 是操作描述,只参与规则表判定。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -530,7 +530,7 @@ impl std::fmt::Display for RequestTargetError {
     }
 }
 
-/// 请求目标组装(08 篇 provider 凭据流):启用 provider 优先,凭据出域即
+/// 请求目标组装(provider 凭据流):启用 provider 优先,凭据出域即
 /// `Zeroizing`;A6:active provider 无凭据时回退环境变量,仍无则显式错误。
 pub(crate) fn request_target(
     cfg: &AssistantConfig,
@@ -642,7 +642,7 @@ fn openai_body(model: &str, user: &str) -> serde_json::Value {
     })
 }
 
-/// 四协议族请求(08 篇 #33):OpenAI Bearer / Anthropic x-api-key /
+/// 四协议族请求:OpenAI Bearer / Anthropic x-api-key /
 /// Google x-goog-api-key / Azure api-key;全局 30s 超时,响应按协议族取
 /// 文本字段。含头拼接串全程 `Zeroizing`。
 pub(crate) fn send_model_request(target: &RequestTarget, user: &str) -> Option<String> {
@@ -768,7 +768,9 @@ pub(crate) fn parse_fix(content: &str) -> Option<AiFix> {
 #[cfg(test)]
 mod ai_assistant_tests {
     use super::*;
+    use crate::ai_providers::ProviderKind;
     use std::collections::HashMap;
+    use std::io::{Read, Write};
 
     // ---- should_suggest 规则表 ----
 
@@ -1326,5 +1328,406 @@ mod ai_assistant_tests {
         assert_eq!(loaded.base_url, "https://example.test/v1injected=on");
         assert_eq!(loaded.model, "modelname");
         assert!(!loaded.enabled);
+    }
+
+    // ---- send_model_request:本地 mock HTTP server ----
+
+    /// mock server 的固定响应。
+    struct MockHttpResponse {
+        status: u16,
+        body: &'static str,
+    }
+
+    /// mock server 捕获到的一次请求。
+    struct CapturedRequest {
+        method: String,
+        /// 请求行中的路径(含 query)。
+        target: String,
+        /// 头名统一小写,便于断言。
+        headers: HashMap<String, String>,
+        body: serde_json::Value,
+    }
+
+    /// 单次连接的 mock HTTP server:绑定 127.0.0.1:0 随机端口,独立线程
+    /// accept 一次。accept 与读写均设超时,异常路径不会挂死测试。
+    struct MockServer {
+        base_url: String,
+        handle: Option<std::thread::JoinHandle<Option<CapturedRequest>>>,
+    }
+
+    impl MockServer {
+        fn start(response: MockHttpResponse) -> Self {
+            let listener =
+                std::net::TcpListener::bind("127.0.0.1:0").expect("mock server 绑定回环端口失败");
+            let address = listener.local_addr().expect("mock server 读取本地地址失败");
+            listener
+                .set_nonblocking(true)
+                .expect("mock server 设置非阻塞失败");
+            let handle = std::thread::spawn(move || {
+                let deadline = Instant::now() + Duration::from_secs(5);
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            if Instant::now() >= deadline {
+                                return None;
+                            }
+                            std::thread::sleep(Duration::from_millis(5));
+                        }
+                        Err(_) => return None,
+                    }
+                };
+                // Windows 上 accept 会继承监听 socket 的非阻塞状态,显式切回阻塞。
+                stream.set_nonblocking(false).ok()?;
+                stream.set_read_timeout(Some(Duration::from_secs(5))).ok()?;
+                stream
+                    .set_write_timeout(Some(Duration::from_secs(5)))
+                    .ok()?;
+                let request = read_http_request(&mut stream)?;
+                let payload = response.body.as_bytes();
+                let reason = if response.status < 400 { "OK" } else { "Error" };
+                let head = format!(
+                    "HTTP/1.1 {} {reason}\r\nContent-Type: application/json\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n",
+                    response.status,
+                    payload.len()
+                );
+                stream.write_all(head.as_bytes()).ok()?;
+                stream.write_all(payload).ok()?;
+                stream.flush().ok()?;
+                let _ = stream.shutdown(std::net::Shutdown::Write);
+                Some(request)
+            });
+            Self {
+                base_url: format!("http://{address}"),
+                handle: Some(handle),
+            }
+        }
+
+        fn base_url(&self) -> &str {
+            &self.base_url
+        }
+
+        /// 等待服务线程退出并交出捕获的请求;线程内各阶段均有超时。
+        fn finish(mut self) -> Option<CapturedRequest> {
+            self.handle
+                .take()
+                .and_then(|handle| handle.join().ok().flatten())
+        }
+    }
+
+    /// 读取一个完整的 HTTP/1.1 请求头与 Content-Length 指定体积的 JSON 体。
+    fn read_http_request(stream: &mut std::net::TcpStream) -> Option<CapturedRequest> {
+        let mut buffer = Vec::new();
+        let mut chunk = [0u8; 4096];
+        let header_end = loop {
+            if let Some(position) = buffer
+                .windows(4)
+                .position(|window| window == b"\r\n\r\n".as_slice())
+            {
+                break position;
+            }
+            let read = stream.read(&mut chunk).ok()?;
+            if read == 0 {
+                return None;
+            }
+            buffer.extend_from_slice(&chunk[..read]);
+        };
+        let head = String::from_utf8_lossy(&buffer[..header_end]);
+        let mut lines = head.split("\r\n");
+        let mut request_line = lines.next()?.split_whitespace();
+        let method = request_line.next()?.to_owned();
+        let target = request_line.next()?.to_owned();
+        let mut headers = HashMap::new();
+        for line in lines {
+            if let Some((name, value)) = line.split_once(':') {
+                headers.insert(name.trim().to_ascii_lowercase(), value.trim().to_owned());
+            }
+        }
+        let content_length = headers
+            .get("content-length")
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(0);
+        let mut body = buffer[header_end + 4..].to_vec();
+        while body.len() < content_length {
+            let read = stream.read(&mut chunk).ok()?;
+            if read == 0 {
+                break;
+            }
+            body.extend_from_slice(&chunk[..read]);
+        }
+        body.truncate(content_length);
+        Some(CapturedRequest {
+            method,
+            target,
+            headers,
+            body: serde_json::from_slice(&body).ok()?,
+        })
+    }
+
+    /// 构造请求目标;key 一律使用假值形态(SEC-18)。
+    fn mock_target(
+        kind: ProviderKind,
+        base_url: String,
+        model: &str,
+        full_url: bool,
+        key: &str,
+    ) -> RequestTarget {
+        RequestTarget {
+            kind,
+            base_url,
+            model: model.to_owned(),
+            full_url,
+            key: Zeroizing::new(key.to_owned()),
+        }
+    }
+
+    /// 起 server → 发一次请求 → 返回响应文本(不关心捕获请求)。
+    fn response_text(kind: ProviderKind, status: u16, body: &'static str) -> Option<String> {
+        let server = MockServer::start(MockHttpResponse { status, body });
+        let target = mock_target(
+            kind,
+            server.base_url().to_owned(),
+            "test-model",
+            false,
+            "sk-test-key",
+        );
+        let text = send_model_request(&target, "Command: demo");
+        server.finish().expect("mock server 未收到请求");
+        text
+    }
+
+    #[test]
+    fn model_request_anthropic_posts_messages_with_protocol_headers() {
+        let server = MockServer::start(MockHttpResponse {
+            status: 200,
+            body: r#"{"content":[{"type":"text","text":"anthropic-fix"}]}"#,
+        });
+        let target = mock_target(
+            ProviderKind::Anthropic,
+            format!("{}/v1", server.base_url()),
+            "claude-sonnet-4-5",
+            false,
+            "sk-test-anthropic",
+        );
+        let user = "Command: carg buld";
+        assert_eq!(
+            send_model_request(&target, user).as_deref(),
+            Some("anthropic-fix")
+        );
+        let request = server.finish().expect("mock server 未收到请求");
+        assert_eq!(request.method, "POST");
+        assert_eq!(request.target, "/v1/messages");
+        assert_eq!(
+            request.headers.get("x-api-key").map(String::as_str),
+            Some("sk-test-anthropic")
+        );
+        assert_eq!(
+            request.headers.get("anthropic-version").map(String::as_str),
+            Some("2023-06-01")
+        );
+        assert!(!request.headers.contains_key("authorization"));
+        assert_eq!(request.body["model"], "claude-sonnet-4-5");
+        assert_eq!(request.body["system"], SYSTEM_PROMPT);
+        assert_eq!(request.body["messages"][0]["role"], "user");
+        assert_eq!(request.body["messages"][0]["content"], user);
+        assert_eq!(request.body["max_tokens"].as_u64(), Some(300));
+        assert_eq!(request.body["temperature"].as_f64(), Some(0.2));
+    }
+
+    #[test]
+    fn model_request_google_strips_models_prefix_and_posts_generate_content() {
+        let server = MockServer::start(MockHttpResponse {
+            status: 200,
+            body: r#"{"candidates":[{"content":{"parts":[{"text":"google-fix"}]}}]}"#,
+        });
+        let target = mock_target(
+            ProviderKind::Google,
+            format!("{}/v1beta", server.base_url()),
+            "models/gemini-2.5-flash",
+            false,
+            "sk-test-google",
+        );
+        let user = "Command: carg buld";
+        assert_eq!(
+            send_model_request(&target, user).as_deref(),
+            Some("google-fix")
+        );
+        let request = server.finish().expect("mock server 未收到请求");
+        assert_eq!(request.method, "POST");
+        assert_eq!(
+            request.target,
+            "/v1beta/models/gemini-2.5-flash:generateContent"
+        );
+        assert_eq!(
+            request.headers.get("x-goog-api-key").map(String::as_str),
+            Some("sk-test-google")
+        );
+        assert!(!request.headers.contains_key("authorization"));
+        // Google 协议把模型放在 URL,请求体不带 model 字段。
+        assert!(request.body.get("model").is_none());
+        assert_eq!(
+            request.body["systemInstruction"]["parts"][0]["text"],
+            SYSTEM_PROMPT
+        );
+        assert_eq!(request.body["contents"][0]["role"], "user");
+        assert_eq!(request.body["contents"][0]["parts"][0]["text"], user);
+        assert_eq!(
+            request.body["generationConfig"]["maxOutputTokens"].as_u64(),
+            Some(300)
+        );
+        assert_eq!(
+            request.body["generationConfig"]["temperature"].as_f64(),
+            Some(0.2)
+        );
+    }
+
+    #[test]
+    fn model_request_azure_posts_deployment_path_with_api_version() {
+        let server = MockServer::start(MockHttpResponse {
+            status: 200,
+            body: r#"{"choices":[{"message":{"content":"azure-fix"}}]}"#,
+        });
+        let target = mock_target(
+            ProviderKind::AzureOpenAi,
+            format!("{}/openai/deployments", server.base_url()),
+            "gpt-4o",
+            false,
+            "sk-test-azure",
+        );
+        let user = "Command: carg buld";
+        assert_eq!(
+            send_model_request(&target, user).as_deref(),
+            Some("azure-fix")
+        );
+        let request = server.finish().expect("mock server 未收到请求");
+        assert_eq!(request.method, "POST");
+        assert_eq!(
+            request.target,
+            "/openai/deployments/gpt-4o/chat/completions?api-version=2024-10-21"
+        );
+        assert_eq!(
+            request.headers.get("api-key").map(String::as_str),
+            Some("sk-test-azure")
+        );
+        assert!(!request.headers.contains_key("authorization"));
+        assert_eq!(request.body["model"], "gpt-4o");
+        assert_eq!(request.body["messages"][0]["role"], "system");
+        assert_eq!(request.body["messages"][0]["content"], SYSTEM_PROMPT);
+        assert_eq!(request.body["messages"][1]["role"], "user");
+        assert_eq!(request.body["messages"][1]["content"], user);
+        assert_eq!(request.body["max_tokens"].as_u64(), Some(300));
+    }
+
+    #[test]
+    fn model_request_openai_posts_chat_completions_with_bearer() {
+        let server = MockServer::start(MockHttpResponse {
+            status: 200,
+            body: r#"{"choices":[{"message":{"content":"openai-fix"}}]}"#,
+        });
+        let target = mock_target(
+            ProviderKind::OpenAi,
+            format!("{}/v1/", server.base_url()),
+            "gpt-5.4-mini",
+            false,
+            "sk-test-openai",
+        );
+        let user = "Command: carg buld";
+        assert_eq!(
+            send_model_request(&target, user).as_deref(),
+            Some("openai-fix")
+        );
+        let request = server.finish().expect("mock server 未收到请求");
+        assert_eq!(request.method, "POST");
+        // base_url 末尾斜杠被裁剪,不产生双斜杠。
+        assert_eq!(request.target, "/v1/chat/completions");
+        assert_eq!(
+            request.headers.get("authorization").map(String::as_str),
+            Some("Bearer sk-test-openai")
+        );
+        assert_eq!(request.body["model"], "gpt-5.4-mini");
+        assert_eq!(request.body["messages"][0]["role"], "system");
+        assert_eq!(request.body["messages"][0]["content"], SYSTEM_PROMPT);
+        assert_eq!(request.body["messages"][1]["role"], "user");
+        assert_eq!(request.body["messages"][1]["content"], user);
+        assert_eq!(request.body["max_tokens"].as_u64(), Some(300));
+        assert_eq!(request.body["temperature"].as_f64(), Some(0.2));
+    }
+
+    #[test]
+    fn model_request_missing_text_field_yields_none() {
+        // 四协议族的文本字段缺失/类型不符都必须返回 None。
+        for (kind, body) in [
+            (ProviderKind::Anthropic, r#"{"content":[]}"#),
+            (ProviderKind::Google, r#"{"candidates":[]}"#),
+            (ProviderKind::OpenAi, r#"{"choices":[]}"#),
+            (ProviderKind::AzureOpenAi, r#"{"choices":[]}"#),
+            (ProviderKind::Anthropic, r#"{"content":[{"text":42}]}"#),
+        ] {
+            assert_eq!(response_text(kind, 200, body), None, "{kind:?} {body}");
+        }
+    }
+
+    #[test]
+    fn model_request_non_success_status_yields_none() {
+        // ureq 对非 2xx 返回 Err,应落到 None 分支。
+        assert_eq!(
+            response_text(ProviderKind::OpenAi, 500, r#"{"error":"boom"}"#),
+            None
+        );
+        assert_eq!(
+            response_text(ProviderKind::Anthropic, 401, r#"{"error":"nope"}"#),
+            None
+        );
+    }
+
+    #[test]
+    fn model_request_full_url_is_used_verbatim() {
+        let server = MockServer::start(MockHttpResponse {
+            status: 200,
+            body: r#"{"choices":[{"message":{"content":"full-url-fix"}}]}"#,
+        });
+        let base = format!("{}/proxy/chat?token=abc", server.base_url());
+        let target = mock_target(
+            ProviderKind::OpenAi,
+            base,
+            "custom-model",
+            true,
+            "sk-test-full",
+        );
+        assert_eq!(
+            send_model_request(&target, "Command: demo").as_deref(),
+            Some("full-url-fix")
+        );
+        let request = server.finish().expect("mock server 未收到请求");
+        assert_eq!(request.method, "POST");
+        assert_eq!(request.target, "/proxy/chat?token=abc");
+        assert_eq!(request.body["model"], "custom-model");
+        assert_eq!(
+            request.headers.get("authorization").map(String::as_str),
+            Some("Bearer sk-test-full")
+        );
+    }
+
+    #[test]
+    fn model_request_openai_without_key_omits_authorization() {
+        let server = MockServer::start(MockHttpResponse {
+            status: 200,
+            body: r#"{"choices":[{"message":{"content":"keyless-fix"}}]}"#,
+        });
+        let target = mock_target(
+            ProviderKind::OpenAi,
+            format!("{}/v1", server.base_url()),
+            "qwen3",
+            false,
+            "",
+        );
+        assert_eq!(
+            send_model_request(&target, "Command: demo").as_deref(),
+            Some("keyless-fix")
+        );
+        let request = server.finish().expect("mock server 未收到请求");
+        assert!(!request.headers.contains_key("authorization"));
+        assert_eq!(request.body["model"], "qwen3");
     }
 }

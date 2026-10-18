@@ -1,4 +1,4 @@
-//! 更新安装包的下载、校验与本地状态(09 篇 M10.5 采纳点 28–30)。
+//! 更新安装包的下载、校验与本地状态。
 //!
 //! 检查侧只提供 release 元数据;本模块再次收紧资产合同,并把大文件流式
 //! 写入同目录 `.part` 文件。只有长度 / PE 文件头(`MZ`)/ SHA-256 / 512MiB
@@ -26,7 +26,7 @@ use crate::update_check::{RELEASE_DOWNLOAD_PREFIX, UpdateAsset};
 mod cache;
 pub(crate) mod handoff;
 
-/// 安装包安全上限(契约值,照抄上游 09 篇):超过即中止。
+/// 安装包安全上限(契约值,照抄上游):超过即中止。
 pub(crate) const MAX_INSTALLER_BYTES: u64 = 512 * 1024 * 1024;
 const DOWNLOAD_CHUNK_BYTES: usize = 64 * 1024;
 /// 下载总时限:大文件经代理/慢速 CDN 的预算。
@@ -80,6 +80,17 @@ fn session() -> MutexGuard<'static, Option<DownloadSession>> {
 #[cfg(test)]
 pub(crate) fn reset_session() {
     *session() = None;
+}
+
+/// 更新弹窗 UI 用例:把资产会话直接置为给定终态,不执行网络与磁盘下载。
+#[cfg(all(test, feature = "gpui-test-support"))]
+pub(crate) fn set_status_for_test(asset: &UpdateAsset, status: DownloadStatus) {
+    let generation = NEXT_GENERATION.fetch_add(1, Ordering::Relaxed);
+    *session() = Some(DownloadSession {
+        generation,
+        asset: asset.clone(),
+        status,
+    });
 }
 
 pub(crate) fn status(asset: &UpdateAsset) -> DownloadStatus {

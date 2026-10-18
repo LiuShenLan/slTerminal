@@ -12,7 +12,7 @@ use std::sync::mpsc::Receiver;
 
 use crate::ai_assistant::{AiFix, AiFixState, AssistantConfig};
 use crate::completion::{self, Session};
-use crate::suggest::{CompletionStyle, SltermCompletionKind};
+use crate::suggest::{CompletionStyle, SltermCompletionItem, SltermCompletionKind};
 
 /// 挂载一个可注入补全会话的终端;返回视图、虚拟窗口、PTY 接收端与
 /// 壳侧会话句柄(所有权锚点)。
@@ -438,6 +438,49 @@ fn grid_output_tail_is_bounded_and_skips_wide_char_spacers(cx: &mut TestAppConte
     assert!(tail.contains("line 29 中"), "保留最新行: {tail:?}");
     let long = terminal.read_with(&window, |view, _| view.grid_output_tail(24, 20));
     assert!(long.chars().count() <= 20);
+}
+
+/// B42:补全弹窗与 AI 条同处 bottom 锚定的 flex column;两者并存时纵向
+/// 堆叠、永不重叠,弹窗位于 AI 条上方且都真实绘制。
+#[gpui::test]
+fn completion_popup_stacks_above_the_ai_fix_bar(cx: &mut TestAppContext) {
+    let (terminal, mut window, _rx) = open(cx, CompletionStyle::Inline, true);
+    terminal.update(&mut window, |view, cx| {
+        view.suggest.completion_items = vec![SltermCompletionItem {
+            label: "slterm stacking item".into(),
+            insert: " item".into(),
+            replace_chars: 0,
+            replace_after_chars: 0,
+            kind: SltermCompletionKind::History,
+        }];
+        view.ai_fix = Some(AiFixState::Ready {
+            seq: 9,
+            fix: AiFix {
+                command: "cargo build".into(),
+                explain: "拼写".into(),
+                danger: false,
+            },
+        });
+        cx.notify();
+    });
+    window.run_until_parked();
+    window.refresh().unwrap();
+    window.update(|window, cx| {
+        window.draw(cx).clear(cx);
+    });
+
+    let popup = window
+        .debug_bounds("slterm-completion-popup")
+        .expect("补全弹窗必须绘制");
+    let bar = window
+        .debug_bounds("slterm-ai-fix-bar")
+        .expect("AI 条必须绘制");
+    assert!(popup.size.width > px(0.0) && popup.size.height > px(0.0));
+    assert!(bar.size.width > px(0.0) && bar.size.height > px(0.0));
+    assert!(
+        popup.bottom() <= bar.top(),
+        "弹窗底部不得压住 AI 条顶部: popup={popup:?} bar={bar:?}"
+    );
 }
 
 /// overlay paint pass 冒烟:绘制后网格文本、选区与复制文本不变。

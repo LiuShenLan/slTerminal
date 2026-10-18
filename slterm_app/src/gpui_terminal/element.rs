@@ -7,9 +7,9 @@
 //! 定位合同:字形落在 `列号 × cell_width`。M3 逐格塑形逐格绘制(连字
 //! 合并塑形随 ligatures 模块归 06);编辑、光标和选区不能改变无关格的原点。
 //!
-//! M3 裁剪(归篇见 13 篇):主题矫正器(06)、公式覆盖层(08)、OSC8 链接
+//! M3 裁剪:主题矫正器、公式覆盖层、OSC8 链接
 //! 装饰(07/09)、内联图片(02 开放问题 4)、ghost/补全弹窗(08)、overlay
-//! 滚动条(M5)、bell 闪烁(09)、app_cursor 臂(13 篇裁决删除)、
+//! 滚动条、bell 闪烁、app_cursor 臂(已裁决删除)、
 //! CJK 字体族/cjk_bold_regular(06)。仅暗色定位:光标/选区色直取 palette,
 //! 不做亮暗 alpha 分档。
 
@@ -34,7 +34,11 @@ impl TerminalElement {
         Self { view }
     }
 
-    /// 在同一次 `Term` 锁内截取渲染快照与公式覆盖帧(08 篇缝合点 1)。
+    /// 在 `Term` 锁内截取渲染快照与公式扫描结果(缝合点 1)。
+    ///
+    /// 快照与扫描共享同一锁窗口;随后显式放锁,再在锁外编译公式并生成
+    /// 绘制计划——首次 TeX 编译是 CPU 密集工作,不能拉长 PTY 网格锁的
+    /// 持有时间。
     ///
     /// 分段只反映内容与宽度类,绝不掺入光标状态:per-cell 绘制下反色只是
     /// 换色,若让闪烁相位改变分段,整行会随闪烁重塑形而跳字。
@@ -61,13 +65,16 @@ impl TerminalElement {
                     cols: layout.cols as u16,
                 },
             );
-            let pending = view.math_overlay.plan_frame(
+            let scanned = view.math_overlay.scan_frame(
                 &term,
                 &size,
                 &view.palette,
                 view.font_size.as_f32(),
                 pixels_per_point,
             );
+            // 锁边界:扫描完成后立即放锁;编译/几何计划不得再持有 Term。
+            drop(term);
+            let pending = view.math_overlay.plan_frame(scanned);
             Some((snap, pending, pixels_per_point))
         })
     }
@@ -459,15 +466,54 @@ impl Element for TerminalElement {
             );
         }
 
-        // ghost 余量(08 篇 M9.5):画在光标之后,使用主题 dim 前景,不改网格。
-        let ghost = self.view.read(cx).suggest.suggestion.clone();
-        if !ghost.is_empty()
+        // ghost 余量:画在光标之后,使用主题 dim 前景,不改网格。
+        //
+        // 光标块占据当前格,ghost 从右侧第一格开始。`suggestion_edit` 存在
+        // 时按终端列宽折行,并先用终端背景遮住接受后会删除的尾部;不存在
+        // 时保持旧行为——只在光标行单行绘制。
+        let (ghost, ghost_replace_after, ghost_has_edit) = {
+            let view = self.view.read(cx);
+            (
+                view.suggest.suggestion.clone(),
+                view.suggest
+                    .suggestion_edit
+                    .as_ref()
+                    .map_or(0, |item| item.replace_after_chars),
+                view.suggest.suggestion_edit.is_some(),
+            )
+        };
+        if (!ghost.is_empty() || ghost_replace_after > 0)
             && let Some(cursor) = &snap.cursor
         {
-            let col = cursor_visual_col.unwrap_or(cursor.col as usize) + 1;
-            if col < layout.cols {
+            let start_col = cursor_visual_col.unwrap_or(cursor.col as usize) + 1;
+            // 没有编辑合同时保持旧行为:只画光标行,不折行。
+            let rows_available = if ghost_has_edit {
+                layout.rows.saturating_sub(cursor.row as usize)
+            } else {
+                1
+            };
+            let ghost_layout = ghost_segments(
+                start_col,
+                layout.cols,
+                rows_available,
+                ghost.chars().count(),
+                ghost_replace_after,
+            );
+            // 先遮住将被 replace_after 删除的格子(含折行后的格),再画文本。
+            for mask in &ghost_layout.masks {
+                window.paint_quad(fill(
+                    cell_rect(cursor.row as usize + mask.row, mask.col, mask.len),
+                    theme.background,
+                ));
+            }
+            for segment in &ghost_layout.segments {
+                let text: String = ghost
+                    .chars()
+                    .skip(segment.chars.start)
+                    .take(segment.chars.len())
+                    .collect();
                 let run = TextRun {
-                    len: ghost.len(),
+                    len: text.len(),
                     font: font.clone(),
                     color: theme.dim_foreground.into(),
                     background_color: None,
@@ -475,14 +521,15 @@ impl Element for TerminalElement {
                     strikethrough: None,
                 };
                 let shaped = window.text_system().shape_line(
-                    SharedString::from(ghost),
+                    SharedString::from(text),
                     font_size,
                     std::slice::from_ref(&run),
                     None,
                 );
                 let origin = point(
-                    bounds.origin.x + layout.cell_width * col as f32,
-                    bounds.origin.y + layout.line_height * cursor.row as f32,
+                    bounds.origin.x + layout.cell_width * segment.col as f32,
+                    bounds.origin.y
+                        + layout.line_height * (cursor.row as usize + segment.row) as f32,
                 );
                 let _ = shaped.paint(
                     origin,
@@ -553,4 +600,203 @@ fn single_line(text: &str) -> String {
 fn snap_to_device(value: Pixels, scale: f32) -> Pixels {
     let scale = scale.max(0.5);
     px((value.as_f32() * scale).round() / scale)
+}
+
+/// ghost 需要先用终端背景遮住的一段替换格(视觉坐标)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct GhostSpan {
+    /// 行偏移,0 = 光标所在行。
+    row: usize,
+    /// 该行内起始视觉列。
+    col: usize,
+    /// 连续格数。
+    len: usize,
+}
+
+/// ghost 文本的一段:起点 + 在 ghost 文本中的字符区间。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GhostTextSegment {
+    row: usize,
+    col: usize,
+    chars: std::ops::Range<usize>,
+}
+
+/// 一帧 ghost 的几何计划:遮罩区间与文本分段。
+#[derive(Debug, Default, PartialEq, Eq)]
+struct GhostLayout {
+    masks: Vec<GhostSpan>,
+    segments: Vec<GhostTextSegment>,
+}
+
+/// 计算 ghost 的绘制几何(纯函数,不接触网格)。
+///
+/// - `start_col`:光标右侧第一格的视觉列;等于 `cols` 时折到下一行行首。
+/// - `cols`/`rows_available`:终端列宽与光标行起的可用行数。
+/// - `text_chars`:ghost 文本字符数;`replace_after_chars`:接受时删除的
+///   尾部字符数。
+///
+/// 遮罩与文本都从 `start_col` 起按终端列宽线性排布:遮罩覆盖
+/// `replace_after_chars` 个格,文本占 `text_chars` 个格,越过底部可用行即
+/// 截断。相邻格合并成连续区间,便于逐区域提交 quad、逐段塑形。
+fn ghost_segments(
+    start_col: usize,
+    cols: usize,
+    rows_available: usize,
+    text_chars: usize,
+    replace_after_chars: usize,
+) -> GhostLayout {
+    let mut layout = GhostLayout::default();
+    let capacity = cols.saturating_mul(rows_available);
+    if cols == 0 || start_col >= capacity {
+        return layout;
+    }
+
+    let cell = |position: usize| (position / cols, position % cols);
+    let mask_end = start_col.saturating_add(replace_after_chars).min(capacity);
+    for position in start_col..mask_end {
+        let (row, col) = cell(position);
+        match layout.masks.last_mut() {
+            Some(span) if span.row == row && span.col + span.len == col => span.len += 1,
+            _ => layout.masks.push(GhostSpan { row, col, len: 1 }),
+        }
+    }
+
+    let text_end = start_col.saturating_add(text_chars).min(capacity);
+    for position in start_col..text_end {
+        let (row, col) = cell(position);
+        let char_index = position - start_col;
+        match layout.segments.last_mut() {
+            Some(segment)
+                if segment.row == row
+                    && segment.col + (segment.chars.end - segment.chars.start) == col =>
+            {
+                segment.chars.end += 1
+            }
+            _ => layout.segments.push(GhostTextSegment {
+                row,
+                col,
+                chars: char_index..char_index + 1,
+            }),
+        }
+    }
+    layout
+}
+
+#[cfg(test)]
+mod ghost_tests {
+    use super::*;
+
+    fn span(row: usize, col: usize, len: usize) -> GhostSpan {
+        GhostSpan { row, col, len }
+    }
+
+    #[test]
+    fn ghost_segments_keeps_text_in_one_run_when_it_fits() {
+        let layout = ghost_segments(5, 20, 3, 4, 0);
+        assert!(layout.masks.is_empty(), "无替换尾部时不应有遮罩");
+        assert_eq!(
+            layout.segments,
+            vec![GhostTextSegment {
+                row: 0,
+                col: 5,
+                chars: 0..4,
+            }]
+        );
+    }
+
+    #[test]
+    fn ghost_segments_finishes_exactly_at_the_row_edge() {
+        let layout = ghost_segments(16, 20, 3, 4, 0);
+        assert_eq!(
+            layout.segments,
+            vec![GhostTextSegment {
+                row: 0,
+                col: 16,
+                chars: 0..4,
+            }],
+            "恰好在行尾结束的文本不得折行"
+        );
+    }
+
+    #[test]
+    fn ghost_segments_wraps_text_across_rows() {
+        let layout = ghost_segments(18, 20, 3, 5, 0);
+        assert_eq!(
+            layout.segments,
+            vec![
+                GhostTextSegment {
+                    row: 0,
+                    col: 18,
+                    chars: 0..2,
+                },
+                GhostTextSegment {
+                    row: 1,
+                    col: 0,
+                    chars: 2..5,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn ghost_segments_masks_replace_after_across_rows() {
+        let layout = ghost_segments(18, 20, 3, 0, 4);
+        assert_eq!(layout.masks, vec![span(0, 18, 2), span(1, 0, 2)]);
+        assert!(layout.segments.is_empty(), "空 ghost 只遮罩不画文本");
+    }
+
+    #[test]
+    fn ghost_segments_truncates_text_and_mask_at_the_bottom() {
+        // 光标行起仅剩 2 行:容量 40 格,start=18 → 可用 22 格。
+        let layout = ghost_segments(18, 20, 2, 30, 30);
+        assert_eq!(
+            layout.segments,
+            vec![
+                GhostTextSegment {
+                    row: 0,
+                    col: 18,
+                    chars: 0..2,
+                },
+                GhostTextSegment {
+                    row: 1,
+                    col: 0,
+                    chars: 2..22,
+                },
+            ]
+        );
+        assert_eq!(layout.masks, vec![span(0, 18, 2), span(1, 0, 20)]);
+    }
+
+    #[test]
+    fn ghost_segments_wraps_from_the_last_column_to_the_next_row() {
+        let layout = ghost_segments(20, 20, 2, 3, 0);
+        assert_eq!(
+            layout.segments,
+            vec![GhostTextSegment {
+                row: 1,
+                col: 0,
+                chars: 0..3,
+            }],
+            "末列右侧的第一格是下一行行首"
+        );
+
+        let bottom = ghost_segments(20, 20, 1, 3, 0);
+        assert_eq!(bottom, GhostLayout::default(), "底部最后一格不得越界");
+    }
+
+    #[test]
+    fn ghost_segments_without_edit_keeps_single_line_drawing() {
+        // 无编辑合同时调用方传 rows_available = 1:只在光标行绘制,
+        // 超出列宽的部分截断(旧行为)。
+        let layout = ghost_segments(8, 10, 1, 5, 0);
+        assert_eq!(
+            layout.segments,
+            vec![GhostTextSegment {
+                row: 0,
+                col: 8,
+                chars: 0..2,
+            }]
+        );
+        assert!(layout.masks.is_empty());
+    }
 }
