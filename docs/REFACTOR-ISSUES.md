@@ -69,6 +69,8 @@
 | B41 | **公式编译在 paint 的 Term 锁内**：首次遇多条新公式可能拉长一帧持锁时间（上游同构）。 | `math_overlay.rs` `plan_frame` | M9.5 | compile 移出锁外或异步预热。 |
 | B42 | **弹窗与 AI 条并存时底部空间受限**（不互相覆盖）。 | `view.rs` 弹窗/AI 条布局 | M9.5 | 低优先级布局打磨。 |
 | B43 | **`NotificationChoice` 暂无消费方**：动作按钮回传事件已通车，确认语义归 M10 安全半程，当前仅 debug 日志。 | `notify.rs` | M10.1 | M10 安全半程消费。 |
+| B44 | **焦点切换不清任务栏进度**：切换活跃 tab/聚焦 pane 时旧条保留，后台 pane 后续进度被忽略，只能等来源 pane 清除边（TurnDone/133;D/关 pane/OSC 0）。上游同行为。 | `workspace/mod.rs` 焦点路由 | M10.2 | M10.3/M10.4 裁决是否焦点切换补清。 |
+| B45 | **taskbar 测试调用记录用进程级 static**：依赖 `--test-threads=1` 既定纪律；若并行需加测试互斥锁。 | `taskbar.rs` | M10.2 | 记录。 |
 
 ## C. 计划内（归后续子步/阶段，重构完成时验证）
 
@@ -87,7 +89,7 @@
 | C11 | **i18n 合同独立 workspace CI 登记**：`tools/slterm-i18n-contract` 不在根 workspace，clippy/CI 不覆盖。 | 12 篇打包/CI 清单 | |
 | C12 | **旧栈语义资产转测试保留**：git2 五份语义资产（D07-1 裁定转对照用例）。 | 07/M11 | |
 | C13 | **docs/ 临时稿删除 + 篇号锚点清理**（与 A3 联动）。 | M11 | |
-| C14 | **设计措辞修正**：05 篇「窗口边缘」应为「内容区外圈」；04 篇 `reorder_batch` 签名稿与上游不符（已照源）；08 篇 `note_bell` 上游不存在（未落）；04 篇 generation 等待错误码口径（实现按设计稿 `agent_identity_mismatch`/`agent_exited`）；08 篇 D08-2 待沉淀仍写「M9.3 落地时拍板」而 DECISIONS 已裁（文档漂移）；08 篇 `compile_formula` 签名草案与上游实源不符（已按源码照抄）；08 篇 #44 `draw_overlays` 未迁，M9.5 自绘 paint pass（设计稿应标注归属）；09 篇 §6 duration 值域（Default|Short|Long）与 06 已落六档不一致（实现按六档消费，persistent 无系统常驻档）。 | 设计稿 | 重构末统一订正。 |
+| C14 | **设计措辞修正**：05 篇「窗口边缘」应为「内容区外圈」；04 篇 `reorder_batch` 签名稿与上游不符（已照源）；08 篇 `note_bell` 上游不存在（未落）；04 篇 generation 等待错误码口径（实现按设计稿 `agent_identity_mismatch`/`agent_exited`）；08 篇 D08-2 待沉淀仍写「M9.3 落地时拍板」而 DECISIONS 已裁（文档漂移）；08 篇 `compile_formula` 签名草案与上游实源不符（已按源码照抄）；08 篇 #44 `draw_overlays` 未迁，M9.5 自绘 paint pass（设计稿应标注归属）；09 篇 §6 duration 值域（Default|Short|Long）与 06 已落六档不一致（实现按六档消费，persistent 无系统常驻档）；09 篇 M10.2 出口只写「agent 退出清进度」，实现按任务书补 TurnDone/pane 关闭清除（doc 待回登）。 | 设计稿 | 重构末统一订正。 |
 | C15 | **`D04-3 windowing_behavior` 未设键**：单窗行为硬编码 `SINGLE_WINDOW_ID`。 | 12 篇随 settings 面统一裁定 | |
 | C16 | **`request_once_bounded` 无消费方**（插件宿主）。 | M9.5/M10 | |
 | C17 | **`ProviderTestOutcome` 文案本地化**（展示边界）。 | M9.5 | |
