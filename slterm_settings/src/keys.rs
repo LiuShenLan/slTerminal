@@ -2,16 +2,21 @@
 //!
 //! settings.json 为段嵌套形态:每个设置键归属一个语义段(appearance/
 //! scrolling/…),写通道按段浅合并。本表是「键 → 段」映射的唯一权威:
-//! `RawSettings` 读取、写通道白名单(M6.1)、`reset` 删除清单全部由本表
-//! 驱动,防「加了新设置忘了加进重置清单」的结构性漂移。
+//! `RawSettings` 读取、写通道顶层白名单(M6.1)、`reset` 删除清单全部由
+//! 本表驱动,防「加了新设置忘了加进重置清单」的结构性漂移。
 //!
-//! 域外顶层段(不占注册表条目,结构与消费归归属篇锚定):
-//! - `keybind` 段:键位绑定数组,归 07 篇锚定结构,写通道整表替换语义
-//!   由 07 消费;
-//! - `conpty_input_modes` 段:ConPTY 输入模式矩阵,归 02 篇锚定,键名经
-//!   02 域模块常量引用。
+//! 三清单同源(段形态):
+//! - 键域枚举 [`SettingsDomain`] = 注册表可归属的段集合;
+//! - 段内键白名单 [`whitelist`] = 注册表 leaf 键集合;
+//! - 重置清单 [`reset_keys`] = `resettable = true` 的 leaf 键集合。
 //!
-//! M6.1 写通道白名单 = 本表段集合 + 上述两个域外段。
+//! 域外顶层段(不占注册表条目,结构与消费归归属篇锚定,[`EXTERNAL_SEGMENTS`]):
+//! - [`KEYBIND_SEGMENT`]:键位绑定数组,归 07 篇锚定结构,写通道整表替换
+//!   语义由 07 消费;段名常量由 07 域模块引用,禁二次字面量。
+//! - [`CONPTY_INPUT_MODES_SEGMENT`]:ConPTY 输入模式矩阵,归 02 篇锚定,
+//!   段名常量由 02 域模块引用。
+//!
+//! 写通道顶层白名单 = [`segment_whitelist`] = 域段 + 域外段。
 
 use crate::AgentHook;
 
@@ -202,13 +207,35 @@ pub static KEYS: &[SettingsKeyDef] = &[
     },
 ];
 
+/// 域外顶层段键名:keybind(07 篇锚定结构;写通道整表替换)。
+pub const KEYBIND_SEGMENT: &str = "keybind";
+
+/// 域外顶层段键名:conpty_input_modes(02 篇锚定矩阵)。
+pub const CONPTY_INPUT_MODES_SEGMENT: &str = "conpty_input_modes";
+
+/// 全部域外顶层段(不占注册表 leaf 条目,结构归归属篇)。
+pub const EXTERNAL_SEGMENTS: [&str; 2] = [KEYBIND_SEGMENT, CONPTY_INPUT_MODES_SEGMENT];
+
+/// 域外段判定:写通道按段整体替换,不做段内 leaf 校验。
+pub fn is_external_segment(name: &str) -> bool {
+    EXTERNAL_SEGMENTS.contains(&name)
+}
+
+/// 写通道顶层白名单:注册表域段 + 域外段。段名唯一,无孤儿段。
+pub fn segment_whitelist() -> impl Iterator<Item = &'static str> {
+    SettingsDomain::ALL
+        .into_iter()
+        .map(SettingsDomain::segment)
+        .chain(EXTERNAL_SEGMENTS)
+}
+
 /// 段内键名 → 注册条目。未登记键返回 None——读取路径经此解析段,
 /// 未登记键读不出,注册表因此成为读取面的机械边界。
 pub fn lookup(key: &str) -> Option<&'static SettingsKeyDef> {
     KEYS.iter().find(|def| def.key == key)
 }
 
-/// 全部已登记键名(写通道白名单的数据源,M6.1 并入段形态硬校验)。
+/// 全部已登记 leaf 键名(段内白名单;顶层段白名单见 [`segment_whitelist`])。
 pub fn whitelist() -> impl Iterator<Item = &'static str> {
     KEYS.iter().map(|def| def.key)
 }
@@ -251,9 +278,61 @@ mod registry_tests {
         }
         assert!(lookup("unknown_key").is_none());
         assert!(
-            lookup("keybind").is_none(),
+            lookup(KEYBIND_SEGMENT).is_none(),
             "keybind 是 07 篇域外段,不占注册表条目"
         );
+        assert!(
+            lookup(CONPTY_INPUT_MODES_SEGMENT).is_none(),
+            "conpty_input_modes 是 02 篇域外段,不占注册表条目"
+        );
+    }
+
+    /// 三清单对账:域段枚举 ⊆ 顶层白名单、每条注册键落在白名单段内、
+    /// 每个域段都有键、leaf 名与段名不相交——段形态自洽且无孤儿键。
+    #[test]
+    fn segment_whitelist_reconciles_registry_and_external_segments() {
+        let segments: Vec<_> = segment_whitelist().collect();
+        let unique: HashSet<_> = segments.iter().copied().collect();
+        assert_eq!(unique.len(), segments.len(), "顶层段名重复");
+        assert_eq!(
+            unique.len(),
+            SettingsDomain::ALL.len() + EXTERNAL_SEGMENTS.len(),
+            "顶层白名单 = 域段 + 域外段"
+        );
+        for domain in SettingsDomain::ALL {
+            assert!(
+                unique.contains(domain.segment()),
+                "域段 {} 未进顶层白名单",
+                domain.segment()
+            );
+            assert!(
+                KEYS.iter().any(|def| def.domain == domain),
+                "域段 {} 没有任何注册键",
+                domain.segment()
+            );
+        }
+        for external in EXTERNAL_SEGMENTS {
+            assert!(unique.contains(external), "域外段 {external} 未进白名单");
+            assert!(is_external_segment(external));
+        }
+        assert!(!is_external_segment("appearance"));
+        for def in KEYS {
+            assert!(
+                unique.contains(def.domain.segment()),
+                "键 {} 归属段 {} 不在顶层白名单",
+                def.key,
+                def.domain.segment()
+            );
+            assert!(
+                !unique.contains(def.key),
+                "leaf 键名 {} 与顶层段名冲突",
+                def.key
+            );
+        }
+        // 段内白名单与域外段不相交:域外段结构归归属篇,不走 leaf 校验。
+        for key in whitelist() {
+            assert!(!is_external_segment(key), "域外段混入 leaf 白名单: {key}");
+        }
     }
 
     #[test]

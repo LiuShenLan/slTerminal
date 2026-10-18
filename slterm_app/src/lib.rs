@@ -45,6 +45,9 @@ pub(crate) mod panic;
 pub(crate) mod platform;
 pub(crate) mod process_tree;
 pub(crate) mod session;
+// settings.json 写通道适配层(06 篇 M6.1):白名单校验/保存锁/原子写/.bak/
+// 损坏三态;`slterm-settings` 保持值权威与零生产依赖。
+pub(crate) mod settings_store;
 pub(crate) mod terminal_registry;
 
 use std::error::Error;

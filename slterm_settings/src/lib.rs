@@ -1,8 +1,9 @@
 //! slTerminal 运行时设置(`settings.json`)与主题终端色表的权威实现。
 //!
 //! 分层原则:本 crate 是零生产依赖的值权威——值模型零序列化框架依赖,
-//! JSON 值层由内部 `json` 模块自包含承载,文件格式与写通道硬机制
-//! (.bak/保存锁/损坏三态)归应用侧适配层(M6.1)。
+//! JSON 值层由内部 `json` 模块自包含承载;写通道硬机制(白名单校验/
+//! 保存锁/原子写/.bak/损坏三态)归应用侧 `slterm_app::settings_store`
+//! (M6.1),本 crate 只保留纯合并函数与宽容读取。
 //!
 //! 持久化契约:数据目录下 `settings.json`(路径唯一权威见 `paths`),段
 //! 嵌套形态——每个设置键归属一个语义段(appearance/scrolling/…),「键 →
@@ -138,14 +139,20 @@ impl RawSettings {
 }
 
 /// 读-改-写语义:已有键替换、缺失键追加、未知键/未知段在对象树原位保留。
-/// 逐键落到注册表归属段内(段级浅合并);未登记键跳过——白名单硬校验归
-/// M6.1 写通道,库态纯函数保守不写入。
+/// 逐键落到注册表归属段内(段级浅合并);域外段(`keybind`/
+/// `conpty_input_modes`)按段整体替换;未登记键跳过——白名单硬校验与
+/// .bak/保存锁/原子写的硬机制归应用侧写通道(M6.1),本函数保持纯函数。
 pub fn apply_updates(tree: &Value, updates: &[(&str, Value)]) -> Value {
     let mut root = match tree {
         Value::Object(_) => tree.clone(),
         _ => Value::empty_object(),
     };
     for (key, value) in updates {
+        if keys::is_external_segment(key) {
+            // 域外段:结构与消费归归属篇,写通道只做整段替换。
+            root.set(key, value.clone());
+            continue;
+        }
         let Some(def) = keys::lookup(key) else {
             continue;
         };
@@ -163,41 +170,6 @@ pub fn apply_updates(tree: &Value, updates: &[(&str, Value)]) -> Value {
         }
     }
     root
-}
-
-/// 统一写通道(M1 最小原子写形态):读现有 → 浅合并 → 临时文件 + rename。
-/// 损坏文件解析失败 = Err 传播,禁覆盖;.bak/保存锁/损坏三态归 M6.1 并入。
-pub fn persist_keys(updates: &[(&str, Value)]) -> io::Result<()> {
-    persist_keys_at(&settings_path(), updates)
-}
-
-fn persist_keys_at(path: &std::path::Path, updates: &[(&str, Value)]) -> io::Result<()> {
-    let tree = match std::fs::read(path) {
-        Ok(bytes) => json::parse(&bytes)
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Value::empty_object(),
-        Err(error) => return Err(error),
-    };
-    let merged = apply_updates(&tree, updates);
-    let text = json::to_string_pretty(&merged);
-    if text.len() > MAX_PERSIST_BYTES {
-        return Err(io::Error::new(
-            io::ErrorKind::FileTooLarge,
-            "settings.json exceeds 1MB",
-        ));
-    }
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    // 同目录临时文件 + rename:崩在半写的 settings.json 对外不可见。
-    static TEMP_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let sequence = TEMP_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let temporary = path.with_extension(format!("tmp-{}-{sequence}", std::process::id()));
-    let result = std::fs::write(&temporary, text).and_then(|_| std::fs::rename(&temporary, path));
-    if result.is_err() {
-        let _ = std::fs::remove_file(&temporary);
-    }
-    result
 }
 
 /// 终端/UI 调色板通用三元色。
@@ -1615,62 +1587,39 @@ mod persist_tests {
     }
 
     #[test]
-    fn persist_round_trips_every_written_value_through_reload() {
-        let directory = temp_dir("roundtrip");
-        let path = directory.join("settings.json");
-        persist_keys_at(
-            &path,
-            &[
-                ("theme", Value::String("Nord".into())),
-                ("font_size", Value::Number(16.5)),
-                ("scrollback_lines", Value::Number(50000.0)),
-                ("bell", Value::String("audible".into())),
-                ("restore_session", Value::Bool(false)),
-                ("slterm_ai_hooks_grok", Value::Bool(true)),
-            ],
+    fn apply_updates_replaces_external_segments_whole() {
+        let tree = json::parse(
+            br#"{
+  "keybind": [
+    { "combo": "ctrl+shift+c", "action": "copy" }
+  ],
+  "conpty_input_modes": { "inherit_cursor": true },
+  "appearance": { "theme": "Nord" }
+}
+"#,
         )
         .unwrap();
-        // 再写一次:浅合并不清既有键。
-        persist_keys_at(&path, &[("opacity", Value::Number(0.9))]).unwrap();
-
-        let settings = RuntimeSettings::from_raw(&RawSettings::from_json_bytes(
-            &std::fs::read(&path).unwrap(),
-        ));
-        assert_eq!(settings.theme, ThemeName::Nord);
-        assert_eq!(settings.font_size_px, Some(16.5));
-        assert_eq!(settings.scrollback_lines, 50_000);
-        assert_eq!(settings.bell, BellModeName::Audible);
-        assert!(!settings.restore_session);
-        assert_eq!(settings.opacity, 0.9);
-        assert!(settings.opacity_is_explicit());
-        assert!(AgentHook::Grok.enabled(&RawSettings::from_json_bytes(
-            &std::fs::read(&path).unwrap()
-        )));
-        // 临时文件不残留。
-        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
-        std::fs::remove_dir_all(directory).unwrap();
-    }
-
-    #[test]
-    fn corrupted_files_are_never_overwritten() {
-        let directory = temp_dir("corrupted");
-        let path = directory.join("settings.json");
-        std::fs::write(&path, "{ not json").unwrap();
-        let result = persist_keys_at(&path, &[("theme", Value::String("Nord".into()))]);
-        assert!(result.is_err());
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{ not json");
-        std::fs::remove_dir_all(directory).unwrap();
-    }
-
-    #[test]
-    fn writes_beyond_the_size_budget_are_rejected() {
-        let directory = temp_dir("budget");
-        let path = directory.join("settings.json");
-        let huge = "x".repeat(MAX_PERSIST_BYTES);
-        let result = persist_keys_at(&path, &[("custom_theme", Value::String(huge))]);
-        assert!(result.is_err());
-        assert!(!path.exists());
-        std::fs::remove_dir_all(directory).unwrap();
+        let bindings = Value::Array(vec![Value::String("ctrl+x".into())]);
+        let modes = json::parse(br#"{ "passthrough_mode": false }"#).unwrap();
+        let merged = apply_updates(
+            &tree,
+            &[
+                (keys::KEYBIND_SEGMENT, bindings.clone()),
+                (keys::CONPTY_INPUT_MODES_SEGMENT, modes.clone()),
+            ],
+        );
+        // 域外段整段替换,不做段内浅合并;其余段原样保留。
+        assert_eq!(merged.get(keys::KEYBIND_SEGMENT), Some(&bindings));
+        assert_eq!(merged.get(keys::CONPTY_INPUT_MODES_SEGMENT), Some(&modes));
+        assert_eq!(
+            merged
+                .get("appearance")
+                .unwrap()
+                .get("theme")
+                .unwrap()
+                .as_str(),
+            Some("Nord")
+        );
     }
 
     #[test]

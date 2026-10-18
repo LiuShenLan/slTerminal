@@ -173,6 +173,58 @@ mod reset_tests {
         assert!(matches!(restored.get("keybind"), Some(Value::Array(_))));
     }
 
+    /// 三清单对账(RESET_KEYS 侧):对「全键存在」的文档执行重置后,
+    /// 消失的键集合必须精确等于 `keys::reset_keys()`——resettable=false
+    /// 的授权类选择与其他段原样保留,无孤儿键、无漏删。
+    #[test]
+    fn reset_removal_set_matches_the_registry_reset_list() {
+        let mut tree = Value::empty_object();
+        for def in keys::KEYS {
+            let segment = def.domain.segment();
+            if !matches!(tree.get(segment), Some(Value::Object(_))) {
+                tree.set(segment, Value::empty_object());
+            }
+            tree.object_mut()
+                .unwrap()
+                .iter_mut()
+                .find(|(name, _)| name == segment)
+                .unwrap()
+                .1
+                .set(def.key, Value::Bool(true));
+        }
+        tree.set("handmade", Value::empty_object());
+        let restored = default_settings_tree(&tree);
+        for def in keys::KEYS {
+            let present = restored
+                .get(def.domain.segment())
+                .and_then(|section| section.get(def.key))
+                .is_some();
+            assert_eq!(
+                present, !def.resettable,
+                "键 {} 的重置归属与注册表不一致",
+                def.key
+            );
+        }
+        assert!(restored.get("handmade").is_some(), "未知段不参与重置删除");
+        let mut actually_removed: Vec<_> = keys::KEYS
+            .iter()
+            .filter(|def| {
+                restored
+                    .get(def.domain.segment())
+                    .and_then(|section| section.get(def.key))
+                    .is_none()
+            })
+            .map(|def| def.key)
+            .collect();
+        let mut listed: Vec<_> = keys::reset_keys().collect();
+        actually_removed.sort_unstable();
+        listed.sort_unstable();
+        assert_eq!(
+            actually_removed, listed,
+            "重置实际删除集合必须精确等于 RESET_KEYS"
+        );
+    }
+
     #[test]
     fn reset_preserves_every_hooks_authorization_choice() {
         let tree = json::parse(

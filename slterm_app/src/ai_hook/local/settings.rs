@@ -222,8 +222,9 @@ pub(crate) fn set_enabled(agent: AgentHook, enabled: bool) -> io::Result<()> {
             ));
         }
     }
-    // 先持久化授权:别的实例拿到锁后只会看到最新授权。
-    slterm_settings::persist_keys(&[(
+    // 先持久化授权:别的实例拿到锁后只会看到最新授权。settings.json 全仓
+    // 唯一写入口 = 应用侧写通道(校验/保存锁/原子写/.bak,06 篇 M6.1)。
+    crate::settings_store::save_settings_blocking(&[(
         agent.settings_key(),
         slterm_settings::json::Value::Bool(enabled),
     )])?;
