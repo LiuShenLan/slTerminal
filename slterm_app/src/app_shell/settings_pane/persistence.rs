@@ -63,6 +63,12 @@ impl SettingsPane {
                 self.status = Some(SettingsStatus::Failed(error.to_string()));
             }
         }
+        // 开机启动显示以真实 .lnk 为准(09 篇 M10.6):默认目标的每次
+        // 重载都从 Startup 文件夹回读,避免设置键与文件状态漂移;测试
+        // 注入路径不碰真实用户目录。
+        if self.settings_target.is_default() {
+            self.runtime.launch_at_login = crate::platform::startup::launch_at_login();
+        }
         cx.set_global(Settings::from_runtime_with_theme_root(
             &self.runtime,
             self.settings_target.theme_root().as_deref(),

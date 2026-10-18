@@ -154,6 +154,12 @@ enum SettingsTarget {
 }
 
 impl SettingsTarget {
+    /// 生产默认目标:开机启动显示需以真实 Startup `.lnk` 为准;测试注入
+    /// 路径绝不读真实用户目录。
+    fn is_default(&self) -> bool {
+        matches!(self, Self::Default)
+    }
+
     fn load(&self) -> io::Result<crate::settings_store::LoadResult> {
         match self {
             Self::Default => crate::settings_store::load_settings(),
@@ -272,7 +278,7 @@ impl SettingsPane {
     ) -> Self {
         // 注册表幂等注册:页面路由/搜索别名的单源就位后才能取分区顺序。
         registry::register_builtin_pages();
-        let using_default_target = matches!(settings_target, SettingsTarget::Default);
+        let using_default_target = settings_target.is_default();
         let (mut runtime, persisted, status) = match settings_target.load() {
             Ok(result) => {
                 let runtime = RuntimeSettings::from_raw(&result.data);
