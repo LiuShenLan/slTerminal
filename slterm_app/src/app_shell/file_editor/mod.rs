@@ -175,9 +175,10 @@ impl TextFileView {
         }
     }
 
-    /// 只读合同查询:固定只读位或快照自身只读(截断/非法编码/只读文件)。
+    /// 只读合同查询:固定只读位、快照自身只读(截断/非法编码/只读文件),
+    /// 或载入失败(无快照 = 没有可保存目标,不得接受编辑)。
     pub fn is_read_only(&self) -> bool {
-        self.fixed_read_only || self.snapshot().is_some_and(|snapshot| snapshot.read_only)
+        self.fixed_read_only || self.snapshot().is_none_or(|snapshot| snapshot.read_only)
     }
 
     /// 脏标记:tab 标题「•」与关闭确认的数据源。

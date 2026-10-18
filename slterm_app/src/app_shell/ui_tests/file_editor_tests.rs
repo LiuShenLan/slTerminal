@@ -431,3 +431,31 @@ fn closing_a_dirty_file_tab_confirms_before_save_or_discard(cx: &mut TestAppCont
     );
     assert_eq!(workspace.read_with(cx, |ws, _| ws.tab_count()), 1);
 }
+
+/// 载入失败不得留下可编辑空缓冲:无快照 = 只读(无保存目标)。
+#[gpui::test]
+fn failed_load_keeps_the_editor_read_only(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    let directory = tempfile::tempdir().unwrap();
+    let missing = directory.path().join("missing.rs");
+
+    open_document_at(&workspace, &mut window, missing);
+    assert_eq!(
+        workspace.read_with(cx, |ws, cx| ws.active_read_only_for_test(cx)),
+        Some(true),
+        "载入失败必须停在只读态"
+    );
+    assert_eq!(
+        workspace.read_with(cx, |ws, cx| ws.active_text_for_test(cx)),
+        None,
+        "失败载入没有快照"
+    );
+    focus_active_file_tab(&workspace, &mut window);
+    window.simulate_input("x");
+    window.run_until_parked();
+    assert_eq!(
+        workspace.read_with(cx, |ws, cx| ws.active_editor_text_for_test(cx)),
+        Some(String::new()),
+        "只读态输入体不得接受键入"
+    );
+}
