@@ -22,6 +22,7 @@
 | A12 | **config_guard 锁竞争不计入失败边**：另一操作进行中不算失败，不投递；`RawSettings::try_load` 失败投递 `slterm-hook settings`。 | M9.3 | 维持边界；若要求锁竞争也计入需裁决。 |
 | A13 | **recovery 汇总走直发通道而非通知漏斗**：启动期窗口前台，漏斗门控会丢该信息，故走 `platform::notifications::show`（诊断/更新提示直发通道）。 | M10.1 | 若要求统一走漏斗，需加「启动汇总豁免前台门控」策略位。 |
 | A14 | **`silent_start=1/tray=0` 为惰性组合**：实现保持设计稿纯两条件（不隐藏），上游会在开启静默时强制 tray=1。 | M10.6 | 是否在设置页加「开启静默同时补 tray」的 UX 约束。 |
+| A15 | **Acrylic 增强路径未迁**：上游 22H2 优先用 DesktopAcrylicController，本仓无该模块/Windows App Runtime 依赖，Acrylic 仅走 WCA state 4 回退。 | M10.7 | 是否补移植（新增依赖面）需裁决；实际观感取决于 WCA。 |
 
 ## B. 待修（已知缺陷/优化）
 
@@ -81,6 +82,9 @@
 | B52 | **更新提示不调 `mark_prompted`**：更新弹窗步落地前，同一版本每次启动都弹 toast。 | `update_check.rs` `deliver` | M10.5 | 弹窗接线时在打开/关闭处调 `mark_prompted`（`remind_later`/`skip_version` 同理）。 |
 | B53 | **`restore_ticket()` 未接启动恢复**：`acknowledge_restore` 无生产调用方。 | `update_download/handoff.rs` | M10.5 | 接 `session_recovery::prepare_startup` 前，窗口建好后确认窗口数。 |
 | B54 | **托盘 NIM_ADD 失败无重试**：explorer 未就绪/刚崩时 `added=false`，`set_enabled(true)` 状态未变不 post，1Hz 快照不变也不刷新——**静默启动下可能长时间无托盘入口（窗口已隐藏）**。 | `tray.rs` `set_enabled`/`apply_enabled` | M10.6 | `set_enabled(true)` 每次 post WM_APP_SET（或维护 mounted 标志）让 1Hz 自然重试。 |
+| B55 | **壁纸设置 UI 缺失**：只有 opacity 滑块/blur 下拉，无 background_image 路径选择与 fit/alignment 控件；目前只能经 settings.json 或主题写入。 | `settings_pane.rs` | M10.7 | 归 06 篇补壁纸选择 + 预览控件（`load_preview` 已备）。 |
+| B56 | **终端默认背景仍是壳底色 token**：网格区未绘制 `Settings.palette.background`，默认格透出 Root 壳色。 | `view/element.rs` 容器底色层 | M10.7 | 02/06 篇若引入独立终端卡底色，在卡层之上、单元格之下补单层（直接叠加会二次 alpha）。 |
+| B57 | **live opacity 预览与并发 Changed 边界**：拖拽期间恰有其它设置触发 `Changed`，`wallpaper::refresh` 会用已持久化值覆盖预览（概率低）。 | `settings_pane/persistence.rs` `preview_opacity` | M10.7 | live 值并入全局或给 refresh 加预览旁路。 |
 
 ## C. 计划内（归后续子步/阶段，重构完成时验证）
 
