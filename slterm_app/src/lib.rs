@@ -119,6 +119,15 @@ pub(crate) mod taskbar;
 // 系统托盘(09 篇 M10.3):独立消息泵线程 + 右键 agent 直达菜单 + 1 Hz
 // 快照去抖;attention 聚合驱动橙点图标。图标资产归 M12。
 pub(crate) mod tray;
+// 自动更新检查(09 篇 M10.5):GitHub Releases 解析/资产四重校验/版本
+// 比较/按版本提示状态;网络请求与下载共用自解析代理。
+pub(crate) mod update_check;
+// 更新包下载与校验(09 篇 M10.5):.part 流式 + 长度/MZ/SHA-256/512MiB
+// 全过才原子替换;generation 作废链与启动 hydrate 双证据。
+pub(crate) mod update_download;
+// 更新 HTTP 客户端与代理解析(09 篇 M10.5):注册表 ProxyServer 按协议
+// 取值、socks 归 socks5、env 回退、NO_PROXY、https_only 双超时。
+pub(crate) mod update_proxy;
 // 窗口管理 facade(09 篇 M10.4):四路回窗(toast/托盘/按钮/ATTACH)与
 // HWND 查询的编译期单一实现点;Win32 焦点/还原原语只在本模块出现。
 pub(crate) mod windowing;

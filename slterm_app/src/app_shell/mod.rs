@@ -90,6 +90,9 @@ pub(crate) enum SltermShellEvent {
     },
     /// 托盘「退出」(09 篇 M10.3):与关窗同一条退出链(终局快照 + 退出)。
     TrayQuit,
+    /// 后台更新检查结果(09 篇 M10.5):提示 + 按 `auto_download_updates`
+    /// 预取安装包。安装授权仍需用户经 handoff 两阶段流程提交。
+    UpdateAvailable(crate::update_check::UpdateCheckResult),
 }
 
 /// 托盘线程 → 壳事件队列的翻译单点(托盘线程不碰 GPUI 状态)。
@@ -106,6 +109,19 @@ fn tray_command_event(command: crate::tray::GpuiTrayCommand) -> SltermShellEvent
 /// 关窗即退出(跨领域不变量 5):`QuitMode::LastWindowClosed` + 无 mux 驻留臂,
 /// 最后一窗关闭 = 进程退出。
 pub fn run_shell(initial_cwd: Option<PathBuf>, initial_command: Option<Program>) {
+    // 安装守卫(09 篇 M10.5):安装事务进行中时不启动常驻资源;预约安装
+    // 在此执行,成功后本进程立即退出,由 helper 覆盖安装后重启。
+    match crate::update_download::handoff::installation_in_progress() {
+        Ok(true) => {
+            log::info!("installation in progress; resident startup deferred");
+            return;
+        }
+        Err(error) => log::warn!("could not inspect installation ownership: {error}"),
+        Ok(false) => {}
+    }
+    if crate::update_download::handoff::apply_scheduled() {
+        return;
+    }
     // 会话恢复决策在开窗前完成(05 篇 M5.5):窗口尺寸/侧栏宽度要先进
     // 窗口定形与 spawn 网格;CLI 显式 cwd/-e 启动只回放几何、不恢复 tabs。
     let restore_tabs = initial_command.is_none() && initial_cwd.is_none();
@@ -153,6 +169,14 @@ pub fn run_shell(initial_cwd: Option<PathBuf>, initial_command: Option<Program>)
         let shell_events = shell_tx.clone();
         move |command| {
             let _ = shell_events.send(tray_command_event(command));
+        }
+    });
+    // 启动更新检查(09 篇 M10.5):独立线程,延迟 12s 等首窗安顿;失败只
+    // 落 debug 日志。结果经壳事件队列回到 UI 线程。
+    crate::update_check::spawn_once({
+        let shell_events = shell_tx.clone();
+        move |result| {
+            let _ = shell_events.send(SltermShellEvent::UpdateAvailable(result));
         }
     });
     let application = gpui_platform::application()

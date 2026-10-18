@@ -4,6 +4,8 @@
 //! 本层是 Windows 原生代码的直接落点,不再带平台分支。
 
 pub mod dirs;
+// 安装渠道门禁(09 篇 M10.5):外部托管渠道不参与自更新。
+pub(crate) mod distribution;
 pub(crate) mod elevation;
 // 系统文件操作(07 篇 M8.4):回收站删除 + 系统处理器打开。
 pub(crate) mod file_operations;
@@ -22,3 +24,5 @@ pub(crate) mod process;
 pub(crate) mod process_output;
 pub(crate) mod process_snapshot;
 pub(crate) mod startup;
+// 安装器 handoff 的原生面(09 篇 M10.5):路径规范化/进程身份/helper 启动。
+pub(crate) mod update_installation;

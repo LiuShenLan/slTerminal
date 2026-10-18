@@ -90,8 +90,79 @@ impl SltermWorkspace {
             // 托盘「退出」(09 篇 M10.3):与关窗同一条退出链——先落终局
             // 快照,再移除唯一主窗;LastWindowClosed 随即结束进程。
             SltermShellEvent::TrayQuit => self.quit_from_tray(window, cx),
+            // 更新提示(09 篇 M10.5):直发 toast;若用户开启后台下载,
+            // 预取安装包(不授予安装权限)。
+            SltermShellEvent::UpdateAvailable(result) => self.update_available(result),
             // 消费(右键「在此处打开」)归 09 篇。
             SltermShellEvent::OpenDirectories(_) => {}
+        }
+    }
+
+    /// 更新可用提示与可选后台预取(09 篇 M10.5)。
+    ///
+    /// 检查线程只负责发现;本方法在 UI 线程读设置并启动下载线程。安装
+    /// 授权仍归 handoff 两阶段流程(用户确认后才写 commit.json)。
+    fn update_available(&mut self, result: crate::update_check::UpdateCheckResult) {
+        let language = crate::i18n::LanguagePreference::from(
+            slterm_settings::RuntimeSettings::load().language,
+        )
+        .resolved();
+        let title = language.pick("发现新版本", "Update available");
+        let body_zh = format!(
+            "{} v{} 已发布(当前 v{})",
+            crate::brand::NAME,
+            result.latest,
+            result.current
+        );
+        let body_en = format!(
+            "{} v{} is available (current v{})",
+            crate::brand::NAME,
+            result.latest,
+            result.current
+        );
+        crate::platform::notifications::show(title, language.pick(&body_zh, &body_en));
+        log::info!(
+            "update-check: v{} available (current v{})",
+            result.latest,
+            result.current
+        );
+
+        if !slterm_settings::RuntimeSettings::load().auto_download_updates {
+            return;
+        }
+        let Some(asset) = result.asset else {
+            return;
+        };
+        // 无摘要的安装包不可验证,预取也拒绝执行;下载器还会二次校验。
+        if asset.digest.is_none() {
+            return;
+        }
+        let job = match crate::update_download::begin(&asset) {
+            Ok(Some(job)) => job,
+            Ok(None) => return,
+            Err(error) => {
+                log::debug!("update-check: background download refused: {error}");
+                return;
+            }
+        };
+        let notice = asset.clone();
+        let spawned = std::thread::Builder::new()
+            .name("update-download".into())
+            .spawn(move || {
+                crate::update_download::run(job);
+                match crate::update_download::status(&notice) {
+                    crate::update_download::DownloadStatus::Ready { .. } => {
+                        log::info!("update-download: v{} ready", notice.version);
+                    }
+                    crate::update_download::DownloadStatus::Failed(error)
+                    | crate::update_download::DownloadStatus::InstallFailed(error) => {
+                        log::warn!("update-download: v{} failed: {error}", notice.version);
+                    }
+                    _ => {}
+                }
+            });
+        if let Err(error) = spawned {
+            log::warn!("update-download: thread spawn failed: {error}");
         }
     }
 

@@ -39,6 +39,9 @@ path = "tests/runtime_conformance.rs"
 # UI 测试全部 `#[cfg(all(test, feature = "gpui-test-support"))]` 双门控,
 # feature 未开时虚拟窗口用例整体不编译,生产构建不带测试夹具。
 gpui-test-support = ["gpui/test-support", "gpui-component/test-support"]
+# 本地假 release 服务器演练通道(09 篇 M10.5 采纳点 34):只用于 debug
+# 验收/发布彩排;`update_check::test_source` 在 release 构建下编译期拒绝。
+update-test-source = []
 
 [dependencies]
 # GPUI 钉版与 URL/rev 一致性纪律见根 Cargo.toml 固定基线注释块。
@@ -88,7 +91,8 @@ html-escape = "0.2.14"
 pulldown-cmark = { version = "0.13", default-features = false }
 # AI 助手修复请求:后台线程一次短 JSON POST。选 ureq 而非 reqwest:
 # 不与 tokio 耦合,依赖树小。
-ureq = { version = "3", features = ["json"] }
+# socks-proxy:更新器把注册表 `socks=` 解析成 socks5:// 后需要真实握手。
+ureq = { version = "3", features = ["json", "socks-proxy"] }
 # 数学引擎(08 篇 M9.4):TeX 事件流解析。版本与上游重构基线逐字一致
 # (pulldown-latex =0.7.1),事件语义/兼容重写才可照抄。
 pulldown-latex = "=0.7.1"
@@ -124,6 +128,9 @@ notify = "7"
 zip = { version = "=4.6.1", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 # 主题包资源签名校验:只开主题包允许的静态图片格式。
 image = { version = "0.25", default-features = false, features = ["bmp", "gif", "jpeg", "png", "webp"] }
+# Windows 系统代理读取(09 篇 M10.5):HKCU Internet Settings 的
+# ProxyEnable/ProxyServer/ProxyOverride;不走 ureq 的 win-system-proxy。
+winreg = "0.56"
 
 [build-dependencies]
 # i18n 静态生成器(06 篇):目录遍历由语言注册表驱动,故构建期依赖设置 crate。
