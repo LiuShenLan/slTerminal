@@ -1095,14 +1095,6 @@ impl SettingsPane {
         self.theme_editor_recommendations()
     }
 
-    pub(crate) fn open_theme_editor_for_test(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<'_, Self>,
-    ) {
-        self.open_theme_editor(window, cx);
-    }
-
     pub(crate) fn switch_theme_template_for_test(
         &mut self,
         index: usize,
@@ -1131,21 +1123,9 @@ impl SettingsPane {
         self.save_theme_editor(apply, window, cx)
     }
 
-    pub(crate) fn close_theme_editor_for_test(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<'_, Self>,
-    ) {
-        self.request_close_theme_editor(window, cx);
-    }
-
     pub(crate) fn theme_editor_template_count_for_test(&self) -> usize {
         self.theme_editor
             .as_ref()
             .map_or(0, |editor| editor.templates.len())
-    }
-
-    pub(crate) fn theme_editor_selected_template_base_for_test(&self) -> Option<ThemeName> {
-        self.theme_editor.as_ref().map(|editor| editor.template)
     }
 }

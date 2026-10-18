@@ -579,10 +579,6 @@ fn agent_name(agent: AgentHook) -> &'static str {
 /// 虚拟窗口用例的驱动端(生产不编译)。
 #[cfg(all(test, feature = "gpui-test-support"))]
 impl SettingsPane {
-    pub(crate) fn set_hooks_rows_for_test(&mut self, rows: Vec<AgentIntegration>) {
-        self.agents.rows = Some(rows);
-    }
-
     pub(crate) fn hooks_rows_for_test(&self) -> Option<&Vec<AgentIntegration>> {
         self.agents.rows.as_ref()
     }

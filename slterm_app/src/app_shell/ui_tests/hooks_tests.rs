@@ -245,10 +245,7 @@ fn hooks_page_edit_writes_user_handlers_and_never_touches_marker_groups(cx: &mut
     let after = fixture.read_claude();
     assert_eq!(after["model"], serde_json::json!("opus"), "无关顶层键保留");
     let groups = after["hooks"]["Stop"].as_array().unwrap();
-    assert!(
-        groups.iter().any(|group| *group == marker_before),
-        "marker 认领组必须逐字保留"
-    );
+    assert!(groups.contains(&marker_before), "marker 认领组必须逐字保留");
     assert!(
         groups
             .iter()
