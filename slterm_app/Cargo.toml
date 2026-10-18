@@ -109,6 +109,12 @@ ahash = { version = "0.8.6", features = ["no-rng"] }
 bitflags = "2.4.1"
 # 凭据出域句柄即用即焚(10 篇锚点;M9.2 先落消费接口 trait)。
 zeroize = "1"
+# 加密备份(10 篇 M10.10):AES-256-GCM 密封 + Argon2id 口令派生。版本与
+# 上游固定基线逐字一致(派生参数组作契约数值随迁)。
+aes-gcm = "0.11"
+argon2 = "0.6.0-rc.8"
+# 盐与 nonce 的系统随机源(0.3 的 `fill` 形态,与上游同族)。
+getrandom = "0.3"
 # 事件信箱/session_pump 的异步通道与 Stream(event_mailbox.rs 随迁形态)。
 futures = "0.3"
 # first_frame 取原生 HWND 走 raw-window-handle(与 gpui 内部同版本族),

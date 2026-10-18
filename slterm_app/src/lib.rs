@@ -58,6 +58,10 @@ pub(crate) mod completion;
 pub(crate) mod directory_history;
 // 有界前缀读取(07 篇):内存上限先于解码生效。
 pub(crate) mod document_io;
+// 加密备份(10 篇 M10.10):白名单收集/口令密封/先验后写恢复 + 选择性恢复
+// 与加密恢复点撤回。UI 入口归 06 设置页安全分区(D10-4),本步只落引擎。
+#[allow(dead_code)]
+pub(crate) mod encrypted_backup;
 // 事务型 Git worktree(07 篇边界,04 篇 agent.fork 消费):只回滚本事务
 // 证明创建过的资源,失败路径不留半成品。
 pub mod error;
