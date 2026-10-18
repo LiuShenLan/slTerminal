@@ -8,12 +8,12 @@
 
 | # | 问题 | 来源 | 建议 |
 |---|------|------|------|
-| A1 | **pty_integration 写读链 flake**：`conpty_spawn_write_read_resize_close_full_chain` 的 15s 等待窗口在全量串行首次运行时超时（Defender 扫 staged exe 同源，单跑/复跑均绿；已出现 ≥2 次）。 | M5.4/M4.5 观测 | 窗口 15s → 30s，注释「负载裕度，非断言/语义放宽」（断言语义不变、真 bug 仍红）。按 CLAUDE.md 负载裕度口径需批准。 |
+| A1 | **pty_integration 负载瞬态（两类）**：①`conpty_spawn_write_read_resize_close_full_chain` 15s 写读窗口在全量串行首次运行超时（Defender 扫 staged exe 同源），出现 ≥2 次；②`spawn_lock_serializes_and_capacity_32_enforced` 在全量 workspace 跑（slterm_app 千余测试之后）偶发并发抢名额断言失败（曾见「2 成功 vs 期望 1」），单跑/复跑均绿。 | M5.4/M4.5/M9.5 观测 | ①窗口 15s → 30s 注释负载裕度；②需排查是否有跨测试 PTY/线程残留影响容量判定（按 CLAUDE.md 负载裕度口径需批准，且②应先定位再改）。 |
 | A2 | **设置类写盘在 UI 线程同步执行**（滑条松手/下拉/开关/主题保存）：与硬约束「阻塞 I/O 用 spawn_blocking」存在张力。上游同形，小文档写、回滚语义依赖同步失败返回。 | M6.2/M6.3 | 接受现状并登记豁免，或改后台任务（相位机随之引入）。 |
 | A3 | **代码注释篇号锚点 vs docs/ 禁引纪律**：M3 起落盘注释大量引用设计稿篇号（如「05 篇三件套锚点」），与「仓内（docs/ 外）禁止引用 docs/ 任何文件」有张力。 | M3 收官登记 | 二选一：M11 删稿时统一清理篇号（sed 可机械化），或把纪律收窄为「禁引用文件路径，篇号锚点允许，M11 一并清」。 |
 | A4 | **`-e` 第二实例不移交**：带显式命令的第二实例按设计稿不开控制面、开 client-only 窗口，与「单实例」定位有张力。 | M7.5 | 维持现状（-e 视为独立作业）或改移交语义，需产品裁定。 |
 | A5 | **git 四方法只对根 checkout 生效**：`verify_repository` 要求 pane cwd == repo root，子目录 pane 被 `git_target_changed` 拒绝。 | M7.3 | 如需子目录支持，重新裁定该条（放宽为「cwd 在 repo 内」并解析相对路径）。 |
-| A6 | **`fallback_api_key` 默认不可达**：预设默认全启用且 active 指向首个预设，「无启用 provider 才走 env 兜底」在默认安装不可达。 | M9.2 | M9.5 定：预设默认关，或 active provider 无凭据时继续走 env 兜底。 |
+| A6 | **`fallback_api_key` 默认不可达**：预设默认全启用且 active 指向首个预设，「无启用 provider 才走 env 兜底」在默认安装不可达。M9.5 按设计稿原语义实现（active 无凭据 → 请求静默放弃，不落 env 兜底），M10.9 前建议条实际不会进 Ready（测试均走注入）。 | M9.2/M9.5 | **仍未裁**：预设默认关，或 active provider 无凭据时继续走 `SLTERM_AI_KEY`/`OPENAI_API_KEY`。 |
 | A7 | **PathEditor 无补全**：任务曾写「补全」，设计稿无补全合同（候选来源/弹层/键盘/提交语义未定义），实现按设计签名（输入/校验/提交）。 | M8.4 | 若产品需要，先在设计稿补合同再落 UI。 |
 | A8 | **R6-R8 与双槽比例**：旧栈按钮跨区/同区排序（R6-R8）与 zones 持久化未迁；双槽固定 50/50（旧栈持久化过 splitRatio）。 | M5.3b | 若保留旧交互需扩 SideViewDef/schema；比例字段需先裁。 |
 | A9 | **分屏不继承锚 pane 的 `-e` 身份**（照上游行为）。 | M5.3a | 若产品要求继承，归启动身份设计（M5.5 已过）另立。 |
@@ -64,6 +64,9 @@
 | B37 | **`Execution::prepare()` 恒 true**：若未来恢复远程/嵌套执行环境需重新引入冻结握手（设计已裁，仅记录接缝）。 | `completion/metadata.rs` | M9.1 | 留锚。 |
 | B38 | **失败边合成命令偏技术化**：`HookFailure.command` 形如 `slterm-hook install slterm_ai_hooks_claude`，只宜作上下文不宜直接呈现。 | `ai_assistant.rs` `HookFailure` | M9.3 | M9.5 呈现层只作上下文，不直出。 |
 | B39 | **`terminal_math/tests.rs` 1970 行贴近 2000 硬限**：后续追加用例前须先拆分。 | `terminal_math/tests.rs` | M9.4 | 拆子模块（按 M8.2 ui_tests 先例）。 |
+| B40 | **ghost 仅按「光标列+1」绘制**：未考虑 `suggestion_edit.replace_after_chars` 与自动折行（纯视觉小瑕疵）。 | `element.rs` ghost 绘制 | M9.5 | 按 suggestion_edit 替换区间绘制。 |
+| B41 | **公式编译在 paint 的 Term 锁内**：首次遇多条新公式可能拉长一帧持锁时间（上游同构）。 | `math_overlay.rs` `plan_frame` | M9.5 | compile 移出锁外或异步预热。 |
+| B42 | **弹窗与 AI 条并存时底部空间受限**（不互相覆盖）。 | `view.rs` 弹窗/AI 条布局 | M9.5 | 低优先级布局打磨。 |
 
 ## C. 计划内（归后续子步/阶段，重构完成时验证）
 
@@ -89,8 +92,9 @@
 | C18 | **`save_api_key` 签名适配**：设计稿无后端参数，实现改为 `&dyn CredentialStore` 显式注入；M10.9 真实实现后调用点直传。 | M10.9 | |
 | C19 | **`load/save_final/quarantine/mark_boot_attempt` targeted allow**：设计锚定 API 保留，生产走 `_at` 显式路径。 | 11 篇复核 | |
 | C20 | **老会话文件叶/tab 无 launch**：首拍快照规范化为 `Some(Default)`（语义等价，字段形态变化）。 | 记录 | 无迁移义务。 |
-| C21 | **失败边投影形态与设计缝合点差异**：设计称失败边「默认取 assistant_answer 投影进入闸门」，但 `AssistantAnswer` 是 pane 级回答投影，config_guard 失败为进程级且无回答原文；实现投影为 `HookFailure{command, program}`。 | M9.5 | 明确失败边是否经 `AnswerInbox` 展示 notice。 |
-| C22 | **`SnapCell` 无 DIM 标志**：终端覆盖层的推理样式过滤需要 DIM。 | M9.5 | 在 `RenderSnapshot::capture` 同一锁窗口从 Term cell Flags 构造 `OverlayCell`，或给 `SnapCell` 增 `dim: bool`。 |
+| C21 | ~~失败边投影形态~~（M9.5 已裁：失败边**不接** `AnswerInbox` notice——进程级事实无 pane 归属且合成命令偏技术化；维持「进闸门 + log 证据」，若需提示另立进程级 notice 通道）。 | M9.5 | 已闭环。 |
+| C22 | ~~`SnapCell` 无 DIM 标志~~（M9.5 已裁：同锁窗口从 Term cell Flags 构造 `OverlayCell`，快照契约不变）。 | M9.5 | 已闭环。 |
+| C23 | **真实模型出网无自动化**：`send_model_request` 已登记豁免。 | 后续 | 用本地 mock HTTP server 补四协议族 URL/头/响应解析用例。 |
 
 ## D. 已修（存档，防重复登记）
 
