@@ -24,6 +24,7 @@
 | A14 | **`silent_start=1/tray=0` 为惰性组合**：实现保持设计稿纯两条件（不隐藏），上游会在开启静默时强制 tray=1。 | M10.6 | 是否在设置页加「开启静默同时补 tray」的 UX 约束。 |
 | A15 | **Acrylic 增强路径未迁**：上游 22H2 优先用 DesktopAcrylicController，本仓无该模块/Windows App Runtime 依赖，Acrylic 仅走 WCA state 4 回退。 | M10.7 | 是否补移植（新增依赖面）需裁决；实际观感取决于 WCA。 |
 | A16 | **审计写事件噪声**：每次设置写发 warn（含主题 live 预览等高频写路径）。取证价值与日志量需平衡。 | M10.12 | 按操作分级，或预览写单独 source 降为 info（涉及审计可观测面口径）。 |
+| A17 | **热路径 O3 与旧体积包络冲突**：启用设计指定 O3 后 setup 17.07 MiB（+12.9%）、zip 22.21 MiB（+15.1%，略超按 M11.1 基线换算的 22.2 线）。当前按 D12-2「全量功能态实测 +15%」取校准态预算 19.63/25.54 MiB。 | M11.2 | 接受校准态预算，或缩减 O3 清单（候选：slterm 16 codegen units、image/resvg）回到旧包络。 |
 
 ## B. 待修（已知缺陷/优化）
 
@@ -99,6 +100,8 @@
 | B68 | **SEC-13 覆盖半面**：claude hooks 的 `HookInspection.needs_repair` 是结构比对、无哈希；磁盘 hook 被改时不产生 SEC-13 哈希事件。 | `ai_hook/local/settings.rs` `current_at`/`inspect_with` | M10.12 | 03 篇补内嵌模板指纹后接 `audit::hook_hash_mismatch`。 |
 | B69 | **`UninstallRun` 调 `slterm.exe setup-ai --remove` 但子命令不存在**：卸载清理为 no-op（错误被 runhidden 吞）。 | `scripts/installer.iss` [UninstallRun] | M11.1 | 03 篇接线或首发前删除该行。 |
 | B70 | **`license = "GPL-3.0"` 未落**：workspace 与成员 crate 均缺（M0.2 合规落点二）。 | 根 `Cargo.toml` | M11.1 | M11.3 补 `license.workspace = true`。 |
+| B71 | **发布脚本无 `#Requires -Version 7` 声明**：`package-release.tests.ps1` 在 Windows PowerShell 5.1 下解析失败且报错晦涩（pwsh 7 下全绿）。 | `scripts/**` | M11.2 | 发布链脚本统一加 `#Requires -Version 7`（或在 release-checklist 明示用 pwsh 7）。 |
+| B72 | **新鲜度判据含根 `Cargo.toml` mtime**：仅改根清单注释（编译输入未变）会让 release 链假红（二进制不重链接）；本次以 `cargo clean` 绕过。 | `scripts/build-windows-product.ps1` `Assert-FreshBinaries` | M11.2 | 改判「参与二进制的输入摘要」或清单变更时强制重链接——M11.4 前裁决。 |
 
 ## C. 计划内（归后续子步/阶段，重构完成时验证）
 
