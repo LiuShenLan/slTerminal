@@ -16,7 +16,7 @@ pub(super) enum Install {
     Conflict,
 }
 
-fn fingerprint(content: &[u8]) -> String {
+pub(super) fn fingerprint(content: &[u8]) -> String {
     let mut fingerprint = String::with_capacity(64);
     for byte in Sha256::digest(content).iter() {
         let _ = write!(&mut fingerprint, "{byte:02x}");

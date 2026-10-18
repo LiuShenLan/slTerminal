@@ -1253,6 +1253,60 @@ mod transport_tests {
         assert_eq!(keys, ["agent", "env", "pane", "tab", "window"]);
     }
 
+    /// B26 防漂移:describe.commands 的动词必须与 CLI 实际命令清单逐项一致。
+    /// 从 clap 的 `Command` 树派生，不复制第二份手写表。
+    #[test]
+    fn describe_commands_match_the_cli_catalog() {
+        use clap::CommandFactory;
+
+        let description = runtime_description();
+        let commands = description["commands"]
+            .as_object()
+            .expect("commands object");
+        let cli = crate::cli::Cli::command();
+        for (resource, verbs) in commands {
+            let resource_command = cli
+                .get_subcommands()
+                .find(|command| command.get_name() == resource)
+                .unwrap_or_else(|| panic!("CLI 缺少资源子命令 {resource}"));
+            let subcommands: Vec<&str> = resource_command
+                .get_subcommands()
+                .map(|command| command.get_name())
+                .collect();
+            // 顶层单动词资源(env):命令本身就是动词;其余资源取子命令名。
+            let mut cli_verbs: Vec<&str> = if subcommands.is_empty() {
+                vec![resource.as_str()]
+            } else {
+                subcommands
+            };
+            let mut described: Vec<&str> = verbs
+                .as_array()
+                .expect("describe verbs array")
+                .iter()
+                .map(|verb| verb.as_str().expect("verb string"))
+                .collect();
+            cli_verbs.sort_unstable();
+            described.sort_unstable();
+            assert_eq!(
+                described, cli_verbs,
+                "资源 {resource} 的 describe 动词与 CLI 清单不一致"
+            );
+        }
+        // CLI 不得隐藏未公布的资源动词(non-resource 入口除外)。
+        let mut cli_resources: Vec<&str> = cli
+            .get_subcommands()
+            .map(|command| command.get_name())
+            .filter(|name| matches!(*name, "env" | "window" | "tab" | "pane" | "agent"))
+            .collect();
+        let mut described_resources: Vec<&str> = commands.keys().map(String::as_str).collect();
+        cli_resources.sort_unstable();
+        described_resources.sort_unstable();
+        assert_eq!(
+            described_resources, cli_resources,
+            "CLI 资源命令面与 describe 公布面不一致"
+        );
+    }
+
     /// 协议 Schema 与描述单源:方法枚举 == capabilities(裁剪后首发面)。
     #[test]
     fn schema_method_enum_matches_describe_capabilities() {

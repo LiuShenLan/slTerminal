@@ -427,7 +427,8 @@ fn add_file(
 }
 
 /// 收集自定义主题文档:只认 `themes/` 下合法 id + 固定后缀的普通文件;
-/// 符号链接/坏文档跳过(它们本就不能被主题库装载)。
+/// 符号链接跳过(安全边界)。坏文档整单失败(B62):静默跳过会让备份缺件
+/// 而用户误以为完整。
 fn add_themes(root: &Path, entries: &mut Vec<BackupEntry>) -> Result<(), String> {
     let directory = root.join("themes");
     let read_dir = match fs::read_dir(&directory) {
@@ -461,15 +462,16 @@ fn add_themes(root: &Path, entries: &mut Vec<BackupEntry>) -> Result<(), String>
             continue;
         }
         let bytes = fs::read(&path).map_err(|error| format!("读取主题文件失败: {error}"))?;
-        // 导入侧复验同一判据;坏文档在导出侧即不入包。
+        // 导入侧复验同一判据。坏文档整单失败(B62):备份必须要么完整、
+        // 要么明确报错,不能静默缺件。
         if crate::theme_library::ThemeDocument::from_json_bytes(&bytes).is_err() {
             tracing::warn!(
                 target: crate::audit::TARGET,
-                operation = "backup_skip_invalid_theme",
-                "备份跳过无有效主题文档: {}",
+                operation = "backup_invalid_theme",
+                "备份中止:主题文件不是有效文档: {}",
                 path.display()
             );
-            continue;
+            return Err(format!("主题文件不是有效文档,备份中止: {}", path.display()));
         }
         entries.push(BackupEntry {
             category: BackupCategory::Themes,
@@ -872,12 +874,8 @@ mod encrypted_backup_tests {
             theme_bytes(),
         )
         .unwrap();
-        fs::write(
-            root.join("themes")
-                .join(format!("broken{THEME_FILE_SUFFIX}")),
-            b"not a theme",
-        )
-        .unwrap();
+        // 坏主题的硬失败路径由 `invalid_theme_documents_abort_the_backup`
+        // 单独覆盖;本用例只验证合法白名单与敏感键剥除。
         // 清单外敏感面:AI 会话库/助手配置/日志/恢复点目录,一律不得入包。
         fs::write(root.join("ai_sessions.json"), "{\"sessions\":[]}").unwrap();
         fs::write(root.join("slterm_assistant.txt"), "enabled=true").unwrap();
@@ -948,6 +946,91 @@ mod encrypted_backup_tests {
                     .windows(secret.len())
                     .any(|window| window == secret.as_bytes()),
                 "凭据值进入备份: {secret}"
+            );
+        }
+    }
+
+    /// B62 防复发:非法主题文档必须整单失败,不得静默缺件。
+    #[test]
+    fn invalid_theme_documents_abort_the_backup() {
+        let directory = tempfile::tempdir().unwrap();
+        let themes = directory.path().join("themes");
+        fs::create_dir_all(&themes).unwrap();
+        fs::write(themes.join("bad.slterm-theme.json"), "{ not a theme }").unwrap();
+        let selection = BackupSelection::from_categories([BackupCategory::Themes]);
+        let error = collect_from(directory.path(), selection).expect_err("非法主题必须中止备份");
+        assert!(error.contains("主题"), "{error}");
+    }
+
+    /// 提取结构体块内的字段名(用于 B63 漂移守卫)。
+    fn struct_fields(source: &str, signature: &str) -> Vec<String> {
+        let start = source
+            .find(signature)
+            .unwrap_or_else(|| panic!("缺少结构体: {signature}"));
+        let open = source[start..]
+            .find('{')
+            .map(|offset| start + offset)
+            .unwrap();
+        let mut depth = 0usize;
+        let mut end = open;
+        for (index, character) in source[open..].char_indices() {
+            match character {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = open + index;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut fields = Vec::new();
+        for line in source[open + 1..end].lines() {
+            let line = line.trim();
+            if line.starts_with('#') || line.starts_with("//") || line.is_empty() {
+                continue;
+            }
+            let Some((declaration, _)) = line.split_once(':') else {
+                continue;
+            };
+            let Some(name) = declaration.split_whitespace().last() else {
+                continue;
+            };
+            if name
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric() || character == '_')
+            {
+                fields.push(name.to_owned());
+            }
+        }
+        fields
+    }
+
+    /// B63 防复发:provider 与设置字段名不得命中敏感键黑名单——否则备份
+    /// 会静默剥除正常字段。provider schema 演进时本用例负责报警。
+    #[test]
+    fn sensitive_key_denylist_does_not_shadow_declared_fields() {
+        let source = fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("src")
+                .join("ai_providers.rs"),
+        )
+        .expect("读取 provider schema 源码");
+        let provider_fields = struct_fields(&source, "pub(crate) struct AiProvider {");
+        assert!(!provider_fields.is_empty(), "provider 字段扫描失效");
+        for field in &provider_fields {
+            assert!(
+                !is_sensitive_key(field),
+                "provider 字段 {field} 会被备份静默剥除"
+            );
+        }
+        for def in slterm_settings::keys::KEYS {
+            assert!(
+                !is_sensitive_key(def.key),
+                "设置键 {} 会被备份静默剥除",
+                def.key
             );
         }
     }

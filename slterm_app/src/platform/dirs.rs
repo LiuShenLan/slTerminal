@@ -6,12 +6,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-/// 覆盖数据目录是否生效(便携模式/自动化测试隔离用)。
-#[cfg(test)]
-fn has_override() -> bool {
-    std::env::var_os("SLTERM_CONFIG_DIR").is_some_and(|value| !value.is_empty())
-}
-
 /// 用户主目录。Windows `USERPROFILE`;空串视为未设置(登录管理器实踩过)。
 #[allow(dead_code)] // 消费点 = M3.2 初始 cwd 回退(显式目录无效时落 home)。
 pub fn home_dir() -> Option<PathBuf> {
@@ -28,6 +22,8 @@ pub fn data_dir() -> &'static Path {
     static DIR: OnceLock<PathBuf> = OnceLock::new();
     DIR.get_or_init(|| {
         let dir = resolve_data_dir();
+        #[cfg(test)]
+        let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::create_dir_all(&dir);
         dir
     })
@@ -36,7 +32,13 @@ pub fn data_dir() -> &'static Path {
 fn resolve_data_dir() -> PathBuf {
     // settings.json、runtime 发现、session、history、导入字体共用同一目录;
     // 零依赖 settings crate 持有环境/OS 解析,app 侧只缓存(01 篇缝合点 1)。
-    slterm_settings::settings_dir()
+    #[cfg(not(test))]
+    let dir = slterm_settings::settings_dir();
+    // 测试构建默认隔离(B1):lib_tests 绝不写真实 `%APPDATA%\slterm`。
+    // 进程内共享同一临时根,`data_dir()` 首用时清残留(pid 复用)。
+    #[cfg(test)]
+    let dir = std::env::temp_dir().join(format!("slterm-test-data-{}", std::process::id()));
+    dir
 }
 
 #[cfg(test)]
@@ -55,32 +57,28 @@ mod dirs_tests {
         );
     }
 
+    /// B1:测试构建的数据目录必须落在临时根,绝不触碰真实用户目录。
     #[test]
-    fn data_dir_is_absolute_and_named() {
+    fn data_dir_is_absolute_and_isolated_in_test_builds() {
         let dir = resolve_data_dir();
         assert!(dir.is_absolute(), "数据目录必须是绝对路径:{dir:?}");
-        // 覆盖环境变量下叶子名任意,只在默认路径上校验命名。
-        if !has_override() {
-            let leaf = dir
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or_default();
-            assert!(
-                leaf.eq_ignore_ascii_case("slterm"),
-                "默认数据目录应以 slterm 结尾,实际 {leaf:?}"
+        assert!(
+            dir.starts_with(std::env::temp_dir()),
+            "测试构建必须隔离到临时目录:{dir:?}"
+        );
+        if let Some(appdata) = std::env::var_os("APPDATA") {
+            assert_ne!(
+                dir,
+                PathBuf::from(appdata).join("slterm"),
+                "测试构建不得解析到真实 %APPDATA%\\slterm"
             );
         }
     }
 
-    /// Windows 落点:`%APPDATA%\slterm`(D2 裁决值)。
+    /// 生产路径权威仍在 settings crate:测试构建下 `settings_dir()` 的
+    /// `%APPDATA%\slterm` 布局由该 crate 的用例负责验证。
     #[test]
-    fn windows_path_uses_slterm_layout() {
-        if has_override() {
-            return;
-        }
-        let Some(appdata) = std::env::var_os("APPDATA") else {
-            return;
-        };
-        assert_eq!(resolve_data_dir(), PathBuf::from(appdata).join("slterm"));
+    fn test_builds_never_use_the_production_settings_directory() {
+        assert_ne!(resolve_data_dir(), slterm_settings::settings_dir());
     }
 }

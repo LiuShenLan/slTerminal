@@ -191,10 +191,11 @@ impl SettingsTarget {
     }
 
     fn reset(&self) -> io::Result<Option<PathBuf>> {
-        match self {
+        // B3:重置与保存共用 SAVE_LOCK,消除「重置后并发保存丢失更新」窗口。
+        crate::settings_store::with_save_lock(|| match self {
             Self::Default => slterm_settings::restore_default_settings(),
             Self::Path(path) => slterm_settings::restore_default_settings_at(path),
-        }
+        })
     }
 
     /// 观察当前设置文件字节快照(主题应用乐观并发基准)。

@@ -5,6 +5,9 @@
 //! 日志(单日志栈,不重复初始化;审计不因任何 subscriber 装配而丢事件);
 //! 测试经作用域 subscriber 捕获断言。
 //!
+//! B67:未来若装配全局 subscriber,必须移除 `log-always` 或让 subscriber
+//! 过滤 audit target——否则同一事件双落点(日志 + subscriber)。
+//!
 //! SEC-17:写设置文件的路径必须经 [`write_settings`](app 设置)与
 //! [`write_user_settings`](user 层 `~/.claude/settings.json`)包装。审计记录
 //! operation/path/source/result,不记内容值(防凭据进日志);包装是唯一

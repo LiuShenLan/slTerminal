@@ -83,7 +83,14 @@ fn inspect_with(
                 result.enabled = installed;
                 if installed && let Some(helper) = helper.as_deref() {
                     match current_at(agent, &path, helper) {
-                        Ok(current) => result.needs_repair = !current,
+                        Ok(current) => {
+                            result.needs_repair = !current;
+                            // SEC-13(B68):claude 的结构比对不一致同样落
+                            // 期望/实测哈希指纹,取证面与其他载体对齐。
+                            if result.needs_repair && agent == AgentHook::Claude {
+                                audit_claude_hash_mismatch(&path, helper);
+                            }
+                        }
                         Err(error) => result.error = Some(error.to_string()),
                     }
                 }
@@ -93,6 +100,29 @@ fn inspect_with(
         result.config_path = Some(path);
     }
     result
+}
+
+/// SEC-13(B68):claude hook 文档与期望形态不一致时补哈希审计。期望形态 =
+/// 把当前文档修复到完整安装后的序列化字节;实测 = 当前文件字节。只落
+/// SHA-256 指纹,不落内容。
+fn audit_claude_hash_mismatch(path: &Path, helper: &str) {
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return;
+    };
+    let Ok(mut value) = serde_json::from_str::<Value>(&raw) else {
+        return;
+    };
+    if install_into(&mut value, helper) != Some(true) {
+        return;
+    }
+    let Ok(expected) = serde_json::to_string_pretty(&value) else {
+        return;
+    };
+    crate::audit::hook_hash_mismatch(
+        path,
+        &super::managed_files::fingerprint(expected.as_bytes()),
+        &super::managed_files::fingerprint(raw.as_bytes()),
+    );
 }
 
 fn read_optional(path: &Path) -> io::Result<Option<String>> {
@@ -432,6 +462,34 @@ mod settings_tests {
         std::fs::write(&path, "user extension").unwrap();
         assert!(installed_at(AgentHook::Pi, &path, "").is_err());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "user extension");
+    }
+
+    /// B68 防复发:claude「已装但需修复」必须落 SEC-13 哈希事件。
+    #[test]
+    fn claude_repair_needed_emits_hash_mismatch_audit_event() {
+        let capture = crate::audit::test_support::capture_events();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let helper = "C:/tools/slterm-hook.exe";
+        std::fs::write(
+            &path,
+            r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"C:/tools/slterm-hook.exe","args":["claude"]}]}]}}"#,
+        )
+        .unwrap();
+        let state = inspect_claude_at(dir.path(), Some(helper));
+        assert!(state.installed, "部分安装仍是已安装");
+        assert!(state.needs_repair, "缺事件即需修复");
+        let text = capture.text();
+        assert!(
+            text.contains("hook_hash_mismatch"),
+            "缺少 SEC-13 事件: {text}"
+        );
+        assert!(text.contains("expected="), "{text}");
+        assert!(text.contains("actual="), "{text}");
+        assert!(
+            !text.contains("C:/tools/slterm-hook.exe"),
+            "事件只落指纹,不落内容: {text}"
+        );
     }
 
     /// `setup-ai --remove` 的内核:移除自有 hook、保留用户键与外来 hooks。

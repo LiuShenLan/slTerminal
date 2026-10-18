@@ -159,6 +159,8 @@ M4.5→M5.4：`split_bounds` 键下标泄漏改 TabId；M5.3b→M6.2：配置钮
 
 M12/R1（2026-10-18）：B69 `setup-ai --remove` 卸载清理、B72 新鲜度改内容摘要构建戳、B74 删除遗留 `slterminal-projects.json`、B77 禁名门禁 full 全树模式与历史语境豁免、B78 锁文件随释放删除 + `[UninstallDelete]` 兜底、B79 显式 `DefaultGroupName`、C24 应用图标资产（PNG/ICO，托盘与通知同源）。
 
+M12/R2（2026-10-18）：B1 测试构建数据目录默认隔离（临时根）、B3 恢复默认共用保存锁、B26 describe↔CLI 命令清单一致性用例、B60 复核（M10.11 已落借出白名单扫描）、B61 真实凭据管理器用例环境门控、B62 非法主题备份改硬失败、B63 敏感键 denylist 漂移守卫、B67 subscriber 双落点约束注释、B68 claude hook 修复路径补 SEC-13 哈希事件。
+
 ## E. 验收纪律补记
 
 - 自 M8.3 起验收同时跑两形态 clippy（`--workspace` 与 `-p slterm --features gpui-test-support`）——此前无 feature 形态遗漏了 M6 起的三处测试端红灯。

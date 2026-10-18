@@ -77,6 +77,8 @@ log = "0.4"
 # 安全审计通道(10 篇 M10.12):SEC-12/13/17 唯一形态 = tracing target
 # "audit";`log-always` 让事件无条件桥接进既有 log 栈(单日志栈,不重复
 # 初始化)——审计取证不因任何 tracing subscriber 装配而丢事件。
+# B67:若未来装配全局 subscriber,必须同时移除 `log-always` 或让 subscriber
+# 过滤 audit target,否则同一事件双落点(日志 + subscriber)。
 tracing = { version = "0.1", features = ["log-always"] }
 # ai_hook 信封/载荷解析(helper 不重编码,JSON 工作全在宿主侧)。
 serde_json = "1"

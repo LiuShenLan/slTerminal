@@ -162,8 +162,17 @@ mod secrets_tests {
         }
     }
 
+    /// B61:真凭据管理器用例默认关闭——无凭据库的服务账户/CI 会失败;
+    /// 显式设 `SLTERM_TEST_CREDENTIAL_STORE=1` 才运行(豁免登记见
+    /// `.claude/test-exemptions.md`)。
     #[test]
     fn credential_three_operations_round_trip_through_windows_manager() {
+        if std::env::var_os("SLTERM_TEST_CREDENTIAL_STORE").is_none_or(|value| value.is_empty()) {
+            eprintln!(
+                "skipping credential manager round-trip (set SLTERM_TEST_CREDENTIAL_STORE=1)"
+            );
+            return;
+        }
         let target = unique_test_target("three-operations");
         let _cleanup = CredentialCleanup(target.clone());
         let backend = WindowsCredentialStore;

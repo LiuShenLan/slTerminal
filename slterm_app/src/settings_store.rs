@@ -136,6 +136,15 @@ pub(crate) fn save_settings_checked(
     save_settings_checked_at(&settings_path(), expected, updates)
 }
 
+/// 与保存通道共用同一把进程锁(B3):恢复默认等非保存写路径必须包在这里,
+/// 避免与并发保存的「读-合并-写」交错导致丢失更新。
+pub(crate) fn with_save_lock<T>(operation: impl FnOnce() -> T) -> T {
+    let _guard = SAVE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    operation()
+}
+
 /// 持锁后的读-合并-写主体。
 fn save_merged_locked(path: &Path, updates: &[(&str, Value)]) -> io::Result<()> {
     let existing = read_existing(path)?;
@@ -279,6 +288,30 @@ mod settings_store_tests {
     }
 
     // ---- 写通道:校验/浅合并/原子写/.bak ----
+
+    /// B3 防复发:外部写路径(恢复默认)与保存通道共用同一把锁,不得并发进入。
+    #[test]
+    fn external_writers_share_the_save_lock() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        static ACTIVE: AtomicUsize = AtomicUsize::new(0);
+        static PEAK: AtomicUsize = AtomicUsize::new(0);
+        let barrier = std::sync::Barrier::new(2);
+        std::thread::scope(|scope| {
+            for _ in 0..2 {
+                scope.spawn(|| {
+                    barrier.wait();
+                    with_save_lock(|| {
+                        let now = ACTIVE.fetch_add(1, Ordering::SeqCst) + 1;
+                        PEAK.fetch_max(now, Ordering::SeqCst);
+                        std::thread::sleep(std::time::Duration::from_millis(20));
+                        ACTIVE.fetch_sub(1, Ordering::SeqCst);
+                    });
+                });
+            }
+        });
+        assert_eq!(PEAK.load(Ordering::SeqCst), 1, "保存锁必须串行化外部写路径");
+    }
 
     #[test]
     fn validation_rejects_unknown_keys_without_touching_disk() {
