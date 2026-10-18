@@ -277,9 +277,14 @@ impl TerminalView {
                 self.commit_line(cx);
                 return;
             }
-            "tab" | "escape" | "up" | "down" | "left" | "right" | "home" | "end" | "pageup"
-            | "pagedown" | "delete" | "insert" | "f1" | "f2" | "f3" | "f4" | "f5" | "f6" | "f7"
-            | "f8" | "f9" | "f10" | "f11" | "f12" => return,
+            // 光标移动/历史召回/中线删除后无法证明镜像等于屏幕真值;
+            // 记录本轮不可信,Enter 时宁缺毋滥(上游 screen_line 纪律)。
+            "left" | "right" | "home" | "end" | "up" | "down" | "delete" => {
+                self.suggest_line_trusted = false;
+                return;
+            }
+            "tab" | "escape" | "pageup" | "pagedown" | "insert" | "f1" | "f2" | "f3" | "f4"
+            | "f5" | "f6" | "f7" | "f8" | "f9" | "f10" | "f11" | "f12" => return,
             _ => {
                 let text = keystroke
                     .key_char
@@ -327,10 +332,15 @@ impl TerminalView {
         let shell_owned = !self
             .term_mode()
             .intersects(TermMode::ALT_SCREEN | TermMode::VI);
-        if shell_owned && !line.is_empty() && !line.chars().any(char::is_control) {
+        if shell_owned
+            && self.suggest_line_trusted
+            && !line.is_empty()
+            && !line.chars().any(char::is_control)
+        {
             completion::record_command(&crate::history::HistoryScope::Local, &line, &self.cwd);
             cx.emit(super::TerminalViewEvent::CommandSubmitted(line));
         }
+        self.suggest_line_trusted = true;
         self.suggest.clear_completion_hints();
         self.suggest.suppressed_line = None;
     }

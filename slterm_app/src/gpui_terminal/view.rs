@@ -154,6 +154,9 @@ pub struct TerminalView {
     /// 按键镜像的当前输入行与光标(终端行编辑器不暴露 buffer)。
     pub(crate) suggest_line: String,
     pub(crate) suggest_cursor: usize,
+    /// 行镜像是否仍与屏幕输入一致。光标移动/历史召回后无法证明,Enter
+    /// 宁可不记也不记脏(对齐上游 screen_line 优先纪律)。
+    pub(crate) suggest_line_trusted: bool,
     /// 壳侧按 pane 持有的来源缓存句柄(不复制缓存本体)。
     pub(crate) completion_session: Option<Rc<crate::completion::Session>>,
     /// 在飞的候选计算;丢弃即取消。

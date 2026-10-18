@@ -155,6 +155,7 @@ impl TerminalView {
             suggest: crate::suggest::SuggestState::default(),
             suggest_line: String::new(),
             suggest_cursor: 0,
+            suggest_line_trusted: true,
             completion_session: None,
             suggestion_task: None,
             completion_style,
