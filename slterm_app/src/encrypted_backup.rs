@@ -366,6 +366,9 @@ fn identity(bytes: Vec<u8>) -> Result<Vec<u8>, String> {
 fn filter_sensitive_document(bytes: Vec<u8>) -> Result<Vec<u8>, String> {
     let value: Value = serde_json::from_slice(&bytes)
         .map_err(|error| format!("备份文档不是合法 JSON: {error}"))?;
+    if !value.is_object() {
+        return Err("备份文档根必须是 JSON 对象".to_owned());
+    }
     let filtered = strip_sensitive_keys(value);
     serde_json::to_vec(&filtered).map_err(|error| format!("序列化备份文档失败: {error}"))
 }
@@ -378,8 +381,8 @@ fn filter_settings(bytes: Vec<u8>) -> Result<Vec<u8>, String> {
 /// 导入侧复验:文档可解析且不含任何敏感键(与导出清洗同一张表)。
 fn document_is_sanitized(bytes: &[u8]) -> bool {
     match serde_json::from_slice::<Value>(bytes) {
-        Ok(value) => strip_sensitive_keys(value.clone()) == value,
-        Err(_) => false,
+        Ok(value) if value.is_object() => strip_sensitive_keys(value.clone()) == value,
+        Ok(_) | Err(_) => false,
     }
 }
 
@@ -949,6 +952,9 @@ mod encrypted_backup_tests {
         let directory = tempfile::tempdir().unwrap();
         assert!(collect_from(directory.path(), BackupSelection::from_categories([])).is_err());
         fs::write(directory.path().join("settings.json"), "{ not json").unwrap();
+        assert!(collect_from(directory.path(), BackupSelection::default()).is_err());
+        // 可解析但根非对象:设置文档合同是对象,四态读取会判损坏,备份拒收。
+        fs::write(directory.path().join("settings.json"), "[1, 2, 3]").unwrap();
         assert!(collect_from(directory.path(), BackupSelection::default()).is_err());
     }
 
