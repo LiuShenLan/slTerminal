@@ -135,6 +135,8 @@ fn runtime_agent(host: &AgentPaneHost) -> Option<RuntimeAgent> {
         agent_id: None,
         generation: None,
         name: None,
+        // managed agent 的 provenance 由 hub 投影回填;投影方不虚构。
+        worktree: None,
         kind: kind.slug().to_owned(),
         display_name: kind.display_name().to_owned(),
         session_id: host

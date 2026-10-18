@@ -53,17 +53,17 @@ pub(crate) fn try_write_stderr(args: fmt::Arguments<'_>) {
 /// 壳跨线程唤醒事件(上游同名枚举裁剪:Tray*/Notification*/SshPrompt/
 /// UpdateAvailable 臂不迁)。
 ///
-/// M3 变体收窄为三个,均无生产者——泵与消费归 M3.2+/各篇:
-/// - `RuntimeControl` 是 04 篇 M7 `RuntimeCallback` 的预埋缝(payload
-///   `Arc<RuntimeDispatch>` 的类型面归 04 篇锚定,届时补挂;M3 先立变体不占类型);
+/// M3 变体收窄为三个,生产者/消费归各篇:
+/// - `RuntimeControl` 载荷是 04 篇 M7.3 锚定的 `Arc<RuntimeDispatch>`;
+///   生产者 = M7.5 `RuntimeServer::spawn_callback`,UI owner 执行后 respond;
 /// - `OpenDirectories` 的消费(on_open_urls/右键「在此处打开」)归 09 篇,
 ///   M3 登记不接线。
-#[allow(dead_code)] // M3 三变体均无生产者/消费者,纯预埋缝(逐变体注释为证)。
+#[allow(dead_code)] // M7.5 接线前仅 `MuxAttach` 无生产者;逐变体注释为证。
 pub(crate) enum SltermShellEvent {
-    /// 预埋缝(13 篇缝合点 9):生产者归 04 篇 M7 RuntimeServer::spawn_callback。
+    /// 预埋缝(13 篇缝合点 9):生产者归 04 篇 M7.5 RuntimeServer::spawn_callback。
     MuxAttach,
-    /// 预埋缝:payload `Arc<RuntimeDispatch>` 的类型面归 04 篇锚定,届时补挂。
-    RuntimeControl,
+    /// 写命令派发:UI owner 执行后经 `RuntimeDispatch::respond` 回执。
+    RuntimeControl(std::sync::Arc<crate::runtime_api::RuntimeDispatch>),
     /// 消费(右键「在此处打开」/on_open_urls 落盘)归 09 篇;M3 只登记发送端。
     OpenDirectories(Vec<String>),
 }

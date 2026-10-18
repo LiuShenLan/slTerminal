@@ -1,8 +1,10 @@
 //! Runtime 控制面传输主链:accept 配额、首行分流、信封校验、读写行。
 //!
-//! M7.2 方法专链:`runtime.describe` / `events.subscribe` / `pane.wait` 在
-//! transport 线程直接对 hub 读写;写方法派发与其余方法族归 M7.3,未知方法
-//! 一律显式 `method_not_found`,不伪造成功。
+//! 方法路由单点:`command::parse_method` 是全表(与 capabilities/Schema 方法
+//! 枚举三向一致)。读方法(`describe`/`subscribe`/`wait`/`agents.*`/`agent.get`/
+//! `agent.wait`)在 transport 线程直接对 hub 读写;写方法与编排经
+//! `dispatch_runtime_command` 进 UI owner。未知方法显式 `method_not_found`,
+//! 不伪造成功。
 
 use std::io::{BufRead, BufReader, Error as IoError, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -13,11 +15,15 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use super::command::{SubscribeParams, WaitParams, parse_params, wait_matches};
+use super::agent_api;
+use super::command::{ParsedMethod, SubscribeParams, WaitParams, parse_method, wait_matches};
+use super::orchestrate;
+use super::run_wait::wait_run_phased;
 use super::{
-    ApiError, ApiEvent, ApiRequest, ApiResponse, CAPABILITIES, EventSink, FEATURES, IO_TIMEOUT,
-    MAX_CLIENTS, MAX_REQUEST_BYTES, MAX_WAIT, PROTOCOL_NAME, PROTOCOL_VERSION, RuntimeCallback,
-    RuntimeHub, SCHEMA_PATH, SUPPORTED_VERSIONS,
+    ApiError, ApiEvent, ApiRequest, ApiResponse, CAPABILITIES, COMMAND_TIMEOUT, EventSink,
+    FEATURES, IO_TIMEOUT, MAX_CLIENTS, MAX_REQUEST_BYTES, PROTOCOL_NAME, PROTOCOL_VERSION,
+    RuntimeCommand, RuntimeDispatch, RuntimeHub, SCHEMA_PATH, SUPPORTED_VERSIONS, emit_attach,
+    emit_control,
 };
 
 /// accept 循环:按 `MAX_CLIENTS` 计数,每连接一线程,配额随连接线程 Drop 归还。
@@ -137,24 +143,44 @@ pub(super) fn handle_connection(
         return write_response(&mut stream, &ApiResponse::failure(request.id, error));
     }
 
-    match request.method.as_str() {
-        "runtime.describe" => write_response(
+    // 唯一路由表:解析成功的方法一定在 capabilities 面内;未知方法显式
+    // `method_not_found`,不伪造成功。
+    let parsed = match parse_method(&request.method, &request.params) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            return write_response(&mut stream, &ApiResponse::failure(request.id, error));
+        }
+    };
+    match parsed {
+        ParsedMethod::Describe => write_response(
             &mut stream,
             &ApiResponse::success(request.id, runtime_description()),
         ),
-        "events.subscribe" => subscribe_connection(&mut stream, request, hub),
-        "pane.wait" => wait_connection(&mut stream, request, hub),
-        // 写方法派发与其余方法族归 M7.3;本步未知方法显式报错。
-        _ => write_response(
-            &mut stream,
-            &ApiResponse::failure(
-                request.id,
-                ApiError::new(
-                    "method_not_found",
-                    format!("unknown runtime method {:?}", request.method),
-                ),
-            ),
-        ),
+        ParsedMethod::Snapshot => {
+            dispatch_connection(&mut stream, request.id, RuntimeCommand::Snapshot, sink, hub)
+        }
+        ParsedMethod::Subscribe(params) => {
+            subscribe_connection(&mut stream, request.id, params, hub)
+        }
+        ParsedMethod::Wait(params) => wait_connection(&mut stream, request.id, params, hub),
+        ParsedMethod::AgentsList(params) => {
+            agent_api::agents_connection(&mut stream, request.id, params, hub)
+        }
+        ParsedMethod::AgentGet(params) => {
+            agent_api::agent_get_connection(&mut stream, request.id, params, hub)
+        }
+        ParsedMethod::AgentDelegate(params) => {
+            agent_api::agent_delegate_connection(&mut stream, request.id, params, sink, hub)
+        }
+        ParsedMethod::AgentWait(params) => {
+            agent_api::agent_wait_connection(&mut stream, request.id, params, hub)
+        }
+        ParsedMethod::Orchestrate(params) => {
+            orchestrate::orchestrate_connection(&mut stream, request.id, *params, sink, hub)
+        }
+        ParsedMethod::Command(command) => {
+            dispatch_connection(&mut stream, request.id, *command, sink, hub)
+        }
     }
 }
 
@@ -172,7 +198,7 @@ pub(super) fn handle_legacy(
     }
     match verb {
         "ATTACH" => {
-            sink(RuntimeCallback::Attach);
+            emit_attach(sink);
             stream.write_all(b"OK\n")
         }
         "PING" => stream.write_all(b"OK\n"),
@@ -218,18 +244,15 @@ pub(super) fn runtime_description() -> Value {
 /// `since_revision` 断点续传:current 不比基线新则不下发首行。
 pub(super) fn subscribe_connection(
     stream: &mut TcpStream,
-    request: ApiRequest,
+    request_id: String,
+    params: SubscribeParams,
     hub: &RuntimeHub,
 ) -> Result<(), IoError> {
-    let params: SubscribeParams = match parse_params(&request.params) {
-        Ok(params) => params,
-        Err(error) => return write_response(stream, &ApiResponse::failure(request.id, error)),
-    };
     let (subscription_id, current, receiver) = hub.subscribe();
     write_response(
         stream,
         &ApiResponse::success(
-            request.id,
+            request_id,
             json!({
                 "subscription_id": subscription_id,
                 "current_revision": current.as_ref().map_or(0, |snapshot| snapshot.revision)
@@ -256,23 +279,11 @@ pub(super) fn subscribe_connection(
 /// 「一直没动」与「跃迁了但没到目标态」。
 pub(super) fn wait_connection(
     stream: &mut TcpStream,
-    request: ApiRequest,
+    request_id: String,
+    params: WaitParams,
     hub: &RuntimeHub,
 ) -> Result<(), IoError> {
-    let params: WaitParams = match parse_params(&request.params) {
-        Ok(params) => params,
-        Err(error) => return write_response(stream, &ApiResponse::failure(request.id, error)),
-    };
     let timeout = Duration::from_millis(params.timeout_ms);
-    if timeout.is_zero() || timeout > MAX_WAIT {
-        return write_response(
-            stream,
-            &ApiResponse::failure(
-                request.id,
-                ApiError::invalid_params("timeout_ms must be between 1 and 86400000"),
-            ),
-        );
-    }
 
     // 先订阅再读 current:否则「读到 current 之后、订阅建立之前」的跃迁
     // 会丢事件,等待只能走满超时。
@@ -284,13 +295,13 @@ pub(super) fn wait_connection(
             Ok((window_id, pane)) => {
                 target_window = Some(window_id);
                 if let Some(error) = hub.pane_lifecycle_error(target_window, params.pane_id) {
-                    return write_response(stream, &ApiResponse::failure(request.id, error));
+                    return write_response(stream, &ApiResponse::failure(request_id, error));
                 }
                 if wait_matches(pane, params.state, params.after_seq) {
                     return write_response(
                         stream,
                         &ApiResponse::success(
-                            request.id,
+                            request_id,
                             serde_json::to_value(snapshot).map_err(IoError::other)?,
                         ),
                     );
@@ -299,15 +310,15 @@ pub(super) fn wait_connection(
             }
             Err(error) if error.code == "target_not_found" => {
                 if let Some(lifecycle) = hub.pane_lifecycle_error(target_window, params.pane_id) {
-                    return write_response(stream, &ApiResponse::failure(request.id, lifecycle));
+                    return write_response(stream, &ApiResponse::failure(request_id, lifecycle));
                 }
             }
             Err(error) => {
-                return write_response(stream, &ApiResponse::failure(request.id, error));
+                return write_response(stream, &ApiResponse::failure(request_id, error));
             }
         }
     } else if let Some(error) = hub.pane_lifecycle_error(target_window, params.pane_id) {
-        return write_response(stream, &ApiResponse::failure(request.id, error));
+        return write_response(stream, &ApiResponse::failure(request_id, error));
     }
 
     let deadline = Instant::now() + timeout;
@@ -322,7 +333,7 @@ pub(super) fn wait_connection(
             | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         };
         if let Some(error) = hub.pane_lifecycle_error(target_window, params.pane_id) {
-            return write_response(stream, &ApiResponse::failure(request.id, error));
+            return write_response(stream, &ApiResponse::failure(request_id, error));
         }
         match snapshot.pane_target(target_window, params.pane_id) {
             Ok((window_id, pane)) => {
@@ -331,7 +342,7 @@ pub(super) fn wait_connection(
                     return write_response(
                         stream,
                         &ApiResponse::success(
-                            request.id,
+                            request_id,
                             serde_json::to_value(snapshot).map_err(IoError::other)?,
                         ),
                     );
@@ -339,13 +350,13 @@ pub(super) fn wait_connection(
                 observed = Some((pane.task_state, pane.state_change_seq));
             }
             Err(error) => {
-                return write_response(stream, &ApiResponse::failure(request.id, error));
+                return write_response(stream, &ApiResponse::failure(request_id, error));
             }
         }
     }
 
     if let Some(error) = hub.pane_lifecycle_error(target_window, params.pane_id) {
-        return write_response(stream, &ApiResponse::failure(request.id, error));
+        return write_response(stream, &ApiResponse::failure(request_id, error));
     }
 
     let detail = match observed {
@@ -357,7 +368,7 @@ pub(super) fn wait_connection(
     write_response(
         stream,
         &ApiResponse::failure(
-            request.id,
+            request_id,
             ApiError::new(
                 "timeout",
                 format!(
@@ -375,7 +386,232 @@ pub(super) fn wait_connection(
     )
 }
 
-fn write_response(stream: &mut TcpStream, response: &ApiResponse) -> Result<(), IoError> {
+/// 写方法派发:参数已在 transport 侧校验完;关键方法审计日志只记 id/目标/
+/// 字节数,不记 prompt/paste 正文。
+pub(super) fn dispatch_connection(
+    stream: &mut TcpStream,
+    request_id: String,
+    command: RuntimeCommand,
+    sink: &EventSink,
+    hub: &RuntimeHub,
+) -> Result<(), IoError> {
+    audit_command(&request_id, &command);
+    let response = match dispatch_runtime_command(command, sink, hub) {
+        Ok(result) => ApiResponse::success(request_id, result),
+        Err(error) => ApiResponse::failure(request_id, error),
+    };
+    write_response(stream, &response)
+}
+
+fn audit_command(request_id: &str, command: &RuntimeCommand) {
+    match command {
+        RuntimeCommand::SendKey {
+            window_id,
+            pane_id,
+            key,
+            modifiers,
+            repeat,
+        } => {
+            log::info!(
+                "runtime pane.send_key request_id={request_id} window_id={window_id:?} pane_id={pane_id} key={} shift={} alt={} control={} repeat={repeat}",
+                key.as_str(),
+                modifiers.shift,
+                modifiers.alt,
+                modifiers.control
+            );
+        }
+        RuntimeCommand::AgentStart {
+            window_id,
+            pane_id,
+            name,
+            kind,
+            session_id,
+            worktree,
+            ..
+        } => {
+            log::info!(
+                "runtime agent.start request_id={request_id} window_id={window_id:?} pane_id={pane_id:?} name={name} kind={} resume={} worktree={}",
+                kind.slug(),
+                session_id.is_some(),
+                worktree.is_some()
+            );
+        }
+        RuntimeCommand::AgentFork { name, kind, .. } => {
+            log::info!(
+                "runtime agent.fork request_id={request_id} name={name} kind={}",
+                kind.slug()
+            );
+        }
+        RuntimeCommand::AgentPrompt {
+            agent,
+            generation,
+            text,
+            submit,
+        } => {
+            log::info!(
+                "runtime agent.prompt request_id={request_id} agent={agent} generation={generation:?} submit={submit} prompt_bytes={}",
+                text.len()
+            );
+        }
+        RuntimeCommand::AgentPaste {
+            agent,
+            generation,
+            text,
+            submit,
+        } => {
+            log::info!(
+                "runtime agent.paste request_id={request_id} agent={agent} generation={generation:?} submit={submit} paste_bytes={}",
+                text.len()
+            );
+        }
+        RuntimeCommand::AgentRead {
+            agent,
+            generation,
+            lines,
+        } => {
+            log::info!(
+                "runtime agent.read request_id={request_id} agent={agent} generation={generation:?} lines={lines}"
+            );
+        }
+        RuntimeCommand::Exec {
+            window_id,
+            pane_id,
+            argv,
+            timeout_ms,
+            max_output_bytes,
+        } => {
+            log::info!(
+                "runtime pane.exec request_id={request_id} window_id={window_id:?} pane_id={pane_id} argv_len={} timeout_ms={timeout_ms} max_output_bytes={max_output_bytes}",
+                argv.len()
+            );
+        }
+        _ => {}
+    }
+}
+
+/// 执行一个已经解析的 Runtime 原语。普通请求与编排步骤共享这里,worktree
+/// 事务、run 等待与 UI 超时在两条路径上语义一致:
+///
+/// 1. `prepare_dispatch_command` 在 transport 线程预建 worktree(agent.fork);
+/// 2. Exec 的派发预算 = 命令超时 + 2s,其余 = `COMMAND_TIMEOUT`;
+/// 3. UI 不可用/无回执 = `runtime_unavailable`;超时 = `runtime_timeout`,
+///    已建 worktree 保留(checkout 可能已被晚到的 PTY 使用);
+/// 4. `Run { wait: true }` 在成功后分段限时等待 OSC 133 真实结果。
+pub(super) fn dispatch_runtime_command(
+    command: RuntimeCommand,
+    sink: &EventSink,
+    hub: &RuntimeHub,
+) -> Result<Value, ApiError> {
+    dispatch_runtime_command_impl(command, sink, hub, None)
+}
+
+#[cfg(test)]
+pub(super) fn dispatch_runtime_command_with_timeout(
+    command: RuntimeCommand,
+    sink: &EventSink,
+    hub: &RuntimeHub,
+    timeout: Duration,
+) -> Result<Value, ApiError> {
+    dispatch_runtime_command_impl(command, sink, hub, Some(timeout))
+}
+
+fn dispatch_runtime_command_impl(
+    command: RuntimeCommand,
+    sink: &EventSink,
+    hub: &RuntimeHub,
+    timeout_override: Option<Duration>,
+) -> Result<Value, ApiError> {
+    let (command, mut worktree_transaction) = agent_api::prepare_dispatch_command(command, hub)?;
+    let run_wait = match &command {
+        RuntimeCommand::Run {
+            wait: true,
+            timeout_ms,
+            ..
+        } => Some(Duration::from_millis(*timeout_ms)),
+        _ => None,
+    };
+    let dispatch_timeout = timeout_override.unwrap_or_else(|| match &command {
+        RuntimeCommand::Exec { timeout_ms, .. } => {
+            Duration::from_millis(*timeout_ms).saturating_add(Duration::from_secs(2))
+        }
+        _ => COMMAND_TIMEOUT,
+    });
+    let (dispatch, receiver) = RuntimeDispatch::new(command);
+    if !emit_control(sink, dispatch) {
+        return Err(agent_api::rollback_prepared_worktree(
+            ApiError::new(
+                "runtime_unavailable",
+                "the shell event loop is not available",
+            ),
+            worktree_transaction.take(),
+        ));
+    }
+    match receiver.recv_timeout(dispatch_timeout) {
+        Ok(Ok(mut result)) => {
+            if let Some(transaction) = worktree_transaction.take() {
+                let provenance = transaction.commit();
+                agent_api::attach_worktree_result(&mut result, &provenance);
+            }
+            if let Some(timeout) = run_wait {
+                let action = result.get("action").unwrap_or(&result);
+                let target = (
+                    action.get("window_id").and_then(Value::as_u64),
+                    action.get("pane_id").and_then(Value::as_u64),
+                    action.get("run_id").and_then(Value::as_u64),
+                );
+                match target {
+                    (Some(window_id), Some(pane_id), Some(run_id)) => {
+                        let run = wait_run_phased(hub, sink, window_id, pane_id, run_id, timeout)?;
+                        Ok(json!({ "run": run, "snapshot": hub.current() }))
+                    }
+                    _ => Err(ApiError::new(
+                        "invalid_runtime_response",
+                        "pane.run did not return its window, pane, and run identity",
+                    )),
+                }
+            } else {
+                Ok(result)
+            }
+        }
+        Ok(Err(error)) => Err(agent_api::rollback_prepared_worktree(
+            error,
+            worktree_transaction.take(),
+        )),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            // dispatch 被壳侧丢弃 = 命令没执行过;与「已受理但未知」不同,
+            // 这里可以安全回滚 worktree。
+            Err(agent_api::rollback_prepared_worktree(
+                ApiError::new(
+                    "runtime_unavailable",
+                    "the shell event queue dropped the runtime command",
+                ),
+                worktree_transaction.take(),
+            ))
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            let mut error = ApiError::new(
+                "runtime_timeout",
+                "runtime event thread did not answer in time",
+            );
+            if let Some(transaction) = worktree_transaction.take() {
+                // UI 派发可能在响应通道超时之后才到达。晚到的 PTY 可能已经在
+                // 使用刚建出的 cwd,绝不能在未知态回收 checkout。
+                let provenance = transaction.commit();
+                error.details = Some(json!({
+                    "worktree": provenance,
+                    "cleanup_deferred": true,
+                    "reason": "the UI outcome is unknown; slTerminal did not remove the worktree"
+                }));
+            }
+            Err(error)
+        }
+    }
+}
+
+pub(super) fn write_response(
+    stream: &mut TcpStream,
+    response: &ApiResponse,
+) -> Result<(), IoError> {
     write_json_line(stream, response)
 }
 
@@ -391,7 +627,7 @@ pub(super) fn write_json_line<T: Serialize>(
 
 #[cfg(test)]
 mod transport_tests {
-    use super::super::RuntimeSnapshot;
+    use super::super::{RuntimeCallback, RuntimeSnapshot};
     use super::*;
     use std::net::{Shutdown, SocketAddr};
     use std::sync::Arc;
@@ -409,6 +645,74 @@ mod transport_tests {
         (sink, receiver)
     }
 
+    /// 测试 UI owner:同步执行闭包并 respond;闭包可断言命令形状。
+    fn sink_responding(
+        respond: impl Fn(&RuntimeCommand) -> Result<Value, ApiError> + Send + Sync + 'static,
+    ) -> EventSink {
+        Arc::new(move |callback| {
+            if let RuntimeCallback::Control(dispatch) = callback {
+                let response = respond(&dispatch.command);
+                dispatch.respond(response);
+            }
+        })
+    }
+
+    /// 测试 UI owner:受理命令但不回执(模拟事件线程卡死/未知态)。
+    fn sink_holding() -> (EventSink, Arc<std::sync::Mutex<Vec<Arc<RuntimeDispatch>>>>) {
+        let held = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink_held = held.clone();
+        let sink: EventSink = Arc::new(move |callback| {
+            if let RuntimeCallback::Control(dispatch) = callback {
+                sink_held.lock().expect("held dispatches").push(dispatch);
+            }
+        });
+        (sink, held)
+    }
+
+    /// 临时 Git 仓库(worktree 事务夹具)。
+    fn test_git_repository() -> tempfile::TempDir {
+        let directory = tempfile::tempdir().expect("create repository directory");
+        let git = |args: &[&str]| {
+            let mut command = std::process::Command::new("git");
+            command.arg("-C").arg(directory.path()).args(args);
+            crate::platform::process::hidden_command(&mut command)
+                .output()
+                .expect("run git")
+        };
+        assert!(git(&["init", "--initial-branch=main"]).status.success());
+        std::fs::write(directory.path().join("tracked.txt"), "tracked")
+            .expect("write tracked file");
+        assert!(git(&["add", "tracked.txt"]).status.success());
+        assert!(
+            git(&[
+                "-c",
+                "user.name=slTerminal Test",
+                "-c",
+                "user.email=slterm@example.invalid",
+                "commit",
+                "-m",
+                "initial"
+            ])
+            .status
+            .success()
+        );
+        directory
+    }
+
+    fn branch_exists(repository: &std::path::Path, branch: &str) -> bool {
+        let mut command = std::process::Command::new("git");
+        command.arg("-C").arg(repository).args([
+            "show-ref",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{branch}"),
+        ]);
+        crate::platform::process::hidden_command(&mut command)
+            .status()
+            .expect("query branch")
+            .success()
+    }
+
     fn pane(id: u64, state: super::super::RuntimeTaskState) -> super::super::RuntimePane {
         super::super::RuntimePane {
             id,
@@ -423,6 +727,67 @@ mod transport_tests {
             active_run: None,
             last_run: None,
         }
+    }
+
+    fn detected_agent(kind: &str, session_id: Option<&str>) -> super::super::RuntimeAgent {
+        super::super::RuntimeAgent {
+            agent_id: None,
+            generation: None,
+            name: None,
+            worktree: None,
+            kind: kind.to_owned(),
+            display_name: kind.to_owned(),
+            session_id: session_id.map(str::to_owned),
+            state_source: super::super::RuntimeAgentStateSource::Hook,
+            state_rule: None,
+            hook_seen: true,
+        }
+    }
+
+    fn pane_with_agent(
+        id: u64,
+        agent: super::super::RuntimeAgent,
+        state: super::super::RuntimeTaskState,
+    ) -> super::super::RuntimePane {
+        super::super::RuntimePane {
+            agent: Some(agent),
+            ..pane(id, state)
+        }
+    }
+
+    const TEST_CODEX_SESSION: &str = "b5f6c1c2-1111-2222-3333-444455556666";
+
+    /// 委派夹具:hub + target managed agent,origin pane 3 / target pane 4。
+    fn delegation_fixture() -> (
+        RuntimeHub,
+        super::super::RuntimeManagedAgent,
+        super::super::RuntimeSnapshot,
+    ) {
+        let hub = RuntimeHub::new();
+        let target = hub
+            .register_agent(
+                "worker".to_owned(),
+                crate::ai_agents::AgentKind::Codex,
+                super::super::SINGLE_WINDOW_ID,
+                4,
+                Some(TEST_CODEX_SESSION.to_owned()),
+                None,
+            )
+            .expect("register target");
+        let snapshot = snapshot_with_panes(vec![
+            pane_with_agent(
+                3,
+                detected_agent("claude", Some("claude-session-1")),
+                super::super::RuntimeTaskState::Finished,
+            ),
+            pane_with_agent(
+                4,
+                detected_agent("codex", Some(TEST_CODEX_SESSION)),
+                super::super::RuntimeTaskState::Finished,
+            ),
+        ]);
+        hub.publish(snapshot.clone());
+        (hub, target, snapshot)
     }
 
     fn snapshot_with_panes(panes: Vec<super::super::RuntimePane>) -> super::super::RuntimeSnapshot {
@@ -520,10 +885,7 @@ mod transport_tests {
     fn valid_request_echoes_identity_in_method_not_found() {
         let (sink, _events) = sink_channel();
         let address = spawn_single_connection_server(TEST_TOKEN, sink, RuntimeHub::new());
-        let response = exchange_json(
-            address,
-            &request("4242-7", "pane.procs", json!({ "pane_id": 1 })),
-        );
+        let response = exchange_json(address, &request("4242-7", "runtime.unknown", json!({})));
         assert!(!response.ok);
         assert_eq!(response.protocol, PROTOCOL_NAME);
         assert_eq!(response.version, PROTOCOL_VERSION);
@@ -533,7 +895,7 @@ mod transport_tests {
     }
 
     #[test]
-    fn missing_params_field_still_reaches_method_dispatch() {
+    fn missing_params_field_defaults_to_empty_object_for_describe() {
         let (sink, _events) = sink_channel();
         let address = spawn_single_connection_server(TEST_TOKEN, sink, RuntimeHub::new());
         let response = exchange_json(
@@ -543,10 +905,14 @@ mod transport_tests {
                 "version": PROTOCOL_VERSION,
                 "id": "4242-8",
                 "token": TEST_TOKEN,
-                "method": "pane.procs",
+                "method": "runtime.describe",
             }),
         );
-        assert_eq!(response.error.expect("error").code, "method_not_found");
+        assert!(response.ok);
+        assert_eq!(
+            response.result.expect("describe result")["protocol"],
+            PROTOCOL_NAME
+        );
     }
 
     #[test]
@@ -1141,5 +1507,393 @@ mod transport_tests {
         let snapshot: RuntimeSnapshot =
             serde_json::from_value(response.result.expect("snapshot")).expect("snapshot payload");
         assert_eq!(snapshot.revision, 2);
+    }
+
+    /// 三向一致:capabilities == Schema 方法枚举 == 可路由方法。
+    /// 未路由的方法只可能是 `method_not_found`。
+    #[test]
+    fn capabilities_schema_and_routing_table_are_three_way_consistent() {
+        let schema: Value =
+            serde_json::from_str(include_str!("../../../docs/runtime-api-v1.schema.json"))
+                .expect("protocol schema must stay valid JSON");
+        let methods: Vec<&str> = schema["$defs"]["request"]["properties"]["method"]["enum"]
+            .as_array()
+            .expect("method enum")
+            .iter()
+            .map(|method| method.as_str().expect("method string"))
+            .collect();
+        assert_eq!(methods, CAPABILITIES);
+
+        for method in methods {
+            match parse_method(method, &json!({})) {
+                Ok(_) => {}
+                Err(error) => assert_ne!(
+                    error.code, "method_not_found",
+                    "capability {method} is not routable"
+                ),
+            }
+            // 已路由方法对未知参数一律 invalid_params,不会静默忽略。
+            let mut params = json!({ "oracle": true });
+            if matches!(
+                method,
+                "runtime.describe" | "runtime.snapshot" | "events.subscribe" | "agents.list"
+            ) {
+                params = json!({ "oracle": true });
+            }
+            assert_eq!(
+                parse_method(method, &params)
+                    .err()
+                    .unwrap_or_else(|| panic!("{method} must reject unknown params"))
+                    .code,
+                "invalid_params",
+                "{method}"
+            );
+        }
+
+        for trimmed in [
+            "window.create",
+            "git.history",
+            "git.stage",
+            "git.commit",
+            "git.fetch",
+            "git.pull",
+            "git.push",
+            "tab.focus",
+            "tab.open",
+            "tab.read",
+            "conversation.read",
+            "conversation.send",
+            "conversation.choose",
+            "conversation.key",
+        ] {
+            assert_eq!(
+                parse_method(trimmed, &json!({}))
+                    .expect_err("trimmed method")
+                    .code,
+                "method_not_found",
+                "{trimmed}"
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_snapshot_is_routed_to_the_shell_owner() {
+        let hub = RuntimeHub::new();
+        hub.publish(snapshot_with_panes(vec![pane(
+            1,
+            super::super::RuntimeTaskState::Idle,
+        )]));
+        let sink = sink_responding(|command| match command {
+            RuntimeCommand::Snapshot => Ok(json!({ "revision": 7, "served": true })),
+            other => panic!("unexpected command: {other:?}"),
+        });
+        let address = spawn_single_connection_server(TEST_TOKEN, sink, hub);
+        let response = exchange_json(address, &request("4242-50", "runtime.snapshot", json!({})));
+        assert!(response.ok, "{:?}", response.error);
+        assert_eq!(response.result.expect("snapshot result")["served"], true);
+    }
+
+    #[test]
+    fn git_status_is_routed_to_the_git_command_family() {
+        let sink = sink_responding(|command| match command {
+            RuntimeCommand::Git { request, .. } => {
+                assert_eq!(request.operation, "status");
+                assert_eq!(request.expected_cwd, "D:/repo");
+                Ok(json!({ "action": { "root": "D:/repo" } }))
+            }
+            other => panic!("unexpected command: {other:?}"),
+        });
+        let address = spawn_single_connection_server(TEST_TOKEN, sink, RuntimeHub::new());
+        let response = exchange_json(
+            address,
+            &request(
+                "4242-51",
+                "git.status",
+                json!({ "window_id": 1, "pane_id": 2, "expected_cwd": "D:/repo" }),
+            ),
+        );
+        assert!(response.ok, "{:?}", response.error);
+        assert_eq!(
+            response.result.expect("git result")["action"]["root"],
+            "D:/repo"
+        );
+    }
+
+    #[test]
+    fn dispatch_timeout_defers_worktree_cleanup() {
+        let repository = test_git_repository();
+        let target = repository.path().join("worktrees").join("stuck");
+        let hub = RuntimeHub::new();
+        let command = RuntimeCommand::from_params(
+            "agent.fork",
+            &json!({
+                "source_cwd": repository.path(),
+                "name": "stuck",
+                "kind": "codex",
+                "branch": "slterm/stuck",
+                "path": target
+            }),
+        )
+        .expect("agent.fork parses");
+        let (sink, held) = sink_holding();
+        let error =
+            dispatch_runtime_command_with_timeout(command, &sink, &hub, Duration::from_millis(50))
+                .expect_err("UI did not answer");
+        assert_eq!(error.code, "runtime_timeout");
+        let details = error.details.expect("timeout details");
+        assert_eq!(details["cleanup_deferred"], true);
+        assert_eq!(
+            details["worktree"]["path"],
+            target.to_string_lossy().as_ref()
+        );
+        assert!(
+            target.join("tracked.txt").is_file(),
+            "deferred cleanup must keep the checkout for a late PTY"
+        );
+        assert!(branch_exists(repository.path(), "slterm/stuck"));
+        // 释放 dispatch(= UI 侧最终丢弃),随后 tempdir 随用例回收。
+        held.lock().expect("held dispatches").clear();
+    }
+
+    #[test]
+    fn dispatch_failure_rolls_back_the_prepared_worktree() {
+        let repository = test_git_repository();
+        let target = repository.path().join("worktrees").join("failed");
+        let command = RuntimeCommand::from_params(
+            "agent.fork",
+            &json!({
+                "source_cwd": repository.path(),
+                "name": "failed",
+                "kind": "codex",
+                "branch": "slterm/failed",
+                "path": target
+            }),
+        )
+        .expect("agent.fork parses");
+        let sink = sink_responding(|command| {
+            assert!(matches!(
+                command,
+                RuntimeCommand::AgentStart {
+                    worktree: Some(_),
+                    ..
+                }
+            ));
+            Err(ApiError::new(
+                "action_failed",
+                "simulated UI launch failure",
+            ))
+        });
+        let error = dispatch_runtime_command_with_timeout(
+            command,
+            &sink,
+            &RuntimeHub::new(),
+            Duration::from_secs(5),
+        )
+        .expect_err("UI failure");
+        assert_eq!(error.code, "action_failed");
+        assert!(
+            !target.exists(),
+            "failed dispatch must roll back the checkout"
+        );
+        assert!(!branch_exists(repository.path(), "slterm/failed"));
+    }
+
+    #[test]
+    fn dispatch_success_commits_the_worktree_and_attaches_provenance() {
+        let repository = test_git_repository();
+        let target = repository.path().join("worktrees").join("ready");
+        let command = RuntimeCommand::from_params(
+            "agent.fork",
+            &json!({
+                "source_cwd": repository.path(),
+                "name": "ready",
+                "kind": "codex",
+                "branch": "slterm/ready",
+                "path": target
+            }),
+        )
+        .expect("agent.fork parses");
+        let sink = sink_responding(|command| {
+            let RuntimeCommand::AgentStart { worktree, .. } = command else {
+                panic!("agent.fork must become AgentStart");
+            };
+            assert!(worktree.is_some());
+            Ok(json!({ "action": { "pane_id": 4 } }))
+        });
+        let result = dispatch_runtime_command_with_timeout(
+            command,
+            &sink,
+            &RuntimeHub::new(),
+            Duration::from_secs(5),
+        )
+        .expect("dispatched");
+        assert_eq!(
+            result["action"]["worktree"]["path"],
+            target.to_string_lossy().as_ref()
+        );
+        assert!(target.join("tracked.txt").is_file());
+        assert!(branch_exists(repository.path(), "slterm/ready"));
+    }
+
+    #[test]
+    fn dropped_dispatch_reports_runtime_unavailable_and_rolls_back() {
+        let repository = test_git_repository();
+        let target = repository.path().join("worktrees").join("dropped");
+        let command = RuntimeCommand::from_params(
+            "agent.fork",
+            &json!({
+                "source_cwd": repository.path(),
+                "name": "dropped",
+                "kind": "codex",
+                "branch": "slterm/dropped",
+                "path": target
+            }),
+        )
+        .expect("agent.fork parses");
+        // 闭包没有保存 dispatch:回调返回时 Arc 被丢弃 → Disconnected。
+        let sink: EventSink = Arc::new(|_callback| {});
+        let error = dispatch_runtime_command_with_timeout(
+            command,
+            &sink,
+            &RuntimeHub::new(),
+            Duration::from_secs(5),
+        )
+        .expect_err("dropped dispatch");
+        assert_eq!(error.code, "runtime_unavailable");
+        assert!(!target.exists());
+        assert!(!branch_exists(repository.path(), "slterm/dropped"));
+    }
+
+    #[test]
+    fn agent_delegate_dispatches_a_generation_bound_prompt() {
+        let (hub, target, _snapshot) = delegation_fixture();
+        let expected_agent_id = target.agent_id.clone();
+        let expected_generation = target.generation;
+        let sink = sink_responding(move |command| {
+            assert!(matches!(
+                command,
+                RuntimeCommand::AgentPrompt {
+                    agent,
+                    generation: Some(generation),
+                    text,
+                    submit: true,
+                } if agent == &expected_agent_id
+                    && *generation == expected_generation
+                    && text == "inspect the build"
+            ));
+            Ok(json!({ "submitted": true }))
+        });
+        let address = spawn_single_connection_server(TEST_TOKEN, sink, hub);
+        let response = exchange_json(
+            address,
+            &request(
+                "4242-60",
+                "agent.delegate",
+                json!({
+                    "agent": target.agent_id,
+                    "generation": target.generation,
+                    "text": "inspect the build",
+                    "origin_pane_id": 3
+                }),
+            ),
+        );
+        assert!(response.ok, "{:?}", response.error);
+        assert_eq!(
+            response.result.expect("delegate result")["delegation"]["status"],
+            "submitted"
+        );
+    }
+
+    #[test]
+    fn agent_wait_identity_failure_is_immediate() {
+        let hub = RuntimeHub::new();
+        let agent = hub
+            .register_agent(
+                "worker".to_owned(),
+                crate::ai_agents::AgentKind::Codex,
+                super::super::SINGLE_WINDOW_ID,
+                4,
+                Some(TEST_CODEX_SESSION.to_owned()),
+                None,
+            )
+            .expect("register");
+        hub.publish(snapshot_with_panes(vec![pane_with_agent(
+            4,
+            detected_agent("codex", Some(TEST_CODEX_SESSION)),
+            super::super::RuntimeTaskState::Idle,
+        )]));
+        hub.close_agent(&agent.agent_id, "agent_exited");
+        let (sink, _events) = sink_channel();
+        let address = spawn_single_connection_server(TEST_TOKEN, sink, hub);
+        let response = exchange_json(
+            address,
+            &request(
+                "4242-61",
+                "agent.wait",
+                json!({
+                    "agent": agent.agent_id,
+                    "generation": agent.generation,
+                    "state": "idle",
+                    "timeout_ms": 500
+                }),
+            ),
+        );
+        assert_eq!(response.error.expect("error").code, "agent_exited");
+    }
+
+    #[test]
+    fn agent_wait_completes_on_a_matching_transition() {
+        let (hub, agent, _snapshot) = delegation_fixture();
+        let (sink, _events) = sink_channel();
+        let address = spawn_single_connection_server(TEST_TOKEN, sink, hub.clone());
+        let waiter = std::thread::spawn(move || {
+            exchange_json(
+                address,
+                &request(
+                    "4242-62",
+                    "agent.wait",
+                    json!({
+                        "agent": agent.agent_id,
+                        "generation": agent.generation,
+                        "state": "running",
+                        "timeout_ms": 5_000
+                    }),
+                ),
+            )
+        });
+        hub.publish(snapshot_with_panes(vec![
+            pane_with_agent(
+                3,
+                detected_agent("claude", Some("claude-session-1")),
+                super::super::RuntimeTaskState::Finished,
+            ),
+            pane_with_agent(
+                4,
+                detected_agent("codex", Some(TEST_CODEX_SESSION)),
+                super::super::RuntimeTaskState::Running,
+            ),
+        ]));
+        let response = waiter.join().expect("waiter thread");
+        assert!(response.ok, "{:?}", response.error);
+        let result = response.result.expect("agent wait result");
+        assert_eq!(result["agent"]["observed"], true);
+        assert_eq!(
+            result["snapshot"]["windows"][0]["tabs"][0]["panes"][1]["task_state"],
+            "running"
+        );
+    }
+
+    #[test]
+    fn agents_list_reports_revision_and_rows() {
+        let (hub, _target, _snapshot) = delegation_fixture();
+        let (sink, _events) = sink_channel();
+        let address = spawn_single_connection_server(TEST_TOKEN, sink, hub);
+        let response = exchange_json(address, &request("4242-63", "agents.list", json!({})));
+        assert!(response.ok, "{:?}", response.error);
+        let result = response.result.expect("agents list result");
+        assert_eq!(result["revision"], 1);
+        assert_eq!(result["agents"].as_array().expect("agent rows").len(), 2);
+        assert_eq!(result["agents"][1]["pane_id"], 4);
+        assert_eq!(result["agents"][1]["agent"]["kind"], "codex");
     }
 }

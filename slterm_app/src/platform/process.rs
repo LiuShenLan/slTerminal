@@ -20,6 +20,108 @@ pub(crate) fn hidden_command(command: &mut Command) -> &mut Command {
     command.creation_flags(CREATE_NO_WINDOW)
 }
 
+/// 一次性子进程的进程组/作业对象配置:超时回收整棵树时连后代一起收。
+///
+/// `pane.exec` 的 stdin 是 null、stdout/stderr 走管道,从头到尾没有交互,
+/// 因此同样挂 `CREATE_NO_WINDOW`。
+#[cfg(windows)]
+#[allow(dead_code)] // 消费点 = runtime_exec::build_command(pane.exec,M7.5)。
+pub(crate) fn configure_process_group(command: &mut Command) {
+    hidden_command(command);
+}
+
+#[cfg(not(windows))]
+#[allow(dead_code)] // 消费点 = runtime_exec::build_command(pane.exec,M7.5)。
+pub(crate) fn configure_process_group(_: &mut Command) {}
+
+/// 一次性子进程的作业对象句柄(Drop 关闭句柄 = 内核回收整棵树)。
+#[allow(dead_code)] // 消费点 = runtime_exec::execute 的超时整树回收(M7.5)。
+pub(crate) struct ProcessGroup {
+    #[cfg(windows)]
+    job: windows_sys::Win32::Foundation::HANDLE,
+}
+
+#[allow(dead_code)] // 消费点 = runtime_exec::execute(M7.5 接线)。
+impl ProcessGroup {
+    pub(crate) fn attach(child: &std::process::Child) -> std::io::Result<Self> {
+        #[cfg(windows)]
+        {
+            use std::mem::{size_of, zeroed};
+            use std::os::windows::io::AsRawHandle as _;
+            use std::ptr;
+            use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+            use windows_sys::Win32::System::JobObjects::{
+                AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+                JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+                SetInformationJobObject,
+            };
+
+            // SAFETY: 指针均指向调用期内有效的 POD 值;返回的 job 句柄由
+            // ProcessGroup 独占并在 Drop 时关闭一次。
+            unsafe {
+                let job = CreateJobObjectW(ptr::null(), ptr::null());
+                if job.is_null() {
+                    return Err(std::io::Error::last_os_error());
+                }
+                let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = zeroed();
+                limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+                if SetInformationJobObject(
+                    job,
+                    JobObjectExtendedLimitInformation,
+                    (&raw const limits).cast(),
+                    size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                ) == 0
+                {
+                    let error = std::io::Error::last_os_error();
+                    CloseHandle(job);
+                    return Err(error);
+                }
+                if AssignProcessToJobObject(job, child.as_raw_handle() as HANDLE) == 0 {
+                    let error = std::io::Error::last_os_error();
+                    CloseHandle(job);
+                    return Err(error);
+                }
+                Ok(Self { job })
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = child;
+            Ok(Self {})
+        }
+    }
+
+    /// 终止作业对象内的全部进程(先整树,再兜底单进程)。
+    pub(crate) fn terminate(&self, child: &mut std::process::Child) {
+        #[cfg(windows)]
+        unsafe {
+            use windows_sys::Win32::System::JobObjects::TerminateJobObject;
+            let _ = TerminateJobObject(self.job, 1);
+        }
+        let _ = child.kill();
+    }
+
+    /// 直接子进程已退出后,收掉仍持有 pipe 句柄的后台后代并等 EOF。
+    /// 句柄关闭由 `Drop` 统一负责,这里只终止作业对象。
+    pub(crate) fn finish(self) {
+        #[cfg(windows)]
+        unsafe {
+            use windows_sys::Win32::System::JobObjects::TerminateJobObject;
+            let _ = TerminateJobObject(self.job, 1);
+        }
+    }
+}
+
+impl Drop for ProcessGroup {
+    fn drop(&mut self) {
+        #[cfg(windows)]
+        unsafe {
+            // SAFETY: `job` 由本守卫独占持有,仅在 Drop 时关闭一次。
+            windows_sys::Win32::Foundation::CloseHandle(self.job);
+        }
+    }
+}
+
 #[cfg(test)]
 mod process_tests {
     use super::*;

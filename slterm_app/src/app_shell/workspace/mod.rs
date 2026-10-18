@@ -1468,7 +1468,9 @@ impl SltermWorkspace {
                         match event {
                             // 预埋缝:生产者归 04 篇 M7。
                             SltermShellEvent::MuxAttach => {}
-                            SltermShellEvent::RuntimeControl => {}
+                            // M7.5 接线点:UI owner 按 RuntimeCommand 调既有
+                            // workspace 操作入口并 `dispatch.respond`。
+                            SltermShellEvent::RuntimeControl(_dispatch) => {}
                             // 消费(右键「在此处打开」)归 09 篇。
                             SltermShellEvent::OpenDirectories(_) => {}
                         }

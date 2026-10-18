@@ -78,6 +78,85 @@ fn with_cached_snapshot<T>(
     Some(read(processes))
 }
 
+/// 一次进程树查询的条目(根 pid 以 depth 0 进入结果)。
+#[allow(dead_code)] // 消费点 = runtime_api::capture_process_tree(pane.procs,M7.5 接线)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ProcessEntry {
+    pub(crate) pid: u32,
+    pub(crate) parent_pid: u32,
+    pub(crate) executable: String,
+    pub(crate) depth: u32,
+}
+
+/// 按需采样本机进程树,返回 `root_pid` 的全部后代(含根)。
+///
+/// 与祖先链共用 PID 复用消解:父号已被更年轻进程占用时该边断开,避免把
+/// 无关进程挂到 pane 名下。根不在快照里 = 壳已退出,显式报错而不是空列表
+/// (空列表会被外部客户端误读成「没有子进程」)。
+#[allow(dead_code)] // 消费点 = runtime_api::capture_process_tree(pane.procs,M7.5 接线)。
+pub(crate) fn descendants(root_pid: u32) -> Result<Vec<ProcessEntry>, String> {
+    descendants_from_rows(root_pid, process_snapshot::snapshot()?)
+}
+
+/// [`descendants`] 的纯函数内核(测试夹具直接喂行,不扫真实进程表)。
+#[allow(dead_code)] // 测试夹具内核 + pane.procs 链(M7.5)。
+fn descendants_from_rows(
+    root_pid: u32,
+    rows: Vec<ProcessRow>,
+) -> Result<Vec<ProcessEntry>, String> {
+    if root_pid == 0 {
+        return Err("the pane does not own a local shell process".to_owned());
+    }
+    descendants_from_snapshot(root_pid, &verified_parentage(rows))
+}
+
+#[allow(dead_code)] // 消费点 = descendants(pane.procs,M7.5)。
+fn descendants_from_snapshot(
+    root_pid: u32,
+    processes: &std::collections::HashMap<u32, (u32, String)>,
+) -> Result<Vec<ProcessEntry>, String> {
+    use std::collections::{HashMap, HashSet, VecDeque};
+
+    if !processes.contains_key(&root_pid) {
+        return Err(format!("shell process {root_pid} is no longer present"));
+    }
+
+    let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
+    for (&pid, &(parent, _)) in processes {
+        if parent != pid {
+            children.entry(parent).or_default().push(pid);
+        }
+    }
+    for child_ids in children.values_mut() {
+        child_ids.sort_unstable();
+    }
+
+    let mut result = Vec::new();
+    let mut queue = VecDeque::from([(root_pid, 0_u32)]);
+    let mut seen = HashSet::new();
+    while let Some((pid, depth)) = queue.pop_front() {
+        if !seen.insert(pid) {
+            continue;
+        }
+        if let Some((parent_pid, executable)) = processes.get(&pid) {
+            result.push(ProcessEntry {
+                pid,
+                parent_pid: *parent_pid,
+                executable: executable.clone(),
+                depth,
+            });
+        }
+        if let Some(child_ids) = children.get(&pid) {
+            queue.extend(
+                child_ids
+                    .iter()
+                    .map(|child| (*child, depth.saturating_add(1))),
+            );
+        }
+    }
+    Ok(result)
+}
+
 /// 沿 `pid` 的祖先链找最近的 AI CLI 进程,返回它的 pid 与 slug。
 ///
 /// hook helper 不一定是 agent 直接 spawn 的:Windows 上 claude 通过 shell 执行
@@ -114,7 +193,9 @@ fn resolve_agent_ancestor(
 mod tests {
     use std::collections::HashMap;
 
-    use super::{ProcessRow, display_name, resolve_agent_ancestor, verified_parentage};
+    use super::{
+        ProcessRow, descendants_from_rows, display_name, resolve_agent_ancestor, verified_parentage,
+    };
 
     /// 带自定义可执行名的进程表,用来构造「helper 上面隔着一层 shell」的链。
     fn named_table(rows: &[(u32, u32, &str)]) -> HashMap<u32, (u32, String)> {
@@ -159,6 +240,49 @@ mod tests {
         // 链上没有任何认得的 CLI:不许瞎猜。
         let plain = named_table(&[(100, 4, "pwsh.exe"), (200, 100, "slterm-hook.exe")]);
         assert_eq!(resolve_agent_ancestor(&plain, 200), None);
+    }
+
+    /// 树遍历:根以 depth 0 进入结果,子进程按 pid 升序排列,结果只含后代。
+    #[test]
+    fn descendants_include_the_root_and_only_its_subtree() {
+        let rows = vec![
+            ProcessRow {
+                pid: 100,
+                parent: 4,
+                executable: "pwsh.exe".into(),
+                created: 1,
+            },
+            ProcessRow {
+                pid: 200,
+                parent: 100,
+                executable: "claude.exe".into(),
+                created: 2,
+            },
+            ProcessRow {
+                pid: 300,
+                parent: 200,
+                executable: "node.exe".into(),
+                created: 3,
+            },
+            ProcessRow {
+                pid: 400,
+                parent: 4,
+                executable: "other.exe".into(),
+                created: 4,
+            },
+        ];
+        let entries = descendants_from_rows(100, rows).expect("tree");
+        let pids: Vec<_> = entries.iter().map(|entry| entry.pid).collect();
+        assert_eq!(pids, [100, 200, 300]);
+        assert_eq!(entries[0].depth, 0);
+        assert_eq!(entries[2].parent_pid, 200);
+        assert_eq!(entries[2].depth, 2);
+    }
+
+    #[test]
+    fn descendants_reject_zero_and_missing_roots() {
+        assert!(descendants_from_rows(0, Vec::new()).is_err());
+        assert!(descendants_from_rows(99, Vec::new()).is_err());
     }
 
     #[test]

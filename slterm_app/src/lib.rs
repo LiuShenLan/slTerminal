@@ -38,7 +38,10 @@ pub(crate) mod agent_env;
 pub(crate) mod assistant_answer;
 pub mod brand;
 pub(crate) mod cli;
+// 事务型 Git worktree(07 篇边界,04 篇 agent.fork 消费):只回滚本事务
+// 证明创建过的资源,失败路径不留半成品。
 pub mod error;
+pub(crate) mod git_worktree;
 pub(crate) mod gpui_terminal;
 // 界面语言(06 篇 M6.4):build.rs 静态生成的 typed Message 查询 API;
 // 运行时零解析、零文件读、零锁。
@@ -50,6 +53,9 @@ pub(crate) mod process_tree;
 // Runtime 控制面(04 篇 M7):版本化信封 + loopback JSON Lines 传输;
 // RuntimeHub/方法族/CLI/单实例移交归 M7.2–M7.5 继续接线。
 pub(crate) mod runtime_api;
+// 非 TTY pane.exec 执行器(04 篇):argv 无 shell 展开、双流并行排水、
+// 超时整树回收;UI owner 以 `spawn` 把结果 respond 回 transport。
+pub(crate) mod runtime_exec;
 pub(crate) mod session;
 // settings.json 写通道适配层(06 篇 M6.1):白名单校验/保存锁/原子写/.bak/
 // 损坏三态;`slterm-settings` 保持值权威与零生产依赖。

@@ -102,6 +102,8 @@ windows-sys = { version = "0.59", features = [
     # 命名管道服务器(ai_hook::windows;PIPE_ACCESS_INBOUND 在 FileSystem,
     # ConnectNamedPipe/ReadFile 的 OVERLAPPED 引用经 Win32_System_IO)。
     "Win32_System_Pipes",
+    # pane.exec 一次性子进程整树回收(Job Object,04 篇 M7.3)。
+    "Win32_System_JobObjects",
     "Win32_Storage_FileSystem",
     "Win32_System_IO",
     # 全机进程快照(process_snapshot::windows::NtQuerySystemInformation)。
