@@ -135,6 +135,9 @@ static GPUI_COMMAND: OnceLock<Box<dyn Fn(GpuiTrayCommand) + Send + Sync>> = Once
 type TestPush = (Vec<TrayAgent>, UiLanguage);
 #[cfg(test)]
 static TEST_PUSHES: Mutex<Vec<TestPush>> = Mutex::new(Vec::new());
+/// 测试构建记录发往托盘线程的消息(不启真实线程/窗口)。
+#[cfg(test)]
+static TEST_POSTS: Mutex<Vec<u32>> = Mutex::new(Vec::new());
 
 /// 状态锁:中毒只表示某线程带锁 panic;清单本身是普通数据,继续用。
 ///
@@ -151,6 +154,10 @@ pub(crate) fn reset_for_test() {
         .lock()
         .unwrap_or_else(|error| error.into_inner())
         .clear();
+    TEST_POSTS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .clear();
 }
 
 #[cfg(test)]
@@ -162,6 +169,11 @@ pub(crate) fn take_updates_for_test() -> Vec<TestPush> {
     )
 }
 
+#[cfg(test)]
+pub(crate) fn take_posts_for_test() -> Vec<u32> {
+    std::mem::take(&mut *TEST_POSTS.lock().unwrap_or_else(|error| error.into_inner()))
+}
+
 /// 装好命令回调。真正的托盘线程按需(首次启用)才起。
 pub(crate) fn init_gpui(on_command: impl Fn(GpuiTrayCommand) + Send + Sync + 'static) {
     let _ = GPUI_COMMAND.set(Box::new(on_command));
@@ -169,6 +181,10 @@ pub(crate) fn init_gpui(on_command: impl Fn(GpuiTrayCommand) + Send + Sync + 'st
 
 /// 开/关托盘图标(设置·高级)。开 = 保证线程在跑并 NIM_ADD;
 /// 关 = 只删图标,线程留着(重开是高频往复,不值得反复建窗)。
+///
+/// B54:开启态每次调用都向托盘线程投递 `WM_APP_SET`,不只在状态翻转时投递。
+/// `NIM_ADD` 在 explorer 未就绪/刚崩时会失败,1 Hz 快照调用方因此天然成为
+/// 重试节拍;托盘线程在 `apply_enabled` 里对未挂载态重复 `NIM_ADD`。
 pub(crate) fn set_enabled(enabled: bool) {
     let changed = {
         let mut shared = lock_state();
@@ -180,7 +196,7 @@ pub(crate) fn set_enabled(enabled: bool) {
     if enabled && !cfg!(test) {
         ensure_thread();
     }
-    if changed {
+    if enabled || changed {
         post(WM_APP_SET);
     }
 }
@@ -214,12 +230,23 @@ pub(crate) fn shutdown() {
     win::shutdown();
 }
 
-#[cfg(windows)]
 fn post(message: u32) {
-    win::post(message);
+    #[cfg(test)]
+    {
+        // 测试构建记录消息、绝不触 Win32;断言覆盖「何时投递」而非线程行为。
+        TEST_POSTS
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .push(message);
+    }
+    #[cfg(not(test))]
+    {
+        #[cfg(windows)]
+        win::post(message);
+        #[cfg(not(windows))]
+        let _ = message;
+    }
 }
-#[cfg(not(windows))]
-fn post(_message: u32) {}
 
 #[cfg(windows)]
 fn ensure_thread() {
@@ -315,6 +342,23 @@ fn icon_variant(agents: &[TrayAgent]) -> TrayIcon {
         TrayIcon::Attention
     } else {
         TrayIcon::Normal
+    }
+}
+
+/// 通知区挂载动作(纯函数):未挂载且开启 → 每次触发都重试 `NIM_ADD`,
+/// 直到成功;关闭态只需删一次。B54 的防复发点在此。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MountAction {
+    Add,
+    Remove,
+    None,
+}
+
+fn mount_action(enabled: bool, added: bool) -> MountAction {
+    match (enabled, added) {
+        (true, false) => MountAction::Add,
+        (false, true) => MountAction::Remove,
+        _ => MountAction::None,
     }
 }
 
@@ -557,9 +601,11 @@ mod win {
             }
             WM_APP_REFRESH => {
                 // 先 apply_enabled:NIM_ADD 曾失败(explorer 未起)时借下一次
-                // 快照变化自愈,不必等用户重开托盘开关。
-                apply_enabled(hwnd);
-                refresh_icon(hwnd);
+                // 快照变化自愈,不必等用户重开托盘开关。挂载动作本身已刷新
+                // 图标;已挂载时再按新快照刷新一次。
+                if !apply_enabled(hwnd) {
+                    refresh_icon(hwnd);
+                }
                 0
             }
             WM_APP_SET => {
@@ -723,38 +769,51 @@ mod win {
         });
     }
 
-    fn apply_enabled(hwnd: windows_sys::Win32::Foundation::HWND) {
+    /// 对齐启用态与通知区挂载态;返回本次是否新挂载成功。
+    ///
+    /// B54:`NIM_ADD` 失败(explorer 未就绪/刚崩)时保持 `added=false`,
+    /// 下一次 `WM_APP_SET`(1 Hz 快照每次都会投递)或 `WM_APP_REFRESH`
+    /// 继续重试,直到成功。
+    fn apply_enabled(hwnd: windows_sys::Win32::Foundation::HWND) -> bool {
         use windows_sys::Win32::UI::Shell::{
             NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, Shell_NotifyIconW,
         };
 
         let enabled = lock_state().enabled;
+        let mut added_now = false;
         ICONS.with(|slot| {
             let mut slot = slot.borrow_mut();
             let Some(icons) = slot.as_mut() else {
                 return;
             };
-            if enabled && !icons.added {
-                let mut data = notify_data(hwnd);
-                data.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
-                data.uCallbackMessage = WM_APP_TRAY;
-                data.hIcon = icons.normal as _;
-                copy_tip(&mut data.szTip, crate::brand::NAME);
-                // SAFETY: 同上;失败(如 explorer 未起)留 added=false,
-                // 下一次 WM_APP_SET/REFRESH 重试。
-                if unsafe { Shell_NotifyIconW(NIM_ADD, &data) } != 0 {
-                    icons.added = true;
+            match super::mount_action(enabled, icons.added) {
+                super::MountAction::Add => {
+                    let mut data = notify_data(hwnd);
+                    data.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
+                    data.uCallbackMessage = WM_APP_TRAY;
+                    data.hIcon = icons.normal as _;
+                    copy_tip(&mut data.szTip, crate::brand::NAME);
+                    // SAFETY: data 完整初始化且 hwnd 属于本线程。
+                    if unsafe { Shell_NotifyIconW(NIM_ADD, &data) } != 0 {
+                        icons.added = true;
+                        added_now = true;
+                    }
                 }
-            } else if !enabled && icons.added {
-                let data = notify_data(hwnd);
-                // SAFETY: 删除只需要 hWnd/uID。
-                unsafe { Shell_NotifyIconW(NIM_DELETE, &data) };
-                icons.added = false;
+                super::MountAction::Remove => {
+                    let data = notify_data(hwnd);
+                    // SAFETY: 删除只需要 hWnd/uID。
+                    unsafe { Shell_NotifyIconW(NIM_DELETE, &data) };
+                    icons.added = false;
+                }
+                super::MountAction::None => {}
             }
         });
-        if enabled {
+        // 只有新挂载成功才补图标/提示;已挂载的 1 Hz 重复 WM_APP_SET 不做
+        // 无谓的 NIM_MODIFY(快照变化仍走 WM_APP_REFRESH)。
+        if added_now {
             refresh_icon(hwnd);
         }
+        added_now
     }
 
     fn remove_icon(hwnd: windows_sys::Win32::Foundation::HWND) {
@@ -961,6 +1020,52 @@ mod tray_tests {
             label: label.to_owned(),
             needs_attention,
         }
+    }
+
+    /// B54 防复发:开启态即使状态未翻转也必须继续投递挂载请求,让 1 Hz
+    /// 快照成为 `NIM_ADD` 失败后的重试节拍;关闭态翻转才投递。
+    #[test]
+    fn enabling_the_tray_reposts_mount_requests_until_mounted() {
+        reset_for_test();
+        set_enabled(true);
+        assert!(
+            take_posts_for_test().contains(&WM_APP_SET),
+            "首次开启必须请求挂载"
+        );
+
+        // 旧实现只在 enabled 翻转时投递;explorer 未就绪导致 NIM_ADD 失败后
+        // 这里不会再有消息,托盘图标静默缺失(B54)。
+        set_enabled(true);
+        assert!(
+            take_posts_for_test().contains(&WM_APP_SET),
+            "状态未变的 1 Hz 调用仍必须请求重试挂载"
+        );
+
+        set_enabled(false);
+        assert!(
+            take_posts_for_test().contains(&WM_APP_SET),
+            "关闭必须请求删除图标"
+        );
+        set_enabled(false);
+        assert!(
+            take_posts_for_test().is_empty(),
+            "关闭态重复调用不得空转打扰托盘线程"
+        );
+        reset_for_test();
+    }
+
+    /// B54 决策面:未挂载且开启时每次调用都返回 Add;挂载成功后退到 None。
+    #[test]
+    fn mount_action_retries_add_while_the_icon_is_not_mounted() {
+        assert_eq!(mount_action(true, false), MountAction::Add);
+        assert_eq!(
+            mount_action(true, false),
+            MountAction::Add,
+            "未挂载的重复触发必须继续重试"
+        );
+        assert_eq!(mount_action(true, true), MountAction::None);
+        assert_eq!(mount_action(false, true), MountAction::Remove);
+        assert_eq!(mount_action(false, false), MountAction::None);
     }
 
     /// 1 Hz 去抖:同一份快照不推送;内容(含语言)变化才推送;托盘关闭时

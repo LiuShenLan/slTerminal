@@ -16,6 +16,9 @@ pub(crate) mod app_shell;
 pub(crate) mod atomic_file;
 // M4.5 单 pane 宿主:事件泵派发与 AgentActivity/AnswerInbox 归属。
 pub(crate) mod agent_host;
+// 后台任务注册表(09 篇 M10.8):元数据单点、订阅生命周期、重入闸门与
+// 失败策略;1 Hz 看门狗/托盘快照与更新检查/预取收编于此。
+pub(crate) mod background_tasks;
 // 屏幕规则与身份面已由 agent_host 的看门狗消费;`parse_command` 等
 // OSC 133 匹配器消费归 05 篇 M5.3,设置/会话面归 05/06 篇。
 #[allow(dead_code)]

@@ -12,6 +12,7 @@ use gpui::{App, Context, Window};
 use super::super::SltermShellEvent;
 use super::{SltermWorkspace, session_persistence::SaveReason, session_recovery};
 use crate::ai_hook::AiHookEvent;
+use crate::background_tasks;
 
 impl SltermWorkspace {
     /// 1 Hz 自动保存泵(05 篇数据流):节奏与 agent 看门狗同源,前台线程
@@ -166,23 +167,41 @@ impl SltermWorkspace {
         .detach();
     }
 
-    /// 1 Hz 屏幕看门狗(照上游形态):逐 pane 取终端网格末尾样本喂仲裁器,
-    /// 给无 hook 的客户端补位、纠正丢边的 hook 状态。
+    /// 1 Hz 屏幕看门狗(照上游形态,09 篇 M10.8 收编进后台任务注册表):
+    /// 逐 pane 取终端网格末尾样本喂仲裁器,给无 hook 的客户端补位、纠正
+    /// 丢边的 hook 状态。
     ///
     /// 节奏刻意与输出解耦:每个 `Wakeup` 上跑规则会在输出洪流下放大成本,
     /// 而屏幕证据只需要拍帧级频率;`allows_screen()` 的 pane 由宿主内判定。
+    ///
+    /// 订阅随 workspace 生命周期存活;退订归零后下一拍循环自行退出。按需
+    /// 下载任务同样由 workspace 订阅(点击路径只经注册表闸门触发)。
     pub(super) fn start_agent_screen_watchdog(&mut self, cx: &mut Context<'_, Self>) {
+        for task_id in [
+            background_tasks::AGENT_SCREEN_WATCHDOG,
+            background_tasks::AUTO_UPDATE_DOWNLOAD,
+        ] {
+            self.background_tasks.push(
+                background_tasks::subscribe(task_id)
+                    .expect("background task must be registered in TASKS"),
+            );
+        }
         let executor = cx.background_executor().clone();
         cx.spawn(async move |this, cx| {
             loop {
-                executor.timer(Duration::from_secs(1)).await;
+                // 每轮重读节拍:applyConfig 直写原子量,下一轮即生效。
+                let interval =
+                    background_tasks::interval_sec(background_tasks::AGENT_SCREEN_WATCHDOG).max(1);
+                executor.timer(Duration::from_secs(interval)).await;
+                if !background_tasks::has_subscribers(background_tasks::AGENT_SCREEN_WATCHDOG) {
+                    background_tasks::stop_loop(background_tasks::AGENT_SCREEN_WATCHDOG);
+                    return;
+                }
                 let Ok(()) = this.update(cx, |workspace, cx| {
-                    for (pane_id, screen) in workspace.screen_samples(cx) {
-                        workspace.agent_hub.observe_screen(pane_id, &screen);
-                    }
-                    // 托盘快照搭同一拍(09 篇 M10.3):秒级延迟对托盘无感,
-                    // 内容相等时 `tray::update` 内部直接返回(天然去抖)。
-                    workspace.publish_tray_snapshot(cx);
+                    background_tasks::run_once(background_tasks::AGENT_SCREEN_WATCHDOG, || {
+                        workspace.screen_watchdog_tick(cx);
+                        Ok(())
+                    });
                 }) else {
                     return;
                 };
@@ -191,8 +210,19 @@ impl SltermWorkspace {
         .detach();
     }
 
-    /// 托盘 1 Hz 快照推送(09 篇 M10.3):语言与托盘开关取全局设置,
-    /// 开关变化经 `set_enabled` 的判重只增删图标(线程留驻)。
+    /// 一拍看门狗:屏幕证据 + 托盘快照。失败策略/重入闸门由注册表统一兜住。
+    pub(super) fn screen_watchdog_tick(&mut self, cx: &mut Context<'_, Self>) {
+        for (pane_id, screen) in self.screen_samples(cx) {
+            self.agent_hub.observe_screen(pane_id, &screen);
+        }
+        // 托盘快照搭同一拍(09 篇 M10.3):秒级延迟对托盘无感,
+        // 内容相等时 `tray::update` 内部直接返回(天然去抖)。
+        self.publish_tray_snapshot(cx);
+    }
+
+    /// 托盘 1 Hz 快照推送(09 篇 M10.3):语言与托盘开关取全局设置;
+    /// 关闭态只在翻转时删图标(线程留驻),开启态每拍都投递挂载请求,
+    /// 让 `NIM_ADD` 失败(explorer 未就绪)借该节拍自愈(B54)。
     pub(super) fn publish_tray_snapshot(&self, cx: &App) {
         let (language, enabled) = cx
             .try_global::<crate::app_shell::config::Settings>()

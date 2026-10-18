@@ -201,6 +201,8 @@ pub struct SltermWorkspace {
     tray_quit_requested: bool,
     /// 每 pane 的 agent 宿主(AgentActivity/AnswerInbox 归属表)。
     agent_hub: AgentHub,
+    /// 后台任务订阅(09 篇 M10.8):字段只为持有订阅生命周期;归零即停轮询。
+    background_tasks: Vec<crate::background_tasks::TaskSubscription>,
     /// 任务栏进度的进程级单显示路由(09 篇 M10.2):只认活跃 tab 聚焦 pane。
     taskbar: crate::taskbar::TaskbarState,
     /// 单窗口会话写盘状态机(latest/saved 双快照、无变化跳过、提权隔离)。
@@ -316,6 +318,7 @@ impl SltermWorkspace {
             #[cfg(all(test, feature = "gpui-test-support"))]
             tray_quit_requested: false,
             agent_hub: AgentHub::new(),
+            background_tasks: Vec::new(),
             taskbar: crate::taskbar::TaskbarState::new(),
             session_persistence: Self::new_session_persistence(),
             runtime_hub,

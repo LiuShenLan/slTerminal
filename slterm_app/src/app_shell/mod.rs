@@ -121,6 +121,9 @@ fn tray_command_event(command: crate::tray::GpuiTrayCommand) -> SltermShellEvent
 /// 关窗即退出(跨领域不变量 5):`QuitMode::LastWindowClosed` + 无 mux 驻留臂,
 /// 最后一窗关闭 = 进程退出。
 pub fn run_shell(initial_cwd: Option<PathBuf>, initial_command: Option<Program>) {
+    // 后台任务运行时复位(09 篇 M10.8):静态初值即注册表默认值,这里显式
+    // 再对齐一次,保证同进程重启测试/后续配置载入从确定态出发。
+    crate::background_tasks::reset_defaults();
     // 安装守卫(09 篇 M10.5):安装事务进行中时不启动常驻资源;预约安装
     // 在此执行,成功后本进程立即退出,由 helper 覆盖安装后重启。
     match crate::update_download::handoff::installation_in_progress() {
@@ -183,14 +186,9 @@ pub fn run_shell(initial_cwd: Option<PathBuf>, initial_command: Option<Program>)
             let _ = shell_events.send(tray_command_event(command));
         }
     });
-    // 启动更新检查(09 篇 M10.5):独立线程,延迟 12s 等首窗安顿;失败只
-    // 落 debug 日志。结果经壳事件队列回到 UI 线程。
-    crate::update_check::spawn_once({
-        let shell_events = shell_tx.clone();
-        move |result| {
-            let _ = shell_events.send(SltermShellEvent::UpdateAvailable(result));
-        }
-    });
+    // 启动更新检查(09 篇 M10.5/M10.8):GPUI background executor 载体,
+    // 立即水合 + 缓存提示,12s 一次性延迟后联网;结果经壳事件队列回 UI。
+    let update_events = shell_tx.clone();
     let application = gpui_platform::application()
         .with_assets(assets::SltermAssets)
         .with_quit_mode(QuitMode::LastWindowClosed);
@@ -199,6 +197,11 @@ pub fn run_shell(initial_cwd: Option<PathBuf>, initial_command: Option<Program>)
     });
     application.run(move |cx| {
         init(cx);
+        // 更新检查(09 篇 M10.5/M10.8):注册表 Once 任务,12s 启动延迟契约
+        // 由 `background_tasks::startup_delay` 单点给出;立即段先水合缓存态。
+        crate::update_check::start_gpui(cx, move |result| {
+            let _ = update_events.send(SltermShellEvent::UpdateAvailable(result));
+        });
         // 静默启动(09 篇 M10.6):仅无显式 CLI 启动时参与;窗口以隐藏
         // 形态创建,托盘「显示」经 M10.4 focus facade 回窗。
         let start_hidden = starts_hidden(restore_tabs, cx.global::<config::Settings>());

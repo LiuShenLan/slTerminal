@@ -13,7 +13,7 @@
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
-use gpui::{App, Context, Window};
+use gpui::{App, AppContext as _, Context, Window};
 use serde_json::{Value, json};
 use slterm_split::{PaneId, SplitDirection, TabId};
 
@@ -92,17 +92,21 @@ impl SltermWorkspace {
             SltermShellEvent::TrayQuit => self.quit_from_tray(window, cx),
             // 更新提示(09 篇 M10.5):直发 toast;若用户开启后台下载,
             // 预取安装包(不授予安装权限)。
-            SltermShellEvent::UpdateAvailable(result) => self.update_available(result),
+            SltermShellEvent::UpdateAvailable(result) => self.update_available(result, cx),
             // 消费(右键「在此处打开」)归 09 篇。
             SltermShellEvent::OpenDirectories(_) => {}
         }
     }
 
-    /// 更新可用提示与可选后台预取(09 篇 M10.5)。
+    /// 更新可用提示与可选后台预取(09 篇 M10.5/M10.8)。
     ///
-    /// 检查线程只负责发现;本方法在 UI 线程读设置并启动下载线程。安装
+    /// 检查任务只负责发现;本方法在 UI 线程读设置并启动后台预取。安装
     /// 授权仍归 handoff 两阶段流程(用户确认后才写 commit.json)。
-    fn update_available(&mut self, result: crate::update_check::UpdateCheckResult) {
+    fn update_available(
+        &mut self,
+        result: crate::update_check::UpdateCheckResult,
+        cx: &mut Context<'_, Self>,
+    ) {
         let language = crate::i18n::LanguagePreference::from(
             slterm_settings::RuntimeSettings::load().language,
         )
@@ -137,6 +141,14 @@ impl SltermWorkspace {
         if asset.digest.is_none() {
             return;
         }
+        // 09 篇 M10.8:下载收编为注册表按需任务;守卫覆盖整轮,重叠触发
+        // 直接跳过(下载会话自身的 generation 作废链保持不变)。
+        let Some(task_guard) =
+            crate::background_tasks::begin(crate::background_tasks::AUTO_UPDATE_DOWNLOAD)
+        else {
+            log::debug!("update-download: previous download still running");
+            return;
+        };
         let job = match crate::update_download::begin(&asset) {
             Ok(Some(job)) => job,
             Ok(None) => return,
@@ -146,24 +158,22 @@ impl SltermWorkspace {
             }
         };
         let notice = asset.clone();
-        let spawned = std::thread::Builder::new()
-            .name("update-download".into())
-            .spawn(move || {
-                crate::update_download::run(job);
-                match crate::update_download::status(&notice) {
-                    crate::update_download::DownloadStatus::Ready { .. } => {
-                        log::info!("update-download: v{} ready", notice.version);
-                    }
-                    crate::update_download::DownloadStatus::Failed(error)
-                    | crate::update_download::DownloadStatus::InstallFailed(error) => {
-                        log::warn!("update-download: v{} failed: {error}", notice.version);
-                    }
-                    _ => {}
+        cx.background_spawn(async move {
+            // 守卫随本轮存活到校验/状态写回结束。
+            let _task_guard = task_guard;
+            crate::update_download::run(job);
+            match crate::update_download::status(&notice) {
+                crate::update_download::DownloadStatus::Ready { .. } => {
+                    log::info!("update-download: v{} ready", notice.version);
                 }
-            });
-        if let Err(error) = spawned {
-            log::warn!("update-download: thread spawn failed: {error}");
-        }
+                crate::update_download::DownloadStatus::Failed(error)
+                | crate::update_download::DownloadStatus::InstallFailed(error) => {
+                    log::warn!("update-download: v{} failed: {error}", notice.version);
+                }
+                _ => {}
+            }
+        })
+        .detach();
     }
 
     /// 托盘退出:与标题栏关闭钮同语义(自绘入口绕过 OS 关闭请求,终局

@@ -1,7 +1,8 @@
 //! 启动/手动更新检查(GitHub Releases,09 篇 M10.5 采纳点 23–26)。
 //!
 //! 全程 best-effort:断网、坏 JSON、GitHub 限流一律落 debug 日志,不弹错、
-//! 不阻塞 UI。启动检查在独立线程延迟 12 秒,等首窗与首个会话安顿后再联网。
+//! 不阻塞 UI。启动检查是后台任务注册表的 12s 一次性任务,等首窗与首个
+//! 会话安顿后再联网;立即段(水合/缓存提示)不受延迟影响。
 //!
 //! 版本与资产纪律(下载器不信任 UI 数据):
 //! - 版本比较是手写点分段数值比较,段内后缀忽略;拒绝降级、等版本不提示;
@@ -13,7 +14,6 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -36,8 +36,6 @@ pub(crate) const RELEASE_DOWNLOAD_PREFIX: &str =
 const UPDATE_STATE_FILE: &str = "update_state.json";
 /// 「稍后提醒」窗口:3 天(采纳点 24 契约值照抄上游)。
 const REMIND_LATER_SECS: u64 = 3 * 24 * 60 * 60;
-/// 启动检查延迟:等首窗与首个会话安顿,避免和启动抢磁盘/网络。
-const STARTUP_CHECK_DELAY: Duration = Duration::from_secs(12);
 /// release JSON 正文上限:正常响应远小于此,防御异常大响应。
 const RELEASE_BODY_LIMIT: u64 = 2 * 1024 * 1024;
 
@@ -140,75 +138,96 @@ impl UpdatePromptState {
     }
 }
 
-/// 启动检查入口:结果经回调送回壳事件队列(检查逻辑不依赖壳类型)。
+/// 启动检查入口(GPUI background executor 载体):结果经回调送回壳事件
+/// 队列(检查逻辑不依赖壳类型)。
 ///
-/// 一次进程只启动一条检查线程;外部托管渠道直接退出。顺序:hydrate 双证据
-/// 恢复 → 缓存资产可装/失败未见过 → 提示 → `auto_check_updates` 闸门 →
-/// 延迟 12s 再联网。
-pub(crate) fn spawn_once(mut deliver: impl FnMut(UpdateCheckResult) + Send + 'static) {
+/// 注册表 `autoUpdateCheck` 是 Once 任务:订阅 + 重入闸门保证一次进程只跑
+/// 一轮,12s 延迟取注册表契约值(不另立常量)。顺序保持原启动线程语义:
+/// hydrate 双证据恢复 → 缓存资产可装/失败未见过 → 提示 →
+/// `auto_check_updates` 闸门 → 延迟 → 联网检查。外部托管渠道直接退出。
+pub(crate) fn start_gpui(
+    cx: &mut gpui::App,
+    mut deliver: impl FnMut(UpdateCheckResult) + Send + 'static,
+) {
+    use gpui::AppContext as _;
+
     if crate::platform::distribution::current().externally_managed() {
         return;
     }
-    static STARTED: AtomicBool = AtomicBool::new(false);
-    if STARTED.swap(true, Ordering::SeqCst) {
+    let Some(subscription) =
+        crate::background_tasks::subscribe(crate::background_tasks::AUTO_UPDATE_CHECK)
+    else {
+        return;
+    };
+    let delay = crate::background_tasks::startup_delay(crate::background_tasks::AUTO_UPDATE_CHECK);
+    let executor = cx.background_executor().clone();
+    cx.background_spawn(async move {
+        // 订阅与一次性闸门覆盖立即段和延迟段;失败/退出后不再重跑。
+        let _subscription = subscription;
+        let Some(_run) = crate::background_tasks::begin(crate::background_tasks::AUTO_UPDATE_CHECK)
+        else {
+            return;
+        };
+        // 无网启动也能恢复上次就绪/失败态(cache + handoff 双证据)。
+        crate::update_download::hydrate();
+        deliver_cached(&mut deliver);
+        if !slterm_settings::RuntimeSettings::load().auto_check_updates {
+            return;
+        }
+        executor.timer(delay).await;
+        deliver_online(&mut deliver);
+    })
+    .detach();
+}
+
+/// 立即段:上次会话留下的缓存资产/失败态可直接提示,不必等联网。
+fn deliver_cached(deliver: &mut impl FnMut(UpdateCheckResult)) {
+    let Some(asset) = crate::update_download::cached_asset() else {
+        return;
+    };
+    let failed = matches!(
+        crate::update_download::status(&asset),
+        crate::update_download::DownloadStatus::InstallFailed(_)
+    );
+    if (failed || can_install_version(&asset.version).unwrap_or(false))
+        && (should_prompt(&asset.version)
+            || (failed
+                && crate::update_download::installation_failure_unseen(&update_state_path())))
+    {
+        deliver(UpdateCheckResult {
+            current: env!("CARGO_PKG_VERSION").into(),
+            latest: asset.version.clone(),
+            update_available: true,
+            asset: Some(asset),
+        });
+    }
+}
+
+/// 延迟段:联网检查;全部失败只落 debug 日志。
+fn deliver_online(deliver: &mut impl FnMut(UpdateCheckResult)) {
+    let result = match check_now() {
+        Ok(result) => result,
+        Err(error) => {
+            log::debug!("update-check: {error}");
+            return;
+        }
+    };
+    if !result.update_available {
+        log::debug!(
+            "update-check: v{} is current (latest v{})",
+            result.current,
+            result.latest
+        );
         return;
     }
-    let spawned = std::thread::Builder::new()
-        .name("update-check".into())
-        .spawn(move || {
-            // 无网启动也能恢复上次就绪/失败态(cache + handoff 双证据)。
-            crate::update_download::hydrate();
-            if let Some(asset) = crate::update_download::cached_asset() {
-                let failed = matches!(
-                    crate::update_download::status(&asset),
-                    crate::update_download::DownloadStatus::InstallFailed(_)
-                );
-                if (failed || can_install_version(&asset.version).unwrap_or(false))
-                    && (should_prompt(&asset.version)
-                        || (failed
-                            && crate::update_download::installation_failure_unseen(
-                                &update_state_path(),
-                            )))
-                {
-                    deliver(UpdateCheckResult {
-                        current: env!("CARGO_PKG_VERSION").into(),
-                        latest: asset.version.clone(),
-                        update_available: true,
-                        asset: Some(asset),
-                    });
-                }
-            }
-            if !slterm_settings::RuntimeSettings::load().auto_check_updates {
-                return;
-            }
-            std::thread::sleep(STARTUP_CHECK_DELAY);
-            let result = match check_now() {
-                Ok(result) => result,
-                Err(error) => {
-                    log::debug!("update-check: {error}");
-                    return;
-                }
-            };
-            if !result.update_available {
-                log::debug!(
-                    "update-check: v{} is current (latest v{})",
-                    result.current,
-                    result.latest
-                );
-                return;
-            }
-            if !should_prompt(&result.latest) {
-                log::debug!(
-                    "update-check: automatic prompt suppressed for v{}",
-                    result.latest
-                );
-                return;
-            }
-            deliver(result);
-        });
-    if let Err(error) = spawned {
-        log::debug!("update-check: thread spawn failed: {error}");
+    if !should_prompt(&result.latest) {
+        log::debug!(
+            "update-check: automatic prompt suppressed for v{}",
+            result.latest
+        );
+        return;
     }
+    deliver(result);
 }
 
 /// 立即检查 GitHub 最新 release;调用方必须放到后台执行,避免网络等待
