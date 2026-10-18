@@ -52,7 +52,7 @@ class GovernanceTests(unittest.TestCase):
     def test_decision_notes_are_scoped_and_complete(self):
         notes = [
             path for path in NOTES_ROOT.rglob("*.md")
-            if path.name != "AGENTS.md"
+            if path.name != "CLAUDE.md"
         ]
         # 允许零 note 起步;一旦入库即受属主路径、命名与九段结构约束。
         self.assertFalse(

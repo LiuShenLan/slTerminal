@@ -1,36 +1,69 @@
 # slTerminal
 
-面向 Windows 10/11、专为 Claude Code CLI 调优的通用终端模拟器。
+A Windows-native terminal emulator tuned for AI coding CLIs.
 
-- Windows 原生跑 `claude`（不走 WSL）；单窗口单实例；仅暗色模式；渲染 GPU 加速
-- 默认 shell：PowerShell 7（`pwsh.exe` → `powershell.exe` → `cmd.exe` 回退）
-- 复制 = `Ctrl+Shift+C`（`Ctrl+C` 保留为中断，供 claude 取消）
-- 架构：Tauri 2 外壳 + Rust 后端（拥有一切 OS 访问）+ React/TypeScript 前端（xterm.js 终端、CodeMirror 6 编辑器、Dockview 布局），前后端经 IPC 通信
+slTerminal is a single-process GPUI application: one window, one instance, dark mode only, GPU-accelerated rendering. It runs AI CLIs directly on Windows (no WSL) and treats every major AI CLI as a first-class citizen.
 
-## 构建与开发
+## Features
 
-| 命令 | 用途 |
-|------|------|
-| `npm run tauri dev` | 开发模式运行（仅保留为开发兜底） |
-| `npx tauri build --debug --no-bundle` | 调试构建（exe + dll，**测试/使用固定流程**） |
-| `.\\.claude\\package.ps1 -Version "0.1.0"` | 一键打包 release 单文件 exe → zip；加 `-Debug` 用 debug 模式 |
+- **Native terminal core** — VT parsing, ConPTY, scrollback, selection, copy/paste, shell integration and a bundled ConPTY fallback for Windows 10.
+- **Tabs and split panes** — terminal tabs, grid splits, pane zoom, drag-to-dock, session restore for terminal tabs.
+- **AI CLI integration** — detection rules for 27 AI CLI agents, hook installation for Claude Code / Kimi / Codex / Pi / OpenCode, agent status projection, Claude Code and Codex session history, and a runtime skill that lets agents discover the control plane.
+- **Runtime API** — loopback JSON Lines control plane with a versioned envelope, `slterm ctl`, `slterm env`, resource verbs, and single-instance handover.
+- **Files and editing** — file explorer, code editor, Markdown and image tabs, read-only dual-pane diff, git gutter, Markdown math rendering and terminal math overlays.
+- **Settings and themes** — settings center with application/appearance/profiles/interaction/advanced/localization/reset and an agent group; eight built-in dark themes (Linear default); English and Chinese UI.
+- **System integration** — tray icon, Windows toast notifications, taskbar progress, launch at login, window materials and wallpaper, update checks and downloads.
+- **Security** — credentials stay in Windows Credential Manager, audited settings writes, encrypted local backup with a strict allow-list.
+- **Packaging** — reproducible local release chain: Inno Setup installer, portable zip, SHA-256 checksums and a pinned size budget.
 
-## 测试
+Some sidebar views (navigation tree, commit view, agent global files) are registered placeholders; only the file explorer is fully wired in this release.
 
-四级测试金字塔（豁免登记与测试定位见 `.claude/test-exemptions.md`）：
+## Requirements
 
-| 层级 | 内容 | 命令 |
-|------|------|------|
-| L1 | Rust 单元/集成 | `cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1` |
-| L2 | 前端单元/集成 | `npm test` |
-| L3 | 终端 headless 渲染 | `npm run test:l3` |
-| L4 | 端到端 E2E | `npm run e2e`（= `build:e2e` + `wdio`） |
+- Windows 10 1809 (build 17763) or newer, x64.
+- Rust toolchain pinned by `rust-toolchain.toml` (1.97.1).
+- PowerShell 7 for release and packaging scripts.
+- Inno Setup 6 to build the installer.
 
-静态检查门禁：`npx tsc --noEmit`、`npx eslint src/`、`cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings`、`cargo fmt --manifest-path src-tauri/Cargo.toml -- --check`。
+## Build
 
-## 文档
+```powershell
+cargo build -p slterm --bin slterm -p slterm_hook --bin slterm-hook
+```
 
-- `.claude/CLAUDE.md` — 项目根指令：硬性开发约束、命令与测试策略（子模块指令经各目录 CLAUDE.md 渐进式披露）
-- `CONTEXT.md` — 领域术语表（项目/操作页面/面板/会话等概念的定义与同义词避讳）
-- `.claude/adr.md` — 架构决策记录
-- `.claude/test-exemptions.md` — 自动化测试豁免与定位（豁免登记 + 定位声明 + 条件跳过）
+The debug binary is `target/debug/slterm.exe`. Launching the GUI from an existing pwsh/cmd session blocks that shell; use the installed shortcut or `Start-Process slterm` for daily use.
+
+For a release build:
+
+```powershell
+pwsh -File scripts/release.ps1 -Version 0.3.0
+```
+
+This produces the installer, the portable zip and `SHA256SUMS` under `dist/`. See `scripts/release-checklist.md` for the manual verification steps.
+
+## Test
+
+```powershell
+cargo test --workspace -- --test-threads=1
+cargo test -p slterm --test lib_tests --features gpui-test-support -- --test-threads=1
+cargo clippy --workspace --all-targets
+cargo fmt --all -- --check
+python scripts/check_architecture.py
+python scripts/check_brand_regress.py staged
+```
+
+Use the explicit `lib_tests` target for filtered tests; `--lib` and bare filters may bypass the intended test manifest and fail with a zero-output crash. See `.claude/adr.md` ADR-0028.
+
+## Documentation
+
+- `CLAUDE.md` in `.claude/` — project rules and development constraints (module details load from the nearest directory `CLAUDE.md`).
+- `CONTEXT.md` — domain glossary.
+- `.claude/adr.md` — architecture decision records.
+- `.claude/test-exemptions.md` — registered test exemptions.
+- `assets/runtime-control-api.md` — bundled Runtime API reference; machine-readable schema at `assets/runtime-api-v1.schema.json`.
+- `release-notes/` — per-version release notes.
+- `CHANGELOG.md` — bilingual changelog, bundled with the installer and portable zip.
+
+## License
+
+GPL-3.0. See `LICENSE` and `THIRD-PARTY-NOTICES`.

@@ -28,11 +28,6 @@ EXEMPT_PATHS = {
     # 合规文本必须如实点名外部项目,不得改写。
     "THIRD-PARTY-NOTICES",
 }
-# 临时稿目录前缀:M11 删除后本前缀表一并移除。
-TEMP_DOC_PREFIXES = (
-    "docs/pebrel-refactor/",
-    "docs/pebrel-design/",
-)
 # 版权/法律归属行:法律文本必须保留原始项目名。
 LEGAL_ATTRIBUTION_PATTERNS = (
     re.compile(
@@ -52,9 +47,7 @@ DEPENDENCY_REFERENCE_PATTERNS = (
 
 
 def exempt_path(path: str) -> bool:
-    return path in EXEMPT_PATHS or any(
-        path.startswith(prefix) for prefix in TEMP_DOC_PREFIXES
-    )
+    return path in EXEMPT_PATHS
 
 
 def git(*args: str) -> bytes:

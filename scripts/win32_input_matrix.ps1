@@ -1,3 +1,4 @@
+#Requires -Version 7
 # Win32 输入矩阵回放测试(11 篇「win32 输入基线矩阵」夹具;13 篇改造节 4 承接)。
 #
 # 被测对象 = slterm keymap 三路径编码器端到端(13 篇锚点):PostMessage 逐键驱动

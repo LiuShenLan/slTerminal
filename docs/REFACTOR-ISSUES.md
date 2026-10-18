@@ -56,7 +56,7 @@
 | B24 | **git 内部错误码超出 04 篇错误码表**：`not_a_git_worktree`/`git_query_failed`/`branch_create_failed` 等。 | `git_worktree.rs` | M7.3 | 07/M11 统一收敛。 |
 | B25 | **close_pane 无 busy_child 确认框**（上游有 request_close_pane 确认）。 | `workspace/mod.rs` `close_pane` | M5.3a | 确认交互归后续篇（busy_child 判据归 02）。 |
 | B26 | **describe.commands 与 CLI 命令清单各自手写**：无交叉一致测试，存在漂移风险。 | `runtime_api/transport.rs` `runtime_description`、`shortcuts.rs` | M7.4 | 补「describe 资源动词 ⊆ catalog 且 catalog 覆盖全部资源动词」用例，或 describe 由 catalog 派生。 |
-| B27 | **`SCHEMA_PATH` 与 SKILL `include_str!` 指 `docs/`**：M12 迁根级 `assets/` 时须同步移动文件、改锚点与 SKILL.md 协议指引。 | `runtime_api.rs` `SCHEMA_PATH`、`local/runtime_skills.rs` | M7.4 | 归 M12（D12-3 已裁）。 |
+| B27 | ~~**`SCHEMA_PATH` 与 SKILL `include_str!` 指 `docs/`**~~（M11.1 已迁根级 `assets/`，锚点与 SKILL 指引同步改完；M11.3 复核 `SCHEMA_PATH` 指 `assets/runtime-api-v1.schema.json`）。 | `runtime_api.rs` `SCHEMA_PATH`、`local/runtime_skills.rs` | M7.4 | 已闭环。 |
 | B28 | **clap caret 实解析 4.6.7**：声明 `4.2.7` 为 caret。 | `slterm_app/Cargo.toml` | M7.4 | 若 D04-2 要精确基线改 `=4.2.7`。 |
 | B29 | **`commands_handle` 探 powershell 5.1**：枚举 cmdlet/函数/别名用 `powershell.exe`，产品默认 shell 是 pwsh 7，可能漏 pwsh 独有命令。 | `suggest.rs` `commands_handle` | M9.1 | M9.5 评估改探 pwsh 或双探。 |
 | B30 | **`serde_yaml 0.9.34+deprecated` 依赖**（连带 unsafe-libyaml）：忠实照抄上游。 | `completion/project_scripts/workspace.rs` | M9.1 | 后续以窄解析器替代。 |
@@ -99,9 +99,14 @@
 | B67 | **审计双栈重复风险**：`tracing` 用 `log-always`（审计无条件进 log）；若后续装配全局 tracing subscriber，事件双落点。 | `slterm_app/Cargo.toml`/`audit.rs` | M10.12 | 装配 subscriber 时改回 `log` feature 并显式控制桥接方向，或 subscriber 侧过滤 audit。 |
 | B68 | **SEC-13 覆盖半面**：claude hooks 的 `HookInspection.needs_repair` 是结构比对、无哈希；磁盘 hook 被改时不产生 SEC-13 哈希事件。 | `ai_hook/local/settings.rs` `current_at`/`inspect_with` | M10.12 | 03 篇补内嵌模板指纹后接 `audit::hook_hash_mismatch`。 |
 | B69 | **`UninstallRun` 调 `slterm.exe setup-ai --remove` 但子命令不存在**：卸载清理为 no-op（错误被 runhidden 吞）。 | `scripts/installer.iss` [UninstallRun] | M11.1 | 03 篇接线或首发前删除该行。 |
-| B70 | **`license = "GPL-3.0"` 未落**：workspace 与成员 crate 均缺（M0.2 合规落点二）。 | 根 `Cargo.toml` | M11.1 | M11.3 补 `license.workspace = true`。 |
-| B71 | **发布脚本无 `#Requires -Version 7` 声明**：`package-release.tests.ps1` 在 Windows PowerShell 5.1 下解析失败且报错晦涩（pwsh 7 下全绿）。 | `scripts/**` | M11.2 | 发布链脚本统一加 `#Requires -Version 7`（或在 release-checklist 明示用 pwsh 7）。 |
+| B70 | ~~**`license = "GPL-3.0"` 未落**~~（M11.3 已补：`[workspace.package] license = "GPL-3.0"` + 六成员 `license.workspace = true`）。 | 根 `Cargo.toml` | M11.1 | 已闭环。 |
+| B71 | ~~**发布脚本无 `#Requires -Version 7` 声明**~~（M11.3 已给 `scripts/` 全部 `.ps1` 首行加声明；5.1 下报错明确指向版本）。 | `scripts/**` | M11.2 | 已闭环。 |
 | B72 | **新鲜度判据含根 `Cargo.toml` mtime**：仅改根清单注释（编译输入未变）会让 release 链假红（二进制不重链接）；本次以 `cargo clean` 绕过。 | `scripts/build-windows-product.ps1` `Assert-FreshBinaries` | M11.2 | 改判「参与二进制的输入摘要」或清单变更时强制重链接——M11.4 前裁决。 |
+| B73 | **导航树/Commit/Agent 全局文件三个侧栏视图仍是占位**：`render_view_slot` 只对 `Explorer` 渲染真实内容，其余显示 title + 归属文案。README/CHANGELOG 已如实标注「已注册占位」。 | `app_shell/workspace/sidebar.rs` `render_view_slot` | M11.3 复核 | 按 05/07/03 篇补内容实现；或从发布说明与 UI 中移除入口。 |
+| B74 | **`slterminal-projects.json` 无任何代码消费**：DECISIONS B.20（保留层级提取、05 消费/07 只读）在 GPUI 单窗口模型中未落地。 | 仓根 `slterminal-projects.json` | M11.3 复核 | 裁定删除该文件，或补迁移消费点并登记归属。 |
+| B75 | **源码/测试注释仍大量引用设计稿篇号**（「NN 篇」）：docs 已删，注释锚点悬空。 | 全仓源码注释 | M11.3（承接 A3） | 按 A3 裁决统一清理或收窄纪律为「篇号锚点允许」。 |
+| B76 | **`.claude/test-exemptions.md` 仍含旧载体豁免行**（WebView/xterm.js/jsdom/wdio/React/Dockview 等）：设计 11 篇要求 M0 末按载体存亡全表重审，未执行。 | `.claude/test-exemptions.md` | M11.3 复核 | 按「载体消亡销项、PTY/Win32 行保留改写、翻案行保留」重审；销项保留根因一行。 |
+| B77 | **禁名门禁无全树模式**：`check_brand_regress.py` 只有 staged/message/push/range（均扫新增行）；设计 M11.3 的「临时稿删除后切全树常挂」未实现。 | `scripts/check_brand_regress.py` | M11.3 复核 | 若要全树扫，需先给历史来源语境（ADR/README/REFACTOR-ISSUES 等）建豁免表；否则维持新增行模式并在文档注明。 |
 
 ## C. 计划内（归后续子步/阶段，重构完成时验证）
 
@@ -119,8 +124,8 @@
 | C10 | **11 篇 conformance 脚本套件与 golden 未落地**：当前由 Rust 集成测试 `runtime_conformance` 驱动，行为基线可复用。 | 11 篇 | |
 | C11 | **i18n 合同独立 workspace CI 登记**：`tools/slterm-i18n-contract` 不在根 workspace，clippy/CI 不覆盖。 | 12 篇打包/CI 清单 | |
 | C12 | **旧栈语义资产转测试保留**：git2 五份语义资产（D07-1 裁定转对照用例）。 | 07/M11 | |
-| C13 | **docs/ 临时稿删除 + 篇号锚点清理**（与 A3 联动）。 | M11 | |
-| C14 | **设计措辞修正**：05 篇「窗口边缘」应为「内容区外圈」；04 篇 `reorder_batch` 签名稿与上游不符（已照源）；08 篇 `note_bell` 上游不存在（未落）；04 篇 generation 等待错误码口径（实现按设计稿 `agent_identity_mismatch`/`agent_exited`）；08 篇 D08-2 待沉淀仍写「M9.3 落地时拍板」而 DECISIONS 已裁（文档漂移）；08 篇 `compile_formula` 签名草案与上游实源不符（已按源码照抄）；08 篇 #44 `draw_overlays` 未迁，M9.5 自绘 paint pass（设计稿应标注归属）；09 篇 §6 duration 值域（Default|Short|Long）与 06 已落六档不一致（实现按六档消费，persistent 无系统常驻档）；09 篇 M10.2 出口只写「agent 退出清进度」，实现按任务书补 TurnDone/pane 关闭清除（doc 待回登）；09 篇 `focus_window(cx)`/`focus_pane(pane,cx)` 为多窗注册表签名，与单窗 GPUI（窗口更新回调内不可再 update）冲突，实现改为显式 `&mut Window` 落点、目标选择/平台调用仍单点；09 篇 `PreparedUpdate::commit(&self)` 实为 `commit(&mut self, windows: &[Session])`，`RELEASE_DOWNLOAD_PREFIX` 落 `update_check.rs` 而非 `update_download`（M11 原位收敛）；09 篇 row 35 写 `.lnk`「静默参数」但 CLI 无静默旗标（实现按设置两条件；doc 待删措辞或另立 `--silent`）；09 篇 TaskDef 无一次性/按需形态，实现新增 `TaskSchedule`（Once/OnDemand，M11 回登）；10 篇 `load_generic_secret` 签名 `Option<Vec<u8>>` 实为 `Option<SecretBytes>`（出域句柄补强）；`store_with_username` 空 secret 拒绝为新增语义（M11 回登或裁除）；10 篇 D10-2 类别清单未回登（实现裁 6 类 + 22 敏感键表 + 导出清洗/导入复验双闸）；`filter_settings` 签名 `Vec<u8>→Vec<u8>` 实为 `Result`；备份依赖 caret 解析 aes-gcm 0.11.1/argon2 0.6.0（上游 0.11.0/0.6.0-rc.8）；**设计输入失实**：上游基线 e537d528 无 plan_balance 模块，行为真值源实为 slTerminal git 历史 `src-tauri/src/plan_balance/`（c59f47f^ 终态），设计稿「上游源」表述待 M11 订正；`AppError::Unknown` 变体未登记 01 篇锚点表；10 篇审计事件字面格式未定，实现取 `operation/path/source/result` 与 `expected/actual`（M11 回登）；上游仓内无 audit/tracing 现成形态（新建）；12 篇构建命令写 `--features slterm/gpui-shell` 但本仓无该 feature（脚本按实际省略；M11.3 订正）；D12-5 默认关时移交链改 `window.focus`+`tab.new`，与 04 篇「ATTACH 先于 tab.new」冲突（跨构建移交会失败，release 同版本无影响；M11.3 登记新形态与撤销条件）；12 篇 manifest 示例写 `docs/`，实际资产在包内 `assets/`。 | 设计稿 | 重构末统一订正。 |
+| C13 | **docs/ 临时稿删除 + 篇号锚点清理**（与 A3 联动）。 | M11 | docs/ 已删（M11.3）；源码/测试注释中的篇号锚点仍在，待 A3 裁决后清理。 |
+| C14 | ~~**设计措辞修正**：05 篇「窗口边缘」应为「内容区外圈」；04 篇 `reorder_batch` 签名稿与上游不符（已照源）；08 篇 `note_bell` 上游不存在（未落）；04 篇 generation 等待错误码口径（实现按设计稿 `agent_identity_mismatch`/`agent_exited`）；08 篇 D08-2 待沉淀仍写「M9.3 落地时拍板」而 DECISIONS 已裁（文档漂移）；08 篇 `compile_formula` 签名草案与上游实源不符（已按源码照抄）；08 篇 #44 `draw_overlays` 未迁，M9.5 自绘 paint pass（设计稿应标注归属）；09 篇 §6 duration 值域（Default\|Short\|Long）与 06 已落六档不一致（实现按六档消费，persistent 无系统常驻档）；09 篇 M10.2 出口只写「agent 退出清进度」，实现按任务书补 TurnDone/pane 关闭清除（doc 待回登）；09 篇 `focus_window(cx)`/`focus_pane(pane,cx)` 为多窗注册表签名，与单窗 GPUI（窗口更新回调内不可再 update）冲突，实现改为显式 `&mut Window` 落点、目标选择/平台调用仍单点；09 篇 `PreparedUpdate::commit(&self)` 实为 `commit(&mut self, windows: &[Session])`，`RELEASE_DOWNLOAD_PREFIX` 落 `update_check.rs` 而非 `update_download`（M11 原位收敛）；09 篇 row 35 写 `.lnk`「静默参数」但 CLI 无静默旗标（实现按设置两条件；doc 待删措辞或另立 `--silent`）；09 篇 TaskDef 无一次性/按需形态，实现新增 `TaskSchedule`（Once/OnDemand，M11 回登）；10 篇 `load_generic_secret` 签名 `Option<Vec<u8>>` 实为 `Option<SecretBytes>`（出域句柄补强）；`store_with_username` 空 secret 拒绝为新增语义（M11 回登或裁除）；10 篇 D10-2 类别清单未回登（实现裁 6 类 + 22 敏感键表 + 导出清洗/导入复验双闸）；`filter_settings` 签名 `Vec<u8>→Vec<u8>` 实为 `Result`；备份依赖 caret 解析 aes-gcm 0.11.1/argon2 0.6.0（上游 0.11.0/0.6.0-rc.8）；**设计输入失实**：上游基线 e537d528 无 plan_balance 模块，行为真值源实为 slTerminal git 历史 `src-tauri/src/plan_balance/`（c59f47f^ 终态），设计稿「上游源」表述待 M11 订正；`AppError::Unknown` 变体未登记 01 篇锚点表；10 篇审计事件字面格式未定，实现取 `operation/path/source/result` 与 `expected/actual`（M11 回登）；上游仓内无 audit/tracing 现成形态（新建）；12 篇构建命令写 `--features slterm/gpui-shell` 但本仓无该 feature（脚本按实际省略；M11.3 订正）；D12-5 默认关时移交链改 `window.focus`+`tab.new`，与 04 篇「ATTACH 先于 tab.new」冲突（跨构建移交会失败，release 同版本无影响；M11.3 登记新形态与撤销条件）；12 篇 manifest 示例写 `docs/`，实际资产在包内 `assets/`。~~（M11.3 收口：设计稿已删，订正对象消亡；实现事实已回登 ADR-0025/0027/0029/0034/0035 与安全成因 note）。 | 设计稿 | 已闭环。 |
 | C15 | **`D04-3 windowing_behavior` 未设键**：单窗行为硬编码 `SINGLE_WINDOW_ID`。 | 12 篇随 settings 面统一裁定 | |
 | C16 | **`request_once_bounded` 无消费方**（插件宿主）。 | M9.5/M10 | |
 | C17 | **`ProviderTestOutcome` 文案本地化**（展示边界）。 | M9.5 | |
@@ -132,7 +137,7 @@
 | C23 | **真实模型出网无自动化**：`send_model_request` 已登记豁免。 | 后续 | 用本地 mock HTTP server 补四协议族 URL/头/响应解析用例。 |
 | C24 | **AUMID 图标未物化**：09 要求 `ensure_icon_file`（appLogoOverride），本仓无 app_icon/PNG 资产（归 12 篇发布面）；横幅无 logo（notify-test 打印 `icon: unavailable`）。 | M12 | 随包落图标并启用（托盘图标同源缺口）。 |
 | C25 | **真实 toast 投递面自动化为空**：`cfg(test)` 短路 show/dispatch，已登记豁免（回收站先例）；兜底 = 漏斗纯函数用例 + notify-test 真机 + 人工 smoke。 | 11 篇 | 如需 CI 化可加假 toast sink。 |
-| C26 | **`slterm_app/Cargo.toml` 无 `version`**：`CARGO_PKG_VERSION` 恒 `0.0.0`，更新比较/helper `--version` 回读依赖它。 | D12-4 首发版本线 | 设计已登记开放决策，非代码缺陷；首发前定版。 |
+| C26 | ~~**`slterm_app/Cargo.toml` 无 `version`**~~（M11.1 已定版 `0.3.0`；`CARGO_PKG_VERSION` 与 `--version` 回读均已生效）。 | D12-4 首发版本线 | 已闭环。 |
 | C27 | **更新弹窗/安装授权步未落**：`UpdateAvailable`/`DownloadStatus`/`ready_path`/`prepare/commit`/`schedule`/`mark_prompted` 均已就绪待接。 | 后续 | 消费面清单见 M10.5 报告缝合点。 |
 | C28 | **`update-check` CLI 诊断子命令未加**（任务标注可选）。 | 后续 | 排障需要时在 `cli.rs` 挂。 |
 | C29 | **`.slterm-update.slterm-lock` 启动残留**：锁权威是内核句柄，空文件无害（上游同构）。 | 产品取舍 | 如需零残留正常退出时删除。 |
@@ -141,8 +146,10 @@
 | C32 | **`RestorePoint` 无 loader**：names 私有且无 open，仅能撤回本次会话返回的句柄；跨重启恢复点清单/撤回归 06 设置页 UI 决策（上游同限制）。 | 06 UI | 落 `RestorePoint::open(path, passphrase)` 或维持会话内撤回语义。 |
 | C33 | **备份 `collect` 整单失败需 UI 展示**：settings/providers 不可解析时整单失败（安全取向），UI 须明示避免误以为成功。 | 06 UI | 随 D10-4 设置页安全分区落地。 |
 | C34 | ~~**planBalance 生产启动链未接**：注册表条目与 executor 已就绪，但生产无订阅/poller 循环（当前仅 L1 进程内驱动）。~~（M10.12 已接：`app_shell::run_shell` → `plan_balance::start_background_poll`；虚拟时钟用例锁定节拍/enabled 门控/Drop 退订）。UI 消费 `current_snapshot` + `subscribe` 归 06。 | M10.12 | 启动链已闭环。 |
-| C35 | **`assets/runtime-control-api.md` 为新建件**：原仓无此文件，内容按当前实现/Schema 整理。 | 04 篇 | 需 04 篇作者审一次事实真值。 |
-| C36 | **README/CHANGELOG/根 CLAUDE 待重写**：README 仍 Tauri 时代；CHANGELOG 0.3.0 占位；根 CLAUDE 引用已删的 `.claude/package.ps1` 与 Tauri 命令。 | M11.3 | 随文档重写收口。 |
+| C35 | ~~**`assets/runtime-control-api.md` 为新建件**~~（M11.3 已按实现与 `runtime-api-v1.schema.json` 核对：发现优先级、信封、上限、方法族、错误码、CLI 入口与 legacy 关闭均一致）。 | 04 篇 | 已闭环。 |
+| C36 | ~~**README/CHANGELOG/根 CLAUDE 待重写**~~（M11.3 已完成：README 双语、CHANGELOG 0.3.0 实写、`.claude/CLAUDE.md` 全量改 GPUI 形态、六个 crate CLAUDE.md 补齐、CONTEXT.md 重写）。 | M11.3 | 已闭环。 |
+| C37 | **D11-2 `cargo xtask` 统一入口未落地**：当前定向测试为裸 cargo 命令 + 文档红线；ADR-0028 已按现状沉淀。 | 11 篇 | 若未来封装须保留 `-p` + `--test lib_tests` + `--test-threads=1`。 |
+| C38 | **D11-3 内存压测与 `pr_size_hint.ps1` 未落地**：`scripts/windows-memory-stress.*` 与行数提示脚本均不存在；阈值未锁入检查点。 | 11 篇 | 需要长期内存质量指标或大 PR 提示时再建，先登记豁免/延后理由。 |
 
 ## D. 已修（存档，防重复登记）
 

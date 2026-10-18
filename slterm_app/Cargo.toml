@@ -4,6 +4,7 @@ name = "slterm"
 version = "0.3.0"
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 
 # D11-1:显式 test target——定向测试一律
 # `cargo test -p slterm --test lib_tests <filter>`,禁 filter 直打默认 lib target

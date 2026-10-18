@@ -12,6 +12,8 @@ resolver = "2"
 [workspace.package]
 edition = "2024"
 rust-version = "1.97.1"
+# GPL-3.0 四落点之二(D12-3):成员 crate 经 `license.workspace = true` 继承。
+license = "GPL-3.0"
 
 [profile.release]
 # Thin LTO preserves package-specific optimization levels. Dependencies retain

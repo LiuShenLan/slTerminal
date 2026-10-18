@@ -2,6 +2,7 @@
 name = "slterm_completions"
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 
 # D11-1:每 crate 显式 test target——定向测试一律
 # `cargo test -p slterm_completions --test lib_tests <filter>`,禁 filter 直打

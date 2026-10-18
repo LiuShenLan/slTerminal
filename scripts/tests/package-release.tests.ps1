@@ -1,3 +1,4 @@
+#Requires -Version 7
 [CmdletBinding()]
 param(
     # 发布版本;缺省回读 slterm_app/Cargo.toml,与打包脚本同一真值源。

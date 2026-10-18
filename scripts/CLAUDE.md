@@ -27,6 +27,8 @@
 - **凭据红线(SEC-18)**:脚本、iss、夹具中禁止出现任何真实 token/key。
 - **禁名门禁**:本目录所有脚本与 iss 内的产品名只允许 `slTerminal` /
   `slterm`;提交前跑 `python scripts/check_brand_regress.py staged`。
+- **PowerShell 7**:本目录全部 `.ps1` 首行声明 `#Requires -Version 7`;
+  5.1 下不保证解析语义,报错应明确指向版本而非晦涩语法错误。
 
 ## 文件职责
 
@@ -42,6 +44,6 @@
 ## 测试与门禁
 
 - 钉测试(安装器参数化/清单/新鲜度/体积预算)归测试层脚本族,存在时由
-  `release.ps1` 自动执行。
+  `release.ps1` 自动执行;单跑入口 `scripts/tests/package-release.tests.ps1`。
 - 架构门禁:`python scripts/check_architecture.py`;禁名门禁:
   `python scripts/check_brand_regress.py staged`。

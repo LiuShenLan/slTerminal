@@ -3,6 +3,9 @@
 **命令成功 ≠ 发布核验完成。** 每项须有人工观察/实测证据,逐项勾选后
 才允许把结论落 `architecture/notes/packaging/`。
 
+**运行环境**:全部 `.ps1` 首行声明 `#Requires -Version 7`,发布链必须在
+PowerShell 7(`pwsh`)下执行;5.1 不受支持。
+
 ## 构建与资产
 
 - [ ] `CHANGELOG.md` 与 `release-notes/vX.Y.Z.md` 已按双语完成,表达同一事实。

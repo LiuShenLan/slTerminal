@@ -81,28 +81,25 @@ class BrandRegressTests(unittest.TestCase):
             self.assertIn("pebrel", result.stderr)
             self.assertIn("source.rs", result.stderr)
 
-    def test_staged_exempt_paths_and_temp_doc_prefixes_are_skipped(self) -> None:
+    def test_staged_only_exempt_paths_are_skipped(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             repository = Path(directory)
             init_repository(repository)
             (repository / "Cargo.toml").write_text(
                 "# anchor nebula-v1.16.1-owned-base\n", encoding="utf-8"
             )
-            note = repository / "docs" / "pebrel-refactor" / "note.md"
-            note.parent.mkdir(parents=True)
-            note.write_text("pebrel baseline review\n", encoding="utf-8")
-            design = repository / "docs" / "pebrel-design" / "draft.md"
-            design.parent.mkdir(parents=True)
-            design.write_text("nebula design\n", encoding="utf-8")
+            # 临时稿目录已随 M11 删除:任何 docs/ 路径都不再获得前缀豁免。
+            former_note = repository / "docs" / "former-note.md"
+            former_note.parent.mkdir(parents=True)
+            former_note.write_text("pebrel baseline review\n", encoding="utf-8")
             ordinary = repository / "docs" / "guide.md"
-            ordinary.write_text("pebrel mention\n", encoding="utf-8")
+            ordinary.write_text("nebula design\n", encoding="utf-8")
             run_git(repository, "add", "-A")
             result = run_checker(repository, "staged")
             self.assertEqual(result.returncode, 1)
+            self.assertIn("docs/former-note.md", result.stderr)
             self.assertIn("docs/guide.md", result.stderr)
             self.assertNotIn("Cargo.toml", result.stderr)
-            self.assertNotIn("pebrel-refactor", result.stderr)
-            self.assertNotIn("pebrel-design", result.stderr)
 
     def test_message_mode_hit_and_safe_pass(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -2,6 +2,7 @@
 name = "slterm_hook"
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 
 # 纯 std 刻意为之:本二进制每个 AI 回合事件跑一次,进程启动即延迟预算——
 # 无依赖 = 最小导入面 = 冷启动 <15ms(行为合同,随迁移一字不动)。

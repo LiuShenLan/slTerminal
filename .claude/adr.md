@@ -2,6 +2,8 @@
 
 架构决策记录。各条正文一律为**当前有效形态**——被后续决策推翻的段落已原位收敛，修订要点见各条末尾「沿革」行；完整编年史从 git log 查。
 
+> WebView 双进程时代的栈级决策（0004–0024 中的部分条目）已由 ADR-0025 起的单进程 GPUI 架构整体取代；这些条目作为历史决策保留供追溯，当前有效形态以 ADR-0025 以后条目与代码为准。
+
 ## 索引
 
 | ADR | 标题 | 状态 |
@@ -30,6 +32,17 @@
 | 0022 | DA1 后端全量接管 + 恢复注入就绪闸门 | accepted |
 | 0023 | 设置中心组模型改全局/Agent 二分 | accepted |
 | 0024 | agent 目录沙箱白名单 + pinned watcher | accepted |
+| 0025 | 单进程 GPUI 模块化单体（workspace 拓扑、类型锚点、错误信封） | accepted |
+| 0026 | 数据目录、文件命名与零迁移 | accepted |
+| 0027 | 设置持久化、后台任务注册表与 plan_balance 推送 | accepted |
+| 0028 | 测试形态与门禁（显式 test target、四层、TQ-COV-06） | accepted |
+| 0029 | Runtime 控制面与 CLI 双人格（含 legacy 回落关闭） | accepted |
+| 0030 | AI CLI 集成与 hook 拓扑 | accepted |
+| 0031 | 单窗口工作区、侧栏、键盘与复制语义 | accepted |
+| 0032 | git 子进程、diff 形态与编辑器字体键域 | accepted |
+| 0033 | 内置主题、窗口材质与 i18n | accepted |
+| 0034 | 凭据、审计与加密备份 | accepted |
+| 0035 | 打包发布链、体积预算与合规四落点 | accepted |
 
 ## 0001 活动栏 + 共享侧栏区（侧栏视图单槽位状态机）
 
@@ -266,7 +279,7 @@
 | D13 | TE-12 knip 门禁 | 方案 A：补 `entry`/`ignoreExports`/`ignoreFiles` 至 `npx knip --production` 退出码 0；不窄化 CI 口径 |
 | D14 | TE-07 TS7 声明失真 | **双 TS 并存（side-by-side）**——见下「TE-07 终态」节 |
 | D15 | SEC-15 shell fallback | 收窄为「两侧 canonicalize 均失败且归一化字符串完全相同」才放行，单侧失败即拒绝；`pty/CLAUDE.md` 登记残余风险；补 L1 拒绝用例。不引入 Win32 文件身份比对。alias 兼容保持（Store 版 pwsh 场景两侧指向同一路径、双侧均失败，仍走 fallback 放行）。**2026-09 残余风险已销**：字符串回退改 Win32 句柄级文件身份比对，SEC-15 单侧拒绝保留为纵深 |
-| D16 | SEC-04 nonce | **威胁模型已消除**：键转发/命令重放通道随 ADR-0019 预览迁移退役；nonce 保留为纵深。0021 以收窄 keyfwd 重建通道并登记新威胁面（global 命令集锁死，command-catalog.test.ts 守卫） | src/panels/CLAUDE.md |
+| D16 | SEC-04 nonce | **威胁模型已消除**：键转发/命令重放通道随 ADR-0019 预览迁移退役；nonce 保留为纵深。0021 以收窄 keyfwd 重建通道并登记新威胁面（global 命令集锁死，command-catalog.test.ts 守卫）；登记点见对应模块 CLAUDE.md |
 | D17 | SEC-16 root 竞态 | 后端 `tokio::sync::Mutex` 串行化整个 `set_project_root_impl`（Cargo.toml tokio 补 `"sync"` feature）；前端零改动 |
 | D18 | FE-37 store IPC | `setProjectRoot` 调用上提调用方（store 纯状态化）；toast 由 `switchToPageShared` 承担（BE-23 同链修）；不登记豁免 |
 | D19 | FE-39 嵌套项目 | 接受「最深前缀」语义；实查测试已固化（`nav-tree-history.test.tsx` 嵌套项目用例），零代码改动，仅 verify 断言确认存在 |
@@ -663,3 +676,343 @@
 - 沙箱放行面扩大至 agent 目录集（静态表白名单，无新增注入面）；`project_root=None` 时 agent 目录仍放行（视图在无项目时可用）。
 - 新增 agent = agent_dirs.rs 表内追加一行 + profile 声明 `capabilities.globalFiles`（configDir/runtimePaths）。
 - `notify_watch` 签名加可选参数为 breaking change（允许，无兼容过渡）。
+
+## 0025 单进程 GPUI 模块化单体（workspace 拓扑、类型锚点、错误信封）
+
+**Status**: accepted（2026-10-18）
+
+**上下文**：旧双进程（WebView 前端 + Rust 后端）栈在 M0 整体删除，重构为单进程 GPUI 应用。需要一次性定死 workspace 成员、依赖方向、跨领域类型归属与错误信封，否则各域会在迁入期各自造类型/执行通道，门禁无从机械强制。
+
+**决策**：
+
+- **workspace 六成员**：`slterm_app`（lib+bin `slterm`，application 层）、`slterm_terminal`/`slterm_settings`/`slterm_split`/`slterm_completions`（core 层）、`slterm_hook`（bin `slterm-hook`，hook 层）。application 单向依赖全部 core；core 不依赖 app 或渲染包；`slterm_hook` 不被 app 依赖（管道服务器与协议解析住在 app 的 `ai_hook` 域）。
+- **零生产依赖契约**：`slterm_settings`/`slterm_split`/`slterm_hook` 零生产依赖，`slterm_completions`/`slterm_terminal` 无本地边；`renderer_packages`（gpui/gpui_platform/gpui-component 等）禁入 core/hook 生产依赖。由 `architecture/dependencies.toml` + `scripts/check_architecture.py` 机械强制；成员键集与根 `Cargo.toml` 全等。
+- **类型锚点**：pane/tab 标识与分屏树归 `slterm_split`；设置/主题/BlurMode 归 `slterm_settings`；终端网格/OSC/快照类型归 `slterm_terminal`；补全值族归 `slterm_completions`；通用错误与品牌常量归 `slterm_app::error`/`slterm_app::brand`。他处只许 `use` 或经 facade 传参，禁重复定义、别名漂移与字段语义改写；新增跨领域类型先登记归属。
+- **错误信封**：`AppError` 四变体 `Io`/`Pty`/`Gpui`/`Unknown`。`Unknown(String)` 承载领域内部失败（如套餐查询/解析），消息是用户可见语义，禁止携带凭据值（SEC-18）；领域不得另立 envelope。`From<io::Error>` → `Io`，`From<anyhow::Error>` → `Gpui`。
+- **平台分支收敛**：业务 `#[cfg(windows)]` 仅允许出现在 PTY/平台封装模块；core 侧 Windows 适配收在 `tty/windows`。
+- **门禁三件套**：行数棘轮（`architecture/file-budgets.txt`）、依赖方向、禁名回流（`scripts/check_brand_regress.py`）为本地强制层，git hooks 挂接；无 CI。
+
+**被否决的备选**：
+
+- **保留双进程/WebView 形态**：定位要求 GPU 加速与单进程；WebView/IPC 栈的跟随延迟与状态双源已被 ADR-0021 证明是结构性负担。
+- **单 crate 单体**：core 能力与壳无法机械隔离，依赖方向与零依赖契约失去落点。
+- **`slterm_config` 独立 crate**：诊断/宽容解析只有一个实现，独立 proc-macro 抽象税大于收益；并入 `slterm_settings` 内部模块。
+- **各领域自建错误 envelope**：调用点语义分叉、错误码漂移；统一四变体足够。
+
+**后果**：
+
+- 新 crate/新依赖必须先过 `dependencies.toml` 与行数预算；renderer 依赖误入 core 即门禁红。
+- `AppError::Unknown` 成为领域失败的唯一通用出口；新增变体须回本锚点登记。
+- `architecture/notes/` 记录重大依赖/所有权决策的成因。
+
+**沿革**：2026-10-18 M11.3 沉淀（原 01 篇 D1/B.1 与类型锚点表）。
+
+## 0026 数据目录、文件命名与零迁移
+
+**Status**: accepted（2026-10-18）
+
+**上下文**：产品历史上有 0.2.0 便携版（settings.json 在 exe 同级），本次重构更换全部持久化形态。目录与文件命名发布后即成用户数据迁移义务；备份魔数随首份产物固化。
+
+**决策**：
+
+- **数据目录**：默认 `%APPDATA%\slterm`（叶子名去品牌、全标识符一致）；`SLTERM_CONFIG_DIR` 优先，空串视为未设置；回退链 APPDATA → USERPROFILE → temp。路径推导唯一权威在 `slterm_settings::paths`，app 侧只委托。
+- **文件命名去品牌**：`settings.json`、`session.json`、`providers.json`、`history.jsonl`、`directory_history.json`、`runtime.port`、`themes/*.slterm-theme.json`。目录名已带品牌，文件名不重复品牌。
+- **零迁移**：新版只读写 `%APPDATA%\slterm`；旧版 exe 同级 `settings.json` 不看不迁。旧数据不构成兼容义务（全新 fork），仅 git 历史保留原貌。
+- **备份魔数**：`TRMBK001`（8 字节，去品牌），同时作 AES-256-GCM 的 AAD，格式身份与密文认证绑死；魔数不符即「非本应用备份」一票拒解。
+
+**被否决的备选**：
+
+- **`%APPDATA%\slTerminal`**：与 crate/env 前缀不一致，且改名史已证明品牌名会再变。
+- **带品牌文件名**：目录名已足够辨识来源；文件名带品牌会在下次改名时产生迁移链。
+- **双位置探测并存/首启迁移**：永久双源或迁移哨兵复杂度；用户数据量仅两份部署，重配成本低于迁移机制维护成本。
+
+**后果**：
+
+- 0.2.0 用户升级后需要重新配置（或手工复制旧 JSON 到新目录，形态不同不保证可读）。
+- 任何新持久化文件沿用去品牌命名与原子写纪律；备份魔数不得变更。
+
+**沿革**：2026-10-18 M11.3 沉淀（原 01 篇 D2/D3、06 篇 D06-2、10 篇 D10-1）。
+
+## 0027 设置持久化、后台任务注册表与 plan_balance 推送
+
+**Status**: accepted（2026-10-18）
+
+**上下文**：设置键形态、写通道与后台任务模型在旧栈中分散（平铺键 + 多写通道 + 前端/后端双调度）；单进程后需要单点真值源与单一写通道，否则浅合并写会互覆、任务元数据会双源漂移。
+
+**决策**：
+
+- **settings 段嵌套**：每个键归属语义段（appearance/scrolling/agentHooks/…），「键 → 段」映射单源在 `slterm_settings::keys`；未知键与用户手改段在对象树原位保留。
+- **写通道单点**：`slterm_app::settings_store` 持白名单校验、段级浅合并、保存锁、原子写、`.bak` 与损坏三态；写核心函数私有，绕过点由源码扫描用例拒绝。后端消费型配置走域专用命令（校验 + 内存态 + 落盘一体），前端消费型走通用段写；禁止自建第二写通道。
+- **后台任务元数据单点**：`background_tasks` 注册表持 `taskId/title/边界/默认值/schedule/executor`；设置页与调度器只读该表，前端不复制边界/默认值。任务配置落 `backgroundTasks.{taskId}` 段，写通道 = 注册表命令。
+- **TaskSchedule 三态**：`Interval`（按间隔连续触发）、`Once`（启动一次性，`interval_sec` 表示启动延迟，失败也不重跑）、`OnDemand`（订阅方按需触发）。三者共用订阅生命周期、重入闸门与失败策略，只有驱动方不同。
+- **plan_balance 推送 = 模块级 watch channel**：值本体在 `SNAPSHOT`，订阅者只收「有新值」唤醒并读最新快照；有界 1 槽合并连续推送，多消费者不耦合组件树。`refresh_plan_balance` 恒 Ok，失败保留旧值不冒泡 UI。
+- **备份 UI 入口**：设置页安全分区（恢复点清单同面）；引擎先落，UI 接线归设置页后续步骤。
+- **回看容量**：默认 10000 行（可选值集 1000–100000），随上游基线取值；后续按真实长会话实测再评，改动走设置键与契约测试。
+
+**被否决的备选**：
+
+- **平铺键**：语义分组与段级浅合并能力丢失，跨篇段归属协议更难维护。
+- **前端直写文件/后端每轮读盘**：并发写竞态与运行期立改语义丢失。
+- **跨端统一调度器**：plan_balance 需后台网络与预热语义，session 刷新需与手动刷新同一执行体；统一调度器会把两套代价强行合并。
+- **GPUI `Context::notify` 推送 plan_balance**：耦合组件树；watch channel 对多消费者与未来 HUD/托盘同样可用。
+
+**后果**：
+
+- 新增任务 = 注册表一条元数据 + 一端执行体；新增设置页 = 页面注册 + 段白名单，框架零改动。
+- 设置写与审计绑定：所有设置写经 `audit` 包装，事件只记 operation/path/source/result。
+- 1Hz 快照与偏好设置分域：布局/侧栏状态走 session，偏好态走 settings，互不污染。
+
+**沿革**：2026-10-18 M11.3 沉淀（原 06 篇 D06-1/12 篇 ADR-0012/0013 的单进程形态、09 篇 TaskDef 扩展、10 篇 D10-3/D10-4）。
+
+## 0028 测试形态与门禁（显式 test target、四层、TQ-COV-06）
+
+**Status**: accepted（2026-10-18）
+
+**上下文**：旧四级金字塔（cargo/vitest/xterm-headless/wdio）随 WebView 载体消亡。多 crate workspace 下，`cargo test` 的默认 lib test target 可能收不到测试专用链接参数；历史上曾以显式 target + `[lib] test = false` 修过零输出崩溃。
+
+**决策**：
+
+- **每 crate 显式 test target（D11-1）**：`[lib] test = false` + `[[test]] name = "lib_tests" path = "src/lib.rs"`；定向测试一律 `cargo test -p <crate> --test lib_tests <filter> -- --test-threads=1`。
+- **TQ-COV-06 预防性知识**：带 filter 或 `--lib` 会绕过显式 target 重建默认 lib 单测 target，测试二进制可能缺少链接参数/manifest 控制，表现为零输出崩溃（历史症状 0xc0000139）。遇同类症状先查测试 target 形态，勿当业务 bug 排查。
+- **四层形态**：① Rust 单测（主力，内嵌 `mod <领域>_tests` + `tests/` 集成）；② GPUI 虚拟窗口 UI 测试（`#[gpui::test]`，feature `gpui-test-support` 双门控）；③ 脚本层门禁与工具箱（python unittest / PS1 / cargo）；④ 豁免登记制度（`.claude/test-exemptions.md` 单表真值源）。
+- **统一入口不封装**：D11-2 的 `cargo xtask` 形态未落地；当前以裸 cargo 命令 + 文档红线为准。若未来封装，必须保持 `-p` + `--test lib_tests` + `--test-threads=1` 三要素。
+- **串行红线（BE-06）**：全量 cargo 测试与脚本钉测试禁止并行；性能基准与 PTY 容量断言对 CPU 负载敏感。
+- **命名**：内嵌模块领域具名；函数「对象_行为_场景」snake_case 裸名；集成 `<域>_tests.rs`；脚本 `test_*.py` / `*.tests.ps1`。
+- **覆盖面判定**：「可自动化」= Rust 可测或 GPUI 虚拟窗口可测；其余登记豁免并注明兜底层级，禁止未登记豁免。
+- **Runtime conformance**：以协议桩为主（可重复），真 CLI 作为实机验收点（默认 shell + 一家 CLI 冷启动）登记豁免表；不为不可重复的真实环境写必红用例。
+- **禁名词表**：只防上游旧品牌回流；竞品名不入门禁（不迁旧栈竞品名清单）。
+- **内存压测延后**：阈值需 M10 后实测一周稳定基线再锁入检查点；当前无压测脚本与检查点，登记为延后项而非既有契约。
+
+**被否决的备选**：
+
+- **默认 lib test target**：manifest 控制不可及，TQ-COV-06 类风险无直接落点。
+- **`cargo xtask` 封装**：本轮未实现；裸 cargo 足够且更贴近 Rust 习惯，红线由文档与 hooks 兜底。
+- **并行跑全量测试**：基准与 PTY 测试会间歇误红，且掩盖真实回归。
+
+**后果**：
+
+- 新 crate 必须带显式 test target 才能进 workspace 测试门禁。
+- 测试命名/TQ-COV-06/串行是提交前固定检查项；门禁脚本自身由 `scripts/tests/test_*.py` 自测。
+- UI 测试只在 feature 形态编译，生产构建不带测试夹具。
+
+**沿革**：2026-10-18 M11.3 沉淀（原 11 篇 D1/D2 与 TQ-COV-06 改写）。
+
+## 0029 Runtime 控制面与 CLI 双人格（含 legacy 回落关闭）
+
+**Status**: accepted（2026-10-18）
+
+**上下文**：AI CLI 需要可编程控制终端；同一 exe 既要 GUI 又要 CLI。Windows 子系统选择、契约数值校准、单窗收编与旧式回落协议都是发布后难逆面。
+
+**决策**：
+
+- **Windows 子系统 = console**：同 `slterm.exe` 双人格——带子命令 = CLI 客户端，无子命令 = GUI。接受 GUI 启动时闪控制台窗，换取标准流正确性；不采用 GUI 子系统 + `AttachConsole` 的标准流边缘缺陷路径。
+- **控制面协议**：本机 `127.0.0.1` TCP，JSON Lines；信封 `{"protocol":"slterm.runtime","version":1,...}`，请求 `deny_unknown_fields`，响应按 `ok/result/error` 互斥校验。token 128 位随机 hex，缺失/不符静默丢弃（先于参数校验）。请求体上限 128 KiB；单实例最多 64 个并发客户端；读写超时 5 秒，控制派发 30 秒（`pane.exec` 按参数追加预算）。
+- **端点发现三级**：进程内 `CHILD_ENDPOINT` > 显式 `SLTERM_RUNTIME_ENDPOINT`（子进程经环境继承）> 数据目录 `runtime.port`；显式端点非法时不回落端口文件，避免选错实例。
+- **契约数值首发照搬上游基线**：等待上限 600s、短超时 30s、RUN_START_GRACE 3s、订阅有界 16、请求/响应上限、截断值等首发取上游实测值，发布后即成外部契约；校准须以真实冷启/委派/run 时延实测为准并登记。
+- **单窗收编**：删除 `windowing_behavior` 设置键；单窗行为硬编码（`SINGLE_WINDOW_ID`），`window.*` 只作用于当前唯一窗口。
+- **legacy ATTACH 回落首发关闭（D12-5）**：首行非 JSON 默认静默丢弃；`legacy-attach` 编译 feature 开启后才接受 `ATTACH/PING`，token 不符仍静默丢弃。单实例移交与存活探测走版本化 JSON：第二实例发 `window.focus` + `tab.new`（不再依赖 ATTACH 先于 tab.new 的顺序）。
+- **跨构建移交限制**：新旧构建若一侧不支持 JSON 移交，移交会失败；同版本发布无影响。旧客户端接入诉求出现时再评估启用 `legacy-attach`。
+- **console 阻塞父 shell 的明示义务**：从 pwsh/cmd 直接启动 `slterm.exe` 会同步阻塞父 shell；安装器快捷方式与发布说明必须告知日常启动用快捷方式或 `Start-Process slterm`。
+- **首发即开 GitHub Release**：首发即挂 Release，自动更新链公网验收；发布坐标常量单点定义在 `update_check.rs`（fallback 复用同仓名），其他模块只 `use`。
+
+**被否决的备选**：
+
+- **GUI 子系统 + AttachConsole**：PowerShell 管道重定向有已知边缘缺陷，标准流正确性优先。
+- **独立 CLI 可执行文件**：双二进制版本错位与打包面翻倍；同 exe 双人格是单文件发布的基础。
+- **首发启用 legacy 回落**：扩大首发审查面；预留在 feature 位，需要时再开。
+- **保留 `windowing_behavior` 键**：多窗前提已不存在，保留键违反按终态设计原则。
+
+**后果**：
+
+- `runtime-control-api.md` 与 `runtime-api-v1.schema.json` 为随包事实文档/schema 真值源；实现能力以 `runtime.describe` 为准。
+- 新增方法/错误码须同步 Schema、describe 与文档；错误码集合含信封、生命周期、执行、run、git、委派、编排各域。
+- 移交链的跨构建兼容是已知边界；`legacy-attach` 是预留翻转位。
+
+**沿革**：2026-10-18 M11.3 沉淀（原 04 篇 D04-1/D04-2/D04-3、12 篇 D12-5 与 C14 移交形态订正）。
+
+## 0030 AI CLI 集成与 hook 拓扑
+
+**Status**: accepted（2026-10-18）
+
+**上下文**：27 家 AI CLI 的身份识别、事件上报、hook 安装、会话历史与状态投影需要统一拓扑；旧栈的信号文件/轮询通道与 hook 管道职责混杂。
+
+**决策**：
+
+- **命名管道 = hook 事件唯一权威通道**：`slterm-hook` 把原始载荷经命名管道转发给宿主；旧信号文件事件通道退役。
+- **statusline 用量信号分通道保留**：信号文件介质保留（app 数据目录），与 hook 管道分通道；桥接脚本节流后写 ContextUsage，并透传用户原 statusline。
+- **流键收窄**：`AiHookStreamKey` = source + session + pane + agent_pid + bridge_instance，`remote_process` 维度随 SSH/远程砍除。
+- **`AgentSession.source` 宽松落盘、严格消费**：持久化保留 hook 原报字符串；恢复注入时经 `AgentKind::parse` 归一，不归一即不可恢复。
+- **27 家一等 AgentKind**：`AgentKind::ALL` 为封闭集，屏幕规则 TOML 随仓；新增 agent = 枚举 + 规则 + 必要的安装器/目录表，不裁剪既有集。
+- **SEC-12 statusline 审查词表**：初版在安装器审查门落地，演化登记到安全审计域；审查门只覆盖 statusline 键，hooks 数组的 command 字段由 marker/归属指纹兜底。
+- **AssistantConfig 独立文件**：AI assistant 配置不并入 settings 树；hook 失败边默认关（与 assistant 默认关闭一致），复用 `AssistantConfig.enabled` 作为载体。
+- **gpui-component 补丁最小集**：只保留数学渲染必需补丁；其余随钉版携带的产品补丁在对应领域点亮时增量评审，撤销条件登记上游审计链。
+- **hook 安装权威**：claude/kimi/codex/pi/opencode 五家按各自配置形态安装；codex 支持 `--chain` 串联原 notifier；managed 文件归属指纹与 config_guard 监视防外部改写。
+- **补全方言**：保留 Posix 方言（Git Bash/MSYS 场景）；SSH/WSL 语义源、ANSI/LS_COLORS 样式分支与 Unix 小分支整面不迁。
+- **WSL/SSH/远程整面不迁**：`WSLENV` 合并、`ExecLocation::Wsl`、远端进程树、remote_* 错误码与移动端桥接均无对象；只保留本地 PTY 与 loopback 控制面。
+
+**被否决的备选**：
+
+- **信号文件作 hook 事件唯一通道**：轮询延迟与丢失窗口；命名管道有界且即时。
+- **封闭 `AgentSession.source`**：27 家之外的 CLI 经 hook 上报会被静默丢弃，与「面向所有 AI CLI」定位冲突。
+- **hook 失败边默认开**：与 AI assistant 默认关闭一致；失败边只进闸门 + 日志证据，不直接弹 UI。
+- **补丁全集随迁**：补丁维护面与上游漂移风险不成比例。
+
+**后果**：
+
+- 新增 CLI 的接入面固定为枚举/规则/安装器/目录表四类登记；未登记 CLI 仍可经宽松 source 落盘但不可恢复。
+- hook 通道与 statusline 通道各自有界；宿主解析 JSON，helper 不重编码。
+- 安全审查词表与审计事件是后续演化的单点，新增命令形态不得绕过。
+
+**沿革**：2026-10-18 M11.3 沉淀（原 03 篇 D03-1..D03-4、08 篇 D08-1..D08-3、SEC-12）。
+
+## 0031 单窗口工作区、侧栏、键盘与复制语义
+
+**Status**: accepted（2026-10-18）
+
+**上下文**：旧产品面是「项目 → 操作页面 → 面板」多层模型；单进程 GPUI 重写后需要定死工作区骨架、侧栏状态归属、窗口回放与复制键语义。
+
+**决策**：
+
+- **单窗口工作区**：`SltermWorkspace` 直持 tab/pane 实体与展示态，无投影层。`WorkspaceTab` 是封闭枚举（Terminal/Settings/Document/Code/Image）；新增类型须在单一注册点登记，恢复时过滤未知。
+- **分屏树**：每个 Terminal tab 持 `panes` + `SplitTree<PaneId>` + `focused`；pane id 全 workspace 唯一、终生不复用；关 pane 由 `RemoveOutcome` 裁定（关整 tab / 兄弟收编）。布局只经 session schema 的快照/恢复转换对。
+- **WindowState 回放**：记住上次窗口大小/位置并在启动时回放；字段语义是行为输入而非诊断。
+- **侧栏双槽**：ActivityBar + 上下双槽内容区；视图封闭集 `SideViewId`（nav/explorer/commit/agentFiles），每半区最多一个打开视图，展示由状态纯推导。
+- **侧栏状态归 session**：collapsed/width/active_view 跟随现场恢复，不进 settings 偏好域。
+- **复制语义**：`Ctrl+Shift+C` 有选区 → 复制并反馈；无选区 → 静默吞，不透传中断、不写剪贴板。`Ctrl+C` 恒中断并透传 PTY，供 AI CLI 取消。
+- **键位单源**：静态默认表 + settings `keybind` 段（行序即优先级、整表替换）；`Ctrl+C`/`Ctrl+Shift+C` 是终端保留键，用户表任何条目被准入门拒绝；新增可重绑动作须同步 `EDITABLE_ACTIONS` 与默认镜像。
+- **tab 元数据**：`TabMeta` 持 custom_name/color/launch；文件 tab 脏关闭与整窗关闭共用「保存/不保存/取消」语义。
+
+**被否决的备选**：
+
+- **保留项目/操作页面层级**：单窗口下无页面宿主与跨页终端存活需求；tab/pane 直接表达用户心智。
+- **侧栏状态归设置**：布局恢复不再完整；1Hz 快照与偏好写通道混域。
+- **无选区 Ctrl+Shift+C 透传中断**：与 `Ctrl+C` 形成同果双键，且违背复制键永不进 PTY 的冒泡纪律。
+- **多槽/浮动侧栏**：单窗口窄屏下复杂度大于收益。
+
+**后果**：
+
+- 快照只收 Terminal tab；Settings/文件 tab 是纯视图，无进程/PTY 生命周期。
+- 新增侧栏视图 = 扩封闭枚举 + 单一注册点；未注册 id 恢复时静默丢弃。
+- 键位冲突在准入门消化，运行时不再二次判断。
+
+**沿革**：2026-10-18 M11.3 沉淀（原 05 篇 D05-1/D05-2/D05-3、13 篇 D13-1）。
+
+## 0032 git 子进程、diff 形态与编辑器字体键域
+
+**Status**: accepted（2026-10-18）
+
+**上下文**：旧栈用 git2 类型化 API；上游用 git 子进程；两套执行体的状态值集与 hunk 语义不同。diff 形态与编辑器字体键域同样在旧产品面与上游形态之间有分叉。
+
+**决策**：
+
+- **git 执行体统一 = 子进程**：`slterm_app::git` 以 git CLI 重实现操作面；每命令 `--no-optional-locks`（flag 位于子命令之前），argv 不经 shell，Windows 挂 `CREATE_NO_WINDOW`。状态解析单源（porcelain v2），消费面（文件树、Commit、gutter、diff、runtime git.*）共用同一执行体。旧 git2 语义资产（LRU 仓库缓存、不扫 ignored、rename 双检、rollback 三方字节一致）转为对照用例保留。
+- **通用 diff = 双栏对照**：只读双栏（HEAD ↔ 工作区），hunk 导航与滚动偏移同步；gutter 点击/重开命中走 `open_diff_tab` 单入口。冲突三栏合并器不在本轮交付。
+- **编辑器字体键域 = 共享单键**：终端与编辑器共享 `font_family`/`font_size`，不保留旧栈 `{terminal, editor}` 双值；旧 editor 值不迁移（用户明示，泛化信号）。
+- **文件打开路由**：`openable_in_app` 单判定 → Image/Document/Code；gitshow 只读臂复用 Code tab。文件树 CRUD、回收站删除（`SHFileOperationW` + `FOF_ALLOWUNDO`）与 git 状态着色共用文件树模型。
+
+**被否决的备选**：
+
+- **git2 移植**：类型化 API 与既有投资有吸引力，但子进程形态与上游同构、跨版本稳定，且消费面已按文本协议统一；双轨并存会永久维护两套状态解析。
+- **unified 单栏 diff**：双栏左右语义对等、与旧面板心智连续；unified 无法继承旧实现且弱化对照。
+- **独立 editor 字体键族**：设置面与迁移映射表扩面；共享单键更简洁。
+
+**后果**：
+
+- 新 git 能力只经 `slterm_app::git` 增加，禁止在面板侧 spawn git 或维护第二份 porcelain 解析。
+- gutter 每个编辑器独立刷新是已知代价；后续可接文件树快照扇出或短 TTL 缓存。
+- diff 只读；写操作（rollback/unstage）经 runtime 执行器并做 status 陈旧比对。
+
+**沿革**：2026-10-18 M11.3 沉淀（原 07 篇 D07-1/D07-2/D07-3、D06-2 零迁移的编辑器分支）。
+
+## 0033 内置主题、窗口材质与 i18n
+
+**Status**: accepted（2026-10-18）
+
+**上下文**：仅暗色定位；旧栈主题体系含亮色与多方案切换；窗口材质在 09 篇有五档枚举；界面需要中英双语静态生成。
+
+**决策**：
+
+- **内置主题 = 上游暗色子集 + Linear 默认**：`ThemeName::BUILTIN` 八项（Linear/BreezeDark/MintDark/Nord/Catppuccin Mocha/Frappe/Macchiato/GlassDark），仅暗色；未知/退休 id 回退 Linear。Linear 是 slTerminal 自有默认主题（旧 UI 重设计定稿值迁入）。
+- **主题校验**：语义槽 WCAG 对比度校验（文本/图形阈值）是准入门；新增主题必须过 `ReviewedPalette` 校验，不达标不得入目录。
+- **窗口材质五档枚举**：`BlurMode = None/Mica/MicaAlt/Aero/Acrylic`，默认 `None`（性能安全档）；`opacity` 为标量。材质通道 WCA/DWMSBT 互斥，按 Windows build 门控，Acrylic 回退路径保留。
+- **i18n 双语静态生成**：`en-US`/`zh-CN` 目录 JSON 构建期展平生成 typed 键；`LanguagePref = System/English/Chinese`，System 按系统 locale 协商。翻译键集是硬合同（缺键/多余键构建期红）。
+- **透明度纪律**：壳层 opacity 只压表面 token 的 alpha，文字前景恒 1；重算幂等，静默启动不得闪现/抢焦点。
+
+**被否决的备选**：
+
+- **保留亮色/全量主题目录**：违反仅暗色定位；目录与校验面减半。
+- **运行时远程拉取主题**：无网络依赖需求，本地目录足够；主题包导入导出走 ZIP 校验通道。
+- **bool blur 占位**：无法表达五档材质与性能档位；字段一次到位。
+- **运行时动态翻译**：静态生成可在构建期发现缺键，运行期零查找成本。
+
+**后果**：
+
+- 新增主题 = 目录项 + 调色板 + WCAG 用例；主题切换随设置写通道持久化。
+- 材质/壁纸相关平台调用只在平台封装模块；测试以纯函数 gate 矩阵覆盖。
+- 新增语言 = 注册表条目 + 目录 JSON + 构建期键集校验。
+
+**沿革**：2026-10-18 M11.3 沉淀（原 06 篇 D06-3/D06-4、09 篇 D09-1、06 篇 i18n 形态）。
+
+## 0034 凭据、审计与加密备份
+
+**Status**: accepted（2026-10-18）
+
+**上下文**：凭据、设置写审计与本地备份都要跨发布长期存续；类型层泄露、日志插值、备份边界错纳都是不可逆事故。旧栈的备份类别与敏感键表基于旧键域，必须按新键域重定。
+
+**决策**：
+
+- **凭据域**：真实凭据只存 Windows 凭据管理器；业务只经 `secrets` 门面（`platform::credentials` 为 `pub(crate)`，旁路由源码扫描用例锁死）。`SecretBytes` 出域句柄即用即焚（Zeroizing）；DTO/快照/日志/错误消息无 token 字段、禁插值；`load_generic_secret` 返回 `Option<SecretBytes>`，`store_with_username` 拒绝空 secret。测试夹具一律 `sk-test` 假值（SEC-18）。
+- **审计通道**：唯一形态 = `tracing` target `audit`；生产不装全局 subscriber，经 `log-always` 无条件桥接进既有单日志栈（测试用作用域 subscriber 捕获）。事件格式：设置写 `operation/path/source/result`，SEC-13 对账 `operation/path/expected/actual`（SHA-256 hex 指纹）；不记文件内容或凭据值。设置写只经 `audit::write_settings`/`write_user_settings` 包装，写核心私有。
+- **加密备份格式**：`TRMBK001 | salt(16) | nonce(12) | ciphertext`；AES-256-GCM，魔数同时作 AAD；Argon2id v0x13（m=19456 KiB、t=2、p=1）；口令最少 8 字符；派生密钥/明文/恢复点明文全程 Zeroizing。恢复序 = 完整鉴权 → 全量校验 → 才允许落盘；任一条不过整单拒写。
+- **备份类别六类（D10-2 实现裁定）**：settings / session / themes / command_history / directory_history / providers；默认仅 settings。AI 会话库、环境变量、凭据库、token 来源文件永不读写进出备份。
+- **敏感键剥除表 22 项（D10-2 实现裁定）**：`access_token`/`api_key`/`authorization`/`client_secret`/`credential(s)`/`password`/`private_key`/`refresh_token`/`secret`/`token` 等大小写精确匹配项；导出侧剥除、导入侧复验双闸；`api_key_set`/`api_key_hint` 是引用与尾四掩码，不在剥除列。
+- **备份 UI 入口（D10-4）**：设置页安全分区，恢复点清单同面；引擎与恢复点撤回先落，UI 接线归后续。
+- **plan_balance 凭据纪律**：只读 user 层 `~/.claude/settings.json` 的 `env` 段，不读凭据库；与 `ai_providers` 的凭据库通道由源码扫描用例隔离。
+
+**被否决的备选**：
+
+- **token 随 DTO/快照出域**：类型层无防线，任何日志/Debug 实现都可能泄露。
+- **审计用独立日志文件/subscriber**：双栈重复落点与初始化时序问题；`log-always` 单栈最稳。
+- **备份遍历 home 目录**：白名单即安全边界；枚举即授权，遍历即扩大事故面。
+- **敏感键 denylist 只做导出**：导入侧手改文档可绕过；双闸是必要纵深。
+
+**后果**：
+
+- 新增设置/凭据字段必须检查敏感键表漂移与导出/导入双闸。
+- 备份类别/敏感键表是外部可见的恢复边界；变更须评审并补往返用例。
+- 审计事件格式是取证合同；新增事件须沿用字段形态，禁自由文本插值。
+
+**沿革**：2026-10-18 M11.3 沉淀（原 10 篇 D10-1..D10-4、SEC-12/13/17/18 与 C14 实现裁定）。
+
+## 0035 打包发布链、体积预算与合规四落点
+
+**Status**: accepted（2026-10-18）
+
+**上下文**：无 CI，全部发布动作本地可跑；安装器、便携 zip、更新链与体积预算必须同源同 feature 图。GPL-3.0 再分发有四个合规落点。版本线与 Inno 安装基在首发后不可回改。
+
+**决策**：
+
+- **单一发布入口**：`scripts/release.ps1` 依次调用共享构建 → 安装器 → 便携 zip → 钉测试 → `verify-release`，逐失败即停。正式路径禁 `-SkipBuild`/`-AllowStale`（仅脚本自测/彩排且须显式出现）。全部脚本 `#Requires -Version 7`。
+- **共享构建与 feature 图**：`build-windows-product.ps1` 以隔离 `CARGO_TARGET_DIR` 显式构建 `slterm` + `slterm-hook`；安装器与 zip 同源。包内文件清单唯一真值源 = `PackageEntries`，zip staging 全等校验与 `installer.iss` `[Files]` 同步，多一件少一件都红。
+- **新鲜度链**：二进制 mtime 必须 ≥ 全部成员 crate 与根清单的最新 `.rs`/`.toml` mtime；基准是源码最新改动，不是脚本运行时刻（cargo 对未变更目标不重链接）。已知边界：仅改根清单注释也可能触发假红，必要时 `cargo clean` 或重链接。
+- **版本与产物**：版本缺省回读 `slterm_app/Cargo.toml`；首发续 `0.3.0`（D12-4），更新链对 `< 0.3.0` 视为需手动重装。产物 `slTerminal-v<version>-windows-x64-setup.exe` / `.zip` + `SHA256SUMS`；verify-release 校验资产名全等、1 MiB 下限、PE 魔数与 semver。
+- **安装器形态**：Inno Setup，用户级安装（`PrivilegesRequired=lowest`）、`MinVersion=10.0.17763`、`AppId` 与夹具 GUID 各自钉死且永不变更（生产 `{D9D92995-C831-4610-87BC-4B82B43B3E71}`，夹具 `{45EED1CD-AE5E-4D5C-84F2-8D1949722E9E}`）；isl 中文翻译固定上游提交 + SHA256。更新首发形态 = `setup.exe` 主形态、便携 zip 副形态（手动更新）。
+- **体积工程（D12-2 校准）**：release profile 冷代码 `opt-level = "s"`、thin LTO、单 codegen unit、strip；热路径清单（resvg/rustybuzz/taffy/ttf-parser/smol/gpui/gpui-component/slterm_terminal/image + `slterm` O3/16 CU）钉回 O3。2026-10-18 全量功能态实测 setup.exe 17.07 MiB / zip 22.21 MiB；预算按实测 + 15% 钉为 setup 19.63 MiB / zip 25.54 MiB（含校准日期与实测值注释）。超预算即红；收紧合法，放宽须在提交信息说明原因。
+- **永久资产归位 `assets/`（D12-3）**：skills、`runtime-api-v1.schema.json`、`runtime-control-api.md` 落仓库根 `assets/`；`release-notes/` 落根级；docs/ 临时稿已删。
+- **合规四落点**：`LICENSE` 全文 / `[workspace.package] license = "GPL-3.0"` + 成员 `license.workspace = true` / 安装器 `LicenseFile` / 应用内关于页；`licenses/` + `THIRD-PARTY-NOTICES` 随包。真实凭据禁入任何打包输入。
+
+**被否决的备选**：
+
+- **保留旧单 exe 裸打 zip 链路**：无清单、无合规文件、无新鲜度检查；已被 scripts/ 体系整体取代。
+- **CI 编排**：本项目无 CI；local-first 门禁 + git hooks 是既定形态。
+- **版本重计 1.0.0/0.1.0**：与 0.2.0 用户感知割裂；续 0.3.0 + 更新链阈值处理更平滑。
+- **不隔离 CARGO_TARGET_DIR**：会打死正在运行的实例（os error 5 历史教训）。
+- **放宽体积预算换取性能**：热路径 O3 已按实测校准；预算放宽必须说明原因。
+
+**后果**：
+
+- 发布前必须完成 CHANGELOG 对应版本小节（安装器/zip 内置 CHANGELOG）；`release-checklist.md` 人工全勾，结论落 `architecture/notes/packaging/`。
+- 改动 `[profile.release]` 体积相关数值或钉包清单必须重跑 `package-release.tests.ps1`。
+- AppId/GUID/版本线/资产命名是发布后不可逆面；变更须走重大决策记录。
+
+**沿革**：2026-10-18 M11.3 沉淀（原 12 篇 D12-1..D12-5、D12-2 校准、09 篇 D09-2、C14 构建命令与 manifest 订正）。
