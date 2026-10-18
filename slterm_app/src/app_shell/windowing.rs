@@ -35,7 +35,7 @@ pub(crate) enum WorkspaceStartup {
 /// 窗口定形唯一函数(13 篇缝合点 11:M5.5 回放 = 定形前覆盖 preferred_size,
 /// 不改调用序)。M3 单形态 = Regular。
 pub(crate) fn workspace_window_options(cx: &App, focus: bool) -> WindowOptions {
-    let preferred = startup_geometry::preferred_size(cx, startup_geometry::M3_SIDEBAR_WIDTH)
+    let preferred = startup_geometry::preferred_size(cx, startup_geometry::STARTUP_SIDEBAR_WIDTH)
         .unwrap_or_else(|| size(px(1080.0), px(720.0)));
     let bounds = cx.primary_display().map_or_else(
         || Bounds::centered(None, preferred, cx),

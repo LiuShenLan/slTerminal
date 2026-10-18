@@ -12,8 +12,15 @@ use gpui_component::Root;
 use slterm_split::PaneId;
 
 use super::windowing::WorkspaceStartup;
-use super::workspace::{CloseActivePane, SltermWorkspace, SplitRight, ToggleZoom};
+use super::workspace::sidebar::SideViewId;
+use super::workspace::title_bar::TitleBarCommand;
+use super::workspace::{
+    CloseActivePane, CloseActiveTab, NewTerminalTab, SelectNextTab, SelectPreviousTab,
+    SltermWorkspace, SplitRight, ToggleSidebar, ToggleZoom,
+};
 use crate::ai_hook::AiHookEvent;
+use crate::cli::Program;
+use crate::session::LaunchSession;
 
 /// 与生产 init 同序的测试子集(11 篇模板同形):内嵌 Maple 在测试文本系统
 /// 不栅格化真实字形,20MB 注册纯属拖慢,测试不挂。
@@ -44,6 +51,21 @@ fn open_workspace_with_ai(
     VisualTestContext,
     mpsc::Sender<AiHookEvent>,
 ) {
+    open_workspace_with_command(
+        cx,
+        Program::Just("slterm-test-missing-shell-executable".into()),
+    )
+}
+
+/// 以指定 `-e` 命令开窗(启动身份冻结用例专用)。
+fn open_workspace_with_command(
+    cx: &mut TestAppContext,
+    command: Program,
+) -> (
+    gpui::Entity<SltermWorkspace>,
+    VisualTestContext,
+    mpsc::Sender<AiHookEvent>,
+) {
     bootstrap(cx);
     let (_tx, rx) = mpsc::channel();
     let (ai_tx, ai_rx) = mpsc::channel();
@@ -54,12 +76,7 @@ fn open_workspace_with_ai(
                 window,
                 rx,
                 Some(ai_rx),
-                WorkspaceStartup::LaunchTerminal {
-                    cwd: None,
-                    command: crate::cli::Program::Just(
-                        "slterm-test-missing-shell-executable".into(),
-                    ),
-                },
+                WorkspaceStartup::LaunchTerminal { cwd: None, command },
                 cx,
             )
         });
@@ -414,4 +431,305 @@ fn screen_watchdog_identifies_agent_and_updates_status(cx: &mut TestAppContext) 
     window.run_until_parked();
     let status = workspace.read_with(cx, |ws, _| ws.agent_status(pane_id));
     assert_eq!(status, Some(crate::ai_agents::AgentStatus::Working));
+}
+
+// ── M5.3b 侧栏骨架 / 标题栏 / tab 动作 ──
+
+/// 按 debug selector 取元素中心并完成一次左键点击。
+fn click_selector(window: &mut VisualTestContext, selector: &'static str) {
+    let bounds = window
+        .debug_bounds(selector)
+        .unwrap_or_else(|| panic!("{selector} 必须绘制"));
+    let center = bounds.center();
+    window.simulate_mouse_down(center, MouseButton::Left, Modifiers::default());
+    window.simulate_mouse_up(center, MouseButton::Left, Modifiers::default());
+    window.run_until_parked();
+}
+
+/// 侧栏默认骨架:ActivityBar 四钮 + 上槽导航树占位 + 宽度拖拽热区。
+#[gpui::test]
+fn sidebar_renders_activity_bar_and_the_default_nav_slot(cx: &mut TestAppContext) {
+    let (_workspace, mut window) = open_workspace(cx);
+    window.refresh().unwrap();
+    draw_frame(&mut window);
+
+    let bar = window
+        .debug_bounds("sidebar-activity-bar")
+        .expect("ActivityBar 必须绘制");
+    assert!(bar.size.width > px(0.0) && bar.size.height > px(0.0));
+    for selector in [
+        "sidebar-view-btn-nav",
+        "sidebar-view-btn-explorer",
+        "sidebar-view-btn-commit",
+        "sidebar-view-btn-agent_files",
+    ] {
+        assert!(
+            window.debug_bounds(selector).is_some(),
+            "{selector} 必须绘制"
+        );
+    }
+    assert!(
+        window.debug_bounds("sidebar-slot-top-nav").is_some(),
+        "默认应打开导航树上槽"
+    );
+    assert!(
+        window.debug_bounds("sidebar-resize-handle").is_some(),
+        "内容区可见时应有宽度拖拽热区"
+    );
+}
+
+/// 双槽 active view 切换关键路径:R1 同槽替换、R2 关闭、下槽独立
+/// 打开(双开 split)、双空回到 hidden。
+#[gpui::test]
+fn sidebar_activity_buttons_switch_both_slots(cx: &mut TestAppContext) {
+    let (_workspace, mut window) = open_workspace(cx);
+    window.refresh().unwrap();
+    draw_frame(&mut window);
+    assert!(window.debug_bounds("sidebar-slot-top-nav").is_some());
+
+    // R1:同槽打开新视图,旧视图隐式关闭。
+    click_selector(&mut window, "sidebar-view-btn-explorer");
+    draw_frame(&mut window);
+    assert!(window.debug_bounds("sidebar-slot-top-explorer").is_some());
+    assert!(window.debug_bounds("sidebar-slot-top-nav").is_none());
+
+    // 下槽独立打开:双槽 split。
+    click_selector(&mut window, "sidebar-view-btn-agent_files");
+    draw_frame(&mut window);
+    assert!(window.debug_bounds("sidebar-slot-top-explorer").is_some());
+    assert!(
+        window
+            .debug_bounds("sidebar-slot-bottom-agent_files")
+            .is_some(),
+        "下槽视图必须渲染"
+    );
+
+    // R2:下槽关闭,上槽不受影响。
+    click_selector(&mut window, "sidebar-view-btn-agent_files");
+    draw_frame(&mut window);
+    assert!(
+        window
+            .debug_bounds("sidebar-slot-bottom-agent_files")
+            .is_none()
+    );
+    assert!(window.debug_bounds("sidebar-slot-top-explorer").is_some());
+
+    // R2+R3:上槽也关闭 → 内容区整体隐藏,ActivityBar 常驻。
+    click_selector(&mut window, "sidebar-view-btn-explorer");
+    draw_frame(&mut window);
+    assert!(window.debug_bounds("sidebar-area").is_none());
+    assert!(window.debug_bounds("sidebar-activity-bar").is_some());
+}
+
+/// collapsed 开合:内容区与拖拽热区隐藏,ActivityBar 常驻;再开恢复现场。
+#[gpui::test]
+fn sidebar_toggle_action_collapses_and_expands_content(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    window.refresh().unwrap();
+    draw_frame(&mut window);
+    assert!(window.debug_bounds("sidebar-area").is_some());
+
+    window.dispatch_action(ToggleSidebar);
+    window.run_until_parked();
+    draw_frame(&mut window);
+    assert!(workspace.read_with(cx, |ws, _| ws.sidebar_state().collapsed));
+    assert!(
+        window.debug_bounds("sidebar-area").is_none(),
+        "collapsed 时内容区不占布局"
+    );
+    assert!(
+        window.debug_bounds("sidebar-resize-handle").is_none(),
+        "collapsed 时无宽度拖拽热区"
+    );
+    assert!(window.debug_bounds("sidebar-activity-bar").is_some());
+
+    window.dispatch_action(ToggleSidebar);
+    window.run_until_parked();
+    draw_frame(&mut window);
+    assert!(!workspace.read_with(cx, |ws, _| ws.sidebar_state().collapsed));
+    assert!(window.debug_bounds("sidebar-slot-top-nav").is_some());
+}
+
+/// 宽度拖拽:跟手更新,越界钳到旧栈 [160, 500]。
+#[gpui::test]
+fn sidebar_width_drag_clamps_to_old_stack_bounds(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    window.refresh().unwrap();
+    draw_frame(&mut window);
+    let initial = workspace.read_with(cx, |ws, _| ws.sidebar_state().width);
+    assert_eq!(initial, 250.0);
+
+    let handle = window
+        .debug_bounds("sidebar-resize-handle")
+        .expect("拖拽热区必须绘制");
+    let start = handle.center();
+    window.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+    draw_frame(&mut window);
+    let target = point(start.x + px(120.0), start.y);
+    window.simulate_mouse_move(target, MouseButton::Left, Modifiers::default());
+    draw_frame(&mut window);
+    window.simulate_mouse_up(target, MouseButton::Left, Modifiers::default());
+    window.run_until_parked();
+    draw_frame(&mut window);
+
+    let widened = workspace.read_with(cx, |ws, _| ws.sidebar_state().width);
+    assert!(
+        (widened - 370.0).abs() < 1.0,
+        "宽度应跟手到 370,实际 {widened}"
+    );
+
+    // 第二次拖到窗口左缘:超出下限被钳到 160。
+    let handle = window
+        .debug_bounds("sidebar-resize-handle")
+        .expect("拖拽热区必须仍在");
+    let start = handle.center();
+    window.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+    draw_frame(&mut window);
+    let target = point(px(1.0), start.y);
+    window.simulate_mouse_move(target, MouseButton::Left, Modifiers::default());
+    draw_frame(&mut window);
+    window.simulate_mouse_up(target, MouseButton::Left, Modifiers::default());
+    window.run_until_parked();
+
+    let narrowed = workspace.read_with(cx, |ws, _| ws.sidebar_state().width);
+    assert_eq!(narrowed, 160.0, "旧栈宽度下限 160");
+}
+
+/// 恢复形态:仅下槽 active 时渲染 single-bottom。
+#[gpui::test]
+fn sidebar_bottom_only_restore_renders_single_bottom_slot(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    workspace.update(cx, |ws, _| {
+        ws.set_sidebar_views_for_test(None, Some(SideViewId::AgentFiles));
+    });
+    window.refresh().unwrap();
+    draw_frame(&mut window);
+
+    assert!(
+        window
+            .debug_bounds("sidebar-slot-bottom-agent_files")
+            .is_some()
+    );
+    assert!(window.debug_bounds("sidebar-slot-top-nav").is_none());
+    assert!(window.debug_bounds("sidebar-area").is_some());
+}
+
+/// 标题栏:自绘三钮 + 活跃 tab 展示名;自定义名优先于终端标题。
+#[gpui::test]
+fn titlebar_renders_active_tab_title_and_window_buttons(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    window.refresh().unwrap();
+    draw_frame(&mut window);
+
+    for selector in [
+        "titlebar",
+        "titlebar-title",
+        "titlebar-min",
+        "titlebar-max",
+        "titlebar-close",
+    ] {
+        assert!(
+            window.debug_bounds(selector).is_some(),
+            "{selector} 必须绘制"
+        );
+    }
+
+    let title = workspace.read_with(cx, |ws, cx| ws.active_tab_title_for_test(cx));
+    assert_eq!(title, "slterm-test-missing-shell-executable");
+
+    workspace.update(cx, |ws, _| {
+        ws.set_active_tab_custom_name_for_test(Some("后端".into()));
+    });
+    window.refresh().unwrap();
+    draw_frame(&mut window);
+    let title = workspace.read_with(cx, |ws, cx| ws.active_tab_title_for_test(cx));
+    assert_eq!(title, "后端", "TabMeta.custom_name 是展示名第一优先源");
+}
+
+/// 三钮行为:虚拟窗口记录命令分派(最小化/最大化切换/关闭)。
+#[gpui::test]
+fn titlebar_buttons_dispatch_window_commands(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    window.refresh().unwrap();
+    draw_frame(&mut window);
+
+    click_selector(&mut window, "titlebar-min");
+    click_selector(&mut window, "titlebar-max");
+    click_selector(&mut window, "titlebar-close");
+    draw_frame(&mut window);
+
+    let commands = workspace.read_with(cx, |ws, _| ws.window_commands().to_vec());
+    assert_eq!(
+        commands,
+        [
+            TitleBarCommand::Minimize,
+            TitleBarCommand::MaximizeToggle,
+            TitleBarCommand::Close,
+        ]
+    );
+}
+
+/// tab 动作:ctrl-shift-t 新建、ctrl-tab/ctrl-shift-tab 循环切换、
+/// 关闭活跃 tab 后焦点与活跃下标收敛。
+#[gpui::test]
+fn tab_actions_create_switch_and_close(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    assert_eq!(workspace.read_with(cx, |ws, _| ws.tab_count()), 1);
+
+    window.dispatch_action(NewTerminalTab);
+    window.run_until_parked();
+    draw_frame(&mut window);
+    assert_eq!(workspace.read_with(cx, |ws, _| ws.tab_count()), 2);
+    assert_eq!(workspace.read_with(cx, |ws, _| ws.active_tab_index()), 1);
+    let (panes, _, _, _) = workspace
+        .read_with(cx, |ws, _| ws.active_tab_snapshot())
+        .expect("新 tab 必须有活跃终端");
+    assert_eq!(panes, vec![PaneId(2)], "新 tab 分配下一个 pane id");
+
+    window.dispatch_action(SelectPreviousTab);
+    window.run_until_parked();
+    assert_eq!(workspace.read_with(cx, |ws, _| ws.active_tab_index()), 0);
+    let (panes, _, _, _) = workspace
+        .read_with(cx, |ws, _| ws.active_tab_snapshot())
+        .expect("首个 tab 必须存活");
+    assert_eq!(panes, vec![PaneId(1)]);
+
+    window.dispatch_action(SelectNextTab);
+    window.run_until_parked();
+    assert_eq!(workspace.read_with(cx, |ws, _| ws.active_tab_index()), 1);
+
+    window.dispatch_action(CloseActiveTab);
+    window.run_until_parked();
+    draw_frame(&mut window);
+    assert_eq!(workspace.read_with(cx, |ws, _| ws.tab_count()), 1);
+    assert_eq!(workspace.read_with(cx, |ws, _| ws.active_tab_index()), 0);
+    let (panes, _, _, _) = workspace
+        .read_with(cx, |ws, _| ws.active_tab_snapshot())
+        .expect("幸存 tab 必须存活");
+    assert_eq!(panes, vec![PaneId(1)]);
+}
+
+/// M5.3a 问题 1:`-e` 启动的 tab 在建 tab 时把完整命令冻结进
+/// `TabMeta.launch`(M5.5 快照/恢复按此重建)。
+#[gpui::test]
+fn launch_terminal_tab_freezes_the_full_command_into_meta(cx: &mut TestAppContext) {
+    let command = Program::WithArgs {
+        program: "slterm-test-missing-shell-executable".into(),
+        args: vec!["--flag".into(), "two words".into()],
+    };
+    let (workspace, _window, _ai_tx) = open_workspace_with_command(cx, command.clone());
+
+    let launch = workspace
+        .read_with(cx, |ws, _| ws.active_tab_launch())
+        .expect("建 tab 必须冻结启动身份");
+    assert_eq!(
+        launch,
+        LaunchSession::Profile {
+            name: "slterm-test-missing-shell-executable".into(),
+            command: command.program().to_owned(),
+            args: command.args().to_vec(),
+            cwd: None,
+            shell_id: None,
+        }
+    );
 }

@@ -22,10 +22,13 @@
 //! 结构性变化经 `TerminalView::mark_structural_resize` 同步下发,不进尾沿
 //! 去抖)。
 
+pub(crate) mod sidebar;
 mod split_drag;
+pub(crate) mod title_bar;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::mpsc;
 use std::time::Duration;
@@ -36,7 +39,7 @@ use gpui::{
     IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _,
     Pixels, Render, SharedString, Styled as _, Subscription, Window, canvas, div, px, relative,
 };
-use gpui_component::{ActiveTheme as _, TitleBar};
+use gpui_component::ActiveTheme as _;
 use slterm_settings::Rgb;
 use slterm_split::{
     DIVIDER_GAP, HIT_SLOP, PaneId, RemoveOutcome, SplitDirection, SplitNav, SplitTree, TabId,
@@ -47,9 +50,11 @@ use super::SltermShellEvent;
 use super::windowing::{WorkspaceStartup, startup_geometry};
 use crate::agent_host::AgentHub;
 use crate::ai_hook::AiHookEvent;
+use crate::brand;
 use crate::gpui_terminal::view::{TerminalLaunch, TerminalView, TerminalViewEvent};
 use crate::session::LaunchSession;
 use crate::terminal_registry::{self, PaneSessionMeta};
+use sidebar::{SidebarResizeDrag, SidebarState};
 use split_drag::SplitDrag;
 
 gpui::actions!(
@@ -63,6 +68,11 @@ gpui::actions!(
         FocusPaneUp,
         FocusPaneDown,
         CloseActivePane,
+        NewTerminalTab,
+        SelectNextTab,
+        SelectPreviousTab,
+        CloseActiveTab,
+        ToggleSidebar,
     ]
 );
 
@@ -94,20 +104,23 @@ pub enum WorkspaceTab {
 
 /// tab 级展示态元数据(05 篇锚点;持久化四字段形态)。
 #[derive(Default)]
-#[allow(dead_code)] // 消费点 = 侧栏展示(M5.3b)与快照(M5.5);M5.3a 只立形态。
 pub struct TabMeta {
+    /// 用户命名;标题栏展示名第一优先源(M5.3b)。
     pub custom_name: Option<String>,
+    /// 用户色标;侧栏色标消费归后续步骤。
+    #[allow(dead_code)]
     pub color: Option<Rgb>,
+    /// 建 tab 时冻结的启动身份;消费点 = M5.5 快照。
+    #[allow(dead_code)]
     pub launch: Option<LaunchSession>,
 }
 
 /// tab + 展示态元数据同槽存放(单 Vec 消下同标耦合)。
 pub struct TabEntry {
-    /// 稳定身份:跨排序/活跃切换不变;消费面 = 侧栏(M5.3b)/dock(M5.4)。
+    /// 稳定身份:跨排序/活跃切换不变;消费面 = 侧栏/dock(M5.4)。
     #[allow(dead_code)]
     pub id: TabId,
     pub tab: WorkspaceTab,
-    #[allow(dead_code)] // 消费点同 `TabMeta`。
     pub meta: TabMeta,
 }
 
@@ -128,6 +141,14 @@ pub struct SltermWorkspace {
     split_bounds: SplitBoundsStore,
     /// 进行中的分隔条拖拽;`None` = 无手势。
     split_drag: Option<SplitDrag>,
+    /// 侧栏骨架态(05 篇 D05-2/D05-3):开合/宽度/双槽 active view。
+    sidebar: SidebarState,
+    /// 进行中的侧栏宽度拖拽;`None` = 无手势。
+    sidebar_resize: Option<SidebarResizeDrag>,
+    /// 虚拟窗口用例的三钮命令记录(生产不编译;平台窗口 API 在测试
+    /// 平台是 unimplemented,行为断言只能落在命令分派端)。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    window_commands: Vec<title_bar::TitleBarCommand>,
     /// 每 pane 的 agent 宿主(AgentActivity/AnswerInbox 归属表)。
     agent_hub: AgentHub,
 }
@@ -147,6 +168,30 @@ fn to_split_rect(bounds: &Bounds<Pixels>) -> slterm_split::Rect {
     )
 }
 
+/// 启动身份冻结:实际 shell 命令 + 参数 + 出生目录进 `LaunchSession::Profile`
+/// (Profile 内嵌完整命令,导出工作区时可移植,05 篇 schema 契约)。
+fn launch_session_of(
+    shell: &slterm_terminal::tty::Shell,
+    cwd: Option<&std::path::Path>,
+) -> LaunchSession {
+    LaunchSession::Profile {
+        name: shell_display_name(shell.program()),
+        command: shell.program().to_owned(),
+        args: shell.args().to_vec(),
+        cwd: cwd.map(|path| path.to_string_lossy().into_owned()),
+        shell_id: None,
+    }
+}
+
+/// 展示短名:prog 路径取文件主干(`pwsh.exe` → `pwsh`),无主干回退全名。
+fn shell_display_name(program: &str) -> String {
+    std::path::Path::new(program)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(str::to_owned)
+        .unwrap_or_else(|| program.to_owned())
+}
+
 impl SltermWorkspace {
     pub fn new(
         window: &mut Window,
@@ -159,7 +204,7 @@ impl SltermWorkspace {
         let initial_grid = startup_geometry::prepare_initial_grid(
             window,
             cx,
-            startup_geometry::M3_SIDEBAR_WIDTH,
+            startup_geometry::STARTUP_SIDEBAR_WIDTH,
             true,
         );
         let mut workspace = SltermWorkspace {
@@ -171,6 +216,10 @@ impl SltermWorkspace {
             pane_bounds: Rc::new(RefCell::new(HashMap::new())),
             split_bounds: Rc::new(RefCell::new(HashMap::new())),
             split_drag: None,
+            sidebar: SidebarState::default(),
+            sidebar_resize: None,
+            #[cfg(all(test, feature = "gpui-test-support"))]
+            window_commands: Vec::new(),
             agent_hub: AgentHub::new(),
         };
         match startup {
@@ -193,10 +242,15 @@ impl SltermWorkspace {
         workspace.start_shell_event_pump(shell_rx, cx);
         workspace.start_ai_hook_pump(ai_events, cx);
         workspace.start_agent_screen_watchdog(cx);
+        workspace.sync_window_title(window, cx);
         workspace
     }
 
     /// 建一个 Terminal tab(cwd + 可选的显式 shell 身份),并聚焦其 pane。
+    ///
+    /// 启动身份在**建 tab 这一刻**冻结进 `TabMeta.launch`(M5.3a 问题 1):
+    /// 默认 shell 也只在本刻探测一次,设置随后变更只影响下一次建 tab,
+    /// 冷恢复按各 tab 自己的 launch 重建,不会把混合工作区抹成同一种 shell。
     fn add_terminal_tab(
         &mut self,
         cwd: Option<std::path::PathBuf>,
@@ -205,19 +259,20 @@ impl SltermWorkspace {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
-        let launch = match shell {
-            Some((shell, name)) => TerminalLaunch::Local {
-                cwd,
-                shell: Some(shell),
-                shell_name: Some(name),
-                explicit_command,
-            },
-            None => TerminalLaunch::Local {
-                cwd,
-                shell: None,
-                shell_name: None,
-                explicit_command,
-            },
+        let (shell, shell_name) = match shell {
+            Some((shell, name)) => (Some(shell), Some(name)),
+            // 默认路径:探测结果冻结进 meta 并显式交给 spawn;展示名保持
+            // M3 现状(None → 终端标题 "shell"),不让启动身份冻结改动 UI。
+            None => (Self::default_shell(), None),
+        };
+        let meta_launch = shell
+            .as_ref()
+            .map(|shell| launch_session_of(shell, cwd.as_deref()));
+        let launch = TerminalLaunch::Local {
+            cwd,
+            shell,
+            shell_name,
+            explicit_command,
         };
         let pane = self.new_pane(self.initial_grid, launch, window, cx);
         let focused = pane.id;
@@ -231,10 +286,119 @@ impl SltermWorkspace {
                 focused,
                 zoomed: false,
             },
-            meta: TabMeta::default(),
+            meta: TabMeta {
+                launch: meta_launch,
+                ..TabMeta::default()
+            },
         });
         self.active = self.tabs.len() - 1;
         self.focus_active(window, cx);
+        self.sync_window_title(window, cx);
+    }
+
+    /// 默认 shell 探测:生产走 core 的 pwsh→powershell→cmd 链,测试顶替
+    /// 必败命令(真 PTY 线程跨测试存活,11 篇测试纪律)。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    fn default_shell() -> Option<slterm_terminal::tty::Shell> {
+        Some(slterm_terminal::tty::Shell::new(
+            "slterm-test-missing-shell-executable".to_owned(),
+            Vec::new(),
+        ))
+    }
+
+    #[cfg(not(all(test, feature = "gpui-test-support")))]
+    fn default_shell() -> Option<slterm_terminal::tty::Shell> {
+        slterm_terminal::tty::resolve_shell(None).ok()
+    }
+
+    /// 新建 tab(ctrl-shift-t):cwd 继承聚焦 pane 的当前目录。
+    fn new_terminal_tab(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        let cwd = self
+            .tabs
+            .get(self.active)
+            .map(|entry| &entry.tab)
+            .and_then(|tab| match tab {
+                WorkspaceTab::Terminal { panes, focused, .. } => panes
+                    .iter()
+                    .find(|pane| pane.id == *focused)
+                    .and_then(|pane| {
+                        let view = pane.view.read(cx);
+                        (!view.cwd.is_empty()).then(|| PathBuf::from(&view.cwd))
+                    }),
+            });
+        self.add_terminal_tab(cwd, None, false, window, cx);
+    }
+
+    /// ctrl-tab / ctrl-shift-tab:相邻 tab 循环切换(上游同语义)。
+    fn select_adjacent_tab(
+        &mut self,
+        forward: bool,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if self.tabs.len() < 2 {
+            return;
+        }
+        let len = self.tabs.len();
+        self.active = if forward {
+            (self.active + 1) % len
+        } else {
+            (self.active + len - 1) % len
+        };
+        self.focus_active(window, cx);
+        self.sync_window_title(window, cx);
+        cx.notify();
+    }
+
+    /// 关闭活跃 tab:逐 pane 显式 shutdown,不留孤儿 PTY;最后一个 tab
+    /// 关闭 = 关窗(单窗产品定位)。
+    fn close_active_tab(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        let Some(entry) = self.tabs.get(self.active) else {
+            return;
+        };
+        let WorkspaceTab::Terminal { panes, .. } = &entry.tab;
+        let views: Vec<_> = panes.iter().map(|pane| pane.view.clone()).collect();
+        let ids: Vec<_> = panes.iter().map(|pane| pane.id).collect();
+        for view in &views {
+            view.read(cx).shutdown();
+        }
+        for id in ids {
+            self.forget_pane(id);
+        }
+        self.tabs.remove(self.active);
+        if self.tabs.is_empty() {
+            window.remove_window();
+            return;
+        }
+        self.active = self.active.min(self.tabs.len() - 1);
+        self.focus_active(window, cx);
+        self.sync_window_title(window, cx);
+        cx.notify();
+    }
+
+    /// 窗口标题 = 活跃 tab 展示名(任务栏可见);无 tab 时回退品牌名。
+    fn sync_window_title(&self, window: &mut Window, cx: &App) {
+        let title = self.active_tab_title(cx);
+        window.set_window_title(&format!("{title} — {}", brand::NAME));
+    }
+
+    /// 活跃 tab 展示名:自定义名优先,否则取聚焦 pane 的既有终端标题。
+    /// 07 篇 TabPresentation 落地后,这一处取值面替换为其派生结果。
+    pub(super) fn active_tab_title(&self, cx: &App) -> String {
+        let Some(entry) = self.tabs.get(self.active) else {
+            return brand::NAME.to_owned();
+        };
+        if let Some(custom) = &entry.meta.custom_name {
+            return custom.clone();
+        }
+        match &entry.tab {
+            WorkspaceTab::Terminal { panes, focused, .. } => panes
+                .iter()
+                .find(|pane| pane.id == *focused)
+                .map(|pane| pane.view.read(cx).title.clone())
+                .filter(|title| !title.is_empty())
+                .unwrap_or_else(|| "shell".to_owned()),
+        }
     }
 
     /// 创建一个 pane 实体(分配 id、spawn 会话、挂宿主订阅、写注册表);
@@ -349,6 +513,7 @@ impl SltermWorkspace {
         }
         self.mark_structural_resize(active, cx);
         self.focus_active(window, cx);
+        self.sync_window_title(window, cx);
         cx.notify();
         Some(new_id)
     }
@@ -382,6 +547,8 @@ impl SltermWorkspace {
     ) {
         match event {
             TerminalViewEvent::TitleChanged => {
+                // 标题栏与任务栏标题同源:活跃 tab 的展示名即时跟随 OSC 标题。
+                self.sync_window_title(window, cx);
                 cx.notify();
             }
             TerminalViewEvent::Exited => {
@@ -431,6 +598,7 @@ impl SltermWorkspace {
                     self.active = self.active.min(self.tabs.len() - 1);
                 }
                 self.focus_active(window, cx);
+                self.sync_window_title(window, cx);
                 cx.notify();
             }
             RemoveOutcome::Collapsed(next_focus) => {
@@ -455,6 +623,7 @@ impl SltermWorkspace {
                 self.mark_structural_resize(tab_index, cx);
                 if tab_index == self.active {
                     self.focus_active(window, cx);
+                    self.sync_window_title(window, cx);
                 }
                 cx.notify();
             }
@@ -511,6 +680,7 @@ impl SltermWorkspace {
                 self.mark_structural_resize(tab_ix, cx);
             }
             self.focus_active(window, cx);
+            self.sync_window_title(window, cx);
         }
         cx.notify();
     }
@@ -623,6 +793,68 @@ impl SltermWorkspace {
     #[cfg(all(test, feature = "gpui-test-support"))]
     pub(crate) fn initial_grid(&self) -> (u16, u16) {
         self.initial_grid
+    }
+
+    /// 测试专用:侧栏骨架态只读(宽度/双槽/开合的断言端)。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn sidebar_state(&self) -> &SidebarState {
+        &self.sidebar
+    }
+
+    /// 测试专用:直接播种双槽 active view(会话恢复消费前的渲染锚)。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn set_sidebar_views_for_test(
+        &mut self,
+        top: Option<sidebar::SideViewId>,
+        bottom: Option<sidebar::SideViewId>,
+    ) {
+        self.sidebar = sidebar::reconcile_views(
+            &SidebarState {
+                active_view_top: top,
+                active_view_bottom: bottom,
+                ..self.sidebar
+            },
+            &sidebar::SideViewId::ALL,
+        );
+    }
+
+    /// 测试专用:标题栏三钮的命令记录(虚拟窗口平台 API 不可直调)。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn window_commands(&self) -> &[title_bar::TitleBarCommand] {
+        &self.window_commands
+    }
+
+    /// 测试专用:活跃 tab 展示名。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn active_tab_title_for_test(&self, cx: &App) -> String {
+        self.active_tab_title(cx)
+    }
+
+    /// 测试专用:写入活跃 tab 自定义名(标题栏展示名的第一优先源)。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn set_active_tab_custom_name_for_test(&mut self, name: Option<String>) {
+        if let Some(entry) = self.tabs.get_mut(self.active) {
+            entry.meta.custom_name = name;
+        }
+    }
+
+    /// 测试专用:活跃 tab 冻结的启动身份。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn active_tab_launch(&self) -> Option<LaunchSession> {
+        self.tabs
+            .get(self.active)
+            .and_then(|entry| entry.meta.launch.clone())
+    }
+
+    /// 测试专用:tab 数量与活跃下标(新建/切换/关闭动作的断言端)。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn tab_count(&self) -> usize {
+        self.tabs.len()
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn active_tab_index(&self) -> usize {
+        self.active
     }
 
     /// 测试专用:活跃 tab 首个 pane id(hook 泵路由断言的锚点)。
@@ -1025,15 +1257,25 @@ impl SltermWorkspace {
 }
 
 impl Render for SltermWorkspace {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
         let content = match self.tabs.get(self.active).map(|entry| &entry.tab) {
             Some(WorkspaceTab::Terminal { .. }) => Some(self.render_terminal_tab(self.active, cx)),
             None => None,
         };
+        // 侧栏三件套:ActivityBar + 双槽内容区 + 宽度拖拽热区。hidden 或
+        // collapsed 时内容区与热区不占布局,ActivityBar 始终常驻。
+        let sidebar_content = self.render_sidebar_content(cx);
+        let sidebar_visible = !self.sidebar.collapsed
+            && sidebar::derive_layout(&self.sidebar) != sidebar::SidebarLayout::Hidden;
+        let activity_bar = self.render_activity_bar(cx);
+        let resize_handle = sidebar_visible.then(|| self.render_sidebar_resize_handle(cx));
+        let sidebar_width = self.sidebar.width;
+        let title_bar = self.render_title_bar(window, cx);
         // 分隔条拖拽 overlay 与全窗指针罩层(同 tab_drag 的捕获模式:罩层
         // 独占指针,移动喂预览、松开提交/关闭)。overlay 在内容之上、罩层
         // 之下;顺序即绘制序。
         let split_overlay = self.split_drag_visual(cx);
+        let sidebar_resize_overlay = self.render_sidebar_resize_overlay(cx);
         let drag_direction = self.split_drag.as_ref().map(|drag| drag.direction);
         div()
             .size_full()
@@ -1066,10 +1308,54 @@ impl Render for SltermWorkspace {
                     this.close_pane(pane_id, window, cx);
                 }
             }))
-            // 标题栏系统底座(13 篇缝合点 11):gpui-component TitleBar 承载
-            // 窗口标题与三钮;自绘标题栏演化归 05/09。
-            .child(TitleBar::new())
-            .child(div().flex_1().min_h_0().relative().children(content))
+            .on_action(cx.listener(|this, _: &NewTerminalTab, window, cx| {
+                this.new_terminal_tab(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &SelectNextTab, window, cx| {
+                this.select_adjacent_tab(true, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &SelectPreviousTab, window, cx| {
+                this.select_adjacent_tab(false, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &CloseActiveTab, window, cx| {
+                this.close_active_tab(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| {
+                this.toggle_sidebar(cx);
+            }))
+            // 自绘标题栏(05 篇):活跃 tab 展示名 + 三钮 + 拖拽区。
+            .child(title_bar)
+            // 主行:ActivityBar(46px) + 侧栏内容区(可开合/拖宽) + 终端主区。
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .w_full()
+                    .relative()
+                    .flex()
+                    .flex_row()
+                    .child(activity_bar)
+                    .when(sidebar_visible, |row| {
+                        row.child(
+                            div()
+                                .w(px(sidebar_width))
+                                .h_full()
+                                .flex_shrink_0()
+                                .min_w_0()
+                                .child(sidebar_content),
+                        )
+                        .child(resize_handle.unwrap_or_else(|| div().into_any_element()))
+                    })
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .min_h_0()
+                            .relative()
+                            .children(content),
+                    ),
+            )
+            .children(sidebar_resize_overlay)
             .children(split_overlay)
             .when_some(drag_direction, |root, direction| {
                 root.child(
@@ -1097,7 +1383,10 @@ impl Render for SltermWorkspace {
 
 /// 工作区级键绑定(05 篇 M5.3;键位照抄上游:ctrl-shift-d 左右、
 /// ctrl-shift-s 上下、ctrl-shift-enter 缩放、ctrl-alt+方向切聚焦、
-/// ctrl-shift-w 关聚焦 pane)。在 `gpui_component::init` 之后调用一次。
+/// ctrl-shift-w 关聚焦 pane、ctrl-shift-t 新 tab、ctrl-tab/ctrl-shift-tab
+/// 切 tab、ctrl-shift-b 侧栏开合)。`CloseActiveTab` 暂无默认键位——
+/// 与上游 ctrl-shift-w 的整 tab 关闭语义冲突,入口归 07/09 菜单裁定。
+/// 在 `gpui_component::init` 之后调用一次。
 pub fn init(cx: &mut App) {
     use gpui::KeyBinding;
     cx.bind_keys([
@@ -1109,6 +1398,10 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("ctrl-alt-up", FocusPaneUp, None),
         KeyBinding::new("ctrl-alt-down", FocusPaneDown, None),
         KeyBinding::new("ctrl-shift-w", CloseActivePane, None),
+        KeyBinding::new("ctrl-shift-t", NewTerminalTab, None),
+        KeyBinding::new("ctrl-tab", SelectNextTab, None),
+        KeyBinding::new("ctrl-shift-tab", SelectPreviousTab, None),
+        KeyBinding::new("ctrl-shift-b", ToggleSidebar, None),
     ]);
 }
 

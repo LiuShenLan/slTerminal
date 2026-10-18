@@ -16,6 +16,8 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use slterm_settings::Rgb;
 
+use crate::app_shell::workspace::sidebar::SidebarState;
+
 /// 最高格式版本。无历史会话文件,升级链不迁;追加字段走
 /// `serde(default)` 免升版。
 pub const VERSION: u32 = 1;
@@ -178,7 +180,7 @@ pub struct WindowState {
     pub maximized: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Session {
     pub version: u32,
     /// 断路器计数:活到首次自动保存即归零。
@@ -189,14 +191,26 @@ pub struct Session {
     pub tabs: Vec<TabSession>,
     #[serde(default)]
     pub window: Option<WindowState>,
+    /// 侧栏骨架态(D05-3 已裁归 session):collapsed/width/双槽 active view。
+    /// 字段追加走 `serde(default)` 免升版;老文件缺整段回默认(schema 版本不变)。
+    #[serde(default, deserialize_with = "deserialize_sidebar")]
+    pub sidebar: SidebarState,
     /// 1 Hz 自动保存恒 false,只有正常收尾的最后一笔写 true;老文件缺省
     /// false(按异常退出多提示一次,恢复行为不变)。
     #[serde(default)]
     pub clean_exit: bool,
 }
 
+/// 侧栏段缺失/为 null 都回默认值(老文件与手工编辑的空段)。
+fn deserialize_sidebar<'de, D>(deserializer: D) -> Result<SidebarState, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<SidebarState>::deserialize(deserializer)?.unwrap_or_default())
+}
+
 impl Session {
-    /// 新快照的规范形态:当前版本、断路器归零、未走收尾。
+    /// 新快照的规范形态:当前版本、断路器归零、未走收尾、侧栏默认。
     pub fn new(active_tab: usize, tabs: Vec<TabSession>) -> Self {
         Self {
             version: VERSION,
@@ -204,6 +218,7 @@ impl Session {
             active_tab,
             tabs,
             window: None,
+            sidebar: SidebarState::default(),
             clean_exit: false,
         }
     }
@@ -481,12 +496,79 @@ mod schema_tests {
         assert_eq!(session.boot_attempts, 0);
         assert_eq!(session.window, None);
         assert!(!session.clean_exit);
+        // 老文件没有侧栏段:回旧栈默认(展开、上槽导航树、250px)。
+        assert_eq!(session.sidebar, SidebarState::default());
+        assert!(!session.sidebar.collapsed);
+        assert_eq!(
+            session.sidebar.active_view_top,
+            Some(crate::app_shell::workspace::sidebar::SideViewId::Nav)
+        );
+        assert_eq!(session.sidebar.active_view_bottom, None);
+        assert_eq!(session.sidebar.width, 250.0);
         let tab = &session.tabs[0];
         assert_eq!(tab.custom_name, None);
         assert_eq!(tab.color, None);
         assert_eq!(tab.launch, None);
         assert_eq!(tab.layout, None);
         assert_eq!(tab.active_pane, 0);
+    }
+
+    /// 侧栏骨架态随 session 往返:字段级相等(D05-3 归 session 的证据)。
+    #[test]
+    fn sidebar_state_round_trips_through_the_session_schema() {
+        use crate::app_shell::workspace::sidebar::SideViewId;
+
+        let json = r#"{
+          "version": 1,
+          "active_tab": 0,
+          "tabs": [],
+          "sidebar": {
+            "collapsed": true,
+            "active_view_top": "explorer",
+            "active_view_bottom": "agent_files",
+            "width": 312.5
+          }
+        }"#;
+        let session = parse(json).expect("侧栏段必须可解析");
+        assert!(session.sidebar.collapsed);
+        assert_eq!(session.sidebar.active_view_top, Some(SideViewId::Explorer));
+        assert_eq!(
+            session.sidebar.active_view_bottom,
+            Some(SideViewId::AgentFiles)
+        );
+        assert_eq!(session.sidebar.width, 312.5);
+
+        let reprinted = serde_json::to_string_pretty(&session).expect("必须可序列化");
+        assert_eq!(parse(&reprinted), Some(session), "字段级往返相等");
+    }
+
+    /// R9 载入防线:未注册 id 与错槽 active view 置空,宽度钳制,
+    /// 不因侧栏段脏数据拒收整份会话。
+    #[test]
+    fn dirty_sidebar_entries_are_reconciled_instead_of_rejecting_the_session() {
+        let json = r#"{
+          "version": 1,
+          "active_tab": 0,
+          "tabs": [],
+          "sidebar": {
+            "collapsed": false,
+            "active_view_top": "agent_files",
+            "active_view_bottom": "obsolete",
+            "width": 9999.0
+          }
+        }"#;
+        let session = parse(json).expect("脏侧栏段必须回退而不是拒收");
+        assert_eq!(session.sidebar.active_view_top, None, "错槽视图置空");
+        assert_eq!(session.sidebar.active_view_bottom, None, "未注册视图置空");
+        assert_eq!(session.sidebar.width, 500.0, "宽度钳到上限");
+    }
+
+    /// 侧栏段为 null 时回默认,不炸整份会话。
+    #[test]
+    fn null_sidebar_section_falls_back_to_defaults() {
+        let json = r#"{"version":1,"active_tab":0,"tabs":[],"sidebar":null}"#;
+        let session = parse(json).expect("null 侧栏段必须回默认");
+        assert_eq!(session.sidebar, SidebarState::default());
     }
 
     #[test]

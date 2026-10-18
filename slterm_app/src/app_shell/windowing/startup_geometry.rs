@@ -3,16 +3,23 @@
 //! 量的是配置基准字号,不是持久化的终端缩放。平台能给出显示器 DPI 时
 //! 在窗口亮相前提供最终尺寸;否则保留建成后再量窗口的回退路径。
 //!
-//! M3 锚:sidecar 宽度恒 0(侧栏归 07);`chrome_size` 的垂直量
-//! (34 标题栏 + 16 + 16 + 2 圆整)与 TerminalView 的 padding(py 8×2 = 16
-//! 含在内)同链——改任一侧,启动零 resize 锚即断。
+//! 侧栏宽度锚(M5.3b 起):ActivityBar + 内容区默认宽度 + 拖拽热区;
+//! `chrome_size` 的垂直量(34 标题栏 + 16 + 16 + 2 圆整)与 TerminalView 的
+//! padding(py 8×2 = 16 含在内)同链——改任一侧,启动零 resize 锚即断。
 
 use gpui::{App, Pixels, Size, Window, px, size};
 
 use crate::gpui_terminal::view::TerminalView;
 
-/// M3 无侧栏:侧栏宽度恒 0(07 篇槽位落地时换成真实宽度)。
-pub(in crate::app_shell) const M3_SIDEBAR_WIDTH: f32 = 0.0;
+/// 启动侧栏宽度 = ActivityBar + 内容区默认宽度 + 拖拽热区;与
+/// `SltermWorkspace` 首帧布局同源(会话恢复的宽度回放归 M5.5,届时覆盖
+/// 该参数而非重启布局规则)。
+pub(in crate::app_shell) const STARTUP_SIDEBAR_WIDTH: f32 = {
+    use crate::app_shell::workspace::sidebar::{
+        ACTIVITY_BAR_SIZE, SIDEBAR_RESIZE_HANDLE_WIDTH, SIDEBAR_WIDTH_DEFAULT,
+    };
+    ACTIVITY_BAR_SIZE + SIDEBAR_WIDTH_DEFAULT + SIDEBAR_RESIZE_HANDLE_WIDTH
+};
 
 fn chrome_size(sidebar_width: f32) -> Size<Pixels> {
     // 侧栏、沟槽、终端 padding,外加既有的 2px 圆整余量。
