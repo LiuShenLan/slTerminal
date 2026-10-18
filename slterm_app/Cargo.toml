@@ -153,6 +153,9 @@ windows = { version = "=0.61.3", features = [
     # GetPath 的 WIN32_FIND_DATAW 参数需要 Storage 面。
     "Win32_Storage_FileSystem",
     "Win32_UI_Shell",
+    # 凭据管理器原语(10 篇 M10.9):CredReadW/CredWriteW/CredDeleteW/
+    # CredFree 与 CREDENTIALW。
+    "Win32_Security_Credentials",
 ] }
 windows-sys = { version = "0.59", features = [
     # AUMID 注册(RegSetKeyValueW,09 篇 M10.1)。

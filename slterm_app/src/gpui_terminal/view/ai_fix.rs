@@ -10,7 +10,7 @@ use gpui::{AppContext as _, Context, Keystroke};
 
 use super::TerminalView;
 use crate::ai_assistant::{self, AiFix, AiFixState, AssistantConfig, FixRequest, redact_secrets};
-use crate::secrets::NoCredentialStore;
+use crate::secrets::WindowsCredentialStore;
 use slterm_terminal::grid::Dimensions as _;
 use slterm_terminal::index::{Column, Line};
 
@@ -46,7 +46,7 @@ impl TerminalView {
         self.ai_fix = Some(AiFixState::Pending { seq });
         // 请求在后台执行器上跑;结果回前台时按 seq 比对,过期即丢。
         let calculation = cx.background_spawn(async move {
-            ai_assistant::request_fix(&config, &request, &NoCredentialStore)
+            ai_assistant::request_fix(&config, &request, &WindowsCredentialStore)
         });
         cx.spawn(async move |this, cx| {
             let fix = calculation.await;

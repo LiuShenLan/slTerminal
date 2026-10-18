@@ -490,8 +490,8 @@ pub(crate) struct RequestTarget {
 /// 请求目标组装(08 篇 provider 凭据流):启用 provider 优先,凭据出域即
 /// `Zeroizing`;无启用 provider 才走环境兜底。
 ///
-/// 凭据后端显式注入(10 篇三原语);M9.5 生产侧无真实后端时传
-/// [`crate::secrets::NoCredentialStore`],此时启用 provider 无凭据 → 安静
+/// 凭据后端显式注入(10 篇三原语);生产调用点直传
+/// [`crate::secrets::WindowsCredentialStore`],启用 provider 无凭据 → 安静
 /// 返回 `None`(A6 登记的默认形态,待产品裁决)。
 pub(crate) fn request_target(
     cfg: &AssistantConfig,
@@ -1156,6 +1156,23 @@ mod ai_assistant_tests {
 
     struct MockCredentials;
 
+    /// 无凭据后端:验证「无凭据不伪造请求目标」与免 key provider 路径。
+    struct EmptyCredentials;
+
+    impl crate::secrets::CredentialStore for EmptyCredentials {
+        fn load(&self, _target: &str) -> io::Result<Option<crate::secrets::SecretBytes>> {
+            Ok(None)
+        }
+
+        fn store(&self, _target: &str, _secret: &[u8]) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn delete(&self, _target: &str) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
     impl crate::secrets::CredentialStore for MockCredentials {
         fn load(&self, _target: &str) -> io::Result<Option<crate::secrets::SecretBytes>> {
             Ok(Some(crate::secrets::SecretBytes::new(
@@ -1185,12 +1202,7 @@ mod ai_assistant_tests {
     fn active_provider_without_credential_stays_silent() {
         let store = store_for(crate::ai_providers::ProviderKind::OpenAi);
         assert!(
-            request_target_from(
-                &AssistantConfig::default(),
-                &store,
-                &crate::secrets::NoCredentialStore
-            )
-            .is_none(),
+            request_target_from(&AssistantConfig::default(), &store, &EmptyCredentials).is_none(),
             "无凭据不得伪造请求目标"
         );
     }
@@ -1198,12 +1210,8 @@ mod ai_assistant_tests {
     #[test]
     fn keyless_provider_needs_no_credential() {
         let store = store_for(crate::ai_providers::ProviderKind::Ollama);
-        let target = request_target_from(
-            &AssistantConfig::default(),
-            &store,
-            &crate::secrets::NoCredentialStore,
-        )
-        .expect("Ollama 免 key");
+        let target = request_target_from(&AssistantConfig::default(), &store, &EmptyCredentials)
+            .expect("Ollama 免 key");
         assert_eq!(target.kind, crate::ai_providers::ProviderKind::Ollama);
         assert!(target.key.is_empty());
         assert!(!target.model.is_empty());

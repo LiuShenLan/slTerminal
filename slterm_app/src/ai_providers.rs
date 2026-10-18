@@ -526,6 +526,34 @@ mod ai_providers_tests {
         assert_eq!(credential_target("custom-2"), "Slterm/AI/custom-2");
     }
 
+    /// 类型层凭据边界:provider 元数据序列化后只有引用字段,绝无明文 token。
+    #[test]
+    fn provider_store_serializes_only_credential_references() {
+        let fake = "sk-test-never-serialized-plaintext";
+        let mut provider =
+            AiProvider::preset(ProviderKind::OpenAi, preset_id(ProviderKind::OpenAi));
+        provider.api_key_set = true;
+        provider.api_key_hint = api_key_hint(fake);
+        let store = ProviderStore {
+            active_id: provider.id.clone(),
+            providers: vec![provider],
+        };
+        let json = serde_json::to_string(&store).expect("provider store 可序列化");
+        assert!(!json.contains(fake), "明文 token 不得进入序列化结果");
+        let value: serde_json::Value = serde_json::from_str(&json).expect("JSON 可解析");
+        let keys: HashSet<&str> = value["providers"][0]
+            .as_object()
+            .expect("provider 是 JSON 对象")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        for forbidden in ["token", "secret", "api_key", "plaintext"] {
+            assert!(!keys.contains(forbidden), "凭据明文键 {forbidden} 不得出域");
+        }
+        assert!(keys.contains("api_key_set"));
+        assert!(keys.contains("api_key_hint"));
+    }
+
     // ---- 元数据清洗 ----
 
     #[test]

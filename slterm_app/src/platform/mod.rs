@@ -3,6 +3,8 @@
 //! 业务 `#[cfg(windows)]` 仅允许出现在 slterm_terminal 的 pty 模块(硬约束 9);
 //! 本层是 Windows 原生代码的直接落点,不再带平台分支。
 
+// 凭据管理器通用封装(10 篇 M10.9):业务域只经 crate::secrets 门面消费。
+pub(crate) mod credentials;
 pub mod dirs;
 // 安装渠道门禁(09 篇 M10.5):外部托管渠道不参与自更新。
 pub(crate) mod distribution;
