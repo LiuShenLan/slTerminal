@@ -350,16 +350,20 @@ pub(super) fn apply(agent: AgentHook, enabled: bool) -> io::Result<()> {
     Ok(())
 }
 
-/// 自愈入口:逐家按授权快照补装(只补缺失,不覆盖)。
-pub(super) fn heal_enabled(raw: &RawSettings) {
+/// 自愈入口:逐家按授权快照补装(只补缺失,不覆盖)。返回失败清单供
+/// config_guard 的失败边通道消费(08 篇 M9.3);自愈语义与日志不变。
+pub(super) fn heal_enabled(raw: &RawSettings) -> Vec<AgentHook> {
+    let mut failures = Vec::new();
     for agent in AgentHook::ALL {
         if agent.enabled(raw)
             && configuration(agent).is_some_and(|(_, footprint)| footprint)
             && let Err(error) = apply(agent, true)
         {
             log::warn!("ai_hook: {}: {error}", agent.settings_key());
+            failures.push(agent);
         }
     }
+    failures
 }
 
 #[cfg(test)]

@@ -7,6 +7,8 @@
 //! 执行(24 行 / 2000 字符)。
 //!
 //! 本步只落可单测的纯逻辑;建议条渲染、请求发送与网格抓取归 M9.5。
+//! M9.3 合流:config_guard 自愈失败经 [`evaluate_hook_failure`] 进入同一
+//! 闸门,D08-2 裁定的默认关(`enabled=false`)同样适用于失败边。
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -289,6 +291,44 @@ impl TriggerGate {
         self.last_fired = Some(now);
         Some(NEXT_SEQ.fetch_add(1, Ordering::Relaxed))
     }
+}
+
+/// hook 失败边的一次失败事实(08 篇改造节 9 / D08-2)。config_guard 自愈
+/// 失败不是 shell 命令失败,没有真实退出码与最后命令;这里把失败操作投影
+/// 成触发链能消费的参数:`command` 是操作描述,只参与规则表判定。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct HookFailure {
+    pub command: String,
+    /// 失败操作的程序身份;自愈失败统一为 `None`——agent 名(claude/codex
+    /// 等)在 INTERACTIVE 表里,误当成 program 会把该报的失败静音。
+    pub program: Option<String>,
+}
+
+/// 失败边的合成退出码:非 0、非用户中止码;用户把它写进
+/// `ignored_exit_codes` 即可整体静音失败边。
+pub(crate) const HOOK_FAILURE_EXIT_CODE: i32 = 1;
+
+/// 失败边通道(D08-2 默认关):config_guard 自愈失败进入与命令失败同一
+/// 门链(冷却 → 开关 → 规则表)。未显式开启(`AssistantConfig::enabled`
+/// 默认 `false`)时连闸门都不碰——不评估、不写冷却;开启后语义与命令失败
+/// 一致,冷却按进程级失败边闸门计。
+pub(crate) fn evaluate_hook_failure(
+    gate: &mut TriggerGate,
+    config: &AssistantConfig,
+    failure: &HookFailure,
+    now: Instant,
+) -> Option<u64> {
+    if !config.enabled {
+        return None;
+    }
+    gate.evaluate(
+        true,
+        HOOK_FAILURE_EXIT_CODE,
+        &failure.command,
+        failure.program.as_deref(),
+        &config.ignored_exit_codes,
+        now,
+    )
 }
 
 /// 表示「用户停了它」而不是「它失败了」的退出码:
