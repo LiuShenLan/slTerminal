@@ -77,6 +77,8 @@
 | B49 | **托盘 shutdown join 等模态菜单收合**（罕见，可接受）。 | `tray.rs` `shutdown` | M10.3 | 记录。 |
 | B50 | **标题栏关闭未收 facade**：`apply_titlebar_command` Close 分支（非 Windows/测试路径）仍是 save+remove，绕过脏守卫；Windows 生产由原生控制区走 `on_window_should_close`（风险低）。 | `workspace/title_bar.rs` | M10.4 | 05 标题栏重建时补 `close_window` facade 入口并复用 B47 守卫。 |
 | B51 | **`window_hwnd(cx)` 的 `cx` 未参与实现**：单窗用开窗时缓存；未来多窗须改为按 `cx` 活动窗口查询。 | `windowing/focus.rs` | M10.4 | 留锚。 |
+| B52 | **更新提示不调 `mark_prompted`**：更新弹窗步落地前，同一版本每次启动都弹 toast。 | `update_check.rs` `deliver` | M10.5 | 弹窗接线时在打开/关闭处调 `mark_prompted`（`remind_later`/`skip_version` 同理）。 |
+| B53 | **`restore_ticket()` 未接启动恢复**：`acknowledge_restore` 无生产调用方。 | `update_download/handoff.rs` | M10.5 | 接 `session_recovery::prepare_startup` 前，窗口建好后确认窗口数。 |
 
 ## C. 计划内（归后续子步/阶段，重构完成时验证）
 
@@ -95,7 +97,7 @@
 | C11 | **i18n 合同独立 workspace CI 登记**：`tools/slterm-i18n-contract` 不在根 workspace，clippy/CI 不覆盖。 | 12 篇打包/CI 清单 | |
 | C12 | **旧栈语义资产转测试保留**：git2 五份语义资产（D07-1 裁定转对照用例）。 | 07/M11 | |
 | C13 | **docs/ 临时稿删除 + 篇号锚点清理**（与 A3 联动）。 | M11 | |
-| C14 | **设计措辞修正**：05 篇「窗口边缘」应为「内容区外圈」；04 篇 `reorder_batch` 签名稿与上游不符（已照源）；08 篇 `note_bell` 上游不存在（未落）；04 篇 generation 等待错误码口径（实现按设计稿 `agent_identity_mismatch`/`agent_exited`）；08 篇 D08-2 待沉淀仍写「M9.3 落地时拍板」而 DECISIONS 已裁（文档漂移）；08 篇 `compile_formula` 签名草案与上游实源不符（已按源码照抄）；08 篇 #44 `draw_overlays` 未迁，M9.5 自绘 paint pass（设计稿应标注归属）；09 篇 §6 duration 值域（Default|Short|Long）与 06 已落六档不一致（实现按六档消费，persistent 无系统常驻档）；09 篇 M10.2 出口只写「agent 退出清进度」，实现按任务书补 TurnDone/pane 关闭清除（doc 待回登）；09 篇 `focus_window(cx)`/`focus_pane(pane,cx)` 为多窗注册表签名，与单窗 GPUI（窗口更新回调内不可再 update）冲突，实现改为显式 `&mut Window` 落点、目标选择/平台调用仍单点。 | 设计稿 | 重构末统一订正。 |
+| C14 | **设计措辞修正**：05 篇「窗口边缘」应为「内容区外圈」；04 篇 `reorder_batch` 签名稿与上游不符（已照源）；08 篇 `note_bell` 上游不存在（未落）；04 篇 generation 等待错误码口径（实现按设计稿 `agent_identity_mismatch`/`agent_exited`）；08 篇 D08-2 待沉淀仍写「M9.3 落地时拍板」而 DECISIONS 已裁（文档漂移）；08 篇 `compile_formula` 签名草案与上游实源不符（已按源码照抄）；08 篇 #44 `draw_overlays` 未迁，M9.5 自绘 paint pass（设计稿应标注归属）；09 篇 §6 duration 值域（Default|Short|Long）与 06 已落六档不一致（实现按六档消费，persistent 无系统常驻档）；09 篇 M10.2 出口只写「agent 退出清进度」，实现按任务书补 TurnDone/pane 关闭清除（doc 待回登）；09 篇 `focus_window(cx)`/`focus_pane(pane,cx)` 为多窗注册表签名，与单窗 GPUI（窗口更新回调内不可再 update）冲突，实现改为显式 `&mut Window` 落点、目标选择/平台调用仍单点；09 篇 `PreparedUpdate::commit(&self)` 实为 `commit(&mut self, windows: &[Session])`，`RELEASE_DOWNLOAD_PREFIX` 落 `update_check.rs` 而非 `update_download`（M11 原位收敛）。 | 设计稿 | 重构末统一订正。 |
 | C15 | **`D04-3 windowing_behavior` 未设键**：单窗行为硬编码 `SINGLE_WINDOW_ID`。 | 12 篇随 settings 面统一裁定 | |
 | C16 | **`request_once_bounded` 无消费方**（插件宿主）。 | M9.5/M10 | |
 | C17 | **`ProviderTestOutcome` 文案本地化**（展示边界）。 | M9.5 | |
@@ -107,6 +109,10 @@
 | C23 | **真实模型出网无自动化**：`send_model_request` 已登记豁免。 | 后续 | 用本地 mock HTTP server 补四协议族 URL/头/响应解析用例。 |
 | C24 | **AUMID 图标未物化**：09 要求 `ensure_icon_file`（appLogoOverride），本仓无 app_icon/PNG 资产（归 12 篇发布面）；横幅无 logo（notify-test 打印 `icon: unavailable`）。 | M12 | 随包落图标并启用（托盘图标同源缺口）。 |
 | C25 | **真实 toast 投递面自动化为空**：`cfg(test)` 短路 show/dispatch，已登记豁免（回收站先例）；兜底 = 漏斗纯函数用例 + notify-test 真机 + 人工 smoke。 | 11 篇 | 如需 CI 化可加假 toast sink。 |
+| C26 | **`slterm_app/Cargo.toml` 无 `version`**：`CARGO_PKG_VERSION` 恒 `0.0.0`，更新比较/helper `--version` 回读依赖它。 | D12-4 首发版本线 | 设计已登记开放决策，非代码缺陷；首发前定版。 |
+| C27 | **更新弹窗/安装授权步未落**：`UpdateAvailable`/`DownloadStatus`/`ready_path`/`prepare/commit`/`schedule`/`mark_prompted` 均已就绪待接。 | 后续 | 消费面清单见 M10.5 报告缝合点。 |
+| C28 | **`update-check` CLI 诊断子命令未加**（任务标注可选）。 | 后续 | 排障需要时在 `cli.rs` 挂。 |
+| C29 | **`.slterm-update.slterm-lock` 启动残留**：锁权威是内核句柄，空文件无害（上游同构）。 | 产品取舍 | 如需零残留正常退出时删除。 |
 
 ## D. 已修（存档，防重复登记）
 
