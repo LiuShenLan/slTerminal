@@ -16,11 +16,20 @@ pub(crate) mod app_shell;
 pub(crate) mod atomic_file;
 // M4.2 协议与仲裁层:消费点归 M4.5(壳侧管道接线)/05 篇(pane 宿主),
 // 接线落地后摘除本 allow。
-#[allow(dead_code)]
+#[allow(dead_code)] // 消费点归 M4.5(屏幕观察)/05 篇(仲裁器)。
 pub(crate) mod ai_agents;
 #[allow(dead_code)]
 pub(crate) mod ai_hook;
-#[allow(dead_code)] // 消费点归 M4.4(AnswerInbox/会话投影)。
+// 会话发现消费点归 05 篇恢复注入(M5.5)/命令面板;本步只落扫描与注册表。
+#[allow(dead_code)]
+pub(crate) mod ai_sessions;
+// 沙箱放行集消费点归 07 篇文件域;设置页展示归 05/06。
+#[allow(dead_code)]
+pub(crate) mod agent_dirs;
+// per-pane 环境注入消费点归 02 篇 PTY spawn 链。
+#[allow(dead_code)]
+pub(crate) mod agent_env;
+#[allow(dead_code)] // 挂 pane 宿主归 05 篇,回答展示归 07 篇。
 pub(crate) mod assistant_answer;
 pub mod brand;
 pub(crate) mod cli;

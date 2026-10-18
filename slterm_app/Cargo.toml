@@ -54,6 +54,11 @@ anyhow = "1"
 log = "0.4"
 # ai_hook 信封/载荷解析(helper 不重编码,JSON 工作全在宿主侧)。
 serde_json = "1"
+# 屏幕规则 TOML 反序列化(规则资源随仓,声明式规则改不动代码)。
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+# 屏幕规则正则:逐规则编译一次进缓存,detect 热路径只跑匹配。
+regex = "1"
 # keymap/sequence.rs 的修饰键位族(与 core 同版本族)。
 bitflags = "2.4.1"
 # 事件信箱/session_pump 的异步通道与 Stream(event_mailbox.rs 随迁形态)。
