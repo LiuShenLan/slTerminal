@@ -5,7 +5,9 @@
 //! 待 02 篇 OSC 133 记账链(M9)回填。
 //!
 //! 不变式:snapshot pane 集合 == Terminal tab 树叶集合;`PaneId.0` 直出协议;
-//! Settings tab 无 pane/layout(单例、不进会话快照)。
+//! Settings/Document/Code/Image 无 pane/layout(纯视图 tab,不进会话快照)。
+//! 文件 tab 的 kind 取 `WorkspaceTab` 变体 snake_case(07 篇 M8.1):document/
+//! code/image。
 
 use gpui::App;
 use slterm_split::{PaneId, SplitDirection, SplitTree};
@@ -73,6 +75,42 @@ pub(crate) fn project_workspace(workspace: &SltermWorkspace, cx: &App) -> Runtim
                     active,
                     label: view.read(cx).title(cx).to_string(),
                     kind: "settings".to_owned(),
+                    bell: false,
+                    focused_pane_id: None,
+                    zoomed_pane_id: None,
+                    layout: None,
+                    panes: Vec::new(),
+                },
+                WorkspaceTab::Document { view } => RuntimeTab {
+                    tab_id: Some(entry.id),
+                    index,
+                    active,
+                    label: view.read(cx).tab_title(),
+                    kind: "document".to_owned(),
+                    bell: false,
+                    focused_pane_id: None,
+                    zoomed_pane_id: None,
+                    layout: None,
+                    panes: Vec::new(),
+                },
+                WorkspaceTab::Code { view } => RuntimeTab {
+                    tab_id: Some(entry.id),
+                    index,
+                    active,
+                    label: view.read(cx).tab_title(cx),
+                    kind: "code".to_owned(),
+                    bell: false,
+                    focused_pane_id: None,
+                    zoomed_pane_id: None,
+                    layout: None,
+                    panes: Vec::new(),
+                },
+                WorkspaceTab::Image { view } => RuntimeTab {
+                    tab_id: Some(entry.id),
+                    index,
+                    active,
+                    label: view.read(cx).title.clone(),
+                    kind: "image".to_owned(),
                     bell: false,
                     focused_pane_id: None,
                     zoomed_pane_id: None,

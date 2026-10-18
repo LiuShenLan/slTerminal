@@ -4,6 +4,14 @@
     "choose": "选择…",
     "copy_suffix": "副本"
   },
+  "editor": {
+    "read_failed": "无法读取文件：{error}",
+    "image_loading": "正在加载图片…",
+    "image_decode_failed": "图片解码失败：{error}",
+    "truncated": "文件超过 8 MB，已截断为只读前缀。",
+    "invalid_encoding": "文件不是有效 UTF-8，已只读打开。",
+    "read_only": "只读"
+  },
   "language": {
     "system": "跟随系统"
   },

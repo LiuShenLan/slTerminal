@@ -4,6 +4,14 @@
     "choose": "Choose...",
     "copy_suffix": "Copy"
   },
+  "editor": {
+    "read_failed": "Could not read the file: {error}",
+    "image_loading": "Loading image…",
+    "image_decode_failed": "Could not decode the image: {error}",
+    "truncated": "File exceeds 8 MB; showing a truncated read-only prefix.",
+    "invalid_encoding": "File is not valid UTF-8; opened read-only.",
+    "read_only": "Read-only"
+  },
   "language": {
     "system": "System"
   },

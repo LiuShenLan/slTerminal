@@ -38,9 +38,14 @@ pub(crate) mod agent_env;
 pub(crate) mod assistant_answer;
 pub mod brand;
 pub(crate) mod cli;
+// 有界前缀读取(07 篇):内存上限先于解码生效。
+pub(crate) mod document_io;
 // 事务型 Git worktree(07 篇边界,04 篇 agent.fork 消费):只回滚本事务
 // 证明创建过的资源,失败路径不留半成品。
 pub mod error;
+// git 子进程执行体 facade(07 篇 D07-1 已裁):M8.1 只读面 = 仓库根 +
+// HEAD 字节(gitshow 数据源);四方法执行归 M8.5。
+pub(crate) mod git;
 pub(crate) mod git_worktree;
 pub(crate) mod gpui_terminal;
 // 界面语言(06 篇 M6.4):build.rs 静态生成的 typed Message 查询 API;
@@ -61,6 +66,8 @@ pub(crate) mod session;
 // 损坏三态;`slterm-settings` 保持值权威与零生产依赖。
 pub(crate) mod settings_store;
 pub(crate) mod terminal_registry;
+// 文本快照(07 篇):编码/行尾/只读合同单点;M8.2 编辑内核的共享底座。
+pub(crate) mod text_document;
 // 主题库应用侧(06 篇 M6.3):版本化 JSON 信封/自定义主题持久化/主题包
 // 有界检查。设置层管值、应用层管格式的分层边界件。
 pub(crate) mod theme_library;

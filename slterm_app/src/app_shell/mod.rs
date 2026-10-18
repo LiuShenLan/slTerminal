@@ -22,7 +22,13 @@ macro_rules! eprintln {
 }
 
 pub(crate) mod assets;
+// 源码文件 tab(07 篇 M8.1):普通源码与 gitshow 只读臂。
+pub(crate) mod code_tab;
 pub(crate) mod config;
+// 文档/图片 tab + openable_in_app 路由单判定(07 篇 M8.1)。
+pub(crate) mod doc_tabs;
+// 文本文件视图骨架(07 篇 M8.1 只读;M8.2 接编辑内核)。
+pub(crate) mod file_editor;
 // 布局转换对(「布局单点」);消费点 = M5.5 快照/恢复闭环。
 pub(crate) mod session_restore;
 // GUI 设置页(06 篇):左导航 + 右表单 + 路由式搜索 + 统一写通道。

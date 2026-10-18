@@ -23,6 +23,8 @@
 //! 结构性变化经 `TerminalView::mark_structural_resize` 同步下发,不进尾沿
 //! 去抖)。
 
+/// 07 篇 M8.1:文件打开路由(openable_in_app → Image/Document/Code)。
+mod documents;
 /// 04 篇 M7.5:Runtime 写命令在 Workspace 上的执行器。
 mod runtime_control;
 pub(crate) mod runtime_projection;
@@ -102,10 +104,11 @@ pub struct TerminalPane {
 }
 
 /// 唯一合法 tab 类型集(面板封闭的 Rust 落点)。本阶段 Terminal +
-/// Settings 两个变体;Document/Code 归 07 篇按片落地。
+/// Settings + 07 篇 M8.1 的 Document/Code/Image 三个文件 tab。
 ///
 /// Settings 是**单例 tab**:再次打开只激活既有实例,不新建;不进会话
-/// 快照(05 篇合同:快照只收 Terminal tab)。
+/// 快照(05 篇合同:快照只收 Terminal tab)。Document/Code/Image 同样
+/// 不进快照——纯视图 drop,无进程/PTY 生命周期。
 pub enum WorkspaceTab {
     Terminal {
         /// 实体属主,无序按 id 查。见模块头生命周期合同。
@@ -122,6 +125,18 @@ pub enum WorkspaceTab {
         view: Entity<SettingsPane>,
         /// 宿主事件订阅(Changed/Close);随 tab 一起释放。
         _subscription: Subscription,
+    },
+    /// Markdown 文档 tab(渲染态归 M8.3;M8.1 只读文本占位)。
+    Document {
+        view: Entity<super::doc_tabs::DocTabView>,
+    },
+    /// 源码 tab(普通文件可编辑态归 M8.2;M8.1 只读 + gitshow 只读臂)。
+    Code {
+        view: Entity<super::code_tab::CodeTabView>,
+    },
+    /// 只读图片 tab(后台解码;缩放归 M8.3)。
+    Image {
+        view: Entity<super::doc_tabs::ImageTabView>,
     },
 }
 
@@ -413,7 +428,10 @@ impl SltermWorkspace {
                         let view = pane.view.read(cx);
                         (!view.cwd.is_empty()).then(|| PathBuf::from(&view.cwd))
                     }),
-                WorkspaceTab::Settings { .. } => None,
+                WorkspaceTab::Settings { .. }
+                | WorkspaceTab::Document { .. }
+                | WorkspaceTab::Code { .. }
+                | WorkspaceTab::Image { .. } => None,
             });
         self.add_terminal_tab(cwd, None, false, window, cx);
     }
@@ -564,7 +582,10 @@ impl SltermWorkspace {
             .iter()
             .filter_map(|entry| match &entry.tab {
                 WorkspaceTab::Terminal { panes, .. } => Some(panes),
-                WorkspaceTab::Settings { .. } => None,
+                WorkspaceTab::Settings { .. }
+                | WorkspaceTab::Document { .. }
+                | WorkspaceTab::Code { .. }
+                | WorkspaceTab::Image { .. } => None,
             })
             .flat_map(|panes| panes.iter().map(|pane| pane.view.clone()))
             .collect();
@@ -722,6 +743,9 @@ impl SltermWorkspace {
                 .filter(|title| !title.is_empty())
                 .unwrap_or_else(|| "shell".to_owned()),
             WorkspaceTab::Settings { view, .. } => view.read(cx).title(cx).to_string(),
+            WorkspaceTab::Document { view } => view.read(cx).tab_title(),
+            WorkspaceTab::Code { view } => view.read(cx).tab_title(cx),
+            WorkspaceTab::Image { view } => view.read(cx).title.clone(),
         }
     }
 
@@ -905,7 +929,10 @@ impl SltermWorkspace {
                 .iter()
                 .find(|pane| pane.view == *view)
                 .map(|pane| pane.id),
-            WorkspaceTab::Settings { .. } => None,
+            WorkspaceTab::Settings { .. }
+            | WorkspaceTab::Document { .. }
+            | WorkspaceTab::Code { .. }
+            | WorkspaceTab::Image { .. } => None,
         })
     }
 
@@ -914,7 +941,10 @@ impl SltermWorkspace {
     fn close_pane(&mut self, pane_id: PaneId, window: &mut Window, cx: &mut Context<'_, Self>) {
         let Some(tab_index) = self.tabs.iter().position(|entry| match &entry.tab {
             WorkspaceTab::Terminal { tree, .. } => tree.contains(pane_id),
-            WorkspaceTab::Settings { .. } => false,
+            WorkspaceTab::Settings { .. }
+            | WorkspaceTab::Document { .. }
+            | WorkspaceTab::Code { .. }
+            | WorkspaceTab::Image { .. } => false,
         }) else {
             return;
         };
@@ -923,7 +953,10 @@ impl SltermWorkspace {
             .record_pane_closed(SINGLE_WINDOW_ID, pane_id.0);
         let outcome = match &mut self.tabs[tab_index].tab {
             WorkspaceTab::Terminal { tree, .. } => tree.remove_leaf(pane_id),
-            WorkspaceTab::Settings { .. } => return,
+            WorkspaceTab::Settings { .. }
+            | WorkspaceTab::Document { .. }
+            | WorkspaceTab::Code { .. }
+            | WorkspaceTab::Image { .. } => return,
         };
         match outcome {
             RemoveOutcome::NotFound => {}
@@ -992,7 +1025,10 @@ impl SltermWorkspace {
             .get(tab_index)
             .map(|entry| match &entry.tab {
                 WorkspaceTab::Terminal { panes, .. } => panes.as_slice(),
-                WorkspaceTab::Settings { .. } => &[],
+                WorkspaceTab::Settings { .. }
+                | WorkspaceTab::Document { .. }
+                | WorkspaceTab::Code { .. }
+                | WorkspaceTab::Image { .. } => &[],
             })
             .unwrap_or(&[])
             .iter()
@@ -1229,7 +1265,10 @@ impl SltermWorkspace {
     pub(crate) fn settings_pane_for_test(&self) -> Option<Entity<SettingsPane>> {
         self.tabs.iter().find_map(|entry| match &entry.tab {
             WorkspaceTab::Settings { view, .. } => Some(view.clone()),
-            WorkspaceTab::Terminal { .. } => None,
+            WorkspaceTab::Terminal { .. }
+            | WorkspaceTab::Document { .. }
+            | WorkspaceTab::Code { .. }
+            | WorkspaceTab::Image { .. } => None,
         })
     }
 
@@ -1317,6 +1356,16 @@ impl SltermWorkspace {
                 let handle = view.read(cx).focus_handle.clone();
                 window.focus(&handle, cx);
             }
+            WorkspaceTab::Document { view } => {
+                let handle = view.read(cx).focus_handle(cx);
+                window.focus(&handle, cx);
+            }
+            WorkspaceTab::Code { view } => {
+                let handle = view.read(cx).focus_handle(cx);
+                window.focus(&handle, cx);
+            }
+            // 图片 tab 无可编辑面,焦点不迁移(关闭后回落到幸存终端)。
+            WorkspaceTab::Image { .. } => {}
         }
     }
 
@@ -1326,7 +1375,10 @@ impl SltermWorkspace {
             .get(self.active)
             .and_then(|entry| match &entry.tab {
                 WorkspaceTab::Terminal { focused, .. } => Some(*focused),
-                WorkspaceTab::Settings { .. } => None,
+                WorkspaceTab::Settings { .. }
+                | WorkspaceTab::Document { .. }
+                | WorkspaceTab::Code { .. }
+                | WorkspaceTab::Image { .. } => None,
             })
     }
 
@@ -1720,6 +1772,18 @@ impl Render for SltermWorkspace {
         let content = match self.tabs.get(self.active).map(|entry| &entry.tab) {
             Some(WorkspaceTab::Terminal { .. }) => Some(self.render_terminal_tab(self.active, cx)),
             Some(WorkspaceTab::Settings { view, .. }) => Some(view.clone().into_any_element()),
+            // 文档 tab 的外层选择器独立于文本视图:测试与诊断按 tab 类型定位。
+            Some(WorkspaceTab::Document { view }) => Some(
+                div()
+                    .debug_selector(|| "slterm-document-tab".to_owned())
+                    .size_full()
+                    .min_w_0()
+                    .min_h_0()
+                    .child(view.clone())
+                    .into_any_element(),
+            ),
+            Some(WorkspaceTab::Code { view }) => Some(view.clone().into_any_element()),
+            Some(WorkspaceTab::Image { view }) => Some(view.clone().into_any_element()),
             None => None,
         };
         // 侧栏三件套:ActivityBar + tab 列表/双槽内容区 + 宽度拖拽热区。

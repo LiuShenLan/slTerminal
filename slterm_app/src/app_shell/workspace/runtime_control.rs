@@ -787,6 +787,9 @@ fn resolve_shell(
 fn tab_pane_ids(entry: &super::TabEntry) -> Vec<PaneId> {
     match &entry.tab {
         WorkspaceTab::Terminal { panes, .. } => panes.iter().map(|pane| pane.id).collect(),
-        WorkspaceTab::Settings { .. } => Vec::new(),
+        WorkspaceTab::Settings { .. }
+        | WorkspaceTab::Document { .. }
+        | WorkspaceTab::Code { .. }
+        | WorkspaceTab::Image { .. } => Vec::new(),
     }
 }
