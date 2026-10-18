@@ -28,6 +28,20 @@ EXEMPT_PATHS = {
     # 合规文本必须如实点名外部项目,不得改写。
     "THIRD-PARTY-NOTICES",
 }
+
+# 全树模式(full)的历史语境豁免:这些文件记录来源、沿革或决策证据,
+# 旧名属于必要事实而非品牌文案。逐路径登记,新增豁免须注明理由。
+HISTORICAL_CONTEXT_PATHS = {
+    ".claude/adr.md",          # ADR 沿革含上游来源
+    "CHANGELOG.md",            # 版本历史含上游来源锚点
+    "CONTEXT.md",              # 术语表记录来源与演进
+    "README.md",               # 项目来源声明
+    "README.zh-CN.md",         # 同上(中文)
+    "docs/REFACTOR-ISSUES.md", # 遗留问题清单含历史来源语境
+}
+HISTORICAL_CONTEXT_PREFIXES = (
+    "architecture/notes/",     # 因果档案:记录历史成因
+)
 # 版权/法律归属行:法律文本必须保留原始项目名。
 LEGAL_ATTRIBUTION_PATTERNS = (
     re.compile(
@@ -48,6 +62,13 @@ DEPENDENCY_REFERENCE_PATTERNS = (
 
 def exempt_path(path: str) -> bool:
     return path in EXEMPT_PATHS
+
+
+def full_exempt_path(path: str) -> bool:
+    """全树模式的豁免面 = 既有豁免 + 历史语境文件。"""
+    return exempt_path(path) or path in HISTORICAL_CONTEXT_PATHS or path.startswith(
+        HISTORICAL_CONTEXT_PREFIXES
+    )
 
 
 def git(*args: str) -> bytes:
@@ -155,6 +176,32 @@ def scan_pending_commits(revision_range: str) -> list[str]:
     return hits
 
 
+def tracked_paths() -> list[str]:
+    raw = git("ls-files", "-z")
+    return [path.decode("utf-8") for path in raw.split(b"\0") if path]
+
+
+def scan_full_tree() -> list[str]:
+    """全树模式:扫描全部已跟踪文件的当前内容。
+
+    临时设计稿删除后作为常挂门禁;历史语境文件按豁免表放行。二进制/非
+    UTF-8 文件跳过(品牌名不可能以可读文本形式藏匿)。
+    """
+    hits: list[str] = []
+    for path in tracked_paths():
+        normalized = path.replace("\\", "/")
+        if full_exempt_path(normalized):
+            continue
+        try:
+            text = Path(path).read_text(encoding="utf-8")
+        except (UnicodeDecodeError, FileNotFoundError):
+            continue
+        for line_no, line in enumerate(text.splitlines(), 1):
+            if prohibited_source_line(normalized, line):
+                hits.append(f"{normalized}:{line_no}:{line}")
+    return hits
+
+
 def scan_message(path: Path) -> list[str]:
     return [
         f"{line_no}:{line}"
@@ -214,7 +261,7 @@ def report(title: str, hits: list[str]) -> int:
 def main(argv: list[str]) -> int:
     if len(argv) < 2:
         print(
-            "usage: check_brand_regress.py staged|message|push [message-file] | "
+            "usage: check_brand_regress.py staged|full|message|push [message-file] | "
             "range --base BASE --head HEAD",
             file=sys.stderr,
         )
@@ -223,6 +270,8 @@ def main(argv: list[str]) -> int:
     mode = argv[1]
     if mode == "staged":
         return report("staged additions contain prohibited legacy brand names", scan_added_lines("--cached"))
+    if mode == "full":
+        return report("tracked files contain prohibited legacy brand names", scan_full_tree())
     if mode == "message":
         if len(argv) != 3:
             print("message mode requires the commit message path", file=sys.stderr)

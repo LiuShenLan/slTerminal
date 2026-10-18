@@ -45,7 +45,6 @@ __pycache__/
 *.py[cod]
 
 # Runtime persistence
-slterminal-projects.json
 coverage/
 
 # codegraph

@@ -22,7 +22,8 @@ use super::{
     RuntimeSnapshot,
 };
 use crate::cli::{
-    ControlCommand, ControlOptions, ControlSplitDirection, ControlWaitState, Subcommands,
+    ControlCommand, ControlOptions, ControlSplitDirection, ControlWaitState, SetupAiOptions,
+    Subcommands,
 };
 
 /// 插件响应的保留量上限:与请求上限分开,整次 I/O 共用一个 deadline。
@@ -291,8 +292,9 @@ pub(crate) fn run_cli(command: Subcommands) -> i32 {
             crate::cli::AgentCommand::Read(options) => options.output.pretty,
             crate::cli::AgentCommand::Wait(options) => options.output.pretty,
         },
-        // notify-test 直接打印诊断文本,不产出 JSON 响应。
+        // notify-test / setup-ai 直接打印诊断文本,不产出 JSON 响应。
         Subcommands::NotifyTest => false,
+        Subcommands::SetupAi(_) => false,
     };
 
     let outcome = match command {
@@ -305,6 +307,8 @@ pub(crate) fn run_cli(command: Subcommands) -> i32 {
         // 同步诊断通道(09 篇采纳点 18):注册 + 时长 + 投递逐段打印,
         // 不启动 GUI、不依赖运行中的实例。
         Subcommands::NotifyTest => return crate::platform::notifications::notify_test(),
+        // 卸载器入口(B69):不启动 GUI、不依赖运行中实例。
+        Subcommands::SetupAi(options) => return run_setup_ai(options),
     };
     match outcome {
         Ok(()) => 0,
@@ -315,6 +319,31 @@ pub(crate) fn run_cli(command: Subcommands) -> i32 {
                 .map_or("cli_transport_error", |error| error.code);
             let response = ApiResponse::failure("cli", ApiError::new(code, error.to_string()));
             let _ = print_response(&response, pretty);
+            1
+        }
+    }
+}
+
+/// 卸载器专用入口(B69):不启动 GUI、不依赖运行中实例。退出码
+/// 0 = 全部清理成功(未安装的 agent 不算失败),1 = 任一失败,2 = 用法错误。
+fn run_setup_ai(options: SetupAiOptions) -> i32 {
+    if !options.remove {
+        eprintln!("usage: slterm setup-ai --remove");
+        return 2;
+    }
+    match crate::ai_hook::remove_all_hooks() {
+        Ok(failures) if failures.is_empty() => {
+            println!("setup-ai: OK (hook integrations removed)");
+            0
+        }
+        Ok(failures) => {
+            for (agent, error) in failures {
+                eprintln!("setup-ai: {}: {error}", agent.settings_key());
+            }
+            1
+        }
+        Err(error) => {
+            eprintln!("setup-ai: {error}");
             1
         }
     }

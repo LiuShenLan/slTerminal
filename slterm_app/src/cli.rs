@@ -68,6 +68,16 @@ pub enum Subcommands {
     /// Diagnose the native notification pipeline: AUMID registration,
     /// configured duration, and a synchronous test toast.
     NotifyTest,
+    /// Installer hook: remove slTerminal hook entries from every supported
+    /// AI CLI before the installation directory is deleted.
+    SetupAi(SetupAiOptions),
+}
+
+#[derive(Args, Debug)]
+pub struct SetupAiOptions {
+    /// Remove hook integrations. This is the only supported operation.
+    #[arg(long)]
+    pub remove: bool,
 }
 
 /// `-e` 启动命令(M3 形态:启动链一次性消费;serde 持久化面归 05 篇)。
@@ -981,6 +991,7 @@ mod cli_tests {
             vec!["tab", "close", "0", "--window", "1"],
             vec!["ctl", "describe"],
             vec!["notify-test"],
+            vec!["setup-ai", "--remove"],
         ] {
             let cli = parse_args(args.clone())
                 .unwrap_or_else(|error| panic!("{args:?} should parse: {error}"));
@@ -988,6 +999,19 @@ mod cli_tests {
                 cli.subcommands.is_some(),
                 "{args:?} must route to the CLI persona"
             );
+        }
+    }
+
+    /// 安装器卸载链依赖的 verb 形态:必须是 CLI 人格且带 `--remove`。
+    #[test]
+    fn setup_ai_remove_parses_to_the_installer_hook() {
+        match parse(["setup-ai", "--remove"]).unwrap().subcommands {
+            Some(Subcommands::SetupAi(options)) => assert!(options.remove),
+            other => panic!("unexpected command: {other:?}"),
+        }
+        match parse(["setup-ai"]).unwrap().subcommands {
+            Some(Subcommands::SetupAi(options)) => assert!(!options.remove),
+            other => panic!("unexpected command: {other:?}"),
         }
     }
 

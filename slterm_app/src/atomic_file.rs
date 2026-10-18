@@ -104,7 +104,10 @@ pub(crate) fn try_lifetime_lock(path: &Path) -> io::Result<Option<LifetimeFileLo
     file.set_len(0)?;
     write!(file, "{}", std::process::id())?;
     file.sync_data()?;
-    Ok(Some(LifetimeFileLock { _file: file }))
+    Ok(Some(LifetimeFileLock {
+        path: lock_path,
+        _file: Some(file),
+    }))
 }
 
 fn create_lock(path: &Path) -> io::Result<FileLock> {
@@ -148,8 +151,20 @@ impl Drop for FileLock {
 }
 
 pub(crate) struct LifetimeFileLock {
-    // 句柄即所有权;Drop 关闭句柄由 File 自身完成。字段从不读——持有即锁。
-    _file: File,
+    path: PathBuf,
+    // Option 以便 Drop 中先关闭独占句柄、再删除锁文件(字段析构顺序无法做到)。
+    // 句柄即所有权;字段从不读——持有即锁。
+    _file: Option<File>,
+}
+
+impl Drop for LifetimeFileLock {
+    fn drop(&mut self) {
+        // 先释放独占句柄再尽力删除锁文件,避免正常退出后安装目录残留
+        // (B78/C29)。若另一实例已经打开该文件,`share_mode(0)` 会让删除
+        // 因共享冲突失败——忽略即可,锁语义仍由对方句柄持有。
+        self._file.take();
+        let _ = std::fs::remove_file(&self.path);
+    }
 }
 
 /// MoveFileExW + REPLACE_EXISTING:读者永远看不到撕裂文件,崩溃留下原件。
@@ -196,11 +211,14 @@ mod atomic_file_tests {
         drop(first);
         assert!(try_lock(&path).unwrap().is_some());
 
+        let lock_file = dir.path().join("state.json.slterm-lock");
         let owner = try_lifetime_lock(&path)
             .unwrap()
             .expect("first lifetime lock");
+        assert!(lock_file.exists(), "持锁期间锁文件必须在");
         assert!(try_lifetime_lock(&path).unwrap().is_none());
         drop(owner);
+        assert!(!lock_file.exists(), "正常释放后锁文件必须删除(B78/C29)");
         assert!(try_lifetime_lock(&path).unwrap().is_some());
     }
 }

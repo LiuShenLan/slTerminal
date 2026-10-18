@@ -280,6 +280,28 @@ pub(crate) fn apply_claude_at(dir: &Path, helper: &str, enabled: bool) -> io::Re
     Ok(())
 }
 
+/// 卸载器入口(`setup-ai --remove`):取跨进程锁后移除全部 agent 的 hook
+/// 注入。配置不存在不算失败;Cursor 无配置路径时跳过。
+pub(crate) fn remove_all() -> io::Result<Vec<(AgentHook, io::Error)>> {
+    let _lock = lock()?;
+    Ok(remove_all_for(&AgentHook::ALL))
+}
+
+/// 不取锁的内核:生产恒全量,测试注入 agent 子集与显式目录。
+pub(super) fn remove_all_for(agents: &[AgentHook]) -> Vec<(AgentHook, io::Error)> {
+    let mut failures = Vec::new();
+    for &agent in agents {
+        // 未安装的 CLI 没有配置路径时不算失败——卸载必须能在任意机器上跑完。
+        if agent == AgentHook::Cursor && cursor::path().is_none() {
+            continue;
+        }
+        if let Err(error) = apply(agent, false) {
+            failures.push((agent, error));
+        }
+    }
+    failures
+}
+
 /// 按已落盘的偏好执行接入/卸载(不写授权;03 安装权威的应用入口)。
 pub(crate) fn apply_and_verify(agent: AgentHook, enabled: bool) -> io::Result<()> {
     apply(agent, enabled)?;
@@ -410,6 +432,30 @@ mod settings_tests {
         std::fs::write(&path, "user extension").unwrap();
         assert!(installed_at(AgentHook::Pi, &path, "").is_err());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "user extension");
+    }
+
+    /// `setup-ai --remove` 的内核:移除自有 hook、保留用户键与外来 hooks。
+    #[test]
+    fn uninstall_removes_own_hooks_and_preserves_user_configuration() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(
+            &path,
+            r#"{"model":"opus","hooks":{"Stop":[{"hooks":[{"type":"command","command":"C:/old/slterm-hook.exe","args":["claude"]},{"type":"command","command":"user-notifier"}]}]}}"#,
+        )
+        .unwrap();
+        // CLAUDE_CONFIG_DIR 是进程级;全量测试串行纪律保证用例间互斥。
+        unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", dir.path()) };
+        let failures = remove_all_for(&[AgentHook::Claude]);
+        unsafe { std::env::remove_var("CLAUDE_CONFIG_DIR") };
+        assert!(failures.is_empty(), "{failures:?}");
+        let root: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(root["model"], json!("opus"), "无关顶层键必须保留");
+        assert_eq!(
+            root["hooks"]["Stop"],
+            json!([{"hooks":[{"type":"command","command":"user-notifier"}]}]),
+            "只移除自有条目,用户 handler 原样保留"
+        );
     }
 
     #[test]

@@ -388,10 +388,13 @@ fn placeholder_icon_pixels(size: u32) -> Vec<u8> {
     pixels
 }
 
-/// 品牌图标像素(C24 归 M12):当前仓内无内嵌 logo,返回 None 让调用方
-/// 退到占位圆盘。资产落地后只在本函数解码,托盘线程与橙点管线不变。
-fn brand_icon_pixels(_size: u32) -> Option<Vec<u8>> {
-    None
+/// 品牌图标像素:内嵌 PNG(与随包 `assets/app-icon.png` 同源),按目标
+/// 尺寸重采样。解码失败返回 None,调用方退到占位圆盘。
+fn brand_icon_pixels(size: u32) -> Option<Vec<u8>> {
+    static PNG: &[u8] = include_bytes!("../../assets/app-icon.png");
+    let decoded = image::load_from_memory_with_format(PNG, image::ImageFormat::Png).ok()?;
+    let resized = decoded.resize_exact(size, size, image::imageops::FilterType::Lanczos3);
+    Some(resized.to_rgba8().into_raw())
 }
 
 /// 右下角实心橙点(约 5/8 直径比)。挑警示橙而不是主题 accent:托盘
@@ -1019,6 +1022,19 @@ mod tray_tests {
             pane: PaneId(pane),
             label: label.to_owned(),
             needs_attention,
+        }
+    }
+
+    /// C24:内嵌品牌图标必须可解码且非全透明,否则托盘会静默退回占位圆盘。
+    #[test]
+    fn brand_icon_decodes_to_rgba_pixels() {
+        for size in [16, 32, 48, 256] {
+            let pixels = brand_icon_pixels(size).expect("embedded icon must decode");
+            assert_eq!(pixels.len(), (size * size * 4) as usize);
+            assert!(
+                pixels.chunks_exact(4).any(|pixel| pixel[3] > 0),
+                "size {size} 不得全透明"
+            );
         }
     }
 

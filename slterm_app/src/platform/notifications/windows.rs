@@ -251,13 +251,15 @@ pub(super) fn register_aumid() -> Result<(), String> {
     Ok(())
 }
 
-/// 物化/发现的 logo 路径(诊断命令打印)。图标资产归 12 篇发布面:数据
-/// 目录或 exe 旁存在 `toast_icon.png` / `slterm.png` 即启用,否则无 logo。
+/// 物化/发现的 logo 路径(诊断命令打印)。随包资产
+/// `assets/app-icon.png` 优先;数据目录 `toast_icon.png` 与 exe 旁
+/// `slterm.png` 作为历史散落形态兼容。
 pub(super) fn icon_path() -> Option<PathBuf> {
     let mut candidates = vec![crate::platform::dirs::data_dir().join("toast_icon.png")];
     if let Ok(exe) = std::env::current_exe()
         && let Some(directory) = exe.parent()
     {
+        candidates.insert(0, directory.join("assets").join("app-icon.png"));
         candidates.push(directory.join("slterm.png"));
     }
     candidates.into_iter().find(|path| path.is_file())

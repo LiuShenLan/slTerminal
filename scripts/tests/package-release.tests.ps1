@@ -138,6 +138,53 @@ function Invoke-BudgetSelfTest {
     }
 }
 
+# 新鲜度判据自测(B72):内容摘要 stamp 命中/拒绝、仅改注释重构建不假红、
+# stamp 缺失回退 mtime。夹具放 target/ 下(已忽略),dot-source 复用库函数。
+function Invoke-FreshnessSelfTest {
+    $root = Join-Path $repoRoot "target/freshness-selftest-$([guid]::NewGuid().ToString('N'))"
+    $sourceRoot = Join-Path $root 'src'
+    $buildRoot = Join-Path $root 'build'
+    New-Item -ItemType Directory -Path $sourceRoot, $buildRoot -Force | Out-Null
+    try {
+        . (Join-Path $repoRoot 'scripts/build-windows-product.ps1') -LibraryOnly
+        $source = Join-Path $sourceRoot 'fixture.rs'
+        Set-Content -LiteralPath $source -Value 'fn main() {}' -Encoding utf8NoBOM
+        $binary = Join-Path $buildRoot 'slterm.exe'
+        [IO.File]::WriteAllText($binary, 'stub')
+        $roots = @($sourceRoot)
+
+        Write-BuildStamp $buildRoot (Get-SourceDigest $roots)
+        Assert-FreshBinaries -Binaries @($binary) -SourceRoots $roots
+
+        Add-Content -LiteralPath $source -Value '// comment only' -Encoding utf8NoBOM
+        $rejected = $false
+        try { Assert-FreshBinaries -Binaries @($binary) -SourceRoots $roots }
+        catch {
+            if ($_.Exception.Message -notlike '*源码摘要与构建戳不一致*') { throw }
+            $rejected = $true
+        }
+        if (-not $rejected) { throw '源码变更未被摘要判据拒绝' }
+
+        # 模拟重新构建:stamp 刷新为当前摘要即通过——仅改注释不重链接也不假红。
+        Write-BuildStamp $buildRoot (Get-SourceDigest $roots)
+        Assert-FreshBinaries -Binaries @($binary) -SourceRoots $roots
+
+        # 旧构建目录(无 stamp)回退 mtime 判据。
+        Remove-Item -LiteralPath (Get-BuildStampPath $buildRoot) -Force
+        (Get-Item -LiteralPath $binary).LastWriteTimeUtc = [DateTime]::UtcNow.AddDays(-1)
+        (Get-Item -LiteralPath $source).LastWriteTimeUtc = [DateTime]::UtcNow
+        $rejected = $false
+        try { Assert-FreshBinaries -Binaries @($binary) -SourceRoots $roots }
+        catch {
+            if ($_.Exception.Message -notlike '*早于源码改动*') { throw }
+            $rejected = $true
+        }
+        if (-not $rejected) { throw 'stamp 缺失时 mtime 回退判据失效' }
+    } finally {
+        Remove-Item -LiteralPath $root -Recurse -Force
+    }
+}
+
 if ([string]::IsNullOrWhiteSpace($Version)) {
     $Version = Get-ProductVersion
 }
@@ -149,7 +196,8 @@ Assert-ReleaseProfile
 
 if ($SelfTest) {
     Invoke-BudgetSelfTest
-    Write-Output 'package-release.tests.ps1: SELFTEST PASS (profile pin, budget boundary, missing asset)'
+    Invoke-FreshnessSelfTest
+    Write-Output 'package-release.tests.ps1: SELFTEST PASS (profile pin, budget boundary, missing asset, freshness digest)'
     return
 }
 

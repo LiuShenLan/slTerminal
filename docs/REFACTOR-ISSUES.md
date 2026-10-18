@@ -157,6 +157,8 @@
 
 M4.5→M5.4：`split_bounds` 键下标泄漏改 TabId；M5.3b→M6.2：配置钮；M6.2→M6.4：locale 每帧探测；M6.3→M6.2：调色板接主题解析；M7.1→M7.2：schema 方法枚举裁剪；M7.2→M7.3：WorktreeProvenance/git_params/capabilities 路由；M7.3→M7.5：RuntimeControl 泵臂/agent 生命周期；M7.5→M8.5：runtime git.* 接执行体；M8.1→M8.3：图片焦点；M8.2→M8.3/M8.5：撤销双栈/整窗脏守卫/Document 脏守卫/图片压帧；M8.3 feature-clippy 三红（2612d1e，验收补 feature-clippy 覆盖）。
 
+M12/R1（2026-10-18）：B69 `setup-ai --remove` 卸载清理、B72 新鲜度改内容摘要构建戳、B74 删除遗留 `slterminal-projects.json`、B77 禁名门禁 full 全树模式与历史语境豁免、B78 锁文件随释放删除 + `[UninstallDelete]` 兜底、B79 显式 `DefaultGroupName`、C24 应用图标资产（PNG/ICO，托盘与通知同源）。
+
 ## E. 验收纪律补记
 
 - 自 M8.3 起验收同时跑两形态 clippy（`--workspace` 与 `-p slterm --features gpui-test-support`）——此前无 feature 形态遗漏了 M6 起的三处测试端红灯。

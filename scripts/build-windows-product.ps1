@@ -48,6 +48,8 @@ $script:PackageEntries = @(
     [pscustomobject]@{ PackagePath = 'docs/CHANGELOG.md'; RepoPath = 'CHANGELOG.md' }
     [pscustomobject]@{ PackagePath = 'assets/runtime-control-api.md'; RepoPath = 'assets/runtime-control-api.md' }
     [pscustomobject]@{ PackagePath = 'assets/runtime-api-v1.schema.json'; RepoPath = 'assets/runtime-api-v1.schema.json' }
+    [pscustomobject]@{ PackagePath = 'assets/app-icon.png'; RepoPath = 'assets/app-icon.png' }
+    [pscustomobject]@{ PackagePath = 'assets/app-icon.ico'; RepoPath = 'assets/app-icon.ico' }
     [pscustomobject]@{ PackagePath = 'skills/slterm-runtime/SKILL.md'; RepoPath = 'assets/skills/slterm-runtime/SKILL.md' }
     [pscustomobject]@{ PackagePath = 'skills/slterm-runtime/agents/openai.yaml'; RepoPath = 'assets/skills/slterm-runtime/agents/openai.yaml' }
     [pscustomobject]@{ PackagePath = 'licenses/LICENSE'; RepoPath = 'LICENSE' }
@@ -80,14 +82,70 @@ function Get-NewestSourceTime([string[]] $Roots) {
     return $newest
 }
 
-# 二进制必须不早于全部源码改动:基准取源码最新 mtime,cargo 对未变更目标
-# 不重链接,拿「本次运行开始时刻」当基准会漏判。
+# 源码内容摘要:全部参与构建的 .rs/.toml + 根 Cargo.lock 的路径+内容哈希,
+# 汇总成单一 SHA256。判据用内容而非 mtime——仅改注释也会变 mtime,但 cargo
+# 不重链接,拿时间戳比较会假红(B72)。
+function Get-SourceDigest([string[]] $Roots) {
+    $entries = [System.Collections.Generic.List[object]]::new()
+    foreach ($root in $Roots) {
+        if (-not (Test-Path -LiteralPath $root)) {
+            throw "新鲜度判定的源码根不存在:$root"
+        }
+        $item = Get-Item -LiteralPath $root
+        if ($item.PSIsContainer) {
+            $files = Get-ChildItem -LiteralPath $root -Recurse -File -Include '*.rs', '*.toml'
+        } else {
+            $files = @($item)
+        }
+        foreach ($file in $files) {
+            $relative = [IO.Path]::GetRelativePath($script:RepoRoot, $file.FullName).Replace('\', '/')
+            $hash = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash
+            $entries.Add([pscustomobject]@{ Path = $relative; Hash = $hash })
+        }
+    }
+    $canonical = ($entries | Sort-Object Path | ForEach-Object { "$($_.Path)`0$($_.Hash)" }) -join "`n"
+    $bytes = [Text.Encoding]::UTF8.GetBytes($canonical + "`n")
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try {
+        return [Convert]::ToHexString($sha.ComputeHash($bytes))
+    } finally {
+        $sha.Dispose()
+    }
+}
+
+function Get-BuildStampPath([string] $BuildRoot) {
+    return Join-Path $BuildRoot '.build-stamp'
+}
+
+# 构建成功后的源码快照:记录「构建开始前」的摘要,构建期间源码再变即报红。
+function Write-BuildStamp([string] $BuildRoot, [string] $Digest) {
+    $stamp = Get-BuildStampPath $BuildRoot
+    [IO.File]::WriteAllText($stamp, $Digest + "`n", [Text.UTF8Encoding]::new($false))
+}
+
+# 新鲜度断言:有 stamp 时比对内容摘要;旧构建目录无 stamp 时回退 mtime 判据。
 function Assert-FreshBinaries([string[]] $Binaries, [string[]] $SourceRoots) {
-    $newest = Get-NewestSourceTime $SourceRoots
+    if ($Binaries.Count -eq 0) {
+        return
+    }
+    $buildRoot = Split-Path -Parent $Binaries[0]
+    $stamp = Get-BuildStampPath $buildRoot
     foreach ($binary in $Binaries) {
         if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) {
             throw "缺少构建产物:$binary"
         }
+    }
+    if (Test-Path -LiteralPath $stamp -PathType Leaf) {
+        $recorded = (Get-Content -LiteralPath $stamp -Raw).Trim()
+        $current = Get-SourceDigest $SourceRoots
+        if ($recorded -ne $current) {
+            throw "构建产物早于源码改动(源码摘要与构建戳不一致);请重新构建"
+        }
+        return
+    }
+    # 兼容旧构建目录(无 stamp):基准取源码最新 mtime。
+    $newest = Get-NewestSourceTime $SourceRoots
+    foreach ($binary in $Binaries) {
         $built = (Get-Item -LiteralPath $binary).LastWriteTimeUtc
         if ($built -lt $newest) {
             throw "构建产物早于源码改动(${binary}: $built < $newest);请重新构建"
@@ -124,6 +182,8 @@ if ($Configuration -eq 'release') {
 
 Write-Host "=== 构建 slterm 产品($Configuration)===" -ForegroundColor Cyan
 Write-Host "  CARGO_TARGET_DIR: $($script:DefaultTargetDirectory)"
+# 构建前抓源码摘要;构建成功后写入构建目录,供后续打包阶段比对。
+$sourceDigest = Get-SourceDigest $script:SourceRoots
 $previousTarget = $env:CARGO_TARGET_DIR
 try {
     $env:CARGO_TARGET_DIR = $script:DefaultTargetDirectory
@@ -142,4 +202,5 @@ foreach ($name in @('slterm.exe', 'slterm-hook.exe')) {
     }
     Write-Host "  $name $([math]::Round((Get-Item -LiteralPath $path).Length / 1MB, 2)) MB"
 }
+Write-BuildStamp $buildRoot $sourceDigest
 Write-Output "build-windows-product.ps1: OK ($Configuration -> $buildRoot)"

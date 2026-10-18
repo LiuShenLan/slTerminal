@@ -101,6 +101,27 @@ class BrandRegressTests(unittest.TestCase):
             self.assertIn("docs/guide.md", result.stderr)
             self.assertNotIn("Cargo.toml", result.stderr)
 
+    def test_full_mode_scans_tracked_files_and_exempts_historical_context(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repository = Path(directory)
+            init_repository(repository)
+            (repository / "source.rs").write_text("safe\n", encoding="utf-8")
+            # 历史语境豁免:README 记录来源,允许旧名;普通源码不允许。
+            (repository / "README.md").write_text("fork of nebula\n", encoding="utf-8")
+            run_git(repository, "add", "-A")
+            run_git(repository, "commit", "-qm", "baseline")
+            self.assertEqual(run_checker(repository, "full").returncode, 0)
+
+            (repository / "source.rs").write_text(
+                "safe\n// backport from pebrel\n", encoding="utf-8"
+            )
+            run_git(repository, "add", "source.rs")
+            run_git(repository, "commit", "-qm", "change")
+            result = run_checker(repository, "full")
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("source.rs", result.stderr)
+            self.assertNotIn("README.md", result.stderr)
+
     def test_message_mode_hit_and_safe_pass(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             repository = Path(directory)

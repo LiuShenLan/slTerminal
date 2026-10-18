@@ -128,6 +128,9 @@ const CLAUDE_EVENTS: [&str; 10] = [
     "SessionEnd",
 ];
 
+/// 卸载器入口(`setup-ai --remove`):移除全部 AI CLI 的 hook 注入。
+pub(crate) use local::settings::remove_all as remove_all_hooks;
+
 // 壳侧启动链的唯一进程级入口(M4.5);返回句柄随 `run_shell` 作用域存活。
 pub use windows::spawn_gpui_server;
 
