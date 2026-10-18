@@ -47,6 +47,9 @@ pub(crate) mod logging;
 pub(crate) mod panic;
 pub(crate) mod platform;
 pub(crate) mod process_tree;
+// Runtime 控制面(04 篇 M7):版本化信封 + loopback JSON Lines 传输;
+// RuntimeHub/方法族/CLI/单实例移交归 M7.2–M7.5 继续接线。
+pub(crate) mod runtime_api;
 pub(crate) mod session;
 // settings.json 写通道适配层(06 篇 M6.1):白名单校验/保存锁/原子写/.bak/
 // 损坏三态;`slterm-settings` 保持值权威与零生产依赖。
