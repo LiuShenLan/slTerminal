@@ -933,3 +933,242 @@ fn failed_load_keeps_the_editor_read_only(cx: &mut TestAppContext) {
         "只读态输入体不得接受键入"
     );
 }
+
+// ── M8.5 gutter / 双栏 diff / 整窗关闭脏守卫 ──
+
+use std::path::Path;
+use std::time::Instant;
+
+/// 建一个含已提交文件的 git 仓库(真实子进程;autocrlf 关闭保字节一致)。
+fn git_repository(directory: &Path, name: &str, content: &[u8]) -> std::path::PathBuf {
+    git_run(directory, &["init", "--initial-branch=main"]);
+    git_run(directory, &["config", "core.autocrlf", "false"]);
+    let path = directory.join(name);
+    std::fs::write(&path, content).unwrap();
+    git_run(directory, &["add", name]);
+    git_run(
+        directory,
+        &[
+            "-c",
+            "user.name=slTerminal Test",
+            "-c",
+            "user.email=slterm@example.invalid",
+            "commit",
+            "-m",
+            "initial",
+        ],
+    );
+    path
+}
+
+fn git_run(root: &Path, args: &[&str]) {
+    let mut command = std::process::Command::new("git");
+    command.arg("-C").arg(root).args(args);
+    crate::platform::process::hidden_command(&mut command);
+    let output = command.output().expect("run git");
+    assert!(
+        output.status.success(),
+        "git {args:?} 失败: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// 后台 gutter 同步是真实 git 子进程:轮询到行标落地。
+fn wait_for_gutter_marks(
+    cx: &mut TestAppContext,
+    workspace: &gpui::Entity<SltermWorkspace>,
+    window: &mut VisualTestContext,
+) -> Vec<(crate::app_shell::file_editor::gutter::GutterMark, u32)> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        window.executor().advance_clock(Duration::from_millis(50));
+        window.run_until_parked();
+        window.refresh().unwrap();
+        draw_frame(window);
+        if let Some(marks) = workspace.read_with(cx, |ws, cx| ws.active_gutter_marks_for_test(cx))
+            && !marks.is_empty()
+        {
+            return marks.into_iter().map(|(line, mark)| (mark, line)).collect();
+        }
+        assert!(Instant::now() < deadline, "gutter 行标未落地");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// gutter:打开脏工作区文件 → 行标落地 → 点击行标打开双栏 diff。
+#[gpui::test]
+fn gutter_click_opens_a_read_only_dual_pane_diff(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    let directory = tempfile::tempdir().unwrap();
+    let path = git_repository(directory.path(), "tracked.txt", b"one\ntwo\nthree\n");
+    std::fs::write(&path, b"one\nchanged\nthree\nfour\n").unwrap();
+
+    open_document_at(&workspace, &mut window, path.clone());
+    let marks = wait_for_gutter_marks(cx, &workspace, &mut window);
+    assert!(
+        marks.iter().any(|(mark, line)| {
+            *mark == crate::app_shell::file_editor::gutter::GutterMark::Modified && *line == 2
+        }),
+        "第 2 行必须标修改: {marks:?}"
+    );
+
+    draw_frame(&mut window);
+    click_selector(&mut window, "gutter-mark-2");
+    window.run_until_parked();
+    draw_frame(&mut window);
+    let (hunks, active) = workspace
+        .read_with(cx, |ws, cx| ws.active_diff_state_for_test(cx))
+        .expect("gutter 点击必须打开 diff 臂");
+    assert_eq!(hunks, 2, "替换 + 新增两处 hunk");
+    assert_eq!(active, None, "打开时未选中 hunk");
+    assert_eq!(
+        workspace.read_with(cx, |ws, cx| ws.active_read_only_for_test(cx)),
+        Some(true),
+        "diff 臂恒只读"
+    );
+    for selector in ["slterm-diff-tab", "slterm-diff-left", "slterm-diff-right"] {
+        assert_file_tab_paints(&mut window, selector);
+    }
+}
+
+/// diff hunk 导航:下一处/上一处更新活动 hunk(双栏同步跳转的服务端状态)。
+#[gpui::test]
+fn diff_hunk_navigation_moves_the_active_hunk(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    let directory = tempfile::tempdir().unwrap();
+    let path = git_repository(directory.path(), "tracked.txt", b"a\nb\nc\n");
+    std::fs::write(&path, b"a\nB\nc\nd\n").unwrap();
+
+    window.update(|window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.open_diff_tab_for_test(path.clone(), window, cx);
+        });
+    });
+    window.run_until_parked();
+    window.refresh().unwrap();
+    draw_frame(&mut window);
+    assert_eq!(
+        workspace.read_with(cx, |ws, cx| ws.active_diff_state_for_test(cx)),
+        Some((2, None))
+    );
+
+    window.update(|_, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.navigate_active_diff_for_test(true, cx);
+        });
+    });
+    window.run_until_parked();
+    assert_eq!(
+        workspace.read_with(cx, |ws, cx| ws.active_diff_state_for_test(cx)),
+        Some((2, Some(0)))
+    );
+    window.update(|_, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.navigate_active_diff_for_test(true, cx);
+        });
+    });
+    window.run_until_parked();
+    assert_eq!(
+        workspace.read_with(cx, |ws, cx| ws.active_diff_state_for_test(cx)),
+        Some((2, Some(1))),
+        "下一处到尾部保持末项"
+    );
+    window.update(|_, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.navigate_active_diff_for_test(false, cx);
+        });
+    });
+    window.run_until_parked();
+    assert_eq!(
+        workspace.read_with(cx, |ws, cx| ws.active_diff_state_for_test(cx)),
+        Some((2, Some(0)))
+    );
+}
+
+/// 整窗关闭脏守卫:脏文件 tab 时关窗被拦截并弹确认;取消保留、保存落盘。
+#[gpui::test]
+fn closing_the_window_with_dirty_files_confirms_first(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    let directory = tempfile::tempdir().unwrap();
+    let path = write_temp_file(directory.path(), "draft.rs", b"initial\n");
+    open_document_at(&workspace, &mut window, path.clone());
+    focus_active_file_tab(&workspace, &mut window);
+    window.simulate_input("draft ");
+    window.run_until_parked();
+    assert_eq!(
+        workspace.read_with(cx, |ws, cx| ws.active_dirty_for_test(cx)),
+        Some(true)
+    );
+
+    // 第一次关窗:被守卫拦截,弹出确认框。
+    assert!(!window.simulate_close(), "脏文件时关窗必须被拦截");
+    window.run_until_parked();
+    assert!(window.has_pending_prompt(), "整窗关闭必须走确认");
+    let cancel = ui_label(cx, Message::EditorCancel);
+    window.simulate_prompt_answer(&cancel);
+    window.run_until_parked();
+
+    // 取消后草稿与磁盘原样;再次关窗仍拦截,选保存后落盘并关窗。
+    assert_eq!(std::fs::read(&path).unwrap(), b"initial\n");
+    assert!(!window.simulate_close(), "取消后再次关窗仍须确认");
+    window.run_until_parked();
+    assert!(window.has_pending_prompt());
+    let save = ui_label(cx, Message::EditorSave);
+    window.simulate_prompt_answer(&save);
+    window.run_until_parked();
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        b"draft initial\n",
+        "保存臂必须落盘后再关窗"
+    );
+}
+
+/// 保留键红线:终端焦点下 Ctrl+S 不被编辑器保存动作吞;Ctrl+C 中断与
+/// Ctrl+Shift+C 复制仍走终端自身语义(不产生编辑器动作/键入串)。
+#[gpui::test]
+fn terminal_reserved_keys_are_not_eaten_by_editor_actions(cx: &mut TestAppContext) {
+    use slterm_terminal::event_loop::Msg as EventLoopMsg;
+
+    let (workspace, mut window) = open_workspace(cx);
+    let view = workspace
+        .read_with(cx, |workspace, _| workspace.first_pane_view())
+        .expect("终端 pane");
+    let receiver = view.update(cx, |view, _| {
+        let (session, receiver) = crate::gpui_terminal::session::test_session();
+        view.session = Some(session);
+        receiver
+    });
+
+    // Ctrl+S 无终端上下文绑定时进入 PTY(0x13);全局 save 绑定会吞掉它。
+    window.simulate_keystrokes("ctrl-s");
+    match receiver
+        .recv_timeout(Duration::from_secs(2))
+        .expect("Ctrl+S 必须进入 PTY")
+    {
+        EventLoopMsg::Input(bytes) => assert_eq!(&*bytes, b"\x13"),
+        other => panic!("unexpected message: {other:?}"),
+    }
+
+    // Ctrl+C 中断透传。
+    window.simulate_keystrokes("ctrl-c");
+    match receiver
+        .recv_timeout(Duration::from_secs(2))
+        .expect("Ctrl+C 必须进入 PTY")
+    {
+        EventLoopMsg::Input(bytes) => assert_eq!(&*bytes, b"\x03"),
+        other => panic!("unexpected message: {other:?}"),
+    }
+
+    // Ctrl+Shift+C 由终端复制层消费:无选区时不写 PTY、不触发保存。
+    window.simulate_keystrokes("ctrl-shift-c");
+    window.run_until_parked();
+    assert!(
+        receiver.try_recv().is_err(),
+        "Ctrl+Shift+C 不得进入 PTY(复制保留键)"
+    );
+    assert_eq!(
+        workspace.read_with(cx, |ws, _| ws.tab_count()),
+        1,
+        "保留键不得触发任何编辑器动作"
+    );
+}

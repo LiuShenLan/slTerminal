@@ -25,8 +25,12 @@ pub(crate) mod assets;
 // 源码文件 tab(07 篇 M8.1):普通源码与 gitshow 只读臂。
 pub(crate) mod code_tab;
 pub(crate) mod config;
+// 通用 diff 对照面(07 篇 M8.5;双栏只读)。
+pub(crate) mod diff_tab;
 // 文档/图片 tab + openable_in_app 路由单判定(07 篇 M8.1)。
 pub(crate) mod doc_tabs;
+// 编辑器语义槽装配(07 篇 M8.5;颜色单源 = 06 篇 UI token)。
+pub(crate) mod editor_theme;
 // 文件树拖放载荷 + 独立幽灵预览(07 篇 M8.4)。
 pub(crate) mod file_drop;
 // 文本文件视图骨架(07 篇 M8.1 只读;M8.2 接编辑内核)。

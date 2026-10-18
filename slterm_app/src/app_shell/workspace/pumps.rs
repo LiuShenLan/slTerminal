@@ -1,0 +1,234 @@
+//! 工作区后台泵与窗口收尾(05 篇):自动保存 / AI hook / 屏幕看门狗 /
+//! 壳事件队列 / 系统关窗。
+//!
+//! 从 `mod.rs` 拆出只为文件行数预算;各泵的节奏与因果注释随实现迁移,
+//! 前台线程只做状态更新,阻塞读取都在管道/后台线程。
+
+use std::sync::mpsc;
+use std::time::Duration;
+
+use gpui::{App, Context, Window};
+
+use super::super::SltermShellEvent;
+use super::{SltermWorkspace, session_persistence::SaveReason, session_recovery};
+use crate::ai_hook::AiHookEvent;
+
+impl SltermWorkspace {
+    /// 1 Hz 自动保存泵(05 篇数据流):节奏与 agent 看门狗同源,前台线程
+    /// 拍快照、状态机判无变化/写盘。失败只 warn,终端不受影响。
+    pub(super) fn start_autosave_pump(&mut self, cx: &mut Context<'_, Self>) {
+        let executor = cx.background_executor().clone();
+        cx.spawn(async move |this, cx| {
+            loop {
+                executor.timer(Duration::from_secs(1)).await;
+                let Ok(()) = this.update(cx, |workspace, cx| workspace.autosave_tick(cx)) else {
+                    return;
+                };
+            }
+        })
+        .detach();
+    }
+
+    /// 一拍自动保存:快照 → 状态机 → 失败 warn。首次成功快照的
+    /// `boot_attempts = 0` 由 `snapshot_session` 的规范形态保证。
+    pub(super) fn autosave_tick(&mut self, cx: &mut Context<'_, Self>) {
+        let window_state = Self::current_window_state(cx);
+        let session = self.snapshot_session(window_state, cx);
+        if let Err(error) = self
+            .session_persistence
+            .save(Some(session), SaveReason::Checkpoint)
+        {
+            log::warn!("session checkpoint: {error}");
+        }
+    }
+
+    /// 单窗:取第一个窗口的当前尺寸/最大化态(无窗口 = 不写 window 段)。
+    fn current_window_state(cx: &mut App) -> Option<crate::session::WindowState> {
+        let handle = cx.windows().first().copied()?;
+        handle
+            .update(cx, |_, window, _| {
+                session_recovery::capture_window_state(window)
+            })
+            .ok()
+    }
+
+    /// 关窗终局笔:1 Hz 快照恒 false,这一笔才 `clean_exit = true`。
+    pub(super) fn save_on_window_close(&mut self, window: &Window, cx: &App) {
+        let session =
+            self.snapshot_session(Some(session_recovery::capture_window_state(window)), cx);
+        if let Err(error) = self
+            .session_persistence
+            .save(Some(session), SaveReason::WindowClose)
+        {
+            log::warn!("could not persist final terminal session: {error}");
+        }
+    }
+
+    /// 最后 tab 关闭:空快照干净落盘(空会话不恢复)。
+    pub(super) fn save_on_tabs_closed(&mut self, window: &Window, cx: &App) {
+        let session =
+            self.snapshot_session(Some(session_recovery::capture_window_state(window)), cx);
+        if let Err(error) = self
+            .session_persistence
+            .save(Some(session), SaveReason::TabsClosed)
+        {
+            log::warn!("could not persist empty workspace: {error}");
+        }
+    }
+
+    /// 系统关窗(Alt+F4/OS 关闭请求)先过脏文件守卫,再落终局快照。
+    ///
+    /// 脏守卫返回 false = 本轮关窗被拦截(确认框在途);用户选「保存/不保存」
+    /// 后由异步回调自行 `remove_window`,不再经本钩子。
+    pub(super) fn install_window_close_save(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let handle = cx.entity().downgrade();
+        window.on_window_should_close(cx, move |window, cx| {
+            let mut proceed = true;
+            let _ = handle.update(cx, |workspace, cx| {
+                proceed = workspace.guard_file_window_close(window, cx);
+                if proceed {
+                    workspace.save_on_window_close(window, cx);
+                }
+            });
+            proceed
+        });
+    }
+
+    /// AI hook 事件泵(M4.5,照上游 agents.rs 形态):管道服务线程写进程内
+    /// mpsc,后台定时器每 75ms 唤醒一次,前台线程排空并与 UI 状态合并。
+    /// 单批上限 64;满批说明下游有积压,退 1ms 让出渲染。
+    ///
+    /// 前台只做状态更新:解析与阻塞读都在管道线程,本任务只消费已解析事件。
+    pub(super) fn start_ai_hook_pump(
+        &mut self,
+        receiver: Option<mpsc::Receiver<AiHookEvent>>,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(receiver) = receiver else {
+            return;
+        };
+        let executor = cx.background_executor().clone();
+        cx.spawn(async move |this, cx| {
+            let mut backlog = false;
+            loop {
+                executor
+                    .timer(Duration::from_millis(if backlog { 1 } else { 75 }))
+                    .await;
+                let mut events = Vec::new();
+                let mut disconnected = false;
+                while events.len() < 64 {
+                    match receiver.try_recv() {
+                        Ok(event) => events.push(event),
+                        Err(mpsc::TryRecvError::Empty) => break,
+                        Err(mpsc::TryRecvError::Disconnected) => {
+                            disconnected = true;
+                            break;
+                        }
+                    }
+                }
+                backlog = events.len() == 64;
+                if events.is_empty() {
+                    if disconnected {
+                        return;
+                    }
+                    continue;
+                }
+                let Ok(()) = this.update(cx, |workspace, cx| {
+                    // 严格 pane 路由 + 仲裁在宿主内完成;UI 消费(页签徽标/
+                    // attention)归 05/09 篇,M4.5 不产生视图态。
+                    let focused = workspace.focused_pane();
+                    let (_, accepted) = workspace.agent_hub.dispatch_lifecycle(events, focused);
+                    // 04 篇 M7.5:SessionEnd 关闭 managed agent、TurnDone
+                    // 完成委派回传,然后统一入账(等待方随快照唤醒)。
+                    workspace.process_agent_lifecycle_events(&accepted, cx);
+                    workspace.publish_runtime_snapshot(cx);
+                }) else {
+                    return;
+                };
+                if disconnected {
+                    return;
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// 1 Hz 屏幕看门狗(照上游形态):逐 pane 取终端网格末尾样本喂仲裁器,
+    /// 给无 hook 的客户端补位、纠正丢边的 hook 状态。
+    ///
+    /// 节奏刻意与输出解耦:每个 `Wakeup` 上跑规则会在输出洪流下放大成本,
+    /// 而屏幕证据只需要拍帧级频率;`allows_screen()` 的 pane 由宿主内判定。
+    pub(super) fn start_agent_screen_watchdog(&mut self, cx: &mut Context<'_, Self>) {
+        let executor = cx.background_executor().clone();
+        cx.spawn(async move |this, cx| {
+            loop {
+                executor.timer(Duration::from_secs(1)).await;
+                let Ok(()) = this.update(cx, |workspace, cx| {
+                    for (pane_id, screen) in workspace.screen_samples(cx) {
+                        workspace.agent_hub.observe_screen(pane_id, &screen);
+                    }
+                }) else {
+                    return;
+                };
+            }
+        })
+        .detach();
+    }
+
+    /// 每个终端 pane 的屏幕观察窗口(最近至多 24 行,与屏幕规则注意力区
+    /// 窗口同源)。无会话或零几何的 pane 跳过。
+    fn screen_samples(&self, cx: &App) -> Vec<(slterm_split::PaneId, String)> {
+        let mut samples = Vec::new();
+        for entry in &self.tabs {
+            let super::WorkspaceTab::Terminal { panes, .. } = &entry.tab else {
+                continue;
+            };
+            for pane in panes {
+                if let Some(screen) = pane.view.read(cx).agent_screen_sample() {
+                    samples.push((pane.id, screen));
+                }
+            }
+        }
+        samples
+    }
+
+    /// 壳事件泵(照上游 residency.rs 形态):120ms 节奏排空通道,前台线程
+    /// 派发。`RuntimeControl` 在 UI owner 上执行并 `respond` 回 transport
+    /// 线程;事件循环不可用时 dispatch 被丢弃 → `runtime_unavailable`。
+    pub(super) fn start_shell_event_pump(
+        &mut self,
+        rx: mpsc::Receiver<SltermShellEvent>,
+        window_handle: gpui::AnyWindowHandle,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let executor = cx.background_executor().clone();
+        cx.spawn(async move |this, cx| {
+            loop {
+                executor.timer(Duration::from_millis(120)).await;
+                let mut events = Vec::new();
+                while let Ok(event) = rx.try_recv() {
+                    events.push(event);
+                }
+                if events.is_empty() {
+                    continue;
+                }
+                // 窗口可能已关闭:此时丢弃事件,transport 侧收到 Disconnected
+                // 后按 runtime_unavailable 收口,不伪造成功。
+                cx.update(|cx| {
+                    let _ = window_handle.update(cx, |_root, window, cx| {
+                        let _ = this.update(cx, |workspace, cx| {
+                            for event in events {
+                                workspace.handle_shell_event(event, window, cx);
+                            }
+                        });
+                    });
+                });
+            }
+        })
+        .detach();
+    }
+}

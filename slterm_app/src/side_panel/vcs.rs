@@ -1,176 +1,20 @@
 //! git 状态快照(07 篇照抄点 21;SVN/tortoise 臂已砍)。
 //!
-//! 执行体与 `crate::git` 共用 `slterm_app::git::command` 子进程构造口
-//! (D07-1 已裁「git 子进程统一」):每条命令都带 `--no-optional-locks`
-//! (边界条 7),`-c safe.directory=<root>` 只作用于本次调用——宿主上浏览
-//! 别的用户的仓库(如 UNC)不会因 dubious ownership 静默空白。
-//!
-//! 状态解析用 `--porcelain=v2 --branch -z`:文件名不是展示文本,不能按行
-//! 或空格拆分;rename 的原始路径单独占一条 NUL 记录。
+//! 执行体与 `crate::git` 共用子进程构造口(D07-1 已裁「git 子进程统一」):
+//! porcelain v2 解析收敛到 `crate::git::parse_status`(唯一实现),本模块只
+//! 负责把快照转成面板展示形态(分支/增删行/分组/提交历史)。
+//! `-c safe.directory=<root>` 只作用于本次调用——宿主上浏览别的用户的仓库
+//! (如 UNC)不会因 dubious ownership 静默空白。
 
 use std::path::Path;
-use std::process::Command;
 
 use super::{GitCommit, GitInfo};
-
-/// `git status` 参数(NUL 分隔 + 分支头,解析见 [`parse_status`])。
-pub(crate) const STATUS_ARGS: &[&str] = &["status", "--porcelain=v2", "--branch", "-z"];
-
-#[derive(Clone, Debug, Default)]
-pub(crate) struct GitStatus {
-    pub branch: String,
-    pub head: String,
-    pub upstream: Option<String>,
-    pub ahead: u32,
-    pub behind: u32,
-    pub entries: Vec<GitEntry>,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct GitEntry {
-    pub path: String,
-    pub original: Option<String>,
-    pub index: char,
-    pub worktree: char,
-    pub conflict: bool,
-}
-
-impl GitEntry {
-    pub(crate) fn staged(&self) -> bool {
-        !matches!(self.index, '.' | '?')
-    }
-
-    pub(crate) fn unstaged(&self) -> bool {
-        self.worktree != '.'
-    }
-}
-
-/// 解析 `git status --porcelain=v2 --branch -z` 输出。
-pub(crate) fn parse_status(output: &str) -> Result<GitStatus, &'static str> {
-    if !output.ends_with('\0') {
-        return Err("git_invalid_status");
-    }
-    let mut result = GitStatus::default();
-    let mut records = output.split_terminator('\0');
-    while let Some(record) = records.next() {
-        if let Some(header) = record.strip_prefix("# ") {
-            if let Some(value) = header.strip_prefix("branch.head ") {
-                result.branch = value.into();
-            } else if let Some(value) = header.strip_prefix("branch.oid ") {
-                result.head = value.into();
-            } else if let Some(value) = header.strip_prefix("branch.upstream ") {
-                result.upstream = Some(value.into());
-            } else if let Some(value) = header.strip_prefix("branch.ab ") {
-                let (ahead, behind) = value.split_once(' ').ok_or("git_invalid_status")?;
-                result.ahead = ahead
-                    .strip_prefix('+')
-                    .ok_or("git_invalid_status")?
-                    .parse()
-                    .map_err(|_| "git_invalid_status")?;
-                result.behind = behind
-                    .strip_prefix('-')
-                    .ok_or("git_invalid_status")?
-                    .parse()
-                    .map_err(|_| "git_invalid_status")?;
-            }
-            continue;
-        }
-        if record.starts_with("! ") {
-            continue;
-        }
-        let kind = record
-            .as_bytes()
-            .first()
-            .copied()
-            .ok_or("git_invalid_status")?;
-        let entry = if kind == b'?' {
-            GitEntry {
-                path: record
-                    .strip_prefix("? ")
-                    .ok_or("git_invalid_status")?
-                    .into(),
-                original: None,
-                index: '?',
-                worktree: '?',
-                conflict: false,
-            }
-        } else {
-            let count = match kind {
-                b'1' => 9,
-                b'2' => 10,
-                b'u' => 11,
-                _ => return Err("git_invalid_status"),
-            };
-            let fields: Vec<_> = record.splitn(count, ' ').collect();
-            if fields.len() != count || fields[1].len() != 2 || !fields[1].is_ascii() {
-                return Err("git_invalid_status");
-            }
-            let xy = fields[1].as_bytes();
-            GitEntry {
-                path: fields[count - 1].into(),
-                original: if kind == b'2' {
-                    Some(records.next().ok_or("git_invalid_status")?.into())
-                } else {
-                    None
-                },
-                index: xy[0] as char,
-                worktree: xy[1] as char,
-                conflict: kind == b'u',
-            }
-        };
-        if entry.path.is_empty() || entry.original.as_ref().is_some_and(|path| path.is_empty()) {
-            return Err("git_invalid_status");
-        }
-        result.entries.push(entry);
-    }
-    if result.branch.is_empty() || result.head.is_empty() {
-        return Err("git_invalid_status");
-    }
-    Ok(result)
-}
 
 /// 采集 `root` 的 git 快照;`None` = git 缺失或不在 work tree 内。
 ///
 /// 后台快照线程调用(同步子进程);渲染线程零调用。
 pub(crate) fn read_git(root: &Path) -> Option<GitInfo> {
-    let safe_directory = format!("safe.directory={}", root.display());
-    collect_git_info(|args| {
-        let mut command = crate::git::command(root);
-        command.args(["-c", &safe_directory]).args(args);
-        run_git(command, args, root)
-    })
-}
-
-/// 跑一条已配好的 git 命令,取 stdout;失败记日志并回 `None`。
-fn run_git(mut command: Command, args: &[&str], root: &Path) -> Option<String> {
-    let output = match command.output() {
-        Ok(output) => output,
-        Err(error) => {
-            log::warn!(
-                "git {:?} failed in {}: {error}",
-                args.first(),
-                root.display()
-            );
-            return None;
-        }
-    };
-    if !output.status.success() {
-        // 留痕而不是静默空白:stderr 首行才说得清真实拒绝原因。
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let reason = stderr.lines().next().unwrap_or("unknown error");
-        log::debug!(
-            "git {:?} failed in {}: {reason}",
-            args.first(),
-            root.display()
-        );
-        return None;
-    }
-    Some(String::from_utf8_lossy(&output.stdout).into_owned())
-}
-
-/// porcelain 解析 + 行统计 + 提交历史。
-fn collect_git_info(run: impl Fn(&[&str]) -> Option<String>) -> Option<GitInfo> {
-    let status = parse_status(&run(STATUS_ARGS)?).ok()?;
+    let status = crate::git::status(root).ok()?;
     let mut info = GitInfo {
         branch: status.branch,
         ahead: status.ahead,
@@ -188,7 +32,7 @@ fn collect_git_info(run: impl Fn(&[&str]) -> Option<String>) -> Option<GitInfo> 
             info.unstaged.push((entry.worktree, entry.path));
         }
     }
-
+    let run = |args: &[&str]| run_git(root, args);
     // `3 files changed, 140 insertions(+), 69 deletions(-)` → (140, 69).
     if let Some(stat) = run(&["diff", "--shortstat", "HEAD"]) {
         for part in stat.split(',') {
@@ -216,6 +60,36 @@ fn collect_git_info(run: impl Fn(&[&str]) -> Option<String>) -> Option<GitInfo> 
     .map(|output| parse_git_history(&output))
     .unwrap_or_default();
     Some(info)
+}
+
+/// 跑一条已配好的 git 命令,取 stdout;失败记日志并回 `None`。
+fn run_git(root: &Path, args: &[&str]) -> Option<String> {
+    let safe_directory = format!("safe.directory={}", root.display());
+    let mut command = crate::git::command(root);
+    command.args(["-c", &safe_directory]).args(args);
+    let output = match command.output() {
+        Ok(output) => output,
+        Err(error) => {
+            log::warn!(
+                "git {:?} failed in {}: {error}",
+                args.first(),
+                root.display()
+            );
+            return None;
+        }
+    };
+    if !output.status.success() {
+        // 留痕而不是静默空白:stderr 首行才说得清真实拒绝原因。
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let reason = stderr.lines().next().unwrap_or("unknown error");
+        log::debug!(
+            "git {:?} failed in {}: {reason}",
+            args.first(),
+            root.display()
+        );
+        return None;
+    }
+    Some(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 /// 解析 `%x1e` 记录起点、`%x1f` 分字段的历史格式。
@@ -257,33 +131,6 @@ pub(crate) fn parse_git_history(output: &str) -> Vec<GitCommit> {
 #[cfg(test)]
 mod vcs_tests {
     use super::*;
-
-    /// rename 身份、部分暂存与中文/换行文件名都按 NUL 记录原样保留。
-    #[test]
-    fn preserves_rename_identity_and_partial_staging() {
-        let status = parse_status(
-            "# branch.oid abc\0# branch.head main\0# branch.ab +2 -1\0\
-             2 RM N... 100644 100644 100644 abc def R100 新 name\n.txt\0old name.txt\0? -new.txt\0",
-        )
-        .expect("合法 porcelain v2");
-        assert_eq!(status.branch, "main");
-        assert_eq!(status.ahead, 2);
-        assert_eq!(status.behind, 1);
-        assert_eq!(status.entries.len(), 2);
-        let renamed = &status.entries[0];
-        assert_eq!(renamed.path, "新 name\n.txt");
-        assert_eq!(renamed.original.as_deref(), Some("old name.txt"));
-        assert!(renamed.staged() && renamed.unstaged());
-        assert_eq!(status.entries[1].path, "-new.txt");
-    }
-
-    /// 截断/坏记录必须整体拒绝,不能产出半份状态。
-    #[test]
-    fn rejects_truncated_or_malformed_status() {
-        assert!(parse_status("# branch.oid abc\0# branch.head main").is_err());
-        assert!(parse_status("? file\0").is_err(), "缺分支头");
-        assert!(parse_status("# branch.oid abc\0# branch.head main\0? \0").is_err());
-    }
 
     /// 提交历史:对象 ID/短哈希/装饰/主题/作者/时间/父提交逐字段保留。
     #[test]

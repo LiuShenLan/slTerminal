@@ -23,9 +23,11 @@ use gpui::{
 use slterm_split::TabId;
 
 use super::{SltermWorkspace, TabEntry, TabMeta, WorkspaceTab};
-use crate::app_shell::code_tab::CodeTabView;
+use crate::app_shell::code_tab::{CodeTabEvent, CodeTabView};
 use crate::app_shell::config::Settings;
 use crate::app_shell::doc_tabs::{self, DocTabView, ImageTabView};
+#[cfg(all(test, feature = "gpui-test-support"))]
+use crate::app_shell::file_editor::gutter::GutterMark;
 use crate::brand;
 use crate::i18n::Message;
 
@@ -52,6 +54,7 @@ fn image_view(entry: &TabEntry) -> Option<&Entity<ImageTabView>> {
 }
 
 /// Code/Document 两种可保存视图的统一句柄:脏关闭守卫与 Ctrl+S 共用。
+#[derive(Clone)]
 enum FileViewHandle {
     Code(Entity<CodeTabView>),
     Document(Entity<DocTabView>),
@@ -140,6 +143,46 @@ impl SltermWorkspace {
         self.push_file_tab(WorkspaceTab::Code { view }, window, cx);
     }
 
+    /// 通用 diff tab:HEAD↔工作区双栏只读臂(同路径重开命中)。
+    pub(crate) fn open_diff_tab(
+        &mut self,
+        path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if let Some(index) = self.tabs.iter().position(|entry| {
+            matches!(&entry.tab, WorkspaceTab::Code { view } if view.read(cx).is_diff_path(&path))
+        }) {
+            if let Some(view) = self.tabs.get(index).and_then(code_view) {
+                view.clone()
+                    .update(cx, |view, cx| view.reload(window, cx));
+            }
+            self.activate_tab(index, window, cx);
+            return;
+        }
+        let view = cx.new(|cx| CodeTabView::new_diff(path, window, cx));
+        self.push_file_tab(WorkspaceTab::Code { view }, window, cx);
+    }
+
+    /// code tab 事件:gutter 点击 → 打开差异对照面(冲突臂同走 diff,
+    /// 三栏合并面不在 M8.5 交付范围)。
+    fn on_code_tab_event(
+        &mut self,
+        _view: &Entity<CodeTabView>,
+        event: &CodeTabEvent,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        match event {
+            CodeTabEvent::GutterClicked { path, line, mark } => {
+                // 行号/标记值集是 diff 定位与冲突面路由的输入;当前统一
+                // 打开 HEAD↔工作区对照(三栏合并面不在 M8.5 范围)。
+                let _ = (line, mark);
+                self.open_diff_tab(path.clone(), window, cx);
+            }
+        }
+    }
+
     /// 同一路径复用已开 tab(激活 + 重读盘;草稿保留归 M8.2)。
     fn open_image_tab(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<'_, Self>) {
         if let Some(index) = self.tabs.iter().position(
@@ -220,6 +263,16 @@ impl SltermWorkspace {
         };
         if let Some(observation) = observation {
             self.file_observations.insert(tab_id, observation);
+        }
+        let tab_events = match self.tabs.last().map(|entry| &entry.tab) {
+            Some(WorkspaceTab::Code { view }) => {
+                let view = view.clone();
+                Some(cx.subscribe_in(&view, window, Self::on_code_tab_event))
+            }
+            _ => None,
+        };
+        if let Some(tab_events) = tab_events {
+            self.file_tab_events.insert(tab_id, tab_events);
         }
         self.active = self.tabs.len() - 1;
         self.focus_active(window, cx);
@@ -421,6 +474,143 @@ impl SltermWorkspace {
         })
         .detach();
         true
+    }
+
+    /// 整窗关闭脏守卫(M8.2 问题 3):true = 可以继续关窗;false = 本轮已拦截。
+    ///
+    /// 与单 tab 关闭同一确认交互(保存 / 不保存 / 取消),但作用对象是
+    /// 全部脏文件 tab:保存臂逐个落盘,全部成功才放行;任一失败保持窗口
+    /// 打开(失败横幅已在编辑器内可见)。保存中在途 = 拦截本轮,等落盘后
+    /// 用户再次关窗;确认框同一时刻只允许一个(pending_file_close 单槽)。
+    pub(super) fn guard_file_window_close(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> bool {
+        // 异步确认已放行:remove_window 若再次触发钩子,不得重弹确认。
+        if std::mem::take(&mut self.window_close_confirmed) {
+            return true;
+        }
+        if self.pending_file_close.is_some() {
+            return false;
+        }
+        let mut dirty = Vec::new();
+        for entry in &self.tabs {
+            let Some(file) = FileViewHandle::of(&entry.tab) else {
+                continue;
+            };
+            if file.is_saving(cx) {
+                // 保存中:本轮关窗直接拦截,下一次关窗再看结果。
+                return false;
+            }
+            if file.is_dirty(cx) {
+                dirty.push((entry.id, file));
+            }
+        }
+        if dirty.is_empty() {
+            return true;
+        }
+        let first_tab = dirty[0].0;
+        self.pending_file_close = Some(first_tab);
+        let handles: Vec<FileViewHandle> = dirty.into_iter().map(|(_, file)| file).collect();
+        let language = cx.global::<Settings>().language;
+        let detail = language.format(
+            Message::EditorCloseWindowDetail,
+            &[("count", &handles.len().to_string())],
+        );
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            language.text(Message::EditorCloseWindowTitle),
+            Some(&detail),
+            &[
+                language.text(Message::EditorSave),
+                language.text(Message::EditorDiscard),
+                language.text(Message::EditorCancel),
+            ],
+            cx,
+        );
+        let handle = window.window_handle();
+        cx.spawn(async move |this, cx| {
+            let choice = answer.await;
+            let close = match choice {
+                // 保存全部:任一失败则保持窗口与草稿。
+                Ok(0) => {
+                    let mut saved = true;
+                    for file in &handles {
+                        if !file.save(cx).await {
+                            saved = false;
+                            break;
+                        }
+                    }
+                    saved
+                }
+                // 不保存:丢弃全部草稿。
+                Ok(1) => true,
+                // 取消/对话框被系统取消。
+                _ => false,
+            };
+            let _ = handle.update(cx, |_, window, cx| {
+                let _ = this.update(cx, |workspace, cx| {
+                    workspace.pending_file_close = None;
+                    if close {
+                        workspace.window_close_confirmed = true;
+                        workspace.save_on_window_close(window, cx);
+                        window.remove_window();
+                    } else {
+                        cx.notify();
+                    }
+                });
+            });
+        })
+        .detach();
+        false
+    }
+
+    /// 测试专用:活跃 diff 模式 tab 的 (hunk 数, 活动 hunk 下标)。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn active_diff_state_for_test(&self, cx: &App) -> Option<(usize, Option<usize>)> {
+        match self.tabs.get(self.active).map(|entry| &entry.tab) {
+            Some(WorkspaceTab::Code { view }) => view
+                .read(cx)
+                .diff_state_for_test(cx)
+                .map(|(hunks, active)| (hunks.len(), active)),
+            _ => None,
+        }
+    }
+
+    /// 测试专用:驱动活跃 diff 的上一/下一处更改。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn navigate_active_diff_for_test(
+        &mut self,
+        forward: bool,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if let Some(WorkspaceTab::Code { view }) =
+            self.tabs.get(self.active).map(|entry| &entry.tab)
+        {
+            let view = view.clone();
+            view.update(cx, |view, cx| view.navigate_diff_hunk_for_test(forward, cx));
+        }
+    }
+
+    /// 测试专用:活跃 code tab 的 gutter 行标(File 模式)。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn active_gutter_marks_for_test(&self, cx: &App) -> Option<Vec<(u32, GutterMark)>> {
+        match self.tabs.get(self.active).map(|entry| &entry.tab) {
+            Some(WorkspaceTab::Code { view }) => Some(view.read(cx).gutter_marks_for_test(cx)),
+            _ => None,
+        }
+    }
+
+    /// 测试专用:打开 diff 入口(生产入口同一条)。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn open_diff_tab_for_test(
+        &mut self,
+        path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.open_diff_tab(path, window, cx);
     }
 
     /// 测试专用:活跃 tab 的封闭变体短名(terminal/settings/document/code/image)。

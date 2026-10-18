@@ -1,8 +1,9 @@
-//! 代码文件 tab(07 篇):普通源码(可编辑)+ gitshow 只读臂。
+//! 代码文件 tab(07 篇):普通源码(可编辑)+ gitshow 只读臂 + 通用 diff 只读臂。
 //!
 //! 普通源码与 gitshow 共用 [`TextFileView`] 快照通路;两者的区别只在数据源
 //! (磁盘前缀 / HEAD blob)与标题后缀(`<name> @ HEAD`)。M8.2 起普通源码
-//! 源码态可编辑可存;三栏 Git 合并归 M8.5。
+//! 源码态可编辑可存;M8.5 的通用 diff 落本视图的 Diff 模式(不新增 05 篇
+//! tab 变体,07 篇边界条 3)。
 //!
 //! 扩展名 → 语言映射表是「视图值集」单点:`viewable_file` 与 openable_in_app
 //! 的源码判定同源(07 篇照抄点 17,fileViewers 注册表值集并入)。
@@ -10,11 +11,31 @@
 use std::path::{Path, PathBuf};
 
 use gpui::{
-    App, AppContext as _, Context, Entity, FocusHandle, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, Styled as _, Subscription, Task, Window, div,
+    App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, InteractiveElement as _,
+    IntoElement, ParentElement as _, Render, Styled as _, Subscription, Task, Window, div,
 };
 
-use super::file_editor::TextFileView;
+use super::diff_tab::{DiffSource, DiffTabView};
+use super::file_editor::gutter::GutterMark;
+use super::file_editor::{TextFileEvent, TextFileView};
+
+/// code tab 对外事件:gutter 点击由工作区决定打开差异对照面。
+#[derive(Clone, Debug)]
+pub enum CodeTabEvent {
+    GutterClicked {
+        path: PathBuf,
+        line: u32,
+        mark: GutterMark,
+    },
+}
+
+impl EventEmitter<CodeTabEvent> for CodeTabView {}
+
+/// tab 内容模式:普通文本视图或通用 diff 双栏。
+enum CodeTabMode {
+    File(Entity<TextFileView>),
+    Diff(Entity<DiffTabView>),
+}
 
 /// 扩展名 → tree-sitter 语言 id(组件库 highlighter 的注册名)。
 fn language_for_extension(extension: &str) -> Option<&'static str> {
@@ -73,15 +94,18 @@ pub fn viewable_file(path: &Path) -> bool {
         .is_some_and(|extension| language_for_extension(extension).is_some())
 }
 
-/// 源码文件 tab:普通文件与 gitshow 只读臂共用一个快照视图。
+/// 源码文件 tab:普通文件与 gitshow 只读臂共用一个快照视图;
+/// Diff 模式承载通用 diff 对照面(只读臂,不新增 tab 变体)。
 pub struct CodeTabView {
     pub path: PathBuf,
     /// gitshow 只读臂:标题追加 `@ HEAD`,复用同路径时不与普通 tab 混淆。
     git_show: bool,
-    file: Entity<TextFileView>,
+    mode: CodeTabMode,
     /// 内层编辑器的变更转发:脏标记/保存完成时让外层 tab 也 notify,
     /// 工作区再经观察刷新侧栏标题与窗口标题。
     _file_observation: Subscription,
+    /// gutter 点击转发(TextFileEvent → CodeTabEvent)。
+    _gutter_subscription: Option<Subscription>,
 }
 
 impl CodeTabView {
@@ -92,6 +116,27 @@ impl CodeTabView {
     /// gitshow 只读臂:HEAD 字节 + 恒定只读(07 篇改造节 5)。
     pub fn new_git_show(path: PathBuf, window: &mut Window, cx: &mut Context<'_, Self>) -> Self {
         Self::new_with_source(path, true, window, cx)
+    }
+
+    /// 通用 diff 只读臂:左 HEAD / 右工作区,双栏对照(D07-2 已裁)。
+    pub fn new_diff(path: PathBuf, window: &mut Window, cx: &mut Context<'_, Self>) -> Self {
+        let diff = cx.new(|cx| {
+            DiffTabView::open(
+                DiffSource::HeadToWorktree { path: path.clone() },
+                window,
+                cx,
+            )
+        });
+        let observation = cx.observe_in(&diff, window, |_, _, _, cx| {
+            cx.notify();
+        });
+        Self {
+            path,
+            git_show: false,
+            mode: CodeTabMode::Diff(diff),
+            _file_observation: observation,
+            _gutter_subscription: None,
+        }
     }
 
     fn new_with_source(
@@ -113,41 +158,86 @@ impl CodeTabView {
             // 刷新 tab 标题。
             cx.notify();
         });
+        let gutter_subscription = cx.subscribe_in(
+            &file,
+            window,
+            |this: &mut Self, _, event: &TextFileEvent, _, cx| {
+                let TextFileEvent::GutterClicked { line, mark } = event;
+                cx.emit(CodeTabEvent::GutterClicked {
+                    path: this.path.clone(),
+                    line: *line,
+                    mark: *mark,
+                });
+                cx.notify();
+            },
+        );
         Self {
             path,
             git_show,
-            file,
+            mode: CodeTabMode::File(file),
             _file_observation: observation,
+            _gutter_subscription: Some(gutter_subscription),
         }
     }
 
-    /// 脏标记(关闭确认数据源;gitshow 恒 false)。
+    fn file(&self) -> Option<&Entity<TextFileView>> {
+        match &self.mode {
+            CodeTabMode::File(file) => Some(file),
+            CodeTabMode::Diff(_) => None,
+        }
+    }
+
+    fn diff(&self) -> Option<&Entity<DiffTabView>> {
+        match &self.mode {
+            CodeTabMode::Diff(diff) => Some(diff),
+            CodeTabMode::File(_) => None,
+        }
+    }
+
+    /// 脏标记(关闭确认数据源;gitshow/diff 恒 false)。
     pub fn is_dirty(&self, cx: &App) -> bool {
-        self.file.read(cx).is_dirty()
+        self.file().is_some_and(|file| file.read(cx).is_dirty())
     }
 
     /// 保存中(关闭确认在此态不弹窗)。
     pub fn is_saving(&self, cx: &App) -> bool {
-        self.file.read(cx).is_saving()
+        self.file().is_some_and(|file| file.read(cx).is_saving())
     }
 
-    /// 触发保存;返回值 = 是否成功落盘且无新草稿。
+    /// 触发保存;只读臂(diff/gitshow)恒无操作。
     pub fn save(&mut self, cx: &mut Context<'_, Self>) -> Task<bool> {
-        self.file.update(cx, |file, cx| file.save(cx))
+        match &self.mode {
+            CodeTabMode::File(file) => {
+                let file = file.clone();
+                file.update(cx, |file, cx| file.save(cx))
+            }
+            CodeTabMode::Diff(_) => Task::ready(true),
+        }
     }
 
     /// 同路径普通源码 tab 的重开命中(草稿保留归 M8.2,本步只重读盘)。
     pub fn is_regular_path(&self, path: &Path) -> bool {
-        !self.git_show && self.path == path
+        self.file().is_some() && !self.git_show && self.path == path
     }
 
     /// 同路径 gitshow tab 的重开命中。
     pub fn is_git_show_path(&self, path: &Path) -> bool {
-        self.git_show && self.path == path
+        self.file().is_some() && self.git_show && self.path == path
+    }
+
+    /// 同路径 HEAD↔工作区 diff tab 的重开命中。
+    pub fn is_diff_path(&self, path: &Path) -> bool {
+        self.diff().is_some() && self.path == path
     }
 
     pub fn tab_title(&self, cx: &App) -> String {
-        let base = self.file.read(cx).tab_title();
+        if let Some(diff) = self.diff() {
+            return diff.read(cx).title.clone();
+        }
+        let Some(file) = self.file() else {
+            return self.path.display().to_string();
+        };
+        let base = file.read(cx).tab_title();
         if self.git_show {
             format!("{base} @ HEAD")
         } else {
@@ -157,15 +247,24 @@ impl CodeTabView {
 
     /// 只读合同(测试与关闭/保存路由共用)。
     pub fn is_read_only(&self, cx: &App) -> bool {
-        self.file.read(cx).is_read_only()
+        match &self.mode {
+            CodeTabMode::File(file) => file.read(cx).is_read_only(),
+            CodeTabMode::Diff(diff) => diff.read(cx).is_read_only(),
+        }
     }
 
     pub fn focus_handle(&self, cx: &App) -> FocusHandle {
-        self.file.read(cx).focus_handle(cx)
+        match &self.mode {
+            CodeTabMode::File(file) => file.read(cx).focus_handle(cx),
+            CodeTabMode::Diff(diff) => diff.read(cx).focus_handle(cx),
+        }
     }
 
     pub fn reload(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
-        self.file.update(cx, |file, cx| file.reload(window, cx));
+        match &self.mode {
+            CodeTabMode::File(file) => file.update(cx, |file, cx| file.reload(window, cx)),
+            CodeTabMode::Diff(diff) => diff.update(cx, |diff, cx| diff.reload(window, cx)),
+        }
     }
 
     /// 渲染激活位:workspace 在 tab 切换时经此释放/恢复预览资产。
@@ -175,26 +274,65 @@ impl CodeTabView {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
-        self.file
-            .update(cx, |file, cx| file.set_render_active(active, window, cx));
+        if let Some(file) = self.file() {
+            file.update(cx, |file, cx| file.set_render_active(active, window, cx));
+        }
     }
 
     /// 测试专用:已载入快照文本(HEAD/工作区字节经同一通路)。
     #[cfg(all(test, feature = "gpui-test-support"))]
     pub fn text_for_test(&self, cx: &App) -> Option<String> {
-        self.file.read(cx).text_for_test()
+        self.file().and_then(|file| file.read(cx).text_for_test())
     }
 
     /// 测试专用:输入实体当前文本(含未保存草稿)。
     #[cfg(all(test, feature = "gpui-test-support"))]
     pub fn input_text_for_test(&self, cx: &App) -> String {
-        self.file.read(cx).input_text_for_test(cx)
+        self.file()
+            .map(|file| file.read(cx).input_text_for_test(cx))
+            .unwrap_or_default()
     }
 
     /// 测试专用:共享撤销栈组数。
     #[cfg(all(test, feature = "gpui-test-support"))]
     pub fn history_undo_depth_for_test(&self, cx: &App) -> usize {
-        self.file.read(cx).history_undo_depth_for_test()
+        self.file()
+            .map(|file| file.read(cx).history_undo_depth_for_test())
+            .unwrap_or(0)
+    }
+
+    /// 测试专用:diff 模式的两栏 hunk 集与活动 hunk。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub fn diff_state_for_test(
+        &self,
+        cx: &App,
+    ) -> Option<(Vec<super::diff_tab::DiffHunk>, Option<usize>)> {
+        let diff = self.diff()?;
+        let diff = diff.read(cx);
+        Some((diff.hunks().to_vec(), diff.active_hunk()))
+    }
+
+    /// 测试专用:驱动 diff 的 hunk 导航。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub fn navigate_diff_hunk_for_test(&mut self, forward: bool, cx: &mut Context<'_, Self>) {
+        if let Some(diff) = self.diff() {
+            let diff = diff.clone();
+            diff.update(cx, |diff, cx| {
+                if forward {
+                    diff.next_hunk(cx);
+                } else {
+                    diff.prev_hunk(cx);
+                }
+            });
+        }
+    }
+
+    /// 测试专用:gutter 行标(File 模式)。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub fn gutter_marks_for_test(&self, cx: &App) -> Vec<(u32, GutterMark)> {
+        self.file()
+            .map(|file| file.read(cx).gutter_marks_for_test())
+            .unwrap_or_default()
     }
 }
 
@@ -205,7 +343,10 @@ impl Render for CodeTabView {
             .size_full()
             .min_w_0()
             .min_h_0()
-            .child(self.file.clone())
+            .child(match &self.mode {
+                CodeTabMode::File(file) => file.clone().into_any_element(),
+                CodeTabMode::Diff(diff) => diff.clone().into_any_element(),
+            })
     }
 }
 

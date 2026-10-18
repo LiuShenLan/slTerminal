@@ -129,6 +129,14 @@ impl RawSettings {
         self.segment_value(key)?.as_bool()
     }
 
+    /// 域外段原样读取(`keybind` / `conpty_input_modes`);未登记段名 = None。
+    pub fn external_value(&self, name: &str) -> Option<&Value> {
+        if !keys::is_external_segment(name) {
+            return None;
+        }
+        self.tree.get(name)
+    }
+
     /// 文件树中实际出现且已登记的键名遍历。
     pub fn keys(&self) -> impl Iterator<Item = &'static str> + '_ {
         keys::KEYS

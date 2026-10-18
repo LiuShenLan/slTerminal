@@ -39,7 +39,15 @@
     "preview_limited": "Preview was truncated at the size limit.",
     "markdown_document": "Markdown document",
     "copy_path": "Copy path",
-    "copy_name": "Copy file name"
+    "copy_name": "Copy file name",
+    "close_window_title": "Unsaved files",
+    "close_window_detail": "{count} file(s) have unsaved changes.",
+    "diff_head": "HEAD",
+    "diff_worktree": "Working tree",
+    "diff_previous": "Previous change",
+    "diff_next": "Next change",
+    "diff_loading": "Loading diff…",
+    "diff_empty": "No differences"
   },
   "files": {
     "search_placeholder": "Filter files...",
@@ -58,6 +66,11 @@
     "path_placeholder": "Enter a directory path",
     "path_edit": "Edit path",
     "path_open": "Open",
+    "delete": "Delete",
+    "delete_failed": "Could not move to the Recycle Bin: {error}",
+    "search_match_case": "Match case",
+    "search_whole_word": "Match whole word",
+    "search_regex": "Use regular expression",
     "path_failed": "Could not open this directory: {error}",
     "path_unavailable": "Directory unavailable",
     "refresh": "Refresh"

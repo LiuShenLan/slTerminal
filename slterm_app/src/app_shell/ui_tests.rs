@@ -1593,3 +1593,27 @@ fn restored_agent_command_is_injected_and_hostile_ids_are_rejected(cx: &mut Test
         "拒收后不保留待提交命令"
     );
 }
+
+/// 07 篇 M8.5:用户 keybind 段在启动后追加绑定,可重绑工作区动作;
+/// 保留键条目(即使同表出现)被准入门拒绝,不产生任何绑定。
+#[gpui::test]
+fn user_keybind_segment_rebinds_without_touching_reserved_keys(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    window.update(|_, cx| {
+        super::workspace::apply_user_keybinds_for_test(
+            cx,
+            &[
+                ("ctrl+alt+r".to_owned(), "split_right".to_owned()),
+                ("ctrl+shift+c".to_owned(), "save_file".to_owned()),
+                ("ctrl+.".to_owned(), "not_an_action".to_owned()),
+            ],
+        );
+    });
+    window.simulate_keystrokes("ctrl-alt-r");
+    window.run_until_parked();
+    let (panes, leaves, _, _) = workspace
+        .read_with(cx, |workspace, _| workspace.active_tab_snapshot())
+        .expect("终端 tab");
+    assert_eq!(panes, leaves, "panes 与树叶必须恒等");
+    assert_eq!(panes.len(), 2, "用户键位必须触达工作区动作");
+}

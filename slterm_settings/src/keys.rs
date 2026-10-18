@@ -417,6 +417,51 @@ pub fn is_external_segment(name: &str) -> bool {
     EXTERNAL_SEGMENTS.contains(&name)
 }
 
+/// `keybind` 段宽容解析:元素缺 `combo`/`action`、类型不符或空串 → 跳过
+/// 该行;行序即优先级(数组顺序原样保留)。
+pub fn keybind_pairs_from_json(value: &crate::json::Value) -> Vec<(String, String)> {
+    let crate::json::Value::Array(entries) = value else {
+        return Vec::new();
+    };
+    entries
+        .iter()
+        .filter_map(|entry| {
+            let combo = entry.get("combo")?.as_str()?.trim();
+            let action = entry.get("action")?.as_str()?.trim();
+            (!combo.is_empty() && !action.is_empty()).then(|| (combo.to_owned(), action.to_owned()))
+        })
+        .collect()
+}
+
+/// `(combo, action)` 对表 → `keybind` 段值(整表形态)。
+pub fn keybind_value(pairs: &[(String, String)]) -> crate::json::Value {
+    crate::json::Value::Array(
+        pairs
+            .iter()
+            .map(|(combo, action)| {
+                crate::json::Value::Object(vec![
+                    (
+                        "combo".to_owned(),
+                        crate::json::Value::String(combo.clone()),
+                    ),
+                    (
+                        "action".to_owned(),
+                        crate::json::Value::String(action.clone()),
+                    ),
+                ])
+            })
+            .collect(),
+    )
+}
+
+/// 整表替换 `keybind` 段,其余段/未知段原样保留(行序即优先级)。
+pub fn apply_keybinds(
+    existing: &crate::json::Value,
+    pairs: &[(String, String)],
+) -> crate::json::Value {
+    crate::apply_updates(existing, &[(KEYBIND_SEGMENT, keybind_value(pairs))])
+}
+
 /// 写通道顶层白名单:注册表域段 + 域外段。段名唯一,无孤儿段。
 pub fn segment_whitelist() -> impl Iterator<Item = &'static str> {
     SettingsDomain::ALL
@@ -561,6 +606,73 @@ mod registry_tests {
         for hook in AgentHook::ALL {
             assert!(!resettable.contains(hook.settings_key()));
         }
+    }
+
+    /// keybind 段宽容解析:坏行跳过、行序即优先级、空串拒绝。
+    #[test]
+    fn keybind_segment_tolerates_bad_rows_and_keeps_order() {
+        let value = crate::json::parse(
+            br#"[
+              {"combo": "ctrl+shift+c", "action": "copy"},
+              {"combo": "ctrl+s", "action": "save_file"},
+              {"combo": "", "action": "save_file"},
+              {"combo": "ctrl+x"},
+              {"action": "paste"},
+              {"combo": 5, "action": "paste"},
+              "garbage"
+            ]"#,
+        )
+        .unwrap();
+        assert_eq!(
+            keybind_pairs_from_json(&value),
+            [
+                ("ctrl+shift+c".to_owned(), "copy".to_owned()),
+                ("ctrl+s".to_owned(), "save_file".to_owned()),
+            ],
+            "坏行不得炸整表,合法行序原样保留"
+        );
+        assert!(keybind_pairs_from_json(&crate::json::Value::Bool(true)).is_empty());
+    }
+
+    /// 整表替换:旧数组不参与浅合并,其余段与未知段原位保留。
+    #[test]
+    fn apply_keybinds_replaces_the_segment_whole() {
+        let tree = crate::json::parse(
+            br#"{
+              "keybind": [{"combo": "ctrl+x", "action": "old"}],
+              "appearance": {"theme": "Nord"},
+              "handmade": {"note": "keep"}
+            }"#,
+        )
+        .unwrap();
+        let pairs = vec![
+            ("ctrl+s".to_owned(), "save_file".to_owned()),
+            ("ctrl+/".to_owned(), "toggle_source".to_owned()),
+        ];
+        let merged = apply_keybinds(&tree, &pairs);
+        assert_eq!(
+            keybind_pairs_from_json(merged.get(KEYBIND_SEGMENT).unwrap()),
+            pairs,
+            "整表替换后只剩新数组"
+        );
+        assert_eq!(
+            merged
+                .get("appearance")
+                .unwrap()
+                .get("theme")
+                .unwrap()
+                .as_str(),
+            Some("Nord")
+        );
+        assert_eq!(
+            merged
+                .get("handmade")
+                .unwrap()
+                .get("note")
+                .unwrap()
+                .as_str(),
+            Some("keep")
+        );
     }
 
     /// 重置覆盖对账:`RuntimeSettings::from_raw` 消费的键集合与注册表

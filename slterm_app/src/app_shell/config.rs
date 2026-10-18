@@ -9,10 +9,11 @@ use std::path::Path;
 
 use gpui::Global;
 
+use crate::app_shell::editor_theme::{self, EditorThemeTokens};
 use crate::gpui_terminal::colors::Palette;
 use crate::i18n::{LanguagePreference, UiLanguage};
 use crate::theme_library::ThemeLibraryStore;
-use slterm_settings::{RawSettings, RuntimeSettings};
+use slterm_settings::{RawSettings, RuntimeSettings, ThemeUiColors};
 
 /// 默认字号:11.25pt × 4/3 = 15px(与上游配置缺省同链)。
 const DEFAULT_FONT_SIZE_PX: f32 = 15.0;
@@ -31,6 +32,8 @@ pub struct Settings {
     pub ligatures: bool,
     /// 暗色单份(仅暗色定位;D06-3)。
     pub palette: Palette,
+    /// 编辑器语义槽(源码态/gutter/diff 的配色单源,07 篇改造节 8)。
+    pub editor_theme: EditorThemeTokens,
     /// 选区完成即复制。
     pub copy_on_select: bool,
     pub scroll_speed: f32,
@@ -87,6 +90,7 @@ impl Settings {
             .filter(|family| !family.is_empty())
             .map(str::to_owned)
             .unwrap_or_else(|| crate::app_shell::assets::REQUIRED_FONT_FAMILY.to_owned());
+        let (palette, ui) = resolve_theme(runtime, theme_root);
         Settings {
             font_family: family.clone(),
             font_bold_family: family.clone(),
@@ -94,7 +98,8 @@ impl Settings {
             font_bold_italic_family: family,
             font_size_px: runtime.font_size_px.unwrap_or(DEFAULT_FONT_SIZE_PX),
             ligatures: runtime.ligatures.enabled(None),
-            palette: resolve_palette(runtime, theme_root),
+            editor_theme: editor_theme::editor_theme_tokens(runtime.theme.reviewed_palette(), &ui),
+            palette,
             copy_on_select: runtime.copy_on_select,
             scroll_speed: runtime.scroll_speed,
             language: LanguagePreference::from(runtime.language).resolved(),
@@ -122,7 +127,10 @@ impl Settings {
 /// 主题选择与应用流(仅暗色):自定义主题经主题库解析,失败回内置主题;
 /// `theme_foreground` 是显式前景覆盖,作用于终端正文。主题解析失败不把
 /// 启动/热应用升级成故障——回退内置目录默认(D06-3 的 linear)。
-fn resolve_palette(runtime: &RuntimeSettings, theme_root: Option<&Path>) -> Palette {
+///
+/// 返回(终端调色板, UI 语义槽):编辑器的 `EditorThemeTokens` 从同一
+/// 分支装配,主题切换时三消费方与终端同步热应用。
+fn resolve_theme(runtime: &RuntimeSettings, theme_root: Option<&Path>) -> (Palette, ThemeUiColors) {
     if let Some(id) = runtime.custom_theme.as_deref() {
         let store = theme_root.map_or_else(ThemeLibraryStore::default, ThemeLibraryStore::new);
         match store.load(id).and_then(|document| {
@@ -131,14 +139,22 @@ fn resolve_palette(runtime: &RuntimeSettings, theme_root: Option<&Path>) -> Pale
                 .map_err(crate::theme_library::StoreError::Document)
         }) {
             Ok(definition) => {
-                return Palette::from_definition(&definition, runtime.theme_foreground);
+                let ui = definition.resolved_ui();
+                return (
+                    Palette::from_definition(&definition, runtime.theme_foreground),
+                    ui,
+                );
             }
             Err(error) => {
                 log::warn!("自定义主题 {id} 解析失败,回退内置主题: {error}");
             }
         }
     }
-    Palette::from_term_theme(runtime.theme.term_theme(), runtime.theme_foreground)
+    (
+        Palette::from_term_theme(runtime.theme.term_theme(), runtime.theme_foreground),
+        // 内置主题的 UI 语义槽 = 评审过的 ReviewedPalette 镜像。
+        ThemeUiColors::from_palette(runtime.theme.reviewed_palette()),
+    )
 }
 
 #[cfg(test)]

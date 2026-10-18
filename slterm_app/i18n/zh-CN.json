@@ -39,7 +39,15 @@
     "preview_limited": "预览已按大小上限截断。",
     "markdown_document": "Markdown 文档",
     "copy_path": "复制路径",
-    "copy_name": "复制文件名"
+    "copy_name": "复制文件名",
+    "close_window_title": "未保存的文件",
+    "close_window_detail": "{count} 个文件有未保存的更改。",
+    "diff_head": "HEAD",
+    "diff_worktree": "工作区",
+    "diff_previous": "上一处更改",
+    "diff_next": "下一处更改",
+    "diff_loading": "正在加载差异…",
+    "diff_empty": "没有差异"
   },
   "files": {
     "search_placeholder": "筛选文件…",
@@ -58,6 +66,11 @@
     "path_placeholder": "输入目录路径",
     "path_edit": "编辑路径",
     "path_open": "打开",
+    "delete": "删除",
+    "delete_failed": "无法移入回收站：{error}",
+    "search_match_case": "匹配大小写",
+    "search_whole_word": "全字匹配",
+    "search_regex": "使用正则表达式",
     "path_failed": "无法打开此目录：{error}",
     "path_unavailable": "目录不可用",
     "refresh": "刷新"

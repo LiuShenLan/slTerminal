@@ -17,6 +17,12 @@ static HTML_IMG_DQ: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r#"(?i)(<img\b[^>]*?\bsrc\s*=\s*")([^"]+)""#).unwrap());
 static HTML_IMG_SQ: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r#"(?i)(<img\b[^>]*?\bsrc\s*=\s*')([^']+)'"#).unwrap());
+/// 引用式图片用法 `![alt][id]`(M8.3 问题 2:引用式动图压帧扩展)。
+static MD_IMG_REF: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r#"!\[[^\]]*\]\[([^\]]+)\]"#).unwrap());
+/// 链接引用定义 `[id]: url`(只重写被图片引用命中的 id)。
+static MD_REF_DEF: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r#"(?m)^( {0,3})\[([^\]]+)\]:[ \t]*(\S+)"#).unwrap());
 
 /// 文档级图片 URL 重写:`base` = 文档所在目录(相对路径解析基址)。
 pub(super) fn rewrite_doc_images(text: &str, base: Option<&Path>) -> String {
@@ -30,9 +36,31 @@ pub(super) fn rewrite_doc_images(text: &str, base: Option<&Path>) -> String {
             flatten_local_image_url(&caps[2], base)
         )
     });
-    HTML_IMG_SQ
+    let rewritten = HTML_IMG_SQ
         .replace_all(&rewritten, |caps: &regex::Captures<'_>| {
             format!("{}{}'", &caps[1], flatten_local_image_url(&caps[2], base))
+        })
+        .into_owned();
+    // 引用式图片:`![alt][id]` + `[id]: anim.gif`。只改被图片引用的定义,
+    // 纯链接引用保持原样(链接语义不被压帧改写)。
+    let referenced: std::collections::HashSet<String> = MD_IMG_REF
+        .captures_iter(&rewritten)
+        .map(|caps| caps[1].to_ascii_lowercase())
+        .collect();
+    if referenced.is_empty() {
+        return rewritten;
+    }
+    MD_REF_DEF
+        .replace_all(&rewritten, |caps: &regex::Captures<'_>| {
+            if !referenced.contains(&caps[2].to_ascii_lowercase()) {
+                return caps[0].to_owned();
+            }
+            format!(
+                "{}[{}]: {}",
+                &caps[1],
+                &caps[2],
+                flatten_local_image_url(&caps[3], base)
+            )
         })
         .into_owned()
 }
@@ -170,6 +198,29 @@ mod images_tests {
         assert!(cached_bytes.starts_with(b"\x89PNG"));
         let again = rewrite_doc_images("![anim](anim.gif)", Some(directory.path()));
         assert_eq!(rewritten, again, "同一内容复用同一缓存文件");
+    }
+
+    /// 引用式动图:`![alt][id]` 命中的定义压帧,纯链接引用不动(M8.3 问题 2)。
+    #[test]
+    fn referenced_gif_definitions_are_flattened_only_for_image_references() {
+        let directory = tempfile::tempdir().unwrap();
+        let gif = directory.path().join("anim.gif");
+        let frame = image::RgbaImage::from_pixel(2, 2, image::Rgba([9, 8, 7, 255]));
+        let mut bytes = Vec::new();
+        image::codecs::gif::GifEncoder::new(&mut bytes)
+            .encode(frame.as_raw(), 2, 2, image::ExtendedColorType::Rgba8)
+            .unwrap();
+        std::fs::write(&gif, &bytes).unwrap();
+        let source = "![anim][figure]\n\n[figure]: anim.gif\n[link]: anim.gif\n";
+        let rewritten = rewrite_doc_images(source, Some(directory.path()));
+        assert!(
+            rewritten.contains("[figure]: ") && rewritten.contains(".png"),
+            "图片引用的定义必须压帧: {rewritten}"
+        );
+        assert!(
+            rewritten.contains("[link]: anim.gif"),
+            "纯链接引用不得被改写: {rewritten}"
+        );
     }
 
     /// HTML `<img>` 双/单引号形态都重写;缺少文件时留在原样。

@@ -24,7 +24,12 @@
   「朴素渲染 + 语言标签」,不回填 CM6 高亮栈。
 - 文档图片:GIF/动画 WebP 压单帧 PNG 进缓存是正确性措施(共用 element id
   越界 panic 链);文档级解码图走 `DocumentImageCache` 的字节/条目双上限 LRU,
-  不得进进程级常驻资产图。
+  不得进进程级常驻资产图。引用式图片 `![alt][id]` 的定义 `[id]: url` 同走
+  压帧;纯链接引用不改写。
+- git gutter(M8.5):数据源 = `crate::git` 子进程(`file_status` + `file_hunks`),
+  与文件树 VCS 同一执行体;行标只在行标变化时推进 revision。只读文档
+  (truncated/gitshow/diff)不挂 gutter。行标颜色只引用 `EditorThemeTokens`,
+  禁裸色值;滚动同步读输入实体上一帧布局(`visible_row_range`/`scroll_offset`)。
 
 ## 步骤接缝
 
@@ -32,5 +37,6 @@
 - M8.3 已落:双模态渲染态 + 虚拟化 + live_edit/decorations/结构命令 + 撤销
   双栈收口 + Document 可编辑与脏关闭守卫 + 图片缓存/真实缩放 + 详情侧栏/
   工具条/几何常量族。
-- M8.5:gutter 与 diff 消费同一编辑器实体;`Outline::source_span`/
+- M8.5 已落:gutter 行标(打开/保存/重载三触发点)+ `TextFileEvent::GutterClicked`
+  事件转发 + 通用 diff 消费同一编辑器实体;`Outline::source_span`/
   `replace_block` 预留给代码块语言切换与结构回写。

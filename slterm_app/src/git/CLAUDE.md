@@ -15,6 +15,10 @@
 - M8.1 只落只读面:仓库根解析 + HEAD 文件字节(gitshow 数据源)。
 - M8.4 起 `command` 对 `side_panel` 开放:文件树过滤索引与 git 状态快照共用
   同一子进程构造口(无第二执行体)。
-- M8.5 接 status/diff/hunks/rollback/unstage 四方法与 04 篇
-  `verify_repository`/`verify_revision` 核对;旧 git2 语义资产(LRU 仓库缓存 BE-09、
-  不扫 ignored CP-008、rename 双检、rollback 三方字节一致)在该步转对照用例。
+- M8.5 已接 status/diff/hunks/rollback/unstage 四方法:porcelain v2 解析在本模块
+  单源(`parse_status`),`revision` = `sha256(status stdout)` 64 hex;写操作由
+  runtime 执行器重跑 status 比对(防陈旧),rollback = `git checkout HEAD -- path`
+  (索引与工作区同时回到 HEAD 字节),untracked 回滚删除工作区新文件,unstage =
+  `git restore --staged`(unborn HEAD 回退 `git rm --cached`)。旧 git2 语义资产
+  (LRU 仓库缓存 BE-09、不扫 ignored CP-008、rename 双检、rollback 三方字节一致)
+  已转对照用例。

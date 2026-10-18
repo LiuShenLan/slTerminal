@@ -10,12 +10,15 @@
 //! managed agent;SessionEnd/pane 关闭关闭注册项;TurnDone 完成委派并把
 //! 回传提示写回 origin pane。
 
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use gpui::{App, Context, Window};
 use serde_json::{Value, json};
 use slterm_split::{PaneId, SplitDirection, TabId};
+
+use crate::git;
 
 use super::super::SltermShellEvent;
 use super::runtime_projection;
@@ -452,10 +455,7 @@ impl SltermWorkspace {
                 )
             }
             RuntimeCommand::Exec { .. } => unreachable!("Exec is handled asynchronously"),
-            RuntimeCommand::Git { .. } => Err(ApiError::new(
-                "git_unavailable",
-                "Git method execution is not wired yet (07 篇子进程封装)",
-            )),
+            RuntimeCommand::Git { request, .. } => self.execute_git_command(request, cx),
             RuntimeCommand::AgentStart {
                 window_id,
                 pane_id,
@@ -528,6 +528,116 @@ impl SltermWorkspace {
                 self.action_result(json!({ "agent": target, "read": read }), cx)
             }
         }
+    }
+
+    /// `git.*` 四方法执行器(07 篇改造节 2;D07-1 子进程统一)。
+    ///
+    /// 全序:显式 pane + `expected_cwd` → 重查 pane cwd 与仓库根 → 写操作
+    /// 重跑 status 比对 revision(防陈旧三板斧)→ 执行 → 回包带提交后
+    /// snapshot 与最新 status 摘要。路径是纯 argv 元素,不解释为 shell。
+    fn execute_git_command(
+        &mut self,
+        request: &crate::runtime_api::git::Request,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<Value, ApiError> {
+        ensure_window(Some(request.window_id))?;
+        let (_, _, view) = self.pane_entry(request.pane_id)?;
+        let pane_cwd = view.read(cx).cwd.clone();
+        if pane_cwd.is_empty() {
+            return Err(ApiError::new(
+                "git_target_changed",
+                "the pane has no working directory",
+            ));
+        }
+        let root = git::repository_root(Path::new(&pane_cwd)).map_err(git_api_error)?;
+        let mut request = request.clone();
+        request.expected_cwd = normalized_path(&request.expected_cwd);
+        request.verify_repository(
+            &normalized_path(&pane_cwd),
+            &normalized_path(&root.to_string_lossy()),
+        )?;
+        let status = git::status(&root).map_err(git_api_error)?;
+        if request.is_write() {
+            request.verify_revision(&status.digest)?;
+        }
+        let relative = if request.operation == "status" {
+            None
+        } else {
+            Some(git_relative(&root, &request.path)?)
+        };
+        let action = match request.operation.as_str() {
+            "status" => json!({
+                "window_id": SINGLE_WINDOW_ID,
+                "pane_id": request.pane_id,
+                "operation": "status",
+                "revision": status.digest.clone(),
+                "branch": status.branch.clone(),
+                "head": status.head.clone(),
+                "ahead": status.ahead,
+                "behind": status.behind,
+                "entries": status
+                    .entries
+                    .iter()
+                    .map(|entry| {
+                        json!({
+                            "path": entry.path,
+                            "original": entry.original,
+                            "index": entry.index.to_string(),
+                            "worktree": entry.worktree.to_string(),
+                            "conflict": entry.conflict
+                        })
+                    })
+                    .collect::<Vec<_>>(),
+            }),
+            "diff" => {
+                let relative = relative.as_deref().expect("diff requires a path");
+                let diff = git::diff_text(&root, relative).map_err(git_api_error)?;
+                let hunks = git::file_hunks(&root, relative).map_err(git_api_error)?;
+                json!({
+                    "window_id": SINGLE_WINDOW_ID,
+                    "pane_id": request.pane_id,
+                    "operation": "diff",
+                    "path": relative,
+                    "revision": status.digest.clone(),
+                    "diff": diff,
+                    "hunks": hunks
+                        .iter()
+                        .map(|hunk| {
+                            json!({
+                                "old_start": hunk.old_start,
+                                "old_lines": hunk.old_lines,
+                                "new_start": hunk.new_start,
+                                "new_lines": hunk.new_lines
+                            })
+                        })
+                        .collect::<Vec<_>>(),
+                })
+            }
+            "rollback" | "unstage" => {
+                let relative = relative.as_deref().expect("write requires a path");
+                if request.operation == "rollback" {
+                    git::rollback(&root, relative).map_err(git_api_error)?;
+                } else {
+                    git::unstage(&root, relative).map_err(git_api_error)?;
+                }
+                // 写后摘要:客户端下一次写操作直接可用,无需额外 status 往返。
+                let after = git::status(&root).map_err(git_api_error)?;
+                json!({
+                    "window_id": SINGLE_WINDOW_ID,
+                    "pane_id": request.pane_id,
+                    "operation": request.operation,
+                    "path": relative,
+                    "revision": after.digest,
+                })
+            }
+            other => {
+                return Err(ApiError::new(
+                    "method_not_found",
+                    format!("unknown Git operation {other:?}"),
+                ));
+            }
+        };
+        self.action_result(action, cx)
     }
 
     /// AgentStart/AgentFork(已事务化)的 UI 落地:新 tab 或既有 pane 里
@@ -777,6 +887,46 @@ impl SltermWorkspace {
             }
         }
     }
+}
+
+/// 路径比较形态:规范化 + `\\?\` 去前缀 + 正斜杠 + 小写(Windows 大小写
+/// 不敏感;`verify_repository` 是逐字比较,归一必须在调用前完成)。
+fn normalized_path(text: &str) -> String {
+    let path = Path::new(text);
+    let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let display = canonical.to_string_lossy().into_owned();
+    let display = display.strip_prefix(r"\\?\").unwrap_or(&display);
+    display.replace('\\', "/").to_ascii_lowercase()
+}
+
+/// 请求路径 → 仓库根相对路径;拒绝 `..` 逃逸(路径是纯 argv,但不是沙箱)。
+fn git_relative(root: &Path, raw: &str) -> Result<String, ApiError> {
+    let path = Path::new(raw);
+    if path
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err(ApiError::invalid_params(
+            "Git path must not escape the repository",
+        ));
+    }
+    let absolute: PathBuf = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        root.join(path)
+    };
+    git::relative_path(root, &absolute).map_err(git_api_error)
+}
+
+/// git 执行体错误 → 协议错误码(UI/CLI 按 code 分流,消息保持可读)。
+fn git_api_error(error: git::GitError) -> ApiError {
+    let code = match &error {
+        git::GitError::Unavailable(_) => "git_unavailable",
+        git::GitError::NotRepository(_) => "git_not_repository",
+        git::GitError::NotInHead(_) => "git_not_in_head",
+        git::GitError::Command(_) => "git_command_failed",
+    };
+    ApiError::new(code, error.to_string())
 }
 
 fn ensure_window(window_id: Option<u64>) -> Result<(), ApiError> {

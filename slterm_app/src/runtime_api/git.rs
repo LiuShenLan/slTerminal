@@ -37,13 +37,12 @@ pub(crate) struct Request {
 }
 
 impl Request {
-    pub(super) fn is_write(&self) -> bool {
+    pub(crate) fn is_write(&self) -> bool {
         matches!(self.operation.as_str(), "rollback" | "unstage")
     }
 
     /// 写前状态摘要校验:与请求携带的 revision 不一致即拒绝。
-    #[allow(dead_code)] // 消费点 = 07 篇 git 子进程执行器(M7.5/M8 接线)。
-    pub(super) fn verify_revision(&self, current_revision: &str) -> Result<(), ApiError> {
+    pub(crate) fn verify_revision(&self, current_revision: &str) -> Result<(), ApiError> {
         if self.is_write() && self.revision != current_revision {
             return Err(ApiError::new(
                 "git_stale",
@@ -61,8 +60,7 @@ impl Request {
 impl Request {
     /// pane cwd 与 repo root 双重核对。设计稿要求两者都等于
     /// `expected_cwd`:Git 方法只对根 checkout 生效,子目录 pane 需先回到根。
-    #[allow(dead_code)] // 消费点 = 07 篇 git 子进程执行器(M7.5/M8 接线)。
-    pub(super) fn verify_repository(
+    pub(crate) fn verify_repository(
         &self,
         pane_cwd: &str,
         repo_root: &str,

@@ -16,7 +16,7 @@
 //! 文件图标载体 = 内嵌 Nerd Font 字形(开放问题 4 选型;色归 06 token)。
 
 use std::ops::Range;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use gpui::prelude::FluentBuilder as _;
@@ -54,6 +54,13 @@ pub(super) const ROW_WASH_INSET: f32 = 2.0;
 /// 内容左右留白。
 pub(super) const DRAWER_TEXT_INSET: f32 = 4.0;
 
+/// 右键菜单状态:挂 workspace 根渲染,不受抽屉裁剪与推出动画影响
+/// (07 篇照抄点 23)。
+pub(super) struct FileTreeContextMenu {
+    pub(super) path: PathBuf,
+    pub(super) position: gpui::Point<gpui::Pixels>,
+}
+
 /// 文件树视图状态:模型 + 输入实体 + 滚动句柄。挂在 workspace 上,
 /// 渲染方法在 [`SltermWorkspace`] 的 impl 里(与旧壳同构)。
 pub(super) struct FileTreeState {
@@ -68,9 +75,16 @@ pub(super) struct FileTreeState {
     pub(super) pump_running: bool,
     /// 搜索框变更订阅(随视图释放)。
     pub(super) search_subscription: Option<Subscription>,
+    /// 右键菜单(文件树行;删除动作入口)。
+    pub(super) context_menu: Option<FileTreeContextMenu>,
+    /// 删除失败等面向上抛的用户可读消息。
+    pub(super) notice: Option<String>,
     /// 测试注入的系统处理器记录(生产走 `ShellExecuteW`)。
     #[cfg(all(test, feature = "gpui-test-support"))]
     pub(super) system_opened: Vec<PathBuf>,
+    /// 测试注入的回收站调用记录(生产走 `SHFileOperationW`)。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(super) recycled: Vec<PathBuf>,
     /// OS 拖出解析器调用记录(gpui 的平台断言口是 crate 私有的,
     /// 用例经注入锚点验证载荷生成)。
     #[cfg(all(test, feature = "gpui-test-support"))]
@@ -90,8 +104,12 @@ impl FileTreeState {
             path_editor: None,
             pump_running: false,
             search_subscription: None,
+            context_menu: None,
+            notice: None,
             #[cfg(all(test, feature = "gpui-test-support"))]
             system_opened: Vec::new(),
+            #[cfg(all(test, feature = "gpui-test-support"))]
+            recycled: Vec::new(),
             #[cfg(all(test, feature = "gpui-test-support"))]
             external_payloads: Default::default(),
         }
@@ -243,9 +261,11 @@ impl SltermWorkspace {
             .panel
             .localized_root_notice(language)
             .map(|notice| SharedString::from(notice.to_owned()));
+        let delete_notice = self.file_tree.notice.clone().map(SharedString::from);
         let empty = self.file_tree_empty_state(language);
         let row_count = self.file_tree.panel.file_rows().len();
         let scroll_handle = self.file_tree.scroll.clone();
+        let search_options = self.file_tree.panel.search_options();
         let search_box = div()
             .id("file-tree-search")
             .debug_selector(|| "file-tree-search".to_owned())
@@ -257,6 +277,8 @@ impl SltermWorkspace {
             .border_color(theme.border)
             .bg(theme.muted)
             .overflow_hidden()
+            .flex()
+            .items_center()
             .child(
                 div().flex_1().min_w_0().h_full().child(
                     Input::new(&self.file_tree.search_input)
@@ -267,6 +289,64 @@ impl SltermWorkspace {
                         .prefix(Icon::new(IconName::Search).xsmall().text_color(muted))
                         .text_size(px(12.0)),
                 ),
+            )
+            // 搜索选项三钮(07 篇 M8.4 缝合点):匹配大小写/全字/正则。
+            .child(
+                Button::new("file-tree-search-case")
+                    .debug_selector(|| "file-tree-search-case".to_owned())
+                    .label("Aa")
+                    .ghost()
+                    .xsmall()
+                    .text_size(px(11.0))
+                    .tooltip(language.text(Message::FilesSearchMatchCase))
+                    .when(search_options.match_case, |button| {
+                        button.text_color(theme.primary)
+                    })
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        let mut options = this.file_tree.panel.search_options();
+                        options.match_case = !options.match_case;
+                        this.file_tree.panel.set_file_search_options(options);
+                        this.ensure_file_tree_pump(cx);
+                        cx.notify();
+                    })),
+            )
+            .child(
+                Button::new("file-tree-search-word")
+                    .debug_selector(|| "file-tree-search-word".to_owned())
+                    .label("ab")
+                    .ghost()
+                    .xsmall()
+                    .text_size(px(11.0))
+                    .tooltip(language.text(Message::FilesSearchWholeWord))
+                    .when(search_options.whole_word, |button| {
+                        button.text_color(theme.primary)
+                    })
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        let mut options = this.file_tree.panel.search_options();
+                        options.whole_word = !options.whole_word;
+                        this.file_tree.panel.set_file_search_options(options);
+                        this.ensure_file_tree_pump(cx);
+                        cx.notify();
+                    })),
+            )
+            .child(
+                Button::new("file-tree-search-regex")
+                    .debug_selector(|| "file-tree-search-regex".to_owned())
+                    .label(".*")
+                    .ghost()
+                    .xsmall()
+                    .text_size(px(11.0))
+                    .tooltip(language.text(Message::FilesSearchRegex))
+                    .when(search_options.regex, |button| {
+                        button.text_color(theme.primary)
+                    })
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        let mut options = this.file_tree.panel.search_options();
+                        options.regex = !options.regex;
+                        this.file_tree.panel.set_file_search_options(options);
+                        this.ensure_file_tree_pump(cx);
+                        cx.notify();
+                    })),
             );
 
         let list = uniform_list(
@@ -330,6 +410,9 @@ impl SltermWorkspace {
             )
             .when_some(root_notice, |panel, notice| {
                 panel.child(div().text_xs().text_color(theme.warning).child(notice))
+            })
+            .when_some(delete_notice, |panel, notice| {
+                panel.child(div().text_xs().text_color(theme.danger).child(notice))
             })
             .child(search_box)
             .when_some(search_status, |panel, status| {
@@ -397,6 +480,92 @@ impl SltermWorkspace {
                     }),
             )
             .into_any_element()
+    }
+
+    /// 文件树右键菜单(挂 workspace 根;全窗遮罩点击关闭)。
+    pub(super) fn render_file_tree_context_menu(
+        &mut self,
+        cx: &mut Context<'_, Self>,
+    ) -> Option<AnyElement> {
+        let menu = self.file_tree.context_menu.as_ref()?;
+        let position = menu.position;
+        let path = menu.path.clone();
+        let language = cx.global::<Settings>().language;
+        let theme = cx.theme();
+        let occluder = div().absolute().inset_0().occlude().on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|this, _, _, cx| {
+                this.file_tree.context_menu = None;
+                cx.stop_propagation();
+                cx.notify();
+            }),
+        );
+        let menu_element = div()
+            .id("file-tree-context-menu")
+            .debug_selector(|| "file-tree-context-menu".to_owned())
+            .absolute()
+            .left(position.x)
+            .top(position.y)
+            .w(px(160.0))
+            .p_1()
+            .rounded(px(6.0))
+            .border_1()
+            .border_color(theme.border)
+            .bg(theme.popover)
+            .shadow_lg()
+            .occlude()
+            .child(
+                Button::new("file-tree-context-delete")
+                    .debug_selector(|| "file-tree-context-delete".to_owned())
+                    .label(language.text(Message::FilesDelete))
+                    .ghost()
+                    .small()
+                    .w_full()
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.delete_file_tree_path(path.clone(), cx);
+                    })),
+            );
+        Some(
+            div()
+                .absolute()
+                .inset_0()
+                .child(occluder)
+                .child(menu_element)
+                .into_any_element(),
+        )
+    }
+
+    /// 右键删除:回收站(生产 `SHFileOperationW`;测试走注入记录)。
+    fn delete_file_tree_path(&mut self, path: PathBuf, cx: &mut Context<'_, Self>) {
+        self.file_tree.context_menu = None;
+        match self.send_path_to_recycle_bin(&path) {
+            Ok(()) => {
+                self.file_tree.notice = None;
+                if self.file_tree.panel.selected.as_ref() == Some(&path) {
+                    self.file_tree.panel.selected = None;
+                }
+                self.file_tree.panel.request_refresh();
+                self.sync_file_tree(cx);
+            }
+            Err(error) => {
+                let language = cx.global::<Settings>().language;
+                self.file_tree.notice =
+                    Some(language.format(Message::FilesDeleteFailed, &[("error", &error)]));
+            }
+        }
+        cx.notify();
+    }
+
+    fn send_path_to_recycle_bin(&mut self, path: &Path) -> Result<(), String> {
+        #[cfg(all(test, feature = "gpui-test-support"))]
+        {
+            self.file_tree.recycled.push(path.to_path_buf());
+            Ok(())
+        }
+        #[cfg(not(all(test, feature = "gpui-test-support")))]
+        {
+            crate::platform::file_operations::send_to_recycle_bin(path)
+        }
     }
 
     /// 空态:标题 + 原因。判据与旧壳一致——`..` 不算内容;读不到/目录真空/
@@ -483,6 +652,7 @@ impl SltermWorkspace {
         });
         let path = row.path.clone();
         let menu_path = path.clone();
+        let context_path = path.clone();
         let drag_path = path.clone();
         let drag_name = row.name.clone();
         let is_dir = row.is_dir;
@@ -625,10 +795,18 @@ impl SltermWorkspace {
                     })
                     .on_mouse_down(
                         MouseButton::Right,
-                        cx.listener(|_, _: &MouseDownEvent, _, cx| {
-                            // 右键菜单归 M8.5;本步只阻断默认行为,
-                            // 避免右键落进行单击/拖拽路径。
+                        cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                            // 合成 `..` 行不是真实条目,不提供删除入口。
+                            if !is_parent {
+                                this.file_tree.context_menu = Some(FileTreeContextMenu {
+                                    path: context_path.clone(),
+                                    position: event.position,
+                                });
+                                this.file_tree.notice = None;
+                            }
+                            // 阻断默认行为,避免右键落进行单击/拖拽路径。
                             cx.stop_propagation();
+                            cx.notify();
                         }),
                     ),
             )
@@ -665,6 +843,24 @@ impl SltermWorkspace {
     #[cfg(all(test, feature = "gpui-test-support"))]
     pub(crate) fn file_tree_search_query_for_test(&self) -> String {
         self.file_tree.panel.search.clone()
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn file_tree_search_options_for_test(&self) -> crate::side_panel::FileSearchOptions {
+        self.file_tree.panel.search_options()
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn file_tree_context_menu_for_test(&self) -> Option<PathBuf> {
+        self.file_tree
+            .context_menu
+            .as_ref()
+            .map(|menu| menu.path.clone())
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn file_tree_recycled_for_test(&self) -> Vec<PathBuf> {
+        self.file_tree.recycled.clone()
     }
 
     #[cfg(all(test, feature = "gpui-test-support"))]

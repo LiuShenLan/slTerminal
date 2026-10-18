@@ -7,6 +7,10 @@
 - **单子进程执行体**(D07-1):gitignore 过滤索引与 git 状态快照都走
   `crate::git::command`;每命令 `--no-optional-locks` 不可谈判。目录枚举不
   spawn git,仓库门控用 `gitignore::git_repository_root` 的文件系统探测。
+- **状态解析单源**:`vcs.rs` 消费 `crate::git::status`/`parse_status`,不在面板侧
+  维护第二份 porcelain 解析。
+- **搜索选项**:匹配大小写/全字/正则三钮由 `FileSearchOptions` 承载,改选项经
+  `set_file_search_options` 重排队;渲染层只读 `search_options()`。
 - **WSL/SVN 整面不迁**:`guest_path`/`followed_wsl`/SVN 状态解析/远程过滤
   索引均已裁掉;不要以「兼容」名义回填。
 - **目录内容不做定时重扫**(上游 2026-08-21 裁定):触发点只有 cwd/根变化、

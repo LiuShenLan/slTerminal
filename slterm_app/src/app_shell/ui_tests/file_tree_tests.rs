@@ -388,3 +388,87 @@ fn dragging_a_tree_row_out_of_the_window_promotes_an_os_file_drag(cx: &mut TestA
         "OS 拖出必须为平台准备真实文件载荷"
     );
 }
+
+// ── M8.5 搜索选项三钮 + 右键删除菜单 ──
+
+/// 三钮切换只改模型选项,并触发一次结果重排(按钮有真实矩形)。
+#[gpui::test]
+fn search_option_buttons_toggle_case_word_and_regex(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    let directory = fixture_directory();
+    set_pane_cwd(cx, &workspace, directory.path());
+    open_explorer(&mut window);
+    wait_file_tree(cx, &workspace, &mut window, |ws| {
+        !ws.file_tree_row_names_for_test().is_empty()
+    });
+    draw_frame(&mut window);
+
+    click_selector(&mut window, "file-tree-search-case");
+    draw_frame(&mut window);
+    assert!(
+        workspace
+            .read_with(cx, |ws, _| ws.file_tree_search_options_for_test())
+            .match_case,
+        "大小写钮必须点亮"
+    );
+    click_selector(&mut window, "file-tree-search-word");
+    draw_frame(&mut window);
+    assert!(
+        workspace
+            .read_with(cx, |ws, _| ws.file_tree_search_options_for_test())
+            .whole_word,
+        "全字钮必须点亮"
+    );
+    click_selector(&mut window, "file-tree-search-regex");
+    draw_frame(&mut window);
+    let options = workspace.read_with(cx, |ws, _| ws.file_tree_search_options_for_test());
+    assert!(options.match_case && options.whole_word && options.regex);
+}
+
+/// 右键行 → 菜单挂在 workspace 根;删除项经回收站注入通道执行并关菜单。
+#[gpui::test]
+fn context_menu_delete_routes_through_the_recycle_bin(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    let directory = fixture_directory();
+    set_pane_cwd(cx, &workspace, directory.path());
+    open_explorer(&mut window);
+    wait_file_tree(cx, &workspace, &mut window, |ws| {
+        ws.file_tree_row_names_for_test()
+            .iter()
+            .any(|name| name == "main.rs")
+    });
+    draw_frame(&mut window);
+    let index = row_index(cx, &workspace, "main.rs");
+    let center = window
+        .debug_bounds(row_selector(index))
+        .expect("行必须绘制")
+        .center();
+    window.simulate_event(MouseDownEvent {
+        position: center,
+        button: MouseButton::Right,
+        modifiers: Modifiers::default(),
+        click_count: 1,
+        first_mouse: false,
+    });
+    window.run_until_parked();
+    draw_frame(&mut window);
+
+    let expected = directory.path().join("main.rs");
+    assert_eq!(
+        workspace.read_with(cx, |ws, _| ws.file_tree_context_menu_for_test()),
+        Some(expected.clone()),
+        "右键必须打开该行菜单"
+    );
+    click_selector(&mut window, "file-tree-context-delete");
+    window.run_until_parked();
+    assert_eq!(
+        workspace.read_with(cx, |ws, _| ws.file_tree_recycled_for_test()),
+        vec![expected],
+        "删除必须走回收站单点"
+    );
+    assert_eq!(
+        workspace.read_with(cx, |ws, _| ws.file_tree_context_menu_for_test()),
+        None,
+        "执行后菜单关闭"
+    );
+}

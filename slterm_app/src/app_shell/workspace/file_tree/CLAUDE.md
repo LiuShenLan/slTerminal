@@ -17,3 +17,8 @@
   提供输入/校验/提交;若后续要补全,先补设计合同再落 UI。
 - **文件图标**:字形映射归 `side_panel::icons`;色归主题 token,禁止在本目录
   出现颜色字面量。
+- **右键菜单**(M8.5):`FileTreeContextMenu` 挂 workspace 根渲染(不受抽屉裁剪),
+  遮罩点击关闭;删除动作单点 = `platform::file_operations::send_to_recycle_bin`,
+  测试构建走注入记录。菜单只对真实条目开放,合成 `..` 行无删除入口。
+- **搜索选项三钮**:只改 `SidePanel::search_options` 并重排结果;不另存 UI 侧
+  影子状态。

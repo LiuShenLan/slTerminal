@@ -23,6 +23,8 @@ mod block_structure;
 mod chrome;
 mod document;
 mod edit_history;
+/// 07 篇 M8.5:git gutter(行标)。
+pub(crate) mod gutter;
 #[allow(dead_code)] // 消费点 = 预览图片解码 LRU(虚拟行资产纪律)。
 mod image_cache;
 mod images;
@@ -66,18 +68,20 @@ use gpui::{
 use gpui_component::ActiveTheme as _;
 use gpui_component::input::{
     self, Backspace, Copy, Enter, Escape, IndentInline, Input, InputEvent, InputState, MoveDown,
-    MoveLeft, MoveRight, MoveToEnd, MoveToStart, MoveUp, OutdentInline, SelectAll,
+    MoveLeft, MoveRight, MoveToEnd, MoveToStart, MoveUp, OutdentInline, Position, SelectAll,
 };
 use gpui_component::text::{MarkdownExtensions, TextViewState};
 pub(crate) use gpui_component::{h_flex, v_flex};
 
 use crate::app_shell::config::Settings;
+use crate::app_shell::editor_theme::EditorThemeTokens;
 use crate::git;
 use crate::i18n::Message;
 use crate::text_document::{MAX_BYTES, SaveError, TextSnapshot};
 use activity::EditCursor;
 use document::Document;
 use edit_history::EditHistory;
+use gutter::{GitGutter, GutterMark};
 use image_cache::DocumentImageCache;
 use live_edit::LiveEdit;
 use outline::Outline;
@@ -92,6 +96,14 @@ gpui::actions!(
         ItalicSelection
     ]
 );
+
+/// 编辑器对外事件(外层 code tab 转发):
+/// gutter 点击 = 行标 → 差异对照/冲突面的动作入口。
+#[derive(Clone, Debug)]
+pub enum TextFileEvent {
+    /// 行标点击:行号(1 基)与标记值集。
+    GutterClicked { line: u32, mark: GutterMark },
+}
 
 /// 文件编辑上下文键绑定(`gpui_component::init` 之后调用一次)。
 ///
@@ -115,7 +127,7 @@ pub(super) fn init(cx: &mut App) {
 }
 
 /// 快照来源。gitshow 与本地文件共用视图形态,只有数据源与只读意图不同。
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TextSource {
     /// 工作区/磁盘当前字节(有界前缀)。
     Local,
@@ -141,6 +153,19 @@ enum EditorNotice {
     SaveChanged,
     SaveReadOnly,
     PreviewLimited,
+}
+
+/// gutter 行标 → 语义槽颜色(渲染代码零裸色值)。
+fn gutter_color(tokens: &EditorThemeTokens, mark: GutterMark) -> gpui::Rgba {
+    let color = match mark {
+        GutterMark::Untracked => tokens.gutter_untracked,
+        GutterMark::Added => tokens.gutter_added,
+        GutterMark::Modified => tokens.gutter_modified,
+        GutterMark::Deleted => tokens.gutter_deleted,
+        GutterMark::Renamed => tokens.gutter_renamed,
+        GutterMark::Conflicted => tokens.gutter_conflicted,
+    };
+    crate::gpui_terminal::colors::from_rgb8(color)
 }
 
 /// 文件标题:文件名优先,取不到时退回完整路径。
@@ -206,9 +231,13 @@ pub struct TextFileView {
     preview_task: Option<Task<()>>,
     /// 程序化替换期间抑制输入订阅的历史记录(替换路径显式记录一次)。
     suppress_history: bool,
+    /// git 行标(打开/保存/重载三触发点同步;只读文档恒空)。
+    gutter: GitGutter,
     focus: FocusHandle,
     _input_subscription: Subscription,
 }
+
+impl gpui::EventEmitter<TextFileEvent> for TextFileView {}
 
 impl TextFileView {
     /// 焦点句柄:渲染态优先活跃输入,其次阅读器根,最后源码输入。
@@ -346,6 +375,7 @@ impl TextFileView {
             content_revision: 0,
             preview_task: None,
             suppress_history: false,
+            gutter: GitGutter::default(),
             focus: cx.focus_handle(),
             _input_subscription: subscription,
         };
@@ -430,6 +460,12 @@ impl TextFileView {
         self.render_active
     }
 
+    /// 测试专用:gutter 行标集(按行升序)。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub fn gutter_marks_for_test(&self) -> Vec<(u32, GutterMark)> {
+        self.gutter.marks().to_vec()
+    }
+
     /// 测试专用:撤销栈组数(撤销统一断言端;行动作必须让它下降)。
     #[cfg(all(test, feature = "gpui-test-support"))]
     pub fn history_undo_depth_for_test(&self) -> usize {
@@ -508,6 +544,8 @@ impl TextFileView {
                 // 保存是撤销组边界:跨保存的键入不合并为一项。
                 self.history.barrier();
                 self.notice = None;
+                // 保存落盘 = gutter 三触发点之一:后台重读状态,不阻塞保存回执。
+                self.spawn_gutter_sync(cx);
                 !self.dirty
             }
             Err(error) => {
@@ -521,6 +559,26 @@ impl TextFileView {
         };
         cx.notify();
         success
+    }
+
+    /// 后台重读 gutter 快照(保存落盘/显式重载后);只读文档不挂行标。
+    fn spawn_gutter_sync(&mut self, cx: &mut Context<'_, Self>) {
+        if self.source == TextSource::GitHead || self.fixed_read_only {
+            return;
+        }
+        let path = self.path.clone();
+        let task = cx
+            .background_executor()
+            .spawn(async move { gutter::read_for_path(&path) });
+        cx.spawn(async move |this, cx| {
+            let next = task.await;
+            let _ = this.update(cx, |view, cx| {
+                if view.gutter.sync(next) {
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     fn snapshot(&self) -> Option<&TextSnapshot> {
@@ -556,12 +614,12 @@ impl TextFileView {
 
     fn apply_loaded(
         &mut self,
-        loaded: Result<(LoadedDocument, Option<Outline>), String>,
+        loaded: Result<(LoadedDocument, Option<Outline>, GitGutter), String>,
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
         match loaded {
-            Ok((LoadedDocument::Local(document), outline)) => {
+            Ok((LoadedDocument::Local(document), outline, gutter)) => {
                 let text = document.text.clone();
                 self.input.update(cx, |input, cx| {
                     input.set_value(text.clone(), window, cx);
@@ -569,11 +627,12 @@ impl TextFileView {
                 self.saved_text = Some(text);
                 self.document = Some(document);
                 self.head = None;
+                self.gutter = gutter;
                 if let Some(outline) = outline {
                     self.apply_outline(outline, cx);
                 }
             }
-            Ok((LoadedDocument::Head(snapshot), _)) => {
+            Ok((LoadedDocument::Head(snapshot), _, _)) => {
                 let text = snapshot.text.clone();
                 self.input.update(cx, |input, cx| {
                     input.set_value(text.clone(), window, cx);
@@ -581,6 +640,8 @@ impl TextFileView {
                 self.saved_text = Some(text);
                 self.head = Some(snapshot);
                 self.document = None;
+                // 只读文档不挂 gutter:无编辑域即无行标意义。
+                self.gutter = GitGutter::default();
             }
             Err(error) => self.notice = Some(EditorNotice::ReadFailed(error)),
         }
@@ -698,6 +759,84 @@ impl TextFileView {
         }
     }
 
+    /// git gutter 行条:只按可见行构造元素,色取 `EditorThemeTokens`。
+    ///
+    /// 滚动同步读输入实体的上一帧布局(`visible_row_range`/`scroll_offset`/
+    /// `line_height`);组件库内部行号留白 8px 与源码态 `.py(8)` 同源。
+    fn render_git_gutter(&self, cx: &mut Context<'_, Self>) -> gpui::AnyElement {
+        if self.gutter.marks().is_empty() {
+            return div().into_any_element();
+        }
+        let tokens = cx.global::<Settings>().editor_theme;
+        let (line_height, offset_y, visible) = {
+            let input = self.input.read(cx);
+            (
+                input
+                    .line_height()
+                    .map(f32::from)
+                    .unwrap_or(cx.theme().mono_font_size.as_f32() * 1.55),
+                f32::from(input.scroll_offset().y),
+                input.visible_row_range(),
+            )
+        };
+        let marks: Vec<(u32, GutterMark)> = self
+            .gutter
+            .marks()
+            .iter()
+            .copied()
+            .filter(|(line, _)| {
+                visible
+                    .as_ref()
+                    .is_none_or(|range| range.contains(&((*line as usize).saturating_sub(1))))
+            })
+            .collect();
+        let mut column = div()
+            .id("file-gutter")
+            .debug_selector(|| "file-gutter".to_owned())
+            .w(px(6.0))
+            .h_full()
+            .flex_shrink_0()
+            .relative()
+            .overflow_hidden();
+        for (line, mark) in marks {
+            let top = offset_y + 8.0 + (line.saturating_sub(1) as f32) * line_height;
+            let color = gutter_color(&tokens, mark);
+            column = column.child(
+                div()
+                    .id(SharedString::from(format!("gutter-mark-{line}")))
+                    .debug_selector(move || format!("gutter-mark-{line}"))
+                    .absolute()
+                    .left_0()
+                    .top(px(top))
+                    .w(px(4.0))
+                    .h(px(line_height))
+                    .bg(color)
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _: &MouseDownEvent, window, cx| {
+                            this.gutter_click(line, mark, window, cx);
+                        }),
+                    ),
+            );
+        }
+        column.into_any_element()
+    }
+
+    /// 行标点击:光标跳到该行并向外层 code tab 发事件(打开差异对照面)。
+    fn gutter_click(
+        &mut self,
+        line: u32,
+        mark: GutterMark,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.input.update(cx, |input, cx| {
+            input.set_cursor_position(Position::new(line.saturating_sub(1), 0), window, cx);
+        });
+        cx.emit(TextFileEvent::GutterClicked { line, mark });
+        cx.notify();
+    }
+
     /// 状态行文案:载入/保存失败优先,其次截断/非法编码/显式只读/预览上限。
     fn notice(&self, cx: &App) -> Option<String> {
         let language = cx.global::<Settings>().language;
@@ -744,9 +883,12 @@ impl TextFileView {
 impl Render for TextFileView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
         self.restore_edit_cursor(window, cx);
-        let background = cx.theme().background;
+        // 编辑器语义槽单源:正文底色/次要文字取自 `EditorThemeTokens`,
+        // 不直接用组件库调色(07 篇改造节 8 的消费纪律)。
+        let tokens = cx.global::<Settings>().editor_theme;
+        let background = crate::gpui_terminal::colors::from_rgb8(tokens.background);
         let border = cx.theme().border;
-        let muted = cx.theme().muted_foreground;
+        let muted = crate::gpui_terminal::colors::from_rgb8(tokens.muted);
         let mono_font_family = cx.theme().mono_font_family.clone();
         let mono_font_size = cx.theme().mono_font_size;
         let editable = !self.loading && !self.is_read_only();
@@ -773,21 +915,26 @@ impl Render for TextFileView {
                 .flex_1()
                 .min_w_0()
                 .h_full()
+                .flex()
+                .child(self.render_git_gutter(cx))
                 .child(
-                    Input::new(&self.input)
-                        .h_full()
-                        // 只读/载入中禁用输入;可编辑性最终由 TextSnapshot
-                        // 的 read_only 合同与保存链兜底。
-                        .disabled(!editable)
-                        .appearance(false)
-                        .bordered(false)
-                        .focus_bordered(false)
-                        .rounded(px(0.0))
-                        .font_family(mono_font_family)
-                        .text_size(mono_font_size)
-                        .line_height(relative(1.55))
-                        .px(px(10.0))
-                        .py(px(8.0)),
+                    div().flex_1().min_w_0().h_full().child(
+                        Input::new(&self.input)
+                            .h_full()
+                            // 只读/载入中禁用输入;可编辑性最终由 TextSnapshot
+                            // 的 read_only 合同与保存链兜底。
+                            .disabled(!editable)
+                            .appearance(false)
+                            .bordered(false)
+                            .focus_bordered(false)
+                            .rounded(px(0.0))
+                            .font_family(mono_font_family)
+                            .text_size(mono_font_size)
+                            .text_color(crate::gpui_terminal::colors::from_rgb8(tokens.foreground))
+                            .line_height(relative(1.55))
+                            .px(px(10.0))
+                            .py(px(8.0)),
+                    ),
                 )
                 .into_any_element()
         };
@@ -1068,12 +1215,14 @@ fn load_document(
     path: &Path,
     source: TextSource,
     markdown: bool,
-) -> Result<(LoadedDocument, Option<Outline>), String> {
+) -> Result<(LoadedDocument, Option<Outline>, GitGutter), String> {
     match source {
         TextSource::Local => Document::load(path)
             .map(|document| {
                 let outline = markdown.then(|| Outline::prepare(&document.text, path.parent()));
-                (LoadedDocument::Local(document), outline)
+                // gutter 与解码同批后台完成,不留 UI 线程 git 子进程。
+                let gutter = gutter::read_for_path(path);
+                (LoadedDocument::Local(document), outline, gutter)
             })
             .map_err(|error| error.to_string()),
         TextSource::GitHead => {
@@ -1083,6 +1232,7 @@ fn load_document(
             Ok((
                 LoadedDocument::Head(TextSnapshot::decode_prefix(bytes, true, truncated)),
                 None,
+                GitGutter::default(),
             ))
         }
     }

@@ -515,6 +515,20 @@ impl SidePanel {
         );
     }
 
+    /// 当前搜索选项(三钮渲染的读端)。
+    pub(crate) fn search_options(&self) -> FileSearchOptions {
+        self.search_options
+    }
+
+    /// 替换搜索选项(匹配大小写/全字/正则);变化才重排结果。
+    pub(crate) fn set_file_search_options(&mut self, options: FileSearchOptions) {
+        if self.search_options == options {
+            return;
+        }
+        self.search_options = options;
+        self.queue_file_search();
+    }
+
     /// 替换过滤词。输入组件的 caret/IME 归 gpui-component,模型只留净化文本。
     pub(crate) fn set_file_search_query(&mut self, mut query: String) {
         query.retain(|character| !matches!(character, '\r' | '\n'));

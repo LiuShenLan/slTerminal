@@ -26,7 +26,8 @@ use gpui::{
 use gpui_component::ActiveTheme as _;
 use slterm_split::{DIVIDER_GAP, PaneId, Rect, SplitDirection, SplitNav, SplitTree, TabId};
 
-use super::{SltermWorkspace, WorkspaceTab, to_split_rect};
+use super::render::to_split_rect;
+use super::{SltermWorkspace, WorkspaceTab};
 
 /// 拖拽启动阈值(逻辑像素):按住不动/轻微抖动是点击,越过才进入拖拽。
 pub(super) const TAB_DRAG_THRESHOLD: f32 = 4.0;

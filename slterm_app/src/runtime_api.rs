@@ -14,7 +14,7 @@ mod agent_api;
 // CLI 客户端(04 篇 M7.4):请求-响应人格;与外部客户端走同一条序列化协议。
 mod cli;
 mod command;
-mod git;
+pub(crate) mod git;
 mod lifecycle;
 mod orchestrate;
 mod run_wait;
