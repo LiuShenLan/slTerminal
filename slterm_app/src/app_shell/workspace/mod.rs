@@ -119,8 +119,7 @@ pub struct TabMeta {
 
 /// tab + 展示态元数据同槽存放(单 Vec 消下同标耦合)。
 pub struct TabEntry {
-    /// 稳定身份:跨排序/活跃切换不变;消费面 = 侧栏/dock(M5.4)。
-    #[allow(dead_code)]
+    /// 稳定身份:跨排序/活跃切换不变;消费面 = 侧栏/dock/节点矩形缓存键。
     pub id: TabId,
     pub tab: WorkspaceTab,
     pub meta: TabMeta,
