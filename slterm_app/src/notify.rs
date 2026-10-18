@@ -466,12 +466,15 @@ fn foreground() -> bool {
     FOREGROUND.load(Ordering::Relaxed)
 }
 
-/// 任务栏闪烁的 HWND 源(单窗语义;M10.4 的窗口 facade 接管后可改为查询)。
+/// 任务栏闪烁/进度的 HWND 源(单窗语义;M10.4 的窗口 facade 接管后可改为
+/// 查询)。
 pub(crate) fn set_window_hwnd(hwnd: isize) {
     WINDOW_HWND.store(hwnd, Ordering::Relaxed);
 }
 
-fn window_hwnd() -> Option<isize> {
+/// 任务栏面(闪烁/进度)的进程级 HWND 读取点;M10.4 facade 落地后改经
+/// `windowing::focus::window_hwnd()` 查询。
+pub(crate) fn window_hwnd() -> Option<isize> {
     match WINDOW_HWND.load(Ordering::Relaxed) {
         0 => None,
         hwnd => Some(hwnd),

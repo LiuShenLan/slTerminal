@@ -106,6 +106,9 @@ pub enum TerminalViewEvent {
     CommandStarted,
     /// OSC 133;D:命令结束。宿主收尾 AgentActivity 并发布快照。
     CommandFinished,
+    /// OSC 9;4 任务进度(五态已映射,规范外码已归清除)。宿主按「活跃 tab
+    /// 的聚焦 pane」路由到任务栏(09 篇 M10.2)。
+    ProgressChanged(crate::taskbar::TaskProgress),
 }
 
 /// 会话种类。M3 只剩本地 shell:上游 `Ssh` 变体消亡(13 篇,06 篇按理想
@@ -463,10 +466,24 @@ impl TerminalView {
             TermEvent::Notify(_) => {}
             // 视觉闪烁与声音归 09 篇。
             TermEvent::Bell => {}
-            TermEvent::Progress { .. } => {}
+            // OSC 9;4:程序自报任务进度。解析层不收窄状态码,宽容映射收在
+            // 消费层(`taskbar::TaskProgress::from_osc`):规范外码归清除。
+            // 视图不持有进度镜像——去重与清除状态机都在工作区;这里再存
+            // 一份,「清除后程序重发同值」会被错误去重。
+            TermEvent::Progress { state, value } => {
+                cx.emit(TerminalViewEvent::ProgressChanged(
+                    crate::taskbar::TaskProgress::from_osc(state, value),
+                ));
+            }
             TermEvent::InlineImage { .. } => {}
             TermEvent::UserVar { .. } => {}
         }
+    }
+
+    /// 测试专用:把一条终端事件喂进事件白集(生产入口 = 会话泵)。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn feed_event_for_test(&mut self, event: TermEvent, cx: &mut Context<'_, Self>) {
+        self.process_event(event, cx);
     }
 
     /// `Exited` 只对宿主发一次;重复的退出信号(ChildExit 之后必然跟 Exit)

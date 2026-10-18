@@ -197,6 +197,8 @@ pub struct SltermWorkspace {
     window_commands: Vec<title_bar::TitleBarCommand>,
     /// 每 pane 的 agent 宿主(AgentActivity/AnswerInbox 归属表)。
     agent_hub: AgentHub,
+    /// 任务栏进度的进程级单显示路由(09 篇 M10.2):只认活跃 tab 聚焦 pane。
+    taskbar: crate::taskbar::TaskbarState,
     /// 单窗口会话写盘状态机(latest/saved 双快照、无变化跳过、提权隔离)。
     session_persistence: SessionPersistence,
     /// 04 篇 Runtime 状态权威:渲染前置投影入账,hub 判等去重。
@@ -308,6 +310,7 @@ impl SltermWorkspace {
             #[cfg(all(test, feature = "gpui-test-support"))]
             window_commands: Vec::new(),
             agent_hub: AgentHub::new(),
+            taskbar: crate::taskbar::TaskbarState::new(),
             session_persistence: Self::new_session_persistence(),
             runtime_hub,
             file_observations: HashMap::new(),
@@ -868,9 +871,46 @@ impl SltermWorkspace {
             TerminalViewEvent::CommandFinished => {
                 if let Some(pane_id) = self.locate_pane(view) {
                     self.agent_hub.command_finished(pane_id);
+                    // 09 篇 M10.2:命令回到提示符,进度主人已经收尾;程序忘发
+                    // `9;4;0` 也不能把进度条留在任务栏上。
+                    self.clear_taskbar_progress(pane_id);
                     self.publish_runtime_snapshot(cx);
                 }
             }
+            // 09 篇 M10.2:任务栏是窗口级的,只反映活跃 tab 的聚焦 pane。
+            // 后台 pane 的构建进度投到同一条按钮上只会互相覆盖,读数还不如
+            // 没有;事件本身照常触发重绘。
+            TerminalViewEvent::ProgressChanged(progress) => {
+                if let Some(pane_id) = self.locate_pane(view)
+                    && self.is_active_focused_pane(pane_id)
+                {
+                    self.show_taskbar_progress(pane_id, *progress);
+                }
+                cx.notify();
+            }
+        }
+    }
+
+    /// 活跃 tab 的聚焦 pane 判定(任务栏进度的路由门,09 篇 M10.2)。
+    fn is_active_focused_pane(&self, pane_id: PaneId) -> bool {
+        self.tabs.get(self.active).is_some_and(|entry| {
+            matches!(&entry.tab, WorkspaceTab::Terminal { focused, .. } if *focused == pane_id)
+        })
+    }
+
+    /// 投递一次任务栏进度。HWND 源 = M10.1 的 `set_window_hwnd` 发布点;
+    /// M10.4 窗口 facade 落地后改查 `window_hwnd()`。
+    fn show_taskbar_progress(&mut self, pane_id: PaneId, progress: crate::taskbar::TaskProgress) {
+        if let Some(progress) = self.taskbar.observe(pane_id, progress) {
+            crate::taskbar::apply(crate::notify::window_hwnd().unwrap_or(0), progress);
+        }
+    }
+
+    /// 任务栏进度的清除边:只有当前显示的来源 pane 自己收尾才恢复常态,
+    /// 别的 pane 的收尾不打断正在显示的进度(09 篇 M10.2)。
+    fn clear_taskbar_progress(&mut self, pane_id: PaneId) {
+        if let Some(progress) = self.taskbar.clear_for(pane_id) {
+            crate::taskbar::apply(crate::notify::window_hwnd().unwrap_or(0), progress);
         }
     }
 
@@ -966,6 +1006,9 @@ impl SltermWorkspace {
 
     /// 索引与宿主表的统一摘除点(注册表写入点 2/2 的对偶)。
     fn forget_pane(&mut self, pane_id: PaneId) {
+        // 09 篇 M10.2:pane 关闭是任务栏进度的清除边之一(关 pane/关 tab/
+        // PTY 退出/恢复失败同路);只清自己名下正在显示的条。
+        self.clear_taskbar_progress(pane_id);
         terminal_registry::remove(pane_id);
         self.agent_hub.remove(pane_id);
         self.pane_bounds.borrow_mut().remove(&pane_id);
@@ -1182,6 +1225,21 @@ impl SltermWorkspace {
         self.tab_panes(self.active)
             .next()
             .map(|pane| pane.view.clone())
+    }
+
+    /// 测试专用:按 pane id 取视图实体(终端事件路由的喂入口)。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn pane_view(&self, pane_id: PaneId) -> Option<Entity<TerminalView>> {
+        self.tabs.iter().find_map(|entry| match &entry.tab {
+            WorkspaceTab::Terminal { panes, .. } => panes
+                .iter()
+                .find(|pane| pane.id == pane_id)
+                .map(|pane| pane.view.clone()),
+            WorkspaceTab::Settings { .. }
+            | WorkspaceTab::Document { .. }
+            | WorkspaceTab::Code { .. }
+            | WorkspaceTab::Image { .. } => None,
+        })
     }
 
     /// 04 篇 M7.2:渲染前把 Workspace 投影入账。hub 只发布语义变化,

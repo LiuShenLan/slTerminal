@@ -113,6 +113,9 @@ pub(crate) mod settings_store;
 // 补全/建议计算核心(08 篇 M9.1):ghost 余量与 popup 多候选同源。
 #[allow(dead_code)] // 消费点归 M9.5 呈现接线。
 pub(crate) mod suggest;
+// 任务栏进度(09 篇 M10.2):OSC 9;4 五态宽容映射 + 进程级单显示路由;
+// `ITaskbarList3` 投递在 Windows 分支自管 COM,失败一律静默。
+pub(crate) mod taskbar;
 // 终端数学覆盖层(08 篇 M9.4):有界扫描、LineProjection、CoverageMask 与
 // 后端无关绘制计划。终端仍是真值——不改 cell/滚动/选区/复制语义。
 #[allow(dead_code)] // 消费点归 M9.5(GPUI paint pass)。

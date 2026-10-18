@@ -885,6 +885,8 @@ impl SltermWorkspace {
             match event.kind {
                 AiHookKind::SessionEnd => {
                     if let Some(pane) = event.pane {
+                        // 09 篇 M10.2:agent 退出即清任务栏进度,不留残条。
+                        self.clear_taskbar_progress(PaneId(pane));
                         self.runtime_hub.close_agents_for_pane(
                             SINGLE_WINDOW_ID,
                             pane,
@@ -893,6 +895,10 @@ impl SltermWorkspace {
                     }
                 }
                 AiHookKind::TurnDone => {
+                    if let Some(pane) = event.pane {
+                        // 09 篇 M10.2:回合结束,进度条属于刚收尾的这一回合。
+                        self.clear_taskbar_progress(PaneId(pane));
+                    }
                     self.runtime_hub.complete_delegations_for_turn(event);
                     let Some(pane) = event.pane else { continue };
                     let Some(identity) = self

@@ -146,6 +146,8 @@ windows = { version = "=0.61.3", features = [
 windows-sys = { version = "0.59", features = [
     # AUMID 注册(RegSetKeyValueW,09 篇 M10.1)。
     "Win32_System_Registry",
+    # 任务栏进度(ITaskbarList3 的 CoInitializeEx/CoCreateInstance,09 篇 M10.2)。
+    "Win32_System_Com",
     "Win32_Foundation",
     # MonitorFromPoint(开窗前 DPI 预取)。
     "Win32_Graphics_Gdi",
