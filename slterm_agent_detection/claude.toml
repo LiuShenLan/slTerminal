@@ -19,7 +19,8 @@ any = [
 # 真正可中断（即回合未结束）时打印它，回合一结束整行消失。
 #
 # 2026-08-22：这条规则此前要求「盲文点阵 spinner 行」AND「esc to interrupt」
-# ——Gate 是 AND 语义（ai_agents.rs:528），而 Claude Code 的动画符号是
+# ——Gate 是 AND 语义（CompiledGate::matches 的 contains 全真才命中），
+# 而 Claude Code 的动画符号是
 # ·✢✳✶✻✽ 而非盲文点阵，第一个条件恒假，整条规则从未命中过。于是运行中的
 # 屏幕只剩 prompt_idle 命中，连续两拍把 Working 降级成 Done，侧栏在 Claude
 # 正干活时显示「完成」蓝点。动画符号本身不能当证据：回合结束的总结行
