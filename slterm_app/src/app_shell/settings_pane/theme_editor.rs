@@ -676,7 +676,7 @@ impl SettingsPane {
     fn apply_saved_theme(
         &mut self,
         document: &ThemeDocument,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> bool {
         let revision = match self
@@ -704,17 +704,10 @@ impl SettingsPane {
                 return false;
             }
         };
-        if let Err(error) = self.try_persist_checked(&updates, &revision, cx) {
-            if let Some(editor) = self.theme_editor.as_mut() {
-                editor.error = Some(error.to_string());
-            }
-            self.report_failure(&error, window, cx);
-            return false;
-        }
-        // 应用成功:关闭编辑器;运行时已由 try_persist_checked 重载热应用。
-        self.theme_editor = None;
+        // A2:条件写盘入队后台执行;成功后由 `finish_persist` 关闭编辑器并
+        // 应用回读(语言变化时刷新显示项)。
+        self.try_persist_checked(&updates, &revision, true, cx);
         self.status = None;
-        self.refresh_localized_controls(window, cx);
         cx.notify();
         true
     }

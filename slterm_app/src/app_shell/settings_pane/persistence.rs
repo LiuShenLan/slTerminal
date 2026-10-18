@@ -1,15 +1,19 @@
 //! 设置页写通道与控件同步:统一持久化入口、失败回滚、失败可感知。
 //!
-//! 三纪律落点:预览方法只改内存;提交方法经 `settings_store` 写盘并在
-//! 失败时读回 `persisted` 快照复位控件;错误记录 stderr + 状态条 + 窗口
-//! 通知。页面渲染只调这些入口,不自行写盘。
+//! A2 相位机:所有设置类写盘(普通保存/条件保存/开机启动/恢复默认/hook
+//! 授权)都在后台执行器上运行;前台只做三件事——入队、控件即时回显、
+//! 消费结果(Committed 应用回读 / Failed 按 `persisted` 快照回滚)。高频
+//! 提交在队尾按 key 合并,后台任务串行执行,不占 GPUI 前台线程。
+//!
+//! 三纪律落点:预览方法只改内存;提交方法只入队;失败时统一回滚 + toast。
 
 use std::io;
+use std::path::PathBuf;
 
 use gpui::{App, Context, PathPromptOptions, SharedString, Window};
 use gpui_component::WindowExt as _;
 use slterm_settings::json::Value;
-use slterm_settings::{RuntimeSettings, normalize_scroll_speed};
+use slterm_settings::{AgentHook, RuntimeSettings, normalize_scroll_speed};
 
 use crate::app_shell::config::Settings;
 use crate::i18n::Message;
@@ -18,57 +22,338 @@ use super::localization::{
     UiLanguage, localized_input_placeholder, localized_select_labels, resolve_language,
 };
 use super::navigation::{matching_sections, section_ids};
-use super::{SettingsPane, SettingsPaneEvent, SettingsStatus};
+use super::{SettingsPane, SettingsPaneEvent, SettingsStatus, SettingsTarget, agents};
+
+/// 后台写任务(A2)。普通保存可在队尾合并;条件保存与系统副作用不合并。
+pub(super) enum PersistJob {
+    Save {
+        updates: Vec<(&'static str, Value)>,
+        /// `Some` = 条件保存(主题应用):仅当磁盘字节仍等于该快照才写。
+        expected: Option<crate::settings_store::SettingsRevision>,
+        /// 成功后关闭主题编辑器(仅主题应用路径)。
+        close_theme_editor: bool,
+    },
+    LaunchAtLogin {
+        enabled: bool,
+    },
+    Reset,
+    AgentHook {
+        hook: AgentHook,
+        enabled: bool,
+        /// C5:用户已在设置页确认 SEC-12 命中的 statusLine 原文。
+        confirmed: bool,
+    },
+}
+
+/// hooks 安装失败;C5 携带待确认原文供设置页展示。
+struct HookFailure {
+    message: String,
+    suspicious_statusline: Option<String>,
+}
+
+/// 任务结果(后台线程产出,前台消费)。
+struct PersistOutcome {
+    job: PersistJob,
+    /// 设置写结果;`Reset` 携带备份路径。
+    write: io::Result<Option<PathBuf>>,
+    /// 写成功后的回读(含 corrupted 标记)。
+    load: Option<io::Result<crate::settings_store::LoadResult>>,
+    /// 开机启动的真实 .lnk 回读(仅默认目标)。
+    launch_at_login: Option<bool>,
+    /// hooks 安装权威的应用结果(仅 `AgentHook` 任务)。
+    hook_apply: Option<Result<(), HookFailure>>,
+}
+
+/// 后台执行体:纯阻塞 IO,不触碰任何 GPUI 状态。
+fn execute_job(
+    job: PersistJob,
+    target: SettingsTarget,
+    hooks_target: agents::HooksTarget,
+) -> PersistOutcome {
+    match &job {
+        PersistJob::Save {
+            updates, expected, ..
+        } => {
+            let write = match expected {
+                Some(expected) => target.save_checked(expected, updates),
+                None => target.save(updates),
+            }
+            .map(|()| None);
+            let (load, launch_at_login) = read_after_write(&target, write.is_ok());
+            PersistOutcome {
+                job,
+                write,
+                load,
+                launch_at_login,
+                hook_apply: None,
+            }
+        }
+        PersistJob::LaunchAtLogin { enabled } => {
+            let write = crate::platform::startup::set_launch_at_login(*enabled)
+                .and_then(|()| target.save(&[("launch_at_login", Value::Bool(*enabled))]))
+                .map(|()| None);
+            let (load, launch_at_login) = read_after_write(&target, write.is_ok());
+            PersistOutcome {
+                job,
+                write,
+                load,
+                launch_at_login,
+                hook_apply: None,
+            }
+        }
+        PersistJob::Reset => {
+            let write = target.reset();
+            let (load, launch_at_login) = read_after_write(&target, write.is_ok());
+            PersistOutcome {
+                job,
+                write,
+                load,
+                launch_at_login,
+                hook_apply: None,
+            }
+        }
+        PersistJob::AgentHook {
+            hook,
+            enabled,
+            confirmed,
+        } => {
+            let write = target
+                .save(&[(hook.settings_key(), Value::Bool(*enabled))])
+                .map(|()| None);
+            let hook_apply = write.as_ref().ok().map(|_| {
+                hooks_target
+                    .apply_with_confirmation(*hook, *enabled, *confirmed)
+                    .map_err(|message| HookFailure {
+                        suspicious_statusline: hooks_target.statusline_confirmation(*hook),
+                        message,
+                    })
+            });
+            let (load, launch_at_login) = read_after_write(&target, write.is_ok());
+            PersistOutcome {
+                job,
+                write,
+                load,
+                launch_at_login,
+                hook_apply,
+            }
+        }
+    }
+}
+
+/// 写成功后的回读:设置文件 + 默认目标下的真实开机启动状态。
+fn read_after_write(
+    target: &SettingsTarget,
+    written: bool,
+) -> (
+    Option<io::Result<crate::settings_store::LoadResult>>,
+    Option<bool>,
+) {
+    if !written {
+        return (None, None);
+    }
+    let load = Some(target.load());
+    let launch_at_login = target
+        .is_default()
+        .then(crate::platform::startup::launch_at_login);
+    (load, launch_at_login)
+}
 
 impl SettingsPane {
-    /// 统一写盘入口:写成功 → 重载单一事实源与全局 `Settings` → 通知宿主。
+    /// 统一写入口(异步):合并到队尾普通保存并入队。
     pub(super) fn try_persist(
         &mut self,
         updates: &[(&'static str, Value)],
         cx: &mut Context<'_, Self>,
-    ) -> io::Result<()> {
-        self.settings_target.save(updates)?;
-        self.apply_persisted_runtime(cx);
-        Ok(())
+    ) {
+        self.enqueue_persist(
+            PersistJob::Save {
+                updates: updates.to_vec(),
+                expected: None,
+                close_theme_editor: false,
+            },
+            cx,
+        );
     }
 
-    /// 主题应用路径专用:成组偏好对照「编辑动作前观察到的字节」写入。
-    /// 外部写入者已改设置时返回 Err(AlreadyExists),不静默覆盖。
+    /// 条件保存(主题应用):携带编辑动作前观察到的字节快照,不可合并。
     pub(super) fn try_persist_checked(
         &mut self,
         updates: &[(&'static str, Value)],
         expected: &crate::settings_store::SettingsRevision,
+        close_theme_editor: bool,
         cx: &mut Context<'_, Self>,
-    ) -> io::Result<()> {
-        self.settings_target.save_checked(expected, updates)?;
-        self.apply_persisted_runtime(cx);
-        Ok(())
+    ) {
+        self.enqueue_persist(
+            PersistJob::Save {
+                updates: updates.to_vec(),
+                expected: Some(expected.clone()),
+                close_theme_editor,
+            },
+            cx,
+        );
     }
 
-    /// 重载磁盘 → 全局事实源 → `Changed`。成功写盘后调用;损坏标记随之刷新。
-    pub(super) fn apply_persisted_runtime(&mut self, cx: &mut Context<'_, Self>) {
-        match self.settings_target.load() {
-            Ok(result) => {
-                let runtime = RuntimeSettings::from_raw(&result.data);
-                // 语言解析只在此处发生一次(System 档探测系统 locale);
-                // 渲染路径读缓存,不再逐帧调用。
-                self.language = resolve_language(runtime.language);
-                self.runtime = runtime.clone();
-                self.persisted = runtime;
-                self.status = result.corrupted.then_some(SettingsStatus::LoadedCorrupted);
+    /// 入队:普通保存与队尾同类合并(同 key 后者覆盖),其余原样排队。
+    pub(super) fn enqueue_persist(&mut self, job: PersistJob, cx: &mut Context<'_, Self>) {
+        match job {
+            PersistJob::Save {
+                updates,
+                expected: None,
+                close_theme_editor: false,
+            } => {
+                if let Some(PersistJob::Save {
+                    updates: queued,
+                    expected: None,
+                    close_theme_editor: false,
+                }) = self.persist_queue.back_mut()
+                {
+                    for (key, value) in updates {
+                        queued.retain(|(existing, _)| *existing != key);
+                        queued.push((key, value));
+                    }
+                    self.start_next_persist(cx);
+                    return;
+                }
+                self.persist_queue.push_back(PersistJob::Save {
+                    updates,
+                    expected: None,
+                    close_theme_editor: false,
+                });
+            }
+            other => self.persist_queue.push_back(other),
+        }
+        self.start_next_persist(cx);
+    }
+
+    /// 启动下一个后台写任务(串行:同一时刻至多一个在飞)。
+    fn start_next_persist(&mut self, cx: &mut Context<'_, Self>) {
+        if self.persist_running {
+            return;
+        }
+        let Some(job) = self.persist_queue.pop_front() else {
+            return;
+        };
+        self.persist_running = true;
+        let target = self.settings_target.clone();
+        let hooks_target = self.hooks_target.clone();
+        let task = cx
+            .background_executor()
+            .spawn(async move { execute_job(job, target, hooks_target) });
+        cx.spawn(async move |this, cx| {
+            let outcome = task.await;
+            let _ = this.update_in(cx, |pane, window, cx| {
+                pane.finish_persist(outcome, window, cx);
+            });
+        })
+        .detach();
+    }
+
+    /// 消费后台结果:成功应用回读与任务副作用;失败按 `persisted` 回滚。
+    fn finish_persist(
+        &mut self,
+        outcome: PersistOutcome,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.persist_running = false;
+        let PersistOutcome {
+            job,
+            write,
+            load,
+            launch_at_login,
+            hook_apply,
+        } = outcome;
+        match write {
+            Ok(backup) => {
+                let mut language_changed = false;
+                if let Some(load) = load {
+                    match load {
+                        Ok(result) => {
+                            let previous = self.language;
+                            self.apply_load_result(result, launch_at_login, cx);
+                            language_changed = self.language != previous;
+                        }
+                        Err(error) => {
+                            log::warn!("设置写盘后重载失败: {error}");
+                            self.status = Some(SettingsStatus::Failed(error.to_string()));
+                        }
+                    }
+                }
+                match &job {
+                    PersistJob::Reset => {
+                        self.status = Some(SettingsStatus::Reset { backup });
+                    }
+                    PersistJob::AgentHook { hook, enabled, .. } => {
+                        match hook_apply.unwrap_or(Ok(())) {
+                            Ok(()) => {
+                                self.agents.suspicious_statusline = None;
+                                self.agents.feedback = Some((*hook, Ok(*enabled)));
+                            }
+                            // C5:命中 SEC-12 时保留原文,行内出现「确认并重试」。
+                            Err(failure) => {
+                                self.agents.suspicious_statusline = failure.suspicious_statusline;
+                                self.agents.feedback = Some((*hook, Err(failure.message)));
+                            }
+                        }
+                        self.refresh_agents(cx);
+                    }
+                    PersistJob::Save {
+                        close_theme_editor: true,
+                        ..
+                    } => {
+                        self.theme_editor = None;
+                    }
+                    _ => {
+                        self.status = None;
+                    }
+                }
+                if language_changed {
+                    self.refresh_localized_controls(window, cx);
+                }
             }
             Err(error) => {
-                // 写成功但读失败属异常路径:保留最近成功读盘快照,状态条告警。
-                log::warn!("设置写盘后重载失败: {error}");
-                self.status = Some(SettingsStatus::Failed(error.to_string()));
+                // 失败回滚:运行时、控件与全局事实源回到最近一次成功读盘快照。
+                self.runtime = self.persisted.clone();
+                self.sync_controls_from_runtime(window, cx);
+                self.publish_global_settings(cx);
+                self.report_failure(&error, window, cx);
+                if let PersistJob::AgentHook { hook, .. } = &job {
+                    self.agents.suspicious_statusline = None;
+                    self.agents.feedback = Some((*hook, Err(error.to_string())));
+                    self.refresh_agents(cx);
+                }
             }
         }
-        // 开机启动显示以真实 .lnk 为准(09 篇 M10.6):默认目标的每次
-        // 重载都从 Startup 文件夹回读,避免设置键与文件状态漂移;测试
-        // 注入路径不碰真实用户目录。
-        if self.settings_target.is_default() {
-            self.runtime.launch_at_login = crate::platform::startup::launch_at_login();
+        cx.notify();
+        self.start_next_persist(cx);
+    }
+
+    /// 应用一次成功回读:语言/运行时/持久化快照/损坏标记/全局事实源。
+    fn apply_load_result(
+        &mut self,
+        result: crate::settings_store::LoadResult,
+        launch_at_login: Option<bool>,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let runtime = RuntimeSettings::from_raw(&result.data);
+        self.language = resolve_language(runtime.language);
+        self.runtime = runtime.clone();
+        self.persisted = runtime;
+        self.status = result.corrupted.then_some(SettingsStatus::LoadedCorrupted);
+        if let Some(launch) = launch_at_login {
+            self.runtime.launch_at_login = launch;
         }
+        // B57:拖动中的透明度预览优先于回读的持久化值,回包不得闪回旧值。
+        if let Some(live) = self.live_opacity {
+            self.runtime.opacity = live;
+            crate::app_shell::wallpaper::set_opacity_live(live, cx);
+            crate::app_shell::theme::reapply_shell_opacity(cx);
+        }
+        self.publish_global_settings(cx);
+    }
+
+    /// 把 `self.runtime` 发布为全局事实源并广播。
+    fn publish_global_settings(&mut self, cx: &mut Context<'_, Self>) {
         cx.set_global(Settings::from_runtime_with_theme_root(
             &self.runtime,
             self.settings_target.theme_root().as_deref(),
@@ -205,17 +490,10 @@ impl SettingsPane {
         } else {
             Value::String(value.to_owned())
         };
-        if let Err(error) = self.try_persist(&[(key, persisted)], cx) {
-            self.report_failure(&error, window, cx);
-            self.sync_controls_from_runtime(window, cx);
-            return;
-        }
+        self.try_persist(&[(key, persisted)], cx);
         self.status = None;
-        if key == "language" {
-            // 语言热应用:显示项刷新,控件实体保留;窗口标题等由宿主刷新。
-            self.refresh_localized_controls(window, cx);
-        }
         cx.notify();
+        let _ = window;
     }
 
     pub(super) fn toggle(
@@ -226,28 +504,18 @@ impl SettingsPane {
         cx: &mut Context<'_, Self>,
     ) {
         if key == "launch_at_login" {
-            // 开机启动是真系统副作用(09 篇 M10.6):先写/删 Startup .lnk
-            // 再持久化键值。.lnk 失败则不写设置键,避免「设置显示已开、
-            // 实际没登记」;设置键写入失败时 .lnk 已生效,下次打开设置页
-            // 以文件为准自愈。
-            let result = crate::platform::startup::set_launch_at_login(value)
-                .and_then(|()| self.try_persist(&[(key, Value::Bool(value))], cx));
-            if let Err(error) = result {
-                self.report_failure(&error, window, cx);
-                self.sync_controls_from_runtime(window, cx);
-                return;
-            }
+            // 开机启动是真系统副作用:写/删 Startup .lnk 与设置键同在一个
+            // 后台任务内完成,失败整笔回滚。
+            self.enqueue_persist(PersistJob::LaunchAtLogin { enabled: value }, cx);
             self.status = None;
             cx.notify();
+            let _ = window;
             return;
         }
-        if let Err(error) = self.try_persist(&[(key, Value::Bool(value))], cx) {
-            self.report_failure(&error, window, cx);
-            self.sync_controls_from_runtime(window, cx);
-            return;
-        }
+        self.try_persist(&[(key, Value::Bool(value))], cx);
         self.status = None;
         cx.notify();
+        let _ = window;
     }
 
     pub(super) fn save_text_input(
@@ -276,13 +544,10 @@ impl SettingsPane {
         } else {
             Value::String(value)
         };
-        if let Err(error) = self.try_persist(&[(key, update)], cx) {
-            self.report_failure(&error, window, cx);
-            self.sync_controls_from_runtime(window, cx);
-            return;
-        }
+        self.try_persist(&[(key, update)], cx);
         self.status = None;
         cx.notify();
+        let _ = window;
     }
 
     /// 起点目录选择(系统目录选择器;取消不改值)。
@@ -332,24 +597,12 @@ impl SettingsPane {
     pub(super) fn commit_scroll_speed(
         &mut self,
         value: f32,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
         let speed = normalize_scroll_speed(value);
-        if let Err(error) =
-            self.try_persist(&[("scroll_speed", Value::Number(f64::from(speed)))], cx)
-        {
-            // 读回已存值复位控件与预览(失败路径不得留下脏内存态)。
-            self.runtime.scroll_speed = self.persisted.scroll_speed;
-            self.scroll_speed_slider.update(cx, |state, cx| {
-                state.set_value(self.persisted.scroll_speed, window, cx)
-            });
-            if cx.has_global::<Settings>() {
-                cx.global_mut::<Settings>().scroll_speed = self.persisted.scroll_speed;
-            }
-            self.report_failure(&error, window, cx);
-            return;
-        }
+        // 失败回滚统一由 `finish_persist` 按 persisted 快照执行。
+        self.try_persist(&[("scroll_speed", Value::Number(f64::from(speed)))], cx);
         self.status = None;
         cx.notify();
     }
@@ -358,6 +611,7 @@ impl SettingsPane {
     /// 不读设置文件、不重建壁纸纹理;落盘等停手后的 commit。
     pub(super) fn preview_opacity(&mut self, value: f32, cx: &mut Context<'_, Self>) {
         self.runtime.opacity = value.clamp(0.0, 1.0);
+        self.live_opacity = Some(self.runtime.opacity);
         crate::app_shell::wallpaper::set_opacity_live(self.runtime.opacity, cx);
         crate::app_shell::theme::reapply_shell_opacity(cx);
         cx.refresh_windows();
@@ -367,19 +621,14 @@ impl SettingsPane {
     pub(super) fn commit_opacity(
         &mut self,
         value: f32,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
         let opacity = value.clamp(0.0, 1.0);
-        if let Err(error) = self.try_persist(&[("opacity", Value::Number(f64::from(opacity)))], cx)
-        {
-            self.runtime.opacity = self.persisted.opacity;
-            self.opacity_slider.update(cx, |state, cx| {
-                state.set_value(self.persisted.opacity, window, cx)
-            });
-            self.report_failure(&error, window, cx);
-            return;
-        }
+        // 松手后预览态结束:回包以持久化值为准。
+        self.live_opacity = None;
+        // 失败回滚统一由 `finish_persist` 按 persisted 快照执行。
+        self.try_persist(&[("opacity", Value::Number(f64::from(opacity)))], cx);
         self.status = None;
         cx.notify();
     }
@@ -409,48 +658,17 @@ impl SettingsPane {
         cx.notify();
     }
 
-    /// 恢复默认:一次点击武装,二次确认执行。失败/损坏文件不覆盖。
-    pub(super) fn confirm_reset(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+    /// 恢复默认:一次点击武装,二次确认入队后台执行(A2)。
+    pub(super) fn confirm_reset(&mut self, _window: &mut Window, cx: &mut Context<'_, Self>) {
         if !self.reset_armed {
             self.reset_armed = true;
             cx.notify();
             return;
         }
         self.reset_armed = false;
-        match self.settings_target.reset() {
-            Ok(backup) => {
-                self.status = Some(SettingsStatus::Reset { backup });
-                match self.settings_target.load() {
-                    Ok(result) => {
-                        let runtime = RuntimeSettings::from_raw(&result.data);
-                        self.language = resolve_language(runtime.language);
-                        self.runtime = runtime.clone();
-                        self.persisted = runtime;
-                        if result.corrupted {
-                            self.status = Some(SettingsStatus::LoadedCorrupted);
-                        }
-                    }
-                    Err(error) => {
-                        self.status = Some(SettingsStatus::Failed(error.to_string()));
-                    }
-                }
-                cx.set_global(Settings::from_runtime_with_theme_root(
-                    &self.runtime,
-                    self.settings_target.theme_root().as_deref(),
-                ));
-                self.sync_controls_from_runtime(window, cx);
-                cx.emit(SettingsPaneEvent::Changed);
-                cx.refresh_windows();
-                cx.notify();
-            }
-            Err(error) => {
-                crate::app_shell::try_write_stderr(format_args!(
-                    "[slterm] settings reset failed: {error}"
-                ));
-                self.status = Some(SettingsStatus::Failed(error.to_string()));
-                cx.notify();
-            }
-        }
+        self.persist_queue.push_back(PersistJob::Reset);
+        self.start_next_persist(cx);
+        cx.notify();
     }
 }
 
@@ -470,8 +688,17 @@ impl SettingsPane {
         self.status.as_ref()
     }
 
+    /// A2 相位机探针:队列与在飞状态。
+    pub(crate) fn persist_state_for_test(&self) -> (usize, bool) {
+        (self.persist_queue.len(), self.persist_running)
+    }
+
     pub(crate) fn preview_scroll_speed_for_test(&mut self, value: f32, cx: &mut Context<'_, Self>) {
         self.preview_scroll_speed(value, cx);
+    }
+
+    pub(crate) fn preview_opacity_for_test(&mut self, value: f32, cx: &mut Context<'_, Self>) {
+        self.preview_opacity(value, cx);
     }
 
     pub(crate) fn commit_scroll_speed_for_test(

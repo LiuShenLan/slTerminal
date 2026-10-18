@@ -21,7 +21,7 @@ use gpui_component::button::Button;
 use gpui_component::input::{Input, InputState};
 use gpui_component::switch::Switch;
 use gpui_component::{ActiveTheme as _, Disableable as _, h_flex, v_flex};
-use slterm_settings::{AgentHook, json::Value};
+use slterm_settings::AgentHook;
 
 use crate::ai_hook::editor::HooksDocument;
 use crate::ai_hook::integrations::{self, AgentIntegration};
@@ -60,9 +60,21 @@ impl HooksTarget {
     }
 
     /// 安装权威应用入口(偏好已由设置页写通道落盘)。
-    fn apply(&self, agent: AgentHook, enabled: bool) -> Result<(), String> {
+    /// C5:confirmed=true 时 SEC-12 审查门恒放行(用户已确认原文)。
+    pub(super) fn apply_with_confirmation(
+        &self,
+        agent: AgentHook,
+        enabled: bool,
+        confirmed: bool,
+    ) -> Result<(), String> {
         match self {
-            Self::Default => integrations::apply_enabled(agent, enabled),
+            Self::Default => {
+                if confirmed {
+                    integrations::apply_enabled_confirmed(agent, enabled)
+                } else {
+                    integrations::apply_enabled(agent, enabled)
+                }
+            }
             Self::Claude {
                 config_dir, helper, ..
             } => {
@@ -72,7 +84,21 @@ impl HooksTarget {
                 let helper = helper
                     .as_deref()
                     .ok_or("The slterm hook helper is missing from this installation.")?;
-                integrations::apply_claude_at(config_dir, helper, enabled)
+                if confirmed {
+                    integrations::apply_claude_confirmed_at(config_dir, helper, enabled)
+                } else {
+                    integrations::apply_claude_at(config_dir, helper, enabled)
+                }
+            }
+        }
+    }
+
+    /// C5:待确认的 statusLine 原文(无命中 → None)。
+    pub(super) fn statusline_confirmation(&self, agent: AgentHook) -> Option<String> {
+        match self {
+            Self::Default => integrations::statusline_confirmation(agent),
+            Self::Claude { config_dir, .. } => {
+                integrations::claude_statusline_confirmation_at(config_dir)
             }
         }
     }
@@ -96,6 +122,8 @@ pub(super) struct AgentSettingsState {
     pub(super) loading: bool,
     pub(super) sequence: u64,
     pub(super) feedback: Option<(AgentHook, Result<bool, String>)>,
+    /// C5:SEC-12 命中的 statusLine 原文;有值时行内出现「确认并重试」。
+    pub(super) suspicious_statusline: Option<String>,
     pub(super) document: Option<HooksDocument>,
     pub(super) document_error: Option<String>,
     pub(super) hooks_editor: Entity<InputState>,
@@ -111,6 +139,7 @@ impl AgentSettingsState {
             loading: false,
             sequence: 0,
             feedback: None,
+            suspicious_statusline: None,
             document: None,
             document_error: None,
             hooks_editor,
@@ -121,7 +150,7 @@ impl AgentSettingsState {
 }
 
 impl SettingsPane {
-    fn refresh_agents(&mut self, cx: &mut Context<'_, Self>) {
+    pub(super) fn refresh_agents(&mut self, cx: &mut Context<'_, Self>) {
         if self.agents.loading {
             return;
         }
@@ -197,13 +226,41 @@ impl SettingsPane {
             return;
         }
         self.agents.feedback = None;
-        if let Err(error) = self.try_persist(&[(agent.settings_key(), Value::Bool(enabled))], cx) {
-            self.report_failure(&error, window, cx);
-            return;
-        }
-        let result = self.hooks_target.apply(agent, enabled);
-        self.agents.feedback = Some((agent, result.map(|()| enabled)));
-        self.refresh_agents(cx);
+        // A2:偏好写盘与安装权威应用同在一个后台任务内串行完成;前台先清
+        // 反馈,结果回包后刷新行。
+        self.enqueue_persist(
+            super::persistence::PersistJob::AgentHook {
+                hook: agent,
+                enabled,
+                confirmed: false,
+            },
+            cx,
+        );
+        self.status = None;
+        cx.notify();
+        let _ = window;
+    }
+
+    /// C5:用户确认 SEC-12 原文后重试(审查门恒放行)。
+    fn set_agent_enabled_confirmed(
+        &mut self,
+        agent: AgentHook,
+        enabled: bool,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.agents.feedback = None;
+        self.enqueue_persist(
+            super::persistence::PersistJob::AgentHook {
+                hook: agent,
+                enabled,
+                confirmed: true,
+            },
+            cx,
+        );
+        self.status = None;
+        cx.notify();
+        let _ = window;
     }
 
     /// 轨二提交:编辑文本 → SEC-05 + marker 边界 → 原子写 → 重读。
@@ -327,6 +384,25 @@ impl SettingsPane {
                     .text_size(px(11.0))
                     .text_color(muted)
                     .child(SharedString::from(note)),
+            );
+        }
+        // C5:SEC-12 命中的原命令必须原文可见,并由用户显式确认后重试。
+        if agent == AgentHook::Claude
+            && let Some(suspicious) = self.agents.suspicious_statusline.as_ref()
+        {
+            text = text.child(
+                div()
+                    .debug_selector(move || format!("agent-hook-suspended-{index}"))
+                    .text_size(px(11.0))
+                    .text_color(cx.theme().danger)
+                    .child(SharedString::from(suspicious.clone())),
+            );
+            text = text.child(
+                Button::new(SharedString::from(format!("agent-hook-confirm-{index}")))
+                    .label(language.text(Message::SettingsAgentsConfirmStatusline))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.set_agent_enabled_confirmed(agent, true, window, cx);
+                    })),
             );
         }
         h_flex()
@@ -638,6 +714,23 @@ impl SettingsPane {
     /// 同步重读 inspect 行(后台刷新在虚拟窗口里不保证已排水)。
     pub(crate) fn refresh_hooks_rows_for_test(&mut self) {
         self.agents.rows = Some(self.hooks_target.inspect());
+    }
+
+    /// C5:待确认的 statusLine 原文(设置页确认重试用例)。
+    pub(crate) fn hooks_suspicious_statusline_for_test(&self) -> Option<&String> {
+        self.agents.suspicious_statusline.as_ref()
+    }
+
+    /// C5:确认后重试(恒放行 SEC-12 审查门)。
+    pub(crate) fn set_agent_enabled_confirmed_for_test(
+        &mut self,
+        agent: AgentHook,
+        enabled: bool,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.agents.loading = false;
+        self.set_agent_enabled_confirmed(agent, enabled, window, cx);
     }
 }
 

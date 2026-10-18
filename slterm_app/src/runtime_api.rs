@@ -881,10 +881,12 @@ pub enum RuntimeCommand {
         shell_id: Option<String>,
     },
     /// `tab_index` + 稳定 `tab_id` 双轨定位:`tab_id` 有值时优先。
+    /// `force` = 丢弃未保存草稿(B12:默认拒脏)。
     CloseTab {
         window_id: Option<u64>,
         tab_index: usize,
         tab_id: Option<TabId>,
+        force: bool,
     },
     RenameTab {
         window_id: Option<u64>,

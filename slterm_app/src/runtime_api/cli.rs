@@ -546,10 +546,14 @@ fn run_control(options: ControlOptions) -> Result<(), Box<dyn Error>> {
             let response = request_once("tab.new", json!({ "window_id": window }), timeout)?;
             print_response(&response, pretty)
         }
-        ControlCommand::CloseTab { window, tab_index } => {
+        ControlCommand::CloseTab {
+            window,
+            tab_index,
+            force,
+        } => {
             let response = request_once(
                 "tab.close",
-                json!({ "window_id": window, "tab_index": tab_index }),
+                json!({ "window_id": window, "tab_index": tab_index, "force": force }),
                 timeout,
             )?;
             print_response(&response, pretty)

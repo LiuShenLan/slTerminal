@@ -288,6 +288,8 @@ fn theme_editor_apply_is_a_separate_action_from_save(cx: &mut TestAppContext) {
             pane.save_theme_editor_for_test(true, window, cx)
         })
     });
+    // A2:条件写盘在后台执行,排水后文件与热应用才可见。
+    window.run_until_parked();
     assert!(
         applied,
         "应用必须成功: {:?}",

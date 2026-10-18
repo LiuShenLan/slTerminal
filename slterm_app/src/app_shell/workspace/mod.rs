@@ -52,8 +52,8 @@ use std::sync::mpsc;
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     App, AppContext as _, Bounds, Context, Entity, FocusHandle, InteractiveElement as _,
-    IntoElement, MouseButton, MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, Render,
-    Styled as _, Subscription, Window, div, px,
+    IntoElement, MouseButton, MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels,
+    PromptLevel, Render, Styled as _, Subscription, Window, div, px,
 };
 use slterm_settings::Rgb;
 use slterm_split::{PaneId, RemoveOutcome, SplitDirection, SplitNav, SplitTree, TabId, nav_target};
@@ -64,7 +64,9 @@ use super::settings_pane::{SettingsPane, SettingsPaneEvent};
 use super::windowing::{WorkspaceStartup, startup_geometry};
 use crate::agent_host::AgentHub;
 use crate::ai_hook::AiHookEvent;
+use crate::app_shell::config::Settings;
 use crate::gpui_terminal::view::{TerminalLaunch, TerminalView, TerminalViewEvent};
+use crate::i18n::Message;
 use crate::runtime_api::{RuntimeHub, SINGLE_WINDOW_ID};
 use crate::session::LaunchSession;
 use crate::terminal_registry::{self, PaneSessionMeta};
@@ -221,6 +223,8 @@ pub struct SltermWorkspace {
     pending_file_close: Option<TabId>,
     /// 整窗关闭确认已放行:异步回调 `remove_window` 前落位,防重入守卫。
     window_close_confirmed: bool,
+    /// B25:忙碌 pane 关闭确认已放行(防异步回调重入弹框)。
+    pane_close_confirmed: Option<PaneId>,
     /// 侧栏文件树视图状态(07 篇 M8.4;explorer 槽内容)。
     file_tree: file_tree::FileTreeState,
     /// 窗口激活态订阅(09 篇 M10.1):通知漏斗前台门控的唯一写入源。
@@ -326,6 +330,7 @@ impl SltermWorkspace {
             file_tab_events: HashMap::new(),
             pending_file_close: None,
             window_close_confirmed: false,
+            pane_close_confirmed: None,
             file_tree: file_tree::FileTreeState::new(window, cx),
             _window_activation: window_activation,
         };
@@ -951,9 +956,50 @@ impl SltermWorkspace {
         })
     }
 
+    /// B25:忙碌 pane 的关闭确认(运行中/等输入/attention 视为破坏性操作)。
+    fn confirm_close_busy_pane(
+        &mut self,
+        pane_id: PaneId,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let language = cx.global::<Settings>().language;
+        let detail = language.text(Message::TerminalCloseBusyDetail);
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            language.text(Message::TerminalCloseBusyTitle),
+            Some(detail),
+            &[
+                language.text(Message::TerminalCloseBusyConfirm),
+                language.text(Message::EditorCancel),
+            ],
+            cx,
+        );
+        let handle = window.window_handle();
+        cx.spawn(async move |this, cx| {
+            if !matches!(answer.await, Ok(0)) {
+                return;
+            }
+            let _ = handle.update(cx, |_, window, cx| {
+                let _ = this.update(cx, |workspace, cx| {
+                    workspace.pane_close_confirmed = Some(pane_id);
+                    workspace.close_pane(pane_id, window, cx);
+                });
+            });
+        })
+        .detach();
+    }
+
     /// 关 pane 状态机(05 篇锚定):摘除 → 立即显式 shutdown → 焦点交幸存
     /// 首叶;唯一叶子关闭 = 关 tab = 无 tab 时关窗(M3 语义保留)。
     fn close_pane(&mut self, pane_id: PaneId, window: &mut Window, cx: &mut Context<'_, Self>) {
+        // B25:忙碌 pane 先确认;确认后的同一次调用经标志放行。
+        if self.pane_close_confirmed.take() != Some(pane_id)
+            && !self.busy_panes(std::iter::once(pane_id)).is_empty()
+        {
+            self.confirm_close_busy_pane(pane_id, window, cx);
+            return;
+        }
         let Some(tab_index) = self.tabs.iter().position(|entry| match &entry.tab {
             WorkspaceTab::Terminal { tree, .. } => tree.contains(pane_id),
             WorkspaceTab::Settings { .. }

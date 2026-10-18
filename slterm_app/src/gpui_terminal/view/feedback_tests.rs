@@ -289,16 +289,31 @@ fn ai_fix_bar_pastes_only_and_drops_stale_responses(cx: &mut TestAppContext) {
 
     // 过期响应不得落位。
     terminal.update(&mut window, |view, cx| {
-        view.apply_ai_fix_response(seq - 1, Some(fix.clone()), cx);
+        view.apply_ai_fix_response(seq - 1, Ok(Some(fix.clone())), cx);
     });
     assert_eq!(
         terminal.read_with(&window, |view, _| view.ai_fix.clone()),
         Some(AiFixState::Pending { seq })
     );
 
+    // A6:配置错误显式上条(取代静默消失);同 seq 仍可被后续结果覆盖。
+    terminal.update(&mut window, |view, cx| {
+        view.ai_fix = Some(AiFixState::Pending { seq });
+        view.apply_ai_fix_response(seq, Err("缺少凭据".into()), cx);
+    });
+    assert_eq!(
+        terminal.read_with(&window, |view, _| view.ai_fix_bar()),
+        Some(super::ai_fix::AiFixBar {
+            command: String::new(),
+            explain: "缺少凭据".into(),
+            danger: false,
+            pending: false,
+        })
+    );
+
     // 当前 seq 落位 Ready。
     terminal.update(&mut window, |view, cx| {
-        view.apply_ai_fix_response(seq, Some(fix.clone()), cx);
+        view.apply_ai_fix_response(seq, Ok(Some(fix.clone())), cx);
     });
     assert_eq!(
         terminal.read_with(&window, |view, _| view.ai_fix_bar()),

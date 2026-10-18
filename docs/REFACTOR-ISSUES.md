@@ -161,6 +161,8 @@ M12/R1（2026-10-18）：B69 `setup-ai --remove` 卸载清理、B72 新鲜度改
 
 M12/R2（2026-10-18）：B1 测试构建数据目录默认隔离（临时根）、B3 恢复默认共用保存锁、B26 describe↔CLI 命令清单一致性用例、B60 复核（M10.11 已落借出白名单扫描）、B61 真实凭据管理器用例环境门控、B62 非法主题备份改硬失败、B63 敏感键 denylist 漂移守卫、B67 subscriber 双落点约束注释、B68 claude hook 修复路径补 SEC-13 哈希事件。
 
+M12/R3（2026-10-18）：A2 设置写通道全量后台相位机（Pending/Committed/Failed、队尾合并、失败统一回滚；含 hooks 授权与主题条件写）、A6 active 无凭据回退 env + 显式错误上条、A16 审计成功写降 info、B6 保存全部继续逐件保存并聚合提示、B12 `tab.close` 增 `force` 参数与 `dirty_document` 拒绝、B25 忙碌 pane 关闭确认框、B43 通知动作回执消费（聚焦 + 审计）、B57 拖动预览不被回读覆盖、B64 `subscribe` 返回当前快照、B65 `HOME` 回退、B66 测试守卫宽化到 feature 形态、C5 SEC-12 命中原文展示 + 确认后重试。
+
 ## E. 验收纪律补记
 
 - 自 M8.3 起验收同时跑两形态 clippy（`--workspace` 与 `-p slterm --features gpui-test-support`）——此前无 feature 形态遗漏了 M6 起的三处测试端红灯。

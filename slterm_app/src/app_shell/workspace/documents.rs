@@ -20,6 +20,7 @@ use gpui::{
     AnyElement, App, AppContext as _, Context, Entity, FocusHandle, InteractiveElement as _,
     IntoElement, ParentElement as _, PromptLevel, Styled as _, Task, Window, div,
 };
+use gpui_component::WindowExt as _;
 use slterm_split::TabId;
 
 use super::{SltermWorkspace, TabEntry, TabMeta, WorkspaceTab};
@@ -482,6 +483,14 @@ impl SltermWorkspace {
     /// 全部脏文件 tab:保存臂逐个落盘,全部成功才放行;任一失败保持窗口
     /// 打开(失败横幅已在编辑器内可见)。保存中在途 = 拦截本轮,等落盘后
     /// 用户再次关窗;确认框同一时刻只允许一个(pending_file_close 单槽)。
+    /// B12:目标 tab 是否含未保存草稿(runtime `tab.close` 的拒绝判据)。
+    pub(super) fn tab_has_dirty_document(&self, index: usize, cx: &App) -> bool {
+        self.tabs
+            .get(index)
+            .and_then(|entry| FileViewHandle::of(&entry.tab))
+            .is_some_and(|file| file.is_dirty(cx))
+    }
+
     pub(super) fn guard_file_window_close(
         &mut self,
         window: &mut Window,
@@ -532,22 +541,22 @@ impl SltermWorkspace {
         let handle = window.window_handle();
         cx.spawn(async move |this, cx| {
             let choice = answer.await;
-            let close = match choice {
-                // 保存全部:任一失败则保持窗口与草稿。
+            let (close, failed) = match choice {
+                // 保存全部:尽量保存每个文件;任一失败则保持窗口与草稿,
+                // 并聚合报告失败数量(B6:不再只在各自编辑器内提示)。
                 Ok(0) => {
-                    let mut saved = true;
+                    let mut failed = 0usize;
                     for file in &handles {
                         if !file.save(cx).await {
-                            saved = false;
-                            break;
+                            failed += 1;
                         }
                     }
-                    saved
+                    (failed == 0, failed)
                 }
                 // 不保存:丢弃全部草稿。
-                Ok(1) => true,
+                Ok(1) => (true, 0),
                 // 取消/对话框被系统取消。
-                _ => false,
+                _ => (false, 0),
             };
             let _ = handle.update(cx, |_, window, cx| {
                 let _ = this.update(cx, |workspace, cx| {
@@ -557,6 +566,20 @@ impl SltermWorkspace {
                         workspace.save_on_window_close(window, cx);
                         window.remove_window();
                     } else {
+                        if failed > 0 {
+                            let language = cx.global::<Settings>().language;
+                            let detail = language.format(
+                                Message::EditorSaveAllFailedDetail,
+                                &[("count", &failed.to_string())],
+                            );
+                            window.push_notification(
+                                gpui_component::notification::Notification::error(
+                                    language.text(Message::EditorSaveAllFailedTitle),
+                                )
+                                .message(detail),
+                                cx,
+                            );
+                        }
                         cx.notify();
                     }
                 });

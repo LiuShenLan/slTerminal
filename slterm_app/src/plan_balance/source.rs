@@ -44,7 +44,7 @@ impl PlanSource for ClaudeUserSettingsSource {
 
 /// user 层 settings.json 路径;测试经 [`test_support::SettingsPathGuard`] 覆盖。
 fn settings_path() -> Option<PathBuf> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "gpui-test-support"))]
     if let Some(path) = test_support::overridden_settings_path() {
         return Some(path);
     }
@@ -79,7 +79,10 @@ fn resolve_env(content: &str) -> Option<(String, SecretBytes)> {
 }
 
 /// 测试专用路径覆盖:进程级静态 + Drop 还原,依赖 `--test-threads=1` 串行纪律。
-#[cfg(test)]
+///
+/// B66:同时开放给 `gpui-test-support` 形态的 UI 用例(共享守卫),e2e 集成
+/// 测试仍走 `USERPROFILE` 注入。
+#[cfg(any(test, feature = "gpui-test-support"))]
 pub(crate) mod test_support {
     use std::path::PathBuf;
     use std::sync::Mutex;

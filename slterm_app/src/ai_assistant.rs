@@ -37,12 +37,14 @@ pub(crate) enum AiFixState {
     Pending { seq: u64 },
     /// 建议已就绪,等 Ctrl+. / Esc / typing。
     Ready { seq: u64, fix: AiFix },
+    /// A6:配置/凭据错误显式上条,不再静默消失。
+    Failed { seq: u64, message: String },
 }
 
 impl AiFixState {
     pub(crate) fn seq(&self) -> u64 {
         match self {
-            Self::Pending { seq } | Self::Ready { seq, .. } => *seq,
+            Self::Pending { seq } | Self::Ready { seq, .. } | Self::Failed { seq, .. } => *seq,
         }
     }
 }
@@ -487,16 +489,40 @@ pub(crate) struct RequestTarget {
     pub key: Zeroizing<String>,
 }
 
+/// 请求目标组装失败(A6:显式错误,不再静默放弃)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RequestTargetError {
+    /// 无启用 provider 且环境兜底缺失,或 active provider 无凭据且无兜底。
+    MissingCredential { provider: String },
+    /// 凭据后端读取失败。
+    CredentialBackend(String),
+    /// 凭据不是合法 UTF-8。
+    InvalidCredentialEncoding,
+}
+
+impl std::fmt::Display for RequestTargetError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingCredential { provider } if provider.is_empty() => write!(
+                formatter,
+                "AI 请求缺少凭据:未启用 provider,且 SLTERM_AI_KEY / OPENAI_API_KEY 未设置"
+            ),
+            Self::MissingCredential { provider } => write!(
+                formatter,
+                "AI 请求缺少凭据:provider {provider} 未配置 API key,且 SLTERM_AI_KEY / OPENAI_API_KEY 未设置"
+            ),
+            Self::CredentialBackend(error) => write!(formatter, "读取 AI 凭据失败: {error}"),
+            Self::InvalidCredentialEncoding => write!(formatter, "AI 凭据不是合法 UTF-8"),
+        }
+    }
+}
+
 /// 请求目标组装(08 篇 provider 凭据流):启用 provider 优先,凭据出域即
-/// `Zeroizing`;无启用 provider 才走环境兜底。
-///
-/// 凭据后端显式注入(10 篇三原语);生产调用点直传
-/// [`crate::secrets::WindowsCredentialStore`],启用 provider 无凭据 → 安静
-/// 返回 `None`(A6 登记的默认形态,待产品裁决)。
+/// `Zeroizing`;A6:active provider 无凭据时回退环境变量,仍无则显式错误。
 pub(crate) fn request_target(
     cfg: &AssistantConfig,
     credentials: &dyn crate::secrets::CredentialStore,
-) -> Option<RequestTarget> {
+) -> Result<RequestTarget, RequestTargetError> {
     request_target_from(cfg, &crate::ai_providers::load(), credentials)
 }
 
@@ -505,31 +531,36 @@ fn request_target_from(
     cfg: &AssistantConfig,
     store: &crate::ai_providers::ProviderStore,
     credentials: &dyn crate::secrets::CredentialStore,
-) -> Option<RequestTarget> {
+) -> Result<RequestTarget, RequestTargetError> {
+    request_target_with(cfg, store, credentials, fallback_api_key)
+}
+
+/// 注入兜底读取器的本体(测试不改进程环境)。
+fn request_target_with(
+    cfg: &AssistantConfig,
+    store: &crate::ai_providers::ProviderStore,
+    credentials: &dyn crate::secrets::CredentialStore,
+    mut fallback: impl FnMut() -> Option<Zeroizing<String>>,
+) -> Result<RequestTarget, RequestTargetError> {
     if let Some(provider) = crate::ai_providers::active_enabled(store) {
         let key = if provider.kind.requires_api_key() {
-            let secret = match crate::ai_providers::load_api_key(credentials, &provider.id) {
-                Ok(Some(secret)) => secret,
-                Ok(None) => {
-                    log::info!("assistant: active provider has no credential");
-                    return None;
-                }
+            match crate::ai_providers::load_api_key(credentials, &provider.id) {
+                Ok(Some(secret)) => match secret.into_string() {
+                    Some(key) => key,
+                    None => return Err(RequestTargetError::InvalidCredentialEncoding),
+                },
+                // A6:active 无凭据 → 环境兜底;仍无则显式错误。
+                Ok(None) => fallback().ok_or_else(|| RequestTargetError::MissingCredential {
+                    provider: provider.id.clone(),
+                })?,
                 Err(error) => {
-                    log::warn!("assistant: credential lookup failed: {error}");
-                    return None;
-                }
-            };
-            match secret.into_string() {
-                Some(key) => key,
-                None => {
-                    log::warn!("assistant: provider credential is not valid UTF-8");
-                    return None;
+                    return Err(RequestTargetError::CredentialBackend(error.to_string()));
                 }
             }
         } else {
             Zeroizing::new(String::new())
         };
-        return Some(RequestTarget {
+        return Ok(RequestTarget {
             kind: provider.kind,
             base_url: provider.base_url.clone(),
             model: provider.model.clone(),
@@ -538,12 +569,15 @@ fn request_target_from(
         });
     }
 
-    Some(RequestTarget {
+    let key = fallback().ok_or(RequestTargetError::MissingCredential {
+        provider: String::new(),
+    })?;
+    Ok(RequestTarget {
         kind: crate::ai_providers::ProviderKind::OpenAi,
         base_url: cfg.base_url.clone(),
         model: cfg.model.clone(),
         full_url: false,
-        key: fallback_api_key()?,
+        key,
     })
 }
 
@@ -561,11 +595,8 @@ pub(crate) fn request_fix(
     cfg: &AssistantConfig,
     request: &FixRequest,
     credentials: &dyn crate::secrets::CredentialStore,
-) -> Option<AiFix> {
-    let Some(target) = request_target(cfg, credentials) else {
-        log::info!("assistant: no usable enabled provider or fallback API key");
-        return None;
-    };
+) -> Result<Option<AiFix>, String> {
+    let target = request_target(cfg, credentials).map_err(|error| error.to_string())?;
     let user = format!(
         "OS: {}\nCommand: {}\nExit code: {}\nDirectory: {}\nGit branch: {}\nOutput (tail):\n{}",
         std::env::consts::OS,
@@ -579,8 +610,11 @@ pub(crate) fn request_fix(
         },
         request.output_tail,
     );
-    let content = send_model_request(&target, &user)?;
-    parse_fix(&content)
+    let Some(content) = send_model_request(&target, &user) else {
+        log::info!("assistant: model request did not complete");
+        return Ok(None);
+    };
+    Ok(parse_fix(&content))
 }
 
 fn openai_body(model: &str, user: &str) -> serde_json::Value {
@@ -1198,20 +1232,54 @@ mod ai_assistant_tests {
         }
     }
 
+    /// A6:active provider 无凭据时回退环境兜底(不再静默放弃)。
     #[test]
-    fn active_provider_without_credential_stays_silent() {
+    fn active_provider_without_credential_falls_back_to_environment() {
         let store = store_for(crate::ai_providers::ProviderKind::OpenAi);
+        let target = request_target_with(
+            &AssistantConfig::default(),
+            &store,
+            &EmptyCredentials,
+            || Some(Zeroizing::new("sk-test-env".to_owned())),
+        )
+        .expect("环境兜底必须可用");
+        assert_eq!(target.key.as_str(), "sk-test-env");
+        assert_eq!(target.kind, crate::ai_providers::ProviderKind::OpenAi);
+    }
+
+    /// A6:无凭据且无环境兜底 → 显式错误(取代静默 None)。
+    #[test]
+    fn missing_credential_and_environment_is_an_explicit_error() {
+        let store = store_for(crate::ai_providers::ProviderKind::OpenAi);
+        let error = match request_target_with(
+            &AssistantConfig::default(),
+            &store,
+            &EmptyCredentials,
+            || None,
+        ) {
+            Ok(_) => panic!("无凭据且无兜底必须显式报错"),
+            Err(error) => error,
+        };
         assert!(
-            request_target_from(&AssistantConfig::default(), &store, &EmptyCredentials).is_none(),
-            "无凭据不得伪造请求目标"
+            matches!(error, RequestTargetError::MissingCredential { .. }),
+            "{error:?}"
+        );
+        assert!(
+            error.to_string().contains("SLTERM_AI_KEY"),
+            "错误必须指明兜底变量: {error}"
         );
     }
 
     #[test]
     fn keyless_provider_needs_no_credential() {
         let store = store_for(crate::ai_providers::ProviderKind::Ollama);
-        let target = request_target_from(&AssistantConfig::default(), &store, &EmptyCredentials)
-            .expect("Ollama 免 key");
+        let target = request_target_with(
+            &AssistantConfig::default(),
+            &store,
+            &EmptyCredentials,
+            || None,
+        )
+        .expect("Ollama 免 key");
         assert_eq!(target.kind, crate::ai_providers::ProviderKind::Ollama);
         assert!(target.key.is_empty());
         assert!(!target.model.is_empty());
@@ -1220,8 +1288,13 @@ mod ai_assistant_tests {
     #[test]
     fn provider_key_is_read_through_the_injected_store_and_wrapped() {
         let store = store_for(crate::ai_providers::ProviderKind::OpenAi);
-        let target =
-            request_target_from(&AssistantConfig::default(), &store, &MockCredentials).unwrap();
+        let target = request_target_with(
+            &AssistantConfig::default(),
+            &store,
+            &MockCredentials,
+            || None,
+        )
+        .unwrap();
         assert_eq!(target.key.as_str(), "sk-test-key");
         assert_eq!(target.kind, crate::ai_providers::ProviderKind::OpenAi);
         assert!(target.base_url.starts_with("https://"));

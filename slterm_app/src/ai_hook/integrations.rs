@@ -89,6 +89,32 @@ pub(crate) fn apply_enabled(hook: AgentHook, enabled: bool) -> Result<(), String
     super::local::settings::apply_and_verify(hook, enabled).map_err(|error| error.to_string())
 }
 
+/// C5:用户已确认 SEC-12 命中的原命令后重试(恒放行审查门)。
+pub(crate) fn apply_enabled_confirmed(hook: AgentHook, enabled: bool) -> Result<(), String> {
+    super::local::settings::apply_and_verify_with(hook, enabled, true)
+        .map_err(|error| error.to_string())
+}
+
+/// C5:待确认的 statusLine 原文(无命中 → None)。
+pub(crate) fn statusline_confirmation(hook: AgentHook) -> Option<String> {
+    super::local::settings::statusline_confirmation(hook)
+}
+
+/// C5:显式配置目录的待确认原文(设置页联调/测试注入)。
+pub(crate) fn claude_statusline_confirmation_at(dir: &Path) -> Option<String> {
+    super::local::settings::statusline_confirmation_at(dir)
+}
+
+/// C5:显式目录的确认重试(设置页联调/测试注入)。
+pub(crate) fn apply_claude_confirmed_at(
+    dir: &Path,
+    helper: &str,
+    enabled: bool,
+) -> Result<(), String> {
+    super::local::settings::apply_claude_at_with(dir, helper, enabled, true)
+        .map_err(|error| error.to_string())
+}
+
 /// 显式 claude 配置目录的接入/卸载(设置页联调/测试注入)。
 pub(crate) fn apply_claude_at(dir: &Path, helper: &str, enabled: bool) -> Result<(), String> {
     super::local::settings::apply_claude_at(dir, helper, enabled).map_err(|error| error.to_string())

@@ -104,11 +104,15 @@ pub(crate) fn current_snapshot() -> Vec<PlanBalanceInfo> {
 }
 
 /// 订阅快照更新(D10-3:多消费者各自持接收端;Drop 即退订)。
+///
+/// B64:同时返回订阅那一刻的当前快照,消除「注册后、通知扇出前」的漏唤醒
+/// 窗口——消费者不必再额外读一次 `current_snapshot()` 也不会丢值。
 #[allow(dead_code)] // 消费点 = M10.12 设置页/壳侧余额展示;本步由用例锁定多消费者语义。
-pub(crate) fn subscribe() -> PlanBalanceUpdates {
+pub(crate) fn subscribe() -> (PlanBalanceUpdates, Vec<PlanBalanceInfo>) {
+    let snapshot = current_snapshot();
     let (sender, receiver) = mpsc::sync_channel(1);
     subscribers_guard().push(sender);
-    PlanBalanceUpdates { receiver }
+    (PlanBalanceUpdates { receiver }, snapshot)
 }
 
 /// 快照更新接收端(watch 语义:唤醒后读最新快照,不排队历史值)。
@@ -603,7 +607,7 @@ mod plan_balance_tests {
     #[test]
     fn apply_snapshot_first_publication_notifies() {
         reset_for_test();
-        let updates = subscribe();
+        let (updates, _) = subscribe();
         apply_snapshot(Vec::new());
         assert_eq!(updates.try_recv(), Some(Vec::new()));
         assert_eq!(current_snapshot(), Vec::<PlanBalanceInfo>::new());
@@ -613,7 +617,7 @@ mod plan_balance_tests {
     #[test]
     fn apply_snapshot_identical_snapshot_is_not_pushed() {
         reset_for_test();
-        let updates = subscribe();
+        let (updates, _) = subscribe();
         let snapshot = vec![old_entry("deepseek", 500)];
         apply_snapshot(snapshot.clone());
         assert_eq!(updates.try_recv(), Some(snapshot.clone()));
@@ -628,7 +632,7 @@ mod plan_balance_tests {
     #[test]
     fn apply_snapshot_updated_at_change_is_pushed() {
         reset_for_test();
-        let updates = subscribe();
+        let (updates, _) = subscribe();
         apply_snapshot(vec![old_entry("deepseek", 500)]);
         assert!(updates.try_recv().is_some());
         apply_snapshot(vec![old_entry("deepseek", 501)]);
@@ -645,7 +649,7 @@ mod plan_balance_tests {
         reset_for_test();
         let old = old_entry("deepseek", 500);
         apply_snapshot(vec![old.clone()]);
-        let updates = subscribe();
+        let (updates, _) = subscribe();
         let new = poll_once_with(
             std::slice::from_ref(&old),
             |_| resolve_some(),
@@ -662,8 +666,8 @@ mod plan_balance_tests {
     #[test]
     fn watch_channel_fans_out_to_multiple_subscribers() {
         reset_for_test();
-        let first = subscribe();
-        let second = subscribe();
+        let (first, _) = subscribe();
+        let (second, _) = subscribe();
         let snapshot = vec![old_entry("deepseek", 700)];
         apply_snapshot(snapshot.clone());
         assert_eq!(first.try_recv(), Some(snapshot.clone()));
@@ -716,11 +720,20 @@ mod plan_balance_tests {
         assert!(def.executor.is_some(), "planBalance 应由进程级执行体驱动");
     }
 
+    /// B64:订阅同时返回当前快照,注册与首推之间不丢值。
+    #[test]
+    fn subscribe_returns_the_current_snapshot_with_the_receiver() {
+        reset_for_test();
+        apply_snapshot(vec![old_entry("plan-a", 1)]);
+        let (_updates, snapshot) = subscribe();
+        assert_eq!(snapshot, vec![old_entry("plan-a", 1)]);
+    }
+
     /// 执行体在后台线程运行并发布快照(来源存在但未命中套餐 → 空快照,不出网)。
     #[test]
     fn executor_publishes_from_a_background_thread() {
         reset_for_test();
-        let updates = subscribe();
+        let (updates, _) = subscribe();
         let dir = tempfile::tempdir().expect("创建临时目录");
         let path = dir.path().join("settings.json");
         std::fs::write(

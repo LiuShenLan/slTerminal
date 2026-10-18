@@ -42,6 +42,8 @@
     "copy_name": "Copy file name",
     "close_window_title": "Unsaved files",
     "close_window_detail": "{count} file(s) have unsaved changes.",
+    "save_all_failed_title": "Could not save all files",
+    "save_all_failed_detail": "{count} file(s) failed to save; the window stays open.",
     "diff_head": "HEAD",
     "diff_worktree": "Working tree",
     "diff_previous": "Previous change",
@@ -160,6 +162,7 @@
       "enabled": "Hooks installed",
       "disabled": "Hooks removed",
       "failed": "Hook operation failed: {error}",
+      "confirm_statusline": "Confirm and retry",
       "restart": "Restart the CLI after changing hook installation.",
       "editor_group": "Hooks configuration",
       "editor_description": "Only your own handlers are editable. Groups installed by slTerminal are read-only and survive saves unchanged.",
@@ -315,6 +318,9 @@
   },
   "terminal": {
     "ai_analyzing": "Analyzing failure…",
-    "ai_fix_hint": "Ctrl+. paste · Esc dismiss"
+    "ai_fix_hint": "Ctrl+. paste · Esc dismiss",
+    "close_busy_title": "Close a running pane?",
+    "close_busy_detail": "This pane still has a running task; closing it terminates its processes.",
+    "close_busy_confirm": "Close anyway"
   }
 }

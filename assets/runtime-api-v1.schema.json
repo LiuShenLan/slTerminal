@@ -1368,6 +1368,11 @@
           ],
           "minimum": 1,
           "description": "Stable tab identity; when present it wins over tab_index."
+        },
+        "force": {
+          "type": "boolean",
+          "default": false,
+          "description": "Discard unsaved editor changes instead of failing with dirty_document."
         }
       },
       "additionalProperties": false

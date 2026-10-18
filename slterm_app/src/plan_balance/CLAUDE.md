@@ -29,5 +29,6 @@
   (注册表订阅 + GPUI background executor 循环;首轮立即,后续按注册表节拍;
   任务 Drop = 退订;enabled 门控走 `background_tasks` 原子量)。
 - UI 展示/刷新入口消费 `current_snapshot()` / `subscribe()` /
-  `refresh_plan_balance()`,归 06 设置页/HUD。
+  `refresh_plan_balance()`,归 06 设置页/HUD。`subscribe()` 同时返回订阅
+  那一刻的当前快照(B64),注册与首推之间不丢值。
 - 真实 provider API 出网豁免登记于 `.claude/test-exemptions.md`(M10.11 条)。

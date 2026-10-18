@@ -58,7 +58,7 @@ slterm agent read <agent> --lines 80           # tail of what the agent printed
 slterm agent wait <agent> --after-seq <seq>    # block until the turn ends
 
 slterm window close <window>
-slterm tab close <tab> --window <window>
+slterm tab close <tab> --window <window>       # dirty editors fail; --force discards
 slterm tab rename <tab> <name> --window <window>
 slterm tab move <tab> <to> --window <window>
 ```

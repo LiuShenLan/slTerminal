@@ -80,6 +80,9 @@ struct TabTargetParams {
     tab_index: usize,
     #[serde(default)]
     tab_id: Option<u64>,
+    /// `tab.close` 专用:丢弃未保存草稿(B12)。
+    #[serde(default)]
+    force: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -330,6 +333,7 @@ impl RuntimeCommand {
                     window_id: params.window_id,
                     tab_index: params.tab_index,
                     tab_id: params.tab_id.map(TabId),
+                    force: params.force,
                 })
             }
             "tab.rename" => {
@@ -1167,6 +1171,27 @@ mod command_tests {
                 assert_eq!(error.code, "invalid_params", "{method}: range {label}");
             }
         }
+    }
+
+    /// B12:`tab.close` 的 force 默认 false;显式 true 才允许丢弃草稿。
+    #[test]
+    fn tab_close_parses_the_force_flag() {
+        let command =
+            RuntimeCommand::from_params("tab.close", &serde_json::json!({"tab_index": 0}))
+                .expect("tab.close");
+        assert!(matches!(
+            command,
+            RuntimeCommand::CloseTab { force: false, .. }
+        ));
+        let command = RuntimeCommand::from_params(
+            "tab.close",
+            &serde_json::json!({"tab_index": 0, "force": true}),
+        )
+        .expect("tab.close force");
+        assert!(matches!(
+            command,
+            RuntimeCommand::CloseTab { force: true, .. }
+        ));
     }
 
     #[test]

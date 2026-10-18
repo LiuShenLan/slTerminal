@@ -52,7 +52,8 @@ fn write_audited(
 ) -> io::Result<()> {
     let result = crate::atomic_file::write(path, bytes);
     match &result {
-        Ok(()) => tracing::warn!(
+        // A16:成功写是常规取证事件,降为 info;失败保持 warn(异常面)。
+        Ok(()) => tracing::info!(
             target: TARGET,
             operation = %operation,
             path = %path.display(),
@@ -231,6 +232,7 @@ mod audit_tests {
         assert_field(&text, "operation", "settings_write");
         assert_field(&text, "source", "settings_store::test");
         assert_field(&text, "result", "ok");
+        assert!(text.contains("INFO"), "成功写必须降为 info(A16): {text}");
     }
 
     /// 失败路径同样审计(result=error),错误照常上抛。
@@ -247,6 +249,7 @@ mod audit_tests {
         let text = captured.text();
         assert_field(&text, "result", "error");
         assert_field(&text, "operation", "settings_write");
+        assert!(text.contains("WARN"), "失败写必须保持 warn(A16): {text}");
     }
 
     /// SEC-18:审计事件只含路径/字段身份,绝不携带写入内容(可能含凭据)。

@@ -355,6 +355,9 @@ pub enum ControlCommand {
         window: Option<u64>,
         #[arg(long = "tab")]
         tab_index: usize,
+        /// Discard unsaved editor changes instead of failing with dirty_document.
+        #[arg(long)]
+        force: bool,
     },
     /// Set a tab's custom name. An empty value restores the generated title.
     RenameTab {
@@ -559,6 +562,9 @@ pub struct TabCloseOptions {
     /// Window containing the tab.
     #[arg(long)]
     pub window: u64,
+    /// Discard unsaved editor changes instead of failing with dirty_document.
+    #[arg(long)]
+    pub force: bool,
     #[command(flatten)]
     pub output: ShortOutput,
     #[arg(long, default_value_t = SHORT_TIMEOUT_MS)]

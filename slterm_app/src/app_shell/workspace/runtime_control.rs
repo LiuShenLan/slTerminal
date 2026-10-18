@@ -74,18 +74,26 @@ impl SltermWorkspace {
                 crate::windowing::focus::focus(self, pane, window, cx);
                 cx.notify();
             }
-            // 权限确认动作按钮是四路回窗之一(09 篇 M10.4):先经 facade
-            // 回窗,确认语义本身归 10 篇安全半程(当前无消费方,落日志取证)。
+            // 权限确认动作按钮是四路回窗之一(09 篇 M10.4)。B43:消费 =
+            // 回窗聚焦 + 审计留痕(选择、请求 id、pane)。按键注入语义取决于
+            // confirmation 标签生产方——当前 hook 是「转发后退出」的非阻塞
+            // 桥,无法回写权限决定,故不猜测按键。
             SltermShellEvent::NotificationChoice {
                 pane_id,
                 request_id,
                 choice,
             } => {
                 crate::windowing::focus::focus(self, Some(pane_id), window, cx);
-                log::debug!(
-                    "notify: choice {choice} for confirmation {request_id} on pane={} (consumer lands with the M10 security half)",
-                    pane_id.0
+                tracing::info!(
+                    target: crate::audit::TARGET,
+                    operation = "notification_choice",
+                    pane = pane_id.0,
+                    request_id = %request_id,
+                    choice = %choice,
+                    result = "acknowledged",
+                    "通知动作按钮回执已消费"
                 );
+                cx.notify();
             }
             // 托盘「退出」(09 篇 M10.3):与关窗同一条退出链——先落终局
             // 快照,再移除唯一主窗;LastWindowClosed 随即结束进程。
@@ -344,12 +352,21 @@ impl SltermWorkspace {
                 window_id,
                 tab_index,
                 tab_id,
+                force,
             } => {
                 ensure_window(*window_id)?;
                 let index = self.tab_index_for(*tab_id, *tab_index)?;
                 let busy = self.busy_panes(self.tab_pane_ids(index));
                 if !busy.is_empty() {
                     return Err(confirmation_required(&busy));
+                }
+                // B12:脏文件默认返回明确错误码,不再「先回成功、异步弹确认」;
+                // 调用方须显式 force=true 才丢弃草稿。
+                if !*force && self.tab_has_dirty_document(index, cx) {
+                    return Err(ApiError::new(
+                        "dirty_document",
+                        "tab has unsaved changes; pass force=true to discard them",
+                    ));
                 }
                 let closed = self.tabs[index].id.0;
                 // 关最后一个 tab = 关窗;先取快照再摘除,避免在已移除窗口
@@ -358,7 +375,12 @@ impl SltermWorkspace {
                     json!({ "window_id": SINGLE_WINDOW_ID, "tab_id": closed, "tab_index": index }),
                     cx,
                 )?;
-                self.close_tab_at(index, window, cx);
+                if *force {
+                    // 已显式确认丢弃草稿:跳过交互式脏守卫。
+                    self.finish_close_tab(index, window, cx);
+                } else {
+                    self.close_tab_at(index, window, cx);
+                }
                 Ok(result)
             }
             RuntimeCommand::RenameTab {
@@ -917,7 +939,7 @@ impl SltermWorkspace {
         }
     }
 
-    fn busy_panes(&self, panes: impl Iterator<Item = PaneId>) -> Vec<u64> {
+    pub(super) fn busy_panes(&self, panes: impl Iterator<Item = PaneId>) -> Vec<u64> {
         panes
             .filter(|pane| busy_state(self.pane_task_state(*pane)))
             .map(|pane| pane.0)
@@ -1129,5 +1151,18 @@ fn tab_pane_ids(entry: &super::TabEntry) -> Vec<PaneId> {
         | WorkspaceTab::Document { .. }
         | WorkspaceTab::Code { .. }
         | WorkspaceTab::Image { .. } => Vec::new(),
+    }
+}
+
+/// 虚拟窗口用例驱动端:直接执行 runtime 写命令。
+#[cfg(all(test, feature = "gpui-test-support"))]
+impl SltermWorkspace {
+    pub(crate) fn execute_runtime_command_for_test(
+        &mut self,
+        command: &RuntimeCommand,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<Value, ApiError> {
+        self.execute_runtime_command(command, window, cx)
     }
 }

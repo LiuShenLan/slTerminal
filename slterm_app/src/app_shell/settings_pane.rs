@@ -140,6 +140,11 @@ pub(crate) struct SettingsPane {
     status: Option<SettingsStatus>,
     /// 恢复默认的二次确认(第一次点击只武装)。
     reset_armed: bool,
+    /// A2 写相位机:设置类写盘全部后台执行,前台只入队与消费结果。
+    persist_queue: std::collections::VecDeque<persistence::PersistJob>,
+    persist_running: bool,
+    /// B57:拖动中的实时透明度;后台回读不得覆盖预览值。
+    live_opacity: Option<f32>,
     /// 主题编辑会话(外观页子视图;关闭即丢弃草稿)。
     theme_editor: Option<theme_editor::ThemeEditor>,
     _subscriptions: Vec<Subscription>,
@@ -364,6 +369,9 @@ impl SettingsPane {
             startup_directory_input,
             status,
             reset_armed: false,
+            persist_queue: std::collections::VecDeque::new(),
+            persist_running: false,
+            live_opacity: None,
             theme_editor: None,
             _subscriptions: subscriptions,
         };

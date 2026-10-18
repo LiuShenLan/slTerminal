@@ -556,6 +556,7 @@ fn settings_slider_previews_in_memory_and_release_commits(cx: &mut TestAppContex
             pane.commit_scroll_speed_for_test(2.25, window, cx);
         });
     });
+    window.run_until_parked();
     assert!(path.exists(), "松手提交必须落盘");
     let tree = slterm_settings::json::parse(&std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(
@@ -568,6 +569,68 @@ fn settings_slider_previews_in_memory_and_release_commits(cx: &mut TestAppContex
     cx.update(|cx| {
         assert_eq!(pane.read(cx).runtime_for_test().scroll_speed, 2.25);
         assert!(pane.read(cx).status_for_test().is_none());
+    });
+}
+
+/// A2 相位机:连续提交在队列尾按 key 合并,后台任务串行执行。
+#[gpui::test]
+fn settings_persist_coalesces_rapid_commits_and_serializes_writes(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("settings.json");
+    let pane = open_settings_at(cx, &workspace, &mut window, path.clone());
+    window.refresh().unwrap();
+    draw_frame(&mut window);
+
+    window.update(|window, cx| {
+        pane.update(cx, |pane, cx| {
+            pane.commit_scroll_speed_for_test(2.0, window, cx);
+            pane.commit_scroll_speed_for_test(2.5, window, cx);
+        });
+    });
+    cx.update(|cx| {
+        let (queued, running) = pane.read(cx).persist_state_for_test();
+        assert!(running, "首个写任务必须已在后台执行");
+        assert!(queued <= 1, "连续提交必须合并到队列尾,实际排队 {queued}");
+    });
+    window.run_until_parked();
+    let tree = slterm_settings::json::parse(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(
+        tree.get("scrolling")
+            .and_then(|section| section.get("scroll_speed"))
+            .and_then(|value| value.as_f64()),
+        Some(2.5),
+        "合并后落盘的必须是最后一次提交"
+    );
+    cx.update(|cx| {
+        let (queued, running) = pane.read(cx).persist_state_for_test();
+        assert_eq!((queued, running), (0, false), "排水后相位机必须归位");
+    });
+}
+
+/// B57:拖动预览期间另一笔设置写完成,回读不得覆盖预览值。
+#[gpui::test]
+fn settings_opacity_preview_survives_a_concurrent_persist(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("settings.json");
+    let pane = open_settings_at(cx, &workspace, &mut window, path.clone());
+    window.refresh().unwrap();
+    draw_frame(&mut window);
+
+    pane.update(cx, |pane, cx| pane.preview_opacity_for_test(0.5, cx));
+    window.update(|window, cx| {
+        pane.update(cx, |pane, cx| {
+            pane.save_text_for_test("font_size", "20", window, cx);
+        });
+    });
+    window.run_until_parked();
+    cx.update(|cx| {
+        assert_eq!(
+            pane.read(cx).runtime_for_test().opacity,
+            0.5,
+            "并发写回读不得覆盖拖动预览(B57)"
+        );
     });
 }
 
@@ -588,6 +651,7 @@ fn launch_at_login_toggle_persists_the_setting_key(cx: &mut TestAppContext) {
                 pane.toggle_for_test("launch_at_login", enabled, window, cx);
             });
         });
+        window.run_until_parked();
         let tree = slterm_settings::json::parse(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(
             tree.get("session")
@@ -653,6 +717,7 @@ fn settings_write_failure_rolls_back_the_slider_and_reports_status(cx: &mut Test
             pane.commit_scroll_speed_for_test(2.0, window, cx);
         });
     });
+    window.run_until_parked();
     cx.update(|cx| {
         let pane = pane.read(cx);
         assert_eq!(
@@ -740,6 +805,7 @@ fn settings_language_switch_refreshes_display_without_rebuilding_controls(cx: &m
             pane.commit_select_for_test("language", "zh-CN", window, cx);
         });
     });
+    window.run_until_parked();
     cx.update(|cx| {
         let pane = pane.read(cx);
         assert_eq!(

@@ -1123,6 +1123,109 @@ fn closing_the_window_with_dirty_files_confirms_first(cx: &mut TestAppContext) {
     );
 }
 
+/// B12:runtime `tab.close` 对脏文件默认拒绝(dirty_document);force 才丢弃。
+#[gpui::test]
+fn runtime_tab_close_rejects_dirty_documents_unless_forced(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    let directory = tempfile::tempdir().unwrap();
+    let path = write_temp_file(directory.path(), "draft.rs", b"initial\n");
+    open_document_at(&workspace, &mut window, path.clone());
+    focus_active_file_tab(&workspace, &mut window);
+    window.simulate_input("draft ");
+    window.run_until_parked();
+    let tab_count = workspace.read_with(cx, |ws, _| ws.tab_count());
+
+    let error = window
+        .update(|window, cx| {
+            workspace.update(cx, |ws, cx| {
+                ws.execute_runtime_command_for_test(
+                    &crate::runtime_api::RuntimeCommand::CloseTab {
+                        window_id: None,
+                        tab_index: tab_count - 1,
+                        tab_id: None,
+                        force: false,
+                    },
+                    window,
+                    cx,
+                )
+            })
+        })
+        .expect_err("脏文件默认必须拒绝");
+    assert_eq!(error.code, "dirty_document");
+    assert_eq!(
+        workspace.read_with(cx, |ws, _| ws.tab_count()),
+        tab_count,
+        "拒绝后 tab 必须保留"
+    );
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        b"initial\n",
+        "拒绝不得丢弃草稿"
+    );
+
+    window
+        .update(|window, cx| {
+            workspace.update(cx, |ws, cx| {
+                ws.execute_runtime_command_for_test(
+                    &crate::runtime_api::RuntimeCommand::CloseTab {
+                        window_id: None,
+                        tab_index: tab_count - 1,
+                        tab_id: None,
+                        force: true,
+                    },
+                    window,
+                    cx,
+                )
+            })
+        })
+        .expect("force 必须关闭");
+    assert_eq!(
+        workspace.read_with(cx, |ws, _| ws.tab_count()),
+        tab_count - 1,
+        "force 后 tab 必须关闭"
+    );
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        b"initial\n",
+        "force 只丢弃草稿,不改磁盘"
+    );
+}
+
+/// B6:保存全部遇单文件失败时继续保存其余文件,窗口保持打开。
+#[gpui::test]
+fn save_all_keeps_saving_after_one_failure(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    let directory = tempfile::tempdir().unwrap();
+    let bad_path = write_temp_file(directory.path(), "bad.rs", b"bad\n");
+    let good_path = write_temp_file(directory.path(), "good.rs", b"good\n");
+    open_document_at(&workspace, &mut window, bad_path.clone());
+    focus_active_file_tab(&workspace, &mut window);
+    window.simulate_input("bad ");
+    window.run_until_parked();
+    open_document_at(&workspace, &mut window, good_path.clone());
+    focus_active_file_tab(&workspace, &mut window);
+    window.simulate_input("good ");
+    window.run_until_parked();
+
+    // 把目标路径换成目录:原子替换必然失败,且不影响其余文件。
+    std::fs::remove_file(&bad_path).unwrap();
+    std::fs::create_dir(&bad_path).unwrap();
+
+    assert!(!window.simulate_close(), "脏文件时关窗必须被拦截");
+    window.run_until_parked();
+    assert!(window.has_pending_prompt());
+    let save = ui_label(cx, Message::EditorSave);
+    window.simulate_prompt_answer(&save);
+    window.run_until_parked();
+
+    assert_eq!(
+        std::fs::read(&good_path).unwrap(),
+        b"good good\n",
+        "单文件失败后必须继续保存其余文件(B6)"
+    );
+    assert!(bad_path.is_dir(), "失败文件路径保持原状");
+}
+
 /// 保留键红线:终端焦点下 Ctrl+S 不被编辑器保存动作吞;Ctrl+C 中断与
 /// Ctrl+Shift+C 复制仍走终端自身语义(不产生编辑器动作/键入串)。
 #[gpui::test]

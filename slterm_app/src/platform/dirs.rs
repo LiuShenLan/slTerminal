@@ -6,12 +6,23 @@
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-/// 用户主目录。Windows `USERPROFILE`;空串视为未设置(登录管理器实踩过)。
+/// 用户主目录。Windows 优先 `USERPROFILE`,回退 `HOME`(B65);空串视为
+/// 未设置(登录管理器实踩过)。
 #[allow(dead_code)] // 消费点 = M3.2 初始 cwd 回退(显式目录无效时落 home)。
 pub fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("USERPROFILE")
-        .map(PathBuf::from)
-        .filter(|path| !path.as_os_str().is_empty())
+    home_dir_from(|name| std::env::var_os(name))
+}
+
+fn home_dir_from(lookup: impl Fn(&str) -> Option<std::ffi::OsString>) -> Option<PathBuf> {
+    for variable in ["USERPROFILE", "HOME"] {
+        if let Some(value) = lookup(variable) {
+            let path = PathBuf::from(value);
+            if !path.as_os_str().is_empty() {
+                return Some(path);
+            }
+        }
+    }
+    None
 }
 
 /// 配置与数据目录,必要时创建。
@@ -55,6 +66,23 @@ mod dirs_tests {
                 .filter(|p: &PathBuf| !p.as_os_str().is_empty())
                 .is_none()
         );
+    }
+
+    /// B65:USERPROFILE 缺失时回退 HOME;空 USERPROFILE 不阻挡回退。
+    #[test]
+    fn home_dir_prefers_userprofile_and_falls_back_to_home() {
+        use std::ffi::OsString;
+
+        let both = |name: &str| match name {
+            "USERPROFILE" => Some(OsString::from("C:/Users/test")),
+            "HOME" => Some(OsString::from("D:/home")),
+            _ => None,
+        };
+        assert_eq!(home_dir_from(both), Some(PathBuf::from("C:/Users/test")));
+        let only_home = |name: &str| (name == "HOME").then(|| OsString::from("D:/home"));
+        assert_eq!(home_dir_from(only_home), Some(PathBuf::from("D:/home")));
+        let empty_userprofile = |name: &str| (name == "USERPROFILE").then(OsString::new);
+        assert_eq!(home_dir_from(empty_userprofile), None);
     }
 
     /// B1:测试构建的数据目录必须落在临时根,绝不触碰真实用户目录。

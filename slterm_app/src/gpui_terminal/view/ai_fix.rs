@@ -49,9 +49,9 @@ impl TerminalView {
             ai_assistant::request_fix(&config, &request, &WindowsCredentialStore)
         });
         cx.spawn(async move |this, cx| {
-            let fix = calculation.await;
+            let result = calculation.await;
             let _ = this.update(cx, |view, cx| {
-                view.apply_ai_fix_response(seq, fix, cx);
+                view.apply_ai_fix_response(seq, result, cx);
             });
         })
         .detach();
@@ -59,14 +59,19 @@ impl TerminalView {
     }
 
     /// 响应落位:pane 归属由视图实体保证,seq 必须与当前态一致。
+    /// `Err` = 配置/凭据错误(A6):显式上条,不再静默消失。
     pub(crate) fn apply_ai_fix_response(
         &mut self,
         seq: u64,
-        fix: Option<AiFix>,
+        result: Result<Option<AiFix>, String>,
         cx: &mut Context<'_, Self>,
     ) {
         if self.ai_fix.as_ref().is_some_and(|state| state.seq() == seq) {
-            self.ai_fix = fix.map(|fix| AiFixState::Ready { seq, fix });
+            self.ai_fix = match result {
+                Ok(Some(fix)) => Some(AiFixState::Ready { seq, fix }),
+                Ok(None) => None,
+                Err(message) => Some(AiFixState::Failed { seq, message }),
+            };
             cx.notify();
         }
     }
@@ -129,6 +134,13 @@ impl TerminalView {
                 command: fix.command.clone(),
                 explain: fix.explain.clone(),
                 danger: fix.danger,
+                pending: false,
+            }),
+            // A6:错误以条面显示(message 走 explain 槽,command 为空)。
+            AiFixState::Failed { message, .. } => Some(AiFixBar {
+                command: String::new(),
+                explain: message.clone(),
+                danger: false,
                 pending: false,
             }),
         }

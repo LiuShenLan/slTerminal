@@ -281,8 +281,23 @@ pub(crate) fn set_enabled(agent: AgentHook, enabled: bool) -> io::Result<()> {
 /// 显式 claude 目录的接入/卸载(设置页联调/测试注入;授权已由调用方经
 /// 设置写通道落盘,本入口不再写偏好)。写后经同一检视面校验。
 pub(crate) fn apply_claude_at(dir: &Path, helper: &str, enabled: bool) -> io::Result<()> {
+    apply_claude_at_with(dir, helper, enabled, false)
+}
+
+/// C5:confirmed=true 时绕过 SEC-12 审查门(设置页已展示原文并确认)。
+pub(crate) fn apply_claude_at_with(
+    dir: &Path,
+    helper: &str,
+    enabled: bool,
+    confirmed: bool,
+) -> io::Result<()> {
     if enabled {
-        match ensure_claude_hooks_at(dir, helper) {
+        let outcome = if confirmed {
+            ensure_claude_hooks_in(dir, helper, |_| InstallGate::Proceed)
+        } else {
+            ensure_claude_hooks_at(dir, helper)
+        };
+        match outcome {
             InstallOutcome::Installed | InstallOutcome::Current => {}
             InstallOutcome::Suspended { suspicious_command } => {
                 return Err(io::Error::other(format!(
@@ -334,7 +349,16 @@ pub(super) fn remove_all_for(agents: &[AgentHook]) -> Vec<(AgentHook, io::Error)
 
 /// 按已落盘的偏好执行接入/卸载(不写授权;03 安装权威的应用入口)。
 pub(crate) fn apply_and_verify(agent: AgentHook, enabled: bool) -> io::Result<()> {
-    apply(agent, enabled)?;
+    apply_and_verify_with(agent, enabled, false)
+}
+
+/// C5:confirmed=true 时 SEC-12 审查门恒放行(设置页已展示原文并由用户确认)。
+pub(crate) fn apply_and_verify_with(
+    agent: AgentHook,
+    enabled: bool,
+    confirmed: bool,
+) -> io::Result<()> {
+    apply_with_confirmation(agent, enabled, confirmed)?;
     let state = inspect(agent);
     if let Some(error) = state.error {
         return Err(io::Error::other(error));
@@ -348,13 +372,43 @@ pub(crate) fn apply_and_verify(agent: AgentHook, enabled: bool) -> io::Result<()
 }
 
 pub(super) fn apply(agent: AgentHook, enabled: bool) -> io::Result<()> {
+    apply_with_confirmation(agent, enabled, false)
+}
+
+/// C5:命中 SEC-12 审查词表时给出待确认原文(设置页据此展示「确认并重试」)。
+pub(crate) fn statusline_confirmation(agent: AgentHook) -> Option<String> {
+    if agent != AgentHook::Claude {
+        return None;
+    }
+    statusline_confirmation_at(&claude_config_dir()?)
+}
+
+/// 显式目录形态(设置页联调/测试注入)。
+pub(crate) fn statusline_confirmation_at(dir: &Path) -> Option<String> {
+    let raw = std::fs::read_to_string(dir.join("settings.json")).ok()?;
+    let root: Value = serde_json::from_str(&raw).ok()?;
+    let command = root.get("statusLine")?.get("command")?.as_str()?;
+    match review_statusline_command(command) {
+        InstallGate::Suspended { suspicious_command } => Some(suspicious_command),
+        InstallGate::Proceed => None,
+    }
+}
+
+pub(super) fn apply_with_confirmation(
+    agent: AgentHook,
+    enabled: bool,
+    confirmed: bool,
+) -> io::Result<()> {
     match (agent, enabled) {
         (AgentHook::Claude, true) => {
-            // reconcile 路径携带真实审查门:命中 → 审计 + 跳过(零写盘),
-            // 无交互可用不当错误上抛(SEC-12;设置页确认路径归 06 篇)。
-            if let InstallOutcome::Suspended { suspicious_command } =
+            let outcome = if confirmed {
+                ensure_claude_hooks(|_| InstallGate::Proceed)
+            } else {
                 ensure_claude_hooks(review_statusline_command)
-            {
+            };
+            // reconcile 路径携带真实审查门:命中 → 审计 + 跳过(零写盘),
+            // 无交互可用不当错误上抛(SEC-12;确认路径传 confirmed=true)。
+            if let InstallOutcome::Suspended { suspicious_command } = outcome {
                 tracing::warn!(
                     target: crate::audit::TARGET,
                     operation = "statusline_review",

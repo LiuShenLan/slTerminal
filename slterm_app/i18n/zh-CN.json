@@ -42,6 +42,8 @@
     "copy_name": "复制文件名",
     "close_window_title": "未保存的文件",
     "close_window_detail": "{count} 个文件有未保存的更改。",
+    "save_all_failed_title": "未能保存全部文件",
+    "save_all_failed_detail": "{count} 个文件保存失败，窗口保持打开。",
     "diff_head": "HEAD",
     "diff_worktree": "工作区",
     "diff_previous": "上一处更改",
@@ -160,6 +162,7 @@
       "enabled": "已安装钩子",
       "disabled": "已移除钩子",
       "failed": "钩子操作失败：{error}",
+      "confirm_statusline": "确认并重试",
       "restart": "更改钩子安装后请重启对应 CLI。",
       "editor_group": "Hooks 配置",
       "editor_description": "仅你的自有 handler 可编辑；slTerminal 安装的分组只读，保存时原样保留。",
@@ -315,6 +318,9 @@
   },
   "terminal": {
     "ai_analyzing": "正在分析失败原因…",
-    "ai_fix_hint": "Ctrl+. 贴入 · Esc 关闭"
+    "ai_fix_hint": "Ctrl+. 贴入 · Esc 关闭",
+    "close_busy_title": "关闭运行中的 pane？",
+    "close_busy_detail": "该 pane 仍有任务在运行，关闭会终止其中的进程。",
+    "close_busy_confirm": "仍然关闭"
   }
 }

@@ -382,7 +382,7 @@ fn tab_close(options: TabCloseOptions) -> Result<(), Box<dyn Error>> {
     let timeout = validated_timeout(options.timeout_ms)?;
     let response = request_once(
         "tab.close",
-        json!({ "window_id": options.window, "tab_index": options.tab }),
+        json!({ "window_id": options.window, "tab_index": options.tab, "force": options.force }),
         timeout,
     )?;
     print_response(&response, options.output.pretty)
