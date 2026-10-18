@@ -23,6 +23,7 @@
 | A13 | **recovery 汇总走直发通道而非通知漏斗**：启动期窗口前台，漏斗门控会丢该信息，故走 `platform::notifications::show`（诊断/更新提示直发通道）。 | M10.1 | 若要求统一走漏斗，需加「启动汇总豁免前台门控」策略位。 |
 | A14 | **`silent_start=1/tray=0` 为惰性组合**：实现保持设计稿纯两条件（不隐藏），上游会在开启静默时强制 tray=1。 | M10.6 | 是否在设置页加「开启静默同时补 tray」的 UX 约束。 |
 | A15 | **Acrylic 增强路径未迁**：上游 22H2 优先用 DesktopAcrylicController，本仓无该模块/Windows App Runtime 依赖，Acrylic 仅走 WCA state 4 回退。 | M10.7 | 是否补移植（新增依赖面）需裁决；实际观感取决于 WCA。 |
+| A16 | **审计写事件噪声**：每次设置写发 warn（含主题 live 预览等高频写路径）。取证价值与日志量需平衡。 | M10.12 | 按操作分级，或预览写单独 source 降为 info（涉及审计可观测面口径）。 |
 
 ## B. 待修（已知缺陷/优化）
 
@@ -94,6 +95,8 @@
 | B64 | **plan_balance 订阅者漏唤醒窗口**：订阅者在「快照落槽后、通知扇出前」注册会漏一次唤醒；消费方须订阅后先读 `current_snapshot()`（已写 doc）。 | `plan_balance/mod.rs` | M10.11 | 订阅 API 同时返回当前值。 |
 | B65 | **plan_balance home 解析仅 USERPROFILE**：旧资产经 home.rs 带 `dirs::home_dir()` 回退；Windows 影响低。 | `plan_balance/source.rs` | M10.11 | 待复核。 |
 | B66 | **`SettingsPathGuard` 仅模块内测试可用**：e2e 若需隔离 plan_balance home，需 USERPROFILE 注入或上提共享守卫。 | `plan_balance/source.rs` | M10.11 | 需要时上提。 |
+| B67 | **审计双栈重复风险**：`tracing` 用 `log-always`（审计无条件进 log）；若后续装配全局 tracing subscriber，事件双落点。 | `slterm_app/Cargo.toml`/`audit.rs` | M10.12 | 装配 subscriber 时改回 `log` feature 并显式控制桥接方向，或 subscriber 侧过滤 audit。 |
+| B68 | **SEC-13 覆盖半面**：claude hooks 的 `HookInspection.needs_repair` 是结构比对、无哈希；磁盘 hook 被改时不产生 SEC-13 哈希事件。 | `ai_hook/local/settings.rs` `current_at`/`inspect_with` | M10.12 | 03 篇补内嵌模板指纹后接 `audit::hook_hash_mismatch`。 |
 
 ## C. 计划内（归后续子步/阶段，重构完成时验证）
 
@@ -112,7 +115,7 @@
 | C11 | **i18n 合同独立 workspace CI 登记**：`tools/slterm-i18n-contract` 不在根 workspace，clippy/CI 不覆盖。 | 12 篇打包/CI 清单 | |
 | C12 | **旧栈语义资产转测试保留**：git2 五份语义资产（D07-1 裁定转对照用例）。 | 07/M11 | |
 | C13 | **docs/ 临时稿删除 + 篇号锚点清理**（与 A3 联动）。 | M11 | |
-| C14 | **设计措辞修正**：05 篇「窗口边缘」应为「内容区外圈」；04 篇 `reorder_batch` 签名稿与上游不符（已照源）；08 篇 `note_bell` 上游不存在（未落）；04 篇 generation 等待错误码口径（实现按设计稿 `agent_identity_mismatch`/`agent_exited`）；08 篇 D08-2 待沉淀仍写「M9.3 落地时拍板」而 DECISIONS 已裁（文档漂移）；08 篇 `compile_formula` 签名草案与上游实源不符（已按源码照抄）；08 篇 #44 `draw_overlays` 未迁，M9.5 自绘 paint pass（设计稿应标注归属）；09 篇 §6 duration 值域（Default|Short|Long）与 06 已落六档不一致（实现按六档消费，persistent 无系统常驻档）；09 篇 M10.2 出口只写「agent 退出清进度」，实现按任务书补 TurnDone/pane 关闭清除（doc 待回登）；09 篇 `focus_window(cx)`/`focus_pane(pane,cx)` 为多窗注册表签名，与单窗 GPUI（窗口更新回调内不可再 update）冲突，实现改为显式 `&mut Window` 落点、目标选择/平台调用仍单点；09 篇 `PreparedUpdate::commit(&self)` 实为 `commit(&mut self, windows: &[Session])`，`RELEASE_DOWNLOAD_PREFIX` 落 `update_check.rs` 而非 `update_download`（M11 原位收敛）；09 篇 row 35 写 `.lnk`「静默参数」但 CLI 无静默旗标（实现按设置两条件；doc 待删措辞或另立 `--silent`）；09 篇 TaskDef 无一次性/按需形态，实现新增 `TaskSchedule`（Once/OnDemand，M11 回登）；10 篇 `load_generic_secret` 签名 `Option<Vec<u8>>` 实为 `Option<SecretBytes>`（出域句柄补强）；`store_with_username` 空 secret 拒绝为新增语义（M11 回登或裁除）；10 篇 D10-2 类别清单未回登（实现裁 6 类 + 22 敏感键表 + 导出清洗/导入复验双闸）；`filter_settings` 签名 `Vec<u8>→Vec<u8>` 实为 `Result`；备份依赖 caret 解析 aes-gcm 0.11.1/argon2 0.6.0（上游 0.11.0/0.6.0-rc.8）；**设计输入失实**：上游基线 e537d528 无 plan_balance 模块，行为真值源实为 slTerminal git 历史 `src-tauri/src/plan_balance/`（c59f47f^ 终态），设计稿「上游源」表述待 M11 订正；`AppError::Unknown` 变体未登记 01 篇锚点表。 | 设计稿 | 重构末统一订正。 |
+| C14 | **设计措辞修正**：05 篇「窗口边缘」应为「内容区外圈」；04 篇 `reorder_batch` 签名稿与上游不符（已照源）；08 篇 `note_bell` 上游不存在（未落）；04 篇 generation 等待错误码口径（实现按设计稿 `agent_identity_mismatch`/`agent_exited`）；08 篇 D08-2 待沉淀仍写「M9.3 落地时拍板」而 DECISIONS 已裁（文档漂移）；08 篇 `compile_formula` 签名草案与上游实源不符（已按源码照抄）；08 篇 #44 `draw_overlays` 未迁，M9.5 自绘 paint pass（设计稿应标注归属）；09 篇 §6 duration 值域（Default|Short|Long）与 06 已落六档不一致（实现按六档消费，persistent 无系统常驻档）；09 篇 M10.2 出口只写「agent 退出清进度」，实现按任务书补 TurnDone/pane 关闭清除（doc 待回登）；09 篇 `focus_window(cx)`/`focus_pane(pane,cx)` 为多窗注册表签名，与单窗 GPUI（窗口更新回调内不可再 update）冲突，实现改为显式 `&mut Window` 落点、目标选择/平台调用仍单点；09 篇 `PreparedUpdate::commit(&self)` 实为 `commit(&mut self, windows: &[Session])`，`RELEASE_DOWNLOAD_PREFIX` 落 `update_check.rs` 而非 `update_download`（M11 原位收敛）；09 篇 row 35 写 `.lnk`「静默参数」但 CLI 无静默旗标（实现按设置两条件；doc 待删措辞或另立 `--silent`）；09 篇 TaskDef 无一次性/按需形态，实现新增 `TaskSchedule`（Once/OnDemand，M11 回登）；10 篇 `load_generic_secret` 签名 `Option<Vec<u8>>` 实为 `Option<SecretBytes>`（出域句柄补强）；`store_with_username` 空 secret 拒绝为新增语义（M11 回登或裁除）；10 篇 D10-2 类别清单未回登（实现裁 6 类 + 22 敏感键表 + 导出清洗/导入复验双闸）；`filter_settings` 签名 `Vec<u8>→Vec<u8>` 实为 `Result`；备份依赖 caret 解析 aes-gcm 0.11.1/argon2 0.6.0（上游 0.11.0/0.6.0-rc.8）；**设计输入失实**：上游基线 e537d528 无 plan_balance 模块，行为真值源实为 slTerminal git 历史 `src-tauri/src/plan_balance/`（c59f47f^ 终态），设计稿「上游源」表述待 M11 订正；`AppError::Unknown` 变体未登记 01 篇锚点表；10 篇审计事件字面格式未定，实现取 `operation/path/source/result` 与 `expected/actual`（M11 回登）；上游仓内无 audit/tracing 现成形态（新建）。 | 设计稿 | 重构末统一订正。 |
 | C15 | **`D04-3 windowing_behavior` 未设键**：单窗行为硬编码 `SINGLE_WINDOW_ID`。 | 12 篇随 settings 面统一裁定 | |
 | C16 | **`request_once_bounded` 无消费方**（插件宿主）。 | M9.5/M10 | |
 | C17 | **`ProviderTestOutcome` 文案本地化**（展示边界）。 | M9.5 | |
