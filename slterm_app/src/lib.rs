@@ -40,6 +40,9 @@ pub mod brand;
 pub(crate) mod cli;
 pub mod error;
 pub(crate) mod gpui_terminal;
+// 界面语言(06 篇 M6.4):build.rs 静态生成的 typed Message 查询 API;
+// 运行时零解析、零文件读、零锁。
+pub(crate) mod i18n;
 pub(crate) mod logging;
 pub(crate) mod panic;
 pub(crate) mod platform;

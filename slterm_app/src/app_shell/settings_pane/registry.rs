@@ -12,6 +12,8 @@
 
 use std::sync::{Mutex, OnceLock};
 
+use crate::i18n::Message;
+
 /// 设置页分组。ADR-0023:导航组序全局在上、Agent 在下。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SettingsPageGroup {
@@ -21,15 +23,15 @@ pub(crate) enum SettingsPageGroup {
     Agent,
 }
 
-/// 一个设置页的路由元数据。`search_terms` 是节级中英混合别名串;
+/// 一个设置页的路由元数据。`title` 是 typed 消息 id(值/显示分离:
+/// 标题随语言刷新,路由 id 稳定);`search_terms` 是节级中英混合别名串;
 /// 控件级别名从 `slterm_settings::keys` 注册表按页面归属拼接,不在此重复。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct SettingsPageDef {
     pub id: &'static str,
     pub group: SettingsPageGroup,
     pub order: u32,
-    pub title_zh: &'static str,
-    pub title_en: &'static str,
+    pub title: Message,
     pub search_terms: &'static str,
 }
 
@@ -39,56 +41,49 @@ pub(crate) const BUILTIN_PAGES: [SettingsPageDef; 7] = [
         id: "application",
         group: SettingsPageGroup::Global,
         order: 0,
-        title_zh: "应用",
-        title_en: "Application",
+        title: Message::SettingsSidebarApplication,
         search_terms: "application app 应用 about 关于 version 版本 update 更新 sponsor 赞助",
     },
     SettingsPageDef {
         id: "appearance",
         group: SettingsPageGroup::Global,
         order: 1,
-        title_zh: "外观",
-        title_en: "Appearance",
+        title: Message::SettingsSidebarAppearance,
         search_terms: "appearance 外观 theme 主题 font 字体 opacity 透明度 background 背景 scrollback 回滚 density 密度",
     },
     SettingsPageDef {
         id: "profiles",
         group: SettingsPageGroup::Global,
         order: 2,
-        title_zh: "配置文件",
-        title_en: "Profiles",
+        title: Message::SettingsSidebarProfiles,
         search_terms: "profiles profile 配置文件 shell terminal 终端 completion 补全 startup 启动 environment 环境变量 notification 通知 bell 铃声",
     },
     SettingsPageDef {
         id: "interaction",
         group: SettingsPageGroup::Global,
         order: 3,
-        title_zh: "交互",
-        title_en: "Interaction",
+        title: Message::SettingsSidebarInteraction,
         search_terms: "interaction 交互 cursor 光标 copy 复制 paste 粘贴 focus 焦点 mouse 鼠标 tab 标签",
     },
     SettingsPageDef {
         id: "advanced",
         group: SettingsPageGroup::Global,
         order: 4,
-        title_zh: "高级",
-        title_en: "Advanced",
+        title: Message::SettingsSidebarAdvanced,
         search_terms: "advanced 高级 session 会话 restore 恢复 tray 托盘 startup 自启动 login 开机 proxy 代理 update 更新",
     },
     SettingsPageDef {
         id: "localization",
         group: SettingsPageGroup::Global,
         order: 5,
-        title_zh: "语言",
-        title_en: "Language",
+        title: Message::SettingsSidebarLocalization,
         search_terms: "localization language 语言 i18n locale 区域",
     },
     SettingsPageDef {
         id: "reset",
         group: SettingsPageGroup::Global,
         order: 6,
-        title_zh: "重置",
-        title_en: "Reset",
+        title: Message::SettingsSidebarReset,
         search_terms: "reset 重置 restore defaults 恢复默认 backup 备份 settings 设置",
     },
 ];
@@ -200,16 +195,15 @@ mod registry_tests {
             id: "agents",
             group: SettingsPageGroup::Agent,
             order: 0,
-            title_zh: "Agent",
-            title_en: "Agents",
+            // 测试条目只验证排序,复用现有消息 id 即可。
+            title: Message::SettingsSidebarApplication,
             search_terms: "agents 智能体",
         });
         register(SettingsPageDef {
             id: "application",
             group: SettingsPageGroup::Global,
             order: 9,
-            title_zh: "应用",
-            title_en: "Application",
+            title: Message::SettingsSidebarApplication,
             search_terms: "application 应用",
         });
         let ids: Vec<_> = get_all().into_iter().map(|def| def.id).collect();

@@ -81,6 +81,13 @@ zip = { version = "=4.6.1", default-features = false, features = ["deflate-flate
 # 主题包资源签名校验:只开主题包允许的静态图片格式。
 image = { version = "0.25", default-features = false, features = ["bmp", "gif", "jpeg", "png", "webp"] }
 
+[build-dependencies]
+# i18n 静态生成器(06 篇):目录遍历由语言注册表驱动,故构建期依赖设置 crate。
+slterm-settings = { path = "../slterm_settings" }
+# 翻译目录 JSON 解析(嵌套键展平 + 类型拒绝)。
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",

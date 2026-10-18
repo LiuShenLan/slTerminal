@@ -12,6 +12,7 @@ use slterm_settings::json::Value;
 use slterm_settings::{RuntimeSettings, normalize_scroll_speed};
 
 use crate::app_shell::config::Settings;
+use crate::i18n::Message;
 
 use super::localization::{
     UiLanguage, localized_input_placeholder, localized_select_labels, resolve_language,
@@ -49,6 +50,9 @@ impl SettingsPane {
         match self.settings_target.load() {
             Ok(result) => {
                 let runtime = RuntimeSettings::from_raw(&result.data);
+                // 语言解析只在此处发生一次(System 档探测系统 locale);
+                // 渲染路径读缓存,不再逐帧调用。
+                self.language = resolve_language(runtime.language);
                 self.runtime = runtime.clone();
                 self.persisted = runtime;
                 self.status = result.corrupted.then_some(SettingsStatus::LoadedCorrupted);
@@ -63,6 +67,8 @@ impl SettingsPane {
             &self.runtime,
             self.settings_target.theme_root().as_deref(),
         ));
+        // 组件库 locale 与自有文案同步热应用(分层:组件内置文案/自有 catalog)。
+        gpui_component::set_locale(self.language.gpui_component_locale());
         cx.emit(SettingsPaneEvent::Changed);
         cx.refresh_windows();
         cx.notify();
@@ -84,7 +90,7 @@ impl SettingsPane {
         let language = self.language(cx);
         window.push_notification(
             gpui_component::notification::Notification::error(
-                language.pick("设置保存失败", "Failed to save settings"),
+                language.text(Message::SettingsStatusSaveFailed),
             )
             .message(message),
             cx,
@@ -92,15 +98,15 @@ impl SettingsPane {
         cx.notify();
     }
 
-    /// 当前渲染语言(System 档经系统 locale 协商)。
+    /// 当前渲染语言:构造/每次运行时重载时解析并缓存,渲染路径零系统调用。
     pub(crate) fn language(&self, cx: &App) -> UiLanguage {
         let _ = cx;
-        resolve_language(self.runtime.language)
+        self.language
     }
 
     /// 设置 tab 展示名(语言热应用后由宿主重读)。
     pub(crate) fn title(&self, cx: &App) -> SharedString {
-        self.language(cx).pick("设置", "Settings").into()
+        self.language(cx).text(Message::SettingsTitle).into()
     }
 
     /// 语言切换只刷显示项与占位符:实体保留(丢失的焦点/编辑值/undo/
@@ -129,8 +135,7 @@ impl SettingsPane {
                 state.set_placeholder(placeholder, window, cx)
             });
         }
-        let placeholder =
-            SharedString::from(language.pick("在全部设置中搜索", "Search all settings"));
+        let placeholder = SharedString::from(language.text(Message::SettingsNavSearch));
         self.search_input.update(cx, |state, cx| {
             state.set_placeholder(placeholder, window, cx)
         });
@@ -266,7 +271,7 @@ impl SettingsPane {
     ) {
         let language = self.language(cx);
         let prompt = language
-            .pick("选择终端启动目录", "Select the terminal startup directory")
+            .text(Message::SettingsProfilesStartupDirectoryPrompt)
             .to_owned();
         let picked = cx.prompt_for_paths(PathPromptOptions {
             files: false,
@@ -391,6 +396,7 @@ impl SettingsPane {
                 match self.settings_target.load() {
                     Ok(result) => {
                         let runtime = RuntimeSettings::from_raw(&result.data);
+                        self.language = resolve_language(runtime.language);
                         self.runtime = runtime.clone();
                         self.persisted = runtime;
                         if result.corrupted {
@@ -426,6 +432,11 @@ impl SettingsPane {
 impl SettingsPane {
     pub(crate) fn runtime_for_test(&self) -> &RuntimeSettings {
         &self.runtime
+    }
+
+    /// 渲染语言缓存(语言切换用例:提交后无需再探测系统 locale)。
+    pub(crate) fn language_for_test(&self) -> UiLanguage {
+        self.language
     }
 
     pub(crate) fn status_for_test(&self) -> Option<&SettingsStatus> {

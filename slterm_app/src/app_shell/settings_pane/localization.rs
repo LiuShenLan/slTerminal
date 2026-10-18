@@ -4,50 +4,21 @@
 //! [`localized_input_placeholder`],因此 `SelectState` 不会留着构造时的
 //! 旧语言;控件实体跨语言保留(重建会丢焦点/编辑值/undo/订阅)。
 //!
-//! i18n 静态生成器归后续阶段:本阶段用 `pick(中文, 英文)` 迁移桥即时
-//! 分支,键集合届时一次收口;`debug_assert` 钉住标签数与值数对齐。
+//! M6.4 起显示文案统一走 build.rs 生成的 typed `Message`(静态表查询);
+//! 语言选择器由 `LanguagePref::ALL` 注册表驱动,显式语言一律 native name
+//! 自显示。`debug_assert` 钉住标签数与值数对齐。
 
 use gpui::SharedString;
 use slterm_settings::{LanguagePref, SCROLLBACK_VALUES};
 
-/// 界面语言(查询桥)。与 `LanguagePref`(设置值)分离:前者是渲染态,
-/// 后者是持久化偏好(System 档需要一次 locale 协商)。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum UiLanguage {
-    ZhCn,
-    EnUs,
-}
+/// 既有消费方(navigation/theme_editor/设置页)经本模块取同一渲染枚举。
+pub(crate) use crate::i18n::UiLanguage;
+use crate::i18n::{LanguagePreference, Message};
 
-impl UiLanguage {
-    /// 中英即时分支(迁移桥;新文案一律双语文面量进这里)。
-    pub(crate) const fn pick<'text>(self, zh_cn: &'text str, en_us: &'text str) -> &'text str {
-        match self {
-            Self::ZhCn => zh_cn,
-            Self::EnUs => en_us,
-        }
-    }
-}
-
-/// 持久化偏好 → 渲染态。System 档经系统 locale 协商,解析不出回英文
-/// (与语言注册表「回英文」兜底同语义)。
+/// 持久化偏好 → 渲染态。System 档经系统 locale 协商,解析不出回英文。
+/// 调用方应缓存结果(设置页在运行时重载点更新,渲染路径不重复探测)。
 pub(crate) fn resolve_language(preference: LanguagePref) -> UiLanguage {
-    match preference {
-        LanguagePref::ZhCn => UiLanguage::ZhCn,
-        LanguagePref::EnUs => UiLanguage::EnUs,
-        LanguagePref::System => crate::platform::locale::system_locale()
-            .as_deref()
-            .and_then(LanguagePref::from_locale)
-            .map(ui_language_of)
-            .unwrap_or(UiLanguage::EnUs),
-    }
-}
-
-fn ui_language_of(preference: LanguagePref) -> UiLanguage {
-    match preference {
-        LanguagePref::ZhCn => UiLanguage::ZhCn,
-        // System 在协商结果里没有对象;防御性回英文。
-        LanguagePref::EnUs | LanguagePref::System => UiLanguage::EnUs,
-    }
+    LanguagePreference::from(preference).resolved()
 }
 
 /// 千分位显示(回滚档位;纯显示,不改持久化值)。
@@ -74,7 +45,7 @@ pub(crate) fn localized_select_labels(
         "language" => LanguagePref::ALL
             .iter()
             .map(|preference| match preference {
-                LanguagePref::System => language.pick("跟随系统", "System").into(),
+                LanguagePref::System => language.text(Message::LanguageSystem).into(),
                 other => other.native_name().into(),
             })
             .collect(),
@@ -87,70 +58,76 @@ pub(crate) fn localized_select_labels(
             .map(|value| SharedString::from(format_thousands(*value)))
             .collect(),
         "cursor_shape" => vec![
-            language.pick("实心框", "Block").into(),
-            language.pick("条形", "Bar").into(),
-            language.pick("下划线", "Underline").into(),
-            language.pick("空心框", "Hollow").into(),
+            language.text(Message::SettingsOptionsBlock).into(),
+            language.text(Message::SettingsOptionsBar).into(),
+            language.text(Message::SettingsOptionsUnderline).into(),
+            language.text(Message::SettingsOptionsHollow).into(),
         ],
         "cursor_motion" => vec![
-            language.pick("关闭", "Off").into(),
-            language.pick("平滑", "Smooth").into(),
+            language
+                .text(Message::SettingsOptionsCursorMotionOff)
+                .into(),
+            language.text(Message::SettingsOptionsSmooth).into(),
         ],
         "tab_reveal" => vec![
-            language.pick("滑动", "Slide").into(),
-            language.pick("立即", "Instant").into(),
+            language.text(Message::SettingsOptionsSlide).into(),
+            language.text(Message::SettingsOptionsInstant).into(),
         ],
         "density" => vec![
-            language.pick("标准", "Standard").into(),
-            language.pick("紧凑", "Compact").into(),
+            language.text(Message::SettingsOptionsStandard).into(),
+            language.text(Message::SettingsOptionsDensityCompact).into(),
         ],
         "new_tab_position" => vec![
-            language.pick("当前标签之后", "After current tab").into(),
-            language.pick("列表末尾", "End of list").into(),
+            language.text(Message::SettingsOptionsAfterCurrent).into(),
+            language.text(Message::SettingsOptionsEndOfList).into(),
         ],
         "vcs_display" => vec![
-            language.pick("自动检测", "Auto detect").into(),
-            language.pick("仅 Git", "Git only").into(),
+            language.text(Message::SettingsOptionsAutoDetect).into(),
+            language.text(Message::SettingsOptionsGitOnly).into(),
         ],
         "ligatures" => vec![
-            language.pick("开启", "On").into(),
-            language.pick("关闭", "Off").into(),
-            language.pick("跟随主题", "Follow theme").into(),
+            language.text(Message::SettingsOptionsLigaturesOn).into(),
+            language.text(Message::SettingsOptionsLigaturesOff).into(),
+            language.text(Message::SettingsOptionsFollowTheme).into(),
         ],
         "bell" => vec![
-            language.pick("关", "Off").into(),
-            language.pick("闪烁", "Visual").into(),
-            language.pick("声音", "Sound").into(),
-            language.pick("闪烁 + 声音", "Visual + sound").into(),
+            language.text(Message::SettingsOptionsBellOff).into(),
+            language.text(Message::SettingsOptionsVisual).into(),
+            language.text(Message::SettingsOptionsSound).into(),
+            language.text(Message::SettingsOptionsVisualSound).into(),
         ],
         "cell_width_mode" => vec![
-            language.pick("紧凑", "Compact").into(),
-            language.pick("宽松", "Relaxed").into(),
+            language
+                .text(Message::SettingsOptionsCellWidthCompact)
+                .into(),
+            language.text(Message::SettingsOptionsRelaxed).into(),
         ],
         "accept" => vec![
-            language.pick("右方向键", "Right arrow").into(),
-            "Tab".into(),
-            language.pick("Tab 或右方向键", "Tab or Right arrow").into(),
+            language.text(Message::SettingsOptionsRightArrow).into(),
+            language.text(Message::SettingsOptionsTab).into(),
+            language.text(Message::SettingsOptionsTabOrRight).into(),
         ],
         "completion_style" => vec![
-            language.pick("内联", "Inline").into(),
-            language.pick("弹窗", "Popup").into(),
-            language.pick("混合", "Hybrid").into(),
+            language.text(Message::SettingsOptionsInline).into(),
+            language.text(Message::SettingsOptionsPopup).into(),
+            language.text(Message::SettingsOptionsHybrid).into(),
         ],
         "notification_duration" => vec![
-            language.pick("默认", "Default").into(),
-            language.pick("5 秒", "5 seconds").into(),
-            language.pick("10 秒", "10 seconds").into(),
-            language.pick("30 秒", "30 seconds").into(),
-            language.pick("90 秒", "90 seconds").into(),
-            language.pick("常驻", "Persistent").into(),
+            language
+                .text(Message::SettingsOptionsDurationDefault)
+                .into(),
+            language.text(Message::SettingsOptionsDurationFive).into(),
+            language.text(Message::SettingsOptionsDurationTen).into(),
+            language.text(Message::SettingsOptionsDurationThirty).into(),
+            language.text(Message::SettingsOptionsDurationNinety).into(),
+            language.text(Message::SettingsOptionsPersistent).into(),
         ],
         "blur" => vec![
-            language.pick("无", "None").into(),
-            "Mica".into(),
-            "Mica Alt".into(),
-            "Aero".into(),
-            "Acrylic".into(),
+            language.text(Message::SettingsOptionsBlurNone).into(),
+            language.text(Message::SettingsOptionsMica).into(),
+            language.text(Message::SettingsOptionsMicaAlt).into(),
+            language.text(Message::SettingsOptionsAero).into(),
+            language.text(Message::SettingsOptionsAcrylic).into(),
         ],
         _ => values
             .iter()
@@ -168,12 +145,9 @@ pub(crate) fn localized_select_labels(
 /// 输入框占位文案(语言切换时经 `InputState::set_placeholder` 刷新)。
 pub(crate) fn localized_input_placeholder(key: &str, language: UiLanguage) -> SharedString {
     let text = match key {
-        "font_family" => language.pick("输入字体名称", "Enter a font family"),
-        "font_size" => language.pick("例如 15", "e.g. 15"),
-        "startup_directory" => language.pick(
-            "留空继承当前目录",
-            "Leave empty to inherit the current directory",
-        ),
+        "font_family" => language.text(Message::SettingsPlaceholderFontFamily),
+        "font_size" => language.text(Message::SettingsPlaceholderFontSize),
+        "startup_directory" => language.text(Message::SettingsPlaceholderStartupDirectory),
         _ => "",
     };
     SharedString::from(text)
@@ -220,6 +194,19 @@ mod localization_tests {
         }
     }
 
+    /// 语言下拉 = `LanguagePref::ALL` 顺序;显式语言 native name 自显示,
+    /// System 档走双语目录。
+    #[test]
+    fn language_select_uses_the_registry_and_native_names() {
+        let zh = localized_select_labels("language", LanguagePref::VALUES, UiLanguage::ZhCn);
+        let zh: Vec<&str> = zh.iter().map(AsRef::as_ref).collect();
+        assert_eq!(zh, ["跟随系统", "简体中文", "English"]);
+        let en = localized_select_labels("language", LanguagePref::VALUES, UiLanguage::EnUs);
+        let en: Vec<&str> = en.iter().map(AsRef::as_ref).collect();
+        assert_eq!(en, ["System", "简体中文", "English"]);
+        assert_eq!(zh.len(), LanguagePref::ALL.len());
+    }
+
     /// 值/显示分离:同一索引在两种语言下显示不同文案,但值表本身不变。
     #[test]
     fn language_switch_changes_labels_without_touching_values() {
@@ -246,15 +233,11 @@ mod localization_tests {
         );
     }
 
+    /// 显式偏好不受系统 locale 影响;System 档至少落在两家之一。
     #[test]
     fn system_language_negotiates_chinese_regions_and_falls_back_to_english() {
-        assert_eq!(
-            resolve_language(LanguagePref::ZhCn),
-            UiLanguage::ZhCn,
-            "显式偏好不受系统 locale 影响"
-        );
+        assert_eq!(resolve_language(LanguagePref::ZhCn), UiLanguage::ZhCn);
         assert_eq!(resolve_language(LanguagePref::EnUs), UiLanguage::EnUs);
-        // System 档在本机 locale 未知时至少必须落在两家之一(不 panic)。
         let system = resolve_language(LanguagePref::System);
         assert!(matches!(system, UiLanguage::ZhCn | UiLanguage::EnUs));
     }

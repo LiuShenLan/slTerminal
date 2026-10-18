@@ -12,6 +12,8 @@ use gpui_component::slider::Slider;
 use gpui_component::switch::Switch;
 use gpui_component::{ActiveTheme as _, h_flex, v_flex};
 
+use crate::i18n::Message;
+
 use super::SettingsPane;
 use super::design::{SETTINGS_GROUP_GAP, SETTINGS_SELECT_WIDTH};
 
@@ -80,7 +82,7 @@ impl SettingsPane {
             )
             .child(
                 Button::new(SharedString::from(format!("settings-save-{key}")))
-                    .label(self.language(cx).pick("保存", "Save"))
+                    .label(self.language(cx).text(Message::CommonSave))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         let value = state.read(cx).value().to_string();
                         this.save_text_input(key, value, window, cx);
@@ -131,88 +133,72 @@ impl SettingsPane {
             .w_full()
             .gap(px(SETTINGS_GROUP_GAP))
             .child(
-                self.group(language.pick("字体与排版", "Fonts and typography"), cx)
+                self.group(language.text(Message::SettingsAppearanceFonts), cx)
                     .child(self.input_row(
                         "font_family",
-                        language.pick("字体", "Font family"),
-                        language.pick(
-                            "逗号分隔主字体与回退字体；对新终端生效。",
-                            "Comma-separated primary and fallback families; applies to new terminals.",
-                        ),
+                        language.text(Message::SettingsAppearanceFontFamily),
+                        language.text(Message::SettingsAppearanceFontFamilyDescription),
                         &self.font_family_input,
                         cx,
                     ))
                     .child(self.input_row(
                         "font_size",
-                        language.pick("终端字号", "Terminal font size"),
-                        language.pick(
-                            "逻辑像素，4–96；对新终端生效。",
-                            "Logical pixels, 4–96; applies to new terminals.",
-                        ),
+                        language.text(Message::SettingsAppearanceFontSize),
+                        language.text(Message::SettingsAppearanceFontSizeDescription),
                         &self.font_size_input,
                         cx,
                     ))
                     .child(self.select_row(
                         "ligatures",
-                        language.pick("连字", "Ligatures"),
-                        language.pick(
-                            "跟随主题时由主题声明决定。",
-                            "Follow theme defers to the theme typography.",
-                        ),
+                        language.text(Message::SettingsAppearanceLigatures),
+                        language.text(Message::SettingsAppearanceLigaturesDescription),
                         cx,
                     ))
                     .child(self.select_row(
                         "cell_width_mode",
-                        language.pick("字宽模式", "Cell width"),
+                        language.text(Message::SettingsAppearanceCellWidth),
                         "",
                         cx,
                     ))
                     .child(self.select_row(
                         "theme",
-                        language.pick("主题", "Theme"),
-                        language.pick(
-                            "仅暗色内置主题；选择后终端调色板立即解析。",
-                            "Dark built-in themes only; the terminal palette resolves immediately.",
-                        ),
+                        language.text(Message::SettingsAppearanceTheme),
+                        language.text(Message::SettingsAppearanceThemeDescription),
                         cx,
                     ))
-                    .child(self.row(
-                        language.pick("自定义主题", "Custom theme"),
-                        language.pick(
-                            "从内置目录或主题库复制一份草稿；保存与应用是两个动作。",
-                            "Fork a draft from the built-in catalog or library; save and apply are separate actions.",
+                    .child(
+                        self.row(
+                            language.text(Message::SettingsAppearanceCustomTheme),
+                            language.text(Message::SettingsAppearanceCustomThemeDescription),
+                            div()
+                                .debug_selector(|| "settings-theme-edit".to_owned())
+                                .child(
+                                    Button::new("settings-theme-edit")
+                                        .label(
+                                            language
+                                                .text(Message::SettingsAppearanceCustomThemeAction),
+                                        )
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.open_theme_editor(window, cx);
+                                        })),
+                                ),
+                            cx,
                         ),
-                        div()
-                            .debug_selector(|| "settings-theme-edit".to_owned())
-                            .child(
-                                Button::new("settings-theme-edit")
-                                    .label(language.pick("编辑主题", "Edit theme"))
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.open_theme_editor(window, cx);
-                                    })),
-                            ),
-                        cx,
-                    )),
+                    ),
             )
             .child(
-                self.group(language.pick("显示", "Display"), cx)
+                self.group(language.text(Message::SettingsAppearanceDisplay), cx)
                     .child(self.slider_row(
-                        language.pick("窗口不透明度", "Window opacity"),
-                        language.pick(
-                            "拖动即时预览，松手保存。",
-                            "Drag to preview; release to save.",
-                        ),
+                        language.text(Message::SettingsAppearanceOpacity),
+                        language.text(Message::SettingsAppearanceOpacityDescription),
                         "settings-slider-opacity",
                         &self.opacity_slider,
                         SharedString::from(format!("{:.0}%", self.runtime.opacity * 100.0)),
                         cx,
                     ))
                     .child(self.slider_row(
-                        language.pick("滚动速度", "Scroll speed"),
-                        language.pick(
-                            "拖动即时预览，松手保存；0.25×–4×。",
-                            "Drag to preview; release to save; 0.25×–4×.",
-                        ),
+                        language.text(Message::SettingsAppearanceScrollSpeed),
+                        language.text(Message::SettingsAppearanceScrollSpeedDescription),
                         "settings-slider-scroll-speed",
                         &self.scroll_speed_slider,
                         SharedString::from(format!("{:.2}×", self.runtime.scroll_speed)),
@@ -220,38 +206,32 @@ impl SettingsPane {
                     ))
                     .child(self.select_row(
                         "scrollback_lines",
-                        language.pick("回滚行数", "Scrollback lines"),
-                        language.pick(
-                            "只影响新建终端，不改已打开会话。",
-                            "Applies to new terminals; open sessions keep their history.",
-                        ),
+                        language.text(Message::SettingsAppearanceScrollback),
+                        language.text(Message::SettingsAppearanceScrollbackDescription),
                         cx,
                     ))
                     .child(self.select_row(
                         "density",
-                        language.pick("密度", "Density"),
+                        language.text(Message::SettingsAppearanceDensity),
                         "",
                         cx,
                     ))
                     .child(self.select_row(
                         "tab_reveal",
-                        language.pick("标签展开动效", "Tab reveal"),
+                        language.text(Message::SettingsAppearanceTabReveal),
                         "",
                         cx,
                     ))
                     .child(self.switch_row(
                         "tab_close_visible",
-                        language.pick("显示标签关闭按钮", "Show tab close buttons"),
-                        language.pick(
-                            "关闭后仍可用中键关闭。",
-                            "Middle-click still closes tabs when hidden.",
-                        ),
+                        language.text(Message::SettingsAppearanceTabClose),
+                        language.text(Message::SettingsAppearanceTabCloseDescription),
                         self.runtime.tab_close_visible,
                         cx,
                     ))
                     .child(self.switch_row(
                         "cjk_bold_regular",
-                        language.pick("中日韩粗体提亮", "Brighten CJK bold"),
+                        language.text(Message::SettingsAppearanceCjkBold),
                         "",
                         self.runtime.cjk_bold_regular,
                         cx,
@@ -278,7 +258,7 @@ impl SettingsPane {
             )
             .child(
                 Button::new("settings-pick-startup-directory")
-                    .label(language.pick("选择…", "Choose..."))
+                    .label(language.text(Message::CommonChoose))
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.pick_startup_directory(window, cx);
                     })),
@@ -288,70 +268,61 @@ impl SettingsPane {
             .w_full()
             .gap(px(SETTINGS_GROUP_GAP))
             .child(
-                self.group(language.pick("启动", "Startup"), cx)
+                self.group(language.text(Message::SettingsProfilesStartup), cx)
                     .child(self.row(
-                        language.pick("启动目录", "Startup directory"),
-                        language.pick(
-                            "留空继承当前目录；对新终端生效。",
-                            "Empty inherits the current directory; applies to new terminals.",
-                        ),
+                        language.text(Message::SettingsProfilesStartupDirectory),
+                        language.text(Message::SettingsProfilesStartupDirectoryDescription),
                         startup_directory,
                         cx,
                     ))
                     .child(self.switch_row(
                         "refresh_environment",
-                        language.pick("刷新环境变量", "Refresh environment"),
-                        language.pick(
-                            "新进程读取最新系统环境变量。",
-                            "New processes read the latest system environment.",
-                        ),
+                        language.text(Message::SettingsProfilesRefreshEnvironment),
+                        language.text(Message::SettingsProfilesRefreshEnvironmentDescription),
                         self.runtime.refresh_environment,
                         cx,
                     )),
             )
             .child(
-                self.group(language.pick("补全", "Completion"), cx)
+                self.group(language.text(Message::SettingsProfilesCompletion), cx)
                     .child(self.switch_row(
                         "ghost",
-                        language.pick("命令补全", "Command completion"),
+                        language.text(Message::SettingsProfilesGhost),
                         "",
                         self.runtime.ghost,
                         cx,
                     ))
                     .child(self.select_row(
                         "completion_style",
-                        language.pick("补全样式", "Completion style"),
+                        language.text(Message::SettingsProfilesCompletionStyle),
                         "",
                         cx,
                     ))
                     .child(self.select_row(
                         "accept",
-                        language.pick("接受补全键", "Accept completion key"),
+                        language.text(Message::SettingsProfilesAccept),
                         "",
                         cx,
                     )),
             )
             .child(
-                self.group(language.pick("提醒", "Alerts"), cx)
+                self.group(language.text(Message::SettingsProfilesAlerts), cx)
                     .child(self.switch_row(
                         "ai_toasts",
-                        language.pick("AI 消息通知", "AI notifications"),
+                        language.text(Message::SettingsProfilesAiToasts),
                         "",
                         self.runtime.ai_toasts,
                         cx,
                     ))
                     .child(self.select_row(
                         "notification_duration",
-                        language.pick("通知时长", "Notification duration"),
-                        language.pick(
-                            "默认档不覆盖各消息自带时长。",
-                            "Default keeps each notification's own duration.",
-                        ),
+                        language.text(Message::SettingsProfilesNotificationDuration),
+                        language.text(Message::SettingsProfilesNotificationDurationDescription),
                         cx,
                     ))
                     .child(self.select_row(
                         "bell",
-                        language.pick("终端铃声", "Terminal bell"),
+                        language.text(Message::SettingsProfilesBell),
                         "",
                         cx,
                     )),
@@ -368,78 +339,75 @@ impl SettingsPane {
             .w_full()
             .gap(px(SETTINGS_GROUP_GAP))
             .child(
-                self.group(language.pick("鼠标与选区", "Mouse and selection"), cx)
+                self.group(language.text(Message::SettingsInteractionMouse), cx)
                     .child(self.switch_row(
                         "focus_follows_mouse",
-                        language.pick("焦点跟随鼠标", "Focus follows mouse"),
+                        language.text(Message::SettingsInteractionFocusFollows),
                         "",
                         self.runtime.focus_follows_mouse.unwrap_or(false),
                         cx,
                     ))
                     .child(self.switch_row(
                         "copy_on_select",
-                        language.pick("选中即复制", "Copy on select"),
+                        language.text(Message::SettingsInteractionCopyOnSelect),
                         "",
                         self.runtime.copy_on_select,
                         cx,
                     ))
                     .child(self.switch_row(
                         "multiline_paste_confirm",
-                        language.pick("粘贴前确认", "Confirm pastes"),
-                        language.pick(
-                            "换行/提权命令/控制字符先确认。",
-                            "Confirms newlines, elevated commands and control characters.",
-                        ),
+                        language.text(Message::SettingsInteractionPasteConfirm),
+                        language.text(Message::SettingsInteractionPasteConfirmDescription),
                         self.runtime.multiline_paste_confirm,
                         cx,
                     ))
                     .child(self.switch_row(
                         "panel_resize",
-                        language.pick("拖拽调节侧栏宽度", "Drag to resize the sidebar"),
+                        language.text(Message::SettingsInteractionPanelResize),
                         "",
                         self.runtime.panel_resize,
                         cx,
                     )),
             )
             .child(
-                self.group(language.pick("光标", "Cursor"), cx)
+                self.group(language.text(Message::SettingsInteractionCursor), cx)
                     .child(self.select_row(
                         "cursor_shape",
-                        language.pick("光标形状", "Cursor shape"),
+                        language.text(Message::SettingsInteractionCursorShape),
                         "",
                         cx,
                     ))
                     .child(self.switch_row(
                         "cursor_blink",
-                        language.pick("光标闪烁", "Cursor blink"),
+                        language.text(Message::SettingsInteractionCursorBlink),
                         "",
                         self.runtime.cursor_blink.unwrap_or(true),
                         cx,
                     ))
                     .child(self.select_row(
                         "cursor_motion",
-                        language.pick("平滑光标", "Smooth cursor motion"),
+                        language.text(Message::SettingsInteractionCursorMotion),
                         "",
                         cx,
                     )),
             )
             .child(
-                self.group(language.pick("标签与窗口", "Tabs and windows"), cx)
+                self.group(language.text(Message::SettingsInteractionTabs), cx)
                     .child(self.select_row(
                         "new_tab_position",
-                        language.pick("新标签位置", "New tab position"),
+                        language.text(Message::SettingsInteractionNewTabPosition),
                         "",
                         cx,
                     ))
                     .child(self.select_row(
                         "vcs_display",
-                        language.pick("侧栏版本控制", "Sidebar version control"),
+                        language.text(Message::SettingsInteractionVcsDisplay),
                         "",
                         cx,
                     ))
                     .child(self.switch_row(
                         "dim_inactive_panes",
-                        language.pick("压暗非聚焦分屏", "Dim inactive panes"),
+                        language.text(Message::SettingsInteractionDimInactive),
                         "",
                         self.runtime.dim_inactive_panes,
                         cx,
@@ -457,83 +425,80 @@ impl SettingsPane {
             .w_full()
             .gap(px(SETTINGS_GROUP_GAP))
             .child(
-                self.group(language.pick("会话生命周期", "Session lifecycle"), cx)
+                self.group(language.text(Message::SettingsAdvancedSession), cx)
                     .child(self.switch_row(
                         "restore_session",
-                        language.pick("启动时恢复上次标签", "Restore previous tabs at startup"),
+                        language.text(Message::SettingsAdvancedRestoreSession),
                         "",
                         self.runtime.restore_session,
                         cx,
                     ))
                     .child(self.switch_row(
                         "resume_ai",
-                        language.pick("恢复时接续 AI 对话", "Resume AI conversations"),
+                        language.text(Message::SettingsAdvancedResumeAi),
                         "",
                         self.runtime.resume_ai,
                         cx,
                     ))
                     .child(self.switch_row(
                         "keep_session",
-                        language.pick("关窗后保留后台会话", "Keep sessions after window close"),
+                        language.text(Message::SettingsAdvancedKeepSession),
                         "",
                         self.runtime.keep_session,
                         cx,
                     ))
                     .child(self.switch_row(
                         "silent_start",
-                        language.pick("静默启动", "Silent start"),
+                        language.text(Message::SettingsAdvancedSilentStart),
                         "",
                         self.runtime.silent_start,
                         cx,
                     ))
                     .child(self.switch_row(
                         "launch_at_login",
-                        language.pick("开机启动", "Launch at login"),
+                        language.text(Message::SettingsAdvancedLaunchAtLogin),
                         "",
                         self.runtime.launch_at_login,
                         cx,
                     ))
                     .child(self.switch_row(
                         "tray",
-                        language.pick("常驻系统托盘", "System tray icon"),
+                        language.text(Message::SettingsAdvancedTray),
                         "",
                         self.runtime.tray,
                         cx,
                     )),
             )
             .child(
-                self.group(language.pick("更新", "Updates"), cx)
+                self.group(language.text(Message::SettingsAdvancedUpdates), cx)
                     .child(self.switch_row(
                         "auto_check_updates",
-                        language.pick("自动检查更新", "Check for updates"),
+                        language.text(Message::SettingsAdvancedCheckUpdates),
                         "",
                         self.runtime.auto_check_updates,
                         cx,
                     ))
                     .child(self.switch_row(
                         "auto_download_updates",
-                        language.pick("后台下载更新", "Download updates in background"),
-                        language.pick("不授予安装权限。", "Does not grant install permission."),
+                        language.text(Message::SettingsAdvancedDownloadUpdates),
+                        language.text(Message::SettingsAdvancedDownloadUpdatesDescription),
                         self.runtime.auto_download_updates,
                         cx,
                     ))
                     .child(self.switch_row(
                         "fetch",
-                        language.pick("新会话欢迎屏", "Welcome screen"),
+                        language.text(Message::SettingsAdvancedWelcome),
                         "",
                         self.runtime.fetch,
                         cx,
                     )),
             )
             .child(
-                self.group(language.pick("环境", "Environment"), cx)
+                self.group(language.text(Message::SettingsAdvancedEnvironment), cx)
                     .child(self.switch_row(
                         "terminal_proxy",
-                        language.pick("终端使用系统代理", "Use system proxy"),
-                        language.pick(
-                            "新建本地终端写入代理环境变量。",
-                            "New local terminals inherit the system proxy environment.",
-                        ),
+                        language.text(Message::SettingsAdvancedProxy),
+                        language.text(Message::SettingsAdvancedProxyDescription),
                         self.runtime.terminal_proxy,
                         cx,
                     )),

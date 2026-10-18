@@ -111,7 +111,10 @@ fn init(cx: &mut App) {
     // 组件库必须只初始化一次,否则全局 action、菜单和主题状态重复注册。
     gpui_component::init(cx);
     // 读一次快照装全局:M3 无热应用;渲染路径不得重复读盘。
-    cx.set_global(config::Settings::load());
+    let settings = config::Settings::load();
+    // 组件库 locale 与自有文案分层:组件内置文案跟解析后的 UiLanguage。
+    gpui_component::set_locale(settings.language.gpui_component_locale());
+    cx.set_global(settings);
     theme::apply_dark_theme(cx);
     crate::gpui_terminal::init(cx);
     workspace::init(cx);

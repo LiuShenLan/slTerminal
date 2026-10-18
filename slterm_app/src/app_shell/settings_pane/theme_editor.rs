@@ -31,6 +31,8 @@ use crate::theme_library::{
     RevisionPrecondition, ThemeDocument, builtin_documents, from_definition, preferences,
 };
 
+use crate::i18n::Message;
+
 use super::SettingsPane;
 use super::design::SETTINGS_SELECT_WIDTH;
 use super::localization::UiLanguage;
@@ -402,7 +404,7 @@ impl SettingsPane {
         let value = input.read(cx).value().to_string();
         let invalid_message = self
             .language(cx)
-            .pick("存在无效输入", "Some inputs are invalid")
+            .text(Message::SettingsThemeEditorInvalidInputs)
             .to_owned();
         let Some(editor) = self.theme_editor.as_mut() else {
             return;
@@ -592,7 +594,7 @@ impl SettingsPane {
         if !editor.invalid_inputs.is_empty() {
             let message = self
                 .language(cx)
-                .pick("存在无效输入", "Some inputs are invalid")
+                .text(Message::SettingsThemeEditorInvalidInputs)
                 .to_owned();
             if let Some(editor) = self.theme_editor.as_mut() {
                 editor.error = Some(message);
@@ -780,122 +782,121 @@ impl SettingsPane {
             .w_full()
             .gap(px(super::design::SETTINGS_GROUP_GAP))
             .child(
-                self.group(
-                    language.pick("主题编辑器", "Theme editor"),
-                    cx,
-                )
-                .child(self.row(
-                    language.pick("模板", "Template"),
-                    language.pick(
-                        "切换模板只替换草稿；源主题与已保存运行时不动。",
-                        "Switching a template replaces only the draft; the source and applied runtime stay untouched.",
-                    ),
-                    div()
-                        .debug_selector(|| "settings-theme-template".to_owned())
-                        .w(px(SETTINGS_SELECT_WIDTH))
-                        .child(Select::new(&template_select).appearance(false)),
-                    cx,
-                ))
-                .child(self.row(
-                    language.pick("名称", "Name"),
-                    language.pick(
-                        "首次保存恒新建主题，不覆盖内置或库内既有主题。",
-                        "The first save always creates a new theme and never overwrites built-in or existing library themes.",
-                    ),
-                    editor_input_box("settings-theme-name", &name_input, false, border),
-                    cx,
-                )),
+                self.group(language.text(Message::SettingsThemeEditorGroup), cx)
+                    .child(
+                        self.row(
+                            language.text(Message::SettingsThemeEditorTemplate),
+                            language.text(Message::SettingsThemeEditorTemplateDescription),
+                            div()
+                                .debug_selector(|| "settings-theme-template".to_owned())
+                                .w(px(SETTINGS_SELECT_WIDTH))
+                                .child(Select::new(&template_select).appearance(false)),
+                            cx,
+                        ),
+                    )
+                    .child(self.row(
+                        language.text(Message::SettingsThemeEditorName),
+                        language.text(Message::SettingsThemeEditorNameDescription),
+                        editor_input_box("settings-theme-name", &name_input, false, border),
+                        cx,
+                    )),
             )
             .child(
-                self.group(language.pick("颜色", "Colors"), cx)
+                self.group(language.text(Message::SettingsThemeEditorColors), cx)
                     .child(self.row(
-                        language.pick("背景色", "Background"),
+                        language.text(Message::SettingsThemeEditorBackground),
                         "#RRGGBB",
-                        editor_input_box("settings-theme-background", &background_input, false, border),
-                        cx,
-                    ))
-                    .child(self.row(
-                        language.pick("前景色", "Foreground"),
-                        language.pick(
-                            "取色推荐：原色恒第一，冷/暖候选满足 WCAG AA。",
-                            "Recommendations keep the original first; cool/warm candidates meet WCAG AA.",
+                        editor_input_box(
+                            "settings-theme-background",
+                            &background_input,
+                            false,
+                            border,
                         ),
-                        h_flex()
-                            .gap_2()
-                            .items_center()
-                            .child(editor_input_box(
-                                "settings-theme-foreground",
-                                &foreground_input,
-                                false,
-                                border,
-                            ))
-                            .children(recommendations.into_iter().enumerate().map(
-                                |(index, color)| {
-                                    let selected = color == original_foreground;
-                                    div()
-                                        .id(SharedString::from(format!(
-                                            "settings-theme-recommendation-{index}"
-                                        )))
-                                        .debug_selector(move || {
-                                            format!("settings-theme-recommendation-{index}")
-                                        })
-                                        .size(px(24.0))
-                                        .rounded(px(4.0))
-                                        .cursor_pointer()
-                                        .bg(rgb(u32::from_be_bytes([
-                                            0,
-                                            color[0],
-                                            color[1],
-                                            color[2],
-                                        ])))
-                                        .border_1()
-                                        .border_color(if selected {
-                                            cx.theme().foreground
-                                        } else {
-                                            border
-                                        })
-                                        .on_click(cx.listener(move |this, _, window, cx| {
-                                            this.set_theme_color(
-                                                ThemeColorSlot::Foreground,
-                                                color,
-                                                window,
-                                                cx,
-                                            );
-                                        }))
-                                        .into_any_element()
-                                },
-                            )),
                         cx,
                     ))
+                    .child(
+                        self.row(
+                            language.text(Message::SettingsThemeEditorForeground),
+                            language.text(Message::SettingsThemeEditorForegroundDescription),
+                            h_flex()
+                                .gap_2()
+                                .items_center()
+                                .child(editor_input_box(
+                                    "settings-theme-foreground",
+                                    &foreground_input,
+                                    false,
+                                    border,
+                                ))
+                                .children(recommendations.into_iter().enumerate().map(
+                                    |(index, color)| {
+                                        let selected = color == original_foreground;
+                                        div()
+                                            .id(SharedString::from(format!(
+                                                "settings-theme-recommendation-{index}"
+                                            )))
+                                            .debug_selector(move || {
+                                                format!("settings-theme-recommendation-{index}")
+                                            })
+                                            .size(px(24.0))
+                                            .rounded(px(4.0))
+                                            .cursor_pointer()
+                                            .bg(rgb(u32::from_be_bytes([
+                                                0, color[0], color[1], color[2],
+                                            ])))
+                                            .border_1()
+                                            .border_color(if selected {
+                                                cx.theme().foreground
+                                            } else {
+                                                border
+                                            })
+                                            .on_click(cx.listener(move |this, _, window, cx| {
+                                                this.set_theme_color(
+                                                    ThemeColorSlot::Foreground,
+                                                    color,
+                                                    window,
+                                                    cx,
+                                                );
+                                            }))
+                                            .into_any_element()
+                                    },
+                                )),
+                            cx,
+                        ),
+                    )
                     .child(self.row(
-                        language.pick("强调色", "Accent"),
+                        language.text(Message::SettingsThemeEditorAccent),
                         "#RRGGBB",
                         editor_input_box("settings-theme-accent", &accent_input, false, border),
                         cx,
                     ))
                     .child(self.row(
-                        language.pick("光标色", "Cursor"),
+                        language.text(Message::SettingsThemeEditorCursor),
                         "#RRGGBB",
                         editor_input_box("settings-theme-cursor", &cursor_input, false, border),
                         cx,
                     )),
             )
             .child(
-                self.group(language.pick("排版与特效", "Typography and effects"), cx)
+                self.group(language.text(Message::SettingsThemeEditorTypography), cx)
                     .child(self.row(
-                        language.pick("字体", "Font family"),
-                        language.pick("留空 = 跟随全局设置。", "Empty = follow global settings."),
+                        language.text(Message::SettingsThemeEditorFontFamily),
+                        language.text(Message::SettingsThemeEditorFontFamilyDescription),
                         editor_input_box("settings-theme-font", &font_input, false, border),
                         cx,
                     ))
                     .child(self.row(
-                        language.pick("字号", "Font size"),
+                        language.text(Message::SettingsThemeEditorFontSize),
                         "4–96",
-                        editor_input_box("settings-theme-font-size", &font_size_input, false, border),
+                        editor_input_box(
+                            "settings-theme-font-size",
+                            &font_size_input,
+                            false,
+                            border,
+                        ),
                         cx,
                     ))
                     .child(self.row(
-                        language.pick("行高", "Line height"),
+                        language.text(Message::SettingsThemeEditorLineHeight),
                         "0.5–3.0",
                         editor_input_box(
                             "settings-theme-line-height",
@@ -906,7 +907,7 @@ impl SettingsPane {
                         cx,
                     ))
                     .child(self.row(
-                        language.pick("不透明度", "Opacity"),
+                        language.text(Message::SettingsThemeEditorOpacity),
                         "0–100%",
                         editor_input_box("settings-theme-opacity", &opacity_input, false, border),
                         cx,
@@ -935,21 +936,21 @@ impl SettingsPane {
                 .text_color(muted)
                 .child(
                     Button::new("settings-theme-back")
-                        .label(language.pick("返回外观", "Back to appearance"))
+                        .label(language.text(Message::SettingsThemeEditorBack))
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.request_close_theme_editor(window, cx);
                         })),
                 )
                 .child(
                     Button::new("settings-theme-reset")
-                        .label(language.pick("重置草稿", "Reset draft"))
+                        .label(language.text(Message::SettingsThemeEditorResetDraft))
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.reset_theme_editor(window, cx);
                         })),
                 )
                 .child(
                     Button::new("settings-theme-save")
-                        .label(language.pick("保存", "Save"))
+                        .label(language.text(Message::CommonSave))
                         .disabled(busy)
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.save_theme_editor(false, window, cx);
@@ -957,7 +958,7 @@ impl SettingsPane {
                 )
                 .child(
                     Button::new("settings-theme-apply")
-                        .label(language.pick("保存并应用", "Save and apply"))
+                        .label(language.text(Message::SettingsThemeEditorSaveAndApply))
                         .disabled(busy)
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.save_theme_editor(true, window, cx);
@@ -967,13 +968,13 @@ impl SettingsPane {
                     div()
                         .debug_selector(|| "settings-theme-saved".to_owned())
                         .text_sm()
-                        .child(language.pick("已保存", "Saved"))
+                        .child(language.text(Message::SettingsThemeEditorSaved))
                         .into_any_element()
                 } else if dirty {
                     div()
                         .debug_selector(|| "settings-theme-dirty".to_owned())
                         .text_sm()
-                        .child(language.pick("未保存", "Unsaved"))
+                        .child(language.text(Message::SettingsThemeEditorUnsaved))
                         .into_any_element()
                 } else {
                     div().into_any_element()
@@ -1036,7 +1037,7 @@ trait NewThemeName {
 
 impl NewThemeName for UiLanguage {
     fn format_new_theme_name(&self, name: &str) -> String {
-        format!("{} {}", name, self.pick("副本", "Copy"))
+        format!("{} {}", name, self.text(Message::CommonCopySuffix))
     }
 }
 

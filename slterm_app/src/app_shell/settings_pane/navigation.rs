@@ -79,7 +79,7 @@ pub(crate) fn section_ids() -> Vec<&'static str> {
 /// 页面标题(值/显示分离:路由 id 稳定,标题随语言刷新)。
 pub(crate) fn section_label(index: usize, language: UiLanguage) -> SharedString {
     match registry::get_all().get(index) {
-        Some(def) => language.pick(def.title_zh, def.title_en).into(),
+        Some(def) => language.text(def.title).into(),
         None => "".into(),
     }
 }
@@ -105,11 +105,17 @@ pub(crate) fn visible_nav_sections() -> impl Iterator<Item = usize> {
 }
 
 /// 单页搜索文本 = 双语标题 + 节级别名 + 该页控件的注册表别名串。
+/// 标题从 typed 消息 id 取两语值,与显示文案同源不重复登记。
 fn section_search_text(index: usize) -> String {
     let Some(def) = registry::get_all().get(index).copied() else {
         return String::new();
     };
-    let mut text = format!("{} {} {}", def.title_zh, def.title_en, def.search_terms);
+    let mut text = format!(
+        "{} {} {}",
+        UiLanguage::ZhCn.text(def.title),
+        UiLanguage::EnUs.text(def.title),
+        def.search_terms
+    );
     for key in page_keys(def.id) {
         if let Some(entry) = slterm_settings::keys::lookup(key) {
             text.push(' ');

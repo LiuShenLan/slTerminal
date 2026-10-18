@@ -47,6 +47,7 @@ use slterm_settings::{
     NotificationDuration, RuntimeSettings, TabRevealName, ThemeName, VcsDisplayName,
 };
 
+use crate::i18n::Message;
 use design::{
     SETTINGS_GROUP_GAP, SETTINGS_NAV_ICON_SIZE, SETTINGS_NAV_ROW_HEIGHT, SETTINGS_NAV_WIDTH,
 };
@@ -93,24 +94,17 @@ impl SettingsStatus {
 
     pub(crate) fn text(&self, language: UiLanguage) -> String {
         match self {
-            Self::LoadedCorrupted => language
-                .pick(
-                    "配置文件损坏，已回退到备份或默认值；损坏原件已保留。",
-                    "The settings file was corrupted; backup or defaults were loaded and the original kept.",
-                )
-                .to_owned(),
-            Self::Reset { backup: Some(path) } => format!(
-                "{}: {}",
-                language.pick("已恢复默认设置，原设置已备份", "Defaults restored; previous settings backed up"),
-                path.display()
-            ),
-            Self::Reset { backup: None } => {
-                language.pick("已恢复默认设置", "Defaults restored").to_owned()
+            Self::LoadedCorrupted => language.text(Message::SettingsStatusCorrupted).to_owned(),
+            Self::Reset { backup: Some(path) } => {
+                let path = path.display().to_string();
+                language.format(Message::SettingsStatusResetBackup, &[("path", &path)])
             }
-            Self::Failed(error) => format!(
-                "{}: {error}",
-                language.pick("设置操作失败", "Settings operation failed")
-            ),
+            Self::Reset { backup: None } => {
+                language.text(Message::SettingsStatusResetDone).to_owned()
+            }
+            Self::Failed(error) => {
+                language.format(Message::SettingsStatusOperationFailed, &[("error", error)])
+            }
         }
     }
 }
@@ -122,6 +116,9 @@ pub(crate) struct SettingsPane {
     settings_target: SettingsTarget,
     /// 渲染与预览的单一事实源;每次成功写盘后整体重载。
     runtime: RuntimeSettings,
+    /// 解析后的渲染语言缓存:System 档的 locale 探测只在运行时重载点发生,
+    /// 渲染路径(`language()`)零系统调用(M6.2 逐帧探测问题收口)。
+    language: UiLanguage,
     /// 最近一次成功读盘的快照——写失败回滚的"已存值"。
     persisted: RuntimeSettings,
     /// 当前分区下标(注册表顺序)。
@@ -299,6 +296,7 @@ impl SettingsPane {
             focus_handle: cx.focus_handle(),
             settings_target,
             runtime,
+            language,
             persisted,
             active_section: 0,
             search_origin: None,
@@ -564,7 +562,7 @@ impl SettingsPane {
                     .hover(move |item| item.bg(hover_bg).text_color(foreground))
                     .on_click(cx.listener(|_, _, _, cx| cx.emit(SettingsPaneEvent::Close)))
                     .child(Icon::new(IconName::ArrowLeft).size(px(SETTINGS_NAV_ICON_SIZE)))
-                    .child(language.pick("返回工作区", "Back to workspace")),
+                    .child(language.text(Message::SettingsNavBack)),
             )
             .child(
                 div()
@@ -583,7 +581,7 @@ impl SettingsPane {
                                     .size(px(SETTINGS_NAV_ICON_SIZE))
                                     .text_color(cx.theme().muted_foreground),
                             )
-                            .aria_label(language.pick("在全部设置中搜索", "Search all settings")),
+                            .aria_label(language.text(Message::SettingsNavSearch)),
                     ),
             );
         let searching = !self.search_input.read(cx).value().trim().is_empty();
@@ -704,10 +702,10 @@ impl SettingsPane {
     fn page_application(&mut self, _window: &mut Window, cx: &mut Context<'_, Self>) -> gpui::Div {
         let language = self.language(cx);
         v_flex().w_full().gap(px(SETTINGS_GROUP_GAP)).child(
-            self.group(language.pick("应用", "Application"), cx)
+            self.group(language.text(Message::SettingsApplicationGroup), cx)
                 .child(
                     self.row(
-                        language.pick("名称", "Name"),
+                        language.text(Message::SettingsApplicationName),
                         "",
                         div()
                             .text_color(cx.theme().foreground)
@@ -717,7 +715,7 @@ impl SettingsPane {
                 )
                 .child(
                     self.row(
-                        language.pick("版本", "Version"),
+                        language.text(Message::SettingsApplicationVersion),
                         "",
                         div()
                             .text_color(cx.theme().muted_foreground)
@@ -731,14 +729,11 @@ impl SettingsPane {
     fn page_localization(&mut self, _window: &mut Window, cx: &mut Context<'_, Self>) -> gpui::Div {
         let language = self.language(cx);
         v_flex().w_full().gap(px(SETTINGS_GROUP_GAP)).child(
-            self.group(language.pick("界面语言", "Interface language"), cx)
+            self.group(language.text(Message::SettingsLocalizationGroup), cx)
                 .child(self.select_row(
                     "language",
-                    language.pick("语言", "Language"),
-                    language.pick(
-                        "System 跟随系统区域设置；切换后立即刷新界面文案。",
-                        "System follows the OS locale; the interface refreshes immediately.",
-                    ),
+                    language.text(Message::SettingsLocalizationLanguage),
+                    language.text(Message::SettingsLocalizationDescription),
                     cx,
                 )),
         )
@@ -747,28 +742,22 @@ impl SettingsPane {
     fn page_reset(&mut self, _window: &mut Window, cx: &mut Context<'_, Self>) -> gpui::Div {
         let language = self.language(cx);
         let label = if self.reset_armed {
-            language.pick("再次点击确认重置", "Click again to confirm")
+            language.text(Message::SettingsResetAgain)
         } else {
-            language.pick("恢复默认设置", "Restore defaults")
+            language.text(Message::SettingsResetAction)
         };
         let button = Button::new("settings-reset-defaults")
             .label(label)
             .on_click(cx.listener(|this, _, window, cx| this.confirm_reset(window, cx)));
-        v_flex()
-            .w_full()
-            .gap(px(SETTINGS_GROUP_GAP))
-            .child(
-                self.group(language.pick("重置", "Reset"), cx)
-                    .child(self.row(
-                        language.pick("恢复默认设置", "Restore defaults"),
-                        language.pick(
-                            "删除已登记设置键并回到出厂值；未知键与 Agent 接入授权保留，原设置先备份。",
-                            "Removes registered settings and restores factory values; unknown keys and agent authorizations are kept, and the previous settings are backed up first.",
-                        ),
-                        button,
-                        cx,
-                    )),
-            )
+        v_flex().w_full().gap(px(SETTINGS_GROUP_GAP)).child(
+            self.group(language.text(Message::SettingsResetGroup), cx)
+                .child(self.row(
+                    language.text(Message::SettingsResetAction),
+                    language.text(Message::SettingsResetDescription),
+                    button,
+                    cx,
+                )),
+        )
     }
 }
 

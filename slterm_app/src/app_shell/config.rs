@@ -10,6 +10,7 @@ use std::path::Path;
 use gpui::Global;
 
 use crate::gpui_terminal::colors::Palette;
+use crate::i18n::{LanguagePreference, UiLanguage};
 use crate::theme_library::ThemeLibraryStore;
 use slterm_settings::{RawSettings, RuntimeSettings};
 
@@ -33,6 +34,9 @@ pub struct Settings {
     /// 选区完成即复制。
     pub copy_on_select: bool,
     pub scroll_speed: f32,
+    /// 解析后的界面语言(System 档的 locale 协商只在此处发生一次;
+    /// 渲染路径读缓存,不再逐帧探测系统 locale)。
+    pub language: UiLanguage,
 }
 
 impl Global for Settings {}
@@ -93,6 +97,7 @@ impl Settings {
             palette: resolve_palette(runtime, theme_root),
             copy_on_select: runtime.copy_on_select,
             scroll_speed: runtime.scroll_speed,
+            language: LanguagePreference::from(runtime.language).resolved(),
         }
     }
 

@@ -703,6 +703,11 @@ fn settings_language_switch_refreshes_display_without_rebuilding_controls(cx: &m
             pane.runtime_for_test().language,
             slterm_settings::LanguagePref::ZhCn
         );
+        assert_eq!(
+            pane.language_for_test(),
+            crate::i18n::UiLanguage::ZhCn,
+            "语言切换后渲染语言缓存必须同步刷新"
+        );
     });
     let tree = slterm_settings::json::parse(&std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(
