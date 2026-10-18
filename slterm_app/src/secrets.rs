@@ -55,6 +55,28 @@ impl fmt::Debug for SecretBytes {
     }
 }
 
+/// M9.5 过渡后端:真实 Windows 凭据管理器归 M10.9。读侧恒「无凭据」,
+/// 使 AI assistant 的 env 兜底成为唯一可用通道,而不是伪造成功。
+#[derive(Debug, Default)]
+pub(crate) struct NoCredentialStore;
+
+impl CredentialStore for NoCredentialStore {
+    fn load(&self, _target: &str) -> io::Result<Option<SecretBytes>> {
+        Ok(None)
+    }
+
+    fn store(&self, _target: &str, _secret: &[u8]) -> io::Result<()> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "credential backend is implemented in M10.9",
+        ))
+    }
+
+    fn delete(&self, _target: &str) -> io::Result<()> {
+        Ok(())
+    }
+}
+
 /// 凭据后端消费接口(10 篇三原语的应用层投影)。
 ///
 /// 真实实现归 M10.9;本步只以 mock 断言「先写凭据后回写引用」「先删凭据

@@ -291,5 +291,9 @@
       "saved": "Saved",
       "unsaved": "Unsaved"
     }
+  },
+  "terminal": {
+    "ai_analyzing": "Analyzing failure…",
+    "ai_fix_hint": "Ctrl+. paste · Esc dismiss"
   }
 }

@@ -16,9 +16,16 @@ impl TerminalView {
         // M3 Settings 白名单外项取模块常量(06 篇设置键回填点):
         // 字宽模式恒 Compact、偏移恒 (0,0)、行高倍率恒 None、shell 恒 None
         // (走 core pwsh→powershell→cmd 探测链)。
-        let (families, font_size, palette, term_config, copy_on_select, ligatures) = match cx
-            .try_global::<Settings>(
-        ) {
+        let (
+            families,
+            font_size,
+            palette,
+            term_config,
+            copy_on_select,
+            ligatures,
+            completion_style,
+            ghost_enabled,
+        ) = match cx.try_global::<Settings>() {
             Some(settings) => (
                 [
                     settings.font_family.clone(),
@@ -31,6 +38,8 @@ impl TerminalView {
                 settings.term_config(),
                 settings.copy_on_select,
                 settings.ligatures,
+                settings.completion_style,
+                settings.ghost,
             ),
             None => (
                 std::array::from_fn(|_| crate::app_shell::assets::REQUIRED_FONT_FAMILY.to_owned()),
@@ -38,6 +47,8 @@ impl TerminalView {
                 Arc::new(Palette::default()),
                 slterm_terminal::term::Config::default(),
                 false,
+                true,
+                slterm_settings::CompletionStyleName::default(),
                 true,
             ),
         };
@@ -140,6 +151,21 @@ impl TerminalView {
             font_offset_y: M3_FONT_OFFSET.1,
             line_height_multiplier: None,
             palette,
+            math_overlay: super::super::math_overlay::MathOverlay::default(),
+            suggest: crate::suggest::SuggestState::default(),
+            suggest_line: String::new(),
+            suggest_cursor: 0,
+            completion_session: None,
+            suggestion_task: None,
+            completion_style,
+            ghost_enabled,
+            last_committed: String::new(),
+            active_run: None,
+            last_run: None,
+            ai_fix: None,
+            ai_fix_gate: crate::ai_assistant::TriggerGate::default(),
+            #[cfg(all(test, feature = "gpui-test-support"))]
+            ai_config_override: None,
             marked_text: None,
             ime_bounds: Bounds::default(),
             title: initial_title,

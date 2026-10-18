@@ -178,18 +178,18 @@ impl TextFileView {
 
 /// 标题段落只保留下标文本 span:块源码里不含 `#` 标记。
 pub(super) fn paragraph_source(source: &str) -> String {
-    if let Ok(markdown::mdast::Node::Root(root)) =
-        markdown::to_mdast(source, &markdown::ParseOptions::gfm())
-        && let Some(markdown::mdast::Node::Heading(heading)) = root.children.first()
+    if let Ok(::markdown::mdast::Node::Root(root)) =
+        ::markdown::to_mdast(source, &::markdown::ParseOptions::gfm())
+        && let Some(::markdown::mdast::Node::Heading(heading)) = root.children.first()
         && let (Some(first), Some(last)) = (
             heading
                 .children
                 .first()
-                .and_then(markdown::mdast::Node::position),
+                .and_then(::markdown::mdast::Node::position),
             heading
                 .children
                 .last()
-                .and_then(markdown::mdast::Node::position),
+                .and_then(::markdown::mdast::Node::position),
         )
     {
         return source[first.start.offset..last.end.offset].to_owned();

@@ -78,6 +78,10 @@ pub(crate) mod logging;
 // 覆盖层 paint pass、markdown 数学)归 M9.5。
 #[allow(dead_code)] // 消费点归 M9.5。
 pub(crate) mod math;
+// 自含 markdown 文档模型(08 篇 M9.5,管线 B):扁平块序列 + 数学片段;
+// 数学适配(MathRun/measure/fit)与终端覆盖层共用引擎单点。
+#[allow(dead_code)] // 阅读器渲染接线归 07 篇后续步骤;本步交付模型与数学适配。
+pub(crate) mod markdown;
 pub(crate) mod panic;
 pub(crate) mod platform;
 pub(crate) mod process_tree;

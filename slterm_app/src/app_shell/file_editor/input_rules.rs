@@ -7,8 +7,8 @@
 
 use super::inline_edit::{Marks, Projection};
 use super::*;
+use ::markdown::mdast::Node;
 use gpui::EntityInputHandler as _;
-use markdown::mdast::Node;
 
 /// 块前缀判定:列表/引用/标题/有序列表必须完整标记(含尾随空格)。
 pub(super) fn block_prefix(text: &str) -> bool {
@@ -82,7 +82,8 @@ impl TextFileView {
                     && matches!(text.as_str(), "[ ] " | "[x] " | "[X] ");
             }
         } else if text.contains('\n')
-            && let Ok(Node::Root(root)) = markdown::to_mdast(&text, &markdown::ParseOptions::gfm())
+            && let Ok(Node::Root(root)) =
+                ::markdown::to_mdast(&text, &::markdown::ParseOptions::gfm())
         {
             convert |= root.children.len() > 1
                 || root.children.first().is_some_and(|node| {

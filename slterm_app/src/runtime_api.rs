@@ -17,7 +17,10 @@ mod command;
 pub(crate) mod git;
 mod lifecycle;
 mod orchestrate;
+mod run_record;
 mod run_wait;
+
+pub(crate) use run_record::begin_runtime_run;
 mod server;
 mod shortcuts;
 mod terminal_read;

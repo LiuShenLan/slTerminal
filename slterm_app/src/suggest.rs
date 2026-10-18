@@ -84,6 +84,8 @@ pub(crate) struct SuggestSources<'a> {
 }
 
 /// 每 pane 的补全缓存与关闭语义(原 pane 状态补全面收敛)。
+///
+/// 视图只读这些字段渲染;按键路径只更新输入快照与缓存键,候选在后台算。
 #[derive(Default)]
 pub(crate) struct SuggestState {
     /// cwd + env + line + style + 命令代际的缓存键。
@@ -92,6 +94,102 @@ pub(crate) struct SuggestState {
     pub suppressed_line: Option<String>,
     /// Hybrid 模式的弹窗请求位。
     pub popup_requested: bool,
+    /// Inline ghost 余量。
+    pub suggestion: String,
+    /// Inline 接受时的编辑合同。
+    pub suggestion_edit: Option<SltermCompletionItem>,
+    /// Popup 列表。
+    pub completion_items: Vec<SltermCompletionItem>,
+    /// 用户尚未主动导航时不高亮任何候选;这保证 Enter 仍提交原始输入。
+    pub completion_selected: Option<usize>,
+    /// 当前缓存键的后台结果已回填。
+    pub completion_result_ready: bool,
+}
+
+impl SuggestState {
+    /// Hybrid 的 Tab 请求只改变呈现,不向 PTY 写入。
+    pub(crate) fn request_completion_popup(&mut self) -> bool {
+        if self.popup_requested {
+            return true;
+        }
+        if self.suggestion.is_empty() && self.completion_items.is_empty() {
+            return false;
+        }
+        self.popup_requested = true;
+        self.suppressed_line = None;
+        self.clear_completion_hints();
+        true
+    }
+
+    /// 弹窗高亮行循环移动。初次导航从首项进入(Up 不至列表末尾)。
+    pub(crate) fn completion_popup_move(&mut self, delta: isize) {
+        let len = self.completion_items.len();
+        if len == 0 {
+            return;
+        }
+        self.completion_selected = Some(match self.completion_selected {
+            Some(current) => (current as isize + delta).rem_euclid(len as isize) as usize,
+            None => 0,
+        });
+    }
+
+    /// 取走选中候选并关闭列表。
+    pub(crate) fn completion_popup_take(&mut self) -> Option<SltermCompletionItem> {
+        let item = self
+            .completion_items
+            .get(self.completion_selected?)?
+            .clone();
+        self.completion_items.clear();
+        self.completion_selected = None;
+        self.popup_requested = false;
+        Some(item)
+    }
+
+    /// Esc 关闭列表:候选清空但重算键保留,列表在行变化前不会复开。
+    /// 返回是否真的关了。
+    pub(crate) fn completion_popup_dismiss(&mut self, line: &str) -> bool {
+        if self.popup_requested {
+            self.popup_requested = false;
+            self.clear_completion_hints();
+            return true;
+        }
+        if self.completion_items.is_empty() {
+            return false;
+        }
+        if !line.is_empty() {
+            self.suppressed_line = Some(line.to_owned());
+        }
+        self.completion_items.clear();
+        self.completion_selected = None;
+        true
+    }
+
+    pub(crate) fn completion_query_matches(&self, key: &str) -> bool {
+        self.suggestion_key == key
+    }
+
+    pub(crate) fn completion_query_ready(&self, key: &str) -> bool {
+        self.completion_query_matches(key) && self.completion_result_ready
+    }
+
+    pub(crate) fn finish_completion_query(&mut self) {
+        self.completion_result_ready = true;
+    }
+
+    pub(crate) fn begin_completion_query(&mut self, key: String) {
+        self.clear_completion_hints();
+        self.suggestion_key = key;
+    }
+
+    /// 丢弃 ghost 与弹窗候选并作废重算缓存。
+    pub(crate) fn clear_completion_hints(&mut self) {
+        self.suggestion.clear();
+        self.suggestion_edit = None;
+        self.suggestion_key.clear();
+        self.completion_result_ready = false;
+        self.completion_items.clear();
+        self.completion_selected = None;
+    }
 }
 
 /// 两种呈现形态的候选结果。
@@ -841,5 +939,89 @@ mod suggest_tests {
         let elided = elide_left(&long, 10);
         assert_eq!(elided.chars().count(), 10);
         assert!(elided.ends_with("tail"), "{elided}");
+    }
+
+    fn popup_state() -> SuggestState {
+        let item = |label: &str, insert: &str| SltermCompletionItem {
+            label: label.to_owned(),
+            insert: insert.to_owned(),
+            replace_chars: 0,
+            replace_after_chars: 0,
+            kind: SltermCompletionKind::Command,
+        };
+        SuggestState {
+            completion_items: vec![
+                item("git pull upstream", " upstream"),
+                item("git pull --rebase", " --rebase"),
+            ],
+            ..SuggestState::default()
+        }
+    }
+
+    #[test]
+    fn popup_does_not_accept_before_explicit_navigation() {
+        let mut state = popup_state();
+        assert_eq!(state.completion_selected, None);
+        assert!(state.completion_popup_take().is_none());
+        assert!(!state.completion_items.is_empty(), "未导航不消耗列表");
+    }
+
+    #[test]
+    fn first_popup_navigation_enters_at_the_first_item() {
+        for delta in [-1, 1] {
+            let mut state = popup_state();
+            state.completion_popup_move(delta);
+            assert_eq!(state.completion_selected, Some(0));
+            assert_eq!(
+                state.completion_popup_take().map(|item| item.insert),
+                Some(" upstream".to_owned())
+            );
+            assert!(state.completion_items.is_empty());
+        }
+    }
+
+    #[test]
+    fn popup_navigation_wraps_in_both_directions() {
+        let mut state = popup_state();
+        state.completion_popup_move(1);
+        state.completion_popup_move(1);
+        assert_eq!(state.completion_selected, Some(1));
+        state.completion_popup_move(1);
+        assert_eq!(state.completion_selected, Some(0));
+        state.completion_popup_move(-1);
+        assert_eq!(state.completion_selected, Some(1));
+    }
+
+    #[test]
+    fn escape_closes_the_list_and_keeps_the_line_suppressed() {
+        let mut state = popup_state();
+        assert!(state.completion_popup_dismiss("git pull"));
+        assert_eq!(state.suppressed_line.as_deref(), Some("git pull"));
+        assert!(state.completion_items.is_empty());
+        // 行不变时不重开由刷新路径消费 suppressed_line 保证。
+        assert!(!state.completion_popup_dismiss("git pull"));
+    }
+
+    #[test]
+    fn hybrid_popup_request_clears_the_suppression() {
+        let mut state = popup_state();
+        state.suppressed_line = Some("git pull".into());
+        state.suggestion = " upstream".into();
+        assert!(state.request_completion_popup());
+        assert!(state.popup_requested);
+        assert!(state.suppressed_line.is_none());
+        assert!(state.suggestion.is_empty(), "请求位清空旧候选");
+    }
+
+    #[test]
+    fn query_keys_gate_stale_background_results() {
+        let mut state = SuggestState::default();
+        state.begin_completion_query("key-a".into());
+        assert!(state.completion_query_matches("key-a"));
+        assert!(!state.completion_query_ready("key-a"));
+        state.finish_completion_query();
+        assert!(state.completion_query_ready("key-a"));
+        state.begin_completion_query("key-b".into());
+        assert!(!state.completion_query_ready("key-a"));
     }
 }

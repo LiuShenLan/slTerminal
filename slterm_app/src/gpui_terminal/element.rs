@@ -22,6 +22,7 @@ use slterm_terminal::render::{RenderSnapshot, SnapshotConfig, boxdraw};
 use vte::ansi::CursorShape;
 
 use super::cursor_painter::{CursorPaint, paint_box_glyph};
+use super::math_overlay;
 use super::view::TerminalView;
 
 pub struct TerminalElement {
@@ -33,20 +34,42 @@ impl TerminalElement {
         Self { view }
     }
 
-    /// 在一次锁内通过渲染合同截取快照;锁外解析颜色与绘制。
-    fn snapshot(&self, rows: usize, cols: usize, cx: &App) -> Option<RenderSnapshot> {
-        let view = self.view.read(cx);
-        let session = view.session.as_ref()?;
-        let term = session.term.lock();
-        // 分段只反映内容与宽度类,绝不掺入光标状态:per-cell 绘制下反色只是
-        // 换色,若让闪烁相位改变分段,整行会随闪烁重塑形而跳字。
-        Some(RenderSnapshot::capture(
-            &term,
-            &SnapshotConfig {
-                rows: rows as u16,
-                cols: cols as u16,
-            },
-        ))
+    /// 在同一次 `Term` 锁内截取渲染快照与公式覆盖帧(08 篇缝合点 1)。
+    ///
+    /// 分段只反映内容与宽度类,绝不掺入光标状态:per-cell 绘制下反色只是
+    /// 换色,若让闪烁相位改变分段,整行会随闪烁重塑形而跳字。
+    fn snapshot(
+        &self,
+        layout: &TermLayout,
+        window: &Window,
+        cx: &mut App,
+    ) -> Option<(RenderSnapshot, math_overlay::PendingMathFrame, f32)> {
+        let pixels_per_point = crate::math::pixels_per_point(window.scale_factor());
+        let size = math_overlay::grid_math_viewport(
+            layout.cols,
+            layout.rows,
+            layout.cell_width.as_f32(),
+            layout.line_height.as_f32(),
+        );
+        self.view.update(cx, |view, _| {
+            let session = view.session.as_ref()?;
+            let term = session.term.lock();
+            let snap = RenderSnapshot::capture(
+                &term,
+                &SnapshotConfig {
+                    rows: layout.rows as u16,
+                    cols: layout.cols as u16,
+                },
+            );
+            let pending = view.math_overlay.plan_frame(
+                &term,
+                &size,
+                &view.palette,
+                view.font_size.as_f32(),
+                pixels_per_point,
+            );
+            Some((snap, pending, pixels_per_point))
+        })
     }
 }
 
@@ -195,9 +218,14 @@ impl Element for TerminalElement {
         let focused = focus_handle.is_focused(window);
         // 只有光标本身参与闪烁;IME 预编辑仍复用同一个坐标锚点。
         let cursor_visible = self.view.read(cx).cursor_visible();
-        let Some(snap) = self.snapshot(layout.rows, layout.cols, cx) else {
+        let Some((snap, pending, pixels_per_point)) = self.snapshot(layout, window, cx) else {
             return;
         };
+        // 位图预检在 term 锁外:公式能否上屏只影响覆盖掩码,不回写网格。
+        let raster_scale = window.scale_factor();
+        let frame = self.view.update(cx, |view, _| {
+            view.math_overlay.finalize_frame(pending, raster_scale)
+        });
         let overrides = snap.color_overrides;
 
         let cell_rect = |row: usize, start: usize, count: usize| -> Bounds<Pixels> {
@@ -210,10 +238,15 @@ impl Element for TerminalElement {
             )
         };
 
+        let cursor_visual_col = snap.cursor.as_ref().map(|cursor| {
+            frame.visual_column(cursor.row as usize, cursor.col as usize, layout.cols)
+        });
         let cursor_paint = snap.cursor.as_ref().map(|cursor| CursorPaint {
             rect: Bounds::new(
                 point(
-                    bounds.origin.x + layout.cell_width * cursor.col as f32,
+                    bounds.origin.x
+                        + layout.cell_width
+                            * cursor_visual_col.unwrap_or(cursor.col as usize) as f32,
                     bounds.origin.y + layout.line_height * cursor.row as f32,
                 ),
                 size(
@@ -239,31 +272,43 @@ impl Element for TerminalElement {
                 continue;
             }
             let color = theme.resolve(run.color, &overrides, false);
-            window.paint_quad(fill(
-                cell_rect(
-                    run.row as usize,
-                    run.start as usize,
-                    (run.end - run.start) as usize,
-                ),
-                color,
-            ));
+            // 公式源格的 ANSI 背景映射进紧凑视觉盒;多出的源格丢弃,
+            // 避免压缩后仍留一条源宽度色带。
+            for visual in frame.projected_runs(
+                run.row as usize,
+                run.start as usize..run.end as usize,
+                layout.cols,
+                true,
+            ) {
+                window.paint_quad(fill(
+                    cell_rect(run.row as usize, visual.start, visual.len()),
+                    color,
+                ));
+            }
         }
+        let mut projected_selection: Vec<(u16, usize, usize)> = Vec::new();
         for run in &snap.selection_runs {
-            window.paint_quad(fill(
-                cell_rect(
-                    run.row as usize,
-                    run.start as usize,
-                    (run.end - run.start) as usize,
-                ),
-                theme.selection,
-            ));
+            for visual in frame.projected_runs(
+                run.row as usize,
+                run.start as usize..run.end as usize,
+                layout.cols,
+                false,
+            ) {
+                window.paint_quad(fill(
+                    cell_rect(run.row as usize, visual.start, visual.len()),
+                    theme.selection,
+                ));
+                projected_selection.push((run.row, visual.start, visual.end));
+            }
         }
         let selection_foreground = theme.selection_foreground;
         let selected_foreground = |row: u16, col: u16| -> Option<Rgba> {
             let foreground = selection_foreground?;
-            snap.selection_runs
+            projected_selection
                 .iter()
-                .any(|run| run.row == row && run.start <= col && col < run.end)
+                .any(|(run_row, start, end)| {
+                    *run_row == row && *start <= col as usize && (col as usize) < *end
+                })
                 .then_some(foreground)
         };
 
@@ -291,7 +336,13 @@ impl Element for TerminalElement {
         // 几何由渲染合同裁定(含设备像素吸附),保证盖满单元格、相邻无缝。
         let scale = window.scale_factor();
         for glyph in &snap.box_glyphs {
-            let fg = if let Some(foreground) = selected_foreground(glyph.row, glyph.col) {
+            // 公式源格由覆盖层接管;project_cell 对覆盖格返回 None。
+            let Some(visual_col) =
+                frame.project_cell(glyph.row as usize, glyph.col as usize, layout.cols)
+            else {
+                continue;
+            };
+            let fg = if let Some(foreground) = selected_foreground(glyph.row, visual_col as u16) {
                 foreground
             } else {
                 theme.resolve(glyph.fg, &overrides, glyph.bold)
@@ -307,7 +358,7 @@ impl Element for TerminalElement {
             };
             let origin = point(
                 snap_to_device(
-                    bounds.origin.x + layout.cell_width * glyph.col as f32,
+                    bounds.origin.x + layout.cell_width * visual_col as f32,
                     scale,
                 ),
                 snap_to_device(
@@ -335,11 +386,18 @@ impl Element for TerminalElement {
         // 逐格绘制文本段。字形原点始终由固定网格决定。
         for seg in &snap.segments {
             for cell in &seg.cells {
-                let fg: Hsla = if let Some(foreground) = selected_foreground(seg.row, cell.col) {
-                    foreground.into()
-                } else {
-                    theme.resolve(cell.fg, &overrides, cell.bold).into()
+                // 覆盖层接管公式源格;其余格按紧凑视觉列落位。
+                let Some(visual_col) =
+                    frame.project_cell(seg.row as usize, cell.col as usize, layout.cols)
+                else {
+                    continue;
                 };
+                let fg: Hsla =
+                    if let Some(foreground) = selected_foreground(seg.row, visual_col as u16) {
+                        foreground.into()
+                    } else {
+                        theme.resolve(cell.fg, &overrides, cell.bold).into()
+                    };
                 let underline = cell.underline.then(|| UnderlineStyle {
                     thickness: px(1.0),
                     color: Some(fg),
@@ -358,7 +416,7 @@ impl Element for TerminalElement {
                     strikethrough,
                 };
                 let origin = point(
-                    bounds.origin.x + layout.cell_width * cell.col as f32,
+                    bounds.origin.x + layout.cell_width * visual_col as f32,
                     bounds.origin.y + layout.line_height * seg.row as f32,
                 );
                 let shaped = window.text_system().shape_line(
@@ -388,14 +446,67 @@ impl Element for TerminalElement {
             }
         }
 
+        // 覆盖层在格子文本之后上屏:源格已被掩码跳过,公式位图落在原跨度上。
+        if !frame.is_empty() {
+            math_overlay::paint_frame(
+                &frame,
+                bounds.origin,
+                (layout.cell_width.as_f32(), layout.line_height.as_f32()),
+                pixels_per_point,
+                theme.selection,
+                window,
+                cx,
+            );
+        }
+
+        // ghost 余量(08 篇 M9.5):画在光标之后,使用主题 dim 前景,不改网格。
+        let ghost = self.view.read(cx).suggest.suggestion.clone();
+        if !ghost.is_empty()
+            && let Some(cursor) = &snap.cursor
+        {
+            let col = cursor_visual_col.unwrap_or(cursor.col as usize) + 1;
+            if col < layout.cols {
+                let run = TextRun {
+                    len: ghost.len(),
+                    font: font.clone(),
+                    color: theme.dim_foreground.into(),
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                };
+                let shaped = window.text_system().shape_line(
+                    SharedString::from(ghost),
+                    font_size,
+                    std::slice::from_ref(&run),
+                    None,
+                );
+                let origin = point(
+                    bounds.origin.x + layout.cell_width * col as f32,
+                    bounds.origin.y + layout.line_height * cursor.row as f32,
+                );
+                let _ = shaped.paint(
+                    origin,
+                    layout.line_height,
+                    gpui::TextAlign::Left,
+                    None,
+                    window,
+                    cx,
+                );
+            }
+        }
+
         if let Some(cursor) = &snap.cursor {
             // 描边形状画在文本之后;IME 锚点是逻辑网格坐标。
             if let Some(cursor) = &cursor_paint {
                 cursor.paint_foreground(window);
             }
 
-            // IME 组合文本锚点与预编辑串:跟随光标单元格。
-            let anchor = cell_rect(cursor.row as usize, cursor.col as usize, 1);
+            // IME 组合文本锚点与预编辑串:跟随光标单元格(紧凑视觉列)。
+            let anchor = cell_rect(
+                cursor.row as usize,
+                cursor_visual_col.unwrap_or(cursor.col as usize),
+                1,
+            );
             let marked = self.view.read(cx).marked_text.clone();
             self.view.update(cx, |view, _| view.ime_bounds = anchor);
             if let Some(marked) = marked.filter(|m| !m.is_empty()) {

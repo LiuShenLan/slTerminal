@@ -132,6 +132,20 @@ impl AgentPaneHost {
         }
     }
 
+    /// OSC 133;C 的提交边:已知程序身份时按程序语义(含 codex `/plan`
+    /// 例外)推进,否则走通用 submitted。
+    pub(crate) fn command_started(&mut self) {
+        match self.program.as_deref() {
+            Some(program) => self.activity.submitted_text(program, ""),
+            None => self.activity.submitted(),
+        }
+    }
+
+    /// OSC 133;D 的完成边。
+    pub(crate) fn command_finished(&mut self) {
+        self.activity.command_finished();
+    }
+
     /// 一次屏幕样本(最近至多 24 行)进仲裁器。身份只在没有 hook 权威时
     /// 由屏幕 chrome 建立——hook 永远是更高置信度的来源。
     pub(crate) fn observe_screen(&mut self, screen: &str) -> bool {
@@ -338,6 +352,20 @@ impl AgentHub {
     pub(crate) fn submitted(&mut self, pane_id: PaneId, text: &str) {
         if let Some(host) = self.hosts.get_mut(&pane_id) {
             host.submitted(text);
+        }
+    }
+
+    /// OSC 133;C 边(runtime run 等待链的启动证据)。
+    pub(crate) fn command_started(&mut self, pane_id: PaneId) {
+        if let Some(host) = self.hosts.get_mut(&pane_id) {
+            host.command_started();
+        }
+    }
+
+    /// OSC 133;D 边。
+    pub(crate) fn command_finished(&mut self, pane_id: PaneId) {
+        if let Some(host) = self.hosts.get_mut(&pane_id) {
+            host.command_finished();
         }
     }
 

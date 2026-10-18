@@ -7,7 +7,7 @@
 
 use super::block_structure::{EditPart, PartKind, StructureNode, add, span};
 use super::inline_edit::Marks;
-use markdown::mdast::Node;
+use ::markdown::mdast::Node;
 
 const MAX_INLINE_RUNS: usize = 128;
 
@@ -134,9 +134,9 @@ mod block_inline_tests {
     use crate::app_shell::file_editor::block_structure::BlockStructure;
 
     fn parse(source: &str) -> BlockStructure {
-        let mut options = markdown::ParseOptions::gfm();
+        let mut options = ::markdown::ParseOptions::gfm();
         options.constructs.math_text = true;
-        let Node::Root(root) = markdown::to_mdast(source, &options).unwrap() else {
+        let Node::Root(root) = ::markdown::to_mdast(source, &options).unwrap() else {
             panic!()
         };
         BlockStructure::from_node(&root.children[0], source, 0).unwrap()

@@ -7,7 +7,7 @@
 //! 消费点:M8.3 结构化渲染与命令(`commit_structure_edit`)。
 
 pub(super) use super::block_inline::InlineRun;
-use markdown::mdast::{AlignKind, Node};
+use ::markdown::mdast::{AlignKind, Node};
 use std::ops::Range;
 
 #[derive(Clone, Debug)]
@@ -397,9 +397,9 @@ mod block_structure_tests {
     use super::*;
 
     fn parse(source: &str) -> BlockStructure {
-        let mut options = markdown::ParseOptions::gfm();
+        let mut options = ::markdown::ParseOptions::gfm();
         options.constructs.math_flow = true;
-        let Node::Root(root) = markdown::to_mdast(source, &options).unwrap() else {
+        let Node::Root(root) = ::markdown::to_mdast(source, &options).unwrap() else {
             panic!()
         };
         BlockStructure::from_node(&root.children[0], source, 0).unwrap()

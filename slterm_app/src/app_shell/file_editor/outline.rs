@@ -8,7 +8,7 @@
 //! M8.3 消费:预览虚拟化与大纲侧栏;图片 URL 重写在 M8.3 预览装配时接入
 //! (`prepare` 的 `base` 参数保留接缝,本步不做改写)。
 
-use markdown::mdast::Node;
+use ::markdown::mdast::Node;
 use std::collections::{HashMap, HashSet};
 
 const MAX_PREVIEW_BYTES: usize = 512 * 1024;
@@ -151,10 +151,10 @@ impl Outline {
     pub(super) fn parse(source: &str) -> Self {
         let limited = source.len() > MAX_PREVIEW_BYTES;
         let source = &source[..source.floor_char_boundary(MAX_PREVIEW_BYTES.min(source.len()))];
-        let mut options = markdown::ParseOptions::gfm();
+        let mut options = ::markdown::ParseOptions::gfm();
         options.constructs.math_flow = true;
         options.constructs.math_text = true;
-        let Ok(Node::Root(root)) = markdown::to_mdast(source, &options) else {
+        let Ok(Node::Root(root)) = ::markdown::to_mdast(source, &options) else {
             return Self {
                 headings: vec![],
                 blocks: vec![source.to_owned()],

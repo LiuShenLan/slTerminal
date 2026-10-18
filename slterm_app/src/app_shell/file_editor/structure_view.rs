@@ -9,10 +9,10 @@
 
 use super::block_structure::{BlockStructure, StructureNode};
 use super::*;
+use ::markdown::mdast::AlignKind;
 use gpui::StatefulInteractiveElement as _;
 use gpui_component::StyledExt as _;
 use gpui_component::text::{TextView, TextViewState, TextViewStyle};
-use markdown::mdast::AlignKind;
 
 impl TextFileView {
     pub(super) fn render_structured_block(

@@ -104,6 +104,10 @@ pub struct TerminalPane {
     /// 本 pane 创建时冻结的启动身份;快照逐叶落盘(M5.5)。
     pub launch: Option<LaunchSession>,
     pub view: Entity<TerminalView>,
+    /// 补全来源缓存按 pane 持有(08 篇 M9.5;与 terminal_registry 以
+    /// PaneId 关联,缓存本体不复制)。所有权锚点;消费经视图的同源句柄。
+    #[allow(dead_code)]
+    pub(crate) completion_session: Rc<crate::completion::Session>,
     _subscription: Subscription,
 }
 
@@ -656,7 +660,13 @@ impl SltermWorkspace {
         let pane_id = PaneId(self.next_pane);
         self.next_pane = self.next_pane.saturating_add(1);
         let launch_identity = launch_session_from_terminal_launch(&launch);
-        let view = cx.new(|cx| TerminalView::new(pane_id, grid, launch, window, cx));
+        let completion_session = Rc::new(crate::completion::Session::default());
+        let session_for_view = Rc::clone(&completion_session);
+        let view = cx.new(|cx| {
+            let mut view = TerminalView::new(pane_id, grid, launch, window, cx);
+            view.attach_completion_session(session_for_view);
+            view
+        });
         let subscription = cx.subscribe_in(&view, window, Self::on_terminal_event);
         // 注册表写入点 1/2(spawn 侧;另一侧 = close_pane)。
         terminal_registry::register(pane_id, PaneSessionMeta::default());
@@ -667,6 +677,7 @@ impl SltermWorkspace {
             custom_name: None,
             launch: launch_identity,
             view,
+            completion_session,
             _subscription: subscription,
         }
     }
@@ -815,6 +826,21 @@ impl SltermWorkspace {
                 }
             }
             TerminalViewEvent::UserInput(_) => {}
+            // 历史记账在视图内完成(record_command + Session::invalidate);
+            // 宿主只需在命令边界推进 agent 生命周期与快照。
+            TerminalViewEvent::CommandSubmitted(_) => {}
+            TerminalViewEvent::CommandStarted => {
+                if let Some(pane_id) = self.locate_pane(view) {
+                    self.agent_hub.command_started(pane_id);
+                    self.publish_runtime_snapshot(cx);
+                }
+            }
+            TerminalViewEvent::CommandFinished => {
+                if let Some(pane_id) = self.locate_pane(view) {
+                    self.agent_hub.command_finished(pane_id);
+                    self.publish_runtime_snapshot(cx);
+                }
+            }
         }
     }
 

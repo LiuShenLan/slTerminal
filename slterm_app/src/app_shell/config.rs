@@ -36,6 +36,10 @@ pub struct Settings {
     pub editor_theme: EditorThemeTokens,
     /// 选区完成即复制。
     pub copy_on_select: bool,
+    /// 补全呈现形态(08 篇 M9.5:Inline/Popup/Hybrid,本体归 06 键域)。
+    pub completion_style: slterm_settings::CompletionStyleName,
+    /// AI 内联补全 ghost 开关。
+    pub ghost: bool,
     pub scroll_speed: f32,
     /// 解析后的界面语言(System 档的 locale 协商只在此处发生一次;
     /// 渲染路径读缓存,不再逐帧探测系统 locale)。
@@ -101,6 +105,8 @@ impl Settings {
             editor_theme: editor_theme::editor_theme_tokens(runtime.theme.reviewed_palette(), &ui),
             palette,
             copy_on_select: runtime.copy_on_select,
+            completion_style: runtime.completion_style,
+            ghost: runtime.ghost,
             scroll_speed: runtime.scroll_speed,
             language: LanguagePreference::from(runtime.language).resolved(),
         }

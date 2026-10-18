@@ -51,14 +51,14 @@ struct ImageBlock {
     height: Option<f32>,
 }
 
-fn image_block(node: &markdown::mdast::Node) -> Option<ImageBlock> {
-    let markdown::mdast::Node::Paragraph(paragraph) = node else {
+fn image_block(node: &::markdown::mdast::Node) -> Option<ImageBlock> {
+    let ::markdown::mdast::Node::Paragraph(paragraph) = node else {
         return None;
     };
     if paragraph.children.len() != 1 {
         return None;
     }
-    let markdown::mdast::Node::Image(image) = &paragraph.children[0] else {
+    let ::markdown::mdast::Node::Image(image) = &paragraph.children[0] else {
         return None;
     };
     Some(ImageBlock {
@@ -494,17 +494,17 @@ mod preview_tests {
     /// 图片段落识别:整段仅一张图才走自定义块;混排段落留给常规内联渲染。
     #[test]
     fn only_single_image_paragraphs_become_image_blocks() {
-        let options = markdown::ParseOptions::gfm();
-        let markdown::mdast::Node::Root(root) =
-            markdown::to_mdast("![alt](a.png)", &options).unwrap()
+        let options = ::markdown::ParseOptions::gfm();
+        let ::markdown::mdast::Node::Root(root) =
+            ::markdown::to_mdast("![alt](a.png)", &options).unwrap()
         else {
             panic!()
         };
         let block = image_block(&root.children[0]).unwrap();
         assert_eq!(block.url, "a.png");
         assert_eq!(block.alt, "alt");
-        let markdown::mdast::Node::Root(root) =
-            markdown::to_mdast("before ![alt](a.png)", &options).unwrap()
+        let ::markdown::mdast::Node::Root(root) =
+            ::markdown::to_mdast("before ![alt](a.png)", &options).unwrap()
         else {
             panic!()
         };

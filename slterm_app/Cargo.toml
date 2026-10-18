@@ -82,6 +82,13 @@ markdown = "=1.0.0"
 # Markdown 实体解码(Projection 可见文本 ↔ 源码 span 双向映射;数学引擎的
 # 传输层实体解码共用同一实现)。
 html-escape = "0.2.14"
+# 自含 markdown 文档模型(08 篇 M9.5):CommonMark + GFM 事件流,
+# `ENABLE_MATH` 给出 math_flow/math_text,数学片段进管线 B。
+# 版本与上游固定基线一致(0.13),关闭默认 feature 避免无关扩展。
+pulldown-cmark = { version = "0.13", default-features = false }
+# AI 助手修复请求:后台线程一次短 JSON POST。选 ureq 而非 reqwest:
+# 不与 tokio 耦合,依赖树小。
+ureq = { version = "3", features = ["json"] }
 # 数学引擎(08 篇 M9.4):TeX 事件流解析。版本与上游重构基线逐字一致
 # (pulldown-latex =0.7.1),事件语义/兼容重写才可照抄。
 pulldown-latex = "=0.7.1"

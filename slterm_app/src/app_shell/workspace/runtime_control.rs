@@ -12,7 +12,6 @@
 
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use gpui::{App, Context, Window};
 use serde_json::{Value, json};
@@ -30,9 +29,6 @@ use crate::runtime_api::{
     SINGLE_WINDOW_ID, capture_process_tree,
 };
 use crate::runtime_exec;
-
-/// run 身份只在本进程内单调;OSC 133 记账归 02 篇 M9。
-static NEXT_RUN_ID: AtomicU64 = AtomicU64::new(1);
 
 /// 忙碌判据:等待用户/正在运行/需要 attention 的 pane 不允许静默关闭。
 fn busy_state(state: RuntimeTaskState) -> bool {
@@ -439,11 +435,16 @@ impl SltermWorkspace {
             } => {
                 ensure_window(*window_id)?;
                 let (_, _, view) = self.pane_entry(*pane_id)?;
-                view.update(cx, |view, cx| view.runtime_prompt(command, true, cx))?;
+                // run 身份与视图的 active_run 同源:OSC 133;C 推进到 Started,
+                // 133;D 产出 last_run;等待链据此区分启动超时/完成超时。
+                let run = crate::runtime_api::begin_runtime_run();
+                let run_id = run.run_id;
+                view.update(cx, |view, cx| {
+                    view.runtime_prompt(command, true, cx)?;
+                    view.attach_run(run);
+                    Ok::<(), crate::runtime_api::ApiError>(())
+                })?;
                 self.agent_hub.submitted(PaneId(*pane_id), command);
-                let run_id = NEXT_RUN_ID.fetch_add(1, Ordering::Relaxed);
-                // OSC 133 真实 exit code 归 02 篇 M9;此后 wait 链如实报
-                // run_start_timeout / exit_code_unavailable,绝不伪造 0。
                 self.action_result(
                     json!({
                         "window_id": SINGLE_WINDOW_ID,

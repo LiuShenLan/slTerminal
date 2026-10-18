@@ -473,10 +473,223 @@ fn fallback_api_key_from(lookup: impl Fn(&str) -> Option<String>) -> Option<Zero
     None
 }
 
-/// 无启用 provider 时的环境兜底;消费点 = M9.5 请求目标组装。
-#[allow(dead_code)]
+/// 无启用 provider 时的环境兜底;消费点 = [`request_target`]。
 pub(crate) fn fallback_api_key() -> Option<Zeroizing<String>> {
     fallback_api_key_from(|name| std::env::var(name).ok())
+}
+
+/// 一次模型请求的目标:协议族 + 端点/模型 + 即用即焚凭据。
+pub(crate) struct RequestTarget {
+    pub kind: crate::ai_providers::ProviderKind,
+    pub base_url: String,
+    pub model: String,
+    pub full_url: bool,
+    pub key: Zeroizing<String>,
+}
+
+/// 请求目标组装(08 篇 provider 凭据流):启用 provider 优先,凭据出域即
+/// `Zeroizing`;无启用 provider 才走环境兜底。
+///
+/// 凭据后端显式注入(10 篇三原语);M9.5 生产侧无真实后端时传
+/// [`crate::secrets::NoCredentialStore`],此时启用 provider 无凭据 → 安静
+/// 返回 `None`(A6 登记的默认形态,待产品裁决)。
+pub(crate) fn request_target(
+    cfg: &AssistantConfig,
+    credentials: &dyn crate::secrets::CredentialStore,
+) -> Option<RequestTarget> {
+    request_target_from(cfg, &crate::ai_providers::load(), credentials)
+}
+
+/// 显式 store 形态(测试注入):避免测试读取真实数据目录。
+fn request_target_from(
+    cfg: &AssistantConfig,
+    store: &crate::ai_providers::ProviderStore,
+    credentials: &dyn crate::secrets::CredentialStore,
+) -> Option<RequestTarget> {
+    if let Some(provider) = crate::ai_providers::active_enabled(store) {
+        let key = if provider.kind.requires_api_key() {
+            let secret = match crate::ai_providers::load_api_key(credentials, &provider.id) {
+                Ok(Some(secret)) => secret,
+                Ok(None) => {
+                    log::info!("assistant: active provider has no credential");
+                    return None;
+                }
+                Err(error) => {
+                    log::warn!("assistant: credential lookup failed: {error}");
+                    return None;
+                }
+            };
+            match secret.into_string() {
+                Some(key) => key,
+                None => {
+                    log::warn!("assistant: provider credential is not valid UTF-8");
+                    return None;
+                }
+            }
+        } else {
+            Zeroizing::new(String::new())
+        };
+        return Some(RequestTarget {
+            kind: provider.kind,
+            base_url: provider.base_url.clone(),
+            model: provider.model.clone(),
+            full_url: provider.full_url,
+            key,
+        });
+    }
+
+    Some(RequestTarget {
+        kind: crate::ai_providers::ProviderKind::OpenAi,
+        base_url: cfg.base_url.clone(),
+        model: cfg.model.clone(),
+        full_url: false,
+        key: fallback_api_key()?,
+    })
+}
+
+/// 系统提示词照抄上游:只回 JSON,空 command = 刻意沉默。
+const SYSTEM_PROMPT: &str = "You fix failed shell commands inside a terminal. Reply with ONLY a \
+JSON object, no markdown fence: {\"command\":\"<corrected command>\",\"explain\":\"<why, max 120 \
+chars>\",\"danger\":<bool>}. Write \"explain\" in the same human language as the terminal output \
+(Chinese output → Chinese explain). Set \"danger\" true when the command deletes or overwrites \
+data, force-pushes, rewrites history, kills processes, or changes system state. If no sensible \
+fix exists, reply {\"command\":\"\",\"explain\":\"<one-line reason>\",\"danger\":false}.";
+
+/// 一次失败命令的完整上下文 → 模型回复 → 抗噪解析。失败只写日志,不打断
+/// 终端工作流。
+pub(crate) fn request_fix(
+    cfg: &AssistantConfig,
+    request: &FixRequest,
+    credentials: &dyn crate::secrets::CredentialStore,
+) -> Option<AiFix> {
+    let Some(target) = request_target(cfg, credentials) else {
+        log::info!("assistant: no usable enabled provider or fallback API key");
+        return None;
+    };
+    let user = format!(
+        "OS: {}\nCommand: {}\nExit code: {}\nDirectory: {}\nGit branch: {}\nOutput (tail):\n{}",
+        std::env::consts::OS,
+        request.command,
+        request.exit_code,
+        request.cwd,
+        if request.branch.is_empty() {
+            "-"
+        } else {
+            &request.branch
+        },
+        request.output_tail,
+    );
+    let content = send_model_request(&target, &user)?;
+    parse_fix(&content)
+}
+
+fn openai_body(model: &str, user: &str) -> serde_json::Value {
+    serde_json::json!({
+        "model": model,
+        "temperature": 0.2,
+        "max_tokens": 300,
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user},
+        ],
+    })
+}
+
+/// 四协议族请求(08 篇 #33):OpenAI Bearer / Anthropic x-api-key /
+/// Google x-goog-api-key / Azure api-key;全局 30s 超时,响应按协议族取
+/// 文本字段。含头拼接串全程 `Zeroizing`。
+pub(crate) fn send_model_request(target: &RequestTarget, user: &str) -> Option<String> {
+    use crate::ai_providers::ProviderKind;
+
+    let config = ureq::config::Config::builder()
+        .timeout_global(Some(Duration::from_secs(30)))
+        .build();
+    let agent: ureq::Agent = config.new_agent();
+    let base = target.base_url.trim_end_matches('/');
+    let (url, body) = match target.kind {
+        ProviderKind::Anthropic => (
+            if target.full_url {
+                base.to_owned()
+            } else {
+                format!("{base}/messages")
+            },
+            serde_json::json!({
+                "model": target.model,
+                "system": SYSTEM_PROMPT,
+                "temperature": 0.2,
+                "max_tokens": 300,
+                "messages": [{"role": "user", "content": user}],
+            }),
+        ),
+        ProviderKind::Google => {
+            let model = target.model.trim().trim_start_matches("models/");
+            (
+                if target.full_url {
+                    base.to_owned()
+                } else {
+                    format!("{base}/models/{model}:generateContent")
+                },
+                serde_json::json!({
+                    "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+                    "contents": [{"role": "user", "parts": [{"text": user}]}],
+                    "generationConfig": {"temperature": 0.2, "maxOutputTokens": 300},
+                }),
+            )
+        }
+        ProviderKind::AzureOpenAi => (
+            if target.full_url {
+                base.to_owned()
+            } else {
+                format!(
+                    "{base}/{}/chat/completions?api-version=2024-10-21",
+                    target.model
+                )
+            },
+            openai_body(&target.model, user),
+        ),
+        _ => (
+            if target.full_url {
+                base.to_owned()
+            } else {
+                format!("{base}/chat/completions")
+            },
+            openai_body(&target.model, user),
+        ),
+    };
+    let mut request = agent.post(&url);
+    let bearer = Zeroizing::new(format!("Bearer {}", target.key.as_str()));
+    request = match target.kind {
+        ProviderKind::Anthropic => request
+            .header("x-api-key", target.key.as_str())
+            .header("anthropic-version", "2023-06-01"),
+        ProviderKind::Google => request.header("x-goog-api-key", target.key.as_str()),
+        ProviderKind::AzureOpenAi => request.header("api-key", target.key.as_str()),
+        _ if target.key.is_empty() => request,
+        _ => request.header("Authorization", bearer.as_str()),
+    };
+    let mut response = match request.send_json(&body) {
+        Ok(response) => response,
+        Err(error) => {
+            log::warn!("assistant: request failed: {error}");
+            return None;
+        }
+    };
+    let value: serde_json::Value = match response.body_mut().read_json() {
+        Ok(value) => value,
+        Err(error) => {
+            log::warn!("assistant: bad response body: {error}");
+            return None;
+        }
+    };
+    match target.kind {
+        ProviderKind::Anthropic => value["content"][0]["text"].as_str().map(str::to_owned),
+        ProviderKind::Google => value["candidates"][0]["content"]["parts"][0]["text"]
+            .as_str()
+            .map(str::to_owned),
+        _ => value["choices"][0]["message"]["content"]
+            .as_str()
+            .map(str::to_owned),
+    }
 }
 
 /// 从模型回复中抗噪提取 JSON:首个 `{` 至末个 `}` 切片。空 command 视为
@@ -937,6 +1150,73 @@ mod ai_assistant_tests {
             path.with_file_name("slterm_assistant.corrupted.txt")
                 .exists()
         );
+    }
+
+    // ---- request_target:凭据引用/免 key provider ----
+
+    struct MockCredentials;
+
+    impl crate::secrets::CredentialStore for MockCredentials {
+        fn load(&self, _target: &str) -> io::Result<Option<crate::secrets::SecretBytes>> {
+            Ok(Some(crate::secrets::SecretBytes::new(
+                b"sk-test-key".to_vec(),
+            )))
+        }
+
+        fn store(&self, _target: &str, _secret: &[u8]) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn delete(&self, _target: &str) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn store_for(kind: crate::ai_providers::ProviderKind) -> crate::ai_providers::ProviderStore {
+        let provider =
+            crate::ai_providers::AiProvider::preset(kind, crate::ai_providers::preset_id(kind));
+        crate::ai_providers::ProviderStore {
+            active_id: provider.id.clone(),
+            providers: vec![provider],
+        }
+    }
+
+    #[test]
+    fn active_provider_without_credential_stays_silent() {
+        let store = store_for(crate::ai_providers::ProviderKind::OpenAi);
+        assert!(
+            request_target_from(
+                &AssistantConfig::default(),
+                &store,
+                &crate::secrets::NoCredentialStore
+            )
+            .is_none(),
+            "无凭据不得伪造请求目标"
+        );
+    }
+
+    #[test]
+    fn keyless_provider_needs_no_credential() {
+        let store = store_for(crate::ai_providers::ProviderKind::Ollama);
+        let target = request_target_from(
+            &AssistantConfig::default(),
+            &store,
+            &crate::secrets::NoCredentialStore,
+        )
+        .expect("Ollama 免 key");
+        assert_eq!(target.kind, crate::ai_providers::ProviderKind::Ollama);
+        assert!(target.key.is_empty());
+        assert!(!target.model.is_empty());
+    }
+
+    #[test]
+    fn provider_key_is_read_through_the_injected_store_and_wrapped() {
+        let store = store_for(crate::ai_providers::ProviderKind::OpenAi);
+        let target =
+            request_target_from(&AssistantConfig::default(), &store, &MockCredentials).unwrap();
+        assert_eq!(target.key.as_str(), "sk-test-key");
+        assert_eq!(target.kind, crate::ai_providers::ProviderKind::OpenAi);
+        assert!(target.base_url.starts_with("https://"));
     }
 
     #[test]

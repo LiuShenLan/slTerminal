@@ -49,6 +49,8 @@
 | gutter 行标与编辑器内部滚动的像素级对齐 | 行标同屏位置依赖组件库内部布局（`visible_row_range`/`scroll_offset`/行号留白），虚拟窗口只能断言元素存在与矩形非零，不能断言与文本行像素级重合 | L1 `gutter` 用例锁死状态→行标映射（升序/去重/六值）与 revision 推进；L4 `gutter_click_opens_a_read_only_dual_pane_diff` 断言行标绘制、点击打开 diff；实际对齐由构建产物人工目测（滚动/长文件） | 07 篇 M8.5 登记 |
 | 双栏 diff 的像素级行对齐与同步滚动视觉 | 两栏独立 `InputState` 的内部滚动由组件库布局决定，hunk 导航的同步滚动只保证滚动偏移写入，像素级行对位不可在虚拟窗口断言 | L1 `diff_tab` 用例锁死 hunk 计算/只读合同；L4 `diff_hunk_navigation_moves_the_active_hunk` 断言 hunk 集与活动下标；实际双栏对位由构建产物人工目测 | 07 篇 M8.5 登记 |
 | 整窗关闭的真实 OS 手势（Alt+F4/系统菜单关闭） | embedded 虚拟窗口无 OS 级关窗注入通道；`simulate_close` 走真实 `on_window_should_close` 回调（含脏守卫与确认框），但 OS 手势到回调的一段不可自动化 | L4 `closing_the_window_with_dirty_files_confirms_first`（拦截/取消/保存落盘）+ `shell_window_mounts_root_and_draws`；真实 Alt+F4 由构建产物人工验收 | 07 篇 M8.5 登记 |
+| AI assistant 真实模型 HTTP 请求（`ai_assistant::send_model_request` 四协议族出网） | 真实外部 API + 凭据依赖，测试进程不发出境请求；协议字段/响应解析可纯函数化的部分已覆盖 | L1 `should_suggest`/危险词表/`redact_secrets`/`parse_fix`/`request_target` 与 `fallback_api_key` 用例 + L4 `ai_fix_bar_pastes_only_and_drops_stale_responses`（Pending/Ready/粘贴/过期 seq）+ 构建产物人工实测（配置 provider 后一条失败命令得到建议条） | 08 篇 M9.5 登记 |
+| terminal_math 覆盖层上屏后的像素级字形观感（公式落点/抗锯齿/裁剪边） | 位图与布局可在 L1 逐像素/几何断言，但最终屏幕合成由 GPUI 文本与图像管线在真实 DPI 下完成，虚拟窗口不能代表字形观感 | L1 `math_overlay_tests`（扫描/投影/掩码/fit 计划）+ `math_render_tests`（位图合成预算）+ L4 `math_overlay_paint_leaves_grid_and_copy_source_untouched`（真实绘制一帧后网格/复制不变）+ 构建产物人工目测（`$x^2$`、`\\[ \\]` 块、宽字符） | 08 篇 M9.5 登记 |
 
 > 原豁免表中 `FileWatcher::start`/`notify_watch` 与 `claude_history` 命令包装两项已按 D6 从豁免重分类为补测，不再列入豁免表。  
 > **SEC-17 豁免已撤销（TQ-COV-05 翻案）**：`tracing::warn!(target: "audit")` 已由 `tracing-test` 断言锁死，豁免行删除。

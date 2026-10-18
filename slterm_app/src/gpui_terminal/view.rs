@@ -1,6 +1,8 @@
 //! 终端视图:持有会话、处理输入与 IME、驱动重绘。
 
+mod ai_fix;
 mod broadcast;
+mod completion;
 mod cwd_report;
 pub(super) mod layout;
 pub(super) mod pointer;
@@ -11,6 +13,7 @@ pub(super) mod typography;
 
 pub use broadcast::TerminalInput;
 
+use gpui::prelude::FluentBuilder as _;
 use gpui::{
     App, Bounds, ClipboardItem, Context, EventEmitter, FocusHandle, Focusable, Font, FontStyle,
     FontWeight, InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent,
@@ -18,6 +21,7 @@ use gpui::{
     Size, Styled as _, UTF16Selection, Window, div, point, px,
 };
 
+use std::rc::Rc;
 use std::sync::Arc;
 
 use slterm_terminal::event::{Event as TermEvent, Notify as _, WindowSize};
@@ -40,6 +44,7 @@ use super::mouse_protocol;
 use super::session::{self, TerminalSession};
 use super::{KEY_CONTEXT, TerminalBackTab, TerminalTab};
 use crate::app_shell::config::Settings;
+use crate::i18n::Message;
 use typography::{M3_CELL_WIDTH_MODE, M3_FONT_OFFSET, mono_font};
 
 /// 拖选越过网格上/下边界后的自动回滚:tick 间隔与「每远离 20px 加一行」的
@@ -94,6 +99,13 @@ pub enum TerminalViewEvent {
     /// 接收 pane 必须重新编码,不能复用发送方已受终端 mode 影响的字节。
     #[allow(dead_code)] // 载荷消费 = M5 广播扇出;M3 宿主只收事件名。
     UserInput(TerminalInput),
+    /// Enter 提交了非空命令行:宿主把 agent 生命周期记到本 pane。
+    #[allow(dead_code)] // 载荷消费 = 后续 agent 判定;当前只作事件名。
+    CommandSubmitted(String),
+    /// OSC 133;C:命令开始。宿主要求 AgentActivity 进入 submitted。
+    CommandStarted,
+    /// OSC 133;D:命令结束。宿主收尾 AgentActivity 并发布快照。
+    CommandFinished,
 }
 
 /// 会话种类。M3 只剩本地 shell:上游 `Ssh` 变体消亡(13 篇,06 篇按理想
@@ -135,6 +147,31 @@ pub struct TerminalView {
     /// 主题行高倍率:`None` 保留 shaped 字体度量;`Some` 作用于逻辑字号。
     line_height_multiplier: Option<f32>,
     pub palette: Arc<Palette>,
+    /// 每 pane 一份的公式覆盖层状态(08 篇 M9.5;终端仍是真值)。
+    pub(crate) math_overlay: super::math_overlay::MathOverlay,
+    /// 补全关闭/缓存状态(08 篇 M9.5):键、抑制行、弹窗请求位与候选。
+    pub(crate) suggest: crate::suggest::SuggestState,
+    /// 按键镜像的当前输入行与光标(终端行编辑器不暴露 buffer)。
+    pub(crate) suggest_line: String,
+    pub(crate) suggest_cursor: usize,
+    /// 壳侧按 pane 持有的来源缓存句柄(不复制缓存本体)。
+    pub(crate) completion_session: Option<Rc<crate::completion::Session>>,
+    /// 在飞的候选计算;丢弃即取消。
+    pub(super) suggestion_task: Option<completion::PendingCompletion>,
+    pub(crate) completion_style: crate::suggest::CompletionStyle,
+    /// AI 内联 ghost 开关。
+    pub(crate) ghost_enabled: bool,
+    /// Enter 时捕获的提交行(OSC 133;D 触发判定与程序身份共用)。
+    pub(crate) last_committed: String,
+    /// runtime run 记账(C1):OSC 133 两条边推进 phase 并产出 outcome。
+    pub(crate) active_run: Option<crate::runtime_api::RuntimePaneRun>,
+    pub(crate) last_run: Option<crate::runtime_api::RuntimeRunOutcome>,
+    /// 每 pane 一条 AI 修复建议的生命周期。
+    pub(crate) ai_fix: Option<crate::ai_assistant::AiFixState>,
+    pub(super) ai_fix_gate: crate::ai_assistant::TriggerGate,
+    /// 测试注入的助手配置(生产读独立配置文件,不碰真实数据目录)。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) ai_config_override: Option<crate::ai_assistant::AssistantConfig>,
     pub marked_text: Option<String>,
     pub ime_bounds: Bounds<Pixels>,
     pub title: String,
@@ -263,6 +300,8 @@ impl TerminalView {
         self.font_size = px(settings.font_size_px);
         self.ligatures = settings.ligatures;
         self.copy_on_select = settings.copy_on_select;
+        self.completion_style = settings.completion_style;
+        self.ghost_enabled = settings.ghost;
         self.palette = Arc::new(settings.palette.clone());
         if font_changed {
             self.mark_structural_resize();
@@ -330,6 +369,9 @@ impl TerminalView {
                 // `SLTERM|cwd|branch` 标题协议:cwd 已由上面的 cwd_report
                 // 摘走;协议串不是窗口标题,更不是 tab 名。branch 字段的
                 // 消费归 05 篇 chrome,M3 不存。
+                if cwd_changed {
+                    crate::completion::record_directory(&self.cwd);
+                }
                 if !title.starts_with("SLTERM|") {
                     self.title = title;
                 }
@@ -379,15 +421,42 @@ impl TerminalView {
                 // 标准 OSC 7 / 9;9 的目录上报:cwd 变了必须发 TitleChanged,
                 // `on_terminal_event` 才会 `cx.notify()` 重绘 tab 标题。
                 if cwd_changed {
+                    // 目录 frecency 只记本机终端真实上报的目录。
+                    crate::completion::record_directory(&self.cwd);
                     cx.emit(TerminalViewEvent::TitleChanged);
                     cx.notify();
                 }
             }
-            // 命令边界:agent 的 `begin_command`/`command_finished` 与 OSC 133
-            // 首 token 匹配需要 Enter 时刻的命令行捕获(补全域归 M9),缝合点
-            // 归 05 篇 M5.3;M4.5 的屏幕采样走 workspace 的 1 Hz 看门狗,
-            // 不在此事件上跑规则(输出洪流下每字节 detect 成本不成立)。
-            TermEvent::CommandStart | TermEvent::CommandDone { .. } => {}
+            // 命令边界(清单 C1):OSC 133;C/D 接 active_run/last_run 记账与
+            // AI assistant 触发链;agent 生命周期由宿主经事件收尾。屏幕采样
+            // 仍走 workspace 的 1 Hz 看门狗(输出洪流下每字节 detect 不成立)。
+            TermEvent::CommandStart => {
+                if !self.last_committed.trim().is_empty() {
+                    if self.running_program.is_none() {
+                        self.running_program =
+                            crate::suggest::extract_program(&self.last_committed);
+                    }
+                    if let Some(run) = &mut self.active_run
+                        && run.phase == crate::runtime_api::RuntimeRunPhase::Submitted
+                    {
+                        run.phase = crate::runtime_api::RuntimeRunPhase::Started;
+                    }
+                    cx.emit(TerminalViewEvent::CommandStarted);
+                }
+            }
+            TermEvent::CommandDone { exit_code } => {
+                let program = self.running_program.take();
+                if let Some(run) = self.active_run.take() {
+                    self.last_run = Some(crate::runtime_api::RuntimeRunOutcome::command_done(
+                        run, exit_code,
+                    ));
+                }
+                cx.emit(TerminalViewEvent::CommandFinished);
+                // 裸第三方 133;D(exit_code=None)静默。
+                if let Some(code) = exit_code {
+                    self.maybe_request_ai_fix(code, program.as_deref(), cx);
+                }
+            }
             TermEvent::Notify(_) => {}
             // 视觉闪烁与声音归 09 篇。
             TermEvent::Bell => {}
@@ -616,6 +685,7 @@ impl TerminalView {
             normalized.into_bytes()
         };
         if emit {
+            self.note_text_input(text, cx);
             self.write_user_text(text.to_owned(), true, bytes, cx);
         } else {
             self.write_input(bytes, cx);
@@ -668,6 +738,16 @@ impl TerminalView {
                 _ => {}
             }
         }
+        // 08 篇 M9.5:AI 建议条键语义优先于补全(Esc 先撤条),再是补全
+        // 导航/接受。两条路径消费按键时都不进入编码器。
+        if self.handle_ai_fix_key(ks, cx) {
+            cx.stop_propagation();
+            return;
+        }
+        if self.handle_completion_key(&ks.key, mods, cx) {
+            cx.stop_propagation();
+            return;
+        }
         // 分屏焦点导航(ctrl+alt+方向)同样冒泡给 workspace,不编码成
         // CSI 1;7 序列。
         if mods.control && mods.alt && matches!(ks.key.as_str(), "left" | "right" | "up" | "down") {
@@ -706,6 +786,8 @@ impl TerminalView {
         // `running_program` 恒 None——agent 检测归 03 篇,签名留位。
         if let Some(bytes) = keymap::encode_for_program(ks, &mode, None) {
             keymap::trace_enter(ks, &mode, &bytes);
+            // 按键镜像只更新输入快照;候选重算在后台,不占按键热路径。
+            self.note_text_key(ks, cx);
             self.write_user_key(ks.clone(), bytes, cx);
             cx.stop_propagation();
         }
@@ -832,6 +914,7 @@ impl gpui::EntityInputHandler for TerminalView {
     ) {
         let had_marked_text = self.marked_text.take().is_some();
         if !text.is_empty() && self.exited.is_none() {
+            self.note_text_input(text, cx);
             self.write_user_text(text.to_owned(), false, text.as_bytes().to_vec(), cx);
         } else if had_marked_text {
             self.restart_cursor_blink(cx);
@@ -914,6 +997,80 @@ impl Render for TerminalView {
             root = root.child(div().p_4().child(error.clone()));
         } else {
             root = root.child(TerminalElement::new(cx.entity()));
+            // 补全弹窗(08 篇 M9.5):与 ghost 同源候选;渲染只读状态。
+            if !self.suggest.completion_items.is_empty() {
+                let mut list = div()
+                    .id("slterm-completion-popup")
+                    .debug_selector(|| "slterm-completion-popup".to_owned())
+                    .absolute()
+                    .bottom(px(64.0))
+                    .left_2()
+                    .w(px(420.0))
+                    .max_h(px(220.0))
+                    .overflow_hidden()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(gpui::opaque_grey(0.4, 0.6))
+                    .bg(gpui::opaque_grey(0.08, 0.96))
+                    .text_sm()
+                    .text_color(self.palette.foreground)
+                    .flex()
+                    .flex_col();
+                for (index, item) in self.suggest.completion_items.iter().take(8).enumerate() {
+                    let selected = self.suggest.completion_selected == Some(index);
+                    list = list.child(
+                        div()
+                            .px_2()
+                            .py_1()
+                            .when(selected, |row| row.bg(self.palette.selection))
+                            .child(format!(
+                                "{}  [{}]",
+                                item.label,
+                                completion_kind_tag(item.kind)
+                            )),
+                    );
+                }
+                root = root.child(list);
+            }
+            // AI 建议条(08 篇 M9.5):Pending 显 analyzing;Ready 是图标 +
+            // 命令 + 解释 + 键位提示;一律只贴不执行。
+            if let Some(bar) = self.ai_fix_bar() {
+                let language = cx
+                    .try_global::<Settings>()
+                    .map(|settings| settings.language)
+                    .unwrap_or(crate::i18n::UiLanguage::EnUs);
+                let text = if bar.pending {
+                    language.text(Message::TerminalAiAnalyzing).to_owned()
+                } else {
+                    let mut text =
+                        format!("{} {}", if bar.danger { "⚠" } else { "✦" }, bar.command);
+                    if !bar.explain.is_empty() {
+                        text.push_str("  ·  ");
+                        text.push_str(&bar.explain);
+                    }
+                    text.push_str("  ·  ");
+                    text.push_str(language.text(Message::TerminalAiFixHint));
+                    text
+                };
+                root = root.child(
+                    div()
+                        .id("slterm-ai-fix-bar")
+                        .debug_selector(|| "slterm-ai-fix-bar".to_owned())
+                        .absolute()
+                        .bottom_2()
+                        .left_2()
+                        .right_2()
+                        .px_3()
+                        .py_2()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(gpui::opaque_grey(0.4, 0.6))
+                        .bg(gpui::opaque_grey(0.08, 0.96))
+                        .text_sm()
+                        .text_color(self.palette.foreground)
+                        .child(text),
+                );
+            }
             if let Some(exited) = &self.exited {
                 root = root.child(
                     div()
@@ -933,8 +1090,20 @@ impl Render for TerminalView {
     }
 }
 
+/// 弹窗候选来源 tag(与 M9.1 呈现条目四态一一对应)。
+fn completion_kind_tag(kind: crate::suggest::SltermCompletionKind) -> &'static str {
+    match kind {
+        crate::suggest::SltermCompletionKind::History => "history",
+        crate::suggest::SltermCompletionKind::Command => "command",
+        crate::suggest::SltermCompletionKind::Dir => "dir",
+        crate::suggest::SltermCompletionKind::File => "file",
+    }
+}
+
 #[cfg(test)]
 mod tests;
 
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod feedback_tests;
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod key_tests;

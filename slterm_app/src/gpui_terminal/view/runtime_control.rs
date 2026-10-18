@@ -25,9 +25,19 @@ impl TerminalView {
         let mut bytes = text.as_bytes().to_vec();
         if submit {
             bytes.push(b'\r');
+            self.note_text_input(text, cx);
+            self.commit_line(cx);
+        } else {
+            self.note_text_input(text, cx);
         }
         self.write_input(bytes, cx);
         Ok(())
+    }
+
+    /// run 记账:调用方(Runtime Run)在提交后把同一 run 身份挂到视图。
+    pub(crate) fn attach_run(&mut self, run: crate::runtime_api::RuntimePaneRun) {
+        self.active_run = Some(run);
+        self.last_run = None;
     }
 
     /// `pane.paste` / `agent.paste`:与 Ctrl+Shift+V 同一条 bracketed-paste
@@ -39,8 +49,10 @@ impl TerminalView {
         cx: &mut Context<'_, Self>,
     ) -> Result<(), ApiError> {
         self.require_live_session()?;
+        // paste_now_impl 已把文本镜像进行缓冲(emit=true)。
         self.paste_now_impl(text, true, cx);
         if submit {
+            self.commit_line(cx);
             self.write_input(b"\r".to_vec(), cx);
         }
         Ok(())

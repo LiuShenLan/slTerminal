@@ -284,6 +284,38 @@ mod runtime_skill_tests {
     }
 
     #[test]
+    fn content_is_written_before_the_managed_marker() {
+        // 原子序:两份内容先落盘,marker 最后落。模拟 marker 写失败(同名
+        // 目录占位),断言已写内容不会被误认成「Current」或半套所有物。
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().join("slterm-runtime");
+        std::fs::create_dir_all(dir.join(RUNTIME_SKILL_MARKER)).unwrap();
+
+        assert!(ensure_runtime_skill(&dir).is_err(), "marker 写入必须失败");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("SKILL.md")).unwrap(),
+            RUNTIME_SKILL_MD
+        );
+        assert!(dir.join("agents/openai.yaml").is_file());
+        assert!(
+            dir.join(RUNTIME_SKILL_MARKER).is_dir(),
+            "marker 尚未落成文件"
+        );
+
+        std::fs::remove_dir(dir.join(RUNTIME_SKILL_MARKER)).unwrap();
+        // 崩溃残留(内容全等、无 marker)走内容归属通道补齐,而不是重写。
+        assert_eq!(
+            ensure_runtime_skill(&dir).unwrap(),
+            ManagedSkillInstall::Installed
+        );
+        assert!(dir.join(RUNTIME_SKILL_MARKER).is_file());
+        assert_eq!(
+            ensure_runtime_skill(&dir).unwrap(),
+            ManagedSkillInstall::Current
+        );
+    }
+
+    #[test]
     fn extra_user_files_survive_install_and_removal() {
         let temp = tempfile::tempdir().unwrap();
         let dir = temp.path().join("slterm-runtime");

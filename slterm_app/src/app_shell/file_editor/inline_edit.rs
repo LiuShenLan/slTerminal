@@ -6,7 +6,7 @@
 //!
 //! 消费点:M8.3 live_edit 的聚焦块输入与装饰(M8.2 为内核 + 用例)。
 
-use markdown::mdast::Node;
+use ::markdown::mdast::Node;
 use std::ops::Range;
 
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
@@ -191,10 +191,10 @@ impl Projection {
             rich: false,
             literal: false,
         };
-        let mut options = markdown::ParseOptions::gfm();
+        let mut options = ::markdown::ParseOptions::gfm();
         options.constructs.math_text = true;
         options.constructs.math_flow = true;
-        if let Ok(Node::Root(root)) = markdown::to_mdast(source, &options)
+        if let Ok(Node::Root(root)) = ::markdown::to_mdast(source, &options)
             && root.children.len() == 1
         {
             match &root.children[0] {
