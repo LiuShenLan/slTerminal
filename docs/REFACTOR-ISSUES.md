@@ -18,6 +18,8 @@
 | A8 | **R6-R8 与双槽比例**：旧栈按钮跨区/同区排序（R6-R8）与 zones 持久化未迁；双槽固定 50/50（旧栈持久化过 splitRatio）。 | M5.3b | 若保留旧交互需扩 SideViewDef/schema；比例字段需先裁。 |
 | A9 | **分屏不继承锚 pane 的 `-e` 身份**（照上游行为）。 | M5.3a | 若产品要求继承，归启动身份设计（M5.5 已过）另立。 |
 | A10 | **recovery 恢复结果无 toast 汇总**（仅 log::info）。 | M5.5 | 通知漏斗归 09 篇 M10.1，届时一并接。 |
+| A11 | **hook 失败边默认关的载体**：设计未定义独立键，实现复用 `AssistantConfig.enabled`（与 D08-2「与 AI assistant 默认关闭一致」）。 | M9.3 | 维持复用；若需独立 `hook_failure_edges` 键另行裁决。 |
+| A12 | **config_guard 锁竞争不计入失败边**：另一操作进行中不算失败，不投递；`RawSettings::try_load` 失败投递 `slterm-hook settings`。 | M9.3 | 维持边界；若要求锁竞争也计入需裁决。 |
 
 ## B. 待修（已知缺陷/优化）
 
@@ -60,6 +62,7 @@
 | B35 | **gutter 行标像素对齐近似**：用输入实体上一帧 scroll_offset/line_height + 8px 行号留白定位。 | `file_editor/gutter.rs` | M8.5 | 已登记 test-exemptions；后续优先用组件装饰集合/布局快照。 |
 | B36 | **`TestAppContext::test_window` 私有**：L4 OS 拖出断言改为解析器注入探针，`external_drag_files` 真断言受限。 | `ui_tests/file_tree_tests` | M8.4 | 上游 API 变化时补真断言。 |
 | B37 | **`Execution::prepare()` 恒 true**：若未来恢复远程/嵌套执行环境需重新引入冻结握手（设计已裁，仅记录接缝）。 | `completion/metadata.rs` | M9.1 | 留锚。 |
+| B38 | **失败边合成命令偏技术化**：`HookFailure.command` 形如 `slterm-hook install slterm_ai_hooks_claude`，只宜作上下文不宜直接呈现。 | `ai_assistant.rs` `HookFailure` | M9.3 | M9.5 呈现层只作上下文，不直出。 |
 
 ## C. 计划内（归后续子步/阶段，重构完成时验证）
 
@@ -78,13 +81,14 @@
 | C11 | **i18n 合同独立 workspace CI 登记**：`tools/slterm-i18n-contract` 不在根 workspace，clippy/CI 不覆盖。 | 12 篇打包/CI 清单 | |
 | C12 | **旧栈语义资产转测试保留**：git2 五份语义资产（D07-1 裁定转对照用例）。 | 07/M11 | |
 | C13 | **docs/ 临时稿删除 + 篇号锚点清理**（与 A3 联动）。 | M11 | |
-| C14 | **设计措辞修正**：05 篇「窗口边缘」应为「内容区外圈」；04 篇 `reorder_batch` 签名稿与上游不符（已照源）；08 篇 `note_bell` 上游不存在（未落）；04 篇 generation 等待错误码口径（实现按设计稿 `agent_identity_mismatch`/`agent_exited`）。 | 设计稿 | 重构末统一订正。 |
+| C14 | **设计措辞修正**：05 篇「窗口边缘」应为「内容区外圈」；04 篇 `reorder_batch` 签名稿与上游不符（已照源）；08 篇 `note_bell` 上游不存在（未落）；04 篇 generation 等待错误码口径（实现按设计稿 `agent_identity_mismatch`/`agent_exited`）；08 篇 D08-2 待沉淀仍写「M9.3 落地时拍板」而 DECISIONS 已裁（文档漂移）。 | 设计稿 | 重构末统一订正。 |
 | C15 | **`D04-3 windowing_behavior` 未设键**：单窗行为硬编码 `SINGLE_WINDOW_ID`。 | 12 篇随 settings 面统一裁定 | |
 | C16 | **`request_once_bounded` 无消费方**（插件宿主）。 | M9.5/M10 | |
 | C17 | **`ProviderTestOutcome` 文案本地化**（展示边界）。 | M9.5 | |
 | C18 | **`save_api_key` 签名适配**：设计稿无后端参数，实现改为 `&dyn CredentialStore` 显式注入；M10.9 真实实现后调用点直传。 | M10.9 | |
 | C19 | **`load/save_final/quarantine/mark_boot_attempt` targeted allow**：设计锚定 API 保留，生产走 `_at` 显式路径。 | 11 篇复核 | |
 | C20 | **老会话文件叶/tab 无 launch**：首拍快照规范化为 `Some(Default)`（语义等价，字段形态变化）。 | 记录 | 无迁移义务。 |
+| C21 | **失败边投影形态与设计缝合点差异**：设计称失败边「默认取 assistant_answer 投影进入闸门」，但 `AssistantAnswer` 是 pane 级回答投影，config_guard 失败为进程级且无回答原文；实现投影为 `HookFailure{command, program}`。 | M9.5 | 明确失败边是否经 `AnswerInbox` 展示 notice。 |
 
 ## D. 已修（存档，防重复登记）
 
