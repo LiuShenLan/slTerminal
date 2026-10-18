@@ -33,6 +33,11 @@ pub(crate) struct LoadResult {
 /// 为进程级故障——后续写入继续持锁执行。
 static SAVE_LOCK: Mutex<()> = Mutex::new(());
 
+/// 设置文件「编辑动作前观察到的字节」快照(缺失 = None)。主题应用路径
+/// 用它做乐观并发:外部写入者不能被静默覆盖。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct SettingsRevision(pub(crate) Option<Vec<u8>>);
+
 /// 读取设置(生产入口)。IO 错误向上传播,不把权限/磁盘故障当默认值。
 pub(crate) fn load_settings() -> io::Result<LoadResult> {
     load_settings_at(&settings_path())
@@ -77,6 +82,62 @@ pub(crate) fn save_settings_blocking_at(path: &Path, updates: &[(&str, Value)]) 
     let _guard = SAVE_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
+    save_merged_locked(path, updates)
+}
+
+/// 读取设置文件的字节快照(缺失 = None;超 1MB 视为不可比较)。
+pub(crate) fn read_revision_at(path: &Path) -> io::Result<SettingsRevision> {
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(SettingsRevision(None)),
+        Err(error) => return Err(error),
+    };
+    if bytes.len() > MAX_PERSIST_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::FileTooLarge,
+            "设置快照超过 1MB 上限",
+        ));
+    }
+    Ok(SettingsRevision(Some(bytes)))
+}
+
+/// 生产路径的字节快照。
+pub(crate) fn read_revision() -> io::Result<SettingsRevision> {
+    read_revision_at(&settings_path())
+}
+
+/// 条件写入:当前字节必须与观察快照完全一致,否则拒绝(AlreadyExists)。
+/// 主题应用键携带修订走这条入口,外部编辑不可被静默覆盖。
+pub(crate) fn save_settings_checked_at(
+    path: &Path,
+    expected: &SettingsRevision,
+    updates: &[(&str, Value)],
+) -> io::Result<SettingsRevision> {
+    validate_updates(updates)?;
+    let _guard = SAVE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let current = read_revision_at(path)?;
+    if current != *expected {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "设置已被外部修改;应用主题前请重新加载",
+        ));
+    }
+    save_merged_locked(path, updates)?;
+    read_revision_at(path)
+}
+
+/// 条件写入(生产数据目录)。
+pub(crate) fn save_settings_checked(
+    expected: &SettingsRevision,
+    updates: &[(&str, Value)],
+) -> io::Result<SettingsRevision> {
+    save_settings_checked_at(&settings_path(), expected, updates)
+}
+
+/// 持锁后的读-合并-写主体。
+fn save_merged_locked(path: &Path, updates: &[(&str, Value)]) -> io::Result<()> {
     let existing = read_existing(path)?;
     let merged = slterm_settings::apply_updates(&existing, updates);
     let text = json::to_string_pretty(&merged);
@@ -419,6 +480,59 @@ mod settings_store_tests {
         assert_eq!(settings.opacity, 0.9);
         assert!(settings.opacity_is_explicit());
         assert!(AgentHook::Grok.enabled(&raw));
+    }
+
+    // ---- 条件写入:外部编辑不可被静默覆盖 ----
+
+    #[test]
+    fn checked_write_requires_the_observed_bytes() {
+        let (_directory, path) = fixture();
+        let absent = read_revision_at(&path).unwrap();
+        let next = save_settings_checked_at(
+            &path,
+            &absent,
+            &[
+                ("theme", Value::String("Nord".into())),
+                ("custom_theme", Value::String("nord-copy".into())),
+            ],
+        )
+        .unwrap();
+        assert_ne!(next, absent);
+        assert_eq!(
+            RuntimeSettings::from_raw(&RawSettings::from_json_bytes(
+                &std::fs::read(&path).unwrap()
+            ))
+            .custom_theme
+            .as_deref(),
+            Some("nord-copy")
+        );
+
+        // 外部写入者改文件后,旧快照的写入被拒且不落盘。
+        let stale = next.clone();
+        write_json(
+            &path,
+            "{\n  \"appearance\": {\n    \"font_size\": 18\n  }\n}\n",
+        );
+        let external = std::fs::read(&path).unwrap();
+        let error =
+            save_settings_checked_at(&path, &stale, &[("theme", Value::String("Linear".into()))])
+                .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read(&path).unwrap(), external);
+    }
+
+    #[test]
+    fn checked_write_accepts_a_fresh_revision_after_reload() {
+        let (_directory, path) = fixture();
+        save_settings_blocking_at(&path, &[("font_size", Value::Number(14.0))]).unwrap();
+        let observed = read_revision_at(&path).unwrap();
+        save_settings_checked_at(&path, &observed, &[("opacity", Value::Number(0.8))]).unwrap();
+        let runtime = RuntimeSettings::from_raw(&RawSettings::from_json_bytes(
+            &std::fs::read(&path).unwrap(),
+        ));
+        assert_eq!(runtime.font_size_px, Some(14.0), "其它键必须保留");
+        assert_eq!(runtime.opacity, 0.8);
+        assert!(runtime.opacity_is_explicit());
     }
 
     // ---- 读侧三态:缺失/正常/损坏 quarantine+重建 ----

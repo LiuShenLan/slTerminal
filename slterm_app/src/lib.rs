@@ -49,6 +49,9 @@ pub(crate) mod session;
 // 损坏三态;`slterm-settings` 保持值权威与零生产依赖。
 pub(crate) mod settings_store;
 pub(crate) mod terminal_registry;
+// 主题库应用侧(06 篇 M6.3):版本化 JSON 信封/自定义主题持久化/主题包
+// 有界检查。设置层管值、应用层管格式的分层边界件。
+pub(crate) mod theme_library;
 
 use std::error::Error;
 

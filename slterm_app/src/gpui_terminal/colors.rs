@@ -7,6 +7,7 @@
 //! `Palette` 静态值。
 
 use gpui::Rgba;
+use slterm_settings::{Rgb8, TermTheme, ThemeDefinition};
 use slterm_terminal::term::color::Colors;
 use vte::ansi::{Color, NamedColor, Rgb};
 
@@ -17,6 +18,11 @@ const fn rgb8(r: u8, g: u8, b: u8) -> Rgba {
         b: b as f32 / 255.0,
         a: 1.0,
     }
+}
+
+/// 主题三元色 → GPUI 颜色(不透明)。
+pub fn from_rgb8(color: Rgb8) -> Rgba {
+    rgb8(color[0], color[1], color[2])
 }
 
 /// 一份终端实例的静态配色。
@@ -95,6 +101,87 @@ impl Default for Palette {
 }
 
 impl Palette {
+    /// 内置主题终端色表 → 实例调色板。`exact: None` = 主题只声明背景,
+    /// 其余槽位保留静态缺省(调用方显式缺省语义);前景覆盖只作用正文。
+    pub fn from_term_theme(theme: TermTheme, foreground_override: Option<Rgb8>) -> Self {
+        let mut palette = Palette {
+            background: from_rgb8(theme.background),
+            ..Palette::default()
+        };
+        let Some(exact) = theme.exact else {
+            if let Some(foreground) = foreground_override {
+                let foreground = from_rgb8(foreground);
+                palette.foreground = foreground;
+                palette.bright_foreground = foreground;
+                palette.dim_foreground = Self::dim_of(foreground);
+            }
+            return palette;
+        };
+        let foreground = from_rgb8(foreground_override.unwrap_or(exact.foreground));
+        palette.foreground = foreground;
+        palette.bright_foreground = foreground;
+        palette.dim_foreground = Self::dim_of(foreground);
+        for (index, color) in exact.ansi.into_iter().enumerate() {
+            palette.ansi[index] = from_rgb8(color);
+            if index < 8 {
+                palette.dim[index] = Self::dim_of(palette.ansi[index]);
+            }
+        }
+        if let Some(cursor) = exact.cursor {
+            palette.cursor = from_rgb8(cursor);
+        }
+        palette.cursor_text = exact.cursor_text.map(from_rgb8);
+        palette.cursor_stroke = exact.cursor_stroke.map(from_rgb8);
+        if let Some(selection) = exact.selection_background {
+            palette.selection = from_rgb8(selection);
+        }
+        if let Some(selection_foreground) = exact.selection_foreground {
+            palette.selection_foreground = Some(from_rgb8(selection_foreground));
+        }
+        palette
+    }
+
+    /// 自定义主题完整定义 → 实例调色板。前 16 色是 ANSI 镜像;16..255
+    /// 整表进 indexed 覆盖,OSC 4 查询与渲染共用同一份。
+    pub fn from_definition(
+        definition: &ThemeDefinition,
+        foreground_override: Option<Rgb8>,
+    ) -> Self {
+        let terminal = &definition.terminal;
+        let mut palette = Self {
+            background: from_rgb8(terminal.background),
+            ..Self::default()
+        };
+        let foreground = from_rgb8(foreground_override.unwrap_or(terminal.foreground));
+        palette.foreground = foreground;
+        palette.bright_foreground = foreground;
+        palette.dim_foreground = Self::dim_of(foreground);
+        for index in 0..16 {
+            palette.ansi[index] = from_rgb8(terminal.palette.colors[index]);
+            if index < 8 {
+                palette.dim[index] = Self::dim_of(palette.ansi[index]);
+            }
+        }
+        if let Some(cursor) = terminal.cursor {
+            palette.cursor = from_rgb8(cursor);
+        }
+        palette.cursor_text = terminal.cursor_text.map(from_rgb8);
+        palette.cursor_stroke = terminal.cursor_stroke.map(from_rgb8);
+        palette.selection = match terminal.selection_background {
+            Some(selection) => from_rgb8(selection),
+            // 主题未声明选区色:走唯一共享派生规则,沿用半透明叠加语义。
+            None => Rgba {
+                a: 0.60,
+                ..from_rgb8(definition.resolved_ui().selection_rgb())
+            },
+        };
+        palette.selection_foreground = terminal.selection_foreground.map(from_rgb8);
+        palette.indexed = (16..256)
+            .map(|index| (index as u8, from_rgb8(terminal.palette.colors[index])))
+            .collect();
+        palette
+    }
+
     /// dim 系数(与上游同一系数 0.66)。
     pub fn dim_of(color: Rgba) -> Rgba {
         Rgba {

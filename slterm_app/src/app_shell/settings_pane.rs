@@ -20,6 +20,11 @@ mod navigation;
 mod pages;
 mod persistence;
 pub(crate) mod registry;
+mod theme_editor;
+
+/// 主题编辑器颜色槽:测试与后续取色面板的统一入口。
+#[cfg(all(test, feature = "gpui-test-support"))]
+pub(crate) use theme_editor::ThemeColorSlot;
 
 use std::io;
 use std::path::PathBuf;
@@ -133,6 +138,8 @@ pub(crate) struct SettingsPane {
     status: Option<SettingsStatus>,
     /// 恢复默认的二次确认(第一次点击只武装)。
     reset_armed: bool,
+    /// 主题编辑会话(外观页子视图;关闭即丢弃草稿)。
+    theme_editor: Option<theme_editor::ThemeEditor>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -159,11 +166,51 @@ impl SettingsTarget {
         }
     }
 
+    /// 条件保存(主题应用路径):携带编辑动作前观察到的字节快照。
+    fn save_checked(
+        &self,
+        expected: &crate::settings_store::SettingsRevision,
+        updates: &[(&'static str, Value)],
+    ) -> io::Result<()> {
+        match self {
+            Self::Default => {
+                crate::settings_store::save_settings_checked(expected, updates).map(|_| ())
+            }
+            Self::Path(path) => {
+                crate::settings_store::save_settings_checked_at(path, expected, updates).map(|_| ())
+            }
+        }
+    }
+
     fn reset(&self) -> io::Result<Option<PathBuf>> {
         match self {
             Self::Default => slterm_settings::restore_default_settings(),
             Self::Path(path) => slterm_settings::restore_default_settings_at(path),
         }
+    }
+
+    /// 观察当前设置文件字节快照(主题应用乐观并发基准)。
+    fn revision(&self) -> io::Result<crate::settings_store::SettingsRevision> {
+        match self {
+            Self::Default => crate::settings_store::read_revision(),
+            Self::Path(path) => crate::settings_store::read_revision_at(path),
+        }
+    }
+
+    /// 主题库根:显式路径时与设置文件同目录(`themes/`),生产走默认。
+    fn theme_root(&self) -> Option<PathBuf> {
+        match self {
+            Self::Default => None,
+            Self::Path(path) => path.parent().map(|parent| parent.join("themes")),
+        }
+    }
+
+    /// 主题库实例(编辑/应用共用)。
+    pub(super) fn theme_store(&self) -> crate::theme_library::ThemeLibraryStore {
+        self.theme_root().map_or_else(
+            crate::theme_library::ThemeLibraryStore::default,
+            crate::theme_library::ThemeLibraryStore::new,
+        )
     }
 }
 
@@ -264,6 +311,7 @@ impl SettingsPane {
             startup_directory_input,
             status,
             reset_armed: false,
+            theme_editor: None,
             _subscriptions: subscriptions,
         };
         pane.add_builtin_selects(language, window, cx);
@@ -632,14 +680,18 @@ impl SettingsPane {
     fn render_page(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> gpui::AnyElement {
         let page_id = self.current_page_id();
         let content = match page_id {
-            "appearance" => self.page_appearance(window, cx),
-            "profiles" => self.page_profiles(window, cx),
-            "interaction" => self.page_interaction(window, cx),
-            "advanced" => self.page_advanced(window, cx),
-            "localization" => self.page_localization(window, cx),
-            "reset" => self.page_reset(window, cx),
+            // 主题编辑是外观页的子视图:打开时替换整页,返回恢复。
+            "appearance" if self.theme_editor.is_some() => {
+                self.page_theme_editor(window, cx).into_any_element()
+            }
+            "appearance" => self.page_appearance(window, cx).into_any_element(),
+            "profiles" => self.page_profiles(window, cx).into_any_element(),
+            "interaction" => self.page_interaction(window, cx).into_any_element(),
+            "advanced" => self.page_advanced(window, cx).into_any_element(),
+            "localization" => self.page_localization(window, cx).into_any_element(),
+            "reset" => self.page_reset(window, cx).into_any_element(),
             // application:品牌位;关于/赞助入口归 12 篇。
-            _ => self.page_application(window, cx),
+            _ => self.page_application(window, cx).into_any_element(),
         };
         div()
             .id(SharedString::from(format!("settings-page-{page_id}")))

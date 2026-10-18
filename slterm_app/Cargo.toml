@@ -75,6 +75,11 @@ sha2 = "0.11"
 base64 = "0.22"
 tempfile = "3"
 notify = "7"
+# 主题包 ZIP(06 篇 M6.3):Manifest + 整包有界检查 + 导出。
+# 版本与 feature 对齐上游主题栈;deflate 走 zlib-rs,不引入 C 依赖。
+zip = { version = "=4.6.1", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+# 主题包资源签名校验:只开主题包允许的静态图片格式。
+image = { version = "0.25", default-features = false, features = ["bmp", "gif", "jpeg", "png", "webp"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [

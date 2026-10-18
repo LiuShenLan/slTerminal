@@ -153,7 +153,7 @@ pub(crate) struct LifetimeFileLock {
 }
 
 /// MoveFileExW + REPLACE_EXISTING:读者永远看不到撕裂文件,崩溃留下原件。
-fn replace(source: &Path, destination: &Path) -> io::Result<()> {
+pub(crate) fn replace(source: &Path, destination: &Path) -> io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Storage::FileSystem::{
         MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,

@@ -171,9 +171,26 @@ impl SettingsPane {
                         "theme",
                         language.pick("主题", "Theme"),
                         language.pick(
-                            "仅暗色内置主题；主题编辑归后续阶段。",
-                            "Dark built-in themes only; the theme editor follows later.",
+                            "仅暗色内置主题；选择后终端调色板立即解析。",
+                            "Dark built-in themes only; the terminal palette resolves immediately.",
                         ),
+                        cx,
+                    ))
+                    .child(self.row(
+                        language.pick("自定义主题", "Custom theme"),
+                        language.pick(
+                            "从内置目录或主题库复制一份草稿；保存与应用是两个动作。",
+                            "Fork a draft from the built-in catalog or library; save and apply are separate actions.",
+                        ),
+                        div()
+                            .debug_selector(|| "settings-theme-edit".to_owned())
+                            .child(
+                                Button::new("settings-theme-edit")
+                                    .label(language.pick("编辑主题", "Edit theme"))
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.open_theme_editor(window, cx);
+                                    })),
+                            ),
                         cx,
                     )),
             )

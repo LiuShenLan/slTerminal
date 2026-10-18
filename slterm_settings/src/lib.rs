@@ -17,9 +17,9 @@ mod cursor_motion;
 mod custom_theme;
 pub use cursor_motion::CursorMotion;
 pub use custom_theme::{
-    IndexedPalette, TerminalThemeColors, ThemeDefinition, ThemeEffects, ThemeLayout,
-    ThemeTypography, ThemeUiColors, ThemeValidationError, foreground_recommendations,
-    meets_wcag_aa, wcag_contrast_ratio,
+    IndexedPalette, TerminalThemeColors, ThemeContrastError, ThemeDefinition, ThemeEffects,
+    ThemeLayout, ThemeTypography, ThemeUiColors, ThemeValidationError, WCAG_GRAPHICS_CONTRAST,
+    WCAG_TEXT_CONTRAST, foreground_recommendations, meets_wcag_aa, wcag_contrast_ratio,
 };
 pub mod diagnostics;
 pub mod json;

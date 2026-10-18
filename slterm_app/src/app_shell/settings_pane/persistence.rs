@@ -31,6 +31,19 @@ impl SettingsPane {
         Ok(())
     }
 
+    /// 主题应用路径专用:成组偏好对照「编辑动作前观察到的字节」写入。
+    /// 外部写入者已改设置时返回 Err(AlreadyExists),不静默覆盖。
+    pub(super) fn try_persist_checked(
+        &mut self,
+        updates: &[(&'static str, Value)],
+        expected: &crate::settings_store::SettingsRevision,
+        cx: &mut Context<'_, Self>,
+    ) -> io::Result<()> {
+        self.settings_target.save_checked(expected, updates)?;
+        self.apply_persisted_runtime(cx);
+        Ok(())
+    }
+
     /// 重载磁盘 → 全局事实源 → `Changed`。成功写盘后调用;损坏标记随之刷新。
     pub(super) fn apply_persisted_runtime(&mut self, cx: &mut Context<'_, Self>) {
         match self.settings_target.load() {
@@ -46,7 +59,10 @@ impl SettingsPane {
                 self.status = Some(SettingsStatus::Failed(error.to_string()));
             }
         }
-        cx.set_global(Settings::from_runtime(&self.runtime));
+        cx.set_global(Settings::from_runtime_with_theme_root(
+            &self.runtime,
+            self.settings_target.theme_root().as_deref(),
+        ));
         cx.emit(SettingsPaneEvent::Changed);
         cx.refresh_windows();
         cx.notify();
@@ -385,7 +401,10 @@ impl SettingsPane {
                         self.status = Some(SettingsStatus::Failed(error.to_string()));
                     }
                 }
-                cx.set_global(Settings::from_runtime(&self.runtime));
+                cx.set_global(Settings::from_runtime_with_theme_root(
+                    &self.runtime,
+                    self.settings_target.theme_root().as_deref(),
+                ));
                 self.sync_controls_from_runtime(window, cx);
                 cx.emit(SettingsPaneEvent::Changed);
                 cx.refresh_windows();

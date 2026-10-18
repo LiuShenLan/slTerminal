@@ -5,9 +5,12 @@
 //! 以及承载 `Changed` 热应用后的全局事实源。设置页写入后经
 //! [`Settings::from_runtime`] 重建并 `cx.set_global`——消费方始终读同一份。
 
+use std::path::Path;
+
 use gpui::Global;
 
 use crate::gpui_terminal::colors::Palette;
+use crate::theme_library::ThemeLibraryStore;
 use slterm_settings::{RawSettings, RuntimeSettings};
 
 /// 默认字号:11.25pt × 4/3 = 15px(与上游配置缺省同链)。
@@ -64,6 +67,15 @@ impl Settings {
     /// 在主题 typography 落地前按「开」处理(与 `Ligatures::enabled(None)`
     /// 同语义)。
     pub fn from_runtime(runtime: &RuntimeSettings) -> Self {
+        Self::from_runtime_with_theme_root(runtime, None)
+    }
+
+    /// 同 [`Self::from_runtime`],但主题库根显式指定(测试 tempdir 与
+    /// 设置页显式路径注入;生产传 None = 默认数据目录)。
+    pub fn from_runtime_with_theme_root(
+        runtime: &RuntimeSettings,
+        theme_root: Option<&Path>,
+    ) -> Self {
         let family = runtime
             .font_family
             .as_deref()
@@ -78,7 +90,7 @@ impl Settings {
             font_bold_italic_family: family,
             font_size_px: runtime.font_size_px.unwrap_or(DEFAULT_FONT_SIZE_PX),
             ligatures: runtime.ligatures.enabled(None),
-            palette: Palette::default(),
+            palette: resolve_palette(runtime, theme_root),
             copy_on_select: runtime.copy_on_select,
             scroll_speed: runtime.scroll_speed,
         }
@@ -100,6 +112,28 @@ impl Settings {
             ..Default::default()
         }
     }
+}
+
+/// 主题选择与应用流(仅暗色):自定义主题经主题库解析,失败回内置主题;
+/// `theme_foreground` 是显式前景覆盖,作用于终端正文。主题解析失败不把
+/// 启动/热应用升级成故障——回退内置目录默认(D06-3 的 linear)。
+fn resolve_palette(runtime: &RuntimeSettings, theme_root: Option<&Path>) -> Palette {
+    if let Some(id) = runtime.custom_theme.as_deref() {
+        let store = theme_root.map_or_else(ThemeLibraryStore::default, ThemeLibraryStore::new);
+        match store.load(id).and_then(|document| {
+            document
+                .resolve()
+                .map_err(crate::theme_library::StoreError::Document)
+        }) {
+            Ok(definition) => {
+                return Palette::from_definition(&definition, runtime.theme_foreground);
+            }
+            Err(error) => {
+                log::warn!("自定义主题 {id} 解析失败,回退内置主题: {error}");
+            }
+        }
+    }
+    Palette::from_term_theme(runtime.theme.term_theme(), runtime.theme_foreground)
 }
 
 #[cfg(test)]
@@ -153,6 +187,102 @@ mod config_tests {
             settings.font_family,
             crate::app_shell::assets::REQUIRED_FONT_FAMILY,
             "空白字族链必须回内嵌 Maple,不能留空导致方框"
+        );
+    }
+
+    #[test]
+    fn default_palette_resolves_to_the_linear_catalog_entry() {
+        // D06-3:默认主题 Linear 的终端色表必须真正进入壳消费视图,
+        // 不再是旧静态缺省。
+        let settings = Settings::default();
+        let linear = slterm_settings::ThemeName::Linear.term_theme();
+        assert_eq!(
+            settings.palette.background,
+            crate::gpui_terminal::colors::from_rgb8(linear.background)
+        );
+        let foreground = linear.exact.unwrap().foreground;
+        assert_eq!(
+            settings.palette.foreground,
+            crate::gpui_terminal::colors::from_rgb8(foreground)
+        );
+    }
+
+    #[test]
+    fn theme_selection_and_foreground_override_reach_the_palette() {
+        let parsed = runtime(r#"{"appearance": {"theme": "Nord"}}"#);
+        let settings = Settings::from_runtime(&parsed);
+        let nord = slterm_settings::ThemeName::Nord.term_theme();
+        assert_eq!(
+            settings.palette.background,
+            crate::gpui_terminal::colors::from_rgb8(nord.background)
+        );
+        assert_eq!(
+            settings.palette.ansi[9],
+            crate::gpui_terminal::colors::from_rgb8([0xbf, 0x61, 0x6a])
+        );
+
+        let parsed =
+            runtime(r##"{"appearance": {"theme": "Nord", "theme_foreground": "#123456"}}"##);
+        let settings = Settings::from_runtime(&parsed);
+        assert_eq!(
+            settings.palette.foreground,
+            crate::gpui_terminal::colors::from_rgb8([0x12, 0x34, 0x56]),
+            "显式前景覆盖必须作用终端正文"
+        );
+        assert_eq!(
+            settings.palette.background,
+            crate::gpui_terminal::colors::from_rgb8(nord.background),
+            "覆盖前景不得改主题背景"
+        );
+    }
+
+    #[test]
+    fn custom_theme_documents_resolve_through_the_library_root() {
+        let directory = tempfile::tempdir().unwrap();
+        let themes = directory.path().join("themes");
+        let store = crate::theme_library::ThemeLibraryStore::new(&themes);
+        let mut definition =
+            slterm_settings::ThemeDefinition::from_builtin(slterm_settings::ThemeName::Nord);
+        definition.name = "Custom".to_owned();
+        definition.terminal.background = [0x01, 0x02, 0x03];
+        definition.terminal.foreground = [0xd0, 0xd1, 0xd2];
+        definition.terminal.palette.colors[16] = [0xaa, 0xbb, 0xcc];
+        let document = crate::theme_library::from_definition(&definition).unwrap();
+        let stored = store.import(&document).unwrap();
+        let id = stored.id().unwrap();
+
+        let parsed = runtime(&format!(
+            r#"{{"appearance": {{"theme": "Linear", "custom_theme": "{id}"}}}}"#
+        ));
+        let settings = Settings::from_runtime_with_theme_root(&parsed, Some(&themes));
+        assert_eq!(
+            settings.palette.background,
+            crate::gpui_terminal::colors::from_rgb8([0x01, 0x02, 0x03])
+        );
+        assert_eq!(
+            settings.palette.foreground,
+            crate::gpui_terminal::colors::from_rgb8([0xd0, 0xd1, 0xd2])
+        );
+        // 完整 256 色表进入 indexed 覆盖(OSC 4/渲染同一来源)。
+        let indexed = settings
+            .palette
+            .indexed
+            .iter()
+            .find(|(index, _)| *index == 16)
+            .map(|(_, color)| *color);
+        assert_eq!(
+            indexed,
+            Some(crate::gpui_terminal::colors::from_rgb8([0xaa, 0xbb, 0xcc]))
+        );
+
+        // 缺失/损坏的自定义主题回退内置主题,不炸启动。
+        let missing = runtime(r#"{"appearance": {"custom_theme": "nope"}}"#);
+        let settings = Settings::from_runtime_with_theme_root(&missing, Some(&themes));
+        assert_eq!(
+            settings.palette.background,
+            crate::gpui_terminal::colors::from_rgb8(
+                slterm_settings::ThemeName::Linear.term_theme().background
+            )
         );
     }
 

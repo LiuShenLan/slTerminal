@@ -81,6 +81,38 @@ pub struct ReviewedPalette {
 }
 
 impl ReviewedPalette {
+    /// 语义槽 WCAG 违规清单(空 = 通过)。正文/次要文字按 AA 普通文本
+    /// 4.5:1;强调与语义六色按大文本/非文本 3:1。保存路径据此拒绝,
+    /// 适配器不得以派生色绕过评审。
+    pub fn wcag_violations(self) -> Vec<(&'static str, f64)> {
+        let mut violations = Vec::new();
+        let mut check = |slot: &'static str, foreground: Rgb8, minimum: f64| {
+            let ratio = crate::wcag_contrast_ratio(foreground, self.background);
+            if ratio + f64::EPSILON < minimum {
+                violations.push((slot, ratio));
+            }
+        };
+        check("foreground", self.foreground, crate::WCAG_TEXT_CONTRAST);
+        check("muted", self.muted, crate::WCAG_TEXT_CONTRAST);
+        for (slot, color) in [
+            ("accent", self.accent),
+            ("red", self.red),
+            ("green", self.green),
+            ("yellow", self.yellow),
+            ("blue", self.blue),
+            ("purple", self.purple),
+            ("cyan", self.cyan),
+        ] {
+            check(slot, color, crate::WCAG_GRAPHICS_CONTRAST);
+        }
+        violations
+    }
+
+    /// 目录成员的语义槽是否全部达到 WCAG 下限。
+    pub fn meets_wcag(self) -> bool {
+        self.wcag_violations().is_empty()
+    }
+
     /// selected 前景色按 alpha 叠到面板底的 CSS 式合成。
     pub const fn code_background(self) -> Rgb8 {
         let alpha = self.selected[3] as u32;
@@ -357,6 +389,28 @@ mod themes_tests {
         assert_eq!(frappe.ansi[8], rgb(0x626880));
         assert_eq!(frappe.ansi[9], rgb(0xe67172));
         assert_ne!(frappe.ansi[1], frappe.ansi[9]);
+    }
+
+    #[test]
+    fn builtin_palettes_pass_semantic_slot_wcag_review() {
+        for name in ThemeName::BUILTIN {
+            let palette = name.reviewed_palette();
+            assert!(
+                palette.meets_wcag(),
+                "{} semantic slots: {:?}",
+                name.prompt_name(),
+                palette.wcag_violations()
+            );
+        }
+        // 语义槽校验是机械判据:把一个槽压到接近底色即被抓出。
+        let mut broken = ThemeName::Nord.reviewed_palette();
+        broken.red = broken.background;
+        let violations = broken.wcag_violations();
+        assert!(
+            violations.iter().any(|(slot, _)| *slot == "red"),
+            "{violations:?}"
+        );
+        assert!(!broken.meets_wcag());
     }
 
     #[test]
