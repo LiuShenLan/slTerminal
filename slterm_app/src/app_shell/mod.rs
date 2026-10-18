@@ -23,6 +23,8 @@ macro_rules! eprintln {
 
 pub(crate) mod assets;
 pub(crate) mod config;
+// 布局转换对(「布局单点」);消费点 = M5.5 快照/恢复闭环。
+pub(crate) mod session_restore;
 pub(crate) mod theme;
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod ui_tests;

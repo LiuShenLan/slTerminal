@@ -1,8 +1,313 @@
-//! 会话文件身份(03 篇协议解析的支撑件)。
+//! 会话 schema 与持久化(05 篇 M5.2 锚点);同时承载 03 篇会话身份校验。
 //!
-//! 本步(M4.2)落地范围:hook 信封解析(`ai_hook::protocol`)需要的两个
-//! 纯校验函数。布局会话树(`AgentSession`/恢复注入)归 05 篇 M5 续写;会话
-//! 档案扫描(`ai_sessions`)归 M4.4,落地时复用本文件的 rollout id 提取。
+//! session.json 只回答「下次启动恢复成什么样」:1 Hz 快照持续写盘、启动前
+//! 断路器计数、收尾最后一笔标记正常退出;不承担驻留/多窗语义。格式版本从
+//! 1 起(无历史会话文件,升级链不迁),追加字段一律 `serde(default)` 免
+//! 升版。同一 schema 兼作工作区导出格式——快照(紧凑写)与导出(pretty
+//! 打印)只有序列化形态之别。
+//!
+//! 布局持久化单点:运行时树与持久化树之间的转换只有
+//! `app_shell::session_restore` 的一对纯函数;本模块只定义 schema 与存取。
+//! 快照泵/启动恢复归 M5.5,本步未消费的存取包装先允许 dead_code。
+#![allow(dead_code)] // 消费点 = M5.5 快照/恢复闭环(session_persistence/session_recovery)。
+
+use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
+use slterm_settings::Rgb;
+
+/// 最高格式版本。无历史会话文件,升级链不迁;追加字段走
+/// `serde(default)` 免升版。
+pub const VERSION: u32 = 1;
+
+/// 连续这么多次启动都没活到首次自动保存就不再恢复(断路器)。
+pub const MAX_BOOT_ATTEMPTS: u32 = 3;
+
+/// tab 首 pane 的启动身份(可持久化的启动子集:仅默认启动与本地 Profile)。
+/// Profile 内嵌完整命令而非引用配置名,导出工作区在目标机配置不同时仍可移植。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum LaunchSession {
+    Default,
+    Profile {
+        name: String,
+        command: String,
+        args: Vec<String>,
+        cwd: Option<String>,
+        #[serde(default)]
+        shell_id: Option<String>,
+    },
+}
+
+/// 分屏轴。与运行时 `SplitDirection` 同形,持久化层不直接依赖显示类型。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SplitAxis {
+    LeftRight,
+    TopBottom,
+}
+
+/// 快照瞬间仍在 pane 前台运行的 AI CLI 对话身份(字段级消费归 03 篇)。
+/// 只存安全启动描述——来源名 + 会话 id + 原生会话文件,不存正文、不存启动
+/// 参数原文。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentSession {
+    /// hook 直报的 CLI 名(slug)。
+    pub source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// 原生会话文件;只在所属 pane 环境内解释。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_file: Option<String>,
+}
+
+/// 持久化布局树:叶带逐 pane 启动环境,Split 带轴 + 第一个孩子占比。
+/// 占比用千分比整数——自动保存的变化检测与文件 diff 不被 f32 序列化噪声
+/// 绊倒,与上游同因。
+///
+/// 变体尺寸差是线格式的事实:Pane 字段级照设计稿锚定,Box 化会改 schema
+/// 签名与转换对形态,故显式豁免该 lint。
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum LayoutSession {
+    Pane {
+        cwd: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        custom_name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent: Option<AgentSession>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        launch: Option<LaunchSession>,
+    },
+    Split {
+        axis: SplitAxis,
+        ratio_permille: u16,
+        first: Box<LayoutSession>,
+        second: Box<LayoutSession>,
+    },
+}
+
+impl LayoutSession {
+    /// 树内 pane(叶)数。
+    pub fn pane_count(&self) -> usize {
+        match self {
+            Self::Pane { .. } => 1,
+            Self::Split { first, second, .. } => first.pane_count() + second.pane_count(),
+        }
+    }
+
+    /// 深度优先首个叶的目录——恢复后首个 pane 的种子目录。
+    pub fn first_cwd(&self) -> &str {
+        match self {
+            Self::Pane { cwd, .. } => cwd,
+            Self::Split { first, .. } => first.first_cwd(),
+        }
+    }
+
+    /// 深度优先叶序。恢复注入按同一顺序逐叶 spawn,索引 i 与第 i 个活叶
+    /// 一一配对。
+    pub fn leaves(&self) -> Vec<&LayoutSession> {
+        fn walk<'tree>(node: &'tree LayoutSession, out: &mut Vec<&'tree LayoutSession>) {
+            match node {
+                LayoutSession::Pane { .. } => out.push(node),
+                LayoutSession::Split { first, second, .. } => {
+                    walk(first, out);
+                    walk(second, out);
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(self, &mut out);
+        out
+    }
+}
+
+/// `Rgb` 值模型零 serde(06 篇契约),落盘形态固定为三元数组,由本适配层
+/// 表达;`None` 落为 null。
+mod rgb_triplet {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use slterm_settings::Rgb;
+
+    pub(super) fn serialize<S: Serializer>(
+        value: &Option<Rgb>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        match value {
+            Some(rgb) => [rgb.0, rgb.1, rgb.2].serialize(serializer),
+            None => serializer.serialize_none(),
+        }
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<Rgb>, D::Error> {
+        let value = Option::<[u8; 3]>::deserialize(deserializer)?;
+        Ok(value.map(|[red, green, blue]| Rgb(red, green, blue)))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TabSession {
+    /// 焦点 pane 的目录。树重建前 boot 路径用它种子首 pane。
+    pub cwd: String,
+    /// 用户重命名;`None` 沿用目录/标题派生标签。
+    #[serde(default)]
+    pub custom_name: Option<String>,
+    /// 用户色标;`None` 跟随当前主题。
+    #[serde(default, with = "rgb_triplet")]
+    pub color: Option<Rgb>,
+    /// 首 pane 的启动身份;`None` 表示默认本地启动。
+    #[serde(default)]
+    pub launch: Option<LaunchSession>,
+    /// 完整分屏树;`None` = 单 pane at `cwd`。
+    #[serde(default)]
+    pub layout: Option<LayoutSession>,
+    /// 焦点叶在 `layout` 中的深度优先下标;越界回退首叶。
+    #[serde(default)]
+    pub active_pane: usize,
+}
+
+/// 上次窗口的逻辑像素尺寸与最大化态。D05-1 已裁回放:字段语义 = 启动
+/// 行为输入(记住上次窗口大小),不再只是诊断数据。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WindowState {
+    pub width: u32,
+    pub height: u32,
+    #[serde(default)]
+    pub maximized: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Session {
+    pub version: u32,
+    /// 断路器计数:活到首次自动保存即归零。
+    #[serde(default)]
+    pub boot_attempts: u32,
+    /// 活跃 tab 的位置下标(稳定身份是运行时 TabId,不进 schema)。
+    pub active_tab: usize,
+    pub tabs: Vec<TabSession>,
+    #[serde(default)]
+    pub window: Option<WindowState>,
+    /// 1 Hz 自动保存恒 false,只有正常收尾的最后一笔写 true;老文件缺省
+    /// false(按异常退出多提示一次,恢复行为不变)。
+    #[serde(default)]
+    pub clean_exit: bool,
+}
+
+impl Session {
+    /// 新快照的规范形态:当前版本、断路器归零、未走收尾。
+    pub fn new(active_tab: usize, tabs: Vec<TabSession>) -> Self {
+        Self {
+            version: VERSION,
+            boot_attempts: 0,
+            active_tab,
+            tabs,
+            window: None,
+            clean_exit: false,
+        }
+    }
+}
+
+/// 数据目录里的规范落点(目录解析归 01 篇 `platform::dirs`)。
+fn session_path() -> PathBuf {
+    crate::platform::dirs::data_dir().join("session.json")
+}
+
+/// 解析会话/工作区文档。版本不符即拒收——无历史格式,不做就地升级。
+fn parse(data: &str) -> Option<Session> {
+    let session: Session = serde_json::from_str(data).ok()?;
+    (session.version == VERSION).then_some(session)
+}
+
+/// 从数据目录读取上次会话;缺失、损坏或版本不符都视为无会话。
+pub fn load() -> Option<Session> {
+    load_from(&session_path())
+}
+
+/// 从显式路径读取会话/工作区文件(工作区导入同一 schema)。
+pub fn load_from(path: &Path) -> Option<Session> {
+    parse(&std::fs::read_to_string(path).ok()?)
+}
+
+/// 紧凑写(机读快照形态);临时文件 + rename 的原子性归 `atomic_file`。
+pub fn try_save(session: &Session) -> std::io::Result<()> {
+    save_compact_to(&session_path(), session)
+}
+
+fn save_compact_to(path: &Path, session: &Session) -> std::io::Result<()> {
+    let json = serde_json::to_string(session).map_err(std::io::Error::other)?;
+    crate::atomic_file::write(path, json.as_bytes())
+}
+
+/// 以命名工作区文件写出:pretty 打印,供人读、可 diff。快照与导出共用
+/// 同一 schema,只是序列化形态不同。
+pub fn save_to(path: &Path, session: &Session) -> std::io::Result<()> {
+    let json = serde_json::to_string_pretty(session).map_err(std::io::Error::other)?;
+    crate::atomic_file::write(path, json.as_bytes())
+}
+
+/// 是否恢复:断路器未跳闸且确有 tab。空会话(一路关标签关干净)不恢复。
+pub fn should_restore(session: &Session) -> bool {
+    session.boot_attempts < MAX_BOOT_ATTEMPTS && !session.tabs.is_empty()
+}
+
+/// 收尾时的最后一笔:先打 `clean_exit = true` 再落盘。所有正常退出路径
+/// 都必须走这里,否则下次启动会把这次退出误判成崩溃。
+pub fn save_final(session: &mut Session) {
+    if let Err(error) = save_final_at(&session_path(), session) {
+        log::warn!("Could not persist final terminal session: {error}");
+    }
+}
+
+fn save_final_at(path: &Path, session: &mut Session) -> std::io::Result<()> {
+    session.clean_exit = true;
+    save_compact_to(path, session)
+}
+
+/// 上次是异常退出(崩溃/强杀/断电),而不是正常收尾。空会话不算。
+pub fn was_crash(session: &Session) -> bool {
+    !session.clean_exit && !session.tabs.is_empty()
+}
+
+/// 断路器跳闸(连续 [`MAX_BOOT_ATTEMPTS`] 次启动都没活到首次自动保存)时,
+/// 把这份会话挪到 `session.crashed.json` 再走干净启动。
+///
+/// 必须挪走而不是留在原地:启动一成功,一秒后的自动保存就会把
+/// `session.json` 盖掉,那份「一恢复就崩」的现场是唯一的诊断材料。
+pub fn quarantine() -> Option<PathBuf> {
+    quarantine_at(&session_path())
+}
+
+fn quarantine_at(path: &Path) -> Option<PathBuf> {
+    let to = path.with_file_name("session.crashed.json");
+    std::fs::copy(path, &to).ok()?;
+    let _ = std::fs::remove_file(path);
+    Some(to)
+}
+
+/// 保存的 cwd 转 `PathBuf`,目录已消失则返回 `None`。不存在的启动目录会让
+/// ConPTY 直接失败,调用方据此回退默认 cwd。
+pub fn valid_dir(cwd: &str) -> Option<PathBuf> {
+    let cwd = cwd.trim();
+    if cwd.is_empty() {
+        return None;
+    }
+    let path = PathBuf::from(cwd);
+    path.is_dir().then_some(path)
+}
+
+/// 恢复尝试前先把计数落盘,这样恢复过程中崩溃会被断路器记到。
+pub fn mark_boot_attempt(session: &mut Session) {
+    if let Err(error) = mark_boot_attempt_at(&session_path(), session) {
+        log::warn!("Could not persist boot attempt count: {error}");
+    }
+}
+
+fn mark_boot_attempt_at(path: &Path, session: &mut Session) -> std::io::Result<()> {
+    session.boot_attempts = session.boot_attempts.saturating_add(1);
+    save_compact_to(path, session)
+}
 
 /// 同时校验 Windows 与来宾绝对路径,不查宿主文件系统——真实存在性与原生
 /// 身份归宿主侧校验。
@@ -87,5 +392,356 @@ mod identity_tests {
         ] {
             assert_eq!(codex_rollout_id(&path), None, "{path}");
         }
+    }
+}
+
+#[cfg(test)]
+mod schema_tests {
+    use super::*;
+
+    /// 05 篇 JSON 实例即夹具:快照形态 = 导出形态(同一 schema)。
+    const WORKSPACE: &str = r#"{
+      "version": 1,
+      "boot_attempts": 0,
+      "active_tab": 1,
+      "tabs": [
+        {
+          "cwd": "D:/work/api",
+          "custom_name": "后端",
+          "color": [97, 175, 239],
+          "launch": { "kind": "profile", "name": "pwsh-elevated",
+                      "command": "pwsh.exe", "args": ["-NoLogo"], "cwd": "D:/work/api" },
+          "layout": {
+            "kind": "split",
+            "axis": "left_right",
+            "ratio_permille": 618,
+            "first": {
+              "kind": "pane", "cwd": "D:/work/api",
+              "agent": { "source": "claude", "session_id": "0199a213-c2a4-7cf5-8f6b-d746fbb6e86c" }
+            },
+            "second": {
+              "kind": "split",
+              "axis": "top_bottom",
+              "ratio_permille": 500,
+              "first": { "kind": "pane", "cwd": "D:/work/api/logs" },
+              "second": { "kind": "pane", "cwd": "" }
+            }
+          },
+          "active_pane": 2
+        },
+        { "cwd": "D:/work/web", "custom_name": null, "active_pane": 0,
+          "layout": { "kind": "pane", "cwd": "D:/work/web" } }
+      ],
+      "window": { "width": 1280, "height": 720, "maximized": false },
+      "clean_exit": false
+    }"#;
+
+    #[test]
+    fn workspace_instance_round_trips_field_identically() {
+        let session = parse(WORKSPACE).expect("实例必须可解析");
+        assert_eq!(session.version, VERSION);
+        assert_eq!(session.active_tab, 1);
+        assert_eq!(session.tabs.len(), 2);
+        assert_eq!(session.tabs[0].custom_name.as_deref(), Some("后端"));
+        assert_eq!(session.tabs[0].color, Some(Rgb(97, 175, 239)));
+        assert_eq!(session.tabs[0].active_pane, 2);
+        let layout = session.tabs[0].layout.as_ref().expect("split 树");
+        assert_eq!(layout.pane_count(), 3);
+        assert_eq!(layout.first_cwd(), "D:/work/api");
+        assert_eq!(
+            session.tabs[0].launch,
+            Some(LaunchSession::Profile {
+                name: "pwsh-elevated".into(),
+                command: "pwsh.exe".into(),
+                args: vec!["-NoLogo".into()],
+                cwd: Some("D:/work/api".into()),
+                shell_id: None,
+            })
+        );
+
+        let reprinted = serde_json::to_string_pretty(&session).expect("必须可序列化");
+        assert_eq!(parse(&reprinted), Some(session), "字段级往返相等");
+    }
+
+    #[test]
+    fn version_mismatch_is_rejected_instead_of_upgraded() {
+        assert_eq!(VERSION, 1);
+        for version in [0, 2, 4] {
+            let json = format!(r#"{{"version":{version},"active_tab":0,"tabs":[]}}"#);
+            assert_eq!(parse(&json), None, "版本 {version} 必须拒收");
+        }
+        assert_eq!(parse("not json"), None, "损坏文件视为无会话");
+    }
+
+    /// 追加字段走 `serde(default)`:只带必需字段的老形态照常解析。
+    #[test]
+    fn missing_optional_fields_take_serde_defaults() {
+        let json = r#"{"version":1,"active_tab":0,"tabs":[{"cwd":"D:/work"}]}"#;
+        let session = parse(json).expect("缺省字段必须解析");
+        assert_eq!(session.boot_attempts, 0);
+        assert_eq!(session.window, None);
+        assert!(!session.clean_exit);
+        let tab = &session.tabs[0];
+        assert_eq!(tab.custom_name, None);
+        assert_eq!(tab.color, None);
+        assert_eq!(tab.launch, None);
+        assert_eq!(tab.layout, None);
+        assert_eq!(tab.active_pane, 0);
+    }
+
+    #[test]
+    fn layout_leaves_walk_depth_first_in_restore_injection_order() {
+        let layout = LayoutSession::Split {
+            axis: SplitAxis::LeftRight,
+            ratio_permille: 500,
+            first: Box::new(LayoutSession::Pane {
+                cwd: "a".into(),
+                custom_name: None,
+                agent: None,
+                launch: None,
+            }),
+            second: Box::new(LayoutSession::Split {
+                axis: SplitAxis::TopBottom,
+                ratio_permille: 500,
+                first: Box::new(LayoutSession::Pane {
+                    cwd: "b".into(),
+                    custom_name: None,
+                    agent: None,
+                    launch: None,
+                }),
+                second: Box::new(LayoutSession::Pane {
+                    cwd: "c".into(),
+                    custom_name: None,
+                    agent: None,
+                    launch: None,
+                }),
+            }),
+        };
+        let leaves = layout.leaves();
+        assert_eq!(leaves.len(), layout.pane_count());
+        let cwds: Vec<_> = leaves
+            .iter()
+            .map(|leaf| match leaf {
+                LayoutSession::Pane { cwd, .. } => cwd.as_str(),
+                LayoutSession::Split { .. } => unreachable!("leaves 只返回叶"),
+            })
+            .collect();
+        assert_eq!(cwds, ["a", "b", "c"]);
+        assert_eq!(layout.first_cwd(), "a");
+    }
+
+    #[test]
+    fn tab_color_persists_as_a_plain_triplet() {
+        let tab = TabSession {
+            cwd: "D:/work".into(),
+            custom_name: None,
+            color: Some(Rgb(1, 2, 3)),
+            launch: None,
+            layout: None,
+            active_pane: 0,
+        };
+        let value = serde_json::to_value(&tab).expect("必须可序列化");
+        assert_eq!(value["color"], serde_json::json!([1, 2, 3]));
+        assert_eq!(serde_json::from_value::<TabSession>(value).unwrap(), tab);
+    }
+
+    #[test]
+    fn profile_launch_embeds_the_full_command() {
+        let launch: LaunchSession = serde_json::from_str(
+            r#"{"kind":"profile","name":"pwsh","command":"pwsh.exe","args":["-NoLogo"]}"#,
+        )
+        .expect("Profile 必须可解析");
+        assert_eq!(
+            launch,
+            LaunchSession::Profile {
+                name: "pwsh".into(),
+                command: "pwsh.exe".into(),
+                args: vec!["-NoLogo".into()],
+                cwd: None,
+                shell_id: None,
+            }
+        );
+    }
+}
+
+#[cfg(test)]
+mod persistence_tests {
+    use super::*;
+    use std::fs;
+
+    fn sample() -> Session {
+        let tab = TabSession {
+            cwd: "D:/work".into(),
+            custom_name: Some("后端".into()),
+            color: Some(Rgb(97, 175, 239)),
+            launch: Some(LaunchSession::Profile {
+                name: "pwsh".into(),
+                command: "pwsh.exe".into(),
+                args: vec!["-NoLogo".into()],
+                cwd: Some("D:/work".into()),
+                shell_id: None,
+            }),
+            layout: Some(LayoutSession::Split {
+                axis: SplitAxis::LeftRight,
+                ratio_permille: 618,
+                first: Box::new(LayoutSession::Pane {
+                    cwd: "D:/work".into(),
+                    custom_name: None,
+                    agent: Some(AgentSession {
+                        source: "claude".into(),
+                        session_id: Some("abc-1".into()),
+                        session_file: None,
+                    }),
+                    launch: None,
+                }),
+                second: Box::new(LayoutSession::Pane {
+                    cwd: String::new(),
+                    custom_name: Some("日志".into()),
+                    agent: None,
+                    launch: None,
+                }),
+            }),
+            active_pane: 1,
+        };
+        let mut session = Session::new(0, vec![tab]);
+        session.window = Some(WindowState {
+            width: 1280,
+            height: 720,
+            maximized: true,
+        });
+        session
+    }
+
+    /// 快照 = 导出:pretty 导出文件经同一 schema 回读,字段级相等。
+    #[test]
+    fn pretty_export_reads_back_field_identical() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("slterm-workspace.json");
+        let session = sample();
+        save_to(&path, &session).unwrap();
+        assert_eq!(load_from(&path), Some(session));
+    }
+
+    #[test]
+    fn compact_snapshot_and_pretty_export_share_one_schema() {
+        let dir = tempfile::tempdir().unwrap();
+        let snapshot = dir.path().join("session.json");
+        let export = dir.path().join("export.json");
+        let session = sample();
+        save_compact_to(&snapshot, &session).unwrap();
+        save_to(&export, &session).unwrap();
+        assert_eq!(load_from(&snapshot), Some(session.clone()));
+        assert_eq!(load_from(&snapshot), load_from(&export));
+    }
+
+    #[test]
+    fn missing_and_corrupt_files_load_as_none() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(load_from(&dir.path().join("absent.json")), None);
+        let corrupt = dir.path().join("corrupt.json");
+        fs::write(&corrupt, b"{not json").unwrap();
+        assert_eq!(load_from(&corrupt), None);
+    }
+
+    #[test]
+    fn should_restore_stops_at_the_breaker_and_ignores_empty_sessions() {
+        let mut session = sample();
+        assert!(should_restore(&session));
+        session.boot_attempts = MAX_BOOT_ATTEMPTS;
+        assert!(!should_restore(&session), "断路器跳闸后不再恢复");
+        assert!(
+            !should_restore(&Session::new(0, Vec::new())),
+            "空会话不恢复"
+        );
+    }
+
+    #[test]
+    fn only_an_unfinished_teardown_counts_as_a_crash() {
+        let mut session = sample();
+        assert!(was_crash(&session), "1 Hz 快照 = 还没走到收尾");
+        session.clean_exit = true;
+        assert!(!was_crash(&session));
+        assert!(!was_crash(&Session::new(0, Vec::new())), "空会话是正常退出");
+    }
+
+    #[test]
+    fn save_final_marks_the_last_snapshot_as_clean() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.json");
+        let mut session = sample();
+        assert!(!session.clean_exit);
+        save_final_at(&path, &mut session).unwrap();
+        let restored = load_from(&path).expect("收尾快照必须可回读");
+        assert!(restored.clean_exit);
+        assert!(!was_crash(&restored));
+    }
+
+    #[test]
+    fn mark_boot_attempt_counts_on_disk_before_restore() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.json");
+        let mut session = sample();
+        mark_boot_attempt_at(&path, &mut session).unwrap();
+        assert_eq!(session.boot_attempts, 1);
+        assert_eq!(load_from(&path).unwrap().boot_attempts, 1);
+        // 首次成功快照的规范形态恒为 0。
+        assert_eq!(Session::new(0, Vec::new()).boot_attempts, 0);
+    }
+
+    /// 挪不删:断路隔离后原路径清空,诊断材料原样保留。
+    #[test]
+    fn quarantine_moves_the_crashed_session_aside() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.json");
+        let session = sample();
+        save_compact_to(&path, &session).unwrap();
+        let quarantined = quarantine_at(&path).expect("必须产出隔离文件");
+        assert_eq!(quarantined, dir.path().join("session.crashed.json"));
+        assert!(!path.exists(), "原路径必须清空");
+        assert_eq!(load_from(&quarantined), Some(session), "诊断材料原样保留");
+        assert_eq!(quarantine_at(&path), None, "原文件不存在时无操作");
+    }
+
+    /// 半写现场不可见:临时文件崩在换名前,规范路径只会是上一笔完整快照。
+    #[test]
+    fn atomic_save_leaves_no_partial_or_temporary_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.json");
+        let session = sample();
+        save_compact_to(&path, &session).unwrap();
+        save_compact_to(&path, &session).unwrap();
+        let leftovers: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.contains("slterm-tmp"))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "临时文件必须被换名或回收:{leftovers:?}"
+        );
+
+        // 崩在换名前留下的半写临时文件不可能被 load 看见。
+        fs::write(
+            dir.path().join(".session.json.slterm-tmp-999-1"),
+            b"{\"version\":1",
+        )
+        .unwrap();
+        assert_eq!(load_from(&path), Some(session));
+    }
+
+    #[test]
+    fn valid_dir_requires_a_real_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            valid_dir(dir.path().to_str().unwrap()),
+            Some(dir.path().to_path_buf())
+        );
+        assert_eq!(valid_dir("   "), None);
+        assert_eq!(
+            valid_dir(&dir.path().join("missing").to_string_lossy()),
+            None,
+            "消失的目录必须回退"
+        );
     }
 }
