@@ -24,6 +24,7 @@
 
 pub(crate) mod sidebar;
 mod split_drag;
+mod tab_drag;
 pub(crate) mod title_bar;
 
 use std::cell::RefCell;
@@ -56,6 +57,7 @@ use crate::session::LaunchSession;
 use crate::terminal_registry::{self, PaneSessionMeta};
 use sidebar::{SidebarResizeDrag, SidebarState};
 use split_drag::SplitDrag;
+use tab_drag::TabDrag;
 
 gpui::actions!(
     slterm_workspace,
@@ -137,10 +139,13 @@ pub struct SltermWorkspace {
     initial_grid: (u16, u16),
     /// PaneBoundsStore:canvas 探针 prepaint 回写(键 = pane id)。
     pane_bounds: PaneBoundsStore,
-    /// SplitBoundsStore:canvas 探针 prepaint 回写(键 = (tab 下标, 节点路径))。
+    /// SplitBoundsStore:canvas 探针 prepaint 回写(键 = (稳定 TabId, 节点路径))。
+    /// 下标会随关 tab/重排漂移,稳定身份才是键。
     split_bounds: SplitBoundsStore,
     /// 进行中的分隔条拖拽;`None` = 无手势。
     split_drag: Option<SplitDrag>,
+    /// 进行中的 tab 拖拽(含未过阈值的待命态);`None` = 无手势。
+    tab_drag: Option<TabDrag>,
     /// 侧栏骨架态(05 篇 D05-2/D05-3):开合/宽度/双槽 active view。
     sidebar: SidebarState,
     /// 进行中的侧栏宽度拖拽;`None` = 无手势。
@@ -155,8 +160,21 @@ pub struct SltermWorkspace {
 
 /// 键:pane id(方向导航要拿所有叶子的屏幕矩形算最近邻)。
 type PaneBoundsStore = Rc<RefCell<HashMap<PaneId, Bounds<Pixels>>>>;
-/// 键:(tab 下标, 分屏节点路径)。路径语义同 `slterm_split::Divider`。
-type SplitBoundsStore = Rc<RefCell<HashMap<(usize, Vec<bool>), Bounds<Pixels>>>>;
+/// 键:(稳定 TabId, 分屏节点路径)。路径语义同 `slterm_split::Divider`。
+///
+/// 用 TabId 而非下标:关 tab 会让后续 tab 的下标整体前移,旧下标键会被
+/// 幸存 tab 误读(拖分隔条读到别的 tab 的上一帧矩形);TabId 终生不复用,
+/// 重排/关闭都不改键。关闭 tab 时仍显式清键,避免缓存无界增长。
+type SplitBoundsStore = Rc<RefCell<HashMap<(TabId, Vec<bool>), Bounds<Pixels>>>>;
+
+/// 分屏递归的只读渲染上下文:tab 身份(下标供调试选择器、TabId 供矩形
+/// 缓存键)+ pane 属主与聚焦叶。递归调用只传本结构,不逐参展开。
+struct SplitRenderContext<'a> {
+    tab_ix: usize,
+    tab_id: TabId,
+    panes: &'a [TerminalPane],
+    focused: PaneId,
+}
 
 /// GPUI `Bounds` → `slterm_split::Rect`(同为窗口逻辑像素坐标系)。
 fn to_split_rect(bounds: &Bounds<Pixels>) -> slterm_split::Rect {
@@ -216,6 +234,7 @@ impl SltermWorkspace {
             pane_bounds: Rc::new(RefCell::new(HashMap::new())),
             split_bounds: Rc::new(RefCell::new(HashMap::new())),
             split_drag: None,
+            tab_drag: None,
             sidebar: SidebarState::default(),
             sidebar_resize: None,
             #[cfg(all(test, feature = "gpui-test-support"))]
@@ -350,6 +369,17 @@ impl SltermWorkspace {
         cx.notify();
     }
 
+    /// 点击侧栏 tab 行:切活跃 tab(同下标空操作)。
+    fn activate_tab(&mut self, index: usize, window: &mut Window, cx: &mut Context<'_, Self>) {
+        if index >= self.tabs.len() || index == self.active {
+            return;
+        }
+        self.active = index;
+        self.focus_active(window, cx);
+        self.sync_window_title(window, cx);
+        cx.notify();
+    }
+
     /// 关闭活跃 tab:逐 pane 显式 shutdown,不留孤儿 PTY;最后一个 tab
     /// 关闭 = 关窗(单窗产品定位)。
     fn close_active_tab(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
@@ -365,7 +395,7 @@ impl SltermWorkspace {
         for id in ids {
             self.forget_pane(id);
         }
-        self.tabs.remove(self.active);
+        self.remove_tab_entry(self.active);
         if self.tabs.is_empty() {
             window.remove_window();
             return;
@@ -374,6 +404,20 @@ impl SltermWorkspace {
         self.focus_active(window, cx);
         self.sync_window_title(window, cx);
         cx.notify();
+    }
+
+    /// 统一「摘除 tab」点:条目离开 tabs 的同时清掉它的节点矩形缓存。
+    /// TabId 终生不复用,残留键不会误配到别的 tab;但不清会随关闭次数
+    /// 无界增长。停靠摘源 tab 同走此点。
+    fn remove_tab_entry(&mut self, index: usize) -> Option<TabEntry> {
+        if index >= self.tabs.len() {
+            return None;
+        }
+        let entry = self.tabs.remove(index);
+        self.split_bounds
+            .borrow_mut()
+            .retain(|(tab, _), _| *tab != entry.id);
+        Some(entry)
     }
 
     /// 窗口标题 = 活跃 tab 展示名(任务栏可见);无 tab 时回退品牌名。
@@ -385,7 +429,15 @@ impl SltermWorkspace {
     /// 活跃 tab 展示名:自定义名优先,否则取聚焦 pane 的既有终端标题。
     /// 07 篇 TabPresentation 落地后,这一处取值面替换为其派生结果。
     pub(super) fn active_tab_title(&self, cx: &App) -> String {
-        let Some(entry) = self.tabs.get(self.active) else {
+        self.tabs
+            .get(self.active)
+            .map(|_| self.tab_title(self.active, cx))
+            .unwrap_or_else(|| brand::NAME.to_owned())
+    }
+
+    /// 单个 tab 的展示名(侧栏 tab 行与标题栏同源)。
+    fn tab_title(&self, tab_ix: usize, cx: &App) -> String {
+        let Some(entry) = self.tabs.get(tab_ix) else {
             return brand::NAME.to_owned();
         };
         if let Some(custom) = &entry.meta.custom_name {
@@ -587,7 +639,7 @@ impl SltermWorkspace {
                     pane.view.read(cx).shutdown();
                 }
                 self.forget_pane(pane_id);
-                self.tabs.remove(tab_index);
+                self.remove_tab_entry(tab_index);
                 if self.tabs.is_empty() {
                     window.remove_window();
                     return;
@@ -763,6 +815,50 @@ impl SltermWorkspace {
             *focused,
             *zoomed,
         ))
+    }
+
+    /// 测试专用:任一 tab 的 (panes id, 树叶) 快照(停靠回退路径的断言端)。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn tab_snapshot(&self, index: usize) -> Option<(Vec<PaneId>, Vec<PaneId>)> {
+        let entry = self.tabs.get(index)?;
+        let WorkspaceTab::Terminal { panes, tree, .. } = &entry.tab;
+        Some((panes.iter().map(|pane| pane.id).collect(), tree.leaves()))
+    }
+
+    /// 测试专用:第 index 个 tab 的稳定身份。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn tab_id_at(&self, index: usize) -> Option<TabId> {
+        self.tabs.get(index).map(|entry| entry.id)
+    }
+
+    /// 测试专用:节点矩形缓存的当前键集合(TabId 键修复的回归断言端)。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn split_bounds_keys(&self) -> Vec<(TabId, Vec<bool>)> {
+        let mut keys: Vec<_> = self.split_bounds.borrow().keys().cloned().collect();
+        keys.sort();
+        keys
+    }
+
+    /// 测试专用:重排 tab(模拟拖拽换位,验证缓存键随稳定身份走)。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn move_tab_for_test(&mut self, from: usize, to: usize) {
+        if from == to || from >= self.tabs.len() || to >= self.tabs.len() {
+            return;
+        }
+        let entry = self.tabs.remove(from);
+        self.tabs.insert(to, entry);
+        self.active = if self.active == from {
+            to
+        } else {
+            let mut ix = self.active;
+            if ix > from {
+                ix -= 1;
+            }
+            if ix >= to {
+                ix += 1;
+            }
+            ix
+        };
     }
 
     /// 测试专用:活跃 tab 根节点的提交比例(单叶 = None)。
@@ -1022,15 +1118,16 @@ impl SltermWorkspace {
     /// Terminal tab 的内容区:zoom 或单叶 → 聚焦 pane 满卡直渲(M3 路径
     /// 保留为特例);否则按分屏树递归铺陈。
     fn render_terminal_tab(&self, tab_ix: usize, cx: &mut Context<'_, Self>) -> gpui::AnyElement {
-        let Some(WorkspaceTab::Terminal {
+        let Some(entry) = self.tabs.get(tab_ix) else {
+            return div().into_any_element();
+        };
+        let tab_id = entry.id;
+        let WorkspaceTab::Terminal {
             tree,
             panes,
             focused,
             zoomed,
-        }) = self.tabs.get(tab_ix).map(|entry| &entry.tab)
-        else {
-            return div().into_any_element();
-        };
+        } = &entry.tab;
         if *zoomed || tree.is_leaf() {
             let pane = panes
                 .iter()
@@ -1063,7 +1160,13 @@ impl SltermWorkspace {
                 .into_any_element();
         }
         let mut path = Vec::new();
-        self.render_split_node(tab_ix, tree, &mut path, panes, *focused, cx)
+        let ctx = SplitRenderContext {
+            tab_ix,
+            tab_id,
+            panes,
+            focused: *focused,
+        };
+        self.render_split_node(&ctx, tree, &mut path, cx)
     }
 
     /// 递归渲染分屏树。Split 节点 = flex 容器:first 占 `relative(ratio)`、
@@ -1076,21 +1179,20 @@ impl SltermWorkspace {
     /// 方向导航消费。
     fn render_split_node(
         &self,
-        tab_ix: usize,
+        ctx: &SplitRenderContext<'_>,
         node: &SplitTree<PaneId>,
         path: &mut Vec<bool>,
-        panes: &[TerminalPane],
-        focused: PaneId,
         cx: &mut Context<'_, Self>,
     ) -> gpui::AnyElement {
         match node {
             SplitTree::Leaf(id) => {
                 let id = *id;
-                let Some(pane) = panes.iter().find(|pane| pane.id == id) else {
+                let Some(pane) = ctx.panes.iter().find(|pane| pane.id == id) else {
                     return div().into_any_element();
                 };
                 let store = self.pane_bounds.clone();
-                let is_focused = id == focused;
+                let is_focused = id == ctx.focused;
+                let tab_ix = ctx.tab_ix;
                 // 非聚焦 pane 压暗(05 篇开放问题 1 默认带 veil;主题开关
                 // 归 06 键域)。veil 只盖终端区,不压暗分屏分隔条。
                 let veil = (!is_focused).then(|| {
@@ -1147,7 +1249,7 @@ impl SltermWorkspace {
                 // 指针事件都重建/重排两侧终端网格。
                 let show_ratio = *ratio;
                 let dragging = *dragging;
-                let key = (tab_ix, path.clone());
+                let key = (ctx.tab_id, path.clone());
                 let store = self.split_bounds.clone();
                 let probe = canvas(
                     move |bounds, _, _| {
@@ -1159,12 +1261,14 @@ impl SltermWorkspace {
                 .inset_0();
 
                 path.push(false);
-                let first_el = self.render_split_node(tab_ix, first, path, panes, focused, cx);
+                let first_el = self.render_split_node(ctx, first, path, cx);
                 path.pop();
                 path.push(true);
-                let second_el = self.render_split_node(tab_ix, second, path, panes, focused, cx);
+                let second_el = self.render_split_node(ctx, second, path, cx);
                 path.pop();
 
+                let tab_ix = ctx.tab_ix;
+                let tab_id = ctx.tab_id;
                 let drag_path = path.clone();
                 let drag_start_ratio = *ratio;
                 let selector_path = drag_path.clone();
@@ -1198,7 +1302,7 @@ impl SltermWorkspace {
                         MouseButton::Left,
                         cx.listener(move |this, _: &MouseDownEvent, _, cx| {
                             this.split_drag = Some(SplitDrag {
-                                tab: tab_ix,
+                                tab: tab_id,
                                 path: drag_path.clone(),
                                 direction,
                                 preview_ratio: drag_start_ratio,
@@ -1262,11 +1366,11 @@ impl Render for SltermWorkspace {
             Some(WorkspaceTab::Terminal { .. }) => Some(self.render_terminal_tab(self.active, cx)),
             None => None,
         };
-        // 侧栏三件套:ActivityBar + 双槽内容区 + 宽度拖拽热区。hidden 或
-        // collapsed 时内容区与热区不占布局,ActivityBar 始终常驻。
+        // 侧栏三件套:ActivityBar + tab 列表/双槽内容区 + 宽度拖拽热区。
+        // collapsed 才整列隐藏;双槽全空时 tab 列表仍常驻(切 tab 与拖拽
+        // 停靠的入口不能随视图槽一起消失)。ActivityBar 始终常驻。
         let sidebar_content = self.render_sidebar_content(cx);
-        let sidebar_visible = !self.sidebar.collapsed
-            && sidebar::derive_layout(&self.sidebar) != sidebar::SidebarLayout::Hidden;
+        let sidebar_visible = !self.sidebar.collapsed;
         let activity_bar = self.render_activity_bar(cx);
         let resize_handle = sidebar_visible.then(|| self.render_sidebar_resize_handle(cx));
         let sidebar_width = self.sidebar.width;
@@ -1277,11 +1381,29 @@ impl Render for SltermWorkspace {
         let split_overlay = self.split_drag_visual(cx);
         let sidebar_resize_overlay = self.render_sidebar_resize_overlay(cx);
         let drag_direction = self.split_drag.as_ref().map(|drag| drag.direction);
+        // tab 拖拽:预览矩形只提示落区,树与网格不动;激活后全窗罩层独占
+        // 指针(与分隔条拖拽同套路),指针划出侧栏/划到终端上都不丢手势。
+        let tab_drag_preview = self.tab_drag_preview(cx);
+        let tab_drag_active = self.tab_drag.as_ref().is_some_and(|drag| drag.active);
         div()
             .size_full()
             .flex()
             .flex_col()
             .relative()
+            // 待命阶段(未过阈值)的指针跟踪;激活后由根部罩层接管。
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                if this.tab_drag.as_ref().is_some_and(|drag| !drag.active) {
+                    this.update_tab_drag(event, window, cx);
+                }
+            }))
+            // 未过阈值的松手 = 普通点击(保留行 on_click 的激活语义);
+            // 已激活的松手走兜底提交(罩层通常已先接到)。
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| {
+                    this.release_tab_drag(window, cx);
+                }),
+            )
             .on_action(cx.listener(|this, _: &SplitRight, window, cx| {
                 this.split_focused(SplitDirection::LeftRight, window, cx);
             }))
@@ -1357,6 +1479,24 @@ impl Render for SltermWorkspace {
             )
             .children(sidebar_resize_overlay)
             .children(split_overlay)
+            .children(tab_drag_preview)
+            .when(tab_drag_active, |root| {
+                root.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .occlude()
+                        .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                            this.update_tab_drag(event, window, cx);
+                        }))
+                        .on_mouse_up(
+                            MouseButton::Left,
+                            cx.listener(|this, _, window, cx| {
+                                this.finish_tab_drag(window, cx);
+                            }),
+                        ),
+                )
+            })
             .when_some(drag_direction, |root, direction| {
                 root.child(
                     div()

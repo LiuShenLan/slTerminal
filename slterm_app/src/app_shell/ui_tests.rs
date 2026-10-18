@@ -709,6 +709,304 @@ fn tab_actions_create_switch_and_close(cx: &mut TestAppContext) {
     assert_eq!(panes, vec![PaneId(1)]);
 }
 
+// ── M5.4 tab 拖拽停靠 + split_bounds 键修复 ──
+
+/// 两个 tab 的通用起手:tab1 左右分屏(panes 1/2),tab2 单 pane(3),
+/// 最后回到 tab1 作停靠目标(活跃 tab)。
+fn two_tabs_with_target_split(
+    cx: &mut TestAppContext,
+) -> (gpui::Entity<SltermWorkspace>, VisualTestContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    window.dispatch_action(SplitRight);
+    window.run_until_parked();
+    window.dispatch_action(NewTerminalTab);
+    window.run_until_parked();
+    window.dispatch_action(SelectPreviousTab);
+    window.run_until_parked();
+    window.refresh().unwrap();
+    draw_frame(&mut window);
+    (workspace, window)
+}
+
+/// tab 行拖到活跃 tab 内容区外圈:根级停靠,整棵源 tab 树并到活跃树右侧。
+#[gpui::test]
+fn tab_drag_to_the_content_edge_docks_the_source_at_the_root(cx: &mut TestAppContext) {
+    let (workspace, mut window) = two_tabs_with_target_split(cx);
+    let (left, right) = workspace.read_with(cx, |ws, _| {
+        (
+            ws.pane_bounds_of(PaneId(1)).unwrap(),
+            ws.pane_bounds_of(PaneId(2)).unwrap(),
+        )
+    });
+    let x0 = f32::from(left.origin.x.min(right.origin.x));
+    let y0 = f32::from(left.origin.y.min(right.origin.y));
+    let x1 = f32::from((right.origin.x + right.size.width).max(left.origin.x + left.size.width));
+    let y1 = f32::from((left.origin.y + left.size.height).max(right.origin.y + right.size.height));
+    // 外圈停靠带:距内容区右缘 2px、纵向居中。
+    let drop = point(px(x1 - 2.0), px((y0 + y1) * 0.5));
+
+    let row = window
+        .debug_bounds("sidebar-tab-1")
+        .expect("源 tab 行必须绘制");
+    window.simulate_mouse_down(row.center(), MouseButton::Left, Modifiers::default());
+    draw_frame(&mut window);
+    window.simulate_mouse_move(drop, MouseButton::Left, Modifiers::default());
+    draw_frame(&mut window);
+
+    let preview = window
+        .debug_bounds("tab-dock-preview")
+        .expect("外圈落点必须画出停靠预览");
+    assert!(
+        (f32::from(preview.size.width) - (x1 - x0) * 0.5).abs() < 3.0,
+        "根级停靠预览应占内容区一半宽: {preview:?}"
+    );
+    assert!(
+        (f32::from(preview.origin.x + preview.size.width) - x1).abs() < 1.0,
+        "Right 停靠预览应贴内容区右缘"
+    );
+
+    window.simulate_mouse_up(drop, MouseButton::Left, Modifiers::default());
+    window.run_until_parked();
+    window.refresh().unwrap();
+    draw_frame(&mut window);
+
+    assert_eq!(
+        workspace.read_with(cx, |ws, _| ws.tab_count()),
+        1,
+        "源 tab 并入后消失"
+    );
+    let (panes, leaves, focused, zoomed) = workspace
+        .read_with(cx, |ws, _| ws.active_tab_snapshot())
+        .expect("活跃终端必须存在");
+    assert_eq!(panes, leaves, "停靠后 panes 与树叶必须恒等");
+    assert_eq!(
+        leaves,
+        vec![PaneId(1), PaneId(2), PaneId(3)],
+        "整棵树按 Right 嫁接到根"
+    );
+    assert_eq!(focused, PaneId(3), "焦点交被拖入 tab 的聚焦 pane");
+    assert!(!zoomed);
+    for selector in ["slterm-pane-1", "slterm-pane-2", "slterm-pane-3"] {
+        assert!(
+            window.debug_bounds(selector).is_some(),
+            "{selector} 必须绘制(提交后树形与渲染生效)"
+        );
+    }
+}
+
+/// tab 行拖到 pane 内四分位:只切该 pane,预览形状半卡。
+#[gpui::test]
+fn tab_drag_into_a_pane_quadrant_splits_only_that_pane(cx: &mut TestAppContext) {
+    let (workspace, mut window) = two_tabs_with_target_split(cx);
+    let pane1 = workspace.read_with(cx, |ws, _| ws.pane_bounds_of(PaneId(1)).unwrap());
+    // 距左缘 20px(越过 14px 外圈带),纵向居中 → pane1 的最近边 = Left。
+    let drop = point(
+        pane1.origin.x + px(20.0),
+        pane1.origin.y + pane1.size.height * 0.5,
+    );
+
+    let row = window
+        .debug_bounds("sidebar-tab-1")
+        .expect("源 tab 行必须绘制");
+    window.simulate_mouse_down(row.center(), MouseButton::Left, Modifiers::default());
+    draw_frame(&mut window);
+    window.simulate_mouse_move(drop, MouseButton::Left, Modifiers::default());
+    draw_frame(&mut window);
+
+    let preview = window
+        .debug_bounds("tab-dock-preview")
+        .expect("pane 落点必须画出停靠预览");
+    assert!(
+        (f32::from(preview.size.width) - f32::from(pane1.size.width) * 0.5).abs() < 3.0,
+        "pane 四分位预览应占该 pane 一半宽: {preview:?}"
+    );
+    assert!(
+        (f32::from(preview.size.height) - f32::from(pane1.size.height)).abs() < 1.0,
+        "Left 停靠预览应占满目标 pane 高度"
+    );
+
+    window.simulate_mouse_up(drop, MouseButton::Left, Modifiers::default());
+    window.run_until_parked();
+    window.refresh().unwrap();
+    draw_frame(&mut window);
+
+    assert_eq!(workspace.read_with(cx, |ws, _| ws.tab_count()), 1);
+    let (mut panes, mut leaves, focused, zoomed) = workspace
+        .read_with(cx, |ws, _| ws.active_tab_snapshot())
+        .expect("活跃终端必须存在");
+    panes.sort();
+    leaves.sort();
+    assert_eq!(panes, leaves, "停靠后 panes 与树叶必须恒等");
+    assert_eq!(
+        workspace.read_with(cx, |ws, _| ws.active_tab_snapshot().unwrap().1),
+        vec![PaneId(3), PaneId(1), PaneId(2)],
+        "源树插到 pane1 左侧,其余分屏不动"
+    );
+    assert_eq!(focused, PaneId(3));
+    assert!(!zoomed);
+}
+
+/// 落点消失退回:手势途中目标 pane 被关,松手必须 Err(source) 原样退回,
+/// 源 tab 的 panes/树/身份一样不少。
+#[gpui::test]
+fn tab_drag_rolls_back_when_the_target_pane_disappears(cx: &mut TestAppContext) {
+    let (workspace, mut window) = two_tabs_with_target_split(cx);
+    let source_id = workspace.read_with(cx, |ws, _| ws.tab_id_at(1).unwrap());
+    let pane2 = workspace.read_with(cx, |ws, _| ws.pane_bounds_of(PaneId(2)).unwrap());
+    let drop = pane2.center();
+
+    let row = window
+        .debug_bounds("sidebar-tab-1")
+        .expect("源 tab 行必须绘制");
+    window.simulate_mouse_down(row.center(), MouseButton::Left, Modifiers::default());
+    draw_frame(&mut window);
+    window.simulate_mouse_move(drop, MouseButton::Left, Modifiers::default());
+    draw_frame(&mut window);
+    assert!(
+        window.debug_bounds("tab-dock-preview").is_some(),
+        "悬停目标 pane 时必须已有落点"
+    );
+
+    // 手势途中关掉目标 pane(活跃 tab 的聚焦 pane = pane2):落点从树上消失。
+    window.dispatch_action(CloseActivePane);
+    window.run_until_parked();
+    draw_frame(&mut window);
+    let (panes, leaves, ..) = workspace
+        .read_with(cx, |ws, _| ws.active_tab_snapshot())
+        .expect("活跃终端必须存在");
+    assert_eq!(panes, vec![PaneId(1)], "目标 pane 已关闭");
+    assert_eq!(leaves, vec![PaneId(1)]);
+
+    // 松手仍按缓存落点提交 → dock_at_leaf 返回 Err(source) → 原样退回。
+    window.simulate_mouse_up(drop, MouseButton::Left, Modifiers::default());
+    window.run_until_parked();
+    window.refresh().unwrap();
+    draw_frame(&mut window);
+
+    assert_eq!(
+        workspace.read_with(cx, |ws, _| ws.tab_count()),
+        2,
+        "源 tab 必须退回"
+    );
+    assert_eq!(workspace.read_with(cx, |ws, _| ws.active_tab_index()), 0);
+    assert_eq!(
+        workspace.read_with(cx, |ws, _| ws.tab_id_at(1)),
+        Some(source_id),
+        "稳定身份与位置原样保留"
+    );
+    let (panes, leaves) = workspace
+        .read_with(cx, |ws, _| ws.tab_snapshot(1))
+        .expect("源 tab 必须存活");
+    assert_eq!(panes, vec![PaneId(3)]);
+    assert_eq!(leaves, vec![PaneId(3)], "源树未被半提交");
+    assert_eq!(
+        workspace.read_with(cx, |ws, _| ws.tab_snapshot(0).unwrap().1),
+        vec![PaneId(1)],
+        "目标 tab 保持关闭后的树"
+    );
+}
+
+/// split_bounds 键修复:关闭 tab 清除其缓存键,幸存 tab 的键不随下标漂移;
+/// 关 tab 后拖分隔条仍按幸存 tab 自己的上一帧矩形换算。
+#[gpui::test]
+fn closing_a_tab_purges_its_split_bounds_and_keeps_dragging_correct(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    window.dispatch_action(SplitRight);
+    window.run_until_parked();
+    draw_frame(&mut window);
+    let first_id = workspace.read_with(cx, |ws, _| ws.tab_id_at(0).unwrap());
+
+    window.dispatch_action(NewTerminalTab);
+    window.run_until_parked();
+    window.dispatch_action(SplitRight);
+    window.run_until_parked();
+    draw_frame(&mut window);
+    let second_id = workspace.read_with(cx, |ws, _| ws.tab_id_at(1).unwrap());
+    let keys_before = workspace.read_with(cx, |ws, _| ws.split_bounds_keys());
+    assert!(
+        keys_before.iter().any(|(tab, _)| *tab == first_id)
+            && keys_before.iter().any(|(tab, _)| *tab == second_id),
+        "两个 tab 都应留下节点矩形键: {keys_before:?}"
+    );
+
+    // 关掉第一个 tab:幸存 tab 前移到下标 0。
+    window.dispatch_action(SelectPreviousTab);
+    window.run_until_parked();
+    window.dispatch_action(CloseActiveTab);
+    window.run_until_parked();
+    window.refresh().unwrap();
+    draw_frame(&mut window);
+
+    let keys_after = workspace.read_with(cx, |ws, _| ws.split_bounds_keys());
+    assert!(
+        !keys_after.iter().any(|(tab, _)| *tab == first_id),
+        "关闭 tab 的缓存键必须清除: {keys_after:?}"
+    );
+    assert!(
+        keys_after.iter().any(|(tab, _)| *tab == second_id),
+        "幸存 tab 的键随稳定身份保留"
+    );
+
+    // 幸存 tab 现处于下标 0;分隔条拖拽读的是它自己的矩形。
+    let ratio_before = workspace.read_with(cx, |ws, _| ws.active_split_ratio().unwrap());
+    let divider = window
+        .debug_bounds("split-divider-0-[]")
+        .expect("幸存 tab 的分隔条必须绘制");
+    let start = divider.center();
+    window.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+    draw_frame(&mut window);
+    let target = point(start.x + px(60.0), start.y);
+    window.simulate_mouse_move(target, MouseButton::Left, Modifiers::default());
+    draw_frame(&mut window);
+    window.simulate_mouse_up(target, MouseButton::Left, Modifiers::default());
+    window.run_until_parked();
+    window.refresh().unwrap();
+    draw_frame(&mut window);
+
+    let ratio_after = workspace.read_with(cx, |ws, _| ws.active_split_ratio().unwrap());
+    assert!(
+        ratio_after > ratio_before + 0.01,
+        "关 tab 后分隔条拖拽仍须生效: {ratio_before} -> {ratio_after}"
+    );
+}
+
+/// 重排后键随 tab 走:TabId 键不随位置平移,重排前后键集合逐项相等。
+#[gpui::test]
+fn split_bounds_keys_follow_the_tab_identity_across_reorder(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    window.dispatch_action(SplitRight);
+    window.run_until_parked();
+    draw_frame(&mut window);
+    window.dispatch_action(NewTerminalTab);
+    window.run_until_parked();
+    window.dispatch_action(SplitRight);
+    window.run_until_parked();
+    draw_frame(&mut window);
+
+    let keys_before = workspace.read_with(cx, |ws, _| ws.split_bounds_keys());
+    let first_id = workspace.read_with(cx, |ws, _| ws.tab_id_at(0).unwrap());
+    let second_id = workspace.read_with(cx, |ws, _| ws.tab_id_at(1).unwrap());
+
+    workspace.update(cx, |ws, _| ws.move_tab_for_test(0, 1));
+    window.refresh().unwrap();
+    draw_frame(&mut window);
+
+    assert_eq!(
+        workspace.read_with(cx, |ws, _| ws.tab_id_at(0)),
+        Some(second_id),
+        "重排后第一个位置是原第二个 tab"
+    );
+    assert_eq!(
+        workspace.read_with(cx, |ws, _| ws.tab_id_at(1)),
+        Some(first_id)
+    );
+    let keys_after = workspace.read_with(cx, |ws, _| ws.split_bounds_keys());
+    assert_eq!(
+        keys_after, keys_before,
+        "矩形缓存键随稳定 TabId 走,不随下标平移"
+    );
+}
+
 /// M5.3a 问题 1:`-e` 启动的 tab 在建 tab 时把完整命令冻结进
 /// `TabMeta.launch`(M5.5 快照/恢复按此重建)。
 #[gpui::test]

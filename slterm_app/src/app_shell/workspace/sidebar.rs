@@ -28,6 +28,10 @@ use super::SltermWorkspace;
 
 /// ActivityBar 固定宽度(旧栈同值 46)。
 pub(crate) const ACTIVITY_BAR_SIZE: f32 = 46.0;
+/// 侧栏 tab 行高度(旧壳纵向列表同档 30)。
+const TAB_ROW_HEIGHT: f32 = 30.0;
+/// 相邻 tab 行间距。
+const TAB_ROW_GAP: f32 = 2.0;
 /// 宽度拖拽热区宽度(内容区右缘竖条)。
 pub(crate) const SIDEBAR_RESIZE_HANDLE_WIDTH: f32 = 4.0;
 /// 侧栏内容区默认宽度。
@@ -354,37 +358,108 @@ impl SltermWorkspace {
             .into_any_element()
     }
 
-    /// 双槽内容区。hidden 或 collapsed 时不占布局;split 时上下各半
-    /// (旧栈 splitRatio 未进本形态 schema,固定对分)。
+    /// 侧栏列:顶部常驻 tab 列表 + 其下双槽内容区。
+    ///
+    /// tab 列表不随双槽全空而消失——它是切换 tab 与拖拽停靠的入口;
+    /// collapsed 才整列隐藏(由 workspace 根判定)。
     pub(super) fn render_sidebar_content(&self, cx: &mut Context<'_, Self>) -> AnyElement {
         let layout = derive_layout(&self.sidebar);
-        if self.sidebar.collapsed || layout == SidebarLayout::Hidden {
-            return div().into_any_element();
-        }
+        let views_open = layout != SidebarLayout::Hidden && !self.sidebar.collapsed;
         let top_open = self.sidebar.active_view_top.is_some();
         let bottom_open = self.sidebar.active_view_bottom.is_some();
         div()
-            .id("sidebar-area")
-            .debug_selector(|| "sidebar-area".to_owned())
+            .id("sidebar-column")
+            .debug_selector(|| "sidebar-column".to_owned())
             .size_full()
             .flex()
             .flex_col()
-            .bg(cx.theme().sidebar)
-            .when(top_open, |area| {
-                area.child(self.render_view_slot(SidebarZone::Top, cx))
-            })
-            .when(top_open && bottom_open, |area| {
-                area.child(
+            // 待命阶段的指针跟踪(激活后由根部罩层独占)。
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                this.update_tab_drag(event, window, cx);
+            }))
+            .child(self.render_tab_list(cx))
+            .when(views_open, |column| {
+                column.child(
                     div()
-                        .h(px(1.0))
+                        .id("sidebar-area")
+                        .debug_selector(|| "sidebar-area".to_owned())
+                        .flex_1()
+                        .min_h_0()
                         .w_full()
-                        .flex_shrink_0()
-                        .bg(cx.theme().sidebar_border),
+                        .flex()
+                        .flex_col()
+                        .bg(cx.theme().sidebar)
+                        .when(top_open, |area| {
+                            area.child(self.render_view_slot(SidebarZone::Top, cx))
+                        })
+                        .when(top_open && bottom_open, |area| {
+                            area.child(
+                                div()
+                                    .h(px(1.0))
+                                    .w_full()
+                                    .flex_shrink_0()
+                                    .bg(cx.theme().sidebar_border),
+                            )
+                        })
+                        .when(bottom_open, |area| {
+                            area.child(self.render_view_slot(SidebarZone::Bottom, cx))
+                        }),
                 )
             })
-            .when(bottom_open, |area| {
-                area.child(self.render_view_slot(SidebarZone::Bottom, cx))
-            })
+            .into_any_element()
+    }
+
+    /// 侧栏 tab 列表(05 篇:左侧垂直 tab 侧边栏)。
+    ///
+    /// 行是 tab 拖拽的源:按下进入待命态,越过阈值后拖进终端区停靠。
+    /// 徽章/新建钮/折叠槽与右键菜单归后续步骤。
+    pub(super) fn render_tab_list(&self, cx: &mut Context<'_, Self>) -> AnyElement {
+        let active = self.active;
+        let active_bg = cx.theme().sidebar_accent;
+        let active_fg = cx.theme().sidebar_accent_foreground;
+        let muted = cx.theme().muted_foreground;
+        let hover_bg = cx.theme().list_hover;
+        let rows = self.tabs.iter().enumerate().map(|(ix, entry)| {
+            let title = self.tab_title(ix, cx);
+            let is_active = ix == active;
+            let tab_id = entry.id;
+            div()
+                .id(SharedString::from(format!("sidebar-tab-{ix}")))
+                .debug_selector(move || format!("sidebar-tab-{ix}"))
+                .h(px(TAB_ROW_HEIGHT))
+                .w_full()
+                .flex_shrink_0()
+                .px(px(8.0))
+                .flex()
+                .items_center()
+                .rounded(px(6.0))
+                .cursor_pointer()
+                .text_size(px(12.0))
+                .when(is_active, |row| row.bg(active_bg).text_color(active_fg))
+                .when(!is_active, |row| {
+                    row.text_color(muted).hover(move |style| style.bg(hover_bg))
+                })
+                .child(div().min_w_0().truncate().child(title))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.activate_tab(ix, window, cx);
+                }))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, event: &MouseDownEvent, _, _| {
+                        this.begin_tab_drag(tab_id, event.position);
+                    }),
+                )
+        });
+        div()
+            .id("sidebar-tabs")
+            .debug_selector(|| "sidebar-tabs".to_owned())
+            .w_full()
+            .flex_shrink_0()
+            .flex()
+            .flex_col()
+            .gap(px(TAB_ROW_GAP))
+            .py(px(6.0))
+            .children(rows)
             .into_any_element()
     }
 

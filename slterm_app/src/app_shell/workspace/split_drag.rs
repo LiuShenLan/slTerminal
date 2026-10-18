@@ -15,8 +15,8 @@ use gpui::{
 };
 use gpui_component::ActiveTheme as _;
 use slterm_split::{
-    DIVIDER_GAP, PaneId, SplitDirection, SplitTree, commit_ratio, drag_close_target, drag_ratio,
-    preview_ratio as preview_curve_ratio,
+    DIVIDER_GAP, PaneId, SplitDirection, SplitTree, TabId, commit_ratio, drag_close_target,
+    drag_ratio, preview_ratio as preview_curve_ratio,
 };
 
 use super::{SltermWorkspace, WorkspaceTab, to_split_rect};
@@ -25,7 +25,8 @@ use crate::gpui_terminal::view::TerminalView;
 /// 进行中的分隔条拖拽:目标 Split 节点以树路径寻址(`Divider` 同语义)。
 /// 指针 → 比例的换算依赖 `SplitBoundsStore` 记录的该节点上一帧视口矩形。
 pub(super) struct SplitDrag {
-    pub tab: usize,
+    /// 稳定 tab 身份(手势期间关 tab/重排不漂移);节点矩形缓存同键。
+    pub tab: TabId,
     pub path: Vec<bool>,
     pub direction: SplitDirection,
     /// 轻量视觉预览。pane flex 树在松手前始终用提交比例,拖拽不重排网格。
@@ -214,6 +215,12 @@ impl SltermWorkspace {
         let Some(drag) = self.split_drag.take() else {
             return;
         };
+        // 手势期间 tab 可能被关(终端退出等):下标按稳定身份现查,查不到
+        // 即放弃提交——缓存键不会指向别的 tab。
+        let Some(tab_ix) = self.tabs.iter().position(|entry| entry.id == drag.tab) else {
+            cx.notify();
+            return;
+        };
         let viewport = self
             .split_bounds
             .borrow()
@@ -229,7 +236,7 @@ impl SltermWorkspace {
         let mut close_target: Option<PaneId> = None;
         if let Some(raw) = raw
             && let Some(WorkspaceTab::Terminal { tree, .. }) =
-                self.tabs.get_mut(drag.tab).map(|entry| &mut entry.tab)
+                self.tabs.get_mut(tab_ix).map(|entry| &mut entry.tab)
             && let Some(SplitTree::Split { first, second, .. }) = tree.node_mut(&drag.path)
             && let Some(squeezed_second) = drag_close_target(raw)
         {
@@ -245,7 +252,7 @@ impl SltermWorkspace {
         if let Some(pane_id) = close_target {
             // 先清拖拽态再关 pane,避免确认/收编路径背后残留高亮分隔线。
             if let Some(WorkspaceTab::Terminal { tree, .. }) =
-                self.tabs.get_mut(drag.tab).map(|entry| &mut entry.tab)
+                self.tabs.get_mut(tab_ix).map(|entry| &mut entry.tab)
                 && let Some(SplitTree::Split {
                     preview_ratio,
                     dragging,
@@ -261,7 +268,7 @@ impl SltermWorkspace {
         }
 
         if let Some(WorkspaceTab::Terminal { tree, .. }) =
-            self.tabs.get_mut(drag.tab).map(|entry| &mut entry.tab)
+            self.tabs.get_mut(tab_ix).map(|entry| &mut entry.tab)
             && let Some(SplitTree::Split {
                 ratio,
                 preview_ratio,
@@ -281,7 +288,7 @@ impl SltermWorkspace {
             *dragging = false;
         }
         // 松手提交 = 几何一次性落定,PTY 同步下发,不进尾沿去抖。
-        self.mark_structural_resize(drag.tab, cx);
+        self.mark_structural_resize(tab_ix, cx);
         cx.notify();
     }
 }
