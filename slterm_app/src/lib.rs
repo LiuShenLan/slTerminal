@@ -38,6 +38,13 @@ pub(crate) mod agent_env;
 pub(crate) mod assistant_answer;
 pub mod brand;
 pub(crate) mod cli;
+// 补全应用层(08 篇 M9.1):Session/Request 分层、来源缓存与后台计算。
+// ghost/popup 呈现与按键接线归 M9.5;引擎本体在 slterm_completions。
+#[allow(dead_code)] // 消费点归 M9.5 终端输入路径。
+pub(crate) mod completion;
+// frecency 目录智能(08 篇 M9.1):cd 补全与目录 ghost 的数据源。
+#[allow(dead_code)] // 消费点归 M9.5 ghost/path 来源。
+pub(crate) mod directory_history;
 // 有界前缀读取(07 篇):内存上限先于解码生效。
 pub(crate) mod document_io;
 // 事务型 Git worktree(07 篇边界,04 篇 agent.fork 消费):只回滚本事务
@@ -46,8 +53,14 @@ pub mod error;
 // git 子进程执行体 facade(07 篇 D07-1 已裁):M8.1 只读面 = 仓库根 +
 // HEAD 字节(gitshow 数据源);四方法执行归 M8.5。
 pub(crate) mod git;
+// 有界本地 Git 发现(08 篇 M9.1):3s/1MB 双预算 + TTL + 代次失效。
+#[allow(dead_code)]
+pub(crate) mod git_completion;
 pub(crate) mod git_worktree;
 pub(crate) mod gpui_terminal;
+// fish 式本地历史(08 篇 M9.1):单池 jsonl + 前缀 range。
+#[allow(dead_code)] // 消费点归 M9.5 提交事件与 ghost。
+pub(crate) mod history;
 // 界面语言(06 篇 M6.4):build.rs 静态生成的 typed Message 查询 API;
 // 运行时零解析、零文件读、零锁。
 pub(crate) mod i18n;
@@ -68,6 +81,9 @@ pub(crate) mod side_panel;
 // settings.json 写通道适配层(06 篇 M6.1):白名单校验/保存锁/原子写/.bak/
 // 损坏三态;`slterm-settings` 保持值权威与零生产依赖。
 pub(crate) mod settings_store;
+// 补全/建议计算核心(08 篇 M9.1):ghost 余量与 popup 多候选同源。
+#[allow(dead_code)] // 消费点归 M9.5 呈现接线。
+pub(crate) mod suggest;
 pub(crate) mod terminal_registry;
 // 文本快照(07 篇):编码/行尾/只读合同单点;M8.2 编辑内核的共享底座。
 pub(crate) mod text_document;

@@ -49,6 +49,12 @@ impl PaneExecContext {
         self.shell_program.as_deref()
     }
 
+    /// 创建 pane 时冻结的环境覆盖;非 TTY 子进程(补全 Git 读取)复用同一份,
+    /// 保证代理/凭据等设置与 pane 内 shell 一致。
+    pub(crate) fn environment(&self) -> &HashMap<String, String> {
+        &self.env
+    }
+
     pub(crate) fn process_instance(&self) -> Option<&str> {
         self.env
             .get(crate::agent_env::PROCESS_ENV)

@@ -44,7 +44,7 @@ pub enum Source {
     Options,
     /// 已知的自由形态值不得混入无关的历史/路径候选。
     None,
-    // SshHosts / WslDistributions 两变体随远程能力整砍(spec 不采纳点 1/2)。
+    // 远程主机与发行版两变体随远程能力整砍(spec 不采纳点 1/2)。
 }
 
 #[derive(Debug)]

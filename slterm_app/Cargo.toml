@@ -51,6 +51,12 @@ slterm_terminal = { path = "../slterm_terminal" }
 slterm-settings = { path = "../slterm_settings" }
 # PaneId/TabId + SplitTree 分屏树(纯数据 core,M3 workspace 雏形挂接)。
 slterm-split = { path = "../slterm_split" }
+# 补全匹配/语义引擎(core crate,08 篇 M9.1):独立轻量库,应用层只消费候选。
+slterm_completions = { path = "../slterm_completions" }
+# workspace 选择器 glob 语义(只读 package.json/yaml 声明,不执行项目代码)。
+glob = "0.3.4"
+# pnpm-workspace.yaml 的 packages 列表解析(声明式只读,不导入项目代码)。
+serde_yaml = "0.9"
 # vte 类型面(Color/CursorShape/NamedColor/Rgb + 测试注入 Processor):
 # core 刻意不再导出(「解析器不经本 crate 再导出」),壳侧同名钉版,
 # 版本/feature 必须与 slterm_terminal/Cargo.toml 逐字一致,跨 crate 类型才同一。
