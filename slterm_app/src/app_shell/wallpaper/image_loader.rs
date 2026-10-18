@@ -85,9 +85,7 @@ pub(super) fn load(request: Request) -> Result<Option<LoadedImage>, LoadError> {
 
 /// 设置页预览加载:同一条有界管线,结果再压到 512 边/1 MiB 以内。
 ///
-/// 消费点 = 06 篇设置页壁纸预览(当前设置页只有 opacity/blur 控件,
-/// 预览接入归后续步骤);本片先交付可测的加载语义。
-#[allow(dead_code)]
+/// 消费点 = 外观页壁纸预览(`wallpaper::load_preview_async`,后台执行器)。
 pub(super) fn load_preview(request: Request) -> Result<Option<LoadedImage>, LoadError> {
     let _preparation = PREPARATION
         .lock()

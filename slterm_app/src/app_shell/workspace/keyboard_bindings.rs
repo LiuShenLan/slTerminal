@@ -16,7 +16,7 @@
 use std::io;
 use std::path::Path;
 
-use gpui::{App, KeyBinding};
+use gpui::{App, Global, KeyBinding};
 use slterm_settings::keys::KEYBIND_SEGMENT;
 
 use super::super::file_editor::{SaveFile, ToggleSource};
@@ -28,13 +28,13 @@ use super::{
 
 /// 设置面可重绑动作(顺序 = 展示顺序;名称即 `keybind` 段 `action` 值)。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct EditableAction {
+pub(crate) struct EditableAction {
     pub name: &'static str,
     pub label_zh: &'static str,
     pub label_en: &'static str,
 }
 
-pub(super) const EDITABLE_ACTIONS: &[EditableAction] = &[
+pub(crate) const EDITABLE_ACTIONS: &[EditableAction] = &[
     // -- 编辑器 --
     EditableAction {
         name: "save_file",
@@ -121,9 +121,8 @@ pub(super) const EDITABLE_ACTIONS: &[EditableAction] = &[
     },
 ];
 
-/// 保留键(只读展示;用户表不可绑定/覆盖)。
-#[allow(dead_code)] // 消费点 = 设置面键位只读行(M8.5 落结构,编辑 UI 归后续)。
-pub(super) const RESERVED_ROWS: &[(&str, &str, &str)] = &[
+/// 保留键(只读展示;用户表不可绑定/覆盖)。消费点 = 设置面键位只读行。
+pub(crate) const RESERVED_ROWS: &[(&str, &str, &str)] = &[
     (
         "interrupt",
         "中断（终端保留）",
@@ -143,7 +142,6 @@ pub(super) const RESERVED_COMBOS: &[&str] = &["ctrl+c", "ctrl+shift+c"];
 /// 默认绑定镜像(combo, action):「恢复默认」写回这张表,「Unbind」按
 /// 同表精确收回;与 [`default_workspace_bindings`] 及 file_editor 默认键
 /// 同源维护,测试锁定解析往返。
-#[allow(dead_code)] // 消费点 = 恢复默认/Unbind 精确收回(M8.5 落语义,编辑 UI 归后续)。
 pub(super) const STATIC_DEFAULT_COMBOS: &[(&str, &str)] = &[
     ("ctrl+shift+d", "split_right"),
     ("ctrl+shift+s", "split_down"),
@@ -206,7 +204,7 @@ pub(super) fn gpui_binding_combo(combo: &str) -> String {
 }
 
 /// 保留 combo 判定(规范化比较)。
-pub(super) fn is_reserved_combo(combo: &str) -> bool {
+pub(crate) fn is_reserved_combo(combo: &str) -> bool {
     let normalized = gpui_binding_combo(combo);
     RESERVED_COMBOS
         .iter()
@@ -214,12 +212,12 @@ pub(super) fn is_reserved_combo(combo: &str) -> bool {
 }
 
 /// 用户表准入:已知动作 + 非保留键 + GPUI 可解析;其余整行拒绝(notice 用)。
-pub(super) struct KeybindAdmission {
+pub(crate) struct KeybindAdmission {
     pub accepted: Vec<(String, String)>,
     pub rejected: Vec<(String, String)>,
 }
 
-pub(super) fn admit_keybind_pairs(pairs: Vec<(String, String)>) -> KeybindAdmission {
+pub(crate) fn admit_keybind_pairs(pairs: Vec<(String, String)>) -> KeybindAdmission {
     let mut admission = KeybindAdmission {
         accepted: Vec::new(),
         rejected: Vec::new(),
@@ -238,7 +236,6 @@ pub(super) fn admit_keybind_pairs(pairs: Vec<(String, String)>) -> KeybindAdmiss
 }
 
 /// 动作的默认 combo 集(存储格式)。
-#[allow(dead_code)] // 消费点 = clear_action/reset_action。
 fn default_combos_for(action: &str) -> Vec<String> {
     STATIC_DEFAULT_COMBOS
         .iter()
@@ -248,9 +245,8 @@ fn default_combos_for(action: &str) -> Vec<String> {
 }
 
 /// 解绑:撤掉该动作的自定义行,并把它的默认 combo 落成 `none`(精确收回,
-/// 旧键透传终端;同键已被别的动作显式占用时不覆盖)。
-#[allow(dead_code)] // 消费点 = 设置面「解绑」动作(M8.5 落语义,编辑 UI 归后续)。
-pub(super) fn clear_action(pairs: &mut Vec<(String, String)>, action: &str) {
+/// 旧键透传终端;同键已被别的动作显式占用时不覆盖)。消费点 = 设置面「解绑」。
+pub(crate) fn clear_action(pairs: &mut Vec<(String, String)>, action: &str) {
     pairs.retain(|(_, candidate)| candidate != action);
     for combo in default_combos_for(action) {
         let normalized = gpui_binding_combo(&combo);
@@ -271,8 +267,8 @@ pub(super) fn clear_action(pairs: &mut Vec<(String, String)>, action: &str) {
 }
 
 /// 恢复默认:撤掉该动作的自定义行与该动作默认键的 `none` 标记。
-#[allow(dead_code)] // 消费点 = 设置面「恢复默认」动作(M8.5 落语义,编辑 UI 归后续)。
-pub(super) fn reset_action(pairs: &mut Vec<(String, String)>, action: &str) {
+/// 消费点 = 设置面「恢复默认」动作。
+pub(crate) fn reset_action(pairs: &mut Vec<(String, String)>, action: &str) {
     let defaults = default_combos_for(action);
     pairs.retain(|(combo, name)| {
         name != action
@@ -283,39 +279,156 @@ pub(super) fn reset_action(pairs: &mut Vec<(String, String)>, action: &str) {
     });
 }
 
-/// 应用用户绑定(启动路径;测试可直调注入 pairs)。
-pub(super) fn bind_user_keybinds(cx: &mut App, pairs: &[(String, String)]) {
-    let admission = admit_keybind_pairs(pairs.to_vec());
-    for (combo, action) in admission.accepted {
-        let combo = gpui_binding_combo(&combo);
+/// 把动作重绑到新组合:撤旧行、清同组合解绑标记,再追加到表尾
+/// (行序尾 = 用户表最高优先级)。消费点 = 设置面录制写回。
+pub(crate) fn rebind_action(pairs: &mut Vec<(String, String)>, action: &str, combo: &str) {
+    reset_action(pairs, action);
+    let normalized = gpui_binding_combo(combo);
+    pairs.retain(|(candidate, name)| {
+        !(matches!(name.as_str(), "none" | "unbound")
+            && gpui_binding_combo(candidate) == normalized)
+    });
+    pairs.push((combo.to_owned(), action.to_owned()));
+}
+
+/// 动作当前生效组合(展示用,存储格式):用户表优先;默认组合被
+/// `none`/`unbound` 精确收回时不展示;返回空 = 未绑定。
+pub(crate) fn effective_combos(pairs: &[(String, String)], action: &str) -> Vec<String> {
+    let custom: Vec<String> = pairs
+        .iter()
+        .filter(|(_, candidate)| candidate.as_str() == action)
+        .map(|(combo, _)| combo.clone())
+        .collect();
+    if !custom.is_empty() {
+        return custom;
+    }
+    default_combos_for(action)
+        .into_iter()
+        .filter(|default| {
+            let normalized = gpui_binding_combo(default);
+            !pairs.iter().any(|(combo, name)| {
+                matches!(name.as_str(), "none" | "unbound")
+                    && gpui_binding_combo(combo) == normalized
+            })
+        })
+        .collect()
+}
+
+/// 保留键只读展示行:(展示组合, 中文说明, 英文说明)。与
+/// [`RESERVED_COMBOS`] 同源同序,设置面只读区消费。
+pub(crate) fn reserved_display_rows() -> [(&'static str, &'static str, &'static str); 2] {
+    [
+        ("Ctrl+C", RESERVED_ROWS[0].1, RESERVED_ROWS[0].2),
+        ("Ctrl+Shift+C", RESERVED_ROWS[1].1, RESERVED_ROWS[1].2),
+    ]
+}
+
+/// 启动时捕获的 keymap 快照(内置组件 + 文件编辑器 + 工作区默认绑定)。
+///
+/// `clear_key_bindings` 会连组件内置绑定一起清掉,而组件 init 不可重入,
+/// 因此热重建只能回放这份基底,不能重新调用各组件 init。
+#[derive(Clone, Default)]
+pub(crate) struct KeymapBase(pub(crate) Vec<KeyBinding>);
+
+impl Global for KeymapBase {}
+
+/// 当前已应用的用户绑定表(准入后、行序保持);设置变更时据此判等。
+#[derive(Clone, Default)]
+pub(crate) struct InstalledUserKeybinds(pub(crate) Vec<(String, String)>);
+
+impl Global for InstalledUserKeybinds {}
+
+/// 启动快照:在默认绑定全部就位之后、用户表安装之前调用一次。
+pub(crate) fn capture_keymap_base(cx: &mut App) {
+    let bindings: Vec<KeyBinding> = {
+        let keymap = cx.key_bindings();
+        keymap.borrow().bindings().cloned().collect()
+    };
+    cx.set_global(KeymapBase(bindings));
+    if cx.try_global::<InstalledUserKeybinds>().is_none() {
+        cx.set_global(InstalledUserKeybinds(Vec::new()));
+    }
+}
+
+/// 用户动作名 → 具体 GPUI 绑定(启动安装与热重建共用同一张单源表)。
+///
+/// `save_file`/`toggle_source` 只在 `FileEditor` 上下文注册;`none`/`unbound`
+/// 绑定到 `NoAction`(同一 combo 的先前绑定被禁用,旧键透传)。
+fn action_binding(combo: &str, action: &str) -> Option<KeyBinding> {
+    Some(match action {
+        "save_file" => KeyBinding::new(combo, SaveFile, Some("FileEditor")),
+        "toggle_source" => KeyBinding::new(combo, ToggleSource, Some("FileEditor")),
+        "new_terminal_tab" => KeyBinding::new(combo, NewTerminalTab, None),
+        "select_next_tab" => KeyBinding::new(combo, SelectNextTab, None),
+        "select_previous_tab" => KeyBinding::new(combo, SelectPreviousTab, None),
+        "close_active_tab" => KeyBinding::new(combo, CloseActiveTab, None),
+        "split_right" => KeyBinding::new(combo, SplitRight, None),
+        "split_down" => KeyBinding::new(combo, SplitDown, None),
+        "toggle_zoom" => KeyBinding::new(combo, ToggleZoom, None),
+        "focus_pane_left" => KeyBinding::new(combo, FocusPaneLeft, None),
+        "focus_pane_right" => KeyBinding::new(combo, FocusPaneRight, None),
+        "focus_pane_up" => KeyBinding::new(combo, FocusPaneUp, None),
+        "focus_pane_down" => KeyBinding::new(combo, FocusPaneDown, None),
+        "close_active_pane" => KeyBinding::new(combo, CloseActivePane, None),
+        "toggle_sidebar" => KeyBinding::new(combo, ToggleSidebar, None),
+        "open_settings" => KeyBinding::new(combo, OpenSettings, None),
+        "none" | "unbound" => KeyBinding::new(combo, gpui::NoAction, None),
+        _ => return None,
+    })
+}
+
+/// 已被用户表接管(重绑)的动作名:热重建时从基底中剔除其默认绑定,
+/// 保证旧组合不再触发(行序追加无法撤销同动作的旧键)。
+fn overridden_action_names(accepted: &[(String, String)]) -> Vec<&'static str> {
+    accepted
+        .iter()
+        .filter(|(_, action)| !matches!(action.as_str(), "none" | "unbound"))
+        .filter_map(|(_, action)| {
+            action_binding("f24", action).map(|binding| binding.action().name())
+        })
+        .collect()
+}
+
+/// 绑定准入后的用户表(调用方已完成准入或由 [`rebuild_keymap`] 内部完成)。
+fn bind_admitted(cx: &mut App, accepted: &[(String, String)]) {
+    for (combo, action) in accepted {
+        let combo = gpui_binding_combo(combo);
         if gpui::Keystroke::parse(&combo).is_err() {
             continue;
         }
-        match action.as_str() {
-            "save_file" => cx.bind_keys([KeyBinding::new(&combo, SaveFile, Some("FileEditor"))]),
-            "toggle_source" => {
-                cx.bind_keys([KeyBinding::new(&combo, ToggleSource, Some("FileEditor"))])
-            }
-            "new_terminal_tab" => cx.bind_keys([KeyBinding::new(&combo, NewTerminalTab, None)]),
-            "select_next_tab" => cx.bind_keys([KeyBinding::new(&combo, SelectNextTab, None)]),
-            "select_previous_tab" => {
-                cx.bind_keys([KeyBinding::new(&combo, SelectPreviousTab, None)])
-            }
-            "close_active_tab" => cx.bind_keys([KeyBinding::new(&combo, CloseActiveTab, None)]),
-            "split_right" => cx.bind_keys([KeyBinding::new(&combo, SplitRight, None)]),
-            "split_down" => cx.bind_keys([KeyBinding::new(&combo, SplitDown, None)]),
-            "toggle_zoom" => cx.bind_keys([KeyBinding::new(&combo, ToggleZoom, None)]),
-            "focus_pane_left" => cx.bind_keys([KeyBinding::new(&combo, FocusPaneLeft, None)]),
-            "focus_pane_right" => cx.bind_keys([KeyBinding::new(&combo, FocusPaneRight, None)]),
-            "focus_pane_up" => cx.bind_keys([KeyBinding::new(&combo, FocusPaneUp, None)]),
-            "focus_pane_down" => cx.bind_keys([KeyBinding::new(&combo, FocusPaneDown, None)]),
-            "close_active_pane" => cx.bind_keys([KeyBinding::new(&combo, CloseActivePane, None)]),
-            "toggle_sidebar" => cx.bind_keys([KeyBinding::new(&combo, ToggleSidebar, None)]),
-            "open_settings" => cx.bind_keys([KeyBinding::new(&combo, OpenSettings, None)]),
-            "none" | "unbound" => cx.bind_keys([KeyBinding::new(&combo, gpui::NoAction, None)]),
-            _ => {}
+        if let Some(binding) = action_binding(&combo, action) {
+            cx.bind_keys([binding]);
         }
     }
+    cx.set_global(InstalledUserKeybinds(accepted.to_vec()));
+}
+
+/// 应用用户绑定(启动路径;测试可直调注入 pairs)。
+pub(crate) fn bind_user_keybinds(cx: &mut App, pairs: &[(String, String)]) {
+    let accepted = admit_keybind_pairs(pairs.to_vec()).accepted;
+    bind_admitted(cx, &accepted);
+}
+
+/// 热重建 keymap:clear → 回放启动基底(剔除被用户表接管的动作)→ 绑定
+/// 用户表。准入在函数内重做,保留键/坏行不落地。
+pub(crate) fn rebuild_keymap(cx: &mut App, pairs: &[(String, String)]) {
+    let accepted = admit_keybind_pairs(pairs.to_vec()).accepted;
+    let overridden = overridden_action_names(&accepted);
+    let base = cx.try_global::<KeymapBase>().cloned().unwrap_or_default().0;
+    cx.clear_key_bindings();
+    let replayed = base
+        .into_iter()
+        .filter(|binding| !overridden.contains(&binding.action().name()))
+        .collect::<Vec<_>>();
+    cx.bind_keys(replayed);
+    bind_admitted(cx, &accepted);
+}
+
+/// 当前已应用的用户绑定表(设置变更判等端)。
+pub(crate) fn applied_user_keybinds(cx: &App) -> Vec<(String, String)> {
+    cx.try_global::<InstalledUserKeybinds>()
+        .map(|installed| installed.0.clone())
+        .unwrap_or_default()
 }
 
 /// 生产启动读用户表;测试构建不读真实数据目录(与 `Settings::load` 隔离
@@ -477,6 +590,23 @@ mod keyboard_binding_tests {
         let next = vec![("ctrl+alt+r".to_owned(), "split_right".to_owned())];
         persist_keybinds_at(&path, &next).unwrap();
         assert_eq!(load_keybind_pairs_at(&path), next);
+    }
+
+    /// B7 热重建接管集合:用户表动作映射到真实 GPUI action 名;
+    /// `none`/`unbound` 不参与接管(只做同 combo 禁用)。
+    #[test]
+    fn override_set_maps_user_actions_to_gpui_action_names() {
+        let accepted = vec![
+            ("ctrl+alt+r".to_owned(), "split_right".to_owned()),
+            ("ctrl+alt+s".to_owned(), "save_file".to_owned()),
+            ("ctrl+alt+n".to_owned(), "none".to_owned()),
+        ];
+        let names = overridden_action_names(&accepted);
+        assert_eq!(names.len(), 2);
+        assert!(names.iter().any(|name| name.ends_with("SplitRight")));
+        assert!(names.iter().any(|name| name.ends_with("SaveFile")));
+        assert!(!names.iter().any(|name| name.ends_with("NoAction")));
+        assert!(action_binding("ctrl+alt+r", "not_an_action").is_none());
     }
 
     /// 缺失/损坏设置文件回空表(启动不炸)。

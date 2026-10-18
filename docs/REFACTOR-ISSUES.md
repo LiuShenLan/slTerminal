@@ -167,6 +167,8 @@ M12/R4（2026-10-18）：A1 容量断言改「成功句柄存活到统计完成�
 
 M12/R5（2026-10-18）：B8 新增 fs-notify 监听器（树根递归 + 打开文件父目录引用计数、有界唤醒通道、前台 30ms 合并泵）驱动外部修改刷新 gutter 与文件树（仍无定时目录重扫）、B9 git 模块短 TTL 状态/仓库根缓存（500ms，只读面共享，rollback 等写路径绕过）且 gutter 无变更状态不再起 hunk 子进程、B15 HEAD 读取补 `cat-file -e` 预检与 stderr 权限/损坏分类（`AccessDenied`/`Corrupt`）、B16 本地图片 URL 先剥离 query/fragment 再解析、B21 六家目录按官方文档/源码复核（kilo 改 `.config/kilo`、maki 改 `AppData/Roaming/maki`，其余四家不变）、B29 补全命令探测改 pwsh 优先 + 5.1 回退、B34 补 unborn HEAD 与 staged 新文件 unstage 用例。
 
+M12/R6（2026-10-19）：B7 键位热重绑（启动键位基线快照 + 整表重建 + 设置页录制/清除/恢复默认）、B10 冲突三栏合并器（git stage 1/2/3 有界读取 + 三栏只读视图 + 脏草稿拒绝采用）、B11 文件树 CRUD（新建文件/目录/重命名，重命名遇打开 tab 安全拒绝）、B17 编辑器 chrome 全屏 + reader-focus、B18 主题编辑器字距/字重/布局/blur 控件、B19 主题包导入导出 UI、B20 侧栏标题 i18n、B55 壁纸设置 UI（路径/fit/对齐/cover/透明度 + 缩略图预览）、B73 侧栏 Nav/Commit/AgentFiles 三视图、C6 hooks 五型表单（user 层）、C8 工作区导出 UI（后台写盘）、B38 失败边进程级通知（只带类别/agent，不直出合成命令）。
+
 ## E. 验收纪律补记
 
 - 自 M8.3 起验收同时跑两形态 clippy（`--workspace` 与 `-p slterm --features gpui-test-support`）——此前无 feature 形态遗漏了 M6 起的三处测试端红灯。

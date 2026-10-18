@@ -25,6 +25,8 @@ use gpui_component::{ActiveTheme as _, Icon, IconName};
 use serde::{Deserialize, Serialize};
 
 use super::SltermWorkspace;
+use crate::app_shell::config::Settings;
+use crate::i18n::Message;
 
 /// ActivityBar 固定宽度(旧栈同值 46)。
 pub(crate) const ACTIVITY_BAR_SIZE: f32 = 46.0;
@@ -113,13 +115,13 @@ impl SideViewId {
         }
     }
 
-    /// 显示名(侧栏槽标题/按钮占位文案)。
-    pub(super) const fn title(self) -> &'static str {
+    /// 显示名(侧栏槽标题/ActivityBar 按钮占位文案);语言解析归渲染点。
+    pub(super) const fn title(self) -> Message {
         match self {
-            Self::Nav => "导航树",
-            Self::Explorer => "文件浏览器",
-            Self::Commit => "Commit",
-            Self::AgentFiles => "Agent 全局文件",
+            Self::Nav => Message::SidebarViewNav,
+            Self::Explorer => Message::SidebarViewExplorer,
+            Self::Commit => Message::SidebarViewCommit,
+            Self::AgentFiles => Message::SidebarViewAgentFiles,
         }
     }
 
@@ -131,22 +133,13 @@ impl SideViewId {
             Self::Nav | Self::Explorer | Self::Commit => SidebarZone::Top,
         }
     }
-
-    /// 内容占位文案——真实视图归对应分片,本步只提示归属。
-    pub(super) const fn content_owner(self) -> &'static str {
-        match self {
-            Self::Nav => "视图内容归 05 篇(导航树数据源)",
-            Self::Explorer | Self::Commit => "视图内容归 07 篇",
-            Self::AgentFiles => "视图内容归 03 篇",
-        }
-    }
 }
 
 /// side view 注册项骨架:id + title;icon 归 06 篇。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct SideViewDef {
     pub id: SideViewId,
-    pub title: &'static str,
+    pub title: Message,
 }
 
 /// 封闭集定义列表(注册序 = 旧栈 sideViewDefs 注册序)。
@@ -315,6 +308,7 @@ impl SltermWorkspace {
     /// active 态 = 选中底色 + 左侧指示条(旧栈 ActivityBar 同形)。
     pub(super) fn render_activity_bar(&self, cx: &mut Context<'_, Self>) -> AnyElement {
         let state = self.sidebar;
+        let language = cx.global::<Settings>().language;
         div()
             .id("sidebar-activity-bar")
             .debug_selector(|| "sidebar-activity-bar".to_owned())
@@ -360,7 +354,14 @@ impl SltermWorkspace {
                     })
                     .when(!active, |button| button.text_color(idle_fg))
                     .hover(move |style| style.bg(hover_bg))
-                    .child(def.title.chars().next().unwrap_or('?').to_string())
+                    .child(
+                        language
+                            .text(def.title)
+                            .chars()
+                            .next()
+                            .unwrap_or('?')
+                            .to_string(),
+                    )
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.toggle_sidebar_view(def.id, cx);
                     }))
@@ -499,44 +500,17 @@ impl SltermWorkspace {
             .into_any_element()
     }
 
-    /// 单槽内容挂载点。explorer = 文件树(07 篇 M8.4);其余视图保持
-    /// M5.3b 占位(内容归对应分片)。
+    /// 单槽内容挂载点:按封闭集分派到各视图渲染函数(B73)。
     fn render_view_slot(&mut self, zone: SidebarZone, cx: &mut Context<'_, Self>) -> AnyElement {
         let Some(id) = self.sidebar.active_in(zone) else {
             return div().into_any_element();
         };
         let selector = format!("sidebar-slot-{}-{}", zone.as_str(), id.id_str());
-        let body = if id == SideViewId::Explorer {
-            self.render_file_tree(cx)
-        } else {
-            div()
-                .flex_1()
-                .min_h_0()
-                .w_full()
-                .flex()
-                .flex_col()
-                .child(
-                    div()
-                        .h(px(30.0))
-                        .px(px(10.0))
-                        .flex_shrink_0()
-                        .flex()
-                        .items_center()
-                        .text_size(px(12.0))
-                        .text_color(cx.theme().sidebar_foreground)
-                        .child(id.title()),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_h_0()
-                        .px(px(10.0))
-                        .py(px(8.0))
-                        .text_size(px(12.0))
-                        .text_color(cx.theme().muted_foreground)
-                        .child(id.content_owner()),
-                )
-                .into_any_element()
+        let body = match id {
+            SideViewId::Explorer => self.render_file_tree(cx),
+            SideViewId::Nav => self.render_nav_view(cx),
+            SideViewId::Commit => self.render_commit_view(cx),
+            SideViewId::AgentFiles => self.render_agent_files_view(cx),
         };
         div()
             .id(SharedString::from(selector.clone()))
@@ -557,6 +531,18 @@ impl SltermWorkspace {
                 .sidebar
                 .active_in(SideViewId::Explorer.zone())
                 .is_some_and(|id| id == SideViewId::Explorer)
+    }
+
+    /// commit 槽当前可见(文件树后台快照刷新判据;与 explorer 同形)。
+    ///
+    /// Commit 与 explorer 同属上槽,二者互斥;文件树域据此把 `sync_file_tree`
+    /// 的门从「仅 explorer」扩到「explorer 或 commit」。
+    pub(super) fn commit_open(&self) -> bool {
+        !self.sidebar.collapsed
+            && self
+                .sidebar
+                .active_in(SideViewId::Commit.zone())
+                .is_some_and(|id| id == SideViewId::Commit)
     }
 
     /// 宽度拖拽热区:内容区右缘 4px 竖条。
@@ -643,6 +629,26 @@ impl SltermWorkspace {
 #[cfg(test)]
 mod sidebar_state_tests {
     use super::*;
+    use crate::i18n::UiLanguage;
+
+    /// B20:四种标题在中英两语下由同一 typed 消息查表。
+    #[test]
+    fn side_view_titles_localize_in_both_languages() {
+        let expected = [
+            (SideViewId::Nav, "导航树", "Navigation"),
+            (SideViewId::Explorer, "文件浏览器", "File Explorer"),
+            (SideViewId::Commit, "Commit", "Commit"),
+            (SideViewId::AgentFiles, "Agent 全局文件", "Agent Files"),
+        ];
+        for (id, zh, en) in expected {
+            assert_eq!(UiLanguage::ZhCn.text(id.title()), zh);
+            assert_eq!(UiLanguage::EnUs.text(id.title()), en);
+        }
+        // 注册表每帧重建时标题与 id 同源。
+        for def in side_view_defs() {
+            assert_eq!(def.title, def.id.title());
+        }
+    }
 
     fn state(top: Option<SideViewId>, bottom: Option<SideViewId>) -> SidebarState {
         SidebarState {

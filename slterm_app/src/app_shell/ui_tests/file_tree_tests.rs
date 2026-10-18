@@ -6,7 +6,9 @@ use std::time::{Duration, Instant};
 use gpui::{Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, point, px};
 
 use super::*;
+use crate::app_shell::config::Settings;
 use crate::app_shell::workspace::SltermWorkspace;
+use crate::i18n::Message;
 use crate::side_panel::drop_text_for_path;
 
 /// 把聚焦 pane 的 cwd 设成测试目录(文件树根跟随源)。
@@ -470,5 +472,290 @@ fn context_menu_delete_routes_through_the_recycle_bin(cx: &mut TestAppContext) {
         workspace.read_with(cx, |ws, _| ws.file_tree_context_menu_for_test()),
         None,
         "执行后菜单关闭"
+    );
+}
+
+// ── M8.5 右键 CRUD:新建 / 重命名 / 名字校验 ──
+
+/// 右键一行并画一帧,让菜单挂上 workspace 根。
+fn right_click_selector(window: &mut VisualTestContext, selector: &'static str) {
+    let center = window
+        .debug_bounds(selector)
+        .unwrap_or_else(|| panic!("{selector} 必须绘制"))
+        .center();
+    window.simulate_event(MouseDownEvent {
+        position: center,
+        button: MouseButton::Right,
+        modifiers: Modifiers::default(),
+        click_count: 1,
+        first_mouse: false,
+    });
+    window.run_until_parked();
+    draw_frame(window);
+}
+
+/// 目录目标:新建文件与新建文件夹都落在该目录内,并自动展开父级可见。
+#[gpui::test]
+fn context_menu_creates_files_and_folders_inside_a_directory_target(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    let directory = fixture_directory();
+    set_pane_cwd(cx, &workspace, directory.path());
+    open_explorer(&mut window);
+    wait_file_tree(cx, &workspace, &mut window, |ws| {
+        ws.file_tree_row_names_for_test()
+            .iter()
+            .any(|name| name == "sub")
+    });
+
+    // 新建文件。
+    let index = row_index(cx, &workspace, "sub");
+    right_click_selector(&mut window, row_selector(index));
+    click_selector(&mut window, "file-tree-context-new-file");
+    draw_frame(&mut window);
+    assert!(
+        workspace.read_with(cx, |ws, _| ws.file_tree_name_editor_active_for_test()),
+        "新建文件必须进入名字编辑态"
+    );
+    window.simulate_input("created.txt");
+    window.simulate_keystrokes("enter");
+    window.run_until_parked();
+    let created = directory.path().join("sub/created.txt");
+    wait_file_tree(cx, &workspace, &mut window, |ws| {
+        ws.file_tree_row_names_for_test()
+            .iter()
+            .any(|name| name == "created.txt")
+    });
+    assert!(created.is_file(), "新文件必须真实落盘");
+    assert_eq!(
+        workspace.read_with(cx, |ws, _| ws.file_tree_selected_for_test()),
+        Some(created),
+        "提交后选中新条目"
+    );
+    assert!(
+        !workspace.read_with(cx, |ws, _| ws.file_tree_name_editor_active_for_test()),
+        "提交成功后名字编辑器关闭"
+    );
+
+    // 新建文件夹(同一目录目标)。
+    let index = row_index(cx, &workspace, "sub");
+    right_click_selector(&mut window, row_selector(index));
+    click_selector(&mut window, "file-tree-context-new-folder");
+    draw_frame(&mut window);
+    window.simulate_input("created_dir");
+    window.simulate_keystrokes("enter");
+    window.run_until_parked();
+    let created_dir = directory.path().join("sub/created_dir");
+    wait_file_tree(cx, &workspace, &mut window, |ws| {
+        ws.file_tree_row_names_for_test()
+            .iter()
+            .any(|name| name == "created_dir")
+    });
+    assert!(created_dir.is_dir(), "新文件夹必须真实落盘");
+}
+
+/// 文件目标:新建动作按父目录语义落在同级,菜单四项齐备。
+#[gpui::test]
+fn context_menu_on_a_file_target_creates_siblings_in_its_parent(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    let directory = fixture_directory();
+    set_pane_cwd(cx, &workspace, directory.path());
+    open_explorer(&mut window);
+    wait_file_tree(cx, &workspace, &mut window, |ws| {
+        ws.file_tree_row_names_for_test()
+            .iter()
+            .any(|name| name == "main.rs")
+    });
+
+    let index = row_index(cx, &workspace, "main.rs");
+    right_click_selector(&mut window, row_selector(index));
+    click_selector(&mut window, "file-tree-context-new-file");
+    draw_frame(&mut window);
+    window.simulate_input("sibling.txt");
+    window.simulate_keystrokes("enter");
+    window.run_until_parked();
+    let sibling = directory.path().join("sibling.txt");
+    wait_file_tree(cx, &workspace, &mut window, |ws| {
+        ws.file_tree_row_names_for_test()
+            .iter()
+            .any(|name| name == "sibling.txt")
+    });
+    assert!(sibling.is_file(), "文件目标的新建落在父目录");
+
+    let index = row_index(cx, &workspace, "data.bin");
+    right_click_selector(&mut window, row_selector(index));
+    click_selector(&mut window, "file-tree-context-new-folder");
+    draw_frame(&mut window);
+    window.simulate_input("sibling_dir");
+    window.simulate_keystrokes("enter");
+    window.run_until_parked();
+    let sibling_dir = directory.path().join("sibling_dir");
+    wait_file_tree(cx, &workspace, &mut window, |ws| {
+        ws.file_tree_row_names_for_test()
+            .iter()
+            .any(|name| name == "sibling_dir")
+    });
+    assert!(sibling_dir.is_dir(), "文件目标的菜单也提供新建文件夹");
+}
+
+/// 重命名:磁盘改名,旧名从树中消失,新条目被选中。
+#[gpui::test]
+fn context_menu_renames_a_file_on_disk_and_in_the_tree(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    let directory = fixture_directory();
+    set_pane_cwd(cx, &workspace, directory.path());
+    open_explorer(&mut window);
+    wait_file_tree(cx, &workspace, &mut window, |ws| {
+        ws.file_tree_row_names_for_test()
+            .iter()
+            .any(|name| name == "main.rs")
+    });
+
+    let index = row_index(cx, &workspace, "main.rs");
+    right_click_selector(&mut window, row_selector(index));
+    click_selector(&mut window, "file-tree-context-rename");
+    draw_frame(&mut window);
+    assert!(
+        workspace.read_with(cx, |ws, _| ws.file_tree_name_editor_active_for_test()),
+        "重命名必须进入名字编辑态"
+    );
+    // 预填旧名且全选,直接输入即替换。
+    window.simulate_input("renamed.rs");
+    window.simulate_keystrokes("enter");
+    window.run_until_parked();
+    wait_file_tree(cx, &workspace, &mut window, |ws| {
+        let names = ws.file_tree_row_names_for_test();
+        names.iter().any(|name| name == "renamed.rs") && !names.iter().any(|name| name == "main.rs")
+    });
+
+    let renamed = directory.path().join("renamed.rs");
+    assert!(renamed.is_file(), "重命名必须真实落盘");
+    assert!(!directory.path().join("main.rs").exists(), "旧路径必须消失");
+    assert_eq!(
+        workspace.read_with(cx, |ws, _| ws.file_tree_selected_for_test()),
+        Some(renamed)
+    );
+}
+
+/// 非法名与已存在同名:编辑器保留可读错误,磁盘不动;Escape 可取消。
+#[gpui::test]
+fn name_editor_rejects_invalid_and_existing_names_without_touching_the_disk(
+    cx: &mut TestAppContext,
+) {
+    let (workspace, mut window) = open_workspace(cx);
+    let directory = fixture_directory();
+    set_pane_cwd(cx, &workspace, directory.path());
+    open_explorer(&mut window);
+    wait_file_tree(cx, &workspace, &mut window, |ws| {
+        ws.file_tree_row_names_for_test()
+            .iter()
+            .any(|name| name == "main.rs")
+    });
+
+    let index = row_index(cx, &workspace, "main.rs");
+    right_click_selector(&mut window, row_selector(index));
+    click_selector(&mut window, "file-tree-context-rename");
+    draw_frame(&mut window);
+
+    let invalid_error = workspace.read_with(cx, |_, cx| {
+        cx.global::<Settings>()
+            .language
+            .text(Message::FilesNameInvalid)
+            .to_owned()
+    });
+    window.simulate_input("bad:name.txt");
+    window.simulate_keystrokes("enter");
+    window.run_until_parked();
+    wait_file_tree(cx, &workspace, &mut window, |ws| {
+        ws.file_tree_name_error_for_test().as_deref() == Some(invalid_error.as_str())
+    });
+    assert!(directory.path().join("main.rs").is_file(), "非法名不得改名");
+    assert!(
+        !directory.path().join("bad:name.txt").exists(),
+        "非法名不得落盘"
+    );
+
+    let exists_error = workspace.read_with(cx, |_, cx| {
+        cx.global::<Settings>()
+            .language
+            .text(Message::FilesNameExists)
+            .to_owned()
+    });
+    window.simulate_keystrokes("ctrl-a backspace");
+    window.simulate_input("data.bin");
+    window.simulate_keystrokes("enter");
+    window.run_until_parked();
+    wait_file_tree(cx, &workspace, &mut window, |ws| {
+        ws.file_tree_name_error_for_test().as_deref() == Some(exists_error.as_str())
+    });
+    assert!(
+        workspace.read_with(cx, |ws, _| ws.file_tree_name_editor_active_for_test()),
+        "失败提交不得关闭编辑器"
+    );
+    assert!(directory.path().join("main.rs").is_file());
+    assert_eq!(
+        std::fs::read(directory.path().join("data.bin")).unwrap(),
+        b"binary",
+        "既有目标文件不得被覆盖"
+    );
+
+    window.simulate_keystrokes("escape");
+    window.run_until_parked();
+    assert!(
+        !workspace.read_with(cx, |ws, _| ws.file_tree_name_editor_active_for_test()),
+        "Escape 必须取消名字编辑"
+    );
+    assert!(directory.path().join("main.rs").is_file(), "取消不改磁盘");
+}
+
+/// 已打开 tab 的文件:重命名安全拒绝,旧路径与 tab 都保持原样。
+#[gpui::test]
+fn renaming_a_file_open_in_a_tab_is_refused_with_a_readable_error(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    let directory = fixture_directory();
+    set_pane_cwd(cx, &workspace, directory.path());
+    open_explorer(&mut window);
+    wait_file_tree(cx, &workspace, &mut window, |ws| {
+        ws.file_tree_row_names_for_test()
+            .iter()
+            .any(|name| name == "main.rs")
+    });
+
+    let index = row_index(cx, &workspace, "main.rs");
+    double_click_selector(&mut window, row_selector(index));
+    window.run_until_parked();
+    assert_eq!(
+        workspace.read_with(cx, |ws, _| ws.active_tab_kind_for_test()),
+        "code",
+        "前置条件:main.rs 已在 tab 中打开"
+    );
+
+    right_click_selector(&mut window, row_selector(index));
+    click_selector(&mut window, "file-tree-context-rename");
+    draw_frame(&mut window);
+    let blocked_error = workspace.read_with(cx, |_, cx| {
+        cx.global::<Settings>()
+            .language
+            .text(Message::FilesRenameOpenTab)
+            .to_owned()
+    });
+    window.simulate_input("renamed_main.rs");
+    window.simulate_keystrokes("enter");
+    window.run_until_parked();
+    wait_file_tree(cx, &workspace, &mut window, |ws| {
+        ws.file_tree_name_error_for_test().as_deref() == Some(blocked_error.as_str())
+    });
+
+    assert!(
+        directory.path().join("main.rs").is_file(),
+        "被 tab 持有的文件不得改名"
+    );
+    assert!(
+        !directory.path().join("renamed_main.rs").exists(),
+        "拒绝后不得留下新路径"
+    );
+    assert_eq!(
+        workspace.read_with(cx, |ws, cx| ws.active_text_for_test(cx)),
+        Some("fn main() {}\n".to_owned()),
+        "原 tab 内容保持不变"
     );
 }

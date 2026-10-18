@@ -2,20 +2,22 @@
 //! (`SettingsPane::try_persist`)落盘并重载。
 
 use gpui::{
-    AnyElement, Context, InteractiveElement as _, IntoElement, ParentElement as _, SharedString,
-    Styled as _, Window, div, px,
+    AnyElement, Context, InteractiveElement as _, IntoElement, KeyDownEvent, ObjectFit,
+    ParentElement as _, SharedString, Styled as _, StyledImage as _, Window, div, px,
 };
 use gpui_component::button::Button;
 use gpui_component::input::{Input, InputState};
 use gpui_component::select::Select;
 use gpui_component::slider::Slider;
 use gpui_component::switch::Switch;
-use gpui_component::{ActiveTheme as _, h_flex, v_flex};
+use gpui_component::{ActiveTheme as _, Disableable as _, Sizable as _, h_flex, v_flex};
 
+use crate::app_shell::workspace::keyboard_bindings;
 use crate::i18n::Message;
 
 use super::SettingsPane;
 use super::design::{SETTINGS_GROUP_GAP, SETTINGS_SELECT_WIDTH};
+use super::localization::UiLanguage;
 
 impl SettingsPane {
     pub(super) fn select_row(
@@ -123,12 +125,240 @@ impl SettingsPane {
         self.row(label, desc, control, cx).into_any_element()
     }
 
+    /// 独立下拉行(实体不进入通用 `selects`:壁纸键的值映射与本地化在
+    /// `settings_pane` 本模块完成)。
+    fn bound_select_row(
+        &self,
+        debug_id: &'static str,
+        label: &'static str,
+        desc: &'static str,
+        select: &gpui::Entity<gpui_component::select::SelectState<Vec<SharedString>>>,
+        cx: &Context<'_, Self>,
+    ) -> AnyElement {
+        let control = div()
+            .debug_selector(move || debug_id.to_owned())
+            .w(px(SETTINGS_SELECT_WIDTH))
+            .child(
+                Select::new(select)
+                    .appearance(false)
+                    .h_full()
+                    .rounded(px(6.0)),
+            )
+            .into_any_element();
+        self.row(label, desc, control, cx).into_any_element()
+    }
+
+    /// 壁纸缩略预览:固定盒内按 fit/alignment 落点绘制后台解码的纹理。
+    fn wallpaper_preview_element(&self, cx: &Context<'_, Self>) -> AnyElement {
+        // 与控件列同宽(220),高度按 2:1 留出 fit/alignment 观察面。
+        const PREVIEW_WIDTH: f32 = SETTINGS_SELECT_WIDTH;
+        const PREVIEW_HEIGHT: f32 = 110.0;
+        let language = self.language(cx);
+        let Some(preview) = self.wallpaper_preview.as_ref() else {
+            let label = if self.wallpaper_preview_loading {
+                language.text(Message::SettingsAppearanceWallpaperPreviewLoading)
+            } else {
+                language.text(Message::SettingsAppearanceWallpaperPreviewEmpty)
+            };
+            return div()
+                .debug_selector(|| "settings-wallpaper-preview".to_owned())
+                .w(px(PREVIEW_WIDTH))
+                .h(px(PREVIEW_HEIGHT))
+                .rounded_md()
+                .bg(cx.theme().muted)
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_color(cx.theme().muted_foreground)
+                .child(label)
+                .into_any_element();
+        };
+        let (x, y, width, height) = crate::app_shell::wallpaper::preview_rect(
+            PREVIEW_WIDTH,
+            PREVIEW_HEIGHT,
+            preview.width,
+            preview.height,
+            self.runtime.background_image_fit.as_deref(),
+            self.runtime.background_image_alignment.as_deref(),
+        );
+        div()
+            .debug_selector(|| "settings-wallpaper-preview".to_owned())
+            .relative()
+            .w(px(PREVIEW_WIDTH))
+            .h(px(PREVIEW_HEIGHT))
+            .rounded_md()
+            .overflow_hidden()
+            .bg(cx.theme().muted)
+            .child(
+                div()
+                    .absolute()
+                    .left(px(x))
+                    .top(px(y))
+                    .w(px(width))
+                    .h(px(height))
+                    .child(
+                        gpui::img(preview.image.clone())
+                            // 落点矩形已编码 fit/alignment;Fill 让纹理铺满该矩形。
+                            .object_fit(ObjectFit::Fill),
+                    ),
+            )
+            .into_any_element()
+    }
+
     pub(super) fn page_appearance(
         &mut self,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> gpui::Div {
+        // 语言热切换只换显示项;壁纸下拉不走通用 `selects` 刷新路径。
+        self.sync_wallpaper_select_language(window, cx);
+        // 启动/回读/恢复路径:运行时路径变化时后台重载缩略图。
+        self.sync_wallpaper_preview(cx);
         let language = self.language(cx);
+        let wallpaper_path = self.runtime.background_image.clone();
+        let wallpaper_path_label = wallpaper_path.clone().unwrap_or_else(|| {
+            language
+                .text(Message::SettingsAppearanceWallpaperNone)
+                .to_owned()
+        });
+        let wallpaper_path_control = h_flex()
+            .w_full()
+            .gap_2()
+            .items_center()
+            .child(
+                div()
+                    .debug_selector(|| "settings-wallpaper-path".to_owned())
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(wallpaper_path_label),
+            )
+            .child(
+                Button::new("settings-wallpaper-choose")
+                    .label(language.text(Message::CommonChoose))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.pick_wallpaper(window, cx);
+                    })),
+            )
+            .child(
+                Button::new("settings-wallpaper-clear")
+                    .label(language.text(Message::SettingsAppearanceWallpaperClear))
+                    .disabled(wallpaper_path.is_none())
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.clear_wallpaper(window, cx);
+                    })),
+            )
+            .into_any_element();
+        let mut wallpaper_group = self
+            .group(language.text(Message::SettingsAppearanceWallpaper), cx)
+            .child(self.row(
+                language.text(Message::SettingsAppearanceWallpaperPath),
+                language.text(Message::SettingsAppearanceWallpaperPathDescription),
+                wallpaper_path_control,
+                cx,
+            ))
+            .child(self.row(
+                language.text(Message::SettingsAppearanceWallpaperPreview),
+                "",
+                self.wallpaper_preview_element(cx),
+                cx,
+            ))
+            .child(self.bound_select_row(
+                "settings-wallpaper-fit",
+                language.text(Message::SettingsAppearanceWallpaperFit),
+                "",
+                &self.wallpaper_fit_select,
+                cx,
+            ))
+            .child(self.bound_select_row(
+                "settings-wallpaper-alignment",
+                language.text(Message::SettingsAppearanceWallpaperAlignment),
+                "",
+                &self.wallpaper_alignment_select,
+                cx,
+            ))
+            .child(self.switch_row(
+                "background_image_cover_chrome",
+                language.text(Message::SettingsAppearanceWallpaperCoverChrome),
+                language.text(Message::SettingsAppearanceWallpaperCoverChromeDescription),
+                self.runtime.background_image_cover_chrome,
+                cx,
+            ))
+            .child(self.slider_row(
+                language.text(Message::SettingsAppearanceWallpaperOpacity),
+                language.text(Message::SettingsAppearanceWallpaperOpacityDescription),
+                "settings-slider-wallpaper-opacity",
+                &self.wallpaper_opacity_slider,
+                SharedString::from(format!(
+                    "{:.0}%",
+                    self.runtime.background_image_opacity * 100.0
+                )),
+                cx,
+            ));
+        if let Some(error) = self.wallpaper_error.clone() {
+            let danger = cx.theme().danger;
+            wallpaper_group = wallpaper_group.child(
+                div()
+                    .debug_selector(|| "settings-wallpaper-error".to_owned())
+                    .w_full()
+                    .px(px(12.0))
+                    .py(px(8.0))
+                    .rounded_md()
+                    .bg(danger.opacity(0.08))
+                    .text_color(danger)
+                    .text_sm()
+                    .child(error),
+            );
+        }
+        let import_busy = self.theme_import_busy;
+        let export_busy = self.theme_export_busy;
+        let has_custom_theme = self.runtime.custom_theme.is_some();
+        let import_label = if import_busy {
+            language.text(Message::SettingsAppearanceThemeImportBusy)
+        } else {
+            language.text(Message::SettingsAppearanceThemeImportAction)
+        };
+        let export_label = if export_busy {
+            language.text(Message::SettingsAppearanceThemeExportBusy)
+        } else {
+            language.text(Message::SettingsAppearanceThemeExportAction)
+        };
+        let export_description = if has_custom_theme {
+            language.text(Message::SettingsAppearanceThemeExportDescription)
+        } else {
+            language.text(Message::SettingsAppearanceThemeExportNeedsCustom)
+        };
+        let theme_package_group = self
+            .group(language.text(Message::SettingsAppearanceThemePackage), cx)
+            .child(
+                self.row(
+                    language.text(Message::SettingsAppearanceThemeImport),
+                    language.text(Message::SettingsAppearanceThemeImportDescription),
+                    Button::new("settings-theme-import")
+                        .label(import_label)
+                        .disabled(import_busy)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.import_theme_package(window, cx);
+                        }))
+                        .into_any_element(),
+                    cx,
+                ),
+            )
+            .child(
+                self.row(
+                    language.text(Message::SettingsAppearanceThemeExport),
+                    export_description,
+                    Button::new("settings-theme-export")
+                        .label(export_label)
+                        .disabled(export_busy || !has_custom_theme)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.export_theme_package(window, cx);
+                        }))
+                        .into_any_element(),
+                    cx,
+                ),
+            );
         v_flex()
             .w_full()
             .gap(px(SETTINGS_GROUP_GAP))
@@ -186,6 +416,8 @@ impl SettingsPane {
                         ),
                     ),
             )
+            .child(theme_package_group)
+            .child(wallpaper_group)
             .child(
                 self.group(language.text(Message::SettingsAppearanceDisplay), cx)
                     .child(self.slider_row(
@@ -338,6 +570,8 @@ impl SettingsPane {
         v_flex()
             .w_full()
             .gap(px(SETTINGS_GROUP_GAP))
+            // 键位组置顶:动作表行数多,置顶保证首屏可见与可发现性。
+            .child(self.keybind_editor(language, cx))
             .child(
                 self.group(language.text(Message::SettingsInteractionMouse), cx)
                     .child(self.switch_row(
@@ -415,12 +649,181 @@ impl SettingsPane {
             )
     }
 
+    /// 键位编辑组:可重绑动作表(录制/清除/恢复默认)+ 保留键只读区。
+    fn keybind_editor(&self, language: UiLanguage, cx: &Context<'_, Self>) -> AnyElement {
+        // 录制焦点挂在本组容器:进入录制态后下一次 KeyDown 由此消费。
+        let mut table = v_flex()
+            .w_full()
+            .track_focus(&self.keybind_focus)
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                this.handle_keybind_key_down(event, window, cx);
+            }));
+        for action in keyboard_bindings::EDITABLE_ACTIONS {
+            table = table.child(self.keybind_editor_row(action, language, cx));
+        }
+        table = table.child(
+            div()
+                .w_full()
+                .pt(px(12.0))
+                .pb(px(4.0))
+                .text_size(px(12.0))
+                .text_color(cx.theme().muted_foreground)
+                .child(language.text(Message::SettingsInteractionKeybindsReserved)),
+        );
+        for (combo, label_zh, label_en) in keyboard_bindings::reserved_display_rows() {
+            let label = if language == UiLanguage::ZhCn {
+                label_zh
+            } else {
+                label_en
+            };
+            table = table.child(
+                h_flex()
+                    .w_full()
+                    .py(px(6.0))
+                    .gap_3()
+                    .items_center()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(label),
+                    )
+                    .child(
+                        div()
+                            .w(px(150.0))
+                            .flex_shrink_0()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(combo),
+                    ),
+            );
+        }
+        if let Some(error) = self.keybind_error.clone() {
+            table = table.child(
+                div()
+                    .debug_selector(|| "settings-keybind-error".to_owned())
+                    .w_full()
+                    .pt(px(6.0))
+                    .text_color(cx.theme().danger)
+                    .child(error),
+            );
+        }
+        self.group(language.text(Message::SettingsInteractionKeybinds), cx)
+            .child(table)
+            .into_any_element()
+    }
+
+    /// 单个可重绑动作行:名称 + 当前生效组合 + 录制/清除/恢复默认。
+    fn keybind_editor_row(
+        &self,
+        action: &keyboard_bindings::EditableAction,
+        language: UiLanguage,
+        cx: &Context<'_, Self>,
+    ) -> AnyElement {
+        let label = if language == UiLanguage::ZhCn {
+            action.label_zh
+        } else {
+            action.label_en
+        };
+        let action_name = action.name;
+        let recording = self.keybind_recording.as_deref() == Some(action_name);
+        let combos = keyboard_bindings::effective_combos(&self.keybind_pairs, action_name);
+        let combo_text = if recording {
+            language
+                .text(Message::SettingsInteractionKeybindRecording)
+                .to_owned()
+        } else if combos.is_empty() {
+            language
+                .text(Message::SettingsInteractionKeybindUnbound)
+                .to_owned()
+        } else {
+            combos.join(" / ")
+        };
+        let record_label = if recording {
+            language.text(Message::SettingsInteractionKeybindRecording)
+        } else {
+            language.text(Message::SettingsInteractionKeybindRecord)
+        };
+        h_flex()
+            .w_full()
+            .py(px(8.0))
+            .gap_3()
+            .items_center()
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_size(px(13.0))
+                    .text_color(cx.theme().foreground)
+                    .child(label),
+            )
+            .child(
+                div()
+                    .debug_selector(move || format!("settings-keybind-combo-{action_name}"))
+                    .w(px(150.0))
+                    .flex_shrink_0()
+                    .truncate()
+                    .text_color(if recording {
+                        cx.theme().accent
+                    } else {
+                        cx.theme().muted_foreground
+                    })
+                    .child(combo_text),
+            )
+            .child(
+                div()
+                    .debug_selector(move || format!("settings-keybind-record-{action_name}"))
+                    .child(
+                        Button::new(SharedString::from(format!(
+                            "settings-keybind-record-btn-{action_name}"
+                        )))
+                        .small()
+                        .label(record_label)
+                        .on_click(cx.listener(
+                            move |this, _, window, cx| {
+                                this.begin_keybind_recording(action_name, window, cx);
+                            },
+                        )),
+                    ),
+            )
+            .child(
+                div()
+                    .debug_selector(move || format!("settings-keybind-clear-{action_name}"))
+                    .child(
+                        Button::new(SharedString::from(format!(
+                            "settings-keybind-clear-btn-{action_name}"
+                        )))
+                        .small()
+                        .label(language.text(Message::SettingsInteractionKeybindClear))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.clear_keybind_action(action_name, cx);
+                        })),
+                    ),
+            )
+            .child(
+                div()
+                    .debug_selector(move || format!("settings-keybind-reset-{action_name}"))
+                    .child(
+                        Button::new(SharedString::from(format!(
+                            "settings-keybind-reset-btn-{action_name}"
+                        )))
+                        .small()
+                        .label(language.text(Message::SettingsInteractionKeybindReset))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.reset_keybind_action(action_name, cx);
+                        })),
+                    ),
+            )
+            .into_any_element()
+    }
+
     pub(super) fn page_advanced(
         &mut self,
         _window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> gpui::Div {
         let language = self.language(cx);
+        let export_workspace_label = language.text(Message::SettingsAdvancedExportWorkspaceAction);
         v_flex()
             .w_full()
             .gap(px(SETTINGS_GROUP_GAP))
@@ -467,7 +870,23 @@ impl SettingsPane {
                         "",
                         self.runtime.tray,
                         cx,
-                    )),
+                    ))
+                    .child(
+                        self.row(
+                            language.text(Message::SettingsAdvancedExportWorkspace),
+                            language.text(Message::SettingsAdvancedExportWorkspaceDescription),
+                            div()
+                                .debug_selector(|| "settings-export-workspace".to_owned())
+                                .child(
+                                    Button::new("settings-export-workspace-btn")
+                                        .label(export_workspace_label)
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.prompt_export_workspace(window, cx);
+                                        })),
+                                ),
+                            cx,
+                        ),
+                    ),
             )
             .child(
                 self.group(language.text(Message::SettingsAdvancedUpdates), cx)

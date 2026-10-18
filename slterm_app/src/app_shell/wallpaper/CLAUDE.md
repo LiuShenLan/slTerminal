@@ -26,5 +26,6 @@
 - **消费点**：`Settings::{blur,opacity,background_image*}`（值权威在
   `slterm-settings`）；`theme::apply_dark_theme`（启动）、设置页 `Changed`
   （热应用）、`SettingsPane::preview_opacity`（live 快览）、`open_initial_window`
-  （首窗 backdrop + 首载）。`load_preview` 的消费点 = 06 篇设置页壁纸预览，
-  当前未接；测试豁免登记见 `.claude/test-exemptions.md` M10.7 行。
+  （首窗 backdrop + 首载）。`load_preview` 的消费点 = 设置页壁纸预览
+  （`SettingsPane` 外观页，后台解码 + 前台缩略图）；测试豁免登记见
+  `.claude/test-exemptions.md` M10.7 行。

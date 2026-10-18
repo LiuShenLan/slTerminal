@@ -14,7 +14,9 @@ use std::time::{Duration, Instant};
 use slterm_settings::{AgentHook, RawSettings};
 
 use super::settings;
-use crate::ai_assistant::{AssistantConfig, HookFailure, TriggerGate, evaluate_hook_failure};
+use crate::ai_assistant::{
+    AssistantConfig, HookFailure, HookFailureKind, TriggerGate, evaluate_hook_failure,
+};
 
 pub struct ConfigGuard {
     stop: Arc<AtomicBool>,
@@ -34,14 +36,20 @@ impl Drop for ConfigGuard {
 
 /// 消费点归 06 篇设置域启动链(挂 app 生命周期,`ai_hooks` 开关落定后
 /// 按授权自愈);M4.5 只接事件通道,本步只落本体。
-pub fn spawn_config_guard() -> Option<ConfigGuard> {
+///
+/// 失败边呈现回调只拿到 [`HookFailureKind`](不含合成命令),由壳启动链转成
+/// 进程级通知;不需要提示的调用方传 `|_| {}`。
+pub fn spawn_config_guard_with<F>(on_alert: F) -> Option<ConfigGuard>
+where
+    F: Fn(HookFailureKind) + Send + 'static,
+{
     let (wake, receive) = mpsc::sync_channel(1);
     let stop = Arc::new(AtomicBool::new(false));
     let stopping = stop.clone();
     let events = wake.clone();
     match std::thread::Builder::new()
         .name("slterm-ai-setup".into())
-        .spawn(move || config_guard(events, receive, stopping))
+        .spawn(move || config_guard(events, receive, stopping, on_alert))
     {
         Ok(worker) => Some(ConfigGuard {
             stop,
@@ -57,7 +65,7 @@ pub fn spawn_config_guard() -> Option<ConfigGuard> {
 
 /// 自愈一轮。`failure_gate` 是进程级失败边闸门(D08-2),跨轮存活以让
 /// 冷却生效;自愈主链语义不因失败边改变。
-fn heal_all(failure_gate: &mut TriggerGate) {
+fn heal_all(failure_gate: &mut TriggerGate, on_alert: &(impl Fn(HookFailureKind) + ?Sized)) {
     let Ok(_lock) = settings::lock() else { return };
     // 锁竞争 = 另一个安装操作在进行,不是自愈失败,不投失败边。
     // 锁内重读授权,不能把菜单/卸载刚移除的 hook 按旧快照装回。
@@ -65,7 +73,11 @@ fn heal_all(failure_gate: &mut TriggerGate) {
         Ok(raw) => raw,
         Err(error) => {
             log::warn!("ai_hook: cannot read hook preferences; installation skipped: {error}");
-            report_heal_failures(failure_gate, &[settings_failure()], Instant::now());
+            if let Some((_, kind)) =
+                report_heal_failures(failure_gate, &[settings_failure()], Instant::now())
+            {
+                on_alert(kind);
+            }
             return;
         }
     };
@@ -99,7 +111,9 @@ fn heal_all(failure_gate: &mut TriggerGate) {
             }
         }
     }
-    report_heal_failures(failure_gate, &failures, Instant::now());
+    if let Some((_, kind)) = report_heal_failures(failure_gate, &failures, Instant::now()) {
+        on_alert(kind);
+    }
 }
 
 /// hook 安装/修复失败的失败边投影。命令描述只参与规则表判定
@@ -108,6 +122,12 @@ fn install_failure(agent: AgentHook) -> HookFailure {
     HookFailure {
         command: format!("slterm-hook install {}", agent.settings_key()),
         program: None,
+        kind: HookFailureKind::Install {
+            agent: agent
+                .settings_key()
+                .trim_start_matches("slterm_ai_hooks_")
+                .to_owned(),
+        },
     }
 }
 
@@ -116,6 +136,9 @@ fn skill_failure(agent: &str) -> HookFailure {
     HookFailure {
         command: format!("slterm-hook skill {agent}"),
         program: None,
+        kind: HookFailureKind::Skill {
+            agent: agent.to_owned(),
+        },
     }
 }
 
@@ -124,6 +147,7 @@ fn settings_failure() -> HookFailure {
     HookFailure {
         command: "slterm-hook settings".into(),
         program: None,
+        kind: HookFailureKind::Settings,
     }
 }
 
@@ -134,7 +158,7 @@ fn report_heal_failures(
     gate: &mut TriggerGate,
     failures: &[HookFailure],
     now: Instant,
-) -> Option<u64> {
+) -> Option<(u64, HookFailureKind)> {
     if failures.is_empty() {
         return None;
     }
@@ -142,12 +166,15 @@ fn report_heal_failures(
 }
 
 /// 显式配置注入形态(测试用),避免读生产数据目录。
+///
+/// 返回首个放行失败的 (seq, 用户可见类别):冷却决定同一轮只有首条放行,
+/// 呈现层据此投一条进程级提示,不接触合成命令。
 fn report_heal_failures_at(
     gate: &mut TriggerGate,
     config: &AssistantConfig,
     failures: &[HookFailure],
     now: Instant,
-) -> Option<u64> {
+) -> Option<(u64, HookFailureKind)> {
     let mut fired = None;
     for failure in failures {
         if let Some(seq) = evaluate_hook_failure(gate, config, failure, now) {
@@ -155,19 +182,24 @@ fn report_heal_failures_at(
                 "ai_hook: failure edge entered AI trigger chain: {} (seq {seq})",
                 failure.command
             );
-            fired.get_or_insert(seq);
+            fired.get_or_insert((seq, failure.kind.clone()));
         }
     }
     fired
 }
 
-fn config_guard(tx: mpsc::SyncSender<()>, rx: mpsc::Receiver<()>, stop: Arc<AtomicBool>) {
+fn config_guard(
+    tx: mpsc::SyncSender<()>,
+    rx: mpsc::Receiver<()>,
+    stop: Arc<AtomicBool>,
+    on_alert: impl Fn(HookFailureKind),
+) {
     use notify::{RecursiveMode, Watcher};
     use std::sync::mpsc::RecvTimeoutError;
 
     // 进程级失败边闸门(D08-2):跨轮存活,冷却才有效。
     let mut failure_gate = TriggerGate::default();
-    heal_all(&mut failure_gate);
+    heal_all(&mut failure_gate, &on_alert);
     // 配置事件只代表需要重读;合并成一个信号,避免繁忙目录堆积整批事件。
     let mut watcher =
         match notify::recommended_watcher(move |result: notify::Result<notify::Event>| {
@@ -227,7 +259,7 @@ fn config_guard(tx: mpsc::SyncSender<()>, rx: mpsc::Receiver<()>, stop: Arc<Atom
         }
         // 定时一轮兼顾启动后新安装的 agent,以及未能建立 watcher 的目录。
         if !stop.load(Ordering::Acquire) {
-            heal_all(&mut failure_gate);
+            heal_all(&mut failure_gate, &on_alert);
         }
     }
 }
@@ -273,13 +305,20 @@ mod config_guard_tests {
         let now = Instant::now();
         let failures = [install_failure(AgentHook::Claude), skill_failure("codex")];
         let first = report_heal_failures_at(&mut gate, &config, &failures, now).unwrap();
+        assert_eq!(
+            first.1,
+            HookFailureKind::Install {
+                agent: "claude".to_owned()
+            },
+            "呈现类别取首条放行失败,且不含合成命令"
+        );
         // 同轮第二条失败共享同一时刻,被冷却吸收。
         assert!(
             report_heal_failures_at(&mut gate, &config, &failures, now + Duration::from_secs(4))
                 .is_none()
         );
         let next = report_heal_failures_at(&mut gate, &config, &failures, now + COOLDOWN).unwrap();
-        assert!(first < next, "seq 必须全局递增: {first} {next}");
+        assert!(first.0 < next.0, "seq 必须全局递增: {} {}", first.0, next.0);
     }
 
     #[test]
@@ -325,5 +364,35 @@ mod config_guard_tests {
         let mut gate = TriggerGate::default();
         let now = Instant::now();
         assert!(report_heal_failures_at(&mut gate, &enabled_config(), &[install], now).is_some());
+    }
+
+    /// B38:失败边呈现类别只带 agent/类别,不携带合成命令。
+    #[test]
+    fn failure_kinds_carry_no_synthetic_command_text() {
+        let install = install_failure(AgentHook::Codex);
+        assert_eq!(
+            install.kind,
+            HookFailureKind::Install {
+                agent: "codex".to_owned()
+            }
+        );
+        assert_eq!(
+            skill_failure("codex").kind,
+            HookFailureKind::Skill {
+                agent: "codex".to_owned()
+            }
+        );
+        assert_eq!(settings_failure().kind, HookFailureKind::Settings);
+        for kind in [
+            install.kind,
+            skill_failure("codex").kind,
+            settings_failure().kind,
+        ] {
+            let display = format!("{kind:?}");
+            assert!(
+                !display.contains("slterm-hook"),
+                "呈现类别不得含合成命令: {display}"
+            );
+        }
     }
 }

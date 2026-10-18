@@ -68,6 +68,9 @@ pub(crate) enum Notification {
     },
     /// 启动期一次性汇总(恢复结果等,A10/A13):走漏斗但豁免前台门控。
     RecoverySummary { text: String },
+    /// 进程级提示(B38):无 pane 归属、无动作按钮;走启动汇总通道豁免
+    /// 前台门控。文本必须由领域类别生成,不得携带技术化合成命令。
+    ProcessAlert { text: String },
 }
 
 impl Notification {
@@ -159,7 +162,7 @@ impl Notification {
     pub(crate) fn is_ai(&self) -> bool {
         let program = match self {
             Self::AiTurn { .. } | Self::AiTurnIssue { .. } => return true,
-            Self::RecoverySummary { .. } => return false,
+            Self::RecoverySummary { .. } | Self::ProcessAlert { .. } => return false,
             Self::Bell { program }
             | Self::CommandDone { program, .. }
             | Self::CommandFailed { program, .. }
@@ -217,7 +220,9 @@ impl Notification {
                 Some(program) => (program.clone(), body.clone()),
                 None => (crate::brand::NAME.to_owned(), body.clone()),
             },
-            Self::RecoverySummary { text } => (crate::brand::NAME.to_owned(), text.clone()),
+            Self::RecoverySummary { text } | Self::ProcessAlert { text } => {
+                (crate::brand::NAME.to_owned(), text.clone())
+            }
             Self::AiTurn {
                 program,
                 message,
@@ -968,6 +973,25 @@ mod notification_tests {
         let plan = funnel.plan_startup(&notification, PaneId(1), true, None, Instant::now());
         assert!(plan.toast.is_some(), "启动汇总必须穿透前台门控");
         assert!(!plan.flash, "启动汇总不得闪烁任务栏");
+    }
+
+    /// B38:进程级提示沿用启动汇总通道,标题取品牌、正文原样、不算 AI 来源。
+    #[test]
+    fn process_alert_uses_the_brand_title_and_is_not_ai_sourced() {
+        let notification = Notification::ProcessAlert {
+            text: "Claude Code 的 hook 安装失败".into(),
+        };
+        let (title, body) = notification.raw_toast_text();
+        assert_eq!(title, crate::brand::NAME);
+        assert_eq!(body, "Claude Code 的 hook 安装失败");
+        assert!(!notification.is_ai());
+        assert!(!notification.is_attention());
+        assert!(!notification.is_failure());
+
+        let mut funnel = Funnel::new();
+        let plan = funnel.plan_startup(&notification, PaneId(0), true, None, Instant::now());
+        assert!(plan.toast.is_some(), "进程级提示必须穿透前台门控");
+        assert!(!plan.flash);
     }
 
     /// pane 级同键窗口:同 pane+attention+request 3s 内只放一条;不同

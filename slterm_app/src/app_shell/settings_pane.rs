@@ -33,8 +33,9 @@ use std::path::PathBuf;
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Subscription, Window, div, px,
+    InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _, PathPromptOptions,
+    Render, SharedString, StatefulInteractiveElement as _, Styled as _, Subscription, Window, div,
+    px,
 };
 use gpui_component::button::Button;
 use gpui_component::input::{Input, InputEvent, InputState};
@@ -43,12 +44,16 @@ use gpui_component::select::{SelectEvent, SelectState};
 use gpui_component::slider::{SliderEvent, SliderState};
 use gpui_component::{ActiveTheme as _, Icon, IconName, v_flex};
 use slterm_settings::json::Value;
+use slterm_settings::keys::KEYBIND_SEGMENT;
 use slterm_settings::{
     BellModeName, BlurMode, CellWidthModeName, CompletionStyleName, Ligatures,
     NotificationDuration, RuntimeSettings, TabRevealName, ThemeName, VcsDisplayName,
 };
 
+use crate::app_shell::config::Settings;
+use crate::app_shell::workspace::keyboard_bindings;
 use crate::i18n::Message;
+use crate::theme_library::package::{Author, CheckedPackage, export_package};
 use design::{
     SETTINGS_GROUP_GAP, SETTINGS_NAV_ICON_SIZE, SETTINGS_NAV_ROW_HEIGHT, SETTINGS_NAV_WIDTH,
 };
@@ -62,6 +67,26 @@ use navigation::{
 /// 共享下拉实体类型(值与显示分离由 `localized_select_labels` 提供)。
 type SharedSelect = Entity<SelectState<Vec<SharedString>>>;
 
+/// 壁纸适应模式持久化值;顺序即下拉索引,解析语义归
+/// `wallpaper::image_layout`(默认 `uniform_to_fill`)。
+const WALLPAPER_FIT_VALUES: [&str; 4] = ["fill", "uniform", "uniform_to_fill", "none"];
+/// 壁纸九宫格对齐持久化值;顺序即下拉索引(默认 `center`)。
+const WALLPAPER_ALIGNMENT_VALUES: [&str; 9] = [
+    "top-left",
+    "top",
+    "top-right",
+    "left",
+    "center",
+    "right",
+    "bottom-left",
+    "bottom",
+    "bottom-right",
+];
+/// 主题包导出元数据(作者 = 品牌名,版本 = 应用版本,许可证 = GPL-3.0)。
+const THEME_PACKAGE_AUTHOR: &str = crate::brand::NAME;
+const THEME_PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
+const THEME_PACKAGE_LICENSE: &str = "GPL-3.0";
+
 /// 一个固定下拉:键、实体、稳定值表(选中索引 → 持久化值)。
 struct SelectEntry {
     key: &'static str,
@@ -69,9 +94,13 @@ struct SelectEntry {
     values: &'static [&'static str],
 }
 
-/// 宿主订阅事件:设置已写盘(热应用)/ 请求关闭设置 tab。
+/// 宿主订阅事件:设置已写盘(热应用)/ 导出工作区 / 请求关闭设置 tab。
 pub(crate) enum SettingsPaneEvent {
     Changed,
+    /// 导出工作区到指定路径;窗口态采集与写盘归宿主。
+    ExportWorkspace {
+        path: PathBuf,
+    },
     Close,
 }
 
@@ -86,11 +115,25 @@ pub(crate) enum SettingsStatus {
     Reset { backup: Option<PathBuf> },
     /// 写盘/读取失败。
     Failed(String),
+    /// 主题包导入成功;`name` = 库内消歧后的显示名。
+    ThemeImported { name: String },
+    /// 主题包导出成功;`path` = 成品输出路径。
+    ThemeExported { path: PathBuf },
+    /// 主题包导入失败(校验/安装原因)。
+    ThemeImportFailed(String),
+    /// 主题包导出失败(读取主题/写包原因)。
+    ThemeExportFailed(String),
 }
 
 impl SettingsStatus {
     pub(crate) fn is_error(&self) -> bool {
-        matches!(self, Self::LoadedCorrupted | Self::Failed(_))
+        matches!(
+            self,
+            Self::LoadedCorrupted
+                | Self::Failed(_)
+                | Self::ThemeImportFailed(_)
+                | Self::ThemeExportFailed(_)
+        )
     }
 
     pub(crate) fn text(&self, language: UiLanguage) -> String {
@@ -106,6 +149,21 @@ impl SettingsStatus {
             Self::Failed(error) => {
                 language.format(Message::SettingsStatusOperationFailed, &[("error", error)])
             }
+            Self::ThemeImported { name } => {
+                language.format(Message::SettingsStatusThemeImported, &[("name", name)])
+            }
+            Self::ThemeExported { path } => {
+                let path = path.display().to_string();
+                language.format(Message::SettingsStatusThemeExported, &[("path", &path)])
+            }
+            Self::ThemeImportFailed(error) => language.format(
+                Message::SettingsStatusThemeImportFailed,
+                &[("error", error)],
+            ),
+            Self::ThemeExportFailed(error) => language.format(
+                Message::SettingsStatusThemeExportFailed,
+                &[("error", error)],
+            ),
         }
     }
 }
@@ -145,8 +203,35 @@ pub(crate) struct SettingsPane {
     persist_running: bool,
     /// B57:拖动中的实时透明度;后台回读不得覆盖预览值。
     live_opacity: Option<f32>,
+    /// 壁纸 fit/alignment 下拉(独立于通用 `selects`:映射与本地化在此)。
+    wallpaper_fit_select: SharedSelect,
+    wallpaper_alignment_select: SharedSelect,
+    /// 壁纸下拉标签的渲染语言缓存(语言热切换时只换显示项)。
+    wallpaper_select_language: UiLanguage,
+    /// 壁纸不透明度滑杆(0–100 显示域;持久化域 0–1)。
+    wallpaper_opacity_slider: Entity<SliderState>,
+    /// 设置页壁纸缩略图:后台解码,前台只持有纹理与原始布局尺寸。
+    wallpaper_preview: Option<crate::app_shell::wallpaper::WallpaperPreview>,
+    /// 预览对应的已确认设置路径;与运行时路径不一致时触发重载。
+    wallpaper_preview_path: Option<PathBuf>,
+    /// 预览载入代际:后发请求赢,旧结果直接丢弃。
+    wallpaper_preview_generation: u64,
+    wallpaper_preview_loading: bool,
+    /// 壁纸可读错误(路径不存在/解码失败);有值时页面内联展示。
+    wallpaper_error: Option<String>,
+    /// B19:主题包导入/导出忙态(防重复点击)。
+    theme_import_busy: bool,
+    theme_export_busy: bool,
     /// 主题编辑会话(外观页子视图;关闭即丢弃草稿)。
     theme_editor: Option<theme_editor::ThemeEditor>,
+    /// 键位录制焦点:进入录制态时取得键盘焦点,下一次 KeyDown 在此消费。
+    keybind_focus: FocusHandle,
+    /// 正在录制的动作名;None = 非录制态。
+    keybind_recording: Option<String>,
+    /// 键位编辑拒绝原因(保留键/非法组合);成功写回即清除。
+    keybind_error: Option<String>,
+    /// 用户 `keybind` 段全表(行序即优先级);每次编辑后随写回更新。
+    keybind_pairs: Vec<(String, String)>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -208,6 +293,24 @@ impl SettingsTarget {
         match self {
             Self::Default => crate::settings_store::read_revision(),
             Self::Path(path) => crate::settings_store::read_revision_at(path),
+        }
+    }
+
+    /// 用户 `keybind` 段读取(生产默认数据目录;显式路径测试隔离)。
+    fn keybind_pairs(&self) -> Vec<(String, String)> {
+        match self {
+            Self::Default => keyboard_bindings::load_keybind_pairs(),
+            Self::Path(path) => keyboard_bindings::load_keybind_pairs_at(path),
+        }
+    }
+
+    /// 设置文件所在目录:导出等对话框的起始目录(测试目标 = 设置父目录)。
+    fn settings_directory(&self) -> PathBuf {
+        match self {
+            Self::Default => slterm_settings::settings_dir(),
+            Self::Path(path) => path
+                .parent()
+                .map_or_else(slterm_settings::settings_dir, std::path::Path::to_path_buf),
         }
     }
 
@@ -350,6 +453,18 @@ impl SettingsPane {
             Self::create_scroll_speed_slider(&persisted, window, cx, &mut subscriptions);
         let opacity_slider =
             Self::create_opacity_slider(&persisted, window, cx, &mut subscriptions);
+        let wallpaper_fit_select =
+            Self::create_wallpaper_fit_select(&persisted, language, window, cx, &mut subscriptions);
+        let wallpaper_alignment_select = Self::create_wallpaper_alignment_select(
+            &persisted,
+            language,
+            window,
+            cx,
+            &mut subscriptions,
+        );
+        let wallpaper_opacity_slider =
+            Self::create_wallpaper_opacity_slider(&persisted, window, cx, &mut subscriptions);
+        let keybind_pairs = settings_target.keybind_pairs();
         let mut pane = Self {
             focus_handle: cx.focus_handle(),
             settings_target,
@@ -372,7 +487,22 @@ impl SettingsPane {
             persist_queue: std::collections::VecDeque::new(),
             persist_running: false,
             live_opacity: None,
+            wallpaper_fit_select,
+            wallpaper_alignment_select,
+            wallpaper_select_language: language,
+            wallpaper_opacity_slider,
+            wallpaper_preview: None,
+            wallpaper_preview_path: None,
+            wallpaper_preview_generation: 0,
+            wallpaper_preview_loading: false,
+            wallpaper_error: None,
+            theme_import_busy: false,
+            theme_export_busy: false,
             theme_editor: None,
+            keybind_focus: cx.focus_handle(),
+            keybind_recording: None,
+            keybind_error: None,
+            keybind_pairs,
             _subscriptions: subscriptions,
         };
         pane.add_builtin_selects(language, window, cx);
@@ -444,6 +574,634 @@ impl SettingsPane {
             }
         }));
         slider
+    }
+
+    /// 壁纸 fit 下拉:索引 ↔ `WALLPAPER_FIT_VALUES`;默认索引对齐
+    /// `BackgroundImageFit::default`(uniform_to_fill)。
+    fn create_wallpaper_fit_select(
+        runtime: &RuntimeSettings,
+        language: UiLanguage,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+        subscriptions: &mut Vec<Subscription>,
+    ) -> SharedSelect {
+        let selected = runtime
+            .background_image_fit
+            .as_deref()
+            .and_then(|value| {
+                WALLPAPER_FIT_VALUES
+                    .iter()
+                    .position(|candidate| *candidate == value)
+            })
+            .unwrap_or(2);
+        let select = cx.new(|cx| {
+            SelectState::new(
+                wallpaper_fit_labels(language),
+                Some(gpui_component::IndexPath::default().row(selected)),
+                window,
+                cx,
+            )
+        });
+        subscriptions.push(cx.subscribe_in(
+            &select,
+            window,
+            |this, entity, event: &SelectEvent<Vec<SharedString>>, window, cx| {
+                if !matches!(event, SelectEvent::Confirm(Some(_))) {
+                    return;
+                }
+                let Some(row) = entity.read(cx).selected_index(cx).map(|path| path.row) else {
+                    return;
+                };
+                let Some(value) = WALLPAPER_FIT_VALUES.get(row).copied() else {
+                    return;
+                };
+                this.commit_wallpaper_fit(value, window, cx);
+            },
+        ));
+        select
+    }
+
+    /// 壁纸对齐下拉(九宫格);默认索引对齐 `BackgroundImageAlignment::default`。
+    fn create_wallpaper_alignment_select(
+        runtime: &RuntimeSettings,
+        language: UiLanguage,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+        subscriptions: &mut Vec<Subscription>,
+    ) -> SharedSelect {
+        let selected = runtime
+            .background_image_alignment
+            .as_deref()
+            .and_then(|value| {
+                WALLPAPER_ALIGNMENT_VALUES
+                    .iter()
+                    .position(|candidate| *candidate == value)
+            })
+            .unwrap_or(4);
+        let select = cx.new(|cx| {
+            SelectState::new(
+                wallpaper_alignment_labels(language),
+                Some(gpui_component::IndexPath::default().row(selected)),
+                window,
+                cx,
+            )
+        });
+        subscriptions.push(cx.subscribe_in(
+            &select,
+            window,
+            |this, entity, event: &SelectEvent<Vec<SharedString>>, window, cx| {
+                if !matches!(event, SelectEvent::Confirm(Some(_))) {
+                    return;
+                }
+                let Some(row) = entity.read(cx).selected_index(cx).map(|path| path.row) else {
+                    return;
+                };
+                let Some(value) = WALLPAPER_ALIGNMENT_VALUES.get(row).copied() else {
+                    return;
+                };
+                this.commit_wallpaper_alignment(value, window, cx);
+            },
+        ));
+        select
+    }
+
+    /// 壁纸不透明度滑杆:显示域 0–100,拖动只改内存/视效,松手落盘。
+    fn create_wallpaper_opacity_slider(
+        runtime: &RuntimeSettings,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+        subscriptions: &mut Vec<Subscription>,
+    ) -> Entity<SliderState> {
+        let slider = cx.new(|_| {
+            SliderState::new()
+                .min(0.0)
+                .max(100.0)
+                .step(1.0)
+                .default_value(runtime.background_image_opacity.clamp(0.0, 1.0) * 100.0)
+        });
+        subscriptions.push(cx.subscribe_in(
+            &slider,
+            window,
+            |this, _, event: &SliderEvent, window, cx| match event {
+                SliderEvent::Change(value) => this.preview_wallpaper_opacity(value.start(), cx),
+                SliderEvent::Release(value) => {
+                    this.commit_wallpaper_opacity(value.start(), window, cx);
+                }
+            },
+        ));
+        // 可访问性增减走 set_value,不发 Change/Release;值偏离运行时值
+        // 时补一次预览+提交(与鼠标路径同一归一化入口)。
+        subscriptions.push(cx.observe_in(&slider, window, |this, slider, window, cx| {
+            let value = slider.read(cx).value().start();
+            if (value - this.runtime.background_image_opacity * 100.0).abs() > 0.5 {
+                this.preview_wallpaper_opacity(value, cx);
+                this.commit_wallpaper_opacity(value, window, cx);
+            }
+        }));
+        slider
+    }
+
+    /// 语言热切换:壁纸下拉不进入通用 `selects`,在页面渲染入口补齐
+    /// 显示项刷新(实体与选中索引保留,不重建控件)。
+    pub(super) fn sync_wallpaper_select_language(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if self.wallpaper_select_language == self.language {
+            return;
+        }
+        self.wallpaper_select_language = self.language;
+        let language = self.language;
+        let fit_selected = self.wallpaper_fit_select.read(cx).selected_index(cx);
+        self.wallpaper_fit_select.update(cx, |state, cx| {
+            state.set_items(wallpaper_fit_labels(language), window, cx);
+            state.set_selected_index(fit_selected, window, cx);
+        });
+        let alignment_selected = self.wallpaper_alignment_select.read(cx).selected_index(cx);
+        self.wallpaper_alignment_select.update(cx, |state, cx| {
+            state.set_items(wallpaper_alignment_labels(language), window, cx);
+            state.set_selected_index(alignment_selected, window, cx);
+        });
+    }
+
+    /// 选择壁纸:平台文件选择器;取消零写入,解码成功后才写设置键。
+    pub(super) fn pick_wallpaper(&mut self, _window: &mut Window, cx: &mut Context<'_, Self>) {
+        let language = self.language(cx);
+        let prompt = language
+            .text(Message::SettingsAppearanceWallpaperPickPrompt)
+            .to_owned();
+        let picked = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some(prompt.into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = picked.await else {
+                return;
+            };
+            let Some(path) = paths.into_iter().next() else {
+                return;
+            };
+            let _ = this.update(cx, |pane, cx| pane.begin_wallpaper_preview(path, cx));
+        })
+        .detach();
+    }
+
+    /// 后台解码选定路径;成功才展示缩略图并写入 `background_image`。
+    fn begin_wallpaper_preview(&mut self, path: PathBuf, cx: &mut Context<'_, Self>) {
+        self.wallpaper_preview_generation = self.wallpaper_preview_generation.wrapping_add(1);
+        let generation = self.wallpaper_preview_generation;
+        self.wallpaper_preview_loading = true;
+        self.wallpaper_error = None;
+        let persist_path = path.to_string_lossy().into_owned();
+        let task = crate::app_shell::wallpaper::load_preview_async(path.clone(), cx);
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            let _ = this.update(cx, |pane, cx| {
+                if pane.wallpaper_preview_generation != generation {
+                    return;
+                }
+                pane.wallpaper_preview_loading = false;
+                match result {
+                    Ok(preview) => {
+                        pane.replace_wallpaper_preview(Some(preview), cx);
+                        pane.wallpaper_preview_path = Some(path);
+                        pane.wallpaper_error = None;
+                        pane.runtime.background_image = Some(persist_path.clone());
+                        pane.try_persist(&[("background_image", Value::String(persist_path))], cx);
+                        pane.status = None;
+                    }
+                    Err(error) => {
+                        let message = pane.wallpaper_preview_error_text(error);
+                        pane.wallpaper_error = Some(message);
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// 运行时路径与已确认预览路径不一致时重载预览(启动/回读/恢复路径)。
+    fn sync_wallpaper_preview(&mut self, cx: &mut Context<'_, Self>) {
+        let desired = self.runtime.background_image.clone().map(PathBuf::from);
+        if desired == self.wallpaper_preview_path {
+            return;
+        }
+        self.wallpaper_preview_path = desired.clone();
+        self.wallpaper_preview_generation = self.wallpaper_preview_generation.wrapping_add(1);
+        let generation = self.wallpaper_preview_generation;
+        let Some(path) = desired else {
+            self.wallpaper_preview_loading = false;
+            self.replace_wallpaper_preview(None, cx);
+            self.wallpaper_error = None;
+            return;
+        };
+        self.wallpaper_preview_loading = true;
+        let task = crate::app_shell::wallpaper::load_preview_async(path, cx);
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            let _ = this.update(cx, |pane, cx| {
+                if pane.wallpaper_preview_generation != generation {
+                    return;
+                }
+                pane.wallpaper_preview_loading = false;
+                match result {
+                    Ok(preview) => {
+                        pane.replace_wallpaper_preview(Some(preview), cx);
+                        pane.wallpaper_error = None;
+                    }
+                    Err(error) => {
+                        let message = pane.wallpaper_preview_error_text(error);
+                        pane.wallpaper_error = Some(message);
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// 替换预览纹理;旧纹理延后释放,避免在窗口 update 期间动渲染资源。
+    fn replace_wallpaper_preview(
+        &mut self,
+        preview: Option<crate::app_shell::wallpaper::WallpaperPreview>,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if let Some(previous) = self.wallpaper_preview.take() {
+            cx.defer(move |cx| cx.drop_image(previous.image, None));
+        }
+        self.wallpaper_preview = preview;
+    }
+
+    /// 预览失败原因 → 可读文案(不裸出内部错误枚举)。
+    fn wallpaper_preview_error_text(
+        &self,
+        error: crate::app_shell::wallpaper::WallpaperPreviewError,
+    ) -> String {
+        use crate::app_shell::wallpaper::WallpaperPreviewError;
+        let message = match error {
+            WallpaperPreviewError::Read => Message::SettingsAppearanceWallpaperErrorRead,
+            WallpaperPreviewError::Decode => Message::SettingsAppearanceWallpaperErrorDecode,
+            WallpaperPreviewError::TooLarge => Message::SettingsAppearanceWallpaperErrorTooLarge,
+        };
+        self.language.text(message).to_owned()
+    }
+
+    /// 清除壁纸:预览与设置键同帧置空,写盘走统一通道。
+    pub(super) fn clear_wallpaper(&mut self, _window: &mut Window, cx: &mut Context<'_, Self>) {
+        self.wallpaper_preview_generation = self.wallpaper_preview_generation.wrapping_add(1);
+        self.wallpaper_preview_path = None;
+        self.wallpaper_preview_loading = false;
+        self.replace_wallpaper_preview(None, cx);
+        self.wallpaper_error = None;
+        self.runtime.background_image = None;
+        if cx.has_global::<Settings>() {
+            cx.global_mut::<Settings>().background_image = None;
+        }
+        crate::app_shell::wallpaper::refresh(cx);
+        self.try_persist(&[("background_image", Value::Null)], cx);
+        self.status = None;
+        cx.notify();
+    }
+
+    fn commit_wallpaper_fit(
+        &mut self,
+        value: &'static str,
+        _window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.runtime.background_image_fit = Some(value.to_owned());
+        if cx.has_global::<Settings>() {
+            cx.global_mut::<Settings>().background_image_fit = Some(value.to_owned());
+        }
+        crate::app_shell::wallpaper::refresh(cx);
+        self.try_persist(
+            &[("background_image_fit", Value::String(value.to_owned()))],
+            cx,
+        );
+        self.status = None;
+        cx.notify();
+    }
+
+    fn commit_wallpaper_alignment(
+        &mut self,
+        value: &'static str,
+        _window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.runtime.background_image_alignment = Some(value.to_owned());
+        if cx.has_global::<Settings>() {
+            cx.global_mut::<Settings>().background_image_alignment = Some(value.to_owned());
+        }
+        crate::app_shell::wallpaper::refresh(cx);
+        self.try_persist(
+            &[(
+                "background_image_alignment",
+                Value::String(value.to_owned()),
+            )],
+            cx,
+        );
+        self.status = None;
+        cx.notify();
+    }
+
+    /// 壁纸不透明度拖动快路径:只改全局事实源与视效 alpha,不触盘。
+    fn preview_wallpaper_opacity(&mut self, value: f32, cx: &mut Context<'_, Self>) {
+        let opacity = (value / 100.0).clamp(0.0, 1.0);
+        self.runtime.background_image_opacity = opacity;
+        if cx.has_global::<Settings>() {
+            cx.global_mut::<Settings>().background_image_opacity = opacity;
+        }
+        crate::app_shell::wallpaper::set_wallpaper_opacity_live(opacity, cx);
+        cx.refresh_windows();
+        cx.notify();
+    }
+
+    fn commit_wallpaper_opacity(
+        &mut self,
+        value: f32,
+        _window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let opacity = (value / 100.0).clamp(0.0, 1.0);
+        self.runtime.background_image_opacity = opacity;
+        if cx.has_global::<Settings>() {
+            cx.global_mut::<Settings>().background_image_opacity = opacity;
+        }
+        self.try_persist(
+            &[(
+                "background_image_opacity",
+                Value::Number(f64::from(opacity)),
+            )],
+            cx,
+        );
+        self.status = None;
+        cx.notify();
+    }
+
+    /// 主题包导入:选择器 → 后台 `CheckedPackage::open + install` → 前台提示。
+    pub(super) fn import_theme_package(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if self.theme_import_busy {
+            return;
+        }
+        let language = self.language(cx);
+        let prompt = language
+            .text(Message::SettingsAppearanceThemeImportPrompt)
+            .to_owned();
+        let picked = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some(prompt.into()),
+        });
+        self.theme_import_busy = true;
+        self.status = None;
+        cx.notify();
+        let store = self.settings_target.theme_store();
+        cx.spawn(async move |this, cx| {
+            let path = match picked.await {
+                Ok(Ok(Some(mut paths))) => paths.pop(),
+                _ => None,
+            };
+            let Some(path) = path else {
+                let _ = this.update(cx, |pane, cx| {
+                    pane.theme_import_busy = false;
+                    cx.notify();
+                });
+                return;
+            };
+            if !has_zip_extension(&path) {
+                let message = language
+                    .text(Message::SettingsAppearanceThemeImportZipRequired)
+                    .to_owned();
+                let _ = this.update(cx, |pane, cx| {
+                    pane.theme_import_busy = false;
+                    pane.status = Some(SettingsStatus::ThemeImportFailed(message));
+                    cx.notify();
+                });
+                return;
+            }
+            let task = cx.background_executor().spawn(async move {
+                CheckedPackage::open(&path)
+                    .and_then(|package| package.install(&store))
+                    .map(|document| document.name().to_owned())
+                    .map_err(|error| error.to_string())
+            });
+            let result = task.await;
+            let _ = this.update(cx, |pane, cx| pane.finish_theme_import(result, cx));
+        })
+        .detach();
+    }
+
+    fn finish_theme_import(&mut self, result: Result<String, String>, cx: &mut Context<'_, Self>) {
+        self.theme_import_busy = false;
+        match result {
+            Ok(name) => {
+                self.status = Some(SettingsStatus::ThemeImported { name });
+                // 主题库已变更:走既有 Changed 路径刷新消费方(编辑器模板
+                // 在下次打开时从 store 重新派生)。
+                cx.emit(SettingsPaneEvent::Changed);
+            }
+            Err(error) => self.status = Some(SettingsStatus::ThemeImportFailed(error)),
+        }
+        cx.notify();
+    }
+
+    /// 主题包导出:选目标 → 后台读取当前自定义主题并 `export_package`。
+    pub(super) fn export_theme_package(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if self.theme_export_busy {
+            return;
+        }
+        let Some(theme_id) = self.runtime.custom_theme.clone() else {
+            return;
+        };
+        let language = self.language(cx);
+        let directory = self.theme_package_directory();
+        let suggested = format!("{theme_id}.slterm-theme.zip");
+        let picked = cx.prompt_for_new_path(&directory, Some(&suggested));
+        self.theme_export_busy = true;
+        self.status = None;
+        cx.notify();
+        let store = self.settings_target.theme_store();
+        cx.spawn(async move |this, cx| {
+            let path = match picked.await {
+                Ok(Ok(Some(path))) => Some(path),
+                _ => None,
+            };
+            let Some(output) = path else {
+                let _ = this.update(cx, |pane, cx| {
+                    pane.theme_export_busy = false;
+                    cx.notify();
+                });
+                return;
+            };
+            if !has_zip_extension(&output) {
+                let message = language
+                    .text(Message::SettingsAppearanceThemeExportZipRequired)
+                    .to_owned();
+                let _ = this.update(cx, |pane, cx| {
+                    pane.theme_export_busy = false;
+                    pane.status = Some(SettingsStatus::ThemeExportFailed(message));
+                    cx.notify();
+                });
+                return;
+            }
+            let task = cx.background_executor().spawn(async move {
+                let document = store.load(&theme_id).map_err(|error| error.to_string())?;
+                export_package(
+                    &document,
+                    Author {
+                        name: THEME_PACKAGE_AUTHOR.to_owned(),
+                        github: None,
+                    },
+                    THEME_PACKAGE_VERSION.to_owned(),
+                    THEME_PACKAGE_LICENSE.to_owned(),
+                    &output,
+                    None,
+                )
+                .map_err(|error| error.to_string())?;
+                Ok::<PathBuf, String>(output)
+            });
+            let result = task.await;
+            let _ = this.update(cx, |pane, cx| pane.finish_theme_export(result, cx));
+        })
+        .detach();
+    }
+
+    fn finish_theme_export(&mut self, result: Result<PathBuf, String>, cx: &mut Context<'_, Self>) {
+        self.theme_export_busy = false;
+        self.status = Some(match result {
+            Ok(path) => SettingsStatus::ThemeExported { path },
+            Err(error) => SettingsStatus::ThemeExportFailed(error),
+        });
+        cx.notify();
+    }
+
+    /// 导出对话框的起始目录:显式测试目标 = 设置文件父目录;生产 =
+    /// 默认数据目录(与主题库同一根)。
+    fn theme_package_directory(&self) -> PathBuf {
+        self.settings_target
+            .theme_root()
+            .and_then(|root| root.parent().map(std::path::Path::to_path_buf))
+            .unwrap_or_else(slterm_settings::settings_dir)
+    }
+
+    /// 进入键位录制:录制焦点接管下一次 KeyDown;Esc 由录制处理函数取消。
+    pub(super) fn begin_keybind_recording(
+        &mut self,
+        action: &'static str,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.keybind_recording = Some(action.to_owned());
+        self.keybind_error = None;
+        window.focus(&self.keybind_focus, cx);
+        cx.notify();
+    }
+
+    /// 取消录制(零写入)。
+    pub(super) fn cancel_keybind_recording(&mut self, cx: &mut Context<'_, Self>) {
+        if self.keybind_recording.take().is_some() {
+            self.keybind_error = None;
+            cx.notify();
+        }
+    }
+
+    /// 录制按键:先准入;保留键/非法组合给可读错误且不写盘,成功则整表写回。
+    pub(super) fn handle_keybind_key_down(
+        &mut self,
+        event: &KeyDownEvent,
+        _window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(action) = self.keybind_recording.clone() else {
+            return;
+        };
+        // 长按重复事件不重复改绑;事件仍由录制态吞掉。
+        cx.stop_propagation();
+        if event.is_held {
+            return;
+        }
+        if event.keystroke.key.eq_ignore_ascii_case("escape") {
+            self.cancel_keybind_recording(cx);
+            return;
+        }
+        let combo = event.keystroke.unparse();
+        let admission =
+            keyboard_bindings::admit_keybind_pairs(vec![(combo.clone(), action.clone())]);
+        if !admission.rejected.is_empty() {
+            let message = if keyboard_bindings::is_reserved_combo(&combo) {
+                Message::SettingsInteractionKeybindReservedError
+            } else {
+                Message::SettingsInteractionKeybindInvalidError
+            };
+            self.keybind_error = Some(self.language(cx).format(message, &[("combo", &combo)]));
+            cx.notify();
+            return;
+        }
+        let mut pairs = self.keybind_pairs.clone();
+        keyboard_bindings::rebind_action(&mut pairs, &action, &combo);
+        self.keybind_recording = None;
+        self.keybind_error = None;
+        self.write_keybind_pairs(pairs, cx);
+    }
+
+    /// 清除动作绑定:撤自定义行并把默认键精确收回(`none` 标记)。
+    pub(super) fn clear_keybind_action(&mut self, action: &str, cx: &mut Context<'_, Self>) {
+        let mut pairs = self.keybind_pairs.clone();
+        keyboard_bindings::clear_action(&mut pairs, action);
+        self.keybind_recording = None;
+        self.keybind_error = None;
+        self.write_keybind_pairs(pairs, cx);
+    }
+
+    /// 恢复动作默认绑定:撤自定义行与默认键的 `none` 标记。
+    pub(super) fn reset_keybind_action(&mut self, action: &str, cx: &mut Context<'_, Self>) {
+        let mut pairs = self.keybind_pairs.clone();
+        keyboard_bindings::reset_action(&mut pairs, action);
+        self.keybind_recording = None;
+        self.keybind_error = None;
+        self.write_keybind_pairs(pairs, cx);
+    }
+
+    /// 键位整表写回:经统一设置写通道(外部段整表替换、行序即优先级)。
+    fn write_keybind_pairs(&mut self, pairs: Vec<(String, String)>, cx: &mut Context<'_, Self>) {
+        let value = slterm_settings::keys::keybind_value(&pairs);
+        self.keybind_pairs = pairs;
+        self.status = None;
+        self.try_persist(&[(KEYBIND_SEGMENT, value)], cx);
+        cx.notify();
+    }
+
+    /// 导出工作区:选目标路径后发事件,窗口态采集与写盘归宿主。
+    pub(super) fn prompt_export_workspace(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let directory = self.settings_target.settings_directory();
+        let picked = cx.prompt_for_new_path(&directory, Some("slterm-workspace.json"));
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(path))) = picked.await else {
+                return;
+            };
+            let _ = this.update(cx, |_pane, cx| {
+                cx.emit(SettingsPaneEvent::ExportWorkspace { path });
+            });
+        })
+        .detach();
     }
 
     fn add_builtin_selects(
@@ -844,6 +1602,44 @@ impl SettingsPane {
 /// 回滚档位持久化值表(显示侧千分位由 localization 派生)。
 const SCROLLBACK_LABELS: [&str; 7] = ["1000", "2000", "5000", "10000", "20000", "50000", "100000"];
 
+/// 壁纸适应模式显示文案;与 [`WALLPAPER_FIT_VALUES`] 严格同序同数。
+fn wallpaper_fit_labels(language: UiLanguage) -> Vec<SharedString> {
+    [
+        Message::SettingsAppearanceWallpaperFitFill,
+        Message::SettingsAppearanceWallpaperFitUniform,
+        Message::SettingsAppearanceWallpaperFitUniformToFill,
+        Message::SettingsAppearanceWallpaperFitNone,
+    ]
+    .into_iter()
+    .map(|message| SharedString::from(language.text(message)))
+    .collect()
+}
+
+/// 壁纸九宫格对齐显示文案;与 [`WALLPAPER_ALIGNMENT_VALUES`] 严格同序同数。
+fn wallpaper_alignment_labels(language: UiLanguage) -> Vec<SharedString> {
+    [
+        Message::SettingsAppearanceWallpaperAlignTopLeft,
+        Message::SettingsAppearanceWallpaperAlignTop,
+        Message::SettingsAppearanceWallpaperAlignTopRight,
+        Message::SettingsAppearanceWallpaperAlignLeft,
+        Message::SettingsAppearanceWallpaperAlignCenter,
+        Message::SettingsAppearanceWallpaperAlignRight,
+        Message::SettingsAppearanceWallpaperAlignBottomLeft,
+        Message::SettingsAppearanceWallpaperAlignBottom,
+        Message::SettingsAppearanceWallpaperAlignBottomRight,
+    ]
+    .into_iter()
+    .map(|message| SharedString::from(language.text(message)))
+    .collect()
+}
+
+/// 主题包对话框的目标/来源扩展名检查(不做前台文件 IO)。
+fn has_zip_extension(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("zip"))
+}
+
 impl Focusable for SettingsPane {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus_handle.clone()
@@ -901,6 +1697,106 @@ impl Render for SettingsPane {
                             ),
                     ),
             )
+    }
+}
+
+/// B55/B19 虚拟窗口用例的驱动端(生产不编译)。
+#[cfg(all(test, feature = "gpui-test-support"))]
+impl SettingsPane {
+    pub(crate) fn pick_wallpaper_for_test(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.pick_wallpaper(window, cx);
+    }
+
+    pub(crate) fn clear_wallpaper_for_test(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.clear_wallpaper(window, cx);
+    }
+
+    pub(crate) fn commit_wallpaper_fit_for_test(
+        &mut self,
+        value: &'static str,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.commit_wallpaper_fit(value, window, cx);
+    }
+
+    pub(crate) fn commit_wallpaper_alignment_for_test(
+        &mut self,
+        value: &'static str,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.commit_wallpaper_alignment(value, window, cx);
+    }
+
+    pub(crate) fn preview_wallpaper_opacity_for_test(
+        &mut self,
+        value: f32,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.preview_wallpaper_opacity(value, cx);
+    }
+
+    pub(crate) fn commit_wallpaper_opacity_for_test(
+        &mut self,
+        value: f32,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.commit_wallpaper_opacity(value, window, cx);
+    }
+
+    pub(crate) fn wallpaper_preview_ready_for_test(&self) -> bool {
+        self.wallpaper_preview.is_some()
+    }
+
+    pub(crate) fn wallpaper_error_for_test(&self) -> Option<&str> {
+        self.wallpaper_error.as_deref()
+    }
+
+    pub(crate) fn import_theme_package_for_test(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.import_theme_package(window, cx);
+    }
+
+    pub(crate) fn export_theme_package_for_test(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.export_theme_package(window, cx);
+    }
+
+    pub(crate) fn theme_import_busy_for_test(&self) -> bool {
+        self.theme_import_busy
+    }
+
+    pub(crate) fn theme_export_busy_for_test(&self) -> bool {
+        self.theme_export_busy
+    }
+
+    /// B7:当前用户在 `keybind` 段的内存表(写回后与磁盘同形)。
+    pub(crate) fn keybind_pairs_for_test(&self) -> Vec<(String, String)> {
+        self.keybind_pairs.clone()
+    }
+
+    pub(crate) fn keybind_recording_for_test(&self) -> Option<&str> {
+        self.keybind_recording.as_deref()
+    }
+
+    pub(crate) fn keybind_error_for_test(&self) -> Option<&str> {
+        self.keybind_error.as_deref()
     }
 }
 

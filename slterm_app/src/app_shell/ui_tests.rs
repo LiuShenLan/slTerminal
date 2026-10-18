@@ -26,15 +26,20 @@ use crate::cli::Program;
 use crate::session::{AgentSession, LaunchSession, WindowState, load_from};
 use slterm_terminal::event_loop::Msg as EventLoopMsg;
 
+mod file_editor_chrome_tests;
 mod file_editor_tests;
 mod file_tree_tests;
 mod focus_tests;
 mod hooks_tests;
+mod keybind_editor_tests;
 mod runtime_control_tests;
 mod runtime_projection_tests;
+mod sidebar_views_tests;
 mod taskbar_tests;
 mod theme_tests;
 mod tray_tests;
+mod wallpaper_tests;
+mod workspace_export_tests;
 
 /// 与生产 init 同序的测试子集(11 篇模板同形):内嵌 Maple 在测试文本系统
 /// 不栅格化真实字形,20MB 注册纯属拖慢,测试不挂。

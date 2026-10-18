@@ -239,6 +239,83 @@ pub(crate) fn set_opacity_live(opacity: f32, cx: &mut App) {
     }
 }
 
+/// 拖壁纸不透明度滑块的快路径:只改视效全局中的壁纸 alpha,不读设置、
+/// 不重载纹理。调用方负责 `cx.refresh_windows()`。
+pub(crate) fn set_wallpaper_opacity_live(opacity: f32, cx: &mut App) {
+    if cx.has_global::<VisualEffects>()
+        && let Some(wallpaper) = cx.global_mut::<VisualEffects>().wallpaper.as_mut()
+    {
+        wallpaper.opacity = opacity.clamp(0.0, 1.0);
+    }
+}
+
+/// 设置页壁纸预览结果:缩略纹理 + 原图布局尺寸(供 fit/alignment 落点)。
+pub(crate) struct WallpaperPreview {
+    pub image: Arc<RenderImage>,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// 预览失败原因;设置页映射为可读文案,不裸出加载器错误。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WallpaperPreviewError {
+    Read,
+    Decode,
+    TooLarge,
+}
+
+/// 设置页预览加载:后台执行器上走同一条有界解码管线(预览 512 边)。
+pub(crate) fn load_preview_async(
+    path: PathBuf,
+    cx: &mut App,
+) -> gpui::Task<Result<WallpaperPreview, WallpaperPreviewError>> {
+    cx.background_executor().spawn(async move {
+        let request = image_loader::Request {
+            path,
+            cached: None,
+            // 设置页预览没有跨帧缓存/代际竞争;固定代际使请求始终有效。
+            generation: Arc::new(AtomicU64::new(0)),
+            version: 0,
+        };
+        match image_loader::load_preview(request) {
+            Ok(Some(loaded)) => Ok(WallpaperPreview {
+                image: Arc::new(RenderImage::new([Frame::new(loaded.pixels)])),
+                width: loaded.layout_width,
+                height: loaded.layout_height,
+            }),
+            Ok(None) => Err(WallpaperPreviewError::Read),
+            Err(error) => Err(match error {
+                image_loader::LoadError::TooLarge => WallpaperPreviewError::TooLarge,
+                image_loader::LoadError::Read => WallpaperPreviewError::Read,
+                image_loader::LoadError::Decode => WallpaperPreviewError::Decode,
+            }),
+        }
+    })
+}
+
+/// 设置页预览盒内图片落点(fit/alignment 与运行时同一套几何)。
+pub(crate) fn preview_rect(
+    viewport_w: f32,
+    viewport_h: f32,
+    image_w: u32,
+    image_h: u32,
+    fit: Option<&str>,
+    alignment: Option<&str>,
+) -> (f32, f32, f32, f32) {
+    let fit = fit.and_then(BackgroundImageFit::parse).unwrap_or_default();
+    let alignment = alignment
+        .and_then(BackgroundImageAlignment::parse)
+        .unwrap_or_default();
+    wallpaper_rect(
+        viewport_w,
+        viewport_h,
+        image_w as f32,
+        image_h as f32,
+        fit,
+        alignment,
+    )
+}
+
 /// 开窗参数用:首帧即走平台 backdrop,不必等 `refresh` 补第二次。
 ///
 /// Mica/MicaAlt 在 22H2(22621)走原生枚举;1809(17763)+ 回退经典

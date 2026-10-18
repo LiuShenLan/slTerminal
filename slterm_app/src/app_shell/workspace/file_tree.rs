@@ -11,7 +11,9 @@
 //!   (应用内可读)或交系统处理器(未命中臂,M8.4 出口);
 //! - 拖行 → 终端 = 路径原文进 PTY(规则在 `side_panel::drop_text_for_path`);
 //!   拖出窗口 = 系统文件拖放(`external_drag_payload`);
-//! - 右键菜单/CRUD 归 M8.5(菜单内容 = 07 篇动作面)。
+//! - 右键菜单 = 新建文件/新建文件夹/重命名/删除;新建目标 = 目录本身或文件
+//!   的父目录,重命名遇已打开 tab 安全拒绝(编辑器路径更新 API 未开放);
+//! - 删除走系统回收站(唯一执行体在 `platform::file_operations`)。
 //!
 //! 文件图标载体 = 内嵌 Nerd Font 字形(开放问题 4 选型;色归 06 token)。
 
@@ -29,9 +31,7 @@ use gpui::{
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::scroll::Scrollbar;
-use gpui_component::{
-    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, StyledExt as _,
-};
+use gpui_component::{ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _};
 
 use super::{SltermWorkspace, WorkspaceTab};
 use crate::app_shell::assets::REQUIRED_FONT_FAMILY;
@@ -43,7 +43,7 @@ use crate::side_panel::{self, SidePanel};
 
 mod path_bar;
 
-pub(super) use path_bar::PathEditor;
+pub(super) use path_bar::{NameEditKind, NameEditor, PathEditor};
 
 /// 行距(旧壳 `PanelLayout::row_h`)。
 pub(super) const ROW_PITCH: f32 = 34.0;
@@ -58,6 +58,8 @@ pub(super) const DRAWER_TEXT_INSET: f32 = 4.0;
 /// (07 篇照抄点 23)。
 pub(super) struct FileTreeContextMenu {
     pub(super) path: PathBuf,
+    /// 目标条目是目录:新建动作落在目录内;文件目标落其父目录。
+    pub(super) is_dir: bool,
     pub(super) position: gpui::Point<gpui::Pixels>,
 }
 
@@ -71,6 +73,8 @@ pub(super) struct FileTreeState {
     pub(super) scroll: UniformListScrollHandle,
     /// 路径栏编辑草稿;`None` = 只读路径按钮形态。
     pub(super) path_editor: Option<PathEditor>,
+    /// 右键新建/重命名的名字草稿;与路径栏互不干扰。
+    pub(super) name_editor: Option<NameEditor>,
     /// 后台快照/搜索轮询泵是否在飞(单实例)。
     pub(super) pump_running: bool,
     /// 搜索框变更订阅(随视图释放)。
@@ -102,6 +106,7 @@ impl FileTreeState {
             search_input,
             scroll: UniformListScrollHandle::new(),
             path_editor: None,
+            name_editor: None,
             pump_running: false,
             search_subscription: None,
             context_menu: None,
@@ -131,9 +136,10 @@ impl SltermWorkspace {
         self.file_tree.search_subscription = Some(subscription);
     }
 
-    /// 侧栏 explorer 槽可见时跟随聚焦 pane 的 cwd;非终端 tab 保留最后根。
+    /// 侧栏 explorer/commit 槽可见时跟随聚焦 pane 的 cwd;非终端 tab 保留最后根。
     pub(super) fn sync_file_tree(&mut self, cx: &mut Context<'_, Self>) {
-        if !self.explorer_open() {
+        // B73:Commit 槽也消费同一文件快照,不能再只由 explorer 门控。
+        if !(self.explorer_open() || self.commit_open()) {
             return;
         }
         let cwd = self.active_terminal_cwd(cx);
@@ -324,6 +330,7 @@ impl SltermWorkspace {
     pub(super) fn render_file_tree(&mut self, cx: &mut Context<'_, Self>) -> AnyElement {
         self.sync_file_tree(cx);
         let path_bar = self.render_file_tree_path(cx);
+        let name_editor = self.render_file_tree_name_editor(cx);
         let language = cx.global::<Settings>().language;
         let theme = cx.theme();
         let muted = theme.muted_foreground;
@@ -503,6 +510,7 @@ impl SltermWorkspace {
                         )
                     }),
             )
+            .when_some(name_editor, |panel, editor| panel.child(editor))
             .when_some(root_notice, |panel, notice| {
                 panel.child(div().text_xs().text_color(theme.warning).child(notice))
             })
@@ -578,6 +586,9 @@ impl SltermWorkspace {
     }
 
     /// 文件树右键菜单(挂 workspace 根;全窗遮罩点击关闭)。
+    ///
+    /// 动作面对:目录目标的新建落在该目录内;文件目标的新建落在其父目录
+    /// (与「在同级新建」的直觉一致),四项动作对两类目标都可见。
     pub(super) fn render_file_tree_context_menu(
         &mut self,
         cx: &mut Context<'_, Self>,
@@ -585,6 +596,18 @@ impl SltermWorkspace {
         let menu = self.file_tree.context_menu.as_ref()?;
         let position = menu.position;
         let path = menu.path.clone();
+        let is_dir = menu.is_dir;
+        let creation_dir = if is_dir {
+            path.clone()
+        } else {
+            path.parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| path.clone())
+        };
+        let new_file_dir = creation_dir.clone();
+        let new_folder_dir = creation_dir;
+        let rename_from = path.clone();
+        let delete_path = path.clone();
         let language = cx.global::<Settings>().language;
         let theme = cx.theme();
         let occluder = div().absolute().inset_0().occlude().on_mouse_down(
@@ -610,15 +633,72 @@ impl SltermWorkspace {
             .shadow_lg()
             .occlude()
             .child(
-                Button::new("file-tree-context-delete")
-                    .debug_selector(|| "file-tree-context-delete".to_owned())
-                    .label(language.text(Message::FilesDelete))
-                    .ghost()
-                    .small()
+                div()
                     .w_full()
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.delete_file_tree_path(path.clone(), cx);
-                    })),
+                    .flex()
+                    .flex_col()
+                    .child(
+                        Button::new("file-tree-context-new-file")
+                            .debug_selector(|| "file-tree-context-new-file".to_owned())
+                            .label(language.text(Message::FilesNewFile))
+                            .ghost()
+                            .small()
+                            .w_full()
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.begin_file_tree_name_edit(
+                                    NameEditKind::NewFile {
+                                        directory: new_file_dir.clone(),
+                                    },
+                                    window,
+                                    cx,
+                                );
+                            })),
+                    )
+                    .child(
+                        Button::new("file-tree-context-new-folder")
+                            .debug_selector(|| "file-tree-context-new-folder".to_owned())
+                            .label(language.text(Message::FilesNewFolder))
+                            .ghost()
+                            .small()
+                            .w_full()
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.begin_file_tree_name_edit(
+                                    NameEditKind::NewFolder {
+                                        directory: new_folder_dir.clone(),
+                                    },
+                                    window,
+                                    cx,
+                                );
+                            })),
+                    )
+                    .child(
+                        Button::new("file-tree-context-rename")
+                            .debug_selector(|| "file-tree-context-rename".to_owned())
+                            .label(language.text(Message::FilesRename))
+                            .ghost()
+                            .small()
+                            .w_full()
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.begin_file_tree_name_edit(
+                                    NameEditKind::Rename {
+                                        from: rename_from.clone(),
+                                    },
+                                    window,
+                                    cx,
+                                );
+                            })),
+                    )
+                    .child(
+                        Button::new("file-tree-context-delete")
+                            .debug_selector(|| "file-tree-context-delete".to_owned())
+                            .label(language.text(Message::FilesDelete))
+                            .ghost()
+                            .small()
+                            .w_full()
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.delete_file_tree_path(delete_path.clone(), cx);
+                            })),
+                    ),
             );
         Some(
             div()
@@ -649,6 +729,24 @@ impl SltermWorkspace {
             }
         }
         cx.notify();
+    }
+
+    /// 新建/重命名落地后展开父目录,让新条目在当前树里可见。
+    /// 只经 `SidePanel::click_row` 的公开语义(未展开目录 = 展开),不碰私有
+    /// `expanded` 集合;搜索态由提交路径先清空,这里只做防御。
+    fn reveal_file_tree_parent(&mut self, path: &Path) {
+        if !self.file_tree.panel.search.trim().is_empty() {
+            return;
+        }
+        let Some(parent) = path.parent() else {
+            return;
+        };
+        let index = self.file_tree.panel.file_rows().iter().position(|row| {
+            row.is_dir && !row.is_parent && row.path.as_path() == parent && !row.expanded
+        });
+        if let Some(index) = index {
+            self.file_tree.panel.click_row(index);
+        }
     }
 
     fn send_path_to_recycle_bin(&mut self, path: &Path) -> Result<(), String> {
@@ -895,6 +993,7 @@ impl SltermWorkspace {
                             if !is_parent {
                                 this.file_tree.context_menu = Some(FileTreeContextMenu {
                                     path: context_path.clone(),
+                                    is_dir,
                                     position: event.position,
                                 });
                                 this.file_tree.notice = None;
@@ -971,6 +1070,19 @@ impl SltermWorkspace {
     #[cfg(all(test, feature = "gpui-test-support"))]
     pub(crate) fn file_tree_path_error_for_test(&self) -> Option<String> {
         self.file_tree_path_error()
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn file_tree_name_editor_active_for_test(&self) -> bool {
+        self.file_tree.name_editor.is_some()
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn file_tree_name_error_for_test(&self) -> Option<String> {
+        self.file_tree
+            .name_editor
+            .as_ref()
+            .and_then(|editor| editor.error.clone())
     }
 }
 

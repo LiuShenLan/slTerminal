@@ -1,9 +1,10 @@
-//! 代码文件 tab(07 篇):普通源码(可编辑)+ gitshow 只读臂 + 通用 diff 只读臂。
+//! 代码文件 tab(07 篇):普通源码(可编辑)+ gitshow 只读臂 + 通用 diff
+//! 只读臂 + 冲突三栏合并臂。
 //!
 //! 普通源码与 gitshow 共用 [`TextFileView`] 快照通路;两者的区别只在数据源
 //! (磁盘前缀 / HEAD blob)与标题后缀(`<name> @ HEAD`)。M8.2 起普通源码
 //! 源码态可编辑可存;M8.5 的通用 diff 落本视图的 Diff 模式(不新增 05 篇
-//! tab 变体,07 篇边界条 3)。
+//! tab 变体,07 篇边界条 3);冲突 gutter 点击落 Merge 模式(base/ours/theirs)。
 //!
 //! 扩展名 → 语言映射表是「视图值集」单点:`viewable_file` 与 openable_in_app
 //! 的源码判定同源(07 篇照抄点 17,fileViewers 注册表值集并入)。
@@ -18,8 +19,10 @@ use gpui::{
 use super::diff_tab::{DiffSource, DiffTabView};
 use super::file_editor::gutter::GutterMark;
 use super::file_editor::{TextFileEvent, TextFileView};
+use super::merge_tab::{MergeSide, MergeTabEvent, MergeTabView};
 
-/// code tab 对外事件:gutter 点击由工作区决定打开差异对照面。
+/// code tab 对外事件:gutter 点击由工作区决定打开差异/冲突对照面,
+/// merge tab 的采用动作经工作区脏文件门控后回写。
 #[derive(Clone, Debug)]
 pub enum CodeTabEvent {
     GutterClicked {
@@ -27,14 +30,21 @@ pub enum CodeTabEvent {
         line: u32,
         mark: GutterMark,
     },
+    /// 冲突三栏:请求采用某一侧(工作区先查同路径脏草稿)。
+    MergeAdopt { path: PathBuf, side: MergeSide },
+    /// 冲突三栏:在工作区编辑器中打开工作区文件。
+    MergeOpenInEditor { path: PathBuf },
+    /// 冲突三栏:采用动作已成功写盘(gutter/树快照刷新触发点)。
+    MergeWritten { path: PathBuf },
 }
 
 impl EventEmitter<CodeTabEvent> for CodeTabView {}
 
-/// tab 内容模式:普通文本视图或通用 diff 双栏。
+/// tab 内容模式:普通文本视图、通用 diff 双栏或冲突三栏合并。
 enum CodeTabMode {
     File(Entity<TextFileView>),
     Diff(Entity<DiffTabView>),
+    Merge(Entity<MergeTabView>),
 }
 
 /// 扩展名 → tree-sitter 语言 id(组件库 highlighter 的注册名)。
@@ -106,6 +116,8 @@ pub struct CodeTabView {
     _file_observation: Subscription,
     /// gutter 点击转发(TextFileEvent → CodeTabEvent)。
     _gutter_subscription: Option<Subscription>,
+    /// merge tab 事件转发(采用/编辑器打开/写盘完成 → CodeTabEvent)。
+    _merge_subscription: Option<Subscription>,
 }
 
 impl CodeTabView {
@@ -136,6 +148,42 @@ impl CodeTabView {
             mode: CodeTabMode::Diff(diff),
             _file_observation: observation,
             _gutter_subscription: None,
+            _merge_subscription: None,
+        }
+    }
+
+    /// 冲突三栏合并臂:base/ours/theirs 只读对照 + 采用版本动作。
+    pub fn new_merge(path: PathBuf, window: &mut Window, cx: &mut Context<'_, Self>) -> Self {
+        let merge = cx.new(|cx| MergeTabView::open(path.clone(), window, cx));
+        let observation = cx.observe_in(&merge, window, |_, _, _, cx| {
+            cx.notify();
+        });
+        let merge_events = cx.subscribe_in(
+            &merge,
+            window,
+            |this: &mut Self, _, event: &MergeTabEvent, _, cx| {
+                match event {
+                    MergeTabEvent::Adopt(side) => cx.emit(CodeTabEvent::MergeAdopt {
+                        path: this.path.clone(),
+                        side: *side,
+                    }),
+                    MergeTabEvent::OpenInEditor => cx.emit(CodeTabEvent::MergeOpenInEditor {
+                        path: this.path.clone(),
+                    }),
+                    MergeTabEvent::Written => cx.emit(CodeTabEvent::MergeWritten {
+                        path: this.path.clone(),
+                    }),
+                }
+                cx.notify();
+            },
+        );
+        Self {
+            path,
+            git_show: false,
+            mode: CodeTabMode::Merge(merge),
+            _file_observation: observation,
+            _gutter_subscription: None,
+            _merge_subscription: Some(merge_events),
         }
     }
 
@@ -177,20 +225,29 @@ impl CodeTabView {
             mode: CodeTabMode::File(file),
             _file_observation: observation,
             _gutter_subscription: Some(gutter_subscription),
+            _merge_subscription: None,
         }
     }
 
     fn file(&self) -> Option<&Entity<TextFileView>> {
         match &self.mode {
             CodeTabMode::File(file) => Some(file),
-            CodeTabMode::Diff(_) => None,
+            CodeTabMode::Diff(_) | CodeTabMode::Merge(_) => None,
         }
     }
 
     fn diff(&self) -> Option<&Entity<DiffTabView>> {
         match &self.mode {
             CodeTabMode::Diff(diff) => Some(diff),
-            CodeTabMode::File(_) => None,
+            CodeTabMode::File(_) | CodeTabMode::Merge(_) => None,
+        }
+    }
+
+    /// 冲突三栏实体(工作区脏门控后经此发起采用写盘)。
+    pub(crate) fn merge(&self) -> Option<&Entity<MergeTabView>> {
+        match &self.mode {
+            CodeTabMode::Merge(merge) => Some(merge),
+            CodeTabMode::File(_) | CodeTabMode::Diff(_) => None,
         }
     }
 
@@ -204,14 +261,14 @@ impl CodeTabView {
         self.file().is_some_and(|file| file.read(cx).is_saving())
     }
 
-    /// 触发保存;只读臂(diff/gitshow)恒无操作。
+    /// 触发保存;只读臂(diff/gitshow/merge)恒无操作。
     pub fn save(&mut self, cx: &mut Context<'_, Self>) -> Task<bool> {
         match &self.mode {
             CodeTabMode::File(file) => {
                 let file = file.clone();
                 file.update(cx, |file, cx| file.save(cx))
             }
-            CodeTabMode::Diff(_) => Task::ready(true),
+            CodeTabMode::Diff(_) | CodeTabMode::Merge(_) => Task::ready(true),
         }
     }
 
@@ -221,11 +278,11 @@ impl CodeTabView {
     }
 
     /// 外部 watcher 兴趣读端(B8):仅 File 模式的普通源码返回磁盘路径;
-    /// gitshow 与 diff 只读臂不登记。
+    /// gitshow、diff 与 merge 只读臂不登记。
     pub(crate) fn editable_path(&self) -> Option<&Path> {
         match &self.mode {
             CodeTabMode::File(_) if !self.git_show => Some(self.path.as_path()),
-            CodeTabMode::File(_) | CodeTabMode::Diff(_) => None,
+            CodeTabMode::File(_) | CodeTabMode::Diff(_) | CodeTabMode::Merge(_) => None,
         }
     }
 
@@ -249,9 +306,17 @@ impl CodeTabView {
         self.diff().is_some() && self.path == path
     }
 
+    /// 同路径冲突三栏 tab 的重开命中。
+    pub fn is_merge_path(&self, path: &Path) -> bool {
+        self.merge().is_some() && self.path == path
+    }
+
     pub fn tab_title(&self, cx: &App) -> String {
         if let Some(diff) = self.diff() {
             return diff.read(cx).title.clone();
+        }
+        if let Some(merge) = self.merge() {
+            return merge.read(cx).title.clone();
         }
         let Some(file) = self.file() else {
             return self.path.display().to_string();
@@ -269,6 +334,7 @@ impl CodeTabView {
         match &self.mode {
             CodeTabMode::File(file) => file.read(cx).is_read_only(),
             CodeTabMode::Diff(diff) => diff.read(cx).is_read_only(),
+            CodeTabMode::Merge(merge) => merge.read(cx).is_read_only(),
         }
     }
 
@@ -276,6 +342,7 @@ impl CodeTabView {
         match &self.mode {
             CodeTabMode::File(file) => file.read(cx).focus_handle(cx),
             CodeTabMode::Diff(diff) => diff.read(cx).focus_handle(cx),
+            CodeTabMode::Merge(merge) => merge.read(cx).focus_handle(cx),
         }
     }
 
@@ -283,6 +350,7 @@ impl CodeTabView {
         match &self.mode {
             CodeTabMode::File(file) => file.update(cx, |file, cx| file.reload(window, cx)),
             CodeTabMode::Diff(diff) => diff.update(cx, |diff, cx| diff.reload(window, cx)),
+            CodeTabMode::Merge(merge) => merge.update(cx, |merge, cx| merge.reload(window, cx)),
         }
     }
 
@@ -353,6 +421,22 @@ impl CodeTabView {
             .map(|file| file.read(cx).gutter_marks_for_test())
             .unwrap_or_default()
     }
+
+    /// 测试专用:merge 模式的三栏文本(非 merge 模式 None)。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub fn merge_state_for_test(
+        &self,
+        cx: &App,
+    ) -> Option<(Option<String>, Option<String>, Option<String>)> {
+        self.merge().map(|merge| merge.read(cx).texts_for_test())
+    }
+
+    /// 测试专用:merge 模式的视图内提示。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub fn merge_notice_for_test(&self, cx: &App) -> Option<String> {
+        self.merge()
+            .and_then(|merge| merge.read(cx).notice_for_test())
+    }
 }
 
 impl Render for CodeTabView {
@@ -365,6 +449,7 @@ impl Render for CodeTabView {
             .child(match &self.mode {
                 CodeTabMode::File(file) => file.clone().into_any_element(),
                 CodeTabMode::Diff(diff) => diff.clone().into_any_element(),
+                CodeTabMode::Merge(merge) => merge.clone().into_any_element(),
             })
     }
 }

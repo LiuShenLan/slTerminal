@@ -10,12 +10,14 @@ use gpui::{
     InteractiveElement as _, IntoElement, MouseButton, ParentElement as _,
     StatefulInteractiveElement as _, Styled as _,
 };
+use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::{Icon, IconName, StyledExt as _};
 
 impl TextFileView {
     pub(super) fn render_toolbar(
         &self,
         editable: bool,
+        window: &gpui::Window,
         cx: &mut Context<'_, Self>,
     ) -> gpui::AnyElement {
         let language = cx.global::<Settings>().language;
@@ -108,6 +110,7 @@ impl TextFileView {
                 )
             })
             .child(div().w(px(1.0)).h(px(18.0)).mx_1().bg(cx.theme().border))
+            .child(self.render_reader_focus_button(cx))
             .child(
                 div()
                     .id("file-details-toggle")
@@ -139,6 +142,7 @@ impl TextFileView {
                         cx.notify();
                     })),
             )
+            .child(self.render_fullscreen_button(window, cx))
             .child(
                 div()
                     .id("file-save")
@@ -165,6 +169,72 @@ impl TextFileView {
                         this.save(cx).detach();
                     })),
             )
+            .into_any_element()
+    }
+
+    /// 聚焦阅读切换按钮:工具条内按钮与退出浮层共用同一 selector,
+    /// 保证工具条隐藏后仍留有唯一的恢复入口。
+    fn render_reader_focus_button(&self, cx: &mut Context<'_, Self>) -> gpui::AnyElement {
+        let language = cx.global::<Settings>().language;
+        let (icon, tooltip) = if self.reader_focus {
+            (IconName::EyeOff, Message::EditorReaderFocusExit)
+        } else {
+            (IconName::BookOpen, Message::EditorReaderFocus)
+        };
+        Button::new("file-reader-focus")
+            .debug_selector(|| "file-reader-focus".to_owned())
+            .icon(icon)
+            .ghost()
+            .tooltip(language.text(tooltip))
+            .on_click(cx.listener(|this, _, window, cx| this.toggle_reader_focus(window, cx)))
+            .into_any_element()
+    }
+
+    /// 全屏切换按钮:图标与提示跟随 `Window::is_fullscreen` 当前态。
+    fn render_fullscreen_button(
+        &self,
+        window: &gpui::Window,
+        cx: &mut Context<'_, Self>,
+    ) -> gpui::AnyElement {
+        let language = cx.global::<Settings>().language;
+        let (icon, tooltip) = if window.is_fullscreen() {
+            (IconName::Minimize, Message::EditorFullscreenExit)
+        } else {
+            (IconName::Maximize, Message::EditorFullscreenEnter)
+        };
+        Button::new("file-fullscreen")
+            .debug_selector(|| "file-fullscreen".to_owned())
+            .icon(icon)
+            .ghost()
+            .tooltip(language.text(tooltip))
+            .on_click(cx.listener(|_, _, window, cx| {
+                // 只切窗口全屏态;不新增窗口控制命令、不改标题栏。
+                window.toggle_fullscreen();
+                cx.notify();
+            }))
+            .into_any_element()
+    }
+
+    /// reader-focus 退出浮层:工具条整体隐藏后,右上角保留恢复入口。
+    pub(super) fn render_reader_focus_overlay(
+        &self,
+        cx: &mut Context<'_, Self>,
+    ) -> gpui::AnyElement {
+        let tokens = cx.global::<Settings>().editor_theme;
+        let background = crate::gpui_terminal::colors::from_rgb8(tokens.background);
+        div()
+            .id("file-reader-focus-overlay")
+            .debug_selector(|| "file-reader-focus-overlay".to_owned())
+            .absolute()
+            .top(px(10.0))
+            .right(px(10.0))
+            .occlude()
+            .p(px(2.0))
+            .rounded(px(6.0))
+            .border_1()
+            .border_color(cx.theme().border)
+            .bg(background.alpha(0.92))
+            .child(self.render_reader_focus_button(cx))
             .into_any_element()
     }
 

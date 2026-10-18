@@ -27,8 +27,8 @@ use super::{SltermWorkspace, TabEntry, TabMeta, WorkspaceTab};
 use crate::app_shell::code_tab::{CodeTabEvent, CodeTabView};
 use crate::app_shell::config::Settings;
 use crate::app_shell::doc_tabs::{self, DocTabView, ImageTabView};
-#[cfg(all(test, feature = "gpui-test-support"))]
 use crate::app_shell::file_editor::gutter::GutterMark;
+use crate::app_shell::merge_tab::MergeSide;
 use crate::brand;
 use crate::i18n::Message;
 
@@ -165,23 +165,139 @@ impl SltermWorkspace {
         self.push_file_tab(WorkspaceTab::Code { view }, window, cx);
     }
 
-    /// code tab 事件:gutter 点击 → 打开差异对照面(冲突臂同走 diff,
-    /// 三栏合并面不在 M8.5 交付范围)。
+    /// code tab 事件:gutter 点击按行标分流(冲突 → 三栏合并,其余 →
+    /// 双栏 diff);merge 动作在工作区侧做脏文件门控后放行写盘。
     fn on_code_tab_event(
         &mut self,
-        _view: &Entity<CodeTabView>,
+        view: &Entity<CodeTabView>,
         event: &CodeTabEvent,
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
         match event {
             CodeTabEvent::GutterClicked { path, line, mark } => {
-                // 行号/标记值集是 diff 定位与冲突面路由的输入;当前统一
-                // 打开 HEAD↔工作区对照(三栏合并面不在 M8.5 范围)。
-                let _ = (line, mark);
-                self.open_diff_tab(path.clone(), window, cx);
+                // 行号只服务编辑器光标定位,路由只看行标值集。
+                let _ = line;
+                if *mark == GutterMark::Conflicted {
+                    self.open_merge_tab(path.clone(), window, cx);
+                } else {
+                    self.open_diff_tab(path.clone(), window, cx);
+                }
+            }
+            CodeTabEvent::MergeAdopt { path, side } => {
+                self.handle_merge_adopt(view, path, *side, window, cx);
+            }
+            CodeTabEvent::MergeOpenInEditor { path } => {
+                self.open_merge_target_in_editor(path.clone(), window, cx);
+            }
+            CodeTabEvent::MergeWritten { path } => {
+                self.on_merge_written(path, window, cx);
             }
         }
+    }
+
+    /// 冲突三栏 tab:同路径重开命中(激活并重读 stage)。
+    pub(crate) fn open_merge_tab(
+        &mut self,
+        path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if let Some(index) = self.tabs.iter().position(|entry| {
+            matches!(&entry.tab, WorkspaceTab::Code { view } if view.read(cx).is_merge_path(&path))
+        }) {
+            if let Some(view) = self.tabs.get(index).and_then(code_view) {
+                view.clone()
+                    .update(cx, |view, cx| view.reload(window, cx));
+            }
+            self.activate_tab(index, window, cx);
+            return;
+        }
+        let view = cx.new(|cx| CodeTabView::new_merge(path, window, cx));
+        self.push_file_tab(WorkspaceTab::Code { view }, window, cx);
+    }
+
+    /// 采用版本门控:同路径存在打开且未保存的 Code tab → 拒绝写盘并提示。
+    fn handle_merge_adopt(
+        &mut self,
+        origin: &Entity<CodeTabView>,
+        path: &std::path::Path,
+        side: MergeSide,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(merge) = origin.read(cx).merge().cloned() else {
+            return;
+        };
+        let language = cx.global::<Settings>().language;
+        if self.has_dirty_regular_code_tab(path, cx) {
+            let detail = language.text(Message::MergeDirtyRejected).to_owned();
+            window.push_notification(
+                gpui_component::notification::Notification::warning(detail.clone()),
+                cx,
+            );
+            merge.update(cx, |merge, cx| merge.set_notice(detail, cx));
+            return;
+        }
+        merge.update(cx, |merge, cx| merge.adopt(side, cx));
+    }
+
+    /// 同路径普通源码 tab 是否有未保存草稿(merge 采用动作的拒绝判据)。
+    fn has_dirty_regular_code_tab(&self, path: &std::path::Path, cx: &App) -> bool {
+        self.tabs.iter().any(|entry| match &entry.tab {
+            WorkspaceTab::Code { view } => {
+                let view = view.read(cx);
+                view.is_regular_path(path) && view.is_dirty(cx)
+            }
+            _ => false,
+        })
+    }
+
+    /// 「在编辑器中打开」:已有同路径源码 tab 只激活(不重读,保草稿);
+    /// 否则走统一代码 tab 入口。
+    fn open_merge_target_in_editor(
+        &mut self,
+        path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if let Some(index) = self.tabs.iter().position(|entry| {
+            matches!(&entry.tab, WorkspaceTab::Code { view } if view.read(cx).is_regular_path(&path))
+        }) {
+            self.activate_tab(index, window, cx);
+            return;
+        }
+        self.open_code_tab(path, window, cx);
+    }
+
+    /// 采用写盘完成:同路径干净的源码 tab 重读盘(含 gutter),文件树快照
+    /// 重臂;脏草稿路径不会被写到(上面已拒绝),仍只刷新 gutter 兜底。
+    fn on_merge_written(
+        &mut self,
+        path: &std::path::Path,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let views: Vec<Entity<CodeTabView>> = self
+            .tabs
+            .iter()
+            .filter_map(|entry| match &entry.tab {
+                WorkspaceTab::Code { view } if view.read(cx).editable_path() == Some(path) => {
+                    Some(view.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        for view in views {
+            let clean = !view.read(cx).is_dirty(cx) && !view.read(cx).is_saving(cx);
+            if clean {
+                view.update(cx, |view, cx| view.reload(window, cx));
+            } else {
+                view.update(cx, |view, cx| view.refresh_gutter(cx));
+            }
+        }
+        self.file_tree.panel.request_refresh();
+        cx.notify();
     }
 
     /// 同一路径复用已开 tab(激活 + 重读盘;草稿保留归 M8.2)。
@@ -613,6 +729,27 @@ impl SltermWorkspace {
         {
             let view = view.clone();
             view.update(cx, |view, cx| view.navigate_diff_hunk_for_test(forward, cx));
+        }
+    }
+
+    /// 测试专用:活跃 merge tab 的三栏文本。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn active_merge_state_for_test(
+        &self,
+        cx: &App,
+    ) -> Option<(Option<String>, Option<String>, Option<String>)> {
+        match self.tabs.get(self.active).map(|entry| &entry.tab) {
+            Some(WorkspaceTab::Code { view }) => view.read(cx).merge_state_for_test(cx),
+            _ => None,
+        }
+    }
+
+    /// 测试专用:活跃 merge tab 的视图内提示。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn active_merge_notice_for_test(&self, cx: &App) -> Option<String> {
+        match self.tabs.get(self.active).map(|entry| &entry.tab) {
+            Some(WorkspaceTab::Code { view }) => view.read(cx).merge_notice_for_test(cx),
+            _ => None,
         }
     }
 

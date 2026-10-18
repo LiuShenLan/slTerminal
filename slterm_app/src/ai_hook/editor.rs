@@ -2,7 +2,7 @@
 //!
 //! 双轨不交叉的判据 = marker 归属:含 slterm-hook 命令的 matcher 组归
 //! 安装器专属,编辑器只读、保存时从磁盘原样保留;编辑域限用户/第三方
-//! handler。写入前跑 SEC-05 语义校验(事件名白名单 + command 型必填),
+//! handler。写入前跑 SEC-05 语义校验(事件名白名单 + 五型必填字段矩阵),
 //! 校验失败零写盘;非法 JSON / 非对象根一律拒绝编辑,绝不「修复式覆盖」。
 //!
 //! 编辑面是 claude 用户层 `~/.claude/settings.json`(设置页无 project 上下文;
@@ -11,9 +11,325 @@
 
 use std::path::{Path, PathBuf};
 
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
+
+use crate::i18n::{Message, UiLanguage};
 
 use super::CLAUDE_EVENTS;
+
+/// 五型 handler 矩阵(旧栈 hooksConfigGui.ts 语义):校验与表单共用的
+/// 单一类型锚点;字段集合见 [`HookHandlerType::required_fields`]。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HookHandlerType {
+    Command,
+    Http,
+    McpTool,
+    Prompt,
+    Agent,
+}
+
+impl HookHandlerType {
+    pub(crate) const ALL: [Self; 5] = [
+        Self::Command,
+        Self::Http,
+        Self::McpTool,
+        Self::Prompt,
+        Self::Agent,
+    ];
+
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Command => "command",
+            Self::Http => "http",
+            Self::McpTool => "mcp_tool",
+            Self::Prompt => "prompt",
+            Self::Agent => "agent",
+        }
+    }
+
+    pub(crate) fn parse_type(value: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| kind.as_str() == value)
+    }
+
+    /// 每型必填字段(非空字符串)。
+    pub(crate) const fn required_fields(self) -> &'static [&'static str] {
+        match self {
+            Self::Command => &["command"],
+            Self::Http => &["url"],
+            Self::McpTool => &["server", "tool"],
+            Self::Prompt | Self::Agent => &["prompt"],
+        }
+    }
+}
+
+/// 编辑器可选事件(与安装器订阅白名单同源;静态存储保证借用期)。
+static EDITOR_EVENTS: [&str; CLAUDE_EVENTS.len()] = CLAUDE_EVENTS;
+
+/// 编辑器可选事件(与安装器订阅白名单同源)。
+pub(crate) fn hook_events() -> &'static [&'static str] {
+    &EDITOR_EVENTS
+}
+
+/// 结构化表单字段(文本输入或布尔开关);键名与 hooks JSON 一致。
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub(crate) enum HandlerField {
+    Command,
+    Args,
+    Async,
+    AsyncRewake,
+    Shell,
+    Url,
+    Headers,
+    AllowedEnvVars,
+    Server,
+    Tool,
+    Input,
+    Prompt,
+    Model,
+    ContinueOnBlock,
+    If,
+    Timeout,
+    StatusMessage,
+}
+
+impl HandlerField {
+    pub(crate) const ALL: [Self; 17] = [
+        Self::Command,
+        Self::Args,
+        Self::Async,
+        Self::AsyncRewake,
+        Self::Shell,
+        Self::Url,
+        Self::Headers,
+        Self::AllowedEnvVars,
+        Self::Server,
+        Self::Tool,
+        Self::Input,
+        Self::Prompt,
+        Self::Model,
+        Self::ContinueOnBlock,
+        Self::If,
+        Self::Timeout,
+        Self::StatusMessage,
+    ];
+
+    pub(crate) const fn key(self) -> &'static str {
+        match self {
+            Self::Command => "command",
+            Self::Args => "args",
+            Self::Async => "async",
+            Self::AsyncRewake => "asyncRewake",
+            Self::Shell => "shell",
+            Self::Url => "url",
+            Self::Headers => "headers",
+            Self::AllowedEnvVars => "allowedEnvVars",
+            Self::Server => "server",
+            Self::Tool => "tool",
+            Self::Input => "input",
+            Self::Prompt => "prompt",
+            Self::Model => "model",
+            Self::ContinueOnBlock => "continueOnBlock",
+            Self::If => "if",
+            Self::Timeout => "timeout",
+            Self::StatusMessage => "statusMessage",
+        }
+    }
+
+    pub(crate) const fn message(self) -> Message {
+        match self {
+            Self::Command => Message::SettingsAgentsFieldCommand,
+            Self::Args => Message::SettingsAgentsFieldArgs,
+            Self::Async => Message::SettingsAgentsFieldAsync,
+            Self::AsyncRewake => Message::SettingsAgentsFieldAsyncRewake,
+            Self::Shell => Message::SettingsAgentsFieldShell,
+            Self::Url => Message::SettingsAgentsFieldUrl,
+            Self::Headers => Message::SettingsAgentsFieldHeaders,
+            Self::AllowedEnvVars => Message::SettingsAgentsFieldAllowedEnvVars,
+            Self::Server => Message::SettingsAgentsFieldServer,
+            Self::Tool => Message::SettingsAgentsFieldTool,
+            Self::Input => Message::SettingsAgentsFieldInput,
+            Self::Prompt => Message::SettingsAgentsFieldPrompt,
+            Self::Model => Message::SettingsAgentsFieldModel,
+            Self::ContinueOnBlock => Message::SettingsAgentsFieldContinueOnBlock,
+            Self::If => Message::SettingsAgentsFieldIf,
+            Self::Timeout => Message::SettingsAgentsFieldTimeout,
+            Self::StatusMessage => Message::SettingsAgentsFieldStatusText,
+        }
+    }
+
+    /// 布尔开关字段;其余字段为文本输入。
+    pub(crate) const fn is_flag(self) -> bool {
+        matches!(
+            self,
+            Self::Async | Self::AsyncRewake | Self::ContinueOnBlock
+        )
+    }
+
+    pub(crate) fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|field| field.key() == key)
+    }
+}
+
+/// 每型专属字段(通用字段 if/timeout/statusMessage 另列)。
+pub(crate) fn type_fields(kind: HookHandlerType) -> &'static [HandlerField] {
+    static COMMAND: [HandlerField; 5] = [
+        HandlerField::Command,
+        HandlerField::Args,
+        HandlerField::Async,
+        HandlerField::AsyncRewake,
+        HandlerField::Shell,
+    ];
+    static HTTP: [HandlerField; 3] = [
+        HandlerField::Url,
+        HandlerField::Headers,
+        HandlerField::AllowedEnvVars,
+    ];
+    static MCP_TOOL: [HandlerField; 3] = [
+        HandlerField::Server,
+        HandlerField::Tool,
+        HandlerField::Input,
+    ];
+    static PROMPT: [HandlerField; 3] = [
+        HandlerField::Prompt,
+        HandlerField::Model,
+        HandlerField::ContinueOnBlock,
+    ];
+    static AGENT: [HandlerField; 2] = [HandlerField::Prompt, HandlerField::Model];
+    match kind {
+        HookHandlerType::Command => &COMMAND,
+        HookHandlerType::Http => &HTTP,
+        HookHandlerType::McpTool => &MCP_TOOL,
+        HookHandlerType::Prompt => &PROMPT,
+        HookHandlerType::Agent => &AGENT,
+    }
+}
+
+pub(crate) const COMMON_FIELDS: [HandlerField; 3] = [
+    HandlerField::If,
+    HandlerField::Timeout,
+    HandlerField::StatusMessage,
+];
+
+/// 字段是否适用于该 handler 型(通用字段恒适用)。
+pub(crate) fn field_applies(kind: HookHandlerType, field: HandlerField) -> bool {
+    COMMON_FIELDS.contains(&field) || type_fields(kind).contains(&field)
+}
+
+pub(crate) fn handler_type_message(kind: HookHandlerType) -> Message {
+    match kind {
+        HookHandlerType::Command => Message::SettingsAgentsTypeCommand,
+        HookHandlerType::Http => Message::SettingsAgentsTypeHttp,
+        HookHandlerType::McpTool => Message::SettingsAgentsTypeMcpTool,
+        HookHandlerType::Prompt => Message::SettingsAgentsTypePrompt,
+        HookHandlerType::Agent => Message::SettingsAgentsTypeAgent,
+    }
+}
+
+/// 表单加载/序列化的技术细节包装(路径或字段标识;非用户文案主句)。
+pub(crate) fn form_load_error(language: UiLanguage, detail: &str) -> String {
+    language.format(Message::SettingsAgentsFormLoadFailed, &[("error", detail)])
+}
+
+/// 单个字段的显示文本;JSON 形态字段保留紧凑 JSON 文本。
+pub(crate) fn load_field_text(
+    handler: &Map<String, Value>,
+    field: HandlerField,
+    language: UiLanguage,
+    path: &str,
+) -> Result<String, String> {
+    match field {
+        HandlerField::Args
+        | HandlerField::Headers
+        | HandlerField::AllowedEnvVars
+        | HandlerField::Input => match handler.get(field.key()) {
+            Some(value) => serde_json::to_string(value).map_err(|error| {
+                form_load_error(language, &format!("{path}.{}: {error}", field.key()))
+            }),
+            None => Ok(String::new()),
+        },
+        HandlerField::Timeout => match handler.get(field.key()) {
+            Some(Value::Number(number)) => Ok(number.to_string()),
+            Some(Value::String(text)) => Ok(text.clone()),
+            Some(_) => Err(form_load_error(
+                language,
+                &format!("{path}.{}", field.key()),
+            )),
+            None => Ok(String::new()),
+        },
+        _ => match handler.get(field.key()) {
+            Some(Value::String(text)) => Ok(text.clone()),
+            Some(_) => Err(form_load_error(
+                language,
+                &format!("{path}.{}", field.key()),
+            )),
+            None => Ok(String::new()),
+        },
+    }
+}
+
+pub(crate) fn load_flag(
+    handler: &Map<String, Value>,
+    field: HandlerField,
+    language: UiLanguage,
+    path: &str,
+) -> Result<bool, String> {
+    match handler.get(field.key()) {
+        Some(Value::Bool(value)) => Ok(*value),
+        Some(_) => Err(form_load_error(
+            language,
+            &format!("{path}.{}", field.key()),
+        )),
+        None => Ok(false),
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum JsonShape {
+    Array,
+    Object,
+}
+
+pub(crate) fn invalid_field(language: UiLanguage, field: HandlerField, error: &str) -> String {
+    language.format(
+        Message::SettingsAgentsFormInvalidField,
+        &[("field", language.text(field.message())), ("error", error)],
+    )
+}
+
+pub(crate) fn insert_string_field(object: &mut Map<String, Value>, key: &str, value: String) {
+    if !value.trim().is_empty() {
+        object.insert(key.to_owned(), Value::String(value));
+    }
+}
+
+/// JSON 文本字段(args/headers/allowedEnvVars/input):空文本省略,非法形态拒绝。
+pub(crate) fn insert_json_field(
+    object: &mut Map<String, Value>,
+    key: &str,
+    raw: String,
+    shape: JsonShape,
+    field: HandlerField,
+    language: UiLanguage,
+) -> Result<(), String> {
+    if raw.trim().is_empty() {
+        return Ok(());
+    }
+    let value: Value = serde_json::from_str(&raw)
+        .map_err(|error| invalid_field(language, field, &error.to_string()))?;
+    let matches = match shape {
+        JsonShape::Array => value.is_array(),
+        JsonShape::Object => value.is_object(),
+    };
+    if !matches {
+        let message = match shape {
+            JsonShape::Array => Message::SettingsAgentsFormExpectedArray,
+            JsonShape::Object => Message::SettingsAgentsFormExpectedObject,
+        };
+        return Err(invalid_field(language, field, language.text(message)));
+    }
+    object.insert(key.to_owned(), value);
+    Ok(())
+}
 
 /// 一份 hooks 编辑文档:可编辑子树 + 安装器认领组只读快照。
 ///
@@ -88,6 +404,11 @@ impl HooksDocument {
         serde_json::to_string_pretty(&self.editable).unwrap_or_else(|_| "{}".to_owned())
     }
 
+    /// 可编辑子树的结构化视图(表单加载用;只读借用)。
+    pub(crate) fn editable_value(&self) -> &Value {
+        &self.editable
+    }
+
     /// 安装器认领组数量(只读展示;双轨判据的可见面)。
     pub(crate) fn owned_group_count(&self) -> usize {
         self.owned
@@ -137,8 +458,8 @@ fn group_is_installer_owned(group: &Value) -> Option<bool> {
     Some(handlers.iter().any(super::local::is_our_claude_hook))
 }
 
-/// SEC-05 语义校验(纯函数):事件名白名单 + handler type == "command" +
-/// command 非空。形态非法同样拒绝。
+/// SEC-05 语义校验(纯函数):事件名白名单 + 五型矩阵的必填字段。
+/// 未知 type、缺失/空白必填字段与形态非法一律拒绝。
 fn validate_editable(hooks: &Value) -> Result<(), String> {
     let events = hooks
         .as_object()
@@ -165,15 +486,28 @@ fn validate_editable(hooks: &Value) -> Result<(), String> {
                 let handler = handler
                     .as_object()
                     .ok_or_else(|| format!("事件 {event} 的 handler 必须是对象"))?;
-                if handler.get("type").and_then(Value::as_str) != Some("command") {
-                    return Err(format!("事件 {event} 的 handler type 非法(仅允许 command)"));
-                }
-                let command = handler
-                    .get("command")
+                let Some(kind) = handler
+                    .get("type")
                     .and_then(Value::as_str)
-                    .unwrap_or_default();
-                if command.trim().is_empty() {
-                    return Err(format!("事件 {event} 的 handler command 必须为非空字符串"));
+                    .and_then(HookHandlerType::parse_type)
+                else {
+                    let allowed = HookHandlerType::ALL
+                        .iter()
+                        .map(|kind| kind.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" / ");
+                    return Err(format!(
+                        "事件 {event} 的 handler type 非法(仅允许: {allowed})"
+                    ));
+                };
+                for field in kind.required_fields() {
+                    let value = handler
+                        .get(*field)
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    if value.trim().is_empty() {
+                        return Err(format!("事件 {event} 的 handler {field} 必须为非空字符串"));
+                    }
                 }
             }
         }
@@ -332,7 +666,7 @@ mod editor_tests {
     }
 
     #[test]
-    fn save_rejects_unknown_events_and_non_command_handlers_without_writing() {
+    fn save_rejects_unknown_events_and_invalid_handlers_without_writing() {
         let (_directory, path) = fixture();
         write(&path, r#"{"hooks":{}}"#);
         let before = std::fs::read(&path).unwrap();
@@ -343,7 +677,7 @@ mod editor_tests {
                 "非法 hook 事件名",
             ),
             (
-                json!({"Stop": [{"hooks": [{"type": "http", "url": "https://x"}]}]}),
+                json!({"Stop": [{"hooks": [{"type": "webhook", "url": "https://x"}]}]}),
                 "handler type 非法",
             ),
             (
@@ -363,6 +697,100 @@ mod editor_tests {
             let error = document.save_editable(&invalid.to_string()).unwrap_err();
             assert!(error.contains(needle), "错误必须点明原因: {error}");
             assert_eq!(std::fs::read(&path).unwrap(), before, "校验失败不得落盘");
+        }
+    }
+
+    /// 五型各一条合法 handler 必须通过 SEC-05 校验(必填字段齐全)。
+    #[test]
+    fn every_handler_type_passes_validation_with_required_fields() {
+        for (kind, handler) in [
+            (
+                "command",
+                json!({
+                    "type": "command",
+                    "command": "notify",
+                    "args": ["claude"],
+                    "async": true,
+                    "asyncRewake": true,
+                    "shell": "pwsh"
+                }),
+            ),
+            (
+                "http",
+                json!({
+                    "type": "http",
+                    "url": "https://example.test/hook",
+                    "headers": {"Authorization": "Bearer sk-test"},
+                    "allowedEnvVars": ["TOKEN"]
+                }),
+            ),
+            (
+                "mcp_tool",
+                json!({
+                    "type": "mcp_tool",
+                    "server": "filesystem",
+                    "tool": "read_file",
+                    "input": {"path": "C:/tmp/x"}
+                }),
+            ),
+            (
+                "prompt",
+                json!({
+                    "type": "prompt",
+                    "prompt": "Summarize the turn",
+                    "model": "haiku",
+                    "continueOnBlock": true
+                }),
+            ),
+            (
+                "agent",
+                json!({
+                    "type": "agent",
+                    "prompt": "Review the diff",
+                    "model": "sonnet"
+                }),
+            ),
+        ] {
+            let hooks = json!({
+                "Stop": [{"matcher": "user", "hooks": [handler]}]
+            });
+            validate_editable(&hooks).unwrap_or_else(|error| panic!("{kind}: {error}"));
+        }
+    }
+
+    /// 每型缺少必填字段(或必填为空白)必须被拒。
+    #[test]
+    fn every_handler_type_rejects_missing_required_fields() {
+        for (handler, field) in [
+            (json!({"type": "command"}), "command"),
+            (json!({"type": "command", "command": "   "}), "command"),
+            (json!({"type": "http"}), "url"),
+            (json!({"type": "http", "url": ""}), "url"),
+            (json!({"type": "mcp_tool", "server": "filesystem"}), "tool"),
+            (json!({"type": "mcp_tool", "tool": "read_file"}), "server"),
+            (json!({"type": "prompt"}), "prompt"),
+            (json!({"type": "agent", "prompt": " "}), "prompt"),
+        ] {
+            let hooks = json!({"Stop": [{"hooks": [handler]}]});
+            let error = validate_editable(&hooks).unwrap_err();
+            assert!(
+                error.contains(field) && error.contains("必须为非空字符串"),
+                "错误必须点明缺失字段 {field}: {error}"
+            );
+        }
+    }
+
+    /// 未知 type(含非字符串 type)一律拒绝。
+    #[test]
+    fn unknown_handler_types_are_rejected() {
+        for handler in [
+            json!({"type": "webhook", "url": "https://x"}),
+            json!({"type": "COMMAND", "command": "x"}),
+            json!({"type": 7, "command": "x"}),
+        ] {
+            let hooks = json!({"Stop": [{"hooks": [handler]}]});
+            let error = validate_editable(&hooks).unwrap_err();
+            assert!(error.contains("handler type 非法"), "{error}");
         }
     }
 

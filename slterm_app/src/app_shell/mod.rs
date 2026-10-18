@@ -27,6 +27,8 @@ pub(crate) mod code_tab;
 pub(crate) mod config;
 // 通用 diff 对照面(07 篇 M8.5;双栏只读)。
 pub(crate) mod diff_tab;
+// 冲突三栏合并面(base/ours/theirs 只读 + 采用版本)。
+pub(crate) mod merge_tab;
 // 文档/图片 tab + openable_in_app 路由单判定(07 篇 M8.1)。
 pub(crate) mod doc_tabs;
 // 编辑器语义槽装配(07 篇 M8.5;颜色单源 = 06 篇 UI token)。
@@ -97,6 +99,9 @@ pub(crate) enum SltermShellEvent {
     /// 后台更新检查结果(09 篇 M10.5):提示 + 按 `auto_download_updates`
     /// 预取安装包。安装授权仍需用户经 handoff 两阶段流程提交。
     UpdateAvailable(crate::update_check::UpdateCheckResult),
+    /// B38:AI hook 自愈失败边(类别 + agent,不含合成命令)。消费 = 进程级
+    /// 通知,不绑定 pane,也不直出技术化命令文本。
+    AiHookAlert(crate::ai_assistant::HookFailureKind),
 }
 
 /// 本次启动是否静默(09 篇 M10.6)。
@@ -198,8 +203,14 @@ pub fn run_shell(initial_cwd: Option<PathBuf>, initial_command: Option<Program>)
     // 天然携带作用域闸门。句柄活到事件循环退出,关窗后确定性回收 accept 线程。
     let (ai_events, pipe_server) = crate::ai_hook::spawn_gpui_server();
     // C4:配置守卫(跨进程 hook 配置变更自愈)挂在设置域启动链上,
-    // 随壳生命周期存活,Drop 时 join 线程。
-    let _config_guard = crate::ai_hook::spawn_config_guard();
+    // 随壳生命周期存活,Drop 时 join 线程。B38:失败边经壳事件队列投进程级
+    // 通知——只传类别/agent,不传合成命令。
+    let _config_guard = crate::ai_hook::spawn_config_guard_with({
+        let shell_events = shell_tx.clone();
+        move |alert| {
+            let _ = shell_events.send(SltermShellEvent::AiHookAlert(alert));
+        }
+    });
     // 通知通道开机位(09 篇 M10.1):toast 点击回投走同一壳事件队列;
     // AUMID 预注册幂等,必须早于第一条通知。
     crate::notify::init_gpui_activation(shell_tx.clone());

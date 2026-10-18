@@ -135,7 +135,8 @@ pub(crate) use local::settings::remove_all as remove_all_hooks;
 pub use windows::spawn_gpui_server;
 
 /// config_guard 落盘本体在 local;消费点 = 壳启动链 `run_shell`(C4)。
-pub use local::spawn_config_guard;
+/// 回调接失败边呈现(B38);不需要提示的调用方传 `|_| {}`。
+pub use local::spawn_config_guard_with;
 
 #[cfg(test)]
 mod e2e_tests;

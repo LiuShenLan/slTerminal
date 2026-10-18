@@ -28,7 +28,8 @@ mod documents;
 /// 07 篇 M8.4:侧栏文件树渲染 + 路径栏 + 拖放。
 mod file_tree;
 /// 07 篇 M8.5:键位 JSON 段消费 + EDITABLE_ACTIONS + 保留键红线。
-mod keyboard_bindings;
+/// B7 起暴露给设置页键位编辑(EDITABLE_ACTIONS/RESERVED_ROWS/clear/reset)。
+pub(crate) mod keyboard_bindings;
 /// 05 篇:后台泵与系统关窗(自动保存 / AI hook / 壳事件)。
 mod pumps;
 /// 05 篇:终端 tab 与分屏树渲染(壳层职责下沉)。
@@ -39,6 +40,8 @@ pub(crate) mod runtime_projection;
 pub(crate) mod session_persistence;
 pub(crate) mod session_recovery;
 pub(crate) mod sidebar;
+/// 05 篇 B73:侧栏三视图渲染(导航树 / Commit / Agent 全局文件)。
+mod sidebar_views;
 mod split_drag;
 mod tab_drag;
 pub(crate) mod title_bar;
@@ -55,6 +58,7 @@ use gpui::{
     IntoElement, MouseButton, MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels,
     PromptLevel, Render, Styled as _, Subscription, Window, div, px,
 };
+use gpui_component::WindowExt as _;
 use slterm_settings::Rgb;
 use slterm_split::{PaneId, RemoveOutcome, SplitDirection, SplitNav, SplitTree, TabId, nav_target};
 
@@ -227,6 +231,16 @@ pub struct SltermWorkspace {
     pane_close_confirmed: Option<PaneId>,
     /// 侧栏文件树视图状态(07 篇 M8.4;explorer 槽内容)。
     file_tree: file_tree::FileTreeState,
+    /// AgentFiles 槽的进程内目录缓存(B73):首次渲染加载,禁止每帧 27 次
+    /// `is_dir`;显式刷新经 `refresh_agent_dirs`。测试构建预置空表,避免
+    /// UI 用例读真实 USERPROFILE(替身经 `set_agent_dirs_for_test` 注入)。
+    agent_dirs_cache: Option<Vec<crate::agent_dirs::AgentGlobalDir>>,
+    /// 设置页当前读写路径(B7 热重绑重读 keybind 段时与设置页同一份文件);
+    /// `None` = 生产默认数据目录,测试经 `open_settings_tab_at` 注入 tempdir。
+    settings_path_override: Option<PathBuf>,
+    /// 测试专用:Commit 视图注入快照(渲染 selector 的确定性数据源)。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    commit_snapshot_for_test: Option<std::sync::Arc<crate::side_panel::GitInfo>>,
     /// B8:外部文件修改监听(树根递归 + 打开文件父目录)。事件驱动刷新
     /// gutter/目录树,不做定时目录重扫;watcher 不可用时为 None。
     fs_watch: Option<super::fs_watch::FsWatch>,
@@ -335,6 +349,10 @@ impl SltermWorkspace {
             window_close_confirmed: false,
             pane_close_confirmed: None,
             file_tree: file_tree::FileTreeState::new(window, cx),
+            agent_dirs_cache: Self::initial_agent_dirs_cache(),
+            settings_path_override: None,
+            #[cfg(all(test, feature = "gpui-test-support"))]
+            commit_snapshot_for_test: None,
             fs_watch: super::fs_watch::FsWatch::new(),
             _window_activation: window_activation,
         };
@@ -398,6 +416,19 @@ impl SltermWorkspace {
         // 托盘首帧快照(09 篇 M10.3):起跑即对齐,不等首秒看门狗。
         workspace.publish_tray_snapshot(cx);
         workspace
+    }
+
+    /// AgentFiles 缓存初值:生产懒加载(NULL = 首帧读目录表);测试构建
+    /// 预置空表,避免 UI 用例触碰真实 USERPROFILE。
+    fn initial_agent_dirs_cache() -> Option<Vec<crate::agent_dirs::AgentGlobalDir>> {
+        #[cfg(all(test, feature = "gpui-test-support"))]
+        {
+            Some(Vec::new())
+        }
+        #[cfg(not(all(test, feature = "gpui-test-support")))]
+        {
+            None
+        }
     }
 
     /// 生产 = 真实写盘;测试 = 空写。虚拟时钟推进 1s 会驱动自动保存泵,
@@ -568,6 +599,8 @@ impl SltermWorkspace {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
+        // B7:设置页写盘路径即 keybind 热重绑的重读路径。
+        self.settings_path_override = settings_path.clone();
         if let Some(index) = self
             .tabs
             .iter()
@@ -622,6 +655,8 @@ impl SltermWorkspace {
     ) {
         match event {
             SettingsPaneEvent::Changed => {
+                // B7:keybind 段可能随本次写盘变化;重读并重建 keymap。
+                self.reload_user_keybinds(cx);
                 // 全局 `Settings` 已由设置页写入;这里把已消费字段扇出到
                 // 每个终端视图(字体/字号/连字/选中复制/调色板热应用)。
                 let settings = cx.global::<crate::app_shell::config::Settings>().clone();
@@ -632,7 +667,57 @@ impl SltermWorkspace {
                 cx.refresh_windows();
                 cx.notify();
             }
+            // C8:工作区导出入口。前台只拍内存快照;写盘走后台执行器,
+            // 成功/失败都只发通知,不改变设置 tab 的既有 Changed/Close 行为。
+            SettingsPaneEvent::ExportWorkspace { path } => {
+                let language = cx.global::<Settings>().language;
+                let path = path.clone();
+                let handle = window.window_handle();
+                let task = self.export_workspace_task(&path, window, cx);
+                cx.spawn(async move |_this, cx| {
+                    let result = task.await;
+                    let _ = handle.update(cx, |_, window, cx| match result {
+                        Ok(()) => {
+                            let text = language.format(
+                                Message::SettingsAdvancedExportWorkspaceDone,
+                                &[("path", &path.display().to_string())],
+                            );
+                            window.push_notification(
+                                gpui_component::notification::Notification::success(text),
+                                cx,
+                            );
+                        }
+                        Err(error) => {
+                            window.push_notification(
+                                gpui_component::notification::Notification::error(
+                                    language.text(Message::SettingsAdvancedExportWorkspaceFailed),
+                                )
+                                .message(error.to_string()),
+                                cx,
+                            );
+                        }
+                    });
+                })
+                .detach();
+                cx.notify();
+            }
             SettingsPaneEvent::Close => self.close_settings_tab(view, window, cx),
+        }
+    }
+
+    /// B7:设置变更后重读 `keybind` 段并热重建 keymap。
+    ///
+    /// 与当前已应用表比较,只有准入结果真正变化才重建;重读路径与设置页
+    /// 写盘路径同源(`settings_path_override`,生产回退默认数据目录)。
+    fn reload_user_keybinds(&mut self, cx: &mut Context<'_, Self>) {
+        let path = self
+            .settings_path_override
+            .clone()
+            .unwrap_or_else(slterm_settings::settings_path);
+        let pairs = keyboard_bindings::load_keybind_pairs_at(&path);
+        let admitted = keyboard_bindings::admit_keybind_pairs(pairs).accepted;
+        if keyboard_bindings::applied_user_keybinds(cx) != admitted {
+            keyboard_bindings::rebuild_keymap(cx, &admitted);
         }
     }
 
@@ -1684,6 +1769,9 @@ pub fn init(cx: &mut App) {
     // 上下文,只对文件视图生效。
     super::file_editor::init(cx);
     cx.bind_keys(keyboard_bindings::default_workspace_bindings());
+    // B7:内置/默认绑定全部就位后、用户表安装前捕获快照——热重绑以它
+    // 为回放基底(clear_key_bindings 会连组件内置绑定一起清掉)。
+    keyboard_bindings::capture_keymap_base(cx);
     // 用户 keybind 段:启动读一次;保留键/坏行由准入门拒绝。
     keyboard_bindings::install_user_keybinds(cx);
 }

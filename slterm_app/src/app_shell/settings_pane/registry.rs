@@ -48,7 +48,7 @@ pub(crate) const BUILTIN_PAGES: [SettingsPageDef; 7] = [
         group: SettingsPageGroup::Global,
         order: 1,
         title: Message::SettingsSidebarAppearance,
-        search_terms: "appearance 外观 theme 主题 font 字体 opacity 透明度 background 背景 scrollback 回滚 density 密度",
+        search_terms: "appearance 外观 theme 主题 font 字体 opacity 透明度 background 背景 wallpaper 壁纸 scrollback 回滚 density 密度 import 导入 export 导出 package 主题包",
     },
     SettingsPageDef {
         id: "profiles",
@@ -62,14 +62,14 @@ pub(crate) const BUILTIN_PAGES: [SettingsPageDef; 7] = [
         group: SettingsPageGroup::Global,
         order: 3,
         title: Message::SettingsSidebarInteraction,
-        search_terms: "interaction 交互 cursor 光标 copy 复制 paste 粘贴 focus 焦点 mouse 鼠标 tab 标签",
+        search_terms: "interaction 交互 cursor 光标 copy 复制 paste 粘贴 focus 焦点 mouse 鼠标 tab 标签 keybind 键位 shortcut 快捷键",
     },
     SettingsPageDef {
         id: "advanced",
         group: SettingsPageGroup::Global,
         order: 4,
         title: Message::SettingsSidebarAdvanced,
-        search_terms: "advanced 高级 session 会话 restore 恢复 tray 托盘 startup 自启动 login 开机 proxy 代理 update 更新",
+        search_terms: "advanced 高级 session 会话 restore 恢复 tray 托盘 startup 自启动 login 开机 proxy 代理 update 更新 export 导出 workspace 工作区",
     },
     SettingsPageDef {
         id: "localization",

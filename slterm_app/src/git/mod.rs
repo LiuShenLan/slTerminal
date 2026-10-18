@@ -261,6 +261,114 @@ fn verify_head(root: &Path) -> Result<(), GitError> {
     }
 }
 
+/// 冲突三栏 stage 的单文件读取上限(展示与「采用」动作共用;超限即截断)。
+pub(crate) const CONFLICT_STAGE_LIMIT: usize = 4 * 1024 * 1024;
+
+/// 单个冲突文件的三种 index stage 内容(1=base、2=ours、3=theirs)。
+///
+/// 缺失 stage 为 `None`(add/add、modify/delete 等形态);文本按 UTF-8
+/// lossy 解码仅供展示,`valid_utf8` 记录原始字节是否可无损写回,
+/// `truncated` 标记该栏是否因超出上限被截断(截断内容禁止用于写盘)。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ConflictStages {
+    pub base: Option<String>,
+    pub ours: Option<String>,
+    pub theirs: Option<String>,
+    /// 各栏原始字节是否合法 UTF-8(顺序 base/ours/theirs)。
+    pub valid_utf8: [bool; 3],
+    /// 各栏是否被截断(顺序 base/ours/theirs)。
+    pub truncated: [bool; 3],
+}
+
+/// 读取冲突文件的 `:1:/:2:/:3:` 三 stage。
+///
+/// 走既有 [`command`] 执行体(`--no-optional-locks`),每 stage 先
+/// `cat-file -e` 判存在性:不存在 = 该 stage 为 `None`,不再起 `show`。
+/// 缺失/非冲突文件不报错;权限/损坏按 [`classify_git_failure`] 收口。
+pub(crate) fn conflict_stages(root: &Path, relative: &str) -> Result<ConflictStages, GitError> {
+    conflict_stages_with_limit(root, relative, CONFLICT_STAGE_LIMIT)
+}
+
+/// 上限可注入的 stage 读取(测试截断语义用)。
+fn conflict_stages_with_limit(
+    root: &Path,
+    relative: &str,
+    limit: usize,
+) -> Result<ConflictStages, GitError> {
+    // 固定顺序 = base/ours/theirs,与 `ConflictStages` 的数组下标同源。
+    let mut stages = ConflictStages::default();
+    for (slot, stage) in [(0usize, 1u8), (1, 2), (2, 3)] {
+        let spec = format!(":{stage}:{relative}");
+        let Some((bytes, truncated)) = show_stage_bounded(root, &spec, limit)? else {
+            continue;
+        };
+        stages.valid_utf8[slot] = std::str::from_utf8(&bytes).is_ok();
+        stages.truncated[slot] = truncated;
+        let text = String::from_utf8_lossy(&bytes).into_owned();
+        match slot {
+            0 => stages.base = Some(text),
+            1 => stages.ours = Some(text),
+            _ => stages.theirs = Some(text),
+        }
+    }
+    Ok(stages)
+}
+
+/// 单个 stage 的有界读取;stage 不存在返回 `Ok(None)`。
+fn show_stage_bounded(
+    root: &Path,
+    spec: &str,
+    limit: usize,
+) -> Result<Option<(Vec<u8>, bool)>, GitError> {
+    let precheck = command(root)
+        .args(["cat-file", "-e", spec])
+        .output()
+        .map_err(|error| GitError::Unavailable(format!("无法运行 git: {error}")))?;
+    if !precheck.status.success() {
+        let stderr = String::from_utf8_lossy(&precheck.stderr);
+        // 权限/损坏必须上抛;「stage 不存在」/「不在 index」是正常语义。
+        if let Some(error) = classify_git_failure(&stderr) {
+            return Err(error);
+        }
+        if stderr.contains("not a git repository") {
+            return Err(command_failure(root, "cat-file", &precheck.stderr));
+        }
+        return Ok(None);
+    }
+    let mut child = command(root)
+        .args(["show", spec])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| GitError::Unavailable(format!("无法运行 git: {error}")))?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| GitError::Command("无法打开 git show 管道".to_owned()))?;
+    let mut bytes = Vec::new();
+    stdout
+        .by_ref()
+        .take(limit.saturating_add(1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|error| GitError::Command(format!("读取冲突 stage 失败: {error}")))?;
+    let truncated = bytes.len() > limit;
+    if truncated {
+        bytes.truncate(limit);
+    }
+    // 截断时子进程仍可能继续写管道:先杀再收尸(stdout 句柄已 drop)。
+    drop(stdout);
+    if truncated {
+        let _ = child.kill();
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|error| GitError::Command(format!("等待 git show 失败: {error}")))?;
+    if !truncated && !output.status.success() {
+        return Err(command_failure(root, "show", &output.stderr));
+    }
+    Ok(Some((bytes, truncated)))
+}
+
 /// 一条统一 diff hunk(git `@@ -a,b +c,d @@` 解析)。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct FileHunk {
@@ -1116,6 +1224,94 @@ mod git_tests {
         assert!(message.contains("untracked.txt"), "{message}");
     }
 
+    /// 真冲突仓(modify/modify):三 stage 分别读到 base/ours/theirs 字节。
+    #[test]
+    fn conflict_stages_read_base_ours_and_theirs_from_a_merge_conflict() {
+        let repository = conflict_repository();
+        let stages = conflict_stages(repository.path(), "conflicted.txt").expect("stage 读取");
+        assert_eq!(stages.base.as_deref(), Some("line1\nbase\nline3\n"));
+        assert_eq!(stages.ours.as_deref(), Some("line1\nours\nline3\n"));
+        assert_eq!(stages.theirs.as_deref(), Some("line1\ntheirs\nline3\n"));
+        assert_eq!(stages.valid_utf8, [true; 3]);
+        assert_eq!(stages.truncated, [false; 3]);
+    }
+
+    /// 非冲突文件没有 stage 1/2/3:三栏全 None,不报错。
+    #[test]
+    fn conflict_stages_are_all_none_for_a_non_conflicted_file() {
+        let repository = test_repository();
+        let stages = conflict_stages(repository.path(), "tracked.txt").expect("非冲突文件");
+        assert!(stages.base.is_none(), "{stages:?}");
+        assert!(stages.ours.is_none(), "{stages:?}");
+        assert!(stages.theirs.is_none(), "{stages:?}");
+    }
+
+    /// add/add 冲突没有 base stage:2/3 存在,1 缺失。
+    #[test]
+    fn add_add_conflict_reports_a_missing_base_stage() {
+        let repository = test_repository();
+        let root = repository.path();
+        assert!(git(root, ["checkout", "-b", "other"]).status.success());
+        std::fs::write(root.join("added.txt"), "theirs\n").unwrap();
+        assert!(git(root, ["add", "added.txt"]).status.success());
+        let theirs = git(
+            root,
+            [
+                "-c",
+                "user.name=slTerminal Test",
+                "-c",
+                "user.email=slterm@example.invalid",
+                "commit",
+                "-m",
+                "theirs",
+            ],
+        );
+        assert!(
+            theirs.status.success(),
+            "{}",
+            String::from_utf8_lossy(&theirs.stderr)
+        );
+        assert!(git(root, ["checkout", "main"]).status.success());
+        std::fs::write(root.join("added.txt"), "ours\n").unwrap();
+        assert!(git(root, ["add", "added.txt"]).status.success());
+        let ours = git(
+            root,
+            [
+                "-c",
+                "user.name=slTerminal Test",
+                "-c",
+                "user.email=slterm@example.invalid",
+                "commit",
+                "-m",
+                "ours",
+            ],
+        );
+        assert!(
+            ours.status.success(),
+            "{}",
+            String::from_utf8_lossy(&ours.stderr)
+        );
+        let merge = git(root, ["merge", "other"]);
+        assert!(!merge.status.success(), "夹具必须制造 add/add 冲突");
+
+        let stages = conflict_stages(root, "added.txt").expect("stage 读取");
+        assert!(stages.base.is_none(), "{stages:?}");
+        assert_eq!(stages.ours.as_deref(), Some("ours\n"));
+        assert_eq!(stages.theirs.as_deref(), Some("theirs\n"));
+    }
+
+    /// 上限截断:只读 limit 字节并标记 truncated(截断内容禁止写盘)。
+    #[test]
+    fn conflict_stage_reads_are_bounded_and_report_truncation() {
+        let repository = conflict_repository();
+        let stages =
+            conflict_stages_with_limit(repository.path(), "conflicted.txt", 4).expect("stage 读取");
+        assert_eq!(stages.base.as_deref(), Some("line"));
+        assert_eq!(stages.ours.as_deref(), Some("line"));
+        assert_eq!(stages.theirs.as_deref(), Some("line"));
+        assert_eq!(stages.truncated, [true; 3]);
+    }
+
     /// 非仓库路径:NotRepository(不 panic、不误报 HEAD)。
     #[test]
     fn paths_outside_a_worktree_are_not_repositories() {
@@ -1417,6 +1613,84 @@ mod git_tests {
             "git commit failed: {}",
             String::from_utf8_lossy(&commit.stderr)
         );
+        directory
+    }
+
+    /// 真 modify/modify 冲突仓:base/ours/theirs 三版都已提交。
+    fn conflict_repository() -> tempfile::TempDir {
+        let directory = tempfile::tempdir().expect("create conflict repository");
+        let root = directory.path();
+        assert!(
+            git(root, ["init", "--initial-branch=main"])
+                .status
+                .success()
+        );
+        assert!(
+            git(root, ["config", "core.autocrlf", "false"])
+                .status
+                .success()
+        );
+        std::fs::write(root.join("conflicted.txt"), "line1\nbase\nline3\n").unwrap();
+        assert!(git(root, ["add", "conflicted.txt"]).status.success());
+        let base = git(
+            root,
+            [
+                "-c",
+                "user.name=slTerminal Test",
+                "-c",
+                "user.email=slterm@example.invalid",
+                "commit",
+                "-m",
+                "base",
+            ],
+        );
+        assert!(
+            base.status.success(),
+            "{}",
+            String::from_utf8_lossy(&base.stderr)
+        );
+        assert!(git(root, ["checkout", "-b", "other"]).status.success());
+        std::fs::write(root.join("conflicted.txt"), "line1\ntheirs\nline3\n").unwrap();
+        assert!(git(root, ["add", "conflicted.txt"]).status.success());
+        let theirs = git(
+            root,
+            [
+                "-c",
+                "user.name=slTerminal Test",
+                "-c",
+                "user.email=slterm@example.invalid",
+                "commit",
+                "-m",
+                "theirs",
+            ],
+        );
+        assert!(
+            theirs.status.success(),
+            "{}",
+            String::from_utf8_lossy(&theirs.stderr)
+        );
+        assert!(git(root, ["checkout", "main"]).status.success());
+        std::fs::write(root.join("conflicted.txt"), "line1\nours\nline3\n").unwrap();
+        assert!(git(root, ["add", "conflicted.txt"]).status.success());
+        let ours = git(
+            root,
+            [
+                "-c",
+                "user.name=slTerminal Test",
+                "-c",
+                "user.email=slterm@example.invalid",
+                "commit",
+                "-m",
+                "ours",
+            ],
+        );
+        assert!(
+            ours.status.success(),
+            "{}",
+            String::from_utf8_lossy(&ours.stderr)
+        );
+        let merge = git(root, ["merge", "other"]);
+        assert!(!merge.status.success(), "夹具必须制造 modify/modify 冲突");
         directory
     }
 

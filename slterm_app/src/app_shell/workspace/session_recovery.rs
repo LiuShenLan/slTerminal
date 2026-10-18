@@ -201,9 +201,10 @@ impl SltermWorkspace {
         session
     }
 
-    /// 整窗导出:与 `session.json` 同一 schema 的 pretty 打印。
-    /// UI 入口归 04/07(palette / CLI),本步只落导出函数。
-    #[allow(dead_code)] // 消费点 = 后续 palette/CLI 导出入口(M5.5 出口用例已消费)。
+    /// 整窗导出(同步形态):与 `session.json` 同一 schema 的 pretty 打印。
+    /// 只供测试与后续 CLI 导出复用;UI 路径走
+    /// [`Self::export_workspace_task`],避免在前台线程写盘。
+    #[cfg(all(test, feature = "gpui-test-support"))]
     pub(crate) fn export_workspace(
         &self,
         path: &Path,
@@ -212,6 +213,19 @@ impl SltermWorkspace {
     ) -> std::io::Result<()> {
         let session = self.snapshot_session(Some(capture_window_state(window)), cx);
         crate::session::save_to(path, &session)
+    }
+
+    /// 导出 UI 路径:前台只拍内存快照,写盘在后台执行器完成。
+    pub(crate) fn export_workspace_task(
+        &self,
+        path: &Path,
+        window: &Window,
+        cx: &mut gpui::Context<'_, Self>,
+    ) -> gpui::Task<std::io::Result<()>> {
+        let session = self.snapshot_session(Some(capture_window_state(window)), cx);
+        let path = path.to_path_buf();
+        cx.background_executor()
+            .spawn(async move { crate::session::save_to(&path, &session) })
     }
 
     /// 逐 tab 恢复;至少恢复出一个 tab 才算成功。调用方在恢复失败时回退

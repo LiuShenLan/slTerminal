@@ -23,7 +23,8 @@ use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::select::{Select, SelectEvent, SelectState};
 use gpui_component::{ActiveTheme as _, Disableable as _, IndexPath, h_flex, v_flex};
 use slterm_settings::{
-    Rgb8, ThemeDefinition, ThemeName, foreground_recommendations, format_hex_rgb, parse_hex_rgb,
+    BlurMode, Rgb8, ThemeDefinition, ThemeName, foreground_recommendations, format_hex_rgb,
+    parse_hex_rgb,
 };
 
 use crate::settings_store::SettingsRevision;
@@ -48,7 +49,40 @@ pub(super) enum EditorInput {
     FontFamily,
     FontSize,
     LineHeight,
+    LetterSpacing,
+    FontWeight,
     Opacity,
+    LayoutRadius,
+    LayoutGutter,
+    LayoutDivider,
+    PaddingX,
+    PaddingY,
+}
+
+#[cfg(all(test, feature = "gpui-test-support"))]
+impl EditorInput {
+    /// 测试辅助:按稳定字段名取输入槽,避免把内部枚举暴露到 `ui_tests`。
+    fn from_test_name(name: &str) -> Option<Self> {
+        Some(match name {
+            "name" => Self::Name,
+            "background" => Self::Background,
+            "foreground" => Self::Foreground,
+            "accent" => Self::Accent,
+            "cursor" => Self::Cursor,
+            "font_family" => Self::FontFamily,
+            "font_size" => Self::FontSize,
+            "line_height" => Self::LineHeight,
+            "letter_spacing" => Self::LetterSpacing,
+            "font_weight" => Self::FontWeight,
+            "opacity" => Self::Opacity,
+            "layout_radius" => Self::LayoutRadius,
+            "layout_gutter" => Self::LayoutGutter,
+            "layout_divider" => Self::LayoutDivider,
+            "padding_x" => Self::PaddingX,
+            "padding_y" => Self::PaddingY,
+            _ => return None,
+        })
+    }
 }
 
 /// 颜色槽(常用四色)。生产路径当前只从取色推荐点选前景;其余槽由输入框
@@ -84,6 +118,8 @@ pub(super) struct ThemeEditor {
     templates: Vec<ThemeTemplate>,
     selected_template: usize,
     pub(super) template_select: Entity<SelectState<Vec<SharedString>>>,
+    /// 背景模糊选择器:空选择 = 跟随全局设置(`effects.blur` 为 None)。
+    blur_select: Entity<SelectState<Vec<SharedString>>>,
     name_input: Entity<InputState>,
     background_input: Entity<InputState>,
     foreground_input: Entity<InputState>,
@@ -92,7 +128,14 @@ pub(super) struct ThemeEditor {
     font_input: Entity<InputState>,
     font_size_input: Entity<InputState>,
     line_height_input: Entity<InputState>,
+    letter_spacing_input: Entity<InputState>,
+    font_weight_input: Entity<InputState>,
     opacity_input: Entity<InputState>,
+    layout_radius_input: Entity<InputState>,
+    layout_gutter_input: Entity<InputState>,
+    layout_divider_input: Entity<InputState>,
+    padding_x_input: Entity<InputState>,
+    padding_y_input: Entity<InputState>,
     /// 最后一次写入输入框的显示值,防程序回填触发 Change 循环。
     input_values: HashMap<EditorInput, String>,
     /// 当前无效的输入槽;非空时保存被拒。
@@ -169,6 +212,25 @@ impl SettingsPane {
         let template_select = cx.new(|cx| {
             SelectState::new(labels, Some(IndexPath::default().row(selected)), window, cx)
         });
+        // 模糊选项顺序与 `BlurMode::VALUES` 全等;None 选择 = 未设置。
+        let blur_labels = BlurMode::VALUES
+            .iter()
+            .filter_map(|value| BlurMode::from_settings(value))
+            .map(|mode| SharedString::from(blur_option_label(mode, language)))
+            .collect::<Vec<_>>();
+        let blur_selected = draft.effects.blur.and_then(|mode| {
+            BlurMode::VALUES
+                .iter()
+                .position(|value| *value == mode.settings_value())
+        });
+        let blur_select = cx.new(|cx| {
+            SelectState::new(
+                blur_labels,
+                blur_selected.map(|row| IndexPath::default().row(row)),
+                window,
+                cx,
+            )
+        });
         let mut make_input = |value: String, placeholder: &'static str| {
             cx.new(|cx| {
                 InputState::new(window, cx)
@@ -200,11 +262,42 @@ impl SettingsPane {
                 .map_or_else(String::new, |value| format!("{value:.2}")),
             "1.60",
         );
+        let letter_spacing_input = make_input(
+            draft
+                .typography
+                .letter_spacing
+                .map_or_else(String::new, |value| format!("{value:.2}")),
+            "0",
+        );
+        let font_weight_input = make_input(
+            draft
+                .typography
+                .font_weight
+                .map_or_else(String::new, |value| value.to_string()),
+            "400",
+        );
         let opacity_input = make_input(
             draft.effects.opacity.map_or_else(String::new, |value| {
                 format!("{}%", (value * 100.0).round() as u16)
             }),
             "100%",
+        );
+        let layout_radius_input = make_input(format!("{:.1}", draft.layout.card.radius), "14");
+        let layout_gutter_input = make_input(format!("{:.1}", draft.layout.card.gutter), "8");
+        let layout_divider_input = make_input(format!("{:.2}", draft.layout.card.divider), "1");
+        let padding_x_input = make_input(
+            draft
+                .layout
+                .padding_x
+                .map_or_else(String::new, |value| format!("{value:.1}")),
+            "0",
+        );
+        let padding_y_input = make_input(
+            draft
+                .layout
+                .padding_y
+                .map_or_else(String::new, |value| format!("{value:.1}")),
+            "0",
         );
         let preference_revision = self
             .settings_target
@@ -222,6 +315,18 @@ impl SettingsPane {
                     return;
                 };
                 this.switch_theme_template(index, window, cx);
+            },
+        ));
+        subscriptions.push(cx.subscribe_in(
+            &blur_select,
+            window,
+            |this, entity, event: &SelectEvent<Vec<SharedString>>, window, cx| {
+                // `Confirm(None)` = 清除选择(跟随全局设置)。
+                if !matches!(event, SelectEvent::Confirm(_)) {
+                    return;
+                }
+                let row = entity.read(cx).selected_index(cx).map(|path| path.row);
+                this.on_theme_editor_blur_selected(row, window, cx);
             },
         ));
         let mut register_input =
@@ -258,7 +363,34 @@ impl SettingsPane {
             EditorInput::LineHeight,
             &mut subscriptions,
         );
+        register_input(
+            &letter_spacing_input,
+            EditorInput::LetterSpacing,
+            &mut subscriptions,
+        );
+        register_input(
+            &font_weight_input,
+            EditorInput::FontWeight,
+            &mut subscriptions,
+        );
         register_input(&opacity_input, EditorInput::Opacity, &mut subscriptions);
+        register_input(
+            &layout_radius_input,
+            EditorInput::LayoutRadius,
+            &mut subscriptions,
+        );
+        register_input(
+            &layout_gutter_input,
+            EditorInput::LayoutGutter,
+            &mut subscriptions,
+        );
+        register_input(
+            &layout_divider_input,
+            EditorInput::LayoutDivider,
+            &mut subscriptions,
+        );
+        register_input(&padding_x_input, EditorInput::PaddingX, &mut subscriptions);
+        register_input(&padding_y_input, EditorInput::PaddingY, &mut subscriptions);
         let mut input_values = HashMap::new();
         for (field, input) in [
             (EditorInput::Name, &name_input),
@@ -269,7 +401,14 @@ impl SettingsPane {
             (EditorInput::FontFamily, &font_input),
             (EditorInput::FontSize, &font_size_input),
             (EditorInput::LineHeight, &line_height_input),
+            (EditorInput::LetterSpacing, &letter_spacing_input),
+            (EditorInput::FontWeight, &font_weight_input),
             (EditorInput::Opacity, &opacity_input),
+            (EditorInput::LayoutRadius, &layout_radius_input),
+            (EditorInput::LayoutGutter, &layout_gutter_input),
+            (EditorInput::LayoutDivider, &layout_divider_input),
+            (EditorInput::PaddingX, &padding_x_input),
+            (EditorInput::PaddingY, &padding_y_input),
         ] {
             input_values.insert(field, input.read(cx).value().to_string());
         }
@@ -284,6 +423,7 @@ impl SettingsPane {
             templates,
             selected_template: selected,
             template_select,
+            blur_select,
             name_input,
             background_input,
             foreground_input,
@@ -292,7 +432,14 @@ impl SettingsPane {
             font_input,
             font_size_input,
             line_height_input,
+            letter_spacing_input,
+            font_weight_input,
             opacity_input,
+            layout_radius_input,
+            layout_gutter_input,
+            layout_divider_input,
+            padding_x_input,
+            padding_y_input,
             input_values,
             invalid_inputs: HashSet::new(),
             preference_revision,
@@ -452,6 +599,33 @@ impl SettingsPane {
                 .ok()
                 .map(|number| candidate.typography.line_height = Some(number))
                 .is_some(),
+            EditorInput::LetterSpacing => {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    // 空 = 跟随全局设置(与字体族同一语义)。
+                    candidate.typography.letter_spacing = None;
+                    true
+                } else {
+                    trimmed
+                        .parse::<f32>()
+                        .ok()
+                        .map(|number| candidate.typography.letter_spacing = Some(number))
+                        .is_some()
+                }
+            }
+            EditorInput::FontWeight => {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    candidate.typography.font_weight = None;
+                    true
+                } else {
+                    trimmed
+                        .parse::<u16>()
+                        .ok()
+                        .map(|weight| candidate.typography.font_weight = Some(weight))
+                        .is_some()
+                }
+            }
             EditorInput::Opacity => value
                 .trim()
                 .trim_end_matches('%')
@@ -460,6 +634,50 @@ impl SettingsPane {
                 .ok()
                 .map(|number| candidate.effects.opacity = Some(number / 100.0))
                 .is_some(),
+            EditorInput::LayoutRadius => value
+                .trim()
+                .parse::<f32>()
+                .ok()
+                .map(|number| candidate.layout.card.radius = number)
+                .is_some(),
+            EditorInput::LayoutGutter => value
+                .trim()
+                .parse::<f32>()
+                .ok()
+                .map(|number| candidate.layout.card.gutter = number)
+                .is_some(),
+            EditorInput::LayoutDivider => value
+                .trim()
+                .parse::<f32>()
+                .ok()
+                .map(|number| candidate.layout.card.divider = number)
+                .is_some(),
+            EditorInput::PaddingX => {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    candidate.layout.padding_x = None;
+                    true
+                } else {
+                    trimmed
+                        .parse::<f32>()
+                        .ok()
+                        .map(|number| candidate.layout.padding_x = Some(number))
+                        .is_some()
+                }
+            }
+            EditorInput::PaddingY => {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    candidate.layout.padding_y = None;
+                    true
+                } else {
+                    trimmed
+                        .parse::<f32>()
+                        .ok()
+                        .map(|number| candidate.layout.padding_y = Some(number))
+                        .is_some()
+                }
+            }
         };
         // 共享值模型是标量范围权威;只有完整合法的候选进入草稿。
         if parsed && candidate.validate().is_ok() {
@@ -470,6 +688,34 @@ impl SettingsPane {
         }
         editor.saved = false;
         editor.error = (!editor.invalid_inputs.is_empty()).then_some(invalid_message);
+        cx.notify();
+    }
+
+    /// 模糊选择确认;`None` = 清除为跟随全局设置。
+    fn on_theme_editor_blur_selected(
+        &mut self,
+        row: Option<usize>,
+        _window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let next = match row {
+            None => None,
+            Some(row) => match BlurMode::VALUES
+                .get(row)
+                .and_then(|value| BlurMode::from_settings(value))
+            {
+                Some(mode) => Some(mode),
+                None => return,
+            },
+        };
+        let Some(editor) = self.theme_editor.as_mut() else {
+            return;
+        };
+        if editor.save_busy || editor.draft.effects.blur == next {
+            return;
+        }
+        editor.draft.effects.blur = next;
+        editor.saved = false;
         cx.notify();
     }
 
@@ -559,6 +805,22 @@ impl SettingsPane {
                     .map_or_else(String::new, |value| format!("{value:.2}")),
             ),
             (
+                EditorInput::LetterSpacing,
+                editor
+                    .draft
+                    .typography
+                    .letter_spacing
+                    .map_or_else(String::new, |value| format!("{value:.2}")),
+            ),
+            (
+                EditorInput::FontWeight,
+                editor
+                    .draft
+                    .typography
+                    .font_weight
+                    .map_or_else(String::new, |value| value.to_string()),
+            ),
+            (
                 EditorInput::Opacity,
                 editor
                     .draft
@@ -568,6 +830,34 @@ impl SettingsPane {
                         format!("{}%", (value * 100.0).round() as u16)
                     }),
             ),
+            (
+                EditorInput::LayoutRadius,
+                format!("{:.1}", editor.draft.layout.card.radius),
+            ),
+            (
+                EditorInput::LayoutGutter,
+                format!("{:.1}", editor.draft.layout.card.gutter),
+            ),
+            (
+                EditorInput::LayoutDivider,
+                format!("{:.2}", editor.draft.layout.card.divider),
+            ),
+            (
+                EditorInput::PaddingX,
+                editor
+                    .draft
+                    .layout
+                    .padding_x
+                    .map_or_else(String::new, |value| format!("{value:.1}")),
+            ),
+            (
+                EditorInput::PaddingY,
+                editor
+                    .draft
+                    .layout
+                    .padding_y
+                    .map_or_else(String::new, |value| format!("{value:.1}")),
+            ),
         ];
         for (field, value) in values {
             editor.input_values.insert(field, value.clone());
@@ -575,6 +865,18 @@ impl SettingsPane {
                 input.update(cx, |state, cx| state.set_value(value, window, cx));
             }
         }
+        let blur_row = editor.draft.effects.blur.and_then(|mode| {
+            BlurMode::VALUES
+                .iter()
+                .position(|value| *value == mode.settings_value())
+        });
+        editor.blur_select.update(cx, |state, cx| {
+            state.set_selected_index(
+                blur_row.map(|row| IndexPath::default().row(row)),
+                window,
+                cx,
+            );
+        });
     }
 
     /// 保存:首次恒 fork(import),后续用快照修订做乐观并发。
@@ -751,6 +1053,7 @@ impl SettingsPane {
         };
         let draft = editor.draft.clone();
         let template_select = editor.template_select.clone();
+        let blur_select = editor.blur_select.clone();
         let name_input = editor.name_input.clone();
         let background_input = editor.background_input.clone();
         let foreground_input = editor.foreground_input.clone();
@@ -759,7 +1062,14 @@ impl SettingsPane {
         let font_input = editor.font_input.clone();
         let font_size_input = editor.font_size_input.clone();
         let line_height_input = editor.line_height_input.clone();
+        let letter_spacing_input = editor.letter_spacing_input.clone();
+        let font_weight_input = editor.font_weight_input.clone();
         let opacity_input = editor.opacity_input.clone();
+        let layout_radius_input = editor.layout_radius_input.clone();
+        let layout_gutter_input = editor.layout_gutter_input.clone();
+        let layout_divider_input = editor.layout_divider_input.clone();
+        let padding_x_input = editor.padding_x_input.clone();
+        let padding_y_input = editor.padding_y_input.clone();
         let error = editor.error.clone();
         let saved = editor.saved;
         let dirty = editor.dirty();
@@ -900,9 +1210,108 @@ impl SettingsPane {
                         cx,
                     ))
                     .child(self.row(
+                        language.text(Message::SettingsThemeEditorLetterSpacing),
+                        language.text(Message::SettingsThemeEditorLetterSpacingDescription),
+                        editor_input_box(
+                            "settings-theme-letter-spacing",
+                            &letter_spacing_input,
+                            false,
+                            border,
+                        ),
+                        cx,
+                    ))
+                    .child(self.row(
+                        language.text(Message::SettingsThemeEditorFontWeight),
+                        language.text(Message::SettingsThemeEditorFontWeightDescription),
+                        editor_input_box(
+                            "settings-theme-font-weight",
+                            &font_weight_input,
+                            false,
+                            border,
+                        ),
+                        cx,
+                    ))
+                    .child(self.row(
                         language.text(Message::SettingsThemeEditorOpacity),
                         "0–100%",
                         editor_input_box("settings-theme-opacity", &opacity_input, false, border),
+                        cx,
+                    ))
+                    .child(
+                        self.row(
+                            language.text(Message::SettingsThemeEditorBlur),
+                            language.text(Message::SettingsThemeEditorBlurDescription),
+                            div()
+                                .debug_selector(|| "settings-theme-blur".to_owned())
+                                .w(px(SETTINGS_SELECT_WIDTH))
+                                .child(
+                                    Select::new(&blur_select)
+                                        .appearance(false)
+                                        .placeholder(
+                                            language
+                                                .text(Message::SettingsThemeEditorFollowSettings),
+                                        )
+                                        .cleanable(true),
+                                ),
+                            cx,
+                        ),
+                    ),
+            )
+            .child(
+                self.group(language.text(Message::SettingsThemeEditorLayout), cx)
+                    .child(self.row(
+                        language.text(Message::SettingsThemeEditorLayoutRadius),
+                        "0–28",
+                        editor_input_box(
+                            "settings-theme-layout-radius",
+                            &layout_radius_input,
+                            false,
+                            border,
+                        ),
+                        cx,
+                    ))
+                    .child(self.row(
+                        language.text(Message::SettingsThemeEditorLayoutGutter),
+                        "0–32",
+                        editor_input_box(
+                            "settings-theme-layout-gutter",
+                            &layout_gutter_input,
+                            false,
+                            border,
+                        ),
+                        cx,
+                    ))
+                    .child(self.row(
+                        language.text(Message::SettingsThemeEditorLayoutDivider),
+                        "0–4",
+                        editor_input_box(
+                            "settings-theme-layout-divider",
+                            &layout_divider_input,
+                            false,
+                            border,
+                        ),
+                        cx,
+                    ))
+                    .child(self.row(
+                        language.text(Message::SettingsThemeEditorPaddingX),
+                        "0–48",
+                        editor_input_box(
+                            "settings-theme-padding-x",
+                            &padding_x_input,
+                            false,
+                            border,
+                        ),
+                        cx,
+                    ))
+                    .child(self.row(
+                        language.text(Message::SettingsThemeEditorPaddingY),
+                        "0–40",
+                        editor_input_box(
+                            "settings-theme-padding-y",
+                            &padding_y_input,
+                            false,
+                            border,
+                        ),
                         cx,
                     )),
             );
@@ -1019,8 +1428,26 @@ fn editor_input(editor: &ThemeEditor, field: EditorInput) -> Option<&Entity<Inpu
         EditorInput::FontFamily => &editor.font_input,
         EditorInput::FontSize => &editor.font_size_input,
         EditorInput::LineHeight => &editor.line_height_input,
+        EditorInput::LetterSpacing => &editor.letter_spacing_input,
+        EditorInput::FontWeight => &editor.font_weight_input,
         EditorInput::Opacity => &editor.opacity_input,
+        EditorInput::LayoutRadius => &editor.layout_radius_input,
+        EditorInput::LayoutGutter => &editor.layout_gutter_input,
+        EditorInput::LayoutDivider => &editor.layout_divider_input,
+        EditorInput::PaddingX => &editor.padding_x_input,
+        EditorInput::PaddingY => &editor.padding_y_input,
     })
+}
+
+/// 模糊选项文案;调用方按 `BlurMode::VALUES` 顺序取用。
+fn blur_option_label(mode: BlurMode, language: UiLanguage) -> &'static str {
+    match mode {
+        BlurMode::None => language.text(Message::SettingsOptionsBlurNone),
+        BlurMode::Mica => language.text(Message::SettingsOptionsMica),
+        BlurMode::MicaAlt => language.text(Message::SettingsOptionsMicaAlt),
+        BlurMode::Aero => language.text(Message::SettingsOptionsAero),
+        BlurMode::Acrylic => language.text(Message::SettingsOptionsAcrylic),
+    }
 }
 
 /// 语言侧的新主题名(值/显示分离:命名模板随语言,保存值不受影响)。
@@ -1116,9 +1543,76 @@ impl SettingsPane {
         self.save_theme_editor(apply, window, cx)
     }
 
+    pub(crate) fn reset_theme_editor_for_test(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.reset_theme_editor(window, cx);
+    }
+
     pub(crate) fn theme_editor_template_count_for_test(&self) -> usize {
         self.theme_editor
             .as_ref()
             .map_or(0, |editor| editor.templates.len())
+    }
+
+    /// 模拟输入框内容变更并跑与真实 Change 事件相同的解析路径。
+    pub(crate) fn set_theme_editor_input_for_test(
+        &mut self,
+        field: &str,
+        value: &str,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(field) = EditorInput::from_test_name(field) else {
+            return;
+        };
+        let Some(input) = self
+            .theme_editor
+            .as_ref()
+            .and_then(|editor| editor_input(editor, field))
+        else {
+            return;
+        };
+        input.update(cx, |state, cx| {
+            state.set_value(SharedString::from(value.to_owned()), window, cx)
+        });
+        self.on_theme_editor_input(field, window, cx);
+    }
+
+    pub(crate) fn theme_editor_input_value_for_test(
+        &self,
+        field: &str,
+        cx: &App,
+    ) -> Option<String> {
+        let field = EditorInput::from_test_name(field)?;
+        let editor = self.theme_editor.as_ref()?;
+        editor_input(editor, field).map(|input| input.read(cx).value().to_string())
+    }
+
+    /// 模拟模糊下拉确认(含清除);`row = None` 对应 `Confirm(None)`。
+    pub(crate) fn set_theme_editor_blur_for_test(
+        &mut self,
+        row: Option<usize>,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(editor) = self.theme_editor.as_mut() else {
+            return;
+        };
+        editor.blur_select.update(cx, |state, cx| {
+            state.set_selected_index(row.map(|row| IndexPath::default().row(row)), window, cx);
+        });
+        self.on_theme_editor_blur_selected(row, window, cx);
+    }
+
+    pub(crate) fn theme_editor_blur_index_for_test(&self, cx: &App) -> Option<usize> {
+        self.theme_editor
+            .as_ref()?
+            .blur_select
+            .read(cx)
+            .selected_index(cx)
+            .map(|path| path.row)
     }
 }

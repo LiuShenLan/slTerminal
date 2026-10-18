@@ -304,6 +304,19 @@ pub(crate) struct HookFailure {
     /// 失败操作的程序身份;自愈失败统一为 `None`——agent 名(claude/codex
     /// 等)在 INTERACTIVE 表里,误当成 program 会把该报的失败静音。
     pub program: Option<String>,
+    /// 用户可见类别;B38:呈现层只消费本字段,不直出 `command`。
+    pub kind: HookFailureKind,
+}
+
+/// 失败边的用户可见类别(不含合成命令)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum HookFailureKind {
+    /// 某家 agent 的 hook 注入/修复失败(agent = CLI slug)。
+    Install { agent: String },
+    /// 某家 agent 的 runtime skill 投放失败(agent = CLI slug)。
+    Skill { agent: String },
+    /// 自愈授权快照不可读(无法判断该装什么)。
+    Settings,
 }
 
 /// 失败边的合成退出码:非 0、非用户中止码;用户把它写进

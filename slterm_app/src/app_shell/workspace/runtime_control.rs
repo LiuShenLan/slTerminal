@@ -22,8 +22,10 @@ use crate::git;
 use super::super::SltermShellEvent;
 use super::runtime_projection;
 use super::{SltermWorkspace, WorkspaceTab};
+use crate::ai_assistant::HookFailureKind;
 use crate::ai_hook::{AiHookEvent, AiHookKind};
 use crate::gpui_terminal::view::TerminalView;
+use crate::i18n::{Message, UiLanguage};
 use crate::runtime_api::{
     ApiError, RuntimeCommand, RuntimeDispatch, RuntimeSplitDirection, RuntimeTaskState,
     SINGLE_WINDOW_ID, capture_process_tree,
@@ -101,6 +103,17 @@ impl SltermWorkspace {
             // 更新提示(09 篇 M10.5):直发 toast;若用户开启后台下载,
             // 预取安装包(不授予安装权限)。
             SltermShellEvent::UpdateAvailable(result) => self.update_available(result, cx),
+            // B38:自愈失败边 → 进程级通知。文本只由类别/agent 生成,合成
+            // 命令(`slterm-hook ...`)不进入呈现层。
+            SltermShellEvent::AiHookAlert(kind) => {
+                let language = cx.global::<crate::app_shell::config::Settings>().language;
+                let text = hook_alert_text(&kind, language);
+                crate::notify::deliver_startup_summary(
+                    &crate::notify::Notification::ProcessAlert { text },
+                    cx,
+                );
+                cx.notify();
+            }
             // 消费(右键「在此处打开」)归 09 篇。
             SltermShellEvent::OpenDirectories(_) => {}
         }
@@ -1125,6 +1138,31 @@ fn git_api_error(error: git::GitError) -> ApiError {
     ApiError::new(code, error.to_string())
 }
 
+/// B38:失败边的用户可见文本。只消费类别/agent,永不拼接
+/// `HookFailure.command` 那类技术化合成命令。
+fn hook_alert_text(kind: &HookFailureKind, language: UiLanguage) -> String {
+    match kind {
+        HookFailureKind::Install { agent } => language.format(
+            Message::NotifyHookInstallFailed,
+            &[("agent", &agent_display_name(agent))],
+        ),
+        HookFailureKind::Skill { agent } => language.format(
+            Message::NotifyHookSkillFailed,
+            &[("agent", &agent_display_name(agent))],
+        ),
+        HookFailureKind::Settings => language
+            .text(Message::NotifyHookSettingsUnreadable)
+            .to_owned(),
+    }
+}
+
+/// CLI slug → 展示名;未知 slug 原样返回(不猜身份)。
+fn agent_display_name(slug: &str) -> String {
+    crate::ai_agents::AgentKind::parse(slug)
+        .map(|kind| kind.display_name().to_owned())
+        .unwrap_or_else(|| slug.to_owned())
+}
+
 fn ensure_window(window_id: Option<u64>) -> Result<(), ApiError> {
     match window_id {
         Some(id) if id != SINGLE_WINDOW_ID => Err(target_not_found(&format!("window {id}"))),
@@ -1166,5 +1204,39 @@ impl SltermWorkspace {
         cx: &mut Context<'_, Self>,
     ) -> Result<Value, ApiError> {
         self.execute_runtime_command(command, window, cx)
+    }
+}
+
+#[cfg(test)]
+mod hook_alert_tests {
+    use super::*;
+
+    /// 呈现文本带 agent 展示名,且不含任何合成命令/内部键。
+    #[test]
+    fn hook_alert_text_is_human_readable_and_command_free() {
+        for &language in UiLanguage::ALL {
+            let install = hook_alert_text(
+                &HookFailureKind::Install {
+                    agent: "claude".to_owned(),
+                },
+                language,
+            );
+            assert!(install.contains("Claude Code"), "{install}");
+            let skill = hook_alert_text(
+                &HookFailureKind::Skill {
+                    agent: "codex".to_owned(),
+                },
+                language,
+            );
+            assert!(skill.contains("Codex"), "{skill}");
+            let settings = hook_alert_text(&HookFailureKind::Settings, language);
+            assert!(!settings.is_empty());
+            for text in [install, skill, settings] {
+                assert!(
+                    !text.contains("slterm-hook") && !text.contains("slterm_ai_hooks"),
+                    "呈现层不得出现合成命令或内部键: {text}"
+                );
+            }
+        }
     }
 }

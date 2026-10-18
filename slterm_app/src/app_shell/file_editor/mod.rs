@@ -207,6 +207,8 @@ pub struct TextFileView {
     last_edit_cursor: Option<EditCursor>,
     resume_edit: bool,
     show_details: bool,
+    /// 聚焦阅读:隐藏工具条与详情栏,仅保留编辑器内容(视图内存,不持久化)。
+    reader_focus: bool,
     info: bool,
     outline: Outline,
     blocks: PreviewBlockSlots,
@@ -353,6 +355,7 @@ impl TextFileView {
             last_edit_cursor: None,
             resume_edit: false,
             show_details: markdown,
+            reader_focus: false,
             info: false,
             outline: Outline::default(),
             blocks: Rc::default(),
@@ -734,6 +737,20 @@ impl TextFileView {
         cx.notify();
     }
 
+    /// 聚焦阅读开关:隐藏工具条与详情栏,仅保留编辑器内容;
+    /// 退出入口由右上角浮层提供。状态只存视图内存,不持久化。
+    fn toggle_reader_focus(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        self.reader_focus = !self.reader_focus;
+        if self.reader_focus {
+            // 详情栏随 chrome 一并隐藏,拖拽锚点必须失效。
+            self.details_resize_anchor = None;
+        }
+        // 键盘焦点交还内容面,不留在工具条/浮层按钮上。
+        let focus = self.focus_handle(cx);
+        focus.focus(window, cx);
+        cx.notify();
+    }
+
     fn begin_details_resize(&mut self, event: &MouseDownEvent, cx: &mut Context<'_, Self>) {
         if !self.show_details {
             return;
@@ -946,6 +963,11 @@ impl Render for TextFileView {
                 )
                 .into_any_element()
         };
+        // 聚焦阅读隐藏整条工具条;右上角浮层保留唯一的恢复入口。
+        let toolbar = (!self.reader_focus).then(|| self.render_toolbar(editable, window, cx));
+        let reader_focus_overlay = self
+            .reader_focus
+            .then(|| self.render_reader_focus_overlay(cx));
         div()
             .debug_selector(|| "slterm-text-view".to_owned())
             .id("text-file-editor")
@@ -1176,7 +1198,7 @@ impl Render for TextFileView {
                     }),
                 )
             })
-            .child(self.render_toolbar(editable, cx))
+            .children(toolbar)
             .when_some(status, |root, status| root.child(status))
             .child(
                 h_flex()
@@ -1185,7 +1207,8 @@ impl Render for TextFileView {
                     .w_full()
                     .items_start()
                     .child(content)
-                    .when(self.show_details, |row| {
+                    // 聚焦阅读同时隐藏详情栏,只留编辑器内容。
+                    .when(self.show_details && !self.reader_focus, |row| {
                         row.child(if self.info {
                             self.render_info(cx)
                         } else if self.markdown {
@@ -1195,6 +1218,7 @@ impl Render for TextFileView {
                         })
                     }),
             )
+            .children(reader_focus_overlay)
             .when(self.details_resize_anchor.is_some(), |root| {
                 root.child(
                     div()

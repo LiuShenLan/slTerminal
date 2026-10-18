@@ -1126,14 +1126,29 @@ mod document_tests {
 
     #[test]
     fn definition_round_trips_through_the_envelope_losslessly() {
-        let source = ThemeDefinition::from_builtin(ThemeName::CatppuccinMocha);
+        let mut source = ThemeDefinition::from_builtin(ThemeName::CatppuccinMocha);
+        source.typography.letter_spacing = Some(2.5);
+        source.typography.font_weight = Some(600);
+        source.layout.card.radius = 18.0;
+        source.layout.card.gutter = 10.0;
+        source.layout.card.divider = 2.0;
+        source.layout.padding_x = Some(12.0);
+        source.layout.padding_y = Some(6.0);
+        source.effects.blur = Some(BlurMode::Acrylic);
         let document = from_definition(&source).unwrap();
         let decoded = document.definition().unwrap();
         assert_eq!(decoded.name, source.name);
         assert_eq!(decoded.base, source.base);
         assert_eq!(decoded.terminal, source.terminal);
         assert_eq!(decoded.ui, source.ui);
+        assert_eq!(decoded.typography, source.typography);
         assert_eq!(decoded.layout, source.layout);
+        assert_eq!(decoded.effects, source.effects);
+        assert_eq!(
+            document.to_value()["typography"]["enabled"].as_bool(),
+            Some(true),
+            "非空排版字段必须自动开启 typography.enabled"
+        );
         assert_eq!(
             document.color("terminal", "background"),
             Some(source.terminal.background)

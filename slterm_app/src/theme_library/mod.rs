@@ -5,7 +5,6 @@
 //! 本层只做格式与持久化。
 
 pub(crate) mod document;
-#[allow(dead_code)] // 消费点 = M6.5 主题导入/导出 UI;M6.3 先落有界检查链路。
 pub(crate) mod package;
 pub(crate) mod preferences;
 mod store;

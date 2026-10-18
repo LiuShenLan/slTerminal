@@ -146,7 +146,18 @@ fn hooks_page_renders_three_states_and_marker_groups_stay_read_only(cx: &mut Tes
         window.debug_bounds("settings-hooks-owned").is_some(),
         "安装器认领组只读区必须渲染"
     );
-    assert!(window.debug_bounds("settings-hooks-editor").is_some());
+    assert!(
+        window.debug_bounds("settings-hooks-scope").is_some(),
+        "user 层标注必须可见"
+    );
+    assert!(
+        window.debug_bounds("settings-hooks-form").is_some(),
+        "默认呈现结构化表单"
+    );
+    assert!(
+        window.debug_bounds("settings-hooks-editor").is_none(),
+        "JSON 高级模式默认收起"
+    );
 
     let rows = read_pane(cx, &pane, |pane, _| {
         pane.hooks_rows_for_test().cloned().unwrap_or_default()
@@ -175,6 +186,229 @@ fn hooks_page_renders_three_states_and_marker_groups_stay_read_only(cx: &mut Tes
         "marker 组不得进入编辑域:{editable}"
     );
     assert!(editable.contains("user-notifier"));
+
+    // 高级模式切换后原始 JSON 编辑框才出现;marker 组仍不进入编辑域。
+    window.update(|_, cx| {
+        pane.update(cx, |pane, cx| pane.set_hooks_form_mode_for_test(true, cx));
+    });
+    window.refresh().unwrap();
+    draw_frame(&mut window);
+    assert!(read_pane(cx, &pane, |pane, _| {
+        pane.hooks_form_mode_is_json_for_test()
+    }));
+    assert!(window.debug_bounds("settings-hooks-editor").is_some());
+    let advanced = read_pane(cx, &pane, |pane, cx| pane.hooks_editor_text_for_test(cx));
+    assert!(
+        !advanced.contains("slterm-hook"),
+        "JSON 模式仍不得包含 marker 组:{advanced}"
+    );
+}
+
+/// 结构化表单:编辑 command/http/prompt/mcp_tool/agent 五型 → 保存 →
+/// 磁盘 JSON 往返;marker 组逐字保留,写入点恒为注入 tempdir 的用户设置。
+#[gpui::test]
+fn hooks_form_saves_edited_handler_types_and_keeps_marker_groups(cx: &mut TestAppContext) {
+    let fixture = HooksFixture::new();
+    let original = serde_json::json!({
+        "model": "opus",
+        "hooks": {
+            "Stop": [user_group("old-user"), marker_group(HELPER)]
+        }
+    });
+    fixture.write_claude(&original);
+    let (_workspace, mut window, pane) = open_hooks_page(cx, &fixture);
+    let marker_before = original["hooks"]["Stop"][1].clone();
+
+    window.update(|window, cx| {
+        pane.update(cx, |pane, cx| {
+            assert_eq!(
+                pane.hooks_form_group_count_for_test(),
+                1,
+                "现有用户组必须载入表单"
+            );
+            assert!(pane.hooks_form_set_group_matcher_for_test(0, "form", window, cx));
+            assert!(pane.hooks_form_set_handler_field_for_test(
+                0,
+                0,
+                "command",
+                "form-command",
+                window,
+                cx,
+            ));
+            assert!(
+                pane.hooks_form_add_handler_for_test(
+                    0,
+                    "http",
+                    &[("url", "https://example.test/hook")],
+                    window,
+                    cx,
+                )
+                .is_some()
+            );
+            assert!(
+                pane.hooks_form_add_handler_for_test(
+                    0,
+                    "prompt",
+                    &[("prompt", "summarize"), ("model", "haiku")],
+                    window,
+                    cx,
+                )
+                .is_some()
+            );
+            assert!(
+                pane.hooks_form_add_handler_for_test(
+                    0,
+                    "mcp_tool",
+                    &[("server", "filesystem"), ("tool", "read_file")],
+                    window,
+                    cx,
+                )
+                .is_some()
+            );
+            assert!(
+                pane.hooks_form_add_handler_for_test(
+                    0,
+                    "agent",
+                    &[("prompt", "review"), ("model", "sonnet")],
+                    window,
+                    cx,
+                )
+                .is_some()
+            );
+            pane.save_hooks_form_for_test(window, cx);
+        });
+    });
+    assert!(
+        read_pane(cx, &pane, |pane, _| pane
+            .hooks_form_error_for_test()
+            .is_none()),
+        "表单加载不得报错"
+    );
+    assert!(
+        read_pane(cx, &pane, |pane, _| pane
+            .hooks_editor_error_for_test()
+            .is_none()),
+        "表单保存不得报错"
+    );
+
+    let after = fixture.read_claude();
+    assert_eq!(
+        after["model"],
+        serde_json::json!("opus"),
+        "hooks 以外的顶层键原样保留"
+    );
+    let groups = after["hooks"]["Stop"].as_array().unwrap();
+    assert!(groups.contains(&marker_before), "marker 组必须逐字保留");
+    let form_group = groups
+        .iter()
+        .find(|group| group["matcher"] == serde_json::json!("form"))
+        .expect("表单组必须落盘");
+    let handlers = form_group["hooks"].as_array().unwrap();
+    assert_eq!(handlers.len(), 5, "五型 handler 必须全部往返");
+    assert_eq!(
+        handlers[0],
+        serde_json::json!({"type": "command", "command": "form-command"})
+    );
+    assert_eq!(
+        handlers[1],
+        serde_json::json!({"type": "http", "url": "https://example.test/hook"})
+    );
+    assert_eq!(
+        handlers[2],
+        serde_json::json!({"type": "prompt", "prompt": "summarize", "model": "haiku"})
+    );
+    assert_eq!(
+        handlers[3],
+        serde_json::json!({"type": "mcp_tool", "server": "filesystem", "tool": "read_file"})
+    );
+    assert_eq!(
+        handlers[4],
+        serde_json::json!({"type": "agent", "prompt": "review", "model": "sonnet"})
+    );
+
+    // user 层路径断言:注入 tempdir 的 `.claude/settings.json` 是唯一写入点。
+    assert!(
+        fixture
+            .claude_settings()
+            .starts_with(fixture._directory.path())
+    );
+    let reloaded = HooksDocument::load_at(&fixture.claude_settings()).expect("保存后必须可重读");
+    assert_eq!(
+        reloaded.owned_group_count(),
+        1,
+        "marker 归属不因表单保存改变"
+    );
+
+    // 空组新增 + 事件下拉选择(保存后表单已按磁盘重读,现有组仍为 1)。
+    window.update(|window, cx| {
+        pane.update(cx, |pane, cx| {
+            let group = pane
+                .hooks_form_add_group_for_test(window, cx)
+                .expect("必须可新增事件组");
+            assert!(pane.hooks_form_set_group_event_for_test(group, "SessionEnd", window, cx));
+            assert_eq!(pane.hooks_form_group_count_for_test(), 2);
+            assert_eq!(pane.hooks_form_handler_count_for_test(group), 0);
+        });
+    });
+}
+
+/// 切换 handler 类型:不适配字段在表单侧清空,保存只落新类型字段。
+#[gpui::test]
+fn hooks_form_type_switch_clears_incompatible_fields(cx: &mut TestAppContext) {
+    let fixture = HooksFixture::new();
+    fixture.write_claude(&serde_json::json!({
+        "hooks": {
+            "Stop": [{
+                "matcher": "user",
+                "hooks": [{"type": "command", "command": "old-command"}]
+            }]
+        }
+    }));
+    let (_workspace, mut window, pane) = open_hooks_page(cx, &fixture);
+
+    window.update(|window, cx| {
+        pane.update(cx, |pane, cx| {
+            assert_eq!(
+                pane.hooks_form_handler_field_for_test(0, 0, "command", cx)
+                    .as_deref(),
+                Some("old-command")
+            );
+            assert!(pane.hooks_form_set_handler_kind_for_test(0, 0, "http", window, cx));
+            assert_eq!(
+                pane.hooks_form_handler_field_for_test(0, 0, "command", cx)
+                    .as_deref(),
+                Some(""),
+                "切换类型必须清空不适配字段"
+            );
+            assert!(pane.hooks_form_set_handler_field_for_test(
+                0,
+                0,
+                "url",
+                "https://switched.test/hook",
+                window,
+                cx,
+            ));
+            pane.save_hooks_form_for_test(window, cx);
+        });
+    });
+    assert!(
+        read_pane(cx, &pane, |pane, _| pane
+            .hooks_editor_error_for_test()
+            .is_none()),
+        "切换类型后的保存不得报错"
+    );
+    let after = fixture.read_claude();
+    assert_eq!(
+        after["hooks"]["Stop"][0]["hooks"][0],
+        serde_json::json!({"type": "http", "url": "https://switched.test/hook"}),
+        "切换后只保留新类型字段"
+    );
+    assert!(
+        after["hooks"]["Stop"][0]["hooks"][0]
+            .get("command")
+            .is_none(),
+        "旧类型 command 不得残留"
+    );
 }
 
 /// 设置页编辑 → 写盘 → inspect 读回:用户 handler 更新,marker 组逐字保留;
@@ -416,6 +650,52 @@ fn suspended_statusline_requires_explicit_confirmation_before_install(cx: &mut T
             .cloned())
         .is_none(),
         "确认成功后待确认状态必须清空"
+    );
+}
+
+/// 表单无法建模的 handler 类型:表单区展示错误,JSON 高级模式仍可用,
+/// 且用户数据不被改写。
+#[gpui::test]
+fn hooks_form_falls_back_to_json_for_unknown_handler_types(cx: &mut TestAppContext) {
+    let fixture = HooksFixture::new();
+    let original = serde_json::json!({
+        "hooks": {
+            "Stop": [{
+                "hooks": [{"type": "webhook", "url": "https://example.test/hook"}]
+            }]
+        }
+    });
+    fixture.write_claude(&original);
+    let (_workspace, mut window, pane) = open_hooks_page(cx, &fixture);
+
+    assert!(
+        read_pane(cx, &pane, |pane, _| pane
+            .hooks_form_error_for_test()
+            .is_some()),
+        "未知类型必须走表单错误分支"
+    );
+    assert!(
+        window.debug_bounds("settings-hooks-form").is_none(),
+        "表单不可用时不得渲染空表单"
+    );
+    assert!(
+        window.debug_bounds("settings-hooks-form-error").is_some(),
+        "表单错误必须可见"
+    );
+
+    window.update(|_, cx| {
+        pane.update(cx, |pane, cx| pane.set_hooks_form_mode_for_test(true, cx));
+    });
+    window.refresh().unwrap();
+    draw_frame(&mut window);
+    assert!(
+        window.debug_bounds("settings-hooks-editor").is_some(),
+        "JSON 高级模式必须仍可用"
+    );
+    assert_eq!(
+        fixture.read_claude(),
+        original,
+        "表单不可用不得改写磁盘文档"
     );
 }
 
