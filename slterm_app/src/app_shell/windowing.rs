@@ -106,17 +106,6 @@ pub(crate) fn workspace_window_options(
     }
 }
 
-/// 原生窗口句柄(任务栏闪烁/进度共用;单窗语义下进程级唯一)。虚拟窗口
-/// (测试)无原生句柄 → None。
-fn native_window_hwnd(window: &gpui::Window) -> Option<isize> {
-    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-    let native = HasWindowHandle::window_handle(window).ok()?;
-    let RawWindowHandle::Win32(native) = native.as_raw() else {
-        return None;
-    };
-    Some(native.hwnd.get())
-}
-
 /// 启动链调一次的开窗入口:命令行 `-e` → LaunchTerminal;有 cwd →
 /// NewTerminal;否则消费启动恢复计划(会话恢复归 05 篇 M5.5)。
 pub(crate) fn open_initial_window(
@@ -140,10 +129,8 @@ pub(crate) fn open_initial_window(
     let deferred_show = first_frame::defer_show(&mut options);
     let result = cx.open_window(options, move |window, cx| {
         window.set_window_title(brand::NAME);
-        // 通知漏斗的闪烁目标(09 篇 M10.1;M10.4 facade 接管后可改为查询)。
-        if let Some(hwnd) = native_window_hwnd(window) {
-            crate::notify::set_window_hwnd(hwnd);
-        }
+        // HWND 发布单点(09 篇 M10.4):任务栏闪烁/进度经 facade 查询。
+        crate::windowing::focus::publish_window(window);
         let workspace = cx.new(|cx| {
             SltermWorkspace::new(
                 window,

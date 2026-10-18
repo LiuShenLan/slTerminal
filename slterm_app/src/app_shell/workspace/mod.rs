@@ -812,7 +812,7 @@ impl SltermWorkspace {
             }
         };
         if !attached {
-            self.forget_pane(new_id);
+            self.forget_pane(new_id, cx);
             return None;
         }
         self.mark_structural_resize(active, cx);
@@ -881,7 +881,7 @@ impl SltermWorkspace {
                     self.agent_hub.command_finished(pane_id);
                     // 09 篇 M10.2:命令回到提示符,进度主人已经收尾;程序忘发
                     // `9;4;0` 也不能把进度条留在任务栏上。
-                    self.clear_taskbar_progress(pane_id);
+                    self.clear_taskbar_progress(pane_id, cx);
                     self.publish_runtime_snapshot(cx);
                 }
             }
@@ -892,7 +892,7 @@ impl SltermWorkspace {
                 if let Some(pane_id) = self.locate_pane(view)
                     && self.is_active_focused_pane(pane_id)
                 {
-                    self.show_taskbar_progress(pane_id, *progress);
+                    self.show_taskbar_progress(pane_id, *progress, cx);
                 }
                 cx.notify();
             }
@@ -906,19 +906,30 @@ impl SltermWorkspace {
         })
     }
 
-    /// 投递一次任务栏进度。HWND 源 = M10.1 的 `set_window_hwnd` 发布点;
-    /// M10.4 窗口 facade 落地后改查 `window_hwnd()`。
-    fn show_taskbar_progress(&mut self, pane_id: PaneId, progress: crate::taskbar::TaskProgress) {
+    /// 投递一次任务栏进度。HWND 源 = 09 篇 M10.4 facade 的查询点
+    /// (`windowing::focus::window_hwnd`)。
+    fn show_taskbar_progress(
+        &mut self,
+        pane_id: PaneId,
+        progress: crate::taskbar::TaskProgress,
+        cx: &App,
+    ) {
         if let Some(progress) = self.taskbar.observe(pane_id, progress) {
-            crate::taskbar::apply(crate::notify::window_hwnd().unwrap_or(0), progress);
+            crate::taskbar::apply(
+                crate::windowing::focus::window_hwnd(cx).unwrap_or(0),
+                progress,
+            );
         }
     }
 
     /// 任务栏进度的清除边:只有当前显示的来源 pane 自己收尾才恢复常态,
     /// 别的 pane 的收尾不打断正在显示的进度(09 篇 M10.2)。
-    fn clear_taskbar_progress(&mut self, pane_id: PaneId) {
+    fn clear_taskbar_progress(&mut self, pane_id: PaneId, cx: &App) {
         if let Some(progress) = self.taskbar.clear_for(pane_id) {
-            crate::taskbar::apply(crate::notify::window_hwnd().unwrap_or(0), progress);
+            crate::taskbar::apply(
+                crate::windowing::focus::window_hwnd(cx).unwrap_or(0),
+                progress,
+            );
         }
     }
 
@@ -963,7 +974,7 @@ impl SltermWorkspace {
                 if let Some(pane) = self.tab_panes(tab_index).find(|pane| pane.id == pane_id) {
                     pane.view.read(cx).shutdown();
                 }
-                self.forget_pane(pane_id);
+                self.forget_pane(pane_id, cx);
                 self.remove_tab_entry(tab_index);
                 if self.tabs.is_empty() {
                     // 同 close_active_tab:最后 tab 关闭 = 空会话终局笔。
@@ -1001,7 +1012,7 @@ impl SltermWorkspace {
                     }
                     *zoomed = false;
                 }
-                self.forget_pane(pane_id);
+                self.forget_pane(pane_id, cx);
                 self.mark_structural_resize(tab_index, cx);
                 if tab_index == self.active {
                     self.focus_active(window, cx);
@@ -1013,10 +1024,10 @@ impl SltermWorkspace {
     }
 
     /// 索引与宿主表的统一摘除点(注册表写入点 2/2 的对偶)。
-    fn forget_pane(&mut self, pane_id: PaneId) {
+    fn forget_pane(&mut self, pane_id: PaneId, cx: &App) {
         // 09 篇 M10.2:pane 关闭是任务栏进度的清除边之一(关 pane/关 tab/
         // PTY 退出/恢复失败同路);只清自己名下正在显示的条。
-        self.clear_taskbar_progress(pane_id);
+        self.clear_taskbar_progress(pane_id, cx);
         terminal_registry::remove(pane_id);
         self.agent_hub.remove(pane_id);
         self.pane_bounds.borrow_mut().remove(&pane_id);

@@ -18,10 +18,11 @@
 //! 诊断命令与新机人工 smoke 兜底。
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::time::{Duration, Instant};
 
+use gpui::App;
 use slterm_split::PaneId;
 
 use crate::ai_hook::{AiHookEvent, AiHookKind, AiTurnOutcome};
@@ -452,10 +453,9 @@ impl Funnel {
     }
 }
 
-// ─── 前台状态与窗口句柄(单窗单实例的进程级收口) ────────────────────────
+// ─── 前台状态(单窗单实例的进程级收口) ──────────────────────────────────
 
 static FOREGROUND: AtomicBool = AtomicBool::new(false);
-static WINDOW_HWND: AtomicIsize = AtomicIsize::new(0);
 
 /// 壳窗口激活态变化唯一写入口(workspace 的 activation observer 调用)。
 pub(crate) fn set_foreground(focused: bool) {
@@ -464,21 +464,6 @@ pub(crate) fn set_foreground(focused: bool) {
 
 fn foreground() -> bool {
     FOREGROUND.load(Ordering::Relaxed)
-}
-
-/// 任务栏闪烁/进度的 HWND 源(单窗语义;M10.4 的窗口 facade 接管后可改为
-/// 查询)。
-pub(crate) fn set_window_hwnd(hwnd: isize) {
-    WINDOW_HWND.store(hwnd, Ordering::Relaxed);
-}
-
-/// 任务栏面(闪烁/进度)的进程级 HWND 读取点;M10.4 facade 落地后改经
-/// `windowing::focus::window_hwnd()` 查询。
-pub(crate) fn window_hwnd() -> Option<isize> {
-    match WINDOW_HWND.load(Ordering::Relaxed) {
-        0 => None,
-        hwnd => Some(hwnd),
-    }
 }
 
 // ─── toast 激活回窗 ──────────────────────────────────────────────────────
@@ -525,17 +510,19 @@ pub(crate) fn from_accepted_hook(
 
 // ─── 投递入口 ────────────────────────────────────────────────────────────
 
-pub(crate) fn deliver_gpui(notification: &Notification, pane_id: PaneId) {
-    deliver_gpui_with_choices(notification, pane_id, None);
+pub(crate) fn deliver_gpui(notification: &Notification, pane_id: PaneId, cx: &App) {
+    deliver_gpui_with_choices(notification, pane_id, None, cx);
 }
 
 /// 单一投递入口:前台门控 → 节流计划 → 闪烁先行 → 系统 toast。
 /// `confirmation` = 权限确认的 (request_id, 候选标签),动作按钮直达
-/// 03 篇 confirmation 链(确认语义归 10 篇安全半程)。
+/// 03 篇 confirmation 链(确认语义归 10 篇安全半程)。HWND 查询经 09 篇
+/// M10.4 facade(单窗单实例的唯一读口)。
 pub(crate) fn deliver_gpui_with_choices(
     notification: &Notification,
     pane_id: PaneId,
     confirmation: Option<(u64, Vec<String>)>,
+    cx: &App,
 ) {
     static FUNNEL: OnceLock<Mutex<Funnel>> = OnceLock::new();
     let plan = FUNNEL
@@ -551,7 +538,7 @@ pub(crate) fn deliver_gpui_with_choices(
         );
     if plan.flash {
         // 闪烁先行:节流只挡系统 toast,不挡任务栏提示。
-        crate::platform::notifications::flash_taskbar(window_hwnd());
+        crate::platform::notifications::flash_taskbar(crate::windowing::focus::window_hwnd(cx));
     }
     let Some((title, body)) = plan.toast else {
         log::debug!(

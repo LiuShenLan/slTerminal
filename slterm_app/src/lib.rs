@@ -119,6 +119,9 @@ pub(crate) mod taskbar;
 // 系统托盘(09 篇 M10.3):独立消息泵线程 + 右键 agent 直达菜单 + 1 Hz
 // 快照去抖;attention 聚合驱动橙点图标。图标资产归 M12。
 pub(crate) mod tray;
+// 窗口管理 facade(09 篇 M10.4):四路回窗(toast/托盘/按钮/ATTACH)与
+// HWND 查询的编译期单一实现点;Win32 焦点/还原原语只在本模块出现。
+pub(crate) mod windowing;
 // 终端数学覆盖层(08 篇 M9.4):有界扫描、LineProjection、CoverageMask 与
 // 后端无关绘制计划。终端仍是真值——不改 cell/滚动/选区/复制语义。
 #[allow(dead_code)] // 消费点归 M9.5(GPUI paint pass)。

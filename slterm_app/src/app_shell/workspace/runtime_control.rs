@@ -59,30 +59,29 @@ impl SltermWorkspace {
         cx: &mut Context<'_, Self>,
     ) {
         match event {
-            // 单窗语义:ATTACH = 聚焦现有唯一窗,不建第二窗。
+            // 单窗语义:legacy ATTACH = 聚焦现有唯一窗(最小化则还原),
+            // 不建第二窗;窗口成分经 09 篇 M10.4 facade 单点实现。
             SltermShellEvent::MuxAttach => {
-                window.activate_window();
+                crate::windowing::focus::focus(self, None, window, cx);
                 cx.notify();
             }
             SltermShellEvent::RuntimeControl(dispatch) => {
                 self.execute_runtime_dispatch(dispatch, window, cx);
             }
-            // 09 篇 M10.1:toast 点击回窗。四路回窗的统一 facade 归 M10.4;
-            // 单窗下本步先按「激活唯一主窗 + 选中所在 tab + 聚焦 pane」落地。
+            // 09 篇 M10.1/M10.4:toast 点击与托盘回窗共用 facade 的 pane
+            // 级语义(window + 选中所在 tab + 窗内聚焦 pane)。
             SltermShellEvent::NotificationFocus(pane) => {
-                window.activate_window();
-                if let Some(pane_id) = pane {
-                    self.focus_notification_pane(pane_id, window, cx);
-                }
+                crate::windowing::focus::focus(self, pane, window, cx);
                 cx.notify();
             }
-            // 权限确认动作按钮的回传通道:确认语义归 10 篇安全半程,本片
-            // 只保证事件可达(当前无消费方,落日志取证)。
+            // 权限确认动作按钮是四路回窗之一(09 篇 M10.4):先经 facade
+            // 回窗,确认语义本身归 10 篇安全半程(当前无消费方,落日志取证)。
             SltermShellEvent::NotificationChoice {
                 pane_id,
                 request_id,
                 choice,
             } => {
+                crate::windowing::focus::focus(self, Some(pane_id), window, cx);
                 log::debug!(
                     "notify: choice {choice} for confirmation {request_id} on pane={} (consumer lands with the M10 security half)",
                     pane_id.0
@@ -97,8 +96,13 @@ impl SltermWorkspace {
     }
 
     /// 托盘退出:与标题栏关闭钮同语义(自绘入口绕过 OS 关闭请求,终局
-    /// 快照在这里补)。测试构建只记录请求,虚拟窗口平台不支持真实移除。
-    fn quit_from_tray(&mut self, _window: &mut Window, cx: &mut Context<'_, Self>) {
+    /// 快照在这里补)。B47:数据丢失风险高于普通关窗,必须先过整窗脏
+    /// 守卫;确认框在途/保存在途 = 本轮拦截,异步回调放行后自行关窗。
+    /// 测试构建只记录已放行的请求,虚拟窗口平台不支持真实移除。
+    fn quit_from_tray(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        if !self.guard_file_window_close(window, cx) {
+            return;
+        }
         #[cfg(all(test, feature = "gpui-test-support"))]
         {
             self.tray_quit_requested = true;
@@ -106,13 +110,14 @@ impl SltermWorkspace {
         }
         #[cfg(not(all(test, feature = "gpui-test-support")))]
         {
-            self.save_on_window_close(_window, cx);
-            _window.remove_window();
+            self.save_on_window_close(window, cx);
+            window.remove_window();
         }
     }
 
-    /// toast 点击的 pane 级回窗:找到所在 tab,切换为活跃并聚焦该 pane。
-    fn focus_notification_pane(
+    /// pane 级回窗的 workspace 落点(09 篇 M10.4 facade 委托):找到所在
+    /// tab,切换为活跃并聚焦该 pane。
+    pub(crate) fn focus_notification_pane(
         &mut self,
         pane_id: PaneId,
         window: &mut Window,
@@ -203,14 +208,11 @@ impl SltermWorkspace {
             }
             RuntimeCommand::Focus { window_id, pane_id } => {
                 ensure_window(*window_id)?;
-                window.activate_window();
                 if let Some(pane_id) = pane_id {
-                    let (tab_ix, _, _) = self.pane_entry(*pane_id)?;
-                    if tab_ix != self.active {
-                        self.activate_tab(tab_ix, window, cx);
-                    }
-                    self.focus_pane(tab_ix, PaneId(*pane_id), window, cx);
+                    // 目标校验保留协议语义:不存在的 pane 仍是 target_not_found。
+                    self.pane_entry(*pane_id)?;
                 }
+                crate::windowing::focus::focus(self, pane_id.map(PaneId), window, cx);
                 self.action_result(
                     json!({ "window_id": SINGLE_WINDOW_ID, "pane_id": pane_id }),
                     cx,
@@ -877,7 +879,7 @@ impl SltermWorkspace {
                 view.read(cx).shutdown();
             }
             for id in ids {
-                self.forget_pane(id);
+                self.forget_pane(id, cx);
             }
         }
         self.remove_tab_entry(index);
@@ -904,7 +906,7 @@ impl SltermWorkspace {
                 AiHookKind::SessionEnd => {
                     if let Some(pane) = event.pane {
                         // 09 篇 M10.2:agent 退出即清任务栏进度,不留残条。
-                        self.clear_taskbar_progress(PaneId(pane));
+                        self.clear_taskbar_progress(PaneId(pane), cx);
                         self.runtime_hub.close_agents_for_pane(
                             SINGLE_WINDOW_ID,
                             pane,
@@ -915,7 +917,7 @@ impl SltermWorkspace {
                 AiHookKind::TurnDone => {
                     if let Some(pane) = event.pane {
                         // 09 篇 M10.2:回合结束,进度条属于刚收尾的这一回合。
-                        self.clear_taskbar_progress(PaneId(pane));
+                        self.clear_taskbar_progress(PaneId(pane), cx);
                     }
                     self.runtime_hub.complete_delegations_for_turn(event);
                     let Some(pane) = event.pane else { continue };

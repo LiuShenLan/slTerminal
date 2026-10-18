@@ -309,7 +309,7 @@ impl SltermWorkspace {
                 pane.view.read(cx).shutdown();
             }
             for pane in &panes {
-                self.forget_pane(pane.id);
+                self.forget_pane(pane.id, cx);
             }
             log::warn!("could not rebuild the saved split tree; restored tab discarded");
             return false;

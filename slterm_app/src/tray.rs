@@ -580,8 +580,8 @@ mod win {
     fn show_menu(hwnd: windows_sys::Win32::Foundation::HWND) {
         use windows_sys::Win32::Foundation::POINT;
         use windows_sys::Win32::UI::WindowsAndMessaging::{
-            DestroyMenu, GetCursorPos, PostMessageW, SetForegroundWindow, TPM_NONOTIFY,
-            TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, WM_NULL,
+            DestroyMenu, GetCursorPos, PostMessageW, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON,
+            TrackPopupMenu, WM_NULL,
         };
 
         // 菜单期间用快照:TrackPopupMenu 是模态泵,STATE 可能被 1 Hz 更新,
@@ -592,8 +592,9 @@ mod win {
         };
         let entries = build_menu_entries(&agents, language);
 
-        // SAFETY: 菜单由本函数持有/销毁。SetForegroundWindow + WM_NULL 保留
-        // TrackPopupMenu 在托盘场景中点外部收合的行为。
+        // SAFETY: 菜单由本函数持有/销毁。owner 前置 + WM_NULL 保留
+        // TrackPopupMenu 在托盘场景中点外部收合的行为;Win32 焦点调用
+        // 收在 09 篇 M10.4 facade。
         unsafe {
             let menu = build_native_menu(&entries);
             if menu.is_null() {
@@ -601,7 +602,7 @@ mod win {
             }
             let mut point = POINT { x: 0, y: 0 };
             GetCursorPos(&mut point);
-            SetForegroundWindow(hwnd);
+            crate::windowing::focus::foreground_menu_owner(hwnd as isize);
             let command = TrackPopupMenu(
                 menu,
                 TPM_RIGHTBUTTON | TPM_RETURNCMD | TPM_NONOTIFY,

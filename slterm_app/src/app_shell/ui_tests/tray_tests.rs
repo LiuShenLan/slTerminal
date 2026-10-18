@@ -12,6 +12,7 @@ use super::{NewTerminalTab, open_workspace, open_workspace_with_ai};
 use crate::ai_hook::{AiHookEvent, parse_envelope};
 use crate::app_shell::SltermShellEvent;
 use crate::app_shell::config::Settings;
+use crate::i18n::Message;
 use crate::tray::{reset_for_test, take_updates_for_test};
 
 fn hook_event(pane: u64, payload: &str) -> AiHookEvent {
@@ -113,5 +114,65 @@ fn tray_focus_and_quit_events_reach_the_workspace(cx: &mut TestAppContext) {
     assert!(
         workspace.read_with(cx, |workspace, _| workspace.tray_quit_requested()),
         "托盘退出必须走关窗同一条退出链"
+    );
+}
+
+/// B47:托盘退出必须先过整窗脏守卫——脏文件确认取消时不得记录退出请求,
+/// 草稿与磁盘保持原样(数据丢失风险高于普通关窗)。
+#[gpui::test]
+fn tray_quit_confirms_dirty_files_before_exiting(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("draft.rs");
+    std::fs::write(&path, b"initial\n").unwrap();
+
+    window.update(|window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.open_document_path(path.clone(), window, cx);
+        });
+    });
+    window.run_until_parked();
+    window.refresh().unwrap();
+    window.update(|window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.focus_active_for_test(window, cx);
+        });
+    });
+    window.simulate_input("draft ");
+    window.run_until_parked();
+    assert_eq!(
+        workspace.read_with(cx, |workspace, cx| workspace.active_dirty_for_test(cx)),
+        Some(true),
+        "前置条件:文件 tab 必须是脏的"
+    );
+
+    window.update(|window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.handle_shell_event(SltermShellEvent::TrayQuit, window, cx);
+        });
+    });
+    window.run_until_parked();
+    assert!(window.has_pending_prompt(), "托盘退出必须弹整窗确认");
+    assert!(
+        !workspace.read_with(cx, |workspace, _| workspace.tray_quit_requested()),
+        "确认在途时不得记录退出请求"
+    );
+
+    let cancel = cx.update(|cx| {
+        cx.global::<Settings>()
+            .language
+            .text(Message::EditorCancel)
+            .to_owned()
+    });
+    window.simulate_prompt_answer(&cancel);
+    window.run_until_parked();
+    assert!(
+        !workspace.read_with(cx, |workspace, _| workspace.tray_quit_requested()),
+        "取消后仍不得退出"
+    );
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        b"initial\n",
+        "取消后磁盘内容不得变化"
     );
 }

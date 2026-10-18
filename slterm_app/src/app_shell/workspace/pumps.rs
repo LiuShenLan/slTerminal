@@ -151,7 +151,7 @@ impl SltermWorkspace {
                         if let Some((notification, pane_id)) =
                             crate::notify::from_accepted_hook(event, focused)
                         {
-                            crate::notify::deliver_gpui(&notification, pane_id);
+                            crate::notify::deliver_gpui(&notification, pane_id, cx);
                         }
                     }
                     workspace.publish_runtime_snapshot(cx);
