@@ -21,6 +21,7 @@
 | A11 | **hook 失败边默认关的载体**：设计未定义独立键，实现复用 `AssistantConfig.enabled`（与 D08-2「与 AI assistant 默认关闭一致」）。 | M9.3 | 维持复用；若需独立 `hook_failure_edges` 键另行裁决。 |
 | A12 | **config_guard 锁竞争不计入失败边**：另一操作进行中不算失败，不投递；`RawSettings::try_load` 失败投递 `slterm-hook settings`。 | M9.3 | 维持边界；若要求锁竞争也计入需裁决。 |
 | A13 | **recovery 汇总走直发通道而非通知漏斗**：启动期窗口前台，漏斗门控会丢该信息，故走 `platform::notifications::show`（诊断/更新提示直发通道）。 | M10.1 | 若要求统一走漏斗，需加「启动汇总豁免前台门控」策略位。 |
+| A14 | **`silent_start=1/tray=0` 为惰性组合**：实现保持设计稿纯两条件（不隐藏），上游会在开启静默时强制 tray=1。 | M10.6 | 是否在设置页加「开启静默同时补 tray」的 UX 约束。 |
 
 ## B. 待修（已知缺陷/优化）
 
@@ -79,6 +80,7 @@
 | B51 | **`window_hwnd(cx)` 的 `cx` 未参与实现**：单窗用开窗时缓存；未来多窗须改为按 `cx` 活动窗口查询。 | `windowing/focus.rs` | M10.4 | 留锚。 |
 | B52 | **更新提示不调 `mark_prompted`**：更新弹窗步落地前，同一版本每次启动都弹 toast。 | `update_check.rs` `deliver` | M10.5 | 弹窗接线时在打开/关闭处调 `mark_prompted`（`remind_later`/`skip_version` 同理）。 |
 | B53 | **`restore_ticket()` 未接启动恢复**：`acknowledge_restore` 无生产调用方。 | `update_download/handoff.rs` | M10.5 | 接 `session_recovery::prepare_startup` 前，窗口建好后确认窗口数。 |
+| B54 | **托盘 NIM_ADD 失败无重试**：explorer 未就绪/刚崩时 `added=false`，`set_enabled(true)` 状态未变不 post，1Hz 快照不变也不刷新——**静默启动下可能长时间无托盘入口（窗口已隐藏）**。 | `tray.rs` `set_enabled`/`apply_enabled` | M10.6 | `set_enabled(true)` 每次 post WM_APP_SET（或维护 mounted 标志）让 1Hz 自然重试。 |
 
 ## C. 计划内（归后续子步/阶段，重构完成时验证）
 
@@ -97,7 +99,7 @@
 | C11 | **i18n 合同独立 workspace CI 登记**：`tools/slterm-i18n-contract` 不在根 workspace，clippy/CI 不覆盖。 | 12 篇打包/CI 清单 | |
 | C12 | **旧栈语义资产转测试保留**：git2 五份语义资产（D07-1 裁定转对照用例）。 | 07/M11 | |
 | C13 | **docs/ 临时稿删除 + 篇号锚点清理**（与 A3 联动）。 | M11 | |
-| C14 | **设计措辞修正**：05 篇「窗口边缘」应为「内容区外圈」；04 篇 `reorder_batch` 签名稿与上游不符（已照源）；08 篇 `note_bell` 上游不存在（未落）；04 篇 generation 等待错误码口径（实现按设计稿 `agent_identity_mismatch`/`agent_exited`）；08 篇 D08-2 待沉淀仍写「M9.3 落地时拍板」而 DECISIONS 已裁（文档漂移）；08 篇 `compile_formula` 签名草案与上游实源不符（已按源码照抄）；08 篇 #44 `draw_overlays` 未迁，M9.5 自绘 paint pass（设计稿应标注归属）；09 篇 §6 duration 值域（Default|Short|Long）与 06 已落六档不一致（实现按六档消费，persistent 无系统常驻档）；09 篇 M10.2 出口只写「agent 退出清进度」，实现按任务书补 TurnDone/pane 关闭清除（doc 待回登）；09 篇 `focus_window(cx)`/`focus_pane(pane,cx)` 为多窗注册表签名，与单窗 GPUI（窗口更新回调内不可再 update）冲突，实现改为显式 `&mut Window` 落点、目标选择/平台调用仍单点；09 篇 `PreparedUpdate::commit(&self)` 实为 `commit(&mut self, windows: &[Session])`，`RELEASE_DOWNLOAD_PREFIX` 落 `update_check.rs` 而非 `update_download`（M11 原位收敛）。 | 设计稿 | 重构末统一订正。 |
+| C14 | **设计措辞修正**：05 篇「窗口边缘」应为「内容区外圈」；04 篇 `reorder_batch` 签名稿与上游不符（已照源）；08 篇 `note_bell` 上游不存在（未落）；04 篇 generation 等待错误码口径（实现按设计稿 `agent_identity_mismatch`/`agent_exited`）；08 篇 D08-2 待沉淀仍写「M9.3 落地时拍板」而 DECISIONS 已裁（文档漂移）；08 篇 `compile_formula` 签名草案与上游实源不符（已按源码照抄）；08 篇 #44 `draw_overlays` 未迁，M9.5 自绘 paint pass（设计稿应标注归属）；09 篇 §6 duration 值域（Default|Short|Long）与 06 已落六档不一致（实现按六档消费，persistent 无系统常驻档）；09 篇 M10.2 出口只写「agent 退出清进度」，实现按任务书补 TurnDone/pane 关闭清除（doc 待回登）；09 篇 `focus_window(cx)`/`focus_pane(pane,cx)` 为多窗注册表签名，与单窗 GPUI（窗口更新回调内不可再 update）冲突，实现改为显式 `&mut Window` 落点、目标选择/平台调用仍单点；09 篇 `PreparedUpdate::commit(&self)` 实为 `commit(&mut self, windows: &[Session])`，`RELEASE_DOWNLOAD_PREFIX` 落 `update_check.rs` 而非 `update_download`（M11 原位收敛）；09 篇 row 35 写 `.lnk`「静默参数」但 CLI 无静默旗标（实现按设置两条件；doc 待删措辞或另立 `--silent`）。 | 设计稿 | 重构末统一订正。 |
 | C15 | **`D04-3 windowing_behavior` 未设键**：单窗行为硬编码 `SINGLE_WINDOW_ID`。 | 12 篇随 settings 面统一裁定 | |
 | C16 | **`request_once_bounded` 无消费方**（插件宿主）。 | M9.5/M10 | |
 | C17 | **`ProviderTestOutcome` 文案本地化**（展示边界）。 | M9.5 | |
