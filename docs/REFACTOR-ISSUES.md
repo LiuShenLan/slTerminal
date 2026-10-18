@@ -107,6 +107,8 @@
 | B75 | **源码/测试注释仍大量引用设计稿篇号**（「NN 篇」）：docs 已删，注释锚点悬空。 | 全仓源码注释 | M11.3（承接 A3） | 按 A3 裁决统一清理或收窄纪律为「篇号锚点允许」。 |
 | B76 | **`.claude/test-exemptions.md` 仍含旧载体豁免行**（WebView/xterm.js/jsdom/wdio/React/Dockview 等）：设计 11 篇要求 M0 末按载体存亡全表重审，未执行。 | `.claude/test-exemptions.md` | M11.3 复核 | 按「载体消亡销项、PTY/Win32 行保留改写、翻案行保留」重审；销项保留根因一行。 |
 | B77 | **禁名门禁无全树模式**：`check_brand_regress.py` 只有 staged/message/push/range（均扫新增行）；设计 M11.3 的「临时稿删除后切全树常挂」未实现。 | `scripts/check_brand_regress.py` | M11.3 复核 | 若要全树扫，需先给历史来源语境（ADR/README/REFACTOR-ISSUES 等）建豁免表；否则维持新增行模式并在文档注明。 |
+| B78 | **卸载后安装目录残留 `.slterm-update.slterm-lock`**：GUI 运行在 exe 旁创建更新交接锁（句柄即权威，空文件 5 字节），Inno 卸载清单不含该文件，卸载后安装目录因此保留（与 C29 同源）。 | `platform/update_installation.rs` `guard_base`、`update_download/handoff.rs`；`scripts/installer.iss` `[UninstallRun]` | M11.4 首发核验 | 正常退出删锁（C29 已记同源取舍），或卸载前由应用/安装器清理 exe 目录；裁决前按已知残留登记。 |
+| B79 | **开始菜单快捷方式落在 `(Default)` 组**：`installer.iss` 未设 `DefaultGroupName`，安装日志与实测显示 `Programs\(Default)\slTerminal.lnk`；功能可用但用户可见命名异常。 | `scripts/installer.iss` `[Setup]`/`[Icons]` | M11.4 首发核验 | 设 `DefaultGroupName={#AppDisplayName}`（或显式组名）；属发布面变更，需用户裁决。 |
 
 ## C. 计划内（归后续子步/阶段，重构完成时验证）
 
