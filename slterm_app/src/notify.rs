@@ -66,6 +66,8 @@ pub(crate) enum Notification {
         message: Option<String>,
         outcome: AiTurnOutcome,
     },
+    /// 启动期一次性汇总(恢复结果等,A10/A13):走漏斗但豁免前台门控。
+    RecoverySummary { text: String },
 }
 
 impl Notification {
@@ -157,6 +159,7 @@ impl Notification {
     pub(crate) fn is_ai(&self) -> bool {
         let program = match self {
             Self::AiTurn { .. } | Self::AiTurnIssue { .. } => return true,
+            Self::RecoverySummary { .. } => return false,
             Self::Bell { program }
             | Self::CommandDone { program, .. }
             | Self::CommandFailed { program, .. }
@@ -214,6 +217,7 @@ impl Notification {
                 Some(program) => (program.clone(), body.clone()),
                 None => (crate::brand::NAME.to_owned(), body.clone()),
             },
+            Self::RecoverySummary { text } => (crate::brand::NAME.to_owned(), text.clone()),
             Self::AiTurn {
                 program,
                 message,
@@ -418,13 +422,38 @@ impl Funnel {
         request: Option<u64>,
         now: Instant,
     ) -> DeliveryPlan {
-        // ① 聚焦中不打扰:全部变体零投递,连闪烁也不发。
-        if focused {
+        self.plan_with(notification, pane_id, focused, request, false, now)
+    }
+
+    /// A13:启动期一次性汇总豁免①前台门控(其余节流层不变)。
+    pub(crate) fn plan_startup(
+        &mut self,
+        notification: &Notification,
+        pane_id: PaneId,
+        focused: bool,
+        request: Option<u64>,
+        now: Instant,
+    ) -> DeliveryPlan {
+        self.plan_with(notification, pane_id, focused, request, true, now)
+    }
+
+    fn plan_with(
+        &mut self,
+        notification: &Notification,
+        pane_id: PaneId,
+        focused: bool,
+        request: Option<u64>,
+        startup_summary: bool,
+        now: Instant,
+    ) -> DeliveryPlan {
+        // ① 聚焦中不打扰:全部变体零投递,连闪烁也不发。启动汇总例外。
+        if focused && !startup_summary {
             return DeliveryPlan::default();
         }
         // ② 闪烁是「恢复中」信号,先于一切节流;被节流时仍恰好发生一次。
+        // 启动汇总不闪(窗口已在前台,闪烁无意义)。
         let mut plan = DeliveryPlan {
-            flash: true,
+            flash: !startup_summary,
             toast: None,
         };
         // ③ 全局间隔:窗口内任何 pane 的第二条 toast 被吞。
@@ -514,6 +543,12 @@ pub(crate) fn deliver_gpui(notification: &Notification, pane_id: PaneId, cx: &Ap
     deliver_gpui_with_choices(notification, pane_id, None, cx);
 }
 
+/// A13:启动期一次性汇总——走漏斗(节流/闪烁统一),但豁免前台门控,
+/// 且不绑定 pane(点击不回窗)。
+pub(crate) fn deliver_startup_summary(notification: &Notification, cx: &App) {
+    deliver_with(notification, PaneId(0), None, true, cx);
+}
+
 /// 单一投递入口:前台门控 → 节流计划 → 闪烁先行 → 系统 toast。
 /// `confirmation` = 权限确认的 (request_id, 候选标签),动作按钮直达
 /// 03 篇 confirmation 链(确认语义归 10 篇安全半程)。HWND 查询经 09 篇
@@ -524,18 +559,28 @@ pub(crate) fn deliver_gpui_with_choices(
     confirmation: Option<(u64, Vec<String>)>,
     cx: &App,
 ) {
+    deliver_with(notification, pane_id, confirmation, false, cx);
+}
+
+fn deliver_with(
+    notification: &Notification,
+    pane_id: PaneId,
+    confirmation: Option<(u64, Vec<String>)>,
+    startup_summary: bool,
+    cx: &App,
+) {
     static FUNNEL: OnceLock<Mutex<Funnel>> = OnceLock::new();
-    let plan = FUNNEL
+    let mut funnel = FUNNEL
         .get_or_init(|| Mutex::new(Funnel::new()))
         .lock()
-        .unwrap_or_else(|poison| poison.into_inner())
-        .plan(
-            notification,
-            pane_id,
-            foreground(),
-            confirmation.as_ref().map(|confirmation| confirmation.0),
-            Instant::now(),
-        );
+        .unwrap_or_else(|poison| poison.into_inner());
+    let request = confirmation.as_ref().map(|confirmation| confirmation.0);
+    let plan = if startup_summary {
+        funnel.plan_startup(notification, pane_id, foreground(), request, Instant::now())
+    } else {
+        funnel.plan(notification, pane_id, foreground(), request, Instant::now())
+    };
+    drop(funnel);
     if plan.flash {
         // 闪烁先行:节流只挡系统 toast,不挡任务栏提示。
         crate::platform::notifications::flash_taskbar(crate::windowing::focus::window_hwnd(cx));
@@ -575,12 +620,12 @@ pub(crate) fn deliver_gpui_with_choices(
             )
         })
         .unwrap_or_default();
-    crate::platform::notifications::dispatch(
-        title,
-        body,
-        application_activation(Some(pane_id)),
-        actions,
-    );
+    let open = if startup_summary {
+        application_activation(None)
+    } else {
+        application_activation(Some(pane_id))
+    };
+    crate::platform::notifications::dispatch(title, body, open, actions);
 }
 
 #[cfg(test)]
@@ -906,6 +951,23 @@ mod notification_tests {
         let allowed = funnel.plan(&second, PaneId(2), false, None, now + TOAST_THROTTLE);
         assert!(allowed.flash);
         assert!(allowed.toast.is_some());
+    }
+
+    /// A13:启动汇总走漏斗但豁免前台门控,且不闪烁、不绑定 pane 激活。
+    #[test]
+    fn startup_summary_bypasses_the_foreground_gate_without_flashing() {
+        let mut funnel = Funnel::new();
+        let notification = Notification::RecoverySummary {
+            text: "恢复 2 个标签页".into(),
+        };
+        assert_eq!(
+            funnel.plan(&notification, PaneId(1), true, None, Instant::now()),
+            DeliveryPlan::default(),
+            "普通通知在前台必须完全安静"
+        );
+        let plan = funnel.plan_startup(&notification, PaneId(1), true, None, Instant::now());
+        assert!(plan.toast.is_some(), "启动汇总必须穿透前台门控");
+        assert!(!plan.flash, "启动汇总不得闪烁任务栏");
     }
 
     /// pane 级同键窗口:同 pane+attention+request 3s 内只放一条;不同

@@ -302,9 +302,10 @@ fn conpty_spawn_write_read_resize_close_full_chain() {
     );
 
     // 写命令 → 读输出(marker 进 grid 即证写读链通)。
-    // 负载裕度:15s 预算是宿主握手 + 冷启动的真机上界,断言语义不变。
+    // 负载裕度,非断言/语义放宽:30s 预算覆盖 Defender 扫描 + 宿主握手 +
+    // 冷启动叠加(A1);真 bug 条件下该断言仍红。
     driven.input(b"echo SLTERM-M2-MARK-1\r");
-    let grid = driven.await_grid(Duration::from_secs(15), |g| g.contains("SLTERM-M2-MARK-1"));
+    let grid = driven.await_grid(Duration::from_secs(30), |g| g.contains("SLTERM-M2-MARK-1"));
     assert!(
         grid.contains("SLTERM-M2-MARK-1"),
         "写读链未见到命令输出:\n{grid}"
@@ -767,25 +768,41 @@ fn spawn_lock_serializes_and_capacity_32_enforced() {
     assert!(err.to_string().contains("32"), "拒绝消息应含上限值: {err}");
 
     // 并发抢名额:释放 1 个 → 4 线程 barrier 同发 → 恰 1 成 3 拒。
+    //
+    // A1:成功者必须**保持 Pty 存活到主线程统计完成**再释放。旧写法在线程
+    // 内立即 drop,`Pty::drop` 的 session_closed() 会先于其他线程的容量
+    // 检查归还名额,让第二个线程合法成功(「2 成功」),断言依赖调度而非锁。
     drop(held.pop());
     let barrier = Arc::new(Barrier::new(4));
+    let release = Arc::new(Barrier::new(4 + 1));
+    let (tx, rx) = std::sync::mpsc::channel();
     let mut handles = Vec::new();
     for _ in 0..4 {
         let barrier = Arc::clone(&barrier);
+        let release = Arc::clone(&release);
+        let tx = tx.clone();
         let opts = opts.clone();
         handles.push(std::thread::spawn(move || {
             barrier.wait();
-            // 成功者在线程内立即 drop(名额归还),只把结果带出。
-            tty::new(&opts, SIZE).map(drop).is_ok()
+            let pty = tty::new(&opts, SIZE).ok();
+            tx.send(pty.is_some()).expect("主线程仍在收集结果");
+            // 主线程断言前不得归还名额。
+            release.wait();
+            drop(pty);
         }));
     }
+    drop(tx);
     let mut succeeded = 0;
-    for h in handles {
-        if h.join().unwrap() {
+    for _ in 0..4 {
+        if rx.recv().expect("工作线程必须回报结果") {
             succeeded += 1;
         }
     }
     assert_eq!(succeeded, 1, "上限-1 并发抢名额:恰一个成功");
+    release.wait();
+    for h in handles {
+        h.join().unwrap();
+    }
 
     // 归还验证:全部 drop → 名额清空 → 再 spawn 成功。
     drop(held);

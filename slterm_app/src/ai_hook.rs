@@ -134,9 +134,7 @@ pub(crate) use local::settings::remove_all as remove_all_hooks;
 // 壳侧启动链的唯一进程级入口(M4.5);返回句柄随 `run_shell` 作用域存活。
 pub use windows::spawn_gpui_server;
 
-/// config_guard 落盘本体在 local;消费点归 06 篇设置域启动链
-/// (`ai_hooks` 全局开关落定后按授权自愈,本步不接线)。
-#[allow(unused_imports)]
+/// config_guard 落盘本体在 local;消费点 = 壳启动链 `run_shell`(C4)。
 pub use local::spawn_config_guard;
 
 #[cfg(test)]

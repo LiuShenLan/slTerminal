@@ -990,6 +990,9 @@ impl Render for TerminalView {
             .debug_selector(|| "slterm-terminal".to_owned())
             .key_context(KEY_CONTEXT)
             .size_full()
+            // B56:终端卡底色取调色板 background(单层铺底;单元格自身的
+            // 背景绘制在其上,不做二次 alpha 叠加)。
+            .bg(self.palette.background)
             .relative()
             .overflow_hidden()
             // 卡内呼吸边距,对齐上游网格 reserve 的换算值:上下 8、左右 12。

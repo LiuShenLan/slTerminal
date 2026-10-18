@@ -411,6 +411,19 @@ fn git_methods_execute_against_the_real_repository(cx: &mut TestAppContext) {
         "unstage 后索引不得再有暂存变更: {entries:?}"
     );
 
+    // A5:子目录 pane 仍可使用 Git 方法(expected_cwd = pane 当前 cwd)。
+    let sub = root.join("src");
+    std::fs::create_dir_all(&sub).unwrap();
+    view.update(cx, |view, _| {
+        view.cwd = sub.to_string_lossy().into_owned();
+    });
+    let sub_status = dispatch(&workspace, &mut window, git_command("status", &sub, "", ""))
+        .expect("子目录 pane 必须允许 git.status");
+    assert_eq!(sub_status["action"]["operation"], "status");
+    view.update(cx, |view, _| {
+        view.cwd = root.to_string_lossy().into_owned();
+    });
+
     // 目标漂移:expected_cwd 与 pane cwd 不一致 → git_target_changed。
     let other = tempfile::tempdir().unwrap();
     let drift = dispatch(

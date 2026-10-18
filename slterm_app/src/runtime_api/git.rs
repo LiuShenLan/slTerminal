@@ -9,6 +9,8 @@
 //! M7.3 只落协议面:请求解析/校验/陈旧判定;07 篇子进程封装接线后由 UI
 //! owner 执行,`--no-optional-locks` 纪律归 07。
 
+use std::path::Path;
+
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -58,17 +60,17 @@ impl Request {
 }
 
 impl Request {
-    /// pane cwd 与 repo root 双重核对。设计稿要求两者都等于
-    /// `expected_cwd`:Git 方法只对根 checkout 生效,子目录 pane 需先回到根。
+    /// pane cwd 与仓库根核对(A5):目标漂移防护只要求 pane cwd 未变;
+    /// pane 可位于仓库内任意子目录,Git 路径按 repo root 解析。
     pub(crate) fn verify_repository(
         &self,
         pane_cwd: &str,
         repo_root: &str,
     ) -> Result<(), ApiError> {
-        if pane_cwd != self.expected_cwd || repo_root != self.expected_cwd {
+        if pane_cwd != self.expected_cwd || !path_is_within(pane_cwd, repo_root) {
             return Err(ApiError::new(
                 "git_target_changed",
-                "the pane working directory or repository root changed; reopen Git",
+                "the pane working directory changed or is outside the repository; reopen Git",
             )
             .details(json!({
                 "expected_cwd": self.expected_cwd,
@@ -78,6 +80,21 @@ impl Request {
         }
         Ok(())
     }
+}
+
+/// `child` 是否位于 `parent` 内(含相等;Windows 组件比较忽略 ASCII 大小写)。
+fn path_is_within(child: &str, parent: &str) -> bool {
+    let mut child = Path::new(child).components();
+    for parent in Path::new(parent).components() {
+        match child.next() {
+            Some(component)
+                if component
+                    .as_os_str()
+                    .eq_ignore_ascii_case(parent.as_os_str()) => {}
+            _ => return false,
+        }
+    }
+    true
 }
 
 pub(super) fn command_from_method(

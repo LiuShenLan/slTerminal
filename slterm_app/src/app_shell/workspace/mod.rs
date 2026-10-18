@@ -374,9 +374,11 @@ impl SltermWorkspace {
             plan.quarantined.as_deref(),
             language,
         ) {
-            crate::platform::notifications::show(
-                crate::brand::NAME,
-                &crate::notify::clamp_toast_body(&text),
+            // A10/A13:统一走通知漏斗;启动汇总经 `plan_startup` 豁免前台
+            // 门控,不再使用直发通道(直发通道保留给更新提示)。
+            crate::notify::deliver_startup_summary(
+                &crate::notify::Notification::RecoverySummary { text },
+                cx,
             );
         }
         // 测试构建不启用会话注册表写入(真实数据目录隔离);生产启用。

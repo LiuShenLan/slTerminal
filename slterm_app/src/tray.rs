@@ -552,7 +552,10 @@ mod win {
             )
         };
         if hwnd.is_null() {
-            log::warn!("tray: CreateWindowExW failed; tray icon disabled");
+            // B48:窗口创建失败必须复位闸门,让后续 set_enabled/init 重试;
+            // 否则本进程内托盘入口永久缺失(静默启动下窗口已隐藏)。
+            THREAD_STARTED.store(false, Ordering::SeqCst);
+            log::warn!("tray: CreateWindowExW failed; tray icon disabled (will retry)");
             return;
         }
         HWND.store(hwnd as isize, Ordering::Release);

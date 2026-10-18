@@ -163,6 +163,8 @@ M12/R2（2026-10-18）：B1 测试构建数据目录默认隔离（临时根）�
 
 M12/R3（2026-10-18）：A2 设置写通道全量后台相位机（Pending/Committed/Failed、队尾合并、失败统一回滚；含 hooks 授权与主题条件写）、A6 active 无凭据回退 env + 显式错误上条、A16 审计成功写降 info、B6 保存全部继续逐件保存并聚合提示、B12 `tab.close` 增 `force` 参数与 `dirty_document` 拒绝、B25 忙碌 pane 关闭确认框、B43 通知动作回执消费（聚焦 + 审计）、B57 拖动预览不被回读覆盖、B64 `subscribe` 返回当前快照、B65 `HOME` 回退、B66 测试守卫宽化到 feature 形态、C5 SEC-12 命中原文展示 + 确认后重试。
 
+M12/R4（2026-10-18）：A1 容量断言改「成功句柄存活到统计完成」+ 全链 30s 负载裕度、A5 Git 方法放宽到仓库内子目录（`expected_cwd` 漂移防护保留）、A10/A13 恢复汇总统一走通知漏斗并新增启动豁免前台门控策略位、B48 托盘建窗失败复位线程闸门、B50 标题栏关闭复用脏守卫、B53 `restore_ticket` 接入启动恢复并在建窗后确认、B56 终端卡底色取调色板 `background`、C4 `spawn_config_guard` 挂启动链；C1 复核（M9.5 已接 OSC 133 两边界与 run 记账）、B54 复核（M10 已落 1 Hz NIM_ADD 重试）。
+
 ## E. 验收纪律补记
 
 - 自 M8.3 起验收同时跑两形态 clippy（`--workspace` 与 `-p slterm --features gpui-test-support`）——此前无 feature 形态遗漏了 M6 起的三处测试端红灯。

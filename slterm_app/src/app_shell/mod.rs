@@ -140,7 +140,27 @@ pub fn run_shell(initial_cwd: Option<PathBuf>, initial_command: Option<Program>)
     // 会话恢复决策在开窗前完成(05 篇 M5.5):窗口尺寸/侧栏宽度要先进
     // 窗口定形与 spawn 网格;CLI 显式 cwd/-e 启动只回放几何、不恢复 tabs。
     let restore_tabs = initial_command.is_none() && initial_cwd.is_none();
-    let startup_plan = workspace::session_recovery::prepare_startup(restore_tabs);
+    let mut startup_plan = workspace::session_recovery::prepare_startup(restore_tabs);
+    // B53:更新交接恢复优先于普通会话恢复——成功/回滚安装后的首个启动用
+    // 交接快照还原更新前的窗口;单窗口定位只取首个窗口。
+    let update_restored_windows = if restore_tabs {
+        match crate::update_download::handoff::restore_ticket() {
+            Some(mut sessions) => match sessions.drain(..).next() {
+                Some(session) => {
+                    startup_plan.sidebar = session.sidebar;
+                    startup_plan.window = session.window;
+                    startup_plan.crashed = false;
+                    startup_plan.session = Some(session);
+                    log::info!("update handoff: restored workspace snapshot");
+                    1
+                }
+                None => 0,
+            },
+            None => 0,
+        }
+    } else {
+        0
+    };
     let (shell_tx, shell_rx) = mpsc::channel();
     let open_urls_tx = shell_tx.clone();
     // 04 篇 M7.5:单实例控制面先于窗口创建。hub 是壳与服务端共享的同一份
@@ -175,6 +195,9 @@ pub fn run_shell(initial_cwd: Option<PathBuf>, initial_command: Option<Program>)
     // `SLTERM_NOTIFY_PIPE`——ConPTY 合并当前进程环境,全部 pane 的子进程树
     // 天然携带作用域闸门。句柄活到事件循环退出,关窗后确定性回收 accept 线程。
     let (ai_events, pipe_server) = crate::ai_hook::spawn_gpui_server();
+    // C4:配置守卫(跨进程 hook 配置变更自愈)挂在设置域启动链上,
+    // 随壳生命周期存活,Drop 时 join 线程。
+    let _config_guard = crate::ai_hook::spawn_config_guard();
     // 通知通道开机位(09 篇 M10.1):toast 点击回投走同一壳事件队列;
     // AUMID 预注册幂等,必须早于第一条通知。
     crate::notify::init_gpui_activation(shell_tx.clone());
@@ -219,6 +242,11 @@ pub fn run_shell(initial_cwd: Option<PathBuf>, initial_command: Option<Program>)
             runtime_hub,
             start_hidden,
         );
+        // B53:窗口建立后按实际恢复的窗口数确认交接 ticket(不一致则
+        // 留待下次尝试,3 次上限后放弃)。
+        if update_restored_windows > 0 {
+            crate::update_download::handoff::acknowledge_restore(update_restored_windows);
+        }
     });
     // 托盘收尾(09 篇 M10.3):先删图标再退进程,否则任务栏残影要等
     // 用户悬停才消失;join 保证删图标先于进程退出。
