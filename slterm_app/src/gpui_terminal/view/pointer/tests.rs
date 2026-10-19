@@ -69,7 +69,7 @@ fn cell_point(view: &TerminalView, col: usize, row: usize, x_frac: f32) -> Point
 }
 
 /// 拖选渲染出的文本:按下 → 移动 → 松手,选区内容命中注入的文本;
-/// `copy_selection` 落剪贴板(缝合点 8 的 M3 形态)。
+/// `copy_selection` 落剪贴板(缝合点 8 的形态)。
 #[gpui::test]
 fn drag_selects_rendered_text_and_copies(cx: &mut TestAppContext) {
     let (terminal, mut window) = open(cx);

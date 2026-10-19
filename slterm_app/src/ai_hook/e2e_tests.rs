@@ -1,4 +1,4 @@
-//! 管道端到端集成用例(M4.5 出口,真机、串行)。
+//! 管道端到端集成用例(出口,真机、串行)。
 //!
 //! 链路全程不 mock:真命名管道服务线程 → `GetNamedPipeClientProcessId` →
 //! `parse_envelope` → 进程内 mpsc → `AgentHub` 的 pane 归属与仲裁器。
@@ -57,7 +57,7 @@ fn pipe_server_shutdown_joins_the_accept_thread() {
     server.shutdown();
 }
 
-/// B2 防复发:客户端连上后保持句柄、不写不关,serve 线程阻塞在 `ReadFile`;
+/// 防复发:客户端连上后保持句柄、不写不关,serve 线程阻塞在 `ReadFile`;
 /// shutdown 必须取消该同步 I/O 并在 2s 内返回(不能依赖客户端配合关闭)。
 #[test]
 fn pipe_server_shutdown_cancels_a_client_blocking_readfile() {

@@ -4,7 +4,7 @@
 //! 进程身份、无 hook API 的 agent、以及粗粒度「回合完成」回调无法区分的交互
 //! 式权限/提问屏幕。
 //!
-//! 本步(M4.4)落地范围:身份纯数据面(`AgentKind` 27 家 + slug/别名/解析/
+//! 本模块落地范围:身份纯数据面(`AgentKind` + slug/别名/解析/
 //! 恢复命令)+ 仲裁三类型(`AgentStatus`/`AgentStatusSource`/`Detection`)+
 //! 声明式 TOML 屏幕规则引擎(`detect`/`identify`/Manifest 编译)与结构判据
 //! 子模块 `screen_context`。规则资源随仓(`slterm_agent_detection/*.toml`),
@@ -20,7 +20,7 @@ use serde::Deserialize;
 
 mod screen_context;
 
-/// slTerminal 能作为一等终端负载识别的 AI 客户端。27 家一项不裁(定位约束 7)。
+/// slTerminal 能作为一等终端负载识别的 AI 客户端。一项不裁(定位约束 7)。
 /// slug 是跨域身份事实单源:hook 事件 source、设置页、恢复命令、目录表全部
 /// 消费 slug,禁第二份枚举。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -411,7 +411,7 @@ pub enum AgentStatusSource {
 pub struct Detection {
     pub agent: AgentKind,
     pub status: AgentStatus,
-    /// TOML 规则 id,仲裁与可解释性共用;规则引擎归 M4.4。
+    /// TOML 规则 id,仲裁与可解释性共用;规则引擎负责匹配。
     pub rule_id: String,
 }
 

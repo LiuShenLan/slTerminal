@@ -17,4 +17,5 @@ fi
 export PYTHONUTF8=1
 # $PY 裸展开:"py -3" 需分词成程序 + 参数。
 $PY scripts/check_architecture.py || exit 1
+$PY scripts/check_doc_policy.py staged || exit 1
 $PY scripts/check_brand_regress.py staged || exit 1

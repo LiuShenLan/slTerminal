@@ -1,4 +1,4 @@
-//! R7 C27/B52:更新弹窗、提示状态机与安装授权接线(虚拟窗口)。
+//! /更新弹窗、提示状态机与安装授权接线(虚拟窗口)。
 //!
 //! 下载会话经 `update_download::set_status_for_test` 置终态,安装执行经
 //! `UpdateInstallRunner` 注入替身——不触真实网络、PowerShell helper 或
@@ -104,7 +104,7 @@ fn update_prompt_remind_later_persists_and_suppresses_repeat(cx: &mut TestAppCon
     );
     assert!(
         !crate::update_check::should_prompt(version),
-        "弹窗打开即记 prompted(B52)"
+        "弹窗打开即记 prompted"
     );
 
     let remind = ui_label(cx, Message::UpdateRemindLater);

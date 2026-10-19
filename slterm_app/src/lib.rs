@@ -1,7 +1,7 @@
 //! slTerminal application crate:GPUI 壳、编排、平台适配、i18n、build 生成。
 //!
 //! 启动链本体在本文件 `run()`(序固定);`src/main.rs` 只承载
-//! `#![windows_subsystem = "console"]`(D04-1)与委托——D11-1 测试形态以
+//! `#![windows_subsystem = "console"]`与委托——测试形态以
 //! lib.rs 为 crate 根,bin 是薄壳。
 //!
 //! 依赖边受 architecture/dependencies.toml 门禁约束(application 层,单向依赖
@@ -14,10 +14,10 @@
 pub(crate) mod app_shell;
 // 持久化小原语(原子写/文件锁):ai_hook 安装器与各域状态写共用。
 pub(crate) mod atomic_file;
-// 安全审计通道(SEC-12/13/17):tracing target "audit";
-// 设置写唯一包装(user 层 settings.json + app 设置)+ SEC-13 哈希对账事件。
+// 安全审计通道:tracing target "audit";
+// 设置写唯一包装(user 层 settings.json + app 设置)+ 哈希对账事件。
 pub(crate) mod audit;
-// M4.5 单 pane 宿主:事件泵派发与 AgentActivity/AnswerInbox 归属。
+// 单 pane 宿主:事件泵派发与 AgentActivity/AnswerInbox 归属。
 pub(crate) mod agent_host;
 // 后台任务注册表:元数据单点、订阅生命周期、重入闸门与
 // 失败策略;1 Hz 看门狗/托盘快照与更新检查/预取收编于此。
@@ -62,7 +62,7 @@ pub(crate) mod directory_history;
 // 有界前缀读取:内存上限先于解码生效。
 pub(crate) mod document_io;
 // 加密备份:白名单收集/口令密封/先验后写恢复 + 选择性恢复
-// 与加密恢复点撤回。UI 入口归设置页安全分区,本步只落引擎。
+// 与加密恢复点撤回。UI 入口归设置页安全分区,本模块只落引擎。
 #[allow(dead_code)]
 pub(crate) mod encrypted_backup;
 // 事务型 Git worktree(agent.fork 消费):只回滚本事务
@@ -90,7 +90,7 @@ pub(crate) mod logging;
 pub(crate) mod math;
 // 自含 markdown 文档模型(管线 B):扁平块序列 + 数学片段;
 // 数学适配(MathRun/measure/fit)与终端覆盖层共用引擎单点。
-#[allow(dead_code)] // 阅读器渲染接线归文件编辑器;本步交付模型与数学适配。
+#[allow(dead_code)] // 阅读器渲染接线归文件编辑器;本模块交付模型与数学适配。
 pub(crate) mod markdown;
 // 通知中心单一漏斗:六变体、去重/节流/失败冷却/前台门控;
 // 系统 toast 投递在 platform::notifications。
@@ -188,7 +188,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     // panic 钩先于一切子系统:启动期 panic 必须有弹面 + 持久日志,不能静默消失。
     panic::attach_handler();
 
-    // console 子系统语义反转后的进程级归一化(D04-1)。
+    // console 子系统语义反转后的进程级归一化。
     if let Err(error) = platform::startup::prepare_gui_process() {
         platform::startup::report_error(&error, true);
         return Err(error.into());

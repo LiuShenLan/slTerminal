@@ -1,4 +1,4 @@
-//! C8 导出工作区 UI:对话框 → `SettingsPaneEvent::ExportWorkspace` → 宿主写盘。
+//! 导出工作区 UI:对话框 → `SettingsPaneEvent::ExportWorkspace` → 宿主写盘。
 //!
 //! 用例走虚拟窗口的真实按钮与路径选择器;导出文件经 `session::load_from`
 //! 回读,并与 `snapshot_for_test` 字段级对账。

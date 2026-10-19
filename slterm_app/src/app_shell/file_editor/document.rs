@@ -37,7 +37,7 @@ impl std::ops::Deref for Document {
 }
 
 impl Document {
-    /// 磁盘修改时间(M8.3 信息侧栏展示)。
+    /// 磁盘修改时间(信息侧栏展示)。
     pub(crate) fn modified(&self) -> Option<SystemTime> {
         self.modified
     }

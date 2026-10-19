@@ -6,8 +6,8 @@
 //!
 //! 纪律:写入点唯一 = workspace `new_pane`/关 pane 两处;面板只订阅、不自存。
 //!
-//! M3 字段最简(改造节 8):`shell_kind` 归 PTY 域回填,
-//! `prompt_ready`/`agent` 归 AI 集成域回填——本体与订阅机制 M3 先立。
+//! 字段最简(改造节 8):`shell_kind` 归 PTY 域回填,
+//! `prompt_ready`/`agent` 归 AI 集成域回填——本体与订阅机制先立。
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -15,10 +15,10 @@ use std::sync::{LazyLock, Mutex, MutexGuard, PoisonError, RwLock};
 
 use slterm_split::PaneId;
 
-/// 一份 pane 会话的元数据(M3 最简形态)。
+/// 一份 pane 会话的元数据(最简形态)。
 ///
 /// 终态字段(`shell_kind: ShellKind` / `prompt_ready: bool` /
-/// `agent: Option<AgentSessionRef>`)按 PTY 与 AI 集成域节奏回填;M3 先立索引形状
+/// `agent: Option<AgentSessionRef>`)按 PTY 与 AI 集成域节奏回填;先立索引形状
 /// 与写入点纪律,空壳不代表终态。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PaneSessionMeta {}
@@ -31,7 +31,7 @@ pub enum RegistryEvent {
 }
 
 /// 订阅句柄:Drop 即退订(对齐旧 TS 注册表家族通用契约)。
-#[allow(dead_code)] // id 字段随 subscribe 消费端(M4+/runtime_api)点亮。
+#[allow(dead_code)] // id 字段随 subscribe 消费端(+/runtime_api)点亮。
 pub struct Subscription {
     id: u64,
 }
@@ -73,7 +73,7 @@ pub fn register(id: PaneId, meta: PaneSessionMeta) {
     broadcast(&RegistryEvent::Registered(id));
 }
 
-#[allow(dead_code)] // 读端归 runtime_api pane.read/M4+;M3 只有写删两侧。
+#[allow(dead_code)] // 读端归 runtime_api pane.read/+;只有写删两侧。
 pub fn get(id: PaneId) -> Option<PaneSessionMeta> {
     METAS
         .read()
@@ -88,7 +88,7 @@ pub fn remove(id: PaneId) {
     }
 }
 
-#[allow(dead_code)] // 订阅端归 RuntimeHub/M4+;契约本体 M3 先立。
+#[allow(dead_code)] // 订阅端归 RuntimeHub/+;契约本体先立。
 pub fn subscribe(f: impl Fn(&RegistryEvent) + Send + 'static) -> Subscription {
     let id = NEXT_SUBSCRIPTION.fetch_add(1, Ordering::Relaxed);
     lock_subscribers().push((id, Box::new(f)));

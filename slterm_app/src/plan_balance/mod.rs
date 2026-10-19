@@ -1,9 +1,9 @@
 //! 套餐余量模块(F10 查询语义原样;单进程 GPUI 形态)。
 //!
 //! 读 user 层 `~/.claude/settings.json` 的 env 判定套餐(Anthropic 兼容端点),
-//! 定时轮询外部 API,把余量快照经模块级 watch channel 推给多消费者(D10-3)。
+//! 定时轮询外部 API,把余量快照经模块级 watch channel 推给多消费者。
 //!
-//! 红线(SEC-18):token 不出凭据域——快照/DTO/推送载荷无 token 字段(类型层
+//! 红线:token 不出凭据域——快照/DTO/推送载荷无 token 字段(类型层
 //! 防线);本模块 tracing/错误消息禁止插值 token 与 Authorization 头
 //! (ureq 错误 Display 不含请求头,构造错误消息时禁止自行拼接)。
 //!
@@ -31,7 +31,7 @@ use crate::secrets::SecretBytes;
 use query::{PlanQuery, QUERIES, find_query_by_url};
 use source::{PlanSource, SOURCES};
 
-// ── DTO(规格 §7;serde camelCase;无 token 字段 = 类型层防线) ──
+// ── DTO(serde camelCase;无 token 字段 = 类型层防线) ──
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -80,11 +80,11 @@ pub(crate) struct FetchOutcome {
     pub windows: Option<WindowsInfo>,
 }
 
-// ── 快照槽 + watch channel(D10-3:模块级静态,多消费者不耦合组件树) ──
+// ── 快照槽 + watch channel(模块级静态,多消费者不耦合组件树) ──
 
 static SNAPSHOT: Mutex<Option<Vec<PlanBalanceInfo>>> = Mutex::new(None);
 
-/// 更新通知订阅者(D10-3 watch 语义:只报「有新值」,值本体读 SNAPSHOT;
+/// 更新通知订阅者(watch 语义:只报「有新值」,值本体读 SNAPSHOT;
 /// 有界 1 槽合并连续推送,订阅方一次唤醒读最新快照)。
 static UPDATE_SUBSCRIBERS: Mutex<Vec<SyncSender<()>>> = Mutex::new(Vec::new());
 
@@ -103,11 +103,11 @@ pub(crate) fn current_snapshot() -> Vec<PlanBalanceInfo> {
     snapshot_guard().clone().unwrap_or_default()
 }
 
-/// 订阅快照更新(D10-3:多消费者各自持接收端;Drop 即退订)。
+/// 订阅快照更新(多消费者各自持接收端;Drop 即退订)。
 ///
-/// B64:同时返回订阅那一刻的当前快照,消除「注册后、通知扇出前」的漏唤醒
+/// 同时返回订阅那一刻的当前快照,消除「注册后、通知扇出前」的漏唤醒
 /// 窗口——消费者不必再额外读一次 `current_snapshot()` 也不会丢值。
-#[allow(dead_code)] // 消费点 = M10.12 设置页/壳侧余额展示;本步由用例锁定多消费者语义。
+#[allow(dead_code)] // 消费点 = 设置页/壳侧余额展示;本模块由用例锁定多消费者语义。
 pub(crate) fn subscribe() -> (PlanBalanceUpdates, Vec<PlanBalanceInfo>) {
     let snapshot = current_snapshot();
     let (sender, receiver) = mpsc::sync_channel(1);
@@ -120,7 +120,7 @@ pub(crate) struct PlanBalanceUpdates {
     receiver: Receiver<()>,
 }
 
-#[allow(dead_code)] // 消费点 = M10.12 展示订阅;本步由用例锁定语义。
+#[allow(dead_code)] // 消费点 = 展示订阅;本模块由用例锁定语义。
 impl PlanBalanceUpdates {
     /// 阻塞等待下一次推送,返回最新快照。
     pub(crate) fn recv(&self) -> Vec<PlanBalanceInfo> {
@@ -147,9 +147,9 @@ fn unix_now() -> u64 {
         .unwrap_or(0)
 }
 
-// ── 快照合并与单轮拉取编排(纯函数/参数化,L1 全测) ──
+// ── 快照合并与单轮拉取编排(纯函数/参数化,单元层全测) ──
 
-/// 快照槽合并(规格 §6):planId 变化丢弃旧值;查询失败保留同 planId 旧值;
+/// 快照槽合并:planId 变化丢弃旧值;查询失败保留同 planId 旧值;
 /// 成功采用新值;失败且无旧值 → 占位(updated_at=0,渲染 --)。
 pub(crate) fn merge_slot(
     old: Option<&PlanBalanceInfo>,
@@ -184,7 +184,7 @@ pub(crate) fn merge_slot(
     }
 }
 
-/// 一轮拉取编排(D6 最小可测性:resolve/fetch 参数化,L1 不触网不触盘)。
+/// 一轮拉取编排(最小可测性:resolve/fetch 参数化,单元层不触网不触盘)。
 /// 返回新快照;与旧快照比较有变化才推(判定在 [`apply_snapshot`])。
 pub(crate) fn poll_once_with(
     old: &[PlanBalanceInfo],
@@ -256,7 +256,7 @@ pub(crate) fn poll_once_executor() {
     apply_snapshot(new);
 }
 
-/// 启动 planBalance 生产轮询(C34,壳启动链唯一入口)。
+/// 启动 planBalance 生产轮询(壳启动链唯一入口)。
 ///
 /// 注册表订阅随任务存活,Drop 即退订;首轮立即执行,此后按注册表节拍
 /// (默认 10s,`apply_config` 直写原子量下一轮生效)。每轮经注册表
@@ -294,14 +294,14 @@ fn spawn_background_poll(
 
 /// 立即刷新(旧语义原样):恒返回 Ok——单来源失败保留旧值,错误不冒泡。
 /// 调用方须在 GPUI background executor 上执行(阻塞 HTTP)。
-#[allow(dead_code)] // 消费点 = M10.12 设置页/托盘刷新入口;本步由用例锁定恒 Ok 语义。
+#[allow(dead_code)] // 消费点 = 设置页/托盘刷新入口;本模块由用例锁定恒 Ok 语义。
 pub(crate) fn refresh_plan_balance() -> Result<Vec<PlanBalanceInfo>, AppError> {
     let new = poll_once_production(unix_now());
     apply_snapshot(new);
     Ok(current_snapshot())
 }
 
-/// 测试注入形态:与生产执行体同一条编排链,仅 resolve/fetch 参数化(D6)。
+/// 测试注入形态:与生产执行体同一条编排链,仅 resolve/fetch 参数化。
 #[cfg(test)]
 pub(crate) fn poll_once_executor_with(
     resolve: impl Fn(&'static dyn PlanSource) -> Option<(String, SecretBytes)>,
@@ -601,7 +601,7 @@ mod plan_balance_tests {
         assert_eq!(out[0].amount, outcome().amount);
     }
 
-    // ── emit / watch 判定(D10-3) ──
+    // ── emit / watch 判定 ──
 
     /// 首次发布(None → 快照)推送给订阅者。
     #[test]
@@ -662,7 +662,7 @@ mod plan_balance_tests {
         assert_eq!(current_snapshot(), vec![old]);
     }
 
-    /// watch channel 多消费者:一次推送所有订阅者各得最新快照(D10-3)。
+    /// watch channel 多消费者:一次推送所有订阅者各得最新快照。
     #[test]
     fn watch_channel_fans_out_to_multiple_subscribers() {
         reset_for_test();
@@ -720,7 +720,7 @@ mod plan_balance_tests {
         assert!(def.executor.is_some(), "planBalance 应由进程级执行体驱动");
     }
 
-    /// B64:订阅同时返回当前快照,注册与首推之间不丢值。
+    /// 订阅同时返回当前快照,注册与首推之间不丢值。
     #[test]
     fn subscribe_returns_the_current_snapshot_with_the_receiver() {
         reset_for_test();
@@ -855,7 +855,7 @@ mod plan_balance_tests {
     }
 }
 
-/// 生产启动链接线(C34):虚拟时钟下验证订阅/节拍/enabled 门控/Drop 退订。
+/// 生产启动链接线:虚拟时钟下验证订阅/节拍/enabled 门控/Drop 退订。
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod scheduling_tests {
     use std::sync::Arc;

@@ -197,7 +197,7 @@ fn ctrl_shift_c_copies_selection_and_feedback_expires_on_controlled_clock(cx: &m
     assert!(!terminal.read_with(&window, |view, _| view.copy_feedback.is_copied()));
 }
 
-/// D13-1 默认语义(待沉淀,按默认实现):无选区的 ctrl+shift+c
+/// 默认语义(待沉淀,按默认实现):无选区的 ctrl+shift+c
 /// 静默吞——剪贴板不动、PTY 零字节、不冒泡、无反馈。
 #[gpui::test]
 fn ctrl_shift_c_without_selection_is_swallowed_silently(cx: &mut TestAppContext) {
@@ -210,7 +210,7 @@ fn ctrl_shift_c_without_selection_is_swallowed_silently(cx: &mut TestAppContext)
         ..Default::default()
     };
     let propagate = press(&mut window, key("c", modifiers));
-    // D13-1:吞语义——stop_propagation 无负反馈(负反馈/透传中断的权衡
+    // 吞语义——stop_propagation 无负反馈(负反馈/透传中断的权衡
     // 与截止口径见待沉淀决策,改语义先过那条裁决)。
     assert!(!propagate, "复制键永不冒泡入应用族");
     assert_eq!(clipboard_text(&mut window).as_deref(), Some("sentinel"));

@@ -72,7 +72,7 @@ pub(crate) fn page_keys(page_id: &str) -> &'static [&'static str] {
     }
 }
 
-/// Agent 组页拥有的控件键:全局授权键 + 9 家接入键(键名单源在
+/// Agent 组页拥有的控件键:全局授权键 + 接入键(键名单源在
 /// `AgentHook`,此处只做页面归属映射)。
 static AGENT_PAGE_KEYS: [&str; 10] = [
     slterm_settings::AgentHook::GLOBAL_SETTINGS_KEY,

@@ -307,7 +307,7 @@ pub(crate) fn run_cli(command: Subcommands) -> i32 {
         // 同步诊断通道:注册 + 时长 + 投递逐段打印,
         // 不启动 GUI、不依赖运行中的实例。
         Subcommands::NotifyTest => return crate::platform::notifications::notify_test(),
-        // 卸载器入口(B69):不启动 GUI、不依赖运行中实例。
+        // 卸载器入口:不启动 GUI、不依赖运行中实例。
         Subcommands::SetupAi(options) => return run_setup_ai(options),
     };
     match outcome {
@@ -324,7 +324,7 @@ pub(crate) fn run_cli(command: Subcommands) -> i32 {
     }
 }
 
-/// 卸载器专用入口(B69):不启动 GUI、不依赖运行中实例。退出码
+/// 卸载器专用入口:不启动 GUI、不依赖运行中实例。退出码
 /// 0 = 全部清理成功(未安装的 agent 不算失败),1 = 任一失败,2 = 用法错误。
 fn run_setup_ai(options: SetupAiOptions) -> i32 {
     if !options.remove {

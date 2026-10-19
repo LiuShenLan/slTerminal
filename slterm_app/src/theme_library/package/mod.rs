@@ -3,7 +3,7 @@
 //! 冷路径同步操作,不落渲染回调;整包有界检查先于通用 ZIP 解析器分配
 //! 元数据(见 `envelope`),不解可信范围以外的字段。分发渠道不在此层
 //! (发布流程),这里只有 Manifest 版本化 + 校验 + 导出。
-//! 消费点 = M6.5 主题导入/导出 UI;M6.3 先落有界检查链路。
+//! 消费点 = 主题导入/导出 UI;先落有界检查链路。
 
 mod archive;
 mod envelope;
@@ -15,7 +15,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-#[allow(unused_imports)] // 生产消费点 = M6.5 导入/导出 UI;M6.3 用例已覆盖。
+#[allow(unused_imports)] // 生产消费点 = 导入/导出 UI;用例已覆盖。
 pub(crate) use archive::{CheckedPackage, export_package};
 
 /// 包文件上限(契约数值)。

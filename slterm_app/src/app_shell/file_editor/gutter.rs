@@ -1,6 +1,6 @@
 //! git gutter(行标):按行标记增/改/删。
 //!
-//! 数据源与文件树 git 快照同一子进程执行体(D07-1):`crate::git` 的
+//! 数据源与文件树 git 快照同一子进程执行体:`crate::git` 的
 //! `file_status` + `file_hunks`,每命令 `--no-optional-locks`。文件级状态是
 //! 零成本基线;hunk 可得时细化到首个变更行(设计稿改造节 3 的可选增强)。
 //!
@@ -257,7 +257,7 @@ mod gutter_tests {
         assert!(read_for_path(&plain).marks().is_empty(), "非仓库零标记");
     }
 
-    /// B9:无变更文件状态为 `None` → 直接空行标,不进入 hunk 分支。
+    /// 无变更文件状态为 `None` → 直接空行标,不进入 hunk 分支。
     #[test]
     fn unchanged_repository_file_produces_no_marks() {
         let directory = tempfile::tempdir().unwrap();
@@ -291,7 +291,7 @@ mod gutter_tests {
         assert!(marks_from_status(None, &[]).is_empty());
     }
 
-    /// B9:非仓库路径返回空行标且不 panic(缓存解析失败分支)。
+    /// 非仓库路径返回空行标且不 panic(缓存解析失败分支)。
     #[test]
     fn non_repository_path_returns_empty_marks() {
         let directory = tempfile::tempdir().unwrap();

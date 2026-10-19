@@ -19,9 +19,9 @@ use std::sync::Arc;
 pub(crate) mod math_run;
 pub(crate) mod parser;
 
-#[allow(unused_imports)] // 消费点 = 阅读器接线;本步由用例锁定语义。
+#[allow(unused_imports)] // 消费点 = 阅读器接线;本模块由用例锁定语义。
 pub(crate) use math_run::{MathRun, fit_math_run, measure_math};
-#[allow(unused_imports)] // 消费点 = 阅读器接线;本步由用例锁定语义。
+#[allow(unused_imports)] // 消费点 = 阅读器接线;本模块由用例锁定语义。
 pub(crate) use parser::parse_markdown;
 
 /// 片段携带的字重。解析器只会产出 `Bold`;完整刻度用于渲染层映射字重,

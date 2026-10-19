@@ -34,7 +34,7 @@ pub(super) enum ManagedSkillRemoval {
     Conflict,
 }
 
-/// 两家 AI CLI 的 skill 目录候选:codex → `<home>/.agents/skills`;claude →
+/// AI CLI 的 skill 目录候选:codex → `<home>/.agents/skills`;claude →
 /// `<claude 配置目录>/skills`(`CLAUDE_CONFIG_DIR` 可覆盖)。
 pub(super) fn runtime_skill_candidates() -> Vec<(&'static str, PathBuf)> {
     let mut targets = Vec::new();

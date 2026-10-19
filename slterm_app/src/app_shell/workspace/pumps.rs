@@ -99,7 +99,7 @@ impl SltermWorkspace {
         });
     }
 
-    /// AI hook 事件泵(M4.5,照上游 agents.rs 形态):管道服务线程写进程内
+    /// AI hook 事件泵(照上游 agents.rs 形态):管道服务线程写进程内
     /// mpsc,后台定时器每 75ms 唤醒一次,前台线程排空并与 UI 状态合并。
     /// 单批上限 64;满批说明下游有积压,退 1ms 让出渲染。
     ///
@@ -140,7 +140,7 @@ impl SltermWorkspace {
                 }
                 let Ok(()) = this.update(cx, |workspace, cx| {
                     // 严格 pane 路由 + 仲裁在宿主内完成;UI 消费(页签徽标/
-                    // attention)归工作区/窗口域,本步不产生视图态。
+                    // attention)归工作区/窗口域,本模块不产生视图态。
                     let focused = workspace.focused_pane();
                     let (_, accepted) = workspace.agent_hub.dispatch_lifecycle(events, focused);
                     // SessionEnd 关闭 managed agent、TurnDone
@@ -222,7 +222,7 @@ impl SltermWorkspace {
 
     /// 托盘 1 Hz 快照推送:语言与托盘开关取全局设置;
     /// 关闭态只在翻转时删图标(线程留驻),开启态每拍都投递挂载请求,
-    /// 让 `NIM_ADD` 失败(explorer 未就绪)借该节拍自愈(B54)。
+    /// 让 `NIM_ADD` 失败(explorer 未就绪)借该节拍自愈。
     pub(super) fn publish_tray_snapshot(&self, cx: &App) {
         let (language, enabled) = cx
             .try_global::<crate::app_shell::config::Settings>()

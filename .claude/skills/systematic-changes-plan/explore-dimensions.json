@@ -1,91 +1,113 @@
 {
-  "description": "代码仓探索维度定义。每个维度对应一个 Explore Agent，输出到 docs/ 目录。",
-  "outputDir": "docs/",
+  "description": "代码仓探索维度定义。每个维度对应一个 Explore Agent，输出到 temp/plans/<task>/review/ 目录。",
+  "outputDir": "temp/plans/",
   "dimensions": [
     {
-      "id": "01-frontend-architecture",
-      "title": "前端架构与组件设计",
-      "outputFile": "docs/01-frontend-architecture.md",
+      "id": "01-app-shell",
+      "title": "应用壳与工作区架构",
+      "outputFile": "review/01-app-shell.md",
       "focus": [
-        "组件层次结构是否合理、职责是否单一",
-        "面板系统的代码复用情况",
-        "IPC 层封装完整性（有无 invoke 泄露）",
-        "Zustand Store 设计（跨 Store 隐式依赖、状态冗余）",
-        "Dockview 布局系统的集成质量",
-        "快捷键系统的扩展性"
+        "SltermWorkspace 的 tab/pane 生命周期与状态权威",
+        "分屏树与布局快照/恢复的单一来源",
+        "GPUI 前台线程纪律与后台执行体边界",
+        "shell 组合层与子模块职责边界",
+        "窗口回放、静默启动与回窗路径"
       ],
-      "files": ["src/App.tsx", "src/main.tsx", "src/panels/", "src/ipc/", "src/stores/", "src/workspace/", "src/features/shortcuts/", "src/types/", "src/lib/", "src/theme/"]
+      "files": ["slterm_app/src/app_shell/", "slterm_app/src/lib.rs", "slterm_app/src/main.rs"]
     },
     {
-      "id": "02-backend-architecture",
-      "title": "后端架构与 Rust 代码",
-      "outputFile": "docs/02-backend-architecture.md",
+      "id": "02-terminal-core",
+      "title": "终端核心与 PTY",
+      "outputFile": "review/02-terminal-core.md",
       "focus": [
-        "PTY 模块职责划分、错误处理",
-        "ConPTY 自定义实现的健壮性",
-        "文件系统/Git/Notify 模块代码质量",
-        "共享状态设计的锁粒度和竞态条件",
-        "命令注册完整性和权限放行",
-        "错误类型体系的覆盖度"
+        "VT 解析、网格与回放的分块/EOF/静默源边界",
+        "ConPTY 捆绑、flags 三态与提取回退",
+        "DA1/DSR 接管与输入编码路径",
+        "PTY 线程生命周期、容量上限与句柄回收",
+        "选择、复制与渲染快照的单点语义"
       ],
-      "files": ["src-tauri/src/pty/", "src-tauri/src/fs/", "src-tauri/src/git/", "src-tauri/src/notify/", "src-tauri/src/state.rs", "src-tauri/src/error.rs", "src-tauri/src/lib.rs", "src-tauri/Cargo.toml"]
+      "files": ["slterm_terminal/src/", "slterm_terminal/tests/"]
     },
     {
-      "id": "03-code-quality",
-      "title": "代码质量与最佳实践",
-      "outputFile": "docs/03-code-quality.md",
+      "id": "03-core-contracts",
+      "title": "core 契约与设置模型",
+      "outputFile": "review/03-core-contracts.md",
       "focus": [
-        "TypeScript 类型安全（any/类型断言/副作用）",
-        "Rust 代码安全（unsafe/unwrap/expect/Clippy）",
-        "代码重复与魔法数字",
-        "注释与文档准确性",
-        "命名规范一致性（snake_case/camelCase 映射）",
-        "依赖版本（过期/风险依赖）"
+        "设置键注册表、段嵌套与写通道边界",
+        "主题目录、WCAG 校验与 BlurMode 值域",
+        "分屏几何、拖拽比例与导航纯函数",
+        "补全匹配引擎与来源合同",
+        "零生产依赖与类型锚点"
       ],
-      "files": ["src/", "src-tauri/src/", "package.json", "src-tauri/Cargo.toml"]
+      "files": ["slterm_settings/src/", "slterm_split/src/", "slterm_completions/src/"]
     },
     {
       "id": "04-test-system",
-      "title": "测试体系",
-      "outputFile": "docs/04-test-system.md",
+      "title": "测试体系与豁免",
+      "outputFile": "review/04-test-system.md",
       "focus": [
-        "L1-L4 各层级测试覆盖率和质量",
-        "测试辅助工具的复用情况",
-        "重复测试、脆弱测试、缺失边界测试",
-        "CI 配置与测试策略对齐",
-        "test-exemptions.md 的准确性"
+        "单元层、虚拟窗口层、脚本层与豁免层的职责边界",
+        "显式 lib_tests target 与串行纪律",
+        "测试隔离、负载裕度与防复发用例",
+        "豁免登记的根因与兜底层级是否仍成立",
+        "测试命名与脚本门禁自测"
       ],
-      "files": ["src/__tests__/", "src-tauri/src/**/mod.rs", "src-tauri/tests/", "test/terminal/", "e2e-tests/", ".github/workflows/ci.yml", ".claude/test-exemptions.md"]
+      "files": ["slterm_app/tests/", "slterm_terminal/tests/", "scripts/tests/", ".claude/docs/testing/"]
     },
     {
       "id": "05-performance-maintainability",
       "title": "性能与可维护性",
-      "outputFile": "docs/05-performance-maintainability.md",
+      "outputFile": "review/05-performance-maintainability.md",
       "focus": [
-        "前端渲染性能（Dockview 多实例、xterm.js WebGL、ResizeObserver）",
-        "后端 I/O 性能（PTY reader、文件监听、大目录处理）",
-        "内存管理（useXterm 生命周期、ring buffer、事件监听器泄漏）",
-        "构建配置优化空间",
-        "模块耦合度与循环依赖",
-        "10 条架构约束合规性"
+        "GPUI 前台阻塞与后台 I/O 边界",
+        "缓存 TTL、代次失效与内存上限",
+        "热路径分配、吞吐与渲染成本证据",
+        "模块耦合、单一执行体与重复实现",
+        "架构门禁与行数预算合规性"
       ],
-      "files": ["src/workspace/Workspace.tsx", "src/panels/terminal/", "src/panels/editor/", "src-tauri/src/pty/", "src-tauri/src/notify/", "src-tauri/src/state.rs", "vite.config.ts", "tauri.conf.json"]
+      "files": ["slterm_app/src/", "slterm_terminal/src/", "architecture/", "scripts/check_architecture.py"]
     },
     {
       "id": "06-contract-consistency",
-      "title": "跨边界契约一致性",
-      "outputFile": "docs/06-contract-consistency.md",
+      "title": "跨模块契约一致性",
+      "outputFile": "review/06-contract-consistency.md",
       "focus": [
-        "Tauri 命令签名双边对照（Rust 必填参数 vs 前端 invoke payload，缺一即运行时 reject）",
-        "DTO 字段 snake_case↔camelCase 双边对应（src/types/ ↔ Rust serde）",
-        "IPC wrapper 调用点全量（含 App.tsx 清理钩子等边缘调用点）",
-        "E2E helpers 与生产代码的模式一致性（时序/参数复制同一 bug）",
-        "Channel/Event payload 结构与前端消费端一致性"
+        "Runtime API 信封、schema 与 describe 一致性",
+        "hook 协议、命名管道载荷与安装器形态",
+        "设置键、i18n 键集与主题文档的构建期合同",
+        "session schema 的布局转换对",
+        "跨 crate 类型锚点与错误信封"
       ],
-      "files": ["src/ipc/", "src/types/", "src-tauri/src/lib.rs", "src-tauri/src/pty/spawn.rs", "src-tauri/src/fs/", "src-tauri/src/notify/", "src-tauri/src/git/", "e2e-tests/helpers.ts"]
+      "files": ["slterm_app/src/runtime_api.rs", "slterm_app/src/ai_hook.rs", "slterm_settings/src/keys.rs", "assets/runtime-api-v1.schema.json"]
+    },
+    {
+      "id": "07-security",
+      "title": "安全与凭据边界",
+      "outputFile": "review/07-security.md",
+      "focus": [
+        "凭据门面、SecretBytes 借出白名单与日志边界",
+        "审计事件字段与旁路写门禁",
+        "加密备份类别、敏感键双闸与恢复序",
+        "沙箱路径校验与 agent 目录放行域",
+        "hook 审查门与安装归属指纹"
+      ],
+      "files": ["slterm_app/src/secrets.rs", "slterm_app/src/audit.rs", "slterm_app/src/encrypted_backup/", "slterm_app/src/ai_hook/local/"]
+    },
+    {
+      "id": "08-release",
+      "title": "发布与打包",
+      "outputFile": "review/08-release.md",
+      "focus": [
+        "发布链单入口、共享构建与 feature 图",
+        "包内清单合同、新鲜度与体积预算",
+        "安装器 AppId/GUID、合规落点与产物命名",
+        "发布核验清单与首发证据",
+        "更新检查/下载与安装 handoff"
+      ],
+      "files": ["scripts/", ".claude/docs/release/", "slterm_app/src/update_check.rs", "slterm_app/src/update_download/"]
     }
   ],
-  "summaryOutput": "docs/00-summary.md",
-  "checklistOutput": "docs/refactoring-checklist.md",
-  "note": "修改此文件可调整探索维度、输出路径和 Agent 关注点。id 和 outputFile 需保持一致编号。"
+  "summaryOutput": "review/00-summary.md",
+  "checklistOutput": "checklist.md",
+  "note": "修改此文件可调整探索维度、输出路径和 Agent 关注点。所有产物写入 temp/plans/<task>/，不进入 git。"
 }

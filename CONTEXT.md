@@ -32,7 +32,7 @@ _Avoid_: 布局树
 最左侧常驻窄条，容纳侧栏视图按钮与设置入口。
 
 **侧栏视图**（Side View）：
-活动栏按钮对应的可开关内容视图，封闭集 `SideViewId`（导航树 / 文件浏览器 / Commit / Agent 全局文件）。未知 id 恢复时静默丢弃。
+活动栏按钮对应的可开关内容视图，封闭集 `SideViewId`。未知 id 恢复时静默丢弃。
 
 **双槽**（Top Zone / Bottom Zone）：
 侧栏内容的上下两个半区；同一半区最多一个打开的视图，展示由状态纯推导。
@@ -55,7 +55,7 @@ GPUI 中的终端呈现实体：接收 PTY 输出、驱动网格渲染、处理�
 Win10（build < 21376）下嵌入并提取的新版 `conpty.dll` + `OpenConsole.exe`；Win11 走系统 ConPTY。提取失败静默回退系统路径。
 
 **DA1 / DSR 接管**：
-终端核心对设备属性查询（DA1）与光标位置查询（DSR）的按需代答/剥离策略；统一身份 `?64;22c`，禁止盲注。详见 ADR-0022。
+终端核心对设备属性查询（DA1）与光标位置查询（DSR）的按需代答/剥离策略；统一身份 `?64;22c`，禁止盲注。
 
 **滚动回看**（Scrollback）：
 终端历史行缓冲；容量是设置键与契约数值，默认值见代码。
@@ -69,10 +69,10 @@ Win10（build < 21376）下嵌入并提取的新版 `conpty.dll` + `OpenConsole.
 统一配置入口的标签页，左侧导航 + 右侧配置页；配置页经注册表分派。新增配置页 = 组件 + 注册一条。
 
 **设置段**（Settings Segment）：
-`settings.json` 的语义分组（appearance/scrolling/agentHooks/…）；「键 → 段」映射单源在 `slterm_settings::keys`，未知键原位保留。
+`settings.json` 的语义分组；「键 → 段」映射单源在 `slterm_settings::keys`，未知键原位保留。
 
 **设置写通道**（settings_store）：
-设置落盘的唯一硬机制：白名单校验、段级浅合并、保存锁、原子写、`.bak` 与损坏三态。写核心私有，所有写入经审计包装。
+设置落盘的唯一硬机制：白名单校验、段级浅合并、保存锁、原子写、`.bak` 与损坏处理。写核心私有，所有写入经审计包装。
 
 **前端/后端消费型配置**：
 消费侧在 UI 的配置走通用段写；消费侧在后端的配置走域专用命令（校验 + 内存态 + 落盘一体）。禁止第二写通道。
@@ -81,7 +81,7 @@ Win10（build < 21376）下嵌入并提取的新版 `conpty.dll` + `OpenConsole.
 UI 颜色的语义命名槽位。组件只引用 token，禁止硬编码颜色；仅暗色。
 
 **内置主题**（ThemeName）：
-八套暗色主题，`Linear` 为默认；主题色经 WCAG 语义槽校验后才可入目录。
+内置暗色主题目录，`Linear` 为默认；主题色经 WCAG 语义槽校验后才可入目录。
 
 **明度阶梯**（Lightness Ramp）：
 UI 背景色的离散档位；层级靠相邻档差表达，不叠加阴影/边框。
@@ -90,7 +90,7 @@ UI 背景色的离散档位；层级靠相邻档差表达，不叠加阴影/边�
 暗色界面分隔线的唯一形态——半透明 1px 线，禁止实色粗边框。
 
 **窗口材质**（BlurMode）：
-五档枚举 `None/Mica/MicaAlt/Aero/Acrylic`，默认 `None`；`opacity` 为标量。WCA/DWMSBT 通道互斥，按 Windows build 门控。
+材质档位枚举 `None/Mica/MicaAlt/Aero/Acrylic`，默认 `None`；`opacity` 为标量。WCA/DWMSBT 通道互斥，按 Windows build 门控。
 
 **i18n 语言偏好**（LanguagePref）：
 `System/English/Chinese`；System 按系统 locale 协商。翻译键集是构建期硬合同。
@@ -98,10 +98,10 @@ UI 背景色的离散档位；层级靠相邻档差表达，不叠加阴影/边�
 ### Agent 集成
 
 **编码 CLI / AI CLI**：
-以命令行运行的 AI 编码代理（claude、codex、gemini 等）。slTerminal 面向所有 AI CLI 调优，内置 27 家 `AgentKind`。
+以命令行运行的 AI 编码代理（claude、codex、gemini 等）。slTerminal 面向所有 AI CLI 调优，`AgentKind` 是内置身份的封闭枚举。
 
 **AgentKind**：
-27 家 AI CLI 的封闭身份枚举；承载 slug、显示名、启动/恢复/分叉命令与屏幕规则匹配。持久化 `source` 宽松落盘，消费时经 `AgentKind::parse` 严格归一。
+AI CLI 的封闭身份枚举；承载 slug、显示名、启动/恢复/分叉命令与屏幕规则匹配。持久化 `source` 宽松落盘，消费时经 `AgentKind::parse` 严格归一。
 
 **Agent 状态**（AgentStatus）：
 pane 的 agent 语义状态：Idle / Working / Blocked / Done / Unknown；来源分为 Hook / Screen / Process / Unknown。`Unknown` 表示尚无权威判定（普通 shell 或未识别）。
@@ -110,7 +110,7 @@ pane 的 agent 语义状态：Idle / Working / Blocked / Done / Unknown；来源
 agent 事件归属与 pane 状态投影的宿主：消费 hook 事件与屏幕看门狗结果，维护 AgentActivity/AnswerInbox。
 
 **AI hook 事件**（AiHookEvent）：
-归一化的生命周期事实：SessionStart / PromptSubmit / ToolComplete / TurnDone / NeedsAttention / SessionEnd，附回合结果与能力位。
+归一化的生命周期事实（会话开始、提示提交、工具完成、回合结束、需要关注、会话结束），附回合结果与能力位。
 
 **hook 小进程**（`slterm-hook`）：
 每个 AI 回合事件调用一次的独立小进程；经命名管道把原始载荷转发给宿主后退出。必须 exit 0、快速、隐形。
@@ -185,7 +185,7 @@ Runtime API 的宿主侧枢纽：接收写命令、派发到工作区执行、�
 应用级任务单元；元数据注册于 `background_tasks`，执行体在后端或订阅方，配置落 `backgroundTasks.{taskId}` 段。
 
 **TaskSchedule**：
-任务触发形态三态——`Interval`（周期）/ `Once`（启动一次性，`interval_sec` 为启动延迟）/ `OnDemand`（事件驱动）。共用订阅生命周期与失败策略。
+任务触发形态——`Interval`（周期）/ `Once`（启动一次性，`interval_sec` 为启动延迟）/ `OnDemand`（事件驱动）。共用订阅生命周期与失败策略。
 
 **扫描执行体**：
 历史会话扫描的唯一执行路径；手动刷新与定时刷新共用。
@@ -205,7 +205,7 @@ Runtime API 的宿主侧枢纽：接收写命令、派发到工作区执行、�
 `tracing` target `audit` 的安全事件通道；事件字段只含 operation/path/source/result 与 expected/actual 指纹，禁插值凭据值与文件内容。
 
 **加密备份**：
-口令保护的本地备份，格式 `TRMBK001 | salt | nonce | ciphertext`（AES-256-GCM，魔数作 AAD；Argon2id 派生）。类别六类，敏感键导出剥除、导入复验。
+口令保护的本地备份，格式 `TRMBK001 | salt | nonce | ciphertext`（AES-256-GCM，魔数作 AAD；Argon2id 派生）。类别与敏感键表以代码为准；敏感键导出剥除、导入复验。
 
 **恢复点**（RestorePoint）：
 一次备份/恢复操作的可撤回句柄；会话内撤回，跨重启清单归设置页安全分区。
@@ -219,40 +219,19 @@ Runtime API 的宿主侧枢纽：接收写命令、派发到工作区执行、�
 前台 = UI 线程（渲染与状态更新，禁阻塞）；后台 = background executor 或专用线程（阻塞 I/O、网络、子进程）。
 
 **AppError**：
-通用错误信封四变体 `Io`/`Pty`/`Gpui`/`Unknown`；`Unknown` 承载领域内部失败，消息用户可见且禁带凭据。
+通用错误信封；变体与转换以类型定义为准。领域不得另立 envelope，错误消息用户可见且禁带凭据。
 
 **会话元数据索引**（terminal_registry）：
 模块级单例，按 `PaneId` 提供会话元数据查询；Workspace 是实体唯一属主，索引不裁决生命周期。
 
 **原子写**：
-持久化通用纪律——临时文件 + rename；损坏三态；设置写经审计包装。
+持久化通用纪律——临时文件 + rename；损坏状态处理；设置写经审计包装。
 
-**门禁三件套**：
-行数棘轮（`architecture/file-budgets.txt`）、依赖方向（`architecture/dependencies.toml`）、禁名回流（`scripts/check_brand_regress.py`）；git hooks 常挂。
+**门禁**：
+行数棘轮（`architecture/file-budgets.txt`）、依赖方向（`architecture/dependencies.toml`）、禁名回流（`scripts/check_brand_regress.py`）、文档策略（`scripts/check_doc_policy.py`）；git hooks 常挂。
 
-**因果 note**（architecture/notes）：
-决策成因档案（九段结构、Supersedes 链、Revisit when）；与 adr 分工：adr 记当前规则，note 记成因与废弃路径。
+**决策记录**：
+当前有效决策写入目标路径最近的 `CLAUDE.md` 或 `.claude/docs/` 对应子域；不集中维护 ADR 或因果档案，完整历史从 git log 查。
 
-**ADR**：
-`.claude/adr.md` 中当前生效决策的当前形态；条目原位收敛，沿革行记修订日期与要点。
-
-**豁免登记**（test-exemptions）：
-不可自动化测试面的单表真值源；未登记豁免即硬约束违规。
-
-## 历史改名
-
-读旧 commit 或旧栈代码时的消歧表：
-
-| 旧标识符 / 概念 | 现行形态 | 说明 |
-|---|---|---|
-| 项目 / 操作页面 | 已删除 | 单窗口模型改为工作区 + 标签页 + 窗格 |
-| Dockview 面板 / panelRegistry | `WorkspaceTab` 封闭枚举 | 面板类型白名单改为 Rust 枚举 + 单一注册点 |
-| 前端会话 `SessionInfo` / Zustand store | 已删除 | 单进程内状态直持；会话元数据经 `terminal_registry` |
-| IPC 层 / `invoke` / Tauri 命令 | 已删除 | 单进程直接调用；跨进程只剩 Runtime API 与 hook 管道 |
-| xterm.js 终端 | `slterm_terminal` + `TerminalView` | VT/网格/PTY 归 core，呈现归 GPUI |
-| CodeMirror 编辑器 | `file_editor` | 自绘编辑内核 |
-| `SideViewRegistry` / `panelRegistry` | `SideViewId` 封闭枚举 | 注册表改为封闭集 + 单点分派 |
-| `plan_balance` emit + 前端订阅 | 模块级 watch channel | 多消费者读最新快照 |
-| `hook-event` / `onHookEvent` | `AiHookEvent` / agent 事件 | 按 agent 域泛化 |
-| `claude_history_*` / `claudeHistory` | `AiSession` / 历史会话扫描 | 泛化为 CLI 无关 |
-| `claudeSession` / `setClaudeSession` | `AgentKind` + pane 会话归属 | 会话模型泛化 |
+**豁免登记**：
+`.claude/docs/testing/exemptions.md` 是不可自动化测试面的单表真值源；未登记豁免即硬约束违规。

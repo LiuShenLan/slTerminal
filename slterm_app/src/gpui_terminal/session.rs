@@ -53,9 +53,9 @@ pub struct TerminalSession {
     pub notifier: Notifier,
     pub(super) native_prompt: super::event_mailbox::NativePromptState,
     /// PTY 直系 shell PID;关闭确认的 `busy_child(shell_pid)` 判据归 PTY 域。
-    #[allow(dead_code)] // M3 仅观测;关闭确认消费点归工作区。
+    #[allow(dead_code)] // 仅观测;关闭确认消费点归工作区。
     pub shell_pid: u32,
-    /// EventLoop 句柄(M2 裁决:`spawn` 返回 must_use 句柄,Drop 兜底发
+    /// EventLoop 句柄(裁决:`spawn` 返回 must_use 句柄,Drop 兜底发
     /// Shutdown + join)。会话必须持证:句柄随会话 Drop,后台线程才跟 pane
     /// 生命周期走。`None` 仅存在于 test_session(无真 PTY)。
     _event_loop: Option<EventLoopHandle<tty::Pty, EventProxy>>,
@@ -100,7 +100,7 @@ pub(crate) fn test_session() -> (
 ///
 /// `explicit_command`:`-e` 显式命令通道——裸名经 core
 /// `resolve_explicit_command` PATH 路径化(含 PATHEXT 补全),并在
-/// `Options` 置位跳过三家白名单(SEC-01 豁免论证见该字段);settings 键
+/// `Options` 置位跳过三家白名单(豁免论证见该字段);settings 键
 /// 来源(设置键)必须传 `false`。解析失败直接 Err(「PATH 中找不到
 /// 命令」),由调用方并入 spawn 错误通道呈现。
 pub(super) fn local_options(
@@ -221,7 +221,7 @@ mod local_options_tests {
     }
 
     /// 非显式通道(settings/探测链来源):program 原样保留、不路径化,
-    /// 标记不置位——白名单深检留给 core `tty::new`(SEC-01)。
+    /// 标记不置位——白名单深检留给 core `tty::new`。
     #[test]
     fn non_explicit_keeps_program_verbatim() {
         let options = local_options(

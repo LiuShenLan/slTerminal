@@ -22,7 +22,7 @@ pub(crate) mod notifications;
 // 同一份实现,不引入应用壳)。
 pub(crate) mod process;
 // 有界可取消子进程输出:Git 发现的 3s/1MB 预算原语。
-#[allow(dead_code)] // 消费点 = completion::metadata 的 Git 读取(M9.1 引擎已接,呈现归 M9.5)。
+#[allow(dead_code)] // 消费点 = completion::metadata 的 Git 读取（引擎已接，呈现归 UI）。
 pub(crate) mod process_output;
 pub(crate) mod process_snapshot;
 pub(crate) mod startup;

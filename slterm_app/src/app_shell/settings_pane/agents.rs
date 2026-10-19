@@ -6,7 +6,7 @@
 //! - 轨二(配置编辑):数据源 = `integrations::inspect()` 的 installed/
 //!   needs_repair/helper_missing 三态与 config_path;编辑器只编辑用户/第三方
 //!   handler,slterm marker 认领组只读展示,保存时由 `HooksDocument` 原样保留。
-//!   编辑面默认结构化表单(五型字段),原始 JSON 保留为高级模式;两者共用
+//!   编辑面默认结构化表单(事件类型字段),原始 JSON 保留为高级模式;两者共用
 //!   同一 `HooksDocument::save_editable` 保存通道。
 //!
 //! 文件 I/O(inspect / 文档加载 / 保存)与既有 settings 写通道一样在本页
@@ -70,7 +70,7 @@ impl HooksTarget {
     }
 
     /// 安装权威应用入口(偏好已由设置页写通道落盘)。
-    /// C5:confirmed=true 时 SEC-12 审查门恒放行(用户已确认原文)。
+    /// confirmed=true 时审查门恒放行(用户已确认原文)。
     pub(super) fn apply_with_confirmation(
         &self,
         agent: AgentHook,
@@ -103,7 +103,7 @@ impl HooksTarget {
         }
     }
 
-    /// C5:待确认的 statusLine 原文(无命中 → None)。
+    /// 待确认的 statusLine 原文(无命中 → None)。
     pub(super) fn statusline_confirmation(&self, agent: AgentHook) -> Option<String> {
         match self {
             Self::Default => integrations::statusline_confirmation(agent),
@@ -139,7 +139,7 @@ pub(super) struct AgentSettingsState {
     pub(super) loading: bool,
     pub(super) sequence: u64,
     pub(super) feedback: Option<(AgentHook, Result<bool, String>)>,
-    /// C5:SEC-12 命中的 statusLine 原文;有值时行内出现「确认并重试」。
+    /// 命中的 statusLine 原文;有值时行内出现「确认并重试」。
     pub(super) suspicious_statusline: Option<String>,
     pub(super) document: Option<HooksDocument>,
     pub(super) document_error: Option<String>,
@@ -320,7 +320,7 @@ impl SettingsPane {
             return;
         }
         self.agents.feedback = None;
-        // A2:偏好写盘与安装权威应用同在一个后台任务内串行完成;前台先清
+        // 偏好写盘与安装权威应用同在一个后台任务内串行完成;前台先清
         // 反馈,结果回包后刷新行。
         self.enqueue_persist(
             super::persistence::PersistJob::AgentHook {
@@ -335,7 +335,7 @@ impl SettingsPane {
         let _ = window;
     }
 
-    /// C5:用户确认 SEC-12 原文后重试(审查门恒放行)。
+    /// 用户确认原文后重试(审查门恒放行)。
     fn set_agent_enabled_confirmed(
         &mut self,
         agent: AgentHook,
@@ -357,7 +357,7 @@ impl SettingsPane {
         let _ = window;
     }
 
-    /// 轨二提交(JSON 高级模式):编辑文本 → SEC-05 + marker 边界 → 原子写 → 重读。
+    /// 轨二提交(JSON 高级模式):编辑文本 → + marker 边界 → 原子写 → 重读。
     fn save_hooks_editor(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
         let Some(document) = self.agents.document.clone() else {
             return;
@@ -685,7 +685,7 @@ impl SettingsPane {
                     .child(SharedString::from(note)),
             );
         }
-        // C5:SEC-12 命中的原命令必须原文可见,并由用户显式确认后重试。
+        // 命中的原命令必须原文可见,并由用户显式确认后重试。
         if agent == AgentHook::Claude
             && let Some(suspicious) = self.agents.suspicious_statusline.as_ref()
         {
@@ -1232,7 +1232,7 @@ fn build_event_select(
     Ok(cx.new(|cx| SelectState::new(labels, Some(IndexPath::default().row(selected)), window, cx)))
 }
 
-/// 类型下拉:五型标签本地化,选中索引与 `HookHandlerType::ALL` 同序。
+/// 类型下拉:事件类型标签本地化,选中索引与 `HookHandlerType::ALL` 同序。
 fn build_type_select(
     kind: HookHandlerType,
     language: UiLanguage,
@@ -1870,12 +1870,12 @@ impl SettingsPane {
         self.agents.rows = Some(self.hooks_target.inspect());
     }
 
-    /// C5:待确认的 statusLine 原文(设置页确认重试用例)。
+    /// 待确认的 statusLine 原文(设置页确认重试用例)。
     pub(crate) fn hooks_suspicious_statusline_for_test(&self) -> Option<&String> {
         self.agents.suspicious_statusline.as_ref()
     }
 
-    /// C5:确认后重试(恒放行 SEC-12 审查门)。
+    /// 确认后重试(恒放行审查门)。
     pub(crate) fn set_agent_enabled_confirmed_for_test(
         &mut self,
         agent: AgentHook,

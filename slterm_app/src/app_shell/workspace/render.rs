@@ -34,7 +34,7 @@ pub(super) fn to_split_rect(bounds: &Bounds<Pixels>) -> slterm_split::Rect {
 }
 
 impl SltermWorkspace {
-    /// Terminal tab 的内容区:zoom 或单叶 → 聚焦 pane 满卡直渲(M3 路径
+    /// Terminal tab 的内容区:zoom 或单叶 → 聚焦 pane 满卡直渲(路径
     /// 保留为特例);否则按分屏树递归铺陈。
     pub(super) fn render_terminal_tab(
         &self,

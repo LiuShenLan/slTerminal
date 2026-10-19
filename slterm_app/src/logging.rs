@@ -1,7 +1,7 @@
 //! 日志:stdout + 按需文件双写(照上游 logging.rs 裁剪,legacy 壳臂删除:
 //! message bar 事件汇、winit 代理随旧壳消亡)。
 //!
-//! 主程序在启动链中恰好调用一次 [`initialize`]。console 子系统(D04-1)下
+//! 主程序在启动链中恰好调用一次 [`initialize`]。console 子系统下
 //! 从 shell 启动时 stdout 有效;双击启动无控制台,写失败静默(诊断落日志文件)。
 
 use std::fs::{File, OpenOptions};
@@ -27,7 +27,7 @@ const DEBUG_LOG_ENV: &str = "SLTERM_DEBUG_LOG";
 /// 常驻放行 target:自家两 crate + 安全审计通道。gpui/依赖树的 Error/Warn 在
 /// max_level=Trace 时放行(见 is_allowed_target),常态不刷屏。
 ///
-/// `audit` = SEC-12/13/17 唯一通道(tracing target 经 log 桥接
+/// `audit` = 唯一通道(tracing target 经 log 桥接
 /// 落到本 logger);取证面不随常态档位静默。
 const ALLOWED_TARGETS: &[&str] = &["slterm_terminal", "slterm", "audit"];
 
@@ -72,7 +72,7 @@ fn extra_log_targets() -> &'static [String] {
 }
 
 /// 初始化 logger。verbosity 旗标(-v/-q 抬降档位)归 CLI 重建后接线;
-/// M3 恒定 Warn——无旗标时可调面为空,静默优先于刷屏。
+/// 恒定 Warn——无旗标时可调面为空,静默优先于刷屏。
 pub fn initialize() -> Result<Option<PathBuf>, log::SetLoggerError> {
     log::set_max_level(LevelFilter::Warn);
 

@@ -10,13 +10,13 @@ use std::fmt;
 pub enum AppError {
     /// 平台/文件 I/O 失败;启动参数非法也走此包(`ErrorKind::InvalidInput`)。
     Io(std::io::Error),
-    /// 终端会话(PTY)启动失败。M3 载体即 io,独立变体让调用点语义可区分
+    /// 终端会话(PTY)启动失败。载体即 io,独立变体让调用点语义可区分
     /// (spawn 失败 vs 普通文件读写失败的报告路径不同)。
     Pty(std::io::Error),
     /// GPUI 开窗/消息循环失败。
     Gpui(anyhow::Error),
     /// 领域内部失败(plan_balance 查询/解析等)。消息为用户可见语义,
-    /// 禁止携带凭据值(SEC-18 红线)。
+    /// 禁止携带凭据值(红线)。
     Unknown(String),
 }
 

@@ -5,13 +5,13 @@
 ```
 {baseDir}/review/
 ├── ADJUDICATION.md           # 阶段 2：跨方向矛盾裁决
-├── D1/                        # 方向 1 的 review 文件
+├── direction-1/                        # 方向 1 的 review 文件
 │   ├── {source-file-1}-review.md
 │   └── {source-file-2}-review.md
-├── D2/                        # 方向 2
+├── direction-2/                        # 方向 2
 ├── verify/                    # 阶段 3：逐条核实
-│   ├── D1-verify.md
-│   └── D2-verify.md
+│   ├── direction-1-verify.md
+│   └── direction-2-verify.md
 └── (后续多轮目录按需创建)
 ```
 

@@ -51,14 +51,14 @@ fn settings_path() -> Option<PathBuf> {
     Some(home_dir()?.join(".claude").join("settings.json"))
 }
 
-/// 显式路径形态:生产 resolve 与 L1 tempdir 用例共用同一条读取链。
+/// 显式路径形态:生产 resolve 与单元层 tempdir 用例共用同一条读取链。
 fn resolve_settings_path(path: &Path) -> Option<(String, SecretBytes)> {
     // 文件内容含 token:整份缓冲 Zeroizing,解析出句柄后随作用域擦除。
     let content = Zeroizing::new(std::fs::read_to_string(path).ok()?);
     resolve_env(&content)
 }
 
-/// env 段提取(纯函数,L1 全测):JSON 损坏/BASE_URL 缺失/token 缺失或为空 → None。
+/// env 段提取(纯函数,单元层全测):JSON 损坏/BASE_URL 缺失/token 缺失或为空 → None。
 fn resolve_env(content: &str) -> Option<(String, SecretBytes)> {
     let root: serde_json::Value = match serde_json::from_str(content) {
         Ok(value) => value,
@@ -80,7 +80,7 @@ fn resolve_env(content: &str) -> Option<(String, SecretBytes)> {
 
 /// 测试专用路径覆盖:进程级静态 + Drop 还原,依赖 `--test-threads=1` 串行纪律。
 ///
-/// B66:同时开放给 `gpui-test-support` 形态的 UI 用例(共享守卫),e2e 集成
+/// 同时开放给 `gpui-test-support` 形态的 UI 用例(共享守卫),e2e 集成
 /// 测试仍走 `USERPROFILE` 注入。
 #[cfg(any(test, feature = "gpui-test-support"))]
 pub(crate) mod test_support {

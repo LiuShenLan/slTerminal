@@ -5,8 +5,8 @@
 //! 列表与引用保持完整。预览上限 512KB、单块上限 32KB(契约值),超限块退
 //! 化为字面量预览。
 //!
-//! M8.3 消费:预览虚拟化与大纲侧栏;图片 URL 重写在 M8.3 预览装配时接入
-//! (`prepare` 的 `base` 参数保留接缝,本步不做改写)。
+//! 消费:预览虚拟化与大纲侧栏;图片 URL 重写在预览装配时接入
+//! (`prepare` 的 `base` 参数保留接缝,本模块不做改写)。
 
 use ::markdown::mdast::Node;
 use std::collections::{HashMap, HashSet};
@@ -291,7 +291,7 @@ impl Outline {
     }
 
     /// Preview code actions must stay inside the block, not appended definitions.
-    #[allow(dead_code)] // 消费点 = M8.5 代码块语言切换(块内源码 span 定位)。
+    #[allow(dead_code)] // 消费点 = 代码块语言切换(块内源码 span 定位)。
     pub(super) fn source_span(
         &self,
         block: usize,
@@ -302,7 +302,7 @@ impl Outline {
         Some((start, end))
     }
 
-    #[allow(dead_code)] // 消费点 = M8.5 结构化命令的块级回写。
+    #[allow(dead_code)] // 消费点 = 结构化命令的块级回写。
     pub(super) fn replace_block(&mut self, block: usize, next: String) {
         if let Some(source) = self.blocks.get_mut(block) {
             *source = next;

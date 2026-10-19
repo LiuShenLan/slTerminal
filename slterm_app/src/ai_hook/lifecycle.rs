@@ -3,7 +3,7 @@
 //! hook 事件是事实;屏幕匹配是有限权威的观察。命令所有权止于 shell 边界,
 //! 绝不因为输出安静下来而结束。
 //!
-//! 上游的 remote_process 归属维随 SSH 语义整支裁剪(D03-4 默认裁定)。
+//! 上游的 remote_process 归属维随 SSH 语义整支裁剪(默认裁定)。
 
 use crate::ai_agents::{AgentStatus, AgentStatusSource, Detection};
 

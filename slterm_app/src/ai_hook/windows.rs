@@ -100,7 +100,7 @@ fn spawn_pipe_server(sink: impl Fn(AiHookEvent) -> bool + Send + 'static) -> Pip
     };
     // 为 opencode 插件导出 slterm-hook.exe 的路径(尽力而为:helper 找不到时,
     // 插件就像在 slTerminal 之外一样 no-op)。正斜杠:这条路径会被插值进插件
-    // 内 Bun 的 `$` shell,与安装器写配置的 `helper_command` 形态(M4.3)一致。
+    // 内 Bun 的 `$` shell,与安装器写配置的 `helper_command` 形态一致。
     if let Some(helper) = helper_path() {
         let p = helper.display().to_string().replace('\\', "/");
         unsafe {

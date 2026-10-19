@@ -160,7 +160,7 @@ pub struct StreamProcessor {
     /// `EventedPty::strip_dsr_queries` 注入；Win10 家族 = true——键事件
     /// 输入下 CPR 应答即 F3 毒键；Win11+ = false——DSR 透传交 Term 实答）。
     strip_dsr: bool,
-    /// 启动窗口：首个非全剥块通过后置位（BE-13 跨边界残留窗口保持——
+    /// 启动窗口：首个非全剥块通过后置位（跨边界残留窗口保持——
     /// 整块剥绝不置位，窗口对迟到的启动序列保持开放）。
     startup_drained: bool,
     /// 跨块查询前缀残片扣留（≤3 字节：ESC / ESC[ / ESC[0 / ESC[6）——
@@ -215,7 +215,7 @@ impl StreamProcessor {
         }
 
         // DA1 全量接管:每次查询都代答(查询已不透传 Term,core 是唯一
-        // 应答方;应答身份与 priming/Term 自答统一 `?64;22c`,D02-1)。
+        // 应答方;应答身份与 priming/Term 自答统一 `?64;22c`)。
         // 实测语义(m2-4 集成基线):bundled 臂子进程可读两份同身份应答
         // (priming 一份+代答一份,VT 消费方容忍重复 DA1);in-box conhost
         // 在宿主层自答 `?61;…`(不经 core、不可控),身份判别力仅 bundled 臂。
@@ -322,7 +322,7 @@ impl StreamProcessor {
 
 // ─── DA1/DSR 接管纯函数族（旧栈 `pty/reader.rs` 语义资产并入）───
 //
-// 应答身份唯一性（D02-1，三处同身份 `\x1b[?64;22c`）：
+// 应答身份唯一性(三处同身份 `\x1b[?64;22c`）：
 // - priming 预写（sideloaded 启动握手，tty/windows/conpty.rs）；
 // - Term 自答（`Term::identify_terminal`，reader 漏网时的兜底层，
 //   `bringup_da1_pending` 一次性吞重答——正常态 DA1 在此族剥离，不可达）；
@@ -518,7 +518,7 @@ fn split_trailing_query_prefix(data: Vec<u8>) -> (Vec<u8>, Vec<u8>) {
 ///
 /// - 启动窗口内（startup_drained=false）：`strip_conpty_startup` 剥离
 ///   ConPTY 启动序列 + DA1 + DSR 查询；全部剥离返回 None——调用方跳过
-///   本轮且不置 drained（BE-13 跨边界残留窗口保持开放）。窗口内行为与
+///   本轮且不置 drained（跨边界残留窗口保持开放）。窗口内行为与
 ///   门控无关。
 /// - 窗口外（drained=true）：剥 DA1 查询；`strip_dsr=true`（Win10 家族
 ///   门控）时一并剥 DSR 查询（ESC[6n）——键事件输入下 CPR 应答即 F3
@@ -1116,7 +1116,7 @@ where
     }
 }
 
-/// PTY 事件循环线程句柄——防泄漏包装（BE-01 名额归还链路）。
+/// PTY 事件循环线程句柄——防泄漏包装（名额归还链路）。
 ///
 /// 裸 `JoinHandle` drop = detach：线程结束后返回值 `(EventLoop, State)`
 /// 永存于线程结构，内含 Pty 永不析构——会话名额与 OS 句柄一并泄漏。
@@ -1780,7 +1780,7 @@ mod tests {
 
     #[test]
     fn output_strip_across_buffer_boundary() {
-        // BE-13：跨缓冲区边界的启动序列剥离——第一轮全为启动序列（None）
+        // 跨缓冲区边界的启动序列剥离——第一轮全为启动序列（None）
         // 不置 drained；第二轮仍有启动序列 + 真实输出，应继续剥离。
         let r1 = apply_output_strip(false, false, b"\x1b]0;pwsh\x07");
         assert_eq!(r1, None);
@@ -1790,7 +1790,7 @@ mod tests {
 
     #[test]
     fn output_strip_multi_round_all_startup_then_real() {
-        // BE-13：多轮纯启动序列后出现真实输出——drained 仅在 Some 时才置。
+        // 多轮纯启动序列后出现真实输出——drained 仅在 Some 时才置。
         assert_eq!(apply_output_strip(false, false, b"\x1b]0;pwsh\x07"), None);
         assert_eq!(apply_output_strip(false, false, b"\x1b[2J"), None);
         let r3 = apply_output_strip(false, false, b"\x1b[?25h\x1b[HHello World");
@@ -2008,7 +2008,7 @@ mod tests {
 
     #[test]
     fn strip_and_answer_first_block_all_startup_keeps_window_open() {
-        // BE-13：整块启动序列 → None 且不置 drained，窗口保持开放。
+        // 整块启动序列 → None 且不置 drained，窗口保持开放。
         let mut sp = StreamProcessor::default();
         let mut w: Vec<u8> = Vec::new();
         assert_eq!(sp.strip_and_answer(b"\x1b]0;pwsh\x07\x1b[2J", &mut w), None);
@@ -2099,7 +2099,7 @@ mod tests {
     }
 
     /// 名额泄漏回归守卫：裸 `JoinHandle` drop = detach，线程返回值
-    /// (EventLoop 含 Pty) 永存、BE-01 名额泄漏。`EventLoopHandle` 的 Drop
+    /// (EventLoop 含 Pty) 永存、名额泄漏。`EventLoopHandle` 的 Drop
     /// 兜底 shutdown+join——不显式 join 时 Pty 也必须随返回值析构。
     #[test]
     fn handle_drop_without_join_reclaims_pty() {

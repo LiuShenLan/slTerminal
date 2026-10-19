@@ -1,21 +1,21 @@
 //! 侧栏骨架:ActivityBar + 上下双槽内容区。
 //!
-//! 槽位状态机照旧栈侧栏 R1-R9 纯函数语义移植:
-//! - R1/R2(`toggle_view_pure`):点击未打开视图 = 打开并隐式替换同槽旧视图;
+//! 槽位状态机沿用旧栈侧栏的纯函数语义:
+//! - `toggle_view_pure`:点击未打开视图 = 打开并隐式替换同槽旧视图;
 //!   点击已打开视图 = 关闭该槽。
-//! - R3-R5(`derive_layout`):双空 hidden / 仅上 single-top / 仅下
+//! - `derive_layout`:双空 hidden / 仅上 single-top / 仅下
 //!   single-bottom / 双开 split。
-//! - R9(`reconcile_views`):持久化恢复时把未注册或错槽的 active view 置空;
+//! - `reconcile_views`:持久化恢复时把未注册或错槽的 active view 置空;
 //!   「缺失注册 id 补按钮」由封闭集每帧重建按钮列表机械保证,无需追加状态。
 //!
-//! 本步只落骨架与占位:视图内容归各视图模块,图标归主题体系;按钮换区排序
-//! (旧栈 R6-R8)归后续步骤。`SidebarState` 的字段是 session schema 的
-//! 持久化面(D05-3 已裁归 session),既有字段追加一律走 `serde(default)`。
+//! 本模块只落骨架与占位:视图内容归各视图模块,图标归主题体系;按钮换区排序
+//! 归后续步骤。`SidebarState` 的字段是 session schema 的
+//! 持久化面(归 session 所有),既有字段追加一律走 `serde(default)`。
 //!
 //! 视图形状收缩为封闭集 [`SideViewId`]:按钮列表由 [`side_view_defs`] 每帧
-//! 重建,槽位归属由 [`SideViewId::zone`] 单点裁定(本步无拖拽换区)。
+//! 重建,槽位归属由 [`SideViewId::zone`] 单点裁定(本模块无拖拽换区)。
 //!
-//! A8:双槽同时打开时按 `ratio_permille` 分配高度,中间分隔条可拖拽。
+//! 双槽同时打开时按 `ratio_permille` 分配高度,中间分隔条可拖拽。
 //! 拖拽沿用宽度热区的 overlay 方案:手势期间只改千分比并重绘,终端网格
 //! 零重排、不触发即时写盘(1 Hz 快照自然持久化)。
 
@@ -72,7 +72,7 @@ impl SidebarZone {
     }
 }
 
-/// 双槽布局推导结果(R3-R5)。
+/// 双槽布局推导结果(-)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum SidebarLayout {
     Hidden,
@@ -84,7 +84,7 @@ pub(super) enum SidebarLayout {
 /// 侧栏视图封闭集(旧栈注册序:nav/explorer/commit/agentFiles)。
 ///
 /// 内容归属:nav 数据源归导航树,explorer/commit 归文件树与提交视图,
-/// agentFiles 归 AI 集成。图标归主题体系,本步只登记 id + title。
+/// agentFiles 归 AI 集成。图标归主题体系,本模块只登记 id + title。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum SideViewId {
@@ -95,7 +95,7 @@ pub(crate) enum SideViewId {
 }
 
 impl SideViewId {
-    /// 封闭集全集,注册序。R9 对齐与按钮渲染共用这一处真值源。
+    /// 封闭集全集,注册序。对齐与按钮渲染共用这一处真值源。
     pub(super) const ALL: [SideViewId; 4] = [
         SideViewId::Nav,
         SideViewId::Explorer,
@@ -113,7 +113,7 @@ impl SideViewId {
         }
     }
 
-    /// 从持久化短名解析;未注册 id 返回 None(R9 的输入侧防线)。
+    /// 从持久化短名解析;未注册 id 返回 None(的输入侧防线)。
     ///
     /// 兼容旧产品面 camelCase 的 `agentFiles` 写法:会话文件可手工编辑,
     /// 未知/旧写法一律退回未打开而不是整份会话拒收。
@@ -137,7 +137,7 @@ impl SideViewId {
         }
     }
 
-    /// 槽位归属单点。本步无按钮拖拽换区(旧栈 R6-R8 归后续),固定:
+    /// 槽位归属单点。本模块无按钮拖拽换区(旧栈 -归后续),固定:
     /// 上槽 = nav/explorer/commit(旧栈 DEFAULT_ZONES 上区),下槽 = agentFiles。
     pub(super) const fn zone(self) -> SidebarZone {
         match self {
@@ -164,7 +164,7 @@ pub(super) fn side_view_defs() -> [SideViewDef; 4] {
 
 /// 侧栏骨架态:collapsed/width/双槽 active view/双槽高度比例。
 ///
-/// D05-3 已裁归 session:字段直接进 session schema 跟现场恢复,不是设置域
+/// 已裁归 session:字段直接进 session schema 跟现场恢复,不是设置域
 /// 偏好。宽度用 f32 逻辑像素,载入时 clamp 到旧栈区间;双槽比例用千分比
 /// 整数(上槽占比),与分屏树 `ratio_permille` 同口径,避免 f32 序列化噪声。
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
@@ -190,7 +190,7 @@ impl Default for SidebarState {
 }
 
 impl<'de> Deserialize<'de> for SidebarState {
-    /// 缺失字段回默认值、未注册 id 回未打开、宽度钳制(R9 对齐)。类型级
+    /// 缺失字段回默认值、未注册 id 回未打开、宽度钳制(对齐)。类型级
     /// 损坏(如数字落入字符串槽)仍按会话解析失败处理,不在此吞掉。
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -286,7 +286,7 @@ pub(super) fn sidebar_split_ratio_at(pointer_y: f32, top: f32, height: f32) -> u
     clamp_ratio((pointer_y - top) / height * 1000.0)
 }
 
-/// R1/R2:点击视图开关。打开动作同时解除 collapsed——点了按钮就是要看内容。
+/// /点击视图开关。打开动作同时解除 collapsed——点了按钮就是要看内容。
 /// 返回新状态,不修改入参(纯函数)。
 pub(super) fn toggle_view_pure(state: &SidebarState, id: SideViewId) -> SidebarState {
     let zone = id.zone();
@@ -302,7 +302,7 @@ pub(super) fn toggle_view_pure(state: &SidebarState, id: SideViewId) -> SidebarS
     next
 }
 
-/// R3-R5:由双槽打开状态纯推导展示形态。collapsed 不参与推导——
+/// -由双槽打开状态纯推导展示形态。collapsed 不参与推导——
 /// collapsed 是独立的整区开合开关,不改变槽位内容。
 pub(super) fn derive_layout(state: &SidebarState) -> SidebarLayout {
     match (
@@ -316,7 +316,7 @@ pub(super) fn derive_layout(state: &SidebarState) -> SidebarLayout {
     }
 }
 
-/// R9:按注册表对齐 active view。
+/// 按注册表对齐 active view。
 ///
 /// 旧栈在载入时过滤未注册 id、把缺失注册 id 追加到上区末尾;本形态按钮
 /// 列表每帧由封闭集重建(不存在持久化的按钮归属),故对齐只剩 active view
@@ -351,7 +351,7 @@ pub(super) fn dragged_width(drag: &SidebarResizeDrag, pointer_x: f32) -> f32 {
 pub(super) struct SidebarSplitDrag;
 
 impl SltermWorkspace {
-    /// ActivityBar:封闭集按钮区。按钮图标归主题体系,本步用标题首字占位,
+    /// ActivityBar:封闭集按钮区。按钮图标归主题体系,本模块用标题首字占位,
     /// active 态 = 选中底色 + 左侧指示条(旧栈 ActivityBar 同形)。
     pub(super) fn render_activity_bar(&self, cx: &mut Context<'_, Self>) -> AnyElement {
         let state = self.sidebar;
@@ -590,7 +590,7 @@ impl SltermWorkspace {
             .into_any_element()
     }
 
-    /// 单槽内容挂载点:按封闭集分派到各视图渲染函数(B73)。
+    /// 单槽内容挂载点:按封闭集分派到各视图渲染函数。
     /// `grow` = flex 增长因子(双槽时按千分比,单槽 1.0);basis 归零保证
     /// 两槽严格按比例分高,不被内容固有高度带偏。
     fn render_view_slot(
@@ -790,7 +790,7 @@ mod sidebar_state_tests {
     use super::*;
     use crate::i18n::UiLanguage;
 
-    /// B20:四种标题在中英两语下由同一 typed 消息查表。
+    /// 四种标题在中英两语下由同一 typed 消息查表。
     #[test]
     fn side_view_titles_localize_in_both_languages() {
         let expected = [
@@ -819,7 +819,7 @@ mod sidebar_state_tests {
         }
     }
 
-    /// R1:关闭的视图点击后打开。
+    /// 关闭的视图点击后打开。
     #[test]
     fn closed_view_opens_in_its_slot() {
         let next = toggle_view_pure(&state(None, None), SideViewId::Nav);
@@ -827,14 +827,14 @@ mod sidebar_state_tests {
         assert_eq!(next.active_view_bottom, None);
     }
 
-    /// R2:已打开的视图点击后关闭。
+    /// 已打开的视图点击后关闭。
     #[test]
     fn open_view_closes_on_second_click() {
         let next = toggle_view_pure(&state(Some(SideViewId::Nav), None), SideViewId::Nav);
         assert_eq!(next.active_view_top, None);
     }
 
-    /// R1 覆盖:同槽打开新视图隐式关闭旧视图,无历史记忆。
+    /// 覆盖:同槽打开新视图隐式关闭旧视图,无历史记忆。
     #[test]
     fn opening_a_sibling_replaces_the_slot_without_history() {
         let next = toggle_view_pure(&state(Some(SideViewId::Nav), None), SideViewId::Explorer);
@@ -863,7 +863,7 @@ mod sidebar_state_tests {
         assert_eq!(opened.active_view_top, Some(SideViewId::Nav));
     }
 
-    /// R3-R5:双槽布局纯推导。
+    /// -双槽布局纯推导。
     #[test]
     fn layout_is_derived_from_both_slots() {
         assert_eq!(derive_layout(&state(None, None)), SidebarLayout::Hidden);
@@ -889,7 +889,7 @@ mod sidebar_state_tests {
         assert_eq!(derive_layout(&collapsed), SidebarLayout::SingleTop);
     }
 
-    /// R9:未注册 active view 置空。
+    /// 未注册 active view 置空。
     #[test]
     fn reconcile_nulls_unregistered_views() {
         let mut dirty = state(Some(SideViewId::Nav), Some(SideViewId::AgentFiles));
@@ -900,7 +900,7 @@ mod sidebar_state_tests {
         assert_eq!(reconciled.width, SIDEBAR_WIDTH_MIN, "宽度同步钳制");
     }
 
-    /// R9:注册但槽位不符的 active view 置空(上槽不可能显示下槽视图)。
+    /// 注册但槽位不符的 active view 置空(上槽不可能显示下槽视图)。
     #[test]
     fn reconcile_nulls_views_persisted_in_the_wrong_slot() {
         let wrong = state(Some(SideViewId::AgentFiles), Some(SideViewId::Nav));
@@ -909,14 +909,14 @@ mod sidebar_state_tests {
         assert_eq!(reconciled.active_view_bottom, None);
     }
 
-    /// R9:注册且槽位正确时原样保留。
+    /// 注册且槽位正确时原样保留。
     #[test]
     fn reconcile_keeps_registered_views_in_their_slots() {
         let clean = state(Some(SideViewId::Nav), Some(SideViewId::AgentFiles));
         assert_eq!(reconcile_views(&clean, &SideViewId::ALL), clean);
     }
 
-    /// A8:reconcile 保留合法双槽比例,越界值收敛到 [100, 900]。
+    /// reconcile 保留合法双槽比例,越界值收敛到 [100, 900]。
     #[test]
     fn reconcile_preserves_and_clamps_the_split_ratio() {
         let mut clean = state(Some(SideViewId::Nav), Some(SideViewId::AgentFiles));
@@ -938,7 +938,7 @@ mod sidebar_state_tests {
         );
     }
 
-    /// A8:比例收敛边界——上下限、越界、非有限值与四舍五入。
+    /// 比例收敛边界——上下限、越界、非有限值与四舍五入。
     #[test]
     fn clamp_ratio_converges_to_the_usable_band() {
         assert_eq!(clamp_ratio(100.0), SIDEBAR_SPLIT_RATIO_MIN);
@@ -952,7 +952,7 @@ mod sidebar_state_tests {
         assert_eq!(clamp_ratio(f32::NEG_INFINITY), SIDEBAR_SPLIT_RATIO_DEFAULT);
     }
 
-    /// A8:指针 y → 上槽千分比;区域上下缘外收敛,退化高度回默认。
+    /// 指针 y → 上槽千分比;区域上下缘外收敛,退化高度回默认。
     #[test]
     fn pointer_y_maps_to_a_clamped_split_ratio() {
         // 内容区 top=100、高 600:y=400 位于 50%。

@@ -6,7 +6,7 @@
 //! 「顺手带上」的通道,导入导出同一道边界。
 //!
 //! 格式:`TRMBK001 | salt(16) | nonce(12) | ciphertext`。魔数同时作
-//! AES-256-GCM 的 AAD(D10-1),格式身份与密文认证绑死——魔数不符即
+//! AES-256-GCM 的 AAD,格式身份与密文认证绑死——魔数不符即
 //! 「非本应用备份」一票拒解。密钥派生 = Argon2id v0x13,m=19456 KiB、
 //! t=2、p=1(契约数值随上游基线)。派生密钥、解密明文与恢复点明文全程
 //! `Zeroizing`;解密失败消息不回显口令或任何派生材料。
@@ -14,11 +14,11 @@
 //! 恢复序:先完整鉴权(`open`)→ `validate_archive` 全量校验 → 才允许
 //! 任何落盘。校验任何一条不过整单拒写,半份不可信报文零副作用。
 //!
-//! 类别清单与敏感键剥除表按键域终态重定(D10-2):设置/会话/自定义
+//! 类别清单与敏感键剥除表按键域终态重定:设置/会话/自定义
 //! 主题/命令历史/目录历史/provider 元数据六类;凭据值永不入包(provider
 //! 文档只保留引用字段与尾四掩码)。
 //!
-//! 消费点:设置页安全分区的加密备份导出已接(C33:类别选择 + masked 口令 +
+//! 消费点:设置页安全分区的加密备份导出已接(类别选择 + masked 口令 +
 //! 后台整单收集/密封/原子写,失败明示);恢复与撤回 UI 尚未接线,其生产接缝
 //! 保持 [`restore`]/[`recovery::restore_selected`]/[`recovery::undo`]。
 
@@ -35,7 +35,7 @@ use zeroize::Zeroizing;
 
 pub(crate) mod recovery;
 
-/// 备份格式魔数(D10-1 已裁:去品牌,8 字节,同时作 AAD)。
+/// 备份格式魔数(已裁:去品牌,8 字节,同时作 AAD)。
 const MAGIC: &[u8; 8] = b"TRMBK001";
 /// 归档格式版本;不符即「版本不支持」一票拒。
 const ARCHIVE_VERSION: u32 = 1;
@@ -48,7 +48,7 @@ pub(crate) const MIN_PASSPHRASE_CHARS: usize = 8;
 /// 自定义主题文件名后缀(与主题库持久化规则同源)。
 const THEME_FILE_SUFFIX: &str = ".slterm-theme.json";
 
-/// 敏感键字面量表(D10-2 按 06 键域终态重定)。
+/// 敏感键字面量表(按 06 键域终态重定)。
 ///
 /// 键域终态不含任何凭据键——凭据值只允许存在于 Windows 凭据管理器,
 /// `providers.json` 只存引用字段(`api_key_set`/`api_key_hint`)与元数据。
@@ -80,7 +80,7 @@ const SENSITIVE_KEYS: &[&str] = &[
     "token",
 ];
 
-/// 备份类别(D10-2 已裁:按 06 键域终态重定;凭据域值永不入包)。
+/// 备份类别(已裁:按 06 键域终态重定;凭据域值永不入包)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum BackupCategory {
@@ -439,7 +439,7 @@ fn add_file(
 }
 
 /// 收集自定义主题文档:只认 `themes/` 下合法 id + 固定后缀的普通文件;
-/// 符号链接跳过(安全边界)。坏文档整单失败(B62):静默跳过会让备份缺件
+/// 符号链接跳过(安全边界)。坏文档整单失败:静默跳过会让备份缺件
 /// 而用户误以为完整。
 fn add_themes(root: &Path, entries: &mut Vec<BackupEntry>) -> Result<(), String> {
     let directory = root.join("themes");
@@ -474,7 +474,7 @@ fn add_themes(root: &Path, entries: &mut Vec<BackupEntry>) -> Result<(), String>
             continue;
         }
         let bytes = fs::read(&path).map_err(|error| format!("读取主题文件失败: {error}"))?;
-        // 导入侧复验同一判据。坏文档整单失败(B62):备份必须要么完整、
+        // 导入侧复验同一判据。坏文档整单失败:备份必须要么完整、
         // 要么明确报错,不能静默缺件。
         if crate::theme_library::ThemeDocument::from_json_bytes(&bytes).is_err() {
             tracing::warn!(
@@ -964,7 +964,7 @@ mod encrypted_backup_tests {
         }
     }
 
-    /// B62 防复发:非法主题文档必须整单失败,不得静默缺件。
+    /// 防复发:非法主题文档必须整单失败,不得静默缺件。
     #[test]
     fn invalid_theme_documents_abort_the_backup() {
         let directory = tempfile::tempdir().unwrap();
@@ -976,7 +976,7 @@ mod encrypted_backup_tests {
         assert!(error.contains("主题"), "{error}");
     }
 
-    /// 提取结构体块内的字段名(用于 B63 漂移守卫)。
+    /// 提取结构体块内的字段名(用于漂移守卫)。
     fn struct_fields(source: &str, signature: &str) -> Vec<String> {
         let start = source
             .find(signature)
@@ -1022,7 +1022,7 @@ mod encrypted_backup_tests {
         fields
     }
 
-    /// B63 防复发:provider 与设置字段名不得命中敏感键黑名单——否则备份
+    /// 防复发:provider 与设置字段名不得命中敏感键黑名单——否则备份
     /// 会静默剥除正常字段。provider schema 演进时本用例负责报警。
     #[test]
     fn sensitive_key_denylist_does_not_shadow_declared_fields() {

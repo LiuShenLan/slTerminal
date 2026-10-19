@@ -2,7 +2,7 @@
 //!
 //! 双轨不交叉的判据 = marker 归属:含 slterm-hook 命令的 matcher 组归
 //! 安装器专属,编辑器只读、保存时从磁盘原样保留;编辑域限用户/第三方
-//! handler。写入前跑 SEC-05 语义校验(事件名白名单 + 五型必填字段矩阵),
+//! handler。写入前跑语义校验(事件名白名单 + 事件类型必填字段矩阵),
 //! 校验失败零写盘;非法 JSON / 非对象根一律拒绝编辑,绝不「修复式覆盖」。
 //!
 //! 编辑面是 claude 用户层 `~/.claude/settings.json`(设置页无 project 上下文;
@@ -17,7 +17,7 @@ use crate::i18n::{Message, UiLanguage};
 
 use super::CLAUDE_EVENTS;
 
-/// 五型 handler 矩阵(旧栈 hooksConfigGui.ts 语义):校验与表单共用的
+/// 事件类型 handler 矩阵(旧栈 hooksConfigGui.ts 语义):校验与表单共用的
 /// 单一类型锚点;字段集合见 [`HookHandlerType::required_fields`]。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum HookHandlerType {
@@ -436,7 +436,7 @@ impl HooksDocument {
             .unwrap_or_default()
     }
 
-    /// 提交编辑:解析 → SEC-05 校验 → 与磁盘现状合并(认领组原样保留)
+    /// 提交编辑:解析 → 校验 → 与磁盘现状合并(认领组原样保留)
     /// → 原子写。失败零写盘。
     pub(crate) fn save_editable(&self, raw: &str) -> Result<(), String> {
         let editable: Value =
@@ -458,7 +458,7 @@ fn group_is_installer_owned(group: &Value) -> Option<bool> {
     Some(handlers.iter().any(super::local::is_our_claude_hook))
 }
 
-/// SEC-05 语义校验(纯函数):事件名白名单 + 五型矩阵的必填字段。
+/// 语义校验(纯函数):事件名白名单 + 事件类型矩阵的必填字段。
 /// 未知 type、缺失/空白必填字段与形态非法一律拒绝。
 fn validate_editable(hooks: &Value) -> Result<(), String> {
     let events = hooks
@@ -700,7 +700,7 @@ mod editor_tests {
         }
     }
 
-    /// 五型各一条合法 handler 必须通过 SEC-05 校验(必填字段齐全)。
+    /// 事件类型各一条合法 handler 必须通过校验(必填字段齐全)。
     #[test]
     fn every_handler_type_passes_validation_with_required_fields() {
         for (kind, handler) in [

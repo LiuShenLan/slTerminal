@@ -4,7 +4,7 @@
 //! `LayoutSession` 之间的全部形状转换只在本模块的一对纯函数里发生。其他
 //! 模块禁直接构造/解构持久化树——文件末的门禁用例机械断言这一步界。
 //!
-//! 消费点 = M5.5 快照(`snapshot_session`)与启动恢复(`restore_tab`)。
+//! 消费点 = 快照(`snapshot_session`)与启动恢复(`restore_tab`)。
 
 use crate::session::{AgentSession, LaunchSession, LayoutSession, SplitAxis};
 use slterm_split::{PaneId, SplitDirection, SplitTree};

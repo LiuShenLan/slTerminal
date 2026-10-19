@@ -1,44 +1,44 @@
-//! 安全审计通道(SEC-12/13/17)。
+//! 安全审计通道。
 //!
 //! 通道唯一形态 = tracing target [`TARGET`](`"audit"`)。生产不装 tracing
 //! subscriber——tracing 的 `log-always` feature 无条件把事件桥接进既有进程
 //! 日志(单日志栈,不重复初始化;审计不因任何 subscriber 装配而丢事件);
 //! 测试经作用域 subscriber 捕获断言。
 //!
-//! B67:未来若装配全局 subscriber,必须移除 `log-always` 或让 subscriber
+//! 未来若装配全局 subscriber,必须移除 `log-always` 或让 subscriber
 //! 过滤 audit target——否则同一事件双落点(日志 + subscriber)。
 //!
-//! SEC-17:写设置文件的路径必须经 [`write_settings`](app 设置)与
+//! 写设置文件的路径必须经 [`write_settings`](app 设置)与
 //! [`write_user_settings`](user 层 `~/.claude/settings.json`)包装。审计记录
 //! operation/path/source/result,不记内容值(防凭据进日志);包装是唯一
 //! 写路径——写核心函数私有,绕过点另由源码扫描用例锁死。
 //!
-//! SEC-13:hook 文件归属对账不一致时经 [`hook_hash_mismatch`] 落期望/实测
+//! hook 文件归属对账不一致时经 [`hook_hash_mismatch`] 落期望/实测
 //! SHA-256 指纹(只补缺失、不覆盖的用户配置纪律保持不变)。
 //!
-//! 红线(SEC-18):审计消息只含路径/命令类别/哈希,禁止插值凭据值。
+//! 红线:审计消息只含路径/命令类别/哈希,禁止插值凭据值。
 
 use std::io;
 use std::path::Path;
 
-/// 审计通道 target(SEC-12/13/17 唯一形态;logging 恒放行)。
+/// 审计通道 target(唯一形态;logging 恒放行)。
 pub(crate) const TARGET: &str = "audit";
 
 /// app 设置写通道的操作类别。
 const OP_SETTINGS_WRITE: &str = "settings_write";
 /// user 层 settings.json 写入的操作类别。
 const OP_USER_SETTINGS_WRITE: &str = "user_settings_write";
-/// SEC-13 归属对账不一致的操作类别。
+/// 归属对账不一致的操作类别。
 const OP_HOOK_HASH_MISMATCH: &str = "hook_hash_mismatch";
 
-/// app 设置文件写入(SEC-17):审计 + 原子写。
+/// app 设置文件写入:审计 + 原子写。
 ///
 /// 生产写通道 = `settings_store`;事件 source 标明具体写路径。
 pub(crate) fn write_settings(path: &Path, content: &str, source: &str) -> io::Result<()> {
     write_audited(OP_SETTINGS_WRITE, path, content.as_bytes(), source)
 }
 
-/// user 层 settings.json 写入(SEC-17):hooks 安装器唯一写路径。
+/// user 层 settings.json 写入:hooks 安装器唯一写路径。
 pub(crate) fn write_user_settings(path: &Path, content: &str, source: &str) -> io::Result<()> {
     write_audited(OP_USER_SETTINGS_WRITE, path, content.as_bytes(), source)
 }
@@ -52,14 +52,14 @@ fn write_audited(
 ) -> io::Result<()> {
     let result = crate::atomic_file::write(path, bytes);
     match &result {
-        // A16:成功写是常规取证事件,降为 info;失败保持 warn(异常面)。
+        // 成功写是常规取证事件,降为 info;失败保持 warn(异常面)。
         Ok(()) => tracing::info!(
             target: TARGET,
             operation = %operation,
             path = %path.display(),
             source = %source,
             result = "ok",
-            "SEC-17 设置文件写入"
+            "设置文件写入"
         ),
         Err(error) => tracing::warn!(
             target: TARGET,
@@ -68,13 +68,13 @@ fn write_audited(
             source = %source,
             result = "error",
             error = %error,
-            "SEC-17 设置文件写入失败"
+            "设置文件写入失败"
         ),
     }
     result
 }
 
-/// SEC-13:磁盘 hook 文件指纹与内嵌模板不一致(被编辑/被替换)。
+/// 磁盘 hook 文件指纹与内嵌模板不一致(被编辑/被替换)。
 ///
 /// `expected`/`actual` 为 SHA-256 hex 指纹,不是文件内容——审计只留身份。
 pub(crate) fn hook_hash_mismatch(path: &Path, expected: &str, actual: &str) {
@@ -84,7 +84,7 @@ pub(crate) fn hook_hash_mismatch(path: &Path, expected: &str, actual: &str) {
         path = %path.display(),
         expected = %expected,
         actual = %actual,
-        "SEC-13 hook 文件哈希对账不一致(只补缺失,不覆盖)"
+        "hook 文件哈希对账不一致(只补缺失,不覆盖)"
     );
 }
 
@@ -200,7 +200,7 @@ mod audit_tests {
         panic!("函数体未闭合: {signature}");
     }
 
-    /// SEC-17:写入触发 audit 事件,字段 = operation/path/source/result。
+    /// 写入触发 audit 事件,字段 = operation/path/source/result。
     #[test]
     fn user_settings_write_emits_audit_event_with_path_source_and_result() {
         let captured = test_support::capture_events();
@@ -220,7 +220,7 @@ mod audit_tests {
         );
     }
 
-    /// SEC-17:app 设置写通道走同一事件族,operation 区分。
+    /// app 设置写通道走同一事件族,operation 区分。
     #[test]
     fn settings_write_emits_audit_event_with_its_own_operation() {
         let captured = test_support::capture_events();
@@ -232,7 +232,7 @@ mod audit_tests {
         assert_field(&text, "operation", "settings_write");
         assert_field(&text, "source", "settings_store::test");
         assert_field(&text, "result", "ok");
-        assert!(text.contains("INFO"), "成功写必须降为 info(A16): {text}");
+        assert!(text.contains("INFO"), "成功写必须降为 info: {text}");
     }
 
     /// 失败路径同样审计(result=error),错误照常上抛。
@@ -249,10 +249,10 @@ mod audit_tests {
         let text = captured.text();
         assert_field(&text, "result", "error");
         assert_field(&text, "operation", "settings_write");
-        assert!(text.contains("WARN"), "失败写必须保持 warn(A16): {text}");
+        assert!(text.contains("WARN"), "失败写必须保持 warn: {text}");
     }
 
-    /// SEC-18:审计事件只含路径/字段身份,绝不携带写入内容(可能含凭据)。
+    /// 审计事件只含路径/字段身份,绝不携带写入内容(可能含凭据)。
     #[test]
     fn audit_events_never_embed_the_written_content() {
         let captured = test_support::capture_events();
@@ -267,7 +267,7 @@ mod audit_tests {
         assert!(text.contains("settings.json"));
     }
 
-    /// SEC-13:hook 哈希对账事件携带期望/实测指纹,不含文件内容。
+    /// hook 哈希对账事件携带期望/实测指纹,不含文件内容。
     #[test]
     fn hook_hash_mismatch_event_carries_expected_and_actual_fingerprints() {
         let captured = test_support::capture_events();
@@ -281,7 +281,7 @@ mod audit_tests {
         assert!(text.contains("slterm.js"), "事件必须含路径: {text}");
     }
 
-    /// SEC-17 唯一写路径:设置写核心只见于审计包装,生产调用点不直写。
+    /// 唯一写路径:设置写核心只见于审计包装,生产调用点不直写。
     #[test]
     fn settings_writes_are_centralized_in_the_audit_wrapper() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -327,10 +327,7 @@ mod audit_tests {
                 "{signature} 必须经审计包装写 user 层 settings.json"
             );
             for bypass in ["write_atomic(", "atomic_file::write", "std::fs::write"] {
-                assert!(
-                    !body.contains(bypass),
-                    "{signature} 出现旁路写 {bypass}(SEC-17)"
-                );
+                assert!(!body.contains(bypass), "{signature} 出现旁路写 {bypass}");
             }
         }
     }

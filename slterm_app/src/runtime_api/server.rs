@@ -8,7 +8,7 @@
 //! (通 = 有活实例)→ bind 127.0.0.1:0 → 原子写端口文件 → serve 线程 →
 //! 登记 `CHILD_ENDPOINT`。Drop 只删自己仍是最新的记录。二次启动不再建窗:
 //! 首发形态经 `window.focus` + `tab.new` 把「聚焦现有唯一窗 + 新开 tab」
-//! 交给首实例后退出(D12-5 回落面关闭);开启 `legacy-attach` feature 时
+//! 交给首实例后退出(回落面关闭);开启 `legacy-attach` feature 时
 //! 改回 ATTACH + `tab.new`。陈旧端口文件由 400ms connect 超时兜底接管,
 //! 移交降级从不挂起。
 //!
@@ -43,7 +43,7 @@ static CHILD_ENDPOINT: Mutex<Option<Endpoint>> = Mutex::new(None);
 const HANDOVER_CONNECT_TIMEOUT: Duration = Duration::from_millis(400);
 /// 移交链读写超时(原 mux.rs IO_TIMEOUT)。
 const HANDOVER_IO_TIMEOUT: Duration = Duration::from_millis(700);
-/// 双启动抢锁重试环:D04-2 契约数值 40 × 25ms。
+/// 双启动抢锁重试环:契约数值 40 × 25ms。
 const HANDOVER_ATTEMPTS: u32 = 40;
 const HANDOVER_RETRY_DELAY: Duration = Duration::from_millis(25);
 /// Drop 自连唤醒阻塞 accept 的 connect 上限;只是解阻塞手段,失败即忽略。
@@ -233,7 +233,7 @@ fn try_open_tab_existing_at(
         .is_some_and(|response| response.ok)
 }
 
-/// D12-5 首发形态的交接唤醒:版本化 `window.focus` 语义等价于旧 ATTACH
+/// 首发形态的交接唤醒:版本化 `window.focus` 语义等价于旧 ATTACH
 /// (最小化先还原再前置);UI owner 回执后才继续 `tab.new`。
 #[cfg(not(feature = "legacy-attach"))]
 fn focus_existing_window_at(port_path: Option<&Path>) -> bool {
@@ -449,7 +449,7 @@ impl Drop for RuntimeServer {
 mod server_tests {
     use super::*;
 
-    // SEC-18:测试一律假值占位,真实凭据禁入仓库。
+    // 测试一律假值占位,真实凭据禁入仓库。
     const TEST_TOKEN: &str = "0123456789abcdef0123456789abcdef";
 
     #[test]
@@ -695,7 +695,7 @@ mod server_tests {
         assert!(read_endpoint().is_none(), "Drop 清空 CHILD_ENDPOINT");
     }
 
-    /// B14 防复发:Drop 必须停 serve 线程、释放监听 socket,不留阻塞 accept。
+    /// 防复发:Drop 必须停 serve 线程、释放监听 socket,不留阻塞 accept。
     #[test]
     fn drop_stops_the_serve_thread_and_releases_the_listening_port() {
         let (sink, _events) = capturing_sink();
@@ -721,7 +721,7 @@ mod server_tests {
         }
     }
 
-    /// B14 防复发:挂起不说话的客户端只占客户端线程,Drop 不得等它。
+    /// 防复发:挂起不说话的客户端只占客户端线程,Drop 不得等它。
     #[test]
     fn drop_is_not_dragged_by_an_open_client_connection() {
         let (sink, _events) = capturing_sink();
@@ -884,7 +884,7 @@ mod server_tests {
         );
     }
 
-    /// 移交链(D12-5 首发形态):window.focus 先到,tab.new 随后到;
+    /// 移交链(首发形态):window.focus 先到,tab.new 随后到;
     /// 全程不出现 legacy Attach 事件。
     #[cfg(not(feature = "legacy-attach"))]
     #[test]
@@ -984,7 +984,7 @@ mod server_tests {
         assert_eq!(calls, 4, "全失败时重试次数有界");
     }
 
-    /// D04-2 契约数值:40 × 25ms 重试环与 400/700ms 移交 I/O。
+    /// 契约数值:40 × 25ms 重试环与 400/700ms 移交 I/O。
     #[test]
     fn handover_contract_values_match_d04_2() {
         assert_eq!(HANDOVER_ATTEMPTS, 40);

@@ -1,6 +1,6 @@
 //! 设置页写通道与控件同步:统一持久化入口、失败回滚、失败可感知。
 //!
-//! A2 相位机:所有设置类写盘(普通保存/条件保存/开机启动/恢复默认/hook
+//! 相位机:所有设置类写盘(普通保存/条件保存/开机启动/恢复默认/hook
 //! 授权)都在后台执行器上运行;前台只做三件事——入队、控件即时回显、
 //! 消费结果(Committed 应用回读 / Failed 按 `persisted` 快照回滚)。高频
 //! 提交在队尾按 key 合并,后台任务串行执行,不占 GPUI 前台线程。
@@ -24,7 +24,7 @@ use super::localization::{
 use super::navigation::{matching_sections, section_ids};
 use super::{SettingsPane, SettingsPaneEvent, SettingsStatus, SettingsTarget, agents};
 
-/// 后台写任务(A2)。普通保存可在队尾合并;条件保存与系统副作用不合并。
+/// 后台写任务。普通保存可在队尾合并;条件保存与系统副作用不合并。
 pub(super) enum PersistJob {
     Save {
         updates: Vec<(&'static str, Value)>,
@@ -40,12 +40,12 @@ pub(super) enum PersistJob {
     AgentHook {
         hook: AgentHook,
         enabled: bool,
-        /// C5:用户已在设置页确认 SEC-12 命中的 statusLine 原文。
+        /// 用户已在设置页确认命中的 statusLine 原文。
         confirmed: bool,
     },
 }
 
-/// hooks 安装失败;C5 携带待确认原文供设置页展示。
+/// hooks 安装失败;携带待确认原文供设置页展示。
 struct HookFailure {
     message: String,
     suspicious_statusline: Option<String>,
@@ -289,7 +289,7 @@ impl SettingsPane {
                                 self.agents.suspicious_statusline = None;
                                 self.agents.feedback = Some((*hook, Ok(*enabled)));
                             }
-                            // C5:命中 SEC-12 时保留原文,行内出现「确认并重试」。
+                            // 命中时保留原文,行内出现「确认并重试」。
                             Err(failure) => {
                                 self.agents.suspicious_statusline = failure.suspicious_statusline;
                                 self.agents.feedback = Some((*hook, Err(failure.message)));
@@ -305,7 +305,7 @@ impl SettingsPane {
                         if *close_theme_editor {
                             self.theme_editor = None;
                         }
-                        // A14:静默启动联动写入成功后保留提示条;其它普通
+                        // 静默启动联动写入成功后保留提示条;其它普通
                         // 保存仍清空上一笔状态(主题应用路径维持原语义)。
                         if updates.iter().any(|(key, value)| {
                             *key == "silent_start" && matches!(value, Value::Bool(true))
@@ -355,7 +355,7 @@ impl SettingsPane {
         if let Some(launch) = launch_at_login {
             self.runtime.launch_at_login = launch;
         }
-        // B57:拖动中的透明度预览优先于回读的持久化值,回包不得闪回旧值。
+        // 拖动中的透明度预览优先于回读的持久化值,回包不得闪回旧值。
         if let Some(live) = self.live_opacity {
             self.runtime.opacity = live;
             crate::app_shell::wallpaper::set_opacity_live(live, cx);
@@ -525,7 +525,7 @@ impl SettingsPane {
             return;
         }
         if key == "silent_start" && value {
-            // A14:静默启动依赖托盘恢复窗口,同一笔写任务内联动开启托盘;
+            // 静默启动依赖托盘恢复窗口,同一笔写任务内联动开启托盘;
             // 关闭 silent_start 不反向改 tray。
             self.try_persist(
                 &[
@@ -685,7 +685,7 @@ impl SettingsPane {
         cx.notify();
     }
 
-    /// 恢复默认:一次点击武装,二次确认入队后台执行(A2)。
+    /// 恢复默认:一次点击武装,二次确认入队后台执行。
     pub(super) fn confirm_reset(&mut self, _window: &mut Window, cx: &mut Context<'_, Self>) {
         if !self.reset_armed {
             self.reset_armed = true;
@@ -715,7 +715,7 @@ impl SettingsPane {
         self.status.as_ref()
     }
 
-    /// A2 相位机探针:队列与在飞状态。
+    /// 相位机探针:队列与在飞状态。
     pub(crate) fn persist_state_for_test(&self) -> (usize, bool) {
         (self.persist_queue.len(), self.persist_running)
     }

@@ -197,7 +197,7 @@ fn api_event_round_trip_carries_revision_and_payload() {
     assert_eq!(decoded, event);
 }
 
-/// M7.1 泛型事件的单源实例化:订阅链走 `ApiEvent<RuntimeSnapshot>`。
+/// 泛型事件的单源实例化:订阅链走 `ApiEvent<RuntimeSnapshot>`。
 #[test]
 fn api_event_instantiates_runtime_snapshot_payload() {
     let snapshot = snapshot_with_panes(vec![pane(1, RuntimeTaskState::Idle)]);

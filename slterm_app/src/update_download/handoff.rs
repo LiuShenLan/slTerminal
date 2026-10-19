@@ -15,8 +15,8 @@
 //! 默认收尾——绝不因为「文件存在」就授权安装。
 //!
 //! **消费面。** prepare/commit/schedule 已由更新弹窗的安装授权步消费
-//! (R7 C27);restore_ticket/acknowledge_restore/apply_scheduled 由启动链
-//! 消费(M12/R4 B53)。其余仅测试消费的机器可验 API 仍由整模块
+//! ;restore_ticket/acknowledge_restore/apply_scheduled 由启动链
+//! 消费。其余仅测试消费的机器可验 API 仍由整模块
 //! dead_code 豁免兜住;消费点接线时逐个删除本豁免。
 #![allow(dead_code)]
 
@@ -527,7 +527,7 @@ pub(crate) fn apply_scheduled_at(paths: &PreparePaths) -> bool {
     if crate::platform::distribution::current().externally_managed() {
         return false;
     }
-    // D12-4:早于首个 Inno 安装基的当前版本不允许自动安装。
+    // 早于首个 Inno 安装基的当前版本不允许自动安装。
     if crate::update_check::requires_manual_reinstall(env!("CARGO_PKG_VERSION")) {
         return false;
     }

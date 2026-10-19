@@ -1,5 +1,5 @@
 //! 各家 provider 配置的落地纪律:安装权威(installation.rs)供「装什么」,
-//! 本模块管「怎么写」——归属判定、原子写、备份、哨兵与 SEC-12 审查门。
+//! 本模块管「怎么写」——归属判定、原子写、备份、哨兵与审查门。
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -26,7 +26,7 @@ pub use config_guard::spawn_config_guard_with;
 static ANNOUNCED: AtomicBool = AtomicBool::new(false);
 
 /// 首次落盘公告:哨兵文件保证跨进程一次性。toast 展示归窗口收尾,
-/// 本步先落哨兵与日志(09 据此决定要不要补 toast)。
+/// 本模块先落哨兵与日志(09 据此决定要不要补 toast)。
 fn announce() {
     if ANNOUNCED.swap(true, Ordering::Relaxed) {
         return;
@@ -51,7 +51,7 @@ fn claim_setup_announcement(directory: &Path) -> std::io::Result<bool> {
     }
 }
 
-// ─── SEC-12 statusline 审查门(旧栈 hooks 域审计三件套合流)──────────────
+// ─── statusline 审查门(旧栈 hooks 域审计组件合流)──────────────
 
 /// 安装审查门的裁决:`Proceed` 正常走;`Suspended` 命中可疑原命令,携带原文
 /// 供设置页二次确认(消费归设置域),确认路径改传恒 `Proceed` 的 gate。
@@ -110,7 +110,7 @@ fn suspicious_statusline_pattern(command: &str) -> Option<&'static str> {
         .map(|(_, name)| *name)
 }
 
-/// SEC-12 审查门(调用点):命中即审计留痕(target "audit",归审计通道)
+/// 审查门(调用点):命中即审计留痕(target "audit",归审计通道)
 /// 并 Suspended 携带命令原文;未命中 Proceed。仅作用于「我们即将接管的
 /// statusLine 原命令」;不再静默放行(旧「仅记录不阻断」语义已作废)。
 pub(crate) fn review_statusline_command(raw: &str) -> InstallGate {
@@ -120,7 +120,7 @@ pub(crate) fn review_statusline_command(raw: &str) -> InstallGate {
                 target: crate::audit::TARGET,
                 operation = "statusline_review",
                 pattern = %pattern,
-                "SEC-12 statusline 原命令命中审查词表,暂停安装待用户确认: {raw}"
+                "statusline 原命令命中审查词表,暂停安装待用户确认: {raw}"
             );
             InstallGate::Suspended {
                 suspicious_command: raw.to_owned(),
@@ -132,7 +132,7 @@ pub(crate) fn review_statusline_command(raw: &str) -> InstallGate {
 
 // ─── claude hooks(~/.claude/settings.json)──────────────────────────────
 
-/// 幂等安装/自愈 claude 的 settings.json hook 条目,入口携带 SEC-12 审查门。
+/// 幂等安装/自愈 claude 的 settings.json hook 条目,入口携带审查门。
 ///
 /// `Suspended` 时 settings.json 零写盘,由设置页展示原文、用户确认后经
 /// confirm 路径(传恒 `Proceed` 的 gate)完成注入;启动自愈/重注入路径传
@@ -155,7 +155,7 @@ pub fn ensure_claude_hooks(gate: impl Fn(&str) -> InstallGate) -> InstallOutcome
 }
 
 /// 显式配置目录的安装入口(设置页联调/测试注入;生产经
-/// [`ensure_claude_hooks`])。SEC-12 审查走自愈形态:命中即审计 + 零写盘。
+/// [`ensure_claude_hooks`])。审查走自愈形态:命中即审计 + 零写盘。
 pub(super) fn ensure_claude_hooks_at(dir: &Path, command: &str) -> InstallOutcome {
     ensure_claude_hooks_in(dir, command, review_statusline_command)
 }
@@ -198,9 +198,9 @@ fn ensure_claude_hooks_in(
         }
     };
 
-    // SEC-12:审查发生在写盘前,与「非法 JSON 绝不修复式覆盖」同一层——都是
+    // 审查发生在写盘前,与「非法 JSON 绝不修复式覆盖」同一层——都是
     // 安装权威不得擅自处置用户配置的分支。statusline 桥接接管归改造节 3,
-    // 本步只对既存 statusLine.command 做预审查。
+    // 本模块只对既存 statusLine.command 做预审查。
     if let Some(original) = root
         .get("statusLine")
         .and_then(|status| status.get("command"))
@@ -237,7 +237,7 @@ fn ensure_claude_hooks_in(
     let Ok(raw) = serde_json::to_string_pretty(&root) else {
         return InstallOutcome::Conflict;
     };
-    // SEC-17:user 层 settings.json 写入唯一路径 = 审计包装。
+    // user 层 settings.json 写入唯一路径 = 审计包装。
     match crate::audit::write_user_settings(&path, &raw, "ai_hook::ensure_claude_hooks") {
         Ok(()) => {
             log::info!("ai_hook: claude hooks installed into {}", path.display());
@@ -344,7 +344,7 @@ pub(super) fn remove_claude_hooks_at(dir: &Path) -> std::io::Result<bool> {
         serde_json::from_str(&raw).map_err(|e| std::io::Error::other(e.to_string()))?;
     let changed = remove_claude_hooks_from(&mut root);
     if changed {
-        // SEC-17:卸载同样是 user 层 settings.json 写入,必须审计留痕。
+        // 卸载同样是 user 层 settings.json 写入,必须审计留痕。
         crate::audit::write_user_settings(
             &path,
             &serde_json::to_string_pretty(&root)?,
@@ -562,7 +562,7 @@ fn helper_command() -> Option<String> {
 /// 临时文件 + rename 写盘:读者永远看不到写了一半的文件,崩溃留下原文件。
 ///
 /// 只用于 codex/kimi 等非 claude 配置文件;user 层 `~/.claude/settings.json`
-/// 恒走 [`crate::audit::write_user_settings`](SEC-17 唯一写路径)。
+/// 恒走 [`crate::audit::write_user_settings`](唯一写路径)。
 fn write_atomic(path: &Path, data: &str) -> std::io::Result<()> {
     // 临时文件名带上进程号。多个实例各自守着同一份 `settings.json` 自愈,
     // 共用一个固定 tmp 名就会互相踩:A 写 tmp、B 覆盖同一个 tmp、A rename
@@ -735,7 +735,7 @@ mod claude_settings_file_tests {
         assert_eq!(std::fs::read_to_string(&settings).unwrap(), "broken JSON");
     }
 
-    /// SEC-12:原 statusline 命令命中可疑模式 → Suspended 且 settings.json
+    /// 原 statusline 命令命中可疑模式 → Suspended 且 settings.json
     /// 逐字节零写盘;用户确认后 gate 恒 Proceed,同一调用完成安装,
     /// 原 statusLine 键原样保留(桥接接管归改造节 3)。
     #[test]

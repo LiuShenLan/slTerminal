@@ -1,4 +1,4 @@
-//! M9.5 呈现接线 L4:真实按键分发 → 补全/AI 建议条状态 → PTY 字节。
+//! 呈现接线豁免层:真实按键分发 → 补全/AI 建议条状态 → PTY 字节。
 //!
 //! 与 key_tests 同纪律:经 `window.dispatch_event` 走完整焦点链与动作解析,
 //! 不直接调 `on_key_down`;断言对象是「哪些字节到了 PTY / 状态是否落位」。
@@ -296,7 +296,7 @@ fn ai_fix_bar_pastes_only_and_drops_stale_responses(cx: &mut TestAppContext) {
         Some(AiFixState::Pending { seq })
     );
 
-    // A6:配置错误显式上条(取代静默消失);同 seq 仍可被后续结果覆盖。
+    // 配置错误显式上条(取代静默消失);同 seq 仍可被后续结果覆盖。
     terminal.update(&mut window, |view, cx| {
         view.ai_fix = Some(AiFixState::Pending { seq });
         view.apply_ai_fix_response(seq, Err("缺少凭据".into()), cx);
@@ -440,7 +440,7 @@ fn grid_output_tail_is_bounded_and_skips_wide_char_spacers(cx: &mut TestAppConte
     assert!(long.chars().count() <= 20);
 }
 
-/// B42:补全弹窗与 AI 条同处 bottom 锚定的 flex column;两者并存时纵向
+/// 补全弹窗与 AI 条同处 bottom 锚定的 flex column;两者并存时纵向
 /// 堆叠、永不重叠,弹窗位于 AI 条上方且都真实绘制。
 #[gpui::test]
 fn completion_popup_stacks_above_the_ai_fix_bar(cx: &mut TestAppContext) {

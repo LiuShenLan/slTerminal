@@ -3,12 +3,12 @@
 //! 终端仍是真值：本模块从不修改 cell、滚动、光标位置、选区或复制文本，
 //! 只在最终 paint pass 替换可见定界符跨度。
 //!
-//! 呈现接线归 M9.5：本步落有界扫描、[`LineProjection`]、[`CoverageMask`]
+//! 本模块落有界扫描、[`LineProjection`]、[`CoverageMask`]
 //! 与后端无关绘制计划数据面。
 
 #[path = "terminal_math/scan.rs"]
 mod scan;
-#[allow(unused_imports)] // 消费点归 M9.5(终端快照同一锁窗口内调用)。
+#[allow(unused_imports)] // 消费点 = 终端快照同一锁窗口内调用。
 pub(crate) use scan::scan_visible;
 use scan::*;
 
@@ -72,7 +72,7 @@ const DISPLAY_BLEED_INTO_PROSE: f32 = 0.18;
 /// 单行正文里的高件——保留终端字号：它的溢出落在行间隙里，剩余由 clip 裁掉。
 const HEIGHT_OVERRUN_TOLERANCE: f32 = 0.12;
 
-/// 覆盖层所需的视口几何（后端无关；M9.5 从 GPUI 布局构造）。
+/// 覆盖层所需的视口几何（后端无关；从 GPUI 布局构造）。
 ///
 /// 坐标系与终端元素一致：原点为内容矩形左上角，padding 为内容矩形相对
 /// 元素边界的偏移。列数/行数由内容矩形与 cell 尺寸向下取整得出。
@@ -134,7 +134,7 @@ impl MathViewport {
     }
 }
 
-/// 覆盖层需要的最小源格信息。M9.5 在终端快照的同一锁窗口内把
+/// 覆盖层需要的最小源格信息。在终端快照的同一锁窗口内把
 /// `RenderSnapshot` 映射成本类型；`fg` 已按调色板解析，`bg_alpha` 为背景
 /// 不透明度（0 = 默认背景，>0 = ANSI/TUI 背景）。
 #[derive(Clone, Debug, PartialEq)]
@@ -771,12 +771,12 @@ pub(crate) struct FormulaOverlay {
 }
 
 impl FormulaOverlay {
-    /// 归一化后的 TeX 源（M9.5 绘制/缓存键用）。
+    /// 归一化后的 TeX 源（绘制/缓存键用）。
     pub(crate) fn source_arc(&self) -> Arc<str> {
         Arc::clone(&self.source)
     }
 
-    /// 源格跨度 `(行, 起, 止)`。M9.5 在位图预检之后要按存活的公式重建
+    /// 源格跨度 `(行, 起, 止)`。在位图预检之后要按存活的公式重建
     /// 覆盖掩码，因此这里把跨度交出去，而不是让它去猜 `spans` 的内部表示。
     pub(crate) fn covered_spans(&self) -> impl Iterator<Item = (usize, usize, usize)> + '_ {
         self.spans.iter().filter_map(|span| {
@@ -1308,7 +1308,7 @@ impl CoverageMask {
         )
     }
 
-    /// 由调用方自己挑出的源格跨度重建掩码。M9.5 在位图预检之后用它：那一步
+    /// 由调用方自己挑出的源格跨度重建掩码。在位图预检之后用它：那一步
     /// 之前拿不到位图的公式还留在 `build` 的结果里，必须整条剔除。
     pub(crate) fn from_spans(spans: impl IntoIterator<Item = (usize, usize, usize)>) -> Self {
         let mut rows: BTreeMap<usize, Vec<(usize, usize)>> = BTreeMap::new();
@@ -1332,7 +1332,7 @@ impl CoverageMask {
 }
 
 /// 一个 overlay 的后端无关绘制计划：几何决策（fit/居中/bleed/裁剪）的
-/// 单一出口，M9.5 的 GPUI paint pass 消费，保证公式落点与裁剪像素级同源。
+/// 单一出口，的 GPUI paint pass 消费，保证公式落点与裁剪像素级同源。
 /// 坐标系与 [`MathViewport`] 一致。
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct OverlayDrawPlan {
@@ -1348,7 +1348,7 @@ pub(crate) struct OverlayDrawPlan {
 }
 
 /// 计算一个已通过预检的 overlay 的绘制几何。`None` = 本帧回退原文
-/// （布局失败或裁剪退化），调用方自行决定回退方式（M9.5 保留源格不跳过）。
+/// （布局失败或裁剪退化），调用方自行决定回退方式（保留源格不跳过）。
 pub(crate) fn plan_overlay_draw(
     state: &mut TerminalMathState,
     overlay: &FormulaOverlay,

@@ -1,4 +1,4 @@
-//! 单 pane agent 宿主(M4.5 壳侧事件通道的落点)。
+//! 单 pane agent 宿主(壳侧事件通道的落点)。
 //!
 //! 每个 pane 一份 `AgentPaneHost`:持有 `AgentActivity` 仲裁器与 `AnswerInbox`
 //! 收件箱。`AgentHub` 是 workspace 侧按 `PaneId` 的归属表——事件泵把整批
@@ -12,7 +12,7 @@
 //!   采样节奏由 workspace 的 1 Hz 看门狗统一驱动,不在每个输出事件上跑规则;
 //! - 屏幕规则引擎只读(用户覆盖热加载归 `ai_agents` 自身)。
 //!
-//! 缝合点(M5.5 已接):
+//! 缝合点(已接):
 //! - `SessionStart` 边把会话身份写进 `ai_sessions` 注册表:写盘在后台线程,
 //!   生产路径由 workspace 显式启用;宿主本身不碰磁盘。
 //! - 恢复注入:workspace 恢复 tab 时先 `seed_session`,再让视图
@@ -334,7 +334,7 @@ impl AgentHub {
     }
 
     /// 同 [`Self::dispatch`],额外返回**被接纳**的事件(按处理后顺序)。
-    /// M7.5 生命周期接线只允许对通过所有权门的事件动手 SessionEnd/TurnDone,
+    /// 生命周期接线只允许对通过所有权门的事件动手 SessionEnd/TurnDone,
     /// 伪造 pane/session 的迟到信封不得关闭注册项或回投委派。
     pub(crate) fn dispatch_lifecycle(
         &mut self,
@@ -532,7 +532,7 @@ mod host_tests {
         assert!(hub.session_agent(PaneId(7)).is_none(), "会话结束后身份清空");
     }
 
-    /// C9 防复发:SessionStart 的注册表写入必须离开调用方线程(锁 + fsync
+    /// 防复发:SessionStart 的注册表写入必须离开调用方线程(锁 + fsync
     /// 不得占用 GPUI 前台)。注入 writer 经 channel 回传线程 id 与字段,
     /// 不触碰真实数据目录。
     #[test]
@@ -617,7 +617,7 @@ mod host_tests {
         assert_eq!(hooked.status(), AgentStatus::Idle);
         assert_eq!(hooked.source(), AgentStatusSource::Hook);
 
-        // 纯检测注入路径(不触规则引擎磁盘覆盖):仲裁器边与 M4.2 用例同源。
+        // 纯检测注入路径(不触规则引擎磁盘覆盖):仲裁器边与用例同源。
         assert!(host.observe_detection(Some(Detection {
             agent: AgentKind::Kimi,
             status: AgentStatus::Blocked,

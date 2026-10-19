@@ -7,7 +7,7 @@
 //! 环境语义 = 「继承宿主进程 + PTY 创建时冻结的 overrides」;运行中 shell
 //! 里的 `export` / `$env:` 不会反向流回父进程,因此不假装能继承。
 
-// 消费点 = M7.5 壳事件泵的 pane.exec 执行器(`RuntimeControl` 臂调用 spawn)。
+// 消费点 = 壳事件泵的 pane.exec 执行器(`RuntimeControl` 臂调用 spawn)。
 #![allow(dead_code)]
 
 use std::collections::HashMap;

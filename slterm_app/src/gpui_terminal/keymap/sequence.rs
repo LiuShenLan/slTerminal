@@ -178,7 +178,7 @@ pub(super) fn use_win32_input_mode(mode: TermMode) -> bool {
 /// 记录翻译成 CR(即使 UnicodeChar 是 LF),其他 Windows 读者(Codex、
 /// PSReadLine)必须保留原生记录。
 ///
-/// M3 留位:`program` 恒 `None`——agent 检测归 AI 集成域,
+/// 留位:`program` 恒 `None`——agent 检测归 AI 集成域,
 /// 上游 `AgentKind::parse(program) == Claude` 的特判臂随 AI 集成域回填;回填前
 /// Windows 上 win32 模式恒保原生记录。
 pub(super) fn shift_enter_as_lf(program: Option<&str>, mode: TermMode) -> bool {
@@ -755,7 +755,7 @@ mod vt_tests {
         );
     }
 
-    /// M3 行为钉(留位):agent 检测归 AI 集成域,回填前 `program` 不消费——
+    /// 行为钉(留位):agent 检测归 AI 集成域,回填前 `program` 不消费——
     /// Windows 上 win32 记录模式恒保原生 Shift+Enter 记录,kitty 协商或传统
     /// VT 下 Shift+Enter 是 LF。
     #[test]

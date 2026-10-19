@@ -76,7 +76,7 @@ fn session() -> MutexGuard<'static, Option<DownloadSession>> {
         .unwrap_or_else(|poison| poison.into_inner())
 }
 
-/// 测试隔离:L1 共用进程,下载会话是模块级单例;每个用例以空会话起步。
+/// 测试隔离:单元层共用进程,下载会话是模块级单例;每个用例以空会话起步。
 #[cfg(test)]
 pub(crate) fn reset_session() {
     *session() = None;
@@ -149,7 +149,7 @@ fn begin_download_session(asset: &UpdateAsset) -> Option<DownloadJob> {
     })
 }
 
-/// 消费点 = 用户取消下载/切换版本(更新弹窗步);L1 作废链测试已覆盖。
+/// 消费点 = 用户取消下载/切换版本(更新弹窗步);单元层作废链测试已覆盖。
 #[allow(dead_code)]
 pub(crate) fn cancel(asset: &UpdateAsset) {
     let mut current = session();

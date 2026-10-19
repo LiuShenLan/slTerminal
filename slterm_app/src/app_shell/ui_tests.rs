@@ -64,7 +64,7 @@ fn open_workspace(cx: &mut TestAppContext) -> (gpui::Entity<SltermWorkspace>, Vi
     (workspace, window)
 }
 
-/// 同 [`open_workspace`],额外返回 hook 事件发送端(M4.5 事件泵断言用)。
+/// 同 [`open_workspace`],额外返回 hook 事件发送端(事件泵断言用)。
 fn open_workspace_with_ai(
     cx: &mut TestAppContext,
 ) -> (
@@ -137,7 +137,7 @@ fn ai_prompt_event(pane: u64, session: &str) -> AiHookEvent {
     crate::ai_hook::parse_envelope(wire.as_bytes()).expect("测试信封应可解析")
 }
 
-/// M3.1 冒烟:开窗 + Root 挂载 + draw 不 panic(clear 收尾是 arena 纪律)。
+/// 冒烟:开窗 + Root 挂载 + draw 不 panic(clear 收尾是 arena 纪律)。
 #[gpui::test]
 fn shell_window_mounts_root_and_draws(cx: &mut TestAppContext) {
     let (_workspace, mut window) = open_workspace(cx);
@@ -197,7 +197,7 @@ fn startup_grid_matches_first_frame_layout(cx: &mut TestAppContext) {
     );
 }
 
-/// M4.5 事件泵:前台任务排空 hook 通道,按信封 pane 写入对应宿主的
+/// 事件泵:前台任务排空 hook 通道,按信封 pane 写入对应宿主的
 /// `AgentActivity`(不 mock 通道,验证 GPUI foreground 排水形态)。
 #[gpui::test]
 fn ai_hook_pump_routes_event_to_the_owning_pane_host(cx: &mut TestAppContext) {
@@ -233,7 +233,7 @@ fn new_terminal_tab_keeps_panes_equal_to_tree_leaves(cx: &mut TestAppContext) {
     assert!(!zoomed);
 }
 
-/// 不变式「panes == 树叶」路径 2/3 + L4 渲染关键路径:split 后真实分屏树
+/// 不变式「panes == 树叶」路径 2/3 + 豁免层渲染关键路径:split 后真实分屏树
 /// 渲染出两个 pane 元素(两处 debug_bounds 非零)。
 #[gpui::test]
 fn split_renders_two_panes_and_keeps_panes_equal_to_tree_leaves(cx: &mut TestAppContext) {
@@ -262,7 +262,7 @@ fn split_renders_two_panes_and_keeps_panes_equal_to_tree_leaves(cx: &mut TestApp
     }
 }
 
-/// C7:非聚焦 pane 压暗层接主题开关;关闭时压暗元素完全不绘制。
+/// 非聚焦 pane 压暗层接主题开关;关闭时压暗元素完全不绘制。
 #[gpui::test]
 fn non_focused_pane_veil_follows_the_theme_switch(cx: &mut TestAppContext) {
     let (_workspace, mut window) = open_workspace(cx);
@@ -480,7 +480,7 @@ fn dragging_divider_into_close_zone_closes_the_squeezed_pane(cx: &mut TestAppCon
     assert!(!zoomed);
 }
 
-/// M4.5 屏幕看门狗:1 Hz 拍帧取网格末尾窗口,身份与规则命中后写入仲裁器。
+/// 屏幕看门狗:1 Hz 拍帧取网格末尾窗口,身份与规则命中后写入仲裁器。
 #[gpui::test]
 fn screen_watchdog_identifies_agent_and_updates_status(cx: &mut TestAppContext) {
     let (workspace, window) = open_workspace(cx);
@@ -508,7 +508,7 @@ fn screen_watchdog_identifies_agent_and_updates_status(cx: &mut TestAppContext) 
     assert_eq!(status, Some(crate::ai_agents::AgentStatus::Working));
 }
 
-// ── M6.2 设置页关键路径 ──
+// ── 设置页关键路径 ──
 
 /// 在临时数据目录打开设置 tab,返回设置页实体(不触碰真实 `%APPDATA%`)。
 fn open_settings_at(
@@ -614,7 +614,7 @@ fn settings_slider_previews_in_memory_and_release_commits(cx: &mut TestAppContex
     });
 }
 
-/// A2 相位机:连续提交在队列尾按 key 合并,后台任务串行执行。
+/// 相位机:连续提交在队列尾按 key 合并,后台任务串行执行。
 #[gpui::test]
 fn settings_persist_coalesces_rapid_commits_and_serializes_writes(cx: &mut TestAppContext) {
     let (workspace, mut window) = open_workspace(cx);
@@ -650,7 +650,7 @@ fn settings_persist_coalesces_rapid_commits_and_serializes_writes(cx: &mut TestA
     });
 }
 
-/// B57:拖动预览期间另一笔设置写完成,回读不得覆盖预览值。
+/// 拖动预览期间另一笔设置写完成,回读不得覆盖预览值。
 #[gpui::test]
 fn settings_opacity_preview_survives_a_concurrent_persist(cx: &mut TestAppContext) {
     let (workspace, mut window) = open_workspace(cx);
@@ -671,7 +671,7 @@ fn settings_opacity_preview_survives_a_concurrent_persist(cx: &mut TestAppContex
         assert_eq!(
             pane.read(cx).runtime_for_test().opacity,
             0.5,
-            "并发写回读不得覆盖拖动预览(B57)"
+            "并发写回读不得覆盖拖动预览"
         );
     });
 }
@@ -713,7 +713,7 @@ fn launch_at_login_toggle_persists_the_setting_key(cx: &mut TestAppContext) {
     }
 }
 
-/// A14:开启静默启动在同一笔写任务内联动 tray 并给出提示;
+/// 开启静默启动在同一笔写任务内联动 tray 并给出提示;
 /// 关闭 silent_start 不反向改 tray。
 #[gpui::test]
 fn silent_start_toggle_enables_tray_in_the_same_write_and_reports_the_hint(
@@ -959,7 +959,7 @@ fn settings_language_switch_refreshes_display_without_rebuilding_controls(cx: &m
     );
 }
 
-// ── M5.3b 侧栏骨架 / 标题栏 / tab 动作 ──
+// ── 侧栏骨架 / 标题栏 / tab 动作 ──
 
 /// 按 debug selector 取元素中心并完成一次左键点击。
 fn click_selector(window: &mut VisualTestContext, selector: &'static str) {
@@ -1004,7 +1004,7 @@ fn sidebar_renders_activity_bar_and_the_default_nav_slot(cx: &mut TestAppContext
     );
 }
 
-/// 双槽 active view 切换关键路径:R1 同槽替换、R2 关闭、下槽独立
+/// 双槽 active view 切换关键路径:同槽替换、关闭、下槽独立
 /// 打开(双开 split)、双空回到 hidden。
 #[gpui::test]
 fn sidebar_activity_buttons_switch_both_slots(cx: &mut TestAppContext) {
@@ -1013,7 +1013,7 @@ fn sidebar_activity_buttons_switch_both_slots(cx: &mut TestAppContext) {
     draw_frame(&mut window);
     assert!(window.debug_bounds("sidebar-slot-top-nav").is_some());
 
-    // R1:同槽打开新视图,旧视图隐式关闭。
+    // 同槽打开新视图,旧视图隐式关闭。
     click_selector(&mut window, "sidebar-view-btn-explorer");
     draw_frame(&mut window);
     assert!(window.debug_bounds("sidebar-slot-top-explorer").is_some());
@@ -1030,7 +1030,7 @@ fn sidebar_activity_buttons_switch_both_slots(cx: &mut TestAppContext) {
         "下槽视图必须渲染"
     );
 
-    // R2:下槽关闭,上槽不受影响。
+    // 下槽关闭,上槽不受影响。
     click_selector(&mut window, "sidebar-view-btn-agent_files");
     draw_frame(&mut window);
     assert!(
@@ -1040,7 +1040,7 @@ fn sidebar_activity_buttons_switch_both_slots(cx: &mut TestAppContext) {
     );
     assert!(window.debug_bounds("sidebar-slot-top-explorer").is_some());
 
-    // R2+R3:上槽也关闭 → 内容区整体隐藏,ActivityBar 常驻。
+    // +上槽也关闭 → 内容区整体隐藏,ActivityBar 常驻。
     click_selector(&mut window, "sidebar-view-btn-explorer");
     draw_frame(&mut window);
     assert!(window.debug_bounds("sidebar-area").is_none());
@@ -1235,7 +1235,7 @@ fn tab_actions_create_switch_and_close(cx: &mut TestAppContext) {
     assert_eq!(panes, vec![PaneId(1)]);
 }
 
-// ── M5.4 tab 拖拽停靠 + split_bounds 键修复 ──
+// ── tab 拖拽停靠 + split_bounds 键修复 ──
 
 /// 两个 tab 的通用起手:tab1 左右分屏(panes 1/2),tab2 单 pane(3),
 /// 最后回到 tab1 作停靠目标(活跃 tab)。
@@ -1533,8 +1533,8 @@ fn split_bounds_keys_follow_the_tab_identity_across_reorder(cx: &mut TestAppCont
     );
 }
 
-/// M5.3a 问题 1:`-e` 启动的 tab 在建 tab 时把完整命令冻结进
-/// `TabMeta.launch`(M5.5 快照/恢复按此重建)。
+/// 问题 1:`-e` 启动的 tab 在建 tab 时把完整命令冻结进
+/// `TabMeta.launch`(快照/恢复按此重建)。
 #[gpui::test]
 fn launch_terminal_tab_freezes_the_full_command_into_meta(cx: &mut TestAppContext) {
     let command = Program::WithArgs {
@@ -1558,7 +1558,7 @@ fn launch_terminal_tab_freezes_the_full_command_into_meta(cx: &mut TestAppContex
     );
 }
 
-// ── M5.5 快照 / 恢复闭环 ──
+// ── 快照 / 恢复闭环 ──
 
 /// 冷恢复夹具:两 tab、tab0 左右分屏、逐叶 cwd/launch/agent、侧栏双槽与
 /// 窗口态全部写进磁盘 session.json(崩溃形态 `clean_exit=false`)。
@@ -1683,7 +1683,7 @@ fn crashed_snapshot_restores_tabs_split_cwd_and_sidebar_within_one_tick(cx: &mut
         Some(cwd2.clone())
     );
 
-    // 侧栏骨架态(D05-3)随现场恢复。
+    // 侧栏骨架态随现场恢复。
     let sidebar = workspace.read_with(cx, |ws, _| *ws.sidebar_state());
     assert_eq!(
         sidebar,
@@ -1756,7 +1756,7 @@ fn export_workspace_is_the_snapshot_schema_read_back(cx: &mut TestAppContext) {
     assert_eq!(exported, snapshot, "导出与快照字段级相等");
 }
 
-/// D05-1:窗口尺寸/最大化态进快照,并在窗口定形前原样回放。
+/// 窗口尺寸/最大化态进快照,并在窗口定形前原样回放。
 #[gpui::test]
 fn window_state_persists_and_replays_before_window_creation(cx: &mut TestAppContext) {
     let (workspace, mut window) = open_workspace(cx);

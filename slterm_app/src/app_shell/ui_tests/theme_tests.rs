@@ -1,4 +1,4 @@
-//! M6.3 主题编辑关键路径(L4 虚拟窗口):草稿/基线双快照、首次保存恒
+//! 主题编辑关键路径(豁免层虚拟窗口):草稿/基线双快照、首次保存恒
 //! fork、保存与应用分离、WCAG 保存拒绝、取色推荐点选、主题解析热应用。
 
 use super::*;
@@ -8,7 +8,7 @@ use crate::theme_library::ThemeLibraryStore;
 use crate::theme_library::package::{Author, CheckedPackage, export_package};
 use slterm_settings::BlurMode;
 
-// ── M6.3 主题编辑关键路径 ──
+// ── 主题编辑关键路径 ──
 
 /// 在临时数据目录打开设置页并进入主题编辑器。
 fn open_theme_editor_at(
@@ -291,7 +291,7 @@ fn theme_editor_apply_is_a_separate_action_from_save(cx: &mut TestAppContext) {
             pane.save_theme_editor_for_test(true, window, cx)
         })
     });
-    // A2:条件写盘在后台执行,排水后文件与热应用才可见。
+    // 条件写盘在后台执行,排水后文件与热应用才可见。
     window.run_until_parked();
     assert!(
         applied,
@@ -374,7 +374,7 @@ fn theme_editor_save_rejects_low_contrast_combinations(cx: &mut TestAppContext) 
     );
 }
 
-/// 取色推荐:L4 点选推荐色块 → 草稿前景更新;原色恒第一且候选达标。
+/// 取色推荐:豁免层点选推荐色块 → 草稿前景更新;原色恒第一且候选达标。
 #[gpui::test]
 fn theme_editor_color_recommendations_keep_original_and_apply_on_click(cx: &mut TestAppContext) {
     let (workspace, mut window) = open_workspace(cx);
@@ -508,7 +508,7 @@ fn theme_editor_saves_advanced_typography_layout_and_blur(cx: &mut TestAppContex
     );
 }
 
-/// C7:非聚焦窗格压暗开关随主题文档 round-trip;Reset/模板切换遵循既有字段模式。
+/// 非聚焦窗格压暗开关随主题文档 round-trip;Reset/模板切换遵循既有字段模式。
 #[gpui::test]
 fn theme_editor_pane_veil_switch_round_trips_through_the_library(cx: &mut TestAppContext) {
     let (workspace, mut window) = open_workspace(cx);
@@ -618,7 +618,7 @@ fn theme_editor_apply_publishes_runtime_keys_and_keeps_document_only_fields(
             pane.save_theme_editor_for_test(true, window, cx)
         })
     });
-    // A2:条件写盘在后台执行,排水后文件与热应用才可见。
+    // 条件写盘在后台执行,排水后文件与热应用才可见。
     window.run_until_parked();
     assert!(
         applied,
@@ -830,7 +830,7 @@ fn theme_editor_rejects_invalid_letter_spacing_and_font_weight(cx: &mut TestAppC
     );
 }
 
-// ── B19 主题包导入/导出 UI ──
+// ── 主题包导入/导出 UI ──
 
 /// 在 tempdir 主题库写入一个自定义主题文档,返回其 id。
 fn seed_custom_theme(directory: &std::path::Path, name: &str) -> String {

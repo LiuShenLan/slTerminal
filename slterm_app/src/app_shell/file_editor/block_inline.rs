@@ -3,7 +3,7 @@
 //!
 //! 病理块(对象数超上限)回退为单字面量部件 + 单输入,避免逐对象物化视图。
 //!
-//! 消费点:M8.3 内联分段渲染。
+//! 消费点:内联分段渲染。
 
 use super::block_structure::{EditPart, PartKind, StructureNode, add, span};
 use super::inline_edit::Marks;

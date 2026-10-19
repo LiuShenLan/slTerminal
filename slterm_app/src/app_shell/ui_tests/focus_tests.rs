@@ -35,7 +35,7 @@ fn legacy_attach_focuses_the_single_window(cx: &mut TestAppContext) {
 }
 
 /// toast 动作按钮也是四路回窗之一:点击确认按钮先回窗到来源 pane,
-/// 确认语义本身归安全确认半程(本步只断言回窗落点)。
+/// 确认语义本身归安全确认半程(本模块只断言回窗落点)。
 #[gpui::test]
 fn action_button_choice_returns_to_the_named_pane(cx: &mut TestAppContext) {
     let (workspace, mut window) = open_workspace(cx);

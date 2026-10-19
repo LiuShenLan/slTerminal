@@ -161,7 +161,7 @@ pub(crate) struct LifetimeFileLock {
 impl Drop for LifetimeFileLock {
     fn drop(&mut self) {
         // 先释放独占句柄再尽力删除锁文件,避免正常退出后安装目录残留
-        // (B78/C29)。若另一实例已经打开该文件,`share_mode(0)` 会让删除
+        // 。若另一实例已经打开该文件,`share_mode(0)` 会让删除
         // 因共享冲突失败——忽略即可,锁语义仍由对方句柄持有。
         self._file.take();
         let _ = std::fs::remove_file(&self.path);
@@ -337,7 +337,7 @@ mod atomic_file_tests {
         assert!(lock_file.exists(), "持锁期间锁文件必须在");
         assert!(try_lifetime_lock(&path).unwrap().is_none());
         drop(owner);
-        assert!(!lock_file.exists(), "正常释放后锁文件必须删除(B78/C29)");
+        assert!(!lock_file.exists(), "正常释放后锁文件必须删除");
         assert!(try_lifetime_lock(&path).unwrap().is_some());
     }
 
@@ -358,7 +358,7 @@ mod atomic_file_tests {
         assert!(path.is_dir(), "失败不得破坏目标");
     }
 
-    /// 原子替换必须保留目标文件原有的显式 DACL(B13)。
+    /// 原子替换必须保留目标文件原有的显式 DACL。
     ///
     /// 无显式 ACE 时 ACL 完全由父目录继承,复制与否不可区分;先用系统自带
     /// `icacls` 加一条显式 ACE 再比对。icacls 不可用或加 ACE 失败时跳过。

@@ -48,7 +48,7 @@ fn is_owned(path: &Path, content: &[u8], expected: &[u8]) -> bool {
     {
         return true;
     }
-    // SEC-13:磁盘文件与内嵌模板不一致(被编辑/被替换)→ 审计留痕。
+    // 磁盘文件与内嵌模板不一致(被编辑/被替换)→ 审计留痕。
     // 只落期望/实测 SHA-256 指纹,不落文件内容。
     crate::audit::hook_hash_mismatch(path, &fingerprint(expected), &actual);
     false

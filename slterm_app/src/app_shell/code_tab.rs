@@ -2,7 +2,7 @@
 //! 只读臂 + 冲突三栏合并臂。
 //!
 //! 普通源码与 gitshow 共用 [`TextFileView`] 快照通路;两者的区别只在数据源
-//! (磁盘前缀 / HEAD blob)与标题后缀(`<name> @ HEAD`)。M8.2 起普通源码
+//! (磁盘前缀 / HEAD blob)与标题后缀(`<name> @ HEAD`)。普通源码
 //! 源码态可编辑可存;通用 diff 落本视图的 Diff 模式(不新增
 //! tab 变体);冲突 gutter 点击落 Merge 模式(base/ours/theirs)。
 //!
@@ -130,7 +130,7 @@ impl CodeTabView {
         Self::new_with_source(path, true, window, cx)
     }
 
-    /// 通用 diff 只读臂:左 HEAD / 右工作区,双栏对照(D07-2 已裁)。
+    /// 通用 diff 只读臂:左 HEAD / 右工作区,双栏对照(已裁)。
     pub fn new_diff(path: PathBuf, window: &mut Window, cx: &mut Context<'_, Self>) -> Self {
         let diff = cx.new(|cx| {
             DiffTabView::open(
@@ -198,7 +198,7 @@ impl CodeTabView {
         let file = if git_show {
             cx.new(|cx| TextFileView::new_git_head(file_path, language, window, cx))
         } else {
-            // M8.2:普通源码 = 可编辑源码态;只读仍由快照合同兜底。
+            // 普通源码 = 可编辑源码态;只读仍由快照合同兜底。
             cx.new(|cx| TextFileView::new(file_path, language, false, window, cx))
         };
         let observation = cx.observe_in(&file, window, |_, _, _, cx| {
@@ -272,12 +272,12 @@ impl CodeTabView {
         }
     }
 
-    /// 同路径普通源码 tab 的重开命中(草稿保留归 M8.2,本步只重读盘)。
+    /// 同路径普通源码 tab 的重开命中（草稿保留，本模块只重读盘）。
     pub fn is_regular_path(&self, path: &Path) -> bool {
         self.file().is_some() && !self.git_show && self.path == path
     }
 
-    /// 外部 watcher 兴趣读端(B8):仅 File 模式的普通源码返回磁盘路径;
+    /// 外部 watcher 兴趣读端:仅 File 模式的普通源码返回磁盘路径;
     /// gitshow、diff 与 merge 只读臂不登记。
     pub(crate) fn editable_path(&self) -> Option<&Path> {
         match &self.mode {
@@ -286,7 +286,7 @@ impl CodeTabView {
         }
     }
 
-    /// 外部修改触发点(B8):重读磁盘 gutter 快照并刷新行标。
+    /// 外部修改触发点:重读磁盘 gutter 快照并刷新行标。
     /// 只读/gitshow 的跳过规则在 `TextFileView::refresh_gutter_from_disk`。
     pub(crate) fn refresh_gutter(&mut self, cx: &mut Context<'_, Self>) {
         let Some(file) = self.file() else {

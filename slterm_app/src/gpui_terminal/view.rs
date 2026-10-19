@@ -45,7 +45,7 @@ use super::session::{self, TerminalSession};
 use super::{KEY_CONTEXT, TerminalBackTab, TerminalTab};
 use crate::app_shell::config::Settings;
 use crate::i18n::Message;
-use typography::{M3_CELL_WIDTH_MODE, M3_FONT_OFFSET, mono_font};
+use typography::{CELL_WIDTH_MODE, FONT_OFFSET, mono_font};
 
 /// 拖选越过网格上/下边界后的自动回滚:tick 间隔与「每远离 20px 加一行」的
 /// 速度分档取自旧壳常量(GPUI 的 `Pixels` 本就是逻辑像素,这里直接是逻辑口径)。
@@ -87,7 +87,7 @@ fn restart_cursor_blink_phase(cursor_visible: &mut bool, cursor_blink_epoch: &mu
     *cursor_blink_epoch
 }
 
-/// 终端视图对宿主(Workspace)暴露的状态变化。M3 白集;
+/// 终端视图对宿主(Workspace)暴露的状态变化。白集;
 /// FocusRequested/RequestClose/Bell/Notification/Progress/菜单等臂归各自
 /// 分模块回填。
 pub enum TerminalViewEvent {
@@ -95,9 +95,9 @@ pub enum TerminalViewEvent {
     TitleChanged,
     /// 会话结束(子进程退出或 PTY 故障),只发一次。
     Exited,
-    /// 用户语义输入。宿主可按 tab 的广播状态扇出(广播本体归 M5);
+    /// 用户语义输入。宿主可按 tab 的广播状态扇出（广播本体归壳层）。
     /// 接收 pane 必须重新编码,不能复用发送方已受终端 mode 影响的字节。
-    #[allow(dead_code)] // 载荷消费 = M5 广播扇出;M3 宿主只收事件名。
+    #[allow(dead_code)] // 载荷消费 = 广播扇出;宿主只收事件名。
     UserInput(TerminalInput),
     /// Enter 提交了非空命令行:宿主把 agent 生命周期记到本 pane。
     #[allow(dead_code)] // 载荷消费 = 后续 agent 判定;当前只作事件名。
@@ -111,7 +111,7 @@ pub enum TerminalViewEvent {
     ProgressChanged(crate::taskbar::TaskProgress),
 }
 
-/// 会话种类。M3 只剩本地 shell:上游 `Ssh` 变体消亡(按理想
+/// 会话种类。只剩本地 shell:上游 `Ssh` 变体消亡(按理想
 /// 终态重设计时另立)。
 ///
 /// `shell` 是 Tab 创建时已经裁定好的启动命令。不能只传 cwd 再在
@@ -121,11 +121,11 @@ pub enum TerminalLaunch {
     Local {
         cwd: Option<std::path::PathBuf>,
         shell: Option<slterm_terminal::tty::Shell>,
-        /// 展示用 shell 名(欢迎/标题);M3 不参与 PTY 启动决策。
+        /// 展示用 shell 名(欢迎/标题);不参与 PTY 启动决策。
         shell_name: Option<String>,
         /// 命令来自 `-e` 显式指定(用户 CLI 直给):core 跳过 shell 白名单
         /// 并做裸名 PATH 路径化。settings 键等配置文件来源必须 `false`
-        /// (SEC-01 防配置注入偷换 shell)。
+        /// (防配置注入偷换 shell)。
         explicit_command: bool,
     },
 }
@@ -141,10 +141,10 @@ pub struct TerminalView {
     pub font_italic: Font,
     pub font_bold_italic: Font,
     pub font_size: Pixels,
-    #[allow(dead_code)] // 设置热应用换字体时重读;M3 构造期消费后闲置。
+    #[allow(dead_code)] // 设置热应用换字体时重读;构造期消费后闲置。
     pub ligatures: bool,
     /// 单元格偏移取物理像素语义(对齐 crossfont 合同),在 GPUI shaped
-    /// 实际字形之后施加。M3 恒 (0,0)(设置键回填)。
+    /// 实际字形之后施加。恒 (0,0)(设置键回填)。
     font_offset_x: f32,
     font_offset_y: f32,
     /// 主题行高倍率:`None` 保留 shaped 字体度量;`Some` 作用于逻辑字号。
@@ -169,7 +169,7 @@ pub struct TerminalView {
     pub(crate) ghost_enabled: bool,
     /// Enter 时捕获的提交行(OSC 133;D 触发判定与程序身份共用)。
     pub(crate) last_committed: String,
-    /// runtime run 记账(C1):OSC 133 两条边推进 phase 并产出 outcome。
+    /// runtime run 记账:OSC 133 两条边推进 phase 并产出 outcome。
     pub(crate) active_run: Option<crate::runtime_api::RuntimePaneRun>,
     pub(crate) last_run: Option<crate::runtime_api::RuntimeRunOutcome>,
     /// 每 pane 一条 AI 修复建议的生命周期。
@@ -250,7 +250,7 @@ pub struct TerminalView {
     _cursor_blink_subscriptions: [gpui::Subscription; 3],
     /// 最近一次下发的默认光标样式。只在它真正变化时清理 shell 的
     /// DECSCUSR/DEC mode 12 覆盖,避免无关设置变更打断 vim 等程序光标。
-    #[allow(dead_code)] // 下发消费点随 M6 主题/设置联动点亮;M3 恒默认。
+    #[allow(dead_code)] // 下发消费点随主题/设置联动点亮;恒默认。
     pub(super) default_cursor_style: CursorStyle,
 }
 
@@ -316,7 +316,7 @@ impl TerminalView {
     }
 
     pub(super) fn cell_width_for_advance(&self, raw_width: f32, scale: f32) -> Pixels {
-        typography::effective_cell_width(raw_width, M3_CELL_WIDTH_MODE, scale, self.font_offset_x)
+        typography::effective_cell_width(raw_width, CELL_WIDTH_MODE, scale, self.font_offset_x)
     }
 
     pub(super) fn line_height_for_metrics(&self, natural_height: f32, scale: f32) -> Pixels {
@@ -354,7 +354,7 @@ impl TerminalView {
             .unwrap_or_default()
     }
 
-    /// 事件白集(M3):每条臂的归属见改造节;新增事件
+    /// 事件白集:每条臂的归属见改造节;新增事件
     /// 消费须先查归属表,不在此自由发挥。
     pub(super) fn process_event(&mut self, event: TermEvent, cx: &mut Context<'_, Self>) {
         let cwd_changed = cwd_report::apply(&mut self.cwd, &event);
@@ -374,7 +374,7 @@ impl TerminalView {
             TermEvent::Title(title) => {
                 // `SLTERM|cwd|branch` 标题协议:cwd 已由上面的 cwd_report
                 // 摘走;协议串不是窗口标题,更不是 tab 名。branch 字段的
-                // 消费归工作区 chrome,M3 不存。
+                // 消费归工作区 chrome,不存。
                 if cwd_changed {
                     crate::completion::record_directory(&self.cwd);
                 }
@@ -433,7 +433,7 @@ impl TerminalView {
                     cx.notify();
                 }
             }
-            // 命令边界(清单 C1):OSC 133;C/D 接 active_run/last_run 记账与
+            // 命令边界:OSC 133;C/D 接 active_run/last_run 记账与
             // AI assistant 触发链;agent 生命周期由宿主经事件收尾。屏幕采样
             // 仍走 workspace 的 1 Hz 看门狗(输出洪流下每字节 detect 不成立)。
             TermEvent::CommandStart => {
@@ -639,7 +639,7 @@ impl TerminalView {
 
     /// 屏幕观察窗口:终端网格末尾最多 24 行(与屏幕规则注意力区窗口同源)。
     ///
-    /// 消费点 = workspace 的 1 Hz agent 看门狗(M4.5);刻意不挂在每个
+    /// 消费点 = workspace 的 1 Hz agent 看门狗;刻意不挂在每个
     /// `Wakeup` 上——规则匹配随输出洪流放大,屏幕证据只需要拍帧级频率。
     /// 无会话/零几何(尚未布局)返回 `None`。
     pub(crate) fn agent_screen_sample(&self) -> Option<String> {
@@ -684,7 +684,7 @@ impl TerminalView {
         true
     }
 
-    /// 粘贴入口。M3 无多行确认(归 AI 集成与通知域):文本直入;bracketed-paste
+    /// 粘贴入口。无多行确认(归 AI 集成与通知域):文本直入;bracketed-paste
     /// 哨兵与注入过滤在 `paste_now_impl`。
     pub fn paste(&mut self, _window: &mut Window, cx: &mut Context<'_, Self>) {
         let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
@@ -712,7 +712,7 @@ impl TerminalView {
         }
     }
 
-    /// M3 键位分发:白名单按改造节 3。分发判定唯一点 = 本函数的
+    /// 键位分发:白名单按改造节 3。分发判定唯一点 = 本函数的
     /// 快捷键层;编码器(`keymap`)零特例——Ctrl+C 不在快捷键层出现,
     /// ctrl_char('c')=0x03 经编码器恒透传(定位约束 7)。
     fn on_key_down(
@@ -737,7 +737,7 @@ impl TerminalView {
         if mods.control && mods.shift {
             match ks.key.as_str() {
                 "c" => {
-                    // D13-1 默认语义:无选区也 stop_propagation 静默吞——
+                    // 默认语义:无选区也 stop_propagation 静默吞——
                     // 复制键永不入 PTY;负反馈/透传中断的权衡见待沉淀决策。
                     self.copy_selection(true, window, cx);
                     cx.stop_propagation();
@@ -990,7 +990,7 @@ impl Render for TerminalView {
             .debug_selector(|| "slterm-terminal".to_owned())
             .key_context(KEY_CONTEXT)
             .size_full()
-            // B56:终端卡底色取调色板 background(单层铺底;单元格自身的
+            // 终端卡底色取调色板 background(单层铺底;单元格自身的
             // 背景绘制在其上,不做二次 alpha 叠加)。
             .bg(self.palette.background)
             .relative()
@@ -1119,7 +1119,7 @@ impl Render for TerminalView {
     }
 }
 
-/// 弹窗候选来源 tag(与 M9.1 呈现条目四态一一对应)。
+/// 弹窗候选来源 tag(与呈现条目四态一一对应)。
 fn completion_kind_tag(kind: crate::suggest::SltermCompletionKind) -> &'static str {
     match kind {
         crate::suggest::SltermCompletionKind::History => "history",

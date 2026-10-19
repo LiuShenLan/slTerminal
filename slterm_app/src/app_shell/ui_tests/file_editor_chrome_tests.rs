@@ -1,4 +1,4 @@
-//! 编辑器 chrome 关键路径(B17):reader-focus 与全屏控制。
+//! 编辑器 chrome 关键路径:reader-focus 与全屏控制。
 //!
 //! reader-focus = 隐藏工具条与详情栏、只留编辑器内容,退出入口固定在
 //! 右上角浮层;全屏只切窗口态,不新增窗口控制命令。全程 tempdir 假文件。

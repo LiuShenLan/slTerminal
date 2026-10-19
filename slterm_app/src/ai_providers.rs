@@ -6,7 +6,7 @@
 //! 永不入 store,文件可整份展示/备份/diff 而无泄露。
 //!
 //! 凭据读写经 [`CredentialStore`] 注入消费(凭据管理器三原语的应用层投影);
-//! 真实 Windows 凭据管理器实现归 M10.9,本步用 mock 断言调用契约。
+//! 真实 Windows 凭据管理器实现归平台层。本模块用 mock 断言调用契约。
 
 use std::io;
 use std::path::{Path, PathBuf};

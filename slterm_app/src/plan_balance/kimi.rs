@@ -39,7 +39,7 @@ impl PlanQuery for KimiQuery {
 }
 
 impl KimiQuery {
-    /// 显式 endpoint/timeout 形态:生产走常量,L1 用本地 HTTP 服务验证请求形态。
+    /// 显式 endpoint/timeout 形态:生产走常量,单元层用本地 HTTP 服务验证请求形态。
     fn fetch_at(
         &self,
         endpoint: &str,

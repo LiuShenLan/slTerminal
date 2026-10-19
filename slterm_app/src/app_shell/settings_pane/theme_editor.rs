@@ -1020,7 +1020,7 @@ impl SettingsPane {
                 return false;
             }
         };
-        // A2:条件写盘入队后台执行;成功后由 `finish_persist` 关闭编辑器并
+        // 条件写盘入队后台执行;成功后由 `finish_persist` 关闭编辑器并
         // 应用回读(语言变化时刷新显示项)。
         self.try_persist_checked(&updates, &revision, true, cx);
         self.status = None;

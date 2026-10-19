@@ -119,7 +119,7 @@ pub(crate) enum SettingsStatus {
     Reset { backup: Option<PathBuf> },
     /// 写盘/读取失败。
     Failed(String),
-    /// 静默启动开启时已联动开启常驻托盘(A14)。
+    /// 静默启动开启时已联动开启常驻托盘。
     SilentStartTrayEnabled,
     /// 主题包导入成功;`name` = 库内消歧后的显示名。
     ThemeImported { name: String },
@@ -201,7 +201,7 @@ pub(crate) struct SettingsPane {
     /// 渲染与预览的单一事实源;每次成功写盘后整体重载。
     runtime: RuntimeSettings,
     /// 解析后的渲染语言缓存:System 档的 locale 探测只在运行时重载点发生,
-    /// 渲染路径(`language()`)零系统调用(M6.2 逐帧探测问题收口)。
+    /// 渲染路径(`language`)零系统调用(逐帧探测问题收口)。
     language: UiLanguage,
     /// 最近一次成功读盘的快照——写失败回滚的"已存值"。
     persisted: RuntimeSettings,
@@ -216,21 +216,21 @@ pub(crate) struct SettingsPane {
     font_family_input: Entity<InputState>,
     font_size_input: Entity<InputState>,
     startup_directory_input: Entity<InputState>,
-    /// C33:加密备份类别选择(纯 UI 态,默认仅设置;不写设置键)。
+    /// 加密备份类别选择(纯 UI 态,默认仅设置;不写设置键)。
     backup_selection: BackupSelection,
-    /// C33:备份口令输入(masked);值只留用户输入,不另存字段。
+    /// 备份口令输入(masked);值只留用户输入,不另存字段。
     backup_passphrase: Entity<InputState>,
-    /// C33:口令占位符当前渲染语言(热切换只换占位符,不重建实体)。
+    /// 口令占位符当前渲染语言(热切换只换占位符,不重建实体)。
     backup_passphrase_language: UiLanguage,
-    /// C33:导出在途忙态(含路径对话框阶段,防重复点击/重入)。
+    /// 导出在途忙态(含路径对话框阶段,防重复点击/重入)。
     backup_busy: bool,
     status: Option<SettingsStatus>,
     /// 恢复默认的二次确认(第一次点击只武装)。
     reset_armed: bool,
-    /// A2 写相位机:设置类写盘全部后台执行,前台只入队与消费结果。
+    /// 写相位机:设置类写盘全部后台执行,前台只入队与消费结果。
     persist_queue: std::collections::VecDeque<persistence::PersistJob>,
     persist_running: bool,
-    /// B57:拖动中的实时透明度;后台回读不得覆盖预览值。
+    /// 拖动中的实时透明度;后台回读不得覆盖预览值。
     live_opacity: Option<f32>,
     /// 壁纸 fit/alignment 下拉(独立于通用 `selects`:映射与本地化在此)。
     wallpaper_fit_select: SharedSelect,
@@ -248,7 +248,7 @@ pub(crate) struct SettingsPane {
     wallpaper_preview_loading: bool,
     /// 壁纸可读错误(路径不存在/解码失败);有值时页面内联展示。
     wallpaper_error: Option<String>,
-    /// B19:主题包导入/导出忙态(防重复点击)。
+    /// 主题包导入/导出忙态(防重复点击)。
     theme_import_busy: bool,
     theme_export_busy: bool,
     /// 主题编辑会话(外观页子视图;关闭即丢弃草稿)。
@@ -310,7 +310,7 @@ impl SettingsTarget {
     }
 
     fn reset(&self) -> io::Result<Option<PathBuf>> {
-        // B3:重置与保存共用 SAVE_LOCK,消除「重置后并发保存丢失更新」窗口。
+        // 重置与保存共用 SAVE_LOCK,消除「重置后并发保存丢失更新」窗口。
         crate::settings_store::with_save_lock(|| match self {
             Self::Default => slterm_settings::restore_default_settings(),
             Self::Path(path) => slterm_settings::restore_default_settings_at(path),
@@ -1739,7 +1739,7 @@ impl Render for SettingsPane {
     }
 }
 
-/// B55/B19 虚拟窗口用例的驱动端(生产不编译)。
+/// /虚拟窗口用例的驱动端(生产不编译)。
 #[cfg(all(test, feature = "gpui-test-support"))]
 impl SettingsPane {
     pub(crate) fn pick_wallpaper_for_test(
@@ -1825,7 +1825,7 @@ impl SettingsPane {
         self.theme_export_busy
     }
 
-    // ── C33 加密备份 ──
+    // ── 加密备份 ──
 
     /// 设置类别选择集(空集用于前置校验用例)。
     pub(crate) fn set_backup_selection_for_test(&mut self, selection: BackupSelection) {
@@ -1871,7 +1871,7 @@ impl SettingsPane {
         self.backup_busy = busy;
     }
 
-    /// B7:当前用户在 `keybind` 段的内存表(写回后与磁盘同形)。
+    /// 当前用户在 `keybind` 段的内存表(写回后与磁盘同形)。
     pub(crate) fn keybind_pairs_for_test(&self) -> Vec<(String, String)> {
         self.keybind_pairs.clone()
     }

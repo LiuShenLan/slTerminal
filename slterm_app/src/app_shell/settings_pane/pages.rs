@@ -951,7 +951,7 @@ impl SettingsPane {
                         cx,
                     )),
             )
-            // C33:加密备份导出(恢复/撤回入口不在本步范围)。
+            // 加密备份导出(恢复/撤回入口不在本模块范围)。
             .child(
                 self.group(language.text(Message::SettingsBackupGroup), cx)
                     .child(self.backup_category_row(

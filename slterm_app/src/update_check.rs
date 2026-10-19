@@ -37,7 +37,7 @@ const UPDATE_STATE_FILE: &str = "update_state.json";
 const REMIND_LATER_SECS: u64 = 3 * 24 * 60 * 60;
 /// release JSON 正文上限:正常响应远小于此,防御异常大响应。
 const RELEASE_BODY_LIMIT: u64 = 2 * 1024 * 1024;
-/// 首个 Inno 安装基版本(D12-4):更早的历史安装(Tauri 时代)不构成
+/// 首个 Inno 安装基版本:更早的历史安装(Tauri 时代)不构成
 /// 可更新对象,更新链只提示「需手动重装」,绝不自动下载/安装。
 pub(crate) const FIRST_INSTALLER_VERSION: &str = "0.3.0";
 
@@ -484,7 +484,7 @@ fn version_is_installable(latest: &str, current: &str, rehearsal: bool) -> bool 
     is_newer(latest, current) || (rehearsal && latest == current)
 }
 
-/// 当前安装早于首个 Inno 安装基(D12-4):Tauri 时代安装基无法被 setup.exe
+/// 当前安装早于首个 Inno 安装基:Tauri 时代安装基无法被 setup.exe
 /// 覆盖,更新链只提示手动重装,自动下载/安装必须保持关闭。
 pub(crate) fn requires_manual_reinstall(current: &str) -> bool {
     is_newer(FIRST_INSTALLER_VERSION, current)

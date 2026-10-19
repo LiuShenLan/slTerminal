@@ -2,13 +2,13 @@
 //!
 //! 合同全貌:
 //! - **发送方向**(`write_user_*`):先按本 pane 的模式编码并写 PTY,再 emit
-//!   一条语义事件。emit 是无条件的,广播开关的判定在宿主(M5),视图这边
+//!   一条语义事件。emit 是无条件的,广播开关的判定在宿主,视图这边
 //!   不留第二份记账。
-//! - **接收方向**(`apply_broadcast_*`):归 M5 随分屏广播落地——接收端按
+//! - **接收方向**(`apply_broadcast_*`):随分屏广播落地——接收端按
 //!   **自己**的 term mode 重新编码后直接写 PTY,不再 emit(无环保证)。
 //!
-//! M3.3 起 `Key`/`Text` 两个变体的生产点齐(键位编码器 + IME/粘贴);
-//! 接收方向(`apply_broadcast_*`)归 M5 随分屏广播落地。
+//! `Key`/`Text` 两个变体的生产点齐(键位编码器 + IME/粘贴);
+//! 接收方向(`apply_broadcast_*`)随分屏广播落地。
 
 use gpui::Context;
 
@@ -18,18 +18,18 @@ use super::{TerminalView, TerminalViewEvent};
 #[derive(Clone)]
 pub enum TerminalInput {
     /// 键位编码器路径(`on_key_down` → `write_user_key`)。
-    #[allow(dead_code)] // 载荷消费 = M5 广播扇出;M3 宿主只收事件名。
+    #[allow(dead_code)] // 载荷消费 = 广播扇出;宿主只收事件名。
     Key(gpui::Keystroke),
     /// `paste` = 走粘贴语义。接收端据此决定要不要套 bracketed-paste 哨兵:
     /// 给单个字符套上哨兵会让 zsh/fish 拒绝执行。
-    #[allow(dead_code)] // 载荷消费 = M5 广播扇出;M3 无接收端。
+    #[allow(dead_code)] // 载荷消费 = 广播扇出;无接收端。
     Text { text: String, paste: bool },
 }
 
 impl TerminalView {
     /// 编码器路径的用户按键:本 pane 照原样写入,同时把 keystroke 上报。
     /// 与上游的形态差:`cursor_animation.note_encoded_key` 不迁——光标动画
-    /// 不在 M3 字段集,随其归属回填时恢复调用点。
+    /// 不在字段集,随其归属回填时恢复调用点。
     pub(super) fn write_user_key(
         &mut self,
         keystroke: gpui::Keystroke,

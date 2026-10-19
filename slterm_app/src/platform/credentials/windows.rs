@@ -28,7 +28,7 @@ fn is_not_found(error: &windows::core::Error) -> bool {
     error.code() == HRESULT::from_win32(ERROR_NOT_FOUND.0)
 }
 
-/// 后端错误消息只含操作名与 target,禁止拼接凭据值(SEC-18 日志红线)。
+/// 后端错误消息只含操作名与 target,禁止拼接凭据值(日志红线)。
 fn backend_error(operation: &str, target: &str, error: windows::core::Error) -> io::Error {
     io::Error::other(format!(
         "credential manager {operation} failed for {target}: {error}"

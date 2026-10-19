@@ -1,7 +1,7 @@
 //! 指针交互:选区、鼠标协议上报、滚轮滚动、选区拖拽自动回滚。
 //!
-//! M3 裁剪(归属见字段节):滚动条 overlay 族(scrollbar_thumb/grab/
-//! drag,归 M5 随分屏渲染扩)、补全浮层族(08)、OSC8 链接族(07/09 裁定)、
+//! 裁剪(归属见字段节):滚动条 overlay 族(scrollbar_thumb/grab/
+//! drag,随分屏渲染扩)、补全浮层族(08)、OSC8 链接族(07/09 裁定)、
 //! focus_follows_mouse(06 设置键)、Ctrl+滚轮字号缩放(06,保留消费不缩放)。
 
 use super::*;
@@ -310,8 +310,8 @@ impl TerminalView {
         true
     }
 
-    /// 右键:M3 无上下文菜单(归 M5)——有选区复制、无选区粘贴
-    /// (对齐上游 copy_on_select=true 形态;M3 菜单请求事件不立)。
+    /// 右键:无上下文菜单——有选区复制、无选区粘贴
+    /// (对齐上游 copy_on_select=true 形态;菜单请求事件不立)。
     pub(super) fn on_right_down(
         &mut self,
         event: &MouseDownEvent,
@@ -405,7 +405,7 @@ impl TerminalView {
         cx: &mut Context<'_, Self>,
     ) {
         let delta_y = event.delta.pixel_delta(self.line_height).y.as_f32();
-        // Ctrl+滚轮 = 字号缩放手势位:M3 键域归 06,这里只消费不缩放——
+        // Ctrl+滚轮 = 字号缩放手势位:键域归 06,这里只消费不缩放——
         // 不消费的话手势会落进下面的滚动逻辑,缩放松手即翻屏。
         if event.modifiers.control && !event.modifiers.alt && delta_y != 0.0 {
             cx.stop_propagation();

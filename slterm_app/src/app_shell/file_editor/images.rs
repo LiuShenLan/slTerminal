@@ -17,7 +17,7 @@ static HTML_IMG_DQ: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r#"(?i)(<img\b[^>]*?\bsrc\s*=\s*")([^"]+)""#).unwrap());
 static HTML_IMG_SQ: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r#"(?i)(<img\b[^>]*?\bsrc\s*=\s*')([^']+)'"#).unwrap());
-/// 引用式图片用法 `![alt][id]`(M8.3 问题 2:引用式动图压帧扩展)。
+/// 引用式图片用法 `![alt][id]`(问题 2:引用式动图压帧扩展)。
 static MD_IMG_REF: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r#"!\[[^\]]*\]\[([^\]]+)\]"#).unwrap());
 /// 链接引用定义 `[id]: url`(只重写被图片引用命中的 id)。
@@ -200,7 +200,7 @@ mod images_tests {
         assert_eq!(rewritten, again, "同一内容复用同一缓存文件");
     }
 
-    /// 引用式动图:`![alt][id]` 命中的定义压帧,纯链接引用不动(M8.3 问题 2)。
+    /// 引用式动图:`![alt][id]` 命中的定义压帧,纯链接引用不动(问题 2)。
     #[test]
     fn referenced_gif_definitions_are_flattened_only_for_image_references() {
         let directory = tempfile::tempdir().unwrap();

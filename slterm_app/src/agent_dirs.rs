@@ -55,7 +55,7 @@ pub(crate) const AGENT_CONFIG_DIRS: [(&str, &str); 27] = [
     ("codebuddy", ".codebuddy"),
 ];
 
-/// 表长 == 27 家身份枚举;两边任何一侧漏改都在编译期报错。
+/// 表长 == 身份枚举;两边任何一侧漏改都在编译期报错。
 const _: () = assert!(AGENT_CONFIG_DIRS.len() == AgentKind::ALL.len());
 
 /// 设置页/侧栏展示项(消费归工作区与设置域)。

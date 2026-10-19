@@ -4,7 +4,7 @@
 //! 投影文本与 marks。IME 组合期 `accept` 守卫不重排输入实体;行内源码显影
 //! (`with_reveal`)只暴露被点击的那个内联节点。
 //!
-//! 消费点:M8.3 live_edit 的聚焦块输入与装饰(M8.2 为内核 + 用例)。
+//! 消费点:live_edit 的聚焦块输入与装饰(为内核 + 用例)。
 
 use ::markdown::mdast::Node;
 use std::ops::Range;

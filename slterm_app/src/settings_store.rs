@@ -3,7 +3,7 @@
 //!
 //! 分层:值模型与键注册表归 `slterm-settings`(零生产依赖);保存锁、.bak、
 //! 损坏 quarantine 等硬机制只在本层。仓内唯一设置写入口 =
-//! [`save_settings_blocking`](M1 过渡的裸 `persist_keys` 已由本模块取代,
+//! [`save_settings_blocking`](过渡的裸 `persist_keys` 已由本模块取代,
 //! 契约语义不变:读-改-写浅合并、未知段保留、损坏禁覆盖、1MB 上限)。
 //!
 //! 损坏三态(与 session 同纪律:读侧回退、写侧拒绝):
@@ -23,7 +23,7 @@ use slterm_settings::json::{self, Value};
 use slterm_settings::{MAX_PERSIST_BYTES, RawSettings, keys, settings_path};
 
 /// settings.json 读侧三态结果。`corrupted = true` 表示数据来自 .bak 或
-/// 默认回退(损坏原件已隔离),设置页据此显示警示条(M6.2 消费)。
+/// 默认回退(损坏原件已隔离),设置页据此显示警示条(消费)。
 pub(crate) struct LoadResult {
     pub(crate) data: RawSettings,
     pub(crate) corrupted: bool,
@@ -137,7 +137,7 @@ pub(crate) fn save_settings_checked(
     save_settings_checked_at(&settings_path(), expected, updates)
 }
 
-/// 与保存通道共用同一把进程锁(B3):恢复默认等非保存写路径必须包在这里,
+/// 与保存通道共用同一把进程锁:恢复默认等非保存写路径必须包在这里,
 /// 避免与并发保存的「读-合并-写」交错导致丢失更新。
 pub(crate) fn with_save_lock<T>(operation: impl FnOnce() -> T) -> T {
     let _guard = SAVE_LOCK
@@ -166,7 +166,7 @@ fn save_merged_locked(path: &Path, updates: &[(&str, Value)]) -> io::Result<()> 
     {
         log::warn!("settings .bak 备份失败: {error}");
     }
-    // SEC-17:设置写唯一路径 = 审计包装(operation/source/result 留痕)。
+    // 设置写唯一路径 = 审计包装(operation/source/result 留痕)。
     crate::audit::write_settings(path, &text, "settings_store::save_merged_locked")
 }
 
@@ -228,7 +228,7 @@ fn recover_corrupted(path: &Path) -> LoadResult {
     };
     // 备份数据重整为 pretty 形态重建主文件;损坏原件已在 quarantine 中保留。
     let text = json::to_string_pretty(&backup);
-    // SEC-17:损坏恢复重建同样经审计包装(唯一写路径)。
+    // 损坏恢复重建同样经审计包装(唯一写路径)。
     if let Err(error) =
         crate::audit::write_settings(path, &text, "settings_store::recover_corrupted")
     {
@@ -334,7 +334,7 @@ mod settings_store_tests {
 
     // ---- 写通道:校验/浅合并/原子写/.bak ----
 
-    /// B3 防复发:外部写路径(恢复默认)与保存通道共用同一把锁,不得并发进入。
+    /// 防复发:外部写路径(恢复默认)与保存通道共用同一把锁,不得并发进入。
     #[test]
     fn external_writers_share_the_save_lock() {
         use std::sync::atomic::{AtomicUsize, Ordering};
@@ -790,7 +790,7 @@ mod settings_store_tests {
         assert!(directory.path().join("settings.json").is_dir());
     }
 
-    // ---- 零迁移断言(D06-2) ----
+    // ---- 零迁移断言 ----
 
     #[test]
     fn legacy_portable_settings_are_neither_read_nor_written() {

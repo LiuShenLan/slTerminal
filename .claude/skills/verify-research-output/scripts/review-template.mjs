@@ -8,7 +8,7 @@
  * 子代理在写入 review 文件前调用本脚本生成头部，然后逐条追加错误条目
  * （错误条目格式见 output-spec.md）。
  *
- * 用法：node review-template.mjs "docs/research/x/D1/01-hooks.md" D1
+ * 用法：node review-template.mjs "temp/research/x/direction-1/01-hooks.md" direction-1
  */
 
 const [sourcePath, direction] = process.argv.slice(2);

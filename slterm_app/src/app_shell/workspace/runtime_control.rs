@@ -2,7 +2,7 @@
 //!
 //! 全序:transport 线程 `RuntimeDispatch` → 壳事件队列 → 前台泵 →
 //! **本模块**把命令映射到 Workspace/TerminalView 既有入口 → `respond`。
-//! 回包形状按 M7.4 缝合点:`{action: {window_id, pane_id}(或 action.agent),
+//! 回包形状按缝合点:`{action: {window_id, pane_id}(或 action.agent),
 //! snapshot: RuntimeSnapshot}`;prompt/paste 成功回包携带**提交后**快照与
 //! `state_change_seq`(CLI `--wait` 基线链依赖)。
 //!
@@ -82,7 +82,7 @@ impl SltermWorkspace {
                 crate::windowing::focus::focus(self, pane, window, cx);
                 cx.notify();
             }
-            // 权限确认动作按钮是四路回窗之一(窗口 facade)。B43:消费 =
+            // 权限确认动作按钮是四路回窗之一(窗口 facade)。消费 =
             // 回窗聚焦 + 审计留痕(选择、请求 id、pane)。按键注入语义取决于
             // confirmation 标签生产方——当前 hook 是「转发后退出」的非阻塞
             // 桥,无法回写权限决定,故不猜测按键。
@@ -111,7 +111,7 @@ impl SltermWorkspace {
             SltermShellEvent::UpdateAvailable(result) => {
                 self.update_available(result, window, cx);
             }
-            // B38:自愈失败边 → 进程级通知。文本只由类别/agent 生成,合成
+            // 自愈失败边 → 进程级通知。文本只由类别/agent 生成,合成
             // 命令(`slterm-hook ...`)不进入呈现层。
             SltermShellEvent::AiHookAlert(kind) => {
                 let language = cx.global::<crate::app_shell::config::Settings>().language;
@@ -127,7 +127,7 @@ impl SltermWorkspace {
         }
     }
 
-    /// 更新可用弹窗与可选后台预取(R7 C27/B52)。
+    /// 更新可用弹窗与可选后台预取。
     ///
     /// 检查任务只负责发现;本方法在 UI 线程决定按钮集并弹第一层提示。
     /// 「下载并安装」后才进入安装授权(第二层);授权经 handoff 两阶段
@@ -162,7 +162,7 @@ impl SltermWorkspace {
             log::debug!("update-check: prompt suppressed for v{}", result.latest);
             return;
         }
-        // B52:打开即记 prompted(best-effort;失败只告警,不阻断提示)。
+        // 打开即记 prompted(best-effort;失败只告警,不阻断提示)。
         if let Err(error) = crate::update_check::mark_prompted(&result.latest) {
             log::warn!(
                 "update-check: could not record prompt for v{}: {error}",
@@ -183,7 +183,7 @@ impl SltermWorkspace {
             ("current", &result.current),
         ];
         let body = if result.manual_reinstall {
-            // D12-4:早于首个 Inno 安装基的历史安装不能被自动覆盖。
+            // 早于首个 Inno 安装基的历史安装不能被自动覆盖。
             language.format(Message::UpdateBodyManualReinstall, &args)
         } else {
             match plan {
@@ -254,7 +254,7 @@ impl SltermWorkspace {
                 }
             },
             Some(1) => {
-                // B52:稍后提醒 = now + 3 天;失败只告警。
+                // 稍后提醒 = now + 3 天;失败只告警。
                 if let Err(error) = crate::update_check::remind_later(&latest) {
                     log::warn!(
                         "update-check: could not record remind-later for v{latest}: {error}"
@@ -264,7 +264,7 @@ impl SltermWorkspace {
                 cx.notify();
             }
             Some(2) => {
-                // B52:跳过该版本,落盘后不再提示同版本。
+                // 跳过该版本,落盘后不再提示同版本。
                 if let Err(error) = crate::update_check::skip_version(&latest) {
                     log::warn!("update-check: could not record skip for v{latest}: {error}");
                 }
@@ -551,7 +551,7 @@ impl SltermWorkspace {
     }
 
     /// 托盘退出:与标题栏关闭钮同语义(自绘入口绕过 OS 关闭请求,终局
-    /// 快照在这里补)。B47:数据丢失风险高于普通关窗,必须先过整窗脏
+    /// 快照在这里补)。数据丢失风险高于普通关窗,必须先过整窗脏
     /// 守卫;确认框在途/保存在途 = 本轮拦截,异步回调放行后自行关窗。
     /// 测试构建只记录已放行的请求,虚拟窗口平台不支持真实移除。
     fn quit_from_tray(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
@@ -703,7 +703,7 @@ impl SltermWorkspace {
                 if !busy.is_empty() {
                     return Err(confirmation_required(&busy));
                 }
-                // B12:脏文件默认返回明确错误码,不再「先回成功、异步弹确认」;
+                // 脏文件默认返回明确错误码,不再「先回成功、异步弹确认」;
                 // 调用方须显式 force=true 才丢弃草稿。
                 if !*force && self.tab_has_dirty_document(index, cx) {
                     return Err(ApiError::new(
@@ -1531,7 +1531,7 @@ fn git_api_error(error: git::GitError) -> ApiError {
     ApiError::new(code, error.to_string())
 }
 
-/// B38:失败边的用户可见文本。只消费类别/agent,永不拼接
+/// 失败边的用户可见文本。只消费类别/agent,永不拼接
 /// `HookFailure.command` 那类技术化合成命令。
 fn hook_alert_text(kind: &HookFailureKind, language: UiLanguage) -> String {
     match kind {

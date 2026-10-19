@@ -3,7 +3,7 @@
 //! 分层原则:本 crate 是零生产依赖的值权威——值模型零序列化框架依赖,
 //! JSON 值层由内部 `json` 模块自包含承载;写通道硬机制(白名单校验/
 //! 保存锁/原子写/.bak/损坏三态)归应用侧 `slterm_app::settings_store`
-//! (M6.1),本 crate 只保留纯合并函数与宽容读取。
+//! ,本 crate 只保留纯合并函数与宽容读取。
 //!
 //! 持久化契约:数据目录下 `settings.json`(路径唯一权威见 `paths`),段
 //! 嵌套形态——每个设置键归属一个语义段(appearance/scrolling/…),「键 →
@@ -149,7 +149,7 @@ impl RawSettings {
 /// 读-改-写语义:已有键替换、缺失键追加、未知键/未知段在对象树原位保留。
 /// 逐键落到注册表归属段内(段级浅合并);域外段(`keybind`/
 /// `conpty_input_modes`)按段整体替换;未登记键跳过——白名单硬校验与
-/// .bak/保存锁/原子写的硬机制归应用侧写通道(M6.1),本函数保持纯函数。
+/// .bak/保存锁/原子写的硬机制归应用侧写通道,本函数保持纯函数。
 pub fn apply_updates(tree: &Value, updates: &[(&str, Value)]) -> Value {
     let mut root = match tree {
         Value::Object(_) => tree.clone(),
@@ -191,7 +191,7 @@ pub type Rgba8 = [u8; 4];
 pub struct Rgb(pub u8, pub u8, pub u8);
 
 /// 主题标识;`settings.json` 的 `theme` 键持久化 [`Self::prompt_name`]。
-/// 目录即合同:可选内置主题 = 暗色子集 + Linear 默认(D06-3)。
+/// 目录即合同:可选内置主题 = 暗色子集 + Linear 默认。
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
 pub enum ThemeName {
     BreezeDark,
@@ -630,7 +630,7 @@ impl BellModeName {
 }
 
 /// 窗口背景材质。**按 DWM 每帧成本递增排列**,不是质量递进——五者是五套
-/// 成本模型,不存在「越靠后越好」(D06-4 值域一次到位:五材质枚举 +
+/// 成本模型,不存在「越靠后越好」(值域一次到位:材质枚举 +
 /// opacity 标量,无 bool 占位):
 ///
 /// - `None`:无材质。窗口按不透明度直接透出后方内容,不模糊。
@@ -760,7 +760,7 @@ pub struct RuntimeSettings {
     pub silent_start: bool,
     /// 开机启动;归壳层启动项消费。
     pub launch_at_login: bool,
-    /// 窗口背景材质(D06-4:五材质枚举,默认 None)。
+    /// 窗口背景材质(材质枚举,默认 None)。
     pub blur: BlurMode,
     pub opacity: f32,
     /// 「显式值权威」三元模式:主题默认可填充未设置值,用户显式写过
@@ -1434,7 +1434,7 @@ mod term_theme_tests {
             );
         }
         assert_eq!(ThemeName::from_prompt_name("NoSuchTheme"), None);
-        // 默认主题 = Linear(D06-3)。
+        // 默认主题 = Linear。
         assert_eq!(ThemeName::default(), ThemeName::Linear);
         assert_eq!(
             RuntimeSettings::from_raw(&RawSettings::default()).theme,

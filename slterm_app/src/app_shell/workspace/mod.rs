@@ -10,11 +10,11 @@
 //! 3. 关 pane 的结局由 `RemoveOutcome` 三态裁定:`WasRoot` 关整个 tab、
 //!    `Collapsed(id)` 兄弟收编且焦点交幸存子树首叶;壳不自行散判。被摘
 //!    pane 立即显式 `shutdown`;建树挂不上时立即回收 pane,不留孤儿 PTY。
-//! 4. 布局持久化只经 session schema(M5.5 快照/恢复已接线,见
+//! 4. 布局持久化只经 session schema(快照/恢复已接线,见
 //!    `session_persistence`/`session_recovery`);本模块运行时树与持久化
 //!    树的转换只走 `session_restore` 一对纯函数。
 //!
-//! ## 壳层职责(M5.3)
+//! ## 壳层职责
 //!
 //! 壳层只做四件事:按**提交比例**渲染递归、canvas 探针回写节点/pane 矩形、
 //! 分隔条拖拽 overlay、松手提交。分屏语义(比例/树变换)全由 `slterm_split`
@@ -28,7 +28,7 @@ mod documents;
 /// 侧栏文件树渲染 + 路径栏 + 拖放。
 mod file_tree;
 /// 键位 JSON 段消费 + EDITABLE_ACTIONS + 保留键红线。
-/// B7 起暴露给设置页键位编辑(EDITABLE_ACTIONS/RESERVED_ROWS/clear/reset)。
+/// 暴露给设置页键位编辑(EDITABLE_ACTIONS/RESERVED_ROWS/clear/reset)。
 pub(crate) mod keyboard_bindings;
 /// 后台泵与系统关窗(自动保存 / AI hook / 壳事件)。
 mod pumps;
@@ -105,9 +105,9 @@ gpui::actions!(
 /// (hook 的 `SLTERM_PANE_ID` 环境值与此同源)。
 pub struct TerminalPane {
     pub id: PaneId,
-    /// 用户重命名(持久化归 05 session 叶;M5.3 无重命名 UI,恒 None)。
+    /// 用户重命名(持久化归 05 session 叶;无重命名 UI,恒 None)。
     pub custom_name: Option<String>,
-    /// 本 pane 创建时冻结的启动身份;快照逐叶落盘(M5.5)。
+    /// 本 pane 创建时冻结的启动身份;快照逐叶落盘。
     pub launch: Option<LaunchSession>,
     pub view: Entity<TerminalView>,
     /// 补全来源缓存按 pane 持有(与 terminal_registry 以
@@ -140,15 +140,15 @@ pub enum WorkspaceTab {
         /// 宿主事件订阅(Changed/Close);随 tab 一起释放。
         _subscription: Subscription,
     },
-    /// Markdown 文档 tab(渲染态归 M8.3;M8.1 只读文本占位)。
+    /// Markdown 文档 tab（渲染态以只读文本占位）。
     Document {
         view: Entity<super::doc_tabs::DocTabView>,
     },
-    /// 源码 tab(普通文件可编辑态归 M8.2;M8.1 只读 + gitshow 只读臂)。
+    /// 源码 tab（普通文件可编辑，gitshow 只读臂）。
     Code {
         view: Entity<super::code_tab::CodeTabView>,
     },
-    /// 只读图片 tab(后台解码;缩放归 M8.3)。
+    /// 只读图片 tab（后台解码）。
     Image {
         view: Entity<super::doc_tabs::ImageTabView>,
     },
@@ -157,11 +157,11 @@ pub enum WorkspaceTab {
 /// tab 级展示态元数据(持久化四字段形态)。
 #[derive(Default)]
 pub struct TabMeta {
-    /// 用户命名;标题栏展示名第一优先源(M5.3b)。
+    /// 用户命名;标题栏展示名第一优先源。
     pub custom_name: Option<String>,
     /// 用户色标;侧栏色标消费归后续步骤。
     pub color: Option<Rgb>,
-    /// 建 tab 时冻结的启动身份;快照与恢复(M5.5)消费。
+    /// 建 tab 时冻结的启动身份;快照与恢复消费。
     pub launch: Option<LaunchSession>,
 }
 
@@ -220,7 +220,7 @@ pub struct SltermWorkspace {
     session_persistence: SessionPersistence,
     /// Runtime 状态权威:渲染前置投影入账,hub 判等去重。
     ///
-    /// M7.5 把同一 clone 交给 `RuntimeServer`;在那之前本 hub 只有壳内
+    /// 把同一 clone 交给 `RuntimeServer`;在那之前本 hub 只有壳内
     /// 发布源,无外部订阅者。
     runtime_hub: RuntimeHub,
     /// 文件 tab 的变更观察(键 = 稳定 TabId):编辑器键入/保存完成时刷新
@@ -232,9 +232,9 @@ pub struct SltermWorkspace {
     pending_file_close: Option<TabId>,
     /// 整窗关闭确认已放行:异步回调 `remove_window` 前落位,防重入守卫。
     window_close_confirmed: bool,
-    /// B25:忙碌 pane 关闭确认已放行(防异步回调重入弹框)。
+    /// 忙碌 pane 关闭确认已放行(防异步回调重入弹框)。
     pane_close_confirmed: Option<PaneId>,
-    /// C27:更新弹窗/安装授权单槽;整个更新交互(含下载与二次确认)期间
+    /// 更新弹窗/安装授权单槽;整个更新交互(含下载与二次确认)期间
     /// 为 true,重复事件直接丢弃。
     update_prompt_open: bool,
     /// 测试专用:更新安装执行替身(生产恒走 handoff)。
@@ -245,17 +245,17 @@ pub struct SltermWorkspace {
     update_install_exit_requested: bool,
     /// 侧栏文件树视图状态(explorer 槽内容)。
     file_tree: file_tree::FileTreeState,
-    /// AgentFiles 槽的进程内目录缓存(B73):首次渲染加载,禁止每帧 27 次
+    /// AgentFiles 槽的进程内目录缓存:首次渲染加载,禁止每帧 27 次
     /// `is_dir`;显式刷新经 `refresh_agent_dirs`。测试构建预置空表,避免
     /// UI 用例读真实 USERPROFILE(替身经 `set_agent_dirs_for_test` 注入)。
     agent_dirs_cache: Option<Vec<crate::agent_dirs::AgentGlobalDir>>,
-    /// 设置页当前读写路径(B7 热重绑重读 keybind 段时与设置页同一份文件);
+    /// 设置页当前读写路径(热重绑重读 keybind 段时与设置页同一份文件);
     /// `None` = 生产默认数据目录,测试经 `open_settings_tab_at` 注入 tempdir。
     settings_path_override: Option<PathBuf>,
     /// 测试专用:Commit 视图注入快照(渲染 selector 的确定性数据源)。
     #[cfg(all(test, feature = "gpui-test-support"))]
     commit_snapshot_for_test: Option<std::sync::Arc<crate::side_panel::GitInfo>>,
-    /// B8:外部文件修改监听(树根递归 + 打开文件父目录)。事件驱动刷新
+    /// 外部文件修改监听(树根递归 + 打开文件父目录)。事件驱动刷新
     /// gutter/目录树,不做定时目录重扫;watcher 不可用时为 None。
     fs_watch: Option<super::fs_watch::FsWatch>,
     /// 窗口激活态订阅:通知漏斗前台门控的唯一写入源。
@@ -323,7 +323,7 @@ impl SltermWorkspace {
         cx: &mut Context<'_, Self>,
     ) -> Self {
         // 侧栏宽度先于 spawn 网格入账:恢复的宽度若在首帧后才生效,会先按
-        // 默认宽度触发一次 ConPTY resize(D05-3/D05-1 回放顺序)。
+        // 默认宽度触发一次 ConPTY resize(/回放顺序)。
         let sidebar = sidebar::reconcile_views(&plan.sidebar, &sidebar::SideViewId::ALL);
         // 开窗 resize 异步落地前,先按目标几何谓出 spawn 网格(启动零 resize)。
         let initial_grid = startup_geometry::prepare_initial_grid(
@@ -394,7 +394,7 @@ impl SltermWorkspace {
                     // `-e` 语义:命令本体即 pane 的启动进程(不是默认 shell
                     // 里再注入一条命令)——冻结进 launch,会话恢复照此重建。
                     // 显式命令通道:core 跳过三家白名单并做裸名 PATH 路径化
-                    // (SEC-01 豁免论证见 `Options::explicit_command`)。
+                    // (豁免论证见 `Options::explicit_command`)。
                     let name = command.program().to_owned();
                     let shell = slterm_terminal::tty::Shell::new(
                         command.program().to_owned(),
@@ -419,7 +419,7 @@ impl SltermWorkspace {
             plan.quarantined.as_deref(),
             language,
         ) {
-            // A10/A13:统一走通知漏斗;启动汇总经 `plan_startup` 豁免前台
+            // /统一走通知漏斗;启动汇总经 `plan_startup` 豁免前台
             // 门控,不再使用直发通道(直发通道保留给更新提示)。
             crate::notify::deliver_startup_summary(
                 &crate::notify::Notification::RecoverySummary { text },
@@ -467,7 +467,7 @@ impl SltermWorkspace {
 
     /// 建一个 Terminal tab(cwd + 可选的显式 shell 身份),并聚焦其 pane。
     ///
-    /// 启动身份在**建 tab 这一刻**冻结进 `TabMeta.launch`(M5.3a 问题 1):
+    /// 启动身份在**建 tab 这一刻**冻结进 `TabMeta.launch`(问题 1):
     /// 默认 shell 也只在本刻探测一次,设置随后变更只影响下一次建 tab,
     /// 冷恢复按各 tab 自己的 launch 重建,不会把混合工作区抹成同一种 shell。
     fn add_terminal_tab(
@@ -481,7 +481,7 @@ impl SltermWorkspace {
         let (shell, shell_name) = match shell {
             Some((shell, name)) => (Some(shell), Some(name)),
             // 默认路径:探测结果冻结进 meta 并显式交给 spawn;展示名保持
-            // M3 现状(None → 终端标题 "shell"),不让启动身份冻结改动 UI。
+            // 现状(None → 终端标题 "shell"),不让启动身份冻结改动 UI。
             None => (Self::default_shell(), None),
         };
         let meta_launch = shell
@@ -622,7 +622,7 @@ impl SltermWorkspace {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
-        // B7:设置页写盘路径即 keybind 热重绑的重读路径。
+        // 设置页写盘路径即 keybind 热重绑的重读路径。
         self.settings_path_override = settings_path.clone();
         if let Some(index) = self
             .tabs
@@ -678,7 +678,7 @@ impl SltermWorkspace {
     ) {
         match event {
             SettingsPaneEvent::Changed => {
-                // B7:keybind 段可能随本次写盘变化;重读并重建 keymap。
+                // keybind 段可能随本次写盘变化;重读并重建 keymap。
                 self.reload_user_keybinds(cx);
                 // 全局 `Settings` 已由设置页写入;这里把已消费字段扇出到
                 // 每个终端视图(字体/字号/连字/选中复制/调色板热应用)。
@@ -690,7 +690,7 @@ impl SltermWorkspace {
                 cx.refresh_windows();
                 cx.notify();
             }
-            // C8:工作区导出入口。前台只拍内存快照;写盘走后台执行器,
+            // 工作区导出入口。前台只拍内存快照;写盘走后台执行器,
             // 成功/失败都只发通知,不改变设置 tab 的既有 Changed/Close 行为。
             SettingsPaneEvent::ExportWorkspace { path } => {
                 let language = cx.global::<Settings>().language;
@@ -728,7 +728,7 @@ impl SltermWorkspace {
         }
     }
 
-    /// B7:设置变更后重读 `keybind` 段并热重建 keymap。
+    /// 设置变更后重读 `keybind` 段并热重建 keymap。
     ///
     /// 与当前已应用表比较,只有准入结果真正变化才重建;重读路径与设置页
     /// 写盘路径同源(`settings_path_override`,生产回退默认数据目录)。
@@ -967,7 +967,7 @@ impl SltermWorkspace {
     }
 
     /// 视图事件白集:标题变化重绘;会话结束走关 pane 状态机;
-    /// 用户输入的广播扇出归 M5(本次不接)。
+    /// 用户输入的广播扇出归壳层（当前未接）。
     fn on_terminal_event(
         &mut self,
         view: &Entity<TerminalView>,
@@ -1070,7 +1070,7 @@ impl SltermWorkspace {
         })
     }
 
-    /// B25:忙碌 pane 的关闭确认(运行中/等输入/attention 视为破坏性操作)。
+    /// 忙碌 pane 的关闭确认(运行中/等输入/attention 视为破坏性操作)。
     fn confirm_close_busy_pane(
         &mut self,
         pane_id: PaneId,
@@ -1105,9 +1105,9 @@ impl SltermWorkspace {
     }
 
     /// 关 pane 状态机:摘除 → 立即显式 shutdown → 焦点交幸存
-    /// 首叶;唯一叶子关闭 = 关 tab = 无 tab 时关窗(M3 语义保留)。
+    /// 首叶;唯一叶子关闭 = 关 tab = 无 tab 时关窗(语义保留)。
     fn close_pane(&mut self, pane_id: PaneId, window: &mut Window, cx: &mut Context<'_, Self>) {
-        // B25:忙碌 pane 先确认;确认后的同一次调用经标志放行。
+        // 忙碌 pane 先确认;确认后的同一次调用经标志放行。
         if self.pane_close_confirmed.take() != Some(pane_id)
             && !self.busy_panes(std::iter::once(pane_id)).is_empty()
         {
@@ -1453,7 +1453,7 @@ impl SltermWorkspace {
         &self.sidebar
     }
 
-    /// 测试专用:当前设置 tab 的视图实体(设置页 L4 用例的驱动端)。
+    /// 测试专用:当前设置 tab 的视图实体(设置页豁免层用例的驱动端)。
     #[cfg(all(test, feature = "gpui-test-support"))]
     pub(crate) fn settings_pane_for_test(&self) -> Option<Entity<SettingsPane>> {
         self.tabs.iter().find_map(|entry| match &entry.tab {
@@ -1494,7 +1494,7 @@ impl SltermWorkspace {
         self.tray_quit_requested
     }
 
-    /// 测试专用:更新弹窗/安装授权是否在途(C27 单实例闸门断言端)。
+    /// 测试专用:更新弹窗/安装授权是否在途(单实例闸门断言端)。
     #[cfg(all(test, feature = "gpui-test-support"))]
     pub(crate) fn update_prompt_open_for_test(&self) -> bool {
         self.update_prompt_open
@@ -1607,7 +1607,7 @@ impl Render for SltermWorkspace {
         // 状态变化统一在渲染路径入账——任何 cx.notify 触发的
         // 重绘都会带上一份最新投影;判等去重保证空转帧零成本。
         self.publish_runtime_snapshot(cx);
-        // B8:每帧对账 watcher 兴趣(树根 + 打开的可编辑文件)。放在渲染根
+        // 每帧对账 watcher 兴趣(树根 + 打开的可编辑文件)。放在渲染根
         // 而非 explorer 槽内:explorer 关闭时 gutter 外部刷新仍须工作。
         self.sync_fs_watch(cx);
         // 只有活跃文件 tab 物化预览资产;切走即释放块槽/图片。
@@ -1623,7 +1623,7 @@ impl Render for SltermWorkspace {
             ) => self.render_file_tab(tab),
             None => None,
         };
-        // 侧栏三件套:ActivityBar + tab 列表/双槽内容区 + 宽度拖拽热区。
+        // 侧栏组件:ActivityBar + tab 列表/双槽内容区 + 宽度拖拽热区。
         // collapsed 才整列隐藏;双槽全空时 tab 列表仍常驻(切 tab 与拖拽
         // 停靠的入口不能随视图槽一起消失)。ActivityBar 始终常驻。
         let sidebar_content = self.render_sidebar_content(cx);
@@ -1815,7 +1815,7 @@ pub fn init(cx: &mut App) {
     // 上下文,只对文件视图生效。
     super::file_editor::init(cx);
     cx.bind_keys(keyboard_bindings::default_workspace_bindings());
-    // B7:内置/默认绑定全部就位后、用户表安装前捕获快照——热重绑以它
+    // 内置/默认绑定全部就位后、用户表安装前捕获快照——热重绑以它
     // 为回放基底(clear_key_bindings 会连组件内置绑定一起清掉)。
     keyboard_bindings::capture_keymap_base(cx);
     // 用户 keybind 段:启动读一次;保留键/坏行由准入门拒绝。

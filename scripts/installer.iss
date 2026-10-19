@@ -54,7 +54,7 @@ DefaultDirName={autopf}\slTerminal
 UsePreviousAppDir=yes
 UsePreviousGroup=no
 DisableProgramGroupPage=yes
-; 显式组名：缺省会落在 Programs\(Default)(B79)。
+; 显式组名：缺省会落在 Programs\(Default)。
 DefaultGroupName={#AppDisplayName}
 ; 用户级安装:写 HKCU、无需管理员,咬合单窗口单实例定位。
 PrivilegesRequired=lowest
@@ -63,7 +63,7 @@ ArchitecturesAllowed=x64compatible
 MinVersion=10.0.17763
 ; 合规四落点之三:安装向导许可页。
 LicenseFile={#RepoRoot}\LICENSE
-; 安装器与快捷方式图标同源于随包资产(C24)。
+; 安装器与快捷方式图标同源于随包资产。
 SetupIconFile={#RepoRoot}\assets\app-icon.ico
 UninstallDisplayIcon={app}\assets\app-icon.ico
 OutputDir={#OutputDir}
@@ -135,5 +135,5 @@ Filename: "{app}\slterm.exe"; Parameters: "setup-ai --remove"; WorkingDir: "{app
 
 [UninstallDelete]
 ; 更新交接锁与探测临时文件不在 [Files] 清单内;应用正常退出已尝试删除,
-; 此处兜底异常退出的残留,避免安装目录因单文件残留而保留(B78/C29)。
+; 此处兜底异常退出的残留,避免安装目录因单文件残留而保留。
 Type: files; Name: "{app}\.slterm-update*"

@@ -28,7 +28,7 @@ use crate::platform::credentials;
 /// 原句柄仍按 Drop 语义擦除,拒绝路径不产生新的明文载体。
 pub(crate) struct SecretBytes(Zeroizing<Vec<u8>>);
 
-#[allow(dead_code)] // 消费点 = M9.5 请求头组装 / M10.9 凭据后端;本步由用例锁定语义。
+#[allow(dead_code)] // 消费点 = 请求头组装 / 凭据后端;本模块由用例锁定语义。
 impl SecretBytes {
     pub(crate) fn new(bytes: Vec<u8>) -> Self {
         Self(Zeroizing::new(bytes))
@@ -89,7 +89,7 @@ pub(crate) trait CredentialStore {
     fn store(&self, target: &str, secret: &[u8]) -> io::Result<()>;
     fn delete(&self, target: &str) -> io::Result<()>;
 
-    #[allow(dead_code)] // 消费点 = 设置页凭据状态展示(M10.9 后);本步由 mock 用例锁定语义。
+    #[allow(dead_code)] // 消费点 = 设置页凭据状态展示(后);本模块由 mock 用例锁定语义。
     fn exists(&self, target: &str) -> io::Result<bool> {
         Ok(self.load(target)?.is_some())
     }
@@ -142,7 +142,7 @@ mod secrets_tests {
         assert!(SecretBytes::new(vec![0xff, 0xfe]).into_string().is_none());
     }
 
-    // ---- 三件套往返:真实 Windows 凭据管理器(隔离 target + Drop 清理) ----
+    // ---- 组件往返:真实 Windows 凭据管理器(隔离 target + Drop 清理) ----
 
     /// 测试 target 专用前缀:每次运行唯一,绝不触碰用户真实凭据。
     fn unique_test_target(label: &str) -> String {
@@ -162,9 +162,8 @@ mod secrets_tests {
         }
     }
 
-    /// B61:真凭据管理器用例默认关闭——无凭据库的服务账户/CI 会失败;
-    /// 显式设 `SLTERM_TEST_CREDENTIAL_STORE=1` 才运行(豁免登记见
-    /// `.claude/test-exemptions.md`)。
+    /// 真凭据管理器用例默认关闭——无凭据库的服务账户会失败;
+    /// 显式设 `SLTERM_TEST_CREDENTIAL_STORE=1` 才运行。
     #[test]
     fn credential_three_operations_round_trip_through_windows_manager() {
         if std::env::var_os("SLTERM_TEST_CREDENTIAL_STORE").is_none_or(|value| value.is_empty()) {
@@ -361,7 +360,7 @@ mod secrets_tests {
         }
     }
 
-    // ---- SecretBytes::as_bytes 借出白名单(B60) ----
+    // ---- SecretBytes::as_bytes 借出白名单 ----
 
     /// 允许借出 SecretBytes 字节的调用点:仅凭据域请求头组装与
     /// 句柄自身语义用例;新增调用点须登记后加入白名单。
@@ -420,7 +419,7 @@ mod secrets_tests {
     }
 
     /// SecretBytes 借出点静态扫描:非白名单文件的 `name.as_bytes()` 与链式
-    /// 借出一律拒绝(B60 防旁路扩散;白名单语义见测试用例)。
+    /// 借出一律拒绝(防旁路扩散;白名单语义见测试用例)。
     #[test]
     fn secret_bytes_as_bytes_borrow_sites_are_whitelisted() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -462,7 +461,7 @@ mod secrets_tests {
         );
     }
 
-    // ---- 凭据域门禁(B59):platform::credentials 仅 secrets 门面可达 ----
+    // ---- 凭据域门禁:platform::credentials 仅 secrets 门面可达 ----
 
     /// 全仓源码扫描:凭据管理器后端引用只允许出现在 `secrets.rs`。
     /// `platform::credentials` 为 `pub(crate)`,旁路仅靠文档纪律不够——本用例
@@ -542,7 +541,7 @@ mod secrets_tests {
             log::set_logger(&CAPTURE_LOGGER).expect("安装测试日志捕获层");
             log::set_max_level(log::LevelFilter::Trace);
         });
-        // C31:tracing 捕获层(线程级,不占全局 logger 槽位)。
+        // tracing 捕获层(线程级,不占全局 logger 槽位)。
         let tracing_capture = crate::audit::test_support::capture_events();
 
         const TOKEN: &str = "sk-test-log-boundary-17f3";
@@ -572,12 +571,12 @@ mod secrets_tests {
             "credential boundary probe: target={}",
             "Slterm/Test/probe"
         );
-        // C31:审计事件走 tracing 通道;`log-always` 无条件桥接落同一日志栈
+        // 审计事件走 tracing 通道;`log-always` 无条件桥接落同一日志栈
         // ——这里同时验证「tracing 捕获」与「log 桥接」两形态。
         tracing::warn!(
             target: crate::audit::TARGET,
             operation = "credential_boundary_probe",
-            "SEC-17 credential boundary probe via tracing: target={}",
+            "credential boundary probe via tracing: target={}",
             "Slterm/Test/probe"
         );
         let captured = CAPTURED_LOGS.lock().expect("日志捕获锁");

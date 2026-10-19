@@ -37,9 +37,9 @@ pub(crate) mod editor_theme;
 pub(crate) mod file_drop;
 // 文本文件视图骨架(只读视图与编辑内核)。
 pub(crate) mod file_editor;
-// B8:外部文件系统事件监听(树根递归 + 打开文件父目录;有界唤醒前台)。
+// 外部文件系统事件监听(树根递归 + 打开文件父目录;有界唤醒前台)。
 pub(crate) mod fs_watch;
-// 布局转换对(「布局单点」);消费点 = M5.5 快照/恢复闭环。
+// 布局转换对(「布局单点」);消费点 = 快照/恢复闭环。
 pub(crate) mod session_restore;
 // GUI 设置页:左导航 + 右表单 + 路由式搜索 + 统一写通道。
 pub(crate) mod settings_pane;
@@ -72,23 +72,23 @@ pub(crate) fn try_write_stderr(args: fmt::Arguments<'_>) {
 /// 壳跨线程唤醒事件(上游同名枚举裁剪:Tray*/Notification*/SshPrompt/
 /// UpdateAvailable 臂不迁)。
 ///
-/// M3 变体收窄为三个,生产者/消费归各领域模块:
+/// 变体收窄为三个,生产者/消费归各领域模块:
 /// - `RuntimeControl` 载荷是 `Arc<RuntimeDispatch>`;
-///   生产者 = M7.5 `RuntimeServer::spawn_callback`,UI owner 执行后 respond;
+///   生产者 = `RuntimeServer::spawn_callback`,UI owner 执行后 respond;
 /// - `OpenDirectories` 的消费(on_open_urls/右键「在此处打开」)归窗口/平台域,
-///   M3 登记不接线。
-#[allow(dead_code)] // M7.5 接线前仅 `MuxAttach` 无生产者;逐变体注释为证。
+///   登记不接线。
+#[allow(dead_code)] // 接线前仅 `MuxAttach` 无生产者;逐变体注释为证。
 pub(crate) enum SltermShellEvent {
     /// 预埋缝:生产者 = `RuntimeServer::spawn_callback`。
     MuxAttach,
     /// 写命令派发:UI owner 执行后经 `RuntimeDispatch::respond` 回执。
     RuntimeControl(std::sync::Arc<crate::runtime_api::RuntimeDispatch>),
-    /// 消费(右键「在此处打开」/on_open_urls 落盘)归窗口/平台域;本步只登记发送端。
+    /// 消费(右键「在此处打开」/on_open_urls 落盘)归窗口/平台域;本模块只登记发送端。
     OpenDirectories(Vec<String>),
     /// toast 点击回窗(窗口 facade 接管四路回窗)。
-    /// 托盘左键/菜单「显示」同样走这条单窗回窗语义(M10.3)。
+    /// 托盘左键/菜单「显示」同样走这条单窗回窗语义。
     NotificationFocus(Option<PaneId>),
-    /// 权限确认 toast 的动作按钮回传(M10 安全半程消费;本片只交付通道面)。
+    /// 权限确认 toast 的动作按钮回传(安全半程消费;本片只交付通道面)。
     NotificationChoice {
         pane_id: PaneId,
         request_id: u64,
@@ -99,7 +99,7 @@ pub(crate) enum SltermShellEvent {
     /// 后台更新检查结果:提示 + 按 `auto_download_updates`
     /// 预取安装包。安装授权仍需用户经 handoff 两阶段流程提交。
     UpdateAvailable(crate::update_check::UpdateCheckResult),
-    /// B38:AI hook 自愈失败边(类别 + agent,不含合成命令)。消费 = 进程级
+    /// AI hook 自愈失败边(类别 + agent,不含合成命令)。消费 = 进程级
     /// 通知,不绑定 pane,也不直出技术化命令文本。
     AiHookAlert(crate::ai_assistant::HookFailureKind),
 }
@@ -148,7 +148,7 @@ pub fn run_shell(initial_cwd: Option<PathBuf>, initial_command: Option<Program>)
     // 窗口定形与 spawn 网格;CLI 显式 cwd/-e 启动只回放几何、不恢复 tabs。
     let restore_tabs = initial_command.is_none() && initial_cwd.is_none();
     let mut startup_plan = workspace::session_recovery::prepare_startup(restore_tabs);
-    // B53:更新交接恢复优先于普通会话恢复——成功/回滚安装后的首个启动用
+    // 更新交接恢复优先于普通会话恢复——成功/回滚安装后的首个启动用
     // 交接快照还原更新前的窗口;单窗口定位只取首个窗口。
     let update_restored_windows = if restore_tabs {
         match crate::update_download::handoff::restore_ticket() {
@@ -190,7 +190,7 @@ pub fn run_shell(initial_cwd: Option<PathBuf>, initial_command: Option<Program>)
     };
     if runtime_server.is_none() && initial_command.is_none() {
         // 与对端抢锁竞态:对方可能已拿锁但端点尚未落盘;40 × 25ms 重试
-        // 后再决定自启还是移交(D04-2 契约数值)。
+        // 后再决定自启还是移交(契约数值)。
         let handover_cwd = initial_cwd.clone().or_else(|| std::env::current_dir().ok());
         if crate::runtime_api::handover_to_existing_instance(handover_cwd.as_deref(), None) {
             log::info!("runtime handover succeeded; this instance exits without a window");
@@ -202,8 +202,8 @@ pub fn run_shell(initial_cwd: Option<PathBuf>, initial_command: Option<Program>)
     // `SLTERM_NOTIFY_PIPE`——ConPTY 合并当前进程环境,全部 pane 的子进程树
     // 天然携带作用域闸门。句柄活到事件循环退出,关窗后确定性回收 accept 线程。
     let (ai_events, pipe_server) = crate::ai_hook::spawn_gpui_server();
-    // C4:配置守卫(跨进程 hook 配置变更自愈)挂在设置域启动链上,
-    // 随壳生命周期存活,Drop 时 join 线程。B38:失败边经壳事件队列投进程级
+    // 配置守卫(跨进程 hook 配置变更自愈)挂在设置域启动链上,
+    // 随壳生命周期存活,Drop 时 join 线程。失败边经壳事件队列投进程级
     // 通知——只传类别/agent,不传合成命令。
     let _config_guard = crate::ai_hook::spawn_config_guard_with({
         let shell_events = shell_tx.clone();
@@ -238,12 +238,12 @@ pub fn run_shell(initial_cwd: Option<PathBuf>, initial_command: Option<Program>)
         crate::update_check::start_gpui(cx, move |result| {
             let _ = update_events.send(SltermShellEvent::UpdateAvailable(result));
         });
-        // 套餐余量轮询(C34):注册表订阅 + 后台循环,首轮立即
+        // 套餐余量轮询:注册表订阅 + 后台循环,首轮立即
         // 执行,此后按注册表节拍(默认 10s);订阅守卫随任务存活,Drop 退订。
         // 阻塞 HTTP 全程在 background executor,UI 线程零阻塞。
         crate::plan_balance::start_background_poll(cx.background_executor().clone());
         // 静默启动:仅无显式 CLI 启动时参与;窗口以隐藏
-        // 形态创建,托盘「显示」经 M10.4 focus facade 回窗。
+        // 形态创建,托盘「显示」经 focus facade 回窗。
         let start_hidden = starts_hidden(restore_tabs, cx.global::<config::Settings>());
         windowing::open_initial_window(
             cx,
@@ -255,7 +255,7 @@ pub fn run_shell(initial_cwd: Option<PathBuf>, initial_command: Option<Program>)
             runtime_hub,
             start_hidden,
         );
-        // B53:窗口建立后按实际恢复的窗口数确认交接 ticket(不一致则
+        // 窗口建立后按实际恢复的窗口数确认交接 ticket(不一致则
         // 留待下次尝试,3 次上限后放弃)。
         if update_restored_windows > 0 {
             crate::update_download::handoff::acknowledge_restore(update_restored_windows);
@@ -273,7 +273,7 @@ fn init(cx: &mut App) {
     register_bundled_fonts(cx);
     // 组件库必须只初始化一次,否则全局 action、菜单和主题状态重复注册。
     gpui_component::init(cx);
-    // 读一次快照装全局:M3 无热应用;渲染路径不得重复读盘。
+    // 读一次快照装全局:无热应用;渲染路径不得重复读盘。
     let settings = config::Settings::load();
     // 组件库 locale 与自有文案分层:组件内置文案跟解析后的 UiLanguage。
     gpui_component::set_locale(settings.language.gpui_component_locale());

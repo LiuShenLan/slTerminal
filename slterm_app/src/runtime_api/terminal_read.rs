@@ -4,7 +4,7 @@
 //! 用户上翻历史、选区与光标都不受影响;不足一屏时多扫一段再回退,字节
 //! 上限 [`MAX_READ_BYTES`] 超限按整行递减,最后才做 UTF-8 字符边界切片。
 
-// 消费点 = M7.5 壳事件泵的 pane.read 执行器(`RuntimeControl` 臂调用)。
+// 消费点 = 壳事件泵的 pane.read 执行器(`RuntimeControl` 臂调用)。
 #![allow(dead_code)]
 
 use super::{ApiError, MAX_READ_BYTES, RuntimeTaskState};

@@ -5,9 +5,9 @@
 //!
 //! ```text
 //! 图片 → WorkspaceTab::Image(BGRA 解码 + 占位缩放)
-//! markdown → WorkspaceTab::Document(只读文本占位;渲染态归 M8.3)
-//! 可映射源码 → WorkspaceTab::Code(只读;可编辑态归 M8.2)
-//! 未命中 → 交系统处理器(M8.4 file_tree 入口裁定)
+//! markdown → WorkspaceTab::Document（只读文本占位）
+//! 可映射源码 → WorkspaceTab::Code（只读或可编辑）
+//! 未命中 → 交系统处理器(file_tree 入口裁定)
 //! ```
 //!
 //! 三个文件 tab 都不进 session 快照(快照只收 Terminal tab),
@@ -101,7 +101,7 @@ impl FileViewHandle {
 
 impl SltermWorkspace {
     /// 文件打开路由。
-    #[allow(dead_code)] // 消费点 = M8.4 file_tree 双击入口;M8.1 出口用例经此直调。
+    #[allow(dead_code)] // 消费点 = file_tree 双击入口;出口用例经此直调。
     pub(crate) fn open_document_path(
         &mut self,
         path: PathBuf,
@@ -109,7 +109,7 @@ impl SltermWorkspace {
         cx: &mut Context<'_, Self>,
     ) {
         // 单判定门:应用内不能读的扩展名不产生 tab(交系统处理器是
-        // M8.4 文件树入口的动作,路由层不静默执行)。
+        // 文件树入口的动作,路由层不静默执行)。
         if !doc_tabs::openable_in_app(&path) {
             return;
         }
@@ -123,7 +123,7 @@ impl SltermWorkspace {
     }
 
     /// gitshow 只读臂:HEAD 字节 → Code tab(标题 `<name> @ HEAD`)。
-    #[allow(dead_code)] // 消费点 = M8.5 gutter/diff 入口;M8.1 出口用例经此直调。
+    #[allow(dead_code)] // 消费点 = gutter/diff 入口;出口用例经此直调。
     pub(crate) fn open_git_show_tab(
         &mut self,
         path: PathBuf,
@@ -300,7 +300,7 @@ impl SltermWorkspace {
         cx.notify();
     }
 
-    /// 同一路径复用已开 tab(激活 + 重读盘;草稿保留归 M8.2)。
+    /// 同一路径复用已开 tab（激活 + 重读盘；草稿保留）。
     fn open_image_tab(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<'_, Self>) {
         if let Some(index) = self.tabs.iter().position(
             |entry| matches!(&entry.tab, WorkspaceTab::Image { view } if view.read(cx).path == path),
@@ -326,7 +326,7 @@ impl SltermWorkspace {
             self.activate_tab(index, window, cx);
             return;
         }
-        // M8.3:Document = 渲染态打开、可编辑;源码↔预览同源同一份文档。
+        // Document = 渲染态打开、可编辑;源码↔预览同源同一份文档。
         let view = cx.new(|cx| DocTabView::new_document(path, window, cx));
         self.push_file_tab(WorkspaceTab::Document { view }, window, cx);
     }
@@ -445,7 +445,7 @@ impl SltermWorkspace {
         }
     }
 
-    /// 文件 tab 的焦点句柄:图片臂 M8.3 起也有独立焦点(动作可到达工作区)。
+    /// 文件 tab 的焦点句柄:图片臂也有独立焦点(动作可到达工作区)。
     pub(super) fn file_tab_focus_handle(
         &self,
         tab: &WorkspaceTab,
@@ -526,7 +526,7 @@ impl SltermWorkspace {
     /// 关闭脏文件 tab 的守卫:true = 已拦截(保存中/确认在途/弹出确认框)。
     ///
     /// 确认交互照上游原生三键提示:保存 / 不保存 / 取消。保存失败或
-    /// 取消都保留 tab 与草稿;保存成功且无新草稿才摘除 tab。M8.3 起
+    /// 取消都保留 tab 与草稿;保存成功且无新草稿才摘除 tab。
     /// Document 与 Code 共用同一守卫。
     pub(super) fn guard_file_tab_close(
         &mut self,
@@ -593,13 +593,13 @@ impl SltermWorkspace {
         true
     }
 
-    /// 整窗关闭脏守卫(M8.2 问题 3):true = 可以继续关窗;false = 本轮已拦截。
+    /// 整窗关闭脏守卫(问题 3):true = 可以继续关窗;false = 本轮已拦截。
     ///
     /// 与单 tab 关闭同一确认交互(保存 / 不保存 / 取消),但作用对象是
     /// 全部脏文件 tab:保存臂逐个落盘,全部成功才放行;任一失败保持窗口
     /// 打开(失败横幅已在编辑器内可见)。保存中在途 = 拦截本轮,等落盘后
     /// 用户再次关窗;确认框同一时刻只允许一个(pending_file_close 单槽)。
-    /// B12:目标 tab 是否含未保存草稿(runtime `tab.close` 的拒绝判据)。
+    /// 目标 tab 是否含未保存草稿(runtime `tab.close` 的拒绝判据)。
     pub(super) fn tab_has_dirty_document(&self, index: usize, cx: &App) -> bool {
         self.tabs
             .get(index)
@@ -659,7 +659,7 @@ impl SltermWorkspace {
             let choice = answer.await;
             let (close, failed) = match choice {
                 // 保存全部:尽量保存每个文件;任一失败则保持窗口与草稿,
-                // 并聚合报告失败数量(B6:不再只在各自编辑器内提示)。
+                // 并聚合报告失败数量(不再只在各自编辑器内提示)。
                 Ok(0) => {
                     let mut failed = 0usize;
                     for file in &handles {
@@ -944,7 +944,7 @@ impl SltermWorkspace {
         }
     }
 
-    /// 测试专用:活跃图片 tab 是否持有键盘焦点(M8.1 问题 1 回归端)。
+    /// 测试专用:活跃图片 tab 是否持有键盘焦点(问题 1 回归端)。
     #[cfg(all(test, feature = "gpui-test-support"))]
     pub(crate) fn active_image_focused_for_test(
         &self,
@@ -978,7 +978,7 @@ impl SltermWorkspace {
         }
     }
 
-    /// 测试专用:活跃图片 tab 的占位缩放值(M8.3 前恒 1.0)。
+    /// 测试专用:活跃图片 tab 的占位缩放值(前恒 1.0)。
     #[cfg(all(test, feature = "gpui-test-support"))]
     pub(crate) fn active_image_zoom_for_test(&self, cx: &gpui::App) -> Option<f32> {
         match self.tabs.get(self.active).map(|entry| &entry.tab) {

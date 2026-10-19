@@ -1,7 +1,7 @@
 //! gitignore 仓库根探测与忽略规则形态(照抄点 21)。
 //!
-//! 本步消费面 = 文件树过滤索引的仓库门控([`super::enumerate`] 调用
-//! [`git_repository_root`]);规则写入/移除的菜单入口归 M8.5,故
+//! 本模块消费面 = 文件树过滤索引的仓库门控([`super::enumerate`] 调用
+//! [`git_repository_root`]）；规则写入/移除的菜单入口归壳层。故
 //! [`gitignore_entry`] 暂为测试锁定形态(cfg(test) 编译,消费点注释登记)。
 
 use std::path::{Path, PathBuf};

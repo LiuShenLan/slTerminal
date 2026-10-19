@@ -3,8 +3,8 @@
 //! - ConPTY flags 能力矩阵：`compute_conpty_flags` 按 build 门控逐位取矩阵，
 //!   默认矩阵与旧三态（0x7/0x7/0x3）恒等，零默认漂移。
 //! - `SPAWN_LOCK` 串行化：并发 spawn 会卡死 ConPTY 输出管道——create + spawn
-//!   段整段持锁（BE-12 锁界）；会话容量上限判定在锁内与占用登记原子化
-//!   （BE-01，`MAX_PTY_SESSIONS`）。
+//!   段整段持锁（锁界）；会话容量上限判定在锁内与占用登记原子化
+//!   (`MAX_PTY_SESSIONS`）。
 //! - Job Object 孤儿防护：每个子进程放入 Job Object，
 //!   `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`——父进程崩溃时 OS 自动杀整棵
 //!   子进程树。
@@ -107,10 +107,10 @@ pub fn compute_conpty_flags(build_number: u32, bundled: bool, modes: &ConptyInpu
 
 // ─── SPAWN_LOCK 串行化与会话容量上限 ───
 
-/// BE-01：PTY 会话总数上限——防止会话无上限堆积耗尽 ConPTY/进程句柄。
+/// PTY 会话总数上限——防止会话无上限堆积耗尽 ConPTY/进程句柄。
 pub const MAX_PTY_SESSIONS: usize = 32;
 
-/// 并发 spawn 会卡死 ConPTY 输出管道——create + spawn 段整段持锁（BE-12
+/// 并发 spawn 会卡死 ConPTY 输出管道——create + spawn 段整段持锁（
 /// 锁界）。容量判定与占用登记在同一把锁内原子化，防并发超发。
 static SPAWN_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
 
@@ -118,7 +118,7 @@ static SPAWN_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
 /// `session_closed` -1）。
 static ACTIVE_PTY_SESSIONS: AtomicUsize = AtomicUsize::new(0);
 
-/// BE-01：会话上限判定纯函数——active 达到 `MAX_PTY_SESSIONS` 即拒绝。
+/// 会话上限判定纯函数——active 达到 `MAX_PTY_SESSIONS` 即拒绝。
 pub fn ensure_pty_capacity(active: usize) -> Result<(), Error> {
     if active >= MAX_PTY_SESSIONS {
         return Err(Error::other(format!(
@@ -360,7 +360,7 @@ mod spawn_tests {
         assert_eq!(FLAG_PASSTHROUGH_MODE, 0x8);
     }
 
-    // ─── BE-01 会话容量上限 ───
+    // ─── 会话容量上限 ───
 
     #[test]
     fn pty_capacity_below_limit_passes() {
@@ -385,7 +385,7 @@ mod spawn_tests {
 
     /// SPAWN_LOCK 串行语义：复刻 `spawn_locked` 的锁内闭环（容量判定 +
     /// 占用登记），上限 -1 时两线程并发进入 → 恰一成一败不超发——串行
-    /// 语义由 SPAWN_LOCK 互斥保证（进程真跑集成层归 M2.4）。
+    /// 语义由 SPAWN_LOCK 互斥保证（进程真跑见集成层）。
     #[test]
     fn spawn_lock_serializes_capacity_check_and_reservation() {
         use std::sync::{Arc, Barrier};

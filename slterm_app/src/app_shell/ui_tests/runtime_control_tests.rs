@@ -259,7 +259,7 @@ fn session_end_closes_the_managed_agent_and_busy_panes_block_window_close(cx: &m
     assert_eq!(SINGLE_WINDOW_ID, 1);
 }
 
-// ── M8.5 git 四方法 runtime 全链(真 git tempdir) ──
+// ── git 四方法 runtime 全链(真 git tempdir) ──
 
 /// 构造 `git.*` 请求:operation 由方法名派生(直接构造时显式给出)。
 fn git_command(
@@ -411,7 +411,7 @@ fn git_methods_execute_against_the_real_repository(cx: &mut TestAppContext) {
         "unstage 后索引不得再有暂存变更: {entries:?}"
     );
 
-    // A5:子目录 pane 仍可使用 Git 方法(expected_cwd = pane 当前 cwd)。
+    // 子目录 pane 仍可使用 Git 方法(expected_cwd = pane 当前 cwd)。
     let sub = root.join("src");
     std::fs::create_dir_all(&sub).unwrap();
     view.update(cx, |view, _| {

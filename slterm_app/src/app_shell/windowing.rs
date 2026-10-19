@@ -1,9 +1,9 @@
 //! 开窗链:窗口选项(116×30 反推尺寸/标题栏/app_id)与启动变体分派。
 //!
-//! M3 单窗单实例(产品定位):`open_initial_window` 只在启动链调一次;
-//! 窗口角色单形态(QuickTerminal 归 09)。会话恢复决策(M5.5)在开窗前由
+//! 单窗单实例(产品定位):`open_initial_window` 只在启动链调一次;
+//! 窗口角色单形态(QuickTerminal 归 09)。会话恢复决策在开窗前由
 //! `session_recovery::prepare_startup` 产出 `StartupPlan`;本模块只把它
-//! 应用到窗口定形(D05-1 回放)并透传给 workspace。
+//! 应用到窗口定形(回放)并透传给 workspace。
 
 pub(super) mod startup_geometry;
 
@@ -37,7 +37,7 @@ pub(crate) enum WorkspaceStartup {
 /// 窗口最小尺寸(旧产品面同值)。
 const MIN_WINDOW_SIZE: (f32, f32) = (760.0, 540.0);
 
-/// 回放尺寸(D05-1):保存值优先,过小或无保存值回退启动基准尺寸。
+/// 回放尺寸:保存值优先,过小或无保存值回退启动基准尺寸。
 /// 返回 `(尺寸, 最大化态)`。
 fn restored_size(
     saved: Option<WindowState>,
@@ -71,7 +71,7 @@ fn fit_to_display(
 }
 
 /// 窗口定形唯一函数(会话恢复回放 = 定形前覆盖 preferred_size,
-/// 不改调用序)。M3 单形态 = Regular。
+/// 不改调用序)。单形态 = Regular。
 pub(crate) fn workspace_window_options(
     cx: &App,
     focus: bool,
@@ -110,7 +110,7 @@ pub(crate) fn workspace_window_options(
 ///
 /// 隐藏窗口不进入 present-then-show 链——该链只为「即将曝光」的窗口
 /// 防首帧黑窗;托盘「显示」时 GPUI `activate_window` 消费首窗 placement
-/// 完成曝光与前台化(M10.4 facade 同路径)。
+/// 完成曝光与前台化(facade 同路径)。
 fn apply_start_hidden(options: &mut WindowOptions, start_hidden: bool) {
     if start_hidden {
         options.show = false;
@@ -181,7 +181,7 @@ pub(crate) fn open_initial_window(
 mod windowing_tests {
     use super::*;
 
-    /// D05-1:保存的尺寸/最大化态在窗口定形前决定 bounds 形态。
+    /// 保存的尺寸/最大化态在窗口定形前决定 bounds 形态。
     #[test]
     fn saved_window_state_replays_size_and_maximized_flag() {
         let fallback = size(px(1080.0), px(720.0));
@@ -226,9 +226,9 @@ mod windowing_tests {
     }
 
     /// 静默启动只改 `show`/`focus` 两轴,且不进入 present-then-show 链;
-    /// 常规启动保持可视 + 聚焦形态(M3.1 首帧纪律不变)。
+    /// 常规启动保持可视 + 聚焦形态(首帧纪律不变)。
     ///
-    /// M10.7 缝合点:视效初始化只写背景外观,不得回写 `show`/`focus`。
+    /// 缝合点:视效初始化只写背景外观,不得回写 `show`/`focus`。
     /// 这里把透明背景提前放进 options,验证 `apply_start_hidden` 的
     /// show/focus=false 仍是最终形态。
     #[test]

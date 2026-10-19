@@ -1,4 +1,4 @@
-//! B20/B73 侧栏三视图与 B7 键位热重绑的虚拟窗口用例。
+//! /侧栏三视图与键位热重绑的虚拟窗口用例。
 //!
 //! Commit/AgentFiles 全部走注入数据,不读真实 git 仓库与 USERPROFILE。
 
@@ -15,7 +15,7 @@ fn leaked(selector: String) -> &'static str {
     Box::leak(selector.into_boxed_str())
 }
 
-/// B73 Nav:两 tab(其一左右分屏)全部可见;tab 行激活切换、pane 行聚焦。
+/// Nav:两 tab(其一左右分屏)全部可见;tab 行激活切换、pane 行聚焦。
 #[gpui::test]
 fn nav_view_lists_tabs_and_panes_and_clicking_focuses(cx: &mut TestAppContext) {
     let (workspace, mut window) = open_workspace(cx);
@@ -56,7 +56,7 @@ fn nav_view_lists_tabs_and_panes_and_clicking_focuses(cx: &mut TestAppContext) {
     assert_eq!(focused, PaneId(2), "点击 pane 行必须聚焦该 pane");
 }
 
-/// B73 Commit:注入快照渲染分支/去重变更行/历史行;无快照走空态。
+/// Commit:注入快照渲染分支/去重变更行/历史行;无快照走空态。
 #[gpui::test]
 fn commit_view_renders_injected_snapshot_and_empty_state(cx: &mut TestAppContext) {
     let (workspace, mut window) = open_workspace(cx);
@@ -114,7 +114,7 @@ fn commit_view_renders_injected_snapshot_and_empty_state(cx: &mut TestAppContext
     );
 }
 
-/// A8:双槽打开时渲染可拖拽分隔条;拖拽实时改比例并落在钳制区间,期间
+/// 双槽打开时渲染可拖拽分隔条;拖拽实时改比例并落在钳制区间,期间
 /// 终端网格零重排;关掉一个槽后比例保留、分隔条消失。
 #[gpui::test]
 fn sidebar_split_divider_drags_the_slot_ratio(cx: &mut TestAppContext) {
@@ -177,7 +177,7 @@ fn sidebar_split_divider_drags_the_slot_ratio(cx: &mut TestAppContext) {
     );
 }
 
-/// B73 AgentFiles:注入目录替身,存在/缺失目录都保留行位。
+/// AgentFiles:注入目录替身,存在/缺失目录都保留行位。
 #[gpui::test]
 fn agent_files_view_renders_cached_directories_with_missing_placeholder(cx: &mut TestAppContext) {
     let (workspace, mut window) = open_workspace(cx);
@@ -208,7 +208,7 @@ fn agent_files_view_renders_cached_directories_with_missing_placeholder(cx: &mut
     }
 }
 
-/// B7:设置 Changed → 重读 keybind 段 → 新组合生效、被接管动作的旧默认
+/// 设置 Changed → 重读 keybind 段 → 新组合生效、被接管动作的旧默认
 /// 组合失效;Ctrl+C / Ctrl+Shift+C 保留键仍被准入门拒绝。
 #[gpui::test]
 fn settings_change_rebuilds_keymap_and_drops_overridden_default(cx: &mut TestAppContext) {

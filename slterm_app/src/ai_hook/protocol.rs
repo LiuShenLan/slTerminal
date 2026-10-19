@@ -221,7 +221,7 @@ pub(crate) fn parse_envelope(bytes: &[u8]) -> Option<AiHookEvent> {
         },
         // opencode 的 Bun 插件把它的事件总线归一成极小的
         // `{"kind":"prompt|done|attention","message":?}` 载荷(见随安装器落盘
-        // 的插件,归 M4.3),于是这一侧与 opencode 持续演进的 SDK 事件 schema
+        // 的插件，于是这一侧与 opencode 持续演进的 SDK 事件 schema
         // 解耦。
         "opencode" | "pi" | "omp" => match payload.get("kind").and_then(Value::as_str) {
             Some("session-start") => (AiHookKind::SessionStart, None),

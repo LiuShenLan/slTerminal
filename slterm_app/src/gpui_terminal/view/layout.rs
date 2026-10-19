@@ -7,7 +7,7 @@ use super::*;
 impl TerminalView {
     /// 宿主宣告:下一次网格变化来自结构性布局改动,直接提交、不去抖。
     /// 见 `structural_resize` 字段注释。
-    #[allow(dead_code)] // 调用点 = M5 分屏/zoom 的结构变更;M3 无生产者。
+    #[allow(dead_code)] // 调用点 = 分屏/zoom 的结构变更;无生产者。
     pub fn mark_structural_resize(&mut self) {
         self.structural_resize = true;
     }

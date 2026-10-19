@@ -5,7 +5,7 @@
 4 阶段线性流程：并行分散→集中裁决→逐条判定→精确修改。每个阶段有明确的输入/输出/步骤。
 
 **输入契约**：一组带来源引用的 markdown 文件 + 可选方向分组。
-- 有分组（如 `structured-web-research` 产出的 D1/D2 方向）→ 每组 1 个子代理
+- 有分组（如 `structured-web-research` 产出的 direction-1/direction-2 方向）→ 每组 1 个子代理
 - 无分组 → 按文件划分子代理，每文件 1 个
 
 ```
@@ -72,7 +72,7 @@
 
 1. **AI 提取 claims**：通读全部源文件，对同一事实点（版本号、数量、布尔支持性、优先级顺序等）提取声称，赋予相同 `field` 名，写成 claims JSON：
    ```json
-   [{"direction":"D1","file":"a.md","line":12,"field":"事件总数","value":"30 个事件","source":"https://..."}]
+   [{"direction":"direction-1","file":"a.md","line":12,"field":"事件总数","value":"30 个事件","source":"https://..."}]
    ```
    **提取纪律（防伪冲突）**：每一条 claim 必须基于**实际读取文件内容**（行号 + 原文核对），禁止凭记忆/摘要提取；提取后对 value 做规范化——先区分**记号差异**（`<project>` vs `[project-path]`、`~` vs 完整 home 路径等同一事实的不同写法，不构成冲突）与**事实差异**（数值/状态/布尔相反才进冲突检测）。检测到疑似冲突时，先回读两处原文确认提取无误，再提交给脚本。
 2. **确定性检测**：`cat claims.json | node <skill目录>/scripts/detect-conflicts.mjs` → 冲突矩阵（boolean_inversion / count_discrepancy / value_mismatch）

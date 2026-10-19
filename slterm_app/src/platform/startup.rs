@@ -47,7 +47,7 @@ pub(crate) fn start_hidden_for(silent_start: bool, tray: bool) -> bool {
 
 /// 在任何 worker/终端子进程存在之前,完成进程级 GUI 状态归一化。
 ///
-/// D04-1 console 子系统下的语义反转三刀(因果链照抄):
+/// console 子系统下的语义反转三刀(因果链照抄):
 /// - AttachConsole 臂消亡:console 子系统进程出生即继承父控制台(双击启动由
 ///   系统分配新控制台),显式 Attach 失去对象。
 /// - FreeConsole 臂消亡:console 子系统下从 pwsh/cmd 启动,父 shell 同步等待

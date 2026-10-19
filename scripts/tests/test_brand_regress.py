@@ -88,7 +88,7 @@ class BrandRegressTests(unittest.TestCase):
             (repository / "Cargo.toml").write_text(
                 "# anchor nebula-v1.16.1-owned-base\n", encoding="utf-8"
             )
-            # 临时稿目录已随 M11 删除:任何 docs/ 路径都不再获得前缀豁免。
+            # 临时稿目录已删除:任何 docs/ 路径都不再获得前缀豁免。
             former_note = repository / "docs" / "former-note.md"
             former_note.parent.mkdir(parents=True)
             former_note.write_text("pebrel baseline review\n", encoding="utf-8")

@@ -1,4 +1,4 @@
-//! 侧栏三视图渲染(B73):导航树 / Commit / Agent 全局文件。
+//! 侧栏三视图渲染:导航树 / Commit / Agent 全局文件。
 //!
 //! 数据源与持久化边界:
 //! - Nav 每帧从 `SltermWorkspace::tabs` 派生,不新增持久化面;

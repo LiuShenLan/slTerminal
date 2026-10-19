@@ -1,7 +1,7 @@
-//! ConPTY 集成测试层（M2.4）——真机真进程，禁止 mock ConPTY。
+//! ConPTY 集成测试层——真机真进程，禁止 mock ConPTY。
 //!
 //! 覆盖：cmd 全链（spawn→写→读→resize→关闭）、默认 shell 探测链
-//! （`resolve_shell`）+ pwsh 集成脚本 OSC 语义、DA1 统一身份（D02-1，
+//! （`resolve_shell`）+ pwsh 集成脚本 OSC 语义、DA1 统一身份(
 //! bundled OpenConsole 臂）、bundled 宿主句柄回归（关闭与失败 spawn 后
 //! 句柄归还）、`SPAWN_LOCK` + `MAX_PTY_SESSIONS=32` 容量真验。
 //!
@@ -73,7 +73,7 @@ fn which(name: &str) -> Option<String> {
     })
 }
 
-/// UTF-16LE + Base64（PowerShell `-EncodedCommand` 编码，B17 链路）。
+/// UTF-16LE + Base64（PowerShell `-EncodedCommand` 编码，链路）。
 fn encode_utf16le_base64(script: &str) -> String {
     use base64::Engine as _;
     let bytes: Vec<u8> = script
@@ -303,11 +303,11 @@ fn conpty_spawn_write_read_resize_close_full_chain() {
 
     // 写命令 → 读输出(marker 进 grid 即证写读链通)。
     // 负载裕度,非断言/语义放宽:30s 预算覆盖 Defender 扫描 + 宿主握手 +
-    // 冷启动叠加(A1);真 bug 条件下该断言仍红。
-    driven.input(b"echo SLTERM-M2-MARK-1\r");
-    let grid = driven.await_grid(Duration::from_secs(30), |g| g.contains("SLTERM-M2-MARK-1"));
+    // 冷启动叠加;真 bug 条件下该断言仍红。
+    driven.input(b"echo SLTERM-MARK-1\r");
+    let grid = driven.await_grid(Duration::from_secs(30), |g| g.contains("SLTERM-MARK-1"));
     assert!(
-        grid.contains("SLTERM-M2-MARK-1"),
+        grid.contains("SLTERM-MARK-1"),
         "写读链未见到命令输出:\n{grid}"
     );
 
@@ -415,7 +415,7 @@ fn default_shell_resolve_chain_osc_marks() {
     );
 }
 
-// ─── 用例 3:pwsh 集成范式——shell-integration.ps1 经 B17 EncodedCommand 真跑 ───
+// ─── 用例 3:pwsh 集成范式——shell-integration.ps1 经 EncodedCommand 真跑 ───
 
 /// 集成脚本在 PowerShell 语义层真跑(对照上游 `run_powershell_integration_case`
 /// 范式:prelude + 脚本本体 + checks 合体,断言行经退出码与 stdout)。
@@ -447,9 +447,9 @@ exit 0
 "#;
     let combined = format!("{prelude}{script}\n{checks}");
     let encoded = encode_utf16le_base64(&combined);
-    // B17 链路真跑:-EncodedCommand 内联(不落盘,AMSI/ASR 红线);
+    // 链路真跑:-EncodedCommand 内联(不落盘,AMSI/ASR 红线);
     // 禁 -NoProfile 是生产 shell 参数约定,本用例测脚本语义,显式
-    // -NoProfile 隔离用户 profile 变量(用例确定性优先;B17 结构守卫在 L1)。
+    // -NoProfile 隔离用户 profile 变量(用例确定性优先;结构守卫在单元层)。
     let out = Command::new(pwsh)
         .args(["-NoLogo", "-NoProfile", "-EncodedCommand", &encoded])
         .output()
@@ -485,7 +485,7 @@ exit 0
     }
 }
 
-// ─── 用例 4:DA1 统一身份(D02-1)——bundled OpenConsole 臂 ───
+// ─── 用例 4:DA1 统一身份——bundled OpenConsole 臂 ───
 
 /// DA1 应答身份真机验证:子进程(exe 旁文件对 → 侧载 OpenConsole)内
 /// pwsh 发 DA1 查询(`ESC[c`),经 EventLoop 读循环检测代答,子进程 stdin
@@ -604,7 +604,7 @@ fn da1_child_drive(pty: tty::Pty) {
     let resp = base64::engine::general_purpose::STANDARD
         .decode(seen[start..end].trim())
         .expect("RESP base64 解码");
-    // 统一身份(D02-1):priming/代答同值;priming 残留与本次代答可能
+    // 统一身份:priming/代答同值;priming 残留与本次代答可能
     // 各贡献一份,逐份都须是该身份。
     assert!(
         contains(&resp, b"\x1b[?64;22c"),
@@ -769,7 +769,7 @@ fn spawn_lock_serializes_and_capacity_32_enforced() {
 
     // 并发抢名额:释放 1 个 → 4 线程 barrier 同发 → 恰 1 成 3 拒。
     //
-    // A1:成功者必须**保持 Pty 存活到主线程统计完成**再释放。旧写法在线程
+    // 成功者必须**保持 Pty 存活到主线程统计完成**再释放。旧写法在线程
     // 内立即 drop,`Pty::drop` 的 session_closed() 会先于其他线程的容量
     // 检查归还名额,让第二个线程合法成功(「2 成功」),断言依赖调度而非锁。
     drop(held.pop());
@@ -811,7 +811,7 @@ fn spawn_lock_serializes_and_capacity_32_enforced() {
 }
 
 /// 显式命令通道(`-e`):`explicit_command=true` 时白名单外程序放行
-/// (SEC-01 豁免论证见 `Options::explicit_command`);同程序 `false` 时
+/// (豁免论证见 `Options::explicit_command`);同程序 `false` 时
 /// 仍被白名单拒绝。用 System32 恒在的 `where.exe`(非白名单三家)作探针。
 #[test]
 fn explicit_command_bypasses_shell_allowlist() {

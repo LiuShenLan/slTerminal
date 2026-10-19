@@ -1,7 +1,7 @@
 // =====================================================================
 // Stage Workflow 模板（实战版）
 // =====================================================================
-// 用法: 读取此文件，替换 __PLACEHOLDER__，落盘 docs/<task>/workflows/stage-NN-*.js，
+// 用法: 读取此文件，替换 __PLACEHOLDER__，落盘 temp/plans/<task>/workflows/stage-NN-*.js，
 //       语法预检（SKILL.md 5.1）后传给 Workflow({ scriptPath })
 //
 // 生成纪律（违反曾致脚本与 checklist 大面积错位）:
@@ -11,8 +11,8 @@
 //   3. 若本 Stage 有特殊纪律（如"只改测试"），写进 PREAMBLE_EXTRA，
 //      并在头部注释注明 fix-loop 调用时 args.constraints 应传的值
 //   4. 门禁命令按 Stage 触碰文件选择——触及 tsc/eslint 覆盖外文件
-//      （如 e2e-tests/helpers.ts 不在根 tsconfig include）时，
-//      __TEST_COMMANDS__ 必须补 npx vite build 构建级兜底
+//      （如某文件不在静态检查覆盖内）时，
+//      __TEST_COMMANDS__ 必须补 python scripts/check_architecture.py 构建级兜底
 //   5. stages 分工表文件清单 = 各 agent prompt 触碰文件全集（含"仅加
 //      export"微改文件）——漏列使"无文件重叠"证明失真
 //   6. prompt 引用既有文件路径必须 Glob 核实，禁凭记忆（实证：
@@ -28,7 +28,7 @@
 //   __PARALLEL_AGENTS__   - 并行 agent 数组, JSON: [{label, prompt}, ...]
 //   __SEQUENTIAL_AGENTS__ - 串行 pipeline 阶段（无则见文末替换说明）
 //   __TEST_COMMANDS__     - 全量测试命令清单（config.json commands）
-//   __VERIFY_FILE__       - 断言文件路径（docs/<task>/workflows/verify/stage-NN.md）
+//   __VERIFY_FILE__       - 断言文件路径（temp/plans/<task>/workflows/verify/stage-NN.md）
 // =====================================================================
 
 export const meta = {
@@ -119,11 +119,11 @@ return { refactorResults, __SEQUENTIAL_RESULT__ testResult, verifyResult }
 //   ]
 //
 // __TEST_COMMANDS__ 示例（逐行编号，与 verify 文件尾部一致）:
-//   1. npx tsc --noEmit
-//   2. npx eslint src/
-//   3. cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
-//   4. npm test
-//   5. cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1
+//   1. cargo build -p slterm --bin slterm -p slterm_hook --bin slterm-hook
+//   2. cargo clippy --workspace --all-targets
+//   3. cargo clippy --workspace --all-targets
+//   4. cargo test --workspace -- --test-threads=1
+//   5. cargo test --workspace -- --test-threads=1
 //
 // 并行 agent 测试纪律（重要）:
 //   并行 agent 的 prompt 中禁止让其各自跑资源共享型测试（含 PTY spawn、

@@ -4,7 +4,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
-# D11-1:每 crate 显式 test target——定向测试一律
+# 每 crate 显式 test target——定向测试一律
 # `cargo test -p slterm-split --test lib_tests <filter>`,禁 filter 直打
 # 默认 lib target(filter/--lib 会绕过 test=false 重建默认单测 target)。
 [lib]

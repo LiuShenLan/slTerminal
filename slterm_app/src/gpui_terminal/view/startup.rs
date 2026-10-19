@@ -13,7 +13,7 @@ impl TerminalView {
         cx: &mut Context<'_, Self>,
     ) -> Self {
         // 字体、调色板与终端启动配置来自全局 Settings(bootstrap 装载)。
-        // M3 Settings 白名单外项取模块常量(设置键回填点):
+        // Settings 白名单外项取模块常量(设置键回填点):
         // 字宽模式恒 Compact、偏移恒 (0,0)、行高倍率恒 None、shell 恒 None
         // (走 core pwsh→powershell→cmd 探测链)。
         let (
@@ -73,7 +73,7 @@ impl TerminalView {
                     .as_ref()
                     .map(|path| path.to_string_lossy().into_owned())
                     .unwrap_or_default();
-                // M3 无设置 shell 键:launch 未指定即 None,core 探测链接手。
+                // 无设置 shell 键:launch 未指定即 None,core 探测链接手。
                 // 显式命令(-e)的解析失败与 spawn 失败同通道呈现。
                 let options = session::local_options(shell, explicit_command, pane_id, cwd);
                 // pane.exec 的环境语义 = PTY 创建时冻结的 overrides;必须在
@@ -147,8 +147,8 @@ impl TerminalView {
             ),
             font_size,
             ligatures,
-            font_offset_x: M3_FONT_OFFSET.0,
-            font_offset_y: M3_FONT_OFFSET.1,
+            font_offset_x: FONT_OFFSET.0,
+            font_offset_y: FONT_OFFSET.1,
             line_height_multiplier: None,
             palette,
             math_overlay: super::super::math_overlay::MathOverlay::default(),

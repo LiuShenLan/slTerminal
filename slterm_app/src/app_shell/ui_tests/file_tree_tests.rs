@@ -1,4 +1,4 @@
-//! 文件树 L4 关键路径:渲染 / 双击路由 / 路径栏 / 拖放落点 /
+//! 文件树豁免层关键路径:渲染 / 双击路由 / 路径栏 / 拖放落点 /
 //! OS 拖出。全程 tempdir 假文件;系统处理器与回收站调用走注入断言端。
 
 use std::time::{Duration, Instant};
@@ -391,7 +391,7 @@ fn dragging_a_tree_row_out_of_the_window_promotes_an_os_file_drag(cx: &mut TestA
     );
 }
 
-// ── M8.5 搜索选项三钮 + 右键删除菜单 ──
+// ── 搜索选项三钮 + 右键删除菜单 ──
 
 /// 三钮切换只改模型选项,并触发一次结果重排(按钮有真实矩形)。
 #[gpui::test]
@@ -475,7 +475,7 @@ fn context_menu_delete_routes_through_the_recycle_bin(cx: &mut TestAppContext) {
     );
 }
 
-// ── M8.5 右键 CRUD:新建 / 重命名 / 名字校验 ──
+// ── 右键 CRUD:新建 / 重命名 / 名字校验 ──
 
 /// 右键一行并画一帧,让菜单挂上 workspace 根。
 fn right_click_selector(window: &mut VisualTestContext, selector: &'static str) {

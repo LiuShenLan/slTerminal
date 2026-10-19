@@ -110,7 +110,7 @@ pub(super) fn handle_connection(
         );
     }
 
-    // 首行非 JSON:首发默认静默丢弃(D12-5 回落面关闭);开启 legacy-attach
+    // 首行非 JSON:首发默认静默丢弃(回落面关闭);开启 legacy-attach
     // 后走 ATTACH/PING 探测,token 不符仍静默丢弃。
     if !line.trim_start().starts_with('{') {
         #[cfg(feature = "legacy-attach")]
@@ -579,7 +579,7 @@ mod transport_tests {
     use std::sync::mpsc;
     use std::time::Duration;
 
-    // SEC-18:测试一律假值占位,真实凭据禁入仓库。
+    // 测试一律假值占位,真实凭据禁入仓库。
     const TEST_TOKEN: &str = "sk-test-runtime-token";
 
     fn sink_channel() -> (EventSink, mpsc::Receiver<RuntimeCallback>) {
@@ -1021,7 +1021,7 @@ mod transport_tests {
         assert!(events.try_recv().is_err());
     }
 
-    /// D12-5 首发面:未开启 legacy-attach 时非 JSON 首行静默丢弃,
+    /// 首发面:未开启 legacy-attach 时非 JSON 首行静默丢弃,
     /// 不产生事件也不回写任何字节。
     #[cfg(not(feature = "legacy-attach"))]
     #[test]
@@ -1200,7 +1200,7 @@ mod transport_tests {
         assert_eq!(keys, ["agent", "env", "pane", "tab", "window"]);
     }
 
-    /// B26 防漂移:describe.commands 的动词必须与 CLI 实际命令清单逐项一致。
+    /// 防漂移:describe.commands 的动词必须与 CLI 实际命令清单逐项一致。
     /// 从 clap 的 `Command` 树派生，不复制第二份手写表。
     #[test]
     fn describe_commands_match_the_cli_catalog() {

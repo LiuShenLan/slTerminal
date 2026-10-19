@@ -1,9 +1,9 @@
-//! git 执行体 facade(D07-1 已裁「子进程统一」)。
+//! git 执行体 facade(已裁「子进程统一」)。
 //!
 //! 旧栈 `src-tauri/src/git/` 是 git2(libgit2 vendored)封装;新世界不移植
-//! git2,操作面统一走 git CLI 子进程(上游子进程形态)。本步(M8.1)只立只读面:
+//! git2,操作面统一走 git CLI 子进程(上游子进程形态)。本模块只立只读面:
 //! 仓库根解析 + HEAD 文件字节——`gitshow` 只读臂的数据源。status/diff/hunks/
-//! rollback/unstage 四方法执行归 M8.5 联调;本模块保留统一执行器形状:
+//! rollback/unstage 四方法由执行器消费;本模块保留统一执行器形状:
 //! 单构造口 [`command`],每命令 `--no-optional-locks`(边界条 7,
 //! 禁触发 index 锁与后台 gc),argv 不经 shell,Windows 挂 CREATE_NO_WINDOW。
 //!
@@ -13,7 +13,7 @@
 //! [`classify_git_failure`] 细分为 [`GitError::AccessDenied`]/
 //! [`GitError::Corrupt`]。UI 占位文案归 i18n,不解析具体错误内容。
 //! 只读消费面的短 TTL 缓存见 [`status_cached`]/[`repository_root_cached`];
-//! 不扫 ignored(CP-008)/rename 双检/rollback 三方字节一致归 M8.5 对照用例。
+//! 不扫 ignored/rename 双检/rollback 三方字节一致保留为对照用例。
 
 use std::collections::HashMap;
 use std::io::Read as _;
@@ -35,7 +35,7 @@ pub(crate) enum GitError {
     AccessDenied(String),
     /// 仓库/对象损坏:corrupt、bad/loose object、object file 等(stderr 分类所得)。
     Corrupt(String),
-    /// 其他命令失败(M8.5 四方法执行复用此臂)。
+    /// 其他命令失败(四方法执行复用此臂)。
     Command(String),
 }
 
@@ -57,7 +57,7 @@ impl std::error::Error for GitError {}
 /// 子进程统一构造口:全局 flag 必须位于子命令之前。
 ///
 /// `pub(crate)`:`side_panel` 的 git 状态快照与文件树过滤索引共用本
-/// 构造口(D07-1 子进程统一,无第二执行体)。
+/// 构造口(子进程统一,无第二执行体)。
 pub(crate) fn command(cwd: &Path) -> Command {
     let mut command = Command::new("git");
     command.arg("--no-optional-locks").arg("-C").arg(cwd);
@@ -93,7 +93,7 @@ struct RootCacheEntry {
 /// 路径所在 worktree 的根(`git rev-parse --show-toplevel`)。
 ///
 /// `verify_repository(pane_cwd, repo_root)` 的 `repo_root` 数据源:
-/// M8.5 的 `git.*` UI 执行器以本函数重查仓库根,与 `expected_cwd` 核对。
+/// 的 `git.*` UI 执行器以本函数重查仓库根,与 `expected_cwd` 核对。
 /// 写路径/runtime 校验用本函数(实时);只读消费面用
 /// [`repository_root_cached`]。
 pub(crate) fn repository_root(path: &Path) -> Result<PathBuf, GitError> {
@@ -390,7 +390,7 @@ pub(crate) enum FileStatus {
 }
 
 /// `git status --porcelain=v2 --branch -z` 解析结果(展示面与写操作 revision
-/// 共用;D07-1 子进程统一后本解析是唯一实现)。
+/// 共用;子进程统一后本解析是唯一实现)。
 #[derive(Clone, Debug, Default)]
 pub(crate) struct StatusSnapshot {
     /// `sha256(porcelain stdout)` 的 64 位 hex——写操作防陈旧 revision。

@@ -2,7 +2,7 @@
 //!
 //! - 带子命令(`ctl` / `env` / `window` / `tab` / `pane` / `agent`)= CLI 客户端,
 //!   请求-响应后退出;输出一律 JSON(`--pretty` 只改排版)。
-//! - 无子命令 = GUI 启动;`--working-directory` / `-e` 两个启动参数保留 M3 语义。
+//! - 无子命令 = GUI 启动;`--working-directory` / `-e` 两个启动参数保留语义。
 //!
 //! 资源 + 动词是完整协议之上的薄别名:同一套 `request_once`、同一响应信封、
 //! 同样的 generation / `after_seq` 竞态保护;短的只是命令行,不是语义。
@@ -16,7 +16,7 @@ use crate::error::AppError;
 #[cfg(test)]
 use std::ffi::OsString;
 
-/// 短命令查询超时(D04-2 首版照搬,重新标定归待沉淀)。
+/// 短命令查询超时(首版照搬,重新标定归待沉淀)。
 pub const SHORT_TIMEOUT_MS: u64 = 30_000;
 /// wait 默认上限:编码 Agent 以分钟计,复用查询超时会把正常一轮打成 timeout。
 pub const SHORT_WAIT_TIMEOUT_MS: u64 = 600_000;
@@ -49,7 +49,7 @@ pub struct Cli {
     pub subcommands: Option<Subcommands>,
 }
 
-/// 同 exe 子命令面。其余领域的子命令(设置/安装器)归各自模块,本步不立。
+/// 同 exe 子命令面。其余领域的子命令(设置/安装器)归各自模块,本模块不立。
 #[derive(Subcommand, Debug)]
 pub enum Subcommands {
     /// Full protocol surface for scripts and long-lived integrations.

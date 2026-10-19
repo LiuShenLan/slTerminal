@@ -63,7 +63,7 @@ pub(crate) fn project_workspace(workspace: &SltermWorkspace, cx: &App) -> Runtim
                                     runtime_task_state(host.status())
                                 }),
                                 state_change_seq: 0,
-                                // OSC 133 记账(C1):启动边 Phases 由视图推进,
+                                // OSC 133 记账:启动边 Phases 由视图推进,
                                 // 完成边产出 outcome;未观测到的字段如实为空。
                                 active_run: view.active_run,
                                 last_run: view.last_run.clone(),

@@ -122,7 +122,7 @@ pub struct ThemeLibraryStore {
 
 impl Default for ThemeLibraryStore {
     fn default() -> Self {
-        // 开放问题 2 / D3:数据目录下 `themes/` 子目录,文件名不带品牌。
+        // 开放问题 2 / 数据目录下 `themes/` 子目录,文件名不带品牌。
         Self::new(slterm_settings::settings_dir().join("themes"))
     }
 }
@@ -308,7 +308,7 @@ impl ThemeLibraryStore {
     }
 
     /// 克隆内置主题并立即保存:返回的自定义主题从修订 1 起。
-    #[allow(dead_code)] // 消费点 = M6.5 主题库管理 UI(测试已用)。
+    #[allow(dead_code)] // 消费点 = 主题库管理 UI(测试已用)。
     pub fn fork_builtin(&self, theme: ThemeName, name: &str) -> Result<ThemeDocument, StoreError> {
         let builtin = builtin_documents()
             .into_iter()
@@ -332,7 +332,7 @@ impl ThemeLibraryStore {
     }
 
     /// 条件删除:修订不匹配拒绝(外部编辑不可被静默删掉)。
-    #[allow(dead_code)] // 消费点 = M6.5 主题库管理 UI(测试已用)。
+    #[allow(dead_code)] // 消费点 = 主题库管理 UI(测试已用)。
     pub fn delete(&self, id: &str, expected_revision: u64) -> Result<(), StoreError> {
         if builtin_documents()
             .into_iter()

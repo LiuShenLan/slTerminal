@@ -80,7 +80,7 @@ struct TabTargetParams {
     tab_index: usize,
     #[serde(default)]
     tab_id: Option<u64>,
-    /// `tab.close` 专用:丢弃未保存草稿(B12)。
+    /// `tab.close` 专用:丢弃未保存草稿。
     #[serde(default)]
     force: bool,
 }
@@ -514,7 +514,7 @@ pub(super) fn validate_wait_timeout(timeout_ms: u64) -> Result<(), ApiError> {
     }
 }
 
-#[allow(dead_code)] // 消费点 = pane.procs 的 UI 执行器(M7.5 接线)。
+#[allow(dead_code)] // 消费点 = pane.procs 的 UI 执行器(接线)。
 pub(crate) fn capture_process_tree(
     window_id: u64,
     pane_id: u64,
@@ -594,7 +594,7 @@ pub(crate) fn validate_prompt(text: &str) -> Result<(), ApiError> {
 }
 
 /// 内部多行文本(chat message):保留换行,但仍不能把 ESC/NUL 送进终端。
-#[allow(dead_code)] // 消费点 = 内部 send-to-chat 链(M8 接线)。
+#[allow(dead_code)] // 消费点 = 内部 send-to-chat 链(接线)。
 pub(crate) fn validate_chat_message(text: &str) -> Result<(), ApiError> {
     validate_multiline_text(text, "chat message")
 }
@@ -1173,7 +1173,7 @@ mod command_tests {
         }
     }
 
-    /// B12:`tab.close` 的 force 默认 false;显式 true 才允许丢弃草稿。
+    /// `tab.close` 的 force 默认 false;显式 true 才允许丢弃草稿。
     #[test]
     fn tab_close_parses_the_force_flag() {
         let command =

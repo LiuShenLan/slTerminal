@@ -1,8 +1,8 @@
-//! 设置注册表——键名/段归属/重置清单的单源(D06-1 段嵌套落地)。
+//! 设置注册表——键名/段归属/重置清单的单源(段嵌套落地)。
 //!
 //! settings.json 为段嵌套形态:每个设置键归属一个语义段(appearance/
 //! scrolling/…),写通道按段浅合并。本表是「键 → 段」映射的唯一权威:
-//! `RawSettings` 读取、写通道顶层白名单(M6.1)、`reset` 删除清单全部由
+//! `RawSettings` 读取、写通道顶层白名单、`reset` 删除清单全部由
 //! 本表驱动,防「加了新设置忘了加进重置清单」的结构性漂移。
 //!
 //! 三清单同源(段形态):
@@ -62,7 +62,7 @@ pub struct SettingsKeyDef {
     pub domain: SettingsDomain,
     /// false = 授权类显式选择(agent hooks 接入状态),重置时保留。
     pub resettable: bool,
-    /// 设置页路由搜索的中英别名串;M6.2 设置页点亮时回填,此前为空。
+    /// 设置页路由搜索的中英别名串;设置页点亮时回填,此前为空。
     pub search_terms: &'static str,
 }
 

@@ -33,7 +33,7 @@ pub fn report_startup_error(error: &dyn std::fmt::Display, gui_launch: bool) {
 }
 
 /// 只给「GUI 人格启动且无控制台」的场景弹面;有控制台时 stderr 已经够用。
-/// console 子系统(D04-1)下双击启动会自带控制台,弹面率较上游 GUI 子系统下降
+/// console 子系统下双击启动会自带控制台,弹面率较上游 GUI 子系统下降
 /// 属已接受后果(标准流正确性优先)。
 fn startup_error_needs_dialog(gui_launch: bool, has_console: bool) -> bool {
     gui_launch && !has_console

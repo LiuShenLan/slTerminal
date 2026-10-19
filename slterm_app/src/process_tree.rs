@@ -1,6 +1,6 @@
 //! 进程树:hook 事件路由的第二因子与 agent 进程身份解析。
 //!
-//! 本步(M4.2)落地范围:祖先链解析(`nearest_agent_ancestor`,命名管道
+//! 本模块落地范围:祖先链解析(`nearest_agent_ancestor`,命名管道
 //! 身份核验的另一半)及其支撑(带 TTL 的全机快照、PID 复用消解、
 //! `display_name`)。上游的关窗确认族(STATELESS/INTERACTIVE_SHELLS/
 //! `is_interactive_shell_command`/`busy_child`/`activity_evidence`/
@@ -79,7 +79,7 @@ fn with_cached_snapshot<T>(
 }
 
 /// 一次进程树查询的条目(根 pid 以 depth 0 进入结果)。
-#[allow(dead_code)] // 消费点 = runtime_api::capture_process_tree(pane.procs,M7.5 接线)。
+#[allow(dead_code)] // 消费点 = runtime_api::capture_process_tree(pane.procs,接线)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ProcessEntry {
     pub(crate) pid: u32,
@@ -93,13 +93,13 @@ pub(crate) struct ProcessEntry {
 /// 与祖先链共用 PID 复用消解:父号已被更年轻进程占用时该边断开,避免把
 /// 无关进程挂到 pane 名下。根不在快照里 = 壳已退出,显式报错而不是空列表
 /// (空列表会被外部客户端误读成「没有子进程」)。
-#[allow(dead_code)] // 消费点 = runtime_api::capture_process_tree(pane.procs,M7.5 接线)。
+#[allow(dead_code)] // 消费点 = runtime_api::capture_process_tree(pane.procs,接线)。
 pub(crate) fn descendants(root_pid: u32) -> Result<Vec<ProcessEntry>, String> {
     descendants_from_rows(root_pid, process_snapshot::snapshot()?)
 }
 
 /// [`descendants`] 的纯函数内核(测试夹具直接喂行,不扫真实进程表)。
-#[allow(dead_code)] // 测试夹具内核 + pane.procs 链(M7.5)。
+#[allow(dead_code)] // 测试夹具内核 + pane.procs 链。
 fn descendants_from_rows(
     root_pid: u32,
     rows: Vec<ProcessRow>,
@@ -110,7 +110,7 @@ fn descendants_from_rows(
     descendants_from_snapshot(root_pid, &verified_parentage(rows))
 }
 
-#[allow(dead_code)] // 消费点 = descendants(pane.procs,M7.5)。
+#[allow(dead_code)] // 消费点 = descendants(pane.procs)。
 fn descendants_from_snapshot(
     root_pid: u32,
     processes: &std::collections::HashMap<u32, (u32, String)>,

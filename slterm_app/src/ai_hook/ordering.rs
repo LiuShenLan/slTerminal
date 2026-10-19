@@ -1,7 +1,7 @@
 //! 按流排序与有界去重,发生在 pane 路由之后。
 //!
 //! 流键 = source + session(pi 以 bridge_instance 代)+ pane + agent_pid。
-//! 上游的 remote_process 维随 SSH 语义整支裁剪(D03-4 默认裁定:pane id
+//! 上游的 remote_process 维随 SSH 语义整支裁剪(默认裁定:pane id
 //! 维已兜住同机歧义)。
 
 use std::collections::{HashMap, VecDeque};

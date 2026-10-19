@@ -1,12 +1,12 @@
 [package]
 name = "slterm"
-# 首发版本线续 0.3.0(D12-4):更新链对 <0.3.0 一律视为需手动重装。
+# 首发版本线续 0.3.0:更新链对 <0.3.0 一律视为需手动重装。
 version = "0.3.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
-# D11-1:显式 test target——定向测试一律
+# 显式 test target——定向测试一律
 # `cargo test -p slterm --test lib_tests <filter>`,禁 filter 直打默认 lib target
 # (filter/--lib 会绕过 test=false 重建默认单测 target,manifest 控制随之失效)。
 [lib]
@@ -32,7 +32,7 @@ path = "tests/windows_console_startup.rs"
 
 # Runtime API 行为级端到端:
 # 真实桌面 + 预构建 exe 才执行,`SLTERM_E2E_EXE` 未设置时打印 SKIP 计通过
-# (条件跳过登记于 .claude/test-exemptions.md)。
+# (条件跳过)。
 [[test]]
 name = "runtime_conformance"
 path = "tests/runtime_conformance.rs"
@@ -45,7 +45,7 @@ gpui-test-support = ["gpui/test-support", "gpui-component/test-support"]
 # 本地假 release 服务器演练通道:只用于 debug
 # 验收/发布彩排;`update_check::test_source` 在 release 构建下编译期拒绝。
 update-test-source = []
-# 旧式回落协议面(D12-5):首行非 JSON 的 ATTACH/PING。首发默认关闭,
+# 旧式回落协议面:首行非 JSON 的 ATTACH/PING。首发默认关闭,
 # 单实例移交与存活探测改走版本化 JSON;开启后接受旧客户端回落行。
 legacy-attach = []
 
@@ -58,7 +58,7 @@ gpui-component-assets.workspace = true
 slterm_terminal = { path = "../slterm_terminal" }
 # 包名带连字符(lib 目标名 cargo 自动转下划线,代码里 `use slterm_settings`)。
 slterm-settings = { path = "../slterm_settings" }
-# PaneId/TabId + SplitTree 分屏树(纯数据 core,M3 workspace 雏形挂接)。
+# PaneId/TabId + SplitTree 分屏树(纯数据 core,workspace 雏形挂接)。
 slterm-split = { path = "../slterm_split" }
 # 补全匹配/语义引擎(core crate):独立轻量库,应用层只消费候选。
 slterm_completions = { path = "../slterm_completions" }
@@ -72,16 +72,16 @@ vte = { version = "0.15.0", default-features = false, features = ["std", "ansi"]
 # (宏内部专用),业务侧必须直连 anyhow 本体。
 anyhow = "1"
 log = "0.4"
-# 安全审计通道:SEC-12/13/17 唯一形态 = tracing target
+# 安全审计通道:唯一形态 = tracing target
 # "audit";`log-always` 让事件无条件桥接进既有 log 栈(单日志栈,不重复
 # 初始化)——审计取证不因任何 tracing subscriber 装配而丢事件。
-# B67:若未来装配全局 subscriber,必须同时移除 `log-always` 或让 subscriber
+# 若未来装配全局 subscriber,必须同时移除 `log-always` 或让 subscriber
 # 过滤 audit target,否则同一事件双落点(日志 + subscriber)。
 tracing = { version = "0.1", features = ["log-always"] }
 # ai_hook 信封/载荷解析(helper 不重编码,JSON 工作全在宿主侧)。
 serde_json = "1"
 # CLI 双人格 clap 面:同 exe 子命令与 GUI 参数共用一份定义,
-# --help/版本/参数拒绝由 clap 统一产出。B28:精确 pin 到当前构建/测试基线
+# --help/版本/参数拒绝由 clap 统一产出。精确 pin 到当前构建/测试基线
 # (Cargo.lock 实解析 4.6.7),避免 caret 漂移改变 --help/解析语义。
 clap = { version = "=4.6.7", features = ["derive"] }
 # 屏幕规则 TOML 反序列化(规则资源随仓,声明式规则改不动代码)。
@@ -118,7 +118,7 @@ unicode-width = "0.2.0"
 ahash = { version = "0.8.6", features = ["no-rng"] }
 # keymap/sequence.rs 的修饰键位族(与 core 同版本族)。
 bitflags = "2.4.1"
-# 凭据出域句柄即用即焚(M9.2 先落消费接口 trait)。
+# 凭据出域句柄即用即焚(先落消费接口 trait)。
 zeroize = "1"
 # 加密备份:AES-256-GCM 密封 + Argon2id 口令派生。版本与
 # 上游固定基线逐字一致(派生参数组作契约数值随迁)。
@@ -131,7 +131,7 @@ futures = "0.3"
 # first_frame 取原生 HWND 走 raw-window-handle(与 gpui 内部同版本族),
 # 不经 winit 中转——winit 事件循环本体不迁。
 raw-window-handle = "0.6"
-# ai_hook 安装权威(M4.3):codex/kimi 的 TOML 手术保注释保格式;managed 文件
+# ai_hook 安装权威:codex/kimi 的 TOML 手术保注释保格式;managed 文件
 # 归属指纹;cursor/copilot/grok 的 EncodedCommand 形态;codex 能力探针输出
 # 暂存与测试 tempdir 隔离;config_guard 的配置目录监听(notify 钉 7 与
 # gpui-component 同版本族,防双份构建)。
@@ -150,7 +150,7 @@ image = { version = "0.25", default-features = false, features = ["bmp", "gif", 
 winreg = "0.56"
 
 [dev-dependencies]
-# 审计事件格式断言(C31):测试内作用域订阅器只开 fmt 层,
+# 审计事件格式断言:测试内作用域订阅器只开 fmt 层,
 # 不引入全局 subscriber(生产仍走 tracing→log 单栈桥接)。
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }
 

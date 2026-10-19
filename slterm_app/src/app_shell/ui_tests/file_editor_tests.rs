@@ -1,5 +1,5 @@
-//! M8 文件与编辑关键路径(L4 虚拟窗口):打开路由/只读臂(M8.1)、
-//! 源码态编辑 + 保存链 + 脏关闭确认(M8.2)。
+//! 文件与编辑关键路径(豁免层虚拟窗口):打开路由/只读臂、
+//! 源码态编辑 + 保存链 + 脏关闭确认。
 //!
 //! 全程 tempdir 假文件;git 夹具用真实子进程,argv 不经 shell。
 
@@ -8,7 +8,7 @@ use crate::app_shell::file_editor::{SaveFile, ToggleSource};
 use crate::i18n::Message;
 use std::time::Duration;
 
-// ── M8.1 文件 tab 路由 + 只读臂 ──
+// ── 文件 tab 路由 + 只读臂 ──
 
 /// 写一个临时文件(自动建父目录),返回路径。
 fn write_temp_file(directory: &std::path::Path, name: &str, bytes: &[u8]) -> std::path::PathBuf {
@@ -57,7 +57,7 @@ fn png_bytes() -> Vec<u8> {
     cursor.into_inner()
 }
 
-/// 源码文件 → Code tab:快照文本 + 渲染矩形非零;M8.2 起可编辑;同路径重开复用 tab。
+/// 源码文件 → Code tab:快照文本 + 渲染矩形非零;可编辑;同路径重开复用 tab。
 #[gpui::test]
 fn code_tab_renders_opened_source_file(cx: &mut TestAppContext) {
     let (workspace, mut window) = open_workspace(cx);
@@ -77,7 +77,7 @@ fn code_tab_renders_opened_source_file(cx: &mut TestAppContext) {
     assert_eq!(
         workspace.read_with(cx, |ws, cx| ws.active_read_only_for_test(cx)),
         Some(false),
-        "M8.2 起普通源码 tab 源码态可编辑"
+        "普通源码 tab 源码态可编辑"
     );
     assert_file_tab_paints(&mut window, "slterm-code-tab");
 
@@ -90,7 +90,7 @@ fn code_tab_renders_opened_source_file(cx: &mut TestAppContext) {
     );
 }
 
-/// Markdown → Document tab:预览渲染态归 M8.3,M8.1 以只读文本占位。
+/// Markdown → Document tab：预览渲染态以只读文本占位。
 #[gpui::test]
 fn document_tab_renders_markdown_file(cx: &mut TestAppContext) {
     let (workspace, mut window) = open_workspace(cx);
@@ -109,7 +109,7 @@ fn document_tab_renders_markdown_file(cx: &mut TestAppContext) {
     assert_file_tab_paints(&mut window, "slterm-document-tab");
 }
 
-/// 图片 → Image tab:后台 BGRA 解码完成 + 渲染矩形非零(缩放归 M8.3)。
+/// 图片 → Image tab：后台 BGRA 解码完成 + 渲染矩形非零。
 #[gpui::test]
 fn image_tab_decodes_and_renders_opened_image(cx: &mut TestAppContext) {
     let (workspace, mut window) = open_workspace(cx);
@@ -129,7 +129,7 @@ fn image_tab_decodes_and_renders_opened_image(cx: &mut TestAppContext) {
     assert_eq!(
         workspace.read_with(cx, |ws, cx| ws.active_image_zoom_for_test(cx)),
         Some(1.0),
-        "M8.3 前的占位缩放恒 1.0(fit-width)"
+        "占位缩放恒 1.0(fit-width)"
     );
     assert_file_tab_paints(&mut window, "slterm-image-tab");
 }
@@ -269,7 +269,7 @@ fn run_git(cwd: &std::path::Path, args: &[&str]) -> std::process::Output {
         .expect("run git")
 }
 
-// ── M8.2 编辑器内核:源码态编辑 + 保存 + 脏确认 ──
+// ── 编辑器内核:源码态编辑 + 保存 + 脏确认 ──
 
 /// 取当前界面语言的文案(提示框按钮标签必须与生产渲染逐字一致)。
 fn ui_label(cx: &mut TestAppContext, message: Message) -> String {
@@ -304,7 +304,7 @@ fn source_editor_edit_save_round_trip_writes_bytes_and_clears_dirty(cx: &mut Tes
     assert_eq!(
         workspace.read_with(cx, |ws, cx| ws.active_read_only_for_test(cx)),
         Some(false),
-        "M8.2 普通源码 tab 必须可编辑"
+        "普通源码 tab 必须可编辑"
     );
     focus_active_file_tab(&workspace, &mut window);
 
@@ -433,7 +433,7 @@ fn closing_a_dirty_file_tab_confirms_before_save_or_discard(cx: &mut TestAppCont
     assert_eq!(workspace.read_with(cx, |ws, _| ws.tab_count()), 1);
 }
 
-// ── M8.3 预览 / 虚拟化 / 双模态 / 撤销统一 / 图片缩放 ──
+// ── 预览 / 虚拟化 / 双模态 / 撤销统一 / 图片缩放 ──
 
 /// 预览态:标题/正文/代码块/图片占位 + 工具条与大纲侧栏真实绘制。
 #[gpui::test]
@@ -787,7 +787,7 @@ fn image_tab_owns_focus_and_zooms_with_real_geometry(cx: &mut TestAppContext) {
     focus_active_file_tab(&workspace, &mut window);
     let focused =
         window.update(|window, cx| workspace.read(cx).active_image_focused_for_test(window, cx));
-    assert_eq!(focused, Some(true), "M8.3 图片 tab 必须持有独立焦点");
+    assert_eq!(focused, Some(true), "图片 tab 必须持有独立焦点");
 
     workspace.update(cx, |ws, cx| ws.zoom_active_image_for_test(2.0, cx));
     window.run_until_parked();
@@ -934,7 +934,7 @@ fn failed_load_keeps_the_editor_read_only(cx: &mut TestAppContext) {
     );
 }
 
-// ── M8.5 gutter / 双栏 diff / 整窗关闭脏守卫 ──
+// ── gutter / 双栏 diff / 整窗关闭脏守卫 ──
 
 use std::path::Path;
 use std::time::Instant;
@@ -1123,7 +1123,7 @@ fn closing_the_window_with_dirty_files_confirms_first(cx: &mut TestAppContext) {
     );
 }
 
-/// B12:runtime `tab.close` 对脏文件默认拒绝(dirty_document);force 才丢弃。
+/// runtime `tab.close` 对脏文件默认拒绝(dirty_document);force 才丢弃。
 #[gpui::test]
 fn runtime_tab_close_rejects_dirty_documents_unless_forced(cx: &mut TestAppContext) {
     let (workspace, mut window) = open_workspace(cx);
@@ -1191,7 +1191,7 @@ fn runtime_tab_close_rejects_dirty_documents_unless_forced(cx: &mut TestAppConte
     );
 }
 
-/// B6:保存全部遇单文件失败时继续保存其余文件,窗口保持打开。
+/// 保存全部遇单文件失败时继续保存其余文件,窗口保持打开。
 #[gpui::test]
 fn save_all_keeps_saving_after_one_failure(cx: &mut TestAppContext) {
     let (workspace, mut window) = open_workspace(cx);
@@ -1221,12 +1221,12 @@ fn save_all_keeps_saving_after_one_failure(cx: &mut TestAppContext) {
     assert_eq!(
         std::fs::read(&good_path).unwrap(),
         b"good good\n",
-        "单文件失败后必须继续保存其余文件(B6)"
+        "单文件失败后必须继续保存其余文件"
     );
     assert!(bad_path.is_dir(), "失败文件路径保持原状");
 }
 
-// ── B8:外部文件系统事件驱动刷新(gutter + 目录树) ──
+// ── 外部文件系统事件驱动刷新(gutter + 目录树) ──
 
 /// 把聚焦 pane 的 cwd 设为测试目录(文件树根跟随源)。
 fn set_pane_cwd(
@@ -1274,7 +1274,7 @@ fn wait_for_gutter_to_clear(
     }
 }
 
-/// B8:外部改写磁盘文件使其与 HEAD 一致 → watcher 事件驱动 gutter 清空。
+/// 外部改写磁盘文件使其与 HEAD 一致 → watcher 事件驱动 gutter 清空。
 #[gpui::test]
 fn external_file_change_refreshes_the_gutter(cx: &mut TestAppContext) {
     let (workspace, mut window) = open_workspace(cx);
@@ -1299,7 +1299,7 @@ fn external_file_change_refreshes_the_gutter(cx: &mut TestAppContext) {
     wait_for_gutter_to_clear(cx, &workspace, &mut window);
 }
 
-/// B8:外部新建文件 → 树根递归 watcher 事件 → 文件树自动出现该行。
+/// 外部新建文件 → 树根递归 watcher 事件 → 文件树自动出现该行。
 #[gpui::test]
 fn external_file_creation_refreshes_the_file_tree(cx: &mut TestAppContext) {
     let (workspace, mut window) = open_workspace(cx);
@@ -1396,7 +1396,7 @@ fn terminal_reserved_keys_are_not_eaten_by_editor_actions(cx: &mut TestAppContex
     );
 }
 
-// ── B10:冲突三栏合并(gutter Conflicted → merge tab) ──
+// ── 冲突三栏合并(gutter Conflicted → merge tab) ──
 
 /// modify/modify 冲突仓:base/ours/theirs 三版已提交,工作区处于冲突态。
 fn conflicted_repository(directory: &Path, name: &str) -> std::path::PathBuf {

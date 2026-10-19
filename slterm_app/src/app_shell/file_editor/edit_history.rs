@@ -5,8 +5,8 @@
 //! 连续输入按 600ms 窗口与相邻性合并为一个撤销组;总字节上限 8MB,超限
 //! 从最旧组开始丢弃。
 //!
-//! 消费点:M8.2 源码态 `TextFileView` 的输入订阅(record_rope);`travel` 的
-//! UI 接线归 M8.3(渲染态撤销与源码态同栈)。
+//! 消费点:源码态 `TextFileView` 的输入订阅(record_rope);`travel` 的
+//! UI 接线归壳层（渲染态撤销与源码态同栈）。
 
 use std::ops::Range;
 use std::time::{Duration, Instant};
@@ -97,7 +97,7 @@ impl EditHistory {
     }
 
     /// 记录一次全文替换(结构化命令/渲染态提交的统一入口)。
-    #[allow(dead_code)] // 消费点 = M8.3 live_edit 提交与结构命令。
+    #[allow(dead_code)] // 消费点 = live_edit 提交与结构命令。
     pub(crate) fn record(&mut self, text: &str) {
         if text == self.current {
             return;
@@ -146,7 +146,7 @@ impl EditHistory {
     }
 
     /// 撤销/重做一步,返回(全文,光标 span)。`redo == true` 表示重做。
-    #[allow(dead_code)] // 消费点 = M8.3 撤销动作接线(与源码态输入共栈)。
+    #[allow(dead_code)] // 消费点 = 撤销动作接线(与源码态输入共栈)。
     pub(crate) fn travel(&mut self, redo: bool) -> Option<(String, Range<usize>)> {
         self.barrier();
         let changes = if redo {

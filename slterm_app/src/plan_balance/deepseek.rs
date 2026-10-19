@@ -1,6 +1,6 @@
-//! deepseek 套餐(规格 §5.1,F10 语义原样):GET /user/balance,取 balance_infos[0]。
+//! deepseek 套餐(.1,F10 语义原样):GET /user/balance,取 balance_infos[0]。
 //!
-//! 请求头组装是 `SecretBytes::as_bytes` 的允许借出点之一(B60 白名单):
+//! 请求头组装是 `SecretBytes::as_bytes` 的允许借出点之一(白名单):
 //! token 只在 Authorization 组装瞬时栈帧中以 `Zeroizing<String>` 存在,
 //! 不进入日志、错误消息或任何快照/ DTO 类型。
 
@@ -34,7 +34,7 @@ impl PlanQuery for DeepSeekQuery {
 }
 
 impl DeepSeekQuery {
-    /// 显式 endpoint/timeout 形态:生产走常量,L1 用本地 HTTP 服务验证请求形态。
+    /// 显式 endpoint/timeout 形态:生产走常量,单元层用本地 HTTP 服务验证请求形态。
     fn fetch_at(
         &self,
         endpoint: &str,
@@ -151,7 +151,7 @@ mod deepseek_tests {
         assert!(error.to_string().contains("total_balance"));
     }
 
-    /// 多币种只取 balance_infos[0](规格 §5.1)。
+    /// 多币种只取 balance_infos[0](.1)。
     #[test]
     fn parse_multi_currency_takes_first() {
         let json = r#"{"balance_infos":[{"currency":"USD","total_balance":"1.00"},{"currency":"CNY","total_balance":"2.00"}]}"#;

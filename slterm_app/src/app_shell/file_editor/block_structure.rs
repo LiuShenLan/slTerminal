@@ -4,7 +4,7 @@
 //! 实体;编辑后 `replace_part` 重排其余部件 span。病理块由 block_inline 回退
 //! 为单字面量部件。
 //!
-//! 消费点:M8.3 结构化渲染与命令(`commit_structure_edit`)。
+//! 消费点:结构化渲染与命令(`commit_structure_edit`)。
 
 pub(super) use super::block_inline::InlineRun;
 use ::markdown::mdast::{AlignKind, Node};

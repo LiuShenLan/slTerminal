@@ -8,7 +8,7 @@
 //!
 //! 布局持久化单点:运行时树与持久化树之间的转换只有
 //! `app_shell::session_restore` 的一对纯函数;本模块只定义 schema 与存取。
-//! 快照泵/启动恢复归 M5.5;少数设计稿锚定的全局路径包装在生产链上
+//! 快照泵/启动恢复归壳层。少数全局路径包装在生产链上
 //! 由显式 `_at` 路径替代,逐项标注 dead_code 原因。
 
 use std::path::{Path, PathBuf};
@@ -239,7 +239,7 @@ pub struct TabSession {
     pub active_pane: usize,
 }
 
-/// 上次窗口的逻辑像素尺寸与最大化态。D05-1 已裁回放:字段语义 = 启动
+/// 上次窗口的逻辑像素尺寸与最大化态。已裁回放:字段语义 = 启动
 /// 行为输入(记住上次窗口大小),不再只是诊断数据。
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WindowState {
@@ -260,7 +260,7 @@ pub struct Session {
     pub tabs: Vec<TabSession>,
     #[serde(default)]
     pub window: Option<WindowState>,
-    /// 侧栏骨架态(D05-3 已裁归 session):collapsed/width/双槽 active view/
+    /// 侧栏骨架态(已裁归 session):collapsed/width/双槽 active view/
     /// 双槽比例。字段追加走 `serde(default)` 免升版;老文件缺整段回默认
     /// (schema 版本不变)。
     #[serde(default, deserialize_with = "deserialize_sidebar")]
@@ -592,7 +592,7 @@ mod schema_tests {
         assert_eq!(tab.active_pane, 0);
     }
 
-    /// 侧栏骨架态随 session 往返:字段级相等(D05-3 归 session 的证据)。
+    /// 侧栏骨架态随 session 往返:字段级相等(归 session 的证据)。
     #[test]
     fn sidebar_state_round_trips_through_the_session_schema() {
         use crate::app_shell::workspace::sidebar::SideViewId;
@@ -623,7 +623,7 @@ mod schema_tests {
         assert_eq!(parse(&reprinted), Some(session), "字段级往返相等");
     }
 
-    /// R9 载入防线:未注册 id 与错槽 active view 置空,宽度钳制,
+    /// 载入防线:未注册 id 与错槽 active view 置空,宽度钳制,
     /// 不因侧栏段脏数据拒收整份会话。
     #[test]
     fn dirty_sidebar_entries_are_reconciled_instead_of_rejecting_the_session() {

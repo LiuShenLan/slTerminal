@@ -430,7 +430,7 @@ pub fn builtin_document(theme: ThemeName) -> Result<ThemeDocument, DocumentError
 
 /// 外部终端色 → 完整文档种子:其余值取默认主题,背景/前景逐字节显式。
 /// 仅暗色定位:不推断亮暗外观。
-#[allow(dead_code)] // 消费点 = M6.5 外部终端配色导入入口(测试已用)。
+#[allow(dead_code)] // 消费点 = 外部终端配色导入入口(测试已用)。
 pub fn seed_document(
     name: &str,
     background: Rgb8,
@@ -1175,7 +1175,7 @@ mod document_tests {
         assert_eq!(updated.to_value()["extensions"]["vendor"]["x"], 1);
     }
 
-    /// C7:非聚焦 pane 压暗开关经文档往返;缺省 null 保持「未设置」语义。
+    /// 非聚焦 pane 压暗开关经文档往返;缺省 null 保持「未设置」语义。
     #[test]
     fn pane_veil_round_trips_absent_and_explicit_values() {
         let mut definition = ThemeDefinition::from_builtin(ThemeName::Nord);

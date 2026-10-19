@@ -39,7 +39,7 @@ use image_layout::{BackgroundImageAlignment, BackgroundImageFit, wallpaper_rect}
 pub(crate) struct VisualEffects {
     /// 窗口不透明度(0..=1):只作用于壳底色与终端默认背景。
     pub opacity: f32,
-    /// 窗口背景材质(D09-1 五档,默认 None)。
+    /// 窗口背景材质(档位,默认 None)。
     pub blur: BlurMode,
     wallpaper: Option<Wallpaper>,
     generation: Arc<AtomicU64>,
@@ -809,7 +809,7 @@ pub(crate) fn test_install_visual_effects(cx: &mut App, opacity: f32, blur: Blur
 mod window_effect_tests {
     use super::*;
 
-    /// D09-1 五材质字符串 round-trip 由 `slterm-settings` 保证;这里钉
+    /// 材质字符串 round-trip 由 `slterm-settings` 保证;这里钉
     /// 死启动 gate 矩阵:平台 build × 材质 → 背景外观。
     #[test]
     fn background_appearance_gate_matrix_follows_windows_builds() {
@@ -865,7 +865,7 @@ mod window_effect_tests {
         }
     }
 
-    /// 静默启动缝(M10.6/M10.7):视效模块只改背景外观与绘制,不得自带
+    /// 静默启动缝:视效模块只改背景外观与绘制,不得自带
     /// 任何曝光/聚焦原语;首窗 `show=false`/`focus=false` 由开窗链独占。
     #[test]
     fn visual_effects_never_show_or_activate_windows() {

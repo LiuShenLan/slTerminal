@@ -59,7 +59,7 @@ impl TerminalView {
     }
 
     /// 响应落位:pane 归属由视图实体保证,seq 必须与当前态一致。
-    /// `Err` = 配置/凭据错误(A6):显式上条,不再静默消失。
+    /// `Err` = 配置/凭据错误:显式上条,不再静默消失。
     pub(crate) fn apply_ai_fix_response(
         &mut self,
         seq: u64,
@@ -136,7 +136,7 @@ impl TerminalView {
                 danger: fix.danger,
                 pending: false,
             }),
-            // A6:错误以条面显示(message 走 explain 槽,command 为空)。
+            // 错误以条面显示(message 走 explain 槽,command 为空)。
             AiFixState::Failed { message, .. } => Some(AiFixBar {
                 command: String::new(),
                 explain: message.clone(),

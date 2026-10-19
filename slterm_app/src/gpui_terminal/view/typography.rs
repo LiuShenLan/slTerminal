@@ -3,9 +3,9 @@
 //! 终端视图与其元素必须共用同一条设备像素取整规则;把 shaping、宽、高、
 //! 行高策略收口在此,spawn 网格才不会漂离首帧 prepaint(启动零 resize 锚)。
 //!
-//! M3 常量锚(设置键回填点):`CellWidthModeName` 恒 Compact(函数签名
+//! 常量锚(设置键回填点):`CellWidthModeName` 恒 Compact(函数签名
 //! 保 mode 参,调用点传死)、`font_offset` 恒 (0,0)、行高倍率恒 None——
-//! 上游这三项来自设置文件,本仓 M3 Settings 白名单未收,取常量
+//! 上游这三项来自设置文件,本仓 Settings 白名单未收,取常量
 //! 保「所有度量路径同值」的合同。
 
 use gpui::{
@@ -17,10 +17,10 @@ use slterm_settings::CellWidthModeName;
 use crate::app_shell::assets::REQUIRED_FONT_FAMILY;
 use crate::app_shell::config::Settings;
 
-/// M3 传死的字宽模式(换设置键真读)。
-pub(super) const M3_CELL_WIDTH_MODE: CellWidthModeName = CellWidthModeName::Compact;
-/// M3 传死的字体偏移(逻辑像素;上游 Windows 默认 (0,4) 随设置键回填)。
-pub(super) const M3_FONT_OFFSET: (f32, f32) = (0.0, 0.0);
+/// 传死的字宽模式(换设置键真读)。
+pub(super) const CELL_WIDTH_MODE: CellWidthModeName = CellWidthModeName::Compact;
+/// 传死的字体偏移(逻辑像素;上游 Windows 默认 (0,4) 随设置键回填)。
+pub(super) const FONT_OFFSET: (f32, f32) = (0.0, 0.0);
 
 /// 逗号分隔字族链解析:去空白、去空项、保序去重。
 fn font_family_chain(value: &str) -> Vec<String> {
@@ -170,9 +170,9 @@ fn measure_cell_metrics(
     )
 }
 
-/// 读取 (字族, 字号) —— M3 Settings 白名单内的两项;偏移/模式/倍率取
-/// 模块常量(见文件头 M3 常量锚)。
-fn m3_metric_inputs(cx: &App) -> (String, f32) {
+/// 读取 (字族, 字号) —— Settings 白名单内的两项;偏移/模式/倍率取
+/// 模块常量(见文件头常量锚)。
+fn metric_inputs(cx: &App) -> (String, f32) {
     match cx.try_global::<Settings>() {
         Some(settings) => (settings.font_family.clone(), settings.font_size_px),
         None => (REQUIRED_FONT_FAMILY.to_owned(), 15.0),
@@ -180,15 +180,15 @@ fn m3_metric_inputs(cx: &App) -> (String, f32) {
 }
 
 pub(super) fn cell_metrics(window: &Window, cx: &App) -> (Pixels, Pixels) {
-    let (family, font_size) = m3_metric_inputs(cx);
+    let (family, font_size) = metric_inputs(cx);
     measure_cell_metrics(
         window.text_system(),
         window.scale_factor(),
         &family,
         px(font_size),
-        M3_CELL_WIDTH_MODE,
-        M3_FONT_OFFSET.0,
-        M3_FONT_OFFSET.1,
+        CELL_WIDTH_MODE,
+        FONT_OFFSET.0,
+        FONT_OFFSET.1,
         None,
     )
 }
@@ -210,15 +210,15 @@ fn measure_startup_cell_metrics(
     scale: f32,
     cx: &App,
 ) -> (Pixels, Pixels) {
-    let (family, font_size) = m3_metric_inputs(cx);
+    let (family, font_size) = metric_inputs(cx);
     measure_cell_metrics(
         text_system,
         scale,
         &family,
         px(font_size),
-        M3_CELL_WIDTH_MODE,
-        M3_FONT_OFFSET.0,
-        M3_FONT_OFFSET.1,
+        CELL_WIDTH_MODE,
+        FONT_OFFSET.0,
+        FONT_OFFSET.1,
         None,
     )
 }

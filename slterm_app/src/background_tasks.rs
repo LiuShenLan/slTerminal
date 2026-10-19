@@ -7,7 +7,7 @@
 //!
 //! 注册任务:
 //! - `planBalance`:套餐余量查询(执行体归 plan_balance;订阅方 = 壳
-//!   启动链,M10.12 接线);
+//!   启动链,接线);
 //! - `agentScreenWatchdog`:1 Hz 屏幕看门狗与托盘快照同拍(订阅方 = workspace);
 //! - `autoUpdateCheck`:启动一次性更新检查,`interval_sec` 即启动延迟秒数
 //!   (12s 契约值);立即段(水合/缓存提示)不受延迟影响;
@@ -50,7 +50,7 @@ pub(crate) type TaskExecutor = fn();
 
 /// 任务元数据(静态切片条目)。
 ///
-/// 字段为设置页/注册表校验的单点元数据;本步无用户可配任务,消费点归
+/// 字段为设置页/注册表校验的单点元数据;本模块无用户可配任务,消费点归
 /// 设置页与 planBalance,故允许暂未读取。
 #[allow(dead_code)]
 pub(crate) struct TaskDef {
@@ -92,7 +92,7 @@ impl TaskRuntime {
     }
 }
 
-/// 任务配置落盘段名(契约锚点;本步无用户可配任务,写通道消费点归 06/10)。
+/// 任务配置落盘段名(契约锚点;本模块无用户可配任务,写通道消费点归 06/10)。
 #[allow(dead_code)]
 pub(crate) const SETTINGS_KEY: &str = "backgroundTasks";
 
@@ -121,7 +121,7 @@ pub(crate) static TASKS: &[TaskDef] = &[
     TaskDef {
         task_id: AUTO_UPDATE_CHECK,
         title: "自动更新检查",
-        // Once 任务的 interval 字段承载启动延迟:12s 是 M10.5 契约值。
+        // Once 任务的 interval 字段承载启动延迟:12s 是契约值。
         interval_min: 12,
         interval_max: 12,
         interval_default: 12,
@@ -284,7 +284,7 @@ pub(crate) fn run_once(task_id: &str, work: impl FnOnce() -> Result<(), String>)
 /// 运行期改配:先校验边界,再直写原子量。不重建驱动循环;禁用只让下一轮
 /// 变成 `Inactive`,重新启用后同一循环继续工作。
 ///
-/// 消费点归设置页 / planBalance;本步只锁定原子量语义与边界。
+/// 消费点归设置页 / planBalance;本模块只锁定原子量语义与边界。
 #[allow(dead_code)]
 pub(crate) fn apply_config(
     task_id: &str,

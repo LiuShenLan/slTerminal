@@ -19,7 +19,7 @@
 //! 3. 有界:纯 std,不碰 JSON(宿主解析),一次管道写。转发有截止时间;
 //!    启动与通知延迟取决于宿主。
 //!
-//! 用法(由宿主安装权威写进各家 CLI 配置,安装器链路归 app 侧 M4):
+//! 用法(由宿主安装权威写进各家 CLI 配置,安装器链路归 app 侧):
 //! ```text
 //! slterm-hook claude                              # stdin 载荷
 //! slterm-hook kimi                                # stdin 载荷
@@ -50,7 +50,7 @@ const FORWARD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 ///
 /// 这道门是承重的,不是保险。它也是会**静默失效**的那一类:变量一旦被上游
 /// 改名或停止导出,门就永远不再命中,而且没有任何报错。宿主侧因此不把它当
-/// 唯一防线——载荷形状校验在 app 侧信封解析(M4.2)里独立拦一次,
+/// 唯一防线——载荷形状校验在 app 侧信封解析里独立拦一次,
 /// `foreign_runner_payload_is_rejected_even_if_the_env_gate_fails` 就是钉住这
 /// 个前提的测试。新增 provider 时在这里加一行。
 const FOREIGN_HOOK_RUNNERS: &[&str] = &[

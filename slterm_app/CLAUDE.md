@@ -1,33 +1,34 @@
 # slterm_app（application 层）
 
-## 存在理由与边界
+> GPUI 壳与一切应用编排：窗口/工作区、设置 UI 与写通道、Runtime API、AI CLI 集成、文件与编辑器、平台适配、i18n 与打包入口。
 
-本 crate = GPUI 壳与一切应用编排：窗口/工作区、设置 UI 与写通道、Runtime API、AI CLI 集成、文件与编辑器、平台适配、i18n 与打包入口。core 能力（VT/PTY、设置值模型、分屏几何、补全匹配）只消费，不在本 crate 复刻。
+## 决策与红线
 
-- **不做第二执行体**：git、文件树、补全、AI 会话等每个领域只有一个执行/解析入口；面板与后台任务都消费同一入口。
+- **不做第二执行体**：git、文件树、补全、AI 会话等每个领域只有一个执行/解析入口；面板与后台任务都消费同一入口。原因：双执行体会产生状态双源与语义漂移。边界：不得在面板侧 spawn 子进程或复刻解析逻辑。
 - **壳即前端**：GPUI 前台直接持有实体与展示态，无跨进程投影层；状态变更后显式通知/重绘。
-- **前台纪律**：阻塞 I/O、网络、子进程等待不得在 GPUI 前台线程执行；走 background executor 或专用线程，结果回传前台。
+- **前台纪律**：阻塞 I/O、网络、子进程等待不得在 GPUI 前台线程执行；走 background executor 或专用线程，结果回传前台。原因：前台阻塞会冻结整个窗口。边界：任何 `await` 子进程/网络的代码都必须在后台执行体。
+- **启动链单点**：启动链单点在 `lib.rs` 的 `run()`；`main.rs` 只承载 Windows 子系统选择与委托，保持薄壳。原因：入口分叉会产生两套初始化顺序。边界：新增启动副作用必须接入同一链。
+- **退出链单点**：关窗/托盘退出/系统关机都走同一「终局快照 + 退出」链；脏文件确认不得被旁路。原因：任一退出路径绕过确认都会丢用户数据。
+- **后台任务元数据单点**：`background_tasks` 注册表持任务 id、标题、边界、默认值、`schedule` 与执行体；设置页与调度器只读该表。`TaskSchedule` 表达 `Interval`/`Once`/`OnDemand` 三种驱动方式，共用订阅生命周期、重入闸门与失败策略。原因：任务元数据双源必然漂移。边界：新增任务 = 注册表一条元数据 + 一端执行体，框架零改动。
+- **PTY 会话元数据单点**：PTY 进程映射只在 `terminal_registry`；pane 视图只订阅会话切片，不自存。
+- **设置写盘单点**：设置写盘单点 = `settings_store`（白名单、浅合并、原子写、`.bak`、损坏处理）；所有持久化经 `atomic_file`，不裸写。原因：并发写与损坏处理必须集中。边界：前端消费型配置走通用段写；后端消费型配置走域专用命令；禁止自建第二写通道。
+- **审计通道**：安全写事件只经 `audit` facade（tracing target `audit`）；事件字段只含 `operation/path/source/result` 与 `expected/actual` 指纹；不记文件内容或凭据值。
+- **凭据红线**：凭据只经 `secrets`/Windows 凭据管理器门面；供应商模块只读用户配置文件，不读凭据库。类型层不向 DTO/快照/日志暴露 token，错误消息禁插值。测试夹具一律假值。
+- **加密备份边界**：备份白名单即安全边界；只读写登记的类别与主题目录。凭据值、AI 会话库、任意 home 路径永不进出包。恢复序固定为「完整鉴权 → 全量校验 → 落盘」，任一条不过整单拒写。敏感键导出剥除 + 导入复验双闸；备份魔数同时作加密 AAD。
+- **agent 目录沙箱**：agent 全局目录由后端静态表定义，前端不能注入任意路径；沙箱放行域 = project_root ∪ agent 目录集，canonicalize 双向比较；pinned watcher 在项目切换时不被暂停。原因：agent 配置文件在项目根外，但读取必须仍走同一沙箱命令族。边界：不得为 agent 文件建第二套读取通道。
+- **主题与外观**：内置主题为暗色目录，Linear 为默认，未知/退休 id 回退 Linear；主题校验在 `slterm_settings`。`BlurMode` 与透明度是外观设置，平台调用只在平台封装模块，静默启动不得闪现/抢焦点。
+- **i18n 合同**：`en-US`/`zh-CN` 目录 JSON 构建期展平为 typed 键；翻译键集是硬合同（缺键/多余键构建期红）。`LanguagePref` 支持系统/英文/中文，系统按 locale 协商。
+- **数据目录**：app 侧只委托 `slterm_settings::paths`，不自行推导；默认 `%APPDATA%\slterm`，`SLTERM_CONFIG_DIR` 优先。
 
-## 启动与生命周期
+## 验收与测试
 
-- 启动链单点在 `lib.rs` 的 `run()`；`main.rs` 只承载 Windows 子系统选择与委托，保持薄壳。
-- 退出链单点：关窗/托盘退出/系统关机都走同一「终局快照 + 退出」链，脏文件确认不得被旁路。
-- 进程级后台任务元数据单点在 `background_tasks`；新增任务 = 注册一条元数据 + 一端执行体，调度框架零改动。
-- PTY 进程映射只在 `terminal_registry`；pane 视图只订阅会话切片。
+- 定向测试：`cargo test -p slterm --test lib_tests <filter> -- --test-threads=1`；禁止 `--lib` 或裸 filter 直打默认 lib target。
+- 虚拟窗口：`cargo test -p slterm --test lib_tests --features gpui-test-support -- --test-threads=1`。UI 用例 `#[cfg(all(test, feature = "gpui-test-support"))]` 双门控；feature 未开时整体不编译，生产构建不带测试夹具。
+- 启动链：`cargo test -p slterm --test windows_console_startup -- --test-threads=1`。
+- 平台/网络/桌面会话依赖项登记 `.claude/docs/testing/exemptions.md`；不登记即违规。
 
-## 写通道与安全
+## 操作
 
-- 设置写盘单点 = `settings_store`（白名单、浅合并、原子写、`.bak`、损坏三态）；所有持久化经 `atomic_file`，不裸写。
-- 安全审计只经 `audit` facade（target `audit`）；写包装外的设置写调用点由源码扫描用例拒绝。
-- 凭据只经 `secrets`/凭据管理器门面；类型层不向 DTO/快照/日志暴露 token（SEC-18）。
-- 加密备份白名单即安全边界：只读写列举的六类文件与主题目录，凭据值、AI 会话库、任意 home 路径永不进出包。
-
-## 模块细节导航
-
-设置页、工作区、文件编辑器、终端视图、数学渲染、平台集成、更新链等各自目录下的 CLAUDE.md 是该域的真值源；本文件只保留跨模块纪律。新增模块目录时同步建立其 CLAUDE.md。
-
-## 测试
-
-- 定向测试一律 `cargo test -p slterm --test lib_tests <filter> -- --test-threads=1`（TQ-COV-06：禁 `--lib`/直打默认 lib target）。
-- UI 用例 `#[cfg(all(test, feature = "gpui-test-support"))]` 双门控；feature 未开时整体不编译，生产构建不带测试夹具。
-- 平台/网络/桌面会话依赖项登记 `.claude/test-exemptions.md`；不登记即违规。
+- 模块细节导航：设置页、工作区、文件编辑器、终端视图、数学渲染、平台集成、更新链等各自目录下的 `CLAUDE.md` 是该域的真值源；本文件只保留跨模块纪律。新增模块目录时同步建立其 `CLAUDE.md`。
+- 新增后台任务：在注册表登记元数据与执行体，配置经注册表命令写入。
+- 新增持久化：经 `atomic_file` 与 `settings_store`/`audit` 包装；文件名去品牌。

@@ -1514,9 +1514,9 @@ impl<T: EventListener> Handler for Term<T> {
                     return;
                 }
                 trace!("Reporting primary device attributes");
-                // DA1 应答身份统一 `?64;22c`（D02-1 裁决：priming / Term 自答 /
+                // DA1 应答身份统一 `?64;22c`（裁决：priming / Term 自答 /
                 // reader 代答三处同身份——VT220 级别 + 色彩能力，对全屏 CLI
-                // 兼容面最宽；M2.4 真机复测钉死）。
+                // 兼容面最宽；真机复测钉死）。
                 let text = String::from("\x1b[?64;22c");
                 self.event_proxy.send_event(Event::PtyWrite(text));
             }

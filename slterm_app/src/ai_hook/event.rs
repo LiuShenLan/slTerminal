@@ -59,7 +59,7 @@ pub(crate) enum CodexHookMode {
     Full,
 }
 
-/// 合同覆盖的事件表:协议解析(本域)与安装器写配置(M4.3)共用同一张表,
+/// 合同覆盖的事件表:协议解析(本域)与安装器写配置共用同一张表,
 /// 禁第二份清单。
 pub(crate) const CODEX_TURN_EVENTS: &[&str] = &["SessionStart", "UserPromptSubmit", "Stop"];
 pub(crate) const CODEX_FULL_EVENTS: &[&str] = &[

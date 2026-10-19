@@ -1,6 +1,6 @@
 ---
 name: systematic-changes-execute
-description: 当已有分阶段变更的执行计划与 workflow 编排脚本（docs/<task>/execution-plan.md + docs/<task>/workflows/*.js + verify 断言），需逐 Stage 实际执行代码变更、验证循环、提交并收尾时使用。制定计划用 /systematic-changes-plan。
+description: 当已有分阶段变更的执行计划与 workflow 编排脚本（temp/plans/<task>/execution-plan.md + temp/plans/<task>/workflows/*.js + verify 断言），需逐 Stage 实际执行代码变更、验证循环、提交并收尾时使用。制定计划用 /systematic-changes-plan。
 disable-model-invocation: true
 ---
 
@@ -10,19 +10,19 @@ disable-model-invocation: true
 
 此 skill 编码了 slTerminal 项目系统性变更的**执行**流程：消费 `/systematic-changes-plan` 产出的计划与编排产物，**逐 Stage 串行执行 → 全量测试 → 逐项验证 → 修复循环 → commit → 收尾**，确保每阶段零回归。
 
-**输入物**（全部由 plan 阶段产出，本 skill 不生成）：
-- `docs/<task>/execution-plan.md`——编排参数单一入口（Stage 表 / commit message / git add 路径枚举 / fix-loop args 规范 / 进度跟踪表）
-- `docs/<task>/workflows/stage-NN-*.js` + `fix-loop.js`——Workflow 脚本
-- `docs/<task>/workflows/verify/stage-NN.md`——验证断言（stage 脚本与 fix-loop 共用的唯一真值源）
-- `docs/<task>/checklist.md` + `stages.md`——项级修复要点与 Stage 说明
+**输入物**（全部由 plan 阶段产出，本 skill 不生成；均位于 `temp/plans/<task>/`，不进入 git）：
+- `execution-plan.md`——编排参数单一入口（Stage 表 / commit message / git add 路径枚举 / fix-loop args 规范 / 进度跟踪表）
+- `workflows/stage-NN-*.js` + `fix-loop.js`——Workflow 脚本
+- `workflows/verify/stage-NN.md`——验证断言（stage 脚本与 fix-loop 共用的唯一真值源）
+- `checklist.md` + `stages.md`——条目级修复要点与 Stage 说明
 
 ## 使用方式
 
 ```
-/systematic-changes-execute docs/<task>/execution-plan.md
+/systematic-changes-execute temp/plans/<task>/execution-plan.md
 ```
 
-**路径必须显式给出，不自动扫描 `docs/`**——多计划并存时自动发现会选错。
+**路径必须显式给出，不自动扫描 `temp/plans/`**——多计划并存时自动发现会选错。
 
 ## 执行流程
 
@@ -42,7 +42,7 @@ Phase 4: 逐项验证 → agent 逐条检查，返回结构化结果
 
 Workflow 返回后，主 agent 检查 `verifyResult.allFixed`：
 - `true` → 所有项通过 → `git commit` → 下一阶段
-- `false` → 启动修复 Workflow（`docs/<task>/workflows/fix-loop.js`），循环直到 `allFixed === true`，最多 3 轮，超过需人工介入
+- `false` → 启动修复 Workflow（`temp/plans/<task>/workflows/fix-loop.js`），循环直到 `allFixed === true`，最多 3 轮，超过需人工介入
 
 #### 5.2 Workflow 运行时语义（执行期编排）
 
@@ -53,41 +53,41 @@ Workflow 返回后，主 agent 检查 `verifyResult.allFixed`：
 
 - `git add` 路径限定：从 execution-plan.md 读取本任务的枚举清单（其由 plan 阶段自 config.json `gitAddPaths` 写入，含 `.claude/` 精确文件——文档 Stage 会改根 CLAUDE.md），不用 `-A`；commit 前 `git status` 甄别预期外改动
 - commit message 以 stages 文档各 Stage 原文为准（文档 Stage 是 `docs:` 前缀，非一律 `refactor:`）
-- 时间盒：Workflow 完成有 harness 自动通知，等待期间无需轮询/定时提醒（实证：B17 执行期设 cron 提醒完全多余，workflow 数分钟内完成自动通知）；仅在通知迟迟未到、单 Stage 超 60 分钟无进展时查 /workflows 后 `TaskStop` + 报告用户
+- 时间盒：Workflow 完成有 harness 自动通知，等待期间无需轮询/定时提醒；仅在通知迟迟未到、单 Stage 超 60 分钟无进展时查 `/workflows` 后 `TaskStop` + 报告用户
 - 文档同步类 agent 必须先读 `git log`/diff 再动笔，禁凭记忆写文档
-- **Stage commit 提交即登记本 Stage 行**：execution-plan.md 进度跟踪表本 Stage 行（状态/commit hash/结果摘要）在该 Stage commit 完成后、下一 Stage 启动前必须登记——登记更新可并入紧随的文档/收尾提交，禁止跨 Stage 捎带迟登记（实证：compromises-fix-review-fix S04 由 S05 捎带、S05 由 S06 回补、S06 由 S07 回补，连续三级层层递延）
+- **Stage commit 提交即登记本 Stage 行**：execution-plan.md 进度跟踪表本 Stage 行（状态/commit hash/结果摘要）在该 Stage commit 完成后、下一 Stage 启动前必须登记——登记更新可并入紧随的文档/收尾提交，禁止跨 Stage 捎带迟登记
 
 #### 5.7 执行期工具故障降级（实证）
 
 | 故障 | 现象 | 降级路径 |
 |------|------|---------|
-| Bash 权限分类器暂不可用 | "auto mode cannot determine the safety of Bash"，`mv`/`sed` 被拒 | 目录改名用 `mcp__filesystem__move_file`（只动路径不碰内容，中文安全）；批量内容替换用 PowerShell：`Get-Content -Raw` + `-replace` + `Set-Content -NoNewline`（PS7 UTF-8 无 BOM 读写，中文安全） |
-| Edit 报 "File has not been read yet" | 目录改名/移动后，本会话已 Read 的文件在新路径仍报未读（Read 记录不跟随 rename） | 重新 Read 新路径再 Edit；多处批量纯 ASCII 替换直接走 PowerShell |
-| Read 误报 "Wasted call — file unchanged" | /clear 或上下文压缩后无历史 Read 仍报 | `mcp__filesystem__read_multiple_files` 兜底读取 |
+| Bash 权限分类器暂不可用 | 「auto mode cannot determine the safety of Bash」，`mv`/`sed` 被拒 | 目录改名用 `mcp__filesystem__move_file`（只动路径不碰内容，中文安全）；批量内容替换用 PowerShell：`Get-Content -Raw` + `-replace` + `Set-Content -NoNewline`（PS7 UTF-8 无 BOM 读写，中文安全） |
+| Edit 报「File has not been read yet」 | 目录改名/移动后，本会话已 Read 的文件在新路径仍报未读（Read 记录不跟随 rename） | 重新 Read 新路径再 Edit；多处批量纯 ASCII 替换直接走 PowerShell |
+| Read 误报「Wasted call — file unchanged」 | /clear 或上下文压缩后无历史 Read 仍报 | `mcp__filesystem__read_multiple_files` 兜底读取 |
 | filesystem MCP 写中文 | 写含中文内容的文件有乱码/损坏风险 | 含中文内容一律用内置 Write/Edit；filesystem MCP 仅用于 move_file（不碰内容）与 read_multiple_files（只读兜底） |
 
-**批量改名/替换后验证三重奏**：① grep 旧模式全仓零残留；② grep 引用变体零残留（如裸相对 `` `workflows/ ``）；③ 重跑语法预检 + grep 新模式抽查落点。
+**批量改名/替换后验证三重奏**：① grep 旧模式全仓零残留；② grep 引用变体零残留；③ 重跑语法预检 + grep 新模式抽查落点。
 
 ### Step 6: 收尾
 
 所有 Stage 完成后：
-- 最终全量构建验证（含 L3/L4，不只每 Stage 的 L1/L2 门禁）
-- **全量验证命令日志落盘**：长输出命令（e2e/wdio 等）完整输出重定向到日志文件再提取摘要——禁止 `cmd 2>&1 | tail` 裸管道（管道末命令遮蔽真实退出码 + 截断丢失败摘要。实证：B17 收尾 `npm run e2e 2>&1 | tail -40` 报 exit 0 但实际 1 failed，失败详情被截断，被迫重跑 wdio 三分钟）
-- **失败三分支判定**：收尾遇测试失败先定性再行动——① 重跑判定 flaky（wait-for 超时类，实证：B17 收尾 L2 首跑 1 例超时重跑全绿）；② 失败面与变更面相关性（本变更零前端代码 → 前端单测失败必非本次回归）；③ L4 失败先对照 `.claude/test-exemptions.md` 豁免表——已登记环境故障不算回归（实证：editor.e2e.ts dirty→clean 命中 2026-08-23 Windows notify 豁免行）
-- 抽查根 CLAUDE.md 与最终代码一致性
-- 归档 commit：review 报告 + 计划文档一并提交
+- 最终全量构建验证：构建、全量测试、clippy、fmt、架构门禁、文档策略门禁、脚本门禁自测、打包钉测试（按改动面选择）
+- **全量验证命令日志落盘**：长输出命令完整输出重定向到日志文件再提取摘要——禁止 `cmd 2>&1 | tail` 裸管道（管道末命令遮蔽真实退出码 + 截断丢失败摘要）
+- **失败三分支判定**：收尾遇测试失败先定性再行动——① 重跑判定 flaky（超时类，确认是否负载裕度）；② 失败面与变更面相关性；③ 对照 `.claude/docs/testing/exemptions.md` 豁免表——已登记环境故障不算回归
+- 抽查根 `.claude/CLAUDE.md` 与最终代码一致性
+- 计划产物留在 `temp/plans/<task>/`，不入库；如需归档由用户决定
 - 输出收尾报告：Stage commit 列表、未修复项（若有，含原因）
 - 计划标注过「人工验证点」的项逐项实测（规范推断/平台行为/渲染/视觉/滚动效果类），结果写入收尾报告
 
 ## 注意事项
 
 - 每阶段一个 commit，message 以 stages 文档原文为准（前缀按变更性质：`refactor:`/`fix:`/`docs:`）
-- 直接 main 分支操作，不使用 git worktree
+- 直接当前分支操作，不使用 git worktree
 - 修复循环最多 3 轮，超过需人工介入
 - 每个执行 agent 只改分配给自己的项，不顺手改无关代码（surgical changes）
 
 **Red flags（踩坑实录，出现即停）：**
 - 对已正常结束的 run 用 `resumeFromRunId` 救 no-return——全命中缓存死循环；verify 阶段改 inline spawn
 - `git add -A`——必须路径限定，且枚举含 `.claude/` 精确文件
-- 并行 agent 各自跑资源共享型测试（如含 PTY spawn 的 `cargo test`）——跨进程并发死锁；脚本 prompt 已含此纪律，主 agent 不得另行指示
-- 门禁/全量验证用 `cmd 2>&1 | tail` 裸管道——末命令遮蔽真实退出码（实证：wdio 1 failed 报 exit 0）；日志落盘文件再提取摘要
+- 并行 agent 各自跑资源共享型测试（如含 PTY spawn 的 cargo test）——跨进程并发死锁；脚本 prompt 已含此纪律，主 agent 不得另行指示
+- 门禁/全量验证用 `cmd 2>&1 | tail` 裸管道——末命令遮蔽真实退出码；日志落盘文件再提取摘要

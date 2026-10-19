@@ -8,7 +8,7 @@
 //! 交互合同:
 //! - 单击目录 = 展开/折叠;单击 `..` = 切换窗口内根;
 //! - 双击目录 = 以该目录为树根;双击文件 = `open_document_path`
-//!   (应用内可读)或交系统处理器(未命中臂,M8.4 出口);
+//! (应用内可读)或交系统处理器(未命中臂,出口);
 //! - 拖行 → 终端 = 路径原文进 PTY(规则在 `side_panel::drop_text_for_path`);
 //!   拖出窗口 = 系统文件拖放(`external_drag_payload`);
 //! - 右键菜单 = 新建文件/新建文件夹/重命名/删除;新建目标 = 目录本身或文件
@@ -138,13 +138,13 @@ impl SltermWorkspace {
 
     /// 侧栏 explorer/commit 槽可见时跟随聚焦 pane 的 cwd;非终端 tab 保留最后根。
     pub(super) fn sync_file_tree(&mut self, cx: &mut Context<'_, Self>) {
-        // B73:Commit 槽也消费同一文件快照,不能再只由 explorer 门控。
+        // Commit 槽也消费同一文件快照,不能再只由 explorer 门控。
         if !(self.explorer_open() || self.commit_open()) {
             return;
         }
         let cwd = self.active_terminal_cwd(cx);
         self.file_tree.panel.sync(cwd);
-        // B8:树根变化/重开 explorer 时对齐递归 watch(同根零成本)。
+        // 树根变化/重开 explorer 时对齐递归 watch(同根零成本)。
         let root = self
             .file_tree
             .panel
@@ -326,7 +326,7 @@ impl SltermWorkspace {
         }
     }
 
-    /// explorer 槽内容(替换 M5.3b 的占位文案)。
+    /// explorer 槽内容(替换的占位文案)。
     pub(super) fn render_file_tree(&mut self, cx: &mut Context<'_, Self>) -> AnyElement {
         self.sync_file_tree(cx);
         let path_bar = self.render_file_tree_path(cx);

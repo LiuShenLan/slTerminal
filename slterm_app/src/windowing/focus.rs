@@ -12,9 +12,9 @@
 //! take)。故 facade 以显式 `&mut Window` 落点;目标选择与平台调用仍由本
 //! 文件唯一承担。
 //!
-//! **还原语义(B46)。** 「显示窗口」= 最小化则 `IsIconic → SW_RESTORE`,
+//! **还原语义。** 「显示窗口」= 最小化则 `IsIconic → SW_RESTORE`,
 //! 再 `SetForegroundWindow`;正常窗口直接前置。判定纯函数化为
-//! [`focus_steps`] 供 L1 断言;真实 Win32 面按豁免走构建产物 smoke。
+//! [`focus_steps`] 供单元层断言;真实 Win32 面按豁免走构建产物 smoke。
 //!
 //! **HWND 单源。** 开窗时 [`publish_window`] 发布原生句柄;任务栏进度/闪烁
 //! 统一经 [`window_hwnd`] 查询。虚拟窗口(测试)无原生句柄 → None,调用方
@@ -39,7 +39,7 @@ pub(crate) enum FocusStep {
     Foreground,
 }
 
-/// 还原语义单点(B46):最小化 → 先还原再前置;正常 → 只前置。
+/// 还原语义单点:最小化 → 先还原再前置;正常 → 只前置。
 ///
 /// 纯函数,`focus_steps(true)` 的顺序即 `IsIconic` 分支的真值锚。
 pub(crate) fn focus_steps(minimized: bool) -> &'static [FocusStep] {
@@ -168,7 +168,7 @@ mod focus_tests {
 
     use super::*;
 
-    /// B46:最小化窗口必须先 SW_RESTORE 再前置;正常窗口只前置。
+    /// 最小化窗口必须先 SW_RESTORE 再前置;正常窗口只前置。
     #[test]
     fn minimized_window_restores_before_foregrounding() {
         assert_eq!(

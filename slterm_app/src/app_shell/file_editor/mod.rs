@@ -195,7 +195,7 @@ pub struct TextFileView {
     saving: bool,
     loading: bool,
     notice: Option<EditorNotice>,
-    /// markdown 文档(M8.3 双模态前提)。
+    /// markdown 文档(双模态前提)。
     markdown: bool,
     /// 当前显示渲染态(仅 markdown 有意义)。
     preview: bool,
@@ -564,7 +564,7 @@ impl TextFileView {
         success
     }
 
-    /// 外部修改触发点(B8):watcher 检测到磁盘变更后重读 gutter 快照。
+    /// 外部修改触发点:watcher 检测到磁盘变更后重读 gutter 快照。
     ///
     /// 只重算行标,不触碰编辑器缓冲/草稿;只读/gitshow 由
     /// [`Self::spawn_gutter_sync`] 内部跳过。

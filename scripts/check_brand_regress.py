@@ -32,16 +32,12 @@ EXEMPT_PATHS = {
 # 全树模式(full)的历史语境豁免:这些文件记录来源、沿革或决策证据,
 # 旧名属于必要事实而非品牌文案。逐路径登记,新增豁免须注明理由。
 HISTORICAL_CONTEXT_PATHS = {
-    ".claude/adr.md",          # ADR 沿革含上游来源
     "CHANGELOG.md",            # 版本历史含上游来源锚点
     "CONTEXT.md",              # 术语表记录来源与演进
     "README.md",               # 项目来源声明
     "README.zh-CN.md",         # 同上(中文)
-    "docs/REFACTOR-ISSUES.md", # 遗留问题清单含历史来源语境
 }
-HISTORICAL_CONTEXT_PREFIXES = (
-    "architecture/notes/",     # 因果档案:记录历史成因
-)
+HISTORICAL_CONTEXT_PREFIXES = ()
 # 版权/法律归属行:法律文本必须保留原始项目名。
 LEGAL_ATTRIBUTION_PATTERNS = (
     re.compile(

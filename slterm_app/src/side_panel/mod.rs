@@ -5,7 +5,7 @@
 //! - 目录枚举在 [`enumerate`],gitignore 过滤索引在 [`gitignore`],文件名
 //!   搜索在 [`search`],git 快照在 [`vcs`];旧壳 `render.rs`/`notice.rs` 不迁;
 //! - WSL guest 臂、SVN/tortoise 臂、git 写操作全部裁掉(SSH/WSL/SVN 不迁,
-//!   边界条 9;写操作归 M8.5)。
+//!   边界条 9；写操作归壳层）。
 //!
 //! 快照流(「文件树快照流」):聚焦 pane cwd 变化 / 显式刷新
 //! → `needs_refresh` 重臂 → 后台快照 worker(generation 守卫防串台)
@@ -68,7 +68,7 @@ pub(crate) struct GitCommit {
 
 /// 解析后的 `git status --porcelain=v2 -z` 快照(SVN 臂已砍)。
 ///
-/// 展示面消费(树着色/gutter/commit 面板)归 M8.5;本步只由 vcs 用例直读,
+/// 展示面消费（树着色/gutter/commit 面板）归 UI；本模块只由 vcs 用例直读。
 /// 故整体放行未读字段。
 #[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
@@ -332,7 +332,7 @@ impl SidePanel {
         self.snapshot_pending() || self.file_search_pending()
     }
 
-    /// 覆盖聚焦 pane cwd,只影响本面板实例(D05-3:不持久化)。
+    /// 覆盖聚焦 pane cwd,只影响本面板实例(不持久化)。
     pub(crate) fn set_custom_root(&mut self, root: PathBuf) -> bool {
         if !root.is_dir() {
             self.root_notice = Some(PanelNotice::DirectoryUnavailable);
@@ -599,13 +599,13 @@ impl SidePanel {
         self.enumeration_failed
     }
 
-    /// 消费点 = M8.5 树着色/gutter/commit 面板;本步只由 vcs 用例直读。
+    /// 消费点 = 树着色/gutter/commit 面板;本模块只由 vcs 用例直读。
     #[allow(dead_code)]
     pub(crate) fn git(&self) -> Option<&GitInfo> {
         self.git.as_deref()
     }
 
-    /// 消费点 = M8.5 树着色/提交面板的快照订阅(Arc 共享,不复制)。
+    /// 消费点 = 树着色/提交面板的快照订阅(Arc 共享,不复制)。
     #[allow(dead_code)]
     pub(crate) fn git_snapshot(&self) -> Option<Arc<GitInfo>> {
         self.git.clone()
@@ -615,7 +615,7 @@ impl SidePanel {
         self.root.as_deref()
     }
 
-    /// fs-notify 树根监听读端(B8):与渲染/枚举共用同一 root 真值源。
+    /// fs-notify 树根监听读端:与渲染/枚举共用同一 root 真值源。
     pub(crate) fn watch_root(&self) -> Option<&Path> {
         self.root.as_deref()
     }
@@ -634,7 +634,7 @@ pub(crate) fn drop_text_for_path(path: &str) -> Option<Vec<u8>> {
 }
 
 /// 目标 shell 的引用规则(多 shell 形态归 PTY 域交界 43 消费;
-/// 本步默认 PowerShell,其余变体由用例锁定)。
+/// 本模块默认 PowerShell,其余变体由用例锁定)。
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum PathQuote {

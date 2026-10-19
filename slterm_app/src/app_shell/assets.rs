@@ -17,7 +17,7 @@ pub const REQUIRED_FONT_FAMILY: &str = "Maple Mono Normal NF CN";
 pub static REQUIRED_FONT_BYTES: &[u8] =
     include_bytes!("../../assets/fonts/MapleMonoNormal-NF-CN-Regular.ttf");
 
-/// 组件库资产桥:M3.1 为纯转发;自有图标回填时在此先查本仓、再回落组件库。
+/// 组件库资产桥:为纯转发;自有图标回填时在此先查本仓、再回落组件库。
 pub struct SltermAssets;
 
 impl AssetSource for SltermAssets {

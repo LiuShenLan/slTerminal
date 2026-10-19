@@ -1,6 +1,6 @@
 //! 非交互子进程适配:一次性探针与宿主控制台隔离。
 //!
-//! slterm 是 console 子系统(D04-1),子进程默认继承宿主控制台——codex
+//! slterm 是 console 子系统,子进程默认继承宿主控制台——codex
 //! 能力探针这类一次性进程不该继承:继承会共享控制台的 Ctrl 事件路由与
 //! 输出归属(探针的 stderr 直写宿主屏幕)。`CREATE_NO_WINDOW` 让探针无
 //! 控制台运行;stdio 全部由调用方重定向,无交互需求。
@@ -25,23 +25,23 @@ pub(crate) fn hidden_command(command: &mut Command) -> &mut Command {
 /// `pane.exec` 的 stdin 是 null、stdout/stderr 走管道,从头到尾没有交互,
 /// 因此同样挂 `CREATE_NO_WINDOW`。
 #[cfg(windows)]
-#[allow(dead_code)] // 消费点 = runtime_exec::build_command(pane.exec,M7.5)。
+#[allow(dead_code)] // 消费点 = runtime_exec::build_command(pane.exec)。
 pub(crate) fn configure_process_group(command: &mut Command) {
     hidden_command(command);
 }
 
 #[cfg(not(windows))]
-#[allow(dead_code)] // 消费点 = runtime_exec::build_command(pane.exec,M7.5)。
+#[allow(dead_code)] // 消费点 = runtime_exec::build_command(pane.exec)。
 pub(crate) fn configure_process_group(_: &mut Command) {}
 
 /// 一次性子进程的作业对象句柄(Drop 关闭句柄 = 内核回收整棵树)。
-#[allow(dead_code)] // 消费点 = runtime_exec::execute 的超时整树回收(M7.5)。
+#[allow(dead_code)] // 消费点 = runtime_exec::execute 的超时整树回收。
 pub(crate) struct ProcessGroup {
     #[cfg(windows)]
     job: windows_sys::Win32::Foundation::HANDLE,
 }
 
-#[allow(dead_code)] // 消费点 = runtime_exec::execute(M7.5 接线)。
+#[allow(dead_code)] // 消费点 = runtime_exec::execute(接线)。
 impl ProcessGroup {
     pub(crate) fn attach(child: &std::process::Child) -> std::io::Result<Self> {
         #[cfg(windows)]

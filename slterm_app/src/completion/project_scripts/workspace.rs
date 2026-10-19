@@ -673,7 +673,7 @@ mod workspace_tests {
     use super::*;
     use slterm_completions::command_context::ShellSyntax;
 
-    /// B30:窄解析器覆盖 pnpm 声明子集,并与旧 serde_yaml 行为保持等价。
+    /// 窄解析器覆盖 pnpm 声明子集,并与旧 serde_yaml 行为保持等价。
     #[test]
     fn pnpm_packages_parser_accepts_declared_subset_and_rejects_malformed_input() {
         let cases: &[(&str, Option<&[&str]>)] = &[

@@ -117,7 +117,7 @@ fn tray_focus_and_quit_events_reach_the_workspace(cx: &mut TestAppContext) {
     );
 }
 
-/// B47:托盘退出必须先过整窗脏守卫——脏文件确认取消时不得记录退出请求,
+/// 托盘退出必须先过整窗脏守卫——脏文件确认取消时不得记录退出请求,
 /// 草稿与磁盘保持原样(数据丢失风险高于普通关窗)。
 #[gpui::test]
 fn tray_quit_confirms_dirty_files_before_exiting(cx: &mut TestAppContext) {

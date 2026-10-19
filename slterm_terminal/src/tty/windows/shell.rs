@@ -2,11 +2,11 @@
 //!
 //! 探测策略：`pwsh.exe` → `powershell.exe` → `cmd.exe` 存在性回退。
 //! PowerShell 经 `-EncodedCommand`（UTF-16LE Base64）内联集成脚本，消除
-//! `%APPDATA%` 文件写入——避免 AMSI/ASR 误杀。禁止 `-NoProfile`（B17）：
+//! `%APPDATA%` 文件写入——避免 AMSI/ASR 误杀。禁止 `-NoProfile`：
 //! 用户 profile 必须先于集成脚本原生加载，否则 conda init 等 profile 钩子
 //! 失效（conda activate 报错或静默空转）。
 //!
-//! 白名单深检（SEC-01/SEC-15）：仅放行 `pwsh.exe`/`powershell.exe`/`cmd.exe`；
+//! 白名单深检：仅放行 `pwsh.exe`/`powershell.exe`/`cmd.exe`；
 //! 含路径分隔符的输入只信任 PATH 解析出的真实路径——canonicalize 双失败时
 //! 以 Win32 句柄级文件身份（volume serial + file index）比对，任一侧证据
 //! 缺失即拒绝，字符串永不构成放行依据。
@@ -94,7 +94,7 @@ pub fn resolve_shell(user_shell: Option<&str>) -> Result<Shell, Error> {
 /// Shell 白名单校验——仅允许 `pwsh.exe` / `powershell.exe` / `cmd.exe`。
 ///
 /// - 纯文件名输入：命中白名单即放行。
-/// - SEC-01：含路径分隔符的输入——canonicalize 用户路径，与
+/// - 含路径分隔符的输入——canonicalize 用户路径，与
 ///   `which_full_path(文件名)` 解析结果比对，一致才放行，杜绝
 ///   `C:\project\cmd.exe` 式绕过。文件名不在白名单时：经 PATH 解析出完整
 ///   路径后再比较文件名。
@@ -132,7 +132,7 @@ pub(crate) fn validate_shell_allowlist(program: &str) -> Result<(), Error> {
             }
             None => {
                 // 消息区分:裸名解析失败 = PATH 里根本没有;含路径分隔符的
-                // 输入 = 路径伪造面,报白名单拒绝(SEC-01 威胁语义)。
+                // 输入 = 路径伪造面,报白名单拒绝(威胁语义)。
                 if !(program.contains('\\') || program.contains('/')) {
                     return Err(Error::new(
                         std::io::ErrorKind::NotFound,
@@ -150,7 +150,7 @@ pub(crate) fn validate_shell_allowlist(program: &str) -> Result<(), Error> {
         return Ok(());
     }
 
-    // SEC-01：含路径分隔符——只信任 PATH 解析出的真实路径；PATH 解析失败
+    // 含路径分隔符——只信任 PATH 解析出的真实路径；PATH 解析失败
     // 回退系统目录比对。
     let resolved = match which_full_path(filename) {
         Some(path) => path,
@@ -172,7 +172,7 @@ pub(crate) fn validate_shell_allowlist(program: &str) -> Result<(), Error> {
     Ok(())
 }
 
-/// Win32 句柄级文件身份（SEC-15：替代字符串回退比对）。
+/// Win32 句柄级文件身份（替代字符串回退比对）。
 ///
 /// 身份 = (volume serial number, file index)——同一卷上唯一标识一个文件。
 /// 普通打开（不带 `FILE_FLAG_OPEN_REPARSE_POINT`）跟随 symlink 等 reparse
@@ -234,7 +234,7 @@ fn query_identity(
     Some((info.dwVolumeSerialNumber, index))
 }
 
-/// 比较 program 与 PATH 解析结果是否指向同一可执行文件（SEC-01 判定核心）。
+/// 比较 program 与 PATH 解析结果是否指向同一可执行文件（判定核心）。
 ///
 /// 1) canonicalize 双成功 → 精确比较（拉平 8.3 短名/`..`/symlink 差异）；
 /// 2) 双侧均失败（应用执行别名/特殊 ACL——CreateProcess 可运行但普通文件
@@ -242,7 +242,7 @@ fn query_identity(
 ///    （volume serial + file index；真实文件取普通句柄身份，alias 类
 ///    reparse 条目取条目身份——两侧证据齐且相等才放行，任一侧证据缺失
 ///    即拒绝，不降级字符串）；
-/// 3) 单侧失败即拒绝（SEC-15 收窄保留为纵深一层）。
+/// 3) 单侧失败即拒绝（收窄保留为纵深一层）。
 fn paths_match(program: &str, resolved: &str) -> bool {
     match (
         std::fs::canonicalize(program),
@@ -271,7 +271,7 @@ fn fallback_identity_match(program: &str, resolved: &str) -> bool {
 /// 为 PowerShell 构建带集成脚本的启动参数。
 ///
 /// `-NoLogo -NoExit -EncodedCommand <base64(UTF-16LE script)>`；脚本经
-/// `include_str!` 嵌入，不写磁盘。禁止 `-NoProfile`（B17）：用户 profile
+/// `include_str!` 嵌入，不写磁盘。禁止 `-NoProfile`：用户 profile
 /// 必须先于集成脚本原生加载。
 fn build_pwsh_command(pwsh_path: &str) -> Shell {
     Shell::new(
@@ -352,7 +352,7 @@ fn pathext_extensions() -> Vec<String> {
 
 /// 显式命令通道(`-e` CLI 直给)的命令解析:不卡三家白名单。
 ///
-/// SEC-01 白名单防的是「配置注入偷换 shell」——settings 文件等信任边界
+/// 白名单防的是「配置注入偷换 shell」——settings 文件等信任边界
 /// 外的数据;`-e` 显式命令是用户本人在命令行当场指定的程序,能写 CLI
 /// 参数的攻击者已具任意执行能力,白名单在此不构成防御。本通道职责收窄为
 /// 存在性校验 + 裸名 PATH 完整路径化(含 PATHEXT 补全),让「找不到」
@@ -407,7 +407,7 @@ mod shell_tests {
     // ─── PATH 可控测试辅助 ───
     //
     // 用例组通过整体替换 PATH 环境变量驱动回退顺序与解析行为。环境变量全局
-    // 可变，依赖 L1 全量 `--test-threads=1` 门禁（串行执行无污染）。
+    // 可变，依赖单元层全量 `--test-threads=1` 门禁（串行执行无污染）。
 
     /// PATH 恢复守卫——测试结束时（含 panic）还原原 PATH，避免污染后续用例。
     /// 持 crate 级 ENV_LOCK 至 drop：族内串行，裸 cargo test 并行亦无污染。
@@ -481,7 +481,7 @@ mod shell_tests {
         path
     }
 
-    // ─── encode_utf16le_base64（B17 载体编码）───
+    // ─── encode_utf16le_base64（载体编码）───
 
     #[test]
     fn encode_utf16le_base64_roundtrip() {
@@ -498,7 +498,7 @@ mod shell_tests {
         assert_eq!(decoded, original);
     }
 
-    // ─── validate_shell_allowlist 正反族（SEC-01）───
+    // ─── validate_shell_allowlist 正反族───
 
     #[test]
     fn allowlist_three_shells_and_case_insensitive_pass() {
@@ -511,7 +511,7 @@ mod shell_tests {
 
     #[test]
     fn allowlist_full_path_passes() {
-        // SEC-01：完整路径仅当与 PATH 解析结果一致时才放行。
+        // 完整路径仅当与 PATH 解析结果一致时才放行。
         if let Some(resolved) = which_full_path("cmd.exe") {
             validate_shell_allowlist(&resolved).expect("PATH 解析出的 cmd.exe 完整路径应通过");
         }
@@ -542,7 +542,7 @@ mod shell_tests {
 
     #[test]
     fn allowlist_accepts_system32_cmd_when_path_lacks_system32() {
-        // SEC-01 回归守卫：PATH 不含 System32 时，resolve_shell 的 cmd 回退
+        // 回归守卫：PATH 不含 System32 时，resolve_shell 的 cmd 回退
         // 使用 %SystemRoot%\System32\cmd.exe——校验必须放行，否则合法回退
         // 被确定性拒绝。
         let dir = tempfile::tempdir().unwrap();
@@ -618,7 +618,7 @@ mod shell_tests {
         );
     }
 
-    // ─── paths_match / file_identity 句柄级身份族（SEC-15）───
+    // ─── paths_match / file_identity 句柄级身份族───
 
     #[test]
     fn paths_match_canonical_equal() {
@@ -646,17 +646,14 @@ mod shell_tests {
 
     #[test]
     fn fallback_both_unopenable_rejected() {
-        // 双侧均打不开（无句柄级证据）即拒绝——同名同串也不例外（SEC-15
+        // 双侧均打不开（无句柄级证据）即拒绝——同名同串也不例外（
         // 字符串回退已销；防回归锚点：绕过需两侧同 volume serial + file index）。
         let missing = r"C:\no-such-dir-x\cmd.exe";
         assert!(
             !std::path::Path::new(missing).exists(),
             "前提：不存在路径不应存在"
         );
-        assert!(
-            !paths_match(missing, missing),
-            "双侧均打不开应拒绝（SEC-15）"
-        );
+        assert!(!paths_match(missing, missing), "双侧均打不开应拒绝");
     }
 
     #[test]
@@ -692,7 +689,7 @@ mod shell_tests {
         assert_ne!(file_identity(&a), file_identity(&b), "不同文件身份应不等");
         assert!(
             !fallback_identity_match(&a, &b),
-            "身份不等不应放行（SEC-15 防回归）"
+            "身份不等不应放行（防回归）"
         );
     }
 
@@ -708,7 +705,7 @@ mod shell_tests {
 
     #[test]
     fn paths_match_single_side_failure_rejected() {
-        // SEC-15：单侧 canonicalize 失败即拒绝（字符串比对无法证明文件身份）。
+        // 单侧 canonicalize 失败即拒绝（字符串比对无法证明文件身份）。
         let real = which_full_path("cmd.exe")
             .or_else(|| system32_exe_path("cmd.exe"))
             .expect("测试机应存在 cmd.exe");
@@ -840,8 +837,8 @@ mod shell_tests {
     }
 
     #[test]
-    fn pwsh_args_no_noprofile_b17() {
-        // B17 防复发：-NoProfile 致 conda activate 失效（win11 CondaError /
+    fn pwsh_args_respect_user_profile() {
+        // 防复发：-NoProfile 致 conda activate 失效（win11 CondaError /
         // win10 conda.bat 静默空转）——自动检测命中 pwsh 时 args 不得含
         // -NoProfile。
         let dir = tempfile::tempdir().unwrap();
@@ -851,7 +848,7 @@ mod shell_tests {
         let shell = resolve_shell(None).expect("应命中 pwsh");
         assert!(
             !shell.args().iter().any(|a| a == "-NoProfile"),
-            "pwsh args 不得含 -NoProfile（B17），实际: {:?}",
+            "pwsh args 不得含 -NoProfile，实际: {:?}",
             shell.args()
         );
         assert!(

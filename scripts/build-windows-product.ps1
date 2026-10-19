@@ -84,7 +84,7 @@ function Get-NewestSourceTime([string[]] $Roots) {
 
 # 源码内容摘要:全部参与构建的 .rs/.toml + 根 Cargo.lock 的路径+内容哈希,
 # 汇总成单一 SHA256。判据用内容而非 mtime——仅改注释也会变 mtime,但 cargo
-# 不重链接,拿时间戳比较会假红(B72)。
+# 不重链接,拿时间戳比较会假红。
 function Get-SourceDigest([string[]] $Roots) {
     $entries = [System.Collections.Generic.List[object]]::new()
     foreach ($root in $Roots) {

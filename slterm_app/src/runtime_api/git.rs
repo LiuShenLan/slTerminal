@@ -60,7 +60,7 @@ impl Request {
 }
 
 impl Request {
-    /// pane cwd 与仓库根核对(A5):目标漂移防护只要求 pane cwd 未变;
+    /// pane cwd 与仓库根核对:目标漂移防护只要求 pane cwd 未变;
     /// pane 可位于仓库内任意子目录,Git 路径按 repo root 解析。
     pub(crate) fn verify_repository(
         &self,

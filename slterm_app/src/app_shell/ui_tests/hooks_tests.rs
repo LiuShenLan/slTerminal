@@ -1,4 +1,4 @@
-//! M6.5 Agent 组 hooks 页双轨联调(L4 虚拟窗口):inspect 数据源三态、
+//! Agent 组 hooks 页双轨联调(豁免层虚拟窗口):inspect 数据源三态、
 //! 设置页编辑 → 写盘 → inspect 读回、marker 组只读不可触碰。
 //!
 //! 全程 tempdir 假 home(安装器写用户配置——绝不碰真实 `%USERPROFILE%`)。
@@ -204,7 +204,7 @@ fn hooks_page_renders_three_states_and_marker_groups_stay_read_only(cx: &mut Tes
     );
 }
 
-/// 结构化表单:编辑 command/http/prompt/mcp_tool/agent 五型 → 保存 →
+/// 结构化表单:编辑 command/http/prompt/mcp_tool/agent 事件类型 → 保存 →
 /// 磁盘 JSON 往返;marker 组逐字保留,写入点恒为注入 tempdir 的用户设置。
 #[gpui::test]
 fn hooks_form_saves_edited_handler_types_and_keeps_marker_groups(cx: &mut TestAppContext) {
@@ -412,7 +412,7 @@ fn hooks_form_type_switch_clears_incompatible_fields(cx: &mut TestAppContext) {
 }
 
 /// 设置页编辑 → 写盘 → inspect 读回:用户 handler 更新,marker 组逐字保留;
-/// SEC-05 非法事件在提交路径拒绝且零写盘。
+/// 非法事件在提交路径拒绝且零写盘。
 #[gpui::test]
 fn hooks_page_edit_writes_user_handlers_and_never_touches_marker_groups(cx: &mut TestAppContext) {
     let fixture = HooksFixture::new();
@@ -428,7 +428,7 @@ fn hooks_page_edit_writes_user_handlers_and_never_touches_marker_groups(cx: &mut
     fixture.write_claude(&original);
     let (_workspace, mut window, pane) = open_hooks_page(cx, &fixture);
 
-    // 非法事件名:提交路径 SEC-05 拒绝,文件不动。
+    // 非法事件名:提交路径拒绝,文件不动。
     let before = std::fs::read(fixture.claude_settings()).unwrap();
     window.update(|window, cx| {
         pane.update(cx, |pane, cx| {
@@ -444,7 +444,7 @@ fn hooks_page_edit_writes_user_handlers_and_never_touches_marker_groups(cx: &mut
         read_pane(cx, &pane, |pane, _| pane
             .hooks_editor_error_for_test()
             .is_some_and(|error| error.contains("非法 hook 事件名"))),
-        "SEC-05 事件名白名单必须在编辑器提交路径生效"
+        "事件名白名单必须在编辑器提交路径生效"
     );
     assert_eq!(
         std::fs::read(fixture.claude_settings()).unwrap(),
@@ -520,7 +520,7 @@ fn hooks_page_toggle_writes_preference_segment_and_installer_applies(cx: &mut Te
             pane.set_agent_enabled_for_test(AgentHook::Claude, true, window, cx);
         });
     });
-    // A2:偏好写盘与安装权威在后台任务内执行,先排水再读文件。
+    // 偏好写盘与安装权威在后台任务内执行,先排水再读文件。
     window.run_until_parked();
     let settings =
         slterm_settings::json::parse(&std::fs::read(&fixture.settings_path).unwrap()).unwrap();
@@ -597,7 +597,7 @@ fn hooks_page_toggle_writes_preference_segment_and_installer_applies(cx: &mut Te
     assert!(!claude.inspection.installed);
 }
 
-/// C5:SEC-12 命中必须零写盘并展示原文;显式确认后重试才安装。
+/// 命中必须零写盘并展示原文;显式确认后重试才安装。
 #[gpui::test]
 fn suspended_statusline_requires_explicit_confirmation_before_install(cx: &mut TestAppContext) {
     let fixture = HooksFixture::new();

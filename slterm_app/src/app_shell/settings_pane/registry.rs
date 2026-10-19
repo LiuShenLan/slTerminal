@@ -14,7 +14,7 @@ use std::sync::{Mutex, OnceLock};
 
 use crate::i18n::Message;
 
-/// 设置页分组。ADR-0023:导航组序全局在上、Agent 在下。
+/// 设置页分组。导航组序全局在上、Agent 在下。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SettingsPageGroup {
     Global,
@@ -130,7 +130,7 @@ pub(crate) fn get_all() -> Vec<SettingsPageDef> {
 }
 
 /// 指定分组的页面(导航分组渲染消费)。
-#[allow(dead_code)] // 消费点 = M6.5 Agent 组导航;全局组当前直接遍历 `get_all`。
+#[allow(dead_code)] // 消费点 = Agent 组导航;全局组当前直接遍历 `get_all`。
 pub(crate) fn get_all_in(group: SettingsPageGroup) -> Vec<SettingsPageDef> {
     get_all()
         .into_iter()

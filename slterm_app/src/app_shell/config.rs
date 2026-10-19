@@ -17,7 +17,7 @@ use slterm_settings::{BlurMode, RawSettings, RuntimeSettings, ThemeEffects, Them
 
 /// 默认字号:11.25pt × 4/3 = 15px(与上游配置缺省同链)。
 const DEFAULT_FONT_SIZE_PX: f32 = 15.0;
-/// 回滚行数(D02-3 裁决值)。
+/// 回滚行数(裁决值)。
 const SCROLLING_HISTORY: usize = 10_000;
 
 /// 应用运行期全局设置;设置页提交后整体替换并扇出到各终端视图。
@@ -30,7 +30,7 @@ pub struct Settings {
     /// GPUI 逻辑像素(1pt = 4/3 px @96dpi)。
     pub font_size_px: f32,
     pub ligatures: bool,
-    /// 暗色单份(仅暗色定位;D06-3)。
+    /// 暗色单份(仅暗色定位;)。
     pub palette: Palette,
     /// 编辑器语义槽(源码态/gutter/diff 的配色单源)。
     pub editor_theme: EditorThemeTokens,
@@ -50,7 +50,7 @@ pub struct Settings {
     /// 静默启动:与 `tray` 合取决定首窗是否隐藏;
     /// 显式 CLI 启动(`--working-directory`/`-e`)恒不静默。
     pub silent_start: bool,
-    /// 窗口背景材质(D09-1 五档,默认 None;自定义主题可声明默认,
+    /// 窗口背景材质(档位,默认 None;自定义主题可声明默认,
     /// 用户显式值恒权威)。
     pub blur: BlurMode,
     /// 窗口不透明度:只透壳底色与终端默认背景,文字层恒不透明。
@@ -180,7 +180,7 @@ impl Settings {
 
 /// 主题选择与应用流(仅暗色):自定义主题经主题库解析,失败回内置主题;
 /// `theme_foreground` 是显式前景覆盖,作用于终端正文。主题解析失败不把
-/// 启动/热应用升级成故障——回退内置目录默认(D06-3 的 linear)。
+/// 启动/热应用升级成故障——回退内置目录默认(的 linear)。
 ///
 /// 返回(终端调色板, UI 语义槽, 自定义主题视效缺省):编辑器的
 /// `EditorThemeTokens` 从同一分支装配,主题切换时消费方与终端同步热应用。
@@ -296,7 +296,7 @@ mod config_tests {
 
     #[test]
     fn default_palette_resolves_to_the_linear_catalog_entry() {
-        // D06-3:默认主题 Linear 的终端色表必须真正进入壳消费视图,
+        // 默认主题 Linear 的终端色表必须真正进入壳消费视图,
         // 不再是旧静态缺省。
         let settings = Settings::default();
         let linear = slterm_settings::ThemeName::Linear.term_theme();
@@ -414,7 +414,7 @@ mod config_tests {
         assert!(!no_silent.start_hidden());
     }
 
-    /// D09-1:主题文档的视效缺省只填用户没写过的键;显式值(含 1.0/none)
+    /// 主题文档的视效缺省只填用户没写过的键;显式值(含 1.0/none)
     /// 保持权威。
     #[test]
     fn custom_theme_effects_fill_only_unset_material_values() {
@@ -443,7 +443,7 @@ mod config_tests {
         assert_eq!(settings.blur, BlurMode::None, "显式 none 必须权威");
     }
 
-    /// C7:veil 无用户设置键;自定义主题显式值权威,其余路径恒开启。
+    /// veil 无用户设置键;自定义主题显式值权威,其余路径恒开启。
     #[test]
     fn pane_veil_defaults_on_and_follows_the_custom_theme_switch() {
         assert!(Settings::default().veil, "内置目录默认开启");
@@ -492,7 +492,7 @@ mod config_tests {
 
     #[test]
     fn term_config_carries_the_anchored_scrollback() {
-        // D02-3:回滚 10000 行是产品裁决值,不是库默认巧合——钉字面量。
+        // 回滚 10000 行是产品裁决值,不是库默认巧合——钉字面量。
         assert_eq!(Settings::default().term_config().scrolling_history, 10000);
     }
 

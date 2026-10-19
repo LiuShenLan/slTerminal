@@ -35,7 +35,7 @@ impl Drop for ConfigGuard {
 }
 
 /// 消费点归设置域启动链(挂 app 生命周期,`ai_hooks` 开关落定后
-/// 按授权自愈);M4.5 只接事件通道,本步只落本体。
+/// 按授权自愈);只接事件通道,本模块只落本体。
 ///
 /// 失败边呈现回调只拿到 [`HookFailureKind`](不含合成命令),由壳启动链转成
 /// 进程级通知;不需要提示的调用方传 `|_| {}`。
@@ -63,7 +63,7 @@ where
     }
 }
 
-/// 自愈一轮。`failure_gate` 是进程级失败边闸门(D08-2),跨轮存活以让
+/// 自愈一轮。`failure_gate` 是进程级失败边闸门,跨轮存活以让
 /// 冷却生效;自愈主链语义不因失败边改变。
 fn heal_all(failure_gate: &mut TriggerGate, on_alert: &(impl Fn(HookFailureKind) + ?Sized)) {
     let Ok(_lock) = settings::lock() else { return };
@@ -83,7 +83,7 @@ fn heal_all(failure_gate: &mut TriggerGate, on_alert: &(impl Fn(HookFailureKind)
     };
     let mut failures = Vec::new();
     // 全局开关短路经由 AgentHook::enabled 逐家生效(独立键 > 全局键 > 默认
-    // 两家——M1 键域钉死的语义);显式开了某家的用户不因全局关闭被回拆。
+    // ——键域钉死的语义);显式开了某家的用户不因全局关闭被回拆。
     for agent in settings::heal_enabled(&raw) {
         failures.push(install_failure(agent));
     }
@@ -151,7 +151,7 @@ fn settings_failure() -> HookFailure {
     }
 }
 
-/// 失败边消费点(D08-2):一条自愈失败进入 AI assistant
+/// 失败边消费点:一条自愈失败进入 AI assistant
 /// 触发闸门。配置每轮失败读一次;同一轮的多条失败共享同一 `now`,冷却
 /// 保证只投第一条。默认关时 [`evaluate_hook_failure`] 不碰闸门。
 fn report_heal_failures(
@@ -197,7 +197,7 @@ fn config_guard(
     use notify::{RecursiveMode, Watcher};
     use std::sync::mpsc::RecvTimeoutError;
 
-    // 进程级失败边闸门(D08-2):跨轮存活,冷却才有效。
+    // 进程级失败边闸门:跨轮存活,冷却才有效。
     let mut failure_gate = TriggerGate::default();
     heal_all(&mut failure_gate, &on_alert);
     // 配置事件只代表需要重读;合并成一个信号,避免繁忙目录堆积整批事件。
@@ -280,7 +280,7 @@ mod config_guard_tests {
     fn failure_edge_is_silent_by_default() {
         let mut gate = TriggerGate::default();
         let config = AssistantConfig::default();
-        assert!(!config.enabled, "D08-2:失败边默认关");
+        assert!(!config.enabled, "失败边默认关");
         let now = Instant::now();
         assert!(
             report_heal_failures_at(
@@ -366,7 +366,7 @@ mod config_guard_tests {
         assert!(report_heal_failures_at(&mut gate, &enabled_config(), &[install], now).is_some());
     }
 
-    /// B38:失败边呈现类别只带 agent/类别,不携带合成命令。
+    /// 失败边呈现类别只带 agent/类别,不携带合成命令。
     #[test]
     fn failure_kinds_carry_no_synthetic_command_text() {
         let install = install_failure(AgentHook::Codex);

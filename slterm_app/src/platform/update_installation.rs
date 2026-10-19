@@ -8,7 +8,7 @@
 //! 创建时间必须同时匹配,helper 才认可旧进程已退出。
 //!
 //! **未消费件登记。** 本模块全部入口由 `update_download::handoff` 的生产
-//! 链引用;handoff 的安装授权 UI 归更新弹窗步,当前只有 L1 测试执行,故
+//! 链引用;handoff 的安装授权 UI 归更新弹窗步,当前只有单元层测试执行,故
 //! 整模块豁免 dead_code(与 handoff.rs 同一登记)。
 #![allow(dead_code)]
 

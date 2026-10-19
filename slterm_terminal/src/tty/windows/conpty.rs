@@ -348,8 +348,8 @@ pub fn new(config: &Options, window_size: WindowSize) -> Result<Pty> {
     // in-box ConPTY may not consume an unsolicited report and would leak
     // the response into the shell as typed input.
     //
-    // 应答身份统一 `?64;22c`（D02-1 裁决：priming / Term 自答 / reader 代答
-    // 三处同身份；M2.4 真机复测钉死）。
+    // 应答身份统一 `?64;22c`（裁决：priming / Term 自答 / reader 代答
+    // 三处同身份；真机复测钉死）。
     if api.sideloaded {
         use std::io::Write;
         let _ = conin.write_all(b"\x1b[?64;22c");

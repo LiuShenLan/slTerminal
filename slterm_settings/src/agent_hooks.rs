@@ -22,7 +22,7 @@ pub enum AgentHook {
 }
 
 impl AgentHook {
-    /// 默认仅两家开启。
+    /// 默认仅开启。
     pub const DEFAULT: [Self; 2] = [Self::Claude, Self::Codex];
 
     pub const ALL: [Self; 9] = [
@@ -54,7 +54,7 @@ impl AgentHook {
         }
     }
 
-    /// 每 agent 独立键 → 全局键兜底 → 默认两家。
+    /// 每 agent 独立键 → 全局键兜底 → 默认。
     pub fn enabled(self, raw: &RawSettings) -> bool {
         let legacy_default = Self::DEFAULT.contains(&self);
         raw.bool_on(self.settings_key()).unwrap_or_else(|| {

@@ -12,7 +12,7 @@ resolver = "2"
 [workspace.package]
 edition = "2024"
 rust-version = "1.97.1"
-# GPL-3.0 四落点之二(D12-3):成员 crate 经 `license.workspace = true` 继承。
+# GPL-3.0 四落点之二:成员 crate 经 `license.workspace = true` 继承。
 license = "GPL-3.0"
 
 [profile.release]
@@ -23,7 +23,7 @@ debug = 0
 strip = "symbols"
 incremental = false
 codegen-units = 1
-# 发布包体积预算(D12-2):2026-10-18 全量功能态 release 实测(本 profile 状态)
+# 发布包体积预算:2026-10-18 全量功能态 release 实测(本 profile 状态)
 # setup.exe 17.07 MiB / 便携 zip 22.21 MiB;以「实测值 + 15% 裕度」钉在
 # scripts/tests/package-release.tests.ps1(实测值、校准日期、裕度在该测试注释
 # 内登记)。冷代码(协议栈、序列化、CLI 等)按体积编译;渲染/塑形/布局/VT

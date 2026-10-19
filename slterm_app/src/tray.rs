@@ -22,7 +22,7 @@
 //!
 //! - 单窗单实例:`Focus` 的 pane 参数只可能来自本窗快照;`Quit` 走关窗
 //!   同一条退出链(终局快照 + 最后一窗关闭 = 进程退出)。
-//! - 托盘图标资产(C24)归 M12:当前无内嵌品牌图,退到中性灰占位圆盘;
+//! - 托盘图标资产：当前无内嵌品牌图，退到中性灰占位圆盘；
 //!   资产落地后只在 [`brand_icon_pixels`] 一处接入,橙点像素管线不变。
 
 use std::sync::{Mutex, MutexGuard, OnceLock};
@@ -182,7 +182,7 @@ pub(crate) fn init_gpui(on_command: impl Fn(GpuiTrayCommand) + Send + Sync + 'st
 /// 开/关托盘图标(设置·高级)。开 = 保证线程在跑并 NIM_ADD;
 /// 关 = 只删图标,线程留着(重开是高频往复,不值得反复建窗)。
 ///
-/// B54:开启态每次调用都向托盘线程投递 `WM_APP_SET`,不只在状态翻转时投递。
+/// 开启态每次调用都向托盘线程投递 `WM_APP_SET`,不只在状态翻转时投递。
 /// `NIM_ADD` 在 explorer 未就绪/刚崩时会失败,1 Hz 快照调用方因此天然成为
 /// 重试节拍;托盘线程在 `apply_enabled` 里对未挂载态重复 `NIM_ADD`。
 pub(crate) fn set_enabled(enabled: bool) {
@@ -346,7 +346,7 @@ fn icon_variant(agents: &[TrayAgent]) -> TrayIcon {
 }
 
 /// 通知区挂载动作(纯函数):未挂载且开启 → 每次触发都重试 `NIM_ADD`,
-/// 直到成功;关闭态只需删一次。B54 的防复发点在此。
+/// 直到成功;关闭态只需删一次。的防复发点在此。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MountAction {
     Add,
@@ -552,7 +552,7 @@ mod win {
             )
         };
         if hwnd.is_null() {
-            // B48:窗口创建失败必须复位闸门,让后续 set_enabled/init 重试;
+            // 窗口创建失败必须复位闸门,让后续 set_enabled/init 重试;
             // 否则本进程内托盘入口永久缺失(静默启动下窗口已隐藏)。
             THREAD_STARTED.store(false, Ordering::SeqCst);
             log::warn!("tray: CreateWindowExW failed; tray icon disabled (will retry)");
@@ -777,7 +777,7 @@ mod win {
 
     /// 对齐启用态与通知区挂载态;返回本次是否新挂载成功。
     ///
-    /// B54:`NIM_ADD` 失败(explorer 未就绪/刚崩)时保持 `added=false`,
+    /// `NIM_ADD` 失败(explorer 未就绪/刚崩)时保持 `added=false`,
     /// 下一次 `WM_APP_SET`(1 Hz 快照每次都会投递)或 `WM_APP_REFRESH`
     /// 继续重试,直到成功。
     fn apply_enabled(hwnd: windows_sys::Win32::Foundation::HWND) -> bool {
@@ -1028,7 +1028,7 @@ mod tray_tests {
         }
     }
 
-    /// C24:内嵌品牌图标必须可解码且非全透明,否则托盘会静默退回占位圆盘。
+    /// 内嵌品牌图标必须可解码且非全透明,否则托盘会静默退回占位圆盘。
     #[test]
     fn brand_icon_decodes_to_rgba_pixels() {
         for size in [16, 32, 48, 256] {
@@ -1041,7 +1041,7 @@ mod tray_tests {
         }
     }
 
-    /// B54 防复发:开启态即使状态未翻转也必须继续投递挂载请求,让 1 Hz
+    /// 防复发:开启态即使状态未翻转也必须继续投递挂载请求,让 1 Hz
     /// 快照成为 `NIM_ADD` 失败后的重试节拍;关闭态翻转才投递。
     #[test]
     fn enabling_the_tray_reposts_mount_requests_until_mounted() {
@@ -1053,7 +1053,7 @@ mod tray_tests {
         );
 
         // 旧实现只在 enabled 翻转时投递;explorer 未就绪导致 NIM_ADD 失败后
-        // 这里不会再有消息,托盘图标静默缺失(B54)。
+        // 这里不会再有消息,托盘图标静默缺失。
         set_enabled(true);
         assert!(
             take_posts_for_test().contains(&WM_APP_SET),
@@ -1073,7 +1073,7 @@ mod tray_tests {
         reset_for_test();
     }
 
-    /// B54 决策面:未挂载且开启时每次调用都返回 Add;挂载成功后退到 None。
+    /// 决策面:未挂载且开启时每次调用都返回 Add;挂载成功后退到 None。
     #[test]
     fn mount_action_retries_add_while_the_icon_is_not_mounted() {
         assert_eq!(mount_action(true, false), MountAction::Add);

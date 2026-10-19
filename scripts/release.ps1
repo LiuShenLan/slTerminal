@@ -45,7 +45,7 @@ Write-Host "=== slTerminal $Version 发布链 ===" -ForegroundColor Cyan
     -Configuration $Configuration -Architecture $Architecture `
     -SkipBuild -Force:$Force -OutputDirectory $OutputDirectory -TargetDirectory $TargetDirectory
 
-# 4. 钉测试(M11 随迁件;存在时强制执行,失败即停)。
+# 4. 钉测试(随迁件;存在时强制执行,失败即停)。
 foreach ($test in @('installer.tests.ps1', 'package-release.tests.ps1')) {
     $testPath = Join-Path $PSScriptRoot "tests/$test"
     if (Test-Path -LiteralPath $testPath -PathType Leaf) {

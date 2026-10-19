@@ -121,7 +121,7 @@ fn translation_lookup_fits_a_small_stack() {
 /// 不属负载裕度)。
 #[test]
 fn embedded_translations_stay_within_the_initial_payload_budget() {
-    // 两语合计译文预算。R7 新增键后实测 22465 字节，按 32 KiB 上限
+    // 两语合计译文预算。新增键后实测 22465 字节，按 32 KiB 上限
     // 重定（原 16 KiB 在前几轮扩容时已被突破，且合同未被 workspace
     // 全量命令覆盖到；此处只放大预算，不删除断言）。
     const { assert!(i18n::TRANSLATED_BYTES < 32 * 1024) };

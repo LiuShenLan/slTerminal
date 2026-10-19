@@ -5,18 +5,18 @@
 ```
 {baseDir}/{topic-slug}/
 ├── README.md              # 总索引
-├── D1-{slug}.md           # 方向 1 汇总
-├── D2-{slug}.md           # 方向 2 汇总
-├── D1/                     # 方向 1 第二波子话题文件（可选，仅当主代理追加第二波时存在）
+├── direction-1-{slug}.md           # 方向 1 汇总
+├── direction-2-{slug}.md           # 方向 2 汇总
+├── direction-1/                     # 方向 1 第二波子话题文件（可选，仅当主代理追加第二波时存在）
 │   ├── 01-{sub}.md
 │   └── ...
-└── D{N}/                   # 方向 N 第二波子话题文件（可选）
+└── direction-{N}/                   # 方向 N 第二波子话题文件（可选）
 ```
 
-- `{baseDir}`: 默认 `docs/research/`，可按需调整
+- `{baseDir}`: 默认 `temp/research/`，可按需调整
 - `{topic-slug}`: 主题的 kebab-case，如 `node-fetch-api`
 - 方向汇总文件在 `{baseDir}/{topic-slug}/` 根
-- 第二波子话题文件在 `D{N}/` 子目录（单层级检索，无孙代理）
+- 第二波子话题文件在 `direction-{N}/` 子目录（单层级检索，无孙代理）
 
 ## README.md 模板
 
@@ -34,7 +34,7 @@
 
 | 方向 | 汇总文件 | 子文件数 | 关键发现数 |
 |------|---------|--------|----------|
-| D1: {title} | [D1-{slug}.md](D1-{slug}.md) | {count} | {count} |
+| direction-1: {title} | [direction-1-{slug}.md](direction-1-{slug}.md) | {count} | {count} |
 | ... | ... | ... | ... |
 
 ## 统计
@@ -45,7 +45,7 @@
 
 ## 跨方向关键发现
 
-1. {发现} (来源: D1, D3)
+1. {发现} (来源: direction-1, direction-3)
 2. ...
 ```
 

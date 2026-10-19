@@ -6,7 +6,7 @@
 //!
 //! 启动序:
 //! `load → should_restore →(否)quarantine → mark_boot_attempt → 逐 tab
-//! restore_tab → 首帧`。窗口尺寸/侧栏宽度在开窗定形前应用(D05-1 回放):
+//! restore_tab → 首帧`。窗口尺寸/侧栏宽度在开窗定形前应用(回放):
 //! 本模块只产出 [`StartupPlan`],定形消费在 `windowing`。
 //!
 //! 恢复注入的 pane 一律走 `new_pane` 唯一路径(注册表/AgentHub 写入点
@@ -25,13 +25,13 @@ use slterm_split::{PaneId, TabId};
 /// 启动恢复计划:开窗前算好,`SltermWorkspace::new` 只消费不决策。
 ///
 /// `session` 仅在「应恢复」时为 `Some`;窗口尺寸/侧栏宽度即使不恢复 tab
-/// 也照常回放(D05-1)。
+/// 也照常回放。
 #[derive(Debug, Clone)]
 pub(crate) struct StartupPlan {
     pub(crate) session: Option<Session>,
-    /// 侧栏宽度/开合随现场恢复(D05-3)。
+    /// 侧栏宽度/开合随现场恢复。
     pub(crate) sidebar: SidebarState,
-    /// 上次窗口尺寸与最大化态(D05-1)。
+    /// 上次窗口尺寸与最大化态。
     pub(crate) window: Option<WindowState>,
     /// 上次是异常退出(仅用于恢复提示文案)。
     pub(crate) crashed: bool,
@@ -128,7 +128,7 @@ pub(crate) fn prepare_startup_at(path: &Path, restore_tabs: bool) -> StartupPlan
 }
 
 /// 窗口当前尺寸/最大化态。最大化时 `window_bounds()` 携带的是还原尺寸,
-/// 正好是回放 D05-1 需要的「还原后大小 + 最大化」二元组。
+/// 正好是回放需要的「还原后大小 + 最大化」二元组。
 pub(crate) fn capture_window_state(window: &Window) -> WindowState {
     let bounds = window.window_bounds();
     let restore = bounds.get_bounds();
@@ -363,7 +363,7 @@ impl SltermWorkspace {
 /// 建 tab 时 core 解析后的完整命令,恢复必须按同一命令重建(`-e` 的任意
 /// 程序也要能复活);Schema 是本机用户态持久化输入,与远程/hook 注入的
 /// 不可信 id 是两条路——agent 恢复命令另经 `AgentSession::resume_command`
-/// 校验(SEC-01 豁免论证同 `-e` 通道)。
+/// 校验(豁免论证同 `-e` 通道)。
 fn terminal_launch_from_session(launch: &LaunchSession, cwd: Option<PathBuf>) -> TerminalLaunch {
     match launch {
         LaunchSession::Default => TerminalLaunch::Local {
@@ -591,7 +591,7 @@ mod session_recovery_tests {
         assert!(explicit_command, "Profile 按显式命令通道重建");
     }
 
-    /// 恢复汇总文案(A10):普通恢复/崩溃恢复/断路器隔离三态,全新启动
+    /// 恢复汇总文案:普通恢复/崩溃恢复/断路器隔离三态,全新启动
     /// 静默;零标签不生成提示。
     #[test]
     fn recovery_notice_summarizes_restore_outcomes_and_stays_quiet_on_fresh_start() {

@@ -1,5 +1,5 @@
-//! redraw_anchor L1 用例:迁自上游 tests/pi_redraw_anchor.rs(纯 headless,
-//! VoidListener 无 OS 依赖;迁入登记「L1 随迁」)。用例名照抄。
+//! redraw_anchor 单元层用例:迁自上游 tests/pi_redraw_anchor.rs(纯 headless,
+//! VoidListener 无 OS 依赖;迁入登记「单元层随迁」)。用例名照抄。
 
 use super::test::TermSize;
 use super::{Config, Term};

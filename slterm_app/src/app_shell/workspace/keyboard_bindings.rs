@@ -1,6 +1,6 @@
 //! 键位收口(键位 JSON 载体化)。
 //!
-//! `settings.json` 的 `keybind` 域外段(M6.1 已登记 `KEYBIND_SEGMENT`)是
+//! `settings.json` 的 `keybind` 域外段(已登记 `KEYBIND_SEGMENT`)是
 //! 用户绑定单源:元素 `{combo, action}`、行序即优先级、整表替换。本模块
 //! 负责:
 //! - 宽容解析/整表写回(纯函数 + 设置写通道);
@@ -163,7 +163,7 @@ pub(super) const STATIC_DEFAULT_COMBOS: &[(&str, &str)] = &[
 /// 工作区静态默认绑定(键位照抄上游)。
 ///
 /// `Ctrl+S` 只在 `FileEditor` 上下文注册(file_editor::init):无 context 的
-/// 全局绑定会吞掉终端焦点下的 Ctrl+S(保留键红线;M8.5 收口)。
+/// 全局绑定会吞掉终端焦点下的 Ctrl+S(保留键红线;收口)。
 pub(super) fn default_workspace_bindings() -> Vec<KeyBinding> {
     vec![
         KeyBinding::new("ctrl-shift-d", SplitRight, None),
@@ -458,7 +458,7 @@ pub(crate) fn load_keybind_pairs_at(path: &Path) -> Vec<(String, String)> {
 }
 
 /// 整表写回生产设置文件(域外段替换,其余内容原样保留)。
-#[allow(dead_code)] // 消费点 = 设置面键位编辑(M8.5 落段结构,编辑 UI 归后续)。
+#[allow(dead_code)] // 消费点 = 设置面键位编辑(落段结构,编辑 UI 归后续)。
 pub(crate) fn persist_keybinds(pairs: &[(String, String)]) -> io::Result<()> {
     persist_keybinds_at(&slterm_settings::settings_path(), pairs)
 }
@@ -592,7 +592,7 @@ mod keyboard_binding_tests {
         assert_eq!(load_keybind_pairs_at(&path), next);
     }
 
-    /// B7 热重建接管集合:用户表动作映射到真实 GPUI action 名;
+    /// 热重建接管集合:用户表动作映射到真实 GPUI action 名;
     /// `none`/`unbound` 不参与接管(只做同 combo 禁用)。
     #[test]
     fn override_set_maps_user_actions_to_gpui_action_names() {

@@ -4,7 +4,7 @@
 //! [`localized_input_placeholder`],因此 `SelectState` 不会留着构造时的
 //! 旧语言;控件实体跨语言保留(重建会丢焦点/编辑值/undo/订阅)。
 //!
-//! M6.4 起显示文案统一走 build.rs 生成的 typed `Message`(静态表查询);
+//! 显示文案统一走 build.rs 生成的 typed `Message`(静态表查询);
 //! 语言选择器由 `LanguagePref::ALL` 注册表驱动,显式语言一律 native name
 //! 自显示。`debug_assert` 钉住标签数与值数对齐。
 
@@ -234,7 +234,7 @@ mod localization_tests {
         );
     }
 
-    /// 显式偏好不受系统 locale 影响;System 档至少落在两家之一。
+    /// 显式偏好不受系统 locale 影响;System 档至少落在之一。
     #[test]
     fn system_language_negotiates_chinese_regions_and_falls_back_to_english() {
         assert_eq!(resolve_language(LanguagePref::ZhCn), UiLanguage::ZhCn);

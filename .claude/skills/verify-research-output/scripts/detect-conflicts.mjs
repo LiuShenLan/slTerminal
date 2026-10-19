@@ -3,7 +3,7 @@
  * 跨文件冲突检测（确定性，可执行）
  *
  * 输入：stdin 读 claims JSON（由 AI 用语义理解从文件中提取）
- *   [{ "direction": "D1", "file": "a.md", "line": 12, "field": "事件总数", "value": "30 个事件", "source": "https://..." }]
+ *   [{ "direction": "direction-1", "file": "a.md", "line": 12, "field": "事件总数", "value": "30 个事件", "source": "https://..." }]
  * 输出：stdout JSON ConflictGroup[]
  *   [{ "claimKey": "...", "kind": "boolean_inversion|count_discrepancy|value_mismatch", "claims": [...] }]
  *
@@ -83,7 +83,7 @@ process.stdin.on("end", () => {
   try {
     claims = JSON.parse(input);
   } catch {
-    console.error('输入不是合法 JSON。期望: [{"direction":"D1","file":"a.md","line":1,"field":"...","value":"...","source":"..."}]');
+    console.error('输入不是合法 JSON。期望: [{"direction":"direction-1","file":"a.md","line":1,"field":"...","value":"...","source":"..."}]');
     process.exit(1);
   }
   if (!Array.isArray(claims)) {

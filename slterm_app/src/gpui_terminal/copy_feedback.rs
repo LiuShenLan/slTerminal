@@ -32,19 +32,19 @@ impl CopyFeedback {
         Self::default()
     }
 
-    #[allow(dead_code)] // 复制反馈展示消费点归 M3.3 键位点亮。
+    #[allow(dead_code)] // 复制反馈展示消费点在键位接线后启用。
     pub(crate) fn is_copied(&self) -> bool {
         self.copied
     }
 
-    #[allow(dead_code)] // 异步剪贴板载荷路径随 M3.3 粘贴确认链点亮。
+    #[allow(dead_code)] // 异步剪贴板载荷路径随粘贴确认链点亮。
     pub(crate) fn is_pending(&self) -> bool {
         self.pending
     }
 
     /// 异步剪贴板载荷制备期间保持动作可见。开始新操作同时取消本控件
     /// 持有的旧成功过期定时器。
-    #[allow(dead_code)] // 同上:M3.2 只有同步复制路径(mark_copied)。
+    #[allow(dead_code)] // 同上:只有同步复制路径(mark_copied)。
     pub(crate) fn mark_pending<E: 'static>(
         &mut self,
         cx: &mut Context<'_, E>,
@@ -86,7 +86,7 @@ impl CopyFeedback {
     }
 
     /// 离开 pending/成功态,不呈现假成功。
-    #[allow(dead_code)] // 失败路径消费点随 M3.3 复制合同用例点亮。
+    #[allow(dead_code)] // 失败路径消费点随复制合同用例点亮。
     pub(crate) fn clear<E: 'static>(
         &mut self,
         cx: &mut Context<'_, E>,

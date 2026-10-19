@@ -2,7 +2,7 @@
 //!
 //! 本地文件与 gitshow(HEAD 字节)共用同一快照通路;`read_only` 是**类型层**
 //! 合同——encode 入口直接拒绝,不靠 UI 层自觉(边界条 6)。可编辑
-//! `Document`(M8.2)复用同一结构,保存链按 `verify` 拒绝覆盖外部修改。
+//! `Document`复用同一结构,保存链按 `verify` 拒绝覆盖外部修改。
 
 use std::io;
 use std::sync::Arc;

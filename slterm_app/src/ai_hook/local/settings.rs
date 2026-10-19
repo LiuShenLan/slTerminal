@@ -85,7 +85,7 @@ fn inspect_with(
                     match current_at(agent, &path, helper) {
                         Ok(current) => {
                             result.needs_repair = !current;
-                            // SEC-13(B68):claude 的结构比对不一致同样落
+                            // claude 的结构比对不一致同样落
                             // 期望/实测哈希指纹,取证面与其他载体对齐。
                             if result.needs_repair && agent == AgentHook::Claude {
                                 audit_claude_hash_mismatch(&path, helper);
@@ -102,7 +102,7 @@ fn inspect_with(
     result
 }
 
-/// SEC-13(B68):claude hook 文档与期望形态不一致时补哈希审计。期望形态 =
+/// claude hook 文档与期望形态不一致时补哈希审计。期望形态 =
 /// 把当前文档修复到完整安装后的序列化字节;实测 = 当前文件字节。只落
 /// SHA-256 指纹,不落内容。
 fn audit_claude_hash_mismatch(path: &Path, helper: &str) {
@@ -284,7 +284,7 @@ pub(crate) fn apply_claude_at(dir: &Path, helper: &str, enabled: bool) -> io::Re
     apply_claude_at_with(dir, helper, enabled, false)
 }
 
-/// C5:confirmed=true 时绕过 SEC-12 审查门(设置页已展示原文并确认)。
+/// confirmed=true 时绕过审查门(设置页已展示原文并确认)。
 pub(crate) fn apply_claude_at_with(
     dir: &Path,
     helper: &str,
@@ -301,7 +301,7 @@ pub(crate) fn apply_claude_at_with(
             InstallOutcome::Installed | InstallOutcome::Current => {}
             InstallOutcome::Suspended { suspicious_command } => {
                 return Err(io::Error::other(format!(
-                    "statusline 原命令需二次确认(SEC-12): {suspicious_command}"
+                    "statusline 原命令需二次确认: {suspicious_command}"
                 )));
             }
             InstallOutcome::Conflict => {
@@ -352,7 +352,7 @@ pub(crate) fn apply_and_verify(agent: AgentHook, enabled: bool) -> io::Result<()
     apply_and_verify_with(agent, enabled, false)
 }
 
-/// C5:confirmed=true 时 SEC-12 审查门恒放行(设置页已展示原文并由用户确认)。
+/// confirmed=true 时审查门恒放行(设置页已展示原文并由用户确认)。
 pub(crate) fn apply_and_verify_with(
     agent: AgentHook,
     enabled: bool,
@@ -375,7 +375,7 @@ pub(super) fn apply(agent: AgentHook, enabled: bool) -> io::Result<()> {
     apply_with_confirmation(agent, enabled, false)
 }
 
-/// C5:命中 SEC-12 审查词表时给出待确认原文(设置页据此展示「确认并重试」)。
+/// 命中审查词表时给出待确认原文(设置页据此展示「确认并重试」)。
 pub(crate) fn statusline_confirmation(agent: AgentHook) -> Option<String> {
     if agent != AgentHook::Claude {
         return None;
@@ -407,13 +407,13 @@ pub(super) fn apply_with_confirmation(
                 ensure_claude_hooks(review_statusline_command)
             };
             // reconcile 路径携带真实审查门:命中 → 审计 + 跳过(零写盘),
-            // 无交互可用不当错误上抛(SEC-12;确认路径传 confirmed=true)。
+            // 无交互可用不当错误上抛(确认路径传 confirmed=true)。
             if let InstallOutcome::Suspended { suspicious_command } = outcome {
                 tracing::warn!(
                     target: crate::audit::TARGET,
                     operation = "statusline_review",
                     result = "suspended",
-                    "SEC-12 claude statusLine 原命令命中审查词表,自愈跳过(零写盘): {suspicious_command}"
+                    "claude statusLine 原命令命中审查词表,自愈跳过(零写盘): {suspicious_command}"
                 );
             }
         }
@@ -518,7 +518,7 @@ mod settings_tests {
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "user extension");
     }
 
-    /// B68 防复发:claude「已装但需修复」必须落 SEC-13 哈希事件。
+    /// 防复发:claude「已装但需修复」必须落哈希事件。
     #[test]
     fn claude_repair_needed_emits_hash_mismatch_audit_event() {
         let capture = crate::audit::test_support::capture_events();
@@ -534,10 +534,7 @@ mod settings_tests {
         assert!(state.installed, "部分安装仍是已安装");
         assert!(state.needs_repair, "缺事件即需修复");
         let text = capture.text();
-        assert!(
-            text.contains("hook_hash_mismatch"),
-            "缺少 SEC-13 事件: {text}"
-        );
+        assert!(text.contains("hook_hash_mismatch"), "缺少审计事件: {text}");
         assert!(text.contains("expected="), "{text}");
         assert!(text.contains("actual="), "{text}");
         assert!(

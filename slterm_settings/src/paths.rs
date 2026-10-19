@@ -1,5 +1,5 @@
 //! 设置文件路径唯一权威:`SLTERM_CONFIG_DIR` 优先(空串视为未设置),
-//! 默认 `%APPDATA%\slterm`(数据目录叶子名 D2 裁决值)。
+//! 默认 `%APPDATA%\slterm`(数据目录叶子名裁决值)。
 //!
 //! 单名环境变量,双名别名层不迁(无历史用户);零迁移:旧 exe 同级便携
 //! 文件不看不迁。仅 Win10/11,路径推导无平台分支。
@@ -30,7 +30,7 @@ pub fn settings_dir() -> PathBuf {
         .unwrap_or_else(|| default_dir_from(|name| std::env::var_os(name)))
 }
 
-/// 设置文件路径:数据目录下 `settings.json`(去品牌命名,D3 裁决)。
+/// 设置文件路径:数据目录下 `settings.json`(去品牌命名,裁决)。
 pub fn settings_path() -> PathBuf {
     settings_dir().join("settings.json")
 }

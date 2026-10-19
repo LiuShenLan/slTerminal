@@ -2,13 +2,13 @@
 //! 文件与建议条数据形态。
 //!
 //! 这条路径跑在每次命令失败上,不能吵:先过便宜门链(冷却 → 开关 →
-//! 规则表),任何一门不过安静返回。隐私闸门三件套的第一件就是默认关闭。
+//! 规则表),任何一门不过安静返回。隐私闸门组件的第一件就是默认关闭。
 //! 请求体出境前,输出尾部必须经 [`redact_secrets`] 打码;字符上限由抓取侧
 //! 执行(24 行 / 2000 字符)。
 //!
-//! 本步只落可单测的纯逻辑;建议条渲染、请求发送与网格抓取归 M9.5。
-//! M9.3 合流:config_guard 自愈失败经 [`evaluate_hook_failure`] 进入同一
-//! 闸门,D08-2 裁定的默认关(`enabled=false`)同样适用于失败边。
+//! 本模块只落可单测的纯逻辑;建议条渲染、请求发送与网格抓取归呈现层。
+//! 合流:config_guard 自愈失败经 [`evaluate_hook_failure`] 进入同一
+//! 闸门,裁定的默认关(`enabled=false`)同样适用于失败边。
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -19,7 +19,7 @@ use slterm_split::PaneId;
 use zeroize::Zeroizing;
 
 /// 配置文件名(数据目录内)。独立于设置主文件:设置页整存整取那份文件,
-/// 手工加进去的陌生键会在下次保存时被抹掉;助手配置独立成文件(D08-1 已裁)。
+/// 手工加进去的陌生键会在下次保存时被抹掉;助手配置独立成文件(已裁)。
 const CONFIG_FILE: &str = "slterm_assistant.txt";
 
 /// 模型给出的一条修复建议。
@@ -37,7 +37,7 @@ pub(crate) enum AiFixState {
     Pending { seq: u64 },
     /// 建议已就绪,等 Ctrl+. / Esc / typing。
     Ready { seq: u64, fix: AiFix },
-    /// A6:配置/凭据错误显式上条,不再静默消失。
+    /// 配置/凭据错误显式上条,不再静默消失。
     Failed { seq: u64, message: String },
 }
 
@@ -295,7 +295,7 @@ impl TriggerGate {
     }
 }
 
-/// hook 失败边的一次失败事实(D08-2)。config_guard 自愈
+/// hook 失败边的一次失败事实。config_guard 自愈
 /// 失败不是 shell 命令失败,没有真实退出码与最后命令;这里把失败操作投影
 /// 成触发链能消费的参数:`command` 是操作描述,只参与规则表判定。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -304,7 +304,7 @@ pub(crate) struct HookFailure {
     /// 失败操作的程序身份;自愈失败统一为 `None`——agent 名(claude/codex
     /// 等)在 INTERACTIVE 表里,误当成 program 会把该报的失败静音。
     pub program: Option<String>,
-    /// 用户可见类别;B38:呈现层只消费本字段,不直出 `command`。
+    /// 用户可见类别;呈现层只消费本字段,不直出 `command`。
     pub kind: HookFailureKind,
 }
 
@@ -323,7 +323,7 @@ pub(crate) enum HookFailureKind {
 /// `ignored_exit_codes` 即可整体静音失败边。
 pub(crate) const HOOK_FAILURE_EXIT_CODE: i32 = 1;
 
-/// 失败边通道(D08-2 默认关):config_guard 自愈失败进入与命令失败同一
+/// 失败边通道(默认关):config_guard 自愈失败进入与命令失败同一
 /// 门链(冷却 → 开关 → 规则表)。未显式开启(`AssistantConfig::enabled`
 /// 默认 `false`)时连闸门都不碰——不评估、不写冷却;开启后语义与命令失败
 /// 一致,冷却按进程级失败边闸门计。
@@ -502,7 +502,7 @@ pub(crate) struct RequestTarget {
     pub key: Zeroizing<String>,
 }
 
-/// 请求目标组装失败(A6:显式错误,不再静默放弃)。
+/// 请求目标组装失败(显式错误,不再静默放弃)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RequestTargetError {
     /// 无启用 provider 且环境兜底缺失,或 active provider 无凭据且无兜底。
@@ -531,7 +531,7 @@ impl std::fmt::Display for RequestTargetError {
 }
 
 /// 请求目标组装(provider 凭据流):启用 provider 优先,凭据出域即
-/// `Zeroizing`;A6:active provider 无凭据时回退环境变量,仍无则显式错误。
+/// `Zeroizing`;active provider 无凭据时回退环境变量,仍无则显式错误。
 pub(crate) fn request_target(
     cfg: &AssistantConfig,
     credentials: &dyn crate::secrets::CredentialStore,
@@ -562,7 +562,7 @@ fn request_target_with(
                     Some(key) => key,
                     None => return Err(RequestTargetError::InvalidCredentialEncoding),
                 },
-                // A6:active 无凭据 → 环境兜底;仍无则显式错误。
+                // active 无凭据 → 环境兜底;仍无则显式错误。
                 Ok(None) => fallback().ok_or_else(|| RequestTargetError::MissingCredential {
                     provider: provider.id.clone(),
                 })?,
@@ -1247,7 +1247,7 @@ mod ai_assistant_tests {
         }
     }
 
-    /// A6:active provider 无凭据时回退环境兜底(不再静默放弃)。
+    /// active provider 无凭据时回退环境兜底(不再静默放弃)。
     #[test]
     fn active_provider_without_credential_falls_back_to_environment() {
         let store = store_for(crate::ai_providers::ProviderKind::OpenAi);
@@ -1262,7 +1262,7 @@ mod ai_assistant_tests {
         assert_eq!(target.kind, crate::ai_providers::ProviderKind::OpenAi);
     }
 
-    /// A6:无凭据且无环境兜底 → 显式错误(取代静默 None)。
+    /// 无凭据且无环境兜底 → 显式错误(取代静默 None)。
     #[test]
     fn missing_credential_and_environment_is_an_explicit_error() {
         let store = store_for(crate::ai_providers::ProviderKind::OpenAi);
@@ -1465,7 +1465,7 @@ mod ai_assistant_tests {
         })
     }
 
-    /// 构造请求目标;key 一律使用假值形态(SEC-18)。
+    /// 构造请求目标;key 一律使用假值形态。
     fn mock_target(
         kind: ProviderKind,
         base_url: String,

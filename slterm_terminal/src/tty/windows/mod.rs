@@ -52,9 +52,9 @@ pub struct Pty {
 }
 
 /// PTY 创建入口：`SPAWN_LOCK` 串行化 + 会话容量上限（spawn 规则层）包住
-/// `conpty::new` 的 create + spawn 段（BE-12 锁界）。
+/// `conpty::new` 的 create + spawn 段（锁界）。
 pub fn new(config: &Options, window_size: WindowSize) -> Result<Pty> {
-    // SEC-01：用户指定 shell 经白名单深检（core 唯一进程创建口）。显式
+    // 用户指定 shell 经白名单深检（core 唯一进程创建口）。显式
     // 命令通道（`-e`）豁免——用户 CLI 直给不构成配置注入面（论证见
     // `Options::explicit_command`）。
     if let Some(shell) = &config.shell
@@ -319,8 +319,8 @@ mod test {
             env: Default::default(),
             env_is_complete: false,
             escape_args: false,
-            // 上游此字面量之后的增量字段:M2.1 `conpty_sideload` 全域化,
-            // M2.3 `conpty_input_modes`(矩阵默认三态)。
+            // 上游此字面量之后的增量字段:`conpty_sideload` 全域化,
+            // `conpty_input_modes`(矩阵默认三态)。
             conpty_sideload: false,
             conpty_input_modes: Default::default(),
             explicit_command: false,

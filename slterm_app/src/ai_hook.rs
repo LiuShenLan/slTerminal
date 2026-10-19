@@ -7,8 +7,8 @@
 //! `SLTERM_HOOK_LOG` 诊断桥接投递而不记载荷;`GateVerdict` 在应用调试日志里
 //! 解释每一条被拒事件。
 //!
-//! 落盘范围:协议/载荷/事件门/仲裁(M4.2)、安装权威与 9 家安装器(M4.3)、
-//! 壳侧事件通道(M4.5:命名管道线程 → 进程内 mpsc → GPUI foreground
+//! 落盘范围:协议/载荷/事件门/仲裁、安装权威与安装器、
+//! 壳侧事件通道(命名管道线程 → 进程内 mpsc → GPUI foreground
 //! 排水 → `AgentActivity`/`AnswerInbox` 的 pane 宿主)。
 //!
 //! 缝合点(不在本模块消费):设置页数据源消费 `integrations::inspect()` 归
@@ -131,11 +131,11 @@ const CLAUDE_EVENTS: [&str; 10] = [
 /// 卸载器入口(`setup-ai --remove`):移除全部 AI CLI 的 hook 注入。
 pub(crate) use local::settings::remove_all as remove_all_hooks;
 
-// 壳侧启动链的唯一进程级入口(M4.5);返回句柄随 `run_shell` 作用域存活。
+// 壳侧启动链的唯一进程级入口;返回句柄随 `run_shell` 作用域存活。
 pub use windows::spawn_gpui_server;
 
-/// config_guard 落盘本体在 local;消费点 = 壳启动链 `run_shell`(C4)。
-/// 回调接失败边呈现(B38);不需要提示的调用方传 `|_| {}`。
+/// config_guard 落盘本体在 local;消费点 = 壳启动链 `run_shell`。
+/// 回调接失败边呈现;不需要提示的调用方传 `|_| {}`。
 pub use local::spawn_config_guard_with;
 
 #[cfg(test)]

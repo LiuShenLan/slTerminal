@@ -2,7 +2,7 @@
 //!
 //! 查询语义零改动:URL 归一化只小写化 + 去尾斜杠(规格字面,不加 trim);
 //! ureq 为纯阻塞 HTTP,调用方负责后台执行器;错误消息只含 planId + 错误
-//! 类别,禁止拼接 token 与 Authorization 头(SEC-18 红线)。
+//! 类别,禁止拼接 token 与 Authorization 头(红线)。
 
 use std::time::Duration;
 
@@ -31,7 +31,7 @@ pub(crate) fn normalize_base_url(url: &str) -> String {
     url.to_lowercase().trim_end_matches('/').to_string()
 }
 
-/// 归一化后与匹配集逐项精确相等(参数化查找供 L1 注入)。
+/// 归一化后与匹配集逐项精确相等(参数化查找供单元层注入)。
 pub(crate) fn find_query_by_url<'a>(
     base_url: &str,
     queries: &'a [&'a dyn PlanQuery],
@@ -235,7 +235,7 @@ mod query_tests {
         );
     }
 
-    /// 错误消息不得携带 token(SEC-18):分类映射不接受也不拼接凭据。
+    /// 错误消息不得携带 token:分类映射不接受也不拼接凭据。
     #[test]
     fn query_err_never_contains_credential_text() {
         let error = query_err("kimi", ureq::Error::StatusCode(401));

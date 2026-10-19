@@ -13,8 +13,7 @@
 #
 # LIMITS:PostMessage 不改变真实键盘状态,修饰键 CHORD(Shift+Enter、
 # Ctrl+Space……)无法无人值守测试——布局层会读到真实的(未按下)修饰键状态。
-# chord 覆盖需前台 SendInput + 值守空闲机,保持人工步骤(test-exemptions 实机
-# 验收点)。
+# chord 覆盖需前台 SendInput + 值守空闲机,保持人工步骤。
 #
 # 基线治理(输入矩阵状态机):基线文件 git 追踪;语义变更时「代码 + 基线」同提交,
 # 禁单独提交基线(防静默放宽);任何数值变更须在提交信息说明触发原因。
@@ -41,7 +40,7 @@ $log = Join-Path $tmpDir 'win32_input_matrix.log'
 $baselineFile = Join-Path $PSScriptRoot 'win32_input_matrix.baseline.txt'
 Remove-Item $log -ErrorAction SilentlyContinue
 
-# 探针经 cmd /c 转接:SEC-01 白名单(core 唯一进程创建口)只放行三家 shell,
+# 探针经 cmd /c 转接:白名单(core 唯一进程创建口)只放行三家 shell,
 # node 不能作 -e 直跑程序;cmd /c 下 node 继承同一 console 输入句柄,
 # stdin 字节路径与直跑等价。程序名必须写全 cmd.exe:白名单校验对非名单
 # 文件名按字面名做 PATH 解析(不加 .exe),裸名 cmd 解析不出会被拒。

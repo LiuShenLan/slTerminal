@@ -1,7 +1,7 @@
 //! native hooks(codex native / cursor / copilot / grok)与结果元数据回归。
 //!
 //! 迁移裁剪:上游本文件中经 `crate::notify::Notification` 断言通知形态的
-//! 部分整体归通知漏斗回补——本步只钉解析与仲裁语义;通知
+//! 部分整体归通知漏斗回补——本模块只钉解析与仲裁语义;通知
 //! 形态的消费点尚不存在,此处不留半套断言。
 use super::*;
 use crate::ai_agents::{AgentStatus, AgentStatusSource};
@@ -241,7 +241,7 @@ fn claude_transcript_is_retained_without_changing_its_native_session_id() {
 #[test]
 fn codex_user_questions_are_structured_attention_and_prose_in_tools_is_not() {
     // 安装器按 CodexHookMode 写出的 matcher 断言(`installation::codex_groups`)
-    // 归 M4.3;此处只钉解析侧:`request_user_input` 的结构化提问是
+    // 此处只钉解析侧：`request_user_input` 的结构化提问是
     // NeedsAttention,工具散文不是。
     let payload = json!({"hook_event_name":"PreToolUse", "session_id":"main", "turn_id":"turn", "tool_name":"request_user_input", "tool_input":{"questions":[{"id":"scope","question":"Which scope should be used?","options":[{"label":"Current project"},{"label":"All projects"}]}]}});
     let event = native("full", payload.clone());
@@ -314,7 +314,7 @@ fn kimi_failure_and_interrupt_have_distinct_outcomes() {
 
 /// Lifecycle 覆盖下屏幕毫无发言权:排队输入、compaction 等画面再怎么像
 /// 「该结束了」,也只有 native Stop 能收回合。(上游本例经 `ai_agents::detect`
-/// 产屏幕观察;TOML 引擎归 M4.4,此处以等价的构造 Detection 钉同一仲裁语义。)
+/// 产屏幕观察;TOML 引擎归规则层。此处以等价的构造 Detection 钉同一仲裁语义。)
 #[test]
 fn queued_input_and_compaction_keep_native_turn_running() {
     use crate::ai_agents::{AgentKind, Detection};

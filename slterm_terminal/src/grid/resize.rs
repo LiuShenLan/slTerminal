@@ -296,7 +296,7 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
                     //
                     // Upstream only drops it when `line_delta != 0`, which never
                     // holds for a cursor on the top visible row: `Point::sub`
-                    // clamps at `Line(0)` under `Boundary::Cursor` (index.rs:103),
+                    // clamps at `Line(0)` under `Boundary::Cursor` (see index.rs),
                     // so the delta comes out `0` and the blank row survives. It
                     // then stands exactly where the content used to be and pushes
                     // that content up a row into the scrollback — which reads as

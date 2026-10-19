@@ -11,11 +11,11 @@
   不再依赖 WebView 或 Node 运行时。
 - 标签页与分屏：终端标签页、网格分屏、窗格缩放、拖拽停靠；终端标签页
   的布局、启动身份与 WindowState 在重启后恢复。
-- 设置中心：应用/外观/配置/交互/高级/本地化/重置七个全局页与 Agent 组；
-  八套内置暗色主题（默认 Linear）；中英双语界面。
+- 设置中心：应用/外观/配置/交互/高级/本地化/重置全局页与 Agent 组；
+  内置暗色主题（默认 Linear）；中英双语界面。
 - 侧栏：活动栏、双槽侧栏骨架与文件浏览器（git 状态着色、创建/删除/重命名/
   打开、回收站删除）。
-- AI CLI 集成：27 家 AI CLI 的屏幕检测与状态投影；Claude Code / Kimi /
+- AI CLI 集成：AI CLI 的屏幕检测与状态投影；Claude Code / Kimi /
   Codex / Pi / OpenCode 的 hook 安装；Claude Code 与 Codex 历史会话扫描；
   随包 runtime skill 自动投放。
 - Runtime API：本机 loopback JSON Lines 控制面、版本化信封、`slterm ctl`
@@ -25,7 +25,7 @@
 - 系统集成：托盘、Windows toast 通知、任务栏进度、开机启动、窗口材质与
   壁纸、更新检查与后台下载。
 - 安全：凭据存入 Windows 凭据管理器、设置写审计通道、口令保护的本地
-  加密备份（六类白名单与敏感键双闸）。
+  加密备份（严格白名单与敏感键双闸）。
 - 打包：Inno Setup 安装器（用户级安装）、便携 zip、SHA256SUMS、体积预算
   钉测试与本地发布核验链。
 

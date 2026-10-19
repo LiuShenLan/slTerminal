@@ -1,10 +1,10 @@
 //! Runtime 控制面:版本化信封、状态权威 `RuntimeHub` 与协议类型族。
 //!
-//! M7.2 落点:snapshot/pane/agent/run 类型族、`RuntimeHub`(发布判等/盖戳/
-//! 订阅有界/生命周期/managed agents/run 等待表)。M7.3 补齐 `RuntimeCommand`
+//! 落点：snapshot/pane/agent/run 类型族、`RuntimeHub`(发布判等/盖戳/
+//! 订阅有界/生命周期/managed agents/run 等待表)。补齐 `RuntimeCommand`
 //! 全族与派发原语(worktree 事务/run 分段限时/超时未知态),以及 pane/agent/
-//! orchestrate/git 方法族与参数校验面。CLI 与 env 契约归 M7.4,单实例移交
-//! 归 M7.5;UI owner 的 RuntimeCommand 执行接线随 M7.5 壳事件泵落地。
+//! orchestrate/git 方法族与参数校验面。CLI 与 env 契约、单实例移交
+//! 归壳层接线；UI owner 的 RuntimeCommand 执行随壳事件泵落地。
 //!
 //! 状态权威只有一份:壳把 `Workspace` 投影成 [`RuntimeSnapshot`] 经
 //! [`RuntimeHub::publish`] 入账;订阅方(read 专链/外部客户端/壳)读同一份
@@ -26,7 +26,7 @@ mod shortcuts;
 mod terminal_read;
 mod transport;
 
-/// CLI 人格入口(M7.4):同 exe 分流后请求-响应并退出。
+/// CLI 人格入口:同 exe 分流后请求-响应并退出。
 pub(crate) use cli::run_cli;
 /// `pane.procs` 的进程树采集(UI owner 执行器消费)。
 pub(crate) use command::capture_process_tree;
@@ -34,7 +34,7 @@ pub(crate) use command::capture_process_tree;
 pub(crate) use server::RuntimeServer;
 /// 子进程端点注入(`agent_env::apply` 末位消费)。
 pub(crate) use server::apply_child_endpoint;
-/// 二次启动移交(M7.5):40 × 25ms 重试环后把启动交给首实例。
+/// 二次启动移交:40 × 25ms 重试环后把启动交给首实例。
 pub(crate) use server::handover_to_existing_instance;
 /// `pane.read` 的 Term 尾部读取(UI owner 执行器消费)。
 pub(crate) use terminal_read::{RuntimePaneRead, capture_terminal_tail};
@@ -64,7 +64,7 @@ pub const SUPPORTED_VERSIONS: &[u16] = &[PROTOCOL_VERSION];
 pub(crate) const SINGLE_WINDOW_ID: u64 = 1;
 
 /// 控制面客户端 connect 超时。
-#[allow(dead_code)] // 消费点 = M7.4 CLI 客户端 `client_stream`。
+#[allow(dead_code)] // 消费点 = CLI 客户端 `client_stream`。
 const CONNECT_TIMEOUT: Duration = Duration::from_millis(500);
 /// 控制面连接读写超时;服务端在 `handle_connection` 同时设置读/写。
 const IO_TIMEOUT: Duration = Duration::from_secs(5);
@@ -87,12 +87,12 @@ pub(super) const MAX_PANE_RATIO: f32 = 0.95;
 pub(super) const DEFAULT_READ_LINES: usize = 120;
 pub(super) const MAX_READ_LINES: usize = 2_000;
 /// 单次读取字节上限;超限按整行递减后做 UTF-8 边界切片。
-#[allow(dead_code)] // 消费点 = terminal_read(UI 执行器 M7.5 接线)。
+#[allow(dead_code)] // 消费点 = terminal_read(UI 执行器接线)。
 pub(super) const MAX_READ_BYTES: usize = 1024 * 1024;
 /// pane.exec 输出字节默认与上限(每条流)。
 pub(super) const DEFAULT_EXEC_OUTPUT_BYTES: usize = 1024 * 1024;
 pub(super) const MAX_EXEC_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
-/// wait 超时上限(契约数值首版照搬上游,D04-2 归待沉淀)。
+/// wait 超时上限(契约数值首版照搬上游,归待沉淀)。
 pub(super) const MAX_WAIT: Duration = Duration::from_secs(24 * 60 * 60);
 /// run 分段限时:Enter 之后留给「命令确实开始了」的观察窗口。
 pub(super) const RUN_START_GRACE: Duration = Duration::from_secs(3);
@@ -113,7 +113,7 @@ const PANE_LIFECYCLE_CACHE: usize = 256;
 /// 已完成 run 的结果缓存上限(等待表迟到与重查共用)。
 const COMPLETED_RUN_CACHE: usize = 256;
 
-#[allow(dead_code)] // 消费点 = RuntimeHub::register_agent(壳在 agent 启动时调用,M7.5)。
+#[allow(dead_code)] // 消费点 = RuntimeHub::register_agent(壳在 agent 启动时调用)。
 static NEXT_AGENT_ID: AtomicU64 = AtomicU64::new(1);
 
 /// 首发能力面(与协议 Schema 的方法枚举单源;裁剪点见协议裁剪表)。
@@ -173,7 +173,7 @@ pub(super) const FEATURES: &[&str] = &[
 ];
 
 /// describe 的协议 Schema 相对路径字段:协议内容,不是文档引用。
-/// 相对安装根目录;随包资产落 `assets/`(D12-3),安装器与 zip 同布局。
+/// 相对安装根目录;随包资产落 `assets/`,安装器与 zip 同布局。
 pub(super) const SCHEMA_PATH: &str = "assets/runtime-api-v1.schema.json";
 
 /// 请求信封:JSON Lines 首行。
@@ -192,7 +192,7 @@ pub struct ApiRequest {
 
 impl ApiRequest {
     /// 构造一条本进程请求。
-    #[allow(dead_code)] // 消费点 = M7.4 CLI 客户端。
+    #[allow(dead_code)] // 消费点 = CLI 客户端。
     pub(crate) fn new(token: String, method: impl Into<String>, params: Value) -> Self {
         use std::sync::atomic::{AtomicU64, Ordering};
         static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
@@ -235,7 +235,7 @@ fn present_json<'de, D: serde::Deserializer<'de>>(input: D) -> Result<Option<Val
 }
 
 impl ApiResponse {
-    #[allow(dead_code)] // 消费点 = M7.2 方法专链;本步仅有失败响应路径。
+    #[allow(dead_code)] // 消费点 = 方法专链;本模块仅有失败响应路径。
     pub(crate) fn success(id: impl Into<String>, result: Value) -> Self {
         Self {
             protocol: PROTOCOL_NAME.to_owned(),
@@ -259,7 +259,7 @@ impl ApiResponse {
     }
 
     /// 客户端响应身份校验:protocol/version/id 逐字段一致,ok 与 result/error 互斥。
-    #[allow(dead_code)] // 消费点 = M7.4 `decode_plugin_response`。
+    #[allow(dead_code)] // 消费点 = `decode_plugin_response`。
     pub(crate) fn verify_identity(&self, request: &ApiRequest) -> Result<(), ApiError> {
         let consistent = if self.ok {
             self.result.is_some() && self.error.is_none()
@@ -292,7 +292,7 @@ pub struct ApiEvent<T> {
 }
 
 impl<T> ApiEvent<T> {
-    #[allow(dead_code)] // 消费点 = M7.3 其余事件族;M7.2 只实例化 snapshot 形态。
+    #[allow(dead_code)] // 消费点 = 其余事件族;只实例化 snapshot 形态。
     pub(crate) fn new(event: impl Into<String>, revision: u64, data: T) -> Self {
         Self {
             protocol: PROTOCOL_NAME.to_owned(),
@@ -305,7 +305,7 @@ impl<T> ApiEvent<T> {
 }
 
 impl ApiEvent<RuntimeSnapshot> {
-    /// `runtime.snapshot` 事件:M7.1 泛型事件的单源实例化。
+    /// `runtime.snapshot` 事件:泛型事件的单源实例化。
     pub(super) fn snapshot(snapshot: RuntimeSnapshot) -> Self {
         let revision = snapshot.revision;
         Self::new("runtime.snapshot", revision, snapshot)
@@ -436,7 +436,7 @@ pub struct RuntimeAgentPane {
 }
 
 /// 委派端点:pane + Agent 身份是路由护栏;窗口/tab 坐标只是观察值。
-#[allow(dead_code)] // 消费点 = M7.3 agent.delegate 专链。
+#[allow(dead_code)] // 消费点 = agent.delegate 专链。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RuntimeDelegationEndpoint {
     pub window_id: u64,
@@ -450,7 +450,7 @@ pub struct RuntimeDelegationEndpoint {
     pub session_id: Option<String>,
 }
 
-#[allow(dead_code)] // 消费点 = M7.3 agent.delegate 专链。
+#[allow(dead_code)] // 消费点 = agent.delegate 专链。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RuntimeDelegationReceipt {
     pub task_id: String,
@@ -779,7 +779,7 @@ pub struct RuntimePane {
     pub last_run: Option<RuntimeRunOutcome>,
 }
 
-#[allow(dead_code)] // 消费点 = M7.3 pane.procs 专链。
+#[allow(dead_code)] // 消费点 = pane.procs 专链。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RuntimeProcess {
     pub pid: u32,
@@ -791,7 +791,7 @@ pub struct RuntimeProcess {
     pub agent_kind: Option<String>,
 }
 
-#[allow(dead_code)] // 消费点 = M7.3 pane.procs 专链。
+#[allow(dead_code)] // 消费点 = pane.procs 专链。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RuntimePaneProcesses {
     pub window_id: u64,
@@ -862,8 +862,8 @@ pub struct RuntimeRunResult {
 /// UI 写操作命令全集(单窗收编:`window.create` 砍,`CloseWindow` 语义 =
 /// 唯一当前窗口)。普通请求与编排步骤共享同一枚举,经同一派发原语执行——
 /// worktree 事务、run 等待、UI 超时不许在两条路径上产生语义分叉。
-// 变体字段由 M7.5 UI owner 执行器消费(按 workspace 既有操作入口落变更);
-// 本步只保证协议形状、校验与派发语义。
+// 变体字段由 UI owner 执行器消费(按 workspace 既有操作入口落变更);
+// 本模块只保证协议形状、校验与派发语义。
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum RuntimeCommand {
@@ -881,7 +881,7 @@ pub enum RuntimeCommand {
         shell_id: Option<String>,
     },
     /// `tab_index` + 稳定 `tab_id` 双轨定位:`tab_id` 有值时优先。
-    /// `force` = 丢弃未保存草稿(B12:默认拒脏)。
+    /// `force` = 丢弃未保存草稿(默认拒脏)。
     CloseTab {
         window_id: Option<u64>,
         tab_index: usize,
@@ -1011,14 +1011,14 @@ pub enum RuntimeCommand {
 }
 
 /// 写操作跨线程回执:transport 线程持 receiver,UI owner 执行后 respond。
-#[allow(dead_code)] // 消费点 = M7.5 壳事件泵(`RuntimeControl` 臂)。
+#[allow(dead_code)] // 消费点 = 壳事件泵(`RuntimeControl` 臂)。
 #[derive(Debug)]
 pub struct RuntimeDispatch {
     pub command: RuntimeCommand,
     reply: SyncSender<Result<Value, ApiError>>,
 }
 
-#[allow(dead_code)] // 消费点 = M7.5 壳事件泵(`RuntimeCallback::Control` 分支)。
+#[allow(dead_code)] // 消费点 = 壳事件泵(`RuntimeCallback::Control` 分支)。
 impl RuntimeDispatch {
     fn new(command: RuntimeCommand) -> (Arc<Self>, Receiver<Result<Value, ApiError>>) {
         let (reply, receiver) = mpsc::sync_channel(1);
@@ -1040,14 +1040,14 @@ pub(crate) fn dispatch_for_test(
 
 /// 壳事件回调。ATTACH 为 fire-and-forget(单窗语义 = 聚焦现有窗口);
 /// `Control` 等待 UI owner 经 [`RuntimeDispatch::respond`] 回执。
-#[allow(dead_code)] // `Control` 载荷消费点 = M7.5 壳事件泵。
+#[allow(dead_code)] // `Control` 载荷消费点 = 壳事件泵。
 #[derive(Clone)]
 pub enum RuntimeCallback {
     Attach,
     Control(Arc<RuntimeDispatch>),
 }
 
-/// 单形态事件汇:闭包桥进壳事件队列(壳侧驱动方归 M7.5 接线)。
+/// 单形态事件汇：闭包桥进壳事件队列（壳侧驱动方归壳层接线）。
 pub(crate) type EventSink = Arc<dyn Fn(RuntimeCallback) + Send + Sync>;
 
 /// ATTACH 派发(fire-and-forget);仅 `legacy-attach` feature 下接线。
@@ -1085,7 +1085,7 @@ struct HubState {
     run_waiters: RunWaiters,
     completed_runs: VecDeque<RuntimeRunResult>,
     /// name → 单调 generation(同名跨会话)。
-    #[allow(dead_code)] // 写点 = register_agent;壳调用点归 M7.5。
+    #[allow(dead_code)] // 写点 = register_agent；壳调用点归壳层。
     agent_generations: HashMap<String, u64>,
     managed_agents: HashMap<String, RuntimeManagedAgent>,
     next_delegation: u64,
@@ -1232,7 +1232,7 @@ impl RuntimeHub {
     /// 注册 managed agent:active 同名即 `agent_name_conflict`;generation
     /// 同名跨会话单调 +1。`worktree` 由 `agent.fork` 事务产出,随注册表
     /// 投影进快照的 pane.agent。
-    #[allow(dead_code)] // 消费点 = 壳在 agent 启动/SessionStart 时调用(M7.5)。
+    #[allow(dead_code)] // 消费点 = 壳在 agent 启动/SessionStart 时调用。
     pub(crate) fn register_agent(
         &self,
         name: String,
@@ -1279,7 +1279,7 @@ impl RuntimeHub {
         Ok(agent)
     }
 
-    #[allow(dead_code)] // 消费点 = M7.3 agent.fork 预检。
+    #[allow(dead_code)] // 消费点 = agent.fork 预检。
     pub(crate) fn ensure_agent_name_available(&self, name: &str) -> Result<(), ApiError> {
         if self
             .lock()
@@ -1296,7 +1296,7 @@ impl RuntimeHub {
     }
 
     /// 关闭注册项:注册表纯变化也重发规范快照,唤醒共用通道的等待方。
-    #[allow(dead_code)] // 消费点 = M7.3 agent 生命周期链。
+    #[allow(dead_code)] // 消费点 = agent 生命周期链。
     pub(crate) fn close_agent(&self, agent_id: &str, reason: &str) {
         let mut state = self.lock();
         let changed = if let Some(agent) = state.managed_agents.get_mut(agent_id) {
@@ -1713,7 +1713,7 @@ fn stamp_state_change_seq(previous: Option<&RuntimeSnapshot>, next: &mut Runtime
 
 /// origin 端点身份匹配:回执里记录过的每一维都必须与当前 pane agent 一致。
 /// `agent_id`/`generation`/`session_id` 在 begin_delegation 时至少有一维存在。
-#[allow(dead_code)] // 消费点 = take_delegation_callback(M7.5)。
+#[allow(dead_code)] // 消费点 = take_delegation_callback。
 fn delegation_endpoint_matches(endpoint: &RuntimeDelegationEndpoint, agent: &RuntimeAgent) -> bool {
     endpoint
         .agent_id
@@ -1729,7 +1729,7 @@ fn delegation_endpoint_matches(endpoint: &RuntimeDelegationEndpoint, agent: &Run
 }
 
 /// 按字符数截断(不是字节),超限补省略标记。
-#[allow(dead_code)] // 消费点 = complete_delegations_for_turn(M7.5)。
+#[allow(dead_code)] // 消费点 = complete_delegations_for_turn。
 fn truncate_chars(value: &str, max_chars: usize) -> String {
     let mut chars = value.chars();
     let mut truncated: String = chars.by_ref().take(max_chars).collect();

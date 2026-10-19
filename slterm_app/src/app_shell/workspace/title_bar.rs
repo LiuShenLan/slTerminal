@@ -1,6 +1,6 @@
 //! 自绘窗口标题栏:活跃 tab 展示名 + 最小化/最大化/关闭三钮 + 拖拽区。
 //!
-//! 壳重建(窗口三钮消息归窗口域,本步按 GPUI 窗口 API 直连留缝):
+//! 壳重建(窗口三钮消息归窗口域,本模块按 GPUI 窗口 API 直连留缝):
 //! - 标题数据源 = 活跃 tab 的展示名,当前取 `TabMeta.custom_name` 或聚焦
 //!   pane 的既有终端标题;`TabPresentation` 落地后替换这一处取值。
 //! - 拖拽区 = GPUI `WindowControlArea::Drag`(Windows 原生 HTCAPTION,
@@ -184,7 +184,7 @@ impl SltermWorkspace {
                 TitleBarCommand::Minimize => _window.minimize_window(),
                 TitleBarCommand::MaximizeToggle => _window.zoom_window(),
                 TitleBarCommand::Close => {
-                    // B50:自绘关闭钮绕过 OS 关闭请求,必须复用同一脏守卫;
+                    // 自绘关闭钮绕过 OS 关闭请求,必须复用同一脏守卫;
                     // 被拦截(确认在途/保存中)时什么都不做。
                     if self.guard_file_window_close(_window, cx) {
                         self.save_on_window_close(_window, cx);

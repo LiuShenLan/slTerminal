@@ -9,8 +9,7 @@
 //! 回调 premature 释放;任何失败只落日志,不影响终端。
 //!
 //! 测试构建一律不投递真实系统 toast(通知中心/桌面会话不可重复),真实面由
-//! `notify-test` 诊断命令与构建产物人工 smoke 兜底(豁免登记见
-//! `.claude/test-exemptions.md`)。
+//! `notify-test` 诊断命令与构建产物人工 smoke 兜底。
 
 pub(crate) type ToastActivation = std::sync::Arc<dyn Fn() + Send + Sync>;
 

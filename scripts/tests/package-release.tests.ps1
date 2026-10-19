@@ -15,7 +15,7 @@ $OutputEncoding = [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($f
 
 $repoRoot = (Get-Item (Join-Path $PSScriptRoot '../..')).FullName
 
-# 体积预算钉(D12-2):校准日期 2026-10-18,全量功能态 release 实测
+# 体积预算钉:校准日期 2026-10-18,全量功能态 release 实测
 # (opt-level="s" + 热路径 O3):
 #   setup.exe 实测 17899557 字节(17.07 MiB);未启用热路径 O3 时为 15.12 MiB
 #   zip       实测 23283760 字节(22.21 MiB);未启用热路径 O3 时为 19.29 MiB
@@ -138,7 +138,7 @@ function Invoke-BudgetSelfTest {
     }
 }
 
-# 新鲜度判据自测(B72):内容摘要 stamp 命中/拒绝、仅改注释重构建不假红、
+# 新鲜度判据自测:内容摘要 stamp 命中/拒绝、仅改注释重构建不假红、
 # stamp 缺失回退 mtime。夹具放 target/ 下(已忽略),dot-source 复用库函数。
 function Invoke-FreshnessSelfTest {
     $root = Join-Path $repoRoot "target/freshness-selftest-$([guid]::NewGuid().ToString('N'))"

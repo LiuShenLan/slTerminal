@@ -884,11 +884,11 @@ mod tests {
         }
     }
 
-    /// M3 行为钉(留位):agent 检测归 AI 集成域,回填前 `program` 参数
+    /// 行为钉(留位):agent 检测归 AI 集成域,回填前 `program` 参数
     /// 不消费——claude 的 LF 回退特判未落地,win32 记录模式下 shift+enter
     /// 与 codex/pwsh 同果(原生记录)。上游 claude→LF 的断言随 AI 集成域恢复。
     #[test]
-    fn claude_newline_fallback_defers_to_agent_detection_m3() {
+    fn claude_newline_fallback_defers_to_agent_detection() {
         let key = Keystroke::parse("shift-enter").unwrap();
         let mode = TermMode::WIN32_INPUT_MODE;
         // 回填前:任何 program 值与 None 同果。

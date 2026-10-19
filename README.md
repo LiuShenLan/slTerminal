@@ -8,15 +8,13 @@ slTerminal is a single-process GPUI application: one window, one instance, dark 
 
 - **Native terminal core** — VT parsing, ConPTY, scrollback, selection, copy/paste, shell integration and a bundled ConPTY fallback for Windows 10.
 - **Tabs and split panes** — terminal tabs, grid splits, pane zoom, drag-to-dock, session restore for terminal tabs.
-- **AI CLI integration** — detection rules for 27 AI CLI agents, hook installation for Claude Code / Kimi / Codex / Pi / OpenCode, agent status projection, Claude Code and Codex session history, and a runtime skill that lets agents discover the control plane.
+- **AI CLI integration** — screen detection rules for AI CLI agents, hook installation for Claude Code / Kimi / Codex / Pi / OpenCode, agent status projection, Claude Code and Codex session history, and a runtime skill that lets agents discover the control plane.
 - **Runtime API** — loopback JSON Lines control plane with a versioned envelope, `slterm ctl`, `slterm env`, resource verbs, and single-instance handover.
 - **Files and editing** — file explorer, code editor, Markdown and image tabs, read-only dual-pane diff, git gutter, Markdown math rendering and terminal math overlays.
-- **Settings and themes** — settings center with application/appearance/profiles/interaction/advanced/localization/reset and an agent group; eight built-in dark themes (Linear default); English and Chinese UI.
+- **Settings and themes** — settings center with application/appearance/profiles/interaction/advanced/localization/reset and an agent group; built-in dark themes (Linear default); English and Chinese UI.
 - **System integration** — tray icon, Windows toast notifications, taskbar progress, launch at login, window materials and wallpaper, update checks and downloads.
 - **Security** — credentials stay in Windows Credential Manager, audited settings writes, encrypted local backup with a strict allow-list.
 - **Packaging** — reproducible local release chain: Inno Setup installer, portable zip, SHA-256 checksums and a pinned size budget.
-
-Some sidebar views (navigation tree, commit view, agent global files) are registered placeholders; only the file explorer is fully wired in this release.
 
 ## Requirements
 
@@ -49,17 +47,20 @@ cargo test -p slterm --test lib_tests --features gpui-test-support -- --test-thr
 cargo clippy --workspace --all-targets
 cargo fmt --all -- --check
 python scripts/check_architecture.py
+python scripts/check_doc_policy.py full
 python scripts/check_brand_regress.py staged
 ```
 
-Use the explicit `lib_tests` target for filtered tests; `--lib` and bare filters may bypass the intended test manifest and fail with a zero-output crash. See `.claude/adr.md` ADR-0028.
+Use the explicit `lib_tests` target for filtered tests; `--lib` and bare filters may bypass the intended test manifest and fail with a zero-output crash. See `.claude/docs/testing/strategy.md`.
 
 ## Documentation
 
-- `CLAUDE.md` in `.claude/` — project rules and development constraints (module details load from the nearest directory `CLAUDE.md`).
+- `.claude/CLAUDE.md` — project rules and development constraints (module details load from the nearest directory `CLAUDE.md`).
 - `CONTEXT.md` — domain glossary.
-- `.claude/adr.md` — architecture decision records.
-- `.claude/test-exemptions.md` — registered test exemptions.
+- `.claude/docs/architecture/overview.md` — architecture, dependencies and ownership boundaries.
+- `.claude/docs/testing/strategy.md` and `.claude/docs/testing/exemptions.md` — test strategy and registered exemptions.
+- `.claude/docs/release/packaging.md` — release chain, size budget and compliance.
+- `.claude/docs/operations/commands.md` — full command matrix.
 - `assets/runtime-control-api.md` — bundled Runtime API reference; machine-readable schema at `assets/runtime-api-v1.schema.json`.
 - `release-notes/` — per-version release notes.
 - `CHANGELOG.md` — bilingual changelog, bundled with the installer and portable zip.

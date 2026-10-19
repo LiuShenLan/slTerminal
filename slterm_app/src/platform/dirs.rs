@@ -1,14 +1,14 @@
 //! 用户目录解析(照上游 platform/dirs.rs 落位)。
 //!
 //! 路径优先级唯一权威在 slterm_settings(`SLTERM_CONFIG_DIR` → 空串视为未设置 →
-//! `%APPDATA%\slterm`,D2 裁决值);本模块只缓存应用侧解析结果,不推导优先级。
+//! `%APPDATA%\slterm`,裁决值);本模块只缓存应用侧解析结果,不推导优先级。
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-/// 用户主目录。Windows 优先 `USERPROFILE`,回退 `HOME`(B65);空串视为
+/// 用户主目录。Windows 优先 `USERPROFILE`,回退 `HOME`;空串视为
 /// 未设置(登录管理器实踩过)。
-#[allow(dead_code)] // 消费点 = M3.2 初始 cwd 回退(显式目录无效时落 home)。
+#[allow(dead_code)] // 消费点 = 初始 cwd 回退(显式目录无效时落 home)。
 pub fn home_dir() -> Option<PathBuf> {
     home_dir_from(|name| std::env::var_os(name))
 }
@@ -45,7 +45,7 @@ fn resolve_data_dir() -> PathBuf {
     // 零依赖 settings crate 持有环境/OS 解析,app 侧只缓存(缝合点 1)。
     #[cfg(not(test))]
     let dir = slterm_settings::settings_dir();
-    // 测试构建默认隔离(B1):lib_tests 绝不写真实 `%APPDATA%\slterm`。
+    // 测试构建默认隔离:lib_tests 绝不写真实 `%APPDATA%\slterm`。
     // 进程内共享同一临时根,`data_dir()` 首用时清残留(pid 复用)。
     #[cfg(test)]
     let dir = std::env::temp_dir().join(format!("slterm-test-data-{}", std::process::id()));
@@ -68,7 +68,7 @@ mod dirs_tests {
         );
     }
 
-    /// B65:USERPROFILE 缺失时回退 HOME;空 USERPROFILE 不阻挡回退。
+    /// USERPROFILE 缺失时回退 HOME;空 USERPROFILE 不阻挡回退。
     #[test]
     fn home_dir_prefers_userprofile_and_falls_back_to_home() {
         use std::ffi::OsString;
@@ -85,7 +85,7 @@ mod dirs_tests {
         assert_eq!(home_dir_from(empty_userprofile), None);
     }
 
-    /// B1:测试构建的数据目录必须落在临时根,绝不触碰真实用户目录。
+    /// 测试构建的数据目录必须落在临时根,绝不触碰真实用户目录。
     #[test]
     fn data_dir_is_absolute_and_isolated_in_test_builds() {
         let dir = resolve_data_dir();

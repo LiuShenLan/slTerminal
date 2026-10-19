@@ -1,8 +1,7 @@
 //! Runtime API 行为级端到端。
 //!
 //! 条件跳过:需要真实桌面会话 + 预构建的 `slterm.exe`(经 `SLTERM_E2E_EXE`
-//! 显式指定;CI 无桌面/无产物时打印 SKIP 并计通过,登记于
-//! `.claude/test-exemptions.md` 条件跳过段)。真机串行:
+//! 显式指定;无桌面会话或无产物时打印 SKIP 并计通过)。真机串行:
 //! `SLTERM_E2E_EXE=target/debug/slterm.exe cargo test -p slterm --test runtime_conformance -- --test-threads=1`
 //!
 //! 覆盖:describe → snapshot → pane.prompt(提交后基线)→ pane.wait 全链;

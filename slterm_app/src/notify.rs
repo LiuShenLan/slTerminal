@@ -66,9 +66,9 @@ pub(crate) enum Notification {
         message: Option<String>,
         outcome: AiTurnOutcome,
     },
-    /// 启动期一次性汇总(恢复结果等,A10/A13):走漏斗但豁免前台门控。
+    /// 启动期一次性汇总(恢复结果等,/):走漏斗但豁免前台门控。
     RecoverySummary { text: String },
-    /// 进程级提示(B38):无 pane 归属、无动作按钮;走启动汇总通道豁免
+    /// 进程级提示:无 pane 归属、无动作按钮;走启动汇总通道豁免
     /// 前台门控。文本必须由领域类别生成,不得携带技术化合成命令。
     ProcessAlert { text: String },
 }
@@ -76,7 +76,7 @@ pub(crate) enum Notification {
 impl Notification {
     /// 命令收尾归一:非零退出无条件成失败(含短命令);被 hook 确认过的
     /// 短成功命令不再通知(hook 覆盖是权威)。
-    #[allow(dead_code)] // 消费点 = OSC 133;D 完成边接线(C1);先落纯函数。
+    #[allow(dead_code)] // 消费点 = OSC 133;D 完成边接线；先落纯函数。
     pub(crate) fn command_finished(
         program: Option<String>,
         duration: Duration,
@@ -400,7 +400,7 @@ pub(crate) struct DeliveryPlan {
     pub(crate) toast: Option<(String, String)>,
 }
 
-/// 漏斗状态:节流窗口 + 失败 episode。时钟注入使全部策略可在 L1 断言。
+/// 漏斗状态:节流窗口 + 失败 episode。时钟注入使全部策略可在单元层断言。
 #[derive(Default)]
 pub(crate) struct Funnel {
     last_toast: Option<Instant>,
@@ -430,7 +430,7 @@ impl Funnel {
         self.plan_with(notification, pane_id, focused, request, false, now)
     }
 
-    /// A13:启动期一次性汇总豁免①前台门控(其余节流层不变)。
+    /// 启动期一次性汇总豁免①前台门控(其余节流层不变)。
     pub(crate) fn plan_startup(
         &mut self,
         notification: &Notification,
@@ -518,7 +518,7 @@ fn application_activation(pane_id: Option<PaneId>) -> Option<ToastActivation> {
     })
 }
 
-// ─── M4.5 缝合:已接纳的 hook 事件 → 通知 ───────────────────────────────
+// ─── 缝合:已接纳的 hook 事件 → 通知 ───────────────────────────────
 
 /// 一条已通过 pane 路由/所有权门的 hook 事件 → (通知, 目标 pane)。
 /// TurnDone/NeedsAttention 之外的边不产生通知。信封缺 pane 时用调用方
@@ -548,7 +548,7 @@ pub(crate) fn deliver_gpui(notification: &Notification, pane_id: PaneId, cx: &Ap
     deliver_gpui_with_choices(notification, pane_id, None, cx);
 }
 
-/// A13:启动期一次性汇总——走漏斗(节流/闪烁统一),但豁免前台门控,
+/// 启动期一次性汇总——走漏斗(节流/闪烁统一),但豁免前台门控,
 /// 且不绑定 pane(点击不回窗)。
 pub(crate) fn deliver_startup_summary(notification: &Notification, cx: &App) {
     deliver_with(notification, PaneId(0), None, true, cx);
@@ -958,7 +958,7 @@ mod notification_tests {
         assert!(allowed.toast.is_some());
     }
 
-    /// A13:启动汇总走漏斗但豁免前台门控,且不闪烁、不绑定 pane 激活。
+    /// 启动汇总走漏斗但豁免前台门控,且不闪烁、不绑定 pane 激活。
     #[test]
     fn startup_summary_bypasses_the_foreground_gate_without_flashing() {
         let mut funnel = Funnel::new();
@@ -975,7 +975,7 @@ mod notification_tests {
         assert!(!plan.flash, "启动汇总不得闪烁任务栏");
     }
 
-    /// B38:进程级提示沿用启动汇总通道,标题取品牌、正文原样、不算 AI 来源。
+    /// 进程级提示沿用启动汇总通道,标题取品牌、正文原样、不算 AI 来源。
     #[test]
     fn process_alert_uses_the_brand_title_and_is_not_ai_sourced() {
         let notification = Notification::ProcessAlert {

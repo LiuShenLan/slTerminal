@@ -4,10 +4,10 @@
 //! fileViewers 注册表值集并入此判定(照上游同构,策略链机制不采纳)。
 //!
 //! 图片 tab:0.25×–8× 缩放、1.18 步进、指针锚点缩放、拖拽平移、后台 BGRA
-//! 解码与同路径 reload;绘制按当帧 bounds 换算(不依赖上一帧矩形)。M8.3 起
+//! 解码与同路径 reload;绘制按当帧 bounds 换算(不依赖上一帧矩形)。
 //! 图片 tab 持有独立焦点,工作区动作可到达。
 //!
-//! Document tab 自 M8.3 起是 [`TextFileView`] 的渲染态 + 源码态双模态。
+//! Document tab 自是 [`TextFileView`] 的渲染态 + 源码态双模态。
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -54,7 +54,7 @@ pub fn markdown_viewable(path: &Path) -> bool {
 }
 
 /// 双击路由单判定:图片 → markdown → 可映射源码;未命中交系统处理器
-/// (系统打开动作归 M8.4 file_tree 入口,本判定只回答「应用内能否打开」)。
+/// (系统打开动作归 file_tree 入口；本判定只回答「应用内能否打开」)。
 pub fn openable_in_app(path: &Path) -> bool {
     image_viewable(path) || markdown_viewable(path) || super::code_tab::viewable_file(path)
 }
@@ -192,7 +192,7 @@ fn image_dimensions(path: &Path) -> Result<(u32, u32), String> {
         .map_err(|error| format!("read image dimensions: {error}"))
 }
 
-/// 只读图片查看 tab(后台 BGRA 解码;M8.3 真实缩放/平移几何)。
+/// 只读图片查看 tab(后台 BGRA 解码;真实缩放/平移几何)。
 pub struct ImageTabView {
     pub path: PathBuf,
     pub title: String,

@@ -10,7 +10,7 @@
 //!
 //! `OverlayCell` 必须在与 `RenderSnapshot::capture` 相同的 `Term` 锁窗口内
 //! 从 Term cell 构造:快照的 `SnapCell` 不含 DIM,而推理样式过滤需要它
-//! (C22 裁定:同锁窗口构造,不给快照类型加字段)。
+//! (裁定:同锁窗口构造,不给快照类型加字段)。
 
 use std::ops::Range;
 use std::sync::Arc;
@@ -559,7 +559,7 @@ fn scan_cells_from_term<T: EventListener>(
                     fg
                 },
                 bg_alpha,
-                // C22:同一锁窗口从 Term cell Flags 取 DIM,SnapCell 不含该位。
+                // 同一锁窗口从 Term cell Flags 取 DIM,SnapCell 不含该位。
                 flags: cell.flags,
             });
         }

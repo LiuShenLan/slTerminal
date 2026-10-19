@@ -14,11 +14,11 @@ pub(crate) mod rasterizer;
 pub(crate) mod spacing;
 pub(crate) mod validate;
 
-#[allow(unused_imports)] // 消费点归 M9.5(markdown/终端呈现接线)。
+#[allow(unused_imports)] // 消费点 = markdown/终端呈现接线。
 pub(crate) use compile::{compile_formula, compile_formula_source};
-#[allow(unused_imports)] // 消费点归 M9.5(markdown/终端呈现接线)。
+#[allow(unused_imports)] // 消费点 = markdown/终端呈现接线。
 pub(crate) use parser::parse_formula;
-#[allow(unused_imports)] // 消费点归 M9.5(markdown/终端呈现接线)。
+#[allow(unused_imports)] // 消费点 = markdown/终端呈现接线。
 pub(crate) use validate::validate;
 
 /// 低于该字号的公式已不可读：调用方应放弃覆盖渲染，回退到原始源码文本。

@@ -7,10 +7,9 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
-# D11-1:每 crate 显式 test target——定向测试一律
+# 每 crate 显式 test target——定向测试一律
 # `cargo test -p slterm_terminal --test lib_tests <filter>`,禁 filter 直打
 # 默认 lib target(filter/--lib 会绕过 test=false 重建默认单测 target)。
-# 本步(M2.1)不含测试模块,lib.rs 暂为空测试入口;用例迁移归 M2.2。
 [lib]
 test = false
 
@@ -18,7 +17,7 @@ test = false
 name = "lib_tests"
 path = "src/lib.rs"
 
-# ConPTY 集成层(M2.4):真机真进程,独立 target 与 lib_tests 并存。
+# ConPTY 集成层:真机真进程,独立 target 与 lib_tests 并存。
 # 运行纪律:`cargo test -p slterm_terminal --test pty_integration_tests -- --test-threads=1`。
 [[test]]
 name = "pty_integration_tests"
@@ -28,7 +27,7 @@ path = "tests/pty_integration_tests.rs"
 default = ["serde"]
 serde = ["dep:serde", "bitflags/serde", "vte/serde"]
 
-# 生产依赖照上游清单裁剪:unix 三件套(rustix-openpty/rustix/signal-hook)
+# 生产依赖照上游清单裁剪:unix 组件(rustix-openpty/rustix/signal-hook)
 # 与 home(terminfo 探测)随裁剪删除。vte 0.15 走 crates.io 不 fork
 # (spec 采纳点 1),OSC 缺口由 osc_cwd tee 补齐。
 [dependencies]

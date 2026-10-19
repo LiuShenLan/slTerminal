@@ -21,7 +21,7 @@ fn recycle_bin_flags() -> u16 {
 }
 
 /// 把路径送进系统回收站(失败 = 权限/占用/路径消失,返回用户可读消息)。
-#[allow(dead_code)] // 消费点 = M8.5 文件树右键「删除」菜单;本步用例经注入通道直调。
+#[allow(dead_code)] // 消费点 = 文件树右键「删除」菜单;本模块用例经注入通道直调。
 pub(crate) fn send_to_recycle_bin(path: &Path) -> Result<(), String> {
     use std::os::windows::ffi::OsStrExt as _;
 

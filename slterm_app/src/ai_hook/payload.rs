@@ -241,7 +241,7 @@ fn sanitize_json(value: &Value, depth: usize) -> Value {
     }
 }
 
-/// 脱敏词表(SEC-18 纪律的一部分):命中即整值替换为 `[redacted]`。
+/// 脱敏词表(纪律的一部分):命中即整值替换为 `[redacted]`。
 /// 键名归一成纯小写字母数字再比对,扛 `apiKey`/`api_key`/`API-KEY` 等拼写。
 fn sensitive_context_key(key: &str) -> bool {
     let normalized = key

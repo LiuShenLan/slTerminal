@@ -678,7 +678,7 @@ mod completion_tests {
         assert_eq!(result.completion_items[0].insert, "a");
     }
 
-    /// B31 防复发:语义来源为 Branches 但 Git 缓存缺失时返回空候选,
+    /// 防复发:语义来源为 Branches 但 Git 缓存缺失时返回空候选,
     /// 绝不回退本会话历史 —— 历史候选不会凭空复活。
     #[test]
     fn missing_git_cache_for_semantic_source_never_falls_back_to_history() {

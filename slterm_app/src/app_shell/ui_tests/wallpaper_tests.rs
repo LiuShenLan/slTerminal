@@ -1,4 +1,4 @@
-//! B55 壁纸设置 UI(L4 虚拟窗口):路径/fit/alignment/cover/opacity 写入、
+//! 壁纸设置 UI(豁免层虚拟窗口):路径/fit/alignment/cover/opacity 写入、
 //! 拖动预览不落盘、取消与解码失败零写入。
 
 use super::*;

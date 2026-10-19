@@ -2,7 +2,7 @@
 //!
 //! 「终端色表」与「UI chrome 色」两套数据分离、各自单源;值静态,适配器
 //! 不得去饱和 accent 或合成第二条选中色带。仅暗色:亮成员与 `is_light`
-//! 语义不迁,目录 = 上游暗色子集 + Linear 默认主题(D06-3)。
+//! 语义不迁,目录 = 上游暗色子集 + Linear 默认主题。
 
 use crate::{ExactTermColors, Rgb8, Rgba8, TermTheme, ThemeName};
 
