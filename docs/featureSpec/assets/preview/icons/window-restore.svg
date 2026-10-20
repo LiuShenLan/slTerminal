@@ -1,0 +1,15 @@
+<!-- 项目自绘窗口控制图标，风格对齐 lucide-static：24×24 viewBox、currentColor 描边 -->
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="24"
+  height="24"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="2"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+ color="#E6E6E6">
+  <rect x="8" y="8" width="13" height="13" rx="2" />
+  <path d="M5 16H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h11a1 1 0 0 1 1 1v1" />
+</svg>

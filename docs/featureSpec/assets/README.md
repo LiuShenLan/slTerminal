@@ -4,7 +4,7 @@
 
 ## 目录说明
 
-- `icons/`：18 个界面 SVG 图标，原样复制；其中 16 个来自 lucide-static，2 个为项目自绘文件图标。
+- `icons/`：21 个界面 SVG 图标；其中 16 个来自 lucide-static，2 个为项目自绘文件图标，3 个为项目自绘窗口控制图标。
 - `cli-svg/`：22 个 CLI 品牌 SVG logo，原样复制。
 - `brand/`：`app-icon.png`，slTerminal 应用图标，256×256。
 - `preview/`：仅供文档深色预览使用的副本；原文件保持原样。
@@ -17,6 +17,7 @@
 - 16 个 lucide 图标来自 `lucide-static@1.31.0`，许可为 ISC；其中从 Feather 派生的图标同时适用 MIT。完整文本见 `LICENSE-lucide.txt`。
 - 图标内容与上游一致，仅按文档语义重命名文件；均为 24×24 viewBox、`currentColor` 描边。
 - `file-generic.svg` 与 `file-generic-typed.svg` 为项目自绘，许可随项目。
+- `window-minimize.svg`、`window-maximize.svg`、`window-restore.svg` 为项目自绘窗口控制图标，风格对齐 lucide（24×24 viewBox、2px 描边、`currentColor`），许可随项目。
 - `file-generic-typed.svg` 左缘类型色块以 `currentColor` 占位，实际颜色按扩展名分组，由实现侧注入。
 
 ### CLI logo
@@ -34,7 +35,7 @@
 
 `preview/` 只服务文档内嵌显示，不替代原文件。生成规则一次性执行，不保留脚本：
 
-- `preview/icons/`：18 个文件全部生成。在根 `<svg>` 增加 `color="#E6E6E6"`，保留 `currentColor` 与路径数据，使描边在暗色背景可读。
+- `preview/icons/`：21 个文件全部生成。在根 `<svg>` 增加 `color="#E6E6E6"`，保留 `currentColor` 与路径数据，使描边在暗色背景可读。
 - `preview/cli-svg/`：只为纯黑/深灰墨色文件生成。
   - `grok.svg`、`kilocode.svg`、`pi.svg`：根 `color` 改为 `#E6E6E6`。
   - `cline.svg`、`codex.svg`、`github-copilot.svg`：`#000` / `#000000` → `#E6E6E6`。
@@ -65,6 +66,9 @@
 | `icons/plus.svg` | lucide `plus` | ISC + MIT | 12px | preview | 当前规格未引用 |
 | `icons/refresh.svg` | lucide `refresh-cw` | ISC | 13px；14px（Agent 全局文件，示意） | preview | `workspace/navigation.md` · 界面结构与行；`sidebar/agent-files.md` · 入口、出口与焦点 |
 | `icons/search.svg` | lucide `search` | ISC + MIT | 12px | preview | `workspace/navigation.md` · 界面结构与行 |
+| `icons/window-minimize.svg` | 项目自绘窗口控制 | 随项目 | 12px | preview | `workspace/shell.md` · 窗口、标题栏与单实例 |
+| `icons/window-maximize.svg` | 项目自绘窗口控制 | 随项目 | 12px | preview | `workspace/shell.md` · 窗口、标题栏与单实例 |
+| `icons/window-restore.svg` | 项目自绘窗口控制 | 随项目 | 12px | preview | `workspace/shell.md` · 窗口、标题栏与单实例 |
 
 ## CLI logo 清单
 

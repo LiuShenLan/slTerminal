@@ -238,7 +238,7 @@
   - 右段：最小化、最大化/还原、关闭钮。
 - 左段与中段共同构成拖拽区，高度撑满标题栏；右段不参与拖拽。
 - 中段标题单行省略；没有活跃项目时仍保留全高拖拽区。
-- 窗口控制钮尺寸 38×26px、图标 12px、间距 2px、圆角 4px（契约）。最小化钮提示 `最小化`；最大化/还原钮按窗口实际状态显示 `最大化` 或 `还原`；关闭钮提示 `关闭`，悬停使用危险色，其余钮悬停使用次级背景色。关闭钮使用 `../assets/icons/close.svg`；最小化与最大化/还原钮无对应资产。
+- 窗口控制钮尺寸 38×26px、图标 12px、间距 2px、圆角 4px（契约）。最小化钮提示 `最小化`；最大化/还原钮按窗口实际状态显示 `最大化` 或 `还原`；关闭钮提示 `关闭`，悬停使用危险色，其余钮悬停使用次级背景色。窗口控制图标（12px）：最小化 <img src="../assets/preview/icons/window-minimize.svg" width="12" height="12" alt="最小化图标">（`../assets/icons/window-minimize.svg`）、最大化 <img src="../assets/preview/icons/window-maximize.svg" width="12" height="12" alt="最大化图标">（`../assets/icons/window-maximize.svg`）、还原 <img src="../assets/preview/icons/window-restore.svg" width="12" height="12" alt="还原图标">（`../assets/icons/window-restore.svg`）；关闭钮使用 `../assets/icons/close.svg`。
 - 最大化状态由窗口状态事件回查，不依赖按钮本地翻转；双击拖拽区、系统贴靠、拖动边框等路径产生的结果一致。
 - 窗口横向分为活动栏、侧栏区与主区。活动栏与侧栏区的尺寸、显隐、分隔线与内部布局由 [sidebar/framework.md](../sidebar/framework.md) 定义；主区占剩余宽度，最小 200px（契约），承载活跃项目的项目布局。
 - 主区没有项目级页签栏，项目切换入口在导航树。其他项目的布局隐藏但保持存活。
