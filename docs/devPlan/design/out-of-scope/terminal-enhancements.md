@@ -1,0 +1,112 @@
+# 终端增强迁移
+
+> 目标态实现级设计；需求真值源见 docs/featureSpec，裁决见 ../../spec-issues.md。
+
+> 职责：设计 Vi 模式、终端补全、数学覆盖层、AI 修复条在目标终端面板中的保留与回迁，以及提示符跳转删除和设置开关。
+
+### 终端面板扩展点
+
+终端面板持有 PTY 会话、网格与视图；增强能力通过统一 host 接入，不直接拥有终端状态：
+
+```rust
+enum KeyDisposition { Consumed, PassThrough }
+enum InputDisposition { Consumed, PassThrough }
+
+trait TerminalEnhancement {
+    fn on_key(&mut self, key: &Keystroke, phase: KeyPhase) -> KeyDisposition;
+    fn on_text_input(&mut self, text: &str, phase: InputPhase) -> InputDisposition;
+    fn on_command_submitted(&mut self, line: &str);
+    fn on_command_finished(&mut self, event: &CommandFinished);
+    fn paint_overlay(&mut self, frame: &mut TerminalPaintFrame);
+}
+```
+
+- 增强顺序固定：Vi 模式 → 补全 → AI 修复条按键；数学覆盖层只在绘制阶段运行。任何增强都不得修改网格、滚动位置、选区真值或复制文本；需要映射时使用终端 core 的投影函数。
+- 所有增强开关来自应用页；关闭后不注册按键、不启动后台计算、不绘制覆盖层。开关即时生效，按 2 秒去抖保存。
+
+### Vi 模式
+
+- 保留终端 core 的 Vi 光标、运动与选择重算；目标态补上可见入口与按键语义。
+- 入口：终端上下文命令 `terminal.toggle_vi_mode`，默认 `Ctrl+Shift+Space`，可在快捷键页重绑；Vi 激活时由终端消费，不发送 PTY。
+- 按键：
+  - `h/j/k/l`、`w/b/e`、`0/$`、`g/G`、`Ctrl+U/D` 移动 Vi 光标。
+  - `v` 开始/结束选择；选择使用现有终端选区模型与复制通道，`y` 复制并退出 Vi。
+  - `i`、`Esc` 退出 Vi；退出时保留选区，交由普通终端复制语义处理。
+  - 其他未识别键在 Vi 激活时透传还是消费需固定：仅上述运动/选择键被消费，其余键退出 Vi 后按普通终端处理，避免吞掉前台程序输入。
+- Vi 模式禁用条件：交替屏幕激活时不允许进入，命令返回失败并在终端显示非阻塞提示；光标样式仍为竖线，仅位置跟随 Vi 光标。
+- 状态为面板级运行期状态，不持久化；切换面板/项目保留，面板关闭丢弃。
+
+### 终端补全
+
+- 保留 `slterm_completions` 匹配引擎与 app 侧 `completion::Session`/`Request` 编排；来源只保留本地：命令历史、目录 frecency、Git 分支/修订、项目脚本、命令词表、路径。远程/SSH/WSL 来源不迁。
+- 按键路径零磁盘/子进程 I/O：只更新输入镜像、光标与缓存键；候选在后台执行器计算。缓存按面板持有，提交命令后失效；取消令牌贯穿文件遍历、历史扫描与 Git 子进程，取消后不得回填缓存或呈现部分结果。
+- 呈现形态保留 inline ghost、popup、hybrid；`terminal.completion.style` 选择形态。`Esc` 关闭当前行补全；`Tab`/方向键/Enter 的接受规则沿用现有状态机；接受时写回 PTY 使用与真实按键同一编码器。
+- 输入镜像在光标移动、历史召回、中线删除后标记不可信；Enter 提交只在可信、非空、无控制字符且非交替屏幕/Vi 时记录历史与使缓存失效。
+- 数据文件迁至 `state/completion/history.jsonl` 与 `state/completion/directories.json`；历史池与目录 frecency 只在本机使用。
+- 交替屏幕、Vi 模式、终端退出、助手建议条打开时，补全不得抢占按键或显示过期候选。
+
+### 数学覆盖层
+
+- 保留 `terminal_math` 的有界扫描、`LineProjection`、`CoverageMask` 与绘制计划；终端仍是真值，覆盖层只替换可见公式定界符跨度，不修改 cell、滚动、光标、选区或复制文本。
+- 保留全部扫描预算：可见公式、持久公式、持久字节、历史回看行、裸括号/方括号搜索行、整帧裸搜索 cell 预算、空行借用与高度溢出容差；不得放宽。失败候选保留原文，不遮不画。
+- 投影必须与终端 reflow/选区使用同一裁决；选区把公式跨度当原子并映射源边界；绘制数据在同一终端锁窗口内构造，锁外只消费快照。
+- 每面板一个 `TerminalMathState`；面板克隆/PTY 重连重建状态，不跨会话携带绝对网格锚点。
+- 设置开关 `terminal.enhancements.math` 关闭后跳过扫描与绘制；重新开启时从当前可见帧重建，不补历史。
+- 上屏字形观感由人工目测兜底；自动化只断言结构、覆盖遮罩与源格映射。
+
+### AI 修复条
+
+- 详细触发、凭据与请求见 AI 设计。终端侧只保留接线：`on_command_finished` 进入门链；建议条覆盖在内容区底部，不改变网格与焦点；`Pending`、`Ready`、`Failed` 三态渲染；`Ctrl+.` 贴入、`Esc` 关闭、可打印输入撤条。
+- 建议条存在时补全候选不得显示；接受建议不让补全立即复现，直到下一次真实输入。
+- 开关 `terminal.enhancements.ai_fix` 关闭或 `ai.assistant.enabled=false` 时不注册 `Ctrl+.`、不请求、不显示条。
+- 失败原因（缺 provider、缺凭据、后端错误）以条面显示，不只写日志。
+
+### 提示符跳转删除
+
+- 删除 `slterm_prompt_jump` 与提示符行标记 deque；删除相关按键、命令、文档与测试。
+- 保留 OSC 133 解析出的命令开始/结束、提示符活动态、输入边界、标题/状态/退出码；这些是 Shell 集成与命令修复的基础，不得随跳转一起删除。
+- 验收断言不存在跳转 API、按键绑定、设置项或恢复分支；`acceptance.md` 已登记“不提供按命令块跳转”。
+
+### 设置开关
+
+| 键 | 默认 | 生效范围 |
+|---|---|---|
+| `terminal.enhancements.vi` | 开 | 注册 Vi 切换命令与按键；关闭后 Vi 不可进入 |
+| `terminal.enhancements.completion` | 开 | 关闭后无 ghost/popup、无后台计算、无历史记录 |
+| `terminal.completion.style` | inline | inline/popup/hybrid 形态切换，立即作用于当前面板 |
+| `terminal.enhancements.math` | 开 | 关闭后跳过数学扫描与覆盖绘制 |
+| `terminal.enhancements.ai_fix` | 开 | 仅在助手启用时有效；关闭后无按键/请求/建议条 |
+
+### 依赖里程碑
+
+- 终端面板、面板扩展点与设置应用页。
+- 终端 core 的 Vi 状态、OSC 133 命令生命周期与选择投影。
+- AI 服务（AI 修复条）。
+- 持久化协调器（补全历史与目录数据）。
+
+### 迁移顺序
+
+1. 终端面板接管 PTY/网格/视图；接入扩展 host 与开关。
+2. 删除提示符跳转 API、标记存储与测试，保留命令生命周期。
+3. 回迁 Vi 模式入口与按键。
+4. 回迁补全编排、缓存与数据路径；先接 inline，再接 popup/hybrid。
+5. 回迁数学覆盖层与绘制预算。
+6. 回迁 AI 修复条接线（依赖 AI 服务）。
+7. 删除旧 pane 视图中的增强接线与旧设置键。
+
+### 测试与验收
+
+- Vi：切换/退出、运动、选择与复制、交替屏幕拒绝、未识别键透传、不向 PTY 发送 Vi 按键。
+- 补全：按键路径零 I/O、缓存按面板失效、取消后不回填、只本地来源、ghost/popup/hybrid 接受、Esc 关闭、交替屏幕/Vi 抑制、IME 输入镜像。
+- 数学：扫描预算边界、投影与 reflow/选区同裁定、只遮源格、失败保留原文、开关关闭不扫描。
+- AI 修复条：门链、seq 过期、三态渲染、按键语义、关闭开关无请求。
+- 提示符跳转：源码符号不存在、无按键绑定、无设置项、无恢复分支。
+- 设置：开关即时生效、保存失败提示、重启恢复。
+
+### 不可自动化面
+
+- Vi 按键手感、选择与滚动手感。
+- 数学公式与代码块的实际字形观感、公式渲染质量。
+- 补全弹窗与 ghost 的视觉舒适度、候选排序主观质量。
+- AI 建议质量与危险命令判定准确率。
+- 真实输入法组合态与终端前台 TUI 的按键交互。

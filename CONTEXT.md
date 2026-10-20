@@ -6,24 +6,30 @@
 
 ### 产品与工作区
 
-**工作区**（Workspace）：
-单窗口内的根 UI 与状态权威（`SltermWorkspace`），直持标签页、窗格与展示态。应用进程的一次运行即一个工作区。
-_Avoid_: 多工作区, 项目工作区
+**项目**（Project）：
+顶层容器，对应一个根目录，拥有稳定 `ProjectId`；根路径词法唯一并做真实路径查重。项目列表持久化。
+_Avoid_: 工作区, 根目录条目
 
-**标签页**（Tab / WorkspaceTab）：
-工作区中的顶层容器，封闭类型集为终端 / 设置 / 文档 / 源码 / 图片。标签页有稳定 `TabId`，跨排序与活跃切换不变。
-_Avoid_: 页签, 页面
+**项目布局**（ProjectLayout）：
+项目对应的网格布局树，叶为面板组；每项目恰好一个，多项目布局同时存活，切换只改变可见性。
 
-**窗格**（Pane）：
-终端标签页内的分屏单元，对应一个 `TerminalView` 与一个 PTY 会话。`PaneId` 全工作区唯一、终生不复用。
-_Avoid_: 面板, 视图
+**面板组**（PanelGroup）：
+布局树中的页签组，拥有独立页签栏与激活面板；空组自动移除。
 
-**分屏树**（SplitTree）：
-描述窗格布局的二叉树，叶 = `PaneId`；切割数学、拖拽比例与方向导航由 `slterm_split` 纯函数裁定。
-_Avoid_: 布局树
+**面板**（Panel）：
+面板组内的页签条目，封闭类型为终端、编辑器、Markdown、Diff、GitShow、设置中心；有稳定 `PanelId`。
 
-**会话快照**（Session Snapshot）：
-落盘于 `session.json` 的工作区恢复数据；只收终端标签页（含分屏树、启动身份、WindowState、侧栏现场），不收设置与纯视图标签页。
+**活跃项目**（Active Project）：
+主区当前显示的项目；项目集合非空时恰好一个。
+
+**项目根**（Project Root）：
+项目对应根目录；文件打开、文件浏览器、Commit 与新建终端的基准。
+
+**设置中心**（Settings Center）：
+项目内普通面板，每项目最多一个；无项目时由应用设置浮层承载应用页。
+
+**应用设置浮层**（App Settings Overlay）：
+无项目时打开的仅含应用页的模态覆盖层；不复用项目布局。
 
 **WindowState**：
 窗口大小/位置/最大化状态；语义是启动回放的行为输入，不是诊断字段。
@@ -37,13 +43,15 @@ _Avoid_: 布局树
 **双槽**（Top Zone / Bottom Zone）：
 侧栏内容的上下两个半区；同一半区最多一个打开的视图，展示由状态纯推导。
 
+> 旧 workspace / tab / pane / session.json 模型已退役；其术语与处置只出现在 `docs/devPlan/design/migration.md`。
+
 ### 终端与 PTY
 
 **终端视图**（TerminalView）：
-GPUI 中的终端呈现实体：接收 PTY 输出、驱动网格渲染、处理输入与选择。每个视图对应一个 pane。
+GPUI 中的终端呈现实体：接收 PTY 输出、驱动网格渲染、处理输入与选择。每个视图对应一个终端面板。
 
 **PTY 会话**：
-`slterm_terminal` 管理的伪终端进程实例（ConPTY、读写线程、子进程与生命周期）。与「标签页」「窗格」是不同概念。
+`slterm_terminal` 管理的伪终端进程实例（ConPTY、读写线程、子进程与生命周期）。与「面板组」「面板」是不同概念。
 
 **Shell 解析**：
 默认 shell 的探测链——PowerShell 7 → Windows PowerShell 5.1 → `cmd.exe`；用户可在设置中覆盖。
@@ -65,8 +73,8 @@ Win10（build < 21376）下嵌入并提取的新版 `conpty.dll` + `OpenConsole.
 
 ### 设置与外观
 
-**设置中心**（SettingsPane）：
-统一配置入口的标签页，左侧导航 + 右侧配置页；配置页经注册表分派。新增配置页 = 组件 + 注册一条。
+**设置中心**（Settings Center）：
+项目内普通面板，左侧导航 + 右侧配置页；每项目最多一个；无项目时由应用设置浮层承载应用页。配置页经注册表分派，新增配置页 = 组件 + 注册一条。
 
 **设置段**（Settings Segment）：
 `settings.json` 的语义分组；「键 → 段」映射单源在 `slterm_settings::keys`，未知键原位保留。
@@ -104,10 +112,10 @@ UI 背景色的离散档位；层级靠相邻档差表达，不叠加阴影/边�
 AI CLI 的封闭身份枚举；承载 slug、显示名、启动/恢复/分叉命令与屏幕规则匹配。持久化 `source` 宽松落盘，消费时经 `AgentKind::parse` 严格归一。
 
 **Agent 状态**（AgentStatus）：
-pane 的 agent 语义状态：Idle / Working / Blocked / Done / Unknown；来源分为 Hook / Screen / Process / Unknown。`Unknown` 表示尚无权威判定（普通 shell 或未识别）。
+面板的 agent 语义状态：Idle / Working / Blocked / Done / Unknown；来源分为 Hook / Screen / Process / Unknown。`Unknown` 表示尚无权威判定（普通 shell 或未识别）。
 
 **AgentHub**：
-agent 事件归属与 pane 状态投影的宿主：消费 hook 事件与屏幕看门狗结果，维护 AgentActivity/AnswerInbox。
+agent 事件归属与面板状态投影的宿主：消费 hook 事件与屏幕看门狗结果，维护 AgentActivity/AnswerInbox。
 
 **AI hook 事件**（AiHookEvent）：
 归一化的生命周期事实（会话开始、提示提交、工具完成、回合结束、需要关注、会话结束），附回合结果与能力位。
@@ -128,7 +136,7 @@ statusline 用量等低频信号的介质；app 数据目录，与命名管道�
 statusline 桥接产出的用量事件，payload 携带 `usedPercentage`。
 
 **SLTERM_PANE_ID**：
-PTY spawn 注入子进程的环境变量，经 shell → CLI → hook 继承链传递，用于会话→pane 路由。
+PTY spawn 注入子进程的环境变量，经 shell → CLI → hook 继承链传递，用于会话→面板路由；v2 使用 `SLTERM_PANEL_ID`。
 
 **历史会话**（AiSession）：
 编码 CLI 在某目录运行产生的持久化会话记录（claude 为 `~/.claude/projects/` 下 `<uuid>.jsonl`），由各 CLI 的扫描/恢复命令处理。
@@ -139,22 +147,22 @@ hook 执行失败时的合成命令与证据；默认关（复用 `AssistantConf
 ### Runtime 控制面
 
 **Runtime API**：
-本机 loopback 上的 JSON Lines 控制面，供 AI CLI 与脚本查询/驱动终端；协议名 `slterm.runtime`，首发版本 1。
+本机 loopback 上的 JSON Lines 控制面，供 AI CLI 与脚本查询/驱动终端；协议名 `slterm.runtime`，目标版本 2；v1 已退役，不保留兼容层。
 
 **信封**（Envelope）：
 请求/响应的统一外层：`protocol`/`version`/`id`/`token`/`method`/`params`；响应以 `ok` + `result` 或 `error` 互斥表达。
 
 **端点发现**：
-进程内子端点 > `SLTERM_RUNTIME_ENDPOINT` 环境变量（`<port> <token>`）> 数据目录 `runtime.port`。
+进程内子端点 > `SLTERM_RUNTIME_ENDPOINT` 环境变量（`<port> <token>`）> 数据目录 `state/runtime.port`。
 
 **CLI 双人格**：
-同一 `slterm.exe`：带子命令 = CLI 客户端，无子命令 = GUI。`slterm ctl` 暴露完整协议，资源动词（`window`/`tab`/`pane`/`agent`）为同一信封上的薄别名，`slterm env` 离线报告身份与端点。
+同一 `slterm.exe`：带子命令 = CLI 客户端，无子命令 = GUI。`slterm ctl` 暴露完整协议，资源动词（`window`/`project`/`panel-group`/`panel`/`agent`）为同一信封上的薄别名，`slterm env` 离线报告身份与端点。
 
 **RuntimeHub / RuntimeDispatch**：
 Runtime API 的宿主侧枢纽：接收写命令、派发到工作区执行、经回执通道返回结果。
 
 **单实例移交**：
-第二个实例启动时不建窗，改为唤起既有实例；移交走版本化 JSON（`window.focus` + `tab.new`）。旧式 `ATTACH/PING` 回落由 `legacy-attach` feature 控制，首发关闭。
+第二个实例启动时不建窗，改为唤起既有实例；移交走版本化 JSON，载荷为仅聚焦、打开项目、打开文件或新建终端；目标不存在时提示，不自动创建项目。
 
 **Runtime skill**：
 随包分发的 `slterm-runtime` Skill（`assets/skills/`），提供给 AI CLI 自发现控制面；安装器按受管文件指纹投放。
@@ -164,11 +172,11 @@ Runtime API 的宿主侧枢纽：接收写命令、派发到工作区执行、�
 **文件编辑器**（file_editor）：
 内置源码/文本编辑内核与视图：文档模型、撤销、选择、输入规则、gutter、outline、预览/并排形态。
 
-**源码标签页 / 文档标签页 / 图片标签页**：
-`WorkspaceTab::Code` / `Document` / `Image`；文件打开路由由 `openable_in_app` 单判定。
+**编辑器面板 / Markdown 面板**：
+`PanelKind::Editor` / `Markdown`；文件打开路由由单一路由判定；图片不进入面板封闭集，走系统默认程序。
 
-**Diff 标签页**：
-只读双栏对照（HEAD ↔ 工作区），复用 `WorkspaceTab::Code` 的 Diff 模式；gutter 点击与重开命中走 `open_diff_tab` 单入口。
+**Diff 面板**：
+HEAD ↔ 工作区双栏或行内对照，工作区侧可编辑；gutter 点击与重开命中走单入口。
 
 **Gutter**：
 编辑器行号区，按 git 状态显示增删改标记；点击打开对应 diff。
@@ -222,7 +230,7 @@ Runtime API 的宿主侧枢纽：接收写命令、派发到工作区执行、�
 通用错误信封；变体与转换以类型定义为准。领域不得另立 envelope，错误消息用户可见且禁带凭据。
 
 **会话元数据索引**（terminal_registry）：
-模块级单例，按 `PaneId` 提供会话元数据查询；Workspace 是实体唯一属主，索引不裁决生命周期。
+模块级单例，按 `PanelId` 提供会话元数据查询；Workspace 是实体唯一属主，索引不裁决生命周期。
 
 **原子写**：
 持久化通用纪律——临时文件 + rename；损坏状态处理；设置写经审计包装。
