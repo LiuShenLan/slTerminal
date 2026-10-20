@@ -40,10 +40,11 @@
 - Changes 包含已跟踪路径的 added、modified、deleted、renamed、conflict。无法识别的已跟踪状态也归入 Changes，使用中性色与文字标签 `未知`，工具提示显示原始状态码。
 - Unversioned Files 仅包含 untracked 文件。普通未跟踪目录展开为逐个文件行，不显示目录行；嵌套 Git 仓库与子模块按单条目显示，不递归内部。
 - renamed 只产生一行，显示新路径；工具提示显示 `旧路径 → 新路径`，不拆成删除行与新增行。
-- ignored 默认不显示、不计数。ignored 开关开启后显示 `已忽略（N）` 独立分区：按仓库返回的忽略路径条目展示，目录条目显示为目录行且不递归展开内部；该分区条目不计入 Changes 或 Unversioned Files 的计数，也不计入任何变更总数。
-- 分组标题固定为 `Changes (N)`、`Unversioned Files (N)`、`已忽略（N）`。N 为该组当前过滤后的条目数，无过滤时等于该组条目总数；折叠不改变计数；英文标题不随单复数变化。
+- ignored 默认不显示、不计数。ignored 开关开启后显示 `已忽略（N）` 独立分区：按仓库返回的忽略路径条目展示，目录条目显示为目录行 <img src="../assets/preview/icons/folder.svg" width="14" height="14" alt="文件夹图标">（`../assets/icons/folder.svg`，14px，示意）且不递归展开内部；该分区条目不计入 Changes 或 Unversioned Files 的计数，也不计入任何变更总数。
+- 分组标题固定为 `Changes (N)`、`Unversioned Files (N)`、`已忽略（N）`；标题前的折叠箭头在展开时为 <img src="../assets/preview/icons/chevron-down.svg" width="12" height="12" alt="展开箭头">（`../assets/icons/chevron-down.svg`，12px，示意），折叠时为 <img src="../assets/preview/icons/chevron-right.svg" width="12" height="12" alt="折叠箭头">（`../assets/icons/chevron-right.svg`，12px，示意）。N 为该组当前过滤后的条目数，无过滤时等于该组条目总数；折叠不改变计数；英文标题不随单复数变化。
 - 折叠只改变行可见性，不改变计数、排序或数据。
 - 每行包含：
+  - 文件图标 <img src="../assets/preview/icons/file-generic-typed.svg" width="14" height="14" alt="文件图标">（`../assets/icons/file-generic-typed.svg`，14px，示意）。
   - 状态文字标签与语义色。Changes 标签为 `新增`、`修改`、`删除`、`重命名`、`冲突`、`未知`；Unversioned Files 为 `未跟踪`；已忽略分区为 `已忽略`。
   - 文件名。
   - 父目录相对路径后缀；文件位于仓库根层时不显示。

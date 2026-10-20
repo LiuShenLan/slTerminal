@@ -36,7 +36,7 @@
 - 左导航组序固定：先 `全局`，后 `Agent`；不新增独立的项目组。
 - `全局` 组依次为：快捷键、后台定时任务、外观、终端。
 - `Agent` 组按已注册 CLI 分节：
-  - 每个分节显示 CLI 品牌 logo（14×14）与显示名称。
+  - 每个分节显示 CLI 品牌 logo <img src="../assets/cli-svg/claude.svg" width="14" height="14" alt="CLI 品牌 logo 示例">（按 AgentKind 取 `../assets/cli-svg/<slug>.svg`，14×14）与显示名称；无品牌资产的 CLI 只显示名称。
   - 分节标题不是配置页入口；点击只折叠或展开该分节，不改变选中页。
   - 分节下缩进显示该 CLI 的配置页：`基础配置` 与 `Hooks` 恒有；`Hooks` 在未声明配置编辑器能力时显示提示态。
   - 没有任何 Agent 配置页时，Agent 组整组不渲染。

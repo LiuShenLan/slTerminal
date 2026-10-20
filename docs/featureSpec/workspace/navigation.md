@@ -15,8 +15,8 @@
 
 | 分区 | 内容 | 滚动 |
 |---|---|---|
-| 顶部标题行 | 左「导航」，右刷新按钮（悬停「刷新导航数据」） | 固定 |
-| 搜索区 | 放大镜图标输入框，占位「搜索项目 / 会话…」，右侧清除按钮 | 固定 |
+| 顶部标题行 | 左「导航」，右刷新按钮 <img src="../assets/preview/icons/refresh.svg" width="13" height="13" alt="刷新图标">（`../assets/icons/refresh.svg`，13px，示意；悬停「刷新导航数据」） | 固定 |
+| 搜索区 | 放大镜图标 <img src="../assets/preview/icons/search.svg" width="12" height="12" alt="搜索图标">（`../assets/icons/search.svg`，12px，示意）输入框，占位「搜索项目 / 会话…」，右侧清除按钮 | 固定 |
 | 树区 | 项目行、活跃会话、历史会话、「未归属会话」节点 | 纵向滚动；无横向滚动 |
 | 套餐余量页脚 | 满足条件时显示，位于树区与底部操作区之间 | 固定 |
 | 底部操作区 | 分隔线 + 全宽「添加项目」按钮 | 固定 |
@@ -41,14 +41,14 @@
 
 项目行：
 
-- 主行：展开箭头、文件夹图标、显示名、「当前」标签（仅活跃项目）、运行中会话数徽标（大于 0 时显示，超过 99 显示 `99+`）、根目录警示图标（不可访问时）。
+- 主行：展开箭头、文件夹图标 <img src="../assets/preview/icons/folder.svg" width="14" height="14" alt="文件夹图标">（`../assets/icons/folder.svg`，14px，示意）、显示名、「当前」标签（仅活跃项目）、运行中会话数徽标（大于 0 时显示，超过 99 显示 `99+`）、根目录警示图标 <img src="../assets/preview/icons/alert-triangle.svg" width="15" height="15" alt="警示图标">（`../assets/icons/alert-triangle.svg`，15px，示意；不可访问时）。
 - 副行：项目根路径，次要文本，单行截断。
 - 悬停：完整显示名 + 完整根路径。
 - 重命名允许显示名重复；创建时重名追加递增数字后缀；项目身份是归一化后的根路径，副行与悬停提示用于消歧。
 
-活跃会话行：可选状态圆点、CLI 品牌图标、会话标题、右侧迷你用量条（32×3 像素，设计契约）与用量百分比。
+活跃会话行：可选状态圆点、CLI 品牌图标 <img src="../assets/cli-svg/claude.svg" width="14" height="14" alt="CLI 品牌图标示例">（按 AgentKind 取 `../assets/cli-svg/<slug>.svg`，14px，设计契约）、会话标题、右侧迷你用量条（32×3 像素，设计契约）与用量百分比；无品牌资产时只显示标题。
 
-历史会话节点行：展开箭头、时钟图标、「历史会话」、计数徽标（超过 99 显示 `99+`）。
+历史会话节点行：展开箭头、时钟图标 <img src="../assets/preview/icons/history.svg" width="14" height="14" alt="时钟图标">（`../assets/icons/history.svg`，14px，示意）、「历史会话」、计数徽标（超过 99 显示 `99+`）。
 
 历史会话行：状态圆点、CLI 品牌图标、标题、右侧相对时间。
 
@@ -349,7 +349,7 @@
 
 - 显示条件：套餐余量后台任务启用且至少配置一个来源；页脚上方有分隔线。
 - 后台任务禁用或来源为空时整个页脚隐藏；底部操作区分隔线保留。
-- 每个来源一行：14×14（设计契约）品牌图标 + 一行文案；图标加载失败时隐藏图标只保留文案。
+- 每个来源一行：14×14（设计契约）品牌图标 + 一行文案；图标加载失败时隐藏图标只保留文案。套餐来源示例：DeepSeek <img src="../assets/cli-svg/deepseek.svg" width="14" height="14" alt="DeepSeek 图标">（`../assets/cli-svg/deepseek.svg`）、Kimi <img src="../assets/cli-svg/kimi.svg" width="14" height="14" alt="Kimi 图标">（`../assets/cli-svg/kimi.svg`）。
 - 页脚不显示标题，不把来源名称作为可见文本；来源名称可出现在悬停提示中。
 - 行有悬停高亮，可点击、可用键盘聚焦。
 

@@ -29,6 +29,7 @@
 | Agent 全局文件 | 上槽 | 第四 | `Ctrl+Shift+A` |
 
 - 每个内置视图包含：稳定标识、显示名称、图标（主题语义 token）、默认槽位、默认顺序、单例约束，以及需要跨重启保留的界面状态清单。
+- 视图按钮图标（15px，示意）：导航树 <img src="../assets/preview/icons/activity-nav.svg" width="15" height="15" alt="导航树图标">（`../assets/icons/activity-nav.svg`）、文件浏览器 <img src="../assets/preview/icons/activity-explorer.svg" width="15" height="15" alt="文件浏览器图标">（`../assets/icons/activity-explorer.svg`）、Commit <img src="../assets/preview/icons/activity-commit.svg" width="15" height="15" alt="Commit 图标">（`../assets/icons/activity-commit.svg`）、Agent 全局文件 <img src="../assets/preview/icons/activity-agent-files.svg" width="15" height="15" alt="Agent 全局文件图标">（`../assets/icons/activity-agent-files.svg`）。
 - 视图始终为单例；同一视图不能同时出现在上下两槽。
 - 视图集合在运行期不变；用户不能新增、删除或重命名视图；显示名称由注册固定。
 - 版本升级可以注册新的内置视图；运行期不因集合变化触发按钮重排。
@@ -57,7 +58,7 @@
 
 配置钮：
 
-- 固定位于活动栏最底部，34×34px，图标 15px；悬停提示为 `设置中心`。
+- 固定位于活动栏最底部，34×34px，图标 <img src="../assets/preview/icons/activity-config.svg" width="15" height="15" alt="设置中心图标">（`../assets/icons/activity-config.svg`，15px，示意）；悬停提示为 `设置中心`。
 - 不参与拖拽、排序、换区与持久化。
 - 状态包括默认、悬停、按下与激活；激活时显示与视图按钮同规格的左侧 2px 竖条与强调色图标。
 - 激活态语义：活跃项目的项目布局中存在设置中心面板，且该面板是其所在面板组的当前面板；该面板组是否聚焦不影响激活态。

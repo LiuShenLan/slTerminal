@@ -27,7 +27,7 @@
 - 面板标题为 `文件名(git delete)`：文件名与后缀直接拼接，中间无空格；后缀固定英文，不随界面语言变化。
 - 同一项目内存在多个同名文件的 GitShow 面板时，标题改用相对路径拼接后缀；冲突出现或消失时自动重算。冲突判定忽略大小写。
 - 冲突消歧优先使用相对项目根的路径；文件不在项目根下时使用相对仓库根的路径。标题悬停显示仓库内完整路径。
-- 面板图标按文件扩展名显示；未知扩展名显示通用文件图标。
+- 面板图标按文件扩展名显示 <img src="../assets/preview/icons/file-generic-typed.svg" width="14" height="14" alt="带类型标识的文件图标">（`../assets/icons/file-generic-typed.svg`，14px，示意）；未知扩展名显示通用文件图标 <img src="../assets/preview/icons/file-generic.svg" width="14" height="14" alt="通用文件图标">（`../assets/icons/file-generic.svg`，14px，示意）。
 - 标题不持久化，恢复时按当前同项目同名冲突重新计算。
 
 ### HEAD 内容读取
