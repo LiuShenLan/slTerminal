@@ -211,10 +211,26 @@
 | Runtime v1 | 删除；v2 不保留兼容层。 |
 | 旧数据迁移 | 删除；新状态根从默认值开始；旧文件不读不删。 |
 
-## 五、验证
+## 五、优化轮裁决（施工图收敛）
+
+| 主题 | 裁决 |
+|---|---|
+| 文档所有权 | 每个契约只保留一个所有者：协议归 `design/integrations/runtime-api-v2.md`；应用页归 `design/settings/app-page.md`；窗口/单实例/托盘/系统通知归 `design/platform-windows.md`；侧栏与状态 schema 归 `design/persistence.md`；焦点/命令归 `design/ux-framework.md`；通知/错误归 `design/cross-cutting.md`；ID 归 `design/domain-model.md`；主题/语言归 `design/theme-and-i18n.md`；诊断归 `design/diagnostics.md`。`design/out-of-scope/` 只保留迁移增量，不复制契约。 |
+| 应用页范围 | 规格范围内交付页壳、全局组顺序、节序、自动保存、通知开关、诊断与 Runtime API 只读不可用状态；界面语言、更新、托盘与开机启动、AI Providers/助手、备份与恢复、终端增强为只读占位或禁用态。诊断动作合并为版本/构建、数据/日志目录、配置健康、复制诊断信息、打开目录/日志、通知自检、一键清理；清理范围不含恢复快照。无项目浮层补导入/导出/恢复所有默认，项目激活后自动关闭。 |
+| 无障碍与对比度 | 删除 WCAG/对比度准入校验与自动回退；保留“明显不可读时提示、不静默改写用户设置”。删除屏幕阅读器/角色/实时播报/200% 文本缩放等专用条款与现有对比度实现；保留键盘、焦点环、IME/CJK、减少动效与 24×24 命中区。 |
+| 旧模型处置 | `legacy-shell` feature + `check_legacy_symbols` allowlist；旧代码默认不编译；主线始终可编译，里程碑边界门禁全绿；每个域验收后增量删除旧实现，最终里程碑只做 legacy-shell 清理与门禁重登记。单实例锁统一 `instance.lock`。 |
+| 计划结构 | 依赖关系以“里程碑全名 → 直接依赖”表为唯一来源，删除树形依赖图；每个里程碑增加退出条件；新增 Hooks 引擎、诊断与日志、构建与打包基线三个里程碑；垂直切片扩展为多项目切换、隐藏项目 PTY 存活、设置/布局持久化、崩溃快照、焦点恢复与关闭守卫。 |
+| Runtime v2 | 以 `design/integrations/runtime-api-v2.md` 为唯一契约源；ID 为 `project:<n>`/`group:<n>`/`panel:<n>`；环境变量 `SLTERM_PANEL_GROUP_ID`；端口文件 `slterm.runtime/2 <port> <token> <pid>`；移交方法 `runtime.handover`；写命令用 `mutation_id` + 可选 `expected_revision`；错误码 `idempotency_conflict`/`revision_conflict`；不提供 `window.*` 方法；未知资源 `resource_not_found`；快照面板 DTO 不暴露原始参数；冲突快照不入快照与布局。移交载荷以根路径定位。 |
+| 窗口几何与静默启动 | 窗口几何保持范围外迁移能力，`design/platform-windows.md` 为所有者，迁移后使用 `state/window.json`；规格内关闭链不冲刷几何。首版不做静默启动；删除 `app.startup.silent` 与 `launch_at_login` 持久键，开机启动状态只读 Startup 快捷方式。窗口最小 760×540，内容最小宽 406px。 |
+| 交互语义 | 焦点意图与协调归 `design/ux-framework.md`，`FocusMemory` 只归 `ProjectView`；异步打开在项目活跃、面板仍为组内激活面板且无更新焦点意图时消费；`Ctrl+Tab` 从活动栏/侧栏/主区均可进入面板循环。通知归 `design/cross-cutting.md`，撤销用可操作通知；事件键 `(panel_id, kind, session_id, turn_key)`；`taskbar_flash` 独立门控闪烁。Diff 去重键含 `mode/source`；冲突快照为瞬态 Diff 面板，不持久化、不参与去重。Agent 根新增显式可写作用域，编辑器可保存；保存链原子替换前经 `PathGuard` 复核；编辑器与 Diff 统一保存前后版本校验。 |
+| 小口径收敛 | `desktop_enabled` 只管系统 toast；删除 `app.diagnostics.debug_log`；终端增强默认 vi 关、补全开、数学开、AI 修复关，应用页补 `completion.style`；AI 助手只存 provider ID；备份完成数据路径统一 `state/completion/*`；`PersistedPath.read_only` 单点；设置面板 `page_params` 持久化；语言枚举统一 `LanguagePreference::{System, English, Chinese}`；通知时长/去重/缓存单源；侧栏 schema 以 `persistence.md` 为准；关闭状态机以 `architecture.md` 为准；项目移除索引先行；ID 游标 `max(next_*, maxSeen+1, maxDir+1)`；`build-and-release.md` 明确命令/持久化/i18n 留在 app；`slterm_settings::paths` 增加本地日志根访问器。 |
+
+## 六、验证
 
 - 本文件每条裁决在 featureSpec 对应篇目有落点；设计文档引用本文件而非重复裁决。
 - `python scripts/check_doc_policy.py full` 零 finding；全部相对链接可解析；表格列数一致。
 - 规格中不再出现“无障碍基线/读屏/ARIA/WCAG/高对比度/大字体”等已删除承诺；“减少动效/IME/CJK/键盘”保留。
 - 规格中 Mermaid 仅以“源码显示 + 保留接口”出现；不再要求七类静态矢量图。
-- 追踪矩阵：16 篇 featureSpec → 设计文档 → 里程碑 → 验收判据，无遗漏。
+- 追踪矩阵：16 篇 featureSpec → 设计文档 → 里程碑 → 验收判据 → 测试层，无遗漏。
+- 设计文档不再出现重复的 ID/焦点/窗口/通知/侧栏 schema 定义；重复内容改为引用所有者文档。
+- 规格与设计不再出现对比度准入、屏幕阅读器、ARIA、读屏播报、高对比度、大字体适配等已删除承诺。

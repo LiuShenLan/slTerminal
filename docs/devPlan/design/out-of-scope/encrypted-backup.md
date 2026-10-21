@@ -2,7 +2,7 @@
 
 > 目标态实现级设计；需求真值源见 docs/featureSpec，裁决见 ../../spec-issues.md。
 
-> 职责：设计目标态本机加密备份、选择性恢复、敏感键与凭据边界、备份 UI 与恢复点；不承担可分享收集器。
+> 职责：设计目标态本机加密备份、选择性恢复、敏感键与凭据边界、应用页备份入口与恢复点；不承担可分享收集器。
 
 ### 归档模型与路径
 
@@ -15,11 +15,11 @@
 - 类别：
   - `app_settings`：`state/settings.json`。
   - `workspace`：`state/workspace.json`、`state/projects/<ProjectId>/layout.json`、`state/projects/<ProjectId>/terminals.json`、`state/sidebar.json`、`state/views/*.json`。
-  - `completion_history`：`completion/history.jsonl`。
-  - `directory_history`：`completion/directories.json`。
-  - `ai_providers`：应用设置域中的 Provider 元数据。
-- 不进入备份：凭据值、AI 会话正文、终端内容、剪贴板、崩溃快照、window.json、runtime/update/backup 目录、日志、Hooks/CLI 配置文件、用户主题（已删除）。
-- 敏感键表保留并集中维护：导出递归剥除、导入复验；Provider 元数据只允许引用字段与 hint；任何 token/key/password/secret 字段在导入时存在即整单拒绝，不静默删除。
+  - `completion_history`：`state/completion/history.jsonl`。
+  - `directory_history`：`state/completion/directories.json`。
+  - `ai_providers`：应用设置域中的 Provider 元数据（仅 provider ID、显示元数据与 hint；不含 `SecretId` 或凭据引用值）。
+- 不进入备份：凭据值、AI 会话正文、终端内容、剪贴板、崩溃快照、`state/window.json`（范围外迁移后存在）、runtime/update/backup 目录、日志、Hooks/CLI 配置文件、用户主题（已删除）。
+- 敏感键表保留并集中维护：导出递归剥除、导入复验；Provider 元数据只允许 provider ID、显示元数据与 hint，不含 `SecretId` 或凭据引用值；任何 token/key/password/secret 字段在导入时存在即整单拒绝，不静默删除。
 
 ### 导出
 
@@ -39,19 +39,15 @@
 ### 敏感键与凭据边界
 
 - 应用设置与 Provider 文档导入后再次扫描；发现敏感键即拒绝，不写入。
-- 凭据值永不入包；恢复不会写入 Windows 凭据管理器，也不会删除现有凭据。Provider 文件中的 hint 可恢复，但 `credential_present` 由本机凭据库重新计算。
+- 凭据值永不入包；恢复不会写入 Windows 凭据管理器，也不会删除现有凭据。Provider 元数据不含 `SecretId` 或凭据引用值；hint 可恢复，`credential_present` 由本机凭据库按 provider ID 重新计算。
 - Hooks、CLI 配置、AI 会话正文、终端内容、日志、崩溃快照不进入任何类别；导入不接受这些条目。
 - 错误消息只含路径、类别与失败原因，不含文件内容、口令或凭据。
 
-### 备份 UI
+### 应用页入口与所有权
 
-- 应用页“备份与恢复”分节：
-  - `导出备份…`：类别复选、口令输入/确认（掩码）、目标路径选择、进度、结果。默认只选应用设置。
-  - `恢复备份…`：文件选择、口令、解密预览（类别、文件数、将覆盖的路径）、破坏性确认、执行、重启提示。
-  - `撤回上次恢复…`：显示恢复点路径与目标文件清单，口令确认后写回。
-- 操作进行中禁用相关按钮；失败行内可见并提供重试；取消不写入。
-- 恢复预览不显示文件内容；路径过长省略，悬停显示完整路径。
-- 备份文件选择、口令输入与恢复确认均为显式动作，不进入 2 秒自动保存。
+- 应用页“备份与恢复”分节只放入口与状态显示：控件、文案与交互归 `settings/app-page.md`；归档格式、类别、敏感键、恢复点与恢复规则归本节，页面不重复定义。
+- 导出、恢复与撤回是显式动作，不进入 2 秒自动保存；操作进行中禁用相关按钮，失败行内可见并提供重试，取消不写入。
+- 恢复预览只显示类别、文件数与路径，不显示文件内容。
 
 ### 依赖里程碑
 
@@ -65,7 +61,7 @@
 1. 冻结新状态文件集与类别映射；实现 v2 归档类型、密封/打开/校验。
 2. 实现导出收集、敏感键剥除与原子写。
 3. 实现导入校验、恢复点、原子恢复、回滚与撤回。
-4. 应用页备份 UI 接线；删除旧类别（session/themes 等）与旧导出入口。
+4. 应用页备份入口接线；删除旧类别（session/themes 等）与旧导出入口。
 5. 删除旧格式兼容代码与旧测试，保留加密原语测试并改类别夹具。
 
 ### 测试与验收

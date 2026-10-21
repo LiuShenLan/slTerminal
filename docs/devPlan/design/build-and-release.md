@@ -6,7 +6,7 @@
 
 ### 决策与红线
 
-- **新 crate 布局按层收敛**：领域、命令、持久化、i18n 为新的 core crate；终端、分屏、设置、补全继续作为 core 引擎；只有应用壳依赖 GPUI 与平台集成。原因：旧壳的 workspace/tab/pane/dock/session 整体废弃，领域模型必须脱离 UI 可测。边界：不保留旧模型兼容层，不迁移旧数据。
+- **新 crate 布局按层收敛**：新增五个领域 core crate（`slterm_workspace`、`slterm_sidebar`、`slterm_agents`、`slterm_hooks`、`slterm_runtime_protocol`）；命令/焦点、持久化协调器与 i18n 目录留在 app，不新增 `slterm_persist`/`slterm_commands`/`slterm_i18n`；终端、分屏、设置、补全继续作为 core 引擎；只有应用壳依赖 GPUI 与平台集成。原因：旧壳的 workspace/tab/pane/dock/session 整体废弃，领域模型必须脱离 UI 可测。边界：不保留旧模型兼容层，不迁移旧数据。
 - **包名与二进制名稳定**：应用包 `slterm`、二进制 `slterm.exe`；Hook 包 `slterm_hook`、二进制 `slterm-hook.exe`；产品显示名 `slTerminal`。原因：安装器、更新链、单实例与 AUMID 已按这些名称形成外部契约。边界：目录布局可以重排，包名与资产名不变。
 - **单一发布入口**：正式发布只走 `scripts/release.ps1 -Version <X.Y.Z>`，依次共享构建、安装器、便携 zip、钉测试、发布核验。原因：两个产物必须同代同 feature 图。边界：正式路径禁止跳过构建或复用旧产物；彩排必须显式标注。
 - **清单即合同**：包内文件集唯一真值源是 `scripts/build-windows-product.ps1` 的 `PackageEntries`；安装器 `[Files]`、便携 zip staging 与钉测试必须同步。原因：包内文件集是外部可见合同。边界：新增/删除文件必须同时修改三处。
@@ -20,7 +20,7 @@ slterm_workspace/          core   项目/布局/面板模型、ID、封闭枚举
 slterm_sidebar/            core   侧栏布局、文件树/Commit/Agent 文件纯模型
 slterm_agents/             core   AgentKind 能力表、会话元数据、hook 事件归一化
 slterm_hooks/              core   Hooks 事件/handler 目录、schema 校验
-slterm_runtime_protocol/   core   Runtime v2 信封、资源 ID、请求/响应 schema
+slterm_runtime_protocol/   core   Runtime v2 信封、线缆 ResourceId、请求/响应 schema
 slterm_settings/           core   设置值模型、键注册表、主题色表、路径权威
 slterm_split/              core   面板组几何树、比例、导航纯函数
 slterm_terminal/           core   PTY、VT、输入编码、选择、渲染快照
@@ -55,12 +55,18 @@ slterm_hook     → 无生产依赖
 - `slterm_sidebar` 只拥有侧栏布局、文件树/Commit/Agent 文件的纯模型与状态迁移；文件系统执行、Git 进程与 GPUI 留在 app。
 - `slterm_agents` 只拥有 AgentKind 能力表、会话元数据与 hook 事件归一化；不启动进程、不读文件、不访问网络。
 - `slterm_hooks` 只拥有事件/handler 目录与 schema 校验；文件读写与 CLI 启动留在 app 服务层。
-- `slterm_runtime_protocol` 只拥有协议类型与资源 ID；服务器、传输与鉴权在 app。
+- `slterm_runtime_protocol` 只拥有协议类型与线缆 `ResourceId`；`ResourceId` 是不透明字符串，自带解析/格式化/错误，不依赖 `slterm_workspace`；该 crate 保持零 workspace 生产依赖。服务器、传输与鉴权在 app。
 - 持久化协调器、命令/焦点框架、i18n 目录与平台适配器留在 app；不新增 `slterm_persist`/`slterm_commands`/`slterm_i18n` crate。
 - `slterm_terminal`、`slterm_settings`、`slterm_split`、`slterm_completions` 保留既有职责，但对外接口按目标模型调整；旧 `workspace`/`tab`/`pane`/`dock`/`session` 模块随旧壳删除。
 - 每个 crate 使用显式 `[[test]] name = "lib_tests"` 与 `[lib] test = false`；定向测试一律 `cargo test -p <crate> --test lib_tests <filter> -- --test-threads=1`。
 - feature 图保留 `gpui-test-support` 与 `update-test-source`；删除旧的 `legacy-attach` 兼容 feature，单实例移交只保留版本化载荷。测试专用 feature 不得进入生产构建。
 - 新 crate 目录必须同步创建路径 `CLAUDE.md`，登记该域决策与验收方式；旧目录 `CLAUDE.md` 随旧代码删除。
+
+### 依赖钉死与基线验收
+
+- GPUI 与 gpui-component 使用根 `Cargo.toml` 钉死的 fork rev；升级必须单独评审，升级前跑全量门禁与体积基线。
+- Tree-sitter grammar 每语言一个 crate；编辑器面板里程碑前完成选型、许可与体积登记。新增依赖同步登记 `architecture/dependencies.toml` 与 `architecture/file-budgets.txt`；超体积预算时裁剪语言集。
+- 构建与打包基线里程碑的验收落点：workspace 成员、依赖策略键集、`PackageEntries`、安装器/便携包 staging 与体积基线；退出条件为架构门禁全绿、包清单三处一致、体积测试有可复现基线。
 
 ### 二进制、包名与资产
 

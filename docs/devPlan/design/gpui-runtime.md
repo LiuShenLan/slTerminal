@@ -7,12 +7,11 @@
 ### Entity 拓扑与所有权
 
 ```
-Workspace (Entity, 窗口根)
+Workspace (Entity, 窗口根；位于 slterm_app/src/app/)
 ├─ ProjectRegistry（领域权威：项目条目与活跃项目）
 ├─ IdAllocator
 ├─ HashMap<ProjectId, Entity<ProjectView>>     全部项目常驻
-├─ HashMap<ProjectId, FocusMemory>             运行期焦点记忆
-├─ Option<FocusIntent>                         一次性焦点意图
+├─ FocusCoordinator                            待消费 FocusIntent；类型与规则见 ux-framework.md
 ├─ CloseState
 ├─ Entity<SidebarHost>                         应用级侧栏
 ├─ Entity<NotificationLayer>
@@ -26,7 +25,7 @@ ProjectView (Entity, 每项目一个)
 ├─ HashMap<PanelId, Entity<PanelHost>>         句柄索引，非成员权威
 ├─ DedupeIndex
 ├─ HashMap<PanelId, Subscription>
-└─ FocusMemory（运行期）
+└─ FocusMemory（运行期；唯一属主，Workspace 不持有第二份）
 
 PanelGroupView (Entity)
 ├─ PanelGroupId
@@ -44,6 +43,8 @@ PanelHost (Entity)
 
 PanelBody = TerminalPanel | EditorPanel | MarkdownPanel | DiffPanel | GitShowPanel | SettingsPanel
 ```
+
+实体与模块命名以 `architecture.md` 为准：`Workspace`/`ProjectView`/`PanelGroupView`/`PanelHost`，目录 `slterm_app/src/app/`。
 
 所有权规则：
 
@@ -104,24 +105,15 @@ overlays: dialogs, notifications, tab menus, drag previews
 
 ### 焦点与一次性焦点意图
 
-```rust
-pub struct FocusIntent {
-    token: u64,
-    project: ProjectId,
-    group: PanelGroupId,
-    panel: PanelId,
-    target: FocusTarget,
-}
-```
+`FocusIntent`/`FocusMemory` 的类型、消费条件与失效规则以 `ux-framework.md` 为唯一源；本节只记录实体集成点。
 
-- 新建/显式打开面板：`Workspace` 生成 `FocusIntent`，等待 `PanelEvent::Ready` 或下一帧消费。
-- 消费条件：项目仍是活跃项目、组仍是聚焦组、面板仍是激活面板、意图 token 未失效。任一不满足即丢弃。
-- 面板关闭、项目切换、用户点击其他面板、显式聚焦其他控件都会使当前意图失效（递增 token）。
-- 命中去重键的打开：直接调用 `focus_now`，不生成 `FocusIntent`。
-- 点击面板内容/页签：`Workspace` 先设置活跃项目（如需要）、聚焦组、激活面板，再 `window.focus(handle)`。
-- 切换项目：若 `focus_memory` 存在且面板存活，聚焦其落点；否则焦点停留在工作区层级。
+- `ProjectView` 持有唯一 `FocusMemory`；`Workspace` 只持 `FocusCoordinator` 与至多一个待消费意图，不保存第二份记忆。
+- 新建/显式打开面板请求 `FocusIntent`，在 `PanelEvent::Ready` 或下一帧按 ux-framework 条件消费；任一条不满足即丢弃。
+- 命中去重键的打开：直接 `focus_now`，不生成 `FocusIntent`。
+- 点击面板内容/页签：先设置活跃项目（如需要）、聚焦组、激活面板，再 `window.focus(handle)`。
+- 切换项目：读取目标 `ProjectView.focus_memory`；无记忆时焦点停留在 `Workspace`。
 - 启动/布局恢复：不调用 `window.focus`；`focused_group` 只决定布局层级。
-- `Ctrl+Tab`/`Ctrl+Shift+Tab`：仅在存在聚焦面板时消费，按 `focus_cycle` 结果激活并聚焦；终端与编辑器不拦截。
+- `Ctrl+Tab`/`Ctrl+Shift+Tab`：按 ux-framework 的 `focus_cycle` 规则激活并聚焦；终端与编辑器不拦截。
 - 焦点落点由面板 body 提供：
 
 ```rust
@@ -154,7 +146,7 @@ impl TaskSlots {
 
 - 文件读取、Git 读取、Markdown 渲染、Diff 计算、外部修改复核、快照写入都携带 `TaskToken`；结果应用前检查 `is_current` 与实体存活。
 - 面板关闭：`cancel_all`，调用 body `shutdown`（终端终止 PTY、取消 watcher、删除崩溃快照），释放订阅，移除 `PanelHost`。
-- 项目移除：按面板顺序关闭全部面板；取消项目级任务；删除项目目录与恢复快照；从 `Workspace` 移除索引。
+- 项目移除：取消项目级任务；先成功写 `workspace.json`，失败则中止移除并保持项目；成功后按面板顺序关闭全部面板，再删除项目目录与恢复快照，最后从 `Workspace` 移除索引。
 - 旧结果（先发后至）不得覆盖新结果；Diff/Markdown 渲染必须保留上一版内容直到新结果可用。
 - 前台禁止 `block_on` 子进程/网络；PTY spawn 在终端 core 的专用路径，结果异步回传。
 
@@ -163,18 +155,10 @@ impl TaskSlots {
 - `Workspace::request_close(window, cx)` 是唯一关闭入口；GPUI 关闭事件、标题栏按钮、系统命令、托盘退出都路由到它。
 - 状态机：
 
-```rust
-pub enum CloseState {
-    Idle,
-    Guarding,
-    SavingAll { failed: Vec<PanelId> },
-    ShuttingDown,
-}
-```
-
+`CloseState` 的枚举与流程以 `architecture.md` 为单点，固定 `Guarding → Saving → ShuttingDown`；本节只描述 GPUI 关闭钩子的接线。
 - 进入 `Guarding` 后收集全部项目（含隐藏项目）的脏面板与前台进程，弹出一次聚合确认。
-- 取消 → 回 `Idle`，窗口保持；保存全部失败 → 回 `Guarding` 并列出失败项，窗口保持。
-- 确认 → `ShuttingDown`，启动 `ShutdownChain` 异步任务；完成后 `window.remove_window()`。
+- 取消 → 回 `Idle`，窗口保持；保存失败 → 回 `Guarding` 并列出失败项，窗口保持。
+- 确认 → `Saving`，启动 `ShutdownChain` 异步任务；完成后进入 `ShuttingDown` 并调用 `window.remove_window()`。
 - 非 `Idle` 时再次请求关闭直接忽略；异步保存回调不得重入 `remove_window`。
 - 关闭期间禁止新建面板/终端；命令返回 `invalid_state`。
 
@@ -213,7 +197,7 @@ let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body.rende
 
 ```rust
 pub trait TerminalLauncher { fn spawn(&self, spec: LaunchSpec) -> Result<TerminalSession, LaunchError>; }
-pub trait PanelFactory { fn create(&self, ctx: PanelCreateContext<'_>) -> Result<PanelInstance, PanelOpenError>; }
+pub trait PanelFactory { fn create(&self, ctx: PanelCreateContext<'_>) -> Result<PanelHost, PanelOpenError>; }
 pub struct WorkspaceHarness {
     pub workspace: Entity<Workspace>,
     pub clock: Arc<ManualClock>,

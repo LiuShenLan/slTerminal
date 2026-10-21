@@ -11,13 +11,13 @@
   - `downloads/`：已校验安装包与 `.part`。
   - `handoffs/<transaction>/`：`plan.json`、`ready.json`、`commit.json`、`cancel.json`、`result.json`、`restored.json`、`workspace.json`。
   - `last-handoff.json`：最近事务指针。
-- 检查保留 GitHub Releases 契约：稳定渠道、版本点分段比较、拒绝降级、同版本不提示、精确资产名/架构/版本/官方 URL 前缀、`digest` 优先、release body checksum 回退、REST 403/429 有界回退。外部托管渠道（Scoop/未知标记）不参与自更新。
+- 检查保留 GitHub Releases 契约：稳定渠道、版本点分段比较、拒绝降级、同版本不提示、资产名/架构/版本/官方 URL 前缀四重精确匹配、`digest` 优先、release body checksum 回退、REST 403/429 有界回退。外部托管渠道（Scoop/未知标记）不参与自更新。
 - 启动检查为后台注册表一次性任务，首窗与首个会话安顿后延迟联网；先水合缓存与失败证据，再按 `app.updates.auto_check` 决定是否联网。应用页手动检查立即执行。
 - 旧 `update_state.json`、旧 `updates/` 不读；首次新版本不继承旧提示抑制。
 
 ### 下载与校验
 
-- 下载器不信任 UI 数据：再次校验资产名、版本、官方 URL、大小、摘要格式；无 SHA-256 拒绝下载。
+- 下载器不信任 UI 数据：再次校验资产名/架构/版本/官方 URL 前缀四重匹配，以及大小与摘要格式；无 SHA-256 拒绝下载。
 - 流式写入 `.part`；长度、`MZ` 头、SHA-256、512 MiB 上限全部通过后原子替换为安装包；中断或错误响应只留 `.part` 或删除。
 - 代次作废链保留：取消或换版本后旧任务进度/完成写入失配；重复点击不叠加任务。
 - 自动下载只预取，不授予安装权限；下载状态经应用页与更新提示步消费。
@@ -40,9 +40,15 @@
 - helper 仍由 PowerShell 隐藏窗口启动，物化自 `handoff.ps1`；参与者身份用 PID + 原生创建时间，防 PID 回收冒名；恢复 ticket 版本匹配、尝试次数上限、`restored.json` 防重放。
 - 更新交接恢复优先于普通会话恢复：成功或回滚后的首个启动按 ticket 还原工作区；恢复失败留待下次尝试，超限放弃。
 
+### 代码签名
+
+- 有 Authenticode 证书时签名安装器与二进制，并在 handoff 前增加独立签名验证步骤；无证书时在发布清单登记残余风险，摘要校验不放宽。
+- 签名验证失败拒绝安装，保持当前安装不变；失败原因可见，不产生半安装状态。
+
 ### 发布链
 
 - 正式发布只走 `scripts/release.ps1 -Version <X.Y.Z>`：共享构建 → Inno 安装器 → 便携 zip → 钉测试 → `verify-release`；正式路径禁止跳过构建/允许陈旧产物。
+- 发布门禁以 `build-and-release.md` 为准：架构/文档/品牌门禁、fmt、clippy、全量测试与打包钉测试全绿后才允许发布。
 - 包内清单唯一真值源为 `build-windows-product.ps1` 的 `PackageEntries`；staging/zip 全等校验与 `installer.iss` 的 `[Files]` 同步。新增/删除包内文件必须三处同改。
 - 本次目标态包清单变更：
   - 加入 `assets/runtime-api-v2.schema.json`、`assets/runtime-control-api-v2.md`、更新后的 `assets/skills/slterm-runtime/`。
@@ -55,12 +61,13 @@
 - 发布脚本统一 `#Requires -Version 7`；发布前按 `scripts/release-checklist.md` 人工核验，脚本成功不等于核验完成。
 - 安装器卸载钩子清理：新 CLI 需要提供 `setup-ai --remove` 的真实实现，或由安装器移除该调用；不得保留已知 no-op 的卸载步骤。
 
-### 应用页更新入口
+### 应用页入口与所有权
 
-- 显示当前版本、检查更新、自动检查/下载开关、下载页、下载进度、安装待重启状态、上次安装失败原因。
+- 应用页“更新”分节只放入口与状态显示：控件、展示字段与交互归 `settings/app-page.md`；更新检查、下载、校验、两阶段交接、安装与恢复由本节拥有，页面不复制状态机。
 - “立即安装并退出”先取工作区快照并冲刷数据，再后台 prepare/commit；成功进入正常退出链，helper 在进程退出后覆盖安装；失败保持窗口并显示错误。
 - “下次启动安装”只写预约标记，不启动 helper；下次启动预处理消费预约并退出，由 helper 完成安装。
-- 外部托管渠道显示由包管理器更新，禁用自动下载/安装。
+- 外部托管渠道显示由包管理器更新，禁用自动下载/安装入口。
+- 首版不做静默启动；窗口形态由 `platform-windows.md` 拥有，本节不引入隐藏启动路径。
 
 ### 依赖里程碑
 
@@ -80,12 +87,12 @@
 
 ### 测试与验收
 
-- 版本比较、稳定渠道过滤、资产精确匹配、digest 规范化和 body 回退、无摘要拒绝、降级拒绝。
+- 版本比较、稳定渠道过滤、资产四重匹配、digest 规范化和 body 回退、无摘要拒绝、降级拒绝。
 - 下载：代理解析、重定向、长度/MZ/SHA-256/上限校验、`.part` 不留可执行文件、取消与换版本代次失配。
 - 交接：plan/ready/commit/cancel 状态机、未 commit Drop 取消、孤儿恢复、参与者身份、安装目录归属、restore ticket 尝试与防重放。
 - 快照：`HandoffWorkspaceV2` 往返、项目布局与活跃项目恢复、恢复后不抢焦。
 - 应用页：检查中/成功/失败/无更新、自动下载开关、安装授权两阶段、外部渠道禁用。
-- 发布链：钉测试、清单全等、新鲜度、体积预算、`verify-release` 资产名/PE/SHA256SUMS、假服务器全链彩排。
+- 发布链：钉测试、清单全等、新鲜度、体积预算、`verify-release` 资产名/PE/SHA256SUMS、签名验证（有证书时）、假服务器全链彩排。
 
 ### 不可自动化面
 

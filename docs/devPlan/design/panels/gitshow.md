@@ -6,12 +6,13 @@
 
 ### 面板模型、入口与去重
 
+面板参数 schema 归 `domain-model.md` 的 `GitShowParams { repo_path: RepoPath }`；本节只定义运行期模型。
+
 ```rust
-pub struct GitShowPanelParams { pub repo_relative_path: String }
 pub struct GitShowPanel {
     pub id: PanelId,
     pub project_id: ProjectId,
-    pub params: GitShowPanelParams,
+    pub params: GitShowParams,
     pub state: GitShowState,
     pub stale: bool,
     pub find: FindState,
@@ -29,11 +30,11 @@ pub enum GitShowState {
 
 - 唯一入口：Commit 变更列表双击 `deleted` 行；无其他入口。
 - 打开落点为活跃项目聚焦面板组；双击即打开，无确认。
-- 去重键：项目 + 仓库内路径 + GitShow 类型，路径忽略大小写；命中聚焦已有面板，不新建、不重读、不提示。
+- 去重键归 `domain-model.md`：项目 + 仓库相对路径，大小写不敏感；命中聚焦已有面板，不新建、不重读、不提示。
 - 同文件编辑器或 Diff 面板不参与去重；三者互不替代。
 - 不同项目同路径各自独立。
 - 创建失败（无活跃项目、仓库不可用、路径无效）不创建面板，显示非阻塞错误。
-- 标题 `文件名(git delete)`；同项目同名时改用相对路径；优先相对项目根，其次相对仓库根；悬停显示仓库内完整路径；标题不持久化，冲突集合变化时重算。
+- 标题按 `domain-model.md`：默认文件名，同项目同名改用项目相对路径，项目根外使用规范化绝对路径，并追加 `(git delete)`；悬停显示仓库内完整路径；标题不持久化，冲突集合变化时重算。
 - 扩展名图标：已知类型用类型图标，未知用通用文件图标。
 
 ### HEAD 读取与内容形态

@@ -18,15 +18,17 @@
 pub struct SettingsPanelModel {
     pub id: PanelId,
     pub project_id: ProjectId,
-    pub selected_page: PageId,
-    pub page_params: BTreeMap<PageId, PageParams>,
+    pub selected_page: SettingsPageId,
+    pub page_params: BTreeMap<SettingsPageId, PageParams>,
     pub collapsed_groups: BTreeSet<GroupId>,
     pub search: String,
-    pub page_states: BTreeMap<PageId, PageSaveState>,
+    pub page_states: BTreeMap<SettingsPageId, PageSaveState>,
 }
 
 pub enum SettingsSurface { ProjectPanel, GlobalOverlay }
 ```
+
+`SettingsSurface` 只在本篇定义；shell 与 `settings/app-page.md` 只引用，不另建枚举。`SettingsPageId` 与 `PageParams` 定义于 `domain-model.md`。
 
 ### 页面注册表与目录
 
@@ -68,7 +70,7 @@ pub trait SettingsPage {
 - 导航项为按钮；选中项使用选中底色；手动未保存显示 7px 中性色圆点；自动保存失败显示独立失败徽标；分组折叠时组标题聚合显示组内状态。
 - 键盘：方向键移动、Home/End 首尾、Enter/Space 激活；分节标题 Enter/Space 折叠；焦点环使用主题 token。
 - 选中页规则：创建时读取保存值；目标页已注册则选中，否则回退全局组第一页，再回退第一个已注册页；无页面为空态。程序化打开可携带初始页，未注册则按回退处理。
-- 用户切换页面后写入面板参数；页内参数独立保存、合并写入。选中页与页内参数随项目布局持久化；关闭面板移除，重开为新面板。
+- 用户切换页面后写入 `page_params`；选中页与 `page_params` 写入 layout schema 并随项目布局持久化，字段归 `domain-model.md`/`persistence.md`。关闭面板移除，重开为新面板。
 
 ### 作用域与保存模式
 
@@ -131,10 +133,10 @@ pub enum ManualDirty { Clean, Dirty }
 
 #### 外观页
 
-- 仅内置暗色主题目录，默认 `Linear`；不提供浅色、跟随系统、用户自定义主题、主题包导入导出或主题编辑器。所有主题、透明度、壁纸、密度组合通过 主题可读性检查。
+- 仅内置暗色主题目录，默认 `Linear`；不提供浅色、跟随系统、用户自定义主题、主题包导入导出或主题编辑器。主题、透明度、壁纸、密度组合不做对比度准入；明显不可读时提示用户调整，不静默改写用户设置（见 `theme-and-i18n.md`）。
 - 字体：终端与编辑器分别设置字体族与字号（8–32）；字体族从系统等宽字体选择并保留当前值；缺失回退默认并可提示；非法字号行内报错不提交。
 - 侧栏默认布局：逐视图显隐、排序、上区/下区归属、恢复默认；语义归侧栏框架，外观页不建第二套布局状态。
-- 透明度 80%–100%，默认 100%；不足对比度时回退最近可用值并提示。
+- 透明度 80%–100%，默认 100%；明显不可读时提示，不回退、不静默改写用户值。
 - 壁纸：选择/清除，支持常见图片；仅窗口背景，内容区保持主题背景；读取失败保留原壁纸并提示。
 - 密度：紧凑/标准/宽松，默认标准，即时生效。
 - 编辑器与 Diff 行为：新面板默认自动换行（默认关）；实时差异重算间隔（100–2000ms，默认 300ms）；自动保存（默认关）；Markdown 草稿崩溃恢复（默认开）。
@@ -179,7 +181,7 @@ pub enum ManualDirty { Clean, Dirty }
 
 #### 应用页
 
-见 `design/settings/app-page.md`。应用页是全局组最后一页，保存模式为自动保存。
+节级范围、键与默认值见 `design/settings/app-page.md`；应用页是全局组最后一页，保存模式为自动保存。本篇不复制应用页键表或默认值。
 
 ### 导入导出与恢复默认
 
@@ -207,7 +209,7 @@ pub enum ManualDirty { Clean, Dirty }
 ```text
 领域 core crate
   settings/
-    page_registry.rs   # PageId、分组、顺序、覆盖规则
+    page_registry.rs   # SettingsPageId、分组、顺序、覆盖规则
     page_params.rs
     save_mode.rs
     scope.rs
@@ -230,7 +232,7 @@ slterm_app/src/panels/settings/
   import_export.rs
 ```
 
-复用：`slterm_settings` 的键注册、宽容读取、主题/字体值、主题可读性检查；`settings_store` 的原子写、备份、损坏隔离与白名单思想（按新域重建）；`ai_hook::editor` 的 `HooksDocument`、事件/handler 字段与保存校验骨架；`integrations` 的安装状态与注入/卸载；`background_tasks` 的任务元数据；`settings_pane` 的注册表/导航/写状态结构作为实现参考。重建：旧七页目录与 `application/appearance/profiles/interaction/advanced/localization/reset` 布局、单文件 Hooks 编辑、主题包/自定义主题、旧 `settings.json` 键集、`SettingsPane` 单体状态。旧设置文件不读、不删、不视为损坏。
+复用：`slterm_settings` 的键注册、宽容读取、主题/字体值；`settings_store` 的原子写、备份、损坏隔离与白名单思想（按新域重建）；`ai_hook::editor` 的 `HooksDocument`、事件/handler 字段与保存校验骨架；`integrations` 的安装状态与注入/卸载；`background_tasks` 的任务元数据；`settings_pane` 的注册表/导航/写状态结构作为实现参考。重建：旧七页目录与 `application/appearance/profiles/interaction/advanced/localization/reset` 布局、单文件 Hooks 编辑、主题包/自定义主题、旧 `settings.json` 键集、`SettingsPane` 单体状态。旧设置文件不读、不删、不视为损坏。
 
 ### 错误映射
 
@@ -258,7 +260,7 @@ slterm_app/src/panels/settings/
 - 保存模式：自动 2 秒去抖、手动脏守卫、提交即保存的失败回滚；关闭冲刷失败进入守卫。
 - 快捷键：录制/取消/解绑/保留键/冲突警告/无效覆盖修复/录制期间全局命令暂停与恢复。
 - 后台任务：范围校验、提交失败回显、清单刷新、订阅型任务计时。
-- 外观：主题 回退、字体字号校验、侧栏布局、自动保存开关、草稿恢复开关。
+- 外观：不做对比度准入、不自动回退的负向断言，字体字号校验、侧栏布局、自动保存开关、草稿恢复开关。
 - 终端页：Shell 三模式、路径校验、回滚容量、OSC52 与闪烁开关的即时作用。
 - Agent 页：名单/别名/节点/清单校验与即时生效、共享数据、页级复位。
 - Hooks：三层读取/切换守卫、GUI/JSON 同步、schema 单一来源、托管条目只读、保存前备份/外部修改/锁、注入/卸载状态机、可见期监听。

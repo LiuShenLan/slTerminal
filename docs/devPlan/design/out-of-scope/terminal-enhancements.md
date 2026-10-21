@@ -21,8 +21,8 @@ trait TerminalEnhancement {
 }
 ```
 
-- 增强顺序固定：Vi 模式 → 补全 → AI 修复条按键；数学覆盖层只在绘制阶段运行。任何增强都不得修改网格、滚动位置、选区真值或复制文本；需要映射时使用终端 core 的投影函数。
-- 所有增强开关来自应用页；关闭后不注册按键、不启动后台计算、不绘制覆盖层。开关即时生效，按 2 秒去抖保存。
+- 增强顺序固定：Vi 模式 → 补全 → AI 修复条按键；数学覆盖层只在绘制阶段运行。终端面板设计（`panels/terminal.md`）若给出不同顺序，以本文件为准。任何增强都不得修改网格、滚动位置、选区真值或复制文本；需要映射时使用终端 core 的投影函数。
+- 开关键、默认值与保存归应用页；本节只定义行为语义。迁移前应用页以禁用态 `尚未启用` 呈现，迁移完成后去掉禁用态。关闭后不注册按键、不启动后台计算、不绘制覆盖层。开关即时生效，按 2 秒去抖保存。
 
 ### Vi 模式
 
@@ -69,13 +69,15 @@ trait TerminalEnhancement {
 
 ### 设置开关
 
+应用页拥有这些键的注册、默认值与保存；下表只描述开启/关闭后的终端行为。
+
 | 键 | 默认 | 生效范围 |
 |---|---|---|
-| `terminal.enhancements.vi` | 开 | 注册 Vi 切换命令与按键；关闭后 Vi 不可进入 |
+| `terminal.enhancements.vi` | 关 | 注册 Vi 切换命令与按键；关闭后 Vi 不可进入 |
 | `terminal.enhancements.completion` | 开 | 关闭后无 ghost/popup、无后台计算、无历史记录 |
 | `terminal.completion.style` | inline | inline/popup/hybrid 形态切换，立即作用于当前面板 |
 | `terminal.enhancements.math` | 开 | 关闭后跳过数学扫描与覆盖绘制 |
-| `terminal.enhancements.ai_fix` | 开 | 仅在助手启用时有效；关闭后无按键/请求/建议条 |
+| `terminal.enhancements.ai_fix` | 关 | 仅在助手启用时有效；关闭后无按键/请求/建议条 |
 
 ### 依赖里程碑
 

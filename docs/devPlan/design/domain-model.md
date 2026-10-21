@@ -35,8 +35,9 @@ impl IdAllocator {
 }
 ```
 
-- 恢复时 `observe_existing` 必须同时考虑 `workspace.json` 的 `next_*`、已加载项目内的全部 ID、`projects/` 目录名；三者取最大值 + 1。这样索引丢失后以空状态继续也不会与孤儿目录 ID 冲突。
-- 字符串形式（Runtime v2、环境变量、移交）：`project:<u64>`、`group:<u64>`、`panel:<u64>`；解析失败即 `invalid_params`，未知资源即 `target_not_found`。前缀集合封闭，未来新增资源类型只追加前缀，不复用旧前缀语义。
+- 恢复时 `observe_existing` 必须同时考虑 `workspace.json` 的 `next_*`、已加载项目内的全部 ID、`projects/` 目录名；游标统一取 `max(next_*, maxSeen + 1, maxDir + 1)`。这样索引丢失后以空状态继续也不会与孤儿目录 ID 冲突。
+- 字符串形式（Runtime v2、环境变量、移交）：`project:<u64>`、`group:<u64>`、`panel:<u64>`；解析失败即 `invalid_params`，未知资源即 `resource_not_found`。前缀集合封闭，未来新增资源类型只追加前缀，不复用旧前缀语义。
+- 线缆类型：协议 crate 的 `resource_id.rs` 只定义不透明字符串 `ResourceId` 及其解析/格式化/错误，不重复定义 `ProjectId`/`PanelGroupId`/`PanelId`；领域 newtype 唯一定义于本文件（`slterm_workspace::ids`）。完整线缆合同见 `integrations/runtime-api-v2.md`。
 
 ### 项目与项目注册表
 
@@ -174,16 +175,14 @@ pub struct TerminalParams { pub revision: u32 }
 
 pub struct EditorParams {
     pub revision: u32,
-    pub path: PersistedPath,
-    pub read_only: bool,               // 根外只读标记；恢复时重新判定
+    pub path: PersistedPath,           // 只读判定只在 PersistedPath.read_only
     pub word_wrap: bool,               // 新面板取设置默认值
     pub language_override: Option<LanguageId>,
 }
 
 pub struct MarkdownParams {
     pub revision: u32,
-    pub path: PersistedPath,
-    pub read_only: bool,
+    pub path: PersistedPath,           // 只读判定只在 PersistedPath.read_only
     pub view: MarkdownView,            // Rendered | Source
     pub outline_open: bool,
     pub zoom_percent: u16,             // 25..=400，默认 100
@@ -212,7 +211,12 @@ pub struct GitShowParams {
 pub struct SettingsParams {
     pub revision: u32,
     pub selected_page: SettingsPageId, // 稳定页面 id，默认“快捷键”
+    /// 页内参数；类型、清洗与保存归 `panels/settings.md`，随布局持久化。
+    pub page_params: BTreeMap<SettingsPageId, PageParams>,
 }
+
+/// 页面自有的不透明参数；schema 由页面注册表声明，工作区只存取、不解释。
+pub struct PageParams(pub serde_json::Value);
 ```
 
 排除项（运行期状态，不持久化）：Diff 的“忽略行尾空白/忽略全部空白/折叠未变更区域”、编辑器代码折叠、手动只读、搜索状态、Markdown 查找栏、终端状态圆点/CLI 图标、GitShow 查找/换行、所有滚动位置（Markdown 滚动锚点例外，属于持久参数）。
@@ -231,7 +235,7 @@ pub enum PathScope { ProjectRelative, RepoRelative, Absolute }
 pub struct PersistedPath {
     pub scope: PathScope,
     pub value: String,
-    pub read_only: bool,       // 上次运行的只读判定；恢复时重算
+    pub read_only: bool,       // 唯一只读标记；打开/恢复时按当前允许根重算
     pub save_as_grant: bool,   // 用户经系统另存为显式授予的根外写入权
 }
 
@@ -239,7 +243,8 @@ pub struct RepoPath { pub value: String }  // 相对仓库实际根
 ```
 
 - `ProjectRelative` 在根重定位时按新根解析；`RepoRelative` 在仓库根变化时重新解析；`Absolute` 原样使用。
-- 恢复时重新执行允许根校验：项目根 + 已登记 Agent 全局目录可写；仓库根内、项目根外只读；仓库根外仅保留 `save_as_grant` 的可写例外，其余强制只读。
+- 恢复时重新执行允许根校验：项目根 + 已登记 Agent 全局目录（`AgentRoot` 作用域）可写；仓库根内、项目根外只读；仓库根外仅保留 `save_as_grant` 的可写例外，其余强制只读。Agent 根可写性是运行期判定，不新增持久化字段。
+- `PersistedPath.read_only` 是只读判定的唯一持久化字段；`EditorParams`/`MarkdownParams` 不重复携带。
 - 路径比较用 `PathKey`：真实路径规范化后的 Windows 大小写不敏感键；显示路径保留原始大小写。
 
 ### 终端编号与终端簿
@@ -271,10 +276,12 @@ impl TerminalBook {
 ### 去重键与标题
 
 ```rust
+pub enum DiffMode { HeadToWorktree, ConflictSnapshot }
+
 pub enum DedupeKey {
     Editor { project: ProjectId, path: PathKey },
     Markdown { project: ProjectId, path: PathKey },
-    Diff { project: ProjectId, workspace: PathKey },
+    Diff { project: ProjectId, workspace: PathKey, mode: DiffMode },
     GitShow { project: ProjectId, repo_path: CaseFoldKey },
     Settings { project: ProjectId },
 }
@@ -287,7 +294,8 @@ pub struct DedupeIndex { /* key -> PanelId */ }
 ```
 
 - 终端返回 `None`，每次新建独立面板。
-- 编辑器与 Markdown 的键为“项目 + 规范化真实路径”；Diff 为“项目 + 规范化工作区路径”；GitShow 为“项目 + 仓库相对路径”，大小写不敏感；设置中心为项目单例。
+- 编辑器与 Markdown 的键为“项目 + 规范化真实路径”；Diff 为“项目 + 规范化工作区路径 + `mode/source`”，只有 `HeadToWorktree` 参与去重；GitShow 为“项目 + 仓库相对路径”，大小写不敏感；设置中心为项目单例。
+- 冲突快照是瞬态 Diff 面板：有独立 `PanelId`，不参与去重、不持久化、不入布局，重启消失。
 - 命中去重键：激活所属项目/面板组/面板并直接聚焦；不产生一次性焦点意图。
 - 标题计算：
 
@@ -297,17 +305,15 @@ pub fn compute_titles(layout: &ProjectLayout, project_root: &ProjectRoot,
 ```
 
   - 文件面板默认文件名；同项目同名（大小写不敏感）改用项目相对路径；项目根外使用规范化绝对路径。
-  - 编辑器不加 Git 来源后缀；Diff 追加 `(git diff)`；GitShow 追加 `(git delete)`；冲突快照追加 `(冲突差异)`（快照面板不入布局）。
+  - 编辑器与 Commit 来源的文件打开路由（Markdown/编辑器）不加来源后缀；Diff 追加 `(git diff)`；GitShow 追加 `(git delete)`；冲突快照追加 `(冲突差异)`（瞬态面板，不入布局）。
   - 设置中心固定 `设置中心`。
   - 终端按标题优先级；终端编号与自定义标题来自 `TerminalBook`。
 
 ### 焦点模型
 
-焦点分层：活跃项目 → 聚焦面板组 → 激活面板 → 面板内焦点落点。
+焦点分层：活跃项目 → 聚焦面板组 → 激活面板 → 面板内焦点落点。`FocusIntent`/`FocusMemory` 的类型与消费规则归 `ux-framework.md`；本文件只保留 `FocusTarget` 与关闭/循环纯函数。`ProjectView.focus_memory` 是 `FocusMemory` 的唯一属主，`Workspace` 不持有第二份。
 
 ```rust
-pub struct FocusMemory { pub group: PanelGroupId, pub panel: PanelId }
-
 #[derive(Copy, Clone, Eq, PartialEq)]
 pub enum FocusTarget {
     TerminalInput,
@@ -334,7 +340,7 @@ pub fn focus_cycle(layout: &ProjectLayout, from: PanelId, forward: bool) -> Opti
 规则：
 
 - `ProjectLayout.focused_group` 是持久化的“上次聚焦组”，用于重启恢复布局层级；不产生键盘焦点。
-- `ProjectView.focus_memory` 是运行期“上次聚焦组/面板”，用于切换项目；不持久化、不跨重启。
+- `ProjectView.focus_memory` 是运行期“上次聚焦组/面板”的唯一副本，用于切换项目；不持久化、不跨重启。
 - 关闭聚焦面板：同组下一个 → 同组上一个 → 相邻面板组激活面板 → 工作区层级。相邻组按布局树深度优先叶序。
 - `Ctrl+Tab` 循环按活跃项目的面板组树序与组内页签序；无聚焦面板时不消费。
 - 单面板显式打开/激活产生一次性焦点意图；命中去重键的聚焦是立即聚焦。
@@ -379,7 +385,7 @@ pub fn restore_registry(dto: WorkspaceDto) -> (ProjectRegistry, IdAllocator, Res
 - 含面板的项目布局恰好一个聚焦组；无面板则无聚焦组。
 - 每个项目至多一个终端自定义标题相同的约束不存在（允许重名标题）；但终端编号在项目内唯一。
 - 每个项目至多一个设置中心面板。
-- 编辑器/Markdown 同项目同路径至多一个面板；Diff 同项目同工作区路径至多一个；GitShow 同项目同仓库路径至多一个。
+- 编辑器/Markdown 同项目同路径至多一个面板；Diff 默认模式同项目同工作区路径至多一个（冲突快照不计入去重约束）；GitShow 同项目同仓库路径至多一个。
 - 面板不跨项目移动；跨项目拖拽被拒绝。
 - DTO 只含路径、参数、标题与编号；不含凭据、文件内容、终端输出、剪贴板内容。
 
@@ -397,7 +403,7 @@ pub fn restore_registry(dto: WorkspaceDto) -> (ProjectRegistry, IdAllocator, Res
   - ID 终生稳定：重命名、排序、面板组拆分/合并、项目根重定位均不改变。
   - 不复用：删除后的 ID 永不再分配。
   - 前缀封闭：新增资源类型只追加新前缀；旧前缀语义不变。
-  - 未知前缀/未知 ID → `target_not_found`；格式不合法 → `invalid_params`。
+  - 未知前缀/未知 ID → `resource_not_found`；格式不合法 → `invalid_params`。
   - 事件与快照同时携带资源 ID 与必要父 ID（`project` 可选，因为 `panel` 全局唯一）。
 - 环境变量：`SLTERM_PROJECT_ID`、`SLTERM_PANEL_GROUP_ID`、`SLTERM_PANEL_ID` 使用同一字符串；`SLTERM_PANE_ID` 随 v1 退役，不保留兼容别名。
 - 单实例移交载荷、CLI `slterm ctl` 与随包 skill 使用同一 ID 形式。
@@ -417,7 +423,7 @@ pub fn restore_registry(dto: WorkspaceDto) -> (ProjectRegistry, IdAllocator, Res
 ```rust
 pub struct PanelDescriptor {
     pub kind: PanelKind,
-    pub create: fn(PanelCreateContext<'_>) -> Result<PanelInstance, PanelOpenError>,
+    pub create: fn(PanelCreateContext<'_>) -> Result<PanelHost, PanelOpenError>,
     pub capabilities: PanelCapabilities,
     pub default_focus: FocusTarget,
 }

@@ -6,30 +6,23 @@
 
 ### 面板模型与两态
 
-```rust
-pub struct MarkdownPanelParams {
-    pub path: PathBuf,
-    pub view: MarkdownView,           // 默认 Rendered
-    pub zoom: f32,                    // 1.0 = 100%
-    pub outline_open: bool,           // 默认 false
-    pub scroll_anchor: Option<ReadingAnchor>,
-}
-pub enum MarkdownView { Rendered, Source }
+面板参数 schema 归 `domain-model.md` 的 `MarkdownParams`（含 `PersistedPath.read_only`）；本节只定义运行期模型。
 
+```rust
 pub struct MarkdownPanel {
     pub id: PanelId,
     pub project_id: ProjectId,
-    pub params: MarkdownPanelParams,
+    pub params: MarkdownParams,
     pub doc: EditorDocument,          // 与编辑器共用文档/保存链，但面板类型独立
     pub render: RenderState,
 }
 ```
 
-- 只处理 `.md`/`.markdown`；每项目每路径一个 Markdown 面板。
+- 只处理 `.md`/`.markdown`；每项目每路径一个 Markdown 面板；去重键归 `domain-model.md`（项目 + 规范化真实路径）。
 - 形态互斥，默认渲染；新建、关闭重开、形态值非法时进入渲染。
 - 两态共用同一份内存草稿；切换不重新读盘；渲染源永远是草稿。
 - 源码态遵循编辑器契约（保存、脏状态、外部修改、撤销、光标、查找替换、换行、字号、编码、行尾）；本篇只定义两态关系。
-- 脏状态附着面板，两态共用；只有源码态产生修改。根外只读面板不产生可保存草稿与脏状态；文件已移出允许根时保留草稿与脏状态，禁用原地保存，提供另存为。
+- 脏状态附着面板，两态共用；只有源码态产生修改。已登记 Agent 全局目录（`AgentRoot`）内可编辑保存；项目根外、仓库根内等只读面板不产生可保存草稿与脏状态；文件已移出允许根时保留草稿与脏状态，禁用原地保存，提供另存为。
 - 源码切渲染：立即按当前草稿渲染，不等输入停止；渲染切源码：显示草稿并恢复源码态撤销历史、光标、选择与滚动。
 - 形态、缩放、大纲开关、滚动锚点随项目布局持久化；关闭重开视为新面板，恢复默认渲染、100%、顶部、无大纲。
 - 右上两段式切换控件显示“渲染”“源码”；文件加载失败时不显示。显式打开或激活时焦点进入面板容器，渲染态不自动进入内容区或查找框，源码态按编辑器焦点落点进入编辑区；布局恢复不抢焦点。
@@ -171,9 +164,7 @@ Mermaid：
 
 滚动锚点：
 
-```rust
-pub struct ReadingAnchor { pub block_id: BlockId, pub offset_in_block: f32 }
-```
+持久化锚点使用 `domain-model.md` 的 `MarkdownAnchor { anchor, offset_px }`；块 id 与块内偏移是运行期映射，不写盘。
 
 - 渲染态单一大垂直滚动容器；宽表格、代码块内部横向滚动。
 - 切换形态、切面板、切项目保留滚动；重渲染按“最近块锚点 + 块内偏移”恢复，锚点不存在按比例回退，最后边界收敛。
@@ -275,4 +266,4 @@ slterm_app/src/mermaid/   # 扩展接口，首版无实现
 - 交互：两态切换不读盘、形态持久化、关闭重开默认、查找计数与高亮、大纲持久化、缩放步进/边界/重置、滚动锚点恢复。
 - 外部：干净刷新、脏横幅、查看差异、重命名/跨类型、删除、重载失败。
 - 大文档：5MB/100,000 行/50MB 分级与渐进渲染；草稿快照恢复/丢弃/开关。
-- 人工豁免：公式/代码高亮观感、CJK 换行与视觉对比度。
+- 人工豁免：公式/代码高亮观感、CJK 换行。

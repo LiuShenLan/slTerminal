@@ -52,9 +52,8 @@ slterm_app/src/panels/terminal/
 
 ```rust
 pub struct TerminalPanelParams {
-    pub number: u32,
-    pub custom_title: Option<String>,
-    pub last_cwd: Option<PathBuf>,
+    pub revision: u32,
+    // 编号/自定义标题/最近 cwd 归 TerminalBook，持久化在 terminals.json；此处不复制。
 }
 
 pub struct TerminalPanelModel {
@@ -183,8 +182,8 @@ Shell 选择：
 
 编号：
 
-- `TerminalNumberAllocator` 按项目分配，从 0 开始；关闭不复用、不重排。
-- 布局持久化 `terminal_counter` 与每个面板的 `number`；恢复时以保存编号为准，计数器取 `max(number)+1`；编号重复或非法时按计数器重新分配并记录一次聚合警告。
+- 编号由 `TerminalBook` 按项目分配，从 0 开始；关闭不复用、不重排。
+- 编号/自定义标题/最近 cwd 只写 `state/projects/<id>/terminals.json`，运行期权威在 `TerminalBook`；`layout.json` 不保存 `terminal_counter` 或 `number`。恢复时以 `terminals.json` 为准，`next_ordinal = max(next_ordinal, maxSeen + 1)`；编号重复或非法时重新分配并记录一次聚合警告。
 - 历史会话恢复同样分配新编号，不继承历史编号。
 
 历史会话恢复：
@@ -313,14 +312,14 @@ CLI 识别来源：
 
 - hook 事件（`slterm_hook` → `ai_hook`）为最高置信度；屏幕规则（`ai_agents::detect`）兜底；进程身份用于恢复与状态对齐。
 - `CliSessionTracker` 只消费注册表与 hook 的已知事件；未知会话不产生标题、图标或通知。
-- 通知：任务完成/等待输入/权限请求/错误在窗口失焦时由工作区通知服务发送并闪烁任务栏；窗口聚焦时不发；同类事件按事件键去重。终端只上报 `AgentNotification { category, agent, project, panel }`，不直接投递系统通知。
+- 通知：任务完成/等待输入/权限请求/错误在窗口失焦时由工作区通知服务处理；系统 toast 由 `desktop_enabled` 门控，任务栏闪烁由 `taskbar_flash` 门控；窗口聚焦时不发；同类事件按事件键去重。终端只上报 `AgentNotification { category, agent, project, panel }`，不直接投递系统通知。
 
 ### 持久化与关闭守卫
 
-随项目布局保存：
+持久化：
 
-- 面板类型、所属项目、面板组归属、顺序、激活态。
-- `TerminalPanelParams`：编号、自定义标题、最近已知工作目录。
+- 布局只保存面板类型、所属项目、面板组归属、顺序、激活态与 `revision`；不内联编号或计数器。
+- 编号、自定义标题、最近已知工作目录只在 `terminals.json`，由 `TerminalBook` 持有与对账。
 
 不保存：画面、回滚、选区、滚动位置、状态圆点、CLI 图标、运行中标题、CLI 会话元数据、待注入命令、输入队列。
 
@@ -334,7 +333,7 @@ CLI 识别来源：
 | 滚动位置 | 保留 | 保留 | 重置底部 | 重置底部 |
 | 工作目录 | 保留 | 保留 | 按入口继承 | 恢复保存值，失效回项目根 |
 | 自定义标题 | 保留 | 保留 | 无 | 恢复 |
-| 编号 | 保留 | 保留 | 新号 | 按布局恢复 |
+| 编号 | 保留 | 保留 | 新号 | 按 `terminals.json` 恢复 |
 | 标题/状态/CLI 元数据 | 保留并更新 | 保留并更新 | 无 | 不恢复 |
 
 关闭守卫：
@@ -382,7 +381,7 @@ pub struct TerminalEnhancements {
 - vi 与补全只在终端上下文生效；全屏 TUI/交替屏幕下补全不弹出、vi 不进入。
 - 数学覆盖层只消费不可变快照，不修改网格、选区或复制文本。
 - AI 修复条只提交建议到输入区，不自动执行；打开前必须经过粘贴守卫同级的控制字符与危险命令检查。
-- 增强层顺序固定：AI 修复条 → 补全 → vi，避免 Esc 语义互相抢占。
+- 增强层顺序固定：Vi → 补全 → AI 修复条，避免 Esc 语义互相抢占；与 `design/out-of-scope/terminal-enhancements.md` 一致。
 
 ### 测试接缝
 

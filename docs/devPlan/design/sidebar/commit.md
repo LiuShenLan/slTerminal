@@ -97,9 +97,9 @@ pub enum ChangeEntry {
 | ignored | 不打开 | 无 | 只读条目 |
 
 - 落点为活跃项目聚焦面板组；无组时创建首个组。
-- 去重键 = 项目 + 规范绝对路径 + 面板标题后缀；无后缀面板与带后缀面板互不复用；跨项目不聚焦。
+- 去重键归 `domain-model.md`：文件打开路由使用项目 + 规范化真实路径；Diff 键含 `mode/source`；GitShow 使用项目 + 仓库相对路径（大小写不敏感）。Commit 的文件打开路由不追加标题后缀；Diff/GitShow 按自身规则追加 `(git diff)`/`(git delete)`，后缀不参与路由去重键。跨项目不聚焦。
 - 双击或聚焦行 `Enter` 打开；单击只设焦点；ignored 不打开；unknown 无右键菜单。
-- 项目根外、仓库根内条目仍显示与打开：modified/renamed/conflict 以 Diff 只读对比模式，added/untracked/unknown 以根外只读打开，deleted 以 GitShow；不提供回滚或删除。
+- 项目根外、仓库根内条目仍显示与打开：modified/renamed/conflict 以 Diff 只读对比模式，added/untracked/unknown 以根外只读打开，deleted 以 GitShow；不提供回滚或删除。该根外只读范围与 Explorer（根固定项目根）不对称，保持不变。
 - 文件消失、内容不可读或面板创建失败：非模态错误提示 + 静默刷新，不静默。
 
 ### 右键菜单与定位
@@ -154,7 +154,7 @@ pub enum ChangeEntry {
 | 进行中刷新 | 可完成并更新数据 | 丢弃旧结果 | 可完成 | 无 |
 | 确认框 | 模态期间禁止切换 | 取消且不执行 | 不保留 | 无 |
 
-- 折叠、已忽略分区折叠、ignored 开关归侧栏视图状态，应用级作用域；滚动、过滤、聚焦行仅运行期。
+- 折叠、已忽略分区折叠、ignored 开关归侧栏视图状态，应用级作用域；持久化位置与信封见 `persistence.md` 的 `state/views/commit.json`，本节不复制 schema。滚动、过滤、聚焦行仅运行期。
 - 不做每项目数据缓存；视图可见性、槽位与宽度归侧栏框架。
 
 ### 复用与重建

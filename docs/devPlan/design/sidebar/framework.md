@@ -8,7 +8,7 @@
 
 ```text
 slterm_sidebar/registry.rs
-  SideViewId { Navigation, Explorer, Commit, AgentFiles }
+  SideViewId { Navigation, Explorer, Commit, AgentFiles }  // 视图 id：nav/explorer/commit/agent-files
   ViewDef {
     id, title_key, icon_token, default_slot, default_order,
     shortcut_command, state_spec
@@ -38,7 +38,7 @@ sidebar_host/
 
 ```rust
 pub struct SidebarLayout {
-    pub visibility_intent: bool,
+    pub visibility_intent: bool, // 持久化为 state/sidebar.json 的 visible；表示显式意图，不是实际可见
     pub width: f32,
     pub split_permille: u16,
     pub slots: [Option<SideViewId>; 2], // 上、下
@@ -107,7 +107,7 @@ pub fn restore_default_layout(layout: &SidebarLayout) -> SidebarLayout;
 - 菜单 `上移 / 下移 / 置顶 / 置底 / 换区 / 隐藏 / 重置顺序`；`换区` 插入目标组末尾，拖拽按指针位置。
 - `重置顺序` 只按注册相对顺序重排各按钮组内可见按钮，不改槽位归属；隐藏视图的记住顺序同步归位。
 - `恢复默认侧栏布局` 需二次确认：全部按钮可见、槽位与顺序回注册默认；可见性意图、宽度、比例不变；已打开视图保持并随按钮迁移；同槽冲突按注册顺序保留靠前者，其余关闭但保留实例。
-- 外观页“侧栏默认布局”与活动栏拖拽/菜单共用同一 `SidebarLayout` 与同一命令入口，不建立第二套状态；页面修改立即作用于运行期，按 500ms 去抖保存。
+- 外观页“侧栏默认布局”与活动栏拖拽/菜单共用同一 `SidebarLayout` 与同一命令入口，不建立第二套状态；页面修改立即作用于运行期，按 `persistence.md` 的侧栏域去抖保存。
 
 ### 快捷键状态机
 
@@ -121,7 +121,7 @@ pub fn restore_default_layout(layout: &SidebarLayout) -> SidebarLayout;
 4. 已打开且侧栏可见但焦点不在视图内 → 聚焦视图内容。
 5. 已打开、侧栏可见且焦点在视图内 → 关闭视图；意图不变；两槽皆空则侧栏实际隐藏；焦点回到该视图可见按钮，没有则下一个可见按钮，仍没有则配置钮。
 
-打开/聚焦落点 = 视图内容第一个可聚焦元素，没有则内容容器。快捷键恢复隐藏视图后若已打开，按上述聚焦或关闭规则处理。视图快捷键全局生效并优先于终端输入；可重绑；冲突在设置中心快捷键页显示。
+打开/聚焦落点 = 视图内容第一个可聚焦元素，没有则内容容器。快捷键恢复隐藏视图后若已打开，按上述聚焦或关闭规则处理。视图快捷键的层序见 `ux-framework.md`（面板固定键与面板命令之后、终端输入之前）；可重绑；冲突在设置中心快捷键页显示。
 
 `切换侧栏` 默认 `Ctrl+Shift+B`，`聚焦活动栏` 默认 `Ctrl+Shift+L`；均走侧栏框架。切换侧栏与视图快捷键都不切换活跃项目、不改变主区面板。
 
@@ -169,24 +169,9 @@ pub struct ViewStateSpec {
 - 视图内部数据加载、错误、权限、空态由视图自己呈现；框架不提供统一骨架屏或空态。
 - 重启后从未打开过的视图不创建实例。
 
-持久化 schema：
+持久化落点与字段级 schema 以 `design/persistence.md` 为准：侧栏布局写 `state/sidebar.json`，各视图声明状态写 `state/views/<view-id>.json`；视图 id 统一为 `nav`、`explorer`、`commit`、`agent-files`。本文件不内嵌 schema。
 
-```json
-{ "version": 1,
-  "visibility_intent": "visible",
-  "width": 250.0,
-  "split_permille": 500,
-  "slots": { "top": "navigation", "bottom": null },
-  "buttons": {
-    "navigation": { "slot": "top", "order": 0, "visible": true },
-    "explorer":   { "slot": "top", "order": 1, "visible": true },
-    "commit":     { "slot": "top", "order": 2, "visible": true },
-    "agent_files":{ "slot": "top", "order": 3, "visible": true }
-  },
-  "view_states": { "navigation": { }, "explorer": { }, "commit": { }, "agent_files": { } } }
-```
-
-- 去抖 500ms；连续变更合并为最后一次完整状态；保存不得阻塞侧栏与主区；正常退出前冲刷。
+- 去抖按 `persistence.md` 的侧栏域；连续变更合并为最后一次完整状态；保存不得阻塞侧栏与主区；正常退出前冲刷。
 - 恢复清洗顺序：整体损坏 → 默认布局并通知一次 `配置已损坏，已恢复默认侧栏布局`；部分字段非法 → 仅该字段默认；未知视图 → 对应槽置空、记录丢弃；缺失视图 → 按注册默认槽位/顺序稳定合并插入；重复视图 → 保留一个；打开状态与按钮槽位冲突 → 以按钮槽位为准；同槽多打开 → 按该槽按钮顺序保留最靠前，其余关闭；隐藏与打开独立还原；隐藏视图记住位置非法 → 回注册默认。
 - 宽度加载夹取 160–720，非法回 250；比例夹取 10–90，非法回 50；呈现再受动态上限约束。
 - 保存失败：通知 `侧栏布局保存失败，更改可能无法在重启后恢复`，保留内存状态，下次变更或退出前重试；退出冲刷失败同样警告。
@@ -195,7 +180,7 @@ pub struct ViewStateSpec {
 
 - 活动栏按钮均可键盘到达；`↑/↓` 按视觉顺序移动，`Home/End` 首尾，`Enter/Space` 激活；`Shift+F10`/菜单键在视图按钮上打开菜单，配置钮不提供。
 - `Tab` 顺序：上按钮组 → 下按钮组 → 配置钮 → 宽度分隔线 → 上槽内容 → 水平分隔线 → 下槽内容 → 主区；空组、隐藏按钮、空槽、不可见分隔线跳过。
-- 分隔线可聚焦并用方向键调整；提供角色、方向、当前值与范围。
+- 分隔线可聚焦并用方向键调整；焦点环可见。
 - 视图关闭或侧栏隐藏后焦点回活动栏按钮或配置钮，不留在不可见内容内。
 - 拖拽结束后焦点回被拖动按钮；取消拖拽恢复不透明与无高亮。
 
@@ -203,15 +188,17 @@ pub struct ViewStateSpec {
 
 | 状态 | 同面板组切面板 | 切换项目 | 视图关闭重开 | 应用重启 |
 |---|---|---|---|---|
-| 可见性意图 | 保持 | 保持 | 保持 | 持久化 |
-| 宽度 | 保持 | 保持 | 保持 | 持久化 |
-| 上下比例 | 保持 | 保持 | 保持 | 持久化 |
-| 按钮显隐 | 保持 | 保持 | 保持 | 持久化 |
-| 按钮槽位与顺序 | 保持 | 保持 | 保持 | 持久化 |
-| 上/下槽打开视图 | 保持 | 保持 | 保持 | 持久化 |
+| 可见性意图 | 保持 | 保持 | 保持 | 持久化到 `state/sidebar.json` |
+| 宽度 | 保持 | 保持 | 保持 | 持久化到 `state/sidebar.json` |
+| 上下比例 | 保持 | 保持 | 保持 | 持久化到 `state/sidebar.json` |
+| 按钮显隐 | 保持 | 保持 | 保持 | 持久化到 `state/sidebar.json` |
+| 按钮槽位与顺序 | 保持 | 保持 | 保持 | 持久化到 `state/sidebar.json` |
+| 上/下槽打开视图 | 保持 | 保持 | 保持 | 持久化到 `state/sidebar.json` |
 | 视图实例与内部状态 | 保持 | 保持 | 保持 | 按声明恢复 |
-| 各视图声明状态 | 保持 | 按视图规则 | 保持 | 持久化 |
+| 各视图声明状态 | 保持 | 按视图规则 | 保持 | 持久化到 `state/views/<view-id>.json` |
 | 活动栏焦点/拖拽/菜单 | 保持焦点 | 拖拽取消，菜单按自身规则 | 不保留 | 不保留 |
+
+侧栏布局与视图状态分文件：布局写 `state/sidebar.json`，视图状态写 `state/views/<view-id>.json`；视图状态损坏只影响该视图。字段级 schema 与清洗规则细目见 `design/persistence.md`。
 
 逐视图状态作用域：
 
@@ -229,6 +216,6 @@ pub struct ViewStateSpec {
 | `sidebar.rs` 的 `toggle_view_pure`、`derive_layout`、`clamp_width`、`clamp_ratio`、`sidebar_split_ratio_at`、`dragged_width` | 复用纯函数思想与公式；状态结构改为按钮组织 + 双槽，宽度上限改 720 |
 | `SideViewId` 四值封闭集与注册顺序 | 直接沿用；补全 `ViewDef` 与状态声明 |
 | 活动栏 46px、34×34 按钮、激活竖条与主题 token | 复用视觉规格；补全隐藏、拖拽、菜单、焦点与键盘 |
-| 旧 `SidebarState` 固定槽位、无按钮组织、随 `session.json` 1Hz 保存 | 废弃；重建按钮组织、500ms 去抖与独立侧栏状态文件 |
+| 旧 `SidebarState` 固定槽位、无按钮组织、随 `session.json` 1Hz 保存 | 废弃；重建按钮组织、按持久化域去抖与独立侧栏状态文件 |
 | 旧视图形状（导航 tab 列表、Commit staged/unstaged、Agent 目录平铺） | 视图内容全部重建 |
 | `notify` 的可操作通知能力 | 复用底层；侧栏撤销提示按通知服务规范接入 |

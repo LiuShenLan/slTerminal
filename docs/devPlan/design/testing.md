@@ -16,9 +16,9 @@
 | 人工验收 | 实机清单 + 豁免登记 | 真实输入法、GPU/字体观感、拖拽手感、系统通知/托盘/回收站、真实 CLI/凭据 |
 
 - **全量串行**：`cargo test --workspace -- --test-threads=1`；性能与 PTY 容量断言对 CPU 负载敏感。
-- **隔离优先**：`tempfile::tempdir()` 与 `SLTERM_CONFIG_DIR` 隔离文件系统；进程级资源用 `SPAWN_LOCK`/`ENV_LOCK`；UI 测试用虚拟窗口与隔离状态根。生产 `%APPDATA%`/`%LOCALAPPDATA%` 永不被测试触碰。
+- **隔离优先**：`tempfile::tempdir()` 与 `SLTERM_CONFIG_DIR`/`SLTERM_LOCAL_DIR` 隔离文件系统；进程级资源用 `SPAWN_LOCK`/`ENV_LOCK`；UI 测试用虚拟窗口与隔离状态根。生产 `%APPDATA%`/`%LOCALAPPDATA%` 永不被测试触碰。
 - **覆盖门禁**：改动代码的可自动化部分必须有全量测试；不可自动化面在 `.claude/docs/testing/exemptions.md` 登记根因与兜底层级，禁止未登记豁免。
-- **键盘与输入保留**：无障碍专用能力不测试（屏幕阅读器/ARIA/读屏播报/WCAG/高对比度/大字体已删除）；键盘路径、焦点环、IME/CJK、减少动效仍作为普通交互测试。
+- **键盘与输入保留**：键盘路径、焦点环、IME/CJK、减少动效作为普通交互测试；无障碍专用能力已删除，只保留“无入口/无设置键/无快捷键”的负向断言。
 - **Mermaid 源码显示**：测试断言 `mermaid` 围栏按代码块显示源码、不执行内容、不生成图；保留渲染接口的类型测试，不测图布局。
 
 ### 夹具
@@ -62,25 +62,56 @@ pub struct WorkspaceHarness {
 | panels/diff | 行对对齐；并排/行内；工作区侧编辑；同步滚动；HEAD 刷新；外部重命名；冲突快照；大文件/二进制 |
 | panels/gitshow | HEAD 只读；刷新/过期；大文件/二进制；临时文件清理；去重 |
 | settings | 页面注册；导航/搜索；三保存模式；快捷键固定键参考；应用页；无项目浮层；导入导出/恢复默认；Hooks；只读/损坏 |
-| theme/i18n | token 消费；内置主题回退；密度/透明度/壁纸；i18n 键集合同（迁移能力）；不做 WCAG 准入 |
+| theme/i18n | token 消费；未知主题 id 回退 `Linear`；密度/透明度/壁纸；i18n 键集合同（迁移能力）；负向断言不做对比度准入、不静默改写用户设置 |
 | platform-windows | 单实例锁与载荷；窗口几何夹取/DPI；通知/任务栏闪烁；托盘/开机启动；回收站；默认程序；进程树终止 |
 | diagnostics/build | 日志脱敏；审计字段；panic；诊断包；一键清理；包清单/体积预算；代码签名（有证书时） |
 
 ### 验收追溯
 
-| featureSpec 篇目 | 设计所有者 | 主要测试层 |
-|---|---|---|
-| `README.md` / `acceptance.md` | 全部 | 跨域集成 + 虚拟窗口 + conformance |
-| `workspace/shell.md` | `design/workspace/shell.md` | 领域 + 虚拟窗口 + 集成 |
-| `workspace/navigation.md` | `design/workspace/navigation.md` | 领域 + 虚拟窗口 + 假 CLI |
-| `sidebar/framework.md` | `design/sidebar/framework.md` | 纯函数 + 虚拟窗口 |
-| `sidebar/explorer.md` / `commit.md` / `agent-files.md` | 对应 `design/sidebar/*` | 模型 + 虚拟窗口 + 文件系统集成 |
-| `panels/terminal.md` | `design/panels/terminal.md` | 终端 core 单测 + PTY 集成 + 虚拟窗口 |
-| `panels/editor.md` / `markdown.md` / `diff.md` / `gitshow.md` | 对应 `design/panels/*` | 引擎单测 + 虚拟窗口 + 文件集成 |
-| `panels/settings.md` | `design/panels/settings.md` + `settings/app-page.md` | 纯函数 + 虚拟窗口 + 设置写通道 |
-| `settings-and-persistence.md` | `design/persistence.md` | 持久化集成 + 故障注入 |
-| `cross-cutting.md` | `design/cross-cutting.md` 与各所有者 | 跨域矩阵 |
-| `acceptance.md` | `design/testing.md` | 门禁 + 人工核验 |
+| featureSpec 篇目 | 设计所有者 | 里程碑 | 验收场景 | 测试层/目标 |
+|---|---|---|---|---|
+| `workspace/shell.md` | `design/workspace/shell.md` | 壳与工作区 | 项目生命周期、布局拆分/合并、焦点、关闭链、单实例移交 | 领域 + 虚拟窗口 + 真实进程/conformance |
+| `workspace/navigation.md` | `design/workspace/navigation.md` | 侧栏框架 + 导航核心；导航历史与余量 | 项目 CRUD/排序/重命名/移除、历史会话、套餐余量 | 领域 + 虚拟窗口 + 假 CLI |
+| `panels/terminal.md` | `design/panels/terminal.md` | 终端面板 | PTY 生命周期、编号/cwd、OSC 8/52、关闭守卫 | 终端 core + PTY 集成 + 虚拟窗口 |
+| `panels/editor.md` | `design/panels/editor.md` | 编辑器面板 | 打开路由、保存冲突、AgentRoot 可写、gutter、崩溃快照 | 引擎单测 + 文件集成 + 虚拟窗口 |
+| `panels/diff.md` | `design/panels/diff.md` | Diff 面板 | 行对、冲突快照瞬态、保存并发、`mode/source` 去重 | 引擎单测 + 虚拟窗口 + 文件集成 |
+| `panels/gitshow.md` | `design/panels/gitshow.md` | GitShow 面板 | HEAD 只读、刷新/过期、大文件/二进制 | 引擎单测 + 集成 |
+| `panels/markdown.md` | `design/panels/markdown.md` | Markdown 面板 | 两态、安全 HTML、Mermaid 源码、草稿恢复 | 引擎单测 + 虚拟窗口 |
+| `panels/settings.md` | `design/panels/settings.md` + `design/settings/app-page.md` | 设置中心壳、基础页与应用页占位；设置中心 Agent/Hooks/后台任务页 | 页面注册、保存模式、固定键参考、无项目浮层 | 纯函数 + 虚拟窗口 + 设置写通道 |
+| `sidebar/framework.md` | `design/sidebar/framework.md` | 侧栏框架 + 导航核心 | 双槽、显隐、视图快捷键、视图状态矩阵 | 领域纯函数 + 虚拟窗口 |
+| `sidebar/explorer.md` | `design/sidebar/explorer.md` | 文件浏览器 | 树/多选/批量/剪贴板、写边界、监听 | 模型 + 文件系统集成 + 虚拟窗口 |
+| `sidebar/commit.md` | `design/sidebar/commit.md` | Commit 视图 | 四态、ignored、打开映射、回滚/删除 | 模型 + Git 集成 + 虚拟窗口 |
+| `sidebar/agent-files.md` | `design/sidebar/agent-files.md` | Agent 全局文件 | 节点探测、过滤、监听、写边界 | 模型 + 文件系统集成 + 虚拟窗口 |
+| `settings-and-persistence.md` | `design/persistence.md` | 设置存储与写通道；壳与工作区 | DTO 往返、去抖、原子写、崩溃恢复、关闭冲刷 | 持久化集成 + 故障注入 |
+| `cross-cutting.md` | `design/cross-cutting.md` 与各所有者 | 应用基础服务；跨域收敛与规格验收 | 错误/通知/焦点/性能/后台任务/安全边界 | 跨域矩阵 + 虚拟窗口 |
+| `acceptance.md` | `design/testing.md` | 跨域收敛与规格验收 | acceptance 全通过、范围外负向、门禁全绿 | 门禁 + 人工核验 |
+| `assets/README.md` | `design/build-and-release.md` | 构建与打包基线 | 资产名/许可/第三方声明随包；清单三处一致 | 包合同钉测试 + 资产核验 |
+
+### 范围外与删除能力
+
+范围外迁移能力按里程碑正向验收；删除能力只做负向断言，不建正向测试。
+
+| 范围外能力 | 里程碑 | 正向验收 | 迁移前边界 |
+|---|---|---|---|
+| Runtime v2 | Runtime API v2 | conformance、幂等、`runtime.handover`、无 `window.*` 方法 | 应用页只读“未迁移/不可用”；无 v1 兼容层 |
+| 应用页范围外节 | 应用页范围外节落地与壳服务 | 界面语言、更新、托盘与开机启动、Providers/助手、备份、终端增强逐项接线 | 只读说明 `该能力由迁移版本提供`；终端增强禁用态 `尚未启用` |
+| AI Providers/助手 | AI Providers/助手 | 元数据 CRUD、凭据门面、脱敏、关闭后不发请求 | 无入口、无设置键 |
+| 终端增强 | 终端增强回迁 | 默认值、按键顺序、取消、缓存按面板 | 禁用态，不拦截按键 |
+| 加密备份 | 加密备份 | 加解密/校验/回滚、类别白名单、旧格式拒绝 | 无导出/恢复入口 |
+| 更新与发布链 | 更新与发布链 | 四重校验、handoff、签名、发布门禁 | 无更新入口，无静默启动 |
+
+| 删除能力 | 负向断言 |
+|---|---|
+| Image 面板 | 无面板类型、入口、快捷键或设置键；恢复未知类型时丢弃 |
+| Merge 三栏 | 无 Merge 入口或快捷键；冲突来源只打开 Diff 只读快照；恢复丢弃 |
+| 用户主题 | 无导入/导出/编辑器入口与设置键；未知主题 id 回退 `Linear` |
+| Markdown 实时块编辑 | 渲染态无输入、无块编辑命令、无 live edit 状态或设置键 |
+| 提示符跳转 | 无 API、无按键、无文档入口 |
+| 无障碍专用能力 | 无屏幕阅读器/ARIA/播报/高对比度/大字体入口、快捷键或设置键 |
+| 对比度校验 | 无准入、无自动回退、无设置键；主题与透明度/壁纸合成后不静默改写用户设置 |
+| Mermaid 渲染 | 围栏代码块按源码显示；无图生成入口或设置键 |
+| 外部文件拖入 | 无外部拖入处理或设置键；仅文件浏览器内部拖到编辑器面板组 |
+| Runtime v1 兼容层 | 无 v1 方法、schema 或端口格式；不读旧端口文件 |
 
 ### 旧测试处置
 
@@ -93,7 +124,7 @@ pub struct WorkspaceHarness {
 
 - 沿用 `.claude/docs/testing/exemptions.md` 单表；新增项在实现阶段登记。
 - 已知不可自动化面：真实中文输入法候选窗、GPU/字体渲染观感、拖拽手感、系统通知/托盘/回收站、真实凭据管理器、真实 CLI hook 事件、安装器覆盖安装。
-- 键盘可达、焦点环、IME/CJK、减少动效仍自动或半自动覆盖；无障碍专用能力已删除，不登记相关豁免。
+- 键盘路径、焦点环、IME/CJK、减少动效仍自动或半自动覆盖；无障碍专用能力已删除，不登记相关豁免。
 
 ### 门禁
 

@@ -2,7 +2,7 @@
 
 > 目标态实现级设计；需求真值源见 docs/featureSpec，裁决见 ../spec-issues.md。
 
-持久化层是唯一写盘通道：所有文件经 `PersistenceCoordinator` 串行写入，使用临时文件 + 原子替换、上一代 `.bak`、损坏隔离与 generation 防旧快照覆盖。设置编码复用 `slterm_settings` 与 `settings_store` 语义；文件原语复用 `atomic_file`。
+状态持久化层是 `state/` 下状态文件的唯一写盘通道：这些文件经 `PersistenceCoordinator` 串行写入，使用临时文件 + 原子替换、上一代 `.bak`、损坏隔离与 generation 防旧快照覆盖。`state/runtime.port`、`state/instance.lock` 由 Runtime 与单实例服务写入，日志、审计、更新下载与崩溃现场由各自服务写入；它们使用各自的原子写与生命周期，不进入 `FileKey`。设置编码复用 `slterm_settings` 与 `settings_store` 语义；文件原语复用 `atomic_file`。
 
 ### 文件划分
 
@@ -19,6 +19,8 @@
 | `state/instance.lock` | 单实例 owner 锁 | 启动时 | 单实例服务 |
 
 不新增全局 `session.json`。旧根文件不读、不删。
+
+范围外路径：迁移后补全数据固定在 `state/completion/*`；备份与恢复文档只引用该路径，不另立位置。窗口几何同样范围外，见下文。
 
 ### 通用信封与版本策略
 
@@ -63,7 +65,7 @@
 - `projects` 数组顺序即导航树顺序；显示名可重复。
 - `root` 为归一化词法路径；真实路径在运行时解析，不进文件。
 - `active_project` 必须存在于 `projects`；恢复时无效则取第一个项目，空列表为 `null`。
-- `next_*` 是全局分配器游标；恢复时与已见最大 ID 取较大者。
+- `next_*` 是全局分配器游标；恢复时统一取 `max(next_*, maxSeen + 1, maxDir + 1)`，`maxSeen` 为已加载项目内该类 ID 的最大值，`maxDir` 为 `projects/` 目录名中的最大值。
 - 项目布局不内联，避免单文件无界增长与单项目损坏扩散。
 
 ### `state/projects/<id>/layout.json`
@@ -98,7 +100,10 @@
         "workspace_path": { "scope": "project_relative", "value": "src/a.ts",
                             "read_only": false, "save_as_grant": false },
         "view": "side_by_side", "word_wrap": false, "sync_scroll": true,
-        "split_permille": 500, "collapsed_side": null, "swapped": false } }
+        "split_permille": 500, "collapsed_side": null, "swapped": false } },
+    { "id": "panel:14", "params": {
+        "kind": "settings", "revision": 1,
+        "selected_page": "shortcuts", "page_params": { } } }
   ]
 }
 ```
@@ -107,12 +112,12 @@
 
 | 类型 | 字段 |
 |---|---|
-| terminal | `revision`；编号/标题/cwd 在 `terminals.json` |
-| editor | `path`、`read_only`、`word_wrap`、`language_override` |
-| markdown | `path`、`read_only`、`view`（`rendered`/`source`）、`outline_open`、`zoom_percent`、`scroll_anchor { anchor, offset_px }` |
+| terminal | `revision`；编号/标题/cwd 只在 `terminals.json`/`TerminalBook` |
+| editor | `path`（含 `PersistedPath.read_only`）、`word_wrap`、`language_override` |
+| markdown | `path`（含 `PersistedPath.read_only`）、`view`（`rendered`/`source`）、`outline_open`、`zoom_percent`、`scroll_anchor { anchor, offset_px }` |
 | diff | `head_path`、`workspace_path`、`view`（`side_by_side`/`inline`）、`word_wrap`、`sync_scroll`、`split_permille`、`collapsed_side`（`null`/`head`/`workspace`）、`swapped` |
 | gitshow | `repo_path` |
-| settings | `selected_page` |
+| settings | `selected_page`、`page_params` |
 
 规则：
 
@@ -121,7 +126,9 @@
 - `groups[].panels` 顺序即页签顺序；`active` 必须在 `panels` 内。
 - `panels` 与 `groups` 的引用必须闭合；不闭合项在恢复时丢弃。
 - 空组不写盘；关闭最后面板后布局变更立即进内存并 2 秒去抖。
-- 冲突快照 Diff 不持久化；恢复只接受默认模式 Diff。
+- 冲突快照 Diff 不持久化、不入布局；恢复只接受默认模式 Diff。
+- `PersistedPath.read_only` 是只读判定的唯一持久化字段；面板参数不重复携带，恢复时按当前允许根重算。
+- 终端编号/自定义标题/最近 cwd 只写 `terminals.json`，运行期权威在 `TerminalBook`；`layout.json` 的终端面板只有 `revision`，不得内联计数器或编号。
 
 ### `state/projects/<id>/terminals.json`
 
@@ -147,6 +154,8 @@
 
 ### `state/sidebar.json`
 
+本文件是侧栏布局与视图状态 schema 的唯一权威；`sidebar/framework.md` 与各视图只引用，不复制字段、默认值或清洗规则。视图 id 封闭为 `nav`、`explorer`、`commit`、`agent-files`；每个视图的内部状态单独落在 `state/views/<view-id>.json`，信封与大小上限见上文。
+
 ```json
 {
   "schema_version": 1,
@@ -166,7 +175,7 @@
 
 - 恢复清洗规则由侧栏框架拥有：宽度 160–720、比例 10%–90%、未知视图静默丢弃、同槽冲突保留按钮顺序靠前者。
 - `views` 只记布局态；各视图内部状态在 `state/views/<id>.json`，损坏只影响该视图。
-- 窗口几何持久化属范围外增强，不进入本文件。
+- 窗口几何保持范围外：`state/window.json` 由 `platform-windows.md` 在迁移里程碑定义与接入；本文件不定义其 schema、不写入、不在关闭链冲刷。
 
 ### `state/views/<view-id>.json`
 
@@ -293,6 +302,7 @@ impl PersistenceCoordinator {
 - 关闭冲刷按 `FlushClass` 分类：
   - `Guarded`：设置、侧栏、工作区索引、项目布局、终端簿。失败中止关闭，提供重试/取消。
   - `BestEffort`：崩溃快照清理、视图状态。失败记录日志并继续。
+- `Guarded` 集合固定为上述五项；关闭状态机以 `architecture.md` 的 `CloseState::{Idle, Guarding, Saving, ShuttingDown}` 为准，本文件只定义冲刷分类与顺序。
 - 设置只读或持续失败时不进入“重试—失败”循环：守卫只提供放弃与取消。
 
 ### 跨文件提交顺序与一致性
