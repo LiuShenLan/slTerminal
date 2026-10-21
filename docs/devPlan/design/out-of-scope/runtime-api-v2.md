@@ -22,16 +22,14 @@
 - 新建 `slterm_runtime_protocol`：`envelope`、`resource_id`（只含线缆 `ResourceId` 的解析/格式化/错误）、`resources`、`methods`、`errors`、`schema`、`describe`、`limits`。
 - 领域 ID newtype、单调分配器与持久化落 `slterm_workspace::ids`；协议 crate 不定义 `ProjectId` 等领域类型。
 - Runtime 服务器统一落 `slterm_app/src/runtime_api/`：`server`、`transport`、`hub`、`dispatch`、`mutation_cache`、`cli`、`handover`、`skill_install`、`audit`、`conformance`。
-- 旧 `slterm_app/src/integrations/runtime/` 目录与 `request_cache.rs` 删除，不保留兼容模块。
+- 旧 `slterm_app/src/runtime_api/` 的 v1 实现（server/transport/command/git/agent_api/orchestrate/cli/shortcuts）整体重写，不保留兼容模块。
 
 ### 迁移顺序
 
-1. 在新 core 领域 crate 落地 `slterm_workspace::ids`、快照投影与布局转换；协议 crate 同步线缆 `ResourceId`。
-2. 实现 v2 hub 投影、revision、订阅与只读方法；UI owner 单队列接入 `dispatch`。
-3. 接通传输、端点发现、单实例 `runtime.handover` 与写命令派发；先完成项目/组/面板生命周期。
-4. 接通终端、Agent、Git 与 orchestrate；写方法接入 `mutation_cache` 与 `expected_revision`。
-5. 重写 CLI、env、skill、schema、文档与审计；删除 v1 资产与旧别名。
-6. 跑 conformance 增量；通过后删除 v1 代码、旧 schema、旧 skill 与 legacy 覆盖。
+1. 领域骨架期落地 `slterm_workspace::ids` 与 `slterm_runtime_protocol` 的信封/`ResourceId`/handover DTO；壳与工作区里程碑实现最小端点、端点发现与 `runtime.handover` 接收端。
+2. 垂直切片后：实现 v2 hub 投影、revision、订阅、project/panel/terminal 读写、UI owner 单队列、`mutation_cache` 与 `expected_revision`；跑项目/组/面板/终端 conformance 子集。
+3. 随域增量：终端、Agent、Git 与 orchestrate 方法按域接入；每接入一域补对应 conformance。
+4. 收敛门后：重写 CLI、env、skill、schema、文档与审计；跑完整 conformance。旧 v1 实现随“旧壳退役”删除；本步删除 v1 资产、旧别名与旧文档。
 
 ### conformance 增量
 
@@ -42,10 +40,7 @@
 
 ### 依赖里程碑
 
-- 项目与布局模型、工作区壳、面板宿主注册点。
-- 单实例与窗口服务、持久化协调器。
-- 终端面板（`terminal.*` 与 `agent.*` 的执行落点）。
-- 设置中心应用页（Runtime 只读状态入口）。
+里程碑依赖只在 `plan.md` 的“里程碑”表定义；本文件不复制依赖列表。
 
 ### 测试与验收
 

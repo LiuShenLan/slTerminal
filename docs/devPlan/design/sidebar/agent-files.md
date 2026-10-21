@@ -105,7 +105,7 @@ pub struct AgentFilterConfig {
   3. 仍冲突且来自不同 Agent 时追加 Agent 显示名。
   4. 仍无法区分时追加完整绝对路径。
   5. 悬停提示始终显示完整绝对路径；标题随面板组页签集合变化重算。
-- 面板参数需保存 `absolute_path / agent_root / agent_display_name`，否则无法在重开与页签变化后重算标题；这不是标题持久化，而是标题输入持久化。
+- 面板参数只保存 `PersistedPath`（绝对路径）；标题重算时按当前 AgentRoot 登记表反查所属 Agent 与根内相对路径，不新增 `agent_root`/`agent_display_name` 持久化字段。节点被删除或根不可用时回退规范化绝对路径；这是标题输入派生，不是标题持久化。
 
 ### 过滤消费
 

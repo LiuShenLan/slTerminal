@@ -51,14 +51,9 @@ pub enum EditorRunMode {
     Detached,             // 文件已移出允许根
     Error(EditorError),
 }
-pub struct EditorPanelParams {
-    pub path: PersistedPath,          // 只读判定只在 PersistedPath.read_only
-    pub wrap: bool,
-    pub language_override: Option<LanguageId>,
-}
 ```
 
-`PersistedPath` 的类型与只读语义归 `domain-model.md`，本面板不复制只读字段。手动只读是叠加在可编辑模式上的用户锁，不产生新模式，且仍为运行期状态、不写入布局。`AgentRoot` 的可写性按当前 Agent 根登记表在运行时判定，不新增持久化字段。
+持久参数以 `domain-model.md` 的 `EditorParams` 为准；`PersistedPath` 的类型与只读语义不在此复制。手动只读是叠加在可编辑模式上的用户锁，不产生新模式，且仍为运行期状态、不写入布局。`AgentRoot` 的可写性按当前 Agent 根登记表在运行时判定，不新增持久化字段。
 
 ### 文档缓冲与编码/行尾
 
@@ -127,7 +122,7 @@ pub enum SaveOutcome {
 - 保存前检查相对基线的变化，保存后检查磁盘版本与本次写入预期一致；任一次不一致即进入保存冲突，不以写入后的磁盘状态静默建立新基线。与 Diff 保存链一致。
 - 不做非原子降级；原子替换失败保留原文件与脏状态。
 - 保存冲突对话框：“覆盖磁盘”“另存为”“取消”，默认焦点“取消”。干净文档不进入冲突，按外部修改自动重载。
-- 另存为使用系统文件对话框，筛选器“所有文件”；成功后更新文档身份、路径、保存目标、页签标题与布局路径；目标已打开时显示“目标文件已打开”，提供“取消”“替换”；替换前对目标脏缓冲要求保存/丢弃确认。
+- 另存为使用系统文件对话框，筛选器“所有文件”；成功后更新文档身份、路径、保存目标、页签标题与布局路径；授权只绑定当前文档与当前运行期，不写入布局，重启后根外路径按根外只读重新判定。目标已打开时显示“目标文件已打开”，提供“取消”“替换”；替换前对目标脏缓冲要求保存/丢弃确认。
 - 保存时文件已不存在：显示“文件已不存在”，默认“另存为”，另有“保存到原路径（重新创建）”“取消”。
 - 只读原因分别提示：只读浏览、根外只读、手动只读；文件已移出允许根的脱离缓冲 `Ctrl+S` 打开另存为。
 
@@ -166,8 +161,22 @@ pub trait SyntaxProvider {
 | `.css` `.scss` `.less` | CSS |
 | `.md` `.markdown` | Markdown |
 | `.xml` `.svg` | XML |
+| `.sh` `.bash` `.zsh` | Shell |
+| `.ps1` `.psm1` | PowerShell |
+| `.go` | Go |
+| `.java` | Java |
+| `.c` `.h` `.cpp` `.hpp` `.cc` | C/C++ |
+| `.cs` | C# |
+| `.sql` | SQL |
+| `.yml` `.yaml` | YAML |
+| `.toml` | TOML |
+| `.ini` `.cfg` | INI |
+| `.diff` `.patch` | Diff |
+| `Dockerfile` | Dockerfile |
+| `Makefile` | Makefile |
 | 其他/无扩展名 | 纯文本 |
 
+- 上表是 `LanguageRegistry` 的唯一语言映射；编辑器、Diff、GitShow 与 Markdown 代码块共用，Markdown 代码块语言别名归一后查同一表，未知语言纯文本。
 - 实现选型：Tree-sitter 增量解析 + 每语言查询；高亮在后台或分帧执行，只计算可见区域与 overscan。无法解析时回退纯文本，不阻塞输入。
 - 路径变化导致语言变化时热切换规则，不重建缓冲、不丢文本/脏状态/光标/撤销历史。
 - 手动语言覆盖是面板参数，随布局持久化；只影响高亮，不改内容、扩展名或保存行为；关闭重开恢复“自动（按扩展名）”。

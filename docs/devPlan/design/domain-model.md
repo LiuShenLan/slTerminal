@@ -35,7 +35,7 @@ impl IdAllocator {
 }
 ```
 
-- 恢复时 `observe_existing` 必须同时考虑 `workspace.json` 的 `next_*`、已加载项目内的全部 ID、`projects/` 目录名；游标统一取 `max(next_*, maxSeen + 1, maxDir + 1)`。这样索引丢失后以空状态继续也不会与孤儿目录 ID 冲突。
+- 恢复时 `observe_existing` 必须同时考虑状态库 `workspace.next_*`、已加载项目内的全部 ID、`recovery/` 目录名；游标统一取 `max(next_*, maxSeen + 1, maxDir + 1)`。这样状态库丢失后以空状态继续也不会与孤儿恢复目录 ID 冲突。
 - 字符串形式（Runtime v2、环境变量、移交）：`project:<u64>`、`group:<u64>`、`panel:<u64>`；解析失败即 `invalid_params`，未知资源即 `resource_not_found`。前缀集合封闭，未来新增资源类型只追加前缀，不复用旧前缀语义。
 - 线缆类型：协议 crate 的 `resource_id.rs` 只定义不透明字符串 `ResourceId` 及其解析/格式化/错误，不重复定义 `ProjectId`/`PanelGroupId`/`PanelId`；领域 newtype 唯一定义于本文件（`slterm_workspace::ids`）。完整线缆合同见 `integrations/runtime-api-v2.md`。
 
@@ -93,7 +93,7 @@ pub fn relocate(entry: &ProjectEntry, layout: &ProjectLayout,
   - `project_relative` 路径按新根重新解析；新根外文件面板转为根外只读或触发错误态，由面板规格决定。
   - `absolute`/`repo_relative` 路径不变；Diff/GitShow 的仓库根按新根重新解析。
   - 既有终端保持原 cwd；新终端与文件浏览器使用新根。
-  - 重定位只写 `workspace.json` 的根字段；布局文件中的相对路径无需改写。
+  - 重定位只提交 `projects.root`；布局 JSON 中的相对路径无需改写。
 
 ### 项目布局、面板组与面板
 
@@ -223,7 +223,7 @@ pub struct PageParams(pub serde_json::Value);
 
 版本规则：
 
-- 文件根 `schema_version` 与当前版本不等（含更高或更低）即不兼容；不提供升级链。
+- 状态库 `user_version` 与当前版本不等（含更高或更低）即不兼容；不提供升级链。
 - 面板参数 `revision` 高于当前支持：丢弃该面板并聚合警告；低于当前：首版无旧版本，按不兼容丢弃。
 - 追加可选字段必须 `serde(default)`，不升版本；字段改名、删除、语义变化必须升 `revision`。
 
@@ -236,14 +236,13 @@ pub struct PersistedPath {
     pub scope: PathScope,
     pub value: String,
     pub read_only: bool,       // 唯一只读标记；打开/恢复时按当前允许根重算
-    pub save_as_grant: bool,   // 用户经系统另存为显式授予的根外写入权
 }
 
 pub struct RepoPath { pub value: String }  // 相对仓库实际根
 ```
 
 - `ProjectRelative` 在根重定位时按新根解析；`RepoRelative` 在仓库根变化时重新解析；`Absolute` 原样使用。
-- 恢复时重新执行允许根校验：项目根 + 已登记 Agent 全局目录（`AgentRoot` 作用域）可写；仓库根内、项目根外只读；仓库根外仅保留 `save_as_grant` 的可写例外，其余强制只读。Agent 根可写性是运行期判定，不新增持久化字段。
+- 恢复时重新执行允许根校验：项目根 + 已登记 Agent 全局目录（`AgentRoot` 作用域）可写；仓库根内、项目根外只读；仓库根外一律只读。系统另存为授权只绑定当前运行期，不进入布局；Agent 根可写性是运行期判定，不新增持久化字段。
 - `PersistedPath.read_only` 是只读判定的唯一持久化字段；`EditorParams`/`MarkdownParams` 不重复携带。
 - 路径比较用 `PathKey`：真实路径规范化后的 Windows 大小写不敏感键；显示路径保留原始大小写。
 
@@ -269,7 +268,7 @@ impl TerminalBook {
 ```
 
 - 创建终端：先分配编号，再创建面板；关闭只删条目，不回退计数。
-- 恢复：布局中的终端面板按 `terminals.json` 取编号；缺失条目从 `next_ordinal` 递增分配；重复编号保留最小者，其余重分配；孤儿条目丢弃。
+- 恢复：布局中的终端面板按状态库 `project_terminals` 取编号；缺失条目从 `next_ordinal` 递增分配；重复编号保留最小者，其余重分配；孤儿条目丢弃。
 - 自定义标题立即持久化；编号与 cwd 去抖 300ms。
 - 标题展示：自定义标题 > 运行中 CLI 会话标题 > 历史会话标题 > `terminal-N`。
 
@@ -348,6 +347,8 @@ pub fn focus_cycle(layout: &ProjectLayout, from: PanelId, forward: bool) -> Opti
 
 ### 纯转换与恢复对账
 
+`WorkspaceDto`、`ProjectLayoutDto`、`TerminalsDto` 作为本地状态库的 JSON 载荷持久化；状态库 schema 与事务归 `persistence.md`，本文件定义 DTO 字段语义、恢复对账与不变量。
+
 ```rust
 pub struct ProjectViewState {
     pub layout: ProjectLayout,
@@ -364,7 +365,7 @@ pub fn restore_registry(dto: WorkspaceDto) -> (ProjectRegistry, IdAllocator, Res
 
 恢复对账顺序（幂等）：
 
-- 校验根 `schema_version`；不兼容即整文件失败。
+- 状态库 `user_version` 与完整性由 `persistence.md` 校验；本层只接收已通过版本校验的载荷。
 - ID 解析与全局唯一性校验；重复的 `PanelGroupId`/`PanelId` 保留先出现者，后者丢弃。
 - 丢弃未知 `PanelKind`、超版本 `revision`、缺失必需字段的面板。
 - 丢弃引用不存在组的面板；丢弃不在树上的组；丢弃空组；按 `slterm_split` 规则塌缩树。
@@ -415,26 +416,9 @@ pub fn restore_registry(dto: WorkspaceDto) -> (ProjectRegistry, IdAllocator, Res
   - `slterm_workspace::panel` 的枚举与参数结构；
   - DTO tag 与 `revision`；
   - `slterm_workspace::dedupe` 的去重键；
-  - `slterm_app::app::panel_registry` 的单一注册项：`kind`、工厂、能力（dirty/save/focus target）、标题策略；
+  - `slterm_app::app::panel_registry` 的单一注册项：`kind`、工厂、能力、标题策略；
   - 恢复过滤与 `RestoreReport` 测试；
   - `docs/featureSpec/workspace/shell.md` 的面板类型表与验收。
-- 注册表项接口：
-
-```rust
-pub struct PanelDescriptor {
-    pub kind: PanelKind,
-    pub create: fn(PanelCreateContext<'_>) -> Result<PanelHost, PanelOpenError>,
-    pub capabilities: PanelCapabilities,
-    pub default_focus: FocusTarget,
-}
-
-pub struct PanelCapabilities {
-    pub dirty: bool,
-    pub save: bool,
-    pub close_guard: bool,
-    pub duplicate: bool,
-}
-```
-
+- 注册项类型（`PanelDescriptor`、`PanelCapabilities`）、工厂上下文与焦点接缝归 `workspace/shell.md` 与 app 注册点所有；本文件只定义领域枚举与参数。core 不引用 `PanelHost`/`PanelCreateContext` 等 app 类型。
 - 未注册类型在恢复时丢弃并聚合警告；运行时不能创建。
 - 禁止面板类型由 UI 侧私增；禁止用“通用文档面板 + 模式字段”绕过封闭集。

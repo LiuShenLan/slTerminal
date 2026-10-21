@@ -26,13 +26,13 @@ _Avoid_: 工作区, 根目录条目
 项目对应根目录；文件打开、文件浏览器、Commit 与新建终端的基准。
 
 **设置中心**（Settings Center）：
-项目内普通面板，每项目最多一个；无项目时由应用设置浮层承载应用页。
+项目内普通面板，左侧导航 + 右侧配置页；每项目最多一个；无项目时由应用设置浮层承载应用页。配置页经注册表分派，新增配置页 = 组件 + 注册一条。
 
 **应用设置浮层**（App Settings Overlay）：
 无项目时打开的仅含应用页的模态覆盖层；不复用项目布局。
 
-**WindowState**：
-窗口大小/位置/最大化状态；语义是启动回放的行为输入，不是诊断字段。
+**窗口几何**（WindowGeometry）：
+窗口大小/位置/最大化状态与显示器标识；语义是启动回放的行为输入，不是诊断字段。
 
 **活动栏**（ActivityBar）：
 最左侧常驻窄条，容纳侧栏视图按钮与设置入口。
@@ -73,9 +73,6 @@ Win10（build < 21376）下嵌入并提取的新版 `conpty.dll` + `OpenConsole.
 
 ### 设置与外观
 
-**设置中心**（Settings Center）：
-项目内普通面板，左侧导航 + 右侧配置页；每项目最多一个；无项目时由应用设置浮层承载应用页。配置页经注册表分派，新增配置页 = 组件 + 注册一条。
-
 **设置段**（Settings Segment）：
 `settings.json` 的语义分组；「键 → 段」映射单源在 `slterm_settings::keys`，未知键原位保留。
 
@@ -89,7 +86,7 @@ Win10（build < 21376）下嵌入并提取的新版 `conpty.dll` + `OpenConsole.
 UI 颜色的语义命名槽位。组件只引用 token，禁止硬编码颜色；仅暗色。
 
 **内置主题**（ThemeName）：
-内置暗色主题目录，`Linear` 为默认；主题色经 WCAG 语义槽校验后才可入目录。
+内置暗色主题目录，`Linear` 为默认；主题只保证暗色可读，不做对比度校验或可读性提示。
 
 **明度阶梯**（Lightness Ramp）：
 UI 背景色的离散档位；层级靠相邻档差表达，不叠加阴影/边框。
@@ -112,7 +109,7 @@ UI 背景色的离散档位；层级靠相邻档差表达，不叠加阴影/边�
 AI CLI 的封闭身份枚举；承载 slug、显示名、启动/恢复/分叉命令与屏幕规则匹配。持久化 `source` 宽松落盘，消费时经 `AgentKind::parse` 严格归一。
 
 **Agent 状态**（AgentStatus）：
-面板的 agent 语义状态：Idle / Working / Blocked / Done / Unknown；来源分为 Hook / Screen / Process / Unknown。`Unknown` 表示尚无权威判定（普通 shell 或未识别）。
+面板的 agent 语义状态：Working / Attention / Done / Error / Unknown；`Attention` 表示等待输入或权限确认，`Unknown` 表示尚无权威判定（普通 shell 或未识别）。
 
 **AgentHub**：
 agent 事件归属与面板状态投影的宿主：消费 hook 事件与屏幕看门狗结果，维护 AgentActivity/AnswerInbox。
@@ -156,7 +153,7 @@ hook 执行失败时的合成命令与证据；默认关（复用 `AssistantConf
 进程内子端点 > `SLTERM_RUNTIME_ENDPOINT` 环境变量（`<port> <token>`）> 数据目录 `state/runtime.port`。
 
 **CLI 双人格**：
-同一 `slterm.exe`：带子命令 = CLI 客户端，无子命令 = GUI。`slterm ctl` 暴露完整协议，资源动词（`window`/`project`/`panel-group`/`panel`/`agent`）为同一信封上的薄别名，`slterm env` 离线报告身份与端点。
+同一 `slterm.exe`：带子命令 = CLI 客户端，无子命令 = GUI。`slterm ctl` 暴露完整协议，资源动词（`project`/`panel-group`/`panel`/`terminal`/`agent`/`git`）为同一信封上的薄别名，`slterm env` 离线报告身份与端点。
 
 **RuntimeHub / RuntimeDispatch**：
 Runtime API 的宿主侧枢纽：接收写命令、派发到工作区执行、经回执通道返回结果。
@@ -207,13 +204,13 @@ HEAD ↔ 工作区双栏或行内对照，工作区侧可编辑；gutter 点击�
 ### 安全
 
 **凭据域**：
-真实凭据只存 Windows 凭据管理器；业务经 `secrets` 门面访问。`SecretBytes` 出域即用即焚，token/key 不出域。
+真实凭据只存 Windows 凭据管理器；业务经 `SecretStore` 门面访问。`SecretValue` 出域即用即焚，token/key 不出域；target 统一 `slterm/<scope>/<id>`。
 
 **审计通道**（audit）：
 `tracing` target `audit` 的安全事件通道；事件字段只含 operation/path/source/result 与 expected/actual 指纹，禁插值凭据值与文件内容。
 
 **加密备份**：
-口令保护的本地备份，格式 `TRMBK001 | salt | nonce | ciphertext`（AES-256-GCM，魔数作 AAD；Argon2id 派生）。类别与敏感键表以代码为准；敏感键导出剥除、导入复验。
+口令保护的本地备份，目标格式 `SLTBK002 | salt | nonce | ciphertext`（AES-256-GCM，魔数作 AAD；Argon2id 派生）。类别与敏感键表以代码为准；敏感键导出剥除、导入复验；旧 `TRMBK001` 归档拒绝。
 
 **恢复点**（RestorePoint）：
 一次备份/恢复操作的可撤回句柄；会话内撤回，跨重启清单归设置页安全分区。
@@ -234,6 +231,12 @@ HEAD ↔ 工作区双栏或行内对照，工作区侧可编辑；gutter 点击�
 
 **原子写**：
 持久化通用纪律——临时文件 + rename；损坏状态处理；设置写经审计包装。
+
+**状态库**（State DB）：
+本地 SQLite 单库，承载项目、布局、终端簿、侧栏与视图状态；设置 JSON 与崩溃快照不在库内。事务提交替代逐文件原子替换与跨文件顺序。
+
+**漫游根 / 本地根**：
+漫游根存应用设置；本地根存状态库与机器本地文件（实例锁、Runtime 端点、窗口几何、崩溃快照、隔离区、补全、更新、日志/审计/崩溃现场）。
 
 **门禁**：
 行数棘轮（`architecture/file-budgets.txt`）、依赖方向（`architecture/dependencies.toml`）、禁名回流（`scripts/check_brand_regress.py`）、文档策略（`scripts/check_doc_policy.py`）；git hooks 常挂。

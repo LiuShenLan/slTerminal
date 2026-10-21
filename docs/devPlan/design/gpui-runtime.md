@@ -38,7 +38,7 @@ PanelHost (Entity)
 ├─ PanelParams 运行副本（只读模型；权威在 PanelRecord）
 ├─ PanelBody（封闭枚举，持具体 Entity）
 ├─ poisoned: Option<PanelPoison>
-├─ TaskSlots（generation + 任务句柄）
+├─ PanelTasks（任务句柄；令牌类型归 cross-cutting.md）
 └─ Vec<Subscription>
 
 PanelBody = TerminalPanel | EditorPanel | MarkdownPanel | DiffPanel | GitShowPanel | SettingsPanel
@@ -114,39 +114,16 @@ overlays: dialogs, notifications, tab menus, drag previews
 - 切换项目：读取目标 `ProjectView.focus_memory`；无记忆时焦点停留在 `Workspace`。
 - 启动/布局恢复：不调用 `window.focus`；`focused_group` 只决定布局层级。
 - `Ctrl+Tab`/`Ctrl+Shift+Tab`：按 ux-framework 的 `focus_cycle` 规则激活并聚焦；终端与编辑器不拦截。
-- 焦点落点由面板 body 提供：
-
-```rust
-pub trait PanelFocus {
-    fn focus_target(&self, cx: &App) -> FocusHandle;
-}
-```
-
+- 焦点落点由 `PanelBody::focus_target(&App) -> Option<FocusTarget>` 提供（接口归 `workspace/shell.md`）；`PanelHost` 将 `FocusTarget` 映射为 GPUI `FocusHandle`。
   - 终端 → 输入区；编辑器 → 编辑区；Markdown → 渲染容器或源码编辑区；Diff → 工作区可编辑侧或 HEAD 只读侧；GitShow → 只读内容区；设置中心 → 面板容器。
   - 只读/降级态由 body 自行返回对应容器；布局恢复不调用。
 
 ### 异步任务与取消
 
-- 每个 `PanelHost` 持 `TaskSlots`：
-
-```rust
-pub struct TaskSlots {
-    generation: u64,
-    tasks: Vec<Task<()>>,
-}
-
-pub struct TaskToken { generation: u64 }
-
-impl TaskSlots {
-    pub fn begin(&mut self) -> TaskToken;      // 递增 generation，旧结果自动失效
-    pub fn is_current(&self, token: TaskToken) -> bool;
-    pub fn cancel_all(&mut self);
-}
-```
-
-- 文件读取、Git 读取、Markdown 渲染、Diff 计算、外部修改复核、快照写入都携带 `TaskToken`；结果应用前检查 `is_current` 与实体存活。
-- 面板关闭：`cancel_all`，调用 body `shutdown`（终端终止 PTY、取消 watcher、删除崩溃快照），释放订阅，移除 `PanelHost`。
-- 项目移除：取消项目级任务；先成功写 `workspace.json`，失败则中止移除并保持项目；成功后按面板顺序关闭全部面板，再删除项目目录与恢复快照，最后从 `Workspace` 移除索引。
+- 每个 `PanelHost` 持 `PanelTasks`；任务经 `cross-cutting.md` 的 `TaskService` 以 `TaskScope::Panel(PanelId)` 启动，结果携带 `TaskToken { id, scope, generation }`。`TaskService` 是任务作用域、取消与代数校验的唯一所有者，`PanelTasks` 只持句柄。
+- 文件读取、Git 读取、Markdown 渲染、Diff 计算、外部修改复核、快照写入都携带 `TaskToken`；结果应用前检查 `scope`、`generation` 与实体存活。
+- 面板关闭：`cancel_scope(Panel(panel_id))`，调用 body `shutdown`（终端终止 PTY、取消 watcher、删除崩溃快照），释放订阅，移除 `PanelHost`。
+- 项目移除：取消项目级任务；先成功提交状态库事务（移除项目、布局、终端簿与恢复索引并更新活跃项目），失败则中止移除并保持项目；成功后按面板顺序关闭全部面板，再删除恢复快照目录，最后从 `Workspace` 移除索引。
 - 旧结果（先发后至）不得覆盖新结果；Diff/Markdown 渲染必须保留上一版内容直到新结果可用。
 - 前台禁止 `block_on` 子进程/网络；PTY spawn 在终端 core 的专用路径，结果异步回传。
 
@@ -198,14 +175,8 @@ let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body.rende
 ```rust
 pub trait TerminalLauncher { fn spawn(&self, spec: LaunchSpec) -> Result<TerminalSession, LaunchError>; }
 pub trait PanelFactory { fn create(&self, ctx: PanelCreateContext<'_>) -> Result<PanelHost, PanelOpenError>; }
-pub struct WorkspaceHarness {
-    pub workspace: Entity<Workspace>,
-    pub clock: Arc<ManualClock>,
-    pub store: Arc<InMemoryStore>,
-    pub launcher: Arc<FakeTerminalLauncher>,
-    pub handoff: Arc<RecordingInstanceCoordinator>,
-}
 ```
 
-- 测试数据目录必须隔离：持久化路径注入临时目录；生产路径 `%APPDATA%` 永不被测试触碰。
+- `WorkspaceHarness`、`TestStateStore` 与夹具注入规则归 `testing.md`；本文件只列 GPUI 侧可注入点。
+- 测试数据目录必须隔离：持久化路径注入临时目录；生产路径 `%APPDATA%`/`%LOCALAPPDATA%` 永不被测试触碰。
 - 真实 GPU/DPI/输入法/拖拽手感按豁免登记人工核验；自动化只覆盖状态机与命令。

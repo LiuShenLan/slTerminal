@@ -2,404 +2,237 @@
 
 > 目标态实现级设计；需求真值源见 docs/featureSpec，裁决见 ../spec-issues.md。
 
-状态持久化层是 `state/` 下状态文件的唯一写盘通道：这些文件经 `PersistenceCoordinator` 串行写入，使用临时文件 + 原子替换、上一代 `.bak`、损坏隔离与 generation 防旧快照覆盖。`state/runtime.port`、`state/instance.lock` 由 Runtime 与单实例服务写入，日志、审计、更新下载与崩溃现场由各自服务写入；它们使用各自的原子写与生命周期，不进入 `FileKey`。设置编码复用 `slterm_settings` 与 `settings_store` 语义；文件原语复用 `atomic_file`。
+> 结构化工作区状态使用本地 SQLite 单库：项目、布局、终端簿、侧栏与视图状态经同一写线程与事务提交。应用设置保留 `settings.json` 与上一代备份；崩溃快照、隔离区、Runtime 端点、实例锁、窗口几何与更新状态使用本地根文件。本文件是状态库 schema、事务、去抖、损坏隔离与侧栏/视图状态 schema 的唯一所有者。
 
-### 文件划分
+### 数据根与文件
 
-| 文件 | 内容 | 去抖 | 所有者 |
-|---|---|---|---|
-| `state/settings.json` | 应用设置全部域 | 2 秒；显式提交立即 | 设置与持久化 |
-| `state/workspace.json` | 项目列表、顺序、显示名、根路径、活跃项目、全局 ID 游标 | 立即入队 + 合并 | 工作区壳 |
-| `state/sidebar.json` | 侧栏布局：可见意图、宽度、比例、槽位、按钮组织/显隐 | 500ms | 侧栏框架 |
-| `state/views/<view-id>.json` | 各侧栏视图声明的界面状态 | 500ms | 各视图 |
-| `state/projects/<id>/layout.json` | 布局树、面板组、顺序、激活面板、聚焦组、面板参数 | 2 秒 | 工作区壳 |
-| `state/projects/<id>/terminals.json` | 终端编号计数、逐终端编号/自定义标题/最近 cwd | 编号与 cwd 300ms；自定义标题立即 | 终端面板 |
-| `state/recovery/<project-id>/<panel-id>.json` | 崩溃恢复快照（仅未保存文本） | 停止编辑 2 秒；连续编辑最长 30 秒刷新 | 编辑器 / Markdown |
-| `state/runtime.port` | Runtime 端点与 token | 启动时 | Runtime API |
-| `state/instance.lock` | 单实例 owner 锁 | 启动时 | 单实例服务 |
+两个根由 `slterm_settings::paths` 单点解析；其他模块不得拼接：
 
-不新增全局 `session.json`。旧根文件不读、不删。
-
-范围外路径：迁移后补全数据固定在 `state/completion/*`；备份与恢复文档只引用该路径，不另立位置。窗口几何同样范围外，见下文。
-
-### 通用信封与版本策略
-
-除 `settings.json` 复用设置段模型外，所有新文件使用统一信封：
-
-```json
-{
-  "schema_version": 1,
-  "generation": 12,
-  "payload": { }
-}
+```text
+<data>/                         # 漫游根，SLTERM_CONFIG_DIR 覆盖，默认 %APPDATA%\slterm
+  state/
+    settings.json               # 应用设置；.bak；损坏隔离
+    quarantine/                 # 设置损坏隔离件
+<local>/                        # 本地根，SLTERM_LOCAL_DIR 覆盖，默认 %LOCALAPPDATA%\slterm
+  state/
+    state.db                    # 结构化状态库
+    state.db.bak                # 正常关闭时的可恢复备份
+    state.db-wal / state.db-shm # SQLite 运行时文件
+    instance.lock               # 单实例句柄锁
+    runtime.port                # Runtime v2 端点与 token
+    window.json                 # 窗口几何；迁移后 platform-windows 所有
+    recovery/<project-id>/<panel-id>.json
+    quarantine/                 # 状态库/快照隔离件
+    completion/history.jsonl
+    completion/directories.json
+    usage/                      # statusline 用量信号，每面板 JSON
+    hooks/                      # 注入脚本、锁与 statusline 备份
+    update/                     # prompt/downloads/handoffs/last-handoff
+    backup/                     # 加密备份恢复点
+  logs/                         # 日志轮转文件
+  audit/                        # audit.log
+  crash/                        # panic.log 与崩溃标记
 ```
 
-实际落盘可把 `payload` 字段平铺到根（减少嵌套），但语义仍是“版本 + 代数 + 载荷”。字段级示例见下节。
+- 旧 `settings.json`、`session.json`、旧 `runtime.port`、旧 `updates/` 等文件位于漫游根旧位置；新代码不读、不删、不视为损坏。
+- `state.db` 在本地根，项目根路径与窗口几何不随漫游配置跨机复制；应用设置是唯一漫游状态。
+- 目录创建在首次写入前完成；读取缺失文件不等于损坏。
+- 测试同时注入 `SLTERM_CONFIG_DIR` 与 `SLTERM_LOCAL_DIR`；生产根永不被测试触碰。
 
-- `schema_version`：整数，精确等于当前支持版本；更高或更低均判不兼容。不提供升级/降级函数。
-- `generation`：每个文件独立单调递增；写入方在内存中分配，完成后记录 `last_written_generation`。迟到的低代数完成结果被丢弃，绝不覆盖新状态。
-- 追加可选字段：`serde(default)`，不升版本；未知字段读取时忽略。
-- 字段改名/删除/类型变化/语义变化：升 `schema_version`，旧文件判不兼容。
-- 单文件大小上限（解析前检查）：设置 1 MiB（契约）；工作区索引 1 MiB；单项目布局 4 MiB；终端簿 1 MiB；侧栏 256 KiB；单个视图状态 256 KiB；崩溃快照文本 64 MiB。超限按损坏/不支持处理，不截断解析。
+### 状态库 schema
 
-### `state/workspace.json`
+```sql
+PRAGMA user_version = 1;
+PRAGMA journal_mode = WAL;
+PRAGMA synchronous = FULL;
+PRAGMA foreign_keys = ON;
 
-```json
-{
-  "schema_version": 1,
-  "generation": 4,
-  "active_project": "project:7",
-  "next_project_id": 8,
-  "next_panel_group_id": 41,
-  "next_panel_id": 97,
-  "projects": [
-    {
-      "id": "project:7",
-      "root": "D:/work/a",
-      "display_name": "a"
-    }
-  ]
-}
+CREATE TABLE workspace (
+  id                INTEGER PRIMARY KEY CHECK (id = 1),
+  active_project_id INTEGER,
+  next_project_id   INTEGER NOT NULL,
+  next_group_id     INTEGER NOT NULL,
+  next_panel_id     INTEGER NOT NULL
+);
+
+CREATE TABLE projects (
+  id           INTEGER PRIMARY KEY,
+  root         TEXT NOT NULL UNIQUE,
+  display_name TEXT NOT NULL,
+  sort_index   INTEGER NOT NULL
+);
+
+CREATE TABLE project_layouts (
+  project_id  INTEGER PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+  layout_json TEXT NOT NULL
+);
+
+CREATE TABLE project_terminals (
+  project_id     INTEGER PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+  terminals_json TEXT NOT NULL
+);
+
+CREATE TABLE sidebar (
+  id          INTEGER PRIMARY KEY CHECK (id = 1),
+  layout_json TEXT NOT NULL
+);
+
+CREATE TABLE view_states (
+  view_id    TEXT PRIMARY KEY,
+  state_json TEXT NOT NULL
+);
+
+CREATE TABLE recovery_index (
+  project_id  INTEGER NOT NULL,
+  panel_id    INTEGER NOT NULL,
+  file_name   TEXT NOT NULL,
+  saved_at_ms INTEGER NOT NULL,
+  text_bytes  INTEGER NOT NULL,
+  PRIMARY KEY (project_id, panel_id)
+);
 ```
 
-- `projects` 数组顺序即导航树顺序；显示名可重复。
-- `root` 为归一化词法路径；真实路径在运行时解析，不进文件。
-- `active_project` 必须存在于 `projects`；恢复时无效则取第一个项目，空列表为 `null`。
-- `next_*` 是全局分配器游标；恢复时统一取 `max(next_*, maxSeen + 1, maxDir + 1)`，`maxSeen` 为已加载项目内该类 ID 的最大值，`maxDir` 为 `projects/` 目录名中的最大值。
-- 项目布局不内联，避免单文件无界增长与单项目损坏扩散。
+- `layout_json` 是 `ProjectLayoutDto`；`terminals_json` 是 `TerminalsDto`；两者字段与恢复对账归 `domain-model.md`。`sidebar.layout_json` 是侧栏布局；`view_states.state_json` 是各视图声明状态。
+- `workspace.next_*` 是全局 ID 游标；恢复时取 `max(next_*, maxSeen + 1, maxDir + 1)`，`maxDir` 为 `recovery/` 目录名中的最大值。状态库不保存真实路径；项目根真实路径在运行时解析。
+- `projects.root` 是归一化词法路径并唯一；`sort_index` 是项目顺序。
+- 所有 JSON 载荷在写入前由前台生成不可变字节；后台线程不得回读实体。
+- 单载荷上限：布局 4 MiB、终端簿 1 MiB、侧栏 256 KiB、单视图 256 KiB；超限拒绝写入并通知。状态库总大小软上限 256 MiB，超限只读并提示，不自动删除数据。
+- `PRAGMA user_version` 精确匹配；更高或更低均不兼容。不提供升级/降级函数。
 
-### `state/projects/<id>/layout.json`
-
-```json
-{
-  "schema_version": 1,
-  "generation": 12,
-  "project_id": "project:7",
-  "focused_group": "group:3",
-  "tree": {
-    "type": "split",
-    "direction": "left_right",
-    "ratio_permille": 500,
-    "first": { "type": "group", "id": "group:3" },
-    "second": { "type": "group", "id": "group:4" }
-  },
-  "groups": [
-    { "id": "group:3", "panels": ["panel:11", "panel:12"], "active": "panel:11" },
-    { "id": "group:4", "panels": ["panel:13"], "active": "panel:13" }
-  ],
-  "panels": [
-    { "id": "panel:11", "params": { "kind": "terminal", "revision": 1 } },
-    { "id": "panel:12", "params": {
-        "kind": "editor", "revision": 1,
-        "path": { "scope": "project_relative", "value": "src/a.ts",
-                  "read_only": false, "save_as_grant": false },
-        "word_wrap": true, "language_override": null } },
-    { "id": "panel:13", "params": {
-        "kind": "diff", "revision": 1,
-        "head_path": "src/a.ts",
-        "workspace_path": { "scope": "project_relative", "value": "src/a.ts",
-                            "read_only": false, "save_as_grant": false },
-        "view": "side_by_side", "word_wrap": false, "sync_scroll": true,
-        "split_permille": 500, "collapsed_side": null, "swapped": false } },
-    { "id": "panel:14", "params": {
-        "kind": "settings", "revision": 1,
-        "selected_page": "shortcuts", "page_params": { } } }
-  ]
-}
-```
-
-各类型特有字段：
-
-| 类型 | 字段 |
-|---|---|
-| terminal | `revision`；编号/标题/cwd 只在 `terminals.json`/`TerminalBook` |
-| editor | `path`（含 `PersistedPath.read_only`）、`word_wrap`、`language_override` |
-| markdown | `path`（含 `PersistedPath.read_only`）、`view`（`rendered`/`source`）、`outline_open`、`zoom_percent`、`scroll_anchor { anchor, offset_px }` |
-| diff | `head_path`、`workspace_path`、`view`（`side_by_side`/`inline`）、`word_wrap`、`sync_scroll`、`split_permille`、`collapsed_side`（`null`/`head`/`workspace`）、`swapped` |
-| gitshow | `repo_path` |
-| settings | `selected_page`、`page_params` |
-
-规则：
-
-- `tree` 的叶是 `group` 节点，不直接是面板；面板属于组。
-- `ratio_permille` 取值 `1..=999`；越界在恢复时夹取或按 500 处理。
-- `groups[].panels` 顺序即页签顺序；`active` 必须在 `panels` 内。
-- `panels` 与 `groups` 的引用必须闭合；不闭合项在恢复时丢弃。
-- 空组不写盘；关闭最后面板后布局变更立即进内存并 2 秒去抖。
-- 冲突快照 Diff 不持久化、不入布局；恢复只接受默认模式 Diff。
-- `PersistedPath.read_only` 是只读判定的唯一持久化字段；面板参数不重复携带，恢复时按当前允许根重算。
-- 终端编号/自定义标题/最近 cwd 只写 `terminals.json`，运行期权威在 `TerminalBook`；`layout.json` 的终端面板只有 `revision`，不得内联计数器或编号。
-
-### `state/projects/<id>/terminals.json`
-
-```json
-{
-  "schema_version": 1,
-  "generation": 9,
-  "next_ordinal": 3,
-  "terminals": [
-    { "panel": "panel:11", "ordinal": 0, "custom_title": "后端",
-      "cwd": "D:/work/a/src" },
-    { "panel": "panel:12", "ordinal": 1, "custom_title": null,
-      "cwd": null }
-  ]
-}
-```
-
-- 每条对应一个终端面板；非终端 `panel` 记录在恢复时丢弃。
-- `ordinal` 在项目内唯一；重复时保留最小者，其余按 `next_ordinal` 重分配。
-- `custom_title` 去除首尾空白后为空则写 `null`；最长 128 字符。
-- `cwd` 为绝对路径；恢复时校验目录存在且位于允许根内，否则置 `null`，运行时回退项目根并提示。
-- `next_ordinal` 只增不减；恢复时取 `max(next_ordinal, 已见最大 ordinal + 1)`。
-
-### `state/sidebar.json`
-
-本文件是侧栏布局与视图状态 schema 的唯一权威；`sidebar/framework.md` 与各视图只引用，不复制字段、默认值或清洗规则。视图 id 封闭为 `nav`、`explorer`、`commit`、`agent-files`；每个视图的内部状态单独落在 `state/views/<view-id>.json`，信封与大小上限见上文。
-
-```json
-{
-  "schema_version": 1,
-  "generation": 5,
-  "visible": true,
-  "width_px": 250.0,
-  "split_permille": 500,
-  "slots": { "top": "nav", "bottom": null },
-  "views": [
-    { "id": "nav", "visible": true, "slot": "top", "order": 0 },
-    { "id": "explorer", "visible": true, "slot": "top", "order": 1 },
-    { "id": "commit", "visible": true, "slot": "top", "order": 2 },
-    { "id": "agent-files", "visible": true, "slot": "top", "order": 3 }
-  ]
-}
-```
-
-- 恢复清洗规则由侧栏框架拥有：宽度 160–720、比例 10%–90%、未知视图静默丢弃、同槽冲突保留按钮顺序靠前者。
-- `views` 只记布局态；各视图内部状态在 `state/views/<id>.json`，损坏只影响该视图。
-- 窗口几何保持范围外：`state/window.json` 由 `platform-windows.md` 在迁移里程碑定义与接入；本文件不定义其 schema、不写入、不在关闭链冲刷。
-
-### `state/views/<view-id>.json`
-
-```json
-{
-  "schema_version": 1,
-  "generation": 3,
-  "state": { }
-}
-```
-
-- `state` 的模式由视图自身拥有（导航树展开/滚动、Commit 折叠、文件浏览器展开等）；框架只负责按 `view-id` 存取与损坏回退。
-- 视图状态不得包含凭据、终端内容、文件内容或搜索词等瞬态值。
-- 未注册 `view-id` 的文件不读、不删；对应视图恢复默认。
-
-### 崩溃快照 `state/recovery/<project-id>/<panel-id>.json`
-
-```json
-{
-  "schema_version": 1,
-  "generation": 7,
-  "project": "project:7",
-  "panel": "panel:12",
-  "kind": "editor",
-  "path": { "scope": "project_relative", "value": "src/a.ts",
-            "read_only": false, "save_as_grant": false },
-  "encoding": "utf-8",
-  "bom": false,
-  "eol": "lf",
-  "text": "…",
-  "text_bytes": 12345,
-  "saved_at_unix_ms": 1760000000000
-}
-```
-
-- 仅保存脏的可编辑编辑器与 Markdown 源码态文本；不保存终端输出、Diff 工作区、剪贴板、凭据。
-- 恢复只重建文本缓冲并标脏，不写回磁盘、不恢复光标/滚动/撤销。
-- 快照路径与布局路径独立；恢复时按当前磁盘内容重新建立外部修改基线。
-
-### 原子写、备份与损坏隔离
-
-单次写入顺序：
-
-1. 取目标同目录临时文件 `.name.slterm-tmp-<pid>-<seq>`，`create_new` 打开。
-2. 写入全部字节，`sync_all`。
-3. 复制目标已有显式 ACL（复用 `atomic_file` 的尽力策略；失败只告警）。
-4. 备份当前文件为 `<name>.bak`；备份失败即中止本次写入，原文件与旧备份不变。
-5. `MoveFileExW(REPLACE_EXISTING | WRITE_THROUGH)` 原子替换。
-6. 失败时删除临时文件，目标保持不变。
-
-- 所有写入串行：单实例 + 单写线程，不需要跨进程锁；进程内不再为每个文件加第二把锁。
-- 备份只保留上一代；不做多代历史。
-- 损坏判定：文件缺失不等于损坏；解析失败、根结构非法、`schema_version` 不匹配、超过大小上限均视为损坏/不兼容。
-- 损坏处理：
-  - 先复制到隔离文件 `<stem>.corrupted-<unix_nanos>.json`，隔离成功后才允许删除/重建主文件。
-  - 隔离失败：保留原文件，进入只读或默认路径，拒绝覆盖写入。
-  - 设置文件：隔离后尝试从 `.bak` 重建；双损回默认并提示。
-  - 工作区索引：阻断工作区，错误界面；用户选择“以空状态继续”时先隔离再允许首次写入。
-  - 单项目布局/终端簿：该项目空布局 + 聚合警告；隔离后下次写入重建。
-  - 侧栏/视图状态：回默认，提示一次；不影响主区。
-  - 崩溃快照：隔离到 `state/quarantine/` 并从恢复提示中排除；不阻止启动。
-- 版本高于当前：只读模式，禁止写入与降级覆盖；设置中心显示只读原因；关闭守卫只提供放弃/取消。
-
-`settings_store` 的调整：保留键白名单、段级浅合并、1 MiB 上限、审计包装；备份失败从“仅告警”改为“中止写入”，与规格一致。写函数仍私有，唯一调用方改为 `PersistenceCoordinator`。
-
-### 去抖、合并写与 flush coordinator
-
-去抖与合并：
-
-| 域 | 去抖 | 合并语义 |
-|---|---|---|
-| 应用设置 | 2 秒 | 同域内连续修改合并为最新完整设置快照；显式提交/导入/恢复默认立即 |
-| 项目索引 | 立即入队 | 连续重命名/排序/切换活跃项目合并为最新索引 |
-| 侧栏布局 + 视图状态 | 500ms | 布局与各视图状态分别合并；布局先写 |
-| 项目布局 | 2 秒 | 结构、顺序、激活面板、聚焦组、面板参数合并为最新完整布局 |
-| 终端编号/cwd | 300ms | 合并为最新终端簿 |
-| 终端自定义标题 | 立即 | 触发终端簿立即写入；与待写 300ms 字段合并 |
-| 崩溃快照 | 停止编辑 2 秒；连续编辑最长 30 秒 | 按面板合并；旧代数结果丢弃 |
-| 项目创建/移除 | 立即 | 按跨文件顺序执行 |
-
-`PersistenceCoordinator` 结构：
+### 写入模型与事务
 
 ```rust
-pub enum FileKey {
-    Settings,
+pub enum StateFacet {
     Workspace,
-    Sidebar,
-    ViewState(ViewId),
     ProjectLayout(ProjectId),
     ProjectTerminals(ProjectId),
-    Recovery { project: ProjectId, panel: PanelId },
+    Sidebar,
+    ViewState(ViewId),
 }
 
 pub enum WriteMode { Debounced(Duration), Immediate }
 
-pub enum FileState {
-    Clean,
-    Dirty { snapshot: Arc<[u8]>, generation: u64, due: Instant },
-    Writing { generation: u64 },
-    Failed { error: PersistError, snapshot: Arc<[u8]>, generation: u64 },
-}
-
 pub struct PersistenceCoordinator {
-    states: HashMap<FileKey, FileState>,
-    worker: PersistenceWorker,       // 单线程串行
-    clock: Arc<dyn Clock>,
-    io: Arc<dyn PersistenceIo>,
+    // 单写线程持有唯一可写连接；前台只提交字节快照
 }
 
 impl PersistenceCoordinator {
-    pub fn mark(&mut self, key: FileKey, snapshot: Vec<u8>, mode: WriteMode);
-    pub fn retry(&mut self, key: FileKey);
-    pub async fn flush(&mut self, keys: &[FileKey], deadline: Duration) -> FlushReport;
+    pub fn mark(&mut self, facet: StateFacet, snapshot: Vec<u8>, mode: WriteMode);
+    pub fn mark_settings(&mut self, snapshot: Vec<u8>, mode: WriteMode);
+    pub fn retry(&mut self, facet: StateFacet);
+    pub async fn flush(&mut self, deadline: Duration) -> FlushReport;
     pub async fn shutdown(&mut self, deadline: Duration) -> FlushReport;
 }
 ```
 
-规则：
-
-- 每个 `FileKey` 至多一个在途写入；在途期间新快照只替换 `Dirty` 快照并抬高 generation。
-- 写入完成时比较 generation：完成代数低于当前最新代数则丢弃完成事件，不把状态回退为 `Clean`。
-- `flush` 把所有待写键的 `due` 强制设为当前时刻，等待全部 `Clean` 或超时；不取消去抖计时器，不丢最新快照。
-- 写失败进入 `Failed`，保留快照与错误；前台显示失败徽标/通知；`retry` 只重试该键。
-- 关闭冲刷按 `FlushClass` 分类：
-  - `Guarded`：设置、侧栏、工作区索引、项目布局、终端簿。失败中止关闭，提供重试/取消。
-  - `BestEffort`：崩溃快照清理、视图状态。失败记录日志并继续。
-- `Guarded` 集合固定为上述五项；关闭状态机以 `architecture.md` 的 `CloseState::{Idle, Guarding, Saving, ShuttingDown}` 为准，本文件只定义冲刷分类与顺序。
+- 每个 facet 至多一个待写快照；新快照替换旧快照并抬高 facet generation。写入在途期间到达的新快照保留为 dirty，提交后再次调度。
+- 到期或显式 `Immediate` 时，把当前全部 dirty facet 合入一个事务提交；设置 JSON 独立写入，不进入状态库事务。
+- 事务成功后清空对应 generation；失败保留 dirty 与错误，前台显示失败徽标/通知，`retry` 只重试失败 facet。
+- `flush` 把所有待写 facet 的 due 置为当前时刻，等待设置与状态库均落地或超时；不取消去抖计时器，不丢最新快照。
+- 关闭冲刷分类：
+  - `Guarded`：设置、状态库全部 dirty facet。失败中止关闭，提供重试/取消。
+  - `BestEffort`：崩溃快照清理、隔离件清理、更新状态收尾。失败记录日志并继续。
 - 设置只读或持续失败时不进入“重试—失败”循环：守卫只提供放弃与取消。
 
-### 跨文件提交顺序与一致性
+去抖：
 
-- **项目创建**：先写 `state/projects/<id>/layout.json`（空布局）与 `terminals.json`，成功后写 `workspace.json` 追加项目。布局失败则创建失败，索引不变。崩溃在索引前：孤儿项目目录保留，不读取、不自动删除，分配器跨过其 ID。
-- **项目移除**：先写 `workspace.json` 移除条目与更新活跃项目，成功后再删除项目目录与 `state/recovery/<id>/`。索引失败则移除中止，项目保持。崩溃在删除前：孤儿目录保留。
-- **新增终端面板**：先写 `terminals.json`（编号/标题/cwd），后写 `layout.json`（引用面板）。崩溃在布局前：终端条目成为孤儿，恢复时丢弃；编号不回收。
-- **关闭终端面板**：先写 `layout.json`（移除引用），后写 `terminals.json`（移除条目）。崩溃在终端簿前：孤儿条目恢复时丢弃。
-- **面板移动/拆分/合并/参数变更**：只写 `layout.json`。
-- **根重定位**：只写 `workspace.json`；项目相对路径在恢复时按新根解析。
-- **侧栏布局与视图状态**：先写 `sidebar.json`，后写各 `state/views/*.json`；视图状态文件缺失/损坏只影响该视图。
-- **设置与其它域**：彼此独立；关闭冲刷时统一等待。
+| 域 | 去抖 | 合并 |
+|---|---|---|
+| 应用设置 | 2 秒 | 同域连续修改合并为最新完整设置快照；显式提交/导入/恢复默认立即 |
+| 项目索引与活跃项目 | 立即提交 | 连续重命名/排序/切换活跃项目合并为同一事务 |
+| 项目布局 | 2 秒 | 结构、顺序、激活面板、聚焦组、面板参数合并为最新完整布局 |
+| 终端编号/cwd | 300ms | 合并为最新终端簿 |
+| 终端自定义标题 | 立即 | 当前事务包含终端簿与布局的最新快照 |
+| 侧栏布局 + 视图状态 | 500ms | 同事务提交 dirty facet |
+| 崩溃快照 | 停止编辑 2 秒；连续编辑最长 30 秒 | 按面板合并；旧结果丢弃 |
 
-一致性恢复原则：引用方先移除、被引用方后移除；新增时被引用方先写入、引用方后写入。恢复对账必须容忍任一中间态，且不因中间态删除用户可见的更多数据。
+### 跨 facet 一致性
+
+- **项目创建**：一个事务插入 `projects`、空 `project_layouts`、空 `project_terminals`，并更新 `workspace.active_project_id` 与游标。失败则项目不存在。
+- **项目移除**：一个事务删除项目行（级联布局/终端簿）与 `recovery_index` 行，并更新活跃项目。事务成功后再删除 `recovery/<id>/` 文件；文件删除失败留待启动清扫，不影响索引。
+- **终端创建/关闭**：一个事务同时更新 `project_terminals` 与 `project_layouts`；不再需要先写终端簿再写布局。
+- **面板移动/拆分/合并/参数变更**：只提交 `project_layouts`。
+- **根重定位**：一个事务更新 `projects.root`；布局中的项目相对路径在恢复时按新根解析。
+- **侧栏与视图状态**：同一事务提交；视图状态独立，损坏只影响该视图。
+- **设置与工作区状态**：彼此独立；关闭冲刷统一等待，不承诺跨根原子性。
+
+恢复对账必须容忍任意已提交状态；状态库事务保证同一事务内不会出现半套引用。
 
 ### 启动恢复
 
-- 读取顺序：配置域并行 → `workspace.json` → 各项目布局/终端簿并行 → 崩溃快照扫描。
-- 布局急切恢复：全部项目、全部面板实例在首帧前建立；不按需懒加载。
-- 布局恢复只读持久化数据；恢复产生的归一化/程序化变化不写回，避免反向覆盖。
-- PTY 并发创建上限 8；应用级总数上限 64。超出上限的终端显示失败态，关闭其他终端后可重试。
-- 单项目布局损坏：隔离原文件 → 该项目空布局 → 聚合警告；其他项目正常。
-- 未知面板类型：丢弃 → 项目其余面板正常 → 聚合警告；全部丢弃则项目空态。
-- 项目根不可访问：项目仍加载，文件型面板按自身错误态显示；导航树警示。
-- 活跃项目无效：取列表第一个；列表为空：无活跃项目。
-- 启动警告聚合为一条通知；启动期间通知排队，界面挂载后按剩余时长显示。
-- 恢复不产生焦点意图、不抢键盘焦点。
+1. 打开 `<local>/state/state.db`；缺失则创建 schema 与空 `workspace` 行。
+2. 校验 `PRAGMA user_version` 与 `PRAGMA quick_check`。
+   - 版本不匹配或检查失败：关闭连接，把 `state.db`、`-wal`、`-shm` 移入 `<local>/state/quarantine/`，显示项目数据错误界面，提供 `重试` 与 `以空状态继续`。
+   - `以空状态继续` 创建新库；隔离失败时保持只读并拒绝写入。
+3. 读取 `workspace` 与 `projects`；索引缺失/非法按空工作区处理。
+4. 按项目读取 `layout_json` 与 `terminals_json`，执行 `domain-model.md` 的恢复对账。单项目载荷解析失败：该项目空布局/空终端簿，原始 JSON 移入 `quarantine/`，并入启动聚合警告；其他项目不受影响。
+5. 读取 `sidebar` 与 `view_states`；单行解析失败只回退该视图默认并提示一次。
+6. 扫描 `recovery/` 与 `recovery_index`：无索引的文件经校验后补索引；无文件的索引行删除；损坏快照移入 `quarantine/` 并从提示排除。
+7. 读取设置 JSON；损坏按设置域规则回退 `.bak`/默认。
+8. 启动警告聚合为一条通知；布局恢复不产生焦点意图、不抢键盘焦点。
 
-### 关闭链落盘
+### 崩溃快照与隔离
 
-- 冲刷环节按 `Guarded` 键强制写入，最多 3 秒；成功或失败可见。
-- PTY 终止环节最多 3 秒；失败只记录。
-- 项目数据保存环节以最终内存状态重新生成 DTO，写 `workspace.json`、全部 `layout.json` 与 `terminals.json`，最多 3 秒；失败只记录。
-- 清理环节删除全部崩溃快照（用户已选择关闭；放弃修改同样清理），关闭 watcher/后台任务，停止写线程。
-- 关闭被取消：不删除快照；写线程继续运行，去抖恢复。
-- 关闭过程中新变更：命令拒绝；冲刷等待期间产生的变更合并到最终快照（若已进入项目数据保存环节则不再接受）。
+- 快照文件位于 `<local>/state/recovery/<project-id>/<panel-id>.json`；索引行在 `recovery_index`。仅保存脏的可编辑编辑器与 Markdown 源码态文本；不保存终端输出、Diff 工作区、剪贴板、凭据。
+- 写入顺序：先原子写快照文件，再 upsert 索引行；索引写失败时下次启动按孤儿文件处理。删除顺序：先删索引行，再删文件；文件删除失败留待清扫。
+- 单文件文本上限 64 MiB，总配额 256 MiB，保留 7 天。超出总配额按 `saved_at_ms` 从旧到新淘汰，不淘汰当前面板最新快照；仍不足则跳过并提示一次。
+- 项目移除提交事务后删除该项目快照目录与索引行；保存成功、撤销回干净、面板正常关闭删除对应快照与索引行；正常关闭窗口清理全部快照与索引行。
+- 恢复只重建文本缓冲并标脏，不写回磁盘、不恢复光标/滚动/撤销；按当前磁盘内容重建外部修改基线。
 
-### 崩溃快照配额、清理与恢复提示
+### 设置 JSON
 
-- 单文件文本上限 64 MiB；超过上限不写快照，界面提示一次。
-- 总配额 256 MiB；写入前统计 `state/recovery/` 总量，超出时按 `saved_at_unix_ms` 从旧到新淘汰，不淘汰当前面板的最新快照；仍不足则跳过并提示一次。
-- 保留时长 7 天；启动扫描删除超期快照。
-- 同路径多项目：快照键为 `(ProjectId, PanelId)`，路径只作展示；两个项目各持独立快照，恢复提示分别列出项目名、路径与时间。
-- 项目移除：删除该项目全部快照。
-- 保存成功、撤销回干净、面板正常关闭：删除对应快照。
-- 启动提示：聚合列出快照；提供逐项/全部恢复与丢弃；所属项目不存在时恢复到当前活跃项目，无活跃项目时提示先创建项目并保留快照。
-- 快照损坏：隔离后排除，提示一次，不阻止启动。
+- `settings.json` 继续经 `settings_store`：键白名单、段级浅合并、1 MiB 上限、审计包装、临时文件 + 原子替换、上一代 `.bak`。
+- `settings_store` 暴露受审计包装的提交入口，私有写核心只由该入口调用；`PersistenceCoordinator` 经该入口写入，导入/导出/恢复默认走同一通道。
+- 损坏：先复制到 `<data>/state/quarantine/`，隔离成功后尝试 `.bak`，双损回默认并提示；版本高于当前进入只读，禁止降级覆盖。
+- 设置与状态库的失败互不代偿：设置失败不阻止工作区打开；状态库失败不阻止设置加载。
+
+### 损坏、备份与只读
+
+- 状态库事务与 WAL 保证崩溃原子性；不逐事务复制整库。
+- 正常关闭完成最终提交后，用 SQLite backup API 生成 `<local>/state/state.db.bak`；备份失败只记录并通知，不阻止关闭。启动时主库不可用时提供“从备份恢复”入口。
+- 复用策略：主库恢复失败不自动覆盖；损坏库与备份都移入 `quarantine/`，用户可手动取回。
+- 只读场景：磁盘满、权限不足、本地根不可写、状态库超限。只读时工作区可浏览，写命令返回可见错误；关闭守卫只提供放弃/取消。
+- 状态库与备份文件不写入日志、审计或诊断包内容。
+
+### 线程与生命周期
+
+- 前台线程只生成 DTO 字节快照、更新内存状态、派发命令与重绘；禁止在 GPUI 前台做 SQLite 调用。
+- 单写线程持有唯一可写连接；读连接只用于启动恢复、诊断与备份。WAL 允许读不阻塞写，但业务读取仍以前台内存为准。
+- 关闭顺序：停止接受新写 → 冲刷设置与状态库 → 终止 PTY → 最终终端簿事务 → 生成备份 → 关闭连接 → 清理快照/隔离件。
+- 写线程崩溃或 panic：转为启动期错误，不得静默丢写；下次启动按事务恢复。
 
 ### 可注入时钟与故障注入
 
 ```rust
 pub trait Clock: Send + Sync + 'static {
-    fn now(&self) -> Instant;          // 单调时钟，驱动去抖
-    fn wall_clock_ms(&self) -> i64;    // 快照时间、隔离文件名
+    fn now(&self) -> Instant;
+    fn wall_clock_ms(&self) -> i64;
 }
 
-pub trait PersistenceIo: Send + Sync + 'static {
-    fn read(&self, path: &Path) -> io::Result<Vec<u8>>;
-    fn write_atomic(&self, path: &Path, bytes: &[u8]) -> io::Result<()>;
-    fn backup(&self, path: &Path) -> io::Result<()>;
-    fn remove(&self, path: &Path) -> io::Result<()>;
-    fn rename(&self, from: &Path, to: &Path) -> io::Result<()>;
-    fn list(&self, dir: &Path) -> io::Result<Vec<DirEntry>>;
-}
+pub enum FaultPoint { Open, Read, Write, Commit, Backup, Checkpoint, Remove }
+
+pub enum FaultAction { Fail(io::ErrorKind), Delay(Duration), CorruptPage }
 ```
 
-故障注入：
-
-```rust
-pub struct FaultPlan { rules: Vec<FaultRule> }
-pub enum FaultAction { Fail(io::ErrorKind), TruncateTemp(usize), Delay(Duration) }
-pub enum FaultPoint { Read, Backup, WriteTemp, Sync, Replace, Remove, List }
-```
-
-- 测试注入点：备份失败、替换失败、临时文件半写、读损坏、写超时、迟到完成。
-- 生产实现包 `atomic_file`：临时文件、`sync_all`、ACL 复制、`MoveFileExW`。
+- 测试注入点：打开失败、事务提交失败、WAL 写失败、备份失败、checkpoint 失败、删除失败、页损坏。
 - `ManualClock::advance` 驱动 2s/500ms/300ms/立即语义；测试禁止真实 `sleep`。
-- 隔离戳使用注入时钟；同戳冲突追加序号，绝不覆盖上一代隔离件。
+- 状态库测试使用临时目录与独立 `state.db`；不触碰生产根。
 
 ### 无迁移策略
 
-- 新代码不读取旧 `session.json`、旧根 `settings.json`、旧 `.bak` 或旧隔离件。
+- 新代码不读取旧 `session.json`、旧根 `settings.json`、旧 `.bak`、旧隔离件、旧 `runtime.port` 或旧更新状态。
 - 旧文件不删除、不改写、不在启动时判定为损坏。
-- 新数据路径与旧路径不重叠；`slterm_settings::settings_path()` 指向新路径，旧路径不再被任何生产代码引用。
-- 目标态内部只接受当前 `schema_version`；无升级函数、无兼容字段映射、无“尽力解析”。
-- 无法识别的记录按损坏/未知处理，不阻止启动（工作区索引失败除外，按启动错误界面处理）。
+- 新数据路径与旧路径不重叠；`slterm_settings::settings_path()` 指向 `<data>/state/settings.json`。
+- 目标态只接受当前 `user_version`；无升级函数、无兼容字段映射、无“尽力解析”。
 
 ### 持久化测试接缝
 
-- DTO 往返：字段级相等；可选字段缺省；版本不匹配拒收。
-- 恢复对账：未知类型、空组、孤儿面板、重复 ID、重复去重键、无效 active/focused、终端簿孤儿、越界 cwd。
-- 去抖：手动时钟验证各域在阈值前不写、阈值后写一次；连续变更只写最后快照。
-- generation：写入在途时产生新快照，旧完成事件不把状态回退；迟到结果丢弃。
-- 原子性：临时文件不残留；替换失败保留原文件；崩溃在替换前主路径仍是上一代。
-- 备份：备份失败中止写入；`.bak` 是替换前完整旧文档。
-- 损坏：隔离成功后才重建；隔离失败保留原文件并只读；多代隔离不互相覆盖。
-- 跨文件：项目创建/移除、终端创建/关闭的中间态恢复幂等。
-- 快照：配额淘汰、7 天保留、同路径多项目、项目移除清理、损坏隔离。
-- 关闭链：3 秒超时、冲刷失败重试/取消、PTY/项目保存失败继续、快照清理。
-- 路径隔离：所有测试使用临时数据根；生产 `%APPDATA%` 不被触碰。
+- schema：空库创建、`user_version` 不匹配、`quick_check` 失败隔离、隔离失败只读。
+- 事务：项目创建/移除、终端创建/关闭、根重定位的原子性与中间态恢复。
+- 去抖：手动时钟验证各域阈值前不写、阈值后一次事务；连续变更只提交最后快照；`Immediate` 合并 dirty facet。
+- generation：写入在途产生新快照，旧提交完成不回退状态；失败保留 dirty。
+- 载荷：布局/终端簿/侧栏/视图超限拒绝；单行 JSON 损坏只回退该 facet。
+- 快照：索引与文件双向对账、配额淘汰、7 天保留、同路径多项目、项目移除清理、损坏隔离。
+- 设置：`.bak` 备份失败中止、双损回默认、版本过高只读。
+- 关闭链：3 秒超时、Guarded 失败重试/取消、最终终端簿事务、备份失败只记录。
+- 路径隔离：漫游根与本地根分别注入临时目录；生产 `%APPDATA%`/`%LOCALAPPDATA%` 不被触碰。

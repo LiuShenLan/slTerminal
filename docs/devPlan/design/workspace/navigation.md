@@ -22,7 +22,7 @@ sidebar_host/views/navigation/
   render.rs / menu.rs
 ```
 
-纯领域逻辑在 `slterm_workspace::sessions`：归属匹配、相对时间、删除账本、状态过滤。CLI 扫描适配器在 app 侧，因为需要文件系统与 `AgentKind`。
+会话领域在 `slterm_agents::sessions`：来源扫描、元数据、词法归属、删除账本、恢复计划；导航视图只做行投影与命令。类型定义见 `integrations/agent-cli.md`，本文件不复制 `SessionRecord`/`SessionProvider`。
 
 ### 行模型
 
@@ -64,16 +64,23 @@ pub struct ActiveSessionRow {
 历史会话：
 
 ```rust
-pub struct SessionRecord {
-    pub key: SessionKey,              // source + 会话 id
+/// 导航行投影；会话身份与元数据来自 slterm_agents::sessions::SessionRecord。
+pub struct HistoryRow {
+    pub key: SessionKey,
     pub title: String,
     pub cwd: Option<PathBuf>,
     pub modified: SystemTime,
-    pub status: SessionStatus,        // Running { panel } | Completed | Unknown
+    pub status: SessionStatus,
     pub source_file: Option<PathBuf>,
     pub prompt_preview: Option<String>,
     pub resume: bool,
     pub fork: bool,
+}
+
+pub enum SessionStatus {
+    Running { panel: PanelId },
+    Completed,
+    Unknown,
 }
 ```
 
@@ -81,22 +88,9 @@ pub struct SessionRecord {
 
 ### 扫描与操作接口
 
+扫描、来源健康、归属与删除账本由 `slterm_agents::sessions::SessionProvider`/`SessionCatalog` 提供（见 `integrations/agent-cli.md`）；导航只定义命令与行投影。
+
 ```rust
-pub trait SessionSource: Send + Sync {
-    fn id(&self) -> &'static str;
-    fn scan(&self, ctx: &ScanContext) -> Result<Vec<SessionRecord>, SourceError>;
-    fn delete(&self, records: &[SessionRecord]) -> Result<DeletionReceipt, SourceError>;
-}
-
-pub struct SessionCatalog { /* 扫描结果 + 项目根索引快照 */ }
-
-impl SessionCatalog {
-    // 由工作区提供项目根索引；归属只做词法最深前缀
-    pub fn replace(&mut self, scanned: Vec<SessionRecord>, roots: &ProjectRootIndex);
-    pub fn rows(&self, project: Option<ProjectId>) -> Vec<HistoryRow>;
-    pub fn project_of(&self, key: &SessionKey) -> SessionOwner;
-}
-
 pub enum NavCommand {
     ActivateProject(ProjectId),
     AddProject,
@@ -114,7 +108,7 @@ pub enum NavCommand {
 }
 ```
 
-- `SessionSource` 的 `id` 是稳定来源名，与 `AgentKind` slug 对齐；app 适配器负责把 `AgentKind` 映射为 `SourceId` 与品牌信息。
+- `SessionProvider` 的来源 id 与 `AgentKind` slug 对齐；app 适配器负责把 `AgentKind` 映射为来源与品牌信息。
 - 扫描结果与删除事务都只携带会话身份、路径、标题与时间，不携带正文；删除事务的隔离目录与启动清理由 app 服务执行，账本纯逻辑在 core。
 - 导航视图只发 `NavCommand` 与 `WorkspaceCommand`，不直接改项目目录、布局或面板。
 
@@ -132,9 +126,9 @@ pub enum NavCommand {
 
 - 添加：系统文件夹选择框；取消无变化；根已存在则激活、展开并滚动到已有项目，通知 `该项目已存在`；新项目追加末尾、成为活跃、展开并滚动到可见；失败通知 `添加项目失败` 与原因。
 - 重命名：项目行右键或 `F2`；内联编辑，原名全选；`Enter`/失焦提交，`Esc` 取消；空名或纯空白拒绝，失焦则恢复原名；最长 80 字符；显示名可重复；只改显示名，不改根、文件夹名、会话数据、面板标题、顺序与展开。写盘失败保留内存值并显示错误指示。
-- 排序：项目行拖拽超过阈值显示插入线；`Alt+Up/Down` 与菜单 `上移/下移` 等价；边界项禁用；排序不改变活跃项目、展开与焦点。索引变更立即入队 `workspace.json`；写失败保留内存顺序并显示错误指示，不回滚已生效排序。
-- 重定位：系统文件夹选择框；新根与当前根相同不写盘；与其他项目根冲突拒绝并通知；成功保留项目身份、显示名、顺序、布局、面板与展开；既有终端继续原 cwd；新终端与文件浏览器使用新根；立即重算历史归属。索引变更只写 `workspace.json`；写失败保持原根并通知。
-- 移除：只发请求；确认与销毁由 shell 负责。索引先行：shell 先成功写 `workspace.json`（移除条目并更新活跃项目），失败则移除中止、项目保持；成功后才删除项目目录与恢复快照。导航行在索引写成功后移除，活跃项目按回退规则迁移；磁盘文件与历史会话记录保留；重新添加同一根路径后历史重新归属；无撤销。
+- 排序：项目行拖拽超过阈值显示插入线；`Alt+Up/Down` 与菜单 `上移/下移` 等价；边界项禁用；排序不改变活跃项目、展开与焦点。顺序变更立即提交状态库事务；写失败保留内存顺序并显示错误指示，不回滚已生效排序。
+- 重定位：系统文件夹选择框；新根与当前根相同不写盘；与其他项目根冲突拒绝并通知；成功保留项目身份、显示名、顺序、布局、面板与展开；既有终端继续原 cwd；新终端与文件浏览器使用新根；立即重算历史归属。只提交 `projects.root`；写失败保持原根并通知。
+- 移除：只发请求；确认与销毁由 shell 负责。索引先行：shell 先成功提交状态库事务（移除项目、布局、终端簿与恢复索引并更新活跃项目），失败则移除中止、项目保持；成功后才删除恢复快照目录。导航行在事务成功后移除，活跃项目按回退规则迁移；磁盘文件与历史会话记录保留；重新添加同一根路径后历史重新归属；无撤销。
 - 项目右键菜单：`重命名 / 上移 / 下移 / 重新定位根目录 / 移除项目`；移除危险色。
 
 ### 活跃会话操作
@@ -219,14 +213,14 @@ pub enum NavCommand {
 | 右键菜单、行内编辑、拖拽 | 关闭/取消 | 关闭/取消 | 不保留 | 不保留 |
 | 树区键盘焦点 | 保持选中 | 不自动进入 | 不抢焦 | 不抢焦 |
 
-持久化字段：项目列表、活跃项目、项目/历史/未归属展开、滚动锚点、删除账本；搜索词、多选、菜单、行内编辑、拖拽、当前焦点不落盘。视图开关、槽位与宽度归侧栏框架。
+持久化字段：项目列表与活跃项目在状态库 `workspace`/`projects`；项目/历史/未归属展开、滚动锚点与删除账本在 `view_states`；搜索词、多选、菜单、行内编辑、拖拽、当前焦点不落盘。视图开关、槽位与宽度归侧栏框架。
 
 ### 复用与重建
 
 | 旧实现 | 处置 |
 |---|---|
 | `ai_sessions.rs` 的 Claude/Codex 扫描、64KB 头部读取、标题提取、注入块过滤、hook 索引合并、`codex_rollout_id` 校验 | 复用为会话来源适配器的基础；索引扩展 cwd 与删除快照，文件改名避免旧数据碰撞 |
-| `ai_agents::AgentKind` 的 slug、显示名、resume/fork 命令与 id 校验 | 直接复用；新增 CLI 历史来源时按 `SessionSource` 注册 |
+| `ai_agents::AgentKind` 的 slug、显示名、resume/fork 命令与 id 校验 | 直接复用；新增 CLI 历史来源时按 `SessionProvider` 注册 |
 | `plan_balance` 快照、合并、订阅、5 秒节流语义基础 | 直接复用；页脚渲染新建 |
 | `session::valid_native_session_file`、`valid_dir` | 复用安全校验与目录回退 |
 | 旧导航树（tab 列表 + pane 列表） | 整体废弃；由项目 / 活跃会话 / 历史会话 / 未归属节点重建 |

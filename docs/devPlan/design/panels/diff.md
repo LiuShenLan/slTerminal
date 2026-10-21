@@ -6,18 +6,9 @@
 
 ### 面板模型与入口
 
-```rust
-pub struct DiffPanelParams {
-    pub head_path: PathBuf,         // 仓库相对路径的 HEAD 侧
-    pub worktree_path: PathBuf,     // 当前工作区路径
-    pub view: DiffViewMode,         // SideBySide | Inline
-    pub wrap: bool,
-    pub sync_scroll: bool,
-    pub split: f32,                 // 0.0..=1.0, 默认 0.5
-    pub collapsed: Option<DiffSide>,
-    pub swapped: bool,
-}
+持久参数以 `domain-model.md` 的 `DiffParams` 为准（`head_path`、`workspace_path`、`view`、`word_wrap`、`sync_scroll`、`split_permille`、`collapsed_side`、`swapped`）；本节只定义运行期模型，不复制参数结构。
 
+```rust
 pub enum DiffSource {
     HeadToWorktree { worktree_path: PathBuf },
     ConflictSnapshot {
@@ -143,7 +134,7 @@ HEAD 刷新：
 - 标题 `〈文件名〉(冲突差异)`。
 - 不读取 HEAD，不随 HEAD/磁盘/缓冲变化自动刷新；显示“快照不会自动更新”。
 - 支持并排/行内、行标记、滚动同步、换行、查找、`F6`/`F7`、交换与单侧折叠；不支持保存、暂存、回滚或任何 Git 写。
-- 快照只存在运行期，不写 `layout.json`、不入布局、不参与去重；关闭面板时清理；不参与编辑器/Markdown 保存冲突处理。
+- 快照只存在运行期，不写 `project_layouts`、不入布局、不参与去重；关闭面板时清理；不参与编辑器/Markdown 保存冲突处理。
 - 快照模式下本文 `HEAD` 侧对应磁盘快照，`工作区` 侧对应当前缓冲。
 
 ### 大文件与二进制

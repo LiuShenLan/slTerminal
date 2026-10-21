@@ -6,7 +6,7 @@
 
 ### 更新状态与检查
 
-- 状态文件迁至 `state/update/`：
+- 状态文件迁至本地根 `<local>/state/update/`：
   - `prompt.json`：`prompted`、`skipped`、`remind_after`，按版本生效；新版本不继承旧版本延迟。
   - `downloads/`：已校验安装包与 `.part`。
   - `handoffs/<transaction>/`：`plan.json`、`ready.json`、`commit.json`、`cancel.json`、`result.json`、`restored.json`、`workspace.json`。
@@ -35,7 +35,7 @@
       sidebar: SidebarSnapshot,
   }
   ```
-  commit 前先冲刷设置/布局并原子写 `workspace.json`，再写 `commit.json`。
+  commit 前先冲刷设置与状态库，从内存/状态库生成并原子写 `workspace.json` 快照，再写 `commit.json`。
 - 安装目录必须是安装器管理的安装（`unins000.exe` 在场）；便携版拒绝自动安装，提示下载页手动替换；提权隔离会话拒绝安装。
 - helper 仍由 PowerShell 隐藏窗口启动，物化自 `handoff.ps1`；参与者身份用 PID + 原生创建时间，防 PID 回收冒名；恢复 ticket 版本匹配、尝试次数上限、`restored.json` 防重放。
 - 更新交接恢复优先于普通会话恢复：成功或回滚后的首个启动按 ticket 还原工作区；恢复失败留待下次尝试，超限放弃。
@@ -71,10 +71,7 @@
 
 ### 依赖里程碑
 
-- 持久化协调器与目标态工作区快照。
-- 单实例与窗口服务、应用页。
-- 通知服务（更新提示与失败通知）。
-- 发布链脚本与包清单。
+里程碑依赖只在 `plan.md` 的“里程碑”表定义；本文件不复制依赖列表。
 
 ### 迁移顺序
 
@@ -83,7 +80,7 @@
 3. 工作区快照改为 `HandoffWorkspaceV2`；恢复 ticket 与版本化启动恢复接线。
 4. 包清单、schema/docs/skill、体积预算与合规落点更新。
 5. 跑假 release 服务器全链彩排与钉测试；再做真实安装器人工核验。
-6. 删除旧更新弹窗、旧 `update_state.json` 路径与旧会话快照适配。
+6. 旧更新弹窗随“旧壳退役”删除；本里程碑删除旧 `update_state.json` 路径与旧会话快照适配。
 
 ### 测试与验收
 

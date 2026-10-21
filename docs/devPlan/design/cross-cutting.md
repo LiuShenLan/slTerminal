@@ -20,7 +20,7 @@
 | 命令、快捷键、焦点、覆盖层、IME、键盘/焦点原语 | `design/ux-framework.md` | 所有域只能经统一派发器与焦点协调器 |
 | 错误分类、反馈层级、通知类别与时长 | 本文件 | 所有域返回统一 `ErrorReport`/`NotificationSpec` |
 | 路径、URL/OSC、Markdown、进程、凭据 | `design/security.md` | 所有域经统一安全边界，不自建例外 |
-| 主题 token、可读性提示、语言与翻译合同 | `design/theme-and-i18n.md` | 组件不得硬编码颜色或用户文案 |
+| 主题 token、语言与翻译合同 | `design/theme-and-i18n.md` | 组件不得硬编码颜色或用户文案 |
 | 单实例、窗口、系统通知、托盘、回收站、进程树 | `design/platform-windows.md` | OS 调用只在平台封装模块 |
 | 日志、审计、panic、诊断包 | `design/diagnostics.md` | 诊断只经统一通道与脱敏 |
 | 包名、安装器、更新、门禁与预算 | `design/build-and-release.md` | 发布只走单一入口与清单合同 |
@@ -84,8 +84,11 @@ pub struct NotificationSpec {
     pub body: Option<MessageArgs>,
     pub action: Option<NotificationAction>,
     pub duration: DurationPolicy,
-    pub dedupe: Option<DedupeKey>,
+    pub dedupe: Option<NotificationDedupeKey>,
 }
+
+/// 通知去重键与领域去重键（DedupeKey）是不同概念，命名不得复用。
+pub struct NotificationDedupeKey(pub String);
 ```
 
 | 来源 | 覆盖 | 说明 |
@@ -96,7 +99,7 @@ pub struct NotificationSpec {
 | 编辑器错误 | 8s | 保存/外部冲突等需阅读的错误 |
 | 进度 | 粘性 | 完成后转为成功/错误，不自动消失直到终态 |
 
-- 同一 `DedupeKey` 的通知合并；错误通知不得因去重被丢弃，只能合并正文并刷新时长。
+- 同一 `NotificationDedupeKey` 的通知合并；错误通知不得因去重被丢弃，只能合并正文并刷新时长。
 - 撤销统一为可操作通知，同一时刻只有一个未决撤销；不另设 UndoBar。
 - 通知正文为纯文本，不可点击、不可拖动；关闭按钮名称为“关闭通知”。通知不抢焦点，不因项目切换清空。
 - 系统通知与任务栏闪烁不在本表：仅在窗口失焦且收到 CLI 状态事件时按设置处理；类别为任务完成、等待输入、权限请求、错误。`EventKey = (panel_id, kind, session_id, turn_key)`；同一键 10 秒内只通知一次并只闪一次；缓存超过 200 条裁剪为最近 100 条，只在运行期有效。`desktop_enabled` 只管系统 toast，`taskbar_flash` 独立门控闪烁；所有类别在开关开启时触发闪烁，回窗停止。系统通知无点击跳转；Windows 投递实现见 `platform-windows.md`。
@@ -120,7 +123,7 @@ pub struct NotificationSpec {
 |---|---|---|
 | 前台帧 | 16.7ms（60Hz） | 单次输入派发与状态更新前台工作不超过 4ms；超时走后台 |
 | 项目切换 | 不随面板数量线性增长 | 只切换可见性/激活态/焦点，不重建面板、不迁移 PTY |
-| 持久化落盘 | 按 `persistence.md` 的域去抖 | 页签增删、拆分/合并、拖动、尺寸变化立即写内存 |
+| 状态库事务 | 按 `persistence.md` 的 facet 去抖 | 页签增删、拆分/合并、拖动、尺寸变化立即写内存；到期合并为一个事务 |
 | 关闭链 | 按 `persistence.md` 关闭链落盘 | 设置与布局冲刷 → 并发终止 PTY → 保存项目数据 |
 | 终端 PTY/回滚 | 按 `panels/terminal.md` | 上限与回滚容量只在终端设计定义 |
 | 编辑器 | 按 `panels/editor.md` | 大文件提示、只读阈值与自动保存开关同源 |
@@ -187,7 +190,7 @@ pub trait TaskService {
 
 - 界面语言 `System`/`English`/`简体中文`，typed `Message` 编译期合同，格式化占位符字面替换；详见 `design/theme-and-i18n.md`。
 - 语义 token 覆盖颜色、间距、字号、圆角、动效与终端 ANSI 调色板；组件不得硬编码颜色；详见 `design/theme-and-i18n.md`。
-- 主题不设对比度准入，不因对比度拒绝或回退用户设置；明显不可读时提示用户调整，不静默改写。详见 `design/theme-and-i18n.md`。
+- 主题不做对比度校验、不提示、不因对比度拒绝或回退用户设置，不静默改写。详见 `design/theme-and-i18n.md`。
 
 ### 跨组件不变量
 

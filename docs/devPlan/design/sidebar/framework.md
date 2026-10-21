@@ -38,7 +38,7 @@ sidebar_host/
 
 ```rust
 pub struct SidebarLayout {
-    pub visibility_intent: bool, // 持久化为 state/sidebar.json 的 visible；表示显式意图，不是实际可见
+    pub visibility_intent: bool, // 持久化为状态库表 sidebar 的 visible；表示显式意图，不是实际可见
     pub width: f32,
     pub split_permille: u16,
     pub slots: [Option<SideViewId>; 2], // 上、下
@@ -169,7 +169,7 @@ pub struct ViewStateSpec {
 - 视图内部数据加载、错误、权限、空态由视图自己呈现；框架不提供统一骨架屏或空态。
 - 重启后从未打开过的视图不创建实例。
 
-持久化落点与字段级 schema 以 `design/persistence.md` 为准：侧栏布局写 `state/sidebar.json`，各视图声明状态写 `state/views/<view-id>.json`；视图 id 统一为 `nav`、`explorer`、`commit`、`agent-files`。本文件不内嵌 schema。
+持久化落点与字段级 schema 以 `design/persistence.md` 为准：侧栏布局写 状态库表 `sidebar`，各视图声明状态写 状态库表 `view_states`；视图 id 统一为 `nav`、`explorer`、`commit`、`agent-files`。本文件不内嵌 schema。
 
 - 去抖按 `persistence.md` 的侧栏域；连续变更合并为最后一次完整状态；保存不得阻塞侧栏与主区；正常退出前冲刷。
 - 恢复清洗顺序：整体损坏 → 默认布局并通知一次 `配置已损坏，已恢复默认侧栏布局`；部分字段非法 → 仅该字段默认；未知视图 → 对应槽置空、记录丢弃；缺失视图 → 按注册默认槽位/顺序稳定合并插入；重复视图 → 保留一个；打开状态与按钮槽位冲突 → 以按钮槽位为准；同槽多打开 → 按该槽按钮顺序保留最靠前，其余关闭；隐藏与打开独立还原；隐藏视图记住位置非法 → 回注册默认。
@@ -188,17 +188,17 @@ pub struct ViewStateSpec {
 
 | 状态 | 同面板组切面板 | 切换项目 | 视图关闭重开 | 应用重启 |
 |---|---|---|---|---|
-| 可见性意图 | 保持 | 保持 | 保持 | 持久化到 `state/sidebar.json` |
-| 宽度 | 保持 | 保持 | 保持 | 持久化到 `state/sidebar.json` |
-| 上下比例 | 保持 | 保持 | 保持 | 持久化到 `state/sidebar.json` |
-| 按钮显隐 | 保持 | 保持 | 保持 | 持久化到 `state/sidebar.json` |
-| 按钮槽位与顺序 | 保持 | 保持 | 保持 | 持久化到 `state/sidebar.json` |
-| 上/下槽打开视图 | 保持 | 保持 | 保持 | 持久化到 `state/sidebar.json` |
+| 可见性意图 | 保持 | 保持 | 保持 | 持久化到 状态库表 `sidebar` |
+| 宽度 | 保持 | 保持 | 保持 | 持久化到 状态库表 `sidebar` |
+| 上下比例 | 保持 | 保持 | 保持 | 持久化到 状态库表 `sidebar` |
+| 按钮显隐 | 保持 | 保持 | 保持 | 持久化到 状态库表 `sidebar` |
+| 按钮槽位与顺序 | 保持 | 保持 | 保持 | 持久化到 状态库表 `sidebar` |
+| 上/下槽打开视图 | 保持 | 保持 | 保持 | 持久化到 状态库表 `sidebar` |
 | 视图实例与内部状态 | 保持 | 保持 | 保持 | 按声明恢复 |
-| 各视图声明状态 | 保持 | 按视图规则 | 保持 | 持久化到 `state/views/<view-id>.json` |
+| 各视图声明状态 | 保持 | 按视图规则 | 保持 | 持久化到 状态库表 `view_states` |
 | 活动栏焦点/拖拽/菜单 | 保持焦点 | 拖拽取消，菜单按自身规则 | 不保留 | 不保留 |
 
-侧栏布局与视图状态分文件：布局写 `state/sidebar.json`，视图状态写 `state/views/<view-id>.json`；视图状态损坏只影响该视图。字段级 schema 与清洗规则细目见 `design/persistence.md`。
+侧栏布局与视图状态同库不同表：布局写 `sidebar`，视图状态写 `view_states`；视图状态行损坏只影响该视图。字段级 schema 与清洗规则细目见 `design/persistence.md`。
 
 逐视图状态作用域：
 

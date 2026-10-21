@@ -74,7 +74,7 @@ pub enum RenderBlock {
 排版：
 
 - 正文最大行宽 900px；表格、代码块、图片可占满内容区；内边距由主题令牌定义。
-- 代码块按语言高亮，长行不折行、内部横向滚动；内置语言至少覆盖 JavaScript、TypeScript、JSON、HTML、XML、CSS、SCSS、Bash、Shell、PowerShell、Python、Rust、Go、Java、C/C++、C#、SQL、YAML、TOML、INI、Diff、Markdown、Dockerfile、Makefile；别名归一（`js`/`node`/`jsx` → JavaScript 等），未知语言纯文本。
+- 代码块按 `panels/editor.md` 的 `LanguageRegistry` 高亮，长行不折行、内部横向滚动；语言别名归一（`js`/`node`/`jsx` → JavaScript 等），未知语言纯文本；本文件不另立语言表。
 - 图片不超过内容宽度，小图不放大；缩放时随内容缩放。
 
 ### 安全 HTML、链接与资源
@@ -130,8 +130,7 @@ impl HtmlSanitizer {
 公式：
 
 - 复用 `slterm_app::math`：`compile_formula` 是唯一排版入口；行内 `$...$`、块级 `$$...$$`；识别时避免货币金额误判。
-- 失败在原位显示公式源码与错误样式，不中断整篇；公式不生成链接或外部资源。
-- 以文本呈现 LaTeX 源码。
+- 成功时排版显示；失败在原位显示 LaTeX 源码与错误样式，不中断整篇；公式不生成链接或外部资源。
 
 Mermaid：
 

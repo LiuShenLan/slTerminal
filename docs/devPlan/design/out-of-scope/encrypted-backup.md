@@ -11,34 +11,33 @@
   SLTBK002 | salt(16) | nonce(12) | ciphertext
   ```
   AES-256-GCM，魔数同时作 AAD；Argon2id m=19456 KiB、t=2、p=1；口令至少 8 字符。派生密钥、明文与恢复点明文全程 `Zeroizing`。
-- `BackupArchiveV2 { manifest: { version: 2, categories }, entries: Vec<BackupEntry> }`；条目名为相对状态根的正斜杠路径。
+- `BackupArchiveV2 { manifest: { version: 2, categories }, entries: Vec<BackupEntry> }`；条目名为相对其所属根（漫游根或本地根）的正斜杠路径，清单记录根类别。
 - 类别：
-  - `app_settings`：`state/settings.json`。
-  - `workspace`：`state/workspace.json`、`state/projects/<ProjectId>/layout.json`、`state/projects/<ProjectId>/terminals.json`、`state/sidebar.json`、`state/views/*.json`。
-  - `completion_history`：`state/completion/history.jsonl`。
-  - `directory_history`：`state/completion/directories.json`。
-  - `ai_providers`：应用设置域中的 Provider 元数据（仅 provider ID、显示元数据与 hint；不含 `SecretId` 或凭据引用值）。
-- 不进入备份：凭据值、AI 会话正文、终端内容、剪贴板、崩溃快照、`state/window.json`（范围外迁移后存在）、runtime/update/backup 目录、日志、Hooks/CLI 配置文件、用户主题（已删除）。
+  - `app_settings`：漫游 `<data>/state/settings.json`；Provider 元数据随应用设置域导出（仅 provider ID、显示元数据与 hint）。
+  - `workspace`：本地状态库 `<local>/state/state.db` 的一致性快照（flush 后经 SQLite backup API 生成），包含项目、布局、终端簿、侧栏与视图状态。
+  - `completion_history`：`<local>/state/completion/history.jsonl`。
+  - `directory_history`：`<local>/state/completion/directories.json`。
+- 不进入备份：凭据值、AI 会话正文、终端内容、剪贴板、崩溃快照、`<local>/state/window.json`（范围外迁移后存在）、runtime/update/backup 目录、日志、Hooks/CLI 配置文件、用户主题（已删除）。
 - 敏感键表保留并集中维护：导出递归剥除、导入复验；Provider 元数据只允许 provider ID、显示元数据与 hint，不含 `SecretId` 或凭据引用值；任何 token/key/password/secret 字段在导入时存在即整单拒绝，不静默删除。
 
 ### 导出
 
 - 用户选择类别与目标路径，输入并确认口令；导出在后台执行：收集 → 逐类校验 → 序列化 → 密封 → 原子写目标文件。
-- 收集缺失文件按“本机尚无该类别”跳过；损坏的应用设置或 Provider 文档不进入备份，整单失败并显示文件与原因，不静默缺件。
+- 收集缺失文件按“本机尚无该类别”跳过；损坏的应用设置（含 Provider 元数据）不进入备份，整单失败并显示文件与原因，不静默缺件。
 - 旧 `SLTBK002` 之前的 `TRMBK001` 归档在导入时明确报“旧格式备份不受支持”，不尝试解密、不降级。
 - 导出文件不包含任何明文标记；写失败不留下半写文件。
 
 ### 导入与恢复
 
 - 恢复序固定：完整鉴权（解密）→ 全量校验 → 采集恢复点 → 原子写。任一条不过整单拒写，零副作用。
-- 校验：版本、类别无重复、条目类别受清单授权、条目名白名单、重名、路径分量全为 Normal、父链无符号链接/非目录、JSON 文档可解析、workspace 类别包含 `state/workspace.json`，且每个 `state/projects/<id>/layout.json` 的 ID 出现在项目索引中。任何一条失败整单拒绝。
-- 恢复采用文件级恢复并要求重启生效：写入新状态文件后显示“恢复完成，重启后生效”，不修改当前运行期模型；避免恢复与内存布局/终端会话竞争。应用设置同理，重启后加载。
-- 恢复点：写入前对全部目标文件采集原字节或“不存在”状态，加密保存到 `backup/recovery/<时间戳>-<序号>.slterm-recovery`；恢复失败自动回滚已写文件。恢复点目标名集合私有只读，撤回时与本次恢复完全一致才允许写回；不存在的原文件在撤回时删除。
+- 校验：版本、类别无重复、条目类别受清单授权、条目名白名单、重名、路径分量全为 Normal、父链无符号链接/非目录、设置 JSON 可解析、workspace 类别包含 `state.db`；状态库本身在恢复后首次启动时校验 `user_version` 与 `quick_check`。任何一条失败整单拒绝。
+- 恢复采用文件级恢复并要求重启生效：写入新 `state.db` 与 `settings.json` 后显示“恢复完成，重启后生效”，不修改当前运行期模型；避免恢复与内存布局/终端会话竞争。
+- 恢复点：写入前对全部目标文件采集原字节或“不存在”状态，加密保存到 `<local>/state/backup/recovery/<时间戳>-<序号>.slterm-recovery`；恢复失败自动回滚已写文件。恢复点目标名集合私有只读，撤回时与本次恢复完全一致才允许写回；不存在的原文件在撤回时删除。
 - 恢复点保留到下一次成功恢复或用户手动清理；UI 显示路径与撤回入口，撤回需要口令。
 
 ### 敏感键与凭据边界
 
-- 应用设置与 Provider 文档导入后再次扫描；发现敏感键即拒绝，不写入。
+- 应用设置（含 Provider 元数据）导入后再次扫描；发现敏感键即拒绝，不写入。
 - 凭据值永不入包；恢复不会写入 Windows 凭据管理器，也不会删除现有凭据。Provider 元数据不含 `SecretId` 或凭据引用值；hint 可恢复，`credential_present` 由本机凭据库按 provider ID 重新计算。
 - Hooks、CLI 配置、AI 会话正文、终端内容、日志、崩溃快照不进入任何类别；导入不接受这些条目。
 - 错误消息只含路径、类别与失败原因，不含文件内容、口令或凭据。
@@ -51,10 +50,7 @@
 
 ### 依赖里程碑
 
-- 持久化协调器与新状态文件集冻结。
-- 项目与布局模型（workspace 类别校验）。
-- 设置中心应用页。
-- AI 服务（Provider 文件与敏感键表）。
+里程碑依赖只在 `plan.md` 的“里程碑”表定义；本文件不复制依赖列表。
 
 ### 迁移顺序
 
@@ -66,7 +62,7 @@
 
 ### 测试与验收
 
-- 密封/打开往返覆盖全部类别；错误口令、短口令、篡改、魔数不符均拒绝且零落盘。
+- 密封/打开往返覆盖全部类别；workspace 类别为 flush 后的 SQLite 一致性快照，恢复后启动校验通过；错误口令、短口令、篡改、魔数不符均拒绝且零落盘。
 - 导出剥除敏感键；导入复验拒绝含敏感键文档；Provider hint 保留、明文不出现。
 - 路径穿越、绝对路径、`..`、符号链接父链、重名条目、未授权类别全部整单拒绝。
 - 恢复失败回滚原字节；恢复前不存在文件在撤回时删除；恢复点目标集合不匹配拒绝。

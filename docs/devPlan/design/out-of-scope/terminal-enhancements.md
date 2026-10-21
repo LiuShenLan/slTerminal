@@ -6,22 +6,9 @@
 
 ### 终端面板扩展点
 
-终端面板持有 PTY 会话、网格与视图；增强能力通过统一 host 接入，不直接拥有终端状态：
+终端面板持有 PTY 会话、网格与视图；增强能力通过统一 host 接入，不直接拥有终端状态。`TerminalEnhancement` trait、增强顺序与扩展点归 `panels/terminal.md`，本文件只定义迁移能力的行为语义。
 
-```rust
-enum KeyDisposition { Consumed, PassThrough }
-enum InputDisposition { Consumed, PassThrough }
-
-trait TerminalEnhancement {
-    fn on_key(&mut self, key: &Keystroke, phase: KeyPhase) -> KeyDisposition;
-    fn on_text_input(&mut self, text: &str, phase: InputPhase) -> InputDisposition;
-    fn on_command_submitted(&mut self, line: &str);
-    fn on_command_finished(&mut self, event: &CommandFinished);
-    fn paint_overlay(&mut self, frame: &mut TerminalPaintFrame);
-}
-```
-
-- 增强顺序固定：Vi 模式 → 补全 → AI 修复条按键；数学覆盖层只在绘制阶段运行。终端面板设计（`panels/terminal.md`）若给出不同顺序，以本文件为准。任何增强都不得修改网格、滚动位置、选区真值或复制文本；需要映射时使用终端 core 的投影函数。
+- 增强顺序固定：Vi 模式 → 补全 → AI 修复条按键；数学覆盖层只在绘制阶段运行。任何增强都不得修改网格、滚动位置、选区真值或复制文本；需要映射时使用终端 core 的投影函数。
 - 开关键、默认值与保存归应用页；本节只定义行为语义。迁移前应用页以禁用态 `尚未启用` 呈现，迁移完成后去掉禁用态。关闭后不注册按键、不启动后台计算、不绘制覆盖层。开关即时生效，按 2 秒去抖保存。
 
 ### Vi 模式
@@ -42,7 +29,7 @@ trait TerminalEnhancement {
 - 按键路径零磁盘/子进程 I/O：只更新输入镜像、光标与缓存键；候选在后台执行器计算。缓存按面板持有，提交命令后失效；取消令牌贯穿文件遍历、历史扫描与 Git 子进程，取消后不得回填缓存或呈现部分结果。
 - 呈现形态保留 inline ghost、popup、hybrid；`terminal.completion.style` 选择形态。`Esc` 关闭当前行补全；`Tab`/方向键/Enter 的接受规则沿用现有状态机；接受时写回 PTY 使用与真实按键同一编码器。
 - 输入镜像在光标移动、历史召回、中线删除后标记不可信；Enter 提交只在可信、非空、无控制字符且非交替屏幕/Vi 时记录历史与使缓存失效。
-- 数据文件迁至 `state/completion/history.jsonl` 与 `state/completion/directories.json`；历史池与目录 frecency 只在本机使用。
+- 数据文件迁至 `<local>/state/completion/history.jsonl` 与 `<local>/state/completion/directories.json`；历史池与目录 frecency 只在本机使用。
 - 交替屏幕、Vi 模式、终端退出、助手建议条打开时，补全不得抢占按键或显示过期候选。
 
 ### 数学覆盖层
@@ -81,10 +68,7 @@ trait TerminalEnhancement {
 
 ### 依赖里程碑
 
-- 终端面板、面板扩展点与设置应用页。
-- 终端 core 的 Vi 状态、OSC 133 命令生命周期与选择投影。
-- AI 服务（AI 修复条）。
-- 持久化协调器（补全历史与目录数据）。
+里程碑依赖只在 `plan.md` 的“里程碑”表定义；本文件不复制依赖列表。补全历史与目录数据使用本地状态库/本地文件，见 `../persistence.md`。
 
 ### 迁移顺序
 

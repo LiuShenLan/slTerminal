@@ -6,7 +6,7 @@
 
 ### Providers
 
-- Provider 元数据并入应用设置域（`state/settings.json` 的 app 段），带 schema 版本；只含 provider ID、显示元数据与 hint，不含明文，也不含 `SecretId` 或任何凭据引用值。
+- Provider 元数据并入应用设置域（漫游 `<data>/state/settings.json` 的 app 段），带 schema 版本；只含 provider ID、显示元数据与 hint，不含明文，也不含 `SecretId` 或任何凭据引用值。
   ```rust
   struct ProviderRecord {
       id: ProviderId,                 // "preset-openai" | "custom-<n>"
@@ -26,18 +26,18 @@
       providers: Vec<ProviderRecord>,
   }
   ```
-- 凭据 target 由 provider ID 单点派生为 `Slterm/AI/<id>`；`credential_present` 不持久化，读取时按 provider ID 实时查询 Windows 凭据管理器（`CredentialStore::exists`），避免引用位与凭据库漂移。`SecretId` 与任何凭据引用值都不进入 provider 元数据、设置 DTO、备份或快照。凭据 target 命名空间保持不变，预置 ID 稳定，已有 Windows 凭据可继续被识别。
+- 凭据 target 由 provider ID 单点派生为小写 `slterm/ai/<id>`；`credential_present` 不持久化，读取时按 provider ID 实时查询 Windows 凭据管理器（`SecretStore::exists`），避免引用位与凭据库漂移。`SecretId` 与任何凭据引用值都不进入 provider 元数据、设置 DTO、备份或快照。预置 ID 稳定；旧 `Slterm/AI/<id>` 凭据按迁移映射读取一次并写回新 target，随后删除旧 target。
 - 预置 provider 全集由 `ProviderKind::PRESETS` 单点定义；加载时补全缺失预置、保留自定义记录、修复无效 active。自定义 ID 只在创建时分配，不复用。
 - 元数据清洗沿用单点：名称/URL/模型去控制字符与首尾空白，长度上限为契约值；两个呈现入口共用同一清洗函数。
 - 保存：临时文件 + 原子替换；损坏文件回退默认预置并记录警告，不隔离（无凭据值）。删除 provider 顺序固定为“定位 → 删除凭据 → 删元数据 → 原子落盘”；凭据删除失败不得改动元数据。
 
 ### 凭据域
 
-- `secrets` 门面保留：`SecretBytes` 出域句柄、`CredentialStore` 三原语、`WindowsCredentialStore` 真实后端；业务模块不得旁路 `platform::credentials`。
+- 凭据域契约类型为 `SecretStore`/`SecretValue`（见 `../security.md`）；现有 `CredentialStore`/`SecretBytes`/`WindowsCredentialStore` 作为后端实现保留，迁移时收敛为契约类型的适配层；业务模块不得旁路 `platform::credentials`。
 - 凭据只存 Windows 凭据管理器；provider 文件、设置、备份、日志、错误消息、崩溃快照均不得出现明文。
 - 凭据读写只以 provider ID 派生 target；不向 DTO、设置、备份、快照或页面状态暴露 `SecretId` 或凭据引用值。
 - 写入顺序：先写凭据，成功后更新 `key_hint` 与内存状态；失败保留旧元数据与旧 hint。
-- 读取只在请求执行器内发生；UI 只拿 `exists` 与 hint。`SecretBytes` 的 `Debug` 只报长度；转换字符串必须走 `Zeroizing`。
+- 读取只在请求执行器内发生；UI 只拿 `exists` 与 hint。`SecretValue` 的 `Debug` 只报长度；转换字符串必须走 `Zeroizing`。
 - 环境变量兜底取消：目标态 provider 是唯一凭据来源；无启用 provider 或无凭据时返回可操作错误，不再回退 `SLTERM_AI_KEY`/`OPENAI_API_KEY`。避免凭据来源双轨，也避免终端子进程环境成为隐式凭据通道。
 - 凭据值不进入备份、导入导出、Runtime 快照、通知、审计字段；应用设置域中的敏感键导出剥除与导入复验继续作为第二道闸。
 
@@ -71,7 +71,7 @@
 ### 测试与验收
 
 - Provider：预置全集完整性、ID 稳定、加载补全、损坏回退、原子写、删除顺序、凭据失败不动元数据、序列化无明文且无 `SecretId`/凭据引用值。
-- 凭据：门面三原语、`SecretBytes` Debug/字符串化、日志与错误不泄露、源码扫描禁止旁路后端；真实凭据管理器用例默认跳过，显式环境变量开启。
+- 凭据：门面三原语、`SecretValue` Debug/字符串化、日志与错误不泄露、源码扫描禁止旁路后端；真实凭据管理器用例默认跳过，显式环境变量开启。
 - 助手：门链顺序与冷却、规则表、打码、危险词、请求目标四种协议、响应解析、seq 过期、按键语义、失败边默认关。
 - 回答：归属校验、会话切换、迟到丢弃、超限不截断、Debug 不含正文。
 - 应用页：只写不读、hint 更新、测试结果、未知 CLI/Provider 防御、自动保存失败提示。
@@ -79,14 +79,11 @@
 
 ### 依赖里程碑
 
-- 项目与布局模型（PanelId）、终端面板与 Agent host。
-- 设置模型与写通道、设置中心应用页。
-- 凭据域（`secrets`/`platform::credentials`）。
-- Runtime/通知只消费 agent 状态，不反向依赖 AI 服务。
+里程碑依赖只在 `plan.md` 的“里程碑”表定义；本文件不复制依赖列表。Runtime/通知只消费 agent 状态，不反向依赖 AI 服务。
 
 ### 迁移顺序
 
-1. 迁移 Provider 文件与路径，改为存在性驱动凭据状态；保留凭据 target 命名空间。
+1. 将 Provider 元数据并入应用设置域，改为存在性驱动凭据状态；凭据 target 迁到 `slterm/ai/<id>`。
 2. 助手配置迁入应用设置；删除旧 txt 配置、旧 `.bak`/corruption 路径。
 3. 建立 `AiGateway`，统一 provider 解析、请求、测试与错误映射。
 4. 应用页 AI 分节接入；完成 Provider 编辑、凭据、测试与助手开关。

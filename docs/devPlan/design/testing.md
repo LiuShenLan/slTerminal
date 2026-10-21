@@ -10,7 +10,7 @@
 | 层 | 载体 | 覆盖对象 |
 |---|---|---|
 | 领域纯函数 | `slterm_workspace`、`slterm_sidebar`、`slterm_agents`、`slterm_hooks`、`slterm_runtime_protocol` 的 `lib_tests` | 四层模型、布局树、焦点、去重、标题、序列化 DTO、恢复对账、侧栏状态机、Commit 投影、Agent 过滤、Hooks schema、Runtime 信封 |
-| 持久化与服务 | app 或 core 的集成 target | 原子写、备份、损坏隔离、去抖、flush coordinator、关闭链、文件监听、Git 执行体、CLI 适配器 |
+| 持久化与服务 | app 或 core 的集成 target | 状态库事务、备份/完整性、损坏隔离、去抖、flush coordinator、关闭链、文件监听、Git 执行体、CLI 适配器 |
 | 虚拟窗口 | `gpui-test-support` + `TestAppContext`/`VisualTestContext` | 壳、面板组、页签、侧栏、菜单、对话框、焦点、关闭守卫、设置中心、通知 |
 | 真实进程/conformance | 独立集成 target | PTY 往返、Runtime v2、单实例移交、发布交接 |
 | 人工验收 | 实机清单 + 豁免登记 | 真实输入法、GPU/字体观感、拖拽手感、系统通知/托盘/回收站、真实 CLI/凭据 |
@@ -27,7 +27,7 @@
 pub struct WorkspaceHarness {
     pub workspace: Entity<Workspace>,
     pub clock: Arc<ManualClock>,
-    pub store: Arc<InMemoryStore>,
+    pub store: Arc<TestStateStore>,
     pub launcher: Arc<FakeTerminalLauncher>,
     pub cli: Arc<FakeCliRegistry>,
     pub handoff: Arc<RecordingInstanceCoordinator>,
@@ -45,7 +45,7 @@ pub struct WorkspaceHarness {
 | 域 | 必测 |
 |---|---|
 | architecture/domain | `ProjectId` 稳定；根路径唯一与真实路径查重；布局树叶=组集合；空组移除；面板不跨项目；去重键；标题消歧；焦点转移；恢复对账幂等 |
-| persistence | DTO 往返；版本拒收；去抖阈值；generation 防旧快照；备份失败中止；损坏隔离；跨文件提交顺序；关闭链三阶段；快照 64 MiB/256 MiB/7 天；旧文件不读 |
+| persistence | DTO 往返；`user_version` 拒收；去抖阈值；事务原子性；facet 合并；备份失败中止；损坏隔离；关闭链三阶段；快照 64 MiB/256 MiB/7 天；旧文件不读 |
 | gpui-runtime | Entity 拓扑；订阅释放；异步结果 generation；隐藏项目不布局/不绘制；面板 `catch_unwind` 错误边界；关闭状态机防重入 |
 | ux-framework | 命令层序；保留键；同上下文冲突；焦点意图令牌；覆盖层入栈/出栈；`Esc` 顺序；IME 门控；项目切换焦点恢复 |
 | security | 路径决策表（绝对/相对/设备/UNC/符号链接/联接）；URL/OSC 白名单；Markdown 清洗；进程启动参数；凭据不出域；诊断脱敏 |
@@ -62,7 +62,7 @@ pub struct WorkspaceHarness {
 | panels/diff | 行对对齐；并排/行内；工作区侧编辑；同步滚动；HEAD 刷新；外部重命名；冲突快照；大文件/二进制 |
 | panels/gitshow | HEAD 只读；刷新/过期；大文件/二进制；临时文件清理；去重 |
 | settings | 页面注册；导航/搜索；三保存模式；快捷键固定键参考；应用页；无项目浮层；导入导出/恢复默认；Hooks；只读/损坏 |
-| theme/i18n | token 消费；未知主题 id 回退 `Linear`；密度/透明度/壁纸；i18n 键集合同（迁移能力）；负向断言不做对比度准入、不静默改写用户设置 |
+| theme/i18n | token 消费；未知主题 id 回退 `Linear`；密度/透明度/壁纸；i18n 键集合同（迁移能力）；负向断言不做对比度校验、不提示、不静默改写用户设置 |
 | platform-windows | 单实例锁与载荷；窗口几何夹取/DPI；通知/任务栏闪烁；托盘/开机启动；回收站；默认程序；进程树终止 |
 | diagnostics/build | 日志脱敏；审计字段；panic；诊断包；一键清理；包清单/体积预算；代码签名（有证书时） |
 
@@ -77,12 +77,12 @@ pub struct WorkspaceHarness {
 | `panels/diff.md` | `design/panels/diff.md` | Diff 面板 | 行对、冲突快照瞬态、保存并发、`mode/source` 去重 | 引擎单测 + 虚拟窗口 + 文件集成 |
 | `panels/gitshow.md` | `design/panels/gitshow.md` | GitShow 面板 | HEAD 只读、刷新/过期、大文件/二进制 | 引擎单测 + 集成 |
 | `panels/markdown.md` | `design/panels/markdown.md` | Markdown 面板 | 两态、安全 HTML、Mermaid 源码、草稿恢复 | 引擎单测 + 虚拟窗口 |
-| `panels/settings.md` | `design/panels/settings.md` + `design/settings/app-page.md` | 设置中心壳、基础页与应用页占位；设置中心 Agent/Hooks/后台任务页 | 页面注册、保存模式、固定键参考、无项目浮层 | 纯函数 + 虚拟窗口 + 设置写通道 |
+| `panels/settings.md` | `design/panels/settings.md` + `design/settings/app-page.md` | 设置中心壳与基础页；设置中心 Agent/Hooks/后台任务页 | 页面注册、保存模式、固定键参考、无项目浮层 | 纯函数 + 虚拟窗口 + 设置写通道 |
 | `sidebar/framework.md` | `design/sidebar/framework.md` | 侧栏框架 + 导航核心 | 双槽、显隐、视图快捷键、视图状态矩阵 | 领域纯函数 + 虚拟窗口 |
 | `sidebar/explorer.md` | `design/sidebar/explorer.md` | 文件浏览器 | 树/多选/批量/剪贴板、写边界、监听 | 模型 + 文件系统集成 + 虚拟窗口 |
 | `sidebar/commit.md` | `design/sidebar/commit.md` | Commit 视图 | 四态、ignored、打开映射、回滚/删除 | 模型 + Git 集成 + 虚拟窗口 |
 | `sidebar/agent-files.md` | `design/sidebar/agent-files.md` | Agent 全局文件 | 节点探测、过滤、监听、写边界 | 模型 + 文件系统集成 + 虚拟窗口 |
-| `settings-and-persistence.md` | `design/persistence.md` | 设置存储与写通道；壳与工作区 | DTO 往返、去抖、原子写、崩溃恢复、关闭冲刷 | 持久化集成 + 故障注入 |
+| `settings-and-persistence.md` | `design/persistence.md` | 状态库与设置存储；壳与工作区 | DTO 往返、去抖、事务原子性、崩溃恢复、关闭冲刷 | 状态库集成 + 故障注入 |
 | `cross-cutting.md` | `design/cross-cutting.md` 与各所有者 | 应用基础服务；跨域收敛与规格验收 | 错误/通知/焦点/性能/后台任务/安全边界 | 跨域矩阵 + 虚拟窗口 |
 | `acceptance.md` | `design/testing.md` | 跨域收敛与规格验收 | acceptance 全通过、范围外负向、门禁全绿 | 门禁 + 人工核验 |
 | `assets/README.md` | `design/build-and-release.md` | 构建与打包基线 | 资产名/许可/第三方声明随包；清单三处一致 | 包合同钉测试 + 资产核验 |
@@ -93,7 +93,7 @@ pub struct WorkspaceHarness {
 
 | 范围外能力 | 里程碑 | 正向验收 | 迁移前边界 |
 |---|---|---|---|
-| Runtime v2 | Runtime API v2 | conformance、幂等、`runtime.handover`、无 `window.*` 方法 | 应用页只读“未迁移/不可用”；无 v1 兼容层 |
+| Runtime v2 | 控制面协议核心；Runtime API v2 完整面 | conformance、幂等、`runtime.handover`、无 `window.*` 方法 | 应用页只读运行状态/不可用；无 v1 兼容层 |
 | 应用页范围外节 | 应用页范围外节落地与壳服务 | 界面语言、更新、托盘与开机启动、Providers/助手、备份、终端增强逐项接线 | 只读说明 `该能力由迁移版本提供`；终端增强禁用态 `尚未启用` |
 | AI Providers/助手 | AI Providers/助手 | 元数据 CRUD、凭据门面、脱敏、关闭后不发请求 | 无入口、无设置键 |
 | 终端增强 | 终端增强回迁 | 默认值、按键顺序、取消、缓存按面板 | 禁用态，不拦截按键 |
@@ -108,14 +108,14 @@ pub struct WorkspaceHarness {
 | Markdown 实时块编辑 | 渲染态无输入、无块编辑命令、无 live edit 状态或设置键 |
 | 提示符跳转 | 无 API、无按键、无文档入口 |
 | 无障碍专用能力 | 无屏幕阅读器/ARIA/播报/高对比度/大字体入口、快捷键或设置键 |
-| 对比度校验 | 无准入、无自动回退、无设置键；主题与透明度/壁纸合成后不静默改写用户设置 |
+| 对比度校验 | 无校验、无提示、无自动回退、无设置键；主题与透明度/壁纸合成后不静默改写用户设置 |
 | Mermaid 渲染 | 围栏代码块按源码显示；无图生成入口或设置键 |
 | 外部文件拖入 | 无外部拖入处理或设置键；仅文件浏览器内部拖到编辑器面板组 |
 | Runtime v1 兼容层 | 无 v1 方法、schema 或端口格式；不读旧端口文件 |
 
 ### 旧测试处置
 
-- 旧 `workspace`/`tab`/`pane`/`dock`/`session` 相关测试随旧代码删除；删除前建立「旧测试 → 规格条目/新测试」映射，避免行为知识丢失。
+- 旧 `workspace`/`tab`/`pane`/`dock`/`session` 相关测试在“旧壳退役”里程碑随旧代码一次性删除；删除前建立「旧测试 → 规格条目/新测试」映射，避免行为知识丢失。
 - 保留引擎的测试随引擎迁移：`slterm_terminal`、`slterm_settings`、`slterm_completions`、`slterm_split` 的既有测试保留并适配新接口。
 - 旧 UI 测试（标签页、分屏、侧栏固定槽位、设置单例）不迁移；对应行为由新的项目/面板组/侧栏/每项目设置测试覆盖。
 - 旧 Runtime v1 conformance 删除；新建 v2 conformance，覆盖 `project:/group:/panel:` 资源、移交载荷与单实例。

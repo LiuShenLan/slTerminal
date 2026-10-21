@@ -127,7 +127,7 @@ impl HookDocument {
     pub fn render_json(&self) -> String;
     pub fn apply_json(&mut self, text: &str) -> Result<(), Vec<Diagnostic>>;
     pub fn apply_gui(&mut self, tree: HooksTree) -> Result<(), Vec<Diagnostic>>;
-    pub fn save(&mut self, req: SaveRequest) -> Result<SaveReceipt, SaveError>;
+    pub fn save(&mut self, req: SaveRequest) -> Result<SaveReceipt, HookSaveError>;
 }
 ```
 
@@ -182,7 +182,7 @@ pub struct SaveRequest<'a> {
     pub user_confirmed: bool,
 }
 
-pub enum SaveError {
+pub enum HookSaveError {
     Validation(Vec<Diagnostic>),
     ConfirmationRequired,
     Corrupt { backup_available: bool },
@@ -198,7 +198,7 @@ pub enum SaveError {
 
 1. 校验目录与 JSON 对象；零诊断才继续。
 2. User 层要求 `user_confirmed == true`，否则返回 `ConfirmationRequired`。
-3. 取得目标文件专属跨进程锁（锁键 = 规范化绝对路径的哈希；锁位于应用数据目录，句柄型，进程崩溃自动释放）。取不到返回 `Busy`，不等待 UI。
+3. 取得目标文件专属跨进程锁（锁键 = 规范化绝对路径的哈希；锁位于本地根 `<local>/state/hooks/locks/`，句柄型，进程崩溃自动释放）。取不到返回 `Busy`，不等待 UI。
 4. 重读目标文件并解析；解析失败返回 `Corrupt`；计算当前 `FileSnapshot`。
 5. 与 `expected` 比较（stamp + 内容哈希）；不一致返回 `ExternalModified`，提供当前快照供“重新加载”。
 6. 文件存在时创建上一代备份（同目录 `<文件名>.slterm-bak`，只保留一代）；备份失败中止，零写入。
@@ -235,8 +235,8 @@ pub enum InstallOutcome {
 Claude 注入：
 
 - 在 User 层 `hooks` 中写入本应用订阅事件的 command handler，命令精确指向 `slterm-hook.exe`，并携带 source 判别参数；同一事件保留用户其他 handler 与 matcher 组。
-- statusline：读取原 `statusLine.command` 并备份到应用数据目录；若命中可疑模式（下载器或 PowerShell 任意执行类命令），暂停注入、零写盘，设置页显示命令原文与 `确认注入`/`取消`；确认后第二次注入恒放行。
-- 桥接命令透传原 statusline 输出，同时把上下文窗口用量写入信号目录；信号目录、脚本目录与备份都限制在应用托管数据目录。
+- statusline：读取原 `statusLine.command` 并备份到本地根 `<local>/state/hooks/backups/`；若命中可疑模式（下载器或 PowerShell 任意执行类命令），暂停注入、零写盘，设置页显示命令原文与 `确认注入`/`取消`；确认后第二次注入恒放行。
+- 桥接命令透传原 statusline 输出，同时把上下文窗口用量写入 `<local>/state/usage/`；脚本目录、信号目录与备份都限制在本地根 `<local>/state/hooks/` 与 `<local>/state/usage/`。
 - 托管识别：handler 命令必须精确解析为 `slterm-hook.exe` 的 argv 形态；同时维护归属 marker 文件（记录已安装条目与内容指纹）。不因命令包含 `slterm` 子串而认领。
 - 注入状态查询只返回 `Injected`、`NotInjected`、`Outdated`。`Outdated` 来源：脚本内容/版本与内置模板不一致、hooks 存在但 statusline 桥接缺失、marker 指纹不匹配。
 - 状态查询失败返回 `Err(StatusQueryFailed)`：UI 显示 `注入状态查询失败` 与重试；若已有上次已知值，显示该值并标注状态未知，不仅记录日志。
@@ -275,7 +275,7 @@ pub fn backup_path(path: &Path) -> PathBuf; // <file>.slterm-bak
 pub fn restore_backup(path: &Path) -> Result<(), RestoreError>;
 ```
 
-- 锁：跨进程独占、无超时回收窗口；锁文件位于应用数据目录，键为真实路径哈希；进程崩溃由内核释放。锁冲突显示 `文件被其他程序占用，请稍后重试`。
+- 锁：跨进程独占、无超时回收窗口；锁文件位于本地根 `<local>/state/hooks/locks/`，键为真实路径哈希；进程崩溃由内核释放。锁冲突显示 `文件被其他程序占用，请稍后重试`。
 - 备份：仅保留上一代，写前创建，备份失败中止保存；备份文件不进入 git 追踪目录以外的特殊处理，不记录内容到日志。
 - 原子写：与文件服务相同的临时文件 + 原子替换；不使用普通覆盖写。
 - 备份恢复：用户确认后以备份内容替换目标；恢复同样走锁与原子写。

@@ -50,16 +50,13 @@ slterm_app/src/panels/terminal/
 
 ### 关键类型
 
-```rust
-pub struct TerminalPanelParams {
-    pub revision: u32,
-    // 编号/自定义标题/最近 cwd 归 TerminalBook，持久化在 terminals.json；此处不复制。
-}
+持久参数 `TerminalParams` 归 `domain-model.md`；编号/自定义标题/最近 cwd 归 `TerminalBook`，持久化在状态库 `project_terminals`，此处不复制。
 
+```rust
 pub struct TerminalPanelModel {
     pub id: PanelId,
     pub project_id: ProjectId,
-    pub params: TerminalPanelParams,
+    pub params: TerminalParams,
     pub session: SessionState,
     pub cli: Option<CliSession>,
     pub title: TitleState,
@@ -79,7 +76,7 @@ pub enum SessionState {
 pub struct CliSession {
     pub agent: AgentKind,
     pub source: CliSource,            // Hook | Screen | CommandToken
-    pub status: CliStatus,            // Working | Attention | Done | Error
+    pub status: AgentStatus,          // 定义见 integrations/agent-cli.md
     pub session_id: Option<String>,
     pub title: Option<String>,
     pub last_title_update: Instant,
@@ -183,7 +180,7 @@ Shell 选择：
 编号：
 
 - 编号由 `TerminalBook` 按项目分配，从 0 开始；关闭不复用、不重排。
-- 编号/自定义标题/最近 cwd 只写 `state/projects/<id>/terminals.json`，运行期权威在 `TerminalBook`；`layout.json` 不保存 `terminal_counter` 或 `number`。恢复时以 `terminals.json` 为准，`next_ordinal = max(next_ordinal, maxSeen + 1)`；编号重复或非法时重新分配并记录一次聚合警告。
+- 编号/自定义标题/最近 cwd 只写状态库 `project_terminals.terminals_json`，运行期权威在 `TerminalBook`；`project_layouts.layout_json` 不保存 `terminal_counter` 或 `number`。恢复时以 terminal book 行为准，`next_ordinal = max(next_ordinal, maxSeen + 1)`；编号重复或非法时重新分配并记录一次聚合警告。
 - 历史会话恢复同样分配新编号，不继承历史编号。
 
 历史会话恢复：
@@ -319,7 +316,7 @@ CLI 识别来源：
 持久化：
 
 - 布局只保存面板类型、所属项目、面板组归属、顺序、激活态与 `revision`；不内联编号或计数器。
-- 编号、自定义标题、最近已知工作目录只在 `terminals.json`，由 `TerminalBook` 持有与对账。
+- 编号、自定义标题、最近已知工作目录只在状态库 `project_terminals`，由 `TerminalBook` 持有与对账。
 
 不保存：画面、回滚、选区、滚动位置、状态圆点、CLI 图标、运行中标题、CLI 会话元数据、待注入命令、输入队列。
 
@@ -333,7 +330,7 @@ CLI 识别来源：
 | 滚动位置 | 保留 | 保留 | 重置底部 | 重置底部 |
 | 工作目录 | 保留 | 保留 | 按入口继承 | 恢复保存值，失效回项目根 |
 | 自定义标题 | 保留 | 保留 | 无 | 恢复 |
-| 编号 | 保留 | 保留 | 新号 | 按 `terminals.json` 恢复 |
+| 编号 | 保留 | 保留 | 新号 | 按状态库 terminal book 恢复 |
 | 标题/状态/CLI 元数据 | 保留并更新 | 保留并更新 | 无 | 不恢复 |
 
 关闭守卫：
@@ -362,10 +359,15 @@ CLI 识别来源：
 终端增强不进入本轮规格验收，但面板结构必须预留稳定端口，迁移时不改面板模型：
 
 ```rust
+pub enum KeyDisposition { Consumed, PassThrough }
+pub enum InputDisposition { Consumed, PassThrough }
+
 pub trait TerminalEnhancement {
-    fn handle_key(&mut self, key: &Keystroke, mode: TermMode, cx: &mut EnhancementCx) -> bool;
-    fn decorate_snapshot(&mut self, snapshot: &mut RenderSnapshot, cx: &EnhancementCx);
-    fn render_overlay(&mut self, cx: &mut EnhancementCx) -> Option<AnyElement>;
+    fn on_key(&mut self, key: &Keystroke, phase: KeyPhase) -> KeyDisposition;
+    fn on_text_input(&mut self, text: &str, phase: InputPhase) -> InputDisposition;
+    fn on_command_submitted(&mut self, line: &str);
+    fn on_command_finished(&mut self, event: &CommandFinished);
+    fn paint_overlay(&mut self, frame: &mut TerminalPaintFrame);
     fn enabled(&self) -> bool;
 }
 

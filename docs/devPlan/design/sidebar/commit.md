@@ -154,7 +154,7 @@ pub enum ChangeEntry {
 | 进行中刷新 | 可完成并更新数据 | 丢弃旧结果 | 可完成 | 无 |
 | 确认框 | 模态期间禁止切换 | 取消且不执行 | 不保留 | 无 |
 
-- 折叠、已忽略分区折叠、ignored 开关归侧栏视图状态，应用级作用域；持久化位置与信封见 `persistence.md` 的 `state/views/commit.json`，本节不复制 schema。滚动、过滤、聚焦行仅运行期。
+- 折叠、已忽略分区折叠、ignored 开关归侧栏视图状态，应用级作用域；落点见 `persistence.md` 的 `view_states` 中 `commit` 行，本节不复制 schema。滚动、过滤、聚焦行仅运行期。
 - 不做每项目数据缓存；视图可见性、槽位与宽度归侧栏框架。
 
 ### 复用与重建

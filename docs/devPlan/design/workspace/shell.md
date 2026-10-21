@@ -19,11 +19,10 @@ slterm_workspace/
   src/dedupe.rs              DedupeKey / DedupeIndex / 标题冲突
   src/focus.rs               焦点循环顺序与关闭焦点转移纯函数
   src/paths.rs               PathKey / PersistedPath / 根重定位计划
-  src/sessions/              SessionKey / 归属 / 相对时间 / 删除账本
-  src/persist/               DTO / 信封 / 恢复对账 / 版本判定
+  src/persist/               DTO / 恢复对账 / 版本判定
 ```
 
-`slterm_sidebar`（依赖 `slterm_workspace` 的 ID/路径类型）：
+`slterm_sidebar`（依赖 `slterm_workspace` 的 ID/路径类型与 `slterm_agents` 的会话投影）：
 
 ```text
 slterm_sidebar/
@@ -82,7 +81,16 @@ pub struct PanelCapabilities {
     pub dirty: bool,
     pub can_save: bool,
     pub pending_autosave: bool, // 设置中心待写/失败自动保存
-    pub foreground: Option<ForegroundProcess>,
+    pub foreground: ForegroundProcessState, // 定义见 panels/terminal.md
+}
+
+/// 面板类型注册项；定义与工厂归 slterm_app::app::panel_registry。
+pub struct PanelDescriptor {
+    pub kind: PanelKind,
+    pub create: fn(&mut PanelCreateContext<'_>) -> Result<PanelHost, PanelOpenError>,
+    pub default_focus: FocusTarget,
+    pub supports_save: bool,
+    pub supports_close_guard: bool,
 }
 ```
 
@@ -103,7 +111,7 @@ pub struct PanelCapabilities {
 - 创建：导航树触发文件夹选择；只接受目录。根路径按 Windows 规则归一后必须在目录中唯一；已存在则激活并通知 `该项目已存在`。显示名取文件夹名，与现有显示名重复时追加递增数字后缀（`demo 2`）。新项目分配新的稳定 `ProjectId`，布局为空，追加到项目顺序末尾，成为活跃项目并显示项目空态；不自动创建终端。失败通知 `添加项目失败` 与原因，项目列表不变。
 - 激活与切换：点击项目行或打开属于该项目的会话/文件/面板。切换只切换可见性与焦点；目标项目的布局、面板实例、PTY 与脏状态保持。无加载态。
 - 活跃回退：移除活跃项目后按项目顺序取下一个；没有下一个取上一个；没有其他项目进入无项目态，主区空白且标题栏中段为空。
-- 移除：导航树只发移除请求，确认框由 shell 拥有。正文包含项目名、将终止的终端数量、需保存面板标题与前台运行终端；声明磁盘文件与历史会话记录不受影响。确认后先成功写 `workspace.json`（移除条目并更新活跃项目）；写失败中止移除、项目保持。成功后再删除项目目录与恢复快照，并终止 PTY、销毁面板与布局；取消不变；不可撤销。移除不删除磁盘文件和 CLI 会话记录。
+- 移除：导航树只发移除请求，确认框由 shell 拥有。正文包含项目名、将终止的终端数量、需保存面板标题与前台运行终端；声明磁盘文件与历史会话记录不受影响。确认后先成功提交状态库事务（删除项目、布局、终端簿与恢复索引并更新活跃项目）；写失败中止移除、项目保持。成功后再删除恢复快照目录，并终止 PTY、销毁面板与布局；取消不变；不可撤销。移除不删除磁盘文件和 CLI 会话记录。
 - 根重定位：入口在导航树；新根必须存在、唯一且不是其他项目根。成功保留 `ProjectId`、显示名、顺序、布局、面板实例与展开状态；失败通知 `重新定位根目录失败` 或 `该根目录已属于其他项目`。
 - 根不可访问：项目仍可激活、重命名、排序、重定位与移除；根警示由导航树显示；不阻断加载与切换。
 - 项目身份以 `ProjectId` 为准，根路径只是唯一性不变量；featureSpec 已同步该表述。
@@ -260,13 +268,13 @@ pub enum SaveBatchResult { AllSaved, Failed(Vec<PanelSaveFailure>) }
 单实例：
 
 - 单实例锁为 `<state>/instance.lock` 句柄锁，由 `platform-windows.md` 拥有；进程崩溃由内核释放，锁文件可残留，所有权只看句柄。
-- 已有实例时不创建窗口。本次启动经 Runtime v2 本地控制端点调用 `runtime.handover` 移交载荷：`Focus`、`OpenProject { root }`、`OpenFile { project_root?, path }`、`NewTerminal { project_root?, cwd }`。载荷用根路径定位，不传内部 ID；端点发现、超时与重试见 `platform-windows.md`。
-- 已有实例按载荷顺序处理：`OpenProject` 归一后命中则激活、否则创建项目；`OpenFile` 在现有项目根中取最深命中，经统一文件打开路由分派并聚焦，根外路径只提示并聚焦窗口；`NewTerminal` 取 cwd 所属项目或活跃项目，无项目时只聚焦；`Focus` 最后执行前置。
+- 已有实例时不创建窗口。本次启动经 Runtime v2 本地控制端点调用 `runtime.handover`；载荷类型、校验与端点发现/超时/重试归 `platform-windows.md`，本文件只记录接收后的项目/面板处理语义。载荷用根路径定位，不传内部 ID。
+- 已有实例按载荷顺序处理：`OpenProject` 归一后命中则激活，否则提示用户先在导航树添加或匹配现有项目，不创建项目；`OpenFile` 在现有项目根中取最深命中，经统一文件打开路由分派并聚焦，根外或无匹配只提示并聚焦窗口；`NewTerminal` 取 cwd 所属项目或活跃项目，无项目时只聚焦；`Focus` 最后执行前置。
 - 单实例保证同一项目数据只有一个写进程；不提供多实例协同。
 
 窗口几何：
 
-- 窗口几何（迁移后落点 `state/window.json`、恢复算法、DPI 夹取与多显示器规则）由 `platform-windows.md` 拥有，属范围外迁移能力。本规格不创建该文件，关闭链不冲刷窗口几何。
+- 窗口几何（迁移后落点 `<local>/state/window.json`、恢复算法、DPI 夹取与多显示器规则）由 `platform-windows.md` 拥有，属范围外迁移能力。本规格不创建该文件，关闭链不冲刷窗口几何。
 
 ### 启动与关闭
 
@@ -274,8 +282,8 @@ pub enum SaveBatchResult { AllSaved, Failed(Vec<PanelSaveFailure>) }
 
 1. 单实例检查。
 2. 加载设置：单域失败使用默认值并记录警告；整体损坏通知 `配置已损坏，已回退默认值`。
-3. 加载项目数据：失败显示项目数据错误界面（错误信息、`重试`、`以空状态继续`，保留自绘标题栏）；`以空状态继续` 后允许保存新数据，原损坏文件先隔离副本，不覆盖。
-4. 急切恢复全部项目布局与全部面板参数；单个项目布局解析失败按空布局处理，其他项目不受影响；未知面板类型丢弃；结果合并为一条启动警告。
+3. 打开状态库并加载项目数据：失败显示项目数据错误界面（错误信息、`重试`、`以空状态继续`，保留自绘标题栏）；`以空状态继续` 后允许保存新数据，原损坏库先隔离，不覆盖。
+4. 急切恢复全部项目布局与全部面板参数；单个项目载荷解析失败按空布局处理，其他项目不受影响；未知面板类型丢弃；结果合并为一条启动警告。
 5. 恢复上次活跃项目；无法定位取项目顺序第一个；无项目进入无项目态。
 6. 按上限并发创建 PTY；超限或失败的面板显示可重试错误态；隐藏项目只暂停绘制，PTY 继续运行。
 7. 检测异常退出快照，以一条聚合提示询问恢复或丢弃；恢复不产生焦点意图。
@@ -284,12 +292,12 @@ pub enum SaveBatchResult { AllSaved, Failed(Vec<PanelSaveFailure>) }
 关闭链：
 
 1. 窗口关闭请求，若存在需保存面板或前台运行终端，弹聚合确认；取消即中止。
-2. 冲刷 `Guarded` 集合：设置、侧栏、工作区索引、项目布局、终端簿。任一失败中止关闭，提供重试/取消；阶段时限与跨文件顺序见 `persistence.md` 关闭链落盘。
+2. 冲刷 `Guarded` 集合：设置 JSON 与状态库全部 dirty facet。任一失败中止关闭，提供重试/取消；阶段时限见 `persistence.md` 关闭链落盘。
 3. 并发终止全部已注册 PTY；失败汇总记录日志，由系统进程树兜底。
-4. 以最终内存状态保存项目数据（完整布局与活跃项目标识）；失败只记录，不阻止关闭。
+4. 以最终内存状态提交终端簿与项目布局事务，并生成状态库备份；失败只记录，不阻止关闭。
 5. 销毁窗口与进程。
 
-关闭链不冲刷窗口几何。移除项目不复用窗口关闭链：确认后先成功写 `workspace.json`，写失败中止移除；成功后再删除项目目录与恢复快照，并终止 PTY、销毁面板与布局。PTY 终止失败只记录。
+关闭链不冲刷窗口几何。移除项目不复用窗口关闭链：确认后先成功提交状态库事务，写失败中止移除；成功后再删除恢复快照目录，并终止 PTY、销毁面板与布局。PTY 终止失败只记录。
 
 ### 通知与确认框
 
@@ -332,8 +340,8 @@ pub struct ConfirmRequest {
 逻辑记录与字段级 schema 由 `design/persistence.md` 单点定义；本节只保留所有者与写入时机：
 
 - 项目索引、项目布局、终端簿由工作区壳写入；侧栏布局与视图状态由侧栏框架写入；应用设置由设置域写入；崩溃快照由编辑器/Markdown 写入。
-- 布局变化立即写内存，去抖按 `persistence.md` 的项目布局域；终端编号/cwd 与自定义标题按终端簿域规则；关闭前强制冲刷，不等待计时器。
-- 写入经 `PersistenceCoordinator` 串行队列与 generation；原子写、备份、损坏隔离与跨文件提交顺序见 `design/persistence.md`。
+- 布局变化立即写内存，去抖按 `persistence.md` 的项目布局 facet；终端编号/cwd 与自定义标题按终端簿 facet 规则；关闭前强制冲刷，不等待计时器。
+- 写入经 `PersistenceCoordinator` 单写线程与事务；facet 合并、损坏隔离、备份分层与关闭冲刷见 `design/persistence.md`。
 - 启动恢复只读，不写回；恢复产生的程序化变化不触发保存。
 
 ### 复用与重建
@@ -343,8 +351,8 @@ pub struct ConfirmRequest {
 | `slterm_split` 分屏树、删除收编、分隔线命中、比例提交、方向导航 | 直接复用为面板组布局树；叶类型换 `PanelGroupId` |
 | `terminal_registry`、`AgentHub`、终端视图/PTY 会话 | 保留引擎；键改为 `ProjectId + PanelId`，所有权挂到 `PanelHost` |
 | `title_bar.rs` 的原生控制区、34px/38×26 尺寸、虚拟窗口命令分派 | 复用；标题数据源改活跃项目名，关闭接统一关闭链 |
-| `session_persistence` 的 latest/saved、无变化跳过、终局冻结、失败重试 | 复用状态机思想；按多项目/多域重写为 flush coordinator |
-| `pumps.rs` 的 hook 泵、屏幕看门狗、壳事件泵、托盘快照 | 复用；事件路由改项目/面板，自动保存泵替换为去抖协调器 |
+| `session_persistence` 的 latest/saved、无变化跳过、终局冻结、失败重试 | 复用状态机思想；按多项目/多 facet 重写为事务协调器 |
+| `pumps.rs` 的 hook 泵、屏幕看门狗、壳事件泵、托盘快照 | 复用；事件路由改项目/面板，自动保存泵替换为 facet 去抖协调器 |
 | `session_recovery.rs` 的断路器、隔离、启动计划、启动身份映射 | 复用恢复策略与 `LaunchSession` 安全转换；多项目重写 |
 | `notify.rs` 的应用内通知队列 | 重建为统一通知服务；系统通知、闪烁与托盘归 `platform-windows.md` |
 | `runtime_api` 端点发现、单实例移交重试、控制面服务 | 复用传输与生命周期；移交方法统一 `runtime.handover`，资源模型升级为 project/panel-group/panel |

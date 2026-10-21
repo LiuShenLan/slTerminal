@@ -43,7 +43,7 @@ slterm_app (application)
   ├─ slterm_split
   └─ slterm_completions
 
-slterm_sidebar  → slterm_workspace / slterm_split
+slterm_sidebar  → slterm_workspace / slterm_split / slterm_agents
 slterm_hooks    → slterm_agents
 slterm_workspace→ slterm_split
 slterm_agents / slterm_runtime_protocol → 无生产依赖
@@ -65,7 +65,8 @@ slterm_hook     → 无生产依赖
 ### 依赖钉死与基线验收
 
 - GPUI 与 gpui-component 使用根 `Cargo.toml` 钉死的 fork rev；升级必须单独评审，升级前跑全量门禁与体积基线。
-- Tree-sitter grammar 每语言一个 crate；编辑器面板里程碑前完成选型、许可与体积登记。新增依赖同步登记 `architecture/dependencies.toml` 与 `architecture/file-budgets.txt`；超体积预算时裁剪语言集。
+- SQLite 使用 bundled 构建并把版本钉在 `Cargo.lock`；只有 app 持久化层依赖数据库，core 与 hook 不依赖。
+- Tree-sitter grammar 每语言一个 crate；编辑器面板里程碑前完成选型、许可与体积登记；语言集以 `LanguageRegistry` 为单点。新增依赖同步登记 `architecture/dependencies.toml` 与 `architecture/file-budgets.txt`；超体积预算时裁剪语言集。
 - 构建与打包基线里程碑的验收落点：workspace 成员、依赖策略键集、`PackageEntries`、安装器/便携包 staging 与体积基线；退出条件为架构门禁全绿、包清单三处一致、体积测试有可复现基线。
 
 ### 二进制、包名与资产

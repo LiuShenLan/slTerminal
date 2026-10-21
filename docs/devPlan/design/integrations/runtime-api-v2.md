@@ -15,6 +15,7 @@
 | v2 资源模型固定为 project → panel-group → panel；不保留 window/tab/pane 资源 | 目标态只有单窗口、项目布局、面板组、面板；兼容层会让两套身份长期并存 | 不提供 `window.*` 方法；快照只保留 `window.focused`，不暴露窗口 ID |
 | 稳定 ID 与可复用编号分离 | 面板编号会重排/复用；资源身份必须跨重排、重定位、重启稳定 | 终端编号仍是项目级展示编号，不进入资源 ID |
 | 协议版本固定 2；版本不匹配显式报错；无 v1 路由 | 工作区模型已破坏性重建，v1 语义无法映射 | 端口文件、schema、skill、env 变量同步升级；旧客户端得到 `protocol_version_mismatch` |
+| 协议先行、方法增量 | 壳的移交与早期 AI CLI 集成需要控制面；完整方法依赖各域实现 | 协议 v2 版本冻结；project/panel/terminal 先交付，git/agent/orchestrate 随域追加；只追加方法，不改旧语义；交付节奏见 `plan.md` |
 | 写命令统一经 UI owner 单队列派发；读命令直接读不可变快照 | 布局/面板操作必须在 UI 线程串行；读不得阻塞 UI | 长等待（run/wait/exec）不占 UI 队列 |
 | 变更可选携带 `expected_revision`；不匹配 `revision_conflict` | 外部客户端可能基于旧快照执行破坏性操作 | 不强制所有读；破坏性/移动操作建议携带 |
 | 写方法可选 `mutation_id`；服务端按 `(mutation_id, method, params_hash)` 缓存响应 | 网络重试不应产生重复面板/分组；请求 `id` 只作关联 | 缓存有界、短 TTL；同 `mutation_id` 不同参数返回 `idempotency_conflict`；跨进程不共享 |
@@ -30,7 +31,7 @@
 pub struct ResourceId(String);
 
 // 线缆枚举，与领域 PanelKind 一一映射；未知值拒绝。
-pub enum PanelKind { Terminal, Editor, Markdown, Diff, GitShow, Settings }
+pub enum WirePanelKind { Terminal, Editor, Markdown, Diff, GitShow, Settings }
 
 pub struct ProjectResource {
     pub id: ResourceId,
@@ -51,7 +52,7 @@ pub struct PanelGroupResource {
 
 pub struct PanelResource {
     pub id: ResourceId,
-    pub kind: PanelKind,
+    pub kind: WirePanelKind,
     pub title: String,
     pub active: bool,
     pub focused: bool,
@@ -75,8 +76,8 @@ pub enum PanelGroupLayout {
 - 项目 ID 语义：项目创建时生成并随项目持久化；根目录重定位、重命名、排序、重启均保持不变。根路径唯一仍是不变量，但不再是身份。
 - 面板组 ID 语义：首个面板组创建或拆分时生成；持久化于项目布局；面板组空置被移除后 ID 退役，不复用。
 - 面板 ID 语义：面板创建时生成；同项目内移动、页签重排、面板组变化、重启均保持不变；关闭后退役。
-- `PanelKind` 线缆枚举是封闭集，与工作区面板类型单点登记一一映射；未知值拒绝。
-- 终端展示编号 `terminal_number` 是项目级编号，随 `terminals.json`/`TerminalBook` 持久化、关闭不复用，但不是资源身份；Runtime 不提供按编号寻址。
+- `WirePanelKind` 线缆枚举是封闭集，与工作区面板类型单点登记一一映射；未知值拒绝。
+- 终端展示编号 `terminal_number` 是项目级编号，随状态库 `project_terminals`/`TerminalBook` 持久化、关闭不复用，但不是资源身份；Runtime 不提供按编号寻址。
 - 资源定位只接受稳定 ID；不再接受 `tab_index`、`pane_id` 或索引路径。索引只作为快照里的顺序字段。
 - 快照：
 
@@ -132,12 +133,12 @@ pub struct RuntimeSnapshot {
     pub app_version: String,
     pub protocol_version: u16,
     pub active_project_id: Option<ResourceId>,
-    pub window: WindowState,
+    pub window: RuntimeWindowState,
     pub projects: Vec<ProjectResource>,
     pub lifecycles: Vec<PanelLifecycle>,
 }
 
-pub struct WindowState {
+pub struct RuntimeWindowState {
     pub focused: bool,
 }
 
@@ -151,7 +152,7 @@ pub struct CreateProjectParams {
 pub struct CreatePanelParams {
     pub project_id: ResourceId,
     pub group_id: Option<ResourceId>, // 缺省 = 项目聚焦组；无组则创建
-    pub kind: PanelKind,
+    pub kind: WirePanelKind,
     pub activate: bool,
     pub terminal: Option<TerminalCreateParams>, // cwd/shell
     pub document: Option<DocumentOpenParams>,   // path/mode
@@ -189,9 +190,9 @@ pub enum ResourceRef {
 - `mutation_id` 仅写方法可选；请求 `id` 只作关联，不参与幂等。
 - token：128 位随机 hex；缺失/不符静默丢弃，不返回错误，避免未认证进程把错误当协议预言机。token 不进日志、审计、错误详情。
 - 限额：请求体 128 KiB；单实例最多 64 个并发客户端；读写超时 5s；控制派发 30s（`terminal.exec` 按参数追加预算）；订阅通道有界 16；wait 上限 600s。
-- 端点发现：进程内子端点（`SLTERM_RUNTIME_ENDPOINT` 注入）> 显式环境变量 > 数据目录 `state/runtime.port`。端口文件内容 `slterm.runtime/2 <port> <token> <pid>`，原子写；显式端点非法时不回落端口文件。
+- 端点发现：进程内子端点（`SLTERM_RUNTIME_ENDPOINT` 注入）> 显式环境变量 > 本地根 `<local>/state/runtime.port`。端口文件内容 `slterm.runtime/2 <port> <token> <pid>`，原子写；显式端点非法时不回落端口文件。
 - 端口文件版本前缀固定 `slterm.runtime/2`；读到其他版本视为不兼容实例，不接管、不静默降级。
-- 单实例：启动先取 lifetime 锁；已有实例时发送 v2 移交请求后退出，不创建第二窗口。移交载荷用根路径定位：`OpenProject{root}`、`OpenFile{project_root?,path}`、`NewTerminal{project_root?,cwd}`，另有仅聚焦；不传内部 ID；项目按根路径幂等解析。
+- 单实例：启动先取本地根 lifetime 锁；已有实例时发送 v2 移交请求后退出，不创建第二窗口。移交载荷类型、校验与接收语义归 `platform-windows.md`；本协议只定义 `runtime.handover` 方法与信封。载荷用根路径定位，不传内部 ID；目标项目/路径不存在只提示，不自动创建。
 - `runtime.describe` 返回：app_version、protocol、protocol_version、supported_versions、schema 相对路径、capabilities、features、env 约定；不返回 token。
 
 ### 命令语义
@@ -243,6 +244,7 @@ pub enum ResourceRef {
 | `git.rollback` / `git.unstage` | 需 `revision`；写前重跑 status 校验 | 非幂等（重复回滚同状态应返回已一致） |
 | `agent.start` | 在面板启动 Agent；`kind` 必须可冷启动 | 非幂等 |
 | `agent.fork` | 事务型 worktree + 新面板；返回 provenance | 非幂等；客户端重试须复用 `mutation_id` |
+| `agent.delegate` | 将任务委派给目标 Agent，返回 request/task ID；不等待回合结束 | 非幂等；客户端重试须复用 `mutation_id` |
 | `agent.prompt` / `agent.paste` / `agent.read` / `agent.wait` | 按 Agent 身份与 generation 绑定 | 读幂等；写非幂等 |
 | `runtime.handover` | 第二实例移交：打开项目/文件、新建终端、聚焦 | 按载荷自然键幂等 |
 

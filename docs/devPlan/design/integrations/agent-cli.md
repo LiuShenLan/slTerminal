@@ -4,7 +4,7 @@
 
 ### 职责与边界
 
-本域负责：AgentKind 身份与能力注册表、命令识别与别名、启动/恢复/分叉命令、Hook 能力声明与事件摄取、statusline 上下文用量、历史会话扫描与恢复计划、套餐余量、进程快照与身份解析、AI 状态系统通知事件。
+本域负责：AgentKind 身份与能力注册表、命令识别与别名、启动/恢复/分叉命令、Hook 能力声明与事件摄取、statusline 上下文用量、历史会话扫描与恢复计划、会话词法归属与删除账本、套餐余量、进程快照与身份解析、AI 状态系统通知事件。本域是会话领域（`SessionKey`/`SessionRecord`/`SessionCatalog`/来源扫描/归属/删除）的唯一所有者。
 
 不负责：PTY 创建与终端渲染（终端面板）、Hook 配置文件编辑（Hooks 域）、导航树视图状态与恢复编排（导航域）、设置页控件（设置中心）、Runtime API 传输（Runtime v2）。
 
@@ -170,7 +170,7 @@ pub struct ContextUsage {
 pub enum UsageState { Unavailable, Fresh(ContextUsage), Stale(ContextUsage) }
 ```
 
-- 注入的 statusline 桥接脚本在透传用户原 statusline 输出的同时，把宿主 stdin 中的上下文窗口信息节流写入信号目录的每面板 JSON 文件（原子写，上限 4 KiB）。
+- 注入的 statusline 桥接脚本在透传用户原 statusline 输出的同时，把宿主 stdin 中的上下文窗口信息节流写入 `<local>/state/usage/` 的每面板 JSON 文件（原子写，上限 4 KiB）。
 - 宿主 `usage_watch` 监听信号目录（不可用时 1 Hz 轮询兜底），解析失败静默丢弃并保留上一份有效值；会话结束或面板关闭清除该面板状态。
 - 导航活跃会话行的迷你用量条消费 `UsageState`；无数据或过期显示 `--`/降级态。用量不是套餐余量，两者模型与刷新节奏独立。
 
@@ -189,6 +189,9 @@ pub struct SessionRecord {
 }
 
 pub enum SessionRunState { Running, Completed, Unknown }
+
+/// 活动 CLI 的实时状态；终端状态圆点、导航活跃会话行与托盘注意力共用。
+pub enum AgentStatus { Working, Attention, Done, Error, Unknown }
 
 pub struct SessionSourceHealth {
     pub source: AgentKind,
@@ -229,12 +232,12 @@ pub struct PlanSourceBalance {
 }
 
 pub trait PlanBalanceQuery: Send + Sync {
-    fn fetch(&self, source: &dyn PlanSource, token: &SecretBytes)
+    fn fetch(&self, source: &dyn PlanSource, token: &SecretValue)
         -> Result<FetchOutcome, PlanError>;
 }
 ```
 
-- 来源解析只读 user 层 `~/.claude/settings.json` 的 `env` 段（Anthropic 兼容端点与 token）；不读 Windows 凭据管理器；token 不出凭据域，快照/DTO/推送载荷无 token 字段。
+- 来源解析只读 user 层 `~/.claude/settings.json` 的 `env` 段（Anthropic 兼容端点与 token）；不读 Windows 凭据管理器；这是外部凭据的只读受控例外，token 只在查询执行器内使用，不出凭据域，快照/DTO/推送载荷无 token 字段。
 - 轮询由后台任务 `planBalance` 驱动（默认 10s，合法 10–3600s）；阻塞 HTTP 全程在 GPUI background executor，UI 线程零阻塞。快照经模块级 watch channel 推送；失败保留旧值、不推送、不冒泡为 UI 错误。
 - 导航页脚刷新节流 5s；结果保留 30s；任务禁用/来源为空时页脚隐藏但保留最后快照；重新启用立即显示。
 - 查询语义（URL 归一化、DeepSeek/Kimi 解析、冻结判定、5h/7d 窗口缺失规则）沿用现有实现与真实响应快照锚点，不在本次重建中改变。
