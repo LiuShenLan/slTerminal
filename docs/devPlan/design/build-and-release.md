@@ -6,19 +6,20 @@
 
 ### 决策与红线
 
-- **新 crate 布局按层收敛**：新增五个领域 core crate（`slterm_workspace`、`slterm_sidebar`、`slterm_agents`、`slterm_hooks`、`slterm_runtime_protocol`）；命令/焦点、持久化协调器与 i18n 目录留在 app，不新增 `slterm_persist`/`slterm_commands`/`slterm_i18n`；终端、分屏、设置、补全继续作为 core 引擎；只有应用壳依赖 GPUI 与平台集成。原因：旧壳的 workspace/tab/pane/dock/session 整体废弃，领域模型必须脱离 UI 可测。边界：不保留旧模型兼容层，不迁移旧数据。
+- **新 crate 布局按层收敛**：新增领域 core crate（`slterm_workspace`、`slterm_sidebar`、`slterm_agents`、`slterm_hooks`、`slterm_runtime_protocol`）；命令/焦点、持久化协调器与 i18n 目录留在 app，不新增 `slterm_persist`/`slterm_commands`/`slterm_i18n`；终端、分屏、设置、补全继续作为 core 引擎；只有应用壳依赖 GPUI 与平台集成。原因：旧壳的 workspace/tab/pane/dock/session 整体废弃，领域模型必须脱离 UI 可测。边界：不保留旧模型兼容层，不迁移旧数据。
 - **包名与二进制名稳定**：应用包 `slterm`、二进制 `slterm.exe`；Hook 包 `slterm_hook`、二进制 `slterm-hook.exe`；产品显示名 `slTerminal`。原因：安装器、更新链、单实例与 AUMID 已按这些名称形成外部契约。边界：目录布局可以重排，包名与资产名不变。
 - **单一发布入口**：正式发布只走 `scripts/release.ps1 -Version <X.Y.Z>`，依次共享构建、安装器、便携 zip、钉测试、发布核验。原因：两个产物必须同代同 feature 图。边界：正式路径禁止跳过构建或复用旧产物；彩排必须显式标注。
 - **清单即合同**：包内文件集唯一真值源是 `scripts/build-windows-product.ps1` 的 `PackageEntries`；安装器 `[Files]`、便携 zip staging 与钉测试必须同步。原因：包内文件集是外部可见合同。边界：新增/删除文件必须同时修改三处。
+- **发布范围与占位解耦**：正式发布不以 AI Providers/助手与终端增强交付为前置；这些范围外节在应用页保持禁用/占位并标注后续交付。原因：发布链验证核心终端与工作区能力，范围外能力按独立里程碑回迁。边界：不得把占位入口当作已交付能力，发布说明必须列明未交付项。
 - **更新包不可执行未验证内容**：名称/架构/版本/官方 URL 前缀四重匹配、SHA-256、长度、PE 头与 512MiB 上限全部通过后才原子替换；commit 是唯一安装授权。原因：下载链是远程输入，必须默认拒绝。边界：便携版不自动安装，提示走下载页手动替换；外部托管渠道不参与自更新。
-- **门禁常挂**：格式、clippy、测试、架构、文档策略、品牌回归、打包钉测试与发布核验全部通过才可发布。原因：目标态重建允许大改，但不允许静默降低质量门。边界：新增 crate 必须先登记依赖策略与行预算，否则架构门禁失败。
+- **门禁常挂**：提交门禁（格式、clippy、测试、架构、文档策略、品牌回归）每次提交全绿；发布门禁在提交门禁全集上追加打包钉测试与发布核验。原因：目标态重建允许大改，但不允许静默降低质量门。边界：新增 crate 必须先登记依赖策略与行预算，否则架构门禁失败。
 
 ### 目标 workspace 布局
 
 ```text
 slterm_workspace/          core   项目/布局/面板模型、ID、封闭枚举、纯转换、持久化 DTO
 slterm_sidebar/            core   侧栏布局、文件树/Commit/Agent 文件纯模型
-slterm_agents/             core   AgentKind 能力表、会话元数据、hook 事件归一化
+slterm_agents/             core   AgentKind 能力表、会话元数据、hook 事件归一化、SessionSource 端口与纯投影
 slterm_hooks/              core   Hooks 事件/handler 目录、schema 校验
 slterm_runtime_protocol/   core   Runtime v2 信封、线缆 ResourceId、请求/响应 schema
 slterm_settings/           core   设置值模型、键注册表、主题色表、路径权威
@@ -53,7 +54,7 @@ slterm_hook     → 无生产依赖
 - 渲染框架包（`gpui`、`gpui_platform`、`gpui-component`、`winit`、`glutin`、`crossfont` 等）只允许应用层依赖；core 与 hook 生产依赖不得出现。
 - `slterm_workspace` 不引用 GPUI、文件系统或网络；项目/布局/面板的 ID、枚举、状态机与纯转换可独立测试。
 - `slterm_sidebar` 只拥有侧栏布局、文件树/Commit/Agent 文件的纯模型与状态迁移；文件系统执行、Git 进程与 GPUI 留在 app。
-- `slterm_agents` 只拥有 AgentKind 能力表、会话元数据与 hook 事件归一化；不启动进程、不读文件、不访问网络。
+- `slterm_agents` 只拥有 AgentKind 能力表、会话元数据、hook 事件归一化与 `SessionSource` 端口/纯投影；不启动进程、不读文件、不访问网络。会话扫描、恢复与删除的文件 I/O 在 app 服务层经端口注入并走 `PathAuthority`。
 - `slterm_hooks` 只拥有事件/handler 目录与 schema 校验；文件读写与 CLI 启动留在 app 服务层。
 - `slterm_runtime_protocol` 只拥有协议类型与线缆 `ResourceId`；`ResourceId` 是不透明字符串，自带解析/格式化/错误，不依赖 `slterm_workspace`；该 crate 保持零 workspace 生产依赖。服务器、传输与鉴权在 app。
 - 持久化协调器、命令/焦点框架、i18n 目录与平台适配器留在 app；不新增 `slterm_persist`/`slterm_commands`/`slterm_i18n` crate。
@@ -81,9 +82,13 @@ slterm_hook     → 无生产依赖
 | AppId | 既有生产 AppId | 一经钉死永不变更；验收夹具使用独立 AppId |
 | AUMID | `com.slterminal.terminal` | 系统通知归因与任务栏归组 |
 | 开机启动快捷方式 | `slTerminal.lnk` | 用户 Startup 文件夹；安装器与设置页同源 |
+| CLI logo 目录 | `assets/cli-svg/` | canonical 源 `docs/featureSpec/assets/cli-svg/`；构建期扫描生成品牌索引；随包路径是包合同一部分 |
 
 - 版本号由发布脚本传入；版本线延续既有更新链规则，低于首个安装器基版本的旧安装视为需手动重装。
-- 包内资产：应用图标 PNG/ICO、许可文件、第三方声明、Runtime API v2 文档与 schema、随包 skill、CHANGELOG；不再携带 v1 schema 与旧版 skill 文案。
+- 包内资产：应用图标 PNG/ICO、CLI 品牌 logo、许可文件、第三方声明、Runtime API v2 文档与 schema、随包 skill、CHANGELOG；不再携带 v1 schema 与旧版 skill 文案。
+- CLI logo canonical 源为 `docs/featureSpec/assets/cli-svg/`；构建脚本扫描该目录生成 `AgentKind` 品牌索引，并把文件集复制到包内 `assets/cli-svg/`。资产清单、`PackageEntries`、安装器 `[Files]`、便携 staging 与 `THIRD-PARTY-NOTICES` 的 logo 段必须一致；缺失、哈希不符或声明缺段拒绝构建。
+- logo 许可：Cursor 与 GitHub Copilot 保留 LobeHub `@lobehub/icons-static-svg` MIT 声明；其余按项目所有者逐文件确认的作者提供记录，并保留商标归属声明。
+- 文档资产预览由构建期脚本从 `docs/featureSpec/assets/` 生成到 `preview/`，并校验预览集合等于需要预览的原文件子集、颜色替换符合规格；预览副本不进入安装包。
 - 包内文件集、安装器脚本、便携 zip staging 与钉测试必须一致；资产路径变更时同步更新。
 
 ### 安装器与便携包
@@ -93,7 +98,8 @@ slterm_hook     → 无生产依赖
 - 安装器语言包含英文与简体中文；中文翻译文件固定上游提交与 SHA-256，缺失或哈希不符拒绝构建。
 - 便携包与安装器使用同一构建目录、同一 feature 图与同一文件清单；便携包解压后文件集必须与 `PackageEntries` 全等。
 - 便携版没有 Inno 卸载器，更新链拒绝自动安装并提示从下载页替换；分发标记文件 `slterm-distribution` 存在且无法识别时按外部托管处理，拒绝自更新。
-- 体积预算：release profile 冷代码 `opt-level = "s"`、thin LTO、单 codegen unit、strip；热路径（渲染、塑形、布局、终端核心、GPUI、应用壳）钉回 O3。预算值以实测 + 15% 裕度钉在打包钉测试；超预算即红，收紧永远合法，放宽须在提交信息说明原因。
+- 体积预算：release profile 冷代码 `opt-level = "s"`、thin LTO、单 codegen unit、strip、`panic = "unwind"`；热路径（渲染、塑形、布局、终端核心、GPUI、应用壳）钉回 O3。预算值以实测 + 15% 裕度钉在打包钉测试；超预算即红，收紧永远合法，放宽须在提交信息说明原因。
+- `panic = "unwind"` 是面板错误边界 `catch_unwind` 的前提；打包钉测试断言该值，改为 `abort` 视为架构回归。
 - 改动 profile 体积相关数值、热路径钉包清单或包内文件集，必须重跑打包钉测试与体积测试。
 
 ### 更新检查与交接
@@ -128,7 +134,7 @@ pub struct Participant { pub pid: u32, pub created: u64 }
 
 检查：
 
-- 启动检查是延迟执行的后台任务；手动检查可随时触发。断网、坏 JSON、限流只记录，不弹错、不阻塞界面。
+- 启动检查是延迟执行的后台任务，失败（断网、坏 JSON、限流）只记录日志，不弹错、不阻塞界面。手动检查可随时触发，必须非阻塞展示结果：已是最新、发现新版本、检查失败；后台预取失败保持静默。
 - 版本比较按点分段数值，拒绝降级与等版本；资产必须名称、架构、版本与官方 URL 前缀四重精确匹配；`digest` 优先，release 正文 checksum 回退。
 - release JSON 正文上限 2MiB；REST 403/429 才允许官方 release 页面的有界回退；不使用 token、不猜包 URL。
 
@@ -137,6 +143,8 @@ pub struct Participant { pub pid: u32, pub created: u64 }
 - 流式写入同目录 `.part` 文件；长度、PE `MZ`、SHA-256、512MiB 上限全部通过后原子替换。
 - 每个下载任务持有单调 generation；取消或换版本后旧任务结果失配失效；取消不需要旧任务句柄。
 - 下载状态与会话持久化；启动水合可在无网时恢复就绪/失败态。
+- 更新状态与会话路径：`<local>/state/update/prompt.json`、`downloads/`、`handoffs/`、`last-handoff.json`；路径与原子写归 `persistence.md`，状态机归本节。
+- 工作区交接快照 `HandoffWorkspaceV2`：`schema: u16`、`window: Option<WindowGeometry>`、`sidebar: SidebarLayout`。`window` 类型归 `platform-windows.md`，`sidebar` 类型与 schema 归 `sidebar/framework.md` 与 `persistence.md`；快照写入事务目录并在安装后恢复，未知 schema 拒绝并回滚。
 
 安装交接：
 
@@ -159,24 +167,26 @@ pub struct Participant { pub pid: u32, pub created: u64 }
 | 根 `Cargo.toml` | workspace 成员与包名一致；无通配成员 |
 | `architecture/dependencies.toml` | 每个成员一条规则：layer、精确依赖列表、零依赖标记；键集与 workspace 成员全等 |
 | `architecture/file-budgets.txt` | 新 crate 根登记行预算；删除旧模型后重基线，禁止新增债务 |
-| `scripts/build-windows-product.ps1` | `WorkspaceMembers` 与 `PackageEntries` 同步；构建包名与二进制名 |
+| `scripts/build-windows-product.ps1` | `WorkspaceMembers` 与 `PackageEntries` 同步；构建包名与二进制名；`WorkspaceMembers` 由门禁测试与根 `Cargo.toml` 成员全等校验 |
 | `scripts/installer.iss` | `[Files]` 与包内清单一致；AppId、AUMID、最低系统版本不变 |
 | 打包钉测试 | 文件清单、新鲜度、profile 钉值、体积预算同步 |
 | 路径 `CLAUDE.md` | 新模块目录创建；旧目录删除 |
 
 - 依赖方向门禁：core 不得依赖应用层或渲染框架；hook 生产依赖为空；应用层是唯一可依赖渲染框架的成员。
+- 构建清单门禁：根 `Cargo.toml` 的 workspace 成员与脚本 `$script:WorkspaceMembers` 全等；不一致即红，防止新 crate 漏登记导致陈旧二进制。
 - 行预算门禁：删除旧 `workspace`/`tab`/`pane`/`dock`/`session` 后重跑 `python scripts/check_architecture.py`，以新基线替换旧债；不得用豁免掩盖新增债务。
-- 体积门禁：新 crate 默认作为冷代码参与 `opt-level = "s"`；只有实测热路径才加入钉包清单。删除旧模型后重新实测安装器与便携 zip，按实测 + 15% 重钉预算。
-- 发布前门禁：`cargo fmt --all -- --check`；`cargo clippy --workspace --all-targets`；`cargo clippy -p slterm --all-targets --features gpui-test-support`；`cargo test --workspace -- --test-threads=1`；`python scripts/check_architecture.py`；`python scripts/check_doc_policy.py full`；`python scripts/check_brand_regress.py staged`；打包钉测试与 `verify-release`。
+- 体积门禁：新 crate 默认作为冷代码参与 `opt-level = "s"`；只有实测热路径才加入钉包清单。删除旧模型后重新实测安装器与便携 zip，按实测 + 15% 重钉预算；release profile 必须含 `panic = "unwind"`。
+- 发布门禁 = 提交门禁全集 + 打包钉测试 + `verify-release`；提交门禁清单归 [testing.md](testing.md) §门禁。发布门禁额外要求：带 `gpui-test-support` 的虚拟窗口测试通过、`PackageEntries`/安装器 `[Files]`/便携 staging 全等、release profile 含 `panic = "unwind"`、CLI logo 与第三方声明完整。
 - 品牌门禁：禁名词表只允许 `slTerminal`/`slterm`；旧品牌名不得回流到二进制、资产、文档或安装器。
 - 合规四落点：仓库根许可证全文、workspace/成员 `license`、安装器许可页、应用内关于页；第三方声明随包。
 
 ### 验收与测试
 
-- 布局门禁：新 workspace 成员、依赖策略键集、行预算根三者全等；core 与 hook 生产依赖无渲染框架；每个 crate 有显式 `lib_tests`。
+- 布局门禁：新 workspace 成员、依赖策略键集、行预算根三者全等；`WorkspaceMembers` 与根 `Cargo.toml` 全等；core 与 hook 生产依赖无渲染框架；每个 crate 有显式 `lib_tests`。
 - 构建：`scripts/build-windows-product.ps1` 从隔离目标目录构建两个二进制；安装器与便携包使用同一产物；新鲜度判据通过。
-- 包合同：安装器 `[Files]`、`PackageEntries`、便携 zip staging 全等；资产名集合、PE 魔数、1MiB 下限、SHA256SUMS 复算一致。
-- 体积：release profile 钉值与热路径清单与脚本一致；体积测试通过；预算收紧/放宽有记录。
+- 包合同：安装器 `[Files]`、`PackageEntries`、便携 zip staging 全等；CLI logo 文件集、资产名集合、PE 魔数、1MiB 下限、SHA256SUMS 复算一致；`THIRD-PARTY-NOTICES` 的 logo 段与文件集对应。
+- 体积：release profile 钉值（含 `panic = "unwind"`）与热路径清单与脚本一致；体积测试通过；预算收紧/放宽有记录。
 - 更新：假 release 服务器覆盖检查、四重匹配、摘要缺失拒绝、降级拒绝、下载中断、摘要不符、PE 头不符、超限、取消 generation、恢复票据与孤儿事务清理。
 - 安装交接：替身 helper 覆盖准备/授权/失败回滚/清理失败；真实安装器与静默安装为人工核验或条件跳过。
 - 发布：`scripts/release.ps1 -Version <X.Y.Z>` 全链通过；`verify-release` 独立复跑；发布清单人工核验完成。
+- 发布范围：AI Providers/助手与终端增强未交付时仍可发布；应用页对应节保持禁用/占位，发布说明列明后续交付。

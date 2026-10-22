@@ -53,7 +53,7 @@ PanelBody = TerminalPanel | EditorPanel | MarkdownPanel | DiffPanel | GitShowPan
 - `PanelGroupView` 拥有页签顺序与激活的展示副本；权威仍是 `ProjectLayout.groups`，每次结构变化由 `ProjectView` 推送并覆盖。
 - `PanelHost` 拥有 body 实例与订阅；body 拥有缓冲、脏、光标、滚动等运行期事实。
 - `PanelRecord.params` 是持久参数唯一权威；body 内的同值字段是创建时快照，变更必须经 `PanelHost → ProjectView` 回写。
-- `RuntimeHub` 只读 `Workspace` 派生投影，不持有第二份可变状态。
+- `RuntimeHub` 持有前台发布的不可变投影（快照 + revision + 墓碑），不持有可变领域权威。
 
 ### 订阅图
 
@@ -97,7 +97,7 @@ overlays: dialogs, notifications, tab menus, drag previews
   - 无面板组时渲染项目空态（不是面板）。
 - 隐藏项目：
   - `ProjectView.set_visible(false)` 后不计算布局、不渲染；`PanelHost` 收到 `PanelActivity::Hidden`。
-  - 终端仍解析输出；前台不安排帧回调节流，模型保持最新网格/回滚。
+  - `TerminalSession` 解析线程在终端锁内写网格/回滚；前台只消费最新快照并在可见时 `cx.notify`；隐藏路径不投递逐块前台事件。线程与模型归属细节见 [architecture.md](architecture.md) 与 [panels/terminal.md](panels/terminal.md)。
   - 切回时 `set_visible(true)`，`TerminalView` 以当前快照重绘一次并恢复滚动锚点。
 - 侧栏始终渲染；其内容按活跃项目刷新，不随项目隐藏。
 - 窗口级通知/确认框挂在 `Workspace` 根部，不随项目切换清空。
@@ -130,12 +130,8 @@ overlays: dialogs, notifications, tab menus, drag previews
 ### 窗口关闭钩子
 
 - `Workspace::request_close(window, cx)` 是唯一关闭入口；GPUI 关闭事件、标题栏按钮、系统命令、托盘退出都路由到它。
-- 状态机：
-
-`CloseState` 的枚举与流程以 `architecture.md` 为单点，固定 `Guarding → Saving → ShuttingDown`；本节只描述 GPUI 关闭钩子的接线。
-- 进入 `Guarding` 后收集全部项目（含隐藏项目）的脏面板与前台进程，弹出一次聚合确认。
-- 取消 → 回 `Idle`，窗口保持；保存失败 → 回 `Guarding` 并列出失败项，窗口保持。
-- 确认 → `Saving`，启动 `ShutdownChain` 异步任务；完成后进入 `ShuttingDown` 并调用 `window.remove_window()`。
+- `CloseState` 的枚举与迁移以 [architecture.md](architecture.md) 为单点，固定为 `Idle → Guarding（收集 + 确认）→ Saving → ShuttingDown`；取消/失败回退与防重入同以该篇为准。本节只描述 GPUI 关闭钩子的接线。
+- 钩子职责：收集全部项目（含隐藏项目）的脏面板与前台进程，交给架构定义的守卫阶段；用户确认后启动 `ShutdownChain` 异步任务，完成后调用 `window.remove_window()`。
 - 非 `Idle` 时再次请求关闭直接忽略；异步保存回调不得重入 `remove_window`。
 - 关闭期间禁止新建面板/终端；命令返回 `invalid_state`。
 
@@ -151,7 +147,7 @@ let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body.rende
   - 捕获 payload 转成用户可读摘要与诊断摘要（不含文件内容、终端输出、凭据）。
   - 设置 `poisoned = Some(PanelPoison { message, at })`，记录 `tracing` 日志。
   - 返回面板错误占位：`面板渲染出错`、说明、`重试`、可折叠详情。
-- `重试`：丢弃旧 body 实体，按 `PanelRecord.params` 重新创建；清空 poison。重建失败则显示不可恢复错误与关闭入口。
+- `重试`：先检查 body 是否脏或可保存；脏时走保存/丢弃确认，或先保留崩溃快照再重建，不得直接丢弃未保存内容。确认后丢弃旧 body 实体，按 `PanelRecord.params` 重新创建；清空 poison。重建失败则显示不可恢复错误与关闭入口。错误占位需明确本次重试的数据影响。
 - 其他面板、项目与窗口不受影响。
 - 区域错误边界：`TitleBarRegion`、`MainRegion`、`NotificationsRegion`、`SidebarRegion` 各自包裹 `RegionBoundary`；区域 panic 显示区域错误占位，顶层兜底全屏 `应用渲染错误`。
 - 发布 profile 必须保持 `panic = "unwind"`；若改为 abort，面板级隔离失效，视为架构回归。
@@ -169,7 +165,7 @@ let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body.rende
 ### 测试接缝
 
 - 纯领域测试：`slterm_workspace` 内完成 ID、布局归一化、恢复对账、去重、焦点、标题、注册表不变量；不链接 GPUI。
-- 虚拟窗口测试：`#[cfg(all(test, feature = "gpui-test-support"))]` 双门控；使用虚拟窗口与测试执行器，只断言实体状态与命令结果，不断言像素。
+- 虚拟窗口测试：`#[cfg(all(test, feature = "gpui-test-support"))]` 双门控；使用虚拟窗口与测试执行器，只断言实体状态与命令结果，不断言像素。该层必须进入提交门禁，见 [testing.md](testing.md) §门禁。
 - 可注入点：
 
 ```rust

@@ -12,7 +12,7 @@
 | `gpui_terminal::session`（`TerminalSession`、`EventProxy`、`spawn`）、`event_mailbox`、`session_pump` | 保留并适配：spawn 移到后台执行体；会话附加改为可替换，支持重连 |
 | `gpui_terminal::keymap`、`mouse_protocol`、`cursor_painter`、`colors`、`copy_feedback` | 保留。按键分发层重写：保留编码器零特例，删除语义/整行选区与终端右键菜单 |
 | `gpui_terminal::element`、`view` | 适配。`PaneId` 改 `PanelId`；字号、闪烁、回滚、OSC 策略从全局设置注入；链接命中、悬浮与打开策略外置；尺寸控制替换为本文状态机；运行期状态与 UI 覆盖层移入面板壳 |
-| `gpui_terminal::{broadcast, completion, math_overlay, math_render}`、`terminal_math` | 作为范围外增强保留，迁回时挂到终端增强端口；迁移前不进入本轮验收 |
+| `gpui_terminal::{broadcast, completion, math_overlay, math_render}`、`terminal_math` | 作为范围外增强保留，迁回时挂到终端增强端口；迁移前不进入当前目标态验收 |
 | `terminal_registry` | 重建：键从 `PaneId` 改为 `PanelId`，扩展项目索引、CLI 会话、标题、工作目录与前台进程查询；仍是 PTY 元数据唯一入口 |
 | 旧 `TerminalPane`、tab 内分屏、`SltermWorkspace` 终端分支 | 废弃 |
 
@@ -62,7 +62,7 @@ pub struct TerminalPanelModel {
     pub title: TitleState,
     pub restore: Option<PendingRestore>,
     pub visible: bool,
-    pub focused: bool,
+    // 焦点由工作区壳 FocusCoordinator 唯一持有；面板不保存 focused 状态。
 }
 
 pub enum SessionState {
@@ -152,20 +152,20 @@ trait TerminalBackend {
 - 连接中键入内容进入 4096 字节有界队列；会话就绪后按序发送；失败或关闭时丢弃。
 - 重连使用当前容器尺寸（不可用时以 80×24 兜底）与最近已知目录；目录失效回退项目根。旧进程内存不保留。
 - 退出后应用不自行创建新会话；`Enter` 在终端聚焦时触发重连，按钮聚焦时触发按钮。
-- 启动失败操作栏文案包含路径与原因；自动探测模式额外提供“改用自动探测重试”。
+- 启动失败操作栏文案包含路径与原因；显式 Shell 失败额外提供“改用自动探测重试”，自动探测失败只提供“重试”“关闭面板”并列出各候选失败原因。
 - 连续发送失败 3 次弹一次输入发送失败提示，成功一次后计数清零。
-- 关闭面板时先取消在途 spawn；已产出的子进程必须终止，不能留孤儿。窗口关闭链先冲刷设置与布局，再并发终止全部 PTY；优雅终止 2 秒，终端清理不超过 3 秒。
+- 关闭面板时先取消在途 spawn；已产出的子进程必须终止，不能留孤儿。窗口关闭链先完成守卫冲刷，再并发终止全部 PTY；优雅终止 2 秒，终端清理不超过 3 秒。
 
 PTY 容量：
 
 - 应用级上限 64。`PtyBudget::try_acquire()` 在创建面板前原子取得许可；许可随会话销毁归还。core 的 `MAX_PTY_SESSIONS` 与 `ensure_pty_capacity` 同步改为 64，并在 `spawn` 内再次校验，避免 TOCTOU。
 - 布局恢复超过上限时按全局顺序连接前 64 个：项目列表顺序 → 项目布局树深度优先（左/上先于右/下）→ 面板组页签顺序；其余进入 `Failed { Capacity }`，关闭其他终端后可重试。
-- PTY 并发创建上限 8；界面在全部会话就绪前保持可交互，失败态可重试。
+- PTY 并发创建上限 8 为内部节流，非契约、可调；启动恢复仍按全局顺序，界面在全部会话就绪前保持可交互，失败态可重试，不丢失待恢复终端。
 - 窗口进入关闭流程后拒绝新建终端。
 
 Shell 选择：
 
-- `ShellChoice::Auto` 按 `pwsh.exe` → `powershell.exe` → `cmd.exe` 逐个尝试 spawn；某个候选 spawn 失败或在 500ms 稳定窗内立即退出，则尝试下一个；全部失败时汇总每个候选的失败原因。
+- `ShellChoice::Auto` 按 `pwsh.exe` → `powershell.exe` → `cmd.exe` 逐个尝试 spawn；某个候选 spawn 失败或在 500ms 稳定窗内退出，则尝试下一个；全部失败时汇总每个候选的失败原因。
 - `Explicit` 缺文件或启动失败直接失败，不静默切换；提供“改用自动探测重试”。
 - `Custom` 只接受可执行文件绝对路径，不提供参数注入。
 - PowerShell 不跳过用户 profile；Shell 集成由 core 的启动参数注入。cmd 无命令边界，标题/状态/目录跟踪按可用事件降级。
@@ -186,7 +186,7 @@ Shell 选择：
 历史会话恢复：
 
 - 输入为导航树契约给出的 `RestoreSessionRequest { project, target_group, cwd, agent, session_id, title, command }`。
-- `ValidatedRestoreCommand` 只接受 `AgentSession::resume_command` 产出的命令；会话 ID 注入前校验格式，禁止任意文本注入。
+- `ValidatedRestoreCommand` 只接受 `AgentDescriptor::resume_command(&SessionId)`（经 `CommandTemplate`）产出的命令；会话 ID 注入前校验格式，禁止任意文本注入。
 - 就绪判定优先 `prompt_ready`；PowerShell 系等待最长 10 秒，超时仍注入；cmd 固定等待约 0.5 秒。
 - 等待期间显示“正在恢复会话...”，首个输出正常呈现；面板关闭或进程退出时取消注入。
 - 失败时前台提示，后台系统通知；其他终端不受影响，不自动重试。
@@ -226,7 +226,7 @@ pub struct ResizeController {
 - 交替屏幕内容不进入回滚。宽度变化时软换行重排，硬换行不重排。
 - 切换面板/项目保留各自滚动位置；原在底部则继续跟随新输出，否则保持。
 - 不提供可见滚动条与滚动锁定。滚轮默认滚动本地回滚；前台程序启用鼠标跟踪时交给程序；`Shift+滚轮` 强制本地。
-- 固定键：`Shift+PageUp/PageDown` 翻页，`Shift+Home/End` 到顶/到底；交替屏幕下不拦截，交给前台程序。
+- 不提供键盘本地滚动固定键；本地滚动仅鼠标滚轮与 `Shift+滚轮`。`Shift+PageUp/PageDown/Home/End` 归选区扩展，见“输入、选区与剪贴板”。
 
 字体与光标：
 
@@ -240,22 +240,27 @@ pub struct ResizeController {
 按键分发顺序（`TerminalView::on_key_down`）：
 
 1. IME 合成中或系统窗口快捷键：不拦截。
-2. 终端固定键：`Ctrl+Shift+C` 复制；`Ctrl+Shift+V`/`Shift+Insert` 粘贴；`Ctrl+Enter` 写入 LF；`Shift+滚轮` 已由指针路径处理。
-3. 增强层（vi/补全/AI 修复条，迁移后启用）按键拦截。
-4. 工作区快捷键透传：`Ctrl+W`、`Ctrl+Tab`、`Ctrl+Shift+Tab`、`Ctrl+,`、`Ctrl+Shift+*` 面板/侧栏命令不编码进 PTY。
-5. 前台程序键序编码：`keymap::encode_for_program`；可打印字符与 IME 提交文本走 `EntityInputHandler`。
-6. `Ctrl+C` 不在快捷键层拦截，由编码器发送 0x03；发送前若 CLI 状态为“工作”则本地改为“注意”。
+2. 终端固定键：`Shift+方向键`/`Shift+PageUp/PageDown`/`Shift+Home/End` 扩选；`Ctrl+Shift+A` 全选；`Shift+滚轮` 已由指针路径处理。
+3. 终端命令（设置中心快捷键页绑定，可重绑）：复制（默认 `Ctrl+Shift+C`）、粘贴（默认 `Ctrl+Shift+V`/`Shift+Insert`）、插入换行（默认 `Ctrl+Enter`）。
+4. 增强层（vi/补全/AI 修复条，迁移后启用）按键拦截。
+5. 工作区快捷键透传：`Ctrl+W`、`Ctrl+Tab`、`Ctrl+Shift+Tab`、`Ctrl+,` 与侧栏视图快捷键不编码进 PTY；与终端固定键同键时终端固定键优先。
+6. 前台程序键序编码：`keymap::encode_for_program`；可打印字符与 IME 提交文本走 `EntityInputHandler`。
+7. `Ctrl+C` 不在快捷键层拦截，由编码器发送 0x03；发送前若 CLI 状态为“工作”则本地改为“注意”。
 
 行为：
 
-- `Ctrl+C` 保留为中断，重复触发状态幂等；`Ctrl+Shift+C` 无选区也消费按键但不改剪贴板。
-- `Ctrl+Enter` 发送 0x0A，不发送 0x0D；接收方语义由前台程序决定。
+- `Ctrl+C` 保留为中断，重复触发状态幂等；复制命令（默认 `Ctrl+Shift+C`）无选区也消费按键但不改剪贴板。
+- 插入换行命令（默认 `Ctrl+Enter`）发送 0x0A，不发送 0x0D；接收方语义由前台程序决定。
 - `F2` 仅在页签本身聚焦时进入重命名；终端输入区聚焦时原样发给前台程序；CLI 会话运行中禁止重命名。
 - 输入法合成期间不触发任何快捷键；合成确认不额外发送 Enter。合成文本按一次输入计入。
 - `Tab` 在终端上下文绑定先于组件库焦点遍历；`Ctrl+W` 不被终端改写。
-- 鼠标单击聚焦并清除选区；拖拽建立简单选区；不提供双击/三击语义选区、`Shift` 扩展选区、终端内容右键菜单、全选与 `Ctrl+End`。
+- 鼠标单击聚焦并清除选区；拖拽建立简单选区；鼠标跟踪启用时普通拖拽交给前台程序，`Shift+拖拽` 强制本地选择。
+- 键盘扩选：无选区时首次扩选以视口内终端光标为锚点；光标不在视口或不可见时，向下扩选取视口顶行、向上扩选取视口底行。`Shift+方向` 按单元格扩展，`Shift+↑/↓` 保持列位置跨行；`Shift+PageUp/PageDown` 按页扩展；`Shift+Home/End` 扩展到当前显示行首/行尾；扩选端超出视口时滚动跟随。
+- `Ctrl+Shift+A` 全选：普通屏幕为回滚缓冲与可见屏幕，交替屏幕仅可见屏幕。交替屏幕下 `Shift+PageUp/PageDown` 不越过可见区域；扩选不改变前台程序状态。
+- 键盘扩选不受鼠标跟踪影响；固定键优先于前台程序编码，不改变 `Ctrl+A` 发送 0x01。
+- 不提供双击/三击语义选区、终端内容右键菜单与 `Ctrl+End`。
 - 开始输入清除选区。软换行复制为连续文本，硬换行保留换行；复制成功显示对勾反馈。
-- 粘贴：`Ctrl+Shift+V` 与 `Shift+Insert` 等价；前台支持括号粘贴时包裹 `CSI 200~`/`CSI 201~`，并移除载荷内的收尾哨兵；内容按 UTF-8 原样发送，不自动追加 Enter。
+- 粘贴命令默认键 `Ctrl+Shift+V` 与 `Shift+Insert`，两者等价；前台支持括号粘贴时包裹 `CSI 200~`/`CSI 201~`，并移除载荷内的收尾哨兵；内容按 UTF-8 原样发送，不自动追加 Enter。
 - 粘贴守卫在发送前执行：含除 `\t`、`\r`、`\n` 外的 C0 或任意 C1 控制字符时确认；超过 50 行确认并显示行数；超过 10MB 拒绝。确认框不显示剪贴板内容，取消不发送任何字节。
 - 复制/粘贴失败显示非阻塞提示；日志与提示不包含剪贴板或终端内容。
 - 所有终端剪贴板写入经 `ClipboardSink` 单通道串行执行，最后一次成功写入生效。
@@ -309,7 +314,7 @@ CLI 识别来源：
 
 - hook 事件（`slterm_hook` → `ai_hook`）为最高置信度；屏幕规则（`ai_agents::detect`）兜底；进程身份用于恢复与状态对齐。
 - `CliSessionTracker` 只消费注册表与 hook 的已知事件；未知会话不产生标题、图标或通知。
-- 通知：任务完成/等待输入/权限请求/错误在窗口失焦时由工作区通知服务处理；系统 toast 由 `desktop_enabled` 门控，任务栏闪烁由 `taskbar_flash` 门控；窗口聚焦时不发；同类事件按事件键去重。终端只上报 `AgentNotification { category, agent, project, panel }`，不直接投递系统通知。
+- 通知：任务完成/等待输入/权限请求/错误在窗口失焦时由工作区通知服务处理；系统 toast 由 `desktop_enabled` 门控，任务栏闪烁由 `taskbar_flash` 门控；窗口聚焦时不发；同类事件按事件键去重。终端只上报所有者定义的 `AgentNotificationEvent { kind, agent, panel_id, project_name, session_id, turn_key, at }`，不直接投递系统通知；终端局部字段在组合根映射为该事件，不另建第二套通知事件。
 
 ### 持久化与关闭守卫
 
@@ -329,9 +334,11 @@ CLI 识别来源：
 | PTY/画面/回滚 | 保留 | 保留 | 丢失 | 丢失 |
 | 滚动位置 | 保留 | 保留 | 重置底部 | 重置底部 |
 | 工作目录 | 保留 | 保留 | 按入口继承 | 恢复保存值，失效回项目根 |
-| 自定义标题 | 保留 | 保留 | 无 | 恢复 |
+| 自定义标题 | 保留 | 保留 | 无 | 按终端簿恢复 |
+| 未自定义标题 | 保留并更新 | 保留并更新 | 新 `terminal-N` 或历史会话标题 | 历史会话标题不保留，回落 `terminal-N` |
+| 状态圆点与 CLI 图标 | 保留并实时更新 | 保留并实时更新 | 无 | 不恢复，直至再次识别到 CLI 会话 |
+| CLI 会话元数据 | 保留 | 保留 | 无 | 不持久化 |
 | 编号 | 保留 | 保留 | 新号 | 按状态库 terminal book 恢复 |
-| 标题/状态/CLI 元数据 | 保留并更新 | 保留并更新 | 无 | 不恢复 |
 
 关闭守卫：
 
@@ -343,7 +350,7 @@ CLI 识别来源：
 
 | 条件 | 状态/文案 | 恢复动作 |
 |---|---|---|
-| 会话创建失败 | 底部“终端启动失败：〈原因〉”；首次一次提示 | 重试、关闭面板；自动模式提供改用自动探测 |
+| 会话创建失败 | 底部“终端启动失败：〈原因〉”；首次一次提示 | 重试、关闭面板；显式 Shell 失败额外提供改用自动探测 |
 | 进程退出 | 底部“进程已退出（退出码 N/`?`）” | 重新连接、关闭面板；`Enter` 重连 |
 | 输入连续失败 | 非阻塞“终端输入发送失败：〈原因〉” | 成功一次清零 |
 | 目录越界/不存在/无权 | 创建失败，原因含目录与限制 | 修正目录或改用项目根 |
@@ -356,7 +363,7 @@ CLI 识别来源：
 
 ### 范围外增强的扩展点
 
-终端增强不进入本轮规格验收，但面板结构必须预留稳定端口，迁移时不改面板模型：
+终端增强不进入当前目标态规格验收，但面板结构必须预留稳定端口，迁移时不改面板模型：
 
 ```rust
 pub enum KeyDisposition { Consumed, PassThrough }
@@ -383,11 +390,19 @@ pub struct TerminalEnhancements {
 - vi 与补全只在终端上下文生效；全屏 TUI/交替屏幕下补全不弹出、vi 不进入。
 - 数学覆盖层只消费不可变快照，不修改网格、选区或复制文本。
 - AI 修复条只提交建议到输入区，不自动执行；打开前必须经过粘贴守卫同级的控制字符与危险命令检查。
-- 增强层顺序固定：Vi → 补全 → AI 修复条，避免 Esc 语义互相抢占；与 `design/out-of-scope/terminal-enhancements.md` 一致。
+- 增强层顺序固定：Vi → 补全 → AI 修复条，避免 Esc 语义互相抢占；增强行为契约由本篇定义，范围外文档只登记迁移。
+
+### 终端增强行为
+
+- Vi：入口命令 `terminal.toggle_vi_mode`，默认 `Ctrl+Shift+Space`，可在快捷键页重绑；交替屏幕下不可进入。`h/j/k/l`、`w/b/e`、`0/$`、`g/G`、`Ctrl+U/D` 移动 Vi 光标；`v` 开始/结束选择，`y` 复制并退出；`i`/`Esc` 退出；仅运动/选择键被消费，其余键退出 Vi 后按普通终端处理。Vi 为面板运行期状态，不持久化。
+- 补全：只保留本地来源（命令历史、目录 frecency、Git、项目脚本、命令词表、路径）；按键路径零磁盘/子进程 I/O，候选后台计算，缓存按面板持有，提交命令后失效，取消后不回填。形态 inline/popup/hybrid 由 `terminal.completion.style` 选择；`Esc` 关闭，`Tab`/方向键/Enter 接受规则沿用现有状态机；交替屏幕、Vi、AI 修复条打开时不抢占按键。
+- 数学覆盖层：只替换可见公式定界符跨度，不修改 cell、滚动、光标、选区或复制文本；扫描/投影/掩码预算沿用终端 core，失败候选保留原文；每面板一个 `TerminalMathState`，重连重建；开关关闭后跳过扫描与绘制。
+- AI 修复条：`on_command_finished` 进入门链；三态 `Pending`/`Ready`/`Failed`；`Ctrl+.` 贴入，`Esc` 关闭，可打印输入撤条；建议条存在时补全不显示；开关关闭或助手关闭时不注册按键、不请求、不显示；失败原因在条面显示。
+- 增强顺序固定：数学覆盖层只在绘制阶段运行；Vi → 补全 → AI 修复条按键顺序固定；任何增强不修改网格、滚动、选区真值或复制文本。
 
 ### 测试接缝
 
-- 纯函数：标题优先级、CLI 首 token 识别、编号分配、工作目录校验、取消/注意状态迁移、粘贴守卫、OSC 8/52 策略、尺寸合并。
+- 纯函数：标题优先级、CLI 首 token 识别、编号分配、工作目录校验、取消/注意状态迁移、键盘扩选锚点与行列扩展、交替屏幕钳制、软/硬换行复制、粘贴守卫、OSC 8/52 策略、尺寸合并。
 - 状态机：以假 backend/假时钟覆盖连接、首个输出、1500ms 遮罩降级、退出、失败重试、重复重连合并、关闭取消、恢复注入就绪与超时。
 - PTY 集成：spawn/写入/读取/resize/关闭全链、64 容量原子抢占、UTF-8 跨块、退出码、进程树终止。
 - 虚拟窗口：遮罩与操作栏焦点与 `Enter` 语义、重命名校验、链接悬浮与 Ctrl+单击、粘贴确认框不泄露内容、字体变化不重启进程。

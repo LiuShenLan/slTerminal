@@ -15,7 +15,7 @@ pub const APP_PAGE: SettingsPageDef = SettingsPageDef {
     title: Message::SettingsSidebarApplication,
     search_terms: "application app 应用 language 语言 update 更新 tray 托盘 startup 开机启动 notification 通知 runtime api providers ai assistant 助手 diagnostics 诊断 terminal enhancements 终端增强",
     save_mode: SaveMode::Auto,
-    scope: SettingsScope::Application,
+    scope: SettingsScopeSpec::Fixed(SettingsScope::Application),
     factory: app_page,
 };
 ```
@@ -23,8 +23,8 @@ pub const APP_PAGE: SettingsPageDef = SettingsPageDef {
 - 全局组顺序：快捷键 → 后台定时任务 → 外观 → 终端 → 应用。
 - 页面分节顺序固定：界面语言、更新、托盘与开机启动、通知、Runtime API、AI Providers/助手、诊断、备份与恢复、终端增强。
 - 页头显示“应用”作用域与保存模式“自动保存”；右侧“恢复本页默认”。
-- 连续型配置自动保存，控件即时作用于运行期状态；失败显示保存失败与重试，修改仍在本轮生效。
-- 凭据、快捷方式、检查更新、连通性测试、备份/恢复是显式动作，立即提交，不进入自动保存去抖。
+- 连续型配置自动保存，控件即时作用于运行期状态；失败显示保存失败与重试，修改仍在本次运行中生效。
+- 凭据、快捷方式、检查更新、连通性测试、备份/恢复、一键清理是显式动作，立即提交，不进入自动保存去抖。
 - 页面重挂载时输入草稿与行内错误丢失；已生效配置保留。
 
 ### 节级交付矩阵
@@ -46,13 +46,28 @@ pub const APP_PAGE: SettingsPageDef = SettingsPageDef {
 
 ```rust
 pub struct AppPageSettings {
-    pub language: LanguagePreference,          // System | English | Chinese
+    pub language: LanguagePreference,          // 默认 System；System | English | Chinese
     pub updates: UpdateSettings,
     pub tray: TraySettings,
     pub notifications: NotificationSettings,
     pub providers: ProviderCatalog,             // 非敏感元数据；凭据按 provider ID 查凭据管理器
     pub assistant: AssistantSettings,
     pub enhancements: TerminalEnhancementSettings,
+}
+
+pub struct ProviderId(pub String);   // 稳定标识，只追加不重用
+pub struct ProviderKind(pub String); // 种类标识；内置预设全集单点注册
+
+pub struct ProviderCatalog {
+    pub providers: Vec<ProviderEntry>,
+}
+pub struct ProviderEntry {
+    pub id: ProviderId,
+    pub kind: ProviderKind,          // 种类
+    pub display_name: String,
+    pub base_url: String,            // 必须是 http/https 绝对地址
+    pub model: String,               // 非空
+    pub key_hint: Option<String>,    // 仅尾四掩码，用于识别，不可逆推
 }
 
 pub struct UpdateSettings {
@@ -78,26 +93,26 @@ pub struct TerminalEnhancementSettings {
 }
 ```
 
-- 设置值只存行为开关与非敏感参数；不存 API key、token 或凭据明文。`ProviderCatalog` 与 `ProviderEntry` 由 AI Providers 设计定义，只含 provider ID、显示元数据与提示；不持久化 `SecretId` 或凭据引用值。AI 助手只引用 provider ID。
-- `LanguagePreference::{System, English, Chinese}` 为唯一枚举；存储值 `system/en-US/zh-CN`，标签 `简体中文`。系统档按 locale 协商；切换后界面即时重渲染，不重建窗口。该节属于迁移能力；规格内应用页显示只读说明 `该能力由迁移版本提供`。
+- 设置值只存行为开关与非敏感参数；不存 API key、token 或凭据明文。`ProviderCatalog`、`ProviderEntry`、`ProviderId` 与 `ProviderKind` 在本页定义，是 Provider 元数据的唯一 DTO；只持久化 provider ID、种类、显示元数据、模型名与识别用 hint，不持久化 `SecretId` 或凭据引用值。AI 助手只引用 provider ID；迁移增量见 `../out-of-scope/ai-providers-assistant.md`。
+- `LanguagePreference::{System, English, Chinese}` 为唯一枚举，默认 `System`；存储值 `system/en-US/zh-CN`，用户标签 `System`/`English`/`简体中文`。系统档按 locale 协商；切换后界面即时重渲染，不重建窗口。该节属于迁移能力；规格内应用页显示只读说明 `该能力由迁移版本提供`。
 - 终端增强键：`terminal.enhancements.vi`、`terminal.enhancements.completion`、`terminal.completion.style`、`terminal.enhancements.math`、`terminal.enhancements.ai_fix`；默认 vi 关、completion 开、math 开、ai_fix 关；补全样式默认 inline。
 - 更新、托盘与通知的默认值沿用现有产品默认；开机启动不保存布尔键，只读 `slTerminal.lnk` 实际存在性。若现有键与新域冲突，以新域为唯一写入目标，旧键不读。
 
 ### 界面语言
 
-- 单选：系统 / English / 简体中文。
+- 单选：`System` / `English` / `简体中文`，默认 `System`。
 - 即时切换界面文案；不重启应用；打开中的页面、对话框与通知按新语言刷新。
 - 语言不影响文件内容、Hooks 配置或 CLI 输出。
-- 保存失败时提示“设置保存失败，修改仅在本次运行中生效”，保留本轮语言。
+- 保存失败时非阻塞提示“设置保存失败，修改仅在本次运行中生效”，保留本次运行中的新语言。
 
 ### 更新
 
 - 显示当前版本与构建信息（只读）。
 - `自动检查更新` 开关，默认开；关闭后仍可手动“检查更新”。
 - `后台下载更新包` 开关，默认关；不授予安装权限；无可用资产或校验不足时不下载。
-- “检查更新”在后台执行，按钮显示进行中并禁用；结果非阻塞展示：已是最新、发现新版本、检查失败（断网/限流/坏响应）。
+- “检查更新”按钮常驻，后台执行，按钮显示进行中并禁用；结果非阻塞展示：已是最新、发现新版本、检查失败（断网/限流/坏响应）。
 - 更新下载与安装入口沿用更新链；应用页只提供开关与手动检查，不内嵌第二套更新协议。
-- 网络跟随系统代理；提供 `仅手动检查` 开关；不提供应用内代理地址或代理凭据配置。
+- 网络跟随系统代理；不提供应用内代理地址或代理凭据配置。
 - 页面不显示 release token 或私有 URL；错误不含凭据。
 
 ### 托盘与开机启动
@@ -153,13 +168,13 @@ Providers：
 
 - 诊断动作、二次确认、清理范围与脱敏规则由 `../diagnostics.md` 独占；应用页只放入口，不定义第二套动作。
 - 只读展示：应用版本、构建标识、数据目录、日志文件路径、设置加载状态（正常/损坏回退/只读）、项目数据加载状态、Runtime API 状态；路径经 `slterm_settings::paths` 的数据根/本地根访问器获取，页面不拼接品牌目录。
-- 入口动作与 `../diagnostics.md` 一致：版本/构建、数据目录、日志目录、配置健康、复制诊断信息、打开数据目录、打开日志文件、通知自检、一键清理；可选导出诊断包与环境自检。
+- 入口动作与 `../diagnostics.md` 一致：版本/构建、数据目录、日志目录、配置健康、复制诊断信息、打开数据目录、打开日志文件、通知自检、一键清理、导出诊断包、运行环境自检；本页只放入口，动作、预览、脱敏与自检项由 `../diagnostics.md` 独占。
 - 诊断命令在后台执行；失败显示原因，不阻塞页面。
 - 不提供任意命令执行、环境变量查看或注册表编辑入口。
 
 ### 备份与恢复
 
-- 分节只承载入口与状态；加密格式、类别、敏感键与恢复点归 `design/out-of-scope/encrypted-backup.md`。
+- 分节只承载入口与状态；加密格式、类别与恢复点归 `../persistence.md`，敏感键与凭据边界归 `../security.md`；迁移增量见 `../out-of-scope/encrypted-backup.md`。
 - `导出备份…`：类别复选、口令输入/确认（掩码）、目标路径选择、进度与结果；默认只选应用设置。
 - `恢复备份…`：文件选择、口令、解密预览（类别、文件数、将覆盖路径）、破坏性确认、执行与重启提示。
 - 恢复点撤回：显示路径与撤回入口，撤回需要口令；恢复点保留到下一次成功恢复或用户手动清理。
@@ -175,7 +190,7 @@ Providers：
 
 ### 保存模式、状态与错误
 
-- 保存模式：自动保存只覆盖连续型配置；凭据、快捷方式、检查更新、连通性测试、备份/恢复是显式动作，立即提交。
+- 保存模式：应用页属于三保存模式中的自动保存页，连续型配置走 2 秒去抖；凭据、快捷方式、检查更新、连通性测试、备份/恢复、一键清理是显式动作，立即提交，不进入去抖。保存模式枚举与状态保留表归 `../panels/settings.md`。
 - 保存状态统一显示“保存中/已保存/保存失败 + 重试”；失败提示“设置保存失败，修改仅在本次运行中生效”。
 - 输入校验：
   - Provider base URL 必须是 `http`/`https` 绝对地址；
@@ -226,15 +241,15 @@ slterm_app/src/panels/settings/pages/app/
 - 测试接缝：
   - 注册与顺序：应用页排在终端之后，无项目浮层只含应用页。
   - 节级交付：规格内可用节可交互；占位节禁用并显示 `该能力由迁移版本提供`；终端增强显示 `尚未启用`。
-  - 语言：`System/English/Chinese` 三档切换、`system/en-US/zh-CN` 存储、即时刷新。
-  - 更新：开关默认值、手动检查后台执行与结果映射、失败不阻塞。
+  - 语言：默认 `System`，三档标签 `System/English/简体中文`、`system/en-US/zh-CN` 存储、即时刷新；保存失败保留本次运行中的新语言并只提示一次。
+  - 更新：`auto_check` 默认开、`auto_download` 默认关；仅这两个持久键，手动检查按钮常驻；后台执行与结果映射、失败不阻塞。
   - 托盘/开机启动：适配器假实现、失败回滚、开机启动只读 `.lnk` 实际存在性。
   - 通知：`desktop_enabled` 只影响后续 toast，`taskbar_flash` 独立；应用页不定义时长或去重。
-  - 保存模式：连续型配置自动保存；凭据、快捷方式、检查更新、连通性测试、备份/恢复立即提交。
+  - 保存模式：连续型配置自动保存；凭据、快捷方式、检查更新、连通性测试、备份/恢复、一键清理立即提交；应用页配置进入状态保留表。
   - Runtime API：控制面核心交付前只读显示 `未迁移/不可用`，交付后显示运行状态/端点/协议版本/文档入口；状态展示不含 token。
   - Providers：元数据 CRUD、凭据设置/清除只调用凭据门面、测试连接失败不泄露 key、导出不含秘密。
   - 助手：默认关、只持久化 provider ID、关闭后不发请求、校验与脱敏。
-  - 诊断：只放入口；动作集、二次确认与清理范围归 `../diagnostics.md`。
+  - 诊断：只放入口；导出诊断包与运行环境自检是正式动作，动作集、预览、脱敏、二次确认与清理范围归 `../diagnostics.md`。
   - 备份与恢复：导出默认只选应用设置、导出不含凭据/Hooks、恢复前预览与确认、撤回需要口令。
   - 增强：默认值（vi=false、completion=true、math=true、ai_fix=false）、补全样式、禁用态（迁移前）、迁移后即时接线。
   - 无项目浮层：不创建项目/布局、只含应用页、底部提供导入/导出/恢复默认、项目激活后自动关闭、保存与关闭守卫复用。

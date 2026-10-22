@@ -97,9 +97,9 @@ pub enum ChangeEntry {
 | ignored | 不打开 | 无 | 只读条目 |
 
 - 落点为活跃项目聚焦面板组；无组时创建首个组。
-- 去重键归 `domain-model.md`：文件打开路由使用项目 + 规范化真实路径；Diff 键含 `mode/source`；GitShow 使用项目 + 仓库相对路径（大小写不敏感）。Commit 的文件打开路由不追加标题后缀；Diff/GitShow 按自身规则追加 `(git diff)`/`(git delete)`，后缀不参与路由去重键。跨项目不聚焦。
+- 去重键归 `domain-model.md`：默认 Diff 面板按项目 + 规范化工作区路径去重，来源不参与；本视图只映射 Git 状态到面板类型与标题后缀，不定义键组成。Commit 的文件打开路由不追加标题后缀；Diff/GitShow 按自身规则追加 `(git diff)`/`(git delete)`，后缀不参与路由去重键。跨项目不聚焦。
 - 双击或聚焦行 `Enter` 打开；单击只设焦点；ignored 不打开；unknown 无右键菜单。
-- 项目根外、仓库根内条目仍显示与打开：modified/renamed/conflict 以 Diff 只读对比模式，added/untracked/unknown 以根外只读打开，deleted 以 GitShow；不提供回滚或删除。该根外只读范围与 Explorer（根固定项目根）不对称，保持不变。
+- 项目根外、仓库根内条目仍显示与打开：modified/renamed/conflict 以 Diff 只读对比模式，added/untracked/unknown 以根外只读打开，deleted 以 GitShow；不提供可执行的回滚或删除。该根外只读范围与 Explorer（根固定项目根）不对称，保持不变。
 - 文件消失、内容不可读或面板创建失败：非模态错误提示 + 静默刷新，不静默。
 
 ### 右键菜单与定位
@@ -107,15 +107,16 @@ pub enum ChangeEntry {
 - 菜单项顺序：`在文件浏览器中显示`、`复制路径`、分隔线、破坏性操作（按状态）。
 - `在文件浏览器中显示`：目标存在于工作区且位于项目根内才可用；执行时文件浏览器不可见则先恢复显示（槽位由侧栏框架决定），再展开层级、选中、滚动并聚焦。renamed 定位新路径。根外禁用并提示 `文件不在项目根内，无法在文件浏览器中显示`；deleted 禁用并提示 `文件已删除，无法在文件浏览器中显示`；其他不存在提示 `文件不存在，无法在文件浏览器中显示`。
 - `复制路径`：工作区条目复制绝对路径；renamed 新路径；deleted 由仓库根 + HEAD 路径拼出；ignored 可复制；成功 `已复制路径`，失败非模态错误。
-- 破坏性操作仅项目根内：modified/deleted/renamed/conflict → `回滚`；added/untracked → `删除`；ignored/unknown 无；根外行只提供复制路径并禁用破坏性项，提示 `项目根外文件需在终端或外部工具中处理`。
+- 破坏性操作仅项目根内可执行：modified/deleted/renamed/conflict → `回滚`；added/untracked → `删除`；ignored/unknown 无。根外且具有定位或破坏性操作的状态，相关项保留但禁用，并提示 `项目根外文件需在终端或外部工具中处理`；`复制路径` 可用。
 - 菜单支持指针位置与 `Shift+F10`/菜单键，键盘方向/Home/End/Enter/Esc，关闭后焦点回原行或最近行。
 
 ### 回滚与删除
 
 - 确认框统一由 shell 确认服务提供，危险按钮 `回滚`/`删除`，默认焦点 `取消`；正文包含完整相对路径与后果；删除说明回收站恢复路径与永久删除回退。
 - 执行前重新读取状态与路径；状态或路径变化中止并提示 `文件状态已变化，请刷新后重试` + 静默刷新；目标不存在提示 `文件不存在` + 刷新。
-- modified/deleted/conflict 回滚：复用 `git::rollback`（`git checkout HEAD -- path`），deleted 从 HEAD 重建；conflict 覆盖为 HEAD 内容。
-- renamed 回滚：先恢复旧路径，成功后才删除新路径；旧路径恢复失败不得删除新路径；新路径删除失败按部分成功报告并刷新。
+- 回滚语义：索引与工作区同时回到 HEAD，不区分 staged/unstaged；不得使用只改工作区的路径（如单独 `git restore --worktree`）。
+- modified/deleted/conflict 回滚：复用 `git::rollback`（`git checkout HEAD -- path`），deleted 从 HEAD 重建并恢复索引条目；conflict 覆盖为 HEAD 内容。
+- renamed 回滚：先恢复旧路径（索引与工作区）；成功后用 `git::unstage(new_path)`（等价 `git reset -- new_path`）清除新路径索引条目；再删除新路径工作区文件。旧路径恢复失败不得清理索引或删除工作区文件；索引清理失败按部分成功报告，保留工作区文件并标注索引残留；删除失败按部分成功报告并刷新。测试接缝：staged modified/renamed 回滚后 `git status --porcelain=v2` 不出现 `AD`/`A.` 残留。
 - added 删除：先取消暂存（`git::unstage`），失败不得删除磁盘文件；成功后移入回收站，回收站不可用则永久删除；移入失败按部分成功，文件以未跟踪状态留存。
 - untracked 删除：直接回收站；不可用回退永久删除。
 - 破坏性操作在视图内串行；执行中的行忙碌，禁止再次操作或打开菜单；其他行保持可见；合并型操作成功/失败/部分成功均静默刷新。

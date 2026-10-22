@@ -170,7 +170,7 @@ pub enum EditorState {
 - GUI 事件树只展示目录中事件；添加下拉列出尚未配置的事件；handler 类型下拉按事件支持集合过滤；删除事件/组/handler 立即更新 JSON 文本。
 - 托管 handler 显示 `slTerminal 托管` 徽标，全部字段只读、删除按钮禁用；所在 matcher 组与事件的删除按钮同样禁用。
 - 必填缺失显示 `此字段为必填`；数组/对象类字段非法草稿不向上更新模型；切换 handler 类型保留通用字段与适用字段，清除不适用字段。
-- 配置页重新挂载时模式重置为 JSON；未保存编辑按守卫处理。
+- 配置页重新挂载时模式重置为 JSON；未保存编辑按守卫处理；层级/模式/未保存编辑在切换配置页、关闭重开与应用重启下的重置矩阵见 `../panels/settings.md`。
 
 ### 保存事务
 
@@ -213,7 +213,12 @@ pub enum HookSaveError {
 ### 注入与卸载
 
 ```rust
-pub enum InjectionStatus { Injected, NotInjected, Outdated { reason: OutdatedReason } }
+pub enum InjectionStatus {
+    Injected,
+    NotInjected,
+    Outdated { reason: OutdatedReason },
+    Conflict { path: PathBuf }, // 托管文件被用户编辑，不覆盖
+}
 
 pub struct InjectionPlan {
     pub settings_path: PathBuf,
@@ -235,10 +240,10 @@ pub enum InstallOutcome {
 Claude 注入：
 
 - 在 User 层 `hooks` 中写入本应用订阅事件的 command handler，命令精确指向 `slterm-hook.exe`，并携带 source 判别参数；同一事件保留用户其他 handler 与 matcher 组。
-- statusline：读取原 `statusLine.command` 并备份到本地根 `<local>/state/hooks/backups/`；若命中可疑模式（下载器或 PowerShell 任意执行类命令），暂停注入、零写盘，设置页显示命令原文与 `确认注入`/`取消`；确认后第二次注入恒放行。
+- statusline：读取原 `statusLine.command` 并备份到本地根 `<local>/state/hooks/backups/`；若命中可疑模式（下载器或 PowerShell 任意执行类命令），暂停注入、零写盘，设置页显示命令原文与 `确认注入`/`取消`。确认绑定 `(command, snapshot/hash)` 且只消费一次；命令或内容指纹变化后重新进入待确认，不提供永久放行。
 - 桥接命令透传原 statusline 输出，同时把上下文窗口用量写入 `<local>/state/usage/`；脚本目录、信号目录与备份都限制在本地根 `<local>/state/hooks/` 与 `<local>/state/usage/`。
 - 托管识别：handler 命令必须精确解析为 `slterm-hook.exe` 的 argv 形态；同时维护归属 marker 文件（记录已安装条目与内容指纹）。不因命令包含 `slterm` 子串而认领。
-- 注入状态查询只返回 `Injected`、`NotInjected`、`Outdated`。`Outdated` 来源：脚本内容/版本与内置模板不一致、hooks 存在但 statusline 桥接缺失、marker 指纹不匹配。
+- 注入状态查询返回 `Injected`、`NotInjected`、`Outdated`、`Conflict`。`Outdated` 来源：脚本内容/版本与内置模板不一致、hooks 存在但 statusline 桥接缺失、marker 指纹不匹配。`Conflict` 表示托管文件被用户编辑，UI 只提供查看、保留与人工处理，不提供覆盖式重新注入。
 - 状态查询失败返回 `Err(StatusQueryFailed)`：UI 显示 `注入状态查询失败` 与重试；若已有上次已知值，显示该值并标注状态未知，不仅记录日志。
 - 提交点 = 用户级设置文件原子写成功。提交前失败：设置文件不变，已准备的脚本与备份回滚；提交后清理失败：设置文件保持已提交，显示可见警告与 `重试清理`，不得伪装成注入失败。
 - 注入/卸载完成后刷新状态并自动重读 User 层；当前在其他层则切换到 User 层（未保存守卫照常生效）。
@@ -296,6 +301,7 @@ pub fn restore_backup(path: &Path) -> Result<(), RestoreError>;
 | `CleanupPending` | 已注入，清理失败 | 重试清理；配置保持已提交 |
 | `StatusQueryFailed` | 注入状态查询失败 | 重试；有上次已知值时标注状态未知 |
 | `Outdated` | 注入状态：版本过旧 | 重新注入 |
+| `Conflict` | 注入状态：托管文件已被用户编辑 | 查看/保留/人工处理；不覆盖 |
 
 ### 复用、改造与新建
 
@@ -319,7 +325,7 @@ pub fn restore_backup(path: &Path) -> Result<(), RestoreError>;
 - 目录：事件/分组/matcher/handler 类型/必填字段矩阵；GUI 与 schema 与保存校验同源；DirectoryAdded 在 GUI 可见且可保存。
 - 文档：三层路径解析、缺文件空配置、损坏 JSON、其他顶层字段保留、未知可保留字段往返、JSON↔GUI 同步、非法 JSON 保留最后合法模型。
 - 保存：User 确认、Project/Local 直写、锁冲突、备份失败、外部修改、写失败原子性、保存成功后仅 hooks 子树变化。
-- 注入/卸载：可疑 statusline 零写盘与确认路径、提交前回滚、提交后清理重试、状态三值、卸载保留用户 handler、损坏文件卸载失败保留脚本。
+- 注入/卸载：可疑 statusline 零写盘与确认路径（确认绑定内容指纹且只消费一次）、提交前回滚、提交后清理重试、状态四值（含 `Conflict`）、卸载保留用户 handler、损坏文件卸载失败保留脚本。
 - 托管：marker 指纹、内容全等、用户编辑 Conflict、GUI 只读与删除禁用、JSON 修改托管标识后按普通条目处理。
 - 外部修改：虚拟时钟下去抖、可见性门控、脏/干净守卫、损坏提示、保存冲突独立检测。
 - 夹具：tempdir 假 home、fixture settings JSON、故障注入（只读/占用/磁盘满/备份失败）、schema 快照；真实 CLI 安装/卸载由构建产物人工验收并登记豁免。

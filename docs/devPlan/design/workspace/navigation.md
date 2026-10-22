@@ -22,7 +22,7 @@ sidebar_host/views/navigation/
   render.rs / menu.rs
 ```
 
-会话领域在 `slterm_agents::sessions`：来源扫描、元数据、词法归属、删除账本、恢复计划；导航视图只做行投影与命令。类型定义见 `integrations/agent-cli.md`，本文件不复制 `SessionRecord`/`SessionProvider`。
+会话领域在 `slterm_agents::sessions`：来源扫描、元数据、词法归属、删除账本、恢复计划；导航视图只做行投影与命令。`scan_service.rs`/`restore.rs`/`delete.rs` 仅做视图编排与命令派发，不持有扫描、归属或删除账本。类型定义见 `integrations/agent-cli.md`，本文件不复制 `SessionRecord`/`SessionProvider`。
 
 ### 行模型
 
@@ -54,9 +54,9 @@ pub struct ActiveSessionRow {
     pub panel: PanelId,
     pub project: ProjectId,
     pub source: AgentKind,
-    pub title: String,
+    pub title: String, // 空标题回退 `终端会话`
     pub status: AgentStatus,
-    pub usage: SessionUsage, // CLI 状态事件用量优先；缺失时匹配套餐余量窗口；无数据为 None
+    pub usage: UsageState, // 会话上下文用量，定义见 integrations/agent-cli.md；缺失或过期显示 `--`，不回退套餐余量
     pub last_event_at: Instant,
 }
 ```
@@ -69,7 +69,7 @@ pub struct HistoryRow {
     pub key: SessionKey,
     pub title: String,
     pub cwd: Option<PathBuf>,
-    pub modified: SystemTime,
+    pub modified: Option<SystemTime>, // None 排序置后，显示 `-`
     pub status: SessionStatus,
     pub source_file: Option<PathBuf>,
     pub prompt_preview: Option<String>,
@@ -82,6 +82,7 @@ pub enum SessionStatus {
     Completed,
     Unknown,
 }
+// SessionStatus 是会话域 SessionRunState 的视图投影；导航只读，不反向写回。
 ```
 
 行层级与度量：项目行双行，显示展开箭头、文件夹图标、显示名、仅活跃项目的 `当前` 标签、运行中会话数徽标与根警示，副行显示根路径；活跃会话行显示可选状态圆点、14px CLI 品牌图标、标题、32×3px 迷你用量条与百分比；历史行显示三态状态圆点、CLI 图标、标题与相对时间。每级缩进 15px；节点行高 28px，会话行高 30px；项目行与历史节点默认收起；计数超过 99 显示 `99+`；树区仅纵向滚动，右侧徽标固定；截断文本悬停显示完整内容。
@@ -134,6 +135,7 @@ pub enum NavCommand {
 ### 活跃会话操作
 
 - 单击/`Enter`：若所属项目非活跃先激活，再切到面板所在组并聚焦终端输入区；连续点击以最后一次为准。
+- 用量只消费 `UsageState`：`Fresh` 显示百分比与迷你条，`Unavailable`/`Stale` 显示 `--`；不回退套餐余量，套餐余量仅用于页脚。
 - 右键菜单：`聚焦`、`复制恢复命令`、`关闭面板`。不提供“删除会话记录”。
 - `关闭面板` 走 shell 关闭守卫；取消保留面板与会话；关闭后行消失、项目徽标减少，历史记录不受影响。
 - `复制恢复命令` 仅 CLI 支持且命令非空时可用；成功 `恢复命令已复制`；空命令 `无法生成恢复命令`；剪贴板失败 `复制失败`。
@@ -142,7 +144,7 @@ pub enum NavCommand {
 ### 历史会话
 
 - 历史来源为各 CLI 历史记录适配器 + hook 会话索引；索引只存“如何重新找到会话”（source、id、cwd、原生文件、标题、最近时间），不复制正文。
-- 扫描合并同 `(source, id)`，modified 取较新者，缺字段互补；结果按修改时间降序，时间无效排最后；结果上限 2,000 条。
+- 扫描合并同 `(source, id)`，modified 取较新者，缺字段互补；结果按修改时间降序，`None` 置后；结果全量合并与排序，不做静默截断；2,000 行是规格性能验收规模，不是结果上限。
 - 状态三态：运行中（可靠关联到运行中 CLI 会话）、已完成（CLI 记录表明结束）、未知（无法确认，中性色，不得显示为已完成）。
 - 标题取会话标题；缺失取 ID 前 8 位；ID 缺失显示 `未知会话`。悬停按序显示完整标题、CLI 名、工作目录、首条提示词预览（超过 200 字符截断）。
 - 相对时间六档：`刚刚`、`N 分钟前`、`N 小时前`、`N 天前`、`MM-DD`（同年）、`YYYY-MM-DD`；无效 `-`；视图打开期间每 60 秒重算。
@@ -211,9 +213,25 @@ pub enum NavCommand {
 | 活跃会话投影 | 实时 | 实时 | 实时 | 重新建立 |
 | 恢复中行标记 | 保持 | 保持 | 取消并清理 | 不保留 |
 | 右键菜单、行内编辑、拖拽 | 关闭/取消 | 关闭/取消 | 不保留 | 不保留 |
-| 树区键盘焦点 | 保持选中 | 不自动进入 | 不抢焦 | 不抢焦 |
+| 树区键盘焦点 | 保持选中 | 焦点进入目标项目面板落点，不留在树区 | 不抢焦 | 不抢焦 |
 
 持久化字段：项目列表与活跃项目在状态库 `workspace`/`projects`；项目/历史/未归属展开、滚动锚点与删除账本在 `view_states`；搜索词、多选、菜单、行内编辑、拖拽、当前焦点不落盘。视图开关、槽位与宽度归侧栏框架。
+
+### 视图边界与焦点落点
+
+| 规格判据 | 设计落点 | 测试接缝 |
+|---|---|---|
+| 无项目且无未归属历史会话：显示无项目空态，搜索框禁用 | `rows::build` 返回空行集，搜索禁用；空态优先于搜索无结果 | 行投影空集与渲染快照 |
+| 无项目但有未归属历史会话：仅显示未归属节点，搜索可用 | 行集只含 `UnownedNode`/`UnownedSession`；无项目空态要求行集为空 | 行投影测试 |
+| 项目展开但无活跃与历史会话：显示「暂无会话」 | `render.rs` 在展开项目无子行时绘制非交互占位，占位不进入 `NavRow` | 渲染快照 |
+| 历史节点计数：无搜索为项目全部历史数，搜索为可见匹配数；项目自身命中时为总数 | `rows::build` 同时给出项目总数与可见匹配数，按搜索状态选择 | 搜索计数单测 |
+| 项目行运行中徽标不随搜索变化 | `running_sessions` 始终来自工作区投影，不经过滤 | 搜索投影测试 |
+| 孤儿行分支恢复禁用并显示原因 | `HistoryRow.fork=false`，原因由 cwd 缺失或不可访问推导 | 菜单矩阵测试 |
+| 活跃会话标题为空回退「终端会话」 | `ActiveSessionRow.title` 投影时回退 | 行投影测试 |
+| 移除项目后焦点落点 | 相邻活跃项目行 → 未归属节点 → 「添加项目」按钮 | 焦点迁移单测 |
+| 删除历史会话后焦点落点 | 下一条可见历史行 → 历史节点行 → 项目行 | 焦点迁移单测 |
+| 视图关闭停止相对时间定时器与周期扫描 | `NavigationView::deactivate` 停止两个定时器，保留展开与滚动 | 生命周期测试 |
+| 切换项目时键盘焦点去向 | 导航只更新活跃项目；焦点由工作区壳 `FocusCoordinator` 送入目标面板落点 | 工作区焦点集成 |
 
 ### 复用与重建
 

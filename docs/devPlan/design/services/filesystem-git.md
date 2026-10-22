@@ -14,11 +14,11 @@
 
 | 规则 | 原因 | 边界 |
 |---|---|---|
-| 所有文件访问经 `PathAuthority` + `AccessPolicy`；面板侧禁止裸 `std::fs` | 允许根、真实路径与符号链接校验必须单点，否则每个面板都是一条穿越路径 | 测试夹具与 `test_support` 例外；审计的显式用户另存路径除外 |
-| 读允许根 = 项目根 + 项目根所在仓库实际根 + 已登记 `AgentRoot`；写允许根 = 项目根 + 已登记 `AgentRoot` | 规格要求仓库根内、项目根外只读；Agent 根是显式可写作用域，编辑器可保存但不扩大项目写边界 | Commit 破坏性操作额外要求目标位于项目根内；写前经 `PathGuard` 复核；仓库根外、设备路径、盘符相对路径一律拒绝 |
+| 所有文件访问经 `PathAuthority`（`PathGuard` 的项目化适配器）；面板侧禁止裸 `std::fs` | 允许根、真实路径与符号链接校验必须单点，否则每个面板都是一条穿越路径 | 测试夹具与 `test_support` 例外；审计的显式用户另存路径除外；策略与决策归 [security.md](../security.md) 的 `PathGuard`，本域不另立规则 |
+| 读/写允许根集合与例外归 `PathGuard` | 规格要求仓库根内、项目根外只读；Agent 根是显式可写作用域 | 本域只按项目构造 `AllowedRoots` 适配器；Commit 破坏性操作额外要求目标位于项目根内；写前经 `PathGuard` 复核 |
 | 文档身份用真实路径，文件树条目用链接项本身 | 编辑器要求符号链接/目录联接按真实目标建立身份；Explorer 要求删除/重命名只作用于链接 | 两种模式由 `LinkPolicy::{Follow, Entry}` 显式选择，调用方不得默认 |
-| 全部 Git 操作经单一 `GitExecutor`，每条命令前置 `--no-optional-locks` | 读操作不得触发 index 锁或后台 gc；双执行体会产生两套状态解析 | flag 必须位于子命令之前；argv 不经 shell；Windows 统一隐藏控制台窗口 |
-| 路径参数是纯 argv 元素，统一 `--literal-pathspecs` | 防止路径被解释为 glob/shell 文本 | 不拼接命令行字符串；不向 shell 传参 |
+| 全部 Git 操作经单一 `GitExecutor`，全局 flag 一律位于子命令之前 | 读操作不得触发 index 锁或后台 gc；双执行体会产生两套状态解析 | 固定形态 `git --no-optional-locks [--literal-pathspecs] -C <cwd> <subcommand> ...`；argv 不经 shell；Windows 统一隐藏控制台窗口 |
+| 路径参数是纯 argv 元素，需要 pathspec 的命令统一加全局 `--literal-pathspecs` | 防止路径被解释为 glob/shell 文本 | 该 flag 位于子命令之前；不拼接命令行字符串；不向 shell 传参 |
 | 缓存只服务只读消费面，写路径与陈旧校验必须绕过缓存 | 写操作吃缓存会产生错误覆盖 | 状态/仓库根/HEAD 缓存 TTL 500ms；写操作完成即推进仓库代次并失效相关缓存 |
 | 监听是租约，不轮询；视图不可见即释放或暂停 | 规格明确不做监听失效轮询兜底 | 监听不可用时降级为手动刷新提示；重新显示/重开视图重试 |
 | 原子保存失败不降级为普通写 | 网络盘不支持原子替换时降级会产生半写文件 | 返回 `AtomicWriteUnsupported` 并保留原文件 |
@@ -31,30 +31,29 @@
 
 ```text
 slterm_app/src/services/
-  src/
-    fs/
-      mod.rs          // FileServices 门面
-      path.rs         // NormalizedPath / PathRef / PathAuthority / LinkPolicy
-      access.rs       // AllowedRoot / AccessPolicy / Access
-      stamp.rs        // FileStamp / DiskVersion / FileId
-      atomic.rs       // 原子替换与版本校验
-      transfer.rs     // 树内复制/移动、冲突与跨卷回退
-      trash.rs        // 回收站/永久删除
-      tree.rs         // 单层目录读取、分批游标、排序
-      watch.rs        // WatchService / WatchPolicy / WatchEvent
-      ports.rs        // PlatformFs / PlatformWatch / Clock
-      test_support.rs // FakePlatformFs / FakeWatch / 故障注入
-    git/
-      mod.rs          // GitServices 门面
-      command.rs      // 唯一子进程构造口
-      status.rs       // porcelain v2 / ignored / 分类
-      head.rs         // HEAD 代次、HEAD 文件读取
-      diff.rs         // HEAD 侧与工作区侧内容获取
-      write.rs        // rollback / unstage / delete / 仓库写门
-      cache.rs        // status / root / head 缓存
-      error.rs        // GitError 与映射
-      test_support.rs // FakeGitProcess / 脚本化仓库
-    ports.rs          // ExplorerBackend / CommitBackend / DocumentBackend / HeadBackend
+  fs/
+    mod.rs          // FileServices 门面
+    path.rs         // NormalizedPath / PathRef / PathAuthority / LinkPolicy
+    access.rs       // 项目化 AllowedRoots 适配（策略与决策委托 PathGuard）
+    stamp.rs        // FileStamp / DiskVersion / FileId
+    atomic.rs       // 原子替换与版本校验
+    transfer.rs     // 树内复制/移动、冲突预检与跨卷回退
+    trash.rs        // 回收站/永久删除
+    tree.rs         // 单层目录读取、分批游标、排序
+    watch.rs        // WatchService / WatchPolicy / WatchEvent
+    ports.rs        // PlatformFs / PlatformWatch / Clock
+    test_support.rs // FakePlatformFs / FakeWatch / 故障注入
+  git/
+    mod.rs          // GitServices 门面
+    command.rs      // 唯一子进程构造口
+    status.rs       // porcelain v2 / ignored / 分类
+    head.rs         // HEAD 代次、HEAD 文件读取
+    diff.rs         // HEAD 侧与工作区侧内容获取
+    write.rs        // rollback / unstage / delete / 仓库写门
+    cache.rs        // status / root / head 缓存
+    error.rs        // GitError 与映射
+    test_support.rs // FakeGitProcess / 脚本化仓库
+  ports.rs          // ExplorerBackend / CommitBackend / DocumentBackend / HeadBackend
 ```
 
 若总架构决定并入统一 core crate，以上模块树保持不变，仅把 crate 前缀替换为该 core 的 `services::fs`/`services::git`。
@@ -88,14 +87,14 @@ pub enum LinkPolicy { Follow, Entry }
 
 impl PathAuthority {
     pub fn resolve(root: &Path) -> Result<Self, PathError>;
-    pub fn check(&self, path: &Path, policy: LinkPolicy, access: Access) -> Result<PathRef, FsError>;
+    pub fn check(&self, path: &Path, policy: LinkPolicy, access: PathAccess) -> Result<PathRef, FsError>;
     pub fn relativize(&self, path: &PathRef) -> Option<NormalizedPath>; // 项目根内相对路径
 }
 ```
 
 规则：
 
-- `PathAuthority`/`AccessPolicy` 是 `design/security.md` 中 `PathGuard` 判定在本域的实现；本域不另立允许根规则。
+- `PathAuthority` 是 [security.md](../security.md) 中 `PathGuard` 的项目化适配器：只持有项目上下文、`LinkPolicy` 选择与相对化；允许根、真实路径、名称规则与决策类型（`AllowedRoots`/`PathAccess`/`PathDecision`）归 `PathGuard`；本域不另立第二套规则。
 - 归一化：正反斜杠等价、忽略大小写、折叠重复分隔符、去除末尾分隔符（盘符根与 UNC 共享根除外）、按路径段边界比较。`NormalizedPath.key` 是归一化后的比较键，`display` 保留磁盘原始形态。
 - 真实路径解析：已存在路径 `canonicalize`；不存在的末段取最近存在祖先的真实路径后逐段拼接；拼接段拒绝 `.`/`..`/空段。解析结果统一去掉 `\\?\` 前缀用于比较，平台调用时再按需加回。
 - 包含性校验按真实路径的路径段边界，Windows 不区分大小写；`C:/foo` 不包含 `C:/foobar`。
@@ -106,39 +105,28 @@ impl PathAuthority {
 
 ### 允许根
 
+允许根集合、`RootKind`、访问位与决策类型归 [security.md](../security.md) 的 `AllowedRoots`/`PathGuard`；本域只按项目构造适配器，不定义第二套策略：
+
 ```rust
-pub enum RootKind { Project, Repository, AgentGlobal }
-
-pub struct AllowedRoot {
-    pub kind: RootKind,
-    pub lexical: NormalizedPath,
-    pub real: RealPath,
-    pub access: AccessMask, // READ | WRITE | CREATE | DELETE
-}
-
-pub struct AccessPolicy { roots: Vec<AllowedRoot> }
-
-impl AccessPolicy {
+impl PathAuthority {
     /// 每次操作按目标项目构造，不把全部项目根合并成全局可写域。
     pub fn for_project(
         authority: &ProjectPathAuthority,
         repo_root: Option<&RealPath>,
         agent_roots: &[RealPath],
     ) -> Self;
-
     pub fn explicit_user_choice(&self, path: &Path) -> Result<PathRef, FsError>;
-    pub fn check(&self, path: &Path, policy: LinkPolicy, access: Access) -> Result<PathRef, FsError>;
+    pub fn explicit_local_link(&self, path: &Path) -> Result<PathRef, FsError>;
 }
 ```
 
-- 读：项目根、仓库实际根、已登记 `AgentRoot`。仓库根内、项目根外为只读。
-- 写：项目根、已登记 `AgentRoot`；编辑器在 `AgentRoot` 内可保存。Commit 回滚/删除再叠加「路径必须在项目根词法范围内」检查。
+- 读/写允许根与只读例外（仓库根内、项目根外只读；`AgentRoot` 可写）以 [security.md](../security.md) §路径允许根与真实路径校验为单点；Commit 回滚/删除在此基础上再叠加「路径必须在项目根词法范围内」检查。
 - 所有写入（含编辑器与 Diff 保存）在原子替换前重新解析真实路径并经 `PathGuard` 拒绝重解析点与符号链接逃逸；调用方不得跳过。
 - `AgentRoot` 由 Agent 能力注册表的静态目录与设置中的自定义节点实时快照组成；目录本身的定义归 Agent 集成域，本域只消费真实路径集合。
 - 显式用户选择（系统“另存为”）经 `explicit_user_choice` 生成一次性 `PathRef`，只允许编辑器保存目标；审计记录 operation/path/result，不记录文件内容。该通道不得用于文件树、Commit、GitShow 或自动打开。
 - Markdown 文档中的显式本地链接经 `explicit_local_link` 生成只读单文件 `PathRef`：只允许读取该文件本身，不加载其根外资源；UNC 与设备路径仍按允许根规则拒绝。该通道只供 Markdown 面板消费，不得用于文件树、编辑器自动打开或写入。
 - 所有允许根在操作开始时快照；项目切换或 Agent 节点删除不影响已开始的单次操作，但下一次操作必须重建策略。
-- 终端创建的应用发起工作目录同样经 `AccessPolicy` 校验（项目根或已登记 `AgentRoot` 内）；Shell 内部 `cd` 不受限，但新终端继承目录时重新校验。
+- 终端创建的应用发起工作目录同样经 `PathAuthority`/`PathGuard` 校验（项目根或已登记 `AgentRoot` 内）；Shell 内部 `cd` 不受限，但新终端继承目录时重新校验。
 
 ### 文件监听
 
@@ -172,10 +160,12 @@ impl WatchService {
 | Explorer / Agent 文件 | 项目根或 Agent 根递归 | 200ms | 1000ms | 过滤 `.git` 噪声；Agent 根只在其展开且视图可见时监听 |
 | Commit | 仓库根递归 + Git 元数据 | 200ms | 1000ms | 只处理仓库根内事件；元数据只认 HEAD、当前分支引用、refs、索引、packed-refs |
 | Editor | 项目根递归；根外/另存文件监听父目录 | 300ms | 1000ms | 外部修改目标时延 1s 内；溢出触发全部已打开文档复核 |
-| Diff HEAD 侧 | Git 元数据 | 300ms | 1000ms | 面板激活且距上次刷新超过 10s 时补一次 |
+| Diff HEAD 侧 | Git 元数据 | 300ms | 1000ms | 只投递元数据事件；10 秒复核由 Diff 面板持有，见下 |
+| Diff 工作区侧 | 项目根递归；目标文件父目录 | 200ms | 1000ms | 与 Editor 共享 OS watcher，去抖独立；保存前 stamp 比对仍独立执行 |
 | GitShow 过期检测 | Git 元数据 + 目标路径 HEAD 指纹 | 300ms | 1000ms | 只置过期状态，不自动替换内容 |
 | Hooks 当前层文件 | 单文件父目录 | 300ms | 1000ms | 连续变化合并为一次外部修改提示 |
 
+- 本表是事件合并窗口的唯一数值源，其他文档只引用。Diff 的 10 秒 HEAD 复核不属于监听服务：由 [panels/diff.md](../panels/diff.md) 的 Diff 面板在可见/聚焦时持有并运行；监听服务保持“监听是租约，不轮询”，不新增 Diff 轮询项。
 - 单根共享：同一根上多个租约共享一个 OS watcher；最后一个租约释放时 `unwatch`。树根递归覆盖的父目录不重复 watch。
 - Git 元数据路径：普通仓库为 `<root>/.git`；链接工作树 `.git` 为文件时解析其 gitdir，并同时监听 common dir 的 refs/packed-refs。排除 `.git/objects/**` 与 `.git/logs/**`。
 - 事件分类在 watcher 线程只做路径归属、去重与溢出标记，再经容量 1 的唤醒通道交给前台；不阻塞、不重扫。
@@ -189,7 +179,7 @@ impl WatchService {
 pub struct GitExecutor { platform: Arc<dyn GitProcess>, clock: Arc<dyn Clock> }
 
 impl GitExecutor {
-    /// 唯一构造口；`--no-optional-locks` 固定位于子命令之前。
+    /// 唯一构造口；所有全局 flag 固定位于子命令之前。
     pub fn command(&self, cwd: &Path) -> GitCommand;
     pub fn run(&self, cmd: GitCommand, timeout: Duration) -> Result<GitOutput, GitError>;
 }
@@ -197,10 +187,10 @@ impl GitExecutor {
 pub struct GitCommand { /* program=git, args: Vec<OsString>, cwd, env, hidden_window */ }
 ```
 
-- 固定参数：`--no-optional-locks`、`-C <cwd>`；Windows 设置 `CREATE_NO_WINDOW`；stdout/stderr 有界读取。
+- 固定形态：`git --no-optional-locks [--literal-pathspecs] -C <cwd> <subcommand> ...`；所有全局 flag 位于子命令之前，Windows 设置 `CREATE_NO_WINDOW`；stdout/stderr 有界读取。
 - 超时：读命令默认 10s，写命令默认 30s；超时 `GitError::Timeout`，不无限等待。
 - 环境：继承进程环境，但不注入凭据；不修改 Git 配置；不执行网络操作。
-- `--literal-pathspecs` 用于 status/diff/checkout 等路径参数命令。
+- `--literal-pathspecs` 是全局 flag，用于 status/diff/checkout 等带 pathspec 的命令，同样位于子命令之前；命令构造测试按 argv 断言该顺序。
 - 禁止 shell：所有路径是 argv 元素；错误消息可直接展示 stderr 摘要，但不得包含文件内容或凭据。
 - 退出码与 stderr 分类：`classify_git_failure` 按 stderr（大小写不敏感）区分 `AccessDenied`、`Corrupt`；识别不出归具体命令错误。
 
@@ -251,8 +241,8 @@ impl GitServices {
 }
 ```
 
-- `status` 使用 `git status --porcelain=v2 --branch -z --untracked-files=all --literal-pathspecs`；未跟踪目录展开为单文件条目，单文件状态从快照派生，不为路径单独 spawn。
-- 已忽略分区使用独立命令 `git ls-files -z --others --ignored --exclude-standard --directory`：目录条目保留尾 `/`，不递归内部；只有 Commit 打开“显示已忽略”时才读取，默认不读、不计数。
+- `status` 使用 `git --no-optional-locks --literal-pathspecs -C <repo> status --porcelain=v2 --branch -z --untracked-files=all`；未跟踪目录展开为单文件条目，单文件状态从快照派生，不为路径单独 spawn。
+- 已忽略分区使用独立命令 `git --no-optional-locks --literal-pathspecs -C <repo> ls-files -z --others --ignored --exclude-standard --directory`：目录条目保留尾 `/`，不递归内部；只有 Commit 打开“显示已忽略”时才读取，默认不读、不计数。
 - 状态分类（服务于 Commit/Explorer 展示）：`Added/Modified/Deleted/Renamed/Conflicted/Untracked/Unknown`；无法识别的已跟踪 XY 归 `Unknown` 并保留原始 XY。staged/unstaged 不分组展示，但保留两个字段供派生。
 - 缓存：状态单槽按仓库根原样匹配，TTL 500ms；同根并发读取共享一次子进程，后到者等待。仓库根缓存独立，容量上限 16。
 - 双代次：`WorktreeEpoch` 由仓库根内任一文件事件推进，`MetadataEpoch` 由 HEAD/refs/index 事件推进；任一推进或写操作完成都使状态缓存失效。只读消费方在代次变化后不得命中旧条目。
@@ -291,7 +281,7 @@ impl GitServices {
 **Commit 写步骤**
 
 - 所有步骤先按 `expected_revision` 重跑权威 `status` 并重新校验目标状态与路径；不一致返回 `GitError::Stale`，不执行任何磁盘/索引写入。
-- modified/deleted/conflict 回滚：`git checkout HEAD -- <path>`，索引与工作区同时回到 HEAD 字节。
+- modified/deleted/conflict 回滚：`git --no-optional-locks --literal-pathspecs -C <repo> checkout HEAD -- <path>`，索引与工作区同时回到 HEAD 字节。
 - renamed 回滚：先恢复旧路径，成功后才删除新路径；旧路径恢复失败不得删除新路径；新路径删除失败按部分成功返回。
 - added 删除：先 `unstage`，成功后才把工作区文件移入回收站；取消暂存失败时磁盘文件保持不变。
 - untracked 删除：直接回收站/永久删除回退。
@@ -363,7 +353,7 @@ impl FileServices {
 
 - 网络文件系统不支持原子替换：返回 `AtomicWriteUnsupported`，不回退普通写。
 - 目标为符号链接且 `LinkPolicy::Follow`：身份与写入目标都是真实目标；`LinkPolicy::Entry` 的删除/重命名只作用于链接本身。
-- 回收站：`DeleteMode::RecyclePreferred` 先走 `SHFileOperationW + FOF_ALLOWUNDO`；卷不支持或系统拒绝时返回 `RecycleUnavailable`，由调用方显示确认后以 `DeleteMode::Permanent` 重试。`DeleteMode::Permanent` 只能在此回退或明确的永久删除语义下使用。
+- 回收站：`DeleteMode::RecyclePreferred` 先走 `SHFileOperationW + FOF_ALLOWUNDO`；卷不支持或系统拒绝时返回 `RecycleUnavailable`，由调用方显示确认后以 `DeleteMode::Permanent` 重试。`DeleteMode::Permanent` 只由调用方在收到 `RecycleUnavailable` 后二次确认触发；不提供其他永久删除入口。
 - 批量删除/粘贴替换逐项执行，不要求原子性；结果聚合为 `Vec<DeleteResult>`，部分失败保留成功项。替换文件夹按“先移走旧目标，再写入”执行，失败保留可恢复状态。
 - 符号链接、目录联接的删除只作用于链接项；递归删除不跟随链接目标。
 
@@ -387,14 +377,17 @@ pub enum TransferResult {
     Failed { source: PathBuf, error: FsError },
 }
 
-pub enum TransferSkip { IntoSelf, AlreadyThere, SymlinkUnsupported }
+pub enum TransferSkip { IntoSelf, AlreadyThere, CrossRoot, SymlinkUnsupported }
 ```
 
 - 源集合由视图按顶层项去重后传入；服务不接受任意外部路径。
+- 首次写入前完成全量预检：目标冲突、源/目标根兼容性、`IntoSelf`/`AlreadyThere` 判定与 `Replace` 的删除授权；预检通过后才开始逐项执行。
 - 目标为源自身或源的后代：该项失败并返回 `TransferSkip::IntoSelf`，其他项继续。
 - 目标与源父目录相同：复制与移动都跳过该项并返回 `TransferSkip::AlreadyThere`。
 - 复制递归处理文件夹内容；移动优先同卷原子改名，跨卷回退为复制后删除源；失败项保留源与剪切态。
-- 冲突按不区分大小写比较；`Replace` 先按删除规则把目标移入回收站（不可用时要求调用方已确认永久删除），再写入；替换文件夹整体移走旧目标，不合并目录内容；`Cancel` 中止整个粘贴且零修改。
+- `TransferMode::Move` 显式拒绝项目根与 Agent 根之间的跨根移动（`TransferSkip::CrossRoot`）；复制允许。
+- 冲突按不区分大小写比较；`Replace` 先按删除规则把目标移入回收站（不可用时要求调用方已确认永久删除），再写入；替换文件夹整体移走旧目标，不合并目录内容。
+- `Cancel` 只在预检阶段有效，返回零修改；进入执行阶段后逐项继续，部分失败不回滚成功项。
 - 符号链接与目录联接按链接项本身处理；无法保持链接语义时跳过并报告，不递归复制目标内容。
 - 批量逐项执行、不要求原子性；结果聚合，部分失败不回滚成功项。替换单个文件必须原子完成，失败时目标保持原样。
 - 操作完成后由调用方刷新受影响目录与 Git 状态；服务返回实际处理数量与失败原因。
@@ -529,7 +522,7 @@ pub trait HeadBackend: Send + Sync {
 | `slterm_app/src/side_panel/gitignore.rs` | 部分复用 | 仓库根文件系统探测保留；忽略清单改由 Commit 的 `ls-files` 提供，树视图不自行解析 |
 | `slterm_app/src/side_panel/vcs.rs` | 改造 | 改为消费 `CommitBackend::status`；分支/统计/历史展示保留在视图层，Git 解析不再留在面板 |
 | 编辑器/文件树现有直接 `std::fs` 调用 | 改造 | 全部改经 `DocumentBackend`/`ExplorerBackend`；禁止绕过允许根 |
-| 新 `PathAuthority`/`AccessPolicy`/`PathRef` | 新建 | 路径权威与真实路径校验单点 |
+| 新 `PathAuthority`/`PathRef` | 新建 | `PathGuard` 的项目化适配器；真实路径、链接策略与相对化，策略与决策仍归 security |
 | 新 `WatchService` | 新建 | 租约式监听与策略化去抖 |
 | 新外部修改基线/保存冲突 | 新建 | `FileStamp`、`DiskVersion`、替换前二次校验 |
 | 新仓库写门 `RepoWriteGate` | 新建 | Commit 回滚/删除、runtime `git.*` 写、worktree 事务按仓库串行 |
@@ -538,9 +531,10 @@ pub trait HeadBackend: Send + Sync {
 ### 验收与测试接缝
 
 - 路径：归一化/路径段边界/UNC/盘符根/长路径/大小写/末尾分隔符表驱动；真实路径穿越（junction 指向根外）拒绝；`C:/foo` 与 `C:/foobar` 不误判。
-- 允许根：项目根写、仓库根只读、Agent 根读写、仓库根外拒绝；Commit 破坏性操作在项目根外禁用；显式另存通道只对编辑器生效。
+- 允许根：项目根写、仓库根只读、Agent 根读写、仓库根外拒绝；Commit 破坏性操作在项目根外禁用；显式另存通道只对编辑器生效；策略与决策只经 `PathGuard`，`PathAuthority` 不另立规则。
+- 树内复制/移动：首次写入前完成冲突与根兼容性预检；`Cancel` 零修改；项目根与 Agent 根之间的 `Move` 拒绝。
 - 监听：尾部去抖与最大延迟；重命名映射；溢出触发全量复核；租约共享与释放；不可用降级。
-- Git：porcelain v2 解析（含 rename/conflict/unknown）、ignored 目录条目、HEAD unborn/不存在/权限/损坏分类、写前 revision 校验、`--no-optional-locks` 出现在每条命令、并发读共享一次子进程、写后缓存失效。
+- Git：porcelain v2 解析（含 rename/conflict/unknown）、ignored 目录条目、HEAD unborn/不存在/权限/损坏分类、写前 revision 校验、并发读共享一次子进程、写后缓存失效；命令形态测试断言 `--no-optional-locks` 与 `--literal-pathspecs` 均位于子命令之前，覆盖 status/diff/checkout/ls-files argv 快照。
 - 外部修改：修改/删除/替换/重命名；保存前与替换前两次检查；自触发抑制只忽略一次；干净文档自动重载由编辑器用例覆盖，服务只断言版本结果。
 - 原子保存/回收站：故障注入（临时文件创建失败、替换失败、备份失败、回收站不可用回退）；真实回收站与网络盘登记人工验收豁免。
 - 假实现：四组 port 各带确定性夹具；视图测试不触真实磁盘与真实 Git（Git 解析用临时仓库交叉验证）。

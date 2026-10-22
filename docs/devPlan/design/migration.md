@@ -9,8 +9,8 @@
 - **单一状态权威**：新项目/布局/面板模型是唯一工作区状态；过渡期不得让旧 `SltermWorkspace` 与新模型同时服务同一窗口。
 - **引擎保留、状态重建**：`slterm_terminal`、文件编辑器、Markdown 渲染、Diff 引擎、Git、补全引擎、加密原语、更新下载/交接、通知漏斗等已验证引擎保留；旧 tab/pane/dock/session/workspace 状态模型整体废弃。
 - **零数据迁移**：新代码只读写新状态根；旧 `settings.json`、`session.json` 等文件不读、不删、不视为损坏，也不提供导入通道。
-- **无适配层**：不为旧模型、旧 Runtime API、旧设置键、旧备份格式建立双向适配；允许 breaking change。垂直切片前新旧壳同仓互不引用，主线始终可编译；切片通过后一次性退役旧壳，不保留 `legacy-shell` feature。
-- **删除即验收**：每个旧域删除前必须已有目标态实现与对应验收；无替代的能力先删除并登记为明确不做，不能以“暂时保留”长期存在。
+- **无适配层**：不为旧模型、旧 Runtime API、旧设置键、旧备份格式建立双向适配；允许 breaking change。垂直切片前新旧壳同仓互不引用，主线始终可编译；切片通过后先退役旧状态模型与写路径，旧 UI 宿主按域在替代实现验收后逐个删除，不保留 `legacy-shell` feature。
+- **删除即验收**：每个旧域删除前必须已有目标态实现与对应验收；共享旧类型随最后一个引用它的域删除；无替代的能力先删除并登记为明确不做，不能以“暂时保留”长期存在。
 - **能力删除不可暗留**：Image、Merge、用户主题、Markdown 实时块编辑、提示符跳转、无障碍专用能力不得以隐藏设置、快捷键或恢复分支回流。
 
 ### 逐域处置表
@@ -18,70 +18,70 @@
 | 域 | 旧代码/类型 | 处置 | 目标落点 | 隔离与删除时机 |
 |---|---|---|---|---|
 | 终端内核 | `slterm_terminal` 的 grid、VT、PTY、输入编码、选择、渲染快照 | 保留；删除提示符跳转 API 与提示符行标记存储，保留 OSC 133 命令生命周期与退出码解析 | `slterm_terminal` | 长期保留；提示符跳转随能力删除同步删除 |
-| 终端视图 | `slterm_app/src/gpui_terminal` 的 pane 视图、事件泵、会话泵 | 改造为终端面板 host；保留数学覆盖层、补全、AI 修复条接线 | 终端面板 | 新终端面板验收后删除旧 pane/tab 接线 |
+| 终端视图 | `slterm_app/src/gpui_terminal` 的 pane 视图、事件泵、会话泵 | 改造为终端面板 host；保留数学覆盖层、补全、AI 修复条接线 | 终端面板 | 旧状态模型退役后删除旧 pane/tab 接线（终端面板已验收） |
 | 布局树 | `slterm_split` 的 `SplitTree<PaneId>`、比例与导航纯函数 | 改造；叶类型改为 `PanelGroupId`，纯函数继续复用 | `slterm_workspace` + `slterm_split` | 保留 crate；仅删除旧 `PaneId` 叶类型绑定与旧 ID 测试 |
 | 设置值模型 | `slterm_settings` 的 `RawSettings`/`RuntimeSettings`、键注册表、主题目录、对比度校验与回退 | 保留 JSON 值层、路径权威与内置主题；删除对比度校验代码；重建目标设置域与键注册表 | 新设置模型 | 新设置中心验收后删除旧键与旧转换 |
 | 设置写通道 | `settings_store`、`atomic_file`、`audit` | 保留；升级为单一 flush coordinator + 串行写队列 + generation 防旧快照覆盖 | 持久化协调器 | 长期保留 |
-| 设置 UI | `app_shell/settings_pane*`、主题编辑器、旧导航与页面注册 | 删除重建；新增项目内设置中心与应用页 | 设置中心/应用页 | 新页面注册表与保存模型验收后删除 |
-| 旧工作区 | `app_shell/workspace` 的 `SltermWorkspace`、`TabEntry`、`WorkspaceTab`、`TerminalPane`、旧分屏与焦点 | 删除；新壳按项目/面板组/面板重建 | 工作区壳 | 新壳、全部面板类型、侧栏迁移验收后删除 |
-| 旧会话 | `session.rs`、`session_restore.rs`、`session.json`、`session.crashed.json` | 删除；项目列表、布局、侧栏、终端状态由新持久化承接 | 持久化协调器 | 新持久化切换并通过崩溃恢复验收后删除 |
-| 侧栏 | `app_shell/workspace/sidebar.rs`、`side_panel` 视图 | 保留视图引擎；双槽固定模型改为封闭侧栏视图注册与状态矩阵 | 侧栏框架 | 新侧栏视图全部迁移后删除旧状态 |
+| 设置 UI | `app_shell/settings_pane*`、主题编辑器、旧导航与页面注册 | 删除重建；新增项目内设置中心与应用页 | 设置中心/应用页 | 设置中心壳验收后删除旧设置 pane 与旧主题库 |
+| 旧工作区 | `app_shell/workspace` 的 `SltermWorkspace`、`TabEntry`、`WorkspaceTab`、`TerminalPane`、旧分屏与焦点 | 删除；新壳按项目/面板组/面板重建 | 工作区壳 | 旧状态模型退役时停止读写并隔离旧状态类型；共享类型随最后一个引用域删除，旧 UI 宿主随各域替代验收删除 |
+| 旧会话 | `session.rs`、`session_restore.rs`、`session.json`、`session.crashed.json` | 删除；项目列表、布局、侧栏、终端状态由新持久化承接 | 持久化协调器 | 旧状态模型退役时关闭写路径；崩溃恢复验收后删除旧读取代码与旧文件 |
+| 侧栏 | `app_shell/workspace/sidebar.rs`、`side_panel` 视图 | 保留视图引擎；双槽固定模型改为封闭侧栏视图注册与状态矩阵 | 侧栏框架 | 旧状态模型退役后删除旧 `side_panel` 宿主 |
 | 文件编辑器 | `app_shell/file_editor` 文档、搜索、折叠、Git 行标、保存 | 保留引擎；删除渲染态 live edit、inline edit 与相关命令 | 编辑器面板 | 编辑器面板验收后删除旧 tab 宿主与 live edit |
-| Markdown | `markdown/` 渲染器、公式、资源加载 | 保留渲染与公式；Mermaid 首版不渲染，按源码显示；删除渲染态块编辑接线 | Markdown 面板 | 编辑器面板验收后删除旧双态宿主 |
+| Markdown | `markdown/` 渲染器、公式、资源加载 | 保留渲染与公式；Mermaid 首版不渲染，按源码显示；删除渲染态块编辑接线 | Markdown 面板 | Markdown 面板验收后删除旧双态宿主 |
 | Diff | `app_shell/diff_tab.rs` | 保留双栏/行内、折叠、同步滚动；新增冲突快照只读模式；删除 Merge 路由 | Diff 面板 | Diff 面板验收后删除旧 CodeTab 模式 |
 | Merge | `app_shell/merge_tab.rs`、三栏冲突采用流程 | 删除；冲突处理由终端 Git 工作流承接，冲突对比由 Diff 快照承接 | Diff 快照 | Diff 快照可用后删除 |
-| Image | `app_shell/doc_tabs.rs` 的 `ImageTabView`、图片打开路由 | 删除；图片/二进制交系统默认程序或错误提示；不新增预览面板类型 | 文件打开路由 | 旧壳退役时删除 |
+| Image | `app_shell/doc_tabs.rs` 的 `ImageTabView`、图片打开路由 | 删除；图片/二进制交系统默认程序或错误提示；不新增预览面板类型 | 文件打开路由 | 旧状态模型退役时删除 |
 | GitShow | `app_shell/code_tab.rs` 的 GitShow 只读模式 | 保留只读读取与渲染；适配 GitShow 面板 | GitShow 面板 | 新面板验收后删除旧模式 |
 | Git | `git/`、`git_completion.rs`、`git_worktree.rs` | 保留唯一执行入口；Commit/Diff/GitShow/文件树统一实际仓库根；worktree 供 agent fork | 各面板与 Git 服务 | 长期保留 |
-| 文件树/Commit/Agent 文件 | `side_panel`、`agent_dirs.rs`、文件操作与监听 | 保留引擎；项目根与 Agent 根作为允许根；侧栏视图改为封闭注册集 | 侧栏框架 | 新侧栏验收后删除旧视图宿主 |
+| 文件树/Commit/Agent 文件 | `side_panel`、`agent_dirs.rs`、文件操作与监听 | 保留引擎；项目根与 Agent 根作为允许根；侧栏视图改为封闭注册集 | 侧栏框架 | 旧状态模型退役后删除旧 `side_panel` 视图宿主 |
 | 主题库 | `theme_library` 的 document/store/package/preferences、自定义主题编辑器、`slterm_settings` 的 `custom_theme` 与主题覆盖键 | 删除；内置暗色主题目录并入 `slterm_settings`，Linear 默认，未知 id 回退 Linear | 主题设置域 | 新设置中心验收后删除；备份/导入导出不再含主题类别 |
 | 无障碍专用实现 | 屏幕阅读器/ARIA/播报/高对比度/大字体适配入口，`theme_editor`、`custom_theme`、`themes` 的对比度校验与自动回退及相关测试 | 删除；不做对比度校验、不提示、不静默改写设置；保留键盘、焦点、IME/CJK、减少动效 | 无 | 新设置中心验收后随主题库删除 |
 | hook 桥 | `slterm_hook` 独立小进程、hook 转发协议 | 保留；只随面板身份环境变量改名与事件字段适配 | `slterm_hook` | 长期保留；不被 app 依赖 |
-| AI Providers/助手 | `ai_providers.rs`、`ai_assistant.rs`、`assistant_answer/`、`provider_test.rs`、`secrets.rs`、`agent_host.rs`、`ai_sessions.rs`、`ai_agents.rs`、`ai_hook*` | 保留引擎与凭据纪律；标识从 `PaneId` 改为 `PanelId`；Provider 元数据与助手配置迁入应用设置域 | AI 服务 | 新应用页与模拟凭据测试通过后删除旧配置文件和旧设置入口 |
-| 终端补全 | `completion.rs`、`completion/`、`suggest.rs`、`history.rs`、`directory_history.rs` | 保留引擎；来源收敛本地；缓存按面板；数据文件迁入 `<local>/state/completion/*` | 终端增强 | 终端面板验收后接线，随后删除旧缓存路径 |
+| AI Providers/助手 | `ai_providers.rs`、`ai_assistant.rs`、`assistant_answer/`、`provider_test.rs`、`secrets.rs`、`agent_host.rs`、`ai_sessions.rs`、`ai_agents.rs`、`ai_hook*` | 保留引擎与凭据纪律；标识从 `PaneId` 改为 `PanelId`；Provider 元数据与助手配置迁入应用设置域；旧 `Slterm/AI/<id>` 凭据先写新 target、校验可读、再删除旧 target，任一步失败保留旧 target 并提示 | AI 服务 | 新应用页与模拟凭据测试通过后删除旧配置文件和旧设置入口 |
+| 终端补全 | `completion.rs`、`completion/`、`suggest.rs`、`history.rs`、`directory_history.rs` | 保留引擎；来源收敛本地；缓存按面板；数据文件迁入 `persistence.md` 定义的本地路径 | 终端增强 | 终端增强回迁验收后删除旧缓存路径 |
 | 数学覆盖层 | `terminal_math*`、`math/`、`gpui_terminal/math_overlay.rs` | 保留；只随面板 host 与设置开关适配 | 终端增强 | 长期保留 |
-| 托盘/任务栏/开机启动/通知 | `tray.rs`、`taskbar.rs`、`platform/startup.rs`、`notify.rs`、`platform/notifications/` | 保留平台实现与线程模型；目标标识改为项目/面板；入口迁入应用页 | 应用服务 | 新壳事件模型验收后删除旧 `PaneId`/旧 tab 路由 |
-| 更新链 | `update_check.rs`、`update_download/`、`update_proxy.rs`、`platform/update_installation.rs`、`platform/distribution.rs` | 保留检查/下载/校验/两阶段交接；状态路径与工作区快照 schema 改为目标态 | 更新服务 | 最后迁移；其他域稳定后接线并删除旧更新 UI |
-| 加密备份 | `encrypted_backup.rs`、`encrypted_backup/recovery.rs` | 保留 AES-GCM/Argon2id/恢复点/原子写；类别与归档名改为新状态文件；旧格式拒绝 | 备份服务 | 新持久化 schema 冻结后重写类别与 UI |
-| Runtime API | `runtime_api*`、`cli.rs`、`assets/runtime-api-v1.schema.json`、`runtime-control-api.md`、随包 skill | 整体重写为 v2 资源模型；不保留 v1 兼容层 | Runtime API v2 | 旧 v1 实现随旧壳退役删除；v2 协议核心在切片后建立，完整面收敛门后交付 |
+| 托盘/任务栏/开机启动/通知 | `tray.rs`、`taskbar.rs`、`platform/startup.rs`、`notify.rs`、`platform/notifications/` | 保留平台实现与线程模型；目标标识改为项目/面板；入口迁入应用页 | 应用服务 | 应用页范围外节与壳服务验收后删除旧 `PaneId`/旧 tab 路由 |
+| 更新链 | `update_check.rs`、`update_download/`、`update_proxy.rs`、`platform/update_installation.rs`、`platform/distribution.rs` | 保留检查/下载/校验/两阶段交接；状态路径与工作区快照 schema 改为目标态 | 更新服务 | 最后迁移；与加密备份完成后接线并删除旧更新 UI 与旧状态路径 |
+| 加密备份 | `encrypted_backup.rs`、`encrypted_backup/recovery.rs` | 保留 AES-GCM/Argon2id/恢复点/原子写；类别与归档名改为新状态文件；旧格式拒绝 | 备份服务 | 新持久化 schema 冻结后重写类别与 UI；验收后删除旧类别与旧 UI |
+| Runtime API | `runtime_api*`、`cli.rs`、`assets/runtime-api-v1.schema.json`、`runtime-control-api.md`、随包 skill | 整体重写为 v2 资源模型；不保留 v1 兼容层 | Runtime API v2 | 旧 v1 实现随旧状态模型退役停止；v2 协议核心在切片后建立，完整面收敛门后交付，旧资产随后删除 |
 | i18n | `i18n/` typed 键与中文/英文目录 | 保留构建期键合同；新增应用页/更新/备份键，删除旧能力键 | i18n | 长期保留 |
 | 日志/panic | `logging.rs`、`panic.rs` | 保留 logger 与 panic 钩；数据路径改为新诊断目录 | 诊断服务 | 长期保留 |
 | 后台任务 | `background_tasks.rs`、`plan_balance/` | 保留注册表、订阅、重入与调度；任务配置接入应用页 | 应用页/任务调度器 | 长期保留 |
-| 窗口 | `windowing`、`app_shell/windowing` | 重建单窗口 shell；窗口几何持久化改为目标态 | 单实例与窗口服务 | 新壳接管后删除旧窗口状态 |
+| 窗口 | `windowing`、`app_shell/windowing` | 重建单窗口 shell；窗口几何持久化改为目标态 | 单实例与窗口服务 | 旧状态模型退役后删除旧窗口状态 |
 
-除保留引擎外，旧壳/tab/pane/dock/session 的删除动作统一在“旧壳退役”里程碑完成；上表“隔离与删除时机”列描述替代实现的验收检查点，不是分散删除动作。
+旧状态模型与写路径在“旧状态模型退役”里程碑停止并被新壳替代；各域旧 UI 宿主在该域替代实现验收后删除，共享旧状态类型随最后一个引用它的域删除。上表“隔离与删除时机”列描述各域删除检查点。
 
-新建域与职责（依赖列只作职责提示，权威依赖见 `plan.md`）：
+新建域与职责（依赖关系只在 `plan.md` 定义）：
 
-| 新建域 | 职责 | 依赖 |
-|---|---|---|
-| 新 core crates | `slterm_workspace`（项目/布局/面板）、`slterm_sidebar`（侧栏/树/Commit 模型）、`slterm_agents`（AgentKind/会话元数据）、`slterm_hooks`（Hooks schema）、`slterm_runtime_protocol`（协议类型） | 无 app 依赖；`slterm_split` 保留并被工作区与侧栏复用，仅改叶类型与测试 |
-| 面板宿主注册点 | 面板类型封闭枚举、`Panel` 生命周期、焦点落点、关闭守卫接缝、扩展点 | 新 core 领域 crate |
-| 持久化协调器 | 设置/布局/侧栏/窗口/项目数据的 flush、串行写、generation、崩溃快照 | `slterm_settings` 路径与值层、`atomic_file` |
-| 设置中心与应用页注册表 | 页面描述、作用域、保存模式、无项目浮层 | 设置模型、持久化协调器 |
-| 应用服务 | 托盘、任务栏、开机启动、通知、诊断、更新入口 | 工作区壳、通知平台、更新引擎 |
-| Runtime API v2 | 资源快照、稳定 ID、传输/鉴权/发现、CLI/skill/audit/conformance | 见 `plan.md` |
-| 备份服务 | 新类别归档、敏感键闸、恢复点与撤回 | 持久化协调器、AI 服务 |
-| 更新服务 | 新状态路径、两阶段交接、v2 工作区快照 | 持久化协调器、应用页、发布链 |
+| 新建域 | 职责 |
+|---|---|
+| 新 core crates | `slterm_workspace`（项目/布局/面板）、`slterm_sidebar`（侧栏/树/Commit 模型）、`slterm_agents`（AgentKind/会话元数据）、`slterm_hooks`（Hooks schema）、`slterm_runtime_protocol`（协议类型）；`slterm_split` 保留并被工作区与侧栏复用，仅改叶类型与测试 |
+| 面板宿主注册点 | 面板类型封闭枚举、`Panel` 生命周期、焦点落点、关闭守卫接缝、扩展点 |
+| 持久化协调器 | 设置/布局/侧栏/窗口/项目数据的 flush、串行写、generation、崩溃快照 |
+| 设置中心与应用页注册表 | 页面描述、作用域、保存模式、无项目浮层 |
+| 应用服务 | 托盘、任务栏、开机启动、通知、诊断、更新入口 |
+| Runtime API v2 | 资源快照、稳定 ID、传输/鉴权/发现、CLI/skill/audit/conformance |
+| 备份服务 | 新类别归档、敏感键闸、恢复点与撤回 |
+| 更新服务 | 新状态路径、两阶段交接、v2 工作区快照 |
 
-### 旧壳退役前隔离
+### 新旧壳隔离与退役门禁
 
 - 旧 UI 模块保留在 `slterm_app/src/app_shell/`，不使用 `legacy-shell` feature；新壳位于 `src/app/`，两者互不引用，只有新壳进入 `run()`。
 - 新 core 领域 crate 不得依赖 `slterm_app`、`slterm_split` 的旧 `PaneId` 布局类型或旧 `Session`；依赖方向由 `architecture/dependencies.toml` 与 `scripts/check_architecture.py` 强制。
-- 退役前以临时 `check_legacy_symbols` 门禁扫描 `SltermWorkspace`、`WorkspaceTab`、`TerminalPane`、`SplitTree<PaneId>`、`TabEntry`、`Session`、`TabSession`、`LayoutSession`、`ImageTabView`、`MergeTabView`、`ThemeLibraryStore` 等旧符号；退役里程碑删除旧代码、脚本与 allowlist。
+- 退役前以临时 `check_legacy_symbols` 门禁扫描 `SltermWorkspace`、`WorkspaceTab`、`TerminalPane`、`SplitTree<PaneId>`、`TabEntry`、`Session`、`TabSession`、`LayoutSession`、`ImageTabView`、`MergeTabView`、`ThemeLibraryStore` 等旧符号；旧状态模型退役时删除已替代宿主与不再被引用的旧状态代码，脚本与 allowlist 在旧符号全部退出后删除。
 - 旧持久化写入在切换时关闭：新壳启动后不再创建或更新 `session.json`、旧 `settings.json`、旧 `providers.json`、旧 `runtime.port`；旧文件不读不删。
 - 旧 Runtime v1 投影不桥接新模型；新 RuntimeHub 只发布 v2 快照。旧 v1 服务端在新壳接管时停止启动，不保留双服务端。
 - 旧/新窗口可开发期并存，但发布安装覆盖旧二进制；应用内不存在并行模型选择开关。
 
 ### 逐域删除时机
 
-删除触发条件统一为：垂直切片通过、生产符号引用清零、旧测试映射已建立。按以下顺序推进：
+删除触发条件：该域替代实现已验收、生产符号引用清零、旧测试映射已建立。按以下顺序推进：
 
 1. 垂直切片前只做新域实现与保留引擎适配，不删除旧壳；旧壳与新壳互不引用。
-2. 旧壳退役里程碑一次性删除旧 `session`、旧 `SltermWorkspace`、旧 `TabEntry`/`TerminalPane`、旧布局树、旧 `settings_pane`、旧主题库/主题编辑器、旧 `side_panel`、旧 Runtime v1、旧测试与旧持久化读取；保留已验证引擎。
-3. 退役后在新地基上推进面板、侧栏、设置中心、Runtime v2 与范围外迁移。
-4. 备份与更新最后迁移；删除旧备份类别、旧更新状态路径与旧更新 UI 接线。
-5. 仓库不再存在旧模型符号；`check_legacy_symbols` 脚本与 allowlist 随退役删除。
+2. 旧状态模型退役：关闭旧 `session`/设置/运行时写路径，新壳成为唯一状态权威；删除已被替代的旧终端、侧栏、导航 UI 宿主与对应旧测试；其余旧 UI 宿主与共享旧类型隔离为不可达模块并登记所属域。
+3. 各域在替代实现验收后删除本域旧 UI 宿主：编辑器 tab 宿主、Markdown 双态宿主、Diff CodeTab 模式、GitShow 只读模式、设置 pane 与主题库、旧 pane 增强接线、旧 provider/assistant 入口、旧更新 UI、旧备份 UI。
+4. 最后一个引用旧共享类型的域退出后，删除旧 workspace/tab/pane/dock/session 类型、`check_legacy_symbols` 脚本与 allowlist。
+5. 备份与更新最后迁移；删除旧备份类别、旧更新状态路径与旧更新 UI 接线。
 
 ### 旧测试删除映射
 
@@ -115,7 +115,7 @@
 
 ### 旧数据文件忽略
 
-- 旧根目录为 `%APPDATA%\slterm`（或 `SLTERM_CONFIG_DIR` 指向的目录）。新应用设置固定在其下 `state/settings.json`，与旧根 `settings.json` 不碰撞；状态库与机器本地文件在本地根，与旧文件不重叠。
+- 旧根目录为 `%APPDATA%\slterm`（或 `SLTERM_CONFIG_DIR` 指向的目录）。新应用设置位置由 `design/persistence.md` 定义，与旧根 `settings.json` 不碰撞；状态库与机器本地文件在本地根，与旧文件不重叠。
 - 新代码启动、运行、关闭全程不读取、不重命名、不删除以下旧文件：`settings.json`、`settings.json.bak`、`session.json`、`session.json.bak`、`session.crashed.json`、`runtime.port`、`runtime.port.slterm-lock`、`providers.json`、`slterm_assistant.txt`、`slterm_assistant.txt.bak`、`slterm_assistant.corrupted.txt`、`history.jsonl`、`directory_history.json`、`update_state.json`、`updates/`、`backup-recovery/`、`themes/`、`ai_sessions.json`、`slterm-panic.log`、`slterm_debug.log` 及旧导入/导出文件。
 - 旧文件存在不构成损坏、不触发隔离、不触发警告；新安装与升级从新状态默认值开始。
 - 旧 `slterm-workspace.json` 导出文件不提供导入；设置导入只接受目标态应用设置 schema。
@@ -123,22 +123,18 @@
 
 ### 新数据目录与文件名
 
-新数据目录与文件名由 `design/persistence.md` 单点定义；范围外能力的数据位置由 `design/out-of-scope/` 各自定义。迁移只保证：
+新数据目录与文件名由 `design/persistence.md` 单点定义；数据根划分与目录归属见 `design/architecture.md`。迁移只保证：
 
-- 应用设置使用漫游根 `<data>/state/settings.json`；状态库 `<local>/state/state.db` 承载项目索引、项目布局、终端簿、侧栏/视图状态。
-- 恢复快照、隔离区、Runtime 端点、实例锁、窗口几何、补全数据、更新状态、日志、审计与崩溃现场在本地根（默认 `%LOCALAPPDATA%\slterm`，可由 `SLTERM_LOCAL_DIR` 覆盖）。
-- Provider 元数据与助手配置并入应用设置域；凭据只存 Windows 凭据管理器。
-- 旧目录不清理；新代码不读旧文件。
-
-- 所有路径在 `slterm_settings::paths` 单点定义；其他模块不得拼接根或文件名。
-- `SLTERM_CONFIG_DIR` 语义保持“漫游根覆盖”；应用设置恒为 `<data>/state/settings.json`，避免旧文件碰撞。`SLTERM_LOCAL_DIR` 覆盖本地根，供测试与便携场景隔离状态库、机器本地文件与日志。
-- `%TEMP%` 日志文件名改为 `slterm-app-<pid>.log`，并继续通过 `SLTERM_LOG` 发布。
+- 旧路径不读、不删、不重命名；新路径与旧路径不重叠，避免旧文件碰撞。
+- 切换时机：新壳接管启动恢复后只写新路径；旧持久化写路径关闭，不提供双写。
+- `SLTERM_CONFIG_DIR` 与 `SLTERM_LOCAL_DIR` 的覆盖语义由 `persistence.md` 定义；迁移测试用二者隔离新旧根。
+- 范围外能力的数据位置随其所有者篇定义；迁移文档不复制路径清单。
 
 ### 旧单实例命名空间隔离
 
-- 旧实例文件：`<基础目录>/runtime.port` 与 `runtime.port.slterm-lock`；新实例端点 `<local>/state/runtime.port`，实例锁统一为 `<local>/state/instance.lock` 句柄锁。新启动链不探测旧端口文件，不读取旧锁。
-- 端点记录格式带协议前缀；新解析器只接受 `slterm.runtime/2`，旧格式、缺失字段、非法端口一律视为不可达。
-- 显式 `SLTERM_RUNTIME_ENDPOINT` 仅接受 v2 格式；值非法时判定为“明确不可达”，不回落端口文件，避免连错实例。
+- 旧实例文件：`<基础目录>/runtime.port` 与 `runtime.port.slterm-lock`；新实例端点与实例锁位置由 `design/persistence.md` 定义。新启动链不探测旧端口文件，不读取旧锁。
+- 端点记录格式与解析规则由 `design/integrations/runtime-api-v2.md` 定义；新解析器只接受 v2 格式，旧格式、缺失字段、非法端口一律视为不可达。
+- 显式 `SLTERM_RUNTIME_ENDPOINT` 只接受 v2 格式；值非法时判定为“明确不可达”，不回落端口文件，避免连错实例。
 - 第二实例启动只向 v2 端点发送 `runtime.handover`；旧实例不会收到移交，旧实例的第二启动也不会触发新实例。
 - AUMID 保持产品身份，不作为单实例判定；发布安装覆盖旧二进制。开发期旧/新并存可能出现通知身份共用，不进入产品验收。
 
@@ -148,8 +144,8 @@
 |---|---|---|---|
 | Image 面板 | `ImageTabView`、`openable_in_app` 图片分支、图片页签恢复类型、相关测试 | 图片交系统默认程序打开或提示不支持；不新增预览类型 | 无 Image 面板类型、无图片打开路由、恢复丢弃未知类型 |
 | Merge 三栏 | `merge_tab.rs`、冲突打开 Merge 路由、采用版本命令与测试 | Git 冲突处理由终端承接；冲突对比由 Diff 只读快照承接 | 无 Merge 入口与快捷键；冲突来源只打开 Diff 快照 |
-| 用户自定义主题 | `theme_library` store/package/document/preferences、主题编辑器、导入导出、`themes/` | 仅内置暗色主题方案；Linear 默认；未知 id 回退 Linear | 无导入/导出/编辑器入口；主题列表只含内置方案并保持可读 |
-| 无障碍专用实现 | 屏幕阅读器/ARIA/播报/高对比度/大字体适配入口，`theme_editor`/`custom_theme`/`themes` 的对比度校验与自动回退及相关测试 | 不做对比度校验、不提示、不静默改写设置；保留键盘、焦点、IME/CJK、减少动效 | 无专用入口、快捷键或设置键；无对比度准入与自动回退 |
+| 用户自定义主题 | `theme_library` store/package/document/preferences、主题编辑器、导入导出、`themes/` | 仅内置暗色主题方案；默认与未知 id 回退由 `theme-and-i18n.md` 定义 | 无导入/导出/编辑器入口；主题列表只含内置方案并保持可读 |
+| 无障碍专用实现 | 屏幕阅读器/ARIA/播报/高对比度/大字体适配入口，`theme_editor`/`custom_theme`/`themes` 的对比度校验与自动回退及相关测试 | 边界见 featureSpec 的无障碍与主题决策；保留键盘、焦点、IME/CJK、减少动效 | 无专用入口、快捷键或设置键；无对比度准入与自动回退 |
 | Markdown 实时块编辑 | `file_editor/live_edit.rs`、`inline_edit.rs`、`live_commands.rs`、渲染态输入规则与订阅 | 源码/渲染两态；渲染态只读，编辑统一进源码态 | 渲染态无输入、无块编辑命令、无 live edit 状态 |
 | 提示符跳转 | `slterm_prompt_jump`、提示符行标记 deque、相关按键与测试 | 终端不提供按提示符跳转；保留 OSC 133 命令边界、标题、状态与退出码 | 无跳转 API、无按键绑定、无文档入口 |
 
@@ -161,8 +157,8 @@
 
 1. 确定新 core 领域 crate 与 `slterm_settings::paths` 双根访问器；建立临时旧符号门禁。
 2. 上线状态库、壳与工作区、终端面板、侧栏框架与导航核心，打通垂直切片；新壳接管启动恢复与单实例移交。
-3. 执行旧壳退役：一次性删除旧 UI/模型/测试/持久化读取、旧 Runtime v1、旧设置 UI、旧主题库与旧 `side_panel`；保留已验证引擎；删除门禁脚本与 allowlist。
-4. 在新地基上推进编辑器、Markdown、Diff、GitShow、Explorer、Commit、设置中心与 Agent 域；控制面协议核心同步交付。
+3. 执行旧状态模型退役：关闭旧状态写路径，新壳成为唯一状态权威；删除已被替代的旧终端、侧栏、导航 UI 宿主与旧测试，旧 Runtime v1 停止启动；其余旧 UI 宿主隔离并登记待删域；保留已验证引擎。
+4. 在新地基上推进编辑器、Markdown、Diff、GitShow、Explorer、Commit、设置中心与 Agent 域；每域验收后删除该域旧 UI 宿主；控制面协议核心同步交付。
 5. 完成 Runtime API v2 完整面、应用页范围外节、AI Providers、终端增强。
 6. 重写备份类别与 UI；重接更新链；完成发布链资产与预算。
 7. 全量收敛门与发布核验。
@@ -171,12 +167,12 @@
 
 - **旧数据不动**：预置全部旧文件后启动、操作、关闭新应用；旧文件逐字节不变，新状态库与设置按默认值创建，无损坏提示。
 - **命名空间隔离**：旧 `runtime.port` 指向存活旧进程或死进程时，新应用仍按本地根新锁启动；旧格式显式端点被判定不可达。
-- **符号清零**：退役前 `check_legacy_symbols` 引用非零即失败；退役后旧符号、脚本与 allowlist 均不存在。
+- **符号清零**：退役前 `check_legacy_symbols` 引用非零即失败；全部域替换完成后旧符号、脚本与 allowlist 均不存在。
 - **能力缺失**：Image、Merge、用户主题、Markdown 实时块编辑、提示符跳转、无障碍专用能力、对比度准入不存在入口、快捷键、设置键或恢复分支。
 - **测试映射**：旧测试删除前对应新测试通过；无替换项在 `acceptance.md` 有明确不做登记。
 - **启动兼容**：旧文件存在不阻断启动；新状态文件损坏时只按新文件规则隔离并提示。
 - **数据路径单点**：源码扫描禁止在 `slterm_settings::paths` 之外拼接状态根或旧文件名。
-- **文档切换**：实现落地时同步更新 `.claude/docs/architecture/overview.md`、各路径 `CLAUDE.md` 与 `CONTEXT.md`；本轮只更新 `CONTEXT.md` 与 `docs/devPlan`。
+- **文档切换**：实现落地时同步更新 `.claude/docs/architecture/overview.md`、各路径 `CLAUDE.md` 与 `CONTEXT.md`；文档阶段先更新 `CONTEXT.md` 与 `docs/devPlan`。
 
 ### 不可自动化面
 

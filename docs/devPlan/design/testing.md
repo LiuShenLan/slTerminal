@@ -15,6 +15,7 @@
 | 真实进程/conformance | 独立集成 target | PTY 往返、Runtime v2、单实例移交、发布交接 |
 | 人工验收 | 实机清单 + 豁免登记 | 真实输入法、GPU/字体观感、拖拽手感、系统通知/托盘/回收站、真实 CLI/凭据 |
 
+- **虚拟窗口层不得漏跑**：标准提交门禁必须带 `gpui-test-support` 运行 `cargo test -p slterm --test lib_tests --features gpui-test-support -- --test-threads=1`。原因：该 feature 非默认，漏传时双门控用例整体不编译、不运行。
 - **全量串行**：`cargo test --workspace -- --test-threads=1`；性能与 PTY 容量断言对 CPU 负载敏感。
 - **隔离优先**：`tempfile::tempdir()` 与 `SLTERM_CONFIG_DIR`/`SLTERM_LOCAL_DIR` 隔离文件系统；进程级资源用 `SPAWN_LOCK`/`ENV_LOCK`；UI 测试用虚拟窗口与隔离状态根。生产 `%APPDATA%`/`%LOCALAPPDATA%` 永不被测试触碰。
 - **覆盖门禁**：改动代码的可自动化部分必须有全量测试；不可自动化面在 `.claude/docs/testing/exemptions.md` 登记根因与兜底层级，禁止未登记豁免。
@@ -49,10 +50,10 @@ pub struct WorkspaceHarness {
 | gpui-runtime | Entity 拓扑；订阅释放；异步结果 generation；隐藏项目不布局/不绘制；面板 `catch_unwind` 错误边界；关闭状态机防重入 |
 | ux-framework | 命令层序；保留键；同上下文冲突；焦点意图令牌；覆盖层入栈/出栈；`Esc` 顺序；IME 门控；项目切换焦点恢复 |
 | security | 路径决策表（绝对/相对/设备/UNC/符号链接/联接）；URL/OSC 白名单；Markdown 清洗；进程启动参数；凭据不出域；诊断脱敏 |
-| services/filesystem-git | 仓库根解析；status 解析；HEAD 读取；监听去抖；外部修改复核；回收站/永久删除回退；写门串行 |
+| services/filesystem-git | 仓库根解析；status 解析；HEAD 读取；Git 全局 flag 顺序；监听去抖；外部修改复核；粘贴预检与跨根拒绝；回收站/永久删除回退；写门串行 |
 | integrations/agent-cli | AgentKind 能力表；hook 事件归一化；会话扫描合并；最深前缀归属；删除隔离区/撤销/永久化；余量来源解析 |
 | integrations/hooks | 目录事件/handler 校验；未知字段保留；托管条目只读；备份失败中止；外部修改冲突；注入/卸载提交点 |
-| integrations/runtime-api-v2 | 信封/错误码；资源 ID `project:/group:/panel:`；快照重建；命令幂等；关闭/移除守卫；并发与过期结果 |
+| integrations/runtime-api-v2 | 信封/错误码；资源 ID `project:/group:/panel:`；快照重建；`MethodParams` 逐方法 schema；`params_hash` 规范化；跨连接幂等隔离；关闭/移除守卫；并发与过期结果 |
 | workspace/shell | 项目创建/切换/移除/重定位；布局拆分/合并/拖拽；页签溢出；脏状态与批量保存；关闭链；无项目应用浮层；单实例载荷 |
 | workspace/navigation | 项目 CRUD；历史归属；搜索；刷新；删除撤销；套餐余量；状态作用域 |
 | sidebar | 双槽状态机；按钮显隐/换区/排序；快捷键状态机；宽度/比例；视图状态清洗；树多选/剪贴板/文件操作；Commit 四态；Agent 节点探测/过滤 |
@@ -74,7 +75,7 @@ pub struct WorkspaceHarness {
 | `workspace/navigation.md` | `design/workspace/navigation.md` | 侧栏框架 + 导航核心；导航历史与余量 | 项目 CRUD/排序/重命名/移除、历史会话、套餐余量 | 领域 + 虚拟窗口 + 假 CLI |
 | `panels/terminal.md` | `design/panels/terminal.md` | 终端面板 | PTY 生命周期、编号/cwd、OSC 8/52、关闭守卫 | 终端 core + PTY 集成 + 虚拟窗口 |
 | `panels/editor.md` | `design/panels/editor.md` | 编辑器面板 | 打开路由、保存冲突、AgentRoot 可写、gutter、崩溃快照 | 引擎单测 + 文件集成 + 虚拟窗口 |
-| `panels/diff.md` | `design/panels/diff.md` | Diff 面板 | 行对、冲突快照瞬态、保存并发、`mode/source` 去重 | 引擎单测 + 虚拟窗口 + 文件集成 |
+| `panels/diff.md` | `design/panels/diff.md` | Diff 面板 | 行对、冲突快照瞬态、保存并发、项目 + 规范化工作区路径去重（来源不参与） | 引擎单测 + 虚拟窗口 + 文件集成 |
 | `panels/gitshow.md` | `design/panels/gitshow.md` | GitShow 面板 | HEAD 只读、刷新/过期、大文件/二进制 | 引擎单测 + 集成 |
 | `panels/markdown.md` | `design/panels/markdown.md` | Markdown 面板 | 两态、安全 HTML、Mermaid 源码、草稿恢复 | 引擎单测 + 虚拟窗口 |
 | `panels/settings.md` | `design/panels/settings.md` + `design/settings/app-page.md` | 设置中心壳与基础页；设置中心 Agent/Hooks/后台任务页 | 页面注册、保存模式、固定键参考、无项目浮层 | 纯函数 + 虚拟窗口 + 设置写通道 |
@@ -85,7 +86,7 @@ pub struct WorkspaceHarness {
 | `settings-and-persistence.md` | `design/persistence.md` | 状态库与设置存储；壳与工作区 | DTO 往返、去抖、事务原子性、崩溃恢复、关闭冲刷 | 状态库集成 + 故障注入 |
 | `cross-cutting.md` | `design/cross-cutting.md` 与各所有者 | 应用基础服务；跨域收敛与规格验收 | 错误/通知/焦点/性能/后台任务/安全边界 | 跨域矩阵 + 虚拟窗口 |
 | `acceptance.md` | `design/testing.md` | 跨域收敛与规格验收 | acceptance 全通过、范围外负向、门禁全绿 | 门禁 + 人工核验 |
-| `assets/README.md` | `design/build-and-release.md` | 构建与打包基线 | 资产名/许可/第三方声明随包；清单三处一致 | 包合同钉测试 + 资产核验 |
+| `assets/README.md` | `design/build-and-release.md` | 构建与打包基线 | 资产名/许可/第三方声明随包；CLI logo、包清单与预览三处一致 | 包合同钉测试 + 资产核验 |
 
 ### 范围外与删除能力
 
@@ -115,7 +116,7 @@ pub struct WorkspaceHarness {
 
 ### 旧测试处置
 
-- 旧 `workspace`/`tab`/`pane`/`dock`/`session` 相关测试在“旧壳退役”里程碑随旧代码一次性删除；删除前建立「旧测试 → 规格条目/新测试」映射，避免行为知识丢失。
+- 旧 `workspace`/`tab`/`pane`/`dock`/`session` 相关测试按域随旧 UI 宿主删除：旧状态模型退役时删除写路径测试，各域替代实现验收后删除该域旧测试；删除前建立「旧测试 → 规格条目/新测试」映射，避免行为知识丢失。
 - 保留引擎的测试随引擎迁移：`slterm_terminal`、`slterm_settings`、`slterm_completions`、`slterm_split` 的既有测试保留并适配新接口。
 - 旧 UI 测试（标签页、分屏、侧栏固定槽位、设置单例）不迁移；对应行为由新的项目/面板组/侧栏/每项目设置测试覆盖。
 - 旧 Runtime v1 conformance 删除；新建 v2 conformance，覆盖 `project:/group:/panel:` 资源、移交载荷与单实例。
@@ -128,16 +129,24 @@ pub struct WorkspaceHarness {
 
 ### 门禁
 
+**提交门禁**
+
 ```text
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets
 cargo clippy -p slterm --all-targets --features gpui-test-support
 cargo test --workspace -- --test-threads=1
+cargo test -p slterm --test lib_tests --features gpui-test-support -- --test-threads=1
 python scripts/check_architecture.py
 python scripts/check_doc_policy.py full
 python scripts/check_brand_regress.py staged
 python -m unittest discover -s scripts/tests -p "test_*.py"
 ```
 
+- 虚拟窗口测试带 `gpui-test-support` 进入提交门禁；CI 与本地执行同一清单。
 - 新 crate 必须登记 `architecture/dependencies.toml` 与 `architecture/file-budgets.txt`，并带显式 `lib_tests` target。
 - 提交前全部门禁全绿；定向测试串行执行。
+
+**发布门禁**
+
+- 发布门禁 = 提交门禁全集 + 打包钉测试 + `verify-release`；完整清单归 [build-and-release.md](build-and-release.md) §架构门禁与预算重登记，本文件不维护第二份清单。

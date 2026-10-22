@@ -35,8 +35,13 @@ The Cursor and GitHub Copilot settings icons are adapted from LobeHub's
 @lobehub/icons-static-svg 1.95.0 (github.com/lobehub/lobe-icons),
 distributed under the MIT License, whose text is reproduced below.
 Copyright (c) 2023 LobeHub. Unused SVG metadata was removed; path geometry
-is unchanged. Product names and trademarks belong to their respective
-owners and identify the tools without implying endorsement.
+is unchanged.
+
+The remaining CLI brand logos under docs/featureSpec/assets/cli-svg are
+included with permission confirmed by the project owner for this project.
+File-internal identifiers indicate the Devicon and Lobe Icons ecosystems.
+Product names and trademarks belong to their respective owners and
+identify the tools without implying endorsement.
 
 The bundled conpty.dll and OpenConsole.exe come from the Windows
 Terminal project (github.com/microsoft/terminal), distributed under the

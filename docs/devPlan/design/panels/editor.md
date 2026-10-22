@@ -30,9 +30,9 @@ pub struct DocumentKey { pub project: ProjectId, pub canonical_path: PathBuf }
 | 其余、无扩展名、点开头隐藏文件 | 编辑器 |
 
 - 目录不是打开目标；文件浏览器自行展开/折叠。
-- 去重键为“项目 + 规范化真实路径”：绝对化、统一分隔符、Windows 大小写不敏感、解析符号链接与目录联接。命中去重键时激活项目、面板组与面板并聚焦，不新建面板或缓冲。
+- 去重键与路径规范化归 [domain-model.md](../domain-model.md) 的去重键与路径纯函数；命中编辑器去重键时激活项目、面板组与面板并聚焦，不新建面板或缓冲。
 - 每项目每路径只有一个编辑器视图与一个文档缓冲；不同项目各自独立。
-- 允许打开范围：项目根、项目根所在 Git 仓库实际根、已登记 Agent 全局目录。项目根与已登记 Agent 全局目录（显式可写作用域 `AgentRoot`）可编辑保存；项目根外、仓库根内只读；仓库根外仅允许经 Markdown 显式链接根外只读打开。系统另存为对话框是项目根与 `AgentRoot` 之外的唯一写入例外。
+- 允许打开范围：项目根、项目根所在 Git 仓库实际根、已登记 Agent 全局目录。项目根与已登记 Agent 全局目录可编辑保存；项目根外、仓库根内且不在已登记 Agent 全局目录内只读；仓库根外仅允许经 Markdown 显式链接根外只读打开。系统另存为对话框是项目根与已登记 Agent 全局目录之外的唯一写入例外。
 - 无活跃项目：不创建面板，提示“请先创建项目”。
 - 打开失败（不存在、无权限、路径失效）仍创建错误态面板并保留路径，提供“重试”“用系统默认程序打开”；布局恢复同样不丢弃面板。
 - 布局恢复只恢复路径、`PersistedPath.read_only`（按当前允许根重算）、自动换行、语言手动覆盖，不恢复文本、脏状态、光标、滚动或搜索；恢复不抢焦点。
@@ -44,29 +44,35 @@ pub struct DocumentKey { pub project: ProjectId, pub canonical_path: PathBuf }
 
 ```rust
 pub enum EditorRunMode {
-    Editable,             // 项目根内
-    AgentRoot,            // 已登记 Agent 全局目录内；可编辑保存
+    Editable,             // 项目根、已登记 Agent 全局目录或运行期另存为授权
     ReadOnlyLarge,        // > 50,000,000 字节
     OutsideRoot,          // 根外只读
     Detached,             // 文件已移出允许根
     Error(EditorError),
 }
+
+pub enum WriteScope {
+    ProjectRoot,
+    AgentRoot,            // 已登记 Agent 全局目录
+    SaveAsAuthorized,     // 当前运行期的另存为授权
+}
 ```
 
-持久参数以 `domain-model.md` 的 `EditorParams` 为准；`PersistedPath` 的类型与只读语义不在此复制。手动只读是叠加在可编辑模式上的用户锁，不产生新模式，且仍为运行期状态、不写入布局。`AgentRoot` 的可写性按当前 Agent 根登记表在运行时判定，不新增持久化字段。
+持久参数以 `domain-model.md` 的 `EditorParams` 为准；`PersistedPath` 的类型与只读语义不在此复制。手动只读是叠加在可编辑模式上的用户锁，不产生新模式，且仍为运行期状态、不写入布局。已登记 Agent 全局目录折叠进 `Editable`，以 `WriteScope::AgentRoot` 区分可写作用域；其可写性按当前 Agent 根登记表在运行时判定，不新增持久化字段。手动只读的可用条件只看 `EditorRunMode::Editable` 且缓冲干净，不因 `WriteScope` 不同而分叉。
 
 ### 文档缓冲与编码/行尾
 
 ```rust
 pub struct EditorDocument {
-    pub key: DocumentKey,
+    pub key: DocumentKey,              // 打开路由去重身份
+    pub path: PathBuf,                 // 当前保存目标
     pub buffer: TextBuffer,            // rope + 行索引
-    pub encoding: TextEncoding,
-    pub bom: bool,
+    pub encoding: TextEncoding,        // BOM 由枚举变体表达
     pub line_ending: LineEnding,
     pub final_newline: bool,
     pub baseline: Option<DiskBaseline>,
     pub mode: EditorRunMode,
+    pub write_scope: WriteScope,
     pub manual_read_only: bool,
     pub dirty: bool,
     pub history: EditHistory,
@@ -86,6 +92,8 @@ pub enum LineEnding { Crlf, Lf }
 pub struct DiskBaseline { pub size: u64, pub modified: SystemTime, pub file_id: FileId }
 ```
 
+BOM 只由 `TextEncoding` 变体表达，不设独立 `bom` 字段；载入、保存与恢复快照以该枚举为唯一真值，禁止出现编码与 BOM 互相矛盾的组合。
+
 载入顺序：
 
 1. 读取元数据；元数据失败直接错误态，不做大小门控。
@@ -103,7 +111,7 @@ pub struct DiskBaseline { pub size: u64, pub modified: SystemTime, pub file_id: 
 - 撤销历史按文档维护，面板存活期间保留；关闭/重启不保留。
 - IME 组合期间不打断；组合结束按一次修改计入撤销与脏状态；CJK 按实际显示宽度排版。
 - 文件大于 10,000,000 字节关闭标识符补全；语法高亮、搜索与 Git 标记保留。
-- 超过 50,000,000 字节的只读浏览使用分页文本源，只渲染可见窗口，不整份载入；超过 200,000,000 字节关闭语法高亮并在信息条说明。
+- 只读浏览与根外只读在超过 50,000,000 字节时使用分页文本源，只渲染可见窗口，不整份载入；超过 200,000,000 字节关闭语法高亮并在信息条说明。根外只读信息条同时标注 `项目根外` 与文件大小。
 
 保存链：
 
@@ -118,10 +126,10 @@ pub enum SaveOutcome {
 ```
 
 - `Ctrl+S` 保存聚焦编辑器；无聚焦编辑器不派发。
-- 顺序：保存前校验磁盘版本（大小、修改时间、文件标识）→ 按选定编码/BOM/行尾/末尾换行编码 → 原子替换前经 `PathGuard` 复核真实路径与重解析点 → 原子替换 → 保存后再校验一次版本 → 更新基线 → 清脏 → 删除恢复备份 → 重算 Git 标记 → 合并 300ms 通知侧栏与 Commit。
-- 保存前检查相对基线的变化，保存后检查磁盘版本与本次写入预期一致；任一次不一致即进入保存冲突，不以写入后的磁盘状态静默建立新基线。与 Diff 保存链一致。
+- 顺序：保存前校验磁盘版本（大小、修改时间、文件标识）→ 按选定编码/BOM/行尾/末尾换行编码 → 原子替换前经 `PathGuard` 复核真实路径与重解析点 → 原子替换 → 更新基线为本次写入版本 → 清脏 → 删除恢复备份 → 重算 Git 标记 → 合并 300ms 通知侧栏与 Commit。
+- 保存冲突只由写入前版本校验触发；版本不一致时不写盘。原子替换成功后不再因磁盘变化进入保存冲突；替换后重新观察磁盘，若磁盘已再变化，按外部修改处理，把观察到的最新磁盘状态作为新基线，不重复冲突。与 Diff 保存链一致。
 - 不做非原子降级；原子替换失败保留原文件与脏状态。
-- 保存冲突对话框：“覆盖磁盘”“另存为”“取消”，默认焦点“取消”。干净文档不进入冲突，按外部修改自动重载。
+- 保存冲突对话框：“覆盖磁盘”“另存为”“取消”，默认焦点“取消”。干净文档不进入冲突，按外部修改自动重载。选择“覆盖磁盘”后写入前再次校验磁盘版本；若版本再次变化则重新进入保存冲突，不覆盖；一致则以当前缓冲原子替换并清除脏状态。
 - 另存为使用系统文件对话框，筛选器“所有文件”；成功后更新文档身份、路径、保存目标、页签标题与布局路径；授权只绑定当前文档与当前运行期，不写入布局，重启后根外路径按根外只读重新判定。目标已打开时显示“目标文件已打开”，提供“取消”“替换”；替换前对目标脏缓冲要求保存/丢弃确认。
 - 保存时文件已不存在：显示“文件已不存在”，默认“另存为”，另有“保存到原路径（重新创建）”“取消”。
 - 只读原因分别提示：只读浏览、根外只读、手动只读；文件已移出允许根的脱离缓冲 `Ctrl+S` 打开另存为。
@@ -148,35 +156,8 @@ pub trait SyntaxProvider {
 }
 ```
 
-- 语言映射单点，普通编辑器、Diff、GitShow 共用：
-
-| 扩展名 | 语言 |
-|---|---|
-| `.js` `.jsx` `.mjs` `.cjs` | JavaScript |
-| `.ts` `.tsx` | TypeScript |
-| `.py` `.pyw` | Python |
-| `.rs` | Rust |
-| `.json` `.jsonc` | JSON |
-| `.html` `.htm` | HTML |
-| `.css` `.scss` `.less` | CSS |
-| `.md` `.markdown` | Markdown |
-| `.xml` `.svg` | XML |
-| `.sh` `.bash` `.zsh` | Shell |
-| `.ps1` `.psm1` | PowerShell |
-| `.go` | Go |
-| `.java` | Java |
-| `.c` `.h` `.cpp` `.hpp` `.cc` | C/C++ |
-| `.cs` | C# |
-| `.sql` | SQL |
-| `.yml` `.yaml` | YAML |
-| `.toml` | TOML |
-| `.ini` `.cfg` | INI |
-| `.diff` `.patch` | Diff |
-| `Dockerfile` | Dockerfile |
-| `Makefile` | Makefile |
-| 其他/无扩展名 | 纯文本 |
-
-- 上表是 `LanguageRegistry` 的唯一语言映射；编辑器、Diff、GitShow 与 Markdown 代码块共用，Markdown 代码块语言别名归一后查同一表，未知语言纯文本。
+- 扩展名与固定文件名到语言的映射表归[规格编辑器篇](../../../featureSpec/panels/editor.md) §编辑、语言高亮与脏状态；本设计不复制第二张表。
+- 实现为 `LanguageRegistry`：注册映射表条目、语言别名归一（`js`/`node`/`jsx` → JavaScript 等）与未知语言纯文本回退；为每种语言注册 Tree-sitter 语法与查询。编辑器、Diff、GitShow 与 Markdown 代码块共用同一注册表，Markdown 代码块语言别名归一后查同一注册表。
 - 实现选型：Tree-sitter 增量解析 + 每语言查询；高亮在后台或分帧执行，只计算可见区域与 overscan。无法解析时回退纯文本，不阻塞输入。
 - 路径变化导致语言变化时热切换规则，不重建缓冲、不丢文本/脏状态/光标/撤销历史。
 - 手动语言覆盖是面板参数，随布局持久化；只影响高亮，不改内容、扩展名或保存行为；关闭重开恢复“自动（按扩展名）”。
@@ -218,30 +199,33 @@ pub enum AutoSaveState {
     Idle,
     Scheduled { due: Instant },
     Saving,
-    Suspended { reason: SuspendReason }, // ExternalConflict | SaveDialog | ReadOnly | ManualReadOnly | Error
+    Suspended { reason: SuspendReason }, // ExternalConflict | SaveDialog | ReadOnly | ManualReadOnly | Detached | Error
     Failed { reason: String },
 }
 ```
 
 - 外观页开关，默认关闭，全局生效。
 - 开启后停止输入 1 秒且仍脏则保存；焦点离开编辑器或窗口失焦立即保存；关闭面板前按关闭守卫的自动保存例外先保存一次。
-- 外部冲突横幅、保存冲突对话框、各种只读与错误态暂停；下一次文本修改后恢复计时。
+- 外部冲突横幅、保存冲突对话框、各种只读、文件已移出允许根的脱离状态与错误态暂停；下一次文本修改后恢复计时。脱离状态计时器到期不写盘、不打开另存为，关闭时进入关闭守卫。
 - 失败沿用“保存失败：〈原因〉”，保留脏状态；同一原因连续失败合并显示，不按周期重复弹错。
 - 自动保存只作用于编辑器，不作用于 Markdown 源码态与 Diff。
 
 崩溃恢复：
 
 ```rust
+pub struct RecoveryKey { pub project: ProjectId, pub panel: PanelId }
 pub struct RecoveryStore;
 impl RecoveryStore {
-    fn snapshot(&self, key: &DocumentKey, doc: &EditorDocument) -> Result<(), RecoveryError>;
-    fn delete(&self, key: &DocumentKey) -> Result<(), RecoveryError>;
+    fn snapshot(&self, key: RecoveryKey, doc: &EditorDocument) -> Result<(), RecoveryError>;
+    fn delete(&self, key: RecoveryKey) -> Result<(), RecoveryError>;
     fn scan(&self) -> Vec<RecoveryEntry>;
 }
 ```
 
+- 快照键为 `(ProjectId, PanelId)`；保存目标路径取自 `EditorDocument.path` 并随快照载荷保存，重命名、另存为与跨类型转换不改变键。
+- 与 Markdown 共用同一 `RecoveryStore`；配额、淘汰与保留期归 `persistence.md`，此处不复制；项目移除时删除该项目全部快照。
 - 只备份脏的可编辑文档（含脱离缓冲），不含干净、只读浏览、根外只读、手动只读与错误态。
-- 快照内容：文本、编码、BOM、行尾、保存目标、快照时间；不含凭据、终端输出、剪贴板。
+- 快照内容：文本、编码（含 BOM）、行尾、保存目标、快照时间；不含凭据、终端输出、剪贴板。
 - 脏缓冲自最后修改起约 2 秒写一次；持续编辑最长 30 秒刷新一次；失败提示一次并继续重试。
 - 保存成功、撤销回基线、关闭文档、正常退出后删除备份。
 - 启动发现备份时聚合列出项目、路径与时间，提供“恢复”“丢弃”“全部恢复”“全部丢弃”；恢复进入脏态且不写盘，磁盘不同则显示冲突横幅；未处理前不得用备份覆盖布局内容。
@@ -280,7 +264,8 @@ pub enum ExternalState {
 | 外部删除 | 横幅“文件已从磁盘删除”，提供另存为、保存到原路径、关闭；只读模式只提供重试与关闭 |
 | 外部重命名（有映射） | 跟随新路径；允许根外进入脱离态；新路径已打开按“目标文件已打开” |
 | 重载读取失败 | 横幅“无法读取外部修改”，提供重试、保留当前内容 |
-| 保存与外部写入并发 | 保存前后各检查一次版本；变化则中止并进入保存冲突 |
+| 保存与外部写入并发 | 保存前校验版本，变化则中止并进入保存冲突；一致则原子替换，替换后磁盘再变化按外部修改处理并以最新磁盘状态为基线，不重复冲突 |
+| 只读浏览、根外只读、手动只读 + 外部修改 | 事件到达即重读；保持顶部行；失败保留最后一次成功内容并轻提示，不弹冲突横幅 |
 
 - 外部修改使文件缩小回可编辑范围时，只读浏览自动切回可编辑；根外只读保持。
 - 冲突状态属于文档；横幅在唯一视图顶部显示，页签显示冲突提示点。
@@ -345,16 +330,16 @@ HTML 悬浮按钮：
 
 ```text
 领域 core crate
+  panels/recovery.rs   # 编辑器与 Markdown 共用的崩溃快照存储；键 (ProjectId, PanelId)
   panels/editor/
     params.rs
-    document.rs        # 模式、编码、行尾、基线、脏状态
+    document.rs        # 模式、可写作用域、编码、行尾、基线、脏状态
     buffer.rs          # rope + 行索引 + 编辑事务
     encoding.rs        # BOM/UTF-16/本地编码探测与往返
     search.rs          # 查询、匹配、替换事务
     fold.rs
     gutter.rs          # 行标形状与差异块到行标的投影
     external.rs        # 外部修改状态机
-    recovery.rs
     open.rs            # DocumentKey、打开范围判定
 
 slterm_app/src/panels/editor/
@@ -373,12 +358,12 @@ slterm_app/src/panels/editor/
 
 ### 测试接缝
 
-- 编码探测与往返（BOM、UTF-16、GB18030）、行尾切换与混合行尾统一、末尾换行保持。
-- 大小分级边界（10,000,000/50,000,001/200,000,000）、二进制 NUL、元数据失败。
-- 保存链：版本冲突、文件不存在、只读、原子替换失败、另存为目标已打开。
-- 外部修改状态机：干净重载、脏横幅、删除、重命名、脱离、监听溢出、保存并发。
-- 自动保存计时与暂停条件；恢复备份写入/清理/启动聚合提示。
-- 搜索增量、替换全部单撤销、非法正则；折叠区域重算；语言热切换。
+- 编码探测与往返（BOM、UTF-16、GB18030）、BOM 仅由 `TextEncoding` 表达的单真值往返、行尾切换与混合行尾统一、末尾换行保持。
+- 大小分级边界（10,000,000/50,000,001/200,000,000）、二进制 NUL、元数据失败；根外只读大文件分页与流式查找。
+- 保存链：写入前版本冲突、文件不存在、只读、原子替换失败、另存为目标已打开；原子替换后磁盘再变化不重复冲突并按外部修改建立基线。
+- 外部修改状态机：干净重载、脏横幅、删除、重命名、脱离、监听溢出、保存并发；只读模式静默刷新与失败保留。
+- 自动保存计时与暂停条件，含脱离状态不写盘、不弹另存为；恢复备份按 `(ProjectId, PanelId)` 写入/清理、路径随载荷、重命名与跨类型转换后删除/恢复、与 Markdown 共享配额、启动聚合提示。
+- 搜索增量、替换全部单撤销、非法正则；折叠区域重算；`LanguageRegistry` 代表性扩展名与固定文件名映射、别名归一、未知回退纯文本与语言热切换。
 - Git 行标纯映射与去抖触发；gutter 点击请求携带行号。
 - 虚拟窗口：拖文件高亮与不替换脏面板、HTML 按钮、状态条交互、搜索焦点、关闭守卫。
-- 人工豁免：IME、字体渲染与视觉对齐、系统默认程序打开。
+- 人工核验：IME、字体渲染与视觉对齐、系统默认程序打开；豁免原因、兜底层级与核验方式登记见 `.claude/docs/testing/exemptions.md`。

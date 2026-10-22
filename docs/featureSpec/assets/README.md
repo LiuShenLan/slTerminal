@@ -4,8 +4,8 @@
 
 ## 目录说明
 
-- `icons/`：21 个界面 SVG 图标；其中 16 个来自 lucide-static，2 个为项目自绘文件图标，3 个为项目自绘窗口控制图标。
-- `cli-svg/`：22 个 CLI 品牌 SVG logo，原样复制。
+- `icons/`：界面 SVG 图标；文件集与来源以本目录文件和下方清单为真值。
+- `cli-svg/`：CLI 品牌 SVG logo，原样复制；文件集与 `AgentKind` 的对应由构建期扫描生成，本文不手工镜像 slug。
 - `brand/`：`app-icon.png`，slTerminal 应用图标，256×256。
 - `preview/`：仅供文档深色预览使用的副本；原文件保持原样。
 - `LICENSE-lucide.txt`：`lucide-static@1.31.0` 上游许可原文（ISC License，含 Feather 派生图标的 MIT 段落）。
@@ -14,7 +14,7 @@
 
 ### 界面图标
 
-- 16 个 lucide 图标来自 `lucide-static@1.31.0`，许可为 ISC；其中从 Feather 派生的图标同时适用 MIT。完整文本见 `LICENSE-lucide.txt`。
+- lucide 图标来自 `lucide-static@1.31.0`，许可为 ISC；其中从 Feather 派生的图标同时适用 MIT。完整文本见 `LICENSE-lucide.txt`。
 - 图标内容与上游一致，仅按文档语义重命名文件；均为 24×24 viewBox、`currentColor` 描边。
 - `file-generic.svg` 与 `file-generic-typed.svg` 为项目自绘，许可随项目。
 - `window-minimize.svg`、`window-maximize.svg`、`window-restore.svg` 为项目自绘窗口控制图标，风格对齐 lucide（24×24 viewBox、2px 描边、`currentColor`），许可随项目。
@@ -22,10 +22,11 @@
 
 ### CLI logo
 
-- 22 个 SVG 由项目作者提供，作为开源 CLI 品牌标识参考收录；文件本身不含许可证头。
-- 文件内嵌 id 显示部分素材源自 Devicon 与 Lobe Icons 生态；未取得逐文件授权确证，因此不在此虚构具体许可证。
+- CLI logo SVG 由项目作者逐文件确认可用于本项目的文档与随包分发；文件本身不含许可证头。
+- Cursor 与 GitHub Copilot 图标在仓库根 [THIRD-PARTY-NOTICES](../../../THIRD-PARTY-NOTICES) 中保留 LobeHub `@lobehub/icons-static-svg` MIT 声明；其余文件按作者提供记录。
 - 各 CLI 名称与图形商标归各自权利人所有；此处仅用于识别与说明，不构成商标授权。
 - `deepseek.svg` 对应套餐余量来源 DeepSeek，不是 `AgentKind`。
+- 随包路径、资产清单与第三方声明的一致性由 [build-and-release.md](../../devPlan/design/build-and-release.md) 的包合同约束；本文只维护资产来源与显示名。
 
 ### 应用图标
 
@@ -33,9 +34,9 @@
 
 ## 预览规则
 
-`preview/` 只服务文档内嵌显示，不替代原文件。生成规则一次性执行，不保留脚本：
+`preview/` 只服务文档内嵌显示，不替代原文件。预览由构建期脚本从原文件生成并校验，不手工维护；脚本同时断言预览集合等于原集合中需要预览的子集，且颜色替换符合下列规则（脚本落点归 [build-and-release.md](../../devPlan/design/build-and-release.md)）：
 
-- `preview/icons/`：21 个文件全部生成。在根 `<svg>` 增加 `color="#E6E6E6"`，保留 `currentColor` 与路径数据，使描边在暗色背景可读。
+- `preview/icons/`：`icons/` 下全部文件生成预览。在根 `<svg>` 增加 `color="#E6E6E6"`，保留 `currentColor` 与路径数据，使描边在暗色背景可读。
 - `preview/cli-svg/`：只为纯黑/深灰墨色文件生成。
   - `grok.svg`、`kilocode.svg`、`pi.svg`：根 `color` 改为 `#E6E6E6`。
   - `cline.svg`、`codex.svg`、`github-copilot.svg`：`#000` / `#000000` → `#E6E6E6`。
@@ -82,43 +83,36 @@ CLI logo 族在以下位置使用：
 
 正文只嵌入 `claude.svg` 作为家族示例；实现按 `AgentKind` 取对应文件。
 
-| 文件 | AgentKind slug | 显示名 | 许可 / 来源 | 备注 |
-|---|---|---|---|---|
-| `cli-svg/amp.svg` | `amp` | Amp | 作者提供；Devicon 生态 | — |
-| `cli-svg/antigravity.svg` | `antigravity` | Antigravity | 作者提供；Devicon 生态 | 多色 |
-| `cli-svg/claude.svg` | `claude` | Claude Code | 作者提供 | 家族示例 |
-| `cli-svg/cline.svg` | `cline` | Cline | 作者提供 | 单色；使用预览 |
-| `cli-svg/codebuddy.svg` | `codebuddy` | CodeBuddy Code | 作者提供；Lobe Icons 生态 | 多色 |
-| `cli-svg/codex.svg` | `codex` | Codex | 作者提供 | 单色；使用预览 |
-| `cli-svg/cursor.svg` | `cursor` | Cursor Agent | 作者提供；Devicon 生态 | 灰阶；使用预览 |
-| `cli-svg/deepseek.svg` | — | DeepSeek | 作者提供；Devicon 生态 | 套餐余量来源，非 AgentKind |
-| `cli-svg/devin.svg` | `devin` | Devin | 作者提供 | 多色 |
-| `cli-svg/gemini.svg` | `gemini` | Gemini | 作者提供；Lobe Icons 生态 | 多色 |
-| `cli-svg/github-copilot.svg` | `copilot` | GitHub Copilot | 作者提供 | 单色；使用预览 |
-| `cli-svg/goose.svg` | `goose` | Goose | 作者提供 | 单色；使用预览 |
-| `cli-svg/grok.svg` | `grok` | Grok | 作者提供 | `currentColor`；使用预览 |
-| `cli-svg/hermes.svg` | `hermes` | Hermes | 作者提供 | 双色 |
-| `cli-svg/kilocode.svg` | `kilo` | Kilo Code | 作者提供 | `currentColor`；使用预览 |
-| `cli-svg/kimi.svg` | `kimi` | Kimi Code | 作者提供 | 多色；亦用于套餐余量页脚 |
-| `cli-svg/kiro.svg` | `kiro` | Kiro | 作者提供 | 多色 |
-| `cli-svg/opencode.svg` | `opencode` | OpenCode | 作者提供 | 灰阶；使用预览 |
-| `cli-svg/pi.svg` | `pi` | Pi | 作者提供 | `currentColor`；使用预览 |
-| `cli-svg/qoder.svg` | `qodercli` | Qoder | 作者提供 | 双色 |
-| `cli-svg/qwen.svg` | `qwen` | Qwen Code | 作者提供 | 单色 |
-| `cli-svg/trae.svg` | `trae-cli` | Trae CLI | 作者提供 | 单色 |
+| 文件 | 显示名 | 许可 / 来源 | 备注 |
+|---|---|---|---|
+| `cli-svg/amp.svg` | Amp | 作者提供 | — |
+| `cli-svg/antigravity.svg` | Antigravity | 作者提供 | 多色 |
+| `cli-svg/claude.svg` | Claude Code | 作者提供 | 家族示例 |
+| `cli-svg/cline.svg` | Cline | 作者提供 | 单色；使用预览 |
+| `cli-svg/codebuddy.svg` | CodeBuddy Code | 作者提供 | 多色 |
+| `cli-svg/codex.svg` | Codex | 作者提供 | 单色；使用预览 |
+| `cli-svg/cursor.svg` | Cursor Agent | LobeHub MIT（`THIRD-PARTY-NOTICES`） | 灰阶；使用预览 |
+| `cli-svg/deepseek.svg` | DeepSeek | 作者提供 | 套餐余量来源，非 AgentKind |
+| `cli-svg/devin.svg` | Devin | 作者提供 | 多色 |
+| `cli-svg/gemini.svg` | Gemini | 作者提供 | 多色 |
+| `cli-svg/github-copilot.svg` | GitHub Copilot | LobeHub MIT（`THIRD-PARTY-NOTICES`） | 单色；使用预览 |
+| `cli-svg/goose.svg` | Goose | 作者提供 | 单色；使用预览 |
+| `cli-svg/grok.svg` | Grok | 作者提供 | `currentColor`；使用预览 |
+| `cli-svg/hermes.svg` | Hermes | 作者提供 | 双色 |
+| `cli-svg/kilocode.svg` | Kilo Code | 作者提供 | `currentColor`；使用预览 |
+| `cli-svg/kimi.svg` | Kimi Code | 作者提供 | 多色；亦用于套餐余量页脚 |
+| `cli-svg/kiro.svg` | Kiro | 作者提供 | 多色 |
+| `cli-svg/opencode.svg` | OpenCode | 作者提供 | 灰阶；使用预览 |
+| `cli-svg/pi.svg` | Pi | 作者提供 | `currentColor`；使用预览 |
+| `cli-svg/qoder.svg` | Qoder | 作者提供 | 双色 |
+| `cli-svg/qwen.svg` | Qwen Code | 作者提供 | 单色 |
+| `cli-svg/trae.svg` | Trae CLI | 作者提供 | 单色 |
+
+`AgentKind` slug 覆盖与缺失清单由 [agent-cli.md](../../devPlan/design/integrations/agent-cli.md) 的能力注册表与构建期扫描派生，本文不手工维护。
 
 ## 缺失的品牌资产
 
-以下 `AgentKind` 没有对应 logo；规格中只显示名称或标题，不显示图片：
-
-| AgentKind slug | 显示名 |
-|---|---|
-| `aider` | Aider |
-| `droid` | Droid |
-| `auggie` | Auggie |
-| `vibe` | Vibe |
-| `omp` | Oh My Pi |
-| `maki` | Maki |
+缺失集合不在此手工维护。`AgentKind` 有注册项但构建期扫描不到对应文件时按无图处理，规格中只显示名称或标题；覆盖与缺失由 `AgentKind` 注册表与构建期检查派生。
 
 ## 应用图标
 

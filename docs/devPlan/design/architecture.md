@@ -2,7 +2,7 @@
 
 > 目标态实现级设计；需求真值源见 docs/featureSpec，裁决见 ../spec-issues.md。
 
-目标态架构：单进程、单窗口、GPUI 前台直持实体；领域层分为 `slterm_workspace`、`slterm_sidebar`、`slterm_agents`、`slterm_hooks`、`slterm_runtime_protocol` 五个 core crate；app 壳按 `Workspace → ProjectView → PanelGroupView → PanelHost` 重建；结构化工作区状态由单一 `PersistenceCoordinator` 写入本地 SQLite 状态库。保留 `slterm_terminal`、`slterm_split`、`slterm_settings`、`slterm_completions`、`slterm_hook` 与既有 `atomic_file`/`settings_store` 机制。
+目标态架构：单进程、单窗口、GPUI 前台直持实体；领域层分为 `slterm_workspace`、`slterm_sidebar`、`slterm_agents`、`slterm_hooks`、`slterm_runtime_protocol`；app 壳按 `Workspace → ProjectView → PanelGroupView → PanelHost` 重建；结构化工作区状态由单一 `PersistenceCoordinator` 写入本地 SQLite 状态库。保留 `slterm_terminal`、`slterm_split`、`slterm_settings`、`slterm_completions`、`slterm_hook` 与既有 `atomic_file`/`settings_store` 机制。
 
 ### 新 core crate 边界
 
@@ -10,12 +10,12 @@
 |---|---|---|
 | `slterm_workspace` | 项目注册表、布局树、面板组、面板参数 DTO、去重、标题、焦点、持久化 DTO | GPUI、I/O、PTY、编辑器缓冲、会话扫描/归属 |
 | `slterm_sidebar` | 侧栏布局状态机、文件树模型、选择/剪贴板/文件操作计划、Commit 投影、Agent 节点过滤与标题消歧纯函数 | GPUI、文件系统执行、Git 进程 |
-| `slterm_agents` | `AgentKind` 能力注册表、会话元数据与扫描、词法归属、删除账本、hook 事件归一化、恢复/分叉命令描述 | 管道/进程/网络 I/O |
+| `slterm_agents` | `AgentKind` 能力注册表、会话元数据模型、扫描投影与词法归属、删除账本、hook 事件归一化、恢复/分叉命令描述 | 文件 I/O、管道/进程/网络 I/O |
 | `slterm_hooks` | Hooks 事件与 handler 目录、schema 校验、托管条目规则 | 文件读写、CLI 启动 |
 | `slterm_runtime_protocol` | Runtime v2 信封、线缆 `ResourceId`、请求/响应 schema、错误码 | 领域 ID newtype、服务器、传输、应用状态 |
 
 - `slterm_workspace` 生产依赖仅 `slterm_split`；`slterm_sidebar` 依赖 `slterm_workspace`、`slterm_split` 与 `slterm_agents`；`slterm_hooks` 依赖 `slterm_agents`；`slterm_runtime_protocol` 零生产依赖且不依赖 `slterm_workspace`。
-- 会话扫描、元数据、词法归属、删除账本与恢复计划归 `slterm_agents::sessions`；`slterm_workspace` 不再定义 `SessionKey`/`SessionRecord`/`SessionCatalog`，只提供项目根索引。
+- 会话扫描的纯投影、元数据模型、词法归属、删除账本与恢复计划归 `slterm_agents::sessions`；来源目录枚举、头部读取、隔离区移动/恢复/清扫由 app provider 经 `FileServices`/`PathAuthority` 执行，core 不裸 `std::fs`。`slterm_workspace` 不再定义 `SessionKey`/`SessionRecord`/`SessionCatalog`，只提供项目根索引。
 - 领域 ID 唯一定义于 `slterm_workspace::ids`；`slterm_runtime_protocol` 只定义线缆 `ResourceId`（不透明字符串、解析/格式化/错误），不重复领域 newtype。
 - 序列化使用 `serde`/`serde_json`；不使用 path 依赖绕开分类。
 - Git/文件系统执行体、Hooks 文件读写与 Runtime 服务器留在 app。
@@ -91,7 +91,7 @@ slterm_app/
   src/runtime_api/                Runtime v2 服务器与投影
 ```
 
-旧 `src/app_shell/` 在垂直切片前保留；新代码不得 `use crate::app_shell::*`，两者互不引用；垂直切片通过后在“旧壳退役”里程碑整体删除。
+旧 `src/app_shell/` 在垂直切片前保留；新代码不得 `use crate::app_shell::*`，两者互不引用；垂直切片通过后先退役旧状态模型/写路径，再按域删除旧 UI 宿主，每个域替换完成即删除该域旧壳。
 
 ### 依赖方向与 architecture/dependencies.toml 登记
 
@@ -140,8 +140,8 @@ dev-dependencies = []
 
 同步动作：
 
-- 根 `Cargo.toml` 的 `workspace.members` 增加五个新 core crate。
-- `architecture/file-budgets.txt` 增加五个新 `root` 条目（沿用统一行数上限）。
+- 根 `Cargo.toml` 的 `workspace.members` 增加 `slterm_workspace`、`slterm_sidebar`、`slterm_agents`、`slterm_hooks`、`slterm_runtime_protocol`。
+- `architecture/file-budgets.txt` 为每个新 core crate 增加 `root` 条目（沿用统一行数上限）。
 - `scripts/check_architecture.py` 机械校验 member 与策略键集全等；新增 crate 未登记即红。
 - 每个新 crate 使用显式 `[lib] test = false` + `[[test]] name = "lib_tests"`。
 - `slterm_workspace` 的 `Cargo.toml` 显式声明 `serde`/`serde_json`；不使用 path 依赖绕开分类。
@@ -183,7 +183,7 @@ dev-dependencies = []
 - **PTY 解析线程**：每个 `TerminalSession` 的读取/解析在其专用线程；输出经有界通道交给前台；前台按帧合并，隐藏项目不提交绘制。
 - **持久化写线程**：单线程持有唯一可写 SQLite 连接；状态库事务与 `settings.json` 写入都在此线程执行，前台只产生不可变字节快照。`runtime.port`、`instance.lock`、窗口几何、日志、审计、更新状态与崩溃快照文件由各自服务写入，不进入状态库事务。单实例保证同进程唯一写者。
 - **后台执行器**：文件读取、Git 读取、Markdown 渲染、Diff 计算、目录扫描、历史会话扫描走 GPUI background executor 或专用线程；结果带 `(PanelId, generation)` 回前台，过期结果丢弃。
-- **文件监听线程**：每个项目根与根外打开文件父目录的 watcher；事件合并窗口由域定义（编辑器约 300ms，Diff 外部修改 200ms），只向前台发事件。
+- **文件监听线程**：每个项目根与根外打开文件父目录的 watcher；事件合并窗口由 `services/filesystem-git.md` 的监听表单点定义，架构不重复数值；只向前台发事件。
 - **GPU 渲染**：GPUI 内部线程；业务不接触。
 
 跨线程规则：
@@ -201,9 +201,9 @@ dev-dependencies = []
 3. **设置与窗口准备**：读取 `<data>/state/settings.json`；损坏回退 `.bak`/默认并提示。创建默认隐藏窗口，初始化 `Clock`、`PersistenceCoordinator`、`NotificationService`、`RuntimeHub`。设置加载不阻断工作区。
 4. **状态库打开与索引加载**：打开 `<local>/state/state.db`，校验 `user_version` 与 `quick_check`，读取 `workspace` 与 `projects`。
    - 成功：进入项目布局加载。
-   - 版本不匹配、检查失败或库不可用：显示项目数据错误界面（自绘标题栏保留窗口控制），提供 `重试` 与 `以空状态继续`；阻断进入工作区。选择空状态后先隔离损坏库再创建新库。
+   - 版本不匹配、检查失败或库不可用：显示项目数据错误界面（自绘标题栏保留窗口控制），提供 `重试`、`从备份恢复` 与 `以空状态继续`；阻断进入工作区。`从备份恢复` 由 `persistence.md` 先校验并尝试 `state.db.bak`，备份缺失或损坏时才隔离两者；选择空状态后先隔离损坏库再创建新库。
 5. **项目布局与终端簿加载**：按项目读取 `project_layouts.layout_json` 与 `project_terminals.terminals_json`，执行恢复对账。单项目载荷失败：该项目按空布局/空终端簿处理、原始 JSON 移入隔离区、并入启动聚合警告；其他项目不受影响。
-6. **构建运行期**：创建全部 `ProjectView`（急切恢复）；按 `PanelRecord` 创建 `PanelHost` 与 body；终端以并发上限 8 启动 PTY，总数受 64 上限约束；超限或启动失败的终端面板进入可见失败态，可重试。
+6. **构建运行期**：创建全部 `ProjectView`（急切恢复）；按 `PanelRecord` 创建 `PanelHost` 与 body；终端以内部并发节流 8 启动 PTY（非规格契约），总数受 64 上限约束；超限或启动失败的终端面板进入可见失败态，可重试。
 7. **侧栏、视图与崩溃快照**：读取状态库 `sidebar` 与 `view_states`；扫描 `recovery/` 与 `recovery_index`，校验、清理过期/损坏项；存在可恢复快照时排队一次聚合提示。
 8. **恢复活跃项目**：上次活跃项目存在则激活；否则取列表第一个；无项目则无活跃项目。布局恢复不产生焦点意图。
 9. **界面挂载**：数据就绪后以标题栏 + 工作区 + 通知区替换加载界面；启动期间通知在挂载后按剩余时长显示。
@@ -216,17 +216,17 @@ dev-dependencies = []
 
 | 环节 | 内容 | 时限 | 失败行为 |
 |---|---|---|---|
-| 关闭守卫 | 聚合全部项目的需保存面板与前台运行进程；单次确认；保存全部按项目顺序与布局顺序逐个执行 | 用户交互 | 任一保存失败中止关闭，保留全部面板，错误通知列出失败项 |
-| 冲刷 | `PersistenceCoordinator::flush` 强制到期 `Guarded` 集合：设置 JSON 与状态库全部 dirty facet | 3 秒 | 任一失败中止关闭，提供重试/取消；只读设置不进入重试循环，只提供放弃/取消 |
+| 收集与确认（Guarding） | 聚合全部项目的需保存面板与前台运行进程；单次确认 | 用户交互 | 取消回 `Idle`；确认进入 `Saving` |
+| 保存与冲刷（Saving） | 按项目顺序与布局顺序保存脏面板；`PersistenceCoordinator::flush` 强制到期设置 JSON 与状态库全部 dirty facet | 3 秒 | 保存失败回 `Guarding`，保留全部面板并列出失败项；冲刷失败中止关闭，提供重试/取消；只读设置只提供放弃/取消 |
 | PTY 终止 | 并发终止全部已注册 PTY；优雅等待 2 秒后强制终止 | 3 秒 | 记录日志并继续；系统进程树兜底 |
-| 最终提交 | 以最终内存状态提交终端簿与项目布局事务，并生成 `state.db.bak` | 3 秒 | 记录日志并继续 |
+| 最终提交 | 以最终内存状态提交终端簿、项目布局与 `workspace` facet（含活跃项目标识）事务，并生成 `state.db.bak` | 3 秒 | 记录日志并继续 |
 | 清理 | 删除崩溃快照与 `recovery_index` 行；关闭监听、watcher、后台任务；关闭持久化写线程；销毁实体与窗口 | 尽力 | 记录日志并继续 |
 
 规则：
 
 - 关闭守卫的“需保存”集合 = 脏面板 + 待写/失败自动保存的设置中心面板；终端前台进程单独列出。
 - 冲刷是“强制到期”而非取消计时器；冲刷期间新变更合并到最终快照。
-- 关闭链只执行一次；`CloseState::{Idle, Guarding, Saving, ShuttingDown}` 防重入：确认后进入 `Guarding`，冲刷成功进入 `Saving`，最终写入与清理进入 `ShuttingDown`；非 `Idle` 时新的关闭请求忽略。
+- 关闭链只执行一次；`CloseState::{Idle, Guarding, Saving, ShuttingDown}` 防重入：请求关闭后立即进入 `Guarding`，在该状态收集全部需保存面板与前台进程并弹出单次确认；确认后进入 `Saving`，先按确认顺序保存脏面板，再冲刷设置 JSON 与状态库全部 dirty facet；取消回 `Idle`，保存失败回 `Guarding`；最终写入与清理进入 `ShuttingDown`。非 `Idle` 时新的关闭请求忽略。
 - `Guarded` 集合固定为设置 JSON 与状态库全部 dirty facet，与 `persistence.md` 的冲刷分类一致；任一失败中止关闭并提供重试/取消。
 - 项目移除不走窗口关闭链：先成功提交状态库事务，失败则中止移除；成功后再删除恢复快照与隔离件。
 - 设置只读（版本过高或 1 MiB 超限）时无法保存，关闭守卫只提供放弃/取消，不反复进入失败循环。
@@ -266,7 +266,7 @@ pub struct RestoreReport {
 | 失败 | 边界 | 行为 |
 |---|---|---|
 | 状态库缺失 | 项目索引 | 创建空库与空 `workspace` 行；不阻断启动 |
-| 状态库版本/完整性失败 | 项目索引 | 阻断工作区，错误界面；`以空状态继续` 前隔离整库 |
+| 状态库版本/完整性失败 | 项目索引 | 阻断工作区，错误界面提供 `重试`/`从备份恢复`/`以空状态继续`；空状态前隔离整库 |
 | 单项目 `layout_json`/`terminals_json` 失败 | 项目 | 该项目空布局/空终端簿 + 聚合警告；原始 JSON 隔离 |
 | 未知面板类型/参数版本 | 面板 | 丢弃该面板 + 聚合警告；项目其余面板正常 |
 | 面板工厂失败 | 面板 | 面板区域错误态，提供重试；不拖垮项目 |
@@ -301,10 +301,10 @@ pub struct RestoreReport {
 
 节奏：
 
-- 主线始终可编译；里程碑边界门禁全绿，里程碑内允许短暂红灯。
-- 垂直切片通过后执行“旧壳退役”里程碑：一次性删除旧 workspace/tab/pane/dock/session、旧测试、旧持久化读取与 `check_legacy_symbols` allowlist；旧测试映射在退役前建立。
+- 主线始终可编译；每次提交全部门禁全绿，里程碑内也不允许红灯提交；未完成能力用 feature gate、占位或禁用态。
+- 旧壳退役分两步：先退役旧状态模型/写路径（旧 workspace/tab/pane/dock/session 的持久化读取与写入、旧测试），再按域删除旧 UI 宿主；每个域替换完成即删除该域旧壳，最后移除 `check_legacy_symbols` allowlist 与旧符号。旧测试映射在删除该域前建立，每个退役步骤有独立验收。
 - 旧持久化（`session.json` 与根 `settings.json` 读取）必须随旧壳一起停止被调用；新状态库写入路径在切片前已全量接管。
-- 退役后只向前修复，不回滚旧壳；预算重基线与架构门禁重登记在退役里程碑完成。
+- 退役后只向前修复，不回滚旧壳；预算重基线与架构门禁重登记在各域退役步骤完成。
 
 ### 新数据目录与文件名
 
@@ -346,7 +346,7 @@ pub struct RestoreReport {
 隔离规则：
 
 - 旧 `session.json`、根 `settings.json`、`settings.json.bak`、`settings.corrupted-*`、旧 `runtime.port`、旧 `updates/` 一律不读、不删、不视为损坏；新代码不提供迁移入口。
-- `slterm_settings::paths` 提供 `settings_path()`、`state_db_path()`、`state_dir()`、`instance_lock_path()`、`runtime_port_path()`、`window_path()`、`recovery_dir(ProjectId)`、`quarantine_dir()`、`completion_dir()`、`usage_dir()`、`hooks_dir()`、`update_dir()`、`backup_dir()`、`log_dir()`、`audit_dir()`、`crash_dir()`。app 侧不得自行拼接路径。
+- `slterm_settings::paths` 提供 `settings_path()`、`state_db_path()`、`state_dir()`、`instance_lock_path()`、`runtime_port_path()`、`window_path()`、`recovery_dir(project_id: u64)`、`quarantine_dir()`、`completion_dir()`、`usage_dir()`、`hooks_dir()`、`update_dir()`、`backup_dir()`、`log_dir()`、`audit_dir()`、`crash_dir()`。`recovery_dir` 只接收十进制项目 ID，不依赖 `slterm_workspace` 的 `ProjectId` 类型；项目级路径组合留在工作区/app 持久化层。app 侧不得自行拼接路径。
 - 文件名去品牌；恢复快照目录用十进制项目 ID，避免路径字符与大小写问题。
 - `window.json` 是迁移后窗口几何落点，归 `platform-windows.md` 所有；规格内不创建、不冲刷。
 - 目录创建在首次写入前完成；读取缺失文件不等于损坏。
@@ -354,8 +354,8 @@ pub struct RestoreReport {
 ### 单实例与移交载荷
 
 - 单实例所有权在创建窗口前获取；锁为 `<local>/state/instance.lock` 句柄锁。已有实例时经 `runtime.handover` 只发送移交载荷并退出。
-- 载荷类型、校验与接收语义归 `platform-windows.md`；协议信封与方法归 `integrations/runtime-api-v2.md`。本文件只记录启动链集成点。
+- 线缆类型、参数 schema、校验与接收语义归 `integrations/runtime-api-v2.md`（`slterm_runtime_protocol::methods::handover`）；平台层只做接收、校验调用与结果映射；协议信封与方法归同一 owner。本文件只记录启动链集成点。
 - 载荷以根路径定位项目与文件，不传 `ProjectId`/`PanelId` 等内部 ID；项目根未提供时按路径取最深命中。
-- 目标项目/路径不存在时提示，不自动创建项目；未知/失效项目回退到活跃项目或提示，不崩溃。
+- 目标项目/路径不存在时提示，不自动创建项目；`NewTerminal` 的 cwd 越界或未匹配时回退活跃项目；其他载荷的未知/失效目标只提示，不崩溃。
 - 移交接收端把请求排队到前台，在启动完成后顺序执行；同一请求不重复执行。
 - 移交载荷不携带凭据、终端内容或文件内容。

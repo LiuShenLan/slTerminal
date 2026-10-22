@@ -29,7 +29,7 @@
 1. 领域骨架期落地 `slterm_workspace::ids` 与 `slterm_runtime_protocol` 的信封/`ResourceId`/handover DTO；壳与工作区里程碑实现最小端点、端点发现与 `runtime.handover` 接收端。
 2. 垂直切片后：实现 v2 hub 投影、revision、订阅、project/panel/terminal 读写、UI owner 单队列、`mutation_cache` 与 `expected_revision`；跑项目/组/面板/终端 conformance 子集。
 3. 随域增量：终端、Agent、Git 与 orchestrate 方法按域接入；每接入一域补对应 conformance。
-4. 收敛门后：重写 CLI、env、skill、schema、文档与审计；跑完整 conformance。旧 v1 实现随“旧壳退役”删除；本步删除 v1 资产、旧别名与旧文档。
+4. 收敛门后：重写 CLI、env、skill、schema、文档与审计；跑完整 conformance。旧 v1 实现随“旧状态模型退役”停止；本步删除 v1 资产、旧别名与旧文档。
 
 ### conformance 增量
 

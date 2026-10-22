@@ -6,6 +6,8 @@
 
 本域负责：AgentKind 身份与能力注册表、命令识别与别名、启动/恢复/分叉命令、Hook 能力声明与事件摄取、statusline 上下文用量、历史会话扫描与恢复计划、会话词法归属与删除账本、套餐余量、进程快照与身份解析、AI 状态系统通知事件。本域是会话领域（`SessionKey`/`SessionRecord`/`SessionCatalog`/来源扫描/归属/删除）的唯一所有者。
 
+core `slterm_agents` 只保留纯逻辑：记录模型、会话头部字节解析、归属、注册表合并、删除账本与恢复计划。来源目录枚举、头部读取、隔离区移动/恢复/清扫与会话 provider 适配器位于 app，经 `FileServices`/`PathAuthority` 执行，不裸 `std::fs`。
+
 不负责：PTY 创建与终端渲染（终端面板）、Hook 配置文件编辑（Hooks 域）、导航树视图状态与恢复编排（导航域）、设置页控件（设置中心）、Runtime API 传输（Runtime v2）。
 
 ### 决策与红线
@@ -34,20 +36,26 @@ slterm_agents/                    // core，无 GPUI
     brand.rs                      // 内置品牌资产索引
     capabilities.rs               // Hook/会话/进程/通知/用量能力位
     sessions/
-      mod.rs                      // SessionCatalog 门面与健康模型
+      mod.rs                      // SessionCatalog 门面与内存合并、健康模型
       record.rs                   // SessionRecord / SessionKey / RunState
-      provider.rs                 // SessionProvider trait
-      claude.rs                   // ~/.claude/projects JSONL
-      codex.rs                    // ~/.codex/sessions rollout JSONL
+      parse/
+        claude.rs                 // JSONL 头部字节 -> 记录字段（纯函数）
+        codex.rs                  // rollout 头部字节 -> 记录字段（纯函数）
       registry.rs                 // hook 会话注册表合并
       attribution.rs              // 词法最深前缀归属/未归属
-      delete.rs                   // 隔离删除、撤销与永久化
+      delete.rs                   // 删除账本、撤销与永久化计划（纯逻辑）
+      resume.rs                   // 恢复计划（纯逻辑）
     usage.rs                      // ContextUsage 模型与状态槽
     hooks_caps.rs                 // Hook 能力与安装器标识（配置编辑归 Hooks 域）
     test_support/                 // FakeAgentCli / 会话夹具 / 通知记录器
 slterm_app/src/integrations/agent_cli/
   mod.rs                          // 组合根
-  scan_service.rs                 // 扫描调度与来源健康聚合
+  scan_service.rs                 // 来源枚举、扫描调度与来源健康聚合
+  sessions/
+    provider.rs                   // SessionProvider trait 与 SessionIo 端口（app 侧）
+    claude.rs                     // Claude provider 适配器
+    codex.rs                      // Codex provider 适配器
+    isolation.rs                  // 隔离区移动、恢复、启动清扫
   hook_ingress.rs                 // 命名管道接管、排序与事件分发
   process_identity.rs             // 进程快照解析与 hook 路由佐证
   usage_watch.rs                  // statusline 用量信号消费
@@ -69,14 +77,15 @@ pub struct AgentDescriptor {
     pub fork: Option<CommandTemplate>,
     pub hooks: HookIntegration,
     pub sessions: Option<SessionIntegration>,
-    pub global_dirs: &'static [GlobalDir],
+    pub global_dir: Option<GlobalDir>,     // 每 Agent 至多一个；对应 Agent 全局文件的一个内置节点
+    pub default_runtime_entries: &'static [&'static str], // 内置默认运行时文件清单，可为空
     pub process: ProcessMatch,
     pub notifications: NotificationCaps,
     pub usage: UsageKind,
 }
 
 pub enum BrandAsset {
-    Svg { path: &'static str }, // assets/cli-svg/<slug>.svg，构建期索引
+    Svg { path: &'static str }, // canonical 源 docs/featureSpec/assets/cli-svg/<slug>.svg；包内 assets/cli-svg/<slug>.svg
     None,
 }
 
@@ -98,7 +107,12 @@ pub enum SessionRoot {
     Env { var: &'static str, suffix: &'static str },
 }
 
-pub struct GlobalDir { pub relative_to_home: &'static str, pub writable: bool }
+pub enum GlobalDirRoot {
+    Home(&'static str),                              // 相对 home
+    Env { var: &'static str, fallback: &'static str },
+}
+
+pub struct GlobalDir { pub root: GlobalDirRoot, pub writable: bool }
 
 pub struct NotificationCaps {
     pub turn_done: bool,
@@ -109,8 +123,9 @@ pub struct NotificationCaps {
 ```
 
 - 描述表按 `AgentKind::ALL` 顺序静态声明；测试校验 slug 唯一、显示名非空、命令名不跨 CLI 冲突、`hooks` 与安装器登记一致。
-- 品牌资产由构建脚本扫描 `assets/cli-svg/` 生成长度为 `AgentKind::ALL.len()` 的索引；缺失即 `BrandAsset::None`，消费方不按 slug 猜测路径。
-- 全局目录只声明静态部分；设置中心的自定义 Agent 节点由 Agent 基础配置持久化，并在构造允许根时与本表合并。目录职责分工保持：目录表管沙箱放行，AgentKind 管身份，屏幕规则管识别。
+- 品牌资产的 canonical 源为 `docs/featureSpec/assets/cli-svg/`，包内路径为 `assets/cli-svg/`；构建脚本扫描 canonical 源生成长度为 `AgentKind::ALL.len()` 的索引，并把文件集复制到包内路径。缺失即 `BrandAsset::None`，消费方不按 slug 猜测路径。包合同归 `design/build-and-release.md`。
+- 全局目录每 Agent 至多一个，对应 Agent 全局文件的一个内置节点；需要额外目录时由用户登记自定义节点。`GlobalDirRoot::Env` 表达环境变量覆盖的根，`writable` 决定该根是否允许写操作。设置中心的自定义 Agent 节点由 Agent 基础配置持久化，并在构造允许根时与本表合并。目录职责分工保持：目录表管沙箱放行，AgentKind 管身份，屏幕规则管识别。
+- `default_runtime_entries` 是内置 Agent 运行时文件清单的唯一默认来源；设置域按 Agent 增删并保存有效清单，恢复默认回到该字段；自定义节点没有内置默认，初始为空。默认清单只参与 Agent 全局文件的根层过滤，不进入凭据或会话载荷。
 - 通知能力与 Hook 能力分离：CLI 可以没有 Hook 但仍有 OSC/BEL 通知来源；是否产生系统通知由能力位决定。
 
 ### 命令识别、启动、恢复与分叉
@@ -126,6 +141,7 @@ pub struct CommandTemplate {
 pub struct CommandRegistry { /* descriptor commands + 用户别名，大小写不敏感 */ }
 
 impl CommandRegistry {
+    // AliasSettings 按 AgentKind 键控，每个 CLI 一份；内置命令仍来自描述表。
     pub fn build(settings: &AliasSettings) -> Result<Self, AliasConflict>;
     pub fn parse_command_line(&self, command: &str) -> Option<AgentKind>;
     pub fn builtin_commands(&self) -> impl Iterator<Item = (&'static str, AgentKind)>;
@@ -140,6 +156,7 @@ impl AgentDescriptor {
 ```
 
 - 命令识别：取首 token，剥掉 `&`、环境变量赋值、`env`、常见包运行器（node/bun/npx/pnpm/yarn/python/uv 等）与 `.exe/.cmd/.bat/.ps1` 后缀后匹配；用户别名参与同一命名空间。
+- CLI 别名按 CLI 各一份，保存在设置域以 `AgentKind` 为键的映射中；一个 CLI 的别名列表不与其他 CLI 共享。
 - 别名冲突在任何写入生效前返回结构化冲突：本 CLI 内置命令、其他 CLI 内置命令、其他 CLI 别名；Windows 不区分大小写。别名添加成功后内存即刻生效，不等待保存。
 - 恢复/分叉命令只覆盖实测语法；Codex 的 session id 取 rollout 文件名末尾 UUID，不接受任意文件名片段。Claude 无 session id 时允许 `claude --continue` 仅用于终端恢复路径，不用于历史会话行。
 - 恢复注入前调用方再次校验 `SessionId`；命令是单行文本，注入通道由终端提供，不在本域执行。
@@ -151,7 +168,7 @@ impl AgentDescriptor {
 - `slterm_hook` 保持零依赖小进程；宿主侧 `HookIngress` 接管命名管道，解析信封与载荷，输出 `AiHookEvent`。
 - 事件身份与排序：流键 = `source + session_id + panel_id + agent_pid + bridge_instance`；同一流内按 provider 事件 id/桥序号/本地接收序去重排序；跨流不比较顺序。
 - 路由：`SLTERM_PANEL_ID` 为主；管道客户端 pid 的祖先链为佐证。祖先链来自进程快照，达到最近的 CLI 可执行名匹配即认定 `agent_pid`；只把 pid 一致的事件归入该面板。
-- 能力表沿用并按注册表扩展：lifecycle、attention_events、attention_context、background_tasks、bridge_sequence、serialized_delivery。未知来源事件可宽松落盘会话注册表，但恢复动作必须经 `AgentKind` 归一。
+- 能力表沿用并按注册表扩展：lifecycle、attention_events、attention_context、background_tasks、bridge_sequence、serialized_delivery。已知 `AgentKind` 的未知事件类型可宽松落盘会话注册表；未知 CLI 来源不构造 `SessionKey`，丢弃并记录诊断，禁止恢复。
 - Hook 事件到状态：SessionStart/PromptSubmit/ToolComplete/TurnDone/NeedsAttention/SessionEnd 映射到终端四态；回合结果只认 provider 显式元数据；后台任务未清时回合结束不置完成。
 
 **statusline 用量**
@@ -200,21 +217,35 @@ pub struct SessionSourceHealth {
     pub error: Option<SessionError>,
 }
 
+// app 侧：文件 I/O 经端口注入，provider 不直接接触 std::fs。
+pub trait SessionIo: Send + Sync {
+    fn read_head(&self, file: &PathRef, limit: usize) -> Result<Vec<u8>, SessionError>;
+    fn move_isolated(&self, source: &PathRef) -> Result<IsolationHandle, SessionError>;
+    fn restore_isolated(&self, handle: &IsolationHandle) -> Result<(), SessionError>;
+    fn purge_isolated(&self, handle: IsolationHandle) -> Result<(), SessionError>;
+}
+
+pub struct ScanContext<'a> {
+    pub candidates: &'a [PathRef], // 由 app 扫描服务枚举并完成允许根校验
+    pub io: &'a dyn SessionIo,
+}
+
 pub trait SessionProvider: Send + Sync {
     fn scan(&self, ctx: &ScanContext) -> Result<Vec<SessionRecord>, SessionError>;
-    fn delete(&self, record: &SessionRecord) -> Result<DeletionRecord, SessionError>;
-    fn restore(&self, record: &DeletionRecord) -> Result<(), SessionError>;
-    fn finalize(&self, record: DeletionRecord);
+    fn delete(&self, ctx: &ScanContext, record: &SessionRecord) -> Result<DeletionRecord, SessionError>;
+    fn restore(&self, ctx: &ScanContext, record: &DeletionRecord) -> Result<(), SessionError>;
+    fn finalize(&self, ctx: &ScanContext, record: DeletionRecord);
 }
 ```
 
-- 扫描：每个来源独立后台执行；头部预算 64 KiB；Claude 解析 `summary` 与首条真人 user 消息，过滤注入块与 `isMeta`；Codex 从 session_meta 取 cwd、从首条 user 输入取标题；其他来源只有在描述表声明解析器时接入。扫描器排除应用会话隔离区路径。
-- 会话文件的读取、移动与删除经 app 服务层的路径权威与原子操作执行（来源目录属于已登记 Agent 全局目录），不自行裸 `std::fs`；读取只取头部，删除/撤销使用应用会话隔离区移动；同卷优先原子改名，跨卷复制后删除。
+- 扫描：app 扫描服务按来源独立后台枚举候选文件并完成允许根校验，provider 经 `SessionIo::read_head` 读取头部（预算 64 KiB），core 纯解析函数产出记录字段；Claude 解析 `summary` 与首条真人 user 消息，过滤注入块与 `isMeta`；Codex 从 session_meta 取 cwd、从首条 user 输入取标题；其他来源只有在描述表声明解析器时接入。扫描器排除应用会话隔离区路径。
+- 会话文件的读取、移动与删除由 app provider 适配器经 `FileServices`/`PathAuthority` 执行（来源目录属于已登记 Agent 全局目录），core 与 provider 均不自行裸 `std::fs`；读取只取头部，删除/撤销使用应用会话隔离区移动；同卷优先原子改名，跨卷复制后删除。
+- 结果规模：与导航设计的历史会话契约一致，扫描/合并层不做静默截断，导航只消费完整结果；性能验收规模以导航契约为准。每来源独立后台执行，避免一次性阻塞前台。
 - 合并：原生扫描结果与 hook 会话注册表按 `(kind, id)` 合并，较新 modified 胜出，空字段互补；注册表容量有界，不复制正文。
 - 归属：按项目根词法归一化后取最深前缀；工作目录为空、相对路径或不可解析进入未归属；目录不可访问不改变词法归属。归属计算是纯函数，输入为项目根集合与记录，可在导航域单测。
 - 运行状态：hook 注册表或活动会话能可靠关联时 `Running`；CLI 记录明确结束时 `Completed`；无法确认时 `Unknown`，不得显示为已完成。
 - 扫描调度：后台任务注册表新增 `sessionHistoryScan`（默认 3s，合法 2–300s，默认启用）；只在导航树视图打开且任务启用时运行，视图关闭停止计时器；手动刷新始终可用。来源健康独立，部分失败保留旧记录并标记过期。
-- 删除与撤销：删除事务把来源文件原子移入应用会话隔离区（同卷优先 rename，跨卷复制后删除），保存 hook 索引条目快照与原顺序键；行立即消失。撤销时按记录移回原路径并恢复索引与顺序。5 秒窗口结束、提示关闭、窗口关闭或应用退出后清除隔离文件，删除永久化；启动时清扫遗留隔离区（视为永久删除）。隔离区不可写或移动失败则删除失败，行保留并报错。运行中记录禁止删除；批量删除先过滤运行中记录。
+- 删除与撤销：core 计算删除账本（隔离移动计划、hook 索引条目快照与原顺序键、撤销/永久化计划）；app `isolation.rs` 经 `SessionIo` 执行：来源文件原子移入应用会话隔离区（同卷优先 rename，跨卷复制后删除），行立即消失。撤销时按账本移回原路径并恢复索引与顺序。5 秒窗口结束、提示关闭、窗口关闭或应用退出后清除隔离文件，删除永久化；启动时清扫遗留隔离区（视为永久删除）。隔离区路径由持久化数据根的专用目录单点登记（owner：`design/persistence.md` §数据根与文件），本域只消费路径、不拼接，容量受数据根总配额约束；隔离区不可写或移动失败则删除失败，行保留并报错。运行中记录禁止删除；批量删除先过滤运行中记录。
 - 恢复计划：`plan_resume(record) -> Result<ResumePlan, SessionError>` 返回命令行、工作目录、初始标题与目标项目根候选；项目创建、面板创建与注入等待归导航/终端域。
 
 ### 套餐余量
@@ -323,16 +354,16 @@ pub trait NotificationSink { fn deliver(&self, event: AgentNotificationEvent); }
 | `slterm_app/src/platform/process_snapshot.rs`、`process_tree.rs` | 直接复用 | 快照与祖先链索引复用；补创建时间身份与 TTL |
 | `slterm_app/src/notify.rs` | 改造 | 保留漏斗/节流/投递；增加四类 AI 通知映射与事件键去重，正文按工作区规格 |
 | 新能力描述表/命令注册表/品牌索引 | 新建 | 单一事实源 |
-| 新会话目录服务与 provider | 新建 | 多来源扫描、健康、隔离删除与恢复计划 |
+| 新会话 provider 适配器与隔离执行器 | 新建 | app 侧 provider/`SessionIo` 适配器、来源枚举、隔离移动/恢复/清扫；core 只放纯解析与账本 |
 | 新 statusline 用量通道 | 新建 | 桥接脚本 + 信号目录 + 状态槽（脚本与注入归 Hooks 域） |
 | 新假 CLI 适配器与确定性夹具 | 新建 | 测试不依赖真实 CLI |
 
 ### 验收与测试接缝
 
-- 能力表：slug 唯一、表与枚举等长、品牌索引覆盖、命令名不冲突、不支持能力返回 `None`。
+- 能力表：slug 唯一、表与枚举等长、品牌索引覆盖、命令名不冲突、不支持能力返回 `None`；每 Agent 至多一个 `global_dir`，`default_runtime_entries` 与设置域内置默认清单一致。
 - 命令：别名大小写与跨 CLI 冲突矩阵；包运行器/环境变量/后缀识别；非法 session id 拒绝；恢复/分叉模板逐 CLI 钉值。
-- 会话：头部预算、截断行容错、注入块过滤、Codex cwd/标题、注册表合并、最深前缀归属、未归属、来源部分失败、隔离删除/撤销/永久化、遗留隔离区清扫。
-- Hook：管道载荷解析、流键、去重排序、客户端 pid 祖先链路由、未知来源宽松落盘/严格恢复。
+- 会话：头部预算、截断行容错、注入块过滤、Codex cwd/标题、注册表合并、最深前缀归属、未归属、来源部分失败、结果不静默截断、隔离删除/撤销/永久化、遗留隔离区清扫、core 无 `std::fs` 且 provider 只经 `SessionIo` 访问文件。
+- Hook：管道载荷解析、流键、去重排序、客户端 pid 祖先链路由、已知 `AgentKind` 的未知事件类型宽松落盘、未知 CLI 来源丢弃且不可恢复。
 - 用量与余量：状态文件原子写/损坏丢弃/过期；余量成功/失败/plan 切换/节流/保留旧值；DTO 键集合无 token。
 - 通知：四类映射、失焦门控、去重上限、正文格式、类别能力缺失不发送。
 - 假 CLI：`FakeAgentCli` 提供脚本化会话、hook 事件、用量、恢复命令与进程树；`AgentHarness` 注入假时钟、临时会话目录与通知记录器，测试全确定性且不触真实 home。

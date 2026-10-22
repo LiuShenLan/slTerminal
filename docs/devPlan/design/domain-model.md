@@ -14,7 +14,7 @@ pub struct PanelId(u64);
 pub struct TerminalOrdinal(u32);
 ```
 
-- 三类 ID 均为应用级全局唯一，单调递增、终生不复用；`PanelGroupId`/`PanelId` 不按项目分段，Runtime v2 与移交载荷可在不带项目的情况下无歧义寻址。
+- 三类 ID 均为应用级全局唯一，单调递增、终生不复用；`PanelGroupId`/`PanelId` 不按项目分段，Runtime v2、CLI 与随包 skill 可在不带项目的情况下无歧义寻址。单实例移交载荷用根路径/cwd 定位，不传内部 ID。
 - `ProjectId` 在根目录重定位、显示名重命名、项目排序后保持不变；根路径唯一是不变量，不是身份。
 - `TerminalOrdinal` 是项目内终端编号，从 0 开始，关闭不复用；不同项目可出现相同编号。
 - 分配器：
@@ -36,7 +36,7 @@ impl IdAllocator {
 ```
 
 - 恢复时 `observe_existing` 必须同时考虑状态库 `workspace.next_*`、已加载项目内的全部 ID、`recovery/` 目录名；游标统一取 `max(next_*, maxSeen + 1, maxDir + 1)`。这样状态库丢失后以空状态继续也不会与孤儿恢复目录 ID 冲突。
-- 字符串形式（Runtime v2、环境变量、移交）：`project:<u64>`、`group:<u64>`、`panel:<u64>`；解析失败即 `invalid_params`，未知资源即 `resource_not_found`。前缀集合封闭，未来新增资源类型只追加前缀，不复用旧前缀语义。
+- 字符串形式（Runtime v2、环境变量、CLI 与随包 skill）：`project:<u64>`、`group:<u64>`、`panel:<u64>`；解析失败即 `invalid_params`，未知资源即 `resource_not_found`。前缀集合封闭，未来新增资源类型只追加前缀，不复用旧前缀语义。
 - 线缆类型：协议 crate 的 `resource_id.rs` 只定义不透明字符串 `ResourceId` 及其解析/格式化/错误，不重复定义 `ProjectId`/`PanelGroupId`/`PanelId`；领域 newtype 唯一定义于本文件（`slterm_workspace::ids`）。完整线缆合同见 `integrations/runtime-api-v2.md`。
 
 ### 项目与项目注册表
@@ -210,7 +210,7 @@ pub struct GitShowParams {
 
 pub struct SettingsParams {
     pub revision: u32,
-    pub selected_page: SettingsPageId, // 稳定页面 id，默认“快捷键”
+    pub selected_page: Option<SettingsPageId>, // None = 当前没有可用配置页；默认“快捷键”
     /// 页内参数；类型、清洗与保存归 `panels/settings.md`，随布局持久化。
     pub page_params: BTreeMap<SettingsPageId, PageParams>,
 }
@@ -268,7 +268,8 @@ impl TerminalBook {
 ```
 
 - 创建终端：先分配编号，再创建面板；关闭只删条目，不回退计数。
-- 恢复：布局中的终端面板按状态库 `project_terminals` 取编号；缺失条目从 `next_ordinal` 递增分配；重复编号保留最小者，其余重分配；孤儿条目丢弃。
+- `TerminalBook` 是终端自定义标题、编号与最近 cwd 的唯一持久化权威；项目布局 `layout_json` 不保存这些字段，也不保存编号计数。
+- 恢复：布局中的终端面板按状态库 `project_terminals` 的 `TerminalBook` 取编号；缺失条目从 `next_ordinal` 递增分配；重复编号保留最小者，其余重分配；孤儿条目丢弃。恢复不以布局重算编号。
 - 自定义标题立即持久化；编号与 cwd 去抖 300ms。
 - 标题展示：自定义标题 > 运行中 CLI 会话标题 > 历史会话标题 > `terminal-N`。
 
@@ -280,7 +281,7 @@ pub enum DiffMode { HeadToWorktree, ConflictSnapshot }
 pub enum DedupeKey {
     Editor { project: ProjectId, path: PathKey },
     Markdown { project: ProjectId, path: PathKey },
-    Diff { project: ProjectId, workspace: PathKey, mode: DiffMode },
+    Diff { project: ProjectId, workspace: PathKey },
     GitShow { project: ProjectId, repo_path: CaseFoldKey },
     Settings { project: ProjectId },
 }
@@ -293,8 +294,8 @@ pub struct DedupeIndex { /* key -> PanelId */ }
 ```
 
 - 终端返回 `None`，每次新建独立面板。
-- 编辑器与 Markdown 的键为“项目 + 规范化真实路径”；Diff 为“项目 + 规范化工作区路径 + `mode/source`”，只有 `HeadToWorktree` 参与去重；GitShow 为“项目 + 仓库相对路径”，大小写不敏感；设置中心为项目单例。
-- 冲突快照是瞬态 Diff 面板：有独立 `PanelId`，不参与去重、不持久化、不入布局，重启消失。
+- 编辑器与 Markdown 的键为“项目 + 规范化真实路径”；默认 Diff 为“项目 + 规范化工作区路径”，来源与模式不参与去重；`DiffMode` 只作运行期判别，不进入键。GitShow 为“项目 + 仓库相对路径”，大小写不敏感；设置中心为项目单例。
+- 冲突快照是瞬态 Diff 面板：有独立 `PanelId`，不参与去重、不持久化、不入布局，重启消失；其去重按“项目 + 源面板 + 快照代次”在运行期完成，不进入 `DedupeIndex` 的持久键。
 - 命中去重键：激活所属项目/面板组/面板并直接聚焦；不产生一次性焦点意图。
 - 标题计算：
 
@@ -363,12 +364,65 @@ pub fn snapshot_registry(reg: &ProjectRegistry, ids: &IdAllocator) -> WorkspaceD
 pub fn restore_registry(dto: WorkspaceDto) -> (ProjectRegistry, IdAllocator, RestoreReport);
 ```
 
+持久化 DTO 合同：
+
+```rust
+pub struct WorkspaceDto {
+    pub schema_version: u32,
+    pub revision: u64,
+    pub active_project: Option<u64>,
+    pub projects: Vec<ProjectEntryDto>,   // 数组顺序 = 导航树顺序
+    pub next_project: u64,
+    pub next_group: u64,
+    pub next_panel: u64,
+}
+
+pub struct ProjectEntryDto {
+    pub id: u64,
+    pub root_lexical: String,
+    pub display_name: String,
+}
+
+pub struct ProjectLayoutDto {
+    pub schema_version: u32,
+    pub revision: u64,
+    pub tree: Option<SplitTreeDto>,       // slterm_split 的序列化树，叶为 group id
+    pub groups: Vec<PanelGroupDto>,
+    pub panels: Vec<PanelRecordDto>,
+    pub focused_group: Option<u64>,
+}
+
+pub struct PanelGroupDto { pub id: u64, pub panels: Vec<u64>, pub active: u64 }
+pub struct PanelRecordDto { pub id: u64, pub kind: PanelKindDto, pub params: PanelParamsDto }
+
+pub struct TerminalsDto {
+    pub schema_version: u32,
+    pub revision: u64,
+    pub next_ordinal: u32,
+    pub entries: Vec<TerminalEntryDto>,
+}
+
+pub struct TerminalEntryDto {
+    pub panel_id: u64,
+    pub ordinal: u32,
+    pub custom_title: Option<String>,
+    pub cwd: Option<String>,
+}
+```
+
+- 三套 DTO 的 `schema_version` 必须等于 `state.db.user_version`；不等即整库不兼容。`revision` 是载荷结构版本（首版为 1），恢复时高于当前支持即不兼容；它不是行级并发令牌，并发由单写线程与事务保证。
+- `ProjectEntryDto` 只持久化词法根路径；真实路径在恢复时按当前磁盘重新解析，不进入 DTO。
+- `PanelKindDto` 是 `PanelKind` 的 snake_case 字符串；`PanelParamsDto` 使用 `#[serde(tag = "kind", content = "params", rename_all = "snake_case")]`，变体字段与对应的 `TerminalParams`/`EditorParams`/`MarkdownParams`/`DiffParams`/`GitShowParams`/`SettingsParams` 完全一致，并保留各自 `revision`。
+- 容器一律数组，不依赖 JSON map 键；数组顺序是语义：`projects` 是导航树顺序，`PanelGroupDto.panels` 是页签顺序。重复 ID 保留先出现者，后者丢弃并记入 `RestoreReport`；`TerminalsDto.entries` 按 `panel_id` 去重。
+- `serde` 统一 `deny_unknown_fields`；新增可选字段用 `serde(default)`，不升 `revision`；字段改名、删除或语义变化必须升对应参数 `revision`。
+- 运行期到 DTO 的映射是纯函数：`PanelRecord.params` 是唯一权威，`PanelGroup.panels` 只存 ID；`TerminalBook` 只进 `TerminalsDto`，不复制进布局。`WorkspaceDto` 不保存布局与终端簿，`ProjectLayoutDto`/`TerminalsDto` 按项目分表存储。
+
 恢复对账顺序（幂等）：
 
 - 状态库 `user_version` 与完整性由 `persistence.md` 校验；本层只接收已通过版本校验的载荷。
 - ID 解析与全局唯一性校验；重复的 `PanelGroupId`/`PanelId` 保留先出现者，后者丢弃。
 - 丢弃未知 `PanelKind`、超版本 `revision`、缺失必需字段的面板。
-- 丢弃引用不存在组的面板；丢弃不在树上的组；丢弃空组；按 `slterm_split` 规则塌缩树。
+- 丢弃引用不存在面板的组条目；丢弃不在树上的组；删除未被任何 `PanelGroup.panels` 引用的 `PanelRecord`；丢弃空组；按 `slterm_split` 规则塌缩树。
 - 修正 `active`（不在组内 → 首面板）、`focused_group`（不在树 → 树首叶；无组 → `None`）。
 - 终端簿对账：补编号、去重复、丢孤儿、校验 cwd（不存在/越界 → `None`，运行时回退项目根并提示）。
 - 去重冲突：同键多个面板保留布局顺序靠前者，其余丢弃并警告。
@@ -407,7 +461,7 @@ pub fn restore_registry(dto: WorkspaceDto) -> (ProjectRegistry, IdAllocator, Res
   - 未知前缀/未知 ID → `resource_not_found`；格式不合法 → `invalid_params`。
   - 事件与快照同时携带资源 ID 与必要父 ID（`project` 可选，因为 `panel` 全局唯一）。
 - 环境变量：`SLTERM_PROJECT_ID`、`SLTERM_PANEL_GROUP_ID`、`SLTERM_PANEL_ID` 使用同一字符串；`SLTERM_PANE_ID` 随 v1 退役，不保留兼容别名。
-- 单实例移交载荷、CLI `slterm ctl` 与随包 skill 使用同一 ID 形式。
+- CLI `slterm ctl` 与随包 skill 使用同一 ID 形式；单实例移交载荷用根路径/cwd 定位，不传内部 ID。
 - 资源 ID 不是授权凭据；权限仍由本机 token 与单实例边界决定。
 
 ### 面板类型注册表扩展规则
