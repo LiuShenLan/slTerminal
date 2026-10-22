@@ -28,7 +28,8 @@ $script:WorkspaceMembers = @(
     'slterm_completions',
     'slterm_hook',
     'slterm_settings',
-    'slterm_split'
+    'slterm_split',
+    'slterm_runtime_protocol'
 )
 $script:SourceRoots = @(
     $script:WorkspaceMembers | ForEach-Object { Join-Path $script:RepoRoot $_ }
@@ -40,6 +41,8 @@ $script:SourceRoots = @(
 
 # 包内清单唯一真值源:便携 zip 的目录布局与安装器 [Files] 共同消费。
 # PackagePath 是包内相对路径;BuildName 取构建目录,RepoPath 取仓库根。
+# 目录条目只允许登记在 PackageDirectories,由 Resolve-PackageSources 受控
+# 展开为逐个文件;展开结果仍属于本清单,安装器/便携 staging 必须全等。
 $script:PackageEntries = @(
     [pscustomobject]@{ PackagePath = 'slterm.exe'; BuildName = 'slterm.exe' }
     [pscustomobject]@{ PackagePath = 'runtime/slterm-hook.exe'; BuildName = 'slterm-hook.exe' }
@@ -55,6 +58,12 @@ $script:PackageEntries = @(
     [pscustomobject]@{ PackagePath = 'licenses/LICENSE'; RepoPath = 'LICENSE' }
     [pscustomobject]@{ PackagePath = 'licenses/THIRD-PARTY-NOTICES'; RepoPath = 'THIRD-PARTY-NOTICES' }
     [pscustomobject]@{ PackagePath = 'licenses/LICENSE-LATIN-MODERN-MATH'; RepoPath = 'licenses/LICENSE-LATIN-MODERN-MATH' }
+)
+
+# 目录条目:受控展开——只允许在此登记,展开后逐个进入包内清单。
+# RepoDir 取仓库根,PackageDir 是包内目录,Filter 限定收录文件名模式。
+$script:PackageDirectories = @(
+    [pscustomobject]@{ RepoDir = 'docs/featureSpec/assets/cli-svg'; PackageDir = 'assets/cli-svg'; Filter = '*.svg' }
 )
 
 function Get-BuildRoot([string] $TargetRoot, [string] $Configuration) {
@@ -153,18 +162,64 @@ function Assert-FreshBinaries([string[]] $Binaries, [string[]] $SourceRoots) {
     }
 }
 
+# workspace 成员表必须与根 Cargo.toml 全等,防新鲜度判据漏掉新增成员。
+function Assert-WorkspaceMembers {
+    $manifestPath = Join-Path $script:RepoRoot 'Cargo.toml'
+    $manifest = Get-Content -Raw -LiteralPath $manifestPath
+    $workspace = [regex]::Match($manifest, '(?ms)^\[workspace\]\s*\r?\n(.*?)(?=^\[|\z)')
+    if (-not $workspace.Success) {
+        throw '根 Cargo.toml 缺少 [workspace] 节'
+    }
+    $members = [regex]::Match($workspace.Groups[1].Value, '(?ms)^\s*members\s*=\s*\[(.*?)\]')
+    if (-not $members.Success) {
+        throw '根 Cargo.toml [workspace] 缺少 members 数组'
+    }
+    $declared = @([regex]::Matches($members.Groups[1].Value, '"([^"]+)"') |
+        ForEach-Object { $_.Groups[1].Value })
+    $difference = @(Compare-Object -ReferenceObject @($script:WorkspaceMembers | Sort-Object) `
+        -DifferenceObject @($declared | Sort-Object))
+    if ($difference.Count -ne 0) {
+        $details = $difference | ForEach-Object { "$($_.SideIndicator) $($_.InputObject)" }
+        throw "Workspace 成员表与根 Cargo.toml 不一致(脚本表为 Reference):`n$($details -join "`n")"
+    }
+}
+
 # 清单 → 源文件绝对路径;两脚本同表派生,防多一件少一件。
+# 目录条目按文件名排序展开;包内路径重复即拒绝。
 function Resolve-PackageSources([string] $BuildRoot) {
-    $resolved = foreach ($entry in $script:PackageEntries) {
+    $resolved = [System.Collections.Generic.List[object]]::new()
+    foreach ($entry in $script:PackageEntries) {
         $source = if ($entry.PSObject.Properties['BuildName']) {
             Join-Path $BuildRoot $entry.BuildName
         } else {
             Join-Path $script:RepoRoot $entry.RepoPath
         }
-        [pscustomobject]@{ PackagePath = $entry.PackagePath; Source = $source }
+        $resolved.Add([pscustomobject]@{ PackagePath = $entry.PackagePath; Source = $source })
+    }
+    foreach ($directory in $script:PackageDirectories) {
+        $sourceDirectory = Join-Path $script:RepoRoot $directory.RepoDir
+        if (-not (Test-Path -LiteralPath $sourceDirectory -PathType Container)) {
+            throw "目录清单源不存在:$sourceDirectory"
+        }
+        $files = @(Get-ChildItem -LiteralPath $sourceDirectory -File -Filter $directory.Filter |
+            Sort-Object Name)
+        foreach ($file in $files) {
+            $resolved.Add([pscustomobject]@{
+                PackagePath = "$($directory.PackageDir)/$($file.Name)"
+                Source      = $file.FullName
+            })
+        }
+    }
+    $duplicates = @($resolved | Group-Object PackagePath | Where-Object Count -gt 1 |
+        ForEach-Object Name)
+    if ($duplicates.Count -ne 0) {
+        throw "包内路径重复:$($duplicates -join ', ')"
     }
     return @($resolved)
 }
+
+# 加载即校验:脚本内成员表是新鲜度与哈希判据的输入,漂移必须立即报红。
+Assert-WorkspaceMembers
 
 if ($LibraryOnly) {
     return

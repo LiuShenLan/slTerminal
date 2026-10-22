@@ -7,5 +7,6 @@ root slterm_settings
 root slterm_split
 root scripts
 root tools
+root slterm_runtime_protocol
 slterm_terminal/src/term/mod.rs 2729
 slterm_terminal/src/event_loop.rs 2185

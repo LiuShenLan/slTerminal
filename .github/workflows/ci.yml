@@ -1,0 +1,73 @@
+name: CI
+
+"on":
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-gates:
+    name: Windows 提交门禁与虚拟窗口测试
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Rust 工具链（读取 rust-toolchain.toml，启用缓存）
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: true
+          # 该 action 默认注入 -D warnings，会改变项目 clippy 门禁口径。
+          rustflags: ""
+
+      - name: 安装 Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 检查 Rust 格式
+        shell: pwsh
+        run: cargo fmt --all -- --check
+
+      - name: Clippy 全工作区
+        shell: pwsh
+        run: cargo clippy --workspace --all-targets
+
+      - name: Clippy slterm 虚拟窗口测试支持
+        shell: pwsh
+        run: cargo clippy -p slterm --all-targets --features gpui-test-support
+
+      - name: 工作区测试
+        shell: pwsh
+        run: cargo test --workspace -- --test-threads=1
+
+      - name: slterm 虚拟窗口测试
+        shell: pwsh
+        run: cargo test -p slterm --test lib_tests --features gpui-test-support -- --test-threads=1
+
+      - name: 架构门禁
+        shell: pwsh
+        run: python scripts/check_architecture.py
+
+      - name: 文档策略门禁
+        shell: pwsh
+        run: python scripts/check_doc_policy.py full
+
+      - name: 品牌回流门禁
+        shell: pwsh
+        run: python scripts/check_brand_regress.py full
+
+      - name: 脚本门禁自测
+        shell: pwsh
+        run: python -m unittest discover -s scripts/tests -p "test_*.py"
+
+      - name: 发布打包自测
+        shell: pwsh
+        run: pwsh -NoProfile -File scripts/tests/package-release.tests.ps1 -SelfTest
+
+      - name: 资产预览校验
+        shell: pwsh
+        run: pwsh -NoProfile -File scripts/generate-asset-previews.ps1 -Check

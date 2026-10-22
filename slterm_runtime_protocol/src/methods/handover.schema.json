@@ -1,0 +1,158 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://slterm.dev/runtime/handover-v1.schema.json",
+  "title": "slTerminal runtime.handover request",
+  "description": "Runtime v2 单实例移交请求。一次只含一个 op；载荷用根路径/cwd 定位目标，不传 ProjectId/PanelId 等内部 ID。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "request_id", "op"],
+  "properties": {
+    "schema": {
+      "const": 1,
+      "description": "线缆 schema 版本；接收端拒绝未知版本。"
+    },
+    "request_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "幂等键；接收端按它缓存首次结果，同一键不重复执行。"
+    },
+    "op": {
+      "$ref": "#/$defs/op"
+    }
+  },
+  "$defs": {
+    "path": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!(?:project|group|panel):)",
+      "description": "文件系统路径（project_root/cwd/path），不是 project:/group:/panel: 形式的内部资源 ID；Windows 路径合法性由平台层校验。"
+    },
+    "op": {
+      "description": "以 kind 判别的单一操作。",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": {
+            "kind": {
+              "const": "focus"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "project_root"],
+          "properties": {
+            "kind": {
+              "const": "open_project"
+            },
+            "project_root": {
+              "$ref": "#/$defs/path",
+              "description": "已登记项目根的路径，不是内部资源 ID。"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "path"],
+          "properties": {
+            "kind": {
+              "const": "open_file"
+            },
+            "project_root": {
+              "$ref": "#/$defs/path",
+              "description": "所属项目根路径，不是内部资源 ID。"
+            },
+            "path": {
+              "$ref": "#/$defs/path",
+              "description": "文件路径，不是内部资源 ID。"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": {
+            "kind": {
+              "const": "new_terminal"
+            },
+            "project_root": {
+              "$ref": "#/$defs/path",
+              "description": "目标项目根路径，不是内部资源 ID。"
+            },
+            "cwd": {
+              "$ref": "#/$defs/path",
+              "description": "新终端工作目录路径，不是内部资源 ID。"
+            }
+          }
+        }
+      ]
+    },
+    "reject": {
+      "type": "string",
+      "enum": [
+        "unknown_schema",
+        "invalid_path",
+        "project_not_found",
+        "project_not_ready",
+        "pty_limit",
+        "unsupported"
+      ],
+      "description": "移交拒绝原因。"
+    },
+    "reply": {
+      "description": "移交结果；以 kind 判别的三态。",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "request_id"],
+          "properties": {
+            "kind": {
+              "const": "accepted"
+            },
+            "request_id": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "request_id", "reason"],
+          "properties": {
+            "kind": {
+              "const": "rejected"
+            },
+            "request_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "reason": {
+              "$ref": "#/$defs/reject"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "request_id"],
+          "properties": {
+            "kind": {
+              "const": "busy"
+            },
+            "request_id": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      ]
+    }
+  }
+}

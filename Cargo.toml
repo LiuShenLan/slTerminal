@@ -6,6 +6,7 @@ members = [
     "slterm_hook",
     "slterm_settings",
     "slterm_split",
+    "slterm_runtime_protocol",
 ]
 resolver = "2"
 
@@ -19,6 +20,8 @@ license = "GPL-3.0"
 # Thin LTO preserves package-specific optimization levels. Dependencies retain
 # one codegen unit; the application uses parallel codegen with the same O3 level.
 lto = "thin"
+# 面板错误边界依赖 catch_unwind;release 必须保持 unwind,不得改为 abort。
+panic = "unwind"
 debug = 0
 strip = "symbols"
 incremental = false

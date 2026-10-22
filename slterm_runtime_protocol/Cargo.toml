@@ -1,0 +1,23 @@
+[package]
+name = "slterm_runtime_protocol"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# 每 crate 显式 test target——定向测试一律
+# `cargo test -p slterm_runtime_protocol --test lib_tests <filter>`,禁 filter
+# 直打默认 lib target(filter/--lib 会绕过 test=false 重建默认单测 target)。
+[lib]
+test = false
+
+[[test]]
+name = "lib_tests"
+path = "src/lib.rs"
+
+# 零生产依赖契约(architecture/dependencies.toml 机械强制):线缆类型只借用
+# 字符串,序列化与平台路径校验由调用方承担。
+[dependencies]
+
+[dev-dependencies]
+# 仅测试用于验证随包 JSON Schema 可解析。
+serde_json = "1"

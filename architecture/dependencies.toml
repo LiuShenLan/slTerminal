@@ -21,6 +21,10 @@ zero_production_dependencies = true
 layer = "core"
 zero_production_dependencies = true
 
+[crates.slterm_runtime_protocol]
+layer = "core"
+zero_production_dependencies = true
+
 [crates.slterm_hook]
 layer = "hook"
 zero_production_dependencies = true

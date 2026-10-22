@@ -391,26 +391,26 @@ pub struct AgentState { pub state: TerminalTaskState, pub state_change_seq: u64 
 
 **`runtime.handover` 线缆类型**
 
-定义于 `slterm_runtime_protocol::methods::handover`；一次移交只含单个 `HandoffOp`，不定义操作序列。平台层只做 Windows 路径校验与结果映射，不自定义载荷类型。
+定义于 `slterm_runtime_protocol::methods::handover`；一次移交只含单个 `HandoffOp`，不定义操作序列。平台层只做 Windows 路径校验与结果映射，不自定义载荷类型。crate 为零生产依赖，线缆类型只借用字符串；`request_id` 是不透明非空字符串，客户端按 UUIDv4 形态生成，协议 crate 不依赖 `uuid`。机器可读 schema 为 `HANDOFF_SCHEMA_JSON`（`schema` 当前为 1）。
 
 ```rust
-pub struct HandoffRequest {
+pub struct HandoffRequest<'a> {
     pub schema: u16,                 // 版本化；未知版本拒绝
-    pub request_id: Uuid,            // 幂等键
-    pub op: HandoffOp,
+    pub request_id: &'a str,         // 幂等键；非空，不传内部资源 ID
+    pub op: HandoffOp<'a>,
 }
 
-pub enum HandoffOp {
+pub enum HandoffOp<'a> {
     Focus,
-    OpenProject { root: String },
-    OpenFile { project_root: Option<String>, path: String },
-    NewTerminal { project_root: Option<String>, cwd: Option<String> },
+    OpenProject { project_root: &'a str },
+    OpenFile { project_root: Option<&'a str>, path: &'a str },
+    NewTerminal { project_root: Option<&'a str>, cwd: Option<&'a str> },
 }
 
-pub enum HandoffReply {
-    Accepted { request_id: Uuid },
-    Rejected { request_id: Uuid, reason: HandoffReject },
-    Busy { request_id: Uuid },
+pub enum HandoffReply<'a> {
+    Accepted { request_id: &'a str },
+    Rejected { request_id: &'a str, reason: HandoffReject },
+    Busy { request_id: &'a str },
 }
 
 pub enum HandoffReject { UnknownSchema, InvalidPath, ProjectNotFound, ProjectNotReady, PtyLimit, Unsupported }

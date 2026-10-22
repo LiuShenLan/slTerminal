@@ -88,7 +88,7 @@ slterm_hook     → 无生产依赖
 - 包内资产：应用图标 PNG/ICO、CLI 品牌 logo、许可文件、第三方声明、Runtime API v2 文档与 schema、随包 skill、CHANGELOG；不再携带 v1 schema 与旧版 skill 文案。
 - CLI logo canonical 源为 `docs/featureSpec/assets/cli-svg/`；构建脚本扫描该目录生成 `AgentKind` 品牌索引，并把文件集复制到包内 `assets/cli-svg/`。资产清单、`PackageEntries`、安装器 `[Files]`、便携 staging 与 `THIRD-PARTY-NOTICES` 的 logo 段必须一致；缺失、哈希不符或声明缺段拒绝构建。
 - logo 许可：Cursor 与 GitHub Copilot 保留 LobeHub `@lobehub/icons-static-svg` MIT 声明；其余按项目所有者逐文件确认的作者提供记录，并保留商标归属声明。
-- 文档资产预览由构建期脚本从 `docs/featureSpec/assets/` 生成到 `preview/`，并校验预览集合等于需要预览的原文件子集、颜色替换符合规格；预览副本不进入安装包。
+- 文档资产预览由构建期脚本 `scripts/generate-asset-previews.ps1` 从 `docs/featureSpec/assets/` 生成到 `preview/`，并校验预览集合等于需要预览的原文件子集、颜色替换符合规格；预览副本不进入安装包。
 - 包内文件集、安装器脚本、便携 zip staging 与钉测试必须一致；资产路径变更时同步更新。
 
 ### 安装器与便携包

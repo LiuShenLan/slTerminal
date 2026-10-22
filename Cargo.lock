@@ -6466,6 +6466,13 @@ name = "slterm_hook"
 version = "0.0.0"
 
 [[package]]
+name = "slterm_runtime_protocol"
+version = "0.0.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "slterm_terminal"
 version = "0.1.0"
 dependencies = [

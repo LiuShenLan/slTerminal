@@ -54,6 +54,7 @@ function Assert-ReleaseProfile {
 
     $requiredRelease = [ordered]@{
         'lto'           = '"thin"'
+        'panic'         = '"unwind"'
         'debug'         = '0'
         'strip'         = '"symbols"'
         'incremental'   = 'false'
@@ -185,6 +186,42 @@ function Invoke-FreshnessSelfTest {
     }
 }
 
+# 清单自测:workspace 成员表与根 Cargo.toml 全等;目录条目受控展开后
+# 逐个进包,且与安装器 [Files] wildcard 对齐,包内路径无重复。
+function Invoke-ManifestSelfTest {
+    . (Join-Path $repoRoot 'scripts/build-windows-product.ps1') -LibraryOnly
+    Assert-WorkspaceMembers
+
+    $sources = @(Resolve-PackageSources (Join-Path $repoRoot 'target/manifest-selftest-build'))
+    $duplicates = @($sources | Group-Object PackagePath | Where-Object { $_.Count -gt 1 })
+    if ($duplicates.Count -ne 0) {
+        throw "包内路径重复:$($duplicates.Name -join ', ')"
+    }
+
+    $logoDirectory = Join-Path $repoRoot 'docs/featureSpec/assets/cli-svg'
+    $logoFiles = @(Get-ChildItem -LiteralPath $logoDirectory -File -Filter '*.svg' | Sort-Object Name)
+    if ($logoFiles.Count -eq 0) {
+        throw "CLI logo 源目录没有 *.svg:$logoDirectory"
+    }
+    $logoEntries = @($sources | Where-Object { $_.PackagePath -like 'assets/cli-svg/*.svg' })
+    if ($logoEntries.Count -ne $logoFiles.Count) {
+        throw "CLI logo 包内条目数与源目录不一致:$($logoEntries.Count) != $($logoFiles.Count)"
+    }
+    $expectedLogoPaths = @($logoFiles | ForEach-Object { "assets/cli-svg/$($_.Name)" })
+    $actualLogoPaths = @($logoEntries | ForEach-Object { $_.PackagePath })
+    $logoDifference = @(Compare-Object -ReferenceObject $expectedLogoPaths -DifferenceObject $actualLogoPaths)
+    if ($logoDifference.Count -ne 0) {
+        $details = $logoDifference | ForEach-Object { "$($_.SideIndicator) $($_.InputObject)" }
+        throw "CLI logo 包内路径不匹配:`n$($details -join "`n")"
+    }
+
+    $wildcard = 'Source: "{#RepoRoot}\docs\featureSpec\assets\cli-svg\*.svg"; DestDir: "{app}\assets\cli-svg"; Flags: ignoreversion'
+    $installer = Get-Content -Raw -LiteralPath (Join-Path $repoRoot 'scripts/installer.iss')
+    if (-not $installer.Contains($wildcard)) {
+        throw "installer.iss 缺少 CLI logo 收录行:$wildcard"
+    }
+}
+
 if ([string]::IsNullOrWhiteSpace($Version)) {
     $Version = Get-ProductVersion
 }
@@ -195,9 +232,10 @@ if ($Version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') {
 Assert-ReleaseProfile
 
 if ($SelfTest) {
+    Invoke-ManifestSelfTest
     Invoke-BudgetSelfTest
     Invoke-FreshnessSelfTest
-    Write-Output 'package-release.tests.ps1: SELFTEST PASS (profile pin, budget boundary, missing asset, freshness digest)'
+    Write-Output 'package-release.tests.ps1: SELFTEST PASS (profile pin, workspace/manifest, budget boundary, missing asset, freshness digest)'
     return
 }
 
