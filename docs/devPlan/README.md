@@ -86,12 +86,12 @@
 | Hooks 目录、schema、三层文档、注入/卸载 | `design/integrations/hooks.md` |
 | Runtime v2 协议、资源 ID、方法、错误码、移交载荷 | `design/integrations/runtime-api-v2.md` |
 | 面板类型注册、生命周期、能力与焦点接缝 | `design/workspace/shell.md` |
-| 面板参数与运行期模型（各面板） | `design/panels/*.md`、`design/sidebar/*.md` |
+| 面板运行期模型与内部行为（各面板）；`PanelParams` 字段归 `design/domain-model.md` | `design/panels/*.md`、`design/sidebar/*.md` |
 | 设置页注册、保存模式、应用页键表 | `design/panels/settings.md`、`design/settings/app-page.md` |
 | AI Providers 元数据、AI 助手配置与 Provider 类型 | `design/settings/app-page.md` |
 | AI 修复条触发、建议状态与终端增强行为 | `design/panels/terminal.md` |
 | 加密备份归档、类别、恢复点与敏感键边界 | `design/persistence.md`、`design/security.md` |
-| 构建、包清单、更新、发布门禁 | `design/build-and-release.md` |
+| 构建、包清单、更新、安装交接（含 `HandoffWorkspaceV2`）、发布门禁 | `design/build-and-release.md` |
 
 ## 维护规则
 

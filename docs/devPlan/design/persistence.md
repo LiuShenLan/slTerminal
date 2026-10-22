@@ -98,7 +98,7 @@ CREATE TABLE recovery_index (
 
 - `layout_json` 是 `ProjectLayoutDto`；`terminals_json` 是 `TerminalsDto`；两者字段与恢复对账归 `domain-model.md`。`sidebar.layout_json` 是侧栏布局；`view_states.state_json` 是各视图声明状态。
 - `view_states` 每个视图一行；`state_json` 内部按视图 owner 声明的作用域键控（导航树展开集合按 `ProjectId`，滚动为应用级单值），持久化层只存取、不解释内部键；单视图 256 KiB 上限由该视图全部项目/节点状态共享，超限拒绝写入并提示。
-- `workspace.next_*` 是全局 ID 游标；恢复时取 `max(next_*, maxSeen + 1, maxDir + 1)`，`maxDir` 为 `recovery/` 目录名中的最大值。状态库不保存真实路径；项目根真实路径在运行时解析。
+- `workspace.next_*` 是全局 ID 游标；恢复时取 `max(next_*, maxSeen + 1, maxDir + 1)`，`maxDir` 为 `recovery/` 目录名中的最大值，只覆盖 `ProjectId`，不承担跨状态库的 group/panel 唯一性。状态库隔离并新建后进入新 ID 纪元，旧 ID 不再解析。状态库不保存真实路径；项目根真实路径在运行时解析。
 - `projects.root` 是归一化词法路径并唯一；`sort_index` 是项目顺序。
 - 所有 JSON 载荷在写入前由前台生成不可变字节；后台线程不得回读实体。
 - 单载荷上限：布局 4 MiB、终端簿 1 MiB、侧栏 256 KiB、单视图 256 KiB；超限拒绝写入并通知。状态库总大小软上限 256 MiB，超限只读并提示，不自动删除数据。这些上限是持久化设计的契约值，其他文档引用本节，不复述数值。

@@ -121,7 +121,7 @@ impl PathAuthority {
 ```
 
 - 读/写允许根与只读例外（仓库根内、项目根外只读；`AgentRoot` 可写）以 [security.md](../security.md) §路径允许根与真实路径校验为单点；Commit 回滚/删除在此基础上再叠加「路径必须在项目根词法范围内」检查。
-- 所有写入（含编辑器与 Diff 保存）在原子替换前重新解析真实路径并经 `PathGuard` 拒绝重解析点与符号链接逃逸；调用方不得跳过。
+- 所有写入（含编辑器与 Diff 保存）在原子替换前重新解析真实路径并经 `PathGuard` 校验：只拒绝真实目标越界的重解析点与符号链接（`ReparsePointEscape`），根内目标的链接允许读写；调用方不得跳过。
 - `AgentRoot` 由 Agent 能力注册表的静态目录与设置中的自定义节点实时快照组成；目录本身的定义归 Agent 集成域，本域只消费真实路径集合。
 - 显式用户选择（系统“另存为”）经 `explicit_user_choice` 生成一次性 `PathRef`，只允许编辑器保存目标；审计记录 operation/path/result，不记录文件内容。该通道不得用于文件树、Commit、GitShow 或自动打开。
 - Markdown 文档中的显式本地链接经 `explicit_local_link` 生成只读单文件 `PathRef`：只允许读取该文件本身，不加载其根外资源；UNC 与设备路径仍按允许根规则拒绝。该通道只供 Markdown 面板消费，不得用于文件树、编辑器自动打开或写入。
@@ -282,7 +282,7 @@ impl GitServices {
 
 - 所有步骤先按 `expected_revision` 重跑权威 `status` 并重新校验目标状态与路径；不一致返回 `GitError::Stale`，不执行任何磁盘/索引写入。
 - modified/deleted/conflict 回滚：`git --no-optional-locks --literal-pathspecs -C <repo> checkout HEAD -- <path>`，索引与工作区同时回到 HEAD 字节。
-- renamed 回滚：先恢复旧路径，成功后才删除新路径；旧路径恢复失败不得删除新路径；新路径删除失败按部分成功返回。
+- renamed 回滚：先恢复旧路径（索引与工作区）；成功后用 `unstage(new_path)`（等价 `git reset -- new_path`）清除新路径索引条目，再删除新路径工作区文件；旧路径恢复失败不得清理索引或删除新路径；索引清理失败按部分成功返回并报告残留；新路径删除失败按部分成功返回。测试接缝：staged modified/renamed 回滚后 `git status --porcelain=v2` 不出现 `AD`/`A.` 残留。
 - added 删除：先 `unstage`，成功后才把工作区文件移入回收站；取消暂存失败时磁盘文件保持不变。
 - untracked 删除：直接回收站/永久删除回退。
 - 符号链接只操作链接项；所有写操作经 `RepoWriteGate` 按仓库串行，完成后推进两个代次并静默刷新。
@@ -347,7 +347,7 @@ impl FileServices {
 1. 校验父目录存在且位于允许根；父目录不存在时由调用方决定是否创建（新建文件流程创建；编辑器保存不隐式创建父目录）。
 2. 同目录创建唯一临时文件，写入、flush、sync。
 3. 复制目标文件 ACL 与只读属性（存在时）；保留扩展属性不在首版承诺。
-4. 替换前重新经 `PathGuard` 解析目标真实路径，拒绝重解析点与符号链接逃逸；若有 `expect`，再比较 stamp，不一致则删除临时文件并返回 `ExternalModified`。
+4. 替换前重新经 `PathGuard` 解析目标真实路径，只拒绝真实目标越界的重解析点与符号链接（根内目标允许）；若有 `expect`，再比较 stamp，不一致则删除临时文件并返回 `ExternalModified`。
 5. `MoveFileExW(REPLACE_EXISTING | WRITE_THROUGH)` 原子替换目标路径。
 6. 返回新 stamp，并登记自触发抑制。
 

@@ -22,7 +22,7 @@ sidebar_host/views/navigation/
   render.rs / menu.rs
 ```
 
-会话领域在 `slterm_agents::sessions`：来源扫描、元数据、词法归属、删除账本、恢复计划；导航视图只做行投影与命令。`scan_service.rs`/`restore.rs`/`delete.rs` 仅做视图编排与命令派发，不持有扫描、归属或删除账本。类型定义见 `integrations/agent-cli.md`，本文件不复制 `SessionRecord`/`SessionProvider`。
+会话领域在 `slterm_agents::sessions`：元数据模型、词法归属、删除账本、恢复计划与纯投影；来源枚举、扫描编排、来源健康与 provider 适配器在 app（`scan_service.rs`/`sessions`），经 `SessionIo`/`PathAuthority` 访问文件。导航视图只做行投影与命令；`scan_service.rs`/`restore.rs`/`delete.rs` 仅做视图编排与命令派发，不持有扫描、归属或删除账本。类型定义见 `integrations/agent-cli.md`，本文件不复制 `SessionRecord`/`SessionProvider`。
 
 ### 行模型
 
@@ -89,7 +89,7 @@ pub enum SessionStatus {
 
 ### 扫描与操作接口
 
-扫描、来源健康、归属与删除账本由 `slterm_agents::sessions::SessionProvider`/`SessionCatalog` 提供（见 `integrations/agent-cli.md`）；导航只定义命令与行投影。
+归属与删除账本由 core `slterm_agents::sessions::SessionCatalog` 提供；来源枚举、扫描编排、来源健康与 provider 适配器在 app（`scan_service.rs`/`sessions`），经 `SessionIo`/`PathAuthority` 访问文件（见 `integrations/agent-cli.md`）；导航只定义命令与行投影。
 
 ```rust
 pub enum NavCommand {
@@ -109,7 +109,7 @@ pub enum NavCommand {
 }
 ```
 
-- `SessionProvider` 的来源 id 与 `AgentKind` slug 对齐；app 适配器负责把 `AgentKind` 映射为来源与品牌信息。
+- app 侧 `SessionProvider` 的来源 id 与 `AgentKind` slug 对齐；app 适配器负责把 `AgentKind` 映射为来源与品牌信息。
 - 扫描结果与删除事务都只携带会话身份、路径、标题与时间，不携带正文；删除事务的隔离目录与启动清理由 app 服务执行，账本纯逻辑在 core。
 - 导航视图只发 `NavCommand` 与 `WorkspaceCommand`，不直接改项目目录、布局或面板。
 
@@ -238,7 +238,7 @@ pub enum NavCommand {
 | 旧实现 | 处置 |
 |---|---|
 | `ai_sessions.rs` 的 Claude/Codex 扫描、64KB 头部读取、标题提取、注入块过滤、hook 索引合并、`codex_rollout_id` 校验 | 复用为会话来源适配器的基础；索引扩展 cwd 与删除快照，文件改名避免旧数据碰撞 |
-| `ai_agents::AgentKind` 的 slug、显示名、resume/fork 命令与 id 校验 | 直接复用；新增 CLI 历史来源时按 `SessionProvider` 注册 |
+| `ai_agents::AgentKind` 的 slug、显示名、resume/fork 命令与 id 校验 | 直接复用；新增 CLI 历史来源时按 app 侧 `SessionProvider` 注册 |
 | `plan_balance` 快照、合并、订阅、5 秒节流语义基础 | 直接复用；页脚渲染新建 |
 | `session::valid_native_session_file`、`valid_dir` | 复用安全校验与目录回退 |
 | 旧导航树（tab 列表 + pane 列表） | 整体废弃；由项目 / 活跃会话 / 历史会话 / 未归属节点重建 |

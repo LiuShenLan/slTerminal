@@ -14,7 +14,7 @@ pub struct PanelId(u64);
 pub struct TerminalOrdinal(u32);
 ```
 
-- 三类 ID 均为应用级全局唯一，单调递增、终生不复用；`PanelGroupId`/`PanelId` 不按项目分段，Runtime v2、CLI 与随包 skill 可在不带项目的情况下无歧义寻址。单实例移交载荷用根路径/cwd 定位，不传内部 ID。
+- 三类 ID 在单个状态库生命周期内应用级全局唯一，单调递增、不复用；`PanelGroupId`/`PanelId` 不按项目分段，Runtime v2、CLI 与随包 skill 可在不带项目的情况下无歧义寻址。状态库因损坏被隔离并新建后进入新纪元：旧 ID 不再解析，墓碑与幂等缓存不跨纪元，客户端必须重新获取快照。单实例移交载荷用根路径/cwd 定位，不传内部 ID。
 - `ProjectId` 在根目录重定位、显示名重命名、项目排序后保持不变；根路径唯一是不变量，不是身份。
 - `TerminalOrdinal` 是项目内终端编号，从 0 开始，关闭不复用；不同项目可出现相同编号。
 - 分配器：
@@ -33,9 +33,19 @@ impl IdAllocator {
     /// 恢复时把游标抬到已见最大 ID 之上；绝不回退。
     pub fn observe_existing(&mut self, ids: PersistedIdCeiling);
 }
+
+pub struct PersistedIdCeiling {
+    pub next_project: u64,
+    pub next_group: u64,
+    pub next_panel: u64,
+    pub max_seen_project: u64,
+    pub max_seen_group: u64,
+    pub max_seen_panel: u64,
+    pub max_recovery_dir: u64, // 仅覆盖 recovery/ 目录名中的 ProjectId
+}
 ```
 
-- 恢复时 `observe_existing` 必须同时考虑状态库 `workspace.next_*`、已加载项目内的全部 ID、`recovery/` 目录名；游标统一取 `max(next_*, maxSeen + 1, maxDir + 1)`。这样状态库丢失后以空状态继续也不会与孤儿恢复目录 ID 冲突。
+- 恢复时 `observe_existing` 必须同时考虑状态库 `workspace.next_*`、已加载项目内的全部 ID、`recovery/` 目录名；游标统一取 `max(next_*, maxSeen + 1, maxDir + 1)`。`maxDir` 只覆盖恢复目录名中的 `ProjectId`，不承担跨状态库的 group/panel 唯一性；状态库丢失后按新纪元处理，不复用旧 ID 作为身份保证。
 - 字符串形式（Runtime v2、环境变量、CLI 与随包 skill）：`project:<u64>`、`group:<u64>`、`panel:<u64>`；解析失败即 `invalid_params`，未知资源即 `resource_not_found`。前缀集合封闭，未来新增资源类型只追加前缀，不复用旧前缀语义。
 - 线缆类型：协议 crate 的 `resource_id.rs` 只定义不透明字符串 `ResourceId` 及其解析/格式化/错误，不重复定义 `ProjectId`/`PanelGroupId`/`PanelId`；领域 newtype 唯一定义于本文件（`slterm_workspace::ids`）。完整线缆合同见 `integrations/runtime-api-v2.md`。
 
@@ -74,10 +84,17 @@ pub struct ProjectRoot {
 - 项目根词法路径唯一；添加已存在根路径返回 `AddProjectOutcome::Existing(id)`，由导航树激活并提示。
 - `active` 非空当且仅当 `entries` 非空；移除活跃项目后，按列表顺序取下一个，没有则取上一个，没有其他项目则为 `None`。
 - 显示名可重复；创建时与现有显示名冲突则追加递增数字后缀（`demo`、`demo 2`、`demo 3`）；重命名不再追加。
+- `display_name` 去首尾空白后非空，最多 80 个 Unicode 字符（按字符计数，不按字节）；持久化与 Runtime 共用该约束。
 - 排序只改变 `Vec` 顺序；活跃项目、布局、ID 不变。
 - 根重定位：
 
 ```rust
+pub struct PanelPathChange {
+    pub panel: PanelId,
+    pub path: PersistedPath,   // 按新根解析后的路径
+    pub outside_root: bool,    // true = 落到新根外，由面板规格决定只读/错误态
+}
+
 pub struct RelocationPlan {
     pub root: ProjectRoot,
     pub affected_panels: Vec<PanelPathChange>,
@@ -217,6 +234,10 @@ pub struct SettingsParams {
 
 /// 页面自有的不透明参数；schema 由页面注册表声明，工作区只存取、不解释。
 pub struct PageParams(pub serde_json::Value);
+
+pub struct SettingsPageId(pub &'static str); // 页面注册表登记的稳定键；值域由注册表封闭
+pub struct LanguageId(pub &'static str);     // LanguageRegistry 登记的稳定键；值域由注册表封闭
+pub struct CaseFoldKey(pub String);          // Windows 大小写不敏感比较键；显示保留原始大小写
 ```
 
 排除项（运行期状态，不持久化）：Diff 的“忽略行尾空白/忽略全部空白/折叠未变更区域”、编辑器代码折叠、手动只读、搜索状态、Markdown 查找栏、终端状态圆点/CLI 图标、GitShow 查找/换行、所有滚动位置（Markdown 滚动锚点例外，属于持久参数）。
@@ -235,7 +256,7 @@ pub enum PathScope { ProjectRelative, RepoRelative, Absolute }
 pub struct PersistedPath {
     pub scope: PathScope,
     pub value: String,
-    pub read_only: bool,       // 唯一只读标记；打开/恢复时按当前允许根重算
+    pub read_only: bool,       // 上次判定的记录值；加载时按当前允许根无条件重算
 }
 
 pub struct RepoPath { pub value: String }  // 相对仓库实际根
@@ -243,7 +264,7 @@ pub struct RepoPath { pub value: String }  // 相对仓库实际根
 
 - `ProjectRelative` 在根重定位时按新根解析；`RepoRelative` 在仓库根变化时重新解析；`Absolute` 原样使用。
 - 恢复时重新执行允许根校验：项目根 + 已登记 Agent 全局目录（`AgentRoot` 作用域）可写；仓库根内、项目根外只读；仓库根外一律只读。系统另存为授权只绑定当前运行期，不进入布局；Agent 根可写性是运行期判定，不新增持久化字段。
-- `PersistedPath.read_only` 是只读判定的唯一持久化字段；`EditorParams`/`MarkdownParams` 不重复携带。
+- `PersistedPath.read_only` 是只读判定的唯一持久化字段；持久值只记录上次判定，加载时按当前允许根无条件重算并以重算值为准，不回写旧判定；访问判定只用重算值，下一次快照写入重算后的值。`EditorParams`/`MarkdownParams` 不重复携带。
 - 路径比较用 `PathKey`：真实路径规范化后的 Windows 大小写不敏感键；显示路径保留原始大小写。
 
 ### 终端编号与终端簿
@@ -270,6 +291,7 @@ impl TerminalBook {
 - 创建终端：先分配编号，再创建面板；关闭只删条目，不回退计数。
 - `TerminalBook` 是终端自定义标题、编号与最近 cwd 的唯一持久化权威；项目布局 `layout_json` 不保存这些字段，也不保存编号计数。
 - 恢复：布局中的终端面板按状态库 `project_terminals` 的 `TerminalBook` 取编号；缺失条目从 `next_ordinal` 递增分配；重复编号保留最小者，其余重分配；孤儿条目丢弃。恢复不以布局重算编号。
+- 自定义标题去首尾空白后非空，最多 128 个 Unicode 字符（按字符计数，不按字节）；超出时拒绝提交。
 - 自定义标题立即持久化；编号与 cwd 去抖 300ms。
 - 标题展示：自定义标题 > 运行中 CLI 会话标题 > 历史会话标题 > `terminal-N`。
 
@@ -300,6 +322,12 @@ pub struct DedupeIndex { /* key -> PanelId */ }
 - 标题计算：
 
 ```rust
+/// 标题计算所需的运行期只读输入；不持有可变状态。
+pub struct TitleRuntime<'a> {
+    pub terminals: &'a TerminalBook,
+    pub session_titles: &'a BTreeMap<PanelId, String>,
+}
+
 pub fn compute_titles(layout: &ProjectLayout, project_root: &ProjectRoot,
                       runtime: &TitleRuntime) -> BTreeMap<PanelId, String>;
 ```
@@ -358,6 +386,12 @@ pub struct ProjectViewState {
 
 pub fn snapshot_project(entry: &ProjectEntry, state: &ProjectViewState)
     -> (ProjectLayoutDto, TerminalsDto);
+/// 恢复期只读上下文；允许根策略归 security.md，本文件只消费。
+pub struct RestoreContext<'a> {
+    pub allowed_roots: &'a AllowedRoots,
+    pub id_ceiling: PersistedIdCeiling,
+}
+
 pub fn restore_project(entry: ProjectEntry, layout: ProjectLayoutDto, terminals: TerminalsDto,
                        ctx: &RestoreContext) -> (ProjectViewState, RestoreReport);
 pub fn snapshot_registry(reg: &ProjectRegistry, ids: &IdAllocator) -> WorkspaceDto;
@@ -434,7 +468,7 @@ pub struct TerminalEntryDto {
 ### 不变量清单
 
 - 项目集合非空 ⇒ 活跃项目恰好一个；项目集合为空 ⇒ 无活跃项目。
-- 项目根词法路径唯一；`ProjectId` 全局唯一且不复用。
+- 项目根词法路径唯一；同一状态库生命周期内 `ProjectId` 全局唯一且不复用；状态库重建进入新纪元后旧 ID 失效。
 - 布局树叶集合 = 面板组集合；每个组非空；每个组 `active ∈ panels`。
 - 每个面板记录恰好被一个组引用；每个面板组恰好被树引用一次。
 - 含面板的项目布局恰好一个聚焦组；无面板则无聚焦组。
@@ -455,8 +489,8 @@ pub struct TerminalEntryDto {
 
 - 合同条款：
   - ID 不透明：客户端不得解析数值做排序、范围或归属推断。
-  - ID 终生稳定：重命名、排序、面板组拆分/合并、项目根重定位均不改变。
-  - 不复用：删除后的 ID 永不再分配。
+  - ID 在同一纪元内终生稳定：重命名、排序、面板组拆分/合并、项目根重定位均不改变。
+  - 不复用：同一纪元内删除后的 ID 永不再分配；状态库重建进入新纪元后旧 ID 失效。
   - 前缀封闭：新增资源类型只追加新前缀；旧前缀语义不变。
   - 未知前缀/未知 ID → `resource_not_found`；格式不合法 → `invalid_params`。
   - 事件与快照同时携带资源 ID 与必要父 ID（`project` 可选，因为 `panel` 全局唯一）。

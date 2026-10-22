@@ -79,7 +79,7 @@ pub struct CliStatusEvent {
 - 门控：仅当窗口失焦且收到编码 CLI 状态事件时按设置分别处理；窗口聚焦时全部丢弃（应用内通知另走通知服务）。`desktop_enabled` 只控制系统 toast 投递，`taskbar_flash` 独立控制任务栏闪烁；两者互不代偿。
 - 类别由 CLI 能力声明决定；未注册或没有状态事件能力的 CLI 不产生系统通知。
 - 正文格式 `<项目名> · <类别> · <时间>`；项目名无法反查时留空。正文纯文本，控制字符过滤，XML 转义。
-- 去重：同一 `EventKey = (panel_id, kind, session_id, turn_key)` 在 10 秒窗口内只通知一次并只闪一次；缓存超过 200 条裁剪为最近 100 条。缓存只在运行期有效。
+- 去重：事件键、去重窗口与缓存上限以 `cross-cutting.md` §通知类别与时长 为唯一 owner；本节只定义系统通知投递与投递失败行为。
 - 系统通知无点击跳转；所有类别在 `taskbar_flash` 开启时触发任务栏闪烁，窗口重新获得焦点后停止。闪烁使用 `FlashWindowEx` 的 `FLASHW_ALL | FLASHW_TIMERNOFG`，对前台窗口幂等静默。
 - 通知权限在首次需要时请求一次；AUMID 使用固定产品标识并在 HKCU 幂等注册。WinRT toast 只在常驻 MTA worker 投递，队列有界，满即丢；活动 toast 对象有界保留，防止回调提前释放。
 - 投递失败只记录日志，不影响终端；通知是 best-effort。

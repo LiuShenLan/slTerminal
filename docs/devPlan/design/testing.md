@@ -71,6 +71,7 @@ pub struct WorkspaceHarness {
 
 | featureSpec 篇目 | 设计所有者 | 里程碑 | 验收场景 | 测试层/目标 |
 |---|---|---|---|---|
+| `README.md` | `design/theme-and-i18n.md`、`design/ux-framework.md`、`design/cross-cutting.md` 与各所有者 | 应用基础服务；跨域收敛与规格验收 | 术语与跨域不变量、焦点与派发层序、通知、状态保留矩阵、快捷键矩阵 | 领域纯函数 + 跨域矩阵 + 虚拟窗口 |
 | `workspace/shell.md` | `design/workspace/shell.md` | 壳与工作区 | 项目生命周期、布局拆分/合并、焦点、关闭链、单实例移交 | 领域 + 虚拟窗口 + 真实进程/conformance |
 | `workspace/navigation.md` | `design/workspace/navigation.md` | 侧栏框架 + 导航核心；导航历史与余量 | 项目 CRUD/排序/重命名/移除、历史会话、套餐余量 | 领域 + 虚拟窗口 + 假 CLI |
 | `panels/terminal.md` | `design/panels/terminal.md` | 终端面板 | PTY 生命周期、编号/cwd、OSC 8/52、关闭守卫 | 终端 core + PTY 集成 + 虚拟窗口 |

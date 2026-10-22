@@ -60,7 +60,7 @@ slterm_app/src/
 
 ### 关键类型
 
-领域类型 `ProjectId`/`PanelGroupId`/`PanelId`/`ProjectRoot`/`ProjectLayout`/`PanelGroup`/`PanelRecord`/`PanelParams`/`PanelKind`/`TerminalBook` 均以 `design/domain-model.md` 为单点；壳只持有 `ProjectView`，不另建 `Project` 聚合。`PanelParams` 字段由各面板篇定义，工作区只负责持久化与重建分发，不解释面板内部字段。`FocusTarget` 同属领域单点。
+领域类型 `ProjectId`/`PanelGroupId`/`PanelId`/`ProjectRoot`/`ProjectLayout`/`PanelGroup`/`PanelRecord`/`PanelParams`/`PanelKind`/`TerminalBook` 均以 `design/domain-model.md` 为单点；壳只持有 `ProjectView`，不另建 `Project` 聚合。`PanelParams` 字段定义于 `domain-model.md`，各面板篇只引用；工作区负责持久化与重建分发，不解释面板内部字段。`FocusTarget` 同属领域单点。
 
 关键接口：
 
@@ -126,7 +126,7 @@ pub struct PanelDescriptor {
 - Diff：按新根所在仓库重算数据根与相对路径；仓库或路径不再可用时进入面板级错误态并提供重试；工作区侧脏缓冲保留，不静默丢弃。
 - GitShow：按新仓库根与仓库相对路径重新读取 HEAD；路径不在新仓库时显示不可用错误态，不关闭面板。
 - 设置中心：面板实例与选中页保持；Hooks 的 Project/Local 层仍绑定 `ProjectId`，项目上下文显示新根。
-- 文件浏览器：按新根重载树；持久化展开/当前行按新根重写相对路径，无法重写的路径丢弃。Commit 按新仓库根重载；Agent 全局文件不受项目根影响。
+- 文件浏览器：按新根重载树；持久化展开/当前行的相对路径保持不变，运行期绝对路径按新根重新解析，失效路径丢弃。Commit 按新仓库根重载；Agent 全局文件不受项目根影响。
 - 标题全部重算；项目行副行、根警示与历史归属立即更新；布局与面板实例不重建。迁移结果在一个保存周期内持久化。
 
 ### 面板组与布局操作
@@ -184,10 +184,10 @@ pub enum LayoutError {
 
 `PanelOpenRequest` 携带 `kind / params / dedupe_key / target_group / focus_policy / source`；`source` 用于区分 Explorer、Commit、Agent、历史恢复、Runtime 等入口，但不改变去重身份。跨项目不聚焦；同一文件在不同项目各自有实例。
 
-标题规则由 `title::resolve_titles(project)` 统一计算，面板标题语义由各面板规格拥有：
+标题规则由 app 侧 `title::resolve_titles(project)` 包装，底层纯函数为 `domain-model.md` 的 `compute_titles(layout, project_root, &TitleRuntime)`；面板标题语义由各面板规格拥有：
 
 - 终端标题由终端簿（编号与自定义标题）与终端面板（运行期 CLI 标题）决定，本函数只读取解析结果。
-- 文件型面板默认文件名；同一项目出现同名文件时，相关页签改用相对项目根的路径。项目根外按所属面板规格计算：编辑器与 Markdown 使用规范化绝对路径，GitShow 在仓库内使用仓库相对路径。路径比较按 Windows 大小写不敏感规则。关闭同名面板之一后重算，可恢复纯文件名。
+- 文件型面板默认文件名；同一项目出现同名文件时，相关页签改用相对项目根的路径。项目根外按所属面板规格计算：编辑器、Markdown 与 GitShow 均使用规范化绝对路径。路径比较按 Windows 大小写不敏感规则。关闭同名面板之一后重算，可恢复纯文件名。
 - Diff 默认模式追加 `(git diff)`；冲突快照标题由 Diff 面板自带状态提供，为 `<文件名>(冲突差异)`，不进入本函数；GitShow 追加 `(git delete)`；设置中心固定 `设置中心`。
 - Agent 全局文件面板使用 `sidebar/agent-files.md` 的例外规则（文件名 + 最短可区分路径 + Agent 显示名），不套用项目相对路径回退。
 - 标题过长单行省略，悬停显示完整标题。标题变化后同步页签与可访问名称，不改变窗口标题。
@@ -311,7 +311,7 @@ pub enum SaveBatchResult { AllSaved, Failed(Vec<PanelSaveFailure>) }
 
 - 右上角纵向堆叠，单条最大宽度 320px；类型与默认时长/视图覆盖引用 `cross-cutting.md` 的 `NotificationSpec`。
 - 不阻塞交互、不抢焦；正文纯文本、不可点击；关闭按钮可聚焦，名称 `关闭通知`。
-- 悬停或聚焦暂停倒计时；可操作通知提供右侧按钮（如 `撤销`），`Enter/Space` 触发；关闭按钮或倒计时结束放弃操作。
+- 悬停或通知内控件聚焦时暂停倒计时；可操作通知提供右侧按钮（如 `撤销`），`Enter/Space` 触发；关闭按钮或倒计时结束放弃操作。
 - 启动期通知先入队列，挂载后按剩余时长显示；项目切换、面板切换、布局恢复不清空。
 - 错误通知不得静默丢弃。
 - 系统通知与任务栏闪烁的类别、门控、事件键、去重与缓存见 `platform-windows.md`。

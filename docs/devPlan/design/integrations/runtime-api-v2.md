@@ -20,7 +20,7 @@
 | 变更可选携带 `expected_revision`；不匹配 `revision_conflict` | 外部客户端可能基于旧快照执行破坏性操作 | 不强制所有读；破坏性/移动操作建议携带 |
 | 写方法可选 `mutation_id`；服务端按 `(client_id, mutation_id, method, params_hash)` 缓存响应 | 网络重试不应产生重复面板/分组；请求 `id` 只作关联；单一 token 下必须防跨客户端串响应 | 缓存有界、短 TTL；`client_id` 为单连接作用域，断线失效；同 `mutation_id` 不同 method/参数返回 `idempotency_conflict`；跨进程不共享 |
 | 关闭/移除走现有脏状态与关闭守卫；`force` 才丢弃 | Runtime 不得绕过用户数据保护 | 返回 `dirty_panels`/`running_terminals` 详情；`force` 明确记录审计 |
-| 稳定 ID 永不复用；关闭后短期墓碑用于幂等关闭 | 复用 ID 会把旧请求作用到新对象 | 墓碑有界；超出后 `resource_not_found` |
+| 稳定 ID 在单个状态库生命周期内永不复用；关闭后短期墓碑用于幂等关闭 | 复用 ID 会把旧请求作用到新对象 | 墓碑有界；状态库隔离并新建后进入新纪元，旧 ID 一律失效；超出后 `resource_not_found` |
 | 审计只记 `operation/path/source/result` 与 `expected/actual` 指纹 | 控制面可执行敏感操作，需可追溯；字段遵守项目审计红线 | 不单列资源 ID；不记 token、提示词、终端内容、文件内容 |
 
 ### 资源模型与稳定 ID
@@ -29,6 +29,9 @@
 // 线缆身份：不透明字符串，形如 "project:<n>" / "group:<n>" / "panel:<n>"。
 // 协议 crate 只定义 ResourceId 的解析、格式化与错误；领域 newtype 与分配器归 slterm_workspace::ids。
 pub struct ResourceId(String);
+
+// ID 唯一性只在单个状态库生命周期内成立。状态库隔离并新建后进入新纪元：
+// 旧 ID 不再解析，墓碑与幂等缓存不跨纪元，客户端必须重新获取快照。
 
 // 线缆枚举，与领域 PanelKind 一一映射；未知值拒绝。
 pub enum WirePanelKind { Terminal, Editor, Markdown, Diff, GitShow, Settings }
@@ -533,7 +536,7 @@ slterm ctl orchestrate --spec <json> --timeout-ms <n>
 
 - 契约一致性：方法表 = `capabilities` = schema 方法枚举；`MethodParams`/`MethodResult` 逐方法覆盖，含 `runtime.handover`；错误码集合 = 文档登记集合 = `ErrorDetails` 变体；`runtime.describe` 与 schema 版本一致。
 - 信封：未知字段拒绝、token 静默丢弃、版本不匹配、请求体上限、响应身份校验、`result:null` 区分。
-- 资源：稳定 ID 跨重排/移动/重命名/重定位/重启不变；关闭后不复用；墓碑窗口；`TerminalResource`/`PanelLifecycle`/`state_change_seq` 往返；未知 ID 返回 `resource_not_found`。
+- 资源：同一纪元内稳定 ID 跨重排/移动/重命名/重定位/重启不变，关闭后不复用；状态库重建后旧 ID 失效；墓碑窗口；`TerminalResource`/`PanelLifecycle`/`state_change_seq` 往返；未知 ID 返回 `resource_not_found`。
 - 命令：每个写方法按 `MethodParams` 变体的正常/非法参数/边界/守卫拒绝/force；`params_hash` 规范化向量（键序、空白、数组顺序、排除字段）；关闭守卫返回详情；项目创建按根幂等且 `activate` 一致生效；重试同 `mutation_id` 不重复执行、同 `mutation_id` 不同参数返回 `idempotency_conflict`；`expected_revision` 冲突返回 `revision_conflict`；`git.*` 的 `status_revision` 陈旧返回 `git_stale`。
 - 并发：多连接写串行；订阅 revision 单调；慢订阅断开；长 wait 不阻塞写命令；相同 `mutation_id` 在不同连接上不互相命中。
 - 移交：第二实例只聚焦并打开载荷，不建第二窗；同 `request_id` 返回首次结果、不同 `request_id` 的 `NewTerminal` 新建；单 op 载荷；项目根自然键幂等。

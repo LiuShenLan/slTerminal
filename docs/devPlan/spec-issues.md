@@ -27,7 +27,7 @@
 | 主题可读性 | 不做任何对比度判断：不校验、不提示、不自动回退、不静默改写；内置暗色主题按设计保证可读，透明度/壁纸是用户显式选择。 |
 | 崩溃快照配额 | 单文件 64 MiB、总配额 256 MiB、保留 7 天。 |
 | 旧模型处置 | 先退役旧状态模型/写路径（旧 workspace/tab/pane/dock/session 的持久化读取与写入、旧测试），再按域删除旧 UI 宿主；每个域替换完成即删除该域旧壳，最后移除 `legacy-shell` 与 allowlist；保留已验证引擎。 |
-| 会话领域归属 | 会话扫描、元数据、词法归属、删除账本与恢复计划统一归 `slterm_agents::sessions`；`slterm_workspace` 只提供项目根索引；导航树消费 agents 投影。 |
+| 会话领域归属 | 会话元数据、词法归属、删除账本、恢复计划与纯投影统一归 `slterm_agents::sessions`；来源枚举、扫描编排、来源健康与 provider 适配器在 app，经 `SessionIo`/`PathAuthority` 访问文件；`slterm_workspace` 只提供项目根索引；导航树消费 agents 投影。 |
 | 另存为授权 | `PathGrant::UserSelected` 只绑定当前文档与当前运行期；不写入布局；重启后根外路径按根外只读重新判定。 |
 | 凭据 target | 统一小写 `slterm/<scope>/<id>`；AI Provider 的 id 为稳定 provider ID；后端实现保留现有 `CredentialStore`，对外契约类型为 `SecretStore`/`SecretValue`。 |
 | 备份类别 | 删除独立 `ai_providers` 类别；Provider 元数据随 `app_settings` 导出与敏感键剥除；凭据值永不入包。 |
@@ -84,6 +84,7 @@
 - 切换项目焦点：恢复该项目最后聚焦的面板组/面板并把键盘焦点送入焦点落点；导航树不保留“焦点留在项目行”。
 - 关闭链：受守卫集合为设置 JSON 与状态库全部 dirty facet，失败中止；最终终端簿/布局事务为 best-effort；项目移除确认后丢弃未保存修改、只提交项目相关状态库事务，批量关闭与窗口关闭逐个保存；两者都不触发全局设置/布局冲刷。
 - 单实例：第二次启动可携带 `Focus/OpenProject/OpenFile/NewTerminal`；`NewTerminal` 按 cwd 最深匹配项目，否则活跃项目；目标组为该项目的聚焦组，无组则建首组；目标不存在不自动创建。
+- 项目数据错误界面：备份可用时提供 `从备份恢复`，否则/同时保留 `重试` 与 `以空状态继续`；备份恢复先校验版本与完整性。
 - 终端簿：标题、编号、最近 cwd 只归 `TerminalBook`/`project_terminals`；布局不保存这些字段与编号计数。
 - 活动项目标识：由状态库 `workspace` facet 持久化；仅快捷键覆盖留在应用设置。
 - Diff 去重：默认键为“项目 + 规范化工作区路径”，来源不参与；冲突快照瞬态，不持久化、不入布局。
@@ -110,7 +111,7 @@
 ### `sidebar/explorer.md`
 
 - 状态持久化：按 `ProjectId` 键，路径存相对形式。
-- 树内剪贴板：应用级内部剪贴板；复制跨视图允许；剪切仅 Agent↔Agent 或同项目根内；跨边界拒绝。
+- 树内剪贴板：应用级内部剪贴板；复制跨视图、跨根允许；剪切仅同一项目根内或同一 Agent 根内；跨项目根、跨 Agent 根、项目根与 Agent 根之间拒绝。
 - 外部文件拖入：不支持；拖入无动作或一次性提示。
 - 无障碍与国际化：删除读屏/播报/高对比度内容；保留 IME/CJK 与键盘。
 - 验收：同步 ProjectId、剪贴板边界、外部拖入；删除无障碍行。
@@ -293,7 +294,7 @@
 | 数据根划分 | 设置漫游；工作区状态、窗口几何、崩溃快照、隔离区、补全、更新、日志/审计/崩溃现场本地 | 项目根与窗口是机器相关事实；漫游 profile 不应携带锁、token 与大快照 | `SLTERM_CONFIG_DIR` 覆盖漫游根，`SLTERM_LOCAL_DIR` 覆盖本地根 |
 | Runtime 节奏 | 协议先行、方法增量；壳只实现最小端点与 `runtime.handover`；垂直切片后交付 project/panel/terminal；git/agent/orchestrate 随域；收敛门后完整 conformance | 消除壳退出条件与控制面空窗；让领域模型尽早被 AI CLI 消费方验证 | 协议 v2 版本冻结；只追加方法，不改旧语义 |
 | 旧壳退役 | 先退役旧状态模型/写路径，再按域删除旧 UI 宿主；每个域替换完成即删除该域旧壳，最后移除 allowlist | 双壳并存只增加编译面、误引用与门禁维护；一次性删除会留下未替换能力 | 保留已验证引擎；每个退役步骤有独立验收，旧测试映射在删除该域前建立 |
-| 会话归属 | 会话扫描、元数据、归属、删除账本、恢复计划归 `slterm_agents::sessions` | 消除 workspace 与 agents 两套 `SessionRecord`/来源抽象 | `slterm_workspace` 只提供项目根索引；sidebar 依赖 agents |
+| 会话归属 | 会话元数据、归属、删除账本、恢复计划与纯投影归 `slterm_agents::sessions`；来源枚举、扫描编排、来源健康与 provider 适配器在 app | 消除 workspace 与 agents 两套 `SessionRecord`/来源抽象 | `slterm_workspace` 只提供项目根索引；sidebar 依赖 agents |
 | 另存为授权 | 不持久化；重启后根外路径按根外只读重新判定 | 根外写权限不应因一次布局持久化长期存在 | 当前运行期仍可编辑；再次另存为可重新授权 |
 | 主题可读性 | 不做任何对比度判断，不提示 | 无判定标准的提示会变成实现分歧；产品只提供内置暗色主题 | 用户显式选择透明度/壁纸即接受结果；不自动回退 |
 | 契约收敛 | 单一所有者 + README 契约索引；删除重复定义/依赖列表/快照数字；统一类型与字段名 | 施工图重复会直接复制进代码 | 凭据 target `slterm/<scope>/<id>`；删除 `ai_providers` 备份类别 |
@@ -312,3 +313,4 @@
 - 规格与设计不再出现“按最近焦点裁定”“仅手动检查独立开关”“布局保存终端标题/编号”“PTY 并发 8 契约”“旧壳一次性退役”。
 - 默认 Diff 去重键为“项目 + 规范化工作区路径”，不含 `mode/source`；冲突快照为瞬态面板。
 - 焦点循环 `Ctrl+Tab`/`Ctrl+Shift+Tab` 为不可重绑系统键；IME 组合态零命令匹配。
+- 修订矩阵逐篇核对：README、`settings-and-persistence.md` 与 `acceptance.md` 的声明均有落点；无落点的条目已删除或改为引用实际 owner。

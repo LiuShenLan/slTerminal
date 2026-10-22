@@ -293,7 +293,7 @@ impl ProcessIndex {
 }
 ```
 
-- 快照 TTL 1s，按键为 `pid + 创建时间`；PID 复用不会命中旧身份。创建时间不可得时保留边并标记 `identity_uncertain`，只作为佐证不作唯一路由依据。
+- 快照 TTL 与复用策略以 `platform-windows.md` §进程树终止 为唯一 owner（`pid + 创建时间` 为键）；PID 复用不会命中旧身份。创建时间不可得时保留边并标记 `identity_uncertain`，只作为佐证不作唯一路由依据。
 - 用途：Hook 管道客户端路由佐证、活动会话关联、`panel.procs` 的进程树、终端关闭守卫的前台进程信息。
 - 匹配规则来自描述表 `ProcessMatch`：可执行名（含兼容名）与解释器启动形态；不读他人命令行，不做 WMI/PEB 扫描。
 

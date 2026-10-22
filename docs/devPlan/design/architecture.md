@@ -47,7 +47,7 @@ slterm_sidebar/                   侧栏与文件树模型（依赖 workspace / 
 slterm_agents/                    Agent 能力与会话元数据
   src/kind.rs                     AgentKind / 能力表 / 显示名 / 品牌 slug
   src/session.rs                  会话元数据、恢复/分叉命令描述
-  src/sessions/                   SessionCatalog / 来源扫描 / 词法归属 / 删除账本
+  src/sessions/                   SessionCatalog / 词法归属 / 删除账本 / 恢复计划
   src/events.rs                   hook 事件归一化
 
 slterm_hooks/                     Hooks 目录与校验
@@ -172,7 +172,7 @@ dev-dependencies = []
 | 关闭流程状态 | `Workspace.close_state` | 不持久化 |
 | 持久化调度、去抖、写队列、generation | `PersistenceCoordinator` | — |
 | 崩溃快照磁盘件 | `RecoveryStore` | 本地 `<local>/state/recovery/<project-id>/<panel-id>.json` + 状态库 `recovery_index` |
-| Runtime v2 资源投影 | `RuntimeHub` 从 `Workspace` 派生；不复制状态 | 不持久化 |
+| Runtime v2 资源投影 | `RuntimeHub` 持有前台发布的不可变投影（快照 + revision + 墓碑），不持有可变领域权威；不复制可变状态 | 不持久化 |
 | 单实例句柄与移交载荷 | `InstanceCoordinator` | 不持久化 |
 
 禁止派生第二份权威：`RuntimeHub`、侧栏、导航树、面板页签都只读同一属主；禁止在面板内另存项目布局或终端编号。
@@ -198,10 +198,10 @@ dev-dependencies = []
 
 1. **进程准备**：解析 CLI 参数；解析双数据根；安装 panic hook（保留 unwind）；初始化日志。此阶段不创建窗口、不写项目数据。
 2. **实例检查与移交**：获取 `<local>/state/instance.lock` 句柄锁；已有实例则经本地端点调用 `runtime.handover` 发送根路径定位的移交载荷并退出。载荷不使用内部 ID；目标项目/路径不存在只提示，不自动创建。
-3. **设置与窗口准备**：读取 `<data>/state/settings.json`；损坏回退 `.bak`/默认并提示。创建默认隐藏窗口，初始化 `Clock`、`PersistenceCoordinator`、`NotificationService`、`RuntimeHub`。设置加载不阻断工作区。
+3. **设置与窗口准备**：创建窗口并显示启动加载界面（不抢键盘焦点）；读取 `<data>/state/settings.json`，损坏回退 `.bak`/默认并提示；初始化 `Clock`、`PersistenceCoordinator`、`NotificationService`、`RuntimeHub`。设置加载不阻断工作区。
 4. **状态库打开与索引加载**：打开 `<local>/state/state.db`，校验 `user_version` 与 `quick_check`，读取 `workspace` 与 `projects`。
    - 成功：进入项目布局加载。
-   - 版本不匹配、检查失败或库不可用：显示项目数据错误界面（自绘标题栏保留窗口控制），提供 `重试`、`从备份恢复` 与 `以空状态继续`；阻断进入工作区。`从备份恢复` 由 `persistence.md` 先校验并尝试 `state.db.bak`，备份缺失或损坏时才隔离两者；选择空状态后先隔离损坏库再创建新库。
+   - 版本不匹配、检查失败或库不可用：显示项目数据错误界面（自绘标题栏保留窗口控制），始终提供 `重试` 与 `以空状态继续`，备份可用时另提供 `从备份恢复`；阻断进入工作区。`从备份恢复` 由 `persistence.md` 先校验并尝试 `state.db.bak`，备份缺失或损坏时才隔离两者；选择空状态后先隔离损坏库再创建新库。
 5. **项目布局与终端簿加载**：按项目读取 `project_layouts.layout_json` 与 `project_terminals.terminals_json`，执行恢复对账。单项目载荷失败：该项目按空布局/空终端簿处理、原始 JSON 移入隔离区、并入启动聚合警告；其他项目不受影响。
 6. **构建运行期**：创建全部 `ProjectView`（急切恢复）；按 `PanelRecord` 创建 `PanelHost` 与 body；终端以内部并发节流 8 启动 PTY（非规格契约），总数受 64 上限约束；超限或启动失败的终端面板进入可见失败态，可重试。
 7. **侧栏、视图与崩溃快照**：读取状态库 `sidebar` 与 `view_states`；扫描 `recovery/` 与 `recovery_index`，校验、清理过期/损坏项；存在可恢复快照时排队一次聚合提示。
@@ -286,7 +286,7 @@ pub struct RestoreReport {
 - `ProjectView` 持 `visible: bool`；`set_visible(false)` 时：
   - 不再调用 `SplitTree::layout` 计算几何；保留上一次提交比例。
   - 向每个 `PanelHost` 传播 `PanelActivity::Hidden`。
-  - 终端输出继续解析进网格/回滚；前台只更新模型，不安排重绘计时器。
+  - 解析线程在终端锁内写网格/回滚；前台只消费最新快照，可见时 `cx.notify`，不安排重绘计时器；隐藏路径不投递逐块前台事件。
 - `TerminalView` 在隐藏态合并输出通知；切回时以当前网格快照重绘一次，不补帧、不重放。
 - 侧栏是应用级外壳，不随项目隐藏；其视图内容按活跃项目刷新。
 - 窗口最小化/遮挡不等于项目隐藏：活跃项目仍可布局；由 GPUI 自身节流。
