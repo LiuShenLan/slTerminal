@@ -1,512 +1,83 @@
-# 领域模型
+# 领域身份与状态
 
-> 目标态实现级设计；需求真值源见 docs/featureSpec，裁决见 ../spec-issues.md。
+> 规定稳定身份、逻辑视图键、资源代次和跨聚合引用，消除路径、标题或存活实例被误当身份的情况。
 
-领域模型以“稳定身份 + 封闭类型 + 纯转换 + 显式不变量”为核心。持久化 DTO 与运行期实例严格分离：DTO 只描述重建所需事实，实例持有进程、缓冲、订阅与临时状态。
+## 决策与红线
 
-### 身份类型与分配器
+### 身份类型
 
-```rust
-#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
-pub struct ProjectId(u64);
-pub struct PanelGroupId(u64);
-pub struct PanelId(u64);
-pub struct TerminalOrdinal(u32);
+- ProjectId、DocumentId、PanelGroupId、TerminalId、AgentRootId、ThemeId 使用 UUIDv7 新类型；序列化采用规范小写 UUID 字符串，数据库与 DTO 不裸传无类型字符串。
+- 为避免 crate 成环，DocumentId、TextStateId、RepositoryBinding、DiffBinding 由 `slterm_document` 定义；ProjectId、PanelGroupId、TerminalId、SideViewId、ViewKey 由 `slterm_workspace` 定义；ThemeId、AgentRootId 由零依赖 `slterm_settings` 定义；AgentKind、AgentSessionKey 由 `slterm_agents` 定义。跨 crate 只沿架构依赖方向引用。
+- PanelId 只标识存活面板，可使用进程内递增整数并与实例纪元组合；关闭后销毁且不复用。PanelId 不进入持久布局、ViewState 或崩溃快照。
+- DocumentId 独立于路径与项目。另存为、外部改名和视图切换不改变 DocumentId；重新打开前发现文件身份已变成另一文件时不得继承旧正文。
+- TerminalId 属于逻辑终端记录；PTY 代次只在每次成功创建 PTY 时递增。显示编号、cwd、标题和进程 PID 都不是 TerminalId。
+- AgentSessionKey 由 AgentKind、原生会话 ID 和适配器版本构成历史记录身份。活跃关联由 TerminalId、PTY 代次和 AgentSessionKey 共同证明，不另建持久活跃映射。
+- Runtime 对外 ID 是带 `project:`、`group:`、`panel:`、`terminal:`、`agent:` 前缀的不透明字符串。外部客户端不得解析其内部结构；Document 不成为独立 Runtime 资源。
+
+### ViewKey 与持久状态
+
+ViewKey 是显式版本化、规范序列化的封闭枚举：
+
+```text
+Terminal       { ProjectId, TerminalId }
+Editor         { ProjectId, DocumentId }
+Markdown       { ProjectId, DocumentId }
+Diff           { ProjectId, DocumentId }
+GitShow        { ProjectId, RepositoryBinding, CommitId, RepoPath }
+Settings       { ProjectId }
+SideView       { SideViewId }
+AppSettingsOverlay
 ```
 
-- 三类 ID 在单个状态库生命周期内应用级全局唯一，单调递增、不复用；`PanelGroupId`/`PanelId` 不按项目分段，Runtime v2、CLI 与随包 skill 可在不带项目的情况下无歧义寻址。状态库因损坏被隔离并新建后进入新纪元：旧 ID 不再解析，墓碑与幂等缓存不跨纪元，客户端必须重新获取快照。单实例移交载荷用根路径/cwd 定位，不传内部 ID。
-- `ProjectId` 在根目录重定位、显示名重命名、项目排序后保持不变；根路径唯一是不变量，不是身份。
-- `TerminalOrdinal` 是项目内终端编号，从 0 开始，关闭不复用；不同项目可出现相同编号。
-- 分配器：
+- 普通文档 ViewKey 的项目只决定视图归属，不限制 Document 被其他项目引用。Editor 与 Markdown 显式切换保留 PanelId 和 Document，ViewKey 随逻辑视图类型改变。
+- Diff 的 `DiffBinding { repository_binding, head_path }` 存入独立持久绑定，不混入列宽、换行等展示参数。
+- GitShow 把创建时仓库、提交和路径放入 ViewKey；HEAD 移动和项目根重定位不产生新解释。
+- SideView 与 AppSettingsOverlay 使用应用级键，不伪造 ProjectId。SideView 内部的按项目或按 AgentRoot 状态必须再以对应稳定 ID 分区。
+- ViewStateStore 是唯一持久视图状态入口。搜索、焦点、选区、菜单、通知、临时错误、录制态、多选、内联编辑、折叠语法区和手动只读均不得进入 ViewState。
+- 恢复遇到未知 ViewKey 类型时过滤并聚合警告；结构非法与未知类型分开处理，不创建替代 Panel。
 
-```rust
-pub struct IdAllocator {
-    next_project: u64,
-    next_group: u64,
-    next_panel: u64,
-}
+### Document 聚合
 
-impl IdAllocator {
-    pub fn allocate_project(&mut self) -> ProjectId;
-    pub fn allocate_group(&mut self) -> PanelGroupId;
-    pub fn allocate_panel(&mut self) -> PanelId;
-    /// 恢复时把游标抬到已见最大 ID 之上；绝不回退。
-    pub fn observe_existing(&mut self, ids: PersistedIdCeiling);
-}
+- DocumentRegistry 持有全部存活 Document；同一文件身份在全应用最多一个实时聚合。无法取得文件身份时使用规范路径去重并保留保存冲突检测。
+- 每个 Document 对应唯一 DocumentSession，统一持有文本、磁盘基线、编码、行尾、撤销、冲突、位置、授权变化和保存代次。
+- Editor、Markdown 与 Diff 工作区侧只引用该聚合；冲突和大文件对比使用独立只读快照，GitShow 使用固定只读版本，均不建立第二实时 Document。
+- `text_revision` 每次编辑单调递增，用于拒绝旧后台结果；`TextStateId` 标识可由撤销／重做返回的文本状态，用于脏状态和保存对账。
+- 脏状态是当前 TextStateId 与 saved_state_id 不同。保存成功记录被保存状态；保存期间继续编辑时更新基线但当前仍为脏。
+- 最后引用关闭才进入内容守卫。关闭集合外仍有引用时，任何批量决定都不得丢弃该 Document。
 
-pub struct PersistedIdCeiling {
-    pub next_project: u64,
-    pub next_group: u64,
-    pub next_panel: u64,
-    pub max_seen_project: u64,
-    pub max_seen_group: u64,
-    pub max_seen_panel: u64,
-    pub max_recovery_dir: u64, // 仅覆盖 recovery/ 目录名中的 ProjectId
-}
-```
+### 项目、布局与路径
 
-- 恢复时 `observe_existing` 必须同时考虑状态库 `workspace.next_*`、已加载项目内的全部 ID、`recovery/` 目录名；游标统一取 `max(next_*, maxSeen + 1, maxDir + 1)`。`maxDir` 只覆盖恢复目录名中的 `ProjectId`，不承担跨状态库的 group/panel 唯一性；状态库丢失后按新纪元处理，不复用旧 ID 作为身份保证。
-- 字符串形式（Runtime v2、环境变量、CLI 与随包 skill）：`project:<u64>`、`group:<u64>`、`panel:<u64>`；解析失败即 `invalid_params`，未知资源即 `resource_not_found`。前缀集合封闭，未来新增资源类型只追加前缀，不复用旧前缀语义。
-- 线缆类型：协议 crate 的 `resource_id.rs` 只定义不透明字符串 `ResourceId` 及其解析/格式化/错误，不重复定义 `ProjectId`/`PanelGroupId`/`PanelId`；领域 newtype 唯一定义于本文件（`slterm_workspace::ids`）。完整线缆合同见 `integrations/runtime-api-v2.md`。
+- ProjectLayout 由 PanelGroup 组成；持久 DTO 只保存稳定 PanelGroupId、布局几何、结构化 ViewKey 和激活关系，不保存 PanelId。
+- ProjectId、PanelGroupId、TerminalId 跨重启稳定。项目移除提交后删除其布局和专属 ViewKey，不删除仍被其他项目引用的 Document 内容或恢复材料。
+- 词法路径用于项目唯一性、历史归属和展示；规范路径用于包含性与授权；文件身份用于别名合并。三者不得相互替代。
+- PathAuthority 对读取、写入、终端 cwd、资源读取和启动恢复分别判定，嵌套根取能力并集。只读根不会抹除另一根的写能力。
+- 根重定位只改变 ProjectRoot 关联，不重绑 Document、既有 PTY、Diff 或 GitShow。删除根立即撤销其能力并增加授权代次。
 
-### 项目与项目注册表
+### RepositoryBinding 与版本内容
 
-```rust
-pub struct ProjectRegistry {
-    entries: Vec<ProjectEntry>,
-    active: Option<ProjectId>,
-}
+`RepositoryBinding` 保存规范 worktree_root、git_dir、common_dir、可取得的目录文件身份和创建时 HEAD：
 
-pub struct ProjectEntry {
-    pub id: ProjectId,
-    pub root: ProjectRoot,
-    pub display_name: String,
-}
+- 复核时要求规范路径一致，并优先以目录文件身份确认同一仓库；无法取得身份时，只有创建时 HEAD 对象仍存在才可保守继续，否则报绑定不可用。
+- Diff 可在同一绑定仓库内刷新 HEAD，但 HEAD 旧路径固定。项目根重定位不得改绑到新仓库的同相对路径。
+- GitShow 固定创建时 CommitId 与 RepoPath，只重读该对象，不跟随 HEAD。
+- 新仓库恰好复用旧路径时不得仅凭路径继承绑定；无法证明身份时显示错误并保留已加载内容。
 
-/// 恢复/快照聚合体。运行期不整体驻留于 Workspace：
-/// entry 归 ProjectRegistry，layout/terminals 移交给 ProjectView。
-pub struct ProjectRecord {
-    pub entry: ProjectEntry,
-    pub layout: ProjectLayout,
-    pub terminals: TerminalBook,
-}
+### 代次与纪元
 
-pub struct ProjectRoot {
-    /// 归一化词法路径：绝对、`/` 分隔、大小写折叠、去尾分隔符（盘符根除外）。身份比较用它。
-    lexical: String,
-    /// 创建/重定位时解析的真实路径（符号链接/目录联接目标）；包含性校验用它。
-    real: Option<String>,
-}
-```
+- `store_epoch` 标识持久工作区世代；整库恢复、重置或灾难恢复提交后更换。Runtime 幂等命名空间以其为边界。
+- `stream_epoch` 标识当前进程的 Runtime 事件流；每次启动更换。事件 revision 只在 store_epoch＋stream_epoch 内单调比较。
+- `operation_id` 标识持久副作用操作；Terminal、PTY、Document、Prompt、View、Task 和 Agent 关联各有自己的代次，不共用一个全局计数器。
+- 所有异步结果至少携带其资源身份和对应代次。跨进程结果还必须携带 store_epoch，防止恢复后的旧客户端写入新状态。
 
-注册表不变量与操作：
+## 验收与测试
 
-- 项目根词法路径唯一；添加已存在根路径返回 `AddProjectOutcome::Existing(id)`，由导航树激活并提示。
-- `active` 非空当且仅当 `entries` 非空；移除活跃项目后，按列表顺序取下一个，没有则取上一个，没有其他项目则为 `None`。
-- 显示名可重复；创建时与现有显示名冲突则追加递增数字后缀（`demo`、`demo 2`、`demo 3`）；重命名不再追加。
-- `display_name` 去首尾空白后非空，最多 80 个 Unicode 字符（按字符计数，不按字节）；持久化与 Runtime 共用该约束。
-- 排序只改变 `Vec` 顺序；活跃项目、布局、ID 不变。
-- 根重定位：
+- 属性测试覆盖 ViewKey 规范序列化往返、未知变体拒绝、ID 类型边界和持久 DTO 不含有 PanelId。
+- 同一文件经不同项目、词法别名和硬链接打开时复用 Document；路径相同但文件身份改变时必须建立不同聚合。
+- 保存期间继续编辑、撤销回保存状态、另存为和外部改名均保持 DocumentId 与正确脏状态。
+- 根重定位到新仓库后，既有 Diff 与 GitShow 的绑定复核不得读取新仓库内容。
+- 普通重启更换 stream_epoch 但不更换 store_epoch；逻辑恢复、灾难恢复和显式重置必须按各自规则更换 store_epoch。
 
-```rust
-pub struct PanelPathChange {
-    pub panel: PanelId,
-    pub path: PersistedPath,   // 按新根解析后的路径
-    pub outside_root: bool,    // true = 落到新根外，由面板规格决定只读/错误态
-}
+## 操作
 
-pub struct RelocationPlan {
-    pub root: ProjectRoot,
-    pub affected_panels: Vec<PanelPathChange>,
-    pub terminals_keep_cwd: bool,          // 恒 true；既有终端不重启
-    pub new_terminal_base: PathBuf,        // 新根
-}
-
-pub fn relocate(entry: &ProjectEntry, layout: &ProjectLayout,
-                new_root: ProjectRoot) -> Result<RelocationPlan, WorkspaceError>;
-```
-
-  - 项目布局树、面板组、面板实例不重建。
-  - `project_relative` 路径按新根重新解析；新根外文件面板转为根外只读或触发错误态，由面板规格决定。
-  - `absolute`/`repo_relative` 路径不变；Diff/GitShow 的仓库根按新根重新解析。
-  - 既有终端保持原 cwd；新终端与文件浏览器使用新根。
-  - 重定位只提交 `projects.root`；布局 JSON 中的相对路径无需改写。
-
-### 项目布局、面板组与面板
-
-```rust
-pub struct ProjectLayout {
-    pub tree: Option<SplitTree<PanelGroupId>>,  // None = 空布局；Some 为 slterm_split 的几何树
-    pub groups: BTreeMap<PanelGroupId, PanelGroup>,
-    pub panels: BTreeMap<PanelId, PanelRecord>,
-    pub focused_group: Option<PanelGroupId>,
-}
-
-pub struct PanelGroup {
-    pub id: PanelGroupId,
-    /// 页签顺序；唯一权威。
-    pub panels: Vec<PanelId>,
-    /// 非空组恰好一个激活面板。
-    pub active: PanelId,
-}
-
-pub struct PanelRecord {
-    pub id: PanelId,
-    pub params: PanelParams,
-}
-```
-
-归属关系：
-
-- `ProjectLayout` 拥有全部 `PanelRecord`；`PanelGroup.panels` 只持 ID，不持有记录副本。
-- 每个面板恰好属于一个面板组；每个面板组恰好是布局树的一个叶；布局树叶集合 = `groups` 键集合。
-- 空面板组不存在：最后一个面板关闭或被拖出后，组从树与 `groups` 中移除；父节点按 `slterm_split::RemoveOutcome` 塌缩，比例按剩余空间归一。
-- 每个含面板的项目布局恰好一个聚焦面板组；布局为空时 `focused_group = None`。
-- 面板不跨项目移动。跨项目使用同一文件时各项目持有独立 `PanelRecord` 与实例。
-
-布局操作纯函数：
-
-```rust
-impl ProjectLayout {
-    pub fn normalize(&mut self) -> Vec<Repair>;
-    pub fn validate(&self) -> Result<(), LayoutInvariantError>;
-    pub fn split_group(&mut self, anchor: PanelGroupId, new: PanelGroupId,
-                       direction: SplitDirection, ratio_permille: u16) -> Result<(), LayoutError>;
-    pub fn remove_group(&mut self, id: PanelGroupId) -> RemoveOutcome<PanelGroupId>;
-    pub fn move_panel(&mut self, panel: PanelId, target: PanelGroupId, index: usize) -> Result<(), LayoutError>;
-    pub fn close_panel(&mut self, panel: PanelId) -> ClosePanelOutcome;
-    pub fn cycle_focus(&self, from: PanelId, forward: bool) -> Option<PanelId>;
-}
-```
-
-比例持久化用千分比整数（`1..=999`），运行时转 `f32`；转换是纯函数，避免 f32 序列化噪声。`slterm_split::SplitTree` 的 `preview_ratio`/`dragging` 是交互态，不进 DTO。
-
-### 面板封闭枚举与参数 schema
-
-```rust
-#[derive(Copy, Clone, Eq, PartialEq, Hash)]
-pub enum PanelKind {
-    Terminal,
-    Editor,
-    Markdown,
-    Diff,
-    GitShow,
-    Settings,
-}
-
-#[derive(Clone, PartialEq)]
-pub enum PanelParams {
-    Terminal(TerminalParams),
-    Editor(EditorParams),
-    Markdown(MarkdownParams),
-    Diff(DiffParams),
-    GitShow(GitShowParams),
-    Settings(SettingsParams),
-}
-```
-
-每个参数结构带独立 `revision: u32`（首版为 1）。字段级 schema：
-
-```rust
-pub struct TerminalParams { pub revision: u32 }
-
-pub struct EditorParams {
-    pub revision: u32,
-    pub path: PersistedPath,           // 只读判定只在 PersistedPath.read_only
-    pub word_wrap: bool,               // 新面板取设置默认值
-    pub language_override: Option<LanguageId>,
-}
-
-pub struct MarkdownParams {
-    pub revision: u32,
-    pub path: PersistedPath,           // 只读判定只在 PersistedPath.read_only
-    pub view: MarkdownView,            // Rendered | Source
-    pub outline_open: bool,
-    pub zoom_percent: u16,             // 25..=400，默认 100
-    pub scroll_anchor: Option<MarkdownAnchor>,
-}
-
-pub struct MarkdownAnchor { pub anchor: String, pub offset_px: f32 }
-
-pub struct DiffParams {
-    pub revision: u32,
-    pub head_path: RepoPath,            // 仓库相对，大小写不敏感比较
-    pub workspace_path: PersistedPath,
-    pub view: DiffView,                // SideBySide | Inline
-    pub word_wrap: bool,
-    pub sync_scroll: bool,
-    pub split_permille: u16,           // 100..=900，默认 500
-    pub collapsed_side: Option<DiffSide>,
-    pub swapped: bool,
-}
-
-pub struct GitShowParams {
-    pub revision: u32,
-    pub repo_path: RepoPath,
-}
-
-pub struct SettingsParams {
-    pub revision: u32,
-    pub selected_page: Option<SettingsPageId>, // None = 当前没有可用配置页；默认“快捷键”
-    /// 页内参数；类型、清洗与保存归 `panels/settings.md`，随布局持久化。
-    pub page_params: BTreeMap<SettingsPageId, PageParams>,
-}
-
-/// 页面自有的不透明参数；schema 由页面注册表声明，工作区只存取、不解释。
-pub struct PageParams(pub serde_json::Value);
-
-pub struct SettingsPageId(pub &'static str); // 页面注册表登记的稳定键；值域由注册表封闭
-pub struct LanguageId(pub &'static str);     // LanguageRegistry 登记的稳定键；值域由注册表封闭
-pub struct CaseFoldKey(pub String);          // Windows 大小写不敏感比较键；显示保留原始大小写
-```
-
-排除项（运行期状态，不持久化）：Diff 的“忽略行尾空白/忽略全部空白/折叠未变更区域”、编辑器代码折叠、手动只读、搜索状态、Markdown 查找栏、终端状态圆点/CLI 图标、GitShow 查找/换行、所有滚动位置（Markdown 滚动锚点例外，属于持久参数）。
-
-版本规则：
-
-- 状态库 `user_version` 与当前版本不等（含更高或更低）即不兼容；不提供升级链。
-- 面板参数 `revision` 高于当前支持：丢弃该面板并聚合警告；低于当前：首版无旧版本，按不兼容丢弃。
-- 追加可选字段必须 `serde(default)`，不升版本；字段改名、删除、语义变化必须升 `revision`。
-
-路径描述：
-
-```rust
-pub enum PathScope { ProjectRelative, RepoRelative, Absolute }
-
-pub struct PersistedPath {
-    pub scope: PathScope,
-    pub value: String,
-    pub read_only: bool,       // 上次判定的记录值；加载时按当前允许根无条件重算
-}
-
-pub struct RepoPath { pub value: String }  // 相对仓库实际根
-```
-
-- `ProjectRelative` 在根重定位时按新根解析；`RepoRelative` 在仓库根变化时重新解析；`Absolute` 原样使用。
-- 恢复时重新执行允许根校验：项目根 + 已登记 Agent 全局目录（`AgentRoot` 作用域）可写；仓库根内、项目根外只读；仓库根外一律只读。系统另存为授权只绑定当前运行期，不进入布局；Agent 根可写性是运行期判定，不新增持久化字段。
-- `PersistedPath.read_only` 是只读判定的唯一持久化字段；持久值只记录上次判定，加载时按当前允许根无条件重算并以重算值为准，不回写旧判定；访问判定只用重算值，下一次快照写入重算后的值。`EditorParams`/`MarkdownParams` 不重复携带。
-- 路径比较用 `PathKey`：真实路径规范化后的 Windows 大小写不敏感键；显示路径保留原始大小写。
-
-### 终端编号与终端簿
-
-```rust
-pub struct TerminalBook {
-    pub next_ordinal: u32,
-    pub entries: BTreeMap<PanelId, TerminalEntry>,
-}
-
-pub struct TerminalEntry {
-    pub ordinal: TerminalOrdinal,
-    pub custom_title: Option<String>,   // <= 128 字符，去除首尾空白
-    pub cwd: Option<String>,            // 最近已知目录；恢复时校验
-}
-
-impl TerminalBook {
-    pub fn allocate(&mut self, panel: PanelId) -> TerminalOrdinal;
-    pub fn remove(&mut self, panel: PanelId);
-    pub fn reconcile(&mut self, layout: &ProjectLayout, root: &ProjectRoot) -> Vec<Repair>;
-}
-```
-
-- 创建终端：先分配编号，再创建面板；关闭只删条目，不回退计数。
-- `TerminalBook` 是终端自定义标题、编号与最近 cwd 的唯一持久化权威；项目布局 `layout_json` 不保存这些字段，也不保存编号计数。
-- 恢复：布局中的终端面板按状态库 `project_terminals` 的 `TerminalBook` 取编号；缺失条目从 `next_ordinal` 递增分配；重复编号保留最小者，其余重分配；孤儿条目丢弃。恢复不以布局重算编号。
-- 自定义标题去首尾空白后非空，最多 128 个 Unicode 字符（按字符计数，不按字节）；超出时拒绝提交。
-- 自定义标题立即持久化；编号与 cwd 去抖 300ms。
-- 标题展示：自定义标题 > 运行中 CLI 会话标题 > 历史会话标题 > `terminal-N`。
-
-### 去重键与标题
-
-```rust
-pub enum DiffMode { HeadToWorktree, ConflictSnapshot }
-
-pub enum DedupeKey {
-    Editor { project: ProjectId, path: PathKey },
-    Markdown { project: ProjectId, path: PathKey },
-    Diff { project: ProjectId, workspace: PathKey },
-    GitShow { project: ProjectId, repo_path: CaseFoldKey },
-    Settings { project: ProjectId },
-}
-
-impl PanelParams {
-    pub fn dedupe_key(&self, project: ProjectId) -> Option<DedupeKey>;
-}
-
-pub struct DedupeIndex { /* key -> PanelId */ }
-```
-
-- 终端返回 `None`，每次新建独立面板。
-- 编辑器与 Markdown 的键为“项目 + 规范化真实路径”；默认 Diff 为“项目 + 规范化工作区路径”，来源与模式不参与去重；`DiffMode` 只作运行期判别，不进入键。GitShow 为“项目 + 仓库相对路径”，大小写不敏感；设置中心为项目单例。
-- 冲突快照是瞬态 Diff 面板：有独立 `PanelId`，不参与去重、不持久化、不入布局，重启消失；其去重按“项目 + 源面板 + 快照代次”在运行期完成，不进入 `DedupeIndex` 的持久键。
-- 命中去重键：激活所属项目/面板组/面板并直接聚焦；不产生一次性焦点意图。
-- 标题计算：
-
-```rust
-/// 标题计算所需的运行期只读输入；不持有可变状态。
-pub struct TitleRuntime<'a> {
-    pub terminals: &'a TerminalBook,
-    pub session_titles: &'a BTreeMap<PanelId, String>,
-}
-
-pub fn compute_titles(layout: &ProjectLayout, project_root: &ProjectRoot,
-                      runtime: &TitleRuntime) -> BTreeMap<PanelId, String>;
-```
-
-  - 文件面板默认文件名；同项目同名（大小写不敏感）改用项目相对路径；项目根外使用规范化绝对路径。
-  - 编辑器与 Commit 来源的文件打开路由（Markdown/编辑器）不加来源后缀；Diff 追加 `(git diff)`；GitShow 追加 `(git delete)`；冲突快照追加 `(冲突差异)`（瞬态面板，不入布局）。
-  - 设置中心固定 `设置中心`。
-  - 终端按标题优先级；终端编号与自定义标题来自 `TerminalBook`。
-
-### 焦点模型
-
-焦点分层：活跃项目 → 聚焦面板组 → 激活面板 → 面板内焦点落点。`FocusIntent`/`FocusMemory` 的类型与消费规则归 `ux-framework.md`；本文件只保留 `FocusTarget` 与关闭/循环纯函数。`ProjectView.focus_memory` 是 `FocusMemory` 的唯一属主，`Workspace` 不持有第二份。
-
-```rust
-#[derive(Copy, Clone, Eq, PartialEq)]
-pub enum FocusTarget {
-    TerminalInput,
-    EditorText,
-    MarkdownRendered,
-    MarkdownSource,
-    DiffWorkspace,
-    DiffReadOnlySide,
-    GitShowContent,
-    SettingsContainer,
-    PanelContainer,
-    Workspace,
-}
-
-pub enum FocusTransfer {
-    Panel { group: PanelGroupId, panel: PanelId, target: FocusTarget },
-    Workspace,
-}
-
-pub fn focus_after_close(layout: &ProjectLayout, closed: PanelId) -> FocusTransfer;
-pub fn focus_cycle(layout: &ProjectLayout, from: PanelId, forward: bool) -> Option<PanelId>;
-```
-
-规则：
-
-- `ProjectLayout.focused_group` 是持久化的“上次聚焦组”，用于重启恢复布局层级；不产生键盘焦点。
-- `ProjectView.focus_memory` 是运行期“上次聚焦组/面板”的唯一副本，用于切换项目；不持久化、不跨重启。
-- 关闭聚焦面板：同组下一个 → 同组上一个 → 相邻面板组激活面板 → 工作区层级。相邻组按布局树深度优先叶序。
-- `Ctrl+Tab` 循环按活跃项目的面板组树序与组内页签序；无聚焦面板时不消费。
-- 单面板显式打开/激活产生一次性焦点意图；命中去重键的聚焦是立即聚焦。
-- 布局恢复/启动恢复不产生任何焦点意图。
-
-### 纯转换与恢复对账
-
-`WorkspaceDto`、`ProjectLayoutDto`、`TerminalsDto` 作为本地状态库的 JSON 载荷持久化；状态库 schema 与事务归 `persistence.md`，本文件定义 DTO 字段语义、恢复对账与不变量。
-
-```rust
-pub struct ProjectViewState {
-    pub layout: ProjectLayout,
-    pub terminals: TerminalBook,
-}
-
-pub fn snapshot_project(entry: &ProjectEntry, state: &ProjectViewState)
-    -> (ProjectLayoutDto, TerminalsDto);
-/// 恢复期只读上下文；允许根策略归 security.md，本文件只消费。
-pub struct RestoreContext<'a> {
-    pub allowed_roots: &'a AllowedRoots,
-    pub id_ceiling: PersistedIdCeiling,
-}
-
-pub fn restore_project(entry: ProjectEntry, layout: ProjectLayoutDto, terminals: TerminalsDto,
-                       ctx: &RestoreContext) -> (ProjectViewState, RestoreReport);
-pub fn snapshot_registry(reg: &ProjectRegistry, ids: &IdAllocator) -> WorkspaceDto;
-pub fn restore_registry(dto: WorkspaceDto) -> (ProjectRegistry, IdAllocator, RestoreReport);
-```
-
-持久化 DTO 合同：
-
-```rust
-pub struct WorkspaceDto {
-    pub schema_version: u32,
-    pub revision: u64,
-    pub active_project: Option<u64>,
-    pub projects: Vec<ProjectEntryDto>,   // 数组顺序 = 导航树顺序
-    pub next_project: u64,
-    pub next_group: u64,
-    pub next_panel: u64,
-}
-
-pub struct ProjectEntryDto {
-    pub id: u64,
-    pub root_lexical: String,
-    pub display_name: String,
-}
-
-pub struct ProjectLayoutDto {
-    pub schema_version: u32,
-    pub revision: u64,
-    pub tree: Option<SplitTreeDto>,       // slterm_split 的序列化树，叶为 group id
-    pub groups: Vec<PanelGroupDto>,
-    pub panels: Vec<PanelRecordDto>,
-    pub focused_group: Option<u64>,
-}
-
-pub struct PanelGroupDto { pub id: u64, pub panels: Vec<u64>, pub active: u64 }
-pub struct PanelRecordDto { pub id: u64, pub kind: PanelKindDto, pub params: PanelParamsDto }
-
-pub struct TerminalsDto {
-    pub schema_version: u32,
-    pub revision: u64,
-    pub next_ordinal: u32,
-    pub entries: Vec<TerminalEntryDto>,
-}
-
-pub struct TerminalEntryDto {
-    pub panel_id: u64,
-    pub ordinal: u32,
-    pub custom_title: Option<String>,
-    pub cwd: Option<String>,
-}
-```
-
-- 三套 DTO 的 `schema_version` 必须等于 `state.db.user_version`；不等即整库不兼容。`revision` 是载荷结构版本（首版为 1），恢复时高于当前支持即不兼容；它不是行级并发令牌，并发由单写线程与事务保证。
-- `ProjectEntryDto` 只持久化词法根路径；真实路径在恢复时按当前磁盘重新解析，不进入 DTO。
-- `PanelKindDto` 是 `PanelKind` 的 snake_case 字符串；`PanelParamsDto` 使用 `#[serde(tag = "kind", content = "params", rename_all = "snake_case")]`，变体字段与对应的 `TerminalParams`/`EditorParams`/`MarkdownParams`/`DiffParams`/`GitShowParams`/`SettingsParams` 完全一致，并保留各自 `revision`。
-- 容器一律数组，不依赖 JSON map 键；数组顺序是语义：`projects` 是导航树顺序，`PanelGroupDto.panels` 是页签顺序。重复 ID 保留先出现者，后者丢弃并记入 `RestoreReport`；`TerminalsDto.entries` 按 `panel_id` 去重。
-- `serde` 统一 `deny_unknown_fields`；新增可选字段用 `serde(default)`，不升 `revision`；字段改名、删除或语义变化必须升对应参数 `revision`。
-- 运行期到 DTO 的映射是纯函数：`PanelRecord.params` 是唯一权威，`PanelGroup.panels` 只存 ID；`TerminalBook` 只进 `TerminalsDto`，不复制进布局。`WorkspaceDto` 不保存布局与终端簿，`ProjectLayoutDto`/`TerminalsDto` 按项目分表存储。
-
-恢复对账顺序（幂等）：
-
-- 状态库 `user_version` 与完整性由 `persistence.md` 校验；本层只接收已通过版本校验的载荷。
-- ID 解析与全局唯一性校验；重复的 `PanelGroupId`/`PanelId` 保留先出现者，后者丢弃。
-- 丢弃未知 `PanelKind`、超版本 `revision`、缺失必需字段的面板。
-- 丢弃引用不存在面板的组条目；丢弃不在树上的组；删除未被任何 `PanelGroup.panels` 引用的 `PanelRecord`；丢弃空组；按 `slterm_split` 规则塌缩树。
-- 修正 `active`（不在组内 → 首面板）、`focused_group`（不在树 → 树首叶；无组 → `None`）。
-- 终端簿对账：补编号、去重复、丢孤儿、校验 cwd（不存在/越界 → `None`，运行时回退项目根并提示）。
-- 去重冲突：同键多个面板保留布局顺序靠前者，其余丢弃并警告。
-- 设置中心每项目至多一个；多余丢弃。
-- 返回 `RestoreReport`，由启动聚合为一条警告。
-
-快照方向（运行期 → DTO）只取持久参数，不读取 body 的缓冲、光标、滚动或临时态；因此恢复结果不会把运行期噪声写回磁盘。
-
-### 不变量清单
-
-- 项目集合非空 ⇒ 活跃项目恰好一个；项目集合为空 ⇒ 无活跃项目。
-- 项目根词法路径唯一；同一状态库生命周期内 `ProjectId` 全局唯一且不复用；状态库重建进入新纪元后旧 ID 失效。
-- 布局树叶集合 = 面板组集合；每个组非空；每个组 `active ∈ panels`。
-- 每个面板记录恰好被一个组引用；每个面板组恰好被树引用一次。
-- 含面板的项目布局恰好一个聚焦组；无面板则无聚焦组。
-- 每个项目至多一个终端自定义标题相同的约束不存在（允许重名标题）；但终端编号在项目内唯一。
-- 每个项目至多一个设置中心面板。
-- 编辑器/Markdown 同项目同路径至多一个面板；Diff 默认模式同项目同工作区路径至多一个（冲突快照不计入去重约束）；GitShow 同项目同仓库路径至多一个。
-- 面板不跨项目移动；跨项目拖拽被拒绝。
-- DTO 只含路径、参数、标题与编号；不含凭据、文件内容、终端输出、剪贴板内容。
-
-### Runtime v2 资源 ID 前向合同
-
-- 资源模型：`project` / `panel-group` / `panel`；方法参数与事件字段一律使用字符串资源 ID，不再使用页码/下标寻址。
-- ID 形式：
-
-```json
-{ "project": "project:7", "panel_group": "group:12", "panel": "panel:31" }
-```
-
-- 合同条款：
-  - ID 不透明：客户端不得解析数值做排序、范围或归属推断。
-  - ID 在同一纪元内终生稳定：重命名、排序、面板组拆分/合并、项目根重定位均不改变。
-  - 不复用：同一纪元内删除后的 ID 永不再分配；状态库重建进入新纪元后旧 ID 失效。
-  - 前缀封闭：新增资源类型只追加新前缀；旧前缀语义不变。
-  - 未知前缀/未知 ID → `resource_not_found`；格式不合法 → `invalid_params`。
-  - 事件与快照同时携带资源 ID 与必要父 ID（`project` 可选，因为 `panel` 全局唯一）。
-- 环境变量：`SLTERM_PROJECT_ID`、`SLTERM_PANEL_GROUP_ID`、`SLTERM_PANEL_ID` 使用同一字符串；`SLTERM_PANE_ID` 随 v1 退役，不保留兼容别名。
-- CLI `slterm ctl` 与随包 skill 使用同一 ID 形式；单实例移交载荷用根路径/cwd 定位，不传内部 ID。
-- 资源 ID 不是授权凭据；权限仍由本机 token 与单实例边界决定。
-
-### 面板类型注册表扩展规则
-
-- `PanelKind` 与 `PanelParams` 是封闭枚举；新增类型必须同时修改：
-  - `slterm_workspace::panel` 的枚举与参数结构；
-  - DTO tag 与 `revision`；
-  - `slterm_workspace::dedupe` 的去重键；
-  - `slterm_app::app::panel_registry` 的单一注册项：`kind`、工厂、能力、标题策略；
-  - 恢复过滤与 `RestoreReport` 测试；
-  - `docs/featureSpec/workspace/shell.md` 的面板类型表与验收。
-- 注册项类型（`PanelDescriptor`、`PanelCapabilities`）、工厂上下文与焦点接缝归 `workspace/shell.md` 与 app 注册点所有；本文件只定义领域枚举与参数。core 不引用 `PanelHost`/`PanelCreateContext` 等 app 类型。
-- 未注册类型在恢复时丢弃并聚合警告；运行时不能创建。
-- 禁止面板类型由 UI 侧私增；禁止用“通用文档面板 + 模式字段”绕过封闭集。
+- 新增稳定身份时同步 DTO、Runtime 外部 ID、备份资格和恢复测试；不得只在 UI 层增加字符串 ID。
+- 新增 ViewKey 变体必须在封闭注册点、规范序列化、恢复过滤、ViewState 生命周期和追溯矩阵同时登记。
