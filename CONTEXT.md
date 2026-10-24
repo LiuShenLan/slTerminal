@@ -1,248 +1,148 @@
-# slTerminal
+# 领域术语
 
-面向 Windows 10/11、面向所有 AI CLI 调优的通用终端模拟器。单进程 GPUI 应用，单窗口单实例、仅暗色模式、GPU 加速渲染。
+> 统一 slTerminal 需求中的领域语言；只定义概念与边界，不描述实现模块、存储格式或开发计划。行为契约见 [功能需求规格](docs/featureSpec/README.md)。
 
-## 术语
+## 工作区与视图
 
-### 产品与工作区
+**项目（Project）**：拥有稳定 `ProjectId` 的顶层容器。显示名和根路径都不是项目身份。
 
-**项目**（Project）：
-顶层容器，对应一个根目录，拥有稳定 `ProjectId`；根路径词法唯一并做真实路径查重。项目列表持久化。
-_Avoid_: 工作区, 根目录条目
+**活跃项目（Active Project）**：主区当前显示的项目；项目集合非空时恰好一个。切换不销毁项目布局或运行实例，应用级侧栏按各自数据根规则响应。
 
-**项目布局**（ProjectLayout）：
-项目对应的网格布局树，叶为面板组；每项目恰好一个，多项目布局同时存活，切换只改变可见性。
+**项目布局（ProjectLayout）**：一个项目的网格布局，由 PanelGroup 组成；每个项目恰好一个，多项目布局同时存活。
 
-**面板组**（PanelGroup）：
-布局树中的页签组，拥有独立页签栏与激活面板；空组自动移除。
+**面板组（PanelGroup）**：布局叶节点和页签容器，拥有激活 Panel；空组自动移除。
 
-**面板**（Panel）：
-面板组内的页签条目，封闭类型为终端、编辑器、Markdown、Diff、GitShow、设置中心；有稳定 `PanelId`。
+**面板（Panel）**：项目布局中的存活视图实例，封闭类型为 Terminal、Editor、Markdown、Diff、GitShow、Settings。Panel 不得跨项目移动。
 
-**活跃项目**（Active Project）：
-主区当前显示的项目；项目集合非空时恰好一个。
+**PanelId**：只标识存活 Panel 实例；关闭后销毁且不复用，不承担持久视图身份。
 
-**项目根**（Project Root）：
-项目对应根目录；文件打开、文件浏览器、Commit 与新建终端的基准。
+**ViewKey**：逻辑视图的稳定身份。普通文档视图由项目、Document 和视图类型等稳定领域标识组成；持久状态绑定 ViewKey，而非 PanelId。
 
-**设置中心**（Settings Center）：
-项目内普通面板，左侧导航 + 右侧配置页；每项目最多一个；无项目时由应用设置浮层承载应用页。配置页经注册表分派，新增配置页 = 组件 + 注册一条。
+**视图状态（ViewState）**：ViewKey 拥有的持久界面状态，例如阅读位置或显示参数。它不包含 Document 实时正文，也不包含搜索、菜单、焦点等瞬态。
 
-**应用设置浮层**（App Settings Overlay）：
-无项目时打开的仅含应用页的模态覆盖层；不复用项目布局。
+**侧栏视图（Side View）**：活动栏对应的应用级视图，`SideViewId` 为封闭集合。关闭视图销毁实例；隐藏整个侧栏保留实例；隐藏按钮只移除入口。
 
-**窗口几何**（WindowGeometry）：
-窗口大小/位置/最大化状态与显示器标识；语义是启动回放的行为输入，不是诊断字段。
+**应用设置浮层（App Settings Overlay）**：无项目时承载全部应用级设置的视图。它与项目内 Settings 共享应用设置，不因项目激活自动关闭。
 
-**活动栏**（ActivityBar）：
-最左侧常驻窄条，容纳侧栏视图按钮与设置入口。
+## 文档与路径
 
-**侧栏视图**（Side View）：
-活动栏按钮对应的可开关内容视图，封闭集 `SideViewId`。未知 id 恢复时静默丢弃。
+**Document**：应用级可编辑文档聚合。同一文件只有一份实时文本、脏状态、撤销、冲突和外部修改状态，可跨项目被多个 Panel 引用。
 
-**双槽**（Top Zone / Bottom Zone）：
-侧栏内容的上下两个半区；同一半区最多一个打开的视图，展示由状态纯推导。
+**DocumentId**：Document 的稳定身份，独立于项目与路径；另存为或外部改名不改变该身份。
 
-> 旧 workspace / tab / pane / session.json 模型已退役；其术语与处置只出现在 `docs/devPlan/design/migration.md`。
+**普通文档视图**：引用 Document 的 Editor 或 Markdown 视图。Diff 工作区侧也引用 Document；只读快照和 GitShow 不建立第二份可编辑 Document。
 
-### 终端与 PTY
+**脏状态（Dirty）**：Document 当前文本相对磁盘基线存在未保存修改。所有引用视图共享同一脏状态。
 
-**终端视图**（TerminalView）：
-GPUI 中的终端呈现实体：接收 PTY 输出、驱动网格渲染、处理输入与选择。每个视图对应一个终端面板。
+**最后引用关闭**：只有关闭 Document 的最后一个引用视图时才触发内容保存／丢弃／取消；关闭其他引用只销毁 Panel。
 
-**PTY 会话**：
-`slterm_terminal` 管理的伪终端进程实例（ConPTY、读写线程、子进程与生命周期）。与「面板组」「面板」是不同概念。
+**只读快照（Read-only Snapshot）**：冲突或大文件对比使用的固定文本副本，不参与编辑、自动保存或普通 Document 去重。
 
-**Shell 解析**：
-默认 shell 的探测链——PowerShell 7 → Windows PowerShell 5.1 → `cmd.exe`；用户可在设置中覆盖。
+**Document 崩溃快照**：异常恢复所用的未保存 Document 文本与元数据，按 DocumentId 对账；不同于只读快照和 GitShow 版本内容。
 
-**Shell 集成脚本**：
-随终端注入的 PowerShell 脚本，覆盖 `prompt` 函数发射 OSC 序列（cwd 跟踪、提示符边界与退出码），供宿主跟踪命令边界。
+**PathPolicy**：按具体操作判定读取、写入、终端 cwd、资源读取和恢复授权的规则。能读不等于能写，能写不等于能作为终端 cwd。
 
-**ConPTY 捆绑**：
-Win10（build < 21376）下嵌入并提取的新版 `conpty.dll` + `OpenConsole.exe`；Win11 走系统 ConPTY。提取失败静默回退系统路径。
+**词法路径（Lexical Path）**：按 Windows 词法规则归一的路径，用于项目唯一性、历史归属和展示。
 
-**DA1 / DSR 接管**：
-终端核心对设备属性查询（DA1）与光标位置查询（DSR）的按需代答/剥离策略；统一身份 `?64;22c`，禁止盲注。
+**规范路径（Canonical Path）**：解析符号链接、目录联接等重定向后的路径，用于包含性和授权判断。
 
-**滚动回看**（Scrollback）：
-终端历史行缓冲；容量是设置键与契约数值，默认值见代码。
+**文件身份（File Identity）**：文件系统支持时由卷与稳定文件标识确定的身份，用于合并硬链接等别名；不可用时退回规范路径并保留冲突检测。
 
-**复制语义**：
-`Ctrl+Shift+C` 有选区复制并反馈、无选区静默吞；`Ctrl+C` 恒中断并透传 PTY。
+**能力并集（Capability Union）**：同一目标被多个根覆盖时，各有效根授予的操作能力取并集；只读根不会抹除另一根的写授权。
 
-### 设置与外观
+**项目根（ProjectRoot）**：与项目关联的授权根，提供其范围内的读取、项目内写入、终端 cwd 和持久恢复能力。根路径变化不改变 ProjectId。
 
-**设置段**（Settings Segment）：
-`settings.json` 的语义分组；「键 → 段」映射单源在 `slterm_settings::keys`，未知键原位保留。
+**仓库根（RepoRoot）**：项目所在 Git 仓库的实际根，只提供 Git 与相关文件读取，不单独授予写入或终端能力。
 
-**设置写通道**（settings_store）：
-设置落盘的唯一硬机制：白名单校验、段级浅合并、保存锁、原子写、`.bak` 与损坏处理。写核心私有，所有写入经审计包装。
+**AgentRoot**：内置或自定义 Agent 文件根，默认只读且禁止终端；写入和终端 cwd 分别显式开启。同一真实目录只允许一个 AgentRoot。
 
-**前端/后端消费型配置**：
-消费侧在 UI 的配置走通用段写；消费侧在后端的配置走域专用命令（校验 + 内存态 + 落盘一体）。禁止第二写通道。
+**会话级显式读取**：用户当次选择根外文件后获得的单文件只读能力，不扩展到相邻资源、目录或终端，也不跨重启。
 
-**配色 token**：
-UI 颜色的语义命名槽位。组件只引用 token，禁止硬编码颜色；仅暗色。
+**另存为写授权**：当前 Document 对用户选定目标的运行期写入能力，不授予其他 Document 或目录能力，也不跨重启。
 
-**内置主题**（ThemeName）：
-内置暗色主题目录，`Linear` 为默认；主题只保证暗色可读，不做对比度校验或可读性提示。
+**根重定位（Root Relocation）**：改变 ProjectRoot 与项目的关联，不移动文件、不重绑 Document、不改变既有 PTY cwd，也不把 Diff 或 GitShow 改绑到新仓库。
 
-**明度阶梯**（Lightness Ramp）：
-UI 背景色的离散档位；层级靠相邻档差表达，不叠加阴影/边框。
+## 终端、CLI 与会话
 
-**发丝线**（Hairline）：
-暗色界面分隔线的唯一形态——半透明 1px 线，禁止实色粗边框。
+**逻辑终端（Terminal）**：可持久恢复的终端记录，包含编号、标题和 cwd 等元数据；任何时刻最多一个存活 PTY。显示编号不是身份。
 
-**窗口材质**（BlurMode）：
-材质档位枚举 `None/Mica/MicaAlt/Aero/Acrylic`，默认 `None`；`opacity` 为标量。WCA/DWMSBT 通道互斥，按 Windows build 门控。
+**PTY**：逻辑终端当前运行的伪终端进程。元数据恢复与 PTY 创建分离，隐藏终端可懒启动，已退出终端不自动运行新 Shell。
 
-**i18n 语言偏好**（LanguagePref）：
-`System/English/Chinese`；System 按系统 locale 协商。翻译键集是构建期硬合同。
+**终端回滚（Scrollback）**：终端可读取的历史行与当前画面，只存在运行期；回滚搜索只读，不写 PTY。
 
-### Agent 集成
+**可信 Shell 输入行**：应用能够可靠镜像、未受备用屏、TUI、历史召回或光标操作污染的命令输入行。补全与本地历史只使用该输入。
 
-**编码 CLI / AI CLI**：
-以命令行运行的 AI 编码代理（claude、codex、gemini 等）。slTerminal 面向所有 AI CLI 调优，`AgentKind` 是内置身份的封闭枚举。
+**补全形态（Inline／Popup／Hybrid）**：ghost 内联候选、弹窗候选或两者组合。接受候选只修改输入，不直接执行。
 
-**AgentKind**：
-AI CLI 的封闭身份枚举；承载 slug、显示名、启动/恢复/分叉命令与屏幕规则匹配。持久化 `source` 宽松落盘，消费时经 `AgentKind::parse` 严格归一。
+**命令历史／目录历史**：从可信 Shell 行采集的本机有界学习数据，可分别停用和清空；不同于 Shell 或 CLI 自己维护的历史。
 
-**Agent 状态**（AgentStatus）：
-面板的 agent 语义状态：Working / Attention / Done / Error / Unknown；`Attention` 表示等待输入或权限确认，`Unknown` 表示尚无权威判定（普通 shell 或未识别）。
+**AI CLI／编码 CLI**：以命令行运行的 AI 编码代理。AgentKind 表示其封闭的内置身份，不是套餐来源或自定义 Provider。
 
-**AgentHub**：
-agent 事件归属与面板状态投影的宿主：消费 hook 事件与屏幕看门狗结果，维护 AgentActivity/AnswerInbox。
+**Agent 状态**：CLI 会话的工作、等待关注、完成、错误或未知状态；无法权威判定时使用未知，不伪造完成或进度。
 
-**AI hook 事件**（AiHookEvent）：
-归一化的生命周期事实（会话开始、提示提交、工具完成、回合结束、需要关注、会话结束），附回合结果与能力位。
+**活跃会话**：当前运行中且可关联到终端 Panel 的 CLI 会话；纯 Shell 终端不属于活跃 CLI 会话。
 
-**hook 小进程**（`slterm-hook`）：
-每个 AI 回合事件调用一次的独立小进程；经命名管道把原始载荷转发给宿主后退出。必须 exit 0、快速、隐形。
+**历史会话**：CLI 自己产生的本地持久会话记录，可用于展示、恢复或分支；应用不借导航建立第二份长期正文库。
 
-**命名管道通道**：
-hook 事件唯一权威通道；宿主侧服务器解析 JSON，helper 不重编码。
+**未归属会话**：cwd 为空、相对或按词法路径无法匹配任何项目根的历史会话。目录暂时不可访问不自动改变归属。
 
-**statusline 桥接**：
-context 用量百分比的数据通道；桥接脚本节流后写 ContextUsage 信号文件，并透传用户原 statusline。与 hook 管道分通道。
+**历史删除隔离区**：已删除历史记录的受管保存区。每批撤销期限独立且跨重启持久化；撤销失败或异常对账的待处理材料不因到期自动删除。它不同于 Windows 回收站和 Document 快照。
 
-**信号文件通道**：
-statusline 用量等低频信号的介质；app 数据目录，与命名管道分通道。
+**Hooks 草稿**：设置视图中按“面板＋CLI＋层级”持有的未保存 Hooks 编辑，不属于应用设置单例，切换、关闭或根重定位前必须显式处理。
 
-**ContextUsage 信号**：
-statusline 桥接产出的用量事件，payload 携带 `usedPercentage`。
+## Git 与对比
 
-**SLTERM_PANE_ID**：
-PTY spawn 注入子进程的环境变量，经 shell → CLI → hook 继承链传递，用于会话→面板路由；v2 使用 `SLTERM_PANEL_ID`。
+**Diff**：绑定仓库中的 HEAD 路径与工作区 Document 的对比视图；HEAD 可刷新，工作区侧不产生独立缓冲。
 
-**历史会话**（AiSession）：
-编码 CLI 在某目录运行产生的持久化会话记录（claude 为 `~/.claude/projects/` 下 `<uuid>.jsonl`），由各 CLI 的扫描/恢复命令处理。
+**GitShow**：创建时固定仓库、HEAD 提交版本和路径的只读版本视图；之后 HEAD 移动或根重定位不改变其内容来源。
 
-**hook 失败边**：
-hook 执行失败时的合成命令与证据；默认关（复用 `AssistantConfig.enabled`），只进闸门与 log，不直接弹 UI。
+**Git 回滚**：Commit 中仅放弃未暂存工作区变化并从索引恢复的操作，不重置索引；不同于终端回滚、历史删除撤销和备份恢复点撤回。
 
-### Runtime 控制面
+## 设置、外观与后台能力
 
-**Runtime API**：
-本机 loopback 上的 JSON Lines 控制面，供 AI CLI 与脚本查询/驱动终端；协议名 `slterm.runtime`，目标版本 2；v1 已退役，不保留兼容层。
+**应用设置单例**：全部项目 Settings 与无项目浮层共享的一份非敏感应用配置及保存队列；关闭任一设置视图不取消全局待写。
 
-**信封**（Envelope）：
-请求/响应的统一外层：`protocol`/`version`/`id`/`token`/`method`/`params`；响应以 `ok` + `result` 或 `error` 互斥表达。
+**统一命令目录**：命令上下文、默认键、用户绑定和冲突的唯一来源，覆盖工作区、文件树、终端搜索和补全动作。
 
-**端点发现**：
-进程内子端点 > `SLTERM_RUNTIME_ENDPOINT` 环境变量（`<port> <token>`）> 数据目录 `state/runtime.port`。
+**语义 token**：界面颜色的语义槽位，组件只引用 token，不硬编码颜色；与认证 token 无关。
 
-**CLI 双人格**：
-同一 `slterm.exe`：带子命令 = CLI 客户端，无子命令 = GUI。`slterm ctl` 暴露完整协议，资源动词（`project`/`panel-group`/`panel`/`terminal`/`agent`/`git`）为同一信封上的薄别名，`slterm env` 离线报告身份与端点。
+**自定义暗色主题**：用户导入的完整暗色语义 token 与 ANSI 映射，可选择、重命名和删除；不做对比度校验或自动回退。
 
-**RuntimeHub / RuntimeDispatch**：
-Runtime API 的宿主侧枢纽：接收写命令、派发到工作区执行、经回执通道返回结果。
+**窗口几何（Window Geometry）**：窗口尺寸、位置、最大化和显示器上下文，按机器恢复；不随工作区跨机直接套用。
 
-**单实例移交**：
-第二个实例启动时不建窗，改为唤起既有实例；移交走版本化 JSON，载荷为仅聚焦、打开项目、打开文件或新建终端；目标不存在时提示，不自动创建项目。
+**窗口材质（Window Material）**：固定暗色窗口背景材质选项，不改变主题 token，也不提供浅色模式。
 
-**Runtime skill**：
-随包分发的 `slterm-runtime` Skill（`assets/skills/`），提供给 AI CLI 自发现控制面；安装器按受管文件指纹投放。
+**套餐余量（Plan Balance）**：内置套餐来源提供的金额或时间窗用量快照，不是 CLI 会话用量，也不是模型管理能力。
 
-### 文件与编辑器
+**套餐专用查询 token**：用户专门为余量查询提供的凭据，只用于对应内置来源；不得从 CLI 配置或环境变量读取替代，也不得回显或进入备份。
 
-**文件编辑器**（file_editor）：
-内置源码/文本编辑内核与视图：文档模型、撤销、选择、输入规则、gutter、outline、预览/并排形态。
+**余量过期（Stale）**：按当前调度周期、计划执行时间和来源响应状态判定的数据时效；失败可保留旧值，但必须标出过期和最后成功时间。
 
-**编辑器面板 / Markdown 面板**：
-`PanelKind::Editor` / `Markdown`；文件打开路由由单一路由判定；图片不进入面板封闭集，走系统默认程序。
+## Runtime、凭据与恢复
 
-**Diff 面板**：
-HEAD ↔ 工作区双栏或行内对照，工作区侧可编辑；gutter 点击与重开命中走单入口。
+**Runtime v2**：仅在 loopback 提供 JSON Lines 控制面的本机自动化能力，复用工作区资源、PathPolicy、保存守卫和关闭状态机；不保留 v1 兼容层。
 
-**Gutter**：
-编辑器行号区，按 git 状态显示增删改标记；点击打开对应 diff。
+**Runtime token**：Runtime 客户端认证凭据，与端点元数据分离；不同于套餐专用查询 token，也不进入普通端口状态或诊断。
 
-**文件浏览器**：
-侧栏视图 `Explorer`：项目目录树、git 状态着色、创建/删除/重命名/打开，回收站删除走 `SHFileOperationW`。
+**非交互冲突**：Runtime 写操作需要用户决定但未提供策略时返回的结构化结果，不弹模态框，也不自动选择保存或丢弃。
 
-**文件树模型**（side_panel）：
-只持数据与状态转换的模型层；渲染按行号取行，模型内禁止出现 GPUI 类型。
+**单实例移交**：后续启动把聚焦、打开项目、打开文件或新建终端意图交给既有窗口，不创建第二窗口或隐式项目。
 
-### 后台任务与套餐余量
+**凭据域（Credential Domain）**：真实凭据的存储与使用边界。真实值只存 Windows 凭据管理器，经凭据门面进入唯一使用链路，不进入普通状态、日志、备份或诊断。
 
-**后台定时任务**（Background Task）：
-应用级任务单元；元数据注册于 `background_tasks`，执行体在后端或订阅方，配置落 `backgroundTasks.{taskId}` 段。
+**审计通道（Audit）**：安全写与哈希对账事件的专用通道，只记录操作、路径、来源、结果和必要指纹，不记录凭据或文件内容。
 
-**TaskSchedule**：
-任务触发形态——`Interval`（周期）/ `Once`（启动一次性，`interval_sec` 为启动延迟）/ `OnDemand`（事件驱动）。共用订阅生命周期与失败策略。
+**加密备份**：口令保护的两类别本地备份，只含获准设置／主题与工作区／界面状态；凭据、终端输出、历史和恢复材料不因此入包。
 
-**扫描执行体**：
-历史会话扫描的唯一执行路径；手动刷新与定时刷新共用。
+**恢复点（Restore Point）**：备份恢复前创建的可撤回本地状态。撤回前比较指纹，后续用户修改不得被静默覆盖。
 
-**套餐余量**（Plan Balance）：
-编码套餐当前剩余可用量（金额余额 / 时间窗用量）；查询走 user 层 settings 的 `env` 段，token 不出凭据域。
+**原子写（Atomic Write）**：持久化只能以完整新状态替换旧状态的纪律；失败不得留下半写内容，批量业务操作的部分成功不等于允许单个文件半写。
 
-**余量推送**（Plan Balance Watch）：
-模块级 `SNAPSHOT` + watch 语义订阅：只报「有新值」，订阅者读最新快照；有界 1 槽合并连续推送。
+## 含混说法
 
-### 安全
-
-**凭据域**：
-真实凭据只存 Windows 凭据管理器；业务经 `SecretStore` 门面访问。`SecretValue` 出域即用即焚，token/key 不出域；target 统一 `slterm/<scope>/<id>`。
-
-**审计通道**（audit）：
-`tracing` target `audit` 的安全事件通道；事件字段只含 operation/path/source/result 与 expected/actual 指纹，禁插值凭据值与文件内容。
-
-**加密备份**：
-口令保护的本地备份，目标格式 `SLTBK002 | salt | nonce | ciphertext`（AES-256-GCM，魔数作 AAD；Argon2id 派生）。类别与敏感键表以代码为准；敏感键导出剥除、导入复验；旧 `TRMBK001` 归档拒绝。
-
-**恢复点**（RestorePoint）：
-一次备份/恢复操作的可撤回句柄；会话内撤回，跨重启清单归设置页安全分区。
-
-**敏感键表**（SENSITIVE_KEYS）：
-备份导出剥除与导入复验共用的第二道防线；手改文档塞入的凭据字段一律剥除/拒绝。
-
-### 基础设施与治理
-
-**GPUI 前台/后台**：
-前台 = UI 线程（渲染与状态更新，禁阻塞）；后台 = background executor 或专用线程（阻塞 I/O、网络、子进程）。
-
-**AppError**：
-通用错误信封；变体与转换以类型定义为准。领域不得另立 envelope，错误消息用户可见且禁带凭据。
-
-**会话元数据索引**（terminal_registry）：
-模块级单例，按 `PanelId` 提供会话元数据查询；Workspace 是实体唯一属主，索引不裁决生命周期。
-
-**原子写**：
-持久化通用纪律——临时文件 + rename；损坏状态处理；设置写经审计包装。
-
-**状态库**（State DB）：
-本地 SQLite 单库，承载项目、布局、终端簿、侧栏与视图状态；设置 JSON 与崩溃快照不在库内。事务提交替代逐文件原子替换与跨文件顺序。
-
-**漫游根 / 本地根**：
-漫游根存应用设置；本地根存状态库与机器本地文件（实例锁、Runtime 端点、窗口几何、崩溃快照、隔离区、补全、更新、日志/审计/崩溃现场）。
-
-**门禁**：
-行数棘轮（`architecture/file-budgets.txt`）、依赖方向（`architecture/dependencies.toml`）、禁名回流（`scripts/check_brand_regress.py`）、文档策略（`scripts/check_doc_policy.py`）；git hooks 常挂。
-
-**决策记录**：
-当前有效决策写入目标路径最近的 `CLAUDE.md` 或 `.claude/docs/` 对应子域；不集中维护 ADR 或因果档案，完整历史从 git log 查。
-
-**豁免登记**：
-`.claude/docs/testing/exemptions.md` 是不可自动化测试面的单表真值源；未登记豁免即硬约束违规。
+- “工作区”必须按语境明确为 Project、ProjectLayout 或整个应用工作区，不作为第四层领域实体。
+- “会话”必须明确为逻辑终端、PTY、活跃 CLI 会话或历史会话，不混用身份和生命周期。
+- “路径相同”必须明确是词法路径、规范路径还是文件身份相同。
+- “关闭”与“隐藏”不得混用：关闭销毁运行实例，隐藏可以保留实例；持久状态是否保留由 ViewKey 判定。
+- “token”必须明确为语义 token、Runtime token 或套餐专用查询 token，后两者都是凭据且不得互相替代。
+- “快照”必须明确为 Document 崩溃快照、Diff 只读快照或套餐结果快照，不共用清理与恢复语义。
