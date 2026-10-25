@@ -208,9 +208,10 @@ impl StreamProcessor {
             return None;
         }
 
-        // bundled 宿主的首条 DA1 到达读循环时已无等待者，迟答会成为
-        // shell 输入；只剥离该条，后续应用查询仍逐次按需代答。
-        if mirror_da1_query(&body) && !std::mem::take(&mut self.bringup_da1_pending) {
+        // bundled 首条宿主 DA1 只剥离：迟答会成为 shell 输入；其余逐条代答。
+        let queries = count_da1_queries(&body);
+        let skip = queries > 0 && std::mem::take(&mut self.bringup_da1_pending);
+        for _ in usize::from(skip)..queries {
             inject_da1_response(writer);
         }
 
@@ -315,11 +316,9 @@ impl StreamProcessor {
 // 应用 DA1 由 reader 逐条代答，`Term::identify_terminal` 仅作漏网兜底；
 // bundled 首条宿主 DA1 与一切无查询盲注均禁止回写。
 
-/// DA1 应答注入：检测到 DA1 查询（ESC[c / ESC[0c）时向子进程 stdin 写入
-/// ESC[?64;22c（VT220 级别 + 色彩能力——对全屏 CLI 兼容面最宽；缺应答
-/// Ink 启动阻塞约 60s）。调用方只过滤 bundled 首条宿主 DA1，其余查询
-/// 均须应答——查询已不透传，core 是唯一应答方。检测决策 = 纯函数
-/// `mirror_da1_query`，注入动作为 I/O。
+/// DA1 应答注入（ESC[c / ESC[0c → ESC[?64;22c，VT220 + 色彩能力）。
+/// 缺应答 Ink 启动阻塞约 60s；调用方只跳过 bundled 首条宿主查询。
+/// 查询不透传，core 是唯一应答方；检测纯函数为 `count_da1_queries`。
 fn inject_da1_response<W: Write>(writer: &mut W) {
     if let Err(e) = writer.write_all(b"\x1b[?64;22c") {
         error!("DA1 response injection failed: {e}");
@@ -527,25 +526,25 @@ fn apply_output_strip(startup_drained: bool, strip_dsr: bool, data: &[u8]) -> Op
     }
 }
 
-/// 检测输出字节流中是否含有 DA1 终端查询（ESC[c 或 ESC[0c）。
-///
-/// DA2 (ESC[>c) 和 XTVERSION (ESC[>0q) 不触发——两者走不同的检测路径。
+/// 统计输出字节流中的 DA1 终端查询（ESC[c 或 ESC[0c）。
+/// DA2 (ESC[>c) 和 XTVERSION (ESC[>0q) 不计入——两者走不同的检测路径。
 /// 滑动窗口扫描，在 read 块（拼接扣尾后）上调用。
-fn mirror_da1_query(data: &[u8]) -> bool {
+fn count_da1_queries(data: &[u8]) -> usize {
+    let mut count = 0;
     for i in 0..data.len().saturating_sub(2) {
         if data[i] == 0x1b && data[i + 1] == b'[' {
             let rest = &data[i + 2..];
             // ESC[c — 不含额外参数的标准 DA1 查询。
             if rest.first() == Some(&b'c') {
-                return true;
+                count += 1;
             }
             // ESC[0c — 含前导 0 的变体。
             if rest.len() >= 2 && rest[0] == b'0' && rest[1] == b'c' {
-                return true;
+                count += 1;
             }
         }
     }
-    false
+    count
 }
 
 /// 检测输出字节流中是否含有 DSR 光标位置查询（ESC[6n）。
@@ -1596,37 +1595,37 @@ mod tests {
         assert!(result.ends_with(b"TAIL"));
     }
 
-    // ─── mirror_da1_query 纯函数族 ───
+    // ─── count_da1_queries 纯函数族 ───
 
     #[test]
     fn da1_standard_query_detected() {
-        assert!(mirror_da1_query(b"\x1b[c"));
+        assert_eq!(count_da1_queries(b"\x1b[c"), 1);
     }
 
     #[test]
     fn da1_with_leading_zero_detected() {
-        assert!(mirror_da1_query(b"\x1b[0c"));
+        assert_eq!(count_da1_queries(b"\x1b[0c"), 1);
     }
 
     #[test]
     fn da2_not_detected() {
-        assert!(!mirror_da1_query(b"\x1b[>c"));
+        assert_eq!(count_da1_queries(b"\x1b[>c"), 0);
     }
 
     #[test]
     fn plain_text_not_falsely_detected() {
-        assert!(!mirror_da1_query(b"hello [c world"));
+        assert_eq!(count_da1_queries(b"hello [c world"), 0);
     }
 
     #[test]
     fn xtversion_not_detected() {
-        assert!(!mirror_da1_query(b"\x1b[>0q"));
+        assert_eq!(count_da1_queries(b"\x1b[>0q"), 0);
     }
 
     #[test]
     fn da1_embedded_in_output_detected() {
-        let input = b"prompt> \x1b[c more output";
-        assert!(mirror_da1_query(input));
+        let input = b"prompt> \x1b[c\x1b[0c more output";
+        assert_eq!(count_da1_queries(input), 2);
     }
 
     // ─── mirror_dsr_query / should_answer_dsr 纯函数族 ───
@@ -1751,11 +1750,11 @@ mod tests {
     fn output_strip_first_round_startup_plus_da1_all_stripped() {
         // 防复发回归：启动窗口内「启动序列 + DA1」整块 → 零字节（旧代码 DA1
         // 不在剥离清单 → 透传触发自答回灌）。调用方须在剥离前的原始字节上
-        // 做 mirror_da1_query 检测；除 bundled 首条宿主 DA1 外，None 分支
+        // 做 count_da1_queries 检测；除 bundled 首条宿主 DA1 外，None 分支
         // 不漏答。
         let result = apply_output_strip(false, false, b"\x1b[2J\x1b[c\x1b[H");
         assert_eq!(result, None);
-        assert!(mirror_da1_query(b"\x1b[2J\x1b[c\x1b[H"));
+        assert_eq!(count_da1_queries(b"\x1b[2J\x1b[c\x1b[H"), 1);
     }
 
     #[test]
@@ -1929,7 +1928,7 @@ mod tests {
         frame.extend_from_slice(b"c def");
         let (b2, p2) = split_trailing_query_prefix(frame);
         assert!(p2.is_empty());
-        assert!(mirror_da1_query(&b2), "拼接后应检测到 DA1 → 触发代答");
+        assert_eq!(count_da1_queries(&b2), 1, "拼接后应检测到 DA1 → 触发代答");
         assert_eq!(strip_da1_queries(&b2), b" def", "剥离后前端无泄漏");
     }
 
@@ -2026,13 +2025,14 @@ mod tests {
     fn strip_and_answer_suppresses_only_bringup_da1() {
         let mut sp = StreamProcessor {
             bringup_da1_pending: true,
-            ..StreamProcessor::default()
+            ..Default::default()
         };
         let mut w: Vec<u8> = Vec::new();
-        assert_eq!(sp.strip_and_answer(b"\x1b[6n\x1b[c", &mut w), None);
-        assert_eq!(w, b"\x1b[1;1R", "首条宿主 DA1 不得迟答");
-        assert_eq!(sp.strip_and_answer(b"\x1b[0c", &mut w), None);
-        assert_eq!(w, b"\x1b[1;1R\x1b[?64;22c", "后续应用 DA1 仍须按需应答");
+        assert_eq!(sp.strip_and_answer(b"\x1b[6n\x1b[c\x1b[0c", &mut w), None);
+        assert_eq!(w, b"\x1b[?64;22c\x1b[1;1R", "首条宿主 DA1 不得迟答");
+        w.clear();
+        assert_eq!(sp.strip_and_answer(b"\x1b[c\x1b[0c", &mut w), None);
+        assert_eq!(w, b"\x1b[?64;22c\x1b[?64;22c", "逐条代答");
     }
 
     #[test]

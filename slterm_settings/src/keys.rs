@@ -11,7 +11,7 @@
 //! - 重置清单 [`reset_keys`] = `resettable = true` 的 leaf 键集合。
 //!
 //! 域外顶层段(不占注册表条目,结构与消费由所属领域锚定,[`EXTERNAL_SEGMENTS`]):
-//! - [`KEYBIND_SEGMENT`]:键位绑定数组,由键位绑定领域锚定结构,写通道整表替换
+//! - [`KEYBIND_SEGMENT`][]:键位绑定数组,由键位绑定领域锚定结构,写通道整表替换
 //!   语义由其消费;段名常量由该领域模块引用,禁二次字面量。
 //! - [`CONPTY_INPUT_MODES_SEGMENT`]:ConPTY 输入模式矩阵,由 ConPTY 输入领域锚定,
 //!   段名常量由该领域模块引用。

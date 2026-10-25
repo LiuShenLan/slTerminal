@@ -5,7 +5,7 @@
 ## 决策与红线
 
 - **core 边界**：本目录只拥有 grid、VT、PTY、输入编码、回放和终端行为；不得依赖产品视图、窗口状态或 GPUI 组件。原因：终端语义必须能脱离 UI 独立测试。边界：不为 UI 需求在终端核心增加产品概念；确需新接口时公开最小命令/结果并保持状态私有。
-- **Win10 捆绑 ConPTY 宿主**：`conpty.dll` + `OpenConsole.exe` 以 `include_bytes!` 嵌入库资源；仅 Windows build < 21376 在首次 spawn 前提取到 `%LOCALAPPDATA%\slterm\conpty` 并动态加载（进程级单次解析）。原因：老 Win10 in-box conhost 不转发鼠标 VT 序列，而部署形态必须保持单文件。边界：提取幂等（大小一致复用）；提取/加载任一失败记录警告并静默回退系统 ConPTY；Win11 恒走系统路径。
+- **bundled ConPTY 宿主**：优先加载 exe 旁 `runtime/` 或 exe 目录的完整 `conpty.dll` + `OpenConsole.exe` 文件对，不限操作系统版本；文件对缺失且 Windows build < 21376 时，才将内嵌文件对在首次 spawn 前提取到 `%LOCALAPPDATA%\slterm\conpty` 并动态加载（进程级单次解析）。原因：exe 旁显式部署在 Win11 同样有效；内嵌单文件形态则用于规避老 Win10 in-box conhost 不转发鼠标 VT 序列。边界：文件对不完整即不选该路径；内嵌提取幂等（大小一致复用）；提取/加载任一失败记录警告并静默回退系统 ConPTY。
 - **ConPTY flags 能力矩阵**：捆绑宿主/Win11 系统走默认矩阵；Win10 系统回退走兼容矩阵。原因：不同 conhost 能力不同。边界：默认矩阵位翻转必须过真实 claude 全屏 TUI 滚轮与 Win10 build 阈值人工实测；非默认 flags 的自动化假阴性已登记豁免。
 - **DA1 后端全量接管**：DA1 查询（`ESC[c`/`ESC[0c`）一律后端检测、剥离，永不透传前端；应用查询逐条代答统一身份。bundled OpenConsole 首条宿主 DA1 到达读循环后，回写会成为 shell 输入，故只剥离不迟答。原因：前端自动应答与迟到应答都会经输入通道回灌，造成蜂鸣、身份序列污染、首字符丢失与恢复注入竞争。边界：首条抑制只由实际 bundled 后端注入且只消费一次；检测在剥离前的原始字节上进行；跨块查询前缀必须扣留；DA2/XTVERSION 未观测受害场景，暂不接管。
 - **DSR 按需代答与门控剥离**：启动窗口内检测到 `ESC[6n` 才代答；窗口外按 conhost 输入能力门控剥离，应答会被传输层损坏的主机只剥离不答。原因：Win10 键事件输入模式下任何 CPR 应答字节写入 stdin 都会变成杂散按键。边界：禁止盲注 CPR；禁止把应答会被损坏的查询透传前端。
