@@ -415,10 +415,6 @@ impl SltermWorkspace {
                 cx,
             );
         }
-        // 测试构建不启用会话注册表写入(真实数据目录隔离);生产启用。
-        if !cfg!(all(test, feature = "gpui-test-support")) {
-            workspace.agent_hub.enable_session_registry();
-        }
         workspace.start_shell_event_pump(shell_rx, window.window_handle(), cx);
         workspace.start_ai_hook_pump(ai_events, cx);
         workspace.start_agent_screen_watchdog(cx);

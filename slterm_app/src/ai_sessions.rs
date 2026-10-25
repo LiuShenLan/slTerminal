@@ -8,25 +8,16 @@
 //! user 消息;codex 的 rollout 第一行是 session_meta(带 cwd)。所以这里每个
 //! 文件最多读 [`HEAD_BYTES`],而且只为真正要显示的前 N 条读。
 //!
-//! 扫描结果与 hook 注册表合并:同一 `(source, id)` 只保留一条,modified 取
-//! 较新者;注册表只记「如何重新找到会话」,不复制对话正文。
-
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-
-use serde::{Deserialize, Serialize};
+use std::time::{Duration, SystemTime};
 
 use crate::ai_agents::AgentKind;
 
 /// 每个会话文件最多读多少字节找标题。
 pub const HEAD_BYTES: usize = 64 * 1024;
-/// 防止 hook 注册表被异常长标题撑大;这不是 UI 的视觉截断阈值。
+/// 会话标题的数据层上限；这不是 UI 的视觉截断阈值。
 /// 列表会按标题真实可用宽度做 ellipsis,正常会话名不会在数据层提前丢失。
 pub const TITLE_STORAGE_CHARS: usize = 512;
-
-const REGISTRY_VERSION: u32 = 1;
-const REGISTRY_LIMIT: usize = 256;
 
 #[derive(Debug, Clone)]
 pub struct AiSession {
@@ -39,7 +30,7 @@ pub struct AiSession {
     /// 副信息:claude 是项目目录(编码过);codex 是会话的 cwd。
     pub project: String,
     pub modified: SystemTime,
-    path: Option<PathBuf>,
+    path: PathBuf,
 }
 
 impl AiSession {
@@ -71,20 +62,16 @@ impl AiSession {
     }
 
     fn fill_details(&mut self) {
-        let Some(path) = self.path.as_deref() else {
-            self.ensure_title();
-            return;
-        };
-        // claude 的项目目录就是 jsonl 的父目录名;注册表条目没存 project 时
-        // 从这里补,不必额外写盘。
+        // claude 的项目目录就是 jsonl 的父目录名。
         if self.source == AgentKind::Claude && self.project.is_empty() {
-            self.project = path
+            self.project = self
+                .path
                 .parent()
                 .and_then(Path::file_name)
                 .map(|name| name.to_string_lossy().into_owned())
                 .unwrap_or_default();
         }
-        let Ok(head) = read_head(path, HEAD_BYTES) else {
+        let Ok(head) = read_head(&self.path, HEAD_BYTES) else {
             self.ensure_title();
             return;
         };
@@ -116,182 +103,24 @@ impl AiSession {
     }
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
-struct SessionRegistry {
-    #[serde(default)]
-    version: u32,
-    #[serde(default)]
-    sessions: Vec<RegistrySession>,
-}
-
-/// slTerminal 只记「如何重新找到会话」,不复制 AI 对话正文。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct RegistrySession {
-    source: String,
-    id: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    title: String,
-    /// CLI 原生会话文件;恢复时据此补标题/项目,不复制正文。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    file: Option<String>,
-    last_seen: u64,
-}
-
-fn registry_path() -> PathBuf {
-    crate::platform::dirs::data_dir().join("ai_sessions.json")
-}
-
-/// 记录一条 hook 上报的会话身份并 upsert 到注册表。
-///
-/// 注册表不存 transcript 或 prompt 正文;`title` 只是可选展示标签,
-/// `file` 是重新找到原生会话的路径。写盘原子化且带文件锁,容量上限截断。
-pub fn record_hook_session(
-    source: &str,
-    session_id: &str,
-    file: Option<PathBuf>,
-    title: Option<&str>,
-) -> std::io::Result<()> {
-    record_hook_session_at(&registry_path(), source, session_id, file, title)
-}
-
-fn record_hook_session_at(
-    path: &Path,
-    source: &str,
-    id: &str,
-    file: Option<PathBuf>,
-    title: Option<&str>,
-) -> std::io::Result<()> {
-    let Some(agent) = AgentKind::parse(source) else {
-        return Ok(());
-    };
-    // 复用命令构造器做不可信 id 校验;没有 resume/fork 语法的客户端仍值得
-    // 记住,退回到注册表自己的形状校验。
-    if agent.resume_command(id).is_none()
-        && agent.fork_command(id).is_none()
-        && !valid_registry_id(id)
-    {
-        return Ok(());
-    }
-    let Some(_lock) = crate::atomic_file::try_lock(path)? else {
-        return Ok(());
-    };
-    let mut registry = load_registry(path);
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    let title = title.map(truncate_title).unwrap_or_default();
-    let file = file.map(|path| path.to_string_lossy().into_owned());
-    if let Some(existing) = registry
-        .sessions
-        .iter_mut()
-        .find(|session| session.source == agent.slug() && session.id == id)
-    {
-        existing.last_seen = now;
-        if file.is_some() {
-            existing.file = file;
-        }
-        if !title.is_empty() {
-            existing.title = title;
-        }
-    } else {
-        registry.sessions.push(RegistrySession {
-            source: agent.slug().to_owned(),
-            id: id.to_owned(),
-            title,
-            file,
-            last_seen: now,
-        });
-    }
-    registry
-        .sessions
-        .sort_by_key(|session| std::cmp::Reverse(session.last_seen));
-    registry.sessions.truncate(REGISTRY_LIMIT);
-    registry.version = REGISTRY_VERSION;
-    let bytes = serde_json::to_vec_pretty(&registry).map_err(std::io::Error::other)?;
-    crate::atomic_file::write(path, &bytes)
-}
-
-fn valid_registry_id(id: &str) -> bool {
-    !id.is_empty()
-        && id.len() <= 64
-        && id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
-}
-
-fn load_registry(path: &Path) -> SessionRegistry {
-    std::fs::read(path)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or_default()
-}
-
-fn registry_sessions_at(path: &Path) -> Vec<AiSession> {
-    load_registry(path)
-        .sessions
-        .into_iter()
-        .filter_map(|session| {
-            let source = AgentKind::parse(&session.source)?;
-            Some(AiSession {
-                source,
-                id: session.id,
-                title: session.title,
-                project: String::new(),
-                modified: UNIX_EPOCH + Duration::from_secs(session.last_seen),
-                path: session.file.map(PathBuf::from),
-            })
-        })
-        .collect()
-}
-
-/// 扫描 CLI 原生档案并与 hook 索引合并;同一 source/id 只保留一条。
+/// 扫描 CLI 原生档案。
 pub fn scan(limit: usize) -> Vec<AiSession> {
     let Some(home) = crate::platform::dirs::home_dir() else {
         return Vec::new();
     };
-    scan_at(&home, &registry_path(), limit)
+    scan_at(&home, limit)
 }
 
-fn scan_at(home: &Path, registry: &Path, limit: usize) -> Vec<AiSession> {
+fn scan_at(home: &Path, limit: usize) -> Vec<AiSession> {
     let mut all = Vec::new();
     all.extend(scan_claude(home));
     all.extend(scan_codex(home));
-    merge_registry(&mut all, registry_sessions_at(registry));
     all.sort_by_key(|session| std::cmp::Reverse(session.modified));
     all.truncate(limit);
     for session in &mut all {
         session.fill_details();
     }
     all
-}
-
-/// 把 hook 注册表条目并入扫描结果:同键取较新 modified,并补空缺字段。
-fn merge_registry(all: &mut Vec<AiSession>, indexed: Vec<AiSession>) {
-    let mut by_key: HashMap<(AgentKind, String), usize> = all
-        .iter()
-        .enumerate()
-        .map(|(index, session)| ((session.source, session.id.clone()), index))
-        .collect();
-    for indexed in indexed {
-        let key = (indexed.source, indexed.id.clone());
-        if let Some(&position) = by_key.get(&key) {
-            let existing = &mut all[position];
-            existing.modified = existing.modified.max(indexed.modified);
-            if existing.project.is_empty() {
-                existing.project = indexed.project;
-            }
-            if existing.title.is_empty() {
-                existing.title = indexed.title;
-            }
-            if existing.path.is_none() {
-                existing.path = indexed.path;
-            }
-        } else {
-            by_key.insert(key, all.len());
-            all.push(indexed);
-        }
-    }
 }
 
 /// 「3 分钟前 / 2 小时前 / 5 天前」式的相对时间,面板右侧的 hint 用。
@@ -348,7 +177,7 @@ fn scan_claude(home: &Path) -> Vec<AiSession> {
                 title: String::new(),
                 project: project_label.clone(),
                 modified: modified_of(&path),
-                path: Some(path),
+                path,
             });
         }
     }
@@ -392,7 +221,7 @@ fn scan_codex(home: &Path) -> Vec<AiSession> {
                 title: String::new(),
                 project: String::new(),
                 modified: modified_of(&path),
-                path: Some(path),
+                path,
             });
         }
     }
@@ -531,6 +360,59 @@ fn codex_details(head: &str) -> (Option<String>, Option<String>) {
 #[cfg(test)]
 mod session_scan_tests {
     use super::*;
+    use std::time::UNIX_EPOCH;
+
+    struct HomeEnvGuard {
+        saved: [(&'static str, Option<std::ffi::OsString>); 2],
+    }
+
+    impl HomeEnvGuard {
+        fn set(home: &Path) -> Self {
+            let saved = ["USERPROFILE", "HOME"].map(|name| (name, std::env::var_os(name)));
+            // 环境变量是进程级;测试固定串行,守卫在断言失败时也还原。
+            for (name, _) in &saved {
+                unsafe { std::env::set_var(name, home) };
+            }
+            Self { saved }
+        }
+    }
+
+    impl Drop for HomeEnvGuard {
+        fn drop(&mut self) {
+            for (name, value) in &self.saved {
+                match value {
+                    Some(value) => unsafe { std::env::set_var(name, value) },
+                    None => unsafe { std::env::remove_var(name) },
+                }
+            }
+        }
+    }
+
+    struct FileRestoreGuard {
+        path: PathBuf,
+        original: Option<Vec<u8>>,
+    }
+
+    impl FileRestoreGuard {
+        fn replace(path: PathBuf, contents: &str) -> Self {
+            let original = std::fs::read(&path).ok();
+            std::fs::write(&path, contents).unwrap();
+            Self { path, original }
+        }
+    }
+
+    impl Drop for FileRestoreGuard {
+        fn drop(&mut self) {
+            match &self.original {
+                Some(contents) => {
+                    let _ = std::fs::write(&self.path, contents);
+                }
+                None => {
+                    let _ = std::fs::remove_file(&self.path);
+                }
+            }
+        }
+    }
 
     fn session(source: AgentKind, id: &str, project: &str, seconds: u64) -> AiSession {
         AiSession {
@@ -539,7 +421,7 @@ mod session_scan_tests {
             title: String::new(),
             project: project.to_owned(),
             modified: UNIX_EPOCH + Duration::from_secs(seconds),
-            path: None,
+            path: PathBuf::from("native.jsonl"),
         }
     }
 
@@ -676,49 +558,39 @@ mod session_scan_tests {
     }
 
     #[test]
-    fn hook_registry_upserts_identity_without_transcript_content() {
+    fn native_scan_ignores_the_retired_session_registry() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("ai_sessions.json");
-        let file = dir.path().join("session-1.jsonl");
-        record_hook_session_at(&path, "opencode", "session-1", Some(file.clone()), None).unwrap();
-        record_hook_session_at(&path, "opencode", "session-1", None, Some("修复登录")).unwrap();
-        let registry = load_registry(&path);
-        assert_eq!(registry.sessions.len(), 1);
-        let saved = &registry.sessions[0];
-        assert_eq!(saved.source, "opencode");
-        assert_eq!(saved.id, "session-1");
-        assert_eq!(saved.file.as_deref(), Some(file.to_string_lossy().as_ref()));
-        assert_eq!(saved.title, "修复登录");
-        let raw = std::fs::read_to_string(path).unwrap();
-        assert!(!raw.contains("message"));
-        assert!(!raw.contains("transcript"));
-    }
+        let home = dir.path().join("home");
+        let project = home.join(".claude").join("projects").join("D--project");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(
+            project.join("native-session.jsonl"),
+            r#"{"type":"summary","summary":"原生历史"}"#,
+        )
+        .unwrap();
+        let _home = HomeEnvGuard::set(&home);
+        // 测试构建的 data_dir 位于进程临时根;假文件覆盖旧生产解析路径。
+        let registry = crate::platform::dirs::data_dir().join("ai_sessions.json");
+        assert!(
+            registry.starts_with(std::env::temp_dir()),
+            "测试注册表必须位于临时数据根"
+        );
+        let retired = r#"{"version":1,"sessions":[{"source":"claude","id":"retired-only","title":"旧注册表","last_seen":999}]}"#;
+        let registry_file = FileRestoreGuard::replace(registry, retired);
 
-    #[test]
-    fn untrusted_registry_ids_are_filtered_by_command_builders() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("ai_sessions.json");
-        // claude 有 resume 构造器,非法 id 会被 `valid_session_id` 拒绝。
-        record_hook_session_at(&path, "claude", "x; calc", None, None).unwrap();
-        assert!(load_registry(&path).sessions.is_empty());
-        // 没有 resume 语法的客户端退回注册表自己的形状校验,合法 id 仍可记。
-        record_hook_session_at(&path, "aider", "session-1", None, Some("aider")).unwrap();
-        assert_eq!(load_registry(&path).sessions.len(), 1);
-    }
-
-    #[test]
-    fn registry_merge_keeps_the_newer_modified_and_fills_gaps() {
-        let mut scanned = vec![session(AgentKind::Claude, "s1", "", 10)];
-        let indexed = vec![session(AgentKind::Claude, "s1", "D--proj", 20)];
-        merge_registry(&mut scanned, indexed);
-        assert_eq!(scanned.len(), 1);
-        assert_eq!(scanned[0].modified, UNIX_EPOCH + Duration::from_secs(20));
-        assert_eq!(scanned[0].project, "D--proj");
-        // 扫描侧较新时不被旧注册表条目拉回。
-        let mut scanned = vec![session(AgentKind::Codex, "s2", "D:\\proj", 30)];
-        merge_registry(&mut scanned, vec![session(AgentKind::Codex, "s2", "", 5)]);
-        assert_eq!(scanned[0].modified, UNIX_EPOCH + Duration::from_secs(30));
-        assert_eq!(scanned[0].project, r"D:\proj");
+        let sessions = scan(8);
+        assert_eq!(
+            sessions
+                .iter()
+                .map(|session| session.id.as_str())
+                .collect::<Vec<_>>(),
+            ["native-session"]
+        );
+        assert_eq!(sessions[0].title, "原生历史");
+        assert_eq!(
+            std::fs::read_to_string(&registry_file.path).unwrap(),
+            retired
+        );
     }
 
     #[test]

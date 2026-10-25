@@ -13,16 +13,11 @@
 //! - 屏幕规则引擎只读(用户覆盖热加载归 `ai_agents` 自身)。
 //!
 //! 缝合点(已接):
-//! - `SessionStart` 边把会话身份写进 `ai_sessions` 注册表:写盘在后台线程,
-//!   生产路径由 workspace 显式启用;宿主本身不碰磁盘。
 //! - 恢复注入:workspace 恢复 tab 时先 `seed_session`,再让视图
 //!   `restore_agent` 构造并提交 resume 命令;
 //! - TurnDone/NeedsAttention 状态边 → 通知漏斗归 `notify`。
 
 use std::collections::HashMap;
-use std::path::PathBuf;
-use std::rc::Rc;
-use std::sync::Arc;
 
 use slterm_split::PaneId;
 
@@ -33,25 +28,6 @@ use crate::ai_hook::{
     AgentActivity, AiHookEvent, AiHookKind, GateVerdict, accept_for_pane, reorder_batch,
 };
 use crate::session::AgentSession;
-
-/// 会话身份注册表写入通道(生产 = 后台线程 + `ai_sessions::record_hook_session`;
-/// 测试可注入捕获器,禁止触碰真实数据目录)。
-pub(crate) type SessionStartRecorder = Rc<dyn Fn(&AiHookEvent)>;
-
-/// 注册表写入动作:参数由 SessionStart 事件解出。生产 = 真实写盘;测试注入
-/// 捕获器,断言字段原样到达且写入发生在后台线程。
-type SessionRegistryWrite = Arc<dyn Fn(&str, &str, Option<PathBuf>) + Send + Sync>;
-
-/// 后台注册表写入线程的唯一启动点:锁 + fsync 不得占用调用方(GPUI 前台)。
-/// 线程起不来只 warn——注册表是恢复线索,不阻塞事件泵。
-fn spawn_session_registry_write(write: impl FnOnce() + Send + 'static) {
-    if let Err(error) = std::thread::Builder::new()
-        .name("slterm-ai-sessions".to_owned())
-        .spawn(write)
-    {
-        log::warn!("agent session index: could not spawn writer thread: {error}");
-    }
-}
 
 /// 一个 pane 的 agent 宿主状态。
 pub(crate) struct AgentPaneHost {
@@ -211,51 +187,11 @@ impl AgentPaneHost {
 #[derive(Default)]
 pub(crate) struct AgentHub {
     hosts: HashMap<PaneId, AgentPaneHost>,
-    /// 生产路径由 workspace 显式启用;未启用 = 纯内存宿主(测试默认态)。
-    record_session_start: Option<SessionStartRecorder>,
 }
 
 impl AgentHub {
     pub(crate) fn new() -> Self {
         Self::default()
-    }
-
-    /// 生产启动时启用注册表写入。测试不直接调用:会话身份可能来自任意信封,
-    /// 让默认宿主直连真实数据目录会破坏测试隔离(测试改用
-    /// [`Self::enable_session_registry_with`] 注入捕获器)。
-    pub(crate) fn enable_session_registry(&mut self) {
-        self.enable_session_registry_with(|source, session_id, file| {
-            if let Err(error) =
-                crate::ai_sessions::record_hook_session(source, session_id, file, None)
-            {
-                log::warn!("agent session index: could not record {source} {session_id}: {error}");
-            }
-        });
-    }
-
-    /// 注册表写入动作的注入点:写入任务始终经
-    /// [`spawn_session_registry_write`] 落到后台线程,失败只由写入动作 warn。
-    fn enable_session_registry_with(
-        &mut self,
-        write: impl Fn(&str, &str, Option<PathBuf>) + Send + Sync + 'static,
-    ) {
-        let write: SessionRegistryWrite = Arc::new(write);
-        self.record_session_start = Some(Rc::new(move |event: &AiHookEvent| {
-            let Some(id) = event.session_id.clone() else {
-                return;
-            };
-            let source = event.source.clone();
-            let file = event.session_file.as_deref().map(PathBuf::from);
-            let write = Arc::clone(&write);
-            // 写盘(锁 + fsync)不在前台线程上做;失败只 warn。
-            spawn_session_registry_write(move || write(&source, &id, file));
-        }));
-    }
-
-    /// 测试注入点:替换注册表写入通道(不触盘)。
-    #[cfg(test)]
-    pub(crate) fn set_session_start_recorder(&mut self, recorder: SessionStartRecorder) {
-        self.record_session_start = Some(recorder);
     }
 
     pub(crate) fn register(&mut self, pane_id: PaneId) {
@@ -335,13 +271,6 @@ impl AgentHub {
             if changed {
                 accepted += 1;
                 accepted_events.push(event.clone());
-            }
-            // 只在事件真的被接纳后记账:被门拒收的伪造身份不得进注册表。
-            if changed
-                && event.kind == AiHookKind::SessionStart
-                && let Some(recorder) = &self.record_session_start
-            {
-                recorder(&event);
             }
         }
         (accepted, accepted_events)
@@ -429,32 +358,20 @@ mod host_tests {
         assert_eq!(hub.host(PaneId(4)).unwrap().status(), AgentStatus::Unknown);
     }
 
-    /// SessionStart 边写注册表:只有被接纳的事件才进写入通道;SessionEnd
+    /// SessionStart 建立内存恢复身份;后续半量事件按字段合并,SessionEnd
     /// 清掉宿主里的恢复身份。
     #[test]
-    fn session_start_edges_reach_the_registry_recorder() {
-        use std::cell::RefCell;
-        use std::rc::Rc;
-
+    fn session_lifecycle_preserves_restore_identity_until_session_end() {
         let mut hub = AgentHub::new();
         hub.register(PaneId(7));
-        let recorded = Rc::new(RefCell::new(Vec::new()));
-        hub.set_session_start_recorder({
-            let recorded = Rc::clone(&recorded);
-            Rc::new(move |event: &AiHookEvent| {
-                recorded
-                    .borrow_mut()
-                    .push(event.session_id.clone().unwrap_or_default());
-            })
-        });
-        // 未注册 pane 的伪造信封被丢弃,不得进注册表。
+        // 未注册 pane 的伪造信封被丢弃。
         let spoofed = event(
             "claude",
             Some(9),
             r#"{"hook_event_name":"SessionStart","session_id":"spoofed"}"#,
         );
         assert_eq!(hub.dispatch(vec![spoofed], None), 0);
-        assert!(recorded.borrow().is_empty());
+        assert!(hub.session_agent(PaneId(7)).is_none());
 
         let start = event(
             "claude",
@@ -462,7 +379,6 @@ mod host_tests {
             r#"{"hook_event_name":"SessionStart","session_id":"registered-1"}"#,
         );
         assert_eq!(hub.dispatch(vec![start], None), 1);
-        assert_eq!(recorded.borrow().as_slice(), ["registered-1".to_owned()]);
         assert_eq!(
             hub.session_agent(PaneId(7))
                 .and_then(|agent| agent.session_id),
@@ -488,45 +404,6 @@ mod host_tests {
         );
         assert_eq!(hub.dispatch(vec![end], None), 1);
         assert!(hub.session_agent(PaneId(7)).is_none(), "会话结束后身份清空");
-    }
-
-    /// 防复发:SessionStart 的注册表写入必须离开调用方线程(锁 + fsync
-    /// 不得占用 GPUI 前台)。注入 writer 经 channel 回传线程 id 与字段,
-    /// 不触碰真实数据目录。
-    #[test]
-    fn session_start_registry_writes_on_a_background_thread() {
-        use std::sync::mpsc;
-        use std::time::Duration;
-
-        let mut hub = AgentHub::new();
-        hub.register(PaneId(9));
-        let caller_thread = std::thread::current().id();
-        let (sent_tx, sent_rx) = mpsc::channel();
-        hub.enable_session_registry_with(move |source, session_id, file| {
-            sent_tx
-                .send((
-                    std::thread::current().id(),
-                    source.to_owned(),
-                    session_id.to_owned(),
-                    file,
-                ))
-                .expect("测试接收端存活");
-        });
-
-        let start = event(
-            "claude",
-            Some(9),
-            r#"{"hook_event_name":"SessionStart","session_id":"bg-write","session_file":"D:/tmp/bg-write.jsonl"}"#,
-        );
-        assert_eq!(hub.dispatch(vec![start], None), 1);
-
-        let (writer_thread, source, session_id, file) = sent_rx
-            .recv_timeout(Duration::from_secs(5))
-            .expect("后台写入必须抵达注入 writer");
-        assert_ne!(writer_thread, caller_thread, "写盘不得发生在调用方线程");
-        assert_eq!(source, "claude");
-        assert_eq!(session_id, "bg-write");
-        assert_eq!(file, Some(PathBuf::from("D:/tmp/bg-write.jsonl")));
     }
 
     /// 恢复注入先入宿主:快照立刻能取到;无 hook 的 pane 退到程序名。
