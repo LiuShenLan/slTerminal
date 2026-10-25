@@ -77,9 +77,8 @@ pub(crate) mod math;
 // 系统 toast 投递在 platform::notifications。
 pub(crate) mod notify;
 pub(crate) mod panic;
-// 套餐余量与后台轮询:user 层 settings.json 来源 + 双套餐查询
-// 注册表 + 快照槽/watch 推送 + GPUI executor 执行体;查询语义 F10 原样。
-#[allow(dead_code)] // UI 消费点归设置页;执行体已挂 background_tasks 注册表。
+// DeepSeek/Kimi 套餐响应解析与展示值类型;不读取 CLI 认证材料。
+#[allow(dead_code)] // 纯解析层尚无生产调用方;解析语义由单元测试锁定。
 pub(crate) mod plan_balance;
 pub(crate) mod platform;
 pub(crate) mod process_tree;

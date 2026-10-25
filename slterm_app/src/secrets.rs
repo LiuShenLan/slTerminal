@@ -358,13 +358,9 @@ mod secrets_tests {
 
     // ---- SecretBytes::as_bytes 借出白名单 ----
 
-    /// 允许借出 SecretBytes 字节的调用点:仅凭据域请求头组装与
-    /// 句柄自身语义用例;新增调用点须登记后加入白名单。
-    const AS_BYTES_WHITELIST: [&str; 3] = [
-        "secrets.rs",
-        "plan_balance/deepseek.rs",
-        "plan_balance/kimi.rs",
-    ];
+    /// 允许借出 SecretBytes 字节的调用点:当前仅凭据域内部;
+    /// 新增请求组装点须先登记凭据域边界。
+    const AS_BYTES_WHITELIST: [&str; 1] = ["secrets.rs"];
 
     /// 取 `:` 前的标识符(用于识别 SecretBytes 绑定)。
     fn identifier_before(text: &str, end: usize) -> Option<&str> {

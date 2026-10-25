@@ -1,26 +1,20 @@
 # 套餐余量（plan_balance）
 
-> 查询套餐余量、归一化为快照并经 watch channel 推送；凭据与网络边界集中在本模块。
+> DeepSeek/Kimi 响应解析与展示值类型。
 
 ## 决策与红线
 
-- **token 不出凭据域**：DTO/快照/推送载荷无 token 字段（类型层防线）；tracing/错误消息禁止插值 token 与 Authorization 头；测试夹具一律假值；真实凭据只存 user 层 `~/.claude/settings.json`（仓库外）。原因：凭据泄露不可逆。边界：新增 DTO 字段先检查是否可能承载凭据。
-- **凭据通道边界**：plan_balance 只读 user 层 settings.json 的 `env` 段，不读 Windows 凭据管理器；由 `plan_balance_reads_user_settings_not_the_credential_store` 源扫描锁死。
-- **查询语义**：URL 归一化只小写化 + 去尾斜杠（不加 trim）；kimi 实证红线（冻结判定、totalQuota 无 used、5 小时窗 detail 内层、remaining 恒在而 used 可缺、数值按字符串解析、全有或全无）；真实响应快照锚点 `parse_real_response_snapshot` 防 API 漂移。
-- **快照变化与推送**：整体 `PartialEq`（含 updated_at）有变化才推；失败保留旧值不推；`refresh_plan_balance` 恒 Ok，错误不冒泡到 UI。
-- **推送形态 = 模块级 watch channel**：多消费者各自订阅，值本体在 `SNAPSHOT`；有界 1 槽合并连续推送，唤醒后读最新快照。原因：多消费者不应耦合组件树。边界：订阅后先读 `current_snapshot()`，覆盖「落槽后、扇出前」的漏唤醒窗口。
-- **执行面**：`poll_once_executor: fn()` 由 `background_tasks` 的 `planBalance` 条目（默认 10 秒，合法 10–3600 秒）驱动；阻塞 HTTP（ureq）全程在 GPUI background executor，不占 UI 线程。
-- **`SecretBytes::as_bytes` 借出白名单**：仅 `secrets.rs`（句柄语义用例）与 `plan_balance/deepseek.rs`、`plan_balance/kimi.rs`（请求头组装）；新增调用点须先登记凭据域。
+- **纯解析边界**：解析函数只接受 `serde_json::Value`，不发现来源，不读取 CLI 配置或环境认证材料，不接触凭据、网络与调度。原因：响应算法不得与旧认证通道、全局状态或路径推导耦合。边界：请求与凭据属于独立执行层，不得混入解析函数。
+- **结果不含凭据**：结果类型只承载冻结态、金额与时间窗，不含 token；错误消息不得插值认证材料。测试只使用罐装响应，不读取真实账号或配置。
+- **DeepSeek 语义**：从 `balance_infos[0]` 读取 `total_balance` 与 `currency`；空数组、字段缺失或非字符串均失败。
+- **Kimi 语义**：采用 2026-08 实测口径；冻结由 `totalQuota.remaining <= 0` 判定，5 小时窗读取 `limits[i].detail`，7 天窗读取顶层 `usage`。`used` 优先，`remaining` 换算回退；非冻结时任一窗口失败则整体失败。真实响应快照锚点为 `parse_real_response_snapshot`。
+- **缺失不造数**：字段缺失或不可解析返回错误，不把缺失数据伪造为 0；百分比输出夹到 0–100。
 
 ## 验收与测试
 
 - 定向测试：`cargo test -p slterm --test lib_tests <filter> -- --test-threads=1`；禁止 `--lib` 或裸 filter 直打默认 lib target。
-- 本地 HTTP 服务覆盖请求形态/响应解析/错误映射（`query.rs` 的 `serve_once`，单请求，不出网）；`kimi.rs`/`deepseek.rs` 覆盖请求头与解析。
-- 编排、合并、推送与订阅语义由单元层覆盖。
-- 真实 provider API 出网由构建产物人工实测，边界见 `.claude/docs/testing/exemptions.md`。
+- 罐装 JSON 覆盖正常值、缺失字段、类型错误、冻结态、双窗选择、换算回退、百分比夹取与真实响应快照。
 
 ## 操作
 
-- 启动接线：`app_shell::run_shell` → `start_background_poll`（注册表订阅 + background executor 循环；首轮立即执行，后续按注册表节拍；任务 Drop = 退订；enabled 门控走 `background_tasks`）。
-- UI 消费：`current_snapshot()` / `subscribe()` / `refresh_plan_balance()`。
-- 新增 provider：实现解析与请求头组装，补本地 HTTP 用例与真实响应快照。
+- 响应字段语义变化时同步更新对应解析函数与罐装用例；实证口径变化须带日期或响应快照锚点。

@@ -1,67 +1,14 @@
-//! kimi 套餐(实测口径,2026-08 实证修正字段漂移;F10 语义原样):
-//! GET /coding/v1/usages,双时间窗 + 配额耗尽冻结态。
+//! Kimi 用量响应解析(2026-08 实测口径):双时间窗与配额耗尽冻结态。
 //!
-//! 实证红线(随迁):
-//! - `Authorization: Bearer`(非 X-Kimi-Authorization——2026-08 实测修正);
+//! 实证红线:
 //! - 5h 窗数值承载于 `limits[i].detail` 内层(外层无),7d 窗为顶层 `usage`;
 //! - `remaining` 恒在、`used` 可缺;数值字段按字符串解析;
 //! - 展示口径 = 已用百分比:used 优先、remaining 换算回退;
 //! - `totalQuota` 无 used 字段(实测可为空对象);非冻结时任一窗口解析失败
 //!   → 整体 Err(全有或全无,防窗口重置瞬间 5h 段丢失)。
 
-use std::time::Duration;
-
-use zeroize::Zeroizing;
-
-use super::query::{PlanQuery, http_agent, query_err};
-use super::{FetchOutcome, WindowInfo, WindowsInfo};
+use super::{PlanBalanceInfo, WindowInfo, WindowsInfo};
 use crate::error::AppError;
-use crate::secrets::SecretBytes;
-
-#[derive(Debug)]
-pub(crate) struct KimiQuery;
-
-const TIMEOUT: Duration = Duration::from_secs(8);
-const USAGES_ENDPOINT: &str = "https://api.kimi.com/coding/v1/usages";
-
-impl PlanQuery for KimiQuery {
-    fn plan_id(&self) -> &'static str {
-        "kimi"
-    }
-
-    fn base_urls(&self) -> &'static [&'static str] {
-        &["https://api.kimi.com/coding"]
-    }
-
-    fn fetch(&self, token: &SecretBytes) -> Result<FetchOutcome, AppError> {
-        self.fetch_at(USAGES_ENDPOINT, TIMEOUT, token)
-    }
-}
-
-impl KimiQuery {
-    /// 显式 endpoint/timeout 形态:生产走常量,单元层用本地 HTTP 服务验证请求形态。
-    fn fetch_at(
-        &self,
-        endpoint: &str,
-        timeout: Duration,
-        token: &SecretBytes,
-    ) -> Result<FetchOutcome, AppError> {
-        // 借出点:token 字节仅用于拼 Authorization;拼串本体 Zeroizing。
-        let token_text = std::str::from_utf8(token.as_bytes())
-            .map_err(|_| AppError::Unknown("kimi 查询失败: token 非 UTF-8".into()))?;
-        let authorization = Zeroizing::new(format!("Bearer {token_text}"));
-        let resp = http_agent(timeout)
-            .get(endpoint)
-            .header("Authorization", authorization.as_str())
-            .call()
-            .map_err(|error| query_err(self.plan_id(), error))?;
-        let body: serde_json::Value = resp
-            .into_body()
-            .read_json()
-            .map_err(|error| AppError::Unknown(format!("kimi 响应读取失败: {error}")))?;
-        parse_kimi_usages(&body)
-    }
-}
 
 /// 已用百分比(用户偏好展示已用量):used 优先(used/limit×100),
 /// remaining 换算回退((limit-remaining)/limit×100);数值字段为字符串(实证口径),
@@ -110,7 +57,7 @@ fn parse_window(detail: &serde_json::Value) -> Result<WindowInfo, AppError> {
 ///    优先,否则 limits[0];limits 空 → 失败;数值读取 limits[i].detail 内层;
 /// 3. 7d 窗:顶层 usage 字段;
 /// 4. 非触顶时任一窗口失败 → 整体 Err。
-pub(crate) fn parse_kimi_usages(body: &serde_json::Value) -> Result<FetchOutcome, AppError> {
+pub(crate) fn parse_kimi_usages(body: &serde_json::Value) -> Result<PlanBalanceInfo, AppError> {
     // totalQuota 缺失/为空对象(实测形态)/remaining 非数字或非 0 → 未冻结
     let frozen = body
         .get("totalQuota")
@@ -119,7 +66,7 @@ pub(crate) fn parse_kimi_usages(body: &serde_json::Value) -> Result<FetchOutcome
         .and_then(|value| value.parse::<f64>().ok())
         .is_some_and(|remaining| remaining <= 0.0);
     if frozen {
-        return Ok(FetchOutcome {
+        return Ok(PlanBalanceInfo {
             frozen: true,
             amount: None,
             windows: None,
@@ -154,7 +101,7 @@ pub(crate) fn parse_kimi_usages(body: &serde_json::Value) -> Result<FetchOutcome
         .get("usage")
         .ok_or_else(|| AppError::Unknown("kimi 响应缺 usage".into()))?;
     let seven_day = parse_window(usage)?;
-    Ok(FetchOutcome {
+    Ok(PlanBalanceInfo {
         frozen: false,
         amount: None,
         windows: Some(WindowsInfo {
@@ -167,14 +114,9 @@ pub(crate) fn parse_kimi_usages(body: &serde_json::Value) -> Result<FetchOutcome
 #[cfg(test)]
 mod kimi_tests {
     use super::*;
-    use crate::plan_balance::query::test_support::{request_contains, serve_once};
 
-    fn parse(json: &str) -> Result<FetchOutcome, AppError> {
+    fn parse(json: &str) -> Result<PlanBalanceInfo, AppError> {
         parse_kimi_usages(&serde_json::from_str(json).expect("合法 JSON 夹具"))
-    }
-
-    fn test_token() -> SecretBytes {
-        SecretBytes::new(b"sk-test-kimi".to_vec())
     }
 
     /// 双窗正常(真实响应数字,已用口径):5h 1%(used 1/100)、7d 23%(used 23/100)。
@@ -612,70 +554,5 @@ mod kimi_tests {
         }"#;
         let windows = parse(json).expect("应解析成功").windows.expect("双窗");
         assert_eq!(windows.five_hour.used_percent, 100, "105% → clamp 100");
-    }
-
-    // ── 本地 HTTP 服务(请求形态验证,不出网) ──
-
-    /// GET /coding/v1/usages + Authorization Bearer(非 X-Kimi-Authorization)+ 双窗解析。
-    #[test]
-    fn fetch_uses_bearer_header_and_parses_usages() {
-        let (base, server) = serve_once(
-            "HTTP/1.1 200 OK",
-            r#"{
-                "usage": {"limit": "100", "used": "23", "remaining": "77"},
-                "limits": [
-                    {"window": {"duration": 300, "timeUnit": "TIME_UNIT_MINUTE"},
-                     "detail": {"limit": "100", "used": "1", "remaining": "99"}}
-                ],
-                "totalQuota": {}
-            }"#,
-        );
-        let outcome = KimiQuery
-            .fetch_at(&format!("{base}/coding/v1/usages"), TIMEOUT, &test_token())
-            .expect("本地查询应成功");
-        let windows = outcome.windows.expect("双窗");
-        assert_eq!(windows.five_hour.used_percent, 1);
-        assert_eq!(windows.seven_day.used_percent, 23);
-
-        let request = server.join().expect("本地服务线程");
-        assert!(request_contains(&request, "GET /coding/v1/usages HTTP/1.1"));
-        assert!(
-            request_contains(&request, "authorization: bearer sk-test-kimi"),
-            "Authorization 头缺失或形态错误: {request}"
-        );
-        assert!(
-            !request_contains(&request, "x-kimi-authorization"),
-            "不得使用已实证废弃的 X-Kimi-Authorization 头"
-        );
-    }
-
-    /// 响应体不可解析 → 读取错误,消息不含 token。
-    #[test]
-    fn fetch_maps_unreadable_body_without_leaking_token() {
-        let (base, server) = serve_once("HTTP/1.1 200 OK", "not json");
-        let error = KimiQuery
-            .fetch_at(&format!("{base}/coding/v1/usages"), TIMEOUT, &test_token())
-            .expect_err("坏响应体应失败");
-        let _ = server.join();
-        let message = error.to_string();
-        assert!(message.contains("响应读取失败"), "实际: {message}");
-        assert!(
-            !message.contains("sk-test-kimi"),
-            "错误消息泄露 token: {message}"
-        );
-    }
-
-    /// token 非 UTF-8 → 联网前拒绝。
-    #[test]
-    fn fetch_rejects_non_utf8_token_before_network() {
-        let token = SecretBytes::new(vec![0xff, 0xfe]);
-        let error = KimiQuery
-            .fetch_at(
-                "http://127.0.0.1:9/unreachable",
-                Duration::from_millis(50),
-                &token,
-            )
-            .expect_err("非 UTF-8 token 应失败");
-        assert!(error.to_string().contains("token 非 UTF-8"));
     }
 }
