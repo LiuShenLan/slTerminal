@@ -72,13 +72,13 @@
       "title": "跨模块契约一致性",
       "outputFile": "review/06-contract-consistency.md",
       "focus": [
-        "Runtime API 信封、schema 与 describe 一致性",
+        "本地 CLI 参数与 GUI 启动分流一致性",
         "hook 协议、命名管道载荷与安装器形态",
         "设置键、i18n 键集与主题文档的构建期合同",
         "session schema 的布局转换对",
         "跨 crate 类型锚点与错误信封"
       ],
-      "files": ["slterm_app/src/runtime_api.rs", "slterm_app/src/ai_hook.rs", "slterm_settings/src/keys.rs", "assets/runtime-api-v1.schema.json"]
+      "files": ["slterm_app/src/cli.rs", "slterm_app/src/ai_hook.rs", "slterm_settings/src/keys.rs", "slterm_app/i18n/"]
     },
     {
       "id": "07-security",

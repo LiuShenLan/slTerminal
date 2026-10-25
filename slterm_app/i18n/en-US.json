@@ -121,25 +121,6 @@
     "schedule_failed_title": "Could not schedule the update",
     "schedule_failed_detail": "Could not schedule the installation for the next launch: {error}"
   },
-  "provider_test": {
-    "success": "Connection succeeded (HTTP {status})",
-    "invalid_endpoint": "Invalid endpoint URL; check the address",
-    "missing_model": "Enter a model name first",
-    "missing_api_key": "API key is missing",
-    "credential_read_failed": "Could not read the saved credential",
-    "invalid_credential_encoding": "The credential encoding is invalid; save the key again",
-    "timeout": "Connection timed out; check the network or proxy",
-    "host_not_found": "Host not found; check the endpoint address",
-    "connection_failed": "Could not connect; check the network or proxy",
-    "io": "Network I/O error: {error}",
-    "tls": "TLS handshake failed; check the certificate or proxy settings",
-    "request_failed": "Could not send the request",
-    "auth_failed": "Authentication failed (HTTP {status}); check the API key",
-    "endpoint_not_found": "Endpoint not found (HTTP {status}); check the URL",
-    "rate_limited": "Rate limited (HTTP {status}); try again later",
-    "http_status": "The service returned HTTP {status}",
-    "start_failed": "Could not start the test request: {error}"
-  },
   "sidebar": {
     "view_nav": "Navigation",
     "view_explorer": "File Explorer",
@@ -177,9 +158,7 @@
       "operation_failed": "Settings operation failed: {error}",
       "save_failed": "Failed to save settings",
       "theme_imported": "Imported theme \"{name}\"",
-      "theme_exported": "Theme package exported: {path}",
-      "theme_import_failed": "Theme import failed: {error}",
-      "theme_export_failed": "Theme export failed: {error}"
+      "theme_import_failed": "Theme import failed: {error}"
     },
     "application": {
       "group": "Application",
@@ -214,20 +193,12 @@
       "custom_theme": "Custom theme",
       "custom_theme_description": "Fork a draft from the built-in catalog or library; save and apply are separate actions.",
       "custom_theme_action": "Edit theme",
-      "theme_package": "Theme package",
-      "theme_import": "Import theme package",
-      "theme_import_description": "Install a .zip theme package without overwriting existing themes.",
+      "theme_library": "Theme library",
+      "theme_import": "Import theme",
+      "theme_import_description": "Import a single JSON theme file without overwriting existing themes.",
       "theme_import_action": "Import...",
-      "theme_import_prompt": "Select a theme package (.zip)",
+      "theme_import_prompt": "Select a theme JSON file",
       "theme_import_busy": "Importing...",
-      "theme_import_zip_required": "Select a .zip theme package.",
-      "theme_export": "Export theme package",
-      "theme_export_description": "Export the applied custom theme as a .zip package.",
-      "theme_export_needs_custom": "Save and apply a custom theme before exporting.",
-      "theme_export_action": "Export...",
-      "theme_export_prompt": "Export theme package",
-      "theme_export_busy": "Exporting...",
-      "theme_export_zip_required": "Choose a .zip target file.",
       "opacity": "Window opacity",
       "opacity_description": "Drag to preview; release to save.",
       "scroll_speed": "Scroll speed",
@@ -409,7 +380,6 @@
       "category_themes": "Custom themes",
       "category_command_history": "Command history",
       "category_directory_history": "Directory history",
-      "category_providers": "AI provider metadata",
       "passphrase": "Backup passphrase",
       "passphrase_placeholder": "Enter a backup passphrase",
       "passphrase_description": "At least 8 characters; a forgotten passphrase cannot be recovered.",
@@ -507,25 +477,6 @@
       "unsaved": "Unsaved"
     }
   },
-  "merge": {
-    "tab_title": "{name} (conflict)",
-    "base": "Base",
-    "ours": "Ours",
-    "theirs": "Theirs",
-    "missing_stage": "This stage does not exist",
-    "truncated": "Content exceeds 4 MB; showing a truncated view",
-    "loading": "Loading conflict…",
-    "adopt_ours": "Use ours",
-    "adopt_theirs": "Use theirs",
-    "open_in_editor": "Open in editor",
-    "wrote": "Wrote the working tree file; run git add in the terminal to complete the resolution.",
-    "dirty_rejected": "This file has unsaved changes; save or close it before adopting a version.",
-    "error_truncated": "This stage exceeds the read limit and cannot be adopted; resolve it in the terminal.",
-    "error_invalid_encoding": "This stage is not valid UTF-8 and cannot be adopted; resolve it in the terminal.",
-    "error_write": "Could not write the working tree file: {error}",
-    "error_load": "Could not read the conflict: {error}",
-    "pane_header": "{label} ({state})"
-  },
   "notify": {
     "bell": "Terminal bell",
     "command_finished": "Command finished in {seconds}s",
@@ -540,7 +491,6 @@
     "recovery_crashed": "Restored {count} tab(s) after an unclean shutdown.",
     "recovery_quarantined": "Repeated restore failures; the saved scene was moved to {path}",
     "hook_install_failed": "Could not install AI CLI hooks for {agent}",
-    "hook_skill_failed": "Could not install the AI CLI runtime skill for {agent}",
     "hook_settings_unreadable": "AI hook settings could not be read; self-healing was skipped"
   },
   "tray": {
@@ -551,8 +501,6 @@
     "tip_running": "{app} — {count} agent(s) running"
   },
   "terminal": {
-    "ai_analyzing": "Analyzing failure…",
-    "ai_fix_hint": "Ctrl+. paste · Esc dismiss",
     "close_busy_title": "Close a running pane?",
     "close_busy_detail": "This pane still has a running task; closing it terminates its processes.",
     "close_busy_confirm": "Close anyway"

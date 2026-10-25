@@ -1,4 +1,4 @@
-//! 呈现接线豁免层:真实按键分发 → 补全/AI 建议条状态 → PTY 字节。
+//! 呈现接线豁免层:真实按键分发 → 补全状态 → PTY 字节。
 //!
 //! 与 key_tests 同纪律:经 `window.dispatch_event` 走完整焦点链与动作解析,
 //! 不直接调 `on_key_down`;断言对象是「哪些字节到了 PTY / 状态是否落位」。
@@ -10,9 +10,8 @@ use slterm_terminal::event_loop::Msg;
 use std::rc::Rc;
 use std::sync::mpsc::Receiver;
 
-use crate::ai_assistant::{AiFix, AiFixState, AssistantConfig};
 use crate::completion::{self, Session};
-use crate::suggest::{CompletionStyle, SltermCompletionItem, SltermCompletionKind};
+use crate::suggest::{CompletionStyle, SltermCompletionKind};
 
 /// 挂载一个可注入补全会话的终端;返回视图、虚拟窗口、PTY 接收端与
 /// 壳侧会话句柄(所有权锚点)。
@@ -97,17 +96,6 @@ fn press(window: &mut VisualTestContext, keystroke: gpui::Keystroke) -> bool {
 fn key(name: &str) -> gpui::Keystroke {
     gpui::Keystroke {
         modifiers: Modifiers::default(),
-        key: name.to_owned(),
-        key_char: None,
-    }
-}
-
-fn ctrl(name: &str) -> gpui::Keystroke {
-    gpui::Keystroke {
-        modifiers: Modifiers {
-            control: true,
-            ..Default::default()
-        },
         key: name.to_owned(),
         key_char: None,
     }
@@ -262,230 +250,9 @@ fn hybrid_tab_requests_popup_and_escape_suppresses_the_same_line(cx: &mut TestAp
     assert!(pty_bytes(&rx).is_empty());
 }
 
-/// AI 建议条:Pending 误按 Ctrl+. 不丢请求;Ready 只贴入不执行;Esc/typing
-/// 关闭;过期 seq 丢弃。
+/// 公式样式文本只走普通网格:绘制不改写源文本,指针列不做公式反投影。
 #[gpui::test]
-fn ai_fix_bar_pastes_only_and_drops_stale_responses(cx: &mut TestAppContext) {
-    let (terminal, mut window, rx) = open(cx, CompletionStyle::Inline, true);
-    let fix = AiFix {
-        command: "cargo build".into(),
-        explain: "拼写".into(),
-        danger: false,
-    };
-
-    // Pending:重复 Ctrl+. 消费按键但不丢请求。
-    let seq = 41;
-    terminal.update(&mut window, |view, cx| {
-        view.ai_fix = Some(AiFixState::Pending { seq });
-        cx.notify();
-    });
-    let propagate = press(&mut window, ctrl("."));
-    assert!(!propagate);
-    assert_eq!(
-        terminal.read_with(&window, |view, _| view.ai_fix.clone()),
-        Some(AiFixState::Pending { seq })
-    );
-    assert!(pty_bytes(&rx).is_empty());
-
-    // 过期响应不得落位。
-    terminal.update(&mut window, |view, cx| {
-        view.apply_ai_fix_response(seq - 1, Ok(Some(fix.clone())), cx);
-    });
-    assert_eq!(
-        terminal.read_with(&window, |view, _| view.ai_fix.clone()),
-        Some(AiFixState::Pending { seq })
-    );
-
-    // 配置错误显式上条(取代静默消失);同 seq 仍可被后续结果覆盖。
-    terminal.update(&mut window, |view, cx| {
-        view.ai_fix = Some(AiFixState::Pending { seq });
-        view.apply_ai_fix_response(seq, Err("缺少凭据".into()), cx);
-    });
-    assert_eq!(
-        terminal.read_with(&window, |view, _| view.ai_fix_bar()),
-        Some(super::ai_fix::AiFixBar {
-            command: String::new(),
-            explain: "缺少凭据".into(),
-            danger: false,
-            pending: false,
-        })
-    );
-
-    // 当前 seq 落位 Ready。
-    terminal.update(&mut window, |view, cx| {
-        view.apply_ai_fix_response(seq, Ok(Some(fix.clone())), cx);
-    });
-    assert_eq!(
-        terminal.read_with(&window, |view, _| view.ai_fix_bar()),
-        Some(super::ai_fix::AiFixBar {
-            command: "cargo build".into(),
-            explain: "拼写".into(),
-            danger: false,
-            pending: false,
-        })
-    );
-
-    // Ctrl+.:只贴入,不带回车。
-    let propagate = press(&mut window, ctrl("."));
-    assert!(!propagate);
-    assert_eq!(pty_bytes(&rx), b"cargo build".to_vec());
-    assert_eq!(
-        terminal.read_with(&window, |view, _| view.ai_fix.clone()),
-        None
-    );
-
-    // Esc 撤条:零字节。
-    terminal.update(&mut window, |view, cx| {
-        view.ai_fix = Some(AiFixState::Ready {
-            seq: 42,
-            fix: fix.clone(),
-        });
-        cx.notify();
-    });
-    let propagate = press(&mut window, key("escape"));
-    assert!(!propagate);
-    assert_eq!(
-        terminal.read_with(&window, |view, _| view.ai_fix.clone()),
-        None
-    );
-    assert!(pty_bytes(&rx).is_empty());
-
-    // typing 撤条,字符照常落进 PTY。
-    terminal.update(&mut window, |view, cx| {
-        view.ai_fix = Some(AiFixState::Ready { seq: 43, fix });
-        cx.notify();
-    });
-    type_text(&terminal, &mut window, "x");
-    assert_eq!(
-        terminal.read_with(&window, |view, _| view.ai_fix.clone()),
-        None
-    );
-    assert_eq!(pty_bytes(&rx), b"x".to_vec());
-}
-
-/// 触发闸门:默认关不触发;开启后 CommandDone 落 Pending;OSC 133 两侧
-/// 推进 active_run/last_run 且不改网格。
-#[gpui::test]
-fn command_boundaries_account_runs_and_gate_the_fix_request(cx: &mut TestAppContext) {
-    let (terminal, mut window, rx) = open(cx, CompletionStyle::Inline, true);
-
-    // 默认关:last_committed 有失败命令也不触发。
-    terminal.update(&mut window, |view, cx| {
-        view.last_committed = "cargoo build".into();
-        view.ai_config_override = Some(AssistantConfig::default());
-        view.attach_run(crate::runtime_api::begin_runtime_run());
-        view.process_event(slterm_terminal::event::Event::CommandStart, cx);
-        view.process_event(
-            slterm_terminal::event::Event::CommandDone {
-                exit_code: Some(127),
-            },
-            cx,
-        );
-    });
-    assert_eq!(
-        terminal.read_with(&window, |view, _| view.ai_fix.clone()),
-        None
-    );
-    let run = terminal.read_with(&window, |view, _| view.last_run.clone());
-    assert_eq!(
-        run.map(|outcome| outcome.state),
-        Some(crate::runtime_api::RuntimeRunState::Failed)
-    );
-
-    // 开启:CommandStart/CommandDone 全过门链 → Pending;runtime run 的
-    // 启动证据来自 133;C,完成结果来自 133;D。
-    terminal.update(&mut window, |view, cx| {
-        view.last_committed = "cargoo build".into();
-        view.ai_fix_gate = crate::ai_assistant::TriggerGate::default();
-        view.ai_config_override = Some(AssistantConfig {
-            enabled: true,
-            ..AssistantConfig::default()
-        });
-        view.attach_run(crate::runtime_api::begin_runtime_run());
-        view.process_event(slterm_terminal::event::Event::CommandStart, cx);
-        assert!(view.ai_fix.is_none(), "CommandStart 本身不触发请求");
-        view.process_event(
-            slterm_terminal::event::Event::CommandDone {
-                exit_code: Some(127),
-            },
-            cx,
-        );
-    });
-    assert!(
-        matches!(
-            terminal.read_with(&window, |view, _| view.ai_fix.clone()),
-            Some(AiFixState::Pending { .. })
-        ),
-        "门链全过应进入 Pending"
-    );
-    assert!(pty_bytes(&rx).is_empty());
-}
-
-/// 网格输出尾部:24 行 / 2000 字符封顶、跳过宽字符占位格、去首尾空行。
-#[gpui::test]
-fn grid_output_tail_is_bounded_and_skips_wide_char_spacers(cx: &mut TestAppContext) {
-    let (terminal, mut window, _rx) = open(cx, CompletionStyle::Inline, true);
-    terminal.update(&mut window, |view, _| {
-        let mut term = view.session.as_ref().unwrap().term.lock();
-        let mut parser = vte::ansi::Processor::<vte::ansi::StdSyncHandler>::default();
-        for row in 0..30 {
-            parser.advance(&mut *term, format!("line {row:02} 中\r\n").as_bytes());
-        }
-    });
-    let tail = terminal.read_with(&window, |view, _| view.grid_output_tail(24, 2000));
-    assert!(tail.lines().count() <= 24);
-    assert!(!tail.contains('\0'));
-    assert!(tail.contains("line 29 中"), "保留最新行: {tail:?}");
-    let long = terminal.read_with(&window, |view, _| view.grid_output_tail(24, 20));
-    assert!(long.chars().count() <= 20);
-}
-
-/// 补全弹窗与 AI 条同处 bottom 锚定的 flex column;两者并存时纵向
-/// 堆叠、永不重叠,弹窗位于 AI 条上方且都真实绘制。
-#[gpui::test]
-fn completion_popup_stacks_above_the_ai_fix_bar(cx: &mut TestAppContext) {
-    let (terminal, mut window, _rx) = open(cx, CompletionStyle::Inline, true);
-    terminal.update(&mut window, |view, cx| {
-        view.suggest.completion_items = vec![SltermCompletionItem {
-            label: "slterm stacking item".into(),
-            insert: " item".into(),
-            replace_chars: 0,
-            replace_after_chars: 0,
-            kind: SltermCompletionKind::History,
-        }];
-        view.ai_fix = Some(AiFixState::Ready {
-            seq: 9,
-            fix: AiFix {
-                command: "cargo build".into(),
-                explain: "拼写".into(),
-                danger: false,
-            },
-        });
-        cx.notify();
-    });
-    window.run_until_parked();
-    window.refresh().unwrap();
-    window.update(|window, cx| {
-        window.draw(cx).clear(cx);
-    });
-
-    let popup = window
-        .debug_bounds("slterm-completion-popup")
-        .expect("补全弹窗必须绘制");
-    let bar = window
-        .debug_bounds("slterm-ai-fix-bar")
-        .expect("AI 条必须绘制");
-    assert!(popup.size.width > px(0.0) && popup.size.height > px(0.0));
-    assert!(bar.size.width > px(0.0) && bar.size.height > px(0.0));
-    assert!(
-        popup.bottom() <= bar.top(),
-        "弹窗底部不得压住 AI 条顶部: popup={popup:?} bar={bar:?}"
-    );
-}
-
-/// overlay paint pass 冒烟:绘制后网格文本、选区与复制文本不变。
-#[gpui::test]
-fn math_overlay_paint_leaves_grid_and_copy_source_untouched(cx: &mut TestAppContext) {
+fn formula_source_paint_keeps_plain_grid_text_and_pointer_mapping(cx: &mut TestAppContext) {
     let (terminal, mut window, _rx) = open(cx, CompletionStyle::Inline, false);
     terminal.update(&mut window, |view, _| {
         let mut term = view.session.as_ref().unwrap().term.lock();
@@ -505,12 +272,38 @@ fn math_overlay_paint_leaves_grid_and_copy_source_untouched(cx: &mut TestAppCont
         })
     };
     let before = row_text(&terminal, &window);
-    // 真实绘制一帧(含扫描/位图预检/覆盖绘制)。
     window.refresh().unwrap();
     window.update(|window, cx| {
         window.draw(cx).clear(cx);
     });
     let after = row_text(&terminal, &window);
-    assert_eq!(before, after, "覆盖层不得改写终端 cell");
+    assert_eq!(before, after, "普通文本绘制不得改写终端 cell");
     assert_eq!(before.trim_end(), "$x^2$ suffix");
+
+    let source_column = terminal.read_with(&window, |view, _| {
+        let position = point(
+            view.origin.x + view.cell_width * 6.25,
+            view.origin.y + view.line_height * 0.25,
+        );
+        view.grid_point(position).0.column.0
+    });
+    assert_eq!(source_column, 6, "suffix 的 s 必须仍命中源网格第 6 列");
+
+    terminal.update(&mut window, |view, _| {
+        let mut term = view.session.as_ref().unwrap().term.lock();
+        term.selection = Some(Selection::new(
+            SelectionType::Simple,
+            TermPoint::new(Line(0), Column(0)),
+            Side::Left,
+        ));
+        term.selection
+            .as_mut()
+            .unwrap()
+            .update(TermPoint::new(Line(0), Column(11)), Side::Right);
+        assert_eq!(
+            term.selection_to_string().as_deref(),
+            Some("$x^2$ suffix"),
+            "复制源必须保留公式样式文本的原始字节"
+        );
+    });
 }

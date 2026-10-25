@@ -98,11 +98,10 @@ gpui::actions!(
 );
 
 /// 编辑器对外事件(外层 code tab 转发):
-/// gutter 点击 = 行标 → 差异对照/冲突面的动作入口。
+/// gutter 点击 = 打开只读差异对照面的动作入口。
 #[derive(Clone, Debug)]
 pub enum TextFileEvent {
-    /// 行标点击:行号(1 基)与标记值集。
-    GutterClicked { line: u32, mark: GutterMark },
+    GutterClicked,
 }
 
 /// 文件编辑上下文键绑定(`gpui_component::init` 之后调用一次)。
@@ -839,7 +838,7 @@ impl TextFileView {
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |this, _: &MouseDownEvent, window, cx| {
-                            this.gutter_click(line, mark, window, cx);
+                            this.gutter_click(line, window, cx);
                         }),
                     ),
             );
@@ -848,17 +847,11 @@ impl TextFileView {
     }
 
     /// 行标点击:光标跳到该行并向外层 code tab 发事件(打开差异对照面)。
-    fn gutter_click(
-        &mut self,
-        line: u32,
-        mark: GutterMark,
-        window: &mut Window,
-        cx: &mut Context<'_, Self>,
-    ) {
+    fn gutter_click(&mut self, line: u32, window: &mut Window, cx: &mut Context<'_, Self>) {
         self.input.update(cx, |input, cx| {
             input.set_cursor_position(Position::new(line.saturating_sub(1), 0), window, cx);
         });
-        cx.emit(TextFileEvent::GutterClicked { line, mark });
+        cx.emit(TextFileEvent::GutterClicked);
         cx.notify();
     }
 

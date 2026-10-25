@@ -8,9 +8,8 @@ slTerminal 是单进程 GPUI 应用：单窗口单实例、仅暗色模式、GPU
 
 - **原生终端核心** — VT 解析、ConPTY、滚动回看、选择、复制/粘贴、Shell 集成，以及 Win10 的新版 ConPTY 捆绑回退。
 - **标签页与分屏** — 终端标签页、网格分屏、窗格缩放、拖拽停靠、终端标签页会话恢复。
-- **AI CLI 集成** — AI CLI 的屏幕检测规则、Claude Code / Kimi / Codex / Pi / OpenCode 的 hook 安装、Agent 状态投影、Claude Code 与 Codex 会话历史，以及供 Agent 自发现控制面的 runtime skill。
-- **Runtime API** — 本机 loopback 的 JSON Lines 控制面，版本化信封，`slterm ctl` / `slterm env`、资源动词与单实例移交。
-- **文件与编辑** — 文件浏览器、源码编辑器、Markdown/图片标签页、只读双栏 diff、git gutter、Markdown 数学渲染与终端数学覆盖层。
+- **AI CLI 集成** — AI CLI 的屏幕检测规则、Claude Code / Kimi / Codex / Pi / OpenCode 的 hook 安装、Agent 状态投影，以及 Claude Code 与 Codex 会话历史。
+- **文件与编辑** — 文件浏览器、源码编辑器、Markdown/图片标签页、只读双栏 diff、git gutter 与 Markdown 数学渲染。
 - **设置与主题** — 设置中心（应用/外观/配置/交互/高级/本地化/重置 + Agent 组）；内置暗色主题（默认 Linear）；中英双语界面。
 - **系统集成** — 托盘、Windows toast 通知、任务栏进度、开机启动、窗口材质与壁纸、更新检查与下载。
 - **安全** — 凭据只存 Windows 凭据管理器、设置写审计、严格白名单的本地加密备份。
@@ -61,7 +60,6 @@ python scripts/check_brand_regress.py staged
 - `.claude/docs/testing/strategy.md` 与 `.claude/docs/testing/exemptions.md` — 测试策略与豁免登记。
 - `.claude/docs/release/packaging.md` — 发布链、体积预算与合规。
 - `.claude/docs/operations/commands.md` — 完整命令矩阵。
-- `assets/runtime-control-api.md` — 随包 Runtime API 事实文档；机器可读 schema 见 `assets/runtime-api-v1.schema.json`。
 - `release-notes/` — 按版本的发布说明。
 - `CHANGELOG.md` — 双语变更日志，随安装器与便携包内置。
 

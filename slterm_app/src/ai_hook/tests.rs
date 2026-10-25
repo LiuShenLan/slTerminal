@@ -259,8 +259,8 @@ fn idle_in_process_teammate_does_not_hold_the_turn_open() {
 }
 
 /// 终态词表必须覆盖真实取值:`success` / `exited` 是从本机 claude 2.1.270 里
-/// 读到的字面量,漏掉它们会让 pane 永远停在「工作中」——完成通知不再弹,
-/// `agent.delegate` 的完成回调也不会触发,比早弹一条更难发现。
+/// 读到的字面量,漏掉它们会让 pane 永远停在「工作中」,完成通知不再弹,
+/// 比早弹一条更难发现。
 #[test]
 fn finished_background_tasks_do_not_hold_the_turn_open() {
     for status in [
@@ -639,16 +639,4 @@ fn kimi_capabilities_are_declared() {
     assert!(!capabilities.background_tasks);
     assert!(!capabilities.bridge_sequence);
     assert!(!capabilities.serialized_delivery);
-}
-
-/// 回答落盘的 cwd 只认绝对路径:相对路径与控制字符都不能进投影。
-#[test]
-fn answer_cwd_accepts_only_absolute_clean_paths() {
-    let raw = b"slterm-hook/1 source=claude pane=3\n{\"hook_event_name\":\"Stop\",\"session_id\":\"s\",\"cwd\":\"D:/work\"}";
-    assert_eq!(
-        parse_envelope(raw).unwrap().answer_cwd.as_deref(),
-        Some(std::path::Path::new("D:/work"))
-    );
-    let raw = b"slterm-hook/1 source=claude pane=3\n{\"hook_event_name\":\"Stop\",\"session_id\":\"s\",\"cwd\":\"relative/dir\"}";
-    assert_eq!(parse_envelope(raw).unwrap().answer_cwd, None);
 }

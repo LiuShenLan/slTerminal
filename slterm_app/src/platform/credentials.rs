@@ -16,8 +16,8 @@ mod windows;
 /// 应用级服务身份(写入凭据的 UserName 展示字段;读取/删除只认 target)。
 const SERVICE: &str = "Slterm";
 
-/// 凭据身份单态:service 恒 `Slterm`,target 由调用方按域命名
-/// (`Slterm/AI/<id>` 等)。无 legacy 回退。
+/// 凭据身份单态:service 恒 `Slterm`,target 由调用方按域命名。
+/// 无 legacy 回退。
 struct CredentialIdentity<'a> {
     service: &'static str,
     target: Cow<'a, str>,

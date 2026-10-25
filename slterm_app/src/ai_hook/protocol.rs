@@ -4,6 +4,7 @@
 //! SSH 语义整支裁剪:pane 身份只由本地 PTY 环境注入,无第二通道。
 
 use serde_json::Value;
+use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -273,6 +274,7 @@ pub(crate) fn parse_envelope(bytes: &[u8]) -> Option<AiHookEvent> {
     } else {
         AiTurnOutcome::Unknown
     };
+    let message_fingerprint = full_message_fingerprint(&source, &payload);
     let attention = (kind == AiHookKind::NeedsAttention).then(|| AttentionContext {
         source: source.clone(),
         pane_id: pane,
@@ -319,13 +321,6 @@ pub(crate) fn parse_envelope(bytes: &[u8]) -> Option<AiHookEvent> {
         selection: context_string(&payload, &["selection", "selected_text", "selectedText"]),
         raw_context: sanitized_raw_context(&payload),
     });
-    let answer = crate::assistant_answer::AssistantAnswer::from_hook(&source, &payload);
-    let answer_cwd = payload
-        .get("cwd")
-        .and_then(Value::as_str)
-        .filter(|path| path.len() <= 4096 && !path.chars().any(char::is_control))
-        .map(std::path::PathBuf::from)
-        .filter(|path| path.is_absolute());
     Some(AiHookEvent {
         codex_hooks,
         turn_id,
@@ -334,13 +329,12 @@ pub(crate) fn parse_envelope(bytes: &[u8]) -> Option<AiHookEvent> {
         legacy_attention: source == "claude"
             && payload.get("hook_event_name").and_then(Value::as_str) == Some("Notification")
             && context_string(&payload, &["notificationType", "notification_type"]).is_none(),
-        answer,
-        answer_cwd,
         pane,
         source,
         kind,
         turn_outcome,
         message,
+        message_fingerprint,
         session_id,
         session_file,
         bridge_instance: payload
@@ -362,6 +356,21 @@ pub(crate) fn parse_envelope(bytes: &[u8]) -> Option<AiHookEvent> {
         background_tasks,
         attention,
     })
+}
+
+/// 只为完整回答计算去重指纹；事件本身不保留未截断正文。
+fn full_message_fingerprint(source: &str, payload: &Value) -> Option<u64> {
+    let value = match source {
+        "claude" => payload.get("last_assistant_message"),
+        "codex" => payload
+            .get("last_assistant_message")
+            .or_else(|| payload.get("last-assistant-message")),
+        _ => None,
+    }?;
+    let text = value.as_str()?;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut hasher);
+    Some(hasher.finish())
 }
 
 fn unix_time_ms() -> u64 {

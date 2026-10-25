@@ -462,7 +462,7 @@ fn suggest_collect(
 
 /// 已提交命令行的首词 → 程序身份:小写、剥路径与常见 Windows 启动后缀。
 ///
-/// AI assistant 判定表与侧栏图标共用同一份身份(缝合点 2)。
+/// 终端命令边界与 Runtime 快照共用同一份程序身份。
 pub(crate) fn extract_program(line: &str) -> Option<String> {
     let first = line.split_whitespace().next()?;
     let base = first

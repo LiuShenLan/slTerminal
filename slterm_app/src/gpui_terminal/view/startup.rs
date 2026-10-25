@@ -76,12 +76,12 @@ impl TerminalView {
                 // 无设置 shell 键:launch 未指定即 None,core 探测链接手。
                 // 显式命令(-e)的解析失败与 spawn 失败同通道呈现。
                 let options = session::local_options(shell, explicit_command, pane_id, cwd);
-                // pane.exec 的环境语义 = PTY 创建时冻结的 overrides;必须在
+                // 后台补全复用 PTY 创建时冻结的 shell 与环境覆盖;必须在
                 // options 被 spawn 消费前留一份只读快照。
                 let exec_context = options
                     .as_ref()
                     .ok()
-                    .map(crate::runtime_exec::PaneExecContext::from_pty_options);
+                    .map(crate::completion::PaneExecContext::from_pty_options);
                 let spawned =
                     options.and_then(|options| session::spawn(initial, term_config, options));
                 let title = shell_name.unwrap_or_else(|| String::from("shell"));
@@ -151,7 +151,6 @@ impl TerminalView {
             font_offset_y: FONT_OFFSET.1,
             line_height_multiplier: None,
             palette,
-            math_overlay: super::super::math_overlay::MathOverlay::default(),
             suggest: crate::suggest::SuggestState::default(),
             suggest_line: String::new(),
             suggest_cursor: 0,
@@ -161,12 +160,6 @@ impl TerminalView {
             completion_style,
             ghost_enabled,
             last_committed: String::new(),
-            active_run: None,
-            last_run: None,
-            ai_fix: None,
-            ai_fix_gate: crate::ai_assistant::TriggerGate::default(),
-            #[cfg(all(test, feature = "gpui-test-support"))]
-            ai_config_override: None,
             marked_text: None,
             ime_bounds: Bounds::default(),
             title: initial_title,

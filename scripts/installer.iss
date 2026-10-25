@@ -98,13 +98,9 @@ Source: "{#BuildRoot}\slterm-hook.exe"; DestDir: "{app}\runtime"; Flags: ignorev
 Source: "{#RepoRoot}\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#RepoRoot}\README.zh-CN.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#RepoRoot}\CHANGELOG.md"; DestDir: "{app}\docs"; Flags: ignoreversion
-Source: "{#RepoRoot}\assets\runtime-control-api.md"; DestDir: "{app}\assets"; Flags: ignoreversion
-Source: "{#RepoRoot}\assets\runtime-api-v1.schema.json"; DestDir: "{app}\assets"; Flags: ignoreversion
 Source: "{#RepoRoot}\assets\app-icon.png"; DestDir: "{app}\assets"; Flags: ignoreversion
 Source: "{#RepoRoot}\assets\app-icon.ico"; DestDir: "{app}\assets"; Flags: ignoreversion
 Source: "{#RepoRoot}\docs\featureSpec\assets\cli-svg\*.svg"; DestDir: "{app}\assets\cli-svg"; Flags: ignoreversion
-Source: "{#RepoRoot}\assets\skills\slterm-runtime\SKILL.md"; DestDir: "{app}\skills\slterm-runtime"; Flags: ignoreversion
-Source: "{#RepoRoot}\assets\skills\slterm-runtime\agents\openai.yaml"; DestDir: "{app}\skills\slterm-runtime\agents"; Flags: ignoreversion
 Source: "{#RepoRoot}\LICENSE"; DestDir: "{app}\licenses"; Flags: ignoreversion
 Source: "{#RepoRoot}\licenses\LICENSE-LATIN-MODERN-MATH"; DestDir: "{app}\licenses"; Flags: ignoreversion
 Source: "{#RepoRoot}\THIRD-PARTY-NOTICES"; DestDir: "{app}\licenses"; Flags: ignoreversion

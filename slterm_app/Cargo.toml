@@ -30,13 +30,6 @@ path = "src/lib.rs"
 name = "windows_console_startup"
 path = "tests/windows_console_startup.rs"
 
-# Runtime API 行为级端到端:
-# 真实桌面 + 预构建 exe 才执行,`SLTERM_E2E_EXE` 未设置时打印 SKIP 计通过
-# (条件跳过)。
-[[test]]
-name = "runtime_conformance"
-path = "tests/runtime_conformance.rs"
-
 [features]
 # 一条 feature 同时打开 gpui 与 gpui-component 的测试支持;
 # UI 测试全部 `#[cfg(all(test, feature = "gpui-test-support"))]` 双门控,
@@ -45,9 +38,6 @@ gpui-test-support = ["gpui/test-support", "gpui-component/test-support"]
 # 本地假 release 服务器演练通道:只用于 debug
 # 验收/发布彩排;`update_check::test_source` 在 release 构建下编译期拒绝。
 update-test-source = []
-# 旧式回落协议面:首行非 JSON 的 ATTACH/PING。首发默认关闭,
-# 单实例移交与存活探测改走版本化 JSON;开启后接受旧客户端回落行。
-legacy-attach = []
 
 [dependencies]
 # GPUI 钉版与 URL/rev 一致性纪律见根 Cargo.toml 固定基线注释块。
@@ -140,10 +130,7 @@ sha2 = "0.11"
 base64 = "0.22"
 tempfile = "3"
 notify = "7"
-# 主题包 ZIP:Manifest + 整包有界检查 + 导出。
-# 版本与 feature 对齐上游主题栈;deflate 走 zlib-rs,不引入 C 依赖。
-zip = { version = "=4.6.1", default-features = false, features = ["deflate-flate2-zlib-rs"] }
-# 主题包资源签名校验:只开主题包允许的静态图片格式。
+# 壁纸与文档图片的本地解码。
 image = { version = "0.25", default-features = false, features = ["bmp", "gif", "jpeg", "png", "webp"] }
 # Windows 系统代理读取:HKCU Internet Settings 的
 # ProxyEnable/ProxyServer/ProxyOverride;不走 ureq 的 win-system-proxy。
@@ -200,7 +187,7 @@ windows-sys = { version = "0.59", features = [
     # 命名管道服务器(ai_hook::windows;PIPE_ACCESS_INBOUND 在 FileSystem,
     # ConnectNamedPipe/ReadFile 的 OVERLAPPED 引用经 Win32_System_IO)。
     "Win32_System_Pipes",
-    # pane.exec 一次性子进程整树回收(Job Object)。
+    # 补全探测的可取消进程树回收(Job Object)。
     "Win32_System_JobObjects",
     "Win32_Storage_FileSystem",
     "Win32_System_IO",

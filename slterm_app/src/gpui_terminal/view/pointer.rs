@@ -26,10 +26,6 @@ impl TerminalView {
         };
         let term = session.term.lock();
         let point = term.visual_viewport_to_point(self.rows, TermPoint::new(row, Column(col)));
-        // 公式跨度是原子:视觉列先反投影到源边界,再进入选区语义。
-        // 没有覆盖层投影时是恒等映射。
-        let origin = term.viewport_origin_for(self.rows);
-        let (point, side) = self.math_overlay.source_point(point, side, origin);
         (point, side)
     }
 

@@ -143,8 +143,7 @@ impl SltermWorkspace {
                     // attention)归工作区/窗口域,本模块不产生视图态。
                     let focused = workspace.focused_pane();
                     let (_, accepted) = workspace.agent_hub.dispatch_lifecycle(events, focused);
-                    // SessionEnd 关闭 managed agent、TurnDone
-                    // 完成委派回传,然后统一入账(等待方随快照唤醒)。
+                    // SessionEnd/TurnDone 先清理任务栏进度，再投递通知。
                     workspace.process_agent_lifecycle_events(&accepted, cx);
                     // 通知漏斗:TurnDone/NeedsAttention 两状态边
                     // → 通知漏斗(前台门控/节流/时长全在漏斗内)。
@@ -155,7 +154,6 @@ impl SltermWorkspace {
                             crate::notify::deliver_gpui(&notification, pane_id, cx);
                         }
                     }
-                    workspace.publish_runtime_snapshot(cx);
                 }) else {
                     return;
                 };
@@ -289,9 +287,7 @@ impl SltermWorkspace {
         samples
     }
 
-    /// 壳事件泵(照上游 residency.rs 形态):120ms 节奏排空通道,前台线程
-    /// 派发。`RuntimeControl` 在 UI owner 上执行并 `respond` 回 transport
-    /// 线程;事件循环不可用时 dispatch 被丢弃 → `runtime_unavailable`。
+    /// 壳事件泵：120ms 节奏排空通道，在前台线程派发。
     pub(super) fn start_shell_event_pump(
         &mut self,
         rx: mpsc::Receiver<SltermShellEvent>,
@@ -309,8 +305,7 @@ impl SltermWorkspace {
                 if events.is_empty() {
                     continue;
                 }
-                // 窗口可能已关闭:此时丢弃事件,transport 侧收到 Disconnected
-                // 后按 runtime_unavailable 收口,不伪造成功。
+                // 窗口可能已关闭：此时丢弃已排队的壳事件。
                 cx.update(|cx| {
                     let _ = window_handle.update(cx, |_root, window, cx| {
                         let _ = this.update(cx, |workspace, cx| {

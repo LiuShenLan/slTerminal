@@ -23,6 +23,8 @@
 //! 结构性变化经 `TerminalView::mark_structural_resize` 同步下发,不进尾沿
 //! 去抖)。
 
+/// 壳事件、更新交互与关闭守卫。
+mod control;
 /// 文件打开路由(`openable_in_app` → Image/Document/Code)。
 mod documents;
 /// 侧栏文件树渲染 + 路径栏 + 拖放。
@@ -34,9 +36,6 @@ pub(crate) mod keyboard_bindings;
 mod pumps;
 /// 终端 tab 与分屏树渲染(壳层职责下沉)。
 mod render;
-/// Runtime 写命令在 Workspace 上的执行器。
-mod runtime_control;
-pub(crate) mod runtime_projection;
 pub(crate) mod session_persistence;
 pub(crate) mod session_recovery;
 pub(crate) mod sidebar;
@@ -71,9 +70,7 @@ use crate::ai_hook::AiHookEvent;
 use crate::app_shell::config::Settings;
 use crate::gpui_terminal::view::{TerminalLaunch, TerminalView, TerminalViewEvent};
 use crate::i18n::Message;
-use crate::runtime_api::{RuntimeHub, SINGLE_WINDOW_ID};
 use crate::session::LaunchSession;
-use crate::terminal_registry::{self, PaneSessionMeta};
 use render::to_split_rect;
 use session_persistence::SessionPersistence;
 use session_recovery::StartupPlan;
@@ -110,8 +107,7 @@ pub struct TerminalPane {
     /// 本 pane 创建时冻结的启动身份;快照逐叶落盘。
     pub launch: Option<LaunchSession>,
     pub view: Entity<TerminalView>,
-    /// 补全来源缓存按 pane 持有(与 terminal_registry 以
-    /// PaneId 关联,缓存本体不复制)。所有权锚点;消费经视图的同源句柄。
+    /// 补全来源缓存按 pane 持有；缓存本体不复制，消费经视图的同源句柄。
     #[allow(dead_code)]
     pub(crate) completion_session: Rc<crate::completion::Session>,
     _subscription: Subscription,
@@ -210,7 +206,7 @@ pub struct SltermWorkspace {
     /// `remove_window` 会绕过关窗钩子,断言只能落在请求端)。
     #[cfg(all(test, feature = "gpui-test-support"))]
     tray_quit_requested: bool,
-    /// 每 pane 的 agent 宿主(AgentActivity/AnswerInbox 归属表)。
+    /// 每 pane 的 agent 宿主(AgentActivity 归属表)。
     agent_hub: AgentHub,
     /// 后台任务订阅:字段只为持有订阅生命周期;归零即停轮询。
     background_tasks: Vec<crate::background_tasks::TaskSubscription>,
@@ -218,11 +214,6 @@ pub struct SltermWorkspace {
     taskbar: crate::taskbar::TaskbarState,
     /// 单窗口会话写盘状态机(latest/saved 双快照、无变化跳过、提权隔离)。
     session_persistence: SessionPersistence,
-    /// Runtime 状态权威:渲染前置投影入账,hub 判等去重。
-    ///
-    /// 把同一 clone 交给 `RuntimeServer`;在那之前本 hub 只有壳内
-    /// 发布源,无外部订阅者。
-    runtime_hub: RuntimeHub,
     /// 文件 tab 的变更观察(键 = 稳定 TabId):编辑器键入/保存完成时刷新
     /// 侧栏与窗口标题的脏标记。关闭 tab 时随条目一并释放。
     file_observations: HashMap<TabId, Subscription>,
@@ -239,7 +230,7 @@ pub struct SltermWorkspace {
     update_prompt_open: bool,
     /// 测试专用:更新安装执行替身(生产恒走 handoff)。
     #[cfg(all(test, feature = "gpui-test-support"))]
-    update_install_runner: Option<runtime_control::UpdateInstallRunner>,
+    update_install_runner: Option<control::UpdateInstallRunner>,
     /// 测试专用:安装成功后的退出请求(虚拟窗口不可直调 remove_window)。
     #[cfg(all(test, feature = "gpui-test-support"))]
     update_install_exit_requested: bool,
@@ -319,7 +310,6 @@ impl SltermWorkspace {
         ai_events: Option<mpsc::Receiver<AiHookEvent>>,
         startup: WorkspaceStartup,
         plan: StartupPlan,
-        runtime_hub: RuntimeHub,
         cx: &mut Context<'_, Self>,
     ) -> Self {
         // 侧栏宽度先于 spawn 网格入账:恢复的宽度若在首帧后才生效,会先按
@@ -360,7 +350,6 @@ impl SltermWorkspace {
             background_tasks: Vec::new(),
             taskbar: crate::taskbar::TaskbarState::new(),
             session_persistence: Self::new_session_persistence(),
-            runtime_hub,
             file_observations: HashMap::new(),
             file_tab_events: HashMap::new(),
             pending_file_close: None,
@@ -833,9 +822,7 @@ impl SltermWorkspace {
             view
         });
         let subscription = cx.subscribe_in(&view, window, Self::on_terminal_event);
-        // 注册表写入点 1/2(spawn 侧;另一侧 = close_pane)。
-        terminal_registry::register(pane_id, PaneSessionMeta::default());
-        // agent 宿主同纪律:只在 pane 创建/关闭两处增删。
+        // agent 宿主只在 pane 创建/关闭两处增删。
         self.agent_hub.register(pane_id);
         TerminalPane {
             id: pane_id,
@@ -983,21 +970,16 @@ impl SltermWorkspace {
             }
             TerminalViewEvent::Exited => {
                 if let Some(pane_id) = self.locate_pane(view) {
-                    // 真实 PTY 退出是首个终态事件;随后 close_pane 的关闭
-                    // 墓碑不得覆盖它(等待方错误码应是 pane_exited)。
-                    self.runtime_hub
-                        .record_pane_exited(SINGLE_WINDOW_ID, pane_id.0);
                     self.close_pane(pane_id, window, cx);
                 }
             }
             TerminalViewEvent::UserInput(_) => {}
             // 历史记账在视图内完成(record_command + Session::invalidate);
-            // 宿主只需在命令边界推进 agent 生命周期与快照。
+            // 宿主只需在命令边界推进 agent 生命周期。
             TerminalViewEvent::CommandSubmitted(_) => {}
             TerminalViewEvent::CommandStarted => {
                 if let Some(pane_id) = self.locate_pane(view) {
                     self.agent_hub.command_started(pane_id);
-                    self.publish_runtime_snapshot(cx);
                 }
             }
             TerminalViewEvent::CommandFinished => {
@@ -1006,7 +988,6 @@ impl SltermWorkspace {
                     // 命令回到提示符,进度主人已经收尾;程序忘发
                     // `9;4;0` 也不能把进度条留在任务栏上。
                     self.clear_taskbar_progress(pane_id, cx);
-                    self.publish_runtime_snapshot(cx);
                 }
             }
             // 任务栏是窗口级的,只反映活跃 tab 的聚焦 pane。
@@ -1108,9 +1089,7 @@ impl SltermWorkspace {
     /// 首叶;唯一叶子关闭 = 关 tab = 无 tab 时关窗(语义保留)。
     fn close_pane(&mut self, pane_id: PaneId, window: &mut Window, cx: &mut Context<'_, Self>) {
         // 忙碌 pane 先确认;确认后的同一次调用经标志放行。
-        if self.pane_close_confirmed.take() != Some(pane_id)
-            && !self.busy_panes(std::iter::once(pane_id)).is_empty()
-        {
+        if self.pane_close_confirmed.take() != Some(pane_id) && self.pane_is_busy(pane_id) {
             self.confirm_close_busy_pane(pane_id, window, cx);
             return;
         }
@@ -1123,9 +1102,6 @@ impl SltermWorkspace {
         }) else {
             return;
         };
-        // 用户关闭是显式生命周期事件;下一帧投影缺该 pane,hub 不再重复记。
-        self.runtime_hub
-            .record_pane_closed(SINGLE_WINDOW_ID, pane_id.0);
         let outcome = match &mut self.tabs[tab_index].tab {
             WorkspaceTab::Terminal { tree, .. } => tree.remove_leaf(pane_id),
             WorkspaceTab::Settings { .. }
@@ -1188,12 +1164,11 @@ impl SltermWorkspace {
         }
     }
 
-    /// 索引与宿主表的统一摘除点(注册表写入点 2/2 的对偶)。
+    /// agent 宿主与视图缓存的统一摘除点。
     fn forget_pane(&mut self, pane_id: PaneId, cx: &App) {
         // pane 关闭是任务栏进度的清除边之一(关 pane/关 tab/
         // PTY 退出/恢复失败同路);只清自己名下正在显示的条。
         self.clear_taskbar_progress(pane_id, cx);
-        terminal_registry::remove(pane_id);
         self.agent_hub.remove(pane_id);
         self.pane_bounds.borrow_mut().remove(&pane_id);
     }
@@ -1426,21 +1401,6 @@ impl SltermWorkspace {
         })
     }
 
-    /// 渲染前把 Workspace 投影入账。hub 只发布语义变化,
-    /// 事件循环空转/光标闪烁重复渲染不烧 revision、不刷订阅方。
-    /// 返回发布后的规范快照(盖戳后),提交类命令随响应回传。
-    fn publish_runtime_snapshot(&self, cx: &App) -> crate::runtime_api::RuntimeSnapshot {
-        let snapshot = runtime_projection::project_workspace(self, cx);
-        self.runtime_hub.publish(snapshot)
-    }
-
-    /// `RuntimeServer::spawn_callback` 接线点:服务端与壳共享同一
-    /// 状态权威(同一 `Arc<Mutex<HubState>>`),不是第二份拷贝。
-    #[allow(dead_code)] // 生产消费点 = 启动链(直接传参);测试经此读同一 hub。
-    pub(crate) fn runtime_hub(&self) -> RuntimeHub {
-        self.runtime_hub.clone()
-    }
-
     /// 测试专用:spawn 网格只读(启动零 resize 锚的断言端)。
     #[cfg(all(test, feature = "gpui-test-support"))]
     pub(crate) fn initial_grid(&self) -> (u16, u16) {
@@ -1504,7 +1464,7 @@ impl SltermWorkspace {
     #[cfg(all(test, feature = "gpui-test-support"))]
     pub(crate) fn set_update_install_runner_for_test(
         &mut self,
-        runner: runtime_control::UpdateInstallRunner,
+        runner: control::UpdateInstallRunner,
     ) {
         self.update_install_runner = Some(runner);
     }
@@ -1604,9 +1564,6 @@ impl SltermWorkspace {
 
 impl Render for SltermWorkspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
-        // 状态变化统一在渲染路径入账——任何 cx.notify 触发的
-        // 重绘都会带上一份最新投影;判等去重保证空转帧零成本。
-        self.publish_runtime_snapshot(cx);
         // 每帧对账 watcher 兴趣(树根 + 打开的可编辑文件)。放在渲染根
         // 而非 explorer 槽内:explorer 关闭时 gutter 外部刷新仍须工作。
         self.sync_fs_watch(cx);

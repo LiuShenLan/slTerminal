@@ -23,12 +23,12 @@ disable-model-invocation: true
 | 性能 | `perf` | 渲染管线、锁竞争、文件 I/O、启动耗时、内存使用 |
 | 稳定性 | `stability` | panic 面、竞态条件、异常路径、错误恢复、资源耗尽 |
 | 死代码 | `dead-code` | 未使用导出/依赖/模块、空文件、调试残留 |
-| 测试覆盖 | `test-coverage` | 单元/集成/虚拟窗口/脚本层测试盲区、Runtime API 与 hook 契约覆盖、mock 质量 |
+| 测试覆盖 | `test-coverage` | 单元/集成/虚拟窗口/脚本层测试盲区、本地 CLI 与 hook 契约覆盖、mock 质量 |
 | 安全性 | `security` | 凭据域、沙箱路径、命令注入面、输入校验、依赖漏洞 |
 | 架构合规 | `architecture` | 项目 CLAUDE.md 中声明的架构约束逐条验证 |
 | 错误处理 | `error-handling` | 错误变体覆盖、unwrap/expect 审计、错误传播与静默 catch、用户可见消息 |
 | 依赖审计 | `dependencies` | 安全漏洞、过期依赖、未使用依赖、许可证兼容 |
-| 契约一致性 | `contract` | Runtime API 方法/字段、hook 协议、设置键、i18n 键集、DTO 双边对应 |
+| 契约一致性 | `contract` | 本地 CLI 参数与启动分流、hook 协议、设置键、i18n 键集、DTO 双边对应 |
 | 资源管理 | `resource` | 生命周期追踪、句柄泄漏、事件监听解绑、环形缓冲正确性 |
 
 ## 执行流程
@@ -53,7 +53,7 @@ disable-model-invocation: true
 | 死代码 | 按 crate 拆（`slterm_app` / core crates / `slterm_hook` / scripts） |
 | 测试覆盖 | 按测试层拆（单元/集成 + 虚拟窗口 + 脚本门禁 + 豁免登记） |
 | 架构合规 | 按约束条目逐一验证 |
-| 契约一致性 | Runtime API schema/describe、hook 协议、设置键、i18n 键集逐对校验 |
+| 契约一致性 | CLI 参数与启动分流、hook 协议、设置键、i18n 键集逐对校验 |
 | 错误处理 | 按模块拆（终端 core + 应用壳 + 平台封装 + 用户可见消息） |
 | 依赖审计 | `cargo audit` + 依赖清单核对 |
 

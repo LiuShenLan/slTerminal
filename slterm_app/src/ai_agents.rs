@@ -277,21 +277,6 @@ impl AgentKind {
         })
     }
 
-    /// 冷启动命令,交互式 CLI 拼法以各 provider 官方文档实测为准。不支持的
-    /// 客户端不得从识别 slug 猜测。
-    pub fn start_command(self) -> Option<String> {
-        match self {
-            Self::Claude => Some("claude".to_owned()),
-            Self::Codex => Some("codex".to_owned()),
-            Self::OpenCode => Some("opencode".to_owned()),
-            Self::Cursor => Some("agent".to_owned()),
-            Self::Pi => Some("pi".to_owned()),
-            Self::OhMyPi => Some("omp".to_owned()),
-            Self::Kimi => Some("kimi".to_owned()),
-            _ => None,
-        }
-    }
-
     /// shell 安全的 fork 命令,仅覆盖有实测 fork 语法的客户端。
     pub fn fork_command(self, session_id: &str) -> Option<String> {
         valid_session_id(session_id)?;
@@ -306,15 +291,6 @@ impl AgentKind {
             _ => return None,
         })
     }
-}
-
-/// 可冷启动集合的唯一真值源 = `start_command()` 为 Some 的 kind。
-/// Runtime API schema 的 `$defs.launch_agent_kind.enum` 必须与该集合
-/// 完全一致(契约测试守卫);新增可冷启动 kind 只需补 `start_command()`。
-pub(crate) fn launchable_kinds() -> impl Iterator<Item = AgentKind> {
-    AgentKind::ALL
-        .into_iter()
-        .filter(|kind| kind.start_command().is_some())
 }
 
 fn valid_session_id(id: &str) -> Option<()> {
@@ -1006,7 +982,6 @@ mod identity_tests {
             Some(AgentKind::Trae)
         );
         assert_eq!(AgentKind::parse("trae-cli-helper"), None);
-        assert_eq!(AgentKind::Trae.start_command(), None);
         assert_eq!(AgentKind::Trae.resume_command("session-1"), None);
         assert_eq!(AgentKind::Trae.fork_command("session-1"), None);
     }
@@ -1046,7 +1021,6 @@ mod identity_tests {
         ] {
             assert_eq!(AgentKind::parse_command(command), None, "{command}");
         }
-        assert_eq!(AgentKind::CodeBuddy.start_command(), None);
         assert_eq!(AgentKind::CodeBuddy.resume_command("session-1"), None);
         assert_eq!(AgentKind::CodeBuddy.fork_command("session-1"), None);
     }
@@ -1083,17 +1057,6 @@ mod identity_tests {
 
     #[test]
     fn commands_are_exact_and_injection_safe() {
-        assert_eq!(AgentKind::Claude.start_command().as_deref(), Some("claude"));
-        assert_eq!(AgentKind::Codex.start_command().as_deref(), Some("codex"));
-        assert_eq!(
-            AgentKind::OpenCode.start_command().as_deref(),
-            Some("opencode")
-        );
-        assert_eq!(AgentKind::Cursor.start_command().as_deref(), Some("agent"));
-        assert_eq!(AgentKind::Pi.start_command().as_deref(), Some("pi"));
-        assert_eq!(AgentKind::OhMyPi.start_command().as_deref(), Some("omp"));
-        assert_eq!(AgentKind::Kimi.start_command().as_deref(), Some("kimi"));
-        assert_eq!(AgentKind::Gemini.start_command(), None);
         assert_eq!(
             AgentKind::Claude.resume_command("abc-123").as_deref(),
             Some("claude --resume abc-123")

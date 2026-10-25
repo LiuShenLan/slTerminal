@@ -12,10 +12,6 @@ pub(crate) mod cursor_painter;
 pub(crate) mod element;
 pub(crate) mod event_mailbox;
 pub(crate) mod keymap;
-/// 公式覆盖层的 term 锁内扫描/绘制计划与 paint pass。
-pub(crate) mod math_overlay;
-/// 公式位图的 GPUI 呈现(有界缓存 + 基线吸附)。
-pub(crate) mod math_render;
 pub(crate) mod mouse_protocol;
 pub(crate) mod session;
 pub(crate) mod session_pump;

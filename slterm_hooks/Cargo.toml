@@ -1,0 +1,16 @@
+[package]
+name = "slterm_hooks"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+test = false
+
+[[test]]
+name = "lib_tests"
+path = "src/lib.rs"
+
+[dependencies]
+slterm_workspace = { path = "../slterm_workspace" }
+slterm_agents = { path = "../slterm_agents" }

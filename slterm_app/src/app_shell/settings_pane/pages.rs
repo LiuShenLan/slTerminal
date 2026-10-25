@@ -335,25 +335,13 @@ impl SettingsPane {
             );
         }
         let import_busy = self.theme_import_busy;
-        let export_busy = self.theme_export_busy;
-        let has_custom_theme = self.runtime.custom_theme.is_some();
         let import_label = if import_busy {
             language.text(Message::SettingsAppearanceThemeImportBusy)
         } else {
             language.text(Message::SettingsAppearanceThemeImportAction)
         };
-        let export_label = if export_busy {
-            language.text(Message::SettingsAppearanceThemeExportBusy)
-        } else {
-            language.text(Message::SettingsAppearanceThemeExportAction)
-        };
-        let export_description = if has_custom_theme {
-            language.text(Message::SettingsAppearanceThemeExportDescription)
-        } else {
-            language.text(Message::SettingsAppearanceThemeExportNeedsCustom)
-        };
-        let theme_package_group = self
-            .group(language.text(Message::SettingsAppearanceThemePackage), cx)
+        let theme_import_group = self
+            .group(language.text(Message::SettingsAppearanceThemeLibrary), cx)
             .child(
                 self.row(
                     language.text(Message::SettingsAppearanceThemeImport),
@@ -362,21 +350,7 @@ impl SettingsPane {
                         .label(import_label)
                         .disabled(import_busy)
                         .on_click(cx.listener(|this, _, window, cx| {
-                            this.import_theme_package(window, cx);
-                        }))
-                        .into_any_element(),
-                    cx,
-                ),
-            )
-            .child(
-                self.row(
-                    language.text(Message::SettingsAppearanceThemeExport),
-                    export_description,
-                    Button::new("settings-theme-export")
-                        .label(export_label)
-                        .disabled(export_busy || !has_custom_theme)
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.export_theme_package(window, cx);
+                            this.import_theme(window, cx);
                         }))
                         .into_any_element(),
                     cx,
@@ -439,7 +413,7 @@ impl SettingsPane {
                         ),
                     ),
             )
-            .child(theme_package_group)
+            .child(theme_import_group)
             .child(wallpaper_group)
             .child(
                 self.group(language.text(Message::SettingsAppearanceDisplay), cx)
@@ -982,12 +956,6 @@ impl SettingsPane {
                         BackupCategory::DirectoryHistory,
                         "settings-backup-category-directory_history",
                         language.text(Message::SettingsBackupCategoryDirectoryHistory),
-                        cx,
-                    ))
-                    .child(self.backup_category_row(
-                        BackupCategory::Providers,
-                        "settings-backup-category-providers",
-                        language.text(Message::SettingsBackupCategoryProviders),
                         cx,
                     ))
                     .child(

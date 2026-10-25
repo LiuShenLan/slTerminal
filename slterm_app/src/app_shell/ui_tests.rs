@@ -33,8 +33,6 @@ mod file_tree_tests;
 mod focus_tests;
 mod hooks_tests;
 mod keybind_editor_tests;
-mod runtime_control_tests;
-mod runtime_projection_tests;
 mod sidebar_views_tests;
 mod taskbar_tests;
 mod theme_tests;
@@ -109,17 +107,8 @@ fn open_workspace_with_startup(
     let (ai_tx, ai_rx) = mpsc::channel();
     let mut slot = None;
     let (_root, window) = cx.add_window_view(|window, cx| {
-        let workspace = cx.new(|cx| {
-            SltermWorkspace::new(
-                window,
-                rx,
-                Some(ai_rx),
-                startup,
-                plan,
-                crate::runtime_api::RuntimeHub::new(),
-                cx,
-            )
-        });
+        let workspace =
+            cx.new(|cx| SltermWorkspace::new(window, rx, Some(ai_rx), startup, plan, cx));
         slot = Some(workspace.clone());
         Root::new(workspace, window, cx)
     });
@@ -211,6 +200,62 @@ fn ai_hook_pump_routes_event_to_the_owning_pane_host(cx: &mut TestAppContext) {
     window.run_until_parked();
     let status = workspace.read_with(cx, |ws, _| ws.agent_status(pane_id));
     assert_eq!(status, Some(crate::ai_agents::AgentStatus::Working));
+}
+
+/// 取当前界面语言的提示框按钮标签。
+fn ui_label(cx: &mut TestAppContext, message: crate::i18n::Message) -> String {
+    cx.update(|cx| {
+        cx.global::<super::config::Settings>()
+            .language
+            .text(message)
+            .to_owned()
+    })
+}
+
+/// 忙碌 pane 的关闭确认可直接由稳定 hook 状态驱动，无需旧 Runtime 投影。
+#[gpui::test]
+fn busy_agent_close_requires_confirmation_before_pane_removal(cx: &mut TestAppContext) {
+    let (workspace, mut window, ai_tx) = open_workspace_with_ai(cx);
+    window.dispatch_action(SplitRight);
+    window.run_until_parked();
+    let busy = PaneId(2);
+    ai_tx
+        .send(ai_prompt_event(busy.0, "busy-close-session"))
+        .unwrap();
+    window.executor().advance_clock(Duration::from_millis(80));
+    window.run_until_parked();
+    assert_eq!(
+        workspace.read_with(cx, |ws, _| ws.agent_status(busy)),
+        Some(crate::ai_agents::AgentStatus::Working)
+    );
+
+    window.dispatch_action(CloseActivePane);
+    window.run_until_parked();
+    assert!(window.has_pending_prompt(), "忙碌关闭必须先确认");
+    assert!(
+        workspace
+            .read_with(cx, |ws, _| ws.agent_status(busy))
+            .is_some()
+    );
+    let cancel = ui_label(cx, crate::i18n::Message::EditorCancel);
+    window.simulate_prompt_answer(&cancel);
+    window.run_until_parked();
+    assert!(
+        workspace
+            .read_with(cx, |ws, _| ws.agent_status(busy))
+            .is_some()
+    );
+
+    window.dispatch_action(CloseActivePane);
+    window.run_until_parked();
+    let confirm = ui_label(cx, crate::i18n::Message::TerminalCloseBusyConfirm);
+    window.simulate_prompt_answer(&confirm);
+    window.run_until_parked();
+    assert_eq!(
+        workspace.read_with(cx, |ws, _| ws.agent_status(busy)),
+        None,
+        "确认后才摘除 pane 与其 Agent 宿主"
+    );
 }
 
 /// 画一帧并清 arena(现有 UI 测试的统一收尾姿势)。

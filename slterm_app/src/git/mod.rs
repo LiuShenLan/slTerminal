@@ -1,19 +1,16 @@
 //! git 执行体 facade(已裁「子进程统一」)。
 //!
 //! 旧栈 `src-tauri/src/git/` 是 git2(libgit2 vendored)封装;新世界不移植
-//! git2,操作面统一走 git CLI 子进程(上游子进程形态)。本模块只立只读面:
-//! 仓库根解析 + HEAD 文件字节——`gitshow` 只读臂的数据源。status/diff/hunks/
-//! rollback/unstage 四方法由执行器消费;本模块保留统一执行器形状:
-//! 单构造口 [`command`],每命令 `--no-optional-locks`(边界条 7,
-//! 禁触发 index 锁与后台 gc),argv 不经 shell,Windows 挂 CREATE_NO_WINDOW。
+//! git2,操作面统一走 git CLI 子进程(上游子进程形态)。本模块提供只读面:
+//! 仓库根解析、HEAD 文件字节、status 与 hunks;单一构造口 [`command`]
+//! 保证每命令 `--no-optional-locks`(禁触发 index 锁与后台 gc),argv 不经
+//! shell,Windows 挂 CREATE_NO_WINDOW。
 //!
-//! 旧 git2 语义资产(五份因果档案)转测试保留,按步骤迁移:**HEAD 不存在
-//! 错误契约**——`UnbornBranch`(尚无提交)与「文件不在 HEAD tree」统一报
+//! HEAD 不存在时,`UnbornBranch`(尚无提交)与「文件不在 HEAD tree」统一报
 //! [`GitError::NotInHead`],消息含「HEAD 中不存在」;权限/损坏经
 //! [`classify_git_failure`] 细分为 [`GitError::AccessDenied`]/
 //! [`GitError::Corrupt`]。UI 占位文案归 i18n,不解析具体错误内容。
-//! 只读消费面的短 TTL 缓存见 [`status_cached`]/[`repository_root_cached`];
-//! 不扫 ignored/rename 双检/rollback 三方字节一致保留为对照用例。
+//! 只读消费面的短 TTL 缓存见 [`status_cached`]/[`repository_root_cached`]。
 
 use std::collections::HashMap;
 use std::io::Read as _;
@@ -67,8 +64,7 @@ pub(crate) fn command(cwd: &Path) -> Command {
 
 /// 只读 git 快照的短 TTL:同一 root 的连续/并发读取在窗口内共享一次子进程。
 ///
-/// 500ms 只影响 gutter/文件树的最多半个窗口陈旧度;写路径(rollback、runtime
-/// revision 校验)一律绕过缓存,正确性不依赖本值。
+/// 500ms 只影响 gutter/文件树的最多半个窗口陈旧度。
 const STATUS_CACHE_TTL: Duration = Duration::from_millis(500);
 
 /// 仓库根解析缓存的 TTL(与状态快照同窗)。
@@ -92,9 +88,7 @@ struct RootCacheEntry {
 
 /// 路径所在 worktree 的根(`git rev-parse --show-toplevel`)。
 ///
-/// `verify_repository(pane_cwd, repo_root)` 的 `repo_root` 数据源:
-/// 的 `git.*` UI 执行器以本函数重查仓库根,与 `expected_cwd` 核对。
-/// 写路径/runtime 校验用本函数(实时);只读消费面用
+/// `head_file` 经本函数实时解析工作树；gutter 等连续只读消费面用
 /// [`repository_root_cached`]。
 pub(crate) fn repository_root(path: &Path) -> Result<PathBuf, GitError> {
     resolve_repository_root(&repository_root_anchor(path))
@@ -261,114 +255,6 @@ fn verify_head(root: &Path) -> Result<(), GitError> {
     }
 }
 
-/// 冲突三栏 stage 的单文件读取上限(展示与「采用」动作共用;超限即截断)。
-pub(crate) const CONFLICT_STAGE_LIMIT: usize = 4 * 1024 * 1024;
-
-/// 单个冲突文件的三种 index stage 内容(1=base、2=ours、3=theirs)。
-///
-/// 缺失 stage 为 `None`(add/add、modify/delete 等形态);文本按 UTF-8
-/// lossy 解码仅供展示,`valid_utf8` 记录原始字节是否可无损写回,
-/// `truncated` 标记该栏是否因超出上限被截断(截断内容禁止用于写盘)。
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct ConflictStages {
-    pub base: Option<String>,
-    pub ours: Option<String>,
-    pub theirs: Option<String>,
-    /// 各栏原始字节是否合法 UTF-8(顺序 base/ours/theirs)。
-    pub valid_utf8: [bool; 3],
-    /// 各栏是否被截断(顺序 base/ours/theirs)。
-    pub truncated: [bool; 3],
-}
-
-/// 读取冲突文件的 `:1:/:2:/:3:` 三 stage。
-///
-/// 走既有 [`command`] 执行体(`--no-optional-locks`),每 stage 先
-/// `cat-file -e` 判存在性:不存在 = 该 stage 为 `None`,不再起 `show`。
-/// 缺失/非冲突文件不报错;权限/损坏按 [`classify_git_failure`] 收口。
-pub(crate) fn conflict_stages(root: &Path, relative: &str) -> Result<ConflictStages, GitError> {
-    conflict_stages_with_limit(root, relative, CONFLICT_STAGE_LIMIT)
-}
-
-/// 上限可注入的 stage 读取(测试截断语义用)。
-fn conflict_stages_with_limit(
-    root: &Path,
-    relative: &str,
-    limit: usize,
-) -> Result<ConflictStages, GitError> {
-    // 固定顺序 = base/ours/theirs,与 `ConflictStages` 的数组下标同源。
-    let mut stages = ConflictStages::default();
-    for (slot, stage) in [(0usize, 1u8), (1, 2), (2, 3)] {
-        let spec = format!(":{stage}:{relative}");
-        let Some((bytes, truncated)) = show_stage_bounded(root, &spec, limit)? else {
-            continue;
-        };
-        stages.valid_utf8[slot] = std::str::from_utf8(&bytes).is_ok();
-        stages.truncated[slot] = truncated;
-        let text = String::from_utf8_lossy(&bytes).into_owned();
-        match slot {
-            0 => stages.base = Some(text),
-            1 => stages.ours = Some(text),
-            _ => stages.theirs = Some(text),
-        }
-    }
-    Ok(stages)
-}
-
-/// 单个 stage 的有界读取;stage 不存在返回 `Ok(None)`。
-fn show_stage_bounded(
-    root: &Path,
-    spec: &str,
-    limit: usize,
-) -> Result<Option<(Vec<u8>, bool)>, GitError> {
-    let precheck = command(root)
-        .args(["cat-file", "-e", spec])
-        .output()
-        .map_err(|error| GitError::Unavailable(format!("无法运行 git: {error}")))?;
-    if !precheck.status.success() {
-        let stderr = String::from_utf8_lossy(&precheck.stderr);
-        // 权限/损坏必须上抛;「stage 不存在」/「不在 index」是正常语义。
-        if let Some(error) = classify_git_failure(&stderr) {
-            return Err(error);
-        }
-        if stderr.contains("not a git repository") {
-            return Err(command_failure(root, "cat-file", &precheck.stderr));
-        }
-        return Ok(None);
-    }
-    let mut child = command(root)
-        .args(["show", spec])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| GitError::Unavailable(format!("无法运行 git: {error}")))?;
-    let mut stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| GitError::Command("无法打开 git show 管道".to_owned()))?;
-    let mut bytes = Vec::new();
-    stdout
-        .by_ref()
-        .take(limit.saturating_add(1) as u64)
-        .read_to_end(&mut bytes)
-        .map_err(|error| GitError::Command(format!("读取冲突 stage 失败: {error}")))?;
-    let truncated = bytes.len() > limit;
-    if truncated {
-        bytes.truncate(limit);
-    }
-    // 截断时子进程仍可能继续写管道:先杀再收尸(stdout 句柄已 drop)。
-    drop(stdout);
-    if truncated {
-        let _ = child.kill();
-    }
-    let output = child
-        .wait_with_output()
-        .map_err(|error| GitError::Command(format!("等待 git show 失败: {error}")))?;
-    if !truncated && !output.status.success() {
-        return Err(command_failure(root, "show", &output.stderr));
-    }
-    Ok(Some((bytes, truncated)))
-}
-
 /// 一条统一 diff hunk(git `@@ -a,b +c,d @@` 解析)。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct FileHunk {
@@ -389,12 +275,9 @@ pub(crate) enum FileStatus {
     Conflicted,
 }
 
-/// `git status --porcelain=v2 --branch -z` 解析结果(展示面与写操作 revision
-/// 共用;子进程统一后本解析是唯一实现)。
+/// `git status --porcelain=v2 --branch -z` 解析结果；porcelain 解析只在本模块实现。
 #[derive(Clone, Debug, Default)]
 pub(crate) struct StatusSnapshot {
-    /// `sha256(porcelain stdout)` 的 64 位 hex——写操作防陈旧 revision。
-    pub digest: String,
     pub branch: String,
     pub head: String,
     pub upstream: Option<String>,
@@ -427,8 +310,7 @@ impl StatusEntry {
 /// 采集仓库状态快照;每条命令都带 `--no-optional-locks`。
 ///
 /// `--untracked-files=all`:未跟踪目录展开为单文件条目,单文件状态可从
-/// 共享快照直接派生(不再为路径单独 spawn 一次 status)。写路径与 revision
-/// 校验使用本函数(实时)。
+/// 共享快照直接派生(不再为路径单独 spawn 一次 status)。
 pub(crate) fn status(root: &Path) -> Result<StatusSnapshot, GitError> {
     let output = command(root)
         .arg("--literal-pathspecs")
@@ -444,18 +326,14 @@ pub(crate) fn status(root: &Path) -> Result<StatusSnapshot, GitError> {
     if !output.status.success() {
         return Err(command_failure(root, "status", &output.stderr));
     }
-    let raw = String::from_utf8_lossy(&output.stdout).into_owned();
-    let mut snapshot =
-        parse_status(&raw).map_err(|code| GitError::Command(format!("status 解析失败: {code}")))?;
-    snapshot.digest = sha256_hex(&output.stdout);
-    Ok(snapshot)
+    let raw = String::from_utf8_lossy(&output.stdout);
+    parse_status(&raw).map_err(|code| GitError::Command(format!("status 解析失败: {code}")))
 }
 
 /// 只读消费面的状态快照:进程级单槽短 TTL 缓存。
 ///
 /// 同 root 的连续/并发读取共享一次 `git status` 子进程;调用期间持锁,后到
-/// 者等待后直接命中新快照。缓存只准 gutter/文件树等只读面使用;rollback 与
-/// runtime revision 校验必须走 [`status`]/[`file_status_uncached`]。
+/// 者等待后直接命中新快照。缓存只准 gutter/文件树等只读面使用。
 pub(crate) fn status_cached(root: &Path) -> Result<Arc<StatusSnapshot>, GitError> {
     status_cached_with(root, Instant::now(), status)
 }
@@ -575,12 +453,6 @@ pub(crate) fn parse_status(output: &str) -> Result<StatusSnapshot, &'static str>
 /// `git status -- path`。无记录 = `Ok(None)`。
 pub(crate) fn file_status(root: &Path, relative: &str) -> Result<Option<FileStatus>, GitError> {
     let snapshot = status_cached(root)?;
-    Ok(file_status_from_snapshot(&snapshot, relative))
-}
-
-/// 写路径专用的实时单文件状态:绕过短 TTL 缓存(rollback 判定)。
-fn file_status_uncached(root: &Path, relative: &str) -> Result<Option<FileStatus>, GitError> {
-    let snapshot = status(root)?;
     Ok(file_status_from_snapshot(&snapshot, relative))
 }
 
@@ -711,30 +583,6 @@ pub(crate) fn file_hunks(root: &Path, relative: &str) -> Result<Vec<FileHunk>, G
     Ok(parse_hunks(&String::from_utf8_lossy(&output.stdout)))
 }
 
-/// 文件相对 HEAD 的统一 diff 文本(协议面 `git.diff` 的展示载荷)。
-pub(crate) fn diff_text(root: &Path, relative: &str) -> Result<String, GitError> {
-    if verify_head(root).is_err() {
-        return Ok(String::new());
-    }
-    let output = command(root)
-        .arg("--literal-pathspecs")
-        .args([
-            "diff",
-            "--unified=3",
-            "--no-color",
-            "--no-ext-diff",
-            "HEAD",
-            "--",
-            relative,
-        ])
-        .output()
-        .map_err(|error| GitError::Unavailable(format!("无法运行 git: {error}")))?;
-    if !output.status.success() {
-        return Err(command_failure(root, "diff", &output.stderr));
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
-}
-
 /// 解析 `@@ -old_start,old_lines +new_start,new_lines @@` 行(缺省行数 = 1)。
 pub(crate) fn parse_hunks(diff: &str) -> Vec<FileHunk> {
     let mut hunks = Vec::new();
@@ -771,55 +619,6 @@ fn parse_hunk_range(value: &str) -> Option<(u32, u32)> {
         None => (value, "1"),
     };
     Some((start.parse().ok()?, lines.parse().ok()?))
-}
-
-/// 回滚单文件到 HEAD 字节(索引与工作区同时复位 = 三方字节一致)。
-///
-/// 未跟踪文件 = 删除工作区新文件;目录回滚拒绝(运行时路径是文件粒度)。
-pub(crate) fn rollback(root: &Path, relative: &str) -> Result<(), GitError> {
-    let target = root.join(relative.replace('/', std::path::MAIN_SEPARATOR_STR));
-    if target.is_dir() {
-        return Err(GitError::Command("目录不支持回滚".to_owned()));
-    }
-    // 写路径不得吃缓存:回滚前必须用实时状态判定文件当前所属分类。
-    match file_status_uncached(root, relative)? {
-        Some(FileStatus::Untracked) => std::fs::remove_file(&target).map_err(|error| {
-            GitError::Command(format!("删除未跟踪文件失败 {}: {error}", target.display()))
-        }),
-        None => Ok(()),
-        Some(_) => {
-            verify_head(root)?;
-            let output = command(root)
-                .arg("--literal-pathspecs")
-                .args(["checkout", "HEAD", "--", relative])
-                .output()
-                .map_err(|error| GitError::Unavailable(format!("无法运行 git: {error}")))?;
-            if output.status.success() {
-                Ok(())
-            } else {
-                Err(command_failure(root, "checkout", &output.stderr))
-            }
-        }
-    }
-}
-
-/// 取消暂存(索引 ← HEAD;工作区字节不动);unborn HEAD 回退 `git rm --cached`。
-pub(crate) fn unstage(root: &Path, relative: &str) -> Result<(), GitError> {
-    let args: &[&str] = if verify_head(root).is_ok() {
-        &["restore", "--staged", "--", relative]
-    } else {
-        &["rm", "--cached", "--ignore-unmatch", "--", relative]
-    };
-    let output = command(root)
-        .arg("--literal-pathspecs")
-        .args(args)
-        .output()
-        .map_err(|error| GitError::Unavailable(format!("无法运行 git: {error}")))?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(command_failure(root, args[0], &output.stderr))
-    }
 }
 
 /// 路径 → 仓库根相对路径(gutter/diff 的 file-scoped 命令参数)。
@@ -874,17 +673,6 @@ fn command_failure(root: &Path, operation: &str, stderr: &[u8]) -> GitError {
     } else {
         GitError::Command(format!("git {operation} 失败: {reason}"))
     }
-}
-
-/// `sha256` 64 位 hex(写操作 revision 摘要)。
-fn sha256_hex(bytes: &[u8]) -> String {
-    use sha2::{Digest as _, Sha256};
-    let mut text = String::with_capacity(64);
-    for byte in Sha256::digest(bytes) {
-        use std::fmt::Write as _;
-        let _ = write!(text, "{byte:02x}");
-    }
-    text
 }
 
 /// 绝对路径 → 仓库根相对路径(`/` 分隔,git tree 路径形态)。
@@ -955,7 +743,6 @@ mod git_tests {
         let read = |_: &Path| {
             calls.set(calls.get() + 1);
             Ok(StatusSnapshot {
-                digest: calls.get().to_string(),
                 branch: "main".into(),
                 head: "abc".into(),
                 ..StatusSnapshot::default()
@@ -972,7 +759,6 @@ mod git_tests {
             status_cached_with(root, start + Duration::from_millis(600), read).expect("过期");
         assert_eq!(calls.get(), 2, "过期后必须重新读取");
         assert!(!Arc::ptr_eq(&first, &third));
-        assert_eq!(third.digest, "2");
     }
 
     /// 仓库根缓存(注入时钟):同一起始目录 TTL 内只解析一次。
@@ -1122,55 +908,6 @@ mod git_tests {
         );
     }
 
-    /// 写路径绕过缓存:缓存锁定的旧状态不得左右 rollback 的实时判定。
-    #[test]
-    fn rollback_reads_realtime_status_and_bypasses_the_snapshot_cache() {
-        let repository = test_repository();
-        let root = repository.path();
-
-        // 方向一:缓存锁定「无记录」,实时是未跟踪 → rollback 必须删除文件。
-        let late = root.join("late-untracked.txt");
-        let polluted = status_cached_with(root, Instant::now() + Duration::from_secs(3600), status)
-            .expect("锁定无记录快照");
-        assert_eq!(
-            file_status_from_snapshot(&polluted, "late-untracked.txt"),
-            None
-        );
-        std::fs::write(&late, "fresh\n").unwrap();
-        rollback(root, "late-untracked.txt").expect("未跟踪回滚");
-        assert!(!late.exists(), "实时未跟踪状态必须驱动删除");
-
-        // 方向二:缓存锁定「未跟踪」,实时已提交 → rollback 不得删文件。
-        let settled = root.join("settled.txt");
-        std::fs::write(&settled, "settled\n").unwrap();
-        let polluted = status_cached_with(root, Instant::now() + Duration::from_secs(7200), status)
-            .expect("锁定未跟踪快照");
-        assert_eq!(
-            file_status_from_snapshot(&polluted, "settled.txt"),
-            Some(FileStatus::Untracked)
-        );
-        assert!(git(root, ["add", "settled.txt"]).status.success());
-        let commit = git(
-            root,
-            [
-                "-c",
-                "user.name=slTerminal Test",
-                "-c",
-                "user.email=slterm@example.invalid",
-                "commit",
-                "-m",
-                "settle",
-            ],
-        );
-        assert!(
-            commit.status.success(),
-            "commit: {}",
-            String::from_utf8_lossy(&commit.stderr)
-        );
-        rollback(root, "settled.txt").expect("实时已跟踪且干净 = 空操作");
-        assert_eq!(std::fs::read(&settled).unwrap(), b"settled\n");
-    }
-
     /// HEAD 字节 ≠ 工作区字节:gitshow 数据面读的是已提交内容。
     #[test]
     fn head_file_returns_the_committed_blob_not_the_worktree_copy() {
@@ -1222,94 +959,6 @@ mod git_tests {
         let message = error.to_string();
         assert!(message.contains("HEAD 中不存在"), "{message}");
         assert!(message.contains("untracked.txt"), "{message}");
-    }
-
-    /// 真冲突仓(modify/modify):三 stage 分别读到 base/ours/theirs 字节。
-    #[test]
-    fn conflict_stages_read_base_ours_and_theirs_from_a_merge_conflict() {
-        let repository = conflict_repository();
-        let stages = conflict_stages(repository.path(), "conflicted.txt").expect("stage 读取");
-        assert_eq!(stages.base.as_deref(), Some("line1\nbase\nline3\n"));
-        assert_eq!(stages.ours.as_deref(), Some("line1\nours\nline3\n"));
-        assert_eq!(stages.theirs.as_deref(), Some("line1\ntheirs\nline3\n"));
-        assert_eq!(stages.valid_utf8, [true; 3]);
-        assert_eq!(stages.truncated, [false; 3]);
-    }
-
-    /// 非冲突文件没有 stage 1/2/3:三栏全 None,不报错。
-    #[test]
-    fn conflict_stages_are_all_none_for_a_non_conflicted_file() {
-        let repository = test_repository();
-        let stages = conflict_stages(repository.path(), "tracked.txt").expect("非冲突文件");
-        assert!(stages.base.is_none(), "{stages:?}");
-        assert!(stages.ours.is_none(), "{stages:?}");
-        assert!(stages.theirs.is_none(), "{stages:?}");
-    }
-
-    /// add/add 冲突没有 base stage:2/3 存在,1 缺失。
-    #[test]
-    fn add_add_conflict_reports_a_missing_base_stage() {
-        let repository = test_repository();
-        let root = repository.path();
-        assert!(git(root, ["checkout", "-b", "other"]).status.success());
-        std::fs::write(root.join("added.txt"), "theirs\n").unwrap();
-        assert!(git(root, ["add", "added.txt"]).status.success());
-        let theirs = git(
-            root,
-            [
-                "-c",
-                "user.name=slTerminal Test",
-                "-c",
-                "user.email=slterm@example.invalid",
-                "commit",
-                "-m",
-                "theirs",
-            ],
-        );
-        assert!(
-            theirs.status.success(),
-            "{}",
-            String::from_utf8_lossy(&theirs.stderr)
-        );
-        assert!(git(root, ["checkout", "main"]).status.success());
-        std::fs::write(root.join("added.txt"), "ours\n").unwrap();
-        assert!(git(root, ["add", "added.txt"]).status.success());
-        let ours = git(
-            root,
-            [
-                "-c",
-                "user.name=slTerminal Test",
-                "-c",
-                "user.email=slterm@example.invalid",
-                "commit",
-                "-m",
-                "ours",
-            ],
-        );
-        assert!(
-            ours.status.success(),
-            "{}",
-            String::from_utf8_lossy(&ours.stderr)
-        );
-        let merge = git(root, ["merge", "other"]);
-        assert!(!merge.status.success(), "夹具必须制造 add/add 冲突");
-
-        let stages = conflict_stages(root, "added.txt").expect("stage 读取");
-        assert!(stages.base.is_none(), "{stages:?}");
-        assert_eq!(stages.ours.as_deref(), Some("ours\n"));
-        assert_eq!(stages.theirs.as_deref(), Some("theirs\n"));
-    }
-
-    /// 上限截断:只读 limit 字节并标记 truncated(截断内容禁止写盘)。
-    #[test]
-    fn conflict_stage_reads_are_bounded_and_report_truncation() {
-        let repository = conflict_repository();
-        let stages =
-            conflict_stages_with_limit(repository.path(), "conflicted.txt", 4).expect("stage 读取");
-        assert_eq!(stages.base.as_deref(), Some("line"));
-        assert_eq!(stages.ours.as_deref(), Some("line"));
-        assert_eq!(stages.theirs.as_deref(), Some("line"));
-        assert_eq!(stages.truncated, [true; 3]);
     }
 
     /// 非仓库路径:NotRepository(不 panic、不误报 HEAD)。
@@ -1379,9 +1028,9 @@ mod git_tests {
         );
     }
 
-    /// 真仓库:status 摘要 64 hex;修改/暂存/回滚/取消暂存全链字节正确。
+    /// 真仓库：文件状态与 hunk 跟随工作区修改。
     #[test]
-    fn repository_status_and_file_operations_round_trip() {
+    fn repository_status_and_hunks_track_worktree_changes() {
         let repository = test_repository();
         let root = repository.path();
         let path = root.join("tracked.txt");
@@ -1389,52 +1038,14 @@ mod git_tests {
 
         std::fs::write(&path, "worktree edit\nmore\n").unwrap();
         let snapshot = status(root).expect("status 快照");
-        assert_eq!(snapshot.digest.len(), 64, "写操作 revision 必须是 64 hex");
-        assert!(snapshot.digest.bytes().all(|byte| byte.is_ascii_hexdigit()));
-        // 写操作后的断言必须读实时状态:短 TTL 缓存可能仍是操作前的快照。
         assert_eq!(
-            file_status_uncached(root, &relative).unwrap(),
+            file_status_from_snapshot(&snapshot, &relative),
             Some(FileStatus::Modified)
         );
         let hunks = file_hunks(root, &relative).unwrap();
         assert_eq!(hunks.len(), 1, "单处修改应解析出一条 hunk: {hunks:?}");
         assert_eq!((hunks[0].old_start, hunks[0].old_lines), (1, 1));
         assert_eq!((hunks[0].new_start, hunks[0].new_lines), (1, 2));
-
-        // 回滚:工作区与索引都回到 HEAD 字节。
-        rollback(root, &relative).unwrap();
-        assert_eq!(std::fs::read(&path).unwrap(), b"tracked\n");
-        assert_eq!(file_status_uncached(root, &relative).unwrap(), None);
-
-        // 暂存后 unstage:索引清空、工作区保留修改。
-        std::fs::write(&path, "staged edit\n").unwrap();
-        assert!(
-            git(root, ["add", "tracked.txt"]).status.success(),
-            "git add"
-        );
-        assert_eq!(
-            file_status_uncached(root, &relative).unwrap(),
-            Some(FileStatus::Modified)
-        );
-        unstage(root, &relative).unwrap();
-        let after = status(root).unwrap();
-        assert!(
-            after.entries.iter().all(|entry| !entry.staged()),
-            "unstage 后索引不得再有该文件: {:?}",
-            after.entries
-        );
-        assert_eq!(std::fs::read(&path).unwrap(), b"staged edit\n");
-
-        // 未跟踪文件回滚 = 删除工作区新文件。
-        let fresh = root.join("fresh.txt");
-        std::fs::write(&fresh, b"new\n").unwrap();
-        let fresh_relative = relative_path(root, &fresh).unwrap();
-        assert_eq!(
-            file_status_uncached(root, &fresh_relative).unwrap(),
-            Some(FileStatus::Untracked)
-        );
-        rollback(root, &fresh_relative).unwrap();
-        assert!(!fresh.exists(), "未跟踪文件回滚必须删除");
     }
 
     /// stderr 分类:权限/损坏各自归位;普通失败与空 stderr 返回 None。
@@ -1471,69 +1082,6 @@ mod git_tests {
             "普通失败交给调用方默认臂"
         );
         assert!(classify_git_failure("").is_none(), "空 stderr 不得误分类");
-    }
-
-    /// unborn HEAD:unstage 清索引条目,工作区文件保留并回到未跟踪。
-    #[test]
-    fn unstage_unborn_head_untracks_without_touching_the_worktree() {
-        let directory = tempfile::tempdir().unwrap();
-        let root = directory.path();
-        assert!(
-            git(root, ["init", "--initial-branch=main"])
-                .status
-                .success(),
-            "git init"
-        );
-        let path = root.join("new.txt");
-        std::fs::write(&path, b"new bytes\n").unwrap();
-        assert!(git(root, ["add", "new.txt"]).status.success(), "git add");
-
-        unstage(root, "new.txt").unwrap();
-
-        let after = status(root).unwrap();
-        assert!(
-            after.entries.iter().all(|entry| !entry.staged()),
-            "索引不得再有暂存条目: {:?}",
-            after.entries
-        );
-        assert_eq!(
-            file_status_uncached(root, "new.txt").unwrap(),
-            Some(FileStatus::Untracked)
-        );
-        assert_eq!(std::fs::read(&path).unwrap(), b"new bytes\n");
-    }
-
-    /// 已提交仓库:staged 新文件 unstage 后回到未跟踪且字节不变。
-    #[test]
-    fn unstage_staged_new_file_keeps_worktree_bytes_and_untracks() {
-        let repository = test_repository();
-        let root = repository.path();
-        let path = root.join("staged-new.txt");
-        let bytes = b"staged new file\n";
-        std::fs::write(&path, bytes).unwrap();
-        assert!(
-            git(root, ["add", "staged-new.txt"]).status.success(),
-            "git add"
-        );
-        assert_eq!(
-            file_status_uncached(root, "staged-new.txt").unwrap(),
-            Some(FileStatus::Added)
-        );
-
-        unstage(root, "staged-new.txt").unwrap();
-
-        assert_eq!(std::fs::read(&path).unwrap(), bytes);
-        assert_eq!(
-            file_status_uncached(root, "staged-new.txt").unwrap(),
-            Some(FileStatus::Untracked)
-        );
-        let after = status(root).unwrap();
-        let entry = after
-            .entries
-            .iter()
-            .find(|entry| entry.path == "staged-new.txt")
-            .expect("未跟踪条目必须可见");
-        assert_eq!((entry.index, entry.worktree), ('?', '?'));
     }
 
     /// hunk 解析:缺省行数与多 hunk 行号保持精确。
@@ -1613,84 +1161,6 @@ mod git_tests {
             "git commit failed: {}",
             String::from_utf8_lossy(&commit.stderr)
         );
-        directory
-    }
-
-    /// 真 modify/modify 冲突仓:base/ours/theirs 三版都已提交。
-    fn conflict_repository() -> tempfile::TempDir {
-        let directory = tempfile::tempdir().expect("create conflict repository");
-        let root = directory.path();
-        assert!(
-            git(root, ["init", "--initial-branch=main"])
-                .status
-                .success()
-        );
-        assert!(
-            git(root, ["config", "core.autocrlf", "false"])
-                .status
-                .success()
-        );
-        std::fs::write(root.join("conflicted.txt"), "line1\nbase\nline3\n").unwrap();
-        assert!(git(root, ["add", "conflicted.txt"]).status.success());
-        let base = git(
-            root,
-            [
-                "-c",
-                "user.name=slTerminal Test",
-                "-c",
-                "user.email=slterm@example.invalid",
-                "commit",
-                "-m",
-                "base",
-            ],
-        );
-        assert!(
-            base.status.success(),
-            "{}",
-            String::from_utf8_lossy(&base.stderr)
-        );
-        assert!(git(root, ["checkout", "-b", "other"]).status.success());
-        std::fs::write(root.join("conflicted.txt"), "line1\ntheirs\nline3\n").unwrap();
-        assert!(git(root, ["add", "conflicted.txt"]).status.success());
-        let theirs = git(
-            root,
-            [
-                "-c",
-                "user.name=slTerminal Test",
-                "-c",
-                "user.email=slterm@example.invalid",
-                "commit",
-                "-m",
-                "theirs",
-            ],
-        );
-        assert!(
-            theirs.status.success(),
-            "{}",
-            String::from_utf8_lossy(&theirs.stderr)
-        );
-        assert!(git(root, ["checkout", "main"]).status.success());
-        std::fs::write(root.join("conflicted.txt"), "line1\nours\nline3\n").unwrap();
-        assert!(git(root, ["add", "conflicted.txt"]).status.success());
-        let ours = git(
-            root,
-            [
-                "-c",
-                "user.name=slTerminal Test",
-                "-c",
-                "user.email=slterm@example.invalid",
-                "commit",
-                "-m",
-                "ours",
-            ],
-        );
-        assert!(
-            ours.status.success(),
-            "{}",
-            String::from_utf8_lossy(&ours.stderr)
-        );
-        let merge = git(root, ["merge", "other"]);
-        assert!(!merge.status.success(), "夹具必须制造 modify/modify 冲突");
         directory
     }
 

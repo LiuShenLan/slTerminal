@@ -23,7 +23,7 @@ mod spawn;
 use blocking::{UnblockedReader, UnblockedWriter};
 use conpty::Conpty as Backend;
 pub use conpty::{ConptyStatus, conpty_status};
-pub use environment::refresh_environment;
+pub use environment::{Environment, refresh_environment};
 use miow::pipe::{AnonRead, AnonWrite};
 use polling::{Event, Poller};
 pub use shell::{ShellKind, resolve_explicit_command, resolve_shell, shell_kind_of};
@@ -318,6 +318,7 @@ mod test {
             drain_on_exit: true,
             env: Default::default(),
             env_is_complete: false,
+            inherited_env_exclusions: Default::default(),
             escape_args: false,
             // 上游此字面量之后的增量字段:`conpty_sideload` 全域化,
             // `conpty_input_modes`(矩阵默认三态)。

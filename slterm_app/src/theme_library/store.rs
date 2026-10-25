@@ -132,10 +132,6 @@ impl ThemeLibraryStore {
         Self { root: root.into() }
     }
 
-    pub fn root(&self) -> &Path {
-        &self.root
-    }
-
     /// 某自定义主题的精确路径(诊断/测试共用同一构造规则)。
     pub fn path_for(&self, id: &str) -> Result<PathBuf, StoreError> {
         validate_id(id)?;
@@ -238,6 +234,15 @@ impl ThemeLibraryStore {
         document: &ThemeDocument,
         precondition: RevisionPrecondition,
     ) -> Result<ThemeDocument, StoreError> {
+        self.save_internal(document, precondition, None)
+    }
+
+    fn save_internal(
+        &self,
+        document: &ThemeDocument,
+        precondition: RevisionPrecondition,
+        import_source: Option<&Path>,
+    ) -> Result<ThemeDocument, StoreError> {
         if document.is_builtin() {
             return Err(StoreError::BuiltinReadOnly(document.name().to_owned()));
         }
@@ -245,6 +250,9 @@ impl ThemeLibraryStore {
             .id()
             .ok_or_else(|| StoreError::InvalidDocument("custom themes require an id".to_owned()))?;
         let path = self.path_for(id)?;
+        if let Some(source) = import_source {
+            self.reject_import_source_locks(source, &path)?;
+        }
         // 取锁前先解析一次:全部运行时标量语义已校验,持锁期间不做 JSON 工作。
         document.definition()?;
         let _global_lock = self.acquire_global_lock()?;
@@ -324,11 +332,31 @@ impl ThemeLibraryStore {
     /// 导入已校验文档为新自定义主题。原生 id 被忽略,导入不可能覆盖
     /// 既有文件;显示名冲突自动消歧。
     pub fn import(&self, document: &ThemeDocument) -> Result<ThemeDocument, StoreError> {
+        self.import_internal(document, None)
+    }
+
+    fn import_internal(
+        &self,
+        document: &ThemeDocument,
+        source: Option<&Path>,
+    ) -> Result<ThemeDocument, StoreError> {
         let snapshot = self.list()?;
         let name = unique_name(document.name(), &snapshot)?;
         let id = self.unique_id(&name, &snapshot)?;
         let candidate = document.with_name(name)?.with_id_and_revision(id, 0);
-        self.save(&candidate, RevisionPrecondition::Absent)
+        self.save_internal(&candidate, RevisionPrecondition::Absent, source)
+    }
+
+    /// 从本次授权的单文件 JSON 导入；来源身份不进入库内，失败不产生部分写入。
+    pub fn import_json_file(&self, path: &Path) -> Result<ThemeDocument, StoreError> {
+        let bytes = read_document_file(path)?.ok_or_else(|| {
+            io_error(
+                path,
+                io::Error::new(io::ErrorKind::NotFound, "theme file not found"),
+            )
+        })?;
+        let document = ThemeDocument::from_json_bytes(&bytes)?;
+        self.import_internal(&document, Some(path))
     }
 
     /// 条件删除:修订不匹配拒绝(外部编辑不可被静默删掉)。
@@ -357,6 +385,22 @@ impl ThemeLibraryStore {
             });
         }
         fs::remove_file(&path).map_err(|error| io_error(&path, error))
+    }
+
+    fn reject_import_source_locks(&self, source: &Path, target: &Path) -> Result<(), StoreError> {
+        let lock_paths = [
+            crate::atomic_file::lock_path(&self.root.join(".slterm-theme-library")),
+            crate::atomic_file::lock_path(target),
+        ];
+        for lock_path in lock_paths {
+            if paths_refer_to_same_file(source, &lock_path)? {
+                return Err(StoreError::InvalidDocument(format!(
+                    "import source conflicts with theme library lock: {}",
+                    lock_path.display()
+                )));
+            }
+        }
+        Ok(())
     }
 
     fn acquire_global_lock(&self) -> Result<crate::atomic_file::LifetimeFileLock, StoreError> {
@@ -431,6 +475,26 @@ impl ThemeLibraryStore {
 }
 
 fn read_document(path: &Path, expected_id: &str) -> Result<Option<ThemeDocument>, StoreError> {
+    let Some(bytes) = read_document_file(path)? else {
+        return Ok(None);
+    };
+    let document = ThemeDocument::from_json_bytes(&bytes)?;
+    if document.is_builtin() {
+        return Err(StoreError::InvalidDocument(
+            "custom theme files cannot be marked builtin".to_owned(),
+        ));
+    }
+    if document.id() != Some(expected_id) {
+        return Err(StoreError::InvalidDocument(format!(
+            "document id {:?} does not match file id {expected_id}",
+            document.id()
+        )));
+    }
+    Ok(Some(document))
+}
+
+/// 库内文件与外部导入共用的有界读取；缺失由调用方按各自语义处理。
+fn read_document_file(path: &Path) -> Result<Option<Vec<u8>>, StoreError> {
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -474,19 +538,40 @@ fn read_document(path: &Path, expected_id: &str) -> Result<Option<ThemeDocument>
             bytes: bytes.len(),
         }));
     }
-    let document = ThemeDocument::from_json_bytes(&bytes)?;
-    if document.is_builtin() {
-        return Err(StoreError::InvalidDocument(
-            "custom theme files cannot be marked builtin".to_owned(),
-        ));
+    Ok(Some(bytes))
+}
+
+/// 同时按规范路径与卷内文件身份判同，覆盖路径别名和硬链接。
+fn paths_refer_to_same_file(left: &Path, right: &Path) -> Result<bool, StoreError> {
+    let left_canonical = fs::canonicalize(left).map_err(|error| io_error(left, error))?;
+    let right_canonical = match fs::canonicalize(right) {
+        Ok(path) => path,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(io_error(right, error)),
+    };
+    if left_canonical == right_canonical {
+        return Ok(true);
     }
-    if document.id() != Some(expected_id) {
-        return Err(StoreError::InvalidDocument(format!(
-            "document id {:?} does not match file id {expected_id}",
-            document.id()
-        )));
+    let left_identity = file_identity(&left_canonical).map_err(|error| io_error(left, error))?;
+    let right_identity = file_identity(&right_canonical).map_err(|error| io_error(right, error))?;
+    Ok(left_identity == right_identity)
+}
+
+fn file_identity(path: &Path) -> io::Result<(u32, u64)> {
+    use std::os::windows::io::AsRawHandle as _;
+
+    use windows_sys::Win32::Storage::FileSystem::{
+        BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
+    };
+
+    let file = fs::File::open(path)?;
+    // Win32 会完整初始化该 POD；文件句柄在调用期间保持有效。
+    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle() as _, &mut info) } == 0 {
+        return Err(io::Error::last_os_error());
     }
-    Ok(Some(document))
+    let index = (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow);
+    Ok((info.dwVolumeSerialNumber, index))
 }
 
 fn reject_symlink(path: &Path) -> Result<(), StoreError> {
@@ -597,6 +682,15 @@ mod store_tests {
         store.import(&document).unwrap()
     }
 
+    fn import_source_bytes(name: &str) -> Vec<u8> {
+        let mut definition = ThemeDefinition::from_builtin(ThemeName::Nord);
+        definition.name = name.to_owned();
+        super::super::document::from_definition(&definition)
+            .unwrap()
+            .to_json_bytes()
+            .unwrap()
+    }
+
     #[test]
     fn first_save_forks_and_revisions_increment() {
         let (_directory, store) = fixture();
@@ -695,6 +789,123 @@ mod store_tests {
         assert_ne!(first.id(), second.id());
         assert_eq!(first.id(), Some("nord-2"));
         assert_eq!(second.id(), Some("nord-3"));
+    }
+
+    #[test]
+    fn json_file_import_uses_the_existing_store_path() {
+        let (directory, store) = fixture();
+        let mut definition = ThemeDefinition::from_builtin(ThemeName::Nord);
+        definition.name = "External".to_owned();
+        let source = super::super::document::from_definition(&definition)
+            .unwrap()
+            .with_id_and_revision("external-id", 9);
+        let bytes = source.to_json_bytes().unwrap();
+        let path = directory.path().join("source.json");
+        fs::write(&path, &bytes).unwrap();
+
+        let imported = store.import_json_file(&path).unwrap();
+
+        assert_eq!(imported.name(), "External");
+        assert_eq!(imported.id(), Some("external"));
+        assert_eq!(imported.revision(), 1);
+        assert_eq!(store.load("external").unwrap(), imported);
+        assert_eq!(fs::read(path).unwrap(), bytes, "导入不得改写来源文件");
+    }
+
+    #[test]
+    fn invalid_json_file_does_not_touch_the_library() {
+        let (directory, store) = fixture();
+        let path = directory.path().join("broken.json");
+        fs::write(&path, b"not valid JSON").unwrap();
+
+        let error = store.import_json_file(&path).unwrap_err();
+
+        assert!(matches!(
+            error,
+            StoreError::Document(DocumentError::Json(_))
+        ));
+        assert!(store.list().unwrap().custom.is_empty());
+        assert!(
+            !directory.path().join("themes").exists(),
+            "失败不得创建主题库目录"
+        );
+    }
+
+    #[test]
+    fn oversized_json_file_is_rejected_before_import() {
+        let (directory, store) = fixture();
+        let path = directory.path().join("oversized.json");
+        fs::write(&path, vec![b' '; MAX_DOCUMENT_BYTES + 1]).unwrap();
+
+        let error = store.import_json_file(&path).unwrap_err();
+
+        assert!(matches!(
+            error,
+            StoreError::Document(DocumentError::TooLarge { .. })
+        ));
+        assert!(store.list().unwrap().custom.is_empty());
+        assert!(
+            !directory.path().join("themes").exists(),
+            "超限输入不得创建主题库目录"
+        );
+    }
+
+    #[test]
+    fn json_file_import_rejects_global_lock_source() {
+        let (_directory, store) = fixture();
+        fs::create_dir_all(&store.root).unwrap();
+        let path = store.root.join(".slterm-theme-library.slterm-lock");
+        let bytes = import_source_bytes("External");
+        fs::write(&path, &bytes).unwrap();
+
+        let result = store.import_json_file(&path);
+
+        assert!(
+            matches!(result, Err(StoreError::InvalidDocument(_))),
+            "来源与全局锁重合时必须拒绝导入"
+        );
+        assert_eq!(fs::read(&path).unwrap(), bytes, "来源内容必须保持不变");
+        assert!(store.list().unwrap().custom.is_empty());
+    }
+
+    #[test]
+    fn json_file_import_rejects_target_lock_source() {
+        let (_directory, store) = fixture();
+        fs::create_dir_all(&store.root).unwrap();
+        let path = store.root.join("external.slterm-theme.json.slterm-lock");
+        let bytes = import_source_bytes("External");
+        fs::write(&path, &bytes).unwrap();
+
+        let result = store.import_json_file(&path);
+
+        assert!(
+            matches!(result, Err(StoreError::InvalidDocument(_))),
+            "来源与目标锁重合时必须拒绝导入"
+        );
+        assert_eq!(fs::read(&path).unwrap(), bytes, "来源内容必须保持不变");
+        assert!(!store.path_for("external").unwrap().exists());
+        assert!(store.list().unwrap().custom.is_empty());
+    }
+
+    #[test]
+    fn json_file_import_rejects_hard_link_to_global_lock() {
+        let (directory, store) = fixture();
+        fs::create_dir_all(&store.root).unwrap();
+        let lock_path = store.root.join(".slterm-theme-library.slterm-lock");
+        let bytes = import_source_bytes("External");
+        fs::write(&lock_path, &bytes).unwrap();
+        let source = directory.path().join("source.json");
+        fs::hard_link(&lock_path, &source).unwrap();
+
+        let result = store.import_json_file(&source);
+
+        assert!(
+            matches!(result, Err(StoreError::InvalidDocument(_))),
+            "来源与全局锁指向同一文件时必须拒绝导入"
+        );
+        assert_eq!(fs::read(&source).unwrap(), bytes, "来源内容必须保持不变");
+        assert_eq!(fs::read(&lock_path).unwrap(), bytes);
+        assert!(store.list().unwrap().custom.is_empty());
     }
 
     #[test]

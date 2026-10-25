@@ -494,7 +494,7 @@ impl LayoutBuilder<'_> {
         }
         let pixel_size = self.pixel_size(index)?;
         let columns = character.width().unwrap_or(1).max(1) as f32;
-        // 与普通终端字体的半 em 拉丁字符和全 em 宽字符 advance 对齐，
+        // 与等宽正文字体的半 em 拉丁字符和全 em 宽字符 advance 对齐，
         // 不为此再保留另一套字体/塑形器。
         let width = pixel_size * 0.52 * columns;
         let height = pixel_size * 0.78;
@@ -1284,7 +1284,7 @@ impl LayoutBuilder<'_> {
 
     /// 脚本字号在字体自带百分比之上抬高到
     /// [`MIN_SCRIPT_SCALE`] / [`MIN_SCRIPT_SCRIPT_SCALE`]。Latin Modern 要求
-    /// 70%/50%，那是为阅读字号印刷调的；摆在终端等宽正文旁边，它们落到
+    /// 70%/50%，那是为阅读字号印刷调的；摆在等宽正文旁边，它们落到
     /// 14px 与 10px，分式分子不再像与周围散文属于同一文档。
     fn script_scale(&self, script_script: bool) -> Result<f32, MathError> {
         let scale = self

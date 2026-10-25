@@ -1,12 +1,16 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
-use std::ffi::OsStr;
+use std::cmp::Ordering;
+use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::{OsStr, OsString};
 use std::io;
-use std::os::windows::ffi::OsStrExt;
+use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::ptr;
 use std::sync::{Mutex, OnceLock};
 
 use windows_sys::Win32::Foundation::{
     ERROR_FILE_NOT_FOUND, ERROR_MORE_DATA, ERROR_NO_MORE_ITEMS, ERROR_PATH_NOT_FOUND, ERROR_SUCCESS,
+};
+use windows_sys::Win32::Globalization::{
+    CSTR_EQUAL, CSTR_GREATER_THAN, CSTR_LESS_THAN, CompareStringOrdinal,
 };
 use windows_sys::Win32::System::Registry::{
     HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, REG_EXPAND_SZ, REG_SZ, RegCloseKey,
@@ -29,111 +33,175 @@ static ENVIRONMENT_STATE: OnceLock<Mutex<EnvironmentState>> = OnceLock::new();
 /// `options.env` 里的现有条目是 pane 专属覆盖，最后叠加到最新注册表快照上。
 pub fn refresh_environment(options: &mut Options) -> io::Result<()> {
     let state = ENVIRONMENT_STATE
-        .get_or_init(|| Mutex::new(EnvironmentState::new(CaseInsensitiveEnv::from_process())));
+        .get_or_init(|| Mutex::new(EnvironmentState::new(Environment::from_process())));
     let mut state = state
         .lock()
         .map_err(|_| io::Error::other("Windows environment refresh state is poisoned"))?;
     let snapshot = RegistrySnapshot::read()?;
 
     // 只有在注册表读取完整成功后才取走原覆盖项；失败时 pane 仍可沿用旧的继承模式。
-    let overrides = CaseInsensitiveEnv::from_hash_map(std::mem::take(&mut options.env));
-    options.env = state.merge(snapshot, overrides).into_hash_map();
+    let overrides = std::mem::take(&mut options.env);
+    options.env = state.merge(snapshot, overrides);
     options.env_is_complete = true;
     Ok(())
 }
 
-#[derive(Clone, Debug, Default)]
-struct CaseInsensitiveEnv {
-    entries: BTreeMap<String, EnvironmentEntry>,
+/// Windows 子进程环境：名称按系统规则大小写不敏感，名称和值均保留原始 UTF-16。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Environment {
+    entries: BTreeMap<EnvironmentName, EnvironmentEntry>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct EnvironmentEntry {
+    name: OsString,
+    value: OsString,
 }
 
 #[derive(Clone, Debug)]
-struct EnvironmentEntry {
-    name: String,
-    value: String,
+struct EnvironmentName(Vec<u16>);
+
+impl EnvironmentName {
+    fn new(name: impl AsRef<OsStr>) -> Self {
+        Self(name.as_ref().encode_wide().collect())
+    }
 }
 
-impl CaseInsensitiveEnv {
+impl PartialEq for EnvironmentName {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
+}
+
+impl Eq for EnvironmentName {}
+
+impl PartialOrd for EnvironmentName {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for EnvironmentName {
+    fn cmp(&self, other: &Self) -> Ordering {
+        compare_environment_names(&self.0, &other.0)
+    }
+}
+
+impl Environment {
     fn from_process() -> Self {
         let mut environment = Self::default();
         for (name, value) in std::env::vars_os() {
-            environment.insert(
-                name.to_string_lossy().into_owned(),
-                value.to_string_lossy().into_owned(),
-            );
-        }
-        environment
-    }
-
-    fn from_hash_map(entries: HashMap<String, String>) -> Self {
-        let mut environment = Self::default();
-        for (name, value) in entries {
             environment.insert(name, value);
         }
         environment
     }
 
-    fn insert(&mut self, name: String, value: String) {
+    pub fn insert(
+        &mut self,
+        name: impl AsRef<OsStr>,
+        value: impl AsRef<OsStr>,
+    ) -> Option<OsString> {
+        let name = name.as_ref().to_os_string();
+        let value = value.as_ref().to_os_string();
         self.entries
-            .insert(normalize_name(&name), EnvironmentEntry { name, value });
+            .insert(
+                EnvironmentName::new(&name),
+                EnvironmentEntry { name, value },
+            )
+            .map(|previous| previous.value)
     }
 
-    fn append_path(&mut self, name: String, value: String) {
+    fn append_path(&mut self, name: OsString, value: OsString) {
         if value.is_empty() {
             return;
         }
-        let normalized = normalize_name(&name);
+        let normalized = EnvironmentName::new(&name);
         if let Some(existing) = self.entries.get_mut(&normalized) {
-            if !existing.value.is_empty() && !existing.value.ends_with(';') {
-                existing.value.push(';');
+            if !existing.value.is_empty()
+                && existing.value.encode_wide().last() != Some(u16::from(b';'))
+            {
+                existing.value.push(";");
             }
-            existing.value.push_str(&value);
+            existing.value.push(value);
         } else {
             self.entries
                 .insert(normalized, EnvironmentEntry { name, value });
         }
     }
 
-    fn get(&self, name: &str) -> Option<&str> {
+    pub fn get(&self, name: impl AsRef<OsStr>) -> Option<&OsStr> {
         self.entries
-            .get(&normalize_name(name))
-            .map(|entry| entry.value.as_str())
+            .get(&EnvironmentName::new(name))
+            .map(|entry| entry.value.as_os_str())
     }
 
-    fn remove_normalized(&mut self, name: &str) {
+    pub fn remove(&mut self, name: impl AsRef<OsStr>) -> Option<OsString> {
+        self.entries
+            .remove(&EnvironmentName::new(name))
+            .map(|removed| removed.value)
+    }
+
+    fn remove_normalized(&mut self, name: &EnvironmentName) {
         self.entries.remove(name);
     }
 
-    fn into_hash_map(self) -> HashMap<String, String> {
+    pub fn contains_key(&self, name: impl AsRef<OsStr>) -> bool {
+        self.entries.contains_key(&EnvironmentName::new(name))
+    }
+
+    pub fn keys(&self) -> impl Iterator<Item = &OsStr> {
+        self.entries.values().map(|entry| entry.name.as_os_str())
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&OsStr, &OsStr)> {
         self.entries
-            .into_values()
-            .map(|entry| (entry.name, entry.value))
-            .collect()
+            .values()
+            .map(|entry| (entry.name.as_os_str(), entry.value.as_os_str()))
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
     }
 }
 
-fn normalize_name(name: &str) -> String {
-    name.to_uppercase()
+pub(super) fn compare_environment_names(left: &[u16], right: &[u16]) -> Ordering {
+    let result = unsafe {
+        CompareStringOrdinal(
+            left.as_ptr(),
+            left.len() as i32,
+            right.as_ptr(),
+            right.len() as i32,
+            1,
+        )
+    };
+    match result {
+        CSTR_LESS_THAN => Ordering::Less,
+        CSTR_EQUAL => Ordering::Equal,
+        CSTR_GREATER_THAN => Ordering::Greater,
+        // 环境变量名受 CreateProcess 环境块上限约束，正常不会失败；异常时仍给出
+        // 全序，不能让排序过程 panic。
+        _ => left.cmp(right),
+    }
 }
 
 struct EnvironmentState {
-    inherited: CaseInsensitiveEnv,
-    registry_keys: HashSet<String>,
+    inherited: Environment,
+    registry_keys: BTreeSet<EnvironmentName>,
 }
 
 impl EnvironmentState {
-    fn new(inherited: CaseInsensitiveEnv) -> Self {
+    fn new(inherited: Environment) -> Self {
         Self {
             inherited,
-            registry_keys: HashSet::new(),
+            registry_keys: BTreeSet::new(),
         }
     }
 
-    fn merge(
-        &mut self,
-        snapshot: RegistrySnapshot,
-        overrides: CaseInsensitiveEnv,
-    ) -> CaseInsensitiveEnv {
+    fn merge(&mut self, snapshot: RegistrySnapshot, overrides: Environment) -> Environment {
         let current_keys = snapshot.keys();
         let mut environment = self.inherited.clone();
         let mut expansion_environment = self.inherited.clone();
@@ -195,29 +263,29 @@ impl RegistrySnapshot {
         Ok(Self { hives })
     }
 
-    fn keys(&self) -> HashSet<String> {
+    fn keys(&self) -> BTreeSet<EnvironmentName> {
         self.hives
             .iter()
             .flatten()
-            .map(|value| normalize_name(&value.name))
+            .map(|value| EnvironmentName::new(&value.name))
             .collect()
     }
 
-    fn final_plain_values(&self) -> CaseInsensitiveEnv {
-        let mut final_values = BTreeMap::<String, &RegistryValue>::new();
+    fn final_plain_values(&self) -> Environment {
+        let mut final_values = BTreeMap::<EnvironmentName, &RegistryValue>::new();
         for value in self.hives.iter().flatten() {
             if value.kind != RegistryValueKind::Unsupported
                 && !value.value.is_empty()
                 && !is_path_variable(&value.name)
             {
-                final_values.insert(normalize_name(&value.name), value);
+                final_values.insert(EnvironmentName::new(&value.name), value);
             }
         }
 
-        let mut environment = CaseInsensitiveEnv::default();
+        let mut environment = Environment::default();
         for value in final_values.into_values() {
             if value.kind == RegistryValueKind::String {
-                environment.insert(value.name.clone(), value.value.clone());
+                environment.insert(&value.name, &value.value);
             }
         }
         environment
@@ -233,15 +301,15 @@ enum RegistryValueKind {
 
 #[derive(Clone, Debug)]
 struct RegistryValue {
-    name: String,
-    value: String,
+    name: OsString,
+    value: OsString,
     kind: RegistryValueKind,
 }
 
 fn apply_registry_hive(
-    environment: &mut CaseInsensitiveEnv,
-    expansion_environment: &mut CaseInsensitiveEnv,
-    final_plain_values: &CaseInsensitiveEnv,
+    environment: &mut Environment,
+    expansion_environment: &mut Environment,
+    final_plain_values: &Environment,
     values: &[RegistryValue],
 ) {
     // REG_SZ 先落表，随后 REG_EXPAND_SZ 才能引用同一 hive 中已经载入的变量。
@@ -278,22 +346,22 @@ fn apply_registry_hive(
     }
 }
 
-fn expand_environment_variables(input: &str, environment: &CaseInsensitiveEnv) -> String {
-    let mut output = String::with_capacity(input.len());
-    let mut variable = None::<String>;
+fn expand_environment_variables(input: &OsStr, environment: &Environment) -> OsString {
+    let mut output = Vec::with_capacity(input.len());
+    let mut variable = None::<Vec<u16>>;
 
-    for character in input.chars() {
-        if character == '%' {
+    for character in input.encode_wide() {
+        if character == u16::from(b'%') {
             if let Some(name) = variable.take() {
-                if let Some(value) = environment.get(&name) {
-                    output.push_str(value);
+                if let Some(value) = environment.get(OsString::from_wide(&name)) {
+                    output.extend(value.encode_wide());
                 } else {
-                    output.push('%');
-                    output.push_str(&name);
-                    output.push('%');
+                    output.push(u16::from(b'%'));
+                    output.extend(name);
+                    output.push(u16::from(b'%'));
                 }
             } else {
-                variable = Some(String::new());
+                variable = Some(Vec::new());
             }
         } else if let Some(name) = variable.as_mut() {
             name.push(character);
@@ -303,16 +371,16 @@ fn expand_environment_variables(input: &str, environment: &CaseInsensitiveEnv) -
     }
 
     if let Some(name) = variable {
-        output.push('%');
-        output.push_str(&name);
+        output.push(u16::from(b'%'));
+        output.extend(name);
     }
-    output
+    OsString::from_wide(&output)
 }
 
-fn is_path_variable(name: &str) -> bool {
+fn is_path_variable(name: &OsStr) -> bool {
     PATH_VARIABLES
         .iter()
-        .any(|path_name| name.eq_ignore_ascii_case(path_name))
+        .any(|path_name| name.eq_ignore_ascii_case(OsStr::new(*path_name)))
 }
 
 struct RegistryKey(HKEY);
@@ -408,7 +476,7 @@ fn read_registry_key(root: HKEY, path: &str) -> io::Result<Vec<RegistryValue>> {
             break (name_length, data_length, value_type);
         };
 
-        let name = String::from_utf16_lossy(&name_buffer[..name_length as usize]);
+        let name = OsString::from_wide(&name_buffer[..name_length as usize]);
         if !name.is_empty() {
             let kind = match value_type {
                 REG_SZ => RegistryValueKind::String,
@@ -416,7 +484,7 @@ fn read_registry_key(root: HKEY, path: &str) -> io::Result<Vec<RegistryValue>> {
                 _ => RegistryValueKind::Unsupported,
             };
             let value = if kind == RegistryValueKind::Unsupported {
-                String::new()
+                OsString::new()
             } else {
                 decode_registry_string(&data_buffer[..data_length as usize])
             };
@@ -426,7 +494,7 @@ fn read_registry_key(root: HKEY, path: &str) -> io::Result<Vec<RegistryValue>> {
     }
 }
 
-fn decode_registry_string(bytes: &[u8]) -> String {
+fn decode_registry_string(bytes: &[u8]) -> OsString {
     let mut wide: Vec<u16> = bytes
         .chunks_exact(2)
         .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
@@ -434,7 +502,7 @@ fn decode_registry_string(bytes: &[u8]) -> String {
     if let Some(end) = wide.iter().position(|character| *character == 0) {
         wide.truncate(end);
     }
-    String::from_utf16_lossy(&wide)
+    OsString::from_wide(&wide)
 }
 
 fn check_registry_status(status: u32) -> io::Result<()> {
@@ -448,26 +516,26 @@ fn check_registry_status(status: u32) -> io::Result<()> {
 mod tests {
     use super::*;
 
-    fn environment(entries: &[(&str, &str)]) -> CaseInsensitiveEnv {
-        let mut environment = CaseInsensitiveEnv::default();
+    fn environment(entries: &[(&str, &str)]) -> Environment {
+        let mut environment = Environment::default();
         for (name, value) in entries {
-            environment.insert((*name).to_owned(), (*value).to_owned());
+            environment.insert(*name, *value);
         }
         environment
     }
 
-    fn plain(name: &str, value: &str) -> RegistryValue {
+    fn plain(name: impl AsRef<OsStr>, value: impl AsRef<OsStr>) -> RegistryValue {
         RegistryValue {
-            name: name.to_owned(),
-            value: value.to_owned(),
+            name: name.as_ref().to_os_string(),
+            value: value.as_ref().to_os_string(),
             kind: RegistryValueKind::String,
         }
     }
 
-    fn expanded(name: &str, value: &str) -> RegistryValue {
+    fn expanded(name: impl AsRef<OsStr>, value: impl AsRef<OsStr>) -> RegistryValue {
         RegistryValue {
-            name: name.to_owned(),
-            value: value.to_owned(),
+            name: name.as_ref().to_os_string(),
+            value: value.as_ref().to_os_string(),
             kind: RegistryValueKind::ExpandString,
         }
     }
@@ -478,60 +546,70 @@ mod tests {
 
     #[test]
     fn user_variables_override_machine_variables() {
-        let mut state = EnvironmentState::new(CaseInsensitiveEnv::default());
+        let mut state = EnvironmentState::new(Environment::default());
         let merged = state.merge(
             snapshot(vec![
                 vec![plain("SDK", "machine")],
                 vec![plain("SDK", "user")],
             ]),
-            CaseInsensitiveEnv::default(),
+            Environment::default(),
         );
 
-        assert_eq!(merged.get("SDK"), Some("user"));
+        assert_eq!(merged.get("SDK").and_then(OsStr::to_str), Some("user"));
     }
 
     #[test]
     fn path_variables_append_machine_before_user() {
         let machine = PATH_VARIABLES.map(|name| plain(name, "machine"));
         let user = PATH_VARIABLES.map(|name| plain(name, "user"));
-        let mut state = EnvironmentState::new(CaseInsensitiveEnv::default());
+        let mut state = EnvironmentState::new(Environment::default());
         let merged = state.merge(
             snapshot(vec![machine.to_vec(), user.to_vec()]),
-            CaseInsensitiveEnv::default(),
+            Environment::default(),
         );
 
         for name in PATH_VARIABLES {
-            assert_eq!(merged.get(name), Some("machine;user"), "{name}");
+            assert_eq!(
+                merged.get(name).and_then(OsStr::to_str),
+                Some("machine;user"),
+                "{name}"
+            );
         }
     }
 
     #[test]
     fn variable_names_are_case_insensitive() {
-        let mut state = EnvironmentState::new(CaseInsensitiveEnv::default());
+        let mut state = EnvironmentState::new(Environment::default());
         let merged = state.merge(
             snapshot(vec![
                 vec![plain("MixedCase", "machine")],
                 vec![plain("mIXEDcASE", "user")],
             ]),
-            CaseInsensitiveEnv::default(),
+            Environment::default(),
         );
 
         assert_eq!(merged.entries.len(), 1);
-        assert_eq!(merged.get("MIXEDCASE"), Some("user"));
+        assert_eq!(
+            merged.get("MIXEDCASE").and_then(OsStr::to_str),
+            Some("user")
+        );
     }
 
     #[test]
     fn expandable_values_see_plain_values_from_the_same_hive() {
-        let mut state = EnvironmentState::new(CaseInsensitiveEnv::default());
+        let mut state = EnvironmentState::new(Environment::default());
         let merged = state.merge(
             snapshot(vec![vec![
                 expanded("SDK", r"%ROOT%\sdk"),
                 plain("ROOT", r"C:\tools"),
             ]]),
-            CaseInsensitiveEnv::default(),
+            Environment::default(),
         );
 
-        assert_eq!(merged.get("SDK"), Some(r"C:\tools\sdk"));
+        assert_eq!(
+            merged.get("SDK").and_then(OsStr::to_str),
+            Some(r"C:\tools\sdk")
+        );
     }
 
     #[test]
@@ -541,24 +619,26 @@ mod tests {
         // shell 一写临时文件就在启动目录下建出 %USERPROFILE% 文件夹。
         // 用户目录随电脑而不同，直接从当前进程取真实 USERPROFILE，断言值
         // 也由它推导，避免把某台机器的用户名写进测试导致其他电脑失败。
-        let profile = std::env::var_os("USERPROFILE")
-            .expect("USERPROFILE must be set in the test process")
-            .to_string_lossy()
-            .into_owned();
-        let temp = r"%USERPROFILE%\AppData\Local\Temp".to_owned();
-        let mut state = EnvironmentState::new(environment(&[("USERPROFILE", profile.as_str())]));
+        let profile =
+            std::env::var_os("USERPROFILE").expect("USERPROFILE must be set in the test process");
+        let mut temp = OsString::from("%USERPROFILE%");
+        temp.push(r"\AppData\Local\Temp");
+        let mut inherited = Environment::default();
+        inherited.insert("USERPROFILE", &profile);
+        let mut state = EnvironmentState::new(inherited);
         let merged = state.merge(
             snapshot(vec![
                 Vec::new(),
-                vec![expanded("TEMP", temp.as_str())],
-                vec![plain("USERPROFILE", profile.as_str())],
+                vec![expanded("TEMP", &temp)],
+                vec![plain("USERPROFILE", &profile)],
             ]),
-            CaseInsensitiveEnv::default(),
+            Environment::default(),
         );
 
-        let expected_temp = format!(r"{profile}\AppData\Local\Temp");
-        assert_eq!(merged.get("TEMP"), Some(expected_temp.as_str()));
-        assert_eq!(merged.get("USERPROFILE"), Some(profile.as_str()));
+        let mut expected_temp = profile.clone();
+        expected_temp.push(r"\AppData\Local\Temp");
+        assert_eq!(merged.get("TEMP"), Some(expected_temp.as_os_str()));
+        assert_eq!(merged.get("USERPROFILE"), Some(profile.as_os_str()));
     }
 
     #[test]
@@ -569,24 +649,30 @@ mod tests {
                 vec![expanded("PROFILE", r"%ROOT%\machine")],
                 vec![plain("PROFILE", r"C:\Users\test")],
             ]),
-            CaseInsensitiveEnv::default(),
+            Environment::default(),
         );
 
-        assert_eq!(merged.get("PROFILE"), Some(r"C:\Users\test"));
+        assert_eq!(
+            merged.get("PROFILE").and_then(OsStr::to_str),
+            Some(r"C:\Users\test")
+        );
     }
 
     #[test]
     fn path_stored_as_reg_sz_is_still_expanded() {
-        let mut state = EnvironmentState::new(CaseInsensitiveEnv::default());
+        let mut state = EnvironmentState::new(Environment::default());
         let merged = state.merge(
             snapshot(vec![vec![
                 plain("Path", r"%ROOT%\bin"),
                 plain("ROOT", r"C:\tools"),
             ]]),
-            CaseInsensitiveEnv::default(),
+            Environment::default(),
         );
 
-        assert_eq!(merged.get("PATH"), Some(r"C:\tools\bin"));
+        assert_eq!(
+            merged.get("PATH").and_then(OsStr::to_str),
+            Some(r"C:\tools\bin")
+        );
     }
 
     #[test]
@@ -597,24 +683,124 @@ mod tests {
         ]));
         let first = state.merge(
             snapshot(vec![vec![plain("RemovedLater", "fresh")]]),
-            CaseInsensitiveEnv::default(),
+            Environment::default(),
         );
-        assert_eq!(first.get("RemovedLater"), Some("fresh"));
+        assert_eq!(
+            first.get("RemovedLater").and_then(OsStr::to_str),
+            Some("fresh")
+        );
 
-        let second = state.merge(snapshot(vec![Vec::new()]), CaseInsensitiveEnv::default());
+        let second = state.merge(snapshot(vec![Vec::new()]), Environment::default());
         assert_eq!(second.get("RemovedLater"), None);
-        assert_eq!(second.get("SESSION_ONLY"), Some("keep"));
+        assert_eq!(
+            second.get("SESSION_ONLY").and_then(OsStr::to_str),
+            Some("keep")
+        );
     }
 
     #[test]
     fn pane_overrides_are_applied_after_the_registry_snapshot() {
-        let mut state = EnvironmentState::new(CaseInsensitiveEnv::default());
+        let mut state = EnvironmentState::new(Environment::default());
         let merged = state.merge(
             snapshot(vec![vec![plain("PaneValue", "registry")]]),
             environment(&[("pANEvALUE", "pane")]),
         );
 
-        assert_eq!(merged.get("PANEvalue"), Some("pane"));
+        assert_eq!(
+            merged.get("PANEvalue").and_then(OsStr::to_str),
+            Some("pane")
+        );
         assert_eq!(merged.entries.len(), 1);
+    }
+
+    struct ProcessEnvRestore {
+        name: std::ffi::OsString,
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl ProcessEnvRestore {
+        fn set(name: std::ffi::OsString, value: &OsStr) -> Self {
+            let previous = std::env::var_os(&name);
+            unsafe { std::env::set_var(&name, value) };
+            Self { name, previous }
+        }
+    }
+
+    impl Drop for ProcessEnvRestore {
+        fn drop(&mut self) {
+            if let Some(previous) = &self.previous {
+                unsafe { std::env::set_var(&self.name, previous) };
+            } else {
+                unsafe { std::env::remove_var(&self.name) };
+            }
+        }
+    }
+
+    #[test]
+    fn process_snapshot_preserves_non_unicode_values() {
+        use std::os::windows::ffi::OsStringExt;
+
+        let _lock = crate::ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let name = std::ffi::OsString::from("SLTERM_NON_UNICODE_REFRESH_TEST");
+        let value = std::ffi::OsString::from_wide(&[u16::from(b'X'), 0xD800, u16::from(b'Y')]);
+        let _restore = ProcessEnvRestore::set(name, &value);
+
+        let environment = Environment::from_process();
+        let actual = environment
+            .get("SLTERM_NON_UNICODE_REFRESH_TEST")
+            .expect("进程私有变量必须进入快照");
+        assert_eq!(
+            OsStr::new(actual).encode_wide().collect::<Vec<_>>(),
+            value.encode_wide().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn process_snapshot_preserves_non_unicode_names() {
+        use std::os::windows::ffi::OsStringExt;
+
+        let _lock = crate::ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut name_wide: Vec<u16> = "SLTERM_NON_UNICODE_NAME_".encode_utf16().collect();
+        name_wide.push(0xD800);
+        let name = std::ffi::OsString::from_wide(&name_wide);
+        let value = std::ffi::OsString::from("preserved");
+        let _restore = ProcessEnvRestore::set(name, &value);
+
+        let environment = Environment::from_process();
+        let entry = environment
+            .entries
+            .values()
+            .find(|entry| OsStr::new(&entry.name).encode_wide().collect::<Vec<_>>() == name_wide)
+            .expect("非 Unicode 变量名不得被有损改写");
+        assert_eq!(
+            OsStr::new(&entry.value).encode_wide().collect::<Vec<_>>(),
+            value.encode_wide().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn registry_string_decoding_preserves_unpaired_surrogates() {
+        let wide = [u16::from(b'X'), 0xD800, u16::from(b'Y'), 0];
+        let bytes: Vec<u8> = wide.iter().flat_map(|unit| unit.to_le_bytes()).collect();
+
+        let decoded = decode_registry_string(&bytes);
+
+        assert_eq!(
+            OsStr::new(&decoded).encode_wide().collect::<Vec<_>>(),
+            wide[..3]
+        );
+    }
+
+    #[test]
+    fn expansion_preserves_non_unicode_values() {
+        use std::os::windows::ffi::OsStringExt;
+
+        let value = std::ffi::OsString::from_wide(&[u16::from(b'X'), 0xD800, u16::from(b'Y')]);
+        let mut environment = Environment::default();
+        environment.insert("ROOT", value.clone());
+
+        let expanded = expand_environment_variables(OsStr::new("%ROOT%\\bin"), &environment);
+        let expected: Vec<u16> = value.encode_wide().chain("\\bin".encode_utf16()).collect();
+        assert_eq!(expanded.encode_wide().collect::<Vec<_>>(), expected);
     }
 }

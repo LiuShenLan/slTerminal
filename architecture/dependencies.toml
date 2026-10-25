@@ -3,7 +3,7 @@ renderer_packages = ["gpui", "gpui_platform", "gpui-component", "gpui-component-
 
 [crates.slterm_app]
 layer = "application"
-dependencies = ["slterm_terminal", "slterm_settings", "slterm_split", "slterm_completions"]
+dependencies = ["slterm_terminal", "slterm_settings", "slterm_split", "slterm_completions", "slterm_path", "slterm_document", "slterm_workspace", "slterm_sidebar", "slterm_agents", "slterm_hooks"]
 build-dependencies = ["slterm_settings"]
 dev-dependencies = []
 
@@ -24,6 +24,30 @@ zero_production_dependencies = true
 [crates.slterm_runtime_protocol]
 layer = "core"
 zero_production_dependencies = true
+
+[crates.slterm_path]
+layer = "core"
+dependencies = []
+
+[crates.slterm_document]
+layer = "core"
+dependencies = []
+
+[crates.slterm_workspace]
+layer = "core"
+dependencies = ["slterm_path", "slterm_document", "slterm_split"]
+
+[crates.slterm_sidebar]
+layer = "core"
+dependencies = ["slterm_workspace", "slterm_agents"]
+
+[crates.slterm_agents]
+layer = "core"
+dependencies = ["slterm_path", "slterm_settings", "slterm_workspace"]
+
+[crates.slterm_hooks]
+layer = "core"
+dependencies = ["slterm_workspace", "slterm_agents"]
 
 [crates.slterm_hook]
 layer = "hook"

@@ -9,7 +9,6 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::directory_history::DirectoryHistory;
 use crate::history::{HistoryScope, SltermHistory};
-use crate::runtime_exec::PaneExecContext;
 use crate::suggest::{self, Input, SuggestEnv, SuggestSources};
 use slterm_completions::command_context::ShellSyntax;
 use slterm_completions::semantic::{Context as SemanticContext, Source};
@@ -19,6 +18,7 @@ pub(crate) mod metadata;
 pub(crate) mod paths;
 mod project_scripts;
 
+pub(crate) use metadata::PaneExecContext;
 pub(crate) use suggest::Candidates;
 
 /// 历史只加载一份,避免多个 pane 在退出时互相覆盖;扫描期间不持有历史锁。

@@ -7,6 +7,12 @@ members = [
     "slterm_settings",
     "slterm_split",
     "slterm_runtime_protocol",
+    "slterm_path",
+    "slterm_document",
+    "slterm_workspace",
+    "slterm_sidebar",
+    "slterm_agents",
+    "slterm_hooks",
 ]
 resolver = "2"
 

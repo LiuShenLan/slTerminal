@@ -1,7 +1,7 @@
 //! 单 pane agent 宿主(壳侧事件通道的落点)。
 //!
-//! 每个 pane 一份 `AgentPaneHost`:持有 `AgentActivity` 仲裁器与 `AnswerInbox`
-//! 收件箱。`AgentHub` 是 workspace 侧按 `PaneId` 的归属表——事件泵把整批
+//! 每个 pane 一份 `AgentPaneHost`:持有 `AgentActivity` 仲裁器。
+//! `AgentHub` 是 workspace 侧按 `PaneId` 的归属表——事件泵把整批
 //! 事件交给它,由信封 pane 字段严格路由(已关闭 pane 的迟到事件直接丢弃,
 //! 只有信封确实缺 pane 时才回退焦点 pane)。
 //!
@@ -17,7 +17,6 @@
 //!   生产路径由 workspace 显式启用;宿主本身不碰磁盘。
 //! - 恢复注入:workspace 恢复 tab 时先 `seed_session`,再让视图
 //!   `restore_agent` 构造并提交 resume 命令;
-//! - 回答展示(收件箱正文)归阅读器;
 //! - TurnDone/NeedsAttention 状态边 → 通知漏斗归 `notify`。
 
 use std::collections::HashMap;
@@ -33,7 +32,6 @@ use crate::ai_agents::{self, AgentKind, AgentStatus, AgentStatusSource};
 use crate::ai_hook::{
     AgentActivity, AiHookEvent, AiHookKind, GateVerdict, accept_for_pane, reorder_batch,
 };
-use crate::assistant_answer::{AnswerInbox, AnswerSnapshot};
 use crate::session::AgentSession;
 
 /// 会话身份注册表写入通道(生产 = 后台线程 + `ai_sessions::record_hook_session`;
@@ -60,8 +58,6 @@ pub(crate) struct AgentPaneHost {
     pane_id: PaneId,
     /// 生命周期仲裁器(hook 是事实,屏幕是有限权威观察)。
     activity: AgentActivity,
-    /// 回答收件箱:只收 provider 原文,不从屏幕猜测。
-    inbox: AnswerInbox,
     /// 屏幕采样与未来徽标的程序身份:hook 事件为权威来源;无 hook 的
     /// pane 才允许由屏幕 chrome 兜底识别(见 `observe_screen`)。
     program: Option<String>,
@@ -75,15 +71,13 @@ impl AgentPaneHost {
         Self {
             pane_id,
             activity: AgentActivity::default(),
-            inbox: AnswerInbox::default(),
             program: None,
             session: None,
         }
     }
 
-    /// 路由一条已按 pane 归属的事件:所有权预检 → 事件门(七判)→ 仲裁器
-    /// → 回答收编。返回是否真正改写了本 pane 的状态(门拒收/所有权不符
-    /// 返回 false,调用方据此记日志)。
+    /// 路由一条已按 pane 归属的事件:所有权预检 → 事件门(七判)→ 仲裁器。
+    /// 返回是否真正改写了本 pane 的状态(门拒收/所有权不符返回 false)。
     pub(crate) fn handle_hook(&mut self, event: &AiHookEvent) -> bool {
         if !self.activity.accepts_hook(event) {
             log::debug!(
@@ -104,9 +98,6 @@ impl AgentPaneHost {
             return false;
         }
         self.activity.apply_hook(event);
-        // 收件箱自带 pane/provider/session 三重归属校验;焦点兜底
-        // (pane=None)事件不得供给阅读器正文,防两个 pane 串台。
-        self.inbox.observe(event, self.pane_id.0);
         if event.kind == AiHookKind::SessionEnd {
             self.program = None;
             self.session = None;
@@ -137,15 +128,6 @@ impl AgentPaneHost {
             }
         }
         true
-    }
-
-    /// 「提交时同步建立 running 边沿」:`pane.prompt`/`agent.prompt`
-    /// 成功提交 Enter 的同步动作。真实完成边归事件链归位。
-    pub(crate) fn submitted(&mut self, text: &str) {
-        match self.program.as_deref() {
-            Some(program) => self.activity.submitted_text(program, text),
-            None => self.activity.submitted(),
-        }
     }
 
     /// OSC 133;C 的提交边:已知程序身份时按程序语义(含 codex `/plan`
@@ -184,13 +166,12 @@ impl AgentPaneHost {
         self.activity.observe_screen(detection)
     }
 
-    /// 当前仲裁状态(页签徽标/runtime 快照消费归工作区与 RuntimeHub)。
-    #[allow(dead_code)]
+    /// 当前仲裁状态（页签徽标、关闭守卫与通知消费归工作区）。
     pub(crate) fn status(&self) -> AgentStatus {
         self.activity.status()
     }
 
-    /// 状态来源(Hook/Screen/Process;消费点同上)。
+    /// 状态来源（Hook/Screen/Process）。
     #[allow(dead_code)]
     pub(crate) fn source(&self) -> AgentStatusSource {
         self.activity.source()
@@ -208,8 +189,7 @@ impl AgentPaneHost {
         self.activity.rule()
     }
 
-    /// 当前屏幕/进程身份(未来页签徽标与 runtime 快照消费)。
-    #[allow(dead_code)] // 消费点归工作区与 RuntimeHub。
+    /// 当前屏幕/进程身份（托盘与恢复消费）。
     pub(crate) fn program(&self) -> Option<&str> {
         self.program.as_deref()
     }
@@ -219,12 +199,6 @@ impl AgentPaneHost {
         self.session.as_ref()
     }
 
-    /// 最新回答快照(展示归阅读器)。
-    #[allow(dead_code)]
-    pub(crate) fn latest_answer(&self) -> Option<&AnswerSnapshot> {
-        self.inbox.latest.as_ref()
-    }
-
     /// 仅测试断言用:直接喂一次检测结果,绕开规则引擎的磁盘覆盖读取。
     #[cfg(test)]
     pub(crate) fn observe_detection(&mut self, detection: Option<Detection>) -> bool {
@@ -232,8 +206,8 @@ impl AgentPaneHost {
     }
 }
 
-/// workspace 侧的 pane 归属表。写入点与 `terminal_registry` 同纪律:
-/// 只在 pane 创建/关闭两处增删,泵与看门狗只读路由。
+/// workspace 侧的 pane 归属表。只在 pane 创建/关闭两处增删,
+/// 泵与看门狗只读路由。
 #[derive(Default)]
 pub(crate) struct AgentHub {
     hosts: HashMap<PaneId, AgentPaneHost>,
@@ -312,8 +286,7 @@ impl AgentHub {
         })
     }
 
-    /// 读端(徽标/runtime 快照消费归工作区与 RuntimeHub;测试经此断言)。
-    #[allow(dead_code)]
+    /// 按 pane 读取宿主（关闭守卫、托盘与测试）。
     pub(crate) fn host(&self, pane_id: PaneId) -> Option<&AgentPaneHost> {
         self.hosts.get(&pane_id)
     }
@@ -334,8 +307,8 @@ impl AgentHub {
     }
 
     /// 同 [`Self::dispatch`],额外返回**被接纳**的事件(按处理后顺序)。
-    /// 生命周期接线只允许对通过所有权门的事件动手 SessionEnd/TurnDone,
-    /// 伪造 pane/session 的迟到信封不得关闭注册项或回投委派。
+    /// 生命周期接线只允许对通过所有权门的事件清理任务栏进度；
+    /// 伪造 pane/session 的迟到信封不得影响现存 pane。
     pub(crate) fn dispatch_lifecycle(
         &mut self,
         events: Vec<AiHookEvent>,
@@ -374,14 +347,7 @@ impl AgentHub {
         (accepted, accepted_events)
     }
 
-    /// 提交 running 边沿(runtime `pane.prompt`/`agent.prompt` 的同步动作)。
-    pub(crate) fn submitted(&mut self, pane_id: PaneId, text: &str) {
-        if let Some(host) = self.hosts.get_mut(&pane_id) {
-            host.submitted(text);
-        }
-    }
-
-    /// OSC 133;C 边(runtime run 等待链的启动证据)。
+    /// OSC 133;C 的命令启动边。
     pub(crate) fn command_started(&mut self, pane_id: PaneId) {
         if let Some(host) = self.hosts.get_mut(&pane_id) {
             host.command_started();
@@ -447,7 +413,7 @@ mod host_tests {
     }
 
     #[test]
-    fn turn_done_answer_is_owned_by_its_pane_and_provider_session() {
+    fn turn_done_updates_only_its_owning_pane() {
         let mut hub = AgentHub::new();
         hub.register(PaneId(3));
         hub.register(PaneId(4));
@@ -460,15 +426,7 @@ mod host_tests {
         let host = hub.host(PaneId(3)).unwrap();
         assert_eq!(host.status(), AgentStatus::Done);
         assert_eq!(host.source(), AgentStatusSource::Hook);
-        let latest = host.latest_answer().expect("回答应入收件箱");
-        assert_eq!(latest.provider, "claude");
-        assert_eq!(latest.session_id, "answer-session");
-        assert_eq!(
-            latest.content.source().expect("完整回答").as_ref(),
-            "原样回答"
-        );
-        // 另一个 pane 的收件箱不得串台。
-        assert!(hub.host(PaneId(4)).unwrap().latest_answer().is_none());
+        assert_eq!(hub.host(PaneId(4)).unwrap().status(), AgentStatus::Unknown);
     }
 
     /// SessionStart 边写注册表:只有被接纳的事件才进写入通道;SessionEnd

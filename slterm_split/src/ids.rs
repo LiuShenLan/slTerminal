@@ -1,5 +1,5 @@
 //! pane/tab 纯标识 newtype(类型锚点,归属分屏领域):分屏树的叶类型即
-//! pane id,app 内跨模块(hook 环境/runtime API 等)引用标识统一经本 crate,
+//! pane id,app 内跨模块(hook 环境与工作区等)引用标识统一经本 crate,
 //! 禁重定义、禁别名漂移。newtype 零成本、零依赖。
 
 /// 终端 pane 标识:全 workspace 唯一、终生不复用。

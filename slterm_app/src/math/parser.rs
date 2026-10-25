@@ -55,7 +55,7 @@ pub(crate) fn parse_formula_source(
 }
 
 /// 矩阵里孤立的行尾反斜杠会被 TeX 当成空格接受，把多条被破坏的行静默压成一行。
-/// 原始文档路径保留这种歧义源码的可见性；终端传输修复走另一条路径。
+/// 原始源码路径保留这种歧义源码的可见性；规范化传输路径另行处理。
 fn reject_ambiguous_row_breaks(source: &str) -> Result<(), MathError> {
     let bytes = source.as_bytes();
     let mut environments = Vec::new();
@@ -174,7 +174,7 @@ fn normalize_ascii_math_arrows(source: &str) -> Cow<'_, str> {
 /// * `\tag{n}` -> `\quad(n)`，`\tag*{n}` -> `\quad n`。编号留在公式旁边，
 ///   而不是推到页边（那需要公式级编号）。
 /// * `\label{name}` 消失，未解析的 `\ref{name}` / `\eqref{name}` 仍可读为
-///   `name` 与 `(name)`。跨终端输出解析标签需要文档级状态；保留可用公式
+///   `name` 与 `(name)`。跨公式解析标签需要文档级状态；保留可用公式
 ///   胜过拒绝整个表达式。
 /// * `\leftroot` / `\uproot`（amsmath 的根指数装饰偏移）及其数字参数消失，
 ///   根号本身仍可渲染。

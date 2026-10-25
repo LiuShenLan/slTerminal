@@ -9,7 +9,7 @@
 //!
 //! 落盘范围:协议/载荷/事件门/仲裁、安装权威与安装器、
 //! 壳侧事件通道(命名管道线程 → 进程内 mpsc → GPUI foreground
-//! 排水 → `AgentActivity`/`AnswerInbox` 的 pane 宿主)。
+//! 排水 → `AgentActivity` 的 pane 宿主)。
 //!
 //! 缝合点(不在本模块消费):设置页数据源消费 `integrations::inspect()` 归
 //! 设置域;`config_guard` 随设置域启动链挂接;通知漏斗消费
@@ -136,7 +136,7 @@ pub use windows::spawn_gpui_server;
 
 /// config_guard 落盘本体在 local;消费点 = 壳启动链 `run_shell`。
 /// 回调接失败边呈现;不需要提示的调用方传 `|_| {}`。
-pub use local::spawn_config_guard_with;
+pub use local::{HookFailureKind, spawn_config_guard_with};
 
 #[cfg(test)]
 mod e2e_tests;

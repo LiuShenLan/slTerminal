@@ -1,0 +1,17 @@
+[package]
+name = "slterm_agents"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+test = false
+
+[[test]]
+name = "lib_tests"
+path = "src/lib.rs"
+
+[dependencies]
+slterm_path = { path = "../slterm_path" }
+slterm_settings = { package = "slterm-settings", path = "../slterm_settings" }
+slterm_workspace = { path = "../slterm_workspace" }

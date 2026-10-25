@@ -1,6 +1,6 @@
 //! TTY related functionality.
 
-use std::collections::HashMap;
+use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::ExitStatus;
 use std::sync::Arc;
@@ -25,11 +25,15 @@ pub struct Options {
     /// Drain the child process output before exiting the terminal.
     pub drain_on_exit: bool,
 
-    /// Extra environment variables.
-    pub env: HashMap<String, String>,
+    /// 子进程环境覆盖或完整环境；名称和值均保留 Windows 原始 UTF-16。
+    pub env: windows::Environment,
 
     /// 此环境表是完整子进程环境，不是需要与当前进程环境合并的增量覆盖。
     pub env_is_complete: bool,
+
+    /// 合并当前进程环境时排除的变量名；按 Windows 环境名规则大小写不敏感匹配。
+    /// 只过滤继承项，不改写自定义环境或继承值。
+    pub inherited_env_exclusions: Vec<OsString>,
 
     /// Specifies whether the Windows shell arguments should be escaped.
     ///
@@ -63,8 +67,9 @@ impl Default for Options {
             shell: None,
             working_directory: None,
             drain_on_exit: false,
-            env: HashMap::new(),
+            env: windows::Environment::default(),
             env_is_complete: false,
+            inherited_env_exclusions: Vec::new(),
             escape_args: false,
             conpty_sideload: true,
             conpty_input_modes: windows::ConptyInputModes::default(),

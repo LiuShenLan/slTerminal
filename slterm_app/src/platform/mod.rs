@@ -4,6 +4,7 @@
 //! 本层是 Windows 原生代码的直接落点,不再带平台分支。
 
 // 凭据管理器通用封装:业务域只经 crate::secrets 门面消费。
+#[allow(dead_code)] // 生产消费点归凭据域;平台三原语由单元测试锁定。
 pub(crate) mod credentials;
 pub mod dirs;
 // 安装渠道门禁:外部托管渠道不参与自更新。
@@ -11,6 +12,7 @@ pub(crate) mod distribution;
 pub(crate) mod elevation;
 // 系统文件操作:回收站删除 + 系统处理器打开。
 pub(crate) mod file_operations;
+pub(crate) mod instance;
 pub(crate) mod keyboard;
 // 补全路径拼写:大小写语义与回写分隔符;shell 引用仍归
 // slterm_completions 的 command_context。

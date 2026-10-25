@@ -779,7 +779,7 @@ mod plan_balance_tests {
         assert_eq!(current_snapshot()[0].updated_at, 1000);
     }
 
-    // ── 双通道裁定守卫(测试点清单) ──
+    // ── 凭据通道边界守卫 ──
 
     fn collect_rust_sources(root: &Path, files: &mut Vec<PathBuf>) {
         for entry in std::fs::read_dir(root).expect("读取源码目录") {
@@ -792,7 +792,7 @@ mod plan_balance_tests {
         }
     }
 
-    /// plan_balance 只读 user 层 settings.json,不触达凭据库;ai_providers 反之。
+    /// plan_balance 只读 user 层 settings.json，不触达凭据库。
     #[test]
     fn plan_balance_reads_user_settings_not_the_credential_store() {
         let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -828,29 +828,6 @@ mod plan_balance_tests {
         assert!(
             saw_user_settings_key,
             "plan_balance 应经 user 层 settings.json 读取 token"
-        );
-
-        let providers_path = src.join("ai_providers.rs");
-        let providers = std::fs::read_to_string(&providers_path).expect("读取 ai_providers 源文件");
-        for needle in [
-            concat!("ANTHROPIC_AUTH_", "TOKEN"),
-            concat!("ANTHROPIC_BASE_", "URL"),
-            concat!(".cl", "aude"),
-            concat!("home_", "dir"),
-            // user 层读取链关键字:settings.json 路径解析与 env 提取。
-            "settings.json",
-            concat!("settings_", "path"),
-            concat!("resolve_", "env"),
-            concat!("crate::plan_", "balance"),
-        ] {
-            assert!(
-                !providers.contains(needle),
-                "ai_providers 不得读 user 层文件: {needle}"
-            );
-        }
-        assert!(
-            providers.contains(concat!("Credential", "Store")),
-            "ai_providers 凭据通道应经凭据库 trait(双通道另一侧)"
         );
     }
 }

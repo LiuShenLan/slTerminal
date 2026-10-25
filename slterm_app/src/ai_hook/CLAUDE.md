@@ -11,9 +11,9 @@
 - **`AgentKind` 封闭集**：内置 agent 身份是封闭枚举，屏幕规则随仓；新增 agent = 枚举 + 规则 + 必要的安装器/目录表登记，不裁剪既有集。
 - **安装权威**：claude/kimi/codex/pi/opencode 按各自配置形态安装；codex 支持 `--chain` 串联原 notifier；managed 文件带归属指纹，`config_guard` 监视防外部改写。
 - **审查门**：statusline 键在安装器审查门落地；审查词表演化登记到安全审计域。审查门只覆盖 statusline 键，hooks 数组的 command 字段由 marker/归属指纹兜底。
-- **AssistantConfig 独立文件**：AI assistant 配置不并入 settings 树；hook 失败边默认关（与 assistant 默认关闭一致），复用 `AssistantConfig.enabled` 作为载体。
+- **自愈授权与失败提示**：授权只经 `AgentHook`/SettingsRegistry；失败提示只含 `Install`/`Settings` 类别与 agent，进程内冷却 5 秒，空失败不占冷却，不携带命令或配置正文。
 - **补全方言**：保留 Posix 方言（Git Bash/MSYS 场景）；SSH/WSL 语义源、ANSI/LS_COLORS 样式分支与 Unix 小分支整面不迁。
-- **WSL/SSH/远程整面不迁**：`WSLENV` 合并、远端进程树、remote_* 错误码与移动端桥接均无对象；只保留本地 PTY 与 loopback 控制面。
+- **WSL/SSH/远程整面不迁**：`WSLENV` 合并、远端进程树、remote_* 错误码与移动端桥接均无对象；只保留本地 PTY 与 Hooks 命名管道。
 - **隔离面**：hook 通道与 statusline 通道各自有界；安全审查词表与审计事件是后续演化单点，新增命令形态不得绕过。
 
 ## 验收与测试

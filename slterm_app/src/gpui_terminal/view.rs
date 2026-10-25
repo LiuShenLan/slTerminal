@@ -1,13 +1,10 @@
 //! 终端视图:持有会话、处理输入与 IME、驱动重绘。
 
-mod ai_fix;
 mod broadcast;
 mod completion;
 mod cwd_report;
 pub(super) mod layout;
 pub(super) mod pointer;
-/// Runtime 写命令在 UI owner 上的终端侧执行入口。
-pub(super) mod runtime_control;
 pub(super) mod startup;
 pub(super) mod typography;
 
@@ -44,7 +41,6 @@ use super::mouse_protocol;
 use super::session::{self, TerminalSession};
 use super::{KEY_CONTEXT, TerminalBackTab, TerminalTab};
 use crate::app_shell::config::Settings;
-use crate::i18n::Message;
 use typography::{CELL_WIDTH_MODE, FONT_OFFSET, mono_font};
 
 /// 拖选越过网格上/下边界后的自动回滚:tick 间隔与「每远离 20px 加一行」的
@@ -133,8 +129,8 @@ pub enum TerminalLaunch {
 pub struct TerminalView {
     pub pane_id: PaneId,
     pub session: Option<TerminalSession>,
-    /// PTY 创建时冻结的环境/cwd 快照(`pane.exec` 唯一复用面)。
-    pub(crate) exec_context: Option<crate::runtime_exec::PaneExecContext>,
+    /// PTY 创建时冻结的 shell 与环境快照，仅供后台补全复用。
+    pub(crate) exec_context: Option<crate::completion::PaneExecContext>,
     pub focus_handle: FocusHandle,
     pub font: Font,
     pub font_bold: Font,
@@ -150,8 +146,6 @@ pub struct TerminalView {
     /// 主题行高倍率:`None` 保留 shaped 字体度量;`Some` 作用于逻辑字号。
     line_height_multiplier: Option<f32>,
     pub palette: Arc<Palette>,
-    /// 每 pane 一份的公式覆盖层状态(终端仍是真值)。
-    pub(crate) math_overlay: super::math_overlay::MathOverlay,
     /// 补全关闭/缓存状态:键、抑制行、弹窗请求位与候选。
     pub(crate) suggest: crate::suggest::SuggestState,
     /// 按键镜像的当前输入行与光标(终端行编辑器不暴露 buffer)。
@@ -169,24 +163,15 @@ pub struct TerminalView {
     pub(crate) ghost_enabled: bool,
     /// Enter 时捕获的提交行(OSC 133;D 触发判定与程序身份共用)。
     pub(crate) last_committed: String,
-    /// runtime run 记账:OSC 133 两条边推进 phase 并产出 outcome。
-    pub(crate) active_run: Option<crate::runtime_api::RuntimePaneRun>,
-    pub(crate) last_run: Option<crate::runtime_api::RuntimeRunOutcome>,
-    /// 每 pane 一条 AI 修复建议的生命周期。
-    pub(crate) ai_fix: Option<crate::ai_assistant::AiFixState>,
-    pub(super) ai_fix_gate: crate::ai_assistant::TriggerGate,
-    /// 测试注入的助手配置(生产读独立配置文件,不碰真实数据目录)。
-    #[cfg(all(test, feature = "gpui-test-support"))]
-    pub(crate) ai_config_override: Option<crate::ai_assistant::AssistantConfig>,
     pub marked_text: Option<String>,
     pub ime_bounds: Bounds<Pixels>,
     pub title: String,
     /// shell 集成 `SLTERM|cwd|branch|program` 标题上报 / OSC 7 的工作目录;
     /// tab 标签的第一优先来源。
     pub cwd: String,
-    /// 标题协议里的分支字段(工作区与 runtime 快照消费);OSC 7 不动它。
+    /// 标题协议里的分支字段(工作区 chrome 消费);OSC 7 不动它。
     pub branch: String,
-    /// 标题协议里的前台程序名;runtime 快照的 `running_program` 来源。
+    /// 标题协议里的前台程序名;Agent 身份与命令生命周期共用。
     pub running_program: Option<String>,
     pub(super) error: Option<String>,
     pub(super) exited: Option<String>,
@@ -433,35 +418,20 @@ impl TerminalView {
                     cx.notify();
                 }
             }
-            // 命令边界:OSC 133;C/D 接 active_run/last_run 记账与
-            // AI assistant 触发链;agent 生命周期由宿主经事件收尾。屏幕采样
-            // 仍走 workspace 的 1 Hz 看门狗(输出洪流下每字节 detect 不成立)。
+            // 命令边界:OSC 133;C/D 推进 agent 生命周期。屏幕采样仍走
+            // workspace 的 1 Hz 看门狗。
             TermEvent::CommandStart => {
                 if !self.last_committed.trim().is_empty() {
                     if self.running_program.is_none() {
                         self.running_program =
                             crate::suggest::extract_program(&self.last_committed);
                     }
-                    if let Some(run) = &mut self.active_run
-                        && run.phase == crate::runtime_api::RuntimeRunPhase::Submitted
-                    {
-                        run.phase = crate::runtime_api::RuntimeRunPhase::Started;
-                    }
                     cx.emit(TerminalViewEvent::CommandStarted);
                 }
             }
-            TermEvent::CommandDone { exit_code } => {
-                let program = self.running_program.take();
-                if let Some(run) = self.active_run.take() {
-                    self.last_run = Some(crate::runtime_api::RuntimeRunOutcome::command_done(
-                        run, exit_code,
-                    ));
-                }
+            TermEvent::CommandDone { .. } => {
+                self.running_program = None;
                 cx.emit(TerminalViewEvent::CommandFinished);
-                // 裸第三方 133;D(exit_code=None)静默。
-                if let Some(code) = exit_code {
-                    self.maybe_request_ai_fix(code, program.as_deref(), cx);
-                }
             }
             TermEvent::Notify(_) => {}
             // 视觉闪烁与声音归通知域。
@@ -758,12 +728,7 @@ impl TerminalView {
                 _ => {}
             }
         }
-        // AI 建议条键语义优先于补全(Esc 先撤条),再是补全
-        // 导航/接受。两条路径消费按键时都不进入编码器。
-        if self.handle_ai_fix_key(ks, cx) {
-            cx.stop_propagation();
-            return;
-        }
+        // 补全导航/接受优先于普通键编码;消费按键时不进入编码器。
         if self.handle_completion_key(&ks.key, mods, cx) {
             cx.stop_propagation();
             return;
@@ -1065,42 +1030,6 @@ impl Render for TerminalView {
                     );
                 }
                 bottom_stack = bottom_stack.child(list);
-            }
-            // AI 建议条:Pending 显 analyzing;Ready 是图标 +
-            // 命令 + 解释 + 键位提示;一律只贴不执行。
-            if let Some(bar) = self.ai_fix_bar() {
-                let language = cx
-                    .try_global::<Settings>()
-                    .map(|settings| settings.language)
-                    .unwrap_or(crate::i18n::UiLanguage::EnUs);
-                let text = if bar.pending {
-                    language.text(Message::TerminalAiAnalyzing).to_owned()
-                } else {
-                    let mut text =
-                        format!("{} {}", if bar.danger { "⚠" } else { "✦" }, bar.command);
-                    if !bar.explain.is_empty() {
-                        text.push_str("  ·  ");
-                        text.push_str(&bar.explain);
-                    }
-                    text.push_str("  ·  ");
-                    text.push_str(language.text(Message::TerminalAiFixHint));
-                    text
-                };
-                bottom_stack = bottom_stack.child(
-                    div()
-                        .id("slterm-ai-fix-bar")
-                        .debug_selector(|| "slterm-ai-fix-bar".to_owned())
-                        .w_full()
-                        .px_3()
-                        .py_2()
-                        .rounded_md()
-                        .border_1()
-                        .border_color(self.palette.dim_foreground.opacity(0.6))
-                        .bg(self.palette.background.opacity(0.96))
-                        .text_sm()
-                        .text_color(self.palette.foreground)
-                        .child(text),
-                );
             }
             if let Some(exited) = &self.exited {
                 bottom_stack = bottom_stack.child(

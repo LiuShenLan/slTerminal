@@ -273,7 +273,7 @@ fn codex_user_questions_are_structured_attention_and_prose_in_tools_is_not() {
 }
 
 #[test]
-fn compaction_does_not_mark_an_active_turn_idle_and_native_stop_supplies_the_answer() {
+fn compaction_does_not_mark_an_active_turn_idle_and_native_stop_supplies_the_message() {
     let mut activity = AgentActivity::default();
     activity.apply_hook(&codex("UserPromptSubmit", "main", Some("turn")));
     let compacted = native(
@@ -286,10 +286,7 @@ fn compaction_does_not_mark_an_active_turn_idle_and_native_stop_supplies_the_ans
         "full",
         json!({"hook_event_name":"Stop","session_id":"main","turn_id":"turn","last_assistant_message":"complete answer"}),
     );
-    assert_eq!(
-        done.answer.unwrap().source().unwrap().as_ref(),
-        "complete answer"
-    );
+    assert_eq!(done.message.as_deref(), Some("complete answer"));
 }
 
 #[test]

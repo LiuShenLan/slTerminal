@@ -14,9 +14,37 @@ use std::time::{Duration, Instant};
 use slterm_settings::{AgentHook, RawSettings};
 
 use super::settings;
-use crate::ai_assistant::{
-    AssistantConfig, HookFailure, HookFailureKind, TriggerGate, evaluate_hook_failure,
-};
+
+/// 自愈失败的用户可见类别；不包含命令或配置正文。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HookFailureKind {
+    /// 某家 agent 的 hook 注入/修复失败（agent = CLI slug）。
+    Install { agent: String },
+    /// 自愈授权快照不可读，无法判断该装什么。
+    Settings,
+}
+
+/// 同类后台失败的提示冷却，避免 watcher 连发形成通知风暴。
+const COOLDOWN: Duration = Duration::from_secs(5);
+
+#[derive(Debug, Default)]
+struct FailureGate {
+    last_fired: Option<Instant>,
+}
+
+impl FailureGate {
+    fn report(&mut self, failures: &[HookFailureKind], now: Instant) -> Option<HookFailureKind> {
+        let first = failures.first()?;
+        if self
+            .last_fired
+            .is_some_and(|last| now.saturating_duration_since(last) < COOLDOWN)
+        {
+            return None;
+        }
+        self.last_fired = Some(now);
+        Some(first.clone())
+    }
+}
 
 pub struct ConfigGuard {
     stop: Arc<AtomicBool>,
@@ -63,17 +91,16 @@ where
     }
 }
 
-/// 自愈一轮。`failure_gate` 是进程级失败边闸门,跨轮存活以让
-/// 冷却生效;自愈主链语义不因失败边改变。
-fn heal_all(failure_gate: &mut TriggerGate, on_alert: &(impl Fn(HookFailureKind) + ?Sized)) {
+/// 自愈一轮。`failure_gate` 跨轮存活，让连续 watcher 事件共享提示冷却。
+fn heal_all(failure_gate: &mut FailureGate, on_alert: &(impl Fn(HookFailureKind) + ?Sized)) {
     let Ok(_lock) = settings::lock() else { return };
-    // 锁竞争 = 另一个安装操作在进行,不是自愈失败,不投失败边。
-    // 锁内重读授权,不能把菜单/卸载刚移除的 hook 按旧快照装回。
+    // 锁竞争 = 另一个安装操作在进行，不是自愈失败，不提示。
+    // 锁内重读授权，不能把菜单/卸载刚移除的 hook 按旧快照装回。
     let raw = match RawSettings::try_load() {
         Ok(raw) => raw,
         Err(error) => {
             log::warn!("ai_hook: cannot read hook preferences; installation skipped: {error}");
-            if let Some((_, kind)) =
+            if let Some(kind) =
                 report_heal_failures(failure_gate, &[settings_failure()], Instant::now())
             {
                 on_alert(kind);
@@ -87,105 +114,31 @@ fn heal_all(failure_gate: &mut TriggerGate, on_alert: &(impl Fn(HookFailureKind)
     for agent in settings::heal_enabled(&raw) {
         failures.push(install_failure(agent));
     }
-    // runtime skill 自愈:与 hook 自愈同一授权快照;全局显式
-    // 关闭(`slterm_ai_hooks=false`)不进 skill 自愈。只为已有配置目录的
-    // agent 投放,单家失败不阻断另一家。
-    if raw.bool_on(AgentHook::GLOBAL_SETTINGS_KEY) != Some(false) {
-        for (agent, path, result) in super::runtime_skills::ensure_runtime_skills() {
-            match result {
-                Ok(super::runtime_skills::ManagedSkillInstall::Installed) => {
-                    log::info!(
-                        "ai_hook: installed {agent} runtime skill at {}",
-                        path.display()
-                    )
-                }
-                Ok(super::runtime_skills::ManagedSkillInstall::Current) => {}
-                Ok(super::runtime_skills::ManagedSkillInstall::Conflict) => log::warn!(
-                    "ai_hook: preserving edited or unmanaged {agent} runtime skill near {}",
-                    path.display()
-                ),
-                Err(error) => {
-                    log::warn!("ai_hook: failed to install {agent} runtime skill: {error}");
-                    failures.push(skill_failure(agent));
-                }
-            }
-        }
-    }
-    if let Some((_, kind)) = report_heal_failures(failure_gate, &failures, Instant::now()) {
+    if let Some(kind) = report_heal_failures(failure_gate, &failures, Instant::now()) {
         on_alert(kind);
     }
 }
 
-/// hook 安装/修复失败的失败边投影。命令描述只参与规则表判定
-/// (`should_suggest`),不对应用户输入的历史命令。
-fn install_failure(agent: AgentHook) -> HookFailure {
-    HookFailure {
-        command: format!("slterm-hook install {}", agent.settings_key()),
-        program: None,
-        kind: HookFailureKind::Install {
-            agent: agent
-                .settings_key()
-                .trim_start_matches("slterm_ai_hooks_")
-                .to_owned(),
-        },
+fn install_failure(agent: AgentHook) -> HookFailureKind {
+    HookFailureKind::Install {
+        agent: agent
+            .settings_key()
+            .trim_start_matches("slterm_ai_hooks_")
+            .to_owned(),
     }
 }
 
-/// runtime skill 投放失败的失败边投影。
-fn skill_failure(agent: &str) -> HookFailure {
-    HookFailure {
-        command: format!("slterm-hook skill {agent}"),
-        program: None,
-        kind: HookFailureKind::Skill {
-            agent: agent.to_owned(),
-        },
-    }
+fn settings_failure() -> HookFailureKind {
+    HookFailureKind::Settings
 }
 
-/// 授权快照不可读时的失败边投影(本轮自愈没有执行)。
-fn settings_failure() -> HookFailure {
-    HookFailure {
-        command: "slterm-hook settings".into(),
-        program: None,
-        kind: HookFailureKind::Settings,
-    }
-}
-
-/// 失败边消费点:一条自愈失败进入 AI assistant
-/// 触发闸门。配置每轮失败读一次;同一轮的多条失败共享同一 `now`,冷却
-/// 保证只投第一条。默认关时 [`evaluate_hook_failure`] 不碰闸门。
+/// 同一轮只提示首条失败；空失败不消耗冷却。
 fn report_heal_failures(
-    gate: &mut TriggerGate,
-    failures: &[HookFailure],
+    gate: &mut FailureGate,
+    failures: &[HookFailureKind],
     now: Instant,
-) -> Option<(u64, HookFailureKind)> {
-    if failures.is_empty() {
-        return None;
-    }
-    report_heal_failures_at(gate, &AssistantConfig::load(), failures, now)
-}
-
-/// 显式配置注入形态(测试用),避免读生产数据目录。
-///
-/// 返回首个放行失败的 (seq, 用户可见类别):冷却决定同一轮只有首条放行,
-/// 呈现层据此投一条进程级提示,不接触合成命令。
-fn report_heal_failures_at(
-    gate: &mut TriggerGate,
-    config: &AssistantConfig,
-    failures: &[HookFailure],
-    now: Instant,
-) -> Option<(u64, HookFailureKind)> {
-    let mut fired = None;
-    for failure in failures {
-        if let Some(seq) = evaluate_hook_failure(gate, config, failure, now) {
-            log::info!(
-                "ai_hook: failure edge entered AI trigger chain: {} (seq {seq})",
-                failure.command
-            );
-            fired.get_or_insert((seq, failure.kind.clone()));
-        }
-    }
-    fired
+) -> Option<HookFailureKind> {
+    gate.report(failures, now)
 }
 
 fn config_guard(
@@ -197,8 +150,8 @@ fn config_guard(
     use notify::{RecursiveMode, Watcher};
     use std::sync::mpsc::RecvTimeoutError;
 
-    // 进程级失败边闸门:跨轮存活,冷却才有效。
-    let mut failure_gate = TriggerGate::default();
+    // 进程级提示冷却：跨轮存活，watcher 连发才不重复提示。
+    let mut failure_gate = FailureGate::default();
     heal_all(&mut failure_gate, &on_alert);
     // 配置事件只代表需要重读;合并成一个信号,避免繁忙目录堆积整批事件。
     let mut watcher =
@@ -267,127 +220,56 @@ fn config_guard(
 #[cfg(test)]
 mod config_guard_tests {
     use super::*;
-    use crate::ai_assistant::{COOLDOWN, HOOK_FAILURE_EXIT_CODE};
-
-    fn enabled_config() -> AssistantConfig {
-        AssistantConfig {
-            enabled: true,
-            ..AssistantConfig::default()
-        }
-    }
 
     #[test]
-    fn failure_edge_is_silent_by_default() {
-        let mut gate = TriggerGate::default();
-        let config = AssistantConfig::default();
-        assert!(!config.enabled, "失败边默认关");
+    fn empty_failures_do_not_consume_cooldown() {
+        let mut gate = FailureGate::default();
         let now = Instant::now();
-        assert!(
-            report_heal_failures_at(
-                &mut gate,
-                &config,
-                &[install_failure(AgentHook::Claude)],
-                now,
-            )
-            .is_none()
-        );
-        // 默认关不碰闸门:同一时刻开启后立即可触发(冷却未被占位)。
-        assert!(
-            gate.evaluate(true, 1, "cargoo build", None, &[], now)
-                .is_some()
-        );
-    }
-
-    #[test]
-    fn enabled_failure_edge_enters_the_gate_with_cooldown() {
-        let mut gate = TriggerGate::default();
-        let config = enabled_config();
-        let now = Instant::now();
-        let failures = [install_failure(AgentHook::Claude), skill_failure("codex")];
-        let first = report_heal_failures_at(&mut gate, &config, &failures, now).unwrap();
+        assert_eq!(report_heal_failures(&mut gate, &[], now), None);
         assert_eq!(
-            first.1,
-            HookFailureKind::Install {
+            report_heal_failures(&mut gate, &[install_failure(AgentHook::Claude)], now),
+            Some(HookFailureKind::Install {
                 agent: "claude".to_owned()
-            },
-            "呈现类别取首条放行失败,且不含合成命令"
+            })
         );
-        // 同轮第二条失败共享同一时刻,被冷却吸收。
-        assert!(
-            report_heal_failures_at(&mut gate, &config, &failures, now + Duration::from_secs(4))
-                .is_none()
-        );
-        let next = report_heal_failures_at(&mut gate, &config, &failures, now + COOLDOWN).unwrap();
-        assert!(first.0 < next.0, "seq 必须全局递增: {} {}", first.0, next.0);
     }
 
     #[test]
-    fn ignored_exit_code_silences_failure_edge() {
-        let mut gate = TriggerGate::default();
-        let config = AssistantConfig {
-            enabled: true,
-            ignored_exit_codes: vec![HOOK_FAILURE_EXIT_CODE],
-            ..AssistantConfig::default()
-        };
+    fn failure_alerts_are_cooled_down_without_assistant_config() {
+        let mut gate = FailureGate::default();
         let now = Instant::now();
-        assert!(
-            report_heal_failures_at(
-                &mut gate,
-                &config,
-                &[install_failure(AgentHook::Claude)],
-                now,
-            )
-            .is_none()
-        );
-        // 规则门不过不写冷却:同一时刻其它失败仍可触发。
-        assert!(
-            gate.evaluate(true, 1, "cargoo build", None, &[], now)
-                .is_some()
-        );
-    }
-
-    #[test]
-    fn failure_edge_commands_avoid_rule_table_traps() {
-        // claude/codex 在 INTERACTIVE 表里;失败边 program 必须为 None,
-        // 否则安装失败会被当成交互式程序的常态退出而静音。
-        let install = install_failure(AgentHook::Claude);
+        let failures = [install_failure(AgentHook::Claude), settings_failure()];
         assert_eq!(
-            install.command,
-            "slterm-hook install slterm_ai_hooks_claude"
+            report_heal_failures(&mut gate, &failures, now),
+            Some(HookFailureKind::Install {
+                agent: "claude".to_owned()
+            }),
+            "同一轮只提示首条失败"
         );
-        assert!(install.program.is_none());
-        assert_eq!(skill_failure("codex").command, "slterm-hook skill codex");
-        assert_eq!(skill_failure("codex").program, None);
-        assert_eq!(settings_failure().command, "slterm-hook settings");
-        assert_eq!(settings_failure().program, None);
-
-        let mut gate = TriggerGate::default();
-        let now = Instant::now();
-        assert!(report_heal_failures_at(&mut gate, &enabled_config(), &[install], now).is_some());
+        assert_eq!(
+            report_heal_failures(&mut gate, &failures, now + Duration::from_secs(4)),
+            None
+        );
+        assert_eq!(
+            report_heal_failures(&mut gate, &failures, now + COOLDOWN),
+            Some(HookFailureKind::Install {
+                agent: "claude".to_owned()
+            })
+        );
     }
 
-    /// 失败边呈现类别只带 agent/类别,不携带合成命令。
+    /// 失败提示只带 agent 与类别，不携带合成命令。
     #[test]
     fn failure_kinds_carry_no_synthetic_command_text() {
         let install = install_failure(AgentHook::Codex);
         assert_eq!(
-            install.kind,
+            install,
             HookFailureKind::Install {
                 agent: "codex".to_owned()
             }
         );
-        assert_eq!(
-            skill_failure("codex").kind,
-            HookFailureKind::Skill {
-                agent: "codex".to_owned()
-            }
-        );
-        assert_eq!(settings_failure().kind, HookFailureKind::Settings);
-        for kind in [
-            install.kind,
-            skill_failure("codex").kind,
-            settings_failure().kind,
-        ] {
+        assert_eq!(settings_failure(), HookFailureKind::Settings);
+        for kind in [install, settings_failure()] {
             let display = format!("{kind:?}");
             assert!(
                 !display.contains("slterm-hook"),

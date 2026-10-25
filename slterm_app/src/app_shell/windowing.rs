@@ -20,7 +20,6 @@ use super::workspace::sidebar::{self, SidebarState};
 use crate::brand;
 use crate::cli::Program;
 use crate::platform::startup::first_frame;
-use crate::runtime_api::RuntimeHub;
 use crate::session::WindowState;
 
 /// 首窗的启动形态(新终端 / 新终端并执行命令两变体)。
@@ -128,7 +127,6 @@ pub(crate) fn open_initial_window(
     initial_cwd: Option<PathBuf>,
     initial_command: Option<Program>,
     plan: StartupPlan,
-    runtime_hub: RuntimeHub,
     start_hidden: bool,
 ) {
     let startup = match initial_command {
@@ -147,17 +145,8 @@ pub(crate) fn open_initial_window(
         window.set_window_title(brand::NAME);
         // HWND 发布单点:任务栏闪烁/进度经 facade 查询。
         crate::windowing::focus::publish_window(window);
-        let workspace = cx.new(|cx| {
-            SltermWorkspace::new(
-                window,
-                shell_rx,
-                Some(ai_events),
-                startup,
-                plan,
-                runtime_hub,
-                cx,
-            )
-        });
+        let workspace =
+            cx.new(|cx| SltermWorkspace::new(window, shell_rx, Some(ai_events), startup, plan, cx));
         cx.new(|cx| Root::new(workspace, window, cx))
     });
     match result {

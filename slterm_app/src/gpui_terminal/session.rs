@@ -109,6 +109,23 @@ pub(super) fn local_options(
     pane_id: slterm_split::PaneId,
     cwd: Option<std::path::PathBuf>,
 ) -> std::io::Result<tty::Options> {
+    local_options_with_refresh(
+        shell,
+        explicit_command,
+        pane_id,
+        cwd,
+        tty::refresh_environment,
+    )
+}
+
+/// 环境刷新可注入，便于覆盖刷新失败的原生继承回退分支。
+fn local_options_with_refresh(
+    shell: Option<tty::Shell>,
+    explicit_command: bool,
+    pane_id: slterm_split::PaneId,
+    cwd: Option<std::path::PathBuf>,
+    refresh: impl FnOnce(&mut tty::Options) -> std::io::Result<()>,
+) -> std::io::Result<tty::Options> {
     let shell = match (shell, explicit_command) {
         (Some(shell), true) => {
             let program = tty::resolve_explicit_command(shell.program())?;
@@ -122,20 +139,19 @@ pub(super) fn local_options(
         ..Default::default()
     };
     options.explicit_command = explicit_command;
-    // 注册表快照合并(MACHINE+USER 环境),置 env_is_complete;失败仅降级
-    // 为进程环境继承,不拦启动(与上游 prepare_local_pty 同语义)。
-    if let Err(error) = tty::refresh_environment(&mut options) {
-        log::warn!("环境快照合并失败,回退进程环境继承: {error}");
+    // 注册表快照合并(MACHINE+USER 环境),成功时置 env_is_complete；失败则
+    // 保留增量环境，由 ConPTY 合并原生父环境并按排除名过滤旧端点。
+    if let Err(error) = refresh(&mut options) {
+        log::warn!("环境快照合并失败,回退原生进程环境继承: {error}");
     }
     // conpty_sideload 硬编码 true(换设置键真读时此处是唯一换点;
     // core `Options::default()` 同值,显式写出是登记锚)。
     options.conpty_sideload = true;
-    // 固定身份/能力注入:core `setup_env` 只写 TERM/COLORTERM;身份组、
-    // CLI 发现与端点注入统一走 `agent_env::apply` 末位(runtime_api
-    // CHILD_ENDPOINT 在 apply 末尾注入,早于首个 PTY spawn 即已登记)。
-    options.env.insert("TERM".into(), "xterm-256color".into());
-    options.env.insert("COLORTERM".into(), "truecolor".into());
-    crate::agent_env::apply(&mut options.env, pane_id.0);
+    // 固定身份/能力注入:core `setup_env` 只写 TERM/COLORTERM;身份组与
+    // CLI 发现统一走 `agent_env::apply`。
+    options.env.insert("TERM", "xterm-256color");
+    options.env.insert("COLORTERM", "truecolor");
+    crate::agent_env::apply(&mut options, pane_id.0);
     Ok(options)
 }
 
@@ -234,5 +250,35 @@ mod local_options_tests {
         let shell = options.shell.expect("shell 应保留");
         assert_eq!(shell.program(), "cmd", "非显式通道应原样保留裸名");
         assert!(!options.explicit_command, "标记不得置位");
+    }
+
+    #[test]
+    fn refresh_failure_keeps_native_inheritance_and_excludes_legacy_endpoint() {
+        let options = local_options_with_refresh(None, false, pane(), None, |options| {
+            options
+                .env
+                .insert("SLTERM_REFRESH_FALLBACK_TEST", "preserved");
+            Err(std::io::Error::other("injected refresh failure"))
+        })
+        .expect("环境刷新失败必须回退到原生进程环境继承");
+
+        assert!(
+            !options.env_is_complete,
+            "回退必须继续由 ConPTY 合并原生父环境"
+        );
+        assert!(
+            options.inherited_env_exclusions.iter().any(|name| {
+                name.eq_ignore_ascii_case(std::ffi::OsStr::new("SLTERM_RUNTIME_ENDPOINT"))
+            }),
+            "旧 Runtime 端点必须在继承合并处排除"
+        );
+        assert_eq!(
+            options
+                .env
+                .get("SLTERM_REFRESH_FALLBACK_TEST")
+                .and_then(std::ffi::OsStr::to_str),
+            Some("preserved"),
+            "刷新失败不得丢弃已组装的自定义环境"
+        );
     }
 }

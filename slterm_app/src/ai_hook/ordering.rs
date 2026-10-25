@@ -217,7 +217,7 @@ fn event_fingerprint(event: &AiHookEvent) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     event.kind.hash(&mut hasher);
     event.message.hash(&mut hasher);
-    event.answer.hash(&mut hasher);
+    event.message_fingerprint.hash(&mut hasher);
     event.background_tasks.hash(&mut hasher);
     if let Some(attention) = event.attention.as_ref() {
         attention.cwd.hash(&mut hasher);

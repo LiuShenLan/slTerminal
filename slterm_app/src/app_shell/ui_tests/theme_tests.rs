@@ -5,7 +5,6 @@ use super::*;
 use crate::app_shell::settings_pane::SettingsPane;
 use crate::app_shell::settings_pane::ThemeColorSlot;
 use crate::theme_library::ThemeLibraryStore;
-use crate::theme_library::package::{Author, CheckedPackage, export_package};
 use slterm_settings::BlurMode;
 
 // ── 主题编辑关键路径 ──
@@ -830,20 +829,10 @@ fn theme_editor_rejects_invalid_letter_spacing_and_font_weight(cx: &mut TestAppC
     );
 }
 
-// ── 主题包导入/导出 UI ──
+// ── 单文件主题导入 UI ──
 
-/// 在 tempdir 主题库写入一个自定义主题文档,返回其 id。
-fn seed_custom_theme(directory: &std::path::Path, name: &str) -> String {
-    let store = ThemeLibraryStore::new(directory.join("themes"));
-    let mut definition =
-        slterm_settings::ThemeDefinition::from_builtin(slterm_settings::ThemeName::Nord);
-    definition.name = name.to_owned();
-    let document = crate::theme_library::from_definition(&definition).unwrap();
-    store.import(&document).unwrap().id().unwrap().to_owned()
-}
-
-/// 用导出器生成一个合法主题包(导入用例的来源夹具)。
-fn write_theme_package(
+/// 生成一个合法的单文件 JSON 主题来源。
+fn write_theme_json(
     directory: &std::path::Path,
     name: &str,
     file_name: &str,
@@ -853,37 +842,24 @@ fn write_theme_package(
     definition.name = name.to_owned();
     let document = crate::theme_library::from_definition(&definition).unwrap();
     let output = directory.join(file_name);
-    export_package(
-        &document,
-        Author {
-            name: crate::brand::NAME.to_owned(),
-            github: None,
-        },
-        "1.0.0".into(),
-        "MIT".into(),
-        &output,
-        None,
-    )
-    .unwrap();
+    std::fs::write(&output, document.to_json_bytes().unwrap()).unwrap();
     output
 }
 
-/// 导入合法包:库增项、状态提示成功,且导入主题进入编辑器模板下拉。
+/// 导入合法 JSON:库增项、状态提示成功,且导入主题进入编辑器模板下拉。
 #[gpui::test]
 fn theme_import_adds_a_selectable_library_entry(cx: &mut TestAppContext) {
     let (workspace, mut window) = open_workspace(cx);
     let directory = tempfile::tempdir().unwrap();
     let settings_path = directory.path().join("settings.json");
     let pane = open_settings_at(cx, &workspace, &mut window, settings_path.clone());
-    let package = write_theme_package(directory.path(), "Imported Aurora", "aurora.zip");
+    let source = write_theme_json(directory.path(), "Imported Aurora", "aurora.json");
 
     window.update(|window, cx| {
-        pane.update(cx, |pane, cx| {
-            pane.import_theme_package_for_test(window, cx)
-        });
+        pane.update(cx, |pane, cx| pane.import_theme_for_test(window, cx));
     });
     assert!(window.did_prompt_for_paths(), "导入必须打开文件选择器");
-    window.simulate_path_prompt_response(|_| Some(vec![package]));
+    window.simulate_path_prompt_response(|_| Some(vec![source]));
     window.run_until_parked();
 
     let store = ThemeLibraryStore::new(directory.path().join("themes"));
@@ -925,20 +901,18 @@ fn theme_import_adds_a_selectable_library_entry(cx: &mut TestAppContext) {
     });
 }
 
-/// 非法包:状态条给可读错误,主题库不变(零部分写入)。
+/// 非法 JSON:状态条给可读错误,主题库不变(零部分写入)。
 #[gpui::test]
-fn invalid_theme_package_reports_an_error_without_touching_the_library(cx: &mut TestAppContext) {
+fn invalid_theme_json_reports_an_error_without_touching_the_library(cx: &mut TestAppContext) {
     let (workspace, mut window) = open_workspace(cx);
     let directory = tempfile::tempdir().unwrap();
     let settings_path = directory.path().join("settings.json");
     let pane = open_settings_at(cx, &workspace, &mut window, settings_path.clone());
-    let broken = directory.path().join("broken.zip");
-    std::fs::write(&broken, b"not a zip archive").unwrap();
+    let broken = directory.path().join("broken.json");
+    std::fs::write(&broken, b"not valid JSON").unwrap();
 
     window.update(|window, cx| {
-        pane.update(cx, |pane, cx| {
-            pane.import_theme_package_for_test(window, cx)
-        });
+        pane.update(cx, |pane, cx| pane.import_theme_for_test(window, cx));
     });
     window.simulate_path_prompt_response(|_| Some(vec![broken]));
     window.run_until_parked();
@@ -946,13 +920,13 @@ fn invalid_theme_package_reports_an_error_without_touching_the_library(cx: &mut 
     cx.update(|cx| {
         let pane = pane.read(cx);
         let status = pane.status_for_test().expect("失败必须留下状态");
-        assert!(status.is_error(), "非法包必须标为错误: {status:?}");
+        assert!(status.is_error(), "非法 JSON 必须标为错误: {status:?}");
         assert!(!pane.theme_import_busy_for_test());
     });
     let store = ThemeLibraryStore::new(directory.path().join("themes"));
     assert!(
         store.list().unwrap().custom.is_empty(),
-        "非法包不得产生库条目"
+        "非法 JSON 不得产生库条目"
     );
     assert!(
         !directory.path().join("themes").exists()
@@ -960,75 +934,21 @@ fn invalid_theme_package_reports_an_error_without_touching_the_library(cx: &mut 
                 .unwrap()
                 .next()
                 .is_none(),
-        "非法包不得留下部分写入"
+        "非法 JSON 不得留下部分写入"
     );
     assert!(!settings_path.exists(), "失败不得改设置");
 }
 
-/// 导出当前自定义主题:成品可自检,文档与库内主题一致。
+/// 取消导入对话框:零写入、忙态复位。
 #[gpui::test]
-fn theme_export_round_trips_the_active_custom_theme(cx: &mut TestAppContext) {
-    let (workspace, mut window) = open_workspace(cx);
-    let directory = tempfile::tempdir().unwrap();
-    let settings_path = directory.path().join("settings.json");
-    let theme_id = seed_custom_theme(directory.path(), "Exported Theme");
-    std::fs::write(
-        &settings_path,
-        format!(r#"{{"appearance":{{"custom_theme":"{theme_id}"}}}}"#),
-    )
-    .unwrap();
-    let settings_before = std::fs::read(&settings_path).unwrap();
-    let pane = open_settings_at(cx, &workspace, &mut window, settings_path.clone());
-    let output = directory.path().join("exported.zip");
-
-    window.update(|window, cx| {
-        pane.update(cx, |pane, cx| {
-            pane.export_theme_package_for_test(window, cx)
-        });
-    });
-    window.simulate_new_path_selection(|_| Some(output.clone()));
-    window.run_until_parked();
-
-    assert!(output.exists(), "导出必须生成目标文件");
-    let checked = CheckedPackage::open(&output).expect("导出成品必须能通过整包自检");
-    let current = ThemeLibraryStore::new(directory.path().join("themes"))
-        .load(&theme_id)
-        .unwrap();
-    assert_eq!(checked.manifest.name, current.name());
-    assert_eq!(
-        checked.document.definition().unwrap(),
-        current.definition().unwrap(),
-        "导出文档必须与当前自定义主题一致"
-    );
-    assert_eq!(checked.manifest.author.name, crate::brand::NAME);
-    assert_eq!(checked.manifest.version, env!("CARGO_PKG_VERSION"));
-    assert_eq!(checked.manifest.license, "GPL-3.0");
-    cx.update(|cx| {
-        let pane = pane.read(cx);
-        let status = pane.status_for_test().expect("导出成功必须给出提示");
-        assert!(!status.is_error(), "{status:?}");
-        assert!(!pane.theme_export_busy_for_test());
-    });
-    assert_eq!(
-        std::fs::read(&settings_path).unwrap(),
-        settings_before,
-        "导出不得改设置"
-    );
-}
-
-/// 两个对话框取消:零写入、忙态复位。
-#[gpui::test]
-fn cancelling_theme_package_dialogs_writes_nothing(cx: &mut TestAppContext) {
+fn cancelling_theme_import_dialog_writes_nothing(cx: &mut TestAppContext) {
     let (workspace, mut window) = open_workspace(cx);
     let directory = tempfile::tempdir().unwrap();
     let settings_path = directory.path().join("settings.json");
     let pane = open_settings_at(cx, &workspace, &mut window, settings_path.clone());
 
-    // 导入取消。
     window.update(|window, cx| {
-        pane.update(cx, |pane, cx| {
-            pane.import_theme_package_for_test(window, cx)
-        });
+        pane.update(cx, |pane, cx| pane.import_theme_for_test(window, cx));
     });
     assert!(window.did_prompt_for_paths());
     window.simulate_path_prompt_response(|_| None);
@@ -1038,44 +958,9 @@ fn cancelling_theme_package_dialogs_writes_nothing(cx: &mut TestAppContext) {
         assert!(pane.read(cx).status_for_test().is_none());
     });
     assert!(!settings_path.exists(), "取消导入不得写设置");
-
-    // 导出取消:关掉旧设置 tab 后以带自定义主题的设置文件重建面板。
-    click_selector(&mut window, "settings-back");
-    draw_frame(&mut window);
-    let theme_id = seed_custom_theme(directory.path(), "Cancel Export");
-    std::fs::write(
-        &settings_path,
-        format!(r#"{{"appearance":{{"custom_theme":"{theme_id}"}}}}"#),
-    )
-    .unwrap();
-    let settings_before = std::fs::read(&settings_path).unwrap();
-    let pane = open_settings_at(cx, &workspace, &mut window, settings_path.clone());
-
-    window.update(|window, cx| {
-        pane.update(cx, |pane, cx| {
-            pane.export_theme_package_for_test(window, cx)
-        });
-    });
-    window.simulate_new_path_selection(|_| None);
-    window.run_until_parked();
-    cx.update(|cx| {
-        assert!(!pane.read(cx).theme_export_busy_for_test());
-        assert!(pane.read(cx).status_for_test().is_none());
-    });
-    assert_eq!(
-        std::fs::read(&settings_path).unwrap(),
-        settings_before,
-        "取消导出不得写设置"
-    );
     assert!(
-        std::fs::read_dir(directory.path())
-            .unwrap()
-            .all(|entry| !entry
-                .unwrap()
-                .file_name()
-                .to_string_lossy()
-                .ends_with(".zip")),
-        "取消导出不得产出包文件"
+        !directory.path().join("themes").exists(),
+        "取消导入不得创建主题库"
     );
 }
 

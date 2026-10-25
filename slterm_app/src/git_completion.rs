@@ -421,7 +421,7 @@ pub(crate) mod tests {
 
     fn test_execution(cwd: &std::path::Path) -> Execution {
         Execution::Process {
-            context: crate::runtime_exec::PaneExecContext::from_pty_options(
+            context: crate::completion::PaneExecContext::from_pty_options(
                 &slterm_terminal::tty::Options {
                     working_directory: Some(cwd.to_owned()),
                     ..Default::default()

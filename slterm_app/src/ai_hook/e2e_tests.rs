@@ -148,9 +148,9 @@ fn real_pipe_prompt_submit_reaches_the_owning_pane_host() {
 }
 
 /// 坏载荷(别家 runner 的 camelCase 形态)在宿主侧解析被拒,绝不投递;
-/// 紧随其后的合法 TurnDone 把回答原文收编进本 pane 的 `AnswerInbox`。
+/// 紧随其后的合法 TurnDone 只更新本 pane 的生命周期。
 #[test]
-fn real_pipe_foreign_payload_is_dropped_and_answer_is_owned_by_pane() {
+fn real_pipe_foreign_payload_is_dropped_and_turn_done_is_owned_by_pane() {
     let _serial = serial();
     let (receiver, mut server) = spawn_gpui_server();
     let pipe = std::env::var(PIPE_ENV).expect("启动管道服务必须发布管道名");
@@ -179,13 +179,7 @@ fn real_pipe_foreign_payload_is_dropped_and_answer_is_owned_by_pane() {
 
     let owner = hub.host(PaneId(3)).expect("pane 3 宿主");
     assert_eq!(owner.status(), AgentStatus::Done);
-    let answer = owner.latest_answer().expect("回答应收编进 pane 3 收件箱");
-    assert_eq!(answer.session_id, "pipe-e2e-answer");
-    assert_eq!(
-        answer.content.source().expect("完整回答").as_ref(),
-        "原样回答"
-    );
-    assert!(hub.host(PaneId(4)).unwrap().latest_answer().is_none());
+    assert_eq!(hub.host(PaneId(4)).unwrap().status(), AgentStatus::Unknown);
 
     server.shutdown();
 }

@@ -17,7 +17,7 @@ pub(crate) mod atomic_file;
 // 安全审计通道:tracing target "audit";
 // 设置写唯一包装(user 层 settings.json + app 设置)+ 哈希对账事件。
 pub(crate) mod audit;
-// 单 pane 宿主:事件泵派发与 AgentActivity/AnswerInbox 归属。
+// 单 pane 宿主:事件泵派发与 AgentActivity 归属。
 pub(crate) mod agent_host;
 // 后台任务注册表:元数据单点、订阅生命周期、重入闸门与
 // 失败策略;1 Hz 看门狗/托盘快照与更新检查/预取收编于此。
@@ -26,18 +26,10 @@ pub(crate) mod background_tasks;
 // OSC 133 匹配器消费归终端视图,设置/会话面归设置与会话域。
 #[allow(dead_code)]
 pub(crate) mod ai_agents;
-// AI assistant 触发链:便宜门链纯函数、独立配置与建议条
-// 数据形态;建议条渲染与请求发送归终端视图。
-#[allow(dead_code)]
-pub(crate) mod ai_assistant;
 // 事件通道已接线;安装/检视面(settings.rs 等)的消费点归设置页
 // 设置域,桥接资产与自愈入口已落盘但尚无壳侧调用方。
 #[allow(dead_code)]
 pub(crate) mod ai_hook;
-// provider 元数据与凭据引用(凭据纪律归 secrets 域):
-// 十三家预设、尾四掩码、注入式凭据读写;设置页消费归设置域。
-#[allow(dead_code)]
-pub(crate) mod ai_providers;
 // 会话注册表写入已由 SessionStart 边接线;扫描列表/手动恢复面板的
 // 消费点归后续(命令面板)。
 #[allow(dead_code)]
@@ -48,8 +40,6 @@ pub(crate) mod agent_dirs;
 // per-pane 环境注入消费点归 PTY spawn 链。
 #[allow(dead_code)]
 pub(crate) mod agent_env;
-#[allow(dead_code)] // 挂 pane 宿主归工作区,回答展示归阅读器。
-pub(crate) mod assistant_answer;
 pub mod brand;
 pub(crate) mod cli;
 // 补全应用层:Session/Request 分层、来源缓存与后台计算。
@@ -65,8 +55,6 @@ pub(crate) mod document_io;
 // 与加密恢复点撤回。UI 入口归设置页安全分区,本模块只落引擎。
 #[allow(dead_code)]
 pub(crate) mod encrypted_backup;
-// 事务型 Git worktree(agent.fork 消费):只回滚本事务
-// 证明创建过的资源,失败路径不留半成品。
 pub mod error;
 // git 子进程执行体 facade(子进程统一已裁):只读面 = 仓库根 +
 // HEAD 字节(gitshow 数据源);四方法执行归 `git::command`。
@@ -74,7 +62,6 @@ pub(crate) mod git;
 // 有界本地 Git 发现:3s/1MB 双预算 + TTL + 代次失效。
 #[allow(dead_code)]
 pub(crate) mod git_completion;
-pub(crate) mod git_worktree;
 pub(crate) mod gpui_terminal;
 // fish 式本地历史:单池 jsonl + 前缀 range。
 #[allow(dead_code)] // 消费点归提交事件与 ghost。
@@ -84,12 +71,11 @@ pub(crate) mod history;
 pub(crate) mod i18n;
 pub(crate) mod logging;
 // 数学引擎:后端无关 TeX 子集——parser→validate→IR→layout→
-// compile→rasterizer/bitmap/cache/font/spacing 十模块。呈现接线(终端
-// 覆盖层 paint pass、markdown 数学)归终端视图。
-#[allow(dead_code)] // 消费点归终端视图。
+// compile→rasterizer/bitmap/cache/font/spacing 十模块。
+#[allow(dead_code)] // 消费点归 Markdown 阅读器。
 pub(crate) mod math;
 // 自含 markdown 文档模型(管线 B):扁平块序列 + 数学片段;
-// 数学适配(MathRun/measure/fit)与终端覆盖层共用引擎单点。
+// 数学适配(MathRun/measure/fit)复用同一公式引擎。
 #[allow(dead_code)] // 阅读器渲染接线归文件编辑器;本模块交付模型与数学适配。
 pub(crate) mod markdown;
 // 通知中心单一漏斗:六变体、去重/节流/失败冷却/前台门控;
@@ -102,17 +88,9 @@ pub(crate) mod panic;
 pub(crate) mod plan_balance;
 pub(crate) mod platform;
 pub(crate) mod process_tree;
-// provider 连通性测试语义化结果:UI 边界再转本地化文案。
-#[allow(dead_code)]
-pub(crate) mod provider_test;
-// Runtime 控制面:版本化信封 + loopback JSON Lines 传输;
-// RuntimeHub/方法族/CLI/单实例移交继续接线。
-pub(crate) mod runtime_api;
-// 非 TTY pane.exec 执行器:argv 无 shell 展开、双流并行排水、
-// 超时整树回收;UI owner 以 `spawn` 把结果 respond 回 transport。
-pub(crate) mod runtime_exec;
 // 凭据域消费接口(过渡形态):trait + 出域句柄;真实
 // Windows 凭据管理器三原语归平台凭据后端。
+#[allow(dead_code)] // 生产消费点归凭据域;三原语与边界由单元测试锁定。
 pub(crate) mod secrets;
 // 回归语料:数学条目逐例编译/栅格不回归;化学/生物条目已裁。
 #[cfg(test)]
@@ -142,34 +120,25 @@ pub(crate) mod update_download;
 // 更新 HTTP 客户端与代理解析:注册表 ProxyServer 按协议
 // 取值、socks 归 socks5、env 回退、NO_PROXY、https_only 双超时。
 pub(crate) mod update_proxy;
-// 窗口管理 facade:四路回窗(toast/托盘/按钮/ATTACH)与
-// HWND 查询的编译期单一实现点;Win32 焦点/还原原语只在本模块出现。
+// 窗口管理 facade:通知与托盘回窗、HWND 查询的编译期单一实现点;
+// Win32 焦点/还原原语只在本模块出现。
 pub(crate) mod windowing;
-// 终端数学覆盖层:有界扫描、LineProjection、CoverageMask 与
-// 后端无关绘制计划。终端仍是真值——不改 cell/滚动/选区/复制语义。
-#[allow(dead_code)] // 消费点归 GPUI paint pass。
-pub(crate) mod terminal_math;
-pub(crate) mod terminal_registry;
 // 文本快照:编码/行尾/只读合同单点;编辑内核的共享底座。
 pub(crate) mod text_document;
-// 主题库应用侧:版本化 JSON 信封/自定义主题持久化/主题包
-// 有界检查。设置层管值、应用层管格式的分层边界件。
+// 主题库应用侧:版本化 JSON 信封、自定义主题持久化与单文件有界导入。
+// 设置层管值、应用层管格式的分层边界件。
 pub(crate) mod theme_library;
 
 use std::error::Error;
 
-/// 启动链(序固定,逐环因果见各环节注释):
-/// boot_trace 锚点 → CLI 解析/同 exe 分流 → panic 钩 → console 准备 → 日志 → run_shell。
+/// 启动链（序固定）：boot_trace → CLI 解析/本地维护分流 → panic 钩 →
+/// console 准备 → 日志 → run_shell。
 ///
-/// 带子命令 = CLI 客户端人格(请求-响应后退出,不初始化
-/// GUI 子系统);无子命令 = GUI 启动。
-///
-/// 上游对照剪枝:helper 拦截(ai_session_identity)归 03;环境双名导入层消亡;
-/// mux probe / 单实例移交归 runtime_api(二次启动 = 双进程过渡态)。
+/// 本地维护子命令直接执行并退出；无子命令才进入 GUI 启动链。
 pub fn run() -> Result<(), Box<dyn Error>> {
     use clap::Parser as _;
 
-    // 第一句:启动剖析 t=0 锚点(core 侧 PTY 段共用同一开关,见 slterm_terminal)。
+    // 第一句：启动剖析 t=0 锚点（core 侧 PTY 段共用同一开关）。
     boot_trace("main enter");
 
     // clap 统一承载 --help/--version 与解析拒绝的退出码语义。
@@ -177,10 +146,9 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         Ok(cli) => cli,
         Err(error) => error.exit(),
     };
-    // CLI 人格:响应一律 JSON,退出码由 run_cli 决定;control plane 是给
-    // pane 里的 AI CLI 用的,不启动 GUI/日志/窗口。
+    // 本地维护命令不启动 GUI、日志或窗口，也不读取运行中实例。
     if let Some(command) = cli.subcommands {
-        std::process::exit(crate::runtime_api::run_cli(command));
+        std::process::exit(cli::run_local(command));
     }
     let options = cli.startup_options();
     boot_trace("cli parsed");
@@ -197,6 +165,12 @@ pub fn run() -> Result<(), Box<dyn Error>> {
 
     // logger 先于一切子系统初始化,捕获后续所有启动阶段的输出。
     let _log_file = logging::initialize().expect("Unable to initialize logger");
+
+    // 单实例锁独立于控制面：无可用移交服务时不得降级成第二窗口。
+    let _instance_guard = platform::instance::acquire().map_err(|error| {
+        log::error!("single-instance startup rejected: {error}");
+        error
+    })?;
 
     log::info!("Welcome to {}", brand::NAME);
     log::info!("Version {}", env!("CARGO_PKG_VERSION"));

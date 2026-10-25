@@ -212,7 +212,7 @@ mod tests {
     #[test]
     fn ink_free_glyphs_rasterize_to_an_empty_bitmap() {
         // `\text{…}` 里的空格是合法的无墨字形。把它当缺字报错，会让合成器
-        // 放弃整张位图——公式源格已经被覆盖掩码藏掉，屏幕上只剩一个空洞。
+        // 放弃整张位图，调用方只能回退为公式源码。
         let font = MathFont::load().unwrap();
         let space = font.glyph_id(' ').unwrap();
         let rasterizer = MathGlyphRasterizer::new().unwrap();

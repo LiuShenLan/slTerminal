@@ -1,8 +1,8 @@
 //! 应用壳:GPUI 消息循环装配与窗口生命周期(模块名映射:上游 `gpui_shell` →
 //! `app_shell`,层级压平一格——无旧壳对照,旧名失去参照对象)。
 //!
-//! 壳即前端:壳内状态权威雏形 = `SltermWorkspace` 直持 pane 实体与展示态,
-//! 无投影层(RuntimeHub facade 缝归 `runtime_projection`)。
+//! 壳即前端:壳内状态权威 = `SltermWorkspace` 直持 pane 实体与展示态,
+//! 无跨进程投影层。
 
 // 编译期拦截(照上游随迁):裸 println!/eprintln! 在无效标准句柄上 panic;
 // console 子系统下句柄通常有效,拦截宏仍保留——诊断统一走 try_write_stderr 单点。
@@ -27,8 +27,6 @@ pub(crate) mod code_tab;
 pub(crate) mod config;
 // 通用 diff 对照面(双栏只读)。
 pub(crate) mod diff_tab;
-// 冲突三栏合并面(base/ours/theirs 只读 + 采用版本)。
-pub(crate) mod merge_tab;
 // 文档/图片 tab + openable_in_app 路由单判定。
 pub(crate) mod doc_tabs;
 // 编辑器语义槽装配(颜色单源 = UI token)。
@@ -69,23 +67,12 @@ pub(crate) fn try_write_stderr(args: fmt::Arguments<'_>) {
     let _ = writeln!(std::io::stderr(), "{args}");
 }
 
-/// 壳跨线程唤醒事件(上游同名枚举裁剪:Tray*/Notification*/SshPrompt/
-/// UpdateAvailable 臂不迁)。
-///
-/// 变体收窄为三个,生产者/消费归各领域模块:
-/// - `RuntimeControl` 载荷是 `Arc<RuntimeDispatch>`;
-///   生产者 = `RuntimeServer::spawn_callback`,UI owner 执行后 respond;
-/// - `OpenDirectories` 的消费(on_open_urls/右键「在此处打开」)归窗口/平台域,
-///   登记不接线。
-#[allow(dead_code)] // 接线前仅 `MuxAttach` 无生产者;逐变体注释为证。
+/// 壳跨线程唤醒事件；生产者与消费归各领域模块。
 pub(crate) enum SltermShellEvent {
-    /// 预埋缝:生产者 = `RuntimeServer::spawn_callback`。
-    MuxAttach,
-    /// 写命令派发:UI owner 执行后经 `RuntimeDispatch::respond` 回执。
-    RuntimeControl(std::sync::Arc<crate::runtime_api::RuntimeDispatch>),
     /// 消费(右键「在此处打开」/on_open_urls 落盘)归窗口/平台域;本模块只登记发送端。
+    #[allow(dead_code)] // 打开目录载荷由平台消费，壳事件本身只负责转发。
     OpenDirectories(Vec<String>),
-    /// toast 点击回窗(窗口 facade 接管四路回窗)。
+    /// toast 点击回窗(统一走窗口 facade)。
     /// 托盘左键/菜单「显示」同样走这条单窗回窗语义。
     NotificationFocus(Option<PaneId>),
     /// 权限确认 toast 的动作按钮回传(安全半程消费;本片只交付通道面)。
@@ -101,7 +88,7 @@ pub(crate) enum SltermShellEvent {
     UpdateAvailable(crate::update_check::UpdateCheckResult),
     /// AI hook 自愈失败边(类别 + agent,不含合成命令)。消费 = 进程级
     /// 通知,不绑定 pane,也不直出技术化命令文本。
-    AiHookAlert(crate::ai_assistant::HookFailureKind),
+    AiHookAlert(crate::ai_hook::HookFailureKind),
 }
 
 /// 本次启动是否静默。
@@ -170,34 +157,6 @@ pub fn run_shell(initial_cwd: Option<PathBuf>, initial_command: Option<Program>)
     };
     let (shell_tx, shell_rx) = mpsc::channel();
     let open_urls_tx = shell_tx.clone();
-    // 单实例控制面先于窗口创建。hub 是壳与服务端共享的同一份
-    // 状态权威;回调把 ATTACH/Control 桥进壳事件队列。
-    let runtime_hub = crate::runtime_api::RuntimeHub::new();
-    let runtime_server = {
-        let shell_events = shell_tx.clone();
-        crate::runtime_api::RuntimeServer::spawn_callback(
-            move |callback| {
-                let event = match callback {
-                    crate::runtime_api::RuntimeCallback::Attach => SltermShellEvent::MuxAttach,
-                    crate::runtime_api::RuntimeCallback::Control(dispatch) => {
-                        SltermShellEvent::RuntimeControl(dispatch)
-                    }
-                };
-                let _ = shell_events.send(event);
-            },
-            runtime_hub.clone(),
-        )
-    };
-    if runtime_server.is_none() && initial_command.is_none() {
-        // 与对端抢锁竞态:对方可能已拿锁但端点尚未落盘;40 × 25ms 重试
-        // 后再决定自启还是移交(契约数值)。
-        let handover_cwd = initial_cwd.clone().or_else(|| std::env::current_dir().ok());
-        if crate::runtime_api::handover_to_existing_instance(handover_cwd.as_deref(), None) {
-            log::info!("runtime handover succeeded; this instance exits without a window");
-            return;
-        }
-    }
-    let _runtime_server = runtime_server; // 随壳生命周期持有;Drop 删自己的端口记录
     // 进程级 hook 管道(单实例,非 per-pane):必须在首个 PTY spawn 之前发布
     // `SLTERM_NOTIFY_PIPE`——ConPTY 合并当前进程环境,全部 pane 的子进程树
     // 天然携带作用域闸门。句柄活到事件循环退出,关窗后确定性回收 accept 线程。
@@ -252,7 +211,6 @@ pub fn run_shell(initial_cwd: Option<PathBuf>, initial_command: Option<Program>)
             initial_cwd,
             initial_command,
             startup_plan,
-            runtime_hub,
             start_hidden,
         );
         // 窗口建立后按实际恢复的窗口数确认交接 ticket(不一致则

@@ -14,10 +14,5 @@ test = false
 name = "lib_tests"
 path = "src/lib.rs"
 
-# 零生产依赖契约(architecture/dependencies.toml 机械强制):线缆类型只借用
-# 字符串,序列化与平台路径校验由调用方承担。
+# 当前仅保留协议 crate 边界，无生产依赖或测试专用序列化依赖。
 [dependencies]
-
-[dev-dependencies]
-# 仅测试用于验证随包 JSON Schema 可解析。
-serde_json = "1"

@@ -1,7 +1,6 @@
-//! 窗口管理 facade:四路回窗的编译期单一实现点。
+//! 窗口管理 facade:回窗的编译期单一实现点。
 //!
-//! 四路 = toast 点击、托盘回窗、toast 动作按钮、legacy ATTACH。四者最终都
-//! 汇到 [`focus`]:调用方只传目标(窗口 / 窗内 pane),窗口还原、前置与
+//! toast 点击、托盘回窗与 toast 动作按钮最终都汇到 [`focus`]:调用方只传目标(窗口 / 窗内 pane),窗口还原、前置与
 //! HWND 查询只在本文件实现;`SetForegroundWindow`/`ShowWindow` 等 Win32
 //! 焦点原语不得出现在别处(门禁用例
 //! `win32_focus_calls_only_live_in_the_facade`)。
@@ -50,7 +49,7 @@ pub(crate) fn focus_steps(minimized: bool) -> &'static [FocusStep] {
     }
 }
 
-/// 四路回窗的唯一入口:目标 `None` = 只聚焦窗口;`Some(pane)` = 窗口 +
+/// 回窗的唯一入口:目标 `None` = 只聚焦窗口;`Some(pane)` = 窗口 +
 /// 选中所在 tab + 窗内聚焦 pane。
 pub(crate) fn focus(
     workspace: &mut SltermWorkspace,
@@ -218,7 +217,7 @@ mod focus_tests {
         }
         assert!(
             violations.is_empty(),
-            "四路回窗必须汇到 windowing::focus;以下位置绕过了 facade:\n{}",
+            "回窗必须汇到 windowing::focus;以下位置绕过了 facade:\n{}",
             violations.join("\n")
         );
     }
@@ -233,11 +232,10 @@ mod focus_tests {
             !notify.contains("WINDOW_HWND"),
             "notify.rs 不得保留窗口句柄静态;查询统一走 windowing::focus::window_hwnd"
         );
-        let runtime_control =
-            std::fs::read_to_string(source_root.join("app_shell/workspace/runtime_control.rs"))
-                .unwrap();
+        let control =
+            std::fs::read_to_string(source_root.join("app_shell/workspace/control.rs")).unwrap();
         assert!(
-            !runtime_control.contains("activate_window("),
+            !control.contains("activate_window("),
             "壳事件泵必须经 windowing::focus 回窗,不得自行 activate_window"
         );
     }

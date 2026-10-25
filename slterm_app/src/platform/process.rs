@@ -20,28 +20,24 @@ pub(crate) fn hidden_command(command: &mut Command) -> &mut Command {
     command.creation_flags(CREATE_NO_WINDOW)
 }
 
-/// 一次性子进程的进程组/作业对象配置:超时回收整棵树时连后代一起收。
+/// 短期原生探测的进程组/作业对象配置：超时回收整棵树时连后代一起收。
 ///
-/// `pane.exec` 的 stdin 是 null、stdout/stderr 走管道,从头到尾没有交互,
-/// 因此同样挂 `CREATE_NO_WINDOW`。
+/// 探测的 stdin 为 null、stdout/stderr 均被重定向，无交互需求，因此同样
+/// 挂 `CREATE_NO_WINDOW`。
 #[cfg(windows)]
-#[allow(dead_code)] // 消费点 = runtime_exec::build_command(pane.exec)。
 pub(crate) fn configure_process_group(command: &mut Command) {
     hidden_command(command);
 }
 
 #[cfg(not(windows))]
-#[allow(dead_code)] // 消费点 = runtime_exec::build_command(pane.exec)。
 pub(crate) fn configure_process_group(_: &mut Command) {}
 
-/// 一次性子进程的作业对象句柄(Drop 关闭句柄 = 内核回收整棵树)。
-#[allow(dead_code)] // 消费点 = runtime_exec::execute 的超时整树回收。
+/// 一次性探测子进程的作业对象句柄（Drop 关闭句柄即回收整棵树）。
 pub(crate) struct ProcessGroup {
     #[cfg(windows)]
     job: windows_sys::Win32::Foundation::HANDLE,
 }
 
-#[allow(dead_code)] // 消费点 = runtime_exec::execute(接线)。
 impl ProcessGroup {
     pub(crate) fn attach(child: &std::process::Child) -> std::io::Result<Self> {
         #[cfg(windows)]

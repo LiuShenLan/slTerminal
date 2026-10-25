@@ -13,9 +13,8 @@
 //!   `keymap/win32.rs` 从 GPUI 键名重造并专管;`keymap.rs` 在进入本构建器前
 //!   已完成 win32/kitty 分流,本函数永远在 kitty 位激活时被调
 //!   (`use_win32_input_mode` 此时恒 false),臂即死码。
-//! - **runtime_api 族不迁**(`build_runtime_*`,归 runtime_api);
-//!   `build_focus_loss_key_ups` 不迁(上游 GPUI 壳无消费点,焦点丢失合成
-//!   key-up 只被旧壳触摸路径调用);`Key::Dead` 随组合路径臂裁。
+//! - **focus-loss 族不迁**：GPUI 壳无消费点，焦点丢失合成 key-up 只被旧壳
+//!   触摸路径调用；`Key::Dead` 随组合路径臂裁。
 
 use std::borrow::Cow;
 
@@ -629,8 +628,7 @@ fn is_control_character(text: &str) -> bool {
 }
 
 /// 平台无关测试:kitty/legacy 编码器只消费 [`KeyInput`] 的可移植字段——
-/// 「单一跨平台编码器」合同的可见形态。runtime_api 族(归 runtime_api)与
-/// focus_loss 族(GPUI 壳无消费点)的用例不迁。
+/// 「单一跨平台编码器」合同的可见形态。
 #[cfg(test)]
 mod vt_tests {
     use super::*;

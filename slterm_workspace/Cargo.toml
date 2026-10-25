@@ -1,0 +1,17 @@
+[package]
+name = "slterm_workspace"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+test = false
+
+[[test]]
+name = "lib_tests"
+path = "src/lib.rs"
+
+[dependencies]
+slterm_path = { path = "../slterm_path" }
+slterm_document = { path = "../slterm_document" }
+slterm_split = { package = "slterm-split", path = "../slterm_split" }

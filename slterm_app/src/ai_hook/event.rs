@@ -284,8 +284,6 @@ pub struct AiHookEvent {
     pub(crate) turn_id: Option<String>,
     /// compaction 在既有回合内触发 hook;它不是一条空闲边。
     pub(crate) session_compacted: bool,
-    pub answer: Option<crate::assistant_answer::AssistantAnswer>,
-    pub answer_cwd: Option<std::path::PathBuf>,
     /// 承载 CLI 的 pane(来自 `SLTERM_PANE_ID`);`None` 回退到焦点 pane
     /// (只在环境变量半路被剥掉时才发生)。
     pub pane: Option<u64>,
@@ -295,6 +293,8 @@ pub struct AiHookEvent {
     pub turn_outcome: AiTurnOutcome,
     /// 事件携带的人类可读文本(claude 的通知文案、codex 的最后一条回答)。
     pub message: Option<String>,
+    /// 完整消息的进程内去重指纹；正文截断为预览后仍用于区分不同事件。
+    pub(crate) message_fingerprint: Option<u64>,
     /// 原生可恢复会话身份。codex 用 transcript 的 thread UUID 或 legacy
     /// notify 的 `thread-id`,不是 hook 的 session/group id。
     pub session_id: Option<String>,

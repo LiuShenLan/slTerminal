@@ -1,6 +1,5 @@
 use log::{info, warn};
 use std::cmp::Ordering;
-use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::io::{Error, Result};
 use std::os::windows::ffi::OsStrExt;
@@ -10,9 +9,6 @@ use std::{mem, ptr};
 
 use windows_sys::Win32::Foundation::{
     ERROR_INSUFFICIENT_BUFFER, FreeLibrary, HANDLE, HMODULE, S_OK,
-};
-use windows_sys::Win32::Globalization::{
-    CSTR_EQUAL, CSTR_GREATER_THAN, CSTR_LESS_THAN, CompareStringOrdinal,
 };
 use windows_sys::Win32::System::Console::{
     COORD, ClosePseudoConsole, CreatePseudoConsole, HPCON, ResizePseudoConsole,
@@ -29,11 +25,12 @@ use windows_sys::Win32::System::Threading::{
 };
 
 use crate::event::{OnResize, WindowSize};
-use crate::tty::Options;
 use crate::tty::windows::blocking::{UnblockedReader, UnblockedWriter};
 use crate::tty::windows::child::ChildExitWatcher;
+use crate::tty::windows::environment::compare_environment_names;
 use crate::tty::windows::spawn::{self, FLAG_WIN32_INPUT_MODE, compute_conpty_flags};
 use crate::tty::windows::{Pty, cmdline, win32_string};
+use crate::tty::{Environment, Options};
 
 const PIPE_CAPACITY: usize = crate::event_loop::READ_BUFFER_SIZE;
 
@@ -479,7 +476,11 @@ fn spawn_shell(config: &Options, conpty: &Conpty) -> Result<ChildExitWatcher> {
     let cwd = config.working_directory.as_ref().map(win32_string);
     let mut creation_flags = EXTENDED_STARTUPINFO_PRESENT;
     let child_config = super::cmd_prompt::prepare(config);
-    let custom_env_block = convert_custom_env(&child_config.env, child_config.env_is_complete);
+    let custom_env_block = convert_custom_env(
+        &child_config.env,
+        child_config.env_is_complete,
+        &child_config.inherited_env_exclusions,
+    );
     let custom_env_block_pointer = match &custom_env_block {
         Some(custom_env_block) => {
             creation_flags |= CREATE_UNICODE_ENVIRONMENT;
@@ -558,20 +559,35 @@ impl Drop for ProcThreadAttributes {
 //
 // https://learn.microsoft.com/en-us/previous-versions/troubleshoot/windows/win32/createprocess-cannot-eliminate-duplicate-variables#environment-variables
 fn convert_custom_env(
-    custom_env: &HashMap<String, String>,
+    custom_env: &Environment,
     env_is_complete: bool,
+    inherited_env_exclusions: &[OsString],
 ) -> Option<Vec<u16>> {
+    build_environment_block(
+        custom_env,
+        env_is_complete,
+        inherited_env_exclusions,
+        std::env::vars_os(),
+    )
+}
+
+fn build_environment_block<I>(
+    custom_env: &Environment,
+    env_is_complete: bool,
+    inherited_env_exclusions: &[OsString],
+    inherited: I,
+) -> Option<Vec<u16>>
+where
+    I: IntoIterator<Item = (OsString, OsString)>,
+{
     // Windows inherits parent's env when no `lpEnvironment` parameter is specified.
-    if custom_env.is_empty() && !env_is_complete {
+    if custom_env.is_empty() && !env_is_complete && inherited_env_exclusions.is_empty() {
         return None;
     }
 
     let mut environment = Vec::new();
-    for (custom_key, custom_value) in custom_env {
-        environment.push(PendingEnvironmentVariable::new(
-            OsStr::new(custom_key),
-            OsStr::new(custom_value),
-        ));
+    for (custom_key, custom_value) in custom_env.iter() {
+        environment.push(PendingEnvironmentVariable::new(custom_key, custom_value));
     }
 
     if !env_is_complete {
@@ -582,7 +598,7 @@ fn convert_custom_env(
         // env_is_complete 不叠加：完整块来自会话持久化快照（快照自身已含
         // 这些键），一字不差恢复是 complete 的契约。
         for (key, value) in FIXED_ENV_INJECTIONS {
-            if !custom_env.keys().any(|k| k.eq_ignore_ascii_case(key)) {
+            if !custom_env.contains_key(key) {
                 environment.push(PendingEnvironmentVariable::new(
                     OsStr::new(key),
                     OsStr::new(value),
@@ -590,12 +606,20 @@ fn convert_custom_env(
             }
         }
 
+        let excluded_names: Vec<Vec<u16>> = inherited_env_exclusions
+            .iter()
+            .map(|name| name.encode_wide().collect())
+            .collect();
         // Pull the current process environment after, to avoid overwriting the user provided one.
-        for (inherited_key, inherited_value) in std::env::vars_os() {
-            environment.push(PendingEnvironmentVariable::new(
-                &inherited_key,
-                &inherited_value,
-            ));
+        // 继承项保持 OsString 原始 UTF-16；排除在排序去重前完成，不改自定义覆盖顺序。
+        for (inherited_key, inherited_value) in inherited {
+            let variable = PendingEnvironmentVariable::new(&inherited_key, &inherited_value);
+            if excluded_names.iter().any(|excluded| {
+                compare_environment_names(excluded, &variable.key_wide) == Ordering::Equal
+            }) {
+                continue;
+            }
+            environment.push(variable);
         }
     }
 
@@ -644,26 +668,6 @@ impl PendingEnvironmentVariable {
     }
 }
 
-fn compare_environment_names(left: &[u16], right: &[u16]) -> Ordering {
-    let result = unsafe {
-        CompareStringOrdinal(
-            left.as_ptr(),
-            left.len() as i32,
-            right.as_ptr(),
-            right.len() as i32,
-            1,
-        )
-    };
-    match result {
-        CSTR_LESS_THAN => Ordering::Less,
-        CSTR_EQUAL => Ordering::Equal,
-        CSTR_GREATER_THAN => Ordering::Greater,
-        // 环境变量名受 CreateProcess 环境块上限约束，正常不会失败；异常时仍给出
-        // 全序，不能让排序过程 panic。
-        _ => left.cmp(right),
-    }
-}
-
 // According to the `lpEnvironment` parameter description:
 // https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-createprocessa#parameters
 //
@@ -708,9 +712,17 @@ mod runtime_asset_tests {
         bundled_conpty_dir, conhost_input_corrupts_cpr, conpty_status, convert_custom_env,
         ensure_extracted, extraction_dir_from, should_bundle, write_if_size_differs,
     };
-    use std::collections::HashMap;
+    use crate::tty::Environment;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn environment(entries: &[(&str, &str)]) -> Environment {
+        let mut environment = Environment::default();
+        for (name, value) in entries {
+            environment.insert(*name, *value);
+        }
+        environment
+    }
 
     static NEXT_DIR: AtomicUsize = AtomicUsize::new(0);
 
@@ -782,8 +794,8 @@ mod runtime_asset_tests {
 
     #[test]
     fn complete_environment_does_not_restore_parent_variables() {
-        let custom = HashMap::from([("SLTERM_REFRESH_TEST".to_owned(), "fresh".to_owned())]);
-        let block = convert_custom_env(&custom, true).expect("environment block");
+        let custom = environment(&[("SLTERM_REFRESH_TEST", "fresh")]);
+        let block = convert_custom_env(&custom, true, &[]).expect("environment block");
         let entries: Vec<String> = block
             .split(|character| *character == 0)
             .filter(|entry| !entry.is_empty())
@@ -795,12 +807,8 @@ mod runtime_asset_tests {
 
     #[test]
     fn complete_environment_block_is_sorted_case_insensitively() {
-        let custom = HashMap::from([
-            ("z-last".to_owned(), "3".to_owned()),
-            ("Middle".to_owned(), "2".to_owned()),
-            ("a-first".to_owned(), "1".to_owned()),
-        ]);
-        let block = convert_custom_env(&custom, true).expect("environment block");
+        let custom = environment(&[("z-last", "3"), ("Middle", "2"), ("a-first", "1")]);
+        let block = convert_custom_env(&custom, true, &[]).expect("environment block");
         let entries: Vec<String> = block
             .split(|character| *character == 0)
             .filter(|entry| !entry.is_empty())
@@ -820,11 +828,120 @@ mod runtime_asset_tests {
             .collect()
     }
 
+    fn raw_block_entries(block: &[u16]) -> Vec<&[u16]> {
+        block
+            .split(|character| *character == 0)
+            .filter(|entry| !entry.is_empty())
+            .collect()
+    }
+
+    fn entry_has_name(entry: &[u16], name: &str) -> bool {
+        let key_end = entry
+            .iter()
+            .position(|character| *character == u16::from(b'='))
+            .unwrap_or(entry.len());
+        String::from_utf16_lossy(&entry[..key_end]).eq_ignore_ascii_case(name)
+    }
+
+    #[test]
+    fn inherited_merge_preserves_non_unicode_and_filters_excluded_names() {
+        use std::ffi::OsString;
+        use std::os::windows::ffi::{OsStrExt, OsStringExt};
+
+        let non_unicode = OsString::from_wide(&[u16::from(b'X'), 0xD800, u16::from(b'Y')]);
+        let inherited = vec![
+            (
+                OsString::from("SLTERM_NON_UNICODE_TEST"),
+                non_unicode.clone(),
+            ),
+            (
+                OsString::from("sLtErM_RuNtImE_EnDpOiNt"),
+                OsString::from("stale endpoint"),
+            ),
+        ];
+        let exclusions = [OsString::from("SLTERM_RUNTIME_ENDPOINT")];
+        let block =
+            super::build_environment_block(&Environment::default(), false, &exclusions, inherited)
+                .expect("environment block");
+        let entries = raw_block_entries(&block);
+        let expected: Vec<u16> = "SLTERM_NON_UNICODE_TEST="
+            .encode_utf16()
+            .chain(non_unicode.encode_wide())
+            .collect();
+
+        assert!(
+            entries.contains(&expected.as_slice()),
+            "非 Unicode 继承值必须逐 UTF-16 代码单元保留"
+        );
+        assert!(
+            !entries
+                .iter()
+                .any(|entry| entry_has_name(entry, "SLTERM_RUNTIME_ENDPOINT")),
+            "排除名必须大小写不敏感地作用于最终环境块"
+        );
+    }
+
+    #[test]
+    fn inherited_duplicate_names_keep_the_first_os_value() {
+        use std::ffi::OsString;
+
+        let inherited = vec![
+            (OsString::from("Path"), OsString::from("C:/first")),
+            (OsString::from("PATH"), OsString::from("C:/second")),
+        ];
+        let custom = environment(&[("SLTERM_DUPLICATE_TEST", "1")]);
+        let block = super::build_environment_block(&custom, false, &[], inherited)
+            .expect("environment block");
+        let matches: Vec<String> = raw_block_entries(&block)
+            .into_iter()
+            .filter(|entry| entry_has_name(entry, "PATH"))
+            .map(String::from_utf16_lossy)
+            .collect();
+
+        assert_eq!(matches, vec!["Path=C:/first"]);
+    }
+
+    #[test]
+    fn custom_environment_overrides_case_variant_inherited_names() {
+        use std::ffi::OsString;
+
+        let custom = environment(&[("Path", "C:/custom")]);
+        let inherited = vec![(OsString::from("PATH"), OsString::from("C:/inherited"))];
+        let block = super::build_environment_block(&custom, false, &[], inherited)
+            .expect("environment block");
+        let matches: Vec<String> = raw_block_entries(&block)
+            .into_iter()
+            .filter(|entry| entry_has_name(entry, "PATH"))
+            .map(String::from_utf16_lossy)
+            .collect();
+
+        assert_eq!(matches, vec!["Path=C:/custom"]);
+    }
+
+    #[test]
+    fn custom_environment_preserves_non_unicode_values() {
+        use std::ffi::OsString;
+        use std::os::windows::ffi::{OsStrExt, OsStringExt};
+
+        let non_unicode = OsString::from_wide(&[u16::from(b'X'), 0xD800, u16::from(b'Y')]);
+        let mut custom = crate::tty::Environment::default();
+        custom.insert("Path", non_unicode.clone());
+        let inherited = vec![(OsString::from("PATH"), OsString::from("C:/inherited"))];
+        let block = super::build_environment_block(&custom, false, &[], inherited)
+            .expect("environment block");
+        let expected: Vec<u16> = "Path="
+            .encode_utf16()
+            .chain(non_unicode.encode_wide())
+            .collect();
+
+        assert!(raw_block_entries(&block).contains(&expected.as_slice()));
+    }
+
     #[test]
     fn fixed_env_injections_filled_when_absent() {
         // 增量合并形态：custom 缺能力键 → 固定清单补缺。
-        let custom = HashMap::from([("SLTERM_REFRESH_TEST".to_owned(), "fresh".to_owned())]);
-        let block = convert_custom_env(&custom, false).expect("environment block");
+        let custom = environment(&[("SLTERM_REFRESH_TEST", "fresh")]);
+        let block = convert_custom_env(&custom, false, &[]).expect("environment block");
         let entries = block_entries(&block);
         assert!(entries.contains(&"TERM=xterm-256color".to_owned()));
         assert!(entries.contains(&"COLORTERM=truecolor".to_owned()));
@@ -834,8 +951,8 @@ mod runtime_asset_tests {
     #[test]
     fn fixed_env_injections_never_override_custom() {
         // custom 同名键（大小写变体也算）优先——固定注入只补缺。
-        let custom = HashMap::from([("term".to_owned(), "custom-term".to_owned())]);
-        let block = convert_custom_env(&custom, false).expect("environment block");
+        let custom = environment(&[("term", "custom-term")]);
+        let block = convert_custom_env(&custom, false, &[]).expect("environment block");
         let entries = block_entries(&block);
         assert!(entries.contains(&"term=custom-term".to_owned()));
         assert!(
@@ -847,13 +964,13 @@ mod runtime_asset_tests {
     #[test]
     fn fixed_env_injections_apply_to_inherited_merge() {
         // 非 complete 形态（与父进程环境合并）同样叠加固定清单。
-        let custom = HashMap::new();
-        let block = convert_custom_env(&custom, false);
+        let custom = Environment::default();
+        let block = convert_custom_env(&custom, false, &[]);
         // custom 为空且非 complete → None（走父进程继承,无环境块）——本形态
         // 不叠加;叠加语义只在「有块」时生效。
         assert!(block.is_none());
-        let custom = HashMap::from([("A".to_owned(), "1".to_owned())]);
-        let entries = block_entries(&convert_custom_env(&custom, false).expect("block"));
+        let custom = environment(&[("A", "1")]);
+        let entries = block_entries(&convert_custom_env(&custom, false, &[]).expect("block"));
         assert!(entries.contains(&"TERM=xterm-256color".to_owned()));
     }
 

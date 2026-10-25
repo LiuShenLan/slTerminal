@@ -8,8 +8,35 @@
 use std::path::Path;
 use std::time::Instant;
 
-use crate::runtime_exec::PaneExecContext;
 use crate::suggest::SuggestEnv;
+
+/// 补全可安全复用的 PTY 启动上下文：只冻结 shell 程序与环境覆盖。
+#[derive(Clone, Debug)]
+pub(crate) struct PaneExecContext {
+    shell_program: Option<String>,
+    env: slterm_terminal::tty::Environment,
+}
+
+impl PaneExecContext {
+    pub(crate) fn from_pty_options(options: &slterm_terminal::tty::Options) -> Self {
+        Self {
+            shell_program: options
+                .shell
+                .as_ref()
+                .map(|shell| shell.program().to_owned()),
+            env: options.env.clone(),
+        }
+    }
+
+    pub(crate) fn shell_program(&self) -> Option<&str> {
+        self.shell_program.as_deref()
+    }
+
+    /// Git 元数据读取复用 pane 创建时的环境，保证代理与凭据策略一致。
+    pub(crate) fn environment(&self) -> &slterm_terminal::tty::Environment {
+        &self.env
+    }
+}
 
 #[derive(Clone)]
 pub(crate) enum Execution {
@@ -61,7 +88,7 @@ impl Execution {
         let budget = deadline.saturating_duration_since(Instant::now());
         let mut command = crate::git::command(Path::new(cwd));
         // 复用 pane 创建时冻结的环境覆盖(代理/凭据策略与 shell 内一致)。
-        command.envs(context.environment());
+        command.envs(context.environment().iter());
         // `completion.snapshot=true` 是 sentinel:即使仓库没有相关配置,
         // `git config --get-regexp` 也返回 0,空结果才不会被当成读取失败。
         command

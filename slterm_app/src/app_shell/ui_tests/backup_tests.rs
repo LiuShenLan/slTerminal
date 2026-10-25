@@ -97,7 +97,6 @@ fn backup_export_writes_an_openable_archive_and_reports_success(cx: &mut TestApp
         "settings-backup-category-themes",
         "settings-backup-category-command_history",
         "settings-backup-category-directory_history",
-        "settings-backup-category-providers",
     ] {
         assert!(
             window.debug_bounds(selector).is_some(),

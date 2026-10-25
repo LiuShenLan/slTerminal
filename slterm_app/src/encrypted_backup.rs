@@ -15,8 +15,7 @@
 //! 任何落盘。校验任何一条不过整单拒写,半份不可信报文零副作用。
 //!
 //! 类别清单与敏感键剥除表按键域终态重定:设置/会话/自定义
-//! 主题/命令历史/目录历史/provider 元数据六类;凭据值永不入包(provider
-//! 文档只保留引用字段与尾四掩码)。
+//! 主题/命令历史/目录历史五类;凭据值永不入包。
 //!
 //! 消费点:设置页安全分区的加密备份导出已接(类别选择 + masked 口令 +
 //! 后台整单收集/密封/原子写,失败明示);恢复与撤回 UI 尚未接线,其生产接缝
@@ -50,11 +49,9 @@ const THEME_FILE_SUFFIX: &str = ".slterm-theme.json";
 
 /// 敏感键字面量表(按 06 键域终态重定)。
 ///
-/// 键域终态不含任何凭据键——凭据值只允许存在于 Windows 凭据管理器,
-/// `providers.json` 只存引用字段(`api_key_set`/`api_key_hint`)与元数据。
+/// 键域终态不含任何凭据键——凭据值只允许存在于 Windows 凭据管理器。
 /// 本表是导出清洗与导入复验共用的第二道防线:手改文档塞入的凭据字段一律
-/// 在进出备份两面被剥除/拒绝。比较口径 = 去首尾空白后 ASCII 小写精确匹配;
-/// `api_key_set`/`api_key_hint` 是引用与尾四掩码,不在剥除之列。
+/// 在进出备份两面被剥除/拒绝。比较口径 = 去首尾空白后 ASCII 小写精确匹配。
 const SENSITIVE_KEYS: &[&str] = &[
     "access_token",
     "accesstoken",
@@ -94,8 +91,6 @@ pub(crate) enum BackupCategory {
     CommandHistory,
     /// 目录 frecency `directory_history.json`。
     DirectoryHistory,
-    /// provider 元数据 `providers.json`(只有引用字段,无凭据值)。
-    Providers,
 }
 
 /// 类别选择集;默认仅设置一项(保守默认思想随上游基线)。
@@ -106,7 +101,6 @@ pub(crate) struct BackupSelection {
     pub themes: bool,
     pub command_history: bool,
     pub directory_history: bool,
-    pub providers: bool,
 }
 
 impl Default for BackupSelection {
@@ -117,7 +111,6 @@ impl Default for BackupSelection {
             themes: false,
             command_history: false,
             directory_history: false,
-            providers: false,
         }
     }
 }
@@ -134,7 +127,6 @@ impl BackupSelection {
             BackupCategory::Themes => &mut self.themes,
             BackupCategory::CommandHistory => &mut self.command_history,
             BackupCategory::DirectoryHistory => &mut self.directory_history,
-            BackupCategory::Providers => &mut self.providers,
         } = enabled;
     }
 
@@ -146,7 +138,6 @@ impl BackupSelection {
             BackupCategory::Themes => self.themes,
             BackupCategory::CommandHistory => self.command_history,
             BackupCategory::DirectoryHistory => self.directory_history,
-            BackupCategory::Providers => self.providers,
         }
     }
 
@@ -157,7 +148,6 @@ impl BackupSelection {
             themes: false,
             command_history: false,
             directory_history: false,
-            providers: false,
         };
         for category in categories {
             selection.set(category, true);
@@ -172,7 +162,6 @@ impl BackupSelection {
             (self.themes, BackupCategory::Themes),
             (self.command_history, BackupCategory::CommandHistory),
             (self.directory_history, BackupCategory::DirectoryHistory),
-            (self.providers, BackupCategory::Providers),
         ]
         .into_iter()
         .filter_map(|(selected, category)| selected.then_some(category))
@@ -348,13 +337,6 @@ fn collect_from(root: &Path, selection: BackupSelection) -> Result<BackupArchive
                 "directory_history.json",
                 &mut entries,
                 identity,
-            )?,
-            BackupCategory::Providers => add_file(
-                root,
-                category,
-                "providers.json",
-                &mut entries,
-                filter_sensitive_document,
             )?,
         }
     }
@@ -597,9 +579,6 @@ fn validate_archive(archive: &BackupArchive) -> Result<(), String> {
             BackupCategory::DirectoryHistory => {
                 entry.name == "directory_history.json" && is_json_object(&entry.bytes)
             }
-            BackupCategory::Providers => {
-                entry.name == "providers.json" && document_is_sanitized(&entry.bytes)
-            }
         };
         if !allowed {
             return Err(format!(
@@ -668,7 +647,6 @@ mod encrypted_backup_tests {
                     BackupCategory::Themes,
                     BackupCategory::CommandHistory,
                     BackupCategory::DirectoryHistory,
-                    BackupCategory::Providers,
                 ],
             },
             entries: vec![
@@ -696,11 +674,6 @@ mod encrypted_backup_tests {
                     category: BackupCategory::DirectoryHistory,
                     name: "directory_history.json".into(),
                     bytes: br#"{"version":1,"entries":[]}"#.to_vec(),
-                },
-                BackupEntry {
-                    category: BackupCategory::Providers,
-                    name: "providers.json".into(),
-                    bytes: br#"{"active_id":"preset-openai","providers":[]}"#.to_vec(),
                 },
             ],
         }
@@ -747,29 +720,34 @@ mod encrypted_backup_tests {
     #[test]
     fn seal_open_round_trips_every_category() {
         let original = full_archive();
+        let plaintext = serde_json::to_vec(&original).expect("序列化");
         let packet = seal(&original, PASSPHRASE).expect("密封");
         assert_eq!(&packet[..8], MAGIC);
         assert_eq!(
             packet.len(),
-            MAGIC.len() + SALT_LEN + NONCE_LEN + original_plaintext_len(&original) + 16,
+            MAGIC.len() + SALT_LEN + NONCE_LEN + plaintext.len() + 16,
             "布局 = 魔数|盐|nonce|密文(含 16 字节 GCM tag)"
         );
         assert_eq!(open(&packet, PASSPHRASE).expect("解封"), original);
         // 每个类别的明文标记都只能以密文形态存在。
         for marker in [
-            b"Nord".as_slice(),
-            b"cargo test".as_slice(),
-            b"preset-openai".as_slice(),
+            b"settings.json".as_slice(),
+            b"session.json".as_slice(),
+            b"themes/nord-copy.slterm-theme.json".as_slice(),
+            b"history.jsonl".as_slice(),
+            b"directory_history.json".as_slice(),
         ] {
+            assert!(
+                plaintext
+                    .windows(marker.len())
+                    .any(|window| window == marker),
+                "测试标记不在明文归档中: {marker:?}"
+            );
             assert!(
                 !packet.windows(marker.len()).any(|window| window == marker),
                 "密文泄露明文标记: {marker:?}"
             );
         }
-    }
-
-    fn original_plaintext_len(archive: &BackupArchive) -> usize {
-        serde_json::to_vec(archive).expect("序列化").len()
     }
 
     #[test]
@@ -867,20 +845,6 @@ mod encrypted_backup_tests {
             r#"{"version":1,"entries":[]}"#,
         )
         .unwrap();
-        fs::write(
-            root.join("providers.json"),
-            r#"{
-              "active_id": "preset-openai",
-              "providers": [{
-                "id": "preset-openai",
-                "kind": "open_ai",
-                "api_key_set": true,
-                "api_key_hint": "••••test",
-                "api_key": "sk-test-provider-secret"
-              }]
-            }"#,
-        )
-        .unwrap();
         fs::create_dir(root.join("themes")).unwrap();
         fs::write(
             root.join("themes")
@@ -890,9 +854,9 @@ mod encrypted_backup_tests {
         .unwrap();
         // 坏主题的硬失败路径由 `invalid_theme_documents_abort_the_backup`
         // 单独覆盖;本用例只验证合法白名单与敏感键剥除。
-        // 清单外敏感面:AI 会话库/助手配置/日志/恢复点目录,一律不得入包。
+        // 清单外敏感面:AI 会话库/未知文件/日志/恢复点目录,一律不得入包。
         fs::write(root.join("ai_sessions.json"), "{\"sessions\":[]}").unwrap();
-        fs::write(root.join("slterm_assistant.txt"), "enabled=true").unwrap();
+        fs::write(root.join("obsolete.txt"), "enabled=true").unwrap();
         fs::write(root.join("slterm_debug.log"), "log").unwrap();
         fs::create_dir(root.join("backup-recovery")).unwrap();
 
@@ -902,7 +866,6 @@ mod encrypted_backup_tests {
             BackupCategory::Themes,
             BackupCategory::CommandHistory,
             BackupCategory::DirectoryHistory,
-            BackupCategory::Providers,
         ]);
         let archive = collect_from(root, selection).expect("收集");
         let names: HashSet<_> = archive
@@ -917,8 +880,7 @@ mod encrypted_backup_tests {
                 "session.json",
                 "themes/nord-copy.slterm-theme.json",
                 "history.jsonl",
-                "directory_history.json",
-                "providers.json"
+                "directory_history.json"
             ])
         );
 
@@ -938,23 +900,9 @@ mod encrypted_backup_tests {
             "大小写变体同样剥除"
         );
 
-        let providers = archive
-            .entries
-            .iter()
-            .find(|entry| entry.name == "providers.json")
-            .unwrap();
-        let providers_text = String::from_utf8(providers.bytes.clone()).unwrap();
-        assert!(!providers_text.contains("sk-test-provider-secret"));
-        assert!(providers_text.contains("api_key_hint"));
-        assert!(providers_text.contains("api_key_set"), "引用字段保留");
-
         // 整个归档密封后仍不含任何假凭据。
         let packet = seal(&archive, PASSPHRASE).expect("密封");
-        for secret in [
-            "sk-test-settings-secret",
-            "sk-test-nested-secret",
-            "sk-test-provider-secret",
-        ] {
+        for secret in ["sk-test-settings-secret", "sk-test-nested-secret"] {
             assert!(
                 !packet
                     .windows(secret.len())
@@ -974,79 +922,6 @@ mod encrypted_backup_tests {
         let selection = BackupSelection::from_categories([BackupCategory::Themes]);
         let error = collect_from(directory.path(), selection).expect_err("非法主题必须中止备份");
         assert!(error.contains("主题"), "{error}");
-    }
-
-    /// 提取结构体块内的字段名(用于漂移守卫)。
-    fn struct_fields(source: &str, signature: &str) -> Vec<String> {
-        let start = source
-            .find(signature)
-            .unwrap_or_else(|| panic!("缺少结构体: {signature}"));
-        let open = source[start..]
-            .find('{')
-            .map(|offset| start + offset)
-            .unwrap();
-        let mut depth = 0usize;
-        let mut end = open;
-        for (index, character) in source[open..].char_indices() {
-            match character {
-                '{' => depth += 1,
-                '}' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        end = open + index;
-                        break;
-                    }
-                }
-                _ => {}
-            }
-        }
-        let mut fields = Vec::new();
-        for line in source[open + 1..end].lines() {
-            let line = line.trim();
-            if line.starts_with('#') || line.starts_with("//") || line.is_empty() {
-                continue;
-            }
-            let Some((declaration, _)) = line.split_once(':') else {
-                continue;
-            };
-            let Some(name) = declaration.split_whitespace().last() else {
-                continue;
-            };
-            if name
-                .chars()
-                .all(|character| character.is_ascii_alphanumeric() || character == '_')
-            {
-                fields.push(name.to_owned());
-            }
-        }
-        fields
-    }
-
-    /// 防复发:provider 与设置字段名不得命中敏感键黑名单——否则备份
-    /// 会静默剥除正常字段。provider schema 演进时本用例负责报警。
-    #[test]
-    fn sensitive_key_denylist_does_not_shadow_declared_fields() {
-        let source = fs::read_to_string(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("src")
-                .join("ai_providers.rs"),
-        )
-        .expect("读取 provider schema 源码");
-        let provider_fields = struct_fields(&source, "pub(crate) struct AiProvider {");
-        assert!(!provider_fields.is_empty(), "provider 字段扫描失效");
-        for field in &provider_fields {
-            assert!(
-                !is_sensitive_key(field),
-                "provider 字段 {field} 会被备份静默剥除"
-            );
-        }
-        for def in slterm_settings::keys::KEYS {
-            assert!(
-                !is_sensitive_key(def.key),
-                "设置键 {} 会被备份静默剥除",
-                def.key
-            );
-        }
     }
 
     #[test]
@@ -1069,8 +944,6 @@ mod encrypted_backup_tests {
                 def.key
             );
         }
-        assert!(!is_sensitive_key("api_key_hint"));
-        assert!(!is_sensitive_key("api_key_set"));
         assert!(is_sensitive_key("api_key"));
     }
 
@@ -1079,44 +952,31 @@ mod encrypted_backup_tests {
         for key in ["API_KEY", "ApiKey", "api-key", "  token  ", "Authorization"] {
             assert!(is_sensitive_key(key), "未命中敏感键: {key}");
         }
-        for key in ["theme", "terminal_proxy", "api_key_hint", "api_key_set"] {
+        for key in ["theme", "terminal_proxy"] {
             assert!(!is_sensitive_key(key), "误伤普通键: {key}");
         }
     }
 
     #[test]
-    fn restore_rejects_unsanitized_settings_and_providers_before_writing() {
-        for (category, name, bytes) in [
-            (
-                BackupCategory::Settings,
-                "settings.json",
-                br#"{"appearance":{"api_key":"sk-test-import"}}"#.to_vec(),
-            ),
-            (
-                BackupCategory::Providers,
-                "providers.json",
-                br#"{"providers":[{"token":"sk-test-import"}]}"#.to_vec(),
-            ),
-        ] {
-            let archive = BackupArchive {
-                manifest: BackupManifest {
-                    version: ARCHIVE_VERSION,
-                    categories: vec![category],
-                },
-                entries: vec![BackupEntry {
-                    category,
-                    name: name.into(),
-                    bytes,
-                }],
-            };
-            let directory = tempfile::tempdir().unwrap();
-            assert!(restore_to(directory.path(), &archive).is_err());
-            assert!(
-                !directory.path().join(name).exists(),
-                "导入复验失败必须在落盘前拒绝: {name}"
-            );
-            assert!(seal(&archive, PASSPHRASE).is_err(), "导出侧同样拒收");
-        }
+    fn restore_rejects_unsanitized_settings_before_writing() {
+        let archive = BackupArchive {
+            manifest: BackupManifest {
+                version: ARCHIVE_VERSION,
+                categories: vec![BackupCategory::Settings],
+            },
+            entries: vec![BackupEntry {
+                category: BackupCategory::Settings,
+                name: "settings.json".into(),
+                bytes: br#"{"appearance":{"api_key":"sk-test-import"}}"#.to_vec(),
+            }],
+        };
+        let directory = tempfile::tempdir().unwrap();
+        assert!(restore_to(directory.path(), &archive).is_err());
+        assert!(
+            !directory.path().join("settings.json").exists(),
+            "导入复验失败必须在落盘前拒绝"
+        );
+        assert!(seal(&archive, PASSPHRASE).is_err(), "导出侧同样拒收");
     }
 
     #[test]
@@ -1190,7 +1050,6 @@ mod encrypted_backup_tests {
         );
         assert!(directory.path().join("history.jsonl").is_file());
         assert!(directory.path().join("directory_history.json").is_file());
-        assert!(directory.path().join("providers.json").is_file());
 
         // 整包往返:open 后的归档与 restore_to 的落盘字节一致。
         let packet = seal(&original, PASSPHRASE).unwrap();
@@ -1225,7 +1084,7 @@ mod encrypted_backup_tests {
     #[test]
     fn summary_counts_files_and_bytes_per_category() {
         let summary = full_archive().summary();
-        assert_eq!(summary.len(), 6);
+        assert_eq!(summary.len(), 5);
         let settings = summary
             .iter()
             .find(|item| item.category == BackupCategory::Settings)

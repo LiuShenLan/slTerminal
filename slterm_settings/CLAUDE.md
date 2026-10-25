@@ -12,7 +12,7 @@
 - **主题语义合同**：`ThemeName::BUILTIN` 是内置暗色主题目录，Linear 为默认，未知/退休 id 回退 Linear；`ReviewedPalette` 与语义槽 WCAG 对比度阈值是准入门。原因：仅暗色定位与可读性是产品约束。边界：新增主题必须过校验，不达标不得入目录。
 - **BlurMode 与外观值**：`BlurMode` 枚举表达窗口材质档位，默认 `None`（性能安全档）；具体档位与映射以类型定义为准。原因：bool 无法表达材质与性能档位。边界：材质平台调用只在平台封装模块。
 - **零迁移**：新版只读写 `%APPDATA%\slterm`；旧版 exe 同级 `settings.json` 不看不迁。原因：全新 fork，迁移机制成本高于重配。边界：旧数据不构成兼容义务。
-- **文件命名去品牌**：`settings.json`、`session.json`、`providers.json`、`history.jsonl`、`directory_history.json`、`runtime.port`、`themes/*.slterm-theme.json`。原因：目录名已带品牌，文件名不重复品牌，避免下次改名产生迁移链。
+- **文件命名去品牌**：`settings.json`、`session.json`、`history.jsonl`、`directory_history.json`、`instance`、`themes/*.slterm-theme.json`。原因：目录名已带品牌，文件名不重复品牌，避免下次改名产生迁移链。
 
 ## 验收与测试
 

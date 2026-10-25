@@ -121,25 +121,6 @@
     "schedule_failed_title": "无法预约更新",
     "schedule_failed_detail": "无法安排下次启动安装：{error}"
   },
-  "provider_test": {
-    "success": "连接成功（HTTP {status}）",
-    "invalid_endpoint": "端点地址无效，请检查 URL",
-    "missing_model": "请先填写模型名称",
-    "missing_api_key": "缺少 API 密钥",
-    "credential_read_failed": "无法读取已保存的凭据",
-    "invalid_credential_encoding": "凭据编码无效，请重新保存密钥",
-    "timeout": "连接超时，请检查网络或代理",
-    "host_not_found": "找不到主机，请检查端点地址",
-    "connection_failed": "无法建立连接，请检查网络或代理",
-    "io": "网络读写错误：{error}",
-    "tls": "TLS 握手失败，请检查证书或代理设置",
-    "request_failed": "请求发送失败",
-    "auth_failed": "认证失败（HTTP {status}），请检查 API 密钥",
-    "endpoint_not_found": "端点不存在（HTTP {status}），请检查 URL",
-    "rate_limited": "请求过于频繁（HTTP {status}），请稍后重试",
-    "http_status": "服务返回 HTTP {status}",
-    "start_failed": "无法启动测试请求：{error}"
-  },
   "sidebar": {
     "view_nav": "导航树",
     "view_explorer": "文件浏览器",
@@ -177,9 +158,7 @@
       "operation_failed": "设置操作失败：{error}",
       "save_failed": "设置保存失败",
       "theme_imported": "已导入主题「{name}」",
-      "theme_exported": "主题包已导出：{path}",
-      "theme_import_failed": "主题导入失败：{error}",
-      "theme_export_failed": "主题导出失败：{error}"
+      "theme_import_failed": "主题导入失败：{error}"
     },
     "application": {
       "group": "应用",
@@ -214,20 +193,12 @@
       "custom_theme": "自定义主题",
       "custom_theme_description": "从内置目录或主题库复制一份草稿；保存与应用是两个动作。",
       "custom_theme_action": "编辑主题",
-      "theme_package": "主题包",
-      "theme_import": "导入主题包",
-      "theme_import_description": "安装 .zip 主题包；不覆盖已有主题。",
+      "theme_library": "主题库",
+      "theme_import": "导入主题",
+      "theme_import_description": "导入单文件 JSON 主题；不覆盖已有主题。",
       "theme_import_action": "导入…",
-      "theme_import_prompt": "选择主题包（.zip）",
+      "theme_import_prompt": "选择 JSON 主题文件",
       "theme_import_busy": "导入中…",
-      "theme_import_zip_required": "请选择 .zip 主题包。",
-      "theme_export": "导出主题包",
-      "theme_export_description": "把当前应用的自定义主题导出为 .zip 主题包。",
-      "theme_export_needs_custom": "请先保存并应用自定义主题再导出。",
-      "theme_export_action": "导出…",
-      "theme_export_prompt": "导出主题包",
-      "theme_export_busy": "导出中…",
-      "theme_export_zip_required": "请选择 .zip 目标文件。",
       "opacity": "窗口不透明度",
       "opacity_description": "拖动即时预览，松手保存。",
       "scroll_speed": "滚动速度",
@@ -409,7 +380,6 @@
       "category_themes": "自定义主题",
       "category_command_history": "命令历史",
       "category_directory_history": "目录历史",
-      "category_providers": "AI Provider 元数据",
       "passphrase": "备份口令",
       "passphrase_placeholder": "输入备份口令",
       "passphrase_description": "至少 8 个字符；忘记口令无法恢复。",
@@ -507,25 +477,6 @@
       "unsaved": "未保存"
     }
   },
-  "merge": {
-    "tab_title": "{name}（冲突）",
-    "base": "基准",
-    "ours": "我们的",
-    "theirs": "他们的",
-    "missing_stage": "该阶段不存在",
-    "truncated": "内容超过 4 MB，已截断显示",
-    "loading": "正在读取冲突…",
-    "adopt_ours": "采用我们的版本",
-    "adopt_theirs": "采用他们的版本",
-    "open_in_editor": "在编辑器中打开",
-    "wrote": "已写入工作区文件，请在终端运行 git add 完成解决。",
-    "dirty_rejected": "该文件有未保存的修改，请先保存或关闭后再采用版本。",
-    "error_truncated": "该阶段超过读取上限，无法采用，请在终端解决。",
-    "error_invalid_encoding": "该阶段不是合法 UTF-8，无法采用，请在终端解决。",
-    "error_write": "写入工作区文件失败：{error}",
-    "error_load": "读取冲突失败：{error}",
-    "pane_header": "{label}（{state}）"
-  },
   "notify": {
     "bell": "终端响铃",
     "command_finished": "命令完成（{seconds} 秒）",
@@ -540,7 +491,6 @@
     "recovery_crashed": "上次未正常退出，已恢复 {count} 个标签。",
     "recovery_quarantined": "连续多次启动未完成恢复，已跳过；现场保存在 {path}",
     "hook_install_failed": "无法为 {agent} 安装 AI CLI hook",
-    "hook_skill_failed": "无法为 {agent} 投放 AI CLI 运行技能",
     "hook_settings_unreadable": "无法读取 AI hook 设置，自愈已跳过"
   },
   "tray": {
@@ -551,8 +501,6 @@
     "tip_running": "{app} — {count} 个 agent 运行中"
   },
   "terminal": {
-    "ai_analyzing": "正在分析失败原因…",
-    "ai_fix_hint": "Ctrl+. 贴入 · Esc 关闭",
     "close_busy_title": "关闭运行中的 pane？",
     "close_busy_detail": "该 pane 仍有任务在运行，关闭会终止其中的进程。",
     "close_busy_confirm": "仍然关闭"

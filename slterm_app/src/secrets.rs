@@ -5,15 +5,13 @@
 //! - 三原语门面 [`store_generic_secret`]/[`load_generic_secret`]/
 //!   [`delete_generic_secret`]:任何域消费凭据管理器只经此入口,禁止旁路
 //!   直调 Win32 或 `platform::credentials`;
-//! - [`WindowsCredentialStore`]:[`CredentialStore`] 消费 trait 的真实后端,
-//!   由生产调用点直传(`ai_fix` 后台请求)。
+//! - [`WindowsCredentialStore`]:[`CredentialStore`] 消费 trait 的真实后端。
 //!
 //! 纪律:
 //! - 凭据值出域即包 [`SecretBytes`],即用即焚;不提供 `String`/`Vec<u8>`
 //!   裸载体。
 //! - 明文永不进入任何元数据文件或日志;`Debug` 只报长度。
-//! - target 命名空间归调用方(`ai_providers::credential_target` 产出
-//!   `Slterm/AI/<id>`),本层不解释 id 语义。
+//! - target 命名空间归调用方,本层不解释 id 语义。
 
 use std::fmt;
 use std::io;
@@ -81,9 +79,7 @@ pub(crate) fn delete_generic_secret(target: &str) -> io::Result<()> {
 
 /// 凭据后端消费接口(三原语的应用层投影)。
 ///
-/// 生产实现 = [`WindowsCredentialStore`];测试经注入 mock 断言「先写凭据
-/// 后回写引用」「先删凭据再删元数据」等调用契约。`exists` 默认经 `load`
-/// 推导,真实后端可覆写为不取回明文的探测。
+/// 生产实现 = [`WindowsCredentialStore`];测试经注入 mock 验证三原语与错误边界。
 pub(crate) trait CredentialStore {
     fn load(&self, target: &str) -> io::Result<Option<SecretBytes>>;
     fn store(&self, target: &str, secret: &[u8]) -> io::Result<()>;
@@ -364,9 +360,8 @@ mod secrets_tests {
 
     /// 允许借出 SecretBytes 字节的调用点:仅凭据域请求头组装与
     /// 句柄自身语义用例;新增调用点须登记后加入白名单。
-    const AS_BYTES_WHITELIST: [&str; 4] = [
+    const AS_BYTES_WHITELIST: [&str; 3] = [
         "secrets.rs",
-        "ai_providers.rs",
         "plan_balance/deepseek.rs",
         "plan_balance/kimi.rs",
     ];
@@ -548,10 +543,11 @@ mod secrets_tests {
         let store = MemoryCredentialStore::default();
 
         // 全生命周期:写 → 读 → 句柄 Debug/字符串化。
-        let hint =
-            crate::ai_providers::save_api_key(&store, "preset-openai", TOKEN).expect("写入凭据");
-        assert_eq!(hint, "••••17f3");
-        let secret = crate::ai_providers::load_api_key(&store, "preset-openai")
+        store
+            .store("Slterm/Test/log-boundary", TOKEN.as_bytes())
+            .expect("写入凭据");
+        let secret = store
+            .load("Slterm/Test/log-boundary")
             .expect("读取凭据")
             .expect("已写入凭据");
         assert_eq!(secret.as_bytes(), TOKEN.as_bytes());
@@ -560,9 +556,9 @@ mod secrets_tests {
         let _ = secret.into_string().expect("UTF-8 凭据");
 
         // 失败路径:后端错误消息不得携带凭据值。
-        let error =
-            crate::ai_providers::save_api_key(&FailingCredentialStore, "preset-openai", TOKEN)
-                .expect_err("后端失败必须上抛");
+        let error = FailingCredentialStore
+            .store("Slterm/Test/log-boundary", TOKEN.as_bytes())
+            .expect_err("后端失败必须上抛");
         assert!(!error.to_string().contains(TOKEN), "错误消息泄露凭据");
 
         // 捕获层自检:确认日志确实被捕获,后续断言不是空集。

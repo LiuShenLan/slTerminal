@@ -16,12 +16,9 @@
 - 侧栏：活动栏、双槽侧栏骨架与文件浏览器（git 状态着色、创建/删除/重命名/
   打开、回收站删除）。
 - AI CLI 集成：AI CLI 的屏幕检测与状态投影；Claude Code / Kimi /
-  Codex / Pi / OpenCode 的 hook 安装；Claude Code 与 Codex 历史会话扫描；
-  随包 runtime skill 自动投放。
-- Runtime API：本机 loopback JSON Lines 控制面、版本化信封、`slterm ctl`
-  与 `slterm env`、window/tab/pane/agent 资源动词、单实例移交。
+  Codex / Pi / OpenCode 的 hook 安装；Claude Code 与 Codex 历史会话扫描。
 - 文件与编辑：源码/文档/图片标签页、只读双栏 diff、git gutter、Markdown
-  数学渲染、终端数学覆盖层、补全引擎。
+  数学渲染与补全引擎。
 - 系统集成：托盘、Windows toast 通知、任务栏进度、开机启动、窗口材质与
   壁纸、更新检查与后台下载。
 - 安全：凭据存入 Windows 凭据管理器、设置写审计通道、口令保护的本地

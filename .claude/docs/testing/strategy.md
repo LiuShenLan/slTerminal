@@ -10,7 +10,7 @@
   |---|---|---|---|
   | 单元与集成层 | Rust 单测与集成 target | 各 crate 内嵌 `mod <领域>_tests` + `tests/` 集成 target | 协议语义、纯函数契约、serde round-trip、注册表契约、平台串行化 |
   | 虚拟窗口 UI 层 | `#[gpui::test]` + `TestAppContext`/`VisualTestContext` | feature `gpui-test-support` 统一门控 | 真实控件、布局、键盘、hover 路径 |
-  | 脚本门禁层 | python unittest、PS1、cargo | `scripts/tests/` 与仓库脚本 | 行数棘轮、依赖方向、禁名回流、打包钉测试、输入矩阵、Runtime conformance |
+  | 脚本门禁层 | python unittest、PS1、cargo | `scripts/tests/` 与仓库脚本 | 行数棘轮、依赖方向、禁名回流、打包钉测试、输入矩阵 |
   | 豁免登记层 | 单表真值源 + 模块文档明细 | `.claude/docs/testing/exemptions.md` | 一切残余不可自动化面（实机验收点、条件跳过） |
 
 - **显式测试 target**：每个 crate 使用 `[lib] test = false` + 显式 `[[test]] name = "lib_tests" path = "src/lib.rs"`。原因：默认 lib test target 可能收不到测试专用链接参数与 manifest 控制，历史上表现为零输出崩溃。边界：定向测试一律 `cargo test -p <crate> --test lib_tests <filter> -- --test-threads=1`；禁止 `--lib` 或裸 filter 直打默认 lib target。遇零输出崩溃先查测试 target 形态与链接参数，不要当业务代码 bug 排查。
@@ -19,7 +19,6 @@
 - **负载裕度登记**：因 CPU 负载导致间歇红而提额超时/轮询预算时，必须在改动点注释标明「负载裕度，非断言/语义放宽」。原因：区分时间预算调整与断言语义放宽。边界：断言语义不变、只放大时间预算，且真 bug 条件下该红仍红；凡须同步放宽断言值/判据的，按语义变更走完整评审。
 - **缺陷修复附防复发测试**：修复缺陷或优化历史功能时，除对改动代码添加全量测试外，还须对照改动前老代码补回归用例。原因：防止同类缺陷以另一种形态复发。边界：无法自动化的部分按豁免规则登记。
 - **命名约定**：内嵌测试模块 = `mod <领域>_tests`（一文件多测试模块用功能具名）；测试函数 = 「对象_行为_场景」snake_case 裸名，禁 `test_` 前缀与规格编号前缀；集成测试 = `<域>_tests.rs`；脚本 = `test_*.py` / `*.tests.ps1`。
-- **Runtime conformance**：以协议桩为主（可重复），真 CLI 作为实机验收点登记豁免；不为不可重复的真实环境写必红用例。
 - **覆盖面判定**：「可自动化」= Rust 可测或 GPUI 虚拟窗口可测；其余登记豁免并注明根因与兜底层级，禁止未登记豁免。
 
 ## 验收与测试

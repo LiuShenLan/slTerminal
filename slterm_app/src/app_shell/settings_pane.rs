@@ -55,7 +55,6 @@ use crate::app_shell::config::Settings;
 use crate::app_shell::workspace::keyboard_bindings;
 use crate::encrypted_backup::{BackupSelection, MIN_PASSPHRASE_CHARS};
 use crate::i18n::Message;
-use crate::theme_library::package::{Author, CheckedPackage, export_package};
 use design::{
     SETTINGS_GROUP_GAP, SETTINGS_NAV_ICON_SIZE, SETTINGS_NAV_ROW_HEIGHT, SETTINGS_NAV_WIDTH,
 };
@@ -84,10 +83,6 @@ const WALLPAPER_ALIGNMENT_VALUES: [&str; 9] = [
     "bottom",
     "bottom-right",
 ];
-/// 主题包导出元数据(作者 = 品牌名,版本 = 应用版本,许可证 = GPL-3.0)。
-const THEME_PACKAGE_AUTHOR: &str = crate::brand::NAME;
-const THEME_PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
-const THEME_PACKAGE_LICENSE: &str = "GPL-3.0";
 /// 加密备份导出对话框的建议文件名。
 const BACKUP_FILE_NAME: &str = "slterm-backup.slterm-backup";
 
@@ -121,14 +116,10 @@ pub(crate) enum SettingsStatus {
     Failed(String),
     /// 静默启动开启时已联动开启常驻托盘。
     SilentStartTrayEnabled,
-    /// 主题包导入成功;`name` = 库内消歧后的显示名。
+    /// 单文件主题导入成功;`name` = 库内消歧后的显示名。
     ThemeImported { name: String },
-    /// 主题包导出成功;`path` = 成品输出路径。
-    ThemeExported { path: PathBuf },
-    /// 主题包导入失败(校验/安装原因)。
+    /// 单文件主题导入失败(读取/校验/安装原因)。
     ThemeImportFailed(String),
-    /// 主题包导出失败(读取主题/写包原因)。
-    ThemeExportFailed(String),
     /// 加密备份导出成功;`path` = 成品输出路径。
     BackupExported { path: PathBuf },
     /// 加密备份导出失败(收集/密封/写盘或前置校验原因);整单失败。
@@ -142,7 +133,6 @@ impl SettingsStatus {
             Self::LoadedCorrupted
                 | Self::Failed(_)
                 | Self::ThemeImportFailed(_)
-                | Self::ThemeExportFailed(_)
                 | Self::BackupFailed(_)
         )
     }
@@ -166,16 +156,8 @@ impl SettingsStatus {
             Self::ThemeImported { name } => {
                 language.format(Message::SettingsStatusThemeImported, &[("name", name)])
             }
-            Self::ThemeExported { path } => {
-                let path = path.display().to_string();
-                language.format(Message::SettingsStatusThemeExported, &[("path", &path)])
-            }
             Self::ThemeImportFailed(error) => language.format(
                 Message::SettingsStatusThemeImportFailed,
-                &[("error", error)],
-            ),
-            Self::ThemeExportFailed(error) => language.format(
-                Message::SettingsStatusThemeExportFailed,
                 &[("error", error)],
             ),
             Self::BackupExported { path } => {
@@ -248,9 +230,8 @@ pub(crate) struct SettingsPane {
     wallpaper_preview_loading: bool,
     /// 壁纸可读错误(路径不存在/解码失败);有值时页面内联展示。
     wallpaper_error: Option<String>,
-    /// 主题包导入/导出忙态(防重复点击)。
+    /// 单文件主题导入忙态(防重复点击)。
     theme_import_busy: bool,
-    theme_export_busy: bool,
     /// 主题编辑会话(外观页子视图;关闭即丢弃草稿)。
     theme_editor: Option<theme_editor::ThemeEditor>,
     /// 键位录制焦点:进入录制态时取得键盘焦点,下一次 KeyDown 在此消费。
@@ -536,7 +517,6 @@ impl SettingsPane {
             wallpaper_preview_loading: false,
             wallpaper_error: None,
             theme_import_busy: false,
-            theme_export_busy: false,
             theme_editor: None,
             keybind_focus: cx.focus_handle(),
             keybind_recording: None,
@@ -982,12 +962,8 @@ impl SettingsPane {
         cx.notify();
     }
 
-    /// 主题包导入:选择器 → 后台 `CheckedPackage::open + install` → 前台提示。
-    pub(super) fn import_theme_package(
-        &mut self,
-        _window: &mut Window,
-        cx: &mut Context<'_, Self>,
-    ) {
+    /// 单文件主题导入:选择器 → 后台有界读取与校验 → 前台提示。
+    pub(super) fn import_theme(&mut self, _window: &mut Window, cx: &mut Context<'_, Self>) {
         if self.theme_import_busy {
             return;
         }
@@ -1017,20 +993,9 @@ impl SettingsPane {
                 });
                 return;
             };
-            if !has_zip_extension(&path) {
-                let message = language
-                    .text(Message::SettingsAppearanceThemeImportZipRequired)
-                    .to_owned();
-                let _ = this.update(cx, |pane, cx| {
-                    pane.theme_import_busy = false;
-                    pane.status = Some(SettingsStatus::ThemeImportFailed(message));
-                    cx.notify();
-                });
-                return;
-            }
             let task = cx.background_executor().spawn(async move {
-                CheckedPackage::open(&path)
-                    .and_then(|package| package.install(&store))
+                store
+                    .import_json_file(&path)
                     .map(|document| document.name().to_owned())
                     .map_err(|error| error.to_string())
             });
@@ -1052,89 +1017,6 @@ impl SettingsPane {
             Err(error) => self.status = Some(SettingsStatus::ThemeImportFailed(error)),
         }
         cx.notify();
-    }
-
-    /// 主题包导出:选目标 → 后台读取当前自定义主题并 `export_package`。
-    pub(super) fn export_theme_package(
-        &mut self,
-        _window: &mut Window,
-        cx: &mut Context<'_, Self>,
-    ) {
-        if self.theme_export_busy {
-            return;
-        }
-        let Some(theme_id) = self.runtime.custom_theme.clone() else {
-            return;
-        };
-        let language = self.language(cx);
-        let directory = self.theme_package_directory();
-        let suggested = format!("{theme_id}.slterm-theme.zip");
-        let picked = cx.prompt_for_new_path(&directory, Some(&suggested));
-        self.theme_export_busy = true;
-        self.status = None;
-        cx.notify();
-        let store = self.settings_target.theme_store();
-        cx.spawn(async move |this, cx| {
-            let path = match picked.await {
-                Ok(Ok(Some(path))) => Some(path),
-                _ => None,
-            };
-            let Some(output) = path else {
-                let _ = this.update(cx, |pane, cx| {
-                    pane.theme_export_busy = false;
-                    cx.notify();
-                });
-                return;
-            };
-            if !has_zip_extension(&output) {
-                let message = language
-                    .text(Message::SettingsAppearanceThemeExportZipRequired)
-                    .to_owned();
-                let _ = this.update(cx, |pane, cx| {
-                    pane.theme_export_busy = false;
-                    pane.status = Some(SettingsStatus::ThemeExportFailed(message));
-                    cx.notify();
-                });
-                return;
-            }
-            let task = cx.background_executor().spawn(async move {
-                let document = store.load(&theme_id).map_err(|error| error.to_string())?;
-                export_package(
-                    &document,
-                    Author {
-                        name: THEME_PACKAGE_AUTHOR.to_owned(),
-                        github: None,
-                    },
-                    THEME_PACKAGE_VERSION.to_owned(),
-                    THEME_PACKAGE_LICENSE.to_owned(),
-                    &output,
-                    None,
-                )
-                .map_err(|error| error.to_string())?;
-                Ok::<PathBuf, String>(output)
-            });
-            let result = task.await;
-            let _ = this.update(cx, |pane, cx| pane.finish_theme_export(result, cx));
-        })
-        .detach();
-    }
-
-    fn finish_theme_export(&mut self, result: Result<PathBuf, String>, cx: &mut Context<'_, Self>) {
-        self.theme_export_busy = false;
-        self.status = Some(match result {
-            Ok(path) => SettingsStatus::ThemeExported { path },
-            Err(error) => SettingsStatus::ThemeExportFailed(error),
-        });
-        cx.notify();
-    }
-
-    /// 导出对话框的起始目录:显式测试目标 = 设置文件父目录;生产 =
-    /// 默认数据目录(与主题库同一根)。
-    fn theme_package_directory(&self) -> PathBuf {
-        self.settings_target
-            .theme_root()
-            .and_then(|root| root.parent().map(std::path::Path::to_path_buf))
-            .unwrap_or_else(slterm_settings::settings_dir)
     }
 
     /// 进入键位录制:录制焦点接管下一次 KeyDown;Esc 由录制处理函数取消。
@@ -1672,13 +1554,6 @@ fn wallpaper_alignment_labels(language: UiLanguage) -> Vec<SharedString> {
     .collect()
 }
 
-/// 主题包对话框的目标/来源扩展名检查(不做前台文件 IO)。
-fn has_zip_extension(path: &std::path::Path) -> bool {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("zip"))
-}
-
 impl Focusable for SettingsPane {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus_handle.clone()
@@ -1801,28 +1676,16 @@ impl SettingsPane {
         self.wallpaper_error.as_deref()
     }
 
-    pub(crate) fn import_theme_package_for_test(
+    pub(crate) fn import_theme_for_test(
         &mut self,
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
-        self.import_theme_package(window, cx);
-    }
-
-    pub(crate) fn export_theme_package_for_test(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<'_, Self>,
-    ) {
-        self.export_theme_package(window, cx);
+        self.import_theme(window, cx);
     }
 
     pub(crate) fn theme_import_busy_for_test(&self) -> bool {
         self.theme_import_busy
-    }
-
-    pub(crate) fn theme_export_busy_for_test(&self) -> bool {
-        self.theme_export_busy
     }
 
     // ── 加密备份 ──

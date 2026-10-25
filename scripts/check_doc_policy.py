@@ -25,7 +25,6 @@ EXCLUDED_PREFIXES = (
 EXCLUDED_FILES = {
     "LICENSE",
     "THIRD-PARTY-NOTICES",
-    "assets/runtime-control-api.md",
     "scripts/check_doc_policy.py",
     "scripts/tests/test_doc_policy.py",
 }

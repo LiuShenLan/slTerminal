@@ -1,7 +1,7 @@
-//! 所有呈现面共享的高层数学编译入口。
+//! Markdown 数学的高层编译入口。
 //!
-//! Markdown 与终端定位公式的方式不同，但都不允许独立规范化、解析或排版。
-//! 把该边界留在这里，可防止按来源分支的 matrix/cases 修复各自漂移。
+//! 解析与排版只在这里汇合；有限传输规范化不推断数学结构，防止 matrix/cases
+//! 修复随调用来源漂移。
 
 use std::borrow::Cow;
 
@@ -20,7 +20,7 @@ pub(crate) fn compile_formula(
     limits: MathLimits,
 ) -> Result<MathLayout, MathError> {
     let formula = parse_formula(source, display, limits)?;
-    // 光学补偿在这一个入口做：调用方传名义字号（终端/正文字号），缓存键也用
+    // 光学补偿在这一个入口做：调用方传 Markdown 正文的名义字号，缓存键也用
     // 名义字号，返回的 metrics 已是补偿后的真实几何，fit 逻辑自然吸收。
     layout_formula(
         &formula,
@@ -63,8 +63,8 @@ pub(super) fn normalize_formula_source<'a>(
     }
 
     let mut normalized = Cow::Borrowed(source);
-    // 终端输出可能先经过 Markdown/HTML，再经过终端协议；有限次解码既覆盖
-    // 真实的双重转义，也避免恶意深层实体造成无界重复扫描。
+    // 传输文本可能经过多层 Markdown/HTML 转义；有限次解码既覆盖真实的
+    // 双重转义，也避免恶意深层实体造成无界重复扫描。
     for _ in 0..MAX_ENTITY_DECODE_PASSES {
         let Some(decoded) = decode_entities_once(normalized.as_ref()) else {
             break;
@@ -510,8 +510,8 @@ mod tests {
     }
 
     /// 每个字形都必须能落到位图上：合成器遇到一个失败字形就整张放弃，
-    /// 而那时源格已经被覆盖掩码藏掉，屏幕上只剩空洞。`\text{ToT Search}`
-    /// 里那个空格就是这么把一整条流水线公式吃掉的。
+    /// 调用方只能回退为公式源码。`\text{ToT Search}` 里的空格曾因此让
+    /// 整条公式无法位图渲染。
     #[test]
     fn every_glyph_of_a_text_annotated_formula_rasterizes() {
         let source = concat!(

@@ -80,11 +80,19 @@ pub(crate) fn try_lock(path: &Path) -> io::Result<Option<FileLock>> {
 
 /// 常驻进程的全程锁:依赖 OS 句柄独占(share_mode(0)),进程崩溃内核立即
 /// 释放,健康进程无论运行多久都不会被「超时回收」。锁文件可保留,所有权
-/// 只看句柄。
+/// 只看句柄；目标路径按通用 sidecar 规则派生。
 pub(crate) fn try_lifetime_lock(path: &Path) -> io::Result<Option<LifetimeFileLock>> {
+    try_lifetime_lock_at(lock_path(path))
+}
+
+/// 在调用方给定的精确路径上持常驻锁，不追加 sidecar 扩展名。
+pub(crate) fn try_lifetime_lock_exact(path: &Path) -> io::Result<Option<LifetimeFileLock>> {
+    try_lifetime_lock_at(path.to_owned())
+}
+
+fn try_lifetime_lock_at(lock_path: PathBuf) -> io::Result<Option<LifetimeFileLock>> {
     use std::os::windows::fs::OpenOptionsExt as _;
 
-    let lock_path = lock_path(path);
     if let Some(parent) = lock_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -129,7 +137,7 @@ fn create_lock(path: &Path) -> io::Result<FileLock> {
     })
 }
 
-fn lock_path(path: &Path) -> PathBuf {
+pub(crate) fn lock_path(path: &Path) -> PathBuf {
     let extension = path
         .extension()
         .and_then(|value| value.to_str())

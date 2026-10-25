@@ -65,7 +65,6 @@ workspace 成员、ownership、类型锚点、错误信封、数据目录与命�
 - **配色单点**：颜色定义于主题/设置体系，组件经语义 token 引用，禁硬编码颜色；仅暗色。新增方案/色值须提供完整语义 token 映射；不做对比度校验、不提示、不自动回退。
 - **布局单点**：会话布局只经 session schema 的 layout 转换对存取；禁第二套序列化或绕过快照。
 - **面板封闭**：tab 与侧栏视图为封闭枚举（`WorkspaceTab`/`SideViewId`）；新增类型须在单一注册点登记，恢复时过滤未知类型。
-- **会话元数据单点**：PTY 进程映射只在 `TerminalRegistry` 管理；pane/视图只订阅，不自存。
 - **测试覆盖**：改动的代码可自动化部分必须添加全量自动化测试用例覆盖；不可自动化部分须在 `.claude/docs/testing/exemptions.md` 登记豁免原因与兜底层级，禁止未登记豁免。
 - **门禁常挂**：提交前全部门禁全绿（架构/依赖、文档策略、禁名、clippy、fmt、测试）；禁名词表只允许 `slTerminal`/`slterm`，旧品牌名不得回流。
 
@@ -102,4 +101,3 @@ workspace 成员、ownership、类型锚点、错误信封、数据目录与命�
 - `.claude/docs/operations/commands.md` — 完整命令矩阵。
 - `.claude/docs/operations/doc-style.md` — 统一文档模板与维护规则。
 - `release-notes/` — 按版本发布说明。
-- `assets/runtime-control-api.md` — 随包 Runtime API 参考；机器可读 schema 在旁边。

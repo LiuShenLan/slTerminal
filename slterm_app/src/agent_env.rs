@@ -1,17 +1,15 @@
 //! 本地 pane 的 Agent 身份契约。
 //!
 //! 让 pane 里的任何进程——尤其是 Codex / Claude Code 这类 AI CLI——在不读源码、
-//! 不扫进程、不猜端口的前提下回答三个问题:
+//! 不扫进程的前提下回答三个问题:
 //!
 //! | 问题 | 变量 |
 //! | --- | --- |
 //! | 我在什么终端里? | `TERM_PROGRAM` / `TERM_PROGRAM_VERSION` |
 //! | 我是哪个 pane? | `SLTERM_PANE_ID` |
-//! | 控制面在哪、怎么调? | `SLTERM_CLI` / `SLTERM_BIN_DIR` / `PATH` |
+//! | 当前可执行文件在哪里? | `SLTERM_CLI` / `SLTERM_BIN_DIR` / `PATH` |
 //!
-//! 前两行是**识别**,第三行是**可达性**,两者都不解决「什么时候该调」——那是
-//! Skill 的职责。三者不能互相替代:没有身份契约,Skill 里写的命令是空头承诺;
-//! 没有 Skill,Agent 至少还能靠 `slterm env` 自己发现完整能力清单。
+//! 前两行是**识别**,第三行是**可执行文件发现**;这些变量只描述事实,不承担工作流指导。
 //!
 //! # 只进本地 PTY
 //!
@@ -23,8 +21,7 @@
 //! 在 slTerminal 的 pane 里再开一个 slTerminal 是常规操作(嵌套 shell、
 //! 测试用的隔离实例)。因此 `PATH` 前置按值判重:套多少层,环境块都不增长。
 
-use std::collections::HashMap;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fmt::Display;
 use std::path::{Path, PathBuf};
 
@@ -51,54 +48,60 @@ pub const PROCESS_ENV: &str = "SLTERM_PROCESS_ID";
 const TERM_PROGRAM_ENV: &str = "TERM_PROGRAM";
 const TERM_PROGRAM_VERSION_ENV: &str = "TERM_PROGRAM_VERSION";
 const PATH_ENV: &str = "PATH";
+const LEGACY_RUNTIME_ENDPOINT_ENV: &str = "SLTERM_RUNTIME_ENDPOINT";
 
 /// 把身份契约写进一个本地 PTY 的环境表。
 ///
 /// 调用点必须在所有其它 `env` 写入之后:本函数以环境表里的 `PATH` 现值为基准
 /// 前置 bin 目录,与调用顺序无关地保住已有条目。
-pub fn apply(env: &mut HashMap<String, String>, pane_id: impl Display) {
+pub fn apply(options: &mut slterm_terminal::tty::Options, pane_id: impl Display) {
+    let env = &mut options.env;
     insert_env(env, PANE_ENV, pane_id.to_string());
     insert_env(env, PROCESS_ENV, std::process::id().to_string());
-    insert_env(env, TERM_PROGRAM_ENV, TERM_PROGRAM.to_owned());
-    insert_env(
-        env,
-        TERM_PROGRAM_VERSION_ENV,
-        env!("CARGO_PKG_VERSION").to_owned(),
-    );
+    insert_env(env, TERM_PROGRAM_ENV, TERM_PROGRAM);
+    insert_env(env, TERM_PROGRAM_VERSION_ENV, env!("CARGO_PKG_VERSION"));
 
     if let Some(executable) = executable() {
-        insert_env(env, CLI_ENV, executable.display().to_string());
+        insert_env(env, CLI_ENV, executable.as_os_str());
         if let Some(directory) = executable.parent() {
-            insert_env(env, BIN_DIR_ENV, directory.display().to_string());
+            insert_env(env, BIN_DIR_ENV, directory.as_os_str());
             if let Some(path) = prepended_path(directory, env_value(env, PATH_ENV)) {
                 insert_env(env, PATH_ENV, path);
             }
         }
     }
 
-    // 端点注入必须排在末位:继承来的旧端点一律作废,
-    // 子进程只指向「正在为它提供控制面的那个实例」。
-    crate::runtime_api::apply_child_endpoint(env);
+    // 旧控制面端点不是子进程身份；自定义表与后续原生继承合并都必须排除。
+    remove_legacy_runtime_endpoint(options);
 }
 
-fn env_value<'a>(env: &'a HashMap<String, String>, name: &str) -> Option<&'a str> {
-    env.iter()
-        .find(|(existing, _)| existing.eq_ignore_ascii_case(name))
-        .map(|(_, value)| value.as_str())
+fn remove_legacy_runtime_endpoint(options: &mut slterm_terminal::tty::Options) {
+    options.env.remove(LEGACY_RUNTIME_ENDPOINT_ENV);
+    let excluded = OsStr::new(LEGACY_RUNTIME_ENDPOINT_ENV);
+    if !options
+        .inherited_env_exclusions
+        .iter()
+        .any(|name| name.eq_ignore_ascii_case(excluded))
+    {
+        options
+            .inherited_env_exclusions
+            .push(excluded.to_os_string());
+    }
 }
 
-fn insert_env(env: &mut HashMap<String, String>, name: &str, value: String) {
-    // Windows 环境变量名大小写不敏感:`Path` 与 `PATH` 是同一个变量,不先
-    // 移除等值键就会留下两份、后写者未必是读取方看到的那份。
-    env.retain(|existing, _| !existing.eq_ignore_ascii_case(name));
-    env.insert(name.to_owned(), value);
+fn env_value<'a>(env: &'a slterm_terminal::tty::Environment, name: &str) -> Option<&'a OsStr> {
+    env.get(name)
+}
+
+fn insert_env(env: &mut slterm_terminal::tty::Environment, name: &str, value: impl AsRef<OsStr>) {
+    env.insert(name, value);
 }
 
 /// 当前运行的 slTerminal 可执行文件。
 ///
 /// 优先 `current_exe()` 而不是继承来的 [`CLI_ENV`]:嵌套启动时,继承值指向
-/// 外层那个二进制,可能已经是旧版本或另一个便携副本;PTY 应当指向**正在为
-/// 它提供控制面的那个**进程。
+/// 外层那个二进制，可能已经是旧版本或另一个便携副本;PTY 应当指向**当前
+/// 终端实例**的进程。
 pub fn executable() -> Option<PathBuf> {
     preferred_executable(
         std::env::current_exe().ok(),
@@ -114,9 +117,9 @@ fn preferred_executable(current: Option<PathBuf>, inherited: Option<PathBuf>) ->
 ///
 /// 先移除所有等值项再前置,所以重复调用是稳定的——否则每层嵌套都会给环境块
 /// 多加一份同样的目录。
-fn prepended_path(directory: &Path, current: Option<&str>) -> Option<String> {
+fn prepended_path(directory: &Path, current: Option<&OsStr>) -> Option<OsString> {
     let current = match current {
-        Some(value) => OsString::from(value),
+        Some(value) => value.to_os_string(),
         None => std::env::var_os(PATH_ENV).unwrap_or_default(),
     };
     let mut entries: Vec<PathBuf> = std::env::split_paths(&current).collect();
@@ -130,9 +133,7 @@ fn prepended_path(directory: &Path, current: Option<&str>) -> Option<String> {
     entries.insert(0, directory.to_path_buf());
     // `join_paths` 在某条目自带分隔符时失败。那种 `PATH` 本来就已经坏了,
     // 保留原值比写回一个被截断的列表安全。
-    std::env::join_paths(entries)
-        .ok()
-        .map(|joined| joined.to_string_lossy().into_owned())
+    std::env::join_paths(entries).ok()
 }
 
 fn same_directory(left: &Path, right: &Path) -> bool {
@@ -144,11 +145,16 @@ fn same_directory(left: &Path, right: &Path) -> bool {
 #[cfg(test)]
 mod env_contract_tests {
     use super::*;
+    use slterm_terminal::tty;
 
-    fn applied(pane_id: u64) -> HashMap<String, String> {
-        let mut env = HashMap::new();
-        apply(&mut env, pane_id);
-        env
+    fn applied_options(pane_id: u64) -> tty::Options {
+        let mut options = tty::Options::default();
+        apply(&mut options, pane_id);
+        options
+    }
+
+    fn applied(pane_id: u64) -> tty::Environment {
+        applied_options(pane_id).env
     }
 
     #[test]
@@ -156,26 +162,15 @@ mod env_contract_tests {
         let env = applied(17);
         let executable = executable().expect("测试二进制的 current_exe 一定存在");
         let bin_dir = executable.parent().expect("可执行文件必有父目录");
-        assert_eq!(env.get(PANE_ENV).map(String::as_str), Some("17"));
+        assert_eq!(env.get(PANE_ENV), Some(OsStr::new("17")));
+        let process_id = std::process::id().to_string();
+        assert_eq!(env.get(PROCESS_ENV), Some(OsStr::new(&process_id)));
+        assert_eq!(env.get(CLI_ENV), Some(executable.as_os_str()));
+        assert_eq!(env.get(BIN_DIR_ENV), Some(bin_dir.as_os_str()));
+        assert_eq!(env.get(TERM_PROGRAM_ENV), Some(OsStr::new(TERM_PROGRAM)));
         assert_eq!(
-            env.get(PROCESS_ENV).map(String::as_str),
-            Some(std::process::id().to_string().as_str())
-        );
-        assert_eq!(
-            env.get(CLI_ENV).map(String::as_str),
-            Some(executable.to_string_lossy().as_ref())
-        );
-        assert_eq!(
-            env.get(BIN_DIR_ENV).map(String::as_str),
-            Some(bin_dir.to_string_lossy().as_ref())
-        );
-        assert_eq!(
-            env.get(TERM_PROGRAM_ENV).map(String::as_str),
-            Some(TERM_PROGRAM)
-        );
-        assert_eq!(
-            env.get(TERM_PROGRAM_VERSION_ENV).map(String::as_str),
-            Some(env!("CARGO_PKG_VERSION"))
+            env.get(TERM_PROGRAM_VERSION_ENV),
+            Some(OsStr::new(env!("CARGO_PKG_VERSION")))
         );
         // 旧品牌名与远程 pane 常量不立,环境组不许多出任何身份键。
         for legacy in [
@@ -201,6 +196,27 @@ mod env_contract_tests {
     }
 
     #[test]
+    fn legacy_runtime_endpoint_is_removed_from_custom_and_inherited_env() {
+        let mut options = tty::Options::default();
+        options
+            .env
+            .insert("slterm_runtime_endpoint", "stale endpoint");
+        options.env.insert("PATH", "C:/Windows");
+        remove_legacy_runtime_endpoint(&mut options);
+        assert!(
+            !options
+                .env
+                .keys()
+                .any(|key| key.eq_ignore_ascii_case("SLTERM_RUNTIME_ENDPOINT"))
+        );
+        assert_eq!(
+            options.inherited_env_exclusions,
+            vec![OsString::from("SLTERM_RUNTIME_ENDPOINT")]
+        );
+        assert_eq!(options.env.get("PATH"), Some(OsStr::new("C:/Windows")));
+    }
+
+    #[test]
     fn cli_directory_leads_path() {
         let env = applied(1);
         let bin_dir = PathBuf::from(env.get(BIN_DIR_ENV).expect("bin dir"));
@@ -217,21 +233,17 @@ mod env_contract_tests {
     #[test]
     fn path_prepend_is_idempotent_and_does_not_duplicate_entries() {
         let directory = Path::new(r"D:\slTerminal\bin");
-        let base = std::env::join_paths([r"D:\tools", r"D:\Windows"])
-            .expect("join")
-            .to_string_lossy()
-            .into_owned();
+        let base = std::env::join_paths([r"D:\tools", r"D:\Windows"]).expect("join");
 
-        let once = prepended_path(directory, Some(base.as_str())).expect("首次调用改写 PATH");
+        let once = prepended_path(directory, Some(base.as_os_str())).expect("首次调用改写 PATH");
         // 已在首位 → 不再重写,嵌套启动因此不会让环境块增长。
-        assert_eq!(prepended_path(directory, Some(once.as_str())), None);
+        assert_eq!(prepended_path(directory, Some(once.as_os_str())), None);
 
         // 目录在中段时移到首位,且不留下重复项。
-        let middle = std::env::join_paths([r"D:\tools", r"D:\SLTERMINAL\BIN", r"D:\Windows"])
-            .expect("join")
-            .to_string_lossy()
-            .into_owned();
-        let moved = prepended_path(directory, Some(middle.as_str())).expect("非首位条目应被前移");
+        let middle =
+            std::env::join_paths([r"D:\tools", r"D:\SLTERMINAL\BIN", r"D:\Windows"]).expect("join");
+        let moved =
+            prepended_path(directory, Some(middle.as_os_str())).expect("非首位条目应被前移");
         let entries: Vec<PathBuf> = std::env::split_paths(&moved).collect();
         assert!(same_directory(&entries[0], directory));
         assert_eq!(
@@ -244,14 +256,45 @@ mod env_contract_tests {
     }
 
     #[test]
+    fn apply_preserves_non_unicode_path_entries() {
+        use std::os::windows::ffi::OsStringExt;
+
+        let non_unicode = OsString::from_wide(&[u16::from(b'X'), 0xD800, u16::from(b'Y')]);
+        let current = std::env::join_paths([non_unicode.clone(), OsString::from(r"C:\Windows")])
+            .expect("join PATH");
+        let mut options = tty::Options::default();
+        options.env.insert("PATH", current);
+
+        apply(&mut options, 9);
+
+        let path = options.env.get(PATH_ENV).expect("PATH");
+        let entries: Vec<PathBuf> = std::env::split_paths(path).collect();
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.as_os_str() == non_unicode.as_os_str()),
+            "PATH 前置不得改写非 Unicode 条目"
+        );
+    }
+
+    #[test]
     fn apply_twice_keeps_the_environment_block_stable() {
-        let mut env = HashMap::new();
-        apply(&mut env, 4);
-        let once = env.get(PATH_ENV).cloned();
-        let keys = env.len();
-        apply(&mut env, 4);
-        assert_eq!(env.get(PATH_ENV).cloned(), once, "PATH 不应重复增长");
-        assert_eq!(env.len(), keys, "重复 apply 不新增键");
+        let mut options = tty::Options::default();
+        apply(&mut options, 4);
+        let once = options.env.get(PATH_ENV).map(OsStr::to_os_string);
+        let keys = options.env.len();
+        apply(&mut options, 4);
+        assert_eq!(
+            options.env.get(PATH_ENV).map(OsStr::to_os_string),
+            once,
+            "PATH 不应重复增长"
+        );
+        assert_eq!(options.env.len(), keys, "重复 apply 不新增键");
+        assert_eq!(
+            options.inherited_env_exclusions,
+            vec![OsString::from("SLTERM_RUNTIME_ENDPOINT")],
+            "重复 apply 不新增继承排除名"
+        );
     }
 
     #[test]
@@ -260,11 +303,8 @@ mod env_contract_tests {
             return;
         }
         let directory = Path::new(r"C:\Tools\slTerminal");
-        let base = std::env::join_paths([r"C:\a", r"C:\TOOLS\SLTERMINAL", r"C:\b"])
-            .expect("join")
-            .to_string_lossy()
-            .into_owned();
-        let moved = prepended_path(directory, Some(base.as_str())).expect("应前移");
+        let base = std::env::join_paths([r"C:\a", r"C:\TOOLS\SLTERMINAL", r"C:\b"]).expect("join");
+        let moved = prepended_path(directory, Some(base.as_os_str())).expect("应前移");
         let entries: Vec<PathBuf> = std::env::split_paths(&moved).collect();
         assert_eq!(entries.len(), 3, "大小写不同的等值目录只留一份");
         assert!(same_directory(&entries[0], directory));

@@ -399,11 +399,6 @@ impl ThemeDocument {
         }
         Some(output)
     }
-
-    #[allow(dead_code)] // 消费点 = 主题包/导入检查读取显式索引色覆盖。
-    pub fn indexed(&self) -> Option<&Map<String, Value>> {
-        self.value.get("terminal")?.get("indexed")?.as_object()
-    }
 }
 
 /// 目录内全部内置主题的文档形态(选择器/template 列表消费)。

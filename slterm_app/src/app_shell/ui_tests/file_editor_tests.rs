@@ -1123,74 +1123,6 @@ fn closing_the_window_with_dirty_files_confirms_first(cx: &mut TestAppContext) {
     );
 }
 
-/// runtime `tab.close` 对脏文件默认拒绝(dirty_document);force 才丢弃。
-#[gpui::test]
-fn runtime_tab_close_rejects_dirty_documents_unless_forced(cx: &mut TestAppContext) {
-    let (workspace, mut window) = open_workspace(cx);
-    let directory = tempfile::tempdir().unwrap();
-    let path = write_temp_file(directory.path(), "draft.rs", b"initial\n");
-    open_document_at(&workspace, &mut window, path.clone());
-    focus_active_file_tab(&workspace, &mut window);
-    window.simulate_input("draft ");
-    window.run_until_parked();
-    let tab_count = workspace.read_with(cx, |ws, _| ws.tab_count());
-
-    let error = window
-        .update(|window, cx| {
-            workspace.update(cx, |ws, cx| {
-                ws.execute_runtime_command_for_test(
-                    &crate::runtime_api::RuntimeCommand::CloseTab {
-                        window_id: None,
-                        tab_index: tab_count - 1,
-                        tab_id: None,
-                        force: false,
-                    },
-                    window,
-                    cx,
-                )
-            })
-        })
-        .expect_err("脏文件默认必须拒绝");
-    assert_eq!(error.code, "dirty_document");
-    assert_eq!(
-        workspace.read_with(cx, |ws, _| ws.tab_count()),
-        tab_count,
-        "拒绝后 tab 必须保留"
-    );
-    assert_eq!(
-        std::fs::read(&path).unwrap(),
-        b"initial\n",
-        "拒绝不得丢弃草稿"
-    );
-
-    window
-        .update(|window, cx| {
-            workspace.update(cx, |ws, cx| {
-                ws.execute_runtime_command_for_test(
-                    &crate::runtime_api::RuntimeCommand::CloseTab {
-                        window_id: None,
-                        tab_index: tab_count - 1,
-                        tab_id: None,
-                        force: true,
-                    },
-                    window,
-                    cx,
-                )
-            })
-        })
-        .expect("force 必须关闭");
-    assert_eq!(
-        workspace.read_with(cx, |ws, _| ws.tab_count()),
-        tab_count - 1,
-        "force 后 tab 必须关闭"
-    );
-    assert_eq!(
-        std::fs::read(&path).unwrap(),
-        b"initial\n",
-        "force 只丢弃草稿,不改磁盘"
-    );
-}
-
 /// 保存全部遇单文件失败时继续保存其余文件,窗口保持打开。
 #[gpui::test]
 fn save_all_keeps_saving_after_one_failure(cx: &mut TestAppContext) {
@@ -1396,7 +1328,7 @@ fn terminal_reserved_keys_are_not_eaten_by_editor_actions(cx: &mut TestAppContex
     );
 }
 
-// ── 冲突三栏合并(gutter Conflicted → merge tab) ──
+// ── 冲突 gutter → 只读双栏 Diff ──
 
 /// modify/modify 冲突仓:base/ours/theirs 三版已提交,工作区处于冲突态。
 fn conflicted_repository(directory: &Path, name: &str) -> std::path::PathBuf {
@@ -1460,57 +1392,13 @@ fn git_output(root: &Path, args: &[&str]) -> std::process::Output {
     command.output().expect("run git")
 }
 
-/// 轮询 merge tab 的三栏文本落地(后台 stage 读取完成)。
-fn wait_for_merge_state(
-    cx: &mut TestAppContext,
-    workspace: &gpui::Entity<SltermWorkspace>,
-    window: &mut VisualTestContext,
-) -> (Option<String>, Option<String>, Option<String>) {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        window.executor().advance_clock(Duration::from_millis(50));
-        window.run_until_parked();
-        window.refresh().unwrap();
-        draw_frame(window);
-        if let Some(state @ (Some(_), _, _)) =
-            workspace.read_with(cx, |ws, cx| ws.active_merge_state_for_test(cx))
-        {
-            return state;
-        }
-        assert!(Instant::now() < deadline, "merge 三栏未载入");
-        std::thread::sleep(Duration::from_millis(5));
-    }
-}
-
-/// 轮询 merge 视图内提示(采用写盘/脏拒绝的异步落点)。
-fn wait_for_merge_notice(
-    cx: &mut TestAppContext,
-    workspace: &gpui::Entity<SltermWorkspace>,
-    window: &mut VisualTestContext,
-) -> String {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        window.executor().advance_clock(Duration::from_millis(50));
-        window.run_until_parked();
-        window.refresh().unwrap();
-        draw_frame(window);
-        if let Some(notice) = workspace.read_with(cx, |ws, cx| ws.active_merge_notice_for_test(cx))
-        {
-            return notice;
-        }
-        assert!(Instant::now() < deadline, "merge 提示未落地");
-        std::thread::sleep(Duration::from_millis(5));
-    }
-}
-
-/// 冲突行标 → 三栏(base/ours/theirs)真实绘制;采用我们的版本写回工作区字节。
+/// 冲突行标 → 只读双栏 diff;不提供三方合并或采用写盘。
 #[gpui::test]
-fn conflict_gutter_click_opens_three_panes_and_adopting_ours_writes_the_worktree(
-    cx: &mut TestAppContext,
-) {
+fn conflict_gutter_click_opens_a_read_only_dual_pane_diff(cx: &mut TestAppContext) {
     let (workspace, mut window) = open_workspace(cx);
     let directory = tempfile::tempdir().unwrap();
     let path = conflicted_repository(directory.path(), "conflicted.txt");
+    let before = std::fs::read(&path).unwrap();
 
     open_document_at(&workspace, &mut window, path.clone());
     let marks = wait_for_gutter_marks(cx, &workspace, &mut window);
@@ -1530,123 +1418,24 @@ fn conflict_gutter_click_opens_three_panes_and_adopting_ours_writes_the_worktree
     assert_eq!(
         workspace.read_with(cx, |ws, _| ws.tab_count()),
         3,
-        "terminal + 源码 tab + 冲突合并 tab"
+        "terminal + 源码 tab + 冲突 diff tab"
     );
-    let (base, ours, theirs) = wait_for_merge_state(cx, &workspace, &mut window);
-    assert_eq!(base.as_deref(), Some("line1\nbase\nline3\n"));
-    assert_eq!(ours.as_deref(), Some("line1\nours\nline3\n"));
-    assert_eq!(theirs.as_deref(), Some("line1\ntheirs\nline3\n"));
-    for selector in [
-        "slterm-merge-tab",
-        "slterm-merge-base",
-        "slterm-merge-ours",
-        "slterm-merge-theirs",
-    ] {
+    let (hunks, active) = workspace
+        .read_with(cx, |ws, cx| ws.active_diff_state_for_test(cx))
+        .expect("冲突 gutter 必须打开双栏 diff");
+    assert!(hunks > 0, "冲突文本必须形成 diff hunk");
+    assert_eq!(active, None, "打开时未选中 hunk");
+    assert_eq!(
+        workspace.read_with(cx, |ws, cx| ws.active_read_only_for_test(cx)),
+        Some(true),
+        "冲突 diff 两臂恒只读"
+    );
+    for selector in ["slterm-diff-tab", "slterm-diff-left", "slterm-diff-right"] {
         assert_file_tab_paints(&mut window, selector);
     }
-
-    click_selector(&mut window, "merge-adopt-ours");
-    let notice = wait_for_merge_notice(cx, &workspace, &mut window);
-    assert_eq!(notice, ui_label(cx, Message::MergeWrote), "写盘成功提示");
-    assert_eq!(
-        std::fs::read(&path).unwrap(),
-        b"line1\nours\nline3\n",
-        "采用我们的版本必须把 ours stage 字节写回工作区"
-    );
-}
-
-/// 同路径存在未保存草稿时,采用动作被拒且磁盘字节不变(草稿不被静默丢弃)。
-#[gpui::test]
-fn conflict_merge_adoption_rejects_a_dirty_draft_without_writing(cx: &mut TestAppContext) {
-    let (workspace, mut window) = open_workspace(cx);
-    let directory = tempfile::tempdir().unwrap();
-    let path = conflicted_repository(directory.path(), "conflicted.txt");
-
-    open_document_at(&workspace, &mut window, path.clone());
-    focus_active_file_tab(&workspace, &mut window);
-    window.simulate_input("draft ");
-    window.run_until_parked();
-    assert_eq!(
-        workspace.read_with(cx, |ws, cx| ws.active_dirty_for_test(cx)),
-        Some(true),
-        "前置:源码 tab 必须有未保存草稿"
-    );
-
-    let marks = wait_for_gutter_marks(cx, &workspace, &mut window);
-    assert!(
-        marks.iter().any(|(mark, line)| {
-            *mark == crate::app_shell::file_editor::gutter::GutterMark::Conflicted && *line == 1
-        }),
-        "冲突文件第 1 行必须有冲突行标: {marks:?}"
-    );
-    let before = std::fs::read(&path).unwrap();
-
-    draw_frame(&mut window);
-    click_selector(&mut window, "gutter-mark-1");
-    window.run_until_parked();
-    window.refresh().unwrap();
-    draw_frame(&mut window);
-    let (_, ours, _) = wait_for_merge_state(cx, &workspace, &mut window);
-    assert_eq!(ours.as_deref(), Some("line1\nours\nline3\n"));
-
-    click_selector(&mut window, "merge-adopt-ours");
-    let notice = wait_for_merge_notice(cx, &workspace, &mut window);
-    assert_eq!(
-        notice,
-        ui_label(cx, Message::MergeDirtyRejected),
-        "脏草稿必须拒绝并提示先保存/关闭"
-    );
     assert_eq!(
         std::fs::read(&path).unwrap(),
         before,
-        "脏草稿路径不得被静默覆盖"
-    );
-}
-
-/// 采用他们的版本写回 theirs 字节;「在编辑器中打开」激活既有源码 tab。
-#[gpui::test]
-fn conflict_merge_adopting_theirs_and_open_in_editor_switch_to_the_source_tab(
-    cx: &mut TestAppContext,
-) {
-    let (workspace, mut window) = open_workspace(cx);
-    let directory = tempfile::tempdir().unwrap();
-    let path = conflicted_repository(directory.path(), "conflicted.txt");
-
-    open_document_at(&workspace, &mut window, path.clone());
-    let marks = wait_for_gutter_marks(cx, &workspace, &mut window);
-    assert!(
-        marks.iter().any(|(mark, line)| {
-            *mark == crate::app_shell::file_editor::gutter::GutterMark::Conflicted && *line == 1
-        }),
-        "冲突文件第 1 行必须有冲突行标: {marks:?}"
-    );
-    draw_frame(&mut window);
-    click_selector(&mut window, "gutter-mark-1");
-    window.run_until_parked();
-    window.refresh().unwrap();
-    draw_frame(&mut window);
-    wait_for_merge_state(cx, &workspace, &mut window);
-
-    click_selector(&mut window, "merge-adopt-theirs");
-    let notice = wait_for_merge_notice(cx, &workspace, &mut window);
-    assert_eq!(notice, ui_label(cx, Message::MergeWrote));
-    assert_eq!(
-        std::fs::read(&path).unwrap(),
-        b"line1\ntheirs\nline3\n",
-        "采用他们的版本必须把 theirs stage 字节写回工作区"
-    );
-
-    click_selector(&mut window, "merge-open-editor");
-    window.run_until_parked();
-    draw_frame(&mut window);
-    assert_eq!(
-        workspace.read_with(cx, |ws, _| ws.tab_count()),
-        3,
-        "打开编辑器不得新增 tab(复用既有源码 tab)"
-    );
-    assert_eq!(
-        workspace.read_with(cx, |ws, cx| ws.active_merge_state_for_test(cx)),
-        None,
-        "活跃 tab 必须切回普通源码模式"
+        "打开冲突 diff 不得改写工作区"
     );
 }

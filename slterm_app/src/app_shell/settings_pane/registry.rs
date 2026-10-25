@@ -48,7 +48,7 @@ pub(crate) const BUILTIN_PAGES: [SettingsPageDef; 7] = [
         group: SettingsPageGroup::Global,
         order: 1,
         title: Message::SettingsSidebarAppearance,
-        search_terms: "appearance 外观 theme 主题 font 字体 opacity 透明度 background 背景 wallpaper 壁纸 scrollback 回滚 density 密度 import 导入 export 导出 package 主题包",
+        search_terms: "appearance 外观 theme 主题 font 字体 opacity 透明度 background 背景 wallpaper 壁纸 scrollback 回滚 density 密度 import 导入",
     },
     SettingsPageDef {
         id: "profiles",

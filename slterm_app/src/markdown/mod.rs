@@ -7,9 +7,8 @@
 //! 嵌套树:虚拟滚动要二分「像素 Y 落在哪个块」并只布局可视切片,扁平列表
 //! 天然满足。保留的嵌套(列表层级、引用深度)以数据字段承载,不建树。
 //!
-//! 数学片段(`FormattedTextLine::DisplayMath` / `FragmentContent::Math`)是
-//! 引擎的唯二入口:markdown 与终端定位公式的方式不同,但都不允许独立
-//! 规范化/解析/排版(边界 6)。
+//! 数学片段(`FormattedTextLine::DisplayMath` / `FragmentContent::Math`)分别承载
+//! 块级与行内公式。本模块只保留源码与显示模式，排版统一归数学引擎。
 
 use std::collections::VecDeque;
 use std::fmt;
@@ -164,7 +163,7 @@ impl TextRef {
     }
 }
 
-/// 数学片段的显示模式。两条管线共用;终端覆盖层只消费 `Display` 的块级形态。
+/// 数学片段在 Markdown 阅读器中的显示模式。
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum MathMode {
     Inline,

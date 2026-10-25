@@ -8,9 +8,8 @@ slTerminal is a single-process GPUI application: one window, one instance, dark 
 
 - **Native terminal core** — VT parsing, ConPTY, scrollback, selection, copy/paste, shell integration and a bundled ConPTY fallback for Windows 10.
 - **Tabs and split panes** — terminal tabs, grid splits, pane zoom, drag-to-dock, session restore for terminal tabs.
-- **AI CLI integration** — screen detection rules for AI CLI agents, hook installation for Claude Code / Kimi / Codex / Pi / OpenCode, agent status projection, Claude Code and Codex session history, and a runtime skill that lets agents discover the control plane.
-- **Runtime API** — loopback JSON Lines control plane with a versioned envelope, `slterm ctl`, `slterm env`, resource verbs, and single-instance handover.
-- **Files and editing** — file explorer, code editor, Markdown and image tabs, read-only dual-pane diff, git gutter, Markdown math rendering and terminal math overlays.
+- **AI CLI integration** — screen detection rules for AI CLI agents, hook installation for Claude Code / Kimi / Codex / Pi / OpenCode, agent status projection, and Claude Code and Codex session history.
+- **Files and editing** — file explorer, code editor, Markdown and image tabs, read-only dual-pane diff, git gutter, and Markdown math rendering.
 - **Settings and themes** — settings center with application/appearance/profiles/interaction/advanced/localization/reset and an agent group; built-in dark themes (Linear default); English and Chinese UI.
 - **System integration** — tray icon, Windows toast notifications, taskbar progress, launch at login, window materials and wallpaper, update checks and downloads.
 - **Security** — credentials stay in Windows Credential Manager, audited settings writes, encrypted local backup with a strict allow-list.
@@ -61,7 +60,6 @@ Use the explicit `lib_tests` target for filtered tests; `--lib` and bare filters
 - `.claude/docs/testing/strategy.md` and `.claude/docs/testing/exemptions.md` — test strategy and registered exemptions.
 - `.claude/docs/release/packaging.md` — release chain, size budget and compliance.
 - `.claude/docs/operations/commands.md` — full command matrix.
-- `assets/runtime-control-api.md` — bundled Runtime API reference; machine-readable schema at `assets/runtime-api-v1.schema.json`.
 - `release-notes/` — per-version release notes.
 - `CHANGELOG.md` — bilingual changelog, bundled with the installer and portable zip.
 

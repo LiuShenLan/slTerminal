@@ -49,12 +49,8 @@ $script:PackageEntries = @(
     [pscustomobject]@{ PackagePath = 'README.md'; RepoPath = 'README.md' }
     [pscustomobject]@{ PackagePath = 'README.zh-CN.md'; RepoPath = 'README.zh-CN.md' }
     [pscustomobject]@{ PackagePath = 'docs/CHANGELOG.md'; RepoPath = 'CHANGELOG.md' }
-    [pscustomobject]@{ PackagePath = 'assets/runtime-control-api.md'; RepoPath = 'assets/runtime-control-api.md' }
-    [pscustomobject]@{ PackagePath = 'assets/runtime-api-v1.schema.json'; RepoPath = 'assets/runtime-api-v1.schema.json' }
     [pscustomobject]@{ PackagePath = 'assets/app-icon.png'; RepoPath = 'assets/app-icon.png' }
     [pscustomobject]@{ PackagePath = 'assets/app-icon.ico'; RepoPath = 'assets/app-icon.ico' }
-    [pscustomobject]@{ PackagePath = 'skills/slterm-runtime/SKILL.md'; RepoPath = 'assets/skills/slterm-runtime/SKILL.md' }
-    [pscustomobject]@{ PackagePath = 'skills/slterm-runtime/agents/openai.yaml'; RepoPath = 'assets/skills/slterm-runtime/agents/openai.yaml' }
     [pscustomobject]@{ PackagePath = 'licenses/LICENSE'; RepoPath = 'LICENSE' }
     [pscustomobject]@{ PackagePath = 'licenses/THIRD-PARTY-NOTICES'; RepoPath = 'THIRD-PARTY-NOTICES' }
     [pscustomobject]@{ PackagePath = 'licenses/LICENSE-LATIN-MODERN-MATH'; RepoPath = 'licenses/LICENSE-LATIN-MODERN-MATH' }

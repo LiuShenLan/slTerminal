@@ -15,7 +15,7 @@ use crate::math::{DEFAULT_LIMITS, MIN_READABLE_MATH_PX, compile_formula};
 
 use super::{MathMode, MathSource};
 
-/// 与终端覆盖层同一余量:布局对字号线性,2% 吸收取整误差,保证最右侧
+/// 布局对字号线性，保留 2% 余量吸收取整误差，保证最右侧
 /// 抗锯齿像素不越出阅读列。
 const FIT_MARGIN: f32 = 0.98;
 

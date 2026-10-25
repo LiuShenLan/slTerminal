@@ -1,8 +1,8 @@
 //! 余量来源(F10 语义原样):trait + 静态切片注册表。
 //!
-//! 双通道裁定:plan_balance 只读 user 层 `~/.claude/settings.json` 的
+//! 凭据通道边界:plan_balance 只读 user 层 `~/.claude/settings.json` 的
 //! `env` 段(`ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN`),不读 Windows
-//! 凭据管理器;provider 凭据库通道归 ai_providers,两者不共享凭据本体。
+//! 凭据管理器。
 //! 文件缺失/env 缺失/token 空 → None 静默降级(不发请求)。
 //!
 //! 注册表形态照 hooks provider 先例(静态切片):Rust 无 side-effect import,
