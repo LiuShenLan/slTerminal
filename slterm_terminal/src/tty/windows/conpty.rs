@@ -136,8 +136,7 @@ struct ConptyApi {
     resize: ResizePseudoConsoleFn,
     close: ClosePseudoConsoleFn,
     /// Whether these entry points come from the side-loaded conpty.dll
-    /// (bundled OpenConsole) rather than the in-box kernel32 ConPTY —
-    /// gates the DA1 handshake priming in `new`.
+    /// (bundled OpenConsole) rather than the in-box kernel32 ConPTY.
     sideloaded: bool,
     // Keep the loaded code alive through ClosePseudoConsole, including when
     // several PTYs share the same DLL. Each LoadLibrary owns one reference.
@@ -334,24 +333,7 @@ pub fn new(config: &Options, window_size: WindowSize) -> Result<Pty> {
     // to be gained by tuning this in the future, but it's likely a reasonable
     // start point.
     let (conout, conout_pty_handle) = miow::pipe::anonymous(0)?;
-    let (conin_pty_handle, mut conin) = miow::pipe::anonymous(0)?;
-
-    // Prime the side-loaded OpenConsole's startup handshake: at boot it sends
-    // a DA1 query and holds parts of its init until the terminal answers.
-    // Pre-writing the DA1 response into the input pipe — before the
-    // host is even spawned, so it's the first thing it reads — makes the
-    // handshake instant instead of a per-pane wait; the same trick
-    // Microsoft's own ConPTY tests use. ONLY for the bundled host: the
-    // in-box ConPTY may not consume an unsolicited report and would leak
-    // the response into the shell as typed input.
-    //
-    // 应答身份统一 `?64;22c`（裁决：priming / Term 自答 / reader 代答
-    // 三处同身份；真机复测钉死）。
-    if api.sideloaded {
-        use std::io::Write;
-        let _ = conin.write_all(b"\x1b[?64;22c");
-        crate::pty_trace("DA1 response primed");
-    }
+    let (conin_pty_handle, conin) = miow::pipe::anonymous(0)?;
 
     // flags 能力矩阵：0x1/0x2 直取矩阵位；0x4（WIN32_INPUT_MODE）按
     // `bundled || build >= 21376` 门控；0x8 默认恒关。ConPTY 把 CSI ... _
@@ -436,6 +418,7 @@ pub fn new(config: &Options, window_size: WindowSize) -> Result<Pty> {
     };
 
     let strip_dsr = conhost_input_corrupts_cpr(build_number);
+    let suppress_bringup_da1 = conpty.api.sideloaded;
     Ok(Pty::new(
         conpty,
         conout,
@@ -443,6 +426,7 @@ pub fn new(config: &Options, window_size: WindowSize) -> Result<Pty> {
         child_watcher,
         job,
         strip_dsr,
+        suppress_bringup_da1,
     ))
 }
 

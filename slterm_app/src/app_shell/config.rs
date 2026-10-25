@@ -162,15 +162,11 @@ impl Settings {
 
     /// 引擎 `Term` 的启动配置。
     ///
-    /// ConPTY 关键位照上游钉死(因果链):侧载 ConPTY 的起桥 DA1 已被宿主
-    /// 预应答,Term 必须吞掉自己的重复应答(`suppress_bringup_da1`,上游 =
-    /// `conpty_sideload_enabled()`——core 已无该读法,Options 默认侧载恒真,
-    /// 此处硬编码 true);resize 后 ConPTY 静默重锚主屏,网格必须同语义
-    /// (`conpty_resize`);`kitty_keyboard` 开增强键报。
+    /// ConPTY resize 后会静默重锚主屏，网格必须保持同语义
+    /// (`conpty_resize`)；`kitty_keyboard` 开增强键报。
     pub fn term_config(&self) -> slterm_terminal::term::Config {
         slterm_terminal::term::Config {
             scrolling_history: SCROLLING_HISTORY,
-            suppress_bringup_da1: true,
             conpty_resize: true,
             kitty_keyboard: true,
             ..Default::default()
@@ -498,9 +494,8 @@ mod config_tests {
 
     #[test]
     fn term_config_pins_the_conpty_and_keyboard_flags() {
-        // 上游同链三键:侧载 DA1 预应答 / ConPTY 网格同语义 / kitty 增强键报。
+        // ConPTY 网格同语义与 kitty 增强键报由壳显式开启。
         let config = Settings::default().term_config();
-        assert!(config.suppress_bringup_da1);
         assert!(config.conpty_resize);
         assert!(config.kitty_keyboard);
     }

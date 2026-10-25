@@ -277,3 +277,153 @@ mod windowing_tests {
         assert_eq!(command.args(), &["--literal=two words".to_owned()]);
     }
 }
+
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod input_lifecycle_tests {
+    use std::{cell::Cell, ops::Range, rc::Rc};
+
+    use gpui::{
+        App, Bounds, Context, Entity, FocusHandle, InputHandler, IntoElement, ParentElement as _,
+        Pixels, Point, Render, Styled as _, TestAppContext, UTF16Selection, Window, canvas, div,
+    };
+
+    struct InputView {
+        focus_handle: FocusHandle,
+        live_handlers: Rc<Cell<usize>>,
+    }
+
+    struct TrackedInputHandler {
+        // 与 ElementInputHandler 相同，持有视图强句柄。
+        _view: Entity<InputView>,
+        live_handlers: Rc<Cell<usize>>,
+    }
+
+    impl Drop for TrackedInputHandler {
+        fn drop(&mut self) {
+            self.live_handlers
+                .set(self.live_handlers.get().checked_sub(1).unwrap());
+        }
+    }
+
+    impl Render for InputView {
+        fn render(&mut self, _window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
+            let focus_handle = self.focus_handle.clone();
+            let live_handlers = self.live_handlers.clone();
+            let view = cx.entity().clone();
+            div().size_full().child(canvas(
+                |_, _, _| {},
+                move |_, _, window, cx| {
+                    assert!(focus_handle.is_focused(window), "测试必须先聚焦输入视图");
+                    live_handlers.set(live_handlers.get() + 1);
+                    window.handle_input(
+                        &focus_handle,
+                        TrackedInputHandler {
+                            _view: view.clone(),
+                            live_handlers: live_handlers.clone(),
+                        },
+                        cx,
+                    );
+                },
+            ))
+        }
+    }
+
+    impl InputHandler for TrackedInputHandler {
+        fn selected_text_range(
+            &mut self,
+            _ignore_disabled_input: bool,
+            _window: &mut Window,
+            _cx: &mut App,
+        ) -> Option<UTF16Selection> {
+            None
+        }
+
+        fn marked_text_range(
+            &mut self,
+            _window: &mut Window,
+            _cx: &mut App,
+        ) -> Option<Range<usize>> {
+            None
+        }
+
+        fn text_for_range(
+            &mut self,
+            _range: Range<usize>,
+            _adjusted_range: &mut Option<Range<usize>>,
+            _window: &mut Window,
+            _cx: &mut App,
+        ) -> Option<String> {
+            None
+        }
+
+        fn replace_text_in_range(
+            &mut self,
+            _range: Option<Range<usize>>,
+            _text: &str,
+            _window: &mut Window,
+            _cx: &mut App,
+        ) {
+        }
+
+        fn replace_and_mark_text_in_range(
+            &mut self,
+            _range: Option<Range<usize>>,
+            _text: &str,
+            _selected_range: Option<Range<usize>>,
+            _window: &mut Window,
+            _cx: &mut App,
+        ) {
+        }
+
+        fn unmark_text(&mut self, _window: &mut Window, _cx: &mut App) {}
+
+        fn bounds_for_range(
+            &mut self,
+            _range: Range<usize>,
+            _window: &mut Window,
+            _cx: &mut App,
+        ) -> Option<Bounds<Pixels>> {
+            None
+        }
+
+        fn character_index_for_point(
+            &mut self,
+            _point: Point<Pixels>,
+            _window: &mut Window,
+            _cx: &mut App,
+        ) -> Option<usize> {
+            None
+        }
+    }
+
+    /// 关窗标记返回时必须已释放输入处理器；不能等整个 Window 或平台
+    /// 原生窗口稍后析构，否则真实 Windows 退出会先把强句柄报成泄漏。
+    #[gpui::test]
+    fn remove_window_releases_focused_input_handler(cx: &mut TestAppContext) {
+        let live_handlers = Rc::new(Cell::new(0));
+        let window = cx.add_window(|window, cx| {
+            let focus_handle = cx.focus_handle();
+            window.focus(&focus_handle, cx);
+            InputView {
+                focus_handle,
+                live_handlers: live_handlers.clone(),
+            }
+        });
+        let weak = window.root(cx).unwrap().downgrade();
+        cx.run_until_parked();
+        assert!(live_handlers.get() > 0, "测试未注册输入处理器");
+
+        window
+            .update(cx, |_, window, _| {
+                window.remove_window();
+                assert_eq!(
+                    live_handlers.get(),
+                    0,
+                    "remove_window 返回时仍持有输入处理器"
+                );
+            })
+            .unwrap();
+
+        weak.assert_released();
+    }
+}

@@ -154,6 +154,12 @@ pub trait EventedPty: EventedReadWrite {
     fn strip_dsr_queries(&self) -> bool {
         false
     }
+
+    /// 是否抑制 bundled ConPTY 首条宿主 DA1 的迟到应答。该查询进入读循环时
+    /// 宿主已不再等待，回写会成为 shell 输入；其他后端的首条应用查询不受影响。
+    fn suppress_bringup_da1(&self) -> bool {
+        false
+    }
 }
 
 /// Setup environment variables.

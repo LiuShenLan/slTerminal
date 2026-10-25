@@ -12,7 +12,6 @@ use std::cell::RefCell;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::prelude::FluentBuilder as _;
@@ -447,7 +446,6 @@ impl TextFileView {
     pub(super) fn preview_style(&self, cx: &mut Context<'_, Self>) -> TextViewStyle {
         let theme = cx.theme();
         TextViewStyle {
-            image_base: self.path.parent().map(Arc::from),
             highlight_theme: theme.highlight_theme.clone(),
             is_dark: theme.is_dark(),
             paragraph_gap: gpui::rems(0.7),

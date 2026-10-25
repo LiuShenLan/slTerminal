@@ -485,6 +485,61 @@ exit 0
     }
 }
 
+// ─── DA1 启动握手与首次输入 ───
+
+/// 真实交互启动不得把握手应答留成 PSReadLine 输入，也不得吞掉首条命令
+/// 的首字符。输出标记由表达式拼接，命令回显本身不能满足断言。
+#[test]
+fn bundled_psreadline_first_input_is_not_polluted() {
+    let _guard = integration_lock();
+    if env::var_os("SLTERM_PSREADLINE_CHILD").is_none() {
+        let (dir, exe) = stage_bundled_host("psreadline-startup");
+        let status = Command::new(&exe)
+            .args([
+                "--exact",
+                "bundled_psreadline_first_input_is_not_polluted",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env("SLTERM_PSREADLINE_CHILD", "1")
+            .status()
+            .expect("PSReadLine 启动子进程启动");
+        cleanup_dir(&dir);
+        assert!(status.success(), "PSReadLine 启动子臂失败(输出见上)");
+        return;
+    }
+
+    let Some(pwsh) = which("pwsh.exe").or_else(|| which("powershell.exe")) else {
+        eprintln!("本机无 pwsh/powershell:PSReadLine 启动用例跳过");
+        return;
+    };
+    let opts = options(&pwsh, &["-NoLogo", "-NoProfile"]);
+    let mut driven = DrivenTerm::new(&opts);
+    assert!(
+        tty::conpty_status().bundled,
+        "本用例必须走 bundled OpenConsole"
+    );
+
+    let startup = driven.await_grid(Duration::from_secs(30), |grid| grid.contains("PS "));
+    assert!(
+        startup.contains("PS "),
+        "交互 shell 未出现提示符:\n{startup}"
+    );
+    driven.input(b"Write-Output ('FIRST' + '-INPUT-OK')\r");
+    let result = driven.await_grid(Duration::from_secs(30), |grid| {
+        grid.contains("FIRST-INPUT-OK")
+    });
+    driven.shutdown();
+
+    let clean = ![&startup, &result]
+        .iter()
+        .any(|grid| grid.contains("[?64;22c") || grid.contains("[?61;") || grid.contains("[1;1R"));
+    assert!(
+        clean && result.contains("FIRST-INPUT-OK"),
+        "启动握手污染或首条命令未完整执行:\n--- startup ---\n{startup}\n--- result ---\n{result}"
+    );
+}
+
 // ─── 用例 4:DA1 统一身份——bundled OpenConsole 臂 ───
 
 /// DA1 应答身份真机验证:子进程(exe 旁文件对 → 侧载 OpenConsole)内
@@ -494,8 +549,8 @@ exit 0
 ///
 /// 为什么必须 bundled 臂:in-box conhost 收到输出流中的 DA1 查询会自答
 /// (实测 31 字节 `?61;6;7;21;22;23;24;28;32;42c`),统一身份的唯一暴露
-/// 面在 bundled 宿主(OpenConsole 握手与子进程查询都由 priming/代答
-/// 覆盖)。子进程形态:侧载状态是进程级记录,与主测试进程隔离。
+/// 面在 bundled 宿主(首条 OpenConsole 宿主查询只剥离，后续子进程查询
+/// 由读循环按需代答)。子进程形态:侧载状态是进程级记录,与主测试进程隔离。
 #[test]
 fn da1_unified_identity_bundled_host() {
     if env::var_os("SLTERM_DA1_CHILD").is_none() {
@@ -604,8 +659,7 @@ fn da1_child_drive(pty: tty::Pty) {
     let resp = base64::engine::general_purpose::STANDARD
         .decode(seen[start..end].trim())
         .expect("RESP base64 解码");
-    // 统一身份:priming/代答同值;priming 残留与本次代答可能
-    // 各贡献一份,逐份都须是该身份。
+    // 应用 DA1 查询由读循环按需代答,身份固定为 ?64;22c。
     assert!(
         contains(&resp, b"\x1b[?64;22c"),
         "DA1 应答缺统一身份 ?64;22c: {}",

@@ -160,6 +160,8 @@ pub struct StreamProcessor {
     /// `EventedPty::strip_dsr_queries` 注入；Win10 家族 = true——键事件
     /// 输入下 CPR 应答即 F3 毒键；Win11+ = false——DSR 透传交 Term 实答）。
     strip_dsr: bool,
+    /// bundled 宿主首条 DA1 的迟到应答抑制；由后端注入，命中一次后清除。
+    bringup_da1_pending: bool,
     /// 启动窗口：首个非全剥块通过后置位（跨边界残留窗口保持——
     /// 整块剥绝不置位，窗口对迟到的启动序列保持开放）。
     startup_drained: bool,
@@ -192,17 +194,9 @@ impl StreamProcessor {
         self.strip_dsr = strip_dsr;
     }
 
-    /// DA1/DSR 全量接管：每读块处理序（旧栈 reader_loop 形态并入）。
-    ///
-    /// 拼接上轮扣留残片 → `split_trailing_query_prefix` 扣块尾半条序列 →
-    /// `mirror_da1_query`/`mirror_dsr_query` 检测（剥离前的原始字节上）→
-    /// 按需代答（DA1 每查必答 `\x1b[?64;22c`；启动窗口内 DSR 代答 CPR
-    /// `\x1b[1;1R`，绝不盲注）→ `apply_output_strip`（启动窗口内剥启动
-    /// 序列+DA1+DSR；窗口外剥 DA1、按 `strip_dsr` 门控剥 DSR）。
-    ///
-    /// 返回 `None` = 整块剥离（残片或启动序列独占）——不置 drained，
-    /// 调用方跳过本轮继续读；`Some(out)` 恒非空，置 drained。代答经
-    /// `writer`（PTY stdin）注入，与键盘输入同通道严格序。
+    /// DA1/DSR 在剥离前的原始字节上检测并按需代答；跨块残片由下轮拼回。
+    /// bundled 首条宿主 DA1 只剥离，其余 DA1 每查必答；DSR 仅启动窗口内代答。
+    /// 返回 `None` = 整块剥离且不置 drained；`Some(out)` 恒非空并置 drained。
     fn strip_and_answer<W: Write>(&mut self, bytes: &[u8], writer: &mut W) -> Option<Vec<u8>> {
         // 跨块防裂:拼接上轮扣留残片,再扣留本块尾部查询前缀。
         let mut frame = std::mem::take(&mut self.pending_query);
@@ -214,12 +208,9 @@ impl StreamProcessor {
             return None;
         }
 
-        // DA1 全量接管:每次查询都代答(查询已不透传 Term,core 是唯一
-        // 应答方;应答身份与 priming/Term 自答统一 `?64;22c`)。
-        // 实测语义(m2-4 集成基线):bundled 臂子进程可读两份同身份应答
-        // (priming 一份+代答一份,VT 消费方容忍重复 DA1);in-box conhost
-        // 在宿主层自答 `?61;…`(不经 core、不可控),身份判别力仅 bundled 臂。
-        if mirror_da1_query(&body) {
+        // bundled 宿主的首条 DA1 到达读循环时已无等待者，迟答会成为
+        // shell 输入；只剥离该条，后续应用查询仍逐次按需代答。
+        if mirror_da1_query(&body) && !std::mem::take(&mut self.bringup_da1_pending) {
             inject_da1_response(writer);
         }
 
@@ -320,21 +311,15 @@ impl StreamProcessor {
     }
 }
 
-// ─── DA1/DSR 接管纯函数族（旧栈 `pty/reader.rs` 语义资产并入）───
-//
-// 应答身份唯一性(三处同身份 `\x1b[?64;22c`）：
-// - priming 预写（sideloaded 启动握手，tty/windows/conpty.rs）；
-// - Term 自答（`Term::identify_terminal`，reader 漏网时的兜底层，
-//   `bringup_da1_pending` 一次性吞重答——正常态 DA1 在此族剥离，不可达）；
-// - reader 代答（本族，会话内每查询必答的主答层）。
-//
-// 红线：禁盲注——没有等待者的应答字节 = 注入应用输入的杂散键；每次查询
-// 必答、谁问谁答。
+// ─── DA1/DSR 接管纯函数族 ───
+// 应用 DA1 由 reader 逐条代答，`Term::identify_terminal` 仅作漏网兜底；
+// bundled 首条宿主 DA1 与一切无查询盲注均禁止回写。
 
 /// DA1 应答注入：检测到 DA1 查询（ESC[c / ESC[0c）时向子进程 stdin 写入
 /// ESC[?64;22c（VT220 级别 + 色彩能力——对全屏 CLI 兼容面最宽；缺应答
-/// Ink 启动阻塞约 60s）。每次查询都应答——查询已不透传，core 是唯一
-/// 应答方。检测决策 = 纯函数 `mirror_da1_query`，注入动作为 I/O。
+/// Ink 启动阻塞约 60s）。调用方只过滤 bundled 首条宿主 DA1，其余查询
+/// 均须应答——查询已不透传，core 是唯一应答方。检测决策 = 纯函数
+/// `mirror_da1_query`，注入动作为 I/O。
 fn inject_da1_response<W: Write>(writer: &mut W) {
     if let Err(e) = writer.write_all(b"\x1b[?64;22c") {
         error!("DA1 response injection failed: {e}");
@@ -886,9 +871,10 @@ where
         let tx = self.channel();
         let join = thread::spawn_named("PTY reader", move || {
             let mut state = State::default();
-            // DA1/DSR 接管:DSR 剥离门控由 PTY 后端注入(Windows ConPTY 按
-            // OS build 预计算;其他后端默认 false = 透传交 Term 自答)。
+            // DA1/DSR 接管门控由 PTY 后端注入（Windows ConPTY 按 OS build
+            // 与宿主能力预计算；其他后端使用默认值）。
             state.stream.set_strip_dsr(self.pty.strip_dsr_queries());
+            state.stream.bringup_da1_pending = self.pty.suppress_bringup_da1();
             let mut buf = [0u8; READ_BUFFER_SIZE];
 
             let poll_opts = PollMode::Level;
@@ -1765,7 +1751,8 @@ mod tests {
     fn output_strip_first_round_startup_plus_da1_all_stripped() {
         // 防复发回归：启动窗口内「启动序列 + DA1」整块 → 零字节（旧代码 DA1
         // 不在剥离清单 → 透传触发自答回灌）。调用方须在剥离前的原始字节上
-        // 做 mirror_da1_query 检测并代答（检测前移，None 分支不漏答）。
+        // 做 mirror_da1_query 检测；除 bundled 首条宿主 DA1 外，None 分支
+        // 不漏答。
         let result = apply_output_strip(false, false, b"\x1b[2J\x1b[c\x1b[H");
         assert_eq!(result, None);
         assert!(mirror_da1_query(b"\x1b[2J\x1b[c\x1b[H"));
@@ -2033,6 +2020,19 @@ mod tests {
             Some(b" world".to_vec())
         );
         assert_eq!(w, b"\x1b[?64;22c\x1b[?64;22c");
+    }
+
+    #[test]
+    fn strip_and_answer_suppresses_only_bringup_da1() {
+        let mut sp = StreamProcessor {
+            bringup_da1_pending: true,
+            ..StreamProcessor::default()
+        };
+        let mut w: Vec<u8> = Vec::new();
+        assert_eq!(sp.strip_and_answer(b"\x1b[6n\x1b[c", &mut w), None);
+        assert_eq!(w, b"\x1b[1;1R", "首条宿主 DA1 不得迟答");
+        assert_eq!(sp.strip_and_answer(b"\x1b[0c", &mut w), None);
+        assert_eq!(w, b"\x1b[1;1R\x1b[?64;22c", "后续应用 DA1 仍须按需应答");
     }
 
     #[test]

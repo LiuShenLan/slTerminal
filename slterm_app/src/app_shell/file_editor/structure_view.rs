@@ -341,7 +341,6 @@ impl TextFileView {
                 .scrollable(false)
                 .style(TextViewStyle {
                     paragraph_gap: gpui::rems(0.0),
-                    image_base: self.path.parent().map(std::sync::Arc::from),
                     highlight_theme: cx.theme().highlight_theme.clone(),
                     is_dark: cx.theme().is_dark(),
                     inline_code: gpui::HighlightStyle {

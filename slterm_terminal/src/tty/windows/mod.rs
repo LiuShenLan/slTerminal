@@ -49,6 +49,8 @@ pub struct Pty {
     /// 窗口外 DSR 剥离门控：spawn 时按 OS build 预计算（Win10 家族 = true，
     /// 键事件输入下 CPR 应答即 F3 毒键；Win11+ = false，交 Term 实答）。
     strip_dsr: bool,
+    /// bundled OpenConsole 的首条宿主 DA1 只剥离不迟答。
+    suppress_bringup_da1: bool,
 }
 
 /// PTY 创建入口：`SPAWN_LOCK` 串行化 + 会话容量上限（spawn 规则层）包住
@@ -80,6 +82,7 @@ impl Pty {
         child_watcher: ChildExitWatcher,
         job: Option<JobHandle>,
         strip_dsr: bool,
+        suppress_bringup_da1: bool,
     ) -> Self {
         Self {
             backend: backend.into(),
@@ -88,6 +91,7 @@ impl Pty {
             child_watcher,
             _job: job,
             strip_dsr,
+            suppress_bringup_da1,
         }
     }
 
@@ -195,6 +199,10 @@ impl EventedPty for Pty {
 
     fn strip_dsr_queries(&self) -> bool {
         self.strip_dsr
+    }
+
+    fn suppress_bringup_da1(&self) -> bool {
+        self.suppress_bringup_da1
     }
 }
 

@@ -242,13 +242,6 @@ pub struct Term<T> {
     /// OSC 133;B input start in absolute grid coordinates.
     slterm_prompt_input: Option<(usize, Column)>,
 
-    /// One-shot suppression of the next primary-DA answer: the side-loaded
-    /// ConPTY host's bring-up DA1 query was already answered by the response
-    /// pre-primed into conin before the host spawned (see
-    /// `tty::windows::conpty`). Answering it again hits an already-unblocked
-    /// host, which forwards the report to the shell as typed input.
-    bringup_da1_pending: bool,
-
     /// 当前默认背景是暗还是亮，供 DECSET 2031 的订阅方使用。
     ///
     /// 宿主在 palette 热应用时调用 [`Term::set_color_scheme`] 更新；判据必须与
@@ -282,11 +275,6 @@ pub struct Config {
     /// OSC52 support mode.
     pub osc52: Osc52,
 
-    /// Swallow the terminal's answer to the FIRST primary-DA query: set for
-    /// side-loaded ConPTY sessions whose bring-up handshake was pre-primed
-    /// (the host already got its answer before it spawned).
-    pub suppress_bringup_da1: bool,
-
     /// Use ConPTY's primary-screen row anchoring during resize.
     ///
     /// ConPTY keeps painting absolute cursor coordinates after silently
@@ -305,7 +293,6 @@ impl Default for Config {
             vi_mode_cursor_style: Default::default(),
             kitty_keyboard: Default::default(),
             osc52: Default::default(),
-            suppress_bringup_da1: false,
             conpty_resize: false,
         }
     }
@@ -399,7 +386,6 @@ impl<T> Term<T> {
             scroll_region,
             event_proxy,
             damage,
-            bringup_da1_pending: config.suppress_bringup_da1,
             // 默认按暗底起步：Slterm 的默认主题是深色，宿主在首次
             // `set_color_scheme` 前不会有订阅方，值不会被读到。
             color_scheme_dark: true,
@@ -1506,17 +1492,9 @@ impl<T: EventListener> Handler for Term<T> {
     fn identify_terminal(&mut self, intermediate: Option<char>) {
         match intermediate {
             None => {
-                // The pre-primed ConPTY bring-up query was already answered;
-                // a second answer would reach the shell as typed input.
-                if self.bringup_da1_pending {
-                    self.bringup_da1_pending = false;
-                    trace!("Suppressing duplicate DA1 response (pre-primed ConPTY handshake)");
-                    return;
-                }
                 trace!("Reporting primary device attributes");
-                // DA1 应答身份统一 `?64;22c`（裁决：priming / Term 自答 /
-                // reader 代答三处同身份——VT220 级别 + 色彩能力，对全屏 CLI
-                // 兼容面最宽；真机复测钉死）。
+                // DA1 应答身份与读循环代答统一 `?64;22c`（VT220 级别 +
+                // 色彩能力，对全屏 CLI 兼容面最宽）。
                 let text = String::from("\x1b[?64;22c");
                 self.event_proxy.send_event(Event::PtyWrite(text));
             }
