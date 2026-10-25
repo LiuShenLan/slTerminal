@@ -74,10 +74,6 @@ pub(crate) mod logging;
 // compile→rasterizer/bitmap/cache/font/spacing 十模块。
 #[allow(dead_code)] // 消费点归 Markdown 阅读器。
 pub(crate) mod math;
-// 自含 markdown 文档模型(管线 B):扁平块序列 + 数学片段;
-// 数学适配(MathRun/measure/fit)复用同一公式引擎。
-#[allow(dead_code)] // 阅读器渲染接线归文件编辑器;本模块交付模型与数学适配。
-pub(crate) mod markdown;
 // 通知中心单一漏斗:六变体、去重/节流/失败冷却/前台门控;
 // 系统 toast 投递在 platform::notifications。
 pub(crate) mod notify;
