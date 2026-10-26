@@ -12,12 +12,6 @@ pub const MIN_SCROLL_SPEED: f32 = 0.25;
 pub const MAX_SCROLL_SPEED: f32 = 4.0;
 pub const SCROLL_SPEED_STEP: f32 = 0.25;
 
-/// 档位外一律回默认。
-pub fn scrollback_lines(raw: Option<usize>) -> usize {
-    raw.filter(|value| SCROLLBACK_VALUES.contains(value))
-        .unwrap_or(DEFAULT_SCROLLBACK_LINES)
-}
-
 /// 非有限/越界 → 默认 1.0;界内钳到 [0.25, 4.0]。
 pub fn normalize_scroll_speed(value: f32) -> f32 {
     if value.is_finite() {
@@ -33,25 +27,25 @@ mod scrolling_tests {
 
     #[test]
     fn whitelist_boundaries_accept_exactly_the_seven_steps() {
+        let registry = crate::SettingsRegistry::new();
         assert_eq!(SCROLLBACK_VALUES.len(), 7);
         for value in SCROLLBACK_VALUES {
-            assert_eq!(scrollback_lines(Some(value)), value);
-        }
-        // 档外与缺键一律回默认。
-        for value in [
-            None,
-            Some(0),
-            Some(999),
-            Some(1001),
-            Some(200_000),
-            Some(usize::MAX),
-        ] {
             assert_eq!(
-                scrollback_lines(value),
-                DEFAULT_SCROLLBACK_LINES,
-                "{value:?}"
+                registry.validate("scrollback_lines", &crate::json::Value::from(value)),
+                Some(true)
             );
         }
+        for value in [0, 999, 1001, 200_000, usize::MAX] {
+            assert_eq!(
+                registry.validate("scrollback_lines", &crate::json::Value::from(value)),
+                Some(false),
+                "{value}"
+            );
+        }
+        assert_eq!(
+            crate::RawSettings::default().usize_or_default("scrollback_lines"),
+            DEFAULT_SCROLLBACK_LINES
+        );
     }
 
     #[test]

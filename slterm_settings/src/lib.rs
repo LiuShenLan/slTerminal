@@ -26,6 +26,10 @@ pub use identity::{AgentRootId, StableIdError, ThemeId};
 pub mod diagnostics;
 pub mod json;
 pub mod keys;
+pub use keys::{
+    SettingRecovery, SettingRecoveryStatus, SettingsDefault, SettingsKeyDef, SettingsRegistry,
+    SettingsSaveMode, SettingsScope, SettingsValueType,
+};
 mod language;
 mod ligatures;
 pub use ligatures::Ligatures;
@@ -93,42 +97,60 @@ impl RawSettings {
     }
 
     /// 段内查找:键 → 注册表段 → 段内成员。
-    fn segment_value(&self, key: &str) -> Option<&Value> {
+    pub(crate) fn segment_value(&self, key: &str) -> Option<&Value> {
         let def = keys::lookup(key)?;
         self.tree.get(def.domain.segment())?.get(key)
     }
 
-    /// 字符串值;非字符串/空串 → None(空串 = 未设置)。
+    /// 只返回通过所属注册字段校验器的持久值。
+    fn valid_value(&self, key: &str) -> Option<&Value> {
+        let def = keys::lookup(key)?;
+        let value = self.segment_value(key)?;
+        (!matches!(value, Value::Null) && (def.validator)(value)).then_some(value)
+    }
+
+    /// 通过字段校验的字符串；缺失、空串、类型或领域值非法均返回 None。
     pub fn value(&self, key: &str) -> Option<&str> {
-        self.segment_value(key)?
-            .as_str()
-            .filter(|value| !value.is_empty())
+        self.valid_value(key)?.as_str()
     }
 
-    /// 数值;NaN/∞ 由调用方钳(见 scrolling 归一)。
+    /// 通过字段校验的有限数值。
     pub fn f32(&self, key: &str) -> Option<f32> {
-        self.segment_value(key)?
-            .as_f64()
-            .map(|number| number as f32)
+        self.valid_value(key)?.as_f64().map(|number| number as f32)
     }
 
-    /// 非负整数;小数/负数/越界 → None。
+    /// 通过字段校验的非负整数。
     pub fn usize(&self, key: &str) -> Option<usize> {
-        let number = self.segment_value(key)?.as_f64()?;
-        if number.is_finite()
-            && number.fract() == 0.0
-            && number >= 0.0
-            && number <= usize::MAX as f64
-        {
-            Some(number as usize)
-        } else {
-            None
-        }
+        keys::integer_value(self.valid_value(key)?)
     }
 
-    /// 真布尔直取;字符串 "true" 等拼写不是合法值(类型不符回默认)。
+    /// 通过字段校验的布尔；字符串拼写不是合法布尔。
     pub fn bool_on(&self, key: &str) -> Option<bool> {
-        self.segment_value(key)?.as_bool()
+        self.valid_value(key)?.as_bool()
+    }
+
+    /// 内部读取有字符串缺省值的已登记字段。
+    pub(crate) fn value_or_default(&self, key: &str) -> &str {
+        let def = keys::lookup(key).expect("缺省读取必须使用已登记设置键");
+        self.value(key).unwrap_or_else(|| def.default_text())
+    }
+
+    /// 内部读取有数值缺省值的已登记字段。
+    pub(crate) fn f32_or_default(&self, key: &str) -> f32 {
+        let def = keys::lookup(key).expect("缺省读取必须使用已登记设置键");
+        self.f32(key).unwrap_or_else(|| def.default_number() as f32)
+    }
+
+    /// 内部读取有整数缺省值的已登记字段。
+    pub(crate) fn usize_or_default(&self, key: &str) -> usize {
+        let def = keys::lookup(key).expect("缺省读取必须使用已登记设置键");
+        self.usize(key).unwrap_or_else(|| def.default_integer())
+    }
+
+    /// 内部读取有布尔缺省值的已登记字段。
+    pub(crate) fn bool_or_default(&self, key: &str) -> bool {
+        let def = keys::lookup(key).expect("缺省读取必须使用已登记设置键");
+        self.bool_on(key).unwrap_or_else(|| def.default_boolean())
     }
 
     /// 域外段原样读取(`keybind` / `conpty_input_modes`);未登记段名 = None。
@@ -828,108 +850,83 @@ impl RuntimeSettings {
         Self::from_raw(&RawSettings::load())
     }
 
-    /// 逐键宽容解析:未知值回默认、范围钳制、None = 未设置。
+    /// 逐键宽容解析:未知值回注册表默认、范围钳制、None = 未设置。
     pub fn from_raw(raw: &RawSettings) -> Self {
-        let blur = raw
-            .value("blur")
-            .and_then(BlurMode::from_settings)
-            .unwrap_or_default();
+        let blur = BlurMode::from_settings(raw.value_or_default("blur")).unwrap_or_default();
         let blur_explicit = raw
             .value("blur")
             .and_then(BlurMode::from_settings)
             .is_some();
         // 主题色默认不透明;材质选择从不主动降低不透明度。
-        let opacity = raw.f32("opacity").unwrap_or(1.0).clamp(0.0, 1.0);
+        let opacity = raw.f32_or_default("opacity").clamp(0.0, 1.0);
         let opacity_explicit = raw.f32("opacity").is_some();
 
         Self {
-            language: raw
-                .value("language")
-                .and_then(LanguagePref::from_settings)
+            language: LanguagePref::from_settings(raw.value_or_default("language"))
                 .unwrap_or_default(),
-            theme: raw
-                .value("theme")
-                .and_then(ThemeName::from_prompt_name)
-                .unwrap_or_default(),
+            theme: ThemeName::from_prompt_name(raw.value_or_default("theme")).unwrap_or_default(),
             font_family: raw.value("font_family").map(str::to_owned),
             font_family_cjk: raw.value("font_family_cjk").map(str::to_owned),
             ui_font_family: raw.value("ui_font_family").map(str::to_owned),
             ui_font_size_px: raw.f32("ui_font_size").map(|size| size.clamp(10.0, 24.0)),
             font_size_px: raw.f32("font_size").map(|size| size.clamp(4.0, 96.0)),
-            ctrl_wheel_font_zoom: raw.bool_on("ctrl_wheel_font_zoom").unwrap_or(true),
-            ligatures: raw
-                .value("ligatures")
-                .and_then(Ligatures::from_settings)
+            ctrl_wheel_font_zoom: raw.bool_or_default("ctrl_wheel_font_zoom"),
+            ligatures: Ligatures::from_settings(raw.value_or_default("ligatures"))
                 .unwrap_or_default(),
             cursor_shape: raw
                 .value("cursor_shape")
                 .and_then(CursorShapeName::from_settings),
             cursor_blink: raw.bool_on("cursor_blink"),
-            cursor_motion: raw
-                .value("cursor_motion")
-                .and_then(CursorMotion::from_settings)
+            cursor_motion: CursorMotion::from_settings(raw.value_or_default("cursor_motion"))
                 .unwrap_or_default(),
-            copy_on_select: raw.bool_on("copy_on_select").unwrap_or(false),
-            scrollback_lines: scrolling::scrollback_lines(raw.usize("scrollback_lines")),
-            scroll_speed: normalize_scroll_speed(
-                raw.f32("scroll_speed").unwrap_or(DEFAULT_SCROLL_SPEED),
-            ),
+            copy_on_select: raw.bool_or_default("copy_on_select"),
+            scrollback_lines: raw.usize_or_default("scrollback_lines"),
+            scroll_speed: normalize_scroll_speed(raw.f32_or_default("scroll_speed")),
             focus_follows_mouse: raw.bool_on("focus_follows_mouse"),
-            dim_inactive_panes: raw.bool_on("dim_inactive_panes").unwrap_or(true),
-            multiline_paste_confirm: raw.bool_on("multiline_paste_confirm").unwrap_or(true),
-            tab_close_visible: raw.bool_on("tab_close_visible").unwrap_or(true),
-            terminal_proxy: raw.bool_on("terminal_proxy").unwrap_or(false),
-            refresh_environment: raw.bool_on("refresh_environment").unwrap_or(true),
+            dim_inactive_panes: raw.bool_or_default("dim_inactive_panes"),
+            multiline_paste_confirm: raw.bool_or_default("multiline_paste_confirm"),
+            tab_close_visible: raw.bool_or_default("tab_close_visible"),
+            terminal_proxy: raw.bool_or_default("terminal_proxy"),
+            refresh_environment: raw.bool_or_default("refresh_environment"),
             shell: raw.value("shell").map(str::to_owned),
             startup_directory: raw.value("startup_directory").map(str::to_owned),
-            ghost: raw.bool_on("ghost").unwrap_or(true),
-            accept: raw
-                .value("accept")
-                .and_then(AcceptKeyName::from_settings)
+            ghost: raw.bool_or_default("ghost"),
+            accept: AcceptKeyName::from_settings(raw.value_or_default("accept"))
                 .unwrap_or_default(),
-            completion_style: raw
-                .value("completion_style")
-                .and_then(CompletionStyleName::from_settings)
+            completion_style: CompletionStyleName::from_settings(
+                raw.value_or_default("completion_style"),
+            )
+            .unwrap_or_default(),
+            cjk_bold_regular: raw.bool_or_default("cjk_bold_regular"),
+            tab_reveal: TabRevealName::from_settings(raw.value_or_default("tab_reveal"))
                 .unwrap_or_default(),
-            cjk_bold_regular: raw.bool_on("cjk_bold_regular").unwrap_or(true),
-            tab_reveal: raw
-                .value("tab_reveal")
-                .and_then(TabRevealName::from_settings)
+            density: DensityName::from_settings(raw.value_or_default("density"))
                 .unwrap_or_default(),
-            density: raw
-                .value("density")
-                .and_then(DensityName::from_settings)
+            new_tab_position: NewTabPositionName::from_settings(
+                raw.value_or_default("new_tab_position"),
+            )
+            .unwrap_or_default(),
+            cell_width_mode: CellWidthModeName::from_settings(
+                raw.value_or_default("cell_width_mode"),
+            )
+            .unwrap_or_default(),
+            vcs_display: VcsDisplayName::from_settings(raw.value_or_default("vcs_display"))
                 .unwrap_or_default(),
-            new_tab_position: raw
-                .value("new_tab_position")
-                .and_then(NewTabPositionName::from_settings)
-                .unwrap_or_default(),
-            cell_width_mode: raw
-                .value("cell_width_mode")
-                .and_then(CellWidthModeName::from_settings)
-                .unwrap_or_default(),
-            vcs_display: raw
-                .value("vcs_display")
-                .and_then(VcsDisplayName::from_settings)
-                .unwrap_or_default(),
-            bell: raw
-                .value("bell")
-                .and_then(BellModeName::from_settings)
-                .unwrap_or_default(),
-            ai_toasts: raw.bool_on("ai_toasts").unwrap_or(true),
-            notification_duration: raw
-                .value("notification_duration")
-                .and_then(NotificationDuration::from_settings)
-                .unwrap_or_default(),
-            fetch: raw.bool_on("fetch").unwrap_or(false),
-            auto_check_updates: raw.bool_on("auto_check_updates").unwrap_or(true),
-            auto_download_updates: raw.bool_on("auto_download_updates").unwrap_or(false),
-            keep_session: raw.bool_on("keep_session").unwrap_or(false),
-            restore_session: raw.bool_on("restore_session").unwrap_or(true),
-            resume_ai: raw.bool_on("resume_ai").unwrap_or(true),
-            tray: raw.bool_on("tray").unwrap_or(true),
-            silent_start: raw.bool_on("silent_start").unwrap_or(false),
-            launch_at_login: raw.bool_on("launch_at_login").unwrap_or(false),
+            bell: BellModeName::from_settings(raw.value_or_default("bell")).unwrap_or_default(),
+            ai_toasts: raw.bool_or_default("ai_toasts"),
+            notification_duration: NotificationDuration::from_settings(
+                raw.value_or_default("notification_duration"),
+            )
+            .unwrap_or_default(),
+            fetch: raw.bool_or_default("fetch"),
+            auto_check_updates: raw.bool_or_default("auto_check_updates"),
+            auto_download_updates: raw.bool_or_default("auto_download_updates"),
+            keep_session: raw.bool_or_default("keep_session"),
+            restore_session: raw.bool_or_default("restore_session"),
+            resume_ai: raw.bool_or_default("resume_ai"),
+            tray: raw.bool_or_default("tray"),
+            silent_start: raw.bool_or_default("silent_start"),
+            launch_at_login: raw.bool_or_default("launch_at_login"),
             blur,
             opacity,
             opacity_explicit,
@@ -943,15 +940,12 @@ impl RuntimeSettings {
                 .filter(|value| !value.is_empty())
                 .map(str::to_owned),
             background_image_opacity: raw
-                .f32("background_image_opacity")
-                .map(|opacity| opacity.clamp(0.0, 1.0))
-                .unwrap_or(DEFAULT_BACKGROUND_IMAGE_OPACITY),
+                .f32_or_default("background_image_opacity")
+                .clamp(0.0, 1.0),
             background_image_fit: raw.value("background_image_fit").map(str::to_owned),
             background_image_alignment: raw.value("background_image_alignment").map(str::to_owned),
-            background_image_cover_chrome: raw
-                .bool_on("background_image_cover_chrome")
-                .unwrap_or(false),
-            panel_resize: raw.bool_on("panel_resize").unwrap_or(true),
+            background_image_cover_chrome: raw.bool_or_default("background_image_cover_chrome"),
+            panel_resize: raw.bool_or_default("panel_resize"),
             // 这四项一律保留 `Option`:`None` 就是「用户没设过」,让主题默认
             // 生效;若在这里 unwrap 成具体数字,切主题便再也换不了形态。
             pane_card_radius: raw

@@ -57,9 +57,8 @@ impl AgentHook {
     /// 每 agent 独立键 → 全局键兜底 → 默认。
     pub fn enabled(self, raw: &RawSettings) -> bool {
         let legacy_default = Self::DEFAULT.contains(&self);
-        raw.bool_on(self.settings_key()).unwrap_or_else(|| {
-            legacy_default && raw.bool_on(Self::GLOBAL_SETTINGS_KEY).unwrap_or(true)
-        })
+        raw.bool_on(self.settings_key())
+            .unwrap_or_else(|| legacy_default && raw.bool_or_default(Self::GLOBAL_SETTINGS_KEY))
     }
 
     /// 显式 CLI 安装/卸载写全部(含 UI 里的逐项覆盖)。
