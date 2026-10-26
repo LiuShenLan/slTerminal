@@ -76,6 +76,8 @@ pub(crate) enum OperationError {
     InvalidRegistration,
     MutationConflict,
     OperationIdConflict,
+    JournalAttachmentConflict,
+    StoreEpochConflict,
     UnknownOperation,
     InvalidTransition(InvalidOperationTransition),
     InvalidPayload,
@@ -89,6 +91,8 @@ impl fmt::Display for OperationError {
             Self::InvalidRegistration => "Operation 登记字段无效",
             Self::MutationConflict => "幂等键已绑定其他参数",
             Self::OperationIdConflict => "Operation ID 已绑定其他幂等键",
+            Self::JournalAttachmentConflict => "Operation 已终态或绑定其他 Journal",
+            Self::StoreEpochConflict => "Operation 与 Journal 的 store_epoch 不一致",
             Self::UnknownOperation => "Operation 不存在",
             Self::InvalidTransition(_) => "Operation 状态转换无效",
             Self::InvalidPayload => "Operation 状态与结果负载不一致",
@@ -247,6 +251,31 @@ impl WorkspaceDatabase {
         operation.error = error;
         Ok(operation)
     }
+}
+
+pub(super) fn attach_operation_journal(
+    connection: &Connection,
+    operation_id: &str,
+    journal_id: &str,
+    store_epoch: &str,
+) -> Result<(), OperationError> {
+    let operation = query_operation(connection, "WHERE operation_id = ?1", [operation_id])?
+        .ok_or(OperationError::UnknownOperation)?;
+    if operation.store_epoch != store_epoch {
+        return Err(OperationError::StoreEpochConflict);
+    }
+    if operation.status.is_terminal() || operation.journal_id.is_some() {
+        return Err(OperationError::JournalAttachmentConflict);
+    }
+    let changed = connection.execute(
+        "UPDATE runtime_operations SET journal_id = ?2 \
+         WHERE operation_id = ?1 AND journal_id IS NULL",
+        params![operation_id, journal_id],
+    )?;
+    if changed != 1 {
+        return Err(OperationError::CorruptRecord);
+    }
+    Ok(())
 }
 
 fn validate_registration(registration: &OperationRegistration) -> Result<(), OperationError> {
