@@ -9,4 +9,4 @@
 mod grammar_audit;
 
 mod identity;
-pub use identity::{DocumentId, StableIdError};
+pub use identity::{DocumentId, StableIdError, TextStateId};

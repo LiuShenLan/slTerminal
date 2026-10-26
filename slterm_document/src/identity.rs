@@ -7,6 +7,10 @@ use uuid::{Uuid, Variant, Version};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct DocumentId(Uuid);
 
+/// 可由撤销／重做返回并用于保存对账的文本状态身份。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct TextStateId(Uuid);
+
 /// 稳定身份的构造或解析错误。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StableIdError {
@@ -16,14 +20,25 @@ pub enum StableIdError {
     ExpectedV7,
 }
 
+fn validate_uuid_v7(value: Uuid) -> Result<Uuid, StableIdError> {
+    if value.get_version() != Some(Version::SortRand) || value.get_variant() != Variant::RFC4122 {
+        return Err(StableIdError::ExpectedV7);
+    }
+    Ok(value)
+}
+
+fn parse_uuid_v7(text: &str) -> Result<Uuid, StableIdError> {
+    let value = Uuid::parse_str(text).map_err(|_| StableIdError::InvalidFormat)?;
+    if text != value.hyphenated().to_string() {
+        return Err(StableIdError::InvalidFormat);
+    }
+    validate_uuid_v7(value)
+}
+
 impl DocumentId {
     /// 使用 application 提供的 UUID 构造稳定身份。
     pub fn from_uuid(value: Uuid) -> Result<Self, StableIdError> {
-        if value.get_version() != Some(Version::SortRand) || value.get_variant() != Variant::RFC4122
-        {
-            return Err(StableIdError::ExpectedV7);
-        }
-        Ok(Self(value))
+        validate_uuid_v7(value).map(Self)
     }
 
     /// 返回底层 UUID 值。
@@ -36,15 +51,37 @@ impl FromStr for DocumentId {
     type Err = StableIdError;
 
     fn from_str(text: &str) -> Result<Self, Self::Err> {
-        let value = Uuid::parse_str(text).map_err(|_| StableIdError::InvalidFormat)?;
-        if text != value.hyphenated().to_string() {
-            return Err(StableIdError::InvalidFormat);
-        }
-        Self::from_uuid(value)
+        parse_uuid_v7(text).map(Self)
     }
 }
 
 impl fmt::Display for DocumentId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.0, formatter)
+    }
+}
+
+impl TextStateId {
+    /// 使用 application 提供的 UUID 构造文本状态身份。
+    pub fn from_uuid(value: Uuid) -> Result<Self, StableIdError> {
+        validate_uuid_v7(value).map(Self)
+    }
+
+    /// 返回底层 UUID 值。
+    pub const fn as_uuid(&self) -> &Uuid {
+        &self.0
+    }
+}
+
+impl FromStr for TextStateId {
+    type Err = StableIdError;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        parse_uuid_v7(text).map(Self)
+    }
+}
+
+impl fmt::Display for TextStateId {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(&self.0, formatter)
     }
@@ -104,6 +141,46 @@ mod identity_tests {
         wrong_variant[8] = 0;
         assert_eq!(
             DocumentId::from_uuid(Uuid::from_bytes(wrong_variant)),
+            Err(StableIdError::ExpectedV7)
+        );
+    }
+
+    /// 文本状态身份在快照与 DTO 中使用规范 UUID 文本。
+    #[test]
+    fn text_state_id_round_trips_canonical_uuid_text() {
+        let id = TextStateId::from_str(V7).unwrap();
+        assert_eq!(id.to_string(), V7);
+        assert_eq!(TextStateId::from_str(&id.to_string()).unwrap(), id);
+    }
+
+    /// 损坏快照中的非规范文本与其他 UUID 版本不得成为状态身份。
+    #[test]
+    fn text_state_id_rejects_noncanonical_text_and_other_versions() {
+        assert_eq!(TextStateId::from_str(V4), Err(StableIdError::ExpectedV7));
+        for text in [V7.to_uppercase(), V7.replace('-', ""), "not-a-uuid".into()] {
+            assert_eq!(
+                TextStateId::from_str(&text),
+                Err(StableIdError::InvalidFormat),
+                "{text}"
+            );
+        }
+    }
+
+    /// 新编辑状态的随机源由应用注入，但版本与变体仍在核心校验。
+    #[test]
+    fn text_state_id_validates_application_supplied_uuid() {
+        let value = Uuid::parse_str(V7).unwrap();
+        let id = TextStateId::from_uuid(value).unwrap();
+        assert_eq!(id.as_uuid(), &value);
+        assert_eq!(
+            TextStateId::from_uuid(Uuid::parse_str(V4).unwrap()),
+            Err(StableIdError::ExpectedV7)
+        );
+
+        let mut wrong_variant = *value.as_bytes();
+        wrong_variant[8] = 0;
+        assert_eq!(
+            TextStateId::from_uuid(Uuid::from_bytes(wrong_variant)),
             Err(StableIdError::ExpectedV7)
         );
     }
