@@ -15,6 +15,14 @@ static NEXT_TEMPORARY: AtomicU64 = AtomicU64::new(1);
 
 /// 以临时文件 + 原子替换把 `contents` 落到 `path`,先 sync 临时文件再换名。
 pub(crate) fn write(path: &Path, contents: &[u8]) -> io::Result<()> {
+    write_with_acl(path, contents, copy_target_acl)
+}
+
+fn write_with_acl(
+    path: &Path,
+    contents: &[u8],
+    copy_acl: fn(&Path, &Path) -> io::Result<()>,
+) -> io::Result<()> {
     let parent = path
         .parent()
         .ok_or_else(|| io::Error::other("state path has no parent"))?;
@@ -40,7 +48,7 @@ pub(crate) fn write(path: &Path, contents: &[u8]) -> io::Result<()> {
         file.write_all(contents)?;
         file.sync_all()?;
         drop(file);
-        copy_target_acl(path, &temporary);
+        copy_acl(path, &temporary)?;
         replace(&temporary, path)
     })();
 
@@ -176,16 +184,18 @@ impl Drop for LifetimeFileLock {
     }
 }
 
-/// 尽力保留目标文件已有的 owner/group/DACL。
+/// 保留目标文件已有的 owner/group/DACL。
 ///
 /// 临时文件只继承父目录的默认 ACL;若目标原本带显式 ACE,直接 rename 会让
-/// 这些 ACE 丢失。复制失败只记 warn、**不阻断写**:写成功优先,ACL 保留是
-/// 尽力而为。目标不存在时跳过(新文件继承父目录默认 ACL)。
-fn copy_target_acl(target: &Path, temporary: &Path) {
+/// 这些 ACE 丢失。目标不存在时允许新文件继承父目录 ACL；其他读取或设置
+/// 失败必须返回错误，调用方不得继续替换目标。
+fn copy_target_acl(target: &Path, temporary: &Path) -> io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
     use std::ptr;
 
-    use windows_sys::Win32::Foundation::{ERROR_SUCCESS, LocalFree};
+    use windows_sys::Win32::Foundation::{
+        ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND, ERROR_SUCCESS, LocalFree,
+    };
     use windows_sys::Win32::Security::Authorization::{
         GetNamedSecurityInfoW, SE_FILE_OBJECT, SetNamedSecurityInfoW,
     };
@@ -193,10 +203,6 @@ fn copy_target_acl(target: &Path, temporary: &Path) {
         DACL_SECURITY_INFORMATION, GROUP_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION,
         PSECURITY_DESCRIPTOR,
     };
-
-    if !target.exists() {
-        return;
-    }
 
     let wide =
         |path: &Path| -> Vec<u16> { path.as_os_str().encode_wide().chain(Some(0)).collect() };
@@ -222,8 +228,10 @@ fn copy_target_acl(target: &Path, temporary: &Path) {
         )
     };
     if read != ERROR_SUCCESS {
-        log::warn!("读取目标 ACL 失败(error {read});继续写入,新文件沿用父目录默认 ACL");
-        return;
+        if matches!(read, ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND) {
+            return Ok(());
+        }
+        return Err(io::Error::from_raw_os_error(read as i32));
     }
     let written = unsafe {
         SetNamedSecurityInfoW(
@@ -238,8 +246,9 @@ fn copy_target_acl(target: &Path, temporary: &Path) {
     };
     unsafe { LocalFree(descriptor) };
     if written != ERROR_SUCCESS {
-        log::warn!("复制目标 ACL 失败(error {written});继续写入,ACL 保留降级为尽力而为");
+        return Err(io::Error::from_raw_os_error(written as i32));
     }
+    Ok(())
 }
 
 /// MoveFileExW + REPLACE_EXISTING:读者永远看不到撕裂文件,崩溃留下原件。
@@ -273,7 +282,7 @@ pub(crate) fn replace(source: &Path, destination: &Path) -> io::Result<()> {
 mod atomic_file_tests {
     use std::path::Path;
 
-    use super::{try_lifetime_lock, try_lock, write};
+    use super::{copy_target_acl, try_lifetime_lock, try_lock, write, write_with_acl};
 
     /// 读取 DACL 的 SDDL 字符串(仅测试断言用)。
     fn dacl_sddl(path: &Path) -> Option<String> {
@@ -364,6 +373,39 @@ mod atomic_file_tests {
             .collect();
         assert!(leftovers.is_empty(), "失败后残留临时文件: {leftovers:?}");
         assert!(path.is_dir(), "失败不得破坏目标");
+    }
+
+    /// ACL 复制失败不得替换目标，也不得留下临时文件。
+    #[test]
+    fn acl_failure_aborts_replace_and_preserves_the_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.json");
+        write(&path, b"before").unwrap();
+
+        let result = write_with_acl(&path, b"after", |_, _| {
+            Err(std::io::Error::other("injected ACL failure"))
+        });
+
+        assert!(result.is_err(), "ACL 失败必须使写入失败");
+        assert_eq!(std::fs::read(&path).unwrap(), b"before");
+        let leftovers: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name.contains(".slterm-tmp-"))
+            .collect();
+        assert!(leftovers.is_empty(), "失败后残留临时文件: {leftovers:?}");
+    }
+
+    /// Win32 ACL 设置失败必须作为错误返回，不能降级为告警。
+    #[test]
+    fn acl_copy_reports_setter_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.json");
+        write(&path, b"before").unwrap();
+        let missing_temporary = dir.path().join("missing-temporary");
+
+        assert!(copy_target_acl(&path, &missing_temporary).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"before");
     }
 
     /// 原子替换必须保留目标文件原有的显式 DACL。
