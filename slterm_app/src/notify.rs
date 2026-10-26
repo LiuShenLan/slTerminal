@@ -602,22 +602,18 @@ fn deliver_with(
         pane_id.0
     );
     let actions = confirmation
-        .and_then(|(request_id, labels)| {
+        .and_then(|(_, labels)| {
             let sender = GPUI_ACTIVATION.get()?.clone();
             Some(
                 labels
                     .into_iter()
-                    .enumerate()
-                    .map(|(choice, label)| {
+                    .map(|label| {
                         let sender = sender.clone();
                         ToastAction {
                             label: label.chars().take(80).collect(),
                             activate: Arc::new(move || {
-                                let _ = sender.send(SltermShellEvent::NotificationChoice {
-                                    pane_id,
-                                    request_id,
-                                    choice,
-                                });
+                                let _ =
+                                    sender.send(SltermShellEvent::NotificationChoice { pane_id });
                             }),
                         }
                     })

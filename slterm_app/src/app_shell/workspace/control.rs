@@ -43,24 +43,16 @@ impl SltermWorkspace {
                 cx.notify();
             }
             // 权限确认动作按钮经窗口 facade 回窗。消费 =
-            // 回窗聚焦 + 审计留痕(选择、请求 id、pane)。按键注入语义取决于
-            // confirmation 标签生产方——当前 hook 是「转发后退出」的非阻塞
-            // 桥,无法回写权限决定,故不猜测按键。
-            SltermShellEvent::NotificationChoice {
-                pane_id,
-                request_id,
-                choice,
-            } => {
+            // 回窗聚焦 + 固定字段审计。按键注入语义取决于 confirmation
+            // 标签生产方——当前 hook 是「转发后退出」的非阻塞桥,无法回写
+            // 权限决定,故不猜测按键。
+            SltermShellEvent::NotificationChoice { pane_id } => {
                 crate::windowing::focus::focus(self, Some(pane_id), window, cx);
-                tracing::info!(
-                    target: crate::audit::TARGET,
-                    operation = "notification_choice",
-                    pane = pane_id.0,
-                    request_id = %request_id,
-                    choice = %choice,
-                    result = "acknowledged",
-                    "通知动作按钮回执已消费"
-                );
+                crate::audit::record(crate::audit::AuditEvent::new(
+                    "notification_choice",
+                    "app_shell::workspace::control::handle_shell_event",
+                    crate::audit::AuditResult::Acknowledged,
+                ));
                 cx.notify();
             }
             // 托盘「退出」:与关窗同一条退出链——先落终局

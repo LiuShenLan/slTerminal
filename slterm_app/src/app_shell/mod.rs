@@ -75,12 +75,8 @@ pub(crate) enum SltermShellEvent {
     /// toast 点击回窗(统一走窗口 facade)。
     /// 托盘左键/菜单「显示」同样走这条单窗回窗语义。
     NotificationFocus(Option<PaneId>),
-    /// 权限确认 toast 的动作按钮回传(安全半程消费;本片只交付通道面)。
-    NotificationChoice {
-        pane_id: PaneId,
-        request_id: u64,
-        choice: usize,
-    },
+    /// 权限确认 toast 的动作按钮回传(只携回窗目标;不回写权限决定)。
+    NotificationChoice { pane_id: PaneId },
     /// 托盘「退出」:与关窗同一条退出链(终局快照 + 退出)。
     TrayQuit,
     /// 后台更新检查结果:提示 + 按 `auto_download_updates`

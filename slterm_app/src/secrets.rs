@@ -557,29 +557,29 @@ mod secrets_tests {
             .expect_err("后端失败必须上抛");
         assert!(!error.to_string().contains(TOKEN), "错误消息泄露凭据");
 
-        // 捕获层自检:确认日志确实被捕获,后续断言不是空集。
+        // 捕获层自检:确认普通日志确实被捕获,后续断言不是空集。
         log::warn!(
-            target: "audit",
+            target: "credential_boundary_test",
             "credential boundary probe: target={}",
             "Slterm/Test/probe"
         );
-        // 审计事件走 tracing 通道;`log-always` 无条件桥接落同一日志栈
-        // ——这里同时验证「tracing 捕获」与「log 桥接」两形态。
-        tracing::warn!(
-            target: crate::audit::TARGET,
-            operation = "credential_boundary_probe",
-            "credential boundary probe via tracing: target={}",
-            "Slterm/Test/probe"
-        );
+        // 审计事件经 facade 走 tracing 通道;`log-always` 无条件桥接落同一
+        // 日志栈——这里同时验证「tracing 捕获」与「log 桥接」两形态。
+        crate::audit::record(crate::audit::AuditEvent::new(
+            "credential_boundary_probe",
+            "secrets::tests::logs_never_contain_credential_plaintext",
+            crate::audit::AuditResult::Ok,
+        ));
         let captured = CAPTURED_LOGS.lock().expect("日志捕获锁");
         assert!(
-            captured.iter().any(|(target, message)| target == "audit"
-                && message.contains("credential boundary probe")),
+            captured
+                .iter()
+                .any(|(target, message)| target == "credential_boundary_test"
+                    && message.contains("credential boundary probe")),
             "捕获层未生效"
         );
         assert!(
-            captured.iter().any(|(target, message)| target == "audit"
-                && message.contains("probe via tracing")),
+            captured.iter().any(|(target, _)| target == "audit"),
             "tracing→log 桥接未生效(生产审计会丢事件)"
         );
         for (target, message) in captured.iter() {

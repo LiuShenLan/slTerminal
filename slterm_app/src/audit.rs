@@ -16,13 +16,97 @@
 //! hook 文件归属对账不一致时经 [`hook_hash_mismatch`] 落期望/实测
 //! SHA-256 指纹(只补缺失、不覆盖的用户配置纪律保持不变)。
 //!
-//! 红线:审计消息只含路径/命令类别/哈希,禁止插值凭据值。
+//! 红线:事件字段只含 operation/path/source/result 与 expected/actual
+//! 指纹;不携带任意消息、底层错误、命令、文件内容或凭据值。
 
 use std::io;
 use std::path::Path;
 
-/// 审计通道 target(唯一形态;logging 恒放行)。
-pub(crate) const TARGET: &str = "audit";
+/// 审计通道 target(唯一形态;logging 恒放行),只由本模块持有。
+const TARGET: &str = "audit";
+
+/// 审计结果是封闭词汇,调用方不得拼接动态文本。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AuditResult {
+    Ok,
+    Error,
+    Suspended,
+    Acknowledged,
+    Mismatch,
+}
+
+impl AuditResult {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Ok => "ok",
+            Self::Error => "error",
+            Self::Suspended => "suspended",
+            Self::Acknowledged => "acknowledged",
+            Self::Mismatch => "mismatch",
+        }
+    }
+}
+
+/// 固定字段审计事件;私有字段与成对指纹构造阻止调用方扩展事件形态。
+pub(crate) struct AuditEvent<'a> {
+    operation: &'static str,
+    path: Option<&'a Path>,
+    source: &'static str,
+    result: AuditResult,
+    expected: Option<&'a str>,
+    actual: Option<&'a str>,
+}
+
+impl<'a> AuditEvent<'a> {
+    pub(crate) fn new(operation: &'static str, source: &'static str, result: AuditResult) -> Self {
+        Self {
+            operation,
+            path: None,
+            source,
+            result,
+            expected: None,
+            actual: None,
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn with_path(mut self, path: &'a Path) -> Self {
+        self.path = Some(path);
+        self
+    }
+
+    #[must_use]
+    pub(crate) fn with_fingerprints(mut self, expected: &'a str, actual: &'a str) -> Self {
+        self.expected = Some(expected);
+        self.actual = Some(actual);
+        self
+    }
+}
+
+/// 审计唯一发点;无自由消息字段,底层错误不得作为参数传入。
+pub(crate) fn record(event: AuditEvent<'_>) {
+    let path = event.path.map(|path| path.display().to_string());
+    match event.result {
+        AuditResult::Ok | AuditResult::Acknowledged => tracing::info!(
+            target: TARGET,
+            operation = event.operation,
+            path = path,
+            source = event.source,
+            result = event.result.as_str(),
+            expected = event.expected,
+            actual = event.actual,
+        ),
+        AuditResult::Error | AuditResult::Suspended | AuditResult::Mismatch => tracing::warn!(
+            target: TARGET,
+            operation = event.operation,
+            path = path,
+            source = event.source,
+            result = event.result.as_str(),
+            expected = event.expected,
+            actual = event.actual,
+        ),
+    }
+}
 
 /// app 设置写通道的操作类别。
 const OP_SETTINGS_WRITE: &str = "settings_write";
@@ -34,12 +118,16 @@ const OP_HOOK_HASH_MISMATCH: &str = "hook_hash_mismatch";
 /// app 设置文件写入:审计 + 原子写。
 ///
 /// 生产写通道 = `settings_store`;事件 source 标明具体写路径。
-pub(crate) fn write_settings(path: &Path, content: &str, source: &str) -> io::Result<()> {
+pub(crate) fn write_settings(path: &Path, content: &str, source: &'static str) -> io::Result<()> {
     write_audited(OP_SETTINGS_WRITE, path, content.as_bytes(), source)
 }
 
 /// user 层 settings.json 写入:hooks 安装器唯一写路径。
-pub(crate) fn write_user_settings(path: &Path, content: &str, source: &str) -> io::Result<()> {
+pub(crate) fn write_user_settings(
+    path: &Path,
+    content: &str,
+    source: &'static str,
+) -> io::Result<()> {
     write_audited(OP_USER_SETTINGS_WRITE, path, content.as_bytes(), source)
 }
 
@@ -48,29 +136,15 @@ fn write_audited(
     operation: &'static str,
     path: &Path,
     bytes: &[u8],
-    source: &str,
+    source: &'static str,
 ) -> io::Result<()> {
     let result = crate::atomic_file::write(path, bytes);
-    match &result {
-        // 成功写是常规取证事件,降为 info;失败保持 warn(异常面)。
-        Ok(()) => tracing::info!(
-            target: TARGET,
-            operation = %operation,
-            path = %path.display(),
-            source = %source,
-            result = "ok",
-            "设置文件写入"
-        ),
-        Err(error) => tracing::warn!(
-            target: TARGET,
-            operation = %operation,
-            path = %path.display(),
-            source = %source,
-            result = "error",
-            error = %error,
-            "设置文件写入失败"
-        ),
-    }
+    let audit_result = if result.is_ok() {
+        AuditResult::Ok
+    } else {
+        AuditResult::Error
+    };
+    record(AuditEvent::new(operation, source, audit_result).with_path(path));
     result
 }
 
@@ -78,13 +152,14 @@ fn write_audited(
 ///
 /// `expected`/`actual` 为 SHA-256 hex 指纹,不是文件内容——审计只留身份。
 pub(crate) fn hook_hash_mismatch(path: &Path, expected: &str, actual: &str) {
-    tracing::warn!(
-        target: TARGET,
-        operation = %OP_HOOK_HASH_MISMATCH,
-        path = %path.display(),
-        expected = %expected,
-        actual = %actual,
-        "hook 文件哈希对账不一致(只补缺失,不覆盖)"
+    record(
+        AuditEvent::new(
+            OP_HOOK_HASH_MISMATCH,
+            "ai_hook::local::hash_reconciliation",
+            AuditResult::Mismatch,
+        )
+        .with_path(path)
+        .with_fingerprints(expected, actual),
     );
 }
 
@@ -250,6 +325,7 @@ mod audit_tests {
         assert_field(&text, "result", "error");
         assert_field(&text, "operation", "settings_write");
         assert!(text.contains("WARN"), "失败写必须保持 warn: {text}");
+        assert!(!text.contains("error="), "审计不得插值底层错误文本: {text}");
     }
 
     /// 审计事件只含路径/字段身份,绝不携带写入内容(可能含凭据)。
@@ -276,9 +352,36 @@ mod audit_tests {
 
         let text = captured.text();
         assert_field(&text, "operation", "hook_hash_mismatch");
+        assert_field(&text, "result", "mismatch");
         assert_field(&text, "expected", "expected-fingerprint");
         assert_field(&text, "actual", "actual-fingerprint");
         assert!(text.contains("slterm.js"), "事件必须含路径: {text}");
+    }
+
+    /// audit target 只由 facade 持有，业务模块不得自行组装事件字段。
+    #[test]
+    fn audit_target_is_private_to_the_facade() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        collect_rust_sources(&root, &mut files);
+        let mut offenders = Vec::new();
+        for path in files {
+            if path == root.join("audit.rs") {
+                continue;
+            }
+            let source = std::fs::read_to_string(&path).expect("读取源码");
+            let compact: String = source.split_whitespace().collect();
+            // 禁词拆分书写，避免未来把本测试迁出 facade 后自命中。
+            if compact.contains(concat!("audit::", "TARGET"))
+                || compact.contains(concat!("target:\"", "audit\""))
+            {
+                offenders.push(path);
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "audit target 必须只经 facade 发出: {offenders:?}"
+        );
     }
 
     /// 唯一写路径:设置写核心只见于审计包装,生产调用点不直写。

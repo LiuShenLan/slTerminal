@@ -29,11 +29,7 @@ fn action_button_choice_returns_to_the_named_pane(cx: &mut TestAppContext) {
     window.update(|window, cx| {
         workspace.update(cx, |workspace, cx| {
             workspace.handle_shell_event(
-                SltermShellEvent::NotificationChoice {
-                    pane_id: first,
-                    request_id: 7,
-                    choice: 0,
-                },
+                SltermShellEvent::NotificationChoice { pane_id: first },
                 window,
                 cx,
             );

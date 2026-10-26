@@ -459,11 +459,13 @@ fn add_themes(root: &Path, entries: &mut Vec<BackupEntry>) -> Result<(), String>
         // 导入侧复验同一判据。坏文档整单失败:备份必须要么完整、
         // 要么明确报错,不能静默缺件。
         if crate::theme_library::ThemeDocument::from_json_bytes(&bytes).is_err() {
-            tracing::warn!(
-                target: crate::audit::TARGET,
-                operation = "backup_invalid_theme",
-                "备份中止:主题文件不是有效文档: {}",
-                path.display()
+            crate::audit::record(
+                crate::audit::AuditEvent::new(
+                    "backup_invalid_theme",
+                    "encrypted_backup::add_themes",
+                    crate::audit::AuditResult::Error,
+                )
+                .with_path(&path),
             );
             return Err(format!("主题文件不是有效文档,备份中止: {}", path.display()));
         }

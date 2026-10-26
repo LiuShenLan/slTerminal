@@ -408,13 +408,12 @@ pub(super) fn apply_with_confirmation(
             };
             // reconcile 路径携带真实审查门:命中 → 审计 + 跳过(零写盘),
             // 无交互可用不当错误上抛(确认路径传 confirmed=true)。
-            if let InstallOutcome::Suspended { suspicious_command } = outcome {
-                tracing::warn!(
-                    target: crate::audit::TARGET,
-                    operation = "statusline_review",
-                    result = "suspended",
-                    "claude statusLine 原命令命中审查词表,自愈跳过(零写盘): {suspicious_command}"
-                );
+            if let InstallOutcome::Suspended { .. } = outcome {
+                crate::audit::record(crate::audit::AuditEvent::new(
+                    "statusline_review",
+                    "ai_hook::local::settings::apply_with_confirmation",
+                    crate::audit::AuditResult::Suspended,
+                ));
             }
         }
         (AgentHook::Codex, true) => {
