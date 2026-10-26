@@ -139,6 +139,50 @@ function Invoke-BudgetSelfTest {
     }
 }
 
+# 原生依赖自测:内部构建必须静态链接;dumpbin 导入表不得出现 dav1d DLL。
+function Invoke-NativeBuildSelfTest {
+    . (Join-Path $repoRoot 'scripts/build-windows-product.ps1') -LibraryOnly
+    foreach ($name in @('Assert-NoDav1dImport', 'Assert-Dav1dStatic')) {
+        if ($null -eq (Get-Command $name -ErrorAction SilentlyContinue)) {
+            throw "缺少原生依赖门禁函数:$name"
+        }
+    }
+
+    Assert-NoDav1dImport -Dependents @('    KERNEL32.dll', '    USER32.dll')
+    foreach ($library in @('dav1d.dll', 'libdav1d-7.dll')) {
+        $rejected = $false
+        try { Assert-NoDav1dImport -Dependents @('    KERNEL32.dll', "    $library") }
+        catch {
+            if ($_.Exception.Message -notlike '*dav1d 动态依赖*') { throw }
+            $rejected = $true
+        }
+        if (-not $rejected) { throw "dav1d 动态依赖未被拒绝:$library" }
+    }
+
+    $configPath = Join-Path $repoRoot '.cargo/config.toml'
+    if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) {
+        throw '缺少 dav1d 可复现构建配置:.cargo/config.toml'
+    }
+    $config = Get-Content -Raw -LiteralPath $configPath
+    foreach ($required in @(
+        'SYSTEM_DEPS_DAV1D_BUILD_INTERNAL',
+        'value = "always"',
+        'SYSTEM_DEPS_DAV1D_LINK',
+        'value = "static"'
+    )) {
+        if (-not $config.Contains($required)) {
+            throw "dav1d 构建配置缺少:$required"
+        }
+    }
+    if ($script:SourceRoots -notcontains $configPath) {
+        throw '构建新鲜度输入缺少 .cargo/config.toml'
+    }
+    $vendorRoot = Join-Path $repoRoot 'vendor/dav1d-sys'
+    if ($script:SourceRoots -notcontains $vendorRoot) {
+        throw '构建新鲜度输入缺少 vendor/dav1d-sys'
+    }
+}
+
 # 新鲜度判据自测:内容摘要 stamp 命中/拒绝、仅改注释重构建不假红、
 # stamp 缺失回退 mtime。夹具放 target/ 下(已忽略),dot-source 复用库函数。
 function Invoke-FreshnessSelfTest {
@@ -220,6 +264,41 @@ function Invoke-ManifestSelfTest {
     if (-not $installer.Contains($wildcard)) {
         throw "installer.iss 缺少 CLI logo 收录行:$wildcard"
     }
+
+    $requiredNotices = @(
+        [pscustomobject]@{
+            PackagePath = 'licenses/THIRD-PARTY-CRATE-NOTICES'
+            RepoPath = 'licenses/THIRD-PARTY-CRATE-NOTICES'
+            InstallerName = 'licenses\THIRD-PARTY-CRATE-NOTICES'
+        },
+        [pscustomobject]@{
+            PackagePath = 'licenses/LICENSE-DAV1D'
+            RepoPath = 'licenses/LICENSE-DAV1D'
+            InstallerName = 'licenses\LICENSE-DAV1D'
+        }
+    )
+    foreach ($notice in $requiredNotices) {
+        $expectedSource = Join-Path $repoRoot $notice.RepoPath
+        $matched = @($sources | Where-Object {
+            $_.PackagePath -eq $notice.PackagePath -and $_.Source -eq $expectedSource
+        })
+        if ($matched.Count -ne 1) {
+            throw "共享清单缺少许可条目:$($notice.PackagePath)"
+        }
+        $line = "Source: `"{#RepoRoot}\$($notice.InstallerName)`"; DestDir: `"{app}\licenses`"; Flags: ignoreversion"
+        if (-not $installer.Contains($line)) {
+            throw "installer.iss 缺少许可收录行:$line"
+        }
+    }
+
+    $release = Get-Content -Raw -LiteralPath (Join-Path $repoRoot 'scripts/release.ps1')
+    if (-not $release.Contains('check_licenses.py') -or
+        -not $release.Contains('第三方许可核验失败')) {
+        throw '正式发布缺少许可核验或原生命令失败检查'
+    }
+    if (-not $release.Contains('& $testPath -Version $Version -Directory $OutputDirectory')) {
+        throw '发布钉测试未接收版本与隔离产物目录'
+    }
 }
 
 if ([string]::IsNullOrWhiteSpace($Version)) {
@@ -232,10 +311,11 @@ if ($Version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') {
 Assert-ReleaseProfile
 
 if ($SelfTest) {
+    Invoke-NativeBuildSelfTest
     Invoke-ManifestSelfTest
     Invoke-BudgetSelfTest
     Invoke-FreshnessSelfTest
-    Write-Output 'package-release.tests.ps1: SELFTEST PASS (profile pin, workspace/manifest, budget boundary, missing asset, freshness digest)'
+    Write-Output 'package-release.tests.ps1: SELFTEST PASS (native static link, profile pin, workspace/manifest, budget boundary, missing asset, freshness digest)'
     return
 }
 

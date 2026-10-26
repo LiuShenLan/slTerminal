@@ -12,7 +12,7 @@
 
 ### GPUI 补丁审计
 
-- **固定点**：2026-10-25 完成补丁减法与关窗输入处理器释放修复，Zed 固定为 `d7b616062879de95ecd60dffa05ca6b1d835647a`，gpui-component 固定为 `558ae28d01f871c6b1536f5070704239a9f3a490`。规则：不升级 GPUI 版本线，应用与组件内部的 Zed 依赖必须同 URL、同 rev。原因：避免重复 GPUI 类型，并将 fork 限制在 Windows 产品所需最小补丁集。边界：后续补丁变更必须同提交更新审计表、应用 rev 与锁文件。
+- **固定点**：2026-10-26 将图片解码限制为规格格式并迁移到 LiuShenLan fork，Zed 固定为 `398ddb60f3d188af95e3661b1b1de8be0cbebbd7`，gpui-kit 固定为 `d71650dd3f99d89cffa243147ed4c2f103974401`。规则：不升级 GPUI 版本线，应用与组件内部的 Zed 依赖必须同 URL、同 rev。原因：避免重复 GPUI 类型，并将 fork 限制在 Windows 产品所需最小补丁集。边界：后续补丁变更必须同提交更新审计表、应用 rev 与锁文件。
 - **删减落点**：Zed 在 `fc05d637cc7029d75de051fd7f52c1a0fb8fa6b4` 之后回退 X11 补丁；组件删减提交为 `0ac7d1c8841956def7a69bafe3dcf2dde5457634`，随后同步 Zed rev 与组件锁文件。原因：删除无产品用途的补丁，而不是保留编译关闭的旧能力。边界：不为数学、旧 GFM 或阴影 helper 留兼容入口。
 
 Zed 上游基线为 `eb8e1c8b5502b7007465fbbc465f4a736fa39210`。
@@ -25,6 +25,7 @@ Zed 上游基线为 `eb8e1c8b5502b7007465fbbc465f4a736fa39210`。
 | `2b0d6d1948e374dc7a1263a27661df1409ae24c1` | 保留 | 彩色 emoji 枚举先推进再读取当前 run；属于 Windows 字体正确性修复。 |
 | `fc05d637cc7029d75de051fd7f52c1a0fb8fa6b4` | 保留 | 混合前清理透明彩色 glyph target；属于 Windows GPU 正确性修复。 |
 | `d7b616062879de95ecd60dffa05ca6b1d835647a` | 保留 | 关窗时同步释放平台与两帧输入处理器，避免其持有的视图强句柄进入退出泄漏检测；不改变原生窗口延迟销毁所有权。 |
+| `398ddb60f3d188af95e3661b1b1de8be0cbebbd7` | 保留 | `image` 仅启用规格解码器与 `avif-native`，删除编码器、rayon 和非规格格式；`Img::extensions()` 与实际解码能力对齐。 |
 
 gpui-component 的来源固定提交 `4ee9f274e990d6228e4f276f0a1e48f62f6a2048`、`4eb3917678930561c7ea36742f432313cd30b275` 保留，确保基线和 Zed source identity 明确。
 
@@ -38,12 +39,13 @@ gpui-component 的来源固定提交 `4ee9f274e990d6228e4f276f0a1e48f62f6a2048`�
 | `f46ecbb06de5907af9700f3f6e2b5b0845459188` | 保留 | 修复 native text selection release 与 input geometry；属于输入正确性边界。 |
 | `f6eb37879723b371e94afd5472ad2459908f7432`、`fc5f5cf63dd80686dafacd2a6e37345bbd1dc7ba` | 保留 | 仅同步彩色 emoji 与透明 glyph 保留补丁对应的 Zed rev；不引入额外产品语义。 |
 | `558ae28d01f871c6b1536f5070704239a9f3a490` | 保留 | 仅同步关窗输入处理器释放修复对应的 Zed rev 与组件锁文件；保持单一 GPUI 来源。 |
+| `d71650dd3f99d89cffa243147ed4c2f103974401` | 保留 | 将组件内部全部 Zed 依赖同步到 `LiuShenLan/zed` 的图片解码固定 rev；保持单一 GPUI source identity。 |
 
 ## 验收与测试
 
 - 上游基线 commit 与旧栈来源提交作为证据锚点，不进入自动化断言。
 - GPUI 固定 rev、锁文件单一来源与补丁审计锚由 `GpuiPinTests` 机械核验。
-- 2026-10-25 真机验收（Windows 11 10.0.26300，上述固定 rev 的 debug 产物）：真实 GPUI 窗口非空上屏；首条 `Write-Output GPUI_FINAL_SMOKE_OK` 无 DA1 污染、首字符完整且输出正确；正常关窗后进程退出码为 0，未出现 `TerminalView` 实体泄漏。
+- 2026-10-26 真机验收（Windows 11 10.0.26300，当前固定 rev 的 debug 产物）：真实 GPUI 窗口非空上屏；首条 `Write-Output GPUI_FINAL_SMOKE_OK` 无 DA1 污染、首字符完整且输出正确；正常关窗后进程退出码为 0，未出现 `TerminalView` 实体泄漏。
 - 旧栈删除的完整性由架构门禁与禁名门禁兜底：workspace 成员与依赖策略全等，旧品牌名不得出现在新增内容。
 
 ## 操作

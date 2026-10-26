@@ -7,7 +7,7 @@
 ### 工具链与固定 fork
 
 - 目标工具链以根 Cargo 配置和实测环境为准：`rustc 1.97.1`、`cargo 1.97.1`，Windows x64 MSVC。依赖升级是独立改动，不与功能重写混合。
-- GPUI 只使用审计后的固定 fork，不升级版本线。审计输入为 `Kuddev/zed` rev `fc05d637cc7029d75de051fd7f52c1a0fb8fa6b4`、`Kuddev/gpui-component` rev `fc5f5cf63dd80686dafacd2a6e37345bbd1dc7ba`。
+- GPUI 只使用审计后的固定 fork，不升级版本线。审计输入为 `LiuShenLan/zed` rev `398ddb60f3d188af95e3661b1b1de8be0cbebbd7`、`LiuShenLan/gpui-kit` rev `d71650dd3f99d89cffa243147ed4c2f103974401`。
 - GPUI 补丁做减法：保留仍必要的 Windows、输入、IME、GPU 与生命周期修复，删除旧编辑器、Markdown、数学覆盖层和不再需要的桥接补丁。新 rev 必须与补丁审计表同提交固定。
 - 不为维持旧安装包体积删除规格语言；先测全量基线，再依发布规则说明并重钉体积预算。
 
@@ -35,7 +35,7 @@
 | `proptest` | `1.12.0` | 仅开发依赖：布局、编辑、协议和恢复属性测试。 | MIT／Apache-2.0 |
 | `jsonschema` | `0.60.1` | 仅开发依赖：生成 schema 与 conformance 校验。 | MIT |
 
-`image` 关闭默认格式与并行特性，只启用规格需要的 PNG、JPEG、GIF、WebP 和 `avif-native` 解码；不启用 ravif 编码。AVIF 的 dav1d、mp4parse 及其上游 notice 必须通过 Windows x64 构建、MPL notice 和静态链接门禁；Rust 包装 crate 的许可元数据不能替代上游审计。
+`image` 关闭默认格式与并行特性，只启用规格需要的 PNG、JPEG、GIF、WebP、BMP、ICO 和 `avif-native` 解码；不启用 ravif 编码。AVIF 的 dav1d、mp4parse 及其上游 notice 必须通过 Windows x64 构建、MPL notice 和静态链接门禁；Rust 包装 crate 的许可元数据不能替代上游审计。上游审计锚为 dav1d `1.5.0`、commit `32cf02af50f32af108a3b281c452788dccdac648`（2026-10-26 对远端 tag 解引用核验）。`dav1d-sys 0.8.3` 使用仓内精确源码补丁，仅在 Meson setup 增加 `--vsenv`，防止 PATH 中的 MinGW 与 MSVC Rust 目标混链。`.cargo/config.toml` 强制 `dav1d-sys` 内部构建并保留 static 链接指令，产品构建后以 `dumpbin /dependents` 拒绝 dav1d DLL；构建机须提供 Git、Meson、Ninja、NASM 与 pkg-config；CI 固定后四项版本，源码只在 Cargo `OUT_DIR` 的独立目录构建。
 
 `zip` 仅保留给隔离记录与诊断 ZIP 导出，不再是主题包格式。HTTP、密码学、正则和公式既有依赖继续服务对应目标能力；删除旧 AI／Markdown 依赖前必须核对隔离导出与公式是否仍使用其传递功能。
 

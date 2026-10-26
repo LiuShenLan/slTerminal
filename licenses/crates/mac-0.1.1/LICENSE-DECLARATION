@@ -1,0 +1,8 @@
+The upstream mac 0.1.1 manifest at revision
+66afc663b68a65633ea165c742b5a9c6734581c2 declares:
+
+authors = ["Jonathan Reem <jonathan.reem@gmail.com>"]
+license = "MIT/Apache-2.0"
+
+That revision contains no license text file. The MIT and Apache License 2.0
+texts accompanying this declaration are the corresponding standard licenses.

@@ -28,6 +28,16 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: 安装 dav1d 静态构建工具
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check "meson==1.12.1" "ninja==1.13.2"
+          if ($LASTEXITCODE -ne 0) { throw "Meson/Ninja 安装失败(exit $LASTEXITCODE)" }
+          choco install nasm --version=2.16.3 --yes --no-progress
+          if ($LASTEXITCODE -ne 0) { throw "NASM 安装失败(exit $LASTEXITCODE)" }
+          choco install pkgconfiglite --version=0.28 --yes --no-progress
+          if ($LASTEXITCODE -ne 0) { throw "pkg-config 安装失败(exit $LASTEXITCODE)" }
+
       - name: 检查 Rust 格式
         shell: pwsh
         run: cargo fmt --all -- --check

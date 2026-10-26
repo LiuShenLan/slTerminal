@@ -4,10 +4,10 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[2]
-ZED_URL = "https://github.com/Kuddev/zed"
-COMPONENT_URL = "https://github.com/Kuddev/gpui-component"
-ZED_REV = "d7b616062879de95ecd60dffa05ca6b1d835647a"
-COMPONENT_REV = "558ae28d01f871c6b1536f5070704239a9f3a490"
+ZED_URL = "https://github.com/LiuShenLan/zed"
+COMPONENT_URL = "https://github.com/LiuShenLan/gpui-kit"
+ZED_REV = "398ddb60f3d188af95e3661b1b1de8be0cbebbd7"
+COMPONENT_REV = "d71650dd3f99d89cffa243147ed4c2f103974401"
 EXPECTED_DEPENDENCIES = {
     "gpui": (ZED_URL, ZED_REV, "=0.2.2"),
     "gpui_platform": (ZED_URL, ZED_REV, "=0.1.0"),

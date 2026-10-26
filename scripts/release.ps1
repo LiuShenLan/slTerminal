@@ -32,6 +32,12 @@ if ($Version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') {
 
 Write-Host "=== slTerminal $Version 发布链 ===" -ForegroundColor Cyan
 
+Write-Host '=== 核验第三方生产依赖许可 ===' -ForegroundColor Cyan
+& python (Join-Path $PSScriptRoot 'check_licenses.py')
+if ($LASTEXITCODE -ne 0) {
+    throw "第三方许可核验失败(exit $LASTEXITCODE)"
+}
+
 # 1. 共享构建:安装器与 zip 同源同 feature 图。
 & (Join-Path $PSScriptRoot 'build-windows-product.ps1') `
     -Configuration $Configuration -TargetDirectory $TargetDirectory
@@ -50,7 +56,7 @@ foreach ($test in @('installer.tests.ps1', 'package-release.tests.ps1')) {
     $testPath = Join-Path $PSScriptRoot "tests/$test"
     if (Test-Path -LiteralPath $testPath -PathType Leaf) {
         Write-Host "=== 钉测试 $test ===" -ForegroundColor Cyan
-        & $testPath
+        & $testPath -Version $Version -Directory $OutputDirectory
     }
 }
 

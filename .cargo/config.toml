@@ -1,0 +1,5 @@
+[env]
+# dav1d-sys 固定从上游 tag 构建；禁止静默改用系统动态库。
+SYSTEM_DEPS_DAV1D_BUILD_INTERNAL = { value = "always", force = true }
+# system-deps 会覆盖内部库的静态标记，必须显式保留 static 链接指令。
+SYSTEM_DEPS_DAV1D_LINK = { value = "static", force = true }

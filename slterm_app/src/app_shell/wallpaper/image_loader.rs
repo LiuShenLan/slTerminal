@@ -251,6 +251,33 @@ mod image_loader_tests {
         assert_eq!(loaded.pixels.get_pixel(0, 0).0, [30, 20, 10, 255]);
     }
 
+    /// GPUI 可发现格式必须与实际编译的解码器一致。
+    #[test]
+    fn gpui_image_extensions_match_decoder_baseline() {
+        assert_eq!(
+            gpui::Img::extensions(),
+            &[
+                "avif", "jpg", "jpeg", "png", "gif", "webp", "bmp", "ico", "svg"
+            ]
+        );
+    }
+
+    /// AVIF 走原生解码器，并经过同一有界加载与 BGRA 转换链。
+    #[test]
+    fn avif_decode_uses_native_decoder_within_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("white.avif");
+        std::fs::write(
+            &path,
+            include_bytes!("../../../tests/fixtures/white_1x1.avif"),
+        )
+        .unwrap();
+        let loaded = load(request(path)).unwrap().unwrap();
+        assert_eq!((loaded.pixels.width(), loaded.pixels.height()), (1, 1));
+        // 样本经有损 AV1 编码；独立浏览器解码同为近白色，而非色名字面值 255。
+        assert_eq!(loaded.pixels.get_pixel(0, 0).0, [253, 253, 253, 255]);
+    }
+
     /// 代际失配的预览请求连文件都不打开。
     #[test]
     fn cancelled_preview_does_not_open_or_decode_a_file() {

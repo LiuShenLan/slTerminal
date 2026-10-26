@@ -83,13 +83,17 @@ split-debuginfo = "unpacked"
 # 固定 fork 只做补丁减法:保留 Windows、输入、测试与生命周期修复,删除 X11、
 # 旧 GFM、数学桥和未使用的阴影 helper。完整审计链由固定 fork 的提交历史锚定。
 #
-# 所有 Zed 依赖统一使用 Kuddev URL:Cargo 的 source identity 包含 URL,应用
-# 与 component 内部若混用官方/自有 URL,即使 SHA 相同也会解析成两套 gpui
-# 类型。新增 Zed/component 补丁必须从固定基线开独立分支、逐条提交并更新
+# 所有 Zed 依赖统一使用 LiuShenLan/zed URL:Cargo 的 source identity 包含 URL,
+# 应用与组件内部若混用不同 URL,即使 SHA 相同也会解析成两套 gpui 类型。
+# 新增 Zed/component 补丁必须从固定基线开独立分支、逐条提交并更新
 # exact rev,不能移动基线 branch/tag。
-gpui = { git = "https://github.com/Kuddev/zed", rev = "d7b616062879de95ecd60dffa05ca6b1d835647a", version = "=0.2.2" }
+gpui = { git = "https://github.com/LiuShenLan/zed", rev = "398ddb60f3d188af95e3661b1b1de8be0cbebbd7", version = "=0.2.2" }
 # GPUI v1.16.1 把平台启动入口拆到独立 crate。它必须与 `gpui` 使用完全相同
 # 的 Git URL 和 rev,否则 Cargo 会把同名类型解析成两套互不兼容的 crate。
-gpui_platform = { git = "https://github.com/Kuddev/zed", rev = "d7b616062879de95ecd60dffa05ca6b1d835647a", version = "=0.1.0", features = ["font-kit"] }
-gpui-component = { git = "https://github.com/Kuddev/gpui-component", rev = "558ae28d01f871c6b1536f5070704239a9f3a490", version = "=0.5.2" }
-gpui-component-assets = { git = "https://github.com/Kuddev/gpui-component", rev = "558ae28d01f871c6b1536f5070704239a9f3a490", version = "=0.5.1" }
+gpui_platform = { git = "https://github.com/LiuShenLan/zed", rev = "398ddb60f3d188af95e3661b1b1de8be0cbebbd7", version = "=0.1.0", features = ["font-kit"] }
+gpui-component = { git = "https://github.com/LiuShenLan/gpui-kit", rev = "d71650dd3f99d89cffa243147ed4c2f103974401", version = "=0.5.2" }
+gpui-component-assets = { git = "https://github.com/LiuShenLan/gpui-kit", rev = "d71650dd3f99d89cffa243147ed4c2f103974401", version = "=0.5.1" }
+
+[patch.crates-io]
+# 上游 0.8.3 未强制 MSVC 环境；仓内补丁仅增加 Meson --vsenv。
+dav1d-sys = { path = "vendor/dav1d-sys" }

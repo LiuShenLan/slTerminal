@@ -4,7 +4,7 @@
 
 ## 决策与红线
 
-- **单入口发布**：正式发布只走 `release.ps1`（共享构建 → 安装器 → 便携 zip → 钉测试（存在时）→ `verify-release`），逐失败即停；手工分步仅用于定位。
+- **单入口发布**：正式发布只走 `release.ps1`（许可核验 → 共享构建 → 安装器 → 便携 zip → 钉测试（存在时）→ `verify-release`），逐失败即停；手工分步仅用于定位。
 - **发布构建纪律**：正式路径禁止 `-SkipBuild` / `-AllowStale`；两者只允许出现在脚本自测与发布彩排，且必须在命令中显式出现。发布包必须来自全新构建。
 - **清单即合同**：包内文件集唯一真值源 = `build-windows-product.ps1` 的 `$script:PackageEntries`；`package-release.ps1` 的 staging/zip 全等校验与 `installer.iss` 的 `[Files]` 必须与它同步，多一件少一件都红。目录条目只允许登记在 `$script:PackageDirectories`，展开后仍必须与安装器/便携 staging 全等。
 - **新鲜度判据**：二进制 mtime 必须 ≥ 全部成员 crate 与根清单的最新 `.rs`/`.toml` mtime。基准是源码而不是脚本运行时刻（cargo 对未变更目标不重链接）。已知边界：仅改根清单注释也可能假红，必要时 `cargo clean`。
@@ -12,6 +12,8 @@
 - **isl pin**：`ChineseSimplified.isl` 固定上游提交 + SHA256；缺失或哈希不符才下载，下载后仍不符则拒绝构建。
 - **GUID 永不变更**：`installer.iss` 的生产 AppId 与夹具 GUID 一经钉死即成为续装/升级/卸载标识；夹具模式必须与生产 AppId、AppName、输出名、注册表键隔离。
 - **凭据红线**：脚本、iss、夹具中禁止出现任何真实 token/key；测试与文档只允许假值占位符。
+- **原生静态链接**：`.cargo/config.toml` 强制 dav1d 内部构建与 static 链接；`vendor/dav1d-sys` 仅补 Meson `--vsenv`，共享构建后以 `dumpbin /dependents` 拒绝 dav1d DLL。原因：`system-deps` 会覆盖内部库的静态标记，仅构建静态库不等于最终静态链接；MinGW 对象不得与 MSVC 目标混链。边界：构建机必须提供 Meson、Ninja、NASM、pkg-config 与 MSVC 工具；缺工具或审计失败即停。
+- **许可核验**：正式发布在构建前执行 `check_licenses.py`，缺失或过期即停；更新只经 `--write` 原子生成。原因：生产依赖与原生源文本必须随锁文件同步。边界：开发依赖不进入随包清单；registry 缺失文本按精确版本使用仓内上游快照。
 - **禁名门禁**：本目录所有脚本与 iss 内的产品名只允许 `slTerminal` / `slterm`；提交前跑 `python scripts/check_brand_regress.py staged`。
 - **PowerShell 7**：本目录全部 `.ps1` 首行声明 `#Requires -Version 7`；5.1 下不保证解析语义，报错应明确指向版本而非晦涩语法错误。
 - **文档策略门禁**：新增/修改脚本不得在注释中引用过程编号、文档名或行号；提交前跑 `python scripts/check_doc_policy.py staged`。

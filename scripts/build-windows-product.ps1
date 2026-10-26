@@ -29,14 +29,22 @@ $script:WorkspaceMembers = @(
     'slterm_hook',
     'slterm_settings',
     'slterm_split',
-    'slterm_runtime_protocol'
+    'slterm_runtime_protocol',
+    'slterm_path',
+    'slterm_document',
+    'slterm_workspace',
+    'slterm_sidebar',
+    'slterm_agents',
+    'slterm_hooks'
 )
 $script:SourceRoots = @(
     $script:WorkspaceMembers | ForEach-Object { Join-Path $script:RepoRoot $_ }
 ) + @(
     (Join-Path $script:RepoRoot 'slterm_agent_detection'),
+    (Join-Path $script:RepoRoot 'vendor/dav1d-sys'),
     (Join-Path $script:RepoRoot 'Cargo.toml'),
-    (Join-Path $script:RepoRoot 'Cargo.lock')
+    (Join-Path $script:RepoRoot 'Cargo.lock'),
+    (Join-Path $script:RepoRoot '.cargo/config.toml')
 )
 
 # 包内清单唯一真值源:便携 zip 的目录布局与安装器 [Files] 共同消费。
@@ -53,6 +61,8 @@ $script:PackageEntries = @(
     [pscustomobject]@{ PackagePath = 'assets/app-icon.ico'; RepoPath = 'assets/app-icon.ico' }
     [pscustomobject]@{ PackagePath = 'licenses/LICENSE'; RepoPath = 'LICENSE' }
     [pscustomobject]@{ PackagePath = 'licenses/THIRD-PARTY-NOTICES'; RepoPath = 'THIRD-PARTY-NOTICES' }
+    [pscustomobject]@{ PackagePath = 'licenses/THIRD-PARTY-CRATE-NOTICES'; RepoPath = 'licenses/THIRD-PARTY-CRATE-NOTICES' }
+    [pscustomobject]@{ PackagePath = 'licenses/LICENSE-DAV1D'; RepoPath = 'licenses/LICENSE-DAV1D' }
     [pscustomobject]@{ PackagePath = 'licenses/LICENSE-LATIN-MODERN-MATH'; RepoPath = 'licenses/LICENSE-LATIN-MODERN-MATH' }
 )
 
@@ -61,6 +71,58 @@ $script:PackageEntries = @(
 $script:PackageDirectories = @(
     [pscustomobject]@{ RepoDir = 'docs/featureSpec/assets/cli-svg'; PackageDir = 'assets/cli-svg'; Filter = '*.svg' }
 )
+
+function Assert-NoDav1dImport([string[]] $Dependents) {
+    $dynamic = @($Dependents | Where-Object {
+        $_ -match '(?i)dav1d' -and $_ -match '(?i)\.dll(?:\s|$)'
+    })
+    if ($dynamic.Count -ne 0) {
+        throw "检测到 dav1d 动态依赖:$($dynamic -join '; ')"
+    }
+}
+
+function Resolve-DumpbinPath {
+    $command = Get-Command 'dumpbin.exe' -ErrorAction SilentlyContinue
+    if ($null -ne $command) {
+        return $command.Source
+    }
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+    if (-not (Test-Path -LiteralPath $vswhere -PathType Leaf)) {
+        throw '未找到 dumpbin.exe 或 vswhere.exe;请安装 MSVC C++ 生成工具'
+    }
+    # 完整收集再取首项：Select-Object -First 提前终止管道时不会设置 LASTEXITCODE。
+    $installations = @(& $vswhere -latest -products * `
+        -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+        -property installationPath)
+    $vswhereExit = $LASTEXITCODE
+    if ($vswhereExit -ne 0 -or $installations.Count -eq 0) {
+        throw '未定位 MSVC C++ 生成工具;无法审计 dav1d 链接方式'
+    }
+    $installation = $installations[0]
+    $toolsRoot = Join-Path $installation 'VC/Tools/MSVC'
+    $candidate = Get-ChildItem -LiteralPath $toolsRoot -Recurse -Filter 'dumpbin.exe' -File |
+        Where-Object { $_.FullName -match '\\bin\\Hostx64\\x64\\dumpbin\.exe$' } |
+        Sort-Object FullName -Descending | Select-Object -First 1
+    if ($null -eq $candidate) {
+        throw "未找到 x64 dumpbin.exe:$toolsRoot"
+    }
+    return $candidate.FullName
+}
+
+function Assert-Dav1dStatic([string] $BinaryPath, [string] $DumpbinPath) {
+    if (-not (Test-Path -LiteralPath $BinaryPath -PathType Leaf)) {
+        throw "缺少待审计二进制:$BinaryPath"
+    }
+    if ([string]::IsNullOrWhiteSpace($DumpbinPath)) {
+        $DumpbinPath = Resolve-DumpbinPath
+    }
+    $dependents = @(& $DumpbinPath '/nologo' '/dependents' $BinaryPath 2>&1 |
+        ForEach-Object { $_.ToString() })
+    if ($LASTEXITCODE -ne 0) {
+        throw "dumpbin 依赖审计失败(exit $LASTEXITCODE):$($dependents -join '; ')"
+    }
+    Assert-NoDav1dImport -Dependents $dependents
+}
 
 function Get-BuildRoot([string] $TargetRoot, [string] $Configuration) {
     return Join-Path ([IO.Path]::GetFullPath($TargetRoot)) $Configuration
@@ -253,5 +315,6 @@ foreach ($name in @('slterm.exe', 'slterm-hook.exe')) {
     }
     Write-Host "  $name $([math]::Round((Get-Item -LiteralPath $path).Length / 1MB, 2)) MB"
 }
+Assert-Dav1dStatic -BinaryPath (Join-Path $buildRoot 'slterm.exe')
 Write-BuildStamp $buildRoot $sourceDigest
 Write-Output "build-windows-product.ps1: OK ($Configuration -> $buildRoot)"
