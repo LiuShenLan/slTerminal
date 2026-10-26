@@ -70,8 +70,9 @@ impl From<RepositoryDtoError> for ViewKeyError {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ViewKeyKind {
+/// 封闭视图类型，同时作为 ViewState 的注册身份。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum ViewKeyKind {
     Terminal,
     Editor,
     Markdown,
@@ -94,7 +95,7 @@ impl ViewKeyKind {
         Self::AppSettingsOverlay,
     ];
 
-    const fn id_str(self) -> &'static str {
+    pub(crate) const fn id_str(self) -> &'static str {
         match self {
             Self::Terminal => "terminal",
             Self::Editor => "editor",
@@ -107,7 +108,7 @@ impl ViewKeyKind {
         }
     }
 
-    fn parse(text: &str) -> Option<Self> {
+    pub(crate) fn parse(text: &str) -> Option<Self> {
         Self::ALL
             .into_iter()
             .find(|candidate| candidate.id_str() == text)
@@ -115,7 +116,8 @@ impl ViewKeyKind {
 }
 
 impl ViewKey {
-    fn kind(&self) -> ViewKeyKind {
+    /// 返回封闭视图类型。
+    pub fn kind(&self) -> ViewKeyKind {
         match self {
             Self::Terminal { .. } => ViewKeyKind::Terminal,
             Self::Editor { .. } => ViewKeyKind::Editor,

@@ -17,7 +17,7 @@ slterm_document = { path = "../slterm_document" }
 slterm_split = { package = "slterm-split", path = "../slterm_split" }
 uuid = { version = "=1.28.0", default-features = false }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["raw_value"] }
 
 [dev-dependencies]
 proptest = "=1.12.0"
