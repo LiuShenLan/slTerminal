@@ -116,6 +116,19 @@ impl ViewKeyKind {
 }
 
 impl ViewKey {
+    /// 返回项目面板所属项目；应用级视图不属于任何项目。
+    pub const fn project_id(&self) -> Option<ProjectId> {
+        match self {
+            Self::Terminal { project_id, .. }
+            | Self::Editor { project_id, .. }
+            | Self::Markdown { project_id, .. }
+            | Self::Diff { project_id, .. }
+            | Self::GitShow { project_id, .. }
+            | Self::Settings { project_id } => Some(*project_id),
+            Self::SideView { .. } | Self::AppSettingsOverlay => None,
+        }
+    }
+
     /// 返回封闭视图类型。
     pub fn kind(&self) -> ViewKeyKind {
         match self {
@@ -186,6 +199,15 @@ impl ViewKey {
             Self::AppSettingsOverlay => {}
         }
         Ok(object)
+    }
+
+    pub(crate) fn to_value(&self) -> Result<Value, ViewKeyError> {
+        Ok(Value::Object(
+            self.to_dto()?
+                .into_iter()
+                .map(|(key, value)| (key.to_owned(), value))
+                .collect(),
+        ))
     }
 
     /// 序列化为显式版本、确定键序且可逐字节重放的 JSON。
@@ -566,6 +588,18 @@ mod view_key_tests {
                 | "side_view"
                 | "app_settings_overlay"
         )
+    }
+
+    /// 项目面板返回所属项目，应用级视图明确返回空。
+    #[test]
+    fn view_key_exposes_only_project_panel_membership() {
+        for (key, kind) in all_view_keys() {
+            let expected = match kind {
+                "side_view" | "app_settings_overlay" => None,
+                _ => Some(project_id()),
+            };
+            assert_eq!(key.project_id(), expected, "{kind}");
+        }
     }
 
     /// 封闭注册表中的每种视图都保留身份并可逐字节重放。

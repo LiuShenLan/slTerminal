@@ -196,17 +196,11 @@ impl ViewState {
         if key.kind() != self.kind {
             return Err(ViewStateError::KeyKindMismatch);
         }
-        match key {
-            ViewKey::Terminal { project_id, .. }
-            | ViewKey::Editor { project_id, .. }
-            | ViewKey::Markdown { project_id, .. }
-            | ViewKey::Diff { project_id, .. }
-            | ViewKey::GitShow { project_id, .. }
-            | ViewKey::Settings { project_id } => Ok(ViewStateScope::Project(*project_id)),
-            ViewKey::SideView { .. } | ViewKey::AppSettingsOverlay => {
-                Ok(ViewStateScope::Application)
-            }
-        }
+        Ok(key
+            .project_id()
+            .map_or(ViewStateScope::Application, |project_id| {
+                ViewStateScope::Project(project_id)
+            }))
     }
 }
 

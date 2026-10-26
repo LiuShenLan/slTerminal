@@ -60,6 +60,17 @@ impl Rect {
     }
 }
 
+/// 扣除分隔条后按比例分配轴向长度；首段取整，次段接收余数并按最小单元钳制。
+pub fn split_lengths(total: f32, ratio: f32, divider: f32, minimum: f32) -> (f32, f32) {
+    let usable = (total - divider).max(minimum);
+    let first = (usable * ratio)
+        .floor()
+        .max(minimum)
+        .min((usable - minimum).max(minimum));
+    let second = (usable - first).max(minimum);
+    (first, second)
+}
+
 /// 一条分隔条的身份:屏幕矩形 + 所属 Split 节点的树路径
 /// (`false` = 第一个孩子,`true` = 第二个),以及该节点铺陈孩子的内容矩形。
 #[derive(Debug, Clone)]
@@ -290,12 +301,7 @@ impl<T: Copy + Eq> SplitTree<T> {
                 };
                 match direction {
                     SplitDirection::LeftRight => {
-                        let usable = (vp.w - divider).max(cell_w);
-                        let first_w = (usable * r)
-                            .floor()
-                            .max(cell_w)
-                            .min((usable - cell_w).max(cell_w));
-                        let second_w = (usable - first_w).max(cell_w);
+                        let (first_w, second_w) = split_lengths(vp.w, r, divider, cell_w);
                         out.dividers.push(Divider {
                             rect: Rect::new(vp.x + first_w, vp.y, divider, vp.h),
                             direction: *direction,
@@ -326,12 +332,7 @@ impl<T: Copy + Eq> SplitTree<T> {
                         path.pop();
                     }
                     SplitDirection::TopBottom => {
-                        let usable = (vp.h - divider).max(cell_h);
-                        let first_h = (usable * r)
-                            .floor()
-                            .max(cell_h)
-                            .min((usable - cell_h).max(cell_h));
-                        let second_h = (usable - first_h).max(cell_h);
+                        let (first_h, second_h) = split_lengths(vp.h, r, divider, cell_h);
                         out.dividers.push(Divider {
                             rect: Rect::new(vp.x, vp.y + first_h, vp.w, divider),
                             direction: *direction,
