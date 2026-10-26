@@ -6260,6 +6260,7 @@ dependencies = [
  "slterm_agents",
  "slterm_completions",
  "slterm_path",
+ "slterm_runtime_protocol",
  "slterm_terminal",
  "slterm_workspace",
  "tempfile",

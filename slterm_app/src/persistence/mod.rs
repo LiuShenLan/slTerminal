@@ -2,4 +2,5 @@
 
 pub(crate) mod database;
 pub(crate) mod learning;
+pub(crate) mod operation;
 pub(crate) mod workspace;

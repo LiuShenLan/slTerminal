@@ -3,7 +3,7 @@ renderer_packages = ["gpui", "gpui_platform", "gpui-component", "gpui-component-
 
 [crates.slterm_app]
 layer = "application"
-dependencies = ["slterm_terminal", "slterm_settings", "slterm_split", "slterm_completions", "slterm_path", "slterm_document", "slterm_workspace", "slterm_sidebar", "slterm_agents", "slterm_hooks"]
+dependencies = ["slterm_terminal", "slterm_settings", "slterm_split", "slterm_completions", "slterm_path", "slterm_document", "slterm_workspace", "slterm_runtime_protocol", "slterm_sidebar", "slterm_agents", "slterm_hooks"]
 build-dependencies = ["slterm_settings"]
 dev-dependencies = []
 

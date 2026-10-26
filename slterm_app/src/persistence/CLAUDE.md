@@ -10,11 +10,12 @@
 - **灾难副本**：Online Backup 只写入由本模块 `create_new` 保留的新临时库，完成 application、版本、完整性与外键复核后才算成功。原因：任何失败都不得留下可被误认为有效的副本。边界：原子替换与 ACL 保留由统一文件写所有者完成，本模块不覆盖既有目标。
 - **数据边界**：正文、终端输出、AI 会话正文与凭据不进入 SQLite；错误展示不得回显路径、SQL、正文或底层 SQLite 消息。旧 JSON 与历史材料不读取、不迁移、不删除。
 - **恢复材料显式清理**：Journal 步骤、隔离项与快照索引不得随父记录或 Document 隐式级联删除。原因：外部文件仍需按指纹、状态与维护流程处理，数据库级联会提前丢失定位事实。边界：项目布局等纯数据库记录可按项目删除契约级联；文件-backed 材料只能由对应所有者显式清理。
+- **Operation 幂等派发**：登记结果必须区分 `Registered` 与 `Existing`，调用方只能派发 `Registered`；同 `store_epoch＋client_id＋mutation_id` 且方法、参数 DTO 版本、参数散列一致时返回原记录，任一不同即冲突。原因：断线重试不得重复产生副作用，也不得用重试输入覆盖原操作。边界：`operation_id` 另作唯一身份；`OutcomeUnknown` 只可重查，不得自动重发。
 
 ## 验收与测试
 
 - 定向测试：`cargo test -p slterm --test lib_tests persistence -- --test-threads=1`。
-- 临时真实 SQLite 覆盖 schema、WAL、外键、单行与幂等约束、事务回滚、当前／高版本分流和损坏不改写；工作区另行覆盖 Online Backup，学习库覆盖去重、UTF-8 字节上限与学习代次，且不出现副本／导出 API。
+- 临时真实 SQLite 覆盖 schema、WAL、外键、单行与幂等约束、事务回滚、当前／高版本分流和损坏不改写；工作区另行覆盖 Online Backup 与 Operation 登记去重、冲突、状态转换和结果重查，学习库覆盖去重、UTF-8 字节上限与学习代次，且不出现副本／导出 API。
 
 ## 操作
 

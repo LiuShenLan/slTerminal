@@ -51,6 +51,7 @@ slterm-settings = { path = "../slterm_settings" }
 # PaneId/TabId + SplitTree 分屏树(纯数据 core,workspace 雏形挂接)。
 slterm-split = { path = "../slterm_split" }
 slterm_workspace = { path = "../slterm_workspace" }
+slterm_runtime_protocol = { path = "../slterm_runtime_protocol" }
 slterm_path = { path = "../slterm_path" }
 slterm_agents = { path = "../slterm_agents" }
 # SQLite 仅由 application 持久化适配持有；bundled 固定内嵌实现，backup 用于灾难副本。

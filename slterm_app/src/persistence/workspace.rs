@@ -63,7 +63,7 @@ static WORKSPACE_OBJECTS: [SchemaObject; 21] = [
     SchemaObject {
         kind: "table",
         name: "runtime_operations",
-        sql: "CREATE TABLE runtime_operations (operation_id TEXT NOT NULL PRIMARY KEY, store_epoch TEXT NOT NULL, client_id TEXT NOT NULL, mutation_id TEXT NOT NULL, method TEXT NOT NULL, params_hash BLOB NOT NULL, resource_generations_json TEXT NOT NULL, status TEXT NOT NULL, result_json TEXT, error_json TEXT, journal_id TEXT REFERENCES managed_journals(journal_id), UNIQUE (store_epoch, client_id, mutation_id))",
+        sql: "CREATE TABLE runtime_operations (operation_id TEXT NOT NULL PRIMARY KEY, store_epoch TEXT NOT NULL, client_id TEXT NOT NULL, mutation_id TEXT NOT NULL, method TEXT NOT NULL, params_dto_version INTEGER NOT NULL CHECK (params_dto_version > 0), params_hash BLOB NOT NULL CHECK (length(params_hash) = 32), resource_generations_json TEXT NOT NULL, status TEXT NOT NULL, result_json TEXT, error_json TEXT, journal_id TEXT REFERENCES managed_journals(journal_id), UNIQUE (store_epoch, client_id, mutation_id))",
     },
     SchemaObject {
         kind: "table",
@@ -124,9 +124,9 @@ static WORKSPACE_SPEC: DatabaseSpec = DatabaseSpec {
     meta_table: "workspace_meta",
 };
 
-/// 工作区数据库连接；领域写入 API 由后续存储所有者提供。
+/// 工作区数据库连接；领域 API 分到 persistence 内各存储模块。
 pub(crate) struct WorkspaceDatabase {
-    database: Database,
+    pub(super) database: Database,
 }
 
 impl WorkspaceDatabase {
@@ -466,8 +466,8 @@ mod workspace_tests {
         let insert_operation = |operation_id: &str| {
             connection.execute(
                 "INSERT INTO runtime_operations \
-                 (operation_id, store_epoch, client_id, mutation_id, method, params_hash, resource_generations_json, status) \
-                 VALUES (?1, 'epoch-test', 'client-test', 'mutation-test', 'document.save', x'00', '{}', 'queued')",
+                 (operation_id, store_epoch, client_id, mutation_id, method, params_dto_version, params_hash, resource_generations_json, status) \
+                 VALUES (?1, 'epoch-test', 'client-test', 'mutation-test', 'document.save', 1, zeroblob(32), '{}', 'queued')",
                 [operation_id],
             )
         };
@@ -583,7 +583,7 @@ mod workspace_tests {
             ),
             (
                 "runtime_operations",
-                "INSERT INTO runtime_operations (operation_id, store_epoch, client_id, mutation_id, method, params_hash, resource_generations_json, status) VALUES (NULL, 'epoch', 'client', 'mutation', 'method', x'00', '{}', 'queued')",
+                "INSERT INTO runtime_operations (operation_id, store_epoch, client_id, mutation_id, method, params_dto_version, params_hash, resource_generations_json, status) VALUES (NULL, 'epoch', 'client', 'mutation', 'method', 1, zeroblob(32), '{}', 'queued')",
             ),
             (
                 "managed_journals",
