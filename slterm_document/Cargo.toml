@@ -12,6 +12,8 @@ name = "lib_tests"
 path = "src/lib.rs"
 
 [dependencies]
+# 仓库绑定复用规范路径与文件身份，不复制路径事实类型。
+slterm_path = { path = "../slterm_path" }
 uuid = { version = "=1.28.0", default-features = false }
 
 [dev-dependencies]

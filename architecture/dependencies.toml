@@ -31,7 +31,7 @@ dependencies = []
 
 [crates.slterm_document]
 layer = "core"
-dependencies = []
+dependencies = ["slterm_path"]
 
 [crates.slterm_workspace]
 layer = "core"

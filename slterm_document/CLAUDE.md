@@ -7,6 +7,7 @@
 - **纯文档边界**：只承载文本、编码、差分、语法与 Markdown 语义。原因：文档语义须可独立于界面和外部系统验证。边界：不得持有 GPUI 类型或执行 I/O。
 - **文本状态身份**：`TextStateId` 使用 application 注入的 UUIDv7；新编辑产生新值，撤销／重做恢复原值，不以正文散列代替身份。原因：同一正文经不同编辑路径到达时仍需精确区分保存与撤销状态。边界：本 crate 只校验和保存值，不生成随机数。
 - **Git 固定版本值**：`CommitId` 只接受完整 40 或 64 位小写十六进制对象 ID；`RepoPath` 只接受正斜杠规范相对文件路径。原因：短哈希、引用名与多义词法路径不能固定版本对象。边界：对象存在性由 GitFacade 查询，本 crate 不执行 Git。
+- **仓库路径事实单点**：`RepositoryBinding` 直接复用 `slterm_path` 的规范路径与文件身份，不另建路径 DTO。原因：绑定复核必须与 PathPolicy 使用同一身份事实。边界：本 crate 只比较纯值；真实路径解析、HEAD 存在性与对象读取由 application 提供。
 - **旧 grammar 适配只留测试**：`tree-sitter-json5 0.1.0` 与 `tree-sitter-dockerfile 0.2.0` 的 Rust binding 仍使用 tree-sitter 0.20 类型，且未导出随包 highlights query。原因：审计须以 tree-sitter 0.27.1 和真实 query 验证 ABI，不得空 query 或改用其他语言资产。边界：C 入口适配仅在 `cfg(test)` 开放，生产库保持 `forbid(unsafe_code)`；本地 query 必须与锁定包原件逐字一致，升级时重新核对。
 - **SCSS 固定 MSVC 修复 rev**：crates.io 的 `tree-sitter-scss 1.0.0` 会向 MSVC 直传 GCC 警告参数，固定上游 `9ab738d22bb248771d42e8678d1a307d14990df1`、版本仍为 1.0.0。原因：该 rev 相对发布基线不改 grammar、query 或 Rust 入口，只补平台构建分支及 README。边界：不得移动 rev；回到 crates.io 或升级前须重新审计并实测 Windows x64。
 

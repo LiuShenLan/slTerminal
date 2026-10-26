@@ -24,7 +24,7 @@ slterm_hook                 零依赖小进程桥
 slterm_app                  全部 GPUI、I/O、子进程、网络、OS 与服务编排
 ```
 
-- `slterm_workspace` 可依赖 path、document、split；`slterm_agents` 可依赖 path、settings、workspace；`slterm_sidebar` 可依赖 workspace、agents；`slterm_hooks` 可依赖 workspace、agents。其余领域 crate 不得为取得类型而反向依赖 app。
+- `slterm_document` 可依赖 path；`slterm_workspace` 可依赖 path、document、split；`slterm_agents` 可依赖 path、settings、workspace；`slterm_sidebar` 可依赖 workspace、agents；`slterm_hooks` 可依赖 workspace、agents。其余领域 crate 不得为取得类型而反向依赖 app。
 - core 只持有纯数据、纯状态机和可独立测试的解析／计算。文件、网络、SQLite、注册表、凭据、系统剪贴板、进程与 watcher 都经 application 端口适配。
 - GPUI、winit、glutin 与平台渲染框架不得进入 core 或 hook 生产依赖。CPU 公式布局和不可变计算结果可留在 core；图片解码、位图呈现和网络留在 application。
 - `slterm_split` 不定义跨领域 `PaneId`／`TabId`。`slterm_workspace` 以泛型布局树包装自己的 PanelGroupId 与 PanelId，避免 ID 循环依赖。

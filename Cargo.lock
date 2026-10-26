@@ -6184,6 +6184,7 @@ dependencies = [
 name = "slterm_document"
 version = "0.0.0"
 dependencies = [
+ "slterm_path",
  "tree-sitter 0.27.1",
  "tree-sitter-bash",
  "tree-sitter-c",

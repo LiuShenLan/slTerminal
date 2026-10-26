@@ -1,6 +1,8 @@
 use std::fmt;
 use std::str::FromStr;
 
+use slterm_path::ResolvedPath;
+
 /// Git 提交的完整对象身份，不用短哈希或分支名代替。
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct CommitId(String);
@@ -93,9 +95,157 @@ impl fmt::Display for InvalidRepoPath {
 
 impl std::error::Error for InvalidRepoPath {}
 
+/// 创建固定版本视图时捕获的仓库路径、目录身份与 HEAD。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RepositoryBinding {
+    worktree_root: ResolvedPath,
+    git_dir: ResolvedPath,
+    common_dir: ResolvedPath,
+    head: CommitId,
+}
+
+/// 当前路径或身份不能证明仍属于创建时仓库。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RepositoryBindingUnavailable;
+
+impl RepositoryBinding {
+    pub fn new(
+        worktree_root: ResolvedPath,
+        git_dir: ResolvedPath,
+        common_dir: ResolvedPath,
+        head: CommitId,
+    ) -> Self {
+        Self {
+            worktree_root,
+            git_dir,
+            common_dir,
+            head,
+        }
+    }
+
+    pub const fn worktree_root(&self) -> &ResolvedPath {
+        &self.worktree_root
+    }
+
+    pub const fn git_dir(&self) -> &ResolvedPath {
+        &self.git_dir
+    }
+
+    pub const fn common_dir(&self) -> &ResolvedPath {
+        &self.common_dir
+    }
+
+    pub const fn head(&self) -> &CommitId {
+        &self.head
+    }
+
+    /// 复核当前仓库事实；HEAD 移动本身不改变绑定路径与身份。
+    /// `original_head_exists` 必须查询 `self.head`，不得以 `current.head` 代替。
+    pub fn revalidate(
+        &self,
+        current: &Self,
+        original_head_exists: bool,
+    ) -> Result<(), RepositoryBindingUnavailable> {
+        if self.worktree_root.canonical_path() != current.worktree_root.canonical_path()
+            || self.git_dir.canonical_path() != current.git_dir.canonical_path()
+            || self.common_dir.canonical_path() != current.common_dir.canonical_path()
+        {
+            return Err(RepositoryBindingUnavailable);
+        }
+
+        let mut identity_proven = false;
+        for (original, current) in [
+            (&self.worktree_root, &current.worktree_root),
+            (&self.git_dir, &current.git_dir),
+            (&self.common_dir, &current.common_dir),
+        ] {
+            if let (Some(original), Some(current)) =
+                (original.file_identity(), current.file_identity())
+            {
+                if original != current {
+                    return Err(RepositoryBindingUnavailable);
+                }
+                identity_proven = true;
+            }
+        }
+
+        if identity_proven || original_head_exists {
+            Ok(())
+        } else {
+            Err(RepositoryBindingUnavailable)
+        }
+    }
+}
+
+impl fmt::Display for RepositoryBindingUnavailable {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("仓库绑定不可用，无法证明当前仓库与创建时相同")
+    }
+}
+
+impl std::error::Error for RepositoryBindingUnavailable {}
+
+/// Diff 的固定仓库与 HEAD 旧路径，不包含任何展示参数。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DiffBinding {
+    repository_binding: RepositoryBinding,
+    head_path: RepoPath,
+}
+
+impl DiffBinding {
+    pub fn new(repository_binding: RepositoryBinding, head_path: RepoPath) -> Self {
+        Self {
+            repository_binding,
+            head_path,
+        }
+    }
+
+    pub const fn repository_binding(&self) -> &RepositoryBinding {
+        &self.repository_binding
+    }
+
+    pub const fn head_path(&self) -> &RepoPath {
+        &self.head_path
+    }
+
+    /// 仅在当前事实仍证明同一仓库时刷新 HEAD，失败保留原绑定。
+    pub fn refresh_head(
+        &mut self,
+        current: &RepositoryBinding,
+        original_head_exists: bool,
+    ) -> Result<(), RepositoryBindingUnavailable> {
+        self.repository_binding
+            .revalidate(current, original_head_exists)?;
+        self.repository_binding.head = current.head.clone();
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod repository_tests {
     use super::*;
+    use slterm_path::{CanonicalPath, FileIdentity};
+
+    fn resolved(path: &str, identity: Option<u128>) -> ResolvedPath {
+        ResolvedPath::new(
+            CanonicalPath::new(path).unwrap(),
+            identity.map(|file| FileIdentity { volume: 7, file }),
+        )
+    }
+
+    fn commit(nibble: char) -> CommitId {
+        CommitId::from_str(&nibble.to_string().repeat(40)).unwrap()
+    }
+
+    fn repository(identities: [Option<u128>; 3], head: CommitId) -> RepositoryBinding {
+        let [worktree, git, common] = identities;
+        RepositoryBinding::new(
+            resolved("D:/repo", worktree),
+            resolved("D:/git/repo.git", git),
+            resolved("D:/git/common.git", common),
+            head,
+        )
+    }
 
     /// 固定版本使用完整 SHA-1 或 SHA-256，序列化保持原值。
     #[test]
@@ -160,6 +310,121 @@ mod repository_tests {
         ] {
             assert_eq!(RepoPath::from_str(text), Err(InvalidRepoPath), "{text:?}");
         }
+    }
+
+    /// 绑定保留三个规范目录、可取得身份与创建时 HEAD；Diff 另存旧路径。
+    #[test]
+    fn repository_and_diff_bindings_keep_their_domain_facts() {
+        let binding = repository([Some(1), Some(2), Some(3)], commit('a'));
+        assert_eq!(
+            binding.worktree_root().canonical_path().as_path(),
+            std::path::Path::new("D:/repo")
+        );
+        assert_eq!(
+            binding.git_dir().canonical_path().as_path(),
+            std::path::Path::new("D:/git/repo.git")
+        );
+        assert_eq!(
+            binding.common_dir().canonical_path().as_path(),
+            std::path::Path::new("D:/git/common.git")
+        );
+        assert_eq!(
+            binding.worktree_root().file_identity(),
+            Some(FileIdentity { volume: 7, file: 1 })
+        );
+        assert_eq!(binding.git_dir().file_identity().unwrap().file, 2);
+        assert_eq!(binding.common_dir().file_identity().unwrap().file, 3);
+        assert_eq!(binding.head(), &commit('a'));
+
+        let head_path = RepoPath::from_str("dir/file.md").unwrap();
+        let diff = DiffBinding::new(binding.clone(), head_path.clone());
+        assert_eq!(diff.repository_binding(), &binding);
+        assert_eq!(diff.head_path(), &head_path);
+    }
+
+    /// 复核要求路径不变；HEAD 可移动，但任一可比身份失配即拒绝。
+    #[test]
+    fn repository_revalidation_checks_paths_and_available_identities() {
+        let original = repository([Some(1), Some(2), Some(3)], commit('a'));
+        let moved_head = repository([Some(1), Some(2), Some(3)], commit('b'));
+        assert_eq!(original.revalidate(&moved_head, false), Ok(()));
+
+        let relocated = RepositoryBinding::new(
+            resolved("D:/elsewhere", Some(1)),
+            resolved("D:/git/repo.git", Some(2)),
+            resolved("D:/git/common.git", Some(3)),
+            commit('b'),
+        );
+        assert_eq!(
+            original.revalidate(&relocated, true),
+            Err(RepositoryBindingUnavailable)
+        );
+
+        let replaced = repository([Some(1), Some(2), Some(99)], commit('b'));
+        assert_eq!(
+            original.revalidate(&replaced, true),
+            Err(RepositoryBindingUnavailable)
+        );
+    }
+
+    /// 没有可比目录身份时才以原 HEAD 仍存在作为保守证据。
+    #[test]
+    fn repository_revalidation_uses_original_head_only_as_fallback() {
+        let unidentified = repository([None, None, None], commit('a'));
+        let current = repository([None, None, None], commit('b'));
+        assert_eq!(unidentified.revalidate(&current, true), Ok(()));
+        assert_eq!(
+            unidentified.revalidate(&current, false),
+            Err(RepositoryBindingUnavailable)
+        );
+
+        let lost_identity = repository([Some(1), None, None], commit('a'));
+        assert_eq!(
+            lost_identity.revalidate(&current, false),
+            Err(RepositoryBindingUnavailable)
+        );
+        assert_eq!(lost_identity.revalidate(&current, true), Ok(()));
+
+        let one_matching = repository([Some(1), None, None], commit('b'));
+        assert_eq!(lost_identity.revalidate(&one_matching, false), Ok(()));
+
+        let one_conflicting = repository([Some(1), Some(9), None], commit('b'));
+        let with_conflict = repository([Some(1), Some(2), None], commit('a'));
+        assert_eq!(
+            with_conflict.revalidate(&one_conflicting, false),
+            Err(RepositoryBindingUnavailable)
+        );
+    }
+
+    /// Diff 复核成功后只更新 HEAD；失败不改变已持久绑定。
+    #[test]
+    fn diff_refresh_updates_head_only_after_revalidation() {
+        let mut diff = DiffBinding::new(
+            repository([Some(1), Some(2), Some(3)], commit('a')),
+            RepoPath::from_str("dir/file.md").unwrap(),
+        );
+        let moved = repository([Some(1), Some(2), Some(3)], commit('b'));
+        assert_eq!(diff.refresh_head(&moved, false), Ok(()));
+        assert_eq!(diff.repository_binding().head(), &commit('b'));
+        assert_eq!(diff.head_path().as_str(), "dir/file.md");
+
+        let replaced = repository([Some(1), Some(2), Some(4)], commit('c'));
+        assert_eq!(
+            diff.refresh_head(&replaced, true),
+            Err(RepositoryBindingUnavailable)
+        );
+        assert_eq!(diff.repository_binding().head(), &commit('b'));
+    }
+
+    /// 绑定不可用错误实现标准接口并提供稳定说明。
+    #[test]
+    fn repository_binding_unavailable_describes_the_failure() {
+        fn require_error<T: std::error::Error>() {}
+        require_error::<RepositoryBindingUnavailable>();
+        assert_eq!(
+            RepositoryBindingUnavailable.to_string(),
+            "仓库绑定不可用，无法证明当前仓库与创建时相同"
+        );
     }
 
     /// 解析错误说明规范形状，不回显不可信输入。
