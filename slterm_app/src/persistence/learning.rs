@@ -295,6 +295,20 @@ mod learning_tests {
     }
 
     #[test]
+    fn learning_corruption_pauses_writes_without_overwrite() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = fixture(&temp);
+        fs::create_dir_all(paths.local_root()).unwrap();
+        fs::write(paths.learning_db_path(), b"not-a-sqlite-database").unwrap();
+        let before = fs::read(paths.learning_db_path()).unwrap();
+
+        let result = LearningDatabase::open(&paths);
+
+        assert!(matches!(result, Err(DatabaseError::Corrupt)));
+        assert_eq!(fs::read(paths.learning_db_path()).unwrap(), before);
+    }
+
+    #[test]
     fn learning_rejects_workspace_identity_without_overwrite() {
         let temp = tempfile::tempdir().unwrap();
         let paths = fixture(&temp);
