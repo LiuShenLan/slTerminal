@@ -7,6 +7,7 @@ use rusqlite::{Connection, OptionalExtension, Row, TransactionBehavior, params};
 use serde_json::Value;
 
 use super::database::DatabaseError;
+use super::metadata::store_epoch_is_current;
 use super::operation::{OperationError, attach_operation_journal};
 use super::workspace::WorkspaceDatabase;
 
@@ -143,6 +144,7 @@ pub(crate) enum JournalError {
     UnknownStep,
     StepOutcomeConflict,
     JournalFinalized,
+    StoreEpochConflict,
     InvalidTransition(InvalidJournalTransition),
     InvalidTransitionFacts,
     CorruptRecord,
@@ -159,6 +161,7 @@ impl fmt::Display for JournalError {
             Self::UnknownStep => "Journal 步骤不存在",
             Self::StepOutcomeConflict => "Journal 步骤已记录不同结果指纹",
             Self::JournalFinalized => "Journal 已终态，步骤事实不可改写",
+            Self::StoreEpochConflict => "Journal 世代不是当前工作区世代",
             Self::InvalidTransition(_) => "Journal 状态转换无效",
             Self::InvalidTransitionFacts => "Journal 状态与结果指纹不一致",
             Self::CorruptRecord => "Journal 持久记录损坏",
@@ -224,6 +227,9 @@ impl WorkspaceDatabase {
             .database
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if !store_epoch_is_current(&transaction, &registration.store_epoch)? {
+            return Err(JournalError::StoreEpochConflict);
+        }
         let exists = transaction.query_row(
             "SELECT EXISTS(SELECT 1 FROM managed_journals WHERE journal_id = ?1)",
             [&registration.journal_id],
@@ -318,6 +324,9 @@ impl WorkspaceDatabase {
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let mut journal =
             query_journal(&transaction, journal_id)?.ok_or(JournalError::UnknownJournal)?;
+        if !store_epoch_is_current(&transaction, &journal.store_epoch)? {
+            return Err(JournalError::StoreEpochConflict);
+        }
         journal.status.transition(next)?;
         let changed = transaction.execute(
             "UPDATE managed_journals \
@@ -355,6 +364,9 @@ impl WorkspaceDatabase {
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let journal =
             query_journal(&transaction, journal_id)?.ok_or(JournalError::UnknownJournal)?;
+        if !store_epoch_is_current(&transaction, &journal.store_epoch)? {
+            return Err(JournalError::StoreEpochConflict);
+        }
         if journal.status.is_terminal() {
             return Err(JournalError::JournalFinalized);
         }
@@ -537,10 +549,30 @@ mod journal_tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::persistence::metadata::RunMarker;
     use crate::persistence::operation::{OperationRegistration, RegistrationOutcome};
 
     fn fixture(temp: &TempDir) -> AppPaths {
         AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap()
+    }
+
+    fn begin_run(store: &mut WorkspaceDatabase, store_epoch: &str) {
+        store
+            .begin_run(
+                store_epoch,
+                RunMarker {
+                    run_id: "run-test".into(),
+                    process_id: 1,
+                    process_created_at_ms: 1,
+                },
+            )
+            .unwrap();
+    }
+
+    fn rotate_epoch(store: &mut WorkspaceDatabase, expected: &str, replacement: &str) {
+        store
+            .rotate_store_epoch("run-test", expected, replacement)
+            .unwrap();
     }
 
     fn operation(operation_id: &str, store_epoch: &str) -> OperationRegistration {
@@ -600,6 +632,7 @@ mod journal_tests {
         let temp = tempfile::tempdir().unwrap();
         let paths = fixture(&temp);
         let mut store = WorkspaceDatabase::open(&paths).unwrap();
+        begin_run(&mut store, "epoch-a");
         assert!(matches!(
             store.register_operation(operation("operation-a", "epoch-a")),
             Ok(RegistrationOutcome::Registered(_))
@@ -658,9 +691,10 @@ mod journal_tests {
         let temp = tempfile::tempdir().unwrap();
         let paths = fixture(&temp);
         let mut store = WorkspaceDatabase::open(&paths).unwrap();
+        begin_run(&mut store, "epoch-old");
         let unknown = JournalRegistration {
             operation_id: Some("missing".into()),
-            ..registration("journal-unknown", "epoch-a")
+            ..registration("journal-unknown", "epoch-old")
         };
         assert!(matches!(
             store.register_journal(unknown),
@@ -670,6 +704,7 @@ mod journal_tests {
         let _ = store
             .register_operation(operation("operation-old", "epoch-old"))
             .unwrap();
+        rotate_epoch(&mut store, "epoch-old", "epoch-new");
         let mismatch = JournalRegistration {
             operation_id: Some("operation-old".into()),
             ..registration("journal-mismatch", "epoch-new")
@@ -680,7 +715,7 @@ mod journal_tests {
         ));
 
         let _ = store
-            .register_operation(operation("operation-terminal", "epoch-a"))
+            .register_operation(operation("operation-terminal", "epoch-new"))
             .unwrap();
         let _ = store
             .transition_operation("operation-terminal", OperationStatus::Running, None, None)
@@ -690,7 +725,7 @@ mod journal_tests {
             .unwrap();
         let terminal = JournalRegistration {
             operation_id: Some("operation-terminal".into()),
-            ..registration("journal-terminal", "epoch-a")
+            ..registration("journal-terminal", "epoch-new")
         };
         assert!(matches!(
             store.register_journal(terminal),
@@ -704,6 +739,91 @@ mod journal_tests {
         }
         assert_eq!(journal_count(&store), 0);
         assert_eq!(step_count(&store), 0);
+    }
+
+    #[test]
+    fn journal_registration_requires_initialized_store_epoch() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = fixture(&temp);
+        let mut store = WorkspaceDatabase::open(&paths).unwrap();
+
+        assert!(matches!(
+            store.register_journal(registration("journal-a", "epoch-a")),
+            Err(JournalError::StoreEpochConflict)
+        ));
+        assert_eq!(journal_count(&store), 0);
+        assert_eq!(step_count(&store), 0);
+    }
+
+    #[test]
+    fn journal_registration_rejects_stale_store_epoch() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = fixture(&temp);
+        let mut store = WorkspaceDatabase::open(&paths).unwrap();
+        begin_run(&mut store, "epoch-old");
+        let old_plan = registration("journal-old", "epoch-old");
+        let _ = store.register_journal(old_plan.clone()).unwrap();
+        rotate_epoch(&mut store, "epoch-old", "epoch-new");
+
+        assert!(matches!(
+            store.register_journal(old_plan),
+            Err(JournalError::StoreEpochConflict)
+        ));
+        assert_eq!(journal_count(&store), 1);
+        assert_eq!(step_count(&store), 2);
+
+        let current = store
+            .register_journal(registration("journal-current", "epoch-new"))
+            .unwrap();
+        assert_eq!(current.status, JournalStatus::Prepared);
+        assert_eq!(journal_count(&store), 2);
+        assert_eq!(step_count(&store), 4);
+    }
+
+    #[test]
+    fn journal_transition_rejects_stale_store_epoch() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = fixture(&temp);
+        let mut store = WorkspaceDatabase::open(&paths).unwrap();
+        begin_run(&mut store, "epoch-old");
+        let _ = store
+            .register_journal(registration("journal-old", "epoch-old"))
+            .unwrap();
+        rotate_epoch(&mut store, "epoch-old", "epoch-new");
+
+        assert!(matches!(
+            store.transition_journal("journal-old", JournalStatus::Applying, None),
+            Err(JournalError::StoreEpochConflict)
+        ));
+        assert_eq!(
+            store.journal("journal-old").unwrap().unwrap().status,
+            JournalStatus::Prepared
+        );
+        assert_eq!(store.unfinished_journals().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn journal_step_facts_reject_stale_store_epoch() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = fixture(&temp);
+        let mut store = WorkspaceDatabase::open(&paths).unwrap();
+        begin_run(&mut store, "epoch-old");
+        let _ = store
+            .register_journal(registration("journal-old", "epoch-old"))
+            .unwrap();
+        let _ = store
+            .transition_journal("journal-old", JournalStatus::Applying, None)
+            .unwrap();
+        rotate_epoch(&mut store, "epoch-old", "epoch-new");
+
+        assert!(matches!(
+            store.record_step_after("journal-old", "step-a", [3; 32]),
+            Err(JournalError::StoreEpochConflict)
+        ));
+        assert_eq!(
+            store.journal("journal-old").unwrap().unwrap().steps[0].after_fingerprint,
+            None
+        );
     }
 
     #[test]
@@ -753,6 +873,7 @@ mod journal_tests {
         let temp = tempfile::tempdir().unwrap();
         let paths = fixture(&temp);
         let mut store = WorkspaceDatabase::open(&paths).unwrap();
+        begin_run(&mut store, "epoch-a");
         let cases: [(JournalStatus, &[JournalStatus]); 8] = [
             (JournalStatus::Prepared, &[]),
             (JournalStatus::Applying, &[JournalStatus::Applying]),
@@ -827,6 +948,7 @@ mod journal_tests {
         let temp = tempfile::tempdir().unwrap();
         let paths = fixture(&temp);
         let mut store = WorkspaceDatabase::open(&paths).unwrap();
+        begin_run(&mut store, "epoch-a");
         let _ = store
             .register_journal(registration("journal-a", "epoch-a"))
             .unwrap();
@@ -899,6 +1021,7 @@ mod journal_tests {
         let temp = tempfile::tempdir().unwrap();
         let paths = fixture(&temp);
         let mut store = WorkspaceDatabase::open(&paths).unwrap();
+        begin_run(&mut store, "epoch-a");
         let registered = store
             .register_journal(registration("journal-a", "epoch-a"))
             .unwrap();
@@ -941,6 +1064,7 @@ mod journal_tests {
         let temp = tempfile::tempdir().unwrap();
         let paths = fixture(&temp);
         let mut store = WorkspaceDatabase::open(&paths).unwrap();
+        begin_run(&mut store, "epoch-a");
         let base = registration("journal-a", "epoch-a");
         let cases = vec![
             JournalRegistration {

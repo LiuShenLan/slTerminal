@@ -223,6 +223,17 @@ fn read_metadata(connection: &Connection) -> Result<Option<WorkspaceMetadata>, D
         .transpose()
 }
 
+/// 写事务内复核当前世代；尚未登记运行元数据时同样拒绝写入。
+pub(super) fn store_epoch_is_current(
+    connection: &Connection,
+    store_epoch: &str,
+) -> Result<bool, DatabaseError> {
+    let current = read_metadata(connection)?;
+    Ok(current
+        .as_ref()
+        .is_some_and(|metadata| metadata.store_epoch == store_epoch))
+}
+
 fn decode_metadata(
     raw: (String, String, i64, i64, i64),
 ) -> Result<WorkspaceMetadata, DatabaseError> {

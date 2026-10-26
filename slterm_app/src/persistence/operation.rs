@@ -8,6 +8,7 @@ use serde_json::Value;
 use slterm_runtime_protocol::{InvalidOperationTransition, OperationStatus};
 
 use super::database::DatabaseError;
+use super::metadata::store_epoch_is_current;
 use super::workspace::WorkspaceDatabase;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -92,7 +93,7 @@ impl fmt::Display for OperationError {
             Self::MutationConflict => "幂等键已绑定其他参数",
             Self::OperationIdConflict => "Operation ID 已绑定其他幂等键",
             Self::JournalAttachmentConflict => "Operation 已终态或绑定其他 Journal",
-            Self::StoreEpochConflict => "Operation 与 Journal 的 store_epoch 不一致",
+            Self::StoreEpochConflict => "Operation 世代与当前工作区或 Journal 不一致",
             Self::UnknownOperation => "Operation 不存在",
             Self::InvalidTransition(_) => "Operation 状态转换无效",
             Self::InvalidPayload => "Operation 状态与结果负载不一致",
@@ -145,6 +146,9 @@ impl WorkspaceDatabase {
             .database
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if !store_epoch_is_current(&transaction, &operation.store_epoch)? {
+            return Err(OperationError::StoreEpochConflict);
+        }
         let existing = query_operation(
             &transaction,
             "WHERE store_epoch = ?1 AND client_id = ?2 AND mutation_id = ?3",
@@ -229,6 +233,9 @@ impl WorkspaceDatabase {
         let mut operation =
             query_operation(&transaction, "WHERE operation_id = ?1", [operation_id])?
                 .ok_or(OperationError::UnknownOperation)?;
+        if !store_epoch_is_current(&transaction, &operation.store_epoch)? {
+            return Err(OperationError::StoreEpochConflict);
+        }
         operation.status.transition(next)?;
         let changed = transaction.execute(
             "UPDATE runtime_operations \
@@ -390,12 +397,32 @@ mod operation_tests {
     use serde_json::json;
 
     use super::*;
+    use crate::persistence::metadata::RunMarker;
     use crate::persistence::workspace::WorkspaceDatabase;
     use slterm_path::AppPaths;
     use tempfile::TempDir;
 
     fn fixture(temp: &TempDir) -> AppPaths {
         AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap()
+    }
+
+    fn begin_run(store: &mut WorkspaceDatabase, store_epoch: &str) {
+        store
+            .begin_run(
+                store_epoch,
+                RunMarker {
+                    run_id: "run-test".into(),
+                    process_id: 1,
+                    process_created_at_ms: 1,
+                },
+            )
+            .unwrap();
+    }
+
+    fn rotate_epoch(store: &mut WorkspaceDatabase, expected: &str, replacement: &str) {
+        store
+            .rotate_store_epoch("run-test", expected, replacement)
+            .unwrap();
     }
 
     fn registration(
@@ -430,6 +457,7 @@ mod operation_tests {
         let temp = tempfile::tempdir().unwrap();
         let paths = fixture(&temp);
         let mut store = WorkspaceDatabase::open(&paths).unwrap();
+        begin_run(&mut store, "epoch-a");
         let _ = store
             .register_operation(registration("operation-a", "epoch-a", "mutation-a"))
             .unwrap();
@@ -461,6 +489,7 @@ mod operation_tests {
         let temp = tempfile::tempdir().unwrap();
         let paths = fixture(&temp);
         let mut store = WorkspaceDatabase::open(&paths).unwrap();
+        begin_run(&mut store, "epoch-a");
         let first = store
             .register_operation(registration("operation-a", "epoch-a", "mutation-a"))
             .unwrap();
@@ -505,19 +534,27 @@ mod operation_tests {
     }
 
     #[test]
-    fn operation_store_epoch_isolates_mutation_namespace() {
+    fn operation_store_epoch_rotation_reopens_mutation_namespace() {
         let temp = tempfile::tempdir().unwrap();
         let paths = fixture(&temp);
         let mut store = WorkspaceDatabase::open(&paths).unwrap();
+        begin_run(&mut store, "epoch-old");
 
         let old = store
             .register_operation(registration("operation-old", "epoch-old", "mutation-a"))
             .unwrap();
+        assert!(matches!(old, RegistrationOutcome::Registered(_)));
+        rotate_epoch(&mut store, "epoch-old", "epoch-new");
+
+        assert!(matches!(
+            store.register_operation(registration("operation-stale", "epoch-old", "mutation-a")),
+            Err(OperationError::StoreEpochConflict)
+        ));
+        assert_eq!(operation_count(&store), 1);
+
         let new = store
             .register_operation(registration("operation-new", "epoch-new", "mutation-a"))
             .unwrap();
-
-        assert!(matches!(old, RegistrationOutcome::Registered(_)));
         assert!(matches!(new, RegistrationOutcome::Registered(_)));
         assert_eq!(operation_count(&store), 2);
         assert!(store.operation("operation-old").unwrap().is_some());
@@ -525,10 +562,45 @@ mod operation_tests {
     }
 
     #[test]
+    fn operation_registration_requires_initialized_store_epoch() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = fixture(&temp);
+        let mut store = WorkspaceDatabase::open(&paths).unwrap();
+
+        assert!(matches!(
+            store.register_operation(registration("operation-a", "epoch-a", "mutation-a")),
+            Err(OperationError::StoreEpochConflict)
+        ));
+        assert_eq!(operation_count(&store), 0);
+    }
+
+    #[test]
+    fn operation_transition_rejects_stale_store_epoch() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = fixture(&temp);
+        let mut store = WorkspaceDatabase::open(&paths).unwrap();
+        begin_run(&mut store, "epoch-old");
+        let _ = store
+            .register_operation(registration("operation-old", "epoch-old", "mutation-a"))
+            .unwrap();
+        rotate_epoch(&mut store, "epoch-old", "epoch-new");
+
+        assert!(matches!(
+            store.transition_operation("operation-old", OperationStatus::Running, None, None),
+            Err(OperationError::StoreEpochConflict)
+        ));
+        assert_eq!(
+            store.operation("operation-old").unwrap().unwrap().status,
+            OperationStatus::Queued
+        );
+    }
+
+    #[test]
     fn operation_transitions_persist_terminal_result() {
         let temp = tempfile::tempdir().unwrap();
         let paths = fixture(&temp);
         let mut store = WorkspaceDatabase::open(&paths).unwrap();
+        begin_run(&mut store, "epoch-a");
         let _ = store
             .register_operation(registration("operation-a", "epoch-a", "mutation-a"))
             .unwrap();
@@ -564,6 +636,7 @@ mod operation_tests {
         let temp = tempfile::tempdir().unwrap();
         let paths = fixture(&temp);
         let mut store = WorkspaceDatabase::open(&paths).unwrap();
+        begin_run(&mut store, "epoch-a");
         let _ = store
             .register_operation(registration("operation-a", "epoch-a", "mutation-a"))
             .unwrap();
@@ -596,6 +669,7 @@ mod operation_tests {
         let temp = tempfile::tempdir().unwrap();
         let paths = fixture(&temp);
         let mut store = WorkspaceDatabase::open(&paths).unwrap();
+        begin_run(&mut store, "epoch-a");
         let _ = store
             .register_operation(registration("operation-a", "epoch-a", "mutation-a"))
             .unwrap();
@@ -647,6 +721,7 @@ mod operation_tests {
         let temp = tempfile::tempdir().unwrap();
         let paths = fixture(&temp);
         let mut store = WorkspaceDatabase::open(&paths).unwrap();
+        begin_run(&mut store, "epoch-a");
         let base = registration("operation-a", "epoch-a", "mutation-a");
         let cases = [
             OperationRegistration {
