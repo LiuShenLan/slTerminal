@@ -18,7 +18,7 @@ static WORKSPACE_OBJECTS: [SchemaObject; 21] = [
     SchemaObject {
         kind: "table",
         name: "projects",
-        sql: "CREATE TABLE projects (project_id TEXT PRIMARY KEY, root TEXT NOT NULL UNIQUE, display_name TEXT NOT NULL, sort_order INTEGER NOT NULL, root_status TEXT NOT NULL, next_terminal_number INTEGER NOT NULL CHECK (next_terminal_number >= 0))",
+        sql: "CREATE TABLE projects (project_id TEXT NOT NULL PRIMARY KEY, root TEXT NOT NULL UNIQUE, display_name TEXT NOT NULL, sort_order INTEGER NOT NULL, root_status TEXT NOT NULL, next_terminal_number INTEGER NOT NULL CHECK (next_terminal_number >= 0))",
     },
     SchemaObject {
         kind: "table",
@@ -28,47 +28,47 @@ static WORKSPACE_OBJECTS: [SchemaObject; 21] = [
     SchemaObject {
         kind: "table",
         name: "panel_groups",
-        sql: "CREATE TABLE panel_groups (panel_group_id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(project_id) ON DELETE CASCADE)",
+        sql: "CREATE TABLE panel_groups (panel_group_id TEXT NOT NULL PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(project_id) ON DELETE CASCADE)",
     },
     SchemaObject {
         kind: "table",
         name: "project_layouts",
-        sql: "CREATE TABLE project_layouts (project_id TEXT PRIMARY KEY REFERENCES projects(project_id) ON DELETE CASCADE, dto_version INTEGER NOT NULL, layout_json TEXT NOT NULL, revision INTEGER NOT NULL CHECK (revision >= 0))",
+        sql: "CREATE TABLE project_layouts (project_id TEXT NOT NULL PRIMARY KEY REFERENCES projects(project_id) ON DELETE CASCADE, dto_version INTEGER NOT NULL, layout_json TEXT NOT NULL, revision INTEGER NOT NULL CHECK (revision >= 0))",
     },
     SchemaObject {
         kind: "table",
         name: "documents",
-        sql: "CREATE TABLE documents (document_id TEXT PRIMARY KEY, location_json TEXT NOT NULL, file_identity_json TEXT)",
+        sql: "CREATE TABLE documents (document_id TEXT NOT NULL PRIMARY KEY, location_json TEXT NOT NULL, file_identity_json TEXT)",
     },
     SchemaObject {
         kind: "table",
         name: "terminals",
-        sql: "CREATE TABLE terminals (terminal_id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(project_id) ON DELETE CASCADE, number INTEGER NOT NULL CHECK (number >= 0), cwd TEXT NOT NULL, shell TEXT NOT NULL, custom_title TEXT, run_intent TEXT NOT NULL, UNIQUE (project_id, number))",
+        sql: "CREATE TABLE terminals (terminal_id TEXT NOT NULL PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(project_id) ON DELETE CASCADE, number INTEGER NOT NULL CHECK (number >= 0), cwd TEXT NOT NULL, shell TEXT NOT NULL, custom_title TEXT, run_intent TEXT NOT NULL, UNIQUE (project_id, number))",
     },
     SchemaObject {
         kind: "table",
         name: "view_states",
-        sql: "CREATE TABLE view_states (view_key TEXT PRIMARY KEY, dto_version INTEGER NOT NULL, state_json TEXT NOT NULL, revision INTEGER NOT NULL CHECK (revision >= 0), scope TEXT NOT NULL CHECK (scope = 'application' OR (substr(scope, 1, 8) = 'project:' AND length(scope) > 8)))",
+        sql: "CREATE TABLE view_states (view_key TEXT NOT NULL PRIMARY KEY, dto_version INTEGER NOT NULL, state_json TEXT NOT NULL, revision INTEGER NOT NULL CHECK (revision >= 0), scope TEXT NOT NULL CHECK (scope = 'application' OR (substr(scope, 1, 8) = 'project:' AND length(scope) > 8)))",
     },
     SchemaObject {
         kind: "table",
         name: "diff_bindings",
-        sql: "CREATE TABLE diff_bindings (view_key TEXT PRIMARY KEY, repository_binding_json TEXT NOT NULL, head_path TEXT NOT NULL, revision INTEGER NOT NULL CHECK (revision >= 0))",
+        sql: "CREATE TABLE diff_bindings (view_key TEXT NOT NULL PRIMARY KEY, repository_binding_json TEXT NOT NULL, head_path TEXT NOT NULL, revision INTEGER NOT NULL CHECK (revision >= 0))",
     },
     SchemaObject {
         kind: "table",
         name: "window_geometry",
-        sql: "CREATE TABLE window_geometry (machine_key TEXT PRIMARY KEY, dto_version INTEGER NOT NULL, geometry_json TEXT NOT NULL)",
+        sql: "CREATE TABLE window_geometry (machine_key TEXT NOT NULL PRIMARY KEY, dto_version INTEGER NOT NULL, geometry_json TEXT NOT NULL)",
     },
     SchemaObject {
         kind: "table",
         name: "runtime_operations",
-        sql: "CREATE TABLE runtime_operations (operation_id TEXT PRIMARY KEY, store_epoch TEXT NOT NULL, client_id TEXT NOT NULL, mutation_id TEXT NOT NULL, method TEXT NOT NULL, params_hash BLOB NOT NULL, resource_generations_json TEXT NOT NULL, status TEXT NOT NULL, result_json TEXT, error_json TEXT, journal_id TEXT REFERENCES managed_journals(journal_id), UNIQUE (store_epoch, client_id, mutation_id))",
+        sql: "CREATE TABLE runtime_operations (operation_id TEXT NOT NULL PRIMARY KEY, store_epoch TEXT NOT NULL, client_id TEXT NOT NULL, mutation_id TEXT NOT NULL, method TEXT NOT NULL, params_hash BLOB NOT NULL, resource_generations_json TEXT NOT NULL, status TEXT NOT NULL, result_json TEXT, error_json TEXT, journal_id TEXT REFERENCES managed_journals(journal_id), UNIQUE (store_epoch, client_id, mutation_id))",
     },
     SchemaObject {
         kind: "table",
         name: "managed_journals",
-        sql: "CREATE TABLE managed_journals (journal_id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL, store_epoch TEXT NOT NULL, before_fingerprint BLOB, after_fingerprint BLOB)",
+        sql: "CREATE TABLE managed_journals (journal_id TEXT NOT NULL PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL, store_epoch TEXT NOT NULL, before_fingerprint BLOB, after_fingerprint BLOB)",
     },
     SchemaObject {
         kind: "table",
@@ -83,7 +83,7 @@ static WORKSPACE_OBJECTS: [SchemaObject; 21] = [
     SchemaObject {
         kind: "table",
         name: "quarantine_batches",
-        sql: "CREATE TABLE quarantine_batches (batch_id TEXT PRIMARY KEY, status TEXT NOT NULL, absolute_deadline_ms INTEGER NOT NULL CHECK (absolute_deadline_ms >= 0), completed_at_ms INTEGER CHECK (completed_at_ms >= 0), fingerprint BLOB)",
+        sql: "CREATE TABLE quarantine_batches (batch_id TEXT NOT NULL PRIMARY KEY, status TEXT NOT NULL, absolute_deadline_ms INTEGER NOT NULL CHECK (absolute_deadline_ms >= 0), completed_at_ms INTEGER CHECK (completed_at_ms >= 0), fingerprint BLOB)",
     },
     SchemaObject {
         kind: "table",
@@ -98,12 +98,12 @@ static WORKSPACE_OBJECTS: [SchemaObject; 21] = [
     SchemaObject {
         kind: "table",
         name: "maintenance_requests",
-        sql: "CREATE TABLE maintenance_requests (request_id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL, staged_fingerprint BLOB NOT NULL, store_epoch TEXT NOT NULL, staged_path TEXT NOT NULL)",
+        sql: "CREATE TABLE maintenance_requests (request_id TEXT NOT NULL PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL, staged_fingerprint BLOB NOT NULL, store_epoch TEXT NOT NULL, staged_path TEXT NOT NULL)",
     },
     SchemaObject {
         kind: "table",
         name: "snapshot_index",
-        sql: "CREATE TABLE snapshot_index (document_id TEXT PRIMARY KEY, file_fingerprint BLOB NOT NULL, status TEXT NOT NULL, scan_generation INTEGER NOT NULL CHECK (scan_generation >= 0), snapshot_path TEXT NOT NULL)",
+        sql: "CREATE TABLE snapshot_index (document_id TEXT NOT NULL PRIMARY KEY, file_fingerprint BLOB NOT NULL, status TEXT NOT NULL, scan_generation INTEGER NOT NULL CHECK (scan_generation >= 0), snapshot_path TEXT NOT NULL)",
     },
     SchemaObject {
         kind: "index",
@@ -537,6 +537,78 @@ mod workspace_tests {
         assert!(batch_delete.is_err());
         assert!(document_delete.is_ok());
         assert_eq!(snapshot_count, 1);
+    }
+
+    #[test]
+    fn workspace_text_primary_keys_reject_null() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = fixture(&temp);
+        let store = WorkspaceDatabase::open(&paths).unwrap();
+        let connection = &store.database.connection;
+        connection
+            .pragma_update(None, "foreign_keys", false)
+            .unwrap();
+        let cases = [
+            (
+                "projects",
+                "INSERT INTO projects (project_id, root, display_name, sort_order, root_status, next_terminal_number) VALUES (NULL, 'D:/null', 'Null', 0, 'ready', 0)",
+            ),
+            (
+                "panel_groups",
+                "INSERT INTO panel_groups (panel_group_id, project_id) VALUES (NULL, 'project-test')",
+            ),
+            (
+                "project_layouts",
+                "INSERT INTO project_layouts (project_id, dto_version, layout_json, revision) VALUES (NULL, 1, '{}', 0)",
+            ),
+            (
+                "documents",
+                "INSERT INTO documents (document_id, location_json) VALUES (NULL, '{}')",
+            ),
+            (
+                "terminals",
+                "INSERT INTO terminals (terminal_id, project_id, number, cwd, shell, run_intent) VALUES (NULL, 'project-test', 0, 'D:/', 'pwsh', 'reuse')",
+            ),
+            (
+                "view_states",
+                "INSERT INTO view_states (view_key, dto_version, state_json, revision, scope) VALUES (NULL, 1, '{}', 0, 'application')",
+            ),
+            (
+                "diff_bindings",
+                "INSERT INTO diff_bindings (view_key, repository_binding_json, head_path, revision) VALUES (NULL, '{}', '', 0)",
+            ),
+            (
+                "window_geometry",
+                "INSERT INTO window_geometry (machine_key, dto_version, geometry_json) VALUES (NULL, 1, '{}')",
+            ),
+            (
+                "runtime_operations",
+                "INSERT INTO runtime_operations (operation_id, store_epoch, client_id, mutation_id, method, params_hash, resource_generations_json, status) VALUES (NULL, 'epoch', 'client', 'mutation', 'method', x'00', '{}', 'queued')",
+            ),
+            (
+                "managed_journals",
+                "INSERT INTO managed_journals (journal_id, kind, status, store_epoch) VALUES (NULL, 'document.save', 'Prepared', 'epoch')",
+            ),
+            (
+                "quarantine_batches",
+                "INSERT INTO quarantine_batches (batch_id, status, absolute_deadline_ms) VALUES (NULL, 'Prepared', 0)",
+            ),
+            (
+                "maintenance_requests",
+                "INSERT INTO maintenance_requests (request_id, kind, status, staged_fingerprint, store_epoch, staged_path) VALUES (NULL, 'restore', 'Prepared', x'00', 'epoch', 'staged')",
+            ),
+            (
+                "snapshot_index",
+                "INSERT INTO snapshot_index (document_id, file_fingerprint, status, scan_generation, snapshot_path) VALUES (NULL, x'00', 'ready', 0, 'snapshot')",
+            ),
+        ];
+
+        let accepted = cases
+            .iter()
+            .filter_map(|(table, sql)| connection.execute(sql, []).is_ok().then_some(*table))
+            .collect::<Vec<_>>();
+
+        assert!(accepted.is_empty(), "接受 NULL 主键：{accepted:?}");
     }
 
     #[test]
