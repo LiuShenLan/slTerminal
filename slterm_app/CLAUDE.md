@@ -17,7 +17,7 @@
 - **加密备份边界**：备份白名单即安全边界；只读写登记的类别与主题目录。凭据值、AI 会话库、任意 home 路径永不进出包。恢复序固定为「完整鉴权 → 全量校验 → 落盘」，任一条不过整单拒写。敏感键导出剥除 + 导入复验双闸；备份魔数同时作加密 AAD。
 - **agent 目录沙箱**：agent 全局目录由后端静态表定义，前端不能注入任意路径；沙箱放行域 = project_root ∪ agent 目录集，canonicalize 双向比较；pinned watcher 在项目切换时不被暂停。原因：agent 配置文件在项目根外，但读取必须仍走同一沙箱命令族。边界：不得为 agent 文件建第二套读取通道。
 - **主题与外观**：内置主题为暗色目录，Linear 为默认，未知/退休 id 回退 Linear；主题校验在 `slterm_settings`。`BlurMode` 与透明度是外观设置，平台调用只在平台封装模块，静默启动不得闪现/抢焦点。
-- **i18n 合同**：`en-US`/`zh-CN` 目录 JSON 构建期展平为 typed 键；翻译键集是硬合同（缺键/多余键构建期红）。`LanguagePref` 支持系统/英文/中文，系统按 locale 协商。
+- **i18n 合同**：`en-US`/`zh-CN` 目录 JSON 构建期展平为 typed 键；翻译键集是硬合同（缺键/多余键构建期红）。运行时只经 `Message` 查询，禁止字符串键、英文文案反查或双语即时分支等第二翻译通道。`LanguagePref` 支持系统/英文/中文，系统按 locale 协商，未知 locale 回退英文。
 - **数据目录**：app 侧只委托 `slterm_settings::paths`，不自行推导；默认 `%APPDATA%\slterm`，`SLTERM_CONFIG_DIR` 优先。
 
 ## 验收与测试

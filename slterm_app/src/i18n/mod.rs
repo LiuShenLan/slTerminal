@@ -1,9 +1,8 @@
 //! 界面语言查询 API:typed `Message` 是唯一入口,查表零分配。
 //!
 //! 生成物经 `include!` 进入本模块:运行时零解析、零文件读、零锁。
-//! `text` 走表索引直取;`pick` 是中英即时分支的渐进迁移桥;`tr` 是字符串
-//! 键兼容层;`format` 是唯一允许创建 `String` 的翻译路径。
-//! 桥不是继续堆双语硬编码的理由——新代码一律 `text(Message::…)`。
+//! `text` 走表索引直取;`format` 是唯一允许创建 `String` 的翻译路径。
+//! 新代码与既有代码都不得引入字符串键或英文文案反查通道。
 
 mod format;
 mod locale;
@@ -46,38 +45,9 @@ impl UiLanguage {
         MESSAGES[self as usize][message as usize]
     }
 
-    /// 旧双语硬编码迁移桥:中英即时分支;未来新增语言经 `source_id` 反查,
-    /// 歧义英文短语不生成反查项,无命中直用原文。当前两语均走即时分支。
-    #[allow(dead_code)] // 消费点:合同测试;壳内存量双语已收编,桥保留不扩大。
-    pub fn pick<'text>(self, zh_cn: &'text str, en_us: &'text str) -> &'text str {
-        if self == Self::ZhCn {
-            return zh_cn;
-        }
-        if self == Self::EnUs {
-            return en_us;
-        }
-        source_id(en_us)
-            .map(|message| self.text(message))
-            .unwrap_or(en_us)
-    }
-
-    /// 字符串键兼容层;未知键原样返回(便于逐步迁移)。
-    #[allow(dead_code)] // 消费点:合同测试;新代码一律 typed `text`。
-    pub fn tr(self, key: &'static str) -> &'static str {
-        message_id(key)
-            .map(|message| self.text(message))
-            .unwrap_or(key)
-    }
-
     /// 带参数翻译:唯一允许创建 `String` 的翻译路径。
     pub fn format(self, message: Message, args: &[(&str, &str)]) -> String {
         format::substitute(self.text(message), args)
-    }
-
-    /// 字符串键 + 参数(兼容层)。
-    #[allow(dead_code)] // 消费点:合同测试;新代码一律 typed `format`。
-    pub fn tr_args(self, key: &'static str, args: &[(&str, &str)]) -> String {
-        format::substitute(self.tr(key), args)
     }
 }
 
@@ -120,9 +90,9 @@ mod i18n_tests {
         assert_eq!(UiLanguage::for_locale(None), UiLanguage::EnUs);
     }
 
-    /// typed 查询与字符串键兼容层读到同一份表。
+    /// typed 查询直接读取对应语言目录。
     #[test]
-    fn typed_and_compatibility_lookups_agree() {
+    fn typed_lookup_reads_each_language_catalog() {
         assert_eq!(
             UiLanguage::ZhCn.text(Message::SettingsSidebarAppearance),
             "外观"
@@ -130,24 +100,6 @@ mod i18n_tests {
         assert_eq!(
             UiLanguage::EnUs.text(Message::SettingsSidebarAppearance),
             "Appearance"
-        );
-        for language in UiLanguage::ALL {
-            assert_eq!(
-                language.tr("settings.sidebar.appearance"),
-                language.text(Message::SettingsSidebarAppearance)
-            );
-            assert_eq!(language.tr("missing.message.id"), "missing.message.id");
-        }
-    }
-
-    /// 迁移桥:中英即时分支;未迁移文案按语言各自取原值。
-    #[test]
-    fn inline_migration_preserves_bilingual_text_and_english_fallback() {
-        assert_eq!(UiLanguage::ZhCn.pick("网络", "Network"), "网络");
-        assert_eq!(UiLanguage::EnUs.pick("网络", "Network"), "Network");
-        assert_eq!(
-            UiLanguage::EnUs.pick("未迁移文案", "Unmigrated text"),
-            "Unmigrated text"
         );
     }
 
@@ -176,15 +128,6 @@ mod i18n_tests {
         assert_eq!(
             UiLanguage::EnUs.format(Message::SettingsStatusOperationFailed, &[]),
             "Settings operation failed: {error}"
-        );
-    }
-
-    /// 字符串键 + 参数兼容层。
-    #[test]
-    fn tr_args_matches_typed_format() {
-        assert_eq!(
-            UiLanguage::ZhCn.tr_args("settings.status.operation_failed", &[("error", "boom")]),
-            UiLanguage::ZhCn.format(Message::SettingsStatusOperationFailed, &[("error", "boom")])
         );
     }
 }

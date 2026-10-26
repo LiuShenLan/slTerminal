@@ -5,8 +5,7 @@
 //! - en-US 与 zh-CN 键集完全相同且非空(不等即构建失败);
 //! - 每语言键集不得超出英文;命名占位符集合跨语言一致;
 //! - message id 合法 + 变体名不碰撞;重复 id/空串/非字符串/嵌套与点号
-//!   冲突全部拒绝;
-//! - source_id 反查只在所有语言同义时生成(歧义短语不借翻译)。
+//!   冲突全部拒绝;运行时只经 typed `Message` 查询。
 //!
 //! 部分目录构建期回退英文(缺失键直接填英文值),运行时不做回退逻辑;
 //! 当前两语均走完整键集硬合同,回退分支是机制保留。
@@ -124,39 +123,7 @@ pub fn generate(directory: &Path, output: &Path) -> Result<(), String> {
         )
         .unwrap();
     }
-    code.push_str(
-        "}}}\n#[allow(dead_code)]\nfn message_id(key: &str) -> Option<Message> { match key {\n",
-    );
-    for key in &keys {
-        writeln!(code, "{key:?} => Some(Message::{}),", message_variant(key)?).unwrap();
-    }
-    code.push_str("_ => None,\n}}\n");
-    let mut aliases = BTreeMap::new();
-    let mut ambiguous = BTreeSet::new();
-    for (index, key) in keys.iter().enumerate() {
-        let source = &english[*key];
-        if let Some(previous) = aliases.insert(source, index)
-            && catalogs
-                .values()
-                .any(|messages| messages.get(*key) != messages.get(keys[previous]))
-        {
-            ambiguous.insert(source);
-        }
-    }
-    code.push_str(
-        "#[allow(dead_code)]\nfn source_id(english: &str) -> Option<Message> { match english {\n",
-    );
-    for (source, index) in aliases {
-        if !ambiguous.contains(source) {
-            writeln!(
-                code,
-                "{source:?} => Some(Message::{}),",
-                message_variant(keys[index])?
-            )
-            .unwrap();
-        }
-    }
-    code.push_str("_ => None,\n}}\n");
+    code.push_str("}}}\n");
     // 常量数组在 debug profile 可能落到调用方栈上;共享查表固定一份静态分配。
     writeln!(
         code,
@@ -269,6 +236,15 @@ mod generator_tests {
         assert!(source.contains("\"你好 {name}\","));
     }
 
+    /// 生成物只暴露 typed 消息目录，不生成字符串键或英文反查通道。
+    #[test]
+    fn generated_catalog_is_typed_only_without_string_lookup() {
+        let source = fixture(r#"{"greeting":"Hello"}"#, r#"{"greeting":"你好"}"#).unwrap();
+        for forbidden in ["fn message_id", "fn source_id"] {
+            assert!(!source.contains(forbidden), "{forbidden}");
+        }
+    }
+
     /// 部分目录的回退机制在构建期取英文值(运行时不做回退)。
     #[test]
     fn partial_catalogs_fall_back_to_english_at_build_time() {
@@ -310,18 +286,6 @@ mod generator_tests {
             fixture(r#"{"bad..id":"A"}"#, r#"{"bad..id":"B"}"#).is_err(),
             "非法 id 必须拒绝"
         );
-    }
-
-    /// 同一英文短语在不同语言里译义不同 → 不生成 source_id 反查。
-    #[test]
-    fn ambiguous_source_phrases_require_contextual_ids() {
-        let source = fixture(
-            r#"{"verb":"Open","state":"Open"}"#,
-            r#"{"verb":"打开","state":"打开状态"}"#,
-        )
-        .unwrap();
-        assert!(!source.contains("\"Open\" => Some("));
-        assert!(source.contains("\"verb\" => Some(Message::Verb)"));
     }
 
     /// 重复键/嵌套点号冲突/非字符串/空串全拒。

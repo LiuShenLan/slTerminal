@@ -49,7 +49,16 @@ unsafe impl GlobalAlloc for CountingAllocator {
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
 
-/// 合同一:首次与重复查询均零分配(typed 直取 / 字符串键 / 迁移桥)。
+/// 运行时只保留 typed 查询，禁止字符串键与英文反查兼容入口。
+#[test]
+fn runtime_catalog_is_typed_only_without_compatibility_entrypoints() {
+    let source = include_str!("../src/i18n/mod.rs");
+    for forbidden in ["pub fn pick", "pub fn tr(", "pub fn tr_args"] {
+        assert!(!source.contains(forbidden), "{forbidden}");
+    }
+}
+
+/// 合同一:首次与重复 typed 查询均零分配。
 #[test]
 fn first_and_repeated_translation_lookups_allocate_nothing() {
     ALLOCATIONS.with(|count| count.set(0));
@@ -59,9 +68,6 @@ fn first_and_repeated_translation_lookups_allocate_nothing() {
             black_box(language.text(black_box(i18n::Message::SettingsSidebarAppearance)));
             black_box(language.text(black_box(i18n::Message::SettingsTitle)));
             black_box(language.text(black_box(i18n::Message::SettingsPlaceholderFontFamily)));
-            black_box(language.tr(black_box("settings.sidebar.appearance")));
-            black_box(language.pick(black_box("外观"), black_box("Appearance")));
-            black_box(language.pick(black_box("新文案"), black_box("Unmigrated text")));
         }
     }
     TRACK_ALLOCATIONS.with(|tracking| tracking.set(false));
@@ -80,16 +86,6 @@ fn translation_lookup_fits_a_small_stack() {
                     assert!(
                         !black_box(language)
                             .text(black_box(i18n::Message::SettingsTitle))
-                            .is_empty()
-                    );
-                    assert!(
-                        !black_box(language)
-                            .tr(black_box("settings.title"))
-                            .is_empty()
-                    );
-                    assert!(
-                        !black_box(language)
-                            .pick(black_box("外观"), black_box("Appearance"))
                             .is_empty()
                     );
                 }
@@ -128,9 +124,9 @@ fn embedded_translations_stay_within_the_initial_payload_budget() {
     const { assert!(i18n::MESSAGE_COUNT >= 150) };
 }
 
-/// 查询层语义:locale 协商回退与 typed/字符串键一致。
+/// 查询层语义:locale 协商回退与 typed 格式化。
 #[test]
-fn resolved_locale_and_compatibility_lookups_agree() {
+fn resolved_locale_and_typed_formatting_follow_the_catalog() {
     assert_eq!(
         i18n::UiLanguage::for_locale(Some("en-GB")),
         i18n::UiLanguage::EnUs
@@ -144,15 +140,18 @@ fn resolved_locale_and_compatibility_lookups_agree() {
         i18n::UiLanguage::EnUs
     );
     assert_eq!(
-        i18n::UiLanguage::ZhCn.tr("settings.sidebar.appearance"),
+        i18n::UiLanguage::ZhCn.text(i18n::Message::SettingsSidebarAppearance),
         "外观"
     );
     assert_eq!(
-        i18n::UiLanguage::EnUs.tr("settings.sidebar.appearance"),
+        i18n::UiLanguage::EnUs.text(i18n::Message::SettingsSidebarAppearance),
         "Appearance"
     );
     assert_eq!(
-        i18n::UiLanguage::EnUs.tr_args("settings.status.operation_failed", &[("error", "boom")]),
+        i18n::UiLanguage::EnUs.format(
+            i18n::Message::SettingsStatusOperationFailed,
+            &[("error", "boom")]
+        ),
         "Settings operation failed: boom"
     );
 }
