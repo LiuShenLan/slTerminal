@@ -44,8 +44,10 @@ pub use scrolling::{
     DEFAULT_SCROLL_SPEED, DEFAULT_SCROLLBACK_LINES, MAX_SCROLL_SPEED, MIN_SCROLL_SPEED,
     SCROLL_SPEED_STEP, SCROLLBACK_VALUES, normalize_scroll_speed,
 };
+mod theme_tokens;
 mod themes;
 pub use language::{LanguageInfo, LanguagePref};
+pub use theme_tokens::{Ansi16, ThemeTokenError, ThemeTokens};
 pub use themes::{FreshPalette, ReviewedPalette};
 
 use json::Value;
