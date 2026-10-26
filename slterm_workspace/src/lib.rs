@@ -3,6 +3,8 @@
 #![forbid(unsafe_code)]
 
 mod identity;
+mod panel;
 mod side_view;
 pub use identity::{PanelGroupId, ProjectId, StableIdError, TerminalId};
+pub use panel::{PanelId, PanelIdAllocator, PanelIdExhausted};
 pub use side_view::{SideViewId, UnknownSideViewId};
