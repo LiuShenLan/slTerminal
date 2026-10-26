@@ -13,7 +13,7 @@
 ## 验收与测试
 
 - 定向测试：`cargo test -p slterm --test lib_tests persistence -- --test-threads=1`。
-- 临时真实 SQLite 覆盖 schema、WAL、外键、单行与幂等约束、事务回滚、当前／高版本分流、损坏不改写和 Online Backup。
+- 临时真实 SQLite 覆盖 schema、WAL、外键、单行与幂等约束、事务回滚、当前／高版本分流和损坏不改写；工作区另行覆盖 Online Backup，学习库覆盖去重、UTF-8 字节上限与学习代次，且不出现副本／导出 API。
 
 ## 操作
 
