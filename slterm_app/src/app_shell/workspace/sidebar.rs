@@ -13,7 +13,7 @@
 //! 持久化面(归 session 所有),既有字段追加一律走 `serde(default)`。
 //!
 //! 视图形状收缩为封闭集 [`SideViewId`]:按钮列表由 [`side_view_defs`] 每帧
-//! 重建,槽位归属由 [`SideViewId::zone`] 单点裁定(本模块无拖拽换区)。
+//! 重建,槽位归属由 [`SideViewIdExt::zone`] 单点裁定(本模块无拖拽换区)。
 //!
 //! 双槽同时打开时按 `ratio_permille` 分配高度,中间分隔条可拖拽。
 //! 拖拽沿用宽度热区的 overlay 方案:手势期间只改千分比并重绘,终端网格
@@ -27,6 +27,8 @@ use gpui::{
 };
 use gpui_component::{ActiveTheme as _, Icon, IconName};
 use serde::{Deserialize, Serialize};
+
+pub(crate) use slterm_workspace::SideViewId;
 
 use super::SltermWorkspace;
 use crate::app_shell::config::Settings;
@@ -81,54 +83,21 @@ pub(super) enum SidebarLayout {
     Split,
 }
 
-/// 侧栏视图封闭集(旧栈注册序:nav/explorer/commit/agentFiles)。
-///
-/// 内容归属:nav 数据源归导航树,explorer/commit 归文件树与提交视图,
-/// agentFiles 归 AI 集成。图标归主题体系,本模块只登记 id + title。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum SideViewId {
-    Nav,
-    Explorer,
-    Commit,
-    AgentFiles,
+/// core 身份到本壳展示规则的扩展；规范文本仍由 core 单一解析。
+trait SideViewIdExt {
+    fn from_id(id: &str) -> Option<Self>
+    where
+        Self: Sized;
+    fn title(self) -> Message;
+    fn zone(self) -> SidebarZone;
 }
 
-impl SideViewId {
-    /// 封闭集全集,注册序。对齐与按钮渲染共用这一处真值源。
-    pub(super) const ALL: [SideViewId; 4] = [
-        SideViewId::Nav,
-        SideViewId::Explorer,
-        SideViewId::Commit,
-        SideViewId::AgentFiles,
-    ];
-
-    /// 持久化/调试短名(与 serde snake_case 同形)。
-    pub(super) const fn id_str(self) -> &'static str {
-        match self {
-            Self::Nav => "nav",
-            Self::Explorer => "explorer",
-            Self::Commit => "commit",
-            Self::AgentFiles => "agent_files",
-        }
+impl SideViewIdExt for SideViewId {
+    fn from_id(id: &str) -> Option<Self> {
+        id.parse().ok()
     }
 
-    /// 从持久化短名解析;未注册 id 返回 None(的输入侧防线)。
-    ///
-    /// 兼容旧产品面 camelCase 的 `agentFiles` 写法:会话文件可手工编辑,
-    /// 未知/旧写法一律退回未打开而不是整份会话拒收。
-    pub(super) fn from_id(id: &str) -> Option<Self> {
-        match id {
-            "nav" => Some(Self::Nav),
-            "explorer" => Some(Self::Explorer),
-            "commit" => Some(Self::Commit),
-            "agent_files" | "agentFiles" => Some(Self::AgentFiles),
-            _ => None,
-        }
-    }
-
-    /// 显示名(侧栏槽标题/ActivityBar 按钮占位文案);语言解析归渲染点。
-    pub(super) const fn title(self) -> Message {
+    fn title(self) -> Message {
         match self {
             Self::Nav => Message::SidebarViewNav,
             Self::Explorer => Message::SidebarViewExplorer,
@@ -137,9 +106,7 @@ impl SideViewId {
         }
     }
 
-    /// 槽位归属单点。本模块无按钮拖拽换区(旧栈 -归后续),固定:
-    /// 上槽 = nav/explorer/commit(旧栈 DEFAULT_ZONES 上区),下槽 = agentFiles。
-    pub(super) const fn zone(self) -> SidebarZone {
+    fn zone(self) -> SidebarZone {
         match self {
             Self::AgentFiles => SidebarZone::Bottom,
             Self::Nav | Self::Explorer | Self::Commit => SidebarZone::Top,
@@ -167,7 +134,7 @@ pub(super) fn side_view_defs() -> [SideViewDef; 4] {
 /// 已裁归 session:字段直接进 session schema 跟现场恢复,不是设置域
 /// 偏好。宽度用 f32 逻辑像素,载入时 clamp 到旧栈区间;双槽比例用千分比
 /// 整数(上槽占比),与分屏树 `ratio_permille` 同口径,避免 f32 序列化噪声。
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct SidebarState {
     pub collapsed: bool,
     pub active_view_top: Option<SideViewId>,
@@ -186,6 +153,31 @@ impl Default for SidebarState {
             width: SIDEBAR_WIDTH_DEFAULT,
             ratio_permille: SIDEBAR_SPLIT_RATIO_DEFAULT,
         }
+    }
+}
+
+impl Serialize for SidebarState {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        #[derive(Serialize)]
+        struct RawSidebar {
+            collapsed: bool,
+            active_view_top: Option<&'static str>,
+            active_view_bottom: Option<&'static str>,
+            width: f32,
+            ratio_permille: u16,
+        }
+
+        RawSidebar {
+            collapsed: self.collapsed,
+            active_view_top: self.active_view_top.map(|id| id.id_str()),
+            active_view_bottom: self.active_view_bottom.map(|id| id.id_str()),
+            width: self.width,
+            ratio_permille: self.ratio_permille,
+        }
+        .serialize(serializer)
     }
 }
 
@@ -979,16 +971,13 @@ mod sidebar_state_tests {
         );
     }
 
-    /// 封闭集解析:已注册短名可用,未知 id 回 None,旧 camelCase 兼容。
+    /// 封闭集解析只接受已登记的规范短名。
     #[test]
     fn side_view_ids_parse_closed_set_names_only() {
         for id in SideViewId::ALL {
             assert_eq!(SideViewId::from_id(id.id_str()), Some(id));
         }
-        assert_eq!(
-            SideViewId::from_id("agentFiles"),
-            Some(SideViewId::AgentFiles)
-        );
+        assert_eq!(SideViewId::from_id("agentFiles"), None);
         assert_eq!(SideViewId::from_id("obsolete"), None);
     }
 

@@ -6137,6 +6137,7 @@ dependencies = [
  "slterm-split",
  "slterm_completions",
  "slterm_terminal",
+ "slterm_workspace",
  "tempfile",
  "toml 0.8.23",
  "toml_edit 0.25.17+spec-1.1.0",
