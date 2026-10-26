@@ -77,6 +77,10 @@ pub(crate) mod math;
 // 系统 toast 投递在 platform::notifications。
 pub(crate) mod notify;
 pub(crate) mod panic;
+// SQLite 持久化适配：连接、schema、损坏分流与 Online Backup；
+// 生产消费点归启动协调器与专用写线程，不在 GPUI 前台打开或写入。
+#[allow(dead_code)]
+pub(crate) mod persistence;
 // DeepSeek/Kimi 套餐响应解析与展示值类型;不读取 CLI 认证材料。
 #[allow(dead_code)] // 纯解析层尚无生产调用方;解析语义由单元测试锁定。
 pub(crate) mod plan_balance;
