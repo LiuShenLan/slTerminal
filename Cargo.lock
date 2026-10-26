@@ -6209,6 +6209,7 @@ dependencies = [
  "tree-sitter-typescript",
  "tree-sitter-xml",
  "tree-sitter-yaml",
+ "uuid",
 ]
 
 [[package]]
@@ -6267,6 +6268,7 @@ dependencies = [
  "slterm-split",
  "slterm_document",
  "slterm_path",
+ "uuid",
 ]
 
 [[package]]

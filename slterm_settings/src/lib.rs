@@ -15,12 +15,14 @@ mod agent_hooks;
 pub use agent_hooks::AgentHook;
 mod cursor_motion;
 mod custom_theme;
+mod identity;
 pub use cursor_motion::CursorMotion;
 pub use custom_theme::{
     IndexedPalette, TerminalThemeColors, ThemeContrastError, ThemeDefinition, ThemeEffects,
     ThemeLayout, ThemeTypography, ThemeUiColors, ThemeValidationError, WCAG_GRAPHICS_CONTRAST,
     WCAG_TEXT_CONTRAST, foreground_recommendations, meets_wcag_aa, wcag_contrast_ratio,
 };
+pub use identity::{AgentRootId, StableIdError, ThemeId};
 pub mod diagnostics;
 pub mod json;
 pub mod keys;

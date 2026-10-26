@@ -12,6 +12,7 @@ name = "lib_tests"
 path = "src/lib.rs"
 
 [dependencies]
+uuid = { version = "=1.28.0", default-features = false }
 
 [dev-dependencies]
 tree-sitter = "=0.27.1"
