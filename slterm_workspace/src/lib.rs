@@ -2,10 +2,15 @@
 
 #![forbid(unsafe_code)]
 
+mod diff_binding;
 mod identity;
 mod panel;
+mod repository_dto;
 mod side_view;
 mod view_key;
+pub use diff_binding::{
+    DiffBindingError, diff_binding_from_canonical_json, diff_binding_to_canonical_json,
+};
 pub use identity::{PanelGroupId, ProjectId, StableIdError, TerminalId};
 pub use panel::{PanelId, PanelIdAllocator, PanelIdExhausted};
 pub use side_view::{SideViewId, UnknownSideViewId};

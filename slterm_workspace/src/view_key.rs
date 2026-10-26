@@ -5,8 +5,8 @@ use std::str::FromStr;
 use serde::Deserialize;
 use serde_json::Value;
 use slterm_document::{CommitId, DocumentId, RepoPath, RepositoryBinding};
-use slterm_path::{CanonicalPath, FileIdentity, ResolvedPath};
 
+use crate::repository_dto::{self, RepositoryBindingDto, RepositoryDtoError};
 use crate::{ProjectId, SideViewId, TerminalId};
 
 const VIEW_KEY_VERSION: u64 = 1;
@@ -58,6 +58,16 @@ pub enum ViewKeyError {
     NonUnicodePath,
     /// 已构造的规范 JSON 值无法编码。
     Encode,
+}
+
+impl From<RepositoryDtoError> for ViewKeyError {
+    fn from(error: RepositoryDtoError) -> Self {
+        match error {
+            RepositoryDtoError::InvalidStructure => Self::InvalidStructure,
+            RepositoryDtoError::NonUnicodePath => Self::NonUnicodePath,
+            RepositoryDtoError::Encode => Self::Encode,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -162,7 +172,7 @@ impl ViewKey {
                 object.insert("repo_path", Value::String(repo_path.to_string()));
                 object.insert(
                     "repository_binding",
-                    repository_binding_to_value(repository_binding)?,
+                    repository_dto::to_value(repository_binding)?,
                 );
             }
             Self::Settings { project_id } => {
@@ -224,30 +234,6 @@ struct ViewKeyDto {
     side_view_id: Option<String>,
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RepositoryBindingDto {
-    worktree_root: RepositoryPathDto,
-    git_dir: RepositoryPathDto,
-    common_dir: RepositoryPathDto,
-    head: String,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RepositoryPathDto {
-    path: String,
-    #[serde(deserialize_with = "deserialize_nullable")]
-    identity: Option<FileIdentityDto>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct FileIdentityDto {
-    volume: u64,
-    file: String,
-}
-
 /// 区分字段缺失与显式 null：只有缺失由外层默认值表示。
 fn deserialize_present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where
@@ -255,15 +241,6 @@ where
     T: Deserialize<'de>,
 {
     T::deserialize(deserializer).map(Some)
-}
-
-/// 可空字段仍必须出现，避免缺失字段被静默当成空身份。
-fn deserialize_nullable<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-    T: Deserialize<'de>,
-{
-    Option::<T>::deserialize(deserializer)
 }
 
 const PROJECT_FIELD: u16 = 1 << 0;
@@ -358,47 +335,6 @@ impl ViewKeyDto {
     }
 }
 
-impl RepositoryBindingDto {
-    fn into_domain(self) -> Result<RepositoryBinding, ViewKeyError> {
-        Ok(RepositoryBinding::new(
-            self.worktree_root.into_domain()?,
-            self.git_dir.into_domain()?,
-            self.common_dir.into_domain()?,
-            self.head
-                .parse()
-                .map_err(|_| ViewKeyError::InvalidStructure)?,
-        ))
-    }
-}
-
-impl RepositoryPathDto {
-    fn into_domain(self) -> Result<ResolvedPath, ViewKeyError> {
-        let canonical_path =
-            CanonicalPath::new(self.path).map_err(|_| ViewKeyError::InvalidStructure)?;
-        let identity = self
-            .identity
-            .map(FileIdentityDto::into_domain)
-            .transpose()?;
-        Ok(ResolvedPath::new(canonical_path, identity))
-    }
-}
-
-impl FileIdentityDto {
-    fn into_domain(self) -> Result<FileIdentity, ViewKeyError> {
-        let file = self
-            .file
-            .parse::<u128>()
-            .map_err(|_| ViewKeyError::InvalidStructure)?;
-        if self.file != file.to_string() {
-            return Err(ViewKeyError::InvalidStructure);
-        }
-        Ok(FileIdentity {
-            volume: self.volume,
-            file,
-        })
-    }
-}
-
 fn parse_required<T>(value: Option<String>) -> Result<T, ViewKeyError>
 where
     T: FromStr,
@@ -407,44 +343,6 @@ where
         .ok_or(ViewKeyError::InvalidStructure)?
         .parse()
         .map_err(|_| ViewKeyError::InvalidStructure)
-}
-
-fn json_object(
-    entries: impl IntoIterator<Item = (&'static str, Value)>,
-) -> Result<Value, ViewKeyError> {
-    let ordered: BTreeMap<_, _> = entries.into_iter().collect();
-    serde_json::to_value(ordered).map_err(|_| ViewKeyError::Encode)
-}
-
-fn resolved_path_to_value(path: &ResolvedPath) -> Result<Value, ViewKeyError> {
-    let path_text = path
-        .canonical_path()
-        .as_path()
-        .to_str()
-        .ok_or(ViewKeyError::NonUnicodePath)?;
-    let identity = match path.file_identity() {
-        Some(identity) => json_object([
-            ("file", Value::String(identity.file.to_string())),
-            ("volume", Value::from(identity.volume)),
-        ])?,
-        None => Value::Null,
-    };
-    json_object([
-        ("identity", identity),
-        ("path", Value::String(path_text.to_owned())),
-    ])
-}
-
-fn repository_binding_to_value(binding: &RepositoryBinding) -> Result<Value, ViewKeyError> {
-    json_object([
-        ("common_dir", resolved_path_to_value(binding.common_dir())?),
-        ("git_dir", resolved_path_to_value(binding.git_dir())?),
-        ("head", Value::String(binding.head().to_string())),
-        (
-            "worktree_root",
-            resolved_path_to_value(binding.worktree_root())?,
-        ),
-    ])
 }
 
 impl fmt::Display for ViewKeyError {
