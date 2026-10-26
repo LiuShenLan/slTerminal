@@ -3,3 +3,6 @@
 //! 本 crate 不执行进程。
 
 #![forbid(unsafe_code)]
+
+mod identity;
+pub use identity::AgentKind;

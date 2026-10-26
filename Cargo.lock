@@ -6135,6 +6135,7 @@ dependencies = [
  "sha2 0.11.1",
  "slterm-settings",
  "slterm-split",
+ "slterm_agents",
  "slterm_completions",
  "slterm_terminal",
  "slterm_workspace",
