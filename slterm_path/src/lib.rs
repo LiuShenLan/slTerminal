@@ -5,4 +5,9 @@
 #![forbid(unsafe_code)]
 
 mod app_paths;
+mod policy;
 pub use app_paths::{AppPaths, AppPathsError};
+pub use policy::{
+    CanonicalPath, Capabilities, FileIdentity, GrantPersistence, PathAuthorization, PathDenial,
+    PathError, PathGrant, PathOperation, PathPolicy, PathRequest, ResolvedPath,
+};
