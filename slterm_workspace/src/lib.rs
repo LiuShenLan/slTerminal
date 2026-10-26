@@ -5,6 +5,8 @@
 mod identity;
 mod panel;
 mod side_view;
+mod view_key;
 pub use identity::{PanelGroupId, ProjectId, StableIdError, TerminalId};
 pub use panel::{PanelId, PanelIdAllocator, PanelIdExhausted};
 pub use side_view::{SideViewId, UnknownSideViewId};
+pub use view_key::{ViewKey, ViewKeyError};
