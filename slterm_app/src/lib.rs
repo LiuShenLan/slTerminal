@@ -144,6 +144,8 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         Ok(cli) => cli,
         Err(error) => error.exit(),
     };
+    // 数据根只在入口解析一次；非法覆盖路径在任何子命令前明确失败。
+    platform::dirs::initialize()?;
     // 本地维护命令不启动 GUI、日志或窗口，也不读取运行中实例。
     if let Some(command) = cli.subcommands {
         std::process::exit(cli::run_local(command));

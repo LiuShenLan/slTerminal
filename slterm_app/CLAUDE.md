@@ -18,7 +18,7 @@
 - **agent 目录沙箱**：agent 全局目录由后端静态表定义，前端不能注入任意路径；沙箱放行域 = project_root ∪ agent 目录集，canonicalize 双向比较；pinned watcher 在项目切换时不被暂停。原因：agent 配置文件在项目根外，但读取必须仍走同一沙箱命令族。边界：不得为 agent 文件建第二套读取通道。
 - **主题与外观**：内置主题为暗色目录，Linear 为默认，未知/退休 id 回退 Linear；主题校验在 `slterm_settings`。`BlurMode` 与透明度是外观设置，平台调用只在平台封装模块，静默启动不得闪现/抢焦点。
 - **i18n 合同**：`en-US`/`zh-CN` 目录 JSON 构建期展平为 typed 键；翻译键集是硬合同（缺键/多余键构建期红）。运行时只经 `Message` 查询，禁止字符串键、英文文案反查或双语即时分支等第二翻译通道。`LanguagePref` 支持系统/英文/中文，系统按 locale 协商，未知 locale 回退英文。
-- **数据目录**：app 侧只委托 `slterm_settings::paths`，不自行推导；默认 `%APPDATA%\slterm`，`SLTERM_CONFIG_DIR` 优先。
+- **双数据根**：启动入口只读取一次 `SLTERM_CONFIG_DIR`、`SLTERM_LOCAL_DIR`，构造不可变 `AppPaths`；覆盖值仅接受绝对路径，空串与相对路径明确失败。默认经 Known Folder API 得 `%APPDATA%\slterm` 与 `%LOCALAPPDATA%\slterm`。设置、设置备份与主题归配置根；数据库、会话、历史、日志、实例锁、恢复材料与更新材料归本地根。生产调用点只读启动缓存，core 不读数据根环境。
 
 ## 验收与测试
 

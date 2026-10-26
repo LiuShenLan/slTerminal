@@ -5,7 +5,7 @@
 //! 保存锁/原子写/.bak/损坏三态)归应用侧 `slterm_app::settings_store`
 //! ,本 crate 只保留纯合并函数与宽容读取。
 //!
-//! 持久化契约:数据目录下 `settings.json`(路径唯一权威见 `paths`),段
+//! 持久化契约:调用方显式提供 `settings.json` 路径,段
 //! 嵌套形态——每个设置键归属一个语义段(appearance/scrolling/…),「键 →
 //! 段」映射单源在 `keys` 注册表;未知键与用户手改段在对象树原位保留。
 
@@ -35,10 +35,8 @@ mod ligatures;
 pub use ligatures::Ligatures;
 mod notifications;
 pub use notifications::NotificationDuration;
-mod paths;
-pub use paths::{settings_dir, settings_path};
 mod reset;
-pub use reset::{restore_default_settings, restore_default_settings_at};
+pub use reset::restore_default_settings_at;
 mod scrolling;
 pub use scrolling::{
     DEFAULT_SCROLL_SPEED, DEFAULT_SCROLLBACK_LINES, MAX_SCROLL_SPEED, MIN_SCROLL_SPEED,
@@ -66,16 +64,8 @@ pub struct RawSettings {
 }
 
 impl RawSettings {
-    pub fn load() -> Self {
-        Self::try_load().unwrap_or_default()
-    }
-
     /// 授权路径(安装器)不许把读取失败当默认:IO 错误与损坏文件都是 Err。
-    pub fn try_load() -> io::Result<Self> {
-        Self::try_load_at(&settings_path())
-    }
-
-    fn try_load_at(path: &std::path::Path) -> io::Result<Self> {
+    pub fn try_load_at(path: &std::path::Path) -> io::Result<Self> {
         match std::fs::read(path) {
             Ok(bytes) => json::parse(&bytes)
                 .map(Self::from_tree)
@@ -848,10 +838,6 @@ pub const MAX_PANE_CARD_DIVIDER: f32 = 4.0;
 pub const DEFAULT_BACKGROUND_IMAGE_OPACITY: f32 = 0.38;
 
 impl RuntimeSettings {
-    pub fn load() -> Self {
-        Self::from_raw(&RawSettings::load())
-    }
-
     /// 逐键宽容解析:未知值回注册表默认、范围钳制、None = 未设置。
     pub fn from_raw(raw: &RawSettings) -> Self {
         let blur = BlurMode::from_settings(raw.value_or_default("blur")).unwrap_or_default();

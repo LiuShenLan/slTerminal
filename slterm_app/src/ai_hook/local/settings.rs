@@ -12,7 +12,7 @@ use super::*;
 
 /// 跨进程串行化:agent-hooks 操作锁(句柄型,进程崩溃内核即释放)。
 pub(super) fn lock() -> io::Result<crate::atomic_file::LifetimeFileLock> {
-    crate::atomic_file::try_lifetime_lock(&slterm_settings::settings_dir().join("agent-hooks"))?
+    crate::atomic_file::try_lifetime_lock(&crate::platform::dirs::local_dir().join("agent-hooks"))?
         .ok_or_else(|| io::Error::other("Another hook operation is running. Please retry."))
 }
 

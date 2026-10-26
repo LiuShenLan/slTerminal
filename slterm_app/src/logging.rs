@@ -31,7 +31,7 @@ const DEBUG_LOG_ENV: &str = "SLTERM_DEBUG_LOG";
 /// 落到本 logger);取证面不随常态档位静默。
 const ALLOWED_TARGETS: &[&str] = &["slterm_terminal", "slterm", "audit"];
 
-/// 诊断辅助:写 data_dir 下的 debug 日志,`SLTERM_DEBUG_LOG` 显式开启才落盘。
+/// 诊断辅助:写本地数据根下的 debug 日志,`SLTERM_DEBUG_LOG` 显式开启才落盘。
 /// 给启动期/发布形态下没法走 log crate 的环节用(开关读取有 OnceLock 缓存)。
 #[allow(dead_code)] // 调用点(启动期文件/进程诊断)归启动与 runtime 接线。
 pub(crate) fn debug_log(message: impl AsRef<str>) {
@@ -49,7 +49,7 @@ pub(crate) fn debug_log(message: impl AsRef<str>) {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| format!("{}.{:03}", duration.as_secs(), duration.subsec_millis()))
         .unwrap_or_else(|_| "0.000".to_owned());
-    let path = crate::platform::dirs::data_dir().join("slterm_debug.log");
+    let path = crate::platform::dirs::local_dir().join("slterm_debug.log");
     if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
         let _ = writeln!(
             file,

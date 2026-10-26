@@ -176,7 +176,7 @@ pub(crate) fn start_gpui(
         // 无网启动也能恢复上次就绪/失败态(cache + handoff 双证据)。
         crate::update_download::hydrate();
         deliver_cached(&mut deliver);
-        if !slterm_settings::RuntimeSettings::load().auto_check_updates {
+        if !crate::settings_store::load_runtime_settings().auto_check_updates {
             return;
         }
         executor.timer(delay).await;
@@ -270,7 +270,7 @@ pub(crate) fn check_from(agent: &ureq::Agent, url: &str) -> Result<UpdateCheckRe
 }
 
 fn update_state_path() -> PathBuf {
-    update_state_path_at(crate::platform::dirs::data_dir())
+    update_state_path_at(crate::platform::dirs::local_dir())
 }
 
 fn update_state_path_at(root: &Path) -> PathBuf {

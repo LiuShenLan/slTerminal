@@ -716,12 +716,12 @@ impl SltermWorkspace {
     /// 设置变更后重读 `keybind` 段并热重建 keymap。
     ///
     /// 与当前已应用表比较,只有准入结果真正变化才重建;重读路径与设置页
-    /// 写盘路径同源(`settings_path_override`,生产回退默认数据目录)。
+    /// 写盘路径同源(`settings_path_override`,生产回退启动缓存的设置文件)。
     fn reload_user_keybinds(&mut self, cx: &mut Context<'_, Self>) {
         let path = self
             .settings_path_override
             .clone()
-            .unwrap_or_else(slterm_settings::settings_path);
+            .unwrap_or_else(|| crate::platform::dirs::app_paths().settings_path());
         let pairs = keyboard_bindings::load_keybind_pairs_at(&path);
         let admitted = keyboard_bindings::admit_keybind_pairs(pairs).accepted;
         if keyboard_bindings::applied_user_keybinds(cx) != admitted {

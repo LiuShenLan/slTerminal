@@ -293,7 +293,9 @@ impl SettingsTarget {
     fn reset(&self) -> io::Result<Option<PathBuf>> {
         // 重置与保存共用 SAVE_LOCK,消除「重置后并发保存丢失更新」窗口。
         crate::settings_store::with_save_lock(|| match self {
-            Self::Default => slterm_settings::restore_default_settings(),
+            Self::Default => slterm_settings::restore_default_settings_at(
+                &crate::platform::dirs::app_paths().settings_path(),
+            ),
             Self::Path(path) => slterm_settings::restore_default_settings_at(path),
         })
     }
@@ -317,10 +319,11 @@ impl SettingsTarget {
     /// 设置文件所在目录:导出等对话框的起始目录(测试目标 = 设置父目录)。
     fn settings_directory(&self) -> PathBuf {
         match self {
-            Self::Default => slterm_settings::settings_dir(),
-            Self::Path(path) => path
-                .parent()
-                .map_or_else(slterm_settings::settings_dir, std::path::Path::to_path_buf),
+            Self::Default => crate::platform::dirs::config_dir().to_path_buf(),
+            Self::Path(path) => path.parent().map_or_else(
+                || crate::platform::dirs::config_dir().to_path_buf(),
+                std::path::Path::to_path_buf,
+            ),
         }
     }
 

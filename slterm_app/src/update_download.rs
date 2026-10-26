@@ -176,7 +176,7 @@ impl DownloadContext {
         #[cfg(not(any(test, feature = "update-test-source")))]
         let origin = None;
         Ok(Self {
-            root: crate::platform::dirs::data_dir().to_owned(),
+            root: crate::platform::dirs::local_dir().to_owned(),
             origin,
         })
     }
@@ -195,7 +195,10 @@ pub(crate) fn run(job: DownloadJob) {
     };
     finish_job(
         job,
-        context.map_or_else(|_| crate::platform::dirs::data_dir().to_owned(), |c| c.root),
+        context.map_or_else(
+            |_| crate::platform::dirs::local_dir().to_owned(),
+            |c| c.root,
+        ),
         outcome,
     );
 }
@@ -235,7 +238,7 @@ fn finish_job(job: DownloadJob, root: PathBuf, outcome: Result<(PathBuf, u64), S
 /// 用户已启动的新任务优先(会话非空时不覆盖)。
 pub(crate) fn hydrate() {
     let executable = std::env::current_exe().ok();
-    hydrate_at(crate::platform::dirs::data_dir(), executable.as_deref());
+    hydrate_at(crate::platform::dirs::local_dir(), executable.as_deref());
 }
 
 pub(crate) fn hydrate_at(root: &Path, executable: Option<&Path>) {
@@ -267,7 +270,7 @@ pub(crate) fn cached_asset() -> Option<UpdateAsset> {
 
 /// 失败发生在用户选「稍后」之后 = 新信息;查看/忽略细节后恢复常规提醒抑制。
 pub(crate) fn installation_failure_unseen(prompt_state: &Path) -> bool {
-    let root = crate::platform::dirs::data_dir();
+    let root = crate::platform::dirs::local_dir();
     let executable = std::env::current_exe().ok();
     handoff::failure_unseen(root, executable.as_deref(), prompt_state)
         || cache::failure_unseen_at(root, prompt_state)
@@ -276,7 +279,7 @@ pub(crate) fn installation_failure_unseen(prompt_state: &Path) -> bool {
 /// 消费点 = handoff prepare(安装授权步)与更新弹窗的「立即安装」按钮。
 #[allow(dead_code)]
 pub(crate) fn ready_path(asset: &UpdateAsset) -> Result<PathBuf, String> {
-    ready_path_at(crate::platform::dirs::data_dir(), asset)
+    ready_path_at(crate::platform::dirs::local_dir(), asset)
 }
 
 /// `_at` 形态:handoff 事务与测试使用显式数据根。

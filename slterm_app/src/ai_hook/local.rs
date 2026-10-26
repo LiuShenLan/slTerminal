@@ -30,7 +30,7 @@ fn announce() {
     if ANNOUNCED.swap(true, Ordering::Relaxed) {
         return;
     }
-    match claim_setup_announcement(&slterm_settings::settings_dir()) {
+    match claim_setup_announcement(crate::platform::dirs::local_dir()) {
         Ok(true) => log::info!("ai_hook: hook setup announced"),
         Ok(false) => {}
         Err(error) => log::debug!("ai_hook: could not persist setup announcement: {error}"),

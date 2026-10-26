@@ -5,7 +5,7 @@
 ## 决策与红线
 
 - **命名管道 = hook 事件唯一权威通道**：`slterm-hook` 把原始载荷经命名管道转发给宿主；旧信号文件事件通道退役。原因：轮询延迟与丢失窗口不可接受。边界：宿主解析 JSON，helper 不重编码。
-- **statusline 用量信号分通道保留**：信号文件介质保留（app 数据目录），与 hook 管道分通道；桥接脚本节流后写 ContextUsage，并透传用户原 statusline。
+- **statusline 用量信号分通道保留**：信号文件介质保留（app 本地数据根），与 hook 管道分通道；桥接脚本节流后写 ContextUsage，并透传用户原 statusline。
 - **流键收窄**：`AiHookStreamKey` = source + session + pane + agent_pid + bridge_instance；`remote_process` 维度随 SSH/远程砍除。
 - **`AgentSession.source` 宽松落盘、严格消费**：持久化保留 hook 原报字符串；恢复注入时经 `AgentKind::parse` 归一，不归一即不可恢复。原因：未知 CLI 的事件不应被静默丢弃，但恢复必须只作用于已知 agent。
 - **`AgentKind` 封闭集**：内置 agent 身份是封闭枚举，屏幕规则随仓；新增 agent = 枚举 + 规则 + 必要的安装器/目录表登记，不裁剪既有集。

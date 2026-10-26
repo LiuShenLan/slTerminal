@@ -15,12 +15,6 @@ use crate::keys;
 
 static RESET_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
-/// 恢复默认设置;返回备份文件路径(原本无文件时为 None)。UI 可据此
-/// 告知用户备份在哪。
-pub fn restore_default_settings() -> io::Result<Option<PathBuf>> {
-    restore_default_settings_at(&crate::settings_path())
-}
-
 /// 纯函数:删除全部 resettable 已知键(段内移除),未知段/未知键/
 /// agent_hooks 授权选择原样保留。段骨架保留(空段是「用户曾有过设置」
 /// 的无害痕迹)。
@@ -43,8 +37,7 @@ fn default_settings_tree(tree: &Value) -> Value {
     restored
 }
 
-/// 显式路径入口(测试注入与设置页保存通道共用;生产入口见
-/// [`restore_default_settings`])。
+/// 显式路径入口；调用方从启动时解析的 `AppPaths` 提供设置文件位置。
 pub fn restore_default_settings_at(path: &Path) -> io::Result<Option<PathBuf>> {
     // 损坏文件直接报错,不覆盖(读侧宽容、写侧拒绝的刻意不对称)。
     let original = match fs::read(path) {

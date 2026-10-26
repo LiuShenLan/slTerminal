@@ -1,6 +1,6 @@
 //! 本地假 release 演练通道。
 //!
-//! 与上游同构:只接受显式回环地址 + 隔离配置目录;官方资产名、URL 与
+//! 与上游同构:只接受显式回环地址 + 隔离双数据根;官方资产名、URL 与
 //! digest 校验仍全程执行,只有 HTTP 传输换成本地夹具。存在 origin 时
 //! 允许「同版本重装」彩排,但永不降级。
 //!
@@ -10,13 +10,15 @@
 #[cfg(not(debug_assertions))]
 compile_error!("update-test-source is for debug acceptance only; never enable it in a release");
 
-/// 测试/演练需要两个条件:显式回环 origin + 隔离配置目录(防污染真实数据)。
+/// 测试/演练需要两个条件:显式回环 origin + 隔离双数据根(防污染真实数据)。
 pub(crate) fn origin() -> Result<Option<String>, String> {
     let Some(origin) = std::env::var_os("SLTERM_TEST_UPDATE_ORIGIN") else {
         return Ok(None);
     };
-    if std::env::var_os("SLTERM_CONFIG_DIR").is_none_or(|path| path.is_empty()) {
-        return Err("updater rehearsal requires an isolated SLTERM_CONFIG_DIR".into());
+    if !crate::platform::dirs::data_roots_are_overridden() {
+        return Err(
+            "updater rehearsal requires isolated SLTERM_CONFIG_DIR and SLTERM_LOCAL_DIR".into(),
+        );
     }
     let origin = origin.to_str().ok_or("test update origin is not UTF-8")?;
     validate_origin(origin)?;

@@ -569,8 +569,8 @@ mod session_scan_tests {
         )
         .unwrap();
         let _home = HomeEnvGuard::set(&home);
-        // 测试构建的 data_dir 位于进程临时根;假文件覆盖旧生产解析路径。
-        let registry = crate::platform::dirs::data_dir().join("ai_sessions.json");
+        // 测试构建的本地数据根位于进程临时根;假文件覆盖旧生产解析路径。
+        let registry = crate::platform::dirs::local_dir().join("ai_sessions.json");
         assert!(
             registry.starts_with(std::env::temp_dir()),
             "测试注册表必须位于临时数据根"

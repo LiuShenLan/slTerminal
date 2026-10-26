@@ -195,7 +195,7 @@ impl SltermHistory {
 }
 
 fn history_path() -> PathBuf {
-    crate::platform::dirs::data_dir().join(HISTORY_FILE)
+    crate::platform::dirs::local_dir().join(HISTORY_FILE)
 }
 
 fn append(scope: &HistoryScope, cmd: &str, cwd: &str) {
@@ -215,7 +215,7 @@ fn append(scope: &HistoryScope, cmd: &str, cwd: &str) {
 }
 
 fn history_path_for(scope: &HistoryScope) -> PathBuf {
-    crate::platform::dirs::data_dir().join(scope.file_name())
+    crate::platform::dirs::local_dir().join(scope.file_name())
 }
 
 /// 单池记录校验:无 `scope` 或 `scope=local` 才属于本地池;远程残留记录拒绝。

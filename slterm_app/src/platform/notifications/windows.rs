@@ -81,7 +81,7 @@ fn run(receiver: mpsc::Receiver<Request>) {
     let mut live = VecDeque::new();
     for request in receiver {
         // 时长是设置键的消费面:在组装 xml 的 worker 处读当前值。
-        let duration = slterm_settings::RuntimeSettings::load().notification_duration;
+        let duration = crate::settings_store::load_runtime_settings().notification_duration;
         match show_request(request, duration) {
             Ok(notification) => {
                 if live.len() == LIVE_RETENTION {
@@ -105,7 +105,7 @@ pub(super) fn show_sync(title: &str, body: &str) -> Result<(), String> {
     if init.is_err() && init != RPC_E_CHANGED_MODE {
         return Err(format!("COM initialization failed: {init:?}"));
     }
-    let duration = slterm_settings::RuntimeSettings::load().notification_duration;
+    let duration = crate::settings_store::load_runtime_settings().notification_duration;
     let result = show_request(
         Request {
             title: title.to_owned(),
@@ -255,7 +255,7 @@ pub(super) fn register_aumid() -> Result<(), String> {
 /// `assets/app-icon.png` 优先;数据目录 `toast_icon.png` 与 exe 旁
 /// `slterm.png` 作为历史散落形态兼容。
 pub(super) fn icon_path() -> Option<PathBuf> {
-    let mut candidates = vec![crate::platform::dirs::data_dir().join("toast_icon.png")];
+    let mut candidates = vec![crate::platform::dirs::local_dir().join("toast_icon.png")];
     if let Ok(exe) = std::env::current_exe()
         && let Some(directory) = exe.parent()
     {

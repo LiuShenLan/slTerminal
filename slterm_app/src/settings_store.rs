@@ -20,7 +20,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use slterm_settings::json::{self, Value};
-use slterm_settings::{MAX_PERSIST_BYTES, RawSettings, keys, settings_path};
+use slterm_settings::{MAX_PERSIST_BYTES, RawSettings, RuntimeSettings, keys};
+
+fn settings_path() -> PathBuf {
+    crate::platform::dirs::app_paths().settings_path()
+}
 
 /// settings.json 读侧三态结果。`corrupted = true` 表示数据来自 .bak 或
 /// 默认回退(损坏原件已隔离),设置页据此显示警示条(消费)。
@@ -33,6 +37,16 @@ pub(crate) struct LoadResult {
 /// 占用冲突(杀软实时扫描窗口为残余偶发源)。锁内 panic 后的毒化不扩大
 /// 为进程级故障——后续写入继续持锁执行。
 static SAVE_LOCK: Mutex<()> = Mutex::new(());
+
+/// 后台消费者的宽容读取：文件缺失、损坏或读取失败均回退默认。
+pub(crate) fn load_runtime_settings() -> RuntimeSettings {
+    load_runtime_settings_at(&settings_path())
+}
+
+fn load_runtime_settings_at(path: &Path) -> RuntimeSettings {
+    let raw = RawSettings::try_load_at(path).unwrap_or_default();
+    RuntimeSettings::from_raw(&raw)
+}
 
 /// 设置文件「编辑动作前观察到的字节」快照(缺失 = None)。主题应用路径
 /// 用它做乐观并发:外部写入者不能被静默覆盖。
@@ -313,6 +327,20 @@ mod settings_store_tests {
 
     fn read_tree(path: &Path) -> Value {
         json::parse(&std::fs::read(path).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn runtime_settings_explicit_path_load_is_lenient_per_file() {
+        let (_directory, path) = fixture();
+        write_json(&path, r#"{"appearance":{"theme":"Nord"}}"#);
+        assert_eq!(load_runtime_settings_at(&path).theme, ThemeName::Nord);
+
+        write_json(&path, "{ not json");
+        assert_eq!(load_runtime_settings_at(&path).theme, ThemeName::Linear);
+        assert_eq!(
+            load_runtime_settings_at(&path.with_file_name("missing.json")).theme,
+            ThemeName::Linear
+        );
     }
 
     /// 当前目录下的多代隔离件(按文件名排序)。

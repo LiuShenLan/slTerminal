@@ -300,7 +300,7 @@ fn build_cache() -> HashMap<AgentKind, CompiledManifest> {
 }
 
 fn override_path(agent: AgentKind) -> PathBuf {
-    crate::platform::dirs::data_dir()
+    crate::platform::dirs::local_dir()
         .join("agent-detection")
         .join(format!("{}.toml", agent.slug()))
 }

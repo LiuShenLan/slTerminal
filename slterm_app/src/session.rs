@@ -296,7 +296,7 @@ impl Session {
 
 /// 数据目录里的规范落点(目录解析归 `platform::dirs`)。
 pub(crate) fn session_path() -> PathBuf {
-    crate::platform::dirs::data_dir().join("session.json")
+    crate::platform::dirs::local_dir().join("session.json")
 }
 
 /// 解析会话/工作区文档。版本不符即拒收——无历史格式,不做就地升级。

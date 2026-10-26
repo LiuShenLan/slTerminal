@@ -96,7 +96,7 @@ fn heal_all(failure_gate: &mut FailureGate, on_alert: &(impl Fn(HookFailureKind)
     let Ok(_lock) = settings::lock() else { return };
     // 锁竞争 = 另一个安装操作在进行，不是自愈失败，不提示。
     // 锁内重读授权，不能把菜单/卸载刚移除的 hook 按旧快照装回。
-    let raw = match RawSettings::try_load() {
+    let raw = match RawSettings::try_load_at(&crate::platform::dirs::app_paths().settings_path()) {
         Ok(raw) => raw,
         Err(error) => {
             log::warn!("ai_hook: cannot read hook preferences; installation skipped: {error}");
@@ -181,7 +181,7 @@ fn config_guard(
         };
     let mut watched = HashSet::new();
     while !stop.load(Ordering::Acquire) {
-        let dirs = std::iter::once(slterm_settings::settings_dir()).chain(
+        let dirs = std::iter::once(crate::platform::dirs::config_dir().to_path_buf()).chain(
             AgentHook::ALL.into_iter().filter_map(|agent| {
                 settings::configuration(agent)?
                     .0

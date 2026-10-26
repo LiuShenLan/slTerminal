@@ -52,7 +52,9 @@ fn stage_ready_package(root: &Path, asset: &UpdateAsset, body: &[u8]) {
 
 fn fixture_paths(root: &Path) -> (PreparePaths, PathBuf) {
     let installation = root.join("install");
+    let config_directory = root.join("config");
     std::fs::create_dir_all(&installation).unwrap();
+    std::fs::create_dir_all(&config_directory).unwrap();
     std::fs::write(installation.join("unins000.exe"), b"MZ").unwrap();
     let executable = std::env::current_exe().unwrap();
     (
@@ -60,7 +62,7 @@ fn fixture_paths(root: &Path) -> (PreparePaths, PathBuf) {
             root: root.to_owned(),
             executable: executable.clone(),
             installation,
-            config_directory: root.to_owned(),
+            config_directory,
         },
         executable,
     )
@@ -144,6 +146,36 @@ fn wait_for(path: &Path) {
         );
         std::thread::sleep(Duration::from_millis(10));
     }
+}
+
+#[test]
+fn handoff_plan_preserves_split_data_roots() {
+    let root = tempfile::tempdir().unwrap();
+    let body = b"MZhandoff split roots fixture";
+    let asset = installer_asset(body);
+    stage_ready_package(root.path(), &asset, body);
+    let (paths, _) = fixture_paths(root.path());
+    let prepared = prepare_with(&asset, paths.clone(), spawn_fake_helper).unwrap();
+    let plan: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(prepared.directory.join("plan.json")).unwrap())
+            .unwrap();
+
+    assert_eq!(
+        plan["config_directory"],
+        serde_json::to_value(canonical(&paths.config_directory).unwrap()).unwrap()
+    );
+    assert_eq!(
+        plan["local_directory"],
+        serde_json::to_value(canonical(&paths.root).unwrap()).unwrap()
+    );
+    drop(prepared);
+}
+
+#[test]
+fn helper_launch_reinjects_split_data_roots() {
+    let script = include_str!("../handoff.ps1");
+    assert!(script.contains("$env:SLTERM_CONFIG_DIR = $plan.config_directory"));
+    assert!(script.contains("$env:SLTERM_LOCAL_DIR = $plan.local_directory"));
 }
 
 #[test]
@@ -231,6 +263,7 @@ fn restore_ticket_covers_success_rollback_attempts_and_acknowledgement() {
         executable: canonical(&executable).unwrap(),
         installation: root.path().join("install"),
         config_directory: root.path().to_owned(),
+        local_directory: root.path().to_owned(),
         installer: root.path().join("fixture"),
         sha256: String::new(),
         bytes: 1,

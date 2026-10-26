@@ -30,6 +30,7 @@ use aes_gcm::aead::{Aead, Payload};
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use slterm_path::AppPaths;
 use zeroize::Zeroizing;
 
 pub(crate) mod recovery;
@@ -91,6 +92,16 @@ pub(crate) enum BackupCategory {
     CommandHistory,
     /// 目录 frecency `directory_history.json`。
     DirectoryHistory,
+}
+
+/// 类别根归属是备份收集、恢复与撤回共用的唯一寻址规则。
+fn category_root(paths: &AppPaths, category: BackupCategory) -> &Path {
+    match category {
+        BackupCategory::Settings | BackupCategory::Themes => paths.config_root(),
+        BackupCategory::Session
+        | BackupCategory::CommandHistory
+        | BackupCategory::DirectoryHistory => paths.local_root(),
+    }
 }
 
 /// 类别选择集;默认仅设置一项(保守默认思想随上游基线)。
@@ -168,7 +179,7 @@ impl BackupSelection {
     }
 }
 
-/// 归档中的单个文件条目;`name` 是相对数据目录的归档名(正斜杠)。
+/// 归档中的单个文件条目;`name` 是相对类别所属数据根的归档名(正斜杠)。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct BackupEntry {
     pub category: BackupCategory,
@@ -305,17 +316,18 @@ fn decrypt_bytes(packet: &[u8], passphrase: &str) -> Result<Zeroizing<Vec<u8>>, 
     Ok(Zeroizing::new(plaintext))
 }
 
-/// 按选择集收集数据目录白名单文件。
+/// 按选择集收集双数据根的白名单文件。
 pub(crate) fn collect(selection: BackupSelection) -> Result<BackupArchive, String> {
-    collect_from(crate::platform::dirs::data_dir(), selection)
+    collect_from(crate::platform::dirs::app_paths(), selection)
 }
 
-fn collect_from(root: &Path, selection: BackupSelection) -> Result<BackupArchive, String> {
+fn collect_from(paths: &AppPaths, selection: BackupSelection) -> Result<BackupArchive, String> {
     if selection.is_empty() {
         return Err("至少选择一个备份类别".to_owned());
     }
     let mut entries = Vec::new();
     for category in selection.categories() {
+        let root = category_root(paths, category);
         match category {
             BackupCategory::Settings => add_file(
                 root,
@@ -487,13 +499,13 @@ fn is_valid_theme_id(id: &str) -> bool {
 
 /// 先鉴权后落盘:完整解密校验通过才允许写任何文件。
 pub(crate) fn restore(packet: &[u8], passphrase: &str) -> Result<(), String> {
-    restore_at(crate::platform::dirs::data_dir(), packet, passphrase)
+    restore_at(crate::platform::dirs::app_paths(), packet, passphrase)
 }
 
-/// 显式根入口(测试注入与工作区导入共用);鉴权失败时零 IO。
-fn restore_at(root: &Path, packet: &[u8], passphrase: &str) -> Result<(), String> {
+/// 显式双根入口(测试注入与工作区导入共用);鉴权失败时零 IO。
+fn restore_at(paths: &AppPaths, packet: &[u8], passphrase: &str) -> Result<(), String> {
     let archive = open(packet, passphrase)?;
-    restore_to(root, &archive)
+    restore_to(paths, &archive)
 }
 
 /// 测试注入的恢复故障点(仅在测试构建存在);`None` = 关闭,
@@ -501,14 +513,14 @@ fn restore_at(root: &Path, packet: &[u8], passphrase: &str) -> Result<(), String
 #[cfg(test)]
 static RESTORE_FAILPOINT: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
-fn restore_to(root: &Path, archive: &BackupArchive) -> Result<(), String> {
+fn restore_to(paths: &AppPaths, archive: &BackupArchive) -> Result<(), String> {
     validate_archive(archive)?;
-    let paths = archive
+    let restore_paths = archive
         .entries
         .iter()
-        .map(|entry| restore_path(root, &entry.name))
+        .map(|entry| restore_path(category_root(paths, entry.category), &entry.name))
         .collect::<Result<Vec<_>, _>>()?;
-    for (entry, path) in archive.entries.iter().zip(paths) {
+    for (entry, path) in archive.entries.iter().zip(restore_paths) {
         #[cfg(test)]
         if RESTORE_FAILPOINT.lock().expect("恢复故障点锁").as_deref() == Some(entry.name.as_str())
         {
@@ -616,6 +628,14 @@ mod encrypted_backup_tests {
 
     const PASSPHRASE: &str = "correct horse";
     const SHORT_PASSPHRASE: &str = "short";
+
+    fn single_root_paths(root: &Path) -> AppPaths {
+        AppPaths::new(root, root).unwrap()
+    }
+
+    fn split_paths(root: &Path) -> AppPaths {
+        AppPaths::new(root.join("config"), root.join("local")).unwrap()
+    }
 
     fn theme_bytes() -> Vec<u8> {
         crate::theme_library::builtin_documents()
@@ -869,7 +889,7 @@ mod encrypted_backup_tests {
             BackupCategory::CommandHistory,
             BackupCategory::DirectoryHistory,
         ]);
-        let archive = collect_from(root, selection).expect("收集");
+        let archive = collect_from(&single_root_paths(root), selection).expect("收集");
         let names: HashSet<_> = archive
             .entries
             .iter()
@@ -914,6 +934,94 @@ mod encrypted_backup_tests {
         }
     }
 
+    #[test]
+    fn collection_scopes_categories_across_split_roots() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = split_paths(directory.path());
+        fs::create_dir_all(paths.config_root().join("themes")).unwrap();
+        fs::create_dir_all(paths.local_root().join("themes")).unwrap();
+        fs::write(paths.settings_path(), br#"{"appearance":{"theme":"Nord"}}"#).unwrap();
+        fs::write(
+            paths
+                .config_root()
+                .join("themes/nord-copy.slterm-theme.json"),
+            theme_bytes(),
+        )
+        .unwrap();
+        fs::write(paths.local_root().join("session.json"), br#"{"version":1}"#).unwrap();
+        fs::write(paths.local_root().join("history.jsonl"), b"local-history\n").unwrap();
+        fs::write(
+            paths.local_root().join("directory_history.json"),
+            br#"{"version":1,"entries":[]}"#,
+        )
+        .unwrap();
+
+        // 另一根的同名文件都是诱饵，不得替代本类别所属根的内容。
+        fs::write(
+            paths.local_root().join("settings.json"),
+            br#"{"appearance":{"theme":"Linear"}}"#,
+        )
+        .unwrap();
+        fs::write(
+            paths.local_root().join("themes/wrong.slterm-theme.json"),
+            theme_bytes(),
+        )
+        .unwrap();
+        fs::write(paths.config_root().join("session.json"), b"config-decoy").unwrap();
+        fs::write(paths.config_root().join("history.jsonl"), b"config-decoy").unwrap();
+        fs::write(
+            paths.config_root().join("directory_history.json"),
+            b"config-decoy",
+        )
+        .unwrap();
+
+        let archive = collect_from(
+            &paths,
+            BackupSelection::from_categories([
+                BackupCategory::Settings,
+                BackupCategory::Session,
+                BackupCategory::Themes,
+                BackupCategory::CommandHistory,
+                BackupCategory::DirectoryHistory,
+            ]),
+        )
+        .unwrap();
+        let names: HashSet<_> = archive
+            .entries
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            HashSet::from([
+                "settings.json",
+                "session.json",
+                "themes/nord-copy.slterm-theme.json",
+                "history.jsonl",
+                "directory_history.json",
+            ])
+        );
+        let entry = |name: &str| {
+            &archive
+                .entries
+                .iter()
+                .find(|entry| entry.name == name)
+                .unwrap()
+                .bytes
+        };
+        assert!(
+            String::from_utf8(entry("settings.json").clone())
+                .unwrap()
+                .contains("Nord")
+        );
+        assert_eq!(entry("session.json"), br#"{"version":1}"#);
+        assert_eq!(entry("history.jsonl"), b"local-history\n");
+        assert_eq!(
+            entry("directory_history.json"),
+            br#"{"version":1,"entries":[]}"#
+        );
+    }
+
     /// 防复发:非法主题文档必须整单失败,不得静默缺件。
     #[test]
     fn invalid_theme_documents_abort_the_backup() {
@@ -922,19 +1030,38 @@ mod encrypted_backup_tests {
         fs::create_dir_all(&themes).unwrap();
         fs::write(themes.join("bad.slterm-theme.json"), "{ not a theme }").unwrap();
         let selection = BackupSelection::from_categories([BackupCategory::Themes]);
-        let error = collect_from(directory.path(), selection).expect_err("非法主题必须中止备份");
+        let error = collect_from(&single_root_paths(directory.path()), selection)
+            .expect_err("非法主题必须中止备份");
         assert!(error.contains("主题"), "{error}");
     }
 
     #[test]
     fn collection_rejects_empty_selection_and_unparseable_settings() {
         let directory = tempfile::tempdir().unwrap();
-        assert!(collect_from(directory.path(), BackupSelection::from_categories([])).is_err());
+        assert!(
+            collect_from(
+                &single_root_paths(directory.path()),
+                BackupSelection::from_categories([])
+            )
+            .is_err()
+        );
         fs::write(directory.path().join("settings.json"), "{ not json").unwrap();
-        assert!(collect_from(directory.path(), BackupSelection::default()).is_err());
+        assert!(
+            collect_from(
+                &single_root_paths(directory.path()),
+                BackupSelection::default()
+            )
+            .is_err()
+        );
         // 可解析但根非对象:设置文档合同是对象,四态读取会判损坏,备份拒收。
         fs::write(directory.path().join("settings.json"), "[1, 2, 3]").unwrap();
-        assert!(collect_from(directory.path(), BackupSelection::default()).is_err());
+        assert!(
+            collect_from(
+                &single_root_paths(directory.path()),
+                BackupSelection::default()
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -973,7 +1100,7 @@ mod encrypted_backup_tests {
             }],
         };
         let directory = tempfile::tempdir().unwrap();
-        assert!(restore_to(directory.path(), &archive).is_err());
+        assert!(restore_to(&single_root_paths(directory.path()), &archive).is_err());
         assert!(
             !directory.path().join("settings.json").exists(),
             "导入复验失败必须在落盘前拒绝"
@@ -995,7 +1122,7 @@ mod encrypted_backup_tests {
                 bytes: b"{}".to_vec(),
             }],
         };
-        assert!(restore_to(directory.path(), &traversal).is_err());
+        assert!(restore_to(&single_root_paths(directory.path()), &traversal).is_err());
         assert!(
             !directory
                 .path()
@@ -1016,11 +1143,11 @@ mod encrypted_backup_tests {
                 bytes: b"{}".to_vec(),
             }],
         };
-        assert!(restore_to(directory.path(), &unsigned_name).is_err());
+        assert!(restore_to(&single_root_paths(directory.path()), &unsigned_name).is_err());
 
         let mut duplicate = archive();
         duplicate.entries.push(duplicate.entries[0].clone());
-        assert!(restore_to(directory.path(), &duplicate).is_err());
+        assert!(restore_to(&single_root_paths(directory.path()), &duplicate).is_err());
         assert!(!directory.path().join("settings.json").exists());
 
         let unlisted_category = BackupArchive {
@@ -1034,14 +1161,14 @@ mod encrypted_backup_tests {
                 bytes: b"{}".to_vec(),
             }],
         };
-        assert!(restore_to(directory.path(), &unlisted_category).is_err());
+        assert!(restore_to(&single_root_paths(directory.path()), &unlisted_category).is_err());
     }
 
     #[test]
     fn restore_to_writes_every_category_and_packet_restore_round_trips() {
         let directory = tempfile::tempdir().unwrap();
         let original = full_archive();
-        restore_to(directory.path(), &original).expect("恢复");
+        restore_to(&single_root_paths(directory.path()), &original).expect("恢复");
         assert!(directory.path().join("settings.json").is_file());
         assert!(directory.path().join("session.json").is_file());
         assert!(
@@ -1057,7 +1184,7 @@ mod encrypted_backup_tests {
         let packet = seal(&original, PASSPHRASE).unwrap();
         let opened = open(&packet, PASSPHRASE).unwrap();
         let second = tempfile::tempdir().unwrap();
-        restore_to(second.path(), &opened).unwrap();
+        restore_to(&single_root_paths(second.path()), &opened).unwrap();
         for entry in &opened.entries {
             assert_eq!(
                 fs::read(second.path().join(&entry.name)).unwrap(),
@@ -1067,15 +1194,45 @@ mod encrypted_backup_tests {
     }
 
     #[test]
+    fn restore_scopes_every_category_across_split_roots() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = split_paths(directory.path());
+        let archive = full_archive();
+        restore_to(&paths, &archive).unwrap();
+
+        for entry in &archive.entries {
+            let (expected_root, other_root) = match entry.category {
+                BackupCategory::Settings | BackupCategory::Themes => {
+                    (paths.config_root(), paths.local_root())
+                }
+                BackupCategory::Session
+                | BackupCategory::CommandHistory
+                | BackupCategory::DirectoryHistory => (paths.local_root(), paths.config_root()),
+            };
+            assert_eq!(
+                fs::read(expected_root.join(&entry.name)).ok(),
+                Some(entry.bytes.clone()),
+                "{} 必须写入类别所属根",
+                entry.name
+            );
+            assert!(
+                !other_root.join(&entry.name).exists(),
+                "{} 不得写入另一数据根",
+                entry.name
+            );
+        }
+    }
+
+    #[test]
     fn restore_rejects_authentication_failure_without_side_effects() {
         let packet = seal(&full_archive(), PASSPHRASE).unwrap();
         let directory = tempfile::tempdir().unwrap();
         // 显式根入口证明鉴权先于任何落盘:错口令/篡改都在零 IO 下拒绝。
-        assert!(restore_at(directory.path(), &packet, "wrong horse").is_err());
+        assert!(restore_at(&single_root_paths(directory.path()), &packet, "wrong horse").is_err());
         let mut tampered = packet;
         let last = tampered.len() - 1;
         tampered[last] ^= 0xFF;
-        assert!(restore_at(directory.path(), &tampered, PASSPHRASE).is_err());
+        assert!(restore_at(&single_root_paths(directory.path()), &tampered, PASSPHRASE).is_err());
         let names: Vec<_> = fs::read_dir(directory.path())
             .unwrap()
             .map(|entry| entry.unwrap().file_name())

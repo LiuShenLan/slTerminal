@@ -10,7 +10,7 @@ pub(crate) struct InstanceGuard {
 
 /// 在 UI、PTY、watcher 与后台任务启动前取得实例锁。
 pub(crate) fn acquire() -> io::Result<InstanceGuard> {
-    acquire_at(&crate::platform::dirs::data_dir().join("instance"))
+    acquire_at(&crate::platform::dirs::local_dir().join("instance"))
 }
 
 fn acquire_at(marker: &Path) -> io::Result<InstanceGuard> {

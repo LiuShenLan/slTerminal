@@ -8,7 +8,7 @@
 - **校验链通过才原子替换**：长度、`MZ` 头、SHA-256、512 MiB 上限；中断或错误响应只能留在 `.part`，不得变成可执行文件。原因：半份或伪造产物不得进入安装链。
 - **代次作废链**：取消或换版本后旧任务的进度/完成写入全部失配；取消不需要旧任务句柄。
 - **文件机是持久证据**：helper 只有见到 `commit.json` 才有安装权威；未 commit 即 Drop 的 `PreparedUpdate` 写 `cancel.json` 并终止 helper。孤儿 `plan`/未 commit 的 `ready` 事务在启动时按 cancel 安全默认收尾。原因：跨进程安装必须以文件证据而非内存状态裁决。
-- **helper 红线**：不按映像名杀进程、不自行安装、不绕过参与者身份核对；helper 物化自 `handoff.ps1`，`SLTERM_UPDATE_RESTORE`/`SLTERM_CONFIG_DIR` 为单名恢复变量。
+- **helper 红线**：不按映像名杀进程、不自行安装、不绕过参与者身份核对；helper 物化自 `handoff.ps1`，`SLTERM_UPDATE_RESTORE`/`SLTERM_CONFIG_DIR`/`SLTERM_LOCAL_DIR` 为单名恢复变量，计划必须同时保存双数据根。
 - **restore ticket**：成功或回滚恢复都要版本匹配；最多 3 次尝试，`restored.json` 留档防重放。
 - **安装目录归属**：安装器管理的安装（旁置 `unins000.exe`）才允许自覆盖；便携 zip 走下载页手动替换。原因：覆盖不受管的目录会破坏用户文件。
 - **消费面**：更新弹窗接 `prepare/commit/schedule`；`run_shell` 启动链消费 `restore_ticket`，建窗后 `acknowledge_restore`。

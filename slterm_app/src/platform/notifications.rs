@@ -84,7 +84,7 @@ pub(crate) fn notify_test() -> i32 {
     }
 
     println!("[2/3] Reading notification_duration ...");
-    let duration = slterm_settings::RuntimeSettings::load().notification_duration;
+    let duration = crate::settings_store::load_runtime_settings().notification_duration;
     match windows::duration_attribute(duration) {
         Some(value) => {
             println!("      OK  (notification_duration={duration:?} -> duration=\"{value}\")")

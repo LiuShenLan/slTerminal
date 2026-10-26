@@ -1,9 +1,8 @@
 //! 选择性恢复与其加密恢复点:UI 只持句柄,不承担文件
 //! 写入规则。
 //!
-//! 恢复点只在本机加密落盘,不经会过滤敏感字段的可分享收集器;撤回时目标
-//! 名集合必须与该次已验证恢复完全一致(`RestorePoint::names` 私有只读),
-//! 外部导入文件不能借撤回扩展白名单。
+//! 恢复点只在本机加密落盘,不经会过滤敏感字段的可分享收集器;撤回时类别与
+//! 目标名集合必须与该次已验证恢复完全一致,外部导入文件不能借撤回扩展白名单。
 
 use std::fs;
 use std::io::ErrorKind;
@@ -12,12 +11,19 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::*;
 
+/// 恢复目标的类别与根内相对名共同构成身份，禁止跨根伪造。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct RestoreTarget {
+    category: BackupCategory,
+    name: String,
+}
+
 /// 一次选择性恢复之前的本机现场句柄。
 #[derive(Clone, Debug)]
 pub(crate) struct RestorePoint {
     pub(crate) path: PathBuf,
-    /// 目标名集合:私有,写入规则不暴露给 UI。
-    names: Vec<String>,
+    /// 目标集合私有，写入规则不暴露给 UI。
+    targets: Vec<RestoreTarget>,
 }
 
 impl RestorePoint {
@@ -25,22 +31,18 @@ impl RestorePoint {
     pub(crate) fn path(&self) -> &Path {
         &self.path
     }
-
-    /// 该次恢复触及的目标名只读清单(UI 展示撤回范围用)。
-    pub(crate) fn names(&self) -> &[String] {
-        &self.names
-    }
 }
 
 #[derive(Serialize, Deserialize)]
 struct OriginalFile {
-    name: String,
+    target: RestoreTarget,
     /// None = 恢复前该文件不存在;撤回时删除,而不是留下恢复新建的文件。
     bytes: Option<Vec<u8>>,
 }
 
-fn read_original(root: &Path, name: &str) -> Result<OriginalFile, String> {
-    let path = restore_path(root, name)?;
+fn read_original(paths: &AppPaths, entry: &BackupEntry) -> Result<OriginalFile, String> {
+    let name = &entry.name;
+    let path = restore_path(category_root(paths, entry.category), name)?;
     if fs::symlink_metadata(&path).is_ok_and(|meta| meta.file_type().is_symlink()) {
         return Err(format!("备份目标是符号链接: {name}"));
     }
@@ -50,24 +52,34 @@ fn read_original(root: &Path, name: &str) -> Result<OriginalFile, String> {
         Err(error) => return Err(format!("读取恢复前现场 {name} 失败: {error}")),
     };
     Ok(OriginalFile {
-        name: name.to_owned(),
+        target: RestoreTarget {
+            category: entry.category,
+            name: name.clone(),
+        },
         bytes,
     })
 }
 
-fn write_originals(root: &Path, originals: &[OriginalFile]) -> Result<(), String> {
-    let paths = originals
+fn write_originals(paths: &AppPaths, originals: &[OriginalFile]) -> Result<(), String> {
+    let restore_paths = originals
         .iter()
-        .map(|file| restore_path(root, &file.name))
+        .map(|file| {
+            restore_path(
+                category_root(paths, file.target.category),
+                &file.target.name,
+            )
+        })
         .collect::<Result<Vec<_>, _>>()?;
-    for (original, path) in originals.iter().zip(paths) {
+    for (original, path) in originals.iter().zip(restore_paths) {
         match &original.bytes {
             Some(bytes) => crate::atomic_file::write(&path, bytes)
-                .map_err(|error| format!("撤回 {} 失败: {error}", original.name))?,
+                .map_err(|error| format!("撤回 {} 失败: {error}", original.target.name))?,
             None => match fs::remove_file(path) {
                 Ok(()) => {}
                 Err(error) if error.kind() == ErrorKind::NotFound => {}
-                Err(error) => return Err(format!("撤回 {} 失败: {error}", original.name)),
+                Err(error) => {
+                    return Err(format!("撤回 {} 失败: {error}", original.target.name));
+                }
             },
         }
     }
@@ -82,7 +94,7 @@ pub(crate) fn restore_selected(
     passphrase: &str,
 ) -> Result<RestorePoint, String> {
     restore_selected_at(
-        crate::platform::dirs::data_dir(),
+        crate::platform::dirs::app_paths(),
         archive,
         selection,
         passphrase,
@@ -90,7 +102,7 @@ pub(crate) fn restore_selected(
 }
 
 fn restore_selected_at(
-    root: &Path,
+    paths: &AppPaths,
     archive: &BackupArchive,
     selection: BackupSelection,
     passphrase: &str,
@@ -112,27 +124,27 @@ fn restore_selected_at(
     let originals = selected
         .entries
         .iter()
-        .map(|entry| read_original(root, &entry.name))
+        .map(|entry| read_original(paths, entry))
         .collect::<Result<Vec<_>, _>>()?;
     let plaintext = Zeroizing::new(
         serde_json::to_vec(&originals).map_err(|error| format!("序列化恢复点失败: {error}"))?,
     );
     let packet = encrypt_bytes(&plaintext, passphrase)?;
-    let path = recovery_point_path(root)?;
+    let path = recovery_point_path(paths.local_root())?;
     fs::create_dir_all(path.parent().ok_or("恢复点路径无效")?)
         .map_err(|error| format!("创建恢复点目录失败: {error}"))?;
     crate::atomic_file::write(&path, &packet)
         .map_err(|error| format!("保存恢复点失败: {error}"))?;
 
-    if let Err(error) = restore_to(root, &selected) {
-        return match write_originals(root, &originals) {
+    if let Err(error) = restore_to(paths, &selected) {
+        return match write_originals(paths, &originals) {
             Ok(()) => Err(error),
             Err(rollback) => Err(format!("{error}; {rollback}; 恢复点: {}", path.display())),
         };
     }
     Ok(RestorePoint {
         path,
-        names: originals.into_iter().map(|file| file.name).collect(),
+        targets: originals.into_iter().map(|file| file.target).collect(),
     })
 }
 
@@ -154,10 +166,10 @@ fn recovery_point_path(root: &Path) -> Result<PathBuf, String> {
 
 /// 凭口令撤回:解密恢复点 → 目标名集合与句柄精确比对 → 写回原现场。
 pub(crate) fn undo(point: &RestorePoint, passphrase: &str) -> Result<(), String> {
-    undo_at(crate::platform::dirs::data_dir(), point, passphrase)
+    undo_at(crate::platform::dirs::app_paths(), point, passphrase)
 }
 
-fn undo_at(root: &Path, point: &RestorePoint, passphrase: &str) -> Result<(), String> {
+fn undo_at(paths: &AppPaths, point: &RestorePoint, passphrase: &str) -> Result<(), String> {
     let packet = fs::read(&point.path).map_err(|error| format!("读取恢复点失败: {error}"))?;
     let plaintext = decrypt_bytes(&packet, passphrase)?;
     let originals: Vec<OriginalFile> =
@@ -165,12 +177,12 @@ fn undo_at(root: &Path, point: &RestorePoint, passphrase: &str) -> Result<(), St
     // 只接受该次已验证恢复操作拥有的目标集合;外部导入文件不能借撤回扩展白名单。
     if originals
         .iter()
-        .map(|file| &file.name)
-        .ne(point.names.iter())
+        .map(|file| &file.target)
+        .ne(point.targets.iter())
     {
         return Err("恢复点目标集合不匹配".to_owned());
     }
-    write_originals(root, &originals)
+    write_originals(paths, &originals)
 }
 
 #[cfg(test)]
@@ -178,6 +190,14 @@ mod recovery_tests {
     use super::*;
 
     const PASSPHRASE: &str = "correct horse";
+
+    fn single_root_paths(root: &Path) -> AppPaths {
+        AppPaths::new(root, root).unwrap()
+    }
+
+    fn split_paths(root: &Path) -> AppPaths {
+        AppPaths::new(root.join("config"), root.join("local")).unwrap()
+    }
 
     fn archive() -> BackupArchive {
         BackupArchive {
@@ -209,7 +229,7 @@ mod recovery_tests {
         )
         .unwrap();
         let point = restore_selected_at(
-            root.path(),
+            &single_root_paths(root.path()),
             &archive(),
             BackupSelection::default(),
             PASSPHRASE,
@@ -223,7 +243,13 @@ mod recovery_tests {
             !root.path().join("session.json").exists(),
             "未选择的类别不得被恢复"
         );
-        assert_eq!(point.names(), ["settings.json".to_owned()]);
+        assert_eq!(
+            point.targets,
+            [RestoreTarget {
+                category: BackupCategory::Settings,
+                name: "settings.json".to_owned(),
+            }]
+        );
         assert!(point.path().is_file(), "恢复点应已加密落盘");
         assert!(
             point
@@ -232,8 +258,8 @@ mod recovery_tests {
             "恢复点落在本机 backup-recovery 目录"
         );
 
-        assert!(undo_at(root.path(), &point, "wrong horse").is_err());
-        undo_at(root.path(), &point, PASSPHRASE).expect("撤回");
+        assert!(undo_at(&single_root_paths(root.path()), &point, "wrong horse").is_err());
+        undo_at(&single_root_paths(root.path()), &point, PASSPHRASE).expect("撤回");
         assert_eq!(
             fs::read(root.path().join("settings.json")).unwrap(),
             br#"{"appearance":{"theme":"Linear"}}"#
@@ -241,15 +267,79 @@ mod recovery_tests {
 
         // 恢复前不存在 → 撤回把恢复新建的文件删掉。
         let point = restore_selected_at(
-            root.path(),
+            &single_root_paths(root.path()),
             &archive(),
             BackupSelection::from_categories([BackupCategory::Session]),
             PASSPHRASE,
         )
         .expect("会话恢复");
         assert!(root.path().join("session.json").exists());
-        undo_at(root.path(), &point, PASSPHRASE).expect("撤回会话");
+        undo_at(&single_root_paths(root.path()), &point, PASSPHRASE).expect("撤回会话");
         assert!(!root.path().join("session.json").exists());
+    }
+
+    #[test]
+    fn selective_restore_and_undo_scope_originals_across_split_roots() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = split_paths(directory.path());
+        fs::create_dir_all(paths.config_root()).unwrap();
+        fs::create_dir_all(paths.local_root()).unwrap();
+        fs::write(
+            paths.settings_path(),
+            br#"{"appearance":{"theme":"Linear"}}"#,
+        )
+        .unwrap();
+        fs::write(paths.local_root().join("session.json"), br#"{"version":0}"#).unwrap();
+        fs::write(paths.local_root().join("settings.json"), b"local-decoy").unwrap();
+        fs::write(paths.config_root().join("session.json"), b"config-decoy").unwrap();
+
+        let point = restore_selected_at(
+            &paths,
+            &archive(),
+            BackupSelection::from_categories([BackupCategory::Settings, BackupCategory::Session]),
+            PASSPHRASE,
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read(paths.settings_path()).unwrap(),
+            br#"{"appearance":{"theme":"Nord"}}"#
+        );
+        assert_eq!(
+            fs::read(paths.local_root().join("session.json")).unwrap(),
+            br#"{"version":1}"#
+        );
+        assert_eq!(
+            fs::read(paths.local_root().join("settings.json")).unwrap(),
+            b"local-decoy"
+        );
+        assert_eq!(
+            fs::read(paths.config_root().join("session.json")).unwrap(),
+            b"config-decoy"
+        );
+        assert!(
+            point
+                .path()
+                .starts_with(paths.local_root().join("backup-recovery")),
+            "恢复点必须始终归本地根"
+        );
+
+        undo_at(&paths, &point, PASSPHRASE).unwrap();
+        assert_eq!(
+            fs::read(paths.settings_path()).unwrap(),
+            br#"{"appearance":{"theme":"Linear"}}"#
+        );
+        assert_eq!(
+            fs::read(paths.local_root().join("session.json")).unwrap(),
+            br#"{"version":0}"#
+        );
+        assert_eq!(
+            fs::read(paths.local_root().join("settings.json")).unwrap(),
+            b"local-decoy"
+        );
+        assert_eq!(
+            fs::read(paths.config_root().join("session.json")).unwrap(),
+            b"config-decoy"
+        );
     }
 
     #[test]
@@ -261,7 +351,7 @@ mod recovery_tests {
         )
         .unwrap();
         let point = restore_selected_at(
-            root.path(),
+            &single_root_paths(root.path()),
             &archive(),
             BackupSelection::default(),
             PASSPHRASE,
@@ -282,7 +372,7 @@ mod recovery_tests {
         let root = tempfile::tempdir().unwrap();
         fs::write(root.path().join("settings.json"), b"local").unwrap();
         let point = restore_selected_at(
-            root.path(),
+            &single_root_paths(root.path()),
             &archive(),
             BackupSelection::default(),
             PASSPHRASE,
@@ -292,11 +382,17 @@ mod recovery_tests {
         // 伪造一份目标集合不同的恢复点文件:撤回必须拒绝,不能借机扩白名单。
         let forged_originals = vec![
             OriginalFile {
-                name: "settings.json".into(),
+                target: RestoreTarget {
+                    category: BackupCategory::Settings,
+                    name: "settings.json".into(),
+                },
                 bytes: Some(b"forged".to_vec()),
             },
             OriginalFile {
-                name: "session.json".into(),
+                target: RestoreTarget {
+                    category: BackupCategory::Session,
+                    name: "session.json".into(),
+                },
                 bytes: None,
             },
         ];
@@ -304,13 +400,46 @@ mod recovery_tests {
         let packet = encrypt_bytes(&plaintext, PASSPHRASE).unwrap();
         let forged = RestorePoint {
             path: point.path.clone(),
-            names: point.names.clone(),
+            targets: point.targets.clone(),
         };
         fs::write(&forged.path, packet).unwrap();
         let before = fs::read(root.path().join("settings.json")).unwrap();
-        assert!(undo_at(root.path(), &forged, PASSPHRASE).is_err());
+        assert!(undo_at(&single_root_paths(root.path()), &forged, PASSPHRASE).is_err());
         assert_eq!(fs::read(root.path().join("settings.json")).unwrap(), before);
         assert!(!root.path().join("session.json").exists());
+    }
+
+    #[test]
+    fn undo_rejects_same_name_with_a_forged_category() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = split_paths(directory.path());
+        fs::create_dir_all(paths.config_root()).unwrap();
+        fs::create_dir_all(paths.local_root()).unwrap();
+        fs::write(
+            paths.settings_path(),
+            br#"{"appearance":{"theme":"Linear"}}"#,
+        )
+        .unwrap();
+        let point = restore_selected_at(&paths, &archive(), BackupSelection::default(), PASSPHRASE)
+            .unwrap();
+
+        // 文件名与句柄一致，仅类别被伪造；完整目标比对必须拒绝跨根写入。
+        let forged_originals = vec![OriginalFile {
+            target: RestoreTarget {
+                category: BackupCategory::Session,
+                name: "settings.json".into(),
+            },
+            bytes: Some(b"forged".to_vec()),
+        }];
+        let packet =
+            encrypt_bytes(&serde_json::to_vec(&forged_originals).unwrap(), PASSPHRASE).unwrap();
+        fs::write(point.path(), packet).unwrap();
+        assert!(undo_at(&paths, &point, PASSPHRASE).is_err());
+        assert_eq!(
+            fs::read(paths.settings_path()).unwrap(),
+            br#"{"appearance":{"theme":"Nord"}}"#
+        );
+        assert!(!paths.local_root().join("settings.json").exists());
     }
 
     #[test]
@@ -321,7 +450,7 @@ mod recovery_tests {
         // 且不留下第 1 条(恢复前不存在)。
         *super::super::RESTORE_FAILPOINT.lock().unwrap() = Some("session.json".to_owned());
         let result = restore_selected_at(
-            root.path(),
+            &single_root_paths(root.path()),
             &archive(),
             BackupSelection::from_categories([BackupCategory::Settings, BackupCategory::Session]),
             PASSPHRASE,
@@ -348,7 +477,7 @@ mod recovery_tests {
         let root = tempfile::tempdir().unwrap();
         assert!(
             restore_selected_at(
-                root.path(),
+                &single_root_paths(root.path()),
                 &archive(),
                 BackupSelection::from_categories([]),
                 PASSPHRASE

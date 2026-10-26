@@ -123,7 +123,7 @@ pub struct ThemeLibraryStore {
 impl Default for ThemeLibraryStore {
     fn default() -> Self {
         // 开放问题 2 / 数据目录下 `themes/` 子目录,文件名不带品牌。
-        Self::new(slterm_settings::settings_dir().join("themes"))
+        Self::new(crate::platform::dirs::config_dir().join("themes"))
     }
 }
 

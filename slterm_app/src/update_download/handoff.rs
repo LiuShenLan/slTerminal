@@ -64,6 +64,7 @@ struct Plan {
     executable: PathBuf,
     installation: PathBuf,
     config_directory: PathBuf,
+    local_directory: PathBuf,
     installer: PathBuf,
     sha256: String,
     bytes: u64,
@@ -116,9 +117,9 @@ impl PreparePaths {
         .map_err(|error| error.to_string())?;
         let installation =
             crate::platform::update_installation::installation_directory(&executable)?;
-        let root = crate::platform::dirs::data_dir().to_owned();
-        let config_directory =
-            canonical(&root).map_err(|error| format!("无法解析配置目录:{error}"))?;
+        let root = crate::platform::dirs::local_dir().to_owned();
+        let config_directory = canonical(crate::platform::dirs::config_dir())
+            .map_err(|error| format!("无法解析配置目录:{error}"))?;
         Ok(Self {
             root,
             executable,
@@ -220,6 +221,7 @@ pub(crate) fn prepare_with(
         installation,
         executable,
         config_directory: canonical(&paths.config_directory).map_err(|error| error.to_string())?,
+        local_directory: canonical(&paths.root).map_err(|error| error.to_string())?,
         installer: canonical(&installer).map_err(|error| error.to_string())?,
         sha256: asset
             .digest
@@ -358,7 +360,7 @@ fn last_handoff_path(root: &Path) -> Option<PathBuf> {
 
 /// 恢复 ticket:按工作区快照恢复,最多 3 次尝试;成功后留档防重放。
 pub(crate) fn restore_ticket() -> Option<Vec<Session>> {
-    let root = crate::platform::dirs::data_dir();
+    let root = crate::platform::dirs::local_dir();
     let executable = std::env::current_exe().ok()?;
     restore_ticket_at(root, &executable, env!("CARGO_PKG_VERSION"))
 }
@@ -497,7 +499,7 @@ pub(super) fn failure_unseen(root: &Path, executable: Option<&Path>, prompt_stat
 
 /// 预约下次启动安装(不授予安装权限;`apply_scheduled` 启动早期消费)。
 pub(crate) fn schedule(asset: &UpdateAsset) -> Result<(), String> {
-    schedule_at(crate::platform::dirs::data_dir(), asset)
+    schedule_at(crate::platform::dirs::local_dir(), asset)
 }
 
 pub(crate) fn schedule_at(root: &Path, asset: &UpdateAsset) -> Result<(), String> {

@@ -8,7 +8,7 @@
 - **渠道过滤**：GitHub `releases/latest` 之外的预发布/草稿一律拒绝；外部托管分发渠道（`platform::distribution`）在检查入口直接退出。
 - **限流回退的唯一触发** = REST 403/429；终 URL 必须是本仓 HTTPS + 精确数字 tag，`SHA256SUMS` 只恢复下载元数据，不授予安装权威。禁止嵌 token、猜包 URL、把 API 失败当最新。
 - **提示状态与用户设置解耦**：`update_state.json` 按版本生效；进程内 Mutex + 跨进程文件锁双闸，被占用时拒绝写入而非半写。
-- **演练通道红线**：`test_source` 只接受 `http://127.0.0.1:<port>` 且要求隔离 `SLTERM_CONFIG_DIR`；存在 origin 时永不回落公网，release 构建编译期拒绝该 feature。
+- **演练通道红线**：`test_source` 只接受 `http://127.0.0.1:<port>` 且要求同时隔离 `SLTERM_CONFIG_DIR` 与 `SLTERM_LOCAL_DIR`；存在 origin 时永不回落公网，release 构建编译期拒绝该 feature。
 - **启动检查 best-effort**：独立线程延迟 12 秒；断网/坏 JSON/限流只落 debug 日志，不弹错、不阻塞 UI。
 
 ## 验收与测试

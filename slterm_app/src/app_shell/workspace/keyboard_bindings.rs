@@ -443,7 +443,7 @@ pub(super) fn install_user_keybinds(cx: &mut App) {
 
 /// 读生产设置文件里的 `keybind` 段(损坏/缺失 = 空表,不炸启动)。
 pub(crate) fn load_keybind_pairs() -> Vec<(String, String)> {
-    load_keybind_pairs_at(&slterm_settings::settings_path())
+    load_keybind_pairs_at(&crate::platform::dirs::app_paths().settings_path())
 }
 
 /// 显式路径读入口(测试 tempdir)。
@@ -460,7 +460,7 @@ pub(crate) fn load_keybind_pairs_at(path: &Path) -> Vec<(String, String)> {
 /// 整表写回生产设置文件(域外段替换,其余内容原样保留)。
 #[allow(dead_code)] // 消费点 = 设置面键位编辑(落段结构,编辑 UI 归后续)。
 pub(crate) fn persist_keybinds(pairs: &[(String, String)]) -> io::Result<()> {
-    persist_keybinds_at(&slterm_settings::settings_path(), pairs)
+    persist_keybinds_at(&crate::platform::dirs::app_paths().settings_path(), pairs)
 }
 
 /// 显式路径写入口(测试 tempdir)。

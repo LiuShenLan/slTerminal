@@ -39,7 +39,7 @@ struct DataDirSettingsGuard {
 
 impl DataDirSettingsGuard {
     fn write(bytes: &[u8]) -> Self {
-        let path = crate::platform::dirs::data_dir().join("settings.json");
+        let path = crate::platform::dirs::app_paths().settings_path();
         let previous = std::fs::read(&path).ok();
         std::fs::write(&path, bytes).expect("测试数据目录可写");
         Self { path, previous }

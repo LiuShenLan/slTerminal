@@ -41,7 +41,7 @@ fn startup_error_needs_dialog(gui_launch: bool, has_console: bool) -> bool {
 
 /// 安装 panic 钩:写 stderr + 持久日志,并弹经典 Windows 错误框。
 pub fn attach_handler() {
-    let panic_log = crate::platform::dirs::data_dir().join("slterm-panic.log");
+    let panic_log = crate::platform::dirs::local_dir().join("slterm-panic.log");
     panic::set_hook(Box::new(move |panic_info| {
         let message = panic_info.to_string();
         let _ = writeln!(io::stderr(), "{message}");

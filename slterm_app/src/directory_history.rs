@@ -83,7 +83,7 @@ pub(crate) fn global() -> DirectoryHistory {
 
 impl DirectoryHistory {
     fn load() -> Self {
-        let path = crate::platform::dirs::data_dir().join("directory_history.json");
+        let path = crate::platform::dirs::local_dir().join("directory_history.json");
         let (database, persistence_enabled) = match read_database(&path) {
             Ok(Some(database)) => (database, true),
             Ok(None) => (DirectoryDatabase::default(), true),

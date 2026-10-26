@@ -251,7 +251,7 @@ impl Notification {
 }
 
 fn notification_language() -> UiLanguage {
-    crate::i18n::LanguagePreference::from(slterm_settings::RuntimeSettings::load().language)
+    crate::i18n::LanguagePreference::from(crate::settings_store::load_runtime_settings().language)
         .resolved()
 }
 
