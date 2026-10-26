@@ -271,7 +271,7 @@ impl AgentKind {
     }
 }
 
-fn valid_session_id(id: &str) -> Option<()> {
+pub(crate) fn valid_session_id(id: &str) -> Option<()> {
     (!id.is_empty()
         && id.len() <= 64
         && id

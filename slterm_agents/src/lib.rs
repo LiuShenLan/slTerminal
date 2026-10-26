@@ -5,4 +5,6 @@
 #![forbid(unsafe_code)]
 
 mod identity;
+mod session;
 pub use identity::AgentKind;
+pub use session::{AgentSessionKey, InvalidNativeSessionId};
