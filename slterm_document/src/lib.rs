@@ -9,4 +9,6 @@
 mod grammar_audit;
 
 mod identity;
+mod repository;
 pub use identity::{DocumentId, StableIdError, TextStateId};
+pub use repository::{CommitId, InvalidCommitId, InvalidRepoPath, RepoPath};
