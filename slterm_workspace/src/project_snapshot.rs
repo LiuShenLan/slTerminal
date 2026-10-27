@@ -108,6 +108,50 @@ impl ProjectSnapshot {
         Ok(())
     }
 
+    /// 原子加入逻辑终端；任何一致性校验失败都保持原快照。
+    pub fn add_terminal(&mut self, record: TerminalRecord) -> Result<(), ProjectSnapshotError> {
+        let id = record.id();
+        if self.terminals.contains_key(&id) {
+            return Err(ProjectSnapshotError::DuplicateTerminal(id));
+        }
+        self.terminals.insert(id, record);
+        if let Err(error) = self.validate() {
+            self.terminals.remove(&id);
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    /// 原子移除逻辑终端；布局仍引用或记录缺失时保持原快照。
+    pub fn remove_terminal(
+        &mut self,
+        id: TerminalId,
+    ) -> Result<TerminalRecord, ProjectSnapshotError> {
+        let record = self
+            .terminals
+            .remove(&id)
+            .ok_or(ProjectSnapshotError::MissingTerminal(id))?;
+        if let Err(error) = self.validate() {
+            self.terminals.insert(id, record);
+            return Err(error);
+        }
+        Ok(record)
+    }
+
+    /// 更新既有逻辑终端的启动意图。
+    pub fn set_run_intent(
+        &mut self,
+        id: TerminalId,
+        run_intent: crate::RunIntent,
+    ) -> Result<(), ProjectSnapshotError> {
+        let record = self
+            .terminals
+            .get_mut(&id)
+            .ok_or(ProjectSnapshotError::MissingTerminal(id))?;
+        record.set_run_intent(run_intent);
+        Ok(())
+    }
+
     pub const fn registry(&self) -> &ProjectRegistry {
         &self.registry
     }

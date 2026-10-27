@@ -213,3 +213,96 @@ fn project_snapshot_rejects_terminal_number_beyond_project_counter() {
         ))
     );
 }
+
+#[test]
+fn project_snapshot_terminal_mutations_preserve_consistency() {
+    let mut snapshot = ProjectSnapshot::restore(
+        registry_with_views(1, &[TERMINAL_A]),
+        vec![record(PROJECT_A, TERMINAL_A, 0)],
+    )
+    .unwrap();
+    let number = snapshot
+        .registry_mut()
+        .allocate_terminal_number(project_id(PROJECT_A))
+        .unwrap();
+    snapshot
+        .registry_mut()
+        .layout_mut(project_id(PROJECT_A))
+        .unwrap()
+        .insert_view(
+            PanelGroupId::from_str(GROUP_A).unwrap(),
+            ViewKey::Terminal {
+                project_id: project_id(PROJECT_A),
+                terminal_id: terminal_id(TERMINAL_B),
+            },
+        )
+        .unwrap();
+    let mut added = record(PROJECT_A, TERMINAL_B, number);
+    snapshot.add_terminal(added.clone()).unwrap();
+    assert_eq!(snapshot.terminal(terminal_id(TERMINAL_B)), Some(&added));
+    assert_eq!(snapshot.validate(), Ok(()));
+
+    snapshot
+        .set_run_intent(terminal_id(TERMINAL_B), RunIntent::Exited)
+        .unwrap();
+    added.set_run_intent(RunIntent::Exited);
+    assert_eq!(
+        snapshot
+            .terminal(terminal_id(TERMINAL_B))
+            .unwrap()
+            .run_intent(),
+        RunIntent::Exited
+    );
+
+    snapshot
+        .registry_mut()
+        .layout_mut(project_id(PROJECT_A))
+        .unwrap()
+        .close_view(&ViewKey::Terminal {
+            project_id: project_id(PROJECT_A),
+            terminal_id: terminal_id(TERMINAL_B),
+        })
+        .unwrap();
+    assert_eq!(snapshot.remove_terminal(terminal_id(TERMINAL_B)), Ok(added));
+    assert_eq!(snapshot.terminal(terminal_id(TERMINAL_B)), None);
+    assert_eq!(snapshot.validate(), Ok(()));
+}
+
+#[test]
+fn project_snapshot_failed_terminal_mutations_do_not_partially_change_state() {
+    let original = ProjectSnapshot::restore(
+        registry_with_views(1, &[TERMINAL_A]),
+        vec![record(PROJECT_A, TERMINAL_A, 0)],
+    )
+    .unwrap();
+    let mut snapshot = original.clone();
+
+    assert_eq!(
+        snapshot.add_terminal(record(PROJECT_A, TERMINAL_A, 0)),
+        Err(ProjectSnapshotError::DuplicateTerminal(terminal_id(
+            TERMINAL_A
+        )))
+    );
+    assert_eq!(snapshot, original);
+    assert_eq!(
+        snapshot.add_terminal(record(PROJECT_A, TERMINAL_B, 1)),
+        Err(ProjectSnapshotError::OrphanTerminal(terminal_id(
+            TERMINAL_B
+        )))
+    );
+    assert_eq!(snapshot, original);
+    assert_eq!(
+        snapshot.remove_terminal(terminal_id(TERMINAL_A)),
+        Err(ProjectSnapshotError::MissingTerminal(terminal_id(
+            TERMINAL_A
+        )))
+    );
+    assert_eq!(snapshot, original);
+    assert_eq!(
+        snapshot.set_run_intent(terminal_id(TERMINAL_B), RunIntent::Exited),
+        Err(ProjectSnapshotError::MissingTerminal(terminal_id(
+            TERMINAL_B
+        )))
+    );
+    assert_eq!(snapshot, original);
+}

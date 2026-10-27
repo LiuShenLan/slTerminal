@@ -99,4 +99,8 @@ impl TerminalRecord {
     pub const fn run_intent(&self) -> RunIntent {
         self.run_intent
     }
+
+    pub(crate) fn set_run_intent(&mut self, run_intent: RunIntent) {
+        self.run_intent = run_intent;
+    }
 }
