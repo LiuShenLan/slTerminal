@@ -2,10 +2,12 @@
 
 use std::fmt;
 
-use rusqlite::{OptionalExtension, Row, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, Row, TransactionBehavior, params};
 use serde::Deserialize;
+use slterm_sidebar::SideViewState;
 use slterm_workspace::{
-    ProjectId, ViewKey, ViewKeyError, ViewState, ViewStateError, ViewStateRegistry, ViewStateScope,
+    ProjectId, SideViewId, ViewKey, ViewKeyError, ViewState, ViewStateError, ViewStateRegistry,
+    ViewStateScope,
 };
 
 use super::database::DatabaseError;
@@ -82,66 +84,11 @@ impl WorkspaceDatabase {
         key: &ViewKey,
         state: &ViewState,
     ) -> Result<u64, ViewStateStoreError> {
-        let key_json = key.to_canonical_json()?;
-        let scope = scope_text(state.scope(key)?);
-        let state_json = state.to_canonical_json()?;
-        let dto_version = envelope_version(&state_json)
-            .ok_or(ViewStateError::InvalidStructure)
-            .map_err(ViewStateStoreError::from)?;
-        let stored_dto_version = i64::try_from(dto_version)
-            .map_err(|_| ViewStateStoreError::ViewState(ViewStateError::UnsupportedVersion))?;
         let transaction = self
             .database
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let existing = transaction
-            .query_row(
-                "SELECT dto_version, state_json, revision FROM view_states WHERE view_key = ?1",
-                [&key_json],
-                |row| Ok(decode_existing_record(row)),
-            )
-            .optional()?
-            .transpose()?;
-        let revision = if let Some((existing_version, existing_json, existing_revision)) = existing
-        {
-            let existing_version =
-                u64::try_from(existing_version).map_err(|_| ViewStateStoreError::CorruptRecord)?;
-            if existing_version > dto_version
-                || envelope_version(&existing_json).is_some_and(|version| version > dto_version)
-            {
-                return Err(ViewStateError::UnsupportedVersion.into());
-            }
-            let current =
-                u64::try_from(existing_revision).map_err(|_| ViewStateStoreError::CorruptRecord)?;
-            let revision = current
-                .checked_add(1)
-                .ok_or(ViewStateStoreError::RevisionExhausted)?;
-            let stored_revision =
-                i64::try_from(revision).map_err(|_| ViewStateStoreError::RevisionExhausted)?;
-            let changed = transaction.execute(
-                "UPDATE view_states \
-                 SET dto_version = ?2, state_json = ?3, revision = ?4, scope = ?5 \
-                 WHERE view_key = ?1",
-                params![
-                    key_json,
-                    stored_dto_version,
-                    state_json,
-                    stored_revision,
-                    scope
-                ],
-            )?;
-            if changed != 1 {
-                return Err(ViewStateStoreError::CorruptRecord);
-            }
-            revision
-        } else {
-            transaction.execute(
-                "INSERT INTO view_states (view_key, dto_version, state_json, revision, scope) \
-                 VALUES (?1, ?2, ?3, 0, ?4)",
-                params![key_json, stored_dto_version, state_json, scope],
-            )?;
-            0
-        };
+        let revision = save_view_state_in(&transaction, key, state)?;
         transaction.commit()?;
         Ok(revision)
     }
@@ -152,33 +99,7 @@ impl WorkspaceDatabase {
         key: &ViewKey,
         registry: &ViewStateRegistry,
     ) -> Result<Option<StoredViewState>, ViewStateStoreError> {
-        let key_json = key.to_canonical_json()?;
-        let raw = self
-            .database
-            .connection
-            .query_row(
-                "SELECT dto_version, state_json, revision, scope \
-                 FROM view_states WHERE view_key = ?1",
-                [&key_json],
-                |row| Ok(decode_record(row)),
-            )
-            .optional()?
-            .transpose()?;
-        let Some((stored_version, state_json, stored_revision, stored_scope)) = raw else {
-            return Ok(None);
-        };
-        let stored_version =
-            u64::try_from(stored_version).map_err(|_| ViewStateStoreError::CorruptRecord)?;
-        let revision =
-            u64::try_from(stored_revision).map_err(|_| ViewStateStoreError::CorruptRecord)?;
-        let state = ViewState::from_canonical_json(&state_json, key, registry)?;
-        if envelope_version(&state_json).ok_or(ViewStateStoreError::CorruptRecord)?
-            != stored_version
-            || scope_text(state.scope(key)?) != stored_scope
-        {
-            return Err(ViewStateStoreError::CorruptRecord);
-        }
-        Ok(Some(StoredViewState { state, revision }))
+        view_state_in(&self.database.connection, key, registry)
     }
 
     /// 删除一个逻辑视图的持久状态，不影响同作用域的其他视图。
@@ -191,17 +112,153 @@ impl WorkspaceDatabase {
         Ok(changed == 1)
     }
 
-    /// 只清理项目级记录；应用级 SideView 内部分区由所属视图另行精确更新。
+    /// 项目作用域记录与 Nav／Explorer 对应分区在同一事务内清理。
     pub(crate) fn delete_project_view_states(
         &mut self,
         project_id: ProjectId,
+        registry: &ViewStateRegistry,
     ) -> Result<usize, ViewStateStoreError> {
         let scope = scope_text(ViewStateScope::Project(project_id));
-        Ok(self
+        let transaction = self
             .database
             .connection
-            .execute("DELETE FROM view_states WHERE scope = ?1", [scope])?)
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let deleted = transaction.execute("DELETE FROM view_states WHERE scope = ?1", [scope])?;
+        for side_view_id in [SideViewId::Nav, SideViewId::Explorer] {
+            let key = ViewKey::SideView { side_view_id };
+            let Some(stored) = view_state_in(&transaction, &key, registry)? else {
+                continue;
+            };
+            let mut state = SideViewState::from_view_state(side_view_id, stored.state)
+                .map_err(|_| ViewStateStoreError::CorruptRecord)?;
+            if state.remove_project(project_id) {
+                save_view_state_in(&transaction, &key, &state.to_view_state(registry)?)?;
+            }
+        }
+        transaction.commit()?;
+        Ok(deleted)
     }
+
+    /// AgentRoot 只清理 AgentFiles 对应根分区，缺失身份不推进 revision。
+    pub(crate) fn delete_agent_root_view_states(
+        &mut self,
+        agent_root_id: slterm_settings::AgentRootId,
+        registry: &ViewStateRegistry,
+    ) -> Result<bool, ViewStateStoreError> {
+        let transaction = self
+            .database
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let key = ViewKey::SideView {
+            side_view_id: SideViewId::AgentFiles,
+        };
+        let Some(stored) = view_state_in(&transaction, &key, registry)? else {
+            return Ok(false);
+        };
+        let mut state = SideViewState::from_view_state(SideViewId::AgentFiles, stored.state)
+            .map_err(|_| ViewStateStoreError::CorruptRecord)?;
+        if !state.remove_agent_root(agent_root_id) {
+            return Ok(false);
+        }
+        save_view_state_in(&transaction, &key, &state.to_view_state(registry)?)?;
+        transaction.commit()?;
+        Ok(true)
+    }
+}
+
+/// 在调用方事务内保存；事务所有者统一决定提交或整体回滚。
+fn save_view_state_in(
+    connection: &Connection,
+    key: &ViewKey,
+    state: &ViewState,
+) -> Result<u64, ViewStateStoreError> {
+    let key_json = key.to_canonical_json()?;
+    let scope = scope_text(state.scope(key)?);
+    let state_json = state.to_canonical_json()?;
+    let dto_version = envelope_version(&state_json)
+        .ok_or(ViewStateError::InvalidStructure)
+        .map_err(ViewStateStoreError::from)?;
+    let stored_dto_version = i64::try_from(dto_version)
+        .map_err(|_| ViewStateStoreError::ViewState(ViewStateError::UnsupportedVersion))?;
+    let existing = connection
+        .query_row(
+            "SELECT dto_version, state_json, revision FROM view_states WHERE view_key = ?1",
+            [&key_json],
+            |row| Ok(decode_existing_record(row)),
+        )
+        .optional()?
+        .transpose()?;
+    if let Some((existing_version, existing_json, existing_revision)) = existing {
+        let existing_version =
+            u64::try_from(existing_version).map_err(|_| ViewStateStoreError::CorruptRecord)?;
+        if existing_version > dto_version
+            || envelope_version(&existing_json).is_some_and(|version| version > dto_version)
+        {
+            return Err(ViewStateError::UnsupportedVersion.into());
+        }
+        let current =
+            u64::try_from(existing_revision).map_err(|_| ViewStateStoreError::CorruptRecord)?;
+        let revision = current
+            .checked_add(1)
+            .ok_or(ViewStateStoreError::RevisionExhausted)?;
+        let stored_revision =
+            i64::try_from(revision).map_err(|_| ViewStateStoreError::RevisionExhausted)?;
+        let changed = connection.execute(
+            "UPDATE view_states \
+             SET dto_version = ?2, state_json = ?3, revision = ?4, scope = ?5 \
+             WHERE view_key = ?1",
+            params![
+                key_json,
+                stored_dto_version,
+                state_json,
+                stored_revision,
+                scope
+            ],
+        )?;
+        if changed != 1 {
+            return Err(ViewStateStoreError::CorruptRecord);
+        }
+        Ok(revision)
+    } else {
+        connection.execute(
+            "INSERT INTO view_states (view_key, dto_version, state_json, revision, scope) \
+             VALUES (?1, ?2, ?3, 0, ?4)",
+            params![key_json, stored_dto_version, state_json, scope],
+        )?;
+        Ok(0)
+    }
+}
+
+/// 在调用方连接或事务内读取，保持缺失、损坏与版本错误边界一致。
+fn view_state_in(
+    connection: &Connection,
+    key: &ViewKey,
+    registry: &ViewStateRegistry,
+) -> Result<Option<StoredViewState>, ViewStateStoreError> {
+    let key_json = key.to_canonical_json()?;
+    let raw = connection
+        .query_row(
+            "SELECT dto_version, state_json, revision, scope \
+             FROM view_states WHERE view_key = ?1",
+            [&key_json],
+            |row| Ok(decode_record(row)),
+        )
+        .optional()?
+        .transpose()?;
+    let Some((stored_version, state_json, stored_revision, stored_scope)) = raw else {
+        return Ok(None);
+    };
+    let stored_version =
+        u64::try_from(stored_version).map_err(|_| ViewStateStoreError::CorruptRecord)?;
+    let revision =
+        u64::try_from(stored_revision).map_err(|_| ViewStateStoreError::CorruptRecord)?;
+    let state = ViewState::from_canonical_json(&state_json, key, registry)?;
+    if envelope_version(&state_json).ok_or(ViewStateStoreError::CorruptRecord)? != stored_version
+        || scope_text(state.scope(key)?) != stored_scope
+    {
+        return Err(ViewStateStoreError::CorruptRecord);
+    }
+    Ok(Some(StoredViewState { state, revision }))
 }
 
 #[derive(Deserialize)]
@@ -252,6 +309,7 @@ mod view_state_store_tests {
     use serde::{Deserialize, Serialize};
     use serde_json::{Value, json};
     use slterm_path::AppPaths;
+    use slterm_sidebar::side_view_state_schema;
     use slterm_workspace::{InvalidViewState, SideViewId, ViewKeyKind, ViewStateSchema};
     use tempfile::TempDir;
 
@@ -259,6 +317,8 @@ mod view_state_store_tests {
 
     const PROJECT_A: &str = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2a";
     const PROJECT_B: &str = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b";
+    const ROOT_A: &str = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2c";
+    const ROOT_B: &str = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2d";
 
     #[derive(Serialize, Deserialize)]
     #[serde(deny_unknown_fields)]
@@ -282,6 +342,67 @@ mod view_state_store_tests {
             .map(|kind| ViewStateSchema::new(kind, decode_test_state)),
         )
         .unwrap()
+    }
+
+    fn cleanup_registry() -> ViewStateRegistry {
+        ViewStateRegistry::new(&[
+            side_view_state_schema(),
+            ViewStateSchema::new(ViewKeyKind::Settings, decode_test_state),
+            ViewStateSchema::new(ViewKeyKind::AppSettingsOverlay, decode_test_state),
+        ])
+        .unwrap()
+    }
+
+    fn cleanup_side_state(view: SideViewId, value: Value) -> ViewState {
+        ViewState::new(
+            &ViewKey::SideView { side_view_id: view },
+            value,
+            &cleanup_registry(),
+        )
+        .unwrap()
+    }
+
+    fn nav_partitions() -> Value {
+        json!({
+            "projects": [
+                {"project_id": PROJECT_A, "expanded": true, "history_expanded": false},
+                {"project_id": PROJECT_B, "expanded": false, "history_expanded": true}
+            ],
+            "unassigned_expanded": true,
+            "scroll": 12.0
+        })
+    }
+
+    fn explorer_partitions() -> Value {
+        json!({
+            "projects": [
+                {
+                    "project_id": PROJECT_A,
+                    "expanded": ["src"],
+                    "current_row": "src/main.rs",
+                    "scroll": 24.0,
+                    "show_ignored": true
+                },
+                {
+                    "project_id": PROJECT_B,
+                    "expanded": ["docs"],
+                    "current_row": null,
+                    "scroll": 48.0,
+                    "show_ignored": false
+                }
+            ]
+        })
+    }
+
+    fn agent_partitions() -> Value {
+        json!({
+            "roots": [
+                {"agent_root_id": ROOT_A, "expanded": true, "directories": ["skills"]},
+                {"agent_root_id": ROOT_B, "expanded": false, "directories": []}
+            ],
+            "current_row": {"agent_root_id": ROOT_A, "path": "skills/run.md"},
+            "scroll": 36.0
+        })
     }
 
     fn fixture(temp: &TempDir) -> AppPaths {
@@ -509,13 +630,19 @@ mod view_state_store_tests {
         let project_a = settings_key(PROJECT_A);
         let project_b = settings_key(PROJECT_B);
         let application = side_view_key();
-        for (key, position) in [(&project_a, 1), (&project_b, 2), (&application, 3)] {
+        for (key, position) in [(&project_a, 1), (&project_b, 2)] {
             store.save_view_state(key, &state(key, position)).unwrap();
         }
+        store
+            .save_view_state(
+                &application,
+                &cleanup_side_state(SideViewId::Nav, nav_partitions()),
+            )
+            .unwrap();
 
         assert_eq!(
             store
-                .delete_project_view_states(project_id(PROJECT_A))
+                .delete_project_view_states(project_id(PROJECT_A), &cleanup_registry())
                 .unwrap(),
             1
         );
@@ -523,7 +650,7 @@ mod view_state_store_tests {
         assert!(store.view_state(&project_b, &registry()).unwrap().is_some());
         assert!(
             store
-                .view_state(&application, &registry())
+                .view_state(&application, &cleanup_registry())
                 .unwrap()
                 .is_some()
         );
@@ -531,6 +658,218 @@ mod view_state_store_tests {
         assert!(store.delete_view_state(&application).unwrap());
         assert!(!store.delete_view_state(&application).unwrap());
         assert!(store.view_state(&project_b, &registry()).unwrap().is_some());
+    }
+
+    /// 项目清理在同一入口删除项目作用域并精确更新 Nav／Explorer 分区。
+    #[test]
+    fn view_state_project_cleanup_preserves_other_side_view_partitions() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = fixture(&temp);
+        let mut store = WorkspaceDatabase::open(&paths).unwrap();
+        let registry = cleanup_registry();
+        let project_a = settings_key(PROJECT_A);
+        let project_b = settings_key(PROJECT_B);
+        store
+            .save_view_state(&project_a, &state(&project_a, 1))
+            .unwrap();
+        store
+            .save_view_state(&project_b, &state(&project_b, 2))
+            .unwrap();
+        let commit_key = ViewKey::SideView {
+            side_view_id: SideViewId::Commit,
+        };
+        let commit = cleanup_side_state(
+            SideViewId::Commit,
+            json!({
+                "changes_collapsed": false,
+                "unversioned_collapsed": true,
+                "ignored_collapsed": false,
+                "show_ignored": true,
+                "scroll": 8.0
+            }),
+        );
+        for (key, state) in [
+            (
+                side_view_key(),
+                cleanup_side_state(SideViewId::Nav, nav_partitions()),
+            ),
+            (
+                ViewKey::SideView {
+                    side_view_id: SideViewId::Explorer,
+                },
+                cleanup_side_state(SideViewId::Explorer, explorer_partitions()),
+            ),
+            (commit_key.clone(), commit.clone()),
+        ] {
+            store.save_view_state(&key, &state).unwrap();
+        }
+
+        assert_eq!(
+            store
+                .delete_project_view_states(project_id(PROJECT_A), &registry)
+                .unwrap(),
+            1
+        );
+        assert_eq!(store.view_state(&project_a, &registry).unwrap(), None);
+        assert_eq!(
+            store.view_state(&project_b, &registry).unwrap(),
+            stored(state(&project_b, 2), 0)
+        );
+        for (view, partition_field) in [
+            (SideViewId::Nav, "projects"),
+            (SideViewId::Explorer, "projects"),
+        ] {
+            let key = ViewKey::SideView { side_view_id: view };
+            let stored = store.view_state(&key, &registry).unwrap().unwrap();
+            assert_eq!(stored.revision, 1);
+            assert_eq!(
+                stored.state.state()[partition_field]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                1
+            );
+            assert_eq!(
+                stored.state.state()[partition_field][0]["project_id"],
+                json!(PROJECT_B)
+            );
+        }
+        assert_eq!(
+            store.view_state(&commit_key, &registry).unwrap(),
+            stored(commit, 0)
+        );
+
+        let before_repeat = [SideViewId::Nav, SideViewId::Explorer].map(|side_view_id| {
+            let key = ViewKey::SideView { side_view_id };
+            let state = store.view_state(&key, &registry).unwrap();
+            (key, state)
+        });
+        assert_eq!(
+            store
+                .delete_project_view_states(project_id(PROJECT_A), &registry)
+                .unwrap(),
+            0
+        );
+        for (key, state) in before_repeat {
+            assert_eq!(store.view_state(&key, &registry).unwrap(), state);
+        }
+    }
+
+    /// AgentRoot 清理保留其他根，清除被删根当前行且空操作不推进 revision。
+    #[test]
+    fn view_state_agent_root_cleanup_is_precise_and_idempotent() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = fixture(&temp);
+        let mut store = WorkspaceDatabase::open(&paths).unwrap();
+        let registry = cleanup_registry();
+        let key = ViewKey::SideView {
+            side_view_id: SideViewId::AgentFiles,
+        };
+        store
+            .save_view_state(
+                &key,
+                &cleanup_side_state(SideViewId::AgentFiles, agent_partitions()),
+            )
+            .unwrap();
+        let root_a = slterm_settings::AgentRootId::from_str(ROOT_A).unwrap();
+
+        assert!(
+            store
+                .delete_agent_root_view_states(root_a, &registry)
+                .unwrap()
+        );
+        let cleaned = store.view_state(&key, &registry).unwrap().unwrap();
+        assert_eq!(cleaned.revision, 1);
+        assert_eq!(cleaned.state.state()["roots"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            cleaned.state.state()["roots"][0]["agent_root_id"],
+            json!(ROOT_B)
+        );
+        assert_eq!(cleaned.state.state()["current_row"], Value::Null);
+        assert_eq!(cleaned.state.state()["scroll"], json!(36.0));
+
+        assert!(
+            !store
+                .delete_agent_root_view_states(root_a, &registry)
+                .unwrap()
+        );
+        assert_eq!(store.view_state(&key, &registry).unwrap(), Some(cleaned));
+    }
+
+    /// 项目作用域删除后的任一分区更新失败，整个清理事务必须回滚且可重试。
+    #[test]
+    fn view_state_project_cleanup_rolls_back_every_change_on_failure() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = fixture(&temp);
+        let mut store = WorkspaceDatabase::open(&paths).unwrap();
+        let registry = cleanup_registry();
+        let project_a = settings_key(PROJECT_A);
+        let nav_key = side_view_key();
+        let nav = cleanup_side_state(SideViewId::Nav, nav_partitions());
+        let explorer_key = ViewKey::SideView {
+            side_view_id: SideViewId::Explorer,
+        };
+        let explorer = cleanup_side_state(SideViewId::Explorer, explorer_partitions());
+        store
+            .save_view_state(&project_a, &state(&project_a, 1))
+            .unwrap();
+        store.save_view_state(&nav_key, &nav).unwrap();
+        store.save_view_state(&explorer_key, &explorer).unwrap();
+        store
+            .database
+            .connection
+            .execute_batch(
+                "CREATE TRIGGER reject_cleanup_update BEFORE UPDATE ON view_states \
+                 WHEN NEW.view_key LIKE '%explorer%' \
+                 BEGIN SELECT RAISE(ABORT, 'injected cleanup failure'); END;",
+            )
+            .unwrap();
+
+        assert!(
+            store
+                .delete_project_view_states(project_id(PROJECT_A), &registry)
+                .is_err()
+        );
+        assert!(store.view_state(&project_a, &registry).unwrap().is_some());
+        assert_eq!(
+            store.view_state(&nav_key, &registry).unwrap(),
+            stored(nav, 0)
+        );
+        assert_eq!(
+            store.view_state(&explorer_key, &registry).unwrap(),
+            stored(explorer, 0)
+        );
+
+        store
+            .database
+            .connection
+            .execute_batch("DROP TRIGGER reject_cleanup_update")
+            .unwrap();
+        assert_eq!(
+            store
+                .delete_project_view_states(project_id(PROJECT_A), &registry)
+                .unwrap(),
+            1
+        );
+        assert_eq!(store.view_state(&project_a, &registry).unwrap(), None);
+        let cleaned = store.view_state(&nav_key, &registry).unwrap().unwrap();
+        assert_eq!(
+            cleaned.state.state()["projects"].as_array().unwrap().len(),
+            1
+        );
+        assert_eq!(
+            cleaned.state.state()["projects"][0]["project_id"],
+            json!(PROJECT_B)
+        );
+        let cleaned = store.view_state(&explorer_key, &registry).unwrap().unwrap();
+        assert_eq!(
+            cleaned.state.state()["projects"].as_array().unwrap().len(),
+            1
+        );
+        assert_eq!(
+            cleaned.state.state()["projects"][0]["project_id"],
+            json!(PROJECT_B)
+        );
     }
 
     /// revision 耗尽拒绝覆盖，最后一条已提交状态仍可读取。

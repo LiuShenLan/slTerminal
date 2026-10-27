@@ -156,6 +156,77 @@ fn typed_side_view_state_roundtrips_through_the_registered_schema() {
     }
 }
 
+/// 分区清理只删除目标身份；共享字段、其他分区与无关视图保持原值。
+#[test]
+fn side_view_partition_removal_is_precise_and_clears_deleted_current_row() {
+    use std::str::FromStr;
+
+    use slterm_settings::AgentRootId;
+    use slterm_workspace::ProjectId;
+
+    let project_a = ProjectId::from_str(PROJECT_A).unwrap();
+    let project_b = ProjectId::from_str(PROJECT_B).unwrap();
+    let root_a = AgentRootId::from_str(ROOT_A).unwrap();
+
+    let mut nav = SideViewState::from_view_state(
+        SideViewId::Nav,
+        create(SideViewId::Nav, nav_state()).unwrap(),
+    )
+    .unwrap();
+    assert!(nav.remove_project(project_a));
+    let nav = nav.to_view_state(&registry()).unwrap();
+    assert_eq!(nav.state()["projects"].as_array().unwrap().len(), 1);
+    assert_eq!(nav.state()["projects"][0]["project_id"], json!(PROJECT_B));
+    assert_eq!(nav.state()["unassigned_expanded"], json!(true));
+    assert_eq!(nav.state()["scroll"], json!(12.5));
+
+    let mut explorer_value = explorer_state();
+    let mut project_b_state = explorer_value["projects"][0].clone();
+    project_b_state["project_id"] = json!(PROJECT_B);
+    project_b_state["current_row"] = Value::Null;
+    project_b_state["scroll"] = json!(64.0);
+    explorer_value["projects"]
+        .as_array_mut()
+        .unwrap()
+        .push(project_b_state);
+    let mut explorer = SideViewState::from_view_state(
+        SideViewId::Explorer,
+        create(SideViewId::Explorer, explorer_value).unwrap(),
+    )
+    .unwrap();
+    assert!(explorer.remove_project(project_a));
+    assert!(!explorer.remove_project(project_a));
+    let explorer = explorer.to_view_state(&registry()).unwrap();
+    assert_eq!(explorer.state()["projects"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        explorer.state()["projects"][0]["project_id"],
+        json!(PROJECT_B)
+    );
+    assert_eq!(explorer.state()["projects"][0]["scroll"], json!(64.0));
+
+    let mut agent = SideViewState::from_view_state(
+        SideViewId::AgentFiles,
+        create(SideViewId::AgentFiles, agent_files_state()).unwrap(),
+    )
+    .unwrap();
+    assert!(agent.remove_agent_root(root_a));
+    let agent = agent.to_view_state(&registry()).unwrap();
+    assert_eq!(agent.state()["roots"].as_array().unwrap().len(), 1);
+    assert_eq!(agent.state()["roots"][0]["agent_root_id"], json!(ROOT_B));
+    assert_eq!(agent.state()["current_row"], Value::Null);
+    assert_eq!(agent.state()["scroll"], json!(36.0));
+
+    let mut commit = SideViewState::from_view_state(
+        SideViewId::Commit,
+        create(SideViewId::Commit, commit_state()).unwrap(),
+    )
+    .unwrap();
+    let before = commit.to_view_state(&registry()).unwrap();
+    assert!(!commit.remove_project(project_b));
+    assert!(!commit.remove_agent_root(root_a));
+    assert_eq!(commit.to_view_state(&registry()).unwrap(), before);
+}
+
 /// fake position、其他视图的字段集合与瞬态字段均不得进入持久状态。
 #[test]
 fn side_view_schemas_reject_fake_cross_view_and_transient_states() {

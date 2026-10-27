@@ -77,6 +77,48 @@ impl SideViewState {
         }
         .map_err(|_| InvalidViewState)
     }
+
+    /// 删除指定项目分区；无项目分区的视图与缺失身份均返回未变化。
+    pub fn remove_project(&mut self, project_id: ProjectId) -> bool {
+        match self {
+            Self::Nav(state) => {
+                let previous = state.projects.len();
+                state
+                    .projects
+                    .retain(|project| project.project_id != project_id);
+                state.projects.len() != previous
+            }
+            Self::Explorer(state) => {
+                let previous = state.projects.len();
+                state
+                    .projects
+                    .retain(|project| project.project_id != project_id);
+                state.projects.len() != previous
+            }
+            Self::Commit(_) | Self::AgentFiles(_) => false,
+        }
+    }
+
+    /// 删除指定 AgentRoot 分区，并清除仍指向该根的当前行。
+    pub fn remove_agent_root(&mut self, agent_root_id: AgentRootId) -> bool {
+        let Self::AgentFiles(state) = self else {
+            return false;
+        };
+        let previous = state.roots.len();
+        state
+            .roots
+            .retain(|root| root.agent_root_id != agent_root_id);
+        let removed = state.roots.len() != previous;
+        if removed
+            && state
+                .current_row
+                .as_ref()
+                .is_some_and(|current| current.agent_root_id == agent_root_id)
+        {
+            state.current_row = None;
+        }
+        removed
+    }
 }
 
 fn decode_side_view_state(key: &ViewKey, text: &str) -> Result<Value, InvalidViewState> {
