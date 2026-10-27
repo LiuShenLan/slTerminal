@@ -9,8 +9,8 @@ use slterm_workspace::SideViewId;
 
 use super::{SideSlot, SidebarState};
 
-const SIDEBAR_STATE_VERSION: u64 = 1;
-const SIDEBAR_STATE_KIND: &str = "sidebar_state";
+pub(super) const SIDEBAR_STATE_VERSION: u64 = 1;
+pub(super) const SIDEBAR_STATE_KIND: &str = "sidebar_state";
 
 /// 侧栏组织状态的编码或严格解码错误。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

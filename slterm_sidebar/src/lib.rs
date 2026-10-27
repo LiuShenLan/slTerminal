@@ -6,8 +6,11 @@ mod sidebar_state;
 #[cfg(test)]
 mod sidebar_state_dto_tests;
 #[cfg(test)]
+mod sidebar_state_recovery_tests;
+#[cfg(test)]
 mod sidebar_state_tests;
 
 pub use sidebar_state::{
-    ButtonMovement, SideSlot, SidebarDtoError, SidebarError, SidebarState, SidebarTransition,
+    ButtonMovement, SideSlot, SidebarDtoError, SidebarError, SidebarRecovery, SidebarRecoveryError,
+    SidebarRecoveryWarning, SidebarState, SidebarTransition,
 };

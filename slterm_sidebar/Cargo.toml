@@ -15,4 +15,4 @@ path = "src/lib.rs"
 slterm_workspace = { path = "../slterm_workspace" }
 slterm_agents = { path = "../slterm_agents" }
 serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1" }
+serde_json = { version = "1", features = ["raw_value"] }

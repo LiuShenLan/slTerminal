@@ -6,8 +6,10 @@ use std::fmt;
 use slterm_workspace::SideViewId;
 
 mod dto;
+mod recovery;
 
 pub use dto::SidebarDtoError;
+pub use recovery::{SidebarRecovery, SidebarRecoveryError, SidebarRecoveryWarning};
 
 /// 侧栏上下槽位。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -104,7 +106,7 @@ pub struct SidebarState {
 impl Default for SidebarState {
     fn default() -> Self {
         Self {
-            buttons: [SideViewId::ALL.to_vec(), Vec::new()],
+            buttons: Self::default_buttons(),
             hidden_buttons: BTreeSet::new(),
             open_views: [Some(SideViewId::Nav), None],
             visible_intent: true,
@@ -338,7 +340,7 @@ impl SidebarState {
             .into_iter()
             .filter(|view| Some(*view) != keep && self.open_slot(*view).is_some())
             .collect();
-        self.buttons = [SideViewId::ALL.to_vec(), Vec::new()];
+        self.buttons = Self::default_buttons();
         self.hidden_buttons.clear();
         self.open_views = [keep, None];
         self.transition_with(was_visible, Vec::new(), closed, None)
@@ -425,6 +427,23 @@ impl SidebarState {
         debug_assert!(self.open_slot(view).is_none());
         let slot = self.button_slot(view);
         self.open_views[slot.index()].replace(view)
+    }
+
+    fn default_buttons() -> [Vec<SideViewId>; 2] {
+        let mut buttons: [Vec<SideViewId>; 2] = Default::default();
+        for view in SideViewId::ALL {
+            buttons[Self::default_button_slot(view).index()].push(view);
+        }
+        buttons
+    }
+
+    fn default_button_slot(view: SideViewId) -> SideSlot {
+        match view {
+            SideViewId::Nav
+            | SideViewId::Explorer
+            | SideViewId::Commit
+            | SideViewId::AgentFiles => SideSlot::Upper,
+        }
     }
 
     fn registration_index(view: SideViewId) -> usize {
