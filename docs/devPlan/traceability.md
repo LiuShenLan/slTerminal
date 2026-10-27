@@ -294,7 +294,7 @@
 | 未知、重复和非法布局字段分别归一与回退 | `sideview_restore_normalizes_invalid_layout` | 已自动化 |
 | 激活项目不关闭无项目设置浮层 | `app_overlay_does_not_close_on_project_activation` | 待实现 |
 | 临时窗口压缩不覆盖用户保存的侧栏宽度 | `sidebar_temporary_compression_does_not_overwrite` | 待实现 |
-| 视图状态写失败保留内存并在后续重试 | `view_state_save_failure_retains_memory` | 待实现 |
+| 视图状态写失败保留内存并在后续重试 | `view_state_save_failure_retains_memory` | 已自动化 |
 
 ### Settings 面板
 
