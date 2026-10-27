@@ -354,7 +354,7 @@ mod shell_event_tests {
     use slterm_path::AppPaths;
     use slterm_settings::{RawSettings, RuntimeSettings};
     use slterm_workspace::{
-        InvalidViewState, ProjectId, ProjectRegistry, SideViewId, ViewKey, ViewKeyKind, ViewState,
+        InvalidViewState, ProjectId, ProjectSnapshot, SideViewId, ViewKey, ViewKeyKind, ViewState,
         ViewStateRegistry, ViewStateSchema,
     };
 
@@ -390,9 +390,9 @@ mod shell_event_tests {
         ViewStateRegistry::new(&[ViewStateSchema::new(ViewKeyKind::SideView, decode)]).unwrap()
     }
 
-    fn project_registry(name: &str) -> ProjectRegistry {
+    fn project_snapshot(name: &str) -> ProjectSnapshot {
         let project_id = ProjectId::from_str("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2a").unwrap();
-        let mut registry = ProjectRegistry::new();
+        let mut registry = slterm_workspace::ProjectRegistry::new();
         registry
             .add_project(
                 project_id,
@@ -400,7 +400,7 @@ mod shell_event_tests {
             )
             .unwrap();
         registry.rename_project(project_id, name).unwrap();
-        registry
+        ProjectSnapshot::restore(registry, Vec::new()).unwrap()
     }
 
     /// 启动失败降级为无 client，不另发会被恢复汇总节流的独立事件。
@@ -472,7 +472,7 @@ mod shell_event_tests {
         let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
         let mut observer = WorkspaceDatabase::open(&paths).unwrap();
         observer
-            .save_project_registry(&project_registry("original"))
+            .save_project_snapshot(&project_snapshot("original"))
             .unwrap();
         let (events, event_rx) = mpsc::channel();
         let runtime = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
@@ -486,7 +486,7 @@ mod shell_event_tests {
             .unwrap();
 
         client
-            .save_project_registry(&project_registry("changed"))
+            .save_project_snapshot(&project_snapshot("changed"))
             .unwrap();
 
         assert!(matches!(
@@ -498,8 +498,8 @@ mod shell_event_tests {
             .unwrap();
         runtime.shutdown().unwrap();
         assert_eq!(
-            observer.load_project_registry().unwrap(),
-            project_registry("changed")
+            observer.load_project_snapshot().unwrap(),
+            project_snapshot("changed")
         );
     }
 

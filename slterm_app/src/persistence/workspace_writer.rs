@@ -9,7 +9,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use slterm_path::AppPaths;
-use slterm_workspace::{ProjectRegistry, ViewKey, ViewKeyError, ViewState, ViewStateError};
+use slterm_workspace::{ProjectSnapshot, ViewKey, ViewKeyError, ViewState, ViewStateError};
 
 use super::database::DatabaseError;
 use super::project::ProjectStoreError;
@@ -17,7 +17,7 @@ use super::view_state::ViewStateStoreError;
 use super::workspace::WorkspaceDatabase;
 
 const VIEW_STATE_DEBOUNCE: Duration = Duration::from_millis(500);
-const PROJECT_REGISTRY_DEBOUNCE: Duration = Duration::from_secs(2);
+const PROJECT_SNAPSHOT_DEBOUNCE: Duration = Duration::from_secs(2);
 const COMMAND_CAPACITY: usize = 64;
 
 /// 一次显式或退出前冲刷的实际写入结果。
@@ -30,7 +30,7 @@ pub(crate) struct WorkspaceFlushReport {
 /// 后台工作区状态写失败；分类信息不携带路径、SQL 或状态正文。
 pub(crate) enum WorkspaceWriteFailure {
     ViewState(ViewStateWriteFailure),
-    ProjectRegistry(ProjectStoreError),
+    ProjectSnapshot(ProjectStoreError),
 }
 
 /// 后台 ViewState 写失败；保留键与分类错误，不携带状态正文。
@@ -83,8 +83,8 @@ enum Command {
         key: ViewKey,
         state: Box<ViewState>,
     },
-    SaveProjectRegistry {
-        registry: Box<ProjectRegistry>,
+    SaveProjectSnapshot {
+        snapshot: Box<ProjectSnapshot>,
     },
     Flush {
         response: SyncSender<WorkspaceFlushReport>,
@@ -119,13 +119,13 @@ impl WorkspaceWriterClient {
     }
 
     /// 非阻塞提交最新项目聚合快照；同一时刻只保留一个待写版本。
-    pub(crate) fn save_project_registry(
+    pub(crate) fn save_project_snapshot(
         &self,
-        registry: &ProjectRegistry,
+        snapshot: &ProjectSnapshot,
     ) -> Result<(), WorkspaceWriterError> {
         self.commands
-            .try_send(Command::SaveProjectRegistry {
-                registry: Box::new(registry.clone()),
+            .try_send(Command::SaveProjectSnapshot {
+                snapshot: Box::new(snapshot.clone()),
             })
             .map_err(|error| match error {
                 TrySendError::Full(_) => WorkspaceWriterError::QueueFull,
@@ -221,14 +221,14 @@ impl WorkspaceWriter {
     }
 
     /// 外部 owner 与 UI client 共用同一项目聚合快照写队列。
-    pub(crate) fn save_project_registry(
+    pub(crate) fn save_project_snapshot(
         &self,
-        registry: &ProjectRegistry,
+        snapshot: &ProjectSnapshot,
     ) -> Result<(), WorkspaceWriterError> {
         if self.worker.is_none() {
             return Err(WorkspaceWriterError::Stopped);
         }
-        self.client().save_project_registry(registry)
+        self.client().save_project_snapshot(snapshot)
     }
 
     /// 将唯一失败接收端移交壳事件转发器；只能取走一次。
@@ -299,15 +299,15 @@ struct PendingViewState {
     due: Option<Instant>,
 }
 
-struct PendingProjectRegistry {
-    registry: ProjectRegistry,
+struct PendingProjectSnapshot {
+    snapshot: ProjectSnapshot,
     due: Option<Instant>,
 }
 
 #[derive(Default)]
 struct PendingWrites {
     view_states: BTreeMap<String, PendingViewState>,
-    project_registry: Option<PendingProjectRegistry>,
+    project_snapshot: Option<PendingProjectSnapshot>,
 }
 
 fn run(
@@ -365,10 +365,10 @@ fn run(
                     },
                 );
             }
-            Command::SaveProjectRegistry { registry } => {
-                pending.project_registry = Some(PendingProjectRegistry {
-                    registry: *registry,
-                    due: Some(Instant::now() + PROJECT_REGISTRY_DEBOUNCE),
+            Command::SaveProjectSnapshot { snapshot } => {
+                pending.project_snapshot = Some(PendingProjectSnapshot {
+                    snapshot: *snapshot,
+                    due: Some(Instant::now() + PROJECT_SNAPSHOT_DEBOUNCE),
                 });
             }
             Command::Flush { response } => {
@@ -394,7 +394,7 @@ fn next_wait(pending: &PendingWrites) -> Option<Duration> {
         .filter_map(|pending| pending.due)
         .chain(
             pending
-                .project_registry
+                .project_snapshot
                 .as_ref()
                 .and_then(|pending| pending.due),
         )
@@ -449,30 +449,30 @@ fn write_pending(
     }
 
     let project_ready = pending
-        .project_registry
+        .project_snapshot
         .as_ref()
         .is_some_and(|pending| all || pending.due.is_some_and(|due| due <= now));
     if project_ready {
         let result = {
             let project = pending
-                .project_registry
+                .project_snapshot
                 .as_ref()
                 .expect("就绪项目快照必须存在");
-            store.save_project_registry(&project.registry)
+            store.save_project_snapshot(&project.snapshot)
         };
         match result {
             Ok(()) => {
-                pending.project_registry = None;
+                pending.project_snapshot = None;
                 report.written += 1;
             }
             Err(error) => {
                 let project = pending
-                    .project_registry
+                    .project_snapshot
                     .as_mut()
                     .expect("失败项目快照必须保留");
                 project.due = None;
                 report.failed += 1;
-                let _ = failures.try_send(WorkspaceWriteFailure::ProjectRegistry(error));
+                let _ = failures.try_send(WorkspaceWriteFailure::ProjectSnapshot(error));
             }
         }
     }
@@ -500,8 +500,8 @@ mod workspace_writer_tests {
     use serde::{Deserialize, Serialize};
     use serde_json::{Value, json};
     use slterm_workspace::{
-        InvalidViewState, ProjectId, ProjectRegistry, SideViewId, ViewKeyKind, ViewStateRegistry,
-        ViewStateSchema,
+        InvalidViewState, PanelGroup, PanelGroupId, ProjectId, ProjectSnapshot, RunIntent,
+        SideViewId, TerminalId, TerminalRecord, ViewKeyKind, ViewStateRegistry, ViewStateSchema,
     };
     use tempfile::TempDir;
 
@@ -547,9 +547,9 @@ mod workspace_writer_tests {
         state_for(&key(), position)
     }
 
-    fn project_registry(name: &str) -> ProjectRegistry {
+    fn project_snapshot(name: &str) -> ProjectSnapshot {
         let project_id = ProjectId::from_str("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2a").unwrap();
-        let mut registry = ProjectRegistry::new();
+        let mut registry = slterm_workspace::ProjectRegistry::new();
         registry
             .add_project(
                 project_id,
@@ -557,19 +557,50 @@ mod workspace_writer_tests {
             )
             .unwrap();
         registry.rename_project(project_id, name).unwrap();
-        registry
+        ProjectSnapshot::restore(registry, Vec::new()).unwrap()
     }
 
-    fn wait_for_project_name(store: &WorkspaceDatabase, name: &str) -> Option<ProjectRegistry> {
+    fn terminal_project_snapshot() -> ProjectSnapshot {
+        let project_id = ProjectId::from_str("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2a").unwrap();
+        let terminal_id = TerminalId::from_str("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0b2a").unwrap();
+        let mut registry = project_snapshot("terminal").registry().clone();
+        assert_eq!(registry.allocate_terminal_number(project_id), Ok(0));
+        let view = ViewKey::Terminal {
+            project_id,
+            terminal_id,
+        };
+        registry
+            .layout_mut(project_id)
+            .unwrap()
+            .open_first_group(
+                PanelGroupId::from_str("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0a2a").unwrap(),
+                PanelGroup::new(vec![view.clone()], view).unwrap(),
+            )
+            .unwrap();
+        let record = TerminalRecord::new(
+            terminal_id,
+            project_id,
+            0,
+            slterm_path::CanonicalPath::new("D:/work/terminal").unwrap(),
+            slterm_path::CanonicalPath::new("C:/shell/pwsh.exe").unwrap(),
+            Some("构建".to_owned()),
+            RunIntent::Exited,
+        )
+        .unwrap();
+        ProjectSnapshot::restore(registry, vec![record]).unwrap()
+    }
+
+    fn wait_for_project_name(store: &mut WorkspaceDatabase, name: &str) -> Option<ProjectSnapshot> {
         let deadline = Instant::now() + Duration::from_secs(4);
         loop {
-            if let Ok(registry) = store.load_project_registry()
-                && registry
+            if let Ok(snapshot) = store.load_project_snapshot()
+                && snapshot
+                    .registry()
                     .projects()
                     .first()
                     .is_some_and(|project| project.display_name() == name)
             {
-                return Some(registry);
+                return Some(snapshot);
             }
             if Instant::now() >= deadline {
                 return None;
@@ -623,7 +654,7 @@ mod workspace_writer_tests {
         loop {
             match writer.try_recv_failure() {
                 Some(WorkspaceWriteFailure::ViewState(failure)) => return Some(failure),
-                Some(WorkspaceWriteFailure::ProjectRegistry(_)) => {
+                Some(WorkspaceWriteFailure::ProjectSnapshot(_)) => {
                     panic!("ViewState 测试不得收到项目聚合失败")
                 }
                 None if Instant::now() < deadline => {
@@ -686,28 +717,48 @@ mod workspace_writer_tests {
 
     /// 项目聚合只保留最新快照，并在 2 秒去抖后一次落盘。
     #[test]
-    fn workspace_writer_debounces_project_registry_to_latest() {
+    fn workspace_writer_flushes_terminal_metadata_with_project_snapshot() {
         let temp = tempfile::tempdir().unwrap();
         let paths = fixture(&temp);
-        let observer = WorkspaceDatabase::open(&paths).unwrap();
+        let mut observer = WorkspaceDatabase::open(&paths).unwrap();
+        let writer = WorkspaceWriter::start(paths).unwrap();
+        let expected = terminal_project_snapshot();
+
+        writer.client().save_project_snapshot(&expected).unwrap();
+        assert_eq!(
+            writer.flush().unwrap(),
+            WorkspaceFlushReport {
+                written: 1,
+                failed: 0,
+            }
+        );
+        assert_eq!(observer.load_project_snapshot().unwrap(), expected);
+        writer.shutdown().unwrap();
+    }
+
+    #[test]
+    fn workspace_writer_debounces_project_snapshot_to_latest() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = fixture(&temp);
+        let mut observer = WorkspaceDatabase::open(&paths).unwrap();
         let writer = WorkspaceWriter::start(paths).unwrap();
         let client = writer.client();
 
-        assert_eq!(PROJECT_REGISTRY_DEBOUNCE, Duration::from_secs(2));
+        assert_eq!(PROJECT_SNAPSHOT_DEBOUNCE, Duration::from_secs(2));
         for name in ["first", "second", "third"] {
             client
-                .save_project_registry(&project_registry(name))
+                .save_project_snapshot(&project_snapshot(name))
                 .unwrap();
         }
         assert_eq!(
-            observer.load_project_registry().unwrap(),
-            ProjectRegistry::new(),
+            observer.load_project_snapshot().unwrap(),
+            ProjectSnapshot::default(),
             "项目聚合去抖到期前不得写盘"
         );
 
         assert_eq!(
-            wait_for_project_name(&observer, "third"),
-            Some(project_registry("third"))
+            wait_for_project_name(&mut observer, "third"),
+            Some(project_snapshot("third"))
         );
         assert_eq!(writer.flush().unwrap(), WorkspaceFlushReport::default());
         writer.shutdown().unwrap();
@@ -715,12 +766,12 @@ mod workspace_writer_tests {
 
     /// 项目聚合写失败保留最新副本，后续提交重试，shutdown 最终冲刷。
     #[test]
-    fn project_registry_save_failure_retains_latest_snapshot() {
+    fn project_snapshot_save_failure_retains_latest_snapshot() {
         let temp = tempfile::tempdir().unwrap();
         let paths = fixture(&temp);
         let mut observer = WorkspaceDatabase::open(&paths).unwrap();
         observer
-            .save_project_registry(&project_registry("original"))
+            .save_project_snapshot(&project_snapshot("original"))
             .unwrap();
         let writer = WorkspaceWriter::start(paths).unwrap();
         observer
@@ -733,7 +784,7 @@ mod workspace_writer_tests {
             .unwrap();
 
         writer
-            .save_project_registry(&project_registry("changed"))
+            .save_project_snapshot(&project_snapshot("changed"))
             .unwrap();
         assert_eq!(
             writer.flush().unwrap(),
@@ -744,17 +795,17 @@ mod workspace_writer_tests {
         );
         assert!(matches!(
             writer.try_recv_failure(),
-            Some(WorkspaceWriteFailure::ProjectRegistry(
+            Some(WorkspaceWriteFailure::ProjectSnapshot(
                 ProjectStoreError::Database(_)
             ))
         ));
         assert_eq!(
-            observer.load_project_registry().unwrap(),
-            project_registry("original")
+            observer.load_project_snapshot().unwrap(),
+            project_snapshot("original")
         );
 
         writer
-            .save_project_registry(&project_registry("latest"))
+            .save_project_snapshot(&project_snapshot("latest"))
             .unwrap();
         assert_eq!(
             writer.flush().unwrap(),
@@ -764,8 +815,8 @@ mod workspace_writer_tests {
             }
         );
         assert_eq!(
-            observer.load_project_registry().unwrap(),
-            project_registry("original")
+            observer.load_project_snapshot().unwrap(),
+            project_snapshot("original")
         );
 
         observer
@@ -781,19 +832,19 @@ mod workspace_writer_tests {
             }
         );
         assert_eq!(
-            observer.load_project_registry().unwrap(),
-            project_registry("latest")
+            observer.load_project_snapshot().unwrap(),
+            project_snapshot("latest")
         );
     }
 
     /// 项目快照提交遇到有界队列满时同步拒收，排水后可重试最新副本。
     #[test]
-    fn project_registry_queue_full_allows_later_retry() {
+    fn project_snapshot_queue_full_allows_later_retry() {
         let temp = tempfile::tempdir().unwrap();
         let paths = fixture(&temp);
         let mut observer = WorkspaceDatabase::open(&paths).unwrap();
         observer
-            .save_project_registry(&project_registry("original"))
+            .save_project_snapshot(&project_snapshot("original"))
             .unwrap();
         let writer = WorkspaceWriter::start(paths).unwrap();
         let client = writer.client();
@@ -803,17 +854,17 @@ mod workspace_writer_tests {
             .execute_batch("BEGIN EXCLUSIVE")
             .unwrap();
         client
-            .save_project_registry(&project_registry("blocked"))
+            .save_project_snapshot(&project_snapshot("blocked"))
             .unwrap();
-        std::thread::sleep(PROJECT_REGISTRY_DEBOUNCE + Duration::from_millis(100));
+        std::thread::sleep(PROJECT_SNAPSHOT_DEBOUNCE + Duration::from_millis(100));
 
         for index in 0..COMMAND_CAPACITY {
             client
-                .save_project_registry(&project_registry(&format!("queued-{index}")))
+                .save_project_snapshot(&project_snapshot(&format!("queued-{index}")))
                 .unwrap();
         }
         assert!(matches!(
-            client.save_project_registry(&project_registry("overflow")),
+            client.save_project_snapshot(&project_snapshot("overflow")),
             Err(WorkspaceWriterError::QueueFull)
         ));
 
@@ -830,12 +881,12 @@ mod workspace_writer_tests {
             }
         );
         assert_eq!(
-            observer.load_project_registry().unwrap(),
-            project_registry(&format!("queued-{}", COMMAND_CAPACITY - 1))
+            observer.load_project_snapshot().unwrap(),
+            project_snapshot(&format!("queued-{}", COMMAND_CAPACITY - 1))
         );
 
         client
-            .save_project_registry(&project_registry("after-drain"))
+            .save_project_snapshot(&project_snapshot("after-drain"))
             .unwrap();
         assert_eq!(
             writer.shutdown().unwrap(),
@@ -845,25 +896,25 @@ mod workspace_writer_tests {
             }
         );
         assert_eq!(
-            observer.load_project_registry().unwrap(),
-            project_registry("after-drain")
+            observer.load_project_snapshot().unwrap(),
+            project_snapshot("after-drain")
         );
     }
 
     /// 命令发送端全部断开时，写线程仍在退出前冲刷未到期项目快照。
     #[test]
-    fn project_registry_disconnect_flushes_pending_snapshot() {
+    fn project_snapshot_disconnect_flushes_pending_snapshot() {
         let temp = tempfile::tempdir().unwrap();
         let paths = fixture(&temp);
-        let observer = WorkspaceDatabase::open(&paths).unwrap();
+        let mut observer = WorkspaceDatabase::open(&paths).unwrap();
         let (commands, receiver) = mpsc::sync_channel(COMMAND_CAPACITY);
         let (failures, _failure_receiver) = mpsc::sync_channel(1);
         let (startup, started) = mpsc::sync_channel(1);
         let worker = std::thread::spawn(move || run(paths, receiver, failures, startup));
         started.recv().unwrap().unwrap();
         commands
-            .send(Command::SaveProjectRegistry {
-                registry: Box::new(project_registry("disconnected")),
+            .send(Command::SaveProjectSnapshot {
+                snapshot: Box::new(project_snapshot("disconnected")),
             })
             .unwrap();
 
@@ -871,8 +922,8 @@ mod workspace_writer_tests {
         worker.join().unwrap();
 
         assert_eq!(
-            observer.load_project_registry().unwrap(),
-            project_registry("disconnected")
+            observer.load_project_snapshot().unwrap(),
+            project_snapshot("disconnected")
         );
     }
 
@@ -884,7 +935,7 @@ mod workspace_writer_tests {
         let mut observer = WorkspaceDatabase::open(&paths).unwrap();
         observer.save_view_state(&key(), &state(7)).unwrap();
         observer
-            .save_project_registry(&project_registry("original"))
+            .save_project_snapshot(&project_snapshot("original"))
             .unwrap();
         let writer = WorkspaceWriter::start(paths).unwrap();
         observer
@@ -897,7 +948,7 @@ mod workspace_writer_tests {
             .unwrap();
         writer.save_view_state(&key(), &state(8)).unwrap();
         writer
-            .save_project_registry(&project_registry("changed"))
+            .save_project_snapshot(&project_snapshot("changed"))
             .unwrap();
 
         assert_eq!(
@@ -909,12 +960,12 @@ mod workspace_writer_tests {
         );
         assert_eq!(read_position(&observer), Some((8, 1)));
         assert_eq!(
-            observer.load_project_registry().unwrap(),
-            project_registry("original")
+            observer.load_project_snapshot().unwrap(),
+            project_snapshot("original")
         );
         assert!(matches!(
             writer.try_recv_failure(),
-            Some(WorkspaceWriteFailure::ProjectRegistry(
+            Some(WorkspaceWriteFailure::ProjectSnapshot(
                 ProjectStoreError::Database(_)
             ))
         ));
@@ -923,8 +974,8 @@ mod workspace_writer_tests {
         assert_eq!(wait_for_position_value(&observer, 9), Some((9, 2)));
         assert!(writer.try_recv_failure().is_none());
         assert_eq!(
-            observer.load_project_registry().unwrap(),
-            project_registry("original")
+            observer.load_project_snapshot().unwrap(),
+            project_snapshot("original")
         );
 
         observer
@@ -941,8 +992,8 @@ mod workspace_writer_tests {
         );
         assert_eq!(read_position(&observer), Some((9, 2)));
         assert_eq!(
-            observer.load_project_registry().unwrap(),
-            project_registry("changed")
+            observer.load_project_snapshot().unwrap(),
+            project_snapshot("changed")
         );
     }
 
@@ -961,7 +1012,7 @@ mod workspace_writer_tests {
                 key: key(),
                 error: ViewStateStoreError::CorruptRecord,
             }),
-            WorkspaceWriteFailure::ProjectRegistry(ProjectStoreError::CorruptRecord),
+            WorkspaceWriteFailure::ProjectSnapshot(ProjectStoreError::CorruptRecord),
         ];
         for failure in failures {
             failure_tx.send(failure).unwrap();

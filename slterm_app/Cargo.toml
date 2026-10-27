@@ -144,6 +144,8 @@ winreg = "0.56"
 # 审计事件格式断言:测试内作用域订阅器只开 fmt 层,
 # 不引入全局 subscriber(生产仍走 tracing→log 单栈桥接)。
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }
+# 并发恢复测试经 SQLite trace 建立确定交错；生产依赖不启用该特性。
+rusqlite = { version = "=0.41.0", features = ["trace"] }
 
 [build-dependencies]
 # i18n 静态生成器:目录遍历由语言注册表驱动,故构建期依赖设置 crate。

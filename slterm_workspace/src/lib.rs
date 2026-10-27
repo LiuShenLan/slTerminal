@@ -11,8 +11,12 @@ mod project_layout_tests;
 mod project_registry;
 #[cfg(test)]
 mod project_registry_tests;
+mod project_snapshot;
+#[cfg(test)]
+mod project_snapshot_tests;
 mod repository_dto;
 mod side_view;
+mod terminal_record;
 mod view_key;
 mod view_state;
 pub use diff_binding::{
@@ -26,7 +30,9 @@ pub use project_layout::{
 pub use project_registry::{
     AddProjectOutcome, Project, ProjectRegistry, ProjectRegistryError, ProjectRootStatus,
 };
+pub use project_snapshot::{ProjectSnapshot, ProjectSnapshotError};
 pub use side_view::{SideViewId, UnknownSideViewId};
+pub use terminal_record::{RunIntent, TerminalRecord, TerminalRecordError};
 pub use view_key::{ViewKey, ViewKeyError, ViewKeyKind};
 pub use view_state::{
     InvalidViewState, ViewState, ViewStateError, ViewStateRegistry, ViewStateRegistryError,
