@@ -3,8 +3,8 @@ use std::str::FromStr;
 use slterm_path::CanonicalPath;
 
 use crate::{
-    AddProjectOutcome, PanelGroup, PanelGroupId, ProjectId, ProjectRegistry, ProjectRegistryError,
-    TerminalId, ViewKey,
+    AddProjectOutcome, PanelGroup, PanelGroupId, Project, ProjectId, ProjectLayout,
+    ProjectRegistry, ProjectRegistryError, ProjectRootStatus, TerminalId, ViewKey,
 };
 
 const PROJECT_A: &str = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2a";
@@ -309,4 +309,225 @@ fn project_registry_noop_commands_and_inactive_removal_preserve_active() {
     );
     assert_eq!(registry.active(), Some(id(PROJECT_B)));
     assert_eq!(registry.project(id(PROJECT_B)), original.get(1));
+}
+
+/// 根状态与项目内终端编号独立推进，重定位成功后根重新就绪。
+#[test]
+fn project_registry_root_status_and_terminal_numbers_follow_project_commands() {
+    let mut registry = ProjectRegistry::new();
+    registry
+        .add_project(id(PROJECT_A), root("D:/work/a"))
+        .unwrap();
+    registry
+        .add_project(id(PROJECT_B), root("D:/work/b"))
+        .unwrap();
+    let project_a = registry.project(id(PROJECT_A)).unwrap();
+    assert_eq!(project_a.root_status(), ProjectRootStatus::Ready);
+    assert_eq!(project_a.next_terminal_number(), 0);
+
+    assert_eq!(
+        registry.set_root_status(id(PROJECT_A), ProjectRootStatus::Inaccessible),
+        Ok(())
+    );
+    assert_eq!(registry.allocate_terminal_number(id(PROJECT_A)), Ok(0));
+    assert_eq!(registry.allocate_terminal_number(id(PROJECT_A)), Ok(1));
+    assert_eq!(registry.allocate_terminal_number(id(PROJECT_B)), Ok(0));
+    assert_eq!(
+        registry
+            .project(id(PROJECT_A))
+            .unwrap()
+            .next_terminal_number(),
+        2
+    );
+
+    assert_eq!(
+        registry.relocate_project(id(PROJECT_A), root("D:/new/a")),
+        Ok(())
+    );
+    let relocated = registry.project(id(PROJECT_A)).unwrap();
+    assert_eq!(relocated.root_status(), ProjectRootStatus::Ready);
+    assert_eq!(relocated.next_terminal_number(), 2);
+    registry
+        .set_root_status(id(PROJECT_A), ProjectRootStatus::Inaccessible)
+        .unwrap();
+    assert_eq!(
+        registry.relocate_project(id(PROJECT_A), root("D:/new/a")),
+        Ok(())
+    );
+    assert_eq!(
+        registry.project(id(PROJECT_A)).unwrap().root_status(),
+        ProjectRootStatus::Ready
+    );
+    assert_eq!(
+        registry.set_root_status(id(PROJECT_C), ProjectRootStatus::Ready),
+        Err(ProjectRegistryError::ProjectNotFound)
+    );
+    assert_eq!(
+        registry.allocate_terminal_number(id(PROJECT_C)),
+        Err(ProjectRegistryError::ProjectNotFound)
+    );
+}
+
+/// 持久恢复保留全部项目字段，并拒绝身份、名称、布局和活跃关系损坏。
+#[test]
+fn project_registry_restore_preserves_metadata_and_rejects_invalid_relations() {
+    let restored_a = Project::restore(
+        id(PROJECT_A),
+        root("D:/work/a"),
+        "custom".to_owned(),
+        ProjectLayout::empty(id(PROJECT_A)),
+        ProjectRootStatus::Inaccessible,
+        41,
+    );
+    assert!(restored_a.is_ok(), "合法项目必须可精确恢复");
+    let restored_a = restored_a.unwrap();
+    assert_eq!(restored_a.display_name(), "custom");
+    assert_eq!(restored_a.root_status(), ProjectRootStatus::Inaccessible);
+    assert_eq!(restored_a.next_terminal_number(), 41);
+
+    let restored_b = Project::restore(
+        id(PROJECT_B),
+        root("D:/work/b"),
+        "custom".to_owned(),
+        ProjectLayout::empty(id(PROJECT_B)),
+        ProjectRootStatus::RelocationRequired,
+        7,
+    )
+    .unwrap();
+    let restored = ProjectRegistry::restore(
+        vec![restored_a.clone(), restored_b.clone()],
+        Some(id(PROJECT_B)),
+    );
+    assert!(restored.is_ok(), "合法项目集合必须可恢复");
+    let mut restored = restored.unwrap();
+    assert_eq!(restored.projects(), &[restored_a.clone(), restored_b]);
+    assert_eq!(restored.active(), Some(id(PROJECT_B)));
+    assert_eq!(restored.allocate_terminal_number(id(PROJECT_A)), Ok(41));
+
+    assert_eq!(
+        Project::restore(
+            id(PROJECT_A),
+            root("D:/work/a"),
+            " \t ".to_owned(),
+            ProjectLayout::empty(id(PROJECT_A)),
+            ProjectRootStatus::Ready,
+            0,
+        ),
+        Err(ProjectRegistryError::EmptyName)
+    );
+    let long_name = "界".repeat(81);
+    let restored_long_name = Project::restore(
+        id(PROJECT_A),
+        root("D:/work/a"),
+        long_name.clone(),
+        ProjectLayout::empty(id(PROJECT_A)),
+        ProjectRootStatus::Ready,
+        0,
+    );
+    assert!(
+        restored_long_name.is_ok(),
+        "长默认名及消歧后缀必须可精确恢复"
+    );
+    assert_eq!(restored_long_name.unwrap().display_name(), long_name);
+    assert_eq!(
+        Project::restore(
+            id(PROJECT_A),
+            root("D:/work/a"),
+            "custom".to_owned(),
+            ProjectLayout::empty(id(PROJECT_B)),
+            ProjectRootStatus::Ready,
+            0,
+        ),
+        Err(ProjectRegistryError::LayoutProjectMismatch)
+    );
+    assert_eq!(
+        ProjectRegistry::restore(
+            vec![restored_a.clone(), restored_a.clone()],
+            Some(id(PROJECT_A))
+        ),
+        Err(ProjectRegistryError::DuplicateProject)
+    );
+    assert_eq!(
+        ProjectRegistry::restore(vec![restored_a.clone()], Some(id(PROJECT_B))),
+        Err(ProjectRegistryError::ProjectNotFound)
+    );
+    assert_eq!(
+        ProjectRegistry::restore(vec![restored_a.clone()], None),
+        Err(ProjectRegistryError::ProjectNotFound)
+    );
+    assert_eq!(
+        ProjectRegistry::restore(Vec::new(), Some(id(PROJECT_A))),
+        Err(ProjectRegistryError::ProjectNotFound)
+    );
+    assert!(ProjectRegistry::restore(Vec::new(), None).is_ok());
+
+    let duplicate_root = Project::restore(
+        id(PROJECT_B),
+        root("D:/work/a"),
+        "other".to_owned(),
+        ProjectLayout::empty(id(PROJECT_B)),
+        ProjectRootStatus::Ready,
+        0,
+    )
+    .unwrap();
+    assert_eq!(
+        ProjectRegistry::restore(
+            vec![restored_a.clone(), duplicate_root],
+            Some(id(PROJECT_A))
+        ),
+        Err(ProjectRegistryError::DuplicateRoot(id(PROJECT_A)))
+    );
+
+    let duplicate_group_projects = [PROJECT_A, PROJECT_B].map(|project| {
+        let project_id = id(project);
+        let view = ViewKey::Terminal {
+            project_id,
+            terminal_id: TerminalId::from_str(TERMINAL_A).unwrap(),
+        };
+        let layout = ProjectLayout::new(
+            project_id,
+            PanelGroupId::from_str(GROUP_A).unwrap(),
+            PanelGroup::new(vec![view.clone()], view).unwrap(),
+        )
+        .unwrap();
+        Project::restore(
+            project_id,
+            root(if project == PROJECT_A {
+                "D:/work/a"
+            } else {
+                "D:/work/b"
+            }),
+            "custom".to_owned(),
+            layout,
+            ProjectRootStatus::Ready,
+            0,
+        )
+        .unwrap()
+    });
+    assert_eq!(
+        ProjectRegistry::restore(
+            duplicate_group_projects.into_iter().collect(),
+            Some(id(PROJECT_A))
+        ),
+        Err(ProjectRegistryError::DuplicatePanelGroup(
+            PanelGroupId::from_str(GROUP_A).unwrap()
+        ))
+    );
+
+    let exhausted = Project::restore(
+        id(PROJECT_A),
+        root("D:/work/a"),
+        "custom".to_owned(),
+        ProjectLayout::empty(id(PROJECT_A)),
+        ProjectRootStatus::Ready,
+        u64::MAX,
+    )
+    .unwrap();
+    let mut exhausted = ProjectRegistry::restore(vec![exhausted], Some(id(PROJECT_A))).unwrap();
+    let before = exhausted.projects().to_vec();
+    assert_eq!(
+        exhausted.allocate_terminal_number(id(PROJECT_A)),
+        Err(ProjectRegistryError::TerminalNumberExhausted)
+    );
+    assert_eq!(exhausted.projects(), before);
 }

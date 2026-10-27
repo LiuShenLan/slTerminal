@@ -10,7 +10,7 @@ use slterm_split::{DIVIDER_GAP, RemoveOutcome, SplitDirection, SplitTree, split_
 
 use crate::{PanelGroupId, ProjectId, ViewKey, ViewKeyError};
 
-const PROJECT_LAYOUT_VERSION: u64 = 1;
+pub const PROJECT_LAYOUT_DTO_VERSION: u64 = 1;
 const PROJECT_LAYOUT_KIND: &str = "project_layout";
 
 const MIN_GROUP_WIDTH: f32 = 120.0;
@@ -186,7 +186,7 @@ impl ProjectLayout {
     pub fn from_canonical_json(text: &str) -> Result<Self, LayoutDtoError> {
         let envelope: ProjectLayoutEnvelope =
             serde_json::from_str(text).map_err(|_| LayoutDtoError::InvalidStructure)?;
-        if envelope.version != PROJECT_LAYOUT_VERSION {
+        if envelope.version != PROJECT_LAYOUT_DTO_VERSION {
             return Err(LayoutDtoError::UnsupportedVersion);
         }
         if envelope.kind != PROJECT_LAYOUT_KIND {
@@ -234,7 +234,7 @@ impl ProjectLayout {
             ("kind", Value::String(PROJECT_LAYOUT_KIND.to_owned())),
             ("project_id", Value::String(self.project_id.to_string())),
             ("tree", tree),
-            ("version", Value::from(PROJECT_LAYOUT_VERSION)),
+            ("version", Value::from(PROJECT_LAYOUT_DTO_VERSION)),
         ]);
         serde_json::to_string(&object_value(object)).map_err(|_| LayoutDtoError::Encode)
     }

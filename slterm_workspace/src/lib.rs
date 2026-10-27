@@ -20,8 +20,12 @@ pub use diff_binding::{
 };
 pub use identity::{PanelGroupId, ProjectId, StableIdError, TerminalId};
 pub use panel::{PanelId, PanelIdAllocator, PanelIdExhausted};
-pub use project_layout::{LayoutDtoError, LayoutError, LogicalSize, PanelGroup, ProjectLayout};
-pub use project_registry::{AddProjectOutcome, Project, ProjectRegistry, ProjectRegistryError};
+pub use project_layout::{
+    LayoutDtoError, LayoutError, LogicalSize, PROJECT_LAYOUT_DTO_VERSION, PanelGroup, ProjectLayout,
+};
+pub use project_registry::{
+    AddProjectOutcome, Project, ProjectRegistry, ProjectRegistryError, ProjectRootStatus,
+};
 pub use side_view::{SideViewId, UnknownSideViewId};
 pub use view_key::{ViewKey, ViewKeyError, ViewKeyKind};
 pub use view_state::{
