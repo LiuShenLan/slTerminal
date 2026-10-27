@@ -4,6 +4,10 @@
 
 mod sidebar_state;
 #[cfg(test)]
+mod sidebar_state_dto_tests;
+#[cfg(test)]
 mod sidebar_state_tests;
 
-pub use sidebar_state::{ButtonMovement, SideSlot, SidebarError, SidebarState, SidebarTransition};
+pub use sidebar_state::{
+    ButtonMovement, SideSlot, SidebarDtoError, SidebarError, SidebarState, SidebarTransition,
+};

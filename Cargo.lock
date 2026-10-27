@@ -6363,6 +6363,8 @@ version = "0.0.0"
 name = "slterm_sidebar"
 version = "0.0.0"
 dependencies = [
+ "serde",
+ "serde_json",
  "slterm_agents",
  "slterm_workspace",
 ]

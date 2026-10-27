@@ -5,6 +5,10 @@ use std::fmt;
 
 use slterm_workspace::SideViewId;
 
+mod dto;
+
+pub use dto::SidebarDtoError;
+
 /// 侧栏上下槽位。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum SideSlot {
@@ -19,6 +23,21 @@ impl SideSlot {
         match self {
             Self::Upper => 0,
             Self::Lower => 1,
+        }
+    }
+
+    const fn id_str(self) -> &'static str {
+        match self {
+            Self::Upper => "upper",
+            Self::Lower => "lower",
+        }
+    }
+
+    fn from_id_str(text: &str) -> Option<Self> {
+        match text {
+            "upper" => Some(Self::Upper),
+            "lower" => Some(Self::Lower),
+            _ => None,
         }
     }
 }
@@ -352,6 +371,45 @@ impl SidebarState {
 
     pub fn reset_ratio(&mut self) {
         self.ratio = Self::DEFAULT_RATIO;
+    }
+
+    fn from_persisted_parts(
+        buttons: [Vec<SideViewId>; 2],
+        hidden_buttons: Vec<SideViewId>,
+        open_views: [Option<SideViewId>; 2],
+        visible_intent: bool,
+        width: u16,
+        ratio: f32,
+    ) -> Option<Self> {
+        let registered = buttons.iter().flatten().copied().collect::<BTreeSet<_>>();
+        let button_count = buttons.iter().map(Vec::len).sum::<usize>();
+        if button_count != SideViewId::ALL.len() || registered.len() != SideViewId::ALL.len() {
+            return None;
+        }
+        if hidden_buttons.iter().collect::<BTreeSet<_>>().len() != hidden_buttons.len() {
+            return None;
+        }
+        for slot in SideSlot::ALL {
+            if let Some(view) = open_views[slot.index()]
+                && !buttons[slot.index()].contains(&view)
+            {
+                return None;
+            }
+        }
+        if !(Self::MIN_WIDTH..=Self::MAX_WIDTH).contains(&width)
+            || !ratio.is_finite()
+            || !(Self::MIN_RATIO..=Self::MAX_RATIO).contains(&ratio)
+        {
+            return None;
+        }
+        Some(Self {
+            buttons,
+            hidden_buttons: hidden_buttons.into_iter().collect(),
+            open_views,
+            visible_intent,
+            width,
+            ratio,
+        })
     }
 
     fn clear_open_view(&mut self, view: SideViewId) -> bool {
