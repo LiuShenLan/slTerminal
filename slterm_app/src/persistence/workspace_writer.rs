@@ -49,6 +49,7 @@ pub(crate) enum WorkspaceWriterError {
     ViewKey(ViewKeyError),
     ViewState(ViewStateError),
     QueueFull,
+    FlushFailed,
     Stopped,
 }
 
@@ -60,6 +61,7 @@ impl fmt::Display for WorkspaceWriterError {
             Self::ViewKey(_) => formatter.write_str("ViewState 的 ViewKey 编码失败"),
             Self::ViewState(error) => fmt::Display::fmt(error, formatter),
             Self::QueueFull => formatter.write_str("工作区写队列已满"),
+            Self::FlushFailed => formatter.write_str("工作区视图状态最终冲刷失败"),
             Self::Stopped => formatter.write_str("工作区写线程已停止"),
         }
     }
@@ -81,49 +83,19 @@ enum Command {
     },
 }
 
-/// 工作区库唯一写线程句柄；显式 shutdown 与 Drop 共用退出冲刷路径。
-pub(crate) struct WorkspaceWriter {
+/// UI 持有的非阻塞写入口；生命周期与退出冲刷由外部 owner 独占。
+#[derive(Clone, Debug)]
+pub(crate) struct WorkspaceWriterClient {
     commands: SyncSender<Command>,
-    failures: Receiver<ViewStateWriteFailure>,
-    worker: Option<JoinHandle<()>>,
 }
 
-impl WorkspaceWriter {
-    /// 在调用线程等待数据库打开与线程启动；生产只由启动协调器后台调用。
-    pub(crate) fn start(paths: AppPaths) -> Result<Self, WorkspaceWriterError> {
-        let (commands, receiver) = mpsc::sync_channel(COMMAND_CAPACITY);
-        let (failure_sender, failures) = mpsc::sync_channel(1);
-        let (startup, started) = mpsc::sync_channel(1);
-        let worker = std::thread::Builder::new()
-            .name("slterm-workspace-writer".to_owned())
-            .spawn(move || run(paths, receiver, failure_sender, startup))
-            .map_err(WorkspaceWriterError::Spawn)?;
-        match started.recv() {
-            Ok(Ok(())) => Ok(Self {
-                commands,
-                failures,
-                worker: Some(worker),
-            }),
-            Ok(Err(error)) => {
-                let _ = worker.join();
-                Err(WorkspaceWriterError::Open(error))
-            }
-            Err(_) => {
-                let _ = worker.join();
-                Err(WorkspaceWriterError::Stopped)
-            }
-        }
-    }
-
+impl WorkspaceWriterClient {
     /// 非阻塞提交最新 ViewState；调用方保留自己的内存状态，队列满时可稍后重试。
     pub(crate) fn save_view_state(
         &self,
         key: &ViewKey,
         state: &ViewState,
     ) -> Result<(), WorkspaceWriterError> {
-        if self.worker.is_none() {
-            return Err(WorkspaceWriterError::Stopped);
-        }
         let key_json = key
             .to_canonical_json()
             .map_err(WorkspaceWriterError::ViewKey)?;
@@ -140,10 +112,68 @@ impl WorkspaceWriter {
                 TrySendError::Disconnected(_) => WorkspaceWriterError::Stopped,
             })
     }
+}
+
+/// 工作区库唯一写线程句柄；显式 shutdown 与 Drop 共用退出冲刷路径。
+pub(crate) struct WorkspaceWriter {
+    commands: SyncSender<Command>,
+    failures: Option<Receiver<ViewStateWriteFailure>>,
+    worker: Option<JoinHandle<()>>,
+}
+
+impl WorkspaceWriter {
+    /// 在调用线程等待数据库打开与线程启动；生产只由启动协调器后台调用。
+    pub(crate) fn start(paths: AppPaths) -> Result<Self, WorkspaceWriterError> {
+        let (commands, receiver) = mpsc::sync_channel(COMMAND_CAPACITY);
+        let (failure_sender, failures) = mpsc::sync_channel(1);
+        let (startup, started) = mpsc::sync_channel(1);
+        let worker = std::thread::Builder::new()
+            .name("slterm-workspace-writer".to_owned())
+            .spawn(move || run(paths, receiver, failure_sender, startup))
+            .map_err(WorkspaceWriterError::Spawn)?;
+        match started.recv() {
+            Ok(Ok(())) => Ok(Self {
+                commands,
+                failures: Some(failures),
+                worker: Some(worker),
+            }),
+            Ok(Err(error)) => {
+                let _ = worker.join();
+                Err(WorkspaceWriterError::Open(error))
+            }
+            Err(_) => {
+                let _ = worker.join();
+                Err(WorkspaceWriterError::Stopped)
+            }
+        }
+    }
+
+    pub(crate) fn client(&self) -> WorkspaceWriterClient {
+        WorkspaceWriterClient {
+            commands: self.commands.clone(),
+        }
+    }
+
+    /// 外部 owner 的维护写与 UI client 共用同一提交逻辑。
+    pub(crate) fn save_view_state(
+        &self,
+        key: &ViewKey,
+        state: &ViewState,
+    ) -> Result<(), WorkspaceWriterError> {
+        if self.worker.is_none() {
+            return Err(WorkspaceWriterError::Stopped);
+        }
+        self.client().save_view_state(key, state)
+    }
+
+    /// 将唯一失败接收端移交壳事件转发器；只能取走一次。
+    pub(crate) fn take_failure_receiver(&mut self) -> Option<Receiver<ViewStateWriteFailure>> {
+        self.failures.take()
+    }
 
     /// 非阻塞收割一条失败通知；容量为一时，已有通知即代表仍有失败待处理。
     pub(crate) fn try_recv_view_state_failure(&self) -> Option<ViewStateWriteFailure> {
-        self.failures.try_recv().ok()
+        self.failures.as_ref()?.try_recv().ok()
     }
 
     /// 立即重试全部待写状态并等待结果；生产只在后台执行体调用。
@@ -310,6 +340,20 @@ fn write_pending(
     report
 }
 
+/// 将写失败逐条转换为非阻塞壳通知；失败通道关闭后线程自然退出。
+pub(crate) fn spawn_view_state_failure_forwarder(
+    failures: Receiver<ViewStateWriteFailure>,
+    mut notify: impl FnMut() + Send + 'static,
+) -> std::io::Result<JoinHandle<()>> {
+    std::thread::Builder::new()
+        .name("slterm-view-state-events".into())
+        .spawn(move || {
+            while failures.recv().is_ok() {
+                notify();
+            }
+        })
+}
+
 #[cfg(test)]
 mod workspace_writer_tests {
     use std::time::Instant;
@@ -419,6 +463,87 @@ mod workspace_writer_tests {
         assert_eq!(wait_for_position(&observer), Some((3, 0)));
         assert_eq!(writer.flush().unwrap(), WorkspaceFlushReport::default());
         writer.shutdown().unwrap();
+    }
+
+    /// UI client 与外部生命周期 owner 共用同一有界命令队列。
+    #[test]
+    fn workspace_writer_client_shares_command_channel() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = fixture(&temp);
+        let observer = WorkspaceDatabase::open(&paths).unwrap();
+        let writer = WorkspaceWriter::start(paths).unwrap();
+        let client = writer.client();
+
+        client.save_view_state(&key(), &state(7)).unwrap();
+
+        assert_eq!(
+            writer.flush().unwrap(),
+            WorkspaceFlushReport {
+                written: 1,
+                failed: 0,
+            }
+        );
+        assert_eq!(read_position(&observer), Some((7, 0)));
+        writer.shutdown().unwrap();
+    }
+
+    /// 转发器逐条发出通知，并在失败通道关闭后退出。
+    #[test]
+    fn view_state_failure_forwarder_relays_and_stops() {
+        let (failure_tx, failure_rx) = mpsc::sync_channel(2);
+        let (event_tx, event_rx) = mpsc::channel();
+        let forwarder = spawn_view_state_failure_forwarder(failure_rx, move || {
+            let _ = event_tx.send(());
+        })
+        .unwrap();
+
+        for _ in 0..2 {
+            failure_tx
+                .send(ViewStateWriteFailure {
+                    key: key(),
+                    error: ViewStateStoreError::CorruptRecord,
+                })
+                .unwrap();
+            event_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        }
+        drop(failure_tx);
+
+        assert!(event_rx.try_recv().is_err());
+        forwarder.join().unwrap();
+    }
+
+    /// 失败接收端可移交壳事件转发器，writer owner 仍负责退出冲刷。
+    #[test]
+    fn workspace_writer_failure_receiver_is_transferable() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = fixture(&temp);
+        let mut observer = WorkspaceDatabase::open(&paths).unwrap();
+        observer.save_view_state(&key(), &state(7)).unwrap();
+        let mut writer = WorkspaceWriter::start(paths).unwrap();
+        observer
+            .database
+            .connection
+            .execute_batch(
+                "CREATE TRIGGER reject_view_state_write BEFORE UPDATE ON view_states \
+                 BEGIN SELECT RAISE(ABORT, 'injected write failure'); END;",
+            )
+            .unwrap();
+        let failures = writer.take_failure_receiver().unwrap();
+        assert!(writer.try_recv_view_state_failure().is_none());
+
+        writer.save_view_state(&key(), &state(8)).unwrap();
+
+        let failure = failures.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert_eq!(failure.key(), &key());
+        assert!(matches!(failure.error(), ViewStateStoreError::Database(_)));
+        drop(failures);
+        observer
+            .database
+            .connection
+            .execute_batch("DROP TRIGGER reject_view_state_write")
+            .unwrap();
+        writer.shutdown().unwrap();
+        assert_eq!(read_position(&observer), Some((8, 1)));
     }
 
     /// 写失败保留最新待写副本；后续修改重试，shutdown 在退出前再次冲刷。

@@ -218,6 +218,8 @@ pub struct SltermWorkspace {
     taskbar: crate::taskbar::TaskbarState,
     /// 单窗口会话写盘状态机(latest/saved 双快照、无变化跳过、提权隔离)。
     session_persistence: SessionPersistence,
+    /// ViewState 非阻塞写入口；writer owner 与退出冲刷由 GPUI 外 runtime 持有。
+    _view_state_writer: Option<crate::persistence::workspace_writer::WorkspaceWriterClient>,
     /// 文件 tab 的变更观察(键 = 稳定 TabId):编辑器键入/保存完成时刷新
     /// 侧栏与窗口标题的脏标记。关闭 tab 时随条目一并释放。
     file_observations: HashMap<TabId, Subscription>,
@@ -314,6 +316,7 @@ impl SltermWorkspace {
         window: &mut Window,
         shell_rx: mpsc::Receiver<SltermShellEvent>,
         ai_events: Option<mpsc::Receiver<AiHookEvent>>,
+        view_state_writer: Option<crate::persistence::workspace_writer::WorkspaceWriterClient>,
         startup: WorkspaceStartup,
         plan: StartupPlan,
         cx: &mut Context<'_, Self>,
@@ -358,6 +361,7 @@ impl SltermWorkspace {
             background_tasks: Vec::new(),
             taskbar: crate::taskbar::TaskbarState::new(),
             session_persistence: Self::new_session_persistence(),
+            _view_state_writer: view_state_writer,
             file_observations: HashMap::new(),
             file_tab_events: HashMap::new(),
             pending_file_close: None,
@@ -414,6 +418,7 @@ impl SltermWorkspace {
             plan.crashed,
             plan.quarantined.as_deref(),
             plan.sidebar_repaired,
+            plan.view_state_writer_unavailable,
             language,
         ) {
             // /统一走通知漏斗;启动汇总经 `plan_startup` 豁免前台

@@ -35,6 +35,8 @@ pub(crate) struct StartupPlan {
     pub(crate) sidebar: SidebarState,
     /// 侧栏结构损坏或字段修复需要向用户聚合提示。
     pub(crate) sidebar_repaired: bool,
+    /// ViewState writer 启动不可用，必须与恢复结果合并为一条提示。
+    pub(crate) view_state_writer_unavailable: bool,
     /// 上次窗口尺寸与最大化态。
     pub(crate) window: Option<WindowState>,
     /// 上次是异常退出(仅用于恢复提示文案)。
@@ -50,6 +52,7 @@ impl StartupPlan {
             session: None,
             sidebar: SidebarState::default(),
             sidebar_repaired: false,
+            view_state_writer_unavailable: false,
             window: None,
             crashed: false,
             quarantined: None,
@@ -80,12 +83,13 @@ pub(crate) fn restore_handoff_sidebar(plan: &mut StartupPlan, sidebar: &SidebarS
 
 /// 恢复结果一次性汇总文案:
 /// 恢复成功按标签数提示(崩溃现场多一句来源说明);断路器隔离给出现场
-/// 路径;侧栏修复可独立成提示，也可与上述结果合并。
+/// 路径;侧栏修复与 writer 启动不可用可独立成提示，也可与上述结果合并。
 pub(crate) fn recovery_notice(
     restored_tabs: Option<usize>,
     crashed: bool,
     quarantined: Option<&Path>,
     sidebar_repaired: bool,
+    view_state_writer_unavailable: bool,
     language: crate::i18n::UiLanguage,
 ) -> Option<String> {
     use crate::i18n::Message;
@@ -117,6 +121,14 @@ pub(crate) fn recovery_notice(
             None => notice = Some(repair.to_owned()),
         }
     }
+    if view_state_writer_unavailable {
+        let unavailable = language.text(Message::NotifyViewStateWriteFailed);
+        // writer 不可用置于首部，长隔离路径被 toast 截断时仍保留该告警。
+        notice = Some(match notice {
+            Some(text) => format!("{unavailable} {text}"),
+            None => unavailable.to_owned(),
+        });
+    }
     notice
 }
 
@@ -136,6 +148,7 @@ pub(crate) fn prepare_startup_at(path: &Path, restore_tabs: bool) -> StartupPlan
         session: None,
         sidebar,
         sidebar_repaired,
+        view_state_writer_unavailable: false,
         window: session.window,
         crashed: false,
         quarantined: None,
@@ -664,17 +677,17 @@ mod session_recovery_tests {
         assert!(explicit_command, "Profile 按显式命令通道重建");
     }
 
-    /// 恢复汇总文案覆盖普通恢复、崩溃、隔离与侧栏修复；全新启动静默。
+    /// 恢复汇总覆盖恢复、隔离、侧栏修复与 writer 不可用；全新启动静默。
     #[test]
     fn recovery_notice_summarizes_restore_outcomes_and_stays_quiet_on_fresh_start() {
         use crate::i18n::UiLanguage;
 
         assert_eq!(
-            recovery_notice(Some(3), false, None, false, UiLanguage::EnUs).as_deref(),
+            recovery_notice(Some(3), false, None, false, false, UiLanguage::EnUs).as_deref(),
             Some("Restored 3 tab(s).")
         );
         assert_eq!(
-            recovery_notice(Some(2), true, None, false, UiLanguage::EnUs).as_deref(),
+            recovery_notice(Some(2), true, None, false, false, UiLanguage::EnUs).as_deref(),
             Some("Restored 2 tab(s) after an unclean shutdown.")
         );
         assert_eq!(
@@ -683,27 +696,56 @@ mod session_recovery_tests {
                 false,
                 Some(Path::new("D:/data/session.crashed.json")),
                 false,
+                false,
                 UiLanguage::ZhCn
             )
             .as_deref(),
             Some("连续多次启动未完成恢复，已跳过；现场保存在 D:/data/session.crashed.json")
         );
         assert_eq!(
-            recovery_notice(None, false, None, false, UiLanguage::EnUs),
+            recovery_notice(None, false, None, false, false, UiLanguage::EnUs),
             None
         );
         assert_eq!(
-            recovery_notice(Some(0), false, None, false, UiLanguage::EnUs),
+            recovery_notice(Some(0), false, None, false, false, UiLanguage::EnUs),
             None
         );
         assert_eq!(
-            recovery_notice(None, false, None, true, UiLanguage::ZhCn).as_deref(),
+            recovery_notice(None, false, None, true, false, UiLanguage::ZhCn).as_deref(),
             Some("侧栏布局存在无效内容，已修复可恢复字段，其余使用默认值。")
         );
-        let combined = recovery_notice(Some(1), false, None, true, UiLanguage::EnUs)
-            .expect("恢复与侧栏修复必须聚合为一条提示");
-        assert!(combined.starts_with("Restored 1 tab(s). "));
+        assert_eq!(
+            recovery_notice(None, false, None, false, true, UiLanguage::EnUs).as_deref(),
+            Some("View state could not be saved. Recent layout changes may not be restored.")
+        );
+        let combined = recovery_notice(Some(1), false, None, true, true, UiLanguage::EnUs)
+            .expect("恢复、侧栏修复与 writer 不可用必须聚合为一条提示");
+        assert!(combined.starts_with("View state could not be saved"));
+        assert!(combined.contains("Restored 1 tab(s)."));
         assert!(combined.contains("sidebar layout"));
+    }
+
+    /// 长隔离路径与侧栏修复同时存在时，writer 告警必须穿透 toast 截断。
+    #[test]
+    fn recovery_notice_keeps_writer_alert_visible_after_toast_clamping() {
+        use crate::i18n::{Message, UiLanguage};
+
+        let quarantined = PathBuf::from(format!(
+            "D:/{}/session.crashed.json",
+            "very-long-directory/".repeat(16)
+        ));
+        let text = recovery_notice(
+            None,
+            false,
+            Some(&quarantined),
+            true,
+            true,
+            UiLanguage::EnUs,
+        )
+        .unwrap();
+
+        let toast = crate::notify::clamp_toast_body(&text);
+        assert!(toast.contains(UiLanguage::EnUs.text(Message::NotifyViewStateWriteFailed)));
     }
 
     /// CLI 显式启动(cwd/-e)不碰恢复:不计数、不隔离、不交会话。

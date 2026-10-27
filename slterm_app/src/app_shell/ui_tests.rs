@@ -126,7 +126,7 @@ fn open_workspace_with_startup(
     let mut slot = None;
     let (_root, window) = cx.add_window_view(|window, cx| {
         let workspace =
-            cx.new(|cx| SltermWorkspace::new(window, rx, Some(ai_rx), startup, plan, cx));
+            cx.new(|cx| SltermWorkspace::new(window, rx, Some(ai_rx), None, startup, plan, cx));
         slot = Some(workspace.clone());
         Root::new(workspace, window, cx)
     });

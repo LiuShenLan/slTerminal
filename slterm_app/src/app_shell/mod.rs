@@ -85,6 +85,85 @@ pub(crate) enum SltermShellEvent {
     /// AI hook 自愈失败边(类别 + agent,不含合成命令)。消费 = 进程级
     /// 通知,不绑定 pane,也不直出技术化命令文本。
     AiHookAlert(crate::ai_hook::HookFailureKind),
+    /// 工作区 ViewState 后台写失败；不携带路径、SQL 或状态正文。
+    ViewStateWriteFailed,
+}
+
+/// GPUI 外独占 writer 与失败转发线程，窗口只拿非阻塞 client。
+struct WorkspaceWriterRuntime {
+    writer: crate::persistence::workspace_writer::WorkspaceWriter,
+    client: crate::persistence::workspace_writer::WorkspaceWriterClient,
+    failure_forwarder: std::thread::JoinHandle<()>,
+}
+
+impl WorkspaceWriterRuntime {
+    fn start_at(
+        paths: &slterm_path::AppPaths,
+        events: mpsc::Sender<SltermShellEvent>,
+    ) -> Result<Self, crate::persistence::workspace_writer::WorkspaceWriterError> {
+        use crate::persistence::workspace_writer::{
+            WorkspaceWriter, WorkspaceWriterError, spawn_view_state_failure_forwarder,
+        };
+
+        let mut writer = WorkspaceWriter::start(paths.clone())?;
+        let client = writer.client();
+        let failures = writer
+            .take_failure_receiver()
+            .expect("新 writer 的失败接收端必须可移交一次");
+        let failure_forwarder = spawn_view_state_failure_forwarder(failures, move || {
+            let _ = events.send(SltermShellEvent::ViewStateWriteFailed);
+        })
+        .map_err(WorkspaceWriterError::Spawn)?;
+        Ok(Self {
+            writer,
+            client,
+            failure_forwarder,
+        })
+    }
+
+    fn client(&self) -> crate::persistence::workspace_writer::WorkspaceWriterClient {
+        self.client.clone()
+    }
+
+    fn shutdown(self) -> Result<(), crate::persistence::workspace_writer::WorkspaceWriterError> {
+        let Self {
+            writer,
+            client: _,
+            failure_forwarder,
+        } = self;
+        let shutdown = writer.shutdown();
+        let forwarder = failure_forwarder.join();
+        match (shutdown, forwarder) {
+            (Err(error), _) => Err(error),
+            (Ok(report), _) if report.failed > 0 => {
+                Err(crate::persistence::workspace_writer::WorkspaceWriterError::FlushFailed)
+            }
+            (Ok(_), Err(_)) => {
+                Err(crate::persistence::workspace_writer::WorkspaceWriterError::Stopped)
+            }
+            (Ok(_), Ok(())) => Ok(()),
+        }
+    }
+}
+
+/// 启动 writer；失败时窗口降级为无 client，由启动计划合并恢复提示。
+fn start_workspace_writer(
+    paths: &slterm_path::AppPaths,
+    events: mpsc::Sender<SltermShellEvent>,
+) -> (
+    Option<WorkspaceWriterRuntime>,
+    Option<crate::persistence::workspace_writer::WorkspaceWriterClient>,
+) {
+    match WorkspaceWriterRuntime::start_at(paths, events) {
+        Ok(runtime) => {
+            let client = runtime.client();
+            (Some(runtime), Some(client))
+        }
+        Err(error) => {
+            log::warn!("workspace writer startup failed: {error}");
+            (None, None)
+        }
+    }
 }
 
 /// 本次启动是否静默。
@@ -155,6 +234,10 @@ pub fn run_shell(initial_cwd: Option<PathBuf>, initial_command: Option<Program>)
         0
     };
     let (shell_tx, shell_rx) = mpsc::channel();
+    // writer owner 与转发线程留在 GPUI 外；启动失败并入恢复汇总提示。
+    let (workspace_writer, view_state_writer) =
+        start_workspace_writer(crate::platform::dirs::app_paths(), shell_tx.clone());
+    startup_plan.view_state_writer_unavailable = workspace_writer.is_none();
     let open_urls_tx = shell_tx.clone();
     // 进程级 hook 管道(单实例,非 per-pane):必须在首个 PTY spawn 之前发布
     // `SLTERM_NOTIFY_PIPE`——ConPTY 合并当前进程环境,全部 pane 的子进程树
@@ -203,6 +286,7 @@ pub fn run_shell(initial_cwd: Option<PathBuf>, initial_command: Option<Program>)
             cx,
             shell_rx,
             ai_events,
+            view_state_writer,
             initial_cwd,
             initial_command,
             startup_plan,
@@ -214,6 +298,12 @@ pub fn run_shell(initial_cwd: Option<PathBuf>, initial_command: Option<Program>)
             crate::update_download::handoff::acknowledge_restore(update_restored_windows);
         }
     });
+    // GPUI 已退出，在主线程等待最终冲刷并 join 转发器，不阻塞前台。
+    if let Some(runtime) = workspace_writer
+        && let Err(error) = runtime.shutdown()
+    {
+        log::warn!("workspace writer shutdown failed: {error}");
+    }
     // 托盘收尾:先删图标再退进程,否则任务栏残影要等
     // 用户悬停才消失;join 保证删图标先于进程退出。
     crate::tray::shutdown();
@@ -251,9 +341,23 @@ fn register_bundled_fonts(cx: &App) {
 
 #[cfg(test)]
 mod shell_event_tests {
-    use slterm_settings::{RawSettings, RuntimeSettings};
+    use std::sync::mpsc;
+    use std::time::Duration;
 
-    use super::{SltermShellEvent, starts_hidden, tray_command_event};
+    use serde_json::{Value, json};
+    use slterm_path::AppPaths;
+    use slterm_settings::{RawSettings, RuntimeSettings};
+    use slterm_workspace::{
+        InvalidViewState, SideViewId, ViewKey, ViewKeyKind, ViewState, ViewStateRegistry,
+        ViewStateSchema,
+    };
+
+    use super::{
+        SltermShellEvent, WorkspaceWriterRuntime, start_workspace_writer, starts_hidden,
+        tray_command_event,
+    };
+    use crate::persistence::workspace::WorkspaceDatabase;
+    use crate::persistence::workspace_writer::WorkspaceWriterError;
     use crate::tray::GpuiTrayCommand;
 
     fn silent_settings() -> crate::app_shell::config::Settings {
@@ -270,6 +374,115 @@ mod shell_event_tests {
         let settings = silent_settings();
         assert!(starts_hidden(true, &settings), "常规启动可静默");
         assert!(!starts_hidden(false, &settings), "显式 CLI 启动不得隐藏");
+    }
+
+    fn view_state_registry() -> ViewStateRegistry {
+        fn decode(_key: &ViewKey, text: &str) -> Result<Value, InvalidViewState> {
+            serde_json::from_str(text).map_err(|_| InvalidViewState)
+        }
+
+        ViewStateRegistry::new(&[ViewStateSchema::new(ViewKeyKind::SideView, decode)]).unwrap()
+    }
+
+    /// 启动失败降级为无 client，不另发会被恢复汇总节流的独立事件。
+    #[test]
+    fn workspace_writer_start_failure_defers_to_recovery_summary() {
+        let temp = tempfile::tempdir().unwrap();
+        let local = temp.path().join("local");
+        std::fs::write(&local, "not a directory").unwrap();
+        let paths = AppPaths::new(temp.path().join("config"), local).unwrap();
+        let (events, event_rx) = mpsc::channel();
+
+        let (runtime, client) = start_workspace_writer(&paths, events);
+
+        assert!(runtime.is_none());
+        assert!(client.is_none());
+        assert!(event_rx.try_recv().is_err());
+    }
+
+    /// 组合根共享 client、转发失败并在退出时重试待写副本、回收转发线程。
+    #[test]
+    fn workspace_writer_runtime_forwards_failure_and_flushes_on_shutdown() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+        let key = ViewKey::SideView {
+            side_view_id: SideViewId::Nav,
+        };
+        let registry = view_state_registry();
+        let mut observer = WorkspaceDatabase::open(&paths).unwrap();
+        observer
+            .save_view_state(
+                &key,
+                &ViewState::new(&key, json!({"position": 7}), &registry).unwrap(),
+            )
+            .unwrap();
+        let (events, event_rx) = mpsc::channel();
+        let runtime = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
+        let client = runtime.client();
+        let fault = rusqlite::Connection::open(paths.workspace_db_path()).unwrap();
+        fault
+            .execute_batch(
+                "CREATE TRIGGER reject_view_state_write BEFORE UPDATE ON view_states \
+                 BEGIN SELECT RAISE(ABORT, 'injected write failure'); END;",
+            )
+            .unwrap();
+
+        client
+            .save_view_state(
+                &key,
+                &ViewState::new(&key, json!({"position": 8}), &registry).unwrap(),
+            )
+            .unwrap();
+
+        assert!(matches!(
+            event_rx.recv_timeout(Duration::from_secs(3)),
+            Ok(SltermShellEvent::ViewStateWriteFailed)
+        ));
+        fault
+            .execute_batch("DROP TRIGGER reject_view_state_write")
+            .unwrap();
+        runtime.shutdown().unwrap();
+        let stored = observer.view_state(&key, &registry).unwrap().unwrap();
+        assert_eq!(stored.state.state()["position"], 8);
+    }
+
+    /// 退出时故障未解除必须报告最终冲刷失败，不能丢弃失败计数。
+    #[test]
+    fn workspace_writer_runtime_shutdown_reports_unflushed_failure() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+        let key = ViewKey::SideView {
+            side_view_id: SideViewId::Nav,
+        };
+        let registry = view_state_registry();
+        let mut observer = WorkspaceDatabase::open(&paths).unwrap();
+        observer
+            .save_view_state(
+                &key,
+                &ViewState::new(&key, json!({"position": 7}), &registry).unwrap(),
+            )
+            .unwrap();
+        let (events, _event_rx) = mpsc::channel();
+        let runtime = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
+        let client = runtime.client();
+        let fault = rusqlite::Connection::open(paths.workspace_db_path()).unwrap();
+        fault
+            .execute_batch(
+                "CREATE TRIGGER reject_view_state_write BEFORE UPDATE ON view_states \
+                 BEGIN SELECT RAISE(ABORT, 'injected write failure'); END;",
+            )
+            .unwrap();
+        client
+            .save_view_state(
+                &key,
+                &ViewState::new(&key, json!({"position": 8}), &registry).unwrap(),
+            )
+            .unwrap();
+
+        assert!(matches!(
+            runtime.shutdown(),
+            Err(WorkspaceWriterError::FlushFailed)
+        ));
     }
 
     /// 托盘线程只发命令枚举;壳侧翻译单点必须把 Focus 汇到已有的回窗

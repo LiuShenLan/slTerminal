@@ -124,6 +124,7 @@ pub(crate) fn open_initial_window(
     cx: &mut App,
     shell_rx: mpsc::Receiver<SltermShellEvent>,
     ai_events: mpsc::Receiver<crate::ai_hook::AiHookEvent>,
+    view_state_writer: Option<crate::persistence::workspace_writer::WorkspaceWriterClient>,
     initial_cwd: Option<PathBuf>,
     initial_command: Option<Program>,
     plan: StartupPlan,
@@ -145,8 +146,17 @@ pub(crate) fn open_initial_window(
         window.set_window_title(brand::NAME);
         // HWND 发布单点:任务栏闪烁/进度经 facade 查询。
         crate::windowing::focus::publish_window(window);
-        let workspace =
-            cx.new(|cx| SltermWorkspace::new(window, shell_rx, Some(ai_events), startup, plan, cx));
+        let workspace = cx.new(|cx| {
+            SltermWorkspace::new(
+                window,
+                shell_rx,
+                Some(ai_events),
+                view_state_writer,
+                startup,
+                plan,
+                cx,
+            )
+        });
         cx.new(|cx| Root::new(workspace, window, cx))
     });
     match result {

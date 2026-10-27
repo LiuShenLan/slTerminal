@@ -76,6 +76,15 @@ impl SltermWorkspace {
             }
             // 消费(右键「在此处打开」)归窗口/平台域。
             SltermShellEvent::OpenDirectories(_) => {}
+            // 启动不可用与运行写失败共用同一脱敏进程提示。
+            SltermShellEvent::ViewStateWriteFailed => {
+                let language = cx.global::<crate::app_shell::config::Settings>().language;
+                crate::notify::deliver_startup_summary(
+                    &view_state_write_failure_notification(language),
+                    cx,
+                );
+                cx.notify();
+            }
         }
     }
 
@@ -691,6 +700,32 @@ fn agent_display_name(slug: &str) -> String {
     crate::ai_agents::AgentKind::parse(slug)
         .map(|kind| kind.display_name().to_owned())
         .unwrap_or_else(|| slug.to_owned())
+}
+
+/// ViewState 写失败只给泛化提示，不暴露键、路径、SQL 或状态正文。
+fn view_state_write_failure_notification(language: UiLanguage) -> crate::notify::Notification {
+    crate::notify::Notification::ProcessAlert {
+        text: language
+            .text(Message::NotifyViewStateWriteFailed)
+            .to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod shell_alert_tests {
+    use super::view_state_write_failure_notification;
+    use crate::i18n::{Message, UiLanguage};
+
+    /// 启动不可用与运行写失败共用不含内部细节的本地化进程提示。
+    #[test]
+    fn view_state_write_failure_alert_is_localized_and_generic() {
+        for language in [UiLanguage::EnUs, UiLanguage::ZhCn] {
+            let notification = view_state_write_failure_notification(language);
+            let (title, body) = notification.raw_toast_text();
+            assert_eq!(title, crate::brand::NAME);
+            assert_eq!(body, language.text(Message::NotifyViewStateWriteFailed));
+        }
+    }
 }
 
 #[cfg(test)]
