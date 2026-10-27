@@ -9,6 +9,7 @@
 
 use gpui::{App, Pixels, Size, Window, px, size};
 
+use crate::app_shell::workspace::sidebar::{self, SidebarState};
 use crate::gpui_terminal::view::TerminalView;
 
 fn chrome_size(sidebar_width: f32) -> Size<Pixels> {
@@ -85,16 +86,17 @@ fn same_device_size(actual: Size<Pixels>, requested: Size<Pixels>, scale: f32) -
 pub(in crate::app_shell) fn prepare_initial_grid(
     window: &mut Window,
     cx: &mut App,
-    sidebar_width: f32,
+    sidebar: &SidebarState,
     fit_window_to_default_grid: bool,
 ) -> (u16, u16) {
     let (cell_w, line_h) = TerminalView::cell_metrics(window, cx);
     let actual = window.bounds().size;
+    let preferred_chrome = sidebar::chrome_width(sidebar);
     let target = if fit_window_to_default_grid {
         let requested = default_size(
             TerminalView::startup_cell_metrics(window, cx),
             startup_grid(),
-            sidebar_width,
+            preferred_chrome,
             display_limit(cx),
         );
         let requested = if crate::platform::startup::primary_display_scale().is_some() {
@@ -114,7 +116,10 @@ pub(in crate::app_shell) fn prepare_initial_grid(
     } else {
         actual
     };
-    let chrome = chrome_size(sidebar_width);
+    let chrome = chrome_size(sidebar::display_chrome_width(
+        sidebar,
+        f32::from(target.width),
+    ));
     let cols = ((f32::from(target.width - chrome.width) / f32::from(cell_w)) + 0.001)
         .floor()
         .max(2.0) as u16;

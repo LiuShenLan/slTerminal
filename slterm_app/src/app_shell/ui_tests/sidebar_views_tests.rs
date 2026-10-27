@@ -628,6 +628,190 @@ fn sidebar_width_drag_ignores_rounding_noops_for_debounce(cx: &mut TestAppContex
     );
 }
 
+/// 既定窄窗口目标必须按压缩后的实际 chrome 反推网格，不能使用原始用户宽度。
+#[gpui::test]
+fn narrow_window_grid_uses_compressed_chrome(cx: &mut TestAppContext) {
+    let mut sidebar = SidebarState::default();
+    sidebar.set_width(600);
+    let (_workspace, mut window) = open_workspace_with_sidebar(cx, sidebar.clone());
+    window.simulate_resize(gpui::size(px(500.0), px(640.0)));
+    window.run_until_parked();
+    let compressed = window.update(|window, cx| {
+        crate::app_shell::windowing::startup_geometry::prepare_initial_grid(
+            window, cx, &sidebar, false,
+        )
+    });
+    sidebar.set_width(250);
+    let explicitly_resized = window.update(|window, cx| {
+        crate::app_shell::windowing::startup_geometry::prepare_initial_grid(
+            window, cx, &sidebar, false,
+        )
+    });
+    assert_eq!(
+        compressed, explicitly_resized,
+        "保存宽度 600 被窗口压缩为 250 后，网格必须与主动宽度 250 完全一致"
+    );
+}
+
+/// 压缩态主动拖拽从可见宽度起算，且不得把不可见的宽度增长写入用户状态。
+#[gpui::test]
+fn compressed_sidebar_drag_uses_visible_width_and_available_limit(cx: &mut TestAppContext) {
+    let mut sidebar = SidebarState::default();
+    sidebar.set_width(600);
+    let (workspace, mut window) = open_workspace_with_sidebar(cx, sidebar);
+    window.simulate_resize(gpui::size(px(500.0), px(640.0)));
+    window.run_until_parked();
+    draw_frame(&mut window);
+    let start = window
+        .debug_bounds("sidebar-resize-handle")
+        .unwrap()
+        .center();
+    window.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+    window.simulate_mouse_move(
+        point(start.x - px(40.0), start.y),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
+    draw_frame(&mut window);
+    assert_eq!(
+        workspace.read_with(cx, |ws, _| ws.sidebar_state().width()),
+        210,
+        "左拖必须立即从可见的 250 减小，而不是从保存的 600 减小"
+    );
+    assert_eq!(
+        window.debug_bounds("sidebar-column").unwrap().size.width,
+        px(210.0)
+    );
+
+    window.simulate_mouse_move(
+        point(start.x + px(100.0), start.y),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
+    draw_frame(&mut window);
+    assert_eq!(
+        workspace.read_with(cx, |ws, _| ws.sidebar_state().width()),
+        250,
+        "向右拖拽不得越过当前窗口的可见上限形成隐保存"
+    );
+    window.simulate_mouse_up(
+        point(start.x + px(100.0), start.y),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
+}
+
+/// 可用展示宽度低于 core 最小宽度时不启动拖拽，避免不可见的状态变更。
+#[gpui::test]
+fn sidebar_drag_is_inactive_below_minimum_visible_width(cx: &mut TestAppContext) {
+    let mut sidebar = SidebarState::default();
+    sidebar.set_width(600);
+    let (workspace, mut window) = open_workspace_with_sidebar(cx, sidebar);
+    let writes = Rc::new(RefCell::new(Vec::<crate::session::Session>::new()));
+    workspace.update(cx, |ws, _| {
+        let writes = Rc::clone(&writes);
+        ws.set_session_writer_for_test(Rc::new(move |session| {
+            writes.borrow_mut().push(session.clone());
+            Ok(())
+        }));
+    });
+    window.simulate_resize(gpui::size(px(406.0), px(640.0)));
+    window.run_until_parked();
+    draw_frame(&mut window);
+    assert_eq!(
+        window.debug_bounds("sidebar-column").unwrap().size.width,
+        px(156.0)
+    );
+    let start = window
+        .debug_bounds("sidebar-resize-handle")
+        .unwrap()
+        .center();
+    window.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+    window.simulate_mouse_move(
+        point(start.x - px(20.0), start.y),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
+    window.simulate_mouse_up(
+        point(start.x - px(20.0), start.y),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
+    window.executor().advance_clock(Duration::from_millis(500));
+    window.run_until_parked();
+    assert_eq!(
+        workspace.read_with(cx, |ws, _| ws.sidebar_state().width()),
+        600
+    );
+    assert!(writes.borrow().is_empty());
+}
+
+/// 窄窗口只压缩实际展示宽度，用户宽度与终局保存始终保留主动设置值。
+#[gpui::test]
+fn sidebar_window_compression_preserves_user_width_and_main_area(cx: &mut TestAppContext) {
+    let mut sidebar = SidebarState::default();
+    sidebar.set_width(600);
+    let (workspace, mut window) = open_workspace_with_sidebar(cx, sidebar);
+    let writes = Rc::new(RefCell::new(Vec::<crate::session::Session>::new()));
+    workspace.update(cx, |ws, _| {
+        let writes = Rc::clone(&writes);
+        ws.set_session_writer_for_test(Rc::new(move |session| {
+            writes.borrow_mut().push(session.clone());
+            Ok(())
+        }));
+    });
+    window.refresh().unwrap();
+    draw_frame(&mut window);
+    assert_eq!(
+        window.debug_bounds("sidebar-column").unwrap().size.width,
+        px(600.0)
+    );
+
+    window.simulate_resize(gpui::size(px(500.0), px(640.0)));
+    window.run_until_parked();
+    draw_frame(&mut window);
+    assert_eq!(
+        window.debug_bounds("sidebar-column").unwrap().size.width,
+        px(250.0),
+        "500 = ActivityBar 46 + 压缩侧栏 250 + 热区 4 + 主区最小宽度 200"
+    );
+    assert_eq!(
+        workspace
+            .read_with(cx, |ws, _| ws.pane_bounds_of(PaneId(1)))
+            .unwrap()
+            .size
+            .width,
+        px(200.0)
+    );
+    assert_eq!(
+        workspace.read_with(cx, |ws, _| ws.sidebar_state().width()),
+        600,
+        "窗口几何不得回写用户宽度"
+    );
+    assert!(writes.borrow().is_empty(), "临时压缩不得触发侧栏布局保存");
+    window.executor().advance_clock(Duration::from_millis(500));
+    window.run_until_parked();
+    assert!(
+        writes.borrow().is_empty(),
+        "经过完整去抖窗口后仍不得出现临时宽度保存"
+    );
+
+    window.simulate_resize(gpui::size(px(1200.0), px(640.0)));
+    window.run_until_parked();
+    draw_frame(&mut window);
+    assert_eq!(
+        window.debug_bounds("sidebar-column").unwrap().size.width,
+        px(600.0),
+        "空间恢复后必须使用原用户宽度"
+    );
+    assert!(window.simulate_close());
+    assert_eq!(writes.borrow().len(), 1);
+    assert_eq!(
+        writes.borrow()[0].sidebar.recover().unwrap().state.width(),
+        600
+    );
+}
+
 /// 双槽打开时渲染可拖拽分隔条;拖拽实时改比例并落在钳制区间,期间
 /// 终端网格零重排;关掉一个槽后比例保留、分隔条消失。
 #[gpui::test]

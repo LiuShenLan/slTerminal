@@ -360,12 +360,7 @@ impl SltermWorkspace {
         // 侧栏宽度先于 spawn 网格入账:恢复的宽度若在首帧后才生效,会先按
         // 默认宽度触发一次 ConPTY resize(/回放顺序)。
         // 开窗 resize 异步落地前,先按目标几何谓出 spawn 网格(启动零 resize)。
-        let initial_grid = startup_geometry::prepare_initial_grid(
-            window,
-            cx,
-            sidebar::chrome_width(&plan.sidebar),
-            true,
-        );
+        let initial_grid = startup_geometry::prepare_initial_grid(window, cx, &plan.sidebar, true);
         // 通知漏斗前台门控:初始态取开窗激活态,此后由窗口
         // 激活态订阅持续刷新;漏斗据此丢弃聚焦期间的打扰。
         crate::notify::set_foreground(window.is_window_active());
@@ -1640,7 +1635,10 @@ impl Render for SltermWorkspace {
         let sidebar_visible = self.side_views.state().is_visible();
         let activity_bar = self.render_activity_bar(cx);
         let resize_handle = sidebar_visible.then(|| self.render_sidebar_resize_handle(cx));
-        let sidebar_width = f32::from(self.side_views.state().width());
+        let sidebar_width = sidebar::display_width(
+            self.side_views.state(),
+            f32::from(window.viewport_size().width),
+        );
         let title_bar = self.render_title_bar(window, cx);
         // 分隔条拖拽 overlay 与全窗指针罩层(同 tab_drag 的捕获模式:罩层
         // 独占指针,移动喂预览、松开提交/关闭)。overlay 在内容之上、罩层

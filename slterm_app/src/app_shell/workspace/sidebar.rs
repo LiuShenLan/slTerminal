@@ -38,6 +38,8 @@ pub(crate) const SIDEBAR_RESIZE_HANDLE_WIDTH: f32 = 4.0;
 pub(super) const SIDEBAR_WIDTH_MIN: f32 = SidebarState::MIN_WIDTH as f32;
 /// 侧栏内容区最大宽度。
 pub(super) const SIDEBAR_WIDTH_MAX: f32 = SidebarState::MAX_WIDTH as f32;
+/// 主区在侧栏可见时必须保留的最小宽度。
+pub(super) const MAIN_AREA_WIDTH_MIN: f32 = 200.0;
 /// 双槽分隔条命中带高度(视觉线居中 1px,整带可拖)。
 const SIDEBAR_SPLIT_DIVIDER_HEIGHT: f32 = 5.0;
 
@@ -91,6 +93,25 @@ pub(crate) fn chrome_width(state: &SidebarState) -> f32 {
     }
 }
 
+/// 当前窗口在保留主区下限后可供侧栏使用的展示宽度。
+fn available_width(window_width: f32) -> f32 {
+    (window_width - ACTIVITY_BAR_SIZE - SIDEBAR_RESIZE_HANDLE_WIDTH - MAIN_AREA_WIDTH_MIN).max(0.0)
+}
+
+/// 窗口过窄时只压缩展示宽度，保留主区下限；core 中的用户宽度不参与换算。
+pub(super) fn display_width(state: &SidebarState, window_width: f32) -> f32 {
+    f32::from(state.width()).min(available_width(window_width))
+}
+
+/// 启动网格使用目标窗口的实际侧栏 chrome，不能沿用未压缩的用户宽度。
+pub(in crate::app_shell) fn display_chrome_width(state: &SidebarState, window_width: f32) -> f32 {
+    if state.is_visible() {
+        ACTIVITY_BAR_SIZE + display_width(state, window_width) + SIDEBAR_RESIZE_HANDLE_WIDTH
+    } else {
+        ACTIVITY_BAR_SIZE
+    }
+}
+
 /// 指针 y → 上槽比例；无效几何回默认值，有效输入交给 core 钳制。
 pub(super) fn sidebar_split_ratio_at(pointer_y: f32, top: f32, height: f32) -> f32 {
     if !pointer_y.is_finite() || !top.is_finite() || !height.is_finite() || height <= 0.0 {
@@ -117,13 +138,15 @@ pub(super) fn derive_layout(state: &SidebarState) -> SidebarLayout {
 pub(super) struct SidebarResizeDrag {
     pub start_x: f32,
     pub start_width: f32,
+    /// 手势开始时当前窗口允许的用户宽度上限。
+    pub max_width: f32,
 }
 
-/// 指针位置 → 新宽度，按 core 区间钳制。
+/// 指针位置 → 新宽度，按 core 区间与当前窗口实际上限钳制。
 pub(super) fn dragged_width(drag: &SidebarResizeDrag, pointer_x: f32) -> f32 {
     let width = drag.start_width + pointer_x - drag.start_x;
     if width.is_finite() {
-        width.clamp(SIDEBAR_WIDTH_MIN, SIDEBAR_WIDTH_MAX)
+        width.clamp(SIDEBAR_WIDTH_MIN, drag.max_width)
     } else {
         SIDEBAR_WIDTH_MIN
     }
@@ -438,14 +461,23 @@ impl SltermWorkspace {
             .bg(cx.theme().sidebar_border)
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                cx.listener(|this, event: &MouseDownEvent, window, cx| {
                     // 与双槽分隔条拖拽互斥:同一时刻只允许一个手势。
                     if this.sidebar_split_drag.is_some() {
                         return;
                     }
+                    let window_width = f32::from(window.viewport_size().width);
+                    let available = available_width(window_width);
+                    // 低于 core 最小区间时没有可表达的拖拽目标，保持用户宽度不变。
+                    if available < SIDEBAR_WIDTH_MIN {
+                        return;
+                    }
+                    let max_width = available.min(SIDEBAR_WIDTH_MAX);
                     this.sidebar_resize = Some(SidebarResizeDrag {
                         start_x: f32::from(event.position.x),
-                        start_width: f32::from(this.side_views.state().width()),
+                        start_width: display_width(this.side_views.state(), window_width)
+                            .clamp(SIDEBAR_WIDTH_MIN, max_width),
+                        max_width,
                     });
                     cx.stop_propagation();
                     cx.notify();
@@ -665,6 +697,7 @@ mod sidebar_state_tests {
         let drag = SidebarResizeDrag {
             start_x: 300.0,
             start_width: 250.0,
+            max_width: SIDEBAR_WIDTH_MAX,
         };
         assert_eq!(dragged_width(&drag, 340.0), 290.0);
         assert_eq!(dragged_width(&drag, -10_000.0), SIDEBAR_WIDTH_MIN);
