@@ -516,6 +516,7 @@ impl SltermWorkspace {
                 ),
             )
             .expect("活动栏点击必须对应可见按钮");
+        self.schedule_sidebar_save(cx);
         cx.notify();
     }
 
@@ -527,9 +528,12 @@ impl SltermWorkspace {
         let Some(drag) = self.sidebar_resize.as_ref() else {
             return;
         };
-        let width = dragged_width(drag, f32::from(event.position.x));
-        if (f32::from(self.side_views.state().width()) - width).abs() > f32::EPSILON {
-            self.side_views.set_width(width.round().max(0.0) as u32);
+        let width = dragged_width(drag, f32::from(event.position.x))
+            .round()
+            .max(0.0) as u32;
+        if u32::from(self.side_views.state().width()) != width {
+            self.side_views.set_width(width);
+            self.schedule_sidebar_save(cx);
             cx.notify();
         }
     }
@@ -542,7 +546,7 @@ impl SltermWorkspace {
 
     /// 分隔条拖拽的指针移动:按 `sidebar-area` 上一帧矩形把指针 y 换算成
     /// 上槽比例。只改 `SidebarState` 并重绘——不触碰 pane/pane 树,终端
-    /// 网格零重排;持久化由 1 Hz 自动保存快照自然带走,不在此写盘。
+    /// 网格零重排;持久化按 500ms 去抖复用同一会话快照,不在指针路径写盘。
     fn update_sidebar_split_drag(&mut self, event: &MouseMoveEvent, cx: &mut Context<'_, Self>) {
         if event.pressed_button != Some(MouseButton::Left) {
             self.finish_sidebar_split_drag(cx);
@@ -563,6 +567,7 @@ impl SltermWorkspace {
             self.side_views
                 .set_ratio(ratio)
                 .expect("指针换算必须产生有限侧栏比例");
+            self.schedule_sidebar_save(cx);
             cx.notify();
         }
     }
@@ -583,6 +588,7 @@ impl SltermWorkspace {
                 self.view_state_writer.clone(),
                 self.side_view_state_write_blocked.clone(),
             ));
+        self.schedule_sidebar_save(cx);
         cx.notify();
     }
 }

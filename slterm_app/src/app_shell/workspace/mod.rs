@@ -218,6 +218,10 @@ pub struct SltermWorkspace {
     taskbar: crate::taskbar::TaskbarState,
     /// 单窗口会话写盘状态机(latest/saved 双快照、无变化跳过、提权隔离)。
     session_persistence: SessionPersistence,
+    /// 侧栏布局去抖代次；只有最后一次变更的定时任务可以提交快照。
+    sidebar_save_generation: u64,
+    /// 去抖期间暂停普通周期快照，避免 1 Hz 泵提前带走侧栏新状态。
+    sidebar_save_pending: bool,
     /// SideView 关闭重开共享的内存恢复事实。
     side_view_state_cache: side_view::SideViewStateCache,
     /// SideView 强类型状态与 ViewState 共用的注册表。
@@ -404,6 +408,8 @@ impl SltermWorkspace {
             background_tasks: Vec::new(),
             taskbar: crate::taskbar::TaskbarState::new(),
             session_persistence: Self::new_session_persistence(),
+            sidebar_save_generation: 0,
+            sidebar_save_pending: false,
             side_view_state_cache,
             view_state_registry,
             view_state_writer,

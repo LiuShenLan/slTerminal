@@ -14,6 +14,8 @@ use super::{SltermWorkspace, session_persistence::SaveReason, session_recovery};
 use crate::ai_hook::AiHookEvent;
 use crate::background_tasks;
 
+const SIDEBAR_SAVE_DEBOUNCE: Duration = Duration::from_millis(500);
+
 impl SltermWorkspace {
     /// 1 Hz 自动保存泵:节奏与 agent 看门狗同源,前台线程
     /// 拍快照、状态机判无变化/写盘。失败只 warn,终端不受影响。
@@ -33,6 +35,9 @@ impl SltermWorkspace {
     /// 一拍自动保存:快照 → 状态机 → 失败 warn。首次成功快照的
     /// `boot_attempts = 0` 由 `snapshot_session` 的规范形态保证。
     pub(super) fn autosave_tick(&mut self, cx: &mut Context<'_, Self>) {
+        if self.sidebar_save_pending {
+            return;
+        }
         let window_state = Self::current_window_state(cx);
         let session = self.snapshot_session(window_state, cx);
         if let Err(error) = self
@@ -41,6 +46,32 @@ impl SltermWorkspace {
         {
             log::warn!("session checkpoint: {error}");
         }
+    }
+
+    /// 侧栏组织变更只在最后一次变更 500ms 后写同一会话快照；旧代次定时任务静默失效。
+    pub(super) fn schedule_sidebar_save(&mut self, cx: &mut Context<'_, Self>) {
+        self.invalidate_sidebar_save();
+        self.sidebar_save_pending = true;
+        let generation = self.sidebar_save_generation;
+        let executor = cx.background_executor().clone();
+        cx.spawn(async move |this, cx| {
+            executor.timer(SIDEBAR_SAVE_DEBOUNCE).await;
+            let _ = this.update(cx, |workspace, cx| {
+                if workspace.sidebar_save_generation == generation {
+                    workspace.sidebar_save_pending = false;
+                    workspace.autosave_tick(cx);
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn invalidate_sidebar_save(&mut self) {
+        self.sidebar_save_pending = false;
+        self.sidebar_save_generation = self
+            .sidebar_save_generation
+            .checked_add(1)
+            .expect("侧栏保存代次耗尽");
     }
 
     /// 单窗:取第一个窗口的当前尺寸/最大化态(无窗口 = 不写 window 段)。
@@ -55,6 +86,7 @@ impl SltermWorkspace {
 
     /// 关窗终局笔:1 Hz 快照恒 false,这一笔才 `clean_exit = true`。
     pub(super) fn save_on_window_close(&mut self, window: &Window, cx: &App) {
+        self.invalidate_sidebar_save();
         let session =
             self.snapshot_session(Some(session_recovery::capture_window_state(window)), cx);
         if let Err(error) = self
@@ -67,6 +99,7 @@ impl SltermWorkspace {
 
     /// 最后 tab 关闭:空快照干净落盘(空会话不恢复)。
     pub(super) fn save_on_tabs_closed(&mut self, window: &Window, cx: &App) {
+        self.invalidate_sidebar_save();
         let session =
             self.snapshot_session(Some(session_recovery::capture_window_state(window)), cx);
         if let Err(error) = self

@@ -504,6 +504,130 @@ fn commit_view_renders_injected_snapshot_and_empty_state(cx: &mut TestAppContext
     );
 }
 
+/// 侧栏布局按真实变更做 500ms 去抖；隐藏不取消保存，关窗立即冲刷最新终态。
+#[gpui::test]
+fn sidebar_layout_changes_debounce_for_500ms_and_flush_on_close(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    let writes = Rc::new(RefCell::new(Vec::<crate::session::Session>::new()));
+    workspace.update(cx, |ws, _| {
+        let writes = Rc::clone(&writes);
+        ws.set_session_writer_for_test(Rc::new(move |session| {
+            writes.borrow_mut().push(session.clone());
+            Ok(())
+        }));
+    });
+    window.refresh().unwrap();
+    draw_frame(&mut window);
+
+    window.executor().advance_clock(Duration::from_millis(600));
+    window.run_until_parked();
+    click_selector(&mut window, "sidebar-view-btn-agent_files");
+    window.executor().advance_clock(Duration::from_millis(300));
+    window.run_until_parked();
+    assert_eq!(writes.borrow().len(), 0, "首次变更的去抖窗口内不得写盘");
+
+    window.dispatch_action(ToggleSidebar);
+    window.run_until_parked();
+    let hidden = workspace.read_with(cx, |ws, _| ws.sidebar_state().clone());
+    assert!(!hidden.visible_intent());
+
+    window.executor().advance_clock(Duration::from_millis(400));
+    window.run_until_parked();
+    assert_eq!(
+        writes.borrow().len(),
+        0,
+        "1 Hz 会话泵不得提前带走尚未到期的侧栏变更"
+    );
+    window.executor().advance_clock(Duration::from_millis(99));
+    window.run_until_parked();
+    assert_eq!(writes.borrow().len(), 0, "连续变更必须重算去抖截止时刻");
+    window.executor().advance_clock(Duration::from_millis(1));
+    window.run_until_parked();
+    assert_eq!(writes.borrow().len(), 1, "最后一次变更 500ms 后必须保存");
+    {
+        let writes = writes.borrow();
+        let saved = writes[0].sidebar.recover().unwrap();
+        assert_eq!(saved.state, hidden);
+        assert!(!writes[0].clean_exit);
+    }
+
+    window.dispatch_action(ToggleSidebar);
+    window.run_until_parked();
+    let restored = workspace.read_with(cx, |ws, _| ws.sidebar_state().clone());
+    assert!(restored.visible_intent());
+    assert!(window.simulate_close(), "无脏文件的关窗必须放行");
+    let writes = writes.borrow();
+    assert_eq!(writes.len(), 2, "关窗不得等待下一次去抖或 1 Hz 泵");
+    let final_write = writes.last().unwrap();
+    assert!(final_write.clean_exit);
+    assert_eq!(final_write.sidebar.recover().unwrap().state, restored);
+}
+
+/// 亚像素移动若取整后宽度不变，不得当作新变更推迟既有保存截止时刻。
+#[gpui::test]
+fn sidebar_width_drag_ignores_rounding_noops_for_debounce(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    let writes = Rc::new(RefCell::new(Vec::<crate::session::Session>::new()));
+    workspace.update(cx, |ws, _| {
+        let writes = Rc::clone(&writes);
+        ws.set_session_writer_for_test(Rc::new(move |session| {
+            writes.borrow_mut().push(session.clone());
+            Ok(())
+        }));
+    });
+    window.refresh().unwrap();
+    draw_frame(&mut window);
+    let handle = window
+        .debug_bounds("sidebar-resize-handle")
+        .expect("拖拽热区必须绘制");
+    let start = handle.center();
+    window.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+    draw_frame(&mut window);
+    window.simulate_mouse_move(
+        point(start.x + px(120.0), start.y),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
+    draw_frame(&mut window);
+    assert_eq!(
+        workspace.read_with(cx, |ws, _| ws.sidebar_state().width()),
+        370
+    );
+
+    window.executor().advance_clock(Duration::from_millis(300));
+    window.run_until_parked();
+    window.simulate_mouse_move(
+        point(start.x + px(120.1), start.y),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
+    draw_frame(&mut window);
+    assert_eq!(
+        workspace.read_with(cx, |ws, _| ws.sidebar_state().width()),
+        370,
+        "测试移动必须在取整后保持原宽度"
+    );
+    window.executor().advance_clock(Duration::from_millis(199));
+    window.run_until_parked();
+    assert_eq!(writes.borrow().len(), 0);
+    window.executor().advance_clock(Duration::from_millis(1));
+    window.run_until_parked();
+    assert_eq!(
+        writes.borrow().len(),
+        1,
+        "无实际变化的移动不得推迟最后一次真实宽度变更的保存"
+    );
+    assert_eq!(
+        writes.borrow()[0].sidebar.recover().unwrap().state.width(),
+        370
+    );
+    window.simulate_mouse_up(
+        point(start.x + px(120.1), start.y),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
+}
+
 /// 双槽打开时渲染可拖拽分隔条;拖拽实时改比例并落在钳制区间,期间
 /// 终端网格零重排;关掉一个槽后比例保留、分隔条消失。
 #[gpui::test]
