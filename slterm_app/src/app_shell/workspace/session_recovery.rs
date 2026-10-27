@@ -12,7 +12,9 @@
 //! 恢复注入的 pane 一律走 `new_pane` 唯一路径(注册表/AgentHub 写入点
 //! 唯一);`zoomed` 不进快照,恢复恒 `false`。
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use gpui::{App, Window, WindowBounds};
 
@@ -22,7 +24,9 @@ use crate::gpui_terminal::view::TerminalLaunch;
 use crate::session::{
     LaunchSession, LayoutSession, Session, SidebarSession, TabSession, WindowState,
 };
+use slterm_sidebar::SideViewState;
 use slterm_split::{PaneId, TabId};
+use slterm_workspace::{SideViewId, ViewKey, ViewStateRegistry};
 
 /// 启动恢复计划:开窗前算好,`SltermWorkspace::new` 只消费不决策。
 ///
@@ -35,6 +39,14 @@ pub(crate) struct StartupPlan {
     pub(crate) sidebar: SidebarState,
     /// 侧栏结构损坏或字段修复需要向用户聚合提示。
     pub(crate) sidebar_repaired: bool,
+    /// SideView 启动恢复事实；只含数据库中通过精确 schema 的状态。
+    pub(crate) side_view_states: BTreeMap<SideViewId, SideViewState>,
+    /// 读取或解码结果未知的视图禁止默认状态自动回写。
+    pub(crate) side_view_state_write_blocked: BTreeSet<SideViewId>,
+    /// SideView 编解码共享同一封闭注册表。
+    pub(crate) view_state_registry: Arc<ViewStateRegistry>,
+    /// 单条 SideView 状态损坏或读取失败，其余视图仍恢复。
+    pub(crate) side_view_state_repaired: bool,
     /// ViewState writer 启动不可用，必须与恢复结果合并为一条提示。
     pub(crate) view_state_writer_unavailable: bool,
     /// 上次窗口尺寸与最大化态。
@@ -52,6 +64,10 @@ impl StartupPlan {
             session: None,
             sidebar: SidebarState::default(),
             sidebar_repaired: false,
+            side_view_states: BTreeMap::new(),
+            side_view_state_write_blocked: BTreeSet::new(),
+            view_state_registry: super::side_view::side_view_state_registry(),
+            side_view_state_repaired: false,
             view_state_writer_unavailable: false,
             window: None,
             crashed: false,
@@ -74,6 +90,43 @@ pub(crate) fn recover_sidebar_state(sidebar: &SidebarSession) -> (SidebarState, 
     }
 }
 
+/// 在 GPUI 外预载全部 SideView 状态；单条损坏不影响其他视图。
+pub(crate) fn restore_side_view_states_at(plan: &mut StartupPlan, paths: &slterm_path::AppPaths) {
+    plan.side_view_states.clear();
+    plan.side_view_state_write_blocked.clear();
+    plan.side_view_state_repaired = false;
+    let store = match crate::persistence::workspace::WorkspaceDatabase::open(paths) {
+        Ok(store) => store,
+        Err(error) => {
+            plan.side_view_state_repaired = true;
+            plan.side_view_state_write_blocked.extend(SideViewId::ALL);
+            log::warn!("could not open workspace database for SideView recovery: {error}");
+            return;
+        }
+    };
+    for id in SideViewId::ALL {
+        let key = ViewKey::SideView { side_view_id: id };
+        match store.view_state(&key, &plan.view_state_registry) {
+            Ok(Some(stored)) => match SideViewState::from_view_state(id, stored.state) {
+                Ok(state) => {
+                    plan.side_view_states.insert(id, state);
+                }
+                Err(_) => {
+                    plan.side_view_state_repaired = true;
+                    plan.side_view_state_write_blocked.insert(id);
+                    log::warn!("could not convert stored SideView ViewState");
+                }
+            },
+            Ok(None) => {}
+            Err(error) => {
+                plan.side_view_state_repaired = true;
+                plan.side_view_state_write_blocked.insert(id);
+                log::warn!("could not recover SideView ViewState: {error}");
+            }
+        }
+    }
+}
+
 /// 更新交接的侧栏覆盖普通会话恢复结果。
 pub(crate) fn restore_handoff_sidebar(plan: &mut StartupPlan, sidebar: &SidebarSession) {
     let (sidebar, sidebar_repaired) = recover_sidebar_state(sidebar);
@@ -89,6 +142,7 @@ pub(crate) fn recovery_notice(
     crashed: bool,
     quarantined: Option<&Path>,
     sidebar_repaired: bool,
+    side_view_state_repaired: bool,
     view_state_writer_unavailable: bool,
     language: crate::i18n::UiLanguage,
 ) -> Option<String> {
@@ -113,6 +167,16 @@ pub(crate) fn recovery_notice(
     };
     if sidebar_repaired {
         let repair = language.text(Message::NotifyRecoverySidebarRepaired);
+        match &mut notice {
+            Some(text) => {
+                text.push(' ');
+                text.push_str(repair);
+            }
+            None => notice = Some(repair.to_owned()),
+        }
+    }
+    if side_view_state_repaired {
+        let repair = language.text(Message::NotifyRecoverySideViewStateRepaired);
         match &mut notice {
             Some(text) => {
                 text.push(' ');
@@ -148,6 +212,10 @@ pub(crate) fn prepare_startup_at(path: &Path, restore_tabs: bool) -> StartupPlan
         session: None,
         sidebar,
         sidebar_repaired,
+        side_view_states: BTreeMap::new(),
+        side_view_state_write_blocked: BTreeSet::new(),
+        view_state_registry: super::side_view::side_view_state_registry(),
+        side_view_state_repaired: false,
         view_state_writer_unavailable: false,
         window: session.window,
         crashed: false,
@@ -584,6 +652,96 @@ mod session_recovery_tests {
         assert!(plan.sidebar_repaired);
     }
 
+    /// SideView 启动预载按视图隔离损坏，合法记录保持原样。
+    #[test]
+    fn side_view_startup_restores_valid_states_and_isolates_corrupt_records() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths =
+            slterm_path::AppPaths::new(temp.path().join("config"), temp.path().join("local"))
+                .unwrap();
+        let mut plan = StartupPlan::fresh();
+        let mut store = crate::persistence::workspace::WorkspaceDatabase::open(&paths).unwrap();
+        let nav_key = slterm_workspace::ViewKey::SideView {
+            side_view_id: SideViewId::Nav,
+        };
+        let nav = slterm_workspace::ViewState::new(
+            &nav_key,
+            serde_json::json!({"projects": [], "unassigned_expanded": true, "scroll": 42.0}),
+            &plan.view_state_registry,
+        )
+        .unwrap();
+        store.save_view_state(&nav_key, &nav).unwrap();
+        let commit_key = slterm_workspace::ViewKey::SideView {
+            side_view_id: SideViewId::Commit,
+        };
+        let commit = SideViewState::new(SideViewId::Commit)
+            .to_view_state(&plan.view_state_registry)
+            .unwrap();
+        store.save_view_state(&commit_key, &commit).unwrap();
+        rusqlite::Connection::open(paths.workspace_db_path())
+            .unwrap()
+            .execute(
+                "UPDATE view_states SET state_json = ?2 WHERE view_key = ?1",
+                rusqlite::params![
+                    commit_key.to_canonical_json().unwrap(),
+                    r#"{"kind":"side_view","state":{"position":7},"version":1}"#
+                ],
+            )
+            .unwrap();
+        drop(store);
+
+        restore_side_view_states_at(&mut plan, &paths);
+
+        let restored = plan
+            .side_view_states
+            .get(&SideViewId::Nav)
+            .expect("合法 Nav 状态必须恢复")
+            .to_view_state(&plan.view_state_registry)
+            .unwrap();
+        assert_eq!(restored, nav);
+        assert!(!plan.side_view_states.contains_key(&SideViewId::Commit));
+        assert!(plan.side_view_state_repaired);
+        assert!(
+            !plan
+                .side_view_state_write_blocked
+                .contains(&SideViewId::Nav)
+        );
+        assert!(
+            plan.side_view_state_write_blocked
+                .contains(&SideViewId::Commit)
+        );
+        assert!(
+            !plan
+                .side_view_state_write_blocked
+                .contains(&SideViewId::Explorer)
+        );
+        assert!(
+            !plan
+                .side_view_state_write_blocked
+                .contains(&SideViewId::AgentFiles)
+        );
+    }
+
+    /// 数据库无法打开时，所有视图的持久状态都未知，不得由默认状态自动修复。
+    #[test]
+    fn side_view_open_failure_blocks_every_automatic_write() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths =
+            slterm_path::AppPaths::new(temp.path().join("config"), temp.path().join("local"))
+                .unwrap();
+        std::fs::create_dir_all(paths.workspace_db_path()).unwrap();
+        let mut plan = StartupPlan::fresh();
+
+        restore_side_view_states_at(&mut plan, &paths);
+
+        assert!(plan.side_view_states.is_empty());
+        assert!(plan.side_view_state_repaired);
+        assert_eq!(
+            plan.side_view_state_write_blocked,
+            SideViewId::ALL.into_iter().collect()
+        );
+    }
+
     /// 更新交接覆盖普通会话后，不得保留被覆盖状态的修复警告。
     #[test]
     fn handoff_sidebar_discards_superseded_recovery_warning() {
@@ -677,17 +835,17 @@ mod session_recovery_tests {
         assert!(explicit_command, "Profile 按显式命令通道重建");
     }
 
-    /// 恢复汇总覆盖恢复、隔离、侧栏修复与 writer 不可用；全新启动静默。
+    /// 恢复汇总覆盖恢复、隔离、侧栏修复、视图状态修复与 writer 不可用；全新启动静默。
     #[test]
     fn recovery_notice_summarizes_restore_outcomes_and_stays_quiet_on_fresh_start() {
         use crate::i18n::UiLanguage;
 
         assert_eq!(
-            recovery_notice(Some(3), false, None, false, false, UiLanguage::EnUs).as_deref(),
+            recovery_notice(Some(3), false, None, false, false, false, UiLanguage::EnUs).as_deref(),
             Some("Restored 3 tab(s).")
         );
         assert_eq!(
-            recovery_notice(Some(2), true, None, false, false, UiLanguage::EnUs).as_deref(),
+            recovery_notice(Some(2), true, None, false, false, false, UiLanguage::EnUs).as_deref(),
             Some("Restored 2 tab(s) after an unclean shutdown.")
         );
         assert_eq!(
@@ -697,32 +855,38 @@ mod session_recovery_tests {
                 Some(Path::new("D:/data/session.crashed.json")),
                 false,
                 false,
+                false,
                 UiLanguage::ZhCn
             )
             .as_deref(),
             Some("连续多次启动未完成恢复，已跳过；现场保存在 D:/data/session.crashed.json")
         );
         assert_eq!(
-            recovery_notice(None, false, None, false, false, UiLanguage::EnUs),
+            recovery_notice(None, false, None, false, false, false, UiLanguage::EnUs),
             None
         );
         assert_eq!(
-            recovery_notice(Some(0), false, None, false, false, UiLanguage::EnUs),
+            recovery_notice(Some(0), false, None, false, false, false, UiLanguage::EnUs),
             None
         );
         assert_eq!(
-            recovery_notice(None, false, None, true, false, UiLanguage::ZhCn).as_deref(),
+            recovery_notice(None, false, None, true, false, false, UiLanguage::ZhCn).as_deref(),
             Some("侧栏布局存在无效内容，已修复可恢复字段，其余使用默认值。")
         );
         assert_eq!(
-            recovery_notice(None, false, None, false, true, UiLanguage::EnUs).as_deref(),
+            recovery_notice(None, false, None, false, true, false, UiLanguage::ZhCn).as_deref(),
+            Some("部分侧栏视图状态无法恢复，受影响视图使用默认状态。")
+        );
+        assert_eq!(
+            recovery_notice(None, false, None, false, false, true, UiLanguage::EnUs).as_deref(),
             Some("View state could not be saved. Recent layout changes may not be restored.")
         );
-        let combined = recovery_notice(Some(1), false, None, true, true, UiLanguage::EnUs)
-            .expect("恢复、侧栏修复与 writer 不可用必须聚合为一条提示");
+        let combined = recovery_notice(Some(1), false, None, true, true, true, UiLanguage::EnUs)
+            .expect("全部恢复结果必须聚合为一条提示");
         assert!(combined.starts_with("View state could not be saved"));
         assert!(combined.contains("Restored 1 tab(s)."));
         assert!(combined.contains("sidebar layout"));
+        assert!(combined.contains("side view states"));
     }
 
     /// 长隔离路径与侧栏修复同时存在时，writer 告警必须穿透 toast 截断。
@@ -738,6 +902,7 @@ mod session_recovery_tests {
             None,
             false,
             Some(&quarantined),
+            true,
             true,
             true,
             UiLanguage::EnUs,

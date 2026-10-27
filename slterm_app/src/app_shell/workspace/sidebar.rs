@@ -7,11 +7,14 @@
 //! 双槽同时打开时按 core 比例分配高度,中间分隔条可拖拽。拖拽只改内存态并
 //! 重绘,终端网格零重排、不触发即时写盘。
 
+use std::rc::Rc;
+use std::sync::Arc;
+
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AnyElement, AppContext as _, Context, InteractiveElement as _, IntoElement, MouseButton,
-    MouseDownEvent, MouseMoveEvent, ParentElement as _, SharedString,
-    StatefulInteractiveElement as _, Styled as _, canvas, div, px,
+    AnyElement, Context, InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent,
+    MouseMoveEvent, ParentElement as _, SharedString, StatefulInteractiveElement as _, Styled as _,
+    canvas, div, px,
 };
 use gpui_component::{ActiveTheme as _, Icon, IconName};
 use slterm_sidebar::SideSlot;
@@ -502,7 +505,16 @@ impl SltermWorkspace {
 
     fn toggle_sidebar_view(&mut self, id: SideViewId, cx: &mut Context<'_, Self>) {
         self.side_views
-            .click_button(id, |view| cx.new(|_| super::side_view::SideView::new(view)))
+            .click_button(
+                id,
+                super::side_view::SideViewController::new(
+                    cx,
+                    Rc::clone(&self.side_view_state_cache),
+                    Arc::clone(&self.view_state_registry),
+                    self.view_state_writer.clone(),
+                    self.side_view_state_write_blocked.clone(),
+                ),
+            )
             .expect("活动栏点击必须对应可见按钮");
         cx.notify();
     }
@@ -564,7 +576,13 @@ impl SltermWorkspace {
     /// 侧栏整区开合(策略动作 ctrl-shift-b)。
     pub(super) fn toggle_sidebar(&mut self, cx: &mut Context<'_, Self>) {
         self.side_views
-            .toggle_sidebar(|view| cx.new(|_| super::side_view::SideView::new(view)));
+            .toggle_sidebar(super::side_view::SideViewController::new(
+                cx,
+                Rc::clone(&self.side_view_state_cache),
+                Arc::clone(&self.view_state_registry),
+                self.view_state_writer.clone(),
+                self.side_view_state_write_blocked.clone(),
+            ));
         cx.notify();
     }
 }

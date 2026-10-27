@@ -120,13 +120,27 @@ fn open_workspace_with_startup(
     VisualTestContext,
     mpsc::Sender<AiHookEvent>,
 ) {
+    open_workspace_with_startup_and_writer(cx, startup, plan, None)
+}
+
+/// 以恢复计划和真实 ViewState client 开窗，验证生产 SideView 持久化接线。
+fn open_workspace_with_startup_and_writer(
+    cx: &mut TestAppContext,
+    startup: WorkspaceStartup,
+    plan: StartupPlan,
+    writer: Option<crate::persistence::workspace_writer::WorkspaceWriterClient>,
+) -> (
+    gpui::Entity<SltermWorkspace>,
+    VisualTestContext,
+    mpsc::Sender<AiHookEvent>,
+) {
     bootstrap(cx);
     let (_tx, rx) = mpsc::channel();
     let (ai_tx, ai_rx) = mpsc::channel();
     let mut slot = None;
     let (_root, window) = cx.add_window_view(|window, cx| {
         let workspace =
-            cx.new(|cx| SltermWorkspace::new(window, rx, Some(ai_rx), None, startup, plan, cx));
+            cx.new(|cx| SltermWorkspace::new(window, rx, Some(ai_rx), writer, startup, plan, cx));
         slot = Some(workspace.clone());
         Root::new(workspace, window, cx)
     });

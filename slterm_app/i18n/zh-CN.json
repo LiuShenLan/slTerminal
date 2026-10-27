@@ -491,6 +491,7 @@
     "recovery_crashed": "上次未正常退出，已恢复 {count} 个标签。",
     "recovery_quarantined": "连续多次启动未完成恢复，已跳过；现场保存在 {path}",
     "recovery_sidebar_repaired": "侧栏布局存在无效内容，已修复可恢复字段，其余使用默认值。",
+    "recovery_side_view_state_repaired": "部分侧栏视图状态无法恢复，受影响视图使用默认状态。",
     "view_state_write_failed": "无法保存视图状态，最近的布局更改可能无法恢复。",
     "hook_install_failed": "无法为 {agent} 安装 AI CLI hook",
     "hook_settings_unreadable": "无法读取 AI hook 设置，自愈已跳过"

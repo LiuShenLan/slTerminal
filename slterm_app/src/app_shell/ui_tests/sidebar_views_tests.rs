@@ -56,6 +56,334 @@ fn nav_view_lists_tabs_and_panes_and_clicking_focuses(cx: &mut TestAppContext) {
     assert_eq!(focused, PaneId(2), "点击 pane 行必须聚焦该 pane");
 }
 
+/// 生产 SideView 在同槽替换、关闭重开时保存并恢复，整栏隐藏不销毁或重复保存。
+#[gpui::test]
+fn sidebar_view_state_survives_replacement_reopen_and_hide(cx: &mut TestAppContext) {
+    use serde_json::json;
+    use slterm_path::AppPaths;
+    use slterm_sidebar::SideViewState;
+    use slterm_workspace::{ViewKey, ViewState};
+
+    use crate::persistence::workspace::WorkspaceDatabase;
+    use crate::persistence::workspace_writer::{WorkspaceFlushReport, WorkspaceWriter};
+
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let mut plan = StartupPlan::fresh();
+    let key = ViewKey::SideView {
+        side_view_id: SideViewId::Nav,
+    };
+    let persisted = ViewState::new(
+        &key,
+        json!({"projects": [], "unassigned_expanded": true, "scroll": 42.0}),
+        &plan.view_state_registry,
+    )
+    .unwrap();
+    plan.side_view_states.insert(
+        SideViewId::Nav,
+        SideViewState::from_view_state(SideViewId::Nav, persisted.clone()).unwrap(),
+    );
+    let writer = WorkspaceWriter::start(paths.clone()).unwrap();
+    let observer = WorkspaceDatabase::open(&paths).unwrap();
+    let (workspace, mut window, _ai_tx) = open_workspace_with_startup_and_writer(
+        cx,
+        WorkspaceStartup::LaunchTerminal {
+            cwd: None,
+            command: Program::Just("slterm-test-missing-shell-executable".into()),
+        },
+        plan.clone(),
+        Some(writer.client()),
+    );
+    window.refresh().unwrap();
+    draw_frame(&mut window);
+
+    let (first, initial) = workspace.read_with(cx, |workspace, cx| {
+        let view = workspace.side_view_for_test(SideViewId::Nav).unwrap();
+        (view.entity_id(), view.read(cx).view_state().unwrap())
+    });
+    assert_eq!(initial, persisted);
+    let updated = ViewState::new(
+        &key,
+        json!({"projects": [], "unassigned_expanded": true, "scroll": 84.0}),
+        &plan.view_state_registry,
+    )
+    .unwrap();
+    let nav = workspace.read_with(cx, |workspace, _| {
+        workspace.side_view_for_test(SideViewId::Nav).unwrap()
+    });
+    nav.update(cx, |view, _| {
+        view.set_state_for_test(
+            SideViewState::from_view_state(SideViewId::Nav, updated.clone()).unwrap(),
+        );
+    });
+
+    click_selector(&mut window, "sidebar-view-btn-explorer");
+    window.run_until_parked();
+    writer.flush().unwrap();
+    assert_eq!(
+        observer
+            .view_state(&key, &plan.view_state_registry)
+            .unwrap()
+            .unwrap()
+            .state,
+        updated,
+        "同槽替换必须保存旧实体修改后的最新状态"
+    );
+
+    click_selector(&mut window, "sidebar-view-btn-nav");
+    window.run_until_parked();
+    let (reopened, restored) = workspace.read_with(cx, |workspace, cx| {
+        let view = workspace.side_view_for_test(SideViewId::Nav).unwrap();
+        (view.entity_id(), view.read(cx).view_state().unwrap())
+    });
+    assert_ne!(first, reopened);
+    assert_eq!(restored, updated, "关闭重开必须读取同一内存恢复事实");
+    writer.flush().unwrap();
+
+    window.dispatch_action(ToggleSidebar);
+    window.run_until_parked();
+    window.dispatch_action(ToggleSidebar);
+    window.run_until_parked();
+    let after_hide = workspace.read_with(cx, |workspace, _| {
+        workspace
+            .side_view_for_test(SideViewId::Nav)
+            .unwrap()
+            .entity_id()
+    });
+    assert_eq!(after_hide, reopened, "整栏隐藏与恢复不得重建实体");
+    assert_eq!(
+        writer.flush().unwrap(),
+        WorkspaceFlushReport::default(),
+        "整栏隐藏不得产生额外保存"
+    );
+
+    click_selector(&mut window, "sidebar-view-btn-nav");
+    window.run_until_parked();
+    writer.flush().unwrap();
+    writer.shutdown().unwrap();
+    assert_eq!(
+        observer
+            .view_state(&key, &plan.view_state_registry)
+            .unwrap()
+            .unwrap()
+            .state,
+        updated,
+        "显式关闭不得删除持久状态"
+    );
+}
+
+/// 启动恢复未知只提供内存默认态，生产关闭链不得覆盖数据库中的有效记录。
+#[gpui::test]
+fn sidebar_unknown_recovery_does_not_overwrite_valid_record(cx: &mut TestAppContext) {
+    use serde_json::json;
+    use slterm_path::AppPaths;
+    use slterm_workspace::{ViewKey, ViewState};
+
+    use crate::persistence::workspace::WorkspaceDatabase;
+    use crate::persistence::workspace_writer::WorkspaceWriter;
+
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let mut plan = StartupPlan::fresh();
+    let key = ViewKey::SideView {
+        side_view_id: SideViewId::Nav,
+    };
+    let persisted = ViewState::new(
+        &key,
+        json!({"projects": [], "unassigned_expanded": true, "scroll": 42.0}),
+        &plan.view_state_registry,
+    )
+    .unwrap();
+    let mut store = WorkspaceDatabase::open(&paths).unwrap();
+    store.save_view_state(&key, &persisted).unwrap();
+    drop(store);
+    plan.side_view_state_write_blocked.insert(SideViewId::Nav);
+    let writer = WorkspaceWriter::start(paths.clone()).unwrap();
+    let (workspace, mut window, _ai_tx) = open_workspace_with_startup_and_writer(
+        cx,
+        WorkspaceStartup::LaunchTerminal {
+            cwd: None,
+            command: Program::Just("slterm-test-missing-shell-executable".into()),
+        },
+        plan.clone(),
+        Some(writer.client()),
+    );
+    let initial = workspace.read_with(cx, |workspace, cx| {
+        workspace
+            .side_view_for_test(SideViewId::Nav)
+            .unwrap()
+            .read(cx)
+            .view_state()
+            .unwrap()
+    });
+    assert_eq!(initial.state()["scroll"], json!(0.0));
+
+    click_selector(&mut window, "sidebar-view-btn-nav");
+    window.run_until_parked();
+    writer.flush().unwrap();
+    writer.shutdown().unwrap();
+
+    let observer = WorkspaceDatabase::open(&paths).unwrap();
+    let stored = observer
+        .view_state(&key, &plan.view_state_registry)
+        .unwrap()
+        .expect("恢复未知不得删除原记录");
+    assert_eq!(stored.state, persisted);
+}
+
+/// 仍有 SideView 打开时移除窗口，实体最终析构必须先于 writer shutdown 保存最新状态。
+#[gpui::test]
+fn sidebar_open_view_state_is_saved_during_workspace_teardown(cx: &mut TestAppContext) {
+    use serde_json::json;
+    use slterm_path::AppPaths;
+    use slterm_sidebar::SideViewState;
+    use slterm_workspace::{ViewKey, ViewState};
+
+    use crate::persistence::workspace::WorkspaceDatabase;
+    use crate::persistence::workspace_writer::WorkspaceWriter;
+
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let plan = StartupPlan::fresh();
+    let key = ViewKey::SideView {
+        side_view_id: SideViewId::Nav,
+    };
+    let updated = ViewState::new(
+        &key,
+        json!({"projects": [], "unassigned_expanded": true, "scroll": 84.0}),
+        &plan.view_state_registry,
+    )
+    .unwrap();
+    let writer = WorkspaceWriter::start(paths.clone()).unwrap();
+    let (workspace, mut window, _ai_tx) = open_workspace_with_startup_and_writer(
+        cx,
+        WorkspaceStartup::LaunchTerminal {
+            cwd: None,
+            command: Program::Just("slterm-test-missing-shell-executable".into()),
+        },
+        plan.clone(),
+        Some(writer.client()),
+    );
+    let nav = workspace.read_with(cx, |workspace, _| {
+        workspace.side_view_for_test(SideViewId::Nav).unwrap()
+    });
+    nav.update(cx, |view, _| {
+        view.set_state_for_test(
+            SideViewState::from_view_state(SideViewId::Nav, updated.clone()).unwrap(),
+        );
+    });
+    let weak_nav = nav.downgrade();
+    let weak_workspace = workspace.downgrade();
+    drop(nav);
+
+    window.update(|window, _| window.remove_window());
+    drop(window);
+    drop(workspace);
+    // 强计数归零只排队释放；空 update 驱动 GPUI effect flush 执行实体析构。
+    cx.update(|_| {});
+    cx.run_until_parked();
+    assert!(weak_workspace.upgrade().is_none(), "工作区必须随窗口释放");
+    assert!(weak_nav.upgrade().is_none(), "SideView 必须随工作区释放");
+
+    writer.shutdown().unwrap();
+    let observer = WorkspaceDatabase::open(&paths).unwrap();
+    let stored = observer
+        .view_state(&key, &plan.view_state_registry)
+        .unwrap()
+        .expect("退出析构必须保存仍打开的 SideView");
+    assert_eq!(stored.state, updated);
+}
+
+/// 恢复屏障经明确编辑解除后，关闭视图在 writer 队列满时仍须保存最终状态。
+#[gpui::test]
+fn sidebar_edited_recovery_state_survives_full_writer_queue_until_shutdown(
+    cx: &mut TestAppContext,
+) {
+    use serde_json::json;
+    use slterm_path::AppPaths;
+    use slterm_sidebar::SideViewState;
+    use slterm_workspace::{ViewKey, ViewState};
+
+    use crate::persistence::workspace::WorkspaceDatabase;
+    use crate::persistence::workspace_writer::{WorkspaceWriter, WorkspaceWriterError};
+
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let mut plan = StartupPlan::fresh();
+    plan.side_view_state_write_blocked.insert(SideViewId::Nav);
+    let key = ViewKey::SideView {
+        side_view_id: SideViewId::Nav,
+    };
+    let updated = ViewState::new(
+        &key,
+        json!({"projects": [], "unassigned_expanded": true, "scroll": 84.0}),
+        &plan.view_state_registry,
+    )
+    .unwrap();
+    let writer = WorkspaceWriter::start(paths.clone()).unwrap();
+    let (workspace, mut window, _ai_tx) = open_workspace_with_startup_and_writer(
+        cx,
+        WorkspaceStartup::LaunchTerminal {
+            cwd: None,
+            command: Program::Just("slterm-test-missing-shell-executable".into()),
+        },
+        plan.clone(),
+        Some(writer.client()),
+    );
+    let nav = workspace.read_with(cx, |workspace, _| {
+        workspace.side_view_for_test(SideViewId::Nav).unwrap()
+    });
+    nav.update(cx, |view, _| {
+        view.set_state_for_test(
+            SideViewState::from_view_state(SideViewId::Nav, updated.clone()).unwrap(),
+        );
+    });
+
+    let fault = rusqlite::Connection::open(paths.workspace_db_path()).unwrap();
+    fault.execute_batch("BEGIN EXCLUSIVE").unwrap();
+    writer.save_view_state(&key, &updated).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(600));
+    for position in 0..128 {
+        let filler = ViewState::new(
+            &key,
+            json!({"projects": [], "unassigned_expanded": true, "scroll": position}),
+            &plan.view_state_registry,
+        )
+        .unwrap();
+        match writer.save_view_state(&key, &filler) {
+            Ok(()) => {}
+            Err(WorkspaceWriterError::QueueFull) => break,
+            Err(error) => panic!("填充 writer 失败: {error}"),
+        }
+        assert!(position < 127, "writer 必须有界");
+    }
+    assert!(matches!(
+        writer.save_view_state(&key, &updated),
+        Err(WorkspaceWriterError::QueueFull)
+    ));
+
+    // 关闭后不重开；旧强句柄使实体延迟到 workspace 退出时才真正析构。
+    click_selector(&mut window, "sidebar-view-btn-nav");
+    window.run_until_parked();
+    let weak_nav = nav.downgrade();
+    window.update(|window, _| window.remove_window());
+    drop(window);
+    drop(workspace);
+    drop(nav);
+    cx.update(|_| {});
+    cx.run_until_parked();
+    assert!(weak_nav.upgrade().is_none());
+    fault.execute_batch("ROLLBACK").unwrap();
+
+    writer.shutdown().unwrap();
+    let observer = WorkspaceDatabase::open(&paths).unwrap();
+    let stored = observer
+        .view_state(&key, &plan.view_state_registry)
+        .unwrap()
+        .expect("最终关闭状态必须保存");
+    assert_eq!(stored.state, updated);
+}
+
 /// 生产 Host 在整栏隐藏后复用真实实体，同槽替换时销毁旧实体。
 #[gpui::test]
 fn production_side_view_host_preserves_on_hide_and_destroys_on_replace(cx: &mut TestAppContext) {

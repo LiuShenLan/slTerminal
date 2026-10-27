@@ -53,7 +53,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc};
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
@@ -218,8 +218,14 @@ pub struct SltermWorkspace {
     taskbar: crate::taskbar::TaskbarState,
     /// 单窗口会话写盘状态机(latest/saved 双快照、无变化跳过、提权隔离)。
     session_persistence: SessionPersistence,
+    /// SideView 关闭重开共享的内存恢复事实。
+    side_view_state_cache: side_view::SideViewStateCache,
+    /// SideView 强类型状态与 ViewState 共用的注册表。
+    view_state_registry: Arc<slterm_workspace::ViewStateRegistry>,
     /// ViewState 非阻塞写入口；writer owner 与退出冲刷由 GPUI 外 runtime 持有。
-    _view_state_writer: Option<crate::persistence::workspace_writer::WorkspaceWriterClient>,
+    view_state_writer: Option<crate::persistence::workspace_writer::WorkspaceWriterClient>,
+    /// 启动结果未知的 SideView 禁止默认状态自动回写；明确编辑动态解除。
+    side_view_state_write_blocked: side_view::SideViewWriteBarriers,
     /// 文件 tab 的变更观察(键 = 稳定 TabId):编辑器键入/保存完成时刷新
     /// 侧栏与窗口标题的脏标记。关闭 tab 时随条目一并释放。
     file_observations: HashMap<TabId, Subscription>,
@@ -253,13 +259,39 @@ pub struct SltermWorkspace {
     settings_path_override: Option<PathBuf>,
     /// 测试专用:Commit 视图注入快照(渲染 selector 的确定性数据源)。
     #[cfg(all(test, feature = "gpui-test-support"))]
-    commit_snapshot_for_test: Option<std::sync::Arc<crate::side_panel::GitInfo>>,
+    commit_snapshot_for_test: Option<Arc<crate::side_panel::GitInfo>>,
     /// 外部文件修改监听(树根递归 + 打开文件父目录)。事件驱动刷新
     /// gutter/目录树,不做定时目录重扫;watcher 不可用时为 None。
     fs_watch: Option<super::fs_watch::FsWatch>,
     /// 窗口激活态订阅:通知漏斗前台门控的唯一写入源。
     /// 字段本身只为持有订阅生命周期。
     _window_activation: Subscription,
+}
+
+impl Drop for SltermWorkspace {
+    fn drop(&mut self) {
+        let Some(writer) = &self.view_state_writer else {
+            return;
+        };
+        // 已关闭实体可能仍等待 GPUI 延迟析构；cache 先移交其最终事实。
+        // 存活实体随后析构并提交同键更新，覆盖这里的旧缓存值。
+        for (id, state) in self.side_view_state_cache.borrow().iter() {
+            if self.side_view_state_write_blocked.borrow().contains(id) {
+                continue;
+            }
+            let view_state = match state.to_view_state(&self.view_state_registry) {
+                Ok(state) => state,
+                Err(error) => {
+                    log::warn!("could not encode final SideView ViewState: {error}");
+                    continue;
+                }
+            };
+            let key = slterm_workspace::ViewKey::SideView { side_view_id: *id };
+            if let Err(error) = writer.save_final_view_state(&key, &view_state) {
+                log::warn!("could not queue final SideView ViewState: {error}");
+            }
+        }
+    }
 }
 
 /// 键:pane id(方向导航要拿所有叶子的屏幕矩形算最近邻)。
@@ -336,9 +368,20 @@ impl SltermWorkspace {
         let window_activation = cx.observe_window_activation(window, |_workspace, window, _cx| {
             crate::notify::set_foreground(window.is_window_active());
         });
-        let side_views = side_view_host::SideViewHost::new(plan.sidebar.clone(), |view| {
-            cx.new(|_| side_view::SideView::new(view))
-        });
+        let side_view_state_cache = Rc::new(std::cell::RefCell::new(plan.side_view_states.clone()));
+        let view_state_registry = Arc::clone(&plan.view_state_registry);
+        let side_view_state_write_blocked =
+            Rc::new(RefCell::new(plan.side_view_state_write_blocked.clone()));
+        let side_views = side_view_host::SideViewHost::new(
+            plan.sidebar.clone(),
+            side_view::SideViewController::new(
+                cx,
+                Rc::clone(&side_view_state_cache),
+                Arc::clone(&view_state_registry),
+                view_state_writer.clone(),
+                side_view_state_write_blocked.clone(),
+            ),
+        );
         let mut workspace = SltermWorkspace {
             tabs: Vec::new(),
             active: 0,
@@ -361,7 +404,10 @@ impl SltermWorkspace {
             background_tasks: Vec::new(),
             taskbar: crate::taskbar::TaskbarState::new(),
             session_persistence: Self::new_session_persistence(),
-            _view_state_writer: view_state_writer,
+            side_view_state_cache,
+            view_state_registry,
+            view_state_writer,
+            side_view_state_write_blocked,
             file_observations: HashMap::new(),
             file_tab_events: HashMap::new(),
             pending_file_close: None,
@@ -418,6 +464,7 @@ impl SltermWorkspace {
             plan.crashed,
             plan.quarantined.as_deref(),
             plan.sidebar_repaired,
+            plan.side_view_state_repaired,
             plan.view_state_writer_unavailable,
             language,
         ) {

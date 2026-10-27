@@ -1,7 +1,7 @@
 use serde_json::{Value, json};
 use slterm_workspace::{SideViewId, ViewKey, ViewState, ViewStateError, ViewStateRegistry};
 
-use super::side_view_state_schema;
+use super::{SideViewState, side_view_state_schema};
 
 const PROJECT_A: &str = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2a";
 const PROJECT_B: &str = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b";
@@ -125,6 +125,34 @@ fn side_view_schemas_accept_and_canonicalize_persistent_fields() {
         let restored = ViewState::from_canonical_json(&canonical, &key(view), &registry()).unwrap();
         assert_eq!(restored, state);
         assert_eq!(restored.to_canonical_json().unwrap(), canonical);
+    }
+}
+
+/// 强类型运行态只经同一 schema 编解码，并拒绝跨视图恢复。
+#[test]
+fn typed_side_view_state_roundtrips_through_the_registered_schema() {
+    for view in SideViewId::ALL {
+        let persisted = create(view, persistent_state(view)).unwrap();
+        let restored = SideViewState::from_view_state(view, persisted.clone()).unwrap();
+        assert_eq!(restored.id(), view);
+        assert_eq!(restored.to_view_state(&registry()).unwrap(), persisted);
+
+        let wrong_view = match view {
+            SideViewId::Nav => SideViewId::Explorer,
+            _ => SideViewId::Nav,
+        };
+        assert!(SideViewState::from_view_state(wrong_view, persisted).is_err());
+
+        let default = SideViewState::new(view).to_view_state(&registry()).unwrap();
+        assert_eq!(
+            default.scope(&key(view)).unwrap(),
+            slterm_workspace::ViewStateScope::Application
+        );
+        let restored_default = SideViewState::from_view_state(view, default.clone()).unwrap();
+        assert_eq!(
+            restored_default.to_view_state(&registry()).unwrap(),
+            default
+        );
     }
 }
 

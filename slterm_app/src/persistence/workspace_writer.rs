@@ -87,6 +87,8 @@ enum Command {
 #[derive(Clone, Debug)]
 pub(crate) struct WorkspaceWriterClient {
     commands: SyncSender<Command>,
+    /// 实体退出时移交的最终状态；只在 owner shutdown 时由后台排空。
+    final_states: SyncSender<(ViewKey, ViewState)>,
 }
 
 impl WorkspaceWriterClient {
@@ -96,15 +98,7 @@ impl WorkspaceWriterClient {
         key: &ViewKey,
         state: &ViewState,
     ) -> Result<(), WorkspaceWriterError> {
-        let key_json = key
-            .to_canonical_json()
-            .map_err(WorkspaceWriterError::ViewKey)?;
-        state.scope(key).map_err(WorkspaceWriterError::ViewState)?;
-        let command = Command::SaveViewState {
-            key_json,
-            key: key.clone(),
-            state: Box::new(state.clone()),
-        };
+        let command = view_state_command(key, state)?;
         self.commands
             .try_send(command)
             .map_err(|error| match error {
@@ -112,11 +106,41 @@ impl WorkspaceWriterClient {
                 TrySendError::Disconnected(_) => WorkspaceWriterError::Stopped,
             })
     }
+
+    /// 非阻塞移交退出终态；正常命令队列满不丢弃这份最后恢复事实。
+    pub(crate) fn save_final_view_state(
+        &self,
+        key: &ViewKey,
+        state: &ViewState,
+    ) -> Result<(), WorkspaceWriterError> {
+        // 终态无需去抖键，但仍执行同一身份与作用域校验。
+        let _ = view_state_command(key, state)?;
+        self.final_states
+            .try_send((key.clone(), state.clone()))
+            .map_err(|error| match error {
+                TrySendError::Full(_) => WorkspaceWriterError::QueueFull,
+                TrySendError::Disconnected(_) => WorkspaceWriterError::Stopped,
+            })
+    }
+}
+
+fn view_state_command(key: &ViewKey, state: &ViewState) -> Result<Command, WorkspaceWriterError> {
+    let key_json = key
+        .to_canonical_json()
+        .map_err(WorkspaceWriterError::ViewKey)?;
+    state.scope(key).map_err(WorkspaceWriterError::ViewState)?;
+    Ok(Command::SaveViewState {
+        key_json,
+        key: key.clone(),
+        state: Box::new(state.clone()),
+    })
 }
 
 /// 工作区库唯一写线程句柄；显式 shutdown 与 Drop 共用退出冲刷路径。
 pub(crate) struct WorkspaceWriter {
     commands: SyncSender<Command>,
+    final_state_sender: SyncSender<(ViewKey, ViewState)>,
+    final_states: Receiver<(ViewKey, ViewState)>,
     failures: Option<Receiver<ViewStateWriteFailure>>,
     worker: Option<JoinHandle<()>>,
 }
@@ -125,6 +149,7 @@ impl WorkspaceWriter {
     /// 在调用线程等待数据库打开与线程启动；生产只由启动协调器后台调用。
     pub(crate) fn start(paths: AppPaths) -> Result<Self, WorkspaceWriterError> {
         let (commands, receiver) = mpsc::sync_channel(COMMAND_CAPACITY);
+        let (final_states, final_state_receiver) = mpsc::sync_channel(COMMAND_CAPACITY);
         let (failure_sender, failures) = mpsc::sync_channel(1);
         let (startup, started) = mpsc::sync_channel(1);
         let worker = std::thread::Builder::new()
@@ -134,6 +159,8 @@ impl WorkspaceWriter {
         match started.recv() {
             Ok(Ok(())) => Ok(Self {
                 commands,
+                final_state_sender: final_states,
+                final_states: final_state_receiver,
                 failures: Some(failures),
                 worker: Some(worker),
             }),
@@ -151,6 +178,7 @@ impl WorkspaceWriter {
     pub(crate) fn client(&self) -> WorkspaceWriterClient {
         WorkspaceWriterClient {
             commands: self.commands.clone(),
+            final_states: self.final_state_sender.clone(),
         }
     }
 
@@ -197,6 +225,8 @@ impl WorkspaceWriter {
         let Some(worker) = self.worker.take() else {
             return Err(WorkspaceWriterError::Stopped);
         };
+        // App 已释放，终态发送者不再增长；后台可用阻塞 send 等队列排水。
+        let final_states = self.submit_final_states();
         let (response, result) = mpsc::sync_channel(1);
         let report = self
             .commands
@@ -204,7 +234,17 @@ impl WorkspaceWriter {
             .map_err(|_| WorkspaceWriterError::Stopped)
             .and_then(|()| result.recv().map_err(|_| WorkspaceWriterError::Stopped));
         let _ = worker.join();
-        report
+        final_states.and(report)
+    }
+
+    fn submit_final_states(&self) -> Result<(), WorkspaceWriterError> {
+        for (key, state) in self.final_states.try_iter() {
+            let command = view_state_command(&key, &state)?;
+            self.commands
+                .send(command)
+                .map_err(|_| WorkspaceWriterError::Stopped)?;
+        }
+        Ok(())
     }
 }
 

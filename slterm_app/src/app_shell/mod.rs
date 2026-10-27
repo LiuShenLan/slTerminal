@@ -210,6 +210,11 @@ pub fn run_shell(initial_cwd: Option<PathBuf>, initial_command: Option<Program>)
     // 窗口定形与 spawn 网格;CLI 显式 cwd/-e 启动只回放几何、不恢复 tabs。
     let restore_tabs = initial_command.is_none() && initial_cwd.is_none();
     let mut startup_plan = workspace::session_recovery::prepare_startup(restore_tabs);
+    // SQLite 读取在 GPUI 消息循环前完成；实体只消费预载的强类型状态。
+    workspace::session_recovery::restore_side_view_states_at(
+        &mut startup_plan,
+        crate::platform::dirs::app_paths(),
+    );
     // 更新交接恢复优先于普通会话恢复——成功/回滚安装后的首个启动用
     // 交接快照还原更新前的窗口;单窗口定位只取首个窗口。
     let update_restored_windows = if restore_tabs {

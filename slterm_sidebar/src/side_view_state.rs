@@ -8,12 +8,75 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use slterm_settings::AgentRootId;
 use slterm_workspace::{
-    InvalidViewState, ProjectId, SideViewId, ViewKey, ViewKeyKind, ViewStateSchema,
+    InvalidViewState, ProjectId, SideViewId, ViewKey, ViewKeyKind, ViewState, ViewStateError,
+    ViewStateRegistry, ViewStateSchema,
 };
 
 /// 注册按完整 SideView ViewKey 分派的私有状态解码器。
 pub fn side_view_state_schema() -> ViewStateSchema {
     ViewStateSchema::new(ViewKeyKind::SideView, decode_side_view_state)
+}
+
+/// SideView 运行态与持久状态共用的强类型事实。
+#[derive(Clone, Debug)]
+pub enum SideViewState {
+    Nav(NavigationState),
+    Explorer(ExplorerState),
+    Commit(CommitState),
+    AgentFiles(AgentFilesState),
+}
+
+impl SideViewState {
+    pub fn new(id: SideViewId) -> Self {
+        match id {
+            SideViewId::Nav => Self::Nav(NavigationState::default()),
+            SideViewId::Explorer => Self::Explorer(ExplorerState::default()),
+            SideViewId::Commit => Self::Commit(CommitState::default()),
+            SideViewId::AgentFiles => Self::AgentFiles(AgentFilesState::default()),
+        }
+    }
+
+    pub const fn id(&self) -> SideViewId {
+        match self {
+            Self::Nav(_) => SideViewId::Nav,
+            Self::Explorer(_) => SideViewId::Explorer,
+            Self::Commit(_) => SideViewId::Commit,
+            Self::AgentFiles(_) => SideViewId::AgentFiles,
+        }
+    }
+
+    /// 编码只经已注册 schema，禁止绕过精确字段校验。
+    pub fn to_view_state(&self, registry: &ViewStateRegistry) -> Result<ViewState, ViewStateError> {
+        let value = match self {
+            Self::Nav(state) => serde_json::to_value(state),
+            Self::Explorer(state) => serde_json::to_value(state),
+            Self::Commit(state) => serde_json::to_value(state),
+            Self::AgentFiles(state) => serde_json::to_value(state),
+        }
+        .map_err(|_| ViewStateError::Encode)?;
+        ViewState::new(
+            &ViewKey::SideView {
+                side_view_id: self.id(),
+            },
+            value,
+            registry,
+        )
+    }
+
+    /// 已恢复的 ViewState 转回强类型运行态，并校验视图身份。
+    pub fn from_view_state(id: SideViewId, state: ViewState) -> Result<Self, InvalidViewState> {
+        state
+            .scope(&ViewKey::SideView { side_view_id: id })
+            .map_err(|_| InvalidViewState)?;
+        let value = state.into_state();
+        match id {
+            SideViewId::Nav => serde_json::from_value(value).map(Self::Nav),
+            SideViewId::Explorer => serde_json::from_value(value).map(Self::Explorer),
+            SideViewId::Commit => serde_json::from_value(value).map(Self::Commit),
+            SideViewId::AgentFiles => serde_json::from_value(value).map(Self::AgentFiles),
+        }
+        .map_err(|_| InvalidViewState)
+    }
 }
 
 fn decode_side_view_state(key: &ViewKey, text: &str) -> Result<Value, InvalidViewState> {
@@ -41,9 +104,9 @@ trait Normalize {
     fn normalize(&mut self) -> Result<(), InvalidViewState>;
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct NavigationState {
+pub struct NavigationState {
     projects: Vec<NavigationProjectState>,
     unassigned_expanded: bool,
     scroll: f64,
@@ -56,7 +119,7 @@ impl Normalize for NavigationState {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct NavigationProjectState {
     #[serde(
@@ -68,9 +131,9 @@ struct NavigationProjectState {
     history_expanded: bool,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ExplorerState {
+pub struct ExplorerState {
     projects: Vec<ExplorerProjectState>,
 }
 
@@ -85,7 +148,7 @@ impl Normalize for ExplorerState {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ExplorerProjectState {
     #[serde(
@@ -100,9 +163,9 @@ struct ExplorerProjectState {
     show_ignored: bool,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct CommitState {
+pub struct CommitState {
     changes_collapsed: bool,
     unversioned_collapsed: bool,
     ignored_collapsed: bool,
@@ -116,9 +179,9 @@ impl Normalize for CommitState {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct AgentFilesState {
+pub struct AgentFilesState {
     roots: Vec<AgentRootState>,
     #[serde(deserialize_with = "deserialize_required_option")]
     current_row: Option<AgentCurrentRow>,
@@ -143,7 +206,7 @@ impl Normalize for AgentFilesState {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AgentRootState {
     #[serde(
@@ -155,7 +218,7 @@ struct AgentRootState {
     directories: Vec<SideViewPath>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AgentCurrentRow {
     #[serde(

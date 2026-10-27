@@ -10,6 +10,22 @@ use slterm_sidebar::ButtonMovement;
 use slterm_sidebar::{SideSlot, SidebarError, SidebarState, SidebarTransition};
 use slterm_workspace::SideViewId;
 
+/// 打开与关闭共用同一控制器；纯打开闭包保持默认的句柄释放行为。
+pub trait SideViewControl<T> {
+    fn open(&mut self, view: SideViewId) -> T;
+
+    fn close(&mut self, _view: SideViewId, _instance: T) {}
+}
+
+impl<T, F> SideViewControl<T> for F
+where
+    F: FnMut(SideViewId) -> T,
+{
+    fn open(&mut self, view: SideViewId) -> T {
+        self(view)
+    }
+}
+
 /// 拥有侧栏组织状态与全部存活 SideView 实例。
 /// 实例必须独占其私有任务句柄，并以 Drop 完成取消与实体释放。
 pub struct SideViewHost<T> {
@@ -19,14 +35,14 @@ pub struct SideViewHost<T> {
 
 impl<T> SideViewHost<T> {
     /// 恢复组织状态并只创建已打开视图；创建闭包在返回实例前恢复其持久状态。
-    pub fn new(state: SidebarState, mut open: impl FnMut(SideViewId) -> T) -> Self {
+    pub fn new(state: SidebarState, mut control: impl SideViewControl<T>) -> Self {
         let mut host = Self {
             state,
             instances: BTreeMap::new(),
         };
         for slot in SideSlot::ALL {
             if let Some(view) = host.state.open_view(slot) {
-                host.open_instance(view, &mut open);
+                host.open_instance(view, &mut control);
             }
         }
         host
@@ -53,10 +69,10 @@ impl<T> SideViewHost<T> {
     pub fn click_button(
         &mut self,
         view: SideViewId,
-        open: impl FnMut(SideViewId) -> T,
+        mut control: impl SideViewControl<T>,
     ) -> Result<SidebarTransition, SidebarError> {
         let transition = self.state.click_button(view)?;
-        Ok(self.apply_transition(transition, open))
+        Ok(self.apply_transition(transition, &mut control))
     }
 
     #[cfg(test)]
@@ -64,23 +80,25 @@ impl<T> SideViewHost<T> {
         &mut self,
         view: SideViewId,
         focused: bool,
-        open: impl FnMut(SideViewId) -> T,
+        mut control: impl SideViewControl<T>,
     ) -> SidebarTransition {
         let transition = self.state.activate_shortcut(view, focused);
-        self.apply_transition(transition, open)
+        self.apply_transition(transition, &mut control)
     }
 
-    pub fn toggle_sidebar(&mut self, open: impl FnMut(SideViewId) -> T) -> SidebarTransition {
+    pub fn toggle_sidebar(&mut self, mut control: impl SideViewControl<T>) -> SidebarTransition {
         let transition = self.state.toggle_sidebar();
-        self.apply_transition(transition, open)
+        self.apply_transition(transition, &mut control)
     }
 
     #[cfg(test)]
-    pub fn close_view(&mut self, view: SideViewId) -> SidebarTransition {
+    pub fn close_view(
+        &mut self,
+        view: SideViewId,
+        mut control: impl SideViewControl<T>,
+    ) -> SidebarTransition {
         let transition = self.state.close_view(view);
-        self.apply_transition(transition, |_| {
-            unreachable!("关闭 SideView 不得产生打开效果")
-        })
+        self.apply_transition(transition, &mut control)
     }
 
     #[cfg(test)]
@@ -99,19 +117,19 @@ impl<T> SideViewHost<T> {
         view: SideViewId,
         target: SideSlot,
         target_index: usize,
+        mut control: impl SideViewControl<T>,
     ) -> Result<SidebarTransition, SidebarError> {
         let transition = self.state.move_button_to_slot(view, target, target_index)?;
-        Ok(self.apply_transition(transition, |_| {
-            unreachable!("移动 SideView 按钮不得产生打开效果")
-        }))
+        Ok(self.apply_transition(transition, &mut control))
     }
 
     #[cfg(test)]
-    pub fn restore_default_buttons(&mut self) -> SidebarTransition {
+    pub fn restore_default_buttons(
+        &mut self,
+        mut control: impl SideViewControl<T>,
+    ) -> SidebarTransition {
         let transition = self.state.restore_default_buttons();
-        self.apply_transition(transition, |_| {
-            unreachable!("恢复默认 SideView 按钮不得产生打开效果")
-        })
+        self.apply_transition(transition, &mut control)
     }
 
     /// 显式关闭全部实例；Drop 复用同一路径，保证没有孤儿任务。
@@ -123,33 +141,33 @@ impl<T> SideViewHost<T> {
     fn apply_transition(
         &mut self,
         transition: SidebarTransition,
-        mut open: impl FnMut(SideViewId) -> T,
+        control: &mut impl SideViewControl<T>,
     ) -> SidebarTransition {
         for view in transition.closed.iter().copied() {
-            self.close_instance(view);
+            self.close_instance(view, control);
         }
         for view in transition.opened.iter().copied() {
-            self.open_instance(view, &mut open);
+            self.open_instance(view, control);
         }
         transition
     }
 
-    fn open_instance(&mut self, view: SideViewId, open: &mut impl FnMut(SideViewId) -> T) {
+    fn open_instance(&mut self, view: SideViewId, control: &mut impl SideViewControl<T>) {
         assert!(
             !self.instances.contains_key(&view),
             "SideView 打开效果不得重复创建存活实例"
         );
-        let instance = open(view);
+        let instance = control.open(view);
         let previous = self.instances.insert(view, instance);
         debug_assert!(previous.is_none());
     }
 
-    fn close_instance(&mut self, view: SideViewId) {
+    fn close_instance(&mut self, view: SideViewId, control: &mut impl SideViewControl<T>) {
         let instance = self
             .instances
             .remove(&view)
             .expect("SideView 关闭效果必须对应存活实例");
-        drop(instance);
+        control.close(view, instance);
     }
 
     fn close_all(&mut self) {
@@ -293,7 +311,7 @@ mod side_view_host_tests {
     #[test]
     fn side_view_host_cross_slot_swap_preserves_both_instances() {
         let (mut host, events, runtime) = harness(SidebarState::default());
-        host.move_button_to_slot(SideViewId::Explorer, SideSlot::Lower, 0)
+        host.move_button_to_slot(SideViewId::Explorer, SideSlot::Lower, 0, opener(&runtime))
             .unwrap();
         host.click_button(SideViewId::Explorer, opener(&runtime))
             .unwrap();
@@ -302,7 +320,7 @@ mod side_view_host_tests {
         events.borrow_mut().clear();
 
         host.reorder_button(SideViewId::Nav, ButtonMovement::Bottom);
-        host.move_button_to_slot(SideViewId::Explorer, SideSlot::Upper, 0)
+        host.move_button_to_slot(SideViewId::Explorer, SideSlot::Upper, 0, opener(&runtime))
             .unwrap();
         assert_eq!(
             host.state().open_view(SideSlot::Upper),
@@ -323,7 +341,7 @@ mod side_view_host_tests {
         let nav = serial(&host, SideViewId::Nav);
         events.borrow_mut().clear();
 
-        host.close_view(SideViewId::Nav);
+        host.close_view(SideViewId::Nav, opener(&runtime));
         assert!(host.instance(SideViewId::Nav).is_none());
         host.click_button(SideViewId::Nav, opener(&runtime))
             .unwrap();
@@ -370,7 +388,7 @@ mod side_view_host_tests {
     #[test]
     fn side_view_host_restoring_defaults_closes_only_conflicting_instances() {
         let (mut host, events, runtime) = harness(SidebarState::default());
-        host.move_button_to_slot(SideViewId::Explorer, SideSlot::Lower, 0)
+        host.move_button_to_slot(SideViewId::Explorer, SideSlot::Lower, 0, opener(&runtime))
             .unwrap();
         host.click_button(SideViewId::Explorer, opener(&runtime))
             .unwrap();
@@ -378,7 +396,7 @@ mod side_view_host_tests {
         let explorer = serial(&host, SideViewId::Explorer);
         events.borrow_mut().clear();
 
-        host.restore_default_buttons();
+        host.restore_default_buttons(opener(&runtime));
         assert_eq!(serial(&host, SideViewId::Nav), nav);
         assert!(host.instance(SideViewId::Explorer).is_none());
         host.shutdown();
@@ -806,8 +824,10 @@ mod gpui_side_view_host_tests {
                 opener(cx, &events, &mut next_serial),
             )
         });
-        host.move_button_to_slot(SideViewId::Explorer, SideSlot::Lower, 0)
-            .unwrap();
+        host.move_button_to_slot(SideViewId::Explorer, SideSlot::Lower, 0, |_| {
+            unreachable!("移动 SideView 不得产生打开效果")
+        })
+        .unwrap();
         window
             .update(|_, cx| {
                 host.click_button(SideViewId::Explorer, opener(cx, &events, &mut next_serial))
@@ -822,8 +842,10 @@ mod gpui_side_view_host_tests {
 
         window.update(|_, _| {
             host.reorder_button(SideViewId::Nav, ButtonMovement::Bottom);
-            host.move_button_to_slot(SideViewId::Explorer, SideSlot::Upper, 0)
-                .unwrap();
+            host.move_button_to_slot(SideViewId::Explorer, SideSlot::Upper, 0, |_| {
+                unreachable!("移动 SideView 不得产生打开效果")
+            })
+            .unwrap();
         });
         window.run_until_parked();
         assert_eq!(
@@ -875,7 +897,12 @@ mod gpui_side_view_host_tests {
         fill_transient(window, &host, SideViewId::Nav);
         save_position(&mut store, &registry, SideViewId::Nav, 42);
 
-        window.update(|_, _| host.close_view(SideViewId::Nav));
+        window.update(|_, cx| {
+            host.close_view(
+                SideViewId::Nav,
+                restored_opener(cx, &store, &registry, &events, &mut next_serial),
+            )
+        });
         window.run_until_parked();
         assert!(weak_first.upgrade().is_none());
         assert_destroyed(&events, SideViewId::Nav, 1);
