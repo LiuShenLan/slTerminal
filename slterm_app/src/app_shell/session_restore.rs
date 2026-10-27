@@ -7,7 +7,9 @@
 //! 消费点 = 快照(`snapshot_session`)与启动恢复(`restore_tab`)。
 
 use crate::session::{AgentSession, LaunchSession, LayoutSession, SplitAxis};
-use slterm_split::{PaneId, SplitDirection, SplitTree};
+use slterm_split::{SplitDirection, SplitTree};
+
+use crate::gpui_terminal::PaneId;
 
 fn axis_of(direction: SplitDirection) -> SplitAxis {
     match direction {

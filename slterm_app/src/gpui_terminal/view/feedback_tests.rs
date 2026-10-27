@@ -37,7 +37,7 @@ fn open(
     let (_root, window) = cx.add_window_view(|window, cx| {
         let terminal = cx.new(|cx| {
             let mut view = TerminalView::new(
-                slterm_split::PaneId(1),
+                crate::gpui_terminal::PaneId(1),
                 (80, 24),
                 TerminalLaunch::Local {
                     cwd: None,

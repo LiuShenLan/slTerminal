@@ -22,8 +22,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::time::{Duration, Instant};
 
+use crate::gpui_terminal::PaneId;
 use gpui::App;
-use slterm_split::PaneId;
 
 use crate::ai_hook::{AiHookEvent, AiHookKind, AiTurnOutcome};
 use crate::app_shell::SltermShellEvent;

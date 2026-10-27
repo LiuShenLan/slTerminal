@@ -63,7 +63,7 @@ use gpui::{
 };
 use gpui_component::WindowExt as _;
 use slterm_settings::Rgb;
-use slterm_split::{PaneId, RemoveOutcome, SplitDirection, SplitNav, SplitTree, TabId, nav_target};
+use slterm_split::{RemoveOutcome, SplitDirection, SplitNav, SplitTree, nav_target};
 
 use super::SltermShellEvent;
 use super::file_editor::SaveFile;
@@ -72,6 +72,7 @@ use super::windowing::{WorkspaceStartup, startup_geometry};
 use crate::agent_host::AgentHub;
 use crate::ai_hook::AiHookEvent;
 use crate::app_shell::config::Settings;
+use crate::gpui_terminal::PaneId;
 use crate::gpui_terminal::view::{TerminalLaunch, TerminalView, TerminalViewEvent};
 use crate::i18n::Message;
 use crate::session::LaunchSession;
@@ -101,6 +102,10 @@ gpui::actions!(
         OpenSettings,
     ]
 );
+
+/// 工作区 tab 的运行身份：跨排序与活跃切换不变，不进入 session schema。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct TabId(pub u64);
 
 /// 一个终端 pane:视图实体 + 宿主订阅。id 全 workspace 唯一、终生不复用
 /// (hook 的 `SLTERM_PANE_ID` 环境值与此同源)。
@@ -1832,8 +1837,30 @@ pub fn init(cx: &mut App) {
 
 #[cfg(test)]
 mod workspace_tests {
+    use std::collections::HashMap;
+
     use super::render::to_split_rect;
     use super::*;
+
+    #[test]
+    fn tab_id_supports_map_keys_and_ordering() {
+        let a = TabId(1);
+        let b = TabId(2);
+        assert_ne!(a, b);
+        assert!(a < b);
+        let copied = a;
+        assert_eq!(copied, a);
+        let mut map = HashMap::new();
+        map.insert(a, "first");
+        assert_eq!(map.get(&TabId(1)), Some(&"first"));
+    }
+
+    #[test]
+    fn split_tree_instantiates_with_pane_id() {
+        let mut tree = SplitTree::leaf(PaneId(1));
+        assert!(tree.split_leaf(PaneId(1), PaneId(2), SplitDirection::LeftRight, 0.5));
+        assert_eq!(tree.leaves(), vec![PaneId(1), PaneId(2)]);
+    }
 
     /// 满卡路径与分屏递归共用同一坐标换算:GPUI Bounds → slterm_split Rect
     /// 保持左上原点与宽高逐字段一致。

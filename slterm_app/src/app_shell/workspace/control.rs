@@ -2,9 +2,9 @@
 
 use std::time::Duration;
 
+use crate::gpui_terminal::PaneId;
 use gpui::{App, Context, PromptLevel, Window};
 use gpui_component::WindowExt as _;
-use slterm_split::PaneId;
 
 use super::super::SltermShellEvent;
 use super::session_recovery;

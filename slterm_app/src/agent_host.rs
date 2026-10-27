@@ -19,7 +19,7 @@
 
 use std::collections::HashMap;
 
-use slterm_split::PaneId;
+use crate::gpui_terminal::PaneId;
 
 #[cfg(test)]
 use crate::ai_agents::Detection;

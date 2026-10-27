@@ -15,12 +15,13 @@ use gpui::{
 };
 use gpui_component::ActiveTheme as _;
 use slterm_split::{
-    DIVIDER_GAP, PaneId, SplitDirection, SplitTree, TabId, commit_ratio, drag_close_target,
-    drag_ratio, preview_ratio as preview_curve_ratio,
+    DIVIDER_GAP, SplitDirection, SplitTree, commit_ratio, drag_close_target, drag_ratio,
+    preview_ratio as preview_curve_ratio,
 };
 
 use super::render::to_split_rect;
-use super::{SltermWorkspace, WorkspaceTab};
+use super::{SltermWorkspace, TabId, WorkspaceTab};
+use crate::gpui_terminal::PaneId;
 use crate::gpui_terminal::view::TerminalView;
 
 /// 进行中的分隔条拖拽:目标 Split 节点以树路径寻址(`Divider` 同语义)。

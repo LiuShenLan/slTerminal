@@ -21,8 +21,8 @@
 
 use std::sync::atomic::{AtomicIsize, Ordering};
 
+use crate::gpui_terminal::PaneId;
 use gpui::{App, Context, Window};
-use slterm_split::PaneId;
 
 use crate::app_shell::workspace::SltermWorkspace;
 

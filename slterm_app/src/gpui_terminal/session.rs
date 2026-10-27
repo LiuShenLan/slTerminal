@@ -106,7 +106,7 @@ pub(crate) fn test_session() -> (
 pub(super) fn local_options(
     shell: Option<tty::Shell>,
     explicit_command: bool,
-    pane_id: slterm_split::PaneId,
+    pane_id: crate::gpui_terminal::PaneId,
     cwd: Option<std::path::PathBuf>,
 ) -> std::io::Result<tty::Options> {
     local_options_with_refresh(
@@ -122,7 +122,7 @@ pub(super) fn local_options(
 fn local_options_with_refresh(
     shell: Option<tty::Shell>,
     explicit_command: bool,
-    pane_id: slterm_split::PaneId,
+    pane_id: crate::gpui_terminal::PaneId,
     cwd: Option<std::path::PathBuf>,
     refresh: impl FnOnce(&mut tty::Options) -> std::io::Result<()>,
 ) -> std::io::Result<tty::Options> {
@@ -195,8 +195,8 @@ pub fn spawn(
 mod local_options_tests {
     use super::*;
 
-    fn pane() -> slterm_split::PaneId {
-        slterm_split::PaneId(1)
+    fn pane() -> crate::gpui_terminal::PaneId {
+        crate::gpui_terminal::PaneId(1)
     }
 
     /// 显式通道:裸名经 core `resolve_explicit_command` 路径化为完整

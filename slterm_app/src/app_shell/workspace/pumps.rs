@@ -305,7 +305,7 @@ impl SltermWorkspace {
 
     /// 每个终端 pane 的屏幕观察窗口(最近至多 24 行,与屏幕规则注意力区
     /// 窗口同源)。无会话或零几何的 pane 跳过。
-    fn screen_samples(&self, cx: &App) -> Vec<(slterm_split::PaneId, String)> {
+    fn screen_samples(&self, cx: &App) -> Vec<(crate::gpui_terminal::PaneId, String)> {
         let mut samples = Vec::new();
         for entry in &self.tabs {
             let super::WorkspaceTab::Terminal { panes, .. } = &entry.tab else {

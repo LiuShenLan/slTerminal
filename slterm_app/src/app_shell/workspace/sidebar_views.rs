@@ -10,13 +10,13 @@
 //! 槽外层容器与 `sidebar-slot-*` selector 由 `sidebar::render_view_slot`
 //! 提供;本模块只产出槽内容。
 
+use crate::gpui_terminal::PaneId;
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     AnyElement, Context, Div, Hsla, InteractiveElement as _, IntoElement, ParentElement as _,
     SharedString, StatefulInteractiveElement as _, Styled as _, div, px,
 };
 use gpui_component::{ActiveTheme as _, v_flex};
-use slterm_split::PaneId;
 
 use super::{SltermWorkspace, WorkspaceTab};
 use crate::agent_dirs::{self, AgentGlobalDir};

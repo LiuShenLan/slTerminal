@@ -48,7 +48,7 @@ gpui-component-assets.workspace = true
 slterm_terminal = { path = "../slterm_terminal" }
 # 包名带连字符(lib 目标名 cargo 自动转下划线,代码里 `use slterm_settings`)。
 slterm-settings = { path = "../slterm_settings" }
-# PaneId/TabId + SplitTree 分屏树(纯数据 core,workspace 雏形挂接)。
+# 泛型 SplitTree 分屏树与几何纯函数(零生产依赖 core)。
 slterm-split = { path = "../slterm_split" }
 slterm_workspace = { path = "../slterm_workspace" }
 slterm_sidebar = { path = "../slterm_sidebar" }

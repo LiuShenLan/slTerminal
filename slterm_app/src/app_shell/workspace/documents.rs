@@ -16,12 +16,12 @@
 
 use std::path::PathBuf;
 
+use super::TabId;
 use gpui::{
     AnyElement, App, AppContext as _, Context, Entity, FocusHandle, InteractiveElement as _,
     IntoElement, ParentElement as _, PromptLevel, Styled as _, Task, Window, div,
 };
 use gpui_component::WindowExt as _;
-use slterm_split::TabId;
 
 use super::{SltermWorkspace, TabEntry, TabMeta, WorkspaceTab};
 use crate::app_shell::code_tab::{CodeTabEvent, CodeTabView};

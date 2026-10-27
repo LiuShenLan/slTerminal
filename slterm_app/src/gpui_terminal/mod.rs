@@ -25,11 +25,35 @@ gpui::actions!(slterm_terminal, [TerminalTab, TerminalBackTab]);
 
 pub(crate) const KEY_CONTEXT: &str = "SltermTerminal";
 
+/// 终端 pane 标识：全工作区唯一、终生不复用。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct PaneId(pub u64);
+
 pub fn init(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("tab", TerminalTab, Some(KEY_CONTEXT)),
         KeyBinding::new("shift-tab", TerminalBackTab, Some(KEY_CONTEXT)),
     ]);
+}
+
+#[cfg(test)]
+mod id_tests {
+    use std::collections::HashMap;
+
+    use super::PaneId;
+
+    #[test]
+    fn pane_id_supports_map_keys_and_ordering() {
+        let a = PaneId(1);
+        let b = PaneId(2);
+        assert_ne!(a, b);
+        assert!(a < b);
+        let copied = a;
+        assert_eq!(copied, a);
+        let mut map = HashMap::new();
+        map.insert(a, "first");
+        assert_eq!(map.get(&PaneId(1)), Some(&"first"));
+    }
 }
 
 #[cfg(test)]

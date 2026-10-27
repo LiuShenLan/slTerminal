@@ -9,7 +9,10 @@ use gpui::{
     ParentElement as _, Pixels, SharedString, Styled as _, canvas, div, px, relative,
 };
 use gpui_component::ActiveTheme as _;
-use slterm_split::{DIVIDER_GAP, HIT_SLOP, PaneId, SplitDirection, SplitTree};
+use slterm_split::{DIVIDER_GAP, HIT_SLOP, SplitDirection, SplitTree};
+
+use super::TabId;
+use crate::gpui_terminal::PaneId;
 
 use super::super::file_drop::FileTreeDrag;
 use super::{SltermWorkspace, WorkspaceTab};
@@ -18,7 +21,7 @@ use super::{SltermWorkspace, WorkspaceTab};
 /// 缓存键)+ pane 属主与聚焦叶。递归调用只传本结构,不逐参展开。
 struct SplitRenderContext<'a> {
     tab_ix: usize,
-    tab_id: slterm_split::TabId,
+    tab_id: TabId,
     panes: &'a [super::TerminalPane],
     focused: PaneId,
 }

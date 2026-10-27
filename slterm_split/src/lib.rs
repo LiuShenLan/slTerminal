@@ -10,8 +10,6 @@
 use std::mem;
 
 mod dock;
-mod ids;
-pub use ids::{PaneId, TabId};
 
 /// 可见分隔条厚度(逻辑像素;使用处乘以 scale 后取整,至少 1 物理像素)。
 pub const DIVIDER_GAP: f32 = 2.0;

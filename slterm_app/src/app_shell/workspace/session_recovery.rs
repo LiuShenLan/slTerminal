@@ -18,14 +18,15 @@ use std::sync::Arc;
 
 use gpui::{App, Window, WindowBounds};
 
+use super::TabId;
 use super::sidebar::SidebarState;
 use super::{SltermWorkspace, TabEntry, TabMeta, WorkspaceTab};
+use crate::gpui_terminal::PaneId;
 use crate::gpui_terminal::view::TerminalLaunch;
 use crate::session::{
     LaunchSession, LayoutSession, Session, SidebarSession, TabSession, WindowState,
 };
 use slterm_sidebar::SideViewState;
-use slterm_split::{PaneId, TabId};
 use slterm_workspace::{SideViewId, ViewKey, ViewStateRegistry};
 
 /// 启动恢复计划:开窗前算好,`SltermWorkspace::new` 只消费不决策。

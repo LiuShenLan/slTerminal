@@ -31,7 +31,7 @@ use slterm_terminal::selection::{Selection, SelectionType};
 use slterm_terminal::term::TermMode;
 use vte::ansi::CursorStyle;
 
-use slterm_split::PaneId;
+use super::PaneId;
 
 use super::colors::Palette;
 use super::copy_feedback::CopyFeedback;

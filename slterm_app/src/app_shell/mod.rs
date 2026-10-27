@@ -54,8 +54,8 @@ use std::fmt;
 use std::path::PathBuf;
 use std::sync::mpsc;
 
+use crate::gpui_terminal::PaneId;
 use gpui::{App, QuitMode};
-use slterm_split::PaneId;
 
 use crate::cli::Program;
 
@@ -550,7 +550,7 @@ mod shell_event_tests {
             tray_command_event(GpuiTrayCommand::Focus(None)),
             SltermShellEvent::NotificationFocus(None)
         ));
-        let pane = slterm_split::PaneId(7);
+        let pane = crate::gpui_terminal::PaneId(7);
         assert!(matches!(
             tray_command_event(GpuiTrayCommand::Focus(Some(pane))),
             SltermShellEvent::NotificationFocus(Some(focused)) if focused == pane

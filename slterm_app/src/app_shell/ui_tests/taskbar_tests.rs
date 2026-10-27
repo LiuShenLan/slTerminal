@@ -4,8 +4,8 @@
 //! 投递」与「清除边恰好恢复常态」——测试构建的 `taskbar::apply` 只记录调用
 //! 序列,不触 COM(虚拟窗口也没有原生 HWND)。
 
+use crate::gpui_terminal::PaneId;
 use gpui::{Entity, TestAppContext, VisualTestContext};
-use slterm_split::PaneId;
 use slterm_terminal::event::Event as TermEvent;
 
 use super::{CloseActivePane, SplitRight, open_workspace};

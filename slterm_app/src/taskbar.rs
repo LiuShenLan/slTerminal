@@ -14,7 +14,7 @@
 //! 的聚焦 pane([`TaskbarState`]);命令收尾/agent 退出/pane 关闭即清,不留残条。
 //! 真实 COM 投递面按豁免登记走人工 smoke,纯映射与状态机在单元层全覆盖。
 
-use slterm_split::PaneId;
+use crate::gpui_terminal::PaneId;
 
 /// 任务栏能画出来的进度形态(ConEmu 9;4 状态码的五态模型)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -228,7 +228,7 @@ pub(crate) fn apply(_hwnd: isize, _progress: TaskProgress) {}
 #[cfg(test)]
 mod taskbar_tests {
     use super::{TaskProgress, TaskbarState};
-    use slterm_split::PaneId;
+    use crate::gpui_terminal::PaneId;
 
     /// 规范码映射到五态;未知码(含实测 `9;4;5;0`)归清除而不是被丢弃——
     /// 否则进度条会永远停在最后一个状态上。

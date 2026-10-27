@@ -12,7 +12,7 @@ use std::io::Write as _;
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
-use slterm_split::PaneId;
+use crate::gpui_terminal::PaneId;
 
 use crate::agent_host::AgentHub;
 use crate::ai_agents::{AgentStatus, AgentStatusSource};

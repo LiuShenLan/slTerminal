@@ -27,7 +27,7 @@
 
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
-use slterm_split::PaneId;
+use crate::gpui_terminal::PaneId;
 
 use crate::i18n::{Message, UiLanguage};
 
@@ -944,7 +944,7 @@ mod win {
     mod native_menu_tests {
         use super::super::{MENU_AGENT_BASE, MENU_QUIT, MENU_SHOW, TrayAgent};
         use super::{build_menu_entries, build_native_menu};
-        use slterm_split::PaneId;
+        use crate::gpui_terminal::PaneId;
         use windows_sys::Win32::UI::WindowsAndMessaging::{
             DestroyMenu, GetMenuItemCount, GetMenuItemID, GetMenuState, GetMenuStringW, HMENU,
             MF_BYPOSITION, MF_SEPARATOR,

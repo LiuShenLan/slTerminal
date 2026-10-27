@@ -24,7 +24,10 @@ use gpui::{
     Pixels, Styled as _, Window, div, px,
 };
 use gpui_component::ActiveTheme as _;
-use slterm_split::{DIVIDER_GAP, PaneId, Rect, SplitDirection, SplitNav, SplitTree, TabId};
+use slterm_split::{DIVIDER_GAP, Rect, SplitDirection, SplitNav, SplitTree};
+
+use super::TabId;
+use crate::gpui_terminal::PaneId;
 
 use super::render::to_split_rect;
 use super::{SltermWorkspace, WorkspaceTab};

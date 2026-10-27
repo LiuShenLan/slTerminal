@@ -9,9 +9,9 @@ use std::rc::Rc;
 use std::sync::mpsc;
 use std::time::Duration;
 
+use crate::gpui_terminal::PaneId;
 use gpui::{AppContext as _, Modifiers, MouseButton, TestAppContext, VisualTestContext, point, px};
 use gpui_component::Root;
-use slterm_split::PaneId;
 
 use super::windowing::{WorkspaceStartup, workspace_window_options};
 use super::workspace::session_recovery::{StartupPlan, capture_window_state, prepare_startup_at};

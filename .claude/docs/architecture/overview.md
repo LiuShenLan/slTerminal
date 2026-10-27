@@ -18,7 +18,7 @@
   | `slterm_hook`（bin `slterm-hook`） | AI CLI hook 小进程桥：有界转发后退出 | 零生产依赖；必须 exit 0、快速、隐形，禁阻塞调用方 |
 
 - **依赖方向**：application → core 单向；`slterm_hook` 不被 app 依赖；`renderer_packages`（gpui/gpui_platform/gpui-component/winit 等）禁入 core/hook 生产依赖。原因：核心层可独立测试与复用，渲染依赖误入即失去边界。边界：由 `architecture/dependencies.toml` 与 `scripts/check_architecture.py` 机械强制；根 workspace 成员与策略键集全等。
-- **跨领域类型锚点**：pane/tab 标识与分屏树归 `slterm_split`；设置/主题类型归 `slterm_settings`；不可变数据根归 `slterm_path::AppPaths`；终端网格/OSC/快照类型归 `slterm_terminal`；补全值族归 `slterm_completions`；通用错误与品牌常量归 `slterm_app::error`/`slterm_app::brand`。边界：他处只许 `use` 或经 facade 传参，禁重复定义、别名漂移与字段语义改写；新增跨领域类型先登记归属。
+- **跨领域类型锚点**：泛型分屏树与几何能力归 `slterm_split`，不定义产品 ID；`PaneId` 归 `slterm_app::gpui_terminal`，`TabId` 归 `slterm_app::app_shell::workspace`；设置/主题类型归 `slterm_settings`；不可变数据根归 `slterm_path::AppPaths`；终端网格/OSC/快照类型归 `slterm_terminal`；补全值族归 `slterm_completions`；通用错误与品牌常量归 `slterm_app::error`/`slterm_app::brand`。边界：他处只许 `use` 或经 facade 传参，禁重复定义、别名漂移与字段语义改写；新增跨领域类型先登记归属。
 - **错误信封**：统一使用 `slterm_app::error::AppError`；变体与 `From` 转换以类型定义为准。原因：调用点语义统一，领域不得另立 envelope。边界：错误消息是用户可见语义，禁止携带凭据值；领域失败经统一通用出口，不新增平行错误类型。
 - **平台分支收敛**：业务 `#[cfg(windows)]` 仅允许出现在 PTY/平台封装模块；终端 core 的 Windows 适配收在 `tty/windows`。原因：平台差异单点可达，便于替换与测试。边界：业务模块不得散落平台条件编译。
 - **模块不穿透**：crate 内模块共享只经公开小接口/类型锚点；跨 crate 共享只经 core crate 公开 API。原因：单一执行体与单一读取通道，防止状态双源。边界：禁领域自建第二套读取/执行/写盘通道。
