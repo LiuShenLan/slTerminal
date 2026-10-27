@@ -8,6 +8,9 @@ mod panel;
 mod project_layout;
 #[cfg(test)]
 mod project_layout_tests;
+mod project_registry;
+#[cfg(test)]
+mod project_registry_tests;
 mod repository_dto;
 mod side_view;
 mod view_key;
@@ -18,6 +21,7 @@ pub use diff_binding::{
 pub use identity::{PanelGroupId, ProjectId, StableIdError, TerminalId};
 pub use panel::{PanelId, PanelIdAllocator, PanelIdExhausted};
 pub use project_layout::{LayoutDtoError, LayoutError, LogicalSize, PanelGroup, ProjectLayout};
+pub use project_registry::{AddProjectOutcome, Project, ProjectRegistry, ProjectRegistryError};
 pub use side_view::{SideViewId, UnknownSideViewId};
 pub use view_key::{ViewKey, ViewKeyError, ViewKeyKind};
 pub use view_state::{
