@@ -6309,7 +6309,7 @@ name = "slterm_document"
 version = "0.0.0"
 dependencies = [
  "slterm_path",
- "tree-sitter 0.27.1",
+ "tree-sitter",
  "tree-sitter-bash",
  "tree-sitter-c",
  "tree-sitter-c-sharp",
@@ -7269,16 +7269,6 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter"
-version = "0.20.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e747b1f9b7b931ed39a548c1fae149101497de3c1fc8d9e18c62c1a66c683d3d"
-dependencies = [
- "cc",
- "regex",
-]
-
-[[package]]
-name = "tree-sitter"
 version = "0.27.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a5129de2ccc97808c4583d48f1fb44576d015cf241e432800572bda11ef30c3b"
@@ -7353,11 +7343,9 @@ dependencies = [
 [[package]]
 name = "tree-sitter-dockerfile"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba46310efcac616744ca79aa4b0e228202e388913ebcd4a1ba107072f7f4432a"
 dependencies = [
  "cc",
- "tree-sitter 0.20.10",
+ "tree-sitter-language",
 ]
 
 [[package]]
@@ -7423,11 +7411,9 @@ dependencies = [
 [[package]]
 name = "tree-sitter-json5"
 version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "24c2edecd0847bcd87b69d7390aa84de2c6df1a55e29402f62a139d567b311ae"
 dependencies = [
  "cc",
- "tree-sitter 0.20.10",
+ "tree-sitter-language",
 ]
 
 [[package]]
@@ -7443,7 +7429,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "66d4fd0af04a7338929f0e27ca078b4831de8e1ebf90ce8182e69012094a0ae0"
 dependencies = [
  "cc",
- "tree-sitter 0.27.1",
+ "tree-sitter",
 ]
 
 [[package]]
@@ -7502,7 +7488,7 @@ version = "1.0.0"
 source = "git+https://github.com/tree-sitter-grammars/tree-sitter-scss?rev=9ab738d22bb248771d42e8678d1a307d14990df1#9ab738d22bb248771d42e8678d1a307d14990df1"
 dependencies = [
  "cc",
- "tree-sitter 0.27.1",
+ "tree-sitter",
 ]
 
 [[package]]

@@ -2,26 +2,6 @@
 
 use tree_sitter::{Language, Parser, Query};
 
-// 两个旧 binding 未导出 LanguageFn；只在测试中把同一 C 入口适配到当前运行时。
-unsafe extern "C" {
-    fn tree_sitter_json5() -> *const tree_sitter::ffi::TSLanguage;
-    fn tree_sitter_dockerfile() -> *const tree_sitter::ffi::TSLanguage;
-}
-
-fn json5_language() -> Language {
-    // 引用绑定 crate，确保其原生静态库参与测试链接。
-    let _ = tree_sitter_json5::NODE_TYPES;
-    // 安全性：符号由锁定的 tree-sitter-json5 grammar 提供，返回非空静态 TSLanguage。
-    unsafe { Language::from_raw(tree_sitter_json5()) }
-}
-
-fn dockerfile_language() -> Language {
-    // 引用绑定 crate，确保其原生静态库参与测试链接。
-    let _ = tree_sitter_dockerfile::NODE_TYPES;
-    // 安全性：符号由锁定的 tree-sitter-dockerfile grammar 提供，返回非空静态 TSLanguage。
-    unsafe { Language::from_raw(tree_sitter_dockerfile()) }
-}
-
 fn audit_grammar(name: &str, language: Language, highlights: &str, sample: &str) {
     assert!(
         (13..=15).contains(&language.abi_version()),
@@ -113,8 +93,8 @@ audit_grammar!(
 audit_grammar!(
     jsonc_grammar_loads_with_real_highlights,
     "JSONC",
-    json5_language(),
-    include_str!("grammar_audit_json5.scm"),
+    tree_sitter_json5::LANGUAGE.into(),
+    tree_sitter_json5::HIGHLIGHTS_QUERY,
     "{unquoted: 1, /* comment */ trailing: true,}\n"
 );
 audit_grammar!(
@@ -253,8 +233,8 @@ audit_grammar!(
 audit_grammar!(
     dockerfile_grammar_loads_with_real_highlights,
     "Dockerfile",
-    dockerfile_language(),
-    include_str!("grammar_audit_dockerfile.scm"),
+    tree_sitter_dockerfile::LANGUAGE.into(),
+    tree_sitter_dockerfile::HIGHLIGHTS_QUERY,
     "FROM alpine:3.22\n"
 );
 audit_grammar!(

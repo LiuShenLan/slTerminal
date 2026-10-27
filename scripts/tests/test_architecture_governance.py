@@ -16,6 +16,29 @@ class GovernanceTests(unittest.TestCase):
             "rust-toolchain channel 与 workspace rust-version 必须钉在同一版本",
         )
 
+    def test_ci_runs_core_tests_in_release_mode(self):
+        manifest = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))
+        dependencies = tomllib.loads(
+            (ROOT / "architecture/dependencies.toml").read_text(encoding="utf-8")
+        )
+        excluded = []
+        for crate in manifest["workspace"]["members"]:
+            if dependencies["crates"][crate]["layer"] == "core":
+                continue
+            package = tomllib.loads(
+                (ROOT / crate / "Cargo.toml").read_text(encoding="utf-8")
+            )
+            excluded.append(package["package"]["name"])
+        command = "cargo test --release --workspace"
+        command += "".join(f" --exclude {package}" for package in excluded)
+        command += " -- --test-threads=1"
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        self.assertIn(
+            f"run: {command}",
+            workflow,
+            "CI 必须按架构层执行 core release 串行测试",
+        )
+
     def test_license_compliance_artifacts_exist(self):
         license_text = (ROOT / "LICENSE").read_text(encoding="utf-8")
         self.assertIn("GNU GENERAL PUBLIC LICENSE", license_text)

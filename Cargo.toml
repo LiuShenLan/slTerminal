@@ -97,3 +97,6 @@ gpui-component-assets = { git = "https://github.com/LiuShenLan/gpui-kit", rev = 
 [patch.crates-io]
 # 上游 0.8.3 未强制 MSVC 环境；仓内补丁仅增加 Meson --vsenv。
 dav1d-sys = { path = "vendor/dav1d-sys" }
+# 两个旧 grammar 仅升级 Rust 绑定，C grammar 与 query 保持锁定快照。
+tree-sitter-json5 = { path = "vendor/tree-sitter-json5" }
+tree-sitter-dockerfile = { path = "vendor/tree-sitter-dockerfile" }

@@ -1,0 +1,2 @@
+# 第三方锁定快照保留上游文件结尾，不做空白重写。
+vendor/** whitespace=-blank-at-eof

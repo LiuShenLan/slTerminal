@@ -70,7 +70,7 @@ workspace 成员、ownership、类型锚点、错误信封、数据目录与命�
 
 ## 验收与测试
 
-- 全量 cargo 与脚本钉测试串行执行。
+- 全量 cargo、core release 与脚本钉测试串行执行。
 - 定向测试必须走显式 `lib_tests` target；禁止 `--lib` 或裸 filter 直打默认 lib target。
 - 不可自动化面必须登记豁免。
 - 提交前全部门禁全绿；详细分层与隔离规则见 `.claude/docs/testing/strategy.md`。
@@ -79,6 +79,7 @@ workspace 成员、ownership、类型锚点、错误信封、数据目录与命�
 
 - 构建：`cargo build -p slterm --bin slterm -p slterm_hook --bin slterm-hook`；验收用 `target/debug/slterm.exe` 实测，不走交互式 dev 模式。
 - 全量测试：`cargo test --workspace -- --test-threads=1`。
+- core 发布模式测试：`cargo test --release --workspace --exclude slterm --exclude slterm_hook -- --test-threads=1`。
 - 定向测试：`cargo test -p <crate> --test lib_tests <filter> -- --test-threads=1`。
 - 静态检查：`cargo clippy --workspace --all-targets`；`cargo clippy -p slterm --all-targets --features gpui-test-support`；`cargo fmt --all -- --check`。
 - 门禁：`python scripts/check_architecture.py`；`python scripts/check_doc_policy.py full`；`python scripts/check_brand_regress.py staged`。

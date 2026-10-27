@@ -72,7 +72,7 @@
 | Dockerfile | `tree-sitter-dockerfile 0.2.0` | MIT |
 | Make | `tree-sitter-make 1.1.1` | MIT |
 
-JSONC 使用 JSON5 仅作高亮语法超集，不用于验证 JSONC；Markdown 语义仍只走 Comrak，Tree-sitter Markdown 不参与渲染语义或第二套 injection 规则。所有 grammar 必须验证 ABI 13–15、Windows x64 编译和 highlights query 加载。
+JSONC 使用 JSON5 仅作高亮语法超集，不用于验证 JSONC；Markdown 语义仍只走 Comrak，Tree-sitter Markdown 不参与渲染语义或第二套 injection 规则。JSONC 与 Dockerfile 使用仓内锁定源码快照，补丁只升级 Rust binding 为 `LanguageFn`，C grammar、scanner 与 query 保持各自提交锚；所有 grammar 共享 tree-sitter 0.27.1 运行时，必须验证 ABI 13–15、Windows x64 编译和 highlights query 加载。
 
 ### 依赖删减与许可
 

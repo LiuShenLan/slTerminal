@@ -54,6 +54,10 @@ jobs:
         shell: pwsh
         run: cargo test --workspace -- --test-threads=1
 
+      - name: core 发布模式测试
+        shell: pwsh
+        run: cargo test --release --workspace --exclude slterm --exclude slterm_hook -- --test-threads=1
+
       - name: slterm 虚拟窗口测试
         shell: pwsh
         run: cargo test -p slterm --test lib_tests --features gpui-test-support -- --test-threads=1

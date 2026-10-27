@@ -7,6 +7,7 @@
 - **构建**：`cargo build -p slterm --bin slterm -p slterm_hook --bin slterm-hook`；发布构建走 `scripts/release.ps1` 的同一 feature 图。
 - **验收**：用 debug 构建产物 `target/debug/slterm.exe` 实测，不走交互式 dev 模式。原因：验收对象必须是实际交付形态。
 - **全量测试**：`cargo test --workspace -- --test-threads=1`；串行执行是硬红线。
+- **core 发布模式测试**：`cargo test --release --workspace --exclude slterm --exclude slterm_hook -- --test-threads=1`；覆盖调试断言关闭后的语义，排除集合与架构层一致。
 - **定向测试**：`cargo test -p <crate> --test lib_tests <filter> -- --test-threads=1`；禁止 `--lib` 或裸 filter 直打默认 lib target。
 - **虚拟窗口测试**：`cargo test -p slterm --test lib_tests --features gpui-test-support -- --test-threads=1`。
 - **平台/真机测试**：`cargo test -p slterm_terminal --test pty_integration_tests -- --test-threads=1`；`cargo test -p slterm --test windows_console_startup -- --test-threads=1`。
