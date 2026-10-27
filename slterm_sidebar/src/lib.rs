@@ -2,6 +2,9 @@
 
 #![forbid(unsafe_code)]
 
+mod side_view_state;
+#[cfg(test)]
+mod side_view_state_tests;
 mod sidebar_state;
 #[cfg(test)]
 mod sidebar_state_dto_tests;
@@ -10,6 +13,7 @@ mod sidebar_state_recovery_tests;
 #[cfg(test)]
 mod sidebar_state_tests;
 
+pub use side_view_state::side_view_state_schema;
 pub use sidebar_state::{
     ButtonMovement, SideSlot, SidebarDtoError, SidebarError, SidebarRecovery, SidebarRecoveryError,
     SidebarRecoveryWarning, SidebarState, SidebarTransition,
