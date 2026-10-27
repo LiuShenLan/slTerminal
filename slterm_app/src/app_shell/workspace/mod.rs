@@ -38,6 +38,8 @@ mod pumps;
 mod render;
 pub(crate) mod session_persistence;
 pub(crate) mod session_recovery;
+#[allow(dead_code)] // GPUI 组合根接线前，实例所有权语义由单元测试锁定。
+mod side_view_host;
 pub(crate) mod sidebar;
 /// 侧栏三视图渲染(导航树 / Commit / Agent 全局文件)。
 mod sidebar_views;

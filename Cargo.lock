@@ -6261,6 +6261,7 @@ dependencies = [
  "slterm_completions",
  "slterm_path",
  "slterm_runtime_protocol",
+ "slterm_sidebar",
  "slterm_terminal",
  "slterm_workspace",
  "tempfile",
