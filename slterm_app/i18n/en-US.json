@@ -490,6 +490,7 @@
     "recovery_restored": "Restored {count} tab(s).",
     "recovery_crashed": "Restored {count} tab(s) after an unclean shutdown.",
     "recovery_quarantined": "Repeated restore failures; the saved scene was moved to {path}",
+    "recovery_sidebar_repaired": "Invalid sidebar layout content was repaired; unavailable fields use defaults.",
     "hook_install_failed": "Could not install AI CLI hooks for {agent}",
     "hook_settings_unreadable": "AI hook settings could not be read; self-healing was skipped"
   },

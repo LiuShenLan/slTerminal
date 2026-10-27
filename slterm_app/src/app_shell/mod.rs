@@ -137,7 +137,10 @@ pub fn run_shell(initial_cwd: Option<PathBuf>, initial_command: Option<Program>)
         match crate::update_download::handoff::restore_ticket() {
             Some(mut sessions) => match sessions.drain(..).next() {
                 Some(session) => {
-                    startup_plan.sidebar = session.sidebar;
+                    workspace::session_recovery::restore_handoff_sidebar(
+                        &mut startup_plan,
+                        &session.sidebar,
+                    );
                     startup_plan.window = session.window;
                     startup_plan.crashed = false;
                     startup_plan.session = Some(session);

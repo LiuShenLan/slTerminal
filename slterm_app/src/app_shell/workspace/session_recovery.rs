@@ -19,7 +19,9 @@ use gpui::{App, Window, WindowBounds};
 use super::sidebar::SidebarState;
 use super::{SltermWorkspace, TabEntry, TabMeta, WorkspaceTab};
 use crate::gpui_terminal::view::TerminalLaunch;
-use crate::session::{LaunchSession, LayoutSession, Session, TabSession, WindowState};
+use crate::session::{
+    LaunchSession, LayoutSession, Session, SidebarSession, TabSession, WindowState,
+};
 use slterm_split::{PaneId, TabId};
 
 /// 启动恢复计划:开窗前算好,`SltermWorkspace::new` 只消费不决策。
@@ -29,8 +31,10 @@ use slterm_split::{PaneId, TabId};
 #[derive(Debug, Clone)]
 pub(crate) struct StartupPlan {
     pub(crate) session: Option<Session>,
-    /// 侧栏宽度/开合随现场恢复。
+    /// core 侧栏组织状态随现场恢复。
     pub(crate) sidebar: SidebarState,
+    /// 侧栏结构损坏或字段修复需要向用户聚合提示。
+    pub(crate) sidebar_repaired: bool,
     /// 上次窗口尺寸与最大化态。
     pub(crate) window: Option<WindowState>,
     /// 上次是异常退出(仅用于恢复提示文案)。
@@ -45,6 +49,7 @@ impl StartupPlan {
         Self {
             session: None,
             sidebar: SidebarState::default(),
+            sidebar_repaired: false,
             window: None,
             crashed: false,
             quarantined: None,
@@ -52,18 +57,40 @@ impl StartupPlan {
     }
 }
 
+/// session 只保存原始 JSON；侧栏字段解释与修复报告统一归 core 恢复转换。
+pub(crate) fn recover_sidebar_state(sidebar: &SidebarSession) -> (SidebarState, bool) {
+    match sidebar.recover() {
+        Ok(recovery) => {
+            let repaired = !recovery.warnings.is_empty();
+            (recovery.state, repaired)
+        }
+        Err(error) => {
+            log::warn!("could not recover sidebar state: {error}");
+            (SidebarState::default(), true)
+        }
+    }
+}
+
+/// 更新交接的侧栏覆盖普通会话恢复结果。
+pub(crate) fn restore_handoff_sidebar(plan: &mut StartupPlan, sidebar: &SidebarSession) {
+    let (sidebar, sidebar_repaired) = recover_sidebar_state(sidebar);
+    plan.sidebar = sidebar;
+    plan.sidebar_repaired = sidebar_repaired;
+}
+
 /// 恢复结果一次性汇总文案:
 /// 恢复成功按标签数提示(崩溃现场多一句来源说明);断路器隔离给出现场
-/// 路径;无恢复且无隔离 = None(全新启动不打扰)。
+/// 路径;侧栏修复可独立成提示，也可与上述结果合并。
 pub(crate) fn recovery_notice(
     restored_tabs: Option<usize>,
     crashed: bool,
     quarantined: Option<&Path>,
+    sidebar_repaired: bool,
     language: crate::i18n::UiLanguage,
 ) -> Option<String> {
     use crate::i18n::Message;
 
-    match restored_tabs {
+    let mut notice = match restored_tabs {
         Some(tabs) if tabs > 0 => {
             let count = tabs.to_string();
             let message = if crashed {
@@ -79,7 +106,18 @@ pub(crate) fn recovery_notice(
                 &[("path", &path.display().to_string())],
             )
         }),
+    };
+    if sidebar_repaired {
+        let repair = language.text(Message::NotifyRecoverySidebarRepaired);
+        match &mut notice {
+            Some(text) => {
+                text.push(' ');
+                text.push_str(repair);
+            }
+            None => notice = Some(repair.to_owned()),
+        }
     }
+    notice
 }
 
 /// 生产启动入口:数据目录 `session.json`。
@@ -93,9 +131,11 @@ pub(crate) fn prepare_startup_at(path: &Path, restore_tabs: bool) -> StartupPlan
     let Some(mut session) = crate::session::load_from(path) else {
         return StartupPlan::fresh();
     };
+    let (sidebar, sidebar_repaired) = recover_sidebar_state(&session.sidebar);
     let mut plan = StartupPlan {
         session: None,
-        sidebar: session.sidebar,
+        sidebar,
+        sidebar_repaired,
         window: session.window,
         crashed: false,
         quarantined: None,
@@ -197,7 +237,7 @@ impl SltermWorkspace {
         }
         let mut session = Session::new(active_out, tabs);
         session.window = window_state;
-        session.sidebar = self.sidebar;
+        session.sidebar = SidebarSession::from_state(self.side_views.state());
         session
     }
 
@@ -457,6 +497,10 @@ mod session_recovery_tests {
     use std::fs;
 
     fn workspace_json(tabs: &str, boot_attempts: u32, clean_exit: bool) -> String {
+        let mut sidebar = SidebarState::default();
+        sidebar.toggle_sidebar();
+        sidebar.set_width(312);
+        let sidebar = serde_json::to_string(&SidebarSession::from_state(&sidebar)).unwrap();
         format!(
             r#"{{
               "version": 1,
@@ -464,8 +508,7 @@ mod session_recovery_tests {
               "active_tab": 0,
               "tabs": [{tabs}],
               "window": {{ "width": 1280, "height": 720, "maximized": true }},
-              "sidebar": {{ "collapsed": true, "active_view_top": "nav",
-                            "active_view_bottom": null, "width": 312.0 }},
+              "sidebar": {sidebar},
               "clean_exit": {clean_exit}
             }}"#
         )
@@ -506,9 +549,39 @@ mod session_recovery_tests {
         assert!(plan.session.is_none());
         assert!(plan.quarantined.is_none());
         assert_eq!(plan.window.map(|window| window.width), Some(1280));
-        assert!(plan.sidebar.collapsed);
-        assert_eq!(plan.sidebar.width, 312.0);
+        assert!(!plan.sidebar.visible_intent());
+        assert_eq!(plan.sidebar.width(), 312);
+        assert!(!plan.sidebar_repaired);
         assert!(path.exists(), "空会话不是崩溃现场");
+    }
+
+    /// 侧栏字段损坏只回退对应字段，启动计划保留修复标记供聚合提示。
+    #[test]
+    fn invalid_sidebar_fields_fall_back_without_discarding_valid_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.json");
+        let mut session: serde_json::Value =
+            serde_json::from_str(&workspace_json("", 0, true)).unwrap();
+        session["sidebar"]["width"] = serde_json::Value::from(9999);
+        write_session(&path, &serde_json::to_string(&session).unwrap());
+
+        let plan = prepare_startup_at(&path, true);
+        assert_eq!(plan.sidebar.width(), SidebarState::DEFAULT_WIDTH);
+        assert!(!plan.sidebar.visible_intent());
+        assert!(plan.sidebar_repaired);
+    }
+
+    /// 更新交接覆盖普通会话后，不得保留被覆盖状态的修复警告。
+    #[test]
+    fn handoff_sidebar_discards_superseded_recovery_warning() {
+        let mut plan = StartupPlan::fresh();
+        plan.sidebar.set_width(312);
+        plan.sidebar_repaired = true;
+
+        restore_handoff_sidebar(&mut plan, &SidebarSession::default());
+
+        assert_eq!(plan.sidebar, SidebarState::default());
+        assert!(!plan.sidebar_repaired);
     }
 
     /// 断路器跳闸:现场挪到 session.crashed.json,本次干净启动。
@@ -591,18 +664,17 @@ mod session_recovery_tests {
         assert!(explicit_command, "Profile 按显式命令通道重建");
     }
 
-    /// 恢复汇总文案:普通恢复/崩溃恢复/断路器隔离三态,全新启动
-    /// 静默;零标签不生成提示。
+    /// 恢复汇总文案覆盖普通恢复、崩溃、隔离与侧栏修复；全新启动静默。
     #[test]
     fn recovery_notice_summarizes_restore_outcomes_and_stays_quiet_on_fresh_start() {
         use crate::i18n::UiLanguage;
 
         assert_eq!(
-            recovery_notice(Some(3), false, None, UiLanguage::EnUs).as_deref(),
+            recovery_notice(Some(3), false, None, false, UiLanguage::EnUs).as_deref(),
             Some("Restored 3 tab(s).")
         );
         assert_eq!(
-            recovery_notice(Some(2), true, None, UiLanguage::EnUs).as_deref(),
+            recovery_notice(Some(2), true, None, false, UiLanguage::EnUs).as_deref(),
             Some("Restored 2 tab(s) after an unclean shutdown.")
         );
         assert_eq!(
@@ -610,16 +682,28 @@ mod session_recovery_tests {
                 None,
                 false,
                 Some(Path::new("D:/data/session.crashed.json")),
+                false,
                 UiLanguage::ZhCn
             )
             .as_deref(),
             Some("连续多次启动未完成恢复，已跳过；现场保存在 D:/data/session.crashed.json")
         );
-        assert_eq!(recovery_notice(None, false, None, UiLanguage::EnUs), None);
         assert_eq!(
-            recovery_notice(Some(0), false, None, UiLanguage::EnUs),
+            recovery_notice(None, false, None, false, UiLanguage::EnUs),
             None
         );
+        assert_eq!(
+            recovery_notice(Some(0), false, None, false, UiLanguage::EnUs),
+            None
+        );
+        assert_eq!(
+            recovery_notice(None, false, None, true, UiLanguage::ZhCn).as_deref(),
+            Some("侧栏布局存在无效内容，已修复可恢复字段，其余使用默认值。")
+        );
+        let combined = recovery_notice(Some(1), false, None, true, UiLanguage::EnUs)
+            .expect("恢复与侧栏修复必须聚合为一条提示");
+        assert!(combined.starts_with("Restored 1 tab(s). "));
+        assert!(combined.contains("sidebar layout"));
     }
 
     /// CLI 显式启动(cwd/-e)不碰恢复:不计数、不隔离、不交会话。

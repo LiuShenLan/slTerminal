@@ -56,6 +56,68 @@ fn nav_view_lists_tabs_and_panes_and_clicking_focuses(cx: &mut TestAppContext) {
     assert_eq!(focused, PaneId(2), "点击 pane 行必须聚焦该 pane");
 }
 
+/// 生产 Host 在整栏隐藏后复用真实实体，同槽替换时销毁旧实体。
+#[gpui::test]
+fn production_side_view_host_preserves_on_hide_and_destroys_on_replace(cx: &mut TestAppContext) {
+    let (workspace, mut window) = open_workspace(cx);
+    draw_frame(&mut window);
+    let nav = workspace.read_with(cx, |ws, _| {
+        ws.side_view_for_test(SideViewId::Nav)
+            .expect("默认 Nav 必须由生产 Host 创建")
+    });
+    let nav_id = nav.entity_id();
+    let weak_nav = nav.downgrade();
+    drop(nav);
+
+    window.dispatch_action(ToggleSidebar);
+    window.run_until_parked();
+    window.dispatch_action(ToggleSidebar);
+    window.run_until_parked();
+    assert_eq!(
+        workspace
+            .read_with(cx, |ws, _| ws.side_view_for_test(SideViewId::Nav).unwrap())
+            .entity_id(),
+        nav_id,
+        "整栏隐藏再显示必须复用同一真实实体"
+    );
+
+    click_selector(&mut window, "sidebar-view-btn-explorer");
+    window.run_until_parked();
+    draw_frame(&mut window);
+    assert!(
+        weak_nav.upgrade().is_none(),
+        "同槽打开 Explorer 必须销毁真实 Nav 实体"
+    );
+    assert!(workspace.read_with(cx, |ws, _| ws.side_view_for_test(SideViewId::Nav).is_none()));
+    assert!(workspace.read_with(cx, |ws, _| {
+        ws.side_view_for_test(SideViewId::Explorer).is_some()
+    }));
+}
+
+/// 默认按钮全在上组；打开 AgentFiles 必须替换 Nav，而不是沿用旧壳固定下槽。
+#[gpui::test]
+fn production_sidebar_rendering_uses_core_button_slots(cx: &mut TestAppContext) {
+    let (_workspace, mut window) = open_workspace(cx);
+    draw_frame(&mut window);
+    click_selector(&mut window, "sidebar-view-btn-agent_files");
+    draw_frame(&mut window);
+
+    assert!(
+        window
+            .debug_bounds("sidebar-slot-top-agent_files")
+            .is_some(),
+        "AgentFiles 必须按 core 默认上槽渲染"
+    );
+    assert!(
+        window.debug_bounds("sidebar-slot-top-nav").is_none(),
+        "同槽替换后不得继续渲染 Nav"
+    );
+    assert!(
+        window.debug_bounds("sidebar-split-divider").is_none(),
+        "单槽不得沿用旧壳固定下槽形成分栏"
+    );
+}
+
 /// Commit:注入快照渲染分支/去重变更行/历史行;无快照走空态。
 #[gpui::test]
 fn commit_view_renders_injected_snapshot_and_empty_state(cx: &mut TestAppContext) {
@@ -118,7 +180,11 @@ fn commit_view_renders_injected_snapshot_and_empty_state(cx: &mut TestAppContext
 /// 终端网格零重排;关掉一个槽后比例保留、分隔条消失。
 #[gpui::test]
 fn sidebar_split_divider_drags_the_slot_ratio(cx: &mut TestAppContext) {
-    let (workspace, mut window) = open_workspace(cx);
+    let mut sidebar = SidebarState::default();
+    sidebar
+        .move_button_to_slot(SideViewId::AgentFiles, slterm_sidebar::SideSlot::Lower, 0)
+        .unwrap();
+    let (workspace, mut window) = open_workspace_with_sidebar(cx, sidebar);
     window.refresh().unwrap();
     draw_frame(&mut window);
     assert!(
@@ -143,8 +209,8 @@ fn sidebar_split_divider_drags_the_slot_ratio(cx: &mut TestAppContext) {
     let target = point(start.x, start.y + px(100.0));
     window.simulate_mouse_move(target, MouseButton::Left, Modifiers::default());
     draw_frame(&mut window);
-    let during = workspace.read_with(cx, |ws, _| ws.sidebar_state().ratio_permille);
-    assert!(during > 500, "拖拽应实时增大上槽比例: {during}");
+    let during = workspace.read_with(cx, |ws, _| ws.sidebar_state().ratio());
+    assert!(during > 0.5, "拖拽应实时增大上槽比例: {during}");
     let pane_during = workspace
         .read_with(cx, |ws, _| ws.pane_bounds_of(PaneId(1)))
         .expect("终端 pane 矩形仍在");
@@ -156,12 +222,12 @@ fn sidebar_split_divider_drags_the_slot_ratio(cx: &mut TestAppContext) {
     window.simulate_mouse_up(target, MouseButton::Left, Modifiers::default());
     window.run_until_parked();
     draw_frame(&mut window);
-    let ratio = workspace.read_with(cx, |ws, _| ws.sidebar_state().ratio_permille);
+    let ratio = workspace.read_with(cx, |ws, _| ws.sidebar_state().ratio());
     assert!(
-        (100..=900).contains(&ratio),
+        (0.1..=0.9).contains(&ratio),
         "比例必须落在钳制区间: {ratio}"
     );
-    assert!(ratio > 500);
+    assert!(ratio > 0.5);
 
     // 关闭下槽:比例保留,分隔条消失。
     click_selector(&mut window, "sidebar-view-btn-agent_files");
@@ -171,7 +237,7 @@ fn sidebar_split_divider_drags_the_slot_ratio(cx: &mut TestAppContext) {
         "单槽不显示分隔条"
     );
     assert_eq!(
-        workspace.read_with(cx, |ws, _| ws.sidebar_state().ratio_permille),
+        workspace.read_with(cx, |ws, _| ws.sidebar_state().ratio()),
         ratio,
         "关闭一个槽不得重置比例"
     );

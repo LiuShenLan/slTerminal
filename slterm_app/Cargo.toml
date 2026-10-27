@@ -76,7 +76,8 @@ log = "0.4"
 # 过滤 audit target,否则同一事件双落点(日志 + subscriber)。
 tracing = { version = "0.1", features = ["log-always"] }
 # ai_hook 信封/载荷解析(helper 不重编码,JSON 工作全在宿主侧)。
-serde_json = "1"
+# RawValue 保留 session 内 core DTO 的原始 JSON，供独立容错恢复检查重复字段。
+serde_json = { version = "1", features = ["raw_value"] }
 # CLI 双人格 clap 面:同 exe 子命令与 GUI 参数共用一份定义,
 # --help/版本/参数拒绝由 clap 统一产出。精确 pin 到当前构建/测试基线
 # (Cargo.lock 实解析 4.6.7),避免 caret 漂移改变 --help/解析语义。

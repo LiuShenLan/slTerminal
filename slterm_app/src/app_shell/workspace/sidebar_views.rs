@@ -406,9 +406,9 @@ impl SltermWorkspace {
         let snapshot = self
             .commit_snapshot_for_test
             .clone()
-            .or_else(|| self.file_tree.panel.git_snapshot());
+            .or_else(|| self.side_panel.git_snapshot());
         #[cfg(not(all(test, feature = "gpui-test-support")))]
-        let snapshot = self.file_tree.panel.git_snapshot();
+        let snapshot = self.side_panel.git_snapshot();
         let body = match snapshot {
             Some(git) => {
                 let projection = CommitProjection::from_git(&git);

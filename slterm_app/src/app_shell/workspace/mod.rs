@@ -40,7 +40,7 @@ mod pumps;
 mod render;
 pub(crate) mod session_persistence;
 pub(crate) mod session_recovery;
-#[allow(dead_code)] // GPUI 组合根接线前，实例所有权语义由单元测试锁定。
+mod side_view;
 mod side_view_host;
 pub(crate) mod sidebar;
 /// 侧栏三视图渲染(导航树 / Commit / Agent 全局文件)。
@@ -78,7 +78,7 @@ use crate::session::LaunchSession;
 use render::to_split_rect;
 use session_persistence::SessionPersistence;
 use session_recovery::StartupPlan;
-use sidebar::{SidebarResizeDrag, SidebarSplitDrag, SidebarState};
+use sidebar::{SidebarResizeDrag, SidebarSplitDrag};
 use split_drag::SplitDrag;
 use tab_drag::TabDrag;
 
@@ -193,8 +193,8 @@ pub struct SltermWorkspace {
     split_drag: Option<SplitDrag>,
     /// 进行中的 tab 拖拽(含未过阈值的待命态);`None` = 无手势。
     tab_drag: Option<TabDrag>,
-    /// 侧栏骨架态:开合/宽度/双槽 active view。
-    sidebar: SidebarState,
+    /// SideView 组织状态与真实实体实例的唯一所有者。
+    side_views: side_view_host::SideViewHost<Entity<side_view::SideView>>,
     /// 进行中的侧栏宽度拖拽;`None` = 无手势。
     sidebar_resize: Option<SidebarResizeDrag>,
     /// 进行中的双槽分隔条拖拽;`None` = 无手势。与 `sidebar_resize` 互斥。
@@ -238,7 +238,9 @@ pub struct SltermWorkspace {
     /// 测试专用:安装成功后的退出请求(虚拟窗口不可直调 remove_window)。
     #[cfg(all(test, feature = "gpui-test-support"))]
     update_install_exit_requested: bool,
-    /// 侧栏文件树视图状态(explorer 槽内容)。
+    /// 侧栏共享文件/Git 快照服务；生命周期独立于单个 SideView 实例。
+    side_panel: crate::side_panel::SidePanel,
+    /// Explorer 私有视图状态。
     file_tree: file_tree::FileTreeState,
     /// AgentFiles 槽的进程内目录缓存:首次渲染加载,禁止每帧 27 次
     /// `is_dir`;显式刷新经 `refresh_agent_dirs`。测试构建预置空表,避免
@@ -318,12 +320,11 @@ impl SltermWorkspace {
     ) -> Self {
         // 侧栏宽度先于 spawn 网格入账:恢复的宽度若在首帧后才生效,会先按
         // 默认宽度触发一次 ConPTY resize(/回放顺序)。
-        let sidebar = sidebar::reconcile_views(&plan.sidebar, &sidebar::SideViewId::ALL);
         // 开窗 resize 异步落地前,先按目标几何谓出 spawn 网格(启动零 resize)。
         let initial_grid = startup_geometry::prepare_initial_grid(
             window,
             cx,
-            sidebar::chrome_width(&sidebar),
+            sidebar::chrome_width(&plan.sidebar),
             true,
         );
         // 通知漏斗前台门控:初始态取开窗激活态,此后由窗口
@@ -331,6 +332,9 @@ impl SltermWorkspace {
         crate::notify::set_foreground(window.is_window_active());
         let window_activation = cx.observe_window_activation(window, |_workspace, window, _cx| {
             crate::notify::set_foreground(window.is_window_active());
+        });
+        let side_views = side_view_host::SideViewHost::new(plan.sidebar.clone(), |view| {
+            cx.new(|_| side_view::SideView::new(view))
         });
         let mut workspace = SltermWorkspace {
             tabs: Vec::new(),
@@ -342,7 +346,7 @@ impl SltermWorkspace {
             split_bounds: Rc::new(RefCell::new(HashMap::new())),
             split_drag: None,
             tab_drag: None,
-            sidebar,
+            side_views,
             sidebar_resize: None,
             sidebar_split_drag: None,
             sidebar_split_bounds: Rc::new(RefCell::new(None)),
@@ -364,6 +368,7 @@ impl SltermWorkspace {
             update_install_runner: None,
             #[cfg(all(test, feature = "gpui-test-support"))]
             update_install_exit_requested: false,
+            side_panel: crate::side_panel::SidePanel::new(),
             file_tree: file_tree::FileTreeState::new(window, cx),
             agent_dirs_cache: Self::initial_agent_dirs_cache(),
             settings_path_override: None,
@@ -397,10 +402,8 @@ impl SltermWorkspace {
                 }
             }
         }
-        // 恢复结果一次性汇总:
-        // 恢复成功按标签数提示(崩溃现场多一句来源说明);断路器隔离时给
-        // 出挪走的现场路径。启动期用户虽在前台,但日志不可见,故走直发
-        // 通道而非漏斗(前台门控会丢弃这条非打扰信息)。
+        // 恢复结果一次性汇总:普通/崩溃恢复、断路器隔离与侧栏修复合并
+        // 为一条通知,经启动汇总通道豁免前台门控。
         let restored_tabs = restored.then_some(workspace.tabs.len());
         let language = cx
             .try_global::<crate::app_shell::config::Settings>()
@@ -410,6 +413,7 @@ impl SltermWorkspace {
             restored_tabs,
             plan.crashed,
             plan.quarantined.as_deref(),
+            plan.sidebar_repaired,
             language,
         ) {
             // /统一走通知漏斗;启动汇总经 `plan_startup` 豁免前台
@@ -1407,10 +1411,19 @@ impl SltermWorkspace {
         self.initial_grid
     }
 
+    /// 测试专用:读取生产 Host 中的真实 SideView 实体。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn side_view_for_test(
+        &self,
+        id: sidebar::SideViewId,
+    ) -> Option<Entity<side_view::SideView>> {
+        self.side_views.instance(id).cloned()
+    }
+
     /// 测试专用:侧栏骨架态只读(宽度/双槽/开合的断言端)。
     #[cfg(all(test, feature = "gpui-test-support"))]
-    pub(crate) fn sidebar_state(&self) -> &SidebarState {
-        &self.sidebar
+    pub(crate) fn sidebar_state(&self) -> &slterm_sidebar::SidebarState {
+        self.side_views.state()
     }
 
     /// 测试专用:当前设置 tab 的视图实体(设置页豁免层用例的驱动端)。
@@ -1423,23 +1436,6 @@ impl SltermWorkspace {
             | WorkspaceTab::Code { .. }
             | WorkspaceTab::Image { .. } => None,
         })
-    }
-
-    /// 测试专用:直接播种双槽 active view(会话恢复消费前的渲染锚)。
-    #[cfg(all(test, feature = "gpui-test-support"))]
-    pub(crate) fn set_sidebar_views_for_test(
-        &mut self,
-        top: Option<sidebar::SideViewId>,
-        bottom: Option<sidebar::SideViewId>,
-    ) {
-        self.sidebar = sidebar::reconcile_views(
-            &SidebarState {
-                active_view_top: top,
-                active_view_bottom: bottom,
-                ..self.sidebar
-            },
-            &sidebar::SideViewId::ALL,
-        );
     }
 
     /// 测试专用:标题栏三钮的命令记录(虚拟窗口平台 API 不可直调)。
@@ -1581,13 +1577,12 @@ impl Render for SltermWorkspace {
             None => None,
         };
         // 侧栏组件:ActivityBar + tab 列表/双槽内容区 + 宽度拖拽热区。
-        // collapsed 才整列隐藏;双槽全空时 tab 列表仍常驻(切 tab 与拖拽
-        // 停靠的入口不能随视图槽一起消失)。ActivityBar 始终常驻。
+        // core 实际不可见时整列隐藏;ActivityBar 始终常驻。
         let sidebar_content = self.render_sidebar_content(cx);
-        let sidebar_visible = !self.sidebar.collapsed;
+        let sidebar_visible = self.side_views.state().is_visible();
         let activity_bar = self.render_activity_bar(cx);
         let resize_handle = sidebar_visible.then(|| self.render_sidebar_resize_handle(cx));
-        let sidebar_width = self.sidebar.width;
+        let sidebar_width = f32::from(self.side_views.state().width());
         let title_bar = self.render_title_bar(window, cx);
         // 分隔条拖拽 overlay 与全窗指针罩层(同 tab_drag 的捕获模式:罩层
         // 独占指针,移动喂预览、松开提交/关闭)。overlay 在内容之上、罩层

@@ -62,6 +62,24 @@ fn open_workspace(cx: &mut TestAppContext) -> (gpui::Entity<SltermWorkspace>, Vi
     (workspace, window)
 }
 
+/// 以指定 core 侧栏组织状态执行真实启动恢复并开窗。
+fn open_workspace_with_sidebar(
+    cx: &mut TestAppContext,
+    sidebar: SidebarState,
+) -> (gpui::Entity<SltermWorkspace>, VisualTestContext) {
+    let mut plan = StartupPlan::fresh();
+    plan.sidebar = sidebar;
+    let (workspace, window, _ai_tx) = open_workspace_with_startup(
+        cx,
+        WorkspaceStartup::LaunchTerminal {
+            cwd: None,
+            command: Program::Just("slterm-test-missing-shell-executable".into()),
+        },
+        plan,
+    );
+    (workspace, window)
+}
+
 /// 同 [`open_workspace`],额外返回 hook 事件发送端(事件泵断言用)。
 fn open_workspace_with_ai(
     cx: &mut TestAppContext,
@@ -1053,7 +1071,11 @@ fn sidebar_renders_activity_bar_and_the_default_nav_slot(cx: &mut TestAppContext
 /// 打开(双开 split)、双空回到 hidden。
 #[gpui::test]
 fn sidebar_activity_buttons_switch_both_slots(cx: &mut TestAppContext) {
-    let (_workspace, mut window) = open_workspace(cx);
+    let mut sidebar = SidebarState::default();
+    sidebar
+        .move_button_to_slot(SideViewId::AgentFiles, slterm_sidebar::SideSlot::Lower, 0)
+        .unwrap();
+    let (_workspace, mut window) = open_workspace_with_sidebar(cx, sidebar);
     window.refresh().unwrap();
     draw_frame(&mut window);
     assert!(window.debug_bounds("sidebar-slot-top-nav").is_some());
@@ -1092,9 +1114,9 @@ fn sidebar_activity_buttons_switch_both_slots(cx: &mut TestAppContext) {
     assert!(window.debug_bounds("sidebar-activity-bar").is_some());
 }
 
-/// collapsed 开合:内容区与拖拽热区隐藏,ActivityBar 常驻;再开恢复现场。
+/// 整栏隐藏:内容区与拖拽热区隐藏,ActivityBar 常驻;再显示恢复原实例。
 #[gpui::test]
-fn sidebar_toggle_action_collapses_and_expands_content(cx: &mut TestAppContext) {
+fn sidebar_toggle_action_hides_and_restores_content(cx: &mut TestAppContext) {
     let (workspace, mut window) = open_workspace(cx);
     window.refresh().unwrap();
     draw_frame(&mut window);
@@ -1103,32 +1125,32 @@ fn sidebar_toggle_action_collapses_and_expands_content(cx: &mut TestAppContext) 
     window.dispatch_action(ToggleSidebar);
     window.run_until_parked();
     draw_frame(&mut window);
-    assert!(workspace.read_with(cx, |ws, _| ws.sidebar_state().collapsed));
+    assert!(workspace.read_with(cx, |ws, _| !ws.sidebar_state().visible_intent()));
     assert!(
         window.debug_bounds("sidebar-area").is_none(),
-        "collapsed 时内容区不占布局"
+        "整栏隐藏时内容区不占布局"
     );
     assert!(
         window.debug_bounds("sidebar-resize-handle").is_none(),
-        "collapsed 时无宽度拖拽热区"
+        "整栏隐藏时无宽度拖拽热区"
     );
     assert!(window.debug_bounds("sidebar-activity-bar").is_some());
 
     window.dispatch_action(ToggleSidebar);
     window.run_until_parked();
     draw_frame(&mut window);
-    assert!(!workspace.read_with(cx, |ws, _| ws.sidebar_state().collapsed));
+    assert!(workspace.read_with(cx, |ws, _| ws.sidebar_state().is_visible()));
     assert!(window.debug_bounds("sidebar-slot-top-nav").is_some());
 }
 
-/// 宽度拖拽:跟手更新,越界钳到旧栈 [160, 500]。
+/// 宽度拖拽:跟手更新,越界钳到 core [160, 720]。
 #[gpui::test]
-fn sidebar_width_drag_clamps_to_old_stack_bounds(cx: &mut TestAppContext) {
+fn sidebar_width_drag_clamps_to_core_bounds(cx: &mut TestAppContext) {
     let (workspace, mut window) = open_workspace(cx);
     window.refresh().unwrap();
     draw_frame(&mut window);
-    let initial = workspace.read_with(cx, |ws, _| ws.sidebar_state().width);
-    assert_eq!(initial, 250.0);
+    let initial = workspace.read_with(cx, |ws, _| ws.sidebar_state().width());
+    assert_eq!(initial, 250);
 
     let handle = window
         .debug_bounds("sidebar-resize-handle")
@@ -1143,11 +1165,8 @@ fn sidebar_width_drag_clamps_to_old_stack_bounds(cx: &mut TestAppContext) {
     window.run_until_parked();
     draw_frame(&mut window);
 
-    let widened = workspace.read_with(cx, |ws, _| ws.sidebar_state().width);
-    assert!(
-        (widened - 370.0).abs() < 1.0,
-        "宽度应跟手到 370,实际 {widened}"
-    );
+    let widened = workspace.read_with(cx, |ws, _| ws.sidebar_state().width());
+    assert_eq!(widened, 370, "宽度应跟手到 370,实际 {widened}");
 
     // 第二次拖到窗口左缘:超出下限被钳到 160。
     let handle = window
@@ -1162,17 +1181,20 @@ fn sidebar_width_drag_clamps_to_old_stack_bounds(cx: &mut TestAppContext) {
     window.simulate_mouse_up(target, MouseButton::Left, Modifiers::default());
     window.run_until_parked();
 
-    let narrowed = workspace.read_with(cx, |ws, _| ws.sidebar_state().width);
-    assert_eq!(narrowed, 160.0, "旧栈宽度下限 160");
+    let narrowed = workspace.read_with(cx, |ws, _| ws.sidebar_state().width());
+    assert_eq!(narrowed, 160, "core 宽度下限 160");
 }
 
 /// 恢复形态:仅下槽 active 时渲染 single-bottom。
 #[gpui::test]
 fn sidebar_bottom_only_restore_renders_single_bottom_slot(cx: &mut TestAppContext) {
-    let (workspace, mut window) = open_workspace(cx);
-    workspace.update(cx, |ws, _| {
-        ws.set_sidebar_views_for_test(None, Some(SideViewId::AgentFiles));
-    });
+    let mut sidebar = SidebarState::default();
+    sidebar.close_view(SideViewId::Nav);
+    sidebar
+        .move_button_to_slot(SideViewId::AgentFiles, slterm_sidebar::SideSlot::Lower, 0)
+        .unwrap();
+    sidebar.click_button(SideViewId::AgentFiles).unwrap();
+    let (_workspace, mut window) = open_workspace_with_sidebar(cx, sidebar);
     window.refresh().unwrap();
     draw_frame(&mut window);
 
@@ -1608,6 +1630,16 @@ fn launch_terminal_tab_freezes_the_full_command_into_meta(cx: &mut TestAppContex
 /// 冷恢复夹具:两 tab、tab0 左右分屏、逐叶 cwd/launch/agent、侧栏双槽与
 /// 窗口态全部写进磁盘 session.json(崩溃形态 `clean_exit=false`)。
 fn write_crash_snapshot(path: &std::path::Path, cwd1: &str, cwd2: &str) {
+    let mut sidebar = SidebarState::default();
+    sidebar.click_button(SideViewId::Explorer).unwrap();
+    sidebar
+        .move_button_to_slot(SideViewId::AgentFiles, slterm_sidebar::SideSlot::Lower, 0)
+        .unwrap();
+    sidebar.click_button(SideViewId::AgentFiles).unwrap();
+    sidebar.set_width(312);
+    sidebar.set_ratio(0.618).unwrap();
+    let sidebar =
+        serde_json::to_value(crate::session::SidebarSession::from_state(&sidebar)).unwrap();
     let profile = |cwd: &str| {
         serde_json::json!({
             "kind": "profile",
@@ -1657,13 +1689,7 @@ fn write_crash_snapshot(path: &std::path::Path, cwd1: &str, cwd2: &str) {
             }
         ],
         "window": { "width": 1024, "height": 640, "maximized": false },
-        "sidebar": {
-            "collapsed": false,
-            "active_view_top": "explorer",
-            "active_view_bottom": "agent_files",
-            "width": 312.0,
-            "ratio_permille": 618
-        },
+        "sidebar": sidebar,
         "clean_exit": false
     });
     std::fs::write(path, serde_json::to_string_pretty(&session).unwrap()).unwrap();
@@ -1685,6 +1711,7 @@ fn crashed_snapshot_restores_tabs_split_cwd_and_sidebar_within_one_tick(cx: &mut
     write_crash_snapshot(&path, &cwd1, &cwd2);
 
     let plan = prepare_startup_at(&path, true);
+    let expected_sidebar = plan.sidebar.clone();
     let expected_tabs = plan.session.as_ref().expect("应恢复").tabs.clone();
     let (workspace, mut window, _ai) =
         open_workspace_with_startup(cx, WorkspaceStartup::NewTerminal { cwd: None }, plan);
@@ -1728,18 +1755,9 @@ fn crashed_snapshot_restores_tabs_split_cwd_and_sidebar_within_one_tick(cx: &mut
         Some(cwd2.clone())
     );
 
-    // 侧栏骨架态随现场恢复。
-    let sidebar = workspace.read_with(cx, |ws, _| *ws.sidebar_state());
-    assert_eq!(
-        sidebar,
-        SidebarState {
-            collapsed: false,
-            active_view_top: Some(SideViewId::Explorer),
-            active_view_bottom: Some(SideViewId::AgentFiles),
-            width: 312.0,
-            ratio_permille: 618,
-        }
-    );
+    // 侧栏组织状态与真实 Host 随现场恢复。
+    let sidebar = workspace.read_with(cx, |ws, _| ws.sidebar_state().clone());
+    assert_eq!(sidebar, expected_sidebar);
 
     // agent 恢复身份在 hook 确认前已进宿主(快照可续接)。
     let agent = workspace
@@ -1775,7 +1793,9 @@ fn crashed_snapshot_restores_tabs_split_cwd_and_sidebar_within_one_tick(cx: &mut
     let saved = captured.borrow().clone().expect("首拍必须写盘");
     assert_eq!(saved.boot_attempts, 0, "首次成功快照归零断路器");
     assert_eq!(saved.tabs, expected_tabs, "恢复的头一秒即回到现场");
-    assert_eq!(saved.sidebar, sidebar);
+    let saved_sidebar = saved.sidebar.recover().expect("快照侧栏必须可恢复");
+    assert_eq!(saved_sidebar.state, sidebar);
+    assert!(saved_sidebar.warnings.is_empty());
     assert!(saved.window.is_some(), "快照带窗口尺寸");
 }
 

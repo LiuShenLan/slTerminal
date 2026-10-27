@@ -5,7 +5,9 @@
 
 use std::collections::BTreeMap;
 
-use slterm_sidebar::{ButtonMovement, SideSlot, SidebarError, SidebarState, SidebarTransition};
+#[cfg(test)]
+use slterm_sidebar::ButtonMovement;
+use slterm_sidebar::{SideSlot, SidebarError, SidebarState, SidebarTransition};
 use slterm_workspace::SideViewId;
 
 /// 拥有侧栏组织状态与全部存活 SideView 实例。
@@ -34,6 +36,16 @@ impl<T> SideViewHost<T> {
         &self.state
     }
 
+    /// 几何修改不产生实例效果，由 Host 保持组织状态唯一入口。
+    pub fn set_width(&mut self, width: u32) {
+        self.state.set_width(width);
+    }
+
+    pub fn set_ratio(&mut self, ratio: f32) -> Result<(), SidebarError> {
+        self.state.set_ratio(ratio)
+    }
+
+    #[cfg(test)]
     pub fn instance(&self, view: SideViewId) -> Option<&T> {
         self.instances.get(&view)
     }
@@ -47,6 +59,7 @@ impl<T> SideViewHost<T> {
         Ok(self.apply_transition(transition, open))
     }
 
+    #[cfg(test)]
     pub fn activate_shortcut(
         &mut self,
         view: SideViewId,
@@ -62,6 +75,7 @@ impl<T> SideViewHost<T> {
         self.apply_transition(transition, open)
     }
 
+    #[cfg(test)]
     pub fn close_view(&mut self, view: SideViewId) -> SidebarTransition {
         let transition = self.state.close_view(view);
         self.apply_transition(transition, |_| {
@@ -69,14 +83,17 @@ impl<T> SideViewHost<T> {
         })
     }
 
+    #[cfg(test)]
     pub fn set_button_hidden(&mut self, view: SideViewId, hidden: bool) {
         self.state.set_button_hidden(view, hidden);
     }
 
+    #[cfg(test)]
     pub fn reorder_button(&mut self, view: SideViewId, movement: ButtonMovement) {
         self.state.reorder_button(view, movement);
     }
 
+    #[cfg(test)]
     pub fn move_button_to_slot(
         &mut self,
         view: SideViewId,
@@ -89,6 +106,7 @@ impl<T> SideViewHost<T> {
         }))
     }
 
+    #[cfg(test)]
     pub fn restore_default_buttons(&mut self) -> SidebarTransition {
         let transition = self.state.restore_default_buttons();
         self.apply_transition(transition, |_| {
@@ -97,6 +115,7 @@ impl<T> SideViewHost<T> {
     }
 
     /// 显式关闭全部实例；Drop 复用同一路径，保证没有孤儿任务。
+    #[cfg(test)]
     pub fn shutdown(mut self) {
         self.close_all();
     }

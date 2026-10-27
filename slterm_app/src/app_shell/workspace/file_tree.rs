@@ -39,7 +39,7 @@ use crate::app_shell::config::Settings;
 use crate::app_shell::doc_tabs;
 use crate::app_shell::file_drop::{FileDragGhost, FileTreeDrag};
 use crate::i18n::Message;
-use crate::side_panel::{self, SidePanel};
+use crate::side_panel;
 
 mod path_bar;
 
@@ -63,10 +63,9 @@ pub(super) struct FileTreeContextMenu {
     pub(super) position: gpui::Point<gpui::Pixels>,
 }
 
-/// 文件树视图状态:模型 + 输入实体 + 滚动句柄。挂在 workspace 上,
-/// 渲染方法在 [`SltermWorkspace`] 的 impl 里(与旧壳同构)。
+/// Explorer 私有视图状态:输入实体、滚动与编辑草稿。
+/// 共享文件/Git 快照服务由 workspace 独立持有，不随视图实例析构。
 pub(super) struct FileTreeState {
-    pub(super) panel: SidePanel,
     /// 搜索过滤框(gpui-component 输入实体持有 caret/IME 真值)。
     pub(super) search_input: Entity<InputState>,
     /// uniform_list 的唯一滚动模型(不再自持行偏移)。
@@ -102,7 +101,6 @@ impl FileTreeState {
             InputState::new(window, cx).placeholder(language.text(Message::FilesSearchPlaceholder))
         });
         Self {
-            panel: SidePanel::new(),
             search_input,
             scroll: UniformListScrollHandle::new(),
             path_editor: None,
@@ -143,11 +141,10 @@ impl SltermWorkspace {
             return;
         }
         let cwd = self.active_terminal_cwd(cx);
-        self.file_tree.panel.sync(cwd);
+        self.side_panel.sync(cwd);
         // 树根变化/重开 explorer 时对齐递归 watch(同根零成本)。
         let root = self
-            .file_tree
-            .panel
+            .side_panel
             .watch_root()
             .map(std::path::Path::to_path_buf);
         if let Some(watch) = self.fs_watch.as_mut() {
@@ -162,8 +159,7 @@ impl SltermWorkspace {
     /// - 对账后确保事件泵在跑。
     pub(super) fn sync_fs_watch(&mut self, cx: &mut Context<'_, Self>) {
         let tree_root = if self.explorer_open() {
-            self.file_tree
-                .panel
+            self.side_panel
                 .watch_root()
                 .map(std::path::Path::to_path_buf)
         } else {
@@ -211,7 +207,7 @@ impl SltermWorkspace {
                     .update(cx, |workspace, cx| {
                         // 事件合并天然发生在两次 tick 之间:脏集按路径去重。
                         workspace.pump_fs_events(cx);
-                        if workspace.file_tree.panel.harvest_pending() {
+                        if workspace.side_panel.harvest_pending() {
                             cx.notify();
                         }
                         workspace.file_tree_pump_active()
@@ -228,7 +224,7 @@ impl SltermWorkspace {
 
     /// 泵是否应继续:面板后台任务或 watcher 兴趣任一存在。
     fn file_tree_pump_active(&self) -> bool {
-        if self.file_tree.panel.pending() {
+        if self.side_panel.pending() {
             return true;
         }
         self.fs_watch
@@ -248,7 +244,7 @@ impl SltermWorkspace {
             return;
         }
         if !pending.dirs.is_empty() {
-            self.file_tree.panel.request_refresh();
+            self.side_panel.request_refresh();
             if self.explorer_open() {
                 // 复用既有同步链:harvest + 新根对账 + worker 重臂。
                 self.sync_file_tree(cx);
@@ -289,8 +285,7 @@ impl SltermWorkspace {
     ) {
         if matches!(event, InputEvent::Change) {
             self.file_tree.scroll.scroll_to_item(0, ScrollStrategy::Top);
-            self.file_tree
-                .panel
+            self.side_panel
                 .set_file_search_query(input.read(cx).value().to_string());
             self.ensure_file_tree_pump(cx);
             cx.notify();
@@ -304,8 +299,8 @@ impl SltermWorkspace {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
-        if self.file_tree.panel.browse_directory(path) {
-            self.file_tree.panel.set_file_search_query(String::new());
+        if self.side_panel.browse_directory(path) {
+            self.side_panel.set_file_search_query(String::new());
             self.file_tree
                 .search_input
                 .update(cx, |input, cx| input.set_value("", window, cx));
@@ -334,40 +329,36 @@ impl SltermWorkspace {
         let language = cx.global::<Settings>().language;
         let theme = cx.theme();
         let muted = theme.muted_foreground;
-        let search_active = !self.file_tree.panel.search.trim().is_empty();
-        let search_pending = self.file_tree.panel.file_search_pending();
-        let search_error = self.file_tree.panel.file_search_error().is_some();
+        let search_active = !self.side_panel.search.trim().is_empty();
+        let search_pending = self.side_panel.file_search_pending();
+        let search_error = self.side_panel.file_search_error().is_some();
         let search_status: Option<SharedString> = search_active.then(|| {
             let text = if search_error {
                 language.text(Message::FilesSearchFailed).to_owned()
             } else if search_pending {
                 language.text(Message::FilesSearchRunning).to_owned()
-            } else if self.file_tree.panel.file_index_truncated() {
+            } else if self.side_panel.file_index_truncated() {
                 language.format(
                     Message::FilesSearchLimited,
-                    &[("count", &self.file_tree.panel.file_rows().len().to_string())],
+                    &[("count", &self.side_panel.file_rows().len().to_string())],
                 )
             } else {
                 language.format(
                     Message::FilesSearchCount,
-                    &[(
-                        "count",
-                        &self.file_tree.panel.file_search_total().to_string(),
-                    )],
+                    &[("count", &self.side_panel.file_search_total().to_string())],
                 )
             };
             text.into()
         });
         let root_notice = self
-            .file_tree
-            .panel
+            .side_panel
             .localized_root_notice(language)
             .map(|notice| SharedString::from(notice.to_owned()));
         let delete_notice = self.file_tree.notice.clone().map(SharedString::from);
         let empty = self.file_tree_empty_state(language);
-        let row_count = self.file_tree.panel.file_rows().len();
+        let row_count = self.side_panel.file_rows().len();
         let scroll_handle = self.file_tree.scroll.clone();
-        let search_options = self.file_tree.panel.search_options();
+        let search_options = self.side_panel.search_options();
         let search_box = div()
             .id("file-tree-search")
             .debug_selector(|| "file-tree-search".to_owned())
@@ -405,9 +396,9 @@ impl SltermWorkspace {
                         button.text_color(theme.primary)
                     })
                     .on_click(cx.listener(|this, _, _, cx| {
-                        let mut options = this.file_tree.panel.search_options();
+                        let mut options = this.side_panel.search_options();
                         options.match_case = !options.match_case;
-                        this.file_tree.panel.set_file_search_options(options);
+                        this.side_panel.set_file_search_options(options);
                         this.ensure_file_tree_pump(cx);
                         cx.notify();
                     })),
@@ -424,9 +415,9 @@ impl SltermWorkspace {
                         button.text_color(theme.primary)
                     })
                     .on_click(cx.listener(|this, _, _, cx| {
-                        let mut options = this.file_tree.panel.search_options();
+                        let mut options = this.side_panel.search_options();
                         options.whole_word = !options.whole_word;
-                        this.file_tree.panel.set_file_search_options(options);
+                        this.side_panel.set_file_search_options(options);
                         this.ensure_file_tree_pump(cx);
                         cx.notify();
                     })),
@@ -443,9 +434,9 @@ impl SltermWorkspace {
                         button.text_color(theme.primary)
                     })
                     .on_click(cx.listener(|this, _, _, cx| {
-                        let mut options = this.file_tree.panel.search_options();
+                        let mut options = this.side_panel.search_options();
                         options.regex = !options.regex;
-                        this.file_tree.panel.set_file_search_options(options);
+                        this.side_panel.set_file_search_options(options);
                         this.ensure_file_tree_pump(cx);
                         cx.notify();
                     })),
@@ -502,8 +493,8 @@ impl SltermWorkspace {
                                     // 刷新同时恢复「跟随当前 pane」:否则路径栏/
                                     // `..` 产生的窗口内根会继续压住终端 cwd,
                                     // 按钮只会刷新旧目录。
-                                    this.file_tree.panel.clear_custom_root();
-                                    this.file_tree.panel.request_refresh();
+                                    this.side_panel.clear_custom_root();
+                                    this.side_panel.request_refresh();
                                     this.sync_file_tree(cx);
                                     cx.notify();
                                 })),
@@ -716,10 +707,10 @@ impl SltermWorkspace {
         match self.send_path_to_recycle_bin(&path) {
             Ok(()) => {
                 self.file_tree.notice = None;
-                if self.file_tree.panel.selected.as_ref() == Some(&path) {
-                    self.file_tree.panel.selected = None;
+                if self.side_panel.selected.as_ref() == Some(&path) {
+                    self.side_panel.selected = None;
                 }
-                self.file_tree.panel.request_refresh();
+                self.side_panel.request_refresh();
                 self.sync_file_tree(cx);
             }
             Err(error) => {
@@ -735,17 +726,17 @@ impl SltermWorkspace {
     /// 只经 `SidePanel::click_row` 的公开语义(未展开目录 = 展开),不碰私有
     /// `expanded` 集合;搜索态由提交路径先清空,这里只做防御。
     fn reveal_file_tree_parent(&mut self, path: &Path) {
-        if !self.file_tree.panel.search.trim().is_empty() {
+        if !self.side_panel.search.trim().is_empty() {
             return;
         }
         let Some(parent) = path.parent() else {
             return;
         };
-        let index = self.file_tree.panel.file_rows().iter().position(|row| {
+        let index = self.side_panel.file_rows().iter().position(|row| {
             row.is_dir && !row.is_parent && row.path.as_path() == parent && !row.expanded
         });
         if let Some(index) = index {
-            self.file_tree.panel.click_row(index);
+            self.side_panel.click_row(index);
         }
     }
 
@@ -767,22 +758,16 @@ impl SltermWorkspace {
         &self,
         language: crate::i18n::UiLanguage,
     ) -> Option<(SharedString, SharedString)> {
-        if self
-            .file_tree
-            .panel
-            .file_rows()
-            .iter()
-            .any(|row| !row.is_parent)
-        {
+        if self.side_panel.file_rows().iter().any(|row| !row.is_parent) {
             return None;
         }
-        let pair = if !self.file_tree.panel.search.trim().is_empty() {
-            if self.file_tree.panel.file_search_error().is_some() {
+        let pair = if !self.side_panel.search.trim().is_empty() {
+            if self.side_panel.file_search_error().is_some() {
                 (
                     language.text(Message::FilesSearchFailed),
                     language.text(Message::FilesEmptyFailedHint),
                 )
-            } else if self.file_tree.panel.file_search_pending() {
+            } else if self.side_panel.file_search_pending() {
                 (
                     language.text(Message::FilesSearchRunning),
                     language.text(Message::FilesEmptyReading),
@@ -793,17 +778,17 @@ impl SltermWorkspace {
                     language.text(Message::FilesEmptyFailedHint),
                 )
             }
-        } else if self.file_tree.panel.snapshot_pending() {
+        } else if self.side_panel.snapshot_pending() {
             (
                 language.text(Message::FilesEmptyReading),
                 language.text(Message::FilesEmptyReading),
             )
-        } else if self.file_tree.panel.enumeration_failed() {
+        } else if self.side_panel.enumeration_failed() {
             (
                 language.text(Message::FilesEmptyFailed),
                 language.text(Message::FilesEmptyFailedHint),
             )
-        } else if self.file_tree.panel.root().is_none() {
+        } else if self.side_panel.root().is_none() {
             (
                 language.text(Message::FilesEmptyNoRoot),
                 language.text(Message::FilesEmptyNoRoot),
@@ -819,7 +804,7 @@ impl SltermWorkspace {
 
     /// 单行:34px 行距里画 30px 水洗;行内容只按行号取模型。
     fn render_file_tree_row(&self, visible_ix: usize, cx: &Context<'_, Self>) -> AnyElement {
-        let Some(row) = self.file_tree.panel.file_rows().get(visible_ix).cloned() else {
+        let Some(row) = self.side_panel.file_rows().get(visible_ix).cloned() else {
             return div().h(px(ROW_PITCH)).into_any_element();
         };
         let theme = cx.theme();
@@ -828,14 +813,13 @@ impl SltermWorkspace {
         let selected_bg = theme.tab_active;
         let selected_ring = theme.ring.opacity(0.16);
         let symbol_family: SharedString = REQUIRED_FONT_FAMILY.into();
-        let selected = self.file_tree.panel.selected.as_ref() == Some(&row.path);
-        let searching = !self.file_tree.panel.search.trim().is_empty();
+        let selected = self.side_panel.selected.as_ref() == Some(&row.path);
+        let searching = !self.side_panel.search.trim().is_empty();
         let path_hint: Option<SharedString> = searching.then(|| {
             row.path
                 .parent()
                 .and_then(|parent| {
-                    self.file_tree
-                        .panel
+                    self.side_panel
                         .root()
                         .and_then(|root| parent.strip_prefix(root).ok())
                 })
@@ -951,14 +935,14 @@ impl SltermWorkspace {
                             return;
                         }
                         if is_dir {
-                            if this.file_tree.panel.click_row(visible_ix) {
+                            if this.side_panel.click_row(visible_ix) {
                                 cx.notify();
                             } else {
-                                this.file_tree.panel.selected = Some(path.clone());
+                                this.side_panel.selected = Some(path.clone());
                                 cx.notify();
                             }
                         } else {
-                            this.file_tree.panel.selected = Some(path.clone());
+                            this.side_panel.selected = Some(path.clone());
                             cx.notify();
                         }
                     }))
@@ -1011,8 +995,7 @@ impl SltermWorkspace {
 
     #[cfg(all(test, feature = "gpui-test-support"))]
     pub(crate) fn file_tree_row_names_for_test(&self) -> Vec<String> {
-        self.file_tree
-            .panel
+        self.side_panel
             .file_rows()
             .iter()
             .map(|row| row.name.clone())
@@ -1021,12 +1004,12 @@ impl SltermWorkspace {
 
     #[cfg(all(test, feature = "gpui-test-support"))]
     pub(crate) fn file_tree_root_for_test(&self) -> Option<PathBuf> {
-        self.file_tree.panel.root().map(PathBuf::from)
+        self.side_panel.root().map(PathBuf::from)
     }
 
     #[cfg(all(test, feature = "gpui-test-support"))]
     pub(crate) fn file_tree_selected_for_test(&self) -> Option<PathBuf> {
-        self.file_tree.panel.selected.clone()
+        self.side_panel.selected.clone()
     }
 
     #[cfg(all(test, feature = "gpui-test-support"))]
@@ -1036,12 +1019,12 @@ impl SltermWorkspace {
 
     #[cfg(all(test, feature = "gpui-test-support"))]
     pub(crate) fn file_tree_search_query_for_test(&self) -> String {
-        self.file_tree.panel.search.clone()
+        self.side_panel.search.clone()
     }
 
     #[cfg(all(test, feature = "gpui-test-support"))]
     pub(crate) fn file_tree_search_options_for_test(&self) -> crate::side_panel::FileSearchOptions {
-        self.file_tree.panel.search_options()
+        self.side_panel.search_options()
     }
 
     #[cfg(all(test, feature = "gpui-test-support"))]

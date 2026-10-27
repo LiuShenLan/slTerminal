@@ -197,7 +197,7 @@ pub(super) fn resolve_directory_in(
 impl SltermWorkspace {
     fn file_tree_path_origin(&self) -> PathOrigin {
         PathOrigin {
-            root: self.file_tree.panel.root().map(Path::to_path_buf),
+            root: self.side_panel.root().map(Path::to_path_buf),
         }
     }
 
@@ -298,10 +298,10 @@ impl SltermWorkspace {
                 }
                 match result {
                     Ok(path) => {
-                        let already_open = this.file_tree.panel.root() == Some(path.as_path());
-                        let changed = this.file_tree.panel.browse_directory(path);
+                        let already_open = this.side_panel.root() == Some(path.as_path());
+                        let changed = this.side_panel.browse_directory(path);
                         if changed || already_open {
-                            this.file_tree.panel.set_file_search_query(String::new());
+                            this.side_panel.set_file_search_query(String::new());
                             this.file_tree
                                 .search_input
                                 .update(cx, |input, cx| input.set_value("", window, cx));
@@ -446,7 +446,7 @@ impl SltermWorkspace {
         self.file_tree.context_menu = None;
         self.file_tree.notice = None;
         let origin = NameOrigin {
-            root: self.file_tree.panel.root().map(Path::to_path_buf),
+            root: self.side_panel.root().map(Path::to_path_buf),
             target: kind.target().to_path_buf(),
         };
         let language = cx.global::<Settings>().language;
@@ -564,17 +564,17 @@ impl SltermWorkspace {
                     Ok(path) => {
                         this.file_tree.name_editor = None;
                         this.file_tree.notice = None;
-                        this.file_tree.panel.selected = Some(path.clone());
+                        this.side_panel.selected = Some(path.clone());
                         // 搜索态下新条目不在平铺结果里;清过滤词让树形结果
                         // 回到可定位状态,再展开父目录。
-                        if !this.file_tree.panel.search.trim().is_empty() {
-                            this.file_tree.panel.set_file_search_query(String::new());
+                        if !this.side_panel.search.trim().is_empty() {
+                            this.side_panel.set_file_search_query(String::new());
                             this.file_tree
                                 .search_input
                                 .update(cx, |input, cx| input.set_value("", window, cx));
                         }
                         this.reveal_file_tree_parent(&path);
-                        this.file_tree.panel.request_refresh();
+                        this.side_panel.request_refresh();
                         this.sync_file_tree(cx);
                         this.focus_active(window, cx);
                     }
@@ -617,7 +617,7 @@ impl SltermWorkspace {
         &mut self,
         cx: &mut Context<'_, Self>,
     ) -> Option<AnyElement> {
-        let root = self.file_tree.panel.root().map(Path::to_path_buf);
+        let root = self.side_panel.root().map(Path::to_path_buf);
         if self
             .file_tree
             .name_editor

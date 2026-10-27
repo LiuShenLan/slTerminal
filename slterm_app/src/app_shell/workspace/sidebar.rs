@@ -1,33 +1,22 @@
 //! 侧栏骨架:ActivityBar + 上下双槽内容区。
 //!
-//! 槽位状态机沿用旧栈侧栏的纯函数语义:
-//! - `toggle_view_pure`:点击未打开视图 = 打开并隐式替换同槽旧视图;
-//!   点击已打开视图 = 关闭该槽。
-//! - `derive_layout`:双空 hidden / 仅上 single-top / 仅下
-//!   single-bottom / 双开 split。
-//! - `reconcile_views`:持久化恢复时把未注册或错槽的 active view 置空;
-//!   「缺失注册 id 补按钮」由封闭集每帧重建按钮列表机械保证,无需追加状态。
+//! `slterm_sidebar::SidebarState` 是按钮顺序、显隐、槽位、打开视图、显示意图、
+//! 宽度与比例的唯一事实；`SideViewHost` 消费转换效果管理真实实体。本模块只
+//! 负责展示与手势换算，不再推断第二套槽位或持久化 DTO。
 //!
-//! 本模块只落骨架与占位:视图内容归各视图模块,图标归主题体系;按钮换区排序
-//! 归后续步骤。`SidebarState` 的字段是 session schema 的
-//! 持久化面(归 session 所有),既有字段追加一律走 `serde(default)`。
-//!
-//! 视图形状收缩为封闭集 [`SideViewId`]:按钮列表由 [`side_view_defs`] 每帧
-//! 重建,槽位归属由 [`SideViewIdExt::zone`] 单点裁定(本模块无拖拽换区)。
-//!
-//! 双槽同时打开时按 `ratio_permille` 分配高度,中间分隔条可拖拽。
-//! 拖拽沿用宽度热区的 overlay 方案:手势期间只改千分比并重绘,终端网格
-//! 零重排、不触发即时写盘(1 Hz 快照自然持久化)。
+//! 双槽同时打开时按 core 比例分配高度,中间分隔条可拖拽。拖拽只改内存态并
+//! 重绘,终端网格零重排、不触发即时写盘。
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AnyElement, Context, InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent,
-    MouseMoveEvent, ParentElement as _, SharedString, StatefulInteractiveElement as _, Styled as _,
-    canvas, div, px,
+    AnyElement, AppContext as _, Context, InteractiveElement as _, IntoElement, MouseButton,
+    MouseDownEvent, MouseMoveEvent, ParentElement as _, SharedString,
+    StatefulInteractiveElement as _, Styled as _, canvas, div, px,
 };
 use gpui_component::{ActiveTheme as _, Icon, IconName};
-use serde::{Deserialize, Serialize};
+use slterm_sidebar::SideSlot;
 
+pub(crate) use slterm_sidebar::SidebarState;
 pub(crate) use slterm_workspace::SideViewId;
 
 use super::SltermWorkspace;
@@ -42,39 +31,14 @@ const TAB_ROW_HEIGHT: f32 = 30.0;
 const TAB_ROW_GAP: f32 = 2.0;
 /// 宽度拖拽热区宽度(内容区右缘竖条)。
 pub(crate) const SIDEBAR_RESIZE_HANDLE_WIDTH: f32 = 4.0;
-/// 侧栏内容区默认宽度。
-pub(crate) const SIDEBAR_WIDTH_DEFAULT: f32 = 250.0;
-/// 侧栏内容区最小宽度(旧栈同值)。
-pub(super) const SIDEBAR_WIDTH_MIN: f32 = 160.0;
-/// 侧栏内容区最大宽度(旧栈同值)。
-pub(super) const SIDEBAR_WIDTH_MAX: f32 = 500.0;
-/// 双槽高度比例默认值(旧栈 splitRatio 50/50)。
-pub(crate) const SIDEBAR_SPLIT_RATIO_DEFAULT: u16 = 500;
-/// 上槽最小占比:防止任一槽被拖到不可用高度。
-pub(super) const SIDEBAR_SPLIT_RATIO_MIN: u16 = 100;
-/// 上槽最大占比(下槽至少保留 10%)。
-pub(super) const SIDEBAR_SPLIT_RATIO_MAX: u16 = 900;
+/// 侧栏内容区最小宽度。
+pub(super) const SIDEBAR_WIDTH_MIN: f32 = SidebarState::MIN_WIDTH as f32;
+/// 侧栏内容区最大宽度。
+pub(super) const SIDEBAR_WIDTH_MAX: f32 = SidebarState::MAX_WIDTH as f32;
 /// 双槽分隔条命中带高度(视觉线居中 1px,整带可拖)。
 const SIDEBAR_SPLIT_DIVIDER_HEIGHT: f32 = 5.0;
 
-/// 侧栏半区标识。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum SidebarZone {
-    Top,
-    Bottom,
-}
-
-impl SidebarZone {
-    /// 调试/测试选择器用短名。
-    pub(super) const fn as_str(self) -> &'static str {
-        match self {
-            Self::Top => "top",
-            Self::Bottom => "bottom",
-        }
-    }
-}
-
-/// 双槽布局推导结果(-)。
+/// 双槽布局推导结果。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum SidebarLayout {
     Hidden,
@@ -83,20 +47,12 @@ pub(super) enum SidebarLayout {
     Split,
 }
 
-/// core 身份到本壳展示规则的扩展；规范文本仍由 core 单一解析。
+/// core 身份到本壳展示文案的扩展。
 trait SideViewIdExt {
-    fn from_id(id: &str) -> Option<Self>
-    where
-        Self: Sized;
     fn title(self) -> Message;
-    fn zone(self) -> SidebarZone;
 }
 
 impl SideViewIdExt for SideViewId {
-    fn from_id(id: &str) -> Option<Self> {
-        id.parse().ok()
-    }
-
     fn title(self) -> Message {
         match self {
             Self::Nav => Message::SidebarViewNav,
@@ -105,16 +61,9 @@ impl SideViewIdExt for SideViewId {
             Self::AgentFiles => Message::SidebarViewAgentFiles,
         }
     }
-
-    fn zone(self) -> SidebarZone {
-        match self {
-            Self::AgentFiles => SidebarZone::Bottom,
-            Self::Nav | Self::Explorer | Self::Commit => SidebarZone::Top,
-        }
-    }
 }
 
-/// side view 注册项骨架:id + title;icon 归主题体系。
+/// SideView 展示注册项：id + title。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct SideViewDef {
     pub id: SideViewId,
@@ -122,6 +71,7 @@ pub(super) struct SideViewDef {
 }
 
 /// 封闭集定义列表(注册序 = 旧栈 sideViewDefs 注册序)。
+#[cfg(test)]
 pub(super) fn side_view_defs() -> [SideViewDef; 4] {
     SideViewId::ALL.map(|id| SideViewDef {
         id,
@@ -129,200 +79,33 @@ pub(super) fn side_view_defs() -> [SideViewDef; 4] {
     })
 }
 
-/// 侧栏骨架态:collapsed/width/双槽 active view/双槽高度比例。
-///
-/// 已裁归 session:字段直接进 session schema 跟现场恢复,不是设置域
-/// 偏好。宽度用 f32 逻辑像素,载入时 clamp 到旧栈区间;双槽比例用千分比
-/// 整数(上槽占比),与分屏树 `ratio_permille` 同口径,避免 f32 序列化噪声。
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct SidebarState {
-    pub collapsed: bool,
-    pub active_view_top: Option<SideViewId>,
-    pub active_view_bottom: Option<SideViewId>,
-    pub width: f32,
-    pub ratio_permille: u16,
-}
-
-impl Default for SidebarState {
-    /// 旧栈 DEFAULT_OPEN:上槽默认打开导航树,下槽空,侧栏展开,比例 50/50。
-    fn default() -> Self {
-        Self {
-            collapsed: false,
-            active_view_top: Some(SideViewId::Nav),
-            active_view_bottom: None,
-            width: SIDEBAR_WIDTH_DEFAULT,
-            ratio_permille: SIDEBAR_SPLIT_RATIO_DEFAULT,
-        }
-    }
-}
-
-impl Serialize for SidebarState {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        #[derive(Serialize)]
-        struct RawSidebar {
-            collapsed: bool,
-            active_view_top: Option<&'static str>,
-            active_view_bottom: Option<&'static str>,
-            width: f32,
-            ratio_permille: u16,
-        }
-
-        RawSidebar {
-            collapsed: self.collapsed,
-            active_view_top: self.active_view_top.map(|id| id.id_str()),
-            active_view_bottom: self.active_view_bottom.map(|id| id.id_str()),
-            width: self.width,
-            ratio_permille: self.ratio_permille,
-        }
-        .serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for SidebarState {
-    /// 缺失字段回默认值、未注册 id 回未打开、宽度钳制(对齐)。类型级
-    /// 损坏(如数字落入字符串槽)仍按会话解析失败处理,不在此吞掉。
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(default)]
-        struct RawSidebar {
-            collapsed: bool,
-            active_view_top: Option<String>,
-            active_view_bottom: Option<String>,
-            width: f32,
-            /// 按 f32 收脏值:整数/小数/越界都先收敛到 u16 千分比,只有
-            /// 类型级损坏(字符串落数字槽)才拒收整份会话。
-            ratio_permille: f32,
-        }
-
-        impl Default for RawSidebar {
-            fn default() -> Self {
-                let defaults = SidebarState::default();
-                Self {
-                    collapsed: defaults.collapsed,
-                    active_view_top: defaults.active_view_top.map(|id| id.id_str().to_owned()),
-                    active_view_bottom: None,
-                    width: defaults.width,
-                    ratio_permille: f32::from(defaults.ratio_permille),
-                }
-            }
-        }
-
-        let raw = RawSidebar::deserialize(deserializer)?;
-        let state = SidebarState {
-            collapsed: raw.collapsed,
-            active_view_top: raw.active_view_top.as_deref().and_then(SideViewId::from_id),
-            active_view_bottom: raw
-                .active_view_bottom
-                .as_deref()
-                .and_then(SideViewId::from_id),
-            width: clamp_width(raw.width),
-            ratio_permille: clamp_ratio(raw.ratio_permille),
-        };
-        Ok(reconcile_views(&state, &SideViewId::ALL))
-    }
-}
-
-impl SidebarState {
-    /// 指定槽位当前视图。
-    pub(super) fn active_in(&self, zone: SidebarZone) -> Option<SideViewId> {
-        match zone {
-            SidebarZone::Top => self.active_view_top,
-            SidebarZone::Bottom => self.active_view_bottom,
-        }
-    }
-}
-
-/// 启动几何用的侧栏总宽:collapsed 时只剩 ActivityBar(内容区与拖拽热区
-/// 不占布局),与首帧渲染同源——恢复的宽度/开合态不能等首帧后再改网格。
+/// 启动几何用的侧栏总宽；实际不可见时只剩 ActivityBar。
 pub(crate) fn chrome_width(state: &SidebarState) -> f32 {
-    if state.collapsed {
-        ACTIVITY_BAR_SIZE
+    if state.is_visible() {
+        ACTIVITY_BAR_SIZE + f32::from(state.width()) + SIDEBAR_RESIZE_HANDLE_WIDTH
     } else {
-        ACTIVITY_BAR_SIZE + state.width + SIDEBAR_RESIZE_HANDLE_WIDTH
+        ACTIVITY_BAR_SIZE
     }
 }
 
-/// 将宽度钳到旧栈区间;非有限数回退最小宽度(旧栈 clamp 同语义)。
-pub(super) fn clamp_width(width: f32) -> f32 {
-    if !width.is_finite() {
-        return SIDEBAR_WIDTH_MIN;
-    }
-    width.clamp(SIDEBAR_WIDTH_MIN, SIDEBAR_WIDTH_MAX)
-}
-
-/// 双槽比例收敛:四舍五入到整千分比并钳到 [100, 900];非有限值回默认
-/// 50/50(脏会话文件/异常指针坐标不得把某个槽压成零高度)。
-pub(super) fn clamp_ratio(value: f32) -> u16 {
-    if !value.is_finite() {
-        return SIDEBAR_SPLIT_RATIO_DEFAULT;
-    }
-    value.round().clamp(
-        f32::from(SIDEBAR_SPLIT_RATIO_MIN),
-        f32::from(SIDEBAR_SPLIT_RATIO_MAX),
-    ) as u16
-}
-
-/// 指针 y → 上槽占比千分比。`top`/`height` = 侧栏内容区(`sidebar-area`)
-/// 的上一帧矩形;指针越过区域上下缘时由 [`clamp_ratio`] 收敛到边界。
-/// 高度退化(未布局/为 0)回默认比例,不产生除零。
-pub(super) fn sidebar_split_ratio_at(pointer_y: f32, top: f32, height: f32) -> u16 {
+/// 指针 y → 上槽比例；无效几何回默认值，有效输入交给 core 钳制。
+pub(super) fn sidebar_split_ratio_at(pointer_y: f32, top: f32, height: f32) -> f32 {
     if !pointer_y.is_finite() || !top.is_finite() || !height.is_finite() || height <= 0.0 {
-        return SIDEBAR_SPLIT_RATIO_DEFAULT;
+        return SidebarState::DEFAULT_RATIO;
     }
-    clamp_ratio((pointer_y - top) / height * 1000.0)
+    ((pointer_y - top) / height).clamp(SidebarState::MIN_RATIO, SidebarState::MAX_RATIO)
 }
 
-/// /点击视图开关。打开动作同时解除 collapsed——点了按钮就是要看内容。
-/// 返回新状态,不修改入参(纯函数)。
-pub(super) fn toggle_view_pure(state: &SidebarState, id: SideViewId) -> SidebarState {
-    let zone = id.zone();
-    let mut next = *state;
-    let slot = match zone {
-        SidebarZone::Top => &mut next.active_view_top,
-        SidebarZone::Bottom => &mut next.active_view_bottom,
-    };
-    *slot = if *slot == Some(id) { None } else { Some(id) };
-    if next.active_in(zone).is_some() {
-        next.collapsed = false;
-    }
-    next
-}
-
-/// -由双槽打开状态纯推导展示形态。collapsed 不参与推导——
-/// collapsed 是独立的整区开合开关,不改变槽位内容。
+/// 由双槽打开状态纯推导展示形态；显示意图在渲染根单独判定。
 pub(super) fn derive_layout(state: &SidebarState) -> SidebarLayout {
     match (
-        state.active_view_top.is_some(),
-        state.active_view_bottom.is_some(),
+        state.open_view(SideSlot::Upper).is_some(),
+        state.open_view(SideSlot::Lower).is_some(),
     ) {
         (false, false) => SidebarLayout::Hidden,
         (true, false) => SidebarLayout::SingleTop,
         (false, true) => SidebarLayout::SingleBottom,
         (true, true) => SidebarLayout::Split,
-    }
-}
-
-/// 按注册表对齐 active view。
-///
-/// 旧栈在载入时过滤未注册 id、把缺失注册 id 追加到上区末尾;本形态按钮
-/// 列表每帧由封闭集重建(不存在持久化的按钮归属),故对齐只剩 active view
-/// 校验一项:视图必须已注册且处于其固定槽位,否则置空。
-pub(super) fn reconcile_views(state: &SidebarState, registered: &[SideViewId]) -> SidebarState {
-    let valid = |zone: SidebarZone, view: Option<SideViewId>| {
-        view.filter(|id| registered.contains(id) && id.zone() == zone)
-    };
-    SidebarState {
-        collapsed: state.collapsed,
-        active_view_top: valid(SidebarZone::Top, state.active_view_top),
-        active_view_bottom: valid(SidebarZone::Bottom, state.active_view_bottom),
-        width: clamp_width(state.width),
-        ratio_permille: clamp_ratio(f32::from(state.ratio_permille)),
     }
 }
 
@@ -333,9 +116,14 @@ pub(super) struct SidebarResizeDrag {
     pub start_width: f32,
 }
 
-/// 指针位置 → 新宽度(带旧栈区间钳制)。
+/// 指针位置 → 新宽度，按 core 区间钳制。
 pub(super) fn dragged_width(drag: &SidebarResizeDrag, pointer_x: f32) -> f32 {
-    clamp_width(drag.start_width + pointer_x - drag.start_x)
+    let width = drag.start_width + pointer_x - drag.start_x;
+    if width.is_finite() {
+        width.clamp(SIDEBAR_WIDTH_MIN, SIDEBAR_WIDTH_MAX)
+    } else {
+        SIDEBAR_WIDTH_MIN
+    }
 }
 
 /// 进行中的双槽分隔条拖拽。比例由指针在 `sidebar-area` 内的相对 y 直接
@@ -343,10 +131,9 @@ pub(super) fn dragged_width(drag: &SidebarResizeDrag, pointer_x: f32) -> f32 {
 pub(super) struct SidebarSplitDrag;
 
 impl SltermWorkspace {
-    /// ActivityBar:封闭集按钮区。按钮图标归主题体系,本模块用标题首字占位,
-    /// active 态 = 选中底色 + 左侧指示条(旧栈 ActivityBar 同形)。
+    /// ActivityBar:封闭集按钮区；active 态 = 选中底色 + 左侧指示条。
     pub(super) fn render_activity_bar(&self, cx: &mut Context<'_, Self>) -> AnyElement {
-        let state = self.sidebar;
+        let state = self.side_views.state();
         let language = cx.global::<Settings>().language;
         div()
             .id("sidebar-activity-bar")
@@ -361,8 +148,12 @@ impl SltermWorkspace {
             .bg(cx.theme().sidebar)
             .border_r_1()
             .border_color(cx.theme().sidebar_border)
-            .children(side_view_defs().into_iter().map(|def| {
-                let active = state.active_in(def.id.zone()) == Some(def.id);
+            .children(state.visible_buttons().into_iter().map(|id| {
+                let def = SideViewDef {
+                    id,
+                    title: id.title(),
+                };
+                let active = state.open_slot(id).is_some();
                 let hover_bg = cx.theme().list_hover;
                 let active_bg = cx.theme().sidebar_accent;
                 let idle_fg = cx.theme().muted_foreground;
@@ -436,27 +227,28 @@ impl SltermWorkspace {
     /// 侧栏列:顶部常驻 tab 列表 + 其下双槽内容区。
     ///
     /// tab 列表不随双槽全空而消失——它是切换 tab 与拖拽停靠的入口;
-    /// collapsed 才整列隐藏(由 workspace 根判定)。
+    /// 整列是否隐藏由 workspace 根按 core 实际可见性判定。
     pub(super) fn render_sidebar_content(&mut self, cx: &mut Context<'_, Self>) -> AnyElement {
-        let layout = derive_layout(&self.sidebar);
-        let views_open = layout != SidebarLayout::Hidden && !self.sidebar.collapsed;
-        let top_open = self.sidebar.active_view_top.is_some();
-        let bottom_open = self.sidebar.active_view_bottom.is_some();
+        let state = self.side_views.state();
+        let layout = derive_layout(state);
+        let views_open = layout != SidebarLayout::Hidden && state.visible_intent();
+        let top_open = state.open_view(SideSlot::Upper).is_some();
+        let bottom_open = state.open_view(SideSlot::Lower).is_some();
         let split = top_open && bottom_open;
-        // 双槽同时打开时按千分比分配高度;单槽独占整个内容区。
-        let ratio = self.sidebar.ratio_permille;
+        // 双槽同时打开时按 core 比例分配高度;单槽独占整个内容区。
+        let ratio = state.ratio();
         let (top_grow, bottom_grow) = if split {
-            (f32::from(ratio), f32::from(1000u16.saturating_sub(ratio)))
+            (ratio, 1.0 - ratio)
         } else {
             (1.0, 1.0)
         };
         // 视图内容需要 `&mut self`(文件树轮询/路径栏);先求值再进链式
         // 闭包,避免多个闭包同时借 self。
-        let top_view = top_open.then(|| self.render_view_slot(SidebarZone::Top, top_grow, cx));
+        let top_view = top_open.then(|| self.render_view_slot(SideSlot::Upper, top_grow, cx));
         let bottom_view =
-            bottom_open.then(|| self.render_view_slot(SidebarZone::Bottom, bottom_grow, cx));
+            bottom_open.then(|| self.render_view_slot(SideSlot::Lower, bottom_grow, cx));
         let tabs = self.render_tab_list(cx);
-        // 只观测的内容区矩形:分隔条拖拽把指针 y 换算成千分比时读取上一帧
+        // 只观测的内容区矩形:分隔条拖拽把指针 y 换算成比例时读取上一帧
         // 区域,不参与布局(absolute + inset_0)。
         let split_bounds = self.sidebar_split_bounds.clone();
         div()
@@ -583,18 +375,22 @@ impl SltermWorkspace {
     }
 
     /// 单槽内容挂载点:按封闭集分派到各视图渲染函数。
-    /// `grow` = flex 增长因子(双槽时按千分比,单槽 1.0);basis 归零保证
+    /// `grow` = flex 增长因子(双槽时按 core 比例,单槽 1.0);basis 归零保证
     /// 两槽严格按比例分高,不被内容固有高度带偏。
     fn render_view_slot(
         &mut self,
-        zone: SidebarZone,
+        zone: SideSlot,
         grow: f32,
         cx: &mut Context<'_, Self>,
     ) -> AnyElement {
-        let Some(id) = self.sidebar.active_in(zone) else {
+        let Some(id) = self.side_views.state().open_view(zone) else {
             return div().into_any_element();
         };
-        let selector = format!("sidebar-slot-{}-{}", zone.as_str(), id.id_str());
+        let zone_name = match zone {
+            SideSlot::Upper => "top",
+            SideSlot::Lower => "bottom",
+        };
+        let selector = format!("sidebar-slot-{zone_name}-{}", id.id_str());
         let body = match id {
             SideViewId::Explorer => self.render_file_tree(cx),
             SideViewId::Nav => self.render_nav_view(cx),
@@ -617,23 +413,14 @@ impl SltermWorkspace {
 
     /// explorer 槽当前可见(内容渲染/跟随 cwd 的单一判据)。
     pub(super) fn explorer_open(&self) -> bool {
-        !self.sidebar.collapsed
-            && self
-                .sidebar
-                .active_in(SideViewId::Explorer.zone())
-                .is_some_and(|id| id == SideViewId::Explorer)
+        let state = self.side_views.state();
+        state.is_visible() && state.open_slot(SideViewId::Explorer).is_some()
     }
 
-    /// commit 槽当前可见(文件树后台快照刷新判据;与 explorer 同形)。
-    ///
-    /// Commit 与 explorer 同属上槽,二者互斥;文件树域据此把 `sync_file_tree`
-    /// 的门从「仅 explorer」扩到「explorer 或 commit」。
+    /// Commit 当前实际可见；文件树后台快照刷新判据与 Explorer 同形。
     pub(super) fn commit_open(&self) -> bool {
-        !self.sidebar.collapsed
-            && self
-                .sidebar
-                .active_in(SideViewId::Commit.zone())
-                .is_some_and(|id| id == SideViewId::Commit)
+        let state = self.side_views.state();
+        state.is_visible() && state.open_slot(SideViewId::Commit).is_some()
     }
 
     /// 宽度拖拽热区:内容区右缘 4px 竖条。
@@ -655,7 +442,7 @@ impl SltermWorkspace {
                     }
                     this.sidebar_resize = Some(SidebarResizeDrag {
                         start_x: f32::from(event.position.x),
-                        start_width: this.sidebar.width,
+                        start_width: f32::from(this.side_views.state().width()),
                     });
                     cx.stop_propagation();
                     cx.notify();
@@ -714,7 +501,9 @@ impl SltermWorkspace {
     }
 
     fn toggle_sidebar_view(&mut self, id: SideViewId, cx: &mut Context<'_, Self>) {
-        self.sidebar = toggle_view_pure(&self.sidebar, id);
+        self.side_views
+            .click_button(id, |view| cx.new(|_| super::side_view::SideView::new(view)))
+            .expect("活动栏点击必须对应可见按钮");
         cx.notify();
     }
 
@@ -727,8 +516,8 @@ impl SltermWorkspace {
             return;
         };
         let width = dragged_width(drag, f32::from(event.position.x));
-        if (self.sidebar.width - width).abs() > f32::EPSILON {
-            self.sidebar.width = width;
+        if (f32::from(self.side_views.state().width()) - width).abs() > f32::EPSILON {
+            self.side_views.set_width(width.round().max(0.0) as u32);
             cx.notify();
         }
     }
@@ -740,7 +529,7 @@ impl SltermWorkspace {
     }
 
     /// 分隔条拖拽的指针移动:按 `sidebar-area` 上一帧矩形把指针 y 换算成
-    /// 上槽千分比。只改 `SidebarState` 并重绘——不触碰 pane/pane 树,终端
+    /// 上槽比例。只改 `SidebarState` 并重绘——不触碰 pane/pane 树,终端
     /// 网格零重排;持久化由 1 Hz 自动保存快照自然带走,不在此写盘。
     fn update_sidebar_split_drag(&mut self, event: &MouseMoveEvent, cx: &mut Context<'_, Self>) {
         if event.pressed_button != Some(MouseButton::Left) {
@@ -758,8 +547,10 @@ impl SltermWorkspace {
             f32::from(bounds.origin.y),
             f32::from(bounds.size.height),
         );
-        if self.sidebar.ratio_permille != ratio {
-            self.sidebar.ratio_permille = ratio;
+        if (self.side_views.state().ratio() - ratio).abs() > f32::EPSILON {
+            self.side_views
+                .set_ratio(ratio)
+                .expect("指针换算必须产生有限侧栏比例");
             cx.notify();
         }
     }
@@ -772,7 +563,8 @@ impl SltermWorkspace {
 
     /// 侧栏整区开合(策略动作 ctrl-shift-b)。
     pub(super) fn toggle_sidebar(&mut self, cx: &mut Context<'_, Self>) {
-        self.sidebar.collapsed = !self.sidebar.collapsed;
+        self.side_views
+            .toggle_sidebar(|view| cx.new(|_| super::side_view::SideView::new(view)));
         cx.notify();
     }
 }
@@ -795,212 +587,57 @@ mod sidebar_state_tests {
             assert_eq!(UiLanguage::ZhCn.text(id.title()), zh);
             assert_eq!(UiLanguage::EnUs.text(id.title()), en);
         }
-        // 注册表每帧重建时标题与 id 同源。
         for def in side_view_defs() {
             assert_eq!(def.title, def.id.title());
         }
     }
 
-    fn state(top: Option<SideViewId>, bottom: Option<SideViewId>) -> SidebarState {
-        SidebarState {
-            collapsed: false,
-            active_view_top: top,
-            active_view_bottom: bottom,
-            width: SIDEBAR_WIDTH_DEFAULT,
-            ratio_permille: SIDEBAR_SPLIT_RATIO_DEFAULT,
-        }
-    }
-
-    /// 关闭的视图点击后打开。
+    /// 展示形态只从 core 双槽状态推导，显示意图不改变槽位。
     #[test]
-    fn closed_view_opens_in_its_slot() {
-        let next = toggle_view_pure(&state(None, None), SideViewId::Nav);
-        assert_eq!(next.active_view_top, Some(SideViewId::Nav));
-        assert_eq!(next.active_view_bottom, None);
+    fn layout_is_derived_from_core_slots() {
+        let mut state = SidebarState::default();
+        assert_eq!(derive_layout(&state), SidebarLayout::SingleTop);
+        state.close_view(SideViewId::Nav);
+        assert_eq!(derive_layout(&state), SidebarLayout::Hidden);
+
+        state
+            .move_button_to_slot(SideViewId::AgentFiles, SideSlot::Lower, 0)
+            .unwrap();
+        state.click_button(SideViewId::AgentFiles).unwrap();
+        assert_eq!(derive_layout(&state), SidebarLayout::SingleBottom);
+        state.click_button(SideViewId::Nav).unwrap();
+        assert_eq!(derive_layout(&state), SidebarLayout::Split);
+        state.toggle_sidebar();
+        assert!(!state.visible_intent());
+        assert_eq!(derive_layout(&state), SidebarLayout::Split);
     }
 
-    /// 已打开的视图点击后关闭。
-    #[test]
-    fn open_view_closes_on_second_click() {
-        let next = toggle_view_pure(&state(Some(SideViewId::Nav), None), SideViewId::Nav);
-        assert_eq!(next.active_view_top, None);
-    }
-
-    /// 覆盖:同槽打开新视图隐式关闭旧视图,无历史记忆。
-    #[test]
-    fn opening_a_sibling_replaces_the_slot_without_history() {
-        let next = toggle_view_pure(&state(Some(SideViewId::Nav), None), SideViewId::Explorer);
-        assert_eq!(next.active_view_top, Some(SideViewId::Explorer));
-    }
-
-    /// 双槽独立:下槽视图开关不影响上槽。
-    #[test]
-    fn bottom_slot_toggles_independently_of_the_top() {
-        let next = toggle_view_pure(&state(Some(SideViewId::Nav), None), SideViewId::AgentFiles);
-        assert_eq!(next.active_view_top, Some(SideViewId::Nav));
-        assert_eq!(next.active_view_bottom, Some(SideViewId::AgentFiles));
-
-        let next = toggle_view_pure(&next, SideViewId::AgentFiles);
-        assert_eq!(next.active_view_top, Some(SideViewId::Nav));
-        assert_eq!(next.active_view_bottom, None);
-    }
-
-    /// 打开动作解除 collapsed;关闭动作保留开合态。
-    #[test]
-    fn opening_a_view_expands_a_collapsed_sidebar() {
-        let mut collapsed = state(None, None);
-        collapsed.collapsed = true;
-        let opened = toggle_view_pure(&collapsed, SideViewId::Nav);
-        assert!(!opened.collapsed);
-        assert_eq!(opened.active_view_top, Some(SideViewId::Nav));
-    }
-
-    /// -双槽布局纯推导。
-    #[test]
-    fn layout_is_derived_from_both_slots() {
-        assert_eq!(derive_layout(&state(None, None)), SidebarLayout::Hidden);
-        assert_eq!(
-            derive_layout(&state(Some(SideViewId::Nav), None)),
-            SidebarLayout::SingleTop
-        );
-        assert_eq!(
-            derive_layout(&state(None, Some(SideViewId::AgentFiles))),
-            SidebarLayout::SingleBottom
-        );
-        assert_eq!(
-            derive_layout(&state(Some(SideViewId::Nav), Some(SideViewId::AgentFiles))),
-            SidebarLayout::Split
-        );
-    }
-
-    /// collapsed 是独立开合开关,不改变槽位推导。
-    #[test]
-    fn collapse_does_not_change_slot_derivation() {
-        let mut collapsed = state(Some(SideViewId::Nav), None);
-        collapsed.collapsed = true;
-        assert_eq!(derive_layout(&collapsed), SidebarLayout::SingleTop);
-    }
-
-    /// 未注册 active view 置空。
-    #[test]
-    fn reconcile_nulls_unregistered_views() {
-        let mut dirty = state(Some(SideViewId::Nav), Some(SideViewId::AgentFiles));
-        dirty.width = 1.0;
-        let reconciled = reconcile_views(&dirty, &[SideViewId::Explorer]);
-        assert_eq!(reconciled.active_view_top, None);
-        assert_eq!(reconciled.active_view_bottom, None);
-        assert_eq!(reconciled.width, SIDEBAR_WIDTH_MIN, "宽度同步钳制");
-    }
-
-    /// 注册但槽位不符的 active view 置空(上槽不可能显示下槽视图)。
-    #[test]
-    fn reconcile_nulls_views_persisted_in_the_wrong_slot() {
-        let wrong = state(Some(SideViewId::AgentFiles), Some(SideViewId::Nav));
-        let reconciled = reconcile_views(&wrong, &SideViewId::ALL);
-        assert_eq!(reconciled.active_view_top, None);
-        assert_eq!(reconciled.active_view_bottom, None);
-    }
-
-    /// 注册且槽位正确时原样保留。
-    #[test]
-    fn reconcile_keeps_registered_views_in_their_slots() {
-        let clean = state(Some(SideViewId::Nav), Some(SideViewId::AgentFiles));
-        assert_eq!(reconcile_views(&clean, &SideViewId::ALL), clean);
-    }
-
-    /// reconcile 保留合法双槽比例,越界值收敛到 [100, 900]。
-    #[test]
-    fn reconcile_preserves_and_clamps_the_split_ratio() {
-        let mut clean = state(Some(SideViewId::Nav), Some(SideViewId::AgentFiles));
-        clean.ratio_permille = 618;
-        assert_eq!(
-            reconcile_views(&clean, &SideViewId::ALL).ratio_permille,
-            618
-        );
-
-        clean.ratio_permille = 5000;
-        assert_eq!(
-            reconcile_views(&clean, &SideViewId::ALL).ratio_permille,
-            SIDEBAR_SPLIT_RATIO_MAX
-        );
-        clean.ratio_permille = 0;
-        assert_eq!(
-            reconcile_views(&clean, &SideViewId::ALL).ratio_permille,
-            SIDEBAR_SPLIT_RATIO_MIN
-        );
-    }
-
-    /// 比例收敛边界——上下限、越界、非有限值与四舍五入。
-    #[test]
-    fn clamp_ratio_converges_to_the_usable_band() {
-        assert_eq!(clamp_ratio(100.0), SIDEBAR_SPLIT_RATIO_MIN);
-        assert_eq!(clamp_ratio(900.0), SIDEBAR_SPLIT_RATIO_MAX);
-        assert_eq!(clamp_ratio(99.4), SIDEBAR_SPLIT_RATIO_MIN);
-        assert_eq!(clamp_ratio(-500.0), SIDEBAR_SPLIT_RATIO_MIN);
-        assert_eq!(clamp_ratio(5000.0), SIDEBAR_SPLIT_RATIO_MAX);
-        assert_eq!(clamp_ratio(617.6), 618, "四舍五入到整千分比");
-        assert_eq!(clamp_ratio(f32::NAN), SIDEBAR_SPLIT_RATIO_DEFAULT);
-        assert_eq!(clamp_ratio(f32::INFINITY), SIDEBAR_SPLIT_RATIO_DEFAULT);
-        assert_eq!(clamp_ratio(f32::NEG_INFINITY), SIDEBAR_SPLIT_RATIO_DEFAULT);
-    }
-
-    /// 指针 y → 上槽千分比;区域上下缘外收敛,退化高度回默认。
+    /// 指针 y → 上槽比例；越界钳制，退化几何回默认。
     #[test]
     fn pointer_y_maps_to_a_clamped_split_ratio() {
-        // 内容区 top=100、高 600:y=400 位于 50%。
-        assert_eq!(sidebar_split_ratio_at(400.0, 100.0, 600.0), 500);
-        // y=250 → 25%。
-        assert_eq!(sidebar_split_ratio_at(250.0, 100.0, 600.0), 250);
-        // 越过上缘/下缘:钳到 10% / 90%。
+        assert_eq!(sidebar_split_ratio_at(400.0, 100.0, 600.0), 0.5);
+        assert_eq!(sidebar_split_ratio_at(250.0, 100.0, 600.0), 0.25);
         assert_eq!(
             sidebar_split_ratio_at(-5_000.0, 100.0, 600.0),
-            SIDEBAR_SPLIT_RATIO_MIN
+            SidebarState::MIN_RATIO
         );
         assert_eq!(
             sidebar_split_ratio_at(5_000.0, 100.0, 600.0),
-            SIDEBAR_SPLIT_RATIO_MAX
+            SidebarState::MAX_RATIO
         );
-        // 未布局/零高/非有限坐标不产生除零,回默认。
         assert_eq!(
             sidebar_split_ratio_at(400.0, 100.0, 0.0),
-            SIDEBAR_SPLIT_RATIO_DEFAULT
+            SidebarState::DEFAULT_RATIO
         );
         assert_eq!(
             sidebar_split_ratio_at(f32::NAN, 100.0, 600.0),
-            SIDEBAR_SPLIT_RATIO_DEFAULT
+            SidebarState::DEFAULT_RATIO
         );
     }
 
-    /// 封闭集解析只接受已登记的规范短名。
+    /// 宽度拖拽纯净换算，并采用 core 的完整宽度区间。
     #[test]
-    fn side_view_ids_parse_closed_set_names_only() {
-        for id in SideViewId::ALL {
-            assert_eq!(SideViewId::from_id(id.id_str()), Some(id));
-        }
-        assert_eq!(SideViewId::from_id("agentFiles"), None);
-        assert_eq!(SideViewId::from_id("obsolete"), None);
-    }
-
-    /// 场景序列 S1/S2:开→替换→关;双槽开→单开。
-    #[test]
-    fn scenario_open_replace_close_sequence() {
-        let mut current = state(None, None);
-        current = toggle_view_pure(&current, SideViewId::Nav);
-        assert_eq!(derive_layout(&current), SidebarLayout::SingleTop);
-        current = toggle_view_pure(&current, SideViewId::Explorer);
-        assert_eq!(current.active_view_top, Some(SideViewId::Explorer));
-        assert_eq!(derive_layout(&current), SidebarLayout::SingleTop);
-        current = toggle_view_pure(&current, SideViewId::AgentFiles);
-        assert_eq!(derive_layout(&current), SidebarLayout::Split);
-        current = toggle_view_pure(&current, SideViewId::AgentFiles);
-        assert_eq!(derive_layout(&current), SidebarLayout::SingleTop);
-        current = toggle_view_pure(&current, SideViewId::Explorer);
-        assert_eq!(derive_layout(&current), SidebarLayout::Hidden);
-    }
-
-    /// 宽度拖拽纯净换算 + 旧栈区间钳制。
-    #[test]
-    fn dragged_width_tracks_pointer_and_clamps_to_old_bounds() {
+    fn dragged_width_tracks_pointer_and_clamps_to_core_bounds() {
         let drag = SidebarResizeDrag {
             start_x: 300.0,
             start_width: 250.0,
@@ -1008,6 +645,6 @@ mod sidebar_state_tests {
         assert_eq!(dragged_width(&drag, 340.0), 290.0);
         assert_eq!(dragged_width(&drag, -10_000.0), SIDEBAR_WIDTH_MIN);
         assert_eq!(dragged_width(&drag, 10_000.0), SIDEBAR_WIDTH_MAX);
-        assert_eq!(clamp_width(f32::NAN), SIDEBAR_WIDTH_MIN);
+        assert_eq!(dragged_width(&drag, f32::NAN), SIDEBAR_WIDTH_MIN);
     }
 }

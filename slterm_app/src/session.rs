@@ -14,9 +14,9 @@
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use serde_json::value::RawValue;
 use slterm_settings::Rgb;
-
-use crate::app_shell::workspace::sidebar::SidebarState;
+use slterm_sidebar::{SidebarRecovery, SidebarRecoveryError, SidebarState};
 
 /// 最高格式版本。无历史会话文件,升级链不迁;追加字段走
 /// `serde(default)` 免升版。
@@ -249,6 +249,56 @@ pub struct WindowState {
     pub maximized: bool,
 }
 
+/// session 内嵌的 core 侧栏原始 JSON；生产快照写为规范形态。
+///
+/// 保留原始对象而非二次定义字段：恢复时仍能检查任意层级重复字段，严格 DTO
+/// 与容错恢复都只经 `slterm_sidebar`。
+#[derive(Debug, Clone)]
+pub struct SidebarSession(Box<RawValue>);
+
+impl PartialEq for SidebarSession {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.get() == other.0.get()
+    }
+}
+
+impl SidebarSession {
+    pub(crate) fn from_state(state: &SidebarState) -> Self {
+        let json = state
+            .to_canonical_json()
+            .expect("有效侧栏状态必须可编码为规范 JSON");
+        Self(RawValue::from_string(json).expect("core 规范 JSON 必须可作为 RawValue"))
+    }
+
+    pub(crate) fn recover(&self) -> Result<SidebarRecovery, SidebarRecoveryError> {
+        SidebarRecovery::from_json(self.0.get())
+    }
+}
+
+impl Default for SidebarSession {
+    fn default() -> Self {
+        Self::from_state(&SidebarState::default())
+    }
+}
+
+impl Serialize for SidebarSession {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.0.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for SidebarSession {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Box::<RawValue>::deserialize(deserializer).map(Self)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Session {
     pub version: u32,
@@ -260,23 +310,13 @@ pub struct Session {
     pub tabs: Vec<TabSession>,
     #[serde(default)]
     pub window: Option<WindowState>,
-    /// 侧栏骨架态(已裁归 session):collapsed/width/双槽 active view/
-    /// 双槽比例。字段追加走 `serde(default)` 免升版;老文件缺整段回默认
-    /// (schema 版本不变)。
-    #[serde(default, deserialize_with = "deserialize_sidebar")]
-    pub sidebar: SidebarState,
+    /// core 侧栏组织状态的原始 JSON；缺整段时写默认值，恢复警告由启动链聚合。
+    #[serde(default)]
+    pub sidebar: SidebarSession,
     /// 1 Hz 自动保存恒 false,只有正常收尾的最后一笔写 true;老文件缺省
     /// false(按异常退出多提示一次,恢复行为不变)。
     #[serde(default)]
     pub clean_exit: bool,
-}
-
-/// 侧栏段缺失/为 null 都回默认值(老文件与手工编辑的空段)。
-fn deserialize_sidebar<'de, D>(deserializer: D) -> Result<SidebarState, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    Ok(Option::<SidebarState>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 impl Session {
@@ -288,7 +328,7 @@ impl Session {
             active_tab,
             tabs,
             window: None,
-            sidebar: SidebarState::default(),
+            sidebar: SidebarSession::default(),
             clean_exit: false,
         }
     }
@@ -562,7 +602,7 @@ mod schema_tests {
         assert_eq!(parse("not json"), None, "损坏文件视为无会话");
     }
 
-    /// 追加字段走 `serde(default)`:只带必需字段的老形态照常解析。
+    /// 追加字段走 `serde(default)`:只带必需字段的形态照常解析。
     #[test]
     fn missing_optional_fields_take_serde_defaults() {
         let json = r#"{"version":1,"active_tab":0,"tabs":[{"cwd":"D:/work"}]}"#;
@@ -570,20 +610,9 @@ mod schema_tests {
         assert_eq!(session.boot_attempts, 0);
         assert_eq!(session.window, None);
         assert!(!session.clean_exit);
-        // 老文件没有侧栏段:回旧栈默认(展开、上槽导航树、250px)。
-        assert_eq!(session.sidebar, SidebarState::default());
-        assert!(!session.sidebar.collapsed);
-        assert_eq!(
-            session.sidebar.active_view_top,
-            Some(crate::app_shell::workspace::sidebar::SideViewId::Nav)
-        );
-        assert_eq!(session.sidebar.active_view_bottom, None);
-        assert_eq!(session.sidebar.width, 250.0);
-        assert_eq!(
-            session.sidebar.ratio_permille,
-            crate::app_shell::workspace::sidebar::SIDEBAR_SPLIT_RATIO_DEFAULT,
-            "缺省双槽比例回 50/50"
-        );
+        let recovery = session.sidebar.recover().expect("默认侧栏必须有效");
+        assert_eq!(recovery.state, SidebarState::default());
+        assert!(recovery.warnings.is_empty());
         let tab = &session.tabs[0];
         assert_eq!(tab.custom_name, None);
         assert_eq!(tab.color, None);
@@ -592,62 +621,75 @@ mod schema_tests {
         assert_eq!(tab.active_pane, 0);
     }
 
-    /// 侧栏骨架态随 session 往返:字段级相等(归 session 的证据)。
+    /// core 侧栏状态经 session 原始 JSON 往返，不经过第二套字段 DTO。
     #[test]
     fn sidebar_state_round_trips_through_the_session_schema() {
-        use crate::app_shell::workspace::sidebar::SideViewId;
+        use slterm_sidebar::SideSlot;
+        use slterm_workspace::SideViewId;
 
-        let json = r#"{
-          "version": 1,
-          "active_tab": 0,
-          "tabs": [],
-          "sidebar": {
-            "collapsed": true,
-            "active_view_top": "explorer",
-            "active_view_bottom": "agent_files",
-            "width": 312.5,
-            "ratio_permille": 618
-          }
-        }"#;
-        let session = parse(json).expect("侧栏段必须可解析");
-        assert!(session.sidebar.collapsed);
-        assert_eq!(session.sidebar.active_view_top, Some(SideViewId::Explorer));
-        assert_eq!(
-            session.sidebar.active_view_bottom,
-            Some(SideViewId::AgentFiles)
-        );
-        assert_eq!(session.sidebar.width, 312.5);
-        assert_eq!(session.sidebar.ratio_permille, 618, "双槽比例字段级往返");
+        let mut state = SidebarState::default();
+        state.click_button(SideViewId::Explorer).unwrap();
+        state
+            .move_button_to_slot(SideViewId::AgentFiles, SideSlot::Lower, 0)
+            .unwrap();
+        state.click_button(SideViewId::AgentFiles).unwrap();
+        state.set_width(312);
+        state.set_ratio(0.618).unwrap();
+        state.toggle_sidebar();
 
-        let reprinted = serde_json::to_string_pretty(&session).expect("必须可序列化");
-        assert_eq!(parse(&reprinted), Some(session), "字段级往返相等");
+        let mut session = Session::new(0, Vec::new());
+        session.sidebar = SidebarSession::from_state(&state);
+        let json = serde_json::to_string_pretty(&session).expect("必须可序列化");
+        let parsed = parse(&json).expect("侧栏段必须可解析");
+        let recovery = parsed.sidebar.recover().expect("规范侧栏必须可恢复");
+        assert_eq!(recovery.state, state);
+        assert!(recovery.warnings.is_empty());
+
+        let reprinted = serde_json::to_string_pretty(&parsed).expect("必须可序列化");
+        assert_eq!(parse(&reprinted), Some(parsed), "字段级往返相等");
     }
 
-    /// 载入防线:未注册 id 与错槽 active view 置空,宽度钳制,
-    /// 不因侧栏段脏数据拒收整份会话。
+    /// 段内脏数据由 core 容错恢复逐字段处理并聚合警告，不拒收整份会话。
     #[test]
-    fn dirty_sidebar_entries_are_reconciled_instead_of_rejecting_the_session() {
+    fn dirty_sidebar_entries_are_recovered_with_aggregated_warnings() {
         let json = r#"{
           "version": 1,
           "active_tab": 0,
           "tabs": [],
           "sidebar": {
-            "collapsed": false,
-            "active_view_top": "agent_files",
-            "active_view_bottom": "obsolete",
-            "width": 9999.0,
-            "ratio_permille": 2000
+            "version": 1,
+            "kind": "sidebar_state",
+            "buttons": [
+              {"slot":"upper","view":"nav"},
+              {"slot":"upper","view":"explorer"},
+              {"slot":"upper","view":"commit"},
+              {"slot":"upper","view":"agent_files"}
+            ],
+            "hidden_buttons": [],
+            "open_views": [{"slot":"upper","view":"obsolete"}],
+            "visible_intent": false,
+            "width": 9999,
+            "ratio": 2.0
           }
         }"#;
-        let session = parse(json).expect("脏侧栏段必须回退而不是拒收");
-        assert_eq!(session.sidebar.active_view_top, None, "错槽视图置空");
-        assert_eq!(session.sidebar.active_view_bottom, None, "未注册视图置空");
-        assert_eq!(session.sidebar.width, 500.0, "宽度钳到上限");
-        assert_eq!(session.sidebar.ratio_permille, 900, "比例钳到上限");
+        let session = parse(json).expect("脏侧栏段必须留给恢复转换");
+        let recovery = session.sidebar.recover().expect("字段级恢复必须成功");
+        assert_eq!(
+            recovery.state.open_view(slterm_sidebar::SideSlot::Upper),
+            None
+        );
+        assert_eq!(recovery.state.width(), SidebarState::DEFAULT_WIDTH);
+        assert_eq!(recovery.state.ratio(), SidebarState::DEFAULT_RATIO);
+        for warning in [
+            slterm_sidebar::SidebarRecoveryWarning::UnknownView,
+            slterm_sidebar::SidebarRecoveryWarning::InvalidWidth,
+            slterm_sidebar::SidebarRecoveryWarning::InvalidRatio,
+        ] {
+            assert!(recovery.warnings.contains(&warning), "缺少警告 {warning:?}");
+        }
     }
 
-    /// 侧栏段内缺 `ratio_permille`(老文件追加字段前的形态)回默认 50/50,
-    /// 不影响其余字段。
+    /// 缺比例只回退该字段并报告，其余有效组织状态保留。
     #[test]
     fn a_sidebar_section_without_a_ratio_takes_the_default() {
         let json = r#"{
@@ -655,29 +697,66 @@ mod schema_tests {
           "active_tab": 0,
           "tabs": [],
           "sidebar": {
-            "collapsed": false,
-            "active_view_top": "nav",
-            "active_view_bottom": "agent_files",
-            "width": 250.0
+            "version": 1,
+            "kind": "sidebar_state",
+            "buttons": [
+              {"slot":"upper","view":"nav"},
+              {"slot":"upper","view":"explorer"},
+              {"slot":"upper","view":"commit"},
+              {"slot":"upper","view":"agent_files"}
+            ],
+            "hidden_buttons": [],
+            "open_views": [{"slot":"upper","view":"nav"}],
+            "visible_intent": true,
+            "width": 250
           }
         }"#;
-        let session = parse(json).expect("缺比例字段必须可解析");
+        let session = parse(json).expect("缺比例字段必须留给恢复转换");
+        let recovery = session.sidebar.recover().expect("字段级恢复必须成功");
+        assert_eq!(recovery.state.ratio(), SidebarState::DEFAULT_RATIO);
         assert_eq!(
-            session.sidebar.ratio_permille,
-            crate::app_shell::workspace::sidebar::SIDEBAR_SPLIT_RATIO_DEFAULT
+            recovery.state.open_view(slterm_sidebar::SideSlot::Upper),
+            Some(slterm_workspace::SideViewId::Nav)
         );
         assert_eq!(
-            session.sidebar.active_view_bottom,
-            Some(crate::app_shell::workspace::sidebar::SideViewId::AgentFiles)
+            recovery.warnings,
+            [slterm_sidebar::SidebarRecoveryWarning::InvalidRatio]
         );
     }
 
-    /// 侧栏段为 null 时回默认,不炸整份会话。
+    /// null 是侧栏结构损坏；是否回退及如何提示由启动恢复链统一裁定。
     #[test]
-    fn null_sidebar_section_falls_back_to_defaults() {
+    fn null_sidebar_section_is_deferred_to_recovery() {
         let json = r#"{"version":1,"active_tab":0,"tabs":[],"sidebar":null}"#;
-        let session = parse(json).expect("null 侧栏段必须回默认");
-        assert_eq!(session.sidebar, SidebarState::default());
+        let session = parse(json).expect("原始侧栏 JSON 必须保留");
+        assert_eq!(
+            session.sidebar.recover().err(),
+            Some(SidebarRecoveryError::InvalidStructure)
+        );
+    }
+
+    /// RawValue 不在 session 解析阶段抹掉嵌套重复字段，core 恢复必须检出。
+    #[test]
+    fn sidebar_duplicate_fields_survive_session_parsing_for_recovery_to_reject() {
+        let json = r#"{
+          "version":1,"active_tab":0,"tabs":[],
+          "sidebar": {
+            "version":1,"kind":"sidebar_state",
+            "buttons":[
+              {"slot":"upper","view":"nav"},
+              {"slot":"upper","view":"explorer"},
+              {"slot":"upper","view":"commit"},
+              {"slot":"upper","view":"agent_files"}
+            ],
+            "hidden_buttons":[],"open_views":[],"visible_intent":true,
+            "width":250,"width":640,"ratio":0.5
+          }
+        }"#;
+        let session = parse(json).expect("原始侧栏 JSON 必须保留重复字段");
+        assert_eq!(
+            session.sidebar.recover().err(),
+            Some(SidebarRecoveryError::InvalidStructure)
+        );
     }
 
     #[test]
