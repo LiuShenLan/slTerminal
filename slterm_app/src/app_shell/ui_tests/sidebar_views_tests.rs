@@ -748,7 +748,7 @@ fn sidebar_drag_is_inactive_below_minimum_visible_width(cx: &mut TestAppContext)
 
 /// 窄窗口只压缩实际展示宽度，用户宽度与终局保存始终保留主动设置值。
 #[gpui::test]
-fn sidebar_window_compression_preserves_user_width_and_main_area(cx: &mut TestAppContext) {
+fn sidebar_temporary_compression_does_not_overwrite(cx: &mut TestAppContext) {
     let mut sidebar = SidebarState::default();
     sidebar.set_width(600);
     let (workspace, mut window) = open_workspace_with_sidebar(cx, sidebar);

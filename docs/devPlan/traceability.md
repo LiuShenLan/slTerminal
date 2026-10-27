@@ -304,7 +304,7 @@
 | 关闭重开与重启共享 ViewKey 状态并清除瞬态 | `sideview_close_and_restart_share_view_state` | 已自动化 |
 | 未知、重复和非法布局字段分别归一与回退 | `sideview_restore_normalizes_invalid_layout` | 已自动化 |
 | 激活项目不关闭无项目设置浮层 | `app_overlay_does_not_close_on_project_activation` | 待实现 |
-| 临时窗口压缩不覆盖用户保存的侧栏宽度 | `sidebar_temporary_compression_does_not_overwrite` | 待实现 |
+| 临时窗口压缩不覆盖用户保存的侧栏宽度 | `sidebar_temporary_compression_does_not_overwrite` | 已自动化 |
 | 视图状态写失败保留内存并在后续重试 | `view_state_save_failure_retains_memory` | 已自动化 |
 
 ### Settings 面板
