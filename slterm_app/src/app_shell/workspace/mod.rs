@@ -466,7 +466,7 @@ impl SltermWorkspace {
             plan.quarantined.as_deref(),
             plan.sidebar_repaired,
             plan.side_view_state_repaired,
-            plan.view_state_writer_unavailable,
+            plan.workspace_writer_unavailable,
             language,
         ) {
             // /统一走通知漏斗;启动汇总经 `plan_startup` 豁免前台

@@ -98,7 +98,7 @@ pub enum ProjectRegistryError {
 }
 
 /// 按导航顺序保存全部项目；存在项目时恰好一个活跃项目。
-#[derive(Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct ProjectRegistry {
     projects: Vec<Project>,
     active: Option<ProjectId>,

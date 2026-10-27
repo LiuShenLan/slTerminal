@@ -492,7 +492,7 @@
     "recovery_quarantined": "Repeated restore failures; the saved scene was moved to {path}",
     "recovery_sidebar_repaired": "Invalid sidebar layout content was repaired; unavailable fields use defaults.",
     "recovery_side_view_state_repaired": "Some side view states could not be restored; affected views use defaults.",
-    "view_state_write_failed": "View state could not be saved. Recent layout changes may not be restored.",
+    "workspace_write_failed": "Workspace state could not be saved. Recent project or layout changes may not be restored.",
     "hook_install_failed": "Could not install AI CLI hooks for {agent}",
     "hook_settings_unreadable": "AI hook settings could not be read; self-healing was skipped"
   },

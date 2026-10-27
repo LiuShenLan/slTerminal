@@ -47,8 +47,8 @@ pub(crate) struct StartupPlan {
     pub(crate) view_state_registry: Arc<ViewStateRegistry>,
     /// 单条 SideView 状态损坏或读取失败，其余视图仍恢复。
     pub(crate) side_view_state_repaired: bool,
-    /// ViewState writer 启动不可用，必须与恢复结果合并为一条提示。
-    pub(crate) view_state_writer_unavailable: bool,
+    /// Workspace writer 启动不可用，必须与恢复结果合并为一条提示。
+    pub(crate) workspace_writer_unavailable: bool,
     /// 上次窗口尺寸与最大化态。
     pub(crate) window: Option<WindowState>,
     /// 上次是异常退出(仅用于恢复提示文案)。
@@ -68,7 +68,7 @@ impl StartupPlan {
             side_view_state_write_blocked: BTreeSet::new(),
             view_state_registry: super::side_view::side_view_state_registry(),
             side_view_state_repaired: false,
-            view_state_writer_unavailable: false,
+            workspace_writer_unavailable: false,
             window: None,
             crashed: false,
             quarantined: None,
@@ -143,7 +143,7 @@ pub(crate) fn recovery_notice(
     quarantined: Option<&Path>,
     sidebar_repaired: bool,
     side_view_state_repaired: bool,
-    view_state_writer_unavailable: bool,
+    workspace_writer_unavailable: bool,
     language: crate::i18n::UiLanguage,
 ) -> Option<String> {
     use crate::i18n::Message;
@@ -185,8 +185,8 @@ pub(crate) fn recovery_notice(
             None => notice = Some(repair.to_owned()),
         }
     }
-    if view_state_writer_unavailable {
-        let unavailable = language.text(Message::NotifyViewStateWriteFailed);
+    if workspace_writer_unavailable {
+        let unavailable = language.text(Message::NotifyWorkspaceWriteFailed);
         // writer 不可用置于首部，长隔离路径被 toast 截断时仍保留该告警。
         notice = Some(match notice {
             Some(text) => format!("{unavailable} {text}"),
@@ -216,7 +216,7 @@ pub(crate) fn prepare_startup_at(path: &Path, restore_tabs: bool) -> StartupPlan
         side_view_state_write_blocked: BTreeSet::new(),
         view_state_registry: super::side_view::side_view_state_registry(),
         side_view_state_repaired: false,
-        view_state_writer_unavailable: false,
+        workspace_writer_unavailable: false,
         window: session.window,
         crashed: false,
         quarantined: None,
@@ -879,11 +879,13 @@ mod session_recovery_tests {
         );
         assert_eq!(
             recovery_notice(None, false, None, false, false, true, UiLanguage::EnUs).as_deref(),
-            Some("View state could not be saved. Recent layout changes may not be restored.")
+            Some(
+                "Workspace state could not be saved. Recent project or layout changes may not be restored."
+            )
         );
         let combined = recovery_notice(Some(1), false, None, true, true, true, UiLanguage::EnUs)
             .expect("全部恢复结果必须聚合为一条提示");
-        assert!(combined.starts_with("View state could not be saved"));
+        assert!(combined.starts_with("Workspace state could not be saved"));
         assert!(combined.contains("Restored 1 tab(s)."));
         assert!(combined.contains("sidebar layout"));
         assert!(combined.contains("side view states"));
@@ -910,7 +912,7 @@ mod session_recovery_tests {
         .unwrap();
 
         let toast = crate::notify::clamp_toast_body(&text);
-        assert!(toast.contains(UiLanguage::EnUs.text(Message::NotifyViewStateWriteFailed)));
+        assert!(toast.contains(UiLanguage::EnUs.text(Message::NotifyWorkspaceWriteFailed)));
     }
 
     /// CLI 显式启动(cwd/-e)不碰恢复:不计数、不隔离、不交会话。

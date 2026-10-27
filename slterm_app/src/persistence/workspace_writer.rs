@@ -1,4 +1,4 @@
-//! `workspace.db` 的专用写线程与 ViewState 去抖调度。
+//! `workspace.db` 的专用写线程、ViewState 与项目聚合去抖调度。
 //!
 //! 前台只提交不可变状态；SQLite 连接、失败待写副本与退出冲刷均由写线程独占。
 
@@ -9,13 +9,15 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use slterm_path::AppPaths;
-use slterm_workspace::{ViewKey, ViewKeyError, ViewState, ViewStateError};
+use slterm_workspace::{ProjectRegistry, ViewKey, ViewKeyError, ViewState, ViewStateError};
 
 use super::database::DatabaseError;
+use super::project::ProjectStoreError;
 use super::view_state::ViewStateStoreError;
 use super::workspace::WorkspaceDatabase;
 
 const VIEW_STATE_DEBOUNCE: Duration = Duration::from_millis(500);
+const PROJECT_REGISTRY_DEBOUNCE: Duration = Duration::from_secs(2);
 const COMMAND_CAPACITY: usize = 64;
 
 /// 一次显式或退出前冲刷的实际写入结果。
@@ -23,6 +25,12 @@ const COMMAND_CAPACITY: usize = 64;
 pub(crate) struct WorkspaceFlushReport {
     pub(crate) written: usize,
     pub(crate) failed: usize,
+}
+
+/// 后台工作区状态写失败；分类信息不携带路径、SQL 或状态正文。
+pub(crate) enum WorkspaceWriteFailure {
+    ViewState(ViewStateWriteFailure),
+    ProjectRegistry(ProjectStoreError),
 }
 
 /// 后台 ViewState 写失败；保留键与分类错误，不携带状态正文。
@@ -61,7 +69,7 @@ impl fmt::Display for WorkspaceWriterError {
             Self::ViewKey(_) => formatter.write_str("ViewState 的 ViewKey 编码失败"),
             Self::ViewState(error) => fmt::Display::fmt(error, formatter),
             Self::QueueFull => formatter.write_str("工作区写队列已满"),
-            Self::FlushFailed => formatter.write_str("工作区视图状态最终冲刷失败"),
+            Self::FlushFailed => formatter.write_str("工作区状态最终冲刷失败"),
             Self::Stopped => formatter.write_str("工作区写线程已停止"),
         }
     }
@@ -74,6 +82,9 @@ enum Command {
         key_json: String,
         key: ViewKey,
         state: Box<ViewState>,
+    },
+    SaveProjectRegistry {
+        registry: Box<ProjectRegistry>,
     },
     Flush {
         response: SyncSender<WorkspaceFlushReport>,
@@ -101,6 +112,21 @@ impl WorkspaceWriterClient {
         let command = view_state_command(key, state)?;
         self.commands
             .try_send(command)
+            .map_err(|error| match error {
+                TrySendError::Full(_) => WorkspaceWriterError::QueueFull,
+                TrySendError::Disconnected(_) => WorkspaceWriterError::Stopped,
+            })
+    }
+
+    /// 非阻塞提交最新项目聚合快照；同一时刻只保留一个待写版本。
+    pub(crate) fn save_project_registry(
+        &self,
+        registry: &ProjectRegistry,
+    ) -> Result<(), WorkspaceWriterError> {
+        self.commands
+            .try_send(Command::SaveProjectRegistry {
+                registry: Box::new(registry.clone()),
+            })
             .map_err(|error| match error {
                 TrySendError::Full(_) => WorkspaceWriterError::QueueFull,
                 TrySendError::Disconnected(_) => WorkspaceWriterError::Stopped,
@@ -141,7 +167,7 @@ pub(crate) struct WorkspaceWriter {
     commands: SyncSender<Command>,
     final_state_sender: SyncSender<(ViewKey, ViewState)>,
     final_states: Receiver<(ViewKey, ViewState)>,
-    failures: Option<Receiver<ViewStateWriteFailure>>,
+    failures: Option<Receiver<WorkspaceWriteFailure>>,
     worker: Option<JoinHandle<()>>,
 }
 
@@ -194,13 +220,24 @@ impl WorkspaceWriter {
         self.client().save_view_state(key, state)
     }
 
+    /// 外部 owner 与 UI client 共用同一项目聚合快照写队列。
+    pub(crate) fn save_project_registry(
+        &self,
+        registry: &ProjectRegistry,
+    ) -> Result<(), WorkspaceWriterError> {
+        if self.worker.is_none() {
+            return Err(WorkspaceWriterError::Stopped);
+        }
+        self.client().save_project_registry(registry)
+    }
+
     /// 将唯一失败接收端移交壳事件转发器；只能取走一次。
-    pub(crate) fn take_failure_receiver(&mut self) -> Option<Receiver<ViewStateWriteFailure>> {
+    pub(crate) fn take_failure_receiver(&mut self) -> Option<Receiver<WorkspaceWriteFailure>> {
         self.failures.take()
     }
 
     /// 非阻塞收割一条失败通知；容量为一时，已有通知即代表仍有失败待处理。
-    pub(crate) fn try_recv_view_state_failure(&self) -> Option<ViewStateWriteFailure> {
+    pub(crate) fn try_recv_failure(&self) -> Option<WorkspaceWriteFailure> {
         self.failures.as_ref()?.try_recv().ok()
     }
 
@@ -262,10 +299,21 @@ struct PendingViewState {
     due: Option<Instant>,
 }
 
+struct PendingProjectRegistry {
+    registry: ProjectRegistry,
+    due: Option<Instant>,
+}
+
+#[derive(Default)]
+struct PendingWrites {
+    view_states: BTreeMap<String, PendingViewState>,
+    project_registry: Option<PendingProjectRegistry>,
+}
+
 fn run(
     paths: AppPaths,
     commands: Receiver<Command>,
-    failures: SyncSender<ViewStateWriteFailure>,
+    failures: SyncSender<WorkspaceWriteFailure>,
     startup: SyncSender<Result<(), DatabaseError>>,
 ) {
     let mut store = match WorkspaceDatabase::open(&paths) {
@@ -278,7 +326,7 @@ fn run(
             return;
         }
     };
-    let mut pending = BTreeMap::<String, PendingViewState>::new();
+    let mut pending = PendingWrites::default();
     loop {
         let wait = next_wait(&pending);
         let command = match wait {
@@ -308,7 +356,7 @@ fn run(
                 key,
                 state,
             } => {
-                pending.insert(
+                pending.view_states.insert(
                     key_json,
                     PendingViewState {
                         key,
@@ -316,6 +364,12 @@ fn run(
                         due: Some(Instant::now() + VIEW_STATE_DEBOUNCE),
                     },
                 );
+            }
+            Command::SaveProjectRegistry { registry } => {
+                pending.project_registry = Some(PendingProjectRegistry {
+                    registry: *registry,
+                    due: Some(Instant::now() + PROJECT_REGISTRY_DEBOUNCE),
+                });
             }
             Command::Flush { response } => {
                 let report = write_pending(&mut store, &mut pending, &failures, true);
@@ -332,11 +386,18 @@ fn run(
     }
 }
 
-fn next_wait(pending: &BTreeMap<String, PendingViewState>) -> Option<Duration> {
+fn next_wait(pending: &PendingWrites) -> Option<Duration> {
     let now = Instant::now();
     pending
+        .view_states
         .values()
         .filter_map(|pending| pending.due)
+        .chain(
+            pending
+                .project_registry
+                .as_ref()
+                .and_then(|pending| pending.due),
+        )
         .map(|due| due.saturating_duration_since(now))
         .min()
 }
@@ -344,12 +405,13 @@ fn next_wait(pending: &BTreeMap<String, PendingViewState>) -> Option<Duration> {
 /// 写到期项或全部项；失败项保留最新副本并取消定时器，等后续修改或显式冲刷重试。
 fn write_pending(
     store: &mut WorkspaceDatabase,
-    pending: &mut BTreeMap<String, PendingViewState>,
-    failures: &SyncSender<ViewStateWriteFailure>,
+    pending: &mut PendingWrites,
+    failures: &SyncSender<WorkspaceWriteFailure>,
     all: bool,
 ) -> WorkspaceFlushReport {
     let now = Instant::now();
     let ready = pending
+        .view_states
         .iter()
         .filter(|(_, pending)| all || pending.due.is_some_and(|due| due <= now))
         .map(|(key_json, _)| key_json.clone())
@@ -358,22 +420,59 @@ fn write_pending(
     for key_json in ready {
         let result = {
             let pending = pending
+                .view_states
                 .get(&key_json)
                 .expect("待写键在单线程写循环中不得消失");
             store.save_view_state(&pending.key, &pending.state)
         };
         match result {
             Ok(_) => {
-                pending.remove(&key_json);
+                pending.view_states.remove(&key_json);
                 report.written += 1;
             }
             Err(error) => {
-                let pending = pending.get_mut(&key_json).expect("失败待写键必须保留");
+                let pending = pending
+                    .view_states
+                    .get_mut(&key_json)
+                    .expect("失败待写键必须保留");
                 pending.due = None;
                 let key = pending.key.clone();
                 report.failed += 1;
                 // 容量为一时，已有信号已代表失败；待写副本不随通知丢弃。
-                let _ = failures.try_send(ViewStateWriteFailure { key, error });
+                let _ =
+                    failures.try_send(WorkspaceWriteFailure::ViewState(ViewStateWriteFailure {
+                        key,
+                        error,
+                    }));
+            }
+        }
+    }
+
+    let project_ready = pending
+        .project_registry
+        .as_ref()
+        .is_some_and(|pending| all || pending.due.is_some_and(|due| due <= now));
+    if project_ready {
+        let result = {
+            let project = pending
+                .project_registry
+                .as_ref()
+                .expect("就绪项目快照必须存在");
+            store.save_project_registry(&project.registry)
+        };
+        match result {
+            Ok(()) => {
+                pending.project_registry = None;
+                report.written += 1;
+            }
+            Err(error) => {
+                let project = pending
+                    .project_registry
+                    .as_mut()
+                    .expect("失败项目快照必须保留");
+                project.due = None;
+                report.failed += 1;
+                let _ = failures.try_send(WorkspaceWriteFailure::ProjectRegistry(error));
             }
         }
     }
@@ -381,12 +480,12 @@ fn write_pending(
 }
 
 /// 将写失败逐条转换为非阻塞壳通知；失败通道关闭后线程自然退出。
-pub(crate) fn spawn_view_state_failure_forwarder(
-    failures: Receiver<ViewStateWriteFailure>,
+pub(crate) fn spawn_workspace_failure_forwarder(
+    failures: Receiver<WorkspaceWriteFailure>,
     mut notify: impl FnMut() + Send + 'static,
 ) -> std::io::Result<JoinHandle<()>> {
     std::thread::Builder::new()
-        .name("slterm-view-state-events".into())
+        .name("slterm-workspace-events".into())
         .spawn(move || {
             while failures.recv().is_ok() {
                 notify();
@@ -396,12 +495,13 @@ pub(crate) fn spawn_view_state_failure_forwarder(
 
 #[cfg(test)]
 mod workspace_writer_tests {
-    use std::time::Instant;
+    use std::{str::FromStr, time::Instant};
 
     use serde::{Deserialize, Serialize};
     use serde_json::{Value, json};
     use slterm_workspace::{
-        InvalidViewState, SideViewId, ViewKeyKind, ViewStateRegistry, ViewStateSchema,
+        InvalidViewState, ProjectId, ProjectRegistry, SideViewId, ViewKeyKind, ViewStateRegistry,
+        ViewStateSchema,
     };
     use tempfile::TempDir;
 
@@ -447,6 +547,37 @@ mod workspace_writer_tests {
         state_for(&key(), position)
     }
 
+    fn project_registry(name: &str) -> ProjectRegistry {
+        let project_id = ProjectId::from_str("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2a").unwrap();
+        let mut registry = ProjectRegistry::new();
+        registry
+            .add_project(
+                project_id,
+                slterm_path::CanonicalPath::new("D:/work/a").unwrap(),
+            )
+            .unwrap();
+        registry.rename_project(project_id, name).unwrap();
+        registry
+    }
+
+    fn wait_for_project_name(store: &WorkspaceDatabase, name: &str) -> Option<ProjectRegistry> {
+        let deadline = Instant::now() + Duration::from_secs(4);
+        loop {
+            if let Ok(registry) = store.load_project_registry()
+                && registry
+                    .projects()
+                    .first()
+                    .is_some_and(|project| project.display_name() == name)
+            {
+                return Some(registry);
+            }
+            if Instant::now() >= deadline {
+                return None;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     fn read_position_for(store: &WorkspaceDatabase, key: &ViewKey) -> Option<(u64, u64)> {
         store.view_state(key, &registry()).unwrap().map(|stored| {
             let position = stored.state.state()["position"].as_u64().unwrap();
@@ -473,17 +604,43 @@ mod workspace_writer_tests {
         wait_for_position_for(store, &key())
     }
 
-    fn wait_for_failure(writer: &WorkspaceWriter) -> Option<ViewStateWriteFailure> {
+    fn wait_for_position_value(store: &WorkspaceDatabase, position: u64) -> Option<(u64, u64)> {
         let deadline = Instant::now() + Duration::from_secs(3);
         loop {
-            if let Some(failure) = writer.try_recv_view_state_failure() {
-                return Some(failure);
+            let current = read_position(store);
+            if current.is_some_and(|(current, _)| current == position) {
+                return current;
             }
             if Instant::now() >= deadline {
-                return None;
+                return current;
             }
             std::thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    fn wait_for_failure(writer: &WorkspaceWriter) -> Option<ViewStateWriteFailure> {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            match writer.try_recv_failure() {
+                Some(WorkspaceWriteFailure::ViewState(failure)) => return Some(failure),
+                Some(WorkspaceWriteFailure::ProjectRegistry(_)) => {
+                    panic!("ViewState 测试不得收到项目聚合失败")
+                }
+                None if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                None => return None,
+            }
+        }
+    }
+
+    /// 最终冲刷诊断同时覆盖 ViewState 与项目聚合，不误报为单一状态类型。
+    #[test]
+    fn workspace_writer_flush_failure_display_covers_workspace_state() {
+        assert_eq!(
+            WorkspaceWriterError::FlushFailed.to_string(),
+            "工作区状态最终冲刷失败"
+        );
     }
 
     /// 每个 ViewKey 只写最新状态，且在 500 毫秒去抖到期前不落盘。
@@ -527,23 +684,287 @@ mod workspace_writer_tests {
         writer.shutdown().unwrap();
     }
 
+    /// 项目聚合只保留最新快照，并在 2 秒去抖后一次落盘。
+    #[test]
+    fn workspace_writer_debounces_project_registry_to_latest() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = fixture(&temp);
+        let observer = WorkspaceDatabase::open(&paths).unwrap();
+        let writer = WorkspaceWriter::start(paths).unwrap();
+        let client = writer.client();
+
+        assert_eq!(PROJECT_REGISTRY_DEBOUNCE, Duration::from_secs(2));
+        for name in ["first", "second", "third"] {
+            client
+                .save_project_registry(&project_registry(name))
+                .unwrap();
+        }
+        assert_eq!(
+            observer.load_project_registry().unwrap(),
+            ProjectRegistry::new(),
+            "项目聚合去抖到期前不得写盘"
+        );
+
+        assert_eq!(
+            wait_for_project_name(&observer, "third"),
+            Some(project_registry("third"))
+        );
+        assert_eq!(writer.flush().unwrap(), WorkspaceFlushReport::default());
+        writer.shutdown().unwrap();
+    }
+
+    /// 项目聚合写失败保留最新副本，后续提交重试，shutdown 最终冲刷。
+    #[test]
+    fn project_registry_save_failure_retains_latest_snapshot() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = fixture(&temp);
+        let mut observer = WorkspaceDatabase::open(&paths).unwrap();
+        observer
+            .save_project_registry(&project_registry("original"))
+            .unwrap();
+        let writer = WorkspaceWriter::start(paths).unwrap();
+        observer
+            .database
+            .connection
+            .execute_batch(
+                "CREATE TRIGGER reject_project_write BEFORE UPDATE ON projects \
+                 BEGIN SELECT RAISE(ABORT, 'injected write failure'); END;",
+            )
+            .unwrap();
+
+        writer
+            .save_project_registry(&project_registry("changed"))
+            .unwrap();
+        assert_eq!(
+            writer.flush().unwrap(),
+            WorkspaceFlushReport {
+                written: 0,
+                failed: 1,
+            }
+        );
+        assert!(matches!(
+            writer.try_recv_failure(),
+            Some(WorkspaceWriteFailure::ProjectRegistry(
+                ProjectStoreError::Database(_)
+            ))
+        ));
+        assert_eq!(
+            observer.load_project_registry().unwrap(),
+            project_registry("original")
+        );
+
+        writer
+            .save_project_registry(&project_registry("latest"))
+            .unwrap();
+        assert_eq!(
+            writer.flush().unwrap(),
+            WorkspaceFlushReport {
+                written: 0,
+                failed: 1,
+            }
+        );
+        assert_eq!(
+            observer.load_project_registry().unwrap(),
+            project_registry("original")
+        );
+
+        observer
+            .database
+            .connection
+            .execute_batch("DROP TRIGGER reject_project_write")
+            .unwrap();
+        assert_eq!(
+            writer.shutdown().unwrap(),
+            WorkspaceFlushReport {
+                written: 1,
+                failed: 0,
+            }
+        );
+        assert_eq!(
+            observer.load_project_registry().unwrap(),
+            project_registry("latest")
+        );
+    }
+
+    /// 项目快照提交遇到有界队列满时同步拒收，排水后可重试最新副本。
+    #[test]
+    fn project_registry_queue_full_allows_later_retry() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = fixture(&temp);
+        let mut observer = WorkspaceDatabase::open(&paths).unwrap();
+        observer
+            .save_project_registry(&project_registry("original"))
+            .unwrap();
+        let writer = WorkspaceWriter::start(paths).unwrap();
+        let client = writer.client();
+        observer
+            .database
+            .connection
+            .execute_batch("BEGIN EXCLUSIVE")
+            .unwrap();
+        client
+            .save_project_registry(&project_registry("blocked"))
+            .unwrap();
+        std::thread::sleep(PROJECT_REGISTRY_DEBOUNCE + Duration::from_millis(100));
+
+        for index in 0..COMMAND_CAPACITY {
+            client
+                .save_project_registry(&project_registry(&format!("queued-{index}")))
+                .unwrap();
+        }
+        assert!(matches!(
+            client.save_project_registry(&project_registry("overflow")),
+            Err(WorkspaceWriterError::QueueFull)
+        ));
+
+        observer
+            .database
+            .connection
+            .execute_batch("ROLLBACK")
+            .unwrap();
+        assert_eq!(
+            writer.flush().unwrap(),
+            WorkspaceFlushReport {
+                written: 1,
+                failed: 0,
+            }
+        );
+        assert_eq!(
+            observer.load_project_registry().unwrap(),
+            project_registry(&format!("queued-{}", COMMAND_CAPACITY - 1))
+        );
+
+        client
+            .save_project_registry(&project_registry("after-drain"))
+            .unwrap();
+        assert_eq!(
+            writer.shutdown().unwrap(),
+            WorkspaceFlushReport {
+                written: 1,
+                failed: 0,
+            }
+        );
+        assert_eq!(
+            observer.load_project_registry().unwrap(),
+            project_registry("after-drain")
+        );
+    }
+
+    /// 命令发送端全部断开时，写线程仍在退出前冲刷未到期项目快照。
+    #[test]
+    fn project_registry_disconnect_flushes_pending_snapshot() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = fixture(&temp);
+        let observer = WorkspaceDatabase::open(&paths).unwrap();
+        let (commands, receiver) = mpsc::sync_channel(COMMAND_CAPACITY);
+        let (failures, _failure_receiver) = mpsc::sync_channel(1);
+        let (startup, started) = mpsc::sync_channel(1);
+        let worker = std::thread::spawn(move || run(paths, receiver, failures, startup));
+        started.recv().unwrap().unwrap();
+        commands
+            .send(Command::SaveProjectRegistry {
+                registry: Box::new(project_registry("disconnected")),
+            })
+            .unwrap();
+
+        drop(commands);
+        worker.join().unwrap();
+
+        assert_eq!(
+            observer.load_project_registry().unwrap(),
+            project_registry("disconnected")
+        );
+    }
+
+    /// 项目失败不撤销 ViewState 的独立定时唤醒，混合冲刷分别计数。
+    #[test]
+    fn project_failure_preserves_view_state_schedule_and_mixed_report() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = fixture(&temp);
+        let mut observer = WorkspaceDatabase::open(&paths).unwrap();
+        observer.save_view_state(&key(), &state(7)).unwrap();
+        observer
+            .save_project_registry(&project_registry("original"))
+            .unwrap();
+        let writer = WorkspaceWriter::start(paths).unwrap();
+        observer
+            .database
+            .connection
+            .execute_batch(
+                "CREATE TRIGGER reject_project_write BEFORE UPDATE ON projects \
+                 BEGIN SELECT RAISE(ABORT, 'injected write failure'); END;",
+            )
+            .unwrap();
+        writer.save_view_state(&key(), &state(8)).unwrap();
+        writer
+            .save_project_registry(&project_registry("changed"))
+            .unwrap();
+
+        assert_eq!(
+            writer.flush().unwrap(),
+            WorkspaceFlushReport {
+                written: 1,
+                failed: 1,
+            }
+        );
+        assert_eq!(read_position(&observer), Some((8, 1)));
+        assert_eq!(
+            observer.load_project_registry().unwrap(),
+            project_registry("original")
+        );
+        assert!(matches!(
+            writer.try_recv_failure(),
+            Some(WorkspaceWriteFailure::ProjectRegistry(
+                ProjectStoreError::Database(_)
+            ))
+        ));
+
+        writer.save_view_state(&key(), &state(9)).unwrap();
+        assert_eq!(wait_for_position_value(&observer, 9), Some((9, 2)));
+        assert!(writer.try_recv_failure().is_none());
+        assert_eq!(
+            observer.load_project_registry().unwrap(),
+            project_registry("original")
+        );
+
+        observer
+            .database
+            .connection
+            .execute_batch("DROP TRIGGER reject_project_write")
+            .unwrap();
+        assert_eq!(
+            writer.shutdown().unwrap(),
+            WorkspaceFlushReport {
+                written: 1,
+                failed: 0,
+            }
+        );
+        assert_eq!(read_position(&observer), Some((9, 2)));
+        assert_eq!(
+            observer.load_project_registry().unwrap(),
+            project_registry("changed")
+        );
+    }
+
     /// 转发器逐条发出通知，并在失败通道关闭后退出。
     #[test]
-    fn view_state_failure_forwarder_relays_and_stops() {
+    fn workspace_failure_forwarder_relays_and_stops() {
         let (failure_tx, failure_rx) = mpsc::sync_channel(2);
         let (event_tx, event_rx) = mpsc::channel();
-        let forwarder = spawn_view_state_failure_forwarder(failure_rx, move || {
+        let forwarder = spawn_workspace_failure_forwarder(failure_rx, move || {
             let _ = event_tx.send(());
         })
         .unwrap();
 
-        for _ in 0..2 {
-            failure_tx
-                .send(ViewStateWriteFailure {
-                    key: key(),
-                    error: ViewStateStoreError::CorruptRecord,
-                })
-                .unwrap();
+        let failures = [
+            WorkspaceWriteFailure::ViewState(ViewStateWriteFailure {
+                key: key(),
+                error: ViewStateStoreError::CorruptRecord,
+            }),
+            WorkspaceWriteFailure::ProjectRegistry(ProjectStoreError::CorruptRecord),
+        ];
+        for failure in failures {
+            failure_tx.send(failure).unwrap();
             event_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         }
         drop(failure_tx);
@@ -569,11 +990,14 @@ mod workspace_writer_tests {
             )
             .unwrap();
         let failures = writer.take_failure_receiver().unwrap();
-        assert!(writer.try_recv_view_state_failure().is_none());
+        assert!(writer.try_recv_failure().is_none());
 
         writer.save_view_state(&key(), &state(8)).unwrap();
 
         let failure = failures.recv_timeout(Duration::from_secs(3)).unwrap();
+        let WorkspaceWriteFailure::ViewState(failure) = failure else {
+            panic!("ViewState 测试不得收到项目聚合失败");
+        };
         assert_eq!(failure.key(), &key());
         assert!(matches!(failure.error(), ViewStateStoreError::Database(_)));
         drop(failures);
@@ -707,7 +1131,7 @@ mod workspace_writer_tests {
             }
         );
         assert_eq!(read_position(&observer), Some((66, 2)));
-        assert!(writer.try_recv_view_state_failure().is_none());
+        assert!(writer.try_recv_failure().is_none());
 
         writer.save_view_state(&key(), &state(999)).unwrap();
         assert_eq!(
