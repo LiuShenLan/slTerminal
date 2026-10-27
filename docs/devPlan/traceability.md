@@ -286,11 +286,11 @@
 
 | 验收场景 | 目标测试例名 | 状态 |
 |---|---|---|
-| 同槽替换销毁旧实例并取消任务 | `sideview_same_slot_replacement_destroys_instance` | 待实现 |
-| 隐藏整个侧栏再显示保留实例与运行态 | `sideview_hide_preserves_instance` | 待实现 |
-| 隐藏按钮不移除内容或销毁实例 | `sideview_hide_button_preserves_instance` | 待实现 |
-| 跨槽交换保留双方实例而同槽替换才销毁 | `sideview_cross_slot_swap_preserves_instances` | 待实现 |
-| 关闭重开与重启共享 ViewKey 状态并清除瞬态 | `sideview_close_and_restart_share_view_state` | 待实现 |
+| 同槽替换销毁旧实例并取消任务 | `sideview_same_slot_replacement_destroys_instance` | 已自动化 |
+| 隐藏整个侧栏再显示保留实例与运行态 | `sideview_hide_preserves_instance` | 已自动化 |
+| 隐藏按钮不移除内容或销毁实例 | `sideview_hide_button_preserves_instance` | 已自动化 |
+| 跨槽交换保留双方实例而同槽替换才销毁 | `sideview_cross_slot_swap_preserves_instances` | 已自动化 |
+| 关闭重开与重启共享 ViewKey 状态并清除瞬态 | `sideview_close_and_restart_share_view_state` | 已自动化 |
 | 未知、重复和非法布局字段分别归一与回退 | `sideview_restore_normalizes_invalid_layout` | 已自动化 |
 | 激活项目不关闭无项目设置浮层 | `app_overlay_does_not_close_on_project_activation` | 待实现 |
 | 临时窗口压缩不覆盖用户保存的侧栏宽度 | `sidebar_temporary_compression_does_not_overwrite` | 待实现 |

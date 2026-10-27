@@ -372,3 +372,542 @@ mod side_view_host_tests {
         );
     }
 }
+
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod gpui_side_view_host_tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use gpui::{
+        App, AppContext as _, Entity, EntityId, IntoElement, Render, Task, TestAppContext,
+        WeakEntity, Window, div,
+    };
+    use serde::{Deserialize, Serialize};
+    use serde_json::{Value, json};
+    use slterm_path::AppPaths;
+    use slterm_workspace::{
+        InvalidViewState, ViewKey, ViewKeyKind, ViewState, ViewStateRegistry, ViewStateSchema,
+    };
+    use tempfile::TempDir;
+
+    use super::*;
+    use crate::persistence::workspace::WorkspaceDatabase;
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum GpuiEvent {
+        Open(SideViewId, u64),
+        Shutdown(SideViewId, u64),
+        TaskCancelled(SideViewId, u64),
+    }
+
+    type Events = Rc<RefCell<Vec<GpuiEvent>>>;
+
+    #[derive(Clone, Debug, Default, PartialEq, Eq)]
+    struct TransientState {
+        search: String,
+        multi_select: bool,
+        inline_edit: bool,
+        menu_open: bool,
+        error: bool,
+        focused: bool,
+    }
+
+    impl TransientState {
+        fn fill(&mut self) {
+            self.search = "query".to_owned();
+            self.multi_select = true;
+            self.inline_edit = true;
+            self.menu_open = true;
+            self.error = true;
+            self.focused = true;
+        }
+    }
+
+    struct TaskProbe {
+        view: SideViewId,
+        serial: u64,
+        events: Events,
+    }
+
+    impl Drop for TaskProbe {
+        fn drop(&mut self) {
+            self.events
+                .borrow_mut()
+                .push(GpuiEvent::TaskCancelled(self.view, self.serial));
+        }
+    }
+
+    struct GpuiFakeInstance {
+        view: SideViewId,
+        serial: u64,
+        position: u64,
+        transient: TransientState,
+        events: Events,
+        // 私有任务由实体独占；实体析构时 Task Drop 必须取消挂起的 future。
+        _task: Task<()>,
+    }
+
+    impl GpuiFakeInstance {
+        fn new(
+            view: SideViewId,
+            serial: u64,
+            position: u64,
+            events: Events,
+            cx: &mut gpui::Context<'_, Self>,
+        ) -> Self {
+            let task_events = Rc::clone(&events);
+            let task = cx.spawn(async move |_, _| {
+                let _probe = TaskProbe {
+                    view,
+                    serial,
+                    events: task_events,
+                };
+                std::future::pending::<()>().await;
+            });
+            Self {
+                view,
+                serial,
+                position,
+                transient: TransientState::default(),
+                events,
+                _task: task,
+            }
+        }
+    }
+
+    impl Drop for GpuiFakeInstance {
+        fn drop(&mut self) {
+            self.events
+                .borrow_mut()
+                .push(GpuiEvent::Shutdown(self.view, self.serial));
+        }
+    }
+
+    struct Dummy;
+
+    impl Render for Dummy {
+        fn render(&mut self, _: &mut Window, _: &mut gpui::Context<'_, Self>) -> impl IntoElement {
+            div()
+        }
+    }
+
+    #[derive(Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct PersistentState {
+        position: u64,
+    }
+
+    fn decode_persistent_state(text: &str) -> Result<Value, InvalidViewState> {
+        let state: PersistentState = serde_json::from_str(text).map_err(|_| InvalidViewState)?;
+        serde_json::to_value(state).map_err(|_| InvalidViewState)
+    }
+
+    fn registry() -> ViewStateRegistry {
+        ViewStateRegistry::new(&[ViewStateSchema::new(
+            ViewKeyKind::SideView,
+            decode_persistent_state,
+        )])
+        .unwrap()
+    }
+
+    fn view_key(view: SideViewId) -> ViewKey {
+        ViewKey::SideView { side_view_id: view }
+    }
+
+    fn fixture(temp: &TempDir) -> AppPaths {
+        AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap()
+    }
+
+    fn restored_position(
+        store: &WorkspaceDatabase,
+        registry: &ViewStateRegistry,
+        view: SideViewId,
+    ) -> u64 {
+        store
+            .view_state(&view_key(view), registry)
+            .unwrap()
+            .map(|stored| {
+                serde_json::from_value::<PersistentState>(stored.state.into_state())
+                    .unwrap()
+                    .position
+            })
+            .unwrap_or(0)
+    }
+
+    fn save_position(
+        store: &mut WorkspaceDatabase,
+        registry: &ViewStateRegistry,
+        view: SideViewId,
+        position: u64,
+    ) {
+        let state = ViewState::new(
+            ViewKeyKind::SideView,
+            json!({"position": position}),
+            registry,
+        )
+        .unwrap();
+        store.save_view_state(&view_key(view), &state).unwrap();
+    }
+
+    fn create_instance(
+        cx: &mut App,
+        events: &Events,
+        next_serial: &mut u64,
+        view: SideViewId,
+        position: u64,
+    ) -> Entity<GpuiFakeInstance> {
+        *next_serial += 1;
+        let serial = *next_serial;
+        events.borrow_mut().push(GpuiEvent::Open(view, serial));
+        cx.new(|cx| GpuiFakeInstance::new(view, serial, position, Rc::clone(events), cx))
+    }
+
+    fn opener<'a>(
+        cx: &'a mut App,
+        events: &'a Events,
+        next_serial: &'a mut u64,
+    ) -> impl FnMut(SideViewId) -> Entity<GpuiFakeInstance> + 'a {
+        move |view| create_instance(cx, events, next_serial, view, 0)
+    }
+
+    fn restored_opener<'a>(
+        cx: &'a mut App,
+        store: &'a WorkspaceDatabase,
+        registry: &'a ViewStateRegistry,
+        events: &'a Events,
+        next_serial: &'a mut u64,
+    ) -> impl FnMut(SideViewId) -> Entity<GpuiFakeInstance> + 'a {
+        move |view| {
+            let position = restored_position(store, registry, view);
+            create_instance(cx, events, next_serial, view, position)
+        }
+    }
+
+    fn dummy_window(cx: &mut TestAppContext) -> &mut gpui::VisualTestContext {
+        let (_, window) = cx.add_window_view(|_, _| Dummy);
+        window
+    }
+
+    fn entity_id(host: &SideViewHost<Entity<GpuiFakeInstance>>, view: SideViewId) -> EntityId {
+        host.instance(view).expect("视图实体必须存活").entity_id()
+    }
+
+    fn weak_instance(
+        host: &SideViewHost<Entity<GpuiFakeInstance>>,
+        view: SideViewId,
+    ) -> WeakEntity<GpuiFakeInstance> {
+        host.instance(view).expect("视图实体必须存活").downgrade()
+    }
+
+    fn assert_destroyed(events: &Events, view: SideViewId, serial: u64) {
+        let events = events.borrow();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| **event == GpuiEvent::Shutdown(view, serial))
+                .count(),
+            1,
+            "旧实体必须恰好析构一次"
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| **event == GpuiEvent::TaskCancelled(view, serial))
+                .count(),
+            1,
+            "实体私有任务必须恰好取消一次"
+        );
+    }
+
+    fn assert_not_destroyed(events: &Events, view: SideViewId, serial: u64) {
+        assert!(!events.borrow().iter().any(|event| matches!(
+            event,
+            GpuiEvent::Shutdown(event_view, event_serial)
+                | GpuiEvent::TaskCancelled(event_view, event_serial)
+                if *event_view == view && *event_serial == serial
+        )));
+    }
+
+    fn fill_transient(
+        window: &mut gpui::VisualTestContext,
+        host: &SideViewHost<Entity<GpuiFakeInstance>>,
+        view: SideViewId,
+    ) {
+        window.update(|_, cx| {
+            host.instance(view).unwrap().update(cx, |instance, _| {
+                instance.position = 42;
+                instance.transient.fill();
+            });
+        });
+    }
+
+    fn transient(
+        window: &mut gpui::VisualTestContext,
+        host: &SideViewHost<Entity<GpuiFakeInstance>>,
+        view: SideViewId,
+    ) -> TransientState {
+        window.update(|_, cx| host.instance(view).unwrap().read(cx).transient.clone())
+    }
+
+    /// 同槽替换释放最后一个实体强句柄，并在 effect flush 中取消私有任务。
+    #[gpui::test]
+    fn sideview_same_slot_replacement_destroys_instance(cx: &mut TestAppContext) {
+        let window = dummy_window(cx);
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let mut next_serial = 0;
+        let mut host = window.update(|_, cx| {
+            SideViewHost::new(
+                SidebarState::default(),
+                opener(cx, &events, &mut next_serial),
+            )
+        });
+        window.run_until_parked();
+        let nav = entity_id(&host, SideViewId::Nav);
+        let weak_nav = weak_instance(&host, SideViewId::Nav);
+
+        window
+            .update(|_, cx| {
+                host.click_button(SideViewId::Explorer, opener(cx, &events, &mut next_serial))
+            })
+            .unwrap();
+        window.run_until_parked();
+        let explorer = entity_id(&host, SideViewId::Explorer);
+
+        assert_ne!(nav, explorer);
+        assert!(host.instance(SideViewId::Nav).is_none());
+        assert!(weak_nav.upgrade().is_none());
+        assert_destroyed(&events, SideViewId::Nav, 1);
+        assert_not_destroyed(&events, SideViewId::Explorer, 2);
+
+        window.update(|_, _| host.shutdown());
+        window.run_until_parked();
+        assert_destroyed(&events, SideViewId::Explorer, 2);
+    }
+
+    /// 整栏隐藏只改变展示，不重建实体或清空视图瞬态。
+    #[gpui::test]
+    fn sideview_hide_preserves_instance(cx: &mut TestAppContext) {
+        let window = dummy_window(cx);
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let mut next_serial = 0;
+        let mut host = window.update(|_, cx| {
+            SideViewHost::new(
+                SidebarState::default(),
+                opener(cx, &events, &mut next_serial),
+            )
+        });
+        window.run_until_parked();
+        fill_transient(window, &host, SideViewId::Nav);
+        let nav = entity_id(&host, SideViewId::Nav);
+        let weak_nav = weak_instance(&host, SideViewId::Nav);
+        let preserved_transient = transient(window, &host, SideViewId::Nav);
+        events.borrow_mut().clear();
+
+        assert!(
+            !window
+                .update(|_, cx| host.toggle_sidebar(opener(cx, &events, &mut next_serial)))
+                .is_visible
+        );
+        assert_eq!(entity_id(&host, SideViewId::Nav), nav);
+        assert!(weak_nav.upgrade().is_some());
+        assert_eq!(
+            transient(window, &host, SideViewId::Nav),
+            preserved_transient
+        );
+        assert!(events.borrow().is_empty());
+
+        assert!(
+            window
+                .update(|_, cx| host.toggle_sidebar(opener(cx, &events, &mut next_serial)))
+                .is_visible
+        );
+        window.run_until_parked();
+        assert_eq!(entity_id(&host, SideViewId::Nav), nav);
+        assert_eq!(
+            transient(window, &host, SideViewId::Nav),
+            preserved_transient
+        );
+        assert!(events.borrow().is_empty());
+
+        window.update(|_, _| host.shutdown());
+    }
+
+    /// 隐藏按钮不改变内容实例；快捷入口恢复按钮时仍复用原实例。
+    #[gpui::test]
+    fn sideview_hide_button_preserves_instance(cx: &mut TestAppContext) {
+        let window = dummy_window(cx);
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let mut next_serial = 0;
+        let mut host = window.update(|_, cx| {
+            SideViewHost::new(
+                SidebarState::default(),
+                opener(cx, &events, &mut next_serial),
+            )
+        });
+        window.run_until_parked();
+        fill_transient(window, &host, SideViewId::Nav);
+        let nav = entity_id(&host, SideViewId::Nav);
+        let preserved_transient = transient(window, &host, SideViewId::Nav);
+        events.borrow_mut().clear();
+
+        window.update(|_, _| host.set_button_hidden(SideViewId::Nav, true));
+        assert!(!host.state().button_is_visible(SideViewId::Nav));
+        assert_eq!(entity_id(&host, SideViewId::Nav), nav);
+        assert_eq!(
+            transient(window, &host, SideViewId::Nav),
+            preserved_transient
+        );
+        assert!(events.borrow().is_empty());
+
+        let transition = window.update(|_, cx| {
+            host.activate_shortcut(
+                SideViewId::Nav,
+                false,
+                opener(cx, &events, &mut next_serial),
+            )
+        });
+        window.run_until_parked();
+        assert_eq!(transition.focus, Some(SideViewId::Nav));
+        assert!(host.state().button_is_visible(SideViewId::Nav));
+        assert_eq!(entity_id(&host, SideViewId::Nav), nav);
+        assert_eq!(
+            transient(window, &host, SideViewId::Nav),
+            preserved_transient
+        );
+        assert!(events.borrow().is_empty());
+
+        window.update(|_, _| host.shutdown());
+    }
+
+    /// 跨槽交换保留两个实体；随后同槽替换只销毁被替换的一侧。
+    #[gpui::test]
+    fn sideview_cross_slot_swap_preserves_instances(cx: &mut TestAppContext) {
+        let window = dummy_window(cx);
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let mut next_serial = 0;
+        let mut host = window.update(|_, cx| {
+            SideViewHost::new(
+                SidebarState::default(),
+                opener(cx, &events, &mut next_serial),
+            )
+        });
+        host.move_button_to_slot(SideViewId::Explorer, SideSlot::Lower, 0)
+            .unwrap();
+        window
+            .update(|_, cx| {
+                host.click_button(SideViewId::Explorer, opener(cx, &events, &mut next_serial))
+            })
+            .unwrap();
+        window.run_until_parked();
+        let nav = entity_id(&host, SideViewId::Nav);
+        let explorer = entity_id(&host, SideViewId::Explorer);
+        let weak_nav = weak_instance(&host, SideViewId::Nav);
+        let weak_explorer = weak_instance(&host, SideViewId::Explorer);
+        events.borrow_mut().clear();
+
+        window.update(|_, _| {
+            host.reorder_button(SideViewId::Nav, ButtonMovement::Bottom);
+            host.move_button_to_slot(SideViewId::Explorer, SideSlot::Upper, 0)
+                .unwrap();
+        });
+        window.run_until_parked();
+        assert_eq!(
+            host.state().open_view(SideSlot::Upper),
+            Some(SideViewId::Explorer)
+        );
+        assert_eq!(
+            host.state().open_view(SideSlot::Lower),
+            Some(SideViewId::Nav)
+        );
+        assert_eq!(entity_id(&host, SideViewId::Nav), nav);
+        assert_eq!(entity_id(&host, SideViewId::Explorer), explorer);
+        assert!(events.borrow().is_empty());
+
+        window
+            .update(|_, cx| {
+                host.click_button(SideViewId::Commit, opener(cx, &events, &mut next_serial))
+            })
+            .unwrap();
+        window.run_until_parked();
+        assert!(weak_explorer.upgrade().is_none());
+        assert!(weak_nav.upgrade().is_some());
+        assert_eq!(entity_id(&host, SideViewId::Nav), nav);
+        assert_destroyed(&events, SideViewId::Explorer, 2);
+        assert_not_destroyed(&events, SideViewId::Nav, 1);
+
+        window.update(|_, _| host.shutdown());
+    }
+
+    /// 关闭重开与 Host 重建只恢复规范持久状态，所有视图瞬态重新初始化。
+    #[gpui::test]
+    fn sideview_close_and_restart_share_view_state(cx: &mut TestAppContext) {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = fixture(&temp);
+        let registry = registry();
+        let mut store = WorkspaceDatabase::open(&paths).unwrap();
+        let window = dummy_window(cx);
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let mut next_serial = 0;
+        let mut host = window.update(|_, cx| {
+            SideViewHost::new(
+                SidebarState::default(),
+                restored_opener(cx, &store, &registry, &events, &mut next_serial),
+            )
+        });
+        window.run_until_parked();
+        let first = entity_id(&host, SideViewId::Nav);
+        let weak_first = weak_instance(&host, SideViewId::Nav);
+        fill_transient(window, &host, SideViewId::Nav);
+        save_position(&mut store, &registry, SideViewId::Nav, 42);
+
+        window.update(|_, _| host.close_view(SideViewId::Nav));
+        window.run_until_parked();
+        assert!(weak_first.upgrade().is_none());
+        assert_destroyed(&events, SideViewId::Nav, 1);
+        assert_eq!(
+            restored_position(&store, &registry, SideViewId::Nav),
+            42,
+            "关闭视图不得删除 ViewKey 持久状态"
+        );
+
+        window
+            .update(|_, cx| {
+                host.click_button(
+                    SideViewId::Nav,
+                    restored_opener(cx, &store, &registry, &events, &mut next_serial),
+                )
+            })
+            .unwrap();
+        window.run_until_parked();
+        let reopened = entity_id(&host, SideViewId::Nav);
+        assert_ne!(first, reopened);
+        window.update(|_, cx| {
+            let instance = host.instance(SideViewId::Nav).unwrap().read(cx);
+            assert_eq!(instance.position, 42);
+            assert_eq!(instance.transient, TransientState::default());
+        });
+        fill_transient(window, &host, SideViewId::Nav);
+
+        let restored_layout = host.state().clone();
+        window.update(|_, _| host.shutdown());
+        window.run_until_parked();
+        drop(store);
+        let store = WorkspaceDatabase::open(&paths).unwrap();
+        let host = window.update(|_, cx| {
+            SideViewHost::new(
+                restored_layout,
+                restored_opener(cx, &store, &registry, &events, &mut next_serial),
+            )
+        });
+        window.run_until_parked();
+        let restarted = entity_id(&host, SideViewId::Nav);
+        assert_ne!(reopened, restarted);
+        window.update(|_, cx| {
+            let instance = host.instance(SideViewId::Nav).unwrap().read(cx);
+            assert_eq!(instance.position, 42);
+            assert_eq!(instance.transient, TransientState::default());
+        });
+
+        window.update(|_, _| host.shutdown());
+    }
+}
