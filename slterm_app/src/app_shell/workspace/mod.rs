@@ -29,6 +29,8 @@ mod control;
 mod documents;
 /// 侧栏文件树渲染 + 路径栏 + 拖放。
 mod file_tree;
+#[allow(dead_code)] // GPUI 组合根接线前，焦点所有权语义由虚拟窗口测试锁定。
+mod focus_manager;
 /// 键位 JSON 段消费 + EDITABLE_ACTIONS + 保留键红线。
 /// 暴露给设置页键位编辑(EDITABLE_ACTIONS/RESERVED_ROWS/clear/reset)。
 pub(crate) mod keyboard_bindings;

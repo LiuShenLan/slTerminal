@@ -117,8 +117,19 @@
 | 验收场景 | 目标测试例名 | 状态 |
 |---|---|---|
 | 文件树与补全重绑后命令一致且终端中断保留 | `command_registry_reserved_terminal_interrupt` | 待实现 |
-| 非模态操作栏不偷焦且可键盘到达 | `focus_nonmodal_no_steal` | 待实现 |
-| 模态触发控件销毁后按链还焦 | `focus_modal_fallback_after_owner_destroy` | 待实现 |
+| 非模态操作栏不偷焦且可键盘到达 | `focus_nonmodal_no_steal` | 已自动化 |
+| 模态触发控件销毁后按链还焦 | `focus_modal_fallback_after_owner_destroy` | 已自动化 |
+| 渲染帧仍强持已销毁触发控件句柄时跳过失效 owner | `focus_modal_skips_destroyed_rendered_trigger` | 已自动化 |
+| 模态约束 GPUI 原生 Tab 与直接焦点入口 | `focus_modal_syncs_gpui_focus_back_inside` | 已自动化 |
+| 非模态原生 Tab 落入旧帧失效节点时恢复可用祖先 | `focus_sync_recovers_destroyed_nonmodal_tab_stop` | 已自动化 |
+| 非模态销毁重绘导致句柄完全释放后恢复父链与输入 | `focus_sync_recovers_destroyed_nonmodal_after_redraw` | 已自动化 |
+| 无重绘销毁导致句柄完全释放后恢复父链 | `focus_sync_recovers_released_nonmodal_without_redraw` | 已自动化 |
+| 无重绘注销且句柄完全释放后回退工作区 | `focus_sync_recovers_released_unregistered_without_redraw` | 已自动化 |
+| 主动 blur 不被非模态焦点恢复覆盖 | `focus_sync_preserves_explicit_blur` | 已自动化 |
+| 无重绘注销当前焦点后恢复项目记忆 | `focus_sync_recovers_unregistered_focus` | 已自动化 |
+| 焦点恢复后的补帧重建文本输入处理器 | `focus_modal_restores_input_handler_after_focus_lost`、`focus_explicit_sync_restores_input_handler` | 已自动化 |
+| 模态子控件销毁或隐藏后恢复存活模态根 | `focus_modal_restores_after_focused_child_destroyed`、`focus_modal_restores_after_focused_child_hidden` | 已自动化 |
+| 项目切换恢复运行期实际最后焦点 | `focus_project_switch_restores_memory`、`focus_project_switch_snapshots_actual_focus` | 已自动化 |
 | 重新可见只合并复核且丢弃过期结果 | `visibility_coalesces_refresh_and_drops_stale` | 待实现 |
 | 隐藏后显式保存或文件操作结果仍可查询 | `operation_result_survives_view_hidden` | 待实现 |
 | 日志、错误、备份和诊断不含敏感正文或凭据 | `sensitive_material_excluded_from_outputs` | 待实现 |
