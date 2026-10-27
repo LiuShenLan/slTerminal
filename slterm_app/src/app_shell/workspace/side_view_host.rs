@@ -516,7 +516,7 @@ mod gpui_side_view_host_tests {
         position: u64,
     }
 
-    fn decode_persistent_state(text: &str) -> Result<Value, InvalidViewState> {
+    fn decode_persistent_state(_key: &ViewKey, text: &str) -> Result<Value, InvalidViewState> {
         let state: PersistentState = serde_json::from_str(text).map_err(|_| InvalidViewState)?;
         serde_json::to_value(state).map_err(|_| InvalidViewState)
     }
@@ -559,12 +559,8 @@ mod gpui_side_view_host_tests {
         view: SideViewId,
         position: u64,
     ) {
-        let state = ViewState::new(
-            ViewKeyKind::SideView,
-            json!({"position": position}),
-            registry,
-        )
-        .unwrap();
+        let state =
+            ViewState::new(&view_key(view), json!({"position": position}), registry).unwrap();
         store.save_view_state(&view_key(view), &state).unwrap();
     }
 

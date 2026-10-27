@@ -71,7 +71,7 @@ enum Command {
     SaveViewState {
         key_json: String,
         key: ViewKey,
-        state: ViewState,
+        state: Box<ViewState>,
     },
     Flush {
         response: SyncSender<WorkspaceFlushReport>,
@@ -131,7 +131,7 @@ impl WorkspaceWriter {
         let command = Command::SaveViewState {
             key_json,
             key: key.clone(),
-            state: state.clone(),
+            state: Box::new(state.clone()),
         };
         self.commands
             .try_send(command)
@@ -242,7 +242,7 @@ fn run(
                     key_json,
                     PendingViewState {
                         key,
-                        state,
+                        state: *state,
                         due: Some(Instant::now() + VIEW_STATE_DEBOUNCE),
                     },
                 );
@@ -330,7 +330,7 @@ mod workspace_writer_tests {
         position: u64,
     }
 
-    fn decode_persistent_state(text: &str) -> Result<Value, InvalidViewState> {
+    fn decode_persistent_state(_key: &ViewKey, text: &str) -> Result<Value, InvalidViewState> {
         let state: PersistentState = serde_json::from_str(text).map_err(|_| InvalidViewState)?;
         serde_json::to_value(state).map_err(|_| InvalidViewState)
     }
@@ -355,12 +355,12 @@ mod workspace_writer_tests {
         key_for(SideViewId::Nav)
     }
 
-    fn state_for(kind: ViewKeyKind, position: u64) -> ViewState {
-        ViewState::new(kind, json!({"position": position}), &registry()).unwrap()
+    fn state_for(key: &ViewKey, position: u64) -> ViewState {
+        ViewState::new(key, json!({"position": position}), &registry()).unwrap()
     }
 
     fn state(position: u64) -> ViewState {
-        state_for(ViewKeyKind::SideView, position)
+        state_for(&key(), position)
     }
 
     fn read_position_for(store: &WorkspaceDatabase, key: &ViewKey) -> Option<(u64, u64)> {
@@ -481,13 +481,11 @@ mod workspace_writer_tests {
     fn workspace_writer_rejects_mismatched_state_before_queueing() {
         let temp = tempfile::tempdir().unwrap();
         let writer = WorkspaceWriter::start(fixture(&temp)).unwrap();
-        let mismatched = state_for(ViewKeyKind::AppSettingsOverlay, 1);
+        let mismatched = state_for(&ViewKey::AppSettingsOverlay, 1);
 
         assert!(matches!(
             writer.save_view_state(&key(), &mismatched),
-            Err(WorkspaceWriterError::ViewState(
-                ViewStateError::KeyKindMismatch
-            ))
+            Err(WorkspaceWriterError::ViewState(ViewStateError::KeyMismatch))
         ));
         assert_eq!(writer.flush().unwrap(), WorkspaceFlushReport::default());
         writer.shutdown().unwrap();
@@ -565,7 +563,9 @@ mod workspace_writer_tests {
         let mut observer = WorkspaceDatabase::open(&paths).unwrap();
         let explorer = key_for(SideViewId::Explorer);
         observer.save_view_state(&key(), &state(7)).unwrap();
-        observer.save_view_state(&explorer, &state(20)).unwrap();
+        observer
+            .save_view_state(&explorer, &state_for(&explorer, 20))
+            .unwrap();
         let writer = WorkspaceWriter::start(paths).unwrap();
         let trigger = format!(
             "CREATE TRIGGER reject_nav_write BEFORE UPDATE ON view_states \
@@ -580,7 +580,9 @@ mod workspace_writer_tests {
             .unwrap();
 
         writer.save_view_state(&key(), &state(8)).unwrap();
-        writer.save_view_state(&explorer, &state(21)).unwrap();
+        writer
+            .save_view_state(&explorer, &state_for(&explorer, 21))
+            .unwrap();
         let failure = wait_for_failure(&writer);
         assert!(failure.is_some(), "失败视图必须产生通知");
         assert_eq!(failure.unwrap().key(), &key());

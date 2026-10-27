@@ -171,7 +171,7 @@ impl WorkspaceDatabase {
             u64::try_from(stored_version).map_err(|_| ViewStateStoreError::CorruptRecord)?;
         let revision =
             u64::try_from(stored_revision).map_err(|_| ViewStateStoreError::CorruptRecord)?;
-        let state = ViewState::from_canonical_json(&state_json, registry)?;
+        let state = ViewState::from_canonical_json(&state_json, key, registry)?;
         if envelope_version(&state_json).ok_or(ViewStateStoreError::CorruptRecord)?
             != stored_version
             || scope_text(state.scope(key)?) != stored_scope
@@ -267,7 +267,7 @@ mod view_state_store_tests {
         position: u64,
     }
 
-    fn decode_test_state(text: &str) -> Result<Value, InvalidViewState> {
+    fn decode_test_state(_key: &ViewKey, text: &str) -> Result<Value, InvalidViewState> {
         let state: TestState = serde_json::from_str(text).map_err(|_| InvalidViewState)?;
         serde_json::to_value(state).map_err(|_| InvalidViewState)
     }
@@ -304,9 +304,9 @@ mod view_state_store_tests {
         }
     }
 
-    fn state(kind: ViewKeyKind, position: u64) -> ViewState {
+    fn state(key: &ViewKey, position: u64) -> ViewState {
         ViewState::new(
-            kind,
+            key,
             json!({"persistent":true,"position":position}),
             &registry(),
         )
@@ -349,7 +349,7 @@ mod view_state_store_tests {
         let paths = fixture(&temp);
         let mut store = WorkspaceDatabase::open(&paths).unwrap();
         let key = side_view_key();
-        let initial = state(ViewKeyKind::SideView, 7);
+        let initial = state(&side_view_key(), 7);
 
         assert_eq!(store.save_view_state(&key, &initial).unwrap(), 0);
         assert_eq!(
@@ -380,7 +380,7 @@ mod view_state_store_tests {
         assert_eq!(raw.3, 0);
         assert_eq!(raw.4, "application");
 
-        let updated = state(ViewKeyKind::SideView, 8);
+        let updated = state(&side_view_key(), 8);
         assert_eq!(store.save_view_state(&key, &updated).unwrap(), 1);
         drop(store);
         let store = WorkspaceDatabase::open(&paths).unwrap();
@@ -392,18 +392,16 @@ mod view_state_store_tests {
 
     /// ViewState 与 ViewKey 类型不匹配时拒写，不能形成错绑记录。
     #[test]
-    fn view_state_store_rejects_key_kind_mismatch_without_writing() {
+    fn view_state_store_rejects_key_mismatch_without_writing() {
         let temp = tempfile::tempdir().unwrap();
         let paths = fixture(&temp);
         let mut store = WorkspaceDatabase::open(&paths).unwrap();
         let key = side_view_key();
-        let mismatched = state(ViewKeyKind::AppSettingsOverlay, 7);
+        let mismatched = state(&ViewKey::AppSettingsOverlay, 7);
 
         assert!(matches!(
             store.save_view_state(&key, &mismatched),
-            Err(ViewStateStoreError::ViewState(
-                ViewStateError::KeyKindMismatch
-            ))
+            Err(ViewStateStoreError::ViewState(ViewStateError::KeyMismatch))
         ));
         assert_eq!(store.view_state(&key, &registry()).unwrap(), None);
     }
@@ -415,8 +413,8 @@ mod view_state_store_tests {
         let paths = fixture(&temp);
         let mut store = WorkspaceDatabase::open(&paths).unwrap();
         let key = side_view_key();
-        let valid = state(ViewKeyKind::SideView, 7).to_canonical_json().unwrap();
-        let mismatched = state(ViewKeyKind::AppSettingsOverlay, 7)
+        let valid = state(&side_view_key(), 7).to_canonical_json().unwrap();
+        let mismatched = state(&ViewKey::AppSettingsOverlay, 7)
             .to_canonical_json()
             .unwrap();
         let future = r#"{"kind":"side_view","state":{"persistent":true,"position":7},"version":2}"#;
@@ -448,9 +446,7 @@ mod view_state_store_tests {
             .unwrap();
         assert!(matches!(
             store.view_state(&key, &registry()),
-            Err(ViewStateStoreError::ViewState(
-                ViewStateError::KeyKindMismatch
-            ))
+            Err(ViewStateStoreError::ViewState(ViewStateError::KeyMismatch))
         ));
         store
             .database
@@ -486,7 +482,7 @@ mod view_state_store_tests {
                 )
                 .unwrap();
             assert!(matches!(
-                store.save_view_state(&key, &state(ViewKeyKind::SideView, 9)),
+                store.save_view_state(&key, &state(&side_view_key(), 9)),
                 Err(ViewStateStoreError::ViewState(
                     ViewStateError::UnsupportedVersion
                 ))
@@ -514,9 +510,7 @@ mod view_state_store_tests {
         let project_b = settings_key(PROJECT_B);
         let application = side_view_key();
         for (key, position) in [(&project_a, 1), (&project_b, 2), (&application, 3)] {
-            store
-                .save_view_state(key, &state(key.kind(), position))
-                .unwrap();
+            store.save_view_state(key, &state(key, position)).unwrap();
         }
 
         assert_eq!(
@@ -546,7 +540,7 @@ mod view_state_store_tests {
         let paths = fixture(&temp);
         let mut store = WorkspaceDatabase::open(&paths).unwrap();
         let key = side_view_key();
-        let initial = state(ViewKeyKind::SideView, 7);
+        let initial = state(&side_view_key(), 7);
         store.save_view_state(&key, &initial).unwrap();
         store
             .database
@@ -558,7 +552,7 @@ mod view_state_store_tests {
             .unwrap();
 
         assert!(matches!(
-            store.save_view_state(&key, &state(ViewKeyKind::SideView, 8)),
+            store.save_view_state(&key, &state(&side_view_key(), 8)),
             Err(ViewStateStoreError::RevisionExhausted)
         ));
         assert_eq!(
@@ -574,7 +568,7 @@ mod view_state_store_tests {
         let paths = fixture(&temp);
         let mut store = WorkspaceDatabase::open(&paths).unwrap();
         let key = side_view_key();
-        let initial = state(ViewKeyKind::SideView, 7);
+        let initial = state(&side_view_key(), 7);
         let key_json = key.to_canonical_json().unwrap();
         store.save_view_state(&key, &initial).unwrap();
 
@@ -655,8 +649,8 @@ mod view_state_store_tests {
         let paths = fixture(&temp);
         let mut store = WorkspaceDatabase::open(&paths).unwrap();
         let key = side_view_key();
-        let initial = state(ViewKeyKind::SideView, 7);
-        let pending = state(ViewKeyKind::SideView, 8);
+        let initial = state(&side_view_key(), 7);
+        let pending = state(&side_view_key(), 8);
         store.save_view_state(&key, &initial).unwrap();
         store
             .database

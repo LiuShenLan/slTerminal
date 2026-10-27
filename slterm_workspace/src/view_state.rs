@@ -27,14 +27,14 @@ impl std::error::Error for InvalidViewState {}
 #[derive(Clone, Copy, Debug)]
 pub struct ViewStateSchema {
     kind: ViewKeyKind,
-    decode: fn(&str) -> Result<Value, InvalidViewState>,
+    decode: fn(&ViewKey, &str) -> Result<Value, InvalidViewState>,
 }
 
 impl ViewStateSchema {
-    /// 登记封闭视图类型及其原始 JSON 精确解码器。
+    /// 登记封闭视图类型及按完整 ViewKey 分派的原始 JSON 精确解码器。
     pub const fn new(
         kind: ViewKeyKind,
-        decode: fn(&str) -> Result<Value, InvalidViewState>,
+        decode: fn(&ViewKey, &str) -> Result<Value, InvalidViewState>,
     ) -> Self {
         Self { kind, decode }
     }
@@ -99,8 +99,8 @@ pub enum ViewStateError {
     UnregisteredKind,
     /// 所属 schema 拒绝状态字段或领域值。
     InvalidState,
-    /// 状态与用于写入或清理的 ViewKey 类型不同。
-    KeyKindMismatch,
+    /// 状态与用于写入、恢复或清理的 ViewKey 身份不同。
+    KeyMismatch,
     /// 已构造的规范 JSON 值无法编码。
     Encode,
 }
@@ -113,7 +113,7 @@ impl fmt::Display for ViewStateError {
             Self::UnsupportedVersion => "不支持的 ViewState DTO 版本",
             Self::UnregisteredKind => "视图未注册 ViewState schema",
             Self::InvalidState => "ViewState 状态字段或领域值非法",
-            Self::KeyKindMismatch => "ViewState 与 ViewKey 类型不匹配",
+            Self::KeyMismatch => "ViewState 与 ViewKey 身份不匹配",
             Self::Encode => "ViewState 规范 JSON 编码失败",
         })
     }
@@ -128,29 +128,33 @@ pub enum ViewStateScope {
     Application,
 }
 
-/// 经所属 schema 校验的规范视图状态。
+/// 经所属 schema 校验并绑定完整稳定身份的规范视图状态。
 #[derive(Clone, Debug, PartialEq)]
 pub struct ViewState {
-    kind: ViewKeyKind,
+    key: ViewKey,
     state: Value,
 }
 
 impl ViewState {
     /// 使用已登记 schema 校验并规范化内存状态。
     pub fn new(
-        kind: ViewKeyKind,
+        key: &ViewKey,
         state: Value,
         registry: &ViewStateRegistry,
     ) -> Result<Self, ViewStateError> {
-        let schema = registry.schema(kind)?;
+        let schema = registry.schema(key.kind())?;
         let raw = serde_json::to_string(&state).map_err(|_| ViewStateError::Encode)?;
-        let state = (schema.decode)(&raw).map_err(|_| ViewStateError::InvalidState)?;
-        Ok(Self { kind, state })
+        let state = (schema.decode)(key, &raw).map_err(|_| ViewStateError::InvalidState)?;
+        Ok(Self {
+            key: key.clone(),
+            state,
+        })
     }
 
     /// 从独立版本的规范 JSON 恢复；schema 直接读取原始状态以拒绝重复字段。
     pub fn from_canonical_json(
         text: &str,
+        key: &ViewKey,
         registry: &ViewStateRegistry,
     ) -> Result<Self, ViewStateError> {
         let envelope: ViewStateEnvelope =
@@ -161,15 +165,22 @@ impl ViewState {
         let kind = ViewKeyKind::parse(&envelope.kind).ok_or(ViewStateError::UnknownKind)?;
         let dto: ViewStateDto =
             serde_json::from_str(text).map_err(|_| ViewStateError::InvalidStructure)?;
+        if kind != key.kind() {
+            return Err(ViewStateError::KeyMismatch);
+        }
         let schema = registry.schema(kind)?;
-        let state = (schema.decode)(dto.state.get()).map_err(|_| ViewStateError::InvalidState)?;
-        Ok(Self { kind, state })
+        let state =
+            (schema.decode)(key, dto.state.get()).map_err(|_| ViewStateError::InvalidState)?;
+        Ok(Self {
+            key: key.clone(),
+            state,
+        })
     }
 
     /// 序列化为确定键序且可逐字节重放的 JSON。
     pub fn to_canonical_json(&self) -> Result<String, ViewStateError> {
         let object = BTreeMap::from([
-            ("kind", Value::String(self.kind.id_str().to_owned())),
+            ("kind", Value::String(self.key.kind().id_str().to_owned())),
             ("state", self.state.clone()),
             ("version", Value::from(VIEW_STATE_VERSION)),
         ]);
@@ -177,8 +188,8 @@ impl ViewState {
     }
 
     /// 返回封闭视图类型。
-    pub const fn kind(&self) -> ViewKeyKind {
-        self.kind
+    pub fn kind(&self) -> ViewKeyKind {
+        self.key.kind()
     }
 
     /// 返回经 schema 规范化的状态值。
@@ -191,10 +202,10 @@ impl ViewState {
         self.state
     }
 
-    /// 校验 ViewKey 绑定并推导生命周期作用域，不重复持久化作用域事实。
+    /// 校验完整 ViewKey 绑定并推导生命周期作用域，不重复持久化作用域事实。
     pub fn scope(&self, key: &ViewKey) -> Result<ViewStateScope, ViewStateError> {
-        if key.kind() != self.kind {
-            return Err(ViewStateError::KeyKindMismatch);
+        if key != &self.key {
+            return Err(ViewStateError::KeyMismatch);
         }
         Ok(key
             .project_id()
@@ -244,9 +255,51 @@ mod view_state_tests {
         position: u64,
     }
 
-    fn decode_test_state(text: &str) -> Result<Value, InvalidViewState> {
+    #[derive(Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct NavState {
+        position: u64,
+    }
+
+    #[derive(Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct ExplorerState {
+        expanded: bool,
+    }
+
+    fn decode_test_state(_key: &ViewKey, text: &str) -> Result<Value, InvalidViewState> {
         let state: TestState = serde_json::from_str(text).map_err(|_| InvalidViewState)?;
         serde_json::to_value(state).map_err(|_| InvalidViewState)
+    }
+
+    fn decode_side_view_test_state(key: &ViewKey, text: &str) -> Result<Value, InvalidViewState> {
+        let ViewKey::SideView { side_view_id } = key else {
+            return Err(InvalidViewState);
+        };
+        match side_view_id {
+            SideViewId::Nav => {
+                let state: NavState = serde_json::from_str(text).map_err(|_| InvalidViewState)?;
+                serde_json::to_value(state).map_err(|_| InvalidViewState)
+            }
+            SideViewId::Explorer => {
+                let state: ExplorerState =
+                    serde_json::from_str(text).map_err(|_| InvalidViewState)?;
+                serde_json::to_value(state).map_err(|_| InvalidViewState)
+            }
+            SideViewId::Commit | SideViewId::AgentFiles => Err(InvalidViewState),
+        }
+    }
+
+    fn side_view_registry() -> ViewStateRegistry {
+        ViewStateRegistry::new(&[ViewStateSchema::new(
+            ViewKeyKind::SideView,
+            decode_side_view_test_state,
+        )])
+        .unwrap()
+    }
+
+    fn side_view_key(side_view_id: SideViewId) -> ViewKey {
+        ViewKey::SideView { side_view_id }
     }
 
     fn registry() -> ViewStateRegistry {
@@ -325,7 +378,7 @@ mod view_state_tests {
         let registry = registry();
         let expected = r#"{"kind":"editor","state":{"persistent":true,"position":7},"version":1}"#;
         let state = ViewState::new(
-            ViewKeyKind::Editor,
+            &editor_key(),
             json!({"position":7,"persistent":true}),
             &registry,
         )
@@ -335,7 +388,7 @@ mod view_state_tests {
         assert_eq!(state.to_canonical_json().unwrap(), expected);
 
         let reordered = r#"{"state":{"position":7,"persistent":true},"version":1,"kind":"editor"}"#;
-        let restored = ViewState::from_canonical_json(reordered, &registry).unwrap();
+        let restored = ViewState::from_canonical_json(reordered, &editor_key(), &registry).unwrap();
         assert_eq!(restored, state);
         assert_eq!(restored.to_canonical_json().unwrap(), expected);
         assert_eq!(
@@ -351,6 +404,7 @@ mod view_state_tests {
         assert_eq!(
             ViewState::from_canonical_json(
                 r#"{"kind":"future_view","state":{},"version":1}"#,
+                &editor_key(),
                 &registry,
             ),
             Err(ViewStateError::UnknownKind)
@@ -358,7 +412,7 @@ mod view_state_tests {
         for version in [0, 2, u64::MAX] {
             let text = format!(r#"{{"kind":"editor","state":{{}},"version":{version}}}"#);
             assert_eq!(
-                ViewState::from_canonical_json(&text, &registry),
+                ViewState::from_canonical_json(&text, &editor_key(), &registry),
                 Err(ViewStateError::UnsupportedVersion),
                 "{text}"
             );
@@ -376,7 +430,7 @@ mod view_state_tests {
             r#"{"kind":"editor","state":{},"state":{},"version":1}"#.into(),
         ] {
             assert_eq!(
-                ViewState::from_canonical_json(&text, &registry),
+                ViewState::from_canonical_json(&text, &editor_key(), &registry),
                 Err(ViewStateError::InvalidStructure),
                 "{text}"
             );
@@ -384,6 +438,10 @@ mod view_state_tests {
         assert_eq!(
             ViewState::from_canonical_json(
                 r#"{"kind":"terminal","state":{"persistent":true,"position":0},"version":1}"#,
+                &ViewKey::Terminal {
+                    project_id: project_id(),
+                    terminal_id: TerminalId::from_str(TERMINAL).unwrap(),
+                },
                 &registry,
             ),
             Err(ViewStateError::UnregisteredKind)
@@ -408,8 +466,8 @@ mod view_state_tests {
                 "ViewState 状态字段或领域值非法",
             ),
             (
-                ViewStateError::KeyKindMismatch,
-                "ViewState 与 ViewKey 类型不匹配",
+                ViewStateError::KeyMismatch,
+                "ViewState 与 ViewKey 身份不匹配",
             ),
             (ViewStateError::Encode, "ViewState 规范 JSON 编码失败"),
         ] {
@@ -433,21 +491,28 @@ mod view_state_tests {
         ] {
             let text = format!(r#"{{"kind":"editor","state":{state},"version":1}}"#);
             assert_eq!(
-                ViewState::from_canonical_json(&text, &registry),
+                ViewState::from_canonical_json(&text, &editor_key(), &registry),
                 Err(ViewStateError::InvalidState),
                 "{text}"
             );
         }
         assert_eq!(
             ViewState::new(
-                ViewKeyKind::Editor,
+                &editor_key(),
                 json!({"persistent":true,"position":1,"menu":true}),
                 &registry,
             ),
             Err(ViewStateError::InvalidState)
         );
         assert_eq!(
-            ViewState::new(ViewKeyKind::Terminal, json!({}), &registry),
+            ViewState::new(
+                &ViewKey::Terminal {
+                    project_id: project_id(),
+                    terminal_id: TerminalId::from_str(TERMINAL).unwrap(),
+                },
+                json!({}),
+                &registry,
+            ),
             Err(ViewStateError::UnregisteredKind)
         );
         assert_eq!(InvalidViewState.to_string(), "视图状态字段或领域值非法");
@@ -461,12 +526,8 @@ mod view_state_tests {
             if key.kind() == ViewKeyKind::Terminal {
                 continue;
             }
-            let state = ViewState::new(
-                key.kind(),
-                json!({"persistent":true,"position":1}),
-                &registry,
-            )
-            .unwrap();
+            let state =
+                ViewState::new(&key, json!({"persistent":true,"position":1}), &registry).unwrap();
             let expected = match key {
                 ViewKey::SideView { .. } | ViewKey::AppSettingsOverlay => {
                     ViewStateScope::Application
@@ -483,11 +544,85 @@ mod view_state_tests {
             } else {
                 editor_key()
             };
-            assert_eq!(
-                state.scope(&mismatched),
-                Err(ViewStateError::KeyKindMismatch)
-            );
+            assert_eq!(state.scope(&mismatched), Err(ViewStateError::KeyMismatch));
         }
+    }
+
+    /// 同一视图类型内的不同稳定身份不能交叉使用状态。
+    #[test]
+    fn view_state_scope_rejects_same_kind_different_identity() {
+        let registry = registry();
+        let nav = ViewKey::SideView {
+            side_view_id: crate::SideViewId::Nav,
+        };
+        let explorer = ViewKey::SideView {
+            side_view_id: crate::SideViewId::Explorer,
+        };
+        let state =
+            ViewState::new(&nav, json!({"persistent":true,"position":1}), &registry).unwrap();
+
+        assert_eq!(state.scope(&nav), Ok(ViewStateScope::Application));
+        assert_eq!(state.scope(&explorer), Err(ViewStateError::KeyMismatch));
+    }
+
+    /// SideView 的内存状态按完整 ViewKey 选择精确 schema。
+    #[test]
+    fn side_view_schema_uses_view_key_for_memory_states() {
+        let registry = side_view_registry();
+        let nav = side_view_key(SideViewId::Nav);
+        let explorer = side_view_key(SideViewId::Explorer);
+
+        assert_eq!(
+            ViewState::new(&nav, json!({"position":7}), &registry)
+                .unwrap()
+                .state(),
+            &json!({"position":7})
+        );
+        assert_eq!(
+            ViewState::new(&explorer, json!({"expanded":true}), &registry)
+                .unwrap()
+                .state(),
+            &json!({"expanded":true})
+        );
+        assert_eq!(
+            ViewState::new(&nav, json!({"expanded":true}), &registry),
+            Err(ViewStateError::InvalidState)
+        );
+        assert_eq!(
+            ViewState::new(&explorer, json!({"position":7}), &registry),
+            Err(ViewStateError::InvalidState)
+        );
+    }
+
+    /// SideView 的持久状态按完整 ViewKey 选择精确 schema。
+    #[test]
+    fn side_view_schema_uses_view_key_for_restored_states() {
+        let registry = side_view_registry();
+        let nav = side_view_key(SideViewId::Nav);
+        let explorer = side_view_key(SideViewId::Explorer);
+        let nav_json = r#"{"kind":"side_view","state":{"position":7},"version":1}"#;
+        let explorer_json = r#"{"kind":"side_view","state":{"expanded":true},"version":1}"#;
+
+        assert_eq!(
+            ViewState::from_canonical_json(nav_json, &nav, &registry)
+                .unwrap()
+                .state(),
+            &json!({"position":7})
+        );
+        assert_eq!(
+            ViewState::from_canonical_json(explorer_json, &explorer, &registry)
+                .unwrap()
+                .state(),
+            &json!({"expanded":true})
+        );
+        assert_eq!(
+            ViewState::from_canonical_json(explorer_json, &nav, &registry),
+            Err(ViewStateError::InvalidState)
+        );
+        assert_eq!(
+            ViewState::from_canonical_json(nav_json, &explorer, &registry),
+            Err(ViewStateError::InvalidState)
+        );
     }
 
     /// 注册表拒绝同一视图类型的第二份 schema，不以后注册覆盖先注册。
@@ -516,7 +651,7 @@ mod view_state_tests {
         ) {
             let registry = registry();
             let state = ViewState::new(
-                ViewKeyKind::Editor,
+                &editor_key(),
                 json!({"position":position,"persistent":persistent}),
                 &registry,
             )
@@ -526,7 +661,8 @@ mod view_state_tests {
                 &json!({"persistent":persistent,"position":position})
             );
             let encoded = state.to_canonical_json().unwrap();
-            let restored = ViewState::from_canonical_json(&encoded, &registry).unwrap();
+            let restored =
+                ViewState::from_canonical_json(&encoded, &editor_key(), &registry).unwrap();
             prop_assert_eq!(&restored, &state);
             prop_assert_eq!(restored.to_canonical_json().unwrap(), encoded);
         }
