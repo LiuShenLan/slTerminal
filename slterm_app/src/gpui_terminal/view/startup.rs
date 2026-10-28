@@ -2,7 +2,59 @@
 
 use super::*;
 
+/// 已冻结的视图配置与几何；PTY 启动结果单独传递。
+struct PreparedTerminal {
+    pane_id: PaneId,
+    families: [String; 4],
+    font_size: Pixels,
+    palette: Arc<Palette>,
+    copy_on_select: bool,
+    ligatures: bool,
+    completion_style: crate::suggest::CompletionStyle,
+    ghost_enabled: bool,
+    default_cursor_style: CursorStyle,
+    cell_w: Pixels,
+    line_h: Pixels,
+    initial: WindowSize,
+    initial_cwd: String,
+    initial_title: String,
+    exec_context: Option<crate::completion::PaneExecContext>,
+}
+
+/// 已成功启动、但尚未挂成 GPUI 实体的终端。
+#[allow(dead_code)] // 独立 AppRoot 的生产窗口装配链。
+pub(crate) struct LaunchedTerminal {
+    prepared: PreparedTerminal,
+    spawned: session::SpawnedSession,
+}
+
 impl TerminalView {
+    /// 只执行一次可失败启动；失败时不存在视图、订阅或占位面板。
+    #[allow(dead_code)] // 独立 AppRoot 的生产窗口装配链。
+    pub(crate) fn launch(
+        pane_id: PaneId,
+        spawn_grid: (u16, u16),
+        launch: TerminalLaunch,
+        window: &Window,
+        cx: &App,
+    ) -> std::io::Result<LaunchedTerminal> {
+        let (prepared, spawned) = Self::prepare(pane_id, spawn_grid, launch, window, cx);
+        Ok(LaunchedTerminal {
+            prepared,
+            spawned: spawned?,
+        })
+    }
+
+    /// 复用已经成功的启动结果构造实体，不再次 spawn。
+    #[allow(dead_code)] // 独立 AppRoot 的生产窗口装配链。
+    pub(crate) fn from_launched(
+        launched: LaunchedTerminal,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Self {
+        Self::from_prepared(launched.prepared, Ok(launched.spawned), window, cx)
+    }
+
     /// `spawn_grid`:PTY 出生网格(宿主已把窗口定形到该几何)。首帧布局
     /// 与之相同则零下发;见 `set_layout` 的启动稳定闸。
     pub fn new(
@@ -12,6 +64,17 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Self {
+        let (prepared, spawned) = Self::prepare(pane_id, spawn_grid, launch, window, cx);
+        Self::from_prepared(prepared, spawned, window, cx)
+    }
+
+    fn prepare(
+        pane_id: PaneId,
+        spawn_grid: (u16, u16),
+        launch: TerminalLaunch,
+        window: &Window,
+        cx: &App,
+    ) -> (PreparedTerminal, std::io::Result<session::SpawnedSession>) {
         // 字体、调色板与终端启动配置来自全局 Settings(bootstrap 装载)。
         // Settings 白名单外项取模块常量(设置键回填点):
         // 字宽模式恒 Compact、偏移恒 (0,0)、行高倍率恒 None、shell 恒 None
@@ -88,12 +151,57 @@ impl TerminalView {
                 (initial_cwd, title, spawned, exec_context)
             }
         };
+        (
+            PreparedTerminal {
+                pane_id,
+                families,
+                font_size,
+                palette,
+                copy_on_select,
+                ligatures,
+                completion_style,
+                ghost_enabled,
+                default_cursor_style,
+                cell_w,
+                line_h,
+                initial,
+                initial_cwd,
+                initial_title,
+                exec_context,
+            },
+            spawned,
+        )
+    }
+
+    fn from_prepared(
+        prepared: PreparedTerminal,
+        spawned: std::io::Result<session::SpawnedSession>,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Self {
+        let PreparedTerminal {
+            pane_id,
+            families,
+            font_size,
+            palette,
+            copy_on_select,
+            ligatures,
+            completion_style,
+            ghost_enabled,
+            default_cursor_style,
+            cell_w,
+            line_h,
+            initial,
+            initial_cwd,
+            initial_title,
+            exec_context,
+        } = prepared;
         let (session, error) = match spawned {
             Ok((session, rx)) => {
                 crate::gpui_terminal::session_pump::attach(rx, cx);
                 (Some(session), None)
             }
-            Err(err) => (None, Some(format!("PTY 启动失败: {err}"))),
+            Err(error) => (None, Some(format!("PTY 启动失败: {error}"))),
         };
 
         let focus_handle = cx.focus_handle();
@@ -204,5 +312,58 @@ impl TerminalView {
         }
         view.restart_cursor_blink(cx);
         view
+    }
+}
+
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod startup_tests {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use gpui::{Context, IntoElement, Render, TestAppContext, Window, div};
+
+    use super::*;
+
+    struct StartupHarness;
+
+    impl Render for StartupHarness {
+        fn render(
+            &mut self,
+            _window: &mut Window,
+            _cx: &mut Context<'_, Self>,
+        ) -> impl IntoElement {
+            div()
+        }
+    }
+
+    fn missing_shell_launch() -> TerminalLaunch {
+        TerminalLaunch::Local {
+            cwd: None,
+            shell: Some(slterm_terminal::tty::Shell::new(
+                "slterm-test-missing-shell-executable".into(),
+                Vec::new(),
+            )),
+            shell_name: None,
+            explicit_command: false,
+        }
+    }
+
+    /// 显式创建失败必须向上返回错误，而不是伪装成可挂载的终端。
+    #[gpui::test]
+    fn terminal_launch_failure_is_returned(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            cx.set_global(Settings::default());
+            crate::app_shell::theme::apply_dark_theme(cx);
+        });
+        let failed = Rc::new(Cell::new(false));
+        let observed = Rc::clone(&failed);
+        let (_root, _window) = cx.add_window_view(|window, cx| {
+            let result =
+                TerminalView::launch(PaneId(1), (80, 24), missing_shell_launch(), window, cx);
+            observed.set(result.is_err());
+            StartupHarness
+        });
+        assert!(failed.get(), "启动失败应返回 Err，而非无会话视图");
     }
 }

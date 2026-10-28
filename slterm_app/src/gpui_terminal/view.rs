@@ -466,6 +466,23 @@ impl TerminalView {
         cx.notify();
     }
 
+    /// 项目可见性只门控输出重绘，不暂停会话泵或终端解析。
+    pub(crate) fn set_output_visible(&mut self, visible: bool, cx: &mut Context<'_, Self>) {
+        if self.output_visible == visible {
+            return;
+        }
+        self.output_visible = visible;
+        if visible {
+            // 隐藏期间会话泵持续推进；重新可见时主动补一帧最新画面。
+            cx.notify();
+        }
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) const fn output_visible(&self) -> bool {
+        self.output_visible
+    }
+
     /// 让 EventLoop 退出并回收 ConPTY/子进程。幂等:重复调用只会得到
     /// 发送失败;线程 join 兜底在会话持有的 EventLoopHandle Drop 上。
     pub fn shutdown(&self) {
