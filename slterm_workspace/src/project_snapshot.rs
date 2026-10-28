@@ -3,9 +3,75 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+use slterm_path::CanonicalPath;
+use slterm_split::SplitDirection;
+
 use crate::{
-    ProjectId, ProjectRegistry, ProjectRegistryError, TerminalId, TerminalRecord, ViewKey,
+    LayoutError, LogicalSize, PanelGroup, PanelGroupId, ProjectId, ProjectRegistry,
+    ProjectRegistryError, RunIntent, TerminalId, TerminalRecord, TerminalRecordError, ViewKey,
 };
+
+/// 在既有组末尾或空项目首组打开逻辑终端的输入。
+#[derive(Clone, Debug)]
+pub struct NewTerminalSpec {
+    pub project_id: ProjectId,
+    pub terminal_id: TerminalId,
+    /// 非空布局中的目标组；空布局中作为首组身份。
+    pub target_group: PanelGroupId,
+    pub shell: CanonicalPath,
+    pub custom_title: Option<String>,
+}
+
+/// 从目标组拆分出带新逻辑终端的新组。
+#[derive(Clone, Debug)]
+pub struct SplitTerminalSpec {
+    pub new_terminal: NewTerminalSpec,
+    pub new_group_id: PanelGroupId,
+    pub direction: SplitDirection,
+    pub ratio: f32,
+    pub viewport: LogicalSize,
+}
+
+/// 快照命令的布局、记录或一致性错误。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ProjectCommandError {
+    Registry(ProjectRegistryError),
+    Layout(LayoutError),
+    Record(TerminalRecordError),
+    Snapshot(ProjectSnapshotError),
+}
+
+impl fmt::Display for ProjectCommandError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("项目快照命令失败")
+    }
+}
+
+impl std::error::Error for ProjectCommandError {}
+
+impl From<ProjectRegistryError> for ProjectCommandError {
+    fn from(error: ProjectRegistryError) -> Self {
+        Self::Registry(error)
+    }
+}
+
+impl From<LayoutError> for ProjectCommandError {
+    fn from(error: LayoutError) -> Self {
+        Self::Layout(error)
+    }
+}
+
+impl From<TerminalRecordError> for ProjectCommandError {
+    fn from(error: TerminalRecordError) -> Self {
+        Self::Record(error)
+    }
+}
+
+impl From<ProjectSnapshotError> for ProjectCommandError {
+    fn from(error: ProjectSnapshotError) -> Self {
+        Self::Snapshot(error)
+    }
+}
 
 /// 项目快照的跨记录约束错误。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -59,6 +125,157 @@ impl ProjectSnapshot {
         };
         snapshot.validate()?;
         Ok(snapshot)
+    }
+
+    /// 生成新增逻辑终端的候选快照；任何失败都不修改原快照。
+    pub fn with_new_terminal(
+        &self,
+        spec: NewTerminalSpec,
+    ) -> Result<(Self, TerminalRecord), ProjectCommandError> {
+        self.validate()?;
+        let mut candidate = self.clone();
+        let (record, view) = candidate.prepare_record(&spec)?;
+        let layout = candidate
+            .registry_mut()
+            .layout_mut(spec.project_id)
+            .ok_or(ProjectRegistryError::ProjectNotFound)?;
+        if layout.tree().is_none() {
+            let group = PanelGroup::new(vec![view.clone()], view)?;
+            layout.open_first_group(spec.target_group, group)?;
+        } else {
+            layout.insert_view(spec.target_group, view)?;
+        }
+        candidate.add_terminal(record.clone())?;
+        candidate.validate()?;
+        Ok((candidate, record))
+    }
+
+    /// 生成拆分逻辑终端的候选快照；新组从创建起即包含新视图。
+    pub fn with_split_terminal(
+        &self,
+        spec: SplitTerminalSpec,
+    ) -> Result<(Self, TerminalRecord), ProjectCommandError> {
+        self.validate()?;
+        let mut candidate = self.clone();
+        let (record, view) = candidate.prepare_record(&spec.new_terminal)?;
+        let group = PanelGroup::new(vec![view.clone()], view)?;
+        candidate
+            .registry_mut()
+            .layout_mut(spec.new_terminal.project_id)
+            .ok_or(ProjectRegistryError::ProjectNotFound)?
+            .split(
+                spec.new_terminal.target_group,
+                spec.new_group_id,
+                group,
+                spec.direction,
+                spec.ratio,
+                spec.viewport,
+            )?;
+        candidate.add_terminal(record.clone())?;
+        candidate.validate()?;
+        Ok((candidate, record))
+    }
+
+    /// 生成关闭逻辑终端的候选快照；最后关闭后保留项目空态。
+    pub fn without_terminal(
+        &self,
+        id: TerminalId,
+    ) -> Result<(Self, TerminalRecord), ProjectCommandError> {
+        self.validate()?;
+        let record = self
+            .terminal(id)
+            .cloned()
+            .ok_or(ProjectSnapshotError::MissingTerminal(id))?;
+        let view = ViewKey::Terminal {
+            project_id: record.project_id(),
+            terminal_id: id,
+        };
+        let mut candidate = self.clone();
+        candidate
+            .registry_mut()
+            .layout_mut(record.project_id())
+            .ok_or(ProjectRegistryError::ProjectNotFound)?
+            .close_view(&view)?;
+        let removed = candidate.remove_terminal(id)?;
+        candidate.validate()?;
+        Ok((candidate, removed))
+    }
+
+    /// 生成激活逻辑终端的候选快照，只改变布局激活关系。
+    pub fn with_active_terminal(&self, id: TerminalId) -> Result<Self, ProjectCommandError> {
+        self.validate()?;
+        let record = self
+            .terminal(id)
+            .ok_or(ProjectSnapshotError::MissingTerminal(id))?;
+        let view = ViewKey::Terminal {
+            project_id: record.project_id(),
+            terminal_id: id,
+        };
+        let mut candidate = self.clone();
+        let layout = candidate
+            .registry_mut()
+            .layout_mut(record.project_id())
+            .ok_or(ProjectRegistryError::ProjectNotFound)?;
+        let group_id = layout
+            .group_ids()
+            .into_iter()
+            .find(|group_id| {
+                layout
+                    .group(*group_id)
+                    .is_some_and(|group| group.views().contains(&view))
+            })
+            .ok_or(LayoutError::ViewNotFound)?;
+        layout.activate_view(group_id, &view)?;
+        candidate.validate()?;
+        Ok(candidate)
+    }
+
+    /// 生成更新逻辑终端运行意图的候选快照，不改变布局。
+    pub fn with_terminal_run_intent(
+        &self,
+        id: TerminalId,
+        run_intent: RunIntent,
+    ) -> Result<Self, ProjectCommandError> {
+        self.validate()?;
+        if self.terminal(id).is_none() {
+            return Err(ProjectSnapshotError::MissingTerminal(id).into());
+        }
+        let mut candidate = self.clone();
+        candidate.set_run_intent(id, run_intent)?;
+        candidate.validate()?;
+        Ok(candidate)
+    }
+
+    fn prepare_record(
+        &mut self,
+        spec: &NewTerminalSpec,
+    ) -> Result<(TerminalRecord, ViewKey), ProjectCommandError> {
+        if self.terminal(spec.terminal_id).is_some() {
+            return Err(ProjectSnapshotError::DuplicateTerminal(spec.terminal_id).into());
+        }
+        let root = self
+            .registry()
+            .project(spec.project_id)
+            .ok_or(ProjectRegistryError::ProjectNotFound)?
+            .root()
+            .clone();
+        let number = self
+            .registry_mut()
+            .allocate_terminal_number(spec.project_id)?;
+        let record = TerminalRecord::new(
+            spec.terminal_id,
+            spec.project_id,
+            number,
+            root,
+            spec.shell.clone(),
+            spec.custom_title.clone(),
+            RunIntent::Launch,
+        )?;
+        let view = ViewKey::Terminal {
+            project_id: spec.project_id,
+            terminal_id: spec.terminal_id,
+        };
+        Ok((record, view))
     }
 
     /// 校验项目聚合、布局引用、终端归属与编号约束。

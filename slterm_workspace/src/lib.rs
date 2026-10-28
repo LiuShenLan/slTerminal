@@ -30,7 +30,9 @@ pub use project_layout::{
 pub use project_registry::{
     AddProjectOutcome, Project, ProjectRegistry, ProjectRegistryError, ProjectRootStatus,
 };
-pub use project_snapshot::{ProjectSnapshot, ProjectSnapshotError};
+pub use project_snapshot::{
+    NewTerminalSpec, ProjectCommandError, ProjectSnapshot, ProjectSnapshotError, SplitTerminalSpec,
+};
 pub use side_view::{SideViewId, UnknownSideViewId};
 pub use terminal_record::{RunIntent, TerminalRecord, TerminalRecordError};
 pub use view_key::{ViewKey, ViewKeyError, ViewKeyKind};
