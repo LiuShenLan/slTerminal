@@ -89,7 +89,7 @@ fn toggle_sidebar_shortcut_preserves_visible_view_lifecycle(cx: &mut TestAppCont
     let temp = tempfile::tempdir().unwrap();
     let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
     let writer = WorkspaceWriter::start(paths.clone()).unwrap();
-    let persistence = SideViewPersistence::load(&paths, Some(writer.client()));
+    let persistence = AppRootPersistence::load(&paths, Some(writer.client()));
     let (root, mut window, _) = open_root_with_persistence(cx, persistence);
     add_project(&root, &mut window, PROJECT_A, "D:/work/a");
     new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_A);
@@ -135,7 +135,7 @@ fn production_sidebar_restores_organization_before_first_frame(cx: &mut TestAppC
     store.save_sidebar_state(&sidebar).unwrap();
     drop(store);
 
-    let persistence = SideViewPersistence::load(&paths, None);
+    let persistence = AppRootPersistence::load(&paths, None);
     let (root, mut window, _) = open_root_with_persistence(cx, persistence);
     draw_frame(&mut window);
 
@@ -151,7 +151,7 @@ fn sidebar_width_divider_keyboard_adjusts_resets_and_persists(cx: &mut TestAppCo
     let temp = tempfile::tempdir().unwrap();
     let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
     let writer = WorkspaceWriter::start(paths.clone()).unwrap();
-    let persistence = SideViewPersistence::load(&paths, Some(writer.client()));
+    let persistence = AppRootPersistence::load(&paths, Some(writer.client()));
     let (root, mut window, _) = open_root_with_persistence(cx, persistence);
     draw_frame(&mut window);
     focus_sidebar_divider(&root, &mut window, cx, SidebarDivider::Width);
@@ -194,7 +194,7 @@ fn sidebar_ratio_divider_keyboard_adjusts_resets_and_persists(cx: &mut TestAppCo
     store.save_sidebar_state(&sidebar).unwrap();
     drop(store);
     let writer = WorkspaceWriter::start(paths.clone()).unwrap();
-    let persistence = SideViewPersistence::load(&paths, Some(writer.client()));
+    let persistence = AppRootPersistence::load(&paths, Some(writer.client()));
     let (root, mut window, _) = open_root_with_persistence(cx, persistence);
     draw_frame(&mut window);
     focus_sidebar_divider(&root, &mut window, cx, SidebarDivider::Ratio);
@@ -229,7 +229,7 @@ fn sidebar_width_divider_drag_and_double_click_reset(cx: &mut TestAppContext) {
     let temp = tempfile::tempdir().unwrap();
     let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
     let writer = WorkspaceWriter::start(paths.clone()).unwrap();
-    let persistence = SideViewPersistence::load(&paths, Some(writer.client()));
+    let persistence = AppRootPersistence::load(&paths, Some(writer.client()));
     let (root, mut window, _) = open_root_with_persistence(cx, persistence);
     draw_frame(&mut window);
     let divider = window
@@ -287,7 +287,7 @@ fn sidebar_ratio_divider_drag_and_double_click_reset(cx: &mut TestAppContext) {
     sidebar.click_button(SideViewId::Explorer).unwrap();
     store.save_sidebar_state(&sidebar).unwrap();
     drop(store);
-    let persistence = SideViewPersistence::load(&paths, None);
+    let persistence = AppRootPersistence::load(&paths, None);
     let (root, mut window, _) = open_root_with_persistence(cx, persistence);
     draw_frame(&mut window);
     let divider = window
@@ -351,7 +351,7 @@ fn sidebar_temporary_compression_does_not_overwrite(cx: &mut TestAppContext) {
     store.save_sidebar_state(&sidebar).unwrap();
     drop(store);
     let writer = WorkspaceWriter::start(paths.clone()).unwrap();
-    let persistence = SideViewPersistence::load(&paths, Some(writer.client()));
+    let persistence = AppRootPersistence::load(&paths, Some(writer.client()));
     let (root, mut window, _) = open_root_with_persistence_and_size(
         cx,
         persistence,
@@ -388,7 +388,7 @@ fn sidebar_dual_slots_keep_minimum_height_without_overwriting_ratio(cx: &mut Tes
     sidebar.set_ratio(0.9).unwrap();
     store.save_sidebar_state(&sidebar).unwrap();
     drop(store);
-    let persistence = SideViewPersistence::load(&paths, None);
+    let persistence = AppRootPersistence::load(&paths, None);
     let (root, mut window, _) = open_root_with_persistence_and_size(
         cx,
         persistence,
@@ -420,7 +420,7 @@ fn sidebar_compressed_width_keyboard_uses_visible_width(cx: &mut TestAppContext)
     sidebar.set_width(333);
     store.save_sidebar_state(&sidebar).unwrap();
     drop(store);
-    let persistence = SideViewPersistence::load(&paths, None);
+    let persistence = AppRootPersistence::load(&paths, None);
     let (root, mut window, _) = open_root_with_persistence_and_size(
         cx,
         persistence,
@@ -452,7 +452,7 @@ fn sidebar_clamped_ratio_keyboard_uses_visible_ratio(cx: &mut TestAppContext) {
     sidebar.set_ratio(0.9).unwrap();
     store.save_sidebar_state(&sidebar).unwrap();
     drop(store);
-    let persistence = SideViewPersistence::load(&paths, None);
+    let persistence = AppRootPersistence::load(&paths, None);
     let (root, mut window, _) = open_root_with_persistence_and_size(
         cx,
         persistence,
@@ -482,7 +482,7 @@ fn sidebar_compressed_width_drag_uses_visible_width(cx: &mut TestAppContext) {
     store.save_sidebar_state(&sidebar).unwrap();
     drop(store);
     let writer = WorkspaceWriter::start(paths.clone()).unwrap();
-    let persistence = SideViewPersistence::load(&paths, Some(writer.client()));
+    let persistence = AppRootPersistence::load(&paths, Some(writer.client()));
     let (root, mut window, _) = open_root_with_persistence_and_size(
         cx,
         persistence,
@@ -526,7 +526,7 @@ fn sidebar_clamped_ratio_drag_uses_visible_ratio(cx: &mut TestAppContext) {
     store.save_sidebar_state(&sidebar).unwrap();
     drop(store);
     let writer = WorkspaceWriter::start(paths.clone()).unwrap();
-    let persistence = SideViewPersistence::load(&paths, Some(writer.client()));
+    let persistence = AppRootPersistence::load(&paths, Some(writer.client()));
     let (root, mut window, _) = open_root_with_persistence_and_size(
         cx,
         persistence,
@@ -570,7 +570,7 @@ fn sidebar_dual_slots_scroll_when_window_is_short(cx: &mut TestAppContext) {
     sidebar.click_button(SideViewId::Explorer).unwrap();
     store.save_sidebar_state(&sidebar).unwrap();
     drop(store);
-    let persistence = SideViewPersistence::load(&paths, None);
+    let persistence = AppRootPersistence::load(&paths, None);
     let (_root, mut window, _) = open_root_with_persistence_and_size(
         cx,
         persistence,
@@ -623,7 +623,7 @@ fn removed_ratio_divider_returns_focus_to_closed_view_button(cx: &mut TestAppCon
     sidebar.click_button(SideViewId::Explorer).unwrap();
     store.save_sidebar_state(&sidebar).unwrap();
     drop(store);
-    let persistence = SideViewPersistence::load(&paths, None);
+    let persistence = AppRootPersistence::load(&paths, None);
     let (root, mut window, _) = open_root_with_persistence(cx, persistence);
     draw_frame(&mut window);
     focus_sidebar_divider(&root, &mut window, cx, SidebarDivider::Ratio);
@@ -658,7 +658,7 @@ fn activity_bar_lower_group_is_anchored_to_bottom(cx: &mut TestAppContext) {
         .unwrap();
     store.save_sidebar_state(&sidebar).unwrap();
     drop(store);
-    let persistence = SideViewPersistence::load(&paths, None);
+    let persistence = AppRootPersistence::load(&paths, None);
     let (root, mut window, _) = open_root_with_persistence(cx, persistence);
     draw_frame(&mut window);
 
@@ -838,7 +838,7 @@ fn side_button_menu_swaps_open_views_without_recreating(cx: &mut TestAppContext)
     sidebar.click_button(SideViewId::Explorer).unwrap();
     store.save_sidebar_state(&sidebar).unwrap();
     drop(store);
-    let persistence = SideViewPersistence::load(&paths, None);
+    let persistence = AppRootPersistence::load(&paths, None);
     let (root, mut window, _) = open_root_with_persistence(cx, persistence);
     draw_frame(&mut window);
     let original = root.read_with(cx, |root, _| {
@@ -1049,7 +1049,7 @@ fn side_button_menu_hiding_only_button_focuses_workspace(cx: &mut TestAppContext
     }
     store.save_sidebar_state(&sidebar).unwrap();
     drop(store);
-    let persistence = SideViewPersistence::load(&paths, None);
+    let persistence = AppRootPersistence::load(&paths, None);
     let (root, mut window, _) = open_root_with_persistence(cx, persistence);
     draw_frame(&mut window);
     let workspace = root.read_with(cx, |root, _| root.workspace_focus.clone());
@@ -1084,7 +1084,7 @@ fn side_button_menu_reset_order_preserves_other_organization(cx: &mut TestAppCon
     sidebar.toggle_sidebar();
     store.save_sidebar_state(&sidebar).unwrap();
     drop(store);
-    let persistence = SideViewPersistence::load(&paths, None);
+    let persistence = AppRootPersistence::load(&paths, None);
     let (root, mut window, _) = open_root_with_persistence(cx, persistence);
     draw_frame(&mut window);
 
@@ -1121,7 +1121,7 @@ fn side_button_menu_organization_edit_persists(cx: &mut TestAppContext) {
     let temp = tempfile::tempdir().unwrap();
     let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
     let writer = WorkspaceWriter::start(paths.clone()).unwrap();
-    let persistence = SideViewPersistence::load(&paths, Some(writer.client()));
+    let persistence = AppRootPersistence::load(&paths, Some(writer.client()));
     let (root, mut window, _) = open_root_with_persistence(cx, persistence);
     draw_frame(&mut window);
 
@@ -1160,7 +1160,7 @@ fn side_button_menu_noop_preserves_recovered_record(cx: &mut TestAppContext) {
         )
         .unwrap();
     let writer = WorkspaceWriter::start(paths.clone()).unwrap();
-    let persistence = SideViewPersistence::load(&paths, Some(writer.client()));
+    let persistence = AppRootPersistence::load(&paths, Some(writer.client()));
     let (root, mut window, _) = open_root_with_persistence(cx, persistence);
     draw_frame(&mut window);
 
@@ -1196,7 +1196,7 @@ fn sidebar_geometry_noop_preserves_recovered_record(cx: &mut TestAppContext) {
         )
         .unwrap();
     let writer = WorkspaceWriter::start(paths.clone()).unwrap();
-    let persistence = SideViewPersistence::load(&paths, Some(writer.client()));
+    let persistence = AppRootPersistence::load(&paths, Some(writer.client()));
     let (root, mut window, _) = open_root_with_persistence(cx, persistence);
     draw_frame(&mut window);
     focus_sidebar_divider(&root, &mut window, cx, SidebarDivider::Width);
@@ -1255,7 +1255,7 @@ fn focus_activity_bar_skips_hidden_buttons(cx: &mut TestAppContext) {
     sidebar.close_view(SideViewId::Nav);
     store.save_sidebar_state(&sidebar).unwrap();
     drop(store);
-    let persistence = SideViewPersistence::load(&paths, None);
+    let persistence = AppRootPersistence::load(&paths, None);
     let (root, mut window, _) = open_root_with_persistence(cx, persistence);
     draw_frame(&mut window);
     let workspace = root.read_with(cx, |root, _| root.workspace_focus.clone());
@@ -1451,7 +1451,7 @@ fn side_view_shortcut_restores_hidden_button_and_persists(cx: &mut TestAppContex
     store.save_sidebar_state(&initial).unwrap();
     drop(store);
     let writer = WorkspaceWriter::start(paths.clone()).unwrap();
-    let persistence = SideViewPersistence::load(&paths, Some(writer.client()));
+    let persistence = AppRootPersistence::load(&paths, Some(writer.client()));
     let (root, mut window, _) = open_root_with_persistence(cx, persistence);
     draw_frame(&mut window);
     let workspace = root.read_with(cx, |root, _| root.workspace_focus.clone());
@@ -1491,7 +1491,7 @@ fn assert_focus_shortcut_preserves_recovered_sidebar(cx: &mut TestAppContext, ra
         .unwrap();
     drop(store);
     let writer = WorkspaceWriter::start(paths.clone()).unwrap();
-    let persistence = SideViewPersistence::load(&paths, Some(writer.client()));
+    let persistence = AppRootPersistence::load(&paths, Some(writer.client()));
     let (root, mut window, _) = open_root_with_persistence(cx, persistence);
     draw_frame(&mut window);
     let workspace = root.read_with(cx, |root, _| root.workspace_focus.clone());
@@ -1546,7 +1546,7 @@ fn production_sidebar_dual_slots_preserve_instances_across_hide(cx: &mut TestApp
     sidebar.click_button(SideViewId::Explorer).unwrap();
     store.save_sidebar_state(&sidebar).unwrap();
     drop(store);
-    let persistence = SideViewPersistence::load(&paths, None);
+    let persistence = AppRootPersistence::load(&paths, None);
     let (root, mut window, _) = open_root_with_persistence(cx, persistence);
     add_project(&root, &mut window, PROJECT_A, "D:/work/a");
     new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_A);
@@ -1609,7 +1609,7 @@ fn production_sidebar_button_replaces_visible_view(cx: &mut TestAppContext) {
     let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
     let writer = WorkspaceWriter::start(paths.clone()).unwrap();
     let registry = super::super::side_view::side_view_state_registry();
-    let persistence = SideViewPersistence::load(&paths, Some(writer.client()));
+    let persistence = AppRootPersistence::load(&paths, Some(writer.client()));
     let (_root, mut window, _) = open_root_with_persistence(cx, persistence);
     draw_frame(&mut window);
     assert!(

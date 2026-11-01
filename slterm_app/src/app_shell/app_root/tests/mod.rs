@@ -33,7 +33,8 @@ use crate::persistence::workspace::WorkspaceDatabase;
 use crate::persistence::workspace_writer::WorkspaceWriter;
 
 use super::commands::{AppRootError, LocalTerminalLauncher};
-use super::side_view::SideViewPersistence;
+use super::focus_manager::FocusError;
+use super::side_view::AppRootPersistence;
 use super::{AppRoot, TerminalPanelLauncher};
 
 const PROJECT_A: &str = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2a";
@@ -121,6 +122,43 @@ impl TerminalPanelLauncher for FakeLauncher {
             .insert(panel_id.sequence(), receiver);
         Ok(terminal)
     }
+
+    fn restore(
+        &mut self,
+        panel_id: PanelId,
+        record: &slterm_workspace::TerminalRecord,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Entity<TerminalView> {
+        let launch = TerminalLaunch::Local {
+            cwd: None,
+            shell: Some(slterm_terminal::tty::Shell::new(
+                "slterm-test-missing-shell-executable".into(),
+                Vec::new(),
+            )),
+            shell_name: None,
+            explicit_command: false,
+        };
+        let pane_id = PaneId(panel_id.sequence());
+        if record.run_intent() == RunIntent::Exited {
+            return cx
+                .new(|cx| TerminalView::restore_exited(pane_id, (80, 24), launch, window, cx));
+        }
+
+        self.state.borrow_mut().attempts += 1;
+        let fail = std::mem::replace(&mut self.state.borrow_mut().fail_next, false);
+        let terminal =
+            cx.new(|cx| TerminalView::restore_launch(pane_id, (80, 24), launch, window, cx));
+        if !fail {
+            let (test_session, receiver) = session::test_session();
+            terminal.update(cx, |view, _| view.install_test_session(test_session));
+            self.state
+                .borrow_mut()
+                .sessions
+                .insert(panel_id.sequence(), receiver);
+        }
+        terminal
+    }
 }
 
 fn open_root(
@@ -130,12 +168,12 @@ fn open_root(
     VisualTestContext,
     Rc<RefCell<LauncherState>>,
 ) {
-    open_root_with_persistence(cx, SideViewPersistence::empty(None))
+    open_root_with_persistence(cx, AppRootPersistence::empty(None))
 }
 
 fn open_root_with_persistence(
     cx: &mut TestAppContext,
-    persistence: SideViewPersistence,
+    persistence: AppRootPersistence,
 ) -> (
     Entity<AppRoot>,
     VisualTestContext,
@@ -146,8 +184,21 @@ fn open_root_with_persistence(
 
 fn open_root_with_persistence_and_size(
     cx: &mut TestAppContext,
-    persistence: SideViewPersistence,
+    persistence: AppRootPersistence,
     window_size: Option<gpui::Size<gpui::Pixels>>,
+) -> (
+    Entity<AppRoot>,
+    VisualTestContext,
+    Rc<RefCell<LauncherState>>,
+) {
+    open_root_with_persistence_and_size_configured(cx, persistence, window_size, |_| {})
+}
+
+fn open_root_with_persistence_and_size_configured(
+    cx: &mut TestAppContext,
+    persistence: AppRootPersistence,
+    window_size: Option<gpui::Size<gpui::Pixels>>,
+    configure: impl FnOnce(&mut LauncherState),
 ) -> (
     Entity<AppRoot>,
     VisualTestContext,
@@ -160,6 +211,7 @@ fn open_root_with_persistence_and_size(
         super::keymap::register(cx);
     });
     let state = Rc::new(RefCell::new(LauncherState::default()));
+    configure(&mut state.borrow_mut());
     let launcher = FakeLauncher {
         state: Rc::clone(&state),
     };
@@ -176,7 +228,10 @@ fn open_root_with_persistence_and_size(
                 cx,
             )
         });
-        root.update(cx, |root, cx| root.observe_focus(window, cx));
+        root.update(cx, |root, cx| {
+            root.observe_focus(window, cx);
+            root.restore_active_project(window, cx);
+        });
         slot = Some(root.clone());
         Root::new(root, window, cx)
     });
@@ -190,6 +245,17 @@ fn draw_frame(window: &mut VisualTestContext) {
     window.update(|window, cx| {
         window.draw(cx).clear(cx);
     });
+}
+
+fn open_side_menu_for_test(window: &mut VisualTestContext) {
+    draw_frame(window);
+    let bounds = window
+        .debug_bounds("app-root-side-button-explorer")
+        .unwrap();
+    window.simulate_mouse_down(bounds.center(), MouseButton::Right, Modifiers::default());
+    window.simulate_mouse_up(bounds.center(), MouseButton::Right, Modifiers::default());
+    draw_frame(window);
+    assert!(window.debug_bounds("app-root-side-button-menu").is_some());
 }
 
 fn group_selector(id: &str) -> &'static str {
@@ -338,6 +404,43 @@ fn output_visible(
     })
 }
 
+fn terminal_recovery_snapshot() -> ProjectSnapshot {
+    let mut snapshot = ProjectSnapshot::default();
+    snapshot
+        .registry_mut()
+        .add_project(project_id(PROJECT_A), path("D:/work/a"))
+        .unwrap();
+    let (next, _) = snapshot
+        .with_new_terminal(terminal_spec(PROJECT_A, GROUP_A, TERMINAL_A))
+        .unwrap();
+    snapshot = next;
+    let (next, _) = snapshot
+        .with_new_terminal(terminal_spec(PROJECT_A, GROUP_A, TERMINAL_C))
+        .unwrap();
+    snapshot = next;
+    snapshot = snapshot
+        .with_terminal_run_intent(terminal_id(TERMINAL_C), RunIntent::Exited)
+        .unwrap();
+    snapshot
+        .registry_mut()
+        .add_project(project_id(PROJECT_B), path("D:/work/b"))
+        .unwrap();
+    let (next, _) = snapshot
+        .with_new_terminal(terminal_spec(PROJECT_B, GROUP_B, TERMINAL_B))
+        .unwrap();
+    snapshot = next;
+    snapshot
+        .registry_mut()
+        .activate_project(project_id(PROJECT_A))
+        .unwrap();
+    snapshot
+}
+
+fn save_terminal_recovery_snapshot(paths: &AppPaths, snapshot: &ProjectSnapshot) {
+    let mut store = WorkspaceDatabase::open(paths).unwrap();
+    store.save_project_snapshot(snapshot).unwrap();
+}
+
 fn assert_project_snapshot_saved(
     root: &Entity<AppRoot>,
     cx: &TestAppContext,
@@ -348,6 +451,235 @@ fn assert_project_snapshot_saved(
     let mut store = WorkspaceDatabase::open(paths).unwrap();
     let persisted = store.load_project_snapshot().unwrap();
     root.read_with(cx, |root, _| assert_eq!(root.snapshot(), &persisted));
+}
+
+#[gpui::test]
+fn project_recovery_failure_blocks_snapshot_overwrite(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let mut original = ProjectSnapshot::default();
+    original
+        .registry_mut()
+        .add_project(project_id(PROJECT_A), path("D:/work/a"))
+        .unwrap();
+    save_terminal_recovery_snapshot(&paths, &original);
+    let raw = rusqlite::Connection::open(paths.workspace_db_path()).unwrap();
+    let valid_layout = raw.query_row(
+        "SELECT layout_json FROM project_layouts WHERE project_id = ?1",
+        [PROJECT_A],
+        |row| row.get::<_, String>(0),
+    );
+    let valid_layout = valid_layout.unwrap();
+    raw.execute(
+        "UPDATE project_layouts SET layout_json = 'not-json' WHERE project_id = ?1",
+        [PROJECT_A],
+    )
+    .unwrap();
+    let writer = WorkspaceWriter::start(paths.clone()).unwrap();
+    let persistence = AppRootPersistence::load(&paths, Some(writer.client()));
+    assert!(persistence.project_snapshot_recovery_failed());
+    raw.execute(
+        "UPDATE project_layouts SET layout_json = ?2 WHERE project_id = ?1",
+        rusqlite::params![PROJECT_A, valid_layout],
+    )
+    .unwrap();
+    let (root, mut window, _) = open_root_with_persistence(cx, persistence);
+
+    open_generated_project(&root, &mut window, "D:/work/b");
+    writer.flush().unwrap();
+    let mut store = WorkspaceDatabase::open(&paths).unwrap();
+    assert_eq!(
+        store.load_project_snapshot().unwrap(),
+        original,
+        "恢复失败后的编辑不得覆盖原项目"
+    );
+    let weak = root.downgrade();
+    window.update(|window, _| window.remove_window());
+    drop(root);
+    cx.run_until_parked();
+    cx.update(|_| {});
+    weak.assert_released();
+    writer.shutdown().unwrap();
+    assert_eq!(store.load_project_snapshot().unwrap(), original);
+}
+
+#[gpui::test]
+fn terminal_restore_visibility_and_exit_state(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let snapshot = terminal_recovery_snapshot();
+    save_terminal_recovery_snapshot(&paths, &snapshot);
+    let writer = WorkspaceWriter::start(paths.clone()).unwrap();
+    let persistence = AppRootPersistence::load(&paths, Some(writer.client()));
+    let (root, mut window, state) = open_root_with_persistence(cx, persistence);
+
+    assert_eq!(state.borrow().attempts, 1, "只启动可见 Launch 终端");
+    root.read_with(cx, |root, cx| {
+        assert_eq!(root.snapshot(), &snapshot);
+        assert_eq!(root.panel_count(project_id(PROJECT_A), cx), 2);
+        assert_eq!(root.panel_count(project_id(PROJECT_B), cx), 0);
+        let active_panel = root
+            .terminal_panel(project_id(PROJECT_A), terminal_id(TERMINAL_C), cx)
+            .unwrap()
+            .0;
+        assert_eq!(
+            root.focused_panel(project_id(PROJECT_A), cx),
+            Some(active_panel),
+            "默认焦点必须指向布局 active 面板"
+        );
+        let visible = root
+            .terminal_panel(project_id(PROJECT_A), terminal_id(TERMINAL_A), cx)
+            .unwrap()
+            .1;
+        assert!(visible.read(cx).session.is_some());
+        let exited = root
+            .terminal_panel(project_id(PROJECT_A), terminal_id(TERMINAL_C), cx)
+            .unwrap()
+            .1;
+        assert!(exited.read(cx).session.is_none());
+        assert!(exited.read(cx).is_exited());
+    });
+    assert!(window.update(|window, cx| window.focused(cx)).is_none());
+    writer.flush().unwrap();
+    let mut store = WorkspaceDatabase::open(&paths).unwrap();
+    assert_eq!(store.load_project_snapshot().unwrap(), snapshot);
+    draw_frame(&mut window);
+    assert!(
+        window.debug_bounds(terminal_selector(TERMINAL_C)).is_some(),
+        "Exited 恢复面板必须实际可绘制"
+    );
+    let activation = window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.activate_terminal(terminal_id(TERMINAL_A), window, cx)
+        })
+    });
+    assert!(
+        activation.is_ok(),
+        "恢复项目必须允许面板聚焦: {activation:?}"
+    );
+
+    activate_project(&root, &mut window, PROJECT_B);
+    assert_eq!(state.borrow().attempts, 2, "隐藏项目首次可见才懒启动");
+    let (_, lazy_entity, _) = panel_entity(&root, cx, PROJECT_B, TERMINAL_B);
+    root.read_with(cx, |root, cx| {
+        let lazy = root
+            .terminal_panel(project_id(PROJECT_B), terminal_id(TERMINAL_B), cx)
+            .unwrap()
+            .1;
+        assert!(lazy.read(cx).session.is_some());
+    });
+    activate_project(&root, &mut window, PROJECT_A);
+    activate_project(&root, &mut window, PROJECT_B);
+    assert_eq!(state.borrow().attempts, 2, "再次激活不得重复启动");
+    assert_eq!(
+        panel_entity(&root, cx, PROJECT_B, TERMINAL_B).1,
+        lazy_entity
+    );
+}
+
+#[gpui::test]
+fn modal_project_activation_does_not_launch_hidden_terminal(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    save_terminal_recovery_snapshot(&paths, &terminal_recovery_snapshot());
+    let persistence = AppRootPersistence::load(&paths, None);
+    let (root, mut window, state) = open_root_with_persistence(cx, persistence);
+    open_side_menu_for_test(&mut window);
+    let attempts = state.borrow().attempts;
+
+    let result = window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.activate_project(project_id(PROJECT_B), window, cx)
+        })
+    });
+
+    assert!(matches!(
+        result,
+        Err(AppRootError::Focus(FocusError::ModalActive))
+    ));
+    assert_eq!(state.borrow().attempts, attempts, "激活失败不得启动 PTY");
+    root.read_with(cx, |root, cx| {
+        assert_eq!(root.panel_count(project_id(PROJECT_B), cx), 0);
+        assert_eq!(
+            root.snapshot().registry().active(),
+            Some(project_id(PROJECT_A))
+        );
+    });
+}
+
+#[gpui::test]
+fn modal_duplicate_project_open_does_not_launch_hidden_terminal(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    save_terminal_recovery_snapshot(&paths, &terminal_recovery_snapshot());
+    let persistence = AppRootPersistence::load(&paths, None);
+    let (root, mut window, state) = open_root_with_persistence(cx, persistence);
+    open_side_menu_for_test(&mut window);
+    let attempts = state.borrow().attempts;
+
+    let result = window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.add_project(project_id(PROJECT_B), path("D:/work/b"), window, cx)
+        })
+    });
+
+    assert!(matches!(
+        result,
+        Err(AppRootError::Focus(FocusError::ModalActive))
+    ));
+    assert_eq!(state.borrow().attempts, attempts, "打开失败不得启动 PTY");
+    root.read_with(cx, |root, cx| {
+        assert_eq!(root.panel_count(project_id(PROJECT_B), cx), 0);
+        assert_eq!(
+            root.snapshot().registry().active(),
+            Some(project_id(PROJECT_A))
+        );
+    });
+}
+
+#[gpui::test]
+fn terminal_restore_failure_retains_panel_without_duplicate(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let snapshot = terminal_recovery_snapshot();
+    save_terminal_recovery_snapshot(&paths, &snapshot);
+    let writer = WorkspaceWriter::start(paths.clone()).unwrap();
+    let persistence = AppRootPersistence::load(&paths, Some(writer.client()));
+    let (root, mut window, state) =
+        open_root_with_persistence_and_size_configured(cx, persistence, None, |launcher| {
+            launcher.fail_next = true
+        });
+
+    assert_eq!(state.borrow().attempts, 1);
+    root.read_with(cx, |root, cx| {
+        assert_eq!(root.snapshot(), &snapshot);
+        assert_eq!(root.panel_count(project_id(PROJECT_A), cx), 2);
+        let failed = root
+            .terminal_panel(project_id(PROJECT_A), terminal_id(TERMINAL_A), cx)
+            .unwrap()
+            .1;
+        assert!(failed.read(cx).session.is_none());
+        assert!(failed.read(cx).has_error(), "恢复失败必须保留错误状态");
+    });
+    window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.activate_terminal(terminal_id(TERMINAL_A), window, cx)
+                .unwrap();
+        });
+    });
+    draw_frame(&mut window);
+    assert!(
+        window.debug_bounds("slterm-terminal-error").is_some(),
+        "恢复错误区域必须实际呈现"
+    );
+    window.update(|window, cx| {
+        root.update(cx, |root, cx| root.restore_active_project(window, cx));
+    });
+    assert_eq!(state.borrow().attempts, 1, "失败面板不得被重复恢复");
+    let expected = root.read_with(cx, |root, _| root.snapshot().clone());
+    writer.flush().unwrap();
+    let mut store = WorkspaceDatabase::open(&paths).unwrap();
+    assert_eq!(store.load_project_snapshot().unwrap(), expected);
 }
 
 #[gpui::test]
@@ -373,7 +705,7 @@ fn project_snapshot_mutations_persist_through_workspace_writer(cx: &mut TestAppC
     let temp = tempfile::tempdir().unwrap();
     let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
     let writer = WorkspaceWriter::start(paths.clone()).unwrap();
-    let persistence = SideViewPersistence::load(&paths, Some(writer.client()));
+    let persistence = AppRootPersistence::load(&paths, Some(writer.client()));
     let (root, mut window, _) = open_root_with_persistence(cx, persistence);
 
     add_project(&root, &mut window, PROJECT_A, "D:/work/a");
@@ -419,7 +751,7 @@ fn rejected_project_snapshot_is_submitted_when_app_root_drops(cx: &mut TestAppCo
     let mut observer = WorkspaceDatabase::open(&paths).unwrap();
     let writer = WorkspaceWriter::start(paths.clone()).unwrap();
     let client = writer.client();
-    let persistence = SideViewPersistence::load(&paths, Some(client.clone()));
+    let persistence = AppRootPersistence::load(&paths, Some(client.clone()));
     let (root, mut window, _) = open_root_with_persistence(cx, persistence);
     let fault = rusqlite::Connection::open(paths.workspace_db_path()).unwrap();
     fault.execute_batch("BEGIN EXCLUSIVE").unwrap();
@@ -460,7 +792,7 @@ fn accepted_project_snapshot_supersedes_rejected_final_state(cx: &mut TestAppCon
     let mut observer = WorkspaceDatabase::open(&paths).unwrap();
     let writer = WorkspaceWriter::start(paths.clone()).unwrap();
     let client = writer.client();
-    let persistence = SideViewPersistence::load(&paths, Some(client.clone()));
+    let persistence = AppRootPersistence::load(&paths, Some(client.clone()));
     let (root, mut window, _) = open_root_with_persistence(cx, persistence);
     let fault = rusqlite::Connection::open(paths.workspace_db_path()).unwrap();
     fault.execute_batch("BEGIN EXCLUSIVE").unwrap();
@@ -832,6 +1164,18 @@ fn local_launcher_rejects_non_unicode_shell_without_lossy_conversion(cx: &mut Te
         matches!(result, Err(ref error) if error.kind() == io::ErrorKind::InvalidInput),
         "非 Unicode Shell 必须在 PTY 启动前拒绝，实际: {result:?}"
     );
+    let restored = window.update(|window, cx| {
+        LocalTerminalLauncher.restore(
+            PanelIdAllocator::new(1).allocate().unwrap(),
+            &record,
+            window,
+            cx,
+        )
+    });
+    restored.read_with(cx, |terminal, _| {
+        assert!(terminal.session.is_none(), "非法恢复元数据不得启动 PTY");
+        assert!(!terminal.is_exited(), "启动失败不得被伪装成 Exited");
+    });
 }
 
 #[gpui::test]
@@ -1154,7 +1498,7 @@ fn split_right_shortcut_uses_app_root_command(cx: &mut TestAppContext) {
 fn split_shortcut_accounts_for_visible_sidebar_width(cx: &mut TestAppContext) {
     let (root, mut window, state) = open_root_with_persistence_and_size(
         cx,
-        SideViewPersistence::empty(None),
+        AppRootPersistence::empty(None),
         Some(gpui::size(gpui::px(1000.0), gpui::px(800.0))),
     );
     let project = open_generated_project(&root, &mut window, "D:/work/generated");

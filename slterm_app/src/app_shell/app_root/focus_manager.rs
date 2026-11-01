@@ -374,6 +374,20 @@ impl FocusManager {
         }
     }
 
+    /// 启动恢复只建立项目作用域，不送焦、不覆盖运行期焦点记忆。
+    pub fn restore_active_project(&mut self, project: Option<ProjectId>) {
+        self.active_project = project;
+    }
+
+    /// 激活或懒启动前的无副作用预检；模态期间禁止项目切换。
+    pub fn ensure_activation_allowed(&self) -> Result<(), FocusError> {
+        if self.modal.is_some() {
+            Err(FocusError::ModalActive)
+        } else {
+            Ok(())
+        }
+    }
+
     pub fn activate_project(
         &mut self,
         project: ProjectId,
@@ -381,9 +395,7 @@ impl FocusManager {
         window: &mut Window,
         cx: &mut App,
     ) -> Result<FocusToken, FocusError> {
-        if self.modal.is_some() {
-            return Err(FocusError::ModalActive);
-        }
+        self.ensure_activation_allowed()?;
         let default_project = self
             .nodes
             .get(&default)

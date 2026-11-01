@@ -27,6 +27,13 @@ pub(crate) struct LaunchedTerminal {
     spawned: session::SpawnedSession,
 }
 
+/// 恢复构造的会话来源；Exited 只恢复状态，不创建 PTY。
+enum SessionStartup {
+    Spawn(std::io::Result<session::SpawnedSession>),
+    Failed(String),
+    Exited,
+}
+
 impl TerminalView {
     /// 只执行一次可失败启动；失败时不存在视图、订阅或占位面板。
     pub(crate) fn launch(
@@ -36,10 +43,10 @@ impl TerminalView {
         window: &Window,
         cx: &App,
     ) -> std::io::Result<LaunchedTerminal> {
-        let (prepared, spawned) = Self::prepare(pane_id, spawn_grid, launch, window, cx);
+        let (prepared, spawned) = Self::prepare(pane_id, spawn_grid, launch, window, cx, true);
         Ok(LaunchedTerminal {
             prepared,
-            spawned: spawned?,
+            spawned: spawned.expect("启动构造必须执行 PTY 创建")?,
         })
     }
 
@@ -49,7 +56,12 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Self {
-        Self::from_prepared(launched.prepared, Ok(launched.spawned), window, cx)
+        Self::from_prepared(
+            launched.prepared,
+            SessionStartup::Spawn(Ok(launched.spawned)),
+            window,
+            cx,
+        )
     }
 
     /// 测试构造器：允许把启动失败保留在视图内，生产只走 `launch`。
@@ -61,8 +73,57 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Self {
-        let (prepared, spawned) = Self::prepare(pane_id, spawn_grid, launch, window, cx);
-        Self::from_prepared(prepared, spawned, window, cx)
+        let (prepared, spawned) = Self::prepare(pane_id, spawn_grid, launch, window, cx, true);
+        Self::from_prepared(
+            prepared,
+            SessionStartup::Spawn(spawned.expect("测试启动构造必须执行 PTY 创建")),
+            window,
+            cx,
+        )
+    }
+
+    /// 恢复 Launch 面板；失败保留在既有面板内，不复用显式新建的空面板拒绝语义。
+    pub(crate) fn restore_launch(
+        pane_id: PaneId,
+        spawn_grid: (u16, u16),
+        launch: TerminalLaunch,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Self {
+        let (prepared, spawned) = Self::prepare(pane_id, spawn_grid, launch, window, cx, true);
+        Self::from_prepared(
+            prepared,
+            SessionStartup::Spawn(spawned.expect("恢复 Launch 必须执行一次 PTY 创建")),
+            window,
+            cx,
+        )
+    }
+
+    /// 恢复无法在组装阶段启动的元数据；保留错误，不做有损 Shell 转换。
+    pub(crate) fn restore_error(
+        pane_id: PaneId,
+        spawn_grid: (u16, u16),
+        launch: TerminalLaunch,
+        error: String,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Self {
+        let (prepared, spawned) = Self::prepare(pane_id, spawn_grid, launch, window, cx, false);
+        debug_assert!(spawned.is_none(), "错误恢复不得创建 PTY");
+        Self::from_prepared(prepared, SessionStartup::Failed(error), window, cx)
+    }
+
+    /// 恢复 Exited 面板；不创建会话，也不伪造已持久化的输出或退出码。
+    pub(crate) fn restore_exited(
+        pane_id: PaneId,
+        spawn_grid: (u16, u16),
+        launch: TerminalLaunch,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Self {
+        let (prepared, spawned) = Self::prepare(pane_id, spawn_grid, launch, window, cx, false);
+        debug_assert!(spawned.is_none(), "Exited 恢复不得创建 PTY");
+        Self::from_prepared(prepared, SessionStartup::Exited, window, cx)
     }
 
     fn prepare(
@@ -71,7 +132,11 @@ impl TerminalView {
         launch: TerminalLaunch,
         window: &Window,
         cx: &App,
-    ) -> (PreparedTerminal, std::io::Result<session::SpawnedSession>) {
+        spawn: bool,
+    ) -> (
+        PreparedTerminal,
+        Option<std::io::Result<session::SpawnedSession>>,
+    ) {
         // 字体、调色板与终端启动配置来自全局 Settings(bootstrap 装载)。
         // Settings 白名单外项取模块常量(设置键回填点):
         // 字宽模式恒 Compact、偏移恒 (0,0)、行高倍率恒 None、shell 恒 None
@@ -135,15 +200,20 @@ impl TerminalView {
                     .unwrap_or_default();
                 // 无设置 shell 键:launch 未指定即 None,core 探测链接手。
                 // 显式命令(-e)的解析失败与 spawn 失败同通道呈现。
-                let options = session::local_options(shell, explicit_command, pane_id, cwd);
-                // 后台补全复用 PTY 创建时冻结的 shell 与环境覆盖;必须在
-                // options 被 spawn 消费前留一份只读快照。
-                let exec_context = options
-                    .as_ref()
-                    .ok()
-                    .map(crate::completion::PaneExecContext::from_pty_options);
-                let spawned =
-                    options.and_then(|options| session::spawn(initial, term_config, options));
+                let (spawned, exec_context) = if spawn {
+                    let options = session::local_options(shell, explicit_command, pane_id, cwd);
+                    // 后台补全复用 PTY 创建时冻结的 shell 与环境覆盖;必须在
+                    // options 被 spawn 消费前留一份只读快照。
+                    let exec_context = options
+                        .as_ref()
+                        .ok()
+                        .map(crate::completion::PaneExecContext::from_pty_options);
+                    let spawned =
+                        options.and_then(|options| session::spawn(initial, term_config, options));
+                    (Some(spawned), exec_context)
+                } else {
+                    (None, None)
+                };
                 let title = shell_name.unwrap_or_else(|| String::from("shell"));
                 (initial_cwd, title, spawned, exec_context)
             }
@@ -172,7 +242,7 @@ impl TerminalView {
 
     fn from_prepared(
         prepared: PreparedTerminal,
-        spawned: std::io::Result<session::SpawnedSession>,
+        startup: SessionStartup,
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Self {
@@ -193,12 +263,16 @@ impl TerminalView {
             initial_title,
             exec_context,
         } = prepared;
-        let (session, error) = match spawned {
-            Ok((session, rx)) => {
+        let (session, error, exited) = match startup {
+            SessionStartup::Spawn(Ok((session, rx))) => {
                 crate::gpui_terminal::session_pump::attach(rx, cx);
-                (Some(session), None)
+                (Some(session), None, None)
             }
-            Err(error) => (None, Some(format!("PTY 启动失败: {error}"))),
+            SessionStartup::Spawn(Err(error)) => {
+                (None, Some(format!("PTY 启动失败: {error}")), None)
+            }
+            SessionStartup::Failed(error) => (None, Some(error), None),
+            SessionStartup::Exited => (None, None, Some("进程已退出".to_owned())),
         };
 
         let focus_handle = cx.focus_handle();
@@ -272,7 +346,7 @@ impl TerminalView {
             branch: String::new(),
             running_program: None,
             error,
-            exited: None,
+            exited,
             origin: point(px(0.0), px(0.0)),
             cell_width: cell_w,
             line_height: line_h,

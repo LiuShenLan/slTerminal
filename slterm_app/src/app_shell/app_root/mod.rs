@@ -15,7 +15,7 @@ mod tests;
 
 use std::collections::BTreeMap;
 
-use gpui::{Context, Entity, FocusHandle, Pixels, Point, Subscription, Window};
+use gpui::{AppContext as _, Context, Entity, FocusHandle, Pixels, Point, Subscription, Window};
 use gpui_component::menu::PopupMenu;
 use slterm_path::CanonicalPath;
 use slterm_workspace::{PanelId, PanelIdAllocator, ProjectId, ProjectSnapshot, SideViewId};
@@ -23,8 +23,8 @@ use slterm_workspace::{PanelId, PanelIdAllocator, ProjectId, ProjectSnapshot, Si
 use crate::persistence::workspace_writer::WorkspaceWriterClient;
 
 use focus_manager::{FocusManager, FocusRegistration, FocusSubscriptions};
+pub(super) use side_view::AppRootPersistence;
 use side_view::SideView;
-pub(super) use side_view::SideViewPersistence;
 use side_view_host::SideViewHost;
 
 pub(crate) use commands::TerminalPanelLauncher;
@@ -100,6 +100,7 @@ pub(crate) struct AppRoot {
     snapshot: ProjectSnapshot,
     project_writer: Option<WorkspaceWriterClient>,
     pending_final_project_snapshot: Option<ProjectSnapshot>,
+    project_snapshot_recovery_failed: bool,
     projects: BTreeMap<ProjectId, Entity<ProjectView>>,
     panel_ids: PanelIdAllocator,
     panel_subscriptions: BTreeMap<PanelId, Subscription>,
@@ -113,7 +114,7 @@ pub(crate) struct AppRoot {
     side_dividers: BTreeMap<SidebarDivider, SideDividerFocus>,
     sidebar_drag: Option<SidebarDrag>,
     side_button_menu: Option<SideButtonMenu>,
-    side_view_persistence: SideViewPersistence,
+    side_view_persistence: AppRootPersistence,
     launcher: Box<dyn TerminalPanelLauncher>,
     shell: CanonicalPath,
 }
@@ -122,7 +123,7 @@ impl AppRoot {
     pub(crate) fn new(
         panel_ids: PanelIdAllocator,
         shell: CanonicalPath,
-        persistence: SideViewPersistence,
+        persistence: AppRootPersistence,
         cx: &mut Context<'_, Self>,
     ) -> Self {
         Self::with_launcher(
@@ -138,12 +139,14 @@ impl AppRoot {
         panel_ids: PanelIdAllocator,
         shell: CanonicalPath,
         launcher: Box<dyn TerminalPanelLauncher>,
-        mut persistence: SideViewPersistence,
+        mut persistence: AppRootPersistence,
         cx: &mut Context<'_, Self>,
     ) -> Self {
         let workspace_focus = cx.focus_handle();
         let mut focus_manager = FocusManager::new(&workspace_focus);
         let project_writer = persistence.writer_client();
+        let project_snapshot_recovery_failed = persistence.project_snapshot_recovery_failed();
+        let snapshot = persistence.take_project_snapshot();
         let sidebar_state = persistence.take_sidebar_state();
         let side_views = SideViewHost::new(sidebar_state, persistence.controller(cx));
         let parent = focus_manager.workspace_token();
@@ -196,11 +199,34 @@ impl AppRoot {
                 .expect("SideView 焦点注册必须唯一");
             side_view_focus.insert(view, registration);
         }
+        let mut projects = BTreeMap::new();
+        let active = snapshot.registry().active();
+        for project_id in snapshot
+            .registry()
+            .projects()
+            .iter()
+            .map(|project| project.id())
+        {
+            let project = cx.new(ProjectView::new);
+            let registration = focus_manager
+                .register(
+                    &project.read(cx).focus_handle,
+                    parent,
+                    Some(project_id),
+                    active == Some(project_id),
+                )
+                .expect("恢复项目焦点注册必须唯一");
+            project.update(cx, |project, _| {
+                project.focus_registration = Some(registration);
+            });
+            projects.insert(project_id, project);
+        }
         Self {
-            snapshot: ProjectSnapshot::default(),
+            snapshot,
             project_writer,
             pending_final_project_snapshot: None,
-            projects: BTreeMap::new(),
+            project_snapshot_recovery_failed,
+            projects,
             panel_ids,
             panel_subscriptions: BTreeMap::new(),
             panel_focus: BTreeMap::new(),
@@ -231,6 +257,9 @@ impl AppRoot {
     /// 快照只在候选提交后进入既有写队列；拒收时保留最后恢复事实。
     fn commit_project_snapshot(&mut self, snapshot: ProjectSnapshot) {
         self.snapshot = snapshot;
+        if self.project_snapshot_recovery_failed {
+            return;
+        }
         let Some(writer) = &self.project_writer else {
             return;
         };
@@ -243,7 +272,10 @@ impl AppRoot {
         }
     }
 
-    #[allow(dead_code)] // 生产快照保存与窗口切换时消费。
+    pub(crate) const fn project_snapshot_recovery_failed(&self) -> bool {
+        self.project_snapshot_recovery_failed
+    }
+
     pub(crate) const fn snapshot(&self) -> &ProjectSnapshot {
         &self.snapshot
     }
@@ -251,6 +283,9 @@ impl AppRoot {
 
 impl Drop for AppRoot {
     fn drop(&mut self) {
+        if self.project_snapshot_recovery_failed {
+            return;
+        }
         let (Some(writer), Some(snapshot)) =
             (&self.project_writer, &self.pending_final_project_snapshot)
         else {

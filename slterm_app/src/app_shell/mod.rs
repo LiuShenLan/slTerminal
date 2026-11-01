@@ -225,7 +225,7 @@ pub fn run_shell(initial_cwd: Option<PathBuf>) {
         start_workspace_writer(app_paths, shell_tx.clone());
     // 首帧前恢复视图私有状态；读取或解码失败只设置对应写屏障。
     let side_view_persistence =
-        app_root::SideViewPersistence::load(app_paths, workspace_writer_client);
+        app_root::AppRootPersistence::load(app_paths, workspace_writer_client);
     let open_urls_tx = shell_tx.clone();
     // 通知通道开机位:toast 点击回投走同一壳事件队列;
     // AUMID 预注册幂等,必须早于第一条通知。
@@ -256,6 +256,7 @@ pub fn run_shell(initial_cwd: Option<PathBuf>) {
             shell,
             side_view_persistence,
             start_hidden,
+            regular_start,
         );
     });
     // GPUI 已退出，在主线程等待最终冲刷并 join 转发器，不阻塞前台。

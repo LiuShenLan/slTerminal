@@ -10,7 +10,7 @@ use gpui::{App, AppContext as _, Bounds, Size, WindowBounds, WindowOptions, px, 
 use gpui_component::{Root, TitleBar};
 
 use super::SltermShellEvent;
-use super::app_root::{AppRoot, SideViewPersistence};
+use super::app_root::{AppRoot, AppRootPersistence};
 use crate::brand;
 use crate::platform::startup::first_frame;
 use slterm_path::CanonicalPath;
@@ -73,14 +73,27 @@ fn apply_start_hidden(options: &mut WindowOptions, start_hidden: bool) {
     }
 }
 
+fn should_open_initial_project(
+    regular_start: bool,
+    has_restored_projects: bool,
+    recovery_failed: bool,
+) -> bool {
+    if regular_start {
+        !recovery_failed && !has_restored_projects
+    } else {
+        true
+    }
+}
+
 /// 启动链调一次的开窗入口：只消费进入 GPUI 前冻结的 Shell 与项目根。
 pub(crate) fn open_initial_window(
     cx: &mut App,
     shell_rx: mpsc::Receiver<SltermShellEvent>,
     initial_root: CanonicalPath,
     shell: CanonicalPath,
-    persistence: SideViewPersistence,
+    persistence: AppRootPersistence,
     start_hidden: bool,
+    regular_start: bool,
 ) {
     let mut options = workspace_window_options(cx, !start_hidden);
     apply_start_hidden(&mut options, start_hidden);
@@ -94,7 +107,15 @@ pub(crate) fn open_initial_window(
         let root = cx.new(|cx| AppRoot::new(PanelIdAllocator::new(1), shell, persistence, cx));
         root.update(cx, |root, cx| {
             root.observe_focus(window, cx);
-            if let Err(error) = root.open_initial_project(initial_root, window, cx) {
+            root.restore_active_project(window, cx);
+            let should_open_initial = should_open_initial_project(
+                regular_start,
+                !root.snapshot().registry().projects().is_empty(),
+                root.project_snapshot_recovery_failed(),
+            );
+            if should_open_initial
+                && let Err(error) = root.open_initial_project(initial_root, window, cx)
+            {
                 log::error!("初始项目启动失败: {error}");
                 super::try_write_stderr(format_args!("初始项目启动失败: {error}"));
             }
@@ -129,6 +150,17 @@ mod windowing_tests {
         let display = Bounds::new(gpui::point(px(0.0), px(0.0)), size(px(1000.0), px(600.0)));
         let bounds = fit_to_display(size(px(4000.0), px(3000.0)), Some(display)).unwrap();
         assert_eq!(bounds.size, display.size, "超屏尺寸收到显示器内");
+    }
+
+    /// 常规启动恢复既有项目，不额外打开 cwd；显式目录仍进入既有打开链。
+    #[test]
+    fn regular_start_does_not_open_cwd_over_restored_projects() {
+        assert!(!should_open_initial_project(true, true, false));
+        assert!(should_open_initial_project(true, false, false));
+        assert!(should_open_initial_project(false, true, false));
+        assert!(should_open_initial_project(false, false, false));
+        assert!(!should_open_initial_project(true, false, true));
+        assert!(should_open_initial_project(false, false, true));
     }
 
     /// 静默启动只改 `show`/`focus` 两轴,且不进入 present-then-show 链;

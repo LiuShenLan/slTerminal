@@ -11,7 +11,7 @@ use gpui::{
     MouseButton, Render, Styled as _, Window, div,
 };
 use slterm_sidebar::{SideViewState, SidebarState, side_view_state_schema};
-use slterm_workspace::{SideViewId, ViewState, ViewStateError, ViewStateRegistry};
+use slterm_workspace::{ProjectSnapshot, SideViewId, ViewState, ViewStateError, ViewStateRegistry};
 
 use super::side_view_host::SideViewControl;
 use crate::persistence::workspace_writer::WorkspaceWriterClient;
@@ -23,24 +23,26 @@ pub(crate) type SideViewWriteBarriers = Rc<RefCell<BTreeSet<SideViewId>>>;
 /// 普通队列拒收的关闭状态；只由持久化 owner 在退出时经终态队列补交。
 type SideViewPendingFinalStates = Rc<RefCell<BTreeMap<SideViewId, ViewState>>>;
 
-/// AppRoot 持有的侧栏持久化依赖；各实体仍独占自己的强类型状态。
-pub(crate) struct SideViewPersistence {
+/// AppRoot 持有的启动恢复与持久化依赖；各实体仍独占自己的强类型状态。
+pub(crate) struct AppRootPersistence {
     cache: SideViewStateCache,
     registry: Arc<ViewStateRegistry>,
     writer: Option<WorkspaceWriterClient>,
     write_barriers: SideViewWriteBarriers,
     pending_final_states: SideViewPendingFinalStates,
     recovered_sidebar: Option<SidebarState>,
+    recovered_project_snapshot: Option<ProjectSnapshot>,
+    project_snapshot_recovery_failed: bool,
     pending_final_sidebar: Option<SidebarState>,
 }
 
-impl SideViewPersistence {
+impl AppRootPersistence {
     pub(crate) fn load(
         paths: &slterm_path::AppPaths,
         writer: Option<WorkspaceWriterClient>,
     ) -> Self {
         let mut persistence = Self::empty(writer);
-        let store = match crate::persistence::workspace::WorkspaceDatabase::open(paths) {
+        let mut store = match crate::persistence::workspace::WorkspaceDatabase::open(paths) {
             Ok(store) => store,
             Err(error) => {
                 log::warn!("could not open SideView ViewState recovery: {error}");
@@ -48,9 +50,18 @@ impl SideViewPersistence {
                     .write_barriers
                     .borrow_mut()
                     .extend(SideViewId::ALL);
+                persistence.project_snapshot_recovery_failed = true;
                 return persistence;
             }
         };
+        match store.load_project_snapshot() {
+            Ok(snapshot) => persistence.recovered_project_snapshot = Some(snapshot),
+            Err(error) => {
+                // 恢复失败只保留原记录；没有显式编辑时不得回写空快照。
+                persistence.project_snapshot_recovery_failed = true;
+                log::warn!("could not restore project snapshot: {error}");
+            }
+        }
         match store.sidebar_state() {
             Ok(Some(recovery)) => {
                 if !recovery.warnings.is_empty() {
@@ -97,12 +108,22 @@ impl SideViewPersistence {
             write_barriers: Rc::default(),
             pending_final_states: Rc::default(),
             recovered_sidebar: None,
+            recovered_project_snapshot: None,
+            project_snapshot_recovery_failed: false,
             pending_final_sidebar: None,
         }
     }
 
     pub(super) fn writer_client(&self) -> Option<WorkspaceWriterClient> {
         self.writer.clone()
+    }
+
+    pub(super) fn project_snapshot_recovery_failed(&self) -> bool {
+        self.project_snapshot_recovery_failed
+    }
+
+    pub(super) fn take_project_snapshot(&mut self) -> ProjectSnapshot {
+        self.recovered_project_snapshot.take().unwrap_or_default()
     }
 
     pub(super) fn take_sidebar_state(&mut self) -> SidebarState {
@@ -135,7 +156,7 @@ impl SideViewPersistence {
     }
 }
 
-impl Drop for SideViewPersistence {
+impl Drop for AppRootPersistence {
     fn drop(&mut self) {
         let Some(writer) = &self.writer else {
             return;
@@ -340,6 +361,8 @@ impl Drop for SideView {
 
 #[cfg(test)]
 mod side_view_state_persistence_tests {
+    use std::str::FromStr;
+
     use serde_json::json;
     use slterm_path::AppPaths;
     use slterm_workspace::{ViewKey, ViewState};
@@ -364,6 +387,32 @@ mod side_view_state_persistence_tests {
     }
 
     #[test]
+    fn project_recovery_failure_is_not_an_empty_workspace() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = paths(&temp);
+        let project_id =
+            slterm_workspace::ProjectId::from_str("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2a").unwrap();
+        let mut registry = slterm_workspace::ProjectRegistry::new();
+        registry
+            .add_project(
+                project_id,
+                slterm_path::CanonicalPath::new("D:/work/a").unwrap(),
+            )
+            .unwrap();
+        let snapshot = ProjectSnapshot::restore(registry, Vec::new()).unwrap();
+        let mut store = WorkspaceDatabase::open(&paths).unwrap();
+        store.save_project_snapshot(&snapshot).unwrap();
+        drop(store);
+        let raw = rusqlite::Connection::open(paths.workspace_db_path()).unwrap();
+        raw.execute("UPDATE project_layouts SET layout_json = 'not-json'", [])
+            .unwrap();
+
+        let persistence = AppRootPersistence::load(&paths, None);
+
+        assert!(persistence.project_snapshot_recovery_failed());
+    }
+
+    #[test]
     fn side_view_load_restores_existing_private_state() {
         let temp = tempfile::tempdir().unwrap();
         let paths = paths(&temp);
@@ -380,7 +429,7 @@ mod side_view_state_persistence_tests {
             .unwrap();
         drop(store);
 
-        let persistence = SideViewPersistence::load(&paths, None);
+        let persistence = AppRootPersistence::load(&paths, None);
         let restored = persistence.cache.borrow()[&SideViewId::Nav]
             .to_view_state(&registry)
             .unwrap();
@@ -415,7 +464,7 @@ mod side_view_state_persistence_tests {
             .unwrap();
         drop(connection);
 
-        let persistence = SideViewPersistence::load(&paths, None);
+        let persistence = AppRootPersistence::load(&paths, None);
         assert!(!persistence.cache.borrow().contains_key(&SideViewId::Nav));
         assert!(
             persistence
@@ -430,7 +479,7 @@ mod side_view_state_persistence_tests {
         let temp = tempfile::tempdir().unwrap();
         let paths = paths(&temp);
         let writer = WorkspaceWriter::start(paths.clone()).unwrap();
-        let mut persistence = SideViewPersistence::load(&paths, Some(writer.client()));
+        let mut persistence = AppRootPersistence::load(&paths, Some(writer.client()));
         let mut state = persistence.take_sidebar_state();
         state
             .move_button_to_slot(SideViewId::Explorer, slterm_sidebar::SideSlot::Lower, 0)
@@ -445,7 +494,7 @@ mod side_view_state_persistence_tests {
         drop(persistence);
         writer.shutdown().unwrap();
 
-        let mut restored = SideViewPersistence::load(&paths, None);
+        let mut restored = AppRootPersistence::load(&paths, None);
         let state = restored.take_sidebar_state();
         assert!(!state.visible_intent());
         assert_eq!(state.width(), 333);
@@ -508,7 +557,7 @@ mod side_view_state_persistence_tests {
             drop(store);
 
             let writer = WorkspaceWriter::start(paths.clone()).unwrap();
-            let mut persistence = SideViewPersistence::load(&paths, Some(writer.client()));
+            let mut persistence = AppRootPersistence::load(&paths, Some(writer.client()));
             assert_eq!(persistence.take_sidebar_state(), expected, "{name}");
             drop(persistence);
             writer.flush().unwrap();
@@ -541,7 +590,7 @@ mod side_view_state_persistence_tests {
             client.save_sidebar_state(&queued).unwrap();
         }
 
-        let mut persistence = SideViewPersistence::empty(Some(client));
+        let mut persistence = AppRootPersistence::empty(Some(client));
         let mut latest = persistence.take_sidebar_state();
         latest.set_width(333);
         latest.toggle_sidebar();
@@ -571,7 +620,7 @@ mod side_view_state_persistence_tests {
             client.save_sidebar_state(&queued).unwrap();
         }
 
-        let mut persistence = SideViewPersistence::empty(Some(client));
+        let mut persistence = AppRootPersistence::empty(Some(client));
         let mut rejected = persistence.take_sidebar_state();
         rejected.set_width(333);
         persistence.save_sidebar_state(&rejected);
@@ -620,7 +669,7 @@ mod side_view_state_persistence_tests {
                 .unwrap();
         }
 
-        let persistence = SideViewPersistence::empty(Some(client));
+        let persistence = AppRootPersistence::empty(Some(client));
         let mut view = SideView::with_persistence(
             SideViewId::Nav,
             Rc::clone(&persistence.cache),
@@ -670,7 +719,7 @@ mod side_view_state_persistence_tests {
                 .unwrap();
         }
 
-        let persistence = SideViewPersistence::empty(Some(client));
+        let persistence = AppRootPersistence::empty(Some(client));
         let mut first = SideView::with_persistence(
             SideViewId::Nav,
             Rc::clone(&persistence.cache),

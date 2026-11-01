@@ -30,9 +30,47 @@ pub(crate) trait TerminalPanelLauncher {
         window: &mut Window,
         cx: &mut App,
     ) -> io::Result<Entity<TerminalView>>;
+
+    /// 恢复既有面板；Launch 失败与 Exited 都保留实体，不重复逻辑记录。
+    fn restore(
+        &mut self,
+        panel_id: PanelId,
+        record: &TerminalRecord,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Entity<TerminalView>;
 }
 
 pub(crate) struct LocalTerminalLauncher;
+
+fn local_launch(record: &TerminalRecord) -> io::Result<TerminalLaunch> {
+    let shell = record
+        .shell()
+        .as_path()
+        .to_str()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Shell 路径必须为有效 Unicode"))?
+        .to_owned();
+    Ok(launch_metadata(
+        record,
+        Some(slterm_terminal::tty::Shell::new(shell, Vec::new())),
+    ))
+}
+
+fn fallback_launch(record: &TerminalRecord) -> TerminalLaunch {
+    launch_metadata(record, None)
+}
+
+fn launch_metadata(
+    record: &TerminalRecord,
+    shell: Option<slterm_terminal::tty::Shell>,
+) -> TerminalLaunch {
+    TerminalLaunch::Local {
+        cwd: Some(record.cwd().as_path().to_path_buf()),
+        shell,
+        shell_name: record.custom_title().map(str::to_owned),
+        explicit_command: false,
+    }
+}
 
 impl TerminalPanelLauncher for LocalTerminalLauncher {
     fn launch(
@@ -42,20 +80,7 @@ impl TerminalPanelLauncher for LocalTerminalLauncher {
         window: &mut Window,
         cx: &mut App,
     ) -> io::Result<Entity<TerminalView>> {
-        let shell = record
-            .shell()
-            .as_path()
-            .to_str()
-            .ok_or_else(|| {
-                io::Error::new(io::ErrorKind::InvalidInput, "Shell 路径必须为有效 Unicode")
-            })?
-            .to_owned();
-        let launch = TerminalLaunch::Local {
-            cwd: Some(record.cwd().as_path().to_path_buf()),
-            shell: Some(slterm_terminal::tty::Shell::new(shell, Vec::new())),
-            shell_name: record.custom_title().map(str::to_owned),
-            explicit_command: false,
-        };
+        let launch = local_launch(record)?;
         let launched = TerminalView::launch(
             PaneId(panel_id.sequence()),
             (
@@ -67,6 +92,44 @@ impl TerminalPanelLauncher for LocalTerminalLauncher {
             cx,
         )?;
         Ok(cx.new(|cx| TerminalView::from_launched(launched, window, cx)))
+    }
+
+    fn restore(
+        &mut self,
+        panel_id: PanelId,
+        record: &TerminalRecord,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Entity<TerminalView> {
+        let pane_id = PaneId(panel_id.sequence());
+        let grid = (
+            TerminalView::DEFAULT_GRID_COLUMNS,
+            TerminalView::DEFAULT_GRID_LINES,
+        );
+        match record.run_intent() {
+            RunIntent::Exited => {
+                let launch = local_launch(record).unwrap_or_else(|_| fallback_launch(record));
+                cx.new(|cx| TerminalView::restore_exited(pane_id, grid, launch, window, cx))
+            }
+            RunIntent::Launch => match local_launch(record) {
+                Ok(launch) => {
+                    cx.new(|cx| TerminalView::restore_launch(pane_id, grid, launch, window, cx))
+                }
+                Err(error) => {
+                    let launch = fallback_launch(record);
+                    cx.new(|cx| {
+                        TerminalView::restore_error(
+                            pane_id,
+                            grid,
+                            launch,
+                            format!("PTY 启动失败: {error}"),
+                            window,
+                            cx,
+                        )
+                    })
+                }
+            },
+        }
     }
 }
 
@@ -150,6 +213,129 @@ impl From<FocusError> for AppRootError {
 }
 
 impl AppRoot {
+    /// 首帧前只恢复活跃项目；隐藏项目保留记录，首次激活时再恢复实例。
+    pub(crate) fn restore_active_project(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let active = self.snapshot.registry().active();
+        self.focus_manager.restore_active_project(active);
+        if let Some(project_id) = active {
+            self.restore_project_panels(project_id, window, cx);
+        }
+        self.sync_project_visibility(cx);
+        cx.notify();
+    }
+
+    fn restore_project_panels(
+        &mut self,
+        project_id: ProjectId,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(project) = self.snapshot.registry().project(project_id) else {
+            return;
+        };
+        let views = project.layout().view_keys();
+        for view in views {
+            let ViewKey::Terminal {
+                project_id: view_project,
+                terminal_id,
+            } = view
+            else {
+                continue;
+            };
+            if view_project != project_id
+                || self.terminal_panel(project_id, terminal_id, cx).is_some()
+            {
+                continue;
+            }
+            let Some(record) = self.snapshot.terminal(terminal_id).cloned() else {
+                log::warn!("恢复布局引用的终端记录缺失");
+                continue;
+            };
+            if let Err(error) = self.restore_terminal_panel(&record, window, cx) {
+                log::warn!("恢复终端面板失败: {error}");
+            }
+        }
+        let default_view = self
+            .snapshot
+            .registry()
+            .project(project_id)
+            .and_then(|project| {
+                let group_id = project.layout().group_ids().into_iter().next()?;
+                project.layout().group(group_id).map(|group| group.active())
+            })
+            .cloned();
+        let default_panel = match default_view {
+            Some(ViewKey::Terminal { terminal_id, .. }) => self
+                .terminal_panel(project_id, terminal_id, cx)
+                .map(|(panel_id, _)| panel_id),
+            _ => None,
+        };
+        if let Some(project) = self.projects.get(&project_id)
+            && project.read(cx).focused_panel.is_none()
+        {
+            project.update(cx, |project, _| project.focused_panel = default_panel);
+        }
+    }
+
+    fn restore_terminal_panel(
+        &mut self,
+        record: &TerminalRecord,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<(), AppRootError> {
+        let project_id = record.project_id();
+        let terminal_id = record.id();
+        let project = self
+            .projects
+            .get(&project_id)
+            .cloned()
+            .ok_or(AppRootError::Registry(
+                ProjectRegistryError::ProjectNotFound,
+            ))?;
+        let panel_id = self.panel_ids.allocate()?;
+        let parent = self.project_focus_token(project_id, cx)?;
+        let terminal = self.launcher.restore(panel_id, record, window, cx);
+        terminal.update(cx, |terminal, _| {
+            terminal.attach_completion_session(Rc::new(crate::completion::Session::default()));
+        });
+        let visible = self.snapshot.registry().active() == Some(project_id);
+        let focus_registration = match self.focus_manager.register(
+            &terminal.read(cx).focus_handle,
+            parent,
+            Some(project_id),
+            visible,
+        ) {
+            Ok(registration) => registration,
+            Err(error) => {
+                terminal.read(cx).shutdown();
+                return Err(error.into());
+            }
+        };
+        let subscription = cx.subscribe_in(&terminal, window, move |root, _, event, window, cx| {
+            root.on_terminal_event(panel_id, event, window, cx);
+        });
+        project.update(cx, |project, _| {
+            project.panels.insert(
+                panel_id,
+                PanelHost {
+                    id: panel_id,
+                    view_key: ViewKey::Terminal {
+                        project_id,
+                        terminal_id,
+                    },
+                    terminal,
+                },
+            );
+        });
+        self.panel_focus.insert(panel_id, focus_registration);
+        self.panel_subscriptions.insert(panel_id, subscription);
+        Ok(())
+    }
+
     pub(crate) fn open_initial_project(
         &mut self,
         root: CanonicalPath,
@@ -183,6 +369,7 @@ impl AppRoot {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Result<AddProjectOutcome, AppRootError> {
+        self.focus_manager.ensure_activation_allowed()?;
         self.sync_focus(window, cx);
         let mut candidate = self.snapshot.clone();
         let outcome = candidate.registry_mut().add_project(id, root)?;
@@ -206,6 +393,7 @@ impl AppRoot {
         } else {
             None
         };
+        self.restore_project_panels(active_id, window, cx);
         let default = match &new_project {
             Some((_, registration)) => registration.token(),
             None => self.project_default_focus(active_id, cx)?,
@@ -231,6 +419,7 @@ impl AppRoot {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Result<(), AppRootError> {
+        self.focus_manager.ensure_activation_allowed()?;
         self.sync_focus(window, cx);
         let mut candidate = self.snapshot.clone();
         candidate.registry_mut().activate_project(id)?;
@@ -240,6 +429,7 @@ impl AppRoot {
                 ProjectRegistryError::ProjectNotFound,
             ));
         }
+        self.restore_project_panels(id, window, cx);
         let default = self.project_default_focus(id, cx)?;
         self.sync_focus_visibility(Some(id), cx);
         self.focus_manager

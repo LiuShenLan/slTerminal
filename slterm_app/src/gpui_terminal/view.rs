@@ -473,6 +473,22 @@ impl TerminalView {
     }
 
     #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) const fn has_error(&self) -> bool {
+        self.error.is_some()
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn install_test_session(&mut self, session: session::TerminalSession) {
+        self.session = Some(session);
+        self.error = None;
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) const fn is_exited(&self) -> bool {
+        self.exited.is_some()
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
     pub(crate) const fn output_visible(&self) -> bool {
         self.output_visible
     }
@@ -955,7 +971,12 @@ impl Render for TerminalView {
             .on_scroll_wheel(cx.listener(Self::on_scroll));
 
         if let Some(error) = &self.error {
-            root = root.child(div().p_4().child(error.clone()));
+            root = root.child(
+                div()
+                    .p_4()
+                    .debug_selector(|| "slterm-terminal-error".to_owned())
+                    .child(error.clone()),
+            );
         } else {
             root = root.child(TerminalElement::new(cx.entity()));
             // 底部浮层统一收进 bottom 锚定的 flex column:自上而下为
