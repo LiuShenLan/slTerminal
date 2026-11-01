@@ -3,10 +3,10 @@
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     AnyElement, Context, InteractiveElement as _, IntoElement, MouseButton, ParentElement as _,
-    Styled as _, div, px, relative,
+    Styled as _, Window, div, px, relative,
 };
 use gpui_component::{ActiveTheme as _, Icon, IconName};
-use slterm_sidebar::{SideSlot, SidebarError};
+use slterm_sidebar::{SideSlot, SidebarError, SidebarState, SidebarTransition};
 use slterm_workspace::SideViewId;
 
 use super::AppRoot;
@@ -27,25 +27,139 @@ impl AppRoot {
         }
     }
 
+    fn focused_side_view(&self, window: &Window, cx: &Context<'_, Self>) -> Option<SideViewId> {
+        SideViewId::ALL.into_iter().find(|view| {
+            self.side_views
+                .instance(*view)
+                .and_then(|instance| instance.read(cx).focus_handle.as_ref())
+                .is_some_and(|focus| focus.contains_focused(window, cx))
+        })
+    }
+
+    /// Host 已提交实体转换；这里统一协调弱焦点节点、还焦和组织状态落盘。
+    fn apply_sidebar_effects(
+        &mut self,
+        transition: SidebarTransition,
+        focused_before: Option<SideViewId>,
+        previous_state: &SidebarState,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let return_from = focused_before
+            .filter(|view| transition.closed.contains(view) || !transition.is_visible);
+        for view in &transition.closed {
+            let registration = self
+                .side_view_focus
+                .remove(view)
+                .expect("关闭的 SideView 必须持有焦点注册");
+            if let Err(error) = self.focus_manager.unregister(registration.token()) {
+                log::warn!("注销 SideView 焦点失败: {error:?}");
+            }
+        }
+        for view in transition.opened.iter().copied() {
+            let handle = self
+                .side_views
+                .instance(view)
+                .and_then(|instance| instance.read(cx).focus_handle.clone())
+                .expect("生产 SideView 必须在注册前安装焦点句柄");
+            let parent = self.focus_manager.workspace_token();
+            let registration = self
+                .focus_manager
+                .register(&handle, parent, None, transition.is_visible)
+                .expect("新 SideView 焦点注册必须唯一");
+            let previous = self.side_view_focus.insert(view, registration);
+            debug_assert!(previous.is_none());
+        }
+        self.sync_sidebar_focus_visibility();
+        if self.side_views.state() != previous_state {
+            self.side_view_persistence
+                .save_sidebar_state(self.side_views.state());
+        }
+
+        if let Some(view) = transition.focus {
+            let token = self.side_view_focus[&view].token();
+            if let Err(error) = self.focus_manager.request_focus(token, window, cx) {
+                log::warn!("SideView 送焦失败: {error:?}");
+            }
+        } else if let Some(view) = return_from {
+            let token = self
+                .side_views
+                .state()
+                .button_is_visible(view)
+                .then_some(view)
+                .or_else(|| self.side_views.state().visible_buttons().first().copied())
+                .and_then(|view| self.side_buttons.get(&view))
+                .map(|button| button.registration.token())
+                .unwrap_or_else(|| self.focus_manager.workspace_token());
+            if let Err(error) = self.focus_manager.restore_focus(&[token], window, cx) {
+                log::warn!("SideView 关闭还焦失败: {error:?}");
+            }
+        }
+        cx.notify();
+    }
+
+    fn sync_sidebar_focus_visibility(&mut self) {
+        let state = self.side_views.state();
+        let visible = state.is_visible();
+        let mut updates = Vec::new();
+        for view in SideViewId::ALL {
+            if let Some(registration) = self.side_view_focus.get(&view) {
+                updates.push((registration.token(), visible));
+            }
+            if let Some(button) = self.side_buttons.get(&view) {
+                updates.push((button.registration.token(), state.button_is_visible(view)));
+            }
+        }
+        for (token, visible) in updates {
+            let result = if visible {
+                self.focus_manager.present_nonmodal(token)
+            } else {
+                self.focus_manager.set_visible(token, false)
+            };
+            if let Err(error) = result {
+                log::warn!("侧栏焦点可见性同步失败: {error:?}");
+            }
+        }
+    }
+
+    pub(super) fn activate_side_view(
+        &mut self,
+        view: SideViewId,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let focused_before = self.focused_side_view(window, cx);
+        self.sync_focus(window, cx);
+        let previous_state = self.side_views.state().clone();
+        let control = self.side_view_persistence.controller(cx);
+        let transition =
+            self.side_views
+                .activate_shortcut(view, focused_before == Some(view), control);
+        self.apply_sidebar_effects(transition, focused_before, &previous_state, window, cx);
+    }
+
     fn click_side_view(
         &mut self,
         view: SideViewId,
+        window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Result<(), SidebarError> {
+        let focused_before = self.focused_side_view(window, cx);
+        self.sync_focus(window, cx);
+        let previous_state = self.side_views.state().clone();
         let control = self.side_view_persistence.controller(cx);
-        self.side_views.click_button(view, control)?;
-        self.side_view_persistence
-            .save_sidebar_state(self.side_views.state());
-        cx.notify();
+        let transition = self.side_views.click_button(view, control)?;
+        self.apply_sidebar_effects(transition, focused_before, &previous_state, window, cx);
         Ok(())
     }
 
-    pub(super) fn toggle_sidebar(&mut self, cx: &mut Context<'_, Self>) {
+    pub(super) fn toggle_sidebar(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        let focused_before = self.focused_side_view(window, cx);
+        self.sync_focus(window, cx);
+        let previous_state = self.side_views.state().clone();
         let control = self.side_view_persistence.controller(cx);
-        self.side_views.toggle_sidebar(control);
-        self.side_view_persistence
-            .save_sidebar_state(self.side_views.state());
-        cx.notify();
+        let transition = self.side_views.toggle_sidebar(control);
+        self.apply_sidebar_effects(transition, focused_before, &previous_state, window, cx);
     }
 
     pub(super) fn render_activity_bar(&self, cx: &Context<'_, Self>) -> AnyElement {
@@ -73,6 +187,7 @@ impl AppRoot {
 
     fn render_side_view_button(&self, view: SideViewId, cx: &Context<'_, Self>) -> AnyElement {
         let active = self.side_views.state().open_slot(view).is_some();
+        let focus = self.side_buttons[&view].handle.clone();
         let icon = match view {
             SideViewId::Nav => IconName::FolderOpen,
             SideViewId::Explorer => IconName::File,
@@ -80,6 +195,7 @@ impl AppRoot {
             SideViewId::AgentFiles => IconName::Bot,
         };
         div()
+            .track_focus(&focus)
             .relative()
             .size(px(34.0))
             .flex_shrink_0()
@@ -102,8 +218,8 @@ impl AppRoot {
             .hover(|button| button.bg(cx.theme().list_hover))
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |this, _, _, cx| {
-                    if let Err(error) = this.click_side_view(view, cx) {
+                cx.listener(move |this, _, window, cx| {
+                    if let Err(error) = this.click_side_view(view, window, cx) {
                         log::warn!("侧栏按钮操作失败: {error}");
                     }
                 }),

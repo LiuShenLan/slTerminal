@@ -5,9 +5,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use std::sync::Arc;
 
+use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    App, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, Render,
-    Styled as _, Window, div,
+    App, AppContext as _, Context, Entity, FocusHandle, InteractiveElement as _, IntoElement,
+    MouseButton, Render, Styled as _, Window, div,
 };
 use slterm_sidebar::{SideViewState, SidebarState, side_view_state_schema};
 use slterm_workspace::{SideViewId, ViewState, ViewStateError, ViewStateRegistry};
@@ -151,6 +152,8 @@ impl Drop for SideViewPersistence {
 
 /// 应用级侧栏视图实体，独占自己的强类型持久状态。
 pub(crate) struct SideView {
+    /// 仅纯持久化测试没有 GPUI 上下文；生产控制器在返回实体前安装。
+    pub(super) focus_handle: Option<FocusHandle>,
     state: SideViewState,
     cache: SideViewStateCache,
     registry: Arc<ViewStateRegistry>,
@@ -176,6 +179,7 @@ impl SideView {
             .cloned()
             .unwrap_or_else(|| SideViewState::new(id));
         Self {
+            focus_handle: None,
             state,
             cache,
             registry,
@@ -265,7 +269,7 @@ impl SideViewControl<Entity<SideView>> for SideViewController<'_> {
         let writer = self.writer.clone();
         let write_barriers = Rc::clone(&self.write_barriers);
         let pending_final_states = Rc::clone(&self.pending_final_states);
-        self.cx.new(|_| {
+        let instance = self.cx.new(|_| {
             SideView::with_persistence(
                 id,
                 cache,
@@ -274,7 +278,11 @@ impl SideViewControl<Entity<SideView>> for SideViewController<'_> {
                 write_barriers,
                 pending_final_states,
             )
-        })
+        });
+        instance.update(self.cx, |view, cx| {
+            view.focus_handle = Some(cx.focus_handle());
+        });
+        instance
     }
 
     fn close(&mut self, _id: SideViewId, instance: Entity<SideView>) {
@@ -291,12 +299,19 @@ pub(crate) fn side_view_state_registry() -> Arc<ViewStateRegistry> {
 }
 
 impl Render for SideView {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<'_, Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
         let id = self.state.id();
+        let focus = self.focus_handle.clone();
         div()
             .size_full()
             .min_w_0()
             .min_h_0()
+            .when_some(focus, |element, focus| {
+                element.track_focus(&focus).on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |_, _, window, cx| focus.focus(window, cx)),
+                )
+            })
             .debug_selector(move || format!("app-root-side-view-{}", id.id_str()))
     }
 }

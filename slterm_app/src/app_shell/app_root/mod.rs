@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 
 use gpui::{Context, Entity, FocusHandle, Subscription, Window};
 use slterm_path::CanonicalPath;
-use slterm_workspace::{PanelId, PanelIdAllocator, ProjectId, ProjectSnapshot};
+use slterm_workspace::{PanelId, PanelIdAllocator, ProjectId, ProjectSnapshot, SideViewId};
 
 use focus_manager::{FocusManager, FocusRegistration, FocusSubscriptions};
 use side_view::SideView;
@@ -33,9 +33,19 @@ gpui::actions!(
         SplitRight,
         SplitDown,
         CloseActiveTerminal,
-        ToggleSidebar
+        ToggleSidebar,
+        ActivateNav,
+        ActivateExplorer,
+        ActivateCommit,
+        ActivateAgentFiles
     ]
 );
+
+/// 活动栏按钮的焦点句柄与弱注册；按钮生命周期独立于 SideView 实例。
+struct SideButtonFocus {
+    handle: FocusHandle,
+    registration: FocusRegistration,
+}
 
 /// 单窗口运行根；`projects` 只是强实体引用表，不复制项目注册信息。
 pub(crate) struct AppRoot {
@@ -48,6 +58,8 @@ pub(crate) struct AppRoot {
     focus_manager: FocusManager,
     focus_subscriptions: Option<FocusSubscriptions>,
     side_views: SideViewHost<Entity<SideView>>,
+    side_view_focus: BTreeMap<SideViewId, FocusRegistration>,
+    side_buttons: BTreeMap<SideViewId, SideButtonFocus>,
     side_view_persistence: SideViewPersistence,
     launcher: Box<dyn TerminalPanelLauncher>,
     shell: CanonicalPath,
@@ -77,9 +89,44 @@ impl AppRoot {
         cx: &mut Context<'_, Self>,
     ) -> Self {
         let workspace_focus = cx.focus_handle();
-        let focus_manager = FocusManager::new(&workspace_focus);
+        let mut focus_manager = FocusManager::new(&workspace_focus);
         let sidebar_state = persistence.take_sidebar_state();
         let side_views = SideViewHost::new(sidebar_state, persistence.controller(cx));
+        let parent = focus_manager.workspace_token();
+        let mut side_buttons = BTreeMap::new();
+        for view in SideViewId::ALL {
+            let handle = cx.focus_handle().tab_stop(true);
+            let registration = focus_manager
+                .register(
+                    &handle,
+                    parent,
+                    None,
+                    side_views.state().button_is_visible(view),
+                )
+                .expect("活动栏按钮焦点注册必须唯一");
+            side_buttons.insert(
+                view,
+                SideButtonFocus {
+                    handle,
+                    registration,
+                },
+            );
+        }
+        let mut side_view_focus = BTreeMap::new();
+        for view in SideViewId::ALL {
+            let Some(instance) = side_views.instance(view) else {
+                continue;
+            };
+            let handle = instance
+                .read(cx)
+                .focus_handle
+                .clone()
+                .expect("生产 SideView 必须持有焦点句柄");
+            let registration = focus_manager
+                .register(&handle, parent, None, side_views.state().is_visible())
+                .expect("SideView 焦点注册必须唯一");
+            side_view_focus.insert(view, registration);
+        }
         Self {
             snapshot: ProjectSnapshot::default(),
             projects: BTreeMap::new(),
@@ -90,6 +137,8 @@ impl AppRoot {
             focus_manager,
             focus_subscriptions: None,
             side_views,
+            side_view_focus,
+            side_buttons,
             side_view_persistence: persistence,
             launcher,
             shell,

@@ -65,7 +65,6 @@ impl<T> SideViewHost<T> {
         Ok(self.apply_transition(transition, &mut control))
     }
 
-    #[cfg(test)]
     pub fn activate_shortcut(
         &mut self,
         view: SideViewId,

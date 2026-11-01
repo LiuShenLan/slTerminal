@@ -1285,6 +1285,7 @@ fn production_sidebar_restores_organization_before_first_frame(cx: &mut TestAppC
     let (root, mut window, _) = open_root_with_persistence(cx, persistence);
     draw_frame(&mut window);
 
+    assert!(window.update(|window, cx| window.focused(cx)).is_none());
     assert!(window.debug_bounds("app-root-side-view-nav").is_none());
     root.read_with(cx, |root, _| {
         assert_eq!(root.side_views.state(), &sidebar);
@@ -1292,37 +1293,300 @@ fn production_sidebar_restores_organization_before_first_frame(cx: &mut TestAppC
 }
 
 #[gpui::test]
-fn production_sidebar_dual_slots_preserve_instances_across_hide(cx: &mut TestAppContext) {
+fn side_view_shortcut_bindings_cover_all_registered_views(cx: &mut TestAppContext) {
     let (root, mut window, _) = open_root(cx);
     add_project(&root, &mut window, PROJECT_A, "D:/work/a");
     new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_A);
-    let original = window.update(|_, cx| {
-        root.update(cx, |root, cx| {
-            let control = root.side_view_persistence.controller(cx);
+    draw_frame(&mut window);
+
+    for (keys, view) in [
+        ("ctrl-shift-n", SideViewId::Nav),
+        ("ctrl-shift-e", SideViewId::Explorer),
+        ("ctrl-shift-g", SideViewId::Commit),
+        ("ctrl-shift-a", SideViewId::AgentFiles),
+    ] {
+        window.simulate_keystrokes(keys);
+        draw_frame(&mut window);
+        root.read_with(cx, |root, _| {
+            let expected = root.side_views.state().button_slot(view);
+            assert_eq!(
+                root.side_views.state().open_slot(view),
+                Some(expected),
+                "{keys}"
+            );
+        });
+    }
+}
+
+#[gpui::test]
+fn side_view_shortcut_focuses_closes_and_reopens_instances(cx: &mut TestAppContext) {
+    let (root, mut window, _) = open_root(cx);
+    draw_frame(&mut window);
+    let workspace = root.read_with(cx, |root, _| root.workspace_focus.clone());
+    window.update(|window, cx| workspace.focus(window, cx));
+    let original = root.read_with(cx, |root, _| {
+        root.side_views
+            .instance(SideViewId::Nav)
+            .unwrap()
+            .entity_id()
+    });
+
+    window.simulate_keystrokes("ctrl-shift-n");
+    draw_frame(&mut window);
+    assert_ne!(
+        window.update(|window, cx| window.focused(cx)),
+        Some(workspace.clone())
+    );
+    assert_eq!(
+        root.read_with(cx, |root, _| root
+            .side_views
+            .instance(SideViewId::Nav)
+            .unwrap()
+            .entity_id()),
+        original,
+        "已打开视图只需送焦，不得重建"
+    );
+    let nav_button = root.read_with(cx, |root, _| {
+        root.side_buttons[&SideViewId::Nav].handle.clone()
+    });
+
+    window.simulate_keystrokes("ctrl-shift-n");
+    draw_frame(&mut window);
+    assert!(root.read_with(cx, |root, _| {
+        root.side_views.instance(SideViewId::Nav).is_none()
+    }));
+    let returned = window.update(|window, cx| window.focused(cx));
+    assert_eq!(
+        returned,
+        Some(nav_button),
+        "关闭聚焦视图后必须还焦其可见按钮"
+    );
+
+    window.simulate_keystrokes("ctrl-shift-e");
+    draw_frame(&mut window);
+    let explorer = root.read_with(cx, |root, _| {
+        root.side_views
+            .instance(SideViewId::Explorer)
+            .unwrap()
+            .entity_id()
+    });
+    window.simulate_keystrokes("ctrl-shift-e");
+    draw_frame(&mut window);
+    window.simulate_keystrokes("ctrl-shift-e");
+    draw_frame(&mut window);
+    let reopened = root.read_with(cx, |root, _| {
+        root.side_views
+            .instance(SideViewId::Explorer)
+            .unwrap()
+            .entity_id()
+    });
+    assert_ne!(reopened, explorer, "显式关闭后重开必须创建新实例");
+}
+
+#[gpui::test]
+fn toggle_sidebar_returns_focus_without_reopening_instance(cx: &mut TestAppContext) {
+    let (root, mut window, _) = open_root(cx);
+    draw_frame(&mut window);
+    let workspace = root.read_with(cx, |root, _| root.workspace_focus.clone());
+    window.update(|window, cx| workspace.focus(window, cx));
+    window.simulate_keystrokes("ctrl-shift-n");
+    draw_frame(&mut window);
+    let (original, button) = root.read_with(cx, |root, _| {
+        (
             root.side_views
-                .move_button_to_slot(
-                    SideViewId::Explorer,
-                    slterm_sidebar::SideSlot::Lower,
-                    0,
-                    control,
-                )
-                .unwrap();
-            let control = root.side_view_persistence.controller(cx);
+                .instance(SideViewId::Nav)
+                .unwrap()
+                .entity_id(),
+            root.side_buttons[&SideViewId::Nav].handle.clone(),
+        )
+    });
+
+    window.simulate_keystrokes("ctrl-shift-b");
+    draw_frame(&mut window);
+
+    assert!(window.debug_bounds("app-root-side-view-nav").is_none());
+    assert_eq!(
+        window.update(|window, cx| window.focused(cx)),
+        Some(button),
+        "隐藏聚焦侧栏后必须还焦可见按钮"
+    );
+    assert_eq!(
+        root.read_with(cx, |root, _| {
             root.side_views
-                .click_button(SideViewId::Explorer, control)
-                .unwrap();
-            cx.notify();
-            (
-                root.side_views
-                    .instance(SideViewId::Nav)
-                    .unwrap()
-                    .entity_id(),
-                root.side_views
-                    .instance(SideViewId::Explorer)
-                    .unwrap()
-                    .entity_id(),
-            )
-        })
+                .instance(SideViewId::Nav)
+                .unwrap()
+                .entity_id()
+        }),
+        original
+    );
+
+    window.simulate_keystrokes("ctrl-shift-b");
+    draw_frame(&mut window);
+    assert_eq!(
+        root.read_with(cx, |root, _| {
+            root.side_views
+                .instance(SideViewId::Nav)
+                .unwrap()
+                .entity_id()
+        }),
+        original,
+        "重新显示不得重建保留实例"
+    );
+}
+
+#[gpui::test]
+fn clicking_side_view_focuses_and_shortcut_recognizes_it(cx: &mut TestAppContext) {
+    let (root, mut window, _) = open_root(cx);
+    draw_frame(&mut window);
+    let workspace = root.read_with(cx, |root, _| root.workspace_focus.clone());
+    window.update(|window, cx| workspace.focus(window, cx));
+    let bounds = window.debug_bounds("app-root-side-view-nav").unwrap();
+    window.simulate_mouse_down(bounds.center(), MouseButton::Left, Modifiers::default());
+    window.simulate_mouse_up(bounds.center(), MouseButton::Left, Modifiers::default());
+    draw_frame(&mut window);
+
+    let nav_focus = root.read_with(cx, |root, cx| {
+        root.side_views
+            .instance(SideViewId::Nav)
+            .unwrap()
+            .read(cx)
+            .focus_handle
+            .clone()
+            .unwrap()
+    });
+    assert_eq!(
+        window.update(|window, cx| window.focused(cx)),
+        Some(nav_focus)
+    );
+
+    window.simulate_keystrokes("ctrl-shift-n");
+    draw_frame(&mut window);
+    assert!(root.read_with(cx, |root, _| {
+        root.side_views.instance(SideViewId::Nav).is_none()
+    }));
+}
+
+#[gpui::test]
+fn side_view_shortcut_restores_hidden_button_and_persists(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let mut store = WorkspaceDatabase::open(&paths).unwrap();
+    let mut initial = slterm_sidebar::SidebarState::default();
+    initial.set_button_hidden(SideViewId::Nav, true);
+    initial.close_view(SideViewId::Nav);
+    store.save_sidebar_state(&initial).unwrap();
+    drop(store);
+    let writer = WorkspaceWriter::start(paths.clone()).unwrap();
+    let persistence = SideViewPersistence::load(&paths, Some(writer.client()));
+    let (root, mut window, _) = open_root_with_persistence(cx, persistence);
+    draw_frame(&mut window);
+    let workspace = root.read_with(cx, |root, _| root.workspace_focus.clone());
+    window.update(|window, cx| workspace.focus(window, cx));
+    assert!(window.debug_bounds("app-root-side-button-nav").is_none());
+    assert!(window.debug_bounds("app-root-side-view-nav").is_none());
+
+    window.simulate_keystrokes("ctrl-shift-n");
+    draw_frame(&mut window);
+
+    assert!(window.debug_bounds("app-root-side-button-nav").is_some());
+    assert!(window.debug_bounds("app-root-side-view-nav").is_some());
+    writer.flush().unwrap();
+    let store = WorkspaceDatabase::open(&paths).unwrap();
+    let restored = store.sidebar_state().unwrap().unwrap().state;
+    assert!(restored.button_is_visible(SideViewId::Nav));
+    assert_eq!(
+        restored.open_view(slterm_sidebar::SideSlot::Upper),
+        Some(SideViewId::Nav)
+    );
+    root.read_with(cx, |root, _| assert_eq!(root.side_views.state(), &restored));
+}
+
+fn assert_focus_shortcut_preserves_recovered_sidebar(cx: &mut TestAppContext, raw: String) {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let mut store = WorkspaceDatabase::open(&paths).unwrap();
+    store
+        .save_sidebar_state(&slterm_sidebar::SidebarState::default())
+        .unwrap();
+    let raw_store = rusqlite::Connection::open(paths.workspace_db_path()).unwrap();
+    raw_store
+        .execute(
+            "UPDATE app_state SET sidebar_json = ?1 WHERE singleton = 1",
+            [&raw],
+        )
+        .unwrap();
+    drop(store);
+    let writer = WorkspaceWriter::start(paths.clone()).unwrap();
+    let persistence = SideViewPersistence::load(&paths, Some(writer.client()));
+    let (root, mut window, _) = open_root_with_persistence(cx, persistence);
+    draw_frame(&mut window);
+    let workspace = root.read_with(cx, |root, _| root.workspace_focus.clone());
+    window.update(|window, cx| workspace.focus(window, cx));
+
+    window.simulate_keystrokes("ctrl-shift-n");
+    draw_frame(&mut window);
+    assert_eq!(
+        root.read_with(cx, |root, _| {
+            root.side_views.state().open_slot(SideViewId::Nav)
+        }),
+        Some(slterm_sidebar::SideSlot::Upper),
+        "测试必须只触发送焦，不得改变组织状态"
+    );
+    writer.flush().unwrap();
+    writer.shutdown().unwrap();
+    let preserved = raw_store
+        .query_row(
+            "SELECT sidebar_json FROM app_state WHERE singleton = 1",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap();
+    assert_eq!(preserved, raw, "纯送焦不得覆盖启动恢复前的原始记录");
+}
+
+#[gpui::test]
+fn side_view_shortcut_focus_preserves_invalid_recovery(cx: &mut TestAppContext) {
+    assert_focus_shortcut_preserves_recovered_sidebar(cx, "not-json".to_owned());
+}
+
+#[gpui::test]
+fn side_view_shortcut_focus_preserves_field_repair(cx: &mut TestAppContext) {
+    let mut custom = slterm_sidebar::SidebarState::default();
+    custom.set_width(333);
+    let invalid_width = custom
+        .to_canonical_json()
+        .unwrap()
+        .replace(r#""width":333"#, r#""width":100"#);
+    assert_focus_shortcut_preserves_recovered_sidebar(cx, invalid_width);
+}
+
+#[gpui::test]
+fn production_sidebar_dual_slots_preserve_instances_across_hide(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let mut store = WorkspaceDatabase::open(&paths).unwrap();
+    let mut sidebar = slterm_sidebar::SidebarState::default();
+    sidebar
+        .move_button_to_slot(SideViewId::Explorer, slterm_sidebar::SideSlot::Lower, 0)
+        .unwrap();
+    sidebar.click_button(SideViewId::Explorer).unwrap();
+    store.save_sidebar_state(&sidebar).unwrap();
+    drop(store);
+    let persistence = SideViewPersistence::load(&paths, None);
+    let (root, mut window, _) = open_root_with_persistence(cx, persistence);
+    add_project(&root, &mut window, PROJECT_A, "D:/work/a");
+    new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_A);
+    let original = root.read_with(cx, |root, _| {
+        (
+            root.side_views
+                .instance(SideViewId::Nav)
+                .unwrap()
+                .entity_id(),
+            root.side_views
+                .instance(SideViewId::Explorer)
+                .unwrap()
+                .entity_id(),
+        )
     });
     draw_frame(&mut window);
 

@@ -10,7 +10,10 @@ use slterm_split::{DIVIDER_GAP, SplitDirection, SplitTree};
 use slterm_workspace::{LogicalSize, PanelGroupId, ProjectLayout, ViewKey};
 
 use super::project_view::ProjectView;
-use super::{AppRoot, CloseActiveTerminal, NewTerminal, SplitDown, SplitRight, ToggleSidebar};
+use super::{
+    ActivateAgentFiles, ActivateCommit, ActivateExplorer, ActivateNav, AppRoot,
+    CloseActiveTerminal, NewTerminal, SplitDown, SplitRight, ToggleSidebar,
+};
 
 impl AppRoot {
     /// 分屏空间校验只使用项目内容区，不把活动栏和侧栏宽度算给面板。
@@ -200,8 +203,20 @@ impl Render for AppRoot {
                     log::warn!("纵向拆分终端命令失败: {error}");
                 }
             }))
-            .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| {
-                this.toggle_sidebar(cx);
+            .on_action(cx.listener(|this, _: &ToggleSidebar, window, cx| {
+                this.toggle_sidebar(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &ActivateNav, window, cx| {
+                this.activate_side_view(slterm_workspace::SideViewId::Nav, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &ActivateExplorer, window, cx| {
+                this.activate_side_view(slterm_workspace::SideViewId::Explorer, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &ActivateCommit, window, cx| {
+                this.activate_side_view(slterm_workspace::SideViewId::Commit, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &ActivateAgentFiles, window, cx| {
+                this.activate_side_view(slterm_workspace::SideViewId::AgentFiles, window, cx);
             }))
             .on_action(cx.listener(|this, _: &CloseActiveTerminal, window, cx| {
                 if let Err(error) = this.close_focused_terminal(window, cx) {
