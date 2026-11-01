@@ -13,21 +13,24 @@ use gpui::{
     VisualTestContext, Window,
 };
 use gpui_component::Root;
-use slterm_path::CanonicalPath;
+use slterm_path::{AppPaths, CanonicalPath};
 use slterm_split::SplitDirection;
 use slterm_terminal::event::Event as TermEvent;
 use slterm_terminal::event_loop::Msg;
 use slterm_workspace::{
     AddProjectOutcome, LogicalSize, NewTerminalSpec, PanelGroupId, PanelId, PanelIdAllocator,
-    ProjectId, RunIntent, SplitTerminalSpec, TerminalId, TerminalRecord, ViewKey,
+    ProjectId, RunIntent, SideViewId, SplitTerminalSpec, TerminalId, TerminalRecord, ViewKey,
 };
 
 use crate::app_shell::SltermShellEvent;
 use crate::gpui_terminal::PaneId;
 use crate::gpui_terminal::session;
 use crate::gpui_terminal::view::{TerminalLaunch, TerminalView, TerminalViewEvent};
+use crate::persistence::workspace::WorkspaceDatabase;
+use crate::persistence::workspace_writer::WorkspaceWriter;
 
 use super::commands::{AppRootError, LocalTerminalLauncher};
+use super::side_view::SideViewPersistence;
 use super::{AppRoot, TerminalPanelLauncher};
 
 const PROJECT_A: &str = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2a";
@@ -124,6 +127,29 @@ fn open_root(
     VisualTestContext,
     Rc<RefCell<LauncherState>>,
 ) {
+    open_root_with_persistence(cx, SideViewPersistence::empty(None))
+}
+
+fn open_root_with_persistence(
+    cx: &mut TestAppContext,
+    persistence: SideViewPersistence,
+) -> (
+    Entity<AppRoot>,
+    VisualTestContext,
+    Rc<RefCell<LauncherState>>,
+) {
+    open_root_with_persistence_and_size(cx, persistence, None)
+}
+
+fn open_root_with_persistence_and_size(
+    cx: &mut TestAppContext,
+    persistence: SideViewPersistence,
+    window_size: Option<gpui::Size<gpui::Pixels>>,
+) -> (
+    Entity<AppRoot>,
+    VisualTestContext,
+    Rc<RefCell<LauncherState>>,
+) {
     cx.update(|cx| {
         gpui_component::init(cx);
         cx.set_global(crate::app_shell::config::Settings::default());
@@ -135,12 +161,15 @@ fn open_root(
         state: Rc::clone(&state),
     };
     let mut slot = None;
-    let (_window_root, window) = cx.add_window_view(|window, cx| {
+    let window_size =
+        window_size.unwrap_or_else(|| cx.update(|cx| gpui::Bounds::maximized(None, cx).size));
+    let window = cx.open_window(window_size, |window, cx| {
         let root = cx.new(|cx| {
             AppRoot::with_launcher(
                 PanelIdAllocator::new(1),
                 path("C:/Program Files/PowerShell/7/pwsh.exe"),
                 Box::new(launcher),
+                persistence,
                 cx,
             )
         });
@@ -148,7 +177,8 @@ fn open_root(
         slot = Some(root.clone());
         Root::new(root, window, cx)
     });
-    (slot.unwrap(), window.clone(), state)
+    let window = VisualTestContext::from_window(window.into(), cx);
+    (slot.unwrap(), window, state)
 }
 
 fn draw_frame(window: &mut VisualTestContext) {
@@ -969,6 +999,36 @@ fn split_right_shortcut_uses_app_root_command(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn split_shortcut_accounts_for_visible_sidebar_width(cx: &mut TestAppContext) {
+    let (root, mut window, state) = open_root_with_persistence_and_size(
+        cx,
+        SideViewPersistence::empty(None),
+        Some(gpui::size(gpui::px(1000.0), gpui::px(800.0))),
+    );
+    let project = open_generated_project(&root, &mut window, "D:/work/generated");
+    new_generated_terminal(&root, &mut window);
+    draw_frame(&mut window);
+    let content = window.debug_bounds("app-root-content").unwrap();
+    let viewport = window.update(|window, _| window.viewport_size());
+    assert!(f32::from(content.size.width) < f32::from(viewport.width));
+
+    for _ in 0..3 {
+        window.simulate_keystrokes("ctrl-shift-d");
+        window.run_until_parked();
+    }
+
+    root.read_with(cx, |root, cx| {
+        assert_eq!(
+            root.panel_count(project, cx),
+            3,
+            "viewport={viewport:?}, content={content:?}"
+        );
+        assert_eq!(root.snapshot().terminals().count(), 3);
+    });
+    assert_eq!(state.borrow().attempts, 3, "项目区不足的拆分不得启动终端");
+}
+
+#[gpui::test]
 fn split_down_shortcut_uses_app_root_command(cx: &mut TestAppContext) {
     let (root, mut window, state) = open_root(cx);
     open_generated_project(&root, &mut window, "D:/work/generated");
@@ -1168,4 +1228,133 @@ fn project_switch_changes_only_the_rendered_project(cx: &mut TestAppContext) {
         first_entity
     );
     assert_eq!(state.borrow().attempts, 2);
+}
+
+#[gpui::test]
+fn toggle_sidebar_shortcut_preserves_visible_view_lifecycle(cx: &mut TestAppContext) {
+    let (root, mut window, _) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, "D:/work/a");
+    new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_A);
+    draw_frame(&mut window);
+    assert!(window.debug_bounds("app-root-side-view-nav").is_some());
+
+    window.simulate_keystrokes("ctrl-shift-b");
+    draw_frame(&mut window);
+    assert!(window.debug_bounds("app-root-side-view-nav").is_none());
+
+    window.simulate_keystrokes("ctrl-shift-b");
+    draw_frame(&mut window);
+    assert!(window.debug_bounds("app-root-side-view-nav").is_some());
+}
+
+#[gpui::test]
+fn production_sidebar_dual_slots_preserve_instances_across_hide(cx: &mut TestAppContext) {
+    let (root, mut window, _) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, "D:/work/a");
+    new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_A);
+    let original = window.update(|_, cx| {
+        root.update(cx, |root, cx| {
+            let control = root.side_view_persistence.controller(cx);
+            root.side_views
+                .move_button_to_slot(
+                    SideViewId::Explorer,
+                    slterm_sidebar::SideSlot::Lower,
+                    0,
+                    control,
+                )
+                .unwrap();
+            let control = root.side_view_persistence.controller(cx);
+            root.side_views
+                .click_button(SideViewId::Explorer, control)
+                .unwrap();
+            cx.notify();
+            (
+                root.side_views
+                    .instance(SideViewId::Nav)
+                    .unwrap()
+                    .entity_id(),
+                root.side_views
+                    .instance(SideViewId::Explorer)
+                    .unwrap()
+                    .entity_id(),
+            )
+        })
+    });
+    draw_frame(&mut window);
+
+    let upper = window.debug_bounds("app-root-side-view-nav").unwrap();
+    let lower = window.debug_bounds("app-root-side-view-explorer").unwrap();
+    let viewport = window.update(|window, _| window.viewport_size());
+    assert!(upper.origin.y < lower.origin.y);
+    assert!(
+        (f32::from(upper.size.height) - f32::from(viewport.height) * 0.5).abs() <= 1.0,
+        "上槽必须采用组织状态比例"
+    );
+    let expected_lower =
+        f32::from(viewport.height) - f32::from(upper.size.height) - slterm_split::DIVIDER_GAP;
+    assert!(
+        (f32::from(lower.size.height) - expected_lower).abs() <= 1.0,
+        "下槽必须接收扣除比例槽与分隔线后的空间"
+    );
+
+    window.simulate_keystrokes("ctrl-shift-b");
+    draw_frame(&mut window);
+    assert!(window.debug_bounds("app-root-side-view-nav").is_none());
+    assert!(window.debug_bounds("app-root-side-view-explorer").is_none());
+    window.simulate_keystrokes("ctrl-shift-b");
+    draw_frame(&mut window);
+
+    let restored = window.update(|_, cx| {
+        root.update(cx, |root, _| {
+            (
+                root.side_views
+                    .instance(SideViewId::Nav)
+                    .unwrap()
+                    .entity_id(),
+                root.side_views
+                    .instance(SideViewId::Explorer)
+                    .unwrap()
+                    .entity_id(),
+            )
+        })
+    });
+    assert_eq!(restored, original, "隐藏整个侧栏不得重建任何槽位实体");
+}
+
+#[gpui::test]
+fn production_sidebar_button_replaces_visible_view(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let writer = WorkspaceWriter::start(paths.clone()).unwrap();
+    let registry = super::side_view::side_view_state_registry();
+    let persistence = SideViewPersistence::load(&paths, Some(writer.client()));
+    let (_root, mut window, _) = open_root_with_persistence(cx, persistence);
+    draw_frame(&mut window);
+    assert!(
+        window.debug_bounds("app-root-side-view-nav").is_some(),
+        "首次使用必须呈现真实导航树实例"
+    );
+    let button = window
+        .debug_bounds("app-root-side-button-explorer")
+        .expect("活动栏必须呈现文件浏览器按钮");
+    window.simulate_mouse_down(button.center(), MouseButton::Left, Modifiers::default());
+    window.simulate_mouse_up(button.center(), MouseButton::Left, Modifiers::default());
+    draw_frame(&mut window);
+
+    assert!(window.debug_bounds("app-root-side-view-nav").is_none());
+    assert!(window.debug_bounds("app-root-side-view-explorer").is_some());
+    writer.flush().unwrap();
+    let store = WorkspaceDatabase::open(&paths).unwrap();
+    assert!(
+        store
+            .view_state(
+                &ViewKey::SideView {
+                    side_view_id: SideViewId::Nav,
+                },
+                &registry,
+            )
+            .unwrap()
+            .is_some(),
+        "同槽关闭必须经生产 writer 保存被替换视图的私有状态"
+    );
 }

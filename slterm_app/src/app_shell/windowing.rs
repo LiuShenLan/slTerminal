@@ -10,7 +10,7 @@ use gpui::{App, AppContext as _, Bounds, Size, WindowBounds, WindowOptions, px, 
 use gpui_component::{Root, TitleBar};
 
 use super::SltermShellEvent;
-use super::app_root::AppRoot;
+use super::app_root::{AppRoot, SideViewPersistence};
 use crate::brand;
 use crate::platform::startup::first_frame;
 use slterm_path::CanonicalPath;
@@ -79,6 +79,7 @@ pub(crate) fn open_initial_window(
     shell_rx: mpsc::Receiver<SltermShellEvent>,
     initial_root: CanonicalPath,
     shell: CanonicalPath,
+    persistence: SideViewPersistence,
     start_hidden: bool,
 ) {
     let mut options = workspace_window_options(cx, !start_hidden);
@@ -90,7 +91,7 @@ pub(crate) fn open_initial_window(
         window.set_window_title(brand::NAME);
         // HWND 发布单点:任务栏闪烁/进度经 facade 查询。
         crate::windowing::focus::publish_window(window);
-        let root = cx.new(|cx| AppRoot::new(PanelIdAllocator::new(1), shell, cx));
+        let root = cx.new(|cx| AppRoot::new(PanelIdAllocator::new(1), shell, persistence, cx));
         root.update(cx, |root, cx| {
             root.observe_focus(window, cx);
             if let Err(error) = root.open_initial_project(initial_root, window, cx) {

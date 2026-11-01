@@ -10,9 +10,18 @@ use slterm_split::{DIVIDER_GAP, SplitDirection, SplitTree};
 use slterm_workspace::{LogicalSize, PanelGroupId, ProjectLayout, ViewKey};
 
 use super::project_view::ProjectView;
-use super::{AppRoot, CloseActiveTerminal, NewTerminal, SplitDown, SplitRight};
+use super::{AppRoot, CloseActiveTerminal, NewTerminal, SplitDown, SplitRight, ToggleSidebar};
 
 impl AppRoot {
+    /// 分屏空间校验只使用项目内容区，不把活动栏和侧栏宽度算给面板。
+    fn project_viewport(&self, window: &Window) -> LogicalSize {
+        let viewport = window.viewport_size();
+        let width = f32::from(viewport.width)
+            - super::sidebar::ACTIVITY_BAR_WIDTH
+            - self.visible_sidebar_width();
+        LogicalSize::new(width.max(0.0), viewport.height.into())
+    }
+
     /// 只铺陈活跃项目；隐藏项目的实体仍由 ProjectView 强持。
     fn render_active_project(&self, cx: &Context<'_, Self>) -> AnyElement {
         let Some(project_id) = self.snapshot.registry().active() else {
@@ -175,8 +184,7 @@ impl Render for AppRoot {
             }))
             .on_action(cx.listener(|this, _: &SplitRight, window, cx| {
                 let shell = this.shell.clone();
-                let viewport = window.viewport_size();
-                let viewport = LogicalSize::new(viewport.width.into(), viewport.height.into());
+                let viewport = this.project_viewport(window);
                 if let Err(error) =
                     this.split_terminal(SplitDirection::LeftRight, 0.5, viewport, shell, window, cx)
                 {
@@ -185,13 +193,15 @@ impl Render for AppRoot {
             }))
             .on_action(cx.listener(|this, _: &SplitDown, window, cx| {
                 let shell = this.shell.clone();
-                let viewport = window.viewport_size();
-                let viewport = LogicalSize::new(viewport.width.into(), viewport.height.into());
+                let viewport = this.project_viewport(window);
                 if let Err(error) =
                     this.split_terminal(SplitDirection::TopBottom, 0.5, viewport, shell, window, cx)
                 {
                     log::warn!("纵向拆分终端命令失败: {error}");
                 }
+            }))
+            .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| {
+                this.toggle_sidebar(cx);
             }))
             .on_action(cx.listener(|this, _: &CloseActiveTerminal, window, cx| {
                 if let Err(error) = this.close_focused_terminal(window, cx) {
@@ -199,6 +209,16 @@ impl Render for AppRoot {
                 }
             }))
             .bg(cx.theme().background)
-            .child(self.render_active_project(cx))
+            .flex()
+            .flex_row()
+            .child(self.render_activity_bar(cx))
+            .children(self.render_sidebar(cx))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .child(self.render_active_project(cx)),
+            )
     }
 }

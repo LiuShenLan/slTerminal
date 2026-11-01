@@ -7,10 +7,9 @@ pub(crate) mod keymap;
 mod panel_host;
 mod project_view;
 mod render;
-#[allow(dead_code)] // SideView 持久状态已迁移，生产宿主由后续侧栏接线装配。
 mod side_view;
-#[allow(dead_code)] // 实例转换与关闭语义由 side_view 及后续生产宿主消费。
 mod side_view_host;
+mod sidebar;
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod tests;
 
@@ -18,15 +17,25 @@ use std::collections::BTreeMap;
 
 use gpui::{Context, Entity, FocusHandle, Subscription, Window};
 use slterm_path::CanonicalPath;
+use slterm_sidebar::SidebarState;
 use slterm_workspace::{PanelId, PanelIdAllocator, ProjectId, ProjectSnapshot};
 
 use focus_manager::{FocusManager, FocusRegistration, FocusSubscriptions};
+use side_view::SideView;
+pub(super) use side_view::SideViewPersistence;
+use side_view_host::SideViewHost;
 
 pub(crate) use commands::TerminalPanelLauncher;
 
 gpui::actions!(
     slterm_app_root,
-    [NewTerminal, SplitRight, SplitDown, CloseActiveTerminal]
+    [
+        NewTerminal,
+        SplitRight,
+        SplitDown,
+        CloseActiveTerminal,
+        ToggleSidebar
+    ]
 );
 
 /// 单窗口运行根；`projects` 只是强实体引用表，不复制项目注册信息。
@@ -39,6 +48,8 @@ pub(crate) struct AppRoot {
     workspace_focus: FocusHandle,
     focus_manager: FocusManager,
     focus_subscriptions: Option<FocusSubscriptions>,
+    side_views: SideViewHost<Entity<SideView>>,
+    side_view_persistence: SideViewPersistence,
     launcher: Box<dyn TerminalPanelLauncher>,
     shell: CanonicalPath,
 }
@@ -47,12 +58,14 @@ impl AppRoot {
     pub(crate) fn new(
         panel_ids: PanelIdAllocator,
         shell: CanonicalPath,
+        persistence: SideViewPersistence,
         cx: &mut Context<'_, Self>,
     ) -> Self {
         Self::with_launcher(
             panel_ids,
             shell,
             Box::new(commands::LocalTerminalLauncher),
+            persistence,
             cx,
         )
     }
@@ -61,10 +74,12 @@ impl AppRoot {
         panel_ids: PanelIdAllocator,
         shell: CanonicalPath,
         launcher: Box<dyn TerminalPanelLauncher>,
+        persistence: SideViewPersistence,
         cx: &mut Context<'_, Self>,
     ) -> Self {
         let workspace_focus = cx.focus_handle();
         let focus_manager = FocusManager::new(&workspace_focus);
+        let side_views = SideViewHost::new(SidebarState::default(), persistence.controller(cx));
         Self {
             snapshot: ProjectSnapshot::default(),
             projects: BTreeMap::new(),
@@ -74,6 +89,8 @@ impl AppRoot {
             workspace_focus,
             focus_manager,
             focus_subscriptions: None,
+            side_views,
+            side_view_persistence: persistence,
             launcher,
             shell,
         }

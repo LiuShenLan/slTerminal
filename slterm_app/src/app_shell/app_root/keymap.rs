@@ -1,8 +1,8 @@
-//! AppRoot 的 Terminal-only 默认键位。
+//! AppRoot 的默认键位。
 
 use gpui::{App, KeyBinding};
 
-use super::{CloseActiveTerminal, NewTerminal, SplitDown, SplitRight};
+use super::{CloseActiveTerminal, NewTerminal, SplitDown, SplitRight, ToggleSidebar};
 
 /// 注册运行根默认键位；用户绑定后续统一接入 CommandRegistry。
 pub(crate) fn register(cx: &mut App) {
@@ -11,5 +11,6 @@ pub(crate) fn register(cx: &mut App) {
         KeyBinding::new("ctrl-shift-d", SplitRight, None),
         KeyBinding::new("ctrl-shift-s", SplitDown, None),
         KeyBinding::new("ctrl-shift-w", CloseActiveTerminal, None),
+        KeyBinding::new("ctrl-shift-b", ToggleSidebar, None),
     ]);
 }

@@ -220,8 +220,12 @@ pub fn run_shell(initial_cwd: Option<PathBuf>) {
     };
     let (shell_tx, shell_rx) = mpsc::channel();
     // writer owner 与转发线程留在 GPUI 外；项目快照 client 由持久化协调接入。
-    let (workspace_writer, _) =
-        start_workspace_writer(crate::platform::dirs::app_paths(), shell_tx.clone());
+    let app_paths = crate::platform::dirs::app_paths();
+    let (workspace_writer, workspace_writer_client) =
+        start_workspace_writer(app_paths, shell_tx.clone());
+    // 首帧前恢复视图私有状态；读取或解码失败只设置对应写屏障。
+    let side_view_persistence =
+        app_root::SideViewPersistence::load(app_paths, workspace_writer_client);
     let open_urls_tx = shell_tx.clone();
     // 通知通道开机位:toast 点击回投走同一壳事件队列;
     // AUMID 预注册幂等,必须早于第一条通知。
@@ -245,7 +249,14 @@ pub fn run_shell(initial_cwd: Option<PathBuf>) {
         // 静默启动:仅无显式 CLI 目录时参与;窗口以隐藏
         // 形态创建,托盘「显示」经 focus facade 回窗。
         let start_hidden = starts_hidden(regular_start, cx.global::<config::Settings>());
-        windowing::open_initial_window(cx, shell_rx, initial_root, shell, start_hidden);
+        windowing::open_initial_window(
+            cx,
+            shell_rx,
+            initial_root,
+            shell,
+            side_view_persistence,
+            start_hidden,
+        );
     });
     // GPUI 已退出，在主线程等待最终冲刷并 join 转发器，不阻塞前台。
     if let Some(runtime) = workspace_writer

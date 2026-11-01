@@ -52,17 +52,7 @@ impl<T> SideViewHost<T> {
         &self.state
     }
 
-    /// 几何修改不产生实例效果，由 Host 保持组织状态唯一入口。
-    pub fn set_width(&mut self, width: u32) {
-        self.state.set_width(width);
-    }
-
-    pub fn set_ratio(&mut self, ratio: f32) -> Result<(), SidebarError> {
-        self.state.set_ratio(ratio)
-    }
-
-    #[cfg(test)]
-    pub fn instance(&self, view: SideViewId) -> Option<&T> {
+    pub(crate) fn instance(&self, view: SideViewId) -> Option<&T> {
         self.instances.get(&view)
     }
 
