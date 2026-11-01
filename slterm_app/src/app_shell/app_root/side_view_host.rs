@@ -5,9 +5,7 @@
 
 use std::collections::BTreeMap;
 
-#[cfg(test)]
-use slterm_sidebar::ButtonMovement;
-use slterm_sidebar::{SideSlot, SidebarError, SidebarState, SidebarTransition};
+use slterm_sidebar::{ButtonMovement, SideSlot, SidebarError, SidebarState, SidebarTransition};
 use slterm_workspace::SideViewId;
 
 /// 打开与关闭共用同一控制器；纯打开闭包保持默认的句柄释放行为。
@@ -90,17 +88,38 @@ impl<T> SideViewHost<T> {
         self.apply_transition(transition, &mut control)
     }
 
-    #[cfg(test)]
-    pub fn set_button_hidden(&mut self, view: SideViewId, hidden: bool) {
+    pub fn set_button_hidden(&mut self, view: SideViewId, hidden: bool) -> SidebarTransition {
+        let was_visible = self.state.is_visible();
         self.state.set_button_hidden(view, hidden);
+        self.organization_transition(was_visible)
     }
 
-    #[cfg(test)]
-    pub fn reorder_button(&mut self, view: SideViewId, movement: ButtonMovement) {
+    pub fn reorder_button(
+        &mut self,
+        view: SideViewId,
+        movement: ButtonMovement,
+    ) -> SidebarTransition {
+        let was_visible = self.state.is_visible();
         self.state.reorder_button(view, movement);
+        self.organization_transition(was_visible)
     }
 
-    #[cfg(test)]
+    pub fn reset_button_order(&mut self) -> SidebarTransition {
+        let was_visible = self.state.is_visible();
+        self.state.reset_button_order();
+        self.organization_transition(was_visible)
+    }
+
+    fn organization_transition(&self, was_visible: bool) -> SidebarTransition {
+        SidebarTransition {
+            opened: Vec::new(),
+            closed: Vec::new(),
+            focus: None,
+            was_visible,
+            is_visible: self.state.is_visible(),
+        }
+    }
+
     pub fn move_button_to_slot(
         &mut self,
         view: SideViewId,

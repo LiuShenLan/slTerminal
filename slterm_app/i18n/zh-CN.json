@@ -132,7 +132,15 @@
     "commit_unstaged": "未暂存",
     "commit_history": "最近提交",
     "agent_empty": "未找到 Agent 全局目录",
-    "agent_missing": "未安装"
+    "agent_missing": "未安装",
+    "button_move_up": "上移",
+    "button_move_down": "下移",
+    "button_move_top": "置顶",
+    "button_move_bottom": "置底",
+    "button_move_upper": "移到上区",
+    "button_move_lower": "移到下区",
+    "button_hide": "隐藏按钮",
+    "button_reset_order": "重置按钮顺序"
   },
   "settings": {
     "title": "设置",

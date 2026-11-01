@@ -15,7 +15,8 @@ mod tests;
 
 use std::collections::BTreeMap;
 
-use gpui::{Context, Entity, FocusHandle, Subscription, Window};
+use gpui::{Context, Entity, FocusHandle, Pixels, Point, Subscription, Window};
+use gpui_component::menu::PopupMenu;
 use slterm_path::CanonicalPath;
 use slterm_workspace::{PanelId, PanelIdAllocator, ProjectId, ProjectSnapshot, SideViewId};
 
@@ -43,7 +44,8 @@ gpui::actions!(
         FocusPreviousSideButton,
         FocusFirstSideButton,
         FocusLastSideButton,
-        ActivateSideButton
+        ActivateSideButton,
+        OpenSideButtonMenu
     ]
 );
 
@@ -51,6 +53,15 @@ gpui::actions!(
 struct SideButtonFocus {
     handle: FocusHandle,
     registration: FocusRegistration,
+}
+
+/// 当前按钮菜单与其锚点；菜单实体只由 AppRoot 持有。
+struct SideButtonMenu {
+    view: SideViewId,
+    position: Option<Point<Pixels>>,
+    menu: Entity<PopupMenu>,
+    registration: FocusRegistration,
+    _dismiss: Subscription,
 }
 
 /// 单窗口运行根；`projects` 只是强实体引用表，不复制项目注册信息。
@@ -66,6 +77,7 @@ pub(crate) struct AppRoot {
     side_views: SideViewHost<Entity<SideView>>,
     side_view_focus: BTreeMap<SideViewId, FocusRegistration>,
     side_buttons: BTreeMap<SideViewId, SideButtonFocus>,
+    side_button_menu: Option<SideButtonMenu>,
     side_view_persistence: SideViewPersistence,
     launcher: Box<dyn TerminalPanelLauncher>,
     shell: CanonicalPath,
@@ -145,6 +157,7 @@ impl AppRoot {
             side_views,
             side_view_focus,
             side_buttons,
+            side_button_menu: None,
             side_view_persistence: persistence,
             launcher,
             shell,

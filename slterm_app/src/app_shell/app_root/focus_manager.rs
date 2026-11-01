@@ -87,7 +87,6 @@ pub enum FocusError {
     GenerationExhausted,
     Unavailable,
     ModalActive,
-    #[allow(dead_code)] // 由首个生产模态视图调用 close_modal 时消费。
     NoModal,
     NoFocusTarget,
     WorkspaceRoot,
@@ -117,7 +116,6 @@ impl FocusNode {
 
 struct ModalFocus {
     token: FocusToken,
-    #[allow(dead_code)] // 还焦链由首个生产模态视图关闭时消费。
     return_chain: Vec<FocusToken>,
 }
 
@@ -412,7 +410,6 @@ impl FocusManager {
         self.focus_first(candidates, window, cx)
     }
 
-    #[allow(dead_code)] // 首个生产模态视图打开时接入，语义由 GPUI 用例锁定。
     pub fn open_modal(
         &mut self,
         trigger: FocusToken,
@@ -458,7 +455,6 @@ impl FocusManager {
         Ok(())
     }
 
-    #[allow(dead_code)] // 首个生产模态视图关闭时接入，语义由 GPUI 用例锁定。
     pub fn close_modal(
         &mut self,
         window: &mut Window,

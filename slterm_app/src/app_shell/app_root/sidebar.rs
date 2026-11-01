@@ -2,16 +2,22 @@
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AnyElement, Context, Hsla, InteractiveElement as _, IntoElement, MouseButton,
-    ParentElement as _, StyleRefinement, Styled as _, Window, div, px, relative,
+    AnyElement, Context, DismissEvent, Focusable as _, Hsla, InteractiveElement as _, IntoElement,
+    MouseButton, ParentElement as _, StyleRefinement, Styled as _, WeakEntity, Window, anchored,
+    deferred, div, point, px, relative,
 };
-use gpui_component::{ActiveTheme as _, Icon, IconName};
-use slterm_sidebar::{SideSlot, SidebarError, SidebarState, SidebarTransition};
+use gpui_component::{
+    ActiveTheme as _, Icon, IconName,
+    menu::{PopupMenu, PopupMenuItem},
+};
+use slterm_sidebar::{ButtonMovement, SideSlot, SidebarError, SidebarState, SidebarTransition};
 use slterm_workspace::SideViewId;
+
+use crate::i18n::{Message, UiLanguage};
 
 use super::{
     ActivateSideButton, AppRoot, FocusFirstSideButton, FocusLastSideButton, FocusNextSideButton,
-    FocusPreviousSideButton,
+    FocusPreviousSideButton, OpenSideButtonMenu, SideButtonMenu,
 };
 
 pub(super) const ACTIVITY_BAR_WIDTH: f32 = 46.0;
@@ -27,6 +33,14 @@ enum SideButtonNavigation {
     Previous,
     First,
     Last,
+}
+
+#[derive(Clone, Copy)]
+enum SideButtonCommand {
+    Reorder(ButtonMovement),
+    MoveToOtherSlot,
+    Hide,
+    ResetOrder,
 }
 
 impl AppRoot {
@@ -123,11 +137,200 @@ impl AppRoot {
         }
     }
 
+    fn open_focused_side_button_menu(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        let Some(view) = self.focused_side_button(window, cx) else {
+            return;
+        };
+        self.open_side_button_menu(view, None, window, cx);
+    }
+
+    fn side_button_menu_item(
+        root: &WeakEntity<Self>,
+        language: UiLanguage,
+        message: Message,
+        view: SideViewId,
+        command: SideButtonCommand,
+    ) -> PopupMenuItem {
+        let root = root.clone();
+        PopupMenuItem::new(language.text(message)).on_click(move |_, window, cx| {
+            let _ = root.update(cx, |this, cx| {
+                this.organize_side_button(view, command, window, cx);
+            });
+        })
+    }
+
+    fn build_side_button_menu(
+        mut menu: PopupMenu,
+        view: SideViewId,
+        target_slot: SideSlot,
+        root: WeakEntity<Self>,
+        language: UiLanguage,
+    ) -> PopupMenu {
+        let move_message = match target_slot {
+            SideSlot::Upper => Message::SidebarButtonMoveUpper,
+            SideSlot::Lower => Message::SidebarButtonMoveLower,
+        };
+        for (message, command) in [
+            (
+                Message::SidebarButtonMoveUp,
+                SideButtonCommand::Reorder(ButtonMovement::Up),
+            ),
+            (
+                Message::SidebarButtonMoveDown,
+                SideButtonCommand::Reorder(ButtonMovement::Down),
+            ),
+            (
+                Message::SidebarButtonMoveTop,
+                SideButtonCommand::Reorder(ButtonMovement::Top),
+            ),
+            (
+                Message::SidebarButtonMoveBottom,
+                SideButtonCommand::Reorder(ButtonMovement::Bottom),
+            ),
+            (move_message, SideButtonCommand::MoveToOtherSlot),
+            (Message::SidebarButtonHide, SideButtonCommand::Hide),
+        ] {
+            menu = menu.item(Self::side_button_menu_item(
+                &root, language, message, view, command,
+            ));
+        }
+        menu.separator().item(Self::side_button_menu_item(
+            &root,
+            language,
+            Message::SidebarButtonResetOrder,
+            view,
+            SideButtonCommand::ResetOrder,
+        ))
+    }
+
+    /// 键盘与右键共用同一个菜单实体和收合订阅。
+    fn open_side_button_menu(
+        &mut self,
+        view: SideViewId,
+        position: Option<gpui::Point<gpui::Pixels>>,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if self.side_button_menu.is_some() {
+            self.close_side_button_menu(window, cx);
+        }
+        self.focus_side_button(view, window, cx);
+        let button = &self.side_buttons[&view];
+        let trigger = button.registration.token();
+        let target_slot = match self.side_views.state().button_slot(view) {
+            SideSlot::Upper => SideSlot::Lower,
+            SideSlot::Lower => SideSlot::Upper,
+        };
+        let language = cx.global::<crate::app_shell::config::Settings>().language;
+        let root = cx.weak_entity();
+        let menu = PopupMenu::build(window, cx, |menu, _, _| {
+            Self::build_side_button_menu(menu, view, target_slot, root, language)
+        });
+        let registration = self
+            .focus_manager
+            .register(&menu.focus_handle(cx), trigger, None, true)
+            .expect("按钮菜单焦点注册必须唯一");
+        if let Err(error) =
+            self.focus_manager
+                .open_modal(trigger, trigger, registration.token(), window, cx)
+        {
+            log::warn!("按钮菜单打开送焦失败: {error:?}");
+            let _ = self.focus_manager.unregister(registration.token());
+            return;
+        }
+        let root = cx.weak_entity();
+        let dismiss = window.subscribe(&menu, cx, move |_, _: &DismissEvent, window, cx| {
+            let _ = root.update(cx, |this, cx| this.close_side_button_menu(window, cx));
+        });
+        self.side_button_menu = Some(SideButtonMenu {
+            view,
+            position,
+            menu,
+            registration,
+            _dismiss: dismiss,
+        });
+        cx.notify();
+    }
+
+    fn close_side_button_menu(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        let Some(state) = self.side_button_menu.take() else {
+            return;
+        };
+        if let Err(error) = self.focus_manager.close_modal(window, cx) {
+            log::warn!("按钮菜单关闭还焦失败: {error:?}");
+        }
+        if let Err(error) = self.focus_manager.unregister(state.registration.token()) {
+            log::warn!("注销按钮菜单焦点失败: {error:?}");
+        }
+        cx.notify();
+    }
+
+    fn organize_side_button(
+        &mut self,
+        view: SideViewId,
+        command: SideButtonCommand,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.close_side_button_menu(window, cx);
+        self.sync_focus(window, cx);
+        let previous_state = self.side_views.state().clone();
+        let control = self.side_view_persistence.controller(cx);
+        let transition = match command {
+            SideButtonCommand::Reorder(movement) => self.side_views.reorder_button(view, movement),
+            SideButtonCommand::MoveToOtherSlot => {
+                let target = match self.side_views.state().button_slot(view) {
+                    SideSlot::Upper => SideSlot::Lower,
+                    SideSlot::Lower => SideSlot::Upper,
+                };
+                let target_index = self.side_views.state().buttons(target).len();
+                match self
+                    .side_views
+                    .move_button_to_slot(view, target, target_index, control)
+                {
+                    Ok(transition) => transition,
+                    Err(error) => {
+                        log::warn!("侧栏按钮换区失败: {error}");
+                        return;
+                    }
+                }
+            }
+            SideButtonCommand::Hide => self.side_views.set_button_hidden(view, true),
+            SideButtonCommand::ResetOrder => self.side_views.reset_button_order(),
+        };
+        let button_return = matches!(command, SideButtonCommand::Hide).then_some(view);
+        self.apply_sidebar_effects(transition, None, button_return, &previous_state, window, cx);
+    }
+
+    fn render_side_button_menu(&self, view: SideViewId) -> Option<AnyElement> {
+        let state = self
+            .side_button_menu
+            .as_ref()
+            .filter(|state| state.view == view)?;
+        let mut anchor = anchored().snap_to_window_with_margin(px(8.0));
+        anchor = match state.position {
+            Some(position) => anchor.position(position),
+            None => anchor.offset(point(px(34.0), px(0.0))),
+        };
+        Some(
+            deferred(
+                anchor.child(
+                    div()
+                        .debug_selector(|| "app-root-side-button-menu".to_owned())
+                        .child(state.menu.clone()),
+                ),
+            )
+            .with_priority(1)
+            .into_any_element(),
+        )
+    }
+
     /// Host 已提交实体转换；这里统一协调弱焦点节点、还焦和组织状态落盘。
     fn apply_sidebar_effects(
         &mut self,
         transition: SidebarTransition,
         focused_before: Option<SideViewId>,
+        button_return: Option<SideViewId>,
         previous_state: &SidebarState,
         window: &mut Window,
         cx: &mut Context<'_, Self>,
@@ -181,6 +384,27 @@ impl AppRoot {
             if let Err(error) = self.focus_manager.restore_focus(&[token], window, cx) {
                 log::warn!("SideView 关闭还焦失败: {error:?}");
             }
+        } else if let Some(view) =
+            button_return.filter(|view| !self.side_views.state().button_is_visible(*view))
+        {
+            let previous = previous_state.visible_buttons();
+            let index = previous
+                .iter()
+                .position(|candidate| *candidate == view)
+                .unwrap_or(0);
+            let visible = self.side_views.state().visible_buttons();
+            let target = visible.get(index).copied().or_else(|| {
+                index
+                    .checked_sub(1)
+                    .and_then(|previous| visible.get(previous).copied())
+            });
+            let token = target
+                .and_then(|view| self.side_buttons.get(&view))
+                .map(|button| button.registration.token())
+                .unwrap_or_else(|| self.focus_manager.workspace_token());
+            if let Err(error) = self.focus_manager.request_focus(token, window, cx) {
+                log::warn!("隐藏活动栏按钮还焦失败: {error:?}");
+            }
         }
         cx.notify();
     }
@@ -222,7 +446,14 @@ impl AppRoot {
         let transition =
             self.side_views
                 .activate_shortcut(view, focused_before == Some(view), control);
-        self.apply_sidebar_effects(transition, focused_before, &previous_state, window, cx);
+        self.apply_sidebar_effects(
+            transition,
+            focused_before,
+            None,
+            &previous_state,
+            window,
+            cx,
+        );
     }
 
     fn click_side_view(
@@ -236,7 +467,14 @@ impl AppRoot {
         let previous_state = self.side_views.state().clone();
         let control = self.side_view_persistence.controller(cx);
         let transition = self.side_views.click_button(view, control)?;
-        self.apply_sidebar_effects(transition, focused_before, &previous_state, window, cx);
+        self.apply_sidebar_effects(
+            transition,
+            focused_before,
+            None,
+            &previous_state,
+            window,
+            cx,
+        );
         Ok(())
     }
 
@@ -246,7 +484,14 @@ impl AppRoot {
         let previous_state = self.side_views.state().clone();
         let control = self.side_view_persistence.controller(cx);
         let transition = self.side_views.toggle_sidebar(control);
-        self.apply_sidebar_effects(transition, focused_before, &previous_state, window, cx);
+        self.apply_sidebar_effects(
+            transition,
+            focused_before,
+            None,
+            &previous_state,
+            window,
+            cx,
+        );
     }
 
     pub(super) fn render_activity_bar(&self, cx: &Context<'_, Self>) -> AnyElement {
@@ -274,6 +519,9 @@ impl AppRoot {
             }))
             .on_action(cx.listener(|this, _: &ActivateSideButton, window, cx| {
                 this.activate_focused_side_button(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &OpenSideButtonMenu, window, cx| {
+                this.open_focused_side_button_menu(window, cx);
             }))
             .w(px(ACTIVITY_BAR_WIDTH))
             .h_full()
@@ -330,11 +578,18 @@ impl AppRoot {
                     }
                 }),
             )
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
+                    this.open_side_button_menu(view, Some(event.position), window, cx);
+                }),
+            )
             .child(Icon::new(icon).size(px(15.0)).text_color(if active {
                 cx.theme().foreground
             } else {
                 cx.theme().muted_foreground
             }))
+            .children(self.render_side_button_menu(view))
             .into_any_element()
     }
 

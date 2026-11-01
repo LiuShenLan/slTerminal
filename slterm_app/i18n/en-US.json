@@ -132,7 +132,15 @@
     "commit_unstaged": "Unstaged",
     "commit_history": "Recent commits",
     "agent_empty": "No agent configuration directories found",
-    "agent_missing": "Not installed"
+    "agent_missing": "Not installed",
+    "button_move_up": "Move Up",
+    "button_move_down": "Move Down",
+    "button_move_top": "Move to Top",
+    "button_move_bottom": "Move to Bottom",
+    "button_move_upper": "Move to Upper Section",
+    "button_move_lower": "Move to Lower Section",
+    "button_hide": "Hide Button",
+    "button_reset_order": "Reset Button Order"
   },
   "settings": {
     "title": "Settings",
