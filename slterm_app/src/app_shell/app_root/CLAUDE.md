@@ -21,5 +21,5 @@
 ## 验收与测试
 
 - 定向测试：`cargo test -p slterm --test lib_tests --features gpui-test-support app_shell::app_root::tests:: -- --test-threads=1`。
-- 必测面：添加项目不自动建终端、启动失败原子性、新建/拆分/激活复用实体、关闭释放与空项目保留、项目切换保活、隐藏事件继续处理、Exited 留存、重复根激活、非 Unicode Shell 拒绝、生产 UUIDv7 身份与聚焦组落点；FocusManager 的弱生命周期、项目还焦与模态链；SideView 的实例转换、快捷键、鼠标送焦、关闭重开、关闭/隐藏还焦、启动不送焦与恢复写屏障；真实窗口绘制须覆盖空态、组内 active 单视图、横纵分屏几何与项目切换画面。
+- 必测面：添加项目不自动建终端、启动失败原子性、新建/拆分/激活复用实体、关闭释放与空项目保留、项目切换保活、隐藏事件继续处理、Exited 留存、重复根激活、非 Unicode Shell 拒绝、生产 UUIDv7 身份与聚焦组落点；FocusManager 的弱生命周期、项目还焦与模态链；SideView 的实例转换、快捷键、鼠标送焦、活动栏键盘导航、关闭重开、关闭/隐藏还焦、启动不送焦与恢复写屏障；真实窗口绘制须覆盖空态、组内 active 单视图、横纵分屏几何与项目切换画面。
 - 测试启动器使用内存 `test_session`，禁止拉取真实 PTY 或访问用户数据。

@@ -12,7 +12,7 @@ use slterm_workspace::{LogicalSize, PanelGroupId, ProjectLayout, ViewKey};
 use super::project_view::ProjectView;
 use super::{
     ActivateAgentFiles, ActivateCommit, ActivateExplorer, ActivateNav, AppRoot,
-    CloseActiveTerminal, NewTerminal, SplitDown, SplitRight, ToggleSidebar,
+    CloseActiveTerminal, FocusActivityBar, NewTerminal, SplitDown, SplitRight, ToggleSidebar,
 };
 
 impl AppRoot {
@@ -217,6 +217,9 @@ impl Render for AppRoot {
             }))
             .on_action(cx.listener(|this, _: &ActivateAgentFiles, window, cx| {
                 this.activate_side_view(slterm_workspace::SideViewId::AgentFiles, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &FocusActivityBar, window, cx| {
+                this.focus_activity_bar(window, cx);
             }))
             .on_action(cx.listener(|this, _: &CloseActiveTerminal, window, cx| {
                 if let Err(error) = this.close_focused_terminal(window, cx) {

@@ -2,16 +2,32 @@
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AnyElement, Context, InteractiveElement as _, IntoElement, MouseButton, ParentElement as _,
-    Styled as _, Window, div, px, relative,
+    AnyElement, Context, Hsla, InteractiveElement as _, IntoElement, MouseButton,
+    ParentElement as _, StyleRefinement, Styled as _, Window, div, px, relative,
 };
 use gpui_component::{ActiveTheme as _, Icon, IconName};
 use slterm_sidebar::{SideSlot, SidebarError, SidebarState, SidebarTransition};
 use slterm_workspace::SideViewId;
 
-use super::AppRoot;
+use super::{
+    ActivateSideButton, AppRoot, FocusFirstSideButton, FocusLastSideButton, FocusNextSideButton,
+    FocusPreviousSideButton,
+};
 
 pub(super) const ACTIVITY_BAR_WIDTH: f32 = 46.0;
+pub(super) const ACTIVITY_BAR_KEY_CONTEXT: &str = "ActivityBar";
+
+/// 活动栏键盘焦点使用主题强调色，与打开态底色区分。
+pub(super) fn side_button_focus_style(accent: Hsla) -> StyleRefinement {
+    StyleRefinement::default().border_1().border_color(accent)
+}
+
+enum SideButtonNavigation {
+    Next,
+    Previous,
+    First,
+    Last,
+}
 
 impl AppRoot {
     /// 动作布局校验与渲染共用实际侧栏占宽；隐藏按钮不等于隐藏整个侧栏。
@@ -34,6 +50,77 @@ impl AppRoot {
                 .and_then(|instance| instance.read(cx).focus_handle.as_ref())
                 .is_some_and(|focus| focus.contains_focused(window, cx))
         })
+    }
+
+    fn focused_side_button(&self, window: &Window, cx: &Context<'_, Self>) -> Option<SideViewId> {
+        let focused = window.focused(cx)?;
+        SideViewId::ALL.into_iter().find(|view| {
+            self.side_buttons
+                .get(view)
+                .is_some_and(|button| button.handle == focused)
+        })
+    }
+
+    fn focus_side_button(
+        &mut self,
+        view: SideViewId,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let token = self.side_buttons[&view].registration.token();
+        if let Err(error) = self.focus_manager.request_focus(token, window, cx) {
+            log::warn!("活动栏按钮送焦失败: {error:?}");
+        }
+    }
+
+    pub(super) fn focus_activity_bar(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        let focused_view = self.focused_side_view(window, cx);
+        self.sync_focus(window, cx);
+        let state = self.side_views.state();
+        let target = focused_view
+            .filter(|view| state.button_is_visible(*view))
+            .or_else(|| {
+                state
+                    .visible_buttons()
+                    .into_iter()
+                    .find(|view| state.open_slot(*view).is_some())
+            })
+            .or_else(|| state.visible_buttons().first().copied());
+        if let Some(view) = target {
+            self.focus_side_button(view, window, cx);
+        }
+    }
+
+    fn navigate_side_buttons(
+        &mut self,
+        navigation: SideButtonNavigation,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let current = self.focused_side_button(window, cx);
+        let buttons = self.side_views.state().visible_buttons();
+        if buttons.is_empty() {
+            return;
+        }
+        let current =
+            current.and_then(|view| buttons.iter().position(|candidate| *candidate == view));
+        let last = buttons.len() - 1;
+        let index = match navigation {
+            SideButtonNavigation::Next => current.map_or(0, |index| (index + 1).min(last)),
+            SideButtonNavigation::Previous => current.map_or(0, |index| index.saturating_sub(1)),
+            SideButtonNavigation::First => 0,
+            SideButtonNavigation::Last => last,
+        };
+        self.focus_side_button(buttons[index], window, cx);
+    }
+
+    fn activate_focused_side_button(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        let Some(view) = self.focused_side_button(window, cx) else {
+            return;
+        };
+        if let Err(error) = self.click_side_view(view, window, cx) {
+            log::warn!("活动栏按钮键盘激活失败: {error}");
+        }
     }
 
     /// Host 已提交实体转换；这里统一协调弱焦点节点、还焦和组织状态落盘。
@@ -170,6 +257,24 @@ impl AppRoot {
             .into_iter()
             .map(|view| self.render_side_view_button(view, cx));
         div()
+            .key_context(ACTIVITY_BAR_KEY_CONTEXT)
+            .on_action(cx.listener(|this, _: &FocusNextSideButton, window, cx| {
+                this.navigate_side_buttons(SideButtonNavigation::Next, window, cx);
+            }))
+            .on_action(
+                cx.listener(|this, _: &FocusPreviousSideButton, window, cx| {
+                    this.navigate_side_buttons(SideButtonNavigation::Previous, window, cx);
+                }),
+            )
+            .on_action(cx.listener(|this, _: &FocusFirstSideButton, window, cx| {
+                this.navigate_side_buttons(SideButtonNavigation::First, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &FocusLastSideButton, window, cx| {
+                this.navigate_side_buttons(SideButtonNavigation::Last, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &ActivateSideButton, window, cx| {
+                this.activate_focused_side_button(window, cx);
+            }))
             .w(px(ACTIVITY_BAR_WIDTH))
             .h_full()
             .flex_shrink_0()
@@ -196,6 +301,7 @@ impl AppRoot {
         };
         div()
             .track_focus(&focus)
+            .focus_visible(|_| side_button_focus_style(cx.theme().accent))
             .relative()
             .size(px(34.0))
             .flex_shrink_0()

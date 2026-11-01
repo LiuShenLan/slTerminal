@@ -9,8 +9,8 @@ use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::Duration;
 
 use gpui::{
-    App, AppContext as _, Entity, EntityId, Modifiers, MouseButton, TestAppContext,
-    VisualTestContext, Window,
+    App, AppContext as _, Entity, EntityId, Modifiers, MouseButton, StyleRefinement, Styled as _,
+    TestAppContext, VisualTestContext, Window,
 };
 use gpui_component::Root;
 use slterm_path::{AppPaths, CanonicalPath};
@@ -187,6 +187,20 @@ fn draw_frame(window: &mut VisualTestContext) {
     window.update(|window, cx| {
         window.draw(cx).clear(cx);
     });
+}
+
+fn assert_side_button_focused(
+    root: &Entity<AppRoot>,
+    window: &mut VisualTestContext,
+    cx: &TestAppContext,
+    view: SideViewId,
+) {
+    let expected = root.read_with(cx, |root, _| root.side_buttons[&view].handle.clone());
+    assert_eq!(
+        window.update(|window, cx| window.focused(cx)),
+        Some(expected),
+        "焦点必须位于 {view:?} 活动栏按钮"
+    );
 }
 
 fn group_selector(id: &str) -> &'static str {
@@ -1290,6 +1304,128 @@ fn production_sidebar_restores_organization_before_first_frame(cx: &mut TestAppC
     root.read_with(cx, |root, _| {
         assert_eq!(root.side_views.state(), &sidebar);
     });
+}
+
+#[test]
+fn activity_bar_focus_indicator_uses_accent_border() {
+    let accent = gpui::hsla(0.1, 0.2, 0.3, 1.0);
+    assert_eq!(
+        super::sidebar::side_button_focus_style(accent),
+        StyleRefinement::default().border_1().border_color(accent)
+    );
+}
+
+#[gpui::test]
+fn activity_bar_tab_and_arrow_keys_follow_visual_order(cx: &mut TestAppContext) {
+    let (root, mut window, _) = open_root(cx);
+    draw_frame(&mut window);
+    let workspace = root.read_with(cx, |root, _| root.workspace_focus.clone());
+    window.update(|window, cx| workspace.focus(window, cx));
+
+    window.simulate_keystrokes("tab");
+    draw_frame(&mut window);
+    assert_side_button_focused(&root, &mut window, cx, SideViewId::Nav);
+    for (keys, view) in [
+        ("down", SideViewId::Explorer),
+        ("down", SideViewId::Commit),
+        ("end", SideViewId::AgentFiles),
+        ("up", SideViewId::Commit),
+        ("home", SideViewId::Nav),
+        ("up", SideViewId::Nav),
+    ] {
+        window.simulate_keystrokes(keys);
+        draw_frame(&mut window);
+        assert_side_button_focused(&root, &mut window, cx, view);
+    }
+}
+
+#[gpui::test]
+fn activity_bar_enter_and_space_activate_buttons(cx: &mut TestAppContext) {
+    let (root, mut window, _) = open_root(cx);
+    draw_frame(&mut window);
+    let workspace = root.read_with(cx, |root, _| root.workspace_focus.clone());
+    window.update(|window, cx| workspace.focus(window, cx));
+    window.simulate_keystrokes("tab");
+    draw_frame(&mut window);
+    assert_side_button_focused(&root, &mut window, cx, SideViewId::Nav);
+
+    window.simulate_keystrokes("enter");
+    draw_frame(&mut window);
+    assert!(root.read_with(cx, |root, _| {
+        root.side_views.instance(SideViewId::Nav).is_none()
+    }));
+    assert_side_button_focused(&root, &mut window, cx, SideViewId::Nav);
+
+    window.simulate_keystrokes("space");
+    draw_frame(&mut window);
+    assert!(root.read_with(cx, |root, _| {
+        root.side_views.instance(SideViewId::Nav).is_some()
+    }));
+    let nav_focus = root.read_with(cx, |root, cx| {
+        root.side_views
+            .instance(SideViewId::Nav)
+            .unwrap()
+            .read(cx)
+            .focus_handle
+            .clone()
+            .unwrap()
+    });
+    assert_eq!(
+        window.update(|window, cx| window.focused(cx)),
+        Some(nav_focus),
+        "重新打开后焦点必须进入新 SideView"
+    );
+}
+
+#[gpui::test]
+fn focus_activity_bar_prefers_open_view_then_first_visible(cx: &mut TestAppContext) {
+    let (root, mut window, _) = open_root(cx);
+    draw_frame(&mut window);
+    let workspace = root.read_with(cx, |root, _| root.workspace_focus.clone());
+    window.update(|window, cx| workspace.focus(window, cx));
+
+    window.simulate_keystrokes("ctrl-shift-l");
+    draw_frame(&mut window);
+    assert_side_button_focused(&root, &mut window, cx, SideViewId::Nav);
+
+    window.simulate_keystrokes("ctrl-shift-e");
+    draw_frame(&mut window);
+    window.simulate_keystrokes("ctrl-shift-l");
+    draw_frame(&mut window);
+    assert_side_button_focused(&root, &mut window, cx, SideViewId::Explorer);
+
+    window.simulate_keystrokes("ctrl-shift-e");
+    draw_frame(&mut window);
+    window.simulate_keystrokes("ctrl-shift-e");
+    draw_frame(&mut window);
+    assert!(root.read_with(cx, |root, _| {
+        root.side_views.instance(SideViewId::Explorer).is_none()
+    }));
+    window.update(|window, cx| workspace.focus(window, cx));
+    window.simulate_keystrokes("ctrl-shift-l");
+    draw_frame(&mut window);
+    assert_side_button_focused(&root, &mut window, cx, SideViewId::Nav);
+}
+
+#[gpui::test]
+fn focus_activity_bar_skips_hidden_buttons(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let mut store = WorkspaceDatabase::open(&paths).unwrap();
+    let mut sidebar = slterm_sidebar::SidebarState::default();
+    sidebar.set_button_hidden(SideViewId::Nav, true);
+    sidebar.close_view(SideViewId::Nav);
+    store.save_sidebar_state(&sidebar).unwrap();
+    drop(store);
+    let persistence = SideViewPersistence::load(&paths, None);
+    let (root, mut window, _) = open_root_with_persistence(cx, persistence);
+    draw_frame(&mut window);
+    let workspace = root.read_with(cx, |root, _| root.workspace_focus.clone());
+    window.update(|window, cx| workspace.focus(window, cx));
+
+    window.simulate_keystrokes("ctrl-shift-l");
+    draw_frame(&mut window);
+    assert_side_button_focused(&root, &mut window, cx, SideViewId::Explorer);
 }
 
 #[gpui::test]

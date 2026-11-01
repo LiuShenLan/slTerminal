@@ -37,7 +37,13 @@ gpui::actions!(
         ActivateNav,
         ActivateExplorer,
         ActivateCommit,
-        ActivateAgentFiles
+        ActivateAgentFiles,
+        FocusActivityBar,
+        FocusNextSideButton,
+        FocusPreviousSideButton,
+        FocusFirstSideButton,
+        FocusLastSideButton,
+        ActivateSideButton
     ]
 );
 
