@@ -6,11 +6,13 @@ use std::rc::Rc;
 
 use gpui::{App, AppContext as _, Context, Entity, Window};
 use slterm_path::CanonicalPath;
+use slterm_split::SplitDirection;
 use slterm_workspace::{
-    AddProjectOutcome, NewTerminalSpec, PanelId, PanelIdExhausted, ProjectCommandError, ProjectId,
-    ProjectRegistryError, ProjectSnapshot, ProjectSnapshotError, RunIntent, SplitTerminalSpec,
-    TerminalId, TerminalRecord, ViewKey,
+    AddProjectOutcome, LogicalSize, NewTerminalSpec, PanelGroupId, PanelId, PanelIdExhausted,
+    ProjectCommandError, ProjectId, ProjectRegistryError, ProjectSnapshot, ProjectSnapshotError,
+    RunIntent, SplitTerminalSpec, TerminalId, TerminalRecord, ViewKey,
 };
+use uuid::Uuid;
 
 use crate::gpui_terminal::PaneId;
 use crate::gpui_terminal::view::{TerminalLaunch, TerminalView, TerminalViewEvent};
@@ -140,7 +142,22 @@ impl From<io::Error> for AppRootError {
 
 #[allow(dead_code)] // 独立运行根切片，生产窗口切换时移除。
 impl AppRoot {
-    pub(crate) fn add_project(
+    pub(crate) fn open_project(
+        &mut self,
+        root: CanonicalPath,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<ProjectId, AppRootError> {
+        let requested = ProjectId::from_uuid(Uuid::now_v7()).expect("系统生成的 UUID 必须为 v7");
+        let outcome = self.add_project(requested, root, window, cx)?;
+        Ok(match outcome {
+            AddProjectOutcome::Added(project_id) | AddProjectOutcome::Existing(project_id) => {
+                project_id
+            }
+        })
+    }
+
+    pub(super) fn add_project(
         &mut self,
         id: ProjectId,
         root: CanonicalPath,
@@ -188,6 +205,31 @@ impl AppRoot {
 
     pub(crate) fn new_terminal(
         &mut self,
+        shell: CanonicalPath,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<PanelId, AppRootError> {
+        let project_id = self.active_project()?;
+        let target_group = match self.focused_group(project_id, cx)? {
+            Some(group_id) => group_id,
+            None => PanelGroupId::from_uuid(Uuid::now_v7()).expect("系统生成的 UUID 必须为 v7"),
+        };
+        let terminal_id = TerminalId::from_uuid(Uuid::now_v7()).expect("系统生成的 UUID 必须为 v7");
+        self.new_terminal_with_identity(
+            NewTerminalSpec {
+                project_id,
+                terminal_id,
+                target_group,
+                shell,
+                custom_title: None,
+            },
+            window,
+            cx,
+        )
+    }
+
+    pub(super) fn new_terminal_with_identity(
+        &mut self,
         spec: NewTerminalSpec,
         window: &mut Window,
         cx: &mut Context<'_, Self>,
@@ -199,6 +241,41 @@ impl AppRoot {
 
     pub(crate) fn split_terminal(
         &mut self,
+        direction: SplitDirection,
+        ratio: f32,
+        viewport: LogicalSize,
+        shell: CanonicalPath,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<PanelId, AppRootError> {
+        let project_id = self.active_project()?;
+        let target_group = self
+            .focused_group(project_id, cx)?
+            .ok_or(AppRootError::MissingPanel)?;
+        let terminal_id = TerminalId::from_uuid(Uuid::now_v7()).expect("系统生成的 UUID 必须为 v7");
+        let new_group_id =
+            PanelGroupId::from_uuid(Uuid::now_v7()).expect("系统生成的 UUID 必须为 v7");
+        self.split_terminal_with_identity(
+            SplitTerminalSpec {
+                new_terminal: NewTerminalSpec {
+                    project_id,
+                    terminal_id,
+                    target_group,
+                    shell,
+                    custom_title: None,
+                },
+                new_group_id,
+                direction,
+                ratio,
+                viewport,
+            },
+            window,
+            cx,
+        )
+    }
+
+    pub(super) fn split_terminal_with_identity(
+        &mut self,
         spec: SplitTerminalSpec,
         window: &mut Window,
         cx: &mut Context<'_, Self>,
@@ -206,6 +283,54 @@ impl AppRoot {
         self.require_active_project(spec.new_terminal.project_id)?;
         let (candidate, record) = self.snapshot.with_split_terminal(spec)?;
         self.launch_candidate(candidate, record, window, cx)
+    }
+
+    fn active_project(&self) -> Result<ProjectId, AppRootError> {
+        self.snapshot
+            .registry()
+            .active()
+            .ok_or(AppRootError::ProjectNotActive)
+    }
+
+    /// 非空布局以项目聚焦面板定位目标组；空布局由调用方生成首组身份。
+    fn focused_group(
+        &self,
+        project_id: ProjectId,
+        cx: &App,
+    ) -> Result<Option<PanelGroupId>, AppRootError> {
+        let project = self
+            .snapshot
+            .registry()
+            .project(project_id)
+            .ok_or(ProjectRegistryError::ProjectNotFound)?;
+        let layout = project.layout();
+        if layout.tree().is_none() {
+            return Ok(None);
+        }
+        let panel_id = self
+            .focused_panel(project_id, cx)
+            .ok_or(AppRootError::MissingPanel)?;
+        let view_key = self
+            .projects
+            .get(&project_id)
+            .and_then(|project| {
+                project
+                    .read(cx)
+                    .panels
+                    .get(&panel_id)
+                    .map(|panel| panel.view_key.clone())
+            })
+            .ok_or(AppRootError::MissingPanel)?;
+        layout
+            .group_ids()
+            .into_iter()
+            .find(|group_id| {
+                layout
+                    .group(*group_id)
+                    .is_some_and(|group| group.views().contains(&view_key))
+            })
+            .map(Some)
+            .ok_or(AppRootError::MissingPanel)
     }
 
     fn require_active_project(&self, project_id: ProjectId) -> Result<(), AppRootError> {
@@ -264,6 +389,26 @@ impl AppRoot {
         self.focus_project(project_id, window, cx);
         cx.notify();
         Ok(panel_id)
+    }
+
+    pub(crate) fn close_focused_terminal(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<TerminalRecord, AppRootError> {
+        let project_id = self.active_project()?;
+        let panel_id = self
+            .focused_panel(project_id, cx)
+            .ok_or(AppRootError::MissingPanel)?;
+        let terminal_id = self
+            .terminal_identity(panel_id, cx)
+            .filter(|terminal_id| {
+                self.snapshot
+                    .terminal(*terminal_id)
+                    .is_some_and(|record| record.project_id() == project_id)
+            })
+            .ok_or(AppRootError::MissingPanel)?;
+        self.close_terminal(terminal_id, window, cx)
     }
 
     pub(crate) fn close_terminal(

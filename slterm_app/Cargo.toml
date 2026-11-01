@@ -120,6 +120,8 @@ aes-gcm = "0.11"
 argon2 = "0.6.0-rc.8"
 # 盐与 nonce 的系统随机源(0.3 的 `fill` 形态,与上游同族)。
 getrandom = "0.3"
+# 工作区稳定身份的 UUIDv7 随机源只由 application 提供。
+uuid = { version = "=1.28.0", default-features = false, features = ["v7"] }
 # 事件信箱/session_pump 的异步通道与 Stream(event_mailbox.rs 随迁形态)。
 futures = "0.3"
 # first_frame 取原生 HWND 走 raw-window-handle(与 gpui 内部同版本族),

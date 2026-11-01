@@ -166,6 +166,20 @@ fn add_project(
     result.unwrap()
 }
 
+fn open_generated_project(
+    root: &Entity<AppRoot>,
+    window: &mut VisualTestContext,
+    root_path: &str,
+) -> ProjectId {
+    let result = window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.open_project(path(root_path), window, cx)
+        })
+    });
+    assert!(result.is_ok(), "打开项目失败: {result:?}");
+    result.unwrap()
+}
+
 fn activate_project(root: &Entity<AppRoot>, window: &mut VisualTestContext, id: &str) {
     let result = window.update(|window, cx| {
         root.update(cx, |root, cx| {
@@ -184,10 +198,37 @@ fn new_terminal(
 ) -> PanelId {
     let result = window.update(|window, cx| {
         root.update(cx, |root, cx| {
-            root.new_terminal(terminal_spec(project, group, terminal), window, cx)
+            root.new_terminal_with_identity(terminal_spec(project, group, terminal), window, cx)
         })
     });
     assert!(result.is_ok(), "新建终端失败: {result:?}");
+    result.unwrap()
+}
+
+fn new_generated_terminal(root: &Entity<AppRoot>, window: &mut VisualTestContext) -> PanelId {
+    let result = window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.new_terminal(path("C:/Program Files/PowerShell/7/pwsh.exe"), window, cx)
+        })
+    });
+    assert!(result.is_ok(), "生产新建终端失败: {result:?}");
+    result.unwrap()
+}
+
+fn split_generated_terminal(root: &Entity<AppRoot>, window: &mut VisualTestContext) -> PanelId {
+    let result = window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.split_terminal(
+                SplitDirection::TopBottom,
+                0.5,
+                LogicalSize::new(1200.0, 800.0),
+                path("C:/Program Files/PowerShell/7/pwsh.exe"),
+                window,
+                cx,
+            )
+        })
+    });
+    assert!(result.is_ok(), "生产拆分终端失败: {result:?}");
     result.unwrap()
 }
 
@@ -202,7 +243,7 @@ fn split_terminal_in_direction(
 ) -> PanelId {
     let result = window.update(|window, cx| {
         root.update(cx, |root, cx| {
-            root.split_terminal(
+            root.split_terminal_with_identity(
                 SplitTerminalSpec {
                     new_terminal: terminal_spec(PROJECT_A, GROUP_A, TERMINAL_B),
                     new_group_id: group_id(GROUP_B),
@@ -275,7 +316,11 @@ fn failed_launch_keeps_snapshot_and_instances_unchanged(cx: &mut TestAppContext)
 
     let result = window.update(|window, cx| {
         root.update(cx, |root, cx| {
-            root.new_terminal(terminal_spec(PROJECT_A, GROUP_A, TERMINAL_A), window, cx)
+            root.new_terminal_with_identity(
+                terminal_spec(PROJECT_A, GROUP_A, TERMINAL_A),
+                window,
+                cx,
+            )
         })
     });
 
@@ -523,6 +568,158 @@ fn duplicate_project_root_reactivates_existing_project(cx: &mut TestAppContext) 
     });
     assert_eq!(panel_entity(&root, cx, PROJECT_A, TERMINAL_A).1, entity);
     assert_eq!(state.borrow().attempts, 1);
+}
+
+#[gpui::test]
+fn open_project_generates_uuid_v7_identity(cx: &mut TestAppContext) {
+    let (root, mut window, state) = open_root(cx);
+
+    let opened = open_generated_project(&root, &mut window, "D:/work/generated");
+
+    assert_eq!(opened.as_uuid().get_version_num(), 7);
+    root.read_with(cx, |root, _| {
+        assert_eq!(root.snapshot().registry().active(), Some(opened));
+        assert_eq!(root.snapshot().terminals().count(), 0);
+    });
+    assert_eq!(state.borrow().attempts, 0);
+}
+
+#[gpui::test]
+fn new_terminal_generates_uuid_v7_and_reuses_focused_group(cx: &mut TestAppContext) {
+    let (root, mut window, state) = open_root(cx);
+    let project = open_generated_project(&root, &mut window, "D:/work/generated");
+
+    new_generated_terminal(&root, &mut window);
+    new_generated_terminal(&root, &mut window);
+
+    root.read_with(cx, |root, _| {
+        let layout = root
+            .snapshot()
+            .registry()
+            .project(project)
+            .unwrap()
+            .layout();
+        let groups = layout.group_ids();
+        assert_eq!(groups.len(), 1, "连续新建应进入当前聚焦组");
+        assert_eq!(groups[0].as_uuid().get_version_num(), 7);
+        assert_eq!(layout.group(groups[0]).unwrap().views().len(), 2);
+        let terminals: Vec<_> = root.snapshot().terminals().collect();
+        assert_eq!(terminals.len(), 2);
+        assert!(terminals.iter().all(|record| {
+            record.project_id() == project && record.id().as_uuid().get_version_num() == 7
+        }));
+        assert_ne!(terminals[0].id(), terminals[1].id());
+    });
+    assert_eq!(state.borrow().attempts, 2);
+}
+
+#[gpui::test]
+fn split_terminal_generates_uuid_v7_and_uses_focused_group(cx: &mut TestAppContext) {
+    let (root, mut window, state) = open_root(cx);
+    let project = open_generated_project(&root, &mut window, "D:/work/generated");
+    new_generated_terminal(&root, &mut window);
+
+    let split = split_generated_terminal(&root, &mut window);
+
+    root.read_with(cx, |root, cx| {
+        let layout = root
+            .snapshot()
+            .registry()
+            .project(project)
+            .unwrap()
+            .layout();
+        let groups = layout.group_ids();
+        assert_eq!(groups.len(), 2);
+        assert_ne!(groups[0], groups[1]);
+        assert!(groups.iter().all(|id| id.as_uuid().get_version_num() == 7));
+        let terminals: Vec<_> = root.snapshot().terminals().collect();
+        assert_eq!(terminals.len(), 2);
+        assert!(terminals.iter().all(|record| {
+            record.project_id() == project && record.id().as_uuid().get_version_num() == 7
+        }));
+        assert_eq!(root.focused_panel(project, cx), Some(split));
+    });
+    assert_eq!(state.borrow().attempts, 2);
+}
+
+#[gpui::test]
+fn close_focused_terminal_closes_split_panel_and_updates_focus(cx: &mut TestAppContext) {
+    let (root, mut window, state) = open_root(cx);
+    let project = open_generated_project(&root, &mut window, "D:/work/generated");
+    let first = new_generated_terminal(&root, &mut window);
+    let split = split_generated_terminal(&root, &mut window);
+
+    let closed = window
+        .update(|window, cx| root.update(cx, |root, cx| root.close_focused_terminal(window, cx)));
+    assert!(closed.is_ok(), "关闭聚焦终端失败: {closed:?}");
+    let closed = closed.unwrap();
+
+    root.read_with(cx, |root, cx| {
+        assert!(root.snapshot().terminal(closed.id()).is_none());
+        assert_eq!(root.snapshot().terminals().count(), 1);
+        assert_eq!(root.focused_panel(project, cx), Some(first));
+        assert_eq!(root.panel_count(project, cx), 1);
+        let layout = root
+            .snapshot()
+            .registry()
+            .project(project)
+            .unwrap()
+            .layout();
+        assert_eq!(layout.group_ids().len(), 1);
+    });
+    assert!(matches!(
+        state.borrow().sessions[&split.sequence()].try_recv(),
+        Ok(Msg::Shutdown)
+    ));
+    assert_eq!(state.borrow().attempts, 2);
+}
+
+#[gpui::test]
+fn production_commands_reject_missing_active_project_or_focused_group(cx: &mut TestAppContext) {
+    let (root, mut window, state) = open_root(cx);
+
+    let without_project = window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.new_terminal(path("C:/Program Files/PowerShell/7/pwsh.exe"), window, cx)
+        })
+    });
+    assert!(matches!(
+        without_project,
+        Err(AppRootError::ProjectNotActive)
+    ));
+
+    open_generated_project(&root, &mut window, "D:/work/generated");
+    let without_group = window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.split_terminal(
+                SplitDirection::LeftRight,
+                0.5,
+                LogicalSize::new(1200.0, 800.0),
+                path("C:/Program Files/PowerShell/7/pwsh.exe"),
+                window,
+                cx,
+            )
+        })
+    });
+    assert!(matches!(without_group, Err(AppRootError::MissingPanel)));
+    let without_focus = window
+        .update(|window, cx| root.update(cx, |root, cx| root.close_focused_terminal(window, cx)));
+    assert!(matches!(without_focus, Err(AppRootError::MissingPanel)));
+    assert_eq!(state.borrow().attempts, 0);
+}
+
+#[gpui::test]
+fn open_project_duplicate_root_returns_existing_identity(cx: &mut TestAppContext) {
+    let (root, mut window, _state) = open_root(cx);
+    let first = open_generated_project(&root, &mut window, "D:/work/generated");
+
+    let second = open_generated_project(&root, &mut window, "D:/work/generated");
+
+    assert_eq!(second, first);
+    root.read_with(cx, |root, _| {
+        assert_eq!(root.snapshot().registry().projects().len(), 1);
+        assert_eq!(root.snapshot().registry().active(), Some(first));
+    });
 }
 
 #[gpui::test]
