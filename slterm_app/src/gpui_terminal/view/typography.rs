@@ -193,12 +193,6 @@ pub(super) fn cell_metrics(window: &Window, cx: &App) -> (Pixels, Pixels) {
     )
 }
 
-/// 启动尺寸用基础字号;持久化的终端缩放只在窗口建成后影响活网格
-/// (缩放键域归 06)。
-pub(super) fn startup_cell_metrics(window: &Window, cx: &App) -> (Pixels, Pixels) {
-    measure_startup_cell_metrics(window.text_system(), window.scale_factor(), cx)
-}
-
 /// 同一套字体系统与取整规则可以在 HWND 存在前先量出窗口尺寸。
 pub(super) fn startup_cell_metrics_at_scale(scale: f32, cx: &App) -> (Pixels, Pixels) {
     let text_system = WindowTextSystem::new(cx.text_system().clone());

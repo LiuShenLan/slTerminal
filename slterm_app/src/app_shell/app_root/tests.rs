@@ -6,6 +6,7 @@ use std::io;
 use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::mpsc::{Receiver, TryRecvError};
+use std::time::Duration;
 
 use gpui::{
     App, AppContext as _, Entity, EntityId, Modifiers, MouseButton, TestAppContext,
@@ -21,6 +22,7 @@ use slterm_workspace::{
     ProjectId, RunIntent, SplitTerminalSpec, TerminalId, TerminalRecord, ViewKey,
 };
 
+use crate::app_shell::SltermShellEvent;
 use crate::gpui_terminal::PaneId;
 use crate::gpui_terminal::session;
 use crate::gpui_terminal::view::{TerminalLaunch, TerminalView, TerminalViewEvent};
@@ -730,6 +732,104 @@ fn open_project_duplicate_root_returns_existing_identity(cx: &mut TestAppContext
         assert_eq!(root.snapshot().registry().projects().len(), 1);
         assert_eq!(root.snapshot().registry().active(), Some(first));
     });
+}
+
+#[gpui::test]
+fn initial_project_startup_opens_one_terminal(cx: &mut TestAppContext) {
+    let (root, mut window, state) = open_root(cx);
+
+    let started = window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.open_initial_project(path("D:/work/initial"), window, cx)
+        })
+    });
+
+    assert!(started.is_ok(), "初始项目启动失败: {started:?}");
+    root.read_with(cx, |root, _| {
+        assert_eq!(root.snapshot().registry().projects().len(), 1);
+        assert_eq!(root.snapshot().terminals().count(), 1);
+        assert_eq!(
+            root.snapshot.registry().active().and_then(|id| {
+                root.snapshot
+                    .registry()
+                    .project(id)
+                    .map(|project| project.root())
+            }),
+            Some(&path("D:/work/initial"))
+        );
+    });
+    assert_eq!(state.borrow().attempts, 1);
+}
+
+#[gpui::test]
+fn notification_focus_activates_the_owning_project_and_panel(cx: &mut TestAppContext) {
+    let (root, mut window, state) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, "D:/work/a");
+    let first = new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_A);
+    add_project(&root, &mut window, PROJECT_B, "D:/work/b");
+    new_terminal(&root, &mut window, PROJECT_B, GROUP_B, TERMINAL_B);
+
+    window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.handle_shell_event(
+                SltermShellEvent::NotificationFocus(Some(PaneId(first.sequence()))),
+                window,
+                cx,
+            )
+        })
+    });
+
+    root.read_with(cx, |root, cx| {
+        assert_eq!(
+            root.snapshot().registry().active(),
+            Some(project_id(PROJECT_A))
+        );
+        assert_eq!(root.focused_panel(project_id(PROJECT_A), cx), Some(first));
+    });
+    assert_eq!(state.borrow().attempts, 2);
+}
+
+#[gpui::test]
+fn open_directories_shell_event_opens_projects_without_terminals(cx: &mut TestAppContext) {
+    let (root, mut window, state) = open_root(cx);
+
+    window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.handle_shell_event(
+                SltermShellEvent::OpenDirectories(vec!["D:/work/external".to_owned()]),
+                window,
+                cx,
+            )
+        })
+    });
+
+    root.read_with(cx, |root, _| {
+        assert_eq!(root.snapshot().registry().projects().len(), 1);
+        assert_eq!(root.snapshot().terminals().count(), 0);
+    });
+    assert_eq!(state.borrow().attempts, 0);
+}
+
+#[gpui::test]
+fn shell_event_pump_dispatches_queued_events_to_app_root(cx: &mut TestAppContext) {
+    let (root, mut window, state) = open_root(cx);
+    let (sender, receiver) = std::sync::mpsc::channel();
+    window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.start_shell_event_pump(receiver, window.window_handle(), cx)
+        })
+    });
+
+    let _ = sender.send(SltermShellEvent::OpenDirectories(vec![
+        "D:/work/pumped".to_owned(),
+    ]));
+    window.executor().advance_clock(Duration::from_millis(121));
+    window.run_until_parked();
+
+    root.read_with(cx, |root, _| {
+        assert_eq!(root.snapshot().registry().projects().len(), 1);
+    });
+    assert_eq!(state.borrow().attempts, 0);
 }
 
 #[gpui::test]

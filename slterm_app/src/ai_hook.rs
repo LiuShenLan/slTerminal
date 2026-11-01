@@ -131,12 +131,9 @@ const CLAUDE_EVENTS: [&str; 10] = [
 /// 卸载器入口(`setup-ai --remove`):移除全部 AI CLI 的 hook 注入。
 pub(crate) use local::settings::remove_all as remove_all_hooks;
 
-// 壳侧启动链的唯一进程级入口;返回句柄随 `run_shell` 作用域存活。
+// 管道服务仅由独立集成测试启动；生产接入归后续 Agent 协调器。
+#[cfg(test)]
 pub use windows::spawn_gpui_server;
-
-/// config_guard 落盘本体在 local;消费点 = 壳启动链 `run_shell`。
-/// 回调接失败边呈现;不需要提示的调用方传 `|_| {}`。
-pub use local::{HookFailureKind, spawn_config_guard_with};
 
 #[cfg(test)]
 mod e2e_tests;

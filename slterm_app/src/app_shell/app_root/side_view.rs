@@ -296,7 +296,7 @@ mod side_view_gpui_persistence_tests {
     use slterm_workspace::{ViewKey, ViewState};
 
     use super::*;
-    use crate::app_shell::workspace::side_view_host::SideViewHost;
+    use crate::app_shell::app_root::side_view_host::SideViewHost;
     use slterm_sidebar::SidebarState;
 
     fn nav_state(registry: &ViewStateRegistry, scroll: f64) -> SideViewState {

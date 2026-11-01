@@ -7,5 +7,7 @@ pub(crate) mod document;
 pub(crate) mod preferences;
 mod store;
 
-pub(crate) use document::{DocumentError, ThemeDocument, builtin_documents, from_definition};
-pub(crate) use store::{RevisionPrecondition, StoreError, ThemeLibrarySnapshot, ThemeLibraryStore};
+pub(crate) use document::{DocumentError, ThemeDocument};
+#[cfg(test)]
+pub(crate) use document::{builtin_documents, from_definition};
+pub(crate) use store::{StoreError, ThemeLibraryStore};

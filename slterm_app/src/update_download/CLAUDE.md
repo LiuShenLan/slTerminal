@@ -11,7 +11,7 @@
 - **helper 红线**：不按映像名杀进程、不自行安装、不绕过参与者身份核对；helper 物化自 `handoff.ps1`，`SLTERM_UPDATE_RESTORE`/`SLTERM_CONFIG_DIR`/`SLTERM_LOCAL_DIR` 为单名恢复变量，计划必须同时保存双数据根。
 - **restore ticket**：成功或回滚恢复都要版本匹配；最多 3 次尝试，`restored.json` 留档防重放。
 - **安装目录归属**：安装器管理的安装（旁置 `unins000.exe`）才允许自覆盖；便携 zip 走下载页手动替换。原因：覆盖不受管的目录会破坏用户文件。
-- **消费面**：更新弹窗接 `prepare/commit/schedule`；`run_shell` 启动链消费 `restore_ticket`，建窗后 `acknowledge_restore`。
+- **消费面**：启动链只消费 `installation_in_progress` 安装事务守卫；`prepare/commit/schedule` 与 restore ticket 由更新域的新快照协调器装配，不读取旧 session。
 
 ## 验收与测试
 
@@ -23,5 +23,4 @@
 ## 操作
 
 - 下载：`spawn_once` 的 hydrate 消费 `failed_update`/cache 双证据。
-- 更新弹窗：消费 `DownloadStatus` 进度、`ready_path`、`prepare/commit`、`schedule`。
-- 启动恢复：消费 `restore_ticket`，建窗后确认恢复。
+- 更新协调：消费 `DownloadStatus` 进度、`ready_path`、`prepare/commit`、`schedule`，并经新 ProjectSnapshot 完成恢复。

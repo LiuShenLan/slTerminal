@@ -1,6 +1,6 @@
 //! 命令行入口：无子命令启动 GUI；本地维护子命令执行后退出。
 //!
-//! `--working-directory` 与 `-e` 只影响首个终端。`notify-test` 和
+//! `--working-directory` 只影响初始项目。`notify-test` 和
 //! `setup-ai --remove` 不连接运行中实例，也不初始化 GUI 子系统。
 
 use std::path::PathBuf;
@@ -25,16 +25,6 @@ pub struct Cli {
     /// GUI 启动：首个终端的工作目录。
     #[arg(long, value_name = "DIRECTORY")]
     pub working_directory: Option<PathBuf>,
-
-    /// GUI 启动：在首个终端执行的命令；其余参数原样透传（必须末位）。
-    #[arg(
-        short = 'e',
-        long = "command",
-        value_name = "COMMAND",
-        allow_hyphen_values = true,
-        num_args = 1..
-    )]
-    pub gui_command: Option<Vec<String>>,
 
     #[command(subcommand)]
     pub subcommands: Option<Subcommands>,
@@ -88,59 +78,17 @@ fn run_setup_ai(options: SetupAiOptions) -> i32 {
     }
 }
 
-/// `-e` 启动命令（启动链一次性消费；serde 持久化面归会话域）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Program {
-    /// 无参形态：启动链只产 `WithArgs`；本变体为 `LaunchSession` 预埋。
-    #[allow(dead_code)]
-    Just(String),
-    WithArgs {
-        program: String,
-        args: Vec<String>,
-    },
-}
-
-impl Program {
-    /// 消费点 = WorkspaceStartup::LaunchTerminal 的 spawn 参数组装。
-    pub fn program(&self) -> &str {
-        match self {
-            Self::Just(program) => program,
-            Self::WithArgs { program, .. } => program,
-        }
-    }
-
-    /// 消费点同上（LaunchTerminal 组装）。
-    pub fn args(&self) -> &[String] {
-        match self {
-            Self::Just(_) => &[],
-            Self::WithArgs { args, .. } => args,
-        }
-    }
-}
-
 /// GUI 启动参数：本地维护子命令之外的唯一形态。
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct StartupOptions {
     pub working_directory: Option<PathBuf>,
-    pub command: Option<Program>,
 }
 
 impl Cli {
     /// GUI 启动视图；本地维护子命令由 `run()` 先分流，本函数不消费。
     pub fn startup_options(self) -> StartupOptions {
-        let command = self.gui_command.and_then(|mut rest| {
-            if rest.is_empty() {
-                return None;
-            }
-            let program = rest.remove(0);
-            Some(Program::WithArgs {
-                program,
-                args: rest,
-            })
-        });
         StartupOptions {
             working_directory: self.working_directory.map(repair_context_menu_dir),
-            command,
         }
     }
 }
@@ -180,10 +128,6 @@ mod cli_tests {
         parse_args(args)
     }
 
-    fn startup<const N: usize>(args: [&str; N]) -> StartupOptions {
-        parse(args).expect("valid startup args").startup_options()
-    }
-
     #[test]
     fn empty_args_yield_the_default_options() {
         let cli = parse([]).unwrap();
@@ -199,30 +143,13 @@ mod cli_tests {
         ] {
             let options = parse_args(args).unwrap().startup_options();
             assert_eq!(options.working_directory, Some(PathBuf::from("D:/work")));
-            assert_eq!(options.command, None);
         }
     }
 
     #[test]
-    fn command_captures_the_tail_verbatim() {
-        let options = startup(["-e", "git", "--literal=two words", "--flag"]);
-        assert_eq!(
-            options.command,
-            Some(Program::WithArgs {
-                program: "git".into(),
-                args: vec!["--literal=two words".into(), "--flag".into()],
-            })
-        );
-        // 命令之后的参数不再解释为本程序旗标。
-        let options = startup(["-e", "pwsh", "--working-directory", "x"]);
-        assert_eq!(
-            options.command,
-            Some(Program::WithArgs {
-                program: "pwsh".into(),
-                args: vec!["--working-directory".into(), "x".into()],
-            })
-        );
-        assert_eq!(options.working_directory, None);
+    fn legacy_command_flag_is_rejected() {
+        assert!(parse(["-e", "git", "--literal=two words"]).is_err());
+        assert!(parse(["--command", "pwsh"]).is_err());
     }
 
     #[test]
@@ -306,18 +233,5 @@ mod cli_tests {
             repair_context_menu_dir(PathBuf::from("D:/work")),
             PathBuf::from("D:/work")
         );
-    }
-
-    #[test]
-    fn program_accessors_cover_both_variants() {
-        let just = Program::Just("pwsh".into());
-        assert_eq!(just.program(), "pwsh");
-        assert!(just.args().is_empty());
-        let full = Program::WithArgs {
-            program: "git".into(),
-            args: vec!["status".into()],
-        };
-        assert_eq!(full.program(), "git");
-        assert_eq!(full.args(), &["status"]);
     }
 }

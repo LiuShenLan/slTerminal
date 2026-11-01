@@ -14,10 +14,9 @@
 //! 崩溃遗留的未 commit 事务(孤儿 plan / ready 无 commit)按 cancel 安全
 //! 默认收尾——绝不因为「文件存在」就授权安装。
 //!
-//! **消费面。** prepare/commit/schedule 已由更新弹窗的安装授权步消费
-//! ;restore_ticket/acknowledge_restore/apply_scheduled 由启动链
-//! 消费。其余仅测试消费的机器可验 API 仍由整模块
-//! dead_code 豁免兜住;消费点接线时逐个删除本豁免。
+//! **消费面。** 启动链只消费安装事务守卫；prepare/commit/schedule 与
+//! restore ticket 由更新域的新快照协调器装配。仅测试消费的机器可验 API
+//! 由整模块 dead_code 豁免兜住。
 #![allow(dead_code)]
 
 use std::io::{self, Read as _};

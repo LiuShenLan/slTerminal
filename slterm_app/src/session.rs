@@ -1,15 +1,7 @@
-//! 会话 schema 与持久化;同时承载会话身份校验。
+//! 旧会话 schema 与 Agent 身份校验。
 //!
-//! session.json 只回答「下次启动恢复成什么样」:1 Hz 快照持续写盘、启动前
-//! 断路器计数、收尾最后一笔标记正常退出;不承担驻留/多窗语义。格式版本从
-//! 1 起(无历史会话文件,升级链不迁),追加字段一律 `serde(default)` 免
-//! 升版。同一 schema 兼作工作区导出格式——快照(紧凑写)与导出(pretty
-//! 打印)只有序列化形态之别。
-//!
-//! 布局持久化单点:运行时树与持久化树之间的转换只有
-//! `app_shell::session_restore` 的一对纯函数;本模块只定义 schema 与存取。
-//! 快照泵/启动恢复归壳层。少数全局路径包装在生产链上
-//! 由显式 `_at` 路径替代,逐项标注 dead_code 原因。
+//! 生产 AppRoot 不读取此格式；更新与 Agent 域完成新模型迁移前，保留既有
+//! 序列化与身份助手的独立测试。旧 tabs/SplitTree 恢复与布局转换通道已删除。
 
 use std::path::{Path, PathBuf};
 
@@ -346,7 +338,7 @@ fn parse(data: &str) -> Option<Session> {
 }
 
 /// 从数据目录读取上次会话;缺失、损坏或版本不符都视为无会话。
-#[allow(dead_code)] // 设计稿锚定 API;生产启动走显式路径(测试可注入 tempdir)。
+#[allow(dead_code)] // 旧格式路径包装仅供独立测试与后续迁移；生产 AppRoot 不调用。
 pub fn load() -> Option<Session> {
     load_from(&session_path())
 }
@@ -380,7 +372,7 @@ pub fn should_restore(session: &Session) -> bool {
 
 /// 收尾时的最后一笔:先打 `clean_exit = true` 再落盘。所有正常退出路径
 /// 都必须走这里,否则下次启动会把这次退出误判成崩溃。
-#[allow(dead_code)] // 设计稿锚定 API;生产收尾走 SessionPersistence(需无变化跳过)。
+#[allow(dead_code)] // 旧格式正常收尾包装仅供独立测试与后续迁移；生产 AppRoot 不调用。
 pub fn save_final(session: &mut Session) {
     if let Err(error) = save_final_at(&session_path(), session) {
         log::warn!("Could not persist final terminal session: {error}");
@@ -402,7 +394,7 @@ pub fn was_crash(session: &Session) -> bool {
 ///
 /// 必须挪走而不是留在原地:启动一成功,一秒后的自动保存就会把
 /// `session.json` 盖掉,那份「一恢复就崩」的现场是唯一的诊断材料。
-#[allow(dead_code)] // 设计稿锚定 API;生产启动走显式路径(测试可注入 tempdir)。
+#[allow(dead_code)] // 旧格式路径包装仅供独立测试与后续迁移；生产 AppRoot 不调用。
 pub fn quarantine() -> Option<PathBuf> {
     quarantine_at(&session_path())
 }
@@ -426,7 +418,7 @@ pub fn valid_dir(cwd: &str) -> Option<PathBuf> {
 }
 
 /// 恢复尝试前先把计数落盘,这样恢复过程中崩溃会被断路器记到。
-#[allow(dead_code)] // 设计稿锚定 API;生产启动走显式路径(测试可注入 tempdir)。
+#[allow(dead_code)] // 旧格式路径包装仅供独立测试与后续迁移；生产 AppRoot 不调用。
 pub fn mark_boot_attempt(session: &mut Session) {
     if let Err(error) = mark_boot_attempt_at(&session_path(), session) {
         log::warn!("Could not persist boot attempt count: {error}");

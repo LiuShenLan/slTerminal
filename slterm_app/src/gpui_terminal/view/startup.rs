@@ -22,7 +22,6 @@ struct PreparedTerminal {
 }
 
 /// 已成功启动、但尚未挂成 GPUI 实体的终端。
-#[allow(dead_code)] // 独立 AppRoot 的生产窗口装配链。
 pub(crate) struct LaunchedTerminal {
     prepared: PreparedTerminal,
     spawned: session::SpawnedSession,
@@ -30,7 +29,6 @@ pub(crate) struct LaunchedTerminal {
 
 impl TerminalView {
     /// 只执行一次可失败启动；失败时不存在视图、订阅或占位面板。
-    #[allow(dead_code)] // 独立 AppRoot 的生产窗口装配链。
     pub(crate) fn launch(
         pane_id: PaneId,
         spawn_grid: (u16, u16),
@@ -46,7 +44,6 @@ impl TerminalView {
     }
 
     /// 复用已经成功的启动结果构造实体，不再次 spawn。
-    #[allow(dead_code)] // 独立 AppRoot 的生产窗口装配链。
     pub(crate) fn from_launched(
         launched: LaunchedTerminal,
         window: &mut Window,
@@ -55,8 +52,8 @@ impl TerminalView {
         Self::from_prepared(launched.prepared, Ok(launched.spawned), window, cx)
     }
 
-    /// `spawn_grid`:PTY 出生网格(宿主已把窗口定形到该几何)。首帧布局
-    /// 与之相同则零下发;见 `set_layout` 的启动稳定闸。
+    /// 测试构造器：允许把启动失败保留在视图内，生产只走 `launch`。
+    #[cfg(all(test, feature = "gpui-test-support"))]
     pub fn new(
         pane_id: PaneId,
         spawn_grid: (u16, u16),
@@ -276,7 +273,6 @@ impl TerminalView {
             running_program: None,
             error,
             exited: None,
-            pending_agent_command: None,
             origin: point(px(0.0), px(0.0)),
             cell_width: cell_w,
             line_height: line_h,

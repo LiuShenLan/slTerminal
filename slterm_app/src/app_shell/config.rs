@@ -48,7 +48,7 @@ pub struct Settings {
     /// 线程留驻不随开关销毁。
     pub tray: bool,
     /// 静默启动:与 `tray` 合取决定首窗是否隐藏;
-    /// 显式 CLI 启动(`--working-directory`/`-e`)恒不静默。
+    /// 显式 CLI 目录启动恒不静默。
     pub silent_start: bool,
     /// 窗口背景材质(档位,默认 None;自定义主题可声明默认,
     /// 用户显式值恒权威)。
@@ -57,6 +57,7 @@ pub struct Settings {
     pub opacity: f32,
     /// 非聚焦 pane 压暗层开关。用户设置域无独立键:自定义主题
     /// `effects.veil` 显式值权威,未声明/无自定义主题/解析失败 = 开启。
+    #[allow(dead_code)] // 非聚焦面板的 veil 渲染随终端视觉接线消费。
     pub veil: bool,
     /// 壁纸路径;None = 无壁纸。加载/缩放/内存预算归 wallpaper 模块。
     pub background_image: Option<PathBuf>,
@@ -68,6 +69,7 @@ pub struct Settings {
     /// 壁纸铺满整窗(含侧栏/标题栏)而非仅终端内容区。
     pub background_image_cover_chrome: bool,
     /// 发现新版本后是否允许后台预取安装包(安装授权仍归更新弹窗)。
+    #[allow(dead_code)] // 更新协调器接入后消费。
     pub auto_download_updates: bool,
 }
 

@@ -11,10 +11,12 @@
 - **可失败启动接缝**：终端先经 `TerminalView::launch` 冻结配置并启动 PTY，成功后才经 `from_launched` 构造实体。原因：GPUI 实体构造不能直接返回启动 `Result`，失败不得先挂实体再补救。边界：成功启动只执行一次；非 Unicode Shell 路径在参数组装前拒绝，不做有损转换。
 - **项目切换保活**：所有项目的 TerminalView 与 PTY 强持于各自 ProjectView；切换只调整 `output_visible` 与焦点，隐藏项目的会话泵、输出解析和回滚继续运行，重新可见时主动补帧。原因：项目导航不得重建终端或丢失后台输出。边界：显式新建只面向活跃项目；隐藏项目 Launch 的懒启动由恢复协调负责，不在显式命令中暗中 spawn。
 - **退出与关闭分离**：TerminalView 的 Exited 只把逻辑记录改为 `RunIntent::Exited`，保留面板、实体与最后画面；显式 close 才释放实例。原因：进程退出不是用户关闭面板。边界：重复或迟到的退出事件不得关闭其他面板；未知运行身份不猜快照目标。
+- **焦点弱所有权**：`FocusManager` 只弱引用 FocusHandle 与 owner 凭证，以不复用的代次 token、逻辑父链和项目焦点记忆协调还焦；控件销毁或隐藏后不得因渲染帧仍强持句柄而继续可聚焦。实际焦点经 pending-input 与 focus-lost 订阅同步，项目切换先快照真实焦点。边界：Manager 不延长视图生命周期，模态层仍须自行遮罩背景指针命中。
+- **SideView 实例与私有状态**：`SideViewHost` 独占侧栏组织状态与全部存活实例，按 core 转换效果创建、替换、保留或关闭实例；`SideView` 独占强类型私有状态，关闭与 Drop 共用一次 checkpoint，写盘只经 WorkspaceWriter。原因：组织状态、GPUI 生命周期与持久事实不得形成双源。边界：隐藏不销毁实例；启动恢复未知的视图禁止以默认态自动回写，显式编辑才解除写屏障。
 - **无旧恢复旁路**：本模块不读取、迁移或清理旧 session 与磁盘历史材料，不与旧 tabs/SplitTree 同步双写。原因：新根必须只有一条布局与生命周期通道。边界：生产恢复只能由启动协调显式注入一致快照，实体层不得自行读盘。
 
 ## 验收与测试
 
 - 定向测试：`cargo test -p slterm --test lib_tests --features gpui-test-support app_shell::app_root::tests:: -- --test-threads=1`。
-- 必测面：添加项目不自动建终端、启动失败原子性、新建/拆分/激活复用实体、关闭释放与空项目保留、项目切换保活、隐藏事件继续处理、Exited 留存、重复根激活、非 Unicode Shell 拒绝、生产 UUIDv7 身份与聚焦组落点；真实窗口绘制须覆盖空态、组内 active 单视图、横纵分屏几何与项目切换画面。
+- 必测面：添加项目不自动建终端、启动失败原子性、新建/拆分/激活复用实体、关闭释放与空项目保留、项目切换保活、隐藏事件继续处理、Exited 留存、重复根激活、非 Unicode Shell 拒绝、生产 UUIDv7 身份与聚焦组落点；FocusManager 的弱生命周期、项目还焦与模态链；SideView 的实例转换、关闭重开与恢复写屏障；真实窗口绘制须覆盖空态、组内 active 单视图、横纵分屏几何与项目切换画面。
 - 测试启动器使用内存 `test_session`，禁止拉取真实 PTY 或访问用户数据。

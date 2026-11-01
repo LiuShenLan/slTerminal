@@ -49,8 +49,8 @@ class AiSessionRegistryRetirementTests(unittest.TestCase):
                 "record_session_start",
                 "enable_session_registry",
             ),
-            "app_shell/workspace/mod.rs": ("enable_session_registry",),
         }
+        self.assertFalse((APP_SOURCE / "app_shell/workspace").exists())
         for relative, markers in retired.items():
             text = (APP_SOURCE / relative).read_text(encoding="utf-8")
             for marker in markers:

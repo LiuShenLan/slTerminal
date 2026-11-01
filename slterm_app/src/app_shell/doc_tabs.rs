@@ -25,8 +25,6 @@ use image::Frame;
 
 use crate::i18n::Message;
 
-pub use super::file_editor::TextFileView as DocTabView;
-
 const MIN_ZOOM: f32 = 0.25;
 const MAX_ZOOM: f32 = 8.0;
 const ZOOM_PER_STEP: f32 = 1.18;

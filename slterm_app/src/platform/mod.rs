@@ -11,6 +11,7 @@ pub mod dirs;
 pub(crate) mod distribution;
 pub(crate) mod elevation;
 // 系统文件操作:回收站删除 + 系统处理器打开。
+#[allow(dead_code)] // 生产消费归文件与 Git 阶段。
 pub(crate) mod file_operations;
 pub(crate) mod instance;
 pub(crate) mod keyboard;
@@ -18,6 +19,7 @@ pub(crate) mod keyboard;
 // slterm_completions 的 command_context。
 pub(crate) mod local_paths;
 // 原生通知(AUMID 注册 + WinRT toast MTA worker)。
+#[allow(dead_code)] // 通知展示由后续领域协调器接入。
 pub(crate) mod notifications;
 // 系统 locale 探测源文件(src/platform/locale.rs)经 `i18n::locale` 的
 // `#[path]` 复编进查询核心;此处不再二次挂模块(独立合同 workspace 复编
@@ -27,6 +29,7 @@ pub(crate) mod process;
 #[allow(dead_code)] // 消费点 = completion::metadata 的 Git 读取（引擎已接，呈现归 UI）。
 pub(crate) mod process_output;
 pub(crate) mod process_snapshot;
+#[allow(dead_code)] // 登录启动设置归 Windows 与发布阶段。
 pub(crate) mod startup;
 // 安装器 handoff 的原生面:路径规范化/进程身份/helper 启动。
 pub(crate) mod update_installation;

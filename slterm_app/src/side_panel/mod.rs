@@ -31,7 +31,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-pub(crate) use icons::{chevron_icon, file_type_icon, folder_icon};
 pub(crate) use search::{EmbeddedFileIndex, FileIndexStatus, FileSearchMemory, FileSearchOptions};
 
 use crate::i18n::{Message, UiLanguage};

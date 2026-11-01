@@ -1,12 +1,11 @@
 //! 窗口管理 facade:回窗的编译期单一实现点。
 //!
-//! toast 点击、托盘回窗与 toast 动作按钮最终都汇到 [`focus`]:调用方只传目标(窗口 / 窗内 pane),窗口还原、前置与
+//! toast 点击、托盘回窗与 toast 动作按钮最终都汇到 [`focus_window`]:窗口还原、前置与
 //! HWND 查询只在本文件实现;`SetForegroundWindow`/`ShowWindow` 等 Win32
 //! 焦点原语不得出现在别处(门禁用例
 //! `win32_focus_calls_only_live_in_the_facade`)。
 //!
-//! **设计签名适配。** `focus_window(cx)`/`focus_pane(pane,
-//! cx)` 写在上游多窗注册表语境;单窗壳的壳事件泵已持有 `&mut Window`,
+//! **设计签名适配。** 单窗壳的壳事件泵已持有 `&mut Window`,
 //! 且 GPUI 禁止在窗口更新回调内再次 `AnyWindowHandle::update`(窗口已被
 //! take)。故 facade 以显式 `&mut Window` 落点;目标选择与平台调用仍由本
 //! 文件唯一承担。
@@ -21,10 +20,7 @@
 
 use std::sync::atomic::{AtomicIsize, Ordering};
 
-use crate::gpui_terminal::PaneId;
-use gpui::{App, Context, Window};
-
-use crate::app_shell::workspace::SltermWorkspace;
+use gpui::{App, Window};
 
 /// 单窗单实例的原生 HWND(0 = 尚未发布;虚拟窗口无原生句柄)。
 static MAIN_WINDOW_HWND: AtomicIsize = AtomicIsize::new(0);
@@ -49,20 +45,6 @@ pub(crate) fn focus_steps(minimized: bool) -> &'static [FocusStep] {
     }
 }
 
-/// 回窗的唯一入口:目标 `None` = 只聚焦窗口;`Some(pane)` = 窗口 +
-/// 选中所在 tab + 窗内聚焦 pane。
-pub(crate) fn focus(
-    workspace: &mut SltermWorkspace,
-    target: Option<PaneId>,
-    window: &mut Window,
-    cx: &mut Context<'_, SltermWorkspace>,
-) {
-    match target {
-        Some(pane) => focus_pane(workspace, pane, window, cx),
-        None => focus_window(window),
-    }
-}
-
 /// 窗口级回窗:最小化则先还原,再前置;虚拟窗口只走 GPUI 激活。
 pub(crate) fn focus_window(window: &mut Window) {
     if let Some(hwnd) = native_window_hwnd(window) {
@@ -70,17 +52,6 @@ pub(crate) fn focus_window(window: &mut Window) {
     }
     // GPUI 内部激活态与平台句柄保持同步;幂等,可重复调用。
     window.activate_window();
-}
-
-/// pane 级回窗 = 窗口级回窗 + 选中 pane 所在 tab + 聚焦该 pane。
-fn focus_pane(
-    workspace: &mut SltermWorkspace,
-    pane: PaneId,
-    window: &mut Window,
-    cx: &mut Context<'_, SltermWorkspace>,
-) {
-    focus_window(window);
-    workspace.focus_notification_pane(pane, window, cx);
 }
 
 /// 开窗时发布唯一主窗原生句柄(启动链调一次;虚拟窗口静默跳过)。
@@ -105,6 +76,7 @@ pub(crate) fn window_hwnd(_cx: &App) -> Option<isize> {
 /// 才能「点外部收合」。这不是回窗语义,集中在本文件只为让 Win32 焦点
 /// 调用保持单文件(门禁用例)。
 #[cfg(windows)]
+#[allow(dead_code)] // 托盘菜单由 Windows 协调器接入。
 pub(crate) fn foreground_menu_owner(hwnd: isize) {
     use std::ffi::c_void;
 
@@ -232,10 +204,10 @@ mod focus_tests {
             !notify.contains("WINDOW_HWND"),
             "notify.rs 不得保留窗口句柄静态;查询统一走 windowing::focus::window_hwnd"
         );
-        let control =
-            std::fs::read_to_string(source_root.join("app_shell/workspace/control.rs")).unwrap();
+        let events =
+            std::fs::read_to_string(source_root.join("app_shell/app_root/events.rs")).unwrap();
         assert!(
-            !control.contains("activate_window("),
+            !events.contains("activate_window("),
             "壳事件泵必须经 windowing::focus 回窗,不得自行 activate_window"
         );
     }

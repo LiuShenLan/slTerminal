@@ -104,6 +104,7 @@ pub enum TerminalViewEvent {
     CommandFinished,
     /// OSC 9;4 任务进度(五态已映射,规范外码已归清除)。宿主按「活跃 tab
     /// 的聚焦 pane」路由到任务栏。
+    #[allow(dead_code)] // 任务栏路由归 Windows 协调器。
     ProgressChanged(crate::taskbar::TaskProgress),
 }
 
@@ -175,8 +176,6 @@ pub struct TerminalView {
     pub running_program: Option<String>,
     pub(super) error: Option<String>,
     pub(super) exited: Option<String>,
-    /// 冷恢复待提交的 AI CLI resume 命令;会话恢复注入的唯一落点。
-    pub(super) pending_agent_command: Option<String>,
     pub(super) origin: Point<Pixels>,
     pub(super) cell_width: Pixels,
     pub(super) line_height: Pixels,
@@ -260,6 +259,7 @@ impl TerminalView {
     /// 字体度量变化属结构性几何变化(`mark_structural_resize`),下一帧
     /// 网格观测直接同步 Term 与 ConPTY,不进尾沿去抖;仅调色板/复制语义
     /// 变化只重绘。
+    #[allow(dead_code)] // 设置协调器接入后消费。
     pub fn apply_settings(&mut self, settings: &Settings, cx: &mut Context<'_, Self>) {
         let font_changed = self.font.family.as_ref() != settings.font_family.as_str()
             || (self.font_size.as_f32() - settings.font_size_px).abs() > f32::EPSILON
@@ -319,12 +319,6 @@ impl TerminalView {
     /// 一致,避免启动即触发一次 ConPTY resize(DA 探询与回显竞态的温床)。
     pub fn cell_metrics(window: &Window, cx: &App) -> (Pixels, Pixels) {
         typography::cell_metrics(window, cx)
-    }
-
-    /// 窗口定形使用配置基准字号,不使用持久化缩放;缩放后的字号只影响
-    /// 最终能容纳的行列数。否则放大一级就会把 116 列全部加到窗宽上。
-    pub fn startup_cell_metrics(window: &Window, cx: &App) -> (Pixels, Pixels) {
-        typography::startup_cell_metrics(window, cx)
     }
 
     pub(crate) fn startup_cell_metrics_at_scale(scale: f32, cx: &App) -> (Pixels, Pixels) {
@@ -497,51 +491,12 @@ impl TerminalView {
         }
     }
 
-    /// 恢复注入:按保存的 [`crate::session::AgentSession`] 重建 resume 命令。
-    ///
-    /// 异形 id / 无 resume 语法的来源由 `AgentSession::resume_command` 拒收
-    /// (SEC 注入面),此时只恢复布局、不上屏任何命令。命令在 pane spawn 后
-    /// 立即写进 ConPTY 输入缓冲:shell 启动期输入由控制台缓冲保留,不依赖
-    /// 额外的 prompt 检测状态机。
-    pub(crate) fn restore_agent(
-        &mut self,
-        agent: &crate::session::AgentSession,
-        cx: &mut Context<'_, Self>,
-    ) {
-        let Some(command) = agent.resume_command() else {
-            log::debug!(
-                "agent restore: no safe resume command for source {}",
-                agent.source
-            );
-            return;
-        };
-        self.pending_agent_command = Some(command);
-        self.flush_pending_agent_command(cx);
-    }
-
-    /// 提交待恢复命令(幂等;无会话/会话已退出时保留待提交态)。
-    fn flush_pending_agent_command(&mut self, cx: &mut Context<'_, Self>) {
-        if self.pending_agent_command.is_none() || self.exited.is_some() || self.session.is_none() {
-            return;
-        }
-        let command = self
-            .pending_agent_command
-            .take()
-            .expect("pending command checked above");
-        self.write_input(format!("{command}\r").into_bytes(), cx);
-    }
-
-    /// 测试专用:待提交的恢复命令(无 = 已提交或未构造)。
-    #[cfg(all(test, feature = "gpui-test-support"))]
-    pub(crate) fn pending_agent_command(&self) -> Option<&str> {
-        self.pending_agent_command.as_deref()
-    }
-
     /// 文件树拖放落点(交界 43):路径文本直写 PTY。
     ///
     /// 不走 bracketed-paste 哨兵:载荷是「路径 + 尾随空格」的粘贴形态,
     /// 没有换行,也不该被当成一段粘贴文本(哨兵会改变部分 shell 的行编辑
     /// 行为)。引用/控制字符规则在 `side_panel::drop_text_for_path` 单点。
+    #[allow(dead_code)] // 文件树拖放由文件与 Git 阶段接入。
     pub(crate) fn drop_path_text(&mut self, bytes: Vec<u8>, cx: &mut Context<'_, Self>) {
         self.write_input(bytes, cx);
     }
@@ -629,6 +584,7 @@ impl TerminalView {
     /// 消费点 = workspace 的 1 Hz agent 看门狗;刻意不挂在每个
     /// `Wakeup` 上——规则匹配随输出洪流放大,屏幕证据只需要拍帧级频率。
     /// 无会话/零几何(尚未布局)返回 `None`。
+    #[allow(dead_code)] // Agent 看门狗由 Agent 与 Hooks 阶段接入。
     pub(crate) fn agent_screen_sample(&self) -> Option<String> {
         let session = self.session.as_ref()?;
         let term = session.term.lock();

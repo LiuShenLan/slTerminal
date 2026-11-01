@@ -18,9 +18,11 @@ pub(crate) mod atomic_file;
 // 设置写唯一包装(user 层 settings.json + app 设置)+ 哈希对账事件。
 pub(crate) mod audit;
 // 单 pane 宿主:事件泵派发与 AgentActivity 归属。
+#[allow(dead_code)] // 生产消费归 Agent 与 Hooks 阶段。
 pub(crate) mod agent_host;
 // 后台任务注册表:元数据单点、订阅生命周期、重入闸门与
 // 失败策略;1 Hz 看门狗/托盘快照与更新检查/预取收编于此。
+#[allow(dead_code)] // 任务调度由后续各领域协调器接入。
 pub(crate) mod background_tasks;
 // 屏幕规则与身份面已由 agent_host 的看门狗消费;`parse_command` 等
 // OSC 133 匹配器消费归终端视图,设置/会话面归设置与会话域。
@@ -49,6 +51,7 @@ pub(crate) mod completion;
 #[allow(dead_code)] // 消费点归 ghost/path 来源。
 pub(crate) mod directory_history;
 // 有界前缀读取:内存上限先于解码生效。
+#[allow(dead_code)] // 生产消费归 Document 与文本视图阶段。
 pub(crate) mod document_io;
 // 加密备份:白名单收集/口令密封/先验后写恢复 + 选择性恢复
 // 与加密恢复点撤回。UI 入口归设置页安全分区,本模块只落引擎。
@@ -57,6 +60,7 @@ pub(crate) mod encrypted_backup;
 pub mod error;
 // git 子进程执行体 facade(子进程统一已裁):只读面 = 仓库根 +
 // HEAD 字节(gitshow 数据源);四方法执行归 `git::command`。
+#[allow(dead_code)] // 生产消费归文件与 Git 阶段。
 pub(crate) mod git;
 // 有界本地 Git 发现:3s/1MB 双预算 + TTL + 代次失效。
 #[allow(dead_code)]
@@ -75,6 +79,7 @@ pub(crate) mod logging;
 pub(crate) mod math;
 // 通知中心单一漏斗:六变体、去重/节流/失败冷却/前台门控;
 // 系统 toast 投递在 platform::notifications。
+#[allow(dead_code)] // AI 与恢复通知由后续协调器接入。
 pub(crate) mod notify;
 pub(crate) mod panic;
 // SQLite 持久化适配：连接、schema、损坏分流与 Online Backup；
@@ -93,27 +98,34 @@ pub(crate) mod secrets;
 // 回归语料:数学条目逐例编译/栅格不回归;化学/生物条目已裁。
 #[cfg(test)]
 pub(crate) mod scientific_corpus;
+#[allow(dead_code)] // 旧 schema 由更新与 Agent 域重写；生产启动不读取。
 pub(crate) mod session;
 // 侧栏文件树模型族:目录枚举/gitignore/文件名搜索/git 快照。
 // 模型与渲染完全分层;WSL/SVN 臂已裁。
+#[allow(dead_code)] // 生产消费归文件与 Git 阶段。
 pub(crate) mod side_panel;
 // settings.json 写通道适配层:白名单校验/保存锁/原子写/.bak/
 // 损坏三态;`slterm-settings` 保持值权威与零生产依赖。
+#[allow(dead_code)] // 设置写由后续设置协调器接入。
 pub(crate) mod settings_store;
 // 补全/建议计算核心:ghost 余量与 popup 多候选同源。
 #[allow(dead_code)] // 消费点归呈现接线。
 pub(crate) mod suggest;
 // 任务栏进度:OSC 9;4 五态宽容映射 + 进程级单显示路由;
 // `ITaskbarList3` 投递在 Windows 分支自管 COM,失败一律静默。
+#[allow(dead_code)] // 生产消费归 Windows 与发布阶段。
 pub(crate) mod taskbar;
 // 系统托盘:独立消息泵线程 + 右键 agent 直达菜单 + 1 Hz
 // 快照去抖;attention 聚合驱动橙点图标。图标资产归发布面。
+#[allow(dead_code)] // 托盘快照与菜单由 Windows 协调器接入。
 pub(crate) mod tray;
 // 自动更新检查:GitHub Releases 解析/资产四重校验/版本
 // 比较/按版本提示状态;网络请求与下载共用自解析代理。
+#[allow(dead_code)] // 生产消费归 Windows 与发布阶段。
 pub(crate) mod update_check;
 // 更新包下载与校验:.part 流式 + 长度/MZ/SHA-256/512MiB
 // 全过才原子替换;generation 作废链与启动 hydrate 双证据。
+#[allow(dead_code)] // 生产消费归 Windows 与发布阶段。
 pub(crate) mod update_download;
 // 更新 HTTP 客户端与代理解析:注册表 ProxyServer 按协议
 // 取值、socks 归 socks5、env 回退、NO_PROXY、https_only 双超时。
@@ -122,9 +134,11 @@ pub(crate) mod update_proxy;
 // Win32 焦点/还原原语只在本模块出现。
 pub(crate) mod windowing;
 // 文本快照:编码/行尾/只读合同单点;编辑内核的共享底座。
+#[allow(dead_code)] // 生产消费归 Document 与文本视图阶段。
 pub(crate) mod text_document;
 // 主题库应用侧:版本化 JSON 信封、自定义主题持久化与单文件有界导入。
 // 设置层管值、应用层管格式的分层边界件。
+#[allow(dead_code)] // 生产消费归设置、主题与恢复阶段。
 pub(crate) mod theme_library;
 
 use std::error::Error;
@@ -182,7 +196,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         .filter(|path| path.is_dir())
         .and_then(|path| std::path::absolute(path).ok());
 
-    app_shell::run_shell(initial_cwd, options.command);
+    app_shell::run_shell(initial_cwd);
     Ok(())
 }
 

@@ -1,8 +1,6 @@
-//! 应用壳:GPUI 消息循环装配与窗口生命周期(模块名映射:上游 `gpui_shell` →
-//! `app_shell`,层级压平一格——无旧壳对照,旧名失去参照对象)。
+//! 应用壳:GPUI 消息循环装配与窗口生命周期。
 //!
-//! 壳即前端:壳内状态权威 = `SltermWorkspace` 直持 pane 实体与展示态,
-//! 无跨进程投影层。
+//! 壳即前端:`AppRoot` 直持项目快照与全部运行面板，无跨进程投影层。
 
 // 编译期拦截(照上游随迁):裸 println!/eprintln! 在无效标准句柄上 panic;
 // console 子系统下句柄通常有效,拦截宏仍保留——诊断统一走 try_write_stderr 单点。
@@ -24,31 +22,32 @@ macro_rules! eprintln {
 pub(crate) mod app_root;
 pub(crate) mod assets;
 // 源码文件 tab:普通源码与 gitshow 只读臂。
+#[allow(dead_code)] // 生产消费归 Document 与文本视图阶段。
 pub(crate) mod code_tab;
 pub(crate) mod config;
 // 通用 diff 对照面(双栏只读)。
+#[allow(dead_code)] // 生产消费归文件与 Git 阶段。
 pub(crate) mod diff_tab;
 // 文档/图片 tab + openable_in_app 路由单判定。
+#[allow(dead_code)] // 生产消费归 Document 与 Markdown 阶段。
 pub(crate) mod doc_tabs;
 // 编辑器语义槽装配(颜色单源 = UI token)。
+#[allow(dead_code)] // 生产消费归 Document 与文本视图阶段。
 pub(crate) mod editor_theme;
 // 文件树拖放载荷 + 独立幽灵预览。
+#[allow(dead_code)] // 生产消费归文件与 Git 阶段。
 pub(crate) mod file_drop;
 // 文本文件视图骨架(只读视图与编辑内核)。
+#[allow(dead_code)] // 生产消费归 Document 与文本视图阶段。
 pub(crate) mod file_editor;
 // 外部文件系统事件监听(树根递归 + 打开文件父目录;有界唤醒前台)。
+#[allow(dead_code)] // 生产消费归文件与 Git 阶段。
 pub(crate) mod fs_watch;
-// 布局转换对(「布局单点」);消费点 = 快照/恢复闭环。
-pub(crate) mod session_restore;
-// GUI 设置页:左导航 + 右表单 + 路由式搜索 + 统一写通道。
-pub(crate) mod settings_pane;
 pub(crate) mod theme;
-#[cfg(all(test, feature = "gpui-test-support"))]
-mod ui_tests;
 // 窗口视效 + 壁纸:模糊材质/透明度纪律/有界壁纸加载。
+#[allow(dead_code)] // 预览与设置消费归设置、主题与恢复阶段。
 pub(crate) mod wallpaper;
 pub(crate) mod windowing;
-pub(crate) mod workspace;
 
 use std::borrow::Cow;
 use std::fmt;
@@ -57,8 +56,7 @@ use std::sync::mpsc;
 
 use crate::gpui_terminal::PaneId;
 use gpui::{App, QuitMode};
-
-use crate::cli::Program;
+use slterm_path::CanonicalPath;
 
 /// GPUI 主窗标准错误句柄不可依赖:保留父进程重定向诊断,但写失败不能再把
 /// 非致命错误升级成应用 panic。
@@ -80,12 +78,6 @@ pub(crate) enum SltermShellEvent {
     NotificationChoice { pane_id: PaneId },
     /// 托盘「退出」:与关窗同一条退出链(终局快照 + 退出)。
     TrayQuit,
-    /// 后台更新检查结果:提示 + 按 `auto_download_updates`
-    /// 预取安装包。安装授权仍需用户经 handoff 两阶段流程提交。
-    UpdateAvailable(crate::update_check::UpdateCheckResult),
-    /// AI hook 自愈失败边(类别 + agent,不含合成命令)。消费 = 进程级
-    /// 通知,不绑定 pane,也不直出技术化命令文本。
-    AiHookAlert(crate::ai_hook::HookFailureKind),
     /// 工作区状态后台写失败；不携带路径、SQL 或状态正文。
     WorkspaceWriteFailed,
 }
@@ -167,12 +159,26 @@ fn start_workspace_writer(
     }
 }
 
+/// 在进入 GPUI 前冻结启动 Shell 与项目根；键位处理不再探测 PATH 或读取 cwd。
+fn frozen_startup_paths(
+    initial_cwd: Option<PathBuf>,
+) -> std::io::Result<(CanonicalPath, CanonicalPath)> {
+    let shell = slterm_terminal::tty::resolve_shell(None)?;
+    let shell = CanonicalPath::new(PathBuf::from(shell.program()))
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
+    let root = match initial_cwd {
+        Some(path) => path,
+        None => std::env::current_dir()?,
+    };
+    let root = CanonicalPath::new(root)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
+    Ok((shell, root))
+}
+
 /// 本次启动是否静默。
 ///
 /// 设置两条件(`silent_start && tray`)由 [`config::Settings::start_hidden`]
-/// 单点判定;显式 CLI 启动(`--working-directory`/`-e`)恒不静默——用户
-/// 主动发起时把窗口藏起来没有意义(上游同因果:仅 RestoreOrDefault
-/// 启动形态参与 start_hidden)。
+/// 单点判定;显式 CLI 目录启动恒不静默——用户主动发起时把窗口藏起来没有意义。
 fn starts_hidden(restore_tabs: bool, settings: &config::Settings) -> bool {
     restore_tabs && settings.start_hidden()
 }
@@ -190,12 +196,11 @@ fn tray_command_event(command: crate::tray::GpuiTrayCommand) -> SltermShellEvent
 /// 装配序(因果链照上游):assets → QuitMode → run 闭包内 init → open_window。
 /// 关窗即退出(跨领域不变量 5):`QuitMode::LastWindowClosed` + 无 mux 驻留臂,
 /// 最后一窗关闭 = 进程退出。
-pub fn run_shell(initial_cwd: Option<PathBuf>, initial_command: Option<Program>) {
+pub fn run_shell(initial_cwd: Option<PathBuf>) {
     // 后台任务运行时复位:静态初值即注册表默认值,这里显式
     // 再对齐一次,保证同进程重启测试/后续配置载入从确定态出发。
     crate::background_tasks::reset_defaults();
-    // 安装守卫:安装事务进行中时不启动常驻资源;预约安装
-    // 在此执行,成功后本进程立即退出,由 helper 覆盖安装后重启。
+    // 安装守卫只阻止与安装事务并发的常驻启动；旧 session 移交恢复已删除。
     match crate::update_download::handoff::installation_in_progress() {
         Ok(true) => {
             log::info!("installation in progress; resident startup deferred");
@@ -204,60 +209,20 @@ pub fn run_shell(initial_cwd: Option<PathBuf>, initial_command: Option<Program>)
         Err(error) => log::warn!("could not inspect installation ownership: {error}"),
         Ok(false) => {}
     }
-    if crate::update_download::handoff::apply_scheduled() {
-        return;
-    }
-    // 会话恢复决策在开窗前完成:窗口尺寸/侧栏宽度要先进
-    // 窗口定形与 spawn 网格;CLI 显式 cwd/-e 启动只回放几何、不恢复 tabs。
-    let restore_tabs = initial_command.is_none() && initial_cwd.is_none();
-    let mut startup_plan = workspace::session_recovery::prepare_startup(restore_tabs);
-    // SQLite 读取在 GPUI 消息循环前完成；实体只消费预载的强类型状态。
-    workspace::session_recovery::restore_side_view_states_at(
-        &mut startup_plan,
-        crate::platform::dirs::app_paths(),
-    );
-    // 更新交接恢复优先于普通会话恢复——成功/回滚安装后的首个启动用
-    // 交接快照还原更新前的窗口;单窗口定位只取首个窗口。
-    let update_restored_windows = if restore_tabs {
-        match crate::update_download::handoff::restore_ticket() {
-            Some(mut sessions) => match sessions.drain(..).next() {
-                Some(session) => {
-                    workspace::session_recovery::restore_handoff_sidebar(
-                        &mut startup_plan,
-                        &session.sidebar,
-                    );
-                    startup_plan.window = session.window;
-                    startup_plan.crashed = false;
-                    startup_plan.session = Some(session);
-                    log::info!("update handoff: restored workspace snapshot");
-                    1
-                }
-                None => 0,
-            },
-            None => 0,
+    let regular_start = initial_cwd.is_none();
+    let (shell, initial_root) = match frozen_startup_paths(initial_cwd) {
+        Ok(paths) => paths,
+        Err(error) => {
+            log::error!("启动路径解析失败: {error}");
+            try_write_stderr(format_args!("启动路径解析失败: {error}"));
+            return;
         }
-    } else {
-        0
     };
     let (shell_tx, shell_rx) = mpsc::channel();
-    // writer owner 与转发线程留在 GPUI 外；启动失败并入恢复汇总提示。
-    let (workspace_writer, view_state_writer) =
+    // writer owner 与转发线程留在 GPUI 外；项目快照 client 由持久化协调接入。
+    let (workspace_writer, _) =
         start_workspace_writer(crate::platform::dirs::app_paths(), shell_tx.clone());
-    startup_plan.workspace_writer_unavailable = workspace_writer.is_none();
     let open_urls_tx = shell_tx.clone();
-    // 进程级 hook 管道(单实例,非 per-pane):必须在首个 PTY spawn 之前发布
-    // `SLTERM_NOTIFY_PIPE`——ConPTY 合并当前进程环境,全部 pane 的子进程树
-    // 天然携带作用域闸门。句柄活到事件循环退出,关窗后确定性回收 accept 线程。
-    let (ai_events, pipe_server) = crate::ai_hook::spawn_gpui_server();
-    // 配置守卫(跨进程 hook 配置变更自愈)挂在设置域启动链上,
-    // 随壳生命周期存活,Drop 时 join 线程。失败边经壳事件队列投进程级
-    // 通知——只传类别/agent,不传合成命令。
-    let _config_guard = crate::ai_hook::spawn_config_guard_with({
-        let shell_events = shell_tx.clone();
-        move |alert| {
-            let _ = shell_events.send(SltermShellEvent::AiHookAlert(alert));
-        }
-    });
     // 通知通道开机位:toast 点击回投走同一壳事件队列;
     // AUMID 预注册幂等,必须早于第一条通知。
     crate::notify::init_gpui_activation(shell_tx.clone());
@@ -269,9 +234,6 @@ pub fn run_shell(initial_cwd: Option<PathBuf>, initial_command: Option<Program>)
             let _ = shell_events.send(tray_command_event(command));
         }
     });
-    // 启动更新检查:GPUI background executor 载体,
-    // 立即水合 + 缓存提示,12s 一次性延迟后联网;结果经壳事件队列回 UI。
-    let update_events = shell_tx.clone();
     let application = gpui_platform::application()
         .with_assets(assets::SltermAssets)
         .with_quit_mode(QuitMode::LastWindowClosed);
@@ -280,29 +242,10 @@ pub fn run_shell(initial_cwd: Option<PathBuf>, initial_command: Option<Program>)
     });
     application.run(move |cx| {
         init(cx);
-        // 更新检查:注册表 Once 任务,12s 启动延迟契约
-        // 由 `background_tasks::startup_delay` 单点给出;立即段先水合缓存态。
-        crate::update_check::start_gpui(cx, move |result| {
-            let _ = update_events.send(SltermShellEvent::UpdateAvailable(result));
-        });
-        // 静默启动:仅无显式 CLI 启动时参与;窗口以隐藏
+        // 静默启动:仅无显式 CLI 目录时参与;窗口以隐藏
         // 形态创建,托盘「显示」经 focus facade 回窗。
-        let start_hidden = starts_hidden(restore_tabs, cx.global::<config::Settings>());
-        windowing::open_initial_window(
-            cx,
-            shell_rx,
-            ai_events,
-            view_state_writer,
-            initial_cwd,
-            initial_command,
-            startup_plan,
-            start_hidden,
-        );
-        // 窗口建立后按实际恢复的窗口数确认交接 ticket(不一致则
-        // 留待下次尝试,3 次上限后放弃)。
-        if update_restored_windows > 0 {
-            crate::update_download::handoff::acknowledge_restore(update_restored_windows);
-        }
+        let start_hidden = starts_hidden(regular_start, cx.global::<config::Settings>());
+        windowing::open_initial_window(cx, shell_rx, initial_root, shell, start_hidden);
     });
     // GPUI 已退出，在主线程等待最终冲刷并 join 转发器，不阻塞前台。
     if let Some(runtime) = workspace_writer
@@ -313,8 +256,6 @@ pub fn run_shell(initial_cwd: Option<PathBuf>, initial_command: Option<Program>)
     // 托盘收尾:先删图标再退进程,否则任务栏残影要等
     // 用户悬停才消失;join 保证删图标先于进程退出。
     crate::tray::shutdown();
-    // run 返回 = 最后窗口已关闭;Drop 完成自连唤醒 + join。
-    drop(pipe_server);
 }
 
 /// 组件库/内嵌字体/主题/终端切片/工作区的一次性初始化。
@@ -329,7 +270,7 @@ fn init(cx: &mut App) {
     cx.set_global(settings);
     theme::apply_dark_theme(cx);
     crate::gpui_terminal::init(cx);
-    workspace::init(cx);
+    app_root::keymap::register(cx);
 }
 
 fn register_bundled_fonts(cx: &App) {

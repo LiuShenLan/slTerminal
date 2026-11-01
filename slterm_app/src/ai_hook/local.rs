@@ -20,7 +20,6 @@ pub(super) mod settings;
 
 use codex_hooks::{ensure_codex_hooks, remove_codex_hooks};
 use codex_notify::{codex_config_dir, ensure_codex_notify, remove_codex_notify};
-pub use config_guard::{HookFailureKind, spawn_config_guard_with};
 
 static ANNOUNCED: AtomicBool = AtomicBool::new(false);
 

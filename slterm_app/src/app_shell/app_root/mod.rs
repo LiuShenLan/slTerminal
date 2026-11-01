@@ -1,10 +1,17 @@
 //! 项目工作区运行根：唯一持有项目快照与全部项目面板实例。
 
 mod commands;
-mod keymap;
+mod events;
+#[allow(dead_code)] // 焦点所有权已迁移，生产订阅由后续焦点接线装配。
+mod focus_manager;
+pub(crate) mod keymap;
 mod panel_host;
 mod project_view;
 mod render;
+#[allow(dead_code)] // SideView 持久状态已迁移，生产宿主由后续侧栏接线装配。
+mod side_view;
+#[allow(dead_code)] // 实例转换与关闭语义由 side_view 及后续生产宿主消费。
+mod side_view_host;
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod tests;
 
@@ -32,12 +39,10 @@ pub(crate) struct AppRoot {
 }
 
 impl AppRoot {
-    #[allow(dead_code)] // 生产窗口切换时消费。
     pub(crate) fn new(panel_ids: PanelIdAllocator, shell: CanonicalPath) -> Self {
         Self::with_launcher(panel_ids, shell, Box::new(commands::LocalTerminalLauncher))
     }
 
-    #[allow(dead_code)] // 测试启动器注入；生产窗口切换时消费。
     fn with_launcher(
         panel_ids: PanelIdAllocator,
         shell: CanonicalPath,

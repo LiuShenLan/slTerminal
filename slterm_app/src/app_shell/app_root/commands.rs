@@ -31,7 +31,6 @@ pub(crate) trait TerminalPanelLauncher {
     ) -> io::Result<Entity<TerminalView>>;
 }
 
-#[allow(dead_code)] // 由 AppRoot::new 在生产窗口切换时装配。
 pub(crate) struct LocalTerminalLauncher;
 
 impl TerminalPanelLauncher for LocalTerminalLauncher {
@@ -140,8 +139,18 @@ impl From<io::Error> for AppRootError {
     }
 }
 
-#[allow(dead_code)] // 独立运行根切片，生产窗口切换时移除。
 impl AppRoot {
+    pub(crate) fn open_initial_project(
+        &mut self,
+        root: CanonicalPath,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<PanelId, AppRootError> {
+        self.open_project(root, window, cx)?;
+        let shell = self.shell.clone();
+        self.new_terminal(shell, window, cx)
+    }
+
     pub(crate) fn open_project(
         &mut self,
         root: CanonicalPath,
@@ -475,6 +484,33 @@ impl AppRoot {
         Ok(())
     }
 
+    pub(crate) fn focus_notification_pane(
+        &mut self,
+        pane: PaneId,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<(), AppRootError> {
+        let (project_id, terminal_id) = self
+            .projects
+            .iter()
+            .find_map(|(project_id, project)| {
+                project
+                    .read(cx)
+                    .panels
+                    .values()
+                    .find(|panel| panel.id.sequence() == pane.0)
+                    .and_then(|panel| match panel.view_key {
+                        ViewKey::Terminal { terminal_id, .. } => Some(terminal_id),
+                        _ => None,
+                    })
+                    .map(|terminal_id| (*project_id, terminal_id))
+            })
+            .ok_or(AppRootError::MissingPanel)?;
+        self.activate_project(project_id, window, cx)?;
+        self.activate_terminal(terminal_id, window, cx)
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
     pub(crate) fn panel_count(&self, project_id: ProjectId, cx: &App) -> usize {
         self.projects
             .get(&project_id)

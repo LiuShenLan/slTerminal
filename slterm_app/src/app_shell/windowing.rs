@@ -1,56 +1,23 @@
-//! 开窗链:窗口选项(116×30 反推尺寸/标题栏/app_id)与启动变体分派。
+//! 开窗链：窗口选项、AppRoot 初始项目与首帧曝光。
 //!
-//! 单窗单实例(产品定位):`open_initial_window` 只在启动链调一次;
-//! 窗口角色单形态(QuickTerminal 归 09)。会话恢复决策在开窗前由
-//! `session_recovery::prepare_startup` 产出 `StartupPlan`;本模块只把它
-//! 应用到窗口定形(回放)并透传给 workspace。
+//! 单窗单实例；本模块不读取旧 session 或自行恢复布局。
 
 pub(super) mod startup_geometry;
 
-use std::path::PathBuf;
 use std::sync::mpsc;
 
 use gpui::{App, AppContext as _, Bounds, Size, WindowBounds, WindowOptions, px, size};
 use gpui_component::{Root, TitleBar};
 
 use super::SltermShellEvent;
-use super::workspace::SltermWorkspace;
-use super::workspace::session_recovery::StartupPlan;
-use super::workspace::sidebar::{self, SidebarState};
+use super::app_root::AppRoot;
 use crate::brand;
-use crate::cli::Program;
 use crate::platform::startup::first_frame;
-use crate::session::WindowState;
-
-/// 首窗的启动形态(新终端 / 新终端并执行命令两变体)。
-pub(crate) enum WorkspaceStartup {
-    /// 新终端(可带显式 cwd)。
-    NewTerminal { cwd: Option<PathBuf> },
-    /// 新终端并执行启动命令(`-e` 尾捕获)。
-    LaunchTerminal {
-        cwd: Option<PathBuf>,
-        command: Program,
-    },
-}
+use slterm_path::CanonicalPath;
+use slterm_workspace::PanelIdAllocator;
 
 /// 窗口最小尺寸(旧产品面同值)。
 const MIN_WINDOW_SIZE: (f32, f32) = (760.0, 540.0);
-
-/// 回放尺寸:保存值优先,过小或无保存值回退启动基准尺寸。
-/// 返回 `(尺寸, 最大化态)`。
-fn restored_size(
-    saved: Option<WindowState>,
-    fallback: Size<gpui::Pixels>,
-) -> (Size<gpui::Pixels>, bool) {
-    let floor = size(px(MIN_WINDOW_SIZE.0), px(MIN_WINDOW_SIZE.1));
-    match saved {
-        Some(saved) if saved.width > 0 && saved.height > 0 => (
-            size(px(saved.width as f32), px(saved.height as f32)).max(&floor),
-            saved.maximized,
-        ),
-        _ => (fallback.max(&floor), false),
-    }
-}
 
 /// 把首选尺寸放进显示器可见区(居中);无显示器信息时交给调用方的
 /// `Bounds::centered` 兜底。纯函数,回放用例直接断言。
@@ -69,29 +36,18 @@ fn fit_to_display(
     ))
 }
 
-/// 窗口定形唯一函数(会话恢复回放 = 定形前覆盖 preferred_size,
-/// 不改调用序)。单形态 = Regular。
-pub(crate) fn workspace_window_options(
-    cx: &App,
-    focus: bool,
-    saved: Option<WindowState>,
-    sidebar: &SidebarState,
-) -> WindowOptions {
-    let fallback = startup_geometry::preferred_size(cx, sidebar::chrome_width(sidebar))
-        .unwrap_or_else(|| size(px(1080.0), px(720.0)));
-    let (preferred, maximized) = restored_size(saved, fallback);
+/// 窗口定形唯一函数。新根尚未恢复几何，统一使用终端网格基准尺寸。
+pub(crate) fn workspace_window_options(cx: &App, focus: bool) -> WindowOptions {
+    let fallback =
+        startup_geometry::preferred_size(cx).unwrap_or_else(|| size(px(1080.0), px(720.0)));
+    let preferred = fallback.max(&size(px(MIN_WINDOW_SIZE.0), px(MIN_WINDOW_SIZE.1)));
     let bounds = fit_to_display(
         preferred,
         cx.primary_display().map(|display| display.visible_bounds()),
     )
     .unwrap_or_else(|| Bounds::centered(None, preferred, cx));
     WindowOptions {
-        window_bounds: Some(if maximized {
-            // 最大化窗口的 bounds 是还原尺寸,回放后系统自己铺满显示器。
-            WindowBounds::Maximized(bounds)
-        } else {
-            WindowBounds::Windowed(bounds)
-        }),
+        window_bounds: Some(WindowBounds::Windowed(bounds)),
         window_min_size: Some(size(px(MIN_WINDOW_SIZE.0), px(MIN_WINDOW_SIZE.1)).min(&bounds.size)),
         titlebar: Some(TitleBar::title_bar_options()),
         app_id: Some(brand::WINDOWS_APP_ID.to_owned()),
@@ -117,27 +73,15 @@ fn apply_start_hidden(options: &mut WindowOptions, start_hidden: bool) {
     }
 }
 
-/// 启动链调一次的开窗入口:命令行 `-e` → LaunchTerminal;有 cwd →
-/// NewTerminal;否则消费启动恢复计划(见 `session_recovery`)。
-#[allow(clippy::too_many_arguments)] // 启动链参数逐项显式(单一调用点),不折叠中间结构体。
+/// 启动链调一次的开窗入口：只消费进入 GPUI 前冻结的 Shell 与项目根。
 pub(crate) fn open_initial_window(
     cx: &mut App,
     shell_rx: mpsc::Receiver<SltermShellEvent>,
-    ai_events: mpsc::Receiver<crate::ai_hook::AiHookEvent>,
-    view_state_writer: Option<crate::persistence::workspace_writer::WorkspaceWriterClient>,
-    initial_cwd: Option<PathBuf>,
-    initial_command: Option<Program>,
-    plan: StartupPlan,
+    initial_root: CanonicalPath,
+    shell: CanonicalPath,
     start_hidden: bool,
 ) {
-    let startup = match initial_command {
-        Some(command) => WorkspaceStartup::LaunchTerminal {
-            cwd: initial_cwd,
-            command,
-        },
-        None => WorkspaceStartup::NewTerminal { cwd: initial_cwd },
-    };
-    let mut options = workspace_window_options(cx, !start_hidden, plan.window, &plan.sidebar);
+    let mut options = workspace_window_options(cx, !start_hidden);
     apply_start_hidden(&mut options, start_hidden);
     // 首帧黑窗/半构窗口不曝光:先同步画一帧再 activate(first_frame 因果链)。
     // 静默窗口不曝光,defer_show 自然返回 false,不进 present-then-show。
@@ -146,18 +90,15 @@ pub(crate) fn open_initial_window(
         window.set_window_title(brand::NAME);
         // HWND 发布单点:任务栏闪烁/进度经 facade 查询。
         crate::windowing::focus::publish_window(window);
-        let workspace = cx.new(|cx| {
-            SltermWorkspace::new(
-                window,
-                shell_rx,
-                Some(ai_events),
-                view_state_writer,
-                startup,
-                plan,
-                cx,
-            )
+        let root = cx.new(|_| AppRoot::new(PanelIdAllocator::new(1), shell));
+        root.update(cx, |root, cx| {
+            if let Err(error) = root.open_initial_project(initial_root, window, cx) {
+                log::error!("初始项目启动失败: {error}");
+                super::try_write_stderr(format_args!("初始项目启动失败: {error}"));
+            }
+            root.start_shell_event_pump(shell_rx, window.window_handle(), cx);
         });
-        cx.new(|cx| Root::new(workspace, window, cx))
+        cx.new(|cx| Root::new(root, window, cx))
     });
     match result {
         Ok(handle) => {
@@ -180,45 +121,9 @@ pub(crate) fn open_initial_window(
 mod windowing_tests {
     use super::*;
 
-    /// 保存的尺寸/最大化态在窗口定形前决定 bounds 形态。
+    /// 首选尺寸大于显示器时收进可见区。
     #[test]
-    fn saved_window_state_replays_size_and_maximized_flag() {
-        let fallback = size(px(1080.0), px(720.0));
-        let (preferred, maximized) = restored_size(
-            Some(WindowState {
-                width: 1280,
-                height: 720,
-                maximized: true,
-            }),
-            fallback,
-        );
-        assert_eq!(preferred, size(px(1280.0), px(720.0)));
-        assert!(maximized, "回放最大化态");
-        let display = Bounds::new(gpui::point(px(0.0), px(0.0)), size(px(1920.0), px(1080.0)));
-        let bounds = fit_to_display(preferred, Some(display)).unwrap();
-        assert_eq!(bounds.size, preferred);
-        assert_eq!(bounds.origin.x, px(320.0), "在显示器内居中");
-        assert_eq!(bounds.origin.y, px(180.0));
-
-        let (preferred, maximized) = restored_size(None, fallback);
-        assert_eq!(preferred, fallback);
-        assert!(!maximized);
-    }
-
-    /// 保存值过小钳到最小尺寸;大于显示器则收进可见区。
-    #[test]
-    fn replayed_window_state_clamps_to_floor_and_display() {
-        let fallback = size(px(1080.0), px(720.0));
-        let (tiny, _) = restored_size(
-            Some(WindowState {
-                width: 120,
-                height: 90,
-                maximized: false,
-            }),
-            fallback,
-        );
-        assert_eq!(tiny, size(px(760.0), px(540.0)));
-
+    fn preferred_window_size_fits_the_display() {
         let display = Bounds::new(gpui::point(px(0.0), px(0.0)), size(px(1000.0), px(600.0)));
         let bounds = fit_to_display(size(px(4000.0), px(3000.0)), Some(display)).unwrap();
         assert_eq!(bounds.size, display.size, "超屏尺寸收到显示器内");
@@ -263,28 +168,6 @@ mod windowing_tests {
             visible.window_background,
             gpui::WindowBackgroundAppearance::Transparent
         );
-    }
-
-    /// 启动命令必须原样保留程序与参数(逐字,不经 shell 二次解析)。
-    #[test]
-    fn explicit_program_is_kept_with_its_arguments_and_directory() {
-        let command = Program::WithArgs {
-            program: "shell.exe".into(),
-            args: vec!["--literal=two words".into()],
-        };
-        let startup = match Some(command) {
-            Some(command) => WorkspaceStartup::LaunchTerminal {
-                cwd: Some(PathBuf::from("C:/work area")),
-                command,
-            },
-            None => unreachable!(),
-        };
-        let WorkspaceStartup::LaunchTerminal { cwd, command } = startup else {
-            panic!("explicit launch was discarded");
-        };
-        assert_eq!(cwd, Some(PathBuf::from("C:/work area")));
-        assert_eq!(command.program(), "shell.exe");
-        assert_eq!(command.args(), &["--literal=two words".to_owned()]);
     }
 }
 

@@ -471,7 +471,7 @@ mod tests {
 
         cx.update(|cx| {
             gpui_component::init(cx);
-            crate::app_shell::workspace::init(cx);
+            crate::gpui_terminal::init(cx);
         });
         let mut probe_out = None;
         let (_, cx) = cx.add_window_view(|window, cx| {
