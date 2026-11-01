@@ -502,10 +502,10 @@ fn foreground() -> bool {
 
 // ─── toast 激活回窗 ──────────────────────────────────────────────────────
 
-static GPUI_ACTIVATION: OnceLock<mpsc::Sender<SltermShellEvent>> = OnceLock::new();
+static GPUI_ACTIVATION: OnceLock<mpsc::SyncSender<SltermShellEvent>> = OnceLock::new();
 
 /// 壳启动早期一次:toast 点击/动作按钮经此回投进程内事件队列。
-pub(crate) fn init_gpui_activation(sender: mpsc::Sender<SltermShellEvent>) {
+pub(crate) fn init_gpui_activation(sender: mpsc::SyncSender<SltermShellEvent>) {
     let _ = GPUI_ACTIVATION.set(sender);
 }
 
@@ -513,7 +513,11 @@ fn application_activation(pane_id: Option<PaneId>) -> Option<ToastActivation> {
     GPUI_ACTIVATION.get().map(|sender| {
         let sender = sender.clone();
         Arc::new(move || {
-            let _ = sender.send(SltermShellEvent::NotificationFocus(pane_id));
+            crate::app_shell::try_send_shell_event(
+                &sender,
+                SltermShellEvent::NotificationFocus(pane_id),
+                "notification-focus",
+            );
         }) as ToastActivation
     })
 }
@@ -612,8 +616,11 @@ fn deliver_with(
                         ToastAction {
                             label: label.chars().take(80).collect(),
                             activate: Arc::new(move || {
-                                let _ =
-                                    sender.send(SltermShellEvent::NotificationChoice { pane_id });
+                                crate::app_shell::try_send_shell_event(
+                                    &sender,
+                                    SltermShellEvent::NotificationChoice { pane_id },
+                                    "notification-choice",
+                                );
                             }),
                         }
                     })

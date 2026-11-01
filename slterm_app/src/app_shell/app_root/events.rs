@@ -6,6 +6,7 @@ use gpui::{Context, Window};
 use slterm_path::CanonicalPath;
 
 use super::AppRoot;
+use super::task_service::CancellationToken;
 use crate::app_shell::SltermShellEvent;
 
 impl AppRoot {
@@ -17,28 +18,40 @@ impl AppRoot {
         cx: &mut Context<'_, Self>,
     ) {
         let executor = cx.background_executor().clone();
-        cx.spawn(async move |this, cx| {
-            loop {
-                executor.timer(Duration::from_millis(120)).await;
-                let mut events = Vec::new();
-                while let Ok(event) = receiver.try_recv() {
-                    events.push(event);
-                }
-                if events.is_empty() {
-                    continue;
-                }
-                cx.update(|cx| {
-                    let _ = window_handle.update(cx, |_root, window, cx| {
-                        let _ = this.update(cx, |root, cx| {
-                            for event in events {
-                                root.handle_shell_event(event, window, cx);
-                            }
+        let cancellation = CancellationToken::new();
+        let task = {
+            let cancellation = cancellation.clone();
+            cx.spawn(async move |this, cx| {
+                loop {
+                    executor.timer(Duration::from_millis(120)).await;
+                    if cancellation.is_cancelled() {
+                        break;
+                    }
+                    let mut events = Vec::new();
+                    while let Ok(event) = receiver.try_recv() {
+                        events.push(event);
+                    }
+                    if events.is_empty() {
+                        continue;
+                    }
+                    cx.update(|cx| {
+                        let _ = window_handle.update(cx, |_root, window, cx| {
+                            let _ = this.update(cx, |root, cx| {
+                                for event in events {
+                                    root.handle_shell_event(event, window, cx);
+                                }
+                            });
                         });
                     });
-                });
-            }
-        })
-        .detach();
+                }
+            })
+        };
+        if let Err(error) =
+            self.tasks
+                .register(super::task_service::TaskId::ShellEvents, cancellation, task)
+        {
+            log::warn!("壳事件泵重复注册被拒绝: {error:?}");
+        }
     }
 
     pub(crate) fn handle_shell_event(

@@ -82,6 +82,27 @@ pub(crate) enum SltermShellEvent {
     WorkspaceWriteFailed,
 }
 
+const SHELL_EVENT_CAPACITY: usize = 64;
+
+fn shell_event_channel() -> (
+    mpsc::SyncSender<SltermShellEvent>,
+    mpsc::Receiver<SltermShellEvent>,
+) {
+    mpsc::sync_channel(SHELL_EVENT_CAPACITY)
+}
+
+pub(crate) fn try_send_shell_event(
+    sender: &mpsc::SyncSender<SltermShellEvent>,
+    event: SltermShellEvent,
+    queue: &'static str,
+) {
+    match sender.try_send(event) {
+        Ok(()) => {}
+        Err(mpsc::TrySendError::Full(_)) => log::warn!("{queue} event queue full"),
+        Err(mpsc::TrySendError::Disconnected(_)) => log::debug!("{queue} event channel closed"),
+    }
+}
+
 /// GPUI 外独占 writer 与失败转发线程，窗口只拿非阻塞 client。
 struct WorkspaceWriterRuntime {
     writer: crate::persistence::workspace_writer::WorkspaceWriter,
@@ -95,7 +116,7 @@ struct WorkspaceWriterRuntime {
 impl WorkspaceWriterRuntime {
     fn start_at(
         paths: &slterm_path::AppPaths,
-        events: mpsc::Sender<SltermShellEvent>,
+        events: mpsc::SyncSender<SltermShellEvent>,
     ) -> Result<Self, crate::persistence::workspace_writer::WorkspaceWriterError> {
         use crate::persistence::workspace_writer::{
             WorkspaceWriter, WorkspaceWriterError, spawn_workspace_failure_forwarder,
@@ -107,7 +128,7 @@ impl WorkspaceWriterRuntime {
             .take_failure_receiver()
             .expect("新 writer 的失败接收端必须可移交一次");
         let failure_forwarder = spawn_workspace_failure_forwarder(failures, move || {
-            let _ = events.send(SltermShellEvent::WorkspaceWriteFailed);
+            try_send_shell_event(&events, SltermShellEvent::WorkspaceWriteFailed, "workspace");
         })
         .map_err(WorkspaceWriterError::Spawn)?;
         let started = (|| {
@@ -181,7 +202,7 @@ impl WorkspaceWriterRuntime {
 /// 启动 writer；失败时窗口降级为无 client，由启动计划合并恢复提示。
 fn start_workspace_writer(
     paths: &slterm_path::AppPaths,
-    events: mpsc::Sender<SltermShellEvent>,
+    events: mpsc::SyncSender<SltermShellEvent>,
 ) -> (
     Option<WorkspaceWriterRuntime>,
     Option<crate::persistence::workspace_writer::WorkspaceWriterClient>,
@@ -259,7 +280,7 @@ pub fn run_shell(initial_cwd: Option<PathBuf>) {
             return;
         }
     };
-    let (shell_tx, shell_rx) = mpsc::channel();
+    let (shell_tx, shell_rx) = shell_event_channel();
     // writer owner 与转发线程留在 GPUI 外；项目快照 client 由持久化协调接入。
     let app_paths = crate::platform::dirs::app_paths();
     let (workspace_writer, workspace_writer_client, previous_run) =
@@ -279,14 +300,18 @@ pub fn run_shell(initial_cwd: Option<PathBuf>) {
     crate::tray::init_gpui({
         let shell_events = shell_tx.clone();
         move |command| {
-            let _ = shell_events.send(tray_command_event(command));
+            try_send_shell_event(&shell_events, tray_command_event(command), "tray");
         }
     });
     let application = gpui_platform::application()
         .with_assets(assets::SltermAssets)
         .with_quit_mode(QuitMode::LastWindowClosed);
     application.on_open_urls(move |urls| {
-        let _ = open_urls_tx.send(SltermShellEvent::OpenDirectories(urls));
+        try_send_shell_event(
+            &open_urls_tx,
+            SltermShellEvent::OpenDirectories(urls),
+            "open-urls",
+        );
     });
     application.run(move |cx| {
         init(cx);
@@ -381,6 +406,18 @@ mod shell_event_tests {
         assert!(!starts_hidden(false, &settings), "显式 CLI 启动不得隐藏");
     }
 
+    #[test]
+    fn shell_event_channel_is_bounded() {
+        let (events, _event_rx) = super::shell_event_channel();
+        for _ in 0..super::SHELL_EVENT_CAPACITY {
+            events.try_send(SltermShellEvent::TrayQuit).unwrap();
+        }
+        assert!(matches!(
+            events.try_send(SltermShellEvent::TrayQuit),
+            Err(mpsc::TrySendError::Full(_))
+        ));
+    }
+
     fn view_state_registry() -> ViewStateRegistry {
         fn decode(_key: &ViewKey, text: &str) -> Result<Value, InvalidViewState> {
             serde_json::from_str(text).map_err(|_| InvalidViewState)
@@ -409,7 +446,7 @@ mod shell_event_tests {
         let local = temp.path().join("local");
         std::fs::write(&local, "not a directory").unwrap();
         let paths = AppPaths::new(temp.path().join("config"), local).unwrap();
-        let (events, event_rx) = mpsc::channel();
+        let (events, event_rx) = mpsc::sync_channel(super::SHELL_EVENT_CAPACITY);
 
         let (runtime, client, previous_run) = start_workspace_writer(&paths, events);
 
@@ -435,7 +472,7 @@ mod shell_event_tests {
                 &ViewState::new(&key, json!({"position": 7}), &registry).unwrap(),
             )
             .unwrap();
-        let (events, event_rx) = mpsc::channel();
+        let (events, event_rx) = mpsc::sync_channel(super::SHELL_EVENT_CAPACITY);
         let runtime = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
         let client = runtime.client();
         let fault = rusqlite::Connection::open(paths.workspace_db_path()).unwrap();
@@ -474,7 +511,7 @@ mod shell_event_tests {
         observer
             .save_project_snapshot(&project_snapshot("original"))
             .unwrap();
-        let (events, event_rx) = mpsc::channel();
+        let (events, event_rx) = mpsc::sync_channel(super::SHELL_EVENT_CAPACITY);
         let runtime = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
         let client = runtime.client();
         let fault = rusqlite::Connection::open(paths.workspace_db_path()).unwrap();
@@ -508,7 +545,7 @@ mod shell_event_tests {
     fn workspace_writer_runtime_marks_clean_shutdown_after_flush() {
         let temp = tempfile::tempdir().unwrap();
         let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
-        let (events, _event_rx) = mpsc::channel();
+        let (events, _event_rx) = mpsc::sync_channel(super::SHELL_EVENT_CAPACITY);
         let runtime = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
         let client = runtime.client();
         let mut observer = WorkspaceDatabase::open(&paths).unwrap();
@@ -537,13 +574,13 @@ mod shell_event_tests {
         let temp = tempfile::tempdir().unwrap();
         let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
         let observer = WorkspaceDatabase::open(&paths).unwrap();
-        let (events, _event_rx) = mpsc::channel();
+        let (events, _event_rx) = mpsc::sync_channel(super::SHELL_EVENT_CAPACITY);
         let first = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
         let first_metadata = observer.metadata().unwrap().unwrap();
         let epoch = first_metadata.store_epoch.clone();
         first.shutdown().unwrap();
 
-        let (events, _event_rx) = mpsc::channel();
+        let (events, _event_rx) = mpsc::sync_channel(super::SHELL_EVENT_CAPACITY);
         let second = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
         let previous = second.previous_run();
         assert!(previous.is_some(), "必须返回上一运行事实");
@@ -556,7 +593,7 @@ mod shell_event_tests {
         raw.execute_batch("UPDATE workspace_meta SET clean_shutdown = 0")
             .unwrap();
 
-        let (events, _event_rx) = mpsc::channel();
+        let (events, _event_rx) = mpsc::sync_channel(super::SHELL_EVENT_CAPACITY);
         let third = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
         let previous = third.previous_run();
         assert!(previous.is_some(), "异常上一运行事实同样必须保留");
@@ -570,14 +607,14 @@ mod shell_event_tests {
     fn workspace_writer_failed_start_preserves_previous_run() {
         let temp = tempfile::tempdir().unwrap();
         let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
-        let (events, _event_rx) = mpsc::channel();
+        let (events, _event_rx) = mpsc::sync_channel(super::SHELL_EVENT_CAPACITY);
         let first = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
         let first_metadata = observer_metadata(&paths);
         first.shutdown().unwrap();
         let raw = rusqlite::Connection::open(paths.workspace_db_path()).unwrap();
         raw.execute_batch("PRAGMA user_version = 2").unwrap();
 
-        let (events, event_rx) = mpsc::channel();
+        let (events, event_rx) = mpsc::sync_channel(super::SHELL_EVENT_CAPACITY);
         let failed = WorkspaceWriterRuntime::start_at(&paths, events);
         let error = failed.as_ref().err();
         assert!(
@@ -588,7 +625,7 @@ mod shell_event_tests {
         assert!(event_rx.recv().is_err(), "启动失败必须回收转发线程");
         raw.execute_batch("PRAGMA user_version = 1").unwrap();
 
-        let (events, _event_rx) = mpsc::channel();
+        let (events, _event_rx) = mpsc::sync_channel(super::SHELL_EVENT_CAPACITY);
         let next = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
         let previous = next.previous_run();
         assert!(previous.is_some());
@@ -602,7 +639,7 @@ mod shell_event_tests {
     fn workspace_writer_runtime_forwarder_panic_keeps_run_unclean() {
         let temp = tempfile::tempdir().unwrap();
         let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
-        let (events, _event_rx) = mpsc::channel();
+        let (events, _event_rx) = mpsc::sync_channel(super::SHELL_EVENT_CAPACITY);
         let mut runtime = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
         let started = observer_metadata(&paths);
         runtime.failure_forwarder = std::thread::spawn(|| panic!("injected forwarder panic"));
@@ -620,7 +657,7 @@ mod shell_event_tests {
     fn workspace_writer_runtime_mark_failure_is_reported() {
         let temp = tempfile::tempdir().unwrap();
         let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
-        let (events, event_rx) = mpsc::channel();
+        let (events, event_rx) = mpsc::sync_channel(super::SHELL_EVENT_CAPACITY);
         let runtime = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
         let started = observer_metadata(&paths);
         let fault = rusqlite::Connection::open(paths.workspace_db_path()).unwrap();
@@ -660,7 +697,7 @@ mod shell_event_tests {
     fn workspace_writer_runtime_readonly_mark_is_reported() {
         let temp = tempfile::tempdir().unwrap();
         let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
-        let (events, event_rx) = mpsc::channel();
+        let (events, event_rx) = mpsc::sync_channel(super::SHELL_EVENT_CAPACITY);
         let runtime = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
         let started = observer_metadata(&paths);
         let database = paths.workspace_db_path();
@@ -706,7 +743,7 @@ mod shell_event_tests {
         observer
             .save_project_snapshot(&project_snapshot("original"))
             .unwrap();
-        let (events, event_rx) = mpsc::channel();
+        let (events, event_rx) = mpsc::sync_channel(super::SHELL_EVENT_CAPACITY);
         let runtime = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
         let client = runtime.client();
         let started = observer.metadata().unwrap();
@@ -748,7 +785,7 @@ mod shell_event_tests {
                 &ViewState::new(&key, json!({"position": 7}), &registry).unwrap(),
             )
             .unwrap();
-        let (events, _event_rx) = mpsc::channel();
+        let (events, _event_rx) = mpsc::sync_channel(super::SHELL_EVENT_CAPACITY);
         let runtime = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
         let client = runtime.client();
         let fault = rusqlite::Connection::open(paths.workspace_db_path()).unwrap();

@@ -1690,6 +1690,32 @@ fn shell_event_pump_dispatches_queued_events_to_app_root(cx: &mut TestAppContext
 }
 
 #[gpui::test]
+fn shell_event_pump_releases_receiver_on_app_root_drop(cx: &mut TestAppContext) {
+    let (root, mut window, _) = open_root(cx);
+    let (sender, receiver) = std::sync::mpsc::channel();
+    window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.start_shell_event_pump(receiver, window.window_handle(), cx)
+        })
+    });
+    let weak = root.downgrade();
+
+    window.update(|window, _| window.remove_window());
+    drop(root);
+    window.executor().advance_clock(Duration::from_millis(121));
+    window.run_until_parked();
+    cx.update(|_| {});
+    weak.assert_released();
+    window.executor().advance_clock(Duration::from_millis(121));
+    window.run_until_parked();
+
+    assert!(
+        sender.send(SltermShellEvent::TrayQuit).is_err(),
+        "AppRoot 销毁后不得保留事件接收端"
+    );
+}
+
+#[gpui::test]
 fn new_terminal_shortcut_uses_app_root_command(cx: &mut TestAppContext) {
     let (root, mut window, state) = open_root(cx);
     open_generated_project(&root, &mut window, "D:/work/generated");

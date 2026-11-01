@@ -11,6 +11,7 @@ mod render;
 mod side_view;
 mod side_view_host;
 mod sidebar;
+mod task_service;
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod tests;
 
@@ -27,6 +28,7 @@ use focus_manager::{FocusManager, FocusRegistration, FocusSubscriptions};
 pub(super) use side_view::AppRootPersistence;
 use side_view::SideView;
 use side_view_host::SideViewHost;
+use task_service::TaskService;
 
 pub(crate) use commands::TerminalPanelLauncher;
 
@@ -107,6 +109,7 @@ pub(crate) struct AppRoot {
     panel_subscriptions: BTreeMap<PanelId, Subscription>,
     panel_focus: BTreeMap<PanelId, FocusRegistration>,
     workspace_focus: FocusHandle,
+    tasks: TaskService,
     focus_manager: FocusManager,
     focus_subscriptions: Option<FocusSubscriptions>,
     side_views: SideViewHost<Entity<SideView>>,
@@ -232,6 +235,7 @@ impl AppRoot {
             panel_subscriptions: BTreeMap::new(),
             panel_focus: BTreeMap::new(),
             workspace_focus,
+            tasks: TaskService::new(),
             focus_manager,
             focus_subscriptions: None,
             side_views,
