@@ -37,6 +37,17 @@ pub(crate) struct AppRootPersistence {
 }
 
 impl AppRootPersistence {
+    pub(crate) fn load_with_previous_run(
+        paths: &slterm_path::AppPaths,
+        writer: Option<WorkspaceWriterClient>,
+        previous_run: Option<crate::persistence::metadata::WorkspaceMetadata>,
+    ) -> Self {
+        if previous_run.is_some_and(|previous| !previous.clean_shutdown) {
+            log::warn!("previous workspace run did not shut down cleanly");
+        }
+        Self::load(paths, writer)
+    }
+
     pub(crate) fn load(
         paths: &slterm_path::AppPaths,
         writer: Option<WorkspaceWriterClient>,

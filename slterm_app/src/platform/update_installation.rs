@@ -58,6 +58,16 @@ pub(crate) fn current_process_created() -> io::Result<u64> {
     Ok((u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime))
 }
 
+/// 当前进程创建时间的 Unix epoch 毫秒表示。
+pub(crate) fn current_process_created_at_ms() -> io::Result<u64> {
+    const WINDOWS_TO_UNIX_EPOCH: u64 = 116_444_736_000_000_000;
+    let filetime = current_process_created()?;
+    let unix_ticks = filetime
+        .checked_sub(WINDOWS_TO_UNIX_EPOCH)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "进程创建时间早于 Unix epoch"))?;
+    Ok(unix_ticks / 10_000)
+}
+
 /// 以隐藏窗口启动 PowerShell helper(不接管 stdin/stdout/stderr)。
 ///
 /// helper 是独立进程:应用退出后它继续等待 commit/失败回滚;日志只进
@@ -120,7 +130,10 @@ pub(crate) fn spawn_prepared_helper(directory: &Path, plan: &Path) -> Result<Chi
 
 #[cfg(test)]
 mod update_installation_tests {
-    use super::{canonical, current_process_created, guard_base, installation_directory};
+    use super::{
+        canonical, current_process_created, current_process_created_at_ms, guard_base,
+        installation_directory,
+    };
 
     #[test]
     fn installation_directory_requires_an_uninstaller() {
@@ -158,5 +171,16 @@ mod update_installation_tests {
         let second = current_process_created().unwrap();
         assert_ne!(first, 0);
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn process_creation_time_is_unix_epoch_milliseconds() {
+        let created = current_process_created_at_ms().unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        assert!(created > 946_684_800_000, "创建时间必须晚于 2000 年");
+        assert!(created <= now, "创建时间不得晚于当前时间");
     }
 }

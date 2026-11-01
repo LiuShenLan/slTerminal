@@ -13,6 +13,7 @@ use slterm_sidebar::SidebarState;
 use slterm_workspace::{ProjectSnapshot, ViewKey, ViewKeyError, ViewState, ViewStateError};
 
 use super::database::DatabaseError;
+use super::metadata::MetadataError;
 use super::project::ProjectStoreError;
 use super::sidebar::SidebarStateStoreError;
 use super::view_state::ViewStateStoreError;
@@ -58,6 +59,8 @@ impl ViewStateWriteFailure {
 pub(crate) enum WorkspaceWriterError {
     Open(DatabaseError),
     Spawn(std::io::Error),
+    Metadata(MetadataError),
+    ProcessCreated(std::io::Error),
     ViewKey(ViewKeyError),
     ViewState(ViewStateError),
     QueueFull,
@@ -70,6 +73,8 @@ impl fmt::Display for WorkspaceWriterError {
         match self {
             Self::Open(_) => formatter.write_str("工作区数据库打开失败"),
             Self::Spawn(_) => formatter.write_str("工作区写线程启动失败"),
+            Self::Metadata(_) => formatter.write_str("工作区运行标记提交失败"),
+            Self::ProcessCreated(_) => formatter.write_str("进程创建时间读取失败"),
             Self::ViewKey(_) => formatter.write_str("ViewState 的 ViewKey 编码失败"),
             Self::ViewState(error) => fmt::Display::fmt(error, formatter),
             Self::QueueFull => formatter.write_str("工作区写队列已满"),

@@ -87,6 +87,9 @@ struct WorkspaceWriterRuntime {
     writer: crate::persistence::workspace_writer::WorkspaceWriter,
     client: crate::persistence::workspace_writer::WorkspaceWriterClient,
     failure_forwarder: std::thread::JoinHandle<()>,
+    paths: slterm_path::AppPaths,
+    run_id: String,
+    previous_run: Option<crate::persistence::metadata::WorkspaceMetadata>,
 }
 
 impl WorkspaceWriterRuntime {
@@ -107,10 +110,37 @@ impl WorkspaceWriterRuntime {
             let _ = events.send(SltermShellEvent::WorkspaceWriteFailed);
         })
         .map_err(WorkspaceWriterError::Spawn)?;
+        let started = (|| {
+            let run = crate::persistence::metadata::RunMarker {
+                run_id: uuid::Uuid::now_v7().to_string(),
+                process_id: std::process::id(),
+                process_created_at_ms:
+                    crate::platform::update_installation::current_process_created_at_ms()
+                        .map_err(WorkspaceWriterError::ProcessCreated)?,
+            };
+            let mut store = crate::persistence::workspace::WorkspaceDatabase::open(paths)
+                .map_err(WorkspaceWriterError::Open)?;
+            store
+                .begin_run(&uuid::Uuid::now_v7().to_string(), run)
+                .map_err(WorkspaceWriterError::Metadata)
+        })();
+        let started = match started {
+            Ok(started) => started,
+            Err(error) => {
+                let _ = writer.shutdown();
+                let _ = failure_forwarder.join();
+                return Err(error);
+            }
+        };
+        let run_id = started.current.run.run_id.clone();
+        let previous_run = started.previous;
         Ok(Self {
             writer,
             client,
             failure_forwarder,
+            paths: paths.clone(),
+            run_id,
+            previous_run,
         })
     }
 
@@ -118,24 +148,33 @@ impl WorkspaceWriterRuntime {
         self.client.clone()
     }
 
+    fn previous_run(&self) -> Option<&crate::persistence::metadata::WorkspaceMetadata> {
+        self.previous_run.as_ref()
+    }
+
     fn shutdown(self) -> Result<(), crate::persistence::workspace_writer::WorkspaceWriterError> {
         let Self {
             writer,
             client: _,
             failure_forwarder,
+            paths,
+            run_id,
+            previous_run: _,
         } = self;
         let shutdown = writer.shutdown();
         let forwarder = failure_forwarder.join();
-        match (shutdown, forwarder) {
-            (Err(error), _) => Err(error),
-            (Ok(report), _) if report.failed > 0 => {
-                Err(crate::persistence::workspace_writer::WorkspaceWriterError::FlushFailed)
-            }
-            (Ok(_), Err(_)) => {
-                Err(crate::persistence::workspace_writer::WorkspaceWriterError::Stopped)
-            }
-            (Ok(_), Ok(())) => Ok(()),
+        let report = shutdown?;
+        if report.failed > 0 {
+            return Err(crate::persistence::workspace_writer::WorkspaceWriterError::FlushFailed);
         }
+        forwarder
+            .map_err(|_| crate::persistence::workspace_writer::WorkspaceWriterError::Stopped)?;
+        let mut store = crate::persistence::workspace::WorkspaceDatabase::open(&paths)
+            .map_err(crate::persistence::workspace_writer::WorkspaceWriterError::Open)?;
+        store
+            .mark_clean_shutdown(&run_id)
+            .map_err(crate::persistence::workspace_writer::WorkspaceWriterError::Metadata)?;
+        Ok(())
     }
 }
 
@@ -146,15 +185,17 @@ fn start_workspace_writer(
 ) -> (
     Option<WorkspaceWriterRuntime>,
     Option<crate::persistence::workspace_writer::WorkspaceWriterClient>,
+    Option<crate::persistence::metadata::WorkspaceMetadata>,
 ) {
     match WorkspaceWriterRuntime::start_at(paths, events) {
         Ok(runtime) => {
             let client = runtime.client();
-            (Some(runtime), Some(client))
+            let previous_run = runtime.previous_run().cloned();
+            (Some(runtime), Some(client), previous_run)
         }
         Err(error) => {
             log::warn!("workspace writer startup failed: {error}");
-            (None, None)
+            (None, None, None)
         }
     }
 }
@@ -221,11 +262,14 @@ pub fn run_shell(initial_cwd: Option<PathBuf>) {
     let (shell_tx, shell_rx) = mpsc::channel();
     // writer owner 与转发线程留在 GPUI 外；项目快照 client 由持久化协调接入。
     let app_paths = crate::platform::dirs::app_paths();
-    let (workspace_writer, workspace_writer_client) =
+    let (workspace_writer, workspace_writer_client, previous_run) =
         start_workspace_writer(app_paths, shell_tx.clone());
-    // 首帧前恢复视图私有状态；读取或解码失败只设置对应写屏障。
-    let side_view_persistence =
-        app_root::AppRootPersistence::load(app_paths, workspace_writer_client);
+    // 首帧前恢复视图私有状态与上一运行退出事实；读取或解码失败只设置对应写屏障。
+    let side_view_persistence = app_root::AppRootPersistence::load_with_previous_run(
+        app_paths,
+        workspace_writer_client,
+        previous_run,
+    );
     let open_urls_tx = shell_tx.clone();
     // 通知通道开机位:toast 点击回投走同一壳事件队列;
     // AUMID 预注册幂等,必须早于第一条通知。
@@ -316,6 +360,7 @@ mod shell_event_tests {
         SltermShellEvent, WorkspaceWriterRuntime, start_workspace_writer, starts_hidden,
         tray_command_event,
     };
+    use crate::persistence::database::DatabaseError;
     use crate::persistence::workspace::WorkspaceDatabase;
     use crate::persistence::workspace_writer::WorkspaceWriterError;
     use crate::tray::GpuiTrayCommand;
@@ -366,10 +411,11 @@ mod shell_event_tests {
         let paths = AppPaths::new(temp.path().join("config"), local).unwrap();
         let (events, event_rx) = mpsc::channel();
 
-        let (runtime, client) = start_workspace_writer(&paths, events);
+        let (runtime, client, previous_run) = start_workspace_writer(&paths, events);
 
         assert!(runtime.is_none());
         assert!(client.is_none());
+        assert!(previous_run.is_none());
         assert!(event_rx.try_recv().is_err());
     }
 
@@ -455,6 +501,235 @@ mod shell_event_tests {
             observer.load_project_snapshot().unwrap(),
             project_snapshot("changed")
         );
+    }
+
+    /// 最终冲刷成功后才登记正常退出，且项目快照使用同一运行标记。
+    #[test]
+    fn workspace_writer_runtime_marks_clean_shutdown_after_flush() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+        let (events, _event_rx) = mpsc::channel();
+        let runtime = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
+        let client = runtime.client();
+        let mut observer = WorkspaceDatabase::open(&paths).unwrap();
+        let started = observer.metadata().unwrap();
+        assert!(started.is_some(), "启动必须登记运行标记");
+        let started = started.unwrap();
+        assert!(!started.clean_shutdown);
+
+        client
+            .save_project_snapshot(&project_snapshot("changed"))
+            .unwrap();
+        runtime.shutdown().unwrap();
+
+        let finished = observer.metadata().unwrap().unwrap();
+        assert_eq!(finished.run.run_id, started.run.run_id);
+        assert!(finished.clean_shutdown);
+        assert_eq!(
+            observer.load_project_snapshot().unwrap(),
+            project_snapshot("changed")
+        );
+    }
+
+    /// 每次启动必须保留上一运行退出事实，且不得改变既有工作区世代。
+    #[test]
+    fn workspace_writer_runtime_preserves_previous_run_and_store_epoch() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+        let observer = WorkspaceDatabase::open(&paths).unwrap();
+        let (events, _event_rx) = mpsc::channel();
+        let first = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
+        let first_metadata = observer.metadata().unwrap().unwrap();
+        let epoch = first_metadata.store_epoch.clone();
+        first.shutdown().unwrap();
+
+        let (events, _event_rx) = mpsc::channel();
+        let second = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
+        let previous = second.previous_run();
+        assert!(previous.is_some(), "必须返回上一运行事实");
+        let previous = previous.unwrap();
+        assert_eq!(previous.run.run_id, first_metadata.run.run_id);
+        assert!(previous.clean_shutdown);
+        assert_eq!(observer.metadata().unwrap().unwrap().store_epoch, epoch);
+        second.shutdown().unwrap();
+        let raw = rusqlite::Connection::open(paths.workspace_db_path()).unwrap();
+        raw.execute_batch("UPDATE workspace_meta SET clean_shutdown = 0")
+            .unwrap();
+
+        let (events, _event_rx) = mpsc::channel();
+        let third = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
+        let previous = third.previous_run();
+        assert!(previous.is_some(), "异常上一运行事实同样必须保留");
+        assert!(!previous.unwrap().clean_shutdown);
+        assert_eq!(observer.metadata().unwrap().unwrap().store_epoch, epoch);
+        third.shutdown().unwrap();
+    }
+
+    /// 启动失败后，下一次启动仍必须能取得上一运行退出事实。
+    #[test]
+    fn workspace_writer_failed_start_preserves_previous_run() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+        let (events, _event_rx) = mpsc::channel();
+        let first = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
+        let first_metadata = observer_metadata(&paths);
+        first.shutdown().unwrap();
+        let raw = rusqlite::Connection::open(paths.workspace_db_path()).unwrap();
+        raw.execute_batch("PRAGMA user_version = 2").unwrap();
+
+        let (events, event_rx) = mpsc::channel();
+        let failed = WorkspaceWriterRuntime::start_at(&paths, events);
+        let error = failed.as_ref().err();
+        assert!(
+            matches!(error, Some(WorkspaceWriterError::Metadata(_)),),
+            "实际错误: {error:?}"
+        );
+        while event_rx.try_recv().is_ok() {}
+        assert!(event_rx.recv().is_err(), "启动失败必须回收转发线程");
+        raw.execute_batch("PRAGMA user_version = 1").unwrap();
+
+        let (events, _event_rx) = mpsc::channel();
+        let next = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
+        let previous = next.previous_run();
+        assert!(previous.is_some());
+        assert_eq!(previous.unwrap().run.run_id, first_metadata.run.run_id);
+        assert!(previous.unwrap().clean_shutdown);
+        next.shutdown().unwrap();
+    }
+
+    /// 转发器 panic 不得把关闭登记为正常退出。
+    #[test]
+    fn workspace_writer_runtime_forwarder_panic_keeps_run_unclean() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+        let (events, _event_rx) = mpsc::channel();
+        let mut runtime = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
+        let started = observer_metadata(&paths);
+        runtime.failure_forwarder = std::thread::spawn(|| panic!("injected forwarder panic"));
+
+        let result = runtime.shutdown();
+
+        assert!(matches!(result, Err(WorkspaceWriterError::Stopped)));
+        let finished = observer_metadata(&paths);
+        assert_eq!(finished.run.run_id, started.run.run_id);
+        assert!(!finished.clean_shutdown);
+    }
+
+    /// 正常退出标记失败必须保留 unclean 并返回元数据错误。
+    #[test]
+    fn workspace_writer_runtime_mark_failure_is_reported() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+        let (events, event_rx) = mpsc::channel();
+        let runtime = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
+        let started = observer_metadata(&paths);
+        let fault = rusqlite::Connection::open(paths.workspace_db_path()).unwrap();
+        fault
+            .execute_batch(
+                "CREATE TRIGGER reject_clean_shutdown BEFORE UPDATE ON workspace_meta \
+                 BEGIN SELECT RAISE(ABORT, 'injected metadata failure'); END;",
+            )
+            .unwrap();
+
+        let result = runtime.shutdown();
+
+        assert!(
+            matches!(
+                result,
+                Err(WorkspaceWriterError::Open(
+                    DatabaseError::IncompatibleSchema
+                ))
+            ),
+            "实际错误: {result:?}"
+        );
+        let (run_id, clean_shutdown) = fault
+            .query_row(
+                "SELECT run_id, clean_shutdown FROM workspace_meta WHERE singleton = 1",
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .unwrap();
+        assert_eq!(run_id, started.run.run_id);
+        assert_eq!(clean_shutdown, 0);
+        while event_rx.try_recv().is_ok() {}
+        assert!(event_rx.recv().is_err(), "失败转发线程必须完成 join");
+    }
+
+    /// 数据库可打开但不可写时，真正的正常退出更新必须失败且保持 unclean。
+    #[test]
+    fn workspace_writer_runtime_readonly_mark_is_reported() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+        let (events, event_rx) = mpsc::channel();
+        let runtime = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
+        let started = observer_metadata(&paths);
+        let database = paths.workspace_db_path();
+        let mut permissions = std::fs::metadata(&database).unwrap().permissions();
+        permissions.set_readonly(true);
+        std::fs::set_permissions(&database, permissions.clone()).unwrap();
+
+        let result = runtime.shutdown();
+
+        #[allow(clippy::permissions_set_readonly_false)]
+        // 仅恢复本用例临时数据库的写权限，避免影响后续清理。
+        permissions.set_readonly(false);
+        std::fs::set_permissions(&database, permissions).unwrap();
+        assert!(matches!(result, Err(WorkspaceWriterError::Metadata(_))));
+        let raw = rusqlite::Connection::open(&database).unwrap();
+        let (run_id, clean_shutdown) = raw
+            .query_row(
+                "SELECT run_id, clean_shutdown FROM workspace_meta WHERE singleton = 1",
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .unwrap();
+        assert_eq!(run_id, started.run.run_id);
+        assert_eq!(clean_shutdown, 0);
+        while event_rx.try_recv().is_ok() {}
+        assert!(event_rx.recv().is_err(), "失败转发线程必须完成 join");
+    }
+
+    fn observer_metadata(paths: &AppPaths) -> crate::persistence::metadata::WorkspaceMetadata {
+        WorkspaceDatabase::open(paths)
+            .unwrap()
+            .metadata()
+            .unwrap()
+            .unwrap()
+    }
+
+    /// 最终冲刷失败不得把本次运行登记为正常退出。
+    #[test]
+    fn workspace_writer_runtime_failed_flush_keeps_run_unclean() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+        let mut observer = WorkspaceDatabase::open(&paths).unwrap();
+        observer
+            .save_project_snapshot(&project_snapshot("original"))
+            .unwrap();
+        let (events, event_rx) = mpsc::channel();
+        let runtime = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
+        let client = runtime.client();
+        let started = observer.metadata().unwrap();
+        assert!(started.is_some(), "启动必须登记运行标记");
+        let fault = rusqlite::Connection::open(paths.workspace_db_path()).unwrap();
+        fault
+            .execute_batch(
+                "CREATE TRIGGER reject_project_write BEFORE UPDATE ON projects \
+                 BEGIN SELECT RAISE(ABORT, 'injected write failure'); END;",
+            )
+            .unwrap();
+        client
+            .save_project_snapshot(&project_snapshot("changed"))
+            .unwrap();
+
+        let result = runtime.shutdown();
+        assert!(matches!(result, Err(WorkspaceWriterError::FlushFailed)));
+
+        let finished = observer.metadata().unwrap().unwrap();
+        assert_eq!(finished.run.run_id, started.unwrap().run.run_id);
+        assert!(!finished.clean_shutdown);
+        while event_rx.try_recv().is_ok() {}
+        assert!(event_rx.recv().is_err(), "失败转发线程必须完成 join");
     }
 
     /// 退出时故障未解除必须报告最终冲刷失败，不能丢弃失败计数。
