@@ -7,7 +7,10 @@ use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::mpsc::{Receiver, TryRecvError};
 
-use gpui::{App, AppContext as _, Entity, EntityId, TestAppContext, VisualTestContext, Window};
+use gpui::{
+    App, AppContext as _, Entity, EntityId, Modifiers, MouseButton, TestAppContext,
+    VisualTestContext, Window,
+};
 use gpui_component::Root;
 use slterm_path::CanonicalPath;
 use slterm_split::SplitDirection;
@@ -121,6 +124,7 @@ fn open_root(
         gpui_component::init(cx);
         cx.set_global(crate::app_shell::config::Settings::default());
         crate::app_shell::theme::apply_dark_theme(cx);
+        super::keymap::register(cx);
     });
     let state = Rc::new(RefCell::new(LauncherState::default()));
     let launcher = FakeLauncher {
@@ -128,7 +132,13 @@ fn open_root(
     };
     let mut slot = None;
     let (_window_root, window) = cx.add_window_view(|window, cx| {
-        let root = cx.new(|_| AppRoot::with_launcher(PanelIdAllocator::new(1), Box::new(launcher)));
+        let root = cx.new(|_| {
+            AppRoot::with_launcher(
+                PanelIdAllocator::new(1),
+                path("C:/Program Files/PowerShell/7/pwsh.exe"),
+                Box::new(launcher),
+            )
+        });
         slot = Some(root.clone());
         Root::new(root, window, cx)
     });
@@ -720,6 +730,124 @@ fn open_project_duplicate_root_returns_existing_identity(cx: &mut TestAppContext
         assert_eq!(root.snapshot().registry().projects().len(), 1);
         assert_eq!(root.snapshot().registry().active(), Some(first));
     });
+}
+
+#[gpui::test]
+fn new_terminal_shortcut_uses_app_root_command(cx: &mut TestAppContext) {
+    let (root, mut window, state) = open_root(cx);
+    open_generated_project(&root, &mut window, "D:/work/generated");
+    new_generated_terminal(&root, &mut window);
+    draw_frame(&mut window);
+
+    window.simulate_keystrokes("ctrl-shift-t");
+    window.run_until_parked();
+
+    root.read_with(cx, |root, _| {
+        assert_eq!(root.snapshot().terminals().count(), 2)
+    });
+    assert_eq!(state.borrow().attempts, 2);
+}
+
+#[gpui::test]
+fn split_right_shortcut_uses_app_root_command(cx: &mut TestAppContext) {
+    let (root, mut window, state) = open_root(cx);
+    open_generated_project(&root, &mut window, "D:/work/generated");
+    new_generated_terminal(&root, &mut window);
+    draw_frame(&mut window);
+
+    window.simulate_keystrokes("ctrl-shift-d");
+    window.run_until_parked();
+
+    root.read_with(cx, |root, _| {
+        assert_eq!(root.snapshot().terminals().count(), 2);
+        let project = root
+            .snapshot
+            .registry()
+            .project(root.snapshot.registry().active().unwrap())
+            .unwrap();
+        assert!(matches!(
+            project.layout().tree(),
+            Some(slterm_split::SplitTree::Split {
+                direction: SplitDirection::LeftRight,
+                ..
+            })
+        ));
+    });
+    assert_eq!(state.borrow().attempts, 2);
+}
+
+#[gpui::test]
+fn split_down_shortcut_uses_app_root_command(cx: &mut TestAppContext) {
+    let (root, mut window, state) = open_root(cx);
+    open_generated_project(&root, &mut window, "D:/work/generated");
+    new_generated_terminal(&root, &mut window);
+    draw_frame(&mut window);
+
+    window.simulate_keystrokes("ctrl-shift-s");
+    window.run_until_parked();
+
+    root.read_with(cx, |root, _| {
+        assert_eq!(root.snapshot().terminals().count(), 2);
+        let project = root
+            .snapshot
+            .registry()
+            .project(root.snapshot.registry().active().unwrap())
+            .unwrap();
+        assert!(matches!(
+            project.layout().tree(),
+            Some(slterm_split::SplitTree::Split {
+                direction: SplitDirection::TopBottom,
+                ..
+            })
+        ));
+    });
+    assert_eq!(state.borrow().attempts, 2);
+}
+
+#[gpui::test]
+fn close_terminal_shortcut_uses_app_root_command(cx: &mut TestAppContext) {
+    let (root, mut window, state) = open_root(cx);
+    let project = open_generated_project(&root, &mut window, "D:/work/generated");
+    new_generated_terminal(&root, &mut window);
+    split_generated_terminal(&root, &mut window);
+    draw_frame(&mut window);
+
+    window.simulate_keystrokes("ctrl-shift-w");
+    window.run_until_parked();
+
+    root.read_with(cx, |root, _| {
+        assert_eq!(root.snapshot().terminals().count(), 1);
+        assert_eq!(root.snapshot().registry().active(), Some(project));
+    });
+    assert_eq!(state.borrow().attempts, 2);
+}
+
+#[gpui::test]
+fn clicking_split_group_activates_existing_terminal(cx: &mut TestAppContext) {
+    let (root, mut window, state) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, "D:/work/a");
+    let first_panel = new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_A);
+    let (_, first_entity, _) = panel_entity(&root, cx, PROJECT_A, TERMINAL_A);
+    split_terminal(&root, &mut window);
+    draw_frame(&mut window);
+    let bounds = window
+        .debug_bounds(group_selector(GROUP_A))
+        .expect("待激活面板组必须绘制");
+
+    window.simulate_mouse_down(bounds.center(), MouseButton::Left, Modifiers::default());
+    window.simulate_mouse_up(bounds.center(), MouseButton::Left, Modifiers::default());
+    window.run_until_parked();
+
+    assert_eq!(
+        root.read_with(cx, |root, cx| root.focused_panel(project_id(PROJECT_A), cx)),
+        Some(first_panel)
+    );
+    assert_eq!(
+        panel_entity(&root, cx, PROJECT_A, TERMINAL_A).1,
+        first_entity,
+        "鼠标激活不得重建终端实体"
+    );
+    assert_eq!(state.borrow().attempts, 2);
 }
 
 #[gpui::test]

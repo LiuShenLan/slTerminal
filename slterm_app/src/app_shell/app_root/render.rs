@@ -2,15 +2,15 @@
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AnyElement, Context, InteractiveElement as _, IntoElement, ParentElement as _, Render,
-    Styled as _, Window, div, px, relative,
+    AnyElement, Context, InteractiveElement as _, IntoElement, MouseButton, ParentElement as _,
+    Render, Styled as _, Window, div, px, relative,
 };
 use gpui_component::ActiveTheme as _;
 use slterm_split::{DIVIDER_GAP, SplitDirection, SplitTree};
-use slterm_workspace::{PanelGroupId, ProjectLayout, ViewKey};
+use slterm_workspace::{LogicalSize, PanelGroupId, ProjectLayout, ViewKey};
 
-use super::AppRoot;
 use super::project_view::ProjectView;
+use super::{AppRoot, CloseActiveTerminal, NewTerminal, SplitDown, SplitRight};
 
 impl AppRoot {
     /// 只铺陈活跃项目；隐藏项目的实体仍由 ProjectView 强持。
@@ -47,7 +47,7 @@ impl AppRoot {
         cx: &Context<'_, Self>,
     ) -> AnyElement {
         match node {
-            SplitTree::Leaf(group_id) => render_group(*group_id, layout, project),
+            SplitTree::Leaf(group_id) => render_group(*group_id, layout, project, cx),
             SplitTree::Split {
                 direction,
                 ratio,
@@ -103,6 +103,7 @@ fn render_group(
     group_id: PanelGroupId,
     layout: &ProjectLayout,
     project: &ProjectView,
+    cx: &Context<'_, AppRoot>,
 ) -> AnyElement {
     let active = layout.group(group_id).map(|group| group.active());
     let terminal = active.and_then(|active| {
@@ -112,18 +113,29 @@ fn render_group(
             .find(|panel| &panel.view_key == active)
             .map(|panel| panel.terminal.clone())
     });
-    let terminal_selector = terminal.as_ref().and_then(|_| match active {
-        Some(ViewKey::Terminal { terminal_id, .. }) => {
-            Some(format!("app-root-terminal-{terminal_id}"))
-        }
+    let terminal_id = active.and_then(|active| match active {
+        ViewKey::Terminal { terminal_id, .. } => Some(*terminal_id),
         _ => None,
     });
+    let terminal_selector = terminal
+        .as_ref()
+        .and_then(|_| terminal_id.map(|id| format!("app-root-terminal-{id}")));
     div()
         .size_full()
         .min_w_0()
         .min_h_0()
         .relative()
         .debug_selector(move || format!("app-root-group-{group_id}"))
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, _, window, cx| {
+                if let Some(terminal_id) = terminal_id
+                    && let Err(error) = this.activate_terminal(terminal_id, window, cx)
+                {
+                    log::warn!("鼠标激活终端失败: {error}");
+                }
+            }),
+        )
         .children(terminal.map(|terminal| {
             div()
                 .size_full()
@@ -152,6 +164,37 @@ impl Render for AppRoot {
             .size_full()
             .min_w_0()
             .min_h_0()
+            .on_action(cx.listener(|this, _: &NewTerminal, window, cx| {
+                let shell = this.shell.clone();
+                if let Err(error) = this.new_terminal(shell, window, cx) {
+                    log::warn!("新建终端命令失败: {error}");
+                }
+            }))
+            .on_action(cx.listener(|this, _: &SplitRight, window, cx| {
+                let shell = this.shell.clone();
+                let viewport = window.viewport_size();
+                let viewport = LogicalSize::new(viewport.width.into(), viewport.height.into());
+                if let Err(error) =
+                    this.split_terminal(SplitDirection::LeftRight, 0.5, viewport, shell, window, cx)
+                {
+                    log::warn!("横向拆分终端命令失败: {error}");
+                }
+            }))
+            .on_action(cx.listener(|this, _: &SplitDown, window, cx| {
+                let shell = this.shell.clone();
+                let viewport = window.viewport_size();
+                let viewport = LogicalSize::new(viewport.width.into(), viewport.height.into());
+                if let Err(error) =
+                    this.split_terminal(SplitDirection::TopBottom, 0.5, viewport, shell, window, cx)
+                {
+                    log::warn!("纵向拆分终端命令失败: {error}");
+                }
+            }))
+            .on_action(cx.listener(|this, _: &CloseActiveTerminal, window, cx| {
+                if let Err(error) = this.close_focused_terminal(window, cx) {
+                    log::warn!("关闭聚焦终端命令失败: {error}");
+                }
+            }))
             .bg(cx.theme().background)
             .child(self.render_active_project(cx))
     }
