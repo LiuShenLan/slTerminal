@@ -7,10 +7,7 @@ use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::mpsc::{Receiver, TryRecvError};
 
-use gpui::{
-    App, AppContext as _, Context, Entity, EntityId, IntoElement, Render, TestAppContext,
-    VisualTestContext, Window, div,
-};
+use gpui::{App, AppContext as _, Entity, EntityId, TestAppContext, VisualTestContext, Window};
 use gpui_component::Root;
 use slterm_path::CanonicalPath;
 use slterm_split::SplitDirection;
@@ -113,16 +110,6 @@ impl TerminalPanelLauncher for FakeLauncher {
     }
 }
 
-struct Harness {
-    _root: Entity<AppRoot>,
-}
-
-impl Render for Harness {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<'_, Self>) -> impl IntoElement {
-        div()
-    }
-}
-
 fn open_root(
     cx: &mut TestAppContext,
 ) -> (
@@ -143,10 +130,25 @@ fn open_root(
     let (_window_root, window) = cx.add_window_view(|window, cx| {
         let root = cx.new(|_| AppRoot::with_launcher(PanelIdAllocator::new(1), Box::new(launcher)));
         slot = Some(root.clone());
-        let harness = cx.new(|_| Harness { _root: root });
-        Root::new(harness, window, cx)
+        Root::new(root, window, cx)
     });
     (slot.unwrap(), window.clone(), state)
+}
+
+fn draw_frame(window: &mut VisualTestContext) {
+    window.run_until_parked();
+    window.refresh().unwrap();
+    window.update(|window, cx| {
+        window.draw(cx).clear(cx);
+    });
+}
+
+fn group_selector(id: &str) -> &'static str {
+    Box::leak(format!("app-root-group-{id}").into_boxed_str())
+}
+
+fn terminal_selector(id: &str) -> &'static str {
+    Box::leak(format!("app-root-terminal-{id}").into_boxed_str())
 }
 
 fn add_project(
@@ -190,13 +192,21 @@ fn new_terminal(
 }
 
 fn split_terminal(root: &Entity<AppRoot>, window: &mut VisualTestContext) -> PanelId {
+    split_terminal_in_direction(root, window, SplitDirection::LeftRight)
+}
+
+fn split_terminal_in_direction(
+    root: &Entity<AppRoot>,
+    window: &mut VisualTestContext,
+    direction: SplitDirection,
+) -> PanelId {
     let result = window.update(|window, cx| {
         root.update(cx, |root, cx| {
             root.split_terminal(
                 SplitTerminalSpec {
                     new_terminal: terminal_spec(PROJECT_A, GROUP_A, TERMINAL_B),
                     new_group_id: group_id(GROUP_B),
-                    direction: SplitDirection::LeftRight,
+                    direction,
                     ratio: 0.5,
                     viewport: LogicalSize::new(1200.0, 800.0),
                 },
@@ -513,4 +523,132 @@ fn duplicate_project_root_reactivates_existing_project(cx: &mut TestAppContext) 
     });
     assert_eq!(panel_entity(&root, cx, PROJECT_A, TERMINAL_A).1, entity);
     assert_eq!(state.borrow().attempts, 1);
+}
+
+#[gpui::test]
+fn empty_project_renders_empty_state_without_terminal(cx: &mut TestAppContext) {
+    let (_root, mut window, state) = open_root(cx);
+    draw_frame(&mut window);
+    assert!(window.debug_bounds("app-root-empty").is_some());
+
+    add_project(&_root, &mut window, PROJECT_A, "D:/work/a");
+    draw_frame(&mut window);
+
+    assert!(window.debug_bounds("app-root-empty").is_some());
+    assert!(window.debug_bounds("slterm-terminal").is_none());
+    assert_eq!(state.borrow().attempts, 0);
+}
+
+#[gpui::test]
+fn active_group_renders_only_its_active_terminal(cx: &mut TestAppContext) {
+    let (root, mut window, state) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, "D:/work/a");
+    new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_A);
+    let (_, first_entity, _) = panel_entity(&root, cx, PROJECT_A, TERMINAL_A);
+    new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_B);
+    draw_frame(&mut window);
+
+    assert!(window.debug_bounds(terminal_selector(TERMINAL_A)).is_none());
+    assert!(window.debug_bounds(terminal_selector(TERMINAL_B)).is_some());
+
+    let activated = window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.activate_terminal(terminal_id(TERMINAL_A), window, cx)
+        })
+    });
+    assert!(activated.is_ok(), "激活组内终端失败: {activated:?}");
+    draw_frame(&mut window);
+
+    assert!(window.debug_bounds(terminal_selector(TERMINAL_A)).is_some());
+    assert!(window.debug_bounds(terminal_selector(TERMINAL_B)).is_none());
+    assert_eq!(
+        panel_entity(&root, cx, PROJECT_A, TERMINAL_A).1,
+        first_entity,
+        "切换组内激活项不得重建终端实体"
+    );
+    assert_eq!(state.borrow().attempts, 2);
+}
+
+#[gpui::test]
+fn split_groups_render_with_project_layout_geometry(cx: &mut TestAppContext) {
+    let (root, mut window, _state) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, "D:/work/a");
+    new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_A);
+    split_terminal(&root, &mut window);
+    draw_frame(&mut window);
+
+    let content = window
+        .debug_bounds("app-root-content")
+        .expect("项目内容必须绘制");
+    let first = window
+        .debug_bounds(group_selector(GROUP_A))
+        .expect("第一面板组必须绘制");
+    let second = window
+        .debug_bounds(group_selector(GROUP_B))
+        .expect("第二面板组必须绘制");
+    assert!(first.size.width > gpui::px(0.0));
+    assert!(second.size.width > gpui::px(0.0));
+    assert_eq!(first.origin, content.origin);
+    assert_eq!(first.origin.y, second.origin.y);
+    assert!(first.origin.x < second.origin.x);
+    let expected_width = (f32::from(content.size.width) - slterm_split::DIVIDER_GAP) / 2.0;
+    assert!((f32::from(first.size.width) - expected_width).abs() <= 1.0);
+    assert!((f32::from(second.size.width) - expected_width).abs() <= 1.0);
+    assert_eq!(first.size.height, content.size.height);
+    assert_eq!(second.size.height, content.size.height);
+}
+
+#[gpui::test]
+fn vertical_split_groups_render_with_project_layout_geometry(cx: &mut TestAppContext) {
+    let (root, mut window, _state) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, "D:/work/a");
+    new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_A);
+    split_terminal_in_direction(&root, &mut window, SplitDirection::TopBottom);
+    draw_frame(&mut window);
+
+    let content = window
+        .debug_bounds("app-root-content")
+        .expect("项目内容必须绘制");
+    let first = window
+        .debug_bounds(group_selector(GROUP_A))
+        .expect("第一面板组必须绘制");
+    let second = window
+        .debug_bounds(group_selector(GROUP_B))
+        .expect("第二面板组必须绘制");
+    assert!(first.size.height > gpui::px(0.0));
+    assert!(second.size.height > gpui::px(0.0));
+    assert_eq!(first.origin, content.origin);
+    assert_eq!(first.origin.x, second.origin.x);
+    assert!(first.origin.y < second.origin.y);
+    let expected_height = (f32::from(content.size.height) - slterm_split::DIVIDER_GAP) / 2.0;
+    assert!((f32::from(first.size.height) - expected_height).abs() <= 1.0);
+    assert!((f32::from(second.size.height) - expected_height).abs() <= 1.0);
+    assert_eq!(first.size.width, content.size.width);
+    assert_eq!(second.size.width, content.size.width);
+}
+
+#[gpui::test]
+fn project_switch_changes_only_the_rendered_project(cx: &mut TestAppContext) {
+    let (root, mut window, state) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, "D:/work/a");
+    new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_A);
+    let (_, first_entity, weak) = panel_entity(&root, cx, PROJECT_A, TERMINAL_A);
+    add_project(&root, &mut window, PROJECT_B, "D:/work/b");
+    new_terminal(&root, &mut window, PROJECT_B, GROUP_B, TERMINAL_B);
+    draw_frame(&mut window);
+
+    assert!(window.debug_bounds(group_selector(GROUP_A)).is_none());
+    assert!(window.debug_bounds(group_selector(GROUP_B)).is_some());
+    assert!(weak.upgrade().is_some());
+
+    activate_project(&root, &mut window, PROJECT_A);
+    draw_frame(&mut window);
+
+    assert!(window.debug_bounds(group_selector(GROUP_A)).is_some());
+    assert!(window.debug_bounds(group_selector(GROUP_B)).is_none());
+    assert_eq!(
+        panel_entity(&root, cx, PROJECT_A, TERMINAL_A).1,
+        first_entity
+    );
+    assert_eq!(state.borrow().attempts, 2);
 }

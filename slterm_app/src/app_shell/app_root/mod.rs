@@ -3,6 +3,7 @@
 mod commands;
 mod panel_host;
 mod project_view;
+mod render;
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod tests;
 
