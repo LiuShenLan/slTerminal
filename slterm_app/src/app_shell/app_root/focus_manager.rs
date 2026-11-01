@@ -379,6 +379,10 @@ impl FocusManager {
         self.active_project = project;
     }
 
+    pub const fn modal_is_active(&self) -> bool {
+        self.modal.is_some()
+    }
+
     /// 激活或懒启动前的无副作用预检；模态期间禁止项目切换。
     pub fn ensure_activation_allowed(&self) -> Result<(), FocusError> {
         if self.modal.is_some() {

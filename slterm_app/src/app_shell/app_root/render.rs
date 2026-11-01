@@ -9,6 +9,7 @@ use gpui_component::ActiveTheme as _;
 use slterm_split::{DIVIDER_GAP, SplitDirection, SplitTree};
 use slterm_workspace::{LogicalSize, PanelGroupId, ProjectLayout, ViewKey};
 
+use super::command_registry::{CommandId, CommandOutcome, CommandParameters, CommandSource};
 use super::project_view::ProjectView;
 use super::{
     ActivateAgentFiles, ActivateCommit, ActivateExplorer, ActivateNav, AppRoot,
@@ -17,7 +18,7 @@ use super::{
 
 impl AppRoot {
     /// 分屏空间校验只使用项目内容区，不把活动栏和侧栏宽度算给面板。
-    fn project_viewport(&self, window: &Window) -> LogicalSize {
+    pub(super) fn project_viewport(&self, window: &Window) -> LogicalSize {
         let viewport = window.viewport_size();
         let width = f32::from(viewport.width)
             - super::sidebar::ACTIVITY_BAR_WIDTH
@@ -181,25 +182,47 @@ impl Render for AppRoot {
             .track_focus(&self.workspace_focus)
             .on_action(cx.listener(|this, _: &NewTerminal, window, cx| {
                 let shell = this.shell.clone();
-                if let Err(error) = this.new_terminal(shell, window, cx) {
+                if let Err(error) = this.execute_terminal_command(
+                    CommandId::NewTerminal,
+                    CommandSource::Keyboard,
+                    Some(CommandParameters::NewTerminal { shell }),
+                    window,
+                    cx,
+                ) {
                     log::warn!("新建终端命令失败: {error}");
                 }
             }))
             .on_action(cx.listener(|this, _: &SplitRight, window, cx| {
-                let shell = this.shell.clone();
                 let viewport = this.project_viewport(window);
-                if let Err(error) =
-                    this.split_terminal(SplitDirection::LeftRight, 0.5, viewport, shell, window, cx)
-                {
+                let shell = this.shell.clone();
+                if let Err(error) = this.execute_terminal_command(
+                    CommandId::SplitRight,
+                    CommandSource::Keyboard,
+                    Some(CommandParameters::Split {
+                        ratio: 0.5,
+                        viewport,
+                        shell,
+                    }),
+                    window,
+                    cx,
+                ) {
                     log::warn!("横向拆分终端命令失败: {error}");
                 }
             }))
             .on_action(cx.listener(|this, _: &SplitDown, window, cx| {
-                let shell = this.shell.clone();
                 let viewport = this.project_viewport(window);
-                if let Err(error) =
-                    this.split_terminal(SplitDirection::TopBottom, 0.5, viewport, shell, window, cx)
-                {
+                let shell = this.shell.clone();
+                if let Err(error) = this.execute_terminal_command(
+                    CommandId::SplitDown,
+                    CommandSource::Keyboard,
+                    Some(CommandParameters::Split {
+                        ratio: 0.5,
+                        viewport,
+                        shell,
+                    }),
+                    window,
+                    cx,
+                ) {
                     log::warn!("纵向拆分终端命令失败: {error}");
                 }
             }))
@@ -222,8 +245,16 @@ impl Render for AppRoot {
                 this.focus_activity_bar(window, cx);
             }))
             .on_action(cx.listener(|this, _: &CloseActiveTerminal, window, cx| {
-                if let Err(error) = this.close_focused_terminal(window, cx) {
-                    log::warn!("关闭聚焦终端命令失败: {error}");
+                match this.execute_terminal_command(
+                    CommandId::CloseActiveTerminal,
+                    CommandSource::Keyboard,
+                    None,
+                    window,
+                    cx,
+                ) {
+                    Ok(CommandOutcome::TerminalClosed(record)) => drop(record),
+                    Ok(_) => unreachable!("关闭终端命令结果类型不匹配"),
+                    Err(error) => log::warn!("关闭聚焦终端命令失败: {error}"),
                 }
             }))
             .bg(cx.theme().background)

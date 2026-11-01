@@ -2,23 +2,20 @@
 
 use gpui::{App, KeyBinding};
 
+use super::command_registry::CommandRegistry;
 use super::{
     ActivateAgentFiles, ActivateCommit, ActivateExplorer, ActivateNav, ActivateSideButton,
     AdjustSidebarRatioDown, AdjustSidebarRatioDownLarge, AdjustSidebarRatioUp,
     AdjustSidebarRatioUpLarge, AdjustSidebarWidthLeft, AdjustSidebarWidthLeftLarge,
-    AdjustSidebarWidthRight, AdjustSidebarWidthRightLarge, CloseActiveTerminal, FocusActivityBar,
-    FocusFirstSideButton, FocusLastSideButton, FocusNextSideButton, FocusPreviousSideButton,
-    NewTerminal, OpenSideButtonMenu, ResetSidebarRatio, ResetSidebarWidth, SplitDown, SplitRight,
-    ToggleSidebar,
+    AdjustSidebarWidthRight, AdjustSidebarWidthRightLarge, FocusActivityBar, FocusFirstSideButton,
+    FocusLastSideButton, FocusNextSideButton, FocusPreviousSideButton, OpenSideButtonMenu,
+    ResetSidebarRatio, ResetSidebarWidth, ToggleSidebar,
 };
 
-/// 注册运行根默认键位；用户绑定后续统一接入 CommandRegistry。
+/// 注册运行根默认键位；终端命令与其执行目录共用定义。
 pub(crate) fn register(cx: &mut App) {
+    CommandRegistry::register_terminal_bindings(cx);
     cx.bind_keys([
-        KeyBinding::new("ctrl-shift-t", NewTerminal, None),
-        KeyBinding::new("ctrl-shift-d", SplitRight, None),
-        KeyBinding::new("ctrl-shift-s", SplitDown, None),
-        KeyBinding::new("ctrl-shift-w", CloseActiveTerminal, None),
         KeyBinding::new("ctrl-shift-b", ToggleSidebar, None),
         KeyBinding::new("ctrl-shift-n", ActivateNav, None),
         KeyBinding::new("ctrl-shift-e", ActivateExplorer, None),

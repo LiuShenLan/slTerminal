@@ -17,6 +17,7 @@ use uuid::Uuid;
 use crate::gpui_terminal::PaneId;
 use crate::gpui_terminal::view::{TerminalLaunch, TerminalView, TerminalViewEvent};
 
+use super::command_registry::{CommandId, CommandOutcome, CommandParameters, CommandSource};
 use super::focus_manager::{FocusError, FocusToken};
 use super::panel_host::PanelHost;
 use super::{AppRoot, ProjectView};
@@ -144,6 +145,7 @@ pub(crate) enum AppRootError {
     Focus(FocusError),
     ProjectNotActive,
     MissingPanel,
+    UnexpectedParameters,
 }
 
 impl fmt::Display for AppRootError {
@@ -157,6 +159,7 @@ impl fmt::Display for AppRootError {
             Self::Focus(error) => write!(formatter, "焦点目标不可用: {error:?}"),
             Self::ProjectNotActive => formatter.write_str("只能在活跃项目中显式创建终端"),
             Self::MissingPanel => formatter.write_str("终端运行面板不存在"),
+            Self::UnexpectedParameters => formatter.write_str("命令参数与目标命令不匹配"),
         }
     }
 }
@@ -171,7 +174,8 @@ impl std::error::Error for AppRootError {
             | Self::PanelIdExhausted
             | Self::Focus(_)
             | Self::ProjectNotActive
-            | Self::MissingPanel => None,
+            | Self::MissingPanel
+            | Self::UnexpectedParameters => None,
         }
     }
 }
@@ -446,6 +450,25 @@ impl AppRoot {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Result<PanelId, AppRootError> {
+        let outcome = self.execute_terminal_command(
+            CommandId::NewTerminal,
+            CommandSource::Application,
+            Some(CommandParameters::NewTerminal { shell }),
+            window,
+            cx,
+        )?;
+        let CommandOutcome::TerminalPanel(panel_id) = outcome else {
+            unreachable!("新建终端命令必须返回面板身份");
+        };
+        Ok(panel_id)
+    }
+
+    pub(super) fn new_terminal_from_request(
+        &mut self,
+        shell: CanonicalPath,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<PanelId, AppRootError> {
         self.sync_focus(window, cx);
         let project_id = self.active_project()?;
         let target_group = match self.focused_group(project_id, cx)? {
@@ -477,7 +500,7 @@ impl AppRoot {
         self.launch_candidate(candidate, record, window, cx)
     }
 
-    pub(crate) fn split_terminal(
+    pub(super) fn split_terminal_from_request(
         &mut self,
         direction: SplitDirection,
         ratio: f32,
@@ -649,7 +672,7 @@ impl AppRoot {
         Ok(panel_id)
     }
 
-    pub(crate) fn close_focused_terminal(
+    pub(super) fn close_focused_terminal_from_request(
         &mut self,
         window: &mut Window,
         cx: &mut Context<'_, Self>,

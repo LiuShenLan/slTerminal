@@ -1,5 +1,6 @@
 //! 项目工作区运行根：唯一持有项目快照与全部项目面板实例。
 
+pub(crate) mod command_registry;
 mod commands;
 mod events;
 mod focus_manager;

@@ -3,7 +3,7 @@
 mod sidebar;
 
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::rc::Rc;
 use std::str::FromStr;
@@ -16,7 +16,7 @@ use gpui::{
 };
 use gpui_component::Root;
 use slterm_path::{AppPaths, CanonicalPath};
-use slterm_split::SplitDirection;
+use slterm_split::{SplitDirection, SplitTree};
 use slterm_terminal::event::Event as TermEvent;
 use slterm_terminal::event_loop::Msg;
 use slterm_workspace::{
@@ -32,6 +32,9 @@ use crate::gpui_terminal::view::{TerminalLaunch, TerminalView, TerminalViewEvent
 use crate::persistence::workspace::WorkspaceDatabase;
 use crate::persistence::workspace_writer::WorkspaceWriter;
 
+use super::command_registry::{
+    CommandId, CommandOutcome, CommandParameters, CommandRegistry, CommandSource,
+};
 use super::commands::{AppRootError, LocalTerminalLauncher};
 use super::focus_manager::FocusError;
 use super::side_view::AppRootPersistence;
@@ -333,18 +336,24 @@ fn new_generated_terminal(root: &Entity<AppRoot>, window: &mut VisualTestContext
 fn split_generated_terminal(root: &Entity<AppRoot>, window: &mut VisualTestContext) -> PanelId {
     let result = window.update(|window, cx| {
         root.update(cx, |root, cx| {
-            root.split_terminal(
-                SplitDirection::TopBottom,
-                0.5,
-                LogicalSize::new(1200.0, 800.0),
-                path("C:/Program Files/PowerShell/7/pwsh.exe"),
+            root.execute_terminal_command(
+                CommandId::SplitDown,
+                CommandSource::Application,
+                Some(CommandParameters::Split {
+                    ratio: 0.5,
+                    viewport: LogicalSize::new(1200.0, 800.0),
+                    shell: path("C:/Program Files/PowerShell/7/pwsh.exe"),
+                }),
                 window,
                 cx,
             )
         })
     });
     assert!(result.is_ok(), "生产拆分终端失败: {result:?}");
-    result.unwrap()
+    let CommandOutcome::TerminalPanel(panel_id) = result.unwrap() else {
+        unreachable!("拆分命令必须返回面板身份");
+    };
+    panel_id
 }
 
 fn split_terminal(root: &Entity<AppRoot>, window: &mut VisualTestContext) -> PanelId {
@@ -680,6 +689,175 @@ fn terminal_restore_failure_retains_panel_without_duplicate(cx: &mut TestAppCont
     writer.flush().unwrap();
     let mut store = WorkspaceDatabase::open(&paths).unwrap();
     assert_eq!(store.load_project_snapshot().unwrap(), expected);
+}
+
+#[test]
+fn terminal_command_definitions_preserve_reserved_interrupt() {
+    let definitions = CommandRegistry::terminal_definitions();
+    let bindings = definitions
+        .iter()
+        .map(|definition| (definition.id, definition.keystroke, definition.context))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        bindings,
+        [
+            (CommandId::NewTerminal, "ctrl-shift-t", None),
+            (CommandId::SplitRight, "ctrl-shift-d", None),
+            (CommandId::SplitDown, "ctrl-shift-s", None),
+            (CommandId::CloseActiveTerminal, "ctrl-shift-w", None),
+        ]
+    );
+    let mut unique = BTreeSet::new();
+    assert!(
+        definitions
+            .iter()
+            .all(|definition| { definition.keystroke != "ctrl+c" && unique.insert(definition.id) })
+    );
+}
+
+#[gpui::test]
+fn modal_terminal_command_is_rejected_without_side_effects(cx: &mut TestAppContext) {
+    let (root, mut window, state) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, "D:/work/a");
+    open_side_menu_for_test(&mut window);
+
+    let result = window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.execute_terminal_command(
+                CommandId::NewTerminal,
+                CommandSource::Keyboard,
+                Some(CommandParameters::NewTerminal {
+                    shell: path("C:/Program Files/PowerShell/7/pwsh.exe"),
+                }),
+                window,
+                cx,
+            )
+        })
+    });
+
+    assert!(matches!(
+        result,
+        Err(AppRootError::Focus(FocusError::ModalActive))
+    ));
+    assert_eq!(state.borrow().attempts, 0);
+    root.read_with(cx, |root, cx| {
+        assert_eq!(root.panel_count(project_id(PROJECT_A), cx), 0)
+    });
+}
+
+#[gpui::test]
+fn terminal_command_requests_share_execution_path(cx: &mut TestAppContext) {
+    let (root, mut window, state) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, "D:/work/a");
+
+    let missing_new = window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.execute_terminal_command(
+                CommandId::NewTerminal,
+                CommandSource::Application,
+                None,
+                window,
+                cx,
+            )
+        })
+    });
+    assert!(matches!(
+        missing_new,
+        Err(AppRootError::UnexpectedParameters)
+    ));
+    let missing_split = window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.execute_terminal_command(
+                CommandId::SplitRight,
+                CommandSource::Keyboard,
+                None,
+                window,
+                cx,
+            )
+        })
+    });
+    assert!(matches!(
+        missing_split,
+        Err(AppRootError::UnexpectedParameters)
+    ));
+    assert_eq!(state.borrow().attempts, 0);
+
+    let created = window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.execute_terminal_command(
+                CommandId::NewTerminal,
+                CommandSource::Application,
+                Some(CommandParameters::NewTerminal {
+                    shell: path("C:/Program Files/PowerShell/7/pwsh.exe"),
+                }),
+                window,
+                cx,
+            )
+        })
+    });
+    assert!(matches!(&created, Ok(CommandOutcome::TerminalPanel(_))));
+    let created = created.unwrap();
+    assert!(matches!(created, CommandOutcome::TerminalPanel(_)));
+    let split = window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.execute_terminal_command(
+                CommandId::SplitRight,
+                CommandSource::Keyboard,
+                Some(CommandParameters::Split {
+                    ratio: 0.25,
+                    viewport: LogicalSize::new(1200.0, 800.0),
+                    shell: path("C:/Program Files/PowerShell/7/pwsh.exe"),
+                }),
+                window,
+                cx,
+            )
+            .unwrap()
+        })
+    });
+    let CommandOutcome::TerminalPanel(split_panel) = split else {
+        panic!("拆分命令必须返回面板身份");
+    };
+    let ratio = root.read_with(cx, |root, _| {
+        match root
+            .snapshot
+            .registry()
+            .project(project_id(PROJECT_A))
+            .unwrap()
+            .layout()
+            .tree()
+            .unwrap()
+        {
+            SplitTree::Split { ratio, .. } => *ratio,
+            SplitTree::Leaf(_) => panic!("拆分后必须为分割树"),
+        }
+    });
+    assert!((ratio - 0.25).abs() <= f32::EPSILON);
+    let expected_terminal = root.read_with(cx, |root, cx| {
+        match &root.projects[&project_id(PROJECT_A)].read(cx).panels[&split_panel].view_key {
+            ViewKey::Terminal { terminal_id, .. } => *terminal_id,
+            _ => panic!("拆分面板必须为终端"),
+        }
+    });
+
+    let closed = window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.execute_terminal_command(
+                CommandId::CloseActiveTerminal,
+                CommandSource::Keyboard,
+                None,
+                window,
+                cx,
+            )
+            .unwrap()
+        })
+    });
+    let CommandOutcome::TerminalClosed(record) = closed else {
+        panic!("关闭命令必须返回逻辑终端记录");
+    };
+    assert_eq!(record.id(), expected_terminal);
+    root.read_with(cx, |root, cx| {
+        assert_eq!(root.panel_count(project_id(PROJECT_A), cx), 1)
+    });
 }
 
 #[gpui::test]
@@ -1279,10 +1457,21 @@ fn close_focused_terminal_closes_split_panel_and_updates_focus(cx: &mut TestAppC
     let first = new_generated_terminal(&root, &mut window);
     let split = split_generated_terminal(&root, &mut window);
 
-    let closed = window
-        .update(|window, cx| root.update(cx, |root, cx| root.close_focused_terminal(window, cx)));
+    let closed = window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.execute_terminal_command(
+                CommandId::CloseActiveTerminal,
+                CommandSource::Application,
+                None,
+                window,
+                cx,
+            )
+        })
+    });
     assert!(closed.is_ok(), "关闭聚焦终端失败: {closed:?}");
-    let closed = closed.unwrap();
+    let CommandOutcome::TerminalClosed(closed) = closed.unwrap() else {
+        unreachable!("关闭命令必须返回逻辑记录");
+    };
 
     root.read_with(cx, |root, cx| {
         assert!(root.snapshot().terminal(closed.id()).is_none());
@@ -1321,19 +1510,31 @@ fn production_commands_reject_missing_active_project_or_focused_group(cx: &mut T
     open_generated_project(&root, &mut window, "D:/work/generated");
     let without_group = window.update(|window, cx| {
         root.update(cx, |root, cx| {
-            root.split_terminal(
-                SplitDirection::LeftRight,
-                0.5,
-                LogicalSize::new(1200.0, 800.0),
-                path("C:/Program Files/PowerShell/7/pwsh.exe"),
+            root.execute_terminal_command(
+                CommandId::SplitRight,
+                CommandSource::Application,
+                Some(CommandParameters::Split {
+                    ratio: 0.5,
+                    viewport: LogicalSize::new(1200.0, 800.0),
+                    shell: path("C:/Program Files/PowerShell/7/pwsh.exe"),
+                }),
                 window,
                 cx,
             )
         })
     });
     assert!(matches!(without_group, Err(AppRootError::MissingPanel)));
-    let without_focus = window
-        .update(|window, cx| root.update(cx, |root, cx| root.close_focused_terminal(window, cx)));
+    let without_focus = window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.execute_terminal_command(
+                CommandId::CloseActiveTerminal,
+                CommandSource::Application,
+                None,
+                window,
+                cx,
+            )
+        })
+    });
     assert!(matches!(without_focus, Err(AppRootError::MissingPanel)));
     assert_eq!(state.borrow().attempts, 0);
 }
