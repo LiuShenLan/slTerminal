@@ -219,7 +219,7 @@ impl AppRoot {
             });
             self.projects.insert(id, project);
         }
-        self.snapshot = candidate;
+        self.commit_project_snapshot(candidate);
         self.sync_project_visibility(cx);
         cx.notify();
         Ok(outcome)
@@ -244,7 +244,7 @@ impl AppRoot {
         self.sync_focus_visibility(Some(id), cx);
         self.focus_manager
             .activate_project(id, default, window, cx)?;
-        self.snapshot = candidate;
+        self.commit_project_snapshot(candidate);
         self.sync_project_visibility(cx);
         cx.notify();
         Ok(())
@@ -453,7 +453,7 @@ impl AppRoot {
         });
         self.panel_focus.insert(panel_id, focus_registration);
         self.panel_subscriptions.insert(panel_id, subscription);
-        self.snapshot = candidate;
+        self.commit_project_snapshot(candidate);
         self.sync_project_visibility(cx);
         cx.notify();
         Ok(panel_id)
@@ -528,7 +528,7 @@ impl AppRoot {
         }
         self.focus_manager.unregister(focus_token)?;
 
-        self.snapshot = candidate;
+        self.commit_project_snapshot(candidate);
         self.panel_focus.remove(&panel_id);
         self.panel_subscriptions.remove(&panel_id);
         let panel = project.update(cx, |project, _| {
@@ -573,7 +573,7 @@ impl AppRoot {
             .map(super::focus_manager::FocusRegistration::token)
             .ok_or(AppRootError::MissingPanel)?;
         self.focus_manager.request_focus(focus_token, window, cx)?;
-        self.snapshot = candidate;
+        self.commit_project_snapshot(candidate);
         project.update(cx, |project, _| project.focused_panel = Some(panel_id));
         cx.notify();
         Ok(())
@@ -748,7 +748,7 @@ impl AppRoot {
         }
         match self.snapshot.with_active_terminal(terminal_id) {
             Ok(candidate) => {
-                self.snapshot = candidate;
+                self.commit_project_snapshot(candidate);
                 if let Some(project) = self.projects.get(&project_id) {
                     project.update(cx, |project, _| project.focused_panel = Some(panel_id));
                 }
@@ -787,7 +787,7 @@ impl AppRoot {
                     .with_terminal_run_intent(terminal_id, RunIntent::Exited)
                 {
                     Ok(candidate) => {
-                        self.snapshot = candidate;
+                        self.commit_project_snapshot(candidate);
                         cx.notify();
                     }
                     Err(error) => log::warn!("终端退出状态提交失败: {error}"),

@@ -20,6 +20,8 @@ use gpui_component::menu::PopupMenu;
 use slterm_path::CanonicalPath;
 use slterm_workspace::{PanelId, PanelIdAllocator, ProjectId, ProjectSnapshot, SideViewId};
 
+use crate::persistence::workspace_writer::WorkspaceWriterClient;
+
 use focus_manager::{FocusManager, FocusRegistration, FocusSubscriptions};
 use side_view::SideView;
 pub(super) use side_view::SideViewPersistence;
@@ -96,6 +98,8 @@ struct SideButtonMenu {
 /// 单窗口运行根；`projects` 只是强实体引用表，不复制项目注册信息。
 pub(crate) struct AppRoot {
     snapshot: ProjectSnapshot,
+    project_writer: Option<WorkspaceWriterClient>,
+    pending_final_project_snapshot: Option<ProjectSnapshot>,
     projects: BTreeMap<ProjectId, Entity<ProjectView>>,
     panel_ids: PanelIdAllocator,
     panel_subscriptions: BTreeMap<PanelId, Subscription>,
@@ -139,6 +143,7 @@ impl AppRoot {
     ) -> Self {
         let workspace_focus = cx.focus_handle();
         let mut focus_manager = FocusManager::new(&workspace_focus);
+        let project_writer = persistence.writer_client();
         let sidebar_state = persistence.take_sidebar_state();
         let side_views = SideViewHost::new(sidebar_state, persistence.controller(cx));
         let parent = focus_manager.workspace_token();
@@ -193,6 +198,8 @@ impl AppRoot {
         }
         Self {
             snapshot: ProjectSnapshot::default(),
+            project_writer,
+            pending_final_project_snapshot: None,
             projects: BTreeMap::new(),
             panel_ids,
             panel_subscriptions: BTreeMap::new(),
@@ -221,9 +228,37 @@ impl AppRoot {
         ));
     }
 
+    /// 快照只在候选提交后进入既有写队列；拒收时保留最后恢复事实。
+    fn commit_project_snapshot(&mut self, snapshot: ProjectSnapshot) {
+        self.snapshot = snapshot;
+        let Some(writer) = &self.project_writer else {
+            return;
+        };
+        match writer.save_project_snapshot(&self.snapshot) {
+            Ok(()) => self.pending_final_project_snapshot = None,
+            Err(error) => {
+                self.pending_final_project_snapshot = Some(self.snapshot.clone());
+                log::warn!("could not queue project snapshot: {error}");
+            }
+        }
+    }
+
     #[allow(dead_code)] // 生产快照保存与窗口切换时消费。
     pub(crate) const fn snapshot(&self) -> &ProjectSnapshot {
         &self.snapshot
+    }
+}
+
+impl Drop for AppRoot {
+    fn drop(&mut self) {
+        let (Some(writer), Some(snapshot)) =
+            (&self.project_writer, &self.pending_final_project_snapshot)
+        else {
+            return;
+        };
+        if let Err(error) = writer.save_final_project_snapshot(snapshot) {
+            log::warn!("could not queue final project snapshot: {error}");
+        }
     }
 }
 

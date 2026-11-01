@@ -109,6 +109,8 @@ pub(crate) struct WorkspaceWriterClient {
     final_states: SyncSender<(ViewKey, ViewState)>,
     /// 应用级侧栏只有一份待终态，独立于普通命令队列。
     final_sidebar_state: SyncSender<SidebarState>,
+    /// 项目聚合只有一份待终态，独立于普通命令队列。
+    final_project_snapshot: SyncSender<ProjectSnapshot>,
 }
 
 impl WorkspaceWriterClient {
@@ -151,6 +153,19 @@ impl WorkspaceWriterClient {
             .try_send(Command::SaveSidebarState {
                 state: Box::new(state.clone()),
             })
+            .map_err(|error| match error {
+                TrySendError::Full(_) => WorkspaceWriterError::QueueFull,
+                TrySendError::Disconnected(_) => WorkspaceWriterError::Stopped,
+            })
+    }
+
+    /// 非阻塞移交项目快照最终状态；只由 AppRoot 在退出时调用。
+    pub(crate) fn save_final_project_snapshot(
+        &self,
+        snapshot: &ProjectSnapshot,
+    ) -> Result<(), WorkspaceWriterError> {
+        self.final_project_snapshot
+            .try_send(snapshot.clone())
             .map_err(|error| match error {
                 TrySendError::Full(_) => WorkspaceWriterError::QueueFull,
                 TrySendError::Disconnected(_) => WorkspaceWriterError::Stopped,
@@ -206,6 +221,8 @@ pub(crate) struct WorkspaceWriter {
     final_states: Receiver<(ViewKey, ViewState)>,
     final_sidebar_sender: SyncSender<SidebarState>,
     final_sidebar_state: Receiver<SidebarState>,
+    final_project_sender: SyncSender<ProjectSnapshot>,
+    final_project_snapshot: Receiver<ProjectSnapshot>,
     failures: Option<Receiver<WorkspaceWriteFailure>>,
     worker: Option<JoinHandle<()>>,
 }
@@ -216,6 +233,7 @@ impl WorkspaceWriter {
         let (commands, receiver) = mpsc::sync_channel(COMMAND_CAPACITY);
         let (final_states, final_state_receiver) = mpsc::sync_channel(COMMAND_CAPACITY);
         let (final_sidebar_state, final_sidebar_receiver) = mpsc::sync_channel(1);
+        let (final_project_snapshot, final_project_receiver) = mpsc::sync_channel(1);
         let (failure_sender, failures) = mpsc::sync_channel(1);
         let (startup, started) = mpsc::sync_channel(1);
         let worker = std::thread::Builder::new()
@@ -229,6 +247,8 @@ impl WorkspaceWriter {
                 final_states: final_state_receiver,
                 final_sidebar_sender: final_sidebar_state,
                 final_sidebar_state: final_sidebar_receiver,
+                final_project_sender: final_project_snapshot,
+                final_project_snapshot: final_project_receiver,
                 failures: Some(failures),
                 worker: Some(worker),
             }),
@@ -248,6 +268,7 @@ impl WorkspaceWriter {
             commands: self.commands.clone(),
             final_states: self.final_state_sender.clone(),
             final_sidebar_state: self.final_sidebar_sender.clone(),
+            final_project_snapshot: self.final_project_sender.clone(),
         }
     }
 
@@ -328,6 +349,13 @@ impl WorkspaceWriter {
             self.commands
                 .send(Command::SaveSidebarState {
                     state: Box::new(state),
+                })
+                .map_err(|_| WorkspaceWriterError::Stopped)?;
+        }
+        for snapshot in self.final_project_snapshot.try_iter() {
+            self.commands
+                .send(Command::SaveProjectSnapshot {
+                    snapshot: Box::new(snapshot),
                 })
                 .map_err(|_| WorkspaceWriterError::Stopped)?;
         }
@@ -1107,6 +1135,29 @@ mod workspace_writer_tests {
         assert_eq!(
             observer.load_project_snapshot().unwrap(),
             project_snapshot("after-drain")
+        );
+    }
+
+    /// 普通队列未接收的项目终态仍经独立通道在退出时提交。
+    #[test]
+    fn final_project_snapshot_is_submitted_at_shutdown() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = fixture(&temp);
+        let mut observer = WorkspaceDatabase::open(&paths).unwrap();
+        observer
+            .save_project_snapshot(&project_snapshot("original"))
+            .unwrap();
+        let writer = WorkspaceWriter::start(paths).unwrap();
+        let client = writer.client();
+
+        client
+            .save_final_project_snapshot(&project_snapshot("final"))
+            .unwrap();
+        writer.shutdown().unwrap();
+
+        assert_eq!(
+            observer.load_project_snapshot().unwrap(),
+            project_snapshot("final")
         );
     }
 

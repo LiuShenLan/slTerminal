@@ -21,7 +21,8 @@ use slterm_terminal::event::Event as TermEvent;
 use slterm_terminal::event_loop::Msg;
 use slterm_workspace::{
     AddProjectOutcome, LogicalSize, NewTerminalSpec, PanelGroupId, PanelId, PanelIdAllocator,
-    ProjectId, RunIntent, SideViewId, SplitTerminalSpec, TerminalId, TerminalRecord, ViewKey,
+    ProjectId, ProjectSnapshot, RunIntent, SideViewId, SplitTerminalSpec, TerminalId,
+    TerminalRecord, ViewKey,
 };
 
 use crate::app_shell::SltermShellEvent;
@@ -337,6 +338,18 @@ fn output_visible(
     })
 }
 
+fn assert_project_snapshot_saved(
+    root: &Entity<AppRoot>,
+    cx: &TestAppContext,
+    writer: &WorkspaceWriter,
+    paths: &AppPaths,
+) {
+    writer.flush().unwrap();
+    let mut store = WorkspaceDatabase::open(paths).unwrap();
+    let persisted = store.load_project_snapshot().unwrap();
+    root.read_with(cx, |root, _| assert_eq!(root.snapshot(), &persisted));
+}
+
 #[gpui::test]
 fn adding_project_does_not_create_terminal(cx: &mut TestAppContext) {
     let (root, mut window, state) = open_root(cx);
@@ -353,6 +366,143 @@ fn adding_project_does_not_create_terminal(cx: &mut TestAppContext) {
         assert_eq!(root.panel_count(project_id(PROJECT_A), cx), 0);
     });
     assert_eq!(state.borrow().attempts, 0);
+}
+
+#[gpui::test]
+fn project_snapshot_mutations_persist_through_workspace_writer(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let writer = WorkspaceWriter::start(paths.clone()).unwrap();
+    let persistence = SideViewPersistence::load(&paths, Some(writer.client()));
+    let (root, mut window, _) = open_root_with_persistence(cx, persistence);
+
+    add_project(&root, &mut window, PROJECT_A, "D:/work/a");
+    assert_project_snapshot_saved(&root, cx, &writer, &paths);
+    new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_A);
+    assert_project_snapshot_saved(&root, cx, &writer, &paths);
+    split_terminal(&root, &mut window);
+    assert_project_snapshot_saved(&root, cx, &writer, &paths);
+    window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.activate_terminal(terminal_id(TERMINAL_A), window, cx)
+                .unwrap();
+        });
+    });
+    assert_project_snapshot_saved(&root, cx, &writer, &paths);
+    window.update(|_, cx| {
+        let terminal = root.read_with(cx, |root, cx| {
+            root.terminal_panel(project_id(PROJECT_A), terminal_id(TERMINAL_B), cx)
+                .unwrap()
+                .1
+        });
+        terminal.update(cx, |_, cx| cx.emit(TerminalViewEvent::Exited));
+    });
+    window.run_until_parked();
+    assert_project_snapshot_saved(&root, cx, &writer, &paths);
+    window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.close_terminal(terminal_id(TERMINAL_B), window, cx)
+                .unwrap();
+        });
+    });
+    assert_project_snapshot_saved(&root, cx, &writer, &paths);
+    add_project(&root, &mut window, PROJECT_B, "D:/work/b");
+    assert_project_snapshot_saved(&root, cx, &writer, &paths);
+    activate_project(&root, &mut window, PROJECT_A);
+    assert_project_snapshot_saved(&root, cx, &writer, &paths);
+}
+
+#[gpui::test]
+fn rejected_project_snapshot_is_submitted_when_app_root_drops(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let mut observer = WorkspaceDatabase::open(&paths).unwrap();
+    let writer = WorkspaceWriter::start(paths.clone()).unwrap();
+    let client = writer.client();
+    let persistence = SideViewPersistence::load(&paths, Some(client.clone()));
+    let (root, mut window, _) = open_root_with_persistence(cx, persistence);
+    let fault = rusqlite::Connection::open(paths.workspace_db_path()).unwrap();
+    fault.execute_batch("BEGIN EXCLUSIVE").unwrap();
+    client
+        .save_project_snapshot(&ProjectSnapshot::default())
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(2100));
+    for _ in 0..=64 {
+        if client
+            .save_project_snapshot(&ProjectSnapshot::default())
+            .is_err()
+        {
+            break;
+        }
+    }
+
+    add_project(&root, &mut window, PROJECT_A, "D:/work/a");
+    let expected = root.read_with(cx, |root, _| {
+        assert!(root.pending_final_project_snapshot.is_some());
+        root.snapshot().clone()
+    });
+    let weak = root.downgrade();
+    window.update(|window, _| window.remove_window());
+    drop(root);
+    cx.run_until_parked();
+    cx.update(|_| {});
+    weak.assert_released();
+
+    fault.execute_batch("ROLLBACK").unwrap();
+    writer.shutdown().unwrap();
+    assert_eq!(observer.load_project_snapshot().unwrap(), expected);
+}
+
+#[gpui::test]
+fn accepted_project_snapshot_supersedes_rejected_final_state(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let mut observer = WorkspaceDatabase::open(&paths).unwrap();
+    let writer = WorkspaceWriter::start(paths.clone()).unwrap();
+    let client = writer.client();
+    let persistence = SideViewPersistence::load(&paths, Some(client.clone()));
+    let (root, mut window, _) = open_root_with_persistence(cx, persistence);
+    let fault = rusqlite::Connection::open(paths.workspace_db_path()).unwrap();
+    fault.execute_batch("BEGIN EXCLUSIVE").unwrap();
+    client
+        .save_project_snapshot(&ProjectSnapshot::default())
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(2100));
+    for _ in 0..=64 {
+        if client
+            .save_project_snapshot(&ProjectSnapshot::default())
+            .is_err()
+        {
+            break;
+        }
+    }
+    add_project(&root, &mut window, PROJECT_A, "D:/work/a");
+    root.read_with(cx, |root, _| {
+        assert!(root.pending_final_project_snapshot.is_some())
+    });
+    fault.execute_batch("ROLLBACK").unwrap();
+    writer.flush().unwrap();
+
+    add_project(&root, &mut window, PROJECT_B, "D:/work/b");
+    let expected = root.read_with(cx, |root, _| {
+        assert!(root.pending_final_project_snapshot.is_none());
+        root.snapshot().clone()
+    });
+    writer.flush().unwrap();
+    assert_eq!(observer.load_project_snapshot().unwrap(), expected);
+    let weak = root.downgrade();
+    window.update(|window, _| window.remove_window());
+    drop(root);
+    cx.run_until_parked();
+    cx.update(|_| {});
+    weak.assert_released();
+    writer.shutdown().unwrap();
+
+    assert_eq!(
+        observer.load_project_snapshot().unwrap(),
+        expected,
+        "后续成功快照必须作废旧拒收终态"
+    );
 }
 
 #[gpui::test]

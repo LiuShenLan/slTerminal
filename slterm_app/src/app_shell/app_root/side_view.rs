@@ -101,6 +101,10 @@ impl SideViewPersistence {
         }
     }
 
+    pub(super) fn writer_client(&self) -> Option<WorkspaceWriterClient> {
+        self.writer.clone()
+    }
+
     pub(super) fn take_sidebar_state(&mut self) -> SidebarState {
         self.recovered_sidebar.take().unwrap_or_default()
     }
