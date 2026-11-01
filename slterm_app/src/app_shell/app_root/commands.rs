@@ -6,6 +6,7 @@ use std::rc::Rc;
 
 use gpui::{App, AppContext as _, Context, Entity, Window};
 use slterm_path::CanonicalPath;
+use slterm_sidebar::SidebarError;
 use slterm_split::SplitDirection;
 use slterm_workspace::{
     AddProjectOutcome, LogicalSize, NewTerminalSpec, PanelGroupId, PanelId, PanelIdExhausted,
@@ -17,7 +18,9 @@ use uuid::Uuid;
 use crate::gpui_terminal::PaneId;
 use crate::gpui_terminal::view::{TerminalLaunch, TerminalView, TerminalViewEvent};
 
-use super::command_registry::{CommandId, CommandOutcome, CommandParameters, CommandSource};
+use super::command_registry::{
+    CommandId, CommandOutcome, CommandParameters, CommandSource, CommandTarget,
+};
 use super::focus_manager::{FocusError, FocusToken};
 use super::panel_host::PanelHost;
 use super::{AppRoot, ProjectView};
@@ -146,6 +149,7 @@ pub(crate) enum AppRootError {
     ProjectNotActive,
     MissingPanel,
     UnexpectedParameters,
+    Sidebar(SidebarError),
 }
 
 impl fmt::Display for AppRootError {
@@ -160,6 +164,7 @@ impl fmt::Display for AppRootError {
             Self::ProjectNotActive => formatter.write_str("只能在活跃项目中显式创建终端"),
             Self::MissingPanel => formatter.write_str("终端运行面板不存在"),
             Self::UnexpectedParameters => formatter.write_str("命令参数与目标命令不匹配"),
+            Self::Sidebar(error) => write!(formatter, "侧栏命令失败: {error}"),
         }
     }
 }
@@ -170,6 +175,7 @@ impl std::error::Error for AppRootError {
             Self::Project(error) => Some(error),
             Self::Snapshot(error) => Some(error),
             Self::Launch(error) => Some(error),
+            Self::Sidebar(error) => Some(error),
             Self::Registry(_)
             | Self::PanelIdExhausted
             | Self::Focus(_)
@@ -213,6 +219,12 @@ impl From<io::Error> for AppRootError {
 impl From<FocusError> for AppRootError {
     fn from(error: FocusError) -> Self {
         Self::Focus(error)
+    }
+}
+
+impl From<SidebarError> for AppRootError {
+    fn from(error: SidebarError) -> Self {
+        Self::Sidebar(error)
     }
 }
 
@@ -450,9 +462,10 @@ impl AppRoot {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Result<PanelId, AppRootError> {
-        let outcome = self.execute_terminal_command(
+        let outcome = self.execute_command(
             CommandId::NewTerminal,
             CommandSource::Application,
+            CommandTarget::Focused,
             Some(CommandParameters::NewTerminal { shell }),
             window,
             cx,

@@ -604,7 +604,8 @@ fn hidden_width_divider_returns_focus_to_open_view_button(cx: &mut TestAppContex
     focus_sidebar_divider(&root, &mut window, cx, SidebarDivider::Width);
 
     window.update(|window, cx| {
-        root.update(cx, |root, cx| root.toggle_sidebar(window, cx));
+        root.update(cx, |root, cx| root.toggle_sidebar(window, cx))
+            .unwrap();
     });
     draw_frame(&mut window);
 
@@ -1601,6 +1602,97 @@ fn production_sidebar_dual_slots_preserve_instances_across_hide(cx: &mut TestApp
         })
     });
     assert_eq!(restored, original, "隐藏整个侧栏不得重建任何槽位实体");
+}
+
+#[gpui::test]
+fn modal_activity_bar_command_returns_focus_error(cx: &mut TestAppContext) {
+    let (root, mut window, _) = open_root(cx);
+    draw_frame(&mut window);
+    let button = window
+        .debug_bounds("app-root-side-button-explorer")
+        .unwrap();
+    window.simulate_mouse_down(button.center(), MouseButton::Right, Modifiers::default());
+    window.simulate_mouse_up(button.center(), MouseButton::Right, Modifiers::default());
+    draw_frame(&mut window);
+    assert!(window.debug_bounds("app-root-side-button-menu").is_some());
+
+    let result = window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.execute_command(
+                super::super::command_registry::CommandId::FocusActivityBar,
+                super::super::command_registry::CommandSource::Keyboard,
+                super::super::command_registry::CommandTarget::Focused,
+                None,
+                window,
+                cx,
+            )
+        })
+    });
+
+    assert!(matches!(
+        result,
+        Err(super::super::commands::AppRootError::Focus(
+            super::super::focus_manager::FocusError::ModalActive
+        ))
+    ));
+}
+
+#[gpui::test]
+fn opening_hidden_side_button_menu_returns_focus_error(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let mut store = WorkspaceDatabase::open(&paths).unwrap();
+    let mut sidebar = slterm_sidebar::SidebarState::default();
+    sidebar.set_button_hidden(SideViewId::Nav, true);
+    store.save_sidebar_state(&sidebar).unwrap();
+    drop(store);
+    let persistence = AppRootPersistence::load(&paths, None);
+    let (root, mut window, _) = open_root_with_persistence(cx, persistence);
+    draw_frame(&mut window);
+
+    let result = window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.execute_command(
+                super::super::command_registry::CommandId::OpenSideButtonMenu,
+                super::super::command_registry::CommandSource::Pointer,
+                super::super::command_registry::CommandTarget::SideButton(SideViewId::Nav),
+                None,
+                window,
+                cx,
+            )
+        })
+    });
+
+    assert!(matches!(
+        result,
+        Err(super::super::commands::AppRootError::Focus(
+            super::super::focus_manager::FocusError::Unavailable
+        ))
+    ));
+    root.read_with(cx, |root, _| {
+        assert!(root.side_button_menu.is_none(), "失败不得留下菜单");
+    });
+}
+
+#[gpui::test]
+fn pointer_click_open_side_button_closes_view(cx: &mut TestAppContext) {
+    let (root, mut window, _) = open_root(cx);
+    draw_frame(&mut window);
+    let button = window.debug_bounds("app-root-side-button-nav").unwrap();
+
+    window.simulate_mouse_down(button.center(), MouseButton::Left, Modifiers::default());
+    window.simulate_mouse_up(button.center(), MouseButton::Left, Modifiers::default());
+    draw_frame(&mut window);
+
+    assert!(window.debug_bounds("app-root-side-view-nav").is_none());
+    root.read_with(cx, |root, _| {
+        assert_eq!(
+            root.side_views
+                .state()
+                .open_view(slterm_sidebar::SideSlot::Upper),
+            None
+        );
+    });
 }
 
 #[gpui::test]

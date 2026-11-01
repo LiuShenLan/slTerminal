@@ -33,7 +33,7 @@ use crate::persistence::workspace::WorkspaceDatabase;
 use crate::persistence::workspace_writer::WorkspaceWriter;
 
 use super::command_registry::{
-    CommandId, CommandOutcome, CommandParameters, CommandRegistry, CommandSource,
+    CommandId, CommandOutcome, CommandParameters, CommandRegistry, CommandSource, CommandTarget,
 };
 use super::commands::{AppRootError, LocalTerminalLauncher};
 use super::focus_manager::FocusError;
@@ -336,9 +336,10 @@ fn new_generated_terminal(root: &Entity<AppRoot>, window: &mut VisualTestContext
 fn split_generated_terminal(root: &Entity<AppRoot>, window: &mut VisualTestContext) -> PanelId {
     let result = window.update(|window, cx| {
         root.update(cx, |root, cx| {
-            root.execute_terminal_command(
+            root.execute_command(
                 CommandId::SplitDown,
                 CommandSource::Application,
+                CommandTarget::Focused,
                 Some(CommandParameters::Split {
                     ratio: 0.5,
                     viewport: LogicalSize::new(1200.0, 800.0),
@@ -723,9 +724,10 @@ fn modal_terminal_command_is_rejected_without_side_effects(cx: &mut TestAppConte
 
     let result = window.update(|window, cx| {
         root.update(cx, |root, cx| {
-            root.execute_terminal_command(
+            root.execute_command(
                 CommandId::NewTerminal,
                 CommandSource::Keyboard,
+                CommandTarget::Focused,
                 Some(CommandParameters::NewTerminal {
                     shell: path("C:/Program Files/PowerShell/7/pwsh.exe"),
                 }),
@@ -746,15 +748,44 @@ fn modal_terminal_command_is_rejected_without_side_effects(cx: &mut TestAppConte
 }
 
 #[gpui::test]
+fn sidebar_command_request_does_not_require_active_project(cx: &mut TestAppContext) {
+    let (root, mut window, _) = open_root(cx);
+
+    let result = window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.execute_command(
+                CommandId::ActivateSideView,
+                CommandSource::Pointer,
+                CommandTarget::SideView(SideViewId::Explorer),
+                None,
+                window,
+                cx,
+            )
+        })
+    });
+
+    assert!(matches!(result, Ok(CommandOutcome::Completed)));
+    root.read_with(cx, |root, _| {
+        assert_eq!(
+            root.side_views
+                .state()
+                .open_view(slterm_sidebar::SideSlot::Upper),
+            Some(SideViewId::Explorer)
+        );
+    });
+}
+
+#[gpui::test]
 fn terminal_command_requests_share_execution_path(cx: &mut TestAppContext) {
     let (root, mut window, state) = open_root(cx);
     add_project(&root, &mut window, PROJECT_A, "D:/work/a");
 
     let missing_new = window.update(|window, cx| {
         root.update(cx, |root, cx| {
-            root.execute_terminal_command(
+            root.execute_command(
                 CommandId::NewTerminal,
                 CommandSource::Application,
+                CommandTarget::Focused,
                 None,
                 window,
                 cx,
@@ -767,9 +798,10 @@ fn terminal_command_requests_share_execution_path(cx: &mut TestAppContext) {
     ));
     let missing_split = window.update(|window, cx| {
         root.update(cx, |root, cx| {
-            root.execute_terminal_command(
+            root.execute_command(
                 CommandId::SplitRight,
                 CommandSource::Keyboard,
+                CommandTarget::Focused,
                 None,
                 window,
                 cx,
@@ -784,9 +816,10 @@ fn terminal_command_requests_share_execution_path(cx: &mut TestAppContext) {
 
     let created = window.update(|window, cx| {
         root.update(cx, |root, cx| {
-            root.execute_terminal_command(
+            root.execute_command(
                 CommandId::NewTerminal,
                 CommandSource::Application,
+                CommandTarget::Focused,
                 Some(CommandParameters::NewTerminal {
                     shell: path("C:/Program Files/PowerShell/7/pwsh.exe"),
                 }),
@@ -800,9 +833,10 @@ fn terminal_command_requests_share_execution_path(cx: &mut TestAppContext) {
     assert!(matches!(created, CommandOutcome::TerminalPanel(_)));
     let split = window.update(|window, cx| {
         root.update(cx, |root, cx| {
-            root.execute_terminal_command(
+            root.execute_command(
                 CommandId::SplitRight,
                 CommandSource::Keyboard,
+                CommandTarget::Focused,
                 Some(CommandParameters::Split {
                     ratio: 0.25,
                     viewport: LogicalSize::new(1200.0, 800.0),
@@ -841,9 +875,10 @@ fn terminal_command_requests_share_execution_path(cx: &mut TestAppContext) {
 
     let closed = window.update(|window, cx| {
         root.update(cx, |root, cx| {
-            root.execute_terminal_command(
+            root.execute_command(
                 CommandId::CloseActiveTerminal,
                 CommandSource::Keyboard,
+                CommandTarget::Focused,
                 None,
                 window,
                 cx,
@@ -1459,9 +1494,10 @@ fn close_focused_terminal_closes_split_panel_and_updates_focus(cx: &mut TestAppC
 
     let closed = window.update(|window, cx| {
         root.update(cx, |root, cx| {
-            root.execute_terminal_command(
+            root.execute_command(
                 CommandId::CloseActiveTerminal,
                 CommandSource::Application,
+                CommandTarget::Focused,
                 None,
                 window,
                 cx,
@@ -1510,9 +1546,10 @@ fn production_commands_reject_missing_active_project_or_focused_group(cx: &mut T
     open_generated_project(&root, &mut window, "D:/work/generated");
     let without_group = window.update(|window, cx| {
         root.update(cx, |root, cx| {
-            root.execute_terminal_command(
+            root.execute_command(
                 CommandId::SplitRight,
                 CommandSource::Application,
+                CommandTarget::Focused,
                 Some(CommandParameters::Split {
                     ratio: 0.5,
                     viewport: LogicalSize::new(1200.0, 800.0),
@@ -1526,9 +1563,10 @@ fn production_commands_reject_missing_active_project_or_focused_group(cx: &mut T
     assert!(matches!(without_group, Err(AppRootError::MissingPanel)));
     let without_focus = window.update(|window, cx| {
         root.update(cx, |root, cx| {
-            root.execute_terminal_command(
+            root.execute_command(
                 CommandId::CloseActiveTerminal,
                 CommandSource::Application,
+                CommandTarget::Focused,
                 None,
                 window,
                 cx,

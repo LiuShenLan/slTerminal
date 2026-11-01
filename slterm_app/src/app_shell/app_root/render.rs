@@ -9,7 +9,9 @@ use gpui_component::ActiveTheme as _;
 use slterm_split::{DIVIDER_GAP, SplitDirection, SplitTree};
 use slterm_workspace::{LogicalSize, PanelGroupId, ProjectLayout, ViewKey};
 
-use super::command_registry::{CommandId, CommandOutcome, CommandParameters, CommandSource};
+use super::command_registry::{
+    CommandId, CommandOutcome, CommandParameters, CommandSource, CommandTarget,
+};
 use super::project_view::ProjectView;
 use super::{
     ActivateAgentFiles, ActivateCommit, ActivateExplorer, ActivateNav, AppRoot,
@@ -182,9 +184,10 @@ impl Render for AppRoot {
             .track_focus(&self.workspace_focus)
             .on_action(cx.listener(|this, _: &NewTerminal, window, cx| {
                 let shell = this.shell.clone();
-                if let Err(error) = this.execute_terminal_command(
+                if let Err(error) = this.execute_command(
                     CommandId::NewTerminal,
                     CommandSource::Keyboard,
+                    CommandTarget::Focused,
                     Some(CommandParameters::NewTerminal { shell }),
                     window,
                     cx,
@@ -195,9 +198,10 @@ impl Render for AppRoot {
             .on_action(cx.listener(|this, _: &SplitRight, window, cx| {
                 let viewport = this.project_viewport(window);
                 let shell = this.shell.clone();
-                if let Err(error) = this.execute_terminal_command(
+                if let Err(error) = this.execute_command(
                     CommandId::SplitRight,
                     CommandSource::Keyboard,
+                    CommandTarget::Focused,
                     Some(CommandParameters::Split {
                         ratio: 0.5,
                         viewport,
@@ -212,9 +216,10 @@ impl Render for AppRoot {
             .on_action(cx.listener(|this, _: &SplitDown, window, cx| {
                 let viewport = this.project_viewport(window);
                 let shell = this.shell.clone();
-                if let Err(error) = this.execute_terminal_command(
+                if let Err(error) = this.execute_command(
                     CommandId::SplitDown,
                     CommandSource::Keyboard,
+                    CommandTarget::Focused,
                     Some(CommandParameters::Split {
                         ratio: 0.5,
                         viewport,
@@ -227,27 +232,82 @@ impl Render for AppRoot {
                 }
             }))
             .on_action(cx.listener(|this, _: &ToggleSidebar, window, cx| {
-                this.toggle_sidebar(window, cx);
+                if let Err(error) = this.execute_command(
+                    CommandId::ToggleSidebar,
+                    CommandSource::Keyboard,
+                    CommandTarget::Focused,
+                    None,
+                    window,
+                    cx,
+                ) {
+                    log::warn!("切换侧栏命令失败: {error}");
+                }
             }))
             .on_action(cx.listener(|this, _: &ActivateNav, window, cx| {
-                this.activate_side_view(slterm_workspace::SideViewId::Nav, window, cx);
+                if let Err(error) = this.execute_command(
+                    CommandId::ActivateSideView,
+                    CommandSource::Keyboard,
+                    CommandTarget::SideView(slterm_workspace::SideViewId::Nav),
+                    None,
+                    window,
+                    cx,
+                ) {
+                    log::warn!("激活导航视图命令失败: {error}");
+                }
             }))
             .on_action(cx.listener(|this, _: &ActivateExplorer, window, cx| {
-                this.activate_side_view(slterm_workspace::SideViewId::Explorer, window, cx);
+                if let Err(error) = this.execute_command(
+                    CommandId::ActivateSideView,
+                    CommandSource::Keyboard,
+                    CommandTarget::SideView(slterm_workspace::SideViewId::Explorer),
+                    None,
+                    window,
+                    cx,
+                ) {
+                    log::warn!("激活文件视图命令失败: {error}");
+                }
             }))
             .on_action(cx.listener(|this, _: &ActivateCommit, window, cx| {
-                this.activate_side_view(slterm_workspace::SideViewId::Commit, window, cx);
+                if let Err(error) = this.execute_command(
+                    CommandId::ActivateSideView,
+                    CommandSource::Keyboard,
+                    CommandTarget::SideView(slterm_workspace::SideViewId::Commit),
+                    None,
+                    window,
+                    cx,
+                ) {
+                    log::warn!("激活提交视图命令失败: {error}");
+                }
             }))
             .on_action(cx.listener(|this, _: &ActivateAgentFiles, window, cx| {
-                this.activate_side_view(slterm_workspace::SideViewId::AgentFiles, window, cx);
+                if let Err(error) = this.execute_command(
+                    CommandId::ActivateSideView,
+                    CommandSource::Keyboard,
+                    CommandTarget::SideView(slterm_workspace::SideViewId::AgentFiles),
+                    None,
+                    window,
+                    cx,
+                ) {
+                    log::warn!("激活 Agent 文件视图命令失败: {error}");
+                }
             }))
             .on_action(cx.listener(|this, _: &FocusActivityBar, window, cx| {
-                this.focus_activity_bar(window, cx);
+                if let Err(error) = this.execute_command(
+                    CommandId::FocusActivityBar,
+                    CommandSource::Keyboard,
+                    CommandTarget::Focused,
+                    None,
+                    window,
+                    cx,
+                ) {
+                    log::warn!("聚焦活动栏命令失败: {error}");
+                }
             }))
             .on_action(cx.listener(|this, _: &CloseActiveTerminal, window, cx| {
-                match this.execute_terminal_command(
+                match this.execute_command(
                     CommandId::CloseActiveTerminal,
                     CommandSource::Keyboard,
+                    CommandTarget::Focused,
                     None,
                     window,
                     cx,

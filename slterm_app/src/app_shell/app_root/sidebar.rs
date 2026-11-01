@@ -11,11 +11,12 @@ use gpui_component::{
     ActiveTheme as _, Icon, IconName,
     menu::{PopupMenu, PopupMenuItem},
 };
-use slterm_sidebar::{ButtonMovement, SideSlot, SidebarError, SidebarState, SidebarTransition};
+use slterm_sidebar::{ButtonMovement, SideSlot, SidebarState, SidebarTransition};
 use slterm_workspace::SideViewId;
 
 use crate::i18n::{Message, UiLanguage};
 
+use super::command_registry::{CommandId, CommandParameters, CommandSource, CommandTarget};
 use super::{
     ActivateSideButton, AdjustSidebarRatioDown, AdjustSidebarRatioDownLarge, AdjustSidebarRatioUp,
     AdjustSidebarRatioUpLarge, AdjustSidebarWidthLeft, AdjustSidebarWidthLeftLarge,
@@ -56,7 +57,7 @@ pub(super) fn side_button_focus_style(accent: Hsla) -> StyleRefinement {
     StyleRefinement::default().border_1().border_color(accent)
 }
 
-enum SideButtonNavigation {
+pub(super) enum SideButtonNavigation {
     Next,
     Previous,
     First,
@@ -64,15 +65,27 @@ enum SideButtonNavigation {
 }
 
 #[derive(Clone, Copy)]
-enum SideButtonCommand {
+pub(super) enum SideButtonCommand {
     Reorder(ButtonMovement),
     MoveToOtherSlot,
     Hide,
     ResetOrder,
 }
 
+fn side_button_command_parts(command: SideButtonCommand) -> (CommandId, Option<CommandParameters>) {
+    match command {
+        SideButtonCommand::Reorder(movement) => (
+            CommandId::ReorderSideButton,
+            Some(CommandParameters::SideButtonMovement(movement)),
+        ),
+        SideButtonCommand::MoveToOtherSlot => (CommandId::MoveSideButtonToOtherSlot, None),
+        SideButtonCommand::Hide => (CommandId::HideSideButton, None),
+        SideButtonCommand::ResetOrder => (CommandId::ResetSideButtonOrder, None),
+    }
+}
+
 #[derive(Clone, Copy)]
-enum SidebarGeometryCommand {
+pub(super) enum SidebarGeometryCommand {
     SetWidth(u32),
     ResetWidth,
     SetRatio(f32),
@@ -90,20 +103,44 @@ impl AppRoot {
         f32::from(state.width()).min(available)
     }
 
-    fn adjust_sidebar_width(&mut self, delta: f32, window: &Window, cx: &mut Context<'_, Self>) {
+    fn execute_sidebar_action(
+        &mut self,
+        id: CommandId,
+        target: CommandTarget,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if let Err(error) =
+            self.execute_command(id, CommandSource::Keyboard, target, None, window, cx)
+        {
+            log::warn!("侧栏键盘命令失败: {error}");
+        }
+    }
+
+    pub(super) fn adjust_sidebar_width(
+        &mut self,
+        delta: f32,
+        window: &Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<(), super::commands::AppRootError> {
         let visible = self.visible_sidebar_width(f32::from(window.viewport_size().width));
         self.change_sidebar_geometry(
             SidebarGeometryCommand::SetWidth((visible + delta).round().max(0.0) as u32),
             cx,
-        );
+        )
     }
 
-    fn adjust_sidebar_ratio(&mut self, delta: f32, window: &Window, cx: &mut Context<'_, Self>) {
+    pub(super) fn adjust_sidebar_ratio(
+        &mut self,
+        delta: f32,
+        window: &Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<(), super::commands::AppRootError> {
         let visible = effective_ratio(
             self.side_views.state(),
             f32::from(window.viewport_size().height),
         );
-        self.change_sidebar_geometry(SidebarGeometryCommand::SetRatio(visible + delta), cx);
+        self.change_sidebar_geometry(SidebarGeometryCommand::SetRatio(visible + delta), cx)
     }
 
     fn focused_side_view(&self, window: &Window, cx: &Context<'_, Self>) -> Option<SideViewId> {
@@ -115,7 +152,11 @@ impl AppRoot {
         })
     }
 
-    fn focused_side_button(&self, window: &Window, cx: &Context<'_, Self>) -> Option<SideViewId> {
+    pub(super) fn focused_side_button(
+        &self,
+        window: &Window,
+        cx: &Context<'_, Self>,
+    ) -> Option<SideViewId> {
         let focused = window.focused(cx)?;
         SideViewId::ALL.into_iter().find(|view| {
             self.side_buttons
@@ -144,14 +185,16 @@ impl AppRoot {
         view: SideViewId,
         window: &mut Window,
         cx: &mut Context<'_, Self>,
-    ) {
+    ) -> Result<(), super::focus_manager::FocusError> {
         let token = self.side_buttons[&view].registration.token();
-        if let Err(error) = self.focus_manager.request_focus(token, window, cx) {
-            log::warn!("活动栏按钮送焦失败: {error:?}");
-        }
+        self.focus_manager.request_focus(token, window, cx)
     }
 
-    pub(super) fn focus_activity_bar(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+    pub(super) fn focus_activity_bar(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<(), super::commands::AppRootError> {
         let focused_view = self.focused_side_view(window, cx);
         self.sync_focus(window, cx);
         let state = self.side_views.state();
@@ -165,20 +208,21 @@ impl AppRoot {
             })
             .or_else(|| state.visible_buttons().first().copied());
         if let Some(view) = target {
-            self.focus_side_button(view, window, cx);
+            self.focus_side_button(view, window, cx)?;
         }
+        Ok(())
     }
 
-    fn navigate_side_buttons(
+    pub(super) fn navigate_side_buttons(
         &mut self,
         navigation: SideButtonNavigation,
         window: &mut Window,
         cx: &mut Context<'_, Self>,
-    ) {
+    ) -> Result<(), super::commands::AppRootError> {
         let current = self.focused_side_button(window, cx);
         let buttons = self.side_views.state().visible_buttons();
         if buttons.is_empty() {
-            return;
+            return Ok(());
         }
         let current =
             current.and_then(|view| buttons.iter().position(|candidate| *candidate == view));
@@ -189,23 +233,8 @@ impl AppRoot {
             SideButtonNavigation::First => 0,
             SideButtonNavigation::Last => last,
         };
-        self.focus_side_button(buttons[index], window, cx);
-    }
-
-    fn activate_focused_side_button(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
-        let Some(view) = self.focused_side_button(window, cx) else {
-            return;
-        };
-        if let Err(error) = self.click_side_view(view, window, cx) {
-            log::warn!("活动栏按钮键盘激活失败: {error}");
-        }
-    }
-
-    fn open_focused_side_button_menu(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
-        let Some(view) = self.focused_side_button(window, cx) else {
-            return;
-        };
-        self.open_side_button_menu(view, None, window, cx);
+        self.focus_side_button(buttons[index], window, cx)?;
+        Ok(())
     }
 
     fn side_button_menu_item(
@@ -218,7 +247,17 @@ impl AppRoot {
         let root = root.clone();
         PopupMenuItem::new(language.text(message)).on_click(move |_, window, cx| {
             let _ = root.update(cx, |this, cx| {
-                this.organize_side_button(view, command, window, cx);
+                let (id, parameters) = side_button_command_parts(command);
+                if let Err(error) = this.execute_command(
+                    id,
+                    CommandSource::Menu,
+                    CommandTarget::SideButton(view),
+                    parameters,
+                    window,
+                    cx,
+                ) {
+                    log::warn!("侧栏菜单命令失败: {error}");
+                }
             });
         })
     }
@@ -268,17 +307,17 @@ impl AppRoot {
     }
 
     /// 键盘与右键共用同一个菜单实体和收合订阅。
-    fn open_side_button_menu(
+    pub(super) fn open_side_button_menu(
         &mut self,
         view: SideViewId,
         position: Option<gpui::Point<gpui::Pixels>>,
         window: &mut Window,
         cx: &mut Context<'_, Self>,
-    ) {
+    ) -> Result<(), super::commands::AppRootError> {
         if self.side_button_menu.is_some() {
-            self.close_side_button_menu(window, cx);
+            self.close_side_button_menu(window, cx)?;
         }
-        self.focus_side_button(view, window, cx);
+        self.focus_side_button(view, window, cx)?;
         let button = &self.side_buttons[&view];
         let trigger = button.registration.token();
         let target_slot = match self.side_views.state().button_slot(view) {
@@ -290,21 +329,23 @@ impl AppRoot {
         let menu = PopupMenu::build(window, cx, |menu, _, _| {
             Self::build_side_button_menu(menu, view, target_slot, root, language)
         });
-        let registration = self
-            .focus_manager
-            .register(&menu.focus_handle(cx), trigger, None, true)
-            .expect("按钮菜单焦点注册必须唯一");
+        let registration =
+            self.focus_manager
+                .register(&menu.focus_handle(cx), trigger, None, true)?;
         if let Err(error) =
             self.focus_manager
                 .open_modal(trigger, trigger, registration.token(), window, cx)
         {
-            log::warn!("按钮菜单打开送焦失败: {error:?}");
             let _ = self.focus_manager.unregister(registration.token());
-            return;
+            return Err(error.into());
         }
         let root = cx.weak_entity();
         let dismiss = window.subscribe(&menu, cx, move |_, _: &DismissEvent, window, cx| {
-            let _ = root.update(cx, |this, cx| this.close_side_button_menu(window, cx));
+            let _ = root.update(cx, |this, cx| {
+                if let Err(error) = this.close_side_button_menu(window, cx) {
+                    log::warn!("按钮菜单关闭失败: {error:?}");
+                }
+            });
         });
         self.side_button_menu = Some(SideButtonMenu {
             view,
@@ -314,29 +355,33 @@ impl AppRoot {
             _dismiss: dismiss,
         });
         cx.notify();
+        Ok(())
     }
 
-    fn close_side_button_menu(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+    fn close_side_button_menu(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<(), super::focus_manager::FocusError> {
         let Some(state) = self.side_button_menu.take() else {
-            return;
+            return Ok(());
         };
-        if let Err(error) = self.focus_manager.close_modal(window, cx) {
-            log::warn!("按钮菜单关闭还焦失败: {error:?}");
-        }
-        if let Err(error) = self.focus_manager.unregister(state.registration.token()) {
-            log::warn!("注销按钮菜单焦点失败: {error:?}");
-        }
+        let close = self.focus_manager.close_modal(window, cx);
+        let unregister = self.focus_manager.unregister(state.registration.token());
         cx.notify();
+        close?;
+        unregister?;
+        Ok(())
     }
 
-    fn organize_side_button(
+    pub(super) fn organize_side_button(
         &mut self,
         view: SideViewId,
         command: SideButtonCommand,
         window: &mut Window,
         cx: &mut Context<'_, Self>,
-    ) {
-        self.close_side_button_menu(window, cx);
+    ) -> Result<(), super::commands::AppRootError> {
+        self.close_side_button_menu(window, cx)?;
         self.sync_focus(window, cx);
         let previous_state = self.side_views.state().clone();
         let control = self.side_view_persistence.controller(cx);
@@ -354,8 +399,7 @@ impl AppRoot {
                 {
                     Ok(transition) => transition,
                     Err(error) => {
-                        log::warn!("侧栏按钮换区失败: {error}");
-                        return;
+                        return Err(error.into());
                     }
                 }
             }
@@ -363,7 +407,8 @@ impl AppRoot {
             SideButtonCommand::ResetOrder => self.side_views.reset_button_order(),
         };
         let button_return = matches!(command, SideButtonCommand::Hide).then_some(view);
-        self.apply_sidebar_effects(transition, None, button_return, &previous_state, window, cx);
+        self.apply_sidebar_effects(transition, None, button_return, &previous_state, window, cx)?;
+        Ok(())
     }
 
     fn render_side_button_menu(&self, view: SideViewId) -> Option<AnyElement> {
@@ -398,7 +443,8 @@ impl AppRoot {
         previous_state: &SidebarState,
         window: &mut Window,
         cx: &mut Context<'_, Self>,
-    ) {
+    ) -> Result<(), super::commands::AppRootError> {
+        let mut first_error = None;
         self.sidebar_drag = None;
         let divider_return = self
             .focused_sidebar_divider(window, cx)
@@ -418,8 +464,10 @@ impl AppRoot {
                 .side_view_focus
                 .remove(view)
                 .expect("关闭的 SideView 必须持有焦点注册");
-            if let Err(error) = self.focus_manager.unregister(registration.token()) {
-                log::warn!("注销 SideView 焦点失败: {error:?}");
+            if let Err(error) = self.focus_manager.unregister(registration.token())
+                && first_error.is_none()
+            {
+                first_error = Some(error.into());
             }
         }
         for view in transition.opened.iter().copied() {
@@ -429,23 +477,43 @@ impl AppRoot {
                 .and_then(|instance| instance.read(cx).focus_handle.clone())
                 .expect("生产 SideView 必须在注册前安装焦点句柄");
             let parent = self.focus_manager.workspace_token();
-            let registration = self
-                .focus_manager
-                .register(&handle, parent, None, transition.is_visible)
-                .expect("新 SideView 焦点注册必须唯一");
+            let registration =
+                match self
+                    .focus_manager
+                    .register(&handle, parent, None, transition.is_visible)
+                {
+                    Ok(registration) => registration,
+                    Err(error) => {
+                        if first_error.is_none() {
+                            first_error = Some(error.into());
+                        }
+                        continue;
+                    }
+                };
             let previous = self.side_view_focus.insert(view, registration);
             debug_assert!(previous.is_none());
         }
-        self.sync_sidebar_focus_visibility();
+        if let Err(error) = self.sync_sidebar_focus_visibility()
+            && first_error.is_none()
+        {
+            first_error = Some(error);
+        }
         if self.side_views.state() != previous_state {
             self.side_view_persistence
                 .save_sidebar_state(self.side_views.state());
         }
 
         if let Some(view) = transition.focus {
-            let token = self.side_view_focus[&view].token();
-            if let Err(error) = self.focus_manager.request_focus(token, window, cx) {
-                log::warn!("SideView 送焦失败: {error:?}");
+            if let Some(registration) = self.side_view_focus.get(&view) {
+                if let Err(error) =
+                    self.focus_manager
+                        .request_focus(registration.token(), window, cx)
+                    && first_error.is_none()
+                {
+                    first_error = Some(error.into());
+                }
+            } else if first_error.is_none() {
+                first_error = Some(super::focus_manager::FocusError::Unavailable.into());
             }
         } else if let Some(view) = return_from {
             let token = self
@@ -457,8 +525,10 @@ impl AppRoot {
                 .and_then(|view| self.side_buttons.get(&view))
                 .map(|button| button.registration.token())
                 .unwrap_or_else(|| self.focus_manager.workspace_token());
-            if let Err(error) = self.focus_manager.restore_focus(&[token], window, cx) {
-                log::warn!("SideView 关闭还焦失败: {error:?}");
+            if let Err(error) = self.focus_manager.restore_focus(&[token], window, cx)
+                && first_error.is_none()
+            {
+                first_error = Some(error.into());
             }
         } else if let Some(view) =
             button_return.filter(|view| !self.side_views.state().button_is_visible(*view))
@@ -478,14 +548,22 @@ impl AppRoot {
                 .and_then(|view| self.side_buttons.get(&view))
                 .map(|button| button.registration.token())
                 .unwrap_or_else(|| self.focus_manager.workspace_token());
-            if let Err(error) = self.focus_manager.request_focus(token, window, cx) {
-                log::warn!("隐藏活动栏按钮还焦失败: {error:?}");
+            if let Err(error) = self.focus_manager.request_focus(token, window, cx)
+                && first_error.is_none()
+            {
+                first_error = Some(error.into());
             }
         }
         cx.notify();
+        if let Some(error) = first_error {
+            Err(error)
+        } else {
+            Ok(())
+        }
     }
 
-    fn sync_sidebar_focus_visibility(&mut self) {
+    fn sync_sidebar_focus_visibility(&mut self) -> Result<(), super::commands::AppRootError> {
+        let mut first_error = None;
         let state = self.side_views.state();
         let visible = state.is_visible();
         let mut updates = Vec::new();
@@ -507,9 +585,16 @@ impl AppRoot {
             } else {
                 self.focus_manager.set_visible(token, false)
             };
-            if let Err(error) = result {
-                log::warn!("侧栏焦点可见性同步失败: {error:?}");
+            if let Err(error) = result
+                && first_error.is_none()
+            {
+                first_error = Some(error);
             }
+        }
+        if let Some(error) = first_error {
+            Err(error.into())
+        } else {
+            Ok(())
         }
     }
 
@@ -518,7 +603,7 @@ impl AppRoot {
         view: SideViewId,
         window: &mut Window,
         cx: &mut Context<'_, Self>,
-    ) {
+    ) -> Result<(), super::commands::AppRootError> {
         let focused_before = self.focused_side_view(window, cx);
         self.sync_focus(window, cx);
         let previous_state = self.side_views.state().clone();
@@ -533,15 +618,15 @@ impl AppRoot {
             &previous_state,
             window,
             cx,
-        );
+        )
     }
 
-    fn click_side_view(
+    pub(super) fn click_side_view(
         &mut self,
         view: SideViewId,
         window: &mut Window,
         cx: &mut Context<'_, Self>,
-    ) -> Result<(), SidebarError> {
+    ) -> Result<(), super::commands::AppRootError> {
         let focused_before = self.focused_side_view(window, cx);
         self.sync_focus(window, cx);
         let previous_state = self.side_views.state().clone();
@@ -554,11 +639,14 @@ impl AppRoot {
             &previous_state,
             window,
             cx,
-        );
-        Ok(())
+        )
     }
 
-    pub(super) fn toggle_sidebar(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+    pub(super) fn toggle_sidebar(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<(), super::commands::AppRootError> {
         let focused_before = self.focused_side_view(window, cx);
         self.sync_focus(window, cx);
         let previous_state = self.side_views.state().clone();
@@ -571,31 +659,61 @@ impl AppRoot {
             &previous_state,
             window,
             cx,
-        );
+        )
     }
 
     pub(super) fn render_activity_bar(&self, cx: &Context<'_, Self>) -> AnyElement {
         div()
             .key_context(ACTIVITY_BAR_KEY_CONTEXT)
             .on_action(cx.listener(|this, _: &FocusNextSideButton, window, cx| {
-                this.navigate_side_buttons(SideButtonNavigation::Next, window, cx);
+                this.execute_sidebar_action(
+                    CommandId::FocusNextSideButton,
+                    CommandTarget::Focused,
+                    window,
+                    cx,
+                );
             }))
             .on_action(
                 cx.listener(|this, _: &FocusPreviousSideButton, window, cx| {
-                    this.navigate_side_buttons(SideButtonNavigation::Previous, window, cx);
+                    this.execute_sidebar_action(
+                        CommandId::FocusPreviousSideButton,
+                        CommandTarget::Focused,
+                        window,
+                        cx,
+                    );
                 }),
             )
             .on_action(cx.listener(|this, _: &FocusFirstSideButton, window, cx| {
-                this.navigate_side_buttons(SideButtonNavigation::First, window, cx);
+                this.execute_sidebar_action(
+                    CommandId::FocusFirstSideButton,
+                    CommandTarget::Focused,
+                    window,
+                    cx,
+                );
             }))
             .on_action(cx.listener(|this, _: &FocusLastSideButton, window, cx| {
-                this.navigate_side_buttons(SideButtonNavigation::Last, window, cx);
+                this.execute_sidebar_action(
+                    CommandId::FocusLastSideButton,
+                    CommandTarget::Focused,
+                    window,
+                    cx,
+                );
             }))
             .on_action(cx.listener(|this, _: &ActivateSideButton, window, cx| {
-                this.activate_focused_side_button(window, cx);
+                this.execute_sidebar_action(
+                    CommandId::ActivateSideButton,
+                    CommandTarget::Focused,
+                    window,
+                    cx,
+                );
             }))
             .on_action(cx.listener(|this, _: &OpenSideButtonMenu, window, cx| {
-                this.open_focused_side_button_menu(window, cx);
+                this.execute_sidebar_action(
+                    CommandId::OpenSideButtonMenu,
+                    CommandTarget::Focused,
+                    window,
+                    cx,
+                );
             }))
             .w(px(ACTIVITY_BAR_WIDTH))
             .h_full()
@@ -668,7 +786,14 @@ impl AppRoot {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, _, window, cx| {
-                    if let Err(error) = this.click_side_view(view, window, cx) {
+                    if let Err(error) = this.execute_command(
+                        CommandId::ActivateSideButton,
+                        CommandSource::Pointer,
+                        CommandTarget::SideButton(view),
+                        None,
+                        window,
+                        cx,
+                    ) {
                         log::warn!("侧栏按钮操作失败: {error}");
                     }
                 }),
@@ -676,7 +801,16 @@ impl AppRoot {
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
-                    this.open_side_button_menu(view, Some(event.position), window, cx);
+                    if let Err(error) = this.execute_command(
+                        CommandId::OpenSideButtonMenu,
+                        CommandSource::Pointer,
+                        CommandTarget::SideButton(view),
+                        Some(CommandParameters::SideButtonMenuPosition(event.position)),
+                        window,
+                        cx,
+                    ) {
+                        log::warn!("侧栏按钮菜单打开失败: {error}");
+                    }
                 }),
             )
             .child(Icon::new(icon).size(px(15.0)).text_color(if active {
@@ -701,11 +835,21 @@ impl AppRoot {
         }
         if event.click_count >= 2 {
             self.sidebar_drag = None;
-            let command = match divider {
-                SidebarDivider::Width => SidebarGeometryCommand::ResetWidth,
-                SidebarDivider::Ratio => SidebarGeometryCommand::ResetRatio,
+            let (id, target) = match divider {
+                SidebarDivider::Width => (
+                    CommandId::ResetSidebarWidth,
+                    CommandTarget::SidebarWidthDivider,
+                ),
+                SidebarDivider::Ratio => (
+                    CommandId::ResetSidebarRatio,
+                    CommandTarget::SidebarRatioDivider,
+                ),
             };
-            self.change_sidebar_geometry(command, cx);
+            if let Err(error) =
+                self.execute_command(id, CommandSource::Pointer, target, None, window, cx)
+            {
+                log::warn!("分隔线双击复位失败: {error}");
+            }
             return;
         }
         self.sidebar_drag = Some(match divider {
@@ -743,10 +887,12 @@ impl AppRoot {
                 start_width,
             } => {
                 let width = start_width + f32::from(event.position.x) - start_x;
-                self.change_sidebar_geometry(
+                if let Err(error) = self.change_sidebar_geometry(
                     SidebarGeometryCommand::SetWidth(width.round().max(0.0) as u32),
                     cx,
-                );
+                ) {
+                    log::warn!("侧栏宽度拖动失败: {error}");
+                }
             }
             SidebarDrag::Ratio {
                 start_y,
@@ -754,7 +900,11 @@ impl AppRoot {
             } => {
                 let height = f32::from(window.viewport_size().height).max(DUAL_SLOT_MIN_HEIGHT);
                 let ratio = start_ratio + (f32::from(event.position.y) - start_y) / height;
-                self.change_sidebar_geometry(SidebarGeometryCommand::SetRatio(ratio), cx);
+                if let Err(error) =
+                    self.change_sidebar_geometry(SidebarGeometryCommand::SetRatio(ratio), cx)
+                {
+                    log::warn!("侧栏比例拖动失败: {error}");
+                }
             }
         }
     }
@@ -791,11 +941,11 @@ impl AppRoot {
         )
     }
 
-    fn change_sidebar_geometry(
+    pub(super) fn change_sidebar_geometry(
         &mut self,
         command: SidebarGeometryCommand,
         cx: &mut Context<'_, Self>,
-    ) {
+    ) -> Result<(), super::commands::AppRootError> {
         let previous_state = self.side_views.state().clone();
         let result = match command {
             SidebarGeometryCommand::SetWidth(width) => {
@@ -812,15 +962,13 @@ impl AppRoot {
                 Ok(())
             }
         };
-        if let Err(error) = result {
-            log::warn!("侧栏几何调整失败: {error}");
-            return;
-        }
+        result?;
         if self.side_views.state() != &previous_state {
             self.side_view_persistence
                 .save_sidebar_state(self.side_views.state());
             cx.notify();
         }
+        Ok(())
     }
 
     fn render_sidebar_width_divider(&self, window: &Window, cx: &Context<'_, Self>) -> AnyElement {
@@ -838,25 +986,50 @@ impl AppRoot {
             .aria_numeric_value_step(16.0)
             .key_context(SIDEBAR_WIDTH_KEY_CONTEXT)
             .on_action(cx.listener(|this, _: &AdjustSidebarWidthLeft, window, cx| {
-                this.adjust_sidebar_width(-16.0, window, cx);
+                this.execute_sidebar_action(
+                    CommandId::AdjustSidebarWidthLeft,
+                    CommandTarget::SidebarWidthDivider,
+                    window,
+                    cx,
+                );
             }))
             .on_action(
                 cx.listener(|this, _: &AdjustSidebarWidthRight, window, cx| {
-                    this.adjust_sidebar_width(16.0, window, cx);
+                    this.execute_sidebar_action(
+                        CommandId::AdjustSidebarWidthRight,
+                        CommandTarget::SidebarWidthDivider,
+                        window,
+                        cx,
+                    );
                 }),
             )
             .on_action(
                 cx.listener(|this, _: &AdjustSidebarWidthLeftLarge, window, cx| {
-                    this.adjust_sidebar_width(-64.0, window, cx);
+                    this.execute_sidebar_action(
+                        CommandId::AdjustSidebarWidthLeftLarge,
+                        CommandTarget::SidebarWidthDivider,
+                        window,
+                        cx,
+                    );
                 }),
             )
             .on_action(
                 cx.listener(|this, _: &AdjustSidebarWidthRightLarge, window, cx| {
-                    this.adjust_sidebar_width(64.0, window, cx);
+                    this.execute_sidebar_action(
+                        CommandId::AdjustSidebarWidthRightLarge,
+                        CommandTarget::SidebarWidthDivider,
+                        window,
+                        cx,
+                    );
                 }),
             )
-            .on_action(cx.listener(|this, _: &ResetSidebarWidth, _, cx| {
-                this.change_sidebar_geometry(SidebarGeometryCommand::ResetWidth, cx);
+            .on_action(cx.listener(|this, _: &ResetSidebarWidth, window, cx| {
+                this.execute_sidebar_action(
+                    CommandId::ResetSidebarWidth,
+                    CommandTarget::SidebarWidthDivider,
+                    window,
+                    cx,
+                );
             }))
             .absolute()
             .top_0()
@@ -901,23 +1074,48 @@ impl AppRoot {
             .aria_numeric_value_step(2.0)
             .key_context(SIDEBAR_RATIO_KEY_CONTEXT)
             .on_action(cx.listener(|this, _: &AdjustSidebarRatioUp, window, cx| {
-                this.adjust_sidebar_ratio(-0.02, window, cx);
+                this.execute_sidebar_action(
+                    CommandId::AdjustSidebarRatioUp,
+                    CommandTarget::SidebarRatioDivider,
+                    window,
+                    cx,
+                );
             }))
             .on_action(cx.listener(|this, _: &AdjustSidebarRatioDown, window, cx| {
-                this.adjust_sidebar_ratio(0.02, window, cx);
+                this.execute_sidebar_action(
+                    CommandId::AdjustSidebarRatioDown,
+                    CommandTarget::SidebarRatioDivider,
+                    window,
+                    cx,
+                );
             }))
             .on_action(
                 cx.listener(|this, _: &AdjustSidebarRatioUpLarge, window, cx| {
-                    this.adjust_sidebar_ratio(-0.1, window, cx);
+                    this.execute_sidebar_action(
+                        CommandId::AdjustSidebarRatioUpLarge,
+                        CommandTarget::SidebarRatioDivider,
+                        window,
+                        cx,
+                    );
                 }),
             )
             .on_action(
                 cx.listener(|this, _: &AdjustSidebarRatioDownLarge, window, cx| {
-                    this.adjust_sidebar_ratio(0.1, window, cx);
+                    this.execute_sidebar_action(
+                        CommandId::AdjustSidebarRatioDownLarge,
+                        CommandTarget::SidebarRatioDivider,
+                        window,
+                        cx,
+                    );
                 }),
             )
-            .on_action(cx.listener(|this, _: &ResetSidebarRatio, _, cx| {
-                this.change_sidebar_geometry(SidebarGeometryCommand::ResetRatio, cx);
+            .on_action(cx.listener(|this, _: &ResetSidebarRatio, window, cx| {
+                this.execute_sidebar_action(
+                    CommandId::ResetSidebarRatio,
+                    CommandTarget::SidebarRatioDivider,
+                    window,
+                    cx,
+                );
             }))
             .h(px(slterm_split::DIVIDER_GAP))
             .w_full()
