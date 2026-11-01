@@ -23,7 +23,7 @@ static WORKSPACE_OBJECTS: [SchemaObject; 21] = [
     SchemaObject {
         kind: "table",
         name: "app_state",
-        sql: "CREATE TABLE app_state (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), active_project_id TEXT REFERENCES projects(project_id) ON DELETE SET NULL)",
+        sql: "CREATE TABLE app_state (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), active_project_id TEXT REFERENCES projects(project_id) ON DELETE SET NULL, sidebar_json TEXT)",
     },
     SchemaObject {
         kind: "table",

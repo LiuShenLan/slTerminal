@@ -9,7 +9,7 @@ use gpui::{
     App, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, Render,
     Styled as _, Window, div,
 };
-use slterm_sidebar::{SideViewState, side_view_state_schema};
+use slterm_sidebar::{SideViewState, SidebarState, side_view_state_schema};
 use slterm_workspace::{SideViewId, ViewState, ViewStateError, ViewStateRegistry};
 
 use super::side_view_host::SideViewControl;
@@ -29,6 +29,8 @@ pub(crate) struct SideViewPersistence {
     writer: Option<WorkspaceWriterClient>,
     write_barriers: SideViewWriteBarriers,
     pending_final_states: SideViewPendingFinalStates,
+    recovered_sidebar: Option<SidebarState>,
+    pending_final_sidebar: Option<SidebarState>,
 }
 
 impl SideViewPersistence {
@@ -36,7 +38,7 @@ impl SideViewPersistence {
         paths: &slterm_path::AppPaths,
         writer: Option<WorkspaceWriterClient>,
     ) -> Self {
-        let persistence = Self::empty(writer);
+        let mut persistence = Self::empty(writer);
         let store = match crate::persistence::workspace::WorkspaceDatabase::open(paths) {
             Ok(store) => store,
             Err(error) => {
@@ -48,6 +50,22 @@ impl SideViewPersistence {
                 return persistence;
             }
         };
+        match store.sidebar_state() {
+            Ok(Some(recovery)) => {
+                if !recovery.warnings.is_empty() {
+                    log::warn!(
+                        "sidebar organization recovered with {} repair(s)",
+                        recovery.warnings.len()
+                    );
+                }
+                persistence.recovered_sidebar = Some(recovery.state);
+            }
+            Ok(None) => {}
+            Err(error) => {
+                // 未发生显式组织编辑时不写回默认态，保留原始记录供诊断。
+                log::warn!("could not restore sidebar organization: {error}");
+            }
+        }
         for id in SideViewId::ALL {
             let key = slterm_workspace::ViewKey::SideView { side_view_id: id };
             match store.view_state(&key, &persistence.registry) {
@@ -77,6 +95,26 @@ impl SideViewPersistence {
             writer,
             write_barriers: Rc::default(),
             pending_final_states: Rc::default(),
+            recovered_sidebar: None,
+            pending_final_sidebar: None,
+        }
+    }
+
+    pub(super) fn take_sidebar_state(&mut self) -> SidebarState {
+        self.recovered_sidebar.take().unwrap_or_default()
+    }
+
+    /// 只有显式组织编辑进入此出口；启动默认态与恢复失败记录不会自动回写。
+    pub(super) fn save_sidebar_state(&mut self, state: &SidebarState) {
+        let Some(writer) = &self.writer else {
+            return;
+        };
+        match writer.save_sidebar_state(state) {
+            Ok(()) => self.pending_final_sidebar = None,
+            Err(error) => {
+                self.pending_final_sidebar = Some(state.clone());
+                log::warn!("could not queue sidebar organization: {error}");
+            }
         }
     }
 
@@ -102,6 +140,11 @@ impl Drop for SideViewPersistence {
             if let Err(error) = writer.save_final_view_state(&key, state) {
                 log::warn!("could not queue deferred final SideView ViewState: {error}");
             }
+        }
+        if let Some(state) = &self.pending_final_sidebar
+            && let Err(error) = writer.save_final_sidebar_state(state)
+        {
+            log::warn!("could not queue final sidebar organization: {error}");
         }
     }
 }
@@ -361,6 +404,172 @@ mod side_view_state_persistence_tests {
                 .borrow()
                 .contains(&SideViewId::Nav)
         );
+    }
+
+    #[test]
+    fn sidebar_persistence_restores_organization_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = paths(&temp);
+        let writer = WorkspaceWriter::start(paths.clone()).unwrap();
+        let mut persistence = SideViewPersistence::load(&paths, Some(writer.client()));
+        let mut state = persistence.take_sidebar_state();
+        state
+            .move_button_to_slot(SideViewId::Explorer, slterm_sidebar::SideSlot::Lower, 0)
+            .unwrap();
+        state.click_button(SideViewId::Explorer).unwrap();
+        state.set_button_hidden(SideViewId::Commit, true);
+        state.set_width(333);
+        state.set_ratio(0.25).unwrap();
+        state.toggle_sidebar();
+        persistence.save_sidebar_state(&state);
+        writer.flush().unwrap();
+        drop(persistence);
+        writer.shutdown().unwrap();
+
+        let mut restored = SideViewPersistence::load(&paths, None);
+        let state = restored.take_sidebar_state();
+        assert!(!state.visible_intent());
+        assert_eq!(state.width(), 333);
+        assert_eq!(state.ratio(), 0.25);
+        assert!(!state.button_is_visible(SideViewId::Commit));
+        assert_eq!(
+            state.open_view(slterm_sidebar::SideSlot::Upper),
+            Some(SideViewId::Nav)
+        );
+        assert_eq!(
+            state.open_view(slterm_sidebar::SideSlot::Lower),
+            Some(SideViewId::Explorer)
+        );
+    }
+
+    /// 整体损坏回退默认态、字段损坏采用修复态；无显式编辑时均保留原始字节。
+    #[test]
+    fn sidebar_recovery_never_rewrites_without_edit() {
+        let default_json = SidebarState::default().to_canonical_json().unwrap();
+        let mut custom = SidebarState::default();
+        custom.set_width(333);
+        custom.toggle_sidebar();
+        let mut repaired = custom.clone();
+        repaired.reset_width();
+        let invalid_width = custom
+            .to_canonical_json()
+            .unwrap()
+            .replace(r#""width":333"#, r#""width":100"#);
+        let cases = [
+            (
+                "invalid-json",
+                "not-json".to_owned(),
+                SidebarState::default(),
+            ),
+            (
+                "unknown-kind",
+                default_json.replace(r#""kind":"sidebar_state""#, r#""kind":"other""#),
+                SidebarState::default(),
+            ),
+            (
+                "unsupported-version",
+                default_json.replace(r#""version":1"#, r#""version":2"#),
+                SidebarState::default(),
+            ),
+            ("field-repair", invalid_width, repaired),
+        ];
+
+        for (name, raw, expected) in cases {
+            let temp = tempfile::tempdir().unwrap();
+            let paths = paths(&temp);
+            let mut store = WorkspaceDatabase::open(&paths).unwrap();
+            store.save_sidebar_state(&SidebarState::default()).unwrap();
+            let raw_store = rusqlite::Connection::open(paths.workspace_db_path()).unwrap();
+            raw_store
+                .execute(
+                    "UPDATE app_state SET sidebar_json = ?1 WHERE singleton = 1",
+                    [&raw],
+                )
+                .unwrap();
+            drop(store);
+
+            let writer = WorkspaceWriter::start(paths.clone()).unwrap();
+            let mut persistence = SideViewPersistence::load(&paths, Some(writer.client()));
+            assert_eq!(persistence.take_sidebar_state(), expected, "{name}");
+            drop(persistence);
+            writer.flush().unwrap();
+            writer.shutdown().unwrap();
+
+            let preserved = raw_store
+                .query_row(
+                    "SELECT sidebar_json FROM app_state WHERE singleton = 1",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap();
+            assert_eq!(preserved, raw, "{name}");
+        }
+    }
+
+    /// 普通队列满时，最新组织状态经独立终态通道在退出时提交。
+    #[test]
+    fn sidebar_queue_full_edit_is_submitted_at_shutdown() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = paths(&temp);
+        let writer = WorkspaceWriter::start(paths.clone()).unwrap();
+        let client = writer.client();
+        let fault = rusqlite::Connection::open(paths.workspace_db_path()).unwrap();
+        fault.execute_batch("BEGIN EXCLUSIVE").unwrap();
+        let queued = SidebarState::default();
+        client.save_sidebar_state(&queued).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(600));
+        for _ in 0..64 {
+            client.save_sidebar_state(&queued).unwrap();
+        }
+
+        let mut persistence = SideViewPersistence::empty(Some(client));
+        let mut latest = persistence.take_sidebar_state();
+        latest.set_width(333);
+        latest.toggle_sidebar();
+        persistence.save_sidebar_state(&latest);
+        assert_eq!(persistence.pending_final_sidebar, Some(latest.clone()));
+
+        fault.execute_batch("ROLLBACK").unwrap();
+        drop(persistence);
+        writer.shutdown().unwrap();
+        let store = WorkspaceDatabase::open(&paths).unwrap();
+        assert_eq!(store.sidebar_state().unwrap().unwrap().state, latest);
+    }
+
+    /// 拒收后的新组织编辑一旦成功入队，退出时不得倒灌旧待终态。
+    #[test]
+    fn sidebar_successful_edit_supersedes_deferred_final_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = paths(&temp);
+        let writer = WorkspaceWriter::start(paths.clone()).unwrap();
+        let client = writer.client();
+        let fault = rusqlite::Connection::open(paths.workspace_db_path()).unwrap();
+        fault.execute_batch("BEGIN EXCLUSIVE").unwrap();
+        let queued = SidebarState::default();
+        client.save_sidebar_state(&queued).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(600));
+        for _ in 0..64 {
+            client.save_sidebar_state(&queued).unwrap();
+        }
+
+        let mut persistence = SideViewPersistence::empty(Some(client));
+        let mut rejected = persistence.take_sidebar_state();
+        rejected.set_width(333);
+        persistence.save_sidebar_state(&rejected);
+        assert_eq!(persistence.pending_final_sidebar, Some(rejected));
+        fault.execute_batch("ROLLBACK").unwrap();
+        writer.flush().unwrap();
+
+        let mut latest = persistence.take_sidebar_state();
+        latest.set_width(444);
+        latest.toggle_sidebar();
+        persistence.save_sidebar_state(&latest);
+        assert!(persistence.pending_final_sidebar.is_none());
+        drop(persistence);
+        writer.shutdown().unwrap();
+
+        let store = WorkspaceDatabase::open(&paths).unwrap();
+        assert_eq!(store.sidebar_state().unwrap().unwrap().state, latest);
     }
 
     /// 同步关闭被普通队列拒收后，持久化 owner 仍须在退出时提交该代次的最终状态。

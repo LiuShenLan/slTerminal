@@ -34,6 +34,8 @@ impl AppRoot {
     ) -> Result<(), SidebarError> {
         let control = self.side_view_persistence.controller(cx);
         self.side_views.click_button(view, control)?;
+        self.side_view_persistence
+            .save_sidebar_state(self.side_views.state());
         cx.notify();
         Ok(())
     }
@@ -41,6 +43,8 @@ impl AppRoot {
     pub(super) fn toggle_sidebar(&mut self, cx: &mut Context<'_, Self>) {
         let control = self.side_view_persistence.controller(cx);
         self.side_views.toggle_sidebar(control);
+        self.side_view_persistence
+            .save_sidebar_state(self.side_views.state());
         cx.notify();
     }
 

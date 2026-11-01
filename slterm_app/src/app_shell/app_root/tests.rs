@@ -1232,19 +1232,63 @@ fn project_switch_changes_only_the_rendered_project(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn toggle_sidebar_shortcut_preserves_visible_view_lifecycle(cx: &mut TestAppContext) {
-    let (root, mut window, _) = open_root(cx);
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let writer = WorkspaceWriter::start(paths.clone()).unwrap();
+    let persistence = SideViewPersistence::load(&paths, Some(writer.client()));
+    let (root, mut window, _) = open_root_with_persistence(cx, persistence);
     add_project(&root, &mut window, PROJECT_A, "D:/work/a");
     new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_A);
     draw_frame(&mut window);
     assert!(window.debug_bounds("app-root-side-view-nav").is_some());
+    let store = WorkspaceDatabase::open(&paths).unwrap();
 
     window.simulate_keystrokes("ctrl-shift-b");
     draw_frame(&mut window);
     assert!(window.debug_bounds("app-root-side-view-nav").is_none());
+    writer.flush().unwrap();
+    let mut hidden = slterm_sidebar::SidebarState::default();
+    hidden.toggle_sidebar();
+    assert_eq!(
+        store
+            .sidebar_state()
+            .unwrap()
+            .map(|recovery| recovery.state),
+        Some(hidden)
+    );
 
     window.simulate_keystrokes("ctrl-shift-b");
     draw_frame(&mut window);
     assert!(window.debug_bounds("app-root-side-view-nav").is_some());
+    writer.flush().unwrap();
+    assert_eq!(
+        store
+            .sidebar_state()
+            .unwrap()
+            .map(|recovery| recovery.state),
+        Some(slterm_sidebar::SidebarState::default())
+    );
+}
+
+#[gpui::test]
+fn production_sidebar_restores_organization_before_first_frame(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let mut store = WorkspaceDatabase::open(&paths).unwrap();
+    let mut sidebar = slterm_sidebar::SidebarState::default();
+    sidebar.set_width(333);
+    sidebar.toggle_sidebar();
+    store.save_sidebar_state(&sidebar).unwrap();
+    drop(store);
+
+    let persistence = SideViewPersistence::load(&paths, None);
+    let (root, mut window, _) = open_root_with_persistence(cx, persistence);
+    draw_frame(&mut window);
+
+    assert!(window.debug_bounds("app-root-side-view-nav").is_none());
+    root.read_with(cx, |root, _| {
+        assert_eq!(root.side_views.state(), &sidebar);
+    });
 }
 
 #[gpui::test]
@@ -1356,5 +1400,13 @@ fn production_sidebar_button_replaces_visible_view(cx: &mut TestAppContext) {
             .unwrap()
             .is_some(),
         "同槽关闭必须经生产 writer 保存被替换视图的私有状态"
+    );
+    let sidebar = store
+        .sidebar_state()
+        .unwrap()
+        .expect("生产按钮必须保存侧栏组织状态");
+    assert_eq!(
+        sidebar.state.open_view(slterm_sidebar::SideSlot::Upper),
+        Some(SideViewId::Explorer)
     );
 }

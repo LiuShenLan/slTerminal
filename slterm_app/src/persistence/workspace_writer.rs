@@ -9,14 +9,17 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use slterm_path::AppPaths;
+use slterm_sidebar::SidebarState;
 use slterm_workspace::{ProjectSnapshot, ViewKey, ViewKeyError, ViewState, ViewStateError};
 
 use super::database::DatabaseError;
 use super::project::ProjectStoreError;
+use super::sidebar::SidebarStateStoreError;
 use super::view_state::ViewStateStoreError;
 use super::workspace::WorkspaceDatabase;
 
 const VIEW_STATE_DEBOUNCE: Duration = Duration::from_millis(500);
+const SIDEBAR_STATE_DEBOUNCE: Duration = Duration::from_millis(500);
 const PROJECT_SNAPSHOT_DEBOUNCE: Duration = Duration::from_secs(2);
 const COMMAND_CAPACITY: usize = 64;
 
@@ -30,6 +33,7 @@ pub(crate) struct WorkspaceFlushReport {
 /// 后台工作区状态写失败；分类信息不携带路径、SQL 或状态正文。
 pub(crate) enum WorkspaceWriteFailure {
     ViewState(ViewStateWriteFailure),
+    SidebarState(SidebarStateStoreError),
     ProjectSnapshot(ProjectStoreError),
 }
 
@@ -86,6 +90,9 @@ enum Command {
     SaveProjectSnapshot {
         snapshot: Box<ProjectSnapshot>,
     },
+    SaveSidebarState {
+        state: Box<SidebarState>,
+    },
     Flush {
         response: SyncSender<WorkspaceFlushReport>,
     },
@@ -100,6 +107,8 @@ pub(crate) struct WorkspaceWriterClient {
     commands: SyncSender<Command>,
     /// 实体退出时移交的最终状态；只在 owner shutdown 时由后台排空。
     final_states: SyncSender<(ViewKey, ViewState)>,
+    /// 应用级侧栏只有一份待终态，独立于普通命令队列。
+    final_sidebar_state: SyncSender<SidebarState>,
 }
 
 impl WorkspaceWriterClient {
@@ -127,6 +136,34 @@ impl WorkspaceWriterClient {
             .try_send(Command::SaveProjectSnapshot {
                 snapshot: Box::new(snapshot.clone()),
             })
+            .map_err(|error| match error {
+                TrySendError::Full(_) => WorkspaceWriterError::QueueFull,
+                TrySendError::Disconnected(_) => WorkspaceWriterError::Stopped,
+            })
+    }
+
+    /// 非阻塞提交最新侧栏组织状态；同一时刻只保留一个待写版本。
+    pub(crate) fn save_sidebar_state(
+        &self,
+        state: &SidebarState,
+    ) -> Result<(), WorkspaceWriterError> {
+        self.commands
+            .try_send(Command::SaveSidebarState {
+                state: Box::new(state.clone()),
+            })
+            .map_err(|error| match error {
+                TrySendError::Full(_) => WorkspaceWriterError::QueueFull,
+                TrySendError::Disconnected(_) => WorkspaceWriterError::Stopped,
+            })
+    }
+
+    /// 非阻塞移交侧栏最终组织状态；只由持久化 owner 在退出时调用。
+    pub(crate) fn save_final_sidebar_state(
+        &self,
+        state: &SidebarState,
+    ) -> Result<(), WorkspaceWriterError> {
+        self.final_sidebar_state
+            .try_send(state.clone())
             .map_err(|error| match error {
                 TrySendError::Full(_) => WorkspaceWriterError::QueueFull,
                 TrySendError::Disconnected(_) => WorkspaceWriterError::Stopped,
@@ -167,6 +204,8 @@ pub(crate) struct WorkspaceWriter {
     commands: SyncSender<Command>,
     final_state_sender: SyncSender<(ViewKey, ViewState)>,
     final_states: Receiver<(ViewKey, ViewState)>,
+    final_sidebar_sender: SyncSender<SidebarState>,
+    final_sidebar_state: Receiver<SidebarState>,
     failures: Option<Receiver<WorkspaceWriteFailure>>,
     worker: Option<JoinHandle<()>>,
 }
@@ -176,6 +215,7 @@ impl WorkspaceWriter {
     pub(crate) fn start(paths: AppPaths) -> Result<Self, WorkspaceWriterError> {
         let (commands, receiver) = mpsc::sync_channel(COMMAND_CAPACITY);
         let (final_states, final_state_receiver) = mpsc::sync_channel(COMMAND_CAPACITY);
+        let (final_sidebar_state, final_sidebar_receiver) = mpsc::sync_channel(1);
         let (failure_sender, failures) = mpsc::sync_channel(1);
         let (startup, started) = mpsc::sync_channel(1);
         let worker = std::thread::Builder::new()
@@ -187,6 +227,8 @@ impl WorkspaceWriter {
                 commands,
                 final_state_sender: final_states,
                 final_states: final_state_receiver,
+                final_sidebar_sender: final_sidebar_state,
+                final_sidebar_state: final_sidebar_receiver,
                 failures: Some(failures),
                 worker: Some(worker),
             }),
@@ -205,6 +247,7 @@ impl WorkspaceWriter {
         WorkspaceWriterClient {
             commands: self.commands.clone(),
             final_states: self.final_state_sender.clone(),
+            final_sidebar_state: self.final_sidebar_sender.clone(),
         }
     }
 
@@ -281,6 +324,13 @@ impl WorkspaceWriter {
                 .send(command)
                 .map_err(|_| WorkspaceWriterError::Stopped)?;
         }
+        for state in self.final_sidebar_state.try_iter() {
+            self.commands
+                .send(Command::SaveSidebarState {
+                    state: Box::new(state),
+                })
+                .map_err(|_| WorkspaceWriterError::Stopped)?;
+        }
         Ok(())
     }
 }
@@ -304,9 +354,15 @@ struct PendingProjectSnapshot {
     due: Option<Instant>,
 }
 
+struct PendingSidebarState {
+    state: SidebarState,
+    due: Option<Instant>,
+}
+
 #[derive(Default)]
 struct PendingWrites {
     view_states: BTreeMap<String, PendingViewState>,
+    sidebar_state: Option<PendingSidebarState>,
     project_snapshot: Option<PendingProjectSnapshot>,
 }
 
@@ -371,6 +427,12 @@ fn run(
                     due: Some(Instant::now() + PROJECT_SNAPSHOT_DEBOUNCE),
                 });
             }
+            Command::SaveSidebarState { state } => {
+                pending.sidebar_state = Some(PendingSidebarState {
+                    state: *state,
+                    due: Some(Instant::now() + SIDEBAR_STATE_DEBOUNCE),
+                });
+            }
             Command::Flush { response } => {
                 let report = write_pending(&mut store, &mut pending, &failures, true);
                 let _ = response.send(report);
@@ -392,6 +454,12 @@ fn next_wait(pending: &PendingWrites) -> Option<Duration> {
         .view_states
         .values()
         .filter_map(|pending| pending.due)
+        .chain(
+            pending
+                .sidebar_state
+                .as_ref()
+                .and_then(|pending| pending.due),
+        )
         .chain(
             pending
                 .project_snapshot
@@ -444,6 +512,35 @@ fn write_pending(
                         key,
                         error,
                     }));
+            }
+        }
+    }
+
+    let sidebar_ready = pending
+        .sidebar_state
+        .as_ref()
+        .is_some_and(|pending| all || pending.due.is_some_and(|due| due <= now));
+    if sidebar_ready {
+        let result = {
+            let sidebar = pending
+                .sidebar_state
+                .as_ref()
+                .expect("就绪侧栏状态必须存在");
+            store.save_sidebar_state(&sidebar.state)
+        };
+        match result {
+            Ok(()) => {
+                pending.sidebar_state = None;
+                report.written += 1;
+            }
+            Err(error) => {
+                let sidebar = pending
+                    .sidebar_state
+                    .as_mut()
+                    .expect("失败侧栏状态必须保留");
+                sidebar.due = None;
+                report.failed += 1;
+                let _ = failures.try_send(WorkspaceWriteFailure::SidebarState(error));
             }
         }
     }
@@ -649,6 +746,20 @@ mod workspace_writer_tests {
         }
     }
 
+    fn wait_for_sidebar_state(store: &WorkspaceDatabase) -> Option<SidebarState> {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            let current = store
+                .sidebar_state()
+                .unwrap()
+                .map(|recovery| recovery.state);
+            if current.is_some() || Instant::now() >= deadline {
+                return current;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     fn wait_for_failure(writer: &WorkspaceWriter) -> Option<ViewStateWriteFailure> {
         let deadline = Instant::now() + Duration::from_secs(3);
         loop {
@@ -656,6 +767,9 @@ mod workspace_writer_tests {
                 Some(WorkspaceWriteFailure::ViewState(failure)) => return Some(failure),
                 Some(WorkspaceWriteFailure::ProjectSnapshot(_)) => {
                     panic!("ViewState 测试不得收到项目聚合失败")
+                }
+                Some(WorkspaceWriteFailure::SidebarState(_)) => {
+                    panic!("ViewState 测试不得收到侧栏组织状态失败")
                 }
                 None if Instant::now() < deadline => {
                     std::thread::sleep(Duration::from_millis(10));
@@ -691,6 +805,101 @@ mod workspace_writer_tests {
         assert_eq!(wait_for_position(&observer), Some((3, 0)));
         assert_eq!(writer.flush().unwrap(), WorkspaceFlushReport::default());
         writer.shutdown().unwrap();
+    }
+
+    /// 侧栏组织状态只写最新版本，且在 500 毫秒去抖到期前不落盘。
+    #[test]
+    fn workspace_writer_debounces_sidebar_state_to_latest() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = fixture(&temp);
+        let observer = WorkspaceDatabase::open(&paths).unwrap();
+        let writer = WorkspaceWriter::start(paths).unwrap();
+        let client = writer.client();
+
+        assert_eq!(SIDEBAR_STATE_DEBOUNCE, Duration::from_millis(500));
+        for width in [260, 300, 333] {
+            let mut state = SidebarState::default();
+            state.set_width(width);
+            client.save_sidebar_state(&state).unwrap();
+        }
+        assert!(
+            observer.sidebar_state().unwrap().is_none(),
+            "侧栏组织状态去抖到期前不得写盘"
+        );
+
+        let restored = wait_for_sidebar_state(&observer).expect("去抖到期后必须写盘");
+        assert_eq!(restored.width(), 333);
+        assert_eq!(writer.flush().unwrap(), WorkspaceFlushReport::default());
+        writer.shutdown().unwrap();
+    }
+
+    /// 侧栏写失败保留最新副本，后续编辑与 shutdown 均可重试。
+    #[test]
+    fn sidebar_state_save_failure_retains_latest() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = fixture(&temp);
+        let mut observer = WorkspaceDatabase::open(&paths).unwrap();
+        observer
+            .save_sidebar_state(&SidebarState::default())
+            .unwrap();
+        let writer = WorkspaceWriter::start(paths).unwrap();
+        let client = writer.client();
+        observer
+            .database
+            .connection
+            .execute_batch(
+                "CREATE TRIGGER reject_sidebar_write BEFORE UPDATE ON app_state \
+                 BEGIN SELECT RAISE(ABORT, 'injected write failure'); END;",
+            )
+            .unwrap();
+
+        let mut changed = SidebarState::default();
+        changed.set_width(333);
+        client.save_sidebar_state(&changed).unwrap();
+        assert_eq!(
+            writer.flush().unwrap(),
+            WorkspaceFlushReport {
+                written: 0,
+                failed: 1,
+            }
+        );
+        assert!(matches!(
+            writer.try_recv_failure(),
+            Some(WorkspaceWriteFailure::SidebarState(
+                SidebarStateStoreError::Database(_)
+            ))
+        ));
+        assert_eq!(
+            observer.sidebar_state().unwrap().unwrap().state.width(),
+            250
+        );
+
+        let mut latest = SidebarState::default();
+        latest.set_width(344);
+        client.save_sidebar_state(&latest).unwrap();
+        assert_eq!(
+            writer.flush().unwrap(),
+            WorkspaceFlushReport {
+                written: 0,
+                failed: 1,
+            }
+        );
+        observer
+            .database
+            .connection
+            .execute_batch("DROP TRIGGER reject_sidebar_write")
+            .unwrap();
+        assert_eq!(
+            writer.shutdown().unwrap(),
+            WorkspaceFlushReport {
+                written: 1,
+                failed: 0,
+            }
+        );
+        assert_eq!(
+            observer.sidebar_state().unwrap().unwrap().state.width(),
+            344
+        );
     }
 
     /// UI client 与外部生命周期 owner 共用同一有界命令队列。

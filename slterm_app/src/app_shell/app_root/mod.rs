@@ -17,7 +17,6 @@ use std::collections::BTreeMap;
 
 use gpui::{Context, Entity, FocusHandle, Subscription, Window};
 use slterm_path::CanonicalPath;
-use slterm_sidebar::SidebarState;
 use slterm_workspace::{PanelId, PanelIdAllocator, ProjectId, ProjectSnapshot};
 
 use focus_manager::{FocusManager, FocusRegistration, FocusSubscriptions};
@@ -74,12 +73,13 @@ impl AppRoot {
         panel_ids: PanelIdAllocator,
         shell: CanonicalPath,
         launcher: Box<dyn TerminalPanelLauncher>,
-        persistence: SideViewPersistence,
+        mut persistence: SideViewPersistence,
         cx: &mut Context<'_, Self>,
     ) -> Self {
         let workspace_focus = cx.focus_handle();
         let focus_manager = FocusManager::new(&workspace_focus);
-        let side_views = SideViewHost::new(SidebarState::default(), persistence.controller(cx));
+        let sidebar_state = persistence.take_sidebar_state();
+        let side_views = SideViewHost::new(sidebar_state, persistence.controller(cx));
         Self {
             snapshot: ProjectSnapshot::default(),
             projects: BTreeMap::new(),

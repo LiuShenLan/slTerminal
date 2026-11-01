@@ -28,7 +28,7 @@
 |---|---|---|
 | `workspace_meta` | 单行约束、`store_epoch`、`run_id`、`clean_shutdown`、`schema_version` | 世代、运行标记和正常退出事实。 |
 | `projects` | `project_id` 主键、词法 `root` 唯一、显示名、排序、根状态、`next_terminal_number` | 项目元数据、RelocationRequired 和单调终端编号计数器。 |
-| `app_state` | 单行约束、可空 `active_project_id` 外键 | 活跃项目，不用布尔多行模拟唯一激活。 |
+| `app_state` | 单行约束、可空 `active_project_id` 外键、可空 `sidebar_json` | 活跃项目与侧栏组织状态，不用布尔多行模拟唯一激活；两类写入只更新所属列。 |
 | `panel_groups` | `panel_group_id` 主键、`project_id` 外键 | 稳定布局组身份。 |
 | `project_layouts` | `project_id` 主键、DTO 版本、规范布局 JSON、revision | PanelGroup 树、ViewKey、激活和尺寸；不存 PanelId。 |
 | `documents` | `document_id` 主键、位置与文件身份 DTO | 被持久布局引用的 Document 元数据，不存正文。 |
