@@ -45,12 +45,41 @@ gpui::actions!(
         FocusFirstSideButton,
         FocusLastSideButton,
         ActivateSideButton,
-        OpenSideButtonMenu
+        OpenSideButtonMenu,
+        AdjustSidebarWidthLeft,
+        AdjustSidebarWidthRight,
+        AdjustSidebarWidthLeftLarge,
+        AdjustSidebarWidthRightLarge,
+        ResetSidebarWidth,
+        AdjustSidebarRatioUp,
+        AdjustSidebarRatioDown,
+        AdjustSidebarRatioUpLarge,
+        AdjustSidebarRatioDownLarge,
+        ResetSidebarRatio
     ]
 );
 
 /// 活动栏按钮的焦点句柄与弱注册；按钮生命周期独立于 SideView 实例。
 struct SideButtonFocus {
+    handle: FocusHandle,
+    registration: FocusRegistration,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum SidebarDivider {
+    Width,
+    Ratio,
+}
+
+/// 同一时刻仅保留一个侧栏布局手势，锚定按下时的指针和用户值。
+#[derive(Clone, Copy)]
+enum SidebarDrag {
+    Width { start_x: f32, start_width: f32 },
+    Ratio { start_y: f32, start_ratio: f32 },
+}
+
+/// 分隔线焦点独立于 SideView 实例，显隐资格由实际槽位布局决定。
+struct SideDividerFocus {
     handle: FocusHandle,
     registration: FocusRegistration,
 }
@@ -77,6 +106,8 @@ pub(crate) struct AppRoot {
     side_views: SideViewHost<Entity<SideView>>,
     side_view_focus: BTreeMap<SideViewId, FocusRegistration>,
     side_buttons: BTreeMap<SideViewId, SideButtonFocus>,
+    side_dividers: BTreeMap<SidebarDivider, SideDividerFocus>,
+    sidebar_drag: Option<SidebarDrag>,
     side_button_menu: Option<SideButtonMenu>,
     side_view_persistence: SideViewPersistence,
     launcher: Box<dyn TerminalPanelLauncher>,
@@ -130,6 +161,21 @@ impl AppRoot {
                 },
             );
         }
+        let mut side_dividers = BTreeMap::new();
+        for divider in [SidebarDivider::Width, SidebarDivider::Ratio] {
+            let eligible = sidebar::divider_is_visible(side_views.state(), divider);
+            let handle = cx.focus_handle().tab_stop(true);
+            let registration = focus_manager
+                .register(&handle, parent, None, eligible)
+                .expect("侧栏分隔线焦点注册必须唯一");
+            side_dividers.insert(
+                divider,
+                SideDividerFocus {
+                    handle,
+                    registration,
+                },
+            );
+        }
         let mut side_view_focus = BTreeMap::new();
         for view in SideViewId::ALL {
             let Some(instance) = side_views.instance(view) else {
@@ -157,6 +203,8 @@ impl AppRoot {
             side_views,
             side_view_focus,
             side_buttons,
+            side_dividers,
+            sidebar_drag: None,
             side_button_menu: None,
             side_view_persistence: persistence,
             launcher,

@@ -1,6 +1,9 @@
 //! 侧栏组织、按钮菜单与焦点生命周期测试。
 
+use super::super::SidebarDivider;
 use super::*;
+use gpui::{MouseDownEvent, MouseUpEvent};
+use slterm_sidebar::SidebarState;
 
 fn assert_side_button_focused(
     root: &Entity<AppRoot>,
@@ -26,6 +29,38 @@ fn focus_side_button(
     window.update(|window, cx| button.focus(window, cx));
     draw_frame(window);
     assert_side_button_focused(root, window, cx, view);
+}
+
+fn focus_sidebar_divider(
+    root: &Entity<AppRoot>,
+    window: &mut VisualTestContext,
+    cx: &TestAppContext,
+    divider: SidebarDivider,
+) {
+    let handle = root.read_with(cx, |root, _| root.side_dividers[&divider].handle.clone());
+    window.update(|window, cx| handle.focus(window, cx));
+    draw_frame(window);
+    assert_eq!(
+        window.update(|window, cx| window.focused(cx)),
+        Some(handle),
+        "焦点必须位于 {divider:?} 分隔线"
+    );
+}
+
+fn double_click(window: &mut VisualTestContext, position: gpui::Point<gpui::Pixels>) {
+    window.simulate_event(MouseDownEvent {
+        position,
+        modifiers: Modifiers::default(),
+        button: MouseButton::Left,
+        click_count: 2,
+        first_mouse: false,
+    });
+    window.simulate_event(MouseUpEvent {
+        position,
+        modifiers: Modifiers::default(),
+        button: MouseButton::Left,
+        click_count: 2,
+    });
 }
 
 fn open_side_button_menu(
@@ -109,6 +144,498 @@ fn production_sidebar_restores_organization_before_first_frame(cx: &mut TestAppC
     root.read_with(cx, |root, _| {
         assert_eq!(root.side_views.state(), &sidebar);
     });
+}
+
+#[gpui::test]
+fn sidebar_width_divider_keyboard_adjusts_resets_and_persists(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let writer = WorkspaceWriter::start(paths.clone()).unwrap();
+    let persistence = SideViewPersistence::load(&paths, Some(writer.client()));
+    let (root, mut window, _) = open_root_with_persistence(cx, persistence);
+    draw_frame(&mut window);
+    focus_sidebar_divider(&root, &mut window, cx, SidebarDivider::Width);
+
+    for (key, expected) in [
+        ("right", 266),
+        ("shift-right", 330),
+        ("left", 314),
+        ("shift-left", 250),
+        ("right", 266),
+        ("enter", 250),
+    ] {
+        window.simulate_keystrokes(key);
+        draw_frame(&mut window);
+        assert_eq!(
+            root.read_with(cx, |root, _| root.side_views.state().width()),
+            expected,
+            "{key} 必须按宽度分隔线合同调整"
+        );
+    }
+
+    writer.flush().unwrap();
+    let store = WorkspaceDatabase::open(&paths).unwrap();
+    assert_eq!(
+        store.sidebar_state().unwrap().unwrap().state.width(),
+        SidebarState::DEFAULT_WIDTH
+    );
+}
+
+#[gpui::test]
+fn sidebar_ratio_divider_keyboard_adjusts_resets_and_persists(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let mut store = WorkspaceDatabase::open(&paths).unwrap();
+    let mut sidebar = slterm_sidebar::SidebarState::default();
+    sidebar
+        .move_button_to_slot(SideViewId::Explorer, slterm_sidebar::SideSlot::Lower, 0)
+        .unwrap();
+    sidebar.click_button(SideViewId::Explorer).unwrap();
+    store.save_sidebar_state(&sidebar).unwrap();
+    drop(store);
+    let writer = WorkspaceWriter::start(paths.clone()).unwrap();
+    let persistence = SideViewPersistence::load(&paths, Some(writer.client()));
+    let (root, mut window, _) = open_root_with_persistence(cx, persistence);
+    draw_frame(&mut window);
+    focus_sidebar_divider(&root, &mut window, cx, SidebarDivider::Ratio);
+
+    for (key, expected) in [
+        ("down", 0.52),
+        ("shift-down", 0.62),
+        ("up", 0.60),
+        ("shift-up", 0.50),
+        ("down", 0.52),
+        ("enter", 0.50),
+    ] {
+        window.simulate_keystrokes(key);
+        draw_frame(&mut window);
+        let actual = root.read_with(cx, |root, _| root.side_views.state().ratio());
+        assert!(
+            (actual - expected).abs() <= 0.000_001,
+            "{key} 必须按比例分隔线合同调整，实际为 {actual}"
+        );
+    }
+
+    writer.flush().unwrap();
+    let store = WorkspaceDatabase::open(&paths).unwrap();
+    assert_eq!(
+        store.sidebar_state().unwrap().unwrap().state.ratio(),
+        SidebarState::DEFAULT_RATIO
+    );
+}
+
+#[gpui::test]
+fn sidebar_width_divider_drag_and_double_click_reset(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let writer = WorkspaceWriter::start(paths.clone()).unwrap();
+    let persistence = SideViewPersistence::load(&paths, Some(writer.client()));
+    let (root, mut window, _) = open_root_with_persistence(cx, persistence);
+    draw_frame(&mut window);
+    let divider = window
+        .debug_bounds("app-root-sidebar-width-divider")
+        .unwrap();
+    let start = divider.center();
+
+    window.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+    draw_frame(&mut window);
+    let target = gpui::point(start.x + gpui::px(40.0), start.y);
+    window.simulate_mouse_move(target, MouseButton::Left, Modifiers::default());
+    draw_frame(&mut window);
+    assert_eq!(
+        root.read_with(cx, |root, _| root.side_views.state().width()),
+        290
+    );
+    window.simulate_mouse_up(target, MouseButton::Left, Modifiers::default());
+    draw_frame(&mut window);
+    writer.flush().unwrap();
+    let store = WorkspaceDatabase::open(&paths).unwrap();
+    assert_eq!(store.sidebar_state().unwrap().unwrap().state.width(), 290);
+    drop(store);
+
+    window.simulate_mouse_move(
+        gpui::point(target.x + gpui::px(40.0), target.y),
+        None,
+        Modifiers::default(),
+    );
+    draw_frame(&mut window);
+    assert_eq!(
+        root.read_with(cx, |root, _| root.side_views.state().width()),
+        290,
+        "松开后不得延续布局手势"
+    );
+    let divider = window
+        .debug_bounds("app-root-sidebar-width-divider")
+        .unwrap();
+    double_click(&mut window, divider.center());
+    draw_frame(&mut window);
+    assert_eq!(
+        root.read_with(cx, |root, _| root.side_views.state().width()),
+        SidebarState::DEFAULT_WIDTH
+    );
+}
+
+#[gpui::test]
+fn sidebar_ratio_divider_drag_and_double_click_reset(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let mut store = WorkspaceDatabase::open(&paths).unwrap();
+    let mut sidebar = slterm_sidebar::SidebarState::default();
+    sidebar
+        .move_button_to_slot(SideViewId::Explorer, slterm_sidebar::SideSlot::Lower, 0)
+        .unwrap();
+    sidebar.click_button(SideViewId::Explorer).unwrap();
+    store.save_sidebar_state(&sidebar).unwrap();
+    drop(store);
+    let persistence = SideViewPersistence::load(&paths, None);
+    let (root, mut window, _) = open_root_with_persistence(cx, persistence);
+    draw_frame(&mut window);
+    let divider = window
+        .debug_bounds("app-root-sidebar-ratio-divider")
+        .unwrap();
+    let start = divider.center();
+    let viewport_height = window.update(|window, _| window.viewport_size().height);
+
+    window.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+    draw_frame(&mut window);
+    let target = gpui::point(start.x, start.y + viewport_height * 0.1);
+    window.simulate_mouse_move(target, MouseButton::Left, Modifiers::default());
+    draw_frame(&mut window);
+    let ratio = root.read_with(cx, |root, _| root.side_views.state().ratio());
+    assert!((ratio - 0.6).abs() <= 0.000_001, "实际比例为 {ratio}");
+    window.simulate_mouse_up(target, MouseButton::Left, Modifiers::default());
+    draw_frame(&mut window);
+
+    let divider = window
+        .debug_bounds("app-root-sidebar-ratio-divider")
+        .unwrap();
+    double_click(&mut window, divider.center());
+    draw_frame(&mut window);
+    assert_eq!(
+        root.read_with(cx, |root, _| root.side_views.state().ratio()),
+        SidebarState::DEFAULT_RATIO
+    );
+}
+
+#[gpui::test]
+fn sidebar_layout_change_cancels_active_drag(cx: &mut TestAppContext) {
+    let (root, mut window, _) = open_root(cx);
+    draw_frame(&mut window);
+    let divider = window
+        .debug_bounds("app-root-sidebar-width-divider")
+        .unwrap();
+    let start = divider.center();
+    window.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+    draw_frame(&mut window);
+    let target = gpui::point(start.x + gpui::px(40.0), start.y);
+    window.simulate_mouse_move(target, MouseButton::Left, Modifiers::default());
+    draw_frame(&mut window);
+    assert!(root.read_with(cx, |root, _| root.sidebar_drag.is_some()));
+
+    window.simulate_keystrokes("ctrl-shift-b");
+    draw_frame(&mut window);
+
+    assert!(
+        root.read_with(cx, |root, _| root.sidebar_drag.is_none()),
+        "布局手势涉及的侧栏隐藏后必须释放全窗覆盖层"
+    );
+}
+
+#[gpui::test]
+fn sidebar_temporary_compression_does_not_overwrite(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let mut store = WorkspaceDatabase::open(&paths).unwrap();
+    let mut sidebar = slterm_sidebar::SidebarState::default();
+    sidebar.set_width(333);
+    store.save_sidebar_state(&sidebar).unwrap();
+    drop(store);
+    let writer = WorkspaceWriter::start(paths.clone()).unwrap();
+    let persistence = SideViewPersistence::load(&paths, Some(writer.client()));
+    let (root, mut window, _) = open_root_with_persistence_and_size(
+        cx,
+        persistence,
+        Some(gpui::size(gpui::px(500.0), gpui::px(800.0))),
+    );
+    draw_frame(&mut window);
+
+    let nav = window.debug_bounds("app-root-side-view-nav").unwrap();
+    assert!(
+        (f32::from(nav.size.width) - 254.0).abs() <= 1.0,
+        "窄窗须给主区保留 200 像素，实际侧栏宽为 {}",
+        f32::from(nav.size.width)
+    );
+    assert_eq!(
+        root.read_with(cx, |root, _| root.side_views.state().width()),
+        333,
+        "临时压缩不得改写用户宽度"
+    );
+    writer.flush().unwrap();
+    let store = WorkspaceDatabase::open(&paths).unwrap();
+    assert_eq!(store.sidebar_state().unwrap().unwrap().state.width(), 333);
+}
+
+#[gpui::test]
+fn sidebar_dual_slots_keep_minimum_height_without_overwriting_ratio(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let mut store = WorkspaceDatabase::open(&paths).unwrap();
+    let mut sidebar = slterm_sidebar::SidebarState::default();
+    sidebar
+        .move_button_to_slot(SideViewId::Explorer, slterm_sidebar::SideSlot::Lower, 0)
+        .unwrap();
+    sidebar.click_button(SideViewId::Explorer).unwrap();
+    sidebar.set_ratio(0.9).unwrap();
+    store.save_sidebar_state(&sidebar).unwrap();
+    drop(store);
+    let persistence = SideViewPersistence::load(&paths, None);
+    let (root, mut window, _) = open_root_with_persistence_and_size(
+        cx,
+        persistence,
+        Some(gpui::size(gpui::px(1000.0), gpui::px(600.0))),
+    );
+    draw_frame(&mut window);
+
+    let upper = window.debug_bounds("app-root-side-view-nav").unwrap();
+    let lower = window.debug_bounds("app-root-side-view-explorer").unwrap();
+    assert!(f32::from(upper.size.height) >= 120.0);
+    assert!(
+        (f32::from(lower.size.height) - 120.0).abs() <= 1.0,
+        "下槽必须保留 120 像素，实际为 {}",
+        f32::from(lower.size.height)
+    );
+    assert_eq!(
+        root.read_with(cx, |root, _| root.side_views.state().ratio()),
+        0.9,
+        "视口夹紧不得改写用户比例"
+    );
+}
+
+#[gpui::test]
+fn sidebar_compressed_width_keyboard_uses_visible_width(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let mut store = WorkspaceDatabase::open(&paths).unwrap();
+    let mut sidebar = slterm_sidebar::SidebarState::default();
+    sidebar.set_width(333);
+    store.save_sidebar_state(&sidebar).unwrap();
+    drop(store);
+    let persistence = SideViewPersistence::load(&paths, None);
+    let (root, mut window, _) = open_root_with_persistence_and_size(
+        cx,
+        persistence,
+        Some(gpui::size(gpui::px(500.0), gpui::px(800.0))),
+    );
+    draw_frame(&mut window);
+    focus_sidebar_divider(&root, &mut window, cx, SidebarDivider::Width);
+
+    window.simulate_keystrokes("right");
+    draw_frame(&mut window);
+
+    assert_eq!(
+        root.read_with(cx, |root, _| root.side_views.state().width()),
+        270,
+        "压缩后的键盘调整必须从可见宽度起算"
+    );
+}
+
+#[gpui::test]
+fn sidebar_clamped_ratio_keyboard_uses_visible_ratio(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let mut store = WorkspaceDatabase::open(&paths).unwrap();
+    let mut sidebar = slterm_sidebar::SidebarState::default();
+    sidebar
+        .move_button_to_slot(SideViewId::Explorer, slterm_sidebar::SideSlot::Lower, 0)
+        .unwrap();
+    sidebar.click_button(SideViewId::Explorer).unwrap();
+    sidebar.set_ratio(0.9).unwrap();
+    store.save_sidebar_state(&sidebar).unwrap();
+    drop(store);
+    let persistence = SideViewPersistence::load(&paths, None);
+    let (root, mut window, _) = open_root_with_persistence_and_size(
+        cx,
+        persistence,
+        Some(gpui::size(gpui::px(1000.0), gpui::px(600.0))),
+    );
+    draw_frame(&mut window);
+    focus_sidebar_divider(&root, &mut window, cx, SidebarDivider::Ratio);
+
+    window.simulate_keystrokes("up");
+    draw_frame(&mut window);
+
+    let expected = 478.0 / 600.0 - 0.02;
+    let actual = root.read_with(cx, |root, _| root.side_views.state().ratio());
+    assert!(
+        (actual - expected).abs() <= 0.000_001,
+        "夹紧后的键盘调整必须从可见比例 {expected} 起算，实际为 {actual}"
+    );
+}
+
+#[gpui::test]
+fn sidebar_compressed_width_drag_uses_visible_width(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let mut store = WorkspaceDatabase::open(&paths).unwrap();
+    let mut sidebar = slterm_sidebar::SidebarState::default();
+    sidebar.set_width(333);
+    store.save_sidebar_state(&sidebar).unwrap();
+    drop(store);
+    let writer = WorkspaceWriter::start(paths.clone()).unwrap();
+    let persistence = SideViewPersistence::load(&paths, Some(writer.client()));
+    let (root, mut window, _) = open_root_with_persistence_and_size(
+        cx,
+        persistence,
+        Some(gpui::size(gpui::px(500.0), gpui::px(800.0))),
+    );
+    draw_frame(&mut window);
+    let divider = window
+        .debug_bounds("app-root-sidebar-width-divider")
+        .unwrap();
+    let start = divider.center();
+    let target = gpui::point(start.x + gpui::px(40.0), start.y);
+
+    window.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+    draw_frame(&mut window);
+    window.simulate_mouse_move(target, MouseButton::Left, Modifiers::default());
+    draw_frame(&mut window);
+    window.simulate_mouse_up(target, MouseButton::Left, Modifiers::default());
+    draw_frame(&mut window);
+
+    assert_eq!(
+        root.read_with(cx, |root, _| root.side_views.state().width()),
+        294,
+        "压缩后的拖动必须从可见宽度 254 起算"
+    );
+    writer.flush().unwrap();
+    let store = WorkspaceDatabase::open(&paths).unwrap();
+    assert_eq!(store.sidebar_state().unwrap().unwrap().state.width(), 294);
+}
+
+#[gpui::test]
+fn sidebar_clamped_ratio_drag_uses_visible_ratio(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let mut store = WorkspaceDatabase::open(&paths).unwrap();
+    let mut sidebar = slterm_sidebar::SidebarState::default();
+    sidebar
+        .move_button_to_slot(SideViewId::Explorer, slterm_sidebar::SideSlot::Lower, 0)
+        .unwrap();
+    sidebar.click_button(SideViewId::Explorer).unwrap();
+    sidebar.set_ratio(0.9).unwrap();
+    store.save_sidebar_state(&sidebar).unwrap();
+    drop(store);
+    let writer = WorkspaceWriter::start(paths.clone()).unwrap();
+    let persistence = SideViewPersistence::load(&paths, Some(writer.client()));
+    let (root, mut window, _) = open_root_with_persistence_and_size(
+        cx,
+        persistence,
+        Some(gpui::size(gpui::px(1000.0), gpui::px(600.0))),
+    );
+    draw_frame(&mut window);
+    let divider = window
+        .debug_bounds("app-root-sidebar-ratio-divider")
+        .unwrap();
+    let start = divider.center();
+    let target = gpui::point(start.x, start.y - gpui::px(60.0));
+
+    window.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+    draw_frame(&mut window);
+    window.simulate_mouse_move(target, MouseButton::Left, Modifiers::default());
+    draw_frame(&mut window);
+    window.simulate_mouse_up(target, MouseButton::Left, Modifiers::default());
+    draw_frame(&mut window);
+
+    let expected = 478.0 / 600.0 - 0.1;
+    let actual = root.read_with(cx, |root, _| root.side_views.state().ratio());
+    assert!(
+        (actual - expected).abs() <= 0.000_001,
+        "夹紧后的拖动必须从可见比例起算，期望 {expected}，实际为 {actual}"
+    );
+    writer.flush().unwrap();
+    let store = WorkspaceDatabase::open(&paths).unwrap();
+    let persisted = store.sidebar_state().unwrap().unwrap().state.ratio();
+    assert!((persisted - expected).abs() <= 0.000_001);
+}
+
+#[gpui::test]
+fn sidebar_dual_slots_scroll_when_window_is_short(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let mut store = WorkspaceDatabase::open(&paths).unwrap();
+    let mut sidebar = slterm_sidebar::SidebarState::default();
+    sidebar
+        .move_button_to_slot(SideViewId::Explorer, slterm_sidebar::SideSlot::Lower, 0)
+        .unwrap();
+    sidebar.click_button(SideViewId::Explorer).unwrap();
+    store.save_sidebar_state(&sidebar).unwrap();
+    drop(store);
+    let persistence = SideViewPersistence::load(&paths, None);
+    let (_root, mut window, _) = open_root_with_persistence_and_size(
+        cx,
+        persistence,
+        Some(gpui::size(gpui::px(1000.0), gpui::px(200.0))),
+    );
+    draw_frame(&mut window);
+
+    let upper = window.debug_bounds("app-root-side-view-nav").unwrap();
+    let lower = window.debug_bounds("app-root-side-view-explorer").unwrap();
+    assert!(f32::from(upper.size.height) >= 120.0);
+    assert!(f32::from(lower.size.height) >= 120.0);
+    let old_lower_y = lower.origin.y;
+    window.simulate_event(gpui::ScrollWheelEvent {
+        position: upper.center(),
+        delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.0), gpui::px(-40.0))),
+        ..Default::default()
+    });
+    draw_frame(&mut window);
+    let lower = window.debug_bounds("app-root-side-view-explorer").unwrap();
+    assert!(
+        lower.origin.y < old_lower_y,
+        "高度不足时整个侧栏必须可纵向滚动，滚动前 {old_lower_y:?}，滚动后 {:?}",
+        lower.origin.y
+    );
+}
+
+#[gpui::test]
+fn hidden_width_divider_returns_focus_to_open_view_button(cx: &mut TestAppContext) {
+    let (root, mut window, _) = open_root(cx);
+    draw_frame(&mut window);
+    focus_sidebar_divider(&root, &mut window, cx, SidebarDivider::Width);
+
+    window.update(|window, cx| {
+        root.update(cx, |root, cx| root.toggle_sidebar(window, cx));
+    });
+    draw_frame(&mut window);
+
+    assert_side_button_focused(&root, &mut window, cx, SideViewId::Nav);
+}
+
+#[gpui::test]
+fn removed_ratio_divider_returns_focus_to_closed_view_button(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let mut store = WorkspaceDatabase::open(&paths).unwrap();
+    let mut sidebar = slterm_sidebar::SidebarState::default();
+    sidebar
+        .move_button_to_slot(SideViewId::Explorer, slterm_sidebar::SideSlot::Lower, 0)
+        .unwrap();
+    sidebar.click_button(SideViewId::Explorer).unwrap();
+    store.save_sidebar_state(&sidebar).unwrap();
+    drop(store);
+    let persistence = SideViewPersistence::load(&paths, None);
+    let (root, mut window, _) = open_root_with_persistence(cx, persistence);
+    draw_frame(&mut window);
+    focus_sidebar_divider(&root, &mut window, cx, SidebarDivider::Ratio);
+
+    let button = window
+        .debug_bounds("app-root-side-button-explorer")
+        .unwrap();
+    window.simulate_mouse_down(button.center(), MouseButton::Left, Modifiers::default());
+    window.simulate_mouse_up(button.center(), MouseButton::Left, Modifiers::default());
+    draw_frame(&mut window);
+
+    assert_side_button_focused(&root, &mut window, cx, SideViewId::Explorer);
 }
 
 #[test]
@@ -650,6 +1177,42 @@ fn side_button_menu_noop_preserves_recovered_record(cx: &mut TestAppContext) {
         )
         .unwrap();
     assert_eq!(preserved, "not-json", "无变化的重置不得覆盖恢复前记录");
+}
+
+#[gpui::test]
+fn sidebar_geometry_noop_preserves_recovered_record(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let mut store = WorkspaceDatabase::open(&paths).unwrap();
+    store
+        .save_sidebar_state(&slterm_sidebar::SidebarState::default())
+        .unwrap();
+    drop(store);
+    let raw_store = rusqlite::Connection::open(paths.workspace_db_path()).unwrap();
+    raw_store
+        .execute(
+            "UPDATE app_state SET sidebar_json = 'not-json' WHERE singleton = 1",
+            [],
+        )
+        .unwrap();
+    let writer = WorkspaceWriter::start(paths.clone()).unwrap();
+    let persistence = SideViewPersistence::load(&paths, Some(writer.client()));
+    let (root, mut window, _) = open_root_with_persistence(cx, persistence);
+    draw_frame(&mut window);
+    focus_sidebar_divider(&root, &mut window, cx, SidebarDivider::Width);
+
+    window.simulate_keystrokes("enter");
+
+    writer.flush().unwrap();
+    writer.shutdown().unwrap();
+    let preserved = raw_store
+        .query_row(
+            "SELECT sidebar_json FROM app_state WHERE singleton = 1",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap();
+    assert_eq!(preserved, "not-json", "无变化的几何复位不得覆盖恢复前记录");
 }
 
 #[gpui::test]

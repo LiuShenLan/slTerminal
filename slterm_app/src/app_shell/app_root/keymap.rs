@@ -4,9 +4,12 @@ use gpui::{App, KeyBinding};
 
 use super::{
     ActivateAgentFiles, ActivateCommit, ActivateExplorer, ActivateNav, ActivateSideButton,
-    CloseActiveTerminal, FocusActivityBar, FocusFirstSideButton, FocusLastSideButton,
-    FocusNextSideButton, FocusPreviousSideButton, NewTerminal, OpenSideButtonMenu, SplitDown,
-    SplitRight, ToggleSidebar,
+    AdjustSidebarRatioDown, AdjustSidebarRatioDownLarge, AdjustSidebarRatioUp,
+    AdjustSidebarRatioUpLarge, AdjustSidebarWidthLeft, AdjustSidebarWidthLeftLarge,
+    AdjustSidebarWidthRight, AdjustSidebarWidthRightLarge, CloseActiveTerminal, FocusActivityBar,
+    FocusFirstSideButton, FocusLastSideButton, FocusNextSideButton, FocusPreviousSideButton,
+    NewTerminal, OpenSideButtonMenu, ResetSidebarRatio, ResetSidebarWidth, SplitDown, SplitRight,
+    ToggleSidebar,
 };
 
 /// 注册运行根默认键位；用户绑定后续统一接入 CommandRegistry。
@@ -56,6 +59,56 @@ pub(crate) fn register(cx: &mut App) {
             "space",
             ActivateSideButton,
             Some(super::sidebar::ACTIVITY_BAR_KEY_CONTEXT),
+        ),
+        KeyBinding::new(
+            "left",
+            AdjustSidebarWidthLeft,
+            Some(super::sidebar::SIDEBAR_WIDTH_KEY_CONTEXT),
+        ),
+        KeyBinding::new(
+            "right",
+            AdjustSidebarWidthRight,
+            Some(super::sidebar::SIDEBAR_WIDTH_KEY_CONTEXT),
+        ),
+        KeyBinding::new(
+            "shift-left",
+            AdjustSidebarWidthLeftLarge,
+            Some(super::sidebar::SIDEBAR_WIDTH_KEY_CONTEXT),
+        ),
+        KeyBinding::new(
+            "shift-right",
+            AdjustSidebarWidthRightLarge,
+            Some(super::sidebar::SIDEBAR_WIDTH_KEY_CONTEXT),
+        ),
+        KeyBinding::new(
+            "enter",
+            ResetSidebarWidth,
+            Some(super::sidebar::SIDEBAR_WIDTH_KEY_CONTEXT),
+        ),
+        KeyBinding::new(
+            "up",
+            AdjustSidebarRatioUp,
+            Some(super::sidebar::SIDEBAR_RATIO_KEY_CONTEXT),
+        ),
+        KeyBinding::new(
+            "down",
+            AdjustSidebarRatioDown,
+            Some(super::sidebar::SIDEBAR_RATIO_KEY_CONTEXT),
+        ),
+        KeyBinding::new(
+            "shift-up",
+            AdjustSidebarRatioUpLarge,
+            Some(super::sidebar::SIDEBAR_RATIO_KEY_CONTEXT),
+        ),
+        KeyBinding::new(
+            "shift-down",
+            AdjustSidebarRatioDownLarge,
+            Some(super::sidebar::SIDEBAR_RATIO_KEY_CONTEXT),
+        ),
+        KeyBinding::new(
+            "enter",
+            ResetSidebarRatio,
+            Some(super::sidebar::SIDEBAR_RATIO_KEY_CONTEXT),
         ),
     ]);
 }

@@ -140,7 +140,9 @@
     "button_move_upper": "移到上区",
     "button_move_lower": "移到下区",
     "button_hide": "隐藏按钮",
-    "button_reset_order": "重置按钮顺序"
+    "button_reset_order": "重置按钮顺序",
+    "width_divider": "侧栏宽度",
+    "ratio_divider": "侧栏分割比例"
   },
   "settings": {
     "title": "设置",

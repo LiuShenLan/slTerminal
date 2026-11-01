@@ -110,6 +110,22 @@ impl<T> SideViewHost<T> {
         self.organization_transition(was_visible)
     }
 
+    pub fn set_width(&mut self, width: u32) {
+        self.state.set_width(width);
+    }
+
+    pub fn reset_width(&mut self) {
+        self.state.reset_width();
+    }
+
+    pub fn set_ratio(&mut self, ratio: f32) -> Result<(), SidebarError> {
+        self.state.set_ratio(ratio)
+    }
+
+    pub fn reset_ratio(&mut self) {
+        self.state.reset_ratio();
+    }
+
     fn organization_transition(&self, was_visible: bool) -> SidebarTransition {
         SidebarTransition {
             opened: Vec::new(),

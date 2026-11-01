@@ -49,6 +49,7 @@
 | 项目 | 归属设计 | 豁免原因（根因） | 当前兜底层级 | 结论/登记锚点 |
 |---|---|---|---|---|
 | 真实输入法候选窗定位、组合态出字与焦点切换 | `design/ux-framework.md`、`design/panels/terminal.md` | 依赖真实 IME 与桌面会话，虚拟窗口无法构造候选窗 | 组合态零命令匹配与字素簇处理的单元层用例 + 构建产物人工验收 | 目标态待实现登记 |
+| 侧栏分隔线 AccessKit 激活与屏幕阅读器数值播报 | `design/workspace.md` | 虚拟窗口 TestPlatform 不激活 AccessKit；真实 UIA 与屏幕阅读器播报依赖桌面会话 | `sidebar_width_divider_keyboard_adjusts_resets_and_persists`、`sidebar_ratio_divider_keyboard_adjusts_resets_and_persists` 锁定数值与焦点行为 + 构建产物人工听取宽度和百分比播报 | 2026-11-01 登记 |
 | 系统默认程序打开（浏览器、文件管理器、默认编辑器） | `design/platform-windows.md` | 依赖系统文件关联与真实桌面，测试进程无法断言实际程序 | 分派与错误映射单元层用例 + 构建产物人工验收 | 目标态待实现登记 |
 | CJK 换行、标题省略与字体渲染观感 | `design/ux-framework.md`、`design/panels/markdown.md`、`design/panels/editor.md` | 最终排版由 GPUI 文本管线在真实 DPI 下完成，虚拟窗口不能代表观感 | 字素簇、换行与省略纯函数用例 + 构建产物人工目测 | 目标态待实现登记 |
 | 代码高亮与公式的视觉观感 | `design/panels/editor.md`、`design/panels/markdown.md` | 语法 token 可单元层断言，最终字形与配色观感依赖真实渲染 | 语法解析/token 用例 + 构建产物人工目测 | 目标态待实现登记 |

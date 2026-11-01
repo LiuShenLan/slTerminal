@@ -140,7 +140,9 @@
     "button_move_upper": "Move to Upper Section",
     "button_move_lower": "Move to Lower Section",
     "button_hide": "Hide Button",
-    "button_reset_order": "Reset Button Order"
+    "button_reset_order": "Reset Button Order",
+    "width_divider": "Sidebar width",
+    "ratio_divider": "Sidebar split ratio"
   },
   "settings": {
     "title": "Settings",

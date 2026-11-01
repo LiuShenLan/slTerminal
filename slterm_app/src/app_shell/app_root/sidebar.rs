@@ -3,8 +3,9 @@
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     AnyElement, Context, DismissEvent, Focusable as _, Hsla, InteractiveElement as _, IntoElement,
-    MouseButton, ParentElement as _, StyleRefinement, Styled as _, WeakEntity, Window, anchored,
-    deferred, div, point, px, relative,
+    MouseButton, MouseDownEvent, MouseMoveEvent, ParentElement as _,
+    StatefulInteractiveElement as _, StyleRefinement, Styled as _, WeakEntity, Window, anchored,
+    deferred, div, point, px,
 };
 use gpui_component::{
     ActiveTheme as _, Icon, IconName,
@@ -16,12 +17,39 @@ use slterm_workspace::SideViewId;
 use crate::i18n::{Message, UiLanguage};
 
 use super::{
-    ActivateSideButton, AppRoot, FocusFirstSideButton, FocusLastSideButton, FocusNextSideButton,
-    FocusPreviousSideButton, OpenSideButtonMenu, SideButtonMenu,
+    ActivateSideButton, AdjustSidebarRatioDown, AdjustSidebarRatioDownLarge, AdjustSidebarRatioUp,
+    AdjustSidebarRatioUpLarge, AdjustSidebarWidthLeft, AdjustSidebarWidthLeftLarge,
+    AdjustSidebarWidthRight, AdjustSidebarWidthRightLarge, AppRoot, FocusFirstSideButton,
+    FocusLastSideButton, FocusNextSideButton, FocusPreviousSideButton, OpenSideButtonMenu,
+    ResetSidebarRatio, ResetSidebarWidth, SideButtonMenu, SidebarDivider, SidebarDrag,
 };
 
 pub(super) const ACTIVITY_BAR_WIDTH: f32 = 46.0;
 pub(super) const ACTIVITY_BAR_KEY_CONTEXT: &str = "ActivityBar";
+pub(super) const SIDEBAR_WIDTH_KEY_CONTEXT: &str = "SidebarWidthDivider";
+pub(super) const SIDEBAR_RATIO_KEY_CONTEXT: &str = "SidebarRatioDivider";
+const PROJECT_MIN_WIDTH: f32 = 200.0;
+const SIDE_SLOT_MIN_HEIGHT: f32 = 120.0;
+const DUAL_SLOT_MIN_HEIGHT: f32 = SIDE_SLOT_MIN_HEIGHT * 2.0 + slterm_split::DIVIDER_GAP;
+
+fn effective_ratio(state: &SidebarState, viewport_height: f32) -> f32 {
+    let container_height = viewport_height.max(DUAL_SLOT_MIN_HEIGHT);
+    let max_upper = container_height - slterm_split::DIVIDER_GAP - SIDE_SLOT_MIN_HEIGHT;
+    let upper = (container_height * state.ratio()).clamp(SIDE_SLOT_MIN_HEIGHT, max_upper);
+    upper / container_height
+}
+
+pub(super) fn divider_is_visible(state: &SidebarState, divider: SidebarDivider) -> bool {
+    match divider {
+        SidebarDivider::Width => state.is_visible(),
+        SidebarDivider::Ratio => {
+            state.is_visible()
+                && SideSlot::ALL
+                    .into_iter()
+                    .all(|slot| state.open_view(slot).is_some())
+        }
+    }
+}
 
 /// 活动栏键盘焦点使用主题强调色，与打开态底色区分。
 pub(super) fn side_button_focus_style(accent: Hsla) -> StyleRefinement {
@@ -43,18 +71,39 @@ enum SideButtonCommand {
     ResetOrder,
 }
 
+#[derive(Clone, Copy)]
+enum SidebarGeometryCommand {
+    SetWidth(u32),
+    ResetWidth,
+    SetRatio(f32),
+    ResetRatio,
+}
+
 impl AppRoot {
-    /// 动作布局校验与渲染共用实际侧栏占宽；隐藏按钮不等于隐藏整个侧栏。
-    pub(super) fn visible_sidebar_width(&self) -> f32 {
+    /// 动作布局校验与渲染共用实际侧栏占宽；窗口压缩只影响本次绘制。
+    pub(super) fn visible_sidebar_width(&self, viewport_width: f32) -> f32 {
         let state = self.side_views.state();
-        let has_open_view = SideSlot::ALL
-            .into_iter()
-            .any(|slot| state.open_view(slot).is_some());
-        if state.is_visible() && has_open_view {
-            f32::from(state.width())
-        } else {
-            0.0
+        if !state.is_visible() {
+            return 0.0;
         }
+        let available = (viewport_width - ACTIVITY_BAR_WIDTH - PROJECT_MIN_WIDTH).max(0.0);
+        f32::from(state.width()).min(available)
+    }
+
+    fn adjust_sidebar_width(&mut self, delta: f32, window: &Window, cx: &mut Context<'_, Self>) {
+        let visible = self.visible_sidebar_width(f32::from(window.viewport_size().width));
+        self.change_sidebar_geometry(
+            SidebarGeometryCommand::SetWidth((visible + delta).round().max(0.0) as u32),
+            cx,
+        );
+    }
+
+    fn adjust_sidebar_ratio(&mut self, delta: f32, window: &Window, cx: &mut Context<'_, Self>) {
+        let visible = effective_ratio(
+            self.side_views.state(),
+            f32::from(window.viewport_size().height),
+        );
+        self.change_sidebar_geometry(SidebarGeometryCommand::SetRatio(visible + delta), cx);
     }
 
     fn focused_side_view(&self, window: &Window, cx: &Context<'_, Self>) -> Option<SideViewId> {
@@ -73,6 +122,21 @@ impl AppRoot {
                 .get(view)
                 .is_some_and(|button| button.handle == focused)
         })
+    }
+
+    fn focused_sidebar_divider(
+        &self,
+        window: &Window,
+        cx: &Context<'_, Self>,
+    ) -> Option<SidebarDivider> {
+        let focused = window.focused(cx)?;
+        [SidebarDivider::Width, SidebarDivider::Ratio]
+            .into_iter()
+            .find(|divider| {
+                self.side_dividers
+                    .get(divider)
+                    .is_some_and(|separator| separator.handle == focused)
+            })
     }
 
     fn focus_side_button(
@@ -335,8 +399,20 @@ impl AppRoot {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
+        self.sidebar_drag = None;
+        let divider_return = self
+            .focused_sidebar_divider(window, cx)
+            .filter(|divider| !divider_is_visible(self.side_views.state(), *divider))
+            .and_then(|_| {
+                transition.closed.first().copied().or_else(|| {
+                    SideSlot::ALL
+                        .into_iter()
+                        .find_map(|slot| previous_state.open_view(slot))
+                })
+            });
         let return_from = focused_before
-            .filter(|view| transition.closed.contains(view) || !transition.is_visible);
+            .filter(|view| transition.closed.contains(view) || !transition.is_visible)
+            .or(divider_return);
         for view in &transition.closed {
             let registration = self
                 .side_view_focus
@@ -420,6 +496,10 @@ impl AppRoot {
             if let Some(button) = self.side_buttons.get(&view) {
                 updates.push((button.registration.token(), state.button_is_visible(view)));
             }
+        }
+        for divider in [SidebarDivider::Width, SidebarDivider::Ratio] {
+            let registration = &self.side_dividers[&divider].registration;
+            updates.push((registration.token(), divider_is_visible(state, divider)));
         }
         for (token, visible) in updates {
             let result = if visible {
@@ -608,7 +688,266 @@ impl AppRoot {
             .into_any_element()
     }
 
-    pub(super) fn render_sidebar(&self, cx: &Context<'_, Self>) -> Option<AnyElement> {
+    fn begin_sidebar_drag(
+        &mut self,
+        divider: SidebarDivider,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let token = self.side_dividers[&divider].registration.token();
+        if let Err(error) = self.focus_manager.request_focus(token, window, cx) {
+            log::warn!("侧栏分隔线送焦失败: {error:?}");
+        }
+        if event.click_count >= 2 {
+            self.sidebar_drag = None;
+            let command = match divider {
+                SidebarDivider::Width => SidebarGeometryCommand::ResetWidth,
+                SidebarDivider::Ratio => SidebarGeometryCommand::ResetRatio,
+            };
+            self.change_sidebar_geometry(command, cx);
+            return;
+        }
+        self.sidebar_drag = Some(match divider {
+            SidebarDivider::Width => SidebarDrag::Width {
+                start_x: event.position.x.into(),
+                start_width: self.visible_sidebar_width(f32::from(window.viewport_size().width)),
+            },
+            SidebarDivider::Ratio => SidebarDrag::Ratio {
+                start_y: event.position.y.into(),
+                start_ratio: effective_ratio(
+                    self.side_views.state(),
+                    f32::from(window.viewport_size().height),
+                ),
+            },
+        });
+        cx.notify();
+    }
+
+    fn update_sidebar_drag(
+        &mut self,
+        event: &MouseMoveEvent,
+        window: &Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(drag) = self.sidebar_drag else {
+            return;
+        };
+        if event.pressed_button != Some(MouseButton::Left) {
+            self.finish_sidebar_drag(cx);
+            return;
+        }
+        match drag {
+            SidebarDrag::Width {
+                start_x,
+                start_width,
+            } => {
+                let width = start_width + f32::from(event.position.x) - start_x;
+                self.change_sidebar_geometry(
+                    SidebarGeometryCommand::SetWidth(width.round().max(0.0) as u32),
+                    cx,
+                );
+            }
+            SidebarDrag::Ratio {
+                start_y,
+                start_ratio,
+            } => {
+                let height = f32::from(window.viewport_size().height).max(DUAL_SLOT_MIN_HEIGHT);
+                let ratio = start_ratio + (f32::from(event.position.y) - start_y) / height;
+                self.change_sidebar_geometry(SidebarGeometryCommand::SetRatio(ratio), cx);
+            }
+        }
+    }
+
+    fn finish_sidebar_drag(&mut self, cx: &mut Context<'_, Self>) {
+        if self.sidebar_drag.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    pub(super) fn render_sidebar_drag_overlay(&self, cx: &Context<'_, Self>) -> Option<AnyElement> {
+        let drag = self.sidebar_drag?;
+        let overlay = div()
+            .absolute()
+            .inset_0()
+            .occlude()
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                this.update_sidebar_drag(event, window, cx);
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| this.finish_sidebar_drag(cx)),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| this.finish_sidebar_drag(cx)),
+            );
+        Some(
+            match drag {
+                SidebarDrag::Width { .. } => overlay.cursor_col_resize(),
+                SidebarDrag::Ratio { .. } => overlay.cursor_row_resize(),
+            }
+            .into_any_element(),
+        )
+    }
+
+    fn change_sidebar_geometry(
+        &mut self,
+        command: SidebarGeometryCommand,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let previous_state = self.side_views.state().clone();
+        let result = match command {
+            SidebarGeometryCommand::SetWidth(width) => {
+                self.side_views.set_width(width);
+                Ok(())
+            }
+            SidebarGeometryCommand::ResetWidth => {
+                self.side_views.reset_width();
+                Ok(())
+            }
+            SidebarGeometryCommand::SetRatio(ratio) => self.side_views.set_ratio(ratio),
+            SidebarGeometryCommand::ResetRatio => {
+                self.side_views.reset_ratio();
+                Ok(())
+            }
+        };
+        if let Err(error) = result {
+            log::warn!("侧栏几何调整失败: {error}");
+            return;
+        }
+        if self.side_views.state() != &previous_state {
+            self.side_view_persistence
+                .save_sidebar_state(self.side_views.state());
+            cx.notify();
+        }
+    }
+
+    fn render_sidebar_width_divider(&self, window: &Window, cx: &Context<'_, Self>) -> AnyElement {
+        let focus = self.side_dividers[&SidebarDivider::Width].handle.clone();
+        let language = cx.global::<crate::app_shell::config::Settings>().language;
+        let visible_width = self.visible_sidebar_width(f32::from(window.viewport_size().width));
+        div()
+            .id("sidebar-width-divider")
+            .role(gpui::Role::Slider)
+            .accessibility_id("sidebar-width-divider")
+            .aria_label(language.text(Message::SidebarWidthDivider))
+            .aria_numeric_value(f64::from(visible_width))
+            .aria_min_numeric_value(0.0)
+            .aria_max_numeric_value(f64::from(SidebarState::MAX_WIDTH))
+            .aria_numeric_value_step(16.0)
+            .key_context(SIDEBAR_WIDTH_KEY_CONTEXT)
+            .on_action(cx.listener(|this, _: &AdjustSidebarWidthLeft, window, cx| {
+                this.adjust_sidebar_width(-16.0, window, cx);
+            }))
+            .on_action(
+                cx.listener(|this, _: &AdjustSidebarWidthRight, window, cx| {
+                    this.adjust_sidebar_width(16.0, window, cx);
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &AdjustSidebarWidthLeftLarge, window, cx| {
+                    this.adjust_sidebar_width(-64.0, window, cx);
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &AdjustSidebarWidthRightLarge, window, cx| {
+                    this.adjust_sidebar_width(64.0, window, cx);
+                }),
+            )
+            .on_action(cx.listener(|this, _: &ResetSidebarWidth, _, cx| {
+                this.change_sidebar_geometry(SidebarGeometryCommand::ResetWidth, cx);
+            }))
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .right_0()
+            .w(px(slterm_split::DIVIDER_GAP))
+            .track_focus(&focus)
+            .focus_visible(|_| side_button_focus_style(cx.theme().accent))
+            .debug_selector(|| "app-root-sidebar-width-divider".to_owned())
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                    this.begin_sidebar_drag(SidebarDivider::Width, event, window, cx);
+                }),
+            )
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| this.finish_sidebar_drag(cx)),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| this.finish_sidebar_drag(cx)),
+            )
+            .into_any_element()
+    }
+
+    fn render_sidebar_ratio_divider(&self, window: &Window, cx: &Context<'_, Self>) -> AnyElement {
+        let focus = self.side_dividers[&SidebarDivider::Ratio].handle.clone();
+        let language = cx.global::<crate::app_shell::config::Settings>().language;
+        let visible_ratio = effective_ratio(
+            self.side_views.state(),
+            f32::from(window.viewport_size().height),
+        );
+        div()
+            .id("sidebar-ratio-divider")
+            .role(gpui::Role::Slider)
+            .accessibility_id("sidebar-ratio-divider")
+            .aria_label(language.text(Message::SidebarRatioDivider))
+            .aria_numeric_value(f64::from(visible_ratio * 100.0))
+            .aria_min_numeric_value(f64::from(SidebarState::MIN_RATIO * 100.0))
+            .aria_max_numeric_value(f64::from(SidebarState::MAX_RATIO * 100.0))
+            .aria_numeric_value_step(2.0)
+            .key_context(SIDEBAR_RATIO_KEY_CONTEXT)
+            .on_action(cx.listener(|this, _: &AdjustSidebarRatioUp, window, cx| {
+                this.adjust_sidebar_ratio(-0.02, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &AdjustSidebarRatioDown, window, cx| {
+                this.adjust_sidebar_ratio(0.02, window, cx);
+            }))
+            .on_action(
+                cx.listener(|this, _: &AdjustSidebarRatioUpLarge, window, cx| {
+                    this.adjust_sidebar_ratio(-0.1, window, cx);
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &AdjustSidebarRatioDownLarge, window, cx| {
+                    this.adjust_sidebar_ratio(0.1, window, cx);
+                }),
+            )
+            .on_action(cx.listener(|this, _: &ResetSidebarRatio, _, cx| {
+                this.change_sidebar_geometry(SidebarGeometryCommand::ResetRatio, cx);
+            }))
+            .h(px(slterm_split::DIVIDER_GAP))
+            .w_full()
+            .flex_shrink_0()
+            .track_focus(&focus)
+            .focus_visible(|_| side_button_focus_style(cx.theme().accent))
+            .debug_selector(|| "app-root-sidebar-ratio-divider".to_owned())
+            .bg(cx.theme().border)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                    this.begin_sidebar_drag(SidebarDivider::Ratio, event, window, cx);
+                }),
+            )
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| this.finish_sidebar_drag(cx)),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| this.finish_sidebar_drag(cx)),
+            )
+            .into_any_element()
+    }
+
+    pub(super) fn render_sidebar(
+        &self,
+        window: &Window,
+        cx: &Context<'_, Self>,
+    ) -> Option<AnyElement> {
         let state = self.side_views.state();
         if !state.is_visible() {
             return None;
@@ -620,15 +959,22 @@ impl AppRoot {
         if open.is_empty() {
             return None;
         }
+        let viewport = window.viewport_size();
+        let viewport_height = f32::from(viewport.height);
+        let dual_slots = open.len() == 2;
+        let container_height = if dual_slots {
+            viewport_height.max(DUAL_SLOT_MIN_HEIGHT)
+        } else {
+            viewport_height
+        };
+        let upper_height = container_height * effective_ratio(state, viewport_height);
         let mut column = div()
-            .w(px(state.width().into()))
-            .h_full()
+            .relative()
+            .w_full()
+            .h(px(container_height))
             .flex_shrink_0()
             .flex()
-            .flex_col()
-            .border_r_1()
-            .border_color(cx.theme().sidebar_border)
-            .bg(cx.theme().sidebar);
+            .flex_col();
         let count = open.len();
         for (index, view) in open.into_iter().enumerate() {
             let instance = self
@@ -636,10 +982,10 @@ impl AppRoot {
                 .instance(view)
                 .expect("已打开槽位必须持有对应 SideView 实体")
                 .clone();
-            let slot = if count == 2 && index == 0 {
+            let slot = if dual_slots && index == 0 {
                 div()
                     .w_full()
-                    .h(relative(state.ratio()))
+                    .h(px(upper_height))
                     .min_h_0()
                     .flex_shrink_0()
                     .child(instance)
@@ -654,15 +1000,21 @@ impl AppRoot {
             };
             column = column.child(slot);
             if index + 1 < count {
-                column = column.child(
-                    div()
-                        .h(px(slterm_split::DIVIDER_GAP))
-                        .w_full()
-                        .flex_shrink_0()
-                        .bg(cx.theme().border),
-                );
+                column = column.child(self.render_sidebar_ratio_divider(window, cx));
             }
         }
-        Some(column.into_any_element())
+        Some(
+            div()
+                .id("sidebar")
+                .w(px(self.visible_sidebar_width(f32::from(viewport.width))))
+                .h_full()
+                .flex_shrink_0()
+                .overflow_y_scroll()
+                .border_r_1()
+                .border_color(cx.theme().sidebar_border)
+                .bg(cx.theme().sidebar)
+                .child(column.child(self.render_sidebar_width_divider(window, cx)))
+                .into_any_element(),
+        )
     }
 }

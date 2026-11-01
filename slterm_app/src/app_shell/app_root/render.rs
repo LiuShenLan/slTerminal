@@ -21,7 +21,7 @@ impl AppRoot {
         let viewport = window.viewport_size();
         let width = f32::from(viewport.width)
             - super::sidebar::ACTIVITY_BAR_WIDTH
-            - self.visible_sidebar_width();
+            - self.visible_sidebar_width(f32::from(viewport.width));
         LogicalSize::new(width.max(0.0), viewport.height.into())
     }
 
@@ -173,7 +173,7 @@ fn render_empty() -> AnyElement {
 }
 
 impl Render for AppRoot {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
         div()
             .size_full()
             .min_w_0()
@@ -230,7 +230,7 @@ impl Render for AppRoot {
             .flex()
             .flex_row()
             .child(self.render_activity_bar(cx))
-            .children(self.render_sidebar(cx))
+            .children(self.render_sidebar(window, cx))
             .child(
                 div()
                     .flex_1()
@@ -238,5 +238,6 @@ impl Render for AppRoot {
                     .h_full()
                     .child(self.render_active_project(cx)),
             )
+            .children(self.render_sidebar_drag_overlay(cx))
     }
 }
