@@ -35,8 +35,10 @@ const PROJECT_B: &str = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b";
 const PROJECT_C: &str = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2c";
 const GROUP_A: &str = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0a2a";
 const GROUP_B: &str = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0a2b";
+const GROUP_C: &str = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0a2c";
 const TERMINAL_A: &str = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0b2a";
 const TERMINAL_B: &str = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0b2b";
+const TERMINAL_C: &str = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0b2c";
 
 fn project_id(text: &str) -> ProjectId {
     ProjectId::from_str(text).unwrap()
@@ -134,13 +136,15 @@ fn open_root(
     };
     let mut slot = None;
     let (_window_root, window) = cx.add_window_view(|window, cx| {
-        let root = cx.new(|_| {
+        let root = cx.new(|cx| {
             AppRoot::with_launcher(
                 PanelIdAllocator::new(1),
                 path("C:/Program Files/PowerShell/7/pwsh.exe"),
                 Box::new(launcher),
+                cx,
             )
         });
+        root.update(cx, |root, cx| root.observe_focus(window, cx));
         slot = Some(root.clone());
         Root::new(root, window, cx)
     });
@@ -390,6 +394,36 @@ fn project_switch_preserves_entities_and_hidden_event_processing(cx: &mut TestAp
 }
 
 #[gpui::test]
+fn project_switch_restores_actual_panel_focus(cx: &mut TestAppContext) {
+    let (root, mut window, _) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, "D:/work/a");
+    new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_A);
+    split_terminal(&root, &mut window);
+    add_project(&root, &mut window, PROJECT_B, "D:/work/b");
+    new_terminal(&root, &mut window, PROJECT_B, GROUP_C, TERMINAL_C);
+    activate_project(&root, &mut window, PROJECT_A);
+    draw_frame(&mut window);
+
+    let first = root.read_with(cx, |root, cx| {
+        root.terminal_panel(project_id(PROJECT_A), terminal_id(TERMINAL_A), cx)
+            .unwrap()
+            .1
+    });
+    window.update(|window, cx| {
+        let focus = first.read(cx).focus_handle.clone();
+        focus.focus(window, cx);
+    });
+    window.run_until_parked();
+
+    activate_project(&root, &mut window, PROJECT_B);
+    activate_project(&root, &mut window, PROJECT_A);
+
+    window.update(|window, cx| {
+        assert!(first.read(cx).focus_handle.is_focused(window));
+    });
+}
+
+#[gpui::test]
 fn split_and_activate_reuse_existing_terminal_entities(cx: &mut TestAppContext) {
     let (root, mut window, state) = open_root(cx);
     add_project(&root, &mut window, PROJECT_A, "D:/work/a");
@@ -477,6 +511,64 @@ fn close_terminal_releases_instance_and_keeps_empty_project(cx: &mut TestAppCont
         Ok(Msg::Shutdown)
     ));
     assert!(weak.upgrade().is_none());
+}
+
+#[gpui::test]
+fn closing_last_panel_releases_actual_focus(cx: &mut TestAppContext) {
+    let (root, mut window, _) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, "D:/work/a");
+    new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_A);
+    let terminal = root.read_with(cx, |root, cx| {
+        root.terminal_panel(project_id(PROJECT_A), terminal_id(TERMINAL_A), cx)
+            .unwrap()
+            .1
+    });
+    let terminal_focus = terminal.read_with(cx, |terminal, _| terminal.focus_handle.clone());
+
+    let result = window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.close_terminal(terminal_id(TERMINAL_A), window, cx)
+        })
+    });
+    assert!(result.is_ok(), "关闭终端失败: {result:?}");
+    window.run_until_parked();
+
+    window.update(|window, cx| {
+        let focused = window.focused(cx);
+        assert!(focused.is_some(), "空项目必须保留可用焦点落点");
+        assert_ne!(focused, Some(terminal_focus), "不得留住已销毁面板焦点");
+    });
+}
+
+#[gpui::test]
+fn closing_remembered_panel_preserves_actual_project_focus(cx: &mut TestAppContext) {
+    let (root, mut window, _) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, "D:/work/a");
+    new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_A);
+    split_terminal(&root, &mut window);
+    let project_focus = root.read_with(cx, |root, cx| {
+        root.projects[&project_id(PROJECT_A)]
+            .read(cx)
+            .focus_handle
+            .clone()
+    });
+    window.update(|window, cx| project_focus.focus(window, cx));
+    window.run_until_parked();
+
+    let result = window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.close_terminal(terminal_id(TERMINAL_B), window, cx)
+        })
+    });
+    assert!(result.is_ok(), "关闭终端失败: {result:?}");
+    window.run_until_parked();
+
+    window.update(|window, _| {
+        assert!(
+            project_focus.is_focused(window),
+            "关闭非真实焦点面板不得抢走项目容器焦点"
+        );
+    });
 }
 
 #[gpui::test]

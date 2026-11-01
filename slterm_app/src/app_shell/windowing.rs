@@ -90,8 +90,9 @@ pub(crate) fn open_initial_window(
         window.set_window_title(brand::NAME);
         // HWND 发布单点:任务栏闪烁/进度经 facade 查询。
         crate::windowing::focus::publish_window(window);
-        let root = cx.new(|_| AppRoot::new(PanelIdAllocator::new(1), shell));
+        let root = cx.new(|cx| AppRoot::new(PanelIdAllocator::new(1), shell, cx));
         root.update(cx, |root, cx| {
+            root.observe_focus(window, cx);
             if let Err(error) = root.open_initial_project(initial_root, window, cx) {
                 log::error!("初始项目启动失败: {error}");
                 super::try_write_stderr(format_args!("初始项目启动失败: {error}"));

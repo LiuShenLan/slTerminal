@@ -2,7 +2,6 @@
 
 mod commands;
 mod events;
-#[allow(dead_code)] // 焦点所有权已迁移，生产订阅由后续焦点接线装配。
 mod focus_manager;
 pub(crate) mod keymap;
 mod panel_host;
@@ -17,9 +16,11 @@ mod tests;
 
 use std::collections::BTreeMap;
 
-use gpui::{Entity, Subscription};
+use gpui::{Context, Entity, FocusHandle, Subscription, Window};
 use slterm_path::CanonicalPath;
 use slterm_workspace::{PanelId, PanelIdAllocator, ProjectId, ProjectSnapshot};
+
+use focus_manager::{FocusManager, FocusRegistration, FocusSubscriptions};
 
 pub(crate) use commands::TerminalPanelLauncher;
 
@@ -34,28 +35,57 @@ pub(crate) struct AppRoot {
     projects: BTreeMap<ProjectId, Entity<ProjectView>>,
     panel_ids: PanelIdAllocator,
     panel_subscriptions: BTreeMap<PanelId, Subscription>,
+    panel_focus: BTreeMap<PanelId, FocusRegistration>,
+    workspace_focus: FocusHandle,
+    focus_manager: FocusManager,
+    focus_subscriptions: Option<FocusSubscriptions>,
     launcher: Box<dyn TerminalPanelLauncher>,
     shell: CanonicalPath,
 }
 
 impl AppRoot {
-    pub(crate) fn new(panel_ids: PanelIdAllocator, shell: CanonicalPath) -> Self {
-        Self::with_launcher(panel_ids, shell, Box::new(commands::LocalTerminalLauncher))
+    pub(crate) fn new(
+        panel_ids: PanelIdAllocator,
+        shell: CanonicalPath,
+        cx: &mut Context<'_, Self>,
+    ) -> Self {
+        Self::with_launcher(
+            panel_ids,
+            shell,
+            Box::new(commands::LocalTerminalLauncher),
+            cx,
+        )
     }
 
     fn with_launcher(
         panel_ids: PanelIdAllocator,
         shell: CanonicalPath,
         launcher: Box<dyn TerminalPanelLauncher>,
+        cx: &mut Context<'_, Self>,
     ) -> Self {
+        let workspace_focus = cx.focus_handle();
+        let focus_manager = FocusManager::new(&workspace_focus);
         Self {
             snapshot: ProjectSnapshot::default(),
             projects: BTreeMap::new(),
             panel_ids,
             panel_subscriptions: BTreeMap::new(),
+            panel_focus: BTreeMap::new(),
+            workspace_focus,
+            focus_manager,
+            focus_subscriptions: None,
             launcher,
             shell,
         }
+    }
+
+    pub(crate) fn observe_focus(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        self.focus_subscriptions = Some(FocusSubscriptions::new(
+            cx,
+            window,
+            |root, window, cx| root.sync_focus(window, cx),
+            |root, window, cx| root.recover_focus(window, cx),
+        ));
     }
 
     #[allow(dead_code)] // 生产快照保存与窗口切换时消费。

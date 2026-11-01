@@ -17,6 +17,7 @@ use uuid::Uuid;
 use crate::gpui_terminal::PaneId;
 use crate::gpui_terminal::view::{TerminalLaunch, TerminalView, TerminalViewEvent};
 
+use super::focus_manager::{FocusError, FocusToken};
 use super::panel_host::PanelHost;
 use super::{AppRoot, ProjectView};
 
@@ -77,6 +78,7 @@ pub(crate) enum AppRootError {
     Snapshot(ProjectSnapshotError),
     PanelIdExhausted,
     Launch(io::Error),
+    Focus(FocusError),
     ProjectNotActive,
     MissingPanel,
 }
@@ -89,6 +91,7 @@ impl fmt::Display for AppRootError {
             Self::Snapshot(error) => write!(formatter, "项目快照不一致: {error}"),
             Self::PanelIdExhausted => formatter.write_str("面板 ID 序列已耗尽"),
             Self::Launch(error) => write!(formatter, "终端启动失败: {error}"),
+            Self::Focus(error) => write!(formatter, "焦点目标不可用: {error:?}"),
             Self::ProjectNotActive => formatter.write_str("只能在活跃项目中显式创建终端"),
             Self::MissingPanel => formatter.write_str("终端运行面板不存在"),
         }
@@ -103,6 +106,7 @@ impl std::error::Error for AppRootError {
             Self::Launch(error) => Some(error),
             Self::Registry(_)
             | Self::PanelIdExhausted
+            | Self::Focus(_)
             | Self::ProjectNotActive
             | Self::MissingPanel => None,
         }
@@ -136,6 +140,12 @@ impl From<PanelIdExhausted> for AppRootError {
 impl From<io::Error> for AppRootError {
     fn from(error: io::Error) -> Self {
         Self::Launch(error)
+    }
+}
+
+impl From<FocusError> for AppRootError {
+    fn from(error: FocusError) -> Self {
+        Self::Focus(error)
     }
 }
 
@@ -173,6 +183,7 @@ impl AppRoot {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Result<AddProjectOutcome, AppRootError> {
+        self.sync_focus(window, cx);
         let mut candidate = self.snapshot.clone();
         let outcome = candidate.registry_mut().add_project(id, root)?;
         candidate.validate()?;
@@ -181,12 +192,35 @@ impl AppRoot {
                 project_id
             }
         };
-        if matches!(outcome, AddProjectOutcome::Added(project_id) if project_id == id) {
-            self.projects.insert(id, cx.new(|_| ProjectView::default()));
+        let new_project = if matches!(outcome, AddProjectOutcome::Added(project_id) if project_id == id)
+        {
+            let project = cx.new(ProjectView::new);
+            let parent = self.focus_manager.workspace_token();
+            let registration = self.focus_manager.register(
+                &project.read(cx).focus_handle,
+                parent,
+                Some(id),
+                true,
+            )?;
+            Some((project, registration))
+        } else {
+            None
+        };
+        let default = match &new_project {
+            Some((_, registration)) => registration.token(),
+            None => self.project_default_focus(active_id, cx)?,
+        };
+        self.sync_focus_visibility(Some(active_id), cx);
+        self.focus_manager
+            .activate_project(active_id, default, window, cx)?;
+        if let Some((project, registration)) = new_project {
+            project.update(cx, |project, _| {
+                project.focus_registration = Some(registration);
+            });
+            self.projects.insert(id, project);
         }
         self.snapshot = candidate;
         self.sync_project_visibility(cx);
-        self.focus_project(active_id, window, cx);
         cx.notify();
         Ok(outcome)
     }
@@ -197,6 +231,7 @@ impl AppRoot {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Result<(), AppRootError> {
+        self.sync_focus(window, cx);
         let mut candidate = self.snapshot.clone();
         candidate.registry_mut().activate_project(id)?;
         candidate.validate()?;
@@ -205,9 +240,12 @@ impl AppRoot {
                 ProjectRegistryError::ProjectNotFound,
             ));
         }
+        let default = self.project_default_focus(id, cx)?;
+        self.sync_focus_visibility(Some(id), cx);
+        self.focus_manager
+            .activate_project(id, default, window, cx)?;
         self.snapshot = candidate;
         self.sync_project_visibility(cx);
-        self.focus_project(id, window, cx);
         cx.notify();
         Ok(())
     }
@@ -218,6 +256,7 @@ impl AppRoot {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Result<PanelId, AppRootError> {
+        self.sync_focus(window, cx);
         let project_id = self.active_project()?;
         let target_group = match self.focused_group(project_id, cx)? {
             Some(group_id) => group_id,
@@ -257,6 +296,7 @@ impl AppRoot {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Result<PanelId, AppRootError> {
+        self.sync_focus(window, cx);
         let project_id = self.active_project()?;
         let target_group = self
             .focused_group(project_id, cx)?
@@ -363,14 +403,6 @@ impl AppRoot {
         if self.terminal_panel(project_id, terminal_id, cx).is_some() {
             return Err(AppRootError::MissingPanel);
         }
-        let panel_id = self.panel_ids.allocate()?;
-        let terminal = self.launcher.launch(panel_id, &record, window, cx)?;
-        terminal.update(cx, |terminal, _| {
-            terminal.attach_completion_session(Rc::new(crate::completion::Session::default()));
-        });
-        let subscription = cx.subscribe_in(&terminal, window, move |root, _, event, window, cx| {
-            root.on_terminal_event(panel_id, event, window, cx);
-        });
         let project = self
             .projects
             .get(&project_id)
@@ -378,6 +410,33 @@ impl AppRoot {
             .ok_or(AppRootError::Registry(
                 ProjectRegistryError::ProjectNotFound,
             ))?;
+        let panel_id = self.panel_ids.allocate()?;
+        let parent = self.project_focus_token(project_id, cx)?;
+        let terminal = self.launcher.launch(panel_id, &record, window, cx)?;
+        terminal.update(cx, |terminal, _| {
+            terminal.attach_completion_session(Rc::new(crate::completion::Session::default()));
+        });
+        let focus_registration = match self.focus_manager.register(
+            &terminal.read(cx).focus_handle,
+            parent,
+            Some(project_id),
+            true,
+        ) {
+            Ok(registration) => registration,
+            Err(error) => {
+                terminal.read(cx).shutdown();
+                return Err(error.into());
+            }
+        };
+        let focus_token = focus_registration.token();
+        if let Err(error) = self.focus_manager.request_focus(focus_token, window, cx) {
+            let _ = self.focus_manager.unregister(focus_token);
+            terminal.read(cx).shutdown();
+            return Err(error.into());
+        }
+        let subscription = cx.subscribe_in(&terminal, window, move |root, _, event, window, cx| {
+            root.on_terminal_event(panel_id, event, window, cx);
+        });
         project.update(cx, |project, _| {
             project.panels.insert(
                 panel_id,
@@ -392,10 +451,10 @@ impl AppRoot {
             );
             project.focused_panel = Some(panel_id);
         });
+        self.panel_focus.insert(panel_id, focus_registration);
         self.panel_subscriptions.insert(panel_id, subscription);
         self.snapshot = candidate;
         self.sync_project_visibility(cx);
-        self.focus_project(project_id, window, cx);
         cx.notify();
         Ok(panel_id)
     }
@@ -405,6 +464,7 @@ impl AppRoot {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Result<TerminalRecord, AppRootError> {
+        self.sync_focus(window, cx);
         let project_id = self.active_project()?;
         let panel_id = self
             .focused_panel(project_id, cx)
@@ -426,9 +486,10 @@ impl AppRoot {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Result<TerminalRecord, AppRootError> {
+        self.sync_focus(window, cx);
         let (candidate, record) = self.snapshot.without_terminal(id)?;
         let project_id = record.project_id();
-        let (panel_id, _) = self
+        let (panel_id, terminal) = self
             .terminal_panel(project_id, id, cx)
             .ok_or(AppRootError::MissingPanel)?;
         let project = self
@@ -438,8 +499,37 @@ impl AppRoot {
             .ok_or(AppRootError::Registry(
                 ProjectRegistryError::ProjectNotFound,
             ))?;
+        let focus_token = self
+            .panel_focus
+            .get(&panel_id)
+            .map(super::focus_manager::FocusRegistration::token)
+            .ok_or(AppRootError::MissingPanel)?;
+        let was_focused = window
+            .focused(cx)
+            .is_some_and(|focused| focused == terminal.read(cx).focus_handle);
+        if self.snapshot.registry().active() == Some(project_id) && was_focused {
+            let next_panel = project
+                .read(cx)
+                .panels
+                .keys()
+                .find(|candidate| **candidate != panel_id)
+                .copied();
+            let mut candidates = Vec::with_capacity(2);
+            match next_panel {
+                Some(next_panel) => candidates.push(
+                    self.panel_focus
+                        .get(&next_panel)
+                        .map(super::focus_manager::FocusRegistration::token)
+                        .ok_or(AppRootError::MissingPanel)?,
+                ),
+                None => candidates.push(self.project_focus_token(project_id, cx)?),
+            }
+            self.focus_manager.restore_focus(&candidates, window, cx)?;
+        }
+        self.focus_manager.unregister(focus_token)?;
 
         self.snapshot = candidate;
+        self.panel_focus.remove(&panel_id);
         self.panel_subscriptions.remove(&panel_id);
         let panel = project.update(cx, |project, _| {
             let panel = project.panels.remove(&panel_id);
@@ -451,7 +541,6 @@ impl AppRoot {
         if let Some(panel) = panel {
             panel.terminal.read(cx).shutdown();
         }
-        self.focus_project(project_id, window, cx);
         cx.notify();
         Ok(record)
     }
@@ -462,6 +551,7 @@ impl AppRoot {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Result<(), AppRootError> {
+        self.sync_focus(window, cx);
         let candidate = self.snapshot.with_active_terminal(id)?;
         let project_id = candidate
             .terminal(id)
@@ -477,9 +567,14 @@ impl AppRoot {
             .ok_or(AppRootError::Registry(
                 ProjectRegistryError::ProjectNotFound,
             ))?;
+        let focus_token = self
+            .panel_focus
+            .get(&panel_id)
+            .map(super::focus_manager::FocusRegistration::token)
+            .ok_or(AppRootError::MissingPanel)?;
+        self.focus_manager.request_focus(focus_token, window, cx)?;
         self.snapshot = candidate;
         project.update(cx, |project, _| project.focused_panel = Some(panel_id));
-        self.focus_project(project_id, window, cx);
         cx.notify();
         Ok(())
     }
@@ -542,17 +637,18 @@ impl AppRoot {
         })
     }
 
-    /// 只改变输出重绘可见性；所有项目的会话泵与实体继续持有。
-    fn sync_project_visibility(&self, cx: &mut App) {
+    /// 同步输出与焦点可见性；所有项目的会话泵与实体继续持有。
+    fn sync_project_visibility(&mut self, cx: &mut App) {
         let active = self.snapshot.registry().active();
+        self.sync_focus_visibility(active, cx);
         for (project_id, project) in &self.projects {
             let visible = active == Some(*project_id);
-            let terminals: Vec<_> = project
+            let terminals = project
                 .read(cx)
                 .panels
                 .values()
                 .map(|panel| panel.terminal.clone())
-                .collect();
+                .collect::<Vec<_>>();
             for terminal in terminals {
                 terminal.update(cx, |terminal, cx| {
                     terminal.set_output_visible(visible, cx);
@@ -561,16 +657,104 @@ impl AppRoot {
         }
     }
 
-    fn focus_project(&self, project_id: ProjectId, window: &mut Window, cx: &mut App) {
-        if self.snapshot.registry().active() != Some(project_id) {
-            return;
+    /// 还焦前先开放目标项目节点，并关闭所有隐藏项目的焦点资格。
+    fn sync_focus_visibility(&mut self, active: Option<ProjectId>, cx: &App) {
+        let mut focus_visibility = Vec::new();
+        for (project_id, project) in &self.projects {
+            let visible = active == Some(*project_id);
+            let project = project.read(cx);
+            if let Some(registration) = &project.focus_registration {
+                focus_visibility.push((registration.token(), visible));
+            }
+            for panel_id in project.panels.keys() {
+                if let Some(registration) = self.panel_focus.get(panel_id) {
+                    focus_visibility.push((registration.token(), visible));
+                }
+            }
         }
-        let Some(panel_id) = self.focused_panel(project_id, cx) else {
+        for (token, visible) in focus_visibility {
+            let result = if visible {
+                self.focus_manager.present_nonmodal(token)
+            } else {
+                self.focus_manager.set_visible(token, false)
+            };
+            if let Err(error) = result {
+                log::warn!("焦点可见性同步失败: {error:?}");
+            }
+        }
+    }
+
+    fn project_focus_token(
+        &self,
+        project_id: ProjectId,
+        cx: &App,
+    ) -> Result<FocusToken, AppRootError> {
+        self.projects
+            .get(&project_id)
+            .and_then(|project| project.read(cx).focus_registration.as_ref())
+            .map(super::focus_manager::FocusRegistration::token)
+            .ok_or(AppRootError::MissingPanel)
+    }
+
+    fn project_default_focus(
+        &self,
+        project_id: ProjectId,
+        cx: &App,
+    ) -> Result<FocusToken, AppRootError> {
+        match self.focused_panel(project_id, cx) {
+            Some(panel_id) => self
+                .panel_focus
+                .get(&panel_id)
+                .map(super::focus_manager::FocusRegistration::token)
+                .ok_or(AppRootError::MissingPanel),
+            None => self.project_focus_token(project_id, cx),
+        }
+    }
+
+    /// 把真实 GPUI 焦点同步到 FocusManager、项目瞬时焦点和布局激活项。
+    pub(super) fn sync_focus(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        self.focus_manager.sync_window_focus(window, cx);
+        self.sync_focus_projection(window, cx);
+    }
+
+    pub(super) fn recover_focus(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        self.focus_manager.recover_focus_lost(window, cx);
+        self.sync_focus_projection(window, cx);
+    }
+
+    fn sync_focus_projection(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        let focused = window.focused(cx).map(|handle| handle.downgrade());
+        let Some(project_id) = self.snapshot.registry().active() else {
             return;
         };
-        let focus = project_focus(self, project_id, panel_id, cx);
-        if let Some(focus) = focus {
-            focus.focus(window, cx);
+        let focused_panel = self.projects.get(&project_id).and_then(|project| {
+            project
+                .read(cx)
+                .panels
+                .iter()
+                .find_map(|(panel_id, panel)| {
+                    let handle = panel.terminal.read(cx).focus_handle.downgrade();
+                    (Some(&handle) == focused.as_ref()).then(|| match panel.view_key {
+                        ViewKey::Terminal { terminal_id, .. } => (*panel_id, terminal_id),
+                        _ => unreachable!("当前运行根只创建终端面板"),
+                    })
+                })
+        });
+        let Some((panel_id, terminal_id)) = focused_panel else {
+            return;
+        };
+        if self.focused_panel(project_id, cx) == Some(panel_id) {
+            return;
+        }
+        match self.snapshot.with_active_terminal(terminal_id) {
+            Ok(candidate) => {
+                self.snapshot = candidate;
+                if let Some(project) = self.projects.get(&project_id) {
+                    project.update(cx, |project, _| project.focused_panel = Some(panel_id));
+                }
+                cx.notify();
+            }
+            Err(error) => log::warn!("实际焦点同步失败: {error}"),
         }
     }
 
@@ -616,18 +800,4 @@ impl AppRoot {
             | TerminalViewEvent::ProgressChanged(_) => {}
         }
     }
-}
-
-fn project_focus(
-    root: &AppRoot,
-    project_id: ProjectId,
-    panel_id: PanelId,
-    cx: &App,
-) -> Option<gpui::FocusHandle> {
-    root.projects
-        .get(&project_id)?
-        .read(cx)
-        .panels
-        .get(&panel_id)
-        .map(|panel| panel.terminal.read(cx).focus_handle.clone())
 }

@@ -26,15 +26,17 @@ impl AppRoot {
         };
         let project_view = project_entity.read(cx);
         let layout = project.layout();
-        let Some(tree) = layout.tree() else {
-            return render_empty();
-        };
+        let content = layout
+            .tree()
+            .map(|tree| self.render_split_node(tree, layout, project_view, &mut Vec::new(), cx))
+            .unwrap_or_else(render_empty);
         div()
             .size_full()
             .min_w_0()
             .min_h_0()
+            .track_focus(&project_view.focus_handle)
             .debug_selector(|| "app-root-content".to_owned())
-            .child(self.render_split_node(tree, layout, project_view, &mut Vec::new(), cx))
+            .child(content)
             .into_any_element()
     }
 
@@ -164,6 +166,7 @@ impl Render for AppRoot {
             .size_full()
             .min_w_0()
             .min_h_0()
+            .track_focus(&self.workspace_focus)
             .on_action(cx.listener(|this, _: &NewTerminal, window, cx| {
                 let shell = this.shell.clone();
                 if let Err(error) = this.new_terminal(shell, window, cx) {
