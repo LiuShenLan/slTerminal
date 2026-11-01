@@ -495,12 +495,6 @@ impl AppRoot {
     }
 
     pub(super) fn render_activity_bar(&self, cx: &Context<'_, Self>) -> AnyElement {
-        let buttons = self
-            .side_views
-            .state()
-            .visible_buttons()
-            .into_iter()
-            .map(|view| self.render_side_view_button(view, cx));
         div()
             .key_context(ACTIVITY_BAR_KEY_CONTEXT)
             .on_action(cx.listener(|this, _: &FocusNextSideButton, window, cx| {
@@ -530,10 +524,31 @@ impl AppRoot {
             .flex_col()
             .items_center()
             .pt_2()
-            .gap_1()
+            .pb_2()
             .bg(cx.theme().sidebar)
             .border_r_1()
             .border_color(cx.theme().sidebar_border)
+            .child(self.render_side_button_group(SideSlot::Upper, cx))
+            .child(div().flex_1().min_h_0())
+            .child(self.render_side_button_group(SideSlot::Lower, cx))
+            .into_any_element()
+    }
+
+    fn render_side_button_group(&self, slot: SideSlot, cx: &Context<'_, Self>) -> AnyElement {
+        let buttons = self
+            .side_views
+            .state()
+            .buttons(slot)
+            .iter()
+            .copied()
+            .filter(|view| self.side_views.state().button_is_visible(*view))
+            .map(|view| self.render_side_view_button(view, cx));
+        div()
+            .flex()
+            .flex_col()
+            .items_center()
+            .gap_1()
+            .flex_shrink_0()
             .children(buttons)
             .into_any_element()
     }

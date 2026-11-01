@@ -121,6 +121,41 @@ fn activity_bar_focus_indicator_uses_accent_border() {
 }
 
 #[gpui::test]
+fn activity_bar_lower_group_is_anchored_to_bottom(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let mut store = WorkspaceDatabase::open(&paths).unwrap();
+    let mut sidebar = slterm_sidebar::SidebarState::default();
+    sidebar
+        .move_button_to_slot(SideViewId::Explorer, slterm_sidebar::SideSlot::Lower, 0)
+        .unwrap();
+    store.save_sidebar_state(&sidebar).unwrap();
+    drop(store);
+    let persistence = SideViewPersistence::load(&paths, None);
+    let (root, mut window, _) = open_root_with_persistence(cx, persistence);
+    draw_frame(&mut window);
+
+    let upper = window.debug_bounds("app-root-side-button-nav").unwrap();
+    let lower = window
+        .debug_bounds("app-root-side-button-explorer")
+        .unwrap();
+    let viewport = window.update(|window, _| window.viewport_size());
+    assert!(lower.origin.y > upper.origin.y);
+    assert!(
+        (f32::from(viewport.height) - f32::from(lower.bottom()) - 8.0).abs() <= 1.0,
+        "下按钮组必须贴齐活动栏底部并保留 8 像素内边距"
+    );
+
+    focus_side_button(&root, &mut window, cx, SideViewId::AgentFiles);
+    window.simulate_keystrokes("down");
+    draw_frame(&mut window);
+    assert_side_button_focused(&root, &mut window, cx, SideViewId::Explorer);
+    window.simulate_keystrokes("up");
+    draw_frame(&mut window);
+    assert_side_button_focused(&root, &mut window, cx, SideViewId::AgentFiles);
+}
+
+#[gpui::test]
 fn activity_bar_tab_and_arrow_keys_follow_visual_order(cx: &mut TestAppContext) {
     let (root, mut window, _) = open_root(cx);
     draw_frame(&mut window);
