@@ -7,6 +7,9 @@ use crate::protocol::{
     ProtocolError, parse_client_request,
 };
 
+#[cfg(feature = "schema")]
+use crate::protocol::HandoverResponse;
+
 fn hello_request() -> HelloRequest {
     JsonRpcRequest::new(
         JsonRpcId::String("client-request-1".to_owned()),
@@ -355,6 +358,17 @@ fn schema_accepts_real_requests_and_rejects_unknown_methods() {
     validator
         .validate(&serde_json::to_value(hello_response).unwrap())
         .unwrap();
+    let handover_response =
+        JsonRpcResponse::result(JsonRpcId::Number(1), HandoverResponse::accepted());
+    validator
+        .validate(&serde_json::to_value(handover_response).unwrap())
+        .unwrap();
+    let rejected_handover = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {"accepted": false}
+    });
+    assert!(validator.validate(&rejected_handover).is_err());
     let error_response = JsonRpcResponse::<HelloResponse>::error(
         JsonRpcId::Number(1),
         JsonRpcError::new(-32001, "not ready", None),

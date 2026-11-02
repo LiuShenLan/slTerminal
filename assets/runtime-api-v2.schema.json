@@ -13,6 +13,9 @@
       "$ref": "#/$defs/JsonRpcResult"
     },
     {
+      "$ref": "#/$defs/JsonRpcResult2"
+    },
+    {
       "$ref": "#/$defs/JsonRpcErrorResponse"
     }
   ],
@@ -139,6 +142,22 @@
             "kind"
           ]
         }
+      ]
+    },
+    "HandoverResponse": {
+      "description": "单实例移交已接受的确认；拒绝必须使用结构化错误而非 accepted=false。",
+      "type": "object",
+      "properties": {
+        "accepted": {
+          "type": "boolean",
+          "enum": [
+            true
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "accepted"
       ]
     },
     "HelloMethod": {
@@ -359,6 +378,30 @@
         },
         "result": {
           "$ref": "#/$defs/HelloResponse"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "jsonrpc",
+        "id",
+        "result"
+      ]
+    },
+    "JsonRpcResult2": {
+      "description": "hello 成功响应的静态形状，与通用错误响应严格分离。",
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/JsonRpcId"
+        },
+        "jsonrpc": {
+          "type": "string",
+          "enum": [
+            "2.0"
+          ]
+        },
+        "result": {
+          "$ref": "#/$defs/HandoverResponse"
         }
       },
       "additionalProperties": false,

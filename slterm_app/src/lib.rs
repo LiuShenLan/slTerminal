@@ -72,6 +72,8 @@ pub(crate) mod history;
 // 界面语言:build.rs 静态生成的 typed Message 查询 API;
 // 运行时零解析、零文件读、零锁。
 pub(crate) mod i18n;
+#[allow(dead_code)] // 生产消费点归启动与单实例移交接线。
+pub(crate) mod local_control;
 pub(crate) mod logging;
 // 数学引擎:后端无关 TeX 子集——parser→validate→IR→layout→
 // compile→rasterizer/bitmap/cache/font/spacing 十模块。

@@ -240,6 +240,25 @@ impl HelloResponse {
     }
 }
 
+/// 单实例移交已接受的确认；拒绝必须使用结构化错误而非 accepted=false。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct HandoverResponse {
+    #[cfg_attr(feature = "schema", schemars(extend("enum" = [true])))]
+    accepted: bool,
+}
+
+impl HandoverResponse {
+    pub const fn accepted() -> Self {
+        Self { accepted: true }
+    }
+
+    pub const fn is_accepted(&self) -> bool {
+        self.accepted
+    }
+}
+
 /// 结构化领域错误码，不与 JSON-RPC 数值码混用。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -354,6 +373,7 @@ pub enum ControlMessage {
     Hello(HelloRequest),
     Handover(HandoverRequest),
     HelloResponse(JsonRpcResult<HelloResponse>),
+    HandoverResponse(JsonRpcResult<HandoverResponse>),
     Error(JsonRpcErrorResponse),
 }
 
