@@ -1,10 +1,10 @@
 //! Runtime hello 与单实例移交的线缆合同测试。
 
 use crate::protocol::{
-    ClientRequest, ControlMessage, ControlMethod, ControlScope, Credential, DomainErrorCode,
-    HandoverMethod, HandoverParams, HandoverRequest, HelloMethod, HelloParams, HelloRequest,
-    HelloResponse, JsonRpcError, JsonRpcErrorData, JsonRpcId, JsonRpcRequest, JsonRpcResponse,
-    ProtocolError, parse_client_request,
+    ClientRequest, ControlMessage, ControlMethod, ControlScope, Credential, DiscoveryRecord,
+    DomainErrorCode, HandoverMethod, HandoverParams, HandoverRequest, HelloMethod, HelloParams,
+    HelloRequest, HelloResponse, JsonRpcError, JsonRpcErrorData, JsonRpcId, JsonRpcRequest,
+    JsonRpcResponse, ProtocolError, parse_client_request,
 };
 
 #[cfg(feature = "schema")]
@@ -21,6 +21,84 @@ fn hello_request() -> HelloRequest {
             scope: ControlScope::Handover,
         },
     )
+}
+
+fn discovery_record() -> DiscoveryRecord {
+    DiscoveryRecord {
+        protocol_version: 2,
+        endpoint: "127.0.0.1:4242".parse().unwrap(),
+        run_id: "run-test".to_owned(),
+        process_id: 123,
+        process_created_at_ms: 456,
+    }
+}
+
+#[test]
+fn discovery_round_trip_contains_only_non_sensitive_metadata() {
+    let record = discovery_record();
+    record.validate().unwrap();
+    let encoded = serde_json::to_value(&record).unwrap();
+    let decoded: DiscoveryRecord = serde_json::from_value(encoded.clone()).unwrap();
+
+    assert_eq!(decoded, record);
+    let mut fields: Vec<&str> = encoded
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    fields.sort_unstable();
+    assert_eq!(
+        fields,
+        [
+            "endpoint",
+            "process_created_at_ms",
+            "process_id",
+            "protocol_version",
+            "run_id"
+        ]
+    );
+}
+
+#[test]
+fn discovery_rejects_unknown_and_sensitive_fields() {
+    for field in ["extra", "credential", "token", "secret"] {
+        let mut encoded = serde_json::to_value(discovery_record()).unwrap();
+        encoded[field] = serde_json::Value::String("sk-test".to_owned());
+        assert!(
+            serde_json::from_value::<DiscoveryRecord>(encoded).is_err(),
+            "发现 DTO 必须拒绝字段 {field}"
+        );
+    }
+}
+
+#[test]
+fn discovery_rejects_invalid_version_endpoint_and_identity() {
+    let invalid_values = [
+        serde_json::json!({"protocol_version": 1}),
+        serde_json::json!({"protocol_version": 3}),
+        serde_json::json!({"endpoint": "0.0.0.0:4242"}),
+        serde_json::json!({"endpoint": "192.168.1.2:4242"}),
+        serde_json::json!({"endpoint": "[::]:4242"}),
+        serde_json::json!({"endpoint": "127.0.0.1:0"}),
+        serde_json::json!({"endpoint": "[::1]:0"}),
+        serde_json::json!({"run_id": ""}),
+        serde_json::json!({"run_id": "  "}),
+        serde_json::json!({"process_id": 0}),
+        serde_json::json!({"process_created_at_ms": 0}),
+    ];
+    for patch in invalid_values {
+        let mut encoded = serde_json::to_value(discovery_record()).unwrap();
+        encoded
+            .as_object_mut()
+            .unwrap()
+            .extend(patch.as_object().unwrap().clone());
+        let record: DiscoveryRecord = serde_json::from_value(encoded).unwrap();
+        assert!(
+            record.validate().is_err(),
+            "必须拒绝无效发现记录 {record:?}"
+        );
+    }
 }
 
 #[test]
@@ -321,6 +399,19 @@ fn schema_generator_failure_preserves_existing_output_file() {
         .unwrap();
     assert!(!status.success());
     assert_eq!(std::fs::read_to_string(destination).unwrap(), "old schema");
+}
+
+#[cfg(feature = "schema")]
+#[test]
+fn schema_accepts_discovery_and_rejects_sensitive_fields() {
+    let schema: serde_json::Value = serde_json::from_str(&packaged_schema()).unwrap();
+    let validator = jsonschema::validator_for(&schema).unwrap();
+    let discovery = serde_json::to_value(discovery_record()).unwrap();
+    validator.validate(&discovery).unwrap();
+
+    let mut with_token = discovery;
+    with_token["token"] = serde_json::Value::String("sk-test".to_owned());
+    assert!(validator.validate(&with_token).is_err());
 }
 
 #[cfg(feature = "schema")]

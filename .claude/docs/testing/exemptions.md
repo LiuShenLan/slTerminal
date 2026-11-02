@@ -42,6 +42,7 @@
 | 应用图标视觉质量（母版构图/16px 降采样可辨性/ico 嵌入正确性） | `assets/app-icon.png`/`assets/app-icon.ico` | 纯资源替换无可自动化代码逻辑；视觉呈现依赖人眼判定 | 无自动化像素断言；构建产物人工检查清单（图标随包、exe 图标属性/任务栏/Alt-Tab、安装器快捷方式图标目测） | 保留；上报待决（是否需要自动化像素基线） |
 | Markdown 数学公式渲染的像素级观感（字形/字号缩放/裁剪边/暗色对比） | `slterm_app/src/math` + `slterm_app/src/app_shell/file_editor` | 公式布局可单元层断言，最终字形光栅与阅读列合成由 GPUI 文本管线在真实 DPI 下完成，虚拟窗口不能代表观感 | 单元层 `maintained_math_documents_generate_math_pixels`/`corpus_rendering_matches_the_upstream_baseline`/`repeated_corpus_resize_uses_bounded_lru_and_keeps_geometry_finite` + `code_and_math_edit_bodies_without_touching_authored_fences` + 构建产物人工目测（行内/块公式、宽公式缩放、暗色协调） | 保留 |
 | socket 配置与 accept 系统调用失败（`set_nonblocking`、`set_read_timeout`、`set_write_timeout`、accept 致命错误） | `slterm_app/src/local_control` | 依赖真实 OS 句柄与资源故障，仓内无确定性失败注入通道 | 配置失败立即返回错误并关闭连接；accept 错误记录后继续服务由真实 loopback 用例覆盖，握手/请求 deadline、连接上限、活跃连接 shutdown 与 worker 全量回收自动化兜底；资源耗尽场景由构建产物人工核验 | 保留 |
+| 文件符号链接替换端点记录的端到端撤销场景 | `slterm_app/src/local_control/discovery.rs` + `slterm_app/src/atomic_file.rs` | 当前测试令牌不含 `SeCreateSymbolicLinkPrivilege`；`symlink_file` 实测返回 `ERROR_PRIVILEGE_NOT_HELD`(1314)，非提权 runner 无法创建文件符号链接 | `removal_rejects_final_reparse_point_instead_of_following_target` 使用无需特权的真实 NTFS junction 验证最终组件按 reparse 点自身打开并保留目标内容；普通文件身份、内容及并发读写撤销由单元层全覆盖；具特权 Windows runner 人工复核文件符号链接场景 | 2026-11-02 登记 |
 
 ## 目标态设计声明的人工验收面
 

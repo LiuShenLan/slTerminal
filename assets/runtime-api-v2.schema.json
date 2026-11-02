@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "ControlMessage",
-  "description": "当前请求与响应的根消息集合，schema 与线缆 DTO 共用此边界。",
+  "description": "当前请求、响应与发现记录的根集合，schema 与各领域 DTO 共用此边界。",
   "anyOf": [
     {
       "$ref": "#/$defs/JsonRpcRequest"
@@ -17,6 +17,9 @@
     },
     {
       "$ref": "#/$defs/JsonRpcErrorResponse"
+    },
+    {
+      "$ref": "#/$defs/DiscoveryRecord"
     }
   ],
   "$defs": {
@@ -48,6 +51,44 @@
     "Credential": {
       "description": "线缆凭据只参与序列化与认证比较，调试输出永远脱敏。",
       "type": "string"
+    },
+    "DiscoveryRecord": {
+      "description": "本机控制面发现记录；认证材料只经凭据门面独立获取。",
+      "type": "object",
+      "properties": {
+        "endpoint": {
+          "type": "string"
+        },
+        "process_created_at_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "process_id": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "protocol_version": {
+          "type": "integer",
+          "format": "uint32",
+          "enum": [
+            2
+          ],
+          "minimum": 0
+        },
+        "run_id": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "protocol_version",
+        "endpoint",
+        "run_id",
+        "process_id",
+        "process_created_at_ms"
+      ]
     },
     "DomainErrorCode": {
       "description": "结构化领域错误码，不与 JSON-RPC 数值码混用。",

@@ -6,23 +6,37 @@
 //! 独占的 lifetime 锁(进程崩溃内核即释放,不存在「超时回收」窗口)。
 
 use std::fs::{File, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 static NEXT_TEMPORARY: AtomicU64 = AtomicU64::new(1);
 
+/// 原子替换前后稳定不变的文件身份，用于防止旧所有者误删替代文件。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FileIdentity {
+    volume_serial_number: u32,
+    file_index: u64,
+}
+
 /// 以临时文件 + 原子替换把 `contents` 落到 `path`,先 sync 临时文件再换名。
 pub(crate) fn write(path: &Path, contents: &[u8]) -> io::Result<()> {
-    write_with_acl(path, contents, copy_target_acl)
+    write_with_acl(path, contents, copy_target_acl).map(|_| ())
+}
+
+/// 发布只许当前用户访问的文件；目标旧 ACL 不得继承到替代文件。
+pub(crate) fn write_current_user(path: &Path, contents: &[u8]) -> io::Result<FileIdentity> {
+    write_with_acl(path, contents, |_, temporary| {
+        restrict_to_current_user(temporary)
+    })
 }
 
 fn write_with_acl(
     path: &Path,
     contents: &[u8],
     copy_acl: fn(&Path, &Path) -> io::Result<()>,
-) -> io::Result<()> {
+) -> io::Result<FileIdentity> {
     let parent = path
         .parent()
         .ok_or_else(|| io::Error::other("state path has no parent"))?;
@@ -47,15 +61,38 @@ fn write_with_acl(
             .open(&temporary)?;
         file.write_all(contents)?;
         file.sync_all()?;
+        let identity = file_identity(&file)?;
         drop(file);
         copy_acl(path, &temporary)?;
-        replace(&temporary, path)
+        replace(&temporary, path)?;
+        Ok(identity)
     })();
 
     if result.is_err() {
         let _ = std::fs::remove_file(&temporary);
     }
     result
+}
+
+fn file_identity(file: &File) -> io::Result<FileIdentity> {
+    use std::os::windows::io::AsRawHandle as _;
+
+    use windows_sys::Win32::Storage::FileSystem::{
+        BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
+    };
+
+    // SAFETY: 该 C 输出结构仅含整数，全零是位级有效初始值。
+    let mut information: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+    // SAFETY: file 是有效打开句柄，输出结构在本栈帧内可写。
+    let queried = unsafe { GetFileInformationByHandle(file.as_raw_handle(), &raw mut information) };
+    if queried == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(FileIdentity {
+        volume_serial_number: information.dwVolumeSerialNumber,
+        file_index: u64::from(information.nFileIndexHigh) << 32
+            | u64::from(information.nFileIndexLow),
+    })
 }
 
 /// 尝试拿同级锁文件,不在 UI 线程上等待。
@@ -184,6 +221,102 @@ impl Drop for LifetimeFileLock {
     }
 }
 
+/// 把 DACL 收敛为当前令牌用户的一条显式允许 ACE，并切断父目录继承。
+fn restrict_to_current_user(path: &Path) -> io::Result<()> {
+    use std::os::windows::ffi::OsStrExt as _;
+    use std::ptr;
+
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS, GetLastError, LocalFree,
+    };
+    use windows_sys::Win32::Security::Authorization::{
+        EXPLICIT_ACCESS_W, GRANT_ACCESS, NO_MULTIPLE_TRUSTEE, SE_FILE_OBJECT, SetEntriesInAclW,
+        SetNamedSecurityInfoW, TRUSTEE_IS_SID, TRUSTEE_IS_USER, TRUSTEE_W,
+    };
+    use windows_sys::Win32::Security::{
+        DACL_SECURITY_INFORMATION, GetTokenInformation, NO_INHERITANCE,
+        PROTECTED_DACL_SECURITY_INFORMATION, TOKEN_QUERY, TOKEN_USER, TokenUser,
+    };
+    use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+    let mut token = ptr::null_mut();
+    // SAFETY: 进程伪句柄只用于本调用；成功取得的 token 在闭包结束后关闭。
+    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let result = (|| {
+        let mut byte_len = 0_u32;
+        // SAFETY: 空缓冲用于查询所需大小；byte_len 是有效输出指针。
+        let queried =
+            unsafe { GetTokenInformation(token, TokenUser, ptr::null_mut(), 0, &mut byte_len) };
+        if queried != 0 {
+            return Err(io::Error::other("TokenUser 空缓冲查询意外成功"));
+        }
+        // SAFETY: 上一 Win32 调用刚返回，立即读取本线程错误码。
+        let query_error = unsafe { GetLastError() };
+        if query_error != ERROR_INSUFFICIENT_BUFFER || byte_len == 0 {
+            return Err(io::Error::from_raw_os_error(query_error as i32));
+        }
+        let mut buffer = vec![0_usize; byte_len.div_ceil(size_of::<usize>() as u32) as usize];
+        // SAFETY: usize 缓冲满足 TOKEN_USER 对齐，容量不小于 Win32 返回的 byte_len。
+        if unsafe {
+            GetTokenInformation(
+                token,
+                TokenUser,
+                buffer.as_mut_ptr().cast(),
+                byte_len,
+                &mut byte_len,
+            )
+        } == 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: 成功的 TokenUser 查询保证缓冲以 TOKEN_USER 开头，SID 随缓冲存活。
+        let user = unsafe { &*buffer.as_ptr().cast::<TOKEN_USER>() };
+        let access = EXPLICIT_ACCESS_W {
+            grfAccessPermissions: FILE_ALL_ACCESS,
+            grfAccessMode: GRANT_ACCESS,
+            grfInheritance: NO_INHERITANCE,
+            Trustee: TRUSTEE_W {
+                pMultipleTrustee: ptr::null_mut(),
+                MultipleTrusteeOperation: NO_MULTIPLE_TRUSTEE,
+                TrusteeForm: TRUSTEE_IS_SID,
+                TrusteeType: TRUSTEE_IS_USER,
+                ptstrName: user.User.Sid.cast(),
+            },
+        };
+        let mut dacl = ptr::null_mut();
+        // SAFETY: access 与 SID 在调用期间有效；oldacl 为空表示不合并任何旧 ACE。
+        let built = unsafe { SetEntriesInAclW(1, &raw const access, ptr::null(), &mut dacl) };
+        if built != ERROR_SUCCESS {
+            return Err(io::Error::from_raw_os_error(built as i32));
+        }
+        let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+        // SAFETY: 路径与新建 DACL 有效；PROTECTED 标志显式禁止继承 ACE。
+        let written = unsafe {
+            SetNamedSecurityInfoW(
+                wide.as_ptr(),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                ptr::null_mut(),
+                ptr::null_mut(),
+                dacl,
+                ptr::null(),
+            )
+        };
+        // SAFETY: dacl 由 SetEntriesInAclW 分配，SetNamedSecurityInfoW 后不再需要。
+        unsafe { LocalFree(dacl.cast()) };
+        if written != ERROR_SUCCESS {
+            return Err(io::Error::from_raw_os_error(written as i32));
+        }
+        Ok(())
+    })();
+    // SAFETY: token 由 OpenProcessToken 成功返回，闭包已停止使用它。
+    unsafe { CloseHandle(token) };
+    result
+}
+
 /// 保留目标文件已有的 owner/group/DACL。
 ///
 /// 临时文件只继承父目录的默认 ACL;若目标原本带显式 ACE,直接 rename 会让
@@ -278,11 +411,69 @@ pub(crate) fn replace(source: &Path, destination: &Path) -> io::Result<()> {
     }
 }
 
+/// 仅当路径仍指向原文件且内容一致时，按已打开句柄标记删除。
+/// 比对期间排除所有其他读写句柄；最终组件按 reparse 点自身打开。
+/// 路径在打开后被替换时，删除只作用于旧句柄。
+pub(crate) fn remove_if_matches(
+    path: &Path,
+    expected_identity: FileIdentity,
+    expected_contents: &[u8],
+) -> io::Result<()> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use std::os::windows::io::AsRawHandle as _;
+
+    use windows_sys::Win32::Foundation::GENERIC_READ;
+    use windows_sys::Win32::Storage::FileSystem::{
+        DELETE, FILE_DISPOSITION_INFO, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+        FileDispositionInfo, SetFileInformationByHandle,
+    };
+
+    let mut file = OpenOptions::new()
+        .read(true)
+        .access_mode(DELETE | GENERIC_READ)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
+        .share_mode(0)
+        .open(path)?;
+    if file_identity(&file)? != expected_identity {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "文件身份已变化，拒绝由旧所有者删除",
+        ));
+    }
+    let mut contents = Vec::new();
+    Read::by_ref(&mut file)
+        .take(expected_contents.len() as u64 + 1)
+        .read_to_end(&mut contents)?;
+    if contents != expected_contents {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "文件内容已变化，拒绝由旧所有者删除",
+        ));
+    }
+    let disposition = FILE_DISPOSITION_INFO { DeleteFile: 1 };
+    // SAFETY: file 具有 DELETE 权限；disposition 指针与字节长度匹配且在本调用内有效。
+    let marked = unsafe {
+        SetFileInformationByHandle(
+            file.as_raw_handle(),
+            FileDispositionInfo,
+            (&raw const disposition).cast(),
+            size_of::<FILE_DISPOSITION_INFO>() as u32,
+        )
+    };
+    if marked == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod atomic_file_tests {
     use std::path::Path;
 
-    use super::{copy_target_acl, try_lifetime_lock, try_lock, write, write_with_acl};
+    use super::{
+        copy_target_acl, file_identity, remove_if_matches, try_lifetime_lock, try_lock, write,
+        write_with_acl,
+    };
 
     /// 读取 DACL 的 SDDL 字符串(仅测试断言用)。
     fn dacl_sddl(path: &Path) -> Option<String> {
@@ -408,10 +599,55 @@ mod atomic_file_tests {
         assert_eq!(std::fs::read(&path).unwrap(), b"before");
     }
 
-    /// 原子替换必须保留目标文件原有的显式 DACL。
-    ///
+    /// 最终组件是 reparse 点时，必须核对链接自身而非其目标身份。
+    #[test]
+    fn removal_rejects_final_reparse_point_instead_of_following_target() {
+        use std::fs::OpenOptions;
+        use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
+
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_DELETE,
+            FILE_SHARE_READ, FILE_SHARE_WRITE,
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("target");
+        let link = dir.path().join("endpoint-link");
+        std::fs::create_dir(&target).unwrap();
+        let target_contents = target.join("record.json");
+        std::fs::write(&target_contents, b"keep-target").unwrap();
+        let linked = std::process::Command::new("cmd")
+            .args(["/c", "mklink", "/J"])
+            .arg(&link)
+            .arg(&target)
+            .output()
+            .unwrap();
+        assert!(linked.status.success(), "必须真实创建 NTFS junction");
+        let metadata = std::fs::symlink_metadata(&link).unwrap();
+        assert_ne!(metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT, 0);
+
+        let target_handle = OpenOptions::new()
+            .read(true)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .open(&target)
+            .unwrap();
+        let target_identity = file_identity(&target_handle).unwrap();
+        let error = remove_if_matches(&link, target_identity, b"").unwrap_err();
+        assert_eq!(
+            error.kind(),
+            std::io::ErrorKind::AlreadyExists,
+            "必须识别 reparse 点身份变化，而不是跟随目标"
+        );
+        drop(target_handle);
+        let metadata = std::fs::symlink_metadata(&link).unwrap();
+        assert_ne!(metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT, 0);
+        assert_eq!(std::fs::read(&target_contents).unwrap(), b"keep-target");
+    }
+
     /// 无显式 ACE 时 ACL 完全由父目录继承,复制与否不可区分;先用系统自带
     /// `icacls` 加一条显式 ACE 再比对。icacls 不可用或加 ACE 失败时跳过。
+    /// 原子替换必须保留目标文件原有的显式 DACL。
     #[test]
     fn replacement_preserves_an_explicit_target_acl() {
         let dir = tempfile::tempdir().unwrap();

@@ -2,10 +2,49 @@
 
 use std::collections::BTreeSet;
 use std::fmt;
+use std::net::SocketAddr;
 
 use serde::{Deserialize, Serialize};
 
 const REQUEST_BUDGET: usize = 128 * 1024;
+
+/// 本机控制面发现记录；认证材料只经凭据门面独立获取。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct DiscoveryRecord {
+    #[cfg_attr(feature = "schema", schemars(extend("enum" = [2])))]
+    pub protocol_version: u32,
+    pub endpoint: SocketAddr,
+    pub run_id: String,
+    pub process_id: u32,
+    pub process_created_at_ms: u64,
+}
+
+impl DiscoveryRecord {
+    /// 拒绝非 loopback、不可连接端口与无法核对进程身份的记录。
+    pub fn validate(&self) -> Result<(), InvalidDiscovery> {
+        let valid = self.protocol_version == 2
+            && self.endpoint.ip().is_loopback()
+            && self.endpoint.port() != 0
+            && !self.run_id.trim().is_empty()
+            && self.process_id != 0
+            && self.process_created_at_ms != 0;
+        if valid { Ok(()) } else { Err(InvalidDiscovery) }
+    }
+}
+
+/// 发现记录不符合当前版本或本机运行身份合同。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InvalidDiscovery;
+
+impl fmt::Display for InvalidDiscovery {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("Runtime 发现记录无效")
+    }
+}
+
+impl std::error::Error for InvalidDiscovery {}
 
 /// JSON-RPC 请求标识；通知与空标识不属于本协议。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -365,7 +404,7 @@ pub struct JsonRpcErrorResponse {
     pub error: JsonRpcError,
 }
 
-/// 当前请求与响应的根消息集合，schema 与线缆 DTO 共用此边界。
+/// 当前请求、响应与发现记录的根集合，schema 与各领域 DTO 共用此边界。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(untagged)]
@@ -375,6 +414,7 @@ pub enum ControlMessage {
     HelloResponse(JsonRpcResult<HelloResponse>),
     HandoverResponse(JsonRpcResult<HandoverResponse>),
     Error(JsonRpcErrorResponse),
+    Discovery(DiscoveryRecord),
 }
 
 /// 解析失败只返回封闭分类，不回显请求行、参数或凭据。
