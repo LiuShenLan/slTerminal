@@ -7,6 +7,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+use sha2::{Digest as _, Sha256};
 use slterm_path::{AppPaths, AppPathsError};
 
 /// 用户主目录。Windows 优先 `USERPROFILE`,回退 `HOME`;空串视为
@@ -166,6 +167,17 @@ pub(crate) fn config_dir() -> &'static Path {
 
 pub(crate) fn local_dir() -> &'static Path {
     app_paths().local_root()
+}
+
+/// Windows 路径身份的无损 SHA-256：逐 UTF-16 码单元编码，拒绝有损 UTF-8 碰撞。
+pub(crate) fn stable_path_hash(path: &Path) -> [u8; 32] {
+    use std::os::windows::ffi::OsStrExt;
+
+    let mut hasher = Sha256::new();
+    for unit in path.as_os_str().encode_wide() {
+        hasher.update(unit.to_le_bytes());
+    }
+    hasher.finalize().into()
 }
 
 #[cfg(any(test, feature = "update-test-source"))]

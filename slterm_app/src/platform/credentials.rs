@@ -50,7 +50,7 @@ pub(crate) fn store(target: &str, secret: &[u8]) -> io::Result<()> {
 /// 字段,不参与 target 查找)。
 pub(crate) fn store_with_username(target: &str, username: &str, secret: &[u8]) -> io::Result<()> {
     if secret.is_empty() {
-        // 空 blob 在读取侧归为「无凭据」,写入侧先拒以保证往返语义不歧义。
+        // 空凭据不是合法写入值；读取侧仍保留已存在空 blob，交由调用方拒绝。
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "credential secret is empty",

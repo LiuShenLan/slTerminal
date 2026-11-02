@@ -1,5 +1,6 @@
 //! 本机控制面与单实例移交服务。
 
+mod credentials;
 mod server;
 #[cfg(test)]
 mod server_tests;

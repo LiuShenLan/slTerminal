@@ -35,6 +35,22 @@ fn backend_error(operation: &str, target: &str, error: windows::core::Error) -> 
     ))
 }
 
+/// 复制成功读取的 blob；零长度是存在的空凭据，空指针配非零长度明确拒绝。
+fn copy_credential_blob(blob: *const u8, size: u32) -> io::Result<Vec<u8>> {
+    if size == 0 {
+        return Ok(Vec::new());
+    }
+    if blob.is_null() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "credential manager returned a null blob with nonzero length",
+        ));
+    }
+    // SAFETY: 调用方只传 CredReadW 成功返回且尚未 CredFree 的缓冲区；
+    // 非零长度与空指针形状已校验，复制后立即结束借用。
+    Ok(unsafe { std::slice::from_raw_parts(blob, size as usize) }.to_vec())
+}
+
 /// 读取凭据;不存在返回 `Ok(None)`。
 pub(crate) fn load_secret(target_name: &str) -> io::Result<Option<Vec<u8>>> {
     let target = wide(target_name);
@@ -50,20 +66,11 @@ pub(crate) fn load_secret(target_name: &str) -> io::Result<Option<Vec<u8>>> {
     // raw 归 CredFree 释放;blob 复制出域后由上层包 Zeroizing。
     let result = unsafe {
         let credential = &*raw;
-        if credential.CredentialBlob.is_null() || credential.CredentialBlobSize == 0 {
-            None
-        } else {
-            Some(
-                std::slice::from_raw_parts(
-                    credential.CredentialBlob,
-                    credential.CredentialBlobSize as usize,
-                )
-                .to_vec(),
-            )
-        }
+        copy_credential_blob(credential.CredentialBlob, credential.CredentialBlobSize)
     };
     unsafe { CredFree(raw as *const c_void) };
-    Ok(result)
+    // 仅 ERROR_NOT_FOUND 是 None；成功读取的空 blob 仍是 Some(empty)。
+    result.map(Some)
 }
 
 /// 写入凭据(覆盖同 target 旧值)。
@@ -126,5 +133,31 @@ mod windows_tests {
         assert!(is_not_found(&not_found));
         let denied = windows::core::Error::from_hresult(HRESULT::from_win32(ERROR_ACCESS_DENIED.0));
         assert!(!is_not_found(&denied));
+    }
+
+    #[test]
+    fn credential_blob_copy_preserves_zero_length_values() {
+        assert_eq!(
+            copy_credential_blob(null_mut(), 0).unwrap(),
+            Vec::<u8>::new()
+        );
+        let mut empty = Vec::<u8>::new();
+        assert_eq!(
+            copy_credential_blob(empty.as_mut_ptr(), 0).unwrap(),
+            Vec::<u8>::new()
+        );
+
+        let mut blob = b"sk-test-blob".to_vec();
+        assert_eq!(
+            copy_credential_blob(blob.as_mut_ptr(), blob.len() as u32).unwrap(),
+            blob
+        );
+    }
+
+    #[test]
+    fn credential_blob_copy_rejects_null_pointer_with_nonzero_length() {
+        let error =
+            copy_credential_blob(null_mut(), 1).expect_err("空指针配非零长度不得构造 slice");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     }
 }

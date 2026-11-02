@@ -264,12 +264,14 @@ mod secrets_tests {
 
     /// 凭据语义的读取函数名;这些函数在凭据域外只允许返回
     /// `SecretBytes` 句柄(或包着它的 `Option`/`io::Result`)。
-    const CREDENTIAL_LOADERS: [&str; 5] = [
+    const CREDENTIAL_LOADERS: [&str; 7] = [
         "load_api_key",
         "load_generic_secret",
         "load_secret",
         "read_secret",
         "credential_load",
+        "load_credential",
+        "load_or_create_credential",
     ];
 
     /// OS 原始字节层:设计上允许 `Vec<u8>` 出域,由 `secrets` 门面立即
@@ -358,16 +360,18 @@ mod secrets_tests {
 
     // ---- SecretBytes::as_bytes 借出白名单 ----
 
-    /// 允许借出 SecretBytes 字节的调用点:当前仅凭据域内部;
-    /// 新增请求组装点须先登记凭据域边界。
-    const AS_BYTES_WHITELIST: [&str; 1] = ["secrets.rs"];
+    /// 允许借出 SecretBytes 字节的调用点:凭据域内部与控制面凭据的
+    /// 校验/写入;新增请求组装点须先登记凭据域边界。
+    const AS_BYTES_WHITELIST: [&str; 2] = ["secrets.rs", "local_control/credentials.rs"];
 
     /// 取 `:` 前的标识符(用于识别 SecretBytes 绑定)。
     fn identifier_before(text: &str, end: usize) -> Option<&str> {
         let prefix = text[..end].trim_end();
         let start = prefix
-            .rfind(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
-            .map(|index| index + 1)
+            .char_indices()
+            .rev()
+            .find(|(_, character)| !(character.is_ascii_alphanumeric() || *character == '_'))
+            .map(|(index, character)| index + character.len_utf8())
             .unwrap_or(0);
         let name = &prefix[start..];
         (!name.is_empty()).then_some(name)
@@ -376,11 +380,13 @@ mod secrets_tests {
     /// 文件中以 SecretBytes 类型绑定的变量名:形参(`name: &SecretBytes`)、
     /// 构造(`let name = SecretBytes::new`)与凭据读取函数返回值。
     fn secret_bytes_bindings(source: &str) -> Vec<String> {
-        const LOADERS: [&str; 4] = [
+        const LOADERS: [&str; 6] = [
             "SecretBytes::new",
             "load_api_key",
             "load_generic_secret",
             "load_secret",
+            "load_credential",
+            "load_or_create_credential",
         ];
         let mut names = Vec::new();
         for line in source.lines() {
@@ -391,15 +397,34 @@ mod secrets_tests {
                     }
                 }
             }
-            if let Some(let_index) = line.find("let ")
-                && LOADERS.iter().any(|loader| line.contains(loader))
-            {
-                let rest = line[let_index + "let ".len()..].trim();
+        }
+        // 逐语句遍历全部 let；条件 let 不与块内后续 loader 错配。
+        for statement in source.split(';') {
+            for (let_index, _) in statement.match_indices("let ") {
+                let rest = statement[let_index + "let ".len()..].trim_start();
+                let rest = rest.strip_prefix("mut ").unwrap_or(rest);
                 let name: String = rest
                     .chars()
                     .take_while(|character| character.is_ascii_alphanumeric() || *character == '_')
                     .collect();
-                if !name.is_empty() {
+                if name.is_empty() {
+                    continue;
+                }
+                let after_name = &rest[name.len()..];
+                let Some(equal) = after_name.find('=') else {
+                    continue;
+                };
+                let pattern_tail = after_name[..equal].trim();
+                // 仅接受简单标识符及可选类型标注，跳过解构模式。
+                if !pattern_tail.is_empty() && !pattern_tail.starts_with(':') {
+                    continue;
+                }
+                // 只查当前绑定等号后的 RHS；嵌套块归其内部 let 自行处理。
+                let rhs = after_name[equal + 1..]
+                    .split('{')
+                    .next()
+                    .unwrap_or_default();
+                if LOADERS.iter().any(|loader| rhs.contains(loader)) {
                     names.push(name);
                 }
             }
@@ -407,6 +432,86 @@ mod secrets_tests {
         names.sort();
         names.dedup();
         names
+    }
+
+    /// 与全仓扫描相同的简单标识符借出判定；输入视作非白名单消费文件。
+    fn detected_simple_borrows(source: &str) -> Vec<String> {
+        secret_bytes_bindings(source)
+            .into_iter()
+            .map(|binding| format!("{binding}.as_bytes()"))
+            .filter(|needle| source.contains(needle))
+            .collect()
+    }
+
+    #[test]
+    fn secret_bytes_borrow_scan_catches_direct_local_control_loader() {
+        let source = r#"
+let secret = load_credential(ControlScope::Runtime, &store)?;
+secret.as_bytes();
+"#;
+        assert_eq!(
+            detected_simple_borrows(source),
+            vec!["secret.as_bytes()".to_owned()]
+        );
+    }
+
+    #[test]
+    fn secret_bytes_borrow_scan_catches_multiline_local_control_loader() {
+        let source = r#"
+let secret =
+    load_or_create_credential(ControlScope::Runtime, &store)?;
+secret.as_bytes();
+"#;
+        assert_eq!(
+            detected_simple_borrows(source),
+            vec!["secret.as_bytes()".to_owned()]
+        );
+    }
+
+    #[test]
+    fn secret_bytes_borrow_scan_catches_loaders_inside_if_let_blocks() {
+        let direct = r#"
+if let Some(value) = value {
+    let secret = load_credential(ControlScope::Runtime, &store)?;
+    secret.as_bytes();
+}
+"#;
+        let multiline = r#"
+if let Some(value) = value {
+    let secret =
+        load_or_create_credential(ControlScope::Runtime, &store)?;
+    secret.as_bytes();
+}
+"#;
+        for source in [direct, multiline] {
+            assert_eq!(
+                detected_simple_borrows(source),
+                vec!["secret.as_bytes()".to_owned()]
+            );
+        }
+    }
+
+    #[test]
+    fn secret_bytes_borrow_scan_catches_loaders_inside_while_let_blocks() {
+        let direct = r#"
+while let Some(value) = values.next() {
+    let secret = load_credential(ControlScope::Runtime, &store)?;
+    secret.as_bytes();
+}
+"#;
+        let multiline = r#"
+while let Some(value) = values.next() {
+    let secret =
+        load_or_create_credential(ControlScope::Runtime, &store)?;
+    secret.as_bytes();
+}
+"#;
+        for source in [direct, multiline] {
+            assert_eq!(
+                detected_simple_borrows(source),
+                vec!["secret.as_bytes()".to_owned()]
+            );
+        }
     }
 
     /// SecretBytes 借出点静态扫描:非白名单文件的 `name.as_bytes()` 与链式
