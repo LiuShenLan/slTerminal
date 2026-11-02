@@ -4,10 +4,11 @@ use std::time::Duration;
 
 use gpui::{App, Context, Window};
 use slterm_path::CanonicalPath;
+use slterm_runtime_protocol::{DomainErrorCode, HandoverParams, HandoverResponse, JsonRpcError};
 
 use super::AppRoot;
 use super::task_service::CancellationToken;
-use crate::app_shell::SltermShellEvent;
+use crate::app_shell::{SltermShellEvent, handover_error};
 
 impl AppRoot {
     /// 后台只负责定时唤醒；通道排空与状态变更都在窗口前台完成。
@@ -37,9 +38,21 @@ impl AppRoot {
                     cx.update(|cx| {
                         let _ = window_handle.update(cx, |_root, window, cx| {
                             let _ = this.update(cx, |root, cx| {
-                                for event in events {
+                                let mut events = events.into_iter();
+                                while let Some(event) = events.next() {
                                     root.handle_shell_event(event, window, cx);
                                     if root.close_completed {
+                                        // 关闭后不再消费领域事件，但同批 handover 必须得到
+                                        // 结构化 Closing，不能只让调用方观察发送端断连。
+                                        for event in events {
+                                            if let SltermShellEvent::Handover {
+                                                completion, ..
+                                            } = event
+                                            {
+                                                let _ = completion
+                                                    .try_send(Err(closing_handover_error()));
+                                            }
+                                        }
                                         break;
                                     }
                                 }
@@ -92,6 +105,28 @@ impl AppRoot {
                 notify_workspace_write_failed(cx);
                 cx.notify();
             }
+            SltermShellEvent::Handover { params, completion } => {
+                let response = if self.close_in_progress || self.close_completed {
+                    Err(closing_handover_error())
+                } else {
+                    match params {
+                        HandoverParams::Focus => {
+                            crate::windowing::focus::focus_window(window);
+                            cx.notify();
+                            Ok(HandoverResponse::accepted())
+                        }
+                        HandoverParams::OpenProject { .. }
+                        | HandoverParams::OpenFile { .. }
+                        | HandoverParams::NewTerminal { .. } => Err(handover_error(
+                            DomainErrorCode::InvalidRequest,
+                            -32000,
+                            "handover request is not implemented",
+                        )),
+                    }
+                };
+                // 回执接收端可能已超时退出；非阻塞发送失败只结束本次答复。
+                let _ = completion.try_send(response);
+            }
             SltermShellEvent::OpenDirectories(paths) => {
                 for path in paths {
                     match CanonicalPath::new(path) {
@@ -106,6 +141,10 @@ impl AppRoot {
             }
         }
     }
+}
+
+fn closing_handover_error() -> JsonRpcError {
+    handover_error(DomainErrorCode::Closing, -32004, "closing")
 }
 
 pub(crate) fn notify_workspace_write_failed(cx: &mut App) {

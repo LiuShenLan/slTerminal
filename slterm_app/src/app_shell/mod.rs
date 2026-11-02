@@ -57,6 +57,9 @@ use std::sync::mpsc;
 use crate::gpui_terminal::PaneId;
 use gpui::{App, QuitMode};
 use slterm_path::CanonicalPath;
+use slterm_runtime_protocol::{
+    DomainErrorCode, HandoverParams, HandoverResponse, JsonRpcError, JsonRpcErrorData,
+};
 
 /// GPUI 主窗标准错误句柄不可依赖:保留父进程重定向诊断,但写失败不能再把
 /// 非致命错误升级成应用 panic。
@@ -80,6 +83,11 @@ pub(crate) enum SltermShellEvent {
     TrayQuit,
     /// 工作区状态后台写失败；不携带路径、SQL 或状态正文。
     WorkspaceWriteFailed,
+    /// 第二实例意图与一次性完成回执；AppRoot 前台消费并同步答复。
+    Handover {
+        params: HandoverParams,
+        completion: mpsc::SyncSender<Result<HandoverResponse, JsonRpcError>>,
+    },
 }
 
 const SHELL_EVENT_CAPACITY: usize = 64;
@@ -100,6 +108,34 @@ pub(crate) fn try_send_shell_event(
         Ok(()) => {}
         Err(mpsc::TrySendError::Full(_)) => log::warn!("{queue} event queue full"),
         Err(mpsc::TrySendError::Disconnected(_)) => log::debug!("{queue} event channel closed"),
+    }
+}
+
+fn handover_error(domain: DomainErrorCode, numeric: i32, message: &'static str) -> JsonRpcError {
+    JsonRpcError::new(numeric, message, Some(JsonRpcErrorData { code: domain }))
+}
+
+/// 非阻塞投递第二实例意图；调用方只在后台执行体等待完成回执。
+#[allow(dead_code)] // LocalControlServer 在下一切片接入此单点。
+pub(crate) fn try_send_handover(
+    sender: &mpsc::SyncSender<SltermShellEvent>,
+    params: HandoverParams,
+) -> Result<mpsc::Receiver<Result<HandoverResponse, JsonRpcError>>, JsonRpcError> {
+    let (completion, response) = mpsc::sync_channel(1);
+    match sender.try_send(SltermShellEvent::Handover { params, completion }) {
+        Ok(()) => Ok(response),
+        Err(mpsc::TrySendError::Full(_)) => {
+            log::warn!("handover event queue full");
+            Err(handover_error(
+                DomainErrorCode::QueueFull,
+                -32003,
+                "handover queue full",
+            ))
+        }
+        Err(mpsc::TrySendError::Disconnected(_)) => {
+            log::debug!("handover event channel closed");
+            Err(handover_error(DomainErrorCode::Closing, -32004, "closing"))
+        }
     }
 }
 
@@ -375,6 +411,9 @@ mod shell_event_tests {
 
     use serde_json::{Value, json};
     use slterm_path::AppPaths;
+    use slterm_runtime_protocol::{
+        DomainErrorCode, HandoverParams, HandoverResponse, JsonRpcError,
+    };
     use slterm_settings::{RawSettings, RuntimeSettings};
     use slterm_workspace::{
         InvalidViewState, ProjectId, ProjectSnapshot, SideViewId, ViewKey, ViewKeyKind, ViewState,
@@ -383,7 +422,7 @@ mod shell_event_tests {
 
     use super::{
         SltermShellEvent, WorkspaceWriterRuntime, start_workspace_writer, starts_hidden,
-        tray_command_event,
+        tray_command_event, try_send_handover,
     };
     use crate::persistence::database::DatabaseError;
     use crate::persistence::workspace::WorkspaceDatabase;
@@ -416,6 +455,67 @@ mod shell_event_tests {
             events.try_send(SltermShellEvent::TrayQuit),
             Err(mpsc::TrySendError::Full(_))
         ));
+    }
+
+    fn assert_handover_error(error: &JsonRpcError, numeric: i32, domain: DomainErrorCode) {
+        assert_eq!(error.code, numeric);
+        assert_eq!(error.data.as_ref().map(|data| data.code), Some(domain));
+        assert!(!error.message.contains("D:/private"));
+        assert!(!error.message.contains("sk-test"));
+    }
+
+    #[test]
+    fn handover_helper_returns_bounded_completion_receiver() {
+        let (events, event_rx) = super::shell_event_channel();
+
+        let response = try_send_handover(&events, HandoverParams::Focus).unwrap();
+
+        let SltermShellEvent::Handover { params, completion } = event_rx.try_recv().unwrap() else {
+            panic!("helper 必须投递 handover 事件");
+        };
+        assert_eq!(params, HandoverParams::Focus);
+        completion
+            .try_send(Ok(HandoverResponse::accepted()))
+            .unwrap();
+        assert!(matches!(
+            completion.try_send(Ok(HandoverResponse::accepted())),
+            Err(mpsc::TrySendError::Full(_))
+        ));
+        assert!(response.try_recv().unwrap().unwrap().is_accepted());
+    }
+
+    #[test]
+    fn handover_helper_maps_full_queue_without_echoing_params() {
+        let (events, _event_rx) = super::shell_event_channel();
+        for _ in 0..super::SHELL_EVENT_CAPACITY {
+            events.try_send(SltermShellEvent::TrayQuit).unwrap();
+        }
+
+        let error = try_send_handover(
+            &events,
+            HandoverParams::OpenProject {
+                project_root: "D:/private/sk-test/project".to_owned(),
+            },
+        )
+        .unwrap_err();
+
+        assert_handover_error(&error, -32003, DomainErrorCode::QueueFull);
+    }
+
+    #[test]
+    fn handover_helper_maps_disconnected_queue_to_closing() {
+        let (events, event_rx) = super::shell_event_channel();
+        drop(event_rx);
+
+        let error = try_send_handover(
+            &events,
+            HandoverParams::OpenFile {
+                path: "D:/private/sk-test/secret.txt".to_owned(),
+            },
+        )
+        .unwrap_err();
+
+        assert_handover_error(&error, -32004, DomainErrorCode::Closing);
     }
 
     fn view_state_registry() -> ViewStateRegistry {
