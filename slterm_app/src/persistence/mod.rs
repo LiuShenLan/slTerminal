@@ -8,6 +8,7 @@ pub(crate) mod metadata;
 pub(crate) mod operation;
 pub(crate) mod project;
 pub(crate) mod sidebar;
+pub(crate) mod startup;
 pub(crate) mod view_state;
 pub(crate) mod workspace;
 pub(crate) mod workspace_writer;
