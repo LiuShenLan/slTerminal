@@ -1,6 +1,7 @@
 //! 项目工作区运行根：唯一持有项目快照与全部项目面板实例。
 
-pub(crate) mod command_registry;
+pub(crate) mod close_coordinator;
+mod command_registry;
 mod commands;
 mod events;
 mod focus_manager;
@@ -101,9 +102,12 @@ struct SideButtonMenu {
 /// 单窗口运行根；`projects` 只是强实体引用表，不复制项目注册信息。
 pub(crate) struct AppRoot {
     snapshot: ProjectSnapshot,
+    snapshot_generation: u64,
     project_writer: Option<WorkspaceWriterClient>,
     pending_final_project_snapshot: Option<ProjectSnapshot>,
     project_snapshot_recovery_failed: bool,
+    close_in_progress: bool,
+    close_completed: bool,
     projects: BTreeMap<ProjectId, Entity<ProjectView>>,
     panel_ids: PanelIdAllocator,
     panel_subscriptions: BTreeMap<PanelId, Subscription>,
@@ -227,9 +231,12 @@ impl AppRoot {
         }
         Self {
             snapshot,
+            snapshot_generation: 0,
             project_writer,
             pending_final_project_snapshot: None,
             project_snapshot_recovery_failed,
+            close_in_progress: false,
+            close_completed: false,
             projects,
             panel_ids,
             panel_subscriptions: BTreeMap::new(),
@@ -261,6 +268,7 @@ impl AppRoot {
 
     /// 快照只在候选提交后进入既有写队列；拒收时保留最后恢复事实。
     fn commit_project_snapshot(&mut self, snapshot: ProjectSnapshot) {
+        self.snapshot_generation = self.snapshot_generation.wrapping_add(1);
         self.snapshot = snapshot;
         if self.project_snapshot_recovery_failed {
             return;

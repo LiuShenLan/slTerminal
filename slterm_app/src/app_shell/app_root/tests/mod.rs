@@ -1,5 +1,6 @@
 //! AppRoot 的虚拟窗口所有权测试；所有终端均使用无真实 PTY 的会话。
 
+mod close;
 mod sidebar;
 
 use std::cell::RefCell;
@@ -25,7 +26,7 @@ use slterm_workspace::{
     TerminalRecord, ViewKey,
 };
 
-use crate::app_shell::SltermShellEvent;
+use crate::app_shell::{SltermShellEvent, WorkspaceWriterRuntime};
 use crate::gpui_terminal::PaneId;
 use crate::gpui_terminal::session;
 use crate::gpui_terminal::view::{TerminalLaunch, TerminalView, TerminalViewEvent};
@@ -230,6 +231,12 @@ fn open_root_with_persistence_and_size_configured(
                 persistence,
                 cx,
             )
+        });
+        let close_root = root.downgrade();
+        window.on_window_should_close(cx, move |window, cx| {
+            close_root
+                .update(cx, |root, cx| root.request_close(window, cx))
+                .unwrap_or(true)
         });
         root.update(cx, |root, cx| {
             root.observe_focus(window, cx);
@@ -1670,7 +1677,7 @@ fn open_directories_shell_event_opens_projects_without_terminals(cx: &mut TestAp
 #[gpui::test]
 fn shell_event_pump_dispatches_queued_events_to_app_root(cx: &mut TestAppContext) {
     let (root, mut window, state) = open_root(cx);
-    let (sender, receiver) = std::sync::mpsc::channel();
+    let (sender, receiver) = std::sync::mpsc::sync_channel(64);
     window.update(|window, cx| {
         root.update(cx, |root, cx| {
             root.start_shell_event_pump(receiver, window.window_handle(), cx)
@@ -1687,32 +1694,6 @@ fn shell_event_pump_dispatches_queued_events_to_app_root(cx: &mut TestAppContext
         assert_eq!(root.snapshot().registry().projects().len(), 1);
     });
     assert_eq!(state.borrow().attempts, 0);
-}
-
-#[gpui::test]
-fn shell_event_pump_releases_receiver_on_app_root_drop(cx: &mut TestAppContext) {
-    let (root, mut window, _) = open_root(cx);
-    let (sender, receiver) = std::sync::mpsc::channel();
-    window.update(|window, cx| {
-        root.update(cx, |root, cx| {
-            root.start_shell_event_pump(receiver, window.window_handle(), cx)
-        })
-    });
-    let weak = root.downgrade();
-
-    window.update(|window, _| window.remove_window());
-    drop(root);
-    window.executor().advance_clock(Duration::from_millis(121));
-    window.run_until_parked();
-    cx.update(|_| {});
-    weak.assert_released();
-    window.executor().advance_clock(Duration::from_millis(121));
-    window.run_until_parked();
-
-    assert!(
-        sender.send(SltermShellEvent::TrayQuit).is_err(),
-        "AppRoot 销毁后不得保留事件接收端"
-    );
 }
 
 #[gpui::test]

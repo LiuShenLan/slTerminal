@@ -149,6 +149,7 @@ pub(crate) enum AppRootError {
     ProjectNotActive,
     MissingPanel,
     UnexpectedParameters,
+    Closing,
     Sidebar(SidebarError),
 }
 
@@ -164,6 +165,7 @@ impl fmt::Display for AppRootError {
             Self::ProjectNotActive => formatter.write_str("只能在活跃项目中显式创建终端"),
             Self::MissingPanel => formatter.write_str("终端运行面板不存在"),
             Self::UnexpectedParameters => formatter.write_str("命令参数与目标命令不匹配"),
+            Self::Closing => formatter.write_str("应用正在关闭，拒绝新命令"),
             Self::Sidebar(error) => write!(formatter, "侧栏命令失败: {error}"),
         }
     }
@@ -181,7 +183,8 @@ impl std::error::Error for AppRootError {
             | Self::Focus(_)
             | Self::ProjectNotActive
             | Self::MissingPanel
-            | Self::UnexpectedParameters => None,
+            | Self::UnexpectedParameters
+            | Self::Closing => None,
         }
     }
 }
@@ -385,6 +388,7 @@ impl AppRoot {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Result<AddProjectOutcome, AppRootError> {
+        self.ensure_not_closing()?;
         self.focus_manager.ensure_activation_allowed()?;
         self.sync_focus(window, cx);
         let mut candidate = self.snapshot.clone();
@@ -435,6 +439,7 @@ impl AppRoot {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Result<(), AppRootError> {
+        self.ensure_not_closing()?;
         self.focus_manager.ensure_activation_allowed()?;
         self.sync_focus(window, cx);
         let mut candidate = self.snapshot.clone();
@@ -558,6 +563,14 @@ impl AppRoot {
         self.require_active_project(spec.new_terminal.project_id)?;
         let (candidate, record) = self.snapshot.with_split_terminal(spec)?;
         self.launch_candidate(candidate, record, window, cx)
+    }
+
+    fn ensure_not_closing(&self) -> Result<(), AppRootError> {
+        if self.close_in_progress {
+            Err(AppRootError::Closing)
+        } else {
+            Ok(())
+        }
     }
 
     fn active_project(&self) -> Result<ProjectId, AppRootError> {
@@ -777,6 +790,7 @@ impl AppRoot {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Result<(), AppRootError> {
+        self.ensure_not_closing()?;
         self.sync_focus(window, cx);
         let candidate = self.snapshot.with_active_terminal(id)?;
         let project_id = candidate
@@ -949,6 +963,9 @@ impl AppRoot {
     }
 
     fn sync_focus_projection(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        if self.close_in_progress {
+            return;
+        }
         let focused = window.focused(cx).map(|handle| handle.downgrade());
         let Some(project_id) = self.snapshot.registry().active() else {
             return;

@@ -105,6 +105,12 @@ pub(crate) fn open_initial_window(
         // HWND 发布单点:任务栏闪烁/进度经 facade 查询。
         crate::windowing::focus::publish_window(window);
         let root = cx.new(|cx| AppRoot::new(PanelIdAllocator::new(1), shell, persistence, cx));
+        let close_root = root.downgrade();
+        window.on_window_should_close(cx, move |window, cx| {
+            close_root
+                .update(cx, |root, cx| root.request_close(window, cx))
+                .unwrap_or(true)
+        });
         root.update(cx, |root, cx| {
             root.observe_focus(window, cx);
             root.restore_active_project(window, cx);

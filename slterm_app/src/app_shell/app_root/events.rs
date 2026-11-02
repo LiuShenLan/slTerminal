@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use gpui::{Context, Window};
+use gpui::{App, Context, Window};
 use slterm_path::CanonicalPath;
 
 use super::AppRoot;
@@ -39,6 +39,9 @@ impl AppRoot {
                             let _ = this.update(cx, |root, cx| {
                                 for event in events {
                                     root.handle_shell_event(event, window, cx);
+                                    if root.close_completed {
+                                        break;
+                                    }
                                 }
                             });
                         });
@@ -83,20 +86,10 @@ impl AppRoot {
                 cx.notify();
             }
             SltermShellEvent::TrayQuit => {
-                // 新根尚无脏 Document；统一关闭协调器接管后仍只能由该事件入口触发。
-                #[cfg(not(all(test, feature = "gpui-test-support")))]
-                window.remove_window();
+                let _ = self.request_close(window, cx);
             }
             SltermShellEvent::WorkspaceWriteFailed => {
-                let language = cx.global::<crate::app_shell::config::Settings>().language;
-                crate::notify::deliver_startup_summary(
-                    &crate::notify::Notification::ProcessAlert {
-                        text: language
-                            .text(crate::i18n::Message::NotifyWorkspaceWriteFailed)
-                            .to_owned(),
-                    },
-                    cx,
-                );
+                notify_workspace_write_failed(cx);
                 cx.notify();
             }
             SltermShellEvent::OpenDirectories(paths) => {
@@ -113,4 +106,16 @@ impl AppRoot {
             }
         }
     }
+}
+
+pub(crate) fn notify_workspace_write_failed(cx: &mut App) {
+    let language = cx.global::<crate::app_shell::config::Settings>().language;
+    crate::notify::deliver_startup_summary(
+        &crate::notify::Notification::ProcessAlert {
+            text: language
+                .text(crate::i18n::Message::NotifyWorkspaceWriteFailed)
+                .to_owned(),
+        },
+        cx,
+    );
 }

@@ -13,8 +13,8 @@ use gpui::{
 use slterm_sidebar::{SideViewState, SidebarState, side_view_state_schema};
 use slterm_workspace::{ProjectSnapshot, SideViewId, ViewState, ViewStateError, ViewStateRegistry};
 
-use super::side_view_host::SideViewControl;
-use crate::persistence::workspace_writer::WorkspaceWriterClient;
+use super::side_view_host::{SideViewControl, SideViewHost};
+use crate::persistence::workspace_writer::{WorkspaceWriterClient, WorkspaceWriterError};
 
 /// 关闭重开共享的内存恢复事实；启动时由 SQLite 在 GPUI 外预载。
 pub(crate) type SideViewStateCache = Rc<RefCell<BTreeMap<SideViewId, SideViewState>>>;
@@ -31,6 +31,8 @@ pub(crate) struct AppRootPersistence {
     write_barriers: SideViewWriteBarriers,
     pending_final_states: SideViewPendingFinalStates,
     recovered_sidebar: Option<SidebarState>,
+    /// 启动默认态与恢复结果只读；只有显式组织编辑才允许终态回写。
+    sidebar_has_explicit_edit: bool,
     recovered_project_snapshot: Option<ProjectSnapshot>,
     project_snapshot_recovery_failed: bool,
     pending_final_sidebar: Option<SidebarState>,
@@ -119,6 +121,7 @@ impl AppRootPersistence {
             write_barriers: Rc::default(),
             pending_final_states: Rc::default(),
             recovered_sidebar: None,
+            sidebar_has_explicit_edit: false,
             recovered_project_snapshot: None,
             project_snapshot_recovery_failed: false,
             pending_final_sidebar: None,
@@ -143,6 +146,7 @@ impl AppRootPersistence {
 
     /// 只有显式组织编辑进入此出口；启动默认态与恢复失败记录不会自动回写。
     pub(super) fn save_sidebar_state(&mut self, state: &SidebarState) {
+        self.sidebar_has_explicit_edit = true;
         let Some(writer) = &self.writer else {
             return;
         };
@@ -164,6 +168,67 @@ impl AppRootPersistence {
             Rc::clone(&self.write_barriers),
             Rc::clone(&self.pending_final_states),
         )
+    }
+    /// 关闭失败或旧终态排空后，为下一次关闭重试恢复检查点资格；最终关窗保持一次性销毁语义。
+    pub(super) fn resume_checkpoint_for_close_retry(
+        &self,
+        host: &SideViewHost<Entity<SideView>>,
+        cx: &mut App,
+    ) {
+        for id in SideViewId::ALL {
+            if let Some(instance) = host.instance(id) {
+                instance.update(cx, |view, _| view.resume_checkpoint_for_close_retry());
+            }
+        }
+    }
+
+    /// 关窗 flush 前先提交全部最终状态，避免 Drop 才首次暴露的待写事实逃逸。
+    /// 返回 true 表示旧终态仍在通道中，调用方必须先冲刷再重新提交，不能直接关窗。
+    pub(super) fn submit_final_states(
+        &mut self,
+        host: &SideViewHost<Entity<SideView>>,
+        snapshot: &ProjectSnapshot,
+        cx: &mut App,
+    ) -> Result<bool, WorkspaceWriterError> {
+        let Some(writer) = &self.writer else {
+            return Ok(false);
+        };
+        let mut first_error = None;
+        let mut reconcile_required = false;
+        let mut record_submission = |result: Result<(), WorkspaceWriterError>| match result {
+            Ok(()) => {}
+            Err(WorkspaceWriterError::QueueFull) => reconcile_required = true,
+            Err(error) => {
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
+            }
+        };
+        // 普通入队成功会清除旧拒收副本；本次 checkpoint 仍须覆盖终态通道中的旧代次。
+        let mut final_states = self.pending_final_states.borrow().clone();
+        for id in SideViewId::ALL {
+            if let Some(instance) = host.instance(id) {
+                let state = instance.update(cx, |view, _| view.checkpoint());
+                if let Some(state) = state {
+                    final_states.insert(id, state);
+                }
+            }
+        }
+        for (id, state) in &final_states {
+            let key = slterm_workspace::ViewKey::SideView { side_view_id: *id };
+            record_submission(writer.save_final_view_state(&key, state));
+        }
+        if self.sidebar_has_explicit_edit {
+            record_submission(writer.save_final_sidebar_state(host.state()));
+        }
+        if !self.project_snapshot_recovery_failed {
+            record_submission(writer.save_final_project_snapshot(snapshot));
+        }
+        if let Some(error) = first_error {
+            Err(error)
+        } else {
+            Ok(reconcile_required)
+        }
     }
 }
 
@@ -231,8 +296,19 @@ impl SideView {
         self.state.to_view_state(&self.registry)
     }
 
+    /// 关闭重试测试直接替换私有运行态，仍经既有 schema 落盘。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(super) fn replace_state_for_test(&mut self, state: SideViewState) {
+        self.state = state;
+    }
+
+    /// 仅关闭重试允许同一存活实体在新一代次重新检查点。
+    fn resume_checkpoint_for_close_retry(&mut self) {
+        self.closed = false;
+    }
+
     /// 每个实体只提交一次最终状态，同步关闭与退出析构共用此出口。
-    fn checkpoint(&mut self) -> Option<ViewState> {
+    pub(super) fn checkpoint(&mut self) -> Option<ViewState> {
         if self.closed {
             return None;
         }

@@ -372,6 +372,9 @@ impl CommandRegistry {
         window: &mut Window,
         cx: &mut Context<'_, AppRoot>,
     ) -> Result<CommandOutcome, AppRootError> {
+        if root.close_in_progress {
+            return Err(AppRootError::Closing);
+        }
         let CommandRequest {
             id,
             source,

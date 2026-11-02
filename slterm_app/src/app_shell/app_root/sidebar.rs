@@ -829,6 +829,11 @@ impl AppRoot {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
+        if self.close_in_progress {
+            self.sidebar_drag = None;
+            cx.notify();
+            return;
+        }
         let token = self.side_dividers[&divider].registration.token();
         if let Err(error) = self.focus_manager.request_focus(token, window, cx) {
             log::warn!("侧栏分隔线送焦失败: {error:?}");
@@ -874,6 +879,11 @@ impl AppRoot {
         window: &Window,
         cx: &mut Context<'_, Self>,
     ) {
+        if self.close_in_progress {
+            self.sidebar_drag = None;
+            cx.notify();
+            return;
+        }
         let Some(drag) = self.sidebar_drag else {
             return;
         };
@@ -946,6 +956,9 @@ impl AppRoot {
         command: SidebarGeometryCommand,
         cx: &mut Context<'_, Self>,
     ) -> Result<(), super::commands::AppRootError> {
+        if self.close_in_progress {
+            return Err(super::commands::AppRootError::Closing);
+        }
         let previous_state = self.side_views.state().clone();
         let result = match command {
             SidebarGeometryCommand::SetWidth(width) => {

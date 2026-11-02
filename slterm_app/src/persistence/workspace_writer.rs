@@ -110,7 +110,7 @@ enum Command {
 #[derive(Clone, Debug)]
 pub(crate) struct WorkspaceWriterClient {
     commands: SyncSender<Command>,
-    /// 实体退出时移交的最终状态；只在 owner shutdown 时由后台排空。
+    /// 实体退出时移交的最终状态；Flush 或 owner shutdown 时由后台排空。
     final_states: SyncSender<(ViewKey, ViewState)>,
     /// 应用级侧栏只有一份待终态，独立于普通命令队列。
     final_sidebar_state: SyncSender<SidebarState>,
@@ -177,6 +177,18 @@ impl WorkspaceWriterClient {
             })
     }
 
+    /// 非阻塞请求一次实际冲刷；结果由后台线程等待，失败可重试。
+    pub(crate) fn flush(&self) -> Result<Receiver<WorkspaceFlushReport>, WorkspaceWriterError> {
+        let (response, result) = mpsc::sync_channel(1);
+        self.commands
+            .try_send(Command::Flush { response })
+            .map_err(|error| match error {
+                TrySendError::Full(_) => WorkspaceWriterError::QueueFull,
+                TrySendError::Disconnected(_) => WorkspaceWriterError::Stopped,
+            })?;
+        Ok(result)
+    }
+
     /// 非阻塞移交侧栏最终组织状态；只由持久化 owner 在退出时调用。
     pub(crate) fn save_final_sidebar_state(
         &self,
@@ -223,11 +235,8 @@ fn view_state_command(key: &ViewKey, state: &ViewState) -> Result<Command, Works
 pub(crate) struct WorkspaceWriter {
     commands: SyncSender<Command>,
     final_state_sender: SyncSender<(ViewKey, ViewState)>,
-    final_states: Receiver<(ViewKey, ViewState)>,
     final_sidebar_sender: SyncSender<SidebarState>,
-    final_sidebar_state: Receiver<SidebarState>,
     final_project_sender: SyncSender<ProjectSnapshot>,
-    final_project_snapshot: Receiver<ProjectSnapshot>,
     failures: Option<Receiver<WorkspaceWriteFailure>>,
     worker: Option<JoinHandle<()>>,
 }
@@ -243,17 +252,26 @@ impl WorkspaceWriter {
         let (startup, started) = mpsc::sync_channel(1);
         let worker = std::thread::Builder::new()
             .name("slterm-workspace-writer".to_owned())
-            .spawn(move || run(paths, receiver, failure_sender, startup))
+            .spawn(move || {
+                run(
+                    paths,
+                    receiver,
+                    failure_sender,
+                    startup,
+                    FinalStateReceivers {
+                        view_states: final_state_receiver,
+                        sidebar_state: final_sidebar_receiver,
+                        project_snapshot: final_project_receiver,
+                    },
+                )
+            })
             .map_err(WorkspaceWriterError::Spawn)?;
         match started.recv() {
             Ok(Ok(())) => Ok(Self {
                 commands,
                 final_state_sender: final_states,
-                final_states: final_state_receiver,
                 final_sidebar_sender: final_sidebar_state,
-                final_sidebar_state: final_sidebar_receiver,
                 final_project_sender: final_project_snapshot,
-                final_project_snapshot: final_project_receiver,
                 failures: Some(failures),
                 worker: Some(worker),
             }),
@@ -331,8 +349,6 @@ impl WorkspaceWriter {
         let Some(worker) = self.worker.take() else {
             return Err(WorkspaceWriterError::Stopped);
         };
-        // App 已释放，终态发送者不再增长；后台可用阻塞 send 等队列排水。
-        let final_states = self.submit_final_states();
         let (response, result) = mpsc::sync_channel(1);
         let report = self
             .commands
@@ -340,31 +356,7 @@ impl WorkspaceWriter {
             .map_err(|_| WorkspaceWriterError::Stopped)
             .and_then(|()| result.recv().map_err(|_| WorkspaceWriterError::Stopped));
         let _ = worker.join();
-        final_states.and(report)
-    }
-
-    fn submit_final_states(&self) -> Result<(), WorkspaceWriterError> {
-        for (key, state) in self.final_states.try_iter() {
-            let command = view_state_command(&key, &state)?;
-            self.commands
-                .send(command)
-                .map_err(|_| WorkspaceWriterError::Stopped)?;
-        }
-        for state in self.final_sidebar_state.try_iter() {
-            self.commands
-                .send(Command::SaveSidebarState {
-                    state: Box::new(state),
-                })
-                .map_err(|_| WorkspaceWriterError::Stopped)?;
-        }
-        for snapshot in self.final_project_snapshot.try_iter() {
-            self.commands
-                .send(Command::SaveProjectSnapshot {
-                    snapshot: Box::new(snapshot),
-                })
-                .map_err(|_| WorkspaceWriterError::Stopped)?;
-        }
-        Ok(())
+        report
     }
 }
 
@@ -392,6 +384,12 @@ struct PendingSidebarState {
     due: Option<Instant>,
 }
 
+struct FinalStateReceivers {
+    view_states: Receiver<(ViewKey, ViewState)>,
+    sidebar_state: Receiver<SidebarState>,
+    project_snapshot: Receiver<ProjectSnapshot>,
+}
+
 #[derive(Default)]
 struct PendingWrites {
     view_states: BTreeMap<String, PendingViewState>,
@@ -404,6 +402,7 @@ fn run(
     commands: Receiver<Command>,
     failures: SyncSender<WorkspaceWriteFailure>,
     startup: SyncSender<Result<(), DatabaseError>>,
+    final_states: FinalStateReceivers,
 ) {
     let mut store = match WorkspaceDatabase::open(&paths) {
         Ok(store) => {
@@ -423,20 +422,20 @@ fn run(
                 Ok(command) => Some(command),
                 Err(RecvTimeoutError::Timeout) => None,
                 Err(RecvTimeoutError::Disconnected) => {
-                    write_pending(&mut store, &mut pending, &failures, true);
+                    write_pending(&mut store, &mut pending, &failures, true, &final_states);
                     return;
                 }
             },
             None => match commands.recv() {
                 Ok(command) => Some(command),
                 Err(_) => {
-                    write_pending(&mut store, &mut pending, &failures, true);
+                    write_pending(&mut store, &mut pending, &failures, true, &final_states);
                     return;
                 }
             },
         };
         let Some(command) = command else {
-            write_pending(&mut store, &mut pending, &failures, false);
+            write_pending(&mut store, &mut pending, &failures, false, &final_states);
             continue;
         };
         match command {
@@ -467,17 +466,19 @@ fn run(
                 });
             }
             Command::Flush { response } => {
-                let report = write_pending(&mut store, &mut pending, &failures, true);
+                let report =
+                    write_pending(&mut store, &mut pending, &failures, true, &final_states);
                 let _ = response.send(report);
                 continue;
             }
             Command::Shutdown { response } => {
-                let report = write_pending(&mut store, &mut pending, &failures, true);
+                let report =
+                    write_pending(&mut store, &mut pending, &failures, true, &final_states);
                 let _ = response.send(report);
                 return;
             }
         }
-        write_pending(&mut store, &mut pending, &failures, false);
+        write_pending(&mut store, &mut pending, &failures, false, &final_states);
     }
 }
 
@@ -503,13 +504,51 @@ fn next_wait(pending: &PendingWrites) -> Option<Duration> {
         .min()
 }
 
+/// 终态队列与 flush 共用同一待写集合，最后提交覆盖普通队列旧副本。
+fn drain_final_states(final_states: &FinalStateReceivers, pending: &mut PendingWrites) {
+    for (key, state) in final_states.view_states.try_iter() {
+        let Command::SaveViewState {
+            key_json,
+            key,
+            state,
+        } = view_state_command(&key, &state).expect("终态 ViewState 入队前已完成校验")
+        else {
+            unreachable!()
+        };
+        pending.view_states.insert(
+            key_json,
+            PendingViewState {
+                key,
+                state: *state,
+                due: Some(Instant::now()),
+            },
+        );
+    }
+    for state in final_states.sidebar_state.try_iter() {
+        pending.sidebar_state = Some(PendingSidebarState {
+            state,
+            due: Some(Instant::now()),
+        });
+    }
+    for snapshot in final_states.project_snapshot.try_iter() {
+        pending.project_snapshot = Some(PendingProjectSnapshot {
+            snapshot,
+            due: Some(Instant::now()),
+        });
+    }
+}
+
 /// 写到期项或全部项；失败项保留最新副本并取消定时器，等后续修改或显式冲刷重试。
 fn write_pending(
     store: &mut WorkspaceDatabase,
     pending: &mut PendingWrites,
     failures: &SyncSender<WorkspaceWriteFailure>,
     all: bool,
+    final_states: &FinalStateReceivers,
 ) -> WorkspaceFlushReport {
+    if all {
+        drain_final_states(final_states, pending);
+    }
     let now = Instant::now();
     let ready = pending
         .view_states
@@ -1175,7 +1214,22 @@ mod workspace_writer_tests {
         let (commands, receiver) = mpsc::sync_channel(COMMAND_CAPACITY);
         let (failures, _failure_receiver) = mpsc::sync_channel(1);
         let (startup, started) = mpsc::sync_channel(1);
-        let worker = std::thread::spawn(move || run(paths, receiver, failures, startup));
+        let (_final_views, final_view_receiver) = mpsc::sync_channel(COMMAND_CAPACITY);
+        let (_final_sidebar, final_sidebar_receiver) = mpsc::sync_channel(1);
+        let (_final_project, final_project_receiver) = mpsc::sync_channel(1);
+        let worker = std::thread::spawn(move || {
+            run(
+                paths,
+                receiver,
+                failures,
+                startup,
+                FinalStateReceivers {
+                    view_states: final_view_receiver,
+                    sidebar_state: final_sidebar_receiver,
+                    project_snapshot: final_project_receiver,
+                },
+            )
+        });
         started.recv().unwrap().unwrap();
         commands
             .send(Command::SaveProjectSnapshot {

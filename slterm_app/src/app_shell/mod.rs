@@ -104,7 +104,7 @@ pub(crate) fn try_send_shell_event(
 }
 
 /// GPUI 外独占 writer 与失败转发线程，窗口只拿非阻塞 client。
-struct WorkspaceWriterRuntime {
+pub(crate) struct WorkspaceWriterRuntime {
     writer: crate::persistence::workspace_writer::WorkspaceWriter,
     client: crate::persistence::workspace_writer::WorkspaceWriterClient,
     failure_forwarder: std::thread::JoinHandle<()>,

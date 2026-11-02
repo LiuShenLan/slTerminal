@@ -10,6 +10,7 @@ use gpui::Task;
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) enum TaskId {
     ShellEvents,
+    CloseFlush,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -69,6 +70,10 @@ impl TaskService {
             },
         );
         Ok(())
+    }
+
+    pub(crate) fn complete(&mut self, id: TaskId) {
+        self.tasks.remove(&id);
     }
 
     pub(crate) fn shutdown(&mut self) {
