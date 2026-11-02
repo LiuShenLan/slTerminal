@@ -161,40 +161,72 @@ impl WorkspaceWriterRuntime {
         events: mpsc::SyncSender<SltermShellEvent>,
     ) -> Result<Self, crate::persistence::workspace_writer::WorkspaceWriterError> {
         use crate::persistence::workspace_writer::{
-            WorkspaceWriter, WorkspaceWriterError, spawn_workspace_failure_forwarder,
+            WorkspaceWriter, spawn_workspace_failure_forwarder,
         };
 
-        let mut writer = WorkspaceWriter::start(paths.clone())?;
+        Self::start_with(paths, events, WorkspaceWriter::start, |failures, notify| {
+            spawn_workspace_failure_forwarder(failures, notify)
+        })
+    }
+
+    fn start_with<StartWriter, SpawnForwarder>(
+        paths: &slterm_path::AppPaths,
+        events: mpsc::SyncSender<SltermShellEvent>,
+        start_writer: StartWriter,
+        spawn_forwarder: SpawnForwarder,
+    ) -> Result<Self, crate::persistence::workspace_writer::WorkspaceWriterError>
+    where
+        StartWriter: FnOnce(
+            slterm_path::AppPaths,
+        ) -> Result<
+            crate::persistence::workspace_writer::WorkspaceWriter,
+            crate::persistence::workspace_writer::WorkspaceWriterError,
+        >,
+        SpawnForwarder: FnOnce(
+            mpsc::Receiver<crate::persistence::workspace_writer::WorkspaceWriteFailure>,
+            Box<dyn FnMut() + Send>,
+        ) -> std::io::Result<std::thread::JoinHandle<()>>,
+    {
+        use crate::persistence::startup::{
+            JournalRecovererRegistry, MaintenanceOutcome, MaintenanceRunner,
+        };
+        use crate::persistence::workspace_writer::WorkspaceWriterError;
+
+        // 维护通过前只持有当前数据库连接；writer、转发器与领域后台任务均未创建。
+        let mut store = crate::persistence::workspace::WorkspaceDatabase::open(paths)
+            .map_err(WorkspaceWriterError::Open)?;
+        let run = crate::persistence::metadata::RunMarker {
+            run_id: uuid::Uuid::now_v7().to_string(),
+            process_id: std::process::id(),
+            process_created_at_ms:
+                crate::platform::update_installation::current_process_created_at_ms()
+                    .map_err(WorkspaceWriterError::ProcessCreated)?,
+        };
+        let started = store
+            .begin_run(&uuid::Uuid::now_v7().to_string(), run)
+            .map_err(WorkspaceWriterError::Metadata)?;
+        let recoverers = JournalRecovererRegistry::default();
+        let maintenance =
+            MaintenanceRunner::new(&mut store, &started.current.store_epoch, &recoverers)
+                .run()
+                .map_err(WorkspaceWriterError::Maintenance)?;
+        if let MaintenanceOutcome::NeedsAttention { stage } = maintenance {
+            return Err(WorkspaceWriterError::MaintenanceNeedsAttention(stage));
+        }
+        drop(store);
+
+        let mut writer = start_writer(paths.clone())?;
         let client = writer.client();
         let failures = writer
             .take_failure_receiver()
             .expect("新 writer 的失败接收端必须可移交一次");
-        let failure_forwarder = spawn_workspace_failure_forwarder(failures, move || {
-            try_send_shell_event(&events, SltermShellEvent::WorkspaceWriteFailed, "workspace");
-        })
+        let failure_forwarder = spawn_forwarder(
+            failures,
+            Box::new(move || {
+                try_send_shell_event(&events, SltermShellEvent::WorkspaceWriteFailed, "workspace");
+            }),
+        )
         .map_err(WorkspaceWriterError::Spawn)?;
-        let started = (|| {
-            let run = crate::persistence::metadata::RunMarker {
-                run_id: uuid::Uuid::now_v7().to_string(),
-                process_id: std::process::id(),
-                process_created_at_ms:
-                    crate::platform::update_installation::current_process_created_at_ms()
-                        .map_err(WorkspaceWriterError::ProcessCreated)?,
-            };
-            let mut store = crate::persistence::workspace::WorkspaceDatabase::open(paths)
-                .map_err(WorkspaceWriterError::Open)?;
-            store
-                .begin_run(&uuid::Uuid::now_v7().to_string(), run)
-                .map_err(WorkspaceWriterError::Metadata)
-        })();
-        let started = match started {
-            Ok(started) => started,
-            Err(error) => {
-                let _ = writer.shutdown();
-                let _ = failure_forwarder.join();
-                return Err(error);
-            }
-        };
         let metadata = started.current;
         let previous_run = started.previous;
         Ok(Self {
@@ -253,26 +285,22 @@ impl WorkspaceWriterRuntime {
     }
 }
 
-/// 启动 writer；失败时窗口降级为无 client，由启动计划合并恢复提示。
+/// 启动 writer；任何维护或启动失败都阻止进入领域恢复与窗口装配。
 fn start_workspace_writer(
     paths: &slterm_path::AppPaths,
     events: mpsc::SyncSender<SltermShellEvent>,
-) -> (
-    Option<WorkspaceWriterRuntime>,
-    Option<crate::persistence::workspace_writer::WorkspaceWriterClient>,
-    Option<crate::persistence::metadata::WorkspaceMetadata>,
-) {
-    match WorkspaceWriterRuntime::start_at(paths, events) {
-        Ok(runtime) => {
-            let client = runtime.client();
-            let previous_run = runtime.previous_run().cloned();
-            (Some(runtime), Some(client), previous_run)
-        }
-        Err(error) => {
-            log::warn!("workspace writer startup failed: {error}");
-            (None, None, None)
-        }
-    }
+) -> Result<
+    (
+        WorkspaceWriterRuntime,
+        crate::persistence::workspace_writer::WorkspaceWriterClient,
+        Option<crate::persistence::metadata::WorkspaceMetadata>,
+    ),
+    crate::persistence::workspace_writer::WorkspaceWriterError,
+> {
+    let runtime = WorkspaceWriterRuntime::start_at(paths, events)?;
+    let client = runtime.client();
+    let previous_run = runtime.previous_run().cloned();
+    Ok((runtime, client, previous_run))
 }
 
 /// writer 提供本次真实运行元数据；服务启动失败只降级控制面，不伪造运行身份。
@@ -369,16 +397,22 @@ pub fn run_shell(initial_cwd: Option<PathBuf>) {
     // writer owner 与转发线程留在 GPUI 外；项目快照 client 由持久化协调接入。
     let app_paths = crate::platform::dirs::app_paths();
     let (workspace_writer, workspace_writer_client, previous_run) =
-        start_workspace_writer(app_paths, shell_tx.clone());
+        match start_workspace_writer(app_paths, shell_tx.clone()) {
+            Ok(started) => started,
+            Err(error) => {
+                // fail-closed：不得加载领域状态、启动控制面或创建 GPUI 窗口。
+                log::warn!("workspace writer startup failed: {error}");
+                return;
+            }
+        };
     // 首帧前恢复视图私有状态与上一运行退出事实；读取或解码失败只设置对应写屏障。
     let side_view_persistence = app_root::AppRootPersistence::load_with_previous_run(
         app_paths,
-        workspace_writer_client,
+        Some(workspace_writer_client),
         previous_run,
     );
     // 控制面复用 writer 已提交的本次运行身份；启动与显式关闭都在 GPUI 外。
-    let mut local_control =
-        start_local_control_service(workspace_writer.as_ref(), shell_tx.clone());
+    let mut local_control = start_local_control_service(Some(&workspace_writer), shell_tx.clone());
     let open_urls_tx = shell_tx.clone();
     // 通知通道开机位:toast 点击回投走同一壳事件队列;
     // AUMID 预注册幂等,必须早于第一条通知。
@@ -420,9 +454,7 @@ pub fn run_shell(initial_cwd: Option<PathBuf>) {
     // 控制面失败只闸门 clean_shutdown，不得跳过 writer 的最终持久提交。
     let control_plane_cleanup = shutdown_local_control_service(local_control.as_mut());
     drop(local_control);
-    if let Some(runtime) = workspace_writer
-        && let Err(error) = runtime.shutdown(control_plane_cleanup)
-    {
+    if let Err(error) = workspace_writer.shutdown(control_plane_cleanup) {
         log::warn!("workspace writer shutdown failed: {error}");
     }
     // 托盘收尾:先删图标再退进程,否则任务栏残影要等
@@ -471,8 +503,8 @@ mod shell_event_tests {
     };
     use slterm_settings::{RawSettings, RuntimeSettings};
     use slterm_workspace::{
-        InvalidViewState, ProjectId, ProjectSnapshot, SideViewId, ViewKey, ViewKeyKind, ViewState,
-        ViewStateRegistry, ViewStateSchema,
+        CloseIntent, CloseScope, InvalidViewState, ProjectId, ProjectSnapshot, SideViewId, ViewKey,
+        ViewKeyKind, ViewState, ViewStateRegistry, ViewStateSchema,
     };
 
     use super::{
@@ -480,9 +512,15 @@ mod shell_event_tests {
         shutdown_local_control_service, start_local_control_service, start_workspace_writer,
         starts_hidden, tray_command_event, try_send_handover,
     };
+    use crate::persistence::close::{CloseCommitStatus, CloseStoreError, PersistedCloseIntent};
     use crate::persistence::database::DatabaseError;
+    use crate::persistence::journal::{
+        JournalRegistration, JournalStatus, JournalStepRegistration,
+    };
+    use crate::persistence::metadata::RunMarker;
+    use crate::persistence::startup::{MaintenanceError, MaintenanceStage};
     use crate::persistence::workspace::WorkspaceDatabase;
-    use crate::persistence::workspace_writer::WorkspaceWriterError;
+    use crate::persistence::workspace_writer::{WorkspaceWriter, WorkspaceWriterError};
     use crate::tray::GpuiTrayCommand;
 
     fn silent_settings() -> crate::app_shell::config::Settings {
@@ -595,21 +633,254 @@ mod shell_event_tests {
         ProjectSnapshot::restore(registry, Vec::new()).unwrap()
     }
 
-    /// 启动失败降级为无 client，不另发会被恢复汇总节流的独立事件。
+    fn seed_maintenance_run(store: &mut WorkspaceDatabase) {
+        store
+            .begin_run(
+                "epoch-maintenance",
+                RunMarker {
+                    run_id: "run-maintenance-seed".into(),
+                    process_id: 1,
+                    process_created_at_ms: 1,
+                },
+            )
+            .unwrap();
+    }
+
+    fn assert_forwarder_sender_released(event_rx: &mpsc::Receiver<SltermShellEvent>) {
+        // 通道断开只证明 forwarder 发送端释放，不证明 writer 线程已回收。
+        assert!(matches!(
+            event_rx.recv_timeout(Duration::from_secs(1)),
+            Err(mpsc::RecvTimeoutError::Disconnected)
+        ));
+    }
+
+    /// 未完成 Journal 必须在 writer 与转发器取得所有权前阻断，且不改写原材料。
     #[test]
-    fn workspace_writer_start_failure_defers_to_recovery_summary() {
+    fn workspace_writer_maintenance_journal_blocks_before_thread_ownership() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+        let mut store = WorkspaceDatabase::open(&paths).unwrap();
+        seed_maintenance_run(&mut store);
+        let registration = JournalRegistration {
+            operation_id: None,
+            journal_id: "journal-maintenance".into(),
+            kind: "unknown.maintenance".into(),
+            store_epoch: "epoch-maintenance".into(),
+            before_fingerprint: Some([1; 32]),
+            steps: vec![JournalStepRegistration {
+                step_key: "step-maintenance".into(),
+                kind: "replace".into(),
+                target: json!({"version": 1}),
+                authorization_generation: 1,
+                before_fingerprint: Some([2; 32]),
+            }],
+        };
+        let _ = store.register_journal(registration).unwrap();
+        let _ = store
+            .transition_journal("journal-maintenance", JournalStatus::NeedsAttention, None)
+            .unwrap();
+        let before = store.journal("journal-maintenance").unwrap();
+        drop(store);
+        let (events, event_rx) = mpsc::sync_channel(super::SHELL_EVENT_CAPACITY);
+
+        let error = match WorkspaceWriterRuntime::start_at(&paths, events) {
+            Err(error) => error,
+            Ok(_) => panic!("维护未通过时不得取得 writer runtime"),
+        };
+
+        assert!(
+            matches!(
+                &error,
+                WorkspaceWriterError::MaintenanceNeedsAttention(MaintenanceStage::Journal)
+            ),
+            "实际错误: {error:?}"
+        );
+        assert_forwarder_sender_released(&event_rx);
+        let observer = WorkspaceDatabase::open(&paths).unwrap();
+        assert!(!observer.metadata().unwrap().unwrap().clean_shutdown);
+        assert_eq!(observer.journal("journal-maintenance").unwrap(), before);
+    }
+
+    /// 未完成关闭意图必须经封闭阶段错误阻断，运行标记保持未正常退出。
+    #[test]
+    fn workspace_writer_maintenance_close_intent_blocks_without_rewrite() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+        let mut store = WorkspaceDatabase::open(&paths).unwrap();
+        seed_maintenance_run(&mut store);
+        let close = PersistedCloseIntent {
+            close_id: "close-maintenance".into(),
+            scope: CloseScope::ApplicationExit,
+            store_epoch: "epoch-maintenance".into(),
+            intent: CloseIntent::new(Vec::new(), [4; 32]).unwrap(),
+            commit_status: CloseCommitStatus::Collected,
+        };
+        store.register_close_intent(&close).unwrap();
+        let before = store.load_close_intent("close-maintenance").unwrap();
+        drop(store);
+        let (events, event_rx) = mpsc::sync_channel(super::SHELL_EVENT_CAPACITY);
+
+        let error = match WorkspaceWriterRuntime::start_at(&paths, events) {
+            Err(error) => error,
+            Ok(_) => panic!("维护未通过时不得取得 writer runtime"),
+        };
+
+        assert!(
+            matches!(
+                &error,
+                WorkspaceWriterError::MaintenanceNeedsAttention(MaintenanceStage::CloseIntents)
+            ),
+            "实际错误: {error:?}"
+        );
+        assert_forwarder_sender_released(&event_rx);
+        let mut observer = WorkspaceDatabase::open(&paths).unwrap();
+        assert!(!observer.metadata().unwrap().unwrap().clean_shutdown);
+        assert_eq!(
+            observer.load_close_intent("close-maintenance").unwrap(),
+            before
+        );
+    }
+
+    /// 维护执行错误保持独立分类与脱敏展示，不创建可取得的 writer。
+    #[test]
+    fn workspace_writer_maintenance_error_is_fail_closed_and_redacted() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+        let mut store = WorkspaceDatabase::open(&paths).unwrap();
+        seed_maintenance_run(&mut store);
+        let close = PersistedCloseIntent {
+            close_id: "close-maintenance-error".into(),
+            scope: CloseScope::ApplicationExit,
+            store_epoch: "epoch-maintenance".into(),
+            intent: CloseIntent::new(Vec::new(), [5; 32]).unwrap(),
+            commit_status: CloseCommitStatus::Collected,
+        };
+        store.register_close_intent(&close).unwrap();
+        drop(store);
+        let marker = "sensitive_maintenance_sql_marker";
+        let fault = rusqlite::Connection::open(paths.workspace_db_path()).unwrap();
+        fault
+            .execute(
+                "UPDATE close_intents SET commit_status = ?1 WHERE close_id = ?2",
+                rusqlite::params![marker, "close-maintenance-error"],
+            )
+            .unwrap();
+        drop(fault);
+        let (events, event_rx) = mpsc::sync_channel(super::SHELL_EVENT_CAPACITY);
+
+        let error = match WorkspaceWriterRuntime::start_at(&paths, events) {
+            Err(error) => error,
+            Ok(_) => panic!("维护未通过时不得取得 writer runtime"),
+        };
+
+        assert!(
+            matches!(
+                &error,
+                WorkspaceWriterError::Maintenance(MaintenanceError::Close(
+                    CloseStoreError::CorruptRecord
+                ))
+            ),
+            "实际错误: {error:?}"
+        );
+        assert!(!error.to_string().contains(marker));
+        assert_forwarder_sender_released(&event_rx);
+        let observer = WorkspaceDatabase::open(&paths).unwrap();
+        assert!(!observer.metadata().unwrap().unwrap().clean_shutdown);
+    }
+
+    /// 维护 Ready 后的真实 writer 打开失败必须上抛，并保留本次未正常退出标记。
+    #[test]
+    fn workspace_writer_ready_writer_start_failure_preserves_unclean_run() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+        let (events, _event_rx) = mpsc::sync_channel(super::SHELL_EVENT_CAPACITY);
+
+        let error = match WorkspaceWriterRuntime::start_with(
+            &paths,
+            events,
+            |writer_paths| {
+                // 故障在维护完成后注入，真实 WorkspaceWriter::start 打开时才发现结构损坏。
+                let fault = rusqlite::Connection::open(writer_paths.workspace_db_path()).unwrap();
+                fault
+                    .execute("DROP TABLE maintenance_requests", [])
+                    .unwrap();
+                drop(fault);
+                WorkspaceWriter::start(writer_paths)
+            },
+            |_, _| -> std::io::Result<std::thread::JoinHandle<()>> {
+                panic!("writer 启动失败不得创建 forwarder")
+            },
+        ) {
+            Err(error) => error,
+            Ok(_) => panic!("writer 启动失败不得取得 runtime"),
+        };
+
+        assert!(
+            matches!(
+                &error,
+                WorkspaceWriterError::Open(DatabaseError::IncompatibleSchema)
+            ),
+            "实际错误: {error:?}"
+        );
+        let raw = rusqlite::Connection::open(paths.workspace_db_path()).unwrap();
+        let clean_shutdown = raw
+            .query_row(
+                "SELECT clean_shutdown FROM workspace_meta WHERE singleton = 1",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap();
+        assert_eq!(clean_shutdown, 0);
+    }
+
+    /// forwarder 启动失败必须在错误返回前 shutdown 并 join 已启动的 writer。
+    #[test]
+    fn workspace_writer_forwarder_spawn_failure_joins_started_writer() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+        let (events, _event_rx) = mpsc::sync_channel(super::SHELL_EVENT_CAPACITY);
+        let (join_probe, joined) = mpsc::sync_channel(1);
+
+        let error = match WorkspaceWriterRuntime::start_with(
+            &paths,
+            events,
+            move |writer_paths| {
+                let mut writer = WorkspaceWriter::start(writer_paths)?;
+                writer.set_join_completion_probe(join_probe);
+                Ok(writer)
+            },
+            |_, _| Err(std::io::Error::other("injected forwarder spawn failure")),
+        ) {
+            Err(error) => error,
+            Ok(_) => panic!("forwarder 启动失败不得取得 runtime"),
+        };
+
+        assert!(
+            matches!(&error, WorkspaceWriterError::Spawn(_)),
+            "实际错误: {error:?}"
+        );
+        assert_eq!(
+            joined.try_recv(),
+            Ok(()),
+            "错误返回前必须完成 writer shutdown 与 JoinHandle::join"
+        );
+        let observer = WorkspaceDatabase::open(&paths).unwrap();
+        assert!(!observer.metadata().unwrap().unwrap().clean_shutdown);
+    }
+
+    /// 启动失败返回错误，不降级为无 client 的恢复路径。
+    #[test]
+    fn workspace_writer_start_failure_is_fail_closed() {
         let temp = tempfile::tempdir().unwrap();
         let local = temp.path().join("local");
         std::fs::write(&local, "not a directory").unwrap();
         let paths = AppPaths::new(temp.path().join("config"), local).unwrap();
         let (events, event_rx) = mpsc::sync_channel(super::SHELL_EVENT_CAPACITY);
 
-        let (runtime, client, previous_run) = start_workspace_writer(&paths, events);
+        let result = start_workspace_writer(&paths, events);
 
-        assert!(runtime.is_none());
-        assert!(client.is_none());
-        assert!(previous_run.is_none());
-        assert!(event_rx.try_recv().is_err());
+        assert!(result.is_err(), "启动失败必须向调用方返回错误");
+        assert_forwarder_sender_released(&event_rx);
     }
 
     /// writer 不可用时不存在真实运行元数据，控制面必须保持关闭。

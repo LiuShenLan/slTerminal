@@ -16,6 +16,7 @@ use super::database::DatabaseError;
 use super::metadata::MetadataError;
 use super::project::ProjectStoreError;
 use super::sidebar::SidebarStateStoreError;
+use super::startup::{MaintenanceError, MaintenanceStage};
 use super::view_state::ViewStateStoreError;
 use super::workspace::WorkspaceDatabase;
 
@@ -61,6 +62,8 @@ pub(crate) enum WorkspaceWriterError {
     Spawn(std::io::Error),
     Metadata(MetadataError),
     ProcessCreated(std::io::Error),
+    MaintenanceNeedsAttention(MaintenanceStage),
+    Maintenance(MaintenanceError),
     ViewKey(ViewKeyError),
     ViewState(ViewStateError),
     QueueFull,
@@ -76,6 +79,17 @@ impl fmt::Display for WorkspaceWriterError {
             Self::Spawn(_) => formatter.write_str("工作区写线程启动失败"),
             Self::Metadata(_) => formatter.write_str("工作区运行标记提交失败"),
             Self::ProcessCreated(_) => formatter.write_str("进程创建时间读取失败"),
+            Self::MaintenanceNeedsAttention(stage) => {
+                let stage = match stage {
+                    MaintenanceStage::Journal => "Journal",
+                    MaintenanceStage::MaintenanceRequests => "维护请求／恢复点",
+                    MaintenanceStage::CloseIntents => "关闭意图",
+                    MaintenanceStage::Snapshots => "快照索引",
+                    MaintenanceStage::HistoryQuarantine => "历史隔离",
+                };
+                write!(formatter, "工作区启动维护需要人工处理：{stage}")
+            }
+            Self::Maintenance(_) => formatter.write_str("工作区启动维护执行失败"),
             Self::ViewKey(_) => formatter.write_str("ViewState 的 ViewKey 编码失败"),
             Self::ViewState(error) => fmt::Display::fmt(error, formatter),
             Self::QueueFull => formatter.write_str("工作区写队列已满"),
@@ -243,6 +257,8 @@ pub(crate) struct WorkspaceWriter {
     final_project_sender: SyncSender<ProjectSnapshot>,
     failures: Option<Receiver<WorkspaceWriteFailure>>,
     worker: Option<JoinHandle<()>>,
+    #[cfg(test)]
+    join_completion_probe: Option<SyncSender<()>>,
 }
 
 impl WorkspaceWriter {
@@ -278,6 +294,8 @@ impl WorkspaceWriter {
                 final_project_sender: final_project_snapshot,
                 failures: Some(failures),
                 worker: Some(worker),
+                #[cfg(test)]
+                join_completion_probe: None,
             }),
             Ok(Err(error)) => {
                 let _ = worker.join();
@@ -288,6 +306,11 @@ impl WorkspaceWriter {
                 Err(WorkspaceWriterError::Stopped)
             }
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_join_completion_probe(&mut self, probe: SyncSender<()>) {
+        self.join_completion_probe = Some(probe);
     }
 
     pub(crate) fn client(&self) -> WorkspaceWriterClient {
@@ -360,6 +383,11 @@ impl WorkspaceWriter {
             .map_err(|_| WorkspaceWriterError::Stopped)
             .and_then(|()| result.recv().map_err(|_| WorkspaceWriterError::Stopped));
         let _ = worker.join();
+        #[cfg(test)]
+        if let Some(probe) = self.join_completion_probe.take() {
+            // 测试回执只在真实 JoinHandle::join 返回后发出。
+            let _ = probe.try_send(());
+        }
         report
     }
 }
