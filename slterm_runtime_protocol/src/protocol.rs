@@ -125,6 +125,23 @@ impl Credential {
     fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+
+    /// 覆盖当前分配中的凭据字节；Drop 与 crate 内测试共用此入口。
+    pub(crate) fn clear(&mut self) {
+        // SAFETY: 只把既有字节改写为 NUL；NUL 是有效 UTF-8，且长度与容量不变。
+        let bytes = unsafe { self.0.as_mut_vec() };
+        for byte in bytes {
+            // SAFETY: byte 来自存活 Vec 的可变迭代，指针对齐且对单字节写入有效。
+            unsafe { std::ptr::write_volatile(byte, 0) };
+        }
+        std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+impl Drop for Credential {
+    fn drop(&mut self) {
+        self.clear();
+    }
 }
 
 impl fmt::Debug for Credential {

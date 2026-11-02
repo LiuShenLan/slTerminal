@@ -114,6 +114,16 @@ fn hello_round_trip_redacts_credential_debug() {
 }
 
 #[test]
+fn credential_clear_overwrites_secret_bytes_in_place() {
+    let mut credential = Credential::new("sk-test-clear-in-place");
+    let secret_len = credential.as_str().len();
+
+    credential.clear();
+
+    assert_eq!(credential.as_str().as_bytes(), vec![0; secret_len]);
+}
+
+#[test]
 fn handover_supports_all_closed_intent_shapes() {
     let cases = [
         HandoverParams::Focus,
