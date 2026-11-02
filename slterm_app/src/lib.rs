@@ -72,7 +72,7 @@ pub(crate) mod history;
 // 界面语言:build.rs 静态生成的 typed Message 查询 API;
 // 运行时零解析、零文件读、零锁。
 pub(crate) mod i18n;
-#[allow(dead_code)] // 生产消费点归启动与单实例移交接线。
+#[allow(dead_code)] // 控制面仍含仅测试消费的观测接口。
 pub(crate) mod local_control;
 pub(crate) mod logging;
 // 数学引擎:后端无关 TeX 子集——parser→validate→IR→layout→
@@ -146,7 +146,7 @@ pub(crate) mod theme_library;
 use std::error::Error;
 
 /// 启动链（序固定）：boot_trace → CLI 解析/本地维护分流 → panic 钩 →
-/// console 准备 → 日志 → run_shell。
+/// console 准备 → 日志 → 单实例锁/移交 → 仅首实例 run_shell。
 ///
 /// 本地维护子命令直接执行并退出；无子命令才进入 GUI 启动链。
 pub fn run() -> Result<(), Box<dyn Error>> {
@@ -182,11 +182,19 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     // logger 先于一切子系统初始化,捕获后续所有启动阶段的输出。
     let _log_file = logging::initialize().expect("Unable to initialize logger");
 
-    // 单实例锁独立于控制面：无可用移交服务时不得降级成第二窗口。
-    let _instance_guard = platform::instance::acquire().map_err(|error| {
-        log::error!("single-instance startup rejected: {error}");
-        error
-    })?;
+    // 首实例持锁继续创建 UI；第二实例只能在 GPUI 前完成移交，失败即终止。
+    let instance =
+        local_control::start_instance(options.working_directory.as_deref()).map_err(|error| {
+            log::error!("single-instance startup rejected: {error}");
+            error
+        })?;
+    let _instance_guard = match instance {
+        local_control::InstanceStartup::Primary(guard) => guard,
+        local_control::InstanceStartup::HandedOver => {
+            log::info!("single-instance startup handed over");
+            return Ok(());
+        }
+    };
 
     log::info!("Welcome to {}", brand::NAME);
     log::info!("Version {}", env!("CARGO_PKG_VERSION"));
