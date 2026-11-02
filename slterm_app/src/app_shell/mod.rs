@@ -138,13 +138,20 @@ pub(crate) fn try_send_handover(
     }
 }
 
+/// 控制面清理结果；未启动服务按成功处理，失败只闸门正常退出标记。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ControlPlaneCleanup {
+    Succeeded,
+    Failed,
+}
+
 /// GPUI 外独占 writer 与失败转发线程，窗口只拿非阻塞 client。
 pub(crate) struct WorkspaceWriterRuntime {
     writer: crate::persistence::workspace_writer::WorkspaceWriter,
     client: crate::persistence::workspace_writer::WorkspaceWriterClient,
     failure_forwarder: std::thread::JoinHandle<()>,
     paths: slterm_path::AppPaths,
-    run_id: String,
+    metadata: crate::persistence::metadata::WorkspaceMetadata,
     previous_run: Option<crate::persistence::metadata::WorkspaceMetadata>,
 }
 
@@ -188,14 +195,14 @@ impl WorkspaceWriterRuntime {
                 return Err(error);
             }
         };
-        let run_id = started.current.run.run_id.clone();
+        let metadata = started.current;
         let previous_run = started.previous;
         Ok(Self {
             writer,
             client,
             failure_forwarder,
             paths: paths.clone(),
-            run_id,
+            metadata,
             previous_run,
         })
     }
@@ -204,17 +211,24 @@ impl WorkspaceWriterRuntime {
         self.client.clone()
     }
 
+    fn metadata(&self) -> &crate::persistence::metadata::WorkspaceMetadata {
+        &self.metadata
+    }
+
     fn previous_run(&self) -> Option<&crate::persistence::metadata::WorkspaceMetadata> {
         self.previous_run.as_ref()
     }
 
-    fn shutdown(self) -> Result<(), crate::persistence::workspace_writer::WorkspaceWriterError> {
+    fn shutdown(
+        self,
+        control_plane_cleanup: ControlPlaneCleanup,
+    ) -> Result<(), crate::persistence::workspace_writer::WorkspaceWriterError> {
         let Self {
             writer,
             client: _,
             failure_forwarder,
             paths,
-            run_id,
+            metadata,
             previous_run: _,
         } = self;
         let shutdown = writer.shutdown();
@@ -225,10 +239,15 @@ impl WorkspaceWriterRuntime {
         }
         forwarder
             .map_err(|_| crate::persistence::workspace_writer::WorkspaceWriterError::Stopped)?;
+        if control_plane_cleanup == ControlPlaneCleanup::Failed {
+            return Err(
+                crate::persistence::workspace_writer::WorkspaceWriterError::ControlPlaneCleanupFailed,
+            );
+        }
         let mut store = crate::persistence::workspace::WorkspaceDatabase::open(&paths)
             .map_err(crate::persistence::workspace_writer::WorkspaceWriterError::Open)?;
         store
-            .mark_clean_shutdown(&run_id)
+            .mark_clean_shutdown(&metadata.run.run_id)
             .map_err(crate::persistence::workspace_writer::WorkspaceWriterError::Metadata)?;
         Ok(())
     }
@@ -253,6 +272,37 @@ fn start_workspace_writer(
             log::warn!("workspace writer startup failed: {error}");
             (None, None, None)
         }
+    }
+}
+
+/// writer 提供本次真实运行元数据；服务启动失败只降级控制面，不伪造运行身份。
+fn start_local_control_service(
+    workspace_writer: Option<&WorkspaceWriterRuntime>,
+    events: mpsc::SyncSender<SltermShellEvent>,
+) -> Option<crate::local_control::LocalControlService> {
+    let metadata = workspace_writer?.metadata().clone();
+    match crate::local_control::LocalControlService::start(metadata, events) {
+        Ok(service) => Some(service),
+        Err(error) => {
+            log::warn!("local control service startup failed: {}", error.kind());
+            None
+        }
+    }
+}
+
+/// GPUI 外显式回收监听与发现记录；未启动服务不产生清理负担。
+fn shutdown_local_control_service(
+    service: Option<&mut crate::local_control::LocalControlService>,
+) -> ControlPlaneCleanup {
+    match service {
+        Some(service) => match service.shutdown() {
+            Ok(()) => ControlPlaneCleanup::Succeeded,
+            Err(error) => {
+                log::warn!("local control service shutdown failed: {}", error.kind());
+                ControlPlaneCleanup::Failed
+            }
+        },
+        None => ControlPlaneCleanup::Succeeded,
     }
 }
 
@@ -326,6 +376,9 @@ pub fn run_shell(initial_cwd: Option<PathBuf>) {
         workspace_writer_client,
         previous_run,
     );
+    // 控制面复用 writer 已提交的本次运行身份；启动与显式关闭都在 GPUI 外。
+    let mut local_control =
+        start_local_control_service(workspace_writer.as_ref(), shell_tx.clone());
     let open_urls_tx = shell_tx.clone();
     // 通知通道开机位:toast 点击回投走同一壳事件队列;
     // AUMID 预注册幂等,必须早于第一条通知。
@@ -363,9 +416,12 @@ pub fn run_shell(initial_cwd: Option<PathBuf>) {
             regular_start,
         );
     });
-    // GPUI 已退出，在主线程等待最终冲刷并 join 转发器，不阻塞前台。
+    // GPUI 已退出：先显式关闭控制面，再等待最终冲刷并 join 转发器。
+    // 控制面失败只闸门 clean_shutdown，不得跳过 writer 的最终持久提交。
+    let control_plane_cleanup = shutdown_local_control_service(local_control.as_mut());
+    drop(local_control);
     if let Some(runtime) = workspace_writer
-        && let Err(error) = runtime.shutdown()
+        && let Err(error) = runtime.shutdown(control_plane_cleanup)
     {
         log::warn!("workspace writer shutdown failed: {error}");
     }
@@ -420,8 +476,9 @@ mod shell_event_tests {
     };
 
     use super::{
-        SltermShellEvent, WorkspaceWriterRuntime, start_workspace_writer, starts_hidden,
-        tray_command_event, try_send_handover,
+        ControlPlaneCleanup, SltermShellEvent, WorkspaceWriterRuntime,
+        shutdown_local_control_service, start_local_control_service, start_workspace_writer,
+        starts_hidden, tray_command_event, try_send_handover,
     };
     use crate::persistence::database::DatabaseError;
     use crate::persistence::workspace::WorkspaceDatabase;
@@ -555,6 +612,23 @@ mod shell_event_tests {
         assert!(event_rx.try_recv().is_err());
     }
 
+    /// writer 不可用时不存在真实运行元数据，控制面必须保持关闭。
+    #[test]
+    fn local_control_startup_requires_workspace_writer() {
+        let (events, _event_rx) = mpsc::sync_channel(super::SHELL_EVENT_CAPACITY);
+
+        assert!(start_local_control_service(None, events).is_none());
+    }
+
+    /// 未启动服务不产生控制面清理负担，writer 可沿用正常退出语义。
+    #[test]
+    fn absent_local_control_cleanup_is_successful() {
+        assert_eq!(
+            shutdown_local_control_service(None),
+            ControlPlaneCleanup::Succeeded
+        );
+    }
+
     /// 组合根共享 client、转发失败并在退出时重试待写副本、回收转发线程。
     #[test]
     fn workspace_writer_runtime_forwards_failure_and_flushes_on_shutdown() {
@@ -596,7 +670,7 @@ mod shell_event_tests {
         fault
             .execute_batch("DROP TRIGGER reject_view_state_write")
             .unwrap();
-        runtime.shutdown().unwrap();
+        runtime.shutdown(ControlPlaneCleanup::Succeeded).unwrap();
         let stored = observer.view_state(&key, &registry).unwrap().unwrap();
         assert_eq!(stored.state.state()["position"], 8);
     }
@@ -632,7 +706,7 @@ mod shell_event_tests {
         fault
             .execute_batch("DROP TRIGGER reject_project_write")
             .unwrap();
-        runtime.shutdown().unwrap();
+        runtime.shutdown(ControlPlaneCleanup::Succeeded).unwrap();
         assert_eq!(
             observer.load_project_snapshot().unwrap(),
             project_snapshot("changed")
@@ -656,7 +730,7 @@ mod shell_event_tests {
         client
             .save_project_snapshot(&project_snapshot("changed"))
             .unwrap();
-        runtime.shutdown().unwrap();
+        runtime.shutdown(ControlPlaneCleanup::Succeeded).unwrap();
 
         let finished = observer.metadata().unwrap().unwrap();
         assert_eq!(finished.run.run_id, started.run.run_id);
@@ -665,6 +739,162 @@ mod shell_event_tests {
             observer.load_project_snapshot().unwrap(),
             project_snapshot("changed")
         );
+    }
+
+    /// Runtime 暴露的身份必须与 begin_run 已提交的同一份元数据完全一致。
+    #[test]
+    fn workspace_writer_runtime_exposes_current_begin_run_metadata() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+        let observer = WorkspaceDatabase::open(&paths).unwrap();
+        let (events, _event_rx) = mpsc::sync_channel(super::SHELL_EVENT_CAPACITY);
+        let runtime = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
+
+        let stored = observer.metadata().unwrap().unwrap();
+        assert_eq!(runtime.metadata(), &stored);
+        assert!(!runtime.metadata().clean_shutdown);
+        runtime.shutdown(ControlPlaneCleanup::Succeeded).unwrap();
+    }
+
+    /// 控制面清理失败不得跳过项目与侧栏终态冲刷、转发器 join 或运行标记闸门。
+    #[test]
+    fn workspace_writer_runtime_control_plane_failure_flushes_without_clean_mark() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+        let (events, event_rx) = mpsc::sync_channel(super::SHELL_EVENT_CAPACITY);
+        let runtime = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
+        let client = runtime.client();
+        let started = observer_metadata(&paths);
+        let snapshot = project_snapshot("changed");
+        let mut sidebar = slterm_sidebar::SidebarState::default();
+        sidebar.set_width(333);
+        client.save_final_project_snapshot(&snapshot).unwrap();
+        client.save_final_sidebar_state(&sidebar).unwrap();
+
+        let result = runtime.shutdown(ControlPlaneCleanup::Failed);
+
+        assert!(
+            matches!(result, Err(WorkspaceWriterError::ControlPlaneCleanupFailed)),
+            "控制面失败必须使整体关闭结果失败"
+        );
+        let mut observer = WorkspaceDatabase::open(&paths).unwrap();
+        assert_eq!(observer.load_project_snapshot().unwrap(), snapshot);
+        assert_eq!(
+            observer.sidebar_state().unwrap().unwrap().state,
+            sidebar,
+            "控制面失败不得跳过侧栏终态冲刷"
+        );
+        let finished = observer.metadata().unwrap().unwrap();
+        assert_eq!(finished.run.run_id, started.run.run_id);
+        assert!(!finished.clean_shutdown);
+        while event_rx.try_recv().is_ok() {}
+        assert!(event_rx.recv().is_err(), "失败转发线程必须完成 join");
+    }
+
+    /// 控制面失败不得掩盖最终冲刷失败；故障在 writer Drop 后仍保持有效。
+    #[test]
+    fn workspace_writer_runtime_flush_failure_precedes_control_plane_failure() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+        let mut observer = WorkspaceDatabase::open(&paths).unwrap();
+        observer
+            .save_project_snapshot(&project_snapshot("original"))
+            .unwrap();
+        let (events, _event_rx) = mpsc::sync_channel(super::SHELL_EVENT_CAPACITY);
+        let runtime = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
+        let started = observer_metadata(&paths);
+        let fault = rusqlite::Connection::open(paths.workspace_db_path()).unwrap();
+        fault
+            .execute_batch(
+                "CREATE TRIGGER reject_project_write BEFORE UPDATE ON projects \
+                 BEGIN SELECT RAISE(ABORT, 'injected write failure'); END;",
+            )
+            .unwrap();
+        runtime
+            .client()
+            .save_final_project_snapshot(&project_snapshot("changed"))
+            .unwrap();
+
+        let result = runtime.shutdown(ControlPlaneCleanup::Failed);
+
+        assert!(
+            matches!(result, Err(WorkspaceWriterError::FlushFailed)),
+            "最终冲刷失败必须优先于控制面清理失败: {result:?}"
+        );
+        assert_eq!(
+            observer.load_project_snapshot().unwrap(),
+            project_snapshot("original"),
+            "故障保持期间 Drop 不得成功冲刷并掩盖提前返回"
+        );
+        let finished = observer.metadata().unwrap().unwrap();
+        assert_eq!(finished.run.run_id, started.run.run_id);
+        assert!(!finished.clean_shutdown);
+        let trigger_count = fault
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master \
+                 WHERE type = 'trigger' AND name = 'reject_project_write'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap();
+        assert_eq!(trigger_count, 1, "断言前故障必须仍然保留");
+    }
+
+    /// 闩门释放前 shutdown 必须等待真实 forwarder join，之后才能进入清理闸门。
+    #[test]
+    fn workspace_writer_runtime_shutdown_waits_for_forwarder_before_control_plane_gate() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+        let (events, _event_rx) = mpsc::sync_channel(super::SHELL_EVENT_CAPACITY);
+        let mut runtime = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
+        let started = observer_metadata(&paths);
+        let (forwarder_started_tx, forwarder_started_rx) = mpsc::sync_channel(1);
+        let (release_forwarder_tx, release_forwarder_rx) = mpsc::sync_channel(1);
+        let (forwarder_finished_tx, forwarder_finished_rx) = mpsc::sync_channel(1);
+        let gated_forwarder = std::thread::spawn(move || {
+            forwarder_started_tx.send(()).unwrap();
+            release_forwarder_rx.recv().unwrap();
+            forwarder_finished_tx.send(()).unwrap();
+        });
+        let original_forwarder = std::mem::replace(&mut runtime.failure_forwarder, gated_forwarder);
+        forwarder_started_rx
+            .recv_timeout(Duration::from_secs(3))
+            .expect("闩门 forwarder 必须启动");
+        let (shutdown_done_tx, shutdown_done_rx) = mpsc::sync_channel(1);
+        let shutdown = std::thread::spawn(move || {
+            let result = runtime.shutdown(ControlPlaneCleanup::Failed);
+            shutdown_done_tx.send(result).unwrap();
+        });
+
+        let premature = shutdown_done_rx.recv_timeout(Duration::from_millis(100));
+        let waited_for_release = matches!(premature, Err(mpsc::RecvTimeoutError::Timeout));
+        assert!(forwarder_finished_rx.try_recv().is_err());
+        release_forwarder_tx.send(()).unwrap();
+        forwarder_finished_rx
+            .recv_timeout(Duration::from_secs(3))
+            .expect("释放后闩门 forwarder 必须完成");
+        let result = match premature {
+            Ok(result) => result,
+            Err(mpsc::RecvTimeoutError::Timeout) => shutdown_done_rx
+                .recv_timeout(Duration::from_secs(3))
+                .expect("释放后 shutdown 必须完成"),
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                panic!("shutdown 完成通道不得提前断开")
+            }
+        };
+        shutdown.join().unwrap();
+        original_forwarder
+            .join()
+            .expect("writer 关闭失败通道后原 forwarder 必须自然回收");
+
+        assert!(waited_for_release, "闩门释放前 shutdown 不得返回");
+        assert!(
+            matches!(result, Err(WorkspaceWriterError::ControlPlaneCleanupFailed)),
+            "join 后必须继续进入控制面清理闸门: {result:?}"
+        );
+        let finished = observer_metadata(&paths);
+        assert_eq!(finished.run.run_id, started.run.run_id);
+        assert!(!finished.clean_shutdown);
     }
 
     /// 每次启动必须保留上一运行退出事实，且不得改变既有工作区世代。
@@ -677,7 +907,7 @@ mod shell_event_tests {
         let first = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
         let first_metadata = observer.metadata().unwrap().unwrap();
         let epoch = first_metadata.store_epoch.clone();
-        first.shutdown().unwrap();
+        first.shutdown(ControlPlaneCleanup::Succeeded).unwrap();
 
         let (events, _event_rx) = mpsc::sync_channel(super::SHELL_EVENT_CAPACITY);
         let second = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
@@ -687,7 +917,7 @@ mod shell_event_tests {
         assert_eq!(previous.run.run_id, first_metadata.run.run_id);
         assert!(previous.clean_shutdown);
         assert_eq!(observer.metadata().unwrap().unwrap().store_epoch, epoch);
-        second.shutdown().unwrap();
+        second.shutdown(ControlPlaneCleanup::Succeeded).unwrap();
         let raw = rusqlite::Connection::open(paths.workspace_db_path()).unwrap();
         raw.execute_batch("UPDATE workspace_meta SET clean_shutdown = 0")
             .unwrap();
@@ -698,7 +928,7 @@ mod shell_event_tests {
         assert!(previous.is_some(), "异常上一运行事实同样必须保留");
         assert!(!previous.unwrap().clean_shutdown);
         assert_eq!(observer.metadata().unwrap().unwrap().store_epoch, epoch);
-        third.shutdown().unwrap();
+        third.shutdown(ControlPlaneCleanup::Succeeded).unwrap();
     }
 
     /// 启动失败后，下一次启动仍必须能取得上一运行退出事实。
@@ -709,7 +939,7 @@ mod shell_event_tests {
         let (events, _event_rx) = mpsc::sync_channel(super::SHELL_EVENT_CAPACITY);
         let first = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
         let first_metadata = observer_metadata(&paths);
-        first.shutdown().unwrap();
+        first.shutdown(ControlPlaneCleanup::Succeeded).unwrap();
         let raw = rusqlite::Connection::open(paths.workspace_db_path()).unwrap();
         raw.execute_batch("PRAGMA user_version = 2").unwrap();
 
@@ -730,7 +960,7 @@ mod shell_event_tests {
         assert!(previous.is_some());
         assert_eq!(previous.unwrap().run.run_id, first_metadata.run.run_id);
         assert!(previous.unwrap().clean_shutdown);
-        next.shutdown().unwrap();
+        next.shutdown(ControlPlaneCleanup::Succeeded).unwrap();
     }
 
     /// 转发器 panic 不得把关闭登记为正常退出。
@@ -743,7 +973,7 @@ mod shell_event_tests {
         let started = observer_metadata(&paths);
         runtime.failure_forwarder = std::thread::spawn(|| panic!("injected forwarder panic"));
 
-        let result = runtime.shutdown();
+        let result = runtime.shutdown(ControlPlaneCleanup::Succeeded);
 
         assert!(matches!(result, Err(WorkspaceWriterError::Stopped)));
         let finished = observer_metadata(&paths);
@@ -767,7 +997,7 @@ mod shell_event_tests {
             )
             .unwrap();
 
-        let result = runtime.shutdown();
+        let result = runtime.shutdown(ControlPlaneCleanup::Succeeded);
 
         assert!(
             matches!(
@@ -804,7 +1034,7 @@ mod shell_event_tests {
         permissions.set_readonly(true);
         std::fs::set_permissions(&database, permissions.clone()).unwrap();
 
-        let result = runtime.shutdown();
+        let result = runtime.shutdown(ControlPlaneCleanup::Succeeded);
 
         #[allow(clippy::permissions_set_readonly_false)]
         // 仅恢复本用例临时数据库的写权限，避免影响后续清理。
@@ -858,7 +1088,7 @@ mod shell_event_tests {
             .save_project_snapshot(&project_snapshot("changed"))
             .unwrap();
 
-        let result = runtime.shutdown();
+        let result = runtime.shutdown(ControlPlaneCleanup::Succeeded);
         assert!(matches!(result, Err(WorkspaceWriterError::FlushFailed)));
 
         let finished = observer.metadata().unwrap().unwrap();
@@ -902,7 +1132,7 @@ mod shell_event_tests {
             .unwrap();
 
         assert!(matches!(
-            runtime.shutdown(),
+            runtime.shutdown(ControlPlaneCleanup::Succeeded),
             Err(WorkspaceWriterError::FlushFailed)
         ));
     }

@@ -66,6 +66,7 @@ pub(crate) enum WorkspaceWriterError {
     QueueFull,
     FlushFailed,
     Stopped,
+    ControlPlaneCleanupFailed,
 }
 
 impl fmt::Display for WorkspaceWriterError {
@@ -80,6 +81,9 @@ impl fmt::Display for WorkspaceWriterError {
             Self::QueueFull => formatter.write_str("工作区写队列已满"),
             Self::FlushFailed => formatter.write_str("工作区状态最终冲刷失败"),
             Self::Stopped => formatter.write_str("工作区写线程已停止"),
+            Self::ControlPlaneCleanupFailed => {
+                formatter.write_str("控制面清理失败，保持未正常退出")
+            }
         }
     }
 }

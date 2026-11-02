@@ -164,7 +164,7 @@ fn close_flush_success_closes_window_and_marks_clean_shutdown(cx: &mut TestAppCo
     drop(root);
     cx.update(|_| {});
     weak.assert_released();
-    runtime.shutdown().unwrap();
+    runtime.shutdown(ControlPlaneCleanup::Succeeded).unwrap();
 
     let metadata = WorkspaceDatabase::open(&paths)
         .unwrap()
@@ -216,7 +216,7 @@ fn close_flush_failure_keeps_window_and_allows_retry(cx: &mut TestAppContext) {
     drop(root);
     cx.update(|_| {});
     weak.assert_released();
-    runtime.shutdown().unwrap();
+    runtime.shutdown(ControlPlaneCleanup::Succeeded).unwrap();
     let metadata = WorkspaceDatabase::open(&paths)
         .unwrap()
         .metadata()
@@ -287,7 +287,7 @@ fn close_flush_submits_rejected_final_snapshot(cx: &mut TestAppContext) {
     drop(root);
     cx.update(|_| {});
     weak.assert_released();
-    runtime.shutdown().unwrap();
+    runtime.shutdown(ControlPlaneCleanup::Succeeded).unwrap();
 
     let mut store = WorkspaceDatabase::open(&paths).unwrap();
     assert_eq!(store.load_project_snapshot().unwrap(), expected);
@@ -365,7 +365,7 @@ fn close_queue_full_retries_without_external_flush(cx: &mut TestAppContext) {
     tray_quit_until_closed(&root, &mut window, cx);
     drop(root);
     cx.update(|_| {});
-    runtime.shutdown().unwrap();
+    runtime.shutdown(ControlPlaneCleanup::Succeeded).unwrap();
 
     let mut store = WorkspaceDatabase::open(&paths).unwrap();
     assert_eq!(store.load_project_snapshot().unwrap(), expected);
@@ -443,7 +443,7 @@ fn close_retry_reconciles_side_view_with_project_recovery_barrier(cx: &mut TestA
     tray_quit_until_closed(&root, &mut window, cx);
     drop(root);
     cx.update(|_| {});
-    runtime.shutdown().unwrap();
+    runtime.shutdown(ControlPlaneCleanup::Succeeded).unwrap();
 
     let store = WorkspaceDatabase::open(&paths).unwrap();
     let stored = store.view_state(&key, &registry).unwrap().unwrap();
@@ -513,7 +513,7 @@ fn close_retry_persists_side_view_changes_after_failure(cx: &mut TestAppContext)
     root.read_with(cx, |root, _| assert!(root.close_completed));
     drop(root);
     cx.update(|_| {});
-    runtime.shutdown().unwrap();
+    runtime.shutdown(ControlPlaneCleanup::Succeeded).unwrap();
 
     let store = WorkspaceDatabase::open(&paths).unwrap();
     let stored = store.view_state(&key, &registry).unwrap().unwrap();
@@ -551,7 +551,7 @@ fn close_without_sidebar_edit_preserves_recovery_barrier(cx: &mut TestAppContext
     root.read_with(cx, |root, _| assert!(root.close_completed));
     drop(root);
     cx.update(|_| {});
-    runtime.shutdown().unwrap();
+    runtime.shutdown(ControlPlaneCleanup::Succeeded).unwrap();
 
     let preserved = raw_store
         .query_row(
@@ -582,7 +582,7 @@ fn close_without_sidebar_record_or_edit_preserves_absence(cx: &mut TestAppContex
     root.read_with(cx, |root, _| assert!(root.close_completed));
     drop(root);
     cx.update(|_| {});
-    runtime.shutdown().unwrap();
+    runtime.shutdown(ControlPlaneCleanup::Succeeded).unwrap();
 
     let store = WorkspaceDatabase::open(&paths).unwrap();
     assert!(
@@ -686,7 +686,7 @@ fn closing_cancels_and_rejects_sidebar_drag(cx: &mut TestAppContext) {
     });
     fault.execute_batch("ROLLBACK").unwrap();
     window.run_until_parked();
-    runtime.shutdown().unwrap();
+    runtime.shutdown(ControlPlaneCleanup::Succeeded).unwrap();
 }
 
 #[gpui::test]
@@ -698,7 +698,7 @@ fn close_stopped_writer_keeps_window(cx: &mut TestAppContext) {
     let persistence =
         AppRootPersistence::load_with_previous_run(&paths, Some(runtime.client()), None);
     let (root, mut window, _) = open_root_with_persistence(cx, persistence);
-    runtime.shutdown().unwrap();
+    runtime.shutdown(ControlPlaneCleanup::Succeeded).unwrap();
     draw_frame(&mut window);
 
     let closed =
@@ -739,7 +739,7 @@ fn close_flush_reconciles_exited_generation(cx: &mut TestAppContext) {
     drop(root);
     cx.update(|_| {});
     weak.assert_released();
-    runtime.shutdown().unwrap();
+    runtime.shutdown(ControlPlaneCleanup::Succeeded).unwrap();
     let snapshot = WorkspaceDatabase::open(&paths)
         .unwrap()
         .load_project_snapshot()

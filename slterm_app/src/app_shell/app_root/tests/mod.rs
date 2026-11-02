@@ -27,7 +27,7 @@ use slterm_workspace::{
     TerminalRecord, ViewKey,
 };
 
-use crate::app_shell::{SltermShellEvent, WorkspaceWriterRuntime};
+use crate::app_shell::{ControlPlaneCleanup, SltermShellEvent, WorkspaceWriterRuntime};
 use crate::gpui_terminal::PaneId;
 use crate::gpui_terminal::session;
 use crate::gpui_terminal::view::{TerminalLaunch, TerminalView, TerminalViewEvent};

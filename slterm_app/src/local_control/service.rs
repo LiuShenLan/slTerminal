@@ -35,7 +35,6 @@ pub(crate) struct LocalControlService {
 
 impl LocalControlService {
     /// 生产入口；调用方必须先取得并持续持有 OS 单实例锁。
-    #[allow(dead_code)] // 消费点 = 后续启动链接线。
     pub(crate) fn start(
         metadata: WorkspaceMetadata,
         events: SyncSender<SltermShellEvent>,
@@ -142,7 +141,6 @@ impl LocalControlService {
     }
 
     /// 两个关闭动作都必定尝试；重复调用沿用底层幂等与失败重试语义。
-    #[allow(dead_code)] // 消费点 = 后续退出链接线。
     pub(crate) fn shutdown(&mut self) -> io::Result<()> {
         let Self { server, discovery } = self;
         shutdown_components(|| server.shutdown(), || discovery.revoke())
