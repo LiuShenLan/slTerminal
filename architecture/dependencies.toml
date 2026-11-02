@@ -23,7 +23,7 @@ zero_production_dependencies = true
 
 [crates.slterm_runtime_protocol]
 layer = "core"
-zero_production_dependencies = true
+dependencies = []
 
 [crates.slterm_path]
 layer = "core"

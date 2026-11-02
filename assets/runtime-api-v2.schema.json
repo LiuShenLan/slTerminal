@@ -1,0 +1,372 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ControlMessage",
+  "description": "当前请求与响应的根消息集合，schema 与线缆 DTO 共用此边界。",
+  "anyOf": [
+    {
+      "$ref": "#/$defs/JsonRpcRequest"
+    },
+    {
+      "$ref": "#/$defs/JsonRpcRequest2"
+    },
+    {
+      "$ref": "#/$defs/JsonRpcResult"
+    },
+    {
+      "$ref": "#/$defs/JsonRpcErrorResponse"
+    }
+  ],
+  "$defs": {
+    "Capabilities": {
+      "description": "当前客户端可调用的方法集合。",
+      "type": "object",
+      "properties": {
+        "methods": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "methods"
+      ]
+    },
+    "ControlScope": {
+      "description": "Runtime 与 handover 使用独立授权的同名作用域。",
+      "type": "string",
+      "enum": [
+        "runtime",
+        "handover"
+      ]
+    },
+    "Credential": {
+      "description": "线缆凭据只参与序列化与认证比较，调试输出永远脱敏。",
+      "type": "string"
+    },
+    "DomainErrorCode": {
+      "description": "结构化领域错误码，不与 JSON-RPC 数值码混用。",
+      "type": "string",
+      "enum": [
+        "not_ready",
+        "unauthorized",
+        "queue_full",
+        "closing",
+        "invalid_request"
+      ]
+    },
+    "HandoverMethod": {
+      "description": "单实例移交只接受 instance.handover。",
+      "type": "string",
+      "enum": [
+        "instance.handover"
+      ]
+    },
+    "HandoverParams": {
+      "description": "第二实例结构化意图；路径授权由应用层 PathPolicy 复核。",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "focus"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "open_project"
+            },
+            "project_root": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "project_root"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "open_file"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "path"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "cwd": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "type": "string",
+              "const": "new_terminal"
+            },
+            "project_root": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ]
+        }
+      ]
+    },
+    "HelloMethod": {
+      "description": "首包只接受 Runtime hello。",
+      "type": "string",
+      "enum": [
+        "runtime.hello"
+      ]
+    },
+    "HelloParams": {
+      "description": "runtime.hello 的认证与协议协商参数。",
+      "type": "object",
+      "properties": {
+        "client_id": {
+          "type": "string"
+        },
+        "credential": {
+          "$ref": "#/$defs/Credential"
+        },
+        "protocol_version": {
+          "type": "integer",
+          "format": "uint32",
+          "enum": [
+            2
+          ],
+          "minimum": 0
+        },
+        "scope": {
+          "$ref": "#/$defs/ControlScope"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "protocol_version",
+        "client_id",
+        "credential",
+        "scope"
+      ]
+    },
+    "HelloResponse": {
+      "description": "hello 握手返回的世代、事件起点与合同散列。",
+      "type": "object",
+      "properties": {
+        "capabilities": {
+          "$ref": "#/$defs/Capabilities"
+        },
+        "protocol_sha256": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "schema_sha256": {
+          "type": "string"
+        },
+        "store_epoch": {
+          "type": "string"
+        },
+        "stream_epoch": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "store_epoch",
+        "stream_epoch",
+        "revision",
+        "protocol_sha256",
+        "schema_sha256",
+        "capabilities"
+      ]
+    },
+    "JsonRpcError": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "data": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JsonRpcErrorData"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "message"
+      ]
+    },
+    "JsonRpcErrorData": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/DomainErrorCode"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "code"
+      ]
+    },
+    "JsonRpcErrorResponse": {
+      "description": "通用错误响应的静态形状，不包含任何 result 字段。",
+      "type": "object",
+      "properties": {
+        "error": {
+          "$ref": "#/$defs/JsonRpcError"
+        },
+        "id": {
+          "$ref": "#/$defs/JsonRpcId"
+        },
+        "jsonrpc": {
+          "type": "string",
+          "enum": [
+            "2.0"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "jsonrpc",
+        "id",
+        "error"
+      ]
+    },
+    "JsonRpcId": {
+      "description": "JSON-RPC 请求标识；通知与空标识不属于本协议。",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "integer",
+          "format": "int64"
+        }
+      ]
+    },
+    "JsonRpcRequest": {
+      "description": "带封闭方法类型的 JSON-RPC 请求信封。",
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/JsonRpcId"
+        },
+        "jsonrpc": {
+          "type": "string",
+          "enum": [
+            "2.0"
+          ]
+        },
+        "method": {
+          "$ref": "#/$defs/HelloMethod"
+        },
+        "params": {
+          "$ref": "#/$defs/HelloParams"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "jsonrpc",
+        "id",
+        "method",
+        "params"
+      ]
+    },
+    "JsonRpcRequest2": {
+      "description": "带封闭方法类型的 JSON-RPC 请求信封。",
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/JsonRpcId"
+        },
+        "jsonrpc": {
+          "type": "string",
+          "enum": [
+            "2.0"
+          ]
+        },
+        "method": {
+          "$ref": "#/$defs/HandoverMethod"
+        },
+        "params": {
+          "$ref": "#/$defs/HandoverParams"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "jsonrpc",
+        "id",
+        "method",
+        "params"
+      ]
+    },
+    "JsonRpcResult": {
+      "description": "hello 成功响应的静态形状，与通用错误响应严格分离。",
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/JsonRpcId"
+        },
+        "jsonrpc": {
+          "type": "string",
+          "enum": [
+            "2.0"
+          ]
+        },
+        "result": {
+          "$ref": "#/$defs/HelloResponse"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "jsonrpc",
+        "id",
+        "result"
+      ]
+    }
+  }
+}

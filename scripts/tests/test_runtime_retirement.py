@@ -30,23 +30,29 @@ class RuntimeRetirementTests(unittest.TestCase):
         self.assertNotIn("runtime_skills", guard)
         self.assertNotIn("Skill", guard, "自愈失败类别不得保留 Skill 占位")
 
-    def test_legacy_runtime_assets_are_not_packaged(self):
+    def test_runtime_assets_are_v2_only(self):
         for relative in (
             "scripts/build-windows-product.ps1",
             "scripts/installer.iss",
         ):
             text = (ROOT / relative).read_text(encoding="utf-8")
-            for marker in ("runtime-api-v1", "runtime-control-api"):
-                self.assertNotIn(
+            self.assertNotIn(
+                "runtime-api-v1",
+                text,
+                f"旧 Runtime 合同不得进入发布清单: {relative}",
+            )
+            for marker in ("runtime-api-v2.schema.json", "runtime-control-api.md"):
+                self.assertIn(
                     marker,
                     text,
-                    f"旧 Runtime 合同不得进入发布清单: {relative} / {marker}",
+                    f"Runtime v2 合同必须进入发布清单: {relative} / {marker}",
                 )
+        self.assertFalse((ROOT / "assets/runtime-api-v1.schema.json").exists())
         for relative in (
-            "assets/runtime-api-v1.schema.json",
+            "assets/runtime-api-v2.schema.json",
             "assets/runtime-control-api.md",
         ):
-            self.assertFalse((ROOT / relative).exists(), f"旧资产必须删除: {relative}")
+            self.assertTrue((ROOT / relative).is_file(), f"Runtime v2 资产缺失: {relative}")
 
     def test_legacy_runtime_implementation_is_removed(self):
         for relative in (

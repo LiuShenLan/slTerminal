@@ -59,6 +59,8 @@ $script:PackageEntries = @(
     [pscustomobject]@{ PackagePath = 'docs/CHANGELOG.md'; RepoPath = 'CHANGELOG.md' }
     [pscustomobject]@{ PackagePath = 'assets/app-icon.png'; RepoPath = 'assets/app-icon.png' }
     [pscustomobject]@{ PackagePath = 'assets/app-icon.ico'; RepoPath = 'assets/app-icon.ico' }
+    [pscustomobject]@{ PackagePath = 'assets/runtime-api-v2.schema.json'; RepoPath = 'assets/runtime-api-v2.schema.json' }
+    [pscustomobject]@{ PackagePath = 'assets/runtime-control-api.md'; RepoPath = 'assets/runtime-control-api.md' }
     [pscustomobject]@{ PackagePath = 'licenses/LICENSE'; RepoPath = 'LICENSE' }
     [pscustomobject]@{ PackagePath = 'licenses/THIRD-PARTY-NOTICES'; RepoPath = 'THIRD-PARTY-NOTICES' }
     [pscustomobject]@{ PackagePath = 'licenses/THIRD-PARTY-CRATE-NOTICES'; RepoPath = 'licenses/THIRD-PARTY-CRATE-NOTICES' }
