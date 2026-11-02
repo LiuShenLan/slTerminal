@@ -28,6 +28,8 @@ pub(crate) struct LocalControlServer {
     accept: Option<JoinHandle<()>>,
     workers: Arc<Mutex<BTreeMap<u64, Worker>>>,
     active_workers: Arc<AtomicUsize>,
+    // join 错误只有安全静态消息；保存后可让重复 shutdown 重建同一错误。
+    termination_error: Option<io::Error>,
 }
 
 struct Worker {
@@ -92,6 +94,7 @@ impl LocalControlServer {
             accept: Some(accept),
             workers,
             active_workers,
+            termination_error: None,
         })
     }
 
@@ -110,7 +113,10 @@ impl LocalControlServer {
 
     fn stop(&mut self) -> io::Result<()> {
         if self.shutdown.swap(true, Ordering::SeqCst) {
-            return Ok(());
+            return match &self.termination_error {
+                Some(error) => Err(io::Error::new(error.kind(), error.to_string())),
+                None => Ok(()),
+            };
         }
         let mut first_error = None;
         if let Some(accept) = self.accept.take()
@@ -128,6 +134,7 @@ impl LocalControlServer {
             }
         }
         if let Some(error) = first_error {
+            self.termination_error = Some(io::Error::new(error.kind(), error.to_string()));
             Err(error)
         } else {
             Ok(())

@@ -158,6 +158,7 @@ fn local_control_shutdown_releases_open_connection_and_listener() {
     let _ = read_line(&mut stream);
 
     server.shutdown().unwrap();
+    server.shutdown().unwrap();
     assert!(TcpStream::connect(&endpoint).is_err());
     assert_eq!(read_line(&mut stream), "");
     assert_eq!(calls.load(Ordering::SeqCst), 0);
@@ -265,6 +266,40 @@ fn local_control_worker_panic_closes_connection() {
 
     assert_eq!(read_line(&mut stream), "");
     server.shutdown().unwrap();
+}
+
+#[test]
+fn local_control_shutdown_replays_worker_join_failure() {
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let release_rx = Arc::new(std::sync::Mutex::new(release_rx));
+    let mut server = LocalControlServer::start(
+        Credential::new("sk-test"),
+        hello_response(),
+        move |_| -> Result<HandoverResponse, slterm_runtime_protocol::JsonRpcError> {
+            started_tx.send(()).unwrap();
+            release_rx.lock().unwrap().recv().unwrap();
+            panic!("injected repeated-shutdown worker panic")
+        },
+    )
+    .unwrap();
+    let mut stream = connect(&server);
+    write_json(&mut stream, &hello("sk-test"));
+    let _ = read_line(&mut stream);
+    write_json(&mut stream, &focus());
+    started_rx.recv().unwrap();
+
+    std::thread::scope(|scope| {
+        let shutdown = scope.spawn(|| server.shutdown());
+        assert_eq!(read_line(&mut stream), "");
+        release_tx.send(()).unwrap();
+        assert!(shutdown.join().unwrap().is_err());
+    });
+    assert!(
+        server.shutdown().is_err(),
+        "后续 shutdown 必须保留首次 join 终止错误"
+    );
+    assert_eq!(server.active_workers(), 0);
 }
 
 #[test]

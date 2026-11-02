@@ -116,7 +116,6 @@ fn handover_error(domain: DomainErrorCode, numeric: i32, message: &'static str) 
 }
 
 /// 非阻塞投递第二实例意图；调用方只在后台执行体等待完成回执。
-#[allow(dead_code)] // LocalControlServer 在下一切片接入此单点。
 pub(crate) fn try_send_handover(
     sender: &mpsc::SyncSender<SltermShellEvent>,
     params: HandoverParams,

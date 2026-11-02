@@ -13,7 +13,7 @@ use crate::platform::dirs;
 const DISCOVERY_FILE_BUDGET: usize = 4 * 1024;
 const ENDPOINT_FILE_NAME: &str = "local-control-endpoint.json";
 
-fn endpoint_path() -> PathBuf {
+pub(super) fn endpoint_path() -> PathBuf {
     dirs::local_dir().join(ENDPOINT_FILE_NAME)
 }
 
@@ -23,7 +23,7 @@ pub(crate) fn publish(record: DiscoveryRecord) -> io::Result<DiscoveryGuard> {
     publish_at(&endpoint_path(), record)
 }
 
-fn publish_at(path: &Path, record: DiscoveryRecord) -> io::Result<DiscoveryGuard> {
+pub(super) fn publish_at(path: &Path, record: DiscoveryRecord) -> io::Result<DiscoveryGuard> {
     record
         .validate()
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
@@ -50,7 +50,7 @@ pub(crate) fn read_discovery() -> io::Result<DiscoveryRecord> {
     read_discovery_at(&endpoint_path())
 }
 
-fn read_discovery_at(path: &Path) -> io::Result<DiscoveryRecord> {
+pub(super) fn read_discovery_at(path: &Path) -> io::Result<DiscoveryRecord> {
     let file = File::open(path)?;
     let mut contents = Vec::new();
     file.take(DISCOVERY_FILE_BUDGET as u64 + 1)
@@ -79,7 +79,6 @@ pub(crate) struct DiscoveryGuard {
 
 impl DiscoveryGuard {
     /// 显式撤销保留所有错误；调用方可在 shutdown 链中上报。
-    #[allow(dead_code)] // 消费点 = LocalControlServer 正常关闭接线。
     pub(crate) fn revoke(&mut self) -> io::Result<()> {
         if !self.active {
             return Ok(());

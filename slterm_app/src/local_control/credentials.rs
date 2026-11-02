@@ -42,7 +42,7 @@ pub(crate) fn load_credential(
     load_credential_at(scope, dirs::local_dir(), store)
 }
 
-fn load_credential_at(
+pub(super) fn load_credential_at(
     scope: ControlScope,
     local_root: &Path,
     store: &dyn CredentialStore,
@@ -65,7 +65,7 @@ pub(crate) fn load_or_create_credential(
     load_or_create_at(scope, dirs::local_dir(), store)
 }
 
-fn load_or_create_at(
+pub(super) fn load_or_create_at(
     scope: ControlScope,
     local_root: &Path,
     store: &dyn CredentialStore,

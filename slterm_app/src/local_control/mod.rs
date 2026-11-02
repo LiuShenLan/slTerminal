@@ -8,6 +8,9 @@ mod discovery;
 mod server;
 #[cfg(test)]
 mod server_tests;
+mod service;
+#[cfg(test)]
+mod service_tests;
 
 #[allow(unused_imports)]
 pub(crate) use client::{HandoverError, handover};
@@ -15,3 +18,5 @@ pub(crate) use client::{HandoverError, handover};
 pub(crate) use discovery::{DiscoveryGuard, publish, read_discovery};
 #[allow(unused_imports)]
 pub(crate) use server::LocalControlServer;
+#[allow(unused_imports)]
+pub(crate) use service::LocalControlService;
