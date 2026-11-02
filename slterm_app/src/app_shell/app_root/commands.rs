@@ -413,14 +413,18 @@ impl AppRoot {
         } else {
             None
         };
-        self.restore_project_panels(active_id, window, cx);
-        let default = match &new_project {
+        let preflight_token = match &new_project {
             Some((_, registration)) => registration.token(),
             None => self.project_default_focus(active_id, cx)?,
         };
+        self.focus_manager
+            .ensure_project_activation_allowed(active_id, preflight_token)?;
+        self.restore_project_panels(active_id, window, cx);
+        let activation_default =
+            self.activation_default_after_restore(active_id, preflight_token, cx);
         self.sync_focus_visibility(Some(active_id), cx);
         self.focus_manager
-            .activate_project(active_id, default, window, cx)?;
+            .activate_project(active_id, activation_default, window, cx)?;
         if let Some((project, registration)) = new_project {
             project.update(cx, |project, _| {
                 project.focus_registration = Some(registration);
@@ -450,11 +454,14 @@ impl AppRoot {
                 ProjectRegistryError::ProjectNotFound,
             ));
         }
+        let preflight_token = self.project_default_focus(id, cx)?;
+        self.focus_manager
+            .ensure_project_activation_allowed(id, preflight_token)?;
         self.restore_project_panels(id, window, cx);
-        let default = self.project_default_focus(id, cx)?;
+        let activation_default = self.activation_default_after_restore(id, preflight_token, cx);
         self.sync_focus_visibility(Some(id), cx);
         self.focus_manager
-            .activate_project(id, default, window, cx)?;
+            .activate_project(id, activation_default, window, cx)?;
         self.commit_project_snapshot(candidate);
         self.sync_project_visibility(cx);
         cx.notify();
@@ -949,6 +956,23 @@ impl AppRoot {
                 .ok_or(AppRootError::MissingPanel),
             None => self.project_focus_token(project_id, cx),
         }
+    }
+
+    /// 恢复可能补齐布局 active 面板；重算失败时沿用已预检 token，不新增失败窗口。
+    fn activation_default_after_restore(
+        &self,
+        project_id: ProjectId,
+        preflight_token: FocusToken,
+        cx: &App,
+    ) -> FocusToken {
+        self.project_default_focus(project_id, cx)
+            .ok()
+            .filter(|default| {
+                self.focus_manager
+                    .ensure_project_activation_allowed(project_id, *default)
+                    .is_ok()
+            })
+            .unwrap_or(preflight_token)
     }
 
     /// 把真实 GPUI 焦点同步到 FocusManager、项目瞬时焦点和布局激活项。

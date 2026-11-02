@@ -392,13 +392,12 @@ impl FocusManager {
         }
     }
 
-    pub fn activate_project(
-        &mut self,
+    /// 项目激活前的纯校验；不得同步、修改或请求实际焦点。
+    pub fn ensure_project_activation_allowed(
+        &self,
         project: ProjectId,
         default: FocusToken,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> Result<FocusToken, FocusError> {
+    ) -> Result<(), FocusError> {
         self.ensure_activation_allowed()?;
         let default_project = self
             .nodes
@@ -408,6 +407,17 @@ impl FocusManager {
         if default_project != Some(project) {
             return Err(FocusError::ScopeMismatch);
         }
+        Ok(())
+    }
+
+    pub fn activate_project(
+        &mut self,
+        project: ProjectId,
+        default: FocusToken,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Result<FocusToken, FocusError> {
+        self.ensure_project_activation_allowed(project, default)?;
         self.sync_window_focus(window, cx);
         self.active_project = Some(project);
         let mut candidates = Vec::with_capacity(3);
@@ -859,6 +869,76 @@ mod focus_manager_tests {
 
     fn project(text: &str) -> ProjectId {
         text.parse().unwrap()
+    }
+
+    /// 项目激活纯预检只校验目标，不同步或修改实际焦点。
+    #[gpui::test]
+    fn focus_project_activation_precheck_validates_without_focus_side_effects(
+        cx: &mut TestAppContext,
+    ) {
+        let (_, window) = cx.add_window_view(|_, _| Dummy);
+        window.update(|window, cx| {
+            let workspace = cx.focus_handle();
+            let panel = cx.focus_handle();
+            let other = cx.focus_handle();
+            let mut manager = FocusManager::new(&workspace);
+            let panel_registration = manager
+                .register(
+                    &panel,
+                    manager.workspace_token(),
+                    Some(project(PROJECT_A)),
+                    true,
+                )
+                .unwrap();
+            let panel_token = panel_registration.token();
+            let other_registration = manager
+                .register(
+                    &other,
+                    manager.workspace_token(),
+                    Some(project(PROJECT_B)),
+                    true,
+                )
+                .unwrap();
+            let other_token = other_registration.token();
+
+            assert_eq!(
+                manager.ensure_project_activation_allowed(project(PROJECT_A), panel_token),
+                Ok(())
+            );
+            assert!(window.focused(cx).is_none());
+            assert_eq!(
+                manager.ensure_project_activation_allowed(project(PROJECT_A), other_token),
+                Err(FocusError::ScopeMismatch)
+            );
+            manager.unregister(other_token).unwrap();
+            assert_eq!(
+                manager.ensure_project_activation_allowed(project(PROJECT_B), other_token),
+                Err(FocusError::UnknownToken)
+            );
+
+            manager
+                .activate_project(project(PROJECT_A), panel_token, window, cx)
+                .unwrap();
+            let modal = cx.focus_handle();
+            let modal_registration = manager
+                .register(&modal, manager.workspace_token(), None, true)
+                .unwrap();
+            manager
+                .open_modal(
+                    panel_token,
+                    panel_token,
+                    modal_registration.token(),
+                    window,
+                    cx,
+                )
+                .unwrap();
+            let focused_before = window.focused(cx);
+            assert_eq!(
+                manager.ensure_project_activation_allowed(project(PROJECT_A), panel_token),
+                Err(FocusError::ModalActive)
+            );
+            assert_eq!(window.focused(cx), focused_before);
+        });
     }
 
     /// 非模态操作栏出现不抢焦，真实键位经动作分派后仍可到达操作栏。

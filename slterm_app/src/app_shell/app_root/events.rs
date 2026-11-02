@@ -7,6 +7,8 @@ use slterm_path::CanonicalPath;
 use slterm_runtime_protocol::{DomainErrorCode, HandoverParams, HandoverResponse, JsonRpcError};
 
 use super::AppRoot;
+use super::commands::AppRootError;
+use super::focus_manager::FocusError;
 use super::task_service::CancellationToken;
 use crate::app_shell::{SltermShellEvent, handover_error};
 
@@ -115,13 +117,29 @@ impl AppRoot {
                             cx.notify();
                             Ok(HandoverResponse::accepted())
                         }
-                        HandoverParams::OpenProject { .. }
-                        | HandoverParams::OpenFile { .. }
-                        | HandoverParams::NewTerminal { .. } => Err(handover_error(
-                            DomainErrorCode::InvalidRequest,
-                            -32000,
-                            "handover request is not implemented",
-                        )),
+                        HandoverParams::OpenProject { project_root } => {
+                            let opened = CanonicalPath::new(project_root)
+                                .map_err(|_| invalid_open_project_request())
+                                .and_then(|path| {
+                                    self.open_project(path, window, cx)
+                                        .map_err(open_project_handover_error)
+                                });
+                            match opened {
+                                Ok(_) => {
+                                    crate::windowing::focus::focus_window(window);
+                                    cx.notify();
+                                    Ok(HandoverResponse::accepted())
+                                }
+                                Err(error) => Err(error),
+                            }
+                        }
+                        HandoverParams::OpenFile { .. } | HandoverParams::NewTerminal { .. } => {
+                            Err(handover_error(
+                                DomainErrorCode::InvalidRequest,
+                                -32000,
+                                "handover request is not implemented",
+                            ))
+                        }
                     }
                 };
                 // 回执接收端可能已超时退出；非阻塞发送失败只结束本次答复。
@@ -140,6 +158,30 @@ impl AppRoot {
                 }
             }
         }
+    }
+}
+
+fn invalid_open_project_request() -> JsonRpcError {
+    handover_error(
+        DomainErrorCode::InvalidRequest,
+        -32000,
+        "invalid project root",
+    )
+}
+
+fn open_project_handover_error(error: AppRootError) -> JsonRpcError {
+    match error {
+        AppRootError::Closing => closing_handover_error(),
+        AppRootError::Focus(FocusError::ModalActive) => handover_error(
+            DomainErrorCode::Unauthorized,
+            -32002,
+            "project activation is not authorized",
+        ),
+        _ => handover_error(
+            DomainErrorCode::NotReady,
+            -32001,
+            "open project is not ready",
+        ),
     }
 }
 
