@@ -2,6 +2,9 @@
 
 #![forbid(unsafe_code)]
 
+mod close;
+#[cfg(test)]
+mod close_tests;
 mod diff_binding;
 mod identity;
 mod panel;
@@ -19,6 +22,10 @@ mod side_view;
 mod terminal_record;
 mod view_key;
 mod view_state;
+pub use close::{
+    CloseAbandonWarning, CloseAttempt, CloseCoordinator, CloseDecision, CloseEffect, CloseError,
+    CloseIntent, CloseObject, CloseOutcome, ClosePhase, CloseScope, CloseStage,
+};
 pub use diff_binding::{
     DiffBindingError, diff_binding_from_canonical_json, diff_binding_to_canonical_json,
 };
