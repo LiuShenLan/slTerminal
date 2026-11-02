@@ -92,6 +92,8 @@ pub(crate) struct CommandContext {
 pub(crate) enum CommandParameters {
     NewTerminal {
         shell: CanonicalPath,
+        project_root: Option<CanonicalPath>,
+        cwd: Option<CanonicalPath>,
     },
     Split {
         ratio: f32,
@@ -399,7 +401,15 @@ impl CommandRegistry {
         if terminal_command && context.modal {
             return Err(FocusError::ModalActive.into());
         }
-        if terminal_command && context.active_project.is_none() {
+        let targeted_new_terminal = matches!(
+            parameters.as_ref(),
+            Some(CommandParameters::NewTerminal {
+                project_root,
+                cwd,
+                ..
+            }) if project_root.is_some() || cwd.is_some()
+        );
+        if terminal_command && !targeted_new_terminal && context.active_project.is_none() {
             return Err(AppRootError::ProjectNotActive);
         }
         if id == CommandId::CloseActiveTerminal
@@ -427,8 +437,15 @@ impl CommandRegistry {
             return Err(AppRootError::UnexpectedParameters);
         };
         match (id, parameters) {
-            (CommandId::NewTerminal, Some(CommandParameters::NewTerminal { shell })) => root
-                .new_terminal_from_request(shell, window, cx)
+            (
+                CommandId::NewTerminal,
+                Some(CommandParameters::NewTerminal {
+                    shell,
+                    project_root,
+                    cwd,
+                }),
+            ) => root
+                .new_terminal_from_request(shell, project_root, cwd, window, cx)
                 .map(CommandOutcome::TerminalPanel),
             (CommandId::SplitRight, parameters) => {
                 let (ratio, viewport, shell) = split_options(parameters)?;

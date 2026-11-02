@@ -1,5 +1,7 @@
 //! GPUI 焦点所有权：弱句柄、实例代次、项目记忆与模态还焦链。
 
+#[cfg(all(test, feature = "gpui-test-support"))]
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::rc::{Rc, Weak};
 
@@ -119,6 +121,15 @@ struct ModalFocus {
     return_chain: Vec<FocusToken>,
 }
 
+#[cfg(all(test, feature = "gpui-test-support"))]
+#[derive(Default)]
+struct FocusFaults {
+    fail_next_project_activation_precheck: Cell<bool>,
+    fail_next_project_activation_after_scope_change: Cell<bool>,
+    fail_terminal_request_after_activation: Cell<bool>,
+    fail_next_request_focus: Cell<bool>,
+}
+
 /// 单窗口焦点权威；只弱引用 GPUI 句柄，不延长任何视图生命周期。
 pub struct FocusManager {
     nodes: BTreeMap<FocusToken, FocusNode>,
@@ -128,6 +139,8 @@ pub struct FocusManager {
     last_focus: BTreeMap<ProjectId, FocusToken>,
     observed_focus: Option<ObservedFocus>,
     modal: Option<ModalFocus>,
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    faults: FocusFaults,
 }
 
 impl FocusManager {
@@ -152,6 +165,8 @@ impl FocusManager {
             last_focus: BTreeMap::new(),
             observed_focus: None,
             modal: None,
+            #[cfg(all(test, feature = "gpui-test-support"))]
+            faults: FocusFaults::default(),
         }
     }
 
@@ -242,6 +257,10 @@ impl FocusManager {
         window: &mut Window,
         cx: &mut App,
     ) -> Result<(), FocusError> {
+        #[cfg(all(test, feature = "gpui-test-support"))]
+        if self.faults.fail_next_request_focus.replace(false) {
+            return Err(FocusError::NoFocusTarget);
+        }
         if self
             .modal
             .as_ref()
@@ -379,6 +398,34 @@ impl FocusManager {
         self.active_project = project;
     }
 
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub fn state_for_test(&self) -> (Option<ProjectId>, BTreeMap<FocusToken, bool>) {
+        (
+            self.active_project,
+            self.nodes
+                .iter()
+                .map(|(token, node)| (*token, node.visible))
+                .collect(),
+        )
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub fn fail_next_project_activation_precheck_for_test(&mut self) {
+        self.faults.fail_next_project_activation_precheck.set(true);
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub fn fail_next_project_activation_after_scope_change_for_test(&mut self) {
+        self.faults
+            .fail_next_project_activation_after_scope_change
+            .set(true);
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub fn fail_terminal_request_focus_after_activation_for_test(&mut self) {
+        self.faults.fail_terminal_request_after_activation.set(true);
+    }
+
     pub const fn modal_is_active(&self) -> bool {
         self.modal.is_some()
     }
@@ -399,6 +446,14 @@ impl FocusManager {
         default: FocusToken,
     ) -> Result<(), FocusError> {
         self.ensure_activation_allowed()?;
+        #[cfg(all(test, feature = "gpui-test-support"))]
+        if self
+            .faults
+            .fail_next_project_activation_precheck
+            .replace(false)
+        {
+            return Err(FocusError::NoFocusTarget);
+        }
         let default_project = self
             .nodes
             .get(&default)
@@ -420,11 +475,29 @@ impl FocusManager {
         self.ensure_project_activation_allowed(project, default)?;
         self.sync_window_focus(window, cx);
         self.active_project = Some(project);
+        #[cfg(all(test, feature = "gpui-test-support"))]
+        if self
+            .faults
+            .fail_next_project_activation_after_scope_change
+            .replace(false)
+        {
+            return Err(FocusError::NoFocusTarget);
+        }
         let mut candidates = Vec::with_capacity(3);
         candidates.extend(self.last_focus.get(&project));
         candidates.push(default);
         candidates.push(self.workspace);
-        self.focus_first(&candidates, window, cx)
+        let focused = self.focus_first(&candidates, window, cx);
+        #[cfg(all(test, feature = "gpui-test-support"))]
+        if focused.is_ok()
+            && self
+                .faults
+                .fail_terminal_request_after_activation
+                .replace(false)
+        {
+            self.faults.fail_next_request_focus.set(true);
+        }
+        focused
     }
 
     pub fn restore_focus(

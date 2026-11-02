@@ -103,6 +103,7 @@ fn new_terminal_spec(project: &str, group: &str, terminal: &str) -> NewTerminalS
         terminal_id: terminal_id(terminal),
         target_group: group_id(group),
         shell: path("C:/Program Files/PowerShell/7/pwsh.exe"),
+        cwd: None,
         custom_title: None,
     }
 }
@@ -396,6 +397,43 @@ fn new_terminal_commands_open_first_group_and_extend_existing_group() {
         &view(PROJECT_A, TERMINAL_B)
     );
     assert_eq!(with_second.validate(), Ok(()));
+}
+
+#[test]
+fn new_terminal_cwd_defaults_to_project_root() {
+    let original = empty_snapshot();
+
+    let (_, record) = original
+        .with_new_terminal(new_terminal_spec(PROJECT_A, GROUP_A, TERMINAL_A))
+        .unwrap();
+
+    assert_eq!(record.cwd(), &path("D:/work/a"));
+    assert_eq!(original, empty_snapshot());
+}
+
+#[test]
+fn new_terminal_cwd_accepts_a_nested_path() {
+    let original = empty_snapshot();
+    let mut spec = new_terminal_spec(PROJECT_A, GROUP_A, TERMINAL_A);
+    spec.cwd = Some(path("D:/work/a/nested/child"));
+
+    let (_, record) = original.with_new_terminal(spec).unwrap();
+
+    assert_eq!(record.cwd(), &path("D:/work/a/nested/child"));
+    assert_eq!(original, empty_snapshot());
+}
+
+#[test]
+fn new_terminal_cwd_rejects_paths_outside_project_without_changing_snapshot() {
+    let original = empty_snapshot();
+    let mut spec = new_terminal_spec(PROJECT_A, GROUP_A, TERMINAL_A);
+    spec.cwd = Some(path("D:/work/ab/nested"));
+
+    assert_eq!(
+        original.with_new_terminal(spec),
+        Err(ProjectCommandError::TerminalCwdOutsideProject)
+    );
+    assert_eq!(original, empty_snapshot());
 }
 
 #[test]

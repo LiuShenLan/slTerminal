@@ -5,8 +5,10 @@ use std::time::Duration;
 use gpui::{App, Context, Window};
 use slterm_path::CanonicalPath;
 use slterm_runtime_protocol::{DomainErrorCode, HandoverParams, HandoverResponse, JsonRpcError};
+use slterm_workspace::ProjectCommandError;
 
 use super::AppRoot;
+use super::command_registry::{CommandId, CommandParameters, CommandSource, CommandTarget};
 use super::commands::AppRootError;
 use super::focus_manager::FocusError;
 use super::task_service::CancellationToken;
@@ -133,13 +135,40 @@ impl AppRoot {
                                 Err(error) => Err(error),
                             }
                         }
-                        HandoverParams::OpenFile { .. } | HandoverParams::NewTerminal { .. } => {
-                            Err(handover_error(
-                                DomainErrorCode::InvalidRequest,
-                                -32000,
-                                "handover request is not implemented",
-                            ))
+                        HandoverParams::NewTerminal { project_root, cwd } => {
+                            let created = parse_new_terminal_paths(project_root, cwd).and_then(
+                                |(project_root, cwd)| {
+                                    let shell = self.shell.clone();
+                                    self.execute_command(
+                                        CommandId::NewTerminal,
+                                        CommandSource::Application,
+                                        CommandTarget::Focused,
+                                        Some(CommandParameters::NewTerminal {
+                                            shell,
+                                            project_root,
+                                            cwd,
+                                        }),
+                                        window,
+                                        cx,
+                                    )
+                                    .map(|_| ())
+                                    .map_err(new_terminal_handover_error)
+                                },
+                            );
+                            match created {
+                                Ok(()) => {
+                                    crate::windowing::focus::focus_window(window);
+                                    cx.notify();
+                                    Ok(HandoverResponse::accepted())
+                                }
+                                Err(error) => Err(error),
+                            }
                         }
+                        HandoverParams::OpenFile { .. } => Err(handover_error(
+                            DomainErrorCode::InvalidRequest,
+                            -32000,
+                            "handover request is not implemented",
+                        )),
                     }
                 };
                 // 回执接收端可能已超时退出；非阻塞发送失败只结束本次答复。
@@ -158,6 +187,47 @@ impl AppRoot {
                 }
             }
         }
+    }
+}
+
+fn parse_new_terminal_paths(
+    project_root: Option<String>,
+    cwd: Option<String>,
+) -> Result<(Option<CanonicalPath>, Option<CanonicalPath>), JsonRpcError> {
+    let project_root = project_root
+        .map(CanonicalPath::new)
+        .transpose()
+        .map_err(|_| invalid_new_terminal_request())?;
+    let cwd = cwd
+        .map(CanonicalPath::new)
+        .transpose()
+        .map_err(|_| invalid_new_terminal_request())?;
+    Ok((project_root, cwd))
+}
+
+fn invalid_new_terminal_request() -> JsonRpcError {
+    handover_error(
+        DomainErrorCode::InvalidRequest,
+        -32000,
+        "invalid new terminal path",
+    )
+}
+
+fn new_terminal_handover_error(error: AppRootError) -> JsonRpcError {
+    match error {
+        AppRootError::Closing => closing_handover_error(),
+        AppRootError::Focus(FocusError::ModalActive)
+        | AppRootError::NewTerminalTargetUnauthorized
+        | AppRootError::Project(ProjectCommandError::TerminalCwdOutsideProject) => handover_error(
+            DomainErrorCode::Unauthorized,
+            -32002,
+            "new terminal is not authorized",
+        ),
+        _ => handover_error(
+            DomainErrorCode::NotReady,
+            -32001,
+            "new terminal is not ready",
+        ),
     }
 }
 

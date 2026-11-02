@@ -15,7 +15,7 @@
 - **回执有界等待**：server 回调只经 `app_shell::try_send_handover` 投递，worker 等待回执的生产上限为 4 秒；超时映射 NotReady，回执发送端断开映射 Closing，helper 错误原样返回。原因：客户端总 deadline 为 5 秒，服务端必须更早给出结构化终态且不能无界占用 worker。边界：不在回执等待后追加无界 join。
 - **统一关闭**：服务显式 shutdown 必须依次尝试 server shutdown 与发现撤销，前者失败不得跳过后者，汇总首个错误；重复调用保持安全，Drop 仅尽力。原因：监听与发现记录是同一服务的两个可观察资源，不能只回收一半。边界：正常退出必须显式调用并处理错误，不能依赖 Drop。
 - **发现记录无凭据**：端点发现只使用 Runtime v2 封闭 DTO，读取预算 4 KiB；发布经原子写收敛为仅当前用户的受保护 DACL，guard 绑定文件身份与内容，撤销排除所有其他读写句柄并把最终组件按 reparse 点自身打开，显式撤销上抛错误，Drop 只尽力清理。原因：端点可供本机客户端发现，但 token 不得进入普通文件，旧实例不得误删替代记录或链接目标，delete-pending 不得伪装为目录项已撤销。边界：客户端只读；损坏、未知字段、非 loopback、零端口与超限记录一律失败，正常关闭必须先显式撤销。
-- **能力边界**：当前只实现 hello 与 handover，不添加 Runtime 占位方法。OpenProject 在 AppRoot 先纯校验规范路径，再复用项目打开命令；仅成功后前置窗口，新增根不自动创建终端，重复根只激活既有项目。仅路径校验失败映射 InvalidRequest，模态激活映射 Unauthorized，其他执行或内部未就绪失败映射 NotReady，错误脱敏且保持运行状态不变。其他路径授权、项目选择和窗口行为由对应 AppRoot 接线复核，不在传输层扩权。
+- **能力边界**：当前只实现 hello 与 handover，不添加 Runtime 占位方法。OpenProject 在 AppRoot 先纯校验规范路径，再复用项目打开命令；仅成功后前置窗口，新增根不自动创建终端，重复根只激活既有项目。NewTerminal 在 AppRoot 纯校验可选 project_root/cwd 后复用同一 CommandRegistry，只选择既有项目，不在传输层或前台做文件系统解析；非法路径为 InvalidRequest，未知根、无覆盖 cwd、跨根 cwd 与模态为 Unauthorized，其他启动或未就绪失败为 NotReady，Closing 优先，错误脱敏。OpenFile 仍返回 InvalidRequest。原因：控制面只转发封闭意图，项目选择、原子启动、授权与窗口行为必须由 AppRoot 单点复核。边界：仅成功后前置窗口并返回 accepted，不得隐式创建项目或改投活跃项目。
 
 ## 验收与测试
 

@@ -4,7 +4,7 @@ use std::fmt;
 use std::io;
 use std::rc::Rc;
 
-use gpui::{App, AppContext as _, Context, Entity, Window};
+use gpui::{App, AppContext as _, Context, Entity, FocusHandle, Window};
 use slterm_path::CanonicalPath;
 use slterm_sidebar::SidebarError;
 use slterm_split::SplitDirection;
@@ -147,6 +147,7 @@ pub(crate) enum AppRootError {
     Launch(io::Error),
     Focus(FocusError),
     ProjectNotActive,
+    NewTerminalTargetUnauthorized,
     MissingPanel,
     UnexpectedParameters,
     Closing,
@@ -163,6 +164,7 @@ impl fmt::Display for AppRootError {
             Self::Launch(error) => write!(formatter, "终端启动失败: {error}"),
             Self::Focus(error) => write!(formatter, "焦点目标不可用: {error:?}"),
             Self::ProjectNotActive => formatter.write_str("只能在活跃项目中显式创建终端"),
+            Self::NewTerminalTargetUnauthorized => formatter.write_str("新终端目标项目未获授权"),
             Self::MissingPanel => formatter.write_str("终端运行面板不存在"),
             Self::UnexpectedParameters => formatter.write_str("命令参数与目标命令不匹配"),
             Self::Closing => formatter.write_str("应用正在关闭，拒绝新命令"),
@@ -182,6 +184,7 @@ impl std::error::Error for AppRootError {
             | Self::PanelIdExhausted
             | Self::Focus(_)
             | Self::ProjectNotActive
+            | Self::NewTerminalTargetUnauthorized
             | Self::MissingPanel
             | Self::UnexpectedParameters
             | Self::Closing => None,
@@ -478,7 +481,11 @@ impl AppRoot {
             CommandId::NewTerminal,
             CommandSource::Application,
             CommandTarget::Focused,
-            Some(CommandParameters::NewTerminal { shell }),
+            Some(CommandParameters::NewTerminal {
+                shell,
+                project_root: None,
+                cwd: None,
+            }),
             window,
             cx,
         )?;
@@ -491,27 +498,130 @@ impl AppRoot {
     pub(super) fn new_terminal_from_request(
         &mut self,
         shell: CanonicalPath,
+        project_root: Option<CanonicalPath>,
+        cwd: Option<CanonicalPath>,
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Result<PanelId, AppRootError> {
         self.sync_focus(window, cx);
-        let project_id = self.active_project()?;
-        let target_group = match self.focused_group(project_id, cx)? {
+        let project_id = self.new_terminal_project(project_root.as_ref(), cwd.as_ref())?;
+        if self.snapshot.registry().active() == Some(project_id) {
+            let target_group = match self.focused_group(project_id, cx)? {
+                Some(group_id) => group_id,
+                None => PanelGroupId::from_uuid(Uuid::now_v7()).expect("系统生成的 UUID 必须为 v7"),
+            };
+            let terminal_id =
+                TerminalId::from_uuid(Uuid::now_v7()).expect("系统生成的 UUID 必须为 v7");
+            return self.new_terminal_with_identity(
+                NewTerminalSpec {
+                    project_id,
+                    terminal_id,
+                    target_group,
+                    shell,
+                    cwd,
+                    custom_title: None,
+                },
+                window,
+                cx,
+            );
+        }
+        self.new_hidden_terminal_from_request(project_id, shell, cwd, window, cx)
+    }
+
+    fn new_terminal_project(
+        &self,
+        project_root: Option<&CanonicalPath>,
+        cwd: Option<&CanonicalPath>,
+    ) -> Result<ProjectId, AppRootError> {
+        if let (Some(root), Some(cwd)) = (project_root, cwd)
+            && !cwd.as_path().starts_with(root.as_path())
+        {
+            return Err(AppRootError::NewTerminalTargetUnauthorized);
+        }
+        if let Some(root) = project_root {
+            return self
+                .snapshot
+                .registry()
+                .projects()
+                .iter()
+                .find(|project| project.root() == root)
+                .map(|project| project.id())
+                .ok_or(AppRootError::NewTerminalTargetUnauthorized);
+        }
+        if let Some(cwd) = cwd {
+            return self
+                .snapshot
+                .registry()
+                .projects()
+                .iter()
+                .filter(|project| cwd.as_path().starts_with(project.root().as_path()))
+                .max_by_key(|project| project.root().as_path().components().count())
+                .map(|project| project.id())
+                .ok_or(AppRootError::NewTerminalTargetUnauthorized);
+        }
+        self.active_project()
+    }
+
+    fn new_hidden_terminal_from_request(
+        &mut self,
+        project_id: ProjectId,
+        shell: CanonicalPath,
+        cwd: Option<CanonicalPath>,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<PanelId, AppRootError> {
+        let mut candidate = self.snapshot.clone();
+        candidate.registry_mut().activate_project(project_id)?;
+        candidate.validate()?;
+        let target_group = match self.hidden_target_group(project_id, cx)? {
             Some(group_id) => group_id,
             None => PanelGroupId::from_uuid(Uuid::now_v7()).expect("系统生成的 UUID 必须为 v7"),
         };
         let terminal_id = TerminalId::from_uuid(Uuid::now_v7()).expect("系统生成的 UUID 必须为 v7");
-        self.new_terminal_with_identity(
-            NewTerminalSpec {
-                project_id,
-                terminal_id,
-                target_group,
-                shell,
-                custom_title: None,
-            },
-            window,
-            cx,
-        )
+        let (candidate, record) = candidate.with_new_terminal(NewTerminalSpec {
+            project_id,
+            terminal_id,
+            target_group,
+            shell,
+            cwd,
+            custom_title: None,
+        })?;
+        self.launch_candidate(candidate, record, true, window, cx)
+    }
+
+    /// 隐藏项目优先复用焦点记忆；未恢复面板时按布局顺序选择既有组。
+    fn hidden_target_group(
+        &self,
+        project_id: ProjectId,
+        cx: &App,
+    ) -> Result<Option<PanelGroupId>, AppRootError> {
+        let project = self
+            .snapshot
+            .registry()
+            .project(project_id)
+            .ok_or(ProjectRegistryError::ProjectNotFound)?;
+        let layout = project.layout();
+        if layout.tree().is_none() {
+            return Ok(None);
+        }
+        let remembered_group = self
+            .focused_panel(project_id, cx)
+            .and_then(|panel_id| {
+                self.projects
+                    .get(&project_id)?
+                    .read(cx)
+                    .panels
+                    .get(&panel_id)
+                    .map(|panel| panel.view_key.clone())
+            })
+            .and_then(|view_key| {
+                layout.group_ids().into_iter().find(|group_id| {
+                    layout
+                        .group(*group_id)
+                        .is_some_and(|group| group.views().contains(&view_key))
+                })
+            });
+        Ok(remembered_group.or_else(|| layout.group_ids().into_iter().next()))
     }
 
     pub(super) fn new_terminal_with_identity(
@@ -522,7 +632,7 @@ impl AppRoot {
     ) -> Result<PanelId, AppRootError> {
         self.require_active_project(spec.project_id)?;
         let (candidate, record) = self.snapshot.with_new_terminal(spec)?;
-        self.launch_candidate(candidate, record, window, cx)
+        self.launch_candidate(candidate, record, false, window, cx)
     }
 
     pub(super) fn split_terminal_from_request(
@@ -549,6 +659,7 @@ impl AppRoot {
                     terminal_id,
                     target_group,
                     shell,
+                    cwd: None,
                     custom_title: None,
                 },
                 new_group_id,
@@ -569,7 +680,7 @@ impl AppRoot {
     ) -> Result<PanelId, AppRootError> {
         self.require_active_project(spec.new_terminal.project_id)?;
         let (candidate, record) = self.snapshot.with_split_terminal(spec)?;
-        self.launch_candidate(candidate, record, window, cx)
+        self.launch_candidate(candidate, record, false, window, cx)
     }
 
     fn ensure_not_closing(&self) -> Result<(), AppRootError> {
@@ -636,11 +747,12 @@ impl AppRoot {
         }
     }
 
-    /// 启动与实例登记全部成功后才提交候选快照。
+    /// 启动、项目激活、实例登记与实际聚焦全部成功后才提交候选快照。
     fn launch_candidate(
         &mut self,
         candidate: ProjectSnapshot,
         record: TerminalRecord,
+        activate_project: bool,
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Result<PanelId, AppRootError> {
@@ -666,7 +778,7 @@ impl AppRoot {
             &terminal.read(cx).focus_handle,
             parent,
             Some(project_id),
-            true,
+            !activate_project,
         ) {
             Ok(registration) => registration,
             Err(error) => {
@@ -675,7 +787,38 @@ impl AppRoot {
             }
         };
         let focus_token = focus_registration.token();
-        if let Err(error) = self.focus_manager.request_focus(focus_token, window, cx) {
+        if activate_project {
+            if let Err(error) = self
+                .focus_manager
+                .ensure_project_activation_allowed(project_id, focus_token)
+            {
+                let _ = self.focus_manager.unregister(focus_token);
+                terminal.read(cx).shutdown();
+                return Err(error.into());
+            }
+            let previous_active = self.snapshot.registry().active();
+            let previous_focus = window.focused(cx);
+            self.sync_focus_visibility(Some(project_id), cx);
+            let focused = self
+                .focus_manager
+                .present_nonmodal(focus_token)
+                .and_then(|_| {
+                    self.focus_manager
+                        .activate_project(project_id, focus_token, window, cx)
+                })
+                .and_then(|_| self.focus_manager.request_focus(focus_token, window, cx));
+            if let Err(error) = focused {
+                self.restore_focus_after_failed_activation(
+                    previous_active,
+                    previous_focus,
+                    window,
+                    cx,
+                );
+                let _ = self.focus_manager.unregister(focus_token);
+                terminal.read(cx).shutdown();
+                return Err(error.into());
+            }
+        } else if let Err(error) = self.focus_manager.request_focus(focus_token, window, cx) {
             let _ = self.focus_manager.unregister(focus_token);
             terminal.read(cx).shutdown();
             return Err(error.into());
@@ -700,9 +843,30 @@ impl AppRoot {
         self.panel_focus.insert(panel_id, focus_registration);
         self.panel_subscriptions.insert(panel_id, subscription);
         self.commit_project_snapshot(candidate);
+        if activate_project {
+            // 新终端已原子提交；其余隐藏记录按既有恢复语义补齐实例。
+            self.restore_project_panels(project_id, window, cx);
+        }
         self.sync_project_visibility(cx);
         cx.notify();
         Ok(panel_id)
+    }
+
+    fn restore_focus_after_failed_activation(
+        &mut self,
+        active: Option<ProjectId>,
+        focused: Option<FocusHandle>,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.sync_focus_visibility(active, cx);
+        self.focus_manager.restore_active_project(active);
+        if let Some(focused) = focused {
+            focused.focus(window, cx);
+        } else {
+            window.blur();
+        }
+        self.focus_manager.sync_window_focus(window, cx);
     }
 
     pub(super) fn close_focused_terminal_from_request(

@@ -188,7 +188,11 @@ impl Render for AppRoot {
                     CommandId::NewTerminal,
                     CommandSource::Keyboard,
                     CommandTarget::Focused,
-                    Some(CommandParameters::NewTerminal { shell }),
+                    Some(CommandParameters::NewTerminal {
+                        shell,
+                        project_root: None,
+                        cwd: None,
+                    }),
                     window,
                     cx,
                 ) {

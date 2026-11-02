@@ -19,6 +19,8 @@ pub struct NewTerminalSpec {
     /// 非空布局中的目标组；空布局中作为首组身份。
     pub target_group: PanelGroupId,
     pub shell: CanonicalPath,
+    /// 缺省使用项目根；显式目录必须位于项目根内。
+    pub cwd: Option<CanonicalPath>,
     pub custom_title: Option<String>,
 }
 
@@ -39,6 +41,7 @@ pub enum ProjectCommandError {
     Layout(LayoutError),
     Record(TerminalRecordError),
     Snapshot(ProjectSnapshotError),
+    TerminalCwdOutsideProject,
 }
 
 impl fmt::Display for ProjectCommandError {
@@ -259,6 +262,10 @@ impl ProjectSnapshot {
             .ok_or(ProjectRegistryError::ProjectNotFound)?
             .root()
             .clone();
+        let cwd = spec.cwd.clone().unwrap_or_else(|| root.clone());
+        if !cwd.as_path().starts_with(root.as_path()) {
+            return Err(ProjectCommandError::TerminalCwdOutsideProject);
+        }
         let number = self
             .registry_mut()
             .allocate_terminal_number(spec.project_id)?;
@@ -266,7 +273,7 @@ impl ProjectSnapshot {
             spec.terminal_id,
             spec.project_id,
             number,
-            root,
+            cwd,
             spec.shell.clone(),
             spec.custom_title.clone(),
             RunIntent::Launch,

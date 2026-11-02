@@ -74,6 +74,7 @@ fn terminal_spec(project: &str, group: &str, terminal: &str) -> NewTerminalSpec 
         terminal_id: terminal_id(terminal),
         target_group: group_id(group),
         shell: path("C:/Program Files/PowerShell/7/pwsh.exe"),
+        cwd: None,
         custom_title: None,
     }
 }
@@ -738,6 +739,8 @@ fn modal_terminal_command_is_rejected_without_side_effects(cx: &mut TestAppConte
                 CommandTarget::Focused,
                 Some(CommandParameters::NewTerminal {
                     shell: path("C:/Program Files/PowerShell/7/pwsh.exe"),
+                    project_root: None,
+                    cwd: None,
                 }),
                 window,
                 cx,
@@ -830,6 +833,8 @@ fn terminal_command_requests_share_execution_path(cx: &mut TestAppContext) {
                 CommandTarget::Focused,
                 Some(CommandParameters::NewTerminal {
                     shell: path("C:/Program Files/PowerShell/7/pwsh.exe"),
+                    project_root: None,
+                    cwd: None,
                 }),
                 window,
                 cx,
