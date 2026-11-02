@@ -39,7 +39,8 @@
 | `runtime_operations` | `operation_id` 唯一、`store_epoch＋client_id＋mutation_id` 唯一 | 幂等键、参数散列、资源代次、状态和结果／错误。 |
 | `managed_journals` | `journal_id` 主键、类型、状态、store_epoch、前后指纹 | 多步骤文件与恢复操作总账。 |
 | `journal_steps` | 日志与步骤键联合主键、目标、授权代次、前后指纹 | 可重放的步骤事实，不存任意正文。 |
-| `close_intents` | 关闭 ID、对象、代次、决定、提交状态 | 关闭收集结果和破坏动作前置事实。 |
+| `close_intents` | 关闭 ID 主键、scope／project_id、store_epoch、指纹与提交状态 | 关闭作用域与提交头事实；空关闭集合同样完整登记。 |
+| `close_objects` | close_id 外键、对象键、对象代次与决定 | 非空关闭集合的逐项对象事实。 |
 | `quarantine_batches` | `batch_id`、状态、绝对截止时间、完成时间、指纹 | 历史隔离批次。 |
 | `quarantine_items` | 批次与项键、原始位置、顺序、来源身份、前后指纹 | 逐项隔离清单；正文在独立隔离文件。 |
 | `recovery_points` | 恢复点 ID、状态、对象键、前后指纹、DPAPI 文件位置 | 逻辑恢复点索引；正文在本地原子文件。 |

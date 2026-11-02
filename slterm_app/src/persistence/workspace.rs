@@ -9,7 +9,7 @@ use super::database::{Database, DatabaseAccess, DatabaseError, DatabaseSpec, Sch
 const WORKSPACE_APPLICATION_ID: i32 = 0x534C_544D;
 const WORKSPACE_SCHEMA_VERSION: u32 = 1;
 
-static WORKSPACE_OBJECTS: [SchemaObject; 21] = [
+static WORKSPACE_OBJECTS: [SchemaObject; 22] = [
     SchemaObject {
         kind: "table",
         name: "workspace_meta",
@@ -78,7 +78,12 @@ static WORKSPACE_OBJECTS: [SchemaObject; 21] = [
     SchemaObject {
         kind: "table",
         name: "close_intents",
-        sql: "CREATE TABLE close_intents (close_id TEXT NOT NULL, object_key TEXT NOT NULL, object_generation INTEGER NOT NULL CHECK (object_generation >= 0), decision TEXT NOT NULL, commit_status TEXT NOT NULL, PRIMARY KEY (close_id, object_key))",
+        sql: "CREATE TABLE close_intents (close_id TEXT NOT NULL PRIMARY KEY, scope TEXT NOT NULL, project_id TEXT, store_epoch TEXT NOT NULL, commit_fingerprint BLOB NOT NULL CHECK (length(commit_fingerprint) = 32), commit_status TEXT NOT NULL)",
+    },
+    SchemaObject {
+        kind: "table",
+        name: "close_objects",
+        sql: "CREATE TABLE close_objects (close_id TEXT NOT NULL REFERENCES close_intents(close_id), object_key TEXT NOT NULL, object_generation INTEGER NOT NULL CHECK (object_generation >= 0), decision TEXT NOT NULL, PRIMARY KEY (close_id, object_key))",
     },
     SchemaObject {
         kind: "table",
@@ -161,9 +166,10 @@ mod workspace_tests {
 
     use super::*;
 
-    const EXPECTED_TABLES: [&str; 19] = [
+    const EXPECTED_TABLES: [&str; 20] = [
         "app_state",
         "close_intents",
+        "close_objects",
         "diff_bindings",
         "documents",
         "journal_steps",
@@ -588,6 +594,18 @@ mod workspace_tests {
             (
                 "managed_journals",
                 "INSERT INTO managed_journals (journal_id, kind, status, store_epoch) VALUES (NULL, 'document.save', 'Prepared', 'epoch')",
+            ),
+            (
+                "close_intents",
+                "INSERT INTO close_intents (close_id, scope, store_epoch, commit_fingerprint, commit_status) VALUES (NULL, 'application_exit', 'epoch', zeroblob(32), 'collected')",
+            ),
+            (
+                "close_objects.close_id",
+                "INSERT INTO close_objects (close_id, object_key, object_generation, decision) VALUES (NULL, 'object', 0, 'save')",
+            ),
+            (
+                "close_objects.object_key",
+                "INSERT INTO close_objects (close_id, object_key, object_generation, decision) VALUES ('close', NULL, 0, 'save')",
             ),
             (
                 "quarantine_batches",
