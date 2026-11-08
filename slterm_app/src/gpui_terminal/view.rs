@@ -493,6 +493,13 @@ impl TerminalView {
         self.output_visible
     }
 
+    /// 把会话所有权移交给后台关闭协调器；此处不发送 Shutdown，也不 join。
+    /// 取走后 `session=None`，视图 Drop 的非拥有型兜底自然不会重复通知。
+    #[allow(dead_code)] // 后台 CloseCoordinator 在后续切片接入消费。
+    pub fn take_session_for_shutdown(&mut self) -> Option<TerminalSession> {
+        self.session.take()
+    }
+
     /// 让 EventLoop 退出并回收 ConPTY/子进程。幂等:重复调用只会得到
     /// 发送失败;线程 join 兜底在会话持有的 EventLoopHandle Drop 上。
     pub fn shutdown(&self) {
@@ -1059,3 +1066,5 @@ mod tests;
 mod feedback_tests;
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod key_tests;
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod shutdown_tests;

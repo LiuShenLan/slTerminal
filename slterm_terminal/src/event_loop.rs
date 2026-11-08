@@ -1100,7 +1100,7 @@ where
         }
     }
 }
-
+include!("event_loop_test_support.rs");
 /// PTY 事件循环线程句柄——防泄漏包装（名额归还链路）。
 ///
 /// 裸 `JoinHandle` drop = detach：线程结束后返回值 `(EventLoop, State)`

@@ -421,6 +421,7 @@ mod startup_tests {
     /// 显式创建失败必须向上返回错误，而不是伪装成可挂载的终端。
     #[gpui::test]
     fn terminal_launch_failure_is_returned(cx: &mut TestAppContext) {
+        let parent_env = session::ParentEnvGuard::set(None, Some("slterm-test-parent-colorterm"));
         cx.update(|cx| {
             gpui_component::init(cx);
             cx.set_global(Settings::default());
@@ -435,5 +436,6 @@ mod startup_tests {
             StartupHarness
         });
         assert!(failed.get(), "启动失败应返回 Err，而非无会话视图");
+        parent_env.assert_unchanged();
     }
 }

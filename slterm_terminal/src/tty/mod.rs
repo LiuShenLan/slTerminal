@@ -1,10 +1,10 @@
 //! TTY related functionality.
 
 use std::ffi::OsString;
+use std::io;
 use std::path::PathBuf;
 use std::process::ExitStatus;
 use std::sync::Arc;
-use std::{env, io};
 
 use polling::{Event, PollMode, Poller};
 
@@ -160,16 +160,4 @@ pub trait EventedPty: EventedReadWrite {
     fn suppress_bringup_da1(&self) -> bool {
         false
     }
-}
-
-/// Setup environment variables.
-///
-/// Windows-only 定位下不做 terminfo 探测（spec 分片 02 不采纳点 11）：
-/// 定死注入。`TERM_PROGRAM` 等固定注入叠加在 `convert_custom_env` 末尾
-/// （tty/windows/conpty.rs）。
-pub fn setup_env() {
-    unsafe { env::set_var("TERM", "xterm-256color") };
-
-    // Advertise 24-bit color support.
-    unsafe { env::set_var("COLORTERM", "truecolor") };
 }

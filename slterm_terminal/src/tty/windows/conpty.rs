@@ -290,9 +290,8 @@ pub struct Conpty {
     api: ConptyApi,
 }
 
-/// 终端能力固定注入清单（`convert_custom_env` 末尾叠加，只补缺不覆盖）。
-/// `TERM_PROGRAM=slterm` 与 `tty::setup_env` 的进程级注入同值；产品定位
-/// 不做 terminfo 探测，三项定死。
+/// 终端能力固定注入清单：custom 已含同名键时保留 custom，否则补入。
+/// 产品定位不做 terminfo 探测，三项定死。
 const FIXED_ENV_INJECTIONS: &[(&str, &str)] = &[
     ("TERM", "xterm-256color"),
     ("COLORTERM", "truecolor"),

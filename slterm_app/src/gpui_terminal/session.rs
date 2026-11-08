@@ -8,12 +8,87 @@ use std::sync::Arc;
 
 use slterm_terminal::Term;
 use slterm_terminal::event::{Event, EventListener, WindowSize};
-use slterm_terminal::event_loop::{EventLoop, EventLoopHandle, Notifier};
+use slterm_terminal::event_loop::{EventLoop, EventLoopHandle, Msg, Notifier};
 use slterm_terminal::grid::Dimensions;
 use slterm_terminal::sync::FairMutex;
 use slterm_terminal::term::Config;
 use slterm_terminal::tty;
 use slterm_terminal::tty::EventedPty as _;
+
+/// 这两个环境键的测试写方共用一把锁；守卫持锁到 Drop，panic 路径也恢复原值。
+#[cfg(test)]
+static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
+pub(crate) struct ParentEnvGuard {
+    _lock: std::sync::MutexGuard<'static, ()>,
+    previous: [(&'static str, Option<std::ffi::OsString>); 2],
+    expected: [(&'static str, Option<std::ffi::OsString>); 2],
+}
+
+#[cfg(test)]
+impl ParentEnvGuard {
+    /// 只观测当前值；旧实现若写入，Drop 仍会恢复。
+    pub(crate) fn capture() -> Self {
+        let lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let previous = [
+            ("TERM", std::env::var_os("TERM")),
+            ("COLORTERM", std::env::var_os("COLORTERM")),
+        ];
+        let expected = previous.clone();
+        Self {
+            _lock: lock,
+            previous,
+            expected,
+        }
+    }
+
+    /// 设置确定的前置值，覆盖 Some/None 两种不污染判据。
+    pub(crate) fn set(term: Option<&str>, colorterm: Option<&str>) -> Self {
+        let mut guard = Self::capture();
+        unsafe {
+            match term {
+                Some(value) => std::env::set_var("TERM", value),
+                None => std::env::remove_var("TERM"),
+            }
+            match colorterm {
+                Some(value) => std::env::set_var("COLORTERM", value),
+                None => std::env::remove_var("COLORTERM"),
+            }
+        }
+        guard.expected = [
+            ("TERM", term.map(std::ffi::OsString::from)),
+            ("COLORTERM", colorterm.map(std::ffi::OsString::from)),
+        ];
+        guard
+    }
+
+    pub(crate) fn assert_unchanged(&self) {
+        for (name, expected) in &self.expected {
+            assert_eq!(
+                std::env::var_os(name).as_deref(),
+                expected.as_deref(),
+                "spawn 不得改写父进程 {name}"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+impl Drop for ParentEnvGuard {
+    fn drop(&mut self) {
+        for (name, value) in &self.previous {
+            unsafe {
+                match value {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+        }
+    }
+}
 
 /// 把 PTY 线程发出的终端事件转投到 GPUI 前台的异步通道。
 #[derive(Clone)]
@@ -59,6 +134,23 @@ pub struct TerminalSession {
     /// Shutdown + join)。会话必须持证:句柄随会话 Drop,后台线程才跟 pane
     /// 生命周期走。`None` 仅存在于 test_session(无真 PTY)。
     _event_loop: Option<EventLoopHandle<tty::Pty, EventProxy>>,
+}
+
+impl TerminalSession {
+    /// 消费会话并显式回收 PTY 线程；join 的 panic 原样交给调用方。
+    ///
+    /// 此方法会阻塞，只能由后台关闭协调器调用，禁止在 GPUI 前台执行。
+    #[allow(dead_code)] // 后台 CloseCoordinator 在后续切片接入消费。
+    pub fn shutdown(self) -> std::thread::Result<()> {
+        match self._event_loop {
+            Some(event_loop) => event_loop.join().map(|_| ()),
+            None => {
+                // 无 PTY 的测试会话没有 EventLoopHandle 代发关闭消息。
+                let _ = self.notifier.0.send(Msg::Shutdown);
+                Ok(())
+            }
+        }
+    }
 }
 
 /// 一次会话 spawn 的完整出口:会话句柄 + 终端事件流。
@@ -147,8 +239,8 @@ fn local_options_with_refresh(
     // conpty_sideload 硬编码 true(换设置键真读时此处是唯一换点;
     // core `Options::default()` 同值,显式写出是登记锚)。
     options.conpty_sideload = true;
-    // 固定身份/能力注入:core `setup_env` 只写 TERM/COLORTERM;身份组与
-    // CLI 发现统一走 `agent_env::apply`。
+    // 固定身份/能力注入:TERM/COLORTERM 写入 options.env，作为子进程
+    // 环境块的自定义覆盖；身份组与 CLI 发现统一走 `agent_env::apply`。
     options.env.insert("TERM", "xterm-256color");
     options.env.insert("COLORTERM", "truecolor");
     crate::agent_env::apply(&mut options, pane_id.0);
@@ -169,7 +261,7 @@ pub fn spawn(
     };
     let term = Arc::new(FairMutex::new(Term::new(term_config, &grid, proxy.clone())));
 
-    tty::setup_env();
+    // 子进程环境由 options.env 与 core custom 环境块组装，不写父进程环境。
     let pty = tty::new(&options, window_size)?;
     let shell_pid = pty.child_pid().unwrap_or(0);
 
@@ -280,5 +372,91 @@ mod local_options_tests {
             Some("preserved"),
             "刷新失败不得丢弃已组装的自定义环境"
         );
+    }
+}
+
+#[cfg(test)]
+mod shutdown_tests {
+    use super::*;
+
+    #[cfg(feature = "gpui-test-support")]
+    use std::sync::Arc;
+
+    fn real_window_size() -> WindowSize {
+        WindowSize {
+            num_lines: 24,
+            num_cols: 80,
+            cell_width: 8,
+            cell_height: 16,
+        }
+    }
+
+    fn real_options() -> tty::Options {
+        tty::Options {
+            shell: Some(tty::Shell::new(
+                "cmd.exe".into(),
+                vec!["/d".into(), "/q".into(), "/k".into()],
+            )),
+            // 测试只走系统 ConPTY，禁止 Win10 侧载提取写用户数据目录。
+            conpty_sideload: false,
+            ..tty::Options::default()
+        }
+    }
+
+    /// 正常路径必须经真实 ConPTY/EventLoop 的 join 回收，不用返回值替身。
+    #[test]
+    fn shutdown_joins_real_pty_event_loop() {
+        let parent_env = ParentEnvGuard::set(Some("slterm-test-parent-term"), None);
+        let (session, _event_rx) =
+            spawn(real_window_size(), Config::default(), real_options()).expect("真实 PTY 应启动");
+
+        session.shutdown().expect("真实 EventLoop join 应成功");
+        parent_env.assert_unchanged();
+    }
+
+    /// 无 PTY 的测试会话沿用 Shutdown 消息合同，且显式关闭成功。
+    #[cfg(feature = "gpui-test-support")]
+    #[test]
+    fn shutdown_without_pty_notifies_and_returns_ok() {
+        let (session, receiver) = test_session();
+
+        session.shutdown().expect("无 PTY 会话应关闭成功");
+
+        assert!(matches!(receiver.try_recv(), Ok(Msg::Shutdown)));
+    }
+
+    /// 故障来自真实 EventLoopHandle 持有的工作线程 JoinHandle，验证
+    /// TerminalSession 不把 join 的 panic Err 吞掉或二次 unwrap。
+    #[cfg(feature = "gpui-test-support")]
+    #[test]
+    fn shutdown_propagates_real_event_loop_worker_panic() {
+        let (events, _event_rx) = super::super::event_mailbox::channel();
+        let proxy = EventProxy { events };
+        let term = Arc::new(FairMutex::new(Term::new(
+            Config::default(),
+            &real_window_size(),
+            proxy.clone(),
+        )));
+        let pty = tty::new(&real_options(), real_window_size()).expect("真实 PTY 应启动");
+        let shell_pid = pty.child_pid().unwrap_or(0);
+        let native_prompt = proxy.events.native_prompt.clone();
+        let event_loop =
+            EventLoop::new(Arc::clone(&term), proxy, pty, false).expect("真实 EventLoop 应创建");
+        let notifier = Notifier(event_loop.channel());
+        let event_loop = event_loop.spawn_panicking_for_test();
+        let session = TerminalSession {
+            term,
+            notifier,
+            native_prompt,
+            shell_pid,
+            _event_loop: Some(event_loop),
+        };
+
+        let panic = session
+            .shutdown()
+            .expect_err("工作线程 panic 必须经 shutdown 返回 Err")
+            .downcast::<&str>()
+            .expect("测试 panic 载荷应保持原类型");
+        assert_eq!(*panic, "测试注入的 PTY reader panic");
     }
 }
