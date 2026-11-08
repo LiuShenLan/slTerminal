@@ -12,7 +12,7 @@ use slterm_path::AppPaths;
 use slterm_sidebar::SidebarState;
 use slterm_workspace::{ProjectSnapshot, ViewKey, ViewKeyError, ViewState, ViewStateError};
 
-use super::close::{CloseCommitError, PersistedCloseIntent};
+use super::close::{CloseCommitError, CloseCommitStatus, CloseStoreError, PersistedCloseIntent};
 use super::database::DatabaseError;
 use super::metadata::MetadataError;
 use super::project::ProjectStoreError;
@@ -119,6 +119,11 @@ enum Command {
         registration: Box<PersistedCloseIntent>,
         response: SyncSender<Result<PersistedCloseIntent, CloseCommitError>>,
     },
+    AdvanceCloseIntent {
+        current: Box<PersistedCloseIntent>,
+        next: CloseCommitStatus,
+        response: SyncSender<Result<PersistedCloseIntent, CloseStoreError>>,
+    },
     SaveSidebarState {
         state: Box<SidebarState>,
     },
@@ -185,6 +190,26 @@ impl WorkspaceWriterClient {
             .try_send(Command::CommitCloseIntent {
                 snapshot: Box::new(snapshot.clone()),
                 registration: Box::new(registration.clone()),
+                response,
+            })
+            .map_err(|error| match error {
+                TrySendError::Full(_) => WorkspaceWriterError::QueueFull,
+                TrySendError::Disconnected(_) => WorkspaceWriterError::Stopped,
+            })?;
+        Ok(result)
+    }
+
+    /// 非阻塞推进关闭头状态；旧状态、指纹与当前世代由唯一写线程复核。
+    pub(crate) fn advance_close_intent(
+        &self,
+        current: &PersistedCloseIntent,
+        next: CloseCommitStatus,
+    ) -> Result<Receiver<Result<PersistedCloseIntent, CloseStoreError>>, WorkspaceWriterError> {
+        let (response, result) = mpsc::sync_channel(1);
+        self.commands
+            .try_send(Command::AdvanceCloseIntent {
+                current: Box::new(current.clone()),
+                next,
                 response,
             })
             .map_err(|error| match error {
@@ -531,6 +556,20 @@ fn run(
                 }
                 let _ = response.send(result);
             }
+            Command::AdvanceCloseIntent {
+                current,
+                next,
+                response,
+            } => {
+                let result = store.advance_close_intent(
+                    &current.close_id,
+                    current.commit_status,
+                    next,
+                    current.intent.fingerprint(),
+                    &current.store_epoch,
+                );
+                let _ = response.send(result);
+            }
             Command::SaveSidebarState { state } => {
                 pending.sidebar_state = Some(PendingSidebarState {
                     state: *state,
@@ -735,6 +774,10 @@ pub(crate) fn spawn_workspace_failure_forwarder(
 }
 
 #[cfg(test)]
+#[path = "workspace_writer_close_advance_tests.rs"]
+mod workspace_writer_close_advance_tests;
+
+#[cfg(test)]
 mod workspace_writer_tests {
     use std::{str::FromStr, time::Instant};
 
@@ -773,7 +816,7 @@ mod workspace_writer_tests {
         .unwrap()
     }
 
-    fn fixture(temp: &TempDir) -> AppPaths {
+    pub(super) fn fixture(temp: &TempDir) -> AppPaths {
         AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap()
     }
 
@@ -781,7 +824,7 @@ mod workspace_writer_tests {
         ViewKey::SideView { side_view_id }
     }
 
-    fn key() -> ViewKey {
+    pub(super) fn key() -> ViewKey {
         key_for(SideViewId::Nav)
     }
 
@@ -789,11 +832,11 @@ mod workspace_writer_tests {
         ViewState::new(key, json!({"position": position}), &registry()).unwrap()
     }
 
-    fn state(position: u64) -> ViewState {
+    pub(super) fn state(position: u64) -> ViewState {
         state_for(&key(), position)
     }
 
-    fn project_snapshot(name: &str) -> ProjectSnapshot {
+    pub(super) fn project_snapshot(name: &str) -> ProjectSnapshot {
         let project_id = ProjectId::from_str("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2a").unwrap();
         let mut registry = slterm_workspace::ProjectRegistry::new();
         registry
@@ -806,7 +849,7 @@ mod workspace_writer_tests {
         ProjectSnapshot::restore(registry, Vec::new()).unwrap()
     }
 
-    fn close_registration(close_id: &str) -> PersistedCloseIntent {
+    pub(super) fn close_registration(close_id: &str) -> PersistedCloseIntent {
         PersistedCloseIntent {
             close_id: close_id.to_owned(),
             scope: CloseScope::ApplicationExit,
@@ -816,7 +859,7 @@ mod workspace_writer_tests {
         }
     }
 
-    fn begin_close_run(store: &mut WorkspaceDatabase) {
+    pub(super) fn begin_close_run(store: &mut WorkspaceDatabase) {
         store
             .begin_run(
                 "epoch-writer-close",
