@@ -35,6 +35,7 @@ pub(crate) struct AppRootPersistence {
     sidebar_has_explicit_edit: bool,
     recovered_project_snapshot: Option<ProjectSnapshot>,
     project_snapshot_recovery_failed: bool,
+    store_epoch: Option<String>,
     pending_final_sidebar: Option<SidebarState>,
 }
 
@@ -67,6 +68,19 @@ impl AppRootPersistence {
                 return persistence;
             }
         };
+        match store.metadata() {
+            Ok(Some(metadata)) if !metadata.store_epoch.is_empty() => {
+                persistence.store_epoch = Some(metadata.store_epoch);
+            }
+            Ok(_) => {
+                if persistence.writer.is_some() {
+                    log::warn!("workspace current store epoch is unavailable");
+                }
+            }
+            Err(error) => {
+                log::warn!("could not restore workspace store epoch: {error}");
+            }
+        }
         match store.load_project_snapshot() {
             Ok(snapshot) => persistence.recovered_project_snapshot = Some(snapshot),
             Err(error) => {
@@ -124,12 +138,17 @@ impl AppRootPersistence {
             sidebar_has_explicit_edit: false,
             recovered_project_snapshot: None,
             project_snapshot_recovery_failed: false,
+            store_epoch: None,
             pending_final_sidebar: None,
         }
     }
 
     pub(super) fn writer_client(&self) -> Option<WorkspaceWriterClient> {
         self.writer.clone()
+    }
+
+    pub(super) fn store_epoch(&self) -> Option<String> {
+        self.store_epoch.clone()
     }
 
     pub(super) fn project_snapshot_recovery_failed(&self) -> bool {

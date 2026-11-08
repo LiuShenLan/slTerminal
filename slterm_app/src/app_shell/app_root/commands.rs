@@ -151,6 +151,13 @@ pub(crate) enum AppRootError {
     MissingPanel,
     UnexpectedParameters,
     Closing,
+    ProjectSnapshotCommitInFlight,
+    ProjectSnapshotRecoveryFailed,
+    TerminalCloseRunning,
+    TerminalCloseState,
+    TerminalCloseOutcomeUnknown,
+    WorkspaceEpochUnavailable,
+    TerminalCloseWriter(crate::persistence::workspace_writer::WorkspaceWriterError),
     Sidebar(SidebarError),
 }
 
@@ -168,6 +175,21 @@ impl fmt::Display for AppRootError {
             Self::MissingPanel => formatter.write_str("终端运行面板不存在"),
             Self::UnexpectedParameters => formatter.write_str("命令参数与目标命令不匹配"),
             Self::Closing => formatter.write_str("应用正在关闭，拒绝新命令"),
+            Self::ProjectSnapshotCommitInFlight => {
+                formatter.write_str("终端关闭快照正在提交，暂拒显式快照命令")
+            }
+            Self::ProjectSnapshotRecoveryFailed => {
+                formatter.write_str("项目快照恢复失败，拒绝终端关闭写入")
+            }
+            Self::TerminalCloseRunning => formatter.write_str("终端正在关闭，拒绝重复请求"),
+            Self::TerminalCloseState => formatter.write_str("终端关闭状态转换无效"),
+            Self::TerminalCloseOutcomeUnknown => {
+                formatter.write_str("终端关闭结果未知，已停止自动重试")
+            }
+            Self::WorkspaceEpochUnavailable => {
+                formatter.write_str("工作区当前世代不可用，拒绝终端关闭")
+            }
+            Self::TerminalCloseWriter(error) => write!(formatter, "终端关闭写请求失败: {error}"),
             Self::Sidebar(error) => write!(formatter, "侧栏命令失败: {error}"),
         }
     }
@@ -179,6 +201,7 @@ impl std::error::Error for AppRootError {
             Self::Project(error) => Some(error),
             Self::Snapshot(error) => Some(error),
             Self::Launch(error) => Some(error),
+            Self::TerminalCloseWriter(error) => Some(error),
             Self::Sidebar(error) => Some(error),
             Self::Registry(_)
             | Self::PanelIdExhausted
@@ -187,7 +210,13 @@ impl std::error::Error for AppRootError {
             | Self::NewTerminalTargetUnauthorized
             | Self::MissingPanel
             | Self::UnexpectedParameters
-            | Self::Closing => None,
+            | Self::Closing
+            | Self::ProjectSnapshotCommitInFlight
+            | Self::ProjectSnapshotRecoveryFailed
+            | Self::TerminalCloseRunning
+            | Self::TerminalCloseState
+            | Self::TerminalCloseOutcomeUnknown
+            | Self::WorkspaceEpochUnavailable => None,
         }
     }
 }
@@ -392,6 +421,7 @@ impl AppRoot {
         cx: &mut Context<'_, Self>,
     ) -> Result<AddProjectOutcome, AppRootError> {
         self.ensure_not_closing()?;
+        self.ensure_project_snapshot_command_allowed()?;
         self.focus_manager.ensure_activation_allowed()?;
         self.sync_focus(window, cx);
         let mut candidate = self.snapshot.clone();
@@ -447,6 +477,7 @@ impl AppRoot {
         cx: &mut Context<'_, Self>,
     ) -> Result<(), AppRootError> {
         self.ensure_not_closing()?;
+        self.ensure_project_snapshot_command_allowed()?;
         self.focus_manager.ensure_activation_allowed()?;
         self.sync_focus(window, cx);
         let mut candidate = self.snapshot.clone();
@@ -503,6 +534,7 @@ impl AppRoot {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Result<PanelId, AppRootError> {
+        self.ensure_project_snapshot_command_allowed()?;
         self.sync_focus(window, cx);
         let project_id = self.new_terminal_project(project_root.as_ref(), cwd.as_ref())?;
         if self.snapshot.registry().active() == Some(project_id) {
@@ -630,6 +662,7 @@ impl AppRoot {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Result<PanelId, AppRootError> {
+        self.ensure_project_snapshot_command_allowed()?;
         self.require_active_project(spec.project_id)?;
         let (candidate, record) = self.snapshot.with_new_terminal(spec)?;
         self.launch_candidate(candidate, record, false, window, cx)
@@ -644,6 +677,7 @@ impl AppRoot {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Result<PanelId, AppRootError> {
+        self.ensure_project_snapshot_command_allowed()?;
         self.sync_focus(window, cx);
         let project_id = self.active_project()?;
         let target_group = self
@@ -678,14 +712,51 @@ impl AppRoot {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Result<PanelId, AppRootError> {
+        self.ensure_project_snapshot_command_allowed()?;
         self.require_active_project(spec.new_terminal.project_id)?;
         let (candidate, record) = self.snapshot.with_split_terminal(spec)?;
         self.launch_candidate(candidate, record, false, window, cx)
     }
 
-    fn ensure_not_closing(&self) -> Result<(), AppRootError> {
+    pub(super) fn ensure_not_closing(&self) -> Result<(), AppRootError> {
         if self.close_in_progress {
             Err(AppRootError::Closing)
+        } else {
+            Ok(())
+        }
+    }
+
+    pub(super) fn terminal_close_store_epoch(&self) -> Result<Option<String>, AppRootError> {
+        if self.project_writer.is_none() {
+            return Ok(None);
+        }
+        self.store_epoch
+            .clone()
+            .filter(|epoch| !epoch.is_empty())
+            .map(Some)
+            .ok_or(AppRootError::WorkspaceEpochUnavailable)
+    }
+
+    pub(super) fn ensure_project_snapshot_command_allowed(&self) -> Result<(), AppRootError> {
+        if self.terminal_closes.values().any(|close| {
+            matches!(
+                close.coordinator.phase(),
+                slterm_workspace::ClosePhase::Running(slterm_workspace::CloseStage::CommitState)
+                    | slterm_workspace::ClosePhase::Failed(
+                        slterm_workspace::CloseStage::CommitState
+                    )
+            )
+        }) {
+            Err(AppRootError::ProjectSnapshotCommitInFlight)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// 局部关闭的组合事务与普通快照写共享启动恢复屏障，但显式目录打开不受此限制。
+    pub(super) fn ensure_terminal_close_recovery_allowed(&self) -> Result<(), AppRootError> {
+        if self.project_snapshot_recovery_failed {
+            Err(AppRootError::ProjectSnapshotRecoveryFailed)
         } else {
             Ok(())
         }
@@ -869,11 +940,48 @@ impl AppRoot {
         self.focus_manager.sync_window_focus(window, cx);
     }
 
+    /// 只读真实 GPUI 焦点，不推进投影、代次或普通写；供关闭重试保留目标语义。
+    fn actual_focused_terminal(&self, window: &Window, cx: &App) -> Option<TerminalId> {
+        let focused = window.focused(cx)?;
+        self.projects.values().find_map(|project| {
+            project.read(cx).panels.values().find_map(|panel| {
+                if panel.terminal.read(cx).focus_handle != focused {
+                    return None;
+                }
+                match panel.view_key {
+                    ViewKey::Terminal { terminal_id, .. } => Some(terminal_id),
+                    _ => None,
+                }
+            })
+        })
+    }
+
+    /// 失败关闭直到 Completed 都占据用户重试队列；重试中的 Running 仍阻止后续目标。
+    pub(super) fn oldest_unresolved_terminal_close_failure(&self) -> Option<TerminalId> {
+        self.terminal_closes
+            .iter()
+            .filter(|(_, close)| close.unresolved_failure)
+            .min_by_key(|(_, close)| close.initiation_sequence)
+            .map(|(id, _)| *id)
+    }
+
     pub(super) fn close_focused_terminal_from_request(
         &mut self,
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Result<TerminalRecord, AppRootError> {
+        self.ensure_not_closing()?;
+        if let Some(terminal_id) = self.oldest_unresolved_terminal_close_failure() {
+            return self.close_terminal(terminal_id, window, cx);
+        }
+        if let Some(terminal_id) = self.actual_focused_terminal(window, cx)
+            && self.terminal_closes.contains_key(&terminal_id)
+        {
+            return self.close_terminal(terminal_id, window, cx);
+        }
+        self.ensure_terminal_close_recovery_allowed()?;
+        self.ensure_project_snapshot_command_allowed()?;
+        self.terminal_close_store_epoch()?;
         self.sync_focus(window, cx);
         let project_id = self.active_project()?;
         let panel_id = self
@@ -896,63 +1004,11 @@ impl AppRoot {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Result<TerminalRecord, AppRootError> {
-        self.sync_focus(window, cx);
-        let (candidate, record) = self.snapshot.without_terminal(id)?;
-        let project_id = record.project_id();
-        let (panel_id, terminal) = self
-            .terminal_panel(project_id, id, cx)
-            .ok_or(AppRootError::MissingPanel)?;
-        let project = self
-            .projects
-            .get(&project_id)
-            .cloned()
-            .ok_or(AppRootError::Registry(
-                ProjectRegistryError::ProjectNotFound,
-            ))?;
-        let focus_token = self
-            .panel_focus
-            .get(&panel_id)
-            .map(super::focus_manager::FocusRegistration::token)
-            .ok_or(AppRootError::MissingPanel)?;
-        let was_focused = window
-            .focused(cx)
-            .is_some_and(|focused| focused == terminal.read(cx).focus_handle);
-        if self.snapshot.registry().active() == Some(project_id) && was_focused {
-            let next_panel = project
-                .read(cx)
-                .panels
-                .keys()
-                .find(|candidate| **candidate != panel_id)
-                .copied();
-            let mut candidates = Vec::with_capacity(2);
-            match next_panel {
-                Some(next_panel) => candidates.push(
-                    self.panel_focus
-                        .get(&next_panel)
-                        .map(super::focus_manager::FocusRegistration::token)
-                        .ok_or(AppRootError::MissingPanel)?,
-                ),
-                None => candidates.push(self.project_focus_token(project_id, cx)?),
-            }
-            self.focus_manager.restore_focus(&candidates, window, cx)?;
+        if self.project_writer.is_none() {
+            self.close_terminal_in_memory(id, window, cx)
+        } else {
+            self.close_terminal_persisted(id, window, cx)
         }
-        self.focus_manager.unregister(focus_token)?;
-
-        self.commit_project_snapshot(candidate);
-        self.panel_focus.remove(&panel_id);
-        self.panel_subscriptions.remove(&panel_id);
-        let panel = project.update(cx, |project, _| {
-            let panel = project.panels.remove(&panel_id);
-            if project.focused_panel == Some(panel_id) {
-                project.focused_panel = project.panels.keys().next().copied();
-            }
-            panel
-        });
-        if let Some(panel) = panel {
-            panel.terminal.read(cx).shutdown();
-        }
-        cx.notify();
-        Ok(record)
     }
 
     pub(crate) fn activate_terminal(
@@ -962,6 +1018,7 @@ impl AppRoot {
         cx: &mut Context<'_, Self>,
     ) -> Result<(), AppRootError> {
         self.ensure_not_closing()?;
+        self.ensure_project_snapshot_command_allowed()?;
         self.sync_focus(window, cx);
         let candidate = self.snapshot.with_active_terminal(id)?;
         let project_id = candidate

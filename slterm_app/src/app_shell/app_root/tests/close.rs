@@ -1,9 +1,10 @@
 //! 关闭协调与事件泵生命周期测试。
 
 use super::*;
+use crate::persistence::close::CloseCommitStatus;
 use crate::persistence::workspace_writer::{WorkspaceWriterClient, WorkspaceWriterError};
 
-fn flush_when_ready(client: &WorkspaceWriterClient) {
+pub(super) fn flush_when_ready(client: &WorkspaceWriterClient) {
     // 负载裕度，非断言/语义放宽：等待真实 Flush 结果，故障前置条件不变。
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     while std::time::Instant::now() < deadline {
@@ -21,6 +22,64 @@ fn flush_when_ready(client: &WorkspaceWriterClient) {
         }
     }
     panic!("writer did not drain before the deadline");
+}
+
+pub(super) fn wait_for_close_status(
+    paths: &AppPaths,
+    close_id: &str,
+    expected: CloseCommitStatus,
+) -> crate::persistence::close::PersistedCloseIntent {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let mut store = WorkspaceDatabase::open(paths).unwrap();
+        if let Some(loaded) = store.load_close_intent(close_id).unwrap()
+            && loaded.commit_status == expected
+        {
+            return loaded;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "close intent did not reach {expected:?}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn wait_for_close_status_polls_until_writer_registers_intent() {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let (events, _event_rx) = std::sync::mpsc::sync_channel(1);
+    let runtime = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
+    let client = runtime.client();
+    let registration = crate::persistence::close::PersistedCloseIntent {
+        close_id: "close-delayed-registration".to_owned(),
+        scope: slterm_workspace::CloseScope::ApplicationExit,
+        store_epoch: runtime.metadata().store_epoch.clone(),
+        intent: slterm_workspace::CloseIntent::new(Vec::new(), [9; 32]).unwrap(),
+        commit_status: CloseCommitStatus::Collected,
+    };
+
+    let loaded = std::thread::scope(|scope| {
+        scope.spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            let response = client
+                .commit_close_intent(&ProjectSnapshot::default(), &registration)
+                .unwrap();
+            response
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap()
+                .unwrap();
+        });
+        wait_for_close_status(
+            &paths,
+            "close-delayed-registration",
+            CloseCommitStatus::StateCommitted,
+        )
+    });
+
+    assert_eq!(loaded.commit_status, CloseCommitStatus::StateCommitted);
+    runtime.shutdown(ControlPlaneCleanup::Succeeded).unwrap();
 }
 
 /// 调用方必须持有数据库写锁；强制写线程进入故障写入后确认普通队列已满。

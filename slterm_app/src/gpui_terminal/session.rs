@@ -140,7 +140,6 @@ impl TerminalSession {
     /// 消费会话并显式回收 PTY 线程；join 的 panic 原样交给调用方。
     ///
     /// 此方法会阻塞，只能由后台关闭协调器调用，禁止在 GPUI 前台执行。
-    #[allow(dead_code)] // 后台 CloseCoordinator 在后续切片接入消费。
     pub fn shutdown(self) -> std::thread::Result<()> {
         match self._event_loop {
             Some(event_loop) => event_loop.join().map(|_| ()),

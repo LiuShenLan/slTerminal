@@ -2,6 +2,8 @@
 
 mod close;
 mod handover;
+mod local_close;
+mod local_close_receipts;
 mod sidebar;
 
 use std::cell::RefCell;
@@ -31,6 +33,7 @@ use crate::app_shell::{ControlPlaneCleanup, SltermShellEvent, WorkspaceWriterRun
 use crate::gpui_terminal::PaneId;
 use crate::gpui_terminal::session;
 use crate::gpui_terminal::view::{TerminalLaunch, TerminalView, TerminalViewEvent};
+use crate::persistence::metadata::RunMarker;
 use crate::persistence::workspace::WorkspaceDatabase;
 use crate::persistence::workspace_writer::WorkspaceWriter;
 
@@ -103,25 +106,27 @@ impl TerminalPanelLauncher for FakeLauncher {
             self.state.borrow_mut().fail_next = false;
             return Err(io::Error::new(io::ErrorKind::NotFound, "测试启动失败"));
         }
+        let launch = TerminalLaunch::Local {
+            cwd: None,
+            shell: Some(slterm_terminal::tty::Shell::new(
+                "slterm-test-missing-shell-executable".into(),
+                Vec::new(),
+            )),
+            shell_name: None,
+            explicit_command: false,
+        };
         let terminal = cx.new(|cx| {
-            TerminalView::new(
+            TerminalView::restore_error(
                 PaneId(panel_id.sequence()),
                 (80, 24),
-                TerminalLaunch::Local {
-                    cwd: None,
-                    shell: Some(slterm_terminal::tty::Shell::new(
-                        "slterm-test-missing-shell-executable".into(),
-                        Vec::new(),
-                    )),
-                    shell_name: None,
-                    explicit_command: false,
-                },
+                launch,
+                "测试禁用真实 PTY".to_owned(),
                 window,
                 cx,
             )
         });
         let (test_session, receiver) = session::test_session();
-        terminal.update(cx, |view, _| view.session = Some(test_session));
+        terminal.update(cx, |view, _| view.install_test_session(test_session));
         self.state
             .borrow_mut()
             .sessions
@@ -153,8 +158,16 @@ impl TerminalPanelLauncher for FakeLauncher {
 
         self.state.borrow_mut().attempts += 1;
         let fail = std::mem::replace(&mut self.state.borrow_mut().fail_next, false);
-        let terminal =
-            cx.new(|cx| TerminalView::restore_launch(pane_id, (80, 24), launch, window, cx));
+        let terminal = cx.new(|cx| {
+            TerminalView::restore_error(
+                pane_id,
+                (80, 24),
+                launch,
+                "测试禁用真实 PTY".to_owned(),
+                window,
+                cx,
+            )
+        });
         if !fail {
             let (test_session, receiver) = session::test_session();
             terminal.update(cx, |view, _| view.install_test_session(test_session));
@@ -164,6 +177,25 @@ impl TerminalPanelLauncher for FakeLauncher {
                 .insert(panel_id.sequence(), receiver);
         }
         terminal
+    }
+}
+
+#[test]
+fn fake_launcher_source_cannot_prepare_a_real_pty() {
+    let source = include_str!("mod.rs");
+    let start = source
+        .find("impl TerminalPanelLauncher for FakeLauncher")
+        .unwrap();
+    let end = start
+        + source[start..]
+            .find("\n#[test]\nfn fake_launcher_source_cannot_prepare_a_real_pty")
+            .unwrap();
+    let launcher = &source[start..end];
+    for forbidden in ["TerminalView::new(", "TerminalView::restore_launch("] {
+        assert!(
+            !launcher.contains(forbidden),
+            "AppRoot 测试启动器不得经 {forbidden} 调用 prepare(spawn=true)"
+        );
     }
 }
 
@@ -902,6 +934,7 @@ fn terminal_command_requests_share_execution_path(cx: &mut TestAppContext) {
     let CommandOutcome::TerminalClosed(record) = closed else {
         panic!("关闭命令必须返回逻辑终端记录");
     };
+    window.run_until_parked();
     assert_eq!(record.id(), expected_terminal);
     root.read_with(cx, |root, cx| {
         assert_eq!(root.panel_count(project_id(PROJECT_A), cx), 1)
@@ -930,6 +963,18 @@ fn adding_project_does_not_create_terminal(cx: &mut TestAppContext) {
 fn project_snapshot_mutations_persist_through_workspace_writer(cx: &mut TestAppContext) {
     let temp = tempfile::tempdir().unwrap();
     let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let mut store = WorkspaceDatabase::open(&paths).unwrap();
+    store
+        .begin_run(
+            "epoch-project-snapshot-test",
+            RunMarker {
+                run_id: "run-project-snapshot-test".into(),
+                process_id: 1,
+                process_created_at_ms: 1,
+            },
+        )
+        .unwrap();
+    drop(store);
     let writer = WorkspaceWriter::start(paths.clone()).unwrap();
     let persistence = AppRootPersistence::load(&paths, Some(writer.client()));
     let (root, mut window, _) = open_root_with_persistence(cx, persistence);
@@ -963,6 +1008,7 @@ fn project_snapshot_mutations_persist_through_workspace_writer(cx: &mut TestAppC
                 .unwrap();
         });
     });
+    window.run_until_parked();
     assert_project_snapshot_saved(&root, cx, &writer, &paths);
     add_project(&root, &mut window, PROJECT_B, "D:/work/b");
     assert_project_snapshot_saved(&root, cx, &writer, &paths);
@@ -1213,105 +1259,6 @@ fn split_and_activate_reuse_existing_terminal_entities(cx: &mut TestAppContext) 
 }
 
 #[gpui::test]
-fn close_terminal_releases_instance_and_keeps_empty_project(cx: &mut TestAppContext) {
-    let (root, mut window, state) = open_root(cx);
-    add_project(&root, &mut window, PROJECT_A, "D:/work/a");
-    let panel = new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_A);
-    let (_, _, weak) = panel_entity(&root, cx, PROJECT_A, TERMINAL_A);
-
-    let result = window.update(|window, cx| {
-        root.update(cx, |root, cx| {
-            root.close_terminal(terminal_id(TERMINAL_A), window, cx)
-        })
-    });
-    assert!(result.is_ok(), "关闭终端失败: {result:?}");
-    window.run_until_parked();
-
-    root.read_with(cx, |root, cx| {
-        assert_eq!(root.snapshot().terminals().count(), 0);
-        assert!(
-            root.snapshot()
-                .registry()
-                .project(project_id(PROJECT_A))
-                .is_some()
-        );
-        assert!(
-            root.snapshot()
-                .registry()
-                .project(project_id(PROJECT_A))
-                .unwrap()
-                .layout()
-                .view_keys()
-                .is_empty()
-        );
-        assert_eq!(root.panel_count(project_id(PROJECT_A), cx), 0);
-    });
-    assert!(matches!(
-        state.borrow().sessions[&panel.sequence()].try_recv(),
-        Ok(Msg::Shutdown)
-    ));
-    assert!(weak.upgrade().is_none());
-}
-
-#[gpui::test]
-fn closing_last_panel_releases_actual_focus(cx: &mut TestAppContext) {
-    let (root, mut window, _) = open_root(cx);
-    add_project(&root, &mut window, PROJECT_A, "D:/work/a");
-    new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_A);
-    let terminal = root.read_with(cx, |root, cx| {
-        root.terminal_panel(project_id(PROJECT_A), terminal_id(TERMINAL_A), cx)
-            .unwrap()
-            .1
-    });
-    let terminal_focus = terminal.read_with(cx, |terminal, _| terminal.focus_handle.clone());
-
-    let result = window.update(|window, cx| {
-        root.update(cx, |root, cx| {
-            root.close_terminal(terminal_id(TERMINAL_A), window, cx)
-        })
-    });
-    assert!(result.is_ok(), "关闭终端失败: {result:?}");
-    window.run_until_parked();
-
-    window.update(|window, cx| {
-        let focused = window.focused(cx);
-        assert!(focused.is_some(), "空项目必须保留可用焦点落点");
-        assert_ne!(focused, Some(terminal_focus), "不得留住已销毁面板焦点");
-    });
-}
-
-#[gpui::test]
-fn closing_remembered_panel_preserves_actual_project_focus(cx: &mut TestAppContext) {
-    let (root, mut window, _) = open_root(cx);
-    add_project(&root, &mut window, PROJECT_A, "D:/work/a");
-    new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_A);
-    split_terminal(&root, &mut window);
-    let project_focus = root.read_with(cx, |root, cx| {
-        root.projects[&project_id(PROJECT_A)]
-            .read(cx)
-            .focus_handle
-            .clone()
-    });
-    window.update(|window, cx| project_focus.focus(window, cx));
-    window.run_until_parked();
-
-    let result = window.update(|window, cx| {
-        root.update(cx, |root, cx| {
-            root.close_terminal(terminal_id(TERMINAL_B), window, cx)
-        })
-    });
-    assert!(result.is_ok(), "关闭终端失败: {result:?}");
-    window.run_until_parked();
-
-    window.update(|window, _| {
-        assert!(
-            project_focus.is_focused(window),
-            "关闭非真实焦点面板不得抢走项目容器焦点"
-        );
-    });
-}
-
-#[gpui::test]
 fn exited_terminal_retains_panel_and_marks_run_intent(cx: &mut TestAppContext) {
     let (root, mut window, state) = open_root(cx);
     add_project(&root, &mut window, PROJECT_A, "D:/work/a");
@@ -1495,50 +1442,6 @@ fn split_terminal_generates_uuid_v7_and_uses_focused_group(cx: &mut TestAppConte
         }));
         assert_eq!(root.focused_panel(project, cx), Some(split));
     });
-    assert_eq!(state.borrow().attempts, 2);
-}
-
-#[gpui::test]
-fn close_focused_terminal_closes_split_panel_and_updates_focus(cx: &mut TestAppContext) {
-    let (root, mut window, state) = open_root(cx);
-    let project = open_generated_project(&root, &mut window, "D:/work/generated");
-    let first = new_generated_terminal(&root, &mut window);
-    let split = split_generated_terminal(&root, &mut window);
-
-    let closed = window.update(|window, cx| {
-        root.update(cx, |root, cx| {
-            root.execute_command(
-                CommandId::CloseActiveTerminal,
-                CommandSource::Application,
-                CommandTarget::Focused,
-                None,
-                window,
-                cx,
-            )
-        })
-    });
-    assert!(closed.is_ok(), "关闭聚焦终端失败: {closed:?}");
-    let CommandOutcome::TerminalClosed(closed) = closed.unwrap() else {
-        unreachable!("关闭命令必须返回逻辑记录");
-    };
-
-    root.read_with(cx, |root, cx| {
-        assert!(root.snapshot().terminal(closed.id()).is_none());
-        assert_eq!(root.snapshot().terminals().count(), 1);
-        assert_eq!(root.focused_panel(project, cx), Some(first));
-        assert_eq!(root.panel_count(project, cx), 1);
-        let layout = root
-            .snapshot()
-            .registry()
-            .project(project)
-            .unwrap()
-            .layout();
-        assert_eq!(layout.group_ids().len(), 1);
-    });
-    assert!(matches!(
-        state.borrow().sessions[&split.sequence()].try_recv(),
-        Ok(Msg::Shutdown)
-    ));
     assert_eq!(state.borrow().attempts, 2);
 }
 
@@ -1800,24 +1703,6 @@ fn split_down_shortcut_uses_app_root_command(cx: &mut TestAppContext) {
                 ..
             })
         ));
-    });
-    assert_eq!(state.borrow().attempts, 2);
-}
-
-#[gpui::test]
-fn close_terminal_shortcut_uses_app_root_command(cx: &mut TestAppContext) {
-    let (root, mut window, state) = open_root(cx);
-    let project = open_generated_project(&root, &mut window, "D:/work/generated");
-    new_generated_terminal(&root, &mut window);
-    split_generated_terminal(&root, &mut window);
-    draw_frame(&mut window);
-
-    window.simulate_keystrokes("ctrl-shift-w");
-    window.run_until_parked();
-
-    root.read_with(cx, |root, _| {
-        assert_eq!(root.snapshot().terminals().count(), 1);
-        assert_eq!(root.snapshot().registry().active(), Some(project));
     });
     assert_eq!(state.borrow().attempts, 2);
 }

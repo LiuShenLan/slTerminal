@@ -11,6 +11,7 @@ use gpui::Task;
 pub(crate) enum TaskId {
     ShellEvents,
     CloseFlush,
+    TerminalClose(slterm_workspace::TerminalId),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -59,6 +60,16 @@ impl TaskService {
         cancellation: CancellationToken,
         task: Task<()>,
     ) -> Result<(), TaskError> {
+        self.register_with(id, cancellation, || task)
+    }
+
+    /// 只有身份可登记时才构造任务，避免重复注册丢弃已移交的资源所有权。
+    pub(crate) fn register_with(
+        &mut self,
+        id: TaskId,
+        cancellation: CancellationToken,
+        task: impl FnOnce() -> Task<()>,
+    ) -> Result<(), TaskError> {
         if self.tasks.contains_key(&id) {
             return Err(TaskError::Duplicate(id));
         }
@@ -66,7 +77,7 @@ impl TaskService {
             id,
             TaskEntry {
                 cancellation,
-                _task: task,
+                _task: task(),
             },
         );
         Ok(())
@@ -74,6 +85,18 @@ impl TaskService {
 
     pub(crate) fn complete(&mut self, id: TaskId) {
         self.tasks.remove(&id);
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(super) fn is_registered(&self, id: TaskId) -> bool {
+        self.tasks.contains_key(&id)
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(super) fn task_identity(&self, id: TaskId) -> Option<usize> {
+        self.tasks
+            .get(&id)
+            .map(|entry| Rc::as_ptr(&entry.cancellation.0) as usize)
     }
 
     pub(crate) fn shutdown(&mut self) {
@@ -97,20 +120,27 @@ mod tests {
     use super::*;
 
     #[gpui::test]
-    fn duplicate_task_registration_is_rejected(cx: &mut TestAppContext) {
+    fn duplicate_terminal_close_registration_does_not_construct_replacement_task(
+        cx: &mut TestAppContext,
+    ) {
         cx.update(|cx| {
             let mut service = TaskService::new();
+            let terminal = slterm_workspace::TerminalId::from_uuid(uuid::Uuid::now_v7()).unwrap();
+            let id = TaskId::TerminalClose(terminal);
             let first = cx.spawn(async move |_| std::future::pending::<()>().await);
-            let second = cx.spawn(async move |_| std::future::pending::<()>().await);
-            assert!(
-                service
-                    .register(TaskId::ShellEvents, CancellationToken::new(), first)
-                    .is_ok()
-            );
-            assert_eq!(
-                service.register(TaskId::ShellEvents, CancellationToken::new(), second),
-                Err(TaskError::Duplicate(TaskId::ShellEvents))
-            );
+            service
+                .register(id, CancellationToken::new(), first)
+                .unwrap();
+            let constructed = Rc::new(Cell::new(false));
+            let constructed_by_factory = Rc::clone(&constructed);
+            let duplicate = service.register_with(id, CancellationToken::new(), || {
+                constructed_by_factory.set(true);
+                cx.spawn(async move |_| std::future::pending::<()>().await)
+            });
+
+            assert_eq!(duplicate, Err(TaskError::Duplicate(id)));
+            assert!(!constructed.get(), "重复注册不得消费替代任务或资源");
+            assert!(service.is_registered(id));
         });
     }
 }

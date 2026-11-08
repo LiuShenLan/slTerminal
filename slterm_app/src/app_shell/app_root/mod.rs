@@ -13,6 +13,7 @@ mod side_view;
 mod side_view_host;
 mod sidebar;
 mod task_service;
+mod terminal_close;
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod tests;
 
@@ -104,10 +105,13 @@ pub(crate) struct AppRoot {
     snapshot: ProjectSnapshot,
     snapshot_generation: u64,
     project_writer: Option<WorkspaceWriterClient>,
+    store_epoch: Option<String>,
     pending_final_project_snapshot: Option<ProjectSnapshot>,
     project_snapshot_recovery_failed: bool,
     close_in_progress: bool,
     close_completed: bool,
+    terminal_closes: BTreeMap<slterm_workspace::TerminalId, terminal_close::LocalTerminalClose>,
+    next_terminal_close_sequence: u64,
     projects: BTreeMap<ProjectId, Entity<ProjectView>>,
     panel_ids: PanelIdAllocator,
     panel_subscriptions: BTreeMap<PanelId, Subscription>,
@@ -153,6 +157,7 @@ impl AppRoot {
         let workspace_focus = cx.focus_handle();
         let mut focus_manager = FocusManager::new(&workspace_focus);
         let project_writer = persistence.writer_client();
+        let store_epoch = persistence.store_epoch();
         let project_snapshot_recovery_failed = persistence.project_snapshot_recovery_failed();
         let snapshot = persistence.take_project_snapshot();
         let sidebar_state = persistence.take_sidebar_state();
@@ -233,10 +238,13 @@ impl AppRoot {
             snapshot,
             snapshot_generation: 0,
             project_writer,
+            store_epoch,
             pending_final_project_snapshot: None,
             project_snapshot_recovery_failed,
             close_in_progress: false,
             close_completed: false,
+            terminal_closes: BTreeMap::new(),
+            next_terminal_close_sequence: 0,
             projects,
             panel_ids,
             panel_subscriptions: BTreeMap::new(),
@@ -266,13 +274,38 @@ impl AppRoot {
         ));
     }
 
-    /// 快照只在候选提交后进入既有写队列；拒收时保留最后恢复事实。
+    /// 快照只在候选提交后进入既有写队列；初始关闭提交在途时仅更新内存并延期发布。
     fn commit_project_snapshot(&mut self, snapshot: ProjectSnapshot) {
         self.snapshot_generation = self.snapshot_generation.wrapping_add(1);
         self.snapshot = snapshot;
         if self.project_snapshot_recovery_failed {
             return;
         }
+        if self.terminal_closes.values().any(|close| {
+            matches!(
+                close.coordinator.phase(),
+                slterm_workspace::ClosePhase::Running(slterm_workspace::CloseStage::CommitState)
+                    | slterm_workspace::ClosePhase::Failed(
+                        slterm_workspace::CloseStage::CommitState
+                    )
+            )
+        }) {
+            self.pending_final_project_snapshot = Some(self.snapshot.clone());
+            return;
+        }
+        self.publish_project_snapshot();
+    }
+
+    /// 已知初始提交失败后恢复最新普通写；未知结果继续保持写屏障。
+    pub(super) fn resume_deferred_project_snapshot(&mut self) {
+        if self.pending_final_project_snapshot.is_some()
+            && self.ensure_project_snapshot_command_allowed().is_ok()
+        {
+            self.publish_project_snapshot();
+        }
+    }
+
+    fn publish_project_snapshot(&mut self) {
         let Some(writer) = &self.project_writer else {
             return;
         };
@@ -296,7 +329,9 @@ impl AppRoot {
 
 impl Drop for AppRoot {
     fn drop(&mut self) {
-        if self.project_snapshot_recovery_failed {
+        if self.project_snapshot_recovery_failed
+            || self.ensure_project_snapshot_command_allowed().is_err()
+        {
             return;
         }
         let (Some(writer), Some(snapshot)) =

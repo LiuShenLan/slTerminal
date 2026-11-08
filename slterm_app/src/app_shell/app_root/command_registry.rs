@@ -401,6 +401,8 @@ impl CommandRegistry {
         if terminal_command && context.modal {
             return Err(FocusError::ModalActive.into());
         }
+        let failed_terminal_close_pending = id == CommandId::CloseActiveTerminal
+            && root.oldest_unresolved_terminal_close_failure().is_some();
         let targeted_new_terminal = matches!(
             parameters.as_ref(),
             Some(CommandParameters::NewTerminal {
@@ -409,10 +411,15 @@ impl CommandRegistry {
                 ..
             }) if project_root.is_some() || cwd.is_some()
         );
-        if terminal_command && !targeted_new_terminal && context.active_project.is_none() {
+        if terminal_command
+            && !targeted_new_terminal
+            && context.active_project.is_none()
+            && !failed_terminal_close_pending
+        {
             return Err(AppRootError::ProjectNotActive);
         }
         if id == CommandId::CloseActiveTerminal
+            && !failed_terminal_close_pending
             && !matches!(
                 (&context.focused_view, context.focused_terminal),
                 (Some(ViewKey::Terminal { .. }), Some(_))
