@@ -12,6 +12,7 @@ use slterm_path::AppPaths;
 use slterm_sidebar::SidebarState;
 use slterm_workspace::{ProjectSnapshot, ViewKey, ViewKeyError, ViewState, ViewStateError};
 
+use super::close::{CloseCommitError, PersistedCloseIntent};
 use super::database::DatabaseError;
 use super::metadata::MetadataError;
 use super::project::ProjectStoreError;
@@ -113,6 +114,11 @@ enum Command {
     SaveProjectSnapshot {
         snapshot: Box<ProjectSnapshot>,
     },
+    CommitCloseIntent {
+        snapshot: Box<ProjectSnapshot>,
+        registration: Box<PersistedCloseIntent>,
+        response: SyncSender<Result<PersistedCloseIntent, CloseCommitError>>,
+    },
     SaveSidebarState {
         state: Box<SidebarState>,
     },
@@ -165,6 +171,27 @@ impl WorkspaceWriterClient {
                 TrySendError::Full(_) => WorkspaceWriterError::QueueFull,
                 TrySendError::Disconnected(_) => WorkspaceWriterError::Stopped,
             })
+    }
+
+    /// 非阻塞提交项目快照与关闭意图的原子组合事务，实际结果只经独立回执返回。
+    pub(crate) fn commit_close_intent(
+        &self,
+        snapshot: &ProjectSnapshot,
+        registration: &PersistedCloseIntent,
+    ) -> Result<Receiver<Result<PersistedCloseIntent, CloseCommitError>>, WorkspaceWriterError>
+    {
+        let (response, result) = mpsc::sync_channel(1);
+        self.commands
+            .try_send(Command::CommitCloseIntent {
+                snapshot: Box::new(snapshot.clone()),
+                registration: Box::new(registration.clone()),
+                response,
+            })
+            .map_err(|error| match error {
+                TrySendError::Full(_) => WorkspaceWriterError::QueueFull,
+                TrySendError::Disconnected(_) => WorkspaceWriterError::Stopped,
+            })?;
+        Ok(result)
     }
 
     /// 非阻塞提交最新侧栏组织状态；同一时刻只保留一个待写版本。
@@ -491,6 +518,19 @@ fn run(
                     due: Some(Instant::now() + PROJECT_SNAPSHOT_DEBOUNCE),
                 });
             }
+            Command::CommitCloseIntent {
+                snapshot,
+                registration,
+                response,
+            } => {
+                drain_final_states(&final_states, &mut pending);
+                let result = store.commit_close_intent(&snapshot, &registration);
+                if result.is_ok() {
+                    // 关闭快照已成为最新事实，旧普通与终态副本不得随后反写。
+                    pending.project_snapshot = None;
+                }
+                let _ = response.send(result);
+            }
             Command::SaveSidebarState { state } => {
                 pending.sidebar_state = Some(PendingSidebarState {
                     state: *state,
@@ -701,12 +741,17 @@ mod workspace_writer_tests {
     use serde::{Deserialize, Serialize};
     use serde_json::{Value, json};
     use slterm_workspace::{
-        InvalidViewState, PanelGroup, PanelGroupId, ProjectId, ProjectSnapshot, RunIntent,
-        SideViewId, TerminalId, TerminalRecord, ViewKeyKind, ViewStateRegistry, ViewStateSchema,
+        CloseIntent, CloseScope, InvalidViewState, PanelGroup, PanelGroupId, ProjectId,
+        ProjectSnapshot, RunIntent, SideViewId, TerminalId, TerminalRecord, ViewKeyKind,
+        ViewStateRegistry, ViewStateSchema,
     };
     use tempfile::TempDir;
 
     use super::*;
+    use crate::persistence::close::{
+        CloseCommitError, CloseCommitStatus, CloseStoreError, PersistedCloseIntent,
+    };
+    use crate::persistence::metadata::RunMarker;
     use crate::persistence::workspace::WorkspaceDatabase;
 
     #[derive(Serialize, Deserialize)]
@@ -759,6 +804,29 @@ mod workspace_writer_tests {
             .unwrap();
         registry.rename_project(project_id, name).unwrap();
         ProjectSnapshot::restore(registry, Vec::new()).unwrap()
+    }
+
+    fn close_registration(close_id: &str) -> PersistedCloseIntent {
+        PersistedCloseIntent {
+            close_id: close_id.to_owned(),
+            scope: CloseScope::ApplicationExit,
+            store_epoch: "epoch-writer-close".to_owned(),
+            intent: CloseIntent::new(Vec::new(), [9; 32]).unwrap(),
+            commit_status: CloseCommitStatus::Collected,
+        }
+    }
+
+    fn begin_close_run(store: &mut WorkspaceDatabase) {
+        store
+            .begin_run(
+                "epoch-writer-close",
+                RunMarker {
+                    run_id: "run-writer-close".to_owned(),
+                    process_id: 23,
+                    process_created_at_ms: 789,
+                },
+            )
+            .unwrap();
     }
 
     fn terminal_project_snapshot() -> ProjectSnapshot {
@@ -1026,6 +1094,200 @@ mod workspace_writer_tests {
         );
         assert_eq!(read_position(&observer), Some((7, 0)));
         writer.shutdown().unwrap();
+    }
+
+    #[test]
+    fn workspace_writer_close_commit_returns_committed_receipt() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = fixture(&temp);
+        let mut observer = WorkspaceDatabase::open(&paths).unwrap();
+        begin_close_run(&mut observer);
+        let writer = WorkspaceWriter::start(paths).unwrap();
+        let client = writer.client();
+        let snapshot = project_snapshot("close-committed");
+        let collected = close_registration("close-writer");
+
+        let response = client.commit_close_intent(&snapshot, &collected).unwrap();
+        let committed = response
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(committed.commit_status, CloseCommitStatus::StateCommitted);
+        assert_eq!(observer.load_project_snapshot().unwrap(), snapshot);
+        assert_eq!(
+            observer.load_close_intent("close-writer").unwrap(),
+            Some(committed)
+        );
+        writer.shutdown().unwrap();
+    }
+
+    #[test]
+    fn workspace_writer_close_commit_supersedes_pending_project_snapshot() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = fixture(&temp);
+        let mut observer = WorkspaceDatabase::open(&paths).unwrap();
+        begin_close_run(&mut observer);
+        let writer = WorkspaceWriter::start(paths).unwrap();
+        let client = writer.client();
+        let closed = project_snapshot("closed-after-pending");
+        client
+            .save_project_snapshot(&project_snapshot("old-pending"))
+            .unwrap();
+        let response = client
+            .commit_close_intent(&closed, &close_registration("close-pending"))
+            .unwrap();
+        response
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap()
+            .unwrap();
+
+        writer.flush().unwrap();
+
+        assert_eq!(observer.load_project_snapshot().unwrap(), closed);
+        writer.shutdown().unwrap();
+    }
+
+    #[test]
+    fn workspace_writer_close_commit_supersedes_final_project_snapshot() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = fixture(&temp);
+        let mut observer = WorkspaceDatabase::open(&paths).unwrap();
+        begin_close_run(&mut observer);
+        let writer = WorkspaceWriter::start(paths).unwrap();
+        let client = writer.client();
+        let closed = project_snapshot("closed-after-final");
+        client
+            .save_final_project_snapshot(&project_snapshot("old-final"))
+            .unwrap();
+        let response = client
+            .commit_close_intent(&closed, &close_registration("close-final"))
+            .unwrap();
+        response
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap()
+            .unwrap();
+
+        writer.flush().unwrap();
+
+        assert_eq!(observer.load_project_snapshot().unwrap(), closed);
+        writer.shutdown().unwrap();
+    }
+
+    #[test]
+    fn workspace_writer_failed_close_commit_preserves_pending_project_snapshot() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = fixture(&temp);
+        let mut observer = WorkspaceDatabase::open(&paths).unwrap();
+        begin_close_run(&mut observer);
+        let conflicting = close_registration("close-conflict");
+        observer.register_close_intent(&conflicting).unwrap();
+        let writer = WorkspaceWriter::start(paths).unwrap();
+        let client = writer.client();
+        let pending = project_snapshot("pending-after-conflict");
+        client.save_project_snapshot(&pending).unwrap();
+        let response = client
+            .commit_close_intent(&project_snapshot("closed-conflict"), &conflicting)
+            .unwrap();
+
+        assert!(matches!(
+            response.recv_timeout(Duration::from_secs(3)).unwrap(),
+            Err(CloseCommitError::Close(CloseStoreError::CloseIdConflict))
+        ));
+        writer.flush().unwrap();
+        assert_eq!(observer.load_project_snapshot().unwrap(), pending);
+        writer.shutdown().unwrap();
+    }
+
+    #[test]
+    fn workspace_writer_failed_close_commit_preserves_final_project_snapshot() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = fixture(&temp);
+        let mut observer = WorkspaceDatabase::open(&paths).unwrap();
+        begin_close_run(&mut observer);
+        let conflicting = close_registration("close-final-conflict");
+        observer.register_close_intent(&conflicting).unwrap();
+        let writer = WorkspaceWriter::start(paths).unwrap();
+        let client = writer.client();
+        let final_snapshot = project_snapshot("final-after-conflict");
+        client.save_final_project_snapshot(&final_snapshot).unwrap();
+        let response = client
+            .commit_close_intent(&project_snapshot("closed-final-conflict"), &conflicting)
+            .unwrap();
+
+        assert!(matches!(
+            response.recv_timeout(Duration::from_secs(3)).unwrap(),
+            Err(CloseCommitError::Close(CloseStoreError::CloseIdConflict))
+        ));
+        writer.flush().unwrap();
+        assert_eq!(observer.load_project_snapshot().unwrap(), final_snapshot);
+        writer.shutdown().unwrap();
+    }
+
+    #[test]
+    fn workspace_writer_close_commit_queue_full_is_rejected() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = fixture(&temp);
+        let mut observer = WorkspaceDatabase::open(&paths).unwrap();
+        begin_close_run(&mut observer);
+        let writer = WorkspaceWriter::start(paths).unwrap();
+        let client = writer.client();
+        observer
+            .database
+            .connection
+            .execute_batch("BEGIN EXCLUSIVE")
+            .unwrap();
+        client.save_view_state(&key(), &state(1)).unwrap();
+        std::thread::sleep(VIEW_STATE_DEBOUNCE + Duration::from_millis(100));
+        let snapshot = project_snapshot("queued-close");
+        let mut responses = Vec::new();
+        for index in 0..COMMAND_CAPACITY {
+            responses.push(
+                client
+                    .commit_close_intent(
+                        &snapshot,
+                        &close_registration(&format!("close-queued-{index}")),
+                    )
+                    .unwrap(),
+            );
+        }
+
+        assert!(matches!(
+            client.commit_close_intent(&snapshot, &close_registration("close-overflow")),
+            Err(WorkspaceWriterError::QueueFull)
+        ));
+
+        observer
+            .database
+            .connection
+            .execute_batch("ROLLBACK")
+            .unwrap();
+        writer.shutdown().unwrap();
+        for response in responses {
+            assert_eq!(
+                response.recv().unwrap().unwrap().commit_status,
+                CloseCommitStatus::StateCommitted
+            );
+        }
+    }
+
+    #[test]
+    fn workspace_writer_close_commit_disconnect_is_rejected() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = fixture(&temp);
+        let mut observer = WorkspaceDatabase::open(&paths).unwrap();
+        begin_close_run(&mut observer);
+        let writer = WorkspaceWriter::start(paths).unwrap();
+        let client = writer.client();
+        writer.shutdown().unwrap();
+
+        assert!(matches!(
+            client.commit_close_intent(
+                &project_snapshot("disconnected-close"),
+                &close_registration("close-disconnected"),
+            ),
+            Err(WorkspaceWriterError::Stopped)
+        ));
     }
 
     /// 项目聚合只保留最新快照，并在 2 秒去抖后一次落盘。

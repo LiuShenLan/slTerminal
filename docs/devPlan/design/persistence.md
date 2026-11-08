@@ -18,6 +18,7 @@
 - 两个库均设置固定 `application_id`、`user_version=1`、WAL、外键和忙时策略；只接受当前 schema，不建立旧库升级链。工作区库 `application_id=0x534C544D`，学习库 `application_id=0x534C4C52`；两者标识在生成 schema 的测试中固定。
 - 启动先检查 application_id、user_version、完整性和 WAL 状态，再决定事务恢复、有效副本、只读或隔离。更高版本只读，不隔离、不降级、不覆盖。
 - 所有跨表不变量在同一事务内提交；前台只收到提交后的不可变结果。SQLite 错误不直接拼接到用户日志，审计只记录允许字段和指纹。
+- ProjectSnapshot 与 Collected 关闭意图的组合提交在同一 Immediate 事务完成快照保存、头／对象登记及 StateCommitted 推进后一次 commit；任一步失败整体回滚，外部不可见 Collected 中间态。原快照保存与组合提交共用事务前 pure preflight，原关闭登记与组合提交也在事务前完成 EncodedRegistration 校验；组合提交必须先完成两侧准备再开启事务。pure preflight 包含快照领域校验、全部项目／终端无损编码、活跃项与 DTO 版本转换，事务内只读取数据库并消费已准备数据，不重复编码；写锁占用不得令非法输入等待 busy_timeout 或改报数据库错误。组合命令只由 WorkspaceWriter 唯一写线程执行，client 非阻塞入队并经独立回执接收结果，队列满或断连立即报错，不另开 SQLite 连接。执行组合提交前先将终态排入同一待写集合，仅成功后清除旧项目待写，失败保留供重试；之后新到普通保存仍可覆盖。
 - 灾难副本使用 SQLite Online Backup 写入临时库，校验 application_id、user_version、外键和完整性后原子替换。正常关闭、成功维护和显式破坏操作提交后排入副本任务；副本不是实时镜像，恢复时明确其世代。
 
 ### workspace.db 表分组

@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::str::FromStr;
 
-use rusqlite::{OptionalExtension, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use slterm_path::CanonicalPath;
 use slterm_workspace::{
     LayoutDtoError, PROJECT_LAYOUT_DTO_VERSION, PanelGroupId, Project, ProjectId, ProjectLayout,
@@ -94,29 +94,29 @@ impl WorkspaceDatabase {
         &mut self,
         snapshot: &ProjectSnapshot,
     ) -> Result<(), ProjectStoreError> {
-        snapshot.validate()?;
-        let registry = snapshot.registry();
-        // 先在内存完成全部无损转换，避免可预见的非法值进入写事务。
-        let encoded = registry
-            .projects()
-            .iter()
-            .enumerate()
-            .map(|(index, project)| EncodedProject::new(index, project))
-            .collect::<Result<Vec<_>, _>>()?;
-        let active = registry.active().map(|id| id.to_string());
-        let terminals = snapshot
-            .terminals()
-            .map(EncodedTerminal::new)
-            .collect::<Result<Vec<_>, _>>()?;
-        let dto_version = i64::try_from(PROJECT_LAYOUT_DTO_VERSION)
-            .map_err(|_| ProjectStoreError::CorruptRecord)?;
+        let prepared = PreparedProjectSnapshot::new(snapshot)?;
         let transaction = self
             .database
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        Self::save_project_snapshot_in_transaction(&transaction, &prepared)?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// 在调用方事务内保存已完成纯校验与编码的项目快照；本函数不自行提交。
+    pub(super) fn save_project_snapshot_in_transaction(
+        transaction: &Connection,
+        prepared: &PreparedProjectSnapshot<'_>,
+    ) -> Result<(), ProjectStoreError> {
+        let snapshot = prepared.snapshot;
+        let encoded = &prepared.projects;
+        let active = &prepared.active;
+        let terminals = &prepared.terminals;
+        let dto_version = prepared.dto_version;
 
         // 已存快照必须先完整自洽，禁止借新快照静默修复损坏。
-        let stored_snapshot = load_project_snapshot_from(&transaction)?;
+        let stored_snapshot = load_project_snapshot_from(transaction)?;
         for terminal in snapshot.terminals() {
             if let Some(stored) = stored_snapshot.terminal(terminal.id()) {
                 if stored.project_id() != terminal.project_id()
@@ -165,7 +165,7 @@ impl WorkspaceDatabase {
             )?;
         }
 
-        for project in &encoded {
+        for project in encoded {
             let stored_next_number = transaction
                 .query_row(
                     "SELECT next_terminal_number FROM projects WHERE project_id = ?1",
@@ -204,7 +204,7 @@ impl WorkspaceDatabase {
                     if stored.project_id() != project_id {
                         return Err(ProjectRegistryError::LayoutProjectMismatch.into());
                     }
-                    let stored_groups = stored_group_ids(&transaction, project_id)?;
+                    let stored_groups = stored_group_ids(transaction, project_id)?;
                     if stored_groups != stored.group_ids().into_iter().collect() {
                         return Err(ProjectStoreError::CorruptRecord);
                     }
@@ -272,7 +272,7 @@ impl WorkspaceDatabase {
         {
             transaction.execute("DELETE FROM terminals WHERE terminal_id = ?1", [stale_id])?;
         }
-        for terminal in &terminals {
+        for terminal in terminals {
             transaction.execute(
                 "INSERT INTO terminals \
                  (terminal_id, project_id, number, cwd, shell, custom_title, run_intent) \
@@ -296,7 +296,6 @@ impl WorkspaceDatabase {
              ON CONFLICT(singleton) DO UPDATE SET active_project_id = excluded.active_project_id",
             [active],
         )?;
-        transaction.commit()?;
         Ok(())
     }
 
@@ -378,6 +377,42 @@ fn load_project_snapshot_from(
     let registry = ProjectRegistry::restore(projects, active)?;
     let terminals = load_terminal_records(connection)?;
     Ok(ProjectSnapshot::restore(registry, terminals)?)
+}
+
+/// 事务前完成全部输入校验与无损编码，写锁内只消费已准备数据。
+pub(super) struct PreparedProjectSnapshot<'a> {
+    snapshot: &'a ProjectSnapshot,
+    projects: Vec<EncodedProject>,
+    terminals: Vec<EncodedTerminal>,
+    active: Option<String>,
+    dto_version: i64,
+}
+
+impl<'a> PreparedProjectSnapshot<'a> {
+    pub(super) fn new(snapshot: &'a ProjectSnapshot) -> Result<Self, ProjectStoreError> {
+        snapshot.validate()?;
+        let registry = snapshot.registry();
+        let projects = registry
+            .projects()
+            .iter()
+            .enumerate()
+            .map(|(index, project)| EncodedProject::new(index, project))
+            .collect::<Result<Vec<_>, _>>()?;
+        let terminals = snapshot
+            .terminals()
+            .map(EncodedTerminal::new)
+            .collect::<Result<Vec<_>, _>>()?;
+        let active = registry.active().map(|id| id.to_string());
+        let dto_version = i64::try_from(PROJECT_LAYOUT_DTO_VERSION)
+            .map_err(|_| ProjectStoreError::CorruptRecord)?;
+        Ok(Self {
+            snapshot,
+            projects,
+            terminals,
+            active,
+            dto_version,
+        })
+    }
 }
 
 struct EncodedTerminal {
@@ -533,6 +568,7 @@ fn decode_root_status(status: &str) -> Result<ProjectRootStatus, ProjectStoreErr
 #[cfg(test)]
 mod project_tests {
     use std::str::FromStr;
+    use std::time::{Duration, Instant};
 
     use rusqlite::params;
     use slterm_path::{AppPaths, CanonicalPath};
@@ -767,6 +803,44 @@ mod project_tests {
                 |row| row.get(0),
             )
             .unwrap()
+    }
+
+    #[test]
+    fn project_snapshot_preflight_precedes_write_lock() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = fixture(&temp);
+        let mut store = WorkspaceDatabase::open(&paths).unwrap();
+        let lock = WorkspaceDatabase::open(&paths).unwrap();
+        let mut invalid = snapshot(sample_registry());
+        invalid
+            .registry_mut()
+            .layout_mut(id(PROJECT_A))
+            .unwrap()
+            .insert_view(
+                PanelGroupId::from_str(GROUP_A).unwrap(),
+                terminal(id(PROJECT_A), TERMINAL_A_SECOND),
+            )
+            .unwrap();
+        lock.database
+            .connection
+            .execute_batch("BEGIN EXCLUSIVE")
+            .unwrap();
+
+        let started = Instant::now();
+        let result = store.save_project_snapshot(&invalid);
+        let elapsed = started.elapsed();
+
+        lock.database.connection.execute_batch("ROLLBACK").unwrap();
+        assert!(matches!(
+            result,
+            Err(ProjectStoreError::Snapshot(
+                ProjectSnapshotError::MissingTerminal(terminal_id)
+            )) if terminal_id == TerminalId::from_str(TERMINAL_A_SECOND).unwrap()
+        ));
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "事务前纯校验不得等待 busy_timeout"
+        );
     }
 
     #[test]
