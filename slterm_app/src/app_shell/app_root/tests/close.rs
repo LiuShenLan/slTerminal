@@ -158,7 +158,7 @@ fn wait_for_view_state(
     }
 }
 
-fn tray_quit_until_closed(
+pub(super) fn tray_quit_until_closed(
     root: &Entity<AppRoot>,
     window: &mut VisualTestContext,
     cx: &TestAppContext,

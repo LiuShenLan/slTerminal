@@ -142,3 +142,37 @@ fn removing_active_project_restores_next_hidden_launch(cx: &mut TestAppContext) 
     );
     runtime.shutdown(ControlPlaneCleanup::Succeeded).unwrap();
 }
+
+#[gpui::test]
+fn integration_project_remove_and_exit(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let (events, _event_rx) = std::sync::mpsc::sync_channel(64);
+    let runtime = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
+    let persistence =
+        AppRootPersistence::load_with_previous_run(&paths, Some(runtime.client()), None);
+    let (root, mut window, _state) = open_root_with_persistence(cx, persistence);
+    add_project(&root, &mut window, PROJECT_A, "D:/work/a");
+    add_project(&root, &mut window, PROJECT_B, "D:/work/b");
+    flush_when_ready(&runtime.client());
+
+    assert!(remove_project(&root, &mut window, PROJECT_B).is_ok());
+    window.run_until_parked();
+    flush_when_ready(&runtime.client());
+    let store = WorkspaceDatabase::open(&paths).unwrap();
+    assert!(!store.metadata().unwrap().unwrap().clean_shutdown);
+    let raw = rusqlite::Connection::open(paths.workspace_db_path()).unwrap();
+    assert_eq!(
+        raw.query_row("SELECT COUNT(*) FROM close_intents", [], |row| row
+            .get::<_, i64>(0))
+            .unwrap(),
+        1,
+        "局部项目移除只登记自己的关闭意图"
+    );
+
+    super::close::tray_quit_until_closed(&root, &mut window, cx);
+    drop(root);
+    cx.update(|_| {});
+    runtime.shutdown(ControlPlaneCleanup::Succeeded).unwrap();
+    assert!(store.metadata().unwrap().unwrap().clean_shutdown);
+}

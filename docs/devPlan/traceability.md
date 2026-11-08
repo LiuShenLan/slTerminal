@@ -71,7 +71,7 @@
 | 根重定位 | [工作区](design/workspace.md)、[领域模型](design/domain-model.md)、[文件与 Git](design/files-git.md) | `integration_project_relocation` | 待实现 |
 | 最后引用关闭 | [生命周期](design/lifecycle.md)、[Document](design/document.md) | `integration_last_reference_close` | 待实现 |
 | 批量关闭 | [生命周期](design/lifecycle.md)、[工作区](design/workspace.md) | `integration_batch_close` | 待实现 |
-| 项目移除与退出 | [生命周期](design/lifecycle.md)、[工作区](design/workspace.md) | `integration_project_remove_and_exit` | 待实现 |
+| 项目移除与退出 | [生命周期](design/lifecycle.md)、[工作区](design/workspace.md) | `integration_project_remove_and_exit` | 已自动化 |
 | 崩溃恢复 | [生命周期](design/lifecycle.md)、[持久化](design/persistence.md) | `integration_crash_recovery` | 待实现 |
 | 快照配额 | [持久化](design/persistence.md)、[Document](design/document.md) | `integration_snapshot_quota` | 待实现 |
 | 终端恢复 | [终端](design/terminal.md)、[生命周期](design/lifecycle.md) | `integration_terminal_restore` | 待实现 |
