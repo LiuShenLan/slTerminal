@@ -732,7 +732,7 @@ impl AppRoot {
     }
 
     pub(super) fn ensure_not_closing(&self) -> Result<(), AppRootError> {
-        if self.close_in_progress {
+        if self.close_in_progress || self.application_close.is_some() {
             Err(AppRootError::Closing)
         } else {
             Ok(())
@@ -1224,7 +1224,7 @@ impl AppRoot {
     }
 
     fn sync_focus_projection(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
-        if self.close_in_progress {
+        if self.close_in_progress || self.application_close.is_some() {
             return;
         }
         let focused = window.focused(cx).map(|handle| handle.downgrade());

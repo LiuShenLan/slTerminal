@@ -3,6 +3,7 @@
 use super::*;
 use crate::persistence::close::CloseCommitStatus;
 use crate::persistence::workspace_writer::{WorkspaceWriterClient, WorkspaceWriterError};
+use slterm_workspace::{ClosePhase, CloseScope, CloseStage};
 
 pub(super) fn flush_when_ready(client: &WorkspaceWriterClient) {
     // 负载裕度，非断言/语义放宽：等待真实 Flush 结果，故障前置条件不变。
@@ -231,6 +232,154 @@ fn close_flush_success_closes_window_and_marks_clean_shutdown(cx: &mut TestAppCo
         .unwrap()
         .unwrap();
     assert!(metadata.clean_shutdown);
+}
+
+#[gpui::test]
+fn application_exit_commits_intent_and_stops_pty_before_window_destroy(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let (events, _event_rx) = std::sync::mpsc::sync_channel(64);
+    let runtime = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
+    let persistence =
+        AppRootPersistence::load_with_previous_run(&paths, Some(runtime.client()), None);
+    let (root, mut window, state) = open_root_with_persistence(cx, persistence);
+    add_project(&root, &mut window, PROJECT_A, "D:/work/a");
+    let panel = new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_A);
+    flush_when_ready(&runtime.client());
+    let weak = root.downgrade();
+
+    assert!(!window.simulate_close());
+    let close_id = root.read_with(cx, |root, _| {
+        root.application_close
+            .as_ref()
+            .unwrap()
+            .persisted
+            .close_id
+            .clone()
+    });
+    window.run_until_parked();
+
+    root.read_with(cx, |root, _| {
+        assert_eq!(
+            root.application_close.as_ref().unwrap().coordinator.phase(),
+            ClosePhase::Running(CloseStage::StopServices)
+        );
+    });
+    assert!(matches!(
+        state.borrow().sessions[&panel.sequence()].try_recv(),
+        Ok(Msg::Shutdown)
+    ));
+    drop(root);
+    cx.update(|_| {});
+    weak.assert_released();
+    runtime.shutdown(ControlPlaneCleanup::Succeeded).unwrap();
+
+    let mut store = WorkspaceDatabase::open(&paths).unwrap();
+    let completed = store.load_close_intent(&close_id).unwrap().unwrap();
+    assert_eq!(completed.commit_status, CloseCommitStatus::Completed);
+    assert_eq!(completed.scope, CloseScope::ApplicationExit);
+    assert_eq!(completed.intent.objects().count(), 1);
+    assert!(store.metadata().unwrap().unwrap().clean_shutdown);
+}
+
+#[gpui::test]
+fn application_join_panic_requires_explicit_retry_without_second_join(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let (events, _event_rx) = std::sync::mpsc::sync_channel(64);
+    let runtime = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
+    let persistence =
+        AppRootPersistence::load_with_previous_run(&paths, Some(runtime.client()), None);
+    let (root, mut window, state) = open_root_with_persistence(cx, persistence);
+    add_project(&root, &mut window, PROJECT_A, "D:/work/a");
+    let panel = new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_A);
+    flush_when_ready(&runtime.client());
+
+    assert!(!window.simulate_close());
+    let (close_id, commit_attempt) = root.read_with(cx, |root, _| {
+        let close = root.application_close.as_ref().unwrap();
+        (
+            close.persisted.close_id.clone(),
+            close.coordinator.current_attempt().unwrap(),
+        )
+    });
+    let committed = wait_for_close_status(&paths, &close_id, CloseCommitStatus::StateCommitted);
+    window.update(|_, cx| {
+        root.update(cx, |root, cx| {
+            root.finish_application_commit(commit_attempt, Ok(Ok(committed)), cx);
+        });
+    });
+    let stop_attempt = root.read_with(cx, |root, cx| {
+        let close = root.application_close.as_ref().unwrap();
+        assert_eq!(
+            close.coordinator.phase(),
+            ClosePhase::Running(CloseStage::StopPty)
+        );
+        assert!(
+            root.projects.values().all(|project| {
+                project
+                    .read(cx)
+                    .panels
+                    .values()
+                    .all(|panel| panel.terminal.read(cx).session.is_none())
+            }),
+            "注入 join panic 前必须已移交全部原 session"
+        );
+        close.coordinator.current_attempt().unwrap()
+    });
+    window.update(|_, cx| {
+        root.update(cx, |root, cx| {
+            root.finish_application_stop(
+                stop_attempt,
+                super::super::terminal_close::PtyStopObservation::Panicked,
+                cx,
+            );
+        });
+    });
+    window.run_until_parked();
+
+    root.read_with(cx, |root, _| {
+        let close = root.application_close.as_ref().unwrap();
+        assert_eq!(
+            close.coordinator.phase(),
+            ClosePhase::Failed(CloseStage::StopPty)
+        );
+        assert_eq!(
+            close.persisted.commit_status,
+            CloseCommitStatus::StateCommitted
+        );
+        assert!(!close.outcome_unknown);
+        assert!(!root.close_in_progress);
+        assert!(!root.close_completed);
+    });
+    assert!(matches!(
+        state.borrow().sessions[&panel.sequence()].try_recv(),
+        Ok(Msg::Shutdown)
+    ));
+
+    assert!(!window.simulate_close());
+    window.run_until_parked();
+    root.read_with(cx, |root, _| {
+        assert!(root.close_completed);
+        assert_eq!(
+            root.application_close.as_ref().unwrap().coordinator.phase(),
+            ClosePhase::Running(CloseStage::StopServices)
+        );
+    });
+    assert!(matches!(
+        state.borrow().sessions[&panel.sequence()].try_recv(),
+        Err(TryRecvError::Empty | TryRecvError::Disconnected)
+    ));
+    runtime.shutdown(ControlPlaneCleanup::Succeeded).unwrap();
+    assert_eq!(
+        WorkspaceDatabase::open(&paths)
+            .unwrap()
+            .load_close_intent(&close_id)
+            .unwrap()
+            .unwrap()
+            .commit_status,
+        CloseCommitStatus::Completed
+    );
 }
 
 #[gpui::test]
@@ -670,6 +819,37 @@ fn close_without_writer_stops_remaining_shell_events(cx: &mut TestAppContext) {
     root.read_with(cx, |root, _| {
         assert!(root.snapshot().registry().projects().is_empty());
         assert!(root.close_completed);
+    });
+}
+
+#[gpui::test]
+fn close_without_writer_and_with_recovery_failure_uses_memory_path(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let mut original = ProjectSnapshot::default();
+    original
+        .registry_mut()
+        .add_project(project_id(PROJECT_A), path("D:/work/a"))
+        .unwrap();
+    save_terminal_recovery_snapshot(&paths, &original);
+    let fault = rusqlite::Connection::open(paths.workspace_db_path()).unwrap();
+    fault
+        .execute(
+            "UPDATE project_layouts SET layout_json = 'not-json' WHERE project_id = ?1",
+            [PROJECT_A],
+        )
+        .unwrap();
+    let persistence = AppRootPersistence::load_with_previous_run(&paths, None, None);
+    assert!(persistence.project_snapshot_recovery_failed());
+    let (root, mut window, _) = open_root_with_persistence(cx, persistence);
+
+    let closed =
+        window.update(|window, cx| root.update(cx, |root, cx| root.request_close(window, cx)));
+
+    assert!(closed);
+    root.read_with(cx, |root, _| {
+        assert!(root.close_completed);
+        assert!(root.application_close.is_none());
     });
 }
 

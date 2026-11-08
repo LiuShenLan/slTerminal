@@ -16,24 +16,10 @@ impl AppRoot {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> bool {
-        if self.close_in_progress
-            || !self.terminal_closes.is_empty()
-            || !self.project_closes.is_empty()
-        {
-            return false;
-        }
-        let Some(client) = self.project_writer.clone() else {
-            self.close_in_progress = true;
-            self.close_completed = true;
-            window.remove_window();
-            return true;
-        };
-        self.close_in_progress = true;
-        self.sidebar_drag = None;
-        self.start_close_flush(client, window.window_handle(), cx)
+        self.start_application_close(window, cx)
     }
 
-    fn start_close_flush(
+    pub(super) fn start_close_flush(
         &mut self,
         client: WorkspaceWriterClient,
         window: gpui::AnyWindowHandle,

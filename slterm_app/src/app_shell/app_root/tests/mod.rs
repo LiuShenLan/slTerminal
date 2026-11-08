@@ -1,5 +1,6 @@
 //! AppRoot 的虚拟窗口所有权测试；所有终端均使用无真实 PTY 的会话。
 
+mod application_close_receipts;
 mod close;
 mod handover;
 mod local_close;

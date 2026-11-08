@@ -1,5 +1,6 @@
 //! 项目工作区运行根：唯一持有项目快照与全部项目面板实例。
 
+mod application_close;
 pub(crate) mod close_coordinator;
 mod command_registry;
 mod commands;
@@ -111,6 +112,7 @@ pub(crate) struct AppRoot {
     project_snapshot_recovery_failed: bool,
     close_in_progress: bool,
     close_completed: bool,
+    application_close: Option<application_close::ApplicationClose>,
     terminal_closes: BTreeMap<slterm_workspace::TerminalId, terminal_close::LocalTerminalClose>,
     next_terminal_close_sequence: u64,
     project_closes: BTreeMap<ProjectId, project_close::LocalProjectClose>,
@@ -245,6 +247,7 @@ impl AppRoot {
             project_snapshot_recovery_failed,
             close_in_progress: false,
             close_completed: false,
+            application_close: None,
             terminal_closes: BTreeMap::new(),
             next_terminal_close_sequence: 0,
             project_closes: BTreeMap::new(),

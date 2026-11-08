@@ -110,7 +110,10 @@ impl AppRoot {
                 cx.notify();
             }
             SltermShellEvent::Handover { params, completion } => {
-                let response = if self.close_in_progress || self.close_completed {
+                let response = if self.close_in_progress
+                    || self.application_close.is_some()
+                    || self.close_completed
+                {
                     Err(closing_handover_error())
                 } else {
                     match params {

@@ -829,7 +829,7 @@ impl AppRoot {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
-        if self.close_in_progress {
+        if self.close_in_progress || self.application_close.is_some() {
             self.sidebar_drag = None;
             cx.notify();
             return;
@@ -879,7 +879,7 @@ impl AppRoot {
         window: &Window,
         cx: &mut Context<'_, Self>,
     ) {
-        if self.close_in_progress {
+        if self.close_in_progress || self.application_close.is_some() {
             self.sidebar_drag = None;
             cx.notify();
             return;
@@ -956,7 +956,7 @@ impl AppRoot {
         command: SidebarGeometryCommand,
         cx: &mut Context<'_, Self>,
     ) -> Result<(), super::commands::AppRootError> {
-        if self.close_in_progress {
+        if self.close_in_progress || self.application_close.is_some() {
             return Err(super::commands::AppRootError::Closing);
         }
         let previous_state = self.side_views.state().clone();
