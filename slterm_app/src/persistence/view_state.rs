@@ -118,23 +118,12 @@ impl WorkspaceDatabase {
         project_id: ProjectId,
         registry: &ViewStateRegistry,
     ) -> Result<usize, ViewStateStoreError> {
-        let scope = scope_text(ViewStateScope::Project(project_id));
         let transaction = self
             .database
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let deleted = transaction.execute("DELETE FROM view_states WHERE scope = ?1", [scope])?;
-        for side_view_id in [SideViewId::Nav, SideViewId::Explorer] {
-            let key = ViewKey::SideView { side_view_id };
-            let Some(stored) = view_state_in(&transaction, &key, registry)? else {
-                continue;
-            };
-            let mut state = SideViewState::from_view_state(side_view_id, stored.state)
-                .map_err(|_| ViewStateStoreError::CorruptRecord)?;
-            if state.remove_project(project_id) {
-                save_view_state_in(&transaction, &key, &state.to_view_state(registry)?)?;
-            }
-        }
+        let deleted =
+            delete_project_view_states_in_transaction(&transaction, project_id, registry)?;
         transaction.commit()?;
         Ok(deleted)
     }
@@ -164,6 +153,43 @@ impl WorkspaceDatabase {
         transaction.commit()?;
         Ok(true)
     }
+}
+
+/// 在调用方事务内清理项目作用域与 Nav／Explorer 分区；事务所有者统一提交或回滚。
+pub(super) fn delete_project_view_states_in_transaction(
+    connection: &Connection,
+    project_id: ProjectId,
+    registry: &ViewStateRegistry,
+) -> Result<usize, ViewStateStoreError> {
+    let scope = scope_text(ViewStateScope::Project(project_id));
+    let deleted = connection.execute("DELETE FROM view_states WHERE scope = ?1", [scope])?;
+    for side_view_id in [SideViewId::Nav, SideViewId::Explorer] {
+        let key = ViewKey::SideView { side_view_id };
+        let Some(stored) = view_state_in(connection, &key, registry)? else {
+            continue;
+        };
+        if let Some(state) =
+            remove_project_from_side_view_state(side_view_id, &stored.state, project_id, registry)?
+        {
+            save_view_state_in(connection, &key, &state)?;
+        }
+    }
+    Ok(deleted)
+}
+
+/// 从应用级 SideView 待写副本移除同一项目分区，保持与事务内磁盘清理一致。
+pub(super) fn remove_project_from_side_view_state(
+    side_view_id: SideViewId,
+    state: &ViewState,
+    project_id: ProjectId,
+    registry: &ViewStateRegistry,
+) -> Result<Option<ViewState>, ViewStateStoreError> {
+    let mut side_state = SideViewState::from_view_state(side_view_id, state.clone())
+        .map_err(|_| ViewStateStoreError::CorruptRecord)?;
+    if !side_state.remove_project(project_id) {
+        return Ok(None);
+    }
+    Ok(Some(side_state.to_view_state(registry)?))
 }
 
 /// 在调用方事务内保存；事务所有者统一决定提交或整体回滚。

@@ -7,11 +7,13 @@ use rusqlite::types::FromSql;
 use rusqlite::{Connection, OptionalExtension, Row, TransactionBehavior, params};
 use slterm_workspace::{
     CloseDecision, CloseIntent, CloseObject, CloseScope, ProjectId, ProjectSnapshot,
+    ViewStateRegistry,
 };
 
 use super::database::DatabaseError;
 use super::metadata::store_epoch_is_current;
 use super::project::{PreparedProjectSnapshot, ProjectStoreError};
+use super::view_state::{ViewStateStoreError, delete_project_view_states_in_transaction};
 use super::workspace::WorkspaceDatabase;
 
 /// 关闭事实的提交进度；只允许按声明顺序推进一步。
@@ -119,6 +121,46 @@ impl std::error::Error for CloseCommitError {
     }
 }
 
+/// 项目关闭清理失败；展示文本按持久事实分类且不泄露存储细节。
+#[derive(Debug)]
+pub(crate) enum ProjectCleanupError {
+    ViewState(ViewStateStoreError),
+    Close(CloseStoreError),
+    Database(DatabaseError),
+}
+
+impl fmt::Display for ProjectCleanupError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::ViewState(_) => "项目关闭的 ViewState 清理失败",
+            Self::Close(_) => "项目关闭的意图状态推进失败",
+            Self::Database(_) => "项目关闭清理数据库事务失败",
+        })
+    }
+}
+
+impl std::error::Error for ProjectCleanupError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::ViewState(error) => Some(error),
+            Self::Close(error) => Some(error),
+            Self::Database(error) => Some(error),
+        }
+    }
+}
+
+impl From<DatabaseError> for ProjectCleanupError {
+    fn from(error: DatabaseError) -> Self {
+        Self::Database(error)
+    }
+}
+
+impl From<rusqlite::Error> for ProjectCleanupError {
+    fn from(error: rusqlite::Error) -> Self {
+        Self::Database(DatabaseError::from(error))
+    }
+}
+
 impl From<DatabaseError> for CloseCommitError {
     fn from(error: DatabaseError) -> Self {
         Self::Database(error)
@@ -209,6 +251,42 @@ impl WorkspaceDatabase {
         snapshot: &ProjectSnapshot,
         registration: &PersistedCloseIntent,
     ) -> Result<PersistedCloseIntent, CloseCommitError> {
+        if matches!(registration.scope, CloseScope::Project { .. }) {
+            // 项目删除必须保留目标记录到专用 cleanup，不能走普通即时删除。
+            return Err(CloseCommitError::Close(
+                CloseStoreError::InvalidRegistration,
+            ));
+        }
+        self.commit_close_intent_with_retention(snapshot, registration, None)
+    }
+
+    /// 项目关闭初始提交保存其他项目，但保留目标项目及其终端供后续清理。
+    pub(crate) fn commit_project_close_intent(
+        &mut self,
+        snapshot: &ProjectSnapshot,
+        registration: &PersistedCloseIntent,
+    ) -> Result<PersistedCloseIntent, CloseCommitError> {
+        let CloseScope::Project { project_id } = registration.scope else {
+            return Err(CloseCommitError::Close(
+                CloseStoreError::InvalidRegistration,
+            ));
+        };
+        if snapshot.registry().project(project_id).is_some()
+            || snapshot
+                .terminals()
+                .any(|terminal| terminal.project_id() == project_id)
+        {
+            return Err(CloseCommitError::Close(CloseStoreError::CloseConflict));
+        }
+        self.commit_close_intent_with_retention(snapshot, registration, Some(project_id))
+    }
+
+    fn commit_close_intent_with_retention(
+        &mut self,
+        snapshot: &ProjectSnapshot,
+        registration: &PersistedCloseIntent,
+        retained_project: Option<ProjectId>,
+    ) -> Result<PersistedCloseIntent, CloseCommitError> {
         let snapshot = PreparedProjectSnapshot::new(snapshot).map_err(CloseCommitError::Project)?;
         let registration =
             EncodedRegistration::new(registration).map_err(CloseCommitError::Close)?;
@@ -216,7 +294,7 @@ impl WorkspaceDatabase {
             .database
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        Self::save_project_snapshot_in_transaction(&transaction, &snapshot)
+        Self::save_project_snapshot_in_transaction(&transaction, &snapshot, retained_project)
             .map_err(CloseCommitError::Project)?;
         Self::register_close_intent_in_transaction(&transaction, &registration)
             .map_err(CloseCommitError::Close)?;
@@ -229,6 +307,49 @@ impl WorkspaceDatabase {
             registration.store_epoch,
         )
         .map_err(CloseCommitError::Close)?;
+        transaction.commit()?;
+        Ok(updated)
+    }
+
+    /// 在项目关闭清理事务中删除视图状态、项目聚合并推进到 CleanupCommitted。
+    pub(crate) fn cleanup_project_close(
+        &mut self,
+        current: &PersistedCloseIntent,
+        registry: &ViewStateRegistry,
+    ) -> Result<PersistedCloseIntent, ProjectCleanupError> {
+        let CloseScope::Project { project_id } = current.scope else {
+            return Err(ProjectCleanupError::Close(
+                CloseStoreError::InvalidRegistration,
+            ));
+        };
+        if current.commit_status != CloseCommitStatus::PtyStopped {
+            return Err(ProjectCleanupError::Close(CloseStoreError::CloseConflict));
+        }
+        let transaction = self
+            .database
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        delete_project_view_states_in_transaction(&transaction, project_id, registry)
+            .map_err(ProjectCleanupError::ViewState)?;
+        let deleted = transaction.execute(
+            "DELETE FROM projects WHERE project_id = ?1",
+            [project_id.to_string()],
+        )?;
+        if deleted != 1 {
+            return Err(ProjectCleanupError::Close(CloseStoreError::CloseConflict));
+        }
+        let updated = advance_close_intent_in_transaction(
+            &transaction,
+            &current.close_id,
+            CloseCommitStatus::PtyStopped,
+            CloseCommitStatus::CleanupCommitted,
+            current.intent.fingerprint(),
+            &current.store_epoch,
+        )
+        .map_err(ProjectCleanupError::Close)?;
+        if updated.scope != current.scope {
+            return Err(ProjectCleanupError::Close(CloseStoreError::CloseConflict));
+        }
         transaction.commit()?;
         Ok(updated)
     }
@@ -303,6 +424,13 @@ impl WorkspaceDatabase {
             expected_fingerprint,
             current_store_epoch,
         )?;
+        if matches!(updated.scope, CloseScope::Project { .. })
+            && expected_status == CloseCommitStatus::PtyStopped
+            && next == CloseCommitStatus::CleanupCommitted
+        {
+            // 项目 CleanupCommitted 必须由实际清理事务证明，不能只推进头状态。
+            return Err(CloseStoreError::InvalidTransition);
+        }
         transaction.commit()?;
         Ok(updated)
     }
@@ -587,966 +715,5 @@ fn decode_status(status: &str) -> Result<CloseCommitStatus, CloseStoreError> {
 }
 
 #[cfg(test)]
-mod close_tests {
-    use std::time::{Duration, Instant};
-
-    use rusqlite::{Connection, params};
-    use slterm_path::{AppPaths, CanonicalPath};
-    use slterm_workspace::{
-        CloseDecision, CloseObject, CloseScope, PanelGroup, PanelGroupId, ProjectId,
-        ProjectRegistry, ProjectSnapshot, ProjectSnapshotError, TerminalId, ViewKey,
-    };
-    use tempfile::TempDir;
-
-    use super::*;
-    use crate::persistence::metadata::RunMarker;
-    use crate::persistence::project::ProjectStoreError;
-
-    const EPOCH: &str = "epoch-close";
-    const OTHER_EPOCH: &str = "epoch-other";
-    const CLOSE_ID: &str = "close-a";
-    const PROJECT_A: &str = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2a";
-
-    fn fixture(temp: &TempDir) -> AppPaths {
-        AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap()
-    }
-
-    fn store(temp: &TempDir) -> WorkspaceDatabase {
-        let mut store = WorkspaceDatabase::open(&fixture(temp)).unwrap();
-        store
-            .begin_run(
-                EPOCH,
-                RunMarker {
-                    run_id: "run-close".to_owned(),
-                    process_id: 17,
-                    process_created_at_ms: 456,
-                },
-            )
-            .unwrap();
-        store
-    }
-
-    fn project_id(text: &str) -> ProjectId {
-        text.parse().unwrap()
-    }
-
-    fn object(key: &str, generation: u64, decision: CloseDecision) -> CloseObject<String> {
-        CloseObject {
-            id: key.to_owned(),
-            generation,
-            decision,
-        }
-    }
-
-    fn registration(
-        close_id: &str,
-        scope: CloseScope,
-        objects: Vec<CloseObject<String>>,
-    ) -> PersistedCloseIntent {
-        PersistedCloseIntent {
-            close_id: close_id.to_owned(),
-            scope,
-            store_epoch: EPOCH.to_owned(),
-            intent: CloseIntent::new(objects, [7; 32]).unwrap(),
-            commit_status: CloseCommitStatus::Collected,
-        }
-    }
-
-    fn empty_registration(close_id: &str) -> PersistedCloseIntent {
-        registration(close_id, CloseScope::ApplicationExit, Vec::new())
-    }
-
-    fn object_registration(close_id: &str) -> PersistedCloseIntent {
-        registration(
-            close_id,
-            CloseScope::Panels {
-                project_id: project_id(PROJECT_A),
-            },
-            vec![object("terminal:a", 3, CloseDecision::Save)],
-        )
-    }
-
-    fn close_snapshot(name: &str) -> ProjectSnapshot {
-        let project_id = project_id(PROJECT_A);
-        let mut registry = ProjectRegistry::new();
-        registry
-            .add_project(project_id, CanonicalPath::new("D:/work/close").unwrap())
-            .unwrap();
-        registry.rename_project(project_id, name).unwrap();
-        ProjectSnapshot::restore(registry, Vec::new()).unwrap()
-    }
-
-    fn invalid_close_snapshot() -> ProjectSnapshot {
-        let mut snapshot = close_snapshot("invalid");
-        let project_id = project_id(PROJECT_A);
-        let view = ViewKey::Terminal {
-            project_id,
-            terminal_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0b2a"
-                .parse::<TerminalId>()
-                .unwrap(),
-        };
-        snapshot
-            .registry_mut()
-            .layout_mut(project_id)
-            .unwrap()
-            .open_first_group(
-                "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0a2a"
-                    .parse::<PanelGroupId>()
-                    .unwrap(),
-                PanelGroup::new(vec![view.clone()], view).unwrap(),
-            )
-            .unwrap();
-        snapshot
-    }
-
-    fn advance(
-        store: &mut WorkspaceDatabase,
-        current: &PersistedCloseIntent,
-        next: CloseCommitStatus,
-    ) -> PersistedCloseIntent {
-        store
-            .advance_close_intent(
-                &current.close_id,
-                current.commit_status,
-                next,
-                current.intent.fingerprint(),
-                EPOCH,
-            )
-            .unwrap()
-    }
-
-    fn complete(store: &mut WorkspaceDatabase, current: &PersistedCloseIntent) {
-        let mut current = current.clone();
-        for next in [
-            CloseCommitStatus::StateCommitted,
-            CloseCommitStatus::PtyStopped,
-            CloseCommitStatus::CleanupCommitted,
-            CloseCommitStatus::Completed,
-        ] {
-            current = advance(store, &current, next);
-        }
-    }
-
-    fn count(store: &WorkspaceDatabase, table: &str) -> i64 {
-        store
-            .database
-            .connection
-            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
-                row.get(0)
-            })
-            .unwrap()
-    }
-
-    fn assert_preflight_did_not_wait(elapsed: Duration) {
-        assert!(
-            elapsed < Duration::from_secs(1),
-            "事务前纯校验不得等待 busy_timeout"
-        );
-    }
-
-    #[test]
-    fn close_intent_empty_and_multi_object_records_round_trip() {
-        let empty_temp = tempfile::tempdir().unwrap();
-        let paths = fixture(&empty_temp);
-        let mut empty_store = store(&empty_temp);
-        let empty = empty_registration(CLOSE_ID);
-        empty_store.register_close_intent(&empty).unwrap();
-        assert_eq!(count(&empty_store, "close_intents"), 1);
-        assert_eq!(count(&empty_store, "close_objects"), 0);
-        drop(empty_store);
-        let mut reopened = WorkspaceDatabase::open(&paths).unwrap();
-        assert_eq!(reopened.load_close_intent(CLOSE_ID).unwrap(), Some(empty));
-        assert_eq!(reopened.load_close_intent("close-missing").unwrap(), None);
-
-        let object_temp = tempfile::tempdir().unwrap();
-        let mut store = store(&object_temp);
-        let expected = registration(
-            CLOSE_ID,
-            CloseScope::Project {
-                project_id: project_id(PROJECT_A),
-            },
-            vec![
-                object("terminal:z", 9, CloseDecision::NotRequired),
-                object("document:a", 2, CloseDecision::Discard),
-                object("terminal:a", 3, CloseDecision::Save),
-            ],
-        );
-        store.register_close_intent(&expected).unwrap();
-        let loaded = store.load_close_intent(CLOSE_ID).unwrap().unwrap();
-        assert_eq!(loaded, expected);
-        assert_eq!(
-            loaded
-                .intent
-                .objects()
-                .map(|object| object.id.as_str())
-                .collect::<Vec<_>>(),
-            ["document:a", "terminal:a", "terminal:z"]
-        );
-    }
-
-    #[test]
-    fn close_id_conflict_preserves_original_header_and_objects() {
-        let temp = tempfile::tempdir().unwrap();
-        let mut store = store(&temp);
-        let original = object_registration(CLOSE_ID);
-        store.register_close_intent(&original).unwrap();
-        let replacement = registration(
-            CLOSE_ID,
-            CloseScope::UpdateHandoff,
-            vec![object("document:replacement", 99, CloseDecision::Discard)],
-        );
-
-        assert!(matches!(
-            store.register_close_intent(&replacement),
-            Err(CloseStoreError::CloseIdConflict)
-        ));
-        assert_eq!(store.load_close_intent(CLOSE_ID).unwrap(), Some(original));
-        assert_eq!(count(&store, "close_intents"), 1);
-        assert_eq!(count(&store, "close_objects"), 1);
-    }
-
-    #[test]
-    fn unfinished_close_intents_are_ordered_and_exclude_only_completed() {
-        let temp = tempfile::tempdir().unwrap();
-        let mut store = store(&temp);
-        for close_id in ["close-c", "close-a", "close-b"] {
-            let current = registration(
-                close_id,
-                CloseScope::ApplicationExit,
-                vec![
-                    object("terminal:z", 1, CloseDecision::Discard),
-                    object("document:a", 2, CloseDecision::Save),
-                ],
-            );
-            store.register_close_intent(&current).unwrap();
-            if close_id == "close-c" {
-                complete(&mut store, &current);
-            }
-        }
-
-        let unfinished = store.unfinished_close_intents().unwrap();
-        assert_eq!(
-            unfinished
-                .iter()
-                .map(|intent| intent.close_id.as_str())
-                .collect::<Vec<_>>(),
-            ["close-a", "close-b"]
-        );
-        for intent in &unfinished {
-            assert_eq!(
-                intent
-                    .intent
-                    .objects()
-                    .map(|object| object.id.as_str())
-                    .collect::<Vec<_>>(),
-                ["document:a", "terminal:z"]
-            );
-        }
-        assert_eq!(
-            store
-                .load_close_intent("close-c")
-                .unwrap()
-                .unwrap()
-                .commit_status,
-            CloseCommitStatus::Completed
-        );
-        assert_eq!(count(&store, "close_intents"), 3);
-    }
-
-    #[test]
-    fn close_registration_preflight_precedes_write_lock() {
-        let temp = tempfile::tempdir().unwrap();
-        let paths = fixture(&temp);
-        let mut store = store(&temp);
-        let lock = WorkspaceDatabase::open(&paths).unwrap();
-        lock.database
-            .connection
-            .execute_batch("BEGIN EXCLUSIVE")
-            .unwrap();
-
-        let started = Instant::now();
-        let result = store.register_close_intent(&empty_registration(""));
-        let elapsed = started.elapsed();
-
-        lock.database.connection.execute_batch("ROLLBACK").unwrap();
-        assert!(matches!(result, Err(CloseStoreError::InvalidRegistration)));
-        assert_preflight_did_not_wait(elapsed);
-    }
-
-    #[test]
-    fn invalid_registrations_write_no_partial_records() {
-        let temp = tempfile::tempdir().unwrap();
-        let mut store = store(&temp);
-        let mut invalid = Vec::new();
-        invalid.push(empty_registration(""));
-        let mut empty_epoch = empty_registration(CLOSE_ID);
-        empty_epoch.store_epoch.clear();
-        invalid.push(empty_epoch);
-        invalid.push(registration(
-            CLOSE_ID,
-            CloseScope::ApplicationExit,
-            vec![object("", 0, CloseDecision::Save)],
-        ));
-        invalid.push(registration(
-            CLOSE_ID,
-            CloseScope::ApplicationExit,
-            vec![object("terminal:a", u64::MAX, CloseDecision::Save)],
-        ));
-        let mut non_initial = empty_registration(CLOSE_ID);
-        non_initial.commit_status = CloseCommitStatus::StateCommitted;
-        invalid.push(non_initial);
-
-        for candidate in invalid {
-            assert!(matches!(
-                store.register_close_intent(&candidate),
-                Err(CloseStoreError::InvalidRegistration)
-            ));
-        }
-        assert_eq!(count(&store, "close_intents"), 0);
-        assert_eq!(count(&store, "close_objects"), 0);
-
-        let stale = PersistedCloseIntent {
-            store_epoch: OTHER_EPOCH.to_owned(),
-            ..empty_registration(CLOSE_ID)
-        };
-        assert!(matches!(
-            store.register_close_intent(&stale),
-            Err(CloseStoreError::StoreEpochConflict)
-        ));
-        assert_eq!(count(&store, "close_intents"), 0);
-    }
-
-    #[test]
-    fn close_object_failure_rolls_back_header_and_prior_objects() {
-        let temp = tempfile::tempdir().unwrap();
-        let mut store = store(&temp);
-        store
-            .database
-            .connection
-            .execute_batch(
-                "CREATE TRIGGER reject_close_object BEFORE INSERT ON close_objects \
-                 WHEN NEW.object_key = 'terminal:b' \
-                 BEGIN SELECT RAISE(ABORT, 'injected close object failure'); END;",
-            )
-            .unwrap();
-        let candidate = registration(
-            CLOSE_ID,
-            CloseScope::ApplicationExit,
-            vec![
-                object("terminal:a", 1, CloseDecision::Save),
-                object("terminal:b", 2, CloseDecision::Discard),
-            ],
-        );
-
-        assert!(matches!(
-            store.register_close_intent(&candidate),
-            Err(CloseStoreError::Database(_))
-        ));
-        assert_eq!(count(&store, "close_intents"), 0);
-        assert_eq!(count(&store, "close_objects"), 0);
-    }
-
-    #[test]
-    fn close_commit_saves_snapshot_and_advances_intent_atomically() {
-        let temp = tempfile::tempdir().unwrap();
-        let mut store = store(&temp);
-        let snapshot = close_snapshot("committed");
-        let collected = object_registration(CLOSE_ID);
-
-        let committed = store.commit_close_intent(&snapshot, &collected).unwrap();
-
-        assert_eq!(committed.commit_status, CloseCommitStatus::StateCommitted);
-        assert_eq!(store.load_project_snapshot().unwrap(), snapshot);
-        assert_eq!(store.load_close_intent(CLOSE_ID).unwrap(), Some(committed));
-    }
-
-    #[test]
-    fn close_commit_rejects_invalid_snapshot_without_registration() {
-        let temp = tempfile::tempdir().unwrap();
-        let mut store = store(&temp);
-
-        assert!(matches!(
-            store.commit_close_intent(&invalid_close_snapshot(), &object_registration(CLOSE_ID)),
-            Err(CloseCommitError::Project(_))
-        ));
-        assert_eq!(
-            store.load_project_snapshot().unwrap(),
-            ProjectSnapshot::default()
-        );
-        assert_eq!(count(&store, "close_intents"), 0);
-        assert_eq!(count(&store, "close_objects"), 0);
-    }
-
-    #[test]
-    fn close_commit_snapshot_preflight_precedes_write_lock() {
-        let temp = tempfile::tempdir().unwrap();
-        let paths = fixture(&temp);
-        let mut store = store(&temp);
-        let lock = WorkspaceDatabase::open(&paths).unwrap();
-        lock.database
-            .connection
-            .execute_batch("BEGIN EXCLUSIVE")
-            .unwrap();
-
-        let started = Instant::now();
-        let result =
-            store.commit_close_intent(&invalid_close_snapshot(), &object_registration(CLOSE_ID));
-        let elapsed = started.elapsed();
-
-        lock.database.connection.execute_batch("ROLLBACK").unwrap();
-        let terminal_id = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0b2a"
-            .parse::<TerminalId>()
-            .unwrap();
-        assert!(matches!(
-            result,
-            Err(CloseCommitError::Project(ProjectStoreError::Snapshot(
-                ProjectSnapshotError::MissingTerminal(missing)
-            ))) if missing == terminal_id
-        ));
-        assert_preflight_did_not_wait(elapsed);
-    }
-
-    #[test]
-    fn close_commit_registration_preflight_precedes_write_lock() {
-        let temp = tempfile::tempdir().unwrap();
-        let paths = fixture(&temp);
-        let mut store = store(&temp);
-        let lock = WorkspaceDatabase::open(&paths).unwrap();
-        lock.database
-            .connection
-            .execute_batch("BEGIN EXCLUSIVE")
-            .unwrap();
-
-        let started = Instant::now();
-        let result = store.commit_close_intent(&close_snapshot("valid"), &empty_registration(""));
-        let elapsed = started.elapsed();
-
-        lock.database.connection.execute_batch("ROLLBACK").unwrap();
-        assert!(matches!(
-            result,
-            Err(CloseCommitError::Close(
-                CloseStoreError::InvalidRegistration
-            ))
-        ));
-        assert_preflight_did_not_wait(elapsed);
-    }
-
-    #[test]
-    fn close_commit_close_id_conflict_rolls_back_snapshot() {
-        let temp = tempfile::tempdir().unwrap();
-        let mut store = store(&temp);
-        let original_snapshot = close_snapshot("original");
-        let original_intent = object_registration(CLOSE_ID);
-        store.save_project_snapshot(&original_snapshot).unwrap();
-        store.register_close_intent(&original_intent).unwrap();
-        let replacement = registration(
-            CLOSE_ID,
-            CloseScope::ApplicationExit,
-            vec![object("terminal:replacement", 8, CloseDecision::Discard)],
-        );
-
-        assert!(matches!(
-            store.commit_close_intent(&close_snapshot("replacement"), &replacement),
-            Err(CloseCommitError::Close(CloseStoreError::CloseIdConflict))
-        ));
-        assert_eq!(store.load_project_snapshot().unwrap(), original_snapshot);
-        assert_eq!(
-            store.load_close_intent(CLOSE_ID).unwrap(),
-            Some(original_intent)
-        );
-    }
-
-    #[test]
-    fn close_commit_object_failure_rolls_back_snapshot_and_records() {
-        let temp = tempfile::tempdir().unwrap();
-        let mut store = store(&temp);
-        store
-            .database
-            .connection
-            .execute_batch(
-                "CREATE TRIGGER reject_commit_close_object BEFORE INSERT ON close_objects \
-                 WHEN NEW.object_key = 'terminal:b' \
-                 BEGIN SELECT RAISE(ABORT, 'injected close commit failure'); END;",
-            )
-            .unwrap();
-        let collected = registration(
-            CLOSE_ID,
-            CloseScope::ApplicationExit,
-            vec![
-                object("terminal:a", 1, CloseDecision::Save),
-                object("terminal:b", 2, CloseDecision::Discard),
-            ],
-        );
-
-        assert!(matches!(
-            store.commit_close_intent(&close_snapshot("rolled-back"), &collected),
-            Err(CloseCommitError::Close(CloseStoreError::Database(_)))
-        ));
-        assert_eq!(
-            store.load_project_snapshot().unwrap(),
-            ProjectSnapshot::default()
-        );
-        assert_eq!(count(&store, "close_intents"), 0);
-        assert_eq!(count(&store, "close_objects"), 0);
-    }
-
-    #[test]
-    fn close_commit_state_failure_rolls_back_snapshot_header_and_objects() {
-        let temp = tempfile::tempdir().unwrap();
-        let mut store = store(&temp);
-        let original = close_snapshot("original");
-        store.save_project_snapshot(&original).unwrap();
-        store
-            .database
-            .connection
-            .execute_batch(
-                "CREATE TRIGGER reject_state_commit BEFORE UPDATE ON close_intents \
-                 WHEN NEW.commit_status = 'state_committed' \
-                 BEGIN SELECT RAISE(ABORT, 'injected state commit failure'); END;",
-            )
-            .unwrap();
-        let collected = registration(
-            CLOSE_ID,
-            CloseScope::ApplicationExit,
-            vec![
-                object("terminal:a", 1, CloseDecision::Save),
-                object("terminal:b", 2, CloseDecision::Discard),
-            ],
-        );
-
-        assert!(matches!(
-            store.commit_close_intent(&close_snapshot("rolled-back"), &collected),
-            Err(CloseCommitError::Close(CloseStoreError::Database(_)))
-        ));
-        assert_eq!(store.load_project_snapshot().unwrap(), original);
-        assert_eq!(count(&store, "close_intents"), 0);
-        assert_eq!(count(&store, "close_objects"), 0);
-    }
-
-    #[test]
-    fn close_commit_errors_do_not_echo_persisted_details() {
-        let marker = "sensitive-close-commit-path-sql-fingerprint";
-        let connection = Connection::open_in_memory().unwrap();
-        let sqlite = connection
-            .execute_batch(&format!("SELECT * FROM {marker}"))
-            .unwrap_err();
-        let database = DatabaseError::from(sqlite);
-        let errors = [
-            CloseCommitError::Project(ProjectStoreError::Database(database)),
-            CloseCommitError::Close(CloseStoreError::CloseIdConflict),
-        ];
-
-        for error in errors {
-            assert!(!error.to_string().contains(marker));
-        }
-    }
-
-    #[test]
-    fn corrupt_close_headers_are_reported_without_repair() {
-        let cases = [
-            (
-                "unknown scope",
-                "UPDATE close_intents SET scope = 'unknown'",
-            ),
-            (
-                "unknown status",
-                "UPDATE close_intents SET commit_status = 'unknown'",
-            ),
-            (
-                "short fingerprint",
-                "UPDATE close_intents SET commit_fingerprint = zeroblob(31)",
-            ),
-            ("empty epoch", "UPDATE close_intents SET store_epoch = ''"),
-            (
-                "global project mismatch",
-                "UPDATE close_intents SET project_id = 'project-unexpected'",
-            ),
-            ("non-text scope", "UPDATE close_intents SET scope = x'ff'"),
-        ];
-        for (name, corruption) in cases {
-            let temp = tempfile::tempdir().unwrap();
-            let mut store = store(&temp);
-            store
-                .register_close_intent(&empty_registration(CLOSE_ID))
-                .unwrap();
-            store
-                .database
-                .connection
-                .pragma_update(None, "ignore_check_constraints", true)
-                .unwrap();
-            store.database.connection.execute(corruption, []).unwrap();
-
-            assert!(
-                matches!(
-                    store.load_close_intent(CLOSE_ID),
-                    Err(CloseStoreError::CorruptRecord)
-                ),
-                "{name} 必须报告损坏"
-            );
-            assert!(
-                matches!(
-                    store.unfinished_close_intents(),
-                    Err(CloseStoreError::CorruptRecord)
-                ),
-                "{name} 不得在未完成枚举中被跳过"
-            );
-            assert_eq!(count(&store, "close_intents"), 1);
-        }
-    }
-
-    #[test]
-    fn corrupt_close_objects_and_project_scopes_are_reported() {
-        let object_cases = [
-            (
-                "unknown decision",
-                "UPDATE close_objects SET decision = 'unknown'",
-            ),
-            (
-                "negative generation",
-                "UPDATE close_objects SET object_generation = -1",
-            ),
-            (
-                "empty object key",
-                "UPDATE close_objects SET object_key = ''",
-            ),
-            (
-                "non-text decision",
-                "UPDATE close_objects SET decision = x'ff'",
-            ),
-        ];
-        for (name, corruption) in object_cases {
-            let temp = tempfile::tempdir().unwrap();
-            let mut store = store(&temp);
-            store
-                .register_close_intent(&object_registration(CLOSE_ID))
-                .unwrap();
-            store
-                .database
-                .connection
-                .pragma_update(None, "ignore_check_constraints", true)
-                .unwrap();
-            store.database.connection.execute(corruption, []).unwrap();
-            assert!(
-                matches!(
-                    store.load_close_intent(CLOSE_ID),
-                    Err(CloseStoreError::CorruptRecord)
-                ),
-                "{name} 必须报告损坏"
-            );
-        }
-
-        let project_cases = [
-            ("missing project", None),
-            ("invalid project", Some("not-a-project")),
-        ];
-        for (name, project) in project_cases {
-            let temp = tempfile::tempdir().unwrap();
-            let mut store = store(&temp);
-            store
-                .register_close_intent(&registration(
-                    CLOSE_ID,
-                    CloseScope::Project {
-                        project_id: project_id(PROJECT_A),
-                    },
-                    Vec::new(),
-                ))
-                .unwrap();
-            store
-                .database
-                .connection
-                .execute("UPDATE close_intents SET project_id = ?1", [project])
-                .unwrap();
-            assert!(
-                matches!(
-                    store.load_close_intent(CLOSE_ID),
-                    Err(CloseStoreError::CorruptRecord)
-                ),
-                "{name} 必须报告损坏"
-            );
-        }
-    }
-
-    #[test]
-    fn empty_persisted_close_id_is_corrupt_and_input_id_is_validated() {
-        let temp = tempfile::tempdir().unwrap();
-        let mut store = store(&temp);
-        store
-            .register_close_intent(&empty_registration(CLOSE_ID))
-            .unwrap();
-        store
-            .database
-            .connection
-            .execute("UPDATE close_intents SET close_id = ''", [])
-            .unwrap();
-
-        assert!(matches!(
-            store.unfinished_close_intents(),
-            Err(CloseStoreError::CorruptRecord)
-        ));
-        assert!(matches!(
-            store.load_close_intent(""),
-            Err(CloseStoreError::InvalidRegistration)
-        ));
-    }
-
-    #[test]
-    fn close_status_advances_in_fixed_order_and_retains_history() {
-        let temp = tempfile::tempdir().unwrap();
-        let mut store = store(&temp);
-        assert_eq!(
-            CloseCommitStatus::ALL,
-            [
-                CloseCommitStatus::Collected,
-                CloseCommitStatus::StateCommitted,
-                CloseCommitStatus::PtyStopped,
-                CloseCommitStatus::CleanupCommitted,
-                CloseCommitStatus::Completed,
-            ]
-        );
-        let registered = object_registration(CLOSE_ID);
-        store.register_close_intent(&registered).unwrap();
-        let mut current = registered;
-        for next in CloseCommitStatus::ALL.into_iter().skip(1) {
-            let expected = current.commit_status;
-            current = advance(&mut store, &current, next);
-            assert_eq!(current.commit_status, next);
-            assert_ne!(current.commit_status, expected);
-            assert_eq!(
-                store.load_close_intent(CLOSE_ID).unwrap(),
-                Some(current.clone())
-            );
-        }
-        assert!(store.unfinished_close_intents().unwrap().is_empty());
-        assert_eq!(count(&store, "close_intents"), 1);
-        assert_eq!(count(&store, "close_objects"), 1);
-    }
-
-    #[test]
-    fn rejected_close_transitions_never_modify_records() {
-        let temp = tempfile::tempdir().unwrap();
-        let mut store = store(&temp);
-        let original = object_registration(CLOSE_ID);
-        store.register_close_intent(&original).unwrap();
-        let fingerprint = original.intent.fingerprint();
-
-        assert!(matches!(
-            store.advance_close_intent(
-                CLOSE_ID,
-                CloseCommitStatus::Collected,
-                CloseCommitStatus::PtyStopped,
-                fingerprint,
-                EPOCH,
-            ),
-            Err(CloseStoreError::InvalidTransition)
-        ));
-        assert!(matches!(
-            store.advance_close_intent(
-                CLOSE_ID,
-                CloseCommitStatus::Collected,
-                CloseCommitStatus::Collected,
-                fingerprint,
-                EPOCH,
-            ),
-            Err(CloseStoreError::InvalidTransition)
-        ));
-        assert!(matches!(
-            store.advance_close_intent(
-                CLOSE_ID,
-                CloseCommitStatus::StateCommitted,
-                CloseCommitStatus::PtyStopped,
-                fingerprint,
-                EPOCH,
-            ),
-            Err(CloseStoreError::CloseConflict)
-        ));
-        assert!(matches!(
-            store.advance_close_intent(
-                CLOSE_ID,
-                CloseCommitStatus::Collected,
-                CloseCommitStatus::StateCommitted,
-                &[8; 32],
-                EPOCH,
-            ),
-            Err(CloseStoreError::CloseConflict)
-        ));
-        store
-            .rotate_store_epoch("run-close", EPOCH, OTHER_EPOCH)
-            .unwrap();
-        assert!(matches!(
-            store.advance_close_intent(
-                CLOSE_ID,
-                CloseCommitStatus::Collected,
-                CloseCommitStatus::StateCommitted,
-                fingerprint,
-                EPOCH,
-            ),
-            Err(CloseStoreError::StoreEpochConflict)
-        ));
-        store
-            .rotate_store_epoch("run-close", OTHER_EPOCH, EPOCH)
-            .unwrap();
-        assert!(matches!(
-            store.advance_close_intent(
-                "close-missing",
-                CloseCommitStatus::Collected,
-                CloseCommitStatus::StateCommitted,
-                fingerprint,
-                EPOCH,
-            ),
-            Err(CloseStoreError::UnknownCloseIntent)
-        ));
-        assert_eq!(
-            store.load_close_intent(CLOSE_ID).unwrap(),
-            Some(original.clone())
-        );
-
-        let committed = advance(&mut store, &original, CloseCommitStatus::StateCommitted);
-        assert!(matches!(
-            store.advance_close_intent(
-                CLOSE_ID,
-                CloseCommitStatus::StateCommitted,
-                CloseCommitStatus::Collected,
-                fingerprint,
-                EPOCH,
-            ),
-            Err(CloseStoreError::InvalidTransition)
-        ));
-        assert_eq!(store.load_close_intent(CLOSE_ID).unwrap(), Some(committed));
-    }
-
-    #[test]
-    fn close_schema_enforces_foreign_keys_nulls_and_value_constraints() {
-        let temp = tempfile::tempdir().unwrap();
-        let store = store(&temp);
-        let connection = &store.database.connection;
-        assert!(
-            connection
-                .execute(
-                    "INSERT INTO close_objects \
-                     (close_id, object_key, object_generation, decision) \
-                     VALUES ('close-missing', 'terminal:a', 0, 'save')",
-                    [],
-                )
-                .is_err()
-        );
-        connection
-            .execute(
-                "INSERT INTO close_intents \
-                 (close_id, scope, project_id, store_epoch, commit_fingerprint, commit_status) \
-                 VALUES (?1, 'application_exit', NULL, ?2, zeroblob(32), 'collected')",
-                params![CLOSE_ID, EPOCH],
-            )
-            .unwrap();
-        assert!(
-            connection
-                .execute(
-                    "INSERT INTO close_objects \
-                     (close_id, object_key, object_generation, decision) \
-                     VALUES (?1, NULL, 0, 'save')",
-                    [CLOSE_ID],
-                )
-                .is_err()
-        );
-        assert!(
-            connection
-                .execute(
-                    "INSERT INTO close_objects \
-                     (close_id, object_key, object_generation, decision) \
-                     VALUES (NULL, 'terminal:a', 0, 'save')",
-                    [],
-                )
-                .is_err()
-        );
-        assert!(
-            connection
-                .execute(
-                    "INSERT INTO close_objects \
-                     (close_id, object_key, object_generation, decision) \
-                     VALUES (?1, 'terminal:a', -1, 'save')",
-                    [CLOSE_ID],
-                )
-                .is_err()
-        );
-        assert!(
-            connection
-                .execute(
-                    "INSERT INTO close_intents \
-                     (close_id, scope, store_epoch, commit_fingerprint, commit_status) \
-                     VALUES ('close-short', 'application_exit', ?1, zeroblob(31), 'collected')",
-                    [EPOCH],
-                )
-                .is_err()
-        );
-        assert!(
-            connection
-                .execute(
-                    "INSERT INTO close_intents \
-                     (close_id, scope, store_epoch, commit_fingerprint, commit_status) \
-                     VALUES (NULL, 'application_exit', ?1, zeroblob(32), 'collected')",
-                    [EPOCH],
-                )
-                .is_err()
-        );
-        connection
-            .execute(
-                "INSERT INTO close_objects \
-                 (close_id, object_key, object_generation, decision) \
-                 VALUES (?1, 'terminal:a', 0, 'save')",
-                [CLOSE_ID],
-            )
-            .unwrap();
-        assert!(
-            connection
-                .execute(
-                    "INSERT INTO close_objects \
-                     (close_id, object_key, object_generation, decision) \
-                     VALUES (?1, 'terminal:a', 1, 'discard')",
-                    [CLOSE_ID],
-                )
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn close_store_errors_do_not_echo_persisted_details() {
-        let marker = "sensitive-object-path-sql-fingerprint";
-        let connection = Connection::open_in_memory().unwrap();
-        let sqlite = connection
-            .execute_batch(&format!("SELECT * FROM {marker}"))
-            .unwrap_err();
-        let errors = [
-            CloseStoreError::InvalidRegistration,
-            CloseStoreError::CloseIdConflict,
-            CloseStoreError::UnknownCloseIntent,
-            CloseStoreError::CloseConflict,
-            CloseStoreError::InvalidTransition,
-            CloseStoreError::StoreEpochConflict,
-            CloseStoreError::CorruptRecord,
-            CloseStoreError::Database(DatabaseError::from(sqlite)),
-        ];
-        for error in errors {
-            assert!(!error.to_string().contains(marker));
-        }
-    }
-
-    #[test]
-    fn close_scope_round_trips_update_handoff_without_project() {
-        let temp = tempfile::tempdir().unwrap();
-        let mut store = store(&temp);
-        let expected = registration(CLOSE_ID, CloseScope::UpdateHandoff, Vec::new());
-        store.register_close_intent(&expected).unwrap();
-        assert_eq!(store.load_close_intent(CLOSE_ID).unwrap(), Some(expected));
-        assert_eq!(
-            store
-                .database
-                .connection
-                .query_row(
-                    "SELECT project_id FROM close_intents WHERE close_id = ?1",
-                    [CLOSE_ID],
-                    |row| row.get::<_, Option<String>>(0),
-                )
-                .unwrap(),
-            None
-        );
-    }
-}
+#[path = "close_tests.rs"]
+mod close_tests;

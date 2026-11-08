@@ -99,7 +99,7 @@ impl WorkspaceDatabase {
             .database
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        Self::save_project_snapshot_in_transaction(&transaction, &prepared)?;
+        Self::save_project_snapshot_in_transaction(&transaction, &prepared, None)?;
         transaction.commit()?;
         Ok(())
     }
@@ -108,6 +108,7 @@ impl WorkspaceDatabase {
     pub(super) fn save_project_snapshot_in_transaction(
         transaction: &Connection,
         prepared: &PreparedProjectSnapshot<'_>,
+        retained_project: Option<ProjectId>,
     ) -> Result<(), ProjectStoreError> {
         let snapshot = prepared.snapshot;
         let encoded = &prepared.projects;
@@ -144,10 +145,15 @@ impl WorkspaceDatabase {
             .iter()
             .map(|project| project.id.as_str())
             .collect::<BTreeSet<_>>();
+        let retained_project_id = retained_project.map(|project_id| project_id.to_string());
         for stale_id in stored_ids
             .iter()
             .filter(|id| !desired_ids.contains(id.as_str()))
         {
+            // 项目关闭的初始提交只保存其他项目，目标项目留待 cleanup 级联删除。
+            if retained_project_id.as_deref() == Some(stale_id.as_str()) {
+                continue;
+            }
             transaction.execute("DELETE FROM projects WHERE project_id = ?1", [stale_id])?;
         }
 
@@ -261,6 +267,11 @@ impl WorkspaceDatabase {
             .iter()
             .map(|terminal| terminal.id.as_str())
             .collect::<BTreeSet<_>>();
+        let retained_terminal_ids = stored_snapshot
+            .terminals()
+            .filter(|terminal| Some(terminal.project_id()) == retained_project)
+            .map(|terminal| terminal.id().to_string())
+            .collect::<BTreeSet<_>>();
         let mut statement = transaction.prepare("SELECT terminal_id FROM terminals")?;
         let stored_terminal_ids = statement
             .query_map([], |row| row.get::<_, String>(0))?
@@ -270,6 +281,10 @@ impl WorkspaceDatabase {
             .iter()
             .filter(|id| !desired_terminal_ids.contains(id.as_str()))
         {
+            // 保留项目下的终端同样不能在初始关闭提交中提前删除。
+            if retained_terminal_ids.contains(stale_id) {
+                continue;
+            }
             transaction.execute("DELETE FROM terminals WHERE terminal_id = ?1", [stale_id])?;
         }
         for terminal in terminals {
