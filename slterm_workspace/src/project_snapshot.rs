@@ -7,7 +7,7 @@ use slterm_path::CanonicalPath;
 use slterm_split::SplitDirection;
 
 use crate::{
-    LayoutError, LogicalSize, PanelGroup, PanelGroupId, ProjectId, ProjectRegistry,
+    LayoutError, LogicalSize, PanelGroup, PanelGroupId, Project, ProjectId, ProjectRegistry,
     ProjectRegistryError, RunIntent, TerminalId, TerminalRecord, TerminalRecordError, ViewKey,
 };
 
@@ -177,6 +177,18 @@ impl ProjectSnapshot {
         candidate.add_terminal(record.clone())?;
         candidate.validate()?;
         Ok((candidate, record))
+    }
+
+    /// 生成移除项目的候选快照；项目拥有的逻辑终端一并移除。
+    pub fn without_project(&self, id: ProjectId) -> Result<(Self, Project), ProjectCommandError> {
+        self.validate()?;
+        let mut candidate = self.clone();
+        let removed = candidate.registry_mut().remove_project(id)?;
+        candidate
+            .terminals
+            .retain(|_, record| record.project_id() != id);
+        candidate.validate()?;
+        Ok((candidate, removed))
     }
 
     /// 生成关闭逻辑终端的候选快照；最后关闭后保留项目空态。

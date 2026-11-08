@@ -12,10 +12,15 @@ use crate::{
 
 const PROJECT_A: &str = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2a";
 const PROJECT_B: &str = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b";
+const PROJECT_C: &str = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2c";
+const PROJECT_UNKNOWN: &str = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2d";
 const GROUP_A: &str = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0a2a";
 const GROUP_B: &str = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0a2b";
+const GROUP_C: &str = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0a2c";
 const TERMINAL_A: &str = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0b2a";
 const TERMINAL_B: &str = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0b2b";
+const TERMINAL_C: &str = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0b2c";
+const TERMINAL_D: &str = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0b2d";
 
 fn project_id(text: &str) -> ProjectId {
     ProjectId::from_str(text).unwrap()
@@ -116,6 +121,33 @@ fn snapshot_with_two_terminals() -> ProjectSnapshot {
         .with_new_terminal(new_terminal_spec(PROJECT_A, GROUP_A, TERMINAL_B))
         .unwrap()
         .0
+}
+
+fn snapshot_with_three_projects() -> ProjectSnapshot {
+    let mut registry = ProjectRegistry::new();
+    for (project, root) in [
+        (PROJECT_A, "D:/work/a"),
+        (PROJECT_B, "D:/work/b"),
+        (PROJECT_C, "D:/work/c"),
+    ] {
+        registry
+            .add_project(project_id(project), path(root))
+            .unwrap();
+    }
+    registry.activate_project(project_id(PROJECT_B)).unwrap();
+    let mut snapshot = ProjectSnapshot::restore(registry, Vec::new()).unwrap();
+    for (project, group, terminal) in [
+        (PROJECT_A, GROUP_A, TERMINAL_A),
+        (PROJECT_B, GROUP_B, TERMINAL_B),
+        (PROJECT_B, GROUP_B, TERMINAL_D),
+        (PROJECT_C, GROUP_C, TERMINAL_C),
+    ] {
+        snapshot = snapshot
+            .with_new_terminal(new_terminal_spec(project, group, terminal))
+            .unwrap()
+            .0;
+    }
+    snapshot
 }
 
 #[test]
@@ -516,6 +548,93 @@ fn close_terminal_command_removes_record_group_and_preserves_project() {
 }
 
 #[test]
+fn remove_active_project_selects_next_and_removes_only_owned_terminals() {
+    let original = snapshot_with_three_projects();
+    let expected_removed = original
+        .registry()
+        .project(project_id(PROJECT_B))
+        .unwrap()
+        .clone();
+    let expected_projects = [PROJECT_A, PROJECT_C].map(|project| {
+        original
+            .registry()
+            .project(project_id(project))
+            .unwrap()
+            .clone()
+    });
+    let expected_terminals = [TERMINAL_A, TERMINAL_C]
+        .map(|terminal| original.terminal(terminal_id(terminal)).unwrap().clone());
+
+    let (candidate, removed) = original.without_project(project_id(PROJECT_B)).unwrap();
+
+    assert_eq!(removed, expected_removed);
+    assert_eq!(candidate.registry().active(), Some(project_id(PROJECT_C)));
+    assert_eq!(
+        candidate.registry().projects(),
+        expected_projects.as_slice()
+    );
+    assert_eq!(
+        candidate.terminals().cloned().collect::<Vec<_>>(),
+        expected_terminals
+    );
+    assert_eq!(candidate.terminal(terminal_id(TERMINAL_B)), None);
+    assert_eq!(candidate.terminal(terminal_id(TERMINAL_D)), None);
+    assert_eq!(candidate.validate(), Ok(()));
+    assert_eq!(original, snapshot_with_three_projects());
+}
+
+#[test]
+fn remove_active_last_project_selects_previous() {
+    let mut original = snapshot_with_three_projects();
+    original
+        .registry_mut()
+        .activate_project(project_id(PROJECT_C))
+        .unwrap();
+
+    let (candidate, _) = original.without_project(project_id(PROJECT_C)).unwrap();
+
+    assert_eq!(candidate.registry().active(), Some(project_id(PROJECT_B)));
+    assert_eq!(candidate.validate(), Ok(()));
+}
+
+#[test]
+fn remove_only_project_leaves_an_empty_snapshot() {
+    let original = snapshot_with_two_terminals();
+
+    let (candidate, removed) = original.without_project(project_id(PROJECT_A)).unwrap();
+
+    assert_eq!(removed.id(), project_id(PROJECT_A));
+    assert!(candidate.registry().projects().is_empty());
+    assert_eq!(candidate.registry().active(), None);
+    assert_eq!(candidate.terminals().count(), 0);
+    assert_eq!(candidate.validate(), Ok(()));
+    assert_eq!(original, snapshot_with_two_terminals());
+}
+
+#[test]
+fn remove_inactive_project_preserves_active_project() {
+    let original = snapshot_with_three_projects();
+
+    let (candidate, _) = original.without_project(project_id(PROJECT_A)).unwrap();
+
+    assert_eq!(candidate.registry().active(), Some(project_id(PROJECT_B)));
+    assert_eq!(candidate.validate(), Ok(()));
+}
+
+#[test]
+fn remove_unknown_project_preserves_original_snapshot() {
+    let original = snapshot_with_three_projects();
+
+    assert_eq!(
+        original.without_project(project_id(PROJECT_UNKNOWN)),
+        Err(ProjectCommandError::Registry(
+            ProjectRegistryError::ProjectNotFound
+        ))
+    );
+    assert_eq!(original, snapshot_with_three_projects());
+}
+
+#[test]
 fn activate_and_exit_commands_only_change_their_owning_state() {
     let original = snapshot_with_two_terminals();
     let activated = original
@@ -661,6 +780,7 @@ fn candidate_commands_reject_an_invalid_input_snapshot() {
     let expected_snapshot = ProjectSnapshotError::OrphanTerminal(terminal_id(TERMINAL_A));
     let expected = ProjectCommandError::Snapshot(expected_snapshot.clone());
     assert_eq!(invalid.validate(), Err(expected_snapshot));
+    let invalid_before = invalid.clone();
 
     assert_eq!(
         invalid.with_new_terminal(new_terminal_spec(PROJECT_A, GROUP_A, TERMINAL_B)),
@@ -681,6 +801,10 @@ fn candidate_commands_reject_an_invalid_input_snapshot() {
         Err(expected.clone())
     );
     assert_eq!(
+        invalid.without_project(project_id(PROJECT_A)),
+        Err(expected.clone())
+    );
+    assert_eq!(
         invalid.with_active_terminal(terminal_id(TERMINAL_A)),
         Err(expected.clone())
     );
@@ -688,4 +812,5 @@ fn candidate_commands_reject_an_invalid_input_snapshot() {
         invalid.with_terminal_run_intent(terminal_id(TERMINAL_A), RunIntent::Exited),
         Err(expected)
     );
+    assert_eq!(invalid, invalid_before);
 }
