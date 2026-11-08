@@ -251,10 +251,45 @@ impl WorkspaceWriterRuntime {
         self.previous_run.as_ref()
     }
 
+    #[cfg(test)]
     fn shutdown(
         self,
         control_plane_cleanup: ControlPlaneCleanup,
     ) -> Result<(), crate::persistence::workspace_writer::WorkspaceWriterError> {
+        match self.shutdown_internal(control_plane_cleanup, |error| {
+            FinalCommitRecovery::Fail(error)
+        })? {
+            FinalShutdownOutcome::Completed => Ok(()),
+            FinalShutdownOutcome::Abandoned => {
+                unreachable!("默认最终提交失败路径不得转为知情放弃")
+            }
+        }
+    }
+
+    /// 最终提交失败由生产调用方决定重试或承担旧状态恢复后果。
+    fn shutdown_with_decision(
+        self,
+        control_plane_cleanup: ControlPlaneCleanup,
+        mut decide: impl FnMut() -> FinalCommitDecision,
+    ) -> Result<FinalShutdownOutcome, crate::persistence::workspace_writer::WorkspaceWriterError>
+    {
+        self.shutdown_internal(control_plane_cleanup, move |_| {
+            if decide() == FinalCommitDecision::Retry {
+                FinalCommitRecovery::Retry
+            } else {
+                FinalCommitRecovery::Abandon
+            }
+        })
+    }
+
+    fn shutdown_internal(
+        self,
+        control_plane_cleanup: ControlPlaneCleanup,
+        mut on_final_error: impl FnMut(
+            crate::persistence::workspace_writer::WorkspaceWriterError,
+        ) -> FinalCommitRecovery,
+    ) -> Result<FinalShutdownOutcome, crate::persistence::workspace_writer::WorkspaceWriterError>
+    {
         let Self {
             writer,
             client: _,
@@ -276,13 +311,44 @@ impl WorkspaceWriterRuntime {
                 crate::persistence::workspace_writer::WorkspaceWriterError::ControlPlaneCleanupFailed,
             );
         }
-        let mut store = crate::persistence::workspace::WorkspaceDatabase::open(&paths)
-            .map_err(crate::persistence::workspace_writer::WorkspaceWriterError::Open)?;
-        store
-            .mark_clean_shutdown(&metadata.run.run_id)
-            .map_err(crate::persistence::workspace_writer::WorkspaceWriterError::Metadata)?;
-        Ok(())
+        loop {
+            let result = (|| {
+                let mut store = crate::persistence::workspace::WorkspaceDatabase::open(&paths)
+                    .map_err(crate::persistence::workspace_writer::WorkspaceWriterError::Open)?;
+                store
+                    .mark_clean_shutdown(&metadata.run.run_id)
+                    .map_err(crate::persistence::workspace_writer::WorkspaceWriterError::Metadata)
+            })();
+            match result {
+                Ok(()) => return Ok(FinalShutdownOutcome::Completed),
+                Err(error) => match on_final_error(error) {
+                    FinalCommitRecovery::Retry => {}
+                    FinalCommitRecovery::Abandon => return Ok(FinalShutdownOutcome::Abandoned),
+                    #[cfg(test)]
+                    FinalCommitRecovery::Fail(error) => return Err(error),
+                },
+            }
+        }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FinalCommitDecision {
+    Retry,
+    Abandon,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FinalShutdownOutcome {
+    Completed,
+    Abandoned,
+}
+
+enum FinalCommitRecovery {
+    Retry,
+    Abandon,
+    #[cfg(test)]
+    Fail(crate::persistence::workspace_writer::WorkspaceWriterError),
 }
 
 /// 启动 writer；任何维护或启动失败都阻止进入领域恢复与窗口装配。
@@ -454,8 +520,18 @@ pub fn run_shell(initial_cwd: Option<PathBuf>) {
     // 控制面失败只闸门 clean_shutdown，不得跳过 writer 的最终持久提交。
     let control_plane_cleanup = shutdown_local_control_service(local_control.as_mut());
     drop(local_control);
-    if let Err(error) = workspace_writer.shutdown(control_plane_cleanup) {
-        log::warn!("workspace writer shutdown failed: {error}");
+    match workspace_writer.shutdown_with_decision(control_plane_cleanup, || {
+        if crate::platform::close_dialog::retry_final_commit() {
+            FinalCommitDecision::Retry
+        } else {
+            FinalCommitDecision::Abandon
+        }
+    }) {
+        Ok(FinalShutdownOutcome::Completed) => {}
+        Ok(FinalShutdownOutcome::Abandoned) => {
+            log::warn!("user abandoned final workspace state commit after explicit warning")
+        }
+        Err(error) => log::warn!("workspace writer shutdown failed: {error}"),
     }
     // 托盘收尾:先删图标再退进程,否则任务栏残影要等
     // 用户悬停才消失;join 保证删图标先于进程退出。
@@ -508,9 +584,9 @@ mod shell_event_tests {
     };
 
     use super::{
-        ControlPlaneCleanup, SltermShellEvent, WorkspaceWriterRuntime,
-        shutdown_local_control_service, start_local_control_service, start_workspace_writer,
-        starts_hidden, tray_command_event, try_send_handover,
+        ControlPlaneCleanup, FinalCommitDecision, FinalShutdownOutcome, SltermShellEvent,
+        WorkspaceWriterRuntime, shutdown_local_control_service, start_local_control_service,
+        start_workspace_writer, starts_hidden, tray_command_event, try_send_handover,
     };
     use crate::persistence::close::{CloseCommitStatus, CloseStoreError, PersistedCloseIntent};
     use crate::persistence::database::DatabaseError;
@@ -1290,6 +1366,68 @@ mod shell_event_tests {
         assert_eq!(clean_shutdown, 0);
         while event_rx.try_recv().is_ok() {}
         assert!(event_rx.recv().is_err(), "失败转发线程必须完成 join");
+    }
+
+    /// 用户撤除故障后，重试必须完成最终正常退出提交。
+    #[test]
+    fn final_commit_failure_retries_after_user_confirmation() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+        let (events, _event_rx) = mpsc::sync_channel(super::SHELL_EVENT_CAPACITY);
+        let runtime = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
+        let fault = rusqlite::Connection::open(paths.workspace_db_path()).unwrap();
+        fault
+            .execute_batch(
+                "CREATE TRIGGER reject_clean_shutdown BEFORE UPDATE ON workspace_meta \
+                 BEGIN SELECT RAISE(ABORT, 'injected metadata failure'); END;",
+            )
+            .unwrap();
+        let mut decisions = 0;
+
+        let outcome = runtime
+            .shutdown_with_decision(ControlPlaneCleanup::Succeeded, || {
+                decisions += 1;
+                fault
+                    .execute_batch("DROP TRIGGER reject_clean_shutdown")
+                    .unwrap();
+                FinalCommitDecision::Retry
+            })
+            .unwrap();
+
+        assert_eq!(outcome, FinalShutdownOutcome::Completed);
+        assert_eq!(decisions, 1);
+        assert!(observer_metadata(&paths).clean_shutdown);
+    }
+
+    /// 用户明确承担恢复后果后，允许不提交最终状态而退出。
+    #[test]
+    fn close_final_commit_failure_allows_explicit_abandon() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+        let (events, _event_rx) = mpsc::sync_channel(super::SHELL_EVENT_CAPACITY);
+        let runtime = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
+        let started = observer_metadata(&paths);
+        let fault = rusqlite::Connection::open(paths.workspace_db_path()).unwrap();
+        fault
+            .execute_batch(
+                "CREATE TRIGGER reject_clean_shutdown BEFORE UPDATE ON workspace_meta \
+                 BEGIN SELECT RAISE(ABORT, 'injected metadata failure'); END;",
+            )
+            .unwrap();
+
+        let outcome = runtime
+            .shutdown_with_decision(ControlPlaneCleanup::Succeeded, || {
+                FinalCommitDecision::Abandon
+            })
+            .unwrap();
+
+        assert_eq!(outcome, FinalShutdownOutcome::Abandoned);
+        fault
+            .execute_batch("DROP TRIGGER reject_clean_shutdown")
+            .unwrap();
+        let finished = observer_metadata(&paths);
+        assert_eq!(finished.run.run_id, started.run.run_id);
+        assert!(!finished.clean_shutdown);
     }
 
     /// 数据库可打开但不可写时，真正的正常退出更新必须失败且保持 unclean。

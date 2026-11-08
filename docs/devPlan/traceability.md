@@ -221,7 +221,7 @@
 | 项目移除先完成守卫与删除意图再销毁资源 | `project_remove_commits_intent_before_destroy` | 已自动化 |
 | 激活项目不关闭无项目浮层或其 Hooks 草稿 | `app_settings_overlay_keeps_hooks_draft` | 待实现 |
 | 移交显式 cwd 未授权时拒绝且不改投项目 | `handover_rejects_unauthorized_cwd` | 待实现 |
-| 最终退出提交失败后允许知情放弃状态 | `close_final_commit_failure_allows_explicit_abandon` | 待实现 |
+| 最终退出提交失败后允许知情放弃状态 | `close_final_commit_failure_allows_explicit_abandon` | 已自动化 |
 | 异常启动先布局后对账且不重复 Panel 或 PTY | `workspace_startup_layout_before_snapshots` | 待实现 |
 
 ### Document

@@ -4,6 +4,7 @@
 //! 本层是 Windows 原生代码的直接落点,不再带平台分支。
 
 // 凭据管理器通用封装:业务域只经 crate::secrets 门面消费。
+pub(crate) mod close_dialog;
 #[allow(dead_code)] // 生产消费点归凭据域;平台三原语由单元测试锁定。
 pub(crate) mod credentials;
 pub mod dirs;
