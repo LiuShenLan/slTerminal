@@ -394,6 +394,111 @@ fn application_commit_receipt_with_wrong_identity_is_ignored(cx: &mut TestAppCon
 }
 
 #[gpui::test]
+fn application_global_receipt_validates_identity_attempt_and_disconnect(cx: &mut TestAppContext) {
+    let (root, mut window, _state) = open_root(cx);
+    let window_handle = window.update(|window, _| window.window_handle());
+    let attempt = window.update(|_, cx| {
+        root.update(cx, |root, cx| {
+            let mut coordinator = slterm_workspace::CloseCoordinator::new();
+            coordinator
+                .begin(slterm_workspace::CloseScope::ApplicationExit)
+                .unwrap();
+            let attempt = coordinator.current_attempt().unwrap();
+            let intent = slterm_workspace::CloseIntent::new(Vec::new(), [7; 32]).unwrap();
+            coordinator.collected(attempt, intent.clone()).unwrap();
+            coordinator
+                .state_committed(coordinator.current_attempt().unwrap())
+                .unwrap();
+            coordinator
+                .pty_stopped(coordinator.current_attempt().unwrap())
+                .unwrap();
+            coordinator
+                .recovery_cleaned(coordinator.current_attempt().unwrap())
+                .unwrap();
+            let attempt = coordinator.current_attempt().unwrap();
+            root.application_close = Some(super::super::application_close::ApplicationClose {
+                coordinator,
+                persisted: crate::persistence::close::PersistedCloseIntent {
+                    close_id: "application-global-receipt".to_owned(),
+                    scope: slterm_workspace::CloseScope::ApplicationExit,
+                    store_epoch: "test-epoch".to_owned(),
+                    intent,
+                    commit_status: CloseCommitStatus::Completed,
+                },
+                stop_observation: Some(super::super::terminal_close::PtyStopObservation::Stopped),
+                outcome_unknown: false,
+                window: window_handle,
+            });
+            root.close_in_progress = true;
+            let task = cx.spawn(async move |_, _| std::future::pending::<()>().await);
+            root.tasks
+                .register(
+                    TaskId::CloseFlush,
+                    super::super::task_service::CancellationToken::new(),
+                    task,
+                )
+                .unwrap();
+            attempt
+        })
+    });
+    let original = root.read_with(cx, |root, _| {
+        root.tasks.task_identity(TaskId::CloseFlush).unwrap()
+    });
+
+    window.update(|_, cx| {
+        root.update(cx, |root, cx| {
+            root.finish_application_global(
+                "wrong-application-close".to_owned(),
+                attempt,
+                Ok(Ok(crate::app_shell::FinalShutdownOutcome::Completed)),
+                cx,
+            );
+        });
+    });
+    root.read_with(cx, |root, _| {
+        assert_eq!(root.tasks.task_identity(TaskId::CloseFlush), Some(original));
+        assert!(!root.close_completed);
+    });
+    let stale = CloseAttempt::new(CloseStage::StopServices, attempt.sequence() - 1);
+    window.update(|_, cx| {
+        root.update(cx, |root, cx| {
+            root.finish_application_global(
+                "application-global-receipt".to_owned(),
+                stale,
+                Ok(Ok(crate::app_shell::FinalShutdownOutcome::Completed)),
+                cx,
+            );
+        });
+    });
+    root.read_with(cx, |root, _| {
+        assert_eq!(root.tasks.task_identity(TaskId::CloseFlush), Some(original));
+        assert!(!root.close_completed);
+    });
+
+    window.update(|_, cx| {
+        root.update(cx, |root, cx| {
+            root.finish_application_global(
+                "application-global-receipt".to_owned(),
+                attempt,
+                Err(std::sync::mpsc::RecvError),
+                cx,
+            );
+        });
+    });
+    root.read_with(cx, |root, _| {
+        let close = root.application_close.as_ref().unwrap();
+        assert!(close.outcome_unknown);
+        assert_eq!(
+            close.coordinator.phase(),
+            ClosePhase::Failed(CloseStage::StopServices)
+        );
+        assert!(!root.close_in_progress);
+        assert!(!root.close_completed);
+        assert!(!root.tasks.is_registered(TaskId::CloseFlush));
+    });
+}
+
+#[gpui::test]
 fn application_exit_stops_visible_and_hidden_project_sessions(cx: &mut TestAppContext) {
     let temp = tempfile::tempdir().unwrap();
     let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
@@ -437,6 +542,90 @@ fn application_exit_stops_visible_and_hidden_project_sessions(cx: &mut TestAppCo
 }
 
 #[gpui::test]
+fn application_disconnected_global_worker_is_fail_closed(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let (events, _event_rx) = std::sync::mpsc::sync_channel(64);
+    let runtime = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
+    let persistence =
+        AppRootPersistence::load_with_previous_run(&paths, Some(runtime.client()), None);
+    let client = crate::app_shell::global_close::GlobalCloseClient::disconnected_for_test();
+    let (root, mut window, _state) = open_root_with_persistence_and_global(cx, persistence, client);
+    add_project(&root, &mut window, PROJECT_A, "D:/work/a");
+    new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_A);
+    flush_when_ready(&runtime.client());
+
+    assert!(!window.simulate_close());
+    window.run_until_parked();
+    root.read_with(cx, |root, _| {
+        let close = root.application_close.as_ref().unwrap();
+        assert!(close.outcome_unknown);
+        assert_eq!(
+            close.coordinator.phase(),
+            ClosePhase::Failed(CloseStage::StopServices)
+        );
+        assert!(!root.close_in_progress);
+        assert!(!root.close_completed);
+        assert!(!root.tasks.is_registered(TaskId::CloseFlush));
+    });
+    assert!(!window.simulate_close());
+    root.read_with(cx, |root, _| {
+        let close = root.application_close.as_ref().unwrap();
+        assert!(close.outcome_unknown);
+        assert_eq!(
+            close.coordinator.phase(),
+            ClosePhase::Failed(CloseStage::StopServices)
+        );
+        assert!(!root.close_completed);
+    });
+    runtime.shutdown(ControlPlaneCleanup::Succeeded).unwrap();
+}
+
+#[gpui::test]
+fn recovery_disconnected_global_worker_is_fail_closed(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let mut original = ProjectSnapshot::default();
+    original
+        .registry_mut()
+        .add_project(project_id(PROJECT_A), path("D:/work/a"))
+        .unwrap();
+    save_terminal_recovery_snapshot(&paths, &original);
+    rusqlite::Connection::open(paths.workspace_db_path())
+        .unwrap()
+        .execute(
+            "UPDATE project_layouts SET layout_json = 'not-json' WHERE project_id = ?1",
+            [PROJECT_A],
+        )
+        .unwrap();
+    let (events, _event_rx) = std::sync::mpsc::sync_channel(64);
+    let runtime = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
+    let persistence =
+        AppRootPersistence::load_with_previous_run(&paths, Some(runtime.client()), None);
+    let client = crate::app_shell::global_close::GlobalCloseClient::disconnected_for_test();
+    let (root, mut window, _state) = open_root_with_persistence_and_global(cx, persistence, client);
+
+    assert!(!window.simulate_close());
+    window.run_until_parked();
+    let attempt = root.read_with(cx, |root, _| {
+        let recovery = root.recovery_global_close.as_ref().unwrap();
+        assert!(recovery.outcome_unknown);
+        assert!(!root.close_in_progress);
+        assert!(!root.close_completed);
+        recovery.attempt
+    });
+    assert!(!window.simulate_close());
+    root.read_with(cx, |root, _| {
+        assert_eq!(
+            root.recovery_global_close.as_ref().unwrap().attempt,
+            attempt
+        );
+        assert!(!root.close_completed);
+    });
+    runtime.shutdown(ControlPlaneCleanup::Succeeded).unwrap();
+}
+
+#[gpui::test]
 fn application_recovery_failure_flushes_without_close_intent(cx: &mut TestAppContext) {
     let temp = tempfile::tempdir().unwrap();
     let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
@@ -474,5 +663,61 @@ fn application_recovery_failure_flushes_without_close_intent(cx: &mut TestAppCon
             })
             .unwrap(),
         0
+    );
+}
+
+#[gpui::test]
+fn application_recovery_failure_uses_global_close_without_intent(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let mut original = ProjectSnapshot::default();
+    original
+        .registry_mut()
+        .add_project(project_id(PROJECT_A), path("D:/work/a"))
+        .unwrap();
+    save_terminal_recovery_snapshot(&paths, &original);
+    let fault = rusqlite::Connection::open(paths.workspace_db_path()).unwrap();
+    fault
+        .execute(
+            "UPDATE project_layouts SET layout_json = 'not-json' WHERE project_id = ?1",
+            [PROJECT_A],
+        )
+        .unwrap();
+    let (events, _event_rx) = std::sync::mpsc::sync_channel(64);
+    let runtime = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
+    let persistence =
+        AppRootPersistence::load_with_previous_run(&paths, Some(runtime.client()), None);
+    assert!(persistence.project_snapshot_recovery_failed());
+    let global = crate::app_shell::global_close::GlobalCloseRuntime::start(runtime, None).unwrap();
+    let (root, mut window, _state) =
+        open_root_with_persistence_and_global(cx, persistence, global.client());
+
+    assert!(!window.simulate_close());
+    window.run_until_parked();
+
+    root.read_with(cx, |root, _| {
+        assert!(root.close_completed);
+        assert!(root.application_close.is_none());
+        assert!(root.recovery_global_close.is_some());
+    });
+    assert!(
+        WorkspaceDatabase::open(&paths)
+            .unwrap()
+            .metadata()
+            .unwrap()
+            .unwrap()
+            .clean_shutdown
+    );
+    assert_eq!(
+        fault
+            .query_row("SELECT COUNT(*) FROM close_intents", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        global.join().unwrap(),
+        crate::app_shell::global_close::GlobalCloseSummary::Completed
     );
 }

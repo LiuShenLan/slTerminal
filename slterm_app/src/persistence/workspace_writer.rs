@@ -77,6 +77,7 @@ pub(crate) enum WorkspaceWriterError {
     FlushFailed,
     Stopped,
     ControlPlaneCleanupFailed,
+    FinalCommitDecisionFailed,
 }
 
 impl fmt::Display for WorkspaceWriterError {
@@ -104,6 +105,9 @@ impl fmt::Display for WorkspaceWriterError {
             Self::Stopped => formatter.write_str("工作区写线程已停止"),
             Self::ControlPlaneCleanupFailed => {
                 formatter.write_str("控制面清理失败，保持未正常退出")
+            }
+            Self::FinalCommitDecisionFailed => {
+                formatter.write_str("最终退出确认失败，保持未正常退出")
             }
         }
     }

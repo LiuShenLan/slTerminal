@@ -9,6 +9,8 @@ use slterm_workspace::{
 use super::AppRoot;
 use super::task_service::{CancellationToken, TaskId};
 use super::terminal_close::{PtyStopObservation, close_fingerprint, same_close_fact};
+use crate::app_shell::FinalShutdownOutcome;
+use crate::app_shell::global_close::{GlobalCloseError, GlobalCloseRequestError};
 use crate::persistence::close::{
     CloseCommitError, CloseCommitStatus, CloseStoreError, PersistedCloseIntent,
 };
@@ -17,6 +19,14 @@ pub(super) struct ApplicationClose {
     pub(super) coordinator: CloseCoordinator<String>,
     pub(super) persisted: PersistedCloseIntent,
     pub(super) stop_observation: Option<PtyStopObservation>,
+    pub(super) outcome_unknown: bool,
+    pub(super) window: gpui::AnyWindowHandle,
+}
+
+/// 恢复失败时不登记关闭意图，仅跟踪最终 flush 后的全局回执代次。
+pub(super) struct RecoveryGlobalClose {
+    pub(super) close_id: String,
+    pub(super) attempt: u64,
     pub(super) outcome_unknown: bool,
     pub(super) window: gpui::AnyWindowHandle,
 }
@@ -44,8 +54,20 @@ impl AppRoot {
             return true;
         };
         if self.project_snapshot_recovery_failed {
+            let window_handle = window.window_handle();
+            let recovery = self
+                .recovery_global_close
+                .get_or_insert_with(|| RecoveryGlobalClose {
+                    close_id: uuid::Uuid::now_v7().to_string(),
+                    attempt: 0,
+                    outcome_unknown: false,
+                    window: window_handle,
+                });
+            if recovery.outcome_unknown {
+                return false;
+            }
             self.close_in_progress = true;
-            return self.start_close_flush(writer, window.window_handle(), cx);
+            return self.start_close_flush(writer, window_handle, cx);
         }
         let Some(store_epoch) = self.store_epoch.clone().filter(|epoch| !epoch.is_empty()) else {
             log::warn!("application close rejected without current store epoch");
@@ -435,6 +457,237 @@ impl AppRoot {
                 super::events::notify_workspace_write_failed(cx);
             }
             Err(_) => self.fail_application_close_unknown(attempt),
+        }
+        cx.notify();
+    }
+
+    pub(super) fn start_application_global_close(&mut self, cx: &mut Context<'_, Self>) {
+        let Some(close) = self.application_close.as_ref() else {
+            return;
+        };
+        if close.coordinator.phase() != ClosePhase::Running(CloseStage::StopServices) {
+            return;
+        }
+        let attempt = close
+            .coordinator
+            .current_attempt()
+            .expect("全局服务阶段必须有 attempt");
+        let close_id = close.persisted.close_id.clone();
+        let Some(client) = self.global_close.clone() else {
+            return;
+        };
+        let owner = crate::windowing::focus::window_hwnd(cx);
+        let response = match client.request(owner) {
+            Ok(response) => response,
+            Err(GlobalCloseRequestError::Full) => {
+                if let Some(close) = self.application_close.as_mut() {
+                    let _ = close.coordinator.fail(attempt);
+                }
+                self.close_in_progress = false;
+                log::warn!("application global close request queue full");
+                return;
+            }
+            Err(GlobalCloseRequestError::Disconnected) => {
+                log::warn!("application global close worker disconnected");
+                self.fail_application_close_unknown(attempt);
+                return;
+            }
+        };
+        let executor = cx.background_executor().clone();
+        let registration =
+            self.tasks
+                .register_with(TaskId::CloseFlush, CancellationToken::new(), move || {
+                    let completion = executor.spawn(async move { response.recv() });
+                    cx.spawn(async move |this, cx| {
+                        let result = completion.await;
+                        let _ = this.update(cx, |root, cx| {
+                            root.finish_application_global(close_id, attempt, result, cx);
+                        });
+                    })
+                });
+        if registration.is_err() {
+            self.fail_application_close_unknown(attempt);
+        }
+    }
+
+    pub(super) fn start_recovery_global_close(&mut self, cx: &mut Context<'_, Self>) {
+        let Some(client) = self.global_close.clone() else {
+            return;
+        };
+        let (close_id, attempt) = {
+            let Some(recovery) = self.recovery_global_close.as_mut() else {
+                return;
+            };
+            if recovery.outcome_unknown {
+                return;
+            }
+            let Some(attempt) = recovery.attempt.checked_add(1) else {
+                recovery.outcome_unknown = true;
+                self.close_in_progress = false;
+                return;
+            };
+            recovery.attempt = attempt;
+            (recovery.close_id.clone(), attempt)
+        };
+        let owner = crate::windowing::focus::window_hwnd(cx);
+        let response = match client.request(owner) {
+            Ok(response) => response,
+            Err(GlobalCloseRequestError::Full) => {
+                self.close_in_progress = false;
+                log::warn!("recovery global close request queue full");
+                return;
+            }
+            Err(GlobalCloseRequestError::Disconnected) => {
+                if let Some(recovery) = self.recovery_global_close.as_mut() {
+                    recovery.outcome_unknown = true;
+                }
+                self.close_in_progress = false;
+                log::warn!("recovery global close worker disconnected");
+                return;
+            }
+        };
+        let executor = cx.background_executor().clone();
+        let registration =
+            self.tasks
+                .register_with(TaskId::CloseFlush, CancellationToken::new(), move || {
+                    let completion = executor.spawn(async move { response.recv() });
+                    cx.spawn(async move |this, cx| {
+                        let result = completion.await;
+                        let _ = this.update(cx, |root, cx| {
+                            root.finish_recovery_global(close_id, attempt, result, cx);
+                        });
+                    })
+                });
+        if registration.is_err() {
+            if let Some(recovery) = self.recovery_global_close.as_mut() {
+                recovery.outcome_unknown = true;
+            }
+            self.close_in_progress = false;
+        }
+    }
+
+    fn finish_recovery_global(
+        &mut self,
+        close_id: String,
+        attempt: u64,
+        result: Result<Result<FinalShutdownOutcome, GlobalCloseError>, std::sync::mpsc::RecvError>,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(recovery) = self.recovery_global_close.as_ref() else {
+            return;
+        };
+        if recovery.close_id != close_id || recovery.attempt != attempt || recovery.outcome_unknown
+        {
+            return;
+        }
+        self.tasks.complete(TaskId::CloseFlush);
+        match result {
+            Ok(Ok(_)) => {
+                let window = recovery.window;
+                self.close_in_progress = false;
+                self.close_completed = true;
+                let _ = window.update(cx, |_, window, _| window.remove_window());
+            }
+            Ok(Err(GlobalCloseError::ControlPlaneCleanupFailed)) => {
+                self.close_in_progress = false;
+                log::warn!("recovery control plane cleanup failed");
+            }
+            Ok(Err(GlobalCloseError::Writer(error))) => {
+                if let Some(recovery) = self.recovery_global_close.as_mut() {
+                    recovery.outcome_unknown = true;
+                }
+                self.close_in_progress = false;
+                log::warn!("recovery global writer shutdown failed: {error}");
+                super::events::notify_workspace_write_failed(cx);
+            }
+            Err(_) => {
+                if let Some(recovery) = self.recovery_global_close.as_mut() {
+                    recovery.outcome_unknown = true;
+                }
+                self.close_in_progress = false;
+                super::events::notify_workspace_write_failed(cx);
+            }
+        }
+        cx.notify();
+    }
+
+    pub(super) fn finish_application_global(
+        &mut self,
+        close_id: String,
+        attempt: CloseAttempt,
+        result: Result<Result<FinalShutdownOutcome, GlobalCloseError>, std::sync::mpsc::RecvError>,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(close) = self.application_close.as_ref() else {
+            return;
+        };
+        if close.persisted.close_id != close_id
+            || close.coordinator.current_attempt() != Some(attempt)
+            || close.coordinator.phase() != ClosePhase::Running(CloseStage::StopServices)
+        {
+            return;
+        }
+        self.tasks.complete(TaskId::CloseFlush);
+        match result {
+            Ok(Ok(outcome)) => {
+                let transitioned = {
+                    let close = self.application_close.as_mut().expect("关闭记录必须存在");
+                    if close.coordinator.services_stopped(attempt).is_err() {
+                        false
+                    } else {
+                        let clean_attempt = close
+                            .coordinator
+                            .current_attempt()
+                            .expect("正常退出提交阶段必须有 attempt");
+                        match outcome {
+                            FinalShutdownOutcome::Completed => close
+                                .coordinator
+                                .clean_shutdown_committed(clean_attempt)
+                                .is_ok(),
+                            FinalShutdownOutcome::Abandoned => {
+                                if close.coordinator.fail(clean_attempt).is_err() {
+                                    false
+                                } else {
+                                    close.coordinator.abandon().is_ok()
+                                }
+                            }
+                        }
+                    }
+                };
+                if !transitioned {
+                    let attempt = self
+                        .application_close
+                        .as_ref()
+                        .and_then(|close| close.coordinator.current_attempt())
+                        .unwrap_or(attempt);
+                    self.fail_application_close_unknown(attempt);
+                    return;
+                }
+                let window = self
+                    .application_close
+                    .as_ref()
+                    .expect("关闭记录必须存在")
+                    .window;
+                self.close_in_progress = false;
+                self.close_completed = true;
+                let _ = window.update(cx, |_, window, _| window.remove_window());
+            }
+            Ok(Err(GlobalCloseError::ControlPlaneCleanupFailed)) => {
+                if let Some(close) = self.application_close.as_mut() {
+                    let _ = close.coordinator.fail(attempt);
+                }
+                self.close_in_progress = false;
+                log::warn!("application control plane cleanup failed");
+            }
+            Ok(Err(GlobalCloseError::Writer(error))) => {
+                log::warn!("application global writer shutdown failed: {error}");
+                self.fail_application_close_unknown(attempt);
+                super::events::notify_workspace_write_failed(cx);
+            }
+            Err(_) => {
+                self.fail_application_close_unknown(attempt);
+                super::events::notify_workspace_write_failed(cx);
+            }
         }
         cx.notify();
     }

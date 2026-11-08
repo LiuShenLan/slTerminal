@@ -100,9 +100,24 @@ impl AppRoot {
                 let _ = self.start_close_flush(client, window, cx);
             }
             Ok(report) if report.failed == 0 => {
-                self.close_in_progress = false;
-                self.close_completed = true;
-                let _ = window.update(cx, |_, window, _| window.remove_window());
+                let application_global = self.application_close.as_ref().is_some_and(|close| {
+                    close.coordinator.phase()
+                        == slterm_workspace::ClosePhase::Running(
+                            slterm_workspace::CloseStage::StopServices,
+                        )
+                });
+                let recovery_global = self.recovery_global_close.is_some();
+                if self.global_close.is_some() && (application_global || recovery_global) {
+                    if application_global {
+                        self.start_application_global_close(cx);
+                    } else {
+                        self.start_recovery_global_close(cx);
+                    }
+                } else {
+                    self.close_in_progress = false;
+                    self.close_completed = true;
+                    let _ = window.update(cx, |_, window, _| window.remove_window());
+                }
             }
             _ => {
                 self.close_in_progress = false;

@@ -21,6 +21,7 @@ macro_rules! eprintln {
 
 pub(crate) mod app_root;
 pub(crate) mod assets;
+mod global_close;
 // 源码文件 tab:普通源码与 gitshow 只读臂。
 #[allow(dead_code)] // 生产消费归 Document 与文本视图阶段。
 pub(crate) mod code_tab;
@@ -266,6 +267,7 @@ impl WorkspaceWriterRuntime {
         }
     }
 
+    #[cfg(test)]
     /// 最终提交失败由生产调用方决定重试或承担旧状态恢复后果。
     fn shutdown_with_decision(
         self,
@@ -273,12 +275,23 @@ impl WorkspaceWriterRuntime {
         mut decide: impl FnMut() -> FinalCommitDecision,
     ) -> Result<FinalShutdownOutcome, crate::persistence::workspace_writer::WorkspaceWriterError>
     {
-        self.shutdown_internal(control_plane_cleanup, move |_| {
-            if decide() == FinalCommitDecision::Retry {
-                FinalCommitRecovery::Retry
-            } else {
-                FinalCommitRecovery::Abandon
-            }
+        self.shutdown_with_fallible_decision(control_plane_cleanup, move || Ok(decide()))
+    }
+
+    /// 确认失败不是用户放弃；显式上抛并保持未正常退出。
+    fn shutdown_with_fallible_decision(
+        self,
+        control_plane_cleanup: ControlPlaneCleanup,
+        mut decide: impl FnMut() -> Result<
+            FinalCommitDecision,
+            crate::persistence::workspace_writer::WorkspaceWriterError,
+        >,
+    ) -> Result<FinalShutdownOutcome, crate::persistence::workspace_writer::WorkspaceWriterError>
+    {
+        self.shutdown_internal(control_plane_cleanup, move |_| match decide() {
+            Ok(FinalCommitDecision::Retry) => FinalCommitRecovery::Retry,
+            Ok(FinalCommitDecision::Abandon) => FinalCommitRecovery::Abandon,
+            Err(error) => FinalCommitRecovery::Fail(error),
         })
     }
 
@@ -324,7 +337,6 @@ impl WorkspaceWriterRuntime {
                 Err(error) => match on_final_error(error) {
                     FinalCommitRecovery::Retry => {}
                     FinalCommitRecovery::Abandon => return Ok(FinalShutdownOutcome::Abandoned),
-                    #[cfg(test)]
                     FinalCommitRecovery::Fail(error) => return Err(error),
                 },
             }
@@ -347,7 +359,6 @@ pub(crate) enum FinalShutdownOutcome {
 enum FinalCommitRecovery {
     Retry,
     Abandon,
-    #[cfg(test)]
     Fail(crate::persistence::workspace_writer::WorkspaceWriterError),
 }
 
@@ -477,8 +488,17 @@ pub fn run_shell(initial_cwd: Option<PathBuf>) {
         Some(workspace_writer_client),
         previous_run,
     );
-    // 控制面复用 writer 已提交的本次运行身份；启动与显式关闭都在 GPUI 外。
-    let mut local_control = start_local_control_service(Some(&workspace_writer), shell_tx.clone());
+    // 控制面与 writer 移交给 GPUI 外关闭所有者；窗口只持有有界请求 client。
+    let local_control = start_local_control_service(Some(&workspace_writer), shell_tx.clone());
+    let global_close =
+        match global_close::GlobalCloseRuntime::start(workspace_writer, local_control) {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                log::warn!("global close runtime startup failed: {error}");
+                return;
+            }
+        };
+    let global_close_client = global_close.client();
     let open_urls_tx = shell_tx.clone();
     // 通知通道开机位:toast 点击回投走同一壳事件队列;
     // AUMID 预注册幂等,必须早于第一条通知。
@@ -511,27 +531,24 @@ pub fn run_shell(initial_cwd: Option<PathBuf>) {
             shell_rx,
             initial_root,
             shell,
-            side_view_persistence,
+            app_root::AppRootServices {
+                persistence: side_view_persistence,
+                global_close: global_close_client,
+            },
             start_hidden,
             regular_start,
         );
     });
-    // GPUI 已退出：先显式关闭控制面，再等待最终冲刷并 join 转发器。
-    // 控制面失败只闸门 clean_shutdown，不得跳过 writer 的最终持久提交。
-    let control_plane_cleanup = shutdown_local_control_service(local_control.as_mut());
-    drop(local_control);
-    match workspace_writer.shutdown_with_decision(control_plane_cleanup, || {
-        if crate::platform::close_dialog::retry_final_commit() {
-            FinalCommitDecision::Retry
-        } else {
-            FinalCommitDecision::Abandon
-        }
-    }) {
-        Ok(FinalShutdownOutcome::Completed) => {}
-        Ok(FinalShutdownOutcome::Abandoned) => {
+    // 正常路径已在窗口销毁前完成全局段；异常返回由断连兜底回收。
+    match global_close.join() {
+        Ok(global_close::GlobalCloseSummary::Completed) => {}
+        Ok(global_close::GlobalCloseSummary::Abandoned) => {
             log::warn!("user abandoned final workspace state commit after explicit warning")
         }
-        Err(error) => log::warn!("workspace writer shutdown failed: {error}"),
+        Ok(global_close::GlobalCloseSummary::Failed) => {
+            log::warn!("global workspace shutdown failed")
+        }
+        Err(_) => log::warn!("global close worker terminated abnormally"),
     }
     // 托盘收尾:先删图标再退进程,否则任务栏残影要等
     // 用户悬停才消失;join 保证删图标先于进程退出。

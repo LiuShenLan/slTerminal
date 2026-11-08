@@ -26,6 +26,7 @@ use gpui_component::menu::PopupMenu;
 use slterm_path::CanonicalPath;
 use slterm_workspace::{PanelId, PanelIdAllocator, ProjectId, ProjectSnapshot, SideViewId};
 
+use crate::app_shell::global_close::GlobalCloseClient;
 use crate::persistence::workspace_writer::WorkspaceWriterClient;
 
 use focus_manager::{FocusManager, FocusRegistration, FocusSubscriptions};
@@ -102,6 +103,12 @@ struct SideButtonMenu {
     _dismiss: Subscription,
 }
 
+/// 生产 AppRoot 的外部服务；全局关闭 client 不可省略。
+pub(crate) struct AppRootServices {
+    pub(crate) persistence: AppRootPersistence,
+    pub(crate) global_close: GlobalCloseClient,
+}
+
 /// 单窗口运行根；`projects` 只是强实体引用表，不复制项目注册信息。
 pub(crate) struct AppRoot {
     snapshot: ProjectSnapshot,
@@ -113,6 +120,8 @@ pub(crate) struct AppRoot {
     close_in_progress: bool,
     close_completed: bool,
     application_close: Option<application_close::ApplicationClose>,
+    recovery_global_close: Option<application_close::RecoveryGlobalClose>,
+    global_close: Option<GlobalCloseClient>,
     terminal_closes: BTreeMap<slterm_workspace::TerminalId, terminal_close::LocalTerminalClose>,
     next_terminal_close_sequence: u64,
     project_closes: BTreeMap<ProjectId, project_close::LocalProjectClose>,
@@ -139,14 +148,15 @@ impl AppRoot {
     pub(crate) fn new(
         panel_ids: PanelIdAllocator,
         shell: CanonicalPath,
-        persistence: AppRootPersistence,
+        services: AppRootServices,
         cx: &mut Context<'_, Self>,
     ) -> Self {
         Self::with_launcher(
             panel_ids,
             shell,
             Box::new(commands::LocalTerminalLauncher),
-            persistence,
+            services.persistence,
+            Some(services.global_close),
             cx,
         )
     }
@@ -156,6 +166,7 @@ impl AppRoot {
         shell: CanonicalPath,
         launcher: Box<dyn TerminalPanelLauncher>,
         mut persistence: AppRootPersistence,
+        global_close: Option<GlobalCloseClient>,
         cx: &mut Context<'_, Self>,
     ) -> Self {
         let workspace_focus = cx.focus_handle();
@@ -248,6 +259,8 @@ impl AppRoot {
             close_in_progress: false,
             close_completed: false,
             application_close: None,
+            recovery_global_close: None,
+            global_close,
             terminal_closes: BTreeMap::new(),
             next_terminal_close_sequence: 0,
             project_closes: BTreeMap::new(),

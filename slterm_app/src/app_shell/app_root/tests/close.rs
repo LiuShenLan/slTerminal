@@ -283,6 +283,276 @@ fn application_exit_commits_intent_and_stops_pty_before_window_destroy(cx: &mut 
 }
 
 #[gpui::test]
+fn application_global_close_commits_clean_shutdown_before_window_destroy(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let (events, _event_rx) = std::sync::mpsc::sync_channel(64);
+    let runtime = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
+    let persistence =
+        AppRootPersistence::load_with_previous_run(&paths, Some(runtime.client()), None);
+    let writer_client = runtime.client();
+    let (control_started, started) = std::sync::mpsc::sync_channel(1);
+    let (release_control, release) = std::sync::mpsc::sync_channel(1);
+    let global = crate::app_shell::global_close::GlobalCloseRuntime::start_with_control(
+        runtime,
+        move || {
+            control_started.send(()).unwrap();
+            release.recv().unwrap();
+            ControlPlaneCleanup::Succeeded
+        },
+        || crate::app_shell::FinalCommitDecision::Retry,
+    )
+    .unwrap();
+    let (root, mut window, state) =
+        open_root_with_persistence_and_global(cx, persistence, global.client());
+    add_project(&root, &mut window, PROJECT_A, "D:/work/a");
+    let panel = new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_A);
+    flush_when_ready(&writer_client);
+    let weak = root.downgrade();
+
+    assert!(!window.simulate_close());
+    let close_id = root.read_with(cx, |root, _| {
+        root.application_close
+            .as_ref()
+            .unwrap()
+            .persisted
+            .close_id
+            .clone()
+    });
+    let committed = wait_for_close_status(&paths, &close_id, CloseCommitStatus::StateCommitted);
+    window.update(|_, cx| {
+        root.update(cx, |root, cx| {
+            let attempt = root
+                .application_close
+                .as_ref()
+                .unwrap()
+                .coordinator
+                .current_attempt()
+                .unwrap();
+            root.finish_application_commit(attempt, Ok(Ok(committed)), cx);
+            let attempt = root
+                .application_close
+                .as_ref()
+                .unwrap()
+                .coordinator
+                .current_attempt()
+                .unwrap();
+            root.finish_application_stop(
+                attempt,
+                super::super::terminal_close::PtyStopObservation::Stopped,
+                cx,
+            );
+        });
+    });
+    for next in [
+        CloseCommitStatus::PtyStopped,
+        CloseCommitStatus::CleanupCommitted,
+        CloseCommitStatus::Completed,
+    ] {
+        let updated = wait_for_close_status(&paths, &close_id, next);
+        window.update(|_, cx| {
+            root.update(cx, |root, cx| {
+                let attempt = root
+                    .application_close
+                    .as_ref()
+                    .unwrap()
+                    .coordinator
+                    .current_attempt()
+                    .unwrap();
+                root.finish_application_advance(attempt, next, Ok(Ok(updated)), cx);
+            });
+        });
+    }
+    flush_when_ready(&writer_client);
+    window.update(|_, cx| {
+        root.update(cx, |root, cx| {
+            root.tasks
+                .complete(super::super::task_service::TaskId::CloseFlush);
+            root.start_application_global_close(cx);
+        });
+    });
+    started
+        .recv_timeout(Duration::from_secs(5))
+        .expect("全局控制面必须收到关闭请求");
+    root.read_with(cx, |root, _| {
+        assert!(!root.close_completed, "全局回执前不得销毁窗口");
+        assert_ne!(
+            root.application_close.as_ref().unwrap().coordinator.phase(),
+            ClosePhase::Completed
+        );
+    });
+    // 已销毁窗口的 AnyWindowHandle 更新会失败，直接证明回执前窗口仍有效。
+    window.update(|_, _| ());
+    assert!(
+        !WorkspaceDatabase::open(&paths)
+            .unwrap()
+            .metadata()
+            .unwrap()
+            .unwrap()
+            .clean_shutdown,
+        "放行全局段前不得提交正常退出"
+    );
+
+    release_control.send(()).unwrap();
+    window.run_until_parked();
+    root.read_with(cx, |root, _| {
+        assert!(root.close_completed);
+        assert_eq!(
+            root.application_close.as_ref().unwrap().coordinator.phase(),
+            ClosePhase::Completed
+        );
+    });
+    assert!(matches!(
+        state.borrow().sessions[&panel.sequence()].try_recv(),
+        Ok(Msg::Shutdown)
+    ));
+    let mut store = WorkspaceDatabase::open(&paths).unwrap();
+    assert!(store.metadata().unwrap().unwrap().clean_shutdown);
+    assert_eq!(
+        store
+            .load_close_intent(&close_id)
+            .unwrap()
+            .unwrap()
+            .commit_status,
+        CloseCommitStatus::Completed
+    );
+    drop(store);
+    assert_eq!(
+        global.join().unwrap(),
+        crate::app_shell::global_close::GlobalCloseSummary::Completed
+    );
+    drop(root);
+    cx.update(|_| {});
+    weak.assert_released();
+}
+
+#[gpui::test]
+fn application_control_cleanup_failure_keeps_window_and_retries_global_close(
+    cx: &mut TestAppContext,
+) {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let (events, _event_rx) = std::sync::mpsc::sync_channel(64);
+    let runtime = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
+    let persistence =
+        AppRootPersistence::load_with_previous_run(&paths, Some(runtime.client()), None);
+    let writer_client = runtime.client();
+    let mut control_attempts = 0;
+    let global = crate::app_shell::global_close::GlobalCloseRuntime::start_with_control(
+        runtime,
+        move || {
+            control_attempts += 1;
+            if control_attempts == 1 {
+                ControlPlaneCleanup::Failed
+            } else {
+                ControlPlaneCleanup::Succeeded
+            }
+        },
+        || crate::app_shell::FinalCommitDecision::Retry,
+    )
+    .unwrap();
+    let (root, mut window, _state) =
+        open_root_with_persistence_and_global(cx, persistence, global.client());
+    add_project(&root, &mut window, PROJECT_A, "D:/work/a");
+    new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_A);
+    flush_when_ready(&writer_client);
+
+    assert!(!window.simulate_close());
+    window.run_until_parked();
+    root.read_with(cx, |root, _| {
+        let close = root.application_close.as_ref().unwrap();
+        assert_eq!(
+            close.coordinator.phase(),
+            ClosePhase::Failed(CloseStage::StopServices)
+        );
+        assert!(!close.outcome_unknown);
+        assert!(!root.close_in_progress);
+        assert!(!root.close_completed);
+    });
+    assert!(
+        !WorkspaceDatabase::open(&paths)
+            .unwrap()
+            .metadata()
+            .unwrap()
+            .unwrap()
+            .clean_shutdown
+    );
+
+    assert!(!window.simulate_close());
+    window.run_until_parked();
+    root.read_with(cx, |root, _| {
+        assert!(root.close_completed);
+        assert_eq!(
+            root.application_close.as_ref().unwrap().coordinator.phase(),
+            ClosePhase::Completed
+        );
+    });
+    assert!(
+        WorkspaceDatabase::open(&paths)
+            .unwrap()
+            .metadata()
+            .unwrap()
+            .unwrap()
+            .clean_shutdown
+    );
+    assert_eq!(
+        global.join().unwrap(),
+        crate::app_shell::global_close::GlobalCloseSummary::Completed
+    );
+}
+
+#[gpui::test]
+fn application_global_abandon_closes_without_clean_shutdown(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let (events, _event_rx) = std::sync::mpsc::sync_channel(64);
+    let runtime = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
+    let persistence =
+        AppRootPersistence::load_with_previous_run(&paths, Some(runtime.client()), None);
+    let fault = rusqlite::Connection::open(paths.workspace_db_path()).unwrap();
+    fault
+        .execute_batch(
+            "CREATE TRIGGER reject_clean_shutdown BEFORE UPDATE ON workspace_meta \
+             BEGIN SELECT RAISE(ABORT, 'injected metadata failure'); END;",
+        )
+        .unwrap();
+    let global = crate::app_shell::global_close::GlobalCloseRuntime::start_with_control(
+        runtime,
+        || ControlPlaneCleanup::Succeeded,
+        || crate::app_shell::FinalCommitDecision::Abandon,
+    )
+    .unwrap();
+    let (root, mut window, _state) =
+        open_root_with_persistence_and_global(cx, persistence, global.client());
+
+    assert!(!window.simulate_close());
+    window.run_until_parked();
+
+    root.read_with(cx, |root, _| {
+        assert!(root.close_completed);
+        assert_eq!(
+            root.application_close.as_ref().unwrap().coordinator.phase(),
+            ClosePhase::Completed
+        );
+    });
+    fault
+        .execute_batch("DROP TRIGGER reject_clean_shutdown")
+        .unwrap();
+    assert!(
+        !WorkspaceDatabase::open(&paths)
+            .unwrap()
+            .metadata()
+            .unwrap()
+            .unwrap()
+            .clean_shutdown
+    );
+    assert_eq!(
+        global.join().unwrap(),
+        crate::app_shell::global_close::GlobalCloseSummary::Abandoned
+    );
+}
+
+#[gpui::test]
 fn application_join_panic_requires_explicit_retry_without_second_join(cx: &mut TestAppContext) {
     let temp = tempfile::tempdir().unwrap();
     let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();

@@ -33,6 +33,7 @@ use slterm_workspace::{
     TerminalRecord, ViewKey,
 };
 
+use crate::app_shell::global_close::GlobalCloseClient;
 use crate::app_shell::{ControlPlaneCleanup, SltermShellEvent, WorkspaceWriterRuntime};
 use crate::gpui_terminal::PaneId;
 use crate::gpui_terminal::session;
@@ -224,6 +225,24 @@ fn open_root_with_persistence(
     open_root_with_persistence_and_size(cx, persistence, None)
 }
 
+fn open_root_with_persistence_and_global(
+    cx: &mut TestAppContext,
+    persistence: AppRootPersistence,
+    global_close: GlobalCloseClient,
+) -> (
+    Entity<AppRoot>,
+    VisualTestContext,
+    Rc<RefCell<LauncherState>>,
+) {
+    open_root_with_persistence_and_size_configured(
+        cx,
+        persistence,
+        None,
+        Some(global_close),
+        |_| {},
+    )
+}
+
 fn open_root_with_persistence_and_size(
     cx: &mut TestAppContext,
     persistence: AppRootPersistence,
@@ -233,13 +252,14 @@ fn open_root_with_persistence_and_size(
     VisualTestContext,
     Rc<RefCell<LauncherState>>,
 ) {
-    open_root_with_persistence_and_size_configured(cx, persistence, window_size, |_| {})
+    open_root_with_persistence_and_size_configured(cx, persistence, window_size, None, |_| {})
 }
 
 fn open_root_with_persistence_and_size_configured(
     cx: &mut TestAppContext,
     persistence: AppRootPersistence,
     window_size: Option<gpui::Size<gpui::Pixels>>,
+    global_close: Option<GlobalCloseClient>,
     configure: impl FnOnce(&mut LauncherState),
 ) -> (
     Entity<AppRoot>,
@@ -267,6 +287,7 @@ fn open_root_with_persistence_and_size_configured(
                 path("C:/Program Files/PowerShell/7/pwsh.exe"),
                 Box::new(launcher),
                 persistence,
+                global_close,
                 cx,
             )
         });
@@ -701,7 +722,7 @@ fn terminal_restore_failure_retains_panel_without_duplicate(cx: &mut TestAppCont
     let writer = WorkspaceWriter::start(paths.clone()).unwrap();
     let persistence = AppRootPersistence::load(&paths, Some(writer.client()));
     let (root, mut window, state) =
-        open_root_with_persistence_and_size_configured(cx, persistence, None, |launcher| {
+        open_root_with_persistence_and_size_configured(cx, persistence, None, None, |launcher| {
             launcher.fail_next = true
         });
 

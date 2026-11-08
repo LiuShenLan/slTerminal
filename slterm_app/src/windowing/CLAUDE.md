@@ -7,7 +7,7 @@
 - **回窗单点**：toast 点击、托盘回窗与 toast 动作按钮的窗口还原与前置一律经 `focus::focus_window`；窗内项目与面板激活由 AppRoot 命令完成。Win32 焦点/还原原语（`SetForegroundWindow`/`ShowWindow`/`BringWindowToTop`/`SW_RESTORE`）只许出现在 `focus.rs`；其他文件出现即被门禁用例 `win32_focus_calls_only_live_in_the_facade` 拦下。托盘菜单的 owner 前置不是回窗语义，同样收在 `foreground_menu_owner`。
 - **签名适配**：单窗壳的事件泵持有 `&mut Window`，且 GPUI 禁止在窗口更新回调内再次 `AnyWindowHandle::update`，故 facade 以显式 `&mut Window` 落点。
 - **还原语义**：最小化 → `IsIconic` → `SW_RESTORE` → 前置；正常窗口只前置。顺序由 `focus_steps` 纯函数锁死，真实 Win32 面按豁免走构建产物 smoke。
-- **HWND 单源**：开窗时 `publish_window` 发布句柄；任务栏闪烁/进度只经 `window_hwnd` 查询。虚拟窗口无原生句柄 → None，调用方按 0 兜底。
+- **HWND 单源**：开窗时 `publish_window` 发布句柄；任务栏闪烁/进度与全局退出确认框 owner 只经 `window_hwnd` 查询。虚拟窗口无原生句柄 → None；测试与 GPUI 已退出兜底按空 owner 处理，正常生产关窗必须携带仍存活主窗。
 - **托盘退出**：托盘命令只经 AppRoot 壳事件入口触发关窗；不得另建绕过统一关闭链的退出入口。
 - **静默启动窗口形态**：首窗 `show=false`/`focus=false` 创建，不进入 present-then-show；托盘「显示」经本 facade 的 GPUI `activate_window` 消费首窗 placement 完成曝光 + 前台化。显式 CLI 目录启动恒不静默。
 
