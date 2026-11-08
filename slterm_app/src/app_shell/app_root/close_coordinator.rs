@@ -16,7 +16,10 @@ impl AppRoot {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> bool {
-        if self.close_in_progress || !self.terminal_closes.is_empty() {
+        if self.close_in_progress
+            || !self.terminal_closes.is_empty()
+            || !self.project_closes.is_empty()
+        {
             return false;
         }
         let Some(client) = self.project_writer.clone() else {

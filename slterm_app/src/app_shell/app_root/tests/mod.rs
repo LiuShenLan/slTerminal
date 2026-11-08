@@ -4,6 +4,9 @@ mod close;
 mod handover;
 mod local_close;
 mod local_close_receipts;
+mod project_close;
+mod project_close_preflight;
+mod project_close_receipts;
 mod sidebar;
 
 use std::cell::RefCell;

@@ -166,7 +166,7 @@ impl AppRoot {
             generation: self.snapshot_generation,
             decision: CloseDecision::NotRequired,
         }];
-        let fingerprint = terminal_close_fingerprint(&close_id, &scope, &store_epoch, &objects);
+        let fingerprint = close_fingerprint(&close_id, &scope, &store_epoch, &objects);
         let intent =
             CloseIntent::new(objects, fingerprint).map_err(|_| AppRootError::TerminalCloseState)?;
         let registration = PersistedCloseIntent {
@@ -780,7 +780,10 @@ impl AppRoot {
     }
 }
 
-fn same_close_fact(current: &PersistedCloseIntent, receipt: &PersistedCloseIntent) -> bool {
+pub(super) fn same_close_fact(
+    current: &PersistedCloseIntent,
+    receipt: &PersistedCloseIntent,
+) -> bool {
     current.close_id == receipt.close_id
         && current.scope == receipt.scope
         && current.store_epoch == receipt.store_epoch
@@ -791,7 +794,7 @@ fn terminal_stop_panic_diagnostic() -> &'static str {
     "terminal PTY worker terminated abnormally"
 }
 
-fn terminal_close_fingerprint(
+pub(super) fn close_fingerprint(
     close_id: &str,
     scope: &CloseScope,
     store_epoch: &str,
@@ -860,40 +863,40 @@ mod fingerprint_tests {
     fn fingerprint_binds_close_scope_epoch_and_object_facts() {
         let scope = scope();
         let objects = objects();
-        let baseline = terminal_close_fingerprint("close-a", &scope, "epoch-a", &objects);
+        let baseline = close_fingerprint("close-a", &scope, "epoch-a", &objects);
         assert_ne!(baseline, [0; 32]);
         assert_ne!(
             baseline,
-            terminal_close_fingerprint("close-b", &scope, "epoch-a", &objects)
+            close_fingerprint("close-b", &scope, "epoch-a", &objects)
         );
         assert_ne!(
             baseline,
-            terminal_close_fingerprint("close-a", &scope, "epoch-b", &objects)
+            close_fingerprint("close-a", &scope, "epoch-b", &objects)
         );
         let other_scope = CloseScope::Panels {
             project_id: slterm_workspace::ProjectId::from_uuid(uuid::Uuid::now_v7()).unwrap(),
         };
         assert_ne!(
             baseline,
-            terminal_close_fingerprint("close-a", &other_scope, "epoch-a", &objects)
+            close_fingerprint("close-a", &other_scope, "epoch-a", &objects)
         );
         let mut changed = objects.clone();
         changed[0].id = "other-terminal".to_owned();
         assert_ne!(
             baseline,
-            terminal_close_fingerprint("close-a", &scope, "epoch-a", &changed)
+            close_fingerprint("close-a", &scope, "epoch-a", &changed)
         );
         let mut changed = objects.clone();
         changed[0].generation += 1;
         assert_ne!(
             baseline,
-            terminal_close_fingerprint("close-a", &scope, "epoch-a", &changed)
+            close_fingerprint("close-a", &scope, "epoch-a", &changed)
         );
         let mut changed = objects;
         changed[0].decision = CloseDecision::Discard;
         assert_ne!(
             baseline,
-            terminal_close_fingerprint("close-a", &scope, "epoch-a", &changed)
+            close_fingerprint("close-a", &scope, "epoch-a", &changed)
         );
     }
 }

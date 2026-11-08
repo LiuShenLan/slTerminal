@@ -156,8 +156,12 @@ pub(crate) enum AppRootError {
     TerminalCloseRunning,
     TerminalCloseState,
     TerminalCloseOutcomeUnknown,
+    ProjectCloseRunning,
+    ProjectCloseState,
+    ProjectCloseOutcomeUnknown,
     WorkspaceEpochUnavailable,
     TerminalCloseWriter(crate::persistence::workspace_writer::WorkspaceWriterError),
+    ProjectCloseWriter(crate::persistence::workspace_writer::WorkspaceWriterError),
     Sidebar(SidebarError),
 }
 
@@ -176,20 +180,26 @@ impl fmt::Display for AppRootError {
             Self::UnexpectedParameters => formatter.write_str("命令参数与目标命令不匹配"),
             Self::Closing => formatter.write_str("应用正在关闭，拒绝新命令"),
             Self::ProjectSnapshotCommitInFlight => {
-                formatter.write_str("终端关闭快照正在提交，暂拒显式快照命令")
+                formatter.write_str("关闭快照正在提交，暂拒显式快照命令")
             }
             Self::ProjectSnapshotRecoveryFailed => {
-                formatter.write_str("项目快照恢复失败，拒绝终端关闭写入")
+                formatter.write_str("项目快照恢复失败，拒绝关闭写入")
             }
             Self::TerminalCloseRunning => formatter.write_str("终端正在关闭，拒绝重复请求"),
             Self::TerminalCloseState => formatter.write_str("终端关闭状态转换无效"),
             Self::TerminalCloseOutcomeUnknown => {
                 formatter.write_str("终端关闭结果未知，已停止自动重试")
             }
+            Self::ProjectCloseRunning => formatter.write_str("项目正在关闭，拒绝重复或并发请求"),
+            Self::ProjectCloseState => formatter.write_str("项目关闭状态转换无效"),
+            Self::ProjectCloseOutcomeUnknown => {
+                formatter.write_str("项目关闭结果未知，已停止自动重试")
+            }
             Self::WorkspaceEpochUnavailable => {
-                formatter.write_str("工作区当前世代不可用，拒绝终端关闭")
+                formatter.write_str("工作区当前世代不可用，拒绝关闭")
             }
             Self::TerminalCloseWriter(error) => write!(formatter, "终端关闭写请求失败: {error}"),
+            Self::ProjectCloseWriter(error) => write!(formatter, "项目关闭写请求失败: {error}"),
             Self::Sidebar(error) => write!(formatter, "侧栏命令失败: {error}"),
         }
     }
@@ -201,7 +211,7 @@ impl std::error::Error for AppRootError {
             Self::Project(error) => Some(error),
             Self::Snapshot(error) => Some(error),
             Self::Launch(error) => Some(error),
-            Self::TerminalCloseWriter(error) => Some(error),
+            Self::TerminalCloseWriter(error) | Self::ProjectCloseWriter(error) => Some(error),
             Self::Sidebar(error) => Some(error),
             Self::Registry(_)
             | Self::PanelIdExhausted
@@ -216,6 +226,9 @@ impl std::error::Error for AppRootError {
             | Self::TerminalCloseRunning
             | Self::TerminalCloseState
             | Self::TerminalCloseOutcomeUnknown
+            | Self::ProjectCloseRunning
+            | Self::ProjectCloseState
+            | Self::ProjectCloseOutcomeUnknown
             | Self::WorkspaceEpochUnavailable => None,
         }
     }
@@ -279,7 +292,7 @@ impl AppRoot {
         cx.notify();
     }
 
-    fn restore_project_panels(
+    pub(super) fn restore_project_panels(
         &mut self,
         project_id: ProjectId,
         window: &mut Window,
@@ -738,15 +751,18 @@ impl AppRoot {
     }
 
     pub(super) fn ensure_project_snapshot_command_allowed(&self) -> Result<(), AppRootError> {
-        if self.terminal_closes.values().any(|close| {
-            matches!(
-                close.coordinator.phase(),
-                slterm_workspace::ClosePhase::Running(slterm_workspace::CloseStage::CommitState)
-                    | slterm_workspace::ClosePhase::Failed(
+        if !self.project_closes.is_empty()
+            || self.terminal_closes.values().any(|close| {
+                matches!(
+                    close.coordinator.phase(),
+                    slterm_workspace::ClosePhase::Running(
+                        slterm_workspace::CloseStage::CommitState
+                    ) | slterm_workspace::ClosePhase::Failed(
                         slterm_workspace::CloseStage::CommitState
                     )
-            )
-        }) {
+                )
+            })
+        {
             Err(AppRootError::ProjectSnapshotCommitInFlight)
         } else {
             Ok(())
@@ -1106,7 +1122,7 @@ impl AppRoot {
     }
 
     /// 同步输出与焦点可见性；所有项目的会话泵与实体继续持有。
-    fn sync_project_visibility(&mut self, cx: &mut App) {
+    pub(super) fn sync_project_visibility(&mut self, cx: &mut App) {
         let active = self.snapshot.registry().active();
         self.sync_focus_visibility(active, cx);
         for (project_id, project) in &self.projects {
@@ -1126,7 +1142,7 @@ impl AppRoot {
     }
 
     /// 还焦前先开放目标项目节点，并关闭所有隐藏项目的焦点资格。
-    fn sync_focus_visibility(&mut self, active: Option<ProjectId>, cx: &App) {
+    pub(super) fn sync_focus_visibility(&mut self, active: Option<ProjectId>, cx: &App) {
         let mut focus_visibility = Vec::new();
         for (project_id, project) in &self.projects {
             let visible = active == Some(*project_id);
@@ -1164,7 +1180,7 @@ impl AppRoot {
             .ok_or(AppRootError::MissingPanel)
     }
 
-    fn project_default_focus(
+    pub(super) fn project_default_focus(
         &self,
         project_id: ProjectId,
         cx: &App,

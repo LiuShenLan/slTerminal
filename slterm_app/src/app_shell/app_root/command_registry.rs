@@ -33,6 +33,7 @@ pub(crate) enum CommandId {
     SplitRight,
     SplitDown,
     CloseActiveTerminal,
+    RemoveProject,
     ActivateSideView,
     ToggleSidebar,
     FocusActivityBar,
@@ -71,6 +72,8 @@ pub(crate) enum CommandSource {
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) enum CommandTarget {
     Focused,
+    #[allow(dead_code)] // 导航与 Runtime 的项目入口按稳定身份构造该目标。
+    Project(ProjectId),
     SideView(SideViewId),
     SideButton(SideViewId),
     SidebarWidthDivider,
@@ -398,7 +401,7 @@ impl CommandRegistry {
                 | CommandId::SplitDown
                 | CommandId::CloseActiveTerminal
         );
-        if terminal_command && context.modal {
+        if (terminal_command || id == CommandId::RemoveProject) && context.modal {
             return Err(FocusError::ModalActive.into());
         }
         let failed_terminal_close_pending = id == CommandId::CloseActiveTerminal
@@ -426,6 +429,17 @@ impl CommandRegistry {
             )
         {
             return Err(AppRootError::MissingPanel);
+        }
+        if id == CommandId::RemoveProject {
+            let CommandTarget::Project(project_id) = target else {
+                return Err(AppRootError::UnexpectedParameters);
+            };
+            if parameters.is_some() {
+                return Err(AppRootError::UnexpectedParameters);
+            }
+            return root
+                .remove_project(project_id, window, cx)
+                .map(|()| CommandOutcome::Completed);
         }
         if id == CommandId::ActivateSideView {
             let CommandTarget::SideView(view) = target else {

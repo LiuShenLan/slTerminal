@@ -218,7 +218,7 @@
 | 多项目切换只改变可见性且实例与进程不重建 | `workspace_project_switch_preserves_instances` | 待实现 |
 | 共享 Document 只有最后引用关闭才触发内容守卫 | `document_last_reference_close_guard` | 待实现 |
 | 批量保存失败取消关闭并保留全部 Panel 与 PTY | `workspace_batch_save_failure_cancels_close` | 待实现 |
-| 项目移除先完成守卫与删除意图再销毁资源 | `project_remove_commits_intent_before_destroy` | 待实现 |
+| 项目移除先完成守卫与删除意图再销毁资源 | `project_remove_commits_intent_before_destroy` | 已自动化 |
 | 激活项目不关闭无项目浮层或其 Hooks 草稿 | `app_settings_overlay_keeps_hooks_draft` | 待实现 |
 | 移交显式 cwd 未授权时拒绝且不改投项目 | `handover_rejects_unauthorized_cwd` | 待实现 |
 | 最终退出提交失败后允许知情放弃状态 | `close_final_commit_failure_allows_explicit_abandon` | 待实现 |

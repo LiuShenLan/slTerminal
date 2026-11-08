@@ -11,7 +11,9 @@ use gpui::{
     MouseButton, Render, Styled as _, Window, div,
 };
 use slterm_sidebar::{SideViewState, SidebarState, side_view_state_schema};
-use slterm_workspace::{ProjectSnapshot, SideViewId, ViewState, ViewStateError, ViewStateRegistry};
+use slterm_workspace::{
+    ProjectId, ProjectSnapshot, SideViewId, ViewState, ViewStateError, ViewStateRegistry,
+};
 
 use super::side_view_host::{SideViewControl, SideViewHost};
 use crate::persistence::workspace_writer::{WorkspaceWriterClient, WorkspaceWriterError};
@@ -315,6 +317,42 @@ impl SideView {
         self.state.to_view_state(&self.registry)
     }
 
+    /// 项目清理提交后同步内存分区；后续检查点与析构只能写出已清理状态。
+    pub(super) fn remove_project(&mut self, project_id: ProjectId) {
+        if !self.state.remove_project(project_id) {
+            return;
+        }
+        let id = self.state.id();
+        self.cache.borrow_mut().insert(id, self.state.clone());
+        if self.write_barriers.borrow().contains(&id) {
+            // 写屏障禁止保存新状态，但旧待终态同样不得复活已删除项目。
+            self.pending_final_states.borrow_mut().remove(&id);
+            return;
+        }
+        let view_state = match self.view_state() {
+            Ok(state) => state,
+            Err(error) => {
+                self.pending_final_states.borrow_mut().remove(&id);
+                log::warn!("could not encode project-cleaned SideView state: {error}");
+                return;
+            }
+        };
+        if let Some(writer) = &self.writer {
+            let key = slterm_workspace::ViewKey::SideView { side_view_id: id };
+            match writer.save_view_state(&key, &view_state) {
+                Ok(()) => {
+                    self.pending_final_states.borrow_mut().remove(&id);
+                }
+                Err(error) => {
+                    self.pending_final_states
+                        .borrow_mut()
+                        .insert(id, view_state);
+                    log::warn!("could not queue project-cleaned SideView state: {error}");
+                }
+            }
+        }
+    }
+
     /// 关闭重试测试直接替换私有运行态，仍经既有 schema 落盘。
     #[cfg(all(test, feature = "gpui-test-support"))]
     pub(super) fn replace_state_for_test(&mut self, state: SideViewState) {
@@ -490,6 +528,53 @@ mod side_view_state_persistence_tests {
             registry,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn project_cleanup_with_write_barrier_drops_stale_final_partition() {
+        let persistence = AppRootPersistence::empty(None);
+        let project_a = ProjectId::from_str("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2a").unwrap();
+        let project_b = ProjectId::from_str("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b").unwrap();
+        let state = ViewState::new(
+            &ViewKey::SideView {
+                side_view_id: SideViewId::Nav,
+            },
+            json!({
+                "projects": [
+                    {"project_id": project_a.to_string(), "expanded": true, "history_expanded": false},
+                    {"project_id": project_b.to_string(), "expanded": false, "history_expanded": true}
+                ],
+                "unassigned_expanded": true,
+                "scroll": 12.0
+            }),
+            &persistence.registry,
+        )
+        .unwrap();
+        persistence
+            .pending_final_states
+            .borrow_mut()
+            .insert(SideViewId::Nav, state.clone());
+        persistence
+            .write_barriers
+            .borrow_mut()
+            .insert(SideViewId::Nav);
+        let mut view = SideView::with_persistence(
+            SideViewId::Nav,
+            Rc::clone(&persistence.cache),
+            Arc::clone(&persistence.registry),
+            None,
+            Rc::clone(&persistence.write_barriers),
+            Rc::clone(&persistence.pending_final_states),
+        );
+        view.state = SideViewState::from_view_state(SideViewId::Nav, state).unwrap();
+
+        view.remove_project(project_a);
+
+        assert!(persistence.pending_final_states.borrow().is_empty());
+        let cleaned = view.view_state().unwrap();
+        let projects = cleaned.state()["projects"].as_array().unwrap();
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0]["project_id"], json!(project_b.to_string()));
     }
 
     #[test]

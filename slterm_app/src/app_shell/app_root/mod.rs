@@ -7,6 +7,7 @@ mod events;
 mod focus_manager;
 pub(crate) mod keymap;
 mod panel_host;
+mod project_close;
 mod project_view;
 mod render;
 mod side_view;
@@ -112,6 +113,7 @@ pub(crate) struct AppRoot {
     close_completed: bool,
     terminal_closes: BTreeMap<slterm_workspace::TerminalId, terminal_close::LocalTerminalClose>,
     next_terminal_close_sequence: u64,
+    project_closes: BTreeMap<ProjectId, project_close::LocalProjectClose>,
     projects: BTreeMap<ProjectId, Entity<ProjectView>>,
     panel_ids: PanelIdAllocator,
     panel_subscriptions: BTreeMap<PanelId, Subscription>,
@@ -245,6 +247,7 @@ impl AppRoot {
             close_completed: false,
             terminal_closes: BTreeMap::new(),
             next_terminal_close_sequence: 0,
+            project_closes: BTreeMap::new(),
             projects,
             panel_ids,
             panel_subscriptions: BTreeMap::new(),
@@ -274,22 +277,25 @@ impl AppRoot {
         ));
     }
 
-    /// 快照只在候选提交后进入既有写队列；初始关闭提交在途时仅更新内存并延期发布。
+    /// 快照只在候选提交后进入既有写队列；关闭屏障期间仅更新内存并延期发布。
     fn commit_project_snapshot(&mut self, snapshot: ProjectSnapshot) {
         self.snapshot_generation = self.snapshot_generation.wrapping_add(1);
         self.snapshot = snapshot;
         if self.project_snapshot_recovery_failed {
             return;
         }
-        if self.terminal_closes.values().any(|close| {
-            matches!(
-                close.coordinator.phase(),
-                slterm_workspace::ClosePhase::Running(slterm_workspace::CloseStage::CommitState)
-                    | slterm_workspace::ClosePhase::Failed(
+        if !self.project_closes.is_empty()
+            || self.terminal_closes.values().any(|close| {
+                matches!(
+                    close.coordinator.phase(),
+                    slterm_workspace::ClosePhase::Running(
+                        slterm_workspace::CloseStage::CommitState
+                    ) | slterm_workspace::ClosePhase::Failed(
                         slterm_workspace::CloseStage::CommitState
                     )
-            )
-        }) {
+                )
+            })
+        {
             self.pending_final_project_snapshot = Some(self.snapshot.clone());
             return;
         }
