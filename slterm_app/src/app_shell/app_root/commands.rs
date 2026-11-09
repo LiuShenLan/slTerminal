@@ -22,7 +22,7 @@ use super::command_registry::{
     CommandId, CommandOutcome, CommandParameters, CommandSource, CommandTarget,
 };
 use super::focus_manager::{FocusError, FocusToken};
-use super::panel_host::PanelHost;
+use super::panel_host::{PanelContent, PanelHost};
 use super::{AppRoot, ProjectView};
 
 /// 终端面板启动适配器；测试可替换为无真实 PTY 的实现。
@@ -147,6 +147,8 @@ pub(crate) enum AppRootError {
     PanelIdExhausted,
     Launch(io::Error),
     ProjectPath(io::Error),
+    #[allow(dead_code)] // 消费点 = Document 真实打开队列与后续 OpenFile。
+    DocumentOpen(io::Error),
     Focus(FocusError),
     ProjectNotActive,
     NewTerminalTargetUnauthorized,
@@ -178,6 +180,7 @@ impl fmt::Display for AppRootError {
             Self::PanelIdExhausted => formatter.write_str("面板 ID 序列已耗尽"),
             Self::Launch(error) => write!(formatter, "终端启动失败: {error}"),
             Self::ProjectPath(error) => write!(formatter, "项目根真实路径解析失败: {error}"),
+            Self::DocumentOpen(error) => write!(formatter, "文档打开失败: {error}"),
             Self::Focus(error) => write!(formatter, "焦点目标不可用: {error:?}"),
             Self::ProjectNotActive => formatter.write_str("只能在活跃项目中显式创建终端"),
             Self::NewTerminalTargetUnauthorized => formatter.write_str("新终端目标项目未获授权"),
@@ -216,7 +219,9 @@ impl std::error::Error for AppRootError {
         match self {
             Self::Project(error) => Some(error),
             Self::Snapshot(error) => Some(error),
-            Self::Launch(error) | Self::ProjectPath(error) => Some(error),
+            Self::Launch(error) | Self::ProjectPath(error) | Self::DocumentOpen(error) => {
+                Some(error)
+            }
             Self::TerminalCloseWriter(error) | Self::ProjectCloseWriter(error) => Some(error),
             Self::Sidebar(error) => Some(error),
             Self::Registry(_)
@@ -405,7 +410,7 @@ impl AppRoot {
                         project_id,
                         terminal_id,
                     },
-                    terminal,
+                    content: PanelContent::Terminal(terminal),
                 },
             );
         });
@@ -783,8 +788,8 @@ impl AppRoot {
         }
     }
 
-    /// 局部关闭的组合事务与普通快照写共享启动恢复屏障，但显式目录打开不受此限制。
-    pub(super) fn ensure_terminal_close_recovery_allowed(&self) -> Result<(), AppRootError> {
+    /// 项目快照命令与局部关闭共享启动恢复屏障，但显式目录打开不受此限制。
+    pub(super) fn ensure_project_snapshot_recovery_allowed(&self) -> Result<(), AppRootError> {
         if self.project_snapshot_recovery_failed {
             Err(AppRootError::ProjectSnapshotRecoveryFailed)
         } else {
@@ -936,7 +941,7 @@ impl AppRoot {
                         project_id,
                         terminal_id,
                     },
-                    terminal,
+                    content: PanelContent::Terminal(terminal),
                 },
             );
             project.focused_panel = Some(panel_id);
@@ -975,7 +980,8 @@ impl AppRoot {
         let focused = window.focused(cx)?;
         self.projects.values().find_map(|project| {
             project.read(cx).panels.values().find_map(|panel| {
-                if panel.terminal.read(cx).focus_handle != focused {
+                let terminal = panel.terminal()?;
+                if terminal.read(cx).focus_handle != focused {
                     return None;
                 }
                 match panel.view_key {
@@ -1013,7 +1019,7 @@ impl AppRoot {
         {
             return self.close_terminal(terminal_id, window, cx);
         }
-        self.ensure_terminal_close_recovery_allowed()?;
+        self.ensure_project_snapshot_recovery_allowed()?;
         self.ensure_project_snapshot_command_allowed()?;
         self.terminal_close_store_epoch()?;
         self.sync_focus(window, cx);
@@ -1148,12 +1154,16 @@ impl AppRoot {
     ) -> Option<(PanelId, Entity<TerminalView>)> {
         self.projects.get(&project_id).and_then(|project| {
             project.read(cx).panels.iter().find_map(|(id, panel)| {
-                (panel.view_key
-                    == ViewKey::Terminal {
+                if panel.view_key
+                    == (ViewKey::Terminal {
                         project_id,
                         terminal_id,
                     })
-                .then(|| (*id, panel.terminal.clone()))
+                {
+                    panel.terminal().map(|terminal| (*id, terminal.clone()))
+                } else {
+                    None
+                }
             })
         })
     }
@@ -1168,7 +1178,7 @@ impl AppRoot {
                 .read(cx)
                 .panels
                 .values()
-                .map(|panel| panel.terminal.clone())
+                .filter_map(|panel| panel.terminal().cloned())
                 .collect::<Vec<_>>();
             for terminal in terminals {
                 terminal.update(cx, |terminal, cx| {
@@ -1277,20 +1287,17 @@ impl AppRoot {
                 .panels
                 .iter()
                 .find_map(|(panel_id, panel)| {
-                    let handle = panel.terminal.read(cx).focus_handle.downgrade();
-                    (Some(&handle) == focused.as_ref()).then(|| match panel.view_key {
-                        ViewKey::Terminal { terminal_id, .. } => (*panel_id, terminal_id),
-                        _ => unreachable!("当前运行根只创建终端面板"),
-                    })
+                    let handle = panel.focus_handle(cx).downgrade();
+                    (Some(&handle) == focused.as_ref()).then(|| (*panel_id, panel.view_key.clone()))
                 })
         });
-        let Some((panel_id, terminal_id)) = focused_panel else {
+        let Some((panel_id, view)) = focused_panel else {
             return;
         };
         if self.focused_panel(project_id, cx) == Some(panel_id) {
             return;
         }
-        match self.snapshot.with_active_terminal(terminal_id) {
+        match self.snapshot.with_active_view(&view) {
             Ok(candidate) => {
                 self.commit_project_snapshot(candidate, cx);
                 if let Some(project) = self.projects.get(&project_id) {

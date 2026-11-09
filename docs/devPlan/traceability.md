@@ -61,7 +61,7 @@
 
 | 验收场景 | 目标设计 | 目标测试例名 | 状态 |
 |---|---|---|---|
-| Document 全局身份 | [领域模型](design/domain-model.md)、[Document](design/document.md) | `integration_document_global_identity` | 待实现 |
+| Document 全局身份 | [领域模型](design/domain-model.md)、[Document](design/document.md) | `integration_document_global_identity` | 已自动化 |
 | 跨项目视图 | [工作区](design/workspace.md)、[Document](design/document.md) | `integration_cross_project_views` | 待实现 |
 | 视图身份 | [领域模型](design/domain-model.md)、[工作区](design/workspace.md) | `integration_view_identity_reopen` | 待实现 |
 | 侧栏显隐 | [工作区](design/workspace.md) | `integration_sidebar_visibility_semantics` | 已自动化 |

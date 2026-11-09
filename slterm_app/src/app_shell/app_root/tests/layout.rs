@@ -58,11 +58,7 @@ fn assert_actual_panel_focus(
     panel_id: PanelId,
 ) {
     let expected = root.read_with(cx, |root, cx| {
-        root.projects[&project_id].read(cx).panels[&panel_id]
-            .terminal
-            .read(cx)
-            .focus_handle
-            .clone()
+        root.projects[&project_id].read(cx).panels[&panel_id].focus_handle(cx)
     });
     let actual = window.update(|window, cx| window.focused(cx));
     assert_eq!(actual, Some(expected), "真实 GPUI 焦点必须落在目标面板");

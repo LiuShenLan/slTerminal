@@ -15,6 +15,8 @@ pub(crate) enum TaskId {
     TerminalCloseBatch(uuid::Uuid),
     ProjectClose(slterm_workspace::ProjectId),
     ProjectOpen(uuid::Uuid),
+    #[allow(dead_code)] // 消费点 = Document 后台真实打开队列。
+    DocumentOpen,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -167,7 +169,7 @@ impl TaskService {
         self.tasks.remove(&id);
     }
 
-    #[cfg(all(test, feature = "gpui-test-support"))]
+    #[allow(dead_code)] // 消费点 = DocumentOpen 单任务所有权闸门。
     pub(super) fn is_registered(&self, id: TaskId) -> bool {
         self.tasks.contains_key(&id)
     }

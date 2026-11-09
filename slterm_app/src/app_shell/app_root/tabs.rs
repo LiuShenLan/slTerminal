@@ -310,6 +310,17 @@ impl AppRoot {
                         .unwrap_or_else(|| format!("terminal-{}", record.number()))
                 })
                 .expect("布局中的终端必须有逻辑记录"),
+            ViewKey::Editor { document_id, .. } | ViewKey::Markdown { document_id, .. } => self
+                .snapshot
+                .document(*document_id)
+                .and_then(|location| {
+                    location
+                        .canonical_path()
+                        .as_path()
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                })
+                .expect("布局中的文档必须有规范位置"),
             _ => view.kind_str().to_owned(),
         }
     }

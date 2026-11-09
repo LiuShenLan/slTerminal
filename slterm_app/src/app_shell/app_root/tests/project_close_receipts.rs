@@ -53,14 +53,11 @@ fn project_join_panic_requires_explicit_retry_without_second_join(cx: &mut TestA
             close.coordinator.phase(),
             ClosePhase::Running(CloseStage::StopPty)
         );
-        assert!(
-            close
-                .project
-                .read(cx)
-                .panels
-                .values()
-                .all(|panel| { panel.terminal.read(cx).session.is_none() })
-        );
+        assert!(close.project.read(cx).panels.values().all(|panel| {
+            panel
+                .terminal()
+                .is_none_or(|terminal| terminal.read(cx).session.is_none())
+        }));
         close.coordinator.current_attempt().unwrap()
     });
     window.update(|_, cx| {

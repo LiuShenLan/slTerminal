@@ -149,7 +149,7 @@ impl AppRoot {
             }
         }
 
-        self.ensure_terminal_close_recovery_allowed()?;
+        self.ensure_project_snapshot_recovery_allowed()?;
         let store_epoch = self
             .terminal_close_store_epoch()?
             .ok_or(AppRootError::WorkspaceEpochUnavailable)?;

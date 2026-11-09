@@ -587,11 +587,11 @@ fn application_join_panic_requires_explicit_retry_without_second_join(cx: &mut T
         );
         assert!(
             root.projects.values().all(|project| {
-                project
-                    .read(cx)
-                    .panels
-                    .values()
-                    .all(|panel| panel.terminal.read(cx).session.is_none())
+                project.read(cx).panels.values().all(|panel| {
+                    panel
+                        .terminal()
+                        .is_none_or(|terminal| terminal.read(cx).session.is_none())
+                })
             }),
             "注入 join panic 前必须已移交全部原 session"
         );

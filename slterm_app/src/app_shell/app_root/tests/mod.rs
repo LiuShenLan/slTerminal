@@ -3,6 +3,7 @@
 mod application_close_receipts;
 mod batch_close;
 mod close;
+mod documents;
 mod handover;
 mod layout;
 mod local_close;

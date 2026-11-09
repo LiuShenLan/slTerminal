@@ -77,7 +77,7 @@ fn language_for_extension(extension: &str) -> Option<&'static str> {
     })
 }
 
-fn language_for_path(path: &Path) -> &'static str {
+pub(crate) fn language_for_path(path: &Path) -> &'static str {
     path.extension()
         .and_then(|extension| extension.to_str())
         .and_then(language_for_extension)

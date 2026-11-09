@@ -31,11 +31,7 @@ fn assert_panel_focused(
     panel_id: PanelId,
 ) {
     let expected = root.read_with(cx, |root, cx| {
-        root.projects[&project_id].read(cx).panels[&panel_id]
-            .terminal
-            .read(cx)
-            .focus_handle
-            .clone()
+        root.projects[&project_id].read(cx).panels[&panel_id].focus_handle(cx)
     });
     assert_eq!(
         root.read_with(cx, |root, cx| root.focused_panel(project_id, cx)),

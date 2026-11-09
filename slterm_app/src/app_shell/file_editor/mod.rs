@@ -303,6 +303,55 @@ impl TextFileView {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Self {
+        let mut view = Self::new_view(
+            path,
+            language,
+            source,
+            fixed_read_only,
+            markdown,
+            window,
+            cx,
+        );
+        view.spawn_load(window, cx);
+        view
+    }
+
+    /// 消费唯一打开服务已载入的 Document；本入口不得再次读取本地正文。
+    pub(crate) fn from_document(
+        document: Document,
+        language: &'static str,
+        markdown: bool,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Self {
+        let path = document.location().canonical_path().as_path().to_path_buf();
+        let mut view = Self::new_view(
+            path,
+            language,
+            TextSource::Local,
+            false,
+            markdown,
+            window,
+            cx,
+        );
+        view.apply_loaded(
+            Ok((LoadedDocument::Local(document), None, GitGutter::default())),
+            window,
+            cx,
+        );
+        view.spawn_loaded_metadata(cx);
+        view
+    }
+
+    fn new_view(
+        path: PathBuf,
+        language: &'static str,
+        source: TextSource,
+        fixed_read_only: bool,
+        markdown: bool,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Self {
         let title = file_title(&path);
         let input = cx.new(|cx| {
             InputState::new(window, cx)
@@ -330,7 +379,7 @@ impl TextFileView {
             }
         });
         let preview_extensions = preview::extensions(path.parent().map(PathBuf::from));
-        let mut view = Self {
+        Self {
             path,
             title,
             input,
@@ -380,9 +429,7 @@ impl TextFileView {
             gutter: GitGutter::default(),
             focus: cx.focus_handle(),
             _input_subscription: subscription,
-        };
-        view.spawn_load(window, cx);
-        view
+        }
     }
 
     /// Tab 标题:脏文档追加「•」标记(侧栏/标题栏同源)。
@@ -403,6 +450,11 @@ impl TextFileView {
     /// 脏标记:tab 标题「•」与关闭确认的数据源。
     pub fn is_dirty(&self) -> bool {
         self.dirty
+    }
+
+    /// 跨项目新视图复用同一聚合的已保存快照，不重读或替换正文。
+    pub(crate) fn local_document(&self) -> Option<&Document> {
+        self.document.as_ref()
     }
 
     /// 保存中:关闭确认在此态不弹窗,避免与在途写盘竞争。
@@ -602,6 +654,29 @@ impl TextFileView {
             .try_slice(range)
             .ok()
             .map(|slice| slice.to_string())
+    }
+
+    /// 已载入正文只补算展示元数据；后台任务不包含第二次正文读盘。
+    fn spawn_loaded_metadata(&mut self, cx: &mut Context<'_, Self>) {
+        let path = self.path.clone();
+        let text = self.input.read(cx).value().to_string();
+        let markdown = self.markdown;
+        let task = cx.background_executor().spawn(async move {
+            let outline = markdown.then(|| Outline::prepare(&text, path.parent()));
+            let gutter = gutter::read_for_path(&path);
+            (outline, gutter)
+        });
+        cx.spawn(async move |this, cx| {
+            let (outline, gutter) = task.await;
+            let _ = this.update(cx, |view, cx| {
+                view.gutter = gutter;
+                if let Some(outline) = outline {
+                    view.apply_outline(outline, cx);
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// 后台载入:读盘/解码不占前台线程;markdown 同时预解析大纲。

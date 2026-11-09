@@ -303,8 +303,9 @@ impl AppRoot {
                                 project
                                     .panels
                                     .values()
-                                    .map(|panel| {
-                                        panel.terminal.update(cx, |terminal, _| {
+                                    .filter_map(|panel| panel.terminal().cloned())
+                                    .map(|terminal| {
+                                        terminal.update(cx, |terminal, _| {
                                             terminal.take_session_for_shutdown()
                                         })
                                     })

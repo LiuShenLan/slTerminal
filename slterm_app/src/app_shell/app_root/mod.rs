@@ -5,6 +5,7 @@ mod batch_close;
 pub(crate) mod close_coordinator;
 mod command_registry;
 mod commands;
+mod documents;
 mod events;
 mod focus_manager;
 pub(crate) mod keymap;
@@ -33,6 +34,7 @@ use gpui::{
     Window,
 };
 use gpui_component::menu::PopupMenu;
+use slterm_document::DocumentRegistry;
 use slterm_path::CanonicalPath;
 use slterm_workspace::{
     PanelGroupId, PanelId, PanelIdAllocator, ProjectId, ProjectSnapshot, SideViewId,
@@ -176,6 +178,13 @@ pub(crate) struct AppRoot {
     active_project_open: Option<uuid::Uuid>,
     project_open_draining: bool,
     panel_ids: PanelIdAllocator,
+    documents: DocumentRegistry,
+    #[allow(dead_code)] // 消费点 = Document 真实后台打开。
+    document_open_service: Arc<crate::app_shell::documents::DocumentOpenService>,
+    #[allow(dead_code)] // 消费点 = Document 单任务 FIFO 调度。
+    document_open_active: bool,
+    #[allow(dead_code)] // 消费点 = Document 打开请求队列。
+    pending_document_opens: VecDeque<documents::DocumentOpenRequest>,
     panel_subscriptions: BTreeMap<PanelId, Subscription>,
     panel_focus: BTreeMap<PanelId, FocusRegistration>,
     split_dividers: BTreeMap<(ProjectId, Vec<bool>), SplitDividerFocus>,
@@ -326,6 +335,12 @@ impl AppRoot {
             active_project_open: None,
             project_open_draining: false,
             panel_ids,
+            documents: DocumentRegistry::new(),
+            document_open_service: Arc::new(
+                crate::app_shell::documents::DocumentOpenService::default(),
+            ),
+            document_open_active: false,
+            pending_document_opens: VecDeque::new(),
             panel_subscriptions: BTreeMap::new(),
             panel_focus: BTreeMap::new(),
             split_dividers: BTreeMap::new(),
@@ -366,6 +381,7 @@ impl AppRoot {
     fn commit_project_snapshot(&mut self, snapshot: ProjectSnapshot, cx: &mut App) {
         self.snapshot_generation = self.snapshot_generation.wrapping_add(1);
         let previous = std::mem::replace(&mut self.snapshot, snapshot);
+        self.reconcile_document_registry();
         self.reconcile_split_dividers(cx);
         self.reconcile_tab_scrolls(Some(&previous));
         if self.project_snapshot_recovery_failed {

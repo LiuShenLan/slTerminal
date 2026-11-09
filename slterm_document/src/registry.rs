@@ -158,6 +158,27 @@ impl DocumentRegistry {
         self.paths.insert(path, id);
         Ok((id, DocumentOpenOutcome::Opened))
     }
+
+    /// 回收聚合及其全部别名索引；不存在时不产生副作用。
+    pub fn remove(&mut self, id: DocumentId) -> Option<DocumentSession> {
+        let session = self.sessions.remove(&id)?;
+        self.identities.retain(|_, owner| *owner != id);
+        self.paths.retain(|_, owner| *owner != id);
+        Some(session)
+    }
+
+    /// 按当前布局引用集合回收存活聚合。
+    pub fn retain(&mut self, mut keep: impl FnMut(DocumentId) -> bool) {
+        let stale = self
+            .sessions
+            .keys()
+            .copied()
+            .filter(|id| !keep(*id))
+            .collect::<Vec<_>>();
+        for id in stale {
+            self.remove(id);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -282,6 +303,61 @@ mod registry_tests {
             registry.session(id(DOCUMENT_B)).unwrap().text().to_string(),
             "new"
         );
+    }
+
+    #[test]
+    fn removing_a_document_clears_every_identity_and_path_alias() {
+        let mut registry = DocumentRegistry::new();
+        registry
+            .open(
+                id(DOCUMENT_A),
+                location("D:/work/a/file.txt", Some(41)),
+                Rope::from_str("original"),
+                state(),
+            )
+            .unwrap();
+        registry
+            .open(
+                id(DOCUMENT_B),
+                location("D:/work/b/alias.txt", Some(41)),
+                Rope::from_str("ignored"),
+                state(),
+            )
+            .unwrap();
+
+        assert!(registry.remove(id(DOCUMENT_A)).is_some());
+
+        assert!(registry.is_empty());
+        assert_eq!(
+            registry.existing(&location("D:/work/a/file.txt", Some(41))),
+            None
+        );
+        assert_eq!(
+            registry.existing(&location("D:/work/b/alias.txt", Some(41))),
+            None
+        );
+        assert_eq!(registry.remove(id(DOCUMENT_A)), None);
+    }
+
+    #[test]
+    fn retain_removes_only_documents_outside_the_reference_set() {
+        let mut registry = DocumentRegistry::new();
+        for (document, path) in [(DOCUMENT_A, "D:/work/a.txt"), (DOCUMENT_B, "D:/work/b.txt")] {
+            registry
+                .open(
+                    id(document),
+                    location(path, None),
+                    Rope::from_str(document),
+                    state(),
+                )
+                .unwrap();
+        }
+
+        registry.retain(|document| document == id(DOCUMENT_A));
+
+        assert_eq!(registry.len(), 1);
+        assert!(registry.session(id(DOCUMENT_A)).is_some());
+        assert_eq!(registry.existing(&location("D:/work/b.txt", None)), None);
     }
 
     #[test]

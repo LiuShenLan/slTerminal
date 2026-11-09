@@ -78,7 +78,7 @@ impl AppRoot {
         if let Some(batch_id) = self.batch_for_group(group_id) {
             return self.retry_batch_close(batch_id, cx).map(|_| ());
         }
-        self.ensure_terminal_close_recovery_allowed()?;
+        self.ensure_project_snapshot_recovery_allowed()?;
         self.ensure_project_snapshot_command_allowed()?;
         let store_epoch = self.terminal_close_store_epoch()?;
         self.sync_focus(window, cx);

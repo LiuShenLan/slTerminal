@@ -55,7 +55,7 @@ impl AppRoot {
         {
             return Err(AppRootError::ProjectCloseRunning);
         }
-        self.ensure_terminal_close_recovery_allowed()?;
+        self.ensure_project_snapshot_recovery_allowed()?;
         self.ensure_project_snapshot_command_allowed()?;
         let store_epoch = self
             .terminal_close_store_epoch()?
@@ -381,10 +381,9 @@ impl AppRoot {
                     project
                         .panels
                         .values()
-                        .map(|panel| {
-                            panel
-                                .terminal
-                                .update(cx, |terminal, _| terminal.take_session_for_shutdown())
+                        .filter_map(|panel| panel.terminal().cloned())
+                        .map(|terminal| {
+                            terminal.update(cx, |terminal, _| terminal.take_session_for_shutdown())
                         })
                         .collect::<Vec<_>>()
                 });

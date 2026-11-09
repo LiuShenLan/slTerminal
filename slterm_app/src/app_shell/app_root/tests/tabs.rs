@@ -52,10 +52,7 @@ fn assert_active_and_focused(
 ) {
     let (view, expected_focus) = root.read_with(cx, |root, cx| {
         let panel = &root.projects[&project_id].read(cx).panels[&panel_id];
-        (
-            panel.view_key.clone(),
-            panel.terminal.read(cx).focus_handle.clone(),
-        )
+        (panel.view_key.clone(), panel.focus_handle(cx))
     });
     root.read_with(cx, |root, _| {
         let group = root

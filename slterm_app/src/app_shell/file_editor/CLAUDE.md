@@ -7,7 +7,7 @@
 - **只读是类型层合同**：`TextSnapshot` 的 `read_only` 在 `encode` 入口拒绝；UI 的 `disabled` 只是辅助，不得作为唯一防线。普通源码 tab 的源码态可编辑。原因：只读意图必须在写入边界强制。边界：只读文档（truncated/gitshow/diff）不得挂 gutter，也不得经可写入口。
 - **保存链单点**：`verify`（磁盘字节）→ `encode`（BOM/CRLF 往返）→ `atomic_file` 原子替换；Changed/ReadOnly/Io 三类结果经提示横幅上抛，失败不破坏磁盘。原因：保存失败必须可观测且不产生半份文件。
 - **脏标记语义**：当前输入文本 vs 已保存快照；保存完成只清理「写完时」的版本，保存期间的新草稿仍保持脏。脏 tab 关闭必须走确认（保存/不保存/取消）。
-- **后台读盘**：读盘/解码在后台 executor，前台只在载入结果回调里落快照；Gitshow 的 HEAD 字节与本地文件走同一快照通路，区别只在数据源与只读意图。`Document` 在真实打开句柄上记录规范位置与 core 文件身份，保存后刷新替换目标的身份；`app_shell::documents` 是唯一项目内真实打开服务，依次执行解析、PathPolicy 读授权、聚合查重、bounded load 与身份复核。原因：前台不得阻塞 I/O，且授权、正文与文件身份不得因重定向错绑。边界：服务只由后台执行体调用；不得在前台整文件物化，失败不得注册空 Document。
+- **后台读盘**：读盘/解码在后台 executor，前台只在载入结果回调里落快照；Gitshow 的 HEAD 字节与本地文件走同一快照通路，区别只在数据源与只读意图。`Document` 在真实打开句柄上记录规范位置与 core 文件身份，保存后刷新替换目标的身份；`app_shell::documents` 是唯一项目内真实打开服务，依次执行解析、PathPolicy 读授权、聚合查重、bounded load 与身份复核；AppRoot 的新 Editor 面板只经 `TextFileView::from_document` 消费已载入快照，既有聚合的新视图复用原已保存快照，不再触发第二次正文读盘。原因：前台不得阻塞 I/O，且授权、正文与文件身份不得因重定向错绑。边界：服务只由后台执行体调用；不得在前台整文件物化，失败不得注册空 Document。
 - **大文件语义**：`MAX_BYTES` 截断 + `truncated` 只读提示；内存上限先于解码（`document_io::read_prefix`），不得先整文件物化再截断。
 - **内核族语义**：outline/inline_edit/block_*/input_rules 照抄上游语义；未消费件带 `#[allow(dead_code)]` + 消费点注释，不得靠删测试规避。
 - **撤销单栈**：根视图 `capture_action` 拦截 `input::{Undo,Redo}` 并走 `EditHistory::travel`；`InputState::replace` 是静默更新（不触发 Change 订阅），程序化替换必须显式记录历史/脏标记/预览失效。原因：第二份撤销栈会产生状态分叉。边界：不得引入平行撤销实现。

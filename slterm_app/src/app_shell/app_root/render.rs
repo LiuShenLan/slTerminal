@@ -157,20 +157,25 @@ impl AppRoot {
         cx: &Context<'_, AppRoot>,
     ) -> AnyElement {
         let active = layout.group(group_id).map(|group| group.active());
-        let terminal = active.and_then(|active| {
+        let content = active.and_then(|active| {
             project
                 .panels
                 .values()
                 .find(|panel| &panel.view_key == active)
-                .map(|panel| panel.terminal.clone())
+                .map(|panel| match &panel.content {
+                    super::panel_host::PanelContent::Terminal(terminal) => {
+                        terminal.clone().into_any_element()
+                    }
+                    super::panel_host::PanelContent::Editor(editor) => {
+                        editor.clone().into_any_element()
+                    }
+                })
         });
         let terminal_id = active.and_then(|active| match active {
             ViewKey::Terminal { terminal_id, .. } => Some(*terminal_id),
             _ => None,
         });
-        let terminal_selector = terminal
-            .as_ref()
-            .and_then(|_| terminal_id.map(|id| format!("app-root-terminal-{id}")));
+        let terminal_selector = terminal_id.map(|id| format!("app-root-terminal-{id}"));
         let tab_bar = self.render_tab_bar(layout.project_id(), group_id, layout, cx);
         div()
             .size_full()
@@ -191,7 +196,7 @@ impl AppRoot {
                 }),
             )
             .child(tab_bar)
-            .children(terminal.map(|terminal| {
+            .children(content.map(|content| {
                 div()
                     .flex_1()
                     .min_w_0()
@@ -201,7 +206,7 @@ impl AppRoot {
                             .clone()
                             .unwrap_or_else(|| "app-root-view".to_owned())
                     })
-                    .child(terminal)
+                    .child(content)
             }))
             .children(self.render_layout_menu(group_id))
             .into_any_element()
