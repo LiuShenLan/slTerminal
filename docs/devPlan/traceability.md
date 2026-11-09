@@ -178,7 +178,7 @@
 | 根外快照异常恢复不自动重读磁盘或恢复授权 | `outside_snapshot_restores_without_disk_read` | 待实现 |
 | 失去读授权后保留内容并停止刷新 | `document_retains_content_after_read_revoke` | 待实现 |
 | 项目根重定位不改绑既有 Diff 与 GitShow | `repository_binding_survives_project_relocation` | 待实现 |
-| 真实路径查重失败时保留原项目关系 | `project_realpath_dedupe_failure_preserves_relation` | 待实现 |
+| 真实路径查重失败时保留原项目关系 | `project_realpath_dedupe_failure_preserves_relation`、`project_realpath_resolution_preserves_request_order`、`project_open_completion_reentry_does_not_duplicate_tasks`、`closing_drains_pending_project_open_handovers`、`destroyed_window_drains_pending_project_open_handovers`、`system_resolver_requires_an_existing_directory`、`system_resolver_normalizes_directory_junction` | 已自动化 |
 
 ### Diff
 
@@ -219,6 +219,7 @@
 | 多项目切换只改变可见性且实例与进程不重建 | `workspace_project_switch_preserves_instances` | 已自动化 |
 | 布局操作保留实例与焦点 | `move_view_reuses_panel_and_focuses_moved_terminal`、`merge_groups_preserves_instances_and_focuses_actual_active`、`split_existing_view_moves_panel_without_starting_another_terminal`、`resize_split_changes_only_geometry`、`layout_menu_moves_active_view_to_next_group`、`layout_menu_splits_and_merges_existing_view`、`split_divider_keyboard_resize_preserves_focus`、`layout_focus_failure_does_not_commit_candidate`、`layout_request_focus_failure_does_not_commit_candidate`、`closing_terminal_with_focused_collapsing_divider_restores_remaining_panel`、`layout_menu_shortcut_is_scoped_to_project_content`、`single_view_group_does_not_open_empty_layout_menu`、`modal_layout_command_is_rejected_without_side_effects`、`invalid_layout_target_preserves_snapshot_instances_and_focus` | 已自动化 |
 | 页签横向溢出与完整列表不丢失视图且焦点跟随激活项 | `clicking_a_tab_reuses_its_panel_and_restores_real_focus`、`complete_list_activates_every_view_without_recreating_panels`、`dismissing_complete_list_preserves_active_and_restores_real_focus`、`narrow_tab_bar_scrolls_horizontally_without_losing_views`、`view_activation_candidate_is_independent_of_view_kind` | 已自动化 |
+| 项目重命名与排序保持身份、布局、实例和活跃关系 | `project_rename_and_reorder_preserve_identity_layout_and_instances` | 已自动化 |
 | 共享 Document 只有最后引用关闭才触发内容守卫 | `document_last_reference_close_guard` | 待实现 |
 | 批量保存失败取消关闭并保留全部 Panel 与 PTY | `workspace_batch_save_failure_cancels_close` | 待实现 |
 | 项目移除先完成守卫与删除意图再销毁资源 | `project_remove_commits_intent_before_destroy` | 已自动化 |

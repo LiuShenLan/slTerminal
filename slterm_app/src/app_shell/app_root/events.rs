@@ -14,6 +14,35 @@ use super::focus_manager::FocusError;
 use super::task_service::CancellationToken;
 use crate::app_shell::{SltermShellEvent, handover_error};
 
+/// 窗口或实体先行销毁时，也必须为未结算 handover 返回 Closing。
+struct HandoverCompletionGuard {
+    completion: Option<std::sync::mpsc::SyncSender<Result<HandoverResponse, JsonRpcError>>>,
+}
+
+impl HandoverCompletionGuard {
+    fn new(
+        completion: std::sync::mpsc::SyncSender<Result<HandoverResponse, JsonRpcError>>,
+    ) -> Self {
+        Self {
+            completion: Some(completion),
+        }
+    }
+
+    fn send(mut self, response: Result<HandoverResponse, JsonRpcError>) {
+        if let Some(completion) = self.completion.take() {
+            let _ = completion.try_send(response);
+        }
+    }
+}
+
+impl Drop for HandoverCompletionGuard {
+    fn drop(&mut self) {
+        if let Some(completion) = self.completion.take() {
+            let _ = completion.try_send(Err(closing_handover_error()));
+        }
+    }
+}
+
 impl AppRoot {
     /// 后台只负责定时唤醒；通道排空与状态变更都在窗口前台完成。
     pub(crate) fn start_shell_event_pump(
@@ -123,20 +152,37 @@ impl AppRoot {
                             Ok(HandoverResponse::accepted())
                         }
                         HandoverParams::OpenProject { project_root } => {
-                            let opened = CanonicalPath::new(project_root)
-                                .map_err(|_| invalid_open_project_request())
-                                .and_then(|path| {
-                                    self.open_project(path, window, cx)
-                                        .map_err(open_project_handover_error)
-                                });
-                            match opened {
-                                Ok(_) => {
-                                    crate::windowing::focus::focus_window(window);
-                                    cx.notify();
-                                    Ok(HandoverResponse::accepted())
+                            let path = match CanonicalPath::new(project_root) {
+                                Ok(path) => path,
+                                Err(_) => {
+                                    let _ =
+                                        completion.try_send(Err(invalid_open_project_request()));
+                                    return;
                                 }
-                                Err(error) => Err(error),
-                            }
+                            };
+                            let asynchronous_completion =
+                                HandoverCompletionGuard::new(completion.clone());
+                            self.open_project_with_completion(
+                                path,
+                                window,
+                                cx,
+                                move |result, _, window, cx| {
+                                    let response = match result {
+                                        Ok(_) => {
+                                            if let Some(window) = window {
+                                                crate::windowing::focus::focus_window(window);
+                                                cx.notify();
+                                                Ok(HandoverResponse::accepted())
+                                            } else {
+                                                Err(closing_handover_error())
+                                            }
+                                        }
+                                        Err(error) => Err(open_project_handover_error(error)),
+                                    };
+                                    asynchronous_completion.send(response);
+                                },
+                            );
+                            return;
                         }
                         HandoverParams::NewTerminal { project_root, cwd } => {
                             let created = parse_new_terminal_paths(project_root, cwd).and_then(
@@ -181,9 +227,16 @@ impl AppRoot {
                 for path in paths {
                     match CanonicalPath::new(path) {
                         Ok(path) => {
-                            if let Err(error) = self.open_project(path, window, cx) {
-                                log::warn!("打开外部目录失败: {error}");
-                            }
+                            self.open_project_with_completion(
+                                path,
+                                window,
+                                cx,
+                                |result, _, _, _| {
+                                    if let Err(error) = result {
+                                        log::warn!("打开外部目录失败: {error}");
+                                    }
+                                },
+                            );
                         }
                         Err(error) => log::warn!("外部目录路径无效: {error}"),
                     }
@@ -272,4 +325,29 @@ pub(crate) fn notify_workspace_write_failed(cx: &mut App) {
         },
         cx,
     );
+}
+
+#[cfg(test)]
+mod handover_completion_guard_tests {
+    use super::*;
+
+    #[test]
+    fn dropping_unsettled_guard_returns_closing_without_a_window() {
+        let (completion, response) = std::sync::mpsc::sync_channel(1);
+        drop(HandoverCompletionGuard::new(completion));
+        let error = response.try_recv().unwrap().unwrap_err();
+        assert_eq!(error.code, -32004);
+        assert_eq!(
+            error.data.map(|data| data.code),
+            Some(DomainErrorCode::Closing)
+        );
+    }
+
+    #[test]
+    fn completed_guard_does_not_send_a_second_response() {
+        let (completion, response) = std::sync::mpsc::sync_channel(1);
+        HandoverCompletionGuard::new(completion).send(Ok(HandoverResponse::accepted()));
+        assert!(response.try_recv().unwrap().unwrap().is_accepted());
+        assert!(response.try_recv().is_err());
+    }
 }

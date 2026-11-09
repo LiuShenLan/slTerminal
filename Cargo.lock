@@ -6387,6 +6387,7 @@ dependencies = [
  "base64 0.22.1",
  "bitflags 2.13.2",
  "clap",
+ "dunce",
  "futures",
  "getrandom 0.3.4",
  "glob",

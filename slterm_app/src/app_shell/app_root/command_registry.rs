@@ -41,6 +41,10 @@ pub(crate) enum CommandId {
     ResizeSplit,
     FocusSplitDivider,
     RemoveProject,
+    #[allow(dead_code)] // 导航树选中项入口由导航视图接线。
+    RenameProject,
+    #[allow(dead_code)] // 导航树选中项入口由导航视图接线。
+    MoveProject,
     ActivateSideView,
     ToggleSidebar,
     FocusActivityBar,
@@ -133,6 +137,14 @@ pub(crate) enum CommandParameters {
     },
     FocusSplitDivider {
         path: Vec<bool>,
+    },
+    #[allow(dead_code)] // 导航树选中项入口由导航视图接线。
+    RenameProject {
+        name: String,
+    },
+    #[allow(dead_code)] // 导航树选中项入口由导航视图接线。
+    MoveProject {
+        new_index: usize,
     },
     SideButtonMovement(ButtonMovement),
     SideButtonMenuPosition(Point<Pixels>),
@@ -480,7 +492,14 @@ impl CommandRegistry {
                 | CommandId::ResizeSplit
                 | CommandId::FocusSplitDivider
         );
-        if (terminal_command || layout_command || id == CommandId::RemoveProject) && context.modal {
+        let project_metadata_command =
+            matches!(id, CommandId::RenameProject | CommandId::MoveProject);
+        if (terminal_command
+            || layout_command
+            || project_metadata_command
+            || id == CommandId::RemoveProject)
+            && context.modal
+        {
             return Err(FocusError::ModalActive.into());
         }
         let failed_terminal_close_pending = id == CommandId::CloseActiveTerminal
@@ -508,6 +527,21 @@ impl CommandRegistry {
             )
         {
             return Err(AppRootError::MissingPanel);
+        }
+        if project_metadata_command {
+            let CommandTarget::Project(project_id) = target else {
+                return Err(AppRootError::UnexpectedParameters);
+            };
+            return match (id, parameters) {
+                (CommandId::RenameProject, Some(CommandParameters::RenameProject { name })) => root
+                    .rename_project_from_request(project_id, name, cx)
+                    .map(|()| CommandOutcome::Completed),
+                (CommandId::MoveProject, Some(CommandParameters::MoveProject { new_index })) => {
+                    root.move_project_from_request(project_id, new_index, cx)
+                        .map(|()| CommandOutcome::Completed)
+                }
+                _ => Err(AppRootError::UnexpectedParameters),
+            };
         }
         if id == CommandId::RemoveProject {
             let CommandTarget::Project(project_id) = target else {

@@ -87,7 +87,7 @@ pub(crate) enum SltermShellEvent {
     TrayQuit,
     /// 工作区状态后台写失败；不携带路径、SQL 或状态正文。
     WorkspaceWriteFailed,
-    /// 第二实例意图与一次性完成回执；AppRoot 前台消费并同步答复。
+    /// 第二实例意图与一次性完成回执；AppRoot 前台消费，真实完成后答复。
     Handover {
         params: HandoverParams,
         completion: mpsc::SyncSender<Result<HandoverResponse, JsonRpcError>>,

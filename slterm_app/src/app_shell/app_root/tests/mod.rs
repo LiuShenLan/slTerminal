@@ -9,6 +9,7 @@ mod local_close_receipts;
 mod project_close;
 mod project_close_preflight;
 mod project_close_receipts;
+mod projects;
 mod sidebar;
 mod tabs;
 
@@ -17,6 +18,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::rc::Rc;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::Duration;
 
@@ -94,6 +96,14 @@ struct LauncherState {
     attempts: usize,
     fail_next: bool,
     sessions: BTreeMap<u64, Receiver<Msg>>,
+}
+
+struct TestProjectPaths;
+
+impl crate::platform::project_paths::ProjectPathResolver for TestProjectPaths {
+    fn resolve(&self, path: &CanonicalPath) -> io::Result<CanonicalPath> {
+        Ok(path.clone())
+    }
 }
 
 struct FakeLauncher {
@@ -284,14 +294,16 @@ fn open_root_with_persistence_and_size_configured(
         window_size.unwrap_or_else(|| cx.update(|cx| gpui::Bounds::maximized(None, cx).size));
     let window = cx.open_window(window_size, |window, cx| {
         let root = cx.new(|cx| {
-            AppRoot::with_launcher(
+            let mut root = AppRoot::with_launcher(
                 PanelIdAllocator::new(1),
                 path("C:/Program Files/PowerShell/7/pwsh.exe"),
                 Box::new(launcher),
                 persistence,
                 global_close,
                 cx,
-            )
+            );
+            root.project_paths = Arc::new(TestProjectPaths);
+            root
         });
         let close_root = root.downgrade();
         window.on_window_should_close(cx, move |window, cx| {
@@ -1575,13 +1587,13 @@ fn open_project_duplicate_root_returns_existing_identity(cx: &mut TestAppContext
 fn initial_project_startup_opens_one_terminal(cx: &mut TestAppContext) {
     let (root, mut window, state) = open_root(cx);
 
-    let started = window.update(|window, cx| {
+    window.update(|window, cx| {
         root.update(cx, |root, cx| {
             root.open_initial_project(path("D:/work/initial"), window, cx)
         })
     });
 
-    assert!(started.is_ok(), "初始项目启动失败: {started:?}");
+    window.run_until_parked();
     root.read_with(cx, |root, _| {
         assert_eq!(root.snapshot().registry().projects().len(), 1);
         assert_eq!(root.snapshot().terminals().count(), 1);
@@ -1640,6 +1652,7 @@ fn open_directories_shell_event_opens_projects_without_terminals(cx: &mut TestAp
         })
     });
 
+    window.run_until_parked();
     root.read_with(cx, |root, _| {
         assert_eq!(root.snapshot().registry().projects().len(), 1);
         assert_eq!(root.snapshot().terminals().count(), 0);

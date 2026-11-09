@@ -1,6 +1,11 @@
-//! 单实例移交事件与同步回执测试。
+//! 单实例移交事件与完成回执测试。
 
-use std::sync::mpsc;
+use std::{
+    cell::Cell,
+    io,
+    rc::Rc,
+    sync::{Arc, mpsc},
+};
 
 use slterm_runtime_protocol::{DomainErrorCode, HandoverParams, HandoverResponse, JsonRpcError};
 
@@ -11,6 +16,16 @@ fn dispatch_handover(
     window: &mut VisualTestContext,
     params: HandoverParams,
 ) -> Result<HandoverResponse, JsonRpcError> {
+    let response = queue_handover(root, window, params);
+    window.run_until_parked();
+    response.try_recv().expect("AppRoot 必须返回 handover 回执")
+}
+
+fn queue_handover(
+    root: &Entity<AppRoot>,
+    window: &mut VisualTestContext,
+    params: HandoverParams,
+) -> mpsc::Receiver<Result<HandoverResponse, JsonRpcError>> {
     let (completion, response) = mpsc::sync_channel(1);
     window.update(|window, cx| {
         root.update(cx, |root, cx| {
@@ -22,8 +37,6 @@ fn dispatch_handover(
         });
     });
     response
-        .try_recv()
-        .expect("AppRoot 必须同步返回 handover 回执")
 }
 
 fn assert_handover_error(error: &JsonRpcError, numeric: i32, domain: DomainErrorCode) {
@@ -149,6 +162,229 @@ fn handover_open_project_opens_root_without_terminal(cx: &mut TestAppContext) {
         );
     });
     assert_eq!(state.borrow().attempts, 0);
+}
+
+#[gpui::test]
+fn project_realpath_resolution_preserves_request_order(cx: &mut TestAppContext) {
+    let (root, mut window, _) = open_root(cx);
+    let first = queue_handover(
+        &root,
+        &mut window,
+        HandoverParams::OpenProject {
+            project_root: "D:/work/first".to_owned(),
+        },
+    );
+    let second = queue_handover(
+        &root,
+        &mut window,
+        HandoverParams::OpenProject {
+            project_root: "D:/work/second".to_owned(),
+        },
+    );
+    assert_eq!(
+        root.read_with(cx, |root, _| root.tasks.project_open_task_count()),
+        1,
+        "后一个请求必须等待前一个解析完成"
+    );
+
+    window.run_until_parked();
+
+    assert!(first.try_recv().unwrap().unwrap().is_accepted());
+    assert!(second.try_recv().unwrap().unwrap().is_accepted());
+    assert_eq!(
+        root.read_with(cx, |root, _| root.tasks.project_open_task_count()),
+        0
+    );
+    root.read_with(cx, |root, _| {
+        let registry = root.snapshot().registry();
+        assert_eq!(
+            registry
+                .projects()
+                .iter()
+                .map(|project| project.root().as_path())
+                .collect::<Vec<_>>(),
+            vec![
+                path("D:/work/first").as_path(),
+                path("D:/work/second").as_path()
+            ]
+        );
+        assert_eq!(registry.projects()[1].id(), registry.active().unwrap());
+    });
+}
+
+#[gpui::test]
+fn project_open_completion_reentry_does_not_duplicate_tasks(cx: &mut TestAppContext) {
+    let (root, mut window, _) = open_root(cx);
+    let completions = Rc::new(Cell::new(0));
+    let nested_completions = Rc::clone(&completions);
+    window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.open_project_with_completion(
+                path("D:/work/outer"),
+                window,
+                cx,
+                move |result, root, window, cx| {
+                    assert!(result.is_ok());
+                    nested_completions.set(nested_completions.get() + 1);
+                    root.open_project_with_completion(
+                        path("D:/work/nested"),
+                        window.expect("重入时窗口必须存活"),
+                        cx,
+                        {
+                            let completions = Rc::clone(&nested_completions);
+                            move |result, _, _, _| {
+                                assert!(result.is_ok());
+                                completions.set(completions.get() + 1);
+                            }
+                        },
+                    );
+                },
+            )
+        })
+    });
+
+    window.run_until_parked();
+
+    assert_eq!(completions.get(), 2);
+    assert_eq!(
+        root.read_with(cx, |root, _| root.tasks.project_open_task_count()),
+        0
+    );
+    root.read_with(cx, |root, _| {
+        assert_eq!(
+            root.snapshot()
+                .registry()
+                .projects()
+                .iter()
+                .map(|project| project.root().as_path())
+                .collect::<Vec<_>>(),
+            vec![
+                path("D:/work/outer").as_path(),
+                path("D:/work/nested").as_path()
+            ]
+        );
+    });
+}
+
+#[gpui::test]
+fn closing_drains_pending_project_open_handovers(cx: &mut TestAppContext) {
+    let (root, mut window, _) = open_root(cx);
+    let responses = ["D:/work/first", "D:/work/second"].map(|root_path| {
+        queue_handover(
+            &root,
+            &mut window,
+            HandoverParams::OpenProject {
+                project_root: root_path.to_owned(),
+            },
+        )
+    });
+
+    window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            let _ = root.request_close(window, cx);
+        })
+    });
+
+    for response in responses {
+        let error = response.try_recv().unwrap().unwrap_err();
+        assert_handover_error(&error, -32004, DomainErrorCode::Closing);
+    }
+    assert_eq!(
+        root.read_with(cx, |root, _| root.tasks.project_open_task_count()),
+        0
+    );
+    assert_eq!(
+        root.read_with(cx, |root, _| root.pending_project_opens.len()),
+        0
+    );
+    assert_eq!(
+        root.read_with(cx, |root, _| root.snapshot().registry().projects().len()),
+        0
+    );
+}
+
+#[gpui::test]
+fn destroyed_window_drains_pending_project_open_handovers(cx: &mut TestAppContext) {
+    let (root, mut window, _) = open_root(cx);
+    let responses = ["D:/work/first", "D:/work/second"].map(|root_path| {
+        queue_handover(
+            &root,
+            &mut window,
+            HandoverParams::OpenProject {
+                project_root: root_path.to_owned(),
+            },
+        )
+    });
+
+    window.update(|window, _| window.remove_window());
+    window.run_until_parked();
+
+    for response in responses {
+        let error = response.try_recv().unwrap().unwrap_err();
+        assert_handover_error(&error, -32004, DomainErrorCode::Closing);
+    }
+    assert_eq!(
+        root.read_with(cx, |root, _| root.tasks.project_open_task_count()),
+        0
+    );
+    assert_eq!(
+        root.read_with(cx, |root, _| root.pending_project_opens.len()),
+        0
+    );
+    assert_eq!(
+        root.read_with(cx, |root, _| root.snapshot().registry().projects().len()),
+        0
+    );
+}
+
+struct FailingProjectPaths;
+
+impl crate::platform::project_paths::ProjectPathResolver for FailingProjectPaths {
+    fn resolve(&self, _: &CanonicalPath) -> io::Result<CanonicalPath> {
+        Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "测试拒绝真实路径解析",
+        ))
+    }
+}
+
+#[gpui::test]
+fn project_realpath_dedupe_failure_preserves_relation(cx: &mut TestAppContext) {
+    let (root, mut window, state) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, "D:/work/a");
+    new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_A);
+    add_project(&root, &mut window, PROJECT_B, "D:/work/b");
+    let before = root.read_with(cx, |root, _| root.snapshot().clone());
+    let (_, terminal_entity, _) = panel_entity(&root, cx, PROJECT_A, TERMINAL_A);
+    root.update(cx, |root, _| {
+        root.project_paths = Arc::new(FailingProjectPaths)
+    });
+    window.deactivate_window();
+
+    let error = dispatch_handover(
+        &root,
+        &mut window,
+        HandoverParams::OpenProject {
+            project_root: "D:/work/unresolved".to_owned(),
+        },
+    )
+    .unwrap_err();
+
+    assert_handover_error(&error, -32001, DomainErrorCode::NotReady);
+    assert_window_active(&mut window, false);
+    root.read_with(cx, |root, _| {
+        assert_eq!(root.snapshot(), &before);
+        assert_eq!(
+            root.snapshot().registry().active(),
+            before.registry().active()
+        );
+        assert_eq!(root.projects.len(), 2);
+    });
+    assert_eq!(
+        panel_entity(&root, cx, PROJECT_A, TERMINAL_A).1,
+        terminal_entity
+    );
+    assert_eq!(state.borrow().attempts, 1);
 }
 
 #[gpui::test]

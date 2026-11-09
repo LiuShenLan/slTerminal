@@ -11,6 +11,7 @@ mod layout;
 mod panel_host;
 mod project_close;
 mod project_view;
+mod projects;
 mod render;
 mod side_view;
 mod side_view_host;
@@ -21,7 +22,8 @@ mod terminal_close;
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod tests;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
+use std::sync::Arc;
 
 use gpui::{
     App, AppContext as _, Context, Entity, FocusHandle, Pixels, Point, ScrollHandle, Subscription,
@@ -35,6 +37,7 @@ use slterm_workspace::{
 
 use crate::app_shell::global_close::GlobalCloseClient;
 use crate::persistence::workspace_writer::WorkspaceWriterClient;
+use crate::platform::project_paths::{ProjectPathResolver, SystemProjectPathResolver};
 
 use focus_manager::{FocusManager, FocusRegistration, FocusSubscriptions};
 pub(super) use side_view::AppRootPersistence;
@@ -161,6 +164,9 @@ pub(crate) struct AppRoot {
     next_terminal_close_sequence: u64,
     project_closes: BTreeMap<ProjectId, project_close::LocalProjectClose>,
     projects: BTreeMap<ProjectId, Entity<ProjectView>>,
+    pending_project_opens: VecDeque<ProjectOpenRequest>,
+    active_project_open: Option<uuid::Uuid>,
+    project_open_draining: bool,
     panel_ids: PanelIdAllocator,
     panel_subscriptions: BTreeMap<PanelId, Subscription>,
     panel_focus: BTreeMap<PanelId, FocusRegistration>,
@@ -180,6 +186,7 @@ pub(crate) struct AppRoot {
     tab_list_menu: Option<TabListMenu>,
     side_view_persistence: AppRootPersistence,
     launcher: Box<dyn TerminalPanelLauncher>,
+    project_paths: Arc<dyn ProjectPathResolver>,
     shell: CanonicalPath,
 }
 
@@ -304,6 +311,9 @@ impl AppRoot {
             next_terminal_close_sequence: 0,
             project_closes: BTreeMap::new(),
             projects,
+            pending_project_opens: VecDeque::new(),
+            active_project_open: None,
+            project_open_draining: false,
             panel_ids,
             panel_subscriptions: BTreeMap::new(),
             panel_focus: BTreeMap::new(),
@@ -323,6 +333,7 @@ impl AppRoot {
             tab_list_menu: None,
             side_view_persistence: persistence,
             launcher,
+            project_paths: Arc::new(SystemProjectPathResolver),
             shell,
         };
         root.reconcile_split_dividers(cx);
@@ -416,3 +427,4 @@ impl Drop for AppRoot {
 }
 
 use project_view::ProjectView;
+use projects::ProjectOpenRequest;

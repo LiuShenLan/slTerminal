@@ -16,6 +16,7 @@ impl AppRoot {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> bool {
+        self.cancel_pending_project_opens(cx);
         self.start_application_close(window, cx)
     }
 

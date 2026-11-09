@@ -13,6 +13,7 @@ pub(crate) enum TaskId {
     CloseFlush,
     TerminalClose(slterm_workspace::TerminalId),
     ProjectClose(slterm_workspace::ProjectId),
+    ProjectOpen(uuid::Uuid),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -84,6 +85,12 @@ impl TaskService {
         Ok(())
     }
 
+    pub(crate) fn cancel(&mut self, id: TaskId) {
+        if let Some(entry) = self.tasks.remove(&id) {
+            entry.cancellation.cancel();
+        }
+    }
+
     pub(crate) fn complete(&mut self, id: TaskId) {
         self.tasks.remove(&id);
     }
@@ -91,6 +98,14 @@ impl TaskService {
     #[cfg(all(test, feature = "gpui-test-support"))]
     pub(super) fn is_registered(&self, id: TaskId) -> bool {
         self.tasks.contains_key(&id)
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(super) fn project_open_task_count(&self) -> usize {
+        self.tasks
+            .keys()
+            .filter(|id| matches!(id, TaskId::ProjectOpen(_)))
+            .count()
     }
 
     #[cfg(all(test, feature = "gpui-test-support"))]

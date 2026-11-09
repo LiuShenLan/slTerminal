@@ -146,6 +146,7 @@ pub(crate) enum AppRootError {
     Layout(LayoutError),
     PanelIdExhausted,
     Launch(io::Error),
+    ProjectPath(io::Error),
     Focus(FocusError),
     ProjectNotActive,
     NewTerminalTargetUnauthorized,
@@ -176,6 +177,7 @@ impl fmt::Display for AppRootError {
             Self::Layout(error) => write!(formatter, "布局命令失败: {error:?}"),
             Self::PanelIdExhausted => formatter.write_str("面板 ID 序列已耗尽"),
             Self::Launch(error) => write!(formatter, "终端启动失败: {error}"),
+            Self::ProjectPath(error) => write!(formatter, "项目根真实路径解析失败: {error}"),
             Self::Focus(error) => write!(formatter, "焦点目标不可用: {error:?}"),
             Self::ProjectNotActive => formatter.write_str("只能在活跃项目中显式创建终端"),
             Self::NewTerminalTargetUnauthorized => formatter.write_str("新终端目标项目未获授权"),
@@ -214,7 +216,7 @@ impl std::error::Error for AppRootError {
         match self {
             Self::Project(error) => Some(error),
             Self::Snapshot(error) => Some(error),
-            Self::Launch(error) => Some(error),
+            Self::Launch(error) | Self::ProjectPath(error) => Some(error),
             Self::TerminalCloseWriter(error) | Self::ProjectCloseWriter(error) => Some(error),
             Self::Sidebar(error) => Some(error),
             Self::Registry(_)
@@ -412,17 +414,7 @@ impl AppRoot {
         Ok(())
     }
 
-    pub(crate) fn open_initial_project(
-        &mut self,
-        root: CanonicalPath,
-        window: &mut Window,
-        cx: &mut Context<'_, Self>,
-    ) -> Result<PanelId, AppRootError> {
-        self.open_project(root, window, cx)?;
-        let shell = self.shell.clone();
-        self.new_terminal(shell, window, cx)
-    }
-
+    #[cfg(all(test, feature = "gpui-test-support"))]
     pub(crate) fn open_project(
         &mut self,
         root: CanonicalPath,

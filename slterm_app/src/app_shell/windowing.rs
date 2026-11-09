@@ -128,11 +128,8 @@ pub(crate) fn open_initial_window(
                 !root.snapshot().registry().projects().is_empty(),
                 root.project_snapshot_recovery_failed(),
             );
-            if should_open_initial
-                && let Err(error) = root.open_initial_project(initial_root, window, cx)
-            {
-                log::error!("初始项目启动失败: {error}");
-                super::try_write_stderr(format_args!("初始项目启动失败: {error}"));
+            if should_open_initial {
+                root.open_initial_project(initial_root, window, cx);
             }
             root.start_shell_event_pump(shell_rx, window.window_handle(), cx);
         });

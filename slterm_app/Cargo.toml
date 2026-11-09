@@ -65,6 +65,8 @@ rusqlite = { version = "=0.41.0", features = ["bundled", "backup"] }
 slterm_completions = { path = "../slterm_completions" }
 # workspace 选择器 glob 语义(只读 package.json/yaml 声明,不执行项目代码)。
 glob = "0.3.4"
+# 项目根真实路径解析：Windows canonicalize 的设备前缀经 dunce 规范化。
+dunce = "=1.0.5"
 # vte 类型面(Color/CursorShape/NamedColor/Rgb + 测试注入 Processor):
 # core 刻意不再导出(「解析器不经本 crate 再导出」),壳侧同名钉版,
 # 版本/feature 必须与 slterm_terminal/Cargo.toml 逐字一致,跨 crate 类型才同一。

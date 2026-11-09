@@ -30,6 +30,7 @@ pub(crate) mod process;
 #[allow(dead_code)] // 消费点 = completion::metadata 的 Git 读取（引擎已接，呈现归 UI）。
 pub(crate) mod process_output;
 pub(crate) mod process_snapshot;
+pub(crate) mod project_paths;
 #[allow(dead_code)] // 登录启动设置归 Windows 与发布阶段。
 pub(crate) mod startup;
 // 安装器 handoff 的原生面:路径规范化/进程身份/helper 启动。
