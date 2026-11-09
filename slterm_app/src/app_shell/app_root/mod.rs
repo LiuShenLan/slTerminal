@@ -15,6 +15,7 @@ mod project_close;
 mod project_view;
 mod projects;
 mod render;
+mod settings_overlay;
 mod side_view;
 mod side_view_host;
 mod sidebar;
@@ -75,6 +76,7 @@ gpui::actions!(
         ActivateSideButton,
         OpenSideButtonMenu,
         OpenLayoutMenu,
+        OpenSettings,
         AdjustSidebarWidthLeft,
         AdjustSidebarWidthRight,
         AdjustSidebarWidthLeftLarge,
@@ -190,6 +192,7 @@ pub(crate) struct AppRoot {
     side_button_menu: Option<SideButtonMenu>,
     layout_menu: Option<LayoutMenu>,
     tab_list_menu: Option<TabListMenu>,
+    settings_overlay: Option<settings_overlay::SettingsOverlayHost>,
     side_view_persistence: AppRootPersistence,
     launcher: Box<dyn TerminalPanelLauncher>,
     project_paths: Arc<dyn ProjectPathResolver>,
@@ -339,6 +342,7 @@ impl AppRoot {
             side_button_menu: None,
             layout_menu: None,
             tab_list_menu: None,
+            settings_overlay: None,
             side_view_persistence: persistence,
             launcher,
             project_paths: Arc::new(SystemProjectPathResolver),

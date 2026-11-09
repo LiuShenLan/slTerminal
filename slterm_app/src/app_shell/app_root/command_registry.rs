@@ -20,8 +20,8 @@ use super::{
     AdjustSidebarWidthRight, AdjustSidebarWidthRightLarge, AdjustSplitDown, AdjustSplitLeft,
     AdjustSplitRight, AdjustSplitUp, AppRoot, CloseActiveTerminal, FocusActivityBar,
     FocusFirstSideButton, FocusLastSideButton, FocusNextPanel, FocusNextSideButton,
-    FocusPreviousPanel, FocusPreviousSideButton, NewTerminal, OpenLayoutMenu, OpenSideButtonMenu,
-    ResetSidebarRatio, ResetSidebarWidth, SplitDown, SplitRight, ToggleSidebar,
+    FocusPreviousPanel, FocusPreviousSideButton, NewTerminal, OpenLayoutMenu, OpenSettings,
+    OpenSideButtonMenu, ResetSidebarRatio, ResetSidebarWidth, SplitDown, SplitRight, ToggleSidebar,
     commands::AppRootError,
     focus_manager::FocusError,
     sidebar::{SideButtonCommand, SideButtonNavigation, SidebarGeometryCommand},
@@ -39,6 +39,7 @@ pub(crate) enum CommandId {
     FocusNextPanel,
     FocusPreviousPanel,
     OpenLayoutMenu,
+    OpenSettings,
     MoveView,
     MergeGroups,
     SplitView,
@@ -185,6 +186,14 @@ pub(crate) struct CommandDefinition {
     pub(crate) context: Option<&'static str>,
     action: fn() -> Box<dyn Action>,
 }
+
+const APPLICATION_DEFINITIONS: [CommandDefinition; 1] = [CommandDefinition {
+    id: CommandId::OpenSettings,
+    target: CommandTarget::Focused,
+    keystroke: "ctrl-,",
+    context: None,
+    action: || Box::new(OpenSettings),
+}];
 
 const TERMINAL_DEFINITIONS: [CommandDefinition; 4] = [
     CommandDefinition {
@@ -465,8 +474,9 @@ impl CommandRegistry {
     pub(crate) fn register_bindings(cx: &mut App) {
         let mut definitions = BTreeSet::new();
         let mut bindings = BTreeSet::new();
-        for definition in TERMINAL_DEFINITIONS
+        for definition in APPLICATION_DEFINITIONS
             .iter()
+            .chain(TERMINAL_DEFINITIONS.iter())
             .chain(PANEL_DEFINITIONS.iter())
             .chain(LAYOUT_DEFINITIONS.iter())
             .chain(SIDEBAR_DEFINITIONS.iter())
@@ -601,6 +611,14 @@ impl CommandRegistry {
             }
             return root
                 .remove_project(project_id, window, cx)
+                .map(|()| CommandOutcome::Completed);
+        }
+        if id == CommandId::OpenSettings {
+            if !matches!(target, CommandTarget::Focused) || parameters.is_some() {
+                return Err(AppRootError::UnexpectedParameters);
+            }
+            return root
+                .open_settings_overlay_from_request(window, cx)
                 .map(|()| CommandOutcome::Completed);
         }
         if id == CommandId::ActivateSideView {

@@ -16,8 +16,8 @@ use super::project_view::ProjectView;
 use super::{
     ActivateAgentFiles, ActivateCommit, ActivateExplorer, ActivateNav, AdjustSplitDown,
     AdjustSplitLeft, AdjustSplitRight, AdjustSplitUp, AppRoot, CloseActiveTerminal,
-    FocusActivityBar, FocusNextPanel, FocusPreviousPanel, NewTerminal, OpenLayoutMenu, SplitDown,
-    SplitRight, ToggleSidebar,
+    FocusActivityBar, FocusNextPanel, FocusPreviousPanel, NewTerminal, OpenLayoutMenu,
+    OpenSettings, SplitDown, SplitRight, ToggleSidebar,
 };
 
 impl AppRoot {
@@ -222,6 +222,18 @@ impl Render for AppRoot {
             .min_w_0()
             .min_h_0()
             .track_focus(&self.workspace_focus)
+            .on_action(cx.listener(|this, _: &OpenSettings, window, cx| {
+                if let Err(error) = this.execute_command(
+                    CommandId::OpenSettings,
+                    CommandSource::Keyboard,
+                    CommandTarget::Focused,
+                    None,
+                    window,
+                    cx,
+                ) {
+                    log::warn!("打开设置浮层命令失败: {error}");
+                }
+            }))
             .on_action(cx.listener(|this, _: &NewTerminal, window, cx| {
                 let shell = this.shell.clone();
                 if let Err(error) = this.execute_command(
@@ -410,5 +422,6 @@ impl Render for AppRoot {
                     .child(self.render_active_project(cx)),
             )
             .children(self.render_sidebar_drag_overlay(cx))
+            .children(self.render_settings_overlay(cx))
     }
 }

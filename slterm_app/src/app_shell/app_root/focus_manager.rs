@@ -393,6 +393,11 @@ impl FocusManager {
         }
     }
 
+    /// 显式浮层记录打开前的还焦起点；调用方须先同步真实窗口焦点。
+    pub fn observed_focus_token(&self) -> Option<FocusToken> {
+        self.observed_focus.as_ref().and_then(|focus| focus.token)
+    }
+
     /// 启动恢复只建立项目作用域，不送焦、不覆盖运行期焦点记忆。
     pub fn restore_active_project(&mut self, project: Option<ProjectId>) {
         self.active_project = project;
