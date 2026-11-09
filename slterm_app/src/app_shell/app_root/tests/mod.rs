@@ -1162,7 +1162,7 @@ fn failed_launch_keeps_snapshot_and_instances_unchanged(cx: &mut TestAppContext)
 }
 
 #[gpui::test]
-fn project_switch_preserves_entities_and_hidden_event_processing(cx: &mut TestAppContext) {
+fn workspace_project_switch_preserves_instances(cx: &mut TestAppContext) {
     let (root, mut window, state) = open_root(cx);
     add_project(&root, &mut window, PROJECT_A, "D:/work/a");
     new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_A);
@@ -1174,6 +1174,21 @@ fn project_switch_preserves_entities_and_hidden_event_processing(cx: &mut TestAp
     assert_ne!(terminal_a, terminal_b);
     assert!(!output_visible(&root, cx, PROJECT_A, TERMINAL_A));
     assert!(output_visible(&root, cx, PROJECT_B, TERMINAL_B));
+    draw_frame(&mut window);
+    assert!(window.debug_bounds(group_selector(GROUP_A)).is_none());
+    assert!(window.debug_bounds(group_selector(GROUP_B)).is_some());
+    let focus_b = root.read_with(cx, |root, cx| {
+        root.terminal_panel(project_id(PROJECT_B), terminal_id(TERMINAL_B), cx)
+            .unwrap()
+            .1
+            .read(cx)
+            .focus_handle
+            .clone()
+    });
+    assert_eq!(
+        window.update(|window, cx| window.focused(cx)),
+        Some(focus_b.clone())
+    );
 
     // 隐藏只门控重绘；标题事件仍按原路径更新实体。
     window.update(|_, cx| {
@@ -1193,13 +1208,35 @@ fn project_switch_preserves_entities_and_hidden_event_processing(cx: &mut TestAp
             .1;
         assert_eq!(terminal.read(cx).title, "hidden");
     });
+    draw_frame(&mut window);
+    assert_eq!(
+        window.update(|window, cx| window.focused(cx)),
+        Some(focus_b)
+    );
+    assert!(window.debug_bounds(group_selector(GROUP_A)).is_none());
+    assert!(window.debug_bounds(group_selector(GROUP_B)).is_some());
 
     activate_project(&root, &mut window, PROJECT_A);
+    draw_frame(&mut window);
+    assert!(window.debug_bounds(group_selector(GROUP_A)).is_some());
+    assert!(window.debug_bounds(group_selector(GROUP_B)).is_none());
     assert_eq!(panel_entity(&root, cx, PROJECT_A, TERMINAL_A).1, terminal_a);
     assert_eq!(panel_entity(&root, cx, PROJECT_B, TERMINAL_B).1, terminal_b);
     assert!(weak_a.upgrade().is_some());
     assert!(output_visible(&root, cx, PROJECT_A, TERMINAL_A));
     assert!(!output_visible(&root, cx, PROJECT_B, TERMINAL_B));
+    let focus_a = root.read_with(cx, |root, cx| {
+        root.terminal_panel(project_id(PROJECT_A), terminal_id(TERMINAL_A), cx)
+            .unwrap()
+            .1
+            .read(cx)
+            .focus_handle
+            .clone()
+    });
+    assert_eq!(
+        window.update(|window, cx| window.focused(cx)),
+        Some(focus_a)
+    );
     assert_eq!(state.borrow().attempts, 2);
     for receiver in state.borrow().sessions.values() {
         assert!(matches!(receiver.try_recv(), Err(TryRecvError::Empty)));
