@@ -11,12 +11,15 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct CloseDialogError;
 
+/// 最终提交失败的实际提示正文；原生确认框与自动化证据共用同一文本源。
+fn final_commit_warning_message() -> &'static str {
+    "退出状态保存失败。\n\n选择“重试”重新提交；选择“取消”退出且不保存本次窗口状态，旧布局与可能残留的快照会在下次启动恢复。"
+}
+
 /// 主窗存活时以其 HWND 为 owner；只有 GPUI 已退出的兜底路径才传 `None`。
 /// 返回 true 表示重试，false 表示用户明确接受旧布局与快照可能恢复。
 pub(crate) fn retry_final_commit(owner: Option<isize>) -> Result<bool, CloseDialogError> {
-    let message = win32_string(
-        "退出状态保存失败。\n\n选择“重试”重新提交；选择“取消”退出且不保存本次窗口状态，旧布局与可能残留的快照会在下次启动恢复。",
-    );
+    let message = win32_string(final_commit_warning_message());
     let title = win32_string(crate::brand::NAME);
     let owner = owner.map_or(ptr::null_mut(), |hwnd| {
         hwnd as windows_sys::Win32::Foundation::HWND
@@ -50,6 +53,15 @@ fn map_message_box_result(result: i32) -> Result<bool, CloseDialogError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn close_abandon_warns_about_old_state() {
+        let message = final_commit_warning_message();
+        assert!(message.contains("退出且不保存本次窗口状态"));
+        assert!(message.contains("旧布局"));
+        assert!(message.contains("可能残留的快照"));
+        assert!(message.contains("下次启动恢复"));
+    }
 
     #[test]
     fn message_box_failure_is_not_explicit_abandon() {

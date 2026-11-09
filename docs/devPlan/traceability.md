@@ -162,7 +162,7 @@
 | 快照配额不足时不驱逐打开脏 Document | `snapshot_quota_does_not_evict_dirty` | 待实现 |
 | 异常启动先布局后对账且不重复创建 Panel | `startup_reconciles_layout_before_snapshot` | 待实现 |
 | 无主快照无活跃项目时保留并等待显式处置 | `orphan_snapshot_requires_explicit_target` | 待实现 |
-| 最终提交失败后放弃状态退出有旧状态提示 | `close_abandon_warns_about_old_state` | 待实现 |
+| 最终提交失败后放弃状态退出有旧状态提示 | `close_abandon_warns_about_old_state` | 已自动化 |
 | 普通设置导入拒绝未知版本或凭据字段 | `settings_import_rejects_unknown_or_credentials` | 待实现 |
 
 ### PathPolicy
