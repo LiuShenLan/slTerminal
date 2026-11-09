@@ -22,6 +22,7 @@ macro_rules! eprintln {
 pub(crate) mod app_root;
 pub(crate) mod assets;
 mod global_close;
+mod startup_diagnostics;
 // 源码文件 tab:普通源码与 gitshow 只读臂。
 #[allow(dead_code)] // 生产消费归 Document 与文本视图阶段。
 pub(crate) mod code_tab;
@@ -449,6 +450,22 @@ fn tray_command_event(command: crate::tray::GpuiTrayCommand) -> SltermShellEvent
 /// 关窗即退出(跨领域不变量 5):`QuitMode::LastWindowClosed` + 无 mux 驻留臂,
 /// 最后一窗关闭 = 进程退出。
 pub fn run_shell(initial_cwd: Option<PathBuf>) {
+    run_shell_loop(initial_cwd, run_shell_once);
+}
+
+/// 用户显式重试才重新进入启动链；原始 cwd 在每轮保持不变。
+fn run_shell_loop(
+    initial_cwd: Option<PathBuf>,
+    mut run: impl FnMut(Option<PathBuf>) -> startup_diagnostics::ShellRunOutcome,
+) {
+    loop {
+        if run(initial_cwd.clone()) == startup_diagnostics::ShellRunOutcome::Exit {
+            break;
+        }
+    }
+}
+
+fn run_shell_once(initial_cwd: Option<PathBuf>) -> startup_diagnostics::ShellRunOutcome {
     // 后台任务运行时复位:静态初值即注册表默认值,这里显式
     // 再对齐一次,保证同进程重启测试/后续配置载入从确定态出发。
     crate::background_tasks::reset_defaults();
@@ -456,7 +473,7 @@ pub fn run_shell(initial_cwd: Option<PathBuf>) {
     match crate::update_download::handoff::installation_in_progress() {
         Ok(true) => {
             log::info!("installation in progress; resident startup deferred");
-            return;
+            return startup_diagnostics::ShellRunOutcome::Exit;
         }
         Err(error) => log::warn!("could not inspect installation ownership: {error}"),
         Ok(false) => {}
@@ -467,7 +484,7 @@ pub fn run_shell(initial_cwd: Option<PathBuf>) {
         Err(error) => {
             log::error!("启动路径解析失败: {error}");
             try_write_stderr(format_args!("启动路径解析失败: {error}"));
-            return;
+            return startup_diagnostics::ShellRunOutcome::Exit;
         }
     };
     let (shell_tx, shell_rx) = shell_event_channel();
@@ -477,9 +494,9 @@ pub fn run_shell(initial_cwd: Option<PathBuf>) {
         match start_workspace_writer(app_paths, shell_tx.clone()) {
             Ok(started) => started,
             Err(error) => {
-                // fail-closed：不得加载领域状态、启动控制面或创建 GPUI 窗口。
+                // 维护失败只开放只读诊断；不得加载领域状态或启动控制面。
                 log::warn!("workspace writer startup failed: {error}");
-                return;
+                return startup_diagnostics::run(error);
             }
         };
     // 首帧前恢复视图私有状态与上一运行退出事实；读取或解码失败只设置对应写屏障。
@@ -495,7 +512,7 @@ pub fn run_shell(initial_cwd: Option<PathBuf>) {
             Ok(runtime) => runtime,
             Err(error) => {
                 log::warn!("global close runtime startup failed: {error}");
-                return;
+                return startup_diagnostics::ShellRunOutcome::Exit;
             }
         };
     let global_close_client = global_close.client();
@@ -553,6 +570,7 @@ pub fn run_shell(initial_cwd: Option<PathBuf>) {
     // 托盘收尾:先删图标再退进程,否则任务栏残影要等
     // 用户悬停才消失;join 保证删图标先于进程退出。
     crate::tray::shutdown();
+    startup_diagnostics::ShellRunOutcome::Exit
 }
 
 /// 组件库/内嵌字体/主题/终端切片/工作区的一次性初始化。

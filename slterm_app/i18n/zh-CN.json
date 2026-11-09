@@ -517,5 +517,17 @@
     "close_busy_title": "关闭运行中的 pane？",
     "close_busy_detail": "该 pane 仍有任务在运行，关闭会终止其中的进程。",
     "close_busy_confirm": "仍然关闭"
+  },
+  "startup_diagnostics": {
+    "title": "启动诊断",
+    "description": "启动维护未完成，未启动终端或后台写入。",
+    "attention": "启动维护需要人工处理：{stage}",
+    "stage_journal": "Journal 对账",
+    "stage_maintenance_requests": "维护请求／恢复点",
+    "stage_close_intents": "关闭意图",
+    "stage_snapshots": "快照索引",
+    "stage_history_quarantine": "历史隔离",
+    "retry": "重试启动",
+    "exit": "退出"
   }
 }

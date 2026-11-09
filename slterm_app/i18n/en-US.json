@@ -517,5 +517,17 @@
     "close_busy_title": "Close a running pane?",
     "close_busy_detail": "This pane still has a running task; closing it terminates its processes.",
     "close_busy_confirm": "Close anyway"
+  },
+  "startup_diagnostics": {
+    "title": "Startup diagnostics",
+    "description": "Startup maintenance did not complete; no terminals or background writers were started.",
+    "attention": "Startup maintenance needs attention: {stage}",
+    "stage_journal": "journal",
+    "stage_maintenance_requests": "maintenance requests or restore points",
+    "stage_close_intents": "close intents",
+    "stage_snapshots": "snapshot index",
+    "stage_history_quarantine": "history quarantine",
+    "retry": "Retry startup",
+    "exit": "Exit"
   }
 }
