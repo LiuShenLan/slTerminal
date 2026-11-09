@@ -21,6 +21,8 @@ macro_rules! eprintln {
 
 pub(crate) mod app_root;
 pub(crate) mod assets;
+#[cfg(test)]
+mod crash_recovery;
 mod global_close;
 mod startup_diagnostics;
 // 源码文件 tab:普通源码与 gitshow 只读臂。

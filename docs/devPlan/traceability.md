@@ -73,6 +73,7 @@
 | 批量关闭 | [生命周期](design/lifecycle.md)、[工作区](design/workspace.md) | `integration_batch_close` | 待实现 |
 | 项目移除与退出 | [生命周期](design/lifecycle.md)、[工作区](design/workspace.md) | `integration_project_remove_and_exit` | 已自动化 |
 | 崩溃恢复 | [生命周期](design/lifecycle.md)、[持久化](design/persistence.md) | `integration_crash_recovery` | 待实现 |
+| 关闭意图各提交边界崩溃后按真实持久阶段对账 | [生命周期](design/lifecycle.md)、[持久化](design/persistence.md) | `close_commit_crash_reopens_with_exact_persistent_stage` | 已自动化 |
 | 快照配额 | [持久化](design/persistence.md)、[Document](design/document.md) | `integration_snapshot_quota` | 待实现 |
 | 终端恢复 | [终端](design/terminal.md)、[生命周期](design/lifecycle.md) | `integration_terminal_restore` | 待实现 |
 | PTY 上限 | [终端](design/terminal.md)、[工作区](design/workspace.md) | `integration_pty_limit` | 待实现 |
