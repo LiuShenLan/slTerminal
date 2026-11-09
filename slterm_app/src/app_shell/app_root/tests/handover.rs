@@ -830,9 +830,7 @@ fn handover_new_terminal_cwd_selects_deepest_covering_project(cx: &mut TestAppCo
 }
 
 #[gpui::test]
-fn handover_new_terminal_rejects_uncovered_and_cross_root_cwd_without_fallback(
-    cx: &mut TestAppContext,
-) {
+fn handover_rejects_unauthorized_cwd(cx: &mut TestAppContext) {
     let (root, mut window, state) = open_root(cx);
     add_project(&root, &mut window, PROJECT_A, "D:/work/a");
     add_project(&root, &mut window, PROJECT_B, "D:/work/b");

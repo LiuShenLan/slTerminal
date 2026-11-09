@@ -224,7 +224,7 @@
 | 批量保存失败取消关闭并保留全部 Panel 与 PTY | `workspace_batch_save_failure_cancels_close` | 待实现 |
 | 项目移除先完成守卫与删除意图再销毁资源 | `project_remove_commits_intent_before_destroy` | 已自动化 |
 | 激活项目不关闭无项目浮层或其 Hooks 草稿 | `app_settings_overlay_keeps_hooks_draft` | 待实现 |
-| 移交显式 cwd 未授权时拒绝且不改投项目 | `handover_rejects_unauthorized_cwd` | 待实现 |
+| 移交显式 cwd 未授权时拒绝且不改投项目 | `handover_rejects_unauthorized_cwd` | 已自动化 |
 | 最终退出提交失败后允许知情放弃状态 | `close_final_commit_failure_allows_explicit_abandon`、`application_global_abandon_closes_without_clean_shutdown` | 已自动化 |
 | 异常启动先布局后对账且不重复 Panel 或 PTY | `workspace_startup_layout_before_snapshots` | 已自动化 |
 | 启动维护失败只提供脱敏诊断与显式重试 | `diagnostic_messages_are_localized_and_sanitized`、`retry_button_returns_retry_without_starting_workspace`、`closing_diagnostic_returns_exit`、`retry_loop_reenters_same_startup_with_original_cwd`、`diagnostic_init_excludes_settings_recovery_and_background_effects`、`open_failure_requests_quit` | 已自动化 |
