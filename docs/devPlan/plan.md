@@ -40,7 +40,7 @@
 
 | 行为切片 | 前置 | 交付与验收锚 |
 |---|---|---|
-| 布局命令与 GPUI 接线 | 既有 `ProjectLayout` 转换对与稳定身份 | 把拆分、合并、移动、尺寸调整接入统一命令与 AppRoot；核销 `integration_view_identity_reopen`，不重建布局核心。 |
+| 布局命令与 GPUI 接线 | 既有 `ProjectLayout` 转换对与稳定身份 | 把拆分、合并、移动、尺寸调整接入统一命令与 AppRoot；核销“布局操作保留实例与焦点”场景，不重建布局核心。 |
 | 页签溢出与完整列表 | 布局命令接线 | 实现横向溢出和完整列表面板，验证无 ViewKey 丢失、焦点与激活项一致。 |
 | 多项目运行态集成 | 既有 ProjectView 与 TerminalRegistry | 只补项目切换的跨域证据，确认实例、PTY 与隐藏输出不重建；核销 `workspace_project_switch_preserves_instances`。 |
 | 侧栏显隐跨域集成 | 既有 SideViewHost、TaskService | 复用现有实例语义补齐可见性集成证据；核销 `integration_sidebar_visibility_semantics`，不重写侧栏生命周期。 |

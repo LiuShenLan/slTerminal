@@ -115,8 +115,10 @@ impl AppRoot {
                 unresolved_failure: false,
             },
         );
-        self.commit_project_snapshot(candidate);
-        self.detach_closing_terminal(id, window, cx);
+        let divider_focus_removed =
+            self.focused_split_divider_removed(record.project_id(), &candidate, window, cx);
+        self.commit_project_snapshot(candidate, cx);
+        self.detach_closing_terminal(id, divider_focus_removed, window, cx);
         cx.notify();
         self.drive_terminal_close_in_memory(id, cx)?;
         Ok(record)
@@ -370,6 +372,14 @@ impl AppRoot {
         }
         // 持久候选提交后，从最新内存快照重算，保留在途 Exited 等其他变化。
         let (candidate, _) = self.snapshot.without_terminal(id)?;
+        let project_id = self
+            .terminal_closes
+            .get(&id)
+            .ok_or(AppRootError::MissingPanel)?
+            .record
+            .project_id();
+        let divider_focus_removed =
+            self.focused_split_divider_removed(project_id, &candidate, window, cx);
         let close = self
             .terminal_closes
             .get_mut(&id)
@@ -379,8 +389,8 @@ impl AppRoot {
             .state_committed(attempt)
             .map_err(|_| AppRootError::TerminalCloseState)?;
         close.persisted = Some(committed);
-        self.commit_project_snapshot(candidate);
-        self.detach_closing_terminal(id, window, cx);
+        self.commit_project_snapshot(candidate, cx);
+        self.detach_closing_terminal(id, divider_focus_removed, window, cx);
         Ok(())
     }
 
@@ -706,7 +716,13 @@ impl AppRoot {
         }
     }
 
-    fn detach_closing_terminal(&mut self, id: TerminalId, window: &mut Window, cx: &mut App) {
+    fn detach_closing_terminal(
+        &mut self,
+        id: TerminalId,
+        divider_focus_removed: bool,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
         let Some(close) = self.terminal_closes.get(&id) else {
             return;
         };
@@ -717,9 +733,10 @@ impl AppRoot {
             return;
         };
         let focus_token = self.panel_focus.get(&panel_id).map(|focus| focus.token());
-        let was_focused = window
-            .focused(cx)
-            .is_some_and(|focused| focused == terminal.read(cx).focus_handle);
+        let was_focused = divider_focus_removed
+            || window
+                .focused(cx)
+                .is_some_and(|focused| focused == terminal.read(cx).focus_handle);
         if self.snapshot.registry().active() == Some(project_id) && was_focused {
             let next_panel = project.read(cx).panels.keys().find(|candidate| {
                 **candidate != panel_id && self.panel_focus.contains_key(*candidate)

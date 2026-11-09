@@ -10,16 +10,17 @@ use slterm_path::CanonicalPath;
 use slterm_sidebar::ButtonMovement;
 use slterm_split::SplitDirection;
 use slterm_workspace::{
-    LogicalSize, PanelId, ProjectId, SideViewId, TerminalId, TerminalRecord, ViewKey,
+    LogicalSize, PanelGroupId, PanelId, ProjectId, SideViewId, TerminalId, TerminalRecord, ViewKey,
 };
 
 use super::{
     ActivateAgentFiles, ActivateCommit, ActivateExplorer, ActivateNav, ActivateSideButton,
     AdjustSidebarRatioDown, AdjustSidebarRatioDownLarge, AdjustSidebarRatioUp,
     AdjustSidebarRatioUpLarge, AdjustSidebarWidthLeft, AdjustSidebarWidthLeftLarge,
-    AdjustSidebarWidthRight, AdjustSidebarWidthRightLarge, AppRoot, CloseActiveTerminal,
-    FocusActivityBar, FocusFirstSideButton, FocusLastSideButton, FocusNextSideButton,
-    FocusPreviousSideButton, NewTerminal, OpenSideButtonMenu, ResetSidebarRatio, ResetSidebarWidth,
+    AdjustSidebarWidthRight, AdjustSidebarWidthRightLarge, AdjustSplitDown, AdjustSplitLeft,
+    AdjustSplitRight, AdjustSplitUp, AppRoot, CloseActiveTerminal, FocusActivityBar,
+    FocusFirstSideButton, FocusLastSideButton, FocusNextSideButton, FocusPreviousSideButton,
+    NewTerminal, OpenLayoutMenu, OpenSideButtonMenu, ResetSidebarRatio, ResetSidebarWidth,
     SplitDown, SplitRight, ToggleSidebar,
     commands::AppRootError,
     focus_manager::FocusError,
@@ -33,6 +34,12 @@ pub(crate) enum CommandId {
     SplitRight,
     SplitDown,
     CloseActiveTerminal,
+    OpenLayoutMenu,
+    MoveView,
+    MergeGroups,
+    SplitView,
+    ResizeSplit,
+    FocusSplitDivider,
     RemoveProject,
     ActivateSideView,
     ToggleSidebar,
@@ -103,6 +110,30 @@ pub(crate) enum CommandParameters {
         viewport: LogicalSize,
         shell: CanonicalPath,
     },
+    MoveView {
+        view: ViewKey,
+        target_group: PanelGroupId,
+        target_index: usize,
+    },
+    MergeGroups {
+        source_group: PanelGroupId,
+        target_group: PanelGroupId,
+    },
+    SplitView {
+        view: ViewKey,
+        target_group: PanelGroupId,
+        direction: SplitDirection,
+        ratio: f32,
+        viewport: LogicalSize,
+    },
+    ResizeSplit {
+        path: Vec<bool>,
+        ratio: f32,
+        viewport: LogicalSize,
+    },
+    FocusSplitDivider {
+        path: Vec<bool>,
+    },
     SideButtonMovement(ButtonMovement),
     SideButtonMenuPosition(Point<Pixels>),
 }
@@ -164,6 +195,44 @@ const TERMINAL_DEFINITIONS: [CommandDefinition; 4] = [
         keystroke: "ctrl-shift-w",
         context: None,
         action: || Box::new(CloseActiveTerminal),
+    },
+];
+
+const LAYOUT_DEFINITIONS: [CommandDefinition; 5] = [
+    CommandDefinition {
+        id: CommandId::OpenLayoutMenu,
+        target: CommandTarget::Focused,
+        keystroke: "shift-f10",
+        context: Some(super::layout::PROJECT_LAYOUT_KEY_CONTEXT),
+        action: || Box::new(OpenLayoutMenu),
+    },
+    CommandDefinition {
+        id: CommandId::ResizeSplit,
+        target: CommandTarget::Focused,
+        keystroke: "left",
+        context: Some(super::layout::SPLIT_DIVIDER_KEY_CONTEXT),
+        action: || Box::new(AdjustSplitLeft),
+    },
+    CommandDefinition {
+        id: CommandId::ResizeSplit,
+        target: CommandTarget::Focused,
+        keystroke: "right",
+        context: Some(super::layout::SPLIT_DIVIDER_KEY_CONTEXT),
+        action: || Box::new(AdjustSplitRight),
+    },
+    CommandDefinition {
+        id: CommandId::ResizeSplit,
+        target: CommandTarget::Focused,
+        keystroke: "up",
+        context: Some(super::layout::SPLIT_DIVIDER_KEY_CONTEXT),
+        action: || Box::new(AdjustSplitUp),
+    },
+    CommandDefinition {
+        id: CommandId::ResizeSplit,
+        target: CommandTarget::Focused,
+        keystroke: "down",
+        context: Some(super::layout::SPLIT_DIVIDER_KEY_CONTEXT),
+        action: || Box::new(AdjustSplitDown),
     },
 ];
 
@@ -342,6 +411,7 @@ impl CommandRegistry {
         let mut bindings = BTreeSet::new();
         for definition in TERMINAL_DEFINITIONS
             .iter()
+            .chain(LAYOUT_DEFINITIONS.iter())
             .chain(SIDEBAR_DEFINITIONS.iter())
         {
             assert!(
@@ -401,7 +471,16 @@ impl CommandRegistry {
                 | CommandId::SplitDown
                 | CommandId::CloseActiveTerminal
         );
-        if (terminal_command || id == CommandId::RemoveProject) && context.modal {
+        let layout_command = matches!(
+            id,
+            CommandId::OpenLayoutMenu
+                | CommandId::MoveView
+                | CommandId::MergeGroups
+                | CommandId::SplitView
+                | CommandId::ResizeSplit
+                | CommandId::FocusSplitDivider
+        );
+        if (terminal_command || layout_command || id == CommandId::RemoveProject) && context.modal {
             return Err(FocusError::ModalActive.into());
         }
         let failed_terminal_close_pending = id == CommandId::CloseActiveTerminal
@@ -414,7 +493,7 @@ impl CommandRegistry {
                 ..
             }) if project_root.is_some() || cwd.is_some()
         );
-        if terminal_command
+        if (terminal_command || layout_command)
             && !targeted_new_terminal
             && context.active_project.is_none()
             && !failed_terminal_close_pending
@@ -450,6 +529,79 @@ impl CommandRegistry {
             }
             root.activate_side_view(view, window, cx)?;
             return Ok(CommandOutcome::Completed);
+        }
+        if id == CommandId::OpenLayoutMenu {
+            if parameters.is_some() {
+                return Err(AppRootError::UnexpectedParameters);
+            }
+            return root
+                .open_layout_menu_from_request(window, cx)
+                .map(|()| CommandOutcome::Completed);
+        }
+        if layout_command {
+            let CommandTarget::Focused = target else {
+                return Err(AppRootError::UnexpectedParameters);
+            };
+            return match (id, parameters) {
+                (
+                    CommandId::MoveView,
+                    Some(CommandParameters::MoveView {
+                        view,
+                        target_group,
+                        target_index,
+                    }),
+                ) => root
+                    .move_view_from_request(view, target_group, target_index, window, cx)
+                    .map(|()| CommandOutcome::Completed),
+                (
+                    CommandId::MergeGroups,
+                    Some(CommandParameters::MergeGroups {
+                        source_group,
+                        target_group,
+                    }),
+                ) => root
+                    .merge_groups_from_request(source_group, target_group, window, cx)
+                    .map(|()| CommandOutcome::Completed),
+                (
+                    CommandId::SplitView,
+                    Some(CommandParameters::SplitView {
+                        view,
+                        target_group,
+                        direction,
+                        ratio,
+                        viewport,
+                    }),
+                ) => root
+                    .split_view_from_request(
+                        super::layout::SplitViewOptions {
+                            view,
+                            target_group,
+                            direction,
+                            ratio,
+                            viewport,
+                        },
+                        window,
+                        cx,
+                    )
+                    .map(|()| CommandOutcome::Completed),
+                (
+                    CommandId::ResizeSplit,
+                    Some(CommandParameters::ResizeSplit {
+                        path,
+                        ratio,
+                        viewport,
+                    }),
+                ) => root
+                    .resize_split_from_request(path, ratio, viewport, window, cx)
+                    .map(|()| CommandOutcome::Completed),
+                (
+                    CommandId::FocusSplitDivider,
+                    Some(CommandParameters::FocusSplitDivider { path }),
+                ) => root
+                    .focus_split_divider_from_request(path, window, cx)
+                    .map(|()| CommandOutcome::Completed),
+                _ => Err(AppRootError::UnexpectedParameters),
+            };
         }
         if !terminal_command {
             return execute_sidebar_command(id, target, parameters, context, root, window, cx);

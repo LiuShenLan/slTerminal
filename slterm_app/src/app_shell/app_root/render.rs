@@ -14,8 +14,9 @@ use super::command_registry::{
 };
 use super::project_view::ProjectView;
 use super::{
-    ActivateAgentFiles, ActivateCommit, ActivateExplorer, ActivateNav, AppRoot,
-    CloseActiveTerminal, FocusActivityBar, NewTerminal, SplitDown, SplitRight, ToggleSidebar,
+    ActivateAgentFiles, ActivateCommit, ActivateExplorer, ActivateNav, AdjustSplitDown,
+    AdjustSplitLeft, AdjustSplitRight, AdjustSplitUp, AppRoot, CloseActiveTerminal,
+    FocusActivityBar, NewTerminal, OpenLayoutMenu, SplitDown, SplitRight, ToggleSidebar,
 };
 
 impl AppRoot {
@@ -43,13 +44,16 @@ impl AppRoot {
         let layout = project.layout();
         let content = layout
             .tree()
-            .map(|tree| self.render_split_node(tree, layout, project_view, &mut Vec::new(), cx))
+            .map(|tree| {
+                self.render_split_node(tree, project_id, layout, project_view, &mut Vec::new(), cx)
+            })
             .unwrap_or_else(render_empty);
         div()
             .size_full()
             .min_w_0()
             .min_h_0()
             .track_focus(&project_view.focus_handle)
+            .key_context(super::layout::PROJECT_LAYOUT_KEY_CONTEXT)
             .debug_selector(|| "app-root-content".to_owned())
             .child(content)
             .into_any_element()
@@ -58,13 +62,14 @@ impl AppRoot {
     fn render_split_node(
         &self,
         node: &SplitTree<PanelGroupId>,
+        project_id: slterm_workspace::ProjectId,
         layout: &ProjectLayout,
         project: &ProjectView,
         path: &mut Vec<bool>,
         cx: &Context<'_, Self>,
     ) -> AnyElement {
         match node {
-            SplitTree::Leaf(group_id) => render_group(*group_id, layout, project, cx),
+            SplitTree::Leaf(group_id) => self.render_group(*group_id, layout, project, cx),
             SplitTree::Split {
                 direction,
                 ratio,
@@ -75,14 +80,40 @@ impl AppRoot {
                 let direction = *direction;
                 let ratio = *ratio;
                 path.push(false);
-                let first = self.render_split_node(first, layout, project, path, cx);
+                let first = self.render_split_node(first, project_id, layout, project, path, cx);
                 path.pop();
                 path.push(true);
-                let second = self.render_split_node(second, layout, project, path, cx);
+                let second = self.render_split_node(second, project_id, layout, project, path, cx);
                 path.pop();
                 let divider_path = format!("{path:?}");
+                let split_path = path.clone();
+                let divider_focus = self
+                    .split_dividers
+                    .get(&(project_id, split_path.clone()))
+                    .expect("渲染前必须已注册当前分隔线")
+                    .handle
+                    .clone();
+                let left_path = split_path.clone();
+                let right_path = split_path.clone();
+                let up_path = split_path.clone();
+                let down_path = split_path.clone();
                 let divider = div()
                     .flex_shrink_0()
+                    .track_focus(&divider_focus)
+                    .key_context(super::layout::SPLIT_DIVIDER_KEY_CONTEXT)
+                    .focus_visible(|style| style.bg(cx.theme().accent))
+                    .on_action(cx.listener(move |this, _: &AdjustSplitLeft, window, cx| {
+                        this.resize_split_action(left_path.clone(), ratio, -0.02, window, cx);
+                    }))
+                    .on_action(cx.listener(move |this, _: &AdjustSplitRight, window, cx| {
+                        this.resize_split_action(right_path.clone(), ratio, 0.02, window, cx);
+                    }))
+                    .on_action(cx.listener(move |this, _: &AdjustSplitUp, window, cx| {
+                        this.resize_split_action(up_path.clone(), ratio, -0.02, window, cx);
+                    }))
+                    .on_action(cx.listener(move |this, _: &AdjustSplitDown, window, cx| {
+                        this.resize_split_action(down_path.clone(), ratio, 0.02, window, cx);
+                    }))
                     .debug_selector(move || format!("app-root-divider-{divider_path}"))
                     .map(|bar| match direction {
                         SplitDirection::LeftRight => bar.w(px(DIVIDER_GAP)).h_full(),
@@ -116,56 +147,60 @@ impl AppRoot {
     }
 }
 
-fn render_group(
-    group_id: PanelGroupId,
-    layout: &ProjectLayout,
-    project: &ProjectView,
-    cx: &Context<'_, AppRoot>,
-) -> AnyElement {
-    let active = layout.group(group_id).map(|group| group.active());
-    let terminal = active.and_then(|active| {
-        project
-            .panels
-            .values()
-            .find(|panel| &panel.view_key == active)
-            .map(|panel| panel.terminal.clone())
-    });
-    let terminal_id = active.and_then(|active| match active {
-        ViewKey::Terminal { terminal_id, .. } => Some(*terminal_id),
-        _ => None,
-    });
-    let terminal_selector = terminal
-        .as_ref()
-        .and_then(|_| terminal_id.map(|id| format!("app-root-terminal-{id}")));
-    div()
-        .size_full()
-        .min_w_0()
-        .min_h_0()
-        .relative()
-        .debug_selector(move || format!("app-root-group-{group_id}"))
-        .on_mouse_down(
-            MouseButton::Left,
-            cx.listener(move |this, _, window, cx| {
-                if let Some(terminal_id) = terminal_id
-                    && let Err(error) = this.activate_terminal(terminal_id, window, cx)
-                {
-                    log::warn!("鼠标激活终端失败: {error}");
-                }
-            }),
-        )
-        .children(terminal.map(|terminal| {
-            div()
-                .size_full()
-                .min_w_0()
-                .min_h_0()
-                .debug_selector(move || {
-                    terminal_selector
-                        .clone()
-                        .unwrap_or_else(|| "app-root-view".to_owned())
-                })
-                .child(terminal)
-        }))
-        .into_any_element()
+impl AppRoot {
+    fn render_group(
+        &self,
+        group_id: PanelGroupId,
+        layout: &ProjectLayout,
+        project: &ProjectView,
+        cx: &Context<'_, AppRoot>,
+    ) -> AnyElement {
+        let active = layout.group(group_id).map(|group| group.active());
+        let terminal = active.and_then(|active| {
+            project
+                .panels
+                .values()
+                .find(|panel| &panel.view_key == active)
+                .map(|panel| panel.terminal.clone())
+        });
+        let terminal_id = active.and_then(|active| match active {
+            ViewKey::Terminal { terminal_id, .. } => Some(*terminal_id),
+            _ => None,
+        });
+        let terminal_selector = terminal
+            .as_ref()
+            .and_then(|_| terminal_id.map(|id| format!("app-root-terminal-{id}")));
+        div()
+            .size_full()
+            .min_w_0()
+            .min_h_0()
+            .relative()
+            .debug_selector(move || format!("app-root-group-{group_id}"))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _, window, cx| {
+                    if let Some(terminal_id) = terminal_id
+                        && let Err(error) = this.activate_terminal(terminal_id, window, cx)
+                    {
+                        log::warn!("鼠标激活终端失败: {error}");
+                    }
+                }),
+            )
+            .children(terminal.map(|terminal| {
+                div()
+                    .size_full()
+                    .min_w_0()
+                    .min_h_0()
+                    .debug_selector(move || {
+                        terminal_selector
+                            .clone()
+                            .unwrap_or_else(|| "app-root-view".to_owned())
+                    })
+                    .child(terminal)
+            }))
+            .children(self.render_layout_menu(group_id))
+            .into_any_element()
+    }
 }
 
 fn render_empty() -> AnyElement {
@@ -233,6 +268,18 @@ impl Render for AppRoot {
                     cx,
                 ) {
                     log::warn!("纵向拆分终端命令失败: {error}");
+                }
+            }))
+            .on_action(cx.listener(|this, _: &OpenLayoutMenu, window, cx| {
+                if let Err(error) = this.execute_command(
+                    CommandId::OpenLayoutMenu,
+                    CommandSource::Keyboard,
+                    CommandTarget::Focused,
+                    None,
+                    window,
+                    cx,
+                ) {
+                    log::warn!("打开布局菜单失败: {error}");
                 }
             }))
             .on_action(cx.listener(|this, _: &ToggleSidebar, window, cx| {

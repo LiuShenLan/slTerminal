@@ -9,9 +9,9 @@ use slterm_path::CanonicalPath;
 use slterm_sidebar::SidebarError;
 use slterm_split::SplitDirection;
 use slterm_workspace::{
-    AddProjectOutcome, LogicalSize, NewTerminalSpec, PanelGroupId, PanelId, PanelIdExhausted,
-    ProjectCommandError, ProjectId, ProjectRegistryError, ProjectSnapshot, ProjectSnapshotError,
-    RunIntent, SplitTerminalSpec, TerminalId, TerminalRecord, ViewKey,
+    AddProjectOutcome, LayoutError, LogicalSize, NewTerminalSpec, PanelGroupId, PanelId,
+    PanelIdExhausted, ProjectCommandError, ProjectId, ProjectRegistryError, ProjectSnapshot,
+    ProjectSnapshotError, RunIntent, SplitTerminalSpec, TerminalId, TerminalRecord, ViewKey,
 };
 use uuid::Uuid;
 
@@ -143,12 +143,14 @@ pub(crate) enum AppRootError {
     Project(ProjectCommandError),
     Registry(ProjectRegistryError),
     Snapshot(ProjectSnapshotError),
+    Layout(LayoutError),
     PanelIdExhausted,
     Launch(io::Error),
     Focus(FocusError),
     ProjectNotActive,
     NewTerminalTargetUnauthorized,
     MissingPanel,
+    NoLayoutActions,
     UnexpectedParameters,
     Closing,
     ProjectSnapshotCommitInFlight,
@@ -171,12 +173,14 @@ impl fmt::Display for AppRootError {
             Self::Project(error) => write!(formatter, "项目快照命令失败: {error}"),
             Self::Registry(error) => write!(formatter, "项目注册命令失败: {error:?}"),
             Self::Snapshot(error) => write!(formatter, "项目快照不一致: {error}"),
+            Self::Layout(error) => write!(formatter, "布局命令失败: {error:?}"),
             Self::PanelIdExhausted => formatter.write_str("面板 ID 序列已耗尽"),
             Self::Launch(error) => write!(formatter, "终端启动失败: {error}"),
             Self::Focus(error) => write!(formatter, "焦点目标不可用: {error:?}"),
             Self::ProjectNotActive => formatter.write_str("只能在活跃项目中显式创建终端"),
             Self::NewTerminalTargetUnauthorized => formatter.write_str("新终端目标项目未获授权"),
             Self::MissingPanel => formatter.write_str("终端运行面板不存在"),
+            Self::NoLayoutActions => formatter.write_str("当前组没有可用布局操作"),
             Self::UnexpectedParameters => formatter.write_str("命令参数与目标命令不匹配"),
             Self::Closing => formatter.write_str("应用正在关闭，拒绝新命令"),
             Self::ProjectSnapshotCommitInFlight => {
@@ -214,11 +218,13 @@ impl std::error::Error for AppRootError {
             Self::TerminalCloseWriter(error) | Self::ProjectCloseWriter(error) => Some(error),
             Self::Sidebar(error) => Some(error),
             Self::Registry(_)
+            | Self::Layout(_)
             | Self::PanelIdExhausted
             | Self::Focus(_)
             | Self::ProjectNotActive
             | Self::NewTerminalTargetUnauthorized
             | Self::MissingPanel
+            | Self::NoLayoutActions
             | Self::UnexpectedParameters
             | Self::Closing
             | Self::ProjectSnapshotCommitInFlight
@@ -249,6 +255,12 @@ impl From<ProjectRegistryError> for AppRootError {
 impl From<ProjectSnapshotError> for AppRootError {
     fn from(error: ProjectSnapshotError) -> Self {
         Self::Snapshot(error)
+    }
+}
+
+impl From<LayoutError> for AppRootError {
+    fn from(error: LayoutError) -> Self {
+        Self::Layout(error)
     }
 }
 
@@ -477,7 +489,7 @@ impl AppRoot {
             });
             self.projects.insert(id, project);
         }
-        self.commit_project_snapshot(candidate);
+        self.commit_project_snapshot(candidate, cx);
         self.sync_project_visibility(cx);
         cx.notify();
         Ok(outcome)
@@ -509,7 +521,7 @@ impl AppRoot {
         self.sync_focus_visibility(Some(id), cx);
         self.focus_manager
             .activate_project(id, activation_default, window, cx)?;
-        self.commit_project_snapshot(candidate);
+        self.commit_project_snapshot(candidate, cx);
         self.sync_project_visibility(cx);
         cx.notify();
         Ok(())
@@ -778,7 +790,7 @@ impl AppRoot {
         }
     }
 
-    fn active_project(&self) -> Result<ProjectId, AppRootError> {
+    pub(super) fn active_project(&self) -> Result<ProjectId, AppRootError> {
         self.snapshot
             .registry()
             .active()
@@ -786,7 +798,7 @@ impl AppRoot {
     }
 
     /// 非空布局以项目聚焦面板定位目标组；空布局由调用方生成首组身份。
-    fn focused_group(
+    pub(super) fn focused_group(
         &self,
         project_id: ProjectId,
         cx: &App,
@@ -929,7 +941,7 @@ impl AppRoot {
         });
         self.panel_focus.insert(panel_id, focus_registration);
         self.panel_subscriptions.insert(panel_id, subscription);
-        self.commit_project_snapshot(candidate);
+        self.commit_project_snapshot(candidate, cx);
         if activate_project {
             // 新终端已原子提交；其余隐藏记录按既有恢复语义补齐实例。
             self.restore_project_panels(project_id, window, cx);
@@ -1057,7 +1069,7 @@ impl AppRoot {
             .map(super::focus_manager::FocusRegistration::token)
             .ok_or(AppRootError::MissingPanel)?;
         self.focus_manager.request_focus(focus_token, window, cx)?;
-        self.commit_project_snapshot(candidate);
+        self.commit_project_snapshot(candidate, cx);
         project.update(cx, |project, _| project.focused_panel = Some(panel_id));
         cx.notify();
         Ok(())
@@ -1156,6 +1168,9 @@ impl AppRoot {
                 }
             }
         }
+        for ((project_id, _), divider) in &self.split_dividers {
+            focus_visibility.push((divider.registration.token(), active == Some(*project_id)));
+        }
         for (token, visible) in focus_visibility {
             let result = if visible {
                 self.focus_manager.present_nonmodal(token)
@@ -1168,7 +1183,7 @@ impl AppRoot {
         }
     }
 
-    fn project_focus_token(
+    pub(super) fn project_focus_token(
         &self,
         project_id: ProjectId,
         cx: &App,
@@ -1252,7 +1267,7 @@ impl AppRoot {
         }
         match self.snapshot.with_active_terminal(terminal_id) {
             Ok(candidate) => {
-                self.commit_project_snapshot(candidate);
+                self.commit_project_snapshot(candidate, cx);
                 if let Some(project) = self.projects.get(&project_id) {
                     project.update(cx, |project, _| project.focused_panel = Some(panel_id));
                 }
@@ -1291,7 +1306,7 @@ impl AppRoot {
                     .with_terminal_run_intent(terminal_id, RunIntent::Exited)
                 {
                     Ok(candidate) => {
-                        self.commit_project_snapshot(candidate);
+                        self.commit_project_snapshot(candidate, cx);
                         cx.notify();
                     }
                     Err(error) => log::warn!("终端退出状态提交失败: {error}"),

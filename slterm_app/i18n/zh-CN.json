@@ -144,6 +144,15 @@
     "width_divider": "侧栏宽度",
     "ratio_divider": "侧栏分割比例"
   },
+  "layout": {
+    "menu_move_previous": "移到上一组",
+    "menu_move_next": "移到下一组",
+    "menu_split_right": "向右移动并拆分视图",
+    "menu_split_down": "向下移动并拆分视图",
+    "menu_merge_previous": "合并到上一组",
+    "menu_merge_next": "合并到下一组",
+    "menu_focus_divider": "调整分隔线"
+  },
   "settings": {
     "title": "设置",
     "nav": {

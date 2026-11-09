@@ -144,6 +144,15 @@
     "width_divider": "Sidebar width",
     "ratio_divider": "Sidebar split ratio"
   },
+  "layout": {
+    "menu_move_previous": "Move to Previous Group",
+    "menu_move_next": "Move to Next Group",
+    "menu_split_right": "Move View Right",
+    "menu_split_down": "Move View Down",
+    "menu_merge_previous": "Merge into Previous Group",
+    "menu_merge_next": "Merge into Next Group",
+    "menu_focus_divider": "Adjust Split Divider"
+  },
   "settings": {
     "title": "Settings",
     "nav": {

@@ -270,7 +270,7 @@ impl AppRoot {
             .state_committed(attempt)
             .map_err(|_| AppRootError::ProjectCloseState)?;
         close.persisted = committed;
-        self.commit_project_snapshot(candidate);
+        self.commit_project_snapshot(candidate, cx);
         if was_active && let Some(next_active) = next_active {
             self.restore_project_panels(next_active, window, cx);
         }

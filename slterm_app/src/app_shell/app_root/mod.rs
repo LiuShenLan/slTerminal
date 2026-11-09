@@ -7,6 +7,7 @@ mod commands;
 mod events;
 mod focus_manager;
 pub(crate) mod keymap;
+mod layout;
 mod panel_host;
 mod project_close;
 mod project_view;
@@ -21,10 +22,14 @@ mod tests;
 
 use std::collections::BTreeMap;
 
-use gpui::{AppContext as _, Context, Entity, FocusHandle, Pixels, Point, Subscription, Window};
+use gpui::{
+    App, AppContext as _, Context, Entity, FocusHandle, Pixels, Point, Subscription, Window,
+};
 use gpui_component::menu::PopupMenu;
 use slterm_path::CanonicalPath;
-use slterm_workspace::{PanelId, PanelIdAllocator, ProjectId, ProjectSnapshot, SideViewId};
+use slterm_workspace::{
+    PanelGroupId, PanelId, PanelIdAllocator, ProjectId, ProjectSnapshot, SideViewId,
+};
 
 use crate::app_shell::global_close::GlobalCloseClient;
 use crate::persistence::workspace_writer::WorkspaceWriterClient;
@@ -43,6 +48,10 @@ gpui::actions!(
         NewTerminal,
         SplitRight,
         SplitDown,
+        AdjustSplitLeft,
+        AdjustSplitRight,
+        AdjustSplitUp,
+        AdjustSplitDown,
         CloseActiveTerminal,
         ToggleSidebar,
         ActivateNav,
@@ -56,6 +65,7 @@ gpui::actions!(
         FocusLastSideButton,
         ActivateSideButton,
         OpenSideButtonMenu,
+        OpenLayoutMenu,
         AdjustSidebarWidthLeft,
         AdjustSidebarWidthRight,
         AdjustSidebarWidthLeftLarge,
@@ -94,10 +104,24 @@ struct SideDividerFocus {
     registration: FocusRegistration,
 }
 
+/// 分割路径只作运行期焦点键；布局事实仍由 ProjectLayout 独占。
+struct SplitDividerFocus {
+    handle: FocusHandle,
+    registration: FocusRegistration,
+}
+
 /// 当前按钮菜单与其锚点；菜单实体只由 AppRoot 持有。
 struct SideButtonMenu {
     view: SideViewId,
     position: Option<Point<Pixels>>,
+    menu: Entity<PopupMenu>,
+    registration: FocusRegistration,
+    _dismiss: Subscription,
+}
+
+/// 当前布局菜单锚定组身份；菜单项只生成统一命令参数。
+struct LayoutMenu {
+    group: PanelGroupId,
     menu: Entity<PopupMenu>,
     registration: FocusRegistration,
     _dismiss: Subscription,
@@ -129,6 +153,7 @@ pub(crate) struct AppRoot {
     panel_ids: PanelIdAllocator,
     panel_subscriptions: BTreeMap<PanelId, Subscription>,
     panel_focus: BTreeMap<PanelId, FocusRegistration>,
+    split_dividers: BTreeMap<(ProjectId, Vec<bool>), SplitDividerFocus>,
     workspace_focus: FocusHandle,
     tasks: TaskService,
     focus_manager: FocusManager,
@@ -139,6 +164,7 @@ pub(crate) struct AppRoot {
     side_dividers: BTreeMap<SidebarDivider, SideDividerFocus>,
     sidebar_drag: Option<SidebarDrag>,
     side_button_menu: Option<SideButtonMenu>,
+    layout_menu: Option<LayoutMenu>,
     side_view_persistence: AppRootPersistence,
     launcher: Box<dyn TerminalPanelLauncher>,
     shell: CanonicalPath,
@@ -249,7 +275,7 @@ impl AppRoot {
             });
             projects.insert(project_id, project);
         }
-        Self {
+        let mut root = Self {
             snapshot,
             snapshot_generation: 0,
             project_writer,
@@ -268,6 +294,7 @@ impl AppRoot {
             panel_ids,
             panel_subscriptions: BTreeMap::new(),
             panel_focus: BTreeMap::new(),
+            split_dividers: BTreeMap::new(),
             workspace_focus,
             tasks: TaskService::new(),
             focus_manager,
@@ -278,10 +305,13 @@ impl AppRoot {
             side_dividers,
             sidebar_drag: None,
             side_button_menu: None,
+            layout_menu: None,
             side_view_persistence: persistence,
             launcher,
             shell,
-        }
+        };
+        root.reconcile_split_dividers(cx);
+        root
     }
 
     pub(crate) fn observe_focus(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
@@ -294,9 +324,10 @@ impl AppRoot {
     }
 
     /// 快照只在候选提交后进入既有写队列；关闭屏障期间仅更新内存并延期发布。
-    fn commit_project_snapshot(&mut self, snapshot: ProjectSnapshot) {
+    fn commit_project_snapshot(&mut self, snapshot: ProjectSnapshot, cx: &mut App) {
         self.snapshot_generation = self.snapshot_generation.wrapping_add(1);
         self.snapshot = snapshot;
+        self.reconcile_split_dividers(cx);
         if self.project_snapshot_recovery_failed {
             return;
         }
