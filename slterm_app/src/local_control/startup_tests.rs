@@ -114,14 +114,15 @@ fn start_service(
     store: &dyn CredentialStore,
 ) -> (LocalControlService, mpsc::Receiver<SltermShellEvent>) {
     let (events, receiver) = mpsc::sync_channel(64);
-    let service = LocalControlService::start_at(
+    let mut service = LocalControlService::start_at(
         metadata(),
         events,
         store,
         &root.join("endpoint.json"),
         TEST_TIMEOUT,
     )
-    .expect("启动真实 loopback 服务");
+    .expect("绑定真实 loopback 服务");
+    service.publish_discovery().expect("开放真实服务");
     (service, receiver)
 }
 

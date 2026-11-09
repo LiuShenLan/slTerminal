@@ -30,7 +30,10 @@ pub(super) type HandoverCallback =
 /// 已持 OS 单实例锁的首实例服务；显式 shutdown 只能在 GPUI 外执行。
 pub(crate) struct LocalControlService {
     server: LocalControlServer,
-    discovery: DiscoveryGuard,
+    discovery_path: std::path::PathBuf,
+    record: Option<DiscoveryRecord>,
+    discovery: Option<DiscoveryGuard>,
+    closed: bool,
 }
 
 impl LocalControlService {
@@ -113,7 +116,7 @@ impl LocalControlService {
                 }
             }
         });
-        let mut server = bind(credential, hello, on_handover)?;
+        let server = bind(credential, hello, on_handover)?;
         let record = DiscoveryRecord {
             protocol_version: 2,
             endpoint: server
@@ -124,11 +127,36 @@ impl LocalControlService {
             process_id: metadata.run.process_id,
             process_created_at_ms: metadata.run.process_created_at_ms,
         };
-        let discovery = match publish_at(discovery_path, record) {
+        Ok(Self {
+            server,
+            discovery_path: discovery_path.to_owned(),
+            record: Some(record),
+            discovery: None,
+            closed: false,
+        })
+    }
+
+    /// 窗口可服务后才发布发现记录；失败立即关闭监听，且不允许重发到死端点。
+    pub(crate) fn publish_discovery(&mut self) -> io::Result<()> {
+        if self.discovery.is_some() {
+            return Ok(());
+        }
+        if self.closed {
+            return Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "控制面已关闭，不能发布发现记录",
+            ));
+        }
+        let record = self
+            .record
+            .take()
+            .expect("未开放的控制面必须保留本次发现记录");
+        let discovery = match publish_at(&self.discovery_path, record) {
             Ok(discovery) => discovery,
             Err(publish_error) => {
+                self.closed = true;
                 // 保留发布根因与 kind；回收失败必须以安全文本一并可观察。
-                return match server.shutdown() {
+                return match self.server.shutdown() {
                     Ok(()) => Err(publish_error),
                     Err(cleanup_error) => Err(io::Error::new(
                         publish_error.kind(),
@@ -137,13 +165,20 @@ impl LocalControlService {
                 };
             }
         };
-        Ok(Self { server, discovery })
+        self.discovery = Some(discovery);
+        Ok(())
     }
 
-    /// 两个关闭动作都必定尝试；重复调用沿用底层幂等与失败重试语义。
+    /// 两个关闭动作都必定尝试；未发布记录时只关闭监听，重复调用保持幂等。
     pub(crate) fn shutdown(&mut self) -> io::Result<()> {
-        let Self { server, discovery } = self;
-        shutdown_components(|| server.shutdown(), || discovery.revoke())
+        self.closed = true;
+        shutdown_components(
+            || self.server.shutdown(),
+            || match self.discovery.as_mut() {
+                Some(discovery) => discovery.revoke(),
+                None => Ok(()),
+            },
+        )
     }
 }
 

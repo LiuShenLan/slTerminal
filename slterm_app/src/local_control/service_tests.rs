@@ -87,8 +87,11 @@ fn start_service(
     store: &dyn CredentialStore,
     events: SyncSender<SltermShellEvent>,
 ) -> LocalControlService {
-    LocalControlService::start_at(metadata(), events, store, discovery_path, TEST_TIMEOUT)
-        .expect("启动真实 loopback 服务组合")
+    let mut service =
+        LocalControlService::start_at(metadata(), events, store, discovery_path, TEST_TIMEOUT)
+            .expect("绑定真实 loopback 服务组合");
+    service.publish_discovery().expect("开放真实服务");
+    service
 }
 
 fn load_test_credential(root: &std::path::Path, store: &dyn CredentialStore) -> SecretBytes {
@@ -135,6 +138,28 @@ fn read_hello(stream: &mut TcpStream, secret: SecretBytes) -> HelloResponse {
         JsonRpcResponse::Result { result, .. } => result,
         JsonRpcResponse::Error { error, .. } => panic!("hello 必须成功: {error:?}"),
     }
+}
+
+#[test]
+fn service_publishes_discovery_only_after_explicit_open() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("endpoint.json");
+    let store = MemoryCredentialStore::default();
+    let (events, _event_rx) = event_channel();
+    let mut service =
+        LocalControlService::start_at(metadata(), events, &store, &path, TEST_TIMEOUT).unwrap();
+
+    assert!(matches!(
+        read_discovery_at(&path),
+        Err(error) if error.kind() == io::ErrorKind::NotFound
+    ));
+    service.publish_discovery().unwrap();
+    assert_eq!(
+        read_discovery_at(&path).unwrap().run_id,
+        metadata().run.run_id
+    );
+    service.publish_discovery().unwrap();
+    service.shutdown().unwrap();
 }
 
 #[test]
@@ -295,6 +320,7 @@ fn service_maps_receipt_timeout_to_not_ready() {
     let mut service =
         LocalControlService::start_at(metadata(), events, &store, &path, SHORT_REPLY_TIMEOUT)
             .unwrap();
+    service.publish_discovery().unwrap();
     let foreground = std::thread::spawn(move || {
         let SltermShellEvent::Handover { completion, .. } =
             event_rx.recv_timeout(TEST_TIMEOUT).unwrap()
@@ -351,6 +377,7 @@ fn service_shutdown_joins_inflight_receipt_wait_and_reclaims_endpoint() {
     let mut service =
         LocalControlService::start_at(metadata(), events, &store, &path, SHORT_REPLY_TIMEOUT)
             .unwrap();
+    service.publish_discovery().unwrap();
     let record = read_discovery_at(&path).unwrap();
     let endpoint = record.endpoint;
     let credential = load_test_credential(temp.path(), &store);
@@ -440,7 +467,7 @@ fn service_publish_failure_reports_real_server_cleanup_failure() {
     let release_worker_rx = Arc::new(Mutex::new(release_worker_rx));
     let (client_done_tx, client_done_rx) = mpsc::channel();
 
-    let error = match LocalControlService::start_with(
+    let mut service = LocalControlService::start_with(
         metadata(),
         events,
         store_ref,
@@ -478,10 +505,11 @@ fn service_publish_failure_reports_real_server_cleanup_failure() {
                 .expect("worker 必须在发布失败前等待释放");
             Ok(server)
         },
-    ) {
-        Ok(_) => panic!("目录不能被发布为发现记录"),
-        Err(error) => error,
-    };
+    )
+    .expect("发布前绑定必须成功");
+    let error = service
+        .publish_discovery()
+        .expect_err("目录不能被发布为发现记录");
 
     assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
     assert!(
@@ -520,7 +548,7 @@ fn service_publish_failure_reclaims_listener_without_new_endpoint() {
     let bound_endpoint = Arc::new(Mutex::new(None));
     let bound_by_server = Arc::clone(&bound_endpoint);
 
-    let error = match LocalControlService::start_with(
+    let mut service = LocalControlService::start_with(
         metadata(),
         events,
         &store,
@@ -532,11 +560,17 @@ fn service_publish_failure_reclaims_listener_without_new_endpoint() {
             *bound_by_server.lock().unwrap() = Some(server.endpoint().to_owned());
             Ok(server)
         },
-    ) {
-        Ok(_) => panic!("目录不能被发布为发现记录"),
-        Err(error) => error,
-    };
+    )
+    .expect("发布前绑定必须成功");
+    let error = service
+        .publish_discovery()
+        .expect_err("目录不能被发布为发现记录");
     assert!(error.kind() != io::ErrorKind::NotFound);
+    assert_eq!(
+        service.publish_discovery().unwrap_err().kind(),
+        io::ErrorKind::BrokenPipe,
+        "发布失败已关闭监听，不得重发同一死端点"
+    );
     assert!(path.is_dir());
     let endpoint = bound_endpoint.lock().unwrap().take().unwrap();
     assert!(

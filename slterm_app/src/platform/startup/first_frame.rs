@@ -17,8 +17,12 @@ pub(crate) fn defer_show(options: &mut WindowOptions) -> bool {
     true
 }
 
-/// WM_PAINT 同步一帧后才 activate:隐藏窗口的首帧绘制/呈现完成前不曝光。
-pub(crate) fn present_then_show(handle: AnyWindowHandle, cx: &mut App) {
+/// WM_PAINT 同步一帧后才 activate；随后只发一次可服务通知。
+pub(crate) fn present_then_show(
+    handle: AnyWindowHandle,
+    cx: &mut App,
+    on_ready: impl FnOnce() + Send + 'static,
+) {
     cx.spawn(async move |cx| {
         use raw_window_handle::{HasWindowHandle, RawWindowHandle};
         use windows_sys::Win32::UI::WindowsAndMessaging::{SendMessageW, WM_PAINT};
@@ -30,8 +34,13 @@ pub(crate) fn present_then_show(handle: AnyWindowHandle, cx: &mut App) {
             };
             Some(native.hwnd.get())
         });
-        // 虚拟窗口(测试)无原生句柄:拿不到即放弃延迟出窗,窗口按原样呈现。
-        let Ok(Some(hwnd)) = hwnd else { return };
+        let Ok(hwnd) = hwnd else { return };
+        let Some(hwnd) = hwnd else {
+            // 仅测试虚拟窗口没有原生句柄；生产拿不到 HWND 必须保持未开放。
+            #[cfg(test)]
+            on_ready();
+            return;
+        };
 
         // SAFETY: 一次性任务跑在 GPUI 前台线程;句柄取自上面的活 GPUI 窗口,
         // SendMessage 期间不持有任何 App/Window 借用:WM_PAINT 会重入 GPUI 的
@@ -41,7 +50,10 @@ pub(crate) fn present_then_show(handle: AnyWindowHandle, cx: &mut App) {
 
         // paint 处理器返回后才走 GPUI activate,消费其 pending placement;
         // 裸 ShowWindow 会让那份 placement 滞留过期。
-        let _ = handle.update(cx, |_, window, _| window.activate_window());
+        let activated = handle.update(cx, |_, window, _| window.activate_window());
+        if activated.is_ok() {
+            on_ready();
+        }
     })
     .detach();
 }
@@ -63,5 +75,61 @@ mod first_frame_tests {
             assert_eq!(options.show, show && !deferred);
             assert_eq!(options.focus, focus);
         }
+    }
+}
+
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod readiness_tests {
+    use gpui::{Context, IntoElement, Render, TestAppContext, Window};
+
+    use super::present_then_show;
+
+    struct ReadyView;
+
+    impl Render for ReadyView {
+        fn render(
+            &mut self,
+            _window: &mut Window,
+            _cx: &mut Context<'_, Self>,
+        ) -> impl IntoElement {
+            gpui::div()
+        }
+    }
+
+    #[gpui::test]
+    fn virtual_present_signals_readiness_exactly_once(cx: &mut TestAppContext) {
+        let window = cx.add_window(|_, _| ReadyView);
+        let handle = window
+            .update(cx, |_, window, _| window.window_handle())
+            .unwrap();
+        let (ready, ready_rx) = std::sync::mpsc::sync_channel(1);
+        cx.update(|cx| {
+            present_then_show(handle, cx, move || ready.send(()).unwrap());
+        });
+
+        cx.run_until_parked();
+
+        assert_eq!(ready_rx.try_recv(), Ok(()));
+        assert!(ready_rx.try_recv().is_err());
+    }
+
+    #[gpui::test]
+    fn destroyed_window_does_not_signal_readiness(cx: &mut TestAppContext) {
+        let window = cx.add_window(|_, _| ReadyView);
+        let handle = window
+            .update(cx, |_, window, _| {
+                let handle = window.window_handle();
+                window.remove_window();
+                handle
+            })
+            .unwrap();
+        let (ready, ready_rx) = std::sync::mpsc::sync_channel(1);
+        cx.update(|cx| {
+            present_then_show(handle, cx, move || ready.send(()).unwrap());
+        });
+
+        cx.run_until_parked();
+
+        assert!(ready_rx.try_recv().is_err());
     }
 }

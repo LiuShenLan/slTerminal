@@ -138,7 +138,7 @@ fn handle_open_result<E: std::fmt::Display>(
 ) {
     match result {
         Ok(handle) if deferred_show => {
-            crate::platform::startup::first_frame::present_then_show(handle, cx);
+            crate::platform::startup::first_frame::present_then_show(handle, cx, || {});
         }
         Ok(_) => {}
         Err(error) => {

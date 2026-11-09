@@ -85,6 +85,14 @@ fn should_open_initial_project(
     }
 }
 
+/// 前台只投递开放请求；发现记录的文件 I/O 由全局关闭工作线程执行。
+fn request_control_plane_open(client: super::global_close::GlobalCloseClient) {
+    match client.open_control_plane() {
+        Ok(_) => {}
+        Err(error) => log::warn!("local control open request failed: {error:?}"),
+    }
+}
+
 /// 启动链调一次的开窗入口：只消费进入 GPUI 前冻结的 Shell 与项目根。
 pub(crate) fn open_initial_window(
     cx: &mut App,
@@ -100,6 +108,7 @@ pub(crate) fn open_initial_window(
     // 首帧黑窗/半构窗口不曝光:先同步画一帧再 activate(first_frame 因果链)。
     // 静默窗口不曝光,defer_show 自然返回 false,不进 present-then-show。
     let deferred_show = first_frame::defer_show(&mut options);
+    let control_open = services.global_close.clone();
     let result = cx.open_window(options, move |window, cx| {
         window.set_window_title(brand::NAME);
         // HWND 发布单点:任务栏闪烁/进度经 facade 查询。
@@ -136,7 +145,12 @@ pub(crate) fn open_initial_window(
             // `apply_start_hidden` 形态不被覆盖。
             crate::app_shell::wallpaper::refresh(cx);
             if deferred_show {
-                first_frame::present_then_show(handle.into(), cx);
+                first_frame::present_then_show(handle.into(), cx, move || {
+                    request_control_plane_open(control_open);
+                });
+            } else {
+                // 静默窗口已装配事件泵但不曝光；无需等待首帧即可接收移交。
+                request_control_plane_open(control_open);
             }
         }
         Err(error) => {
