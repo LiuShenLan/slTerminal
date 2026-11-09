@@ -9,6 +9,7 @@ mod events;
 mod focus_manager;
 pub(crate) mod keymap;
 mod layout;
+mod navigation;
 mod panel_host;
 mod project_close;
 mod project_view;
@@ -59,6 +60,8 @@ gpui::actions!(
         AdjustSplitUp,
         AdjustSplitDown,
         CloseActiveTerminal,
+        FocusNextPanel,
+        FocusPreviousPanel,
         ToggleSidebar,
         ActivateNav,
         ActivateExplorer,

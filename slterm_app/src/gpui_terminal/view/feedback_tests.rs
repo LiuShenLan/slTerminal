@@ -216,6 +216,54 @@ fn popup_navigation_and_accept_edit_the_line_without_submitting(cx: &mut TestApp
     assert_eq!(bytes, selected.insert.as_bytes(), "只写候选余量");
 }
 
+/// 工作区面板循环优先于活动补全弹窗，且不得写入 PTY。
+#[gpui::test]
+fn ctrl_tab_is_not_consumed_by_active_completion_popup(cx: &mut TestAppContext) {
+    let unique = "slterm-panel-cycle-popup-";
+    completion::insert_history_for_test(&format!("{unique}alpha one"));
+    completion::insert_history_for_test(&format!("{unique}alpha two"));
+    let (terminal, mut window, rx) = open(cx, CompletionStyle::Popup, true);
+    type_text(&terminal, &mut window, &format!("{unique}alpha"));
+    let _ = pty_bytes(&rx);
+    assert!(
+        terminal.read_with(&window, |view, _| !view.suggest.completion_items.is_empty()),
+        "前置条件必须是活动补全弹窗"
+    );
+    let before = terminal.read_with(&window, |view, _| {
+        (
+            view.suggest_line().to_owned(),
+            view.suggest.completion_selected,
+        )
+    });
+
+    for (control, shift) in [(true, false), (true, true)] {
+        let propagate = press(
+            &mut window,
+            gpui::Keystroke {
+                modifiers: Modifiers {
+                    control,
+                    shift,
+                    ..Modifiers::default()
+                },
+                key: "tab".to_owned(),
+                key_char: None,
+            },
+        );
+        assert!(propagate, "Ctrl+Tab 必须冒泡到工作区循环");
+        assert!(pty_bytes(&rx).is_empty(), "面板循环不得写入 PTY");
+        assert_eq!(
+            terminal.read_with(&window, |view, _| {
+                (
+                    view.suggest_line().to_owned(),
+                    view.suggest.completion_selected,
+                )
+            }),
+            before,
+            "全局循环不得接受或移动补全候选"
+        );
+    }
+}
+
 /// Hybrid:Tab 请求列表;Esc 关闭且行不变不自动复开。
 #[gpui::test]
 fn hybrid_tab_requests_popup_and_escape_suppresses_the_same_line(cx: &mut TestAppContext) {

@@ -119,8 +119,10 @@ impl AppRoot {
         );
         let divider_focus_removed =
             self.focused_split_divider_removed(record.project_id(), &candidate, window, cx);
+        let preferred_panel =
+            self.preferred_close_panel(record.project_id(), &[panel_id], &candidate, cx);
         self.commit_project_snapshot(candidate, cx);
-        self.detach_closing_terminal(id, divider_focus_removed, window, cx);
+        self.detach_closing_terminal(id, preferred_panel, divider_focus_removed, window, cx);
         cx.notify();
         self.drive_terminal_close_in_memory(id, cx)?;
         Ok(record)
@@ -382,6 +384,12 @@ impl AppRoot {
             .project_id();
         let divider_focus_removed =
             self.focused_split_divider_removed(project_id, &candidate, window, cx);
+        let panel_id = self
+            .terminal_closes
+            .get(&id)
+            .ok_or(AppRootError::MissingPanel)?
+            .panel_id;
+        let preferred_panel = self.preferred_close_panel(project_id, &[panel_id], &candidate, cx);
         let close = self
             .terminal_closes
             .get_mut(&id)
@@ -392,7 +400,7 @@ impl AppRoot {
             .map_err(|_| AppRootError::TerminalCloseState)?;
         close.persisted = Some(committed);
         self.commit_project_snapshot(candidate, cx);
-        self.detach_closing_terminal(id, divider_focus_removed, window, cx);
+        self.detach_closing_terminal(id, preferred_panel, divider_focus_removed, window, cx);
         Ok(())
     }
 
@@ -721,6 +729,7 @@ impl AppRoot {
     fn detach_closing_terminal(
         &mut self,
         id: TerminalId,
+        preferred_panel: Option<slterm_workspace::PanelId>,
         divider_focus_removed: bool,
         window: &mut Window,
         cx: &mut App,
@@ -732,6 +741,7 @@ impl AppRoot {
         self.detach_terminal_panels(
             close.record.project_id(),
             &panels,
+            preferred_panel,
             divider_focus_removed,
             window,
             cx,
@@ -743,6 +753,7 @@ impl AppRoot {
         &mut self,
         project_id: slterm_workspace::ProjectId,
         panels: &[(slterm_workspace::PanelId, Entity<TerminalView>)],
+        preferred_panel: Option<slterm_workspace::PanelId>,
         divider_focus_removed: bool,
         window: &mut Window,
         cx: &mut App,
@@ -761,13 +772,24 @@ impl AppRoot {
             .then_some(*panel_id)
         });
         let was_focused = divider_focus_removed || focused_panel.is_some();
-        if self.snapshot.registry().active() == Some(project_id) && was_focused {
-            let next_panel = project.read(cx).panels.keys().find(|candidate| {
-                !closing.contains(*candidate) && self.panel_focus.contains_key(*candidate)
+        let next_panel = preferred_panel
+            .filter(|panel_id| {
+                !closing.contains(panel_id) && self.panel_focus.contains_key(panel_id)
+            })
+            .or_else(|| {
+                project
+                    .read(cx)
+                    .panels
+                    .keys()
+                    .find(|candidate| {
+                        !closing.contains(*candidate) && self.panel_focus.contains_key(*candidate)
+                    })
+                    .copied()
             });
+        if self.snapshot.registry().active() == Some(project_id) && was_focused {
             let mut candidates = Vec::new();
             if let Some(next_panel) = next_panel
-                && let Some(registration) = self.panel_focus.get(next_panel)
+                && let Some(registration) = self.panel_focus.get(&next_panel)
             {
                 candidates.push(registration.token());
             }
@@ -801,13 +823,7 @@ impl AppRoot {
                 .focused_panel
                 .is_some_and(|panel_id| closing.contains(&panel_id))
             {
-                project.focused_panel = project
-                    .panels
-                    .keys()
-                    .find(|candidate| {
-                        !closing.contains(*candidate) && self.panel_focus.contains_key(*candidate)
-                    })
-                    .copied();
+                project.focused_panel = next_panel;
             }
         });
     }

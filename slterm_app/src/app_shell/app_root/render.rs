@@ -16,7 +16,8 @@ use super::project_view::ProjectView;
 use super::{
     ActivateAgentFiles, ActivateCommit, ActivateExplorer, ActivateNav, AdjustSplitDown,
     AdjustSplitLeft, AdjustSplitRight, AdjustSplitUp, AppRoot, CloseActiveTerminal,
-    FocusActivityBar, NewTerminal, OpenLayoutMenu, SplitDown, SplitRight, ToggleSidebar,
+    FocusActivityBar, FocusNextPanel, FocusPreviousPanel, NewTerminal, OpenLayoutMenu, SplitDown,
+    SplitRight, ToggleSidebar,
 };
 
 impl AppRoot {
@@ -370,6 +371,30 @@ impl Render for AppRoot {
                     Ok(CommandOutcome::TerminalClosed(record)) => drop(record),
                     Ok(_) => unreachable!("关闭终端命令结果类型不匹配"),
                     Err(error) => log::warn!("关闭聚焦终端命令失败: {error}"),
+                }
+            }))
+            .on_action(cx.listener(|this, _: &FocusNextPanel, window, cx| {
+                if let Err(error) = this.execute_command(
+                    CommandId::FocusNextPanel,
+                    CommandSource::Keyboard,
+                    CommandTarget::Focused,
+                    None,
+                    window,
+                    cx,
+                ) {
+                    log::warn!("循环到下一面板失败: {error}");
+                }
+            }))
+            .on_action(cx.listener(|this, _: &FocusPreviousPanel, window, cx| {
+                if let Err(error) = this.execute_command(
+                    CommandId::FocusPreviousPanel,
+                    CommandSource::Keyboard,
+                    CommandTarget::Focused,
+                    None,
+                    window,
+                    cx,
+                ) {
+                    log::warn!("循环到上一面板失败: {error}");
                 }
             }))
             .bg(cx.theme().background)

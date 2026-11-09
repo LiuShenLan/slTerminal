@@ -19,9 +19,9 @@ use super::{
     AdjustSidebarRatioUpLarge, AdjustSidebarWidthLeft, AdjustSidebarWidthLeftLarge,
     AdjustSidebarWidthRight, AdjustSidebarWidthRightLarge, AdjustSplitDown, AdjustSplitLeft,
     AdjustSplitRight, AdjustSplitUp, AppRoot, CloseActiveTerminal, FocusActivityBar,
-    FocusFirstSideButton, FocusLastSideButton, FocusNextSideButton, FocusPreviousSideButton,
-    NewTerminal, OpenLayoutMenu, OpenSideButtonMenu, ResetSidebarRatio, ResetSidebarWidth,
-    SplitDown, SplitRight, ToggleSidebar,
+    FocusFirstSideButton, FocusLastSideButton, FocusNextPanel, FocusNextSideButton,
+    FocusPreviousPanel, FocusPreviousSideButton, NewTerminal, OpenLayoutMenu, OpenSideButtonMenu,
+    ResetSidebarRatio, ResetSidebarWidth, SplitDown, SplitRight, ToggleSidebar,
     commands::AppRootError,
     focus_manager::FocusError,
     sidebar::{SideButtonCommand, SideButtonNavigation, SidebarGeometryCommand},
@@ -36,6 +36,8 @@ pub(crate) enum CommandId {
     CloseActiveTerminal,
     CloseOtherViews,
     CloseAllViews,
+    FocusNextPanel,
+    FocusPreviousPanel,
     OpenLayoutMenu,
     MoveView,
     MergeGroups,
@@ -212,6 +214,23 @@ const TERMINAL_DEFINITIONS: [CommandDefinition; 4] = [
         keystroke: "ctrl-shift-w",
         context: None,
         action: || Box::new(CloseActiveTerminal),
+    },
+];
+
+const PANEL_DEFINITIONS: [CommandDefinition; 2] = [
+    CommandDefinition {
+        id: CommandId::FocusNextPanel,
+        target: CommandTarget::Focused,
+        keystroke: "ctrl-tab",
+        context: None,
+        action: || Box::new(FocusNextPanel),
+    },
+    CommandDefinition {
+        id: CommandId::FocusPreviousPanel,
+        target: CommandTarget::Focused,
+        keystroke: "ctrl-shift-tab",
+        context: None,
+        action: || Box::new(FocusPreviousPanel),
     },
 ];
 
@@ -423,11 +442,32 @@ impl CommandRegistry {
         &TERMINAL_DEFINITIONS
     }
 
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn panel_cycle_bindings_for_test() -> Vec<KeyBinding> {
+        PANEL_DEFINITIONS
+            .iter()
+            .map(|definition| {
+                KeyBinding::load(
+                    definition.keystroke,
+                    (definition.action)(),
+                    definition
+                        .context
+                        .map(|context| KeyBindingContextPredicate::parse(context).unwrap().into()),
+                    false,
+                    None,
+                    &DummyKeyboardMapper,
+                )
+                .expect("面板循环键位必须有效")
+            })
+            .collect()
+    }
+
     pub(crate) fn register_bindings(cx: &mut App) {
         let mut definitions = BTreeSet::new();
         let mut bindings = BTreeSet::new();
         for definition in TERMINAL_DEFINITIONS
             .iter()
+            .chain(PANEL_DEFINITIONS.iter())
             .chain(LAYOUT_DEFINITIONS.iter())
             .chain(SIDEBAR_DEFINITIONS.iter())
         {
@@ -489,6 +529,8 @@ impl CommandRegistry {
                 | CommandId::CloseActiveTerminal
                 | CommandId::CloseOtherViews
                 | CommandId::CloseAllViews
+                | CommandId::FocusNextPanel
+                | CommandId::FocusPreviousPanel
         );
         let layout_command = matches!(
             id,
@@ -688,6 +730,16 @@ impl CommandRegistry {
             (CommandId::CloseActiveTerminal, None) => root
                 .close_focused_terminal_from_request(window, cx)
                 .map(CommandOutcome::TerminalClosed),
+            (CommandId::FocusNextPanel, None) => root
+                .cycle_panel_from_request(super::navigation::PanelCycleDirection::Next, window, cx)
+                .map(|()| CommandOutcome::Completed),
+            (CommandId::FocusPreviousPanel, None) => root
+                .cycle_panel_from_request(
+                    super::navigation::PanelCycleDirection::Previous,
+                    window,
+                    cx,
+                )
+                .map(|()| CommandOutcome::Completed),
             (CommandId::CloseOtherViews, Some(CommandParameters::CloseGroup { group_id })) => root
                 .close_other_views_from_request(group_id, window, cx)
                 .map(|()| CommandOutcome::Completed),

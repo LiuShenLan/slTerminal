@@ -7,6 +7,7 @@ mod handover;
 mod layout;
 mod local_close;
 mod local_close_receipts;
+mod navigation;
 mod project_close;
 mod project_close_preflight;
 mod project_close_receipts;

@@ -723,6 +723,10 @@ impl TerminalView {
                 _ => {}
             }
         }
+        // 工作区切 tab(ctrl+tab / ctrl+shift+tab)优先于补全，不编码进 PTY。
+        if mods.control && !mods.alt && ks.key.as_str() == "tab" {
+            return;
+        }
         // 补全导航/接受优先于普通键编码;消费按键时不进入编码器。
         if self.handle_completion_key(&ks.key, mods, cx) {
             cx.stop_propagation();
@@ -731,10 +735,6 @@ impl TerminalView {
         // 分屏焦点导航(ctrl+alt+方向)同样冒泡给 workspace,不编码成
         // CSI 1;7 序列。
         if mods.control && mods.alt && matches!(ks.key.as_str(), "left" | "right" | "up" | "down") {
-            return;
-        }
-        // 工作区切 tab(ctrl+tab / ctrl+shift+tab):不编码进 PTY。
-        if mods.control && !mods.alt && ks.key.as_str() == "tab" {
             return;
         }
 

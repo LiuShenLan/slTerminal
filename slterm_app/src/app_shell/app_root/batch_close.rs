@@ -407,7 +407,7 @@ impl AppRoot {
         window: &mut Window,
         cx: &mut App,
     ) -> Result<(), AppRootError> {
-        let (project_id, terminal_ids) = {
+        let (project_id, terminal_ids, panel_ids) = {
             let close = self
                 .terminal_close_batches
                 .get(&batch_id)
@@ -415,11 +415,17 @@ impl AppRoot {
             (
                 close.project_id,
                 close.members.keys().copied().collect::<Vec<_>>(),
+                close
+                    .members
+                    .values()
+                    .map(|member| member.panel_id)
+                    .collect::<Vec<_>>(),
             )
         };
         let (candidate, _) = self.snapshot.without_terminals(&terminal_ids)?;
         let divider_focus_removed =
             self.focused_split_divider_removed(project_id, &candidate, window, cx);
+        let preferred_panel = self.preferred_close_panel(project_id, &panel_ids, &candidate, cx);
         let attempt = self
             .terminal_close_batches
             .get(&batch_id)
@@ -440,7 +446,7 @@ impl AppRoot {
             close.persisted = Some(committed);
         }
         self.commit_project_snapshot(candidate, cx);
-        self.detach_batch_terminals(batch_id, divider_focus_removed, window, cx);
+        self.detach_batch_terminals(batch_id, preferred_panel, divider_focus_removed, window, cx);
         Ok(())
     }
 
@@ -812,6 +818,7 @@ impl AppRoot {
     fn detach_batch_terminals(
         &mut self,
         batch_id: Uuid,
+        preferred_panel: Option<PanelId>,
         divider_focus_removed: bool,
         window: &mut Window,
         cx: &mut App,
@@ -824,7 +831,14 @@ impl AppRoot {
             .values()
             .map(|member| (member.panel_id, member.terminal.clone()))
             .collect::<Vec<_>>();
-        self.detach_terminal_panels(close.project_id, &panels, divider_focus_removed, window, cx);
+        self.detach_terminal_panels(
+            close.project_id,
+            &panels,
+            preferred_panel,
+            divider_focus_removed,
+            window,
+            cx,
+        );
     }
 
     fn destroy_closed_batch(&mut self, batch_id: Uuid, cx: &mut Context<'_, Self>) {
