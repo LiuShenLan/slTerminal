@@ -15,6 +15,7 @@ mod render;
 mod side_view;
 mod side_view_host;
 mod sidebar;
+mod tabs;
 mod task_service;
 mod terminal_close;
 #[cfg(all(test, feature = "gpui-test-support"))]
@@ -23,7 +24,8 @@ mod tests;
 use std::collections::BTreeMap;
 
 use gpui::{
-    App, AppContext as _, Context, Entity, FocusHandle, Pixels, Point, Subscription, Window,
+    App, AppContext as _, Context, Entity, FocusHandle, Pixels, Point, ScrollHandle, Subscription,
+    Window,
 };
 use gpui_component::menu::PopupMenu;
 use slterm_path::CanonicalPath;
@@ -127,6 +129,15 @@ struct LayoutMenu {
     _dismiss: Subscription,
 }
 
+/// 组内完整页签列表；菜单一并进入 FocusManager 模态链。
+struct TabListMenu {
+    group: PanelGroupId,
+    position: Point<Pixels>,
+    menu: Entity<PopupMenu>,
+    registration: FocusRegistration,
+    _dismiss: Subscription,
+}
+
 /// 生产 AppRoot 的外部服务；全局关闭 client 不可省略。
 pub(crate) struct AppRootServices {
     pub(crate) persistence: AppRootPersistence,
@@ -154,6 +165,7 @@ pub(crate) struct AppRoot {
     panel_subscriptions: BTreeMap<PanelId, Subscription>,
     panel_focus: BTreeMap<PanelId, FocusRegistration>,
     split_dividers: BTreeMap<(ProjectId, Vec<bool>), SplitDividerFocus>,
+    tab_scrolls: BTreeMap<(ProjectId, PanelGroupId), ScrollHandle>,
     workspace_focus: FocusHandle,
     tasks: TaskService,
     focus_manager: FocusManager,
@@ -165,6 +177,7 @@ pub(crate) struct AppRoot {
     sidebar_drag: Option<SidebarDrag>,
     side_button_menu: Option<SideButtonMenu>,
     layout_menu: Option<LayoutMenu>,
+    tab_list_menu: Option<TabListMenu>,
     side_view_persistence: AppRootPersistence,
     launcher: Box<dyn TerminalPanelLauncher>,
     shell: CanonicalPath,
@@ -295,6 +308,7 @@ impl AppRoot {
             panel_subscriptions: BTreeMap::new(),
             panel_focus: BTreeMap::new(),
             split_dividers: BTreeMap::new(),
+            tab_scrolls: BTreeMap::new(),
             workspace_focus,
             tasks: TaskService::new(),
             focus_manager,
@@ -306,11 +320,13 @@ impl AppRoot {
             sidebar_drag: None,
             side_button_menu: None,
             layout_menu: None,
+            tab_list_menu: None,
             side_view_persistence: persistence,
             launcher,
             shell,
         };
         root.reconcile_split_dividers(cx);
+        root.reconcile_tab_scrolls(None);
         root
     }
 
@@ -326,8 +342,9 @@ impl AppRoot {
     /// 快照只在候选提交后进入既有写队列；关闭屏障期间仅更新内存并延期发布。
     fn commit_project_snapshot(&mut self, snapshot: ProjectSnapshot, cx: &mut App) {
         self.snapshot_generation = self.snapshot_generation.wrapping_add(1);
-        self.snapshot = snapshot;
+        let previous = std::mem::replace(&mut self.snapshot, snapshot);
         self.reconcile_split_dividers(cx);
+        self.reconcile_tab_scrolls(Some(&previous));
         if self.project_snapshot_recovery_failed {
             return;
         }

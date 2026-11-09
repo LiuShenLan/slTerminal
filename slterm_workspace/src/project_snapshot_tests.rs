@@ -635,6 +635,38 @@ fn remove_unknown_project_preserves_original_snapshot() {
 }
 
 #[test]
+fn view_activation_candidate_is_independent_of_view_kind() {
+    let mut snapshot = snapshot_with_two_terminals();
+    let editor = ViewKey::Editor {
+        project_id: project_id(PROJECT_A),
+        document_id: slterm_document::DocumentId::from_str("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0f2a")
+            .unwrap(),
+    };
+    snapshot
+        .registry_mut()
+        .layout_mut(project_id(PROJECT_A))
+        .unwrap()
+        .insert_view(group_id(GROUP_A), editor.clone())
+        .unwrap();
+    snapshot.validate().unwrap();
+
+    let terminal_candidate = snapshot
+        .with_active_view(&view(PROJECT_A, TERMINAL_A))
+        .unwrap();
+    let editor_candidate = terminal_candidate.with_active_view(&editor).unwrap();
+    let layout = editor_candidate
+        .registry()
+        .project(project_id(PROJECT_A))
+        .unwrap()
+        .layout();
+    assert_eq!(layout.group(group_id(GROUP_A)).unwrap().active(), &editor);
+    assert_eq!(
+        editor_candidate.terminals().collect::<Vec<_>>(),
+        snapshot.terminals().collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn activate_and_exit_commands_only_change_their_owning_state() {
     let original = snapshot_with_two_terminals();
     let activated = original

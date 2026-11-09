@@ -10,6 +10,7 @@ mod project_close;
 mod project_close_preflight;
 mod project_close_receipts;
 mod sidebar;
+mod tabs;
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};

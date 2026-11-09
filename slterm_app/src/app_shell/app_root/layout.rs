@@ -174,7 +174,7 @@ impl AppRoot {
         Ok((project_id, self.snapshot.clone()))
     }
 
-    fn panel_for_view(
+    pub(super) fn panel_for_view(
         &self,
         project_id: ProjectId,
         view: &ViewKey,

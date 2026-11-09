@@ -218,18 +218,23 @@ impl ProjectSnapshot {
 
     /// 生成激活逻辑终端的候选快照，只改变布局激活关系。
     pub fn with_active_terminal(&self, id: TerminalId) -> Result<Self, ProjectCommandError> {
-        self.validate()?;
         let record = self
             .terminal(id)
             .ok_or(ProjectSnapshotError::MissingTerminal(id))?;
-        let view = ViewKey::Terminal {
+        self.with_active_view(&ViewKey::Terminal {
             project_id: record.project_id(),
             terminal_id: id,
-        };
+        })
+    }
+
+    /// 生成激活既有逻辑视图的候选快照，只改变其所属组的激活关系。
+    pub fn with_active_view(&self, view: &ViewKey) -> Result<Self, ProjectCommandError> {
+        self.validate()?;
+        let project_id = view.project_id().ok_or(LayoutError::ProjectMismatch)?;
         let mut candidate = self.clone();
         let layout = candidate
             .registry_mut()
-            .layout_mut(record.project_id())
+            .layout_mut(project_id)
             .ok_or(ProjectRegistryError::ProjectNotFound)?;
         let group_id = layout
             .group_ids()
@@ -237,10 +242,10 @@ impl ProjectSnapshot {
             .find(|group_id| {
                 layout
                     .group(*group_id)
-                    .is_some_and(|group| group.views().contains(&view))
+                    .is_some_and(|group| group.views().contains(view))
             })
             .ok_or(LayoutError::ViewNotFound)?;
-        layout.activate_view(group_id, &view)?;
+        layout.activate_view(group_id, view)?;
         candidate.validate()?;
         Ok(candidate)
     }

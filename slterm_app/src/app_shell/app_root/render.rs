@@ -170,11 +170,14 @@ impl AppRoot {
         let terminal_selector = terminal
             .as_ref()
             .and_then(|_| terminal_id.map(|id| format!("app-root-terminal-{id}")));
+        let tab_bar = self.render_tab_bar(layout.project_id(), group_id, layout, cx);
         div()
             .size_full()
             .min_w_0()
             .min_h_0()
             .relative()
+            .flex()
+            .flex_col()
             .debug_selector(move || format!("app-root-group-{group_id}"))
             .on_mouse_down(
                 MouseButton::Left,
@@ -186,9 +189,10 @@ impl AppRoot {
                     }
                 }),
             )
+            .child(tab_bar)
             .children(terminal.map(|terminal| {
                 div()
-                    .size_full()
+                    .flex_1()
                     .min_w_0()
                     .min_h_0()
                     .debug_selector(move || {

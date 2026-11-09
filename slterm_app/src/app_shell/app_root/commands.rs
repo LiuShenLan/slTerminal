@@ -1045,17 +1045,33 @@ impl AppRoot {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Result<(), AppRootError> {
-        self.ensure_not_closing()?;
-        self.ensure_project_snapshot_command_allowed()?;
-        self.sync_focus(window, cx);
-        let candidate = self.snapshot.with_active_terminal(id)?;
-        let project_id = candidate
+        let project_id = self
+            .snapshot
             .terminal(id)
             .map(TerminalRecord::project_id)
             .ok_or(AppRootError::MissingPanel)?;
-        let (panel_id, _) = self
-            .terminal_panel(project_id, id, cx)
-            .ok_or(AppRootError::MissingPanel)?;
+        self.activate_view(
+            ViewKey::Terminal {
+                project_id,
+                terminal_id: id,
+            },
+            window,
+            cx,
+        )
+    }
+
+    pub(crate) fn activate_view(
+        &mut self,
+        view: ViewKey,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<(), AppRootError> {
+        self.ensure_not_closing()?;
+        self.ensure_project_snapshot_command_allowed()?;
+        self.sync_focus(window, cx);
+        let candidate = self.snapshot.with_active_view(&view)?;
+        let project_id = view.project_id().ok_or(AppRootError::MissingPanel)?;
+        let panel_id = self.panel_for_view(project_id, &view, cx)?;
         let project = self
             .projects
             .get(&project_id)
