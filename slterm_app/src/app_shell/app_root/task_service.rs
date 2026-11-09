@@ -45,15 +45,86 @@ struct TaskEntry {
     _task: Task<()>,
 }
 
+#[allow(dead_code)] // 消费点归后续 Panel、SideView 后台读取与刷新。
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(super) enum ViewTaskOwner {
+    Panel(slterm_workspace::PanelId),
+    SideView(slterm_workspace::SideViewId),
+}
+
+/// 一次可见性复核的唯一代次；回执必须原样归还。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct ViewRefreshTicket {
+    owner: ViewTaskOwner,
+    generation: u64,
+}
+
+impl ViewRefreshTicket {
+    #[allow(dead_code)] // 消费点归后续可见性任务的代次日志与断言。
+    pub(super) const fn generation(self) -> u64 {
+        self.generation
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ViewRefreshOutcome {
+    Applied,
+    Stale,
+}
+
+#[allow(dead_code)] // 字段由后续生产回执点读取。
+pub(super) struct ViewRefreshCompletion {
+    pub(super) outcome: ViewRefreshOutcome,
+    pub(super) next: Option<ViewRefreshTicket>,
+}
+
+struct ViewRefreshState {
+    visible: bool,
+    pending: bool,
+    generation: u64,
+    in_flight: Option<u64>,
+}
+
+impl Default for ViewRefreshState {
+    fn default() -> Self {
+        Self {
+            visible: true,
+            pending: false,
+            generation: 0,
+            in_flight: None,
+        }
+    }
+}
+
+impl ViewRefreshState {
+    fn start(&mut self, owner: ViewTaskOwner) -> Option<ViewRefreshTicket> {
+        if !self.visible || !self.pending || self.in_flight.is_some() {
+            return None;
+        }
+        self.pending = false;
+        self.generation = self
+            .generation
+            .checked_add(1)
+            .expect("视图刷新代次不得回绕");
+        self.in_flight = Some(self.generation);
+        Some(ViewRefreshTicket {
+            owner,
+            generation: self.generation,
+        })
+    }
+}
+
 /// GPUI 任务句柄只由所属运行根持有，禁止 detach 形成游离循环。
 pub(crate) struct TaskService {
     tasks: BTreeMap<TaskId, TaskEntry>,
+    view_refreshes: BTreeMap<ViewTaskOwner, ViewRefreshState>,
 }
 
 impl TaskService {
     pub(crate) fn new() -> Self {
         Self {
             tasks: BTreeMap::new(),
+            view_refreshes: BTreeMap::new(),
         }
     }
 
@@ -116,11 +187,74 @@ impl TaskService {
             .map(|entry| Rc::as_ptr(&entry.cancellation.0) as usize)
     }
 
+    /// 可见时至多一个在途复核；其余请求只保留合并位。
+    #[allow(dead_code)] // 生产调度由后续 Explorer、Diff 与历史视图接入。
+    pub(super) fn request_view_refresh(
+        &mut self,
+        owner: ViewTaskOwner,
+    ) -> Option<ViewRefreshTicket> {
+        let state = self.view_refreshes.entry(owner).or_default();
+        state.pending = true;
+        state.start(owner)
+    }
+
+    /// 隐藏立即使旧代次失效；重新可见只启动一次合并复核。
+    #[allow(dead_code)] // 生产调度由后续 Explorer、Diff 与历史视图接入。
+    pub(super) fn set_view_visible(
+        &mut self,
+        owner: ViewTaskOwner,
+        visible: bool,
+    ) -> Option<ViewRefreshTicket> {
+        let state = self.view_refreshes.entry(owner).or_default();
+        if state.visible == visible {
+            return state.start(owner);
+        }
+        state.visible = visible;
+        state.pending = true;
+        if !visible {
+            state.in_flight = None;
+        }
+        state.start(owner)
+    }
+
+    /// 只有当前代次可结算；旧回执不得清除新任务或触发额外刷新。
+    #[allow(dead_code)] // 生产调度由后续 Explorer、Diff 与历史视图接入。
+    pub(super) fn finish_view_refresh(
+        &mut self,
+        ticket: ViewRefreshTicket,
+    ) -> ViewRefreshCompletion {
+        let outcome = self
+            .view_refreshes
+            .get(&ticket.owner)
+            .and_then(|state| state.in_flight)
+            .map_or(ViewRefreshOutcome::Stale, |generation| {
+                if generation == ticket.generation {
+                    ViewRefreshOutcome::Applied
+                } else {
+                    ViewRefreshOutcome::Stale
+                }
+            });
+        if outcome == ViewRefreshOutcome::Stale {
+            return ViewRefreshCompletion {
+                outcome,
+                next: None,
+            };
+        }
+        let state = self
+            .view_refreshes
+            .get_mut(&ticket.owner)
+            .expect("当前刷新回执必须有所有者状态");
+        state.in_flight = None;
+        let next = state.start(ticket.owner);
+        ViewRefreshCompletion { outcome, next }
+    }
+
     pub(crate) fn shutdown(&mut self) {
         for entry in self.tasks.values() {
             entry.cancellation.cancel();
         }
         self.tasks.clear();
+        self.view_refreshes.clear();
     }
 }
 

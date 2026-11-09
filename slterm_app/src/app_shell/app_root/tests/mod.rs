@@ -14,6 +14,7 @@ mod project_close_receipts;
 mod projects;
 mod sidebar;
 mod tabs;
+mod view_tasks;
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};

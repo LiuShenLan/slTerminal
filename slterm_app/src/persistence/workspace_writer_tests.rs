@@ -552,6 +552,42 @@ fn workspace_writer_close_commit_disconnect_is_rejected() {
     ));
 }
 
+#[test]
+fn operation_query_queue_full_and_disconnect_are_explicit() {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = fixture(&temp);
+    let observer = WorkspaceDatabase::open(&paths).unwrap();
+    let writer = WorkspaceWriter::start(paths).unwrap();
+    let client = writer.client();
+    observer
+        .database
+        .connection
+        .execute_batch("BEGIN EXCLUSIVE")
+        .unwrap();
+    client.save_view_state(&key(), &state(1)).unwrap();
+    std::thread::sleep(VIEW_STATE_DEBOUNCE + Duration::from_millis(100));
+    let responses = (0..COMMAND_CAPACITY)
+        .map(|_| client.query_operation("missing").unwrap())
+        .collect::<Vec<_>>();
+
+    assert!(matches!(
+        client.query_operation("overflow"),
+        Err(WorkspaceWriterError::QueueFull)
+    ));
+
+    observer
+        .database
+        .connection
+        .execute_batch("ROLLBACK")
+        .unwrap();
+    drop(responses);
+    writer.shutdown().unwrap();
+    assert!(matches!(
+        client.query_operation("disconnected"),
+        Err(WorkspaceWriterError::Stopped)
+    ));
+}
+
 /// 项目聚合只保留最新快照，并在 2 秒去抖后一次落盘。
 #[test]
 fn workspace_writer_flushes_terminal_metadata_with_project_snapshot() {

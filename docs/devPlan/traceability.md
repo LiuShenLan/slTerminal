@@ -131,8 +131,8 @@
 | 焦点恢复后的补帧重建文本输入处理器 | `focus_modal_restores_input_handler_after_focus_lost`、`focus_explicit_sync_restores_input_handler` | 已自动化 |
 | 模态子控件销毁或隐藏后恢复存活模态根 | `focus_modal_restores_after_focused_child_destroyed`、`focus_modal_restores_after_focused_child_hidden` | 已自动化 |
 | 项目切换恢复运行期实际最后焦点 | `focus_project_switch_restores_memory`、`focus_project_switch_snapshots_actual_focus` | 已自动化 |
-| 重新可见只合并复核且丢弃过期结果 | `visibility_coalesces_refresh_and_drops_stale` | 待实现 |
-| 隐藏后显式保存或文件操作结果仍可查询 | `operation_result_survives_view_hidden` | 待实现 |
+| 重新可见只合并复核且丢弃过期结果 | `visibility_coalesces_refresh_and_drops_stale` | 已自动化 |
+| 隐藏后显式保存或文件操作结果仍可查询 | `operation_result_survives_view_hidden` | 已自动化 |
 | 日志、错误、备份和诊断不含敏感正文或凭据 | `sensitive_material_excluded_from_outputs` | 待实现 |
 | 性能数值具有测量条件或属于契约数值 | `performance_claims_have_conditions` | 待实现 |
 

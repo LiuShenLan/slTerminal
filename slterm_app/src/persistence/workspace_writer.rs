@@ -21,6 +21,7 @@ use super::close::{
 };
 use super::database::DatabaseError;
 use super::metadata::MetadataError;
+use super::operation::{Operation, OperationError};
 use super::project::ProjectStoreError;
 use super::sidebar::SidebarStateStoreError;
 use super::startup::{MaintenanceError, MaintenanceStage};
@@ -143,6 +144,10 @@ enum Command {
         current: Box<PersistedCloseIntent>,
         next: CloseCommitStatus,
         response: SyncSender<Result<PersistedCloseIntent, CloseStoreError>>,
+    },
+    QueryOperation {
+        operation_id: String,
+        response: SyncSender<Result<Option<Operation>, OperationError>>,
     },
     SaveSidebarState {
         state: Box<SidebarState>,
@@ -272,6 +277,25 @@ impl WorkspaceWriterClient {
             .try_send(Command::AdvanceCloseIntent {
                 current: Box::new(current.clone()),
                 next,
+                response,
+            })
+            .map_err(|error| match error {
+                TrySendError::Full(_) => WorkspaceWriterError::QueueFull,
+                TrySendError::Disconnected(_) => WorkspaceWriterError::Stopped,
+            })?;
+        Ok(result)
+    }
+
+    /// 非阻塞查询显式操作结果；调用方在后台等待，视图显隐不改变持久结果。
+    #[allow(dead_code)] // 生产消费点归显式保存、文件操作与 Runtime 结果重查。
+    pub(crate) fn query_operation(
+        &self,
+        operation_id: &str,
+    ) -> Result<Receiver<Result<Option<Operation>, OperationError>>, WorkspaceWriterError> {
+        let (response, result) = mpsc::sync_channel(1);
+        self.commands
+            .try_send(Command::QueryOperation {
+                operation_id: operation_id.to_owned(),
                 response,
             })
             .map_err(|error| match error {
@@ -720,6 +744,13 @@ fn run(
                     current.intent.fingerprint(),
                     &current.store_epoch,
                 );
+                let _ = response.send(result);
+            }
+            Command::QueryOperation {
+                operation_id,
+                response,
+            } => {
+                let result = store.operation(&operation_id);
                 let _ = response.send(result);
             }
             Command::SaveSidebarState { state } => {
