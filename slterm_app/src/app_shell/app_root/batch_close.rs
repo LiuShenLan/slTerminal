@@ -626,6 +626,18 @@ impl AppRoot {
         if close.coordinator.current_attempt() != Some(attempt) {
             return;
         }
+        let expected = close.members.keys().copied().collect::<BTreeSet<_>>();
+        let actual = result
+            .iter()
+            .map(|(terminal_id, _)| *terminal_id)
+            .collect::<BTreeSet<_>>();
+        if actual != expected || result.len() != expected.len() {
+            self.tasks.complete(TaskId::TerminalCloseBatch(batch_id));
+            self.fail_batch_close_outcome_unknown(batch_id, attempt);
+            log::warn!("batch terminal stop receipt has an invalid member set");
+            cx.notify();
+            return;
+        }
         self.tasks.complete(TaskId::TerminalCloseBatch(batch_id));
         let close = self
             .terminal_close_batches
@@ -659,6 +671,17 @@ impl AppRoot {
             return;
         }
         let _ = self.drive_batch_close(batch_id, cx);
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(super) fn finish_batch_stop_for_test(
+        &mut self,
+        batch_id: Uuid,
+        attempt: CloseAttempt,
+        result: Vec<(TerminalId, std::thread::Result<()>)>,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.finish_batch_stop(batch_id, attempt, result, cx);
     }
 
     fn start_batch_advance(

@@ -1,5 +1,6 @@
 //! 组内批量关闭的原子提交、空组塌缩与失败重试测试。
 
+use super::super::task_service::TaskId;
 use super::close::flush_when_ready;
 use super::*;
 use crate::persistence::close::CloseCommitStatus;
@@ -187,6 +188,155 @@ fn integration_batch_close(cx: &mut TestAppContext) {
         0
     );
     assert_eq!(state.borrow().attempts, 3);
+}
+
+#[gpui::test]
+fn incomplete_batch_stop_result_is_outcome_unknown_without_partial_facts(cx: &mut TestAppContext) {
+    let (root, mut window, _state) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, "D:/work/batch");
+    new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_A);
+    new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_B);
+    new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_C);
+    execute_batch(
+        &root,
+        &mut window,
+        CommandId::CloseOtherViews,
+        group_id(GROUP_A),
+    )
+    .unwrap();
+    let (batch_id, attempt, terminal_id) = root.read_with(cx, |root, _| {
+        let (id, close) = root.terminal_close_batches.iter().next().unwrap();
+        (
+            *id,
+            close.coordinator.current_attempt().unwrap(),
+            *close.members.keys().next().unwrap(),
+        )
+    });
+
+    window.update(|_window, cx| {
+        root.update(cx, |root, cx| {
+            root.finish_batch_stop_for_test(batch_id, attempt, vec![(terminal_id, Ok(()))], cx);
+        });
+    });
+
+    root.read_with(cx, |root, _| {
+        let close = &root.terminal_close_batches[&batch_id];
+        assert!(close.outcome_unknown);
+        assert!(close.stop_observations.is_empty());
+        assert_eq!(
+            close.coordinator.phase(),
+            ClosePhase::Failed(CloseStage::StopPty)
+        );
+    });
+    assert!(matches!(
+        execute_batch(
+            &root,
+            &mut window,
+            CommandId::CloseAllViews,
+            group_id(GROUP_A),
+        ),
+        Err(AppRootError::TerminalCloseOutcomeUnknown)
+    ));
+}
+
+#[gpui::test]
+fn unknown_batch_stop_member_is_outcome_unknown_even_with_full_valid_prefix(
+    cx: &mut TestAppContext,
+) {
+    let (root, mut window, _state) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, "D:/work/batch");
+    new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_A);
+    new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_B);
+    new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_C);
+    execute_batch(
+        &root,
+        &mut window,
+        CommandId::CloseOtherViews,
+        group_id(GROUP_A),
+    )
+    .unwrap();
+    let (batch_id, attempt, result) = root.read_with(cx, |root, _| {
+        let (id, close) = root.terminal_close_batches.iter().next().unwrap();
+        let mut result = close
+            .members
+            .keys()
+            .map(|terminal_id| (*terminal_id, Ok(())))
+            .collect::<Vec<_>>();
+        result.push((terminal_id(TERMINAL_C), Ok(())));
+        (*id, close.coordinator.current_attempt().unwrap(), result)
+    });
+
+    window.update(|_window, cx| {
+        root.update(cx, |root, cx| {
+            root.finish_batch_stop_for_test(batch_id, attempt, result, cx);
+        });
+    });
+
+    root.read_with(cx, |root, _| {
+        let close = &root.terminal_close_batches[&batch_id];
+        assert!(close.outcome_unknown);
+        assert!(close.stop_observations.is_empty());
+        assert_eq!(
+            close.coordinator.phase(),
+            ClosePhase::Failed(CloseStage::StopPty)
+        );
+    });
+}
+
+#[gpui::test]
+fn batch_join_panic_requires_explicit_retry_without_rejoin(cx: &mut TestAppContext) {
+    let (root, mut window, _state) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, "D:/work/batch");
+    new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_A);
+    new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_B);
+    new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_C);
+    execute_batch(
+        &root,
+        &mut window,
+        CommandId::CloseOtherViews,
+        group_id(GROUP_A),
+    )
+    .unwrap();
+    let (batch_id, attempt, result) = root.read_with(cx, |root, _| {
+        let (id, close) = root.terminal_close_batches.iter().next().unwrap();
+        let mut result = close
+            .members
+            .keys()
+            .map(|terminal_id| (*terminal_id, Ok(())))
+            .collect::<Vec<_>>();
+        result[1].1 = Err(Box::new("injected join panic") as Box<dyn std::any::Any + Send>);
+        (*id, close.coordinator.current_attempt().unwrap(), result)
+    });
+    window.update(|_window, cx| {
+        root.update(cx, |root, cx| {
+            root.finish_batch_stop_for_test(batch_id, attempt, result, cx);
+        });
+    });
+    root.read_with(cx, |root, _| {
+        let close = &root.terminal_close_batches[&batch_id];
+        assert!(!close.outcome_unknown);
+        assert_eq!(close.stop_observations.len(), close.members.len());
+        assert_eq!(
+            close.coordinator.phase(),
+            ClosePhase::Failed(CloseStage::StopPty)
+        );
+        assert!(
+            !root
+                .tasks
+                .is_registered(TaskId::TerminalCloseBatch(batch_id))
+        );
+    });
+
+    execute_batch(
+        &root,
+        &mut window,
+        CommandId::CloseAllViews,
+        group_id(GROUP_A),
+    )
+    .unwrap();
+
+    assert!(root.read_with(cx, |root, _| root.terminal_close_batches.is_empty()));
+    assert_eq!(group_views(&root, cx, group_id(GROUP_A)).len(), 1);
 }
 
 #[gpui::test]
