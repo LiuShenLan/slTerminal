@@ -13,12 +13,8 @@ use std::time::Duration;
 
 static NEXT_TEMPORARY: AtomicU64 = AtomicU64::new(1);
 
-/// 原子替换前后稳定不变的文件身份，用于防止旧所有者误删替代文件。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct FileIdentity {
-    volume_serial_number: u32,
-    file_index: u64,
-}
+/// 原子替换与文件授权共用 core 的卷＋稳定文件标识。
+pub(crate) use slterm_path::FileIdentity;
 
 /// 以临时文件 + 原子替换把 `contents` 落到 `path`,先 sync 临时文件再换名。
 pub(crate) fn write(path: &Path, contents: &[u8]) -> io::Result<()> {
@@ -74,7 +70,7 @@ fn write_with_acl(
     result
 }
 
-fn file_identity(file: &File) -> io::Result<FileIdentity> {
+pub(crate) fn file_identity(file: &File) -> io::Result<FileIdentity> {
     use std::os::windows::io::AsRawHandle as _;
 
     use windows_sys::Win32::Storage::FileSystem::{
@@ -89,9 +85,10 @@ fn file_identity(file: &File) -> io::Result<FileIdentity> {
         return Err(io::Error::last_os_error());
     }
     Ok(FileIdentity {
-        volume_serial_number: information.dwVolumeSerialNumber,
-        file_index: u64::from(information.nFileIndexHigh) << 32
-            | u64::from(information.nFileIndexLow),
+        volume: u64::from(information.dwVolumeSerialNumber),
+        file: u128::from(
+            u64::from(information.nFileIndexHigh) << 32 | u64::from(information.nFileIndexLow),
+        ),
     })
 }
 

@@ -10,6 +10,8 @@ pub(crate) mod credentials;
 pub mod dirs;
 // 安装渠道门禁:外部托管渠道不参与自更新。
 pub(crate) mod distribution;
+#[allow(dead_code)] // 生产消费点归 AppRoot Document 打开任务。
+pub(crate) mod document_paths;
 pub(crate) mod elevation;
 // 系统文件操作:回收站删除 + 系统处理器打开。
 #[allow(dead_code)] // 生产消费归文件与 Git 阶段。

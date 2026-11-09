@@ -58,9 +58,11 @@ slterm_workspace = { path = "../slterm_workspace" }
 slterm_sidebar = { path = "../slterm_sidebar" }
 slterm_runtime_protocol = { path = "../slterm_runtime_protocol" }
 slterm_path = { path = "../slterm_path" }
+slterm_document = { path = "../slterm_document" }
 slterm_agents = { path = "../slterm_agents" }
 # SQLite 仅由 application 持久化适配持有；bundled 固定内嵌实现，backup 用于灾难副本。
 rusqlite = { version = "=0.41.0", features = ["bundled", "backup"] }
+ropey = { version = "=2.0.0-beta.1", default-features = false }
 # 补全匹配/语义引擎(core crate):独立轻量库,应用层只消费候选。
 slterm_completions = { path = "../slterm_completions" }
 # workspace 选择器 glob 语义(只读 package.json/yaml 声明,不执行项目代码)。

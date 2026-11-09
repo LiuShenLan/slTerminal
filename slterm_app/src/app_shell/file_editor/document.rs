@@ -11,8 +11,10 @@
 
 use std::fs;
 use std::io::Read as _;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::SystemTime;
+
+use slterm_path::{CanonicalPath, ResolvedPath};
 
 use crate::document_io;
 use crate::text_document::{MAX_BYTES, SaveError, TextSnapshot};
@@ -20,8 +22,8 @@ use crate::text_document::{MAX_BYTES, SaveError, TextSnapshot};
 #[derive(Clone, Debug)]
 pub(crate) struct Document {
     snapshot: TextSnapshot,
-    /// 规范化目标路径:保存时与再次解析的路径比对,防符号链接/重定向替换。
-    target: PathBuf,
+    /// 打开时的规范位置与真实文件身份；保存重定向复核共用同一事实。
+    location: ResolvedPath,
     /// 载入时的完整文件大小(截断判定是 `snapshot.truncated`,本字段供信息栏)。
     pub(crate) total_bytes: u64,
     /// 载入/保存后的磁盘修改时间(信息栏展示)。
@@ -42,11 +44,19 @@ impl Document {
         self.modified
     }
 
+    pub(crate) fn location(&self) -> &ResolvedPath {
+        &self.location
+    }
+
     /// 有界载入:上限检查先于解码;只读属性/截断/非法编码进入快照合同。
     pub(crate) fn load(path: &Path) -> std::io::Result<Self> {
-        let target = path.canonicalize()?;
+        let target = dunce::canonicalize(path)?;
+        let canonical = CanonicalPath::new(target.clone())
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
         let mut file = fs::File::open(&target)?;
         let metadata = file.metadata()?;
+        let identity = crate::atomic_file::file_identity(&file)?;
+        let location = ResolvedPath::new(canonical, Some(identity));
         let (bytes, truncated) = document_io::read_prefix(&mut file, metadata.len(), MAX_BYTES)?;
         Ok(Self {
             snapshot: TextSnapshot::decode_prefix(
@@ -54,7 +64,7 @@ impl Document {
                 metadata.permissions().readonly(),
                 truncated,
             ),
-            target,
+            location,
             total_bytes: metadata.len(),
             modified: metadata.modified().ok(),
         })
@@ -62,10 +72,10 @@ impl Document {
 
     /// 保存前比对:路径未被替换、磁盘仍可写、字节与载入快照逐字节一致。
     fn check_current(&self, path: &Path) -> Result<(), SaveError> {
-        if path.canonicalize()? != self.target {
+        if dunce::canonicalize(path)?.as_path() != self.location.canonical_path().as_path() {
             return Err(SaveError::Changed);
         }
-        let file = fs::File::open(&self.target)?;
+        let file = fs::File::open(self.location.canonical_path().as_path())?;
         let metadata = file.metadata()?;
         if metadata.permissions().readonly() {
             return Err(SaveError::ReadOnly);
@@ -89,14 +99,16 @@ impl Document {
         }
         let bytes = self.snapshot.encode(text)?;
         // 失败不触碰目标文件:临时文件与替换都在原子原语内部收口。
-        crate::atomic_file::write(&self.target, &bytes)?;
+        crate::atomic_file::write(self.location.canonical_path().as_path(), &bytes)?;
+        let file = fs::File::open(self.location.canonical_path().as_path())?;
+        let metadata = file.metadata()?;
+        let identity = crate::atomic_file::file_identity(&file)?;
+        let location = ResolvedPath::new(self.location.canonical_path().clone(), Some(identity));
         Ok(Self {
             total_bytes: bytes.len() as u64,
             snapshot: TextSnapshot::decode(bytes, false),
-            modified: fs::metadata(&self.target)
-                .and_then(|metadata| metadata.modified())
-                .ok(),
-            ..self.clone()
+            location,
+            modified: metadata.modified().ok(),
         })
     }
 }

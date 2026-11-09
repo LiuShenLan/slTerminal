@@ -21,7 +21,7 @@ mod block_inline;
 #[allow(dead_code)] // 消费点 = 结构化渲染/结构命令/outline 部件索引。
 mod block_structure;
 mod chrome;
-mod document;
+pub(crate) mod document;
 mod edit_history;
 /// git gutter(行标)。
 pub(crate) mod gutter;

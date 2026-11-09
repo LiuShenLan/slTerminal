@@ -6403,6 +6403,7 @@ dependencies = [
  "pulldown-latex",
  "raw-window-handle",
  "regex",
+ "ropey",
  "rusqlite",
  "serde",
  "serde_json",
@@ -6411,6 +6412,7 @@ dependencies = [
  "slterm-split",
  "slterm_agents",
  "slterm_completions",
+ "slterm_document",
  "slterm_path",
  "slterm_runtime_protocol",
  "slterm_sidebar",
@@ -6462,6 +6464,7 @@ dependencies = [
 name = "slterm_document"
 version = "0.0.0"
 dependencies = [
+ "ropey",
  "slterm_path",
  "tree-sitter",
  "tree-sitter-bash",

@@ -35,6 +35,8 @@ pub(crate) mod diff_tab;
 // 文档/图片 tab + openable_in_app 路由单判定。
 #[allow(dead_code)] // 生产消费归 Document 与 Markdown 阶段。
 pub(crate) mod doc_tabs;
+#[allow(dead_code)] // 生产消费点归 AppRoot Document 面板接线。
+pub(crate) mod documents;
 // 编辑器语义槽装配(颜色单源 = UI token)。
 #[allow(dead_code)] // 生产消费归 Document 与文本视图阶段。
 pub(crate) mod editor_theme;

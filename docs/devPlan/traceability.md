@@ -171,7 +171,7 @@
 
 | 验收场景 | 目标测试例名 | 状态 |
 |---|---|---|
-| 硬链接或不同词法路径按文件身份复用 Document | `path_file_identity_deduplicates_document` | 待实现 |
+| 硬链接或不同词法路径按文件身份复用 Document | `path_file_identity_deduplicates_document` | 已自动化 |
 | 只读根与可写根覆盖时保存按能力并集 | `path_capabilities_union_for_save` | 待实现 |
 | 链接重定向后写前重新校验并拒绝旧授权 | `path_rechecks_redirect_before_write` | 待实现 |
 | 根外文件重启后只显示重新授权占位 | `outside_document_restart_requires_authorization` | 待实现 |
