@@ -1359,7 +1359,7 @@ fn side_view_shortcut_focuses_closes_and_reopens_instances(cx: &mut TestAppConte
 }
 
 #[gpui::test]
-fn toggle_sidebar_returns_focus_without_reopening_instance(cx: &mut TestAppContext) {
+fn integration_sidebar_visibility_semantics(cx: &mut TestAppContext) {
     let (root, mut window, _) = open_root(cx);
     draw_frame(&mut window);
     let workspace = root.read_with(cx, |root, _| root.workspace_focus.clone());
@@ -1382,7 +1382,7 @@ fn toggle_sidebar_returns_focus_without_reopening_instance(cx: &mut TestAppConte
     assert!(window.debug_bounds("app-root-side-view-nav").is_none());
     assert_eq!(
         window.update(|window, cx| window.focused(cx)),
-        Some(button),
+        Some(button.clone()),
         "隐藏聚焦侧栏后必须还焦可见按钮"
     );
     assert_eq!(
@@ -1394,6 +1394,14 @@ fn toggle_sidebar_returns_focus_without_reopening_instance(cx: &mut TestAppConte
         }),
         original
     );
+    root.read_with(cx, |root, _| {
+        assert!(!root.side_views.state().is_visible());
+        assert_eq!(
+            root.side_views.state().open_slot(SideViewId::Nav),
+            Some(slterm_sidebar::SideSlot::Upper),
+            "整体隐藏不得清空槽位内容"
+        );
+    });
 
     window.simulate_keystrokes("ctrl-shift-b");
     draw_frame(&mut window);
@@ -1406,6 +1414,19 @@ fn toggle_sidebar_returns_focus_without_reopening_instance(cx: &mut TestAppConte
         }),
         original,
         "重新显示不得重建保留实例"
+    );
+    assert!(window.debug_bounds("app-root-side-view-nav").is_some());
+    root.read_with(cx, |root, _| {
+        assert!(root.side_views.state().is_visible());
+        assert_eq!(
+            root.side_views.state().open_slot(SideViewId::Nav),
+            Some(slterm_sidebar::SideSlot::Upper)
+        );
+    });
+    assert_eq!(
+        window.update(|window, cx| window.focused(cx)),
+        Some(button),
+        "恢复后焦点不得落入其他不可见内容"
     );
 }
 

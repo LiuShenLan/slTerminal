@@ -64,7 +64,7 @@
 | Document 全局身份 | [领域模型](design/domain-model.md)、[Document](design/document.md) | `integration_document_global_identity` | 待实现 |
 | 跨项目视图 | [工作区](design/workspace.md)、[Document](design/document.md) | `integration_cross_project_views` | 待实现 |
 | 视图身份 | [领域模型](design/domain-model.md)、[工作区](design/workspace.md) | `integration_view_identity_reopen` | 待实现 |
-| 侧栏显隐 | [工作区](design/workspace.md) | `integration_sidebar_visibility_semantics` | 待实现 |
+| 侧栏显隐 | [工作区](design/workspace.md) | `integration_sidebar_visibility_semantics` | 已自动化 |
 | PathPolicy 能力并集 | [架构](design/architecture.md)、[文件与 Git](design/files-git.md) | `integration_path_capability_union` | 待实现 |
 | 链接与文件身份 | [架构](design/architecture.md)、[文件与 Git](design/files-git.md)、[Document](design/document.md) | `integration_links_and_file_identity` | 待实现 |
 | 会话级授权恢复 | [生命周期](design/lifecycle.md)、[持久化](design/persistence.md)、[Document](design/document.md) | `integration_session_grant_restore` | 待实现 |
