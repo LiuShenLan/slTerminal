@@ -548,6 +548,33 @@ fn close_terminal_command_removes_record_group_and_preserves_project() {
 }
 
 #[test]
+fn batch_close_candidate_removes_all_records_and_collapses_group_atomically() {
+    let original = snapshot_with_two_terminals();
+    let (closed, removed) = original
+        .without_terminals(&[terminal_id(TERMINAL_A), terminal_id(TERMINAL_B)])
+        .unwrap();
+    assert_eq!(
+        removed.iter().map(TerminalRecord::id).collect::<Vec<_>>(),
+        vec![terminal_id(TERMINAL_A), terminal_id(TERMINAL_B)]
+    );
+    assert_eq!(closed.terminals().count(), 0);
+    assert!(
+        closed
+            .registry()
+            .project(project_id(PROJECT_A))
+            .unwrap()
+            .layout()
+            .group_ids()
+            .is_empty()
+    );
+    assert_eq!(original, snapshot_with_two_terminals());
+
+    let invalid = original.without_terminals(&[terminal_id(TERMINAL_A), terminal_id(TERMINAL_D)]);
+    assert!(invalid.is_err());
+    assert_eq!(original, snapshot_with_two_terminals());
+}
+
+#[test]
 fn remove_active_project_selects_next_and_removes_only_owned_terminals() {
     let original = snapshot_with_three_projects();
     let expected_removed = original

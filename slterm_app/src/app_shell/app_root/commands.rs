@@ -766,6 +766,16 @@ impl AppRoot {
                     )
                 )
             })
+            || self.terminal_close_batches.values().any(|close| {
+                matches!(
+                    close.coordinator.phase(),
+                    slterm_workspace::ClosePhase::Running(
+                        slterm_workspace::CloseStage::CommitState
+                    ) | slterm_workspace::ClosePhase::Failed(
+                        slterm_workspace::CloseStage::CommitState
+                    )
+                )
+            })
         {
             Err(AppRootError::ProjectSnapshotCommitInFlight)
         } else {
@@ -978,11 +988,15 @@ impl AppRoot {
 
     /// 失败关闭直到 Completed 都占据用户重试队列；重试中的 Running 仍阻止后续目标。
     pub(super) fn oldest_unresolved_terminal_close_failure(&self) -> Option<TerminalId> {
-        self.terminal_closes
+        let single = self
+            .terminal_closes
             .iter()
             .filter(|(_, close)| close.unresolved_failure)
-            .min_by_key(|(_, close)| close.initiation_sequence)
-            .map(|(id, _)| *id)
+            .map(|(id, close)| (close.initiation_sequence, *id));
+        single
+            .chain(self.oldest_unresolved_batch_failure())
+            .min_by_key(|(sequence, _)| *sequence)
+            .map(|(_, id)| id)
     }
 
     pub(super) fn close_focused_terminal_from_request(
@@ -1024,6 +1038,9 @@ impl AppRoot {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Result<TerminalRecord, AppRootError> {
+        if let Some(batch_id) = self.terminal_close_batch_members.get(&id).copied() {
+            return self.close_batch_member(batch_id, id, cx);
+        }
         if self.project_writer.is_none() {
             self.close_terminal_in_memory(id, window, cx)
         } else {

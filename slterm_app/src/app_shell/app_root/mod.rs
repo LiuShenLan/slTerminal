@@ -1,6 +1,7 @@
 //! 项目工作区运行根：唯一持有项目快照与全部项目面板实例。
 
 mod application_close;
+mod batch_close;
 pub(crate) mod close_coordinator;
 mod command_registry;
 mod commands;
@@ -161,6 +162,8 @@ pub(crate) struct AppRoot {
     recovery_global_close: Option<application_close::RecoveryGlobalClose>,
     global_close: Option<GlobalCloseClient>,
     terminal_closes: BTreeMap<slterm_workspace::TerminalId, terminal_close::LocalTerminalClose>,
+    terminal_close_batches: BTreeMap<uuid::Uuid, batch_close::LocalTerminalBatchClose>,
+    terminal_close_batch_members: BTreeMap<slterm_workspace::TerminalId, uuid::Uuid>,
     next_terminal_close_sequence: u64,
     project_closes: BTreeMap<ProjectId, project_close::LocalProjectClose>,
     projects: BTreeMap<ProjectId, Entity<ProjectView>>,
@@ -308,6 +311,8 @@ impl AppRoot {
             recovery_global_close: None,
             global_close,
             terminal_closes: BTreeMap::new(),
+            terminal_close_batches: BTreeMap::new(),
+            terminal_close_batch_members: BTreeMap::new(),
             next_terminal_close_sequence: 0,
             project_closes: BTreeMap::new(),
             projects,
@@ -361,6 +366,16 @@ impl AppRoot {
         }
         if !self.project_closes.is_empty()
             || self.terminal_closes.values().any(|close| {
+                matches!(
+                    close.coordinator.phase(),
+                    slterm_workspace::ClosePhase::Running(
+                        slterm_workspace::CloseStage::CommitState
+                    ) | slterm_workspace::ClosePhase::Failed(
+                        slterm_workspace::CloseStage::CommitState
+                    )
+                )
+            })
+            || self.terminal_close_batches.values().any(|close| {
                 matches!(
                     close.coordinator.phase(),
                     slterm_workspace::ClosePhase::Running(

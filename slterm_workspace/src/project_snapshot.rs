@@ -196,22 +196,37 @@ impl ProjectSnapshot {
         &self,
         id: TerminalId,
     ) -> Result<(Self, TerminalRecord), ProjectCommandError> {
+        let (candidate, mut removed) = self.without_terminals(&[id])?;
+        Ok((
+            candidate,
+            removed.pop().expect("单终端关闭必须返回一个记录"),
+        ))
+    }
+
+    /// 在同一候选中关闭全部逻辑终端；任何失败都不修改原快照。
+    pub fn without_terminals(
+        &self,
+        ids: &[TerminalId],
+    ) -> Result<(Self, Vec<TerminalRecord>), ProjectCommandError> {
         self.validate()?;
-        let record = self
-            .terminal(id)
-            .cloned()
-            .ok_or(ProjectSnapshotError::MissingTerminal(id))?;
-        let view = ViewKey::Terminal {
-            project_id: record.project_id(),
-            terminal_id: id,
-        };
         let mut candidate = self.clone();
-        candidate
-            .registry_mut()
-            .layout_mut(record.project_id())
-            .ok_or(ProjectRegistryError::ProjectNotFound)?
-            .close_view(&view)?;
-        let removed = candidate.remove_terminal(id)?;
+        let mut removed = Vec::with_capacity(ids.len());
+        for id in ids {
+            let record = candidate
+                .terminal(*id)
+                .cloned()
+                .ok_or(ProjectSnapshotError::MissingTerminal(*id))?;
+            let view = ViewKey::Terminal {
+                project_id: record.project_id(),
+                terminal_id: *id,
+            };
+            candidate
+                .registry_mut()
+                .layout_mut(record.project_id())
+                .ok_or(ProjectRegistryError::ProjectNotFound)?
+                .close_view(&view)?;
+            removed.push(candidate.remove_terminal(*id)?);
+        }
         candidate.validate()?;
         Ok((candidate, removed))
     }

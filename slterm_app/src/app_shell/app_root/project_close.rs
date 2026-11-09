@@ -48,6 +48,10 @@ impl AppRoot {
                 .terminal_closes
                 .values()
                 .any(|close| close.record.project_id() == id)
+            || self
+                .terminal_close_batches
+                .values()
+                .any(|close| close.project_id == id)
         {
             return Err(AppRootError::ProjectCloseRunning);
         }

@@ -151,7 +151,9 @@
     "menu_split_down": "向下移动并拆分视图",
     "menu_merge_previous": "合并到上一组",
     "menu_merge_next": "合并到下一组",
-    "menu_focus_divider": "调整分隔线"
+    "menu_focus_divider": "调整分隔线",
+    "menu_close_others": "关闭其他视图",
+    "menu_close_all": "关闭全部视图"
   },
   "settings": {
     "title": "设置",

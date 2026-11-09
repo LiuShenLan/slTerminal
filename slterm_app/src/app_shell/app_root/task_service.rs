@@ -12,6 +12,7 @@ pub(crate) enum TaskId {
     ShellEvents,
     CloseFlush,
     TerminalClose(slterm_workspace::TerminalId),
+    TerminalCloseBatch(uuid::Uuid),
     ProjectClose(slterm_workspace::ProjectId),
     ProjectOpen(uuid::Uuid),
 }

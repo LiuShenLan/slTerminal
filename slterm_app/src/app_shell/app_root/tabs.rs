@@ -2,7 +2,8 @@
 
 use gpui::{
     AnyElement, Context, DismissEvent, Focusable as _, InteractiveElement as _, IntoElement,
-    ParentElement as _, Pixels, Point, Styled as _, Window, anchored, deferred, div, px,
+    ParentElement as _, Pixels, Point, Styled as _, WeakEntity, Window, anchored, deferred, div,
+    px,
 };
 use gpui_component::{
     IconName, Sizable as _,
@@ -14,8 +15,38 @@ use slterm_workspace::{
     PanelGroupId, ProjectId, ProjectLayout, ProjectRegistryError, ProjectSnapshot, ViewKey,
 };
 
+use super::command_registry::{CommandId, CommandParameters, CommandSource, CommandTarget};
 use super::commands::AppRootError;
 use super::{AppRoot, TabListMenu};
+use crate::i18n::{Message, UiLanguage};
+
+fn tab_list_command_item(
+    root: &WeakEntity<AppRoot>,
+    language: UiLanguage,
+    message: Message,
+    id: CommandId,
+    group_id: PanelGroupId,
+) -> PopupMenuItem {
+    let root = root.clone();
+    PopupMenuItem::new(language.text(message)).on_click(move |_, window, cx| {
+        let _ = root.update(cx, |root, cx| {
+            if let Err(error) = root.close_tab_list_menu(window, cx) {
+                log::warn!("完整页签列表命令前收合失败: {error:?}");
+                return;
+            }
+            if let Err(error) = root.execute_command(
+                id,
+                CommandSource::Menu,
+                CommandTarget::Focused,
+                Some(CommandParameters::CloseGroup { group_id }),
+                window,
+                cx,
+            ) {
+                log::warn!("组内批量关闭失败: {error}");
+            }
+        });
+    })
+}
 
 impl AppRoot {
     /// 滚动偏移属于运行期展示态；组身份与激活项仍以布局快照为准。
@@ -161,6 +192,7 @@ impl AppRoot {
             .map(super::focus_manager::FocusRegistration::token)
             .ok_or(AppRootError::MissingPanel)?;
         let root = cx.weak_entity();
+        let language = cx.global::<crate::app_shell::config::Settings>().language;
         let menu = PopupMenu::build(window, cx, |mut menu, _, _| {
             menu = menu.scrollable(true);
             for (index, (view, title)) in views.iter().zip(titles).enumerate() {
@@ -182,6 +214,22 @@ impl AppRoot {
                         }),
                 );
             }
+            if views.len() > 1 {
+                menu = menu.item(tab_list_command_item(
+                    &root,
+                    language,
+                    Message::LayoutMenuCloseOthers,
+                    CommandId::CloseOtherViews,
+                    group_id,
+                ));
+            }
+            menu = menu.item(tab_list_command_item(
+                &root,
+                language,
+                Message::LayoutMenuCloseAll,
+                CommandId::CloseAllViews,
+                group_id,
+            ));
             menu
         });
         let registration =

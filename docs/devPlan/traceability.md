@@ -70,7 +70,7 @@
 | 会话级授权恢复 | [生命周期](design/lifecycle.md)、[持久化](design/persistence.md)、[Document](design/document.md) | `integration_session_grant_restore` | 待实现 |
 | 根重定位 | [工作区](design/workspace.md)、[领域模型](design/domain-model.md)、[文件与 Git](design/files-git.md) | `integration_project_relocation` | 待实现 |
 | 最后引用关闭 | [生命周期](design/lifecycle.md)、[Document](design/document.md) | `integration_last_reference_close` | 待实现 |
-| 批量关闭 | [生命周期](design/lifecycle.md)、[工作区](design/workspace.md) | `integration_batch_close` | 待实现 |
+| 批量关闭 | [生命周期](design/lifecycle.md)、[工作区](design/workspace.md) | `integration_batch_close` | 已自动化 |
 | 项目移除与退出 | [生命周期](design/lifecycle.md)、[工作区](design/workspace.md) | `integration_project_remove_and_exit` | 已自动化 |
 | 崩溃恢复 | [生命周期](design/lifecycle.md)、[持久化](design/persistence.md) | `integration_crash_recovery` | 待实现 |
 | 关闭意图各提交边界崩溃后按真实持久阶段对账 | [生命周期](design/lifecycle.md)、[持久化](design/persistence.md) | `close_commit_crash_reopens_with_exact_persistent_stage` | 已自动化 |

@@ -34,6 +34,8 @@ pub(crate) enum CommandId {
     SplitRight,
     SplitDown,
     CloseActiveTerminal,
+    CloseOtherViews,
+    CloseAllViews,
     OpenLayoutMenu,
     MoveView,
     MergeGroups,
@@ -137,6 +139,9 @@ pub(crate) enum CommandParameters {
     },
     FocusSplitDivider {
         path: Vec<bool>,
+    },
+    CloseGroup {
+        group_id: PanelGroupId,
     },
     #[allow(dead_code)] // 导航树选中项入口由导航视图接线。
     RenameProject {
@@ -482,6 +487,8 @@ impl CommandRegistry {
                 | CommandId::SplitRight
                 | CommandId::SplitDown
                 | CommandId::CloseActiveTerminal
+                | CommandId::CloseOtherViews
+                | CommandId::CloseAllViews
         );
         let layout_command = matches!(
             id,
@@ -681,6 +688,12 @@ impl CommandRegistry {
             (CommandId::CloseActiveTerminal, None) => root
                 .close_focused_terminal_from_request(window, cx)
                 .map(CommandOutcome::TerminalClosed),
+            (CommandId::CloseOtherViews, Some(CommandParameters::CloseGroup { group_id })) => root
+                .close_other_views_from_request(group_id, window, cx)
+                .map(|()| CommandOutcome::Completed),
+            (CommandId::CloseAllViews, Some(CommandParameters::CloseGroup { group_id })) => root
+                .close_all_views_from_request(group_id, window, cx)
+                .map(|()| CommandOutcome::Completed),
             _ => Err(AppRootError::UnexpectedParameters),
         }
     }

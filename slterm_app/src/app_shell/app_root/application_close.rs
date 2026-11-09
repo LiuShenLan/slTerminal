@@ -37,7 +37,10 @@ impl AppRoot {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> bool {
-        if !self.terminal_closes.is_empty() || !self.project_closes.is_empty() {
+        if !self.terminal_closes.is_empty()
+            || !self.terminal_close_batches.is_empty()
+            || !self.project_closes.is_empty()
+        {
             return false;
         }
         if self.application_close.is_some() {

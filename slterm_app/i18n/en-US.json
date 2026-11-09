@@ -151,7 +151,9 @@
     "menu_split_down": "Move View Down",
     "menu_merge_previous": "Merge into Previous Group",
     "menu_merge_next": "Merge into Next Group",
-    "menu_focus_divider": "Adjust Split Divider"
+    "menu_focus_divider": "Adjust Split Divider",
+    "menu_close_others": "Close Other Views",
+    "menu_close_all": "Close All Views"
   },
   "settings": {
     "title": "Settings",

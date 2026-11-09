@@ -187,6 +187,52 @@ fn dismissing_complete_list_preserves_active_and_restores_real_focus(cx: &mut Te
 }
 
 #[gpui::test]
+fn complete_list_batch_actions_close_other_and_all_views(cx: &mut TestAppContext) {
+    let (root, mut window, _) = open_root(cx);
+    let project = open_generated_project(&root, &mut window, "D:/work/tabs");
+    let panels: Vec<_> = (0..3)
+        .map(|_| new_generated_terminal(&root, &mut window))
+        .collect();
+    let group = only_group(&root, cx);
+    draw_frame(&mut window);
+
+    open_complete_list(&mut window, group);
+    for _ in 0..4 {
+        window.simulate_keystrokes("down");
+    }
+    window.simulate_keystrokes("enter");
+    draw_frame(&mut window);
+
+    assert_eq!(
+        root.read_with(cx, |root, cx| root.panel_count(project, cx)),
+        1
+    );
+    assert_active_and_focused(&root, &mut window, cx, project, group, panels[2]);
+
+    open_complete_list(&mut window, group);
+    for _ in 0..2 {
+        window.simulate_keystrokes("down");
+    }
+    window.simulate_keystrokes("enter");
+    draw_frame(&mut window);
+
+    assert_eq!(
+        root.read_with(cx, |root, cx| root.panel_count(project, cx)),
+        0
+    );
+    assert!(root.read_with(cx, |root, _| {
+        root.snapshot()
+            .registry()
+            .project(project)
+            .unwrap()
+            .layout()
+            .group_ids()
+            .is_empty()
+    }));
+    assert!(window.debug_bounds("app-root-tab-list-menu").is_none());
+}
+
+#[gpui::test]
 fn narrow_tab_bar_scrolls_horizontally_without_losing_views(cx: &mut TestAppContext) {
     let (root, mut window, _) = open_root_with_persistence_and_size(
         cx,

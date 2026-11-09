@@ -1,5 +1,7 @@
 //! 单终端局部关闭：原子状态提交后，后台回收 PTY，再按序清理并销毁 Panel。
 
+use std::collections::BTreeSet;
+
 use gpui::{AnyWindowHandle, App, Context, Entity, Window};
 use sha2::{Digest as _, Sha256};
 use slterm_workspace::{
@@ -36,7 +38,7 @@ pub(super) struct LocalTerminalClose {
 }
 
 impl AppRoot {
-    fn allocate_terminal_close_sequence(&mut self) -> Result<u64, AppRootError> {
+    pub(super) fn allocate_terminal_close_sequence(&mut self) -> Result<u64, AppRootError> {
         let sequence = self.next_terminal_close_sequence;
         self.next_terminal_close_sequence = self
             .next_terminal_close_sequence
@@ -726,20 +728,42 @@ impl AppRoot {
         let Some(close) = self.terminal_closes.get(&id) else {
             return;
         };
-        let project_id = close.record.project_id();
-        let panel_id = close.panel_id;
-        let terminal = close.terminal.clone();
+        let panels = [(close.panel_id, close.terminal.clone())];
+        self.detach_terminal_panels(
+            close.record.project_id(),
+            &panels,
+            divider_focus_removed,
+            window,
+            cx,
+        );
+    }
+
+    /// 单终端与批量关闭共用一次焦点恢复；批量先排除全部目标再选择剩余面板。
+    pub(super) fn detach_terminal_panels(
+        &mut self,
+        project_id: slterm_workspace::ProjectId,
+        panels: &[(slterm_workspace::PanelId, Entity<TerminalView>)],
+        divider_focus_removed: bool,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
         let Some(project) = self.projects.get(&project_id).cloned() else {
             return;
         };
-        let focus_token = self.panel_focus.get(&panel_id).map(|focus| focus.token());
-        let was_focused = divider_focus_removed
-            || window
+        let closing = panels
+            .iter()
+            .map(|(panel_id, _)| *panel_id)
+            .collect::<BTreeSet<_>>();
+        let focused_panel = panels.iter().find_map(|(panel_id, terminal)| {
+            (window
                 .focused(cx)
-                .is_some_and(|focused| focused == terminal.read(cx).focus_handle);
+                .is_some_and(|focused| focused == terminal.read(cx).focus_handle))
+            .then_some(*panel_id)
+        });
+        let was_focused = divider_focus_removed || focused_panel.is_some();
         if self.snapshot.registry().active() == Some(project_id) && was_focused {
             let next_panel = project.read(cx).panels.keys().find(|candidate| {
-                **candidate != panel_id && self.panel_focus.contains_key(*candidate)
+                !closing.contains(*candidate) && self.panel_focus.contains_key(*candidate)
             });
             let mut candidates = Vec::new();
             if let Some(next_panel) = next_panel
@@ -757,24 +781,31 @@ impl AppRoot {
                 self.focus_manager.sync_window_focus(window, cx);
             }
         }
-        if let Some(token) = focus_token
-            && let Err(error) = self.focus_manager.unregister(token)
-        {
-            log::warn!("terminal close focus unregister failed: {error:?}");
-            let _ = self.focus_manager.set_visible(token, false);
-            if was_focused {
-                window.blur();
+        for (panel_id, terminal) in panels {
+            let focus_token = self.panel_focus.get(panel_id).map(|focus| focus.token());
+            if let Some(token) = focus_token
+                && let Err(error) = self.focus_manager.unregister(token)
+            {
+                log::warn!("terminal close focus unregister failed: {error:?}");
+                let _ = self.focus_manager.set_visible(token, false);
+                if focused_panel == Some(*panel_id) || divider_focus_removed {
+                    window.blur();
+                }
             }
+            self.panel_focus.remove(panel_id);
+            self.panel_subscriptions.remove(panel_id);
+            let _ = terminal;
         }
-        self.panel_focus.remove(&panel_id);
-        self.panel_subscriptions.remove(&panel_id);
         project.update(cx, |project, _| {
-            if project.focused_panel == Some(panel_id) {
+            if project
+                .focused_panel
+                .is_some_and(|panel_id| closing.contains(&panel_id))
+            {
                 project.focused_panel = project
                     .panels
                     .keys()
                     .find(|candidate| {
-                        **candidate != panel_id && self.panel_focus.contains_key(*candidate)
+                        !closing.contains(*candidate) && self.panel_focus.contains_key(*candidate)
                     })
                     .copied();
             }
