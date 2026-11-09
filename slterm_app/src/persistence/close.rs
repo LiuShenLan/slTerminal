@@ -12,7 +12,9 @@ use slterm_workspace::{
 
 use super::database::DatabaseError;
 use super::metadata::store_epoch_is_current;
-use super::project::{PreparedProjectSnapshot, ProjectStoreError};
+use super::project::{
+    PreparedProjectSnapshot, ProjectStoreError, delete_project_documents_in_transaction,
+};
 use super::view_state::{ViewStateStoreError, delete_project_view_states_in_transaction};
 use super::workspace::WorkspaceDatabase;
 
@@ -125,6 +127,7 @@ impl std::error::Error for CloseCommitError {
 #[derive(Debug)]
 pub(crate) enum ProjectCleanupError {
     ViewState(ViewStateStoreError),
+    Project(ProjectStoreError),
     Close(CloseStoreError),
     Database(DatabaseError),
 }
@@ -133,6 +136,7 @@ impl fmt::Display for ProjectCleanupError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::ViewState(_) => "项目关闭的 ViewState 清理失败",
+            Self::Project(_) => "项目关闭的 Document 清理失败",
             Self::Close(_) => "项目关闭的意图状态推进失败",
             Self::Database(_) => "项目关闭清理数据库事务失败",
         })
@@ -143,6 +147,7 @@ impl std::error::Error for ProjectCleanupError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::ViewState(error) => Some(error),
+            Self::Project(error) => Some(error),
             Self::Close(error) => Some(error),
             Self::Database(error) => Some(error),
         }
@@ -311,7 +316,7 @@ impl WorkspaceDatabase {
         Ok(updated)
     }
 
-    /// 在项目关闭清理事务中删除视图状态、项目聚合并推进到 CleanupCommitted。
+    /// 在项目关闭清理事务中删除视图状态、独占 Document、项目聚合并推进到 CleanupCommitted。
     pub(crate) fn cleanup_project_close(
         &mut self,
         current: &PersistedCloseIntent,
@@ -331,6 +336,8 @@ impl WorkspaceDatabase {
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         delete_project_view_states_in_transaction(&transaction, project_id, registry)
             .map_err(ProjectCleanupError::ViewState)?;
+        delete_project_documents_in_transaction(&transaction, project_id)
+            .map_err(ProjectCleanupError::Project)?;
         let deleted = transaction.execute(
             "DELETE FROM projects WHERE project_id = ?1",
             [project_id.to_string()],

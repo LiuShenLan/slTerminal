@@ -5,12 +5,19 @@ use std::fmt;
 use std::str::FromStr;
 
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
-use slterm_path::CanonicalPath;
+use slterm_document::DocumentId;
+use slterm_path::{CanonicalPath, ResolvedPath};
 use slterm_workspace::{
     LayoutDtoError, PROJECT_LAYOUT_DTO_VERSION, PanelGroupId, Project, ProjectId, ProjectLayout,
     ProjectRegistry, ProjectRegistryError, ProjectRootStatus, ProjectSnapshot,
     ProjectSnapshotError, RunIntent, TerminalId, TerminalRecord,
 };
+
+#[path = "project_documents.rs"]
+mod documents;
+
+pub(super) use documents::delete_project_documents_in_transaction;
+use documents::{EncodedDocument, load_document_records};
 
 use super::database::DatabaseError;
 use super::workspace::WorkspaceDatabase;
@@ -114,11 +121,17 @@ impl WorkspaceDatabase {
         let encoded = &prepared.projects;
         let active = &prepared.active;
         let terminals = &prepared.terminals;
+        let documents = &prepared.documents;
         let dto_version = prepared.dto_version;
 
         // 启动已归一的跨记录引用使用同一规则恢复；其他损坏仍阻止保存。
-        let (stored_registry, stored_terminals) = decode_project_snapshot_from(transaction)?;
-        let stored_snapshot = ProjectSnapshot::recover(stored_registry, stored_terminals)?;
+        let (stored_registry, stored_terminals, stored_documents) =
+            decode_project_snapshot_from(transaction)?;
+        let stored_snapshot = ProjectSnapshot::recover_with_documents(
+            stored_registry,
+            stored_terminals,
+            stored_documents,
+        )?;
         for terminal in snapshot.terminals() {
             if let Some(stored) = stored_snapshot.terminal(terminal.id()) {
                 if stored.project_id() != terminal.project_id()
@@ -307,6 +320,46 @@ impl WorkspaceDatabase {
                 ],
             )?;
         }
+        let desired_document_ids = snapshot
+            .documents()
+            .map(|(id, _)| id)
+            .collect::<BTreeSet<_>>();
+        let retained_document_ids = retained_project
+            .and_then(|project_id| stored_snapshot.registry().project(project_id))
+            .map(|project| {
+                project
+                    .layout()
+                    .view_keys()
+                    .into_iter()
+                    .filter_map(|view| match view {
+                        slterm_workspace::ViewKey::Editor { document_id, .. }
+                        | slterm_workspace::ViewKey::Markdown { document_id, .. }
+                        | slterm_workspace::ViewKey::Diff { document_id, .. } => Some(document_id),
+                        _ => None,
+                    })
+                    .collect::<BTreeSet<_>>()
+            })
+            .unwrap_or_default();
+        for (stored_id, _) in stored_snapshot.documents() {
+            if !desired_document_ids.contains(&stored_id)
+                && !retained_document_ids.contains(&stored_id)
+            {
+                transaction.execute(
+                    "DELETE FROM documents WHERE document_id = ?1",
+                    [stored_id.to_string()],
+                )?;
+            }
+        }
+        for document in documents {
+            transaction.execute(
+                "INSERT INTO documents (document_id, location_json, file_identity_json) \
+                 VALUES (?1, ?2, ?3) \
+                 ON CONFLICT(document_id) DO UPDATE SET \
+                 location_json = excluded.location_json, \
+                 file_identity_json = excluded.file_identity_json",
+                params![document.id, document.location_json, document.identity_json],
+            )?;
+        }
         transaction.execute(
             "INSERT INTO app_state (singleton, active_project_id) VALUES (1, ?1) \
              ON CONFLICT(singleton) DO UPDATE SET active_project_id = excluded.active_project_id",
@@ -333,8 +386,8 @@ impl WorkspaceDatabase {
             .database
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let (registry, terminals) = decode_project_snapshot_from(&transaction)?;
-        let snapshot = ProjectSnapshot::recover(registry, terminals)?;
+        let (registry, terminals, documents) = decode_project_snapshot_from(&transaction)?;
+        let snapshot = ProjectSnapshot::recover_with_documents(registry, terminals, documents)?;
         transaction.commit()?;
         Ok(snapshot)
     }
@@ -343,13 +396,21 @@ impl WorkspaceDatabase {
 fn load_project_snapshot_from(
     connection: &rusqlite::Connection,
 ) -> Result<ProjectSnapshot, ProjectStoreError> {
-    let (registry, terminals) = decode_project_snapshot_from(connection)?;
-    Ok(ProjectSnapshot::restore(registry, terminals)?)
+    let (registry, terminals, documents) = decode_project_snapshot_from(connection)?;
+    Ok(ProjectSnapshot::restore_with_documents(
+        registry, terminals, documents,
+    )?)
 }
+
+type DecodedProjectSnapshot = (
+    ProjectRegistry,
+    Vec<TerminalRecord>,
+    Vec<(DocumentId, ResolvedPath)>,
+);
 
 fn decode_project_snapshot_from(
     connection: &rusqlite::Connection,
-) -> Result<(ProjectRegistry, Vec<TerminalRecord>), ProjectStoreError> {
+) -> Result<DecodedProjectSnapshot, ProjectStoreError> {
     let mut statement = connection.prepare(
         "SELECT p.project_id, p.root, p.display_name, p.root_status, \
          p.next_terminal_number, l.dto_version, l.layout_json \
@@ -412,7 +473,8 @@ fn decode_project_snapshot_from(
         .or_else(|| projects.first().map(Project::id));
     let registry = ProjectRegistry::restore(projects, active)?;
     let terminals = load_terminal_records(connection)?;
-    Ok((registry, terminals))
+    let documents = load_document_records(connection)?;
+    Ok((registry, terminals, documents))
 }
 
 /// 事务前完成全部输入校验与无损编码，写锁内只消费已准备数据。
@@ -420,6 +482,7 @@ pub(super) struct PreparedProjectSnapshot<'a> {
     snapshot: &'a ProjectSnapshot,
     projects: Vec<EncodedProject>,
     terminals: Vec<EncodedTerminal>,
+    documents: Vec<EncodedDocument>,
     active: Option<String>,
     dto_version: i64,
 }
@@ -438,6 +501,10 @@ impl<'a> PreparedProjectSnapshot<'a> {
             .terminals()
             .map(EncodedTerminal::new)
             .collect::<Result<Vec<_>, _>>()?;
+        let documents = snapshot
+            .documents()
+            .map(|(id, location)| EncodedDocument::new(id, location))
+            .collect::<Result<Vec<_>, _>>()?;
         let active = registry.active().map(|id| id.to_string());
         let dto_version = i64::try_from(PROJECT_LAYOUT_DTO_VERSION)
             .map_err(|_| ProjectStoreError::CorruptRecord)?;
@@ -445,6 +512,7 @@ impl<'a> PreparedProjectSnapshot<'a> {
             snapshot,
             projects,
             terminals,
+            documents,
             active,
             dto_version,
         })

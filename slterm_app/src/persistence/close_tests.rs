@@ -2,7 +2,8 @@ use std::time::{Duration, Instant};
 
 use rusqlite::{Connection, params};
 use serde_json::{Value, json};
-use slterm_path::{AppPaths, CanonicalPath};
+use slterm_document::DocumentId;
+use slterm_path::{AppPaths, CanonicalPath, ResolvedPath};
 use slterm_sidebar::side_view_state_schema;
 use slterm_workspace::{
     CloseDecision, CloseObject, CloseScope, InvalidViewState, PanelGroup, PanelGroupId, ProjectId,
@@ -26,6 +27,8 @@ const TERMINAL_A: &str = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0b2a";
 const TERMINAL_A_SECOND: &str = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0b2b";
 const TERMINAL_B: &str = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0b2c";
 const TERMINAL_B_SECOND: &str = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0b2d";
+const DOCUMENT_SHARED: &str = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0f2a";
+const DOCUMENT_EXCLUSIVE: &str = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0f2b";
 
 fn fixture(temp: &TempDir) -> AppPaths {
     AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap()
@@ -166,6 +169,41 @@ fn project_registration(
             })
             .collect(),
     )
+}
+
+fn document_project_snapshot() -> ProjectSnapshot {
+    let original = multi_project_snapshot(project_id(PROJECT_A));
+    let shared = DOCUMENT_SHARED.parse::<DocumentId>().unwrap();
+    let exclusive = DOCUMENT_EXCLUSIVE.parse::<DocumentId>().unwrap();
+    let shared_location =
+        ResolvedPath::new(CanonicalPath::new("D:/work/shared.txt").unwrap(), None);
+    let exclusive_location =
+        ResolvedPath::new(CanonicalPath::new("D:/work/exclusive.txt").unwrap(), None);
+    let (with_shared, _) = original
+        .with_opened_document(
+            project_id(PROJECT_A),
+            GROUP_A.parse().unwrap(),
+            shared,
+            shared_location.clone(),
+        )
+        .unwrap();
+    let (shared_across_projects, _) = with_shared
+        .with_opened_document(
+            project_id(PROJECT_B),
+            GROUP_B.parse().unwrap(),
+            shared,
+            shared_location,
+        )
+        .unwrap();
+    shared_across_projects
+        .with_opened_document(
+            project_id(PROJECT_A),
+            GROUP_A.parse().unwrap(),
+            exclusive,
+            exclusive_location,
+        )
+        .unwrap()
+        .0
 }
 
 fn decode_test_state(_key: &ViewKey, text: &str) -> Result<Value, InvalidViewState> {
@@ -836,6 +874,86 @@ fn project_close_commit_retains_target_until_cleanup_and_persists_next_active() 
 }
 
 #[test]
+fn project_cleanup_deletes_exclusive_documents_and_retains_shared_documents() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut store = store(&temp);
+    let original = document_project_snapshot();
+    store.save_project_snapshot(&original).unwrap();
+    let (candidate, _) = original.without_project(project_id(PROJECT_A)).unwrap();
+    let collected = project_registration(CLOSE_ID, project_id(PROJECT_A), &original);
+    let committed = store
+        .commit_project_close_intent(&candidate, &collected)
+        .unwrap();
+    let current = advance(&mut store, &committed, CloseCommitStatus::PtyStopped);
+    assert_eq!(count(&store, "documents"), 2);
+
+    let cleaned = store
+        .cleanup_project_close(&current, &cleanup_view_registry())
+        .unwrap();
+
+    assert_eq!(cleaned.commit_status, CloseCommitStatus::CleanupCommitted);
+    assert_eq!(store.load_project_snapshot().unwrap(), candidate);
+    assert_eq!(count(&store, "documents"), 1);
+    let remaining = store.load_project_snapshot().unwrap();
+    assert!(
+        remaining
+            .document(DOCUMENT_SHARED.parse().unwrap())
+            .is_some()
+    );
+    assert!(
+        remaining
+            .document(DOCUMENT_EXCLUSIVE.parse().unwrap())
+            .is_none()
+    );
+}
+
+#[test]
+fn project_cleanup_document_delete_failure_rolls_back_and_allows_retry() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut store = store(&temp);
+    let original = document_project_snapshot();
+    store.save_project_snapshot(&original).unwrap();
+    let (candidate, _) = original.without_project(project_id(PROJECT_A)).unwrap();
+    let collected = project_registration(CLOSE_ID, project_id(PROJECT_A), &original);
+    let committed = store
+        .commit_project_close_intent(&candidate, &collected)
+        .unwrap();
+    let current = advance(&mut store, &committed, CloseCommitStatus::PtyStopped);
+    let before_cleanup = store.load_project_snapshot().unwrap();
+    store
+        .database
+        .connection
+        .execute_batch(&format!(
+            "CREATE TRIGGER reject_project_cleanup BEFORE DELETE ON documents \
+             WHEN OLD.document_id = '{DOCUMENT_EXCLUSIVE}' \
+             BEGIN SELECT RAISE(ABORT, 'injected document delete failure'); END;"
+        ))
+        .unwrap();
+
+    assert!(
+        store
+            .cleanup_project_close(&current, &cleanup_view_registry())
+            .is_err()
+    );
+    assert_eq!(store.load_project_snapshot().unwrap(), before_cleanup);
+    assert_eq!(count(&store, "documents"), 2);
+    assert_eq!(
+        store.load_close_intent(CLOSE_ID).unwrap(),
+        Some(current.clone())
+    );
+
+    store
+        .database
+        .connection
+        .execute_batch("DROP TRIGGER reject_project_cleanup")
+        .unwrap();
+    store
+        .cleanup_project_close(&current, &cleanup_view_registry())
+        .unwrap();
+    assert_eq!(store.load_project_snapshot().unwrap(), candidate);
+}
+
+#[test]
 fn project_cleanup_removes_only_target_view_states_and_side_view_partitions() {
     let temp = tempfile::tempdir().unwrap();
     let fixture = &mut project_cleanup_fixture(&temp, CLOSE_ID);
@@ -1160,6 +1278,7 @@ fn project_cleanup_errors_do_not_echo_persisted_details() {
         ProjectCleanupError::ViewState(
             crate::persistence::view_state::ViewStateStoreError::CorruptRecord,
         ),
+        ProjectCleanupError::Project(ProjectStoreError::CorruptRecord),
         ProjectCleanupError::Close(CloseStoreError::CloseConflict),
         ProjectCleanupError::Database(DatabaseError::from(sqlite)),
     ];

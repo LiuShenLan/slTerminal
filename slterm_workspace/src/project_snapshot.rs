@@ -3,7 +3,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use slterm_path::CanonicalPath;
+use slterm_document::DocumentId;
+use slterm_path::{CanonicalPath, ResolvedPath};
 use slterm_split::SplitDirection;
 
 use crate::{
@@ -87,6 +88,10 @@ pub enum ProjectSnapshotError {
     OrphanTerminal(TerminalId),
     DuplicateTerminalNumber { project_id: ProjectId, number: u64 },
     TerminalNumberBeyondCounter(TerminalId),
+    MissingDocument(DocumentId),
+    DuplicateDocument(DocumentId),
+    OrphanDocument(DocumentId),
+    DocumentLocationConflict(DocumentId),
 }
 
 impl fmt::Display for ProjectSnapshotError {
@@ -108,12 +113,21 @@ impl From<ProjectRegistryError> for ProjectSnapshotError {
 pub struct ProjectSnapshot {
     registry: ProjectRegistry,
     terminals: BTreeMap<TerminalId, TerminalRecord>,
+    documents: BTreeMap<DocumentId, ResolvedPath>,
 }
 
 impl ProjectSnapshot {
     pub fn restore(
         registry: ProjectRegistry,
         terminals: Vec<TerminalRecord>,
+    ) -> Result<Self, ProjectSnapshotError> {
+        Self::restore_with_documents(registry, terminals, Vec::new())
+    }
+
+    pub fn restore_with_documents(
+        registry: ProjectRegistry,
+        terminals: Vec<TerminalRecord>,
+        documents: Vec<(DocumentId, ResolvedPath)>,
     ) -> Result<Self, ProjectSnapshotError> {
         let mut terminal_map = BTreeMap::new();
         for record in terminals {
@@ -122,9 +136,16 @@ impl ProjectSnapshot {
                 return Err(ProjectSnapshotError::DuplicateTerminal(id));
             }
         }
+        let mut document_map = BTreeMap::new();
+        for (id, location) in documents {
+            if document_map.insert(id, location).is_some() {
+                return Err(ProjectSnapshotError::DuplicateDocument(id));
+            }
+        }
         let snapshot = Self {
             registry,
             terminals: terminal_map,
+            documents: document_map,
         };
         snapshot.validate()?;
         Ok(snapshot)
@@ -135,6 +156,14 @@ impl ProjectSnapshot {
         registry: ProjectRegistry,
         terminals: Vec<TerminalRecord>,
     ) -> Result<Self, ProjectSnapshotError> {
+        Self::recover_with_documents(registry, terminals, Vec::new())
+    }
+
+    pub fn recover_with_documents(
+        registry: ProjectRegistry,
+        terminals: Vec<TerminalRecord>,
+        documents: Vec<(DocumentId, ResolvedPath)>,
+    ) -> Result<Self, ProjectSnapshotError> {
         registry.validate()?;
         let mut terminal_map = BTreeMap::new();
         for record in terminals {
@@ -143,25 +172,37 @@ impl ProjectSnapshot {
                 return Err(ProjectSnapshotError::DuplicateTerminal(id));
             }
         }
+        let mut document_map = BTreeMap::new();
+        for (id, location) in documents {
+            if document_map.insert(id, location).is_some() {
+                return Err(ProjectSnapshotError::DuplicateDocument(id));
+            }
+        }
         let mut recovered = Self {
             registry,
             terminals: terminal_map,
+            documents: document_map,
         };
         let mut detached_views = Vec::new();
         for project in recovered.registry.projects() {
             for view in project.layout().view_keys() {
-                if let ViewKey::Terminal {
-                    project_id,
-                    terminal_id,
-                } = &view
-                {
-                    let valid = recovered
+                let detached = match &view {
+                    ViewKey::Terminal {
+                        project_id,
+                        terminal_id,
+                    } => !recovered
                         .terminals
                         .get(terminal_id)
-                        .is_some_and(|record| record.project_id() == *project_id);
-                    if !valid {
-                        detached_views.push(view);
+                        .is_some_and(|record| record.project_id() == *project_id),
+                    ViewKey::Editor { document_id, .. }
+                    | ViewKey::Markdown { document_id, .. }
+                    | ViewKey::Diff { document_id, .. } => {
+                        !recovered.documents.contains_key(document_id)
                     }
+                    _ => false,
+                };
+                if detached {
+                    detached_views.push(view);
                 }
             }
         }
@@ -187,8 +228,51 @@ impl ProjectSnapshot {
         recovered
             .terminals
             .retain(|terminal_id, _| referenced.contains(terminal_id));
+        recovered.retain_referenced_documents();
         recovered.validate()?;
         Ok(recovered)
+    }
+
+    /// 在同一候选中登记 Document 元数据并打开 Editor 视图。
+    pub fn with_opened_document(
+        &self,
+        project_id: ProjectId,
+        target_group: PanelGroupId,
+        document_id: DocumentId,
+        location: ResolvedPath,
+    ) -> Result<(Self, ViewKey), ProjectCommandError> {
+        self.validate()?;
+        if self
+            .documents
+            .get(&document_id)
+            .is_some_and(|existing| existing != &location)
+        {
+            return Err(ProjectSnapshotError::DocumentLocationConflict(document_id).into());
+        }
+        let view = ViewKey::Editor {
+            project_id,
+            document_id,
+        };
+        let mut candidate = self.clone();
+        candidate.documents.insert(document_id, location);
+        let layout = candidate
+            .registry_mut()
+            .layout_mut(project_id)
+            .ok_or(ProjectRegistryError::ProjectNotFound)?;
+        if let Some(group_id) = layout.group_ids().into_iter().find(|group_id| {
+            layout
+                .group(*group_id)
+                .is_some_and(|group| group.views().contains(&view))
+        }) {
+            layout.activate_view(group_id, &view)?;
+        } else if layout.tree().is_none() {
+            let group = PanelGroup::new(vec![view.clone()], view.clone())?;
+            layout.open_first_group(target_group, group)?;
+        } else {
+            layout.insert_view(target_group, view.clone())?;
+        }
+        candidate.validate()?;
+        Ok((candidate, view))
     }
 
     /// 生成新增逻辑终端的候选快照；任何失败都不修改原快照。
@@ -248,6 +332,7 @@ impl ProjectSnapshot {
         candidate
             .terminals
             .retain(|_, record| record.project_id() != id);
+        candidate.retain_referenced_documents();
         candidate.validate()?;
         Ok((candidate, removed))
     }
@@ -383,22 +468,38 @@ impl ProjectSnapshot {
         self.registry.validate()?;
 
         let mut referenced = BTreeSet::new();
+        let mut referenced_documents = BTreeSet::new();
         for project in self.registry.projects() {
             for view in project.layout().view_keys() {
-                if let ViewKey::Terminal {
-                    project_id,
-                    terminal_id,
-                } = view
-                {
-                    let record = self
-                        .terminals
-                        .get(&terminal_id)
-                        .ok_or(ProjectSnapshotError::MissingTerminal(terminal_id))?;
-                    if record.project_id() != project_id {
-                        return Err(ProjectSnapshotError::TerminalProjectMismatch(terminal_id));
+                match view {
+                    ViewKey::Terminal {
+                        project_id,
+                        terminal_id,
+                    } => {
+                        let record = self
+                            .terminals
+                            .get(&terminal_id)
+                            .ok_or(ProjectSnapshotError::MissingTerminal(terminal_id))?;
+                        if record.project_id() != project_id {
+                            return Err(ProjectSnapshotError::TerminalProjectMismatch(terminal_id));
+                        }
+                        referenced.insert(terminal_id);
                     }
-                    referenced.insert(terminal_id);
+                    ViewKey::Editor { document_id, .. }
+                    | ViewKey::Markdown { document_id, .. }
+                    | ViewKey::Diff { document_id, .. } => {
+                        if !self.documents.contains_key(&document_id) {
+                            return Err(ProjectSnapshotError::MissingDocument(document_id));
+                        }
+                        referenced_documents.insert(document_id);
+                    }
+                    _ => {}
                 }
+            }
+        }
+        for id in self.documents.keys() {
+            if !referenced_documents.contains(id) {
+                return Err(ProjectSnapshotError::OrphanDocument(*id));
             }
         }
 
@@ -423,6 +524,22 @@ impl ProjectSnapshot {
             }
         }
         Ok(())
+    }
+
+    fn retain_referenced_documents(&mut self) {
+        let referenced = self
+            .registry
+            .projects()
+            .iter()
+            .flat_map(|project| project.layout().view_keys())
+            .filter_map(|view| match view {
+                ViewKey::Editor { document_id, .. }
+                | ViewKey::Markdown { document_id, .. }
+                | ViewKey::Diff { document_id, .. } => Some(document_id),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        self.documents.retain(|id, _| referenced.contains(id));
     }
 
     /// 原子加入逻辑终端；任何一致性校验失败都保持原快照。
@@ -480,6 +597,14 @@ impl ProjectSnapshot {
 
     pub fn terminal(&self, id: TerminalId) -> Option<&TerminalRecord> {
         self.terminals.get(&id)
+    }
+
+    pub fn document(&self, id: DocumentId) -> Option<&ResolvedPath> {
+        self.documents.get(&id)
+    }
+
+    pub fn documents(&self) -> impl Iterator<Item = (DocumentId, &ResolvedPath)> {
+        self.documents.iter().map(|(id, location)| (*id, location))
     }
 
     pub fn terminals(&self) -> impl Iterator<Item = &TerminalRecord> {

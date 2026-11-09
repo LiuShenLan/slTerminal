@@ -1,6 +1,7 @@
 use std::str::FromStr;
 
-use slterm_path::CanonicalPath;
+use slterm_document::DocumentId;
+use slterm_path::{CanonicalPath, ResolvedPath};
 use slterm_split::SplitDirection;
 
 use crate::{
@@ -21,6 +22,8 @@ const TERMINAL_A: &str = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0b2a";
 const TERMINAL_B: &str = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0b2b";
 const TERMINAL_C: &str = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0b2c";
 const TERMINAL_D: &str = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0b2d";
+const DOCUMENT_A: &str = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0f2a";
+const DOCUMENT_B: &str = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0f2b";
 
 fn project_id(text: &str) -> ProjectId {
     ProjectId::from_str(text).unwrap()
@@ -100,6 +103,42 @@ fn empty_snapshot() -> ProjectSnapshot {
         .add_project(project_id(PROJECT_A), path("D:/work/a"))
         .unwrap();
     ProjectSnapshot::restore(registry, Vec::new()).unwrap()
+}
+
+fn document_id(text: &str) -> DocumentId {
+    DocumentId::from_str(text).unwrap()
+}
+
+fn document_location(text: &str) -> ResolvedPath {
+    ResolvedPath::new(path(text), None)
+}
+
+fn registry_with_editor(id: DocumentId) -> ProjectRegistry {
+    let project_id = project_id(PROJECT_A);
+    let view = ViewKey::Editor {
+        project_id,
+        document_id: id,
+    };
+    ProjectRegistry::restore(
+        vec![
+            Project::restore(
+                project_id,
+                path("D:/work/a"),
+                "a".to_owned(),
+                ProjectLayout::new(
+                    project_id,
+                    group_id(GROUP_A),
+                    PanelGroup::new(vec![view.clone()], view).unwrap(),
+                )
+                .unwrap(),
+                ProjectRootStatus::Ready,
+                0,
+            )
+            .unwrap(),
+        ],
+        Some(project_id),
+    )
+    .unwrap()
 }
 
 fn new_terminal_spec(project: &str, group: &str, terminal: &str) -> NewTerminalSpec {
@@ -693,20 +732,173 @@ fn remove_unknown_project_preserves_original_snapshot() {
 }
 
 #[test]
-fn view_activation_candidate_is_independent_of_view_kind() {
-    let mut snapshot = snapshot_with_two_terminals();
-    let editor = ViewKey::Editor {
-        project_id: project_id(PROJECT_A),
-        document_id: slterm_document::DocumentId::from_str("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0f2a")
-            .unwrap(),
-    };
-    snapshot
-        .registry_mut()
-        .layout_mut(project_id(PROJECT_A))
-        .unwrap()
-        .insert_view(group_id(GROUP_A), editor.clone())
+fn document_open_candidate_binds_layout_and_shared_record_atomically() {
+    let original = empty_snapshot();
+    let document_id = document_id(DOCUMENT_A);
+    let location = document_location("D:/work/a/file.txt");
+
+    let (opened, view) = original
+        .with_opened_document(
+            project_id(PROJECT_A),
+            group_id(GROUP_A),
+            document_id,
+            location.clone(),
+        )
         .unwrap();
-    snapshot.validate().unwrap();
+
+    assert_eq!(opened.document(document_id), Some(&location));
+    assert_eq!(
+        opened.registry().projects()[0].layout().view_keys(),
+        vec![view.clone()]
+    );
+    assert_eq!(
+        original.registry().projects()[0].layout().view_keys(),
+        Vec::new()
+    );
+    assert_eq!(original.document(document_id), None);
+
+    let registry = registry_with_editor(document_id);
+    assert!(matches!(
+        ProjectSnapshot::restore(registry.clone(), Vec::new()),
+        Err(ProjectSnapshotError::MissingDocument(id)) if id == document_id
+    ));
+    assert!(
+        ProjectSnapshot::restore_with_documents(
+            registry,
+            Vec::new(),
+            vec![(document_id, location)],
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn document_open_reuses_shared_record_and_project_removal_retains_external_reference() {
+    let mut registry = ProjectRegistry::new();
+    for (project, root) in [(PROJECT_A, "D:/work/a"), (PROJECT_B, "D:/work/b")] {
+        registry
+            .add_project(project_id(project), path(root))
+            .unwrap();
+    }
+    let original = ProjectSnapshot::restore(registry, Vec::new()).unwrap();
+    let id = document_id(DOCUMENT_A);
+    let location = document_location("D:/work/shared.txt");
+    let (first, _) = original
+        .with_opened_document(
+            project_id(PROJECT_A),
+            group_id(GROUP_A),
+            id,
+            location.clone(),
+        )
+        .unwrap();
+    let (shared, _) = first
+        .with_opened_document(
+            project_id(PROJECT_B),
+            group_id(GROUP_B),
+            id,
+            location.clone(),
+        )
+        .unwrap();
+    assert_eq!(shared.documents().count(), 1);
+
+    let (remaining, _) = shared.without_project(project_id(PROJECT_A)).unwrap();
+
+    assert_eq!(remaining.document(id), Some(&location));
+    assert_eq!(
+        remaining.registry().projects()[0].layout().view_keys(),
+        vec![ViewKey::Editor {
+            project_id: project_id(PROJECT_B),
+            document_id: id,
+        }]
+    );
+}
+
+#[test]
+fn document_open_location_conflict_preserves_original_snapshot() {
+    let id = document_id(DOCUMENT_A);
+    let (original, _) = empty_snapshot()
+        .with_opened_document(
+            project_id(PROJECT_A),
+            group_id(GROUP_A),
+            id,
+            document_location("D:/work/a/original.txt"),
+        )
+        .unwrap();
+
+    let conflict = original.with_opened_document(
+        project_id(PROJECT_A),
+        group_id(GROUP_A),
+        id,
+        document_location("D:/work/a/replaced.txt"),
+    );
+
+    assert!(matches!(
+        conflict,
+        Err(ProjectCommandError::Snapshot(
+            ProjectSnapshotError::DocumentLocationConflict(conflicted)
+        )) if conflicted == id
+    ));
+    assert_eq!(
+        original.document(id),
+        Some(&document_location("D:/work/a/original.txt"))
+    );
+}
+
+#[test]
+fn document_restore_rejects_duplicate_and_orphan_records() {
+    let id = document_id(DOCUMENT_A);
+    let location = document_location("D:/work/a/file.txt");
+    assert!(matches!(
+        ProjectSnapshot::restore_with_documents(
+            ProjectRegistry::new(),
+            Vec::new(),
+            vec![(id, location.clone()), (id, location.clone())],
+        ),
+        Err(ProjectSnapshotError::DuplicateDocument(duplicated)) if duplicated == id
+    ));
+    assert!(matches!(
+        ProjectSnapshot::restore_with_documents(
+            ProjectRegistry::new(),
+            Vec::new(),
+            vec![(id, location)],
+        ),
+        Err(ProjectSnapshotError::OrphanDocument(orphan)) if orphan == id
+    ));
+}
+
+#[test]
+fn document_recovery_detaches_missing_views_and_drops_orphan_records() {
+    let missing = document_id(DOCUMENT_A);
+    let orphan = document_id(DOCUMENT_B);
+    let registry = registry_with_editor(missing);
+
+    let recovered = ProjectSnapshot::recover_with_documents(
+        registry,
+        Vec::new(),
+        vec![(orphan, document_location("D:/work/a/orphan.txt"))],
+    )
+    .unwrap();
+
+    assert!(
+        recovered.registry().projects()[0]
+            .layout()
+            .view_keys()
+            .is_empty()
+    );
+    assert_eq!(recovered.documents().count(), 0);
+    assert_eq!(recovered.validate(), Ok(()));
+}
+
+#[test]
+fn view_activation_candidate_is_independent_of_view_kind() {
+    let (snapshot, editor) = snapshot_with_two_terminals()
+        .with_opened_document(
+            project_id(PROJECT_A),
+            group_id(GROUP_A),
+            slterm_document::DocumentId::from_str("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0f2a").unwrap(),
+            slterm_path::ResolvedPath::new(path("D:/work/a/file.txt"), None),
+        )
+        .unwrap();
 
     let terminal_candidate = snapshot
         .with_active_view(&view(PROJECT_A, TERMINAL_A))
