@@ -116,8 +116,9 @@ impl WorkspaceDatabase {
         let terminals = &prepared.terminals;
         let dto_version = prepared.dto_version;
 
-        // 已存快照必须先完整自洽，禁止借新快照静默修复损坏。
-        let stored_snapshot = load_project_snapshot_from(transaction)?;
+        // 启动已归一的跨记录引用使用同一规则恢复；其他损坏仍阻止保存。
+        let (stored_registry, stored_terminals) = decode_project_snapshot_from(transaction)?;
+        let stored_snapshot = ProjectSnapshot::recover(stored_registry, stored_terminals)?;
         for terminal in snapshot.terminals() {
             if let Some(stored) = stored_snapshot.terminal(terminal.id()) {
                 if stored.project_id() != terminal.project_id()
@@ -324,11 +325,31 @@ impl WorkspaceDatabase {
         transaction.commit()?;
         Ok(snapshot)
     }
+    /// 启动恢复在同一事务读取完整布局，再确定性归一失效终端引用。
+    pub(crate) fn recover_project_snapshot(
+        &mut self,
+    ) -> Result<ProjectSnapshot, ProjectStoreError> {
+        let transaction = self
+            .database
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let (registry, terminals) = decode_project_snapshot_from(&transaction)?;
+        let snapshot = ProjectSnapshot::recover(registry, terminals)?;
+        transaction.commit()?;
+        Ok(snapshot)
+    }
 }
 
 fn load_project_snapshot_from(
     connection: &rusqlite::Connection,
 ) -> Result<ProjectSnapshot, ProjectStoreError> {
+    let (registry, terminals) = decode_project_snapshot_from(connection)?;
+    Ok(ProjectSnapshot::restore(registry, terminals)?)
+}
+
+fn decode_project_snapshot_from(
+    connection: &rusqlite::Connection,
+) -> Result<(ProjectRegistry, Vec<TerminalRecord>), ProjectStoreError> {
     let mut statement = connection.prepare(
         "SELECT p.project_id, p.root, p.display_name, p.root_status, \
          p.next_terminal_number, l.dto_version, l.layout_json \
@@ -391,7 +412,7 @@ fn load_project_snapshot_from(
         .or_else(|| projects.first().map(Project::id));
     let registry = ProjectRegistry::restore(projects, active)?;
     let terminals = load_terminal_records(connection)?;
-    Ok(ProjectSnapshot::restore(registry, terminals)?)
+    Ok((registry, terminals))
 }
 
 /// 事务前完成全部输入校验与无损编码，写锁内只消费已准备数据。
@@ -883,6 +904,26 @@ mod project_tests {
     }
 
     #[test]
+    fn explicit_save_can_commit_the_deterministically_recovered_baseline() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut store = populated_store(&temp);
+        store
+            .database
+            .connection
+            .execute("DELETE FROM terminals WHERE terminal_id = ?1", [TERMINAL_A])
+            .unwrap();
+        let mut recovered = store.recover_project_snapshot().unwrap();
+        recovered
+            .registry_mut()
+            .rename_project(id(PROJECT_A), "after recovery")
+            .unwrap();
+
+        store.save_project_snapshot(&recovered).unwrap();
+
+        assert_eq!(store.load_project_snapshot().unwrap(), recovered);
+    }
+
+    #[test]
     fn project_snapshot_store_load_returns_only_committed_generations() {
         use rusqlite::trace::{TraceEvent, TraceEventCodes};
 
@@ -1154,7 +1195,7 @@ mod project_tests {
     }
 
     #[test]
-    fn project_snapshot_store_save_rejects_orphan_retained_terminal() {
+    fn project_snapshot_store_save_discards_normalized_orphan_terminal() {
         let temp = tempfile::tempdir().unwrap();
         let mut store = WorkspaceDatabase::open(&fixture(&temp)).unwrap();
         let original = snapshot(sample_registry());
@@ -1175,19 +1216,14 @@ mod project_tests {
             .rename_project(id(PROJECT_A), "changed")
             .unwrap();
 
-        assert!(matches!(
-            store.save_project_snapshot(&changed),
-            Err(ProjectStoreError::Snapshot(
-                ProjectSnapshotError::OrphanTerminal(terminal_id)
-            )) if terminal_id == TerminalId::from_str(TERMINAL_A_SECOND).unwrap()
-        ));
+        store.save_project_snapshot(&changed).unwrap();
         assert_eq!(
             store.database.connection.query_row(
                 "SELECT display_name FROM projects WHERE project_id = ?1",
                 [PROJECT_A],
                 |row| row.get::<_, String>(0),
             ),
-            Ok("same".to_owned())
+            Ok("changed".to_owned())
         );
         assert_eq!(
             store.database.connection.query_row(
@@ -1195,7 +1231,7 @@ mod project_tests {
                 [TERMINAL_A_SECOND],
                 |row| row.get::<_, i64>(0),
             ),
-            Ok(1)
+            Ok(0)
         );
     }
 

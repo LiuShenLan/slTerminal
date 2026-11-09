@@ -137,8 +137,13 @@ pub(crate) struct WorkspaceDatabase {
 impl WorkspaceDatabase {
     /// 只从应用数据路径打开工作区库，不读取环境或旧 JSON。
     pub(crate) fn open(paths: &AppPaths) -> Result<Self, DatabaseError> {
+        Self::open_path(&paths.workspace_db_path())
+    }
+
+    /// 启动恢复可用同一 schema 合同校验灾难副本，不另建连接规则。
+    pub(super) fn open_path(path: &Path) -> Result<Self, DatabaseError> {
         Ok(Self {
-            database: Database::open(&paths.workspace_db_path(), &WORKSPACE_SPEC)?,
+            database: Database::open(path, &WORKSPACE_SPEC)?,
         })
     }
 

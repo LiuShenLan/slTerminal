@@ -138,6 +138,10 @@ impl AppRoot {
                 notify_workspace_write_failed(cx);
                 cx.notify();
             }
+            SltermShellEvent::WorkspaceRecovered(notice) => {
+                notify_workspace_recovered(notice, cx);
+                cx.notify();
+            }
             SltermShellEvent::Handover { params, completion } => {
                 let response = if self.close_in_progress
                     || self.application_close.is_some()
@@ -322,6 +326,27 @@ pub(crate) fn notify_workspace_write_failed(cx: &mut App) {
             text: language
                 .text(crate::i18n::Message::NotifyWorkspaceWriteFailed)
                 .to_owned(),
+        },
+        cx,
+    );
+}
+
+pub(crate) fn notify_workspace_recovered(
+    notice: crate::persistence::startup::WorkspaceRecoveryNotice,
+    cx: &mut App,
+) {
+    let language = cx.global::<crate::app_shell::config::Settings>().language;
+    let message = match notice {
+        crate::persistence::startup::WorkspaceRecoveryNotice::RestoredFromBackup => {
+            crate::i18n::Message::NotifyWorkspaceRestoredFromBackup
+        }
+        crate::persistence::startup::WorkspaceRecoveryNotice::Isolated => {
+            crate::i18n::Message::NotifyWorkspaceIsolated
+        }
+    };
+    crate::notify::deliver_startup_summary(
+        &crate::notify::Notification::ProcessAlert {
+            text: language.text(message).to_owned(),
         },
         cx,
     );

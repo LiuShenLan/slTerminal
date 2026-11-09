@@ -83,7 +83,7 @@ impl AppRootPersistence {
                 log::warn!("could not restore workspace store epoch: {error}");
             }
         }
-        match store.load_project_snapshot() {
+        match crate::persistence::startup::StartupRecovery::recover(&mut store, None) {
             Ok(snapshot) => persistence.recovered_project_snapshot = Some(snapshot),
             Err(error) => {
                 // 恢复失败只保留原记录；没有显式编辑时不得回写空快照。

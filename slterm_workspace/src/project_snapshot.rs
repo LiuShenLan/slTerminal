@@ -130,6 +130,67 @@ impl ProjectSnapshot {
         Ok(snapshot)
     }
 
+    /// 启动恢复只归一跨记录引用；身份、编号与其他结构损坏仍然报错。
+    pub fn recover(
+        registry: ProjectRegistry,
+        terminals: Vec<TerminalRecord>,
+    ) -> Result<Self, ProjectSnapshotError> {
+        registry.validate()?;
+        let mut terminal_map = BTreeMap::new();
+        for record in terminals {
+            let id = record.id();
+            if terminal_map.insert(id, record).is_some() {
+                return Err(ProjectSnapshotError::DuplicateTerminal(id));
+            }
+        }
+        let mut recovered = Self {
+            registry,
+            terminals: terminal_map,
+        };
+        let mut detached_views = Vec::new();
+        for project in recovered.registry.projects() {
+            for view in project.layout().view_keys() {
+                if let ViewKey::Terminal {
+                    project_id,
+                    terminal_id,
+                } = &view
+                {
+                    let valid = recovered
+                        .terminals
+                        .get(terminal_id)
+                        .is_some_and(|record| record.project_id() == *project_id);
+                    if !valid {
+                        detached_views.push(view);
+                    }
+                }
+            }
+        }
+        for view in detached_views {
+            let project_id = view.project_id().expect("终端视图必须属于项目");
+            recovered
+                .registry
+                .layout_mut(project_id)
+                .expect("项目布局必须属于既有项目")
+                .close_view(&view)
+                .expect("待归一视图必须存在于原布局");
+        }
+        let referenced = recovered
+            .registry
+            .projects()
+            .iter()
+            .flat_map(|project| project.layout().view_keys())
+            .filter_map(|view| match view {
+                ViewKey::Terminal { terminal_id, .. } => Some(terminal_id),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        recovered
+            .terminals
+            .retain(|terminal_id, _| referenced.contains(terminal_id));
+        recovered.validate()?;
+        Ok(recovered)
+    }
+
     /// 生成新增逻辑终端的候选快照；任何失败都不修改原快照。
     pub fn with_new_terminal(
         &self,

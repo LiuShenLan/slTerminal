@@ -158,7 +158,7 @@
 |---|---|---|
 | 多项目与浮层修改后关闭视图不取消全局队列 | `settings_single_queue_across_views` | 待实现 |
 | 权限、损坏、高版本和字段错误严格分流 | `settings_damage_classification` | 待实现 |
-| 状态库及副本均不可恢复时隔离并明确提示 | `workspace_unrecoverable_isolated` | 待实现 |
+| 状态库及副本均不可恢复时隔离并明确提示 | `workspace_unrecoverable_isolated`、`workspace_missing_disaster_copy_is_not_a_valid_empty_backup`、`workspace_isolation_emits_explicit_startup_notice` | 已自动化 |
 | 快照配额不足时不驱逐打开脏 Document | `snapshot_quota_does_not_evict_dirty` | 待实现 |
 | 异常启动先布局后对账且不重复创建 Panel | `startup_reconciles_layout_before_snapshot` | 待实现 |
 | 无主快照无活跃项目时保留并等待显式处置 | `orphan_snapshot_requires_explicit_target` | 待实现 |
@@ -226,7 +226,7 @@
 | 激活项目不关闭无项目浮层或其 Hooks 草稿 | `app_settings_overlay_keeps_hooks_draft` | 待实现 |
 | 移交显式 cwd 未授权时拒绝且不改投项目 | `handover_rejects_unauthorized_cwd` | 待实现 |
 | 最终退出提交失败后允许知情放弃状态 | `close_final_commit_failure_allows_explicit_abandon`、`application_global_abandon_closes_without_clean_shutdown` | 已自动化 |
-| 异常启动先布局后对账且不重复 Panel 或 PTY | `workspace_startup_layout_before_snapshots` | 待实现 |
+| 异常启动先布局后对账且不重复 Panel 或 PTY | `workspace_startup_layout_before_snapshots` | 已自动化 |
 | 启动维护失败只提供脱敏诊断与显式重试 | `diagnostic_messages_are_localized_and_sanitized`、`retry_button_returns_retry_without_starting_workspace`、`closing_diagnostic_returns_exit`、`retry_loop_reenters_same_startup_with_original_cwd`、`diagnostic_init_excludes_settings_recovery_and_background_effects`、`open_failure_requests_quit` | 已自动化 |
 | 存活窗口首帧后才开放控制面，断连取消排队或在途开放 | `service_publishes_discovery_only_after_explicit_open`、`destroyed_window_does_not_signal_readiness`、`queued_open_is_cancelled_when_window_clients_disconnect`、`disconnect_during_open_immediately_closes_control_plane` | 已自动化 |
 

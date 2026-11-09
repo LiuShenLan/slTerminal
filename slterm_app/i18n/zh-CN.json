@@ -514,6 +514,8 @@
     "recovery_sidebar_repaired": "侧栏布局存在无效内容，已修复可恢复字段，其余使用默认值。",
     "recovery_side_view_state_repaired": "部分侧栏视图状态无法恢复，受影响视图使用默认状态。",
     "workspace_write_failed": "无法保存工作区状态，最近的项目或布局更改可能无法恢复。",
+    "workspace_restored_from_backup": "工作区状态库损坏，已从有效副本恢复；原现场已保留。",
+    "workspace_isolated": "工作区状态库及副本均不可恢复，原现场已隔离保留，当前以空工作区启动。",
     "hook_install_failed": "无法为 {agent} 安装 AI CLI hook",
     "hook_settings_unreadable": "无法读取 AI hook 设置，自愈已跳过"
   },

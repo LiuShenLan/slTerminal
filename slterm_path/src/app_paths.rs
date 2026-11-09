@@ -72,6 +72,11 @@ impl AppPaths {
         self.local_root.join("workspace.db")
     }
 
+    /// 工作区灾难副本的完整路径。
+    pub fn workspace_disaster_copy_path(&self) -> PathBuf {
+        self.local_root.join("workspace.backup.db")
+    }
+
     /// `learning.db` 的完整路径。
     pub fn learning_db_path(&self) -> PathBuf {
         self.local_root.join("learning.db")
@@ -100,6 +105,10 @@ mod app_paths_tests {
         assert_eq!(paths.local_root(), local.as_path());
         assert_eq!(paths.settings_path(), config.join("settings.json"));
         assert_eq!(paths.workspace_db_path(), local.join("workspace.db"));
+        assert_eq!(
+            paths.workspace_disaster_copy_path(),
+            local.join("workspace.backup.db")
+        );
         assert_eq!(paths.learning_db_path(), local.join("learning.db"));
     }
 

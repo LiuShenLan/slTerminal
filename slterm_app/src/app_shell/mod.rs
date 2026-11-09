@@ -87,6 +87,8 @@ pub(crate) enum SltermShellEvent {
     TrayQuit,
     /// 工作区状态后台写失败；不携带路径、SQL 或状态正文。
     WorkspaceWriteFailed,
+    /// 启动时副本恢复或双损隔离已完成；只携带封闭通知类型。
+    WorkspaceRecovered(crate::persistence::startup::WorkspaceRecoveryNotice),
     /// 第二实例意图与一次性完成回执；AppRoot 前台消费，真实完成后答复。
     Handover {
         params: HandoverParams,
@@ -193,12 +195,21 @@ impl WorkspaceWriterRuntime {
     {
         use crate::persistence::startup::{
             JournalRecovererRegistry, MaintenanceOutcome, MaintenanceRunner,
+            open_workspace_with_recovery,
         };
         use crate::persistence::workspace_writer::WorkspaceWriterError;
 
         // 维护通过前只持有当前数据库连接；writer、转发器与领域后台任务均未创建。
-        let mut store = crate::persistence::workspace::WorkspaceDatabase::open(paths)
-            .map_err(WorkspaceWriterError::Open)?;
+        let recovered =
+            open_workspace_with_recovery(paths).map_err(WorkspaceWriterError::Recovery)?;
+        if let Some(notice) = recovered.notice() {
+            try_send_shell_event(
+                &events,
+                SltermShellEvent::WorkspaceRecovered(notice),
+                "workspace",
+            );
+        }
+        let mut store = recovered.store;
         let run = crate::persistence::metadata::RunMarker {
             run_id: uuid::Uuid::now_v7().to_string(),
             process_id: std::process::id(),
@@ -765,6 +776,26 @@ mod shell_event_tests {
             event_rx.recv_timeout(Duration::from_secs(1)),
             Err(mpsc::RecvTimeoutError::Disconnected)
         ));
+    }
+
+    #[test]
+    fn workspace_isolation_emits_explicit_startup_notice() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+        std::fs::create_dir_all(paths.local_root()).unwrap();
+        std::fs::write(paths.workspace_db_path(), b"corrupt-main").unwrap();
+        std::fs::write(paths.workspace_disaster_copy_path(), b"corrupt-backup").unwrap();
+        let (events, event_rx) = mpsc::sync_channel(super::SHELL_EVENT_CAPACITY);
+
+        let runtime = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
+
+        assert!(matches!(
+            event_rx.recv_timeout(Duration::from_secs(3)),
+            Ok(SltermShellEvent::WorkspaceRecovered(
+                crate::persistence::startup::WorkspaceRecoveryNotice::Isolated
+            ))
+        ));
+        runtime.shutdown(ControlPlaneCleanup::Succeeded).unwrap();
     }
 
     /// 未完成 Journal 必须在 writer 与转发器取得所有权前阻断，且不改写原材料。

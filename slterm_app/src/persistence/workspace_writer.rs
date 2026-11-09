@@ -67,6 +67,7 @@ impl ViewStateWriteFailure {
 #[derive(Debug)]
 pub(crate) enum WorkspaceWriterError {
     Open(DatabaseError),
+    Recovery(crate::persistence::startup::WorkspaceOpenError),
     Spawn(std::io::Error),
     Metadata(MetadataError),
     ProcessCreated(std::io::Error),
@@ -85,6 +86,7 @@ impl fmt::Display for WorkspaceWriterError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Open(_) => formatter.write_str("工作区数据库打开失败"),
+            Self::Recovery(_) => formatter.write_str("工作区数据库恢复失败"),
             Self::Spawn(_) => formatter.write_str("工作区写线程启动失败"),
             Self::Metadata(_) => formatter.write_str("工作区运行标记提交失败"),
             Self::ProcessCreated(_) => formatter.write_str("进程创建时间读取失败"),

@@ -548,6 +548,37 @@ fn close_terminal_command_removes_record_group_and_preserves_project() {
 }
 
 #[test]
+fn recovery_normalizes_missing_terminal_views_and_orphan_records() {
+    let missing = ProjectSnapshot::recover(
+        registry_with_views(2, &[TERMINAL_A, TERMINAL_B]),
+        vec![record(PROJECT_A, TERMINAL_B, 1)],
+    )
+    .unwrap();
+    assert_eq!(
+        missing.registry().projects()[0].layout().view_keys(),
+        vec![view(PROJECT_A, TERMINAL_B)]
+    );
+    assert_eq!(missing.terminals().count(), 1);
+
+    let orphan = ProjectSnapshot::recover(
+        registry_with_views(2, &[TERMINAL_A]),
+        vec![
+            record(PROJECT_A, TERMINAL_A, 0),
+            record(PROJECT_A, TERMINAL_B, 1),
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        orphan,
+        ProjectSnapshot::restore(
+            registry_with_views(2, &[TERMINAL_A]),
+            vec![record(PROJECT_A, TERMINAL_A, 0)],
+        )
+        .unwrap()
+    );
+}
+
+#[test]
 fn batch_close_candidate_removes_all_records_and_collapses_group_atomically() {
     let original = snapshot_with_two_terminals();
     let (closed, removed) = original
