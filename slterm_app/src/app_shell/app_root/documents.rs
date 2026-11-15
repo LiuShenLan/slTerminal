@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use std::io;
 use std::sync::Arc;
 
-use gpui::{App, AppContext as _, Context, Window};
+use gpui::{App, AppContext as _, Context, FocusHandle, Focusable as _, Window};
 use slterm_document::DocumentOpenOutcome;
 use slterm_path::CanonicalPath;
 use slterm_workspace::{PanelGroupId, PanelId, ProjectId, ProjectRegistryError, ViewKey};
@@ -15,8 +15,9 @@ use super::AppRoot;
 use super::commands::AppRootError;
 use super::panel_host::{PanelContent, PanelHost};
 use super::task_service::{CancellationToken, TaskId};
-use crate::app_shell::documents::OpenedDocument;
+use crate::app_shell::documents::{OpenedDocument, OpenedDocumentBody};
 use crate::app_shell::file_editor::TextFileView;
+use crate::app_shell::text_view::PagedTextView;
 
 pub(super) struct DocumentOpenRequest {
     project_id: ProjectId,
@@ -117,7 +118,7 @@ impl AppRoot {
                 self.documents.remove(opened.id);
             }
             self.pending_document_opens.clear();
-            self.reconcile_document_registry();
+            self.reconcile_document_registry(cx);
             cx.notify();
             return;
         }
@@ -134,7 +135,7 @@ impl AppRoot {
             Err(error) => Err(AppRootError::DocumentOpen(error)),
         };
         // 在途期间的项目关闭提交也必须与返回后的聚合表对账。
-        self.reconcile_document_registry();
+        self.reconcile_document_registry(cx);
         if let Err(error) = outcome {
             log::warn!("Document 打开未提交: {error}");
         }
@@ -196,13 +197,51 @@ impl AppRoot {
             return Ok(());
         }
 
-        let document = match opened.document {
-            Some(document) => document,
-            None => self
-                .saved_document(opened.id, cx)
-                .ok_or(AppRootError::MissingPanel)?,
+        let panel_id = if self
+            .documents
+            .session(opened.id)
+            .is_some_and(|session| session.paged().is_some())
+        {
+            let (reader, pending) = match opened.body {
+                Some(OpenedDocumentBody::Paged(document)) => {
+                    let reader = document.page_reader();
+                    (reader, Some(document))
+                }
+                None => (
+                    self.paged_documents
+                        .get(&opened.id)
+                        .ok_or(AppRootError::MissingPanel)?
+                        .page_reader(),
+                    None,
+                ),
+                Some(OpenedDocumentBody::Editable(_)) => {
+                    return Err(AppRootError::DocumentOpen(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "分页 Document 收到可编辑正文",
+                    )));
+                }
+            };
+            let panel =
+                self.install_paged_panel(project_id, view, opened.id, reader, window, cx)?;
+            if let Some(document) = pending {
+                self.paged_documents.insert(opened.id, document);
+            }
+            panel
+        } else {
+            let document = match opened.body {
+                Some(OpenedDocumentBody::Editable(document)) => *document,
+                None => self
+                    .saved_document(opened.id, cx)
+                    .ok_or(AppRootError::MissingPanel)?,
+                Some(OpenedDocumentBody::Paged(_)) => {
+                    return Err(AppRootError::DocumentOpen(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "可编辑 Document 收到分页正文",
+                    )));
+                }
+            };
+            self.install_editor_panel(project_id, view, document, window, cx)?
         };
-        let panel_id = self.install_editor_panel(project_id, view, document, window, cx)?;
         self.projects
             .get(&project_id)
             .cloned()
@@ -233,6 +272,52 @@ impl AppRoot {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Result<PanelId, AppRootError> {
+        self.install_panel(project_id, view, focus, window, cx, |window, cx| {
+            let path = document.location().canonical_path().as_path();
+            let markdown = crate::app_shell::doc_tabs::markdown_viewable(path);
+            let language = crate::app_shell::code_tab::language_for_path(path);
+            let editor =
+                cx.new(|cx| TextFileView::from_document(document, language, markdown, window, cx));
+            let focus_handle = editor.read(cx).focus_handle(cx);
+            (PanelContent::Editor(editor), focus_handle)
+        })
+    }
+
+    fn install_paged_panel(
+        &mut self,
+        project_id: ProjectId,
+        view: ViewKey,
+        document_id: slterm_document::DocumentId,
+        reader: crate::app_shell::paged_document::PageReader,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<PanelId, AppRootError> {
+        let session = self
+            .documents
+            .session(document_id)
+            .cloned()
+            .ok_or(AppRootError::MissingPanel)?;
+        let request = self
+            .documents
+            .text_request(document_id, 9)
+            .map_err(|_| AppRootError::MissingPanel)?;
+        let cache = self.page_cache.clone();
+        self.install_panel(project_id, view, true, window, cx, |_, cx| {
+            let paged = cx.new(|cx| PagedTextView::new(&session, cache, reader, request, cx));
+            let focus_handle = paged.read(cx).focus_handle(cx);
+            (PanelContent::Paged(paged), focus_handle)
+        })
+    }
+
+    fn install_panel(
+        &mut self,
+        project_id: ProjectId,
+        view: ViewKey,
+        focus: bool,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+        build: impl FnOnce(&mut Window, &mut Context<'_, Self>) -> (PanelContent, FocusHandle),
+    ) -> Result<PanelId, AppRootError> {
         let project = self
             .projects
             .get(&project_id)
@@ -240,18 +325,11 @@ impl AppRoot {
             .ok_or(ProjectRegistryError::ProjectNotFound)?;
         let panel_id = self.panel_ids.allocate()?;
         let parent = self.project_focus_token(project_id, cx)?;
-        let path = document.location().canonical_path().as_path();
-        let markdown = crate::app_shell::doc_tabs::markdown_viewable(path);
-        let language = crate::app_shell::code_tab::language_for_path(path);
-        let editor =
-            cx.new(|cx| TextFileView::from_document(document, language, markdown, window, cx));
+        let (content, focus_handle) = build(window, cx);
         let visible = self.snapshot.registry().active() == Some(project_id);
-        let focus_registration = self.focus_manager.register(
-            &editor.read(cx).focus_handle(cx),
-            parent,
-            Some(project_id),
-            visible,
-        )?;
+        let focus_registration =
+            self.focus_manager
+                .register(&focus_handle, parent, Some(project_id), visible)?;
         if focus
             && let Err(error) =
                 self.focus_manager
@@ -266,7 +344,7 @@ impl AppRoot {
                 PanelHost {
                     id: panel_id,
                     view_key: view,
-                    content: PanelContent::Editor(editor),
+                    content,
                 },
             );
         });
@@ -358,12 +436,37 @@ impl AppRoot {
         })
     }
 
-    pub(super) fn reconcile_document_registry(&mut self) {
+    pub(super) fn reconcile_document_registry(&mut self, cx: &mut App) {
         let referenced = self
             .snapshot
             .documents()
             .map(|(id, _)| id)
             .collect::<BTreeSet<_>>();
+        for project in self.projects.values() {
+            project.update(cx, |project, cx| {
+                for panel in project.panels.values() {
+                    let document_id = match &panel.view_key {
+                        ViewKey::Editor { document_id, .. }
+                        | ViewKey::Markdown { document_id, .. }
+                        | ViewKey::Diff { document_id, .. } => *document_id,
+                        _ => continue,
+                    };
+                    if !referenced.contains(&document_id)
+                        && let PanelContent::Paged(view) = &panel.content
+                    {
+                        view.update(cx, |view, _| view.close());
+                    }
+                }
+            });
+        }
         self.documents.retain(|id| referenced.contains(&id));
+        self.paged_documents.retain(|id, _| {
+            if referenced.contains(id) {
+                true
+            } else {
+                self.page_cache.borrow_mut().remove_document(*id);
+                false
+            }
+        });
     }
 }

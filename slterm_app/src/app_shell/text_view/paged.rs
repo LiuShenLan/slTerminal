@@ -43,6 +43,7 @@ pub(crate) struct PagedTextView {
     pending_pages: BTreeSet<usize>,
     failed_pages: BTreeSet<usize>,
     tasks: BTreeMap<usize, Task<()>>,
+    closed: bool,
     scroll_line: usize,
     scroll_column: usize,
     wheel_remainder: f32,
@@ -94,6 +95,7 @@ impl PagedTextView {
             pending_pages: BTreeSet::new(),
             failed_pages: BTreeSet::new(),
             tasks: BTreeMap::new(),
+            closed: false,
             scroll_line: 0,
             scroll_column: 0,
             wheel_remainder: 0.0,
@@ -106,6 +108,27 @@ impl PagedTextView {
         }
     }
 
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn painted_lines_for_test(&self) -> Vec<(usize, Option<String>)> {
+        self.painted_lines.borrow().clone()
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn is_closed_for_test(&self) -> bool {
+        self.closed
+    }
+
+    /// 最后布局引用消失时立即关闭读取面，迟到回执不得复活共享缓存。
+    pub(crate) fn close(&mut self) {
+        if self.closed {
+            return;
+        }
+        self.closed = true;
+        self.tasks.clear();
+        self.pending_pages.clear();
+        self.invalidate_copy();
+    }
+
     /// 旧代次回执不得结算或污染当前源；失败页在当前视图内不自动重试。
     fn apply_page_result(
         &mut self,
@@ -115,7 +138,8 @@ impl PagedTextView {
         result: io::Result<String>,
         cx: &mut Context<'_, Self>,
     ) {
-        if generation != self.source.source_generation()
+        if self.closed
+            || generation != self.source.source_generation()
             || fingerprint != *self.source.fingerprint()
         {
             return;
@@ -171,6 +195,9 @@ impl PagedTextView {
     }
 
     fn copy(&mut self, cx: &mut Context<'_, Self>) {
+        if self.closed {
+            return;
+        }
         let generation = self.invalidate_copy();
         let range = self.selection.range();
         if range.is_empty() {
@@ -295,6 +322,9 @@ impl PagedTextView {
     }
 
     fn claim_pages(&mut self, pages: &[usize]) -> Vec<(usize, u64, [u8; 32], PageReader)> {
+        if self.closed {
+            return Vec::new();
+        }
         let generation = self.source.source_generation();
         let fingerprint = *self.source.fingerprint();
         pages
@@ -904,6 +934,26 @@ mod tests {
 
         assert!(weak.upgrade().is_none(), "在途任务不得强持已销毁视图");
         assert!(cache.borrow().is_empty(), "迟到回执不得进入共享缓存");
+    }
+
+    #[gpui::test]
+    fn closing_paged_view_cancels_requests_and_ignores_late_results(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::app_shell::theme::apply_dark_theme(cx);
+        });
+        let cache = Rc::new(RefCell::new(DocumentPageCache::new()));
+        let reader: PageReader = Arc::new(|_| Ok("late\n".to_owned()));
+        let view = cx.update(|cx| make_view(cache.clone(), reader, source_for(&["only\n"]), cx));
+        cx.update(|cx| PagedTextView::request_pages(&view, vec![0], cx));
+        view.update(cx, |view, _| view.close());
+        cx.run_until_parked();
+
+        assert!(cache.borrow().is_empty());
+        cx.update(|cx| {
+            assert!(view.read(cx).tasks.is_empty());
+            assert!(view.read(cx).pending_pages.is_empty());
+        });
     }
 
     #[gpui::test]

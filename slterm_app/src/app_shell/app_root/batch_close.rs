@@ -573,7 +573,7 @@ impl AppRoot {
     ) {
         self.documents = documents;
         let Some(close) = self.terminal_close_batches.get(&batch_id) else {
-            self.reconcile_document_registry();
+            self.reconcile_document_registry(cx);
             return;
         };
         if close.coordinator.current_attempt() != Some(attempt) {

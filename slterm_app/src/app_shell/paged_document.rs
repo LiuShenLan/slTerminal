@@ -127,7 +127,6 @@ impl PagedDocument {
         &self.encoding
     }
 
-    #[allow(dead_code)] // 消费点 = AppRoot Paged 视图生产接线。
     pub(crate) fn page_reader(self: &Arc<Self>) -> PageReader {
         let document = self.clone();
         Arc::new(move |page| document.read_page(page))

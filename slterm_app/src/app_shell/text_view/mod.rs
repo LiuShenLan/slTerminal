@@ -4,8 +4,8 @@ mod editor;
 mod layout;
 #[allow(dead_code)] // 消费点 = 专用视图选区、命中测试与 IME。
 mod metrics;
-#[allow(dead_code)] // 消费点 = Paged 只读生产接线。
 mod paged;
+pub(crate) use paged::PagedTextView;
 #[allow(dead_code)] // 消费点 = 专用视图可见行渲染。
 mod source;
 #[allow(dead_code)] // 消费点 = Document 语法视图接线。

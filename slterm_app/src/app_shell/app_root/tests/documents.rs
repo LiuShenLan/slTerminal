@@ -43,6 +43,34 @@ fn editor_text(
     })
 }
 
+fn paged_painted_lines(
+    root: &Entity<AppRoot>,
+    cx: &TestAppContext,
+    project: &str,
+    document: slterm_document::DocumentId,
+) -> Vec<(usize, Option<String>)> {
+    root.read_with(cx, |root, cx| {
+        let project_view = root.projects[&project_id(project)].read(cx);
+        let panel = project_view
+            .panels
+            .values()
+            .find(|panel| {
+                panel.view_key
+                    == (ViewKey::Editor {
+                        project_id: project_id(project),
+                        document_id: document,
+                    })
+            })
+            .unwrap();
+        match &panel.content {
+            crate::app_shell::app_root::panel_host::PanelContent::Paged(view) => {
+                view.read(cx).painted_lines_for_test()
+            }
+            _ => panic!("大文件必须安装 PagedTextView"),
+        }
+    })
+}
+
 fn write_recovered_snapshot(
     paths: &AppPaths,
     document: slterm_document::DocumentId,
@@ -501,6 +529,116 @@ fn shared_document_restore_preserves_project_grant_union(cx: &mut TestAppContext
     recovered.save("changed").unwrap();
 
     assert_eq!(std::fs::read_to_string(file).unwrap(), "changed");
+}
+
+#[gpui::test]
+fn large_file_paged_views_share_a_real_source_across_projects(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let project_root = temp.path().join("project");
+    std::fs::create_dir(&project_root).unwrap();
+    let file = project_root.join("large.txt");
+    let mut bytes = b"paged-start\n".to_vec();
+    bytes.resize(slterm_document::EDITABLE_LIMIT_BYTES as usize + 1, b'x');
+    std::fs::write(&file, bytes).unwrap();
+    let file = CanonicalPath::new(file).unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let (events, _event_rx) = std::sync::mpsc::sync_channel(64);
+    let runtime = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
+    let persistence =
+        AppRootPersistence::load_with_previous_run(&paths, Some(runtime.client()), None);
+    let (root, mut window, _) = open_root_with_persistence(cx, persistence);
+    add_project(
+        &root,
+        &mut window,
+        PROJECT_A,
+        project_root.to_str().unwrap(),
+    );
+
+    open_document(&root, &mut window, PROJECT_A, GROUP_A, file.clone());
+
+    let document = root.read_with(cx, |root, _| {
+        root.snapshot
+            .registry()
+            .project(project_id(PROJECT_A))
+            .unwrap()
+            .layout()
+            .view_keys()
+            .into_iter()
+            .find_map(|view| match view {
+                ViewKey::Editor { document_id, .. } => Some(document_id),
+                _ => None,
+            })
+            .unwrap()
+    });
+    assert!(root.read_with(cx, |root, _| {
+        root.documents.session(document).unwrap().text().is_none()
+    }));
+    for _ in 0..2 {
+        window.refresh().unwrap();
+        window.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+        window.run_until_parked();
+    }
+    let painted = paged_painted_lines(&root, cx, PROJECT_A, document);
+    assert_eq!(painted.first(), Some(&(0, Some("paged-start".to_owned()))));
+    let cached_pages = root.read_with(cx, |root, _| root.page_cache.borrow().len());
+
+    add_project(&root, &mut window, PROJECT_B, temp.path().to_str().unwrap());
+    activate_project(&root, &mut window, PROJECT_B);
+    open_document(&root, &mut window, PROJECT_B, GROUP_B, file);
+    for _ in 0..2 {
+        window.refresh().unwrap();
+        window.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+        window.run_until_parked();
+    }
+
+    let painted = paged_painted_lines(&root, cx, PROJECT_B, document);
+    assert_eq!(painted.first(), Some(&(0, Some("paged-start".to_owned()))));
+    assert_eq!(
+        root.read_with(cx, |root, _| {
+            (
+                root.paged_documents.len(),
+                root.page_cache.borrow().len(),
+                root.documents.len(),
+            )
+        }),
+        (1, cached_pages, 1)
+    );
+
+    let closing_view = root.read_with(cx, |root, cx| {
+        let project = root.projects[&project_id(PROJECT_B)].read(cx);
+        project
+            .panels
+            .values()
+            .find_map(|panel| match &panel.content {
+                crate::app_shell::app_root::panel_host::PanelContent::Paged(view) => {
+                    Some(view.clone())
+                }
+                _ => None,
+            })
+            .unwrap()
+    });
+    super::close::flush_when_ready(&runtime.client());
+    super::project_close::remove_project(&root, &mut window, PROJECT_A).unwrap();
+    window.run_until_parked();
+    super::close::flush_when_ready(&runtime.client());
+    assert_eq!(root.read_with(cx, |root, _| root.paged_documents.len()), 1);
+    super::project_close::remove_project(&root, &mut window, PROJECT_B).unwrap();
+    window.run_until_parked();
+    super::close::flush_when_ready(&runtime.client());
+    assert!(root.read_with(cx, |root, _| {
+        root.documents.is_empty()
+            && root.paged_documents.is_empty()
+            && root.page_cache.borrow().is_empty()
+    }));
+    assert!(closing_view.read_with(cx, |view, _| view.is_closed_for_test()));
+
+    drop(root);
+    cx.update(|_| {});
+    runtime.shutdown(ControlPlaneCleanup::Succeeded).unwrap();
 }
 
 #[gpui::test]

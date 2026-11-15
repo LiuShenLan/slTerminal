@@ -96,6 +96,14 @@ impl Document {
 
     /// 有界载入:上限检查先于解码;只读属性/截断/非法编码进入快照合同。
     pub(crate) fn load(path: &Path) -> std::io::Result<Self> {
+        Self::load_with_read(path, document_io::read_prefix)
+    }
+
+    /// 读取端口只用于故障注入；正文、身份与长度仍来自同一真实文件句柄。
+    fn load_with_read(
+        path: &Path,
+        read: impl FnOnce(&mut fs::File, u64, usize) -> std::io::Result<(Vec<u8>, bool)>,
+    ) -> std::io::Result<Self> {
         let target = dunce::canonicalize(path)?;
         let canonical = CanonicalPath::new(target.clone())
             .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
@@ -108,7 +116,10 @@ impl Document {
         } else {
             MAX_BYTES
         };
-        let (bytes, truncated) = document_io::read_prefix(&mut file, metadata.len(), limit)?;
+        let (bytes, truncated) = read(&mut file, metadata.len(), limit)?;
+        if file.metadata()?.len() != metadata.len() {
+            return Err(std::io::Error::other("文件在读取期间改变了长度"));
+        }
         let content = DocumentContent::decode(bytes, metadata.len(), None);
         if matches!(content, DocumentContent::Unavailable(_)) {
             return Err(std::io::Error::new(
@@ -318,6 +329,22 @@ mod document_tests {
                 0,
                 Arc::new(crate::platform::document_paths::SystemDocumentPathResolver),
             ))
+    }
+
+    #[test]
+    fn load_rejects_growth_before_committing_a_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("growing.txt");
+        fs::write(&path, vec![b'x'; EDITABLE_LIMIT_BYTES as usize]).unwrap();
+
+        let result = Document::load_with_read(&path, |file, declared, limit| {
+            let read = document_io::read_prefix(file, declared, limit)?;
+            let mut append = fs::OpenOptions::new().append(true).open(&path)?;
+            std::io::Write::write_all(&mut append, b"y")?;
+            Ok(read)
+        });
+
+        assert!(result.is_err(), "读取期间增长不得提交旧长度快照");
     }
 
     /// 保存保留 BOM/CRLF/Unicode;空串保存为仅 BOM 文件。

@@ -27,7 +27,9 @@ mod terminal_close;
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod tests;
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, VecDeque};
+use std::rc::Rc;
 use std::sync::Arc;
 
 use gpui::{
@@ -35,7 +37,7 @@ use gpui::{
     Window,
 };
 use gpui_component::menu::PopupMenu;
-use slterm_document::DocumentRegistry;
+use slterm_document::{DocumentPageCache, DocumentRegistry};
 use slterm_path::CanonicalPath;
 use slterm_workspace::{
     PanelGroupId, PanelId, PanelIdAllocator, ProjectId, ProjectSnapshot, SideViewId,
@@ -180,6 +182,9 @@ pub(crate) struct AppRoot {
     project_open_draining: bool,
     panel_ids: PanelIdAllocator,
     documents: DocumentRegistry,
+    paged_documents:
+        BTreeMap<slterm_document::DocumentId, Arc<crate::app_shell::paged_document::PagedDocument>>,
+    page_cache: Rc<RefCell<DocumentPageCache>>,
     #[allow(dead_code)] // 消费点 = Document 真实后台打开。
     document_open_service: Arc<crate::app_shell::documents::DocumentOpenService>,
     #[allow(dead_code)] // 消费点 = Document 单任务 FIFO 调度。
@@ -338,6 +343,8 @@ impl AppRoot {
             project_open_draining: false,
             panel_ids,
             documents,
+            paged_documents: BTreeMap::new(),
+            page_cache: Rc::new(RefCell::new(DocumentPageCache::new())),
             document_open_service: Arc::new(
                 crate::app_shell::documents::DocumentOpenService::default(),
             ),
@@ -383,7 +390,7 @@ impl AppRoot {
     fn commit_project_snapshot(&mut self, snapshot: ProjectSnapshot, cx: &mut App) {
         self.snapshot_generation = self.snapshot_generation.wrapping_add(1);
         let previous = std::mem::replace(&mut self.snapshot, snapshot);
-        self.reconcile_document_registry();
+        self.reconcile_document_registry(cx);
         self.reconcile_split_dividers(cx);
         self.reconcile_tab_scrolls(Some(&previous));
         if self.project_snapshot_recovery_failed {

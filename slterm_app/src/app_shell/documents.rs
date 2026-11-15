@@ -6,21 +6,27 @@ use std::sync::Arc;
 use ropey::Rope;
 use slterm_document::{
     DocumentId, DocumentMetadata, DocumentOpenOutcome, DocumentRegistry, DocumentSaveReceipt,
-    DocumentSaveRequest, TextStateId,
+    DocumentSaveRequest, EDITABLE_LIMIT_BYTES, TextStateId,
 };
 use slterm_path::{CanonicalPath, PathGrant, PathOperation, PathPolicy, PathRequest};
 use slterm_workspace::{ProjectRootStatus, ProjectSnapshot, ViewKey};
 use uuid::Uuid;
 
 use super::file_editor::document::{Document, DocumentWriteContext};
+use super::paged_document::PagedDocument;
 use crate::platform::document_paths::{DocumentPathResolver, SystemDocumentPathResolver};
 use crate::text_document::SaveError;
+
+pub(crate) enum OpenedDocumentBody {
+    Editable(Box<Document>),
+    Paged(Arc<PagedDocument>),
+}
 
 pub(crate) struct OpenedDocument {
     pub(crate) id: DocumentId,
     pub(crate) outcome: DocumentOpenOutcome,
-    /// 只有新聚合需要把已读快照移交给编辑器；既有聚合不得重读替换正文。
-    pub(crate) document: Option<Document>,
+    /// 只有新聚合移交已读内容；既有聚合继续复用原正文与读取端口。
+    pub(crate) body: Option<OpenedDocumentBody>,
 }
 
 /// 启动读取与所有恢复视图共享同一 Document 的 Ready 项目授权并集。
@@ -82,40 +88,64 @@ impl DocumentOpenService {
             return Ok(OpenedDocument {
                 id,
                 outcome: DocumentOpenOutcome::Existing,
-                document: None,
+                body: None,
             });
         }
 
-        let document = Document::load(resolved.canonical_path().as_path())?.with_write_context(
-            DocumentWriteContext::new(vec![grant], 0, 0, self.resolver.clone()),
-        );
-        if document.location() != &resolved {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "读取期间文件身份已变化",
-            ));
-        }
+        let initial_bytes = std::fs::metadata(resolved.canonical_path().as_path())?.len();
+        let body = if initial_bytes > EDITABLE_LIMIT_BYTES {
+            let document = Arc::new(PagedDocument::open(&resolved, None)?);
+            if document.index().total_bytes() != initial_bytes {
+                return Err(io::Error::other("文件在打开期间改变了长度"));
+            }
+            OpenedDocumentBody::Paged(document)
+        } else {
+            let document = Document::load(resolved.canonical_path().as_path())?.with_write_context(
+                DocumentWriteContext::new(vec![grant], 0, 0, self.resolver.clone()),
+            );
+            if document.location() != &resolved {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "读取期间文件身份已变化",
+                ));
+            }
+            if document.total_bytes > EDITABLE_LIMIT_BYTES {
+                return Err(io::Error::other("文件在打开期间增长为分页内容"));
+            }
+            OpenedDocumentBody::Editable(Box::new(document))
+        };
         let id = DocumentId::from_uuid(Uuid::now_v7()).expect("系统生成的 DocumentId 必须为 v7");
         let state =
             TextStateId::from_uuid(Uuid::now_v7()).expect("系统生成的 TextStateId 必须为 v7");
-        let text = Rope::from_str(&document.text);
-        let (id, outcome) = registry
-            .open(
+        let (id, outcome) = match &body {
+            OpenedDocumentBody::Editable(document) => registry.open(
                 id,
                 resolved,
-                text,
+                Rope::from_str(&document.text),
                 state,
                 document.bytes.clone(),
                 DocumentMetadata {
                     encoding: document.encoding.clone(),
                     read_only: document.read_only,
                 },
-            )
-            .map_err(io::Error::other)?;
+            ),
+            OpenedDocumentBody::Paged(document) => registry.open(
+                id,
+                resolved,
+                document.source(),
+                state,
+                Arc::default(),
+                DocumentMetadata {
+                    encoding: document.encoding().clone(),
+                    read_only: true,
+                },
+            ),
+        }
+        .map_err(io::Error::other)?;
         Ok(OpenedDocument {
             id,
             outcome,
-            document: (outcome == DocumentOpenOutcome::Opened).then_some(document),
+            body: (outcome == DocumentOpenOutcome::Opened).then_some(body),
         })
     }
 }
@@ -240,6 +270,30 @@ mod documents_tests {
             )
             .unwrap();
         registry.begin_save(id, authorization_generation).unwrap()
+    }
+
+    #[test]
+    fn large_file_opens_as_paged_source_without_prefix_rope() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = CanonicalPath::new(dunce::canonicalize(temp.path()).unwrap()).unwrap();
+        let file = temp.path().join("large.txt");
+        let mut bytes = b"paged-start\n".to_vec();
+        bytes.resize(slterm_document::EDITABLE_LIMIT_BYTES as usize + 1, b'x');
+        std::fs::write(&file, bytes).unwrap();
+        let mut registry = DocumentRegistry::new();
+
+        let opened = DocumentOpenService::default()
+            .open(&mut registry, &root, &CanonicalPath::new(&file).unwrap())
+            .unwrap();
+
+        let session = registry.session(opened.id).unwrap();
+        assert!(session.text().is_none());
+        assert!(session.paged().is_some());
+        assert!(session.is_read_only());
+        assert_eq!(
+            session.paged().unwrap().index().total_bytes(),
+            slterm_document::EDITABLE_LIMIT_BYTES + 1
+        );
     }
 
     #[test]
@@ -617,7 +671,7 @@ mod documents_tests {
         assert_eq!(first.outcome, DocumentOpenOutcome::Opened);
         assert_eq!(second.outcome, DocumentOpenOutcome::Existing);
         assert_eq!(second.id, first.id);
-        assert!(second.document.is_none());
+        assert!(second.body.is_none());
         assert_eq!(registry.len(), 1);
         assert_eq!(
             registry
