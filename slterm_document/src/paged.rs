@@ -29,14 +29,16 @@ impl From<PagedSource> for DocumentBody {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PagedSource {
     index: PageIndex,
+    line_index: PagedLineIndex,
     fingerprint: [u8; 32],
     source_generation: u64,
 }
 
 impl PagedSource {
-    pub fn new(index: PageIndex, fingerprint: [u8; 32]) -> Self {
+    pub fn new(index: PageIndex, fingerprint: [u8; 32], line_index: PagedLineIndex) -> Self {
         Self {
             index,
+            line_index,
             fingerprint,
             source_generation: 0,
         }
@@ -44,6 +46,10 @@ impl PagedSource {
 
     pub const fn index(&self) -> &PageIndex {
         &self.index
+    }
+
+    pub const fn line_index(&self) -> &PagedLineIndex {
+        &self.line_index
     }
 
     pub const fn source_generation(&self) -> u64 {
@@ -324,12 +330,24 @@ mod tests {
     use std::str::FromStr;
 
     use super::{
-        DocumentPageCache, PAGE_SOURCE_BYTES, PageIndex, PageKey, PagedLineIndex, SourceByteRange,
+        DocumentPageCache, PAGE_SOURCE_BYTES, PageIndex, PageKey, PagedLineIndex, PagedSource,
+        SourceByteRange,
     };
     use crate::DocumentId;
 
     fn document() -> DocumentId {
         DocumentId::from_str("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2a").unwrap()
+    }
+
+    #[test]
+    fn paged_source_preserves_its_line_index_across_clones() {
+        let source = PagedSource::new(
+            PageIndex::new(0, Vec::new()).unwrap(),
+            [4; 32],
+            PagedLineIndex::from_page_stats(&[(2, 6)]),
+        );
+        assert_eq!(source.line_index(), source.clone().line_index());
+        assert_eq!(source.line_index().line_count(), 3);
     }
 
     #[test]

@@ -111,7 +111,11 @@ impl PagedDocument {
     }
 
     pub(crate) fn source(&self) -> PagedSource {
-        PagedSource::new(self.index.clone(), self.fingerprint)
+        PagedSource::new(
+            self.index.clone(),
+            self.fingerprint,
+            self.line_index.clone(),
+        )
     }
 
     pub(crate) const fn encoding(&self) -> &TextEncoding {

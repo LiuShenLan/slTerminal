@@ -1237,6 +1237,7 @@ mod tests {
             crate::DocumentBody::Paged(crate::PagedSource::new(
                 crate::PageIndex::new(total, ranges).unwrap(),
                 [0; 32],
+                crate::PagedLineIndex::from_page_stats(&[]),
             ))
         }
 
@@ -1337,6 +1338,7 @@ mod tests {
             crate::DocumentBody::Paged(crate::PagedSource::new(
                 crate::PageIndex::new(0, Vec::new()).unwrap(),
                 fingerprint,
+                crate::PagedLineIndex::from_page_stats(&[]),
             ))
         };
         registry

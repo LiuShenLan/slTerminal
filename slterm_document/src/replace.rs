@@ -239,7 +239,11 @@ mod tests {
             .open(
                 id,
                 ResolvedPath::new(CanonicalPath::new("D:/work/paged.txt").unwrap(), None),
-                crate::PagedSource::new(crate::PageIndex::new(0, Vec::new()).unwrap(), [0; 32]),
+                crate::PagedSource::new(
+                    crate::PageIndex::new(0, Vec::new()).unwrap(),
+                    [0; 32],
+                    crate::PagedLineIndex::from_page_stats(&[]),
+                ),
                 state,
                 std::sync::Arc::default(),
                 DocumentMetadata {

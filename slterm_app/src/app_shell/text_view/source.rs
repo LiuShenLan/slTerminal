@@ -173,10 +173,10 @@ impl<'a> PagedTextSource<'a> {
     pub(crate) fn new(
         document_id: DocumentId,
         source: &'a PagedSource,
-        lines: &'a PagedLineIndex,
         cache: &'a mut DocumentPageCache,
         display: DisplayMap,
     ) -> Self {
+        let lines = source.line_index();
         Self {
             document_id,
             source,
@@ -365,11 +365,11 @@ mod tests {
             ],
         )
         .unwrap();
-        let source = PagedSource::new(pages, [7; 32]);
         let lines = PagedLineIndex::from_page_stats(&[(1, 4), (1, 5)]);
+        let source = PagedSource::new(pages, [7; 32], lines);
         let mut cache = DocumentPageCache::new();
         cache.insert(PageKey::new(id, 0, 0), "中\n".to_owned());
-        let mut text = PagedTextSource::new(id, &source, &lines, &mut cache, DisplayMap::new(4));
+        let mut text = PagedTextSource::new(id, &source, &mut cache, DisplayMap::new(4));
 
         let rows = text.visible_lines(0..3);
         assert_eq!(rows.len(), 3);
@@ -381,7 +381,7 @@ mod tests {
 
         let _ = text;
         cache.insert(PageKey::new(id, 0, 1), "😀\n".to_owned());
-        let mut text = PagedTextSource::new(id, &source, &lines, &mut cache, DisplayMap::new(4));
+        let mut text = PagedTextSource::new(id, &source, &mut cache, DisplayMap::new(4));
         let rows = text.visible_lines(0..3);
         assert_eq!(rows[1].as_text().unwrap().text(), "😀");
         assert_eq!(rows[1].as_text().unwrap().byte_range(), 4..8);
@@ -401,16 +401,16 @@ mod tests {
             ],
         )
         .unwrap();
-        let source = PagedSource::new(pages, [9; 32]);
         let lines = PagedLineIndex::from_page_stats(&[(0, 3), (2, 10)]);
+        let source = PagedSource::new(pages, [9; 32], lines);
         let mut cache = DocumentPageCache::new();
         cache.insert(PageKey::new(id, 0, 0), "abc".to_owned());
-        let mut text = PagedTextSource::new(id, &source, &lines, &mut cache, DisplayMap::new(4));
+        let mut text = PagedTextSource::new(id, &source, &mut cache, DisplayMap::new(4));
         assert!(text.visible_lines(0..1)[0].as_text().is_none());
         let _ = text;
 
         cache.insert(PageKey::new(id, 0, 1), "😀\nnext\n".to_owned());
-        let mut text = PagedTextSource::new(id, &source, &lines, &mut cache, DisplayMap::new(4));
+        let mut text = PagedTextSource::new(id, &source, &mut cache, DisplayMap::new(4));
         let rows = text.visible_lines(0..3);
         assert_eq!(rows[0].as_text().unwrap().text(), "abc😀");
         assert_eq!(rows[0].as_text().unwrap().byte_range(), 0..7);
@@ -423,10 +423,10 @@ mod tests {
     fn paged_source_does_not_fake_empty_text_for_a_nonempty_source() {
         let id = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0f2a".parse().unwrap();
         let pages = PageIndex::new(1, vec![SourceByteRange::new(0, 1).unwrap()]).unwrap();
-        let source = PagedSource::new(pages, [3; 32]);
         let lines = PagedLineIndex::from_page_stats(&[]);
+        let source = PagedSource::new(pages, [3; 32], lines);
         let mut cache = DocumentPageCache::new();
-        let mut text = PagedTextSource::new(id, &source, &lines, &mut cache, DisplayMap::new(4));
+        let mut text = PagedTextSource::new(id, &source, &mut cache, DisplayMap::new(4));
 
         let rows = text.visible_lines(0..1);
         assert!(rows[0].as_text().is_none());

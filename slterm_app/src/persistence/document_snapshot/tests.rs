@@ -8,7 +8,7 @@ use std::time::Instant;
 use ropey::Rope;
 use slterm_document::{
     DocumentId, DocumentMetadata, DocumentRegistry, DocumentSaveReceipt, EditOrigin,
-    EditTransaction, MergePolicy, PageIndex, PagedSource, TextEdit, TextStateId,
+    EditTransaction, MergePolicy, PageIndex, PagedLineIndex, PagedSource, TextEdit, TextStateId,
 };
 use slterm_path::{AppPaths, CanonicalPath, ResolvedPath};
 use slterm_workspace::{
@@ -1143,7 +1143,11 @@ fn clean_paged_and_oversized_documents_have_no_snapshot() {
         .open(
             id,
             ResolvedPath::new(CanonicalPath::new("D:/work/paged.txt").unwrap(), None),
-            PagedSource::new(PageIndex::new(0, Vec::new()).unwrap(), [0; 32]),
+            PagedSource::new(
+                PageIndex::new(0, Vec::new()).unwrap(),
+                [0; 32],
+                PagedLineIndex::from_page_stats(&[]),
+            ),
             state('a', '0'),
             Arc::default(),
             DocumentMetadata {
