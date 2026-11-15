@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use gpui::{ShapedLine, SharedString};
+use gpui::{Bounds, Hsla, Pixels, ShapedLine, SharedString};
 use slterm_document::{DocumentId, TextStateId};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -22,6 +22,31 @@ pub(crate) struct TextLayoutKey {
     pub(crate) first_visible_column: usize,
     pub(crate) dpi_bits: u32,
     pub(crate) theme_revision: u64,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct LayoutMetrics {
+    pub(crate) bounds: Bounds<Pixels>,
+    pub(crate) cell_width: Pixels,
+    pub(crate) line_height: Pixels,
+}
+
+impl LayoutMetrics {
+    pub(crate) fn visible_columns(&self) -> usize {
+        (self.bounds.size.width / self.cell_width).ceil().max(1.0) as usize
+    }
+
+    pub(crate) fn visible_whole_columns(&self) -> usize {
+        (self.bounds.size.width / self.cell_width).floor() as usize
+    }
+}
+
+#[derive(Clone, PartialEq)]
+pub(crate) struct ThemeFingerprint {
+    pub(crate) foreground: Hsla,
+    pub(crate) accent: Hsla,
+    pub(crate) mono_font_family: SharedString,
+    pub(crate) mono_font_size: Pixels,
 }
 
 #[derive(Default)]

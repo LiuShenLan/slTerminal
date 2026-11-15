@@ -1,6 +1,7 @@
 //! 真实文件的只读源范围分页与逐页严格解码。
 
 use std::io::{self, Read as _, Seek as _};
+use std::sync::Arc;
 
 use sha2::{Digest as _, Sha256};
 use slterm_document::{
@@ -8,6 +9,9 @@ use slterm_document::{
     PageIndex, PagedLineIndex, PagedSource, SearchError, SourceByteRange, TextChunk, TextEncoding,
 };
 use slterm_path::ResolvedPath;
+
+/// 单页后台读取端口；实现只能返回该页真实完整解码文本。
+pub(crate) type PageReader = Arc<dyn Fn(usize) -> io::Result<String> + Send + Sync>;
 
 /// 分页只读源；索引不保存完整正文，解码页由全应用 LRU 另行持有。
 pub(crate) struct PagedDocument {
@@ -121,6 +125,12 @@ impl PagedDocument {
 
     pub(crate) const fn encoding(&self) -> &TextEncoding {
         &self.encoding
+    }
+
+    #[allow(dead_code)] // 消费点 = AppRoot Paged 视图生产接线。
+    pub(crate) fn page_reader(self: &Arc<Self>) -> PageReader {
+        let document = self.clone();
+        Arc::new(move |page| document.read_page(page))
     }
 
     /// 每次读取复核身份与源长度；旧索引不得读取已增长或已替换的文件。

@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use gpui::{
     App, Bounds, ContentMask, Context, ElementInputHandler, EntityInputHandler, FocusHandle,
-    Focusable, Font, Hsla, InteractiveElement as _, MouseButton, MouseDownEvent, MouseMoveEvent,
+    Focusable, Font, InteractiveElement as _, MouseButton, MouseDownEvent, MouseMoveEvent,
     MouseUpEvent, ParentElement as _, Pixels, Point, Render, ScrollWheelEvent, ShapedLine,
     SharedString, Styled as _, TextAlign, TextRun, UTF16Selection, Window, canvas, div, fill,
     point, px, size,
@@ -23,7 +23,7 @@ use slterm_document::{
 };
 use uuid::Uuid;
 
-use super::layout::{FontMetricsKey, LayoutCache, TextLayoutKey};
+use super::layout::{FontMetricsKey, LayoutCache, LayoutMetrics, TextLayoutKey, ThemeFingerprint};
 use super::metrics::{
     DisplayMap, rope_ceil_grapheme_boundary, rope_floor_grapheme_boundary,
     rope_is_grapheme_boundary, rope_next_grapheme_boundary, rope_previous_grapheme_boundary,
@@ -183,37 +183,12 @@ fn normalized_input_utf16_offset(original: &Rope, offset: usize) -> Option<usize
     offset.checked_sub(crlf_count)
 }
 
-#[derive(Clone, Copy)]
-struct LayoutMetrics {
-    bounds: Bounds<Pixels>,
-    cell_width: Pixels,
-    line_height: Pixels,
-}
-
-impl LayoutMetrics {
-    fn visible_columns(&self) -> usize {
-        (self.bounds.size.width / self.cell_width).ceil().max(1.0) as usize
-    }
-
-    fn visible_whole_columns(&self) -> usize {
-        (self.bounds.size.width / self.cell_width).floor() as usize
-    }
-}
-
 struct PaintFrame {
     bounds: Bounds<Pixels>,
     lines: Vec<(ShapedLine, super::source::VisibleLine)>,
     selection: Range<usize>,
     cursor: usize,
     layout: LayoutMetrics,
-}
-
-#[derive(Clone, PartialEq)]
-struct ThemeFingerprint {
-    foreground: Hsla,
-    accent: Hsla,
-    mono_font_family: SharedString,
-    mono_font_size: Pixels,
 }
 
 /// Document 的专用文本视图；Rope 是不可变展示快照，修改只发 core 事务。

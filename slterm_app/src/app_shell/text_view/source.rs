@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -169,6 +170,7 @@ pub(crate) struct PagedTextSource<'a> {
     lines: &'a PagedLineIndex,
     cache: &'a mut DocumentPageCache,
     display: DisplayMap,
+    missing_pages: BTreeSet<usize>,
 }
 
 #[derive(Clone, Copy)]
@@ -235,7 +237,12 @@ impl<'a> PagedTextSource<'a> {
             lines,
             cache,
             display,
+            missing_pages: BTreeSet::new(),
         }
+    }
+
+    pub(crate) const fn missing_pages(&self) -> &BTreeSet<usize> {
+        &self.missing_pages
     }
 
     fn read_continuation(
@@ -247,7 +254,10 @@ impl<'a> PagedTextSource<'a> {
     ) -> Option<VisibleLine> {
         loop {
             let key = PageKey::new(self.document_id, self.source.source_generation(), page);
-            let page_text = self.cache.get(&key)?;
+            let Some(page_text) = self.cache.get(&key) else {
+                self.missing_pages.insert(page);
+                return None;
+            };
             text.push_str(page_text.split('\n').next()?);
             if self.lines.line_ends_in_page(page, 0)? || page + 1 == self.source.index().len() {
                 break;
@@ -289,7 +299,10 @@ impl<'a> PagedTextSource<'a> {
                 self.source.source_generation(),
                 context_page,
             );
-            let page_text = self.cache.get(&key)?;
+            let Some(page_text) = self.cache.get(&key) else {
+                self.missing_pages.insert(context_page);
+                return None;
+            };
             if local_start <= local_end
                 && local_end <= page_text.len()
                 && page_text.is_char_boundary(local_start)
@@ -403,7 +416,11 @@ impl<'a> PagedTextSource<'a> {
                     chunk_start = end;
                     page += 1;
                     let key = PageKey::new(self.document_id, self.source.source_generation(), page);
-                    page_text = self.cache.get(&key)?;
+                    let Some(next_page) = self.cache.get(&key) else {
+                        self.missing_pages.insert(page);
+                        return None;
+                    };
+                    page_text = next_page;
                     let segment_len = page_text.find('\n').unwrap_or(page_text.len());
                     segment_range = 0..segment_len;
                     // 上游 RI 状态若直接续传，会在 PreContext 中重复计数；重建后先判接缝。
@@ -458,6 +475,7 @@ impl TextSource for PagedTextSource<'_> {
             let local_end = local_start + row_end - index;
             let key = PageKey::new(self.document_id, self.source.source_generation(), page);
             let Some(page_text) = self.cache.get(&key) else {
+                self.missing_pages.insert(page);
                 rows.extend((index..row_end).map(|index| VisibleRow::Loading { index }));
                 index = row_end;
                 continue;
@@ -502,6 +520,7 @@ impl PagedTextSource<'_> {
         lines: Range<usize>,
         columns: Range<usize>,
     ) -> Vec<VisibleRow> {
+        self.missing_pages.clear();
         let start = lines.start.min(self.line_count());
         let end = lines.end.min(self.line_count()).max(start);
         let mut rows = Vec::with_capacity(end - start);
@@ -535,6 +554,7 @@ impl PagedTextSource<'_> {
             let local_end = local_start + row_end - index;
             let key = PageKey::new(self.document_id, self.source.source_generation(), page);
             let Some(page_text) = self.cache.get(&key) else {
+                self.missing_pages.insert(page);
                 rows.extend((index..row_end).map(|index| VisibleRow::Loading { index }));
                 index = row_end;
                 continue;
@@ -1016,6 +1036,10 @@ mod tests {
             }
             let mut text = PagedTextSource::new(id, &source, &mut cache, DisplayMap::new(4));
             assert!(text.visible_line_windows(0..1, 0..2)[0].as_text().is_none());
+            assert_eq!(
+                text.missing_pages().iter().copied().collect::<Vec<_>>(),
+                vec![missing]
+            );
         }
     }
 
