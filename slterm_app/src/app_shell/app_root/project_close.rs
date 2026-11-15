@@ -18,7 +18,7 @@ use crate::persistence::close::{
 
 pub(super) struct LocalProjectClose {
     pub(super) project: Entity<ProjectView>,
-    pub(super) coordinator: CloseCoordinator<String>,
+    pub(super) coordinator: CloseCoordinator<slterm_workspace::CloseTarget>,
     pub(super) persisted: PersistedCloseIntent,
     pub(super) stop_observation: Option<PtyStopObservation>,
     pub(super) outcome_unknown: bool,
@@ -76,7 +76,7 @@ impl AppRoot {
             .terminals()
             .filter(|terminal| terminal.project_id() == id)
             .map(|terminal| CloseObject {
-                id: terminal.id().to_string(),
+                id: slterm_workspace::CloseTarget::Terminal(terminal.id()),
                 generation: self.snapshot_generation,
                 decision: CloseDecision::NotRequired,
             })

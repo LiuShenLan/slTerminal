@@ -4,7 +4,7 @@ use super::super::task_service::TaskId;
 use super::close::flush_when_ready;
 use super::*;
 use crate::persistence::close::CloseCommitStatus;
-use slterm_workspace::{ClosePhase, CloseStage};
+use slterm_workspace::{CloseDecision, ClosePhase, CloseStage};
 
 fn execute_batch(
     root: &Entity<AppRoot>,
@@ -12,13 +12,26 @@ fn execute_batch(
     id: CommandId,
     group: PanelGroupId,
 ) -> Result<CommandOutcome, AppRootError> {
+    execute_batch_with_decisions(root, window, id, group, BTreeMap::new())
+}
+
+fn execute_batch_with_decisions(
+    root: &Entity<AppRoot>,
+    window: &mut VisualTestContext,
+    id: CommandId,
+    group: PanelGroupId,
+    document_decisions: BTreeMap<slterm_document::DocumentId, CloseDecision>,
+) -> Result<CommandOutcome, AppRootError> {
     window.update(|window, cx| {
         root.update(cx, |root, cx| {
             root.execute_command(
                 id,
                 CommandSource::Menu,
                 CommandTarget::Focused,
-                Some(CommandParameters::CloseGroup { group_id: group }),
+                Some(CommandParameters::CloseGroup {
+                    group_id: group,
+                    document_decisions,
+                }),
                 window,
                 cx,
             )
@@ -188,6 +201,277 @@ fn integration_batch_close(cx: &mut TestAppContext) {
         0
     );
     assert_eq!(state.borrow().attempts, 3);
+}
+
+#[gpui::test]
+fn document_batch_close_partial_save(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let first_path = temp.path().join("first.txt");
+    let second_path = temp.path().join("second.txt");
+    std::fs::write(&first_path, "first").unwrap();
+    std::fs::write(&second_path, "second").unwrap();
+    let first_path = CanonicalPath::new(dunce::canonicalize(&first_path).unwrap()).unwrap();
+    let second_path = CanonicalPath::new(dunce::canonicalize(&second_path).unwrap()).unwrap();
+    let (root, mut window, state) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, temp.path().to_str().unwrap());
+    let terminal = new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_A);
+    super::documents::open_document(&root, &mut window, PROJECT_A, GROUP_A, first_path.clone());
+    super::documents::open_document(&root, &mut window, PROJECT_A, GROUP_A, second_path.clone());
+    let ids = root.read_with(cx, |root, _| {
+        root.snapshot()
+            .documents()
+            .map(|(id, location)| {
+                if location.canonical_path() == &first_path {
+                    ("first", id)
+                } else if location.canonical_path() == &second_path {
+                    ("second", id)
+                } else {
+                    panic!("未知 Document 位置")
+                }
+            })
+            .collect::<BTreeMap<_, _>>()
+    });
+    root.update(cx, |root, _| {
+        for (name, replacement) in [("first", "first saved"), ("second", "second local")] {
+            let id = ids[name];
+            let session = root.documents.session(id).unwrap();
+            let revision = session.text_revision();
+            let end = session.text().len();
+            root.documents
+                .apply(
+                    slterm_document::EditTransaction {
+                        document_id: id,
+                        expected_text_revision: revision,
+                        edits: vec![slterm_document::TextEdit::new(0..end, replacement)],
+                        origin: slterm_document::EditOrigin::ReplaceAll,
+                        merge_policy: slterm_document::MergePolicy::Disallowed,
+                    },
+                    slterm_document::TextStateId::from_uuid(uuid::Uuid::now_v7()).unwrap(),
+                    std::time::Instant::now(),
+                )
+                .unwrap();
+        }
+    });
+    std::fs::write(second_path.as_path(), "second external").unwrap();
+    let before = root.read_with(cx, |root, _| root.snapshot().clone());
+    let decisions = ids.values().map(|id| (*id, CloseDecision::Save)).collect();
+
+    execute_batch_with_decisions(
+        &root,
+        &mut window,
+        CommandId::CloseAllViews,
+        group_id(GROUP_A),
+        decisions,
+    )
+    .unwrap();
+    window.run_until_parked();
+
+    assert_eq!(
+        root.read_with(cx, |root, _| root.snapshot().clone()),
+        before
+    );
+    assert_eq!(
+        root.read_with(cx, |root, cx| root.panel_count(project_id(PROJECT_A), cx)),
+        3
+    );
+    assert_eq!(
+        std::fs::read_to_string(first_path.as_path()).unwrap(),
+        "first saved"
+    );
+    assert_eq!(
+        std::fs::read_to_string(second_path.as_path()).unwrap(),
+        "second external"
+    );
+    root.read_with(cx, |root, cx| {
+        assert!(!root.documents.session(ids["first"]).unwrap().is_dirty());
+        let second = root.documents.session(ids["second"]).unwrap();
+        assert!(second.is_dirty());
+        assert_eq!(second.text().to_string(), "second local");
+        assert!(
+            root.terminal_panel(project_id(PROJECT_A), terminal_id(TERMINAL_A), cx)
+                .unwrap()
+                .1
+                .read(cx)
+                .session
+                .is_some()
+        );
+        assert_eq!(root.terminal_close_batches.len(), 1);
+        assert_eq!(
+            root.terminal_close_batches
+                .values()
+                .next()
+                .unwrap()
+                .coordinator
+                .phase(),
+            ClosePhase::Failed(CloseStage::Save)
+        );
+    });
+    assert!(matches!(
+        state.borrow().sessions[&terminal.sequence()].try_recv(),
+        Err(TryRecvError::Empty)
+    ));
+
+    // 冲突解除后重试同一 Save 意图，全部保存成功才停止终端并销毁面板。
+    std::fs::write(second_path.as_path(), "second").unwrap();
+    execute_batch(
+        &root,
+        &mut window,
+        CommandId::CloseAllViews,
+        group_id(GROUP_A),
+    )
+    .unwrap();
+    window.run_until_parked();
+    assert_eq!(
+        root.read_with(cx, |root, cx| root.panel_count(project_id(PROJECT_A), cx)),
+        0
+    );
+    assert!(root.read_with(cx, |root, _| root.terminal_close_batches.is_empty()));
+    assert!(root.read_with(cx, |root, _| root.documents.is_empty()));
+    assert_eq!(
+        std::fs::read_to_string(second_path.as_path()).unwrap(),
+        "second local"
+    );
+    assert!(matches!(
+        state.borrow().sessions[&terminal.sequence()].try_recv(),
+        Ok(Msg::Shutdown)
+    ));
+}
+
+#[gpui::test]
+fn integration_last_reference_close(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let project_a = temp.path().join("a");
+    std::fs::create_dir(&project_a).unwrap();
+    let file = project_a.join("shared.txt");
+    std::fs::write(&file, "disk").unwrap();
+    let file = CanonicalPath::new(dunce::canonicalize(file).unwrap()).unwrap();
+    let (root, mut window, _) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, project_a.to_str().unwrap());
+    super::documents::open_document(&root, &mut window, PROJECT_A, GROUP_A, file.clone());
+    add_project(&root, &mut window, PROJECT_B, temp.path().to_str().unwrap());
+    super::documents::open_document(&root, &mut window, PROJECT_B, GROUP_B, file.clone());
+    let (id, shared_panel) = root.read_with(cx, |root, cx| {
+        let (id, _) = root.snapshot().documents().next().unwrap();
+        let view = ViewKey::Editor {
+            project_id: project_id(PROJECT_B),
+            document_id: id,
+        };
+        (
+            id,
+            root.panel_for_view(project_id(PROJECT_B), &view, cx)
+                .unwrap(),
+        )
+    });
+    root.update(cx, |root, _| {
+        let session = root.documents.session(id).unwrap();
+        let revision = session.text_revision();
+        let end = session.text().len();
+        root.documents
+            .apply(
+                slterm_document::EditTransaction {
+                    document_id: id,
+                    expected_text_revision: revision,
+                    edits: vec![slterm_document::TextEdit::new(0..end, "draft")],
+                    origin: slterm_document::EditOrigin::ReplaceAll,
+                    merge_policy: slterm_document::MergePolicy::Disallowed,
+                },
+                slterm_document::TextStateId::from_uuid(uuid::Uuid::now_v7()).unwrap(),
+                std::time::Instant::now(),
+            )
+            .unwrap();
+    });
+    activate_project(&root, &mut window, PROJECT_A);
+
+    // 集合外仍有引用，不需要也不允许内容决定；共享正文与既有面板不变。
+    execute_batch(
+        &root,
+        &mut window,
+        CommandId::CloseAllViews,
+        group_id(GROUP_A),
+    )
+    .unwrap();
+    window.run_until_parked();
+
+    assert!(root.read_with(cx, |root, _| root.documents.session(id).unwrap().is_dirty()));
+    assert_eq!(
+        root.read_with(cx, |root, cx| {
+            let view = ViewKey::Editor {
+                project_id: project_id(PROJECT_B),
+                document_id: id,
+            };
+            root.panel_for_view(project_id(PROJECT_B), &view, cx)
+                .unwrap()
+        }),
+        shared_panel
+    );
+    activate_project(&root, &mut window, PROJECT_B);
+    let before = root.read_with(cx, |root, _| root.snapshot().clone());
+    assert!(matches!(
+        execute_batch(
+            &root,
+            &mut window,
+            CommandId::CloseAllViews,
+            group_id(GROUP_B),
+        ),
+        Err(AppRootError::DocumentClose(
+            slterm_workspace::DocumentCloseError::MissingDecision(missing)
+        )) if missing == id
+    ));
+    assert_eq!(
+        root.read_with(cx, |root, _| root.snapshot().clone()),
+        before
+    );
+    assert_eq!(
+        root.read_with(cx, |root, cx| {
+            let view = ViewKey::Editor {
+                project_id: project_id(PROJECT_B),
+                document_id: id,
+            };
+            root.panel_for_view(project_id(PROJECT_B), &view, cx)
+                .unwrap()
+        }),
+        shared_panel
+    );
+    std::fs::write(file.as_path(), "external").unwrap();
+    execute_batch_with_decisions(
+        &root,
+        &mut window,
+        CommandId::CloseAllViews,
+        group_id(GROUP_B),
+        BTreeMap::from([(id, CloseDecision::Save)]),
+    )
+    .unwrap();
+    window.run_until_parked();
+    assert_eq!(std::fs::read_to_string(file.as_path()).unwrap(), "external");
+    assert_eq!(
+        root.read_with(cx, |root, _| {
+            root.terminal_close_batches
+                .values()
+                .next()
+                .unwrap()
+                .coordinator
+                .phase()
+        }),
+        ClosePhase::Failed(CloseStage::Save)
+    );
+
+    // 纯 Document 批次同样必须能重试，不依赖任何终端成员。
+    std::fs::write(file.as_path(), "disk").unwrap();
+    execute_batch(
+        &root,
+        &mut window,
+        CommandId::CloseAllViews,
+        group_id(GROUP_B),
+    )
+    .unwrap();
+    window.run_until_parked();
+
+    assert!(root.read_with(cx, |root, _| root.documents.is_empty()));
+    assert_eq!(std::fs::read_to_string(file.as_path()).unwrap(), "draft");
+    assert_eq!(
+        root.read_with(cx, |root, cx| root.panel_count(project_id(PROJECT_B), cx)),
+        0
+    );
 }
 
 #[gpui::test]
@@ -527,7 +811,10 @@ fn batch_stop_failure_retries_original_batch_without_rejoin_or_new_target(cx: &m
         .unwrap();
     assert_eq!(
         object_keys,
-        vec![TERMINAL_A.to_owned(), TERMINAL_B.to_owned()]
+        vec![
+            format!("terminal:{TERMINAL_A}"),
+            format!("terminal:{TERMINAL_B}")
+        ]
     );
     for panel in [first, second] {
         assert!(matches!(

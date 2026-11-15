@@ -38,7 +38,10 @@ fn tab_list_command_item(
                 id,
                 CommandSource::Menu,
                 CommandTarget::Focused,
-                Some(CommandParameters::CloseGroup { group_id }),
+                Some(CommandParameters::CloseGroup {
+                    group_id,
+                    document_decisions: Default::default(),
+                }),
                 window,
                 cx,
             ) {

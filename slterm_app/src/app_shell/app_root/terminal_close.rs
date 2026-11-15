@@ -6,7 +6,7 @@ use gpui::{AnyWindowHandle, App, Context, Entity, Window};
 use sha2::{Digest as _, Sha256};
 use slterm_workspace::{
     CloseAttempt, CloseCoordinator, CloseDecision, CloseEffect, CloseIntent, CloseObject,
-    ClosePhase, CloseScope, CloseStage, ProjectSnapshot, TerminalId, TerminalRecord,
+    ClosePhase, CloseScope, CloseStage, CloseTarget, ProjectSnapshot, TerminalId, TerminalRecord,
 };
 
 use crate::gpui_terminal::view::TerminalView;
@@ -29,7 +29,7 @@ pub(super) struct LocalTerminalClose {
     pub(super) record: TerminalRecord,
     pub(super) panel_id: slterm_workspace::PanelId,
     pub(super) terminal: Entity<TerminalView>,
-    pub(super) coordinator: CloseCoordinator<String>,
+    pub(super) coordinator: CloseCoordinator<CloseTarget>,
     pub(super) persisted: Option<PersistedCloseIntent>,
     pub(super) stop_observation: Option<PtyStopObservation>,
     pub(super) outcome_unknown: bool,
@@ -79,7 +79,7 @@ impl AppRoot {
         let scope = CloseScope::Panels { project_id };
         let intent = CloseIntent::new(
             vec![CloseObject {
-                id: id.to_string(),
+                id: CloseTarget::Terminal(id),
                 generation: self.snapshot_generation,
                 decision: CloseDecision::NotRequired,
             }],
@@ -168,7 +168,7 @@ impl AppRoot {
         let close_id = uuid::Uuid::now_v7().to_string();
         let scope = CloseScope::Panels { project_id };
         let objects = vec![CloseObject {
-            id: id.to_string(),
+            id: CloseTarget::Terminal(id),
             generation: self.snapshot_generation,
             decision: CloseDecision::NotRequired,
         }];
@@ -737,8 +737,8 @@ impl AppRoot {
         let Some(close) = self.terminal_closes.get(&id) else {
             return;
         };
-        let panels = [(close.panel_id, close.terminal.clone())];
-        self.detach_terminal_panels(
+        let panels = [close.panel_id];
+        self.detach_panels(
             close.record.project_id(),
             &panels,
             preferred_panel,
@@ -748,11 +748,11 @@ impl AppRoot {
         );
     }
 
-    /// 单终端与批量关闭共用一次焦点恢复；批量先排除全部目标再选择剩余面板。
-    pub(super) fn detach_terminal_panels(
+    /// 单视图与批量关闭共用一次焦点恢复；批量先排除全部目标再选择剩余面板。
+    pub(super) fn detach_panels(
         &mut self,
         project_id: slterm_workspace::ProjectId,
-        panels: &[(slterm_workspace::PanelId, Entity<TerminalView>)],
+        panels: &[slterm_workspace::PanelId],
         preferred_panel: Option<slterm_workspace::PanelId>,
         divider_focus_removed: bool,
         window: &mut Window,
@@ -761,15 +761,13 @@ impl AppRoot {
         let Some(project) = self.projects.get(&project_id).cloned() else {
             return;
         };
-        let closing = panels
-            .iter()
-            .map(|(panel_id, _)| *panel_id)
-            .collect::<BTreeSet<_>>();
-        let focused_panel = panels.iter().find_map(|(panel_id, terminal)| {
-            (window
-                .focused(cx)
-                .is_some_and(|focused| focused == terminal.read(cx).focus_handle))
-            .then_some(*panel_id)
+        let closing = panels.iter().copied().collect::<BTreeSet<_>>();
+        let focused_panel = panels.iter().copied().find(|panel_id| {
+            project.read(cx).panels.get(panel_id).is_some_and(|panel| {
+                window
+                    .focused(cx)
+                    .is_some_and(|focused| focused == panel.focus_handle(cx))
+            })
         });
         let was_focused = divider_focus_removed || focused_panel.is_some();
         let next_panel = preferred_panel
@@ -803,7 +801,7 @@ impl AppRoot {
                 self.focus_manager.sync_window_focus(window, cx);
             }
         }
-        for (panel_id, terminal) in panels {
+        for panel_id in panels {
             let focus_token = self.panel_focus.get(panel_id).map(|focus| focus.token());
             if let Some(token) = focus_token
                 && let Err(error) = self.focus_manager.unregister(token)
@@ -816,7 +814,6 @@ impl AppRoot {
             }
             self.panel_focus.remove(panel_id);
             self.panel_subscriptions.remove(panel_id);
-            let _ = terminal;
         }
         project.update(cx, |project, _| {
             if project
@@ -862,10 +859,10 @@ pub(super) fn close_fingerprint(
     close_id: &str,
     scope: &CloseScope,
     store_epoch: &str,
-    objects: &[CloseObject<String>],
+    objects: &[CloseObject<CloseTarget>],
 ) -> [u8; 32] {
     let mut hasher = Sha256::new();
-    hash_field(&mut hasher, b"slterm-terminal-close-v1");
+    hash_field(&mut hasher, b"slterm-close-v2");
     hash_field(&mut hasher, close_id.as_bytes());
     match scope {
         CloseScope::Panels { project_id } => {
@@ -881,7 +878,16 @@ pub(super) fn close_fingerprint(
     }
     hash_field(&mut hasher, store_epoch.as_bytes());
     for object in objects {
-        hash_field(&mut hasher, object.id.as_bytes());
+        match object.id {
+            CloseTarget::Terminal(id) => {
+                hash_field(&mut hasher, b"terminal");
+                hash_field(&mut hasher, id.to_string().as_bytes());
+            }
+            CloseTarget::Document(id) => {
+                hash_field(&mut hasher, b"document");
+                hash_field(&mut hasher, id.to_string().as_bytes());
+            }
+        }
         hasher.update(object.generation.to_be_bytes());
         let decision = match object.decision {
             CloseDecision::Save => 0,
@@ -908,9 +914,9 @@ mod fingerprint_tests {
         }
     }
 
-    fn objects() -> Vec<CloseObject<String>> {
+    fn objects() -> Vec<CloseObject<CloseTarget>> {
         vec![CloseObject {
-            id: "terminal-object".to_owned(),
+            id: CloseTarget::Terminal(TerminalId::from_uuid(uuid::Uuid::now_v7()).unwrap()),
             generation: 17,
             decision: CloseDecision::NotRequired,
         }]
@@ -945,7 +951,7 @@ mod fingerprint_tests {
             close_fingerprint("close-a", &other_scope, "epoch-a", &objects)
         );
         let mut changed = objects.clone();
-        changed[0].id = "other-terminal".to_owned();
+        changed[0].id = CloseTarget::Terminal(TerminalId::from_uuid(uuid::Uuid::now_v7()).unwrap());
         assert_ne!(
             baseline,
             close_fingerprint("close-a", &scope, "epoch-a", &changed)

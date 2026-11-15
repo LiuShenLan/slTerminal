@@ -2,7 +2,7 @@
 
 use super::*;
 
-fn open_document(
+pub(super) fn open_document(
     root: &Entity<AppRoot>,
     window: &mut VisualTestContext,
     project: &str,

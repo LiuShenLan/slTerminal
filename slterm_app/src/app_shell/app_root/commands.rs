@@ -149,6 +149,7 @@ pub(crate) enum AppRootError {
     ProjectPath(io::Error),
     #[allow(dead_code)] // 消费点 = Document 真实打开队列与后续 OpenFile。
     DocumentOpen(io::Error),
+    DocumentClose(slterm_workspace::DocumentCloseError),
     Focus(FocusError),
     ProjectNotActive,
     NewTerminalTargetUnauthorized,
@@ -181,6 +182,7 @@ impl fmt::Display for AppRootError {
             Self::Launch(error) => write!(formatter, "终端启动失败: {error}"),
             Self::ProjectPath(error) => write!(formatter, "项目根真实路径解析失败: {error}"),
             Self::DocumentOpen(error) => write!(formatter, "文档打开失败: {error}"),
+            Self::DocumentClose(error) => write!(formatter, "文档关闭守卫失败: {error}"),
             Self::Focus(error) => write!(formatter, "焦点目标不可用: {error:?}"),
             Self::ProjectNotActive => formatter.write_str("只能在活跃项目中显式创建终端"),
             Self::NewTerminalTargetUnauthorized => formatter.write_str("新终端目标项目未获授权"),
@@ -236,6 +238,7 @@ impl std::error::Error for AppRootError {
             | Self::Closing
             | Self::ProjectSnapshotCommitInFlight
             | Self::ProjectSnapshotRecoveryFailed
+            | Self::DocumentClose(_)
             | Self::TerminalCloseRunning
             | Self::TerminalCloseState
             | Self::TerminalCloseOutcomeUnknown
@@ -268,6 +271,12 @@ impl From<ProjectSnapshotError> for AppRootError {
 impl From<LayoutError> for AppRootError {
     fn from(error: LayoutError) -> Self {
         Self::Layout(error)
+    }
+}
+
+impl From<slterm_workspace::DocumentCloseError> for AppRootError {
+    fn from(error: slterm_workspace::DocumentCloseError) -> Self {
+        Self::DocumentClose(error)
     }
 }
 
@@ -765,7 +774,8 @@ impl AppRoot {
                 matches!(
                     close.coordinator.phase(),
                     slterm_workspace::ClosePhase::Running(
-                        slterm_workspace::CloseStage::CommitState
+                        slterm_workspace::CloseStage::Save
+                            | slterm_workspace::CloseStage::CommitState
                     ) | slterm_workspace::ClosePhase::Failed(
                         slterm_workspace::CloseStage::CommitState
                     )
@@ -775,7 +785,8 @@ impl AppRoot {
                 matches!(
                     close.coordinator.phase(),
                     slterm_workspace::ClosePhase::Running(
-                        slterm_workspace::CloseStage::CommitState
+                        slterm_workspace::CloseStage::Save
+                            | slterm_workspace::CloseStage::CommitState
                     ) | slterm_workspace::ClosePhase::Failed(
                         slterm_workspace::CloseStage::CommitState
                     )

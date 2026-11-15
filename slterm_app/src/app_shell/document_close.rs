@@ -9,6 +9,7 @@ use slterm_workspace::{CloseDecision, CloseIntent, CloseTarget};
 use super::documents::DocumentSaveService;
 use crate::text_document::SaveError;
 
+#[allow(dead_code)] // 结构化错误值由失败断言与后续聚合提示读取。
 #[derive(Debug)]
 pub(crate) enum DocumentSaveFailureKind {
     RevisionMismatch,
@@ -16,19 +17,21 @@ pub(crate) enum DocumentSaveFailureKind {
     State(SaveTransactionError),
 }
 
+#[allow(dead_code)] // 失败身份与种类由测试及后续用户提示读取。
 #[derive(Debug)]
 pub(crate) struct DocumentSaveFailure {
     document_id: DocumentId,
     pub(crate) kind: DocumentSaveFailureKind,
 }
 
+#[allow(dead_code)] // 访问器由聚合失败测试与后续提示使用。
 impl DocumentSaveFailure {
     pub(crate) const fn document_id(&self) -> DocumentId {
         self.document_id
     }
 }
 
-/// 逐项保存并聚合失败；已成功的 Document 不回滚。
+/// 逐项保存并聚合失败；已成功的 Document 不回滚。只允许在后台执行体调用。
 pub(crate) fn execute_document_save_stage(
     registry: &mut DocumentRegistry,
     intent: &CloseIntent<CloseTarget>,
@@ -138,7 +141,7 @@ mod tests {
     }
 
     #[test]
-    fn document_batch_close_partial_save() {
+    fn workspace_batch_save_failure_cancels_close() {
         let temp = tempfile::tempdir().unwrap();
         let root = CanonicalPath::new(dunce::canonicalize(temp.path()).unwrap()).unwrap();
         let first = temp.path().join("first.txt");

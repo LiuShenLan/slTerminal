@@ -392,7 +392,8 @@ impl AppRoot {
                 matches!(
                     close.coordinator.phase(),
                     slterm_workspace::ClosePhase::Running(
-                        slterm_workspace::CloseStage::CommitState
+                        slterm_workspace::CloseStage::Save
+                            | slterm_workspace::CloseStage::CommitState
                     ) | slterm_workspace::ClosePhase::Failed(
                         slterm_workspace::CloseStage::CommitState
                     )
@@ -402,7 +403,8 @@ impl AppRoot {
                 matches!(
                     close.coordinator.phase(),
                     slterm_workspace::ClosePhase::Running(
-                        slterm_workspace::CloseStage::CommitState
+                        slterm_workspace::CloseStage::Save
+                            | slterm_workspace::CloseStage::CommitState
                     ) | slterm_workspace::ClosePhase::Failed(
                         slterm_workspace::CloseStage::CommitState
                     )

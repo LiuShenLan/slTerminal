@@ -138,7 +138,7 @@ fn persisted_local_close_commits_snapshot_and_completes_intent(cx: &mut TestAppC
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .unwrap();
-    assert_eq!(object_key, TERMINAL_A);
+    assert_eq!(object_key, format!("terminal:{TERMINAL_A}"));
     assert_eq!(generation, request_generation as i64);
     assert_eq!(decision, "not_required");
     assert_eq!(

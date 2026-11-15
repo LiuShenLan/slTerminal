@@ -1,3 +1,4 @@
+use std::str::FromStr;
 use std::time::{Duration, Instant};
 
 use rusqlite::{Connection, params};
@@ -53,9 +54,34 @@ fn project_id(text: &str) -> ProjectId {
     text.parse().unwrap()
 }
 
-fn object(key: &str, generation: u64, decision: CloseDecision) -> CloseObject<String> {
+fn target(key: &str) -> CloseTarget {
+    let (kind, name) = key.split_once(':').expect("测试对象必须带类型前缀");
+    match kind {
+        "terminal" => {
+            let id = match name {
+                "a" => TERMINAL_A,
+                "b" => TERMINAL_A_SECOND,
+                "z" => TERMINAL_B,
+                "replacement" => TERMINAL_B_SECOND,
+                _ => name,
+            };
+            CloseTarget::Terminal(terminal_id(id))
+        }
+        "document" => {
+            let id = match name {
+                "a" => DOCUMENT_SHARED,
+                "replacement" => DOCUMENT_EXCLUSIVE,
+                _ => name,
+            };
+            CloseTarget::Document(DocumentId::from_str(id).unwrap())
+        }
+        _ => panic!("未知测试关闭对象"),
+    }
+}
+
+fn object(key: &str, generation: u64, decision: CloseDecision) -> CloseObject<CloseTarget> {
     CloseObject {
-        id: key.to_owned(),
+        id: target(key),
         generation,
         decision,
     }
@@ -64,7 +90,7 @@ fn object(key: &str, generation: u64, decision: CloseDecision) -> CloseObject<St
 fn registration(
     close_id: &str,
     scope: CloseScope,
-    objects: Vec<CloseObject<String>>,
+    objects: Vec<CloseObject<CloseTarget>>,
 ) -> PersistedCloseIntent {
     PersistedCloseIntent {
         close_id: close_id.to_owned(),
@@ -465,9 +491,13 @@ fn close_intent_empty_and_multi_object_records_round_trip() {
         loaded
             .intent
             .objects()
-            .map(|object| object.id.as_str())
+            .map(|object| object.id)
             .collect::<Vec<_>>(),
-        ["document:a", "terminal:a", "terminal:z"]
+        [
+            target("terminal:a"),
+            target("terminal:z"),
+            target("document:a")
+        ]
     );
 }
 
@@ -524,9 +554,9 @@ fn unfinished_close_intents_are_ordered_and_exclude_only_completed() {
             intent
                 .intent
                 .objects()
-                .map(|object| object.id.as_str())
+                .map(|object| object.id)
                 .collect::<Vec<_>>(),
-            ["document:a", "terminal:z"]
+            [target("terminal:z"), target("document:a")]
         );
     }
     assert_eq!(
@@ -572,11 +602,6 @@ fn invalid_registrations_write_no_partial_records() {
     invalid.push(registration(
         CLOSE_ID,
         CloseScope::ApplicationExit,
-        vec![object("", 0, CloseDecision::Save)],
-    ));
-    invalid.push(registration(
-        CLOSE_ID,
-        CloseScope::ApplicationExit,
         vec![object("terminal:a", u64::MAX, CloseDecision::Save)],
     ));
     let mut non_initial = empty_registration(CLOSE_ID);
@@ -610,11 +635,12 @@ fn close_object_failure_rolls_back_header_and_prior_objects() {
     store
         .database
         .connection
-        .execute_batch(
+        .execute_batch(&format!(
             "CREATE TRIGGER reject_close_object BEFORE INSERT ON close_objects \
-             WHEN NEW.object_key = 'terminal:b' \
+             WHEN NEW.object_key = '{}' \
              BEGIN SELECT RAISE(ABORT, 'injected close object failure'); END;",
-        )
+            encode_close_target(target("terminal:b"))
+        ))
         .unwrap();
     let candidate = registration(
         CLOSE_ID,
@@ -750,11 +776,12 @@ fn close_commit_object_failure_rolls_back_snapshot_and_records() {
     store
         .database
         .connection
-        .execute_batch(
+        .execute_batch(&format!(
             "CREATE TRIGGER reject_commit_close_object BEFORE INSERT ON close_objects \
-             WHEN NEW.object_key = 'terminal:b' \
+             WHEN NEW.object_key = '{}' \
              BEGIN SELECT RAISE(ABORT, 'injected close commit failure'); END;",
-        )
+            encode_close_target(target("terminal:b"))
+        ))
         .unwrap();
     let collected = registration(
         CLOSE_ID,

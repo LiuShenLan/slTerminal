@@ -3,10 +3,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use gpui::{AnyWindowHandle, App, Context, Entity, Window};
+use slterm_document::DocumentId;
 use slterm_workspace::{
     CloseAttempt, CloseCoordinator, CloseDecision, CloseEffect, CloseIntent, CloseObject,
-    ClosePhase, CloseScope, CloseStage, PanelGroupId, PanelId, ProjectId, ProjectRegistryError,
-    ProjectSnapshot, ProjectSnapshotError, TerminalId, TerminalRecord, ViewKey,
+    ClosePhase, CloseScope, CloseStage, CloseTarget, PanelGroupId, PanelId, ProjectId,
+    ProjectRegistryError, ProjectSnapshot, ProjectSnapshotError, TerminalId, TerminalRecord,
+    ViewKey,
 };
 use uuid::Uuid;
 
@@ -22,7 +24,6 @@ use super::terminal_close::{PtyStopObservation, close_fingerprint, same_close_fa
 
 pub(super) struct BatchTerminalMember {
     pub(super) record: TerminalRecord,
-    pub(super) panel_id: PanelId,
     pub(super) terminal: Entity<TerminalView>,
 }
 
@@ -31,7 +32,9 @@ pub(super) struct LocalTerminalBatchClose {
     pub(super) project_id: ProjectId,
     pub(super) group_id: PanelGroupId,
     pub(super) members: BTreeMap<TerminalId, BatchTerminalMember>,
-    pub(super) coordinator: CloseCoordinator<String>,
+    pub(super) panels: Vec<(ViewKey, PanelId)>,
+    pub(super) window: AnyWindowHandle,
+    pub(super) coordinator: CloseCoordinator<CloseTarget>,
     pub(super) persisted: Option<PersistedCloseIntent>,
     pub(super) stop_observations: BTreeMap<TerminalId, PtyStopObservation>,
     pub(super) outcome_unknown: bool,
@@ -49,25 +52,40 @@ impl AppRoot {
     pub(super) fn close_other_views_from_request(
         &mut self,
         group_id: PanelGroupId,
+        document_decisions: BTreeMap<DocumentId, CloseDecision>,
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Result<(), AppRootError> {
-        self.close_group_from_request(group_id, GroupCloseMode::Others, window, cx)
+        self.close_group_from_request(
+            group_id,
+            GroupCloseMode::Others,
+            document_decisions,
+            window,
+            cx,
+        )
     }
 
     pub(super) fn close_all_views_from_request(
         &mut self,
         group_id: PanelGroupId,
+        document_decisions: BTreeMap<DocumentId, CloseDecision>,
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Result<(), AppRootError> {
-        self.close_group_from_request(group_id, GroupCloseMode::All, window, cx)
+        self.close_group_from_request(
+            group_id,
+            GroupCloseMode::All,
+            document_decisions,
+            window,
+            cx,
+        )
     }
 
     fn close_group_from_request(
         &mut self,
         group_id: PanelGroupId,
         mode: GroupCloseMode,
+        document_decisions: BTreeMap<DocumentId, CloseDecision>,
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Result<(), AppRootError> {
@@ -93,63 +111,62 @@ impl AppRoot {
             .group(group_id)
             .ok_or(slterm_workspace::LayoutError::GroupNotFound)?;
         let active = group.active().clone();
-        let mut terminal_ids = group
+        let closing = group
             .views()
             .iter()
             .filter(|view| match mode {
                 GroupCloseMode::Others => *view != &active,
                 GroupCloseMode::All => true,
             })
-            .map(|view| match view {
-                ViewKey::Terminal { terminal_id, .. } => Ok(*terminal_id),
-                _ => Err(AppRootError::MissingPanel),
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        if terminal_ids.is_empty() {
+            .cloned()
+            .collect::<Vec<_>>();
+        if closing.is_empty() {
             return Ok(());
         }
         if matches!(mode, GroupCloseMode::Others) {
-            // 保留项也必须是真实面板；不为未来 Document 构造占位宿主。
             self.panel_for_view(project_id, &active, cx)?;
         }
-        terminal_ids.sort_unstable();
-        terminal_ids.dedup();
 
+        let mut panels = Vec::new();
         let mut members = BTreeMap::new();
-        for terminal_id in &terminal_ids {
-            if self.terminal_closes.contains_key(terminal_id)
-                || self.terminal_close_batch_members.contains_key(terminal_id)
-            {
-                return Err(AppRootError::TerminalCloseRunning);
+        let mut objects = Vec::new();
+        for view in &closing {
+            let panel_id = self.panel_for_view(project_id, view, cx)?;
+            panels.push((view.clone(), panel_id));
+            if let ViewKey::Terminal { terminal_id, .. } = view {
+                if self.terminal_closes.contains_key(terminal_id)
+                    || self.terminal_close_batch_members.contains_key(terminal_id)
+                {
+                    return Err(AppRootError::TerminalCloseRunning);
+                }
+                let record = self
+                    .snapshot
+                    .terminal(*terminal_id)
+                    .cloned()
+                    .ok_or(ProjectSnapshotError::MissingTerminal(*terminal_id))?;
+                let (terminal_panel, terminal) = self
+                    .terminal_panel(project_id, *terminal_id, cx)
+                    .ok_or(AppRootError::MissingPanel)?;
+                if terminal_panel != panel_id {
+                    return Err(AppRootError::MissingPanel);
+                }
+                members.insert(*terminal_id, BatchTerminalMember { record, terminal });
+                objects.push(CloseObject {
+                    id: CloseTarget::Terminal(*terminal_id),
+                    generation: self.snapshot_generation,
+                    decision: CloseDecision::NotRequired,
+                });
             }
-            let record = self
-                .snapshot
-                .terminal(*terminal_id)
-                .cloned()
-                .ok_or(ProjectSnapshotError::MissingTerminal(*terminal_id))?;
-            let (panel_id, terminal) = self
-                .terminal_panel(project_id, *terminal_id, cx)
-                .ok_or(AppRootError::MissingPanel)?;
-            members.insert(
-                *terminal_id,
-                BatchTerminalMember {
-                    record,
-                    panel_id,
-                    terminal,
-                },
-            );
         }
-        let (candidate, _) = self.snapshot.without_terminals(&terminal_ids)?;
+        objects.extend(slterm_workspace::collect_document_close(
+            &self.snapshot,
+            &self.documents,
+            &closing,
+            &document_decisions,
+        )?);
+        let (candidate, _) = self.snapshot.without_views(&closing)?;
         let batch_id = Uuid::now_v7();
         let scope = CloseScope::Panels { project_id };
-        let objects = terminal_ids
-            .iter()
-            .map(|terminal_id| CloseObject {
-                id: terminal_id.to_string(),
-                generation: self.snapshot_generation,
-                decision: CloseDecision::NotRequired,
-            })
-            .collect::<Vec<_>>();
         let fingerprint = store_epoch.as_ref().map_or([0; 32], |epoch| {
             close_fingerprint(&batch_id.to_string(), &scope, epoch, &objects)
         });
@@ -173,7 +190,7 @@ impl AppRoot {
             .collected(attempt, intent)
             .map_err(|_| AppRootError::TerminalCloseState)?;
         let initiation_sequence = self.allocate_terminal_close_sequence()?;
-        for terminal_id in &terminal_ids {
+        for terminal_id in members.keys() {
             self.terminal_close_batch_members
                 .insert(*terminal_id, batch_id);
         }
@@ -183,6 +200,8 @@ impl AppRoot {
                 project_id,
                 group_id,
                 members,
+                panels,
+                window: window.window_handle(),
                 coordinator,
                 persisted,
                 stop_observations: BTreeMap::new(),
@@ -191,8 +210,16 @@ impl AppRoot {
                 unresolved_failure: false,
             },
         );
-        if self.project_writer.is_some() {
-            if let Err(error) = self.start_batch_commit(batch_id, candidate, window, cx) {
+        if self
+            .terminal_close_batches
+            .get(&batch_id)
+            .is_some_and(|close| close.coordinator.phase() == ClosePhase::Running(CloseStage::Save))
+        {
+            self.start_batch_save(batch_id, cx);
+        } else if self.project_writer.is_some() {
+            if let Err(error) =
+                self.start_batch_commit(batch_id, candidate, window.window_handle(), cx)
+            {
                 self.remove_batch_registration(batch_id);
                 return Err(error);
             }
@@ -223,23 +250,18 @@ impl AppRoot {
             .and_then(|close| close.members.get(&terminal_id))
             .map(|member| member.record.clone())
             .ok_or(AppRootError::MissingPanel)?;
-        self.retry_batch_close(batch_id, cx).map(|_| record)
+        self.retry_batch_close(batch_id, cx)?;
+        Ok(record)
     }
 
     fn retry_batch_close(
         &mut self,
         batch_id: Uuid,
         cx: &mut Context<'_, Self>,
-    ) -> Result<TerminalRecord, AppRootError> {
+    ) -> Result<(), AppRootError> {
         let Some(close) = self.terminal_close_batches.get(&batch_id) else {
             return Err(AppRootError::MissingPanel);
         };
-        let record = close
-            .members
-            .values()
-            .next()
-            .map(|member| member.record.clone())
-            .ok_or(AppRootError::TerminalCloseState)?;
         if close.outcome_unknown {
             return Err(AppRootError::TerminalCloseOutcomeUnknown);
         }
@@ -257,7 +279,7 @@ impl AppRoot {
             .retry()
             .map_err(|_| AppRootError::TerminalCloseState)?;
         self.drive_batch_close(batch_id, cx)?;
-        Ok(record)
+        Ok(())
     }
 
     pub(super) fn oldest_unresolved_batch_failure(&self) -> Option<(u64, TerminalId)> {
@@ -286,7 +308,7 @@ impl AppRoot {
         &mut self,
         batch_id: Uuid,
         candidate: ProjectSnapshot,
-        window: &mut Window,
+        window: AnyWindowHandle,
         cx: &mut Context<'_, Self>,
     ) -> Result<(), AppRootError> {
         let (writer, registration, attempt) = {
@@ -316,7 +338,6 @@ impl AppRoot {
                 return Err(AppRootError::TerminalCloseWriter(error));
             }
         };
-        let window = window.window_handle();
         let executor = cx.background_executor().clone();
         let task_id = TaskId::TerminalCloseBatch(batch_id);
         let registration_result =
@@ -407,22 +428,26 @@ impl AppRoot {
         window: &mut Window,
         cx: &mut App,
     ) -> Result<(), AppRootError> {
-        let (project_id, terminal_ids, panel_ids) = {
+        let (project_id, closing, panel_ids) = {
             let close = self
                 .terminal_close_batches
                 .get(&batch_id)
                 .ok_or(AppRootError::MissingPanel)?;
             (
                 close.project_id,
-                close.members.keys().copied().collect::<Vec<_>>(),
                 close
-                    .members
-                    .values()
-                    .map(|member| member.panel_id)
+                    .panels
+                    .iter()
+                    .map(|(view, _)| view.clone())
+                    .collect::<Vec<_>>(),
+                close
+                    .panels
+                    .iter()
+                    .map(|(_, panel)| *panel)
                     .collect::<Vec<_>>(),
             )
         };
-        let (candidate, _) = self.snapshot.without_terminals(&terminal_ids)?;
+        let (candidate, _) = self.snapshot.without_views(&closing)?;
         let divider_focus_removed =
             self.focused_split_divider_removed(project_id, &candidate, window, cx);
         let preferred_panel = self.preferred_close_panel(project_id, &panel_ids, &candidate, cx);
@@ -448,6 +473,172 @@ impl AppRoot {
         self.commit_project_snapshot(candidate, cx);
         self.detach_batch_terminals(batch_id, preferred_panel, divider_focus_removed, window, cx);
         Ok(())
+    }
+
+    fn start_batch_save(&mut self, batch_id: Uuid, cx: &mut Context<'_, Self>) {
+        let task_id = TaskId::TerminalCloseBatch(batch_id);
+        if self.tasks.is_registered(task_id) {
+            return;
+        }
+        let Some(close) = self.terminal_close_batches.get(&batch_id) else {
+            return;
+        };
+        if close.coordinator.phase() != ClosePhase::Running(CloseStage::Save) {
+            return;
+        }
+        let Some(attempt) = close.coordinator.current_attempt() else {
+            return;
+        };
+        let Some(intent) = close.coordinator.intent().cloned() else {
+            return;
+        };
+        let grants = self.document_close_grants(&intent);
+        let mut documents = std::mem::take(&mut self.documents);
+        let executor = cx.background_executor().clone();
+        let registration = self
+            .tasks
+            .register_with(task_id, CancellationToken::new(), move || {
+                let save = executor.spawn(async move {
+                    let result = crate::app_shell::document_close::execute_document_save_stage(
+                        &mut documents,
+                        &intent,
+                        &grants,
+                        0,
+                    );
+                    (documents, result)
+                });
+                cx.spawn(async move |this, cx| {
+                    let (documents, result) = save.await;
+                    let _ = this.update(cx, |root, cx| {
+                        root.finish_batch_save(batch_id, attempt, documents, result, cx);
+                    });
+                })
+            });
+        if registration.is_err() {
+            self.fail_batch_close_outcome_unknown(batch_id, attempt);
+        }
+    }
+
+    fn document_close_grants(
+        &self,
+        intent: &CloseIntent<CloseTarget>,
+    ) -> BTreeMap<DocumentId, Vec<slterm_path::PathGrant>> {
+        intent
+            .objects()
+            .filter_map(|object| match object.id {
+                CloseTarget::Document(id) if object.decision == CloseDecision::Save => Some(id),
+                _ => None,
+            })
+            .map(|id| {
+                let grants = self
+                    .snapshot
+                    .registry()
+                    .projects()
+                    .iter()
+                    .filter(|project| {
+                        project.layout().view_keys().iter().any(|view| match view {
+                            ViewKey::Editor { document_id, .. }
+                            | ViewKey::Markdown { document_id, .. }
+                            | ViewKey::Diff { document_id, .. } => *document_id == id,
+                            _ => false,
+                        })
+                    })
+                    .map(|project| slterm_path::PathGrant::project_root(project.root().clone()))
+                    .collect();
+                (id, grants)
+            })
+            .collect()
+    }
+
+    fn finish_batch_save(
+        &mut self,
+        batch_id: Uuid,
+        attempt: CloseAttempt,
+        documents: slterm_document::DocumentRegistry,
+        result: Result<(), Vec<crate::app_shell::document_close::DocumentSaveFailure>>,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.documents = documents;
+        let Some(close) = self.terminal_close_batches.get(&batch_id) else {
+            self.reconcile_document_registry();
+            return;
+        };
+        if close.coordinator.current_attempt() != Some(attempt) {
+            return;
+        }
+        self.tasks.complete(TaskId::TerminalCloseBatch(batch_id));
+        if let Err(failures) = result {
+            let close = self
+                .terminal_close_batches
+                .get_mut(&batch_id)
+                .expect("批量关闭刚读取必须仍存在");
+            close.unresolved_failure = true;
+            let _ = close.coordinator.fail(attempt);
+            log::warn!("Document 批量保存失败，关闭未提交: {} 项", failures.len());
+            cx.notify();
+            return;
+        }
+        let Some(close) = self.terminal_close_batches.get_mut(&batch_id) else {
+            return;
+        };
+        if close.coordinator.save_succeeded(attempt).is_err() {
+            self.fail_batch_close_outcome_unknown(batch_id, attempt);
+            return;
+        }
+        let (persisted, closing, window) = {
+            let close = &self.terminal_close_batches[&batch_id];
+            (
+                close.persisted.is_some(),
+                close
+                    .panels
+                    .iter()
+                    .map(|(view, _)| view.clone())
+                    .collect::<Vec<_>>(),
+                close.window,
+            )
+        };
+        let candidate = match self.snapshot.without_views(&closing) {
+            Ok((candidate, _)) => candidate,
+            Err(error) => {
+                log::warn!("批量关闭候选重算失败: {error}");
+                let attempt = self.terminal_close_batches[&batch_id]
+                    .coordinator
+                    .current_attempt()
+                    .expect("保存成功后的提交阶段必须有 attempt");
+                self.fail_batch_close_outcome_unknown(batch_id, attempt);
+                return;
+            }
+        };
+        if persisted {
+            if let Err(error) = self.start_batch_commit(batch_id, candidate, window, cx) {
+                log::warn!("批量保存后的关闭提交失败: {error}");
+            }
+        } else {
+            let mut completed = false;
+            let updated = window.update(cx, |_, window, cx| {
+                match self.complete_batch_state_commit(batch_id, None, window, cx) {
+                    Ok(()) => completed = true,
+                    Err(error) => {
+                        log::warn!("批量保存后的内存提交失败: {error}");
+                        let attempt = self.terminal_close_batches[&batch_id]
+                            .coordinator
+                            .current_attempt()
+                            .expect("内存提交阶段必须有 attempt");
+                        self.fail_batch_close_outcome_unknown(batch_id, attempt);
+                    }
+                }
+            });
+            if updated.is_err() {
+                let attempt = self.terminal_close_batches[&batch_id]
+                    .coordinator
+                    .current_attempt()
+                    .expect("窗口失效前的提交阶段必须有 attempt");
+                self.fail_batch_close_outcome_unknown(batch_id, attempt);
+            } else if completed {
+                let _ = self.drive_batch_close_in_memory(batch_id, cx);
+            }
+        }
+        cx.notify();
     }
 
     fn drive_batch_close(
@@ -509,6 +700,10 @@ impl AppRoot {
                 self.destroy_closed_batch(batch_id, cx);
                 Ok(())
             }
+            ClosePhase::Running(CloseStage::Save) => {
+                self.start_batch_save(batch_id, cx);
+                Ok(())
+            }
             ClosePhase::Running(CloseStage::CommitState)
             | ClosePhase::Idle
             | ClosePhase::Failed(_)
@@ -553,6 +748,10 @@ impl AppRoot {
                     }
                     _ => Err(AppRootError::TerminalCloseState),
                 }
+            }
+            ClosePhase::Running(CloseStage::Save) => {
+                self.start_batch_save(batch_id, cx);
+                Ok(())
             }
             ClosePhase::Running(CloseStage::CommitState)
             | ClosePhase::Idle
@@ -850,11 +1049,11 @@ impl AppRoot {
             return;
         };
         let panels = close
-            .members
-            .values()
-            .map(|member| (member.panel_id, member.terminal.clone()))
+            .panels
+            .iter()
+            .map(|(_, panel)| *panel)
             .collect::<Vec<_>>();
-        self.detach_terminal_panels(
+        self.detach_panels(
             close.project_id,
             &panels,
             preferred_panel,
@@ -869,9 +1068,9 @@ impl AppRoot {
             return;
         };
         let panel_ids = close
-            .members
-            .values()
-            .map(|member| member.panel_id)
+            .panels
+            .iter()
+            .map(|(_, panel)| *panel)
             .collect::<BTreeSet<_>>();
         if let Some(project) = self.projects.get(&close.project_id) {
             project.update(cx, |project, _| {

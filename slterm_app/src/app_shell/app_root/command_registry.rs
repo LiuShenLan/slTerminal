@@ -1,16 +1,18 @@
 //! 应用命令目录：请求、上下文快照与统一执行入口。
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use gpui::{
     Action, App, Context, DummyKeyboardMapper, KeyBinding, KeyBindingContextPredicate, Pixels,
     Point, Window,
 };
+use slterm_document::DocumentId;
 use slterm_path::CanonicalPath;
 use slterm_sidebar::ButtonMovement;
 use slterm_split::SplitDirection;
 use slterm_workspace::{
-    LogicalSize, PanelGroupId, PanelId, ProjectId, SideViewId, TerminalId, TerminalRecord, ViewKey,
+    CloseDecision, LogicalSize, PanelGroupId, PanelId, ProjectId, SideViewId, TerminalId,
+    TerminalRecord, ViewKey,
 };
 
 use super::{
@@ -145,6 +147,7 @@ pub(crate) enum CommandParameters {
     },
     CloseGroup {
         group_id: PanelGroupId,
+        document_decisions: BTreeMap<DocumentId, CloseDecision>,
     },
     #[allow(dead_code)] // 导航树选中项入口由导航视图接线。
     RenameProject {
@@ -758,11 +761,23 @@ impl CommandRegistry {
                     cx,
                 )
                 .map(|()| CommandOutcome::Completed),
-            (CommandId::CloseOtherViews, Some(CommandParameters::CloseGroup { group_id })) => root
-                .close_other_views_from_request(group_id, window, cx)
+            (
+                CommandId::CloseOtherViews,
+                Some(CommandParameters::CloseGroup {
+                    group_id,
+                    document_decisions,
+                }),
+            ) => root
+                .close_other_views_from_request(group_id, document_decisions, window, cx)
                 .map(|()| CommandOutcome::Completed),
-            (CommandId::CloseAllViews, Some(CommandParameters::CloseGroup { group_id })) => root
-                .close_all_views_from_request(group_id, window, cx)
+            (
+                CommandId::CloseAllViews,
+                Some(CommandParameters::CloseGroup {
+                    group_id,
+                    document_decisions,
+                }),
+            ) => root
+                .close_all_views_from_request(group_id, document_decisions, window, cx)
                 .map(|()| CommandOutcome::Completed),
             _ => Err(AppRootError::UnexpectedParameters),
         }

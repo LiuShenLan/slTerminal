@@ -69,7 +69,7 @@
 | 链接与文件身份 | [架构](design/architecture.md)、[文件与 Git](design/files-git.md)、[Document](design/document.md) | `integration_links_and_file_identity` | 待实现 |
 | 会话级授权恢复 | [生命周期](design/lifecycle.md)、[持久化](design/persistence.md)、[Document](design/document.md) | `integration_session_grant_restore` | 待实现 |
 | 根重定位 | [工作区](design/workspace.md)、[领域模型](design/domain-model.md)、[文件与 Git](design/files-git.md) | `integration_project_relocation` | 待实现 |
-| 最后引用关闭 | [生命周期](design/lifecycle.md)、[Document](design/document.md) | `integration_last_reference_close` | 待实现 |
+| 最后引用关闭 | [生命周期](design/lifecycle.md)、[Document](design/document.md) | `integration_last_reference_close` | 已自动化 |
 | 批量关闭 | [生命周期](design/lifecycle.md)、[工作区](design/workspace.md) | `integration_batch_close` | 已自动化 |
 | 项目移除与退出 | [生命周期](design/lifecycle.md)、[工作区](design/workspace.md) | `integration_project_remove_and_exit` | 已自动化 |
 | 崩溃恢复 | [生命周期](design/lifecycle.md)、[持久化](design/persistence.md) | `integration_crash_recovery` | 待实现 |
@@ -221,7 +221,7 @@
 | 页签横向溢出与完整列表不丢失视图且焦点跟随激活项 | `clicking_a_tab_reuses_its_panel_and_restores_real_focus`、`complete_list_activates_every_view_without_recreating_panels`、`dismissing_complete_list_preserves_active_and_restores_real_focus`、`narrow_tab_bar_scrolls_horizontally_without_losing_views`、`view_activation_candidate_is_independent_of_view_kind` | 已自动化 |
 | 项目重命名与排序保持身份、布局、实例和活跃关系 | `project_rename_and_reorder_preserve_identity_layout_and_instances` | 已自动化 |
 | 共享 Document 只有最后引用关闭才触发内容守卫 | `document_last_reference_close_guard` | 已自动化 |
-| 批量保存失败取消关闭并保留全部 Panel 与 PTY | `workspace_batch_save_failure_cancels_close` | 待实现 |
+| 批量保存失败取消关闭并保留全部 Panel 与 PTY | `workspace_batch_save_failure_cancels_close`、`document_batch_close_partial_save` | 已自动化 |
 | 项目移除先完成守卫与删除意图再销毁资源 | `project_remove_commits_intent_before_destroy` | 已自动化 |
 | 激活项目不关闭无项目浮层或其 Hooks 草稿 | `app_settings_overlay_keeps_hooks_draft` | 待实现 |
 | 移交显式 cwd 未授权时拒绝且不改投项目 | `handover_rejects_unauthorized_cwd` | 已自动化 |
@@ -241,7 +241,7 @@
 | 文件跨扩展名改名不自动转换 Panel 类型 | `document_rename_preserves_identity_and_view` | 待实现 |
 | 另存为已打开目标时拒绝且两个 Document 不变 | `document_save_as_rejects_open_target` | 已自动化 |
 | 自动保存等待全部编辑视图失焦 | `document_autosave_waits_for_all_views_to_blur` | 已自动化 |
-| 批量关闭部分保存失败时保留所有 Panel | `document_batch_close_partial_save` | 待实现 |
+| 批量关闭部分保存失败时保留所有 Panel | `document_batch_close_partial_save` | 已自动化 |
 | 关闭集合外仍有引用时不丢弃 Document | `document_discard_respects_external_reference` | 已自动化 |
 | 根重定位或外部改名不重建 Document 或视图 | `document_location_change_does_not_rebuild` | 已自动化 |
 

@@ -5,9 +5,10 @@ use std::str::FromStr;
 
 use rusqlite::types::FromSql;
 use rusqlite::{Connection, OptionalExtension, Row, TransactionBehavior, params};
+use slterm_document::DocumentId;
 use slterm_workspace::{
-    CloseDecision, CloseIntent, CloseObject, CloseScope, ProjectId, ProjectSnapshot,
-    ViewStateRegistry,
+    CloseDecision, CloseIntent, CloseObject, CloseScope, CloseTarget, ProjectId, ProjectSnapshot,
+    TerminalId, ViewStateRegistry,
 };
 
 use super::database::DatabaseError;
@@ -54,7 +55,7 @@ pub(crate) struct PersistedCloseIntent {
     pub(crate) close_id: String,
     pub(crate) scope: CloseScope,
     pub(crate) store_epoch: String,
-    pub(crate) intent: CloseIntent<String>,
+    pub(crate) intent: CloseIntent<CloseTarget>,
     pub(crate) commit_status: CloseCommitStatus,
 }
 
@@ -517,11 +518,8 @@ impl<'a> EncodedRegistration<'a> {
             .intent
             .objects()
             .map(|object| {
-                if object.id.is_empty() {
-                    return Err(CloseStoreError::InvalidRegistration);
-                }
-                Ok(EncodedCloseObject {
-                    key: object.id.clone(),
+                Ok::<EncodedCloseObject, CloseStoreError>(EncodedCloseObject {
+                    key: encode_close_target(object.id),
                     generation: i64::try_from(object.generation)
                         .map_err(|_| CloseStoreError::InvalidRegistration)?,
                     decision: decision_name(object.decision),
@@ -593,11 +591,8 @@ fn load_close_intent_from(
     let objects = rows
         .into_iter()
         .map(|object| {
-            if object.key.is_empty() {
-                return Err(CloseStoreError::CorruptRecord);
-            }
             Ok(CloseObject {
-                id: object.key,
+                id: decode_close_target(&object.key)?,
                 generation: u64::try_from(object.generation)
                     .map_err(|_| CloseStoreError::CorruptRecord)?,
                 decision: decode_decision(&object.decision)?,
@@ -679,6 +674,28 @@ fn decode_scope(scope: &str, project_id: Option<String>) -> Result<CloseScope, C
             reject_project(project_id)?;
             Ok(CloseScope::UpdateHandoff)
         }
+        _ => Err(CloseStoreError::CorruptRecord),
+    }
+}
+
+fn encode_close_target(target: CloseTarget) -> String {
+    match target {
+        CloseTarget::Terminal(id) => format!("terminal:{id}"),
+        CloseTarget::Document(id) => format!("document:{id}"),
+    }
+}
+
+fn decode_close_target(encoded: &str) -> Result<CloseTarget, CloseStoreError> {
+    let (kind, id) = encoded
+        .split_once(':')
+        .ok_or(CloseStoreError::CorruptRecord)?;
+    match kind {
+        "terminal" => TerminalId::from_str(id)
+            .map(CloseTarget::Terminal)
+            .map_err(|_| CloseStoreError::CorruptRecord),
+        "document" => DocumentId::from_str(id)
+            .map(CloseTarget::Document)
+            .map_err(|_| CloseStoreError::CorruptRecord),
         _ => Err(CloseStoreError::CorruptRecord),
     }
 }
