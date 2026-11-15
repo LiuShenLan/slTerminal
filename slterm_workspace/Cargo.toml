@@ -21,3 +21,4 @@ serde_json = { version = "1", features = ["raw_value"] }
 
 [dev-dependencies]
 proptest = "=1.12.0"
+ropey = { version = "=2.0.0-beta.1", default-features = false }

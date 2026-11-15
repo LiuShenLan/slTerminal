@@ -6562,6 +6562,7 @@ name = "slterm_workspace"
 version = "0.0.0"
 dependencies = [
  "proptest 1.12.0",
+ "ropey",
  "serde",
  "serde_json",
  "slterm-split",

@@ -220,7 +220,7 @@
 | 布局操作保留实例与焦点 | `move_view_reuses_panel_and_focuses_moved_terminal`、`merge_groups_preserves_instances_and_focuses_actual_active`、`split_existing_view_moves_panel_without_starting_another_terminal`、`resize_split_changes_only_geometry`、`layout_menu_moves_active_view_to_next_group`、`layout_menu_splits_and_merges_existing_view`、`split_divider_keyboard_resize_preserves_focus`、`layout_focus_failure_does_not_commit_candidate`、`layout_request_focus_failure_does_not_commit_candidate`、`closing_terminal_with_focused_collapsing_divider_restores_remaining_panel`、`layout_menu_shortcut_is_scoped_to_project_content`、`single_view_group_does_not_open_empty_layout_menu`、`modal_layout_command_is_rejected_without_side_effects`、`invalid_layout_target_preserves_snapshot_instances_and_focus` | 已自动化 |
 | 页签横向溢出与完整列表不丢失视图且焦点跟随激活项 | `clicking_a_tab_reuses_its_panel_and_restores_real_focus`、`complete_list_activates_every_view_without_recreating_panels`、`dismissing_complete_list_preserves_active_and_restores_real_focus`、`narrow_tab_bar_scrolls_horizontally_without_losing_views`、`view_activation_candidate_is_independent_of_view_kind` | 已自动化 |
 | 项目重命名与排序保持身份、布局、实例和活跃关系 | `project_rename_and_reorder_preserve_identity_layout_and_instances` | 已自动化 |
-| 共享 Document 只有最后引用关闭才触发内容守卫 | `document_last_reference_close_guard` | 待实现 |
+| 共享 Document 只有最后引用关闭才触发内容守卫 | `document_last_reference_close_guard` | 已自动化 |
 | 批量保存失败取消关闭并保留全部 Panel 与 PTY | `workspace_batch_save_failure_cancels_close` | 待实现 |
 | 项目移除先完成守卫与删除意图再销毁资源 | `project_remove_commits_intent_before_destroy` | 已自动化 |
 | 激活项目不关闭无项目浮层或其 Hooks 草稿 | `app_settings_overlay_keeps_hooks_draft` | 待实现 |
@@ -242,7 +242,7 @@
 | 另存为已打开目标时拒绝且两个 Document 不变 | `document_save_as_rejects_open_target` | 已自动化 |
 | 自动保存等待全部编辑视图失焦 | `document_autosave_waits_for_all_views_to_blur` | 已自动化 |
 | 批量关闭部分保存失败时保留所有 Panel | `document_batch_close_partial_save` | 待实现 |
-| 关闭集合外仍有引用时不丢弃 Document | `document_discard_respects_external_reference` | 待实现 |
+| 关闭集合外仍有引用时不丢弃 Document | `document_discard_respects_external_reference` | 已自动化 |
 | 根重定位或外部改名不重建 Document 或视图 | `document_location_change_does_not_rebuild` | 已自动化 |
 
 ### Editor

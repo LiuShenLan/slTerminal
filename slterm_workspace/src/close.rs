@@ -3,7 +3,9 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use crate::ProjectId;
+use slterm_document::DocumentId;
+
+use crate::{ProjectId, TerminalId};
 
 /// 关闭请求冻结、提交和销毁的对象边界。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -18,6 +20,13 @@ impl CloseScope {
     fn is_global(&self) -> bool {
         matches!(self, Self::ApplicationExit | Self::UpdateHandoff)
     }
+}
+
+/// 同一关闭意图可携带的强类型对象身份。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum CloseTarget {
+    Terminal(TerminalId),
+    Document(DocumentId),
 }
 
 /// 收集阶段对单个对象确定的内容处置。

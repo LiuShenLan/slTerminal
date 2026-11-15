@@ -6,6 +6,7 @@ mod close;
 #[cfg(test)]
 mod close_tests;
 mod diff_binding;
+mod document_close;
 mod identity;
 mod panel;
 mod project_layout;
@@ -24,11 +25,12 @@ mod view_key;
 mod view_state;
 pub use close::{
     CloseAbandonWarning, CloseAttempt, CloseCoordinator, CloseDecision, CloseEffect, CloseError,
-    CloseIntent, CloseObject, CloseOutcome, ClosePhase, CloseScope, CloseStage,
+    CloseIntent, CloseObject, CloseOutcome, ClosePhase, CloseScope, CloseStage, CloseTarget,
 };
 pub use diff_binding::{
     DiffBindingError, diff_binding_from_canonical_json, diff_binding_to_canonical_json,
 };
+pub use document_close::{DocumentCloseError, collect_document_close};
 pub use identity::{PanelGroupId, ProjectId, StableIdError, TerminalId};
 pub use panel::{PanelId, PanelIdAllocator, PanelIdExhausted};
 pub use project_layout::{
