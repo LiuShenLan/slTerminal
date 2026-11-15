@@ -725,6 +725,8 @@ pub struct RuntimeSettings {
     /// 平滑光标移动:显式 opt-in,默认关。
     pub cursor_motion: CursorMotion,
     pub copy_on_select: bool,
+    /// 应用级 Document 自动保存；Editor、Markdown 与可编辑 Diff 共用。
+    pub document_autosave: bool,
     /// 新建终端的历史容量上限;不动已打开会话。
     pub scrollback_lines: usize,
     /// 滚轮倍率;像素级触控板输入与此独立。
@@ -868,6 +870,7 @@ impl RuntimeSettings {
             cursor_motion: CursorMotion::from_settings(raw.value_or_default("cursor_motion"))
                 .unwrap_or_default(),
             copy_on_select: raw.bool_or_default("copy_on_select"),
+            document_autosave: raw.bool_or_default("document_autosave"),
             scrollback_lines: raw.usize_or_default("scrollback_lines"),
             scroll_speed: normalize_scroll_speed(raw.f32_or_default("scroll_speed")),
             focus_follows_mouse: raw.bool_on("focus_follows_mouse"),
@@ -1007,6 +1010,7 @@ mod runtime_settings_tests {
             assert_eq!(settings.font_family, None);
             assert_eq!(settings.font_size_px, None);
             assert!(!settings.copy_on_select);
+            assert!(!settings.document_autosave);
             assert!(settings.multiline_paste_confirm, "多行粘贴确认默认开");
             assert!(settings.tab_close_visible);
             assert!(!settings.terminal_proxy);
@@ -1095,6 +1099,7 @@ mod runtime_settings_tests {
     "cursor_blink": true,
     "cursor_motion": "smooth",
     "copy_on_select": true,
+    "document_autosave": true,
     "focus_follows_mouse": true,
     "dim_inactive_panes": false,
     "multiline_paste_confirm": false,
@@ -1167,6 +1172,7 @@ mod runtime_settings_tests {
         assert_eq!(settings.cursor_blink, Some(true));
         assert_eq!(settings.cursor_motion, CursorMotion::Smooth);
         assert!(settings.copy_on_select);
+        assert!(settings.document_autosave);
         assert_eq!(settings.focus_follows_mouse, Some(true));
         assert!(!settings.dim_inactive_panes);
         assert!(!settings.multiline_paste_confirm);

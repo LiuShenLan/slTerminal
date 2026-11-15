@@ -669,6 +669,12 @@ pub static KEYS: &[SettingsKeyDef] = &[
         "copy on select 选中复制",
         false,
     ),
+    boolean(
+        "document_autosave",
+        SettingsDomain::Interaction,
+        "document autosave 文档 自动保存 editor markdown diff",
+        false,
+    ),
     optional_boolean(
         "focus_follows_mouse",
         SettingsDomain::Interaction,

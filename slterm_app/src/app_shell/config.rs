@@ -36,6 +36,8 @@ pub struct Settings {
     pub editor_theme: EditorThemeTokens,
     /// 选区完成即复制。
     pub copy_on_select: bool,
+    /// 全局 Document 自动保存；视图层不得另设开关。
+    pub document_autosave: bool,
     /// 补全呈现形态(Inline/Popup/Hybrid;设置值本体归 `slterm-settings` 键域)。
     pub completion_style: slterm_settings::CompletionStyleName,
     /// AI 内联补全 ghost 开关。
@@ -138,6 +140,7 @@ impl Settings {
             editor_theme: editor_theme::editor_theme_tokens(runtime.theme.reviewed_palette(), &ui),
             palette,
             copy_on_select: runtime.copy_on_select,
+            document_autosave: runtime.document_autosave,
             completion_style: runtime.completion_style,
             ghost: runtime.ghost,
             scroll_speed: runtime.scroll_speed,
@@ -269,7 +272,7 @@ mod config_tests {
             r#"{
                 "appearance": {"font_family": "Cascadia Mono", "font_size": 18},
                 "scrolling": {"scroll_speed": 2.5},
-                "interaction": {"ligatures": "off", "copy_on_select": true}
+                "interaction": {"ligatures": "off", "copy_on_select": true, "document_autosave": true}
             }"#,
         );
         let settings = Settings::from_runtime(&runtime);
@@ -278,6 +281,7 @@ mod config_tests {
         assert_eq!(settings.font_size_px, 18.0);
         assert!(!settings.ligatures, "off 档必须关闭连字");
         assert!(settings.copy_on_select);
+        assert!(settings.document_autosave);
         assert_eq!(settings.scroll_speed, 2.5);
     }
 

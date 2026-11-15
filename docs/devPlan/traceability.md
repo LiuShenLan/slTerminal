@@ -240,7 +240,7 @@
 | 同项目普通视图去重而 Diff 与 GitShow 独立 | `document_duplicate_view_focuses_existing` | 待实现 |
 | 文件跨扩展名改名不自动转换 Panel 类型 | `document_rename_preserves_identity_and_view` | 待实现 |
 | 另存为已打开目标时拒绝且两个 Document 不变 | `document_save_as_rejects_open_target` | 已自动化 |
-| 自动保存等待全部编辑视图失焦 | `document_autosave_waits_for_all_views_to_blur` | 待实现 |
+| 自动保存等待全部编辑视图失焦 | `document_autosave_waits_for_all_views_to_blur` | 已自动化 |
 | 批量关闭部分保存失败时保留所有 Panel | `document_batch_close_partial_save` | 待实现 |
 | 关闭集合外仍有引用时不丢弃 Document | `document_discard_respects_external_reference` | 待实现 |
 | 根重定位或外部改名不重建 Document 或视图 | `document_location_change_does_not_rebuild` | 已自动化 |
@@ -324,7 +324,7 @@
 | 多 Settings 视图同步生效值且关闭不取消队列 | `settings_views_share_global_queue` | 待实现 |
 | 终端中断与文件树复制按上下文独立绑定 | `keybinding_reserved_contexts` | 待实现 |
 | 完整主题可用、缺项零写入且使用中删除需另选 | `theme_import_complete_or_zero_write` | 待实现 |
-| Editor、Markdown、Diff 遵循同一 Document 自动保存 | `settings_document_autosave_is_global` | 待实现 |
+| Editor、Markdown、Diff 遵循同一 Document 自动保存 | `settings_document_autosave_is_global` | 已自动化 |
 | 套餐不读取 CLI 凭据且专用 token 不回显 | `settings_plan_token_not_cli_credentials` | 待实现 |
 | 后台周期提交后按新周期运行且隐藏仍查询 | `settings_plan_schedule_commit_and_visibility` | 待实现 |
 | 自定义根真实目录重复拒绝且删除立即撤销授权 | `agent_root_duplicate_and_revocation` | 待实现 |
