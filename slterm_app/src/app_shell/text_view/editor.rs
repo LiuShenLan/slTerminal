@@ -5,9 +5,10 @@ use std::rc::Rc;
 
 use gpui::{
     App, Bounds, ContentMask, Context, ElementInputHandler, EntityInputHandler, FocusHandle,
-    Focusable, Font, Hsla, InteractiveElement as _, ParentElement as _, Pixels, Point, Render,
-    ShapedLine, SharedString, Styled as _, TextAlign, TextRun, UTF16Selection, Window, canvas, div,
-    fill, point, px, size,
+    Focusable, Font, Hsla, InteractiveElement as _, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, ParentElement as _, Pixels, Point, Render, ScrollWheelEvent, ShapedLine,
+    SharedString, Styled as _, TextAlign, TextRun, UTF16Selection, Window, canvas, div, fill,
+    point, px, size,
 };
 use gpui_component::ActiveTheme as _;
 use gpui_component::input::{
@@ -232,6 +233,8 @@ pub(crate) struct DocumentTextView {
     marked_range: Option<Range<usize>>,
     scroll_line: usize,
     scroll_column: usize,
+    wheel_remainder: f32,
+    mouse_anchor: Option<usize>,
     focus: FocusHandle,
     layout: Rc<RefCell<Option<LayoutMetrics>>>,
     #[cfg(test)]
@@ -261,6 +264,8 @@ impl DocumentTextView {
             marked_range: None,
             scroll_line: 0,
             scroll_column: 0,
+            wheel_remainder: 0.0,
+            mouse_anchor: None,
             focus: cx.focus_handle().tab_stop(true),
             layout: Rc::default(),
             #[cfg(test)]
@@ -329,6 +334,7 @@ impl DocumentTextView {
         self.revision = snapshot.revision;
         self.text_state = snapshot.text_state;
         self.read_only = snapshot.read_only;
+        self.mouse_anchor = None;
         self.scroll_line = self
             .scroll_line
             .min(self.text.len_lines(LineType::LF).saturating_sub(1));
@@ -710,6 +716,106 @@ impl DocumentTextView {
         }
     }
 
+    fn byte_for_point(&self, point: Point<Pixels>) -> Option<usize> {
+        let metrics = self.metrics()?;
+        let x = (point.x - metrics.bounds.origin.x).max(px(0.0));
+        let y = (point.y - metrics.bounds.origin.y).max(px(0.0));
+        let row = self.scroll_line + (y / metrics.line_height).floor() as usize;
+        let map = DisplayMap::new(4);
+        let line = RopeTextSource::new(&self.text, map)
+            .visible_line_windows(
+                row..row + 1,
+                self.scroll_column..self.scroll_column + metrics.visible_columns(),
+            )
+            .into_iter()
+            .next()?;
+        let viewport_column = (x / metrics.cell_width).round() as usize;
+        let target_column = self.scroll_column + viewport_column;
+        let local = map.byte_at_column_from(line.text(), target_column, line.display_start())?;
+        Some(line.byte_range().start + local)
+    }
+
+    fn mouse_down(
+        &mut self,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if event.button != MouseButton::Left || self.marked_range.is_some() {
+            return;
+        }
+        let Some(position) = self.byte_for_point(event.position) else {
+            return;
+        };
+        let anchor = if event.modifiers.shift {
+            self.selection.anchor
+        } else {
+            position
+        };
+        self.mouse_anchor = Some(anchor);
+        self.selection = TextSelection {
+            anchor,
+            head: position,
+        };
+        self.preferred_column = None;
+        window.focus(&self.focus, cx);
+        self.ensure_cursor_visible();
+        cx.notify();
+        cx.stop_propagation();
+    }
+
+    fn mouse_move(&mut self, event: &MouseMoveEvent, cx: &mut Context<'_, Self>) {
+        if self.marked_range.is_some() {
+            self.mouse_anchor = None;
+            return;
+        }
+        let Some(anchor) = self.mouse_anchor else {
+            return;
+        };
+        if event.pressed_button != Some(MouseButton::Left) {
+            self.mouse_anchor = None;
+            return;
+        }
+        let Some(position) = self.byte_for_point(event.position) else {
+            return;
+        };
+        self.selection = TextSelection {
+            anchor,
+            head: position,
+        };
+        self.preferred_column = None;
+        self.ensure_cursor_visible();
+        cx.notify();
+    }
+
+    fn mouse_up(&mut self, event: &MouseUpEvent) {
+        if event.button == MouseButton::Left {
+            self.mouse_anchor = None;
+        }
+    }
+
+    fn scroll_wheel(&mut self, event: &ScrollWheelEvent, cx: &mut Context<'_, Self>) {
+        let Some(metrics) = self.metrics() else {
+            return;
+        };
+        let pixels = event.delta.pixel_delta(metrics.line_height).y.as_f32();
+        if !pixels.is_finite() {
+            return;
+        }
+        self.wheel_remainder += pixels;
+        let lines = (self.wheel_remainder / metrics.line_height.as_f32().max(1.0)).trunc() as i32;
+        self.wheel_remainder -= lines as f32 * metrics.line_height.as_f32();
+        if lines > 0 {
+            self.scroll_line = self.scroll_line.saturating_sub(lines as usize);
+        } else if lines < 0 {
+            self.scroll_line = self
+                .scroll_line
+                .saturating_add(lines.unsigned_abs() as usize)
+                .min(self.text.len_lines(LineType::LF) - 1);
+        }
+        cx.notify();
+    }
+
     fn metrics(&self) -> Option<LayoutMetrics> {
         *self.layout.borrow()
     }
@@ -859,22 +965,8 @@ impl EntityInputHandler for DocumentTextView {
         _: &mut Window,
         _: &mut Context<'_, Self>,
     ) -> Option<usize> {
-        let metrics = self.metrics()?;
-        let x = (point.x - metrics.bounds.origin.x).max(px(0.0));
-        let y = (point.y - metrics.bounds.origin.y).max(px(0.0));
-        let row = self.scroll_line + (y / metrics.line_height).floor() as usize;
-        let map = DisplayMap::new(4);
-        let line = RopeTextSource::new(&self.text, map)
-            .visible_line_windows(
-                row..row + 1,
-                self.scroll_column..self.scroll_column + metrics.visible_columns(),
-            )
-            .into_iter()
-            .next()?;
-        let viewport_column = (x / metrics.cell_width).round() as usize;
-        let target_column = self.scroll_column + viewport_column;
-        let local = map.byte_at_column_from(line.text(), target_column, line.display_start())?;
-        Some(self.text.byte_to_utf16_idx(line.byte_range().start + local))
+        let byte = self.byte_for_point(point)?;
+        Some(self.text.byte_to_utf16_idx(byte))
     }
 }
 
@@ -1130,6 +1222,19 @@ impl Render for DocumentTextView {
             .on_action(cx.listener(|view, _: &Redo, _, cx| view.travel_history(true, cx)))
             .on_action(cx.listener(|view, _: &Copy, _, cx| view.copy(cx)))
             .on_action(cx.listener(|view, _: &Paste, _, cx| view.paste(cx)))
+            .on_mouse_down(MouseButton::Left, cx.listener(DocumentTextView::mouse_down))
+            .on_mouse_move(cx.listener(|view, event: &MouseMoveEvent, _, cx| {
+                view.mouse_move(event, cx);
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|view, event: &MouseUpEvent, _, _| {
+                    view.mouse_up(event);
+                }),
+            )
+            .on_scroll_wheel(cx.listener(|view, event: &ScrollWheelEvent, _, cx| {
+                view.scroll_wheel(event, cx);
+            }))
             .child(canvas)
     }
 }

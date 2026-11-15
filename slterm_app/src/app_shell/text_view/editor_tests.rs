@@ -1179,6 +1179,257 @@ fn collapsed_copy_preserves_existing_clipboard(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn mouse_click_drag_and_shift_click_control_selection(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        crate::app_shell::theme::apply_dark_theme(cx);
+    });
+    let window = cx.add_window(|_, cx| Host::new("A中\nB", false, cx));
+    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    visual.update(|window, cx| {
+        window.draw(cx).clear(cx);
+    });
+    let metrics = window
+        .update(cx, |host, _, cx| host.view.read(cx).metrics().unwrap())
+        .unwrap();
+    let start = gpui::point(
+        metrics.bounds.origin.x + metrics.cell_width * 2.0,
+        metrics.bounds.origin.y,
+    );
+    visual.simulate_mouse_down(start, gpui::MouseButton::Left, gpui::Modifiers::default());
+    visual.simulate_mouse_move(
+        gpui::point(
+            metrics.bounds.origin.x,
+            metrics.bounds.origin.y + metrics.line_height,
+        ),
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
+    visual.simulate_mouse_up(
+        gpui::point(
+            metrics.bounds.origin.x,
+            metrics.bounds.origin.y + metrics.line_height,
+        ),
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
+    window
+        .update(cx, |host, window, cx| {
+            host.view.update(cx, |view, cx| {
+                assert_eq!(
+                    view.selected_text_range(false, window, cx).unwrap().range,
+                    2..3
+                );
+            });
+        })
+        .unwrap();
+    visual.simulate_mouse_move(
+        gpui::point(metrics.bounds.origin.x, metrics.bounds.origin.y),
+        None,
+        gpui::Modifiers::default(),
+    );
+    window
+        .update(cx, |host, window, cx| {
+            host.view.update(cx, |view, cx| {
+                assert_eq!(
+                    view.selected_text_range(false, window, cx).unwrap().range,
+                    2..3
+                );
+            });
+        })
+        .unwrap();
+    visual.simulate_click(
+        gpui::point(metrics.bounds.origin.x, metrics.bounds.origin.y),
+        gpui::Modifiers {
+            shift: true,
+            ..gpui::Modifiers::default()
+        },
+    );
+    window
+        .update(cx, |host, window, cx| {
+            host.view.update(cx, |view, cx| {
+                let selection = view.selected_text_range(false, window, cx).unwrap();
+                assert_eq!(selection.range, 0..2);
+                assert!(selection.reversed);
+            });
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn mouse_wheel_scrolls_lines_and_preserves_fractional_pixels(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        crate::app_shell::theme::apply_dark_theme(cx);
+    });
+    let window = cx.add_window(|_, cx| Host::new("0\n1\n2\n3\n4", false, cx));
+    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    visual.update(|window, cx| {
+        window.draw(cx).clear(cx);
+    });
+    let metrics = window
+        .update(cx, |host, _, cx| host.view.read(cx).metrics().unwrap())
+        .unwrap();
+    visual.simulate_event(gpui::ScrollWheelEvent {
+        position: metrics.bounds.center(),
+        delta: gpui::ScrollDelta::Pixels(gpui::point(
+            px(0.0),
+            px(-metrics.line_height.as_f32() / 2.0),
+        )),
+        modifiers: gpui::Modifiers::default(),
+        ..Default::default()
+    });
+    window
+        .update(cx, |host, _, cx| {
+            assert_eq!(host.view.read(cx).scroll_line, 0)
+        })
+        .unwrap();
+    visual.simulate_event(gpui::ScrollWheelEvent {
+        position: metrics.bounds.center(),
+        delta: gpui::ScrollDelta::Pixels(gpui::point(
+            px(0.0),
+            px(-metrics.line_height.as_f32() / 2.0),
+        )),
+        modifiers: gpui::Modifiers::default(),
+        ..Default::default()
+    });
+    window
+        .update(cx, |host, _, cx| {
+            assert_eq!(host.view.read(cx).scroll_line, 1)
+        })
+        .unwrap();
+    visual.simulate_event(gpui::ScrollWheelEvent {
+        position: metrics.bounds.center(),
+        delta: gpui::ScrollDelta::Lines(gpui::point(0.0, 1.0)),
+        modifiers: gpui::Modifiers::default(),
+        ..Default::default()
+    });
+    window
+        .update(cx, |host, _, cx| {
+            assert_eq!(host.view.read(cx).scroll_line, 0)
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn snapshot_change_cancels_an_inflight_mouse_selection(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        crate::app_shell::theme::apply_dark_theme(cx);
+    });
+    let window = cx.add_window(|_, cx| Host::new("abc", false, cx));
+    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    visual.update(|window, cx| {
+        window.draw(cx).clear(cx);
+    });
+    let metrics = window
+        .update(cx, |host, _, cx| host.view.read(cx).metrics().unwrap())
+        .unwrap();
+    visual.simulate_mouse_down(
+        gpui::point(
+            metrics.bounds.origin.x + metrics.cell_width * 3.0,
+            metrics.bounds.origin.y,
+        ),
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
+    window
+        .update(cx, |host, _window, cx| {
+            let transaction = EditTransaction {
+                document_id: host.id,
+                expected_text_revision: 0,
+                edits: vec![TextEdit::new(0..3, "")],
+                origin: EditOrigin::UserInput,
+                merge_policy: MergePolicy::Disallowed,
+            };
+            host.registry
+                .borrow_mut()
+                .apply(
+                    transaction.clone(),
+                    TextStateId::from_uuid(Uuid::now_v7()).unwrap(),
+                    Instant::now(),
+                )
+                .unwrap();
+            let registry = host.registry.borrow();
+            let session = registry.session(host.id).unwrap();
+            host.view.update(cx, |view, cx| {
+                view.apply_edit_snapshot(session, &transaction, cx);
+            });
+        })
+        .unwrap();
+    visual.simulate_mouse_move(
+        metrics.bounds.origin,
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
+    window
+        .update(cx, |host, window, cx| {
+            host.view.update(cx, |view, cx| {
+                assert_eq!(
+                    view.selected_text_range(false, window, cx).unwrap().range,
+                    0..0
+                );
+            });
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn ime_start_cancels_an_inflight_mouse_selection(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        crate::app_shell::theme::apply_dark_theme(cx);
+    });
+    let window = cx.add_window(|_, cx| Host::new("abc", false, cx));
+    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    visual.update(|window, cx| {
+        window.draw(cx).clear(cx);
+    });
+    let metrics = window
+        .update(cx, |host, _, cx| host.view.read(cx).metrics().unwrap())
+        .unwrap();
+    visual.simulate_mouse_down(
+        gpui::point(
+            metrics.bounds.origin.x + metrics.cell_width * 3.0,
+            metrics.bounds.origin.y,
+        ),
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
+    window
+        .update(cx, |host, window, cx| {
+            host.view.update(cx, |view, cx| {
+                view.replace_and_mark_text_in_range(None, "x", None, window, cx);
+            });
+        })
+        .unwrap();
+    visual.simulate_mouse_move(
+        metrics.bounds.origin,
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
+    window
+        .update(cx, |host, window, cx| {
+            host.view.update(cx, |view, cx| {
+                assert_eq!(
+                    view.selected_text_range(false, window, cx).unwrap().range,
+                    4..4
+                );
+                assert_eq!(view.marked_text_range(window, cx), Some(3..4));
+            });
+        })
+        .unwrap();
+}
+
+#[gpui::test]
 fn read_only_view_rejects_ime_without_touching_document(cx: &mut TestAppContext) {
     cx.update(|cx| {
         gpui_component::init(cx);
