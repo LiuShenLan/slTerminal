@@ -307,7 +307,23 @@ impl DocumentRegistry {
                 let previous_identity = session.location.file_identity();
                 let location_changed = session.location != location;
                 if content_changed {
-                    match (&session.body, &content) {
+                    let next_generation = if matches!(content, DocumentBody::Paged(_)) {
+                        Some(
+                            session
+                                .paged_generation
+                                .checked_add(1)
+                                .ok_or(ExternalChangeError::SourceGenerationExhausted)?,
+                        )
+                    } else {
+                        None
+                    };
+                    let next_body = match content {
+                        DocumentBody::Editable(text) => DocumentBody::Editable(text),
+                        DocumentBody::Paged(source) => DocumentBody::Paged(
+                            source.with_generation(next_generation.expect("分页代次已分配")),
+                        ),
+                    };
+                    match (&session.body, &next_body) {
                         (DocumentBody::Editable(before), DocumentBody::Editable(after)) => {
                             session.history.record_reload(
                                 before,
@@ -319,18 +335,10 @@ impl DocumentRegistry {
                         }
                         _ => session.history.reset(),
                     }
-                    session.body = match content {
-                        DocumentBody::Editable(text) => DocumentBody::Editable(text),
-                        DocumentBody::Paged(source) => {
-                            let next = match &session.body {
-                                DocumentBody::Paged(current) => current
-                                    .advanced(source.index().clone(), *source.fingerprint())
-                                    .ok_or(ExternalChangeError::SourceGenerationExhausted)?,
-                                DocumentBody::Editable(_) => source,
-                            };
-                            DocumentBody::Paged(next)
-                        }
-                    };
+                    session.body = next_body;
+                    if let Some(generation) = next_generation {
+                        session.paged_generation = generation;
+                    }
                     session.current_state = new_state;
                     session.saved_state = new_state;
                     session.known_states.insert(new_state);

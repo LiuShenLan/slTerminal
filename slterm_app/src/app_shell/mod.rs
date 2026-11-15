@@ -51,8 +51,10 @@ pub(crate) mod file_drop;
 // 文本文件视图骨架(只读视图与编辑内核)。
 #[allow(dead_code)] // 生产消费归 Document 与文本视图阶段。
 pub(crate) mod file_editor;
+// Document 专用文本视图与 Unicode/IME 坐标。
 #[allow(dead_code)] // 生产消费归 AppRoot Paged Document 打开与逐页读取。
 pub(crate) mod paged_document;
+pub(crate) mod text_view;
 // 外部文件系统事件监听(树根递归 + 打开文件父目录;有界唤醒前台)。
 #[allow(dead_code)] // 生产消费归文件与 Git 阶段。
 pub(crate) mod fs_watch;

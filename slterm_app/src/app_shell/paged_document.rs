@@ -5,7 +5,7 @@ use std::io::{self, Read as _, Seek as _};
 use sha2::{Digest as _, Sha256};
 use slterm_document::{
     DocumentContent, DocumentEncoding, DocumentTextRequest, LineEnding, PAGE_SOURCE_BYTES,
-    PageIndex, PagedSource, SearchError, SourceByteRange, TextChunk, TextEncoding,
+    PageIndex, PagedLineIndex, PagedSource, SearchError, SourceByteRange, TextChunk, TextEncoding,
 };
 use slterm_path::ResolvedPath;
 
@@ -14,6 +14,7 @@ pub(crate) struct PagedDocument {
     location: ResolvedPath,
     encoding: TextEncoding,
     index: PageIndex,
+    line_index: PagedLineIndex,
     fingerprint: [u8; 32],
 }
 
@@ -28,6 +29,7 @@ impl PagedDocument {
         verify_identity(&file, location)?;
         let (encoding, bom, bom_bytes) = detect_encoding(&mut file, requested)?;
         let mut ranges = Vec::new();
+        let mut line_stats = Vec::new();
         let mut hasher = Sha256::new();
         let mut start = 0;
         let mut line_ending = None;
@@ -49,6 +51,11 @@ impl PagedDocument {
                 bytes.truncate(line_end);
                 end = start + line_end as u64;
             }
+            if end < total_bytes {
+                let trailing = trailing_carriage_return_len(&bytes, encoding, body_start);
+                bytes.truncate(bytes.len() - trailing);
+                end -= trailing as u64;
+            }
             if end == start {
                 return Err(invalid_encoding());
             }
@@ -60,16 +67,15 @@ impl PagedDocument {
             } else {
                 encoding
                     .decode(&bytes[body_start..])
+                    .map(|text| text.replace("\r\n", "\n"))
                     .map_err(|_| invalid_encoding())?
             };
-            if line_ending.is_none()
-                && let Some(index) = decoded.find('\n')
-            {
-                line_ending = Some(if index > 0 && decoded.as_bytes()[index - 1] == b'\r' {
-                    LineEnding::Crlf
-                } else {
-                    LineEnding::Lf
-                });
+            line_stats.push((
+                decoded.bytes().filter(|byte| *byte == b'\n').count(),
+                decoded.len(),
+            ));
+            if line_ending.is_none() {
+                line_ending = first_line_ending(&bytes, encoding, body_start);
             }
             trailing_newline = decoded.ends_with('\n');
             hasher.update(&bytes);
@@ -81,6 +87,7 @@ impl PagedDocument {
         }
         verify_identity(&file, location)?;
         let index = PageIndex::new(total_bytes, ranges).map_err(|_| invalid_encoding())?;
+        let line_index = PagedLineIndex::from_page_stats(&line_stats);
         Ok(Self {
             location: location.clone(),
             encoding: TextEncoding {
@@ -90,12 +97,17 @@ impl PagedDocument {
                 trailing_newline,
             },
             index,
+            line_index,
             fingerprint: hasher.finalize().into(),
         })
     }
 
     pub(crate) const fn index(&self) -> &PageIndex {
         &self.index
+    }
+
+    pub(crate) const fn line_index(&self) -> &PagedLineIndex {
+        &self.line_index
     }
 
     pub(crate) fn source(&self) -> PagedSource {
@@ -211,6 +223,64 @@ const fn bom_len(encoding: DocumentEncoding) -> usize {
     }
 }
 
+fn trailing_carriage_return_len(
+    bytes: &[u8],
+    encoding: DocumentEncoding,
+    body_start: usize,
+) -> usize {
+    match encoding {
+        DocumentEncoding::Utf16Le | DocumentEncoding::Utf16Be
+            if bytes.len().saturating_sub(body_start) >= 2 =>
+        {
+            let pair = &bytes[bytes.len() - 2..];
+            let unit = if encoding == DocumentEncoding::Utf16Le {
+                u16::from_le_bytes([pair[0], pair[1]])
+            } else {
+                u16::from_be_bytes([pair[0], pair[1]])
+            };
+            usize::from(unit == 0x000d) * 2
+        }
+        DocumentEncoding::Utf16Le | DocumentEncoding::Utf16Be => 0,
+        _ => usize::from(bytes.last() == Some(&b'\r')),
+    }
+}
+
+fn first_line_ending(
+    bytes: &[u8],
+    encoding: DocumentEncoding,
+    body_start: usize,
+) -> Option<LineEnding> {
+    match encoding {
+        DocumentEncoding::Utf16Le | DocumentEncoding::Utf16Be => {
+            let mut previous = None;
+            for pair in bytes[body_start..].chunks_exact(2) {
+                let unit = if encoding == DocumentEncoding::Utf16Le {
+                    u16::from_le_bytes([pair[0], pair[1]])
+                } else {
+                    u16::from_be_bytes([pair[0], pair[1]])
+                };
+                if unit == 0x000a {
+                    return Some(if previous == Some(0x000d) {
+                        LineEnding::Crlf
+                    } else {
+                        LineEnding::Lf
+                    });
+                }
+                previous = Some(unit);
+            }
+            None
+        }
+        _ => {
+            let index = bytes.iter().position(|byte| *byte == b'\n')?;
+            Some(if index > body_start && bytes[index - 1] == b'\r' {
+                LineEnding::Crlf
+            } else {
+                LineEnding::Lf
+            })
+        }
+    }
+}
+
 fn last_line_end(bytes: &[u8], encoding: DocumentEncoding, body_start: usize) -> Option<usize> {
     match encoding {
         DocumentEncoding::Utf16Le | DocumentEncoding::Utf16Be => bytes[body_start..]
@@ -274,11 +344,21 @@ mod tests {
     #[test]
     fn paged_reads_utf8_utf16_and_gbk_without_splitting_characters() {
         let temp = tempfile::tempdir().unwrap();
-        let utf8_text = format!("{}😀\nnext\r\n", "a".repeat(PAGE_SOURCE_BYTES as usize - 2));
+        let utf8_text = format!(
+            "{}😀\r\nnext\r\n",
+            "a".repeat(PAGE_SOURCE_BYTES as usize - 2)
+        );
         let utf8 = temp.path().join("utf8.txt");
         std::fs::write(&utf8, &utf8_text).unwrap();
         let document = PagedDocument::open(&location(&utf8), None).unwrap();
         assert_eq!(document.index().len(), 2);
+        assert_eq!(document.line_index().line_count(), 3);
+        assert_eq!(document.encoding().line_ending, LineEnding::Crlf);
+        let first_page_len = document.read_page(0).unwrap().len();
+        assert_eq!(
+            document.line_index().location(1),
+            Some((1, 1, first_page_len))
+        );
         assert_eq!(read_all(&document), utf8_text.replace("\r\n", "\n"));
 
         let utf16_text = format!(
@@ -297,6 +377,7 @@ mod tests {
         std::fs::write(&utf16, bytes).unwrap();
         let document = PagedDocument::open(&location(&utf16), None).unwrap();
         assert_eq!(document.index().len(), 2);
+        assert_eq!(document.line_index().line_count(), 3);
         assert_eq!(read_all(&document), utf16_text);
 
         let gbk = temp.path().join("gbk.txt");
@@ -362,6 +443,19 @@ mod tests {
             .copy(document.chunks_for(&request).unwrap(), &cancellation)
             .unwrap();
         assert_eq!(copied, text);
+    }
+
+    #[test]
+    fn paged_crlf_is_never_split_between_source_pages() {
+        let temp = tempfile::tempdir().unwrap();
+        let text = format!("{}\r\nnext", "a".repeat(PAGE_SOURCE_BYTES as usize - 1));
+        let path = temp.path().join("split-crlf.txt");
+        std::fs::write(&path, &text).unwrap();
+        let document = PagedDocument::open(&location(&path), None).unwrap();
+
+        assert_eq!(document.index().len(), 2);
+        assert_eq!(document.encoding().line_ending, LineEnding::Crlf);
+        assert_eq!(read_all(&document), text.replace("\r\n", "\n"));
     }
 
     #[test]

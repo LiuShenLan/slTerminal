@@ -1296,4 +1296,80 @@ mod tests {
         let request = dirty.begin_save(dirty_id, 0).unwrap();
         assert_eq!(request.text().to_string(), "draft");
     }
+
+    #[test]
+    fn paged_source_generation_survives_editable_roundtrip() {
+        fn reload(
+            registry: &mut DocumentRegistry,
+            id: DocumentId,
+            content: crate::DocumentBody,
+            new_state: TextStateId,
+        ) {
+            let request = registry.external_request(id, 0).unwrap();
+            let location = request.location().clone();
+            registry
+                .apply_external(
+                    crate::DocumentExternalChange::Reload {
+                        request,
+                        content,
+                        disk_baseline: std::sync::Arc::default(),
+                        metadata: DocumentMetadata::default(),
+                        location,
+                        new_state,
+                    },
+                    Instant::now(),
+                )
+                .unwrap();
+        }
+
+        let id = DOCUMENT.parse().unwrap();
+        let initial = state(STATE_A);
+        let mut registry = DocumentRegistry::new();
+        let paged = |fingerprint| {
+            crate::DocumentBody::Paged(crate::PagedSource::new(
+                crate::PageIndex::new(0, Vec::new()).unwrap(),
+                fingerprint,
+            ))
+        };
+        registry
+            .open(
+                id,
+                slterm_path::ResolvedPath::new(
+                    slterm_path::CanonicalPath::new("D:/work/paged.txt").unwrap(),
+                    None,
+                ),
+                paged([0; 32]),
+                initial,
+                std::sync::Arc::default(),
+                DocumentMetadata::default(),
+            )
+            .unwrap();
+
+        reload(&mut registry, id, paged([1; 32]), state(STATE_B));
+        assert_eq!(
+            registry
+                .session(id)
+                .unwrap()
+                .paged()
+                .unwrap()
+                .source_generation(),
+            1
+        );
+        reload(
+            &mut registry,
+            id,
+            crate::DocumentBody::Editable(Rope::from_str("editable")),
+            state(STATE_C),
+        );
+        reload(&mut registry, id, paged([2; 32]), state(STATE_D));
+        assert_eq!(
+            registry
+                .session(id)
+                .unwrap()
+                .paged()
+                .unwrap()
+                .source_generation(),
+            2
+        );
+    }
 }

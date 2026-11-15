@@ -20,6 +20,7 @@ pub struct DocumentSession {
     pub(crate) id: DocumentId,
     pub(crate) location: ResolvedPath,
     pub(crate) body: DocumentBody,
+    pub(crate) paged_generation: u64,
     pub(crate) text_revision: u64,
     pub(crate) current_state: TextStateId,
     pub(crate) saved_state: TextStateId,
@@ -205,12 +206,18 @@ impl DocumentRegistry {
         }
 
         let path = location.canonical_path().clone();
+        let body = text.into();
+        let paged_generation = match &body {
+            DocumentBody::Paged(source) => source.source_generation(),
+            DocumentBody::Editable(_) => 0,
+        };
         self.sessions.insert(
             id,
             DocumentSession {
                 id,
                 location: location.clone(),
-                body: text.into(),
+                body,
+                paged_generation,
                 text_revision: 0,
                 current_state: state,
                 saved_state: state,

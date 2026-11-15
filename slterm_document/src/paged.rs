@@ -54,12 +54,9 @@ impl PagedSource {
         &self.fingerprint
     }
 
-    pub(crate) fn advanced(&self, index: PageIndex, fingerprint: [u8; 32]) -> Option<Self> {
-        Some(Self {
-            index,
-            fingerprint,
-            source_generation: self.source_generation.checked_add(1)?,
-        })
+    pub(crate) fn with_generation(mut self, source_generation: u64) -> Self {
+        self.source_generation = source_generation;
+        self
     }
 }
 
@@ -150,6 +147,66 @@ impl PageIndex {
 
     pub const fn total_bytes(&self) -> u64 {
         self.total_bytes
+    }
+}
+
+/// 每页换行数与 UTF-8 长度形成的只读行索引；不保存正文。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PagedLineIndex {
+    first_lines: Vec<usize>,
+    utf8_offsets: Vec<usize>,
+    newlines: Vec<usize>,
+    line_count: usize,
+}
+
+impl PagedLineIndex {
+    /// stats 每项为（页内换行数，页解码后的 UTF-8 字节数）；非末页须在换行处结束。
+    pub fn from_page_stats(stats: &[(usize, usize)]) -> Self {
+        let mut first_lines = Vec::with_capacity(stats.len());
+        let mut utf8_offsets = Vec::with_capacity(stats.len());
+        let mut newlines_in_pages = Vec::with_capacity(stats.len());
+        let mut line_count = 0;
+        let mut utf8_offset = 0;
+        for (index, (newlines, utf8_bytes)) in stats.iter().copied().enumerate() {
+            first_lines.push(line_count);
+            utf8_offsets.push(utf8_offset);
+            newlines_in_pages.push(newlines);
+            line_count += newlines + usize::from(index + 1 == stats.len());
+            utf8_offset += utf8_bytes;
+        }
+        if stats.is_empty() {
+            line_count = 1;
+        }
+        Self {
+            first_lines,
+            utf8_offsets,
+            newlines: newlines_in_pages,
+            line_count,
+        }
+    }
+
+    pub const fn line_count(&self) -> usize {
+        self.line_count
+    }
+
+    /// 返回（页号，页内行号，页 UTF-8 起点）；空文档没有真实页。
+    pub fn location(&self, line: usize) -> Option<(usize, usize, usize)> {
+        if line >= self.line_count || self.first_lines.is_empty() {
+            return None;
+        }
+        let next = self.first_lines.partition_point(|first| *first < line);
+        let page = if next < self.first_lines.len() && self.first_lines[next] == line {
+            next
+        } else {
+            next.checked_sub(1)?
+        };
+        Some((page, line - self.first_lines[page], self.utf8_offsets[page]))
+    }
+
+    pub fn line_ends_in_page(&self, page: usize, line_in_page: usize) -> Option<bool> {
+        self.newlines
+            .get(page)
+            .map(|newlines| line_in_page < *newlines)
     }
 }
 
@@ -266,7 +323,9 @@ impl Default for DocumentPageCache {
 mod tests {
     use std::str::FromStr;
 
-    use super::{DocumentPageCache, PAGE_SOURCE_BYTES, PageIndex, PageKey, SourceByteRange};
+    use super::{
+        DocumentPageCache, PAGE_SOURCE_BYTES, PageIndex, PageKey, PagedLineIndex, SourceByteRange,
+    };
     use crate::DocumentId;
 
     fn document() -> DocumentId {
@@ -310,6 +369,26 @@ mod tests {
             .is_err()
         );
         assert!(PageIndex::new(8, vec![SourceByteRange::new(0, 4).unwrap()]).is_err());
+    }
+
+    #[test]
+    fn paged_line_index_maps_global_lines_and_utf8_offsets() {
+        let index = PagedLineIndex::from_page_stats(&[(1, "中\n".len()), (1, "😀\n".len())]);
+        assert_eq!(index.line_count(), 3);
+        assert_eq!(index.location(0), Some((0, 0, 0)));
+        assert_eq!(index.location(1), Some((1, 0, 4)));
+        assert_eq!(index.location(2), Some((1, 1, 4)));
+        assert_eq!(index.location(3), None);
+
+        let empty = PagedLineIndex::from_page_stats(&[]);
+        assert_eq!(empty.line_count(), 1);
+        assert_eq!(empty.location(0), None);
+
+        let split_line = PagedLineIndex::from_page_stats(&[(0, 3), (2, 10)]);
+        assert_eq!(split_line.line_count(), 3);
+        assert_eq!(split_line.location(0), Some((0, 0, 0)));
+        assert_eq!(split_line.location(1), Some((1, 1, 3)));
+        assert_eq!(split_line.location(2), Some((1, 2, 3)));
     }
 
     #[test]
