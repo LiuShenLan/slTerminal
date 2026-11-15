@@ -309,7 +309,7 @@ impl DisplayMap {
         Some(text.len())
     }
 
-    fn grapheme_width(&self, grapheme: &str, column: usize) -> usize {
+    pub(crate) fn grapheme_width(&self, grapheme: &str, column: usize) -> usize {
         if grapheme == "\t" {
             self.tab_width - column % self.tab_width
         } else {

@@ -73,6 +73,7 @@ impl PagedDocument {
             line_stats.push((
                 decoded.bytes().filter(|byte| *byte == b'\n').count(),
                 decoded.len(),
+                decoded.ends_with('\n'),
             ));
             if line_ending.is_none() {
                 line_ending = first_line_ending(&bytes, encoding, body_start);

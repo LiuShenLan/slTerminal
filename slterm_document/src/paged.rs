@@ -1,6 +1,7 @@
 //! 只读分页的源范围索引与全应用解码页缓存。
 
 use std::collections::{BTreeMap, VecDeque};
+use std::sync::Arc;
 
 use ropey::Rope;
 
@@ -156,29 +157,34 @@ impl PageIndex {
     }
 }
 
-/// 每页换行数与 UTF-8 长度形成的只读行索引；不保存正文。
+/// 每页换行数、换行结尾与 UTF-8 长度形成的只读行索引；不保存正文。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PagedLineIndex {
     first_lines: Vec<usize>,
     utf8_offsets: Vec<usize>,
     newlines: Vec<usize>,
+    continuations: Vec<bool>,
     line_count: usize,
 }
 
 impl PagedLineIndex {
-    /// stats 每项为（页内换行数，页解码后的 UTF-8 字节数）；非末页须在换行处结束。
-    pub fn from_page_stats(stats: &[(usize, usize)]) -> Self {
+    /// stats 每项为（页内换行数，页解码后的 UTF-8 字节数，是否以换行结束）。
+    pub fn from_page_stats(stats: &[(usize, usize, bool)]) -> Self {
         let mut first_lines = Vec::with_capacity(stats.len());
         let mut utf8_offsets = Vec::with_capacity(stats.len());
         let mut newlines_in_pages = Vec::with_capacity(stats.len());
+        let mut continuations = Vec::with_capacity(stats.len());
         let mut line_count = 0;
         let mut utf8_offset = 0;
-        for (index, (newlines, utf8_bytes)) in stats.iter().copied().enumerate() {
+        let mut previous_ended = true;
+        for (index, (newlines, utf8_bytes, ended)) in stats.iter().copied().enumerate() {
             first_lines.push(line_count);
             utf8_offsets.push(utf8_offset);
             newlines_in_pages.push(newlines);
+            continuations.push(index > 0 && !previous_ended);
             line_count += newlines + usize::from(index + 1 == stats.len());
             utf8_offset += utf8_bytes;
+            previous_ended = ended;
         }
         if stats.is_empty() {
             line_count = 1;
@@ -187,6 +193,7 @@ impl PagedLineIndex {
             first_lines,
             utf8_offsets,
             newlines: newlines_in_pages,
+            continuations,
             line_count,
         }
     }
@@ -200,13 +207,23 @@ impl PagedLineIndex {
         if line >= self.line_count || self.first_lines.is_empty() {
             return None;
         }
-        let next = self.first_lines.partition_point(|first| *first < line);
-        let page = if next < self.first_lines.len() && self.first_lines[next] == line {
-            next
-        } else {
-            next.checked_sub(1)?
-        };
+        let next = self.first_lines.partition_point(|first| *first <= line);
+        let mut page = next.checked_sub(1)?;
+        while page > 0 && self.continuations[page] && self.first_lines[page] == line {
+            page -= 1;
+        }
         Some((page, line - self.first_lines[page], self.utf8_offsets[page]))
+    }
+
+    /// 返回包含目标 UTF-8 偏移的页候选与页起点；调用方按真实页长复核边界。
+    pub fn utf8_page(&self, byte: usize) -> Option<(usize, usize)> {
+        let next = self.utf8_offsets.partition_point(|offset| *offset <= byte);
+        let page = next.checked_sub(1)?;
+        Some((page, self.utf8_offsets[page]))
+    }
+
+    pub fn page_utf8_offset(&self, page: usize) -> Option<usize> {
+        self.utf8_offsets.get(page).copied()
     }
 
     pub fn line_ends_in_page(&self, page: usize, line_in_page: usize) -> Option<bool> {
@@ -242,7 +259,7 @@ impl PageKey {
 pub struct DocumentPageCache {
     capacity: usize,
     used_bytes: usize,
-    pages: BTreeMap<PageKey, String>,
+    pages: BTreeMap<PageKey, Arc<str>>,
     lru: VecDeque<PageKey>,
 }
 
@@ -260,12 +277,13 @@ impl DocumentPageCache {
         }
     }
 
-    pub fn get(&mut self, key: &PageKey) -> Option<&str> {
+    /// 返回共享页句柄；调用方可在后续缓存操作时保留文本切片，无需复制页内容。
+    pub fn get(&mut self, key: &PageKey) -> Option<Arc<str>> {
         if !self.pages.contains_key(key) {
             return None;
         }
         self.touch(*key);
-        self.pages.get(key).map(String::as_str)
+        self.pages.get(key).cloned()
     }
 
     /// 返回是否进入缓存；超过总容量的单页只读返回，不驱逐其他页。
@@ -274,6 +292,7 @@ impl DocumentPageCache {
         if text.len() > self.capacity {
             return false;
         }
+        let text: Arc<str> = text.into();
         while self.used_bytes + text.len() > self.capacity {
             let Some(oldest) = self.lru.pop_front() else {
                 break;
@@ -291,7 +310,7 @@ impl DocumentPageCache {
     pub fn remove_document(&mut self, document_id: DocumentId) {
         self.pages.retain(|key, _| key.document_id != document_id);
         self.lru.retain(|key| key.document_id != document_id);
-        self.used_bytes = self.pages.values().map(String::len).sum();
+        self.used_bytes = self.pages.values().map(|text| text.len()).sum();
     }
 
     pub fn len(&self) -> usize {
@@ -344,7 +363,7 @@ mod tests {
         let source = PagedSource::new(
             PageIndex::new(0, Vec::new()).unwrap(),
             [4; 32],
-            PagedLineIndex::from_page_stats(&[(2, 6)]),
+            PagedLineIndex::from_page_stats(&[(2, 6, true)]),
         );
         assert_eq!(source.line_index(), source.clone().line_index());
         assert_eq!(source.line_index().line_count(), 3);
@@ -391,22 +410,36 @@ mod tests {
 
     #[test]
     fn paged_line_index_maps_global_lines_and_utf8_offsets() {
-        let index = PagedLineIndex::from_page_stats(&[(1, "中\n".len()), (1, "😀\n".len())]);
+        let index =
+            PagedLineIndex::from_page_stats(&[(1, "中\n".len(), true), (1, "😀\n".len(), true)]);
         assert_eq!(index.line_count(), 3);
         assert_eq!(index.location(0), Some((0, 0, 0)));
         assert_eq!(index.location(1), Some((1, 0, 4)));
         assert_eq!(index.location(2), Some((1, 1, 4)));
         assert_eq!(index.location(3), None);
+        assert_eq!(index.utf8_page(0), Some((0, 0)));
+        assert_eq!(index.utf8_page(3), Some((0, 0)));
+        assert_eq!(index.utf8_page(4), Some((1, 4)));
+        assert_eq!(index.page_utf8_offset(1), Some(4));
+        assert_eq!(index.page_utf8_offset(2), None);
 
         let empty = PagedLineIndex::from_page_stats(&[]);
         assert_eq!(empty.line_count(), 1);
         assert_eq!(empty.location(0), None);
 
-        let split_line = PagedLineIndex::from_page_stats(&[(0, 3), (2, 10)]);
+        let split_line = PagedLineIndex::from_page_stats(&[(0, 3, false), (2, 10, true)]);
         assert_eq!(split_line.line_count(), 3);
         assert_eq!(split_line.location(0), Some((0, 0, 0)));
         assert_eq!(split_line.location(1), Some((1, 1, 3)));
         assert_eq!(split_line.location(2), Some((1, 2, 3)));
+
+        let continued =
+            PagedLineIndex::from_page_stats(&[(1, 8, false), (0, 1, false), (1, 5, true)]);
+        assert_eq!(continued.location(1), Some((0, 1, 0)));
+        assert_eq!(continued.location(2), Some((2, 1, 9)));
+
+        let new_line = PagedLineIndex::from_page_stats(&[(1, 8, true), (1, 5, true)]);
+        assert_eq!(new_line.location(1), Some((1, 0, 8)));
     }
 
     #[test]
@@ -419,19 +452,19 @@ mod tests {
         assert!(cache.insert(first, "aaaa".to_owned()));
         assert!(cache.insert(second, "bbbb".to_owned()));
         assert_eq!(
-            cache.get(&first).map(str::to_owned),
+            cache.get(&first).map(|text| text.to_string()),
             Some("aaaa".to_owned())
         );
 
         assert!(cache.insert(third, "cccc".to_owned()));
 
         assert_eq!(
-            cache.get(&first).map(str::to_owned),
+            cache.get(&first).map(|text| text.to_string()),
             Some("aaaa".to_owned())
         );
         assert_eq!(cache.get(&second), None);
         assert_eq!(
-            cache.get(&third).map(str::to_owned),
+            cache.get(&third).map(|text| text.to_string()),
             Some("cccc".to_owned())
         );
         assert_eq!(cache.len(), 2);
@@ -448,9 +481,12 @@ mod tests {
         cache.insert(old, "old".to_owned());
         cache.insert(current, "current".to_owned());
 
-        assert_eq!(cache.get(&old).map(str::to_owned), Some("old".to_owned()));
         assert_eq!(
-            cache.get(&current).map(str::to_owned),
+            cache.get(&old).map(|text| text.to_string()),
+            Some("old".to_owned())
+        );
+        assert_eq!(
+            cache.get(&current).map(|text| text.to_string()),
             Some("current".to_owned())
         );
         cache.remove_document(document());
