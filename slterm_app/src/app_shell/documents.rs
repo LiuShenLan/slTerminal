@@ -9,6 +9,7 @@ use slterm_document::{
     DocumentSaveRequest, TextStateId,
 };
 use slterm_path::{CanonicalPath, PathGrant, PathOperation, PathPolicy, PathRequest};
+use slterm_workspace::{ProjectRootStatus, ProjectSnapshot, ViewKey};
 use uuid::Uuid;
 
 use super::file_editor::document::{Document, DocumentWriteContext};
@@ -20,6 +21,28 @@ pub(crate) struct OpenedDocument {
     pub(crate) outcome: DocumentOpenOutcome,
     /// 只有新聚合需要把已读快照移交给编辑器；既有聚合不得重读替换正文。
     pub(crate) document: Option<Document>,
+}
+
+/// 启动读取与所有恢复视图共享同一 Document 的 Ready 项目授权并集。
+pub(crate) fn document_project_grants(
+    snapshot: &ProjectSnapshot,
+    id: DocumentId,
+) -> Vec<PathGrant> {
+    snapshot
+        .registry()
+        .projects()
+        .iter()
+        .filter(|project| {
+            project.root_status() == ProjectRootStatus::Ready
+                && project.layout().view_keys().iter().any(|view| match view {
+                    ViewKey::Editor { document_id, .. }
+                    | ViewKey::Markdown { document_id, .. }
+                    | ViewKey::Diff { document_id, .. } => *document_id == id,
+                    _ => false,
+                })
+        })
+        .map(|project| PathGrant::project_root(project.root().clone()))
+        .collect()
 }
 
 pub(crate) struct DocumentOpenService {

@@ -21,6 +21,7 @@ use super::store::DocumentSnapshotStore;
 use super::writer::DocumentSnapshotWriter;
 use crate::persistence::close::{CloseCommitStatus, PersistedCloseIntent};
 use crate::persistence::metadata::RunMarker;
+use crate::persistence::startup::recovery::SnapshotRecoverer;
 use crate::persistence::workspace::WorkspaceDatabase;
 
 fn id(document: char) -> DocumentId {
@@ -461,6 +462,672 @@ fn snapshot_delete_commit_boundary_crash() {
             .unwrap();
         assert_eq!(close.commit_status, CloseCommitStatus::StateCommitted);
     }
+}
+
+fn recovered_layout(
+    project_root: &std::path::Path,
+    document: DocumentId,
+    location: ResolvedPath,
+) -> ProjectSnapshot {
+    let project =
+        slterm_workspace::ProjectId::from_str("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0a2a").unwrap();
+    let group =
+        slterm_workspace::PanelGroupId::from_str("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0b2a").unwrap();
+    let mut projects = ProjectRegistry::new();
+    projects
+        .add_project(
+            project,
+            CanonicalPath::new(dunce::canonicalize(project_root).unwrap()).unwrap(),
+        )
+        .unwrap();
+    ProjectSnapshot::restore(projects, Vec::new())
+        .unwrap()
+        .with_opened_document(project, group, document, location)
+        .unwrap()
+        .0
+}
+
+fn recovered_pair_layout(
+    root: &std::path::Path,
+    old_id: DocumentId,
+    old_location: ResolvedPath,
+    new_id: DocumentId,
+    new_location: ResolvedPath,
+) -> ProjectSnapshot {
+    let layout = recovered_layout(root, old_id, old_location);
+    layout
+        .with_opened_document(
+            slterm_workspace::ProjectId::from_str("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0a2a").unwrap(),
+            slterm_workspace::PanelGroupId::from_str("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0b2a")
+                .unwrap(),
+            new_id,
+            new_location,
+        )
+        .unwrap()
+        .0
+}
+
+fn snapshot_at(
+    document: char,
+    path: &std::path::Path,
+    disk: &str,
+    draft: &str,
+) -> DocumentSnapshot {
+    snapshot_at_encoding(document, path, disk, draft, None)
+}
+
+fn snapshot_at_encoding(
+    document: char,
+    path: &std::path::Path,
+    disk: &str,
+    draft: &str,
+    requested: Option<slterm_document::DocumentEncoding>,
+) -> DocumentSnapshot {
+    let bytes = requested.map_or_else(
+        || disk.as_bytes().to_vec(),
+        |encoding| {
+            slterm_document::TextEncoding {
+                encoding,
+                bom: false,
+                line_ending: slterm_document::LineEnding::Lf,
+                trailing_newline: disk.ends_with('\n'),
+            }
+            .encode(disk)
+            .unwrap()
+        },
+    );
+    std::fs::write(path, &bytes).unwrap();
+    let canonical = CanonicalPath::new(dunce::canonicalize(path).unwrap()).unwrap();
+    let identity = crate::atomic_file::file_identity(&std::fs::File::open(path).unwrap()).unwrap();
+    let location = ResolvedPath::new(canonical, Some(identity));
+    let total_bytes = bytes.len() as u64;
+    let slterm_document::DocumentContent::Editable(decoded) =
+        slterm_document::DocumentContent::decode(bytes, total_bytes, requested)
+    else {
+        panic!("测试基线必须可编辑")
+    };
+    let id = id(document);
+    let mut registry = DocumentRegistry::new();
+    registry
+        .open(
+            id,
+            location,
+            Rope::from_str(&decoded.text),
+            state(document, '0'),
+            decoded.disk_baseline,
+            DocumentMetadata {
+                encoding: decoded.encoding,
+                read_only: false,
+            },
+        )
+        .unwrap();
+    edit(&mut registry, id, document, draft);
+    DocumentSnapshot::capture(registry.session(id).unwrap(), "run-recovery").unwrap()
+}
+
+#[test]
+fn startup_reconciles_layout_before_snapshot() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("project");
+    std::fs::create_dir(&root).unwrap();
+    let file = root.join("file.txt");
+    let snapshot = snapshot_at('a', &file, "disk\n", "draft\n");
+    let location = ResolvedPath::new(
+        CanonicalPath::new(dunce::canonicalize(&file).unwrap()).unwrap(),
+        Some(crate::atomic_file::file_identity(&std::fs::File::open(&file).unwrap()).unwrap()),
+    );
+    let layout = recovered_layout(&root, snapshot.document_id(), location);
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let mut store = DocumentSnapshotStore::new(&paths);
+    store
+        .write(&snapshot, &protected(&[snapshot.document_id()]))
+        .unwrap();
+    let mut database = WorkspaceDatabase::open(&paths).unwrap();
+    database.save_project_snapshot(&layout).unwrap();
+    let mut recoverer = super::recovery::DocumentSnapshotRecoverer::new(&paths);
+
+    let recovered =
+        crate::persistence::startup::StartupRecovery::recover(&mut database, Some(&mut recoverer))
+            .unwrap();
+
+    assert_eq!(recovered, layout);
+    let session = recoverer
+        .registry()
+        .session(snapshot.document_id())
+        .unwrap();
+    assert_eq!(session.text().unwrap().to_string(), "draft\n");
+    assert_eq!(session.saved_state(), state('a', '0'));
+    assert_eq!(session.current_state(), state('a', '1'));
+    assert_eq!(session.disk_baseline().as_ref(), b"disk\n");
+    assert!(!session.is_read_revoked());
+
+    let persistence = crate::app_shell::app_root::AppRootPersistence::load(&paths, None);
+    let restored = persistence
+        .recovered_documents()
+        .session(snapshot.document_id())
+        .unwrap();
+    assert_eq!(restored.text().unwrap().to_string(), "draft\n");
+    assert!(!persistence.document_requires_authorization(snapshot.document_id()));
+}
+
+#[test]
+fn unrepresentable_snapshot_draft_still_restores() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("project");
+    std::fs::create_dir(&root).unwrap();
+    let file = root.join("file.txt");
+    let snapshot = snapshot_at_encoding(
+        'a',
+        &file,
+        "disk\n",
+        "draft 😀\n",
+        Some(slterm_document::DocumentEncoding::Gbk),
+    );
+    let layout = recovered_layout(&root, snapshot.document_id(), snapshot.location().clone());
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let mut store = DocumentSnapshotStore::new(&paths);
+    store
+        .write(&snapshot, &protected(&[snapshot.document_id()]))
+        .unwrap();
+    let mut recoverer = super::recovery::DocumentSnapshotRecoverer::new(&paths);
+
+    SnapshotRecoverer::recover(&mut recoverer, &layout).unwrap();
+
+    let session = recoverer
+        .registry()
+        .session(snapshot.document_id())
+        .unwrap();
+    assert_eq!(session.text().unwrap().to_string(), "draft 😀\n");
+    assert!(session.is_dirty());
+    assert!(session.external_conflict().is_none());
+}
+
+#[test]
+fn binary_external_change_preserves_snapshot_conflict() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("project");
+    std::fs::create_dir(&root).unwrap();
+    let file = root.join("file.txt");
+    let snapshot = snapshot_at('a', &file, "disk", "draft");
+    std::fs::write(&file, [0, 1, 2]).unwrap();
+    let layout = recovered_layout(&root, snapshot.document_id(), snapshot.location().clone());
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let mut store = DocumentSnapshotStore::new(&paths);
+    store
+        .write(&snapshot, &protected(&[snapshot.document_id()]))
+        .unwrap();
+    let mut recoverer = super::recovery::DocumentSnapshotRecoverer::new(&paths);
+
+    SnapshotRecoverer::recover(&mut recoverer, &layout).unwrap();
+
+    let session = recoverer
+        .registry()
+        .session(snapshot.document_id())
+        .unwrap();
+    assert_eq!(session.text().unwrap().to_string(), "draft");
+    assert_eq!(
+        session.external_conflict().unwrap().kind(),
+        slterm_document::ExternalConflictKind::Modified
+    );
+}
+
+fn location_of(path: &std::path::Path) -> ResolvedPath {
+    ResolvedPath::new(
+        CanonicalPath::new(dunce::canonicalize(path).unwrap()).unwrap(),
+        Some(crate::atomic_file::file_identity(&std::fs::File::open(path).unwrap()).unwrap()),
+    )
+}
+
+#[test]
+fn replaced_clean_document_does_not_consume_new_dirty_document() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("project");
+    std::fs::create_dir(&root).unwrap();
+    let file = root.join("file.txt");
+    std::fs::write(&file, "old clean").unwrap();
+    let old_location = location_of(&file);
+    crate::atomic_file::write(&file, b"replacement").unwrap();
+    let new = snapshot_at('b', &file, "replacement", "new draft");
+    let layout = recovered_pair_layout(
+        &root,
+        id('a'),
+        old_location,
+        new.document_id(),
+        new.location().clone(),
+    );
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let mut store = DocumentSnapshotStore::new(&paths);
+    store.write(&new, &protected(&[new.document_id()])).unwrap();
+    let mut recoverer = super::recovery::DocumentSnapshotRecoverer::new(&paths);
+
+    SnapshotRecoverer::recover(&mut recoverer, &layout).unwrap();
+
+    assert!(recoverer.registry().session(id('a')).is_none());
+    assert_eq!(
+        recoverer
+            .registry()
+            .session(new.document_id())
+            .unwrap()
+            .text()
+            .unwrap()
+            .to_string(),
+        "new draft"
+    );
+}
+
+#[test]
+fn redundant_old_identity_does_not_consume_new_dirty_document() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("project");
+    std::fs::create_dir(&root).unwrap();
+    let file = root.join("file.txt");
+    let old = snapshot_at('a', &file, "old clean", "replacement");
+    crate::atomic_file::write(&file, b"replacement").unwrap();
+    let new = snapshot_at('b', &file, "replacement", "new draft");
+    let layout = recovered_pair_layout(
+        &root,
+        old.document_id(),
+        old.location().clone(),
+        new.document_id(),
+        new.location().clone(),
+    );
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let mut store = DocumentSnapshotStore::new(&paths);
+    store.write(&old, &protected(&[old.document_id()])).unwrap();
+    store
+        .write(&new, &protected(&[old.document_id(), new.document_id()]))
+        .unwrap();
+    let mut recoverer = super::recovery::DocumentSnapshotRecoverer::new(&paths);
+
+    SnapshotRecoverer::recover(&mut recoverer, &layout).unwrap();
+
+    let old_session = recoverer.registry().session(old.document_id()).unwrap();
+    assert!(!old_session.is_dirty());
+    assert_eq!(
+        old_session.location().file_identity(),
+        old.location().file_identity()
+    );
+    assert_eq!(
+        recoverer
+            .registry()
+            .session(new.document_id())
+            .unwrap()
+            .text()
+            .unwrap()
+            .to_string(),
+        "new draft"
+    );
+}
+
+#[test]
+fn replaced_clean_documents_do_not_merge_or_abort_startup() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("project");
+    std::fs::create_dir(&root).unwrap();
+    let file = root.join("file.txt");
+    std::fs::write(&file, "old clean").unwrap();
+    let old_location = location_of(&file);
+    crate::atomic_file::write(&file, b"new clean").unwrap();
+    let new_location = location_of(&file);
+    let layout = recovered_pair_layout(&root, id('a'), old_location, id('b'), new_location.clone());
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let mut recoverer = super::recovery::DocumentSnapshotRecoverer::new(&paths);
+
+    SnapshotRecoverer::recover(&mut recoverer, &layout).unwrap();
+
+    assert!(recoverer.registry().session(id('a')).is_none());
+    assert_eq!(
+        recoverer
+            .registry()
+            .session(id('b'))
+            .unwrap()
+            .text()
+            .unwrap()
+            .to_string(),
+        "new clean"
+    );
+    assert_eq!(
+        recoverer
+            .registry()
+            .session(id('b'))
+            .unwrap()
+            .location()
+            .file_identity(),
+        new_location.file_identity()
+    );
+}
+
+#[test]
+fn binary_new_source_still_marks_clean_old_identity_replaced() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("project");
+    std::fs::create_dir(&root).unwrap();
+    let file = root.join("file.txt");
+    std::fs::write(&file, "old clean").unwrap();
+    let old_location = location_of(&file);
+    crate::atomic_file::write(&file, b"replacement").unwrap();
+    let new = snapshot_at('b', &file, "replacement", "new draft");
+    std::fs::write(&file, [0, 1, 2]).unwrap();
+    let layout = recovered_pair_layout(
+        &root,
+        id('a'),
+        old_location,
+        new.document_id(),
+        new.location().clone(),
+    );
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let mut store = DocumentSnapshotStore::new(&paths);
+    store.write(&new, &protected(&[new.document_id()])).unwrap();
+    let mut recoverer = super::recovery::DocumentSnapshotRecoverer::new(&paths);
+
+    SnapshotRecoverer::recover(&mut recoverer, &layout).unwrap();
+
+    assert!(recoverer.identity_was_replaced(id('a')));
+    assert!(recoverer.registry().session(id('a')).is_none());
+    assert_eq!(
+        recoverer
+            .registry()
+            .session(new.document_id())
+            .unwrap()
+            .text()
+            .unwrap()
+            .to_string(),
+        "new draft"
+    );
+}
+
+#[test]
+fn replaced_file_and_previous_identity_restore_as_distinct_documents() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("project");
+    std::fs::create_dir(&root).unwrap();
+    let file = root.join("file.txt");
+    let old = snapshot_at('a', &file, "disk", "old draft");
+    crate::atomic_file::write(&file, b"replacement").unwrap();
+    let new = snapshot_at('b', &file, "replacement", "new draft");
+    assert_ne!(
+        old.location().file_identity(),
+        new.location().file_identity()
+    );
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let mut store = DocumentSnapshotStore::new(&paths);
+    store.write(&old, &protected(&[old.document_id()])).unwrap();
+    store
+        .write(&new, &protected(&[old.document_id(), new.document_id()]))
+        .unwrap();
+    let mut projects = ProjectRegistry::new();
+    let project =
+        slterm_workspace::ProjectId::from_str("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0a2a").unwrap();
+    let group =
+        slterm_workspace::PanelGroupId::from_str("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0b2a").unwrap();
+    projects
+        .add_project(
+            project,
+            CanonicalPath::new(dunce::canonicalize(&root).unwrap()).unwrap(),
+        )
+        .unwrap();
+    let (layout, _) = ProjectSnapshot::restore(projects, Vec::new())
+        .unwrap()
+        .with_opened_document(project, group, old.document_id(), old.location().clone())
+        .unwrap();
+    let (layout, _) = layout
+        .with_opened_document(project, group, new.document_id(), new.location().clone())
+        .unwrap();
+    let mut recoverer = super::recovery::DocumentSnapshotRecoverer::new(&paths);
+
+    SnapshotRecoverer::recover(&mut recoverer, &layout).unwrap();
+
+    assert_eq!(
+        recoverer
+            .registry()
+            .session(old.document_id())
+            .unwrap()
+            .text()
+            .unwrap()
+            .to_string(),
+        "old draft"
+    );
+    assert_eq!(
+        recoverer
+            .registry()
+            .session(new.document_id())
+            .unwrap()
+            .text()
+            .unwrap()
+            .to_string(),
+        "new draft"
+    );
+    assert_eq!(
+        recoverer
+            .registry()
+            .session(old.document_id())
+            .unwrap()
+            .location()
+            .file_identity(),
+        old.location().file_identity()
+    );
+    assert_eq!(
+        recoverer
+            .registry()
+            .session(new.document_id())
+            .unwrap()
+            .location()
+            .file_identity(),
+        new.location().file_identity()
+    );
+}
+
+#[test]
+fn redundant_snapshot_reconciles_clean_without_disk_rewrite() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("project");
+    std::fs::create_dir(&root).unwrap();
+    let file = root.join("file.txt");
+    let snapshot = snapshot_at('a', &file, "disk\n", "draft\n");
+    std::fs::write(&file, "draft\n").unwrap();
+    let location = ResolvedPath::new(
+        CanonicalPath::new(dunce::canonicalize(&file).unwrap()).unwrap(),
+        None,
+    );
+    let layout = recovered_layout(&root, snapshot.document_id(), location);
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let mut store = DocumentSnapshotStore::new(&paths);
+    store
+        .write(&snapshot, &protected(&[snapshot.document_id()]))
+        .unwrap();
+    let mut recoverer = super::recovery::DocumentSnapshotRecoverer::new(&paths);
+
+    SnapshotRecoverer::recover(&mut recoverer, &layout).unwrap();
+
+    let session = recoverer
+        .registry()
+        .session(snapshot.document_id())
+        .unwrap();
+    assert!(!session.is_dirty());
+    assert_eq!(session.text().unwrap().to_string(), "draft\n");
+    assert!(store.read(snapshot.document_id()).unwrap().is_none());
+}
+
+#[test]
+fn snapshot_disk_change_preserves_draft_and_conflict() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("project");
+    std::fs::create_dir(&root).unwrap();
+    let file = root.join("file.txt");
+    let snapshot = snapshot_at('a', &file, "disk\n", "draft\n");
+    std::fs::write(&file, "external\n").unwrap();
+    let location = ResolvedPath::new(
+        CanonicalPath::new(dunce::canonicalize(&file).unwrap()).unwrap(),
+        None,
+    );
+    let layout = recovered_layout(&root, snapshot.document_id(), location);
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let mut store = DocumentSnapshotStore::new(&paths);
+    store
+        .write(&snapshot, &protected(&[snapshot.document_id()]))
+        .unwrap();
+    let mut recoverer = super::recovery::DocumentSnapshotRecoverer::new(&paths);
+
+    SnapshotRecoverer::recover(&mut recoverer, &layout).unwrap();
+
+    let session = recoverer
+        .registry()
+        .session(snapshot.document_id())
+        .unwrap();
+    assert!(session.is_dirty());
+    assert_eq!(session.text().unwrap().to_string(), "draft\n");
+    assert_eq!(session.disk_baseline().as_ref(), b"external\n");
+    assert_eq!(
+        session.external_conflict().unwrap().kind(),
+        slterm_document::ExternalConflictKind::Modified
+    );
+    assert!(store.read(snapshot.document_id()).unwrap().is_some());
+}
+
+#[test]
+fn outside_snapshot_restores_without_disk_read() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("project");
+    std::fs::create_dir(&root).unwrap();
+    let file = temp.path().join("outside.txt");
+    let snapshot = snapshot_at('a', &file, "disk", "draft");
+    let location = ResolvedPath::new(
+        CanonicalPath::new(dunce::canonicalize(&file).unwrap()).unwrap(),
+        None,
+    );
+    let layout = recovered_layout(&root, snapshot.document_id(), location);
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let mut store = DocumentSnapshotStore::new(&paths);
+    store
+        .write(&snapshot, &protected(&[snapshot.document_id()]))
+        .unwrap();
+    std::fs::remove_file(&file).unwrap();
+    let mut recoverer = super::recovery::DocumentSnapshotRecoverer::new(&paths);
+
+    SnapshotRecoverer::recover(&mut recoverer, &layout).unwrap();
+
+    let session = recoverer
+        .registry()
+        .session(snapshot.document_id())
+        .unwrap();
+    assert_eq!(session.text().unwrap().to_string(), "draft");
+    assert!(session.is_read_revoked());
+    assert!(recoverer.requires_authorization(snapshot.document_id()));
+}
+
+#[test]
+fn outside_document_restart_requires_authorization() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("project");
+    std::fs::create_dir(&root).unwrap();
+    let location = ResolvedPath::new(
+        CanonicalPath::new(temp.path().join("missing.txt")).unwrap(),
+        None,
+    );
+    let document = id('a');
+    let layout = recovered_layout(&root, document, location);
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let mut recoverer = super::recovery::DocumentSnapshotRecoverer::new(&paths);
+
+    SnapshotRecoverer::recover(&mut recoverer, &layout).unwrap();
+
+    assert!(recoverer.registry().session(document).is_none());
+    assert!(recoverer.requires_authorization(document));
+    assert_eq!(recoverer.layout(), &layout);
+}
+
+#[test]
+fn orphan_snapshot_requires_explicit_target() {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let (_registry, snapshot) = snapshot('a', "orphan");
+    let mut store = DocumentSnapshotStore::new(&paths);
+    store
+        .write(&snapshot, &protected(&[snapshot.document_id()]))
+        .unwrap();
+    let layout = ProjectSnapshot::restore(ProjectRegistry::new(), Vec::new()).unwrap();
+    let mut recoverer = super::recovery::DocumentSnapshotRecoverer::new(&paths);
+
+    SnapshotRecoverer::recover(&mut recoverer, &layout).unwrap();
+
+    assert_eq!(recoverer.orphans(), std::slice::from_ref(&snapshot));
+    assert!(
+        recoverer
+            .registry()
+            .session(snapshot.document_id())
+            .is_none()
+    );
+    assert!(store.read(snapshot.document_id()).unwrap().is_some());
+    assert_eq!(recoverer.layout(), &layout);
+}
+
+#[test]
+fn corrupt_snapshot_is_quarantined_without_blocking_recovery() {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let (_registry, snapshot) = snapshot('a', "damaged");
+    let mut store = DocumentSnapshotStore::new(&paths);
+    store
+        .write(&snapshot, &protected(&[snapshot.document_id()]))
+        .unwrap();
+    let path = temp
+        .path()
+        .join("local/snapshots")
+        .join(format!("{}.snap", snapshot.document_id()));
+    let mut bytes = std::fs::read(&path).unwrap();
+    *bytes.last_mut().unwrap() ^= 1;
+    std::fs::write(&path, bytes).unwrap();
+    let layout = ProjectSnapshot::restore(ProjectRegistry::new(), Vec::new()).unwrap();
+    let mut recoverer = super::recovery::DocumentSnapshotRecoverer::new(&paths);
+
+    SnapshotRecoverer::recover(&mut recoverer, &layout).unwrap();
+
+    assert_eq!(recoverer.quarantined().len(), 1);
+    assert!(recoverer.quarantined()[0].exists());
+    assert!(recoverer.orphans().is_empty());
+    assert!(store.read(snapshot.document_id()).unwrap().is_none());
+}
+
+#[test]
+fn integration_session_grant_restore() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("project");
+    std::fs::create_dir(&root).unwrap();
+    let file = temp.path().join("outside.txt");
+    let snapshot = snapshot_at('a', &file, "disk", "draft");
+    let location = ResolvedPath::new(
+        CanonicalPath::new(dunce::canonicalize(&file).unwrap()).unwrap(),
+        None,
+    );
+    let layout = recovered_layout(&root, snapshot.document_id(), location);
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let mut store = DocumentSnapshotStore::new(&paths);
+    store
+        .write(&snapshot, &protected(&[snapshot.document_id()]))
+        .unwrap();
+    std::fs::remove_file(&file).unwrap();
+    let mut recoverer = super::recovery::DocumentSnapshotRecoverer::new(&paths);
+    SnapshotRecoverer::recover(&mut recoverer, &layout).unwrap();
+    std::fs::write(&file, "changed").unwrap();
+    let canonical = CanonicalPath::new(dunce::canonicalize(&file).unwrap()).unwrap();
+
+    let mut registry = recoverer.take_registry();
+    recoverer
+        .reauthorize(
+            &mut registry,
+            snapshot.document_id(),
+            slterm_path::PathGrant::session_file_read(canonical),
+        )
+        .unwrap();
+
+    let session = registry.session(snapshot.document_id()).unwrap();
+    assert!(!session.is_read_revoked());
+    assert_eq!(session.text().unwrap().to_string(), "draft");
+    assert_eq!(session.disk_baseline().as_ref(), b"changed");
+    assert_eq!(
+        session.external_conflict().unwrap().kind(),
+        slterm_document::ExternalConflictKind::Modified
+    );
 }
 
 #[test]

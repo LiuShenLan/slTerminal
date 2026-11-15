@@ -169,6 +169,9 @@ impl AppRoot {
                     super::panel_host::PanelContent::Editor(editor) => {
                         editor.clone().into_any_element()
                     }
+                    super::panel_host::PanelContent::Recovery(recovery) => {
+                        recovery.clone().into_any_element()
+                    }
                 })
         });
         let terminal_id = active.and_then(|active| match active {

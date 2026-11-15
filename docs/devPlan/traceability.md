@@ -67,7 +67,7 @@
 | 侧栏显隐 | [工作区](design/workspace.md) | `integration_sidebar_visibility_semantics` | 已自动化 |
 | PathPolicy 能力并集 | [架构](design/architecture.md)、[文件与 Git](design/files-git.md) | `integration_path_capability_union` | 待实现 |
 | 链接与文件身份 | [架构](design/architecture.md)、[文件与 Git](design/files-git.md)、[Document](design/document.md) | `integration_links_and_file_identity` | 待实现 |
-| 会话级授权恢复 | [生命周期](design/lifecycle.md)、[持久化](design/persistence.md)、[Document](design/document.md) | `integration_session_grant_restore` | 待实现 |
+| 会话级授权恢复 | [生命周期](design/lifecycle.md)、[持久化](design/persistence.md)、[Document](design/document.md) | `integration_session_grant_restore` | 已自动化 |
 | 根重定位 | [工作区](design/workspace.md)、[领域模型](design/domain-model.md)、[文件与 Git](design/files-git.md) | `integration_project_relocation` | 待实现 |
 | 最后引用关闭 | [生命周期](design/lifecycle.md)、[Document](design/document.md) | `integration_last_reference_close` | 已自动化 |
 | 批量关闭 | [生命周期](design/lifecycle.md)、[工作区](design/workspace.md) | `integration_batch_close` | 已自动化 |
@@ -160,8 +160,8 @@
 | 权限、损坏、高版本和字段错误严格分流 | `settings_damage_classification` | 待实现 |
 | 状态库及副本均不可恢复时隔离并明确提示 | `workspace_unrecoverable_isolated`、`workspace_missing_disaster_copy_is_not_a_valid_empty_backup`、`workspace_isolation_emits_explicit_startup_notice` | 已自动化 |
 | 快照配额不足时不驱逐打开脏 Document | `snapshot_quota_does_not_evict_dirty` | 已自动化 |
-| 异常启动先布局后对账且不重复创建 Panel | `startup_reconciles_layout_before_snapshot` | 待实现 |
-| 无主快照无活跃项目时保留并等待显式处置 | `orphan_snapshot_requires_explicit_target` | 待实现 |
+| 异常启动先布局后对账且不重复创建 Panel | `startup_reconciles_layout_before_snapshot` | 已自动化 |
+| 无主快照无活跃项目时保留并等待显式处置 | `orphan_snapshot_requires_explicit_target` | 已自动化 |
 | 最终提交失败后放弃状态退出有旧状态提示 | `close_abandon_warns_about_old_state` | 已自动化 |
 | 普通设置导入拒绝未知版本或凭据字段 | `settings_import_rejects_unknown_or_credentials` | 待实现 |
 
@@ -174,8 +174,8 @@
 | 硬链接或不同词法路径按文件身份复用 Document | `path_file_identity_deduplicates_document` | 已自动化 |
 | 只读根与可写根覆盖时保存按能力并集 | `path_capabilities_union_for_save` | 已自动化 |
 | 链接重定向后写前重新校验并拒绝旧授权 | `path_rechecks_redirect_before_write` | 已自动化 |
-| 根外文件重启后只显示重新授权占位 | `outside_document_restart_requires_authorization` | 待实现 |
-| 根外快照异常恢复不自动重读磁盘或恢复授权 | `outside_snapshot_restores_without_disk_read` | 待实现 |
+| 根外文件重启后只显示重新授权占位 | `outside_document_restart_requires_authorization` | 已自动化 |
+| 根外快照异常恢复不自动重读磁盘或恢复授权 | `outside_snapshot_restores_without_disk_read` | 已自动化 |
 | 失去读授权后保留内容并停止刷新 | `document_retains_content_after_read_revoke` | 已自动化 |
 | 项目根重定位不改绑既有 Diff 与 GitShow | `repository_binding_survives_project_relocation` | 待实现 |
 | 真实路径查重失败时保留原项目关系 | `project_realpath_dedupe_failure_preserves_relation`、`project_realpath_resolution_preserves_request_order`、`project_open_completion_reentry_does_not_duplicate_tasks`、`closing_drains_pending_project_open_handovers`、`destroyed_window_drains_pending_project_open_handovers`、`system_resolver_requires_an_existing_directory`、`system_resolver_normalizes_directory_junction` | 已自动化 |

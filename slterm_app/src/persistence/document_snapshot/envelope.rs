@@ -116,6 +116,26 @@ impl DocumentSnapshot {
         self.text.len()
     }
 
+    pub(crate) fn location(&self) -> &ResolvedPath {
+        &self.metadata.location
+    }
+
+    pub(crate) fn encoding(&self) -> &TextEncoding {
+        &self.metadata.encoding
+    }
+
+    pub(crate) const fn disk_baseline_hash(&self) -> &[u8; 32] {
+        &self.metadata.disk_baseline_hash
+    }
+
+    pub(crate) const fn saved_state(&self) -> TextStateId {
+        self.metadata.saved_state
+    }
+
+    pub(crate) const fn current_state(&self) -> TextStateId {
+        self.metadata.current_state
+    }
+
     pub(crate) fn encode(&self) -> Result<Vec<u8>, SnapshotStoreError> {
         let metadata = encode_metadata(&self.metadata)?;
         if metadata.len() > METADATA_LIMIT_BYTES

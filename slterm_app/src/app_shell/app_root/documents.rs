@@ -4,6 +4,7 @@
 
 use std::collections::BTreeSet;
 use std::io;
+use std::sync::Arc;
 
 use gpui::{App, AppContext as _, Context, Window};
 use slterm_document::DocumentOpenOutcome;
@@ -220,6 +221,18 @@ impl AppRoot {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Result<PanelId, AppRootError> {
+        self.install_document_panel(project_id, view, document, true, window, cx)
+    }
+
+    fn install_document_panel(
+        &mut self,
+        project_id: ProjectId,
+        view: ViewKey,
+        document: crate::app_shell::file_editor::document::Document,
+        focus: bool,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<PanelId, AppRootError> {
         let project = self
             .projects
             .get(&project_id)
@@ -239,9 +252,10 @@ impl AppRoot {
             Some(project_id),
             visible,
         )?;
-        if let Err(error) = self
-            .focus_manager
-            .request_focus(focus_registration.token(), window, cx)
+        if focus
+            && let Err(error) =
+                self.focus_manager
+                    .request_focus(focus_registration.token(), window, cx)
         {
             let _ = self.focus_manager.unregister(focus_registration.token());
             return Err(error.into());
@@ -257,6 +271,70 @@ impl AppRoot {
             );
         });
         self.panel_focus.insert(panel_id, focus_registration);
+        Ok(panel_id)
+    }
+
+    pub(super) fn restore_document_panel(
+        &mut self,
+        project_id: ProjectId,
+        view: ViewKey,
+        document_id: slterm_document::DocumentId,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<PanelId, AppRootError> {
+        let grants =
+            crate::app_shell::documents::document_project_grants(&self.snapshot, document_id);
+        let session = self
+            .documents
+            .session(document_id)
+            .ok_or(AppRootError::MissingPanel)?;
+        let write = (!session.is_read_revoked()).then(|| {
+            crate::app_shell::file_editor::document::DocumentWriteContext::new(
+                grants,
+                0,
+                0,
+                Arc::new(crate::platform::document_paths::SystemDocumentPathResolver),
+            )
+        });
+        let document =
+            crate::app_shell::file_editor::document::Document::from_recovered(session, write)
+                .ok_or(AppRootError::MissingPanel)?;
+        self.install_document_panel(project_id, view, document, false, window, cx)
+    }
+
+    pub(super) fn restore_recovery_panel(
+        &mut self,
+        project_id: ProjectId,
+        view: ViewKey,
+        kind: super::document_recovery::DocumentRecoveryKind,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<PanelId, AppRootError> {
+        let project = self
+            .projects
+            .get(&project_id)
+            .cloned()
+            .ok_or(ProjectRegistryError::ProjectNotFound)?;
+        let panel_id = self.panel_ids.allocate()?;
+        let parent = self.project_focus_token(project_id, cx)?;
+        let recovery = cx.new(|cx| super::document_recovery::DocumentRecoveryView::new(kind, cx));
+        let visible = self.snapshot.registry().active() == Some(project_id);
+        let focus = self.focus_manager.register(
+            &recovery.read(cx).focus_handle,
+            parent,
+            Some(project_id),
+            visible,
+        )?;
+        project.update(cx, |project, _| {
+            project.panels.insert(
+                panel_id,
+                PanelHost {
+                    id: panel_id,
+                    view_key: view,
+                    content: PanelContent::Recovery(recovery),
+                },
+            );
+        });
+        self.panel_focus.insert(panel_id, focus);
         Ok(panel_id)
     }
 

@@ -20,6 +20,11 @@ struct StoredSnapshot {
     modified: SystemTime,
 }
 
+pub(crate) struct SnapshotRecoveryScan {
+    pub(crate) snapshots: Vec<DocumentSnapshot>,
+    pub(crate) corrupt: Vec<PathBuf>,
+}
+
 /// 快照目录的唯一文件所有者；所有调用只能位于专用后台写线程。
 pub(crate) struct DocumentSnapshotStore {
     root: PathBuf,
@@ -152,13 +157,61 @@ impl DocumentSnapshotStore {
         remove_file(&self.path(id))
     }
 
+    pub(crate) fn scan_for_recovery(&self) -> Result<SnapshotRecoveryScan, SnapshotStoreError> {
+        let (entries, corrupt) = self.scan_entries(true)?;
+        Ok(SnapshotRecoveryScan {
+            snapshots: entries.into_iter().map(|entry| entry.snapshot).collect(),
+            corrupt,
+        })
+    }
+
+    /// 只把本目录内的损坏快照改名到独立隔离目录，不读取或删除正文。
+    pub(crate) fn quarantine(&self, path: &Path) -> io::Result<PathBuf> {
+        if path.parent() != Some(self.root.as_path())
+            || path.extension().and_then(|value| value.to_str()) != Some("snap")
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "隔离来源不是本快照目录文件",
+            ));
+        }
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "快照文件名无效"))?;
+        let directory = self
+            .root
+            .parent()
+            .ok_or_else(|| io::Error::other("快照目录缺少本地根"))?
+            .join("quarantine/snapshots");
+        std::fs::create_dir_all(&directory)?;
+        let target = directory.join(format!("{name}.{}.quarantine", uuid::Uuid::now_v7()));
+        std::fs::rename(path, &target)?;
+        Ok(target)
+    }
+
     fn scan(&self) -> Result<Vec<StoredSnapshot>, SnapshotStoreError> {
+        let (entries, corrupt) = self.scan_entries(false)?;
+        if corrupt.is_empty() {
+            Ok(entries)
+        } else {
+            Err(SnapshotStoreError::Corrupt)
+        }
+    }
+
+    fn scan_entries(
+        &self,
+        allow_corrupt: bool,
+    ) -> Result<(Vec<StoredSnapshot>, Vec<PathBuf>), SnapshotStoreError> {
         let entries = match std::fs::read_dir(&self.root) {
             Ok(entries) => entries,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Ok((Vec::new(), Vec::new()));
+            }
             Err(error) => return Err(error.into()),
         };
         let mut snapshots = Vec::new();
+        let mut corrupt = Vec::new();
         for entry in entries {
             let entry = entry?;
             let path = entry.path();
@@ -168,17 +221,22 @@ impl DocumentSnapshotStore {
             if !entry.file_type()?.is_file() {
                 return Err(SnapshotStoreError::Corrupt);
             }
-            let snapshot = DocumentSnapshot::decode(&std::fs::read(&path)?)?;
-            if self.path(snapshot.document_id()) != path {
+            let decoded = DocumentSnapshot::decode(&std::fs::read(&path)?)
+                .ok()
+                .filter(|snapshot| self.path(snapshot.document_id()) == path);
+            if let Some(snapshot) = decoded {
+                snapshots.push(StoredSnapshot {
+                    snapshot,
+                    modified: entry.metadata()?.modified()?,
+                    path,
+                });
+            } else if allow_corrupt {
+                corrupt.push(path);
+            } else {
                 return Err(SnapshotStoreError::Corrupt);
             }
-            snapshots.push(StoredSnapshot {
-                snapshot,
-                modified: entry.metadata()?.modified()?,
-                path,
-            });
         }
-        Ok(snapshots)
+        Ok((snapshots, corrupt))
     }
 }
 

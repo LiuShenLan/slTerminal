@@ -17,6 +17,7 @@ use std::time::SystemTime;
 
 use slterm_document::{
     DocumentContent, DocumentSaveReceipt, DocumentSaveRequest, EDITABLE_LIMIT_BYTES,
+    NORMAL_EDIT_LIMIT_BYTES, SYNTAX_LIMIT_BYTES,
 };
 use slterm_path::{CanonicalPath, PathGrant, PathOperation, PathPolicy, PathRequest, ResolvedPath};
 
@@ -125,6 +126,31 @@ impl Document {
             total_bytes: metadata.len(),
             modified: metadata.modified().ok(),
             write: None,
+        })
+    }
+
+    /// 启动恢复只复制到既有编辑器视图；core Session 仍是保存与关闭的权威。
+    pub(crate) fn from_recovered(
+        session: &slterm_document::DocumentSession,
+        write: Option<DocumentWriteContext>,
+    ) -> Option<Self> {
+        let text = session.text()?.to_string();
+        let text_bytes = text.len() as u64;
+        Some(Self {
+            snapshot: TextSnapshot {
+                text,
+                bytes: session.disk_baseline().clone(),
+                encoding: session.encoding().clone(),
+                completion_enabled: text_bytes <= NORMAL_EDIT_LIMIT_BYTES,
+                syntax_enabled: text_bytes <= SYNTAX_LIMIT_BYTES,
+                truncated: false,
+                invalid_encoding: false,
+                read_only: session.is_read_only(),
+            },
+            location: session.location().clone(),
+            total_bytes: session.disk_baseline().len() as u64,
+            modified: None,
+            write,
         })
     }
 

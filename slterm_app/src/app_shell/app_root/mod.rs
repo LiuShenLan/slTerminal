@@ -5,6 +5,7 @@ mod batch_close;
 pub(crate) mod close_coordinator;
 mod command_registry;
 mod commands;
+mod document_recovery;
 mod documents;
 mod events;
 mod focus_manager;
@@ -45,7 +46,7 @@ use crate::persistence::workspace_writer::WorkspaceWriterClient;
 use crate::platform::project_paths::{ProjectPathResolver, SystemProjectPathResolver};
 
 use focus_manager::{FocusManager, FocusRegistration, FocusSubscriptions};
-pub(super) use side_view::AppRootPersistence;
+pub(crate) use side_view::AppRootPersistence;
 use side_view::SideView;
 use side_view_host::SideViewHost;
 use task_service::TaskService;
@@ -239,6 +240,7 @@ impl AppRoot {
         let store_epoch = persistence.store_epoch();
         let project_snapshot_recovery_failed = persistence.project_snapshot_recovery_failed();
         let snapshot = persistence.take_project_snapshot();
+        let documents = persistence.take_documents();
         let sidebar_state = persistence.take_sidebar_state();
         let side_views = SideViewHost::new(sidebar_state, persistence.controller(cx));
         let parent = focus_manager.workspace_token();
@@ -335,7 +337,7 @@ impl AppRoot {
             active_project_open: None,
             project_open_draining: false,
             panel_ids,
-            documents: DocumentRegistry::new(),
+            documents,
             document_open_service: Arc::new(
                 crate::app_shell::documents::DocumentOpenService::default(),
             ),

@@ -106,12 +106,16 @@ pub enum DocumentOpenOutcome {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DocumentRegistryError {
     DocumentIdConflict(DocumentId),
+    RecoveryTargetOccupied(DocumentId),
 }
 
 impl fmt::Display for DocumentRegistryError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::DocumentIdConflict(_) => formatter.write_str("DocumentId 已绑定其他存活文档"),
+            Self::RecoveryTargetOccupied(_) => {
+                formatter.write_str("恢复目标已关联其他 Document，拒绝合并恢复输入")
+            }
         }
     }
 }

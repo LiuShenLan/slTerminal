@@ -158,10 +158,23 @@ impl AppRoot {
                 });
             }
         }
+        // 授权或身份替换占位没有可编辑 Session；只随布局关闭，不伪造保存对象。
+        let documents_to_close = closing
+            .iter()
+            .filter(|view| match view {
+                ViewKey::Editor { document_id, .. }
+                | ViewKey::Markdown { document_id, .. }
+                | ViewKey::Diff { document_id, .. } => {
+                    self.documents.session(*document_id).is_some()
+                }
+                _ => false,
+            })
+            .cloned()
+            .collect::<Vec<_>>();
         objects.extend(slterm_workspace::collect_document_close(
             &self.snapshot,
             &self.documents,
-            &closing,
+            &documents_to_close,
             &document_decisions,
         )?);
         let (candidate, _) = self.snapshot.without_views(&closing)?;

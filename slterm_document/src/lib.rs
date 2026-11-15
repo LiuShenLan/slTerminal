@@ -13,6 +13,7 @@ mod encoding;
 mod external;
 mod identity;
 mod paged;
+mod recovery;
 mod registry;
 mod replace;
 mod repository;
@@ -35,6 +36,7 @@ pub use paged::{
     DECODED_PAGE_CACHE_LIMIT_BYTES, DocumentBody, DocumentPageCache, PAGE_SOURCE_BYTES, PageIndex,
     PageIndexError, PageKey, PagedSource, SourceByteRange,
 };
+pub use recovery::{DocumentRecovery, ReauthorizationError};
 pub use registry::{
     DocumentMetadata, DocumentOpenOutcome, DocumentRegistry, DocumentRegistryError, DocumentSession,
 };

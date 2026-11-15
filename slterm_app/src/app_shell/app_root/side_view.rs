@@ -36,6 +36,9 @@ pub(crate) struct AppRootPersistence {
     /// 启动默认态与恢复结果只读；只有显式组织编辑才允许终态回写。
     sidebar_has_explicit_edit: bool,
     recovered_project_snapshot: Option<ProjectSnapshot>,
+    recovered_documents: slterm_document::DocumentRegistry,
+    document_recoverer:
+        Option<crate::persistence::document_snapshot::recovery::DocumentSnapshotRecoverer>,
     project_snapshot_recovery_failed: bool,
     store_epoch: Option<String>,
     pending_final_sidebar: Option<SidebarState>,
@@ -83,8 +86,17 @@ impl AppRootPersistence {
                 log::warn!("could not restore workspace store epoch: {error}");
             }
         }
-        match crate::persistence::startup::StartupRecovery::recover(&mut store, None) {
-            Ok(snapshot) => persistence.recovered_project_snapshot = Some(snapshot),
+        let mut snapshots =
+            crate::persistence::document_snapshot::recovery::DocumentSnapshotRecoverer::new(paths);
+        match crate::persistence::startup::StartupRecovery::recover(
+            &mut store,
+            Some(&mut snapshots),
+        ) {
+            Ok(snapshot) => {
+                persistence.recovered_project_snapshot = Some(snapshot);
+                persistence.recovered_documents = snapshots.take_registry();
+                persistence.document_recoverer = Some(snapshots);
+            }
             Err(error) => {
                 // 恢复失败只保留原记录；没有显式编辑时不得回写空快照。
                 persistence.project_snapshot_recovery_failed = true;
@@ -139,6 +151,8 @@ impl AppRootPersistence {
             recovered_sidebar: None,
             sidebar_has_explicit_edit: false,
             recovered_project_snapshot: None,
+            recovered_documents: slterm_document::DocumentRegistry::new(),
+            document_recoverer: None,
             project_snapshot_recovery_failed: false,
             store_epoch: None,
             pending_final_sidebar: None,
@@ -159,6 +173,27 @@ impl AppRootPersistence {
 
     pub(super) fn take_project_snapshot(&mut self) -> ProjectSnapshot {
         self.recovered_project_snapshot.take().unwrap_or_default()
+    }
+
+    pub(super) fn take_documents(&mut self) -> slterm_document::DocumentRegistry {
+        std::mem::take(&mut self.recovered_documents)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn recovered_documents(&self) -> &slterm_document::DocumentRegistry {
+        &self.recovered_documents
+    }
+
+    pub(crate) fn document_requires_authorization(&self, id: slterm_document::DocumentId) -> bool {
+        self.document_recoverer
+            .as_ref()
+            .is_some_and(|recoverer| recoverer.requires_authorization(id))
+    }
+
+    pub(crate) fn document_identity_was_replaced(&self, id: slterm_document::DocumentId) -> bool {
+        self.document_recoverer
+            .as_ref()
+            .is_some_and(|recoverer| recoverer.identity_was_replaced(id))
     }
 
     pub(super) fn take_sidebar_state(&mut self) -> SidebarState {

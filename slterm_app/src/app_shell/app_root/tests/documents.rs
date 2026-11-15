@@ -43,6 +43,466 @@ fn editor_text(
     })
 }
 
+fn write_recovered_snapshot(
+    paths: &AppPaths,
+    document: slterm_document::DocumentId,
+    location: slterm_path::ResolvedPath,
+    draft: &str,
+) {
+    let disk = std::fs::read_to_string(location.canonical_path().as_path()).unwrap();
+    let saved = slterm_document::TextStateId::from_uuid(uuid::Uuid::now_v7()).unwrap();
+    let current = slterm_document::TextStateId::from_uuid(uuid::Uuid::now_v7()).unwrap();
+    let mut documents = slterm_document::DocumentRegistry::new();
+    documents
+        .open(
+            document,
+            location,
+            ropey::Rope::from_str(&disk),
+            saved,
+            Arc::from(disk.as_bytes()),
+            slterm_document::DocumentMetadata::default(),
+        )
+        .unwrap();
+    documents
+        .apply(
+            slterm_document::EditTransaction {
+                document_id: document,
+                expected_text_revision: 0,
+                edits: vec![slterm_document::TextEdit::new(0..disk.len(), draft)],
+                origin: slterm_document::EditOrigin::UserInput,
+                merge_policy: slterm_document::MergePolicy::Disallowed,
+            },
+            current,
+            std::time::Instant::now(),
+        )
+        .unwrap();
+    let snapshot = crate::persistence::document_snapshot::envelope::DocumentSnapshot::capture(
+        documents.session(document).unwrap(),
+        "run-test",
+    )
+    .unwrap();
+    crate::persistence::document_snapshot::store::DocumentSnapshotStore::new(paths)
+        .write(&snapshot, &BTreeSet::from([document]))
+        .unwrap();
+}
+
+#[gpui::test]
+fn outside_document_restart_requires_authorization(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let project_root = temp.path().join("project");
+    std::fs::create_dir(&project_root).unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let document =
+        slterm_document::DocumentId::from_str("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2a").unwrap();
+    let location = slterm_path::ResolvedPath::new(
+        CanonicalPath::new(temp.path().join("outside.txt")).unwrap(),
+        None,
+    );
+    let mut projects = slterm_workspace::ProjectRegistry::new();
+    projects
+        .add_project(
+            project_id(PROJECT_A),
+            CanonicalPath::new(dunce::canonicalize(&project_root).unwrap()).unwrap(),
+        )
+        .unwrap();
+    let layout = ProjectSnapshot::restore(projects, Vec::new())
+        .unwrap()
+        .with_opened_document(project_id(PROJECT_A), group_id(GROUP_A), document, location)
+        .unwrap()
+        .0;
+    WorkspaceDatabase::open(&paths)
+        .unwrap()
+        .save_project_snapshot(&layout)
+        .unwrap();
+
+    let persistence = AppRootPersistence::load(&paths, None);
+    let (root, mut window, _) = open_root_with_persistence(cx, persistence);
+    draw_frame(&mut window);
+
+    assert!(root.read_with(cx, |root, _| root.documents.session(document).is_none()));
+    let (panel_count, is_recovery) = root.read_with(cx, |root, cx| {
+        let panels = &root.projects[&project_id(PROJECT_A)].read(cx).panels;
+        (
+            panels.len(),
+            panels.values().all(|panel| {
+                matches!(
+                    &panel.content,
+                    super::super::panel_host::PanelContent::Recovery(_)
+                )
+            }),
+        )
+    });
+    assert_eq!(panel_count, 1);
+    assert!(is_recovery);
+    assert!(
+        window
+            .debug_bounds("document-recovery-authorization")
+            .is_some()
+    );
+    assert!(window.update(|window, cx| window.focused(cx)).is_none());
+}
+
+#[gpui::test]
+fn paged_document_restart_has_explicit_placeholder(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let project_root = temp.path().join("project");
+    std::fs::create_dir(&project_root).unwrap();
+    let file = project_root.join("large.txt");
+    std::fs::write(
+        &file,
+        vec![b'x'; slterm_document::EDITABLE_LIMIT_BYTES as usize + 1],
+    )
+    .unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let document =
+        slterm_document::DocumentId::from_str("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2a").unwrap();
+    let location = slterm_path::ResolvedPath::new(
+        CanonicalPath::new(dunce::canonicalize(&file).unwrap()).unwrap(),
+        Some(crate::atomic_file::file_identity(&std::fs::File::open(&file).unwrap()).unwrap()),
+    );
+    let mut projects = slterm_workspace::ProjectRegistry::new();
+    projects
+        .add_project(
+            project_id(PROJECT_A),
+            CanonicalPath::new(dunce::canonicalize(&project_root).unwrap()).unwrap(),
+        )
+        .unwrap();
+    let layout = ProjectSnapshot::restore(projects, Vec::new())
+        .unwrap()
+        .with_opened_document(project_id(PROJECT_A), group_id(GROUP_A), document, location)
+        .unwrap()
+        .0;
+    WorkspaceDatabase::open(&paths)
+        .unwrap()
+        .save_project_snapshot(&layout)
+        .unwrap();
+
+    let persistence = AppRootPersistence::load(&paths, None);
+    let (root, mut window, _) = open_root_with_persistence(cx, persistence);
+    draw_frame(&mut window);
+
+    assert!(root.read_with(cx, |root, _| {
+        root.documents.session(document).unwrap().paged().is_some()
+    }));
+    assert_eq!(
+        root.read_with(cx, |root, cx| root.panel_count(project_id(PROJECT_A), cx)),
+        1
+    );
+    assert!(window.debug_bounds("document-recovery-paged").is_some());
+}
+
+#[gpui::test]
+fn startup_reconciles_layout_before_snapshot(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let project_root = temp.path().join("project");
+    std::fs::create_dir(&project_root).unwrap();
+    let file = project_root.join("file.txt");
+    std::fs::write(&file, "disk\n").unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let document =
+        slterm_document::DocumentId::from_str("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2a").unwrap();
+    let location = slterm_path::ResolvedPath::new(
+        CanonicalPath::new(dunce::canonicalize(&file).unwrap()).unwrap(),
+        Some(crate::atomic_file::file_identity(&std::fs::File::open(&file).unwrap()).unwrap()),
+    );
+    let saved = slterm_document::TextStateId::from_uuid(uuid::Uuid::now_v7()).unwrap();
+    let current = slterm_document::TextStateId::from_uuid(uuid::Uuid::now_v7()).unwrap();
+    let mut documents = slterm_document::DocumentRegistry::new();
+    documents
+        .open(
+            document,
+            location.clone(),
+            ropey::Rope::from_str("disk\n"),
+            saved,
+            Arc::from(b"disk\n".as_slice()),
+            slterm_document::DocumentMetadata::default(),
+        )
+        .unwrap();
+    documents
+        .apply(
+            slterm_document::EditTransaction {
+                document_id: document,
+                expected_text_revision: 0,
+                edits: vec![slterm_document::TextEdit::new(0..5, "draft\n")],
+                origin: slterm_document::EditOrigin::UserInput,
+                merge_policy: slterm_document::MergePolicy::Disallowed,
+            },
+            current,
+            std::time::Instant::now(),
+        )
+        .unwrap();
+    let snapshot = crate::persistence::document_snapshot::envelope::DocumentSnapshot::capture(
+        documents.session(document).unwrap(),
+        "run-test",
+    )
+    .unwrap();
+    crate::persistence::document_snapshot::store::DocumentSnapshotStore::new(&paths)
+        .write(&snapshot, &BTreeSet::from([document]))
+        .unwrap();
+    let mut projects = slterm_workspace::ProjectRegistry::new();
+    projects
+        .add_project(
+            project_id(PROJECT_A),
+            CanonicalPath::new(dunce::canonicalize(&project_root).unwrap()).unwrap(),
+        )
+        .unwrap();
+    let layout = ProjectSnapshot::restore(projects, Vec::new())
+        .unwrap()
+        .with_opened_document(project_id(PROJECT_A), group_id(GROUP_A), document, location)
+        .unwrap()
+        .0;
+    WorkspaceDatabase::open(&paths)
+        .unwrap()
+        .save_project_snapshot(&layout)
+        .unwrap();
+
+    let persistence = AppRootPersistence::load(&paths, None);
+    let (root, mut window, _) = open_root_with_persistence(cx, persistence);
+    draw_frame(&mut window);
+
+    assert_eq!(
+        root.read_with(cx, |root, _| root.snapshot().clone()),
+        layout
+    );
+    assert_eq!(editor_text(&root, cx, PROJECT_A, document), "draft\n");
+    assert!(root.read_with(cx, |root, _| {
+        root.documents.session(document).unwrap().is_dirty()
+    }));
+    window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.restore_project_panels(project_id(PROJECT_A), window, cx);
+        });
+    });
+    assert_eq!(
+        root.read_with(cx, |root, cx| root.panel_count(project_id(PROJECT_A), cx)),
+        1
+    );
+    assert_eq!(editor_text(&root, cx, PROJECT_A, document), "draft\n");
+}
+
+#[gpui::test]
+fn replaced_clean_document_has_placeholder_beside_new_document(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let project_root = temp.path().join("project");
+    std::fs::create_dir(&project_root).unwrap();
+    let file = project_root.join("file.txt");
+    std::fs::write(&file, "old clean").unwrap();
+    let old_location = slterm_path::ResolvedPath::new(
+        CanonicalPath::new(dunce::canonicalize(&file).unwrap()).unwrap(),
+        Some(crate::atomic_file::file_identity(&std::fs::File::open(&file).unwrap()).unwrap()),
+    );
+    crate::atomic_file::write(&file, b"new clean").unwrap();
+    let new_location = slterm_path::ResolvedPath::new(
+        CanonicalPath::new(dunce::canonicalize(&file).unwrap()).unwrap(),
+        Some(crate::atomic_file::file_identity(&std::fs::File::open(&file).unwrap()).unwrap()),
+    );
+    let old =
+        slterm_document::DocumentId::from_str("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2a").unwrap();
+    let new =
+        slterm_document::DocumentId::from_str("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b").unwrap();
+    let mut projects = slterm_workspace::ProjectRegistry::new();
+    projects
+        .add_project(
+            project_id(PROJECT_A),
+            CanonicalPath::new(dunce::canonicalize(&project_root).unwrap()).unwrap(),
+        )
+        .unwrap();
+    let layout = ProjectSnapshot::restore(projects, Vec::new())
+        .unwrap()
+        .with_opened_document(project_id(PROJECT_A), group_id(GROUP_A), old, old_location)
+        .unwrap()
+        .0
+        .with_opened_document(project_id(PROJECT_A), group_id(GROUP_A), new, new_location)
+        .unwrap()
+        .0;
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    WorkspaceDatabase::open(&paths)
+        .unwrap()
+        .save_project_snapshot(&layout)
+        .unwrap();
+
+    let persistence = AppRootPersistence::load(&paths, None);
+    let (root, mut window, _) = open_root_with_persistence(cx, persistence);
+    draw_frame(&mut window);
+
+    assert!(root.read_with(cx, |root, _| root.documents.session(old).is_none()));
+    assert_eq!(editor_text(&root, cx, PROJECT_A, new), "new clean");
+    assert_eq!(
+        root.read_with(cx, |root, cx| root.panel_count(project_id(PROJECT_A), cx)),
+        2
+    );
+    window.update(|_window, cx| {
+        root.update(cx, |root, cx| {
+            let candidate = root
+                .snapshot()
+                .with_active_view(&ViewKey::Editor {
+                    project_id: project_id(PROJECT_A),
+                    document_id: old,
+                })
+                .unwrap();
+            root.commit_project_snapshot(candidate, cx);
+        });
+    });
+    draw_frame(&mut window);
+    assert!(window.debug_bounds("document-recovery-replaced").is_some());
+
+    window.update(|_window, cx| {
+        root.update(cx, |root, cx| {
+            root.close_all_views_from_request(group_id(GROUP_A), BTreeMap::new(), _window, cx)
+                .unwrap();
+        });
+    });
+    window.run_until_parked();
+    assert_eq!(
+        root.read_with(cx, |root, cx| root.panel_count(project_id(PROJECT_A), cx)),
+        0
+    );
+    assert!(root.read_with(cx, |root, _| root.snapshot().documents().next().is_none()));
+}
+
+#[gpui::test]
+fn binary_new_source_keeps_old_replaced_placeholder(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let project_root = temp.path().join("project");
+    std::fs::create_dir(&project_root).unwrap();
+    let file = project_root.join("file.txt");
+    std::fs::write(&file, "old clean").unwrap();
+    let old_location = slterm_path::ResolvedPath::new(
+        CanonicalPath::new(dunce::canonicalize(&file).unwrap()).unwrap(),
+        Some(crate::atomic_file::file_identity(&std::fs::File::open(&file).unwrap()).unwrap()),
+    );
+    crate::atomic_file::write(&file, b"replacement").unwrap();
+    let new_location = slterm_path::ResolvedPath::new(
+        CanonicalPath::new(dunce::canonicalize(&file).unwrap()).unwrap(),
+        Some(crate::atomic_file::file_identity(&std::fs::File::open(&file).unwrap()).unwrap()),
+    );
+    let old =
+        slterm_document::DocumentId::from_str("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2a").unwrap();
+    let new =
+        slterm_document::DocumentId::from_str("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b").unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    write_recovered_snapshot(&paths, new, new_location.clone(), "new draft");
+    std::fs::write(&file, [0, 1, 2]).unwrap();
+    let mut projects = slterm_workspace::ProjectRegistry::new();
+    projects
+        .add_project(
+            project_id(PROJECT_A),
+            CanonicalPath::new(dunce::canonicalize(&project_root).unwrap()).unwrap(),
+        )
+        .unwrap();
+    let layout = ProjectSnapshot::restore(projects, Vec::new())
+        .unwrap()
+        .with_opened_document(project_id(PROJECT_A), group_id(GROUP_A), old, old_location)
+        .unwrap()
+        .0
+        .with_opened_document(project_id(PROJECT_A), group_id(GROUP_A), new, new_location)
+        .unwrap()
+        .0;
+    WorkspaceDatabase::open(&paths)
+        .unwrap()
+        .save_project_snapshot(&layout)
+        .unwrap();
+
+    let persistence = AppRootPersistence::load(&paths, None);
+    let (root, mut window, _) = open_root_with_persistence(cx, persistence);
+    draw_frame(&mut window);
+
+    assert_eq!(editor_text(&root, cx, PROJECT_A, new), "new draft");
+    assert_eq!(
+        root.read_with(cx, |root, cx| root.panel_count(project_id(PROJECT_A), cx)),
+        2
+    );
+    window.update(|_window, cx| {
+        root.update(cx, |root, cx| {
+            let candidate = root
+                .snapshot()
+                .with_active_view(&ViewKey::Editor {
+                    project_id: project_id(PROJECT_A),
+                    document_id: old,
+                })
+                .unwrap();
+            root.commit_project_snapshot(candidate, cx);
+        });
+    });
+    draw_frame(&mut window);
+    assert!(window.debug_bounds("document-recovery-replaced").is_some());
+}
+
+#[gpui::test]
+fn shared_document_restore_preserves_project_grant_union(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let root_a = temp.path().join("a");
+    let root_b = temp.path().join("b");
+    std::fs::create_dir(&root_a).unwrap();
+    std::fs::create_dir(&root_b).unwrap();
+    let file = root_a.join("shared.txt");
+    std::fs::write(&file, "disk").unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let document =
+        slterm_document::DocumentId::from_str("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2a").unwrap();
+    let location = slterm_path::ResolvedPath::new(
+        CanonicalPath::new(dunce::canonicalize(&file).unwrap()).unwrap(),
+        Some(crate::atomic_file::file_identity(&std::fs::File::open(&file).unwrap()).unwrap()),
+    );
+    let mut projects = slterm_workspace::ProjectRegistry::new();
+    for (project, root) in [(PROJECT_A, &root_a), (PROJECT_B, &root_b)] {
+        projects
+            .add_project(
+                project_id(project),
+                CanonicalPath::new(dunce::canonicalize(root).unwrap()).unwrap(),
+            )
+            .unwrap();
+    }
+    let layout = ProjectSnapshot::restore(projects, Vec::new())
+        .unwrap()
+        .with_opened_document(
+            project_id(PROJECT_A),
+            group_id(GROUP_A),
+            document,
+            location.clone(),
+        )
+        .unwrap()
+        .0
+        .with_opened_document(project_id(PROJECT_B), group_id(GROUP_B), document, location)
+        .unwrap()
+        .0;
+    WorkspaceDatabase::open(&paths)
+        .unwrap()
+        .save_project_snapshot(&layout)
+        .unwrap();
+    let persistence = AppRootPersistence::load(&paths, None);
+    let (root, mut window, _) = open_root_with_persistence(cx, persistence);
+    window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.activate_project(project_id(PROJECT_B), window, cx)
+                .unwrap();
+        });
+    });
+    let recovered = root.read_with(cx, |root, cx| {
+        root.projects[&project_id(PROJECT_B)]
+            .read(cx)
+            .panels
+            .values()
+            .find(|panel| {
+                panel.view_key
+                    == ViewKey::Editor {
+                        project_id: project_id(PROJECT_B),
+                        document_id: document,
+                    }
+            })
+            .and_then(|panel| panel.editor())
+            .unwrap()
+            .read(cx)
+            .local_document()
+            .cloned()
+            .unwrap()
+    });
+
+    recovered.save("changed").unwrap();
+
+    assert_eq!(std::fs::read_to_string(file).unwrap(), "changed");
+}
+
 #[gpui::test]
 fn integration_document_global_identity(cx: &mut TestAppContext) {
     let temp = tempfile::tempdir().unwrap();

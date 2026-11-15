@@ -6,10 +6,13 @@ use slterm_workspace::{PanelId, ViewKey};
 use crate::app_shell::file_editor::TextFileView;
 use crate::gpui_terminal::view::TerminalView;
 
+use super::document_recovery::DocumentRecoveryView;
+
 pub(crate) enum PanelContent {
     Terminal(Entity<TerminalView>),
     #[allow(dead_code)] // 消费点 = Document 真实打开与后续编辑器视图集成。
     Editor(Entity<TextFileView>),
+    Recovery(Entity<DocumentRecoveryView>),
 }
 
 pub(crate) struct PanelHost {
@@ -22,7 +25,7 @@ impl PanelHost {
     pub(crate) fn terminal(&self) -> Option<&Entity<TerminalView>> {
         match &self.content {
             PanelContent::Terminal(terminal) => Some(terminal),
-            PanelContent::Editor(_) => None,
+            PanelContent::Editor(_) | PanelContent::Recovery(_) => None,
         }
     }
 
@@ -30,7 +33,7 @@ impl PanelHost {
     pub(crate) fn editor(&self) -> Option<&Entity<TextFileView>> {
         match &self.content {
             PanelContent::Editor(editor) => Some(editor),
-            PanelContent::Terminal(_) => None,
+            PanelContent::Terminal(_) | PanelContent::Recovery(_) => None,
         }
     }
 
@@ -38,6 +41,7 @@ impl PanelHost {
         match &self.content {
             PanelContent::Terminal(terminal) => terminal.read(cx).focus_handle.clone(),
             PanelContent::Editor(editor) => editor.read(cx).focus_handle(cx),
+            PanelContent::Recovery(recovery) => recovery.read(cx).focus_handle.clone(),
         }
     }
 }

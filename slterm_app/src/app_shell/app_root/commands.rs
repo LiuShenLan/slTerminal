@@ -331,24 +331,69 @@ impl AppRoot {
         };
         let views = project.layout().view_keys();
         for view in views {
-            let ViewKey::Terminal {
-                project_id: view_project,
-                terminal_id,
-            } = view
-            else {
-                continue;
-            };
-            if view_project != project_id
-                || self.terminal_panel(project_id, terminal_id, cx).is_some()
-            {
-                continue;
-            }
-            let Some(record) = self.snapshot.terminal(terminal_id).cloned() else {
-                log::warn!("恢复布局引用的终端记录缺失");
-                continue;
-            };
-            if let Err(error) = self.restore_terminal_panel(&record, window, cx) {
-                log::warn!("恢复终端面板失败: {error}");
+            match view {
+                ViewKey::Terminal {
+                    project_id: view_project,
+                    terminal_id,
+                } => {
+                    if view_project != project_id
+                        || self.terminal_panel(project_id, terminal_id, cx).is_some()
+                    {
+                        continue;
+                    }
+                    let Some(record) = self.snapshot.terminal(terminal_id).cloned() else {
+                        log::warn!("恢复布局引用的终端记录缺失");
+                        continue;
+                    };
+                    if let Err(error) = self.restore_terminal_panel(&record, window, cx) {
+                        log::warn!("恢复终端面板失败: {error}");
+                    }
+                }
+                ViewKey::Editor { document_id, .. } | ViewKey::Markdown { document_id, .. } => {
+                    if self.panel_for_view(project_id, &view, cx).is_ok() {
+                        continue;
+                    }
+                    let result = if self
+                        .documents
+                        .session(document_id)
+                        .is_some_and(|session| session.paged().is_some())
+                    {
+                        self.restore_recovery_panel(
+                            project_id,
+                            view,
+                            super::document_recovery::DocumentRecoveryKind::Paged,
+                            cx,
+                        )
+                    } else if self.documents.session(document_id).is_some() {
+                        self.restore_document_panel(project_id, view, document_id, window, cx)
+                    } else if self
+                        .side_view_persistence
+                        .document_requires_authorization(document_id)
+                    {
+                        self.restore_recovery_panel(
+                            project_id,
+                            view,
+                            super::document_recovery::DocumentRecoveryKind::Authorization,
+                            cx,
+                        )
+                    } else if self
+                        .side_view_persistence
+                        .document_identity_was_replaced(document_id)
+                    {
+                        self.restore_recovery_panel(
+                            project_id,
+                            view,
+                            super::document_recovery::DocumentRecoveryKind::Replaced,
+                            cx,
+                        )
+                    } else {
+                        continue;
+                    };
+                    if let Err(error) = result {
+                        log::warn!("恢复 Document 面板失败: {error}");
+                    }
+                }
+                _ => {}
             }
         }
         let default_view = self
@@ -364,6 +409,9 @@ impl AppRoot {
             Some(ViewKey::Terminal { terminal_id, .. }) => self
                 .terminal_panel(project_id, terminal_id, cx)
                 .map(|(panel_id, _)| panel_id),
+            Some(view @ (ViewKey::Editor { .. } | ViewKey::Markdown { .. })) => {
+                self.panel_for_view(project_id, &view, cx).ok()
+            }
             _ => None,
         };
         if let Some(project) = self.projects.get(&project_id)
