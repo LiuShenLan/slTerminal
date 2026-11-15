@@ -17,8 +17,9 @@ pub(crate) fn init(cx: &mut gpui::App) {
     use self::{SelectDown, SelectLeft, SelectRight, SelectUp};
     use gpui::KeyBinding;
     use gpui_component::input::{
-        Backspace, Delete, Enter, MoveDown, MoveLeft, MoveRight, MoveToEndOfLine,
-        MoveToStartOfLine, MoveUp, Redo, SelectAll, SelectToEndOfLine, SelectToStartOfLine, Undo,
+        Backspace, Copy, Delete, Enter, MoveDown, MoveLeft, MoveRight, MoveToEndOfLine,
+        MoveToStartOfLine, MoveUp, Paste, Redo, SelectAll, SelectToEndOfLine, SelectToStartOfLine,
+        Undo,
     };
 
     const CONTEXT: &str = "DocumentText";
@@ -57,5 +58,7 @@ pub(crate) fn init(cx: &mut gpui::App) {
         KeyBinding::new("ctrl-z", Undo, Some(CONTEXT)),
         KeyBinding::new("ctrl-y", Redo, Some(CONTEXT)),
         KeyBinding::new("ctrl-shift-z", Redo, Some(CONTEXT)),
+        KeyBinding::new("ctrl-shift-c", Copy, Some(CONTEXT)),
+        KeyBinding::new("ctrl-shift-v", Paste, Some(CONTEXT)),
     ]);
 }

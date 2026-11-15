@@ -11,8 +11,9 @@ use gpui::{
 };
 use gpui_component::ActiveTheme as _;
 use gpui_component::input::{
-    Backspace, Delete, Enter, MoveDown, MoveLeft, MoveRight, MoveToEndOfLine, MoveToStartOfLine,
-    MoveUp, Redo, SelectAll, SelectToEndOfLine, SelectToStartOfLine, Undo,
+    Backspace, Copy, Delete, Enter, MoveDown, MoveLeft, MoveRight, MoveToEndOfLine,
+    MoveToStartOfLine, MoveUp, Paste, Redo, SelectAll, SelectToEndOfLine, SelectToStartOfLine,
+    Undo,
 };
 use ropey::{LineType, Rope};
 use slterm_document::{
@@ -548,6 +549,26 @@ impl DocumentTextView {
         };
         self.preferred_column = None;
         cx.notify();
+    }
+
+    fn copy(&self, cx: &mut Context<'_, Self>) {
+        let range = self.selection.range();
+        if range.is_empty() {
+            return;
+        }
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+            self.text.slice(range).to_string(),
+        ));
+    }
+
+    fn paste(&mut self, cx: &mut Context<'_, Self>) {
+        if self.read_only || self.marked_range.is_some() {
+            return;
+        }
+        let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
+            return;
+        };
+        self.replace(None, &text, None, false, cx);
     }
 
     fn travel_history(&mut self, redo: bool, cx: &mut Context<'_, Self>) {
@@ -1107,6 +1128,8 @@ impl Render for DocumentTextView {
             .on_action(cx.listener(|view, _: &SelectAll, _, cx| view.select_all(cx)))
             .on_action(cx.listener(|view, _: &Undo, _, cx| view.travel_history(false, cx)))
             .on_action(cx.listener(|view, _: &Redo, _, cx| view.travel_history(true, cx)))
+            .on_action(cx.listener(|view, _: &Copy, _, cx| view.copy(cx)))
+            .on_action(cx.listener(|view, _: &Paste, _, cx| view.paste(cx)))
             .child(canvas)
     }
 }

@@ -1116,6 +1116,69 @@ fn composition_blocks_keyboard_editing_and_history(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn clipboard_shortcuts_copy_and_paste_unicode_text(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        crate::app_shell::theme::apply_dark_theme(cx);
+        crate::app_shell::text_view::init(cx);
+    });
+    let window = cx.add_window(|_, cx| Host::new("a😀b", false, cx));
+    window
+        .update(cx, |host, window, cx| {
+            let focus = host.view.read(cx).focus.clone();
+            window.focus(&focus, cx);
+            host.view.update(cx, |view, cx| {
+                view.set_selected_text_range(1..3, window, cx);
+            });
+        })
+        .unwrap();
+    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    visual.run_until_parked();
+    visual.simulate_keystrokes("ctrl-shift-c");
+    window
+        .update(cx, |_, _, cx| {
+            assert_eq!(
+                cx.read_from_clipboard().and_then(|item| item.text()),
+                Some("😀".to_owned())
+            );
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string("中\r\nx".to_owned()));
+        })
+        .unwrap();
+    visual.simulate_keystrokes("ctrl-shift-v");
+    window
+        .update(cx, |host, _, _| assert_eq!(host.text(), "a中\nxb"))
+        .unwrap();
+}
+
+#[gpui::test]
+fn collapsed_copy_preserves_existing_clipboard(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        crate::app_shell::theme::apply_dark_theme(cx);
+        crate::app_shell::text_view::init(cx);
+    });
+    let window = cx.add_window(|_, cx| Host::new("ab", false, cx));
+    window
+        .update(cx, |host, window, cx| {
+            let focus = host.view.read(cx).focus.clone();
+            window.focus(&focus, cx);
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string("sentinel".to_owned()));
+        })
+        .unwrap();
+    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    visual.run_until_parked();
+    visual.simulate_keystrokes("ctrl-shift-c");
+    window
+        .update(cx, |_, _, cx| {
+            assert_eq!(
+                cx.read_from_clipboard().and_then(|item| item.text()),
+                Some("sentinel".to_owned())
+            );
+        })
+        .unwrap();
+}
+
+#[gpui::test]
 fn read_only_view_rejects_ime_without_touching_document(cx: &mut TestAppContext) {
     cx.update(|cx| {
         gpui_component::init(cx);
@@ -1124,12 +1187,14 @@ fn read_only_view_rejects_ime_without_touching_document(cx: &mut TestAppContext)
     let window = cx.add_window(|_, cx| Host::new("locked", true, cx));
     window
         .update(cx, |host, window, cx| {
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string("paste".to_owned()));
             host.view.update(cx, |view, cx| {
                 assert!(!view.accepts_text_input(window, cx));
                 view.replace_and_mark_text_in_range(None, "x", None, window, cx);
                 view.backspace(cx);
                 view.delete(cx);
                 view.insert_newline(cx);
+                view.paste(cx);
                 view.travel_history(false, cx);
             });
             assert_eq!(host.text(), "locked");
