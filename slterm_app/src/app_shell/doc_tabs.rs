@@ -480,7 +480,13 @@ mod doc_tabs_tests {
     /// 三判定正例:图片 / markdown / 可映射源码。
     #[test]
     fn openable_in_app_accepts_images_documents_and_source() {
-        for path in ["photo.png", "README.md", "src/main.rs", "page.HTML"] {
+        for path in [
+            "photo.png",
+            "README.md",
+            "src/main.rs",
+            "page.HTML",
+            "icon.svg",
+        ] {
             assert!(openable_in_app(Path::new(path)), "{path}");
         }
     }
@@ -488,7 +494,7 @@ mod doc_tabs_tests {
     /// 三判定反例:未知扩展名/二进制/无扩展名一律交系统处理器。
     #[test]
     fn openable_in_app_rejects_unknown_files() {
-        for path in ["archive.zip", "app.exe", "no_extension", "photo.svg"] {
+        for path in ["archive.zip", "app.exe", "no_extension"] {
             assert!(!openable_in_app(Path::new(path)), "{path}");
         }
     }

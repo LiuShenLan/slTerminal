@@ -34,61 +34,19 @@ enum CodeTabMode {
     Diff(Entity<DiffTabView>),
 }
 
-/// 扩展名 → tree-sitter 语言 id(组件库 highlighter 的注册名)。
-fn language_for_extension(extension: &str) -> Option<&'static str> {
-    Some(match extension.to_ascii_lowercase().as_str() {
-        "rs" => "rust",
-        "md" | "markdown" => "markdown",
-        "py" | "pyi" => "python",
-        "js" | "mjs" | "cjs" => "javascript",
-        "ts" | "mts" | "cts" => "typescript",
-        "tsx" => "tsx",
-        "jsx" => "jsx",
-        "c" | "h" => "c",
-        "cpp" | "cc" | "cxx" | "hpp" | "hh" => "cpp",
-        "cs" => "csharp",
-        "go" => "go",
-        "java" => "java",
-        "rb" => "ruby",
-        "php" => "php",
-        "swift" => "swift",
-        "kt" | "kts" => "kotlin",
-        "lua" => "lua",
-        "sh" | "bash" | "zsh" => "bash",
-        "ps1" | "psm1" | "psd1" => "powershell",
-        "toml" => "toml",
-        "yaml" | "yml" => "yaml",
-        "html" | "htm" => "html",
-        "css" => "css",
-        "scss" => "scss",
-        "sql" => "sql",
-        "zig" => "zig",
-        "cmake" => "cmake",
-        "dockerfile" => "dockerfile",
-        "ex" | "exs" => "elixir",
-        "erl" => "erlang",
-        "hs" => "haskell",
-        "ini" | "cfg" | "conf" => "ini",
-        "vim" => "vim",
-        "xml" => "xml",
-        "json" | "jsonl" | "ndjson" => "json",
-        "txt" | "log" | "text" => "text",
-        _ => return None,
-    })
-}
-
+/// 路径映射唯一来自 core 的封闭 LanguageRegistry；无 grammar 的旧扩展名不残留第二表。
 pub(crate) fn language_for_path(path: &Path) -> &'static str {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .and_then(language_for_extension)
+    slterm_document::LanguageRegistry::new()
+        .for_path(path)
+        .map(slterm_document::LanguageId::as_str)
         .unwrap_or("text")
 }
 
 /// 文件树双击是否进代码 tab(与 markdown/图片路由并列)。
 pub fn viewable_file(path: &Path) -> bool {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| language_for_extension(extension).is_some())
+    slterm_document::LanguageRegistry::new()
+        .for_path(path)
+        .is_some()
 }
 
 /// 源码文件 tab:普通文件与 gitshow 只读臂共用一个快照视图;
@@ -394,5 +352,12 @@ mod code_tab_tests {
         assert_eq!(language_for_path(Path::new("a.MJS")), "javascript");
         assert_eq!(language_for_path(Path::new("a.yaml")), "yaml");
         assert_eq!(language_for_path(Path::new("a.unknown")), "text");
+        assert_eq!(language_for_path(Path::new("Dockerfile")), "dockerfile");
+        assert_eq!(language_for_path(Path::new("Makefile")), "make");
+        assert_eq!(language_for_path(Path::new("config.JSONC")), "jsonc");
+        for unsupported in ["script.rb", "page.php", "video.swift"] {
+            assert_eq!(language_for_path(Path::new(unsupported)), "text");
+            assert!(!viewable_file(Path::new(unsupported)));
+        }
     }
 }
