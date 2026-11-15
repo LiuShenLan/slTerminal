@@ -40,7 +40,8 @@ pub use project_registry::{
     AddProjectOutcome, Project, ProjectRegistry, ProjectRegistryError, ProjectRootStatus,
 };
 pub use project_snapshot::{
-    NewTerminalSpec, ProjectCommandError, ProjectSnapshot, ProjectSnapshotError, SplitTerminalSpec,
+    ClosedViews, NewTerminalSpec, ProjectCommandError, ProjectSnapshot, ProjectSnapshotError,
+    SplitTerminalSpec,
 };
 pub use side_view::{SideViewId, UnknownSideViewId};
 pub use terminal_record::{RunIntent, TerminalRecord, TerminalRecordError};

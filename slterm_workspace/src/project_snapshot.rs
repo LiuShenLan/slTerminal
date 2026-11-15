@@ -110,6 +110,22 @@ impl From<ProjectRegistryError> for ProjectSnapshotError {
 
 /// 同一事务保存与恢复的项目聚合和逻辑终端集合。
 #[derive(Clone, Debug, Default, PartialEq)]
+pub struct ClosedViews {
+    terminals: Vec<TerminalRecord>,
+    documents: Vec<(DocumentId, ResolvedPath)>,
+}
+
+impl ClosedViews {
+    pub fn terminals(&self) -> &[TerminalRecord] {
+        &self.terminals
+    }
+
+    pub fn documents(&self) -> &[(DocumentId, ResolvedPath)] {
+        &self.documents
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct ProjectSnapshot {
     registry: ProjectRegistry,
     terminals: BTreeMap<TerminalId, TerminalRecord>,
@@ -349,32 +365,64 @@ impl ProjectSnapshot {
         ))
     }
 
+    /// 在同一候选中关闭混合逻辑视图；只有失去全部引用的 Document 才移除记录。
+    pub fn without_views(
+        &self,
+        views: &[ViewKey],
+    ) -> Result<(Self, ClosedViews), ProjectCommandError> {
+        self.validate()?;
+        let mut candidate = self.clone();
+        let mut closed = ClosedViews::default();
+        for view in views {
+            let project_id = view.project_id().ok_or(LayoutError::ProjectMismatch)?;
+            let terminal = match view {
+                ViewKey::Terminal { terminal_id, .. } => Some(
+                    candidate
+                        .terminal(*terminal_id)
+                        .cloned()
+                        .ok_or(ProjectSnapshotError::MissingTerminal(*terminal_id))?,
+                ),
+                _ => None,
+            };
+            candidate
+                .registry_mut()
+                .layout_mut(project_id)
+                .ok_or(ProjectRegistryError::ProjectNotFound)?
+                .close_view(view)?;
+            if let Some(record) = terminal {
+                candidate.remove_terminal(record.id())?;
+                closed.terminals.push(record);
+            }
+        }
+        candidate.retain_referenced_documents();
+        closed.documents = self
+            .documents
+            .iter()
+            .filter(|(id, _)| !candidate.documents.contains_key(*id))
+            .map(|(id, location)| (*id, location.clone()))
+            .collect();
+        candidate.validate()?;
+        Ok((candidate, closed))
+    }
+
     /// 在同一候选中关闭全部逻辑终端；任何失败都不修改原快照。
     pub fn without_terminals(
         &self,
         ids: &[TerminalId],
     ) -> Result<(Self, Vec<TerminalRecord>), ProjectCommandError> {
-        self.validate()?;
-        let mut candidate = self.clone();
-        let mut removed = Vec::with_capacity(ids.len());
-        for id in ids {
-            let record = candidate
-                .terminal(*id)
-                .cloned()
-                .ok_or(ProjectSnapshotError::MissingTerminal(*id))?;
-            let view = ViewKey::Terminal {
-                project_id: record.project_id(),
-                terminal_id: *id,
-            };
-            candidate
-                .registry_mut()
-                .layout_mut(record.project_id())
-                .ok_or(ProjectRegistryError::ProjectNotFound)?
-                .close_view(&view)?;
-            removed.push(candidate.remove_terminal(*id)?);
-        }
-        candidate.validate()?;
-        Ok((candidate, removed))
+        let views = ids
+            .iter()
+            .map(|id| {
+                self.terminal(*id)
+                    .map(|record| ViewKey::Terminal {
+                        project_id: record.project_id(),
+                        terminal_id: *id,
+                    })
+                    .ok_or(ProjectSnapshotError::MissingTerminal(*id))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let (candidate, closed) = self.without_views(&views)?;
+        Ok((candidate, closed.terminals))
     }
 
     /// 生成激活逻辑终端的候选快照，只改变布局激活关系。

@@ -37,6 +37,8 @@ pub(crate) mod diff_tab;
 pub(crate) mod doc_tabs;
 #[allow(dead_code)] // 生产消费归 AppRoot Document 生命周期与退出链。
 pub(crate) mod document_autosave;
+#[allow(dead_code)] // 生产消费归 AppRoot 统一关闭保存阶段。
+pub(crate) mod document_close;
 #[allow(dead_code)] // 生产消费归 watcher 与 Document 外部变化接线。
 pub(crate) mod document_external;
 #[allow(dead_code)] // 生产消费点归 AppRoot Document 面板接线。

@@ -557,6 +557,75 @@ fn split_terminal_command_creates_two_non_empty_groups() {
 }
 
 #[test]
+fn mixed_view_close_is_atomic_and_retains_external_document() {
+    let original = snapshot_with_three_projects();
+    let id = document_id(DOCUMENT_A);
+    let location = document_location("D:/work/shared.txt");
+    let (first, editor_a) = original
+        .with_opened_document(
+            project_id(PROJECT_A),
+            group_id(GROUP_A),
+            id,
+            location.clone(),
+        )
+        .unwrap();
+    let (original, editor_b) = first
+        .with_opened_document(
+            project_id(PROJECT_B),
+            group_id(GROUP_B),
+            id,
+            location.clone(),
+        )
+        .unwrap();
+    let terminal_a = view(PROJECT_A, TERMINAL_A);
+
+    let (partial, removed) = original
+        .without_views(&[terminal_a.clone(), editor_a.clone()])
+        .unwrap();
+    assert_eq!(removed.terminals().len(), 1);
+    assert_eq!(removed.terminals()[0].id(), terminal_id(TERMINAL_A));
+    assert!(removed.documents().is_empty());
+    assert_eq!(partial.terminal(terminal_id(TERMINAL_A)), None);
+    assert_eq!(partial.document(id), Some(&location));
+    assert!(
+        partial
+            .registry()
+            .project(project_id(PROJECT_B))
+            .unwrap()
+            .layout()
+            .view_keys()
+            .contains(&editor_b)
+    );
+
+    let (last, removed) = partial.without_views(&[editor_b]).unwrap();
+    assert!(last.document(id).is_none());
+    assert_eq!(removed.documents(), &[(id, location)]);
+
+    let invalid = original.without_views(&[
+        terminal_a,
+        ViewKey::Editor {
+            project_id: project_id(PROJECT_C),
+            document_id: document_id(DOCUMENT_B),
+        },
+    ]);
+    assert!(invalid.is_err());
+    assert!(
+        original
+            .registry()
+            .project(project_id(PROJECT_A))
+            .unwrap()
+            .layout()
+            .view_keys()
+            .contains(&editor_a)
+    );
+    assert!(original.terminal(terminal_id(TERMINAL_A)).is_some());
+    assert_eq!(
+        original.document(id),
+        Some(&document_location("D:/work/shared.txt"))
+    );
+}
+
+#[test]
 fn close_terminal_command_removes_record_group_and_preserves_project() {
     let original = snapshot_with_two_terminals();
     let close_result = original.without_terminal(terminal_id(TERMINAL_B));
