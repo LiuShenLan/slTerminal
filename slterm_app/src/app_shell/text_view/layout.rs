@@ -19,6 +19,7 @@ pub(crate) struct TextLayoutKey {
     pub(crate) language_revision: u64,
     pub(crate) font: FontMetricsKey,
     pub(crate) wrap_width_bits: u32,
+    pub(crate) first_visible_column: usize,
     pub(crate) dpi_bits: u32,
     pub(crate) theme_revision: u64,
 }
@@ -83,6 +84,7 @@ mod tests {
                 line_height_bits: 20.0_f32.to_bits(),
             },
             wrap_width_bits: 640.0_f32.to_bits(),
+            first_visible_column: 0,
             dpi_bits: 1.0_f32.to_bits(),
             theme_revision: 0,
         }
@@ -136,6 +138,10 @@ mod tests {
             },
             TextLayoutKey {
                 wrap_width_bits: 320.0_f32.to_bits(),
+                ..base.clone()
+            },
+            TextLayoutKey {
+                first_visible_column: 1,
                 ..base.clone()
             },
             TextLayoutKey {

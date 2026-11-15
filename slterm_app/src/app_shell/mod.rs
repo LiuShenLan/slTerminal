@@ -608,6 +608,7 @@ fn init(cx: &mut App) {
     gpui_component::set_locale(settings.language.gpui_component_locale());
     cx.set_global(settings);
     theme::apply_dark_theme(cx);
+    text_view::init(cx);
     crate::gpui_terminal::init(cx);
     app_root::keymap::register(cx);
 }

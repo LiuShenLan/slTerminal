@@ -5,10 +5,15 @@ use std::rc::Rc;
 
 use gpui::{
     App, Bounds, ContentMask, Context, ElementInputHandler, EntityInputHandler, FocusHandle,
-    Focusable, Font, Hsla, Pixels, Point, Render, ShapedLine, SharedString, Styled as _, TextAlign,
-    TextRun, UTF16Selection, Window, canvas, fill, point, px, size,
+    Focusable, Font, Hsla, InteractiveElement as _, ParentElement as _, Pixels, Point, Render,
+    ShapedLine, SharedString, Styled as _, TextAlign, TextRun, UTF16Selection, Window, canvas, div,
+    fill, point, px, size,
 };
 use gpui_component::ActiveTheme as _;
+use gpui_component::input::{
+    MoveDown, MoveLeft, MoveRight, MoveToEndOfLine, MoveToStartOfLine, MoveUp, SelectToEndOfLine,
+    SelectToStartOfLine,
+};
 use ropey::{LineType, Rope};
 use slterm_document::{
     DocumentId, DocumentSession, EditOrigin, EditTransaction, EditTransactionError, MergePolicy,
@@ -19,9 +24,10 @@ use uuid::Uuid;
 use super::layout::{FontMetricsKey, LayoutCache, TextLayoutKey};
 use super::metrics::{
     DisplayMap, rope_ceil_grapheme_boundary, rope_floor_grapheme_boundary,
-    rope_is_grapheme_boundary,
+    rope_is_grapheme_boundary, rope_next_grapheme_boundary, rope_previous_grapheme_boundary,
 };
 use super::source::RopeTextSource;
+use super::{SelectDown, SelectLeft, SelectRight, SelectUp};
 
 /// 一次同步提交成功后回投的只读正文快照。
 pub(crate) struct DocumentTextSnapshot {
@@ -180,6 +186,10 @@ impl LayoutMetrics {
     fn visible_columns(&self) -> usize {
         (self.bounds.size.width / self.cell_width).ceil().max(1.0) as usize
     }
+
+    fn visible_whole_columns(&self) -> usize {
+        (self.bounds.size.width / self.cell_width).floor() as usize
+    }
 }
 
 struct PaintFrame {
@@ -211,8 +221,10 @@ pub(crate) struct DocumentTextView {
     theme_fingerprint: Option<ThemeFingerprint>,
     layout_cache: Rc<RefCell<LayoutCache>>,
     selection: TextSelection,
+    preferred_column: Option<usize>,
     marked_range: Option<Range<usize>>,
     scroll_line: usize,
+    scroll_column: usize,
     focus: FocusHandle,
     layout: Rc<RefCell<Option<LayoutMetrics>>>,
     #[cfg(test)]
@@ -238,8 +250,10 @@ impl DocumentTextView {
             theme_fingerprint: None,
             layout_cache: Rc::default(),
             selection: TextSelection { anchor: 0, head: 0 },
+            preferred_column: None,
             marked_range: None,
             scroll_line: 0,
+            scroll_column: 0,
             focus: cx.focus_handle().tab_stop(true),
             layout: Rc::default(),
             #[cfg(test)]
@@ -252,6 +266,8 @@ impl DocumentTextView {
         self.adopt_snapshot(DocumentTextSnapshot::from_session(session));
         self.selection = TextSelection { anchor: 0, head: 0 };
         self.marked_range = None;
+        self.preferred_column = None;
+        self.ensure_cursor_visible();
         cx.notify();
     }
 
@@ -296,6 +312,8 @@ impl DocumentTextView {
         self.selection = selection;
         self.marked_range = marked_range;
         self.reconcile_transient_ranges();
+        self.preferred_column = None;
+        self.ensure_cursor_visible();
         cx.notify();
     }
 
@@ -460,7 +478,130 @@ impl DocumentTextView {
         };
         self.marked_range = new_marked;
         self.reconcile_transient_ranges();
+        self.preferred_column = None;
+        self.ensure_cursor_visible();
         cx.notify();
+    }
+
+    fn move_to(&mut self, position: usize, select: bool, cx: &mut Context<'_, Self>) {
+        if self.marked_range.is_some() {
+            return;
+        }
+        if select {
+            self.selection.head = position;
+        } else {
+            self.selection = TextSelection {
+                anchor: position,
+                head: position,
+            };
+        }
+        self.preferred_column = None;
+        self.ensure_cursor_visible();
+        cx.notify();
+    }
+
+    fn move_horizontal(&mut self, left: bool, select: bool, cx: &mut Context<'_, Self>) {
+        let range = self.selection.range();
+        let position = if !select && range.start < range.end {
+            if left { range.start } else { range.end }
+        } else {
+            let boundary = if left {
+                rope_previous_grapheme_boundary(&self.text, self.selection.head)
+            } else {
+                rope_next_grapheme_boundary(&self.text, self.selection.head)
+            };
+            boundary.unwrap_or(self.selection.head)
+        };
+        self.move_to(position, select, cx);
+    }
+
+    fn move_line_boundary(&mut self, end: bool, select: bool, cx: &mut Context<'_, Self>) {
+        let row = self
+            .text
+            .byte_to_line_idx(self.selection.head, LineType::LF);
+        let Some(range) = RopeTextSource::new(&self.text, DisplayMap::new(4)).line_byte_range(row)
+        else {
+            return;
+        };
+        self.move_to(if end { range.end } else { range.start }, select, cx);
+    }
+
+    fn move_vertical(&mut self, down: bool, select: bool, cx: &mut Context<'_, Self>) {
+        if self.marked_range.is_some() {
+            return;
+        }
+        let map = DisplayMap::new(4);
+        let source = RopeTextSource::new(&self.text, map);
+        let row = self
+            .text
+            .byte_to_line_idx(self.selection.head, LineType::LF);
+        let target_row = if down {
+            row.saturating_add(1)
+                .min(self.text.len_lines(LineType::LF) - 1)
+        } else {
+            row.saturating_sub(1)
+        };
+        if target_row == row {
+            return;
+        }
+        let Some(current_range) = source.line_byte_range(row) else {
+            return;
+        };
+        let current_column = map.column_at_rope(
+            self.text.slice(current_range),
+            self.selection.head - self.text.line_to_byte_idx(row, LineType::LF),
+        );
+        let preferred = match (self.preferred_column, current_column) {
+            (Some(column), _) => column,
+            (None, Some(column)) => column,
+            (None, None) => return,
+        };
+        let Some(line) = source
+            .visible_line_windows(target_row..target_row + 1, 0..preferred + 1)
+            .into_iter()
+            .next()
+        else {
+            return;
+        };
+        let Some(local) = map.byte_at_column(line.text(), preferred) else {
+            return;
+        };
+        let target = line.byte_range().start + local;
+        self.move_to(target, select, cx);
+        self.preferred_column = Some(preferred);
+    }
+
+    fn ensure_cursor_visible(&mut self) {
+        let Some(metrics) = self.metrics() else {
+            return;
+        };
+        let row = self
+            .text
+            .byte_to_line_idx(self.selection.head, LineType::LF);
+        let visible_rows = (metrics.bounds.size.height / metrics.line_height)
+            .floor()
+            .max(1.0) as usize;
+        if row < self.scroll_line {
+            self.scroll_line = row;
+        } else if row >= self.scroll_line + visible_rows {
+            self.scroll_line = row + 1 - visible_rows;
+        }
+        let map = DisplayMap::new(4);
+        let Some(range) = RopeTextSource::new(&self.text, map).line_byte_range(row) else {
+            return;
+        };
+        let line_start = range.start;
+        let Some(column) =
+            map.column_at_rope(self.text.slice(range), self.selection.head - line_start)
+        else {
+            return;
+        };
+        let visible_columns = metrics.visible_whole_columns();
+        if column < self.scroll_column {
+            self.scroll_column = column;
+        } else if column > self.scroll_column + visible_columns {
+            self.scroll_column = column - visible_columns;
+        }
     }
 
     fn metrics(&self) -> Option<LayoutMetrics> {
@@ -544,6 +685,8 @@ impl EntityInputHandler for DocumentTextView {
             anchor: range.start,
             head: range.end,
         };
+        self.preferred_column = None;
+        self.ensure_cursor_visible();
         cx.notify();
     }
 
@@ -566,24 +709,35 @@ impl EntityInputHandler for DocumentTextView {
         let byte = range.start;
         let row = self.text.byte_to_line_idx(byte, LineType::LF);
         let visible_row = row.checked_sub(self.scroll_line)?;
-        let line_start = self.text.line_to_byte_idx(row, LineType::LF);
         let metrics = self.metrics().unwrap_or(LayoutMetrics {
             bounds: element_bounds,
             cell_width: px(8.0),
             line_height: px(20.0),
         });
         let line = RopeTextSource::new(&self.text, DisplayMap::new(4))
-            .visible_line_windows(row..row + 1, metrics.visible_columns())
+            .visible_line_windows(
+                row..row + 1,
+                self.scroll_column..self.scroll_column + metrics.visible_columns(),
+            )
             .into_iter()
             .next()?;
-        let local = byte - line_start;
-        let x = match DisplayMap::new(4).column_at(line.text(), local) {
-            Some(column) => metrics.bounds.origin.x + metrics.cell_width * column as f32,
-            None if local > line.text().len() => {
-                metrics.bounds.origin.x + metrics.bounds.size.width
-            }
-            None => return None,
+        let visible = line.byte_range();
+        let x = if byte < visible.start {
+            metrics.bounds.origin.x
+        } else if byte > visible.end {
+            metrics.bounds.origin.x + metrics.bounds.size.width
+        } else {
+            let column = DisplayMap::new(4).column_at_from(
+                line.text(),
+                byte - visible.start,
+                line.display_start(),
+            )?;
+            metrics.bounds.origin.x
+                + metrics.cell_width * (column as f32 - self.scroll_column as f32)
         };
+        let x = x
+            .max(metrics.bounds.origin.x)
+            .min(metrics.bounds.origin.x + metrics.bounds.size.width);
         Some(Bounds {
             origin: point(
                 x,
@@ -605,11 +759,15 @@ impl EntityInputHandler for DocumentTextView {
         let row = self.scroll_line + (y / metrics.line_height).floor() as usize;
         let map = DisplayMap::new(4);
         let line = RopeTextSource::new(&self.text, map)
-            .visible_line_windows(row..row + 1, metrics.visible_columns())
+            .visible_line_windows(
+                row..row + 1,
+                self.scroll_column..self.scroll_column + metrics.visible_columns(),
+            )
             .into_iter()
             .next()?;
-        let column = (x / metrics.cell_width).round() as usize;
-        let local = map.byte_at_column(line.text(), column)?;
+        let viewport_column = (x / metrics.cell_width).round() as usize;
+        let target_column = self.scroll_column + viewport_column;
+        let local = map.byte_at_column_from(line.text(), target_column, line.display_start())?;
         Some(self.text.byte_to_utf16_idx(line.byte_range().start + local))
     }
 }
@@ -642,6 +800,7 @@ impl DocumentTextView {
         let selection = self.selection.range();
         let cursor = self.selection.head;
         let scroll_line = self.scroll_line;
+        let scroll_column = self.scroll_column;
         let layout = self.layout.clone();
         let layout_cache = self.layout_cache.clone();
         let document_id = self.document_id;
@@ -686,6 +845,7 @@ impl DocumentTextView {
                         line_height_bits: line_height.as_f32().to_bits(),
                     },
                     wrap_width_bits: bounds.size.width.as_f32().to_bits(),
+                    first_visible_column: scroll_column,
                     dpi_bits: window.scale_factor().to_bits(),
                     theme_revision,
                 });
@@ -696,7 +856,7 @@ impl DocumentTextView {
                 let lines = RopeTextSource::new(&text, map)
                     .visible_line_windows(
                         scroll_line..scroll_line + count,
-                        metrics.visible_columns(),
+                        scroll_column..scroll_column + metrics.visible_columns(),
                     )
                     .into_iter()
                     .map(|line| {
@@ -733,13 +893,23 @@ impl DocumentTextView {
                         let start = frame.selection.start.max(range.start);
                         let end = frame.selection.end.min(range.end);
                         if start < end {
-                            let x0 = map.column_at(line.text(), start - range.start);
-                            let x1 = map.column_at(line.text(), end - range.start);
+                            let x0 = map.column_at_from(
+                                line.text(),
+                                start - range.start,
+                                line.display_start(),
+                            );
+                            let x1 = map.column_at_from(
+                                line.text(),
+                                end - range.start,
+                                line.display_start(),
+                            );
                             if let (Some(x0), Some(x1)) = (x0, x1) {
                                 fill(
                                     Bounds {
                                         origin: point(
-                                            bounds.origin.x + frame.layout.cell_width * x0 as f32,
+                                            bounds.origin.x
+                                                + frame.layout.cell_width
+                                                    * (x0 as f32 - scroll_column as f32),
                                             bounds.origin.y + frame.layout.line_height * row as f32,
                                         ),
                                         size: size(
@@ -753,13 +923,18 @@ impl DocumentTextView {
                         }
                         if range.start <= frame.cursor
                             && frame.cursor <= range.end
-                            && let Some(column) =
-                                map.column_at(line.text(), frame.cursor - range.start)
+                            && let Some(column) = map.column_at_from(
+                                line.text(),
+                                frame.cursor - range.start,
+                                line.display_start(),
+                            )
                         {
                             fill(
                                 Bounds {
                                     origin: point(
-                                        bounds.origin.x + frame.layout.cell_width * column as f32,
+                                        bounds.origin.x
+                                            + frame.layout.cell_width
+                                                * (column as f32 - scroll_column as f32),
                                         bounds.origin.y + frame.layout.line_height * row as f32,
                                     ),
                                     size: size(px(1.0), frame.layout.line_height),
@@ -768,9 +943,11 @@ impl DocumentTextView {
                             );
                         }
                     }
-                    for (row, (shaped, _)) in frame.lines.iter().enumerate() {
+                    for (row, (shaped, line)) in frame.lines.iter().enumerate() {
                         let origin = point(
-                            bounds.origin.x,
+                            bounds.origin.x
+                                + frame.layout.cell_width
+                                    * (line.display_start() as f32 - scroll_column as f32),
                             bounds.origin.y + frame.layout.line_height * row as f32,
                         );
                         let _ = shaped.paint(
@@ -794,693 +971,55 @@ impl DocumentTextView {
 
 impl Render for DocumentTextView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<'_, Self>) -> impl gpui::IntoElement {
-        self.text_canvas(cx)
+        let canvas = self.text_canvas(cx);
+        let focus = self.focus.clone();
+        div()
+            .key_context("DocumentText")
+            .track_focus(&focus)
+            .size_full()
+            .min_w_0()
+            .min_h_0()
+            .overflow_hidden()
+            .on_action(cx.listener(|view, _: &MoveLeft, _, cx| {
+                view.move_horizontal(true, false, cx);
+            }))
+            .on_action(cx.listener(|view, _: &MoveRight, _, cx| {
+                view.move_horizontal(false, false, cx);
+            }))
+            .on_action(cx.listener(|view, _: &MoveUp, _, cx| {
+                view.move_vertical(false, false, cx);
+            }))
+            .on_action(cx.listener(|view, _: &MoveDown, _, cx| {
+                view.move_vertical(true, false, cx);
+            }))
+            .on_action(cx.listener(|view, _: &SelectLeft, _, cx| {
+                view.move_horizontal(true, true, cx);
+            }))
+            .on_action(cx.listener(|view, _: &SelectRight, _, cx| {
+                view.move_horizontal(false, true, cx);
+            }))
+            .on_action(cx.listener(|view, _: &SelectUp, _, cx| {
+                view.move_vertical(false, true, cx);
+            }))
+            .on_action(cx.listener(|view, _: &SelectDown, _, cx| {
+                view.move_vertical(true, true, cx);
+            }))
+            .on_action(cx.listener(|view, _: &MoveToStartOfLine, _, cx| {
+                view.move_line_boundary(false, false, cx);
+            }))
+            .on_action(cx.listener(|view, _: &MoveToEndOfLine, _, cx| {
+                view.move_line_boundary(true, false, cx);
+            }))
+            .on_action(cx.listener(|view, _: &SelectToStartOfLine, _, cx| {
+                view.move_line_boundary(false, true, cx);
+            }))
+            .on_action(cx.listener(|view, _: &SelectToEndOfLine, _, cx| {
+                view.move_line_boundary(true, true, cx);
+            }))
+            .child(canvas)
     }
 }
 
 #[cfg(all(test, feature = "gpui-test-support"))]
-mod tests {
-    use std::cell::RefCell;
-    use std::rc::Rc;
-    use std::time::Instant;
-
-    use gpui::{
-        AppContext as _, Bounds, Context, Entity, EntityInputHandler as _, Render, TestAppContext,
-        Window, px,
-    };
-    use ropey::Rope;
-    use slterm_document::{
-        DocumentId, DocumentMetadata, DocumentRegistry, EditOrigin, EditTransaction, MergePolicy,
-        TextEdit, TextStateId,
-    };
-    use slterm_path::{CanonicalPath, ResolvedPath};
-    use uuid::Uuid;
-
-    use super::{
-        DocumentTextSnapshot, DocumentTextView, LayoutMetrics, TextSelection, transform_selection,
-    };
-
-    struct Host {
-        registry: Rc<RefCell<DocumentRegistry>>,
-        id: DocumentId,
-        view: Entity<DocumentTextView>,
-    }
-
-    impl Host {
-        fn new(text: &str, read_only: bool, cx: &mut Context<'_, Self>) -> Self {
-            let id: DocumentId = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0f2a".parse().unwrap();
-            let state = TextStateId::from_uuid(Uuid::now_v7()).unwrap();
-            let mut registry = DocumentRegistry::new();
-            registry
-                .open(
-                    id,
-                    ResolvedPath::new(CanonicalPath::new("D:/work/editor.txt").unwrap(), None),
-                    Rope::from_str(text),
-                    state,
-                    std::sync::Arc::from(text.as_bytes()),
-                    DocumentMetadata {
-                        read_only,
-                        ..DocumentMetadata::default()
-                    },
-                )
-                .unwrap();
-            let registry = Rc::new(RefCell::new(registry));
-            let sink_registry = registry.clone();
-            let view = cx.new(|cx| {
-                let session = registry.borrow();
-                DocumentTextView::new(
-                    id,
-                    session.session(id).unwrap(),
-                    Box::new(move |transaction, state, _| {
-                        let mut registry = sink_registry.borrow_mut();
-                        registry.apply(transaction, state, Instant::now())?;
-                        Ok(DocumentTextSnapshot::from_session(
-                            registry.session(id).unwrap(),
-                        ))
-                    }),
-                    cx,
-                )
-            });
-            Self { registry, id, view }
-        }
-
-        fn text(&self) -> String {
-            self.registry
-                .borrow()
-                .session(self.id)
-                .unwrap()
-                .text()
-                .unwrap()
-                .to_string()
-        }
-    }
-
-    impl Render for Host {
-        fn render(&mut self, _: &mut Window, _: &mut Context<'_, Self>) -> impl gpui::IntoElement {
-            self.view.clone()
-        }
-    }
-
-    #[test]
-    fn external_replacement_collapses_a_fully_covered_selection() {
-        let selection = TextSelection { anchor: 2, head: 4 };
-        let edits = vec![TextEdit::new(1..5, "X")];
-        let mapped = transform_selection(selection, &edits);
-        assert_eq!(mapped.anchor, 1);
-        assert_eq!(mapped.head, 1);
-    }
-
-    #[test]
-    fn adjacent_edits_rebase_boundaries_through_same_offset_insertions() {
-        let selection = TextSelection { anchor: 1, head: 2 };
-        let edits = vec![TextEdit::new(0..1, "X"), TextEdit::new(1..1, "Q")];
-        let mapped = transform_selection(selection, &edits);
-        assert_eq!(mapped.range(), 2..3);
-    }
-
-    #[gpui::test]
-    fn ime_commits_utf16_edits_through_the_shared_document(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            gpui_component::init(cx);
-            crate::app_shell::theme::apply_dark_theme(cx);
-        });
-        let window = cx.add_window(|_, cx| Host::new("A😀B", false, cx));
-        window
-            .update(cx, |host, window, cx| {
-                host.view.update(cx, |view, cx| {
-                    view.replace_and_mark_text_in_range(None, "中", None, window, cx)
-                });
-            })
-            .unwrap();
-        cx.run_until_parked();
-        window
-            .update(cx, |host, window, cx| {
-                assert_eq!(host.text(), "中A😀B");
-                host.view.update(cx, |view, cx| {
-                    assert_eq!(view.marked_text_range(window, cx), Some(0..1));
-                    view.replace_text_in_range(None, "🙂", window, cx);
-                    assert_eq!(view.marked_text_range(window, cx), None);
-                });
-            })
-            .unwrap();
-        cx.run_until_parked();
-        window
-            .update(cx, |host, window, cx| {
-                assert_eq!(host.text(), "🙂A😀B");
-                host.view.update(cx, |view, cx| {
-                    let mut adjusted = None;
-                    assert_eq!(
-                        view.text_for_range(0..2, &mut adjusted, window, cx),
-                        Some("🙂".to_owned())
-                    );
-                    assert_eq!(adjusted, Some(0..2));
-                });
-            })
-            .unwrap();
-    }
-
-    #[gpui::test]
-    fn painted_view_dispatches_text_input_to_document(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            gpui_component::init(cx);
-            crate::app_shell::theme::apply_dark_theme(cx);
-        });
-        let window = cx.add_window(|_, cx| Host::new("ab", false, cx));
-        window
-            .update(cx, |host, window, cx| {
-                let focus = host.view.read(cx).focus.clone();
-                window.focus(&focus, cx);
-            })
-            .unwrap();
-        let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
-        visual.run_until_parked();
-        visual.refresh().unwrap();
-        visual.update(|window, cx| {
-            window.draw(cx).clear(cx);
-        });
-        visual.simulate_input("中");
-
-        window
-            .update(cx, |host, _, _| assert_eq!(host.text(), "中ab"))
-            .unwrap();
-    }
-
-    #[gpui::test]
-    fn invalid_explicit_input_range_does_not_fall_back_to_selection(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            gpui_component::init(cx);
-            crate::app_shell::theme::apply_dark_theme(cx);
-        });
-        let window = cx.add_window(|_, cx| Host::new("abc", false, cx));
-        window
-            .update(cx, |host, window, cx| {
-                host.view.update(cx, |view, cx| {
-                    view.replace_text_in_range(Some(99..100), "x", window, cx);
-                });
-            })
-            .unwrap();
-        cx.run_until_parked();
-        window
-            .update(cx, |host, _, _| assert_eq!(host.text(), "abc"))
-            .unwrap();
-    }
-
-    #[gpui::test]
-    fn ime_geometry_uses_scrolled_visible_origin(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            gpui_component::init(cx);
-            crate::app_shell::theme::apply_dark_theme(cx);
-        });
-        let window = cx.add_window(|_, cx| Host::new("A中\nB", false, cx));
-        let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
-        visual.run_until_parked();
-        visual.refresh().unwrap();
-        visual.update(|window, cx| {
-            window.draw(cx).clear(cx);
-        });
-        window
-            .update(cx, |host, window, cx| {
-                host.view.update(cx, |view, cx| {
-                    let metrics = view.metrics().unwrap();
-                    let hit = view
-                        .character_index_for_point(
-                            gpui::point(
-                                metrics.bounds.origin.x + metrics.cell_width * 2.0,
-                                metrics.bounds.origin.y,
-                            ),
-                            window,
-                            cx,
-                        )
-                        .unwrap();
-                    assert_eq!(hit, 2);
-                    view.scroll_line = 1;
-                    let bounds = view
-                        .bounds_for_range(3..4, metrics.bounds, window, cx)
-                        .unwrap();
-                    assert_eq!(bounds.origin.y, metrics.bounds.origin.y);
-                });
-            })
-            .unwrap();
-    }
-
-    #[gpui::test]
-    fn sequential_input_in_one_update_is_not_lost(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            gpui_component::init(cx);
-            crate::app_shell::theme::apply_dark_theme(cx);
-        });
-        let window = cx.add_window(|_, cx| Host::new("", false, cx));
-        window
-            .update(cx, |host, window, cx| {
-                host.view.update(cx, |view, cx| {
-                    view.replace_text_in_range(None, "a", window, cx);
-                    view.replace_text_in_range(None, "b", window, cx);
-                });
-            })
-            .unwrap();
-        cx.run_until_parked();
-        window
-            .update(cx, |host, _, _| assert_eq!(host.text(), "ab"))
-            .unwrap();
-    }
-
-    #[gpui::test]
-    fn marked_range_is_queryable_immediately(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            gpui_component::init(cx);
-            crate::app_shell::theme::apply_dark_theme(cx);
-        });
-        let window = cx.add_window(|_, cx| Host::new("", false, cx));
-        window
-            .update(cx, |host, window, cx| {
-                host.view.update(cx, |view, cx| {
-                    view.replace_and_mark_text_in_range(None, "中", None, window, cx);
-                    assert_eq!(view.marked_text_range(window, cx), Some(0..1));
-                });
-            })
-            .unwrap();
-    }
-
-    #[gpui::test]
-    fn crlf_input_is_normalized_before_commit(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            gpui_component::init(cx);
-            crate::app_shell::theme::apply_dark_theme(cx);
-        });
-        let window = cx.add_window(|_, cx| Host::new("", false, cx));
-        window
-            .update(cx, |host, window, cx| {
-                host.view.update(cx, |view, cx| {
-                    view.replace_text_in_range(None, "a\r\nb", window, cx);
-                });
-            })
-            .unwrap();
-        cx.run_until_parked();
-        window
-            .update(cx, |host, _, _| assert_eq!(host.text(), "a\nb"))
-            .unwrap();
-    }
-
-    #[gpui::test]
-    fn system_selection_rejects_grapheme_internal_offsets(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            gpui_component::init(cx);
-            crate::app_shell::theme::apply_dark_theme(cx);
-        });
-        let window = cx.add_window(|_, cx| Host::new("e\u{301}", false, cx));
-        window
-            .update(cx, |host, window, cx| {
-                host.view.update(cx, |view, cx| {
-                    view.set_selected_text_range(1..1, window, cx);
-                    let selection = view.selected_text_range(false, window, cx).unwrap();
-                    assert_eq!(selection.range, 0..0);
-                });
-            })
-            .unwrap();
-    }
-
-    #[gpui::test]
-    fn input_after_a_grapheme_merge_continues_after_the_cluster(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            gpui_component::init(cx);
-            crate::app_shell::theme::apply_dark_theme(cx);
-        });
-        let window = cx.add_window(|_, cx| Host::new("\u{301}", false, cx));
-        window
-            .update(cx, |host, window, cx| {
-                host.view.update(cx, |view, cx| {
-                    view.replace_text_in_range(None, "e", window, cx);
-                    view.replace_text_in_range(None, "x", window, cx);
-                });
-                assert_eq!(host.text(), "e\u{301}x");
-            })
-            .unwrap();
-    }
-
-    #[gpui::test]
-    fn ime_mark_expands_when_input_merges_with_adjacent_grapheme(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            gpui_component::init(cx);
-            crate::app_shell::theme::apply_dark_theme(cx);
-        });
-        let window = cx.add_window(|_, cx| Host::new("e", false, cx));
-        window
-            .update(cx, |host, window, cx| {
-                host.view.update(cx, |view, cx| {
-                    view.set_selected_text_range(1..1, window, cx);
-                    view.replace_and_mark_text_in_range(None, "\u{301}", None, window, cx);
-                    assert_eq!(view.marked_text_range(window, cx), Some(0..2));
-                    view.replace_text_in_range(None, "x", window, cx);
-                });
-                assert_eq!(host.text(), "x");
-            })
-            .unwrap();
-    }
-
-    #[gpui::test]
-    fn explicit_utf16_ranges_reject_surrogate_internal_offsets(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            gpui_component::init(cx);
-            crate::app_shell::theme::apply_dark_theme(cx);
-        });
-        let window = cx.add_window(|_, cx| Host::new("😀", false, cx));
-        window
-            .update(cx, |host, window, cx| {
-                host.view.update(cx, |view, cx| {
-                    view.set_selected_text_range(1..1, window, cx);
-                    assert_eq!(
-                        view.selected_text_range(false, window, cx).unwrap().range,
-                        0..0
-                    );
-                    view.replace_text_in_range(Some(1..2), "x", window, cx);
-                });
-                assert_eq!(host.text(), "😀");
-            })
-            .unwrap();
-    }
-
-    #[gpui::test]
-    fn text_canvas_clips_horizontal_and_vertical_overflow(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            gpui_component::init(cx);
-            crate::app_shell::theme::apply_dark_theme(cx);
-        });
-        let window = cx.add_window(|_, cx| Host::new("long", false, cx));
-        let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
-        visual.run_until_parked();
-        visual.refresh().unwrap();
-        visual.update(|window, cx| {
-            window.draw(cx).clear(cx);
-        });
-        window
-            .update(cx, |host, _, cx| {
-                let view = host.view.read(cx);
-                let bounds = view.metrics().unwrap().bounds;
-                assert_eq!(view.painted_content_mask.borrow().unwrap().bounds, bounds);
-            })
-            .unwrap();
-    }
-
-    #[gpui::test]
-    fn external_edit_rebases_selection_and_marked_range(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            gpui_component::init(cx);
-            crate::app_shell::theme::apply_dark_theme(cx);
-        });
-        let window = cx.add_window(|_, cx| Host::new("", false, cx));
-        window
-            .update(cx, |host, window, cx| {
-                host.view.update(cx, |view, cx| {
-                    view.replace_and_mark_text_in_range(None, "x", None, window, cx);
-                });
-                let revision = host
-                    .registry
-                    .borrow()
-                    .session(host.id)
-                    .unwrap()
-                    .text_revision();
-                let transaction = EditTransaction {
-                    document_id: host.id,
-                    expected_text_revision: revision,
-                    edits: vec![TextEdit::new(0..0, "Q")],
-                    origin: EditOrigin::UserInput,
-                    merge_policy: MergePolicy::Disallowed,
-                };
-                host.registry
-                    .borrow_mut()
-                    .apply(
-                        transaction.clone(),
-                        TextStateId::from_uuid(Uuid::now_v7()).unwrap(),
-                        Instant::now(),
-                    )
-                    .unwrap();
-                {
-                    let registry = host.registry.borrow();
-                    let session = registry.session(host.id).unwrap();
-                    host.view.update(cx, |view, cx| {
-                        view.apply_edit_snapshot(session, &transaction, cx);
-                        assert_eq!(view.marked_text_range(window, cx), Some(1..2));
-                        assert_eq!(
-                            view.selected_text_range(false, window, cx).unwrap().range,
-                            2..2
-                        );
-                    });
-                }
-                host.view.update(cx, |view, cx| {
-                    view.replace_and_mark_text_in_range(None, "y", None, window, cx);
-                });
-            })
-            .unwrap();
-        window
-            .update(cx, |host, _, _| assert_eq!(host.text(), "Qy"))
-            .unwrap();
-    }
-
-    #[gpui::test]
-    fn rejected_edit_preserves_selection_and_marked_range(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            gpui_component::init(cx);
-            crate::app_shell::theme::apply_dark_theme(cx);
-        });
-        let window = cx.add_window(|_, cx| Host::new("", false, cx));
-        window
-            .update(cx, |host, window, cx| {
-                let transaction = EditTransaction {
-                    document_id: host.id,
-                    expected_text_revision: 0,
-                    edits: vec![TextEdit::new(0..0, "external")],
-                    origin: EditOrigin::UserInput,
-                    merge_policy: MergePolicy::Disallowed,
-                };
-                host.registry
-                    .borrow_mut()
-                    .apply(
-                        transaction,
-                        TextStateId::from_uuid(Uuid::now_v7()).unwrap(),
-                        Instant::now(),
-                    )
-                    .unwrap();
-                host.view.update(cx, |view, cx| {
-                    view.replace_and_mark_text_in_range(None, "stale", None, window, cx);
-                    assert_eq!(view.marked_text_range(window, cx), None);
-                    assert_eq!(
-                        view.selected_text_range(false, window, cx).unwrap().range,
-                        0..0
-                    );
-                });
-                assert_eq!(host.text(), "external");
-            })
-            .unwrap();
-    }
-
-    #[gpui::test]
-    fn unchanged_edits_do_not_rebase_or_cancel_view_ranges(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            gpui_component::init(cx);
-            crate::app_shell::theme::apply_dark_theme(cx);
-        });
-        let window = cx.add_window(|_, cx| Host::new("ab", false, cx));
-        window
-            .update(cx, |host, window, cx| {
-                host.view.update(cx, |view, cx| {
-                    view.set_selected_text_range(0..1, window, cx);
-                });
-                let transaction = EditTransaction {
-                    document_id: host.id,
-                    expected_text_revision: 0,
-                    edits: vec![TextEdit::new(0..1, "a"), TextEdit::new(2..2, "X")],
-                    origin: EditOrigin::UserInput,
-                    merge_policy: MergePolicy::Disallowed,
-                };
-                host.registry
-                    .borrow_mut()
-                    .apply(
-                        transaction.clone(),
-                        TextStateId::from_uuid(Uuid::now_v7()).unwrap(),
-                        Instant::now(),
-                    )
-                    .unwrap();
-                let registry = host.registry.borrow();
-                let session = registry.session(host.id).unwrap();
-                host.view.update(cx, |view, cx| {
-                    view.apply_edit_snapshot(session, &transaction, cx);
-                    assert_eq!(
-                        view.selected_text_range(false, window, cx).unwrap().range,
-                        0..1
-                    );
-                });
-                assert_eq!(host.text(), "abX");
-            })
-            .unwrap();
-    }
-
-    #[gpui::test]
-    fn crlf_composition_maps_selected_range_to_normalized_text(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            gpui_component::init(cx);
-            crate::app_shell::theme::apply_dark_theme(cx);
-        });
-        let window = cx.add_window(|_, cx| Host::new("", false, cx));
-        window
-            .update(cx, |host, window, cx| {
-                host.view.update(cx, |view, cx| {
-                    view.replace_and_mark_text_in_range(None, "a\r\nb", Some(4..4), window, cx);
-                    assert_eq!(
-                        view.selected_text_range(false, window, cx).unwrap().range,
-                        3..3
-                    );
-                });
-                assert_eq!(host.text(), "a\nb");
-            })
-            .unwrap();
-    }
-
-    #[gpui::test]
-    fn snapshot_clamps_scroll_and_restores_ime_geometry(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            gpui_component::init(cx);
-            crate::app_shell::theme::apply_dark_theme(cx);
-        });
-        let window = cx.add_window(|_, cx| Host::new("a\nb\nc", false, cx));
-        window
-            .update(cx, |host, window, cx| {
-                host.view.update(cx, |view, _cx| view.scroll_line = 2);
-                let transaction = EditTransaction {
-                    document_id: host.id,
-                    expected_text_revision: 0,
-                    edits: vec![TextEdit::new(0..5, "x")],
-                    origin: EditOrigin::UserInput,
-                    merge_policy: MergePolicy::Disallowed,
-                };
-                host.registry
-                    .borrow_mut()
-                    .apply(
-                        transaction.clone(),
-                        TextStateId::from_uuid(Uuid::now_v7()).unwrap(),
-                        Instant::now(),
-                    )
-                    .unwrap();
-                let registry = host.registry.borrow();
-                let session = registry.session(host.id).unwrap();
-                host.view.update(cx, |view, cx| {
-                    view.apply_edit_snapshot(session, &transaction, cx);
-                    assert_eq!(view.scroll_line, 0);
-                    assert!(
-                        view.bounds_for_range(0..1, Bounds::default(), window, cx)
-                            .is_some()
-                    );
-                });
-            })
-            .unwrap();
-    }
-
-    #[gpui::test]
-    fn long_line_tail_uses_the_visible_right_edge_for_ime(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            gpui_component::init(cx);
-            crate::app_shell::theme::apply_dark_theme(cx);
-        });
-        let window = cx.add_window(|_, cx| Host::new("abcdefgh", false, cx));
-        window
-            .update(cx, |host, window, cx| {
-                host.view.update(cx, |view, cx| {
-                    let bounds = Bounds {
-                        origin: gpui::point(px(10.0), px(10.0)),
-                        size: gpui::size(px(32.0), px(20.0)),
-                    };
-                    *view.layout.borrow_mut() = Some(LayoutMetrics {
-                        bounds,
-                        cell_width: px(8.0),
-                        line_height: px(20.0),
-                    });
-                    let caret = view.bounds_for_range(8..8, bounds, window, cx).unwrap();
-                    assert_eq!(caret.origin.x, px(42.0));
-                });
-            })
-            .unwrap();
-    }
-
-    #[gpui::test]
-    fn layout_cache_reuses_lines_and_invalidates_text_and_theme(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            gpui_component::init(cx);
-            crate::app_shell::theme::apply_dark_theme(cx);
-        });
-        let window = cx.add_window(|_, cx| Host::new("abc", false, cx));
-        let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
-        visual.run_until_parked();
-        visual.refresh().unwrap();
-        visual.update(|window, cx| {
-            window.draw(cx).clear(cx);
-        });
-        let first = window
-            .update(cx, |host, _, cx| {
-                host.view.read(cx).layout_cache.borrow().stats()
-            })
-            .unwrap();
-        visual.refresh().unwrap();
-        visual.update(|window, cx| {
-            window.draw(cx).clear(cx);
-        });
-        let second = window
-            .update(cx, |host, _, cx| {
-                host.view.read(cx).layout_cache.borrow().stats()
-            })
-            .unwrap();
-        assert!(second.0 > first.0);
-        assert_eq!(second.1, first.1);
-
-        window
-            .update(cx, |host, window, cx| {
-                host.view.update(cx, |view, cx| {
-                    view.replace_text_in_range(None, "x", window, cx);
-                });
-            })
-            .unwrap();
-        visual.refresh().unwrap();
-        visual.update(|window, cx| {
-            window.draw(cx).clear(cx);
-        });
-        let edited = window
-            .update(cx, |host, _, cx| {
-                host.view.read(cx).layout_cache.borrow().stats()
-            })
-            .unwrap();
-        assert!(edited.1 > second.1);
-
-        visual.update(|_, cx| {
-            let theme = gpui_component::Theme::global_mut(cx);
-            let accent = theme.accent;
-            theme.accent = theme.foreground;
-            theme.foreground = accent;
-        });
-        visual.refresh().unwrap();
-        visual.update(|window, cx| {
-            window.draw(cx).clear(cx);
-        });
-        let themed = window
-            .update(cx, |host, _, cx| {
-                host.view.read(cx).layout_cache.borrow().stats()
-            })
-            .unwrap();
-        assert!(themed.1 > edited.1);
-    }
-
-    #[gpui::test]
-    fn read_only_view_rejects_ime_without_touching_document(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            gpui_component::init(cx);
-            crate::app_shell::theme::apply_dark_theme(cx);
-        });
-        let window = cx.add_window(|_, cx| Host::new("locked", true, cx));
-        window
-            .update(cx, |host, window, cx| {
-                host.view.update(cx, |view, cx| {
-                    assert!(!view.accepts_text_input(window, cx));
-                    view.replace_and_mark_text_in_range(None, "x", None, window, cx);
-                });
-                assert_eq!(host.text(), "locked");
-            })
-            .unwrap();
-    }
-}
+#[path = "editor_tests.rs"]
+mod tests;

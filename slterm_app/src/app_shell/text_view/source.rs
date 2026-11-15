@@ -9,6 +9,7 @@ use super::metrics::DisplayMap;
 pub(crate) struct VisibleLine {
     index: usize,
     byte_range: Range<usize>,
+    display_start: usize,
     text: String,
     display_width: usize,
 }
@@ -24,6 +25,10 @@ impl VisibleLine {
 
     pub(crate) fn text(&self) -> &str {
         &self.text
+    }
+
+    pub(crate) const fn display_start(&self) -> usize {
+        self.display_start
     }
 
     pub(crate) const fn display_width(&self) -> usize {
@@ -67,11 +72,26 @@ impl<'a> RopeTextSource<'a> {
         Self { text, display }
     }
 
-    /// 仅物化覆盖可视列的完整字素前缀；长行不可见尾部不进入前台字符串。
+    /// 读取行内容的全局字节范围，不物化行文本，也不含 LF／CRLF。
+    pub(crate) fn line_byte_range(&self, index: usize) -> Option<Range<usize>> {
+        if index >= self.text.len_lines(LineType::LF) {
+            return None;
+        }
+        let line = self.text.line(index, LineType::LF);
+        let line_start = self.text.line_to_byte_idx(index, LineType::LF);
+        let has_newline = line.len() > 0 && line.byte(line.len() - 1) == b'\n';
+        let mut content_len = line.len() - usize::from(has_newline);
+        if has_newline && content_len > 0 && line.byte(content_len - 1) == b'\r' {
+            content_len -= 1;
+        }
+        Some(line_start..line_start + content_len)
+    }
+
+    /// 仅物化与可视列相交的完整字素；长行其余部分不进入前台字符串。
     pub(crate) fn visible_line_windows(
         &self,
         lines: Range<usize>,
-        columns: usize,
+        columns: Range<usize>,
     ) -> Vec<VisibleLine> {
         let line_count = self.text.len_lines(LineType::LF);
         let start = lines.start.min(line_count);
@@ -86,12 +106,14 @@ impl<'a> RopeTextSource<'a> {
                     content_len -= 1;
                 }
                 let content = line.slice(..content_len);
-                let visible_len = self.display.visible_prefix_len(content, columns);
-                let text = content.slice(..visible_len).to_string();
+                let (visible, display_start) =
+                    self.display.visible_window(content, columns.clone());
+                let text = content.slice(visible.clone()).to_string();
                 VisibleLine {
                     index,
-                    byte_range: line_start..line_start + visible_len,
-                    display_width: self.display.width(&text),
+                    byte_range: line_start + visible.start..line_start + visible.end,
+                    display_start,
+                    display_width: self.display.width_from(&text, display_start) - display_start,
                     text,
                 }
             })
@@ -116,6 +138,7 @@ impl<'a> RopeTextSource<'a> {
                 VisibleLine {
                     index,
                     byte_range: line_start..line_start + content_len,
+                    display_start: 0,
                     display_width: self.display.width(&text),
                     text,
                 }
@@ -182,6 +205,7 @@ impl<'a> PagedTextSource<'a> {
         Some(VisibleLine {
             index,
             byte_range: byte_start..byte_start + text.len(),
+            display_start: 0,
             display_width: self.display.width(&text),
             text,
         })
@@ -203,6 +227,7 @@ impl TextSource for PagedTextSource<'_> {
                     index: 0,
                     byte_range: 0..0,
                     text: String::new(),
+                    display_start: 0,
                     display_width: 0,
                 }));
             } else {
@@ -247,6 +272,7 @@ impl TextSource for PagedTextSource<'_> {
                 let line = if ended || page + 1 == self.source.index().len() {
                     Some(VisibleLine {
                         index: line_index,
+                        display_start: 0,
                         display_width: self.display.width(&text),
                         byte_range: byte_start..byte_start + text.len(),
                         text,
@@ -304,15 +330,28 @@ mod tests {
     fn rope_source_bounds_long_line_materialization_to_visible_columns() {
         let rope = Rope::from_str(&"a".repeat(100_000));
         let source = RopeTextSource::new(&rope, DisplayMap::new(4));
-        let lines = source.visible_line_windows(0..1, 4);
+        let lines = source.visible_line_windows(0..1, 0..4);
         assert_eq!(lines[0].text(), "aaaa");
         assert_eq!(lines[0].byte_range(), 0..4);
 
         let rope = Rope::from_str(&format!("e\u{301}{}", "b".repeat(100_000)));
         let source = RopeTextSource::new(&rope, DisplayMap::new(4));
-        let lines = source.visible_line_windows(0..1, 1);
+        let lines = source.visible_line_windows(0..1, 0..1);
         assert_eq!(lines[0].text(), "e\u{301}");
         assert_eq!(lines[0].byte_range(), 0..3);
+
+        let rope = Rope::from_str("abcdef");
+        let source = RopeTextSource::new(&rope, DisplayMap::new(4));
+        let lines = source.visible_line_windows(0..1, 2..5);
+        assert_eq!(lines[0].text(), "cde");
+        assert_eq!(lines[0].byte_range(), 2..5);
+        assert_eq!(lines[0].display_start(), 2);
+
+        let rope = Rope::from_str("中a");
+        let source = RopeTextSource::new(&rope, DisplayMap::new(4));
+        let lines = source.visible_line_windows(0..1, 1..2);
+        assert_eq!(lines[0].text(), "中");
+        assert_eq!(lines[0].display_start(), 0);
     }
 
     #[test]
