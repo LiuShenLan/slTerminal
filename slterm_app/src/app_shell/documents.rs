@@ -524,6 +524,53 @@ mod documents_tests {
     }
 
     #[test]
+    fn save_requires_write_capability_not_mere_read_access() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = CanonicalPath::new(dunce::canonicalize(temp.path()).unwrap()).unwrap();
+        let file = temp.path().join("file.txt");
+        std::fs::write(&file, "old").unwrap();
+        let mut registry = DocumentRegistry::new();
+        let opened = DocumentOpenService::default()
+            .open(&mut registry, &root, &CanonicalPath::new(&file).unwrap())
+            .unwrap();
+        let request = edited_save_request(&mut registry, opened.id, "new", 0);
+
+        let result = DocumentSaveService::default().save(request, &[PathGrant::repo_root(root)], 0);
+
+        assert!(matches!(
+            result,
+            Err(crate::text_document::SaveError::Unauthorized)
+        ));
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "old");
+        registry.fail_save(opened.id, 1).unwrap();
+        assert!(registry.session(opened.id).unwrap().is_dirty());
+    }
+
+    #[test]
+    fn save_rejects_changed_authorization_generation_without_writing() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = CanonicalPath::new(dunce::canonicalize(temp.path()).unwrap()).unwrap();
+        let file = temp.path().join("file.txt");
+        std::fs::write(&file, "old").unwrap();
+        let mut registry = DocumentRegistry::new();
+        let opened = DocumentOpenService::default()
+            .open(&mut registry, &root, &CanonicalPath::new(&file).unwrap())
+            .unwrap();
+        let request = edited_save_request(&mut registry, opened.id, "new", 4);
+
+        let result =
+            DocumentSaveService::default().save(request, &[PathGrant::project_root(root)], 5);
+
+        assert!(matches!(
+            result,
+            Err(crate::text_document::SaveError::Unauthorized)
+        ));
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "old");
+        registry.fail_save(opened.id, 1).unwrap();
+        assert!(registry.session(opened.id).unwrap().is_dirty());
+    }
+
+    #[test]
     fn path_file_identity_deduplicates_document() {
         let temp = tempfile::tempdir().unwrap();
         let root = CanonicalPath::new(temp.path()).unwrap();

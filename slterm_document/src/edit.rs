@@ -384,6 +384,7 @@ mod tests {
     };
 
     const DOCUMENT: &str = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0f2a";
+    const DOCUMENT_OTHER: &str = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0f2b";
     const STATE_A: &str = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2a";
     const STATE_B: &str = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b";
     const STATE_C: &str = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2c";
@@ -743,6 +744,88 @@ mod tests {
             std::path::Path::new("D:/work/file.txt")
         );
         registry.fail_save(id, 2).unwrap();
+    }
+
+    #[test]
+    fn in_place_save_completion_does_not_undo_external_relocation() {
+        let (mut registry, id, _) = document("0", false);
+        registry
+            .apply(
+                transaction(id, 0, vec![TextEdit::new(1..1, "1")]),
+                state(STATE_B),
+                Instant::now(),
+            )
+            .unwrap();
+        let request = registry.begin_save(id, 0).unwrap();
+        let external = registry.external_request(id, 0).unwrap();
+        let renamed = slterm_path::ResolvedPath::new(
+            CanonicalPath::new("D:/work/renamed.txt").unwrap(),
+            None,
+        );
+        registry
+            .apply_external(
+                crate::DocumentExternalChange::Relocated {
+                    request: external,
+                    location: renamed.clone(),
+                },
+                Instant::now(),
+            )
+            .unwrap();
+
+        registry
+            .complete_save(DocumentSaveReceipt::new(
+                request,
+                std::sync::Arc::from(b"01".as_slice()),
+                None,
+            ))
+            .unwrap();
+
+        let session = registry.session(id).unwrap();
+        assert_eq!(session.location(), &renamed);
+        assert_eq!(session.disk_baseline().as_ref(), b"01");
+        assert!(!session.is_dirty());
+        assert_eq!(registry.existing(&renamed), Some(id));
+    }
+
+    #[test]
+    fn save_as_completion_rejects_an_occupied_target_atomically() {
+        let (mut registry, id, _) = document("0", false);
+        let target_id = DOCUMENT_OTHER.parse().unwrap();
+        let target =
+            slterm_path::ResolvedPath::new(CanonicalPath::new("D:/work/target.txt").unwrap(), None);
+        registry
+            .open(
+                target_id,
+                target.clone(),
+                Rope::from_str("target"),
+                state(STATE_C),
+                std::sync::Arc::from(b"target".as_slice()),
+                DocumentMetadata::default(),
+            )
+            .unwrap();
+        registry
+            .apply(
+                transaction(id, 0, vec![TextEdit::new(1..1, "1")]),
+                state(STATE_B),
+                Instant::now(),
+            )
+            .unwrap();
+        let request = registry.begin_save(id, 0).unwrap();
+        let original = registry.session(id).unwrap().location().clone();
+
+        assert_eq!(
+            registry.complete_save_as(DocumentSaveReceipt::for_save_as(
+                request,
+                std::sync::Arc::from(b"01".as_slice()),
+                target,
+            )),
+            Err(crate::SaveTransactionError::TargetOccupied)
+        );
+        assert_eq!(registry.session(id).unwrap().location(), &original);
+        assert!(registry.session(id).unwrap().is_saving());
+        assert!(registry.session(id).unwrap().is_dirty());
+        assert_eq!(text(&registry, target_id), "target");
+        registry.fail_save(id, 1).unwrap();
     }
 
     #[test]

@@ -116,6 +116,7 @@ pub enum SaveTransactionError {
     SaveGenerationExhausted,
     StaleSave,
     LocationMismatch,
+    TargetOccupied,
 }
 
 impl fmt::Display for SaveTransactionError {
@@ -127,6 +128,7 @@ impl fmt::Display for SaveTransactionError {
             Self::SaveGenerationExhausted => "保存代次已耗尽",
             Self::StaleSave => "保存回执不属于当前保存代次",
             Self::LocationMismatch => "保存回执的位置与保存类型不匹配",
+            Self::TargetOccupied => "另存为目标已关联其他 Document",
         })
     }
 }
@@ -208,6 +210,13 @@ impl DocumentRegistry {
         save_as: bool,
     ) -> Result<(), SaveTransactionError> {
         let id = receipt.request.document_id;
+        if save_as
+            && self
+                .existing(&receipt.location)
+                .is_some_and(|existing| existing != id)
+        {
+            return Err(SaveTransactionError::TargetOccupied);
+        }
         let session = self
             .session_mut(id)
             .ok_or(SaveTransactionError::DocumentNotFound(id))?;
@@ -220,10 +229,18 @@ impl DocumentRegistry {
             return Err(SaveTransactionError::LocationMismatch);
         }
         let previous_identity = session.location.file_identity();
-        let location_changed = session.location.canonical_path() != target;
+        let location_changed = save_as && session.location.canonical_path() != target;
         session.saved_state = receipt.request.text_state;
         session.disk_baseline = receipt.disk_baseline;
-        session.location = receipt.location;
+        if save_as {
+            session.location = receipt.location;
+        } else {
+            // 外部改名可能已经提交；普通保存回执只更新身份，不回滚路径。
+            session.location = ResolvedPath::new(
+                session.location.canonical_path().clone(),
+                receipt.location.file_identity(),
+            );
+        }
         session.active_save = None;
         session.history.barrier();
         let current_identity = session.location.file_identity();

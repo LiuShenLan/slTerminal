@@ -241,7 +241,11 @@ mod tests {
         autosave.on_focus(id, markdown.clone());
 
         assert!(autosave.on_blur(id, editor, &registry).is_empty());
-        assert_eq!(autosave.on_blur(id, markdown, &registry), vec![id]);
+        assert_eq!(autosave.on_blur(id, markdown.clone(), &registry), vec![id]);
+        assert!(
+            autosave.on_blur(id, markdown, &registry).is_empty(),
+            "同一视图的重复失焦不得重复触发"
+        );
     }
 
     #[test]
