@@ -12,6 +12,7 @@ mod edit;
 mod encoding;
 mod external;
 mod identity;
+mod paged;
 mod registry;
 mod repository;
 mod save;
@@ -28,6 +29,10 @@ pub use external::{
     ExternalChangeError, ExternalConflictKind,
 };
 pub use identity::{DocumentId, StableIdError, TextStateId};
+pub use paged::{
+    DECODED_PAGE_CACHE_LIMIT_BYTES, DocumentPageCache, PAGE_SOURCE_BYTES, PageIndex,
+    PageIndexError, PageKey, SourceByteRange,
+};
 pub use registry::{
     DocumentMetadata, DocumentOpenOutcome, DocumentRegistry, DocumentRegistryError, DocumentSession,
 };
