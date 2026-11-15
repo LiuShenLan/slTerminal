@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use gpui::{
     App, Bounds, ContentMask, Context, ElementInputHandler, EntityInputHandler, FocusHandle,
-    Focusable, Font, Pixels, Point, Render, ShapedLine, SharedString, Styled as _, TextAlign,
+    Focusable, Font, Hsla, Pixels, Point, Render, ShapedLine, SharedString, Styled as _, TextAlign,
     TextRun, UTF16Selection, Window, canvas, fill, point, px, size,
 };
 use gpui_component::ActiveTheme as _;
@@ -16,6 +16,7 @@ use slterm_document::{
 };
 use uuid::Uuid;
 
+use super::layout::{FontMetricsKey, LayoutCache, TextLayoutKey};
 use super::metrics::{
     DisplayMap, rope_ceil_grapheme_boundary, rope_floor_grapheme_boundary,
     rope_is_grapheme_boundary,
@@ -26,6 +27,7 @@ use super::source::RopeTextSource;
 pub(crate) struct DocumentTextSnapshot {
     text: Rope,
     revision: u64,
+    text_state: TextStateId,
     read_only: bool,
 }
 
@@ -34,6 +36,7 @@ impl DocumentTextSnapshot {
         Self {
             text: session.text().expect("Paged 不进入 Rope 编辑器").clone(),
             revision: session.text_revision(),
+            text_state: session.current_state(),
             read_only: session.is_read_only(),
         }
     }
@@ -187,13 +190,26 @@ struct PaintFrame {
     layout: LayoutMetrics,
 }
 
+#[derive(Clone, PartialEq)]
+struct ThemeFingerprint {
+    foreground: Hsla,
+    accent: Hsla,
+    mono_font_family: SharedString,
+    mono_font_size: Pixels,
+}
+
 /// Document 的专用文本视图；Rope 是不可变展示快照，修改只发 core 事务。
 pub(crate) struct DocumentTextView {
     document_id: DocumentId,
     text: Rope,
     revision: u64,
+    text_state: TextStateId,
     read_only: bool,
     edit_sink: DocumentEditSink,
+    language_revision: u64,
+    theme_revision: u64,
+    theme_fingerprint: Option<ThemeFingerprint>,
+    layout_cache: Rc<RefCell<LayoutCache>>,
     selection: TextSelection,
     marked_range: Option<Range<usize>>,
     scroll_line: usize,
@@ -214,8 +230,13 @@ impl DocumentTextView {
             document_id,
             text: session.text().expect("Paged 不进入 Rope 编辑器").clone(),
             revision: session.text_revision(),
+            text_state: session.current_state(),
             read_only: session.is_read_only(),
             edit_sink,
+            language_revision: 0,
+            theme_revision: 0,
+            theme_fingerprint: None,
+            layout_cache: Rc::default(),
             selection: TextSelection { anchor: 0, head: 0 },
             marked_range: None,
             scroll_line: 0,
@@ -281,6 +302,7 @@ impl DocumentTextView {
     fn adopt_snapshot(&mut self, snapshot: DocumentTextSnapshot) {
         self.text = snapshot.text;
         self.revision = snapshot.revision;
+        self.text_state = snapshot.text_state;
         self.read_only = snapshot.read_only;
         self.scroll_line = self
             .scroll_line
@@ -598,6 +620,20 @@ impl DocumentTextView {
         let foreground = theme.foreground;
         let accent = theme.accent;
         let background = theme.background;
+        let font_size = theme.mono_font_size;
+        let fingerprint = ThemeFingerprint {
+            foreground,
+            accent,
+            mono_font_family: theme.mono_font_family.clone(),
+            mono_font_size: font_size,
+        };
+        if self.theme_fingerprint.as_ref() != Some(&fingerprint) {
+            self.theme_revision = self
+                .theme_revision
+                .checked_add(1)
+                .expect("主题 revision 不得耗尽");
+            self.theme_fingerprint = Some(fingerprint);
+        }
         let font = Font {
             family: theme.mono_font_family.clone(),
             ..Font::default()
@@ -607,6 +643,11 @@ impl DocumentTextView {
         let cursor = self.selection.head;
         let scroll_line = self.scroll_line;
         let layout = self.layout.clone();
+        let layout_cache = self.layout_cache.clone();
+        let document_id = self.document_id;
+        let text_state = self.text_state;
+        let language_revision = self.language_revision;
+        let theme_revision = self.theme_revision;
         let focus = self.focus.clone();
         let view = cx.entity();
         #[cfg(test)]
@@ -625,7 +666,7 @@ impl DocumentTextView {
                 };
                 let sample = window.text_system().shape_line(
                     SharedString::new_static("M"),
-                    px(14.0),
+                    font_size,
                     &[make_run(1)],
                     None,
                 );
@@ -634,9 +675,24 @@ impl DocumentTextView {
                     cell_width: sample.width,
                     line_height,
                 };
+                layout_cache.borrow_mut().activate(TextLayoutKey {
+                    document_id,
+                    text_state,
+                    language_revision,
+                    font: FontMetricsKey {
+                        family: font.family.clone(),
+                        font_size_bits: font_size.as_f32().to_bits(),
+                        cell_width_bits: metrics.cell_width.as_f32().to_bits(),
+                        line_height_bits: line_height.as_f32().to_bits(),
+                    },
+                    wrap_width_bits: bounds.size.width.as_f32().to_bits(),
+                    dpi_bits: window.scale_factor().to_bits(),
+                    theme_revision,
+                });
                 *layout.borrow_mut() = Some(metrics);
                 let height: f32 = bounds.size.height.into();
                 let count = (height / line_height.as_f32()).ceil().max(1.0) as usize;
+                let mut cache = layout_cache.borrow_mut();
                 let lines = RopeTextSource::new(&text, map)
                     .visible_line_windows(
                         scroll_line..scroll_line + count,
@@ -644,12 +700,16 @@ impl DocumentTextView {
                     )
                     .into_iter()
                     .map(|line| {
-                        let shaped = window.text_system().shape_line(
-                            SharedString::from(line.text().to_owned()),
-                            px(14.0),
-                            &[make_run(line.text().len())],
-                            None,
-                        );
+                        let shaped = cache.get(line.index()).unwrap_or_else(|| {
+                            let shaped = window.text_system().shape_line(
+                                SharedString::from(line.text().to_owned()),
+                                font_size,
+                                &[make_run(line.text().len())],
+                                None,
+                            );
+                            cache.insert(line.index(), shaped.clone());
+                            shaped
+                        });
                         (shaped, line)
                     })
                     .collect();
@@ -1338,6 +1398,72 @@ mod tests {
                 });
             })
             .unwrap();
+    }
+
+    #[gpui::test]
+    fn layout_cache_reuses_lines_and_invalidates_text_and_theme(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::app_shell::theme::apply_dark_theme(cx);
+        });
+        let window = cx.add_window(|_, cx| Host::new("abc", false, cx));
+        let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.run_until_parked();
+        visual.refresh().unwrap();
+        visual.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+        let first = window
+            .update(cx, |host, _, cx| {
+                host.view.read(cx).layout_cache.borrow().stats()
+            })
+            .unwrap();
+        visual.refresh().unwrap();
+        visual.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+        let second = window
+            .update(cx, |host, _, cx| {
+                host.view.read(cx).layout_cache.borrow().stats()
+            })
+            .unwrap();
+        assert!(second.0 > first.0);
+        assert_eq!(second.1, first.1);
+
+        window
+            .update(cx, |host, window, cx| {
+                host.view.update(cx, |view, cx| {
+                    view.replace_text_in_range(None, "x", window, cx);
+                });
+            })
+            .unwrap();
+        visual.refresh().unwrap();
+        visual.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+        let edited = window
+            .update(cx, |host, _, cx| {
+                host.view.read(cx).layout_cache.borrow().stats()
+            })
+            .unwrap();
+        assert!(edited.1 > second.1);
+
+        visual.update(|_, cx| {
+            let theme = gpui_component::Theme::global_mut(cx);
+            let accent = theme.accent;
+            theme.accent = theme.foreground;
+            theme.foreground = accent;
+        });
+        visual.refresh().unwrap();
+        visual.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+        let themed = window
+            .update(cx, |host, _, cx| {
+                host.view.read(cx).layout_cache.borrow().stats()
+            })
+            .unwrap();
+        assert!(themed.1 > edited.1);
     }
 
     #[gpui::test]
