@@ -163,34 +163,48 @@ impl PagedDocument {
     pub(crate) fn chunks_for(
         &self,
         request: &DocumentTextRequest,
-    ) -> Result<PagedDocumentChunks<'_>, SearchError> {
+    ) -> Result<PagedReaderChunks<'_>, SearchError> {
         if !request.paged().is_some_and(|source| {
             source.index() == &self.index && source.fingerprint() == &self.fingerprint
         }) {
             return Err(SearchError::ReadFailed);
         }
-        Ok(PagedDocumentChunks {
-            document: self,
+        Ok(PagedReaderChunks {
+            page_count: self.index.len(),
+            reader: Box::new(|page| self.read_page(page)),
             next_page: 0,
             offset: 0,
         })
     }
 }
 
-pub(crate) struct PagedDocumentChunks<'a> {
-    document: &'a PagedDocument,
+/// 按真实页顺序产生连续 UTF-8 块；查找与选区复制共用此实现。
+pub(crate) struct PagedReaderChunks<'a> {
+    page_count: usize,
+    reader: Box<dyn Fn(usize) -> io::Result<String> + 'a>,
     next_page: usize,
     offset: usize,
 }
 
-impl Iterator for PagedDocumentChunks<'_> {
+impl PagedReaderChunks<'static> {
+    pub(crate) fn new(source: &PagedSource, reader: PageReader) -> Self {
+        Self {
+            page_count: source.index().len(),
+            reader: Box::new(move |page| reader(page)),
+            next_page: 0,
+            offset: 0,
+        }
+    }
+}
+
+impl Iterator for PagedReaderChunks<'_> {
     type Item = Result<TextChunk, SearchError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.next_page >= self.document.index.len() {
+        if self.next_page >= self.page_count {
             return None;
         }
-        let text = match self.document.read_page(self.next_page) {
+        let text = match (self.reader)(self.next_page) {
             Ok(text) => text,
             Err(_) => return Some(Err(SearchError::ReadFailed)),
         };

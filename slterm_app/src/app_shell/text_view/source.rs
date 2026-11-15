@@ -8,6 +8,19 @@ use unicode_segmentation::{GraphemeCursor, GraphemeIncomplete};
 
 use super::metrics::DisplayMap;
 
+/// 视图瞬态选区；坐标始终是解码正文的全局 UTF-8 字素边界。
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct TextSelection {
+    pub(crate) anchor: usize,
+    pub(crate) head: usize,
+}
+
+impl TextSelection {
+    pub(crate) fn range(self) -> Range<usize> {
+        self.anchor.min(self.head)..self.anchor.max(self.head)
+    }
+}
+
 /// 一行按需物化的展示文本；全局字节区间不含行尾换行。
 pub(crate) struct VisibleLine {
     index: usize,

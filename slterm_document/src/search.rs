@@ -12,6 +12,7 @@ pub enum SearchError {
     Cancelled,
     ChunkOffsetMismatch,
     OffsetExhausted,
+    InvalidTextRange,
 }
 
 /// 解码后 UTF-8 文本中的一个连续块；偏移用于跨块结果对账。
@@ -172,6 +173,49 @@ impl DocumentTextRequest {
         Ok(copied)
     }
 
+    /// 流式复制指定 UTF-8 范围；到达右边界后不再读取后续块。
+    pub fn copy_range(
+        &self,
+        range: std::ops::Range<usize>,
+        chunks: impl IntoIterator<Item = Result<TextChunk, SearchError>>,
+        cancellation: &Receiver<()>,
+    ) -> Result<String, SearchError> {
+        if range.start > range.end {
+            return Err(SearchError::InvalidTextRange);
+        }
+        let mut copied = String::new();
+        let mut covered = 0;
+        let mut chunks = chunks.into_iter();
+        loop {
+            if covered >= range.end {
+                return Ok(copied);
+            }
+            check_cancelled(cancellation)?;
+            let Some(chunk) = chunks.next() else {
+                return Err(SearchError::OffsetExhausted);
+            };
+            let chunk = chunk?;
+            if chunk.offset != covered {
+                return Err(SearchError::ChunkOffsetMismatch);
+            }
+            let end = chunk
+                .offset
+                .checked_add(chunk.text.len())
+                .ok_or(SearchError::OffsetExhausted)?;
+            if end <= range.start {
+                covered = end;
+                continue;
+            }
+            let start = range.start.max(chunk.offset) - chunk.offset;
+            let local_end = range.end.min(end) - chunk.offset;
+            if !chunk.text.is_char_boundary(start) || !chunk.text.is_char_boundary(local_end) {
+                return Err(SearchError::InvalidTextRange);
+            }
+            copied.push_str(&chunk.text[start..local_end]);
+            covered = end;
+        }
+    }
+
     fn result(&self, matches: Vec<SearchMatch>) -> DocumentSearchResult {
         DocumentSearchResult {
             document_id: self.document_id,
@@ -246,8 +290,8 @@ impl DocumentRegistry {
 
 pub(crate) fn check_cancelled(cancellation: &Receiver<()>) -> Result<(), SearchError> {
     match cancellation.try_recv() {
-        Ok(()) => Err(SearchError::Cancelled),
-        Err(TryRecvError::Empty | TryRecvError::Disconnected) => Ok(()),
+        Ok(()) | Err(TryRecvError::Disconnected) => Err(SearchError::Cancelled),
+        Err(TryRecvError::Empty) => Ok(()),
     }
 }
 
@@ -380,6 +424,66 @@ mod tests {
         assert_eq!(
             request.search("a", request.chunks().unwrap(), &cancellation),
             Err(SearchError::Cancelled)
+        );
+    }
+
+    #[test]
+    fn disconnected_cancellation_stops_before_the_next_chunk() {
+        let request = request();
+        let (cancel, cancellation) = sync_channel(1);
+        let mut cancel = Some(cancel);
+        let mut reads = 0;
+        let chunks = std::iter::from_fn(|| {
+            reads += 1;
+            if reads == 1 {
+                cancel.take();
+                Some(Ok(TextChunk::new(0, "ab".to_owned())))
+            } else {
+                Some(Ok(TextChunk::new(2, "cd".to_owned())))
+            }
+        });
+        assert_eq!(
+            request.copy_range(0..4, chunks, &cancellation),
+            Err(SearchError::Cancelled)
+        );
+        assert_eq!(reads, 1);
+    }
+
+    #[test]
+    fn copy_range_streams_only_the_selected_extent() {
+        let request = request();
+        let (_cancel, cancellation) = sync_channel(1);
+        let chunks = vec![
+            Ok(TextChunk::new(0, "ab".to_owned())),
+            Ok(TextChunk::new(2, "cd".to_owned())),
+            Ok(TextChunk::new(4, "ab".to_owned())),
+            Err(SearchError::ReadFailed),
+        ];
+        assert_eq!(
+            request.copy_range(1..5, chunks, &cancellation),
+            Ok("bcda".to_owned())
+        );
+        assert_eq!(
+            request.copy_range(2..2, request.chunks().unwrap(), &cancellation),
+            Ok(String::new())
+        );
+        assert_eq!(
+            request.copy_range(0..7, request.chunks().unwrap(), &cancellation),
+            Err(SearchError::OffsetExhausted)
+        );
+        assert_eq!(
+            request.copy_range(
+                std::hint::black_box(4)..std::hint::black_box(2),
+                request.chunks().unwrap(),
+                &cancellation,
+            ),
+            Err(SearchError::InvalidTextRange)
+        );
+
+        let unicode = vec![Ok(TextChunk::new(0, "a😀b".to_owned()))];
+        assert_eq!(
+            request.copy_range(1..3, unicode, &cancellation),
+            Err(SearchError::InvalidTextRange)
         );
     }
 }

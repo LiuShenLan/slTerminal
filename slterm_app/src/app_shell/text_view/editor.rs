@@ -28,7 +28,7 @@ use super::metrics::{
     DisplayMap, rope_ceil_grapheme_boundary, rope_floor_grapheme_boundary,
     rope_is_grapheme_boundary, rope_next_grapheme_boundary, rope_previous_grapheme_boundary,
 };
-use super::source::RopeTextSource;
+use super::source::{RopeTextSource, TextSelection};
 use super::{SelectDown, SelectLeft, SelectRight, SelectUp};
 
 /// 一次同步提交成功后回投的只读正文快照。
@@ -64,18 +64,6 @@ pub(crate) struct DocumentEditResponse {
 type DocumentEditSink = Box<
     dyn FnMut(DocumentEditRequest, &mut App) -> Result<DocumentEditResponse, EditTransactionError>,
 >;
-
-#[derive(Clone, Copy, Debug)]
-struct TextSelection {
-    anchor: usize,
-    head: usize,
-}
-
-impl TextSelection {
-    fn range(self) -> Range<usize> {
-        self.anchor.min(self.head)..self.anchor.max(self.head)
-    }
-}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum BoundaryBias {

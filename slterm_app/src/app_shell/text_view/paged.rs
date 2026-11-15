@@ -1,22 +1,27 @@
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
+use std::ops::Range;
 use std::rc::Rc;
+use std::sync::mpsc::{SyncSender, sync_channel};
 
 use gpui::{
-    App, ContentMask, Context, Entity, Font, InteractiveElement as _, ParentElement as _, Pixels,
-    Render, ScrollWheelEvent, ShapedLine, Styled as _, Task, TextAlign, TextRun, Window, canvas,
-    div, point, px,
+    App, ContentMask, Context, Entity, FocusHandle, Focusable, Font, InteractiveElement as _,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, Render,
+    ScrollWheelEvent, ShapedLine, Styled as _, Task, TextAlign, TextRun, Window, canvas, div, fill,
+    point, px, size,
 };
 use gpui_component::ActiveTheme as _;
+use gpui_component::input::{Copy, SelectAll};
 use slterm_document::{
-    DocumentId, DocumentPageCache, DocumentSession, PageKey, PagedSource, TextStateId,
+    DocumentId, DocumentPageCache, DocumentSession, DocumentTextRequest, PageKey, PagedSource,
+    TextStateId,
 };
 
 use super::layout::{FontMetricsKey, LayoutCache, LayoutMetrics, TextLayoutKey, ThemeFingerprint};
 use super::metrics::DisplayMap;
-use super::source::{PagedTextSource, VisibleLine, VisibleRow};
-use crate::app_shell::paged_document::PageReader;
+use super::source::{PagedTextSource, TextSelection, VisibleLine, VisibleRow};
+use crate::app_shell::paged_document::{PageReader, PagedReaderChunks};
 
 #[cfg(all(test, feature = "gpui-test-support"))]
 type PaintedLines = Rc<RefCell<Vec<(usize, Option<String>)>>>;
@@ -26,6 +31,13 @@ pub(crate) struct PagedTextView {
     document_id: DocumentId,
     source: PagedSource,
     text_state: TextStateId,
+    request: DocumentTextRequest,
+    selection: TextSelection,
+    mouse_anchor: Option<usize>,
+    focus: FocusHandle,
+    copy_generation: u64,
+    copy_cancel: Option<SyncSender<()>>,
+    copy_task: Option<Task<()>>,
     cache: Rc<RefCell<DocumentPageCache>>,
     reader: PageReader,
     pending_pages: BTreeSet<usize>,
@@ -45,6 +57,7 @@ pub(crate) struct PagedTextView {
 struct PagedPaintFrame {
     cell_width: Pixels,
     line_height: Pixels,
+    selection: Range<usize>,
     rows: Vec<(usize, Option<(ShapedLine, VisibleLine)>)>,
 }
 
@@ -53,16 +66,29 @@ impl PagedTextView {
         session: &DocumentSession,
         cache: Rc<RefCell<DocumentPageCache>>,
         reader: PageReader,
-        _cx: &mut Context<'_, Self>,
+        request: DocumentTextRequest,
+        cx: &mut Context<'_, Self>,
     ) -> Self {
         let source = session
             .paged()
             .expect("PagedTextView 只接受分页正文")
             .clone();
+        assert_eq!(request.document_id(), session.id());
+        assert_eq!(
+            request.source_generation(),
+            Some(source.source_generation())
+        );
         Self {
             document_id: session.id(),
             source,
             text_state: session.current_state(),
+            request,
+            selection: TextSelection { anchor: 0, head: 0 },
+            mouse_anchor: None,
+            focus: cx.focus_handle().tab_stop(true),
+            copy_generation: 0,
+            copy_cancel: None,
+            copy_task: None,
             cache,
             reader,
             pending_pages: BTreeSet::new(),
@@ -107,6 +133,141 @@ impl PagedTextView {
             }
         }
         cx.notify();
+    }
+
+    fn select_all(&mut self, cx: &mut Context<'_, Self>) {
+        self.selection = TextSelection {
+            anchor: 0,
+            head: self.source.line_index().total_utf8_bytes(),
+        };
+        cx.notify();
+    }
+
+    fn invalidate_copy(&mut self) -> u64 {
+        self.copy_generation = self
+            .copy_generation
+            .checked_add(1)
+            .expect("复制代次不得耗尽");
+        if let Some(cancel) = self.copy_cancel.take() {
+            let _ = cancel.try_send(());
+        }
+        self.copy_task = None;
+        self.copy_generation
+    }
+
+    fn apply_copy_result(
+        &mut self,
+        generation: u64,
+        result: Result<String, slterm_document::SearchError>,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if generation != self.copy_generation {
+            return;
+        }
+        self.copy_cancel = None;
+        if let Ok(text) = result {
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+        }
+    }
+
+    fn copy(&mut self, cx: &mut Context<'_, Self>) {
+        let generation = self.invalidate_copy();
+        let range = self.selection.range();
+        if range.is_empty() {
+            return;
+        }
+        let request = self.request.clone();
+        let reader = self.reader.clone();
+        let (cancel, cancellation) = sync_channel(1);
+        self.copy_cancel = Some(cancel);
+        let background = cx.background_executor().spawn(async move {
+            let chunks =
+                PagedReaderChunks::new(request.paged().expect("复制请求必须为 Paged"), reader);
+            request.copy_range(range, chunks, &cancellation)
+        });
+        let target = cx.entity().downgrade();
+        self.copy_task = Some(cx.spawn(async move |_, cx| {
+            let result = background.await;
+            let Some(target) = target.upgrade() else {
+                return;
+            };
+            target.update(cx, |view, cx| {
+                view.apply_copy_result(generation, result, cx);
+            });
+        }));
+    }
+
+    fn byte_for_point(&self, point: gpui::Point<Pixels>) -> Option<usize> {
+        let metrics = (*self.layout.borrow())?;
+        let x = (point.x - metrics.bounds.origin.x).max(px(0.0));
+        let y = (point.y - metrics.bounds.origin.y).max(px(0.0));
+        let row = self.scroll_line + (y / metrics.line_height).floor() as usize;
+        let map = DisplayMap::new(4);
+        let mut cache = self.cache.borrow_mut();
+        let mut source = PagedTextSource::new(self.document_id, &self.source, &mut cache, map);
+        let row = source
+            .visible_line_windows(
+                row..row + 1,
+                self.scroll_column..self.scroll_column + metrics.visible_columns(),
+            )
+            .into_iter()
+            .next()?;
+        let line = row.as_text()?;
+        let viewport_column = (x / metrics.cell_width).round() as usize;
+        let target_column = self.scroll_column + viewport_column;
+        let local = map.byte_at_column_from(line.text(), target_column, line.display_start())?;
+        Some(line.byte_range().start + local)
+    }
+
+    fn mouse_down(
+        &mut self,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if event.button != MouseButton::Left {
+            return;
+        }
+        let Some(position) = self.byte_for_point(event.position) else {
+            return;
+        };
+        let anchor = if event.modifiers.shift {
+            self.selection.anchor
+        } else {
+            position
+        };
+        self.mouse_anchor = Some(anchor);
+        self.selection = TextSelection {
+            anchor,
+            head: position,
+        };
+        window.focus(&self.focus, cx);
+        cx.notify();
+        cx.stop_propagation();
+    }
+
+    fn mouse_move(&mut self, event: &MouseMoveEvent, cx: &mut Context<'_, Self>) {
+        let Some(anchor) = self.mouse_anchor else {
+            return;
+        };
+        if event.pressed_button != Some(MouseButton::Left) {
+            self.mouse_anchor = None;
+            return;
+        }
+        let Some(position) = self.byte_for_point(event.position) else {
+            return;
+        };
+        self.selection = TextSelection {
+            anchor,
+            head: position,
+        };
+        cx.notify();
+    }
+
+    fn mouse_up(&mut self, event: &MouseUpEvent) {
+        if event.button == MouseButton::Left {
+            self.mouse_anchor = None;
+        }
     }
 
     fn scroll_wheel(&mut self, event: &ScrollWheelEvent, cx: &mut Context<'_, Self>) {
@@ -202,10 +363,17 @@ impl PagedTextView {
     }
 }
 
+impl Focusable for PagedTextView {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus.clone()
+    }
+}
+
 impl Render for PagedTextView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<'_, Self>) -> impl gpui::IntoElement {
         let theme = cx.theme();
         let foreground = theme.foreground;
+        let accent = theme.accent;
         let background = theme.background;
         let font_size = theme.mono_font_size;
         let fingerprint = ThemeFingerprint {
@@ -243,6 +411,7 @@ impl Render for PagedTextView {
         let theme_revision = self.theme_revision;
         let scroll_line = self.scroll_line;
         let scroll_column = self.scroll_column;
+        let selection = self.selection.range();
         #[cfg(all(test, feature = "gpui-test-support"))]
         let painted_lines = self.painted_lines.clone();
         let content = canvas(
@@ -326,11 +495,50 @@ impl Render for PagedTextView {
                 PagedPaintFrame {
                     cell_width,
                     line_height,
+                    selection,
                     rows,
                 }
             },
             move |bounds, frame, window, cx| {
                 window.with_content_mask(Some(ContentMask { bounds }), |window| {
+                    let map = DisplayMap::new(4);
+                    for (row, (_, line)) in frame.rows.iter().enumerate() {
+                        if let Some((_, line)) = line {
+                            let range = line.byte_range();
+                            let start = frame.selection.start.max(range.start);
+                            let end = frame.selection.end.min(range.end);
+                            if start < end
+                                && let (Some(x0), Some(x1)) = (
+                                    map.column_at_from(
+                                        line.text(),
+                                        start - range.start,
+                                        line.display_start(),
+                                    ),
+                                    map.column_at_from(
+                                        line.text(),
+                                        end - range.start,
+                                        line.display_start(),
+                                    ),
+                                )
+                            {
+                                fill(
+                                    gpui::Bounds {
+                                        origin: point(
+                                            bounds.origin.x
+                                                + frame.cell_width
+                                                    * (x0 as f32 - scroll_column as f32),
+                                            bounds.origin.y + frame.line_height * row as f32,
+                                        ),
+                                        size: size(
+                                            frame.cell_width * (x1 - x0) as f32,
+                                            frame.line_height,
+                                        ),
+                                    },
+                                    accent,
+                                );
+                            }
+                        }
+                    }
                     for (row, (_, line)) in frame.rows.iter().enumerate() {
                         if let Some((shaped, line)) = line {
                             let origin = point(
@@ -356,7 +564,26 @@ impl Render for PagedTextView {
         .overflow_hidden()
         .bg(background);
         div()
+            .key_context("DocumentText")
+            .track_focus(&self.focus)
             .size_full()
+            .on_action(cx.listener(|view, _: &SelectAll, _, cx| view.select_all(cx)))
+            .on_action(cx.listener(|view, _: &Copy, _, cx| view.copy(cx)))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|view, event: &MouseDownEvent, window, cx| {
+                    view.mouse_down(event, window, cx);
+                }),
+            )
+            .on_mouse_move(cx.listener(|view, event: &MouseMoveEvent, _, cx| {
+                view.mouse_move(event, cx);
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|view, event: &MouseUpEvent, _, _| {
+                    view.mouse_up(event);
+                }),
+            )
             .on_scroll_wheel(cx.listener(|view, event: &ScrollWheelEvent, _, cx| {
                 view.scroll_wheel(event, cx);
             }))
@@ -403,6 +630,31 @@ mod tests {
         )
     }
 
+    fn make_view(
+        cache: Rc<RefCell<DocumentPageCache>>,
+        reader: PageReader,
+        source: PagedSource,
+        cx: &mut gpui::App,
+    ) -> Entity<PagedTextView> {
+        let id: DocumentId = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0f2a".parse().unwrap();
+        let mut registry = DocumentRegistry::new();
+        registry
+            .open(
+                id,
+                ResolvedPath::new(CanonicalPath::new("D:/work/paged.txt").unwrap(), None),
+                source,
+                TextStateId::from_uuid(Uuid::now_v7()).unwrap(),
+                Arc::<[u8]>::default(),
+                DocumentMetadata {
+                    read_only: true,
+                    ..DocumentMetadata::default()
+                },
+            )
+            .unwrap();
+        let request = registry.text_request(id, 0).unwrap();
+        cx.new(|cx| PagedTextView::new(registry.session(id).unwrap(), cache, reader, request, cx))
+    }
+
     struct Host {
         view: Entity<PagedTextView>,
     }
@@ -422,23 +674,7 @@ mod tests {
             source: PagedSource,
             cx: &mut gpui::Context<'_, Self>,
         ) -> Self {
-            let id: DocumentId = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0f2a".parse().unwrap();
-            let mut registry = DocumentRegistry::new();
-            registry
-                .open(
-                    id,
-                    ResolvedPath::new(CanonicalPath::new("D:/work/paged.txt").unwrap(), None),
-                    source,
-                    TextStateId::from_uuid(Uuid::now_v7()).unwrap(),
-                    Arc::<[u8]>::default(),
-                    DocumentMetadata {
-                        read_only: true,
-                        ..DocumentMetadata::default()
-                    },
-                )
-                .unwrap();
-            let view =
-                cx.new(|cx| PagedTextView::new(registry.session(id).unwrap(), cache, reader, cx));
+            let view = make_view(cache, reader, source, cx);
             Self { view }
         }
     }
@@ -664,6 +900,162 @@ mod tests {
 
         assert!(weak.upgrade().is_none(), "在途任务不得强持已销毁视图");
         assert!(cache.borrow().is_empty(), "迟到回执不得进入共享缓存");
+    }
+
+    #[gpui::test]
+    fn paged_copy_reads_selected_uncached_pages_without_filling_view_cache(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::app_shell::theme::apply_dark_theme(cx);
+        });
+        let cache = Rc::new(RefCell::new(DocumentPageCache::new()));
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let recorded = requests.clone();
+        let reader: PageReader = Arc::new(move |page| {
+            recorded.lock().unwrap().push(page);
+            Ok(match page {
+                0 => "ab".to_owned(),
+                1 => "cd".to_owned(),
+                2 => "ef\n".to_owned(),
+                _ => return Err(io::Error::new(io::ErrorKind::InvalidInput, "页号越界")),
+            })
+        });
+        let view =
+            cx.update(|cx| make_view(cache.clone(), reader, source_for(&["ab", "cd", "ef\n"]), cx));
+        view.update(cx, |view, cx| {
+            view.selection = super::super::source::TextSelection { anchor: 1, head: 5 };
+            view.copy(cx);
+        });
+        cx.run_until_parked();
+        cx.update(|cx| {
+            assert_eq!(
+                cx.read_from_clipboard().and_then(|item| item.text()),
+                Some("bcde".to_owned())
+            );
+        });
+        assert!(cache.borrow().is_empty());
+        assert_eq!(requests.lock().unwrap().as_slice(), &[0, 1, 2]);
+
+        view.update(cx, |view, cx| {
+            view.selection = super::super::source::TextSelection { anchor: 2, head: 2 };
+            view.copy(cx);
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string("sentinel".to_owned()));
+        });
+        cx.run_until_parked();
+        cx.update(|cx| {
+            assert_eq!(
+                cx.read_from_clipboard().and_then(|item| item.text()),
+                Some("sentinel".to_owned())
+            );
+        });
+        view.update(cx, |view, cx| {
+            view.select_all(cx);
+            view.copy(cx);
+        });
+        cx.run_until_parked();
+        cx.update(|cx| {
+            assert_eq!(
+                cx.read_from_clipboard().and_then(|item| item.text()),
+                Some("abcdef\n".to_owned())
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn paged_copy_rejects_stale_results_and_read_failures(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::app_shell::theme::apply_dark_theme(cx);
+        });
+        let cache = Rc::new(RefCell::new(DocumentPageCache::new()));
+        let reader: PageReader = Arc::new(|_| Ok("ab".to_owned()));
+        let view = cx.update(|cx| make_view(cache, reader, source_for(&["ab"]), cx));
+        view.update(cx, |view, cx| {
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string("sentinel".to_owned()));
+            view.copy_generation = 7;
+            view.apply_copy_result(6, Ok("old".to_owned()), cx);
+            view.apply_copy_result(7, Err(slterm_document::SearchError::ReadFailed), cx);
+        });
+        cx.update(|cx| {
+            assert_eq!(
+                cx.read_from_clipboard().and_then(|item| item.text()),
+                Some("sentinel".to_owned())
+            );
+        });
+        view.update(cx, |view, cx| {
+            view.apply_copy_result(7, Ok("new".to_owned()), cx);
+        });
+        cx.update(|cx| {
+            assert_eq!(
+                cx.read_from_clipboard().and_then(|item| item.text()),
+                Some("new".to_owned())
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn paged_mouse_drag_selects_across_cached_pages(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::app_shell::theme::apply_dark_theme(cx);
+        });
+        let cache = Rc::new(RefCell::new(DocumentPageCache::new()));
+        let reader: PageReader = Arc::new(|page| {
+            Ok(match page {
+                0 => "ab\n".to_owned(),
+                1 => "cd\n".to_owned(),
+                _ => return Err(io::Error::new(io::ErrorKind::InvalidInput, "页号越界")),
+            })
+        });
+        let window = cx.add_window(|_, cx| {
+            Host::with_source(cache, reader, source_for(&["ab\n", "cd\n"]), cx)
+        });
+        let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.run_until_parked();
+        visual.refresh().unwrap();
+        visual.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+        visual.run_until_parked();
+        visual.refresh().unwrap();
+        visual.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+        let metrics = window
+            .update(cx, |host, _, cx| *host.view.read(cx).layout.borrow())
+            .unwrap()
+            .unwrap();
+        visual.simulate_mouse_down(
+            gpui::point(
+                metrics.bounds.origin.x + metrics.cell_width,
+                metrics.bounds.origin.y,
+            ),
+            gpui::MouseButton::Left,
+            gpui::Modifiers::default(),
+        );
+        visual.simulate_mouse_move(
+            gpui::point(
+                metrics.bounds.origin.x + metrics.cell_width * 2.0,
+                metrics.bounds.origin.y + metrics.line_height,
+            ),
+            gpui::MouseButton::Left,
+            gpui::Modifiers::default(),
+        );
+        visual.simulate_mouse_up(
+            gpui::point(
+                metrics.bounds.origin.x + metrics.cell_width * 2.0,
+                metrics.bounds.origin.y + metrics.line_height,
+            ),
+            gpui::MouseButton::Left,
+            gpui::Modifiers::default(),
+        );
+        window
+            .update(cx, |host, _, cx| {
+                assert_eq!(host.view.read(cx).selection.range(), 1..5);
+            })
+            .unwrap();
     }
 
     #[gpui::test]

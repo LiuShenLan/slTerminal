@@ -165,6 +165,7 @@ pub struct PagedLineIndex {
     newlines: Vec<usize>,
     continuations: Vec<bool>,
     line_count: usize,
+    total_utf8_bytes: usize,
 }
 
 impl PagedLineIndex {
@@ -195,11 +196,16 @@ impl PagedLineIndex {
             newlines: newlines_in_pages,
             continuations,
             line_count,
+            total_utf8_bytes: utf8_offset,
         }
     }
 
     pub const fn line_count(&self) -> usize {
         self.line_count
+    }
+
+    pub const fn total_utf8_bytes(&self) -> usize {
+        self.total_utf8_bytes
     }
 
     /// 返回（页号，页内行号，页 UTF-8 起点）；空文档没有真实页。
@@ -413,6 +419,7 @@ mod tests {
         let index =
             PagedLineIndex::from_page_stats(&[(1, "中\n".len(), true), (1, "😀\n".len(), true)]);
         assert_eq!(index.line_count(), 3);
+        assert_eq!(index.total_utf8_bytes(), 9);
         assert_eq!(index.location(0), Some((0, 0, 0)));
         assert_eq!(index.location(1), Some((1, 0, 4)));
         assert_eq!(index.location(2), Some((1, 1, 4)));
