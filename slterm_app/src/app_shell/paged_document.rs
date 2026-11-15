@@ -2,9 +2,10 @@
 
 use std::io::{self, Read as _, Seek as _};
 
+use sha2::{Digest as _, Sha256};
 use slterm_document::{
-    DocumentContent, DocumentEncoding, LineEnding, PAGE_SOURCE_BYTES, PageIndex, SourceByteRange,
-    TextEncoding,
+    DocumentContent, DocumentEncoding, LineEnding, PAGE_SOURCE_BYTES, PageIndex, PagedSource,
+    SourceByteRange, TextEncoding,
 };
 use slterm_path::ResolvedPath;
 
@@ -13,6 +14,7 @@ pub(crate) struct PagedDocument {
     location: ResolvedPath,
     encoding: TextEncoding,
     index: PageIndex,
+    fingerprint: [u8; 32],
 }
 
 impl PagedDocument {
@@ -26,6 +28,7 @@ impl PagedDocument {
         verify_identity(&file, location)?;
         let (encoding, bom, bom_bytes) = detect_encoding(&mut file, requested)?;
         let mut ranges = Vec::new();
+        let mut hasher = Sha256::new();
         let mut start = 0;
         let mut line_ending = None;
         let mut trailing_newline = false;
@@ -69,6 +72,7 @@ impl PagedDocument {
                 });
             }
             trailing_newline = decoded.ends_with('\n');
+            hasher.update(&bytes);
             ranges.push(SourceByteRange::new(start, end).map_err(|_| invalid_encoding())?);
             start = end;
         }
@@ -86,11 +90,20 @@ impl PagedDocument {
                 trailing_newline,
             },
             index,
+            fingerprint: hasher.finalize().into(),
         })
     }
 
     pub(crate) const fn index(&self) -> &PageIndex {
         &self.index
+    }
+
+    pub(crate) fn source(&self) -> PagedSource {
+        PagedSource::new(self.index.clone(), self.fingerprint)
+    }
+
+    pub(crate) const fn encoding(&self) -> &TextEncoding {
+        &self.encoding
     }
 
     /// 每次读取复核身份与源长度；旧索引不得读取已增长或已替换的文件。

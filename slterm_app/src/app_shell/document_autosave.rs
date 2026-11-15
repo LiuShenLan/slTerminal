@@ -192,7 +192,7 @@ mod tests {
     fn edit(registry: &mut DocumentRegistry, id: DocumentId, text: &str, state: &str) {
         let session = registry.session(id).unwrap();
         let revision = session.text_revision();
-        let end = session.text().len();
+        let end = session.text().unwrap().len();
         registry
             .apply(
                 EditTransaction {

@@ -30,8 +30,8 @@ pub use external::{
 };
 pub use identity::{DocumentId, StableIdError, TextStateId};
 pub use paged::{
-    DECODED_PAGE_CACHE_LIMIT_BYTES, DocumentPageCache, PAGE_SOURCE_BYTES, PageIndex,
-    PageIndexError, PageKey, SourceByteRange,
+    DECODED_PAGE_CACHE_LIMIT_BYTES, DocumentBody, DocumentPageCache, PAGE_SOURCE_BYTES, PageIndex,
+    PageIndexError, PageKey, PagedSource, SourceByteRange,
 };
 pub use registry::{
     DocumentMetadata, DocumentOpenOutcome, DocumentRegistry, DocumentRegistryError, DocumentSession,

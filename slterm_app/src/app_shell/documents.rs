@@ -202,7 +202,7 @@ mod documents_tests {
         authorization_generation: u64,
     ) -> DocumentSaveRequest {
         let revision = registry.session(id).unwrap().text_revision();
-        let end = registry.session(id).unwrap().text().len();
+        let end = registry.session(id).unwrap().text().unwrap().len();
         registry
             .apply(
                 EditTransaction {
@@ -365,7 +365,10 @@ mod documents_tests {
         assert_eq!(std::fs::read(&file).unwrap(), b"old");
         registry.fail_save(id, 1).unwrap();
         assert!(registry.session(id).unwrap().is_dirty());
-        assert_eq!(registry.session(id).unwrap().text().to_string(), "😀");
+        assert_eq!(
+            registry.session(id).unwrap().text().unwrap().to_string(),
+            "😀"
+        );
 
         let request = edited_save_request(&mut registry, id, "中文", 0);
         let receipt = DocumentSaveService::default()
@@ -467,7 +470,7 @@ mod documents_tests {
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "draft");
         let session = registry.session(opened.id).unwrap();
         assert_eq!(session.id(), opened.id);
-        assert_eq!(session.text().to_string(), "draft newer");
+        assert_eq!(session.text().unwrap().to_string(), "draft newer");
         assert_eq!(session.location().canonical_path().as_path(), target);
         assert_eq!(session.disk_baseline().as_ref(), b"draft");
         assert_eq!(session.current_state(), current);
@@ -594,7 +597,12 @@ mod documents_tests {
         assert!(second.document.is_none());
         assert_eq!(registry.len(), 1);
         assert_eq!(
-            registry.session(first.id).unwrap().text().to_string(),
+            registry
+                .session(first.id)
+                .unwrap()
+                .text()
+                .unwrap()
+                .to_string(),
             "shared"
         );
     }

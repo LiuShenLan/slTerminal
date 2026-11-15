@@ -279,7 +279,10 @@ mod tests {
             )
             .is_err()
         );
-        assert_eq!(registry.session(id).unwrap().text().to_string(), "new");
+        assert_eq!(
+            registry.session(id).unwrap().text().unwrap().to_string(),
+            "new"
+        );
         assert!(registry.session(id).unwrap().is_dirty());
     }
 

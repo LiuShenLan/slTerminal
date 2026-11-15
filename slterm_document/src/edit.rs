@@ -137,6 +137,13 @@ impl EditHistory {
         self.last_edit = None;
     }
 
+    pub(crate) fn reset(&mut self) {
+        self.undo.clear();
+        self.redo.clear();
+        self.bytes = 0;
+        self.last_edit = None;
+    }
+
     /// 外部重载记录为独立撤销组，不与用户键入合并。
     pub(crate) fn record_reload(
         &mut self,
@@ -217,9 +224,10 @@ impl crate::DocumentSession {
         transaction: &EditTransaction,
         new_state: TextStateId,
     ) -> Result<(), EditTransactionError> {
-        if self.metadata.read_only {
+        if self.is_read_only() {
             return Err(EditTransactionError::ReadOnly);
         }
+        let text = self.text().ok_or(EditTransactionError::ReadOnly)?;
         if self.text_revision != transaction.expected_text_revision {
             return Err(EditTransactionError::RevisionMismatch);
         }
@@ -238,9 +246,9 @@ impl crate::DocumentSession {
         for edit in &transaction.edits {
             let range = &edit.utf8_range;
             if range.start > range.end
-                || range.end > self.text.len()
-                || !self.text.is_char_boundary(range.start)
-                || !self.text.is_char_boundary(range.end)
+                || range.end > text.len()
+                || !text.is_char_boundary(range.start)
+                || !text.is_char_boundary(range.end)
             {
                 return Err(EditTransactionError::InvalidRange);
             }
@@ -253,7 +261,7 @@ impl crate::DocumentSession {
                 }
             }
             if let Some(expected) = &edit.expected
-                && self.text.slice(range.clone()) != expected.as_str()
+                && text.slice(range.clone()) != expected.as_str()
             {
                 return Err(EditTransactionError::OriginalTextMismatch);
             }
@@ -269,7 +277,7 @@ impl crate::DocumentSession {
         at: Instant,
     ) -> Result<EditApplyOutcome, EditTransactionError> {
         self.validate_transaction(&transaction, new_state)?;
-        let mut text = self.text.clone();
+        let mut text = self.text().cloned().ok_or(EditTransactionError::ReadOnly)?;
         let mut changes = Vec::new();
         for edit in transaction.edits.iter().rev() {
             let before = text.slice(edit.utf8_range.clone()).to_string();
@@ -295,7 +303,7 @@ impl crate::DocumentSession {
         };
         let join = self.history.should_join(&transaction, &group.changes, at);
         self.history.push(group, at, join);
-        self.text = text;
+        self.body = crate::DocumentBody::Editable(text);
         self.current_state = new_state;
         self.known_states.insert(new_state);
         self.text_revision += 1;
@@ -303,6 +311,9 @@ impl crate::DocumentSession {
     }
 
     fn travel(&mut self, redo: bool) -> Result<EditApplyOutcome, EditTransactionError> {
+        if self.text().is_none() {
+            return Ok(EditApplyOutcome::Unchanged);
+        }
         if self.text_revision == u64::MAX {
             return Err(EditTransactionError::RevisionExhausted);
         }
@@ -314,7 +325,7 @@ impl crate::DocumentSession {
         let Some(group) = stack.pop() else {
             return Ok(EditApplyOutcome::Unchanged);
         };
-        let mut text = self.text.clone();
+        let mut text = self.text().cloned().ok_or(EditTransactionError::ReadOnly)?;
         if redo {
             for change in &group.changes {
                 text.remove(change.start..change.start + change.before.len());
@@ -326,7 +337,7 @@ impl crate::DocumentSession {
                 text.insert(change.start, &change.before);
             }
         }
-        self.text = text;
+        self.body = crate::DocumentBody::Editable(text);
         self.current_state = if redo {
             group.after_state
         } else {
@@ -428,7 +439,7 @@ mod tests {
     }
 
     fn text(registry: &DocumentRegistry, id: DocumentId) -> String {
-        registry.session(id).unwrap().text().to_string()
+        registry.session(id).unwrap().text().unwrap().to_string()
     }
 
     #[test]
@@ -455,14 +466,14 @@ mod tests {
 
         assert_eq!(registry.undo(id), Ok(EditApplyOutcome::Applied));
         let session = registry.session(id).unwrap();
-        assert_eq!(session.text().to_string(), "a中😀z");
+        assert_eq!(session.text().unwrap().to_string(), "a中😀z");
         assert_eq!(session.current_state(), original);
         assert!(!session.is_dirty());
         assert_eq!(session.text_revision(), 2);
 
         assert_eq!(registry.redo(id), Ok(EditApplyOutcome::Applied));
         let session = registry.session(id).unwrap();
-        assert_eq!(session.text().to_string(), "a文😀");
+        assert_eq!(session.text().unwrap().to_string(), "a文😀");
         assert_eq!(session.current_state(), edited);
         assert!(session.is_dirty());
         assert_eq!(session.text_revision(), 3);
@@ -642,7 +653,7 @@ mod tests {
             .unwrap();
 
         let session = registry.session(id).unwrap();
-        assert_eq!(session.text().to_string(), "012");
+        assert_eq!(session.text().unwrap().to_string(), "012");
         assert_eq!(session.current_state(), current);
         assert_eq!(session.saved_state(), saved);
         assert_eq!(session.disk_baseline().as_ref(), b"01");
@@ -683,7 +694,7 @@ mod tests {
             Err(crate::SaveTransactionError::StaleSave)
         );
         let session = registry.session(id).unwrap();
-        assert_eq!(session.text().to_string(), "012");
+        assert_eq!(session.text().unwrap().to_string(), "012");
         assert_eq!(session.disk_baseline().as_ref(), b"0");
         assert!(session.is_dirty());
         assert!(session.is_saving());
@@ -871,7 +882,7 @@ mod tests {
             .apply_external(
                 crate::DocumentExternalChange::Reload {
                     request,
-                    text: Rope::from_str("outside"),
+                    content: crate::DocumentBody::Editable(Rope::from_str("outside")),
                     disk_baseline: std::sync::Arc::from(b"outside".as_slice()),
                     metadata: DocumentMetadata::default(),
                     location,
@@ -896,7 +907,7 @@ mod tests {
             .apply_external(
                 crate::DocumentExternalChange::Reload {
                     request,
-                    text: Rope::from_str("other"),
+                    content: crate::DocumentBody::Editable(Rope::from_str("other")),
                     disk_baseline: std::sync::Arc::from(b"other".as_slice()),
                     metadata: DocumentMetadata::default(),
                     location,
@@ -944,7 +955,7 @@ mod tests {
             .apply_external(
                 crate::DocumentExternalChange::Reload {
                     request,
-                    text: Rope::from_str("outside"),
+                    content: crate::DocumentBody::Editable(Rope::from_str("outside")),
                     disk_baseline: std::sync::Arc::from(b"outside".as_slice()),
                     metadata: DocumentMetadata::default(),
                     location,
@@ -1029,7 +1040,7 @@ mod tests {
         assert_eq!(session.id(), id);
         assert_eq!(session.current_state(), original);
         assert_eq!(session.text_revision(), 0);
-        assert_eq!(session.text().to_string(), "same");
+        assert_eq!(session.text().unwrap().to_string(), "same");
         assert_eq!(session.location(), &relocated);
         assert_eq!(registry.existing(&relocated), Some(id));
     }
@@ -1202,5 +1213,87 @@ mod tests {
         registry.undo(id).unwrap();
         assert_eq!(text(&registry, id), texts[1]);
         assert_eq!(registry.undo(id), Ok(EditApplyOutcome::Unchanged));
+    }
+
+    #[test]
+    fn editor_large_file_dirty_preserves_buffer() {
+        fn paged_body() -> crate::DocumentBody {
+            let total = crate::EDITABLE_LIMIT_BYTES + 1;
+            let mut ranges = Vec::new();
+            let mut start = 0;
+            while start < total {
+                let end = (start + crate::PAGE_SOURCE_BYTES).min(total);
+                ranges.push(crate::SourceByteRange::new(start, end).unwrap());
+                start = end;
+            }
+            crate::DocumentBody::Paged(crate::PagedSource::new(
+                crate::PageIndex::new(total, ranges).unwrap(),
+                [0; 32],
+            ))
+        }
+
+        let (mut clean, clean_id, _) = document("old", false);
+        let request = clean.external_request(clean_id, 0).unwrap();
+        let location = request.location().clone();
+        clean
+            .apply_external(
+                crate::DocumentExternalChange::Reload {
+                    request,
+                    content: paged_body(),
+                    disk_baseline: std::sync::Arc::default(),
+                    metadata: DocumentMetadata {
+                        read_only: true,
+                        ..DocumentMetadata::default()
+                    },
+                    location,
+                    new_state: state(STATE_B),
+                },
+                Instant::now(),
+            )
+            .unwrap();
+        let session = clean.session(clean_id).unwrap();
+        assert!(session.text().is_none());
+        assert_eq!(
+            session.paged().unwrap().index().total_bytes(),
+            crate::EDITABLE_LIMIT_BYTES + 1
+        );
+        assert!(session.is_read_only());
+        assert_eq!(
+            clean.begin_save(clean_id, 0),
+            Err(crate::SaveTransactionError::ReadOnly)
+        );
+
+        let (mut dirty, dirty_id, _) = document("old", false);
+        dirty
+            .apply(
+                transaction(dirty_id, 0, vec![TextEdit::new(0..3, "draft")]),
+                state(STATE_C),
+                Instant::now(),
+            )
+            .unwrap();
+        let request = dirty.external_request(dirty_id, 0).unwrap();
+        let location = request.location().clone();
+        let outcome = dirty
+            .apply_external(
+                crate::DocumentExternalChange::Reload {
+                    request,
+                    content: paged_body(),
+                    disk_baseline: std::sync::Arc::default(),
+                    metadata: DocumentMetadata {
+                        read_only: true,
+                        ..DocumentMetadata::default()
+                    },
+                    location,
+                    new_state: state(STATE_D),
+                },
+                Instant::now(),
+            )
+            .unwrap();
+        assert_eq!(outcome, crate::ExternalApplyOutcome::Conflict);
+        assert_eq!(text(&dirty, dirty_id), "draft");
+        assert!(dirty.session(dirty_id).unwrap().paged().is_none());
+        assert!(!dirty.session(dirty_id).unwrap().is_read_only());
+        let request = dirty.begin_save(dirty_id, 0).unwrap();
+        assert_eq!(request.text().to_string(), "draft");
     }
 }

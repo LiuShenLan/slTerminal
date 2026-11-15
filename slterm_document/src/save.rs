@@ -145,9 +145,13 @@ impl DocumentRegistry {
         let session = self
             .session_mut(id)
             .ok_or(SaveTransactionError::DocumentNotFound(id))?;
-        if session.metadata.read_only {
+        if session.is_read_only() {
             return Err(SaveTransactionError::ReadOnly);
         }
+        let text = session
+            .text()
+            .cloned()
+            .ok_or(SaveTransactionError::ReadOnly)?;
         if session.active_save.is_some() {
             return Err(SaveTransactionError::SaveInProgress);
         }
@@ -163,7 +167,7 @@ impl DocumentRegistry {
             document_id: session.id,
             text_revision: session.text_revision,
             text_state: session.current_state,
-            text: session.text.clone(),
+            text,
             disk_baseline: session.disk_baseline.clone(),
             encoding: session.metadata.encoding.clone(),
             location: session.location.clone(),

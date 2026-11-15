@@ -236,7 +236,7 @@ fn document_batch_close_partial_save(cx: &mut TestAppContext) {
             let id = ids[name];
             let session = root.documents.session(id).unwrap();
             let revision = session.text_revision();
-            let end = session.text().len();
+            let end = session.text().unwrap().len();
             root.documents
                 .apply(
                     slterm_document::EditTransaction {
@@ -286,7 +286,7 @@ fn document_batch_close_partial_save(cx: &mut TestAppContext) {
         assert!(!root.documents.session(ids["first"]).unwrap().is_dirty());
         let second = root.documents.session(ids["second"]).unwrap();
         assert!(second.is_dirty());
-        assert_eq!(second.text().to_string(), "second local");
+        assert_eq!(second.text().unwrap().to_string(), "second local");
         assert!(
             root.terminal_panel(project_id(PROJECT_A), terminal_id(TERMINAL_A), cx)
                 .unwrap()
@@ -365,7 +365,7 @@ fn integration_last_reference_close(cx: &mut TestAppContext) {
     root.update(cx, |root, _| {
         let session = root.documents.session(id).unwrap();
         let revision = session.text_revision();
-        let end = session.text().len();
+        let end = session.text().unwrap().len();
         root.documents
             .apply(
                 slterm_document::EditTransaction {

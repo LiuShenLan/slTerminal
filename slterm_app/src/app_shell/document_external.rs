@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use ropey::Rope;
 use slterm_document::{
-    DocumentConflict, DocumentExternalChange, DocumentExternalRequest, DocumentId,
+    DocumentBody, DocumentConflict, DocumentExternalChange, DocumentExternalRequest, DocumentId,
     DocumentRegistry, ExternalChangeError,
 };
 use slterm_path::{CanonicalPath, PathGrant, PathOperation, PathPolicy, PathRequest, ResolvedPath};
@@ -95,9 +95,36 @@ impl DocumentExternalService {
                 "外部刷新期间文件身份已变化",
             ));
         }
+        if document.total_bytes > slterm_document::EDITABLE_LIMIT_BYTES {
+            let paged = match super::paged_document::PagedDocument::open(
+                &resolved,
+                Some(document.encoding.encoding),
+            ) {
+                Ok(paged) => paged,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    return Ok(DocumentExternalChange::Deleted(request));
+                }
+                Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+                    return Ok(DocumentExternalChange::ReadRevoked { document_id: id });
+                }
+                Err(error) => return Err(error),
+            };
+            return Ok(DocumentExternalChange::Reload {
+                request,
+                content: slterm_document::DocumentBody::Paged(paged.source()),
+                disk_baseline: Arc::default(),
+                metadata: slterm_document::DocumentMetadata {
+                    encoding: paged.encoding().clone(),
+                    read_only: true,
+                },
+                location: resolved,
+                new_state: slterm_document::TextStateId::from_uuid(Uuid::now_v7())
+                    .expect("系统生成的 TextStateId 必须为 v7"),
+            });
+        }
         Ok(DocumentExternalChange::Reload {
             request,
-            text: Rope::from_str(&document.text),
+            content: slterm_document::DocumentBody::Editable(Rope::from_str(&document.text)),
             disk_baseline: document.bytes.clone(),
             metadata: slterm_document::DocumentMetadata {
                 encoding: document.encoding.clone(),
@@ -127,6 +154,7 @@ impl DocumentExternalService {
         let change = self.read(request, &lexical, grants, current_authorization_generation)?;
         let unchanged = match &change {
             DocumentExternalChange::Reload {
+                content,
                 disk_baseline,
                 metadata,
                 location,
@@ -137,6 +165,7 @@ impl DocumentExternalService {
                     && registry.session(id).is_some_and(|session| {
                         session.encoding() == &metadata.encoding
                             && session.is_read_only() == metadata.read_only
+                            && content_matches_current(registry, id, content)
                     })
             }
             _ => false,
@@ -175,27 +204,49 @@ impl DocumentExternalService {
         match change {
             DocumentExternalChange::Reload {
                 request,
+                content,
                 disk_baseline,
                 location,
                 ..
             } if location.file_identity() == request.location().file_identity()
-                && disk_baseline.as_ref() == request.disk_baseline().as_ref() =>
+                && disk_baseline.as_ref() == request.disk_baseline().as_ref()
+                && content_matches_current(registry, id, &content) =>
             {
                 Ok(DocumentExternalChange::Relocated { request, location })
             }
             DocumentExternalChange::Reload {
                 request,
+                content,
                 disk_baseline,
                 location,
                 ..
             } if location.file_identity() != request.location().file_identity() => {
-                Ok(DocumentExternalChange::Conflict {
-                    request,
-                    conflict: DocumentConflict::modified(location, disk_baseline),
-                })
+                let conflict = match content {
+                    DocumentBody::Editable(_) => {
+                        DocumentConflict::modified(location, disk_baseline)
+                    }
+                    DocumentBody::Paged(_) => DocumentConflict::modified_paged(location),
+                };
+                Ok(DocumentExternalChange::Conflict { request, conflict })
             }
             change => Ok(change),
         }
+    }
+}
+
+fn content_matches_current(
+    registry: &DocumentRegistry,
+    id: DocumentId,
+    content: &DocumentBody,
+) -> bool {
+    match content {
+        DocumentBody::Paged(next) => registry
+            .session(id)
+            .and_then(|session| session.paged())
+            .is_some_and(|current| {
+                current.index() == next.index() && current.fingerprint() == next.fingerprint()
+            }),
+        DocumentBody::Editable(_) => true,
     }
 }
 
@@ -216,7 +267,7 @@ mod tests {
     fn replace_local(registry: &mut DocumentRegistry, id: slterm_document::DocumentId, text: &str) {
         let session = registry.session(id).unwrap();
         let revision = session.text_revision();
-        let end = session.text().len();
+        let end = session.text().unwrap().len();
         registry
             .apply(
                 EditTransaction {
@@ -254,7 +305,12 @@ mod tests {
             .unwrap();
         registry.apply_external(change, Instant::now()).unwrap();
         assert_eq!(
-            registry.session(opened.id).unwrap().text().to_string(),
+            registry
+                .session(opened.id)
+                .unwrap()
+                .text()
+                .unwrap()
+                .to_string(),
             "outside"
         );
         assert!(!registry.session(opened.id).unwrap().is_dirty());
@@ -268,7 +324,12 @@ mod tests {
         let outcome = registry.apply_external(change, Instant::now()).unwrap();
         assert_eq!(outcome, ExternalApplyOutcome::Conflict);
         assert_eq!(
-            registry.session(opened.id).unwrap().text().to_string(),
+            registry
+                .session(opened.id)
+                .unwrap()
+                .text()
+                .unwrap()
+                .to_string(),
             "local"
         );
         assert_eq!(
@@ -306,7 +367,7 @@ mod tests {
 
         let session = registry.session(opened.id).unwrap();
         assert!(session.is_read_only());
-        assert_eq!(session.text().to_string(), "same");
+        assert_eq!(session.text().unwrap().to_string(), "same");
         assert_eq!(session.text_revision(), 0);
         #[allow(clippy::permissions_set_readonly_false)]
         {
@@ -336,7 +397,12 @@ mod tests {
         registry.apply_external(change, Instant::now()).unwrap();
         assert!(registry.session(opened.id).unwrap().is_read_revoked());
         assert_eq!(
-            registry.session(opened.id).unwrap().text().to_string(),
+            registry
+                .session(opened.id)
+                .unwrap()
+                .text()
+                .unwrap()
+                .to_string(),
             "local"
         );
 
@@ -349,7 +415,12 @@ mod tests {
         assert!(matches!(change, DocumentExternalChange::ReadRevoked { .. }));
         registry.apply_external(change, Instant::now()).unwrap();
         assert_eq!(
-            registry.session(opened.id).unwrap().text().to_string(),
+            registry
+                .session(opened.id)
+                .unwrap()
+                .text()
+                .unwrap()
+                .to_string(),
             "local"
         );
     }
@@ -379,7 +450,12 @@ mod tests {
 
         assert_eq!(outcome, ExternalApplyOutcome::Deleted);
         assert_eq!(
-            registry.session(opened.id).unwrap().text().to_string(),
+            registry
+                .session(opened.id)
+                .unwrap()
+                .text()
+                .unwrap()
+                .to_string(),
             "content"
         );
         assert_eq!(
@@ -400,7 +476,12 @@ mod tests {
         let outcome = registry.apply_external(change, Instant::now()).unwrap();
         assert_eq!(outcome, ExternalApplyOutcome::Conflict);
         assert_eq!(
-            registry.session(opened.id).unwrap().text().to_string(),
+            registry
+                .session(opened.id)
+                .unwrap()
+                .text()
+                .unwrap()
+                .to_string(),
             "content"
         );
         assert_eq!(
@@ -443,8 +524,91 @@ mod tests {
         let session = registry.session(opened.id).unwrap();
         assert_eq!(session.id(), opened.id);
         assert_eq!(session.text_revision(), revision);
-        assert_eq!(session.text().to_string(), "same");
+        assert_eq!(session.text().unwrap().to_string(), "same");
         assert_eq!(session.location().canonical_path().as_path(), target);
         assert_eq!(registry.existing(session.location()), Some(opened.id));
+    }
+
+    #[test]
+    fn editor_large_file_dirty_preserves_buffer() {
+        fn grow(path: &std::path::Path) {
+            use std::io::Write as _;
+
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .truncate(true)
+                .open(path)
+                .unwrap();
+            let chunk = vec![b'x'; 1024 * 1024];
+            let mut written = 0u64;
+            while written < slterm_document::EDITABLE_LIMIT_BYTES + 1 {
+                file.write_all(&chunk).unwrap();
+                written += chunk.len() as u64;
+            }
+        }
+
+        let temp = tempfile::tempdir().unwrap();
+        let root = CanonicalPath::new(dunce::canonicalize(temp.path()).unwrap()).unwrap();
+        let path = temp.path().join("large.txt");
+        std::fs::write(&path, "old").unwrap();
+        let opener = DocumentOpenService::default();
+        let mut registry = DocumentRegistry::new();
+        let opened = opener
+            .open(&mut registry, &root, &CanonicalPath::new(&path).unwrap())
+            .unwrap();
+        grow(&path);
+        let change = DocumentExternalService::default()
+            .refresh(
+                &registry,
+                opened.id,
+                &[PathGrant::project_root(root.clone())],
+                0,
+            )
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            &change,
+            DocumentExternalChange::Reload {
+                content: slterm_document::DocumentBody::Paged(_),
+                ..
+            }
+        ));
+        registry.apply_external(change, Instant::now()).unwrap();
+        let total = registry
+            .session(opened.id)
+            .unwrap()
+            .paged()
+            .unwrap()
+            .index()
+            .total_bytes();
+        assert!(total > slterm_document::EDITABLE_LIMIT_BYTES);
+        assert!(
+            DocumentExternalService::default()
+                .refresh(
+                    &registry,
+                    opened.id,
+                    &[PathGrant::project_root(root.clone())],
+                    0,
+                )
+                .unwrap()
+                .is_none()
+        );
+
+        std::fs::write(&path, "old").unwrap();
+        let mut dirty = DocumentRegistry::new();
+        let opened = opener
+            .open(&mut dirty, &root, &CanonicalPath::new(&path).unwrap())
+            .unwrap();
+        replace_local(&mut dirty, opened.id, "draft");
+        grow(&path);
+        let change = DocumentExternalService::default()
+            .refresh(&dirty, opened.id, &[PathGrant::project_root(root)], 0)
+            .unwrap()
+            .unwrap();
+        dirty.apply_external(change, Instant::now()).unwrap();
+        let session = dirty.session(opened.id).unwrap();
+        assert_eq!(session.text().unwrap().to_string(), "draft");
+        assert!(session.external_conflict().is_some());
+        assert!(dirty.begin_save(opened.id, 0).is_ok());
     }
 }

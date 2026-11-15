@@ -124,7 +124,7 @@ mod tests {
     fn edit(registry: &mut DocumentRegistry, id: DocumentId, text: &str) {
         let session = registry.session(id).unwrap();
         let revision = session.text_revision();
-        let end = session.text().len();
+        let end = session.text().unwrap().len();
         registry
             .apply(
                 EditTransaction {
@@ -194,7 +194,12 @@ mod tests {
         assert!(!registry.session(first_open.id).unwrap().is_dirty());
         assert!(registry.session(second_open.id).unwrap().is_dirty());
         assert_eq!(
-            registry.session(second_open.id).unwrap().text().to_string(),
+            registry
+                .session(second_open.id)
+                .unwrap()
+                .text()
+                .unwrap()
+                .to_string(),
             "second local"
         );
         coordinator.fail(attempt).unwrap();

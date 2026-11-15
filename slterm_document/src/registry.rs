@@ -7,7 +7,7 @@ use std::sync::Arc;
 use ropey::Rope;
 use slterm_path::{CanonicalPath, FileIdentity, ResolvedPath};
 
-use crate::{DocumentId, TextEncoding, TextStateId};
+use crate::{DocumentBody, DocumentId, PagedSource, TextEncoding, TextStateId};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DocumentMetadata {
@@ -19,7 +19,7 @@ pub struct DocumentMetadata {
 pub struct DocumentSession {
     pub(crate) id: DocumentId,
     pub(crate) location: ResolvedPath,
-    pub(crate) text: Rope,
+    pub(crate) body: DocumentBody,
     pub(crate) text_revision: u64,
     pub(crate) current_state: TextStateId,
     pub(crate) saved_state: TextStateId,
@@ -42,8 +42,18 @@ impl DocumentSession {
         &self.location
     }
 
-    pub fn text(&self) -> &Rope {
-        &self.text
+    pub fn text(&self) -> Option<&Rope> {
+        match &self.body {
+            DocumentBody::Editable(text) => Some(text),
+            DocumentBody::Paged(_) => None,
+        }
+    }
+
+    pub fn paged(&self) -> Option<&PagedSource> {
+        match &self.body {
+            DocumentBody::Paged(source) => Some(source),
+            DocumentBody::Editable(_) => None,
+        }
     }
 
     pub const fn text_revision(&self) -> u64 {
@@ -79,7 +89,7 @@ impl DocumentSession {
     }
 
     pub const fn is_read_only(&self) -> bool {
-        self.metadata.read_only
+        self.metadata.read_only || matches!(&self.body, DocumentBody::Paged(_))
     }
 
     pub const fn encoding(&self) -> &TextEncoding {
@@ -163,7 +173,7 @@ impl DocumentRegistry {
         &mut self,
         id: DocumentId,
         location: ResolvedPath,
-        text: Rope,
+        text: impl Into<DocumentBody>,
         state: TextStateId,
         disk_baseline: Arc<[u8]>,
         metadata: DocumentMetadata,
@@ -196,7 +206,7 @@ impl DocumentRegistry {
             DocumentSession {
                 id,
                 location: location.clone(),
-                text,
+                body: text.into(),
                 text_revision: 0,
                 current_state: state,
                 saved_state: state,
@@ -305,7 +315,12 @@ mod registry_tests {
         assert_eq!(alias, (id(DOCUMENT_A), DocumentOpenOutcome::Existing));
         assert_eq!(registry.len(), 1);
         assert_eq!(
-            registry.session(id(DOCUMENT_A)).unwrap().text().to_string(),
+            registry
+                .session(id(DOCUMENT_A))
+                .unwrap()
+                .text()
+                .unwrap()
+                .to_string(),
             "original"
         );
         assert_eq!(
@@ -379,11 +394,21 @@ mod registry_tests {
         assert_eq!(replacement, (id(DOCUMENT_B), DocumentOpenOutcome::Opened));
         assert_eq!(registry.len(), 2);
         assert_eq!(
-            registry.session(id(DOCUMENT_A)).unwrap().text().to_string(),
+            registry
+                .session(id(DOCUMENT_A))
+                .unwrap()
+                .text()
+                .unwrap()
+                .to_string(),
             "old"
         );
         assert_eq!(
-            registry.session(id(DOCUMENT_B)).unwrap().text().to_string(),
+            registry
+                .session(id(DOCUMENT_B))
+                .unwrap()
+                .text()
+                .unwrap()
+                .to_string(),
             "new"
         );
     }
@@ -478,7 +503,12 @@ mod registry_tests {
         );
         assert_eq!(registry.len(), 1);
         assert_eq!(
-            registry.session(id(DOCUMENT_A)).unwrap().text().to_string(),
+            registry
+                .session(id(DOCUMENT_A))
+                .unwrap()
+                .text()
+                .unwrap()
+                .to_string(),
             "a"
         );
     }

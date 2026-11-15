@@ -2,7 +2,66 @@
 
 use std::collections::{BTreeMap, VecDeque};
 
+use ropey::Rope;
+
 use crate::DocumentId;
+
+/// Document 的唯一正文形态；Paged 不持伪造的空 Rope 或完整实时文本。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DocumentBody {
+    Editable(Rope),
+    Paged(PagedSource),
+}
+
+impl From<Rope> for DocumentBody {
+    fn from(text: Rope) -> Self {
+        Self::Editable(text)
+    }
+}
+
+impl From<PagedSource> for DocumentBody {
+    fn from(source: PagedSource) -> Self {
+        Self::Paged(source)
+    }
+}
+
+/// 只读分页源及其单调代次；代次用于淘汰旧外部版本的缓存页。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PagedSource {
+    index: PageIndex,
+    fingerprint: [u8; 32],
+    source_generation: u64,
+}
+
+impl PagedSource {
+    pub fn new(index: PageIndex, fingerprint: [u8; 32]) -> Self {
+        Self {
+            index,
+            fingerprint,
+            source_generation: 0,
+        }
+    }
+
+    pub const fn index(&self) -> &PageIndex {
+        &self.index
+    }
+
+    pub const fn source_generation(&self) -> u64 {
+        self.source_generation
+    }
+
+    pub const fn fingerprint(&self) -> &[u8; 32] {
+        &self.fingerprint
+    }
+
+    pub(crate) fn advanced(&self, index: PageIndex, fingerprint: [u8; 32]) -> Option<Self> {
+        Some(Self {
+            index,
+            fingerprint,
+            source_generation: self.source_generation.checked_add(1)?,
+        })
+    }
+}
 
 /// 单页源字节上限；页边界可在编码与行边界处提前结束。
 pub const PAGE_SOURCE_BYTES: u64 = 2 * 1024 * 1024;

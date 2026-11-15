@@ -4,10 +4,9 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::Instant;
 
-use ropey::Rope;
 use slterm_path::ResolvedPath;
 
-use crate::{DocumentId, DocumentMetadata, DocumentRegistry, TextStateId};
+use crate::{DocumentBody, DocumentId, DocumentMetadata, DocumentRegistry, TextStateId};
 
 /// 后台刷新只消费这份基线快照；迟到结果不得作用于新正文或新位置。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -17,6 +16,7 @@ pub struct DocumentExternalRequest {
     text_state: TextStateId,
     disk_baseline: Arc<[u8]>,
     location: ResolvedPath,
+    source_generation: Option<u64>,
     authorization_generation: u64,
 }
 
@@ -39,6 +39,10 @@ impl DocumentExternalRequest {
 
     pub fn location(&self) -> &ResolvedPath {
         &self.location
+    }
+
+    pub const fn source_generation(&self) -> Option<u64> {
+        self.source_generation
     }
 
     pub const fn authorization_generation(&self) -> u64 {
@@ -69,6 +73,14 @@ impl DocumentConflict {
         }
     }
 
+    pub fn modified_paged(location: ResolvedPath) -> Self {
+        Self {
+            kind: ExternalConflictKind::Modified,
+            disk_baseline: None,
+            location,
+        }
+    }
+
     pub fn deleted(location: ResolvedPath) -> Self {
         Self {
             kind: ExternalConflictKind::Deleted,
@@ -94,7 +106,7 @@ impl DocumentConflict {
 pub enum DocumentExternalChange {
     Reload {
         request: DocumentExternalRequest,
-        text: Rope,
+        content: DocumentBody,
         disk_baseline: Arc<[u8]>,
         metadata: DocumentMetadata,
         location: ResolvedPath,
@@ -129,6 +141,7 @@ pub enum ExternalChangeError {
     ReadRevoked,
     StaleExternalChange,
     RevisionExhausted,
+    SourceGenerationExhausted,
     StateConflict,
     TargetOccupied,
     IdentityMismatch,
@@ -141,6 +154,7 @@ impl fmt::Display for ExternalChangeError {
             Self::ReadRevoked => "Document 读取授权已撤销",
             Self::StaleExternalChange => "外部变化结果已过期",
             Self::RevisionExhausted => "文本 revision 已耗尽",
+            Self::SourceGenerationExhausted => "分页源代次已耗尽",
             Self::StateConflict => "外部重载复用了既有 TextStateId",
             Self::TargetOccupied => "目标位置已关联其他 Document",
             Self::IdentityMismatch => "重定位目标不是原文件",
@@ -168,6 +182,7 @@ impl DocumentRegistry {
             text_state: session.current_state,
             disk_baseline: session.disk_baseline.clone(),
             location: session.location.clone(),
+            source_generation: session.paged().map(|source| source.source_generation()),
             authorization_generation,
         })
     }
@@ -182,7 +197,7 @@ impl DocumentRegistry {
         if session.text_revision != request.text_revision
             || session.current_state != request.text_state
             || session.disk_baseline != request.disk_baseline
-            || session.location != request.location
+            || session.paged().map(|source| source.source_generation()) != request.source_generation
         {
             return Err(ExternalChangeError::StaleExternalChange);
         }
@@ -241,7 +256,7 @@ impl DocumentRegistry {
             }
             DocumentExternalChange::Reload {
                 request,
-                text,
+                content,
                 disk_baseline,
                 metadata,
                 location,
@@ -265,28 +280,57 @@ impl DocumentRegistry {
                 let session = self.sessions_mut(id)?;
                 if session.is_dirty() || session.is_saving() || session.external_conflict.is_some()
                 {
-                    session.external_conflict =
-                        Some(DocumentConflict::modified(location, disk_baseline));
+                    session.external_conflict = Some(match &content {
+                        DocumentBody::Editable(_) => {
+                            DocumentConflict::modified(location, disk_baseline)
+                        }
+                        DocumentBody::Paged(_) => DocumentConflict::modified_paged(location),
+                    });
                     return Ok(ExternalApplyOutcome::Conflict);
                 }
                 if session.known_states.contains(&new_state) {
                     return Err(ExternalChangeError::StateConflict);
                 }
-                let text_changed = session.text != text;
-                if text_changed && session.text_revision == u64::MAX {
+                let content_changed = match (&session.body, &content) {
+                    (DocumentBody::Editable(current), DocumentBody::Editable(next)) => {
+                        current != next
+                    }
+                    (DocumentBody::Paged(current), DocumentBody::Paged(next)) => {
+                        current.index() != next.index()
+                            || current.fingerprint() != next.fingerprint()
+                    }
+                    _ => true,
+                };
+                if content_changed && session.text_revision == u64::MAX {
                     return Err(ExternalChangeError::RevisionExhausted);
                 }
                 let previous_identity = session.location.file_identity();
                 let location_changed = session.location != location;
-                if text_changed {
-                    session.history.record_reload(
-                        &session.text,
-                        &text,
-                        session.current_state,
-                        new_state,
-                        at,
-                    );
-                    session.text = text;
+                if content_changed {
+                    match (&session.body, &content) {
+                        (DocumentBody::Editable(before), DocumentBody::Editable(after)) => {
+                            session.history.record_reload(
+                                before,
+                                after,
+                                session.current_state,
+                                new_state,
+                                at,
+                            );
+                        }
+                        _ => session.history.reset(),
+                    }
+                    session.body = match content {
+                        DocumentBody::Editable(text) => DocumentBody::Editable(text),
+                        DocumentBody::Paged(source) => {
+                            let next = match &session.body {
+                                DocumentBody::Paged(current) => current
+                                    .advanced(source.index().clone(), *source.fingerprint())
+                                    .ok_or(ExternalChangeError::SourceGenerationExhausted)?,
+                                DocumentBody::Editable(_) => source,
+                            };
+                            DocumentBody::Paged(next)
+                        }
+                    };
                     session.current_state = new_state;
                     session.saved_state = new_state;
                     session.known_states.insert(new_state);
