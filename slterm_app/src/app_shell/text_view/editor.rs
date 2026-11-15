@@ -2,12 +2,13 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 use std::ops::Range;
 use std::rc::Rc;
+use std::time::Duration;
 
 use gpui::{
     App, Bounds, ContentMask, Context, ElementInputHandler, EntityInputHandler, FocusHandle,
-    Focusable, Font, InteractiveElement as _, MouseButton, MouseDownEvent, MouseMoveEvent,
+    Focusable, Font, Hsla, InteractiveElement as _, MouseButton, MouseDownEvent, MouseMoveEvent,
     MouseUpEvent, ParentElement as _, Pixels, Point, Render, ScrollWheelEvent, ShapedLine,
-    SharedString, Styled as _, TextAlign, TextRun, UTF16Selection, Window, canvas, div, fill,
+    SharedString, Styled as _, Task, TextAlign, TextRun, UTF16Selection, Window, canvas, div, fill,
     point, px, size,
 };
 use gpui_component::ActiveTheme as _;
@@ -29,6 +30,7 @@ use super::metrics::{
     rope_is_grapheme_boundary, rope_next_grapheme_boundary, rope_previous_grapheme_boundary,
 };
 use super::source::{RopeTextSource, TextSelection};
+use super::syntax::{DocumentSyntax, capture_color};
 use super::{SelectDown, SelectLeft, SelectRight, SelectUp};
 
 /// 一次同步提交成功后回投的只读正文快照。
@@ -171,6 +173,36 @@ fn normalized_input_utf16_offset(original: &Rope, offset: usize) -> Option<usize
     offset.checked_sub(crlf_count)
 }
 
+fn line_text_runs(
+    line: &super::source::VisibleLine,
+    spans: Vec<(Range<usize>, String)>,
+    font: &Font,
+    foreground: Hsla,
+    colors: &gpui_component::ThemeColor,
+) -> Vec<TextRun> {
+    let make_run = |len, color| TextRun {
+        len,
+        font: font.clone(),
+        color,
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    let mut runs = Vec::new();
+    let mut cursor = 0;
+    for (range, capture) in spans {
+        if range.start > cursor {
+            runs.push(make_run(range.start - cursor, foreground));
+        }
+        cursor = range.end;
+        runs.push(make_run(range.len(), capture_color(colors, &capture)));
+    }
+    if cursor < line.text().len() || runs.is_empty() {
+        runs.push(make_run(line.text().len() - cursor, foreground));
+    }
+    runs
+}
+
 struct PaintFrame {
     bounds: Bounds<Pixels>,
     lines: Vec<(ShapedLine, super::source::VisibleLine)>,
@@ -178,6 +210,9 @@ struct PaintFrame {
     cursor: usize,
     layout: LayoutMetrics,
 }
+
+#[cfg(all(test, feature = "gpui-test-support"))]
+type PaintedSyntax = Rc<RefCell<Vec<(usize, Vec<TextRun>)>>>;
 
 /// Document 的专用文本视图；Rope 是不可变展示快照，修改只发 core 事务。
 pub(crate) struct DocumentTextView {
@@ -191,6 +226,9 @@ pub(crate) struct DocumentTextView {
     theme_revision: u64,
     theme_fingerprint: Option<ThemeFingerprint>,
     layout_cache: Rc<RefCell<LayoutCache>>,
+    syntax: Option<Rc<RefCell<DocumentSyntax>>>,
+    applied_syntax: Option<(u64, u64)>,
+    syntax_poll_task: Option<Task<()>>,
     selection: TextSelection,
     preferred_column: Option<usize>,
     marked_range: Option<Range<usize>>,
@@ -200,6 +238,8 @@ pub(crate) struct DocumentTextView {
     mouse_anchor: Option<usize>,
     focus: FocusHandle,
     layout: Rc<RefCell<Option<LayoutMetrics>>>,
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    painted_syntax: PaintedSyntax,
     #[cfg(test)]
     painted_content_mask: Rc<RefCell<Option<gpui::ContentMask<Pixels>>>>,
 }
@@ -211,7 +251,17 @@ impl DocumentTextView {
         edit_sink: DocumentEditSink,
         cx: &mut Context<'_, Self>,
     ) -> Self {
-        Self {
+        Self::new_with_syntax(document_id, session, edit_sink, None, cx)
+    }
+
+    pub(crate) fn new_with_syntax(
+        document_id: DocumentId,
+        session: &DocumentSession,
+        edit_sink: DocumentEditSink,
+        syntax: Option<Rc<RefCell<DocumentSyntax>>>,
+        cx: &mut Context<'_, Self>,
+    ) -> Self {
+        let mut view = Self {
             document_id,
             text: session.text().expect("Paged 不进入 Rope 编辑器").clone(),
             revision: session.text_revision(),
@@ -222,6 +272,9 @@ impl DocumentTextView {
             theme_revision: 0,
             theme_fingerprint: None,
             layout_cache: Rc::default(),
+            syntax,
+            applied_syntax: None,
+            syntax_poll_task: None,
             selection: TextSelection { anchor: 0, head: 0 },
             preferred_column: None,
             marked_range: None,
@@ -231,18 +284,70 @@ impl DocumentTextView {
             mouse_anchor: None,
             focus: cx.focus_handle().tab_stop(true),
             layout: Rc::default(),
+            #[cfg(all(test, feature = "gpui-test-support"))]
+            painted_syntax: Rc::default(),
             #[cfg(test)]
             painted_content_mask: Rc::default(),
+        };
+        view.schedule_syntax_poll(cx);
+        view
+    }
+
+    fn schedule_syntax_poll(&mut self, cx: &mut Context<'_, Self>) {
+        let Some(syntax) = self.syntax.clone() else {
+            return;
+        };
+        if self
+            .syntax_poll_task
+            .as_ref()
+            .is_some_and(|task| !task.is_ready())
+        {
+            return;
         }
+        let target = cx.entity().downgrade();
+        self.syntax_poll_task = Some(cx.spawn(async move |_, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(30))
+                    .await;
+                let Some(target) = target.upgrade() else {
+                    return;
+                };
+                let resolved = target.update(cx, |view, cx| {
+                    syntax.borrow_mut().poll();
+                    let marker = syntax.borrow().current_marker();
+                    let changed = view.applied_syntax != marker;
+                    view.applied_syntax = marker;
+                    if changed {
+                        view.language_revision = view
+                            .language_revision
+                            .checked_add(1)
+                            .expect("语言 revision 不得耗尽");
+                        cx.notify();
+                    }
+                    syntax.borrow().is_resolved()
+                });
+                if resolved {
+                    return;
+                }
+            }
+        }));
     }
 
     /// 无编辑增量的外部快照无法保留逻辑位置，必须取消组合并复位选区。
     pub(crate) fn apply_snapshot(&mut self, session: &DocumentSession, cx: &mut Context<'_, Self>) {
-        self.adopt_snapshot(DocumentTextSnapshot::from_session(session));
+        let snapshot = DocumentTextSnapshot::from_session(session);
+        if let Some(syntax) = &self.syntax {
+            syntax
+                .borrow_mut()
+                .rebuild(snapshot.text.clone(), snapshot.revision);
+        }
+        self.adopt_snapshot(snapshot);
         self.selection = TextSelection { anchor: 0, head: 0 };
         self.marked_range = None;
         self.preferred_column = None;
         self.ensure_cursor_visible();
+        self.schedule_syntax_poll(cx);
         cx.notify();
     }
 
@@ -283,12 +388,22 @@ impl DocumentTextView {
             let end = transform_offset(marked.end, &edits, BoundaryBias::Left);
             (start <= end).then_some(start..end)
         });
-        self.adopt_snapshot(DocumentTextSnapshot::from_session(session));
+        let snapshot = DocumentTextSnapshot::from_session(session);
+        if let Some(syntax) = &self.syntax {
+            syntax.borrow_mut().edit(
+                &self.text,
+                snapshot.text.clone(),
+                snapshot.revision,
+                transaction,
+            );
+        }
+        self.adopt_snapshot(snapshot);
         self.selection = selection;
         self.marked_range = marked_range;
         self.reconcile_transient_ranges();
         self.preferred_column = None;
         self.ensure_cursor_visible();
+        self.schedule_syntax_poll(cx);
         cx.notify();
     }
 
@@ -455,11 +570,28 @@ impl DocumentTextView {
             origin: EditOrigin::UserInput,
             merge_policy: MergePolicy::Adjacent,
         };
+        let syntax_transaction = transaction.clone();
+        let before = self.text.clone();
         let Ok(response) = (self.edit_sink)(DocumentEditRequest::Edit(transaction, new_state), cx)
         else {
             return;
         };
-        self.adopt_snapshot(response.snapshot);
+        let changed = response.outcome != EditApplyOutcome::Unchanged;
+        // 原样普通替换保留既有选区；原样 IME 提交仍须落实组合态与组合内选区。
+        if !changed && self.marked_range.is_none() && new_marked.is_none() {
+            return;
+        }
+        if changed {
+            if let Some(syntax) = &self.syntax {
+                syntax.borrow_mut().edit(
+                    &before,
+                    response.snapshot.text.clone(),
+                    response.snapshot.revision,
+                    &syntax_transaction,
+                );
+            }
+            self.adopt_snapshot(response.snapshot);
+        }
         self.selection = TextSelection {
             anchor: new_selection.start,
             head: new_selection.end,
@@ -468,6 +600,9 @@ impl DocumentTextView {
         self.reconcile_transient_ranges();
         self.preferred_column = None;
         self.ensure_cursor_visible();
+        if changed {
+            self.schedule_syntax_poll(cx);
+        }
         cx.notify();
     }
 
@@ -550,11 +685,18 @@ impl DocumentTextView {
         if response.outcome == EditApplyOutcome::Unchanged {
             return;
         }
-        self.adopt_snapshot(response.snapshot);
+        let snapshot = response.snapshot;
+        if let Some(syntax) = &self.syntax {
+            syntax
+                .borrow_mut()
+                .rebuild(snapshot.text.clone(), snapshot.revision);
+        }
+        self.adopt_snapshot(snapshot);
         self.selection = TextSelection { anchor: 0, head: 0 };
         self.marked_range = None;
         self.preferred_column = None;
         self.ensure_cursor_visible();
+        self.schedule_syntax_poll(cx);
         cx.notify();
     }
 
@@ -943,6 +1085,10 @@ impl DocumentTextView {
         let fingerprint = ThemeFingerprint {
             foreground,
             accent,
+            muted_foreground: theme.muted_foreground,
+            info_foreground: theme.info_foreground,
+            success_foreground: theme.success_foreground,
+            warning_foreground: theme.warning_foreground,
             mono_font_family: theme.mono_font_family.clone(),
             mono_font_size: font_size,
         };
@@ -958,6 +1104,9 @@ impl DocumentTextView {
             ..Font::default()
         };
         let text = self.text.clone();
+        let syntax = self.syntax.clone();
+        let revision = self.revision;
+        let syntax_colors = cx.theme().colors;
         let selection = self.selection.range();
         let cursor = self.selection.head;
         let scroll_line = self.scroll_line;
@@ -972,6 +1121,8 @@ impl DocumentTextView {
         let view = cx.entity();
         #[cfg(test)]
         let painted_content_mask = self.painted_content_mask.clone();
+        #[cfg(all(test, feature = "gpui-test-support"))]
+        let painted_syntax = self.painted_syntax.clone();
         canvas(
             move |bounds, window, _| {
                 let line_height = px(20.0);
@@ -1022,10 +1173,26 @@ impl DocumentTextView {
                     .into_iter()
                     .map(|line| {
                         let shaped = cache.get(line.index()).unwrap_or_else(|| {
+                            let spans = syntax
+                                .as_ref()
+                                .map(|syntax| {
+                                    syntax.borrow().highlight_line(
+                                        &text,
+                                        line.byte_range(),
+                                        revision,
+                                    )
+                                })
+                                .unwrap_or_default();
+                            let runs =
+                                line_text_runs(&line, spans, &font, foreground, &syntax_colors);
+                            #[cfg(all(test, feature = "gpui-test-support"))]
+                            painted_syntax
+                                .borrow_mut()
+                                .push((line.index(), runs.clone()));
                             let shaped = window.text_system().shape_line(
                                 SharedString::from(line.text().to_owned()),
                                 font_size,
-                                &[make_run(line.text().len())],
+                                &runs,
                                 None,
                             );
                             cache.insert(line.index(), shaped.clone());

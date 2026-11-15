@@ -52,4 +52,7 @@ pub use save::{DocumentSaveReceipt, DocumentSaveRequest, SaveTransactionError};
 pub use search::{
     DocumentSearchResult, DocumentTextRequest, SearchError, SearchMatch, TextChunk, TextChunks,
 };
-pub use syntax::{SyntaxTree, SyntaxWorker, SyntaxWorkerError, syntax_input_edit};
+pub use syntax::{
+    SyntaxHighlighter, SyntaxSpan, SyntaxTree, SyntaxWorker, SyntaxWorkerError, syntax_input_edit,
+    syntax_transaction_input_edits,
+};

@@ -1,15 +1,16 @@
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use gpui::{
-    AppContext as _, Bounds, Context, Entity, EntityInputHandler as _, Render, TestAppContext,
-    Window, px,
+    AppContext as _, Bounds, Context, Entity, EntityInputHandler as _, ParentElement as _, Render,
+    Styled as _, TestAppContext, Window, px,
 };
+use gpui_component::ActiveTheme;
 use ropey::Rope;
 use slterm_document::{
-    DocumentId, DocumentMetadata, DocumentRegistry, EditOrigin, EditTransaction, MergePolicy,
-    TextEdit, TextStateId,
+    DocumentId, DocumentMetadata, DocumentRegistry, EditOrigin, EditTransaction, LanguageId,
+    MergePolicy, TextEdit, TextStateId,
 };
 use slterm_path::{CanonicalPath, ResolvedPath};
 use uuid::Uuid;
@@ -23,17 +24,39 @@ struct Host {
     registry: Rc<RefCell<DocumentRegistry>>,
     id: DocumentId,
     view: Entity<DocumentTextView>,
+    syntax: Option<Rc<RefCell<super::super::syntax::DocumentSyntax>>>,
 }
 
 impl Host {
     fn new(text: &str, read_only: bool, cx: &mut Context<'_, Self>) -> Self {
+        Self::configured(text, read_only, None, cx)
+    }
+
+    fn new_rust(text: &str, cx: &mut Context<'_, Self>) -> Self {
+        Self::configured(text, false, Some(LanguageId::Rust), cx)
+    }
+
+    fn configured(
+        text: &str,
+        read_only: bool,
+        language: Option<LanguageId>,
+        cx: &mut Context<'_, Self>,
+    ) -> Self {
         let id: DocumentId = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0f2a".parse().unwrap();
         let state = TextStateId::from_uuid(Uuid::now_v7()).unwrap();
         let mut registry = DocumentRegistry::new();
         registry
             .open(
                 id,
-                ResolvedPath::new(CanonicalPath::new("D:/work/editor.txt").unwrap(), None),
+                ResolvedPath::new(
+                    CanonicalPath::new(if language == Some(LanguageId::Rust) {
+                        "D:/work/editor.rs"
+                    } else {
+                        "D:/work/editor.txt"
+                    })
+                    .unwrap(),
+                    None,
+                ),
                 Rope::from_str(text),
                 state,
                 std::sync::Arc::from(text.as_bytes()),
@@ -45,9 +68,16 @@ impl Host {
             .unwrap();
         let registry = Rc::new(RefCell::new(registry));
         let sink_registry = registry.clone();
+        let syntax = language.and_then(|language| {
+            super::super::syntax::DocumentSyntax::new(
+                registry.borrow().session(id).unwrap(),
+                language,
+            )
+            .map(|syntax| Rc::new(RefCell::new(syntax)))
+        });
         let view = cx.new(|cx| {
             let session = registry.borrow();
-            DocumentTextView::new(
+            DocumentTextView::new_with_syntax(
                 id,
                 session.session(id).unwrap(),
                 Box::new(move |request, _| {
@@ -69,10 +99,16 @@ impl Host {
                         outcome,
                     })
                 }),
+                syntax.clone(),
                 cx,
             )
         });
-        Self { registry, id, view }
+        Self {
+            registry,
+            id,
+            view,
+            syntax,
+        }
     }
 
     fn text(&self) -> String {
@@ -90,6 +126,39 @@ impl Render for Host {
     fn render(&mut self, _: &mut Window, _: &mut Context<'_, Self>) -> impl gpui::IntoElement {
         self.view.clone()
     }
+}
+
+struct SharedHost {
+    first: Entity<Host>,
+    second: Entity<DocumentTextView>,
+}
+
+impl Render for SharedHost {
+    fn render(&mut self, _: &mut Window, _: &mut Context<'_, Self>) -> impl gpui::IntoElement {
+        gpui::div()
+            .flex()
+            .flex_col()
+            .child(gpui::div().h(px(100.0)).child(self.first.clone()))
+            .child(gpui::div().h(px(100.0)).child(self.second.clone()))
+    }
+}
+
+fn has_keyword(
+    painted: &super::PaintedSyntax,
+    range: std::ops::Range<usize>,
+    color: gpui::Hsla,
+) -> bool {
+    painted.borrow().iter().any(|(line, runs)| {
+        *line == 0
+            && runs
+                .iter()
+                .scan(0, |start, run| {
+                    let actual = *start..*start + run.len;
+                    *start += run.len;
+                    Some((actual, run.color))
+                })
+                .any(|(actual, actual_color)| actual == range && actual_color == color)
+    })
 }
 
 #[test]
@@ -173,6 +242,233 @@ fn painted_view_dispatches_text_input_to_document(cx: &mut TestAppContext) {
 
     window
         .update(cx, |host, _, _| assert_eq!(host.text(), "中ab"))
+        .unwrap();
+}
+
+#[gpui::test]
+fn syntax_worker_publishes_semantic_runs_to_the_painted_view(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        crate::app_shell::theme::apply_dark_theme(cx);
+    });
+    let keyword_color = cx.update(|cx| cx.theme().colors.accent);
+    let window = cx.add_window(|_, cx| Host::new_rust("fn main() {}\n", cx));
+    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    let painted = window
+        .update(cx, |host, _, cx| host.view.read(cx).painted_syntax.clone())
+        .unwrap();
+    for _ in 0..100 {
+        std::thread::sleep(Duration::from_millis(1));
+        visual.run_until_parked();
+        visual.executor().advance_clock(Duration::from_millis(30));
+        visual.run_until_parked();
+        visual.refresh().unwrap();
+        visual.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+        if has_keyword(&painted, 0..2, keyword_color) {
+            break;
+        }
+    }
+    assert!(
+        has_keyword(&painted, 0..2, keyword_color),
+        "实际 shaping runs: {:?}",
+        painted.borrow()
+    );
+
+    window
+        .update(cx, |host, window, cx| {
+            host.view.update(cx, |view, cx| {
+                view.replace_text_in_range(None, "pub ", window, cx);
+            });
+        })
+        .unwrap();
+    window
+        .update(cx, |host, _, _| {
+            assert_eq!(host.text(), "pub fn main() {}\n")
+        })
+        .unwrap();
+    for _ in 0..100 {
+        std::thread::sleep(Duration::from_millis(1));
+        visual.run_until_parked();
+        visual.executor().advance_clock(Duration::from_millis(30));
+        visual.run_until_parked();
+        visual.refresh().unwrap();
+        visual.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+        if has_keyword(&painted, 4..6, keyword_color) {
+            break;
+        }
+    }
+    assert!(
+        has_keyword(&painted, 4..6, keyword_color),
+        "编辑后 shaping runs: {:?}",
+        painted.borrow()
+    );
+}
+
+#[gpui::test]
+fn two_painted_views_independently_adopt_a_shared_syntax_tree(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        crate::app_shell::theme::apply_dark_theme(cx);
+    });
+    let keyword_color = cx.update(|cx| cx.theme().colors.accent);
+    let window = cx.add_window(|_, cx| -> SharedHost {
+        let first = cx.new(|cx| Host::new_rust("fn main() {}\n", cx));
+        let id = first.read(cx).id;
+        let registry = first.read(cx).registry.clone();
+        let syntax = first.read(cx).syntax.clone();
+        let sink_registry = registry.clone();
+        let second = cx.new(|cx| {
+            let registry_read = registry.borrow();
+            let session = registry_read.session(id).unwrap();
+            DocumentTextView::new_with_syntax(
+                id,
+                session,
+                Box::new(move |request, _| {
+                    let mut registry = sink_registry.borrow_mut();
+                    let outcome = match request {
+                        DocumentEditRequest::Edit(transaction, state) => {
+                            registry.apply(transaction, state, Instant::now())?
+                        }
+                        DocumentEditRequest::Travel { redo } => {
+                            if redo {
+                                registry.redo(id)
+                            } else {
+                                registry.undo(id)
+                            }?
+                        }
+                    };
+                    Ok(DocumentEditResponse {
+                        snapshot: DocumentTextSnapshot::from_session(registry.session(id).unwrap()),
+                        outcome,
+                    })
+                }),
+                syntax,
+                cx,
+            )
+        });
+        SharedHost { first, second }
+    });
+    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    let (first, second) = window
+        .update(cx, |host, _, cx| {
+            (
+                host.first.read(cx).view.read(cx).painted_syntax.clone(),
+                host.second.read(cx).painted_syntax.clone(),
+            )
+        })
+        .unwrap();
+    for _ in 0..100 {
+        std::thread::sleep(Duration::from_millis(1));
+        visual.run_until_parked();
+        visual.executor().advance_clock(Duration::from_millis(30));
+        visual.run_until_parked();
+        visual.refresh().unwrap();
+        visual.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+        if has_keyword(&first, 0..2, keyword_color) && has_keyword(&second, 0..2, keyword_color) {
+            break;
+        }
+    }
+    assert!(has_keyword(&first, 0..2, keyword_color));
+    assert!(
+        has_keyword(&second, 0..2, keyword_color),
+        "第二视图未采纳共享首树"
+    );
+
+    window
+        .update(cx, |host, _, cx| {
+            let id = host.first.read(cx).id;
+            let registry = host.first.read(cx).registry.clone();
+            let transaction = EditTransaction {
+                document_id: id,
+                expected_text_revision: 0,
+                edits: vec![TextEdit::new(0..0, "pub ")],
+                origin: EditOrigin::UserInput,
+                merge_policy: MergePolicy::Disallowed,
+            };
+            let state = TextStateId::from_uuid(Uuid::now_v7()).unwrap();
+            registry
+                .borrow_mut()
+                .apply(transaction.clone(), state, Instant::now())
+                .unwrap();
+            let registry = registry.borrow();
+            let session = registry.session(id).unwrap();
+            let first_view = host.first.read(cx).view.clone();
+            first_view.update(cx, |view, cx| {
+                view.apply_edit_snapshot(session, &transaction, cx)
+            });
+            host.second.update(cx, |view, cx| {
+                view.apply_edit_snapshot(session, &transaction, cx)
+            });
+        })
+        .unwrap();
+    for _ in 0..100 {
+        std::thread::sleep(Duration::from_millis(1));
+        visual.run_until_parked();
+        visual.executor().advance_clock(Duration::from_millis(30));
+        visual.run_until_parked();
+        visual.refresh().unwrap();
+        visual.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+        if has_keyword(&first, 4..6, keyword_color) && has_keyword(&second, 4..6, keyword_color) {
+            break;
+        }
+    }
+    assert!(has_keyword(&first, 4..6, keyword_color));
+    assert!(
+        has_keyword(&second, 4..6, keyword_color),
+        "第二视图未采纳编辑后的共享树"
+    );
+}
+
+#[gpui::test]
+fn unchanged_replacement_preserves_selection_and_view_transients(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        crate::app_shell::theme::apply_dark_theme(cx);
+    });
+    let window = cx.add_window(|_, cx| Host::new("ab", false, cx));
+    window
+        .update(cx, |host, window, cx| {
+            host.view.update(cx, |view, cx| {
+                view.set_selected_text_range(1..2, window, cx);
+                view.replace_text_in_range(None, "b", window, cx);
+                assert_eq!(
+                    view.selected_text_range(false, window, cx).unwrap().range,
+                    1..2
+                );
+            });
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn unchanged_ime_commit_clears_composition_and_updates_selection(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        crate::app_shell::theme::apply_dark_theme(cx);
+    });
+    let window = cx.add_window(|_, cx| Host::new("", false, cx));
+    window
+        .update(cx, |host, window, cx| {
+            host.view.update(cx, |view, cx| {
+                view.replace_and_mark_text_in_range(None, "中", None, window, cx);
+                view.replace_text_in_range(None, "中", window, cx);
+                assert_eq!(view.marked_text_range(window, cx), None);
+                assert_eq!(
+                    view.selected_text_range(false, window, cx).unwrap().range,
+                    1..1
+                );
+                view.backspace(cx);
+            });
+            assert_eq!(host.text(), "");
+        })
         .unwrap();
 }
 

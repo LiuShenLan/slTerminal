@@ -10,9 +10,12 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use ropey::{LineType, Rope};
-use tree_sitter::{InputEdit, LanguageError, ParseOptions, Parser, Point, Tree};
+use tree_sitter::{
+    InputEdit, LanguageError, ParseOptions, Parser, Point, Query, QueryCursor, StreamingIterator,
+    Tree,
+};
 
-use crate::{DocumentId, LanguageId, LanguageRegistry};
+use crate::{DocumentId, EditTransaction, LanguageId, LanguageRegistry};
 
 const COMMAND_CAPACITY: usize = 8;
 // 初始任务与全部在途命令各至多产生一个结果，因此结果永不需无界排队。
@@ -22,6 +25,8 @@ const RESULT_CAPACITY: usize = COMMAND_CAPACITY + 1;
 pub enum SyntaxWorkerError {
     MissingGrammar,
     Language(LanguageError),
+    Query(tree_sitter::QueryError),
+    InvalidRange,
     StaleRevision,
     QueueFull,
     Closed,
@@ -33,6 +38,8 @@ impl std::fmt::Display for SyntaxWorkerError {
         formatter.write_str(match self {
             Self::MissingGrammar => "纯文本语言没有语法运行时",
             Self::Language(_) => "语法运行时与 grammar 不兼容",
+            Self::Query(_) => "高亮查询与 grammar 不兼容",
+            Self::InvalidRange => "高亮范围不是有效 UTF-8 边界",
             Self::StaleRevision => "语法编辑必须推进文本 revision",
             Self::QueueFull => "语法任务队列已满",
             Self::Closed => "语法工作线程已关闭",
@@ -103,6 +110,106 @@ enum WorkerObservation {
 struct PendingEdit {
     text: Rope,
     revision: u64,
+}
+
+/// 单个非重叠高亮区间；capture 保留查询中的语义名称。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SyntaxSpan {
+    range: Range<usize>,
+    capture: String,
+}
+
+impl SyntaxSpan {
+    pub fn range(&self) -> Range<usize> {
+        self.range.clone()
+    }
+
+    pub fn capture(&self) -> &str {
+        &self.capture
+    }
+}
+
+/// 每种语言共享同一编译查询；视图按可见范围请求非重叠 span。
+pub struct SyntaxHighlighter {
+    query: Query,
+}
+
+impl SyntaxHighlighter {
+    pub fn new(language: LanguageId) -> Result<Self, SyntaxWorkerError> {
+        let descriptor = LanguageRegistry::new().descriptor(language);
+        let grammar = descriptor
+            .grammar()
+            .ok_or(SyntaxWorkerError::MissingGrammar)?;
+        let source = descriptor
+            .highlight_query()
+            .ok_or(SyntaxWorkerError::MissingGrammar)?;
+        let query = Query::new(&grammar, &source).map_err(SyntaxWorkerError::Query)?;
+        Ok(Self { query })
+    }
+
+    pub fn highlight_range(
+        &self,
+        text: &Rope,
+        tree: &Tree,
+        range: Range<usize>,
+    ) -> Result<Vec<SyntaxSpan>, SyntaxWorkerError> {
+        if range.start > range.end
+            || range.end > text.len()
+            || !text.is_char_boundary(range.start)
+            || !text.is_char_boundary(range.end)
+        {
+            return Err(SyntaxWorkerError::InvalidRange);
+        }
+        if range.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut cursor = QueryCursor::new();
+        cursor.set_byte_range(range.clone());
+        let provider =
+            |node: tree_sitter::Node| text.slice(node.byte_range()).chunks().map(str::as_bytes);
+        let mut captures = cursor.captures(&self.query, tree.root_node(), provider);
+        let mut spans = Vec::new();
+        while let Some((matched, capture_index)) = captures.next() {
+            let capture = matched.captures()[*capture_index];
+            let start = capture.node.start_byte().max(range.start);
+            let end = capture.node.end_byte().min(range.end);
+            if start >= end {
+                continue;
+            }
+            let span = SyntaxSpan {
+                range: start..end,
+                capture: self.query.capture_names()[capture.index as usize].to_owned(),
+            };
+            insert_span(&mut spans, span);
+        }
+        spans.sort_by_key(|span| span.range.start);
+        Ok(spans)
+    }
+}
+
+/// 后出现的捕获覆盖重叠区；保留先捕获未被覆盖的左右片段。
+fn insert_span(spans: &mut Vec<SyntaxSpan>, next: SyntaxSpan) {
+    let mut retained = Vec::new();
+    for existing in spans.drain(..) {
+        if existing.range.end <= next.range.start || next.range.end <= existing.range.start {
+            retained.push(existing);
+            continue;
+        }
+        if existing.range.start < next.range.start {
+            retained.push(SyntaxSpan {
+                range: existing.range.start..next.range.start,
+                capture: existing.capture.clone(),
+            });
+        }
+        if existing.range.end > next.range.end {
+            retained.push(SyntaxSpan {
+                range: next.range.end..existing.range.end,
+                capture: existing.capture,
+            });
+        }
+    }
+    retained.push(next);
+    *spans = retained;
 }
 
 /// 单个 Document 的语法树所有者；前台只经有界队列提交与接收。
@@ -185,11 +292,26 @@ impl SyntaxWorker {
         revision: u64,
         edits: Vec<InputEdit>,
     ) -> Result<(), SyntaxWorkerError> {
+        self.submit(text, revision, edits, false)
+    }
+
+    /// 无增量快照与历史移动必须丢弃旧树并全量重建。
+    pub fn rebuild(&mut self, text: Rope, revision: u64) -> Result<(), SyntaxWorkerError> {
+        self.submit(text, revision, Vec::new(), true)
+    }
+
+    fn submit(
+        &mut self,
+        text: Rope,
+        revision: u64,
+        edits: Vec<InputEdit>,
+        rebuild: bool,
+    ) -> Result<(), SyntaxWorkerError> {
         if revision <= self.latest_revision {
             return Err(SyntaxWorkerError::StaleRevision);
         }
         self.latest_revision = revision;
-        let rebuild = self.pending.is_some();
+        let rebuild = rebuild || self.pending.is_some();
         let pending_text = text.clone();
         let generation = self.generation.fetch_add(1, Ordering::Release) + 1;
         match self.commands.try_send(Command::Edit {
@@ -497,6 +619,27 @@ pub fn syntax_input_edit(before: &Rope, after: &Rope, old_range: Range<usize>) -
         old_end_position: point(before, old_range.end),
         new_end_position: point(after, new_end),
     }
+}
+
+/// 按 core 的降序应用顺序，为事务生成逐步中间正文坐标。
+pub fn syntax_transaction_input_edits(
+    before: &Rope,
+    transaction: &EditTransaction,
+) -> Vec<InputEdit> {
+    let mut intermediate = before.clone();
+    let mut edits = Vec::new();
+    for edit in transaction.edits.iter().rev() {
+        let range = edit.utf8_range().clone();
+        if intermediate.slice(range.clone()) == edit.replacement() {
+            continue;
+        }
+        let mut after = intermediate.clone();
+        after.remove(range.clone());
+        after.insert(range.start, edit.replacement());
+        edits.push(syntax_input_edit(&intermediate, &after, range));
+        intermediate = after;
+    }
+    edits
 }
 
 fn point(text: &Rope, byte: usize) -> Point {

@@ -6,8 +6,8 @@ use ropey::Rope;
 use tree_sitter::{Parser, Point};
 
 use super::{
-    COMMAND_CAPACITY, RESULT_CAPACITY, SyntaxWorker, SyntaxWorkerError, WorkerObservation,
-    syntax_input_edit,
+    COMMAND_CAPACITY, RESULT_CAPACITY, SyntaxHighlighter, SyntaxWorker, SyntaxWorkerError,
+    WorkerObservation, syntax_input_edit,
 };
 use crate::{DocumentId, LanguageId, LanguageRegistry};
 
@@ -37,6 +37,34 @@ fn large_rust_source() -> Rope {
 }
 
 #[test]
+fn highlighter_returns_nonoverlapping_semantic_spans_in_visible_ranges() {
+    let text = Rope::from_str("fn main() {\n    // 注释\n}\n");
+    let tree = rust_tree(&text);
+    let highlighter = SyntaxHighlighter::new(LanguageId::Rust).unwrap();
+    let spans = highlighter
+        .highlight_range(&text, &tree, 0..text.len())
+        .unwrap();
+    assert!(
+        spans
+            .iter()
+            .any(|span| { span.range() == (0..2) && span.capture().starts_with("keyword") })
+    );
+    assert!(spans.iter().any(|span| {
+        text.slice(span.range()) == "// 注释" && span.capture().starts_with("comment")
+    }));
+    assert!(
+        spans
+            .windows(2)
+            .all(|pair| pair[0].range().end <= pair[1].range().start)
+    );
+
+    let visible = highlighter.highlight_range(&text, &tree, 0..2).unwrap();
+    assert_eq!(visible.len(), 1);
+    assert_eq!(visible[0].range(), 0..2);
+    assert!(SyntaxHighlighter::new(LanguageId::PlainText).is_err());
+}
+
+#[test]
 fn input_edit_tracks_unicode_and_multiline_replacement() {
     let before = Rope::from_str("let 数值 = 1;\nfn main() {}\n");
     let after = Rope::from_str("let 数值 = 你好\n2;\nfn main() {}\n");
@@ -49,6 +77,22 @@ fn input_edit_tracks_unicode_and_multiline_replacement() {
     assert_eq!(edit.start_position, Point::new(0, start));
     assert_eq!(edit.old_end_position, Point::new(0, start + 1));
     assert_eq!(edit.new_end_position, Point::new(1, 1));
+}
+
+#[test]
+fn worker_rebuilds_an_external_snapshot_without_reusing_old_edits() {
+    let before = Rope::from_str("fn main() { let value = 1; }\n");
+    let after = Rope::from_str("fn other() { let changed = 2; }\n");
+    let mut worker = SyntaxWorker::new(document_id(), LanguageId::Rust, before, 0).unwrap();
+    worker.recv_timeout(Duration::from_secs(5)).unwrap();
+    worker.rebuild(after.clone(), 1).unwrap();
+    let parsed = worker.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(parsed.revision(), 1);
+    assert_eq!(
+        parsed.tree().root_node().to_sexp(),
+        rust_tree(&after).root_node().to_sexp()
+    );
+    worker.shutdown().unwrap();
 }
 
 #[test]

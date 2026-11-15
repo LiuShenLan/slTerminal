@@ -45,6 +45,10 @@ impl LayoutMetrics {
 pub(crate) struct ThemeFingerprint {
     pub(crate) foreground: Hsla,
     pub(crate) accent: Hsla,
+    pub(crate) muted_foreground: Hsla,
+    pub(crate) info_foreground: Hsla,
+    pub(crate) success_foreground: Hsla,
+    pub(crate) warning_foreground: Hsla,
     pub(crate) mono_font_family: SharedString,
     pub(crate) mono_font_size: Pixels,
 }

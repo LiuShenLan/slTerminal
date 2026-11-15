@@ -8,6 +8,8 @@ mod metrics;
 mod paged;
 #[allow(dead_code)] // 消费点 = 专用视图可见行渲染。
 mod source;
+#[allow(dead_code)] // 消费点 = Document 语法视图接线。
+mod syntax;
 
 gpui::actions!(
     document_text_view,

@@ -379,6 +379,10 @@ impl Render for PagedTextView {
         let fingerprint = ThemeFingerprint {
             foreground,
             accent: theme.accent,
+            muted_foreground: theme.muted_foreground,
+            info_foreground: theme.info_foreground,
+            success_foreground: theme.success_foreground,
+            warning_foreground: theme.warning_foreground,
             mono_font_family: theme.mono_font_family.clone(),
             mono_font_size: font_size,
         };
