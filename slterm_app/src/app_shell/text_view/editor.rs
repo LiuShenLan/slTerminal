@@ -11,13 +11,13 @@ use gpui::{
 };
 use gpui_component::ActiveTheme as _;
 use gpui_component::input::{
-    MoveDown, MoveLeft, MoveRight, MoveToEndOfLine, MoveToStartOfLine, MoveUp, SelectToEndOfLine,
-    SelectToStartOfLine,
+    Backspace, Delete, Enter, MoveDown, MoveLeft, MoveRight, MoveToEndOfLine, MoveToStartOfLine,
+    MoveUp, Redo, SelectAll, SelectToEndOfLine, SelectToStartOfLine, Undo,
 };
 use ropey::{LineType, Rope};
 use slterm_document::{
-    DocumentId, DocumentSession, EditOrigin, EditTransaction, EditTransactionError, MergePolicy,
-    TextEdit, TextStateId,
+    DocumentId, DocumentSession, EditApplyOutcome, EditOrigin, EditTransaction,
+    EditTransactionError, MergePolicy, TextEdit, TextStateId,
 };
 use uuid::Uuid;
 
@@ -48,13 +48,19 @@ impl DocumentTextSnapshot {
     }
 }
 
+pub(crate) enum DocumentEditRequest {
+    Edit(EditTransaction, TextStateId),
+    Travel { redo: bool },
+}
+
+pub(crate) struct DocumentEditResponse {
+    snapshot: DocumentTextSnapshot,
+    outcome: EditApplyOutcome,
+}
+
 /// 视图只提交事务；组合根同步调用唯一 Registry，并立即返回权威快照。
 type DocumentEditSink = Box<
-    dyn FnMut(
-        EditTransaction,
-        TextStateId,
-        &mut App,
-    ) -> Result<DocumentTextSnapshot, EditTransactionError>,
+    dyn FnMut(DocumentEditRequest, &mut App) -> Result<DocumentEditResponse, EditTransactionError>,
 >;
 
 #[derive(Clone, Copy, Debug)]
@@ -427,6 +433,17 @@ impl DocumentTextView {
                 .clone()
                 .unwrap_or_else(|| self.selection.range()),
         };
+        self.replace_normalized(range, &text, selected, mark, cx);
+    }
+
+    fn replace_normalized(
+        &mut self,
+        range: Range<usize>,
+        text: &str,
+        selected: Option<Range<usize>>,
+        mark: bool,
+        cx: &mut Context<'_, Self>,
+    ) {
         if range.start > range.end
             || range.end > self.text.len()
             || !rope_is_grapheme_boundary(&self.text, range.start)
@@ -436,7 +453,7 @@ impl DocumentTextView {
         }
         let selected_bytes = match selected {
             Some(selected) => {
-                let replacement = Rope::from_str(&text);
+                let replacement = Rope::from_str(text);
                 if selected.start > selected.end || selected.end > replacement.len_utf16() {
                     return;
                 }
@@ -464,20 +481,88 @@ impl DocumentTextView {
         let transaction = EditTransaction {
             document_id: self.document_id,
             expected_text_revision: self.revision,
-            edits: vec![TextEdit::new(range, text.as_ref())],
+            edits: vec![TextEdit::new(range, text)],
             origin: EditOrigin::UserInput,
             merge_policy: MergePolicy::Adjacent,
         };
-        let Ok(snapshot) = (self.edit_sink)(transaction, new_state, cx) else {
+        let Ok(response) = (self.edit_sink)(DocumentEditRequest::Edit(transaction, new_state), cx)
+        else {
             return;
         };
-        self.adopt_snapshot(snapshot);
+        self.adopt_snapshot(response.snapshot);
         self.selection = TextSelection {
             anchor: new_selection.start,
             head: new_selection.end,
         };
         self.marked_range = new_marked;
         self.reconcile_transient_ranges();
+        self.preferred_column = None;
+        self.ensure_cursor_visible();
+        cx.notify();
+    }
+
+    fn edit_by_keyboard(&mut self, range: Range<usize>, text: &str, cx: &mut Context<'_, Self>) {
+        if self.read_only || self.marked_range.is_some() {
+            return;
+        }
+        self.replace_normalized(range, text, None, false, cx);
+    }
+
+    fn backspace(&mut self, cx: &mut Context<'_, Self>) {
+        let range = self.selection.range();
+        let range = if range.start == range.end {
+            let Some(start) = rope_previous_grapheme_boundary(&self.text, range.start) else {
+                return;
+            };
+            start..range.end
+        } else {
+            range
+        };
+        self.edit_by_keyboard(range, "", cx);
+    }
+
+    fn delete(&mut self, cx: &mut Context<'_, Self>) {
+        let range = self.selection.range();
+        let range = if range.start == range.end {
+            let Some(end) = rope_next_grapheme_boundary(&self.text, range.start) else {
+                return;
+            };
+            range.start..end
+        } else {
+            range
+        };
+        self.edit_by_keyboard(range, "", cx);
+    }
+
+    fn insert_newline(&mut self, cx: &mut Context<'_, Self>) {
+        self.edit_by_keyboard(self.selection.range(), "\n", cx);
+    }
+
+    fn select_all(&mut self, cx: &mut Context<'_, Self>) {
+        if self.marked_range.is_some() {
+            return;
+        }
+        self.selection = TextSelection {
+            anchor: 0,
+            head: self.text.len(),
+        };
+        self.preferred_column = None;
+        cx.notify();
+    }
+
+    fn travel_history(&mut self, redo: bool, cx: &mut Context<'_, Self>) {
+        if self.read_only || self.marked_range.is_some() {
+            return;
+        }
+        let Ok(response) = (self.edit_sink)(DocumentEditRequest::Travel { redo }, cx) else {
+            return;
+        };
+        if response.outcome == EditApplyOutcome::Unchanged {
+            return;
+        }
+        self.adopt_snapshot(response.snapshot);
+        self.selection = TextSelection { anchor: 0, head: 0 };
+        self.marked_range = None;
         self.preferred_column = None;
         self.ensure_cursor_visible();
         cx.notify();
@@ -1016,6 +1101,12 @@ impl Render for DocumentTextView {
             .on_action(cx.listener(|view, _: &SelectToEndOfLine, _, cx| {
                 view.move_line_boundary(true, true, cx);
             }))
+            .on_action(cx.listener(|view, _: &Backspace, _, cx| view.backspace(cx)))
+            .on_action(cx.listener(|view, _: &Delete, _, cx| view.delete(cx)))
+            .on_action(cx.listener(|view, _: &Enter, _, cx| view.insert_newline(cx)))
+            .on_action(cx.listener(|view, _: &SelectAll, _, cx| view.select_all(cx)))
+            .on_action(cx.listener(|view, _: &Undo, _, cx| view.travel_history(false, cx)))
+            .on_action(cx.listener(|view, _: &Redo, _, cx| view.travel_history(true, cx)))
             .child(canvas)
     }
 }

@@ -15,7 +15,8 @@ use slterm_path::{CanonicalPath, ResolvedPath};
 use uuid::Uuid;
 
 use super::{
-    DocumentTextSnapshot, DocumentTextView, LayoutMetrics, TextSelection, transform_selection,
+    DocumentEditRequest, DocumentEditResponse, DocumentTextSnapshot, DocumentTextView,
+    LayoutMetrics, TextSelection, transform_selection,
 };
 
 struct Host {
@@ -49,12 +50,24 @@ impl Host {
             DocumentTextView::new(
                 id,
                 session.session(id).unwrap(),
-                Box::new(move |transaction, state, _| {
+                Box::new(move |request, _| {
                     let mut registry = sink_registry.borrow_mut();
-                    registry.apply(transaction, state, Instant::now())?;
-                    Ok(DocumentTextSnapshot::from_session(
-                        registry.session(id).unwrap(),
-                    ))
+                    let outcome = match request {
+                        DocumentEditRequest::Edit(transaction, state) => {
+                            registry.apply(transaction, state, Instant::now())?
+                        }
+                        DocumentEditRequest::Travel { redo } => {
+                            if redo {
+                                registry.redo(id)
+                            } else {
+                                registry.undo(id)
+                            }?
+                        }
+                    };
+                    Ok(DocumentEditResponse {
+                        snapshot: DocumentTextSnapshot::from_session(registry.session(id).unwrap()),
+                        outcome,
+                    })
                 }),
                 cx,
             )
@@ -983,6 +996,126 @@ fn subcell_viewport_still_follows_the_cursor(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn keyboard_editing_actions_commit_through_document(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        crate::app_shell::theme::apply_dark_theme(cx);
+        crate::app_shell::text_view::init(cx);
+    });
+    let window = cx.add_window(|_, cx| Host::new("ab", false, cx));
+    window
+        .update(cx, |host, window, cx| {
+            let focus = host.view.read(cx).focus.clone();
+            window.focus(&focus, cx);
+        })
+        .unwrap();
+    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    visual.run_until_parked();
+    visual.simulate_keystrokes("end");
+    visual.simulate_keystrokes("backspace");
+    visual.simulate_keystrokes("enter");
+    visual.simulate_keystrokes("ctrl-a");
+    visual.simulate_keystrokes("delete");
+    window
+        .update(cx, |host, _, _| assert_eq!(host.text(), ""))
+        .unwrap();
+}
+
+#[gpui::test]
+fn undo_redo_travel_the_shared_document_history(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        crate::app_shell::theme::apply_dark_theme(cx);
+        crate::app_shell::text_view::init(cx);
+    });
+    let window = cx.add_window(|_, cx| Host::new("", false, cx));
+    window
+        .update(cx, |host, window, cx| {
+            let focus = host.view.read(cx).focus.clone();
+            window.focus(&focus, cx);
+        })
+        .unwrap();
+    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    visual.update(|window, cx| {
+        window.draw(cx).clear(cx);
+    });
+    visual.simulate_input("ab");
+    visual.simulate_keystrokes("ctrl-z");
+    window
+        .update(cx, |host, window, cx| {
+            assert_eq!(host.text(), "");
+            host.view.update(cx, |view, cx| {
+                assert_eq!(
+                    view.selected_text_range(false, window, cx).unwrap().range,
+                    0..0
+                );
+            });
+        })
+        .unwrap();
+    visual.simulate_keystrokes("ctrl-y");
+    window
+        .update(cx, |host, _, _| assert_eq!(host.text(), "ab"))
+        .unwrap();
+}
+
+#[gpui::test]
+fn empty_history_does_not_reset_selection(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        crate::app_shell::theme::apply_dark_theme(cx);
+        crate::app_shell::text_view::init(cx);
+    });
+    let window = cx.add_window(|_, cx| Host::new("ab", false, cx));
+    window
+        .update(cx, |host, window, cx| {
+            let focus = host.view.read(cx).focus.clone();
+            window.focus(&focus, cx);
+            host.view.update(cx, |view, cx| {
+                view.set_selected_text_range(1..1, window, cx);
+            });
+        })
+        .unwrap();
+    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    visual.run_until_parked();
+    visual.simulate_keystrokes("ctrl-z");
+    window
+        .update(cx, |host, window, cx| {
+            host.view.update(cx, |view, cx| {
+                assert_eq!(
+                    view.selected_text_range(false, window, cx).unwrap().range,
+                    1..1
+                );
+            });
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn composition_blocks_keyboard_editing_and_history(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        crate::app_shell::theme::apply_dark_theme(cx);
+    });
+    let window = cx.add_window(|_, cx| Host::new("", false, cx));
+    window
+        .update(cx, |host, window, cx| {
+            host.view.update(cx, |view, cx| {
+                view.replace_and_mark_text_in_range(None, "x", None, window, cx);
+                view.backspace(cx);
+                view.delete(cx);
+                view.insert_newline(cx);
+                view.select_all(cx);
+                view.travel_history(false, cx);
+                assert_eq!(view.marked_text_range(window, cx), Some(0..1));
+            });
+            assert_eq!(host.text(), "x");
+        })
+        .unwrap();
+}
+
+#[gpui::test]
 fn read_only_view_rejects_ime_without_touching_document(cx: &mut TestAppContext) {
     cx.update(|cx| {
         gpui_component::init(cx);
@@ -994,6 +1127,10 @@ fn read_only_view_rejects_ime_without_touching_document(cx: &mut TestAppContext)
             host.view.update(cx, |view, cx| {
                 assert!(!view.accepts_text_input(window, cx));
                 view.replace_and_mark_text_in_range(None, "x", None, window, cx);
+                view.backspace(cx);
+                view.delete(cx);
+                view.insert_newline(cx);
+                view.travel_history(false, cx);
             });
             assert_eq!(host.text(), "locked");
         })
