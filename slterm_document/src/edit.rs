@@ -678,6 +678,50 @@ mod tests {
     }
 
     #[test]
+    fn save_receipt_location_must_match_its_completion_kind() {
+        let (mut registry, id, _) = document("0", false);
+        registry
+            .apply(
+                transaction(id, 0, vec![TextEdit::new(1..1, "1")]),
+                state(STATE_B),
+                Instant::now(),
+            )
+            .unwrap();
+        let request = registry.begin_save(id, 0).unwrap();
+        let in_place =
+            DocumentSaveReceipt::new(request, std::sync::Arc::from(b"01".as_slice()), None);
+        assert_eq!(
+            registry.complete_save_as(in_place),
+            Err(crate::SaveTransactionError::LocationMismatch)
+        );
+        assert!(registry.session(id).unwrap().is_saving());
+        assert_eq!(registry.session(id).unwrap().disk_baseline().as_ref(), b"0");
+        registry.fail_save(id, 1).unwrap();
+
+        let request = registry.begin_save(id, 0).unwrap();
+        let relocated = DocumentSaveReceipt::for_save_as(
+            request,
+            std::sync::Arc::from(b"01".as_slice()),
+            slterm_path::ResolvedPath::new(CanonicalPath::new("D:/work/other.txt").unwrap(), None),
+        );
+        assert_eq!(
+            registry.complete_save(relocated),
+            Err(crate::SaveTransactionError::LocationMismatch)
+        );
+        assert!(registry.session(id).unwrap().is_saving());
+        assert_eq!(
+            registry
+                .session(id)
+                .unwrap()
+                .location()
+                .canonical_path()
+                .as_path(),
+            std::path::Path::new("D:/work/file.txt")
+        );
+        registry.fail_save(id, 2).unwrap();
+    }
+
+    #[test]
     fn save_rejects_read_only_exhaustion_and_stale_failure() {
         let (mut readonly, id, _) = document("fixed", true);
         assert_eq!(

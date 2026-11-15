@@ -202,11 +202,10 @@ impl Document {
         })
     }
 
-    /// 从 core 捕获快照执行同一条件保存链，并返回可按代次对账的回执。
-    pub(crate) fn save_request(
-        request: DocumentSaveRequest,
+    fn from_save_snapshot(
+        request: &DocumentSaveRequest,
         write: DocumentWriteContext,
-    ) -> Result<DocumentSaveReceipt, SaveError> {
+    ) -> Result<Self, SaveError> {
         let baseline = request.disk_baseline().to_vec();
         let content = DocumentContent::decode(
             baseline,
@@ -225,13 +224,21 @@ impl Document {
                 .into());
             }
         };
-        let document = Self {
+        Ok(Self {
             snapshot,
             location: request.location().clone(),
             total_bytes: request.disk_baseline().len() as u64,
             modified: None,
             write: Some(write),
-        };
+        })
+    }
+
+    /// 从 core 捕获快照执行同一条件保存链，并返回可按代次对账的回执。
+    pub(crate) fn save_request(
+        request: DocumentSaveRequest,
+        write: DocumentWriteContext,
+    ) -> Result<DocumentSaveReceipt, SaveError> {
+        let document = Self::from_save_snapshot(&request, write)?;
         let saved = document.save(&request.text().to_string())?;
         let disk_baseline = saved.bytes.clone();
         let file_identity = saved.location.file_identity();
@@ -239,6 +246,33 @@ impl Document {
             request,
             disk_baseline,
             file_identity,
+        ))
+    }
+
+    /// 已授权且未占用的另存为目标；源位置不执行任何写入。
+    pub(crate) fn save_as_request(
+        request: DocumentSaveRequest,
+        target: ResolvedPath,
+        write: DocumentWriteContext,
+    ) -> Result<DocumentSaveReceipt, SaveError> {
+        let document = Self::from_save_snapshot(&request, write)?;
+        let bytes = document.snapshot.encode(&request.text().to_string())?;
+        let rechecked = document
+            .write
+            .as_ref()
+            .expect("另存为快照必须携带解析器")
+            .resolver
+            .resolve_write_target(target.canonical_path())?;
+        if rechecked != target {
+            return Err(SaveError::Changed);
+        }
+        let identity =
+            crate::atomic_file::write_with_identity(target.canonical_path().as_path(), &bytes)?;
+        let location = ResolvedPath::new(target.canonical_path().clone(), Some(identity));
+        Ok(DocumentSaveReceipt::for_save_as(
+            request,
+            Arc::from(bytes),
+            location,
         ))
     }
 }

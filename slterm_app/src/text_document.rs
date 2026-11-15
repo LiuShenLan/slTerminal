@@ -30,6 +30,7 @@ pub(crate) enum SaveError {
     Changed,
     ReadOnly,
     Unauthorized,
+    TargetOpen,
     Unrepresentable,
     Io(io::Error),
 }
@@ -52,6 +53,7 @@ impl std::fmt::Display for SaveError {
             Self::Changed => formatter.write_str("文件在打开后已被外部修改"),
             Self::ReadOnly => formatter.write_str("文档处于只读状态"),
             Self::Unauthorized => formatter.write_str("文档写入未获授权或授权代次已变化"),
+            Self::TargetOpen => formatter.write_str("另存为目标已关联其他打开的 Document"),
             Self::Unrepresentable => formatter.write_str("当前编码无法表示文本"),
             Self::Io(error) => error.fmt(formatter),
         }

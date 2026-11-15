@@ -65,7 +65,7 @@ impl DocumentSaveRequest {
 pub struct DocumentSaveReceipt {
     request: DocumentSaveRequest,
     disk_baseline: Arc<[u8]>,
-    file_identity: Option<FileIdentity>,
+    location: ResolvedPath,
 }
 
 impl DocumentSaveReceipt {
@@ -74,10 +74,24 @@ impl DocumentSaveReceipt {
         disk_baseline: Arc<[u8]>,
         file_identity: Option<FileIdentity>,
     ) -> Self {
+        let location = ResolvedPath::new(request.location.canonical_path().clone(), file_identity);
         Self {
             request,
             disk_baseline,
-            file_identity,
+            location,
+        }
+    }
+
+    /// 另存为回执携带用户选定并已实际写入的新位置。
+    pub fn for_save_as(
+        request: DocumentSaveRequest,
+        disk_baseline: Arc<[u8]>,
+        location: ResolvedPath,
+    ) -> Self {
+        Self {
+            request,
+            disk_baseline,
+            location,
         }
     }
 
@@ -101,6 +115,7 @@ pub enum SaveTransactionError {
     SaveInProgress,
     SaveGenerationExhausted,
     StaleSave,
+    LocationMismatch,
 }
 
 impl fmt::Display for SaveTransactionError {
@@ -111,6 +126,7 @@ impl fmt::Display for SaveTransactionError {
             Self::SaveInProgress => "Document 已有保存任务在途",
             Self::SaveGenerationExhausted => "保存代次已耗尽",
             Self::StaleSave => "保存回执不属于当前保存代次",
+            Self::LocationMismatch => "保存回执的位置与保存类型不匹配",
         })
     }
 }
@@ -175,6 +191,22 @@ impl DocumentRegistry {
         &mut self,
         receipt: DocumentSaveReceipt,
     ) -> Result<(), SaveTransactionError> {
+        self.complete_save_at(receipt, false)
+    }
+
+    /// 另存为成功保持 DocumentId，只重绑位置、身份与被保存状态。
+    pub fn complete_save_as(
+        &mut self,
+        receipt: DocumentSaveReceipt,
+    ) -> Result<(), SaveTransactionError> {
+        self.complete_save_at(receipt, true)
+    }
+
+    fn complete_save_at(
+        &mut self,
+        receipt: DocumentSaveReceipt,
+        save_as: bool,
+    ) -> Result<(), SaveTransactionError> {
         let id = receipt.request.document_id;
         let session = self
             .session_mut(id)
@@ -182,17 +214,24 @@ impl DocumentRegistry {
         if session.active_save != Some(receipt.request.save_generation) {
             return Err(SaveTransactionError::StaleSave);
         }
+        let original = receipt.request.location.canonical_path();
+        let target = receipt.location.canonical_path();
+        if (!save_as && target != original) || (save_as && target == original) {
+            return Err(SaveTransactionError::LocationMismatch);
+        }
         let previous_identity = session.location.file_identity();
+        let location_changed = session.location.canonical_path() != target;
         session.saved_state = receipt.request.text_state;
         session.disk_baseline = receipt.disk_baseline;
-        session.location = ResolvedPath::new(
-            session.location.canonical_path().clone(),
-            receipt.file_identity,
-        );
+        session.location = receipt.location;
         session.active_save = None;
         session.history.barrier();
-        if previous_identity != receipt.file_identity {
-            self.refresh_identity(id, receipt.file_identity);
+        let current_identity = session.location.file_identity();
+        if location_changed {
+            self.rebind_path(id);
+        }
+        if previous_identity != current_identity {
+            self.refresh_identity(id, current_identity);
         }
         Ok(())
     }

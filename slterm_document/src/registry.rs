@@ -205,6 +205,12 @@ impl DocumentRegistry {
         Ok((id, DocumentOpenOutcome::Opened))
     }
 
+    pub(crate) fn rebind_path(&mut self, id: DocumentId) {
+        self.paths.retain(|_, owner| *owner != id);
+        let path = self.sessions[&id].location.canonical_path().clone();
+        self.paths.insert(path, id);
+    }
+
     pub(crate) fn refresh_identity(&mut self, id: DocumentId, identity: Option<FileIdentity>) {
         self.identities.retain(|_, owner| *owner != id);
         if let Some(identity) = identity {

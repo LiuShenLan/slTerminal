@@ -131,6 +131,43 @@ impl DocumentSaveService {
         );
         Document::save_request(request, write)
     }
+
+    /// 另存为只使用用户选定目标的单文件写授权；打开目标在写前拒绝。
+    pub(crate) fn save_as(
+        &self,
+        registry: &DocumentRegistry,
+        request: DocumentSaveRequest,
+        target: CanonicalPath,
+        current_authorization_generation: u64,
+    ) -> Result<DocumentSaveReceipt, SaveError> {
+        let resolved = self.resolver.resolve_write_target(&target)?;
+        let session_grant = PathGrant::save_as_target(resolved.canonical_path().clone());
+        let path_request = PathRequest {
+            operation: PathOperation::Write,
+            lexical_path: target.as_path().to_path_buf(),
+            root_hints: Vec::new(),
+            session_grant: Some(session_grant),
+            expected_authorization_generation: request.authorization_generation(),
+        };
+        let authorization = PathPolicy::authorize(
+            &path_request,
+            &resolved,
+            &[],
+            current_authorization_generation,
+        )
+        .map_err(|_| SaveError::Unauthorized)?;
+        let resolved = authorization.resolved_path().clone();
+        if registry.existing(&resolved).is_some() {
+            return Err(SaveError::TargetOpen);
+        }
+        let write = DocumentWriteContext::new(
+            Vec::new(),
+            request.authorization_generation(),
+            current_authorization_generation,
+            self.resolver.clone(),
+        );
+        Document::save_as_request(request, resolved, write)
+    }
 }
 
 #[cfg(test)]
@@ -329,6 +366,95 @@ mod documents_tests {
             encoded
         );
         assert!(!registry.session(id).unwrap().is_dirty());
+    }
+
+    #[test]
+    fn document_save_as_rejects_open_target() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = CanonicalPath::new(dunce::canonicalize(temp.path()).unwrap()).unwrap();
+        let source = temp.path().join("source.txt");
+        let target = temp.path().join("target.txt");
+        std::fs::write(&source, "source").unwrap();
+        std::fs::write(&target, "target").unwrap();
+        let opener = DocumentOpenService::default();
+        let mut registry = DocumentRegistry::new();
+        let source_open = opener
+            .open(&mut registry, &root, &CanonicalPath::new(&source).unwrap())
+            .unwrap();
+        let target_open = opener
+            .open(&mut registry, &root, &CanonicalPath::new(&target).unwrap())
+            .unwrap();
+        let source_location = registry.session(source_open.id).unwrap().location().clone();
+        let request = edited_save_request(&mut registry, source_open.id, "draft", 0);
+
+        let result = DocumentSaveService::default().save_as(
+            &registry,
+            request,
+            CanonicalPath::new(&target).unwrap(),
+            0,
+        );
+
+        assert!(matches!(
+            result,
+            Err(crate::text_document::SaveError::TargetOpen)
+        ));
+        assert_eq!(std::fs::read_to_string(&source).unwrap(), "source");
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "target");
+        assert_eq!(registry.len(), 2);
+        assert_eq!(
+            registry.session(source_open.id).unwrap().location(),
+            &source_location
+        );
+        assert!(registry.session(target_open.id).is_some());
+        registry.fail_save(source_open.id, 1).unwrap();
+        assert!(registry.session(source_open.id).unwrap().is_dirty());
+    }
+
+    #[test]
+    fn document_save_as_rebinds_without_rebuilding() {
+        let temp = tempfile::tempdir().unwrap();
+        let root_path = dunce::canonicalize(temp.path()).unwrap();
+        let root = CanonicalPath::new(&root_path).unwrap();
+        let source = root_path.join("source.txt");
+        let target = root_path.join("target.txt");
+        std::fs::write(&source, "source").unwrap();
+        let mut registry = DocumentRegistry::new();
+        let opened = DocumentOpenService::default()
+            .open(&mut registry, &root, &CanonicalPath::new(&source).unwrap())
+            .unwrap();
+        let request = edited_save_request(&mut registry, opened.id, "draft", 0);
+        let current = TextStateId::from_uuid(Uuid::now_v7()).unwrap();
+        registry
+            .apply(
+                EditTransaction {
+                    document_id: opened.id,
+                    expected_text_revision: request.text_revision(),
+                    edits: vec![TextEdit::new(5..5, " newer")],
+                    origin: EditOrigin::UserInput,
+                    merge_policy: MergePolicy::Adjacent,
+                },
+                current,
+                Instant::now(),
+            )
+            .unwrap();
+
+        let receipt = DocumentSaveService::default()
+            .save_as(&registry, request, CanonicalPath::new(&target).unwrap(), 0)
+            .unwrap();
+        registry.complete_save_as(receipt).unwrap();
+
+        assert_eq!(std::fs::read_to_string(&source).unwrap(), "source");
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "draft");
+        let session = registry.session(opened.id).unwrap();
+        assert_eq!(session.id(), opened.id);
+        assert_eq!(session.text().to_string(), "draft newer");
+        assert_eq!(session.location().canonical_path().as_path(), target);
+        assert_eq!(session.disk_baseline().as_ref(), b"draft");
+        assert_eq!(session.current_state(), current);
+        assert!(session.is_dirty());
+        assert_eq!(registry.existing(session.location()), Some(opened.id));
+        registry.undo(opened.id).unwrap();
+        assert!(!registry.session(opened.id).unwrap().is_dirty());
     }
 
     #[test]
