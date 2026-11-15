@@ -22,7 +22,9 @@ pub use encoding::{
     TextEncoding,
 };
 pub use identity::{DocumentId, StableIdError, TextStateId};
-pub use registry::{DocumentOpenOutcome, DocumentRegistry, DocumentRegistryError, DocumentSession};
+pub use registry::{
+    DocumentMetadata, DocumentOpenOutcome, DocumentRegistry, DocumentRegistryError, DocumentSession,
+};
 pub use repository::{
     CommitId, DiffBinding, InvalidCommitId, InvalidRepoPath, RepoPath, RepositoryBinding,
     RepositoryBindingUnavailable,

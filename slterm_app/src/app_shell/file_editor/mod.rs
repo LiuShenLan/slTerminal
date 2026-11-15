@@ -606,7 +606,9 @@ impl TextFileView {
                 self.notice = Some(match error {
                     SaveError::Changed => EditorNotice::SaveChanged,
                     SaveError::ReadOnly => EditorNotice::SaveReadOnly,
-                    SaveError::Io(error) => EditorNotice::SaveFailed(error.to_string()),
+                    error @ (SaveError::Unrepresentable | SaveError::Io(_)) => {
+                        EditorNotice::SaveFailed(error.to_string())
+                    }
                 });
                 false
             }

@@ -75,16 +75,33 @@ impl TextFileView {
                 Message::EditorEncodingLabel,
                 if document.invalid_encoding {
                     "—"
-                } else if document.bom {
-                    "UTF-8 BOM"
                 } else {
-                    "UTF-8"
+                    match document.encoding.encoding {
+                        slterm_document::DocumentEncoding::Utf8 if document.encoding.bom => {
+                            "UTF-8 BOM"
+                        }
+                        slterm_document::DocumentEncoding::Utf8 => "UTF-8",
+                        slterm_document::DocumentEncoding::Utf16Le if document.encoding.bom => {
+                            "UTF-16 LE BOM"
+                        }
+                        slterm_document::DocumentEncoding::Utf16Be if document.encoding.bom => {
+                            "UTF-16 BE BOM"
+                        }
+                        slterm_document::DocumentEncoding::Utf16Le => "UTF-16 LE",
+                        slterm_document::DocumentEncoding::Utf16Be => "UTF-16 BE",
+                        slterm_document::DocumentEncoding::Gbk => "GBK",
+                        slterm_document::DocumentEncoding::Gb18030 => "GB18030",
+                    }
                 }
                 .to_owned(),
             ));
             properties.push((
                 Message::EditorLineEnding,
-                if document.crlf { "CRLF" } else { "LF" }.to_owned(),
+                match document.encoding.line_ending {
+                    slterm_document::LineEnding::Crlf => "CRLF",
+                    slterm_document::LineEnding::Lf => "LF",
+                }
+                .to_owned(),
             ));
             if let Some(modified) = document.modified() {
                 properties.push((Message::EditorModified, read_modified_time(modified)));

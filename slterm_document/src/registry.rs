@@ -6,7 +6,13 @@ use std::fmt;
 use ropey::Rope;
 use slterm_path::{CanonicalPath, FileIdentity, ResolvedPath};
 
-use crate::{DocumentId, TextStateId};
+use crate::{DocumentId, TextEncoding, TextStateId};
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DocumentMetadata {
+    pub encoding: TextEncoding,
+    pub read_only: bool,
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct DocumentSession {
@@ -16,7 +22,7 @@ pub struct DocumentSession {
     pub(crate) text_revision: u64,
     pub(crate) current_state: TextStateId,
     pub(crate) saved_state: TextStateId,
-    pub(crate) read_only: bool,
+    pub(crate) metadata: DocumentMetadata,
     pub(crate) history: crate::edit::EditHistory,
     pub(crate) known_states: BTreeSet<TextStateId>,
 }
@@ -51,7 +57,11 @@ impl DocumentSession {
     }
 
     pub const fn is_read_only(&self) -> bool {
-        self.read_only
+        self.metadata.read_only
+    }
+
+    pub const fn encoding(&self) -> &TextEncoding {
+        &self.metadata.encoding
     }
 }
 
@@ -133,7 +143,7 @@ impl DocumentRegistry {
         location: ResolvedPath,
         text: Rope,
         state: TextStateId,
-        read_only: bool,
+        metadata: DocumentMetadata,
     ) -> Result<(DocumentId, DocumentOpenOutcome), DocumentRegistryError> {
         if self.sessions.contains_key(&id) {
             return Err(DocumentRegistryError::DocumentIdConflict(id));
@@ -162,7 +172,7 @@ impl DocumentRegistry {
                 text_revision: 0,
                 current_state: state,
                 saved_state: state,
-                read_only,
+                metadata,
                 history: crate::edit::EditHistory::default(),
                 known_states: BTreeSet::from([state]),
             },
@@ -230,7 +240,7 @@ mod registry_tests {
                 location("D:/work/a/file.txt", Some(41)),
                 Rope::from_str("original"),
                 state(),
-                false,
+                DocumentMetadata::default(),
             )
             .unwrap();
         let alias = registry
@@ -239,7 +249,7 @@ mod registry_tests {
                 location("D:/work/b/alias.txt", Some(41)),
                 Rope::from_str("must-not-replace"),
                 state(),
-                false,
+                DocumentMetadata::default(),
             )
             .unwrap();
 
@@ -269,7 +279,7 @@ mod registry_tests {
                 location("D:/work/file.txt", None),
                 Rope::from_str("fallback"),
                 state(),
-                false,
+                DocumentMetadata::default(),
             )
             .unwrap();
 
@@ -279,7 +289,7 @@ mod registry_tests {
                 location("D:/work/file.txt", Some(99)),
                 Rope::from_str("ignored"),
                 state(),
-                false,
+                DocumentMetadata::default(),
             )
             .unwrap();
 
@@ -300,7 +310,7 @@ mod registry_tests {
                 location("D:/work/file.txt", Some(1)),
                 Rope::from_str("old"),
                 state(),
-                false,
+                DocumentMetadata::default(),
             )
             .unwrap();
 
@@ -310,7 +320,7 @@ mod registry_tests {
                 location("D:/work/file.txt", Some(2)),
                 Rope::from_str("new"),
                 state(),
-                false,
+                DocumentMetadata::default(),
             )
             .unwrap();
 
@@ -335,7 +345,7 @@ mod registry_tests {
                 location("D:/work/a/file.txt", Some(41)),
                 Rope::from_str("original"),
                 state(),
-                false,
+                DocumentMetadata::default(),
             )
             .unwrap();
         registry
@@ -344,7 +354,7 @@ mod registry_tests {
                 location("D:/work/b/alias.txt", Some(41)),
                 Rope::from_str("ignored"),
                 state(),
-                false,
+                DocumentMetadata::default(),
             )
             .unwrap();
 
@@ -372,7 +382,7 @@ mod registry_tests {
                     location(path, None),
                     Rope::from_str(document),
                     state(),
-                    false,
+                    DocumentMetadata::default(),
                 )
                 .unwrap();
         }
@@ -393,7 +403,7 @@ mod registry_tests {
                 location("D:/work/a.txt", Some(1)),
                 Rope::from_str("a"),
                 state(),
-                false,
+                DocumentMetadata::default(),
             )
             .unwrap();
 
@@ -402,7 +412,7 @@ mod registry_tests {
             location("D:/work/b.txt", Some(2)),
             Rope::from_str("b"),
             state(),
-            false,
+            DocumentMetadata::default(),
         );
 
         assert_eq!(

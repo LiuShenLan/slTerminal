@@ -1,27 +1,26 @@
-//! 渲染无关的文本快照:编码/行尾/快照比对的单点。
-//!
-//! 本地文件与 gitshow(HEAD 字节)共用同一快照通路;`read_only` 是**类型层**
-//! 合同——encode 入口直接拒绝,不靠 UI 层自觉(边界条 6)。可编辑
-//! `Document`复用同一结构,保存链按 `verify` 拒绝覆盖外部修改。
+//! 渲染无关的文本快照：core 编码路由、磁盘基线与条件保存适配。
 
 use std::io;
 use std::sync::Arc;
 
-/// 可编辑域上限(契约值,§目标形态:超限 = 截断 + 只读)。
-pub(crate) const MAX_BYTES: usize = 8 * 1024 * 1024;
+use slterm_document::{
+    DecodedText, DocumentContent, EDITABLE_LIMIT_BYTES, EncodeError, TextEncoding,
+};
+
+/// 可编辑域与读取上限使用同一契约；Paged 另行只读有限前缀。
+pub(crate) const MAX_BYTES: usize = EDITABLE_LIMIT_BYTES as usize;
 
 #[derive(Clone, Debug)]
 pub(crate) struct TextSnapshot {
     pub text: String,
     /// 载入原文逐字节副本——保存前比对的权威。
     pub bytes: Arc<[u8]>,
-    /// UTF-8 BOM 保留往返。
-    pub bom: bool,
-    /// CRLF 行尾保留往返。
-    pub crlf: bool,
-    /// 超限截断 → 强制只读。
+    pub encoding: TextEncoding,
+    pub completion_enabled: bool,
+    pub syntax_enabled: bool,
+    /// 有界前缀而非完整正文时强制只读。
     pub truncated: bool,
-    /// 非法 UTF-8 / 含 NUL → 强制只读。
+    /// 仅供 GitShow／Diff 的不可用预览；真实 Document 打开会直接拒绝。
     pub invalid_encoding: bool,
     pub read_only: bool,
 }
@@ -30,6 +29,7 @@ pub(crate) struct TextSnapshot {
 pub(crate) enum SaveError {
     Changed,
     ReadOnly,
+    Unrepresentable,
     Io(io::Error),
 }
 
@@ -39,11 +39,18 @@ impl From<io::Error> for SaveError {
     }
 }
 
+impl From<EncodeError> for SaveError {
+    fn from(_: EncodeError) -> Self {
+        Self::Unrepresentable
+    }
+}
+
 impl std::fmt::Display for SaveError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Changed => formatter.write_str("文件在打开后已被外部修改"),
             Self::ReadOnly => formatter.write_str("文档处于只读状态"),
+            Self::Unrepresentable => formatter.write_str("当前编码无法表示文本"),
             Self::Io(error) => error.fmt(formatter),
         }
     }
@@ -52,33 +59,48 @@ impl std::fmt::Display for SaveError {
 impl std::error::Error for SaveError {}
 
 impl TextSnapshot {
-    /// 有界读取器已先移走溢出字节时,仍保持只读合同(不把超限内容
-    /// 交给 decode 造成超大分配后再截断)。
     pub(crate) fn decode_prefix(bytes: Vec<u8>, read_only: bool, truncated: bool) -> Self {
-        let mut snapshot = Self::decode(bytes, read_only);
-        snapshot.truncated |= truncated;
-        snapshot.read_only |= truncated;
-        snapshot
+        let total = bytes.len() as u64;
+        Self::from_content(
+            DocumentContent::decode(bytes, total, None),
+            read_only,
+            truncated,
+        )
     }
 
-    pub(crate) fn decode(mut bytes: Vec<u8>, read_only: bool) -> Self {
-        let truncated = bytes.len() > MAX_BYTES;
-        bytes.truncate(MAX_BYTES);
-        let bom = bytes.starts_with(b"\xef\xbb\xbf");
-        let body = if bom { &bytes[3..] } else { &bytes };
-        let invalid_encoding = std::str::from_utf8(body).is_err() || body.contains(&0);
-        let text = String::from_utf8_lossy(body);
-        // CRLF 判定 = 全文只含 CRLF 一种换行;混排按 LF 处理,避免往返改写。
-        let crlf = text.contains("\r\n") && !text.replace("\r\n", "").contains('\n');
-        let text = text.replace("\r\n", "\n");
+    pub(crate) fn decode(bytes: Vec<u8>, read_only: bool) -> Self {
+        Self::decode_prefix(bytes, read_only, false)
+    }
+
+    pub(crate) fn from_content(content: DocumentContent, read_only: bool, truncated: bool) -> Self {
+        match content {
+            DocumentContent::Editable(decoded) => {
+                Self::from_decoded(decoded, read_only || truncated, truncated)
+            }
+            DocumentContent::Paged(decoded) => Self::from_decoded(decoded, true, truncated),
+            DocumentContent::Unavailable(_) => Self {
+                text: String::new(),
+                bytes: Arc::from(Vec::new()),
+                encoding: TextEncoding::default(),
+                completion_enabled: false,
+                syntax_enabled: false,
+                truncated,
+                invalid_encoding: true,
+                read_only: true,
+            },
+        }
+    }
+
+    fn from_decoded(decoded: DecodedText, read_only: bool, truncated: bool) -> Self {
         Self {
-            text,
-            bytes: bytes.into(),
-            bom,
-            crlf,
+            text: decoded.text,
+            bytes: decoded.disk_baseline,
+            encoding: decoded.encoding,
+            completion_enabled: decoded.completion_enabled,
+            syntax_enabled: decoded.syntax_enabled,
             truncated,
-            invalid_encoding,
-            read_only: read_only || truncated || invalid_encoding,
+            invalid_encoding: false,
+            read_only,
         }
     }
 
@@ -86,21 +108,13 @@ impl TextSnapshot {
         if self.read_only {
             return Err(SaveError::ReadOnly);
         }
-        let mut bytes = if self.bom {
-            b"\xef\xbb\xbf".to_vec()
-        } else {
-            Vec::new()
-        };
-        let encoded = if self.crlf {
-            text.replace('\n', "\r\n")
-        } else {
-            text.to_owned()
-        };
-        bytes.extend_from_slice(encoded.as_bytes());
+        let bytes = self.encoding.encode(text)?;
         if bytes.len() > MAX_BYTES {
-            return Err(
-                io::Error::new(io::ErrorKind::InvalidInput, "可编辑文本上限为 8 MiB").into(),
-            );
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "可编辑文本上限为 50000000 字节",
+            )
+            .into());
         }
         Ok(bytes)
     }
@@ -139,6 +153,18 @@ mod text_document_tests {
             "\u{feff}新标题\r\n".as_bytes()
         );
         assert_eq!(snapshot.encode("").unwrap(), b"\xef\xbb\xbf");
+    }
+
+    #[test]
+    fn unrepresentable_text_is_a_save_failure_without_replacement() {
+        let mut snapshot = TextSnapshot::decode("中文".as_bytes().to_vec(), false);
+        snapshot.encoding.encoding = slterm_document::DocumentEncoding::Gbk;
+
+        assert!(matches!(
+            snapshot.encode("😀"),
+            Err(SaveError::Unrepresentable)
+        ));
+        assert_eq!(snapshot.bytes.as_ref(), "中文".as_bytes());
     }
 
     /// 等长外部修改同样是冲突(verify 逐字节比对)。

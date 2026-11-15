@@ -4,7 +4,9 @@ use std::io;
 use std::sync::Arc;
 
 use ropey::Rope;
-use slterm_document::{DocumentId, DocumentOpenOutcome, DocumentRegistry, TextStateId};
+use slterm_document::{
+    DocumentId, DocumentMetadata, DocumentOpenOutcome, DocumentRegistry, TextStateId,
+};
 use slterm_path::{CanonicalPath, PathOperation, PathPolicy, PathRequest};
 use uuid::Uuid;
 
@@ -74,7 +76,16 @@ impl DocumentOpenService {
             TextStateId::from_uuid(Uuid::now_v7()).expect("系统生成的 TextStateId 必须为 v7");
         let text = Rope::from_str(&document.text);
         let (id, outcome) = registry
-            .open(id, resolved, text, state, document.read_only)
+            .open(
+                id,
+                resolved,
+                text,
+                state,
+                DocumentMetadata {
+                    encoding: document.encoding.clone(),
+                    read_only: document.read_only,
+                },
+            )
             .map_err(io::Error::other)?;
         Ok(OpenedDocument {
             id,
@@ -131,6 +142,35 @@ mod documents_tests {
 
         assert!(result.is_err());
         assert!(registry.is_empty());
+    }
+
+    #[test]
+    fn editor_encoding_and_binary_routing() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = CanonicalPath::new(temp.path()).unwrap();
+        let gbk = temp.path().join("gbk.txt");
+        let invalid = temp.path().join("invalid.txt");
+        let binary = temp.path().join("binary.txt");
+        std::fs::write(&gbk, [0xd6, 0xd0, 0xce, 0xc4]).unwrap();
+        std::fs::write(&invalid, [0xff]).unwrap();
+        std::fs::write(&binary, b"text\0binary").unwrap();
+        let content = slterm_document::DocumentContent::decode(
+            std::fs::read(&gbk).unwrap(),
+            4,
+            Some(slterm_document::DocumentEncoding::Gbk),
+        );
+        assert!(matches!(
+            content,
+            slterm_document::DocumentContent::Editable(text) if text.text == "中文"
+        ));
+
+        let service = DocumentOpenService::default();
+        let mut registry = DocumentRegistry::new();
+        for path in [invalid, binary] {
+            let result = service.open(&mut registry, &root, &CanonicalPath::new(path).unwrap());
+            assert!(result.is_err());
+            assert!(registry.is_empty());
+        }
     }
 
     #[test]

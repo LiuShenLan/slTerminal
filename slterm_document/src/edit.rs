@@ -193,7 +193,7 @@ impl crate::DocumentSession {
         transaction: &EditTransaction,
         new_state: TextStateId,
     ) -> Result<(), EditTransactionError> {
-        if self.read_only {
+        if self.metadata.read_only {
             return Err(EditTransactionError::ReadOnly);
         }
         if self.text_revision != transaction.expected_text_revision {
@@ -364,8 +364,8 @@ mod tests {
     use slterm_path::CanonicalPath;
 
     use crate::{
-        DocumentId, DocumentRegistry, EditApplyOutcome, EditOrigin, EditTransaction,
-        EditTransactionError, MergePolicy, TextEdit, TextStateId,
+        DocumentId, DocumentMetadata, DocumentRegistry, EditApplyOutcome, EditOrigin,
+        EditTransaction, EditTransactionError, MergePolicy, TextEdit, TextStateId,
     };
 
     const DOCUMENT: &str = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0f2a";
@@ -391,7 +391,10 @@ mod tests {
                 ),
                 Rope::from_str(text),
                 state,
-                read_only,
+                DocumentMetadata {
+                    read_only,
+                    ..DocumentMetadata::default()
+                },
             )
             .unwrap();
         (registry, id, state)

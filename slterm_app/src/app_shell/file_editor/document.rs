@@ -1,7 +1,7 @@
 //! 文档载入与条件保存。
 //!
-//! 保存链 = 磁盘快照逐字节比对(`TextSnapshot::verify`)→ 编码回写
-//! (`encode`,BOM/CRLF 往返)→ 原子替换(`atomic_file::write`)。任一步失败
+//! 保存链 = 磁盘快照逐字节比对(`TextSnapshot::verify`)→ core 编码回写
+//! (BOM／首个行尾／原始编码往返，不可表示字符明确失败)→ 原子替换(`atomic_file::write`)。任一步失败
 //! 都不破坏磁盘:Changed 拒绝覆盖外部修改,ReadOnly 拒绝写只读/截断文档,
 //! Io 原样上抛给提示横幅。
 //!
@@ -14,10 +14,13 @@ use std::io::Read as _;
 use std::path::Path;
 use std::time::SystemTime;
 
+use slterm_document::{DocumentContent, EDITABLE_LIMIT_BYTES};
 use slterm_path::{CanonicalPath, ResolvedPath};
 
 use crate::document_io;
 use crate::text_document::{MAX_BYTES, SaveError, TextSnapshot};
+
+const PAGED_PREFIX_BYTES: usize = 2 * 1024 * 1024;
 
 #[derive(Clone, Debug)]
 pub(crate) struct Document {
@@ -57,10 +60,22 @@ impl Document {
         let metadata = file.metadata()?;
         let identity = crate::atomic_file::file_identity(&file)?;
         let location = ResolvedPath::new(canonical, Some(identity));
-        let (bytes, truncated) = document_io::read_prefix(&mut file, metadata.len(), MAX_BYTES)?;
+        let limit = if metadata.len() > EDITABLE_LIMIT_BYTES {
+            PAGED_PREFIX_BYTES
+        } else {
+            MAX_BYTES
+        };
+        let (bytes, truncated) = document_io::read_prefix(&mut file, metadata.len(), limit)?;
+        let content = DocumentContent::decode(bytes, metadata.len(), None);
+        if matches!(content, DocumentContent::Unavailable(_)) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "内容不是可建立的文本编辑基线",
+            ));
+        }
         Ok(Self {
-            snapshot: TextSnapshot::decode_prefix(
-                bytes,
+            snapshot: TextSnapshot::from_content(
+                content,
                 metadata.permissions().readonly(),
                 truncated,
             ),
@@ -159,19 +174,62 @@ mod document_tests {
         assert!(!path.exists());
     }
 
-    /// 截断/非法编码快照永不可写(只读合同在 encode 层)。
+    /// 截断前缀永不可写；未知编码与 NUL 不得建立可保存正文基线。
     #[test]
-    fn partial_or_lossy_previews_can_never_be_saved() {
+    fn partial_or_unavailable_documents_cannot_be_saved() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("large.txt");
         fs::write(&path, vec![b'x'; MAX_BYTES + 1]).unwrap();
         let doc = Document::load(&path).unwrap();
         assert!(doc.truncated && doc.read_only);
         assert!(matches!(doc.save(&path, "short"), Err(SaveError::ReadOnly)));
-        fs::write(&path, [0xff, 0xfe, 0]).unwrap();
-        let doc = Document::load(&path).unwrap();
-        assert!(doc.invalid_encoding && doc.read_only);
-        assert!(matches!(doc.save(&path, "text"), Err(SaveError::ReadOnly)));
+        for bytes in [b"\xff".as_slice(), b"text\0binary".as_slice()] {
+            fs::write(&path, bytes).unwrap();
+            assert!(Document::load(&path).is_err());
+        }
+    }
+
+    #[test]
+    fn utf16_bom_files_round_trip_through_real_document_io() {
+        for little_endian in [true, false] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("utf16.txt");
+            let mut bytes = if little_endian {
+                b"\xff\xfe".to_vec()
+            } else {
+                b"\xfe\xff".to_vec()
+            };
+            for unit in "标题😀\r\n".encode_utf16() {
+                let encoded = if little_endian {
+                    unit.to_le_bytes()
+                } else {
+                    unit.to_be_bytes()
+                };
+                bytes.extend_from_slice(&encoded);
+            }
+            fs::write(&path, bytes).unwrap();
+
+            let doc = Document::load(&path).unwrap();
+            assert_eq!(doc.text, "标题😀\n");
+            assert!(!doc.read_only);
+            let saved = doc.save(&path, "新😀\n").unwrap();
+            assert_eq!(saved.text, "新😀\n");
+            let reread = fs::read(&path).unwrap();
+            let mut expected = if little_endian {
+                b"\xff\xfe".to_vec()
+            } else {
+                b"\xfe\xff".to_vec()
+            };
+            for unit in "新😀\r\n".encode_utf16() {
+                let encoded = if little_endian {
+                    unit.to_le_bytes()
+                } else {
+                    unit.to_be_bytes()
+                };
+                expected.extend_from_slice(&encoded);
+            }
+            assert_eq!(reread, expected);
+        }
     }
 
     /// 只读属性文件载入即只读,保存被类型层拒绝。
