@@ -9,11 +9,17 @@
 mod grammar_audit;
 
 mod edit;
+mod encoding;
 mod identity;
 mod registry;
 mod repository;
 pub use edit::{
     EditApplyOutcome, EditOrigin, EditTransaction, EditTransactionError, MergePolicy, TextEdit,
+};
+pub use encoding::{
+    BINARY_PROBE_BYTES, ContentUnavailable, DecodedText, DocumentContent, DocumentEncoding,
+    EDITABLE_LIMIT_BYTES, EncodeError, LineEnding, NORMAL_EDIT_LIMIT_BYTES, SYNTAX_LIMIT_BYTES,
+    TextEncoding,
 };
 pub use identity::{DocumentId, StableIdError, TextStateId};
 pub use registry::{DocumentOpenOutcome, DocumentRegistry, DocumentRegistryError, DocumentSession};

@@ -6464,6 +6464,7 @@ dependencies = [
 name = "slterm_document"
 version = "0.0.0"
 dependencies = [
+ "encoding_rs",
  "proptest 1.12.0",
  "ropey",
  "slterm_path",
