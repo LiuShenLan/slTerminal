@@ -97,6 +97,13 @@ impl DocumentOpenService {
     }
 }
 
+/// 另存为对既有磁盘目标的显式用户决定。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ExistingTargetPolicy {
+    RequireConfirmation,
+    OverwriteConfirmed,
+}
+
 /// 后台 Document 保存：只消费前台捕获的不可变请求，不回读实时正文。
 pub(crate) struct DocumentSaveService {
     resolver: Arc<dyn DocumentPathResolver>,
@@ -139,6 +146,7 @@ impl DocumentSaveService {
         request: DocumentSaveRequest,
         target: CanonicalPath,
         current_authorization_generation: u64,
+        existing_target: ExistingTargetPolicy,
     ) -> Result<DocumentSaveReceipt, SaveError> {
         let resolved = self.resolver.resolve_write_target(&target)?;
         let session_grant = PathGrant::save_as_target(resolved.canonical_path().clone());
@@ -159,6 +167,11 @@ impl DocumentSaveService {
         let resolved = authorization.resolved_path().clone();
         if registry.existing(&resolved).is_some() {
             return Err(SaveError::TargetOpen);
+        }
+        if resolved.file_identity().is_some()
+            && existing_target == ExistingTargetPolicy::RequireConfirmation
+        {
+            return Err(SaveError::TargetExists);
         }
         let write = DocumentWriteContext::new(
             Vec::new(),
@@ -392,6 +405,7 @@ mod documents_tests {
             request,
             CanonicalPath::new(&target).unwrap(),
             0,
+            ExistingTargetPolicy::RequireConfirmation,
         );
 
         assert!(matches!(
@@ -439,7 +453,13 @@ mod documents_tests {
             .unwrap();
 
         let receipt = DocumentSaveService::default()
-            .save_as(&registry, request, CanonicalPath::new(&target).unwrap(), 0)
+            .save_as(
+                &registry,
+                request,
+                CanonicalPath::new(&target).unwrap(),
+                0,
+                ExistingTargetPolicy::RequireConfirmation,
+            )
             .unwrap();
         registry.complete_save_as(receipt).unwrap();
 
@@ -454,6 +474,52 @@ mod documents_tests {
         assert!(session.is_dirty());
         assert_eq!(registry.existing(session.location()), Some(opened.id));
         registry.undo(opened.id).unwrap();
+        assert!(!registry.session(opened.id).unwrap().is_dirty());
+    }
+
+    #[test]
+    fn document_save_as_existing_target_requires_confirmation() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = CanonicalPath::new(dunce::canonicalize(temp.path()).unwrap()).unwrap();
+        let source = temp.path().join("source.txt");
+        let target = temp.path().join("target.txt");
+        std::fs::write(&source, "source").unwrap();
+        std::fs::write(&target, "target").unwrap();
+        let mut registry = DocumentRegistry::new();
+        let opened = DocumentOpenService::default()
+            .open(&mut registry, &root, &CanonicalPath::new(&source).unwrap())
+            .unwrap();
+        let request = edited_save_request(&mut registry, opened.id, "draft", 0);
+
+        let result = DocumentSaveService::default().save_as(
+            &registry,
+            request,
+            CanonicalPath::new(&target).unwrap(),
+            0,
+            ExistingTargetPolicy::RequireConfirmation,
+        );
+
+        assert!(matches!(
+            result,
+            Err(crate::text_document::SaveError::TargetExists)
+        ));
+        assert_eq!(std::fs::read_to_string(&source).unwrap(), "source");
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "target");
+        registry.fail_save(opened.id, 1).unwrap();
+
+        let request = registry.begin_save(opened.id, 0).unwrap();
+        let receipt = DocumentSaveService::default()
+            .save_as(
+                &registry,
+                request,
+                CanonicalPath::new(&target).unwrap(),
+                0,
+                ExistingTargetPolicy::OverwriteConfirmed,
+            )
+            .unwrap();
+        registry.complete_save_as(receipt).unwrap();
+        assert_eq!(std::fs::read_to_string(&source).unwrap(), "source");
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "draft");
         assert!(!registry.session(opened.id).unwrap().is_dirty());
     }
 

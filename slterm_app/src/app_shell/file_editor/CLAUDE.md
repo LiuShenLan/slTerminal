@@ -5,8 +5,8 @@
 ## 决策与红线
 
 - **只读是类型层合同**：`TextSnapshot` 的 `read_only` 在 `encode` 入口拒绝；UI 的 `disabled` 只是辅助，不得作为唯一防线。普通源码 tab 的源码态可编辑。原因：只读意图必须在写入边界强制。边界：只读文档（truncated/gitshow/diff）不得挂 gutter，也不得经可写入口。
-- **保存链单点**：`DocumentSaveService` 消费 core 捕获的不可变保存请求，与既有视图保存共用 `Document` 的「重新解析与 Write 授权 → 真实句柄身份、权限和磁盘字节复核 → core 编码 → `atomic_file` 原子替换」链；保存只写当前绑定位置，不接受调用方另传路径。Changed/ReadOnly/Unauthorized/TargetOpen/Unrepresentable/Io 结果经提示横幅或保存回执上抛，失败不破坏磁盘；替换后的文件身份直接来自原子写句柄。原因：重定向、失权、外部修改与编码失败必须可观测且不得产生半份文件。
-- **另存为边界**：`DocumentSaveService::save_as` 使用用户选定目标的单文件 Write 授权，允许尚不存在的目标但只规范化其父目录并拒绝悬空链接；目标已关联任何打开 Document 时写前拒绝。编码后、原子替换前再次解析并比较目标，成功回执只写新位置并保持 DocumentId，原文件不变。原因：另存为不得覆盖其他实时聚合或跟随编码期间的重定向。
+- **保存链单点**：`DocumentSaveService` 消费 core 捕获的不可变保存请求，与既有视图保存共用 `Document` 的「重新解析与 Write 授权 → 真实句柄身份、权限和磁盘字节复核 → core 编码 → `atomic_file` 原子替换」链；保存只写当前绑定位置，不接受调用方另传路径。Changed/ReadOnly/Unauthorized/TargetOpen/TargetExists/Unrepresentable/Io 结果经提示横幅或保存回执上抛，失败不破坏磁盘；替换后的文件身份直接来自原子写句柄。原因：重定向、失权、外部修改与编码失败必须可观测且不得产生半份文件。
+- **另存为边界**：`DocumentSaveService::save_as` 使用用户选定目标的单文件 Write 授权，允许尚不存在的目标但只规范化其父目录并拒绝悬空链接；目标已关联任何打开 Document 时写前拒绝，目标虽未打开但已存在时必须有 `OverwriteConfirmed` 决定。编码后、原子替换前再次解析并比较目标，成功回执只写新位置并保持 DocumentId，原文件不变。原因：另存为不得覆盖其他实时聚合或跟随编码期间的重定向。
 - **脏标记语义**：当前输入文本 vs 已保存快照；保存完成只清理「写完时」的版本，保存期间的新草稿仍保持脏。脏 tab 关闭必须走确认（保存/不保存/取消）。
 - **后台读盘**：读盘/解码在后台 executor，前台只在载入结果回调里落快照；Gitshow 的 HEAD 字节与本地文件走同一快照通路，区别只在数据源与只读意图。`Document` 在真实打开句柄上记录规范位置与 core 文件身份，保存后刷新替换目标的身份；`app_shell::documents` 是唯一项目内真实打开服务，依次执行解析、PathPolicy 读授权、聚合查重、bounded load 与身份复核；AppRoot 的新 Editor 面板只经 `TextFileView::from_document` 消费已载入快照，既有聚合的新视图复用原已保存快照，不再触发第二次正文读盘。原因：前台不得阻塞 I/O，且授权、正文与文件身份不得因重定向错绑。边界：服务只由后台执行体调用；不得在前台整文件物化，失败不得注册空 Document。
 - **外部变化服务**：`DocumentExternalService` 在后台重新解析并执行 Read 授权，只经 `Document::load` 有界读取；干净修改生成重载，脏修改与在途保存由 core 转为共享冲突，删除保留正文。PathPolicy 拒绝与 OS PermissionDenied 都标记 ReadRevoked，之后不再解析或读盘；真实改名复核目标占用、身份与基线后经 `Relocated` 重绑。原因：外部事件不得绕过授权、覆盖本地草稿或重建 Document。

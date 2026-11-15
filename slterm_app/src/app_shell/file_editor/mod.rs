@@ -607,6 +607,7 @@ impl TextFileView {
                     SaveError::ReadOnly => EditorNotice::SaveReadOnly,
                     error @ (SaveError::Unauthorized
                     | SaveError::TargetOpen
+                    | SaveError::TargetExists
                     | SaveError::Unrepresentable
                     | SaveError::Io(_)) => EditorNotice::SaveFailed(error.to_string()),
                 });
