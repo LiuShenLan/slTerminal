@@ -1,9 +1,9 @@
 //! 文档载入与条件保存。
 //!
-//! 保存链 = 磁盘快照逐字节比对(`TextSnapshot::verify`)→ core 编码回写
-//! (BOM／首个行尾／原始编码往返，不可表示字符明确失败)→ 原子替换(`atomic_file::write`)。任一步失败
+//! 保存链 = 写前重解析与授权 → 真实句柄身份／权限／磁盘基线复核 → core 编码回写
+//! (BOM／首个行尾／原始编码往返，不可表示字符明确失败)→ 原子替换。任一步失败
 //! 都不破坏磁盘:Changed 拒绝覆盖外部修改,ReadOnly 拒绝写只读/截断文档,
-//! Io 原样上抛给提示横幅。
+//! Unauthorized 拒绝失权写入,Io 原样上抛给提示横幅。
 //!
 //! 与上游实现的差异仅在原子写载体:本仓锁定的持久化原语是
 //! `crate::atomic_file`(临时文件 + `MoveFileExW`),不再另起 `tempfile` 臂。
@@ -12,15 +12,55 @@
 use std::fs;
 use std::io::Read as _;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::SystemTime;
 
-use slterm_document::{DocumentContent, EDITABLE_LIMIT_BYTES};
-use slterm_path::{CanonicalPath, ResolvedPath};
+use slterm_document::{
+    DocumentContent, DocumentSaveReceipt, DocumentSaveRequest, EDITABLE_LIMIT_BYTES,
+};
+use slterm_path::{CanonicalPath, PathGrant, PathOperation, PathPolicy, PathRequest, ResolvedPath};
 
 use crate::document_io;
+use crate::platform::document_paths::DocumentPathResolver;
 use crate::text_document::{MAX_BYTES, SaveError, TextSnapshot};
 
 const PAGED_PREFIX_BYTES: usize = 2 * 1024 * 1024;
+
+/// 保存时使用的最小授权集合与代次；解析器必须与打开服务同源。
+#[derive(Clone)]
+pub(crate) struct DocumentWriteContext {
+    grants: Vec<PathGrant>,
+    expected_generation: u64,
+    current_generation: u64,
+    resolver: Arc<dyn DocumentPathResolver>,
+}
+
+impl DocumentWriteContext {
+    pub(crate) fn new(
+        grants: Vec<PathGrant>,
+        expected_generation: u64,
+        current_generation: u64,
+        resolver: Arc<dyn DocumentPathResolver>,
+    ) -> Self {
+        Self {
+            grants,
+            expected_generation,
+            current_generation,
+            resolver,
+        }
+    }
+}
+
+impl std::fmt::Debug for DocumentWriteContext {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DocumentWriteContext")
+            .field("grants", &self.grants)
+            .field("expected_generation", &self.expected_generation)
+            .field("current_generation", &self.current_generation)
+            .finish_non_exhaustive()
+    }
+}
 
 #[derive(Clone, Debug)]
 pub(crate) struct Document {
@@ -31,6 +71,8 @@ pub(crate) struct Document {
     pub(crate) total_bytes: u64,
     /// 载入/保存后的磁盘修改时间(信息栏展示)。
     modified: Option<SystemTime>,
+    /// 未挂接写授权的加载入口必须 fail-closed。
+    write: Option<DocumentWriteContext>,
 }
 
 impl std::ops::Deref for Document {
@@ -82,15 +124,43 @@ impl Document {
             location,
             total_bytes: metadata.len(),
             modified: metadata.modified().ok(),
+            write: None,
         })
     }
 
-    /// 保存前比对:路径未被替换、磁盘仍可写、字节与载入快照逐字节一致。
-    fn check_current(&self, path: &Path) -> Result<(), SaveError> {
-        if dunce::canonicalize(path)?.as_path() != self.location.canonical_path().as_path() {
+    pub(crate) fn with_write_context(mut self, write: DocumentWriteContext) -> Self {
+        self.write = Some(write);
+        self
+    }
+
+    /// 写前重新解析并授权，再比较真实句柄身份、权限与完整磁盘基线。
+    fn authorize_current(&self) -> Result<ResolvedPath, SaveError> {
+        let write = self.write.as_ref().ok_or(SaveError::Unauthorized)?;
+        let lexical = self.location.canonical_path();
+        let resolved = write.resolver.resolve(lexical)?;
+        let request = PathRequest {
+            operation: PathOperation::Write,
+            lexical_path: lexical.as_path().to_path_buf(),
+            root_hints: Vec::new(),
+            session_grant: None,
+            expected_authorization_generation: write.expected_generation,
+        };
+        let authorization =
+            PathPolicy::authorize(&request, &resolved, &write.grants, write.current_generation)
+                .map_err(|_| SaveError::Unauthorized)?;
+        let resolved = authorization.resolved_path();
+        if resolved != &self.location {
             return Err(SaveError::Changed);
         }
-        let file = fs::File::open(self.location.canonical_path().as_path())?;
+        Ok(resolved.clone())
+    }
+
+    /// 保存前比对:真实句柄身份未变、磁盘仍可写、字节与载入快照逐字节一致。
+    fn check_current(&self, resolved: &ResolvedPath) -> Result<(), SaveError> {
+        let file = fs::File::open(resolved.canonical_path().as_path())?;
+        if Some(crate::atomic_file::file_identity(&file)?) != self.location.file_identity() {
+            return Err(SaveError::Changed);
+        }
         let metadata = file.metadata()?;
         if metadata.permissions().readonly() {
             return Err(SaveError::ReadOnly);
@@ -104,27 +174,72 @@ impl Document {
     }
 
     /// 条件保存:文本未变 = 无写盘;成功后返回以新字节为准的快照。
-    pub(crate) fn save(&self, path: &Path, text: &str) -> Result<Self, SaveError> {
+    pub(crate) fn save(&self, text: &str) -> Result<Self, SaveError> {
         if self.read_only {
             return Err(SaveError::ReadOnly);
         }
-        self.check_current(path)?;
+        let resolved = self.authorize_current()?;
+        self.check_current(&resolved)?;
         if text == self.text {
             return Ok(self.clone());
         }
         let bytes = self.snapshot.encode(text)?;
         // 失败不触碰目标文件:临时文件与替换都在原子原语内部收口。
-        crate::atomic_file::write(self.location.canonical_path().as_path(), &bytes)?;
-        let file = fs::File::open(self.location.canonical_path().as_path())?;
-        let metadata = file.metadata()?;
-        let identity = crate::atomic_file::file_identity(&file)?;
-        let location = ResolvedPath::new(self.location.canonical_path().clone(), Some(identity));
+        let identity =
+            crate::atomic_file::write_with_identity(resolved.canonical_path().as_path(), &bytes)?;
+        let modified = fs::metadata(resolved.canonical_path().as_path())
+            .and_then(|metadata| metadata.modified())
+            .ok();
+        let location = ResolvedPath::new(resolved.canonical_path().clone(), Some(identity));
+        let total_bytes = bytes.len() as u64;
+        let content = DocumentContent::decode(bytes, total_bytes, Some(self.encoding.encoding));
         Ok(Self {
-            total_bytes: bytes.len() as u64,
-            snapshot: TextSnapshot::decode(bytes, false),
+            total_bytes,
+            snapshot: TextSnapshot::from_content(content, false, false),
             location,
-            modified: metadata.modified().ok(),
+            modified,
+            write: self.write.clone(),
         })
+    }
+
+    /// 从 core 捕获快照执行同一条件保存链，并返回可按代次对账的回执。
+    pub(crate) fn save_request(
+        request: DocumentSaveRequest,
+        write: DocumentWriteContext,
+    ) -> Result<DocumentSaveReceipt, SaveError> {
+        let baseline = request.disk_baseline().to_vec();
+        let content = DocumentContent::decode(
+            baseline,
+            request.disk_baseline().len() as u64,
+            Some(request.encoding().encoding),
+        );
+        let snapshot = match content {
+            DocumentContent::Editable(decoded) | DocumentContent::Paged(decoded) => {
+                TextSnapshot::from_content(DocumentContent::Editable(decoded), false, false)
+            }
+            DocumentContent::Unavailable(_) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "保存请求的磁盘基线不可解码",
+                )
+                .into());
+            }
+        };
+        let document = Self {
+            snapshot,
+            location: request.location().clone(),
+            total_bytes: request.disk_baseline().len() as u64,
+            modified: None,
+            write: Some(write),
+        };
+        let saved = document.save(&request.text().to_string())?;
+        let disk_baseline = saved.bytes.clone();
+        let file_identity = saved.location.file_identity();
+        Ok(DocumentSaveReceipt::new(
+            request,
+            disk_baseline,
+            file_identity,
+        ))
     }
 }
 
@@ -132,21 +247,34 @@ impl Document {
 mod document_tests {
     use super::*;
 
+    fn load_writable(path: &Path) -> Document {
+        let root =
+            CanonicalPath::new(dunce::canonicalize(path.parent().unwrap()).unwrap()).unwrap();
+        Document::load(path)
+            .unwrap()
+            .with_write_context(DocumentWriteContext::new(
+                vec![PathGrant::project_root(root)],
+                0,
+                0,
+                Arc::new(crate::platform::document_paths::SystemDocumentPathResolver),
+            ))
+    }
+
     /// 保存保留 BOM/CRLF/Unicode;空串保存为仅 BOM 文件。
     #[test]
     fn saving_preserves_bom_crlf_and_unicode() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("中文.md");
         fs::write(&path, b"\xef\xbb\xbf# title\r\nold\r\n").unwrap();
-        let doc = Document::load(&path).unwrap();
+        let doc = load_writable(&path);
         assert_eq!(doc.text, "# title\nold\n");
-        let saved = doc.save(&path, "# 标题\n新内容\n").unwrap();
+        let saved = doc.save("# 标题\n新内容\n").unwrap();
         assert_eq!(
             fs::read(&path).unwrap(),
             "\u{feff}# 标题\r\n新内容\r\n".as_bytes()
         );
         assert_eq!(saved.text, "# 标题\n新内容\n");
-        saved.save(&path, "").unwrap();
+        saved.save("").unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"\xef\xbb\xbf");
     }
 
@@ -156,9 +284,9 @@ mod document_tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("test.rs");
         fs::write(&path, "first").unwrap();
-        let doc = Document::load(&path).unwrap();
+        let doc = load_writable(&path);
         fs::write(&path, "other").unwrap();
-        assert!(matches!(doc.save(&path, "draft"), Err(SaveError::Changed)));
+        assert!(matches!(doc.save("draft"), Err(SaveError::Changed)));
         assert_eq!(fs::read_to_string(&path).unwrap(), "other");
     }
 
@@ -168,9 +296,9 @@ mod document_tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("gone.rs");
         fs::write(&path, "first").unwrap();
-        let doc = Document::load(&path).unwrap();
+        let doc = load_writable(&path);
         fs::remove_file(&path).unwrap();
-        assert!(doc.save(&path, "draft").is_err());
+        assert!(doc.save("draft").is_err());
         assert!(!path.exists());
     }
 
@@ -180,9 +308,9 @@ mod document_tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("large.txt");
         fs::write(&path, vec![b'x'; MAX_BYTES + 1]).unwrap();
-        let doc = Document::load(&path).unwrap();
+        let doc = load_writable(&path);
         assert!(doc.truncated && doc.read_only);
-        assert!(matches!(doc.save(&path, "short"), Err(SaveError::ReadOnly)));
+        assert!(matches!(doc.save("short"), Err(SaveError::ReadOnly)));
         for bytes in [b"\xff".as_slice(), b"text\0binary".as_slice()] {
             fs::write(&path, bytes).unwrap();
             assert!(Document::load(&path).is_err());
@@ -209,10 +337,10 @@ mod document_tests {
             }
             fs::write(&path, bytes).unwrap();
 
-            let doc = Document::load(&path).unwrap();
+            let doc = load_writable(&path);
             assert_eq!(doc.text, "标题😀\n");
             assert!(!doc.read_only);
-            let saved = doc.save(&path, "新😀\n").unwrap();
+            let saved = doc.save("新😀\n").unwrap();
             assert_eq!(saved.text, "新😀\n");
             let reread = fs::read(&path).unwrap();
             let mut expected = if little_endian {
@@ -241,12 +369,9 @@ mod document_tests {
         let mut permissions = fs::metadata(&path).unwrap().permissions();
         permissions.set_readonly(true);
         fs::set_permissions(&path, permissions).unwrap();
-        let doc = Document::load(&path).unwrap();
+        let doc = load_writable(&path);
         assert!(doc.read_only);
-        assert!(matches!(
-            doc.save(&path, "unlocked"),
-            Err(SaveError::ReadOnly)
-        ));
+        assert!(matches!(doc.save("unlocked"), Err(SaveError::ReadOnly)));
         // 测试夹具清理:项目仅 Windows,无 Unix 世界可写语义;clippy 的
         // Unix 告警不适用。
         #[allow(clippy::permissions_set_readonly_false)]

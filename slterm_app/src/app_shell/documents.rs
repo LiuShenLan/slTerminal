@@ -5,13 +5,15 @@ use std::sync::Arc;
 
 use ropey::Rope;
 use slterm_document::{
-    DocumentId, DocumentMetadata, DocumentOpenOutcome, DocumentRegistry, TextStateId,
+    DocumentId, DocumentMetadata, DocumentOpenOutcome, DocumentRegistry, DocumentSaveReceipt,
+    DocumentSaveRequest, TextStateId,
 };
-use slterm_path::{CanonicalPath, PathOperation, PathPolicy, PathRequest};
+use slterm_path::{CanonicalPath, PathGrant, PathOperation, PathPolicy, PathRequest};
 use uuid::Uuid;
 
-use super::file_editor::document::Document;
+use super::file_editor::document::{Document, DocumentWriteContext};
 use crate::platform::document_paths::{DocumentPathResolver, SystemDocumentPathResolver};
+use crate::text_document::SaveError;
 
 pub(crate) struct OpenedDocument {
     pub(crate) id: DocumentId,
@@ -48,13 +50,10 @@ impl DocumentOpenService {
             session_grant: None,
             expected_authorization_generation: 0,
         };
-        let authorization = PathPolicy::authorize(
-            &request,
-            &resolved,
-            &[slterm_path::PathGrant::project_root(project_root.clone())],
-            0,
-        )
-        .map_err(|_| io::Error::new(io::ErrorKind::PermissionDenied, "文档读取未获授权"))?;
+        let grant = PathGrant::project_root(project_root.clone());
+        let authorization =
+            PathPolicy::authorize(&request, &resolved, std::slice::from_ref(&grant), 0)
+                .map_err(|_| io::Error::new(io::ErrorKind::PermissionDenied, "文档读取未获授权"))?;
         let resolved = authorization.resolved_path().clone();
         if let Some(id) = registry.existing(&resolved) {
             return Ok(OpenedDocument {
@@ -64,7 +63,9 @@ impl DocumentOpenService {
             });
         }
 
-        let document = Document::load(resolved.canonical_path().as_path())?;
+        let document = Document::load(resolved.canonical_path().as_path())?.with_write_context(
+            DocumentWriteContext::new(vec![grant], 0, 0, self.resolver.clone()),
+        );
         if document.location() != &resolved {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -81,6 +82,7 @@ impl DocumentOpenService {
                 resolved,
                 text,
                 state,
+                document.bytes.clone(),
                 DocumentMetadata {
                     encoding: document.encoding.clone(),
                     read_only: document.read_only,
@@ -95,11 +97,239 @@ impl DocumentOpenService {
     }
 }
 
+/// 后台 Document 保存：只消费前台捕获的不可变请求，不回读实时正文。
+pub(crate) struct DocumentSaveService {
+    resolver: Arc<dyn DocumentPathResolver>,
+}
+
+impl Default for DocumentSaveService {
+    fn default() -> Self {
+        Self {
+            resolver: Arc::new(SystemDocumentPathResolver),
+        }
+    }
+}
+
+impl DocumentSaveService {
+    #[cfg(test)]
+    fn with_resolver(resolver: Arc<dyn DocumentPathResolver>) -> Self {
+        Self { resolver }
+    }
+
+    /// 编码、写前复核、临时文件与原子替换均只允许在后台执行体调用。
+    pub(crate) fn save(
+        &self,
+        request: DocumentSaveRequest,
+        grants: &[PathGrant],
+        current_authorization_generation: u64,
+    ) -> Result<DocumentSaveReceipt, SaveError> {
+        let write = DocumentWriteContext::new(
+            grants.to_vec(),
+            request.authorization_generation(),
+            current_authorization_generation,
+            self.resolver.clone(),
+        );
+        Document::save_request(request, write)
+    }
+}
+
 #[cfg(test)]
 mod documents_tests {
-    use slterm_document::DocumentOpenOutcome;
+    use std::time::Instant;
+
+    use slterm_document::{
+        DocumentOpenOutcome, DocumentRegistry, DocumentSaveRequest, EditOrigin, EditTransaction,
+        MergePolicy, TextEdit,
+    };
+    use slterm_path::{PathGrant, ResolvedPath};
 
     use super::*;
+
+    fn edited_save_request(
+        registry: &mut DocumentRegistry,
+        id: slterm_document::DocumentId,
+        replacement: &str,
+        authorization_generation: u64,
+    ) -> DocumentSaveRequest {
+        let revision = registry.session(id).unwrap().text_revision();
+        let end = registry.session(id).unwrap().text().len();
+        registry
+            .apply(
+                EditTransaction {
+                    document_id: id,
+                    expected_text_revision: revision,
+                    edits: vec![TextEdit::new(0..end, replacement)],
+                    origin: EditOrigin::ReplaceAll,
+                    merge_policy: MergePolicy::Disallowed,
+                },
+                TextStateId::from_uuid(Uuid::now_v7()).unwrap(),
+                Instant::now(),
+            )
+            .unwrap();
+        registry.begin_save(id, authorization_generation).unwrap()
+    }
+
+    #[test]
+    fn path_capabilities_union_for_save() {
+        let temp = tempfile::tempdir().unwrap();
+        let root_path = dunce::canonicalize(temp.path()).unwrap();
+        let nested_path = root_path.join("nested");
+        std::fs::create_dir(&nested_path).unwrap();
+        let file = nested_path.join("file.txt");
+        std::fs::write(&file, "old").unwrap();
+        let root = CanonicalPath::new(&root_path).unwrap();
+        let nested = CanonicalPath::new(&nested_path).unwrap();
+        let mut registry = DocumentRegistry::new();
+        let opened = DocumentOpenService::default()
+            .open(&mut registry, &root, &CanonicalPath::new(&file).unwrap())
+            .unwrap();
+        let request = edited_save_request(&mut registry, opened.id, "new", 9);
+        let previous_identity = registry
+            .session(opened.id)
+            .unwrap()
+            .location()
+            .file_identity()
+            .unwrap();
+        let grants = [
+            PathGrant::repo_root(root),
+            PathGrant::agent_root(nested, true, false),
+        ];
+
+        let receipt = DocumentSaveService::default()
+            .save(request, &grants, 9)
+            .unwrap();
+        registry.complete_save(receipt).unwrap();
+
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "new");
+        assert!(!registry.session(opened.id).unwrap().is_dirty());
+        assert_eq!(
+            registry
+                .session(opened.id)
+                .unwrap()
+                .disk_baseline()
+                .as_ref(),
+            b"new"
+        );
+        let location = registry.session(opened.id).unwrap().location();
+        assert_ne!(location.file_identity(), Some(previous_identity));
+        assert_eq!(registry.existing(location), Some(opened.id));
+        let old_location =
+            ResolvedPath::new(location.canonical_path().clone(), Some(previous_identity));
+        assert_eq!(registry.existing(&old_location), None);
+    }
+
+    struct RedirectResolver {
+        target: ResolvedPath,
+    }
+
+    impl DocumentPathResolver for RedirectResolver {
+        fn resolve(&self, _lexical: &CanonicalPath) -> io::Result<ResolvedPath> {
+            Ok(self.target.clone())
+        }
+    }
+
+    #[test]
+    fn path_rechecks_redirect_before_write() {
+        let temp = tempfile::tempdir().unwrap();
+        let root_path = dunce::canonicalize(temp.path()).unwrap();
+        let project_path = root_path.join("project");
+        std::fs::create_dir(&project_path).unwrap();
+        let file = project_path.join("file.txt");
+        let outside = root_path.join("outside.txt");
+        std::fs::write(&file, "old").unwrap();
+        std::fs::write(&outside, "outside").unwrap();
+        let root = CanonicalPath::new(&project_path).unwrap();
+        let mut registry = DocumentRegistry::new();
+        let opened = DocumentOpenService::default()
+            .open(&mut registry, &root, &CanonicalPath::new(&file).unwrap())
+            .unwrap();
+        let request = edited_save_request(&mut registry, opened.id, "new", 4);
+        let outside_file = std::fs::File::open(&outside).unwrap();
+        let target = ResolvedPath::new(
+            CanonicalPath::new(dunce::canonicalize(&outside).unwrap()).unwrap(),
+            Some(crate::atomic_file::file_identity(&outside_file).unwrap()),
+        );
+        let service = DocumentSaveService::with_resolver(Arc::new(RedirectResolver { target }));
+
+        let result = service.save(request, &[PathGrant::project_root(root)], 4);
+
+        assert!(matches!(
+            result,
+            Err(crate::text_document::SaveError::Unauthorized)
+        ));
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "old");
+        assert_eq!(std::fs::read_to_string(&outside).unwrap(), "outside");
+        assert!(registry.session(opened.id).unwrap().is_saving());
+        registry
+            .fail_save(opened.id, 1)
+            .expect("失败回执只释放在途保存");
+        assert!(registry.session(opened.id).unwrap().is_dirty());
+    }
+
+    #[test]
+    fn unrepresentable_save_preserves_disk_and_dirty_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let root_path = dunce::canonicalize(temp.path()).unwrap();
+        let file = root_path.join("gbk.txt");
+        std::fs::write(&file, b"old").unwrap();
+        let root = CanonicalPath::new(&root_path).unwrap();
+        let handle = std::fs::File::open(&file).unwrap();
+        let location = ResolvedPath::new(
+            CanonicalPath::new(dunce::canonicalize(&file).unwrap()).unwrap(),
+            Some(crate::atomic_file::file_identity(&handle).unwrap()),
+        );
+        drop(handle);
+        let id = slterm_document::DocumentId::from_uuid(Uuid::now_v7()).unwrap();
+        let state = TextStateId::from_uuid(Uuid::now_v7()).unwrap();
+        let mut registry = DocumentRegistry::new();
+        registry
+            .open(
+                id,
+                location,
+                ropey::Rope::from_str("old"),
+                state,
+                Arc::from(b"old".as_slice()),
+                slterm_document::DocumentMetadata {
+                    encoding: slterm_document::TextEncoding {
+                        encoding: slterm_document::DocumentEncoding::Gbk,
+                        bom: false,
+                        line_ending: slterm_document::LineEnding::Lf,
+                        trailing_newline: false,
+                    },
+                    read_only: false,
+                },
+            )
+            .unwrap();
+        let request = edited_save_request(&mut registry, id, "😀", 0);
+
+        let result = DocumentSaveService::default().save(
+            request,
+            &[PathGrant::project_root(root.clone())],
+            0,
+        );
+
+        assert!(matches!(
+            result,
+            Err(crate::text_document::SaveError::Unrepresentable)
+        ));
+        assert_eq!(std::fs::read(&file).unwrap(), b"old");
+        registry.fail_save(id, 1).unwrap();
+        assert!(registry.session(id).unwrap().is_dirty());
+        assert_eq!(registry.session(id).unwrap().text().to_string(), "😀");
+
+        let request = edited_save_request(&mut registry, id, "中文", 0);
+        let receipt = DocumentSaveService::default()
+            .save(request, &[PathGrant::project_root(root)], 0)
+            .unwrap();
+        registry.complete_save(receipt).unwrap();
+        let encoded = [0xd6, 0xd0, 0xce, 0xc4];
+        assert_eq!(std::fs::read(&file).unwrap(), encoded);
+        assert_eq!(
+            registry.session(id).unwrap().disk_baseline().as_ref(),
+            encoded
+        );
+        assert!(!registry.session(id).unwrap().is_dirty());
+    }
 
     #[test]
     fn path_file_identity_deduplicates_document() {

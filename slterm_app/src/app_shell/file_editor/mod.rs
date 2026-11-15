@@ -568,13 +568,12 @@ impl TextFileView {
         let Some(document) = self.document.clone() else {
             return Task::ready(false);
         };
-        let path = self.path.clone();
         let text = self.input.read(cx).value().to_string();
         self.saving = true;
         self.notice = None;
         let task = cx
             .background_executor()
-            .spawn(async move { document.save(&path, &text) });
+            .spawn(async move { document.save(&text) });
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = task.await;
@@ -606,9 +605,9 @@ impl TextFileView {
                 self.notice = Some(match error {
                     SaveError::Changed => EditorNotice::SaveChanged,
                     SaveError::ReadOnly => EditorNotice::SaveReadOnly,
-                    error @ (SaveError::Unrepresentable | SaveError::Io(_)) => {
-                        EditorNotice::SaveFailed(error.to_string())
-                    }
+                    error @ (SaveError::Unauthorized
+                    | SaveError::Unrepresentable
+                    | SaveError::Io(_)) => EditorNotice::SaveFailed(error.to_string()),
                 });
                 false
             }

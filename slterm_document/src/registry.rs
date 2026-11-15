@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::sync::Arc;
 
 use ropey::Rope;
 use slterm_path::{CanonicalPath, FileIdentity, ResolvedPath};
@@ -16,12 +17,15 @@ pub struct DocumentMetadata {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct DocumentSession {
-    id: DocumentId,
-    location: ResolvedPath,
+    pub(crate) id: DocumentId,
+    pub(crate) location: ResolvedPath,
     pub(crate) text: Rope,
     pub(crate) text_revision: u64,
     pub(crate) current_state: TextStateId,
     pub(crate) saved_state: TextStateId,
+    pub(crate) disk_baseline: Arc<[u8]>,
+    pub(crate) save_generation: u64,
+    pub(crate) active_save: Option<u64>,
     pub(crate) metadata: DocumentMetadata,
     pub(crate) history: crate::edit::EditHistory,
     pub(crate) known_states: BTreeSet<TextStateId>,
@@ -50,6 +54,14 @@ impl DocumentSession {
 
     pub const fn saved_state(&self) -> TextStateId {
         self.saved_state
+    }
+
+    pub fn disk_baseline(&self) -> &Arc<[u8]> {
+        &self.disk_baseline
+    }
+
+    pub const fn is_saving(&self) -> bool {
+        self.active_save.is_some()
     }
 
     pub fn is_dirty(&self) -> bool {
@@ -143,22 +155,28 @@ impl DocumentRegistry {
         location: ResolvedPath,
         text: Rope,
         state: TextStateId,
+        disk_baseline: Arc<[u8]>,
         metadata: DocumentMetadata,
     ) -> Result<(DocumentId, DocumentOpenOutcome), DocumentRegistryError> {
         if self.sessions.contains_key(&id) {
             return Err(DocumentRegistryError::DocumentIdConflict(id));
         }
         if let Some(existing) = self.existing(&location) {
+            let path = location.canonical_path().clone();
             let session = self
                 .sessions
                 .get_mut(&existing)
                 .expect("索引必须指向存活 Document");
+            if session.location.file_identity().is_none() {
+                session.location = ResolvedPath::new(
+                    session.location.canonical_path().clone(),
+                    location.file_identity(),
+                );
+            }
             if let Some(identity) = location.file_identity() {
                 self.identities.entry(identity).or_insert(existing);
             }
-            session.location = location;
-            self.paths
-                .insert(session.location.canonical_path().clone(), existing);
+            self.paths.insert(path, existing);
             return Ok((existing, DocumentOpenOutcome::Existing));
         }
 
@@ -172,6 +190,9 @@ impl DocumentRegistry {
                 text_revision: 0,
                 current_state: state,
                 saved_state: state,
+                disk_baseline,
+                save_generation: 0,
+                active_save: None,
                 metadata,
                 history: crate::edit::EditHistory::default(),
                 known_states: BTreeSet::from([state]),
@@ -182,6 +203,13 @@ impl DocumentRegistry {
         }
         self.paths.insert(path, id);
         Ok((id, DocumentOpenOutcome::Opened))
+    }
+
+    pub(crate) fn refresh_identity(&mut self, id: DocumentId, identity: Option<FileIdentity>) {
+        self.identities.retain(|_, owner| *owner != id);
+        if let Some(identity) = identity {
+            self.identities.insert(identity, id);
+        }
     }
 
     /// 回收聚合及其全部别名索引；不存在时不产生副作用。
@@ -240,6 +268,7 @@ mod registry_tests {
                 location("D:/work/a/file.txt", Some(41)),
                 Rope::from_str("original"),
                 state(),
+                Arc::default(),
                 DocumentMetadata::default(),
             )
             .unwrap();
@@ -249,6 +278,7 @@ mod registry_tests {
                 location("D:/work/b/alias.txt", Some(41)),
                 Rope::from_str("must-not-replace"),
                 state(),
+                Arc::default(),
                 DocumentMetadata::default(),
             )
             .unwrap();
@@ -266,7 +296,7 @@ mod registry_tests {
                 .unwrap()
                 .location()
                 .canonical_path(),
-            &CanonicalPath::new("D:/work/b/alias.txt").unwrap()
+            &CanonicalPath::new("D:/work/a/file.txt").unwrap()
         );
     }
 
@@ -279,6 +309,7 @@ mod registry_tests {
                 location("D:/work/file.txt", None),
                 Rope::from_str("fallback"),
                 state(),
+                Arc::default(),
                 DocumentMetadata::default(),
             )
             .unwrap();
@@ -289,6 +320,7 @@ mod registry_tests {
                 location("D:/work/file.txt", Some(99)),
                 Rope::from_str("ignored"),
                 state(),
+                Arc::default(),
                 DocumentMetadata::default(),
             )
             .unwrap();
@@ -310,6 +342,7 @@ mod registry_tests {
                 location("D:/work/file.txt", Some(1)),
                 Rope::from_str("old"),
                 state(),
+                Arc::default(),
                 DocumentMetadata::default(),
             )
             .unwrap();
@@ -320,6 +353,7 @@ mod registry_tests {
                 location("D:/work/file.txt", Some(2)),
                 Rope::from_str("new"),
                 state(),
+                Arc::default(),
                 DocumentMetadata::default(),
             )
             .unwrap();
@@ -345,6 +379,7 @@ mod registry_tests {
                 location("D:/work/a/file.txt", Some(41)),
                 Rope::from_str("original"),
                 state(),
+                Arc::default(),
                 DocumentMetadata::default(),
             )
             .unwrap();
@@ -354,6 +389,7 @@ mod registry_tests {
                 location("D:/work/b/alias.txt", Some(41)),
                 Rope::from_str("ignored"),
                 state(),
+                Arc::default(),
                 DocumentMetadata::default(),
             )
             .unwrap();
@@ -382,6 +418,7 @@ mod registry_tests {
                     location(path, None),
                     Rope::from_str(document),
                     state(),
+                    Arc::default(),
                     DocumentMetadata::default(),
                 )
                 .unwrap();
@@ -403,6 +440,7 @@ mod registry_tests {
                 location("D:/work/a.txt", Some(1)),
                 Rope::from_str("a"),
                 state(),
+                Arc::default(),
                 DocumentMetadata::default(),
             )
             .unwrap();
@@ -412,6 +450,7 @@ mod registry_tests {
             location("D:/work/b.txt", Some(2)),
             Rope::from_str("b"),
             state(),
+            Arc::default(),
             DocumentMetadata::default(),
         );
 

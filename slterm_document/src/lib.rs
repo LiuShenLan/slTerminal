@@ -13,6 +13,7 @@ mod encoding;
 mod identity;
 mod registry;
 mod repository;
+mod save;
 pub use edit::{
     EditApplyOutcome, EditOrigin, EditTransaction, EditTransactionError, MergePolicy, TextEdit,
 };
@@ -29,3 +30,4 @@ pub use repository::{
     CommitId, DiffBinding, InvalidCommitId, InvalidRepoPath, RepoPath, RepositoryBinding,
     RepositoryBindingUnavailable,
 };
+pub use save::{DocumentSaveReceipt, DocumentSaveRequest, SaveTransactionError};

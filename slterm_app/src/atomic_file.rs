@@ -18,7 +18,12 @@ pub(crate) use slterm_path::FileIdentity;
 
 /// 以临时文件 + 原子替换把 `contents` 落到 `path`,先 sync 临时文件再换名。
 pub(crate) fn write(path: &Path, contents: &[u8]) -> io::Result<()> {
-    write_with_acl(path, contents, copy_target_acl).map(|_| ())
+    write_with_identity(path, contents).map(|_| ())
+}
+
+/// 返回被原子替换文件的稳定身份，避免调用方在替换后按路径重开。
+pub(crate) fn write_with_identity(path: &Path, contents: &[u8]) -> io::Result<FileIdentity> {
+    write_with_acl(path, contents, copy_target_acl)
 }
 
 /// 发布只许当前用户访问的文件；目标旧 ACL 不得继承到替代文件。

@@ -131,7 +131,7 @@ pub(crate) struct EditHistory {
 }
 
 impl EditHistory {
-    fn barrier(&mut self) {
+    pub(crate) fn barrier(&mut self) {
         self.last_edit = None;
     }
 
@@ -344,15 +344,6 @@ impl DocumentRegistry {
             .ok_or(EditTransactionError::DocumentNotFound(id))?
             .travel(true)
     }
-
-    pub fn mark_saved(&mut self, id: DocumentId) -> Result<(), EditTransactionError> {
-        let session = self
-            .session_mut(id)
-            .ok_or(EditTransactionError::DocumentNotFound(id))?;
-        session.saved_state = session.current_state;
-        session.history.barrier();
-        Ok(())
-    }
 }
 
 #[cfg(test)]
@@ -364,8 +355,8 @@ mod tests {
     use slterm_path::CanonicalPath;
 
     use crate::{
-        DocumentId, DocumentMetadata, DocumentRegistry, EditApplyOutcome, EditOrigin,
-        EditTransaction, EditTransactionError, MergePolicy, TextEdit, TextStateId,
+        DocumentId, DocumentMetadata, DocumentRegistry, DocumentSaveReceipt, EditApplyOutcome,
+        EditOrigin, EditTransaction, EditTransactionError, MergePolicy, TextEdit, TextStateId,
     };
 
     const DOCUMENT: &str = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0f2a";
@@ -391,6 +382,7 @@ mod tests {
                 ),
                 Rope::from_str(text),
                 state,
+                std::sync::Arc::from(text.as_bytes()),
                 DocumentMetadata {
                     read_only,
                     ..DocumentMetadata::default()
@@ -592,6 +584,134 @@ mod tests {
     }
 
     #[test]
+    fn save_completion_preserves_edits_made_while_write_is_in_flight() {
+        let (mut registry, id, _) = document("0", false);
+        let saved = state(STATE_B);
+        registry
+            .apply(
+                transaction(id, 0, vec![TextEdit::new(1..1, "1")]),
+                saved,
+                Instant::now(),
+            )
+            .unwrap();
+        let request = registry.begin_save(id, 17).unwrap();
+        assert_eq!(request.text().to_string(), "01");
+        assert_eq!(request.text_state(), saved);
+        assert_eq!(request.disk_baseline().as_ref(), b"0");
+        assert_eq!(request.authorization_generation(), 17);
+
+        let current = state(STATE_C);
+        registry
+            .apply(
+                transaction(id, 1, vec![TextEdit::new(2..2, "2")]),
+                current,
+                Instant::now(),
+            )
+            .unwrap();
+        registry
+            .complete_save(DocumentSaveReceipt::new(
+                request,
+                std::sync::Arc::from(b"01".as_slice()),
+                None,
+            ))
+            .unwrap();
+
+        let session = registry.session(id).unwrap();
+        assert_eq!(session.text().to_string(), "012");
+        assert_eq!(session.current_state(), current);
+        assert_eq!(session.saved_state(), saved);
+        assert_eq!(session.disk_baseline().as_ref(), b"01");
+        assert!(session.is_dirty());
+        assert!(!session.is_saving());
+        registry.undo(id).unwrap();
+        assert!(!registry.session(id).unwrap().is_dirty());
+    }
+
+    #[test]
+    fn stale_save_receipt_cannot_clear_a_newer_attempt() {
+        let (mut registry, id, _) = document("0", false);
+        registry
+            .apply(
+                transaction(id, 0, vec![TextEdit::new(1..1, "1")]),
+                state(STATE_B),
+                Instant::now(),
+            )
+            .unwrap();
+        let first = registry.begin_save(id, 3).unwrap();
+        assert_eq!(
+            registry.begin_save(id, 3),
+            Err(crate::SaveTransactionError::SaveInProgress)
+        );
+        registry.fail_save(id, first.save_generation()).unwrap();
+        registry
+            .apply(
+                transaction(id, 1, vec![TextEdit::new(2..2, "2")]),
+                state(STATE_C),
+                Instant::now(),
+            )
+            .unwrap();
+        let second = registry.begin_save(id, 4).unwrap();
+        let stale = DocumentSaveReceipt::new(first, std::sync::Arc::from(b"01".as_slice()), None);
+
+        assert_eq!(
+            registry.complete_save(stale),
+            Err(crate::SaveTransactionError::StaleSave)
+        );
+        let session = registry.session(id).unwrap();
+        assert_eq!(session.text().to_string(), "012");
+        assert_eq!(session.disk_baseline().as_ref(), b"0");
+        assert!(session.is_dirty());
+        assert!(session.is_saving());
+
+        registry
+            .complete_save(DocumentSaveReceipt::new(
+                second,
+                std::sync::Arc::from(b"012".as_slice()),
+                None,
+            ))
+            .unwrap();
+        assert!(!registry.session(id).unwrap().is_dirty());
+        assert_eq!(
+            registry.session(id).unwrap().disk_baseline().as_ref(),
+            b"012"
+        );
+    }
+
+    #[test]
+    fn save_rejects_read_only_exhaustion_and_stale_failure() {
+        let (mut readonly, id, _) = document("fixed", true);
+        assert_eq!(
+            readonly.begin_save(id, 0),
+            Err(crate::SaveTransactionError::ReadOnly)
+        );
+
+        let (mut registry, id, _) = document("0", false);
+        registry
+            .apply(
+                transaction(id, 0, vec![TextEdit::new(1..1, "1")]),
+                state(STATE_B),
+                Instant::now(),
+            )
+            .unwrap();
+        let request = registry.begin_save(id, 0).unwrap();
+        assert_eq!(
+            registry.fail_save(id, request.save_generation() + 1),
+            Err(crate::SaveTransactionError::StaleSave)
+        );
+        assert!(registry.session(id).unwrap().is_saving());
+        registry.fail_save(id, request.save_generation()).unwrap();
+        assert!(registry.session(id).unwrap().is_dirty());
+        assert_eq!(registry.session(id).unwrap().disk_baseline().as_ref(), b"0");
+
+        registry.session_mut(id).unwrap().save_generation = u64::MAX;
+        assert_eq!(
+            registry.begin_save(id, 0),
+            Err(crate::SaveTransactionError::SaveGenerationExhausted)
+        );
+        assert!(!registry.session(id).unwrap().is_saving());
+    }
+
+    #[test]
     fn saved_state_controls_dirty_across_undo_and_redo() {
         let (mut registry, id, _) = document("0", false);
         let saved = state(STATE_B);
@@ -602,7 +722,14 @@ mod tests {
                 Instant::now(),
             )
             .unwrap();
-        registry.mark_saved(id).unwrap();
+        let request = registry.begin_save(id, 0).unwrap();
+        registry
+            .complete_save(DocumentSaveReceipt::new(
+                request,
+                std::sync::Arc::from(b"01".as_slice()),
+                None,
+            ))
+            .unwrap();
         assert!(!registry.session(id).unwrap().is_dirty());
         registry
             .apply(
@@ -671,8 +798,8 @@ mod tests {
             Err(EditTransactionError::DocumentNotFound(id))
         );
         assert_eq!(
-            registry.mark_saved(id),
-            Err(EditTransactionError::DocumentNotFound(id))
+            registry.begin_save(id, 0),
+            Err(crate::SaveTransactionError::DocumentNotFound(id))
         );
         assert!(registry.is_empty());
     }

@@ -29,6 +29,7 @@ pub(crate) struct TextSnapshot {
 pub(crate) enum SaveError {
     Changed,
     ReadOnly,
+    Unauthorized,
     Unrepresentable,
     Io(io::Error),
 }
@@ -50,6 +51,7 @@ impl std::fmt::Display for SaveError {
         match self {
             Self::Changed => formatter.write_str("文件在打开后已被外部修改"),
             Self::ReadOnly => formatter.write_str("文档处于只读状态"),
+            Self::Unauthorized => formatter.write_str("文档写入未获授权或授权代次已变化"),
             Self::Unrepresentable => formatter.write_str("当前编码无法表示文本"),
             Self::Io(error) => error.fmt(formatter),
         }
