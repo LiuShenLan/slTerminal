@@ -74,7 +74,7 @@
 | 项目移除与退出 | [生命周期](design/lifecycle.md)、[工作区](design/workspace.md) | `integration_project_remove_and_exit` | 已自动化 |
 | 崩溃恢复 | [生命周期](design/lifecycle.md)、[持久化](design/persistence.md) | `integration_crash_recovery` | 待实现 |
 | 关闭意图各提交边界崩溃后按真实持久阶段对账 | [生命周期](design/lifecycle.md)、[持久化](design/persistence.md) | `close_commit_crash_reopens_with_exact_persistent_stage` | 已自动化 |
-| 快照配额 | [持久化](design/persistence.md)、[Document](design/document.md) | `integration_snapshot_quota` | 待实现 |
+| 快照配额 | [持久化](design/persistence.md)、[Document](design/document.md) | `integration_snapshot_quota` | 已自动化 |
 | 终端恢复 | [终端](design/terminal.md)、[生命周期](design/lifecycle.md) | `integration_terminal_restore` | 待实现 |
 | PTY 上限 | [终端](design/terminal.md)、[工作区](design/workspace.md) | `integration_pty_limit` | 待实现 |
 | 新建 cwd | [终端](design/terminal.md)、[工作区](design/workspace.md) | `integration_new_terminal_cwd` | 待实现 |
@@ -159,7 +159,7 @@
 | 多项目与浮层修改后关闭视图不取消全局队列 | `settings_single_queue_across_views` | 待实现 |
 | 权限、损坏、高版本和字段错误严格分流 | `settings_damage_classification` | 待实现 |
 | 状态库及副本均不可恢复时隔离并明确提示 | `workspace_unrecoverable_isolated`、`workspace_missing_disaster_copy_is_not_a_valid_empty_backup`、`workspace_isolation_emits_explicit_startup_notice` | 已自动化 |
-| 快照配额不足时不驱逐打开脏 Document | `snapshot_quota_does_not_evict_dirty` | 待实现 |
+| 快照配额不足时不驱逐打开脏 Document | `snapshot_quota_does_not_evict_dirty` | 已自动化 |
 | 异常启动先布局后对账且不重复创建 Panel | `startup_reconciles_layout_before_snapshot` | 待实现 |
 | 无主快照无活跃项目时保留并等待显式处置 | `orphan_snapshot_requires_explicit_target` | 待实现 |
 | 最终提交失败后放弃状态退出有旧状态提示 | `close_abandon_warns_about_old_state` | 已自动化 |

@@ -2,6 +2,7 @@
 
 pub(crate) mod close;
 pub(crate) mod database;
+pub(crate) mod document_snapshot;
 pub(crate) mod journal;
 pub(crate) mod learning;
 pub(crate) mod metadata;
