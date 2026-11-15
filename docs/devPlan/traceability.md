@@ -176,7 +176,7 @@
 | 链接重定向后写前重新校验并拒绝旧授权 | `path_rechecks_redirect_before_write` | 已自动化 |
 | 根外文件重启后只显示重新授权占位 | `outside_document_restart_requires_authorization` | 待实现 |
 | 根外快照异常恢复不自动重读磁盘或恢复授权 | `outside_snapshot_restores_without_disk_read` | 待实现 |
-| 失去读授权后保留内容并停止刷新 | `document_retains_content_after_read_revoke` | 待实现 |
+| 失去读授权后保留内容并停止刷新 | `document_retains_content_after_read_revoke` | 已自动化 |
 | 项目根重定位不改绑既有 Diff 与 GitShow | `repository_binding_survives_project_relocation` | 待实现 |
 | 真实路径查重失败时保留原项目关系 | `project_realpath_dedupe_failure_preserves_relation`、`project_realpath_resolution_preserves_request_order`、`project_open_completion_reentry_does_not_duplicate_tasks`、`closing_drains_pending_project_open_handovers`、`destroyed_window_drains_pending_project_open_handovers`、`system_resolver_requires_an_existing_directory`、`system_resolver_normalizes_directory_junction` | 已自动化 |
 
@@ -243,7 +243,7 @@
 | 自动保存等待全部编辑视图失焦 | `document_autosave_waits_for_all_views_to_blur` | 待实现 |
 | 批量关闭部分保存失败时保留所有 Panel | `document_batch_close_partial_save` | 待实现 |
 | 关闭集合外仍有引用时不丢弃 Document | `document_discard_respects_external_reference` | 待实现 |
-| 根重定位或外部改名不重建 Document 或视图 | `document_location_change_does_not_rebuild` | 待实现 |
+| 根重定位或外部改名不重建 Document 或视图 | `document_location_change_does_not_rebuild` | 已自动化 |
 
 ### Editor
 

@@ -4,6 +4,8 @@ use std::fmt;
 use std::ops::Range;
 use std::time::{Duration, Instant};
 
+use ropey::Rope;
+
 use crate::{DocumentId, DocumentRegistry, TextStateId};
 
 const MERGE_WINDOW: Duration = Duration::from_millis(600);
@@ -133,6 +135,28 @@ pub(crate) struct EditHistory {
 impl EditHistory {
     pub(crate) fn barrier(&mut self) {
         self.last_edit = None;
+    }
+
+    /// 外部重载记录为独立撤销组，不与用户键入合并。
+    pub(crate) fn record_reload(
+        &mut self,
+        before: &Rope,
+        after: &Rope,
+        before_state: TextStateId,
+        after_state: TextStateId,
+        at: Instant,
+    ) {
+        let group = EditGroup {
+            changes: vec![Change {
+                start: 0,
+                before: before.to_string(),
+                after: after.to_string(),
+            }],
+            before_state,
+            after_state,
+            origin: EditOrigin::EncodingReload,
+        };
+        self.push(group, at, false);
     }
 
     fn should_join(&self, transaction: &EditTransaction, changes: &[Change], at: Instant) -> bool {
@@ -753,6 +777,178 @@ mod tests {
             Err(crate::SaveTransactionError::SaveGenerationExhausted)
         );
         assert!(!registry.session(id).unwrap().is_saving());
+    }
+
+    #[test]
+    fn external_reload_conflict_and_delete_share_one_session() {
+        let (mut registry, id, _) = document("old", false);
+        let request = registry.external_request(id, 0).unwrap();
+        let location = request.location().clone();
+        registry
+            .apply_external(
+                crate::DocumentExternalChange::Reload {
+                    request,
+                    text: Rope::from_str("outside"),
+                    disk_baseline: std::sync::Arc::from(b"outside".as_slice()),
+                    metadata: DocumentMetadata::default(),
+                    location,
+                    new_state: state(STATE_B),
+                },
+                Instant::now(),
+            )
+            .unwrap();
+        assert_eq!(text(&registry, id), "outside");
+        assert!(!registry.session(id).unwrap().is_dirty());
+
+        registry
+            .apply(
+                transaction(id, 1, vec![TextEdit::new(0..7, "local")]),
+                state(STATE_C),
+                Instant::now(),
+            )
+            .unwrap();
+        let request = registry.external_request(id, 0).unwrap();
+        let location = request.location().clone();
+        let outcome = registry
+            .apply_external(
+                crate::DocumentExternalChange::Reload {
+                    request,
+                    text: Rope::from_str("other"),
+                    disk_baseline: std::sync::Arc::from(b"other".as_slice()),
+                    metadata: DocumentMetadata::default(),
+                    location,
+                    new_state: state(STATE_D),
+                },
+                Instant::now(),
+            )
+            .unwrap();
+        assert_eq!(outcome, crate::ExternalApplyOutcome::Conflict);
+        assert_eq!(text(&registry, id), "local");
+        assert_eq!(
+            registry.session(id).unwrap().disk_baseline().as_ref(),
+            b"outside"
+        );
+        let conflict = registry.session(id).unwrap().external_conflict().unwrap();
+        assert_eq!(conflict.kind(), crate::ExternalConflictKind::Modified);
+        assert_eq!(conflict.disk_baseline().unwrap().as_ref(), b"other");
+
+        let request = registry.external_request(id, 0).unwrap();
+        registry
+            .apply_external(
+                crate::DocumentExternalChange::Deleted(request),
+                Instant::now(),
+            )
+            .unwrap();
+        assert_eq!(text(&registry, id), "local");
+        assert_eq!(
+            registry
+                .session(id)
+                .unwrap()
+                .external_conflict()
+                .unwrap()
+                .kind(),
+            crate::ExternalConflictKind::Deleted
+        );
+    }
+
+    #[test]
+    fn external_reload_is_an_independent_undo_group() {
+        let (mut registry, id, original) = document("old", false);
+        let request = registry.external_request(id, 0).unwrap();
+        let location = request.location().clone();
+        let outside = state(STATE_B);
+        registry
+            .apply_external(
+                crate::DocumentExternalChange::Reload {
+                    request,
+                    text: Rope::from_str("outside"),
+                    disk_baseline: std::sync::Arc::from(b"outside".as_slice()),
+                    metadata: DocumentMetadata::default(),
+                    location,
+                    new_state: outside,
+                },
+                Instant::now(),
+            )
+            .unwrap();
+        registry.undo(id).unwrap();
+        assert_eq!(registry.session(id).unwrap().current_state(), original);
+        assert!(registry.session(id).unwrap().is_dirty());
+        registry.redo(id).unwrap();
+        assert!(!registry.session(id).unwrap().is_dirty());
+
+        registry
+            .apply(
+                transaction(id, 3, vec![TextEdit::new(7..7, "!")]),
+                state(STATE_C),
+                Instant::now(),
+            )
+            .unwrap();
+        registry.undo(id).unwrap();
+        assert_eq!(text(&registry, id), "outside");
+        assert!(!registry.session(id).unwrap().is_dirty());
+    }
+
+    #[test]
+    fn stale_external_result_cannot_touch_newer_text() {
+        let (mut registry, id, _) = document("old", false);
+        let request = registry.external_request(id, 0).unwrap();
+        registry
+            .apply(
+                transaction(id, 0, vec![TextEdit::new(0..3, "local")]),
+                state(STATE_B),
+                Instant::now(),
+            )
+            .unwrap();
+
+        assert_eq!(
+            registry.apply_external(
+                crate::DocumentExternalChange::Deleted(request),
+                Instant::now()
+            ),
+            Err(crate::ExternalChangeError::StaleExternalChange)
+        );
+        assert_eq!(text(&registry, id), "local");
+        assert!(registry.session(id).unwrap().external_conflict().is_none());
+    }
+
+    #[test]
+    fn read_revoke_and_relocation_preserve_document_identity() {
+        let (mut registry, id, _) = document("local", false);
+        registry
+            .apply_external(
+                crate::DocumentExternalChange::ReadRevoked { document_id: id },
+                Instant::now(),
+            )
+            .unwrap();
+        assert!(registry.session(id).unwrap().is_read_revoked());
+        assert_eq!(text(&registry, id), "local");
+        assert_eq!(
+            registry.external_request(id, 1),
+            Err(crate::ExternalChangeError::ReadRevoked)
+        );
+
+        let (mut registry, id, original) = document("same", false);
+        let request = registry.external_request(id, 3).unwrap();
+        let relocated = slterm_path::ResolvedPath::new(
+            CanonicalPath::new("D:/work/renamed.txt").unwrap(),
+            None,
+        );
+        registry
+            .apply_external(
+                crate::DocumentExternalChange::Relocated {
+                    request,
+                    location: relocated.clone(),
+                },
+                Instant::now(),
+            )
+            .unwrap();
+        let session = registry.session(id).unwrap();
+        assert_eq!(session.id(), id);
+        assert_eq!(session.current_state(), original);
+        assert_eq!(session.text_revision(), 0);
+        assert_eq!(session.text().to_string(), "same");
+        assert_eq!(session.location(), &relocated);
+        assert_eq!(registry.existing(&relocated), Some(id));
     }
 
     #[test]

@@ -1,4 +1,4 @@
-//! Document 真实打开：授权、查重、读取与聚合注册只经这一入口。
+//! Document 真实打开与保存：授权、查重、读取、聚合注册和写盘只经这些入口。
 
 use std::io;
 use std::sync::Arc;

@@ -26,6 +26,8 @@ pub struct DocumentSession {
     pub(crate) disk_baseline: Arc<[u8]>,
     pub(crate) save_generation: u64,
     pub(crate) active_save: Option<u64>,
+    pub(crate) external_conflict: Option<crate::DocumentConflict>,
+    pub(crate) read_revoked: bool,
     pub(crate) metadata: DocumentMetadata,
     pub(crate) history: crate::edit::EditHistory,
     pub(crate) known_states: BTreeSet<TextStateId>,
@@ -62,6 +64,14 @@ impl DocumentSession {
 
     pub const fn is_saving(&self) -> bool {
         self.active_save.is_some()
+    }
+
+    pub fn external_conflict(&self) -> Option<&crate::DocumentConflict> {
+        self.external_conflict.as_ref()
+    }
+
+    pub const fn is_read_revoked(&self) -> bool {
+        self.read_revoked
     }
 
     pub fn is_dirty(&self) -> bool {
@@ -193,6 +203,8 @@ impl DocumentRegistry {
                 disk_baseline,
                 save_generation: 0,
                 active_save: None,
+                external_conflict: None,
+                read_revoked: false,
                 metadata,
                 history: crate::edit::EditHistory::default(),
                 known_states: BTreeSet::from([state]),

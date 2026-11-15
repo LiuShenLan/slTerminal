@@ -10,6 +10,7 @@ mod grammar_audit;
 
 mod edit;
 mod encoding;
+mod external;
 mod identity;
 mod registry;
 mod repository;
@@ -21,6 +22,10 @@ pub use encoding::{
     BINARY_PROBE_BYTES, ContentUnavailable, DecodedText, DocumentContent, DocumentEncoding,
     EDITABLE_LIMIT_BYTES, EncodeError, LineEnding, NORMAL_EDIT_LIMIT_BYTES, SYNTAX_LIMIT_BYTES,
     TextEncoding,
+};
+pub use external::{
+    DocumentConflict, DocumentExternalChange, DocumentExternalRequest, ExternalApplyOutcome,
+    ExternalChangeError, ExternalConflictKind,
 };
 pub use identity::{DocumentId, StableIdError, TextStateId};
 pub use registry::{
