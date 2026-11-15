@@ -4,8 +4,8 @@ use std::io::{self, Read as _, Seek as _};
 
 use sha2::{Digest as _, Sha256};
 use slterm_document::{
-    DocumentContent, DocumentEncoding, LineEnding, PAGE_SOURCE_BYTES, PageIndex, PagedSource,
-    SourceByteRange, TextEncoding,
+    DocumentContent, DocumentEncoding, DocumentTextRequest, LineEnding, PAGE_SOURCE_BYTES,
+    PageIndex, PagedSource, SearchError, SourceByteRange, TextChunk, TextEncoding,
 };
 use slterm_path::ResolvedPath;
 
@@ -131,6 +131,50 @@ impl PagedDocument {
             .map(|text| text.replace("\r\n", "\n"))
             .map_err(|_| invalid_encoding())
     }
+
+    /// 分页块只允许读取请求捕获的同一文件指纹；调用与读取均在后台执行。
+    pub(crate) fn chunks_for(
+        &self,
+        request: &DocumentTextRequest,
+    ) -> Result<PagedDocumentChunks<'_>, SearchError> {
+        if !request.paged().is_some_and(|source| {
+            source.index() == &self.index && source.fingerprint() == &self.fingerprint
+        }) {
+            return Err(SearchError::ReadFailed);
+        }
+        Ok(PagedDocumentChunks {
+            document: self,
+            next_page: 0,
+            offset: 0,
+        })
+    }
+}
+
+pub(crate) struct PagedDocumentChunks<'a> {
+    document: &'a PagedDocument,
+    next_page: usize,
+    offset: usize,
+}
+
+impl Iterator for PagedDocumentChunks<'_> {
+    type Item = Result<TextChunk, SearchError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.next_page >= self.document.index.len() {
+            return None;
+        }
+        let text = match self.document.read_page(self.next_page) {
+            Ok(text) => text,
+            Err(_) => return Some(Err(SearchError::ReadFailed)),
+        };
+        self.next_page += 1;
+        let chunk = TextChunk::new(self.offset, text);
+        let Some(next_offset) = self.offset.checked_add(chunk.text().len()) else {
+            return Some(Err(SearchError::OffsetExhausted));
+        };
+        self.offset = next_offset;
+        Some(Ok(chunk))
+    }
 }
 
 fn detect_encoding(
@@ -207,6 +251,8 @@ fn changed_source() -> io::Error {
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr as _;
+
     use slterm_document::{DocumentEncoding, LineEnding, PAGE_SOURCE_BYTES, TextEncoding};
     use slterm_path::{CanonicalPath, ResolvedPath};
 
@@ -272,6 +318,50 @@ mod tests {
             read_all(&document),
             format!("{}中\nnext\n", "a".repeat(PAGE_SOURCE_BYTES as usize - 1))
         );
+    }
+
+    #[test]
+    fn paged_search_and_copy_cross_source_pages() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("search.txt");
+        let text = format!("{}END\nstart\n", "x".repeat(PAGE_SOURCE_BYTES as usize - 3));
+        std::fs::write(&path, &text).unwrap();
+        let location = location(&path);
+        let document = PagedDocument::open(&location, None).unwrap();
+        let id =
+            slterm_document::DocumentId::from_str("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2a").unwrap();
+        let mut registry = slterm_document::DocumentRegistry::new();
+        registry
+            .open(
+                id,
+                location,
+                document.source(),
+                slterm_document::TextStateId::from_str("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0f2a")
+                    .unwrap(),
+                std::sync::Arc::default(),
+                slterm_document::DocumentMetadata {
+                    read_only: true,
+                    ..slterm_document::DocumentMetadata::default()
+                },
+            )
+            .unwrap();
+        let request = registry.text_request(id, 9).unwrap();
+        let (_cancel, cancellation) = std::sync::mpsc::sync_channel(1);
+
+        let result = request
+            .search(
+                "END\nstart",
+                document.chunks_for(&request).unwrap(),
+                &cancellation,
+            )
+            .unwrap();
+        let expected = PAGE_SOURCE_BYTES as usize - 3;
+        assert_eq!(result.matches().len(), 1);
+        assert_eq!(result.matches()[0].range(), expected..expected + 9);
+        let copied = request
+            .copy(document.chunks_for(&request).unwrap(), &cancellation)
+            .unwrap();
+        assert_eq!(copied, text);
     }
 
     #[test]

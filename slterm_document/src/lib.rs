@@ -14,8 +14,10 @@ mod external;
 mod identity;
 mod paged;
 mod registry;
+mod replace;
 mod repository;
 mod save;
+mod search;
 pub use edit::{
     EditApplyOutcome, EditOrigin, EditTransaction, EditTransactionError, MergePolicy, TextEdit,
 };
@@ -36,8 +38,12 @@ pub use paged::{
 pub use registry::{
     DocumentMetadata, DocumentOpenOutcome, DocumentRegistry, DocumentRegistryError, DocumentSession,
 };
+pub use replace::{DocumentReplaceRequest, DocumentReplacement, ReplacePlanError};
 pub use repository::{
     CommitId, DiffBinding, InvalidCommitId, InvalidRepoPath, RepoPath, RepositoryBinding,
     RepositoryBindingUnavailable,
 };
 pub use save::{DocumentSaveReceipt, DocumentSaveRequest, SaveTransactionError};
+pub use search::{
+    DocumentSearchResult, DocumentTextRequest, SearchError, SearchMatch, TextChunk, TextChunks,
+};

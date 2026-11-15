@@ -16,6 +16,7 @@ path = "src/lib.rs"
 slterm_path = { path = "../slterm_path" }
 encoding_rs = "=0.8.42"
 ropey = { version = "=2.0.0-beta.1", default-features = false }
+regex = "=1.13.1"
 uuid = { version = "=1.28.0", default-features = false }
 
 [dev-dependencies]
