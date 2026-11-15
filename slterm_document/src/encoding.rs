@@ -136,25 +136,13 @@ impl DocumentContent {
         if binary {
             return Self::Unavailable(ContentUnavailable::Binary);
         }
-        let decoded = match encoding {
-            DocumentEncoding::Utf8 => std::str::from_utf8(body).map(str::to_owned).map_err(|_| {
-                if requested.is_none() {
-                    ContentUnavailable::UnknownEncoding
-                } else {
-                    ContentUnavailable::InvalidEncoding
-                }
-            }),
-            DocumentEncoding::Utf16Le => decode_utf16(body, true),
-            DocumentEncoding::Utf16Be => decode_utf16(body, false),
-            DocumentEncoding::Gbk => encoding_rs::GBK
-                .decode_without_bom_handling_and_without_replacement(body)
-                .map(|text| text.into_owned())
-                .ok_or(ContentUnavailable::InvalidEncoding),
-            DocumentEncoding::Gb18030 => encoding_rs::GB18030
-                .decode_without_bom_handling_and_without_replacement(body)
-                .map(|text| text.into_owned())
-                .ok_or(ContentUnavailable::InvalidEncoding),
-        };
+        let decoded = encoding.decode(body).map_err(|cause| {
+            if encoding == DocumentEncoding::Utf8 && requested.is_none() {
+                ContentUnavailable::UnknownEncoding
+            } else {
+                cause
+            }
+        });
         let decoded = match decoded {
             Ok(decoded) => decoded,
             Err(cause) => return Self::Unavailable(cause),
@@ -188,20 +176,59 @@ impl DocumentContent {
     }
 }
 
-fn decode_utf16(bytes: &[u8], little_endian: bool) -> Result<String, ContentUnavailable> {
-    if !bytes.len().is_multiple_of(2) {
-        return Err(ContentUnavailable::InvalidEncoding);
-    }
-    let units = bytes.chunks_exact(2).map(|pair| {
-        if little_endian {
-            u16::from_le_bytes([pair[0], pair[1]])
-        } else {
-            u16::from_be_bytes([pair[0], pair[1]])
+impl DocumentEncoding {
+    fn encoding_rs(self) -> &'static encoding_rs::Encoding {
+        match self {
+            Self::Utf8 => encoding_rs::UTF_8,
+            Self::Utf16Le => encoding_rs::UTF_16LE,
+            Self::Utf16Be => encoding_rs::UTF_16BE,
+            Self::Gbk => encoding_rs::GBK,
+            Self::Gb18030 => encoding_rs::GB18030,
         }
-    });
-    char::decode_utf16(units)
-        .collect::<Result<String, _>>()
-        .map_err(|_| ContentUnavailable::InvalidEncoding)
+    }
+
+    /// 严格解码完整字符前缀，并返回可安全切分的源字节位置。
+    pub fn decode_prefix(self, bytes: &[u8]) -> Result<(String, usize), ContentUnavailable> {
+        let mut decoder = self.encoding_rs().new_decoder_without_bom_handling();
+        let mut output = String::new();
+        let mut read = 0;
+        loop {
+            output.reserve((bytes.len() - read).saturating_mul(3).max(16));
+            let (result, consumed) =
+                decoder.decode_to_string_without_replacement(&bytes[read..], &mut output, false);
+            read += consumed;
+            match result {
+                encoding_rs::DecoderResult::InputEmpty => break,
+                encoding_rs::DecoderResult::OutputFull => {}
+                encoding_rs::DecoderResult::Malformed(_, _) => {
+                    return Err(ContentUnavailable::InvalidEncoding);
+                }
+            }
+        }
+        if let Ok(text) = self.decode(bytes) {
+            return Ok((text, bytes.len()));
+        }
+        // InputEmpty 的 read 包含解码器暂存的不完整尾部，不能用作页边界。
+        let max_character_bytes = match self {
+            Self::Gbk => 2,
+            Self::Utf8 | Self::Utf16Le | Self::Utf16Be | Self::Gb18030 => 4,
+        };
+        for trailing in 1..max_character_bytes.min(bytes.len() + 1) {
+            let end = bytes.len() - trailing;
+            if let Ok(text) = self.decode(&bytes[..end]) {
+                return Ok((text, end));
+            }
+        }
+        Err(ContentUnavailable::InvalidEncoding)
+    }
+
+    /// 严格解码完整正文；不完整尾字符与非法序列均拒绝。
+    pub fn decode(self, bytes: &[u8]) -> Result<String, ContentUnavailable> {
+        self.encoding_rs()
+            .decode_without_bom_handling_and_without_replacement(bytes)
+            .map(|text| text.into_owned())
+            .ok_or(ContentUnavailable::InvalidEncoding)
+    }
 }
 
 impl TextEncoding {
@@ -354,6 +381,31 @@ mod tests {
             DocumentContent::decode(vec![0xff, 0xfe, 0x00], 3, Some(DocumentEncoding::Utf16Le),),
             DocumentContent::Unavailable(ContentUnavailable::InvalidEncoding)
         ));
+    }
+
+    #[test]
+    fn decode_prefix_reports_exact_incomplete_character_boundary() {
+        let utf8 = "a😀".as_bytes();
+        let (text, read) = DocumentEncoding::Utf8.decode_prefix(&utf8[..3]).unwrap();
+        assert_eq!(text, "a");
+        assert_eq!(read, 1);
+        assert!(DocumentEncoding::Utf8.decode(&utf8[..3]).is_err());
+
+        let mut utf16 = 0x0061u16.to_le_bytes().to_vec();
+        utf16.extend_from_slice(&0xd83du16.to_le_bytes());
+        let (text, read) = DocumentEncoding::Utf16Le.decode_prefix(&utf16).unwrap();
+        assert_eq!(text, "a");
+        assert_eq!(read, 2);
+
+        let (text, read) = DocumentEncoding::Gbk.decode_prefix(&[0xd6]).unwrap();
+        assert_eq!(text, "");
+        assert_eq!(read, 0);
+        let gb18030 = encoding_rs::GB18030.encode("😀").0;
+        let (text, read) = DocumentEncoding::Gb18030
+            .decode_prefix(&gb18030[..3])
+            .unwrap();
+        assert_eq!(text, "");
+        assert_eq!(read, 0);
     }
 
     #[test]
