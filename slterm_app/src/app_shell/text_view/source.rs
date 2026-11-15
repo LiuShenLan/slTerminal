@@ -67,6 +67,37 @@ impl<'a> RopeTextSource<'a> {
         Self { text, display }
     }
 
+    /// 仅物化覆盖可视列的完整字素前缀；长行不可见尾部不进入前台字符串。
+    pub(crate) fn visible_line_windows(
+        &self,
+        lines: Range<usize>,
+        columns: usize,
+    ) -> Vec<VisibleLine> {
+        let line_count = self.text.len_lines(LineType::LF);
+        let start = lines.start.min(line_count);
+        let end = lines.end.min(line_count).max(start);
+        (start..end)
+            .map(|index| {
+                let line = self.text.line(index, LineType::LF);
+                let line_start = self.text.line_to_byte_idx(index, LineType::LF);
+                let has_newline = line.len() > 0 && line.byte(line.len() - 1) == b'\n';
+                let mut content_len = line.len() - usize::from(has_newline);
+                if has_newline && content_len > 0 && line.byte(content_len - 1) == b'\r' {
+                    content_len -= 1;
+                }
+                let content = line.slice(..content_len);
+                let visible_len = self.display.visible_prefix_len(content, columns);
+                let text = content.slice(..visible_len).to_string();
+                VisibleLine {
+                    index,
+                    byte_range: line_start..line_start + visible_len,
+                    display_width: self.display.width(&text),
+                    text,
+                }
+            })
+            .collect()
+    }
+
     /// 仅物化请求范围内的行；范围越界只截到真实行数。
     pub(crate) fn visible_lines(&self, lines: Range<usize>) -> Vec<VisibleLine> {
         let line_count = self.text.len_lines(LineType::LF);
@@ -267,6 +298,21 @@ mod tests {
         let lines = source.visible_lines(0..1);
         assert_eq!(lines[0].text(), "a");
         assert_eq!(lines[0].byte_range(), 0..1);
+    }
+
+    #[test]
+    fn rope_source_bounds_long_line_materialization_to_visible_columns() {
+        let rope = Rope::from_str(&"a".repeat(100_000));
+        let source = RopeTextSource::new(&rope, DisplayMap::new(4));
+        let lines = source.visible_line_windows(0..1, 4);
+        assert_eq!(lines[0].text(), "aaaa");
+        assert_eq!(lines[0].byte_range(), 0..4);
+
+        let rope = Rope::from_str(&format!("e\u{301}{}", "b".repeat(100_000)));
+        let source = RopeTextSource::new(&rope, DisplayMap::new(4));
+        let lines = source.visible_line_windows(0..1, 1);
+        assert_eq!(lines[0].text(), "e\u{301}");
+        assert_eq!(lines[0].byte_range(), 0..3);
     }
 
     #[test]

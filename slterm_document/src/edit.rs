@@ -38,6 +38,14 @@ impl TextEdit {
             expected: Some(expected.into()),
         }
     }
+
+    pub fn utf8_range(&self) -> &Range<usize> {
+        &self.utf8_range
+    }
+
+    pub fn replacement(&self) -> &str {
+        &self.replacement
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
