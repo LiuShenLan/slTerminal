@@ -1,6 +1,6 @@
 //! Document 聚合：稳定身份、文件身份与规范路径去重的唯一事实源。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use ropey::Rope;
@@ -12,10 +12,13 @@ use crate::{DocumentId, TextStateId};
 pub struct DocumentSession {
     id: DocumentId,
     location: ResolvedPath,
-    text: Rope,
-    text_revision: u64,
-    current_state: TextStateId,
-    saved_state: TextStateId,
+    pub(crate) text: Rope,
+    pub(crate) text_revision: u64,
+    pub(crate) current_state: TextStateId,
+    pub(crate) saved_state: TextStateId,
+    pub(crate) read_only: bool,
+    pub(crate) history: crate::edit::EditHistory,
+    pub(crate) known_states: BTreeSet<TextStateId>,
 }
 
 impl DocumentSession {
@@ -45,6 +48,10 @@ impl DocumentSession {
 
     pub fn is_dirty(&self) -> bool {
         self.current_state != self.saved_state
+    }
+
+    pub const fn is_read_only(&self) -> bool {
+        self.read_only
     }
 }
 
@@ -86,6 +93,10 @@ impl DocumentRegistry {
         self.sessions.get(&id)
     }
 
+    pub(crate) fn session_mut(&mut self, id: DocumentId) -> Option<&mut DocumentSession> {
+        self.sessions.get_mut(&id)
+    }
+
     pub fn len(&self) -> usize {
         self.sessions.len()
     }
@@ -122,6 +133,7 @@ impl DocumentRegistry {
         location: ResolvedPath,
         text: Rope,
         state: TextStateId,
+        read_only: bool,
     ) -> Result<(DocumentId, DocumentOpenOutcome), DocumentRegistryError> {
         if self.sessions.contains_key(&id) {
             return Err(DocumentRegistryError::DocumentIdConflict(id));
@@ -150,6 +162,9 @@ impl DocumentRegistry {
                 text_revision: 0,
                 current_state: state,
                 saved_state: state,
+                read_only,
+                history: crate::edit::EditHistory::default(),
+                known_states: BTreeSet::from([state]),
             },
         );
         if let Some(identity) = location.file_identity() {
@@ -215,6 +230,7 @@ mod registry_tests {
                 location("D:/work/a/file.txt", Some(41)),
                 Rope::from_str("original"),
                 state(),
+                false,
             )
             .unwrap();
         let alias = registry
@@ -223,6 +239,7 @@ mod registry_tests {
                 location("D:/work/b/alias.txt", Some(41)),
                 Rope::from_str("must-not-replace"),
                 state(),
+                false,
             )
             .unwrap();
 
@@ -252,6 +269,7 @@ mod registry_tests {
                 location("D:/work/file.txt", None),
                 Rope::from_str("fallback"),
                 state(),
+                false,
             )
             .unwrap();
 
@@ -261,6 +279,7 @@ mod registry_tests {
                 location("D:/work/file.txt", Some(99)),
                 Rope::from_str("ignored"),
                 state(),
+                false,
             )
             .unwrap();
 
@@ -281,6 +300,7 @@ mod registry_tests {
                 location("D:/work/file.txt", Some(1)),
                 Rope::from_str("old"),
                 state(),
+                false,
             )
             .unwrap();
 
@@ -290,6 +310,7 @@ mod registry_tests {
                 location("D:/work/file.txt", Some(2)),
                 Rope::from_str("new"),
                 state(),
+                false,
             )
             .unwrap();
 
@@ -314,6 +335,7 @@ mod registry_tests {
                 location("D:/work/a/file.txt", Some(41)),
                 Rope::from_str("original"),
                 state(),
+                false,
             )
             .unwrap();
         registry
@@ -322,6 +344,7 @@ mod registry_tests {
                 location("D:/work/b/alias.txt", Some(41)),
                 Rope::from_str("ignored"),
                 state(),
+                false,
             )
             .unwrap();
 
@@ -349,6 +372,7 @@ mod registry_tests {
                     location(path, None),
                     Rope::from_str(document),
                     state(),
+                    false,
                 )
                 .unwrap();
         }
@@ -369,6 +393,7 @@ mod registry_tests {
                 location("D:/work/a.txt", Some(1)),
                 Rope::from_str("a"),
                 state(),
+                false,
             )
             .unwrap();
 
@@ -377,6 +402,7 @@ mod registry_tests {
             location("D:/work/b.txt", Some(2)),
             Rope::from_str("b"),
             state(),
+            false,
         );
 
         assert_eq!(

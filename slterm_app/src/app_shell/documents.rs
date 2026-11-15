@@ -74,7 +74,7 @@ impl DocumentOpenService {
             TextStateId::from_uuid(Uuid::now_v7()).expect("系统生成的 TextStateId 必须为 v7");
         let text = Rope::from_str(&document.text);
         let (id, outcome) = registry
-            .open(id, resolved, text, state)
+            .open(id, resolved, text, state, document.read_only)
             .map_err(io::Error::other)?;
         Ok(OpenedDocument {
             id,
@@ -131,6 +131,31 @@ mod documents_tests {
 
         assert!(result.is_err());
         assert!(registry.is_empty());
+    }
+
+    #[test]
+    fn real_open_preserves_read_only_contract() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = CanonicalPath::new(temp.path()).unwrap();
+        let file = temp.path().join("readonly.txt");
+        std::fs::write(&file, "fixed").unwrap();
+        let mut permissions = std::fs::metadata(&file).unwrap().permissions();
+        permissions.set_readonly(true);
+        std::fs::set_permissions(&file, permissions).unwrap();
+        let service = DocumentOpenService::default();
+        let mut registry = DocumentRegistry::new();
+
+        let opened = service
+            .open(&mut registry, &root, &CanonicalPath::new(&file).unwrap())
+            .unwrap();
+
+        assert!(registry.session(opened.id).unwrap().is_read_only());
+        #[allow(clippy::permissions_set_readonly_false)]
+        {
+            let mut permissions = std::fs::metadata(&file).unwrap().permissions();
+            permissions.set_readonly(false);
+            std::fs::set_permissions(&file, permissions).unwrap();
+        }
     }
 
     #[test]

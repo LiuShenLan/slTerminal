@@ -8,9 +8,13 @@
 #[cfg(test)]
 mod grammar_audit;
 
+mod edit;
 mod identity;
 mod registry;
 mod repository;
+pub use edit::{
+    EditApplyOutcome, EditOrigin, EditTransaction, EditTransactionError, MergePolicy, TextEdit,
+};
 pub use identity::{DocumentId, StableIdError, TextStateId};
 pub use registry::{DocumentOpenOutcome, DocumentRegistry, DocumentRegistryError, DocumentSession};
 pub use repository::{
