@@ -17,6 +17,7 @@
 - **Git 固定版本值**：`CommitId` 只接受完整 40 或 64 位小写十六进制对象 ID；`RepoPath` 只接受正斜杠规范相对文件路径。原因：短哈希、引用名与多义词法路径不能固定版本对象。边界：对象存在性由 GitFacade 查询，本 crate 不执行 Git。
 - **仓库路径事实单点**：`RepositoryBinding` 直接复用 `slterm_path` 的规范路径与文件身份，不另建路径 DTO。原因：绑定复核必须与 PathPolicy 使用同一身份事实。边界：本 crate 只比较纯值；真实路径解析、HEAD 存在性与对象读取由 application 提供。
 - **语言注册单点**：`LanguageRegistry` 以封闭 `LanguageId` 与静态 `LanguageDescriptor` 统一扩展名、固定文件名、Markdown 别名、grammar、highlight 与 fold query；路径匹配忽略 ASCII 大小写，JSONC／JSON5 共用 JSON5 高亮超集但不承担 JSONC 验证。每种语言必须编译真实 highlight 与 fold query，只有 PlainText 无 grammar，未知类型不得借旧映射猜测。原因：路径映射、语法任务与视图不得各自维护语言表。边界：手动覆盖只改变后续语法高亮，不改变路径、内容或保存行为；Markdown 语义仍归 Comrak，Tree-sitter 只负责源码高亮。
+- **增量语法后台单点**：`SyntaxWorker` 独占单个 Document 的 Rope 快照、Parser 与旧树；编辑按实际应用顺序携带全部 `InputEdit`，过期命令仍须推进正文与旧树，但只有当前代次可解析和发布。新代次与关闭经 `ParseOptions::progress_callback` 中止，取消即使返回 `None` 也必须先 reset 再解析新代次，禁止续跑旧栈。隐藏释放旧树，重新可见从最新 Rope 全量重建；命令与结果均有界，队列拒收只保留最新 Rope 待写副本，flush 或后续编辑经全量重建合并且不得断代，结果同时核对 revision 与代次，结果队列只传 `Weak<Tree>` 且采纳当前代次时才升级为 `Arc<Tree>`，结果满时只阻塞后台发布，shutdown 断开命令、排空结果后 join，前台 Drop 不等待。原因：迟到解析、取消残留与隐藏资产不得污染新正文或泄漏线程。边界：PlainText 不创建 worker；调用方必须提交真实完整编辑与单调 revision，分页正文不建立伪 Rope。
 - **grammar 单一运行时**：`tree-sitter-json5 0.1.0` 与 `tree-sitter-dockerfile 0.2.0` 使用仓内锁定源码快照，Rust binding 统一为 `LanguageFn`，随包 highlights query 直接导出。原因：全部 grammar 必须由 tree-sitter 0.27.1 执行 ABI 与真实 query 审计，旧 binding 不得带入第二套原生运行时或重复 query 副本。边界：C grammar、scanner 与 query 只按各自快照锚升级；测试不开放手写 C 入口适配，生产库保持 `forbid(unsafe_code)`。
 - **SCSS 固定 MSVC 修复 rev**：crates.io 的 `tree-sitter-scss 1.0.0` 会向 MSVC 直传 GCC 警告参数，固定上游 `9ab738d22bb248771d42e8678d1a307d14990df1`、版本仍为 1.0.0。原因：该 rev 相对发布基线不改 grammar、query 或 Rust 入口，只补平台构建分支及 README。边界：不得移动 rev；回到 crates.io 或升级前须重新审计并实测 Windows x64。
 
@@ -24,3 +25,4 @@
 
 - 定向测试：`cargo test -p slterm_document --test lib_tests <filter> -- --test-threads=1`；禁止 `--lib` 或裸 filter 直打默认 lib target。
 - grammar 审计：`cargo test -p slterm_document --test lib_tests grammar_audit -- --test-threads=1`；每种 grammar 必须实际验证 ABI 13–15、真实 highlights query 编译和最小合法样例无错误，禁止 skip、空 query 或占位 query。
+- 语法 worker：`cargo test -p slterm_document --test lib_tests syntax::tests -- --test-threads=1`；覆盖完整多编辑、Unicode Point、revision 丢弃、取消后 reset、有界背压、隐藏释放、重新可见重建与关闭回收。

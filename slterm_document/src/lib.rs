@@ -20,6 +20,7 @@ mod replace;
 mod repository;
 mod save;
 mod search;
+mod syntax;
 pub use edit::{
     EditApplyOutcome, EditOrigin, EditTransaction, EditTransactionError, MergePolicy, TextEdit,
 };
@@ -51,3 +52,4 @@ pub use save::{DocumentSaveReceipt, DocumentSaveRequest, SaveTransactionError};
 pub use search::{
     DocumentSearchResult, DocumentTextRequest, SearchError, SearchMatch, TextChunk, TextChunks,
 };
+pub use syntax::{SyntaxTree, SyntaxWorker, SyntaxWorkerError, syntax_input_edit};
