@@ -31,6 +31,22 @@ pub(crate) struct VisibleLine {
 }
 
 impl VisibleLine {
+    pub(super) fn new(
+        index: usize,
+        byte_range: Range<usize>,
+        display_start: usize,
+        text: String,
+        display_width: usize,
+    ) -> Self {
+        Self {
+            index,
+            byte_range,
+            display_start,
+            text,
+            display_width,
+        }
+    }
+
     pub(crate) const fn index(&self) -> usize {
         self.index
     }

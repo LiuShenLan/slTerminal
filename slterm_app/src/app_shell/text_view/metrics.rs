@@ -144,17 +144,26 @@ impl DisplayMap {
 
     /// 不物化整行地计算字素边界对应的显示列。
     pub(crate) fn column_at_rope(&self, text: RopeSlice<'_>, byte: usize) -> Option<usize> {
+        self.column_at_rope_from(text, byte, 0)
+    }
+
+    pub(crate) fn column_at_rope_from(
+        &self,
+        text: RopeSlice<'_>,
+        byte: usize,
+        start_column: usize,
+    ) -> Option<usize> {
         if byte > text.len() || !text.is_char_boundary(byte) {
             return None;
         }
         if byte == 0 {
-            return Some(0);
+            return Some(start_column);
         }
         let mut chunks = text.chunks();
         let mut chunk = chunks.next()?;
         let mut chunk_start = 0;
         let mut cursor = GraphemeCursor::new(0, text.len(), true);
-        let mut column = 0;
+        let mut column = start_column;
         let mut start = 0;
         loop {
             match cursor.next_boundary(chunk, chunk_start) {
@@ -251,6 +260,92 @@ impl DisplayMap {
         }
     }
 
+    /// 按显示列切分完整字素；范围不含换行，起点保留全局逻辑列以维持 Tab 停靠。
+    pub(crate) fn wrap_segments(
+        &self,
+        text: RopeSlice<'_>,
+        max_columns: usize,
+    ) -> Vec<(Range<usize>, usize)> {
+        let mut segments = Vec::new();
+        self.visit_wrap_segments_from(text, max_columns, 0, 0, |range, display_start| {
+            segments.push((range, display_start));
+            true
+        });
+        segments
+    }
+
+    /// 从已知字素边界续扫；visitor 返回 false 时立即停止，不读取后续文本。
+    pub(crate) fn visit_wrap_segments_from(
+        &self,
+        text: RopeSlice<'_>,
+        max_columns: usize,
+        start_byte: usize,
+        start_column: usize,
+        mut visit: impl FnMut(Range<usize>, usize) -> bool,
+    ) {
+        let max_columns = max_columns.max(1);
+        if text.len() == 0 {
+            visit(0..0, 0);
+            return;
+        }
+        if start_byte >= text.len() {
+            return;
+        }
+        let Some((mut chunk, mut chunk_start)) = text.get_chunk(start_byte) else {
+            return;
+        };
+        let mut cursor = GraphemeCursor::new(start_byte, text.len(), true);
+        let mut column = start_column;
+        let mut start = start_byte;
+        let mut segment_start = start_byte;
+        let mut segment_display_start = start_column;
+        loop {
+            match cursor.next_boundary(chunk, chunk_start) {
+                Ok(Some(end)) => {
+                    let grapheme = text.slice(start..end).to_string();
+                    let width = self.grapheme_width(&grapheme, column);
+                    let segment_columns = column - segment_display_start;
+                    if start > segment_start && width > max_columns.saturating_sub(segment_columns)
+                    {
+                        if !visit(segment_start..start, segment_display_start) {
+                            return;
+                        }
+                        segment_start = start;
+                        segment_display_start = column;
+                    }
+                    column += width;
+                    start = end;
+                }
+                Ok(None) => {
+                    visit(segment_start..text.len(), segment_display_start);
+                    return;
+                }
+                Err(GraphemeIncomplete::NextChunk) => {
+                    let next = chunk_start + chunk.len();
+                    if next >= text.len() {
+                        visit(segment_start..text.len(), segment_display_start);
+                        return;
+                    }
+                    let Some((next_chunk, next_start)) = text.get_chunk(next) else {
+                        return;
+                    };
+                    chunk = next_chunk;
+                    chunk_start = next_start;
+                }
+                Err(GraphemeIncomplete::PreContext(end)) => {
+                    let Some(previous) = end.checked_sub(1) else {
+                        return;
+                    };
+                    let Some((context, context_start)) = text.get_chunk(previous) else {
+                        return;
+                    };
+                    cursor.provide_context(&context[..end - context_start], context_start);
+                }
+                Err(_) => return,
+            }
+        }
+    }
+
     pub(crate) fn column_at(&self, text: &str, byte: usize) -> Option<usize> {
         self.column_at_from(text, byte, 0)
     }
@@ -340,6 +435,28 @@ mod tests {
         assert_eq!(map.byte_at_column(text, 5), Some(8));
         assert_eq!(map.byte_at_column(text, 6), Some(text.len()));
         assert_eq!(map.byte_at_column(text, 99), Some(text.len()));
+    }
+
+    #[test]
+    fn display_map_wrap_segments_preserve_graphemes_and_display_columns() {
+        let map = DisplayMap::new(4);
+        let text = ropey::Rope::from_str("A中B😀C");
+        assert_eq!(
+            map.wrap_segments(text.slice(..), 3),
+            vec![(0..4, 0), (4..9, 3), (9..10, 6)]
+        );
+        let tab = ropey::Rope::from_str("A\tB");
+        assert_eq!(
+            map.wrap_segments(tab.slice(..), 4),
+            vec![(0..2, 0), (2..3, 4)]
+        );
+        let empty = ropey::Rope::from_str("");
+        assert_eq!(map.wrap_segments(empty.slice(..), 3), vec![(0..0, 0)]);
+        let wide = ropey::Rope::from_str("中😀");
+        assert_eq!(
+            map.wrap_segments(wide.slice(..), 1),
+            vec![(0..3, 0), (3..7, 2)]
+        );
     }
 
     #[test]

@@ -14,14 +14,20 @@ use slterm_workspace::{
 
 use crate::persistence::workspace_writer::WorkspaceWriterClient;
 
-/// 只保存语言覆盖与阅读位置；选区、目标列、IME 与待续动作均为瞬态。
+/// 只保存语言覆盖、软换行与阅读位置；选区、目标列、IME 与待续动作均为瞬态。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct EditorViewState {
     scroll_line: u64,
     scroll_column: u64,
+    #[serde(default, skip_serializing_if = "is_false")]
+    wrap: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     language_override: Option<LanguageId>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 impl EditorViewState {
@@ -29,8 +35,18 @@ impl EditorViewState {
         Self {
             scroll_line: scroll_line as u64,
             scroll_column: scroll_column as u64,
+            wrap: false,
             language_override: None,
         }
+    }
+
+    pub(crate) fn with_wrap(mut self, wrap: bool) -> Self {
+        self.wrap = wrap;
+        self
+    }
+
+    pub(crate) fn wrap(self) -> bool {
+        self.wrap
     }
 
     pub(crate) fn with_language_override(mut self, language: Option<LanguageId>) -> Self {
@@ -412,6 +428,24 @@ mod tests {
                     .contains(&format!("\"language_override\":\"{}\"", language.as_str()))
             );
         }
+    }
+
+    #[test]
+    fn editor_view_state_persists_only_explicit_wrap_choice() {
+        let registry = ViewStateRegistry::new(&[editor_view_state_schema()]).unwrap();
+        let wrapped = EditorViewState::new(3, 0).with_wrap(true);
+        let state =
+            ViewState::new(&key(), serde_json::to_value(wrapped).unwrap(), &registry).unwrap();
+        assert!(state.to_canonical_json().unwrap().contains("\"wrap\":true"));
+        let decoded = serde_json::from_value::<EditorViewState>(state.into_state()).unwrap();
+        assert!(decoded.wrap());
+        let default = ViewState::new(
+            &key(),
+            json!({"scroll_line": 3, "scroll_column": 4}),
+            &registry,
+        )
+        .unwrap();
+        assert!(!default.to_canonical_json().unwrap().contains("\"wrap\""));
     }
 
     #[test]

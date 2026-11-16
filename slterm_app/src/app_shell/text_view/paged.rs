@@ -58,6 +58,7 @@ pub(crate) struct PagedTextView {
     view_states: EditorViewStateStore,
     view_state_dirty: bool,
     language_override: Option<LanguageId>,
+    wrap: bool,
     source: PagedSource,
     text_state: TextStateId,
     request: DocumentTextRequest,
@@ -127,6 +128,7 @@ impl PagedTextView {
             view_states,
             view_state_dirty: false,
             language_override: restored.language_override(),
+            wrap: restored.wrap(),
             source,
             text_state: session.current_state(),
             request,
@@ -498,6 +500,7 @@ impl PagedTextView {
         self.view_states.checkpoint(
             &self.view_lease,
             EditorViewState::new(self.scroll_line, self.scroll_column)
+                .with_wrap(self.wrap)
                 .with_language_override(self.language_override),
         );
     }
@@ -824,6 +827,7 @@ impl Render for PagedTextView {
                         line_height_bits: line_height.as_f32().to_bits(),
                     },
                     wrap_width_bits: bounds.size.width.as_f32().to_bits(),
+                    soft_wrap: false,
                     first_visible_column: scroll_column,
                     dpi_bits: window.scale_factor().to_bits(),
                     theme_revision,
@@ -1219,15 +1223,26 @@ mod tests {
             document_id: id,
         };
         let states = super::super::view_state::EditorViewStateStore::transient();
-        states.restore(key, super::super::view_state::EditorViewState::new(3, 4));
+        states.restore(
+            key.clone(),
+            super::super::view_state::EditorViewState::new(3, 4).with_wrap(true),
+        );
         let cache = Rc::new(RefCell::new(DocumentPageCache::new()));
         let reader: PageReader = Arc::new(|_| Ok("unused\n".to_owned()));
         let view = cx.update(|cx| {
-            make_view_with_store(cache, reader, source_for(&["0\n1\n2\n3\n4\n"]), states, cx)
+            make_view_with_store(
+                cache,
+                reader,
+                source_for(&["0\n1\n2\n3\n4\n"]),
+                states.clone(),
+                cx,
+            )
         });
         view.update(cx, |view, _| {
             assert_eq!(view.scroll_state_for_test(), (3, 4, 0..0, false));
+            view.persist_view_state();
         });
+        assert!(states.state(&key).wrap());
     }
 
     #[gpui::test]

@@ -16,6 +16,8 @@ use slterm_path::{CanonicalPath, ResolvedPath};
 use slterm_workspace::ViewKey;
 use uuid::Uuid;
 
+include!("editor_tests/wrap.rs");
+
 use super::{
     DocumentEditRequest, DocumentEditResponse, DocumentTextSnapshot, DocumentTextView,
     LayoutMetrics, TextSelection, transform_selection,
@@ -59,6 +61,7 @@ impl Host {
         view_states: super::super::view_state::EditorViewStateStore,
         cx: &mut Context<'_, Self>,
     ) -> Self {
+        cx.set_global(crate::app_shell::config::Settings::default());
         let id: DocumentId = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0f2a".parse().unwrap();
         let state = TextStateId::from_uuid(Uuid::now_v7()).unwrap();
         let mut registry = DocumentRegistry::new();
