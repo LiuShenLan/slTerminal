@@ -39,7 +39,7 @@ fn editor_text(
             .and_then(|panel| panel.editor())
             .unwrap()
             .read(cx)
-            .input_text_for_test(cx)
+            .input_text_for_test()
     })
 }
 
@@ -506,29 +506,263 @@ fn shared_document_restore_preserves_project_grant_union(cx: &mut TestAppContext
                 .unwrap();
         });
     });
-    let recovered = root.read_with(cx, |root, cx| {
-        root.projects[&project_id(PROJECT_B)]
-            .read(cx)
-            .panels
-            .values()
-            .find(|panel| {
-                panel.view_key
-                    == ViewKey::Editor {
-                        project_id: project_id(PROJECT_B),
+    window.update(|_, cx| {
+        root.update(cx, |root, cx| {
+            let revision = root.documents.session(document).unwrap().text_revision();
+            let end = root
+                .documents
+                .session(document)
+                .unwrap()
+                .text()
+                .unwrap()
+                .len();
+            root.documents
+                .apply(
+                    slterm_document::EditTransaction {
                         document_id: document,
-                    }
-            })
-            .and_then(|panel| panel.editor())
+                        expected_text_revision: revision,
+                        edits: vec![slterm_document::TextEdit::new(0..end, "changed")],
+                        origin: slterm_document::EditOrigin::UserInput,
+                        merge_policy: slterm_document::MergePolicy::Disallowed,
+                    },
+                    slterm_document::TextStateId::from_uuid(uuid::Uuid::now_v7()).unwrap(),
+                    std::time::Instant::now(),
+                )
+                .unwrap();
+            root.save_document(document, cx);
+        });
+    });
+    window.run_until_parked();
+
+    assert_eq!(std::fs::read_to_string(file).unwrap(), "changed");
+}
+
+#[gpui::test]
+fn inflight_open_does_not_suspend_existing_source_editing_or_saving(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let first = temp.path().join("first.txt");
+    let second = temp.path().join("second.txt");
+    std::fs::write(&first, "old").unwrap();
+    std::fs::write(&second, "second").unwrap();
+    let first_path = CanonicalPath::new(&first).unwrap();
+    let second_path = CanonicalPath::new(&second).unwrap();
+    let (root, mut window, _) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, temp.path().to_str().unwrap());
+    open_document(&root, &mut window, PROJECT_A, GROUP_A, first_path);
+    let document = root.read_with(cx, |root, _| {
+        root.snapshot
+            .registry()
+            .project(project_id(PROJECT_A))
             .unwrap()
-            .read(cx)
-            .local_document()
-            .cloned()
+            .layout()
+            .view_keys()
+            .into_iter()
+            .find_map(|view| match view {
+                ViewKey::Editor { document_id, .. } => Some(document_id),
+                _ => None,
+            })
+            .unwrap()
+    });
+    window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.open_document(
+                project_id(PROJECT_A),
+                group_id(GROUP_B),
+                second_path,
+                window,
+                cx,
+            )
+            .unwrap();
+        });
+    });
+
+    window.simulate_input("draft ");
+    window.run_until_parked();
+    assert_eq!(
+        root.read_with(cx, |root, _| root
+            .documents
+            .session(document)
+            .unwrap()
+            .text()
+            .unwrap()
+            .to_string()),
+        "draft old"
+    );
+    window.simulate_keystrokes("ctrl-s");
+    window.run_until_parked();
+    assert_eq!(std::fs::read_to_string(&first).unwrap(), "draft old");
+    assert!(!root.read_with(cx, |root, _| {
+        root.documents.session(document).unwrap().is_saving()
+    }));
+}
+
+#[gpui::test]
+fn source_save_failure_preserves_draft_and_allows_retry(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let file = temp.path().join("save.txt");
+    std::fs::write(&file, "old").unwrap();
+    let file_path = CanonicalPath::new(&file).unwrap();
+    let (root, mut window, _) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, temp.path().to_str().unwrap());
+    open_document(&root, &mut window, PROJECT_A, GROUP_A, file_path);
+    let document = root.read_with(cx, |root, _| root.snapshot().documents().next().unwrap().0);
+    window.simulate_input("draft ");
+
+    std::fs::write(&file, "external").unwrap();
+    window.simulate_keystrokes("ctrl-s");
+    window.run_until_parked();
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "external");
+    assert!(root.read_with(cx, |root, _| {
+        let session = root.documents.session(document).unwrap();
+        session.is_dirty() && !session.is_saving()
+    }));
+
+    std::fs::write(&file, "old").unwrap();
+    window.simulate_keystrokes("ctrl-s");
+    window.run_until_parked();
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "draft old");
+    assert!(!root.read_with(cx, |root, _| {
+        root.documents.session(document).unwrap().is_dirty()
+    }));
+}
+
+#[gpui::test]
+fn save_during_inflight_save_coalesces_the_latest_snapshot(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let file = temp.path().join("save.txt");
+    std::fs::write(&file, "old").unwrap();
+    let file_path = CanonicalPath::new(&file).unwrap();
+    let (root, mut window, _) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, temp.path().to_str().unwrap());
+    open_document(&root, &mut window, PROJECT_A, GROUP_A, file_path);
+    let document = root.read_with(cx, |root, _| {
+        root.snapshot
+            .registry()
+            .project(project_id(PROJECT_A))
+            .unwrap()
+            .layout()
+            .view_keys()
+            .into_iter()
+            .find_map(|view| match view {
+                ViewKey::Editor { document_id, .. } => Some(document_id),
+                _ => None,
+            })
             .unwrap()
     });
 
-    recovered.save("changed").unwrap();
+    let editor = root.read_with(cx, |root, cx| {
+        root.projects[&project_id(PROJECT_A)]
+            .read(cx)
+            .panels
+            .values()
+            .find_map(|panel| panel.editor().cloned())
+            .unwrap()
+    });
+    window.update(|window, cx| {
+        editor.update(cx, |view, cx| {
+            gpui::EntityInputHandler::replace_text_in_range(view, None, "first ", window, cx);
+        });
+        root.update(cx, |root, cx| root.save_document(document, cx));
+    });
+    assert!(root.read_with(cx, |root, _| {
+        root.documents.session(document).unwrap().is_saving()
+    }));
+    window.update(|window, cx| {
+        editor.update(cx, |view, cx| {
+            gpui::EntityInputHandler::replace_text_in_range(view, None, "second ", window, cx);
+        });
+    });
+    assert!(root.read_with(cx, |root, _| {
+        root.documents.session(document).unwrap().is_saving()
+    }));
+    window.update(|_, cx| {
+        root.update(cx, |root, cx| root.save_document(document, cx));
+    });
+    window.run_until_parked();
 
-    assert_eq!(std::fs::read_to_string(file).unwrap(), "changed");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "first second old");
+    assert!(!root.read_with(cx, |root, _| {
+        let session = root.documents.session(document).unwrap();
+        session.is_dirty() || session.is_saving()
+    }));
+}
+
+#[gpui::test]
+fn shared_source_edit_and_save_use_one_document_session(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let root_a = temp.path().join("a");
+    std::fs::create_dir(&root_a).unwrap();
+    let file = root_a.join("shared.txt");
+    std::fs::write(&file, "old").unwrap();
+    let file = CanonicalPath::new(file).unwrap();
+    let (root, mut window, _) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, root_a.to_str().unwrap());
+    add_project(&root, &mut window, PROJECT_B, temp.path().to_str().unwrap());
+    activate_project(&root, &mut window, PROJECT_A);
+    open_document(&root, &mut window, PROJECT_A, GROUP_A, file.clone());
+    let document = root.read_with(cx, |root, _| {
+        root.snapshot
+            .registry()
+            .project(project_id(PROJECT_A))
+            .unwrap()
+            .layout()
+            .view_keys()
+            .into_iter()
+            .find_map(|view| match view {
+                ViewKey::Editor { document_id, .. } => Some(document_id),
+                _ => None,
+            })
+            .unwrap()
+    });
+    activate_project(&root, &mut window, PROJECT_B);
+    open_document(&root, &mut window, PROJECT_B, GROUP_B, file.clone());
+    activate_project(&root, &mut window, PROJECT_A);
+    open_document(&root, &mut window, PROJECT_A, GROUP_A, file.clone());
+
+    window.simulate_input("shared ");
+    window.run_until_parked();
+
+    assert_eq!(editor_text(&root, cx, PROJECT_A, document), "shared old");
+    assert_eq!(editor_text(&root, cx, PROJECT_B, document), "shared old");
+    assert_eq!(
+        root.read_with(cx, |root, _| root
+            .documents
+            .session(document)
+            .unwrap()
+            .text()
+            .unwrap()
+            .to_string()),
+        "shared old"
+    );
+    for _ in 0..16 {
+        if root.read_with(cx, |root, _| {
+            root.documents.session(document).unwrap().text().unwrap() == "old"
+        }) {
+            break;
+        }
+        window.simulate_keystrokes("ctrl-z");
+    }
+    assert_eq!(editor_text(&root, cx, PROJECT_A, document), "old");
+    assert_eq!(editor_text(&root, cx, PROJECT_B, document), "old");
+    for _ in 0..16 {
+        if root.read_with(cx, |root, _| {
+            root.documents.session(document).unwrap().text().unwrap() == "shared old"
+        }) {
+            break;
+        }
+        window.simulate_keystrokes("ctrl-y");
+    }
+    assert_eq!(editor_text(&root, cx, PROJECT_A, document), "shared old");
+    assert_eq!(editor_text(&root, cx, PROJECT_B, document), "shared old");
+    window.simulate_keystrokes("ctrl-s");
+    window.run_until_parked();
+    assert_eq!(
+        std::fs::read_to_string(file.as_path()).unwrap(),
+        "shared old"
+    );
+    assert!(!root.read_with(cx, |root, _| {
+        root.documents.session(document).unwrap().is_dirty()
+    }));
 }
 
 #[gpui::test]

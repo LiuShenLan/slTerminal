@@ -1,23 +1,27 @@
-//! AppRoot 的 Document 打开队列与编辑器面板原子提交。
+//! AppRoot 的 Document 打开、同步编辑、保存与分页面板所有权。
 
 #![allow(dead_code)] // 消费点 = 后续 Explorer 与真实 OpenFile 移交入口。
-
 use std::collections::BTreeSet;
 use std::io;
+use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Instant;
 
-use gpui::{App, AppContext as _, Context, FocusHandle, Focusable as _, Window};
-use slterm_document::DocumentOpenOutcome;
+use gpui::{App, AppContext as _, Context, EntityId, FocusHandle, Focusable as _, Window};
+use slterm_document::{DocumentId, DocumentOpenOutcome, EditApplyOutcome, EditTransactionError};
 use slterm_path::CanonicalPath;
 use slterm_workspace::{PanelGroupId, PanelId, ProjectId, ProjectRegistryError, ViewKey};
 
 use super::AppRoot;
 use super::commands::AppRootError;
-use super::panel_host::{PanelContent, PanelHost};
+use super::panel_host::{EditorContent, PanelContent, PanelHost};
 use super::task_service::{CancellationToken, TaskId};
-use crate::app_shell::documents::{OpenedDocument, OpenedDocumentBody};
+use crate::app_shell::documents::{OpenedDocument, OpenedDocumentBody, ResolvedDocument};
 use crate::app_shell::file_editor::TextFileView;
-use crate::app_shell::text_view::PagedTextView;
+use crate::app_shell::text_view::{
+    DocumentEditRequest, DocumentEditResponse, DocumentSyntax, DocumentTextEvent,
+    DocumentTextSnapshot, DocumentTextView, PagedTextView,
+};
 
 pub(super) struct DocumentOpenRequest {
     project_id: ProjectId,
@@ -77,22 +81,21 @@ impl AppRoot {
         let Some(request) = self.pending_document_opens.pop_front() else {
             return;
         };
-        let mut documents = std::mem::take(&mut self.documents);
         let service = self.document_open_service.clone();
         let executor = cx.background_executor().clone();
         let window_handle = window.window_handle();
         self.document_open_active = true;
         self.tasks
             .register_with(TaskId::DocumentOpen, CancellationToken::new(), move || {
-                let read = executor.spawn(async move {
-                    let result = service.open(&mut documents, &request.project_root, &request.path);
-                    (documents, request, result)
+                let resolving = executor.spawn(async move {
+                    let result = service.resolve(&request.project_root, &request.path);
+                    (request, result)
                 });
                 cx.spawn(async move |this, cx| {
-                    let (documents, request, result) = read.await;
+                    let (request, result) = resolving.await;
                     let _ = window_handle.update(cx, |_, window, cx| {
                         let _ = this.update(cx, |root, cx| {
-                            root.finish_document_open(documents, request, result, window, cx);
+                            root.finish_document_resolve(request, result, window, cx);
                         });
                     });
                 })
@@ -100,9 +103,87 @@ impl AppRoot {
             .expect("DocumentOpen 单任务登记必须唯一");
     }
 
+    fn finish_document_resolve(
+        &mut self,
+        request: DocumentOpenRequest,
+        result: io::Result<ResolvedDocument>,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let resolved = match result {
+            Ok(resolved) => resolved,
+            Err(error) => {
+                self.finish_document_open(request, Err(error), window, cx);
+                return;
+            }
+        };
+        if let Some(id) = self.documents.existing(&resolved.location) {
+            self.finish_document_open(
+                request,
+                Ok(OpenedDocument {
+                    id,
+                    outcome: DocumentOpenOutcome::Existing,
+                    body: None,
+                }),
+                window,
+                cx,
+            );
+            return;
+        }
+        self.tasks.complete(TaskId::DocumentOpen);
+        self.start_document_read(request, resolved, window, cx);
+    }
+
+    fn start_document_read(
+        &mut self,
+        request: DocumentOpenRequest,
+        resolved: ResolvedDocument,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if self.close_in_progress || self.application_close.is_some() || self.close_completed {
+            self.document_open_active = false;
+            self.pending_document_opens.clear();
+            self.reconcile_document_registry(cx);
+            cx.notify();
+            return;
+        }
+        let service = self.document_open_service.clone();
+        let executor = cx.background_executor().clone();
+        let window_handle = window.window_handle();
+        self.tasks
+            .register_with(TaskId::DocumentOpen, CancellationToken::new(), move || {
+                let reading = executor.spawn(async move {
+                    let result = service.load(resolved);
+                    (request, result)
+                });
+                cx.spawn(async move |this, cx| {
+                    let (request, result) = reading.await;
+                    let _ = window_handle.update(cx, |_, window, cx| {
+                        let _ = this.update(cx, |root, cx| {
+                            root.finish_document_read(request, result, window, cx);
+                        });
+                    });
+                })
+            })
+            .expect("DocumentOpen 读取任务必须唯一");
+    }
+
+    fn finish_document_read(
+        &mut self,
+        request: DocumentOpenRequest,
+        result: io::Result<crate::app_shell::documents::LoadedDocument>,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let result = result.and_then(|loaded| {
+            crate::app_shell::documents::DocumentOpenService::register(&mut self.documents, loaded)
+        });
+        self.finish_document_open(request, result, window, cx);
+    }
+
     fn finish_document_open(
         &mut self,
-        documents: slterm_document::DocumentRegistry,
         request: DocumentOpenRequest,
         result: io::Result<OpenedDocument>,
         window: &mut Window,
@@ -110,7 +191,6 @@ impl AppRoot {
     ) {
         self.tasks.complete(TaskId::DocumentOpen);
         self.document_open_active = false;
-        self.documents = documents;
         if self.close_in_progress || self.application_close.is_some() || self.close_completed {
             if let Ok(opened) = &result
                 && opened.outcome == DocumentOpenOutcome::Opened
@@ -227,7 +307,7 @@ impl AppRoot {
                 self.paged_documents.insert(opened.id, document);
             }
             panel
-        } else {
+        } else if matches!(&view, ViewKey::Markdown { .. }) {
             let document = match opened.body {
                 Some(OpenedDocumentBody::Editable(document)) => *document,
                 None => self
@@ -240,7 +320,15 @@ impl AppRoot {
                     )));
                 }
             };
-            self.install_editor_panel(project_id, view, document, window, cx)?
+            self.install_markdown_panel(project_id, view, document, true, window, cx)?
+        } else {
+            if matches!(opened.body, Some(OpenedDocumentBody::Paged(_))) {
+                return Err(AppRootError::DocumentOpen(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "可编辑 Document 收到分页正文",
+                )));
+            }
+            self.install_source_panel(project_id, view, opened.id, true, window, cx)?
         };
         self.projects
             .get(&project_id)
@@ -252,18 +340,71 @@ impl AppRoot {
         Ok(())
     }
 
-    fn install_editor_panel(
+    fn install_source_panel(
         &mut self,
         project_id: ProjectId,
         view: ViewKey,
-        document: crate::app_shell::file_editor::document::Document,
+        document_id: DocumentId,
+        focus: bool,
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Result<PanelId, AppRootError> {
-        self.install_document_panel(project_id, view, document, true, window, cx)
+        let session = self
+            .documents
+            .session(document_id)
+            .cloned()
+            .filter(|session| session.text().is_some())
+            .ok_or(AppRootError::MissingPanel)?;
+        let language = slterm_document::LanguageRegistry::new()
+            .for_path(session.location().canonical_path().as_path());
+        let syntax = self.document_syntax.get(&document_id).cloned().or_else(|| {
+            language
+                .and_then(|language| DocumentSyntax::new(&session, language))
+                .map(|syntax| Rc::new(std::cell::RefCell::new(syntax)))
+        });
+        let view_syntax = syntax.clone();
+        let root = cx.entity().downgrade();
+        let panel =
+            self.install_panel(project_id, view, focus, window, cx, move |window, cx| {
+                let edit_root = root.clone();
+                let editor = cx.new(|cx| {
+                    DocumentTextView::new(
+                        document_id,
+                        &session,
+                        Box::new(move |request, origin, app| {
+                            let root = edit_root
+                                .upgrade()
+                                .ok_or(EditTransactionError::DocumentNotFound(document_id))?;
+                            root.update(app, |root, cx| {
+                                root.apply_document_edit(document_id, origin, request, cx)
+                            })
+                        }),
+                        view_syntax,
+                        cx,
+                    )
+                });
+                let save_subscription = cx.subscribe_in(
+                    &editor,
+                    window,
+                    move |root, _, event: &DocumentTextEvent, _, cx| {
+                        if matches!(event, DocumentTextEvent::Save) {
+                            root.save_document(document_id, cx);
+                        }
+                    },
+                );
+                let focus_handle = editor.read(cx).focus_handle(cx);
+                (
+                    PanelContent::Editor(EditorContent::new(editor, save_subscription)),
+                    focus_handle,
+                )
+            })?;
+        if let Some(syntax) = syntax {
+            self.document_syntax.insert(document_id, syntax);
+        }
+        Ok(panel)
     }
 
-    fn install_document_panel(
+    fn install_markdown_panel(
         &mut self,
         project_id: ProjectId,
         view: ViewKey,
@@ -274,12 +415,11 @@ impl AppRoot {
     ) -> Result<PanelId, AppRootError> {
         self.install_panel(project_id, view, focus, window, cx, |window, cx| {
             let path = document.location().canonical_path().as_path();
-            let markdown = crate::app_shell::doc_tabs::markdown_viewable(path);
             let language = crate::app_shell::code_tab::language_for_path(path);
             let editor =
-                cx.new(|cx| TextFileView::from_document(document, language, markdown, window, cx));
+                cx.new(|cx| TextFileView::from_document(document, language, true, window, cx));
             let focus_handle = editor.read(cx).focus_handle(cx);
-            (PanelContent::Editor(editor), focus_handle)
+            (PanelContent::Markdown(editor), focus_handle)
         })
     }
 
@@ -352,6 +492,140 @@ impl AppRoot {
         Ok(panel_id)
     }
 
+    fn apply_document_edit(
+        &mut self,
+        document_id: DocumentId,
+        origin: EntityId,
+        request: DocumentEditRequest,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<DocumentEditResponse, EditTransactionError> {
+        let outcome = match &request {
+            DocumentEditRequest::Edit(transaction, state) => {
+                self.documents
+                    .apply(transaction.clone(), *state, Instant::now())?
+            }
+            DocumentEditRequest::Travel { redo } => {
+                if *redo {
+                    self.documents.redo(document_id)?
+                } else {
+                    self.documents.undo(document_id)?
+                }
+            }
+        };
+        let session = self
+            .documents
+            .session(document_id)
+            .cloned()
+            .ok_or(EditTransactionError::DocumentNotFound(document_id))?;
+        let response = DocumentEditResponse {
+            snapshot: DocumentTextSnapshot::from_session(&session),
+            outcome,
+        };
+        if outcome == EditApplyOutcome::Applied {
+            let views = self
+                .projects
+                .values()
+                .flat_map(|project| {
+                    project
+                        .read(cx)
+                        .panels
+                        .values()
+                        .filter_map(|panel| match &panel.content {
+                            PanelContent::Editor(editor)
+                                if editor.view.entity_id() != origin
+                                    && matches!(&panel.view_key, ViewKey::Editor { document_id: actual, .. } if *actual == document_id) =>
+                            {
+                                Some(editor.view.clone())
+                            }
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
+            for view in views {
+                view.update(cx, |view, cx| match &request {
+                    DocumentEditRequest::Edit(transaction, _) => {
+                        view.apply_edit_snapshot(&session, transaction, cx);
+                    }
+                    DocumentEditRequest::Travel { .. } => view.apply_snapshot(&session, cx),
+                });
+            }
+        }
+        Ok(response)
+    }
+
+    pub(super) fn save_document(&mut self, document_id: DocumentId, cx: &mut Context<'_, Self>) {
+        if self.close_in_progress || self.application_close.is_some() || self.close_completed {
+            return;
+        }
+        let task_id = TaskId::DocumentSave(document_id);
+        if self.tasks.is_registered(task_id) {
+            self.pending_document_saves.insert(document_id);
+            return;
+        }
+        self.pending_document_saves.remove(&document_id);
+        if self
+            .documents
+            .session(document_id)
+            .is_none_or(|session| !session.is_dirty())
+        {
+            return;
+        }
+        let grants =
+            crate::app_shell::documents::document_project_grants(&self.snapshot, document_id);
+        let request = match self.documents.begin_save(document_id, 0) {
+            Ok(request) => request,
+            Err(error) => {
+                log::warn!("Document 保存请求未建立: {error}");
+                super::events::notify_document_save_state(error, cx);
+                return;
+            }
+        };
+        let save_generation = request.save_generation();
+        let executor = cx.background_executor().clone();
+        if let Err(error) = self
+            .tasks
+            .register_with(task_id, CancellationToken::new(), move || {
+                let background = executor.spawn(async move {
+                    crate::app_shell::documents::DocumentSaveService::default()
+                        .save(request, &grants, 0)
+                });
+                cx.spawn(async move |this, cx| {
+                    let result = background.await;
+                    let _ = this.update(cx, |root, cx| {
+                        root.tasks.complete(task_id);
+                        match result {
+                            Ok(receipt) => {
+                                if let Err(error) = root.documents.complete_save(receipt) {
+                                    log::warn!("Document 保存回执未采纳: {error}");
+                                    let _ = root.documents.fail_save(document_id, save_generation);
+                                    super::events::notify_document_save_state(error, cx);
+                                }
+                            }
+                            Err(error) => {
+                                if let Err(error) =
+                                    root.documents.fail_save(document_id, save_generation)
+                                {
+                                    log::warn!("Document 保存失败闸门未释放: {error}");
+                                }
+                                log::warn!("Document 保存失败: {error}");
+                                super::events::notify_document_save_error(&error, cx);
+                            }
+                        }
+                        if root.pending_document_saves.remove(&document_id) {
+                            root.save_document(document_id, cx);
+                        }
+                        root.resume_blocked_batch_saves(cx);
+                        cx.notify();
+                    });
+                })
+            })
+        {
+            let _ = self.documents.fail_save(document_id, save_generation);
+            log::warn!("Document 保存任务未登记: {error:?}");
+        }
+    }
+
     pub(super) fn restore_document_panel(
         &mut self,
         project_id: ProjectId,
@@ -360,6 +634,9 @@ impl AppRoot {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Result<PanelId, AppRootError> {
+        if !matches!(&view, ViewKey::Markdown { .. }) {
+            return self.install_source_panel(project_id, view, document_id, false, window, cx);
+        }
         let grants =
             crate::app_shell::documents::document_project_grants(&self.snapshot, document_id);
         let session = self
@@ -377,7 +654,7 @@ impl AppRoot {
         let document =
             crate::app_shell::file_editor::document::Document::from_recovered(session, write)
                 .ok_or(AppRootError::MissingPanel)?;
-        self.install_document_panel(project_id, view, document, false, window, cx)
+        self.install_markdown_panel(project_id, view, document, false, window, cx)
     }
 
     pub(super) fn restore_recovery_panel(
@@ -424,14 +701,14 @@ impl AppRoot {
         self.projects.values().find_map(|project| {
             project.read(cx).panels.values().find_map(|panel| {
                 if panel.view_key
-                    != (ViewKey::Editor {
+                    != (ViewKey::Markdown {
                         project_id: panel.view_key.project_id()?,
                         document_id,
                     })
                 {
                     return None;
                 }
-                panel.editor()?.read(cx).local_document().cloned()
+                panel.markdown()?.read(cx).local_document().cloned()
             })
         })
     }
@@ -468,5 +745,8 @@ impl AppRoot {
                 false
             }
         });
+        self.document_syntax.retain(|id, _| referenced.contains(id));
+        self.pending_document_saves
+            .retain(|id| referenced.contains(id));
     }
 }

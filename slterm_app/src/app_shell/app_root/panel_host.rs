@@ -1,18 +1,32 @@
-//! 运行面板宿主：稳定视图键绑定封闭的终端或编辑器实体。
+//! 运行面板宿主：稳定视图键绑定封闭的终端或文档实体。
 
-use gpui::{App, Entity, FocusHandle, Focusable as _};
+use gpui::{App, Entity, FocusHandle, Focusable as _, Subscription};
 use slterm_workspace::{PanelId, ViewKey};
 
 use crate::app_shell::file_editor::TextFileView;
-use crate::app_shell::text_view::PagedTextView;
+use crate::app_shell::text_view::{DocumentTextView, PagedTextView};
 use crate::gpui_terminal::view::TerminalView;
 
 use super::document_recovery::DocumentRecoveryView;
 
+pub(crate) struct EditorContent {
+    pub(crate) view: Entity<DocumentTextView>,
+    _save_subscription: Subscription,
+}
+
+impl EditorContent {
+    pub(crate) fn new(view: Entity<DocumentTextView>, save_subscription: Subscription) -> Self {
+        Self {
+            view,
+            _save_subscription: save_subscription,
+        }
+    }
+}
+
 pub(crate) enum PanelContent {
     Terminal(Entity<TerminalView>),
-    #[allow(dead_code)] // 消费点 = Document 真实打开与后续编辑器视图集成。
-    Editor(Entity<TextFileView>),
+    Editor(EditorContent),
+    Markdown(Entity<TextFileView>),
     Paged(Entity<PagedTextView>),
     Recovery(Entity<DocumentRecoveryView>),
 }
@@ -27,22 +41,30 @@ impl PanelHost {
     pub(crate) fn terminal(&self) -> Option<&Entity<TerminalView>> {
         match &self.content {
             PanelContent::Terminal(terminal) => Some(terminal),
-            PanelContent::Editor(_) | PanelContent::Paged(_) | PanelContent::Recovery(_) => None,
+            _ => None,
         }
     }
 
-    #[allow(dead_code)] // 消费点 = Document 跨项目已保存快照复用。
-    pub(crate) fn editor(&self) -> Option<&Entity<TextFileView>> {
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn editor(&self) -> Option<&Entity<DocumentTextView>> {
         match &self.content {
-            PanelContent::Editor(editor) => Some(editor),
-            PanelContent::Terminal(_) | PanelContent::Paged(_) | PanelContent::Recovery(_) => None,
+            PanelContent::Editor(editor) => Some(&editor.view),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn markdown(&self) -> Option<&Entity<TextFileView>> {
+        match &self.content {
+            PanelContent::Markdown(markdown) => Some(markdown),
+            _ => None,
         }
     }
 
     pub(crate) fn focus_handle(&self, cx: &App) -> FocusHandle {
         match &self.content {
             PanelContent::Terminal(terminal) => terminal.read(cx).focus_handle.clone(),
-            PanelContent::Editor(editor) => editor.read(cx).focus_handle(cx),
+            PanelContent::Editor(editor) => editor.view.read(cx).focus_handle(cx),
+            PanelContent::Markdown(markdown) => markdown.read(cx).focus_handle(cx),
             PanelContent::Paged(paged) => paged.read(cx).focus_handle(cx),
             PanelContent::Recovery(recovery) => recovery.read(cx).focus_handle.clone(),
         }

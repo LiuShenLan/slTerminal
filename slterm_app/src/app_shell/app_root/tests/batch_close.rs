@@ -4,7 +4,7 @@ use super::super::task_service::TaskId;
 use super::close::flush_when_ready;
 use super::*;
 use crate::persistence::close::CloseCommitStatus;
-use slterm_workspace::{CloseDecision, ClosePhase, CloseStage};
+use slterm_workspace::{CloseDecision, ClosePhase, CloseStage, CloseTarget};
 
 fn execute_batch(
     root: &Entity<AppRoot>,
@@ -69,6 +69,39 @@ fn group_views(root: &Entity<AppRoot>, cx: &TestAppContext, group: PanelGroupId)
             .and_then(|project| project.layout().group(group))
             .map(|group| group.views().to_vec())
             .unwrap_or_default()
+    })
+}
+
+fn open_editor(
+    root: &Entity<AppRoot>,
+    window: &mut VisualTestContext,
+    cx: &TestAppContext,
+    path: CanonicalPath,
+) -> (
+    slterm_document::DocumentId,
+    Entity<crate::app_shell::text_view::DocumentTextView>,
+) {
+    super::documents::open_document(root, window, PROJECT_A, GROUP_A, path.clone());
+    root.read_with(cx, |root, cx| {
+        let document = root
+            .snapshot()
+            .documents()
+            .find_map(|(id, location)| (location.canonical_path() == &path).then_some(id))
+            .unwrap();
+        let editor = root.projects[&project_id(PROJECT_A)]
+            .read(cx)
+            .panels
+            .values()
+            .find(|panel| {
+                panel.view_key
+                    == ViewKey::Editor {
+                        project_id: project_id(PROJECT_A),
+                        document_id: document,
+                    }
+            })
+            .and_then(|panel| panel.editor().cloned())
+            .unwrap();
+        (document, editor)
     })
 }
 
@@ -204,6 +237,514 @@ fn integration_batch_close(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn save_close_rechecks_revision_after_background_writes(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let file = temp.path().join("late.txt");
+    std::fs::write(&file, "old").unwrap();
+    let file_path = CanonicalPath::new(dunce::canonicalize(&file).unwrap()).unwrap();
+    let (root, mut window, _) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, temp.path().to_str().unwrap());
+    new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_A);
+    super::documents::open_document(&root, &mut window, PROJECT_A, GROUP_A, file_path.clone());
+    let (document, editor) = root.read_with(cx, |root, cx| {
+        let document = root.snapshot().documents().next().unwrap().0;
+        let editor = root.projects[&project_id(PROJECT_A)]
+            .read(cx)
+            .panels
+            .values()
+            .find_map(|panel| panel.editor().cloned())
+            .unwrap();
+        (document, editor)
+    });
+    window.update(|window, cx| {
+        editor.update(cx, |view, cx| {
+            gpui::EntityInputHandler::replace_text_in_range(view, None, "saved", window, cx);
+        });
+    });
+    execute_batch_with_decisions(
+        &root,
+        &mut window,
+        CommandId::CloseAllViews,
+        group_id(GROUP_A),
+        BTreeMap::from([(document, CloseDecision::Save)]),
+    )
+    .unwrap();
+    window.update(|window, cx| {
+        editor.update(cx, |view, cx| {
+            gpui::EntityInputHandler::replace_text_in_range(view, None, "late ", window, cx);
+        });
+    });
+    window.run_until_parked();
+
+    assert_eq!(
+        std::fs::read_to_string(file_path.as_path()).unwrap(),
+        "savedold"
+    );
+    assert_eq!(
+        root.read_with(cx, |root, _| root
+            .documents
+            .session(document)
+            .unwrap()
+            .text()
+            .unwrap()
+            .to_string()),
+        "savedlate old"
+    );
+    assert_eq!(
+        root.read_with(cx, |root, _| root
+            .terminal_close_batches
+            .values()
+            .next()
+            .unwrap()
+            .coordinator
+            .phase()),
+        ClosePhase::Failed(CloseStage::Save)
+    );
+
+    execute_batch_with_decisions(
+        &root,
+        &mut window,
+        CommandId::CloseAllViews,
+        group_id(GROUP_A),
+        BTreeMap::from([(document, CloseDecision::Save)]),
+    )
+    .unwrap();
+    window.run_until_parked();
+    assert_eq!(
+        std::fs::read_to_string(file_path.as_path()).unwrap(),
+        "savedlate old"
+    );
+    assert!(root.read_with(cx, |root, _| root.documents.is_empty()));
+    assert_eq!(
+        root.read_with(cx, |root, _| root.terminal_close_batches.len()),
+        0
+    );
+}
+
+#[gpui::test]
+fn save_close_rechecks_a_clean_sibling_edited_during_background_writes(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let saved_path = temp.path().join("saved.txt");
+    let sibling_path = temp.path().join("sibling.txt");
+    std::fs::write(&saved_path, "old").unwrap();
+    std::fs::write(&sibling_path, "clean").unwrap();
+    let saved_path = CanonicalPath::new(dunce::canonicalize(&saved_path).unwrap()).unwrap();
+    let sibling_path = CanonicalPath::new(dunce::canonicalize(&sibling_path).unwrap()).unwrap();
+    let (root, mut window, _) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, temp.path().to_str().unwrap());
+    new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_A);
+    let (saved, saved_editor) = open_editor(&root, &mut window, cx, saved_path.clone());
+    let (sibling, sibling_editor) = open_editor(&root, &mut window, cx, sibling_path.clone());
+    window.update(|window, cx| {
+        saved_editor.update(cx, |view, cx| {
+            gpui::EntityInputHandler::replace_text_in_range(view, None, "saved", window, cx);
+        });
+    });
+
+    execute_batch_with_decisions(
+        &root,
+        &mut window,
+        CommandId::CloseAllViews,
+        group_id(GROUP_A),
+        BTreeMap::from([(saved, CloseDecision::Save)]),
+    )
+    .unwrap();
+    window.update(|window, cx| {
+        sibling_editor.update(cx, |view, cx| {
+            gpui::EntityInputHandler::replace_text_in_range(view, None, "late ", window, cx);
+        });
+    });
+    window.run_until_parked();
+
+    assert_eq!(
+        std::fs::read_to_string(saved_path.as_path()).unwrap(),
+        "savedold"
+    );
+    assert_eq!(
+        root.read_with(cx, |root, _| root
+            .documents
+            .session(sibling)
+            .unwrap()
+            .text()
+            .unwrap()
+            .to_string()),
+        "late clean"
+    );
+    assert!(root.read_with(cx, |root, _| {
+        root.terminal_close_batches
+            .values()
+            .next()
+            .is_some_and(|close| {
+                close.needs_recollect
+                    && close.coordinator.phase() == ClosePhase::Failed(CloseStage::Save)
+            })
+    }));
+}
+
+#[gpui::test]
+fn discard_close_waits_for_inflight_save_before_detaching_document(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let file = temp.path().join("discard.txt");
+    std::fs::write(&file, "old").unwrap();
+    let file_path = CanonicalPath::new(dunce::canonicalize(&file).unwrap()).unwrap();
+    let (root, mut window, _) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, temp.path().to_str().unwrap());
+    new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_A);
+    super::documents::open_document(&root, &mut window, PROJECT_A, GROUP_A, file_path.clone());
+    let (document, editor) = root.read_with(cx, |root, cx| {
+        let document = root.snapshot().documents().next().unwrap().0;
+        let editor = root.projects[&project_id(PROJECT_A)]
+            .read(cx)
+            .panels
+            .values()
+            .find_map(|panel| panel.editor().cloned())
+            .unwrap();
+        (document, editor)
+    });
+    window.update(|window, cx| {
+        editor.update(cx, |view, cx| {
+            gpui::EntityInputHandler::replace_text_in_range(view, None, "saved", window, cx);
+        });
+        root.update(cx, |root, cx| root.save_document(document, cx));
+    });
+
+    execute_batch_with_decisions(
+        &root,
+        &mut window,
+        CommandId::CloseAllViews,
+        group_id(GROUP_A),
+        BTreeMap::from([(document, CloseDecision::Discard)]),
+    )
+    .unwrap();
+    assert!(root.read_with(cx, |root, _| root.documents.session(document).is_some()));
+    window.run_until_parked();
+
+    assert_eq!(
+        std::fs::read_to_string(file_path.as_path()).unwrap(),
+        "savedold"
+    );
+    assert!(root.read_with(cx, |root, _| root.documents.is_empty()));
+    assert_eq!(
+        root.read_with(cx, |root, _| root.terminal_close_batches.len()),
+        0
+    );
+}
+
+#[gpui::test]
+fn discard_close_rechecks_late_edits_and_recollects_on_retry(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let file = temp.path().join("discard-late.txt");
+    std::fs::write(&file, "old").unwrap();
+    let file_path = CanonicalPath::new(dunce::canonicalize(&file).unwrap()).unwrap();
+    let (root, mut window, _) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, temp.path().to_str().unwrap());
+    new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_A);
+    super::documents::open_document(&root, &mut window, PROJECT_A, GROUP_A, file_path.clone());
+    let (document, editor) = root.read_with(cx, |root, cx| {
+        let document = root.snapshot().documents().next().unwrap().0;
+        let editor = root.projects[&project_id(PROJECT_A)]
+            .read(cx)
+            .panels
+            .values()
+            .find_map(|panel| panel.editor().cloned())
+            .unwrap();
+        (document, editor)
+    });
+    window.update(|window, cx| {
+        editor.update(cx, |view, cx| {
+            gpui::EntityInputHandler::replace_text_in_range(view, None, "saved", window, cx);
+        });
+        root.update(cx, |root, cx| root.save_document(document, cx));
+    });
+    execute_batch_with_decisions(
+        &root,
+        &mut window,
+        CommandId::CloseAllViews,
+        group_id(GROUP_A),
+        BTreeMap::from([(document, CloseDecision::Discard)]),
+    )
+    .unwrap();
+    window.update(|window, cx| {
+        editor.update(cx, |view, cx| {
+            gpui::EntityInputHandler::replace_text_in_range(view, None, "late ", window, cx);
+        });
+    });
+    window.run_until_parked();
+
+    assert_eq!(
+        root.read_with(cx, |root, _| root
+            .documents
+            .session(document)
+            .unwrap()
+            .text()
+            .unwrap()
+            .to_string()),
+        "savedlate old"
+    );
+    assert!(root.read_with(cx, |root, _| {
+        root.terminal_close_batches
+            .values()
+            .next()
+            .is_some_and(|close| {
+                close.coordinator.phase() == ClosePhase::Failed(CloseStage::CommitState)
+            })
+    }));
+    execute_batch_with_decisions(
+        &root,
+        &mut window,
+        CommandId::CloseAllViews,
+        group_id(GROUP_A),
+        BTreeMap::from([(document, CloseDecision::Discard)]),
+    )
+    .unwrap();
+    window.run_until_parked();
+    assert!(root.read_with(cx, |root, _| root.documents.is_empty()));
+}
+
+#[gpui::test]
+fn recollect_requires_a_decision_for_newly_dirty_document_and_persists_new_intent(
+    cx: &mut TestAppContext,
+) {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let (events, _event_rx) = std::sync::mpsc::sync_channel(64);
+    let runtime = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
+    let persistence =
+        AppRootPersistence::load_with_previous_run(&paths, Some(runtime.client()), None);
+    let (root, mut window, _) = open_root_with_persistence(cx, persistence);
+    add_project(&root, &mut window, PROJECT_A, temp.path().to_str().unwrap());
+    let discarded_path = temp.path().join("discarded.txt");
+    let clean_path = temp.path().join("newly-dirty.txt");
+    std::fs::write(&discarded_path, "old").unwrap();
+    std::fs::write(&clean_path, "clean").unwrap();
+    let discarded_path = CanonicalPath::new(dunce::canonicalize(&discarded_path).unwrap()).unwrap();
+    let clean_path = CanonicalPath::new(dunce::canonicalize(&clean_path).unwrap()).unwrap();
+    let (discarded, discarded_editor) = open_editor(&root, &mut window, cx, discarded_path.clone());
+    let (clean, clean_editor) = open_editor(&root, &mut window, cx, clean_path.clone());
+    flush_when_ready(&runtime.client());
+    window.update(|window, cx| {
+        discarded_editor.update(cx, |view, cx| {
+            gpui::EntityInputHandler::replace_text_in_range(view, None, "saved", window, cx);
+        });
+        root.update(cx, |root, cx| root.save_document(discarded, cx));
+    });
+
+    execute_batch_with_decisions(
+        &root,
+        &mut window,
+        CommandId::CloseAllViews,
+        group_id(GROUP_A),
+        BTreeMap::from([(discarded, CloseDecision::Discard)]),
+    )
+    .unwrap();
+    window.update(|window, cx| {
+        clean_editor.update(cx, |view, cx| {
+            gpui::EntityInputHandler::replace_text_in_range(view, None, "late ", window, cx);
+        });
+    });
+    window.run_until_parked();
+    let previous_fingerprint = root.read_with(cx, |root, _| {
+        let close = root.terminal_close_batches.values().next().unwrap();
+        assert_eq!(
+            close.coordinator.phase(),
+            ClosePhase::Failed(CloseStage::CommitState)
+        );
+        *close.persisted.as_ref().unwrap().intent.fingerprint()
+    });
+
+    // 原干净 Document 已变脏，重试必须重新收集并要求新的内容决定。
+    assert!(matches!(
+        execute_batch(&root, &mut window, CommandId::CloseAllViews, group_id(GROUP_A)),
+        Err(AppRootError::DocumentClose(
+            slterm_workspace::DocumentCloseError::MissingDecision(id)
+        )) if id == clean
+    ));
+    assert!(root.read_with(cx, |root, _| root.documents.session(clean).is_some()));
+
+    execute_batch_with_decisions(
+        &root,
+        &mut window,
+        CommandId::CloseAllViews,
+        group_id(GROUP_A),
+        BTreeMap::from([(clean, CloseDecision::Save)]),
+    )
+    .unwrap();
+    root.read_with(cx, |root, _| {
+        let close = root.terminal_close_batches.values().next().unwrap();
+        let persisted = close.persisted.as_ref().unwrap();
+        assert_eq!(close.coordinator.intent(), Some(&persisted.intent));
+        assert_ne!(persisted.intent.fingerprint(), &previous_fingerprint);
+        let objects = close
+            .coordinator
+            .intent()
+            .unwrap()
+            .objects()
+            .filter_map(|object| match object.id {
+                CloseTarget::Document(id) => Some((id, object.decision)),
+                CloseTarget::Terminal(_) => None,
+            })
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(objects[&discarded], CloseDecision::NotRequired);
+        assert_eq!(objects[&clean], CloseDecision::Save);
+    });
+    window.run_until_parked();
+    flush_when_ready(&runtime.client());
+
+    assert_eq!(
+        std::fs::read_to_string(discarded_path.as_path()).unwrap(),
+        "savedold"
+    );
+    assert_eq!(
+        std::fs::read_to_string(clean_path.as_path()).unwrap(),
+        "late clean"
+    );
+    assert!(root.read_with(cx, |root, _| root.documents.is_empty()));
+    assert_eq!(
+        root.read_with(cx, |root, _| root.terminal_close_batches.len()),
+        0
+    );
+    let database = rusqlite::Connection::open(paths.workspace_db_path()).unwrap();
+    assert_eq!(
+        database
+            .query_row("SELECT commit_status FROM close_intents", [], |row| row
+                .get::<_, String>(
+                0
+            ))
+            .unwrap(),
+        "completed"
+    );
+    drop(database);
+    runtime.shutdown(ControlPlaneCleanup::Succeeded).unwrap();
+}
+
+#[gpui::test]
+fn pending_discard_resume_is_idempotent(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let file = temp.path().join("resume.txt");
+    std::fs::write(&file, "old").unwrap();
+    let file_path = CanonicalPath::new(dunce::canonicalize(&file).unwrap()).unwrap();
+    let (root, mut window, _) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, temp.path().to_str().unwrap());
+    new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_A);
+    super::documents::open_document(&root, &mut window, PROJECT_A, GROUP_A, file_path.clone());
+    let (document, editor) = root.read_with(cx, |root, cx| {
+        let document = root.snapshot().documents().next().unwrap().0;
+        let editor = root.projects[&project_id(PROJECT_A)]
+            .read(cx)
+            .panels
+            .values()
+            .find_map(|panel| panel.editor().cloned())
+            .unwrap();
+        (document, editor)
+    });
+    let request = window.update(|window, cx| {
+        editor.update(cx, |view, cx| {
+            gpui::EntityInputHandler::replace_text_in_range(view, None, "saved", window, cx);
+        });
+        root.update(cx, |root, _| {
+            root.documents.begin_save(document, 0).unwrap()
+        })
+    });
+    let receipt = crate::app_shell::documents::DocumentSaveService::default()
+        .save(
+            request,
+            &[slterm_path::PathGrant::project_root(
+                CanonicalPath::new(dunce::canonicalize(temp.path()).unwrap()).unwrap(),
+            )],
+            0,
+        )
+        .unwrap();
+    execute_batch_with_decisions(
+        &root,
+        &mut window,
+        CommandId::CloseAllViews,
+        group_id(GROUP_A),
+        BTreeMap::from([(document, CloseDecision::Discard)]),
+    )
+    .unwrap();
+    root.update(cx, |root, cx| {
+        root.documents.complete_save(receipt).unwrap();
+        root.resume_blocked_batch_saves(cx);
+        root.resume_blocked_batch_saves(cx);
+    });
+    assert!(root.read_with(cx, |root, _| {
+        root.terminal_close_batches
+            .values()
+            .next()
+            .is_some_and(|close| !close.outcome_unknown)
+    }));
+    window.run_until_parked();
+    assert_eq!(
+        root.read_with(cx, |root, _| root.terminal_close_batches.len()),
+        0
+    );
+}
+
+#[gpui::test]
+fn document_close_waits_for_and_follows_an_inflight_save(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let file = temp.path().join("shared.txt");
+    std::fs::write(&file, "old").unwrap();
+    let file_path = CanonicalPath::new(dunce::canonicalize(&file).unwrap()).unwrap();
+    let (root, mut window, state) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, temp.path().to_str().unwrap());
+    let terminal = new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_A);
+    super::documents::open_document(&root, &mut window, PROJECT_A, GROUP_A, file_path.clone());
+    let document = root.read_with(cx, |root, _| root.snapshot().documents().next().unwrap().0);
+    root.update(cx, |root, cx| {
+        let session = root.documents.session(document).unwrap();
+        let end = session.text().unwrap().len();
+        root.documents
+            .apply(
+                slterm_document::EditTransaction {
+                    document_id: document,
+                    expected_text_revision: session.text_revision(),
+                    edits: vec![slterm_document::TextEdit::new(0..end, "saved")],
+                    origin: slterm_document::EditOrigin::ReplaceAll,
+                    merge_policy: slterm_document::MergePolicy::Disallowed,
+                },
+                slterm_document::TextStateId::from_uuid(uuid::Uuid::now_v7()).unwrap(),
+                std::time::Instant::now(),
+            )
+            .unwrap();
+        root.save_document(document, cx);
+    });
+
+    execute_batch_with_decisions(
+        &root,
+        &mut window,
+        CommandId::CloseAllViews,
+        group_id(GROUP_A),
+        BTreeMap::from([(document, CloseDecision::Save)]),
+    )
+    .unwrap();
+    assert!(root.read_with(cx, |root, _| {
+        root.terminal_close_batches
+            .values()
+            .next()
+            .unwrap()
+            .coordinator
+            .phase()
+            == ClosePhase::Running(CloseStage::Save)
+    }));
+    window.run_until_parked();
+
+    assert_eq!(
+        std::fs::read_to_string(file_path.as_path()).unwrap(),
+        "saved"
+    );
+    assert_eq!(
+        root.read_with(cx, |root, _| root.terminal_close_batches.len()),
+        0
+    );
+    assert!(root.read_with(cx, |root, _| root.documents.is_empty()));
+    assert!(matches!(
+        state.borrow().sessions[&terminal.sequence()].try_recv(),
+        Ok(Msg::Shutdown)
+    ));
+}
+
+#[gpui::test]
 fn document_batch_close_partial_save(cx: &mut TestAppContext) {
     let temp = tempfile::tempdir().unwrap();
     let first_path = temp.path().join("first.txt");
@@ -264,6 +805,10 @@ fn document_batch_close_partial_save(cx: &mut TestAppContext) {
         decisions,
     )
     .unwrap();
+    assert!(
+        root.read_with(cx, |root, _| root.documents.session(ids["first"]).is_some()),
+        "后台保存期间 Registry 必须仍可供前台对账"
+    );
     window.run_until_parked();
 
     assert_eq!(

@@ -2,7 +2,9 @@
 
 use std::collections::BTreeMap;
 
-use slterm_document::{DocumentId, DocumentRegistry, SaveTransactionError};
+use slterm_document::{
+    DocumentId, DocumentRegistry, DocumentSaveReceipt, DocumentSaveRequest, SaveTransactionError,
+};
 use slterm_path::PathGrant;
 use slterm_workspace::{CloseDecision, CloseIntent, CloseTarget};
 
@@ -29,16 +31,31 @@ impl DocumentSaveFailure {
     pub(crate) const fn document_id(&self) -> DocumentId {
         self.document_id
     }
+
+    pub(crate) const fn is_revision_mismatch(&self) -> bool {
+        matches!(self.kind, DocumentSaveFailureKind::RevisionMismatch)
+    }
 }
 
-/// 逐项保存并聚合失败；已成功的 Document 不回滚。只允许在后台执行体调用。
-pub(crate) fn execute_document_save_stage(
+pub(crate) struct PreparedDocumentSaveStage {
+    pub(crate) requests: Vec<DocumentSaveRequest>,
+    pub(crate) failures: Vec<DocumentSaveFailure>,
+}
+
+pub(crate) struct DocumentSaveWriteOutcome {
+    document_id: DocumentId,
+    save_generation: u64,
+    result: Result<DocumentSaveReceipt, SaveError>,
+}
+
+/// 前台捕获不可变保存请求；Registry 从不移交后台。
+pub(crate) fn prepare_document_save_stage(
     registry: &mut DocumentRegistry,
     intent: &CloseIntent<CloseTarget>,
     grants: &BTreeMap<DocumentId, Vec<PathGrant>>,
     current_authorization_generation: u64,
-) -> Result<(), Vec<DocumentSaveFailure>> {
-    let service = DocumentSaveService::default();
+) -> PreparedDocumentSaveStage {
+    let mut requests = Vec::new();
     let mut failures = Vec::new();
     for object in intent.objects() {
         let CloseTarget::Document(id) = object.id else {
@@ -57,38 +74,71 @@ pub(crate) fn execute_document_save_stage(
             });
             continue;
         }
-        let Some(grants) = grants.get(&id) else {
+        if !grants.contains_key(&id) {
             failures.push(DocumentSaveFailure {
                 document_id: id,
                 kind: DocumentSaveFailureKind::Save(SaveError::Unauthorized),
             });
             continue;
-        };
-        let request = match registry.begin_save(id, current_authorization_generation) {
-            Ok(request) => request,
-            Err(error) => {
-                failures.push(DocumentSaveFailure {
-                    document_id: id,
-                    kind: DocumentSaveFailureKind::State(error),
-                });
-                continue;
+        }
+        match registry.begin_save(id, current_authorization_generation) {
+            Ok(request) => requests.push(request),
+            Err(error) => failures.push(DocumentSaveFailure {
+                document_id: id,
+                kind: DocumentSaveFailureKind::State(error),
+            }),
+        }
+    }
+    PreparedDocumentSaveStage { requests, failures }
+}
+
+/// 后台只执行真实写盘，不读取或修改 Registry。
+pub(crate) fn execute_document_save_writes(
+    requests: Vec<DocumentSaveRequest>,
+    grants: &BTreeMap<DocumentId, Vec<PathGrant>>,
+    current_authorization_generation: u64,
+) -> Vec<DocumentSaveWriteOutcome> {
+    let service = DocumentSaveService::default();
+    requests
+        .into_iter()
+        .map(|request| {
+            let document_id = request.document_id();
+            let save_generation = request.save_generation();
+            let result = service.save(
+                request,
+                &grants[&document_id],
+                current_authorization_generation,
+            );
+            DocumentSaveWriteOutcome {
+                document_id,
+                save_generation,
+                result,
             }
-        };
-        let generation = request.save_generation();
-        match service.save(request, grants, current_authorization_generation) {
+        })
+        .collect()
+}
+
+/// 前台按保存代次结算全部回执；已成功写入不回滚，失败完整聚合。
+pub(crate) fn complete_document_save_stage(
+    registry: &mut DocumentRegistry,
+    mut failures: Vec<DocumentSaveFailure>,
+    writes: Vec<DocumentSaveWriteOutcome>,
+) -> Result<(), Vec<DocumentSaveFailure>> {
+    for write in writes {
+        match write.result {
             Ok(receipt) => {
                 if let Err(error) = registry.complete_save(receipt) {
-                    let _ = registry.fail_save(id, generation);
+                    let _ = registry.fail_save(write.document_id, write.save_generation);
                     failures.push(DocumentSaveFailure {
-                        document_id: id,
+                        document_id: write.document_id,
                         kind: DocumentSaveFailureKind::State(error),
                     });
                 }
             }
             Err(error) => {
-                let _ = registry.fail_save(id, generation);
+                let _ = registry.fail_save(write.document_id, write.save_generation);
                 failures.push(DocumentSaveFailure {
-                    document_id: id,
+                    document_id: write.document_id,
                     kind: DocumentSaveFailureKind::Save(error),
                 });
             }
@@ -99,6 +149,47 @@ pub(crate) fn execute_document_save_stage(
     } else {
         Err(failures)
     }
+}
+
+/// 所有待提交关闭（包括 Discard）都不得越过已经变化的 Document 代次。
+pub(crate) fn validate_document_close_generations(
+    registry: &DocumentRegistry,
+    intent: &CloseIntent<CloseTarget>,
+) -> Result<(), Vec<DocumentSaveFailure>> {
+    let failures = intent
+        .objects()
+        .filter_map(|object| {
+            let CloseTarget::Document(id) = object.id else {
+                return None;
+            };
+            registry
+                .session(id)
+                .is_none_or(|session| session.text_revision() != object.generation)
+                .then_some(DocumentSaveFailure {
+                    document_id: id,
+                    kind: DocumentSaveFailureKind::RevisionMismatch,
+                })
+        })
+        .collect::<Vec<_>>();
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures)
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn execute_document_save_stage(
+    registry: &mut DocumentRegistry,
+    intent: &CloseIntent<CloseTarget>,
+    grants: &BTreeMap<DocumentId, Vec<PathGrant>>,
+    current_authorization_generation: u64,
+) -> Result<(), Vec<DocumentSaveFailure>> {
+    let prepared =
+        prepare_document_save_stage(registry, intent, grants, current_authorization_generation);
+    let writes =
+        execute_document_save_writes(prepared.requests, grants, current_authorization_generation);
+    complete_document_save_stage(registry, prepared.failures, writes)
 }
 
 #[cfg(test)]

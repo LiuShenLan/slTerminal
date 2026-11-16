@@ -288,6 +288,7 @@ fn open_root_with_persistence_and_size_configured(
         cx.set_global(crate::app_shell::config::Settings::default());
         crate::app_shell::theme::apply_dark_theme(cx);
         super::keymap::register(cx);
+        crate::app_shell::text_view::init(cx);
     });
     let state = Rc::new(RefCell::new(LauncherState::default()));
     configure(&mut state.borrow_mut());

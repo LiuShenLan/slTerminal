@@ -5,11 +5,11 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use gpui::{
-    App, Bounds, ContentMask, Context, ElementInputHandler, EntityInputHandler, FocusHandle,
-    Focusable, Font, Hsla, InteractiveElement as _, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, ParentElement as _, Pixels, Point, Render, ScrollWheelEvent, ShapedLine,
-    SharedString, Styled as _, Task, TextAlign, TextRun, UTF16Selection, Window, canvas, div, fill,
-    point, px, size,
+    App, Bounds, ContentMask, Context, ElementInputHandler, EntityId, EntityInputHandler,
+    EventEmitter, FocusHandle, Focusable, Font, Hsla, InteractiveElement as _, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, Point, Render,
+    ScrollWheelEvent, ShapedLine, SharedString, Styled as _, Task, TextAlign, TextRun,
+    UTF16Selection, Window, canvas, div, fill, point, px, size,
 };
 use gpui_component::ActiveTheme as _;
 use gpui_component::input::{
@@ -31,7 +31,7 @@ use super::metrics::{
 };
 use super::source::{RopeTextSource, TextSelection};
 use super::syntax::{DocumentSyntax, capture_color};
-use super::{SelectDown, SelectLeft, SelectRight, SelectUp};
+use super::{SaveFile, SelectDown, SelectLeft, SelectRight, SelectUp};
 
 /// 一次同步提交成功后回投的只读正文快照。
 pub(crate) struct DocumentTextSnapshot {
@@ -42,7 +42,7 @@ pub(crate) struct DocumentTextSnapshot {
 }
 
 impl DocumentTextSnapshot {
-    fn from_session(session: &DocumentSession) -> Self {
+    pub(crate) fn from_session(session: &DocumentSession) -> Self {
         Self {
             text: session.text().expect("Paged 不进入 Rope 编辑器").clone(),
             revision: session.text_revision(),
@@ -58,13 +58,17 @@ pub(crate) enum DocumentEditRequest {
 }
 
 pub(crate) struct DocumentEditResponse {
-    snapshot: DocumentTextSnapshot,
-    outcome: EditApplyOutcome,
+    pub(crate) snapshot: DocumentTextSnapshot,
+    pub(crate) outcome: EditApplyOutcome,
 }
 
 /// 视图只提交事务；组合根同步调用唯一 Registry，并立即返回权威快照。
 type DocumentEditSink = Box<
-    dyn FnMut(DocumentEditRequest, &mut App) -> Result<DocumentEditResponse, EditTransactionError>,
+    dyn FnMut(
+        DocumentEditRequest,
+        EntityId,
+        &mut App,
+    ) -> Result<DocumentEditResponse, EditTransactionError>,
 >;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -204,7 +208,6 @@ fn line_text_runs(
 }
 
 struct PaintFrame {
-    bounds: Bounds<Pixels>,
     lines: Vec<(ShapedLine, super::source::VisibleLine)>,
     selection: Range<usize>,
     cursor: usize,
@@ -213,6 +216,12 @@ struct PaintFrame {
 
 #[cfg(all(test, feature = "gpui-test-support"))]
 type PaintedSyntax = Rc<RefCell<Vec<(usize, Vec<TextRun>)>>>;
+
+pub(crate) enum DocumentTextEvent {
+    Save,
+}
+
+impl EventEmitter<DocumentTextEvent> for DocumentTextView {}
 
 /// Document 的专用文本视图；Rope 是不可变展示快照，修改只发 core 事务。
 pub(crate) struct DocumentTextView {
@@ -246,15 +255,6 @@ pub(crate) struct DocumentTextView {
 
 impl DocumentTextView {
     pub(crate) fn new(
-        document_id: DocumentId,
-        session: &DocumentSession,
-        edit_sink: DocumentEditSink,
-        cx: &mut Context<'_, Self>,
-    ) -> Self {
-        Self::new_with_syntax(document_id, session, edit_sink, None, cx)
-    }
-
-    pub(crate) fn new_with_syntax(
         document_id: DocumentId,
         session: &DocumentSession,
         edit_sink: DocumentEditSink,
@@ -332,6 +332,11 @@ impl DocumentTextView {
                 }
             }
         }));
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn input_text_for_test(&self) -> String {
+        self.text.to_string()
     }
 
     /// 无编辑增量的外部快照无法保留逻辑位置，必须取消组合并复位选区。
@@ -572,8 +577,12 @@ impl DocumentTextView {
         };
         let syntax_transaction = transaction.clone();
         let before = self.text.clone();
-        let Ok(response) = (self.edit_sink)(DocumentEditRequest::Edit(transaction, new_state), cx)
-        else {
+        let origin = cx.entity().entity_id();
+        let Ok(response) = (self.edit_sink)(
+            DocumentEditRequest::Edit(transaction, new_state),
+            origin,
+            cx,
+        ) else {
             return;
         };
         let changed = response.outcome != EditApplyOutcome::Unchanged;
@@ -679,7 +688,9 @@ impl DocumentTextView {
         if self.read_only || self.marked_range.is_some() {
             return;
         }
-        let Ok(response) = (self.edit_sink)(DocumentEditRequest::Travel { redo }, cx) else {
+        let origin = cx.entity().entity_id();
+        let Ok(response) = (self.edit_sink)(DocumentEditRequest::Travel { redo }, origin, cx)
+        else {
             return;
         };
         if response.outcome == EditApplyOutcome::Unchanged {
@@ -1202,7 +1213,6 @@ impl DocumentTextView {
                     })
                     .collect();
                 PaintFrame {
-                    bounds,
                     lines,
                     selection,
                     cursor,
@@ -1352,6 +1362,9 @@ impl Render for DocumentTextView {
             .on_action(cx.listener(|view, _: &Redo, _, cx| view.travel_history(true, cx)))
             .on_action(cx.listener(|view, _: &Copy, _, cx| view.copy(cx)))
             .on_action(cx.listener(|view, _: &Paste, _, cx| view.paste(cx)))
+            .on_action(cx.listener(|_, _: &SaveFile, _, cx| {
+                cx.emit(DocumentTextEvent::Save);
+            }))
             .on_mouse_down(MouseButton::Left, cx.listener(DocumentTextView::mouse_down))
             .on_mouse_move(cx.listener(|view, event: &MouseMoveEvent, _, cx| {
                 view.mouse_move(event, cx);

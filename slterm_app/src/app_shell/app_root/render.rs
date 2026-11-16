@@ -167,7 +167,10 @@ impl AppRoot {
                         terminal.clone().into_any_element()
                     }
                     super::panel_host::PanelContent::Editor(editor) => {
-                        editor.clone().into_any_element()
+                        editor.view.clone().into_any_element()
+                    }
+                    super::panel_host::PanelContent::Markdown(markdown) => {
+                        markdown.clone().into_any_element()
                     }
                     super::panel_host::PanelContent::Paged(paged) => {
                         paged.clone().into_any_element()

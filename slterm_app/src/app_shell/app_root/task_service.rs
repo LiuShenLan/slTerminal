@@ -17,6 +17,7 @@ pub(crate) enum TaskId {
     ProjectOpen(uuid::Uuid),
     #[allow(dead_code)] // 消费点 = Document 后台真实打开队列。
     DocumentOpen,
+    DocumentSave(slterm_document::DocumentId),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

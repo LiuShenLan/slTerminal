@@ -173,6 +173,7 @@ pub(crate) struct AppRoot {
     global_close: Option<GlobalCloseClient>,
     terminal_closes: BTreeMap<slterm_workspace::TerminalId, terminal_close::LocalTerminalClose>,
     terminal_close_batches: BTreeMap<uuid::Uuid, batch_close::LocalTerminalBatchClose>,
+    pending_batch_commits: BTreeMap<uuid::Uuid, ProjectSnapshot>,
     terminal_close_batch_members: BTreeMap<slterm_workspace::TerminalId, uuid::Uuid>,
     next_terminal_close_sequence: u64,
     project_closes: BTreeMap<ProjectId, project_close::LocalProjectClose>,
@@ -184,6 +185,10 @@ pub(crate) struct AppRoot {
     documents: DocumentRegistry,
     paged_documents:
         BTreeMap<slterm_document::DocumentId, Arc<crate::app_shell::paged_document::PagedDocument>>,
+    document_syntax: BTreeMap<
+        slterm_document::DocumentId,
+        Rc<RefCell<crate::app_shell::text_view::DocumentSyntax>>,
+    >,
     page_cache: Rc<RefCell<DocumentPageCache>>,
     #[allow(dead_code)] // 消费点 = Document 真实后台打开。
     document_open_service: Arc<crate::app_shell::documents::DocumentOpenService>,
@@ -191,6 +196,7 @@ pub(crate) struct AppRoot {
     document_open_active: bool,
     #[allow(dead_code)] // 消费点 = Document 打开请求队列。
     pending_document_opens: VecDeque<documents::DocumentOpenRequest>,
+    pending_document_saves: std::collections::BTreeSet<slterm_document::DocumentId>,
     panel_subscriptions: BTreeMap<PanelId, Subscription>,
     panel_focus: BTreeMap<PanelId, FocusRegistration>,
     split_dividers: BTreeMap<(ProjectId, Vec<bool>), SplitDividerFocus>,
@@ -334,6 +340,7 @@ impl AppRoot {
             global_close,
             terminal_closes: BTreeMap::new(),
             terminal_close_batches: BTreeMap::new(),
+            pending_batch_commits: BTreeMap::new(),
             terminal_close_batch_members: BTreeMap::new(),
             next_terminal_close_sequence: 0,
             project_closes: BTreeMap::new(),
@@ -344,12 +351,14 @@ impl AppRoot {
             panel_ids,
             documents,
             paged_documents: BTreeMap::new(),
+            document_syntax: BTreeMap::new(),
             page_cache: Rc::new(RefCell::new(DocumentPageCache::new())),
             document_open_service: Arc::new(
                 crate::app_shell::documents::DocumentOpenService::default(),
             ),
             document_open_active: false,
             pending_document_opens: VecDeque::new(),
+            pending_document_saves: std::collections::BTreeSet::new(),
             panel_subscriptions: BTreeMap::new(),
             panel_focus: BTreeMap::new(),
             split_dividers: BTreeMap::new(),

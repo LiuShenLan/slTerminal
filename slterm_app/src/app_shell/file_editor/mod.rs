@@ -75,6 +75,7 @@ pub(crate) use gpui_component::{h_flex, v_flex};
 
 use crate::app_shell::config::Settings;
 use crate::app_shell::editor_theme::EditorThemeTokens;
+use crate::app_shell::text_view::SaveFile;
 use crate::git;
 use crate::i18n::Message;
 use crate::text_document::{MAX_BYTES, SaveError, TextSnapshot};
@@ -89,7 +90,6 @@ use outline::Outline;
 gpui::actions!(
     file_editor,
     [
-        SaveFile,
         ToggleSource,
         FinishBlockEdit,
         BoldSelection,

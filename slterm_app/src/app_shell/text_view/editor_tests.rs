@@ -77,10 +77,10 @@ impl Host {
         });
         let view = cx.new(|cx| {
             let session = registry.borrow();
-            DocumentTextView::new_with_syntax(
+            DocumentTextView::new(
                 id,
                 session.session(id).unwrap(),
-                Box::new(move |request, _| {
+                Box::new(move |request, _, _| {
                     let mut registry = sink_registry.borrow_mut();
                     let outcome = match request {
                         DocumentEditRequest::Edit(transaction, state) => {
@@ -324,10 +324,10 @@ fn two_painted_views_independently_adopt_a_shared_syntax_tree(cx: &mut TestAppCo
         let second = cx.new(|cx| {
             let registry_read = registry.borrow();
             let session = registry_read.session(id).unwrap();
-            DocumentTextView::new_with_syntax(
+            DocumentTextView::new(
                 id,
                 session,
-                Box::new(move |request, _| {
+                Box::new(move |request, _, _| {
                     let mut registry = sink_registry.borrow_mut();
                     let outcome = match request {
                         DocumentEditRequest::Edit(transaction, state) => {

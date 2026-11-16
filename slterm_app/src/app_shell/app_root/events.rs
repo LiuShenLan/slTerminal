@@ -352,6 +352,86 @@ pub(crate) fn notify_workspace_recovered(
     );
 }
 
+fn document_save_error_text(
+    error: &crate::text_document::SaveError,
+    language: crate::i18n::UiLanguage,
+) -> String {
+    match error {
+        crate::text_document::SaveError::Changed => language
+            .text(crate::i18n::Message::EditorSaveChanged)
+            .to_owned(),
+        crate::text_document::SaveError::ReadOnly => language
+            .text(crate::i18n::Message::EditorSaveReadOnly)
+            .to_owned(),
+        error => language.format(
+            crate::i18n::Message::EditorSaveFailed,
+            &[("error", &error.to_string())],
+        ),
+    }
+}
+
+pub(crate) fn notify_document_save_error(error: &crate::text_document::SaveError, cx: &mut App) {
+    let language = cx.global::<crate::app_shell::config::Settings>().language;
+    let text = document_save_error_text(error, language);
+    crate::notify::deliver_startup_summary(&crate::notify::Notification::ProcessAlert { text }, cx);
+}
+
+fn document_save_state_text(
+    error: slterm_document::SaveTransactionError,
+    language: crate::i18n::UiLanguage,
+) -> String {
+    if error == slterm_document::SaveTransactionError::ReadOnly {
+        language
+            .text(crate::i18n::Message::EditorSaveReadOnly)
+            .to_owned()
+    } else {
+        language.format(
+            crate::i18n::Message::EditorSaveFailed,
+            &[("error", &error.to_string())],
+        )
+    }
+}
+
+pub(crate) fn notify_document_save_state(
+    error: slterm_document::SaveTransactionError,
+    cx: &mut App,
+) {
+    let language = cx.global::<crate::app_shell::config::Settings>().language;
+    let text = document_save_state_text(error, language);
+    crate::notify::deliver_startup_summary(&crate::notify::Notification::ProcessAlert { text }, cx);
+}
+
+#[cfg(test)]
+mod document_save_notice_tests {
+    use super::{document_save_error_text, document_save_state_text};
+    use crate::i18n::{Message, UiLanguage};
+    use crate::text_document::SaveError;
+
+    #[test]
+    fn save_failures_keep_specific_user_visible_causes() {
+        assert_eq!(
+            document_save_error_text(&SaveError::Changed, UiLanguage::EnUs),
+            UiLanguage::EnUs.text(Message::EditorSaveChanged)
+        );
+        assert_eq!(
+            document_save_error_text(&SaveError::ReadOnly, UiLanguage::EnUs),
+            UiLanguage::EnUs.text(Message::EditorSaveReadOnly)
+        );
+        assert_eq!(
+            document_save_state_text(
+                slterm_document::SaveTransactionError::ReadOnly,
+                UiLanguage::EnUs,
+            ),
+            UiLanguage::EnUs.text(Message::EditorSaveReadOnly)
+        );
+        let error = SaveError::Unauthorized;
+        assert_eq!(
+            document_save_error_text(&error, UiLanguage::EnUs),
+            UiLanguage::EnUs.format(Message::EditorSaveFailed, &[("error", &error.to_string())],)
+        );
+    }
+}
+
 #[cfg(test)]
 mod handover_completion_guard_tests {
     use super::*;

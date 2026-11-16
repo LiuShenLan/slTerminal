@@ -355,6 +355,17 @@ impl<O: Ord + Clone> CloseCoordinator<O> {
         self.transition(stage)
     }
 
+    /// 内容代次失效时重新进入 Collect；调用方必须提交完整的新意图。
+    pub fn recollect(&mut self) -> Result<CloseEffect<O>, CloseError> {
+        if !matches!(
+            self.phase,
+            ClosePhase::Failed(CloseStage::Collect | CloseStage::Save | CloseStage::CommitState,)
+        ) {
+            return Err(CloseError::InvalidTransition);
+        }
+        self.transition(CloseStage::Collect)
+    }
+
     /// 状态提交尚未发起，或提交已明确失败时，允许取消并恢复原运行状态。
     pub fn cancel(&mut self) -> Result<CloseEffect<O>, CloseError> {
         let allowed = matches!(
@@ -551,6 +562,39 @@ mod close_attempt_tests {
             CloseStage::StopServices => coordinator.services_stopped(attempt),
             _ => panic!("stage does not advance: {stage:?}"),
         }
+    }
+
+    #[test]
+    fn failed_content_generation_can_be_recollected_with_a_fresh_attempt() {
+        let mut coordinator = drive_to_stage(CloseStage::Save);
+        coordinator
+            .fail(coordinator.current_attempt().unwrap())
+            .unwrap();
+        let CloseEffect::Collect { attempt } = coordinator.recollect().unwrap() else {
+            panic!("代次失配必须重新进入 Collect");
+        };
+        let updated = CloseIntent::new(
+            vec![CloseObject {
+                id: 1,
+                generation: 2,
+                decision: CloseDecision::Save,
+            }],
+            [2; 32],
+        )
+        .unwrap();
+        coordinator.collected(attempt, updated).unwrap();
+        assert_eq!(coordinator.phase(), ClosePhase::Running(CloseStage::Save));
+        assert_eq!(
+            coordinator
+                .intent()
+                .unwrap()
+                .objects()
+                .next()
+                .unwrap()
+                .generation,
+            2
+        );
+        assert_eq!(coordinator.recollect(), Err(CloseError::InvalidTransition));
     }
 
     #[test]

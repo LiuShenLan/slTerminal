@@ -1,5 +1,8 @@
-#[allow(dead_code)] // 消费点 = Document 编辑器生产接线。
 mod editor;
+pub(crate) use editor::{
+    DocumentEditRequest, DocumentEditResponse, DocumentTextEvent, DocumentTextSnapshot,
+    DocumentTextView,
+};
 #[allow(dead_code)] // 消费点 = 专用视图布局缓存。
 mod layout;
 #[allow(dead_code)] // 消费点 = 专用视图选区、命中测试与 IME。
@@ -8,17 +11,17 @@ mod paged;
 pub(crate) use paged::PagedTextView;
 #[allow(dead_code)] // 消费点 = 专用视图可见行渲染。
 mod source;
-#[allow(dead_code)] // 消费点 = Document 语法视图接线。
 mod syntax;
+pub(crate) use syntax::DocumentSyntax;
 
 gpui::actions!(
     document_text_view,
-    [SelectLeft, SelectRight, SelectUp, SelectDown]
+    [SelectLeft, SelectRight, SelectUp, SelectDown, SaveFile]
 );
 
 /// 专用文本视图的键盘合同；复制键不与终端中断争用。
 pub(crate) fn init(cx: &mut gpui::App) {
-    use self::{SelectDown, SelectLeft, SelectRight, SelectUp};
+    use self::{SaveFile, SelectDown, SelectLeft, SelectRight, SelectUp};
     use gpui::KeyBinding;
     use gpui_component::input::{
         Backspace, Copy, Delete, Enter, MoveDown, MoveLeft, MoveRight, MoveToEndOfLine,
@@ -64,5 +67,6 @@ pub(crate) fn init(cx: &mut gpui::App) {
         KeyBinding::new("ctrl-shift-z", Redo, Some(CONTEXT)),
         KeyBinding::new("ctrl-shift-c", Copy, Some(CONTEXT)),
         KeyBinding::new("ctrl-shift-v", Paste, Some(CONTEXT)),
+        KeyBinding::new("ctrl-s", SaveFile, Some(CONTEXT)),
     ]);
 }

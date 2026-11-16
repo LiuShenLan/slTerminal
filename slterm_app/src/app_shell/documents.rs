@@ -29,6 +29,16 @@ pub(crate) struct OpenedDocument {
     pub(crate) body: Option<OpenedDocumentBody>,
 }
 
+pub(crate) struct ResolvedDocument {
+    pub(crate) location: slterm_path::ResolvedPath,
+    grant: PathGrant,
+}
+
+pub(crate) struct LoadedDocument {
+    location: slterm_path::ResolvedPath,
+    body: OpenedDocumentBody,
+}
+
 /// 启动读取与所有恢复视图共享同一 Document 的 Ready 项目授权并集。
 pub(crate) fn document_project_grants(
     snapshot: &ProjectSnapshot,
@@ -64,13 +74,12 @@ impl Default for DocumentOpenService {
 }
 
 impl DocumentOpenService {
-    /// 阻塞读取只允许在后台执行体调用；前台只消费此完整结果。
-    pub(crate) fn open(
+    /// 只在后台解析与授权；Registry 查重由前台在读取前完成。
+    pub(crate) fn resolve(
         &self,
-        registry: &mut DocumentRegistry,
         project_root: &CanonicalPath,
         lexical: &CanonicalPath,
-    ) -> io::Result<OpenedDocument> {
+    ) -> io::Result<ResolvedDocument> {
         let resolved = self.resolver.resolve(lexical)?;
         let request = PathRequest {
             operation: PathOperation::Read,
@@ -83,27 +92,27 @@ impl DocumentOpenService {
         let authorization =
             PathPolicy::authorize(&request, &resolved, std::slice::from_ref(&grant), 0)
                 .map_err(|_| io::Error::new(io::ErrorKind::PermissionDenied, "文档读取未获授权"))?;
-        let resolved = authorization.resolved_path().clone();
-        if let Some(id) = registry.existing(&resolved) {
-            return Ok(OpenedDocument {
-                id,
-                outcome: DocumentOpenOutcome::Existing,
-                body: None,
-            });
-        }
+        Ok(ResolvedDocument {
+            location: authorization.resolved_path().clone(),
+            grant,
+        })
+    }
 
-        let initial_bytes = std::fs::metadata(resolved.canonical_path().as_path())?.len();
+    /// 只在后台读取已授权位置；不接触或移走 Registry。
+    pub(crate) fn load(&self, resolved: ResolvedDocument) -> io::Result<LoadedDocument> {
+        let location = resolved.location;
+        let initial_bytes = std::fs::metadata(location.canonical_path().as_path())?.len();
         let body = if initial_bytes > EDITABLE_LIMIT_BYTES {
-            let document = Arc::new(PagedDocument::open(&resolved, None)?);
+            let document = Arc::new(PagedDocument::open(&location, None)?);
             if document.index().total_bytes() != initial_bytes {
                 return Err(io::Error::other("文件在打开期间改变了长度"));
             }
             OpenedDocumentBody::Paged(document)
         } else {
-            let document = Document::load(resolved.canonical_path().as_path())?.with_write_context(
-                DocumentWriteContext::new(vec![grant], 0, 0, self.resolver.clone()),
+            let document = Document::load(location.canonical_path().as_path())?.with_write_context(
+                DocumentWriteContext::new(vec![resolved.grant], 0, 0, self.resolver.clone()),
             );
-            if document.location() != &resolved {
+            if document.location() != &location {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     "读取期间文件身份已变化",
@@ -114,13 +123,28 @@ impl DocumentOpenService {
             }
             OpenedDocumentBody::Editable(Box::new(document))
         };
+        Ok(LoadedDocument { location, body })
+    }
+
+    /// 前台纯注册；读取后再次查重，绝不覆盖已存活正文。
+    pub(crate) fn register(
+        registry: &mut DocumentRegistry,
+        loaded: LoadedDocument,
+    ) -> io::Result<OpenedDocument> {
+        if let Some(id) = registry.existing(&loaded.location) {
+            return Ok(OpenedDocument {
+                id,
+                outcome: DocumentOpenOutcome::Existing,
+                body: None,
+            });
+        }
         let id = DocumentId::from_uuid(Uuid::now_v7()).expect("系统生成的 DocumentId 必须为 v7");
         let state =
             TextStateId::from_uuid(Uuid::now_v7()).expect("系统生成的 TextStateId 必须为 v7");
-        let (id, outcome) = match &body {
+        let (id, outcome) = match &loaded.body {
             OpenedDocumentBody::Editable(document) => registry.open(
                 id,
-                resolved,
+                loaded.location,
                 Rope::from_str(&document.text),
                 state,
                 document.bytes.clone(),
@@ -131,7 +155,7 @@ impl DocumentOpenService {
             ),
             OpenedDocumentBody::Paged(document) => registry.open(
                 id,
-                resolved,
+                loaded.location,
                 document.source(),
                 state,
                 Arc::default(),
@@ -145,8 +169,20 @@ impl DocumentOpenService {
         Ok(OpenedDocument {
             id,
             outcome,
-            body: (outcome == DocumentOpenOutcome::Opened).then_some(body),
+            body: (outcome == DocumentOpenOutcome::Opened).then_some(loaded.body),
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn open(
+        &self,
+        registry: &mut DocumentRegistry,
+        project_root: &CanonicalPath,
+        lexical: &CanonicalPath,
+    ) -> io::Result<OpenedDocument> {
+        let resolved = self.resolve(project_root, lexical)?;
+        let loaded = self.load(resolved)?;
+        Self::register(registry, loaded)
     }
 }
 

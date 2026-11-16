@@ -40,6 +40,7 @@ pub(super) struct LocalTerminalBatchClose {
     pub(super) outcome_unknown: bool,
     pub(super) initiation_sequence: u64,
     pub(super) unresolved_failure: bool,
+    pub(super) needs_recollect: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -94,7 +95,9 @@ impl AppRoot {
             return self.close_terminal(terminal_id, window, cx).map(|_| ());
         }
         if let Some(batch_id) = self.batch_for_group(group_id) {
-            return self.retry_batch_close(batch_id, cx).map(|_| ());
+            return self
+                .retry_batch_close(batch_id, &document_decisions, cx)
+                .map(|_| ());
         }
         self.ensure_project_snapshot_recovery_allowed()?;
         self.ensure_project_snapshot_command_allowed()?;
@@ -221,6 +224,7 @@ impl AppRoot {
                 outcome_unknown: false,
                 initiation_sequence,
                 unresolved_failure: false,
+                needs_recollect: false,
             },
         );
         if self
@@ -229,6 +233,8 @@ impl AppRoot {
             .is_some_and(|close| close.coordinator.phase() == ClosePhase::Running(CloseStage::Save))
         {
             self.start_batch_save(batch_id, cx);
+        } else if self.batch_has_inflight_document_saves(batch_id) {
+            self.pending_batch_commits.insert(batch_id, candidate);
         } else if self.project_writer.is_some() {
             if let Err(error) =
                 self.start_batch_commit(batch_id, candidate, window.window_handle(), cx)
@@ -263,13 +269,147 @@ impl AppRoot {
             .and_then(|close| close.members.get(&terminal_id))
             .map(|member| member.record.clone())
             .ok_or(AppRootError::MissingPanel)?;
-        self.retry_batch_close(batch_id, cx)?;
+        self.retry_batch_close(batch_id, &BTreeMap::new(), cx)?;
         Ok(record)
+    }
+
+    fn recollect_batch_close(
+        &mut self,
+        batch_id: Uuid,
+        document_decisions: &BTreeMap<DocumentId, CloseDecision>,
+    ) -> Result<(), AppRootError> {
+        let close = self
+            .terminal_close_batches
+            .get(&batch_id)
+            .ok_or(AppRootError::MissingPanel)?;
+        let previous = close
+            .coordinator
+            .intent()
+            .cloned()
+            .ok_or(AppRootError::TerminalCloseState)?;
+        // 仍有效的原决定保留；已经变干净或存在外部引用的对象不再携带旧决定。
+        let closing = close
+            .panels
+            .iter()
+            .filter(|(view, _)| match view {
+                ViewKey::Editor { document_id, .. }
+                | ViewKey::Markdown { document_id, .. }
+                | ViewKey::Diff { document_id, .. } => {
+                    self.documents.session(*document_id).is_some()
+                }
+                _ => false,
+            })
+            .map(|(view, _)| view.clone())
+            .collect::<Vec<_>>();
+        let all_views = self
+            .snapshot
+            .registry()
+            .projects()
+            .iter()
+            .flat_map(|project| project.layout().view_keys())
+            .collect::<Vec<_>>();
+        let mut decisions = document_decisions.clone();
+        for object in previous.objects() {
+            let CloseTarget::Document(id) = object.id else {
+                continue;
+            };
+            if decisions.contains_key(&id)
+                || !matches!(
+                    object.decision,
+                    CloseDecision::Save | CloseDecision::Discard
+                )
+            {
+                continue;
+            }
+            let has_external_reference = all_views.iter().any(|view| match view {
+                ViewKey::Editor { document_id, .. }
+                | ViewKey::Markdown { document_id, .. }
+                | ViewKey::Diff { document_id, .. } => {
+                    *document_id == id && !closing.contains(view)
+                }
+                _ => false,
+            });
+            if !has_external_reference
+                && self
+                    .documents
+                    .session(id)
+                    .is_some_and(|session| session.is_dirty())
+            {
+                decisions.insert(id, object.decision);
+            }
+        }
+        let mut objects = slterm_workspace::collect_document_close(
+            &self.snapshot,
+            &self.documents,
+            &closing,
+            &decisions,
+        )?;
+        objects.extend(
+            previous
+                .objects()
+                .filter(|object| matches!(object.id, CloseTarget::Terminal(_)))
+                .cloned(),
+        );
+        let scope = close
+            .coordinator
+            .scope()
+            .cloned()
+            .ok_or(AppRootError::TerminalCloseState)?;
+        let fingerprint = close.persisted.as_ref().map_or([0; 32], |persisted| {
+            close_fingerprint(
+                &batch_id.to_string(),
+                &scope,
+                &persisted.store_epoch,
+                &objects,
+            )
+        });
+        let intent =
+            CloseIntent::new(objects, fingerprint).map_err(|_| AppRootError::TerminalCloseState)?;
+        let close = self
+            .terminal_close_batches
+            .get_mut(&batch_id)
+            .ok_or(AppRootError::MissingPanel)?;
+        let CloseEffect::Collect { attempt } = close
+            .coordinator
+            .recollect()
+            .map_err(|_| AppRootError::TerminalCloseState)?
+        else {
+            return Err(AppRootError::TerminalCloseState);
+        };
+        close
+            .coordinator
+            .collected(attempt, intent.clone())
+            .map_err(|_| AppRootError::TerminalCloseState)?;
+        if let Some(persisted) = &mut close.persisted {
+            persisted.intent = intent;
+        }
+        close.needs_recollect = false;
+        Ok(())
+    }
+
+    fn schedule_recollected_batch_commit(
+        &mut self,
+        batch_id: Uuid,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<(), AppRootError> {
+        let closing = self
+            .terminal_close_batches
+            .get(&batch_id)
+            .ok_or(AppRootError::MissingPanel)?
+            .panels
+            .iter()
+            .map(|(view, _)| view.clone())
+            .collect::<Vec<_>>();
+        let (candidate, _) = self.snapshot.without_views(&closing)?;
+        self.pending_batch_commits.insert(batch_id, candidate);
+        self.resume_blocked_batch_saves(cx);
+        Ok(())
     }
 
     fn retry_batch_close(
         &mut self,
         batch_id: Uuid,
+        document_decisions: &BTreeMap<DocumentId, CloseDecision>,
         cx: &mut Context<'_, Self>,
     ) -> Result<(), AppRootError> {
         let Some(close) = self.terminal_close_batches.get(&batch_id) else {
@@ -285,12 +425,26 @@ impl AppRoot {
                 return Err(AppRootError::TerminalCloseState);
             }
         }
-        self.terminal_close_batches
-            .get_mut(&batch_id)
-            .expect("批量关闭刚读取必须仍存在")
-            .coordinator
-            .retry()
-            .map_err(|_| AppRootError::TerminalCloseState)?;
+        if close.needs_recollect {
+            self.recollect_batch_close(batch_id, document_decisions)?;
+            if self
+                .terminal_close_batches
+                .get(&batch_id)
+                .is_some_and(|close| {
+                    close.coordinator.phase() == ClosePhase::Running(CloseStage::CommitState)
+                })
+            {
+                self.schedule_recollected_batch_commit(batch_id, cx)?;
+                return Ok(());
+            }
+        } else {
+            self.terminal_close_batches
+                .get_mut(&batch_id)
+                .expect("批量关闭刚读取必须仍存在")
+                .coordinator
+                .retry()
+                .map_err(|_| AppRootError::TerminalCloseState)?;
+        }
         self.drive_batch_close(batch_id, cx)?;
         Ok(())
     }
@@ -310,6 +464,7 @@ impl AppRoot {
     }
 
     fn remove_batch_registration(&mut self, batch_id: Uuid) -> Option<LocalTerminalBatchClose> {
+        self.pending_batch_commits.remove(&batch_id);
         let close = self.terminal_close_batches.remove(&batch_id)?;
         for terminal_id in close.members.keys() {
             self.terminal_close_batch_members.remove(terminal_id);
@@ -488,6 +643,129 @@ impl AppRoot {
         Ok(())
     }
 
+    fn batch_has_inflight_document_saves(&self, batch_id: Uuid) -> bool {
+        self.terminal_close_batches
+            .get(&batch_id)
+            .and_then(|close| close.coordinator.intent())
+            .is_some_and(|intent| {
+                intent.objects().any(|object| {
+                    matches!(object.id, CloseTarget::Document(id) if self.documents.session(id).is_some_and(|session| session.is_saving()))
+                })
+            })
+    }
+
+    pub(super) fn resume_blocked_batch_saves(&mut self, cx: &mut Context<'_, Self>) {
+        let batches = self
+            .terminal_close_batches
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        for batch_id in batches {
+            let Some(close) = self.terminal_close_batches.get(&batch_id) else {
+                continue;
+            };
+            if close.coordinator.phase() == ClosePhase::Running(CloseStage::Save) {
+                self.start_batch_save(batch_id, cx);
+                continue;
+            }
+            if self.batch_has_inflight_document_saves(batch_id)
+                || self
+                    .tasks
+                    .is_registered(TaskId::TerminalCloseBatch(batch_id))
+            {
+                continue;
+            }
+            if !self.pending_batch_commits.contains_key(&batch_id) {
+                continue;
+            }
+            let window = self.terminal_close_batches[&batch_id].window;
+            let target = cx.entity().downgrade();
+            let task_cx = &mut *cx;
+            let registration = self.tasks.register_with(
+                TaskId::TerminalCloseBatch(batch_id),
+                CancellationToken::new(),
+                move || {
+                    task_cx.spawn(async move |_, cx| {
+                        let Some(target) = target.upgrade() else {
+                            return;
+                        };
+                        let _ = window.update(cx, |_, window, cx| {
+                            target.update(cx, |root, cx| {
+                                root.finish_pending_batch_commit(batch_id, window, cx);
+                            });
+                        });
+                    })
+                },
+            );
+            if registration.is_err() {
+                log::warn!("保存后的批量关闭无法调度");
+                if let Some(attempt) = self
+                    .terminal_close_batches
+                    .get(&batch_id)
+                    .and_then(|close| close.coordinator.current_attempt())
+                {
+                    self.fail_batch_close_outcome_unknown(batch_id, attempt);
+                }
+            }
+        }
+    }
+
+    fn finish_pending_batch_commit(
+        &mut self,
+        batch_id: Uuid,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.tasks.complete(TaskId::TerminalCloseBatch(batch_id));
+        let Some(candidate) = self.pending_batch_commits.remove(&batch_id) else {
+            return;
+        };
+        if let Some(intent) = self
+            .terminal_close_batches
+            .get(&batch_id)
+            .and_then(|close| close.coordinator.intent())
+            && let Err(failures) =
+                crate::app_shell::document_close::validate_document_close_generations(
+                    &self.documents,
+                    intent,
+                )
+        {
+            let Some(attempt) = self
+                .terminal_close_batches
+                .get(&batch_id)
+                .and_then(|close| close.coordinator.current_attempt())
+            else {
+                return;
+            };
+            let close = self
+                .terminal_close_batches
+                .get_mut(&batch_id)
+                .expect("待提交批次必须存在");
+            close.unresolved_failure = true;
+            close.needs_recollect = true;
+            let _ = close.coordinator.fail(attempt);
+            log::warn!("关闭前 Document 代次已变化: {} 项", failures.len());
+            cx.notify();
+            return;
+        }
+        let result = if self.project_writer.is_some() {
+            self.start_batch_commit(batch_id, candidate, window.window_handle(), cx)
+        } else {
+            self.complete_batch_state_commit(batch_id, None, window, cx)
+                .and_then(|()| self.drive_batch_close_in_memory(batch_id, cx))
+        };
+        if let Err(error) = result {
+            log::warn!("保存后的批量关闭提交失败: {error}");
+            if let Some(attempt) = self
+                .terminal_close_batches
+                .get(&batch_id)
+                .and_then(|close| close.coordinator.current_attempt())
+            {
+                self.fail_batch_close_outcome_unknown(batch_id, attempt);
+            }
+        }
+    }
+
     fn start_batch_save(&mut self, batch_id: Uuid, cx: &mut Context<'_, Self>) {
         let task_id = TaskId::TerminalCloseBatch(batch_id);
         if self.tasks.is_registered(task_id) {
@@ -506,28 +784,45 @@ impl AppRoot {
             return;
         };
         let grants = self.document_close_grants(&intent);
-        let mut documents = std::mem::take(&mut self.documents);
+        if intent.objects().any(|object| {
+            matches!(object.id, CloseTarget::Document(id) if self.documents.session(id).is_some_and(|session| session.is_saving()))
+        }) {
+            return;
+        }
+        let prepared = crate::app_shell::document_close::prepare_document_save_stage(
+            &mut self.documents,
+            &intent,
+            &grants,
+            0,
+        );
+        let pending = prepared
+            .requests
+            .iter()
+            .map(|request| (request.document_id(), request.save_generation()))
+            .collect::<Vec<_>>();
         let executor = cx.background_executor().clone();
         let registration = self
             .tasks
             .register_with(task_id, CancellationToken::new(), move || {
                 let save = executor.spawn(async move {
-                    let result = crate::app_shell::document_close::execute_document_save_stage(
-                        &mut documents,
-                        &intent,
+                    let writes = crate::app_shell::document_close::execute_document_save_writes(
+                        prepared.requests,
                         &grants,
                         0,
                     );
-                    (documents, result)
+                    (prepared.failures, writes)
                 });
                 cx.spawn(async move |this, cx| {
-                    let (documents, result) = save.await;
+                    let (failures, writes) = save.await;
                     let _ = this.update(cx, |root, cx| {
-                        root.finish_batch_save(batch_id, attempt, documents, result, cx);
+                        root.finish_batch_save(batch_id, attempt, failures, writes, cx);
                     });
                 })
             });
         if registration.is_err() {
+            for (id, generation) in pending {
+                let _ = self.documents.fail_save(id, generation);
+            }
             self.fail_batch_close_outcome_unknown(batch_id, attempt);
         }
     }
@@ -567,11 +862,26 @@ impl AppRoot {
         &mut self,
         batch_id: Uuid,
         attempt: CloseAttempt,
-        documents: slterm_document::DocumentRegistry,
-        result: Result<(), Vec<crate::app_shell::document_close::DocumentSaveFailure>>,
+        failures: Vec<crate::app_shell::document_close::DocumentSaveFailure>,
+        writes: Vec<crate::app_shell::document_close::DocumentSaveWriteOutcome>,
         cx: &mut Context<'_, Self>,
     ) {
-        self.documents = documents;
+        let result = crate::app_shell::document_close::complete_document_save_stage(
+            &mut self.documents,
+            failures,
+            writes,
+        )
+        .and_then(|()| {
+            self.terminal_close_batches
+                .get(&batch_id)
+                .and_then(|close| close.coordinator.intent())
+                .map_or(Ok(()), |intent| {
+                    crate::app_shell::document_close::validate_document_close_generations(
+                        &self.documents,
+                        intent,
+                    )
+                })
+        });
         let Some(close) = self.terminal_close_batches.get(&batch_id) else {
             self.reconcile_document_registry(cx);
             return;
@@ -586,6 +896,9 @@ impl AppRoot {
                 .get_mut(&batch_id)
                 .expect("批量关闭刚读取必须仍存在");
             close.unresolved_failure = true;
+            close.needs_recollect = failures
+                .iter()
+                .any(|failure| failure.is_revision_mismatch());
             let _ = close.coordinator.fail(attempt);
             log::warn!("Document 批量保存失败，关闭未提交: {} 项", failures.len());
             cx.notify();
