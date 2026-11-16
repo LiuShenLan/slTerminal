@@ -237,7 +237,7 @@
 | 验收场景 | 目标测试例名 | 状态 |
 |---|---|---|
 | 跨项目 Editor 与 Diff 共享文本、撤销和冲突 | `document_shared_across_projects` | 待实现 |
-| 同项目普通视图去重而 Diff 与 GitShow 独立 | `document_duplicate_view_focuses_existing` | 待实现 |
+| 同项目普通视图去重而 Diff 与 GitShow 独立 | `document_duplicate_view_focuses_existing`、`ordinary_open_does_not_deduplicate_diff_or_gitshow` | 已自动化 |
 | 文件跨扩展名改名不自动转换 Panel 类型 | `document_rename_preserves_identity_and_view` | 已自动化 |
 | 另存为已打开目标时拒绝且两个 Document 不变 | `document_save_as_rejects_open_target` | 已自动化 |
 | 自动保存等待全部编辑视图失焦 | `document_autosave_waits_for_all_views_to_blur` | 已自动化 |

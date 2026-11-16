@@ -146,6 +146,39 @@ fn editor_external_rename_preserves_manual_language_override(cx: &mut TestAppCon
 }
 
 #[gpui::test]
+fn external_rename_then_reopen_focuses_existing_editor(cx: &mut TestAppContext) {
+    let (_temp, root, mut window, document, editor, source, target) =
+        open_watched_editor(cx, "same");
+    std::fs::rename(&source, &target).unwrap();
+    wait_for_document_relocation(&root, &mut window, cx, document, &target);
+
+    open_document(
+        &root,
+        &mut window,
+        PROJECT_A,
+        GROUP_A,
+        CanonicalPath::new(&target).unwrap(),
+    );
+
+    assert_eq!(
+        root.read_with(cx, |root, cx| root.panel_count(project_id(PROJECT_A), cx)),
+        1
+    );
+    root.read_with(cx, |root, cx| {
+        let panels = &root.projects[&project_id(PROJECT_A)].read(cx).panels;
+        let panel = panels.values().next().unwrap();
+        assert_eq!(panel.editor(), Some(&editor));
+        assert_eq!(
+            panel.view_key,
+            ViewKey::Editor {
+                project_id: project_id(PROJECT_A),
+                document_id: document,
+            }
+        );
+    });
+}
+
+#[gpui::test]
 fn paged_external_rename_preserves_view_and_rebinds_page_reader(cx: &mut TestAppContext) {
     let temp = tempfile::tempdir().unwrap();
     let project = temp.path().join("project");

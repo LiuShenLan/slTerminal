@@ -591,6 +591,64 @@ fn document_rename_preserves_identity_and_view() {
 }
 
 #[test]
+fn ordinary_open_does_not_deduplicate_diff_or_gitshow() {
+    let original = snapshot_with_three_projects();
+    let id = document_id(DOCUMENT_A);
+    let location = document_location("D:/work/shared.txt");
+    let (mut original, editor) = original
+        .with_opened_document(
+            project_id(PROJECT_A),
+            group_id(GROUP_A),
+            id,
+            location.clone(),
+        )
+        .unwrap();
+    let diff = ViewKey::Diff {
+        project_id: project_id(PROJECT_A),
+        document_id: id,
+    };
+    let commit = slterm_document::CommitId::from_str(&"a".repeat(40)).unwrap();
+    let gitshow = ViewKey::GitShow {
+        project_id: project_id(PROJECT_A),
+        repository_binding: Box::new(slterm_document::RepositoryBinding::new(
+            document_location("D:/work"),
+            document_location("D:/work/.git"),
+            document_location("D:/work/.git"),
+            commit.clone(),
+        )),
+        commit_id: commit,
+        repo_path: slterm_document::RepoPath::from_str("shared.txt").unwrap(),
+    };
+    let layout = original
+        .registry_mut()
+        .layout_mut(project_id(PROJECT_A))
+        .unwrap();
+    layout.insert_view(group_id(GROUP_A), diff.clone()).unwrap();
+    layout
+        .insert_view(group_id(GROUP_A), gitshow.clone())
+        .unwrap();
+    layout.close_view(&editor).unwrap();
+    original.validate().unwrap();
+
+    let (opened, editor) = original
+        .with_opened_document(project_id(PROJECT_A), group_id(GROUP_A), id, location)
+        .unwrap();
+
+    let group = opened
+        .registry()
+        .project(project_id(PROJECT_A))
+        .unwrap()
+        .layout()
+        .group(group_id(GROUP_A))
+        .unwrap();
+    assert_eq!(group.active(), &editor);
+    assert!(group.views().contains(&diff));
+    assert!(group.views().contains(&gitshow));
+    assert!(group.views().contains(&editor));
+    assert_eq!(group.views().len(), 4, "既有 Terminal 也必须保留");
+}
+
+#[test]
 fn document_relocation_rejects_occupied_target_without_side_effects() {
     let original = empty_snapshot();
     let first = document_id(DOCUMENT_A);

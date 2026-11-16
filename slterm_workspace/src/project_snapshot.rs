@@ -265,7 +265,11 @@ impl ProjectSnapshot {
         {
             return Err(ProjectSnapshotError::DocumentLocationConflict(document_id).into());
         }
-        let view = ViewKey::Editor {
+        let preferred = ViewKey::Editor {
+            project_id,
+            document_id,
+        };
+        let alternate = ViewKey::Markdown {
             project_id,
             document_id,
         };
@@ -275,6 +279,21 @@ impl ProjectSnapshot {
             .registry_mut()
             .layout_mut(project_id)
             .ok_or(ProjectRegistryError::ProjectNotFound)?;
+        let contains = |view: &ViewKey| {
+            layout.group_ids().into_iter().any(|group_id| {
+                layout
+                    .group(group_id)
+                    .is_some_and(|group| group.views().contains(view))
+            })
+        };
+        // 普通打开复用同项目既有 Editor／Markdown；Diff／GitShow 身份独立。
+        let view = if contains(&preferred) {
+            preferred
+        } else if contains(&alternate) {
+            alternate
+        } else {
+            preferred
+        };
         if let Some(group_id) = layout.group_ids().into_iter().find(|group_id| {
             layout
                 .group(*group_id)

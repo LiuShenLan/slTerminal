@@ -1115,6 +1115,47 @@ fn large_file_paged_views_share_a_real_source_across_projects(cx: &mut TestAppCo
 }
 
 #[gpui::test]
+fn document_duplicate_view_focuses_existing(cx: &mut TestAppContext) {
+    let (_temp, root, mut window, document, view, source, _target) = open_watched_markdown(cx);
+    let panel = root.read_with(cx, |root, cx| {
+        root.projects[&project_id(PROJECT_A)]
+            .read(cx)
+            .panels
+            .values()
+            .find_map(|panel| (panel.markdown() == Some(&view)).then_some(panel.id))
+            .unwrap()
+    });
+    new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_A);
+    open_document(
+        &root,
+        &mut window,
+        PROJECT_A,
+        GROUP_A,
+        CanonicalPath::new(source).unwrap(),
+    );
+
+    assert_eq!(
+        root.read_with(cx, |root, cx| root.panel_count(project_id(PROJECT_A), cx)),
+        2
+    );
+    assert_eq!(root.read_with(cx, |root, _| root.documents.len()), 1);
+    let focus = root.read_with(cx, |root, cx| {
+        let project = root.projects[&project_id(PROJECT_A)].read(cx);
+        let current = project.panels.get(&panel).unwrap();
+        assert_eq!(current.markdown(), Some(&view));
+        assert_eq!(
+            current.view_key,
+            ViewKey::Markdown {
+                project_id: project_id(PROJECT_A),
+                document_id: document,
+            }
+        );
+        current.focus_handle(cx)
+    });
+    assert_eq!(window.update(|window, cx| window.focused(cx)), Some(focus));
+}
+
+#[gpui::test]
 fn integration_document_global_identity(cx: &mut TestAppContext) {
     let temp = tempfile::tempdir().unwrap();
     let root_a = temp.path().join("a");
