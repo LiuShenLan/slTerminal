@@ -745,6 +745,330 @@ fn document_close_waits_for_and_follows_an_inflight_save(cx: &mut TestAppContext
 }
 
 #[gpui::test]
+fn document_batch_save_waits_for_relocation_and_resumes_at_completion(cx: &mut TestAppContext) {
+    use crate::platform::document_paths::{DocumentPathResolver as _, SystemDocumentPathResolver};
+
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source.txt");
+    let target = temp.path().join("renamed.txt");
+    std::fs::write(&source, "old").unwrap();
+    let source_path = CanonicalPath::new(dunce::canonicalize(&source).unwrap()).unwrap();
+    let (root, mut window, _) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, temp.path().to_str().unwrap());
+    let (document, _editor) = open_editor(&root, &mut window, cx, source_path);
+    let request = root.update(cx, |root, _| {
+        let session = root.documents.session(document).unwrap();
+        root.documents
+            .apply(
+                slterm_document::EditTransaction {
+                    document_id: document,
+                    expected_text_revision: session.text_revision(),
+                    edits: vec![slterm_document::TextEdit::new(
+                        0..session.text().unwrap().len(),
+                        "local",
+                    )],
+                    origin: slterm_document::EditOrigin::ReplaceAll,
+                    merge_policy: slterm_document::MergePolicy::Disallowed,
+                },
+                slterm_document::TextStateId::from_uuid(uuid::Uuid::now_v7()).unwrap(),
+                std::time::Instant::now(),
+            )
+            .unwrap();
+        root.documents.external_request(document, 0).unwrap()
+    });
+    std::fs::rename(&source, &target).unwrap();
+    let target_path = CanonicalPath::new(&target).unwrap();
+    let location = SystemDocumentPathResolver.resolve(&target_path).unwrap();
+    root.update(cx, |root, _| {
+        root.active_document_relocations
+            .insert(document, target_path.clone());
+        root.last_document_relocation_targets
+            .insert(document, target_path.clone());
+    });
+
+    execute_batch_with_decisions(
+        &root,
+        &mut window,
+        CommandId::CloseAllViews,
+        group_id(GROUP_A),
+        BTreeMap::from([(document, CloseDecision::Save)]),
+    )
+    .unwrap();
+    assert!(root.read_with(cx, |root, _| {
+        !root.documents.session(document).unwrap().is_saving()
+            && root
+                .terminal_close_batches
+                .values()
+                .next()
+                .unwrap()
+                .coordinator
+                .phase()
+                == ClosePhase::Running(CloseStage::Save)
+    }));
+
+    window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.finish_document_external(
+                document,
+                target_path,
+                false,
+                Ok(Some(
+                    crate::app_shell::document_external::DocumentExternalResult {
+                        change: slterm_document::DocumentExternalChange::Relocated {
+                            request,
+                            location,
+                        },
+                        paged: None,
+                    },
+                )),
+                window,
+                cx,
+            );
+        });
+    });
+    assert!(root.read_with(cx, |root, _| {
+        root.documents.session(document).unwrap().is_saving()
+    }));
+    window.run_until_parked();
+
+    assert!(root.read_with(cx, |root, _| {
+        root.terminal_close_batches.is_empty() && root.documents.is_empty()
+    }));
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "local");
+}
+
+#[gpui::test]
+fn document_batch_save_rechecks_relocation_arriving_during_write(cx: &mut TestAppContext) {
+    use crate::platform::document_paths::{DocumentPathResolver as _, SystemDocumentPathResolver};
+
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("source.txt");
+    let target = temp.path().join("renamed.txt");
+    std::fs::write(&source, "old").unwrap();
+    let source_path = CanonicalPath::new(dunce::canonicalize(&source).unwrap()).unwrap();
+    let (root, mut window, _) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, temp.path().to_str().unwrap());
+    let (document, _editor) = open_editor(&root, &mut window, cx, source_path);
+    root.update(cx, |root, _| {
+        let session = root.documents.session(document).unwrap();
+        root.documents
+            .apply(
+                slterm_document::EditTransaction {
+                    document_id: document,
+                    expected_text_revision: session.text_revision(),
+                    edits: vec![slterm_document::TextEdit::new(
+                        0..session.text().unwrap().len(),
+                        "local",
+                    )],
+                    origin: slterm_document::EditOrigin::ReplaceAll,
+                    merge_policy: slterm_document::MergePolicy::Disallowed,
+                },
+                slterm_document::TextStateId::from_uuid(uuid::Uuid::now_v7()).unwrap(),
+                std::time::Instant::now(),
+            )
+            .unwrap();
+    });
+    execute_batch_with_decisions(
+        &root,
+        &mut window,
+        CommandId::CloseAllViews,
+        group_id(GROUP_A),
+        BTreeMap::from([(document, CloseDecision::Save)]),
+    )
+    .unwrap();
+    let target_path = CanonicalPath::new(&target).unwrap();
+    root.update(cx, |root, _| {
+        assert!(root.documents.session(document).unwrap().is_saving());
+        root.pending_document_relocations
+            .insert(document, target_path.clone());
+    });
+    window.run_until_parked();
+
+    assert!(root.read_with(cx, |root, _| {
+        root.documents.session(document).is_some()
+            && root
+                .terminal_close_batches
+                .values()
+                .next()
+                .unwrap()
+                .coordinator
+                .phase()
+                == ClosePhase::Running(CloseStage::Save)
+    }));
+
+    let request = root.read_with(cx, |root, _| {
+        root.documents.external_request(document, 0).unwrap()
+    });
+    std::fs::rename(&source, &target).unwrap();
+    let location = SystemDocumentPathResolver.resolve(&target_path).unwrap();
+    root.update(cx, |root, _| {
+        root.pending_document_relocations.remove(&document);
+        root.active_document_relocations
+            .insert(document, target_path.clone());
+        root.last_document_relocation_targets
+            .insert(document, target_path.clone());
+    });
+    window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.finish_document_external(
+                document,
+                target_path,
+                false,
+                Ok(Some(
+                    crate::app_shell::document_external::DocumentExternalResult {
+                        change: slterm_document::DocumentExternalChange::Relocated {
+                            request,
+                            location,
+                        },
+                        paged: None,
+                    },
+                )),
+                window,
+                cx,
+            );
+        });
+    });
+    window.run_until_parked();
+    assert!(root.read_with(cx, |root, _| {
+        root.terminal_close_batches.is_empty() && root.documents.is_empty()
+    }));
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "local");
+}
+
+#[gpui::test]
+fn pending_batch_close_recomputes_document_location_after_relocation(cx: &mut TestAppContext) {
+    use crate::platform::document_paths::{DocumentPathResolver as _, SystemDocumentPathResolver};
+
+    let temp = tempfile::tempdir().unwrap();
+    let project_a = temp.path().join("a");
+    std::fs::create_dir(&project_a).unwrap();
+    let source = project_a.join("shared.txt");
+    let target = project_a.join("renamed.txt");
+    std::fs::write(&source, "same").unwrap();
+    let source_path = CanonicalPath::new(dunce::canonicalize(&source).unwrap()).unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let (events, _event_rx) = std::sync::mpsc::sync_channel(64);
+    let runtime = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
+    let persistence =
+        AppRootPersistence::load_with_previous_run(&paths, Some(runtime.client()), None);
+    let (root, mut window, _) = open_root_with_persistence(cx, persistence);
+    add_project(&root, &mut window, PROJECT_A, project_a.to_str().unwrap());
+    new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_A);
+    let (document, _editor) = open_editor(&root, &mut window, cx, source_path);
+    add_project(&root, &mut window, PROJECT_B, temp.path().to_str().unwrap());
+    super::documents::open_document(
+        &root,
+        &mut window,
+        PROJECT_B,
+        GROUP_B,
+        root.read_with(cx, |root, _| {
+            root.documents
+                .session(document)
+                .unwrap()
+                .location()
+                .canonical_path()
+                .clone()
+        }),
+    );
+    activate_project(&root, &mut window, PROJECT_A);
+    flush_when_ready(&runtime.client());
+    let fault = rusqlite::Connection::open(paths.workspace_db_path()).unwrap();
+    fault
+        .execute_batch(
+            "CREATE TRIGGER reject_batch_pty_stopped BEFORE UPDATE OF commit_status ON close_intents \
+             WHEN NEW.commit_status = 'pty_stopped' \
+             BEGIN SELECT RAISE(ABORT, 'injected batch pty failure'); END;",
+        )
+        .unwrap();
+    let request = root.read_with(cx, |root, _| {
+        root.documents.external_request(document, 0).unwrap()
+    });
+    let target_path = CanonicalPath::new(&target).unwrap();
+    root.update(cx, |root, _| {
+        root.pending_document_relocations
+            .insert(document, target_path.clone());
+    });
+    execute_batch(
+        &root,
+        &mut window,
+        CommandId::CloseAllViews,
+        group_id(GROUP_A),
+    )
+    .unwrap();
+    assert!(root.read_with(cx, |root, _| {
+        root.pending_batch_commits
+            .contains(root.terminal_close_batches.keys().next().unwrap())
+    }));
+
+    std::fs::rename(&source, &target).unwrap();
+    let location = SystemDocumentPathResolver.resolve(&target_path).unwrap();
+    root.update(cx, |root, _| {
+        root.pending_document_relocations.remove(&document);
+        root.active_document_relocations
+            .insert(document, target_path.clone());
+        root.last_document_relocation_targets
+            .insert(document, target_path.clone());
+    });
+    window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.finish_document_external(
+                document,
+                target_path,
+                false,
+                Ok(Some(
+                    crate::app_shell::document_external::DocumentExternalResult {
+                        change: slterm_document::DocumentExternalChange::Relocated {
+                            request,
+                            location,
+                        },
+                        paged: None,
+                    },
+                )),
+                window,
+                cx,
+            );
+        });
+    });
+    window.run_until_parked();
+
+    assert_eq!(
+        root.read_with(cx, |root, _| {
+            root.snapshot
+                .document(document)
+                .unwrap()
+                .canonical_path()
+                .as_path()
+                .to_path_buf()
+        }),
+        target
+    );
+    let persisted_location: String = fault
+        .query_row(
+            "SELECT location_json FROM documents WHERE document_id = ?1",
+            [document.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(
+        persisted_location.contains("renamed.txt"),
+        "StateCommitted 原子事务不得保存等待前的旧位置: {persisted_location}"
+    );
+    assert!(root.read_with(cx, |root, _| {
+        root.terminal_close_batches
+            .values()
+            .next()
+            .unwrap()
+            .coordinator
+            .phase()
+            == ClosePhase::Failed(CloseStage::StopPty)
+    }));
+    fault
+        .execute_batch("DROP TRIGGER reject_batch_pty_stopped")
+        .unwrap();
+    runtime.shutdown(ControlPlaneCleanup::Succeeded).unwrap();
+}
+
+#[gpui::test]
 fn document_batch_close_partial_save(cx: &mut TestAppContext) {
     let temp = tempfile::tempdir().unwrap();
     let first_path = temp.path().join("first.txt");

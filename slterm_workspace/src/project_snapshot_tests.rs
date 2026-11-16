@@ -557,6 +557,72 @@ fn split_terminal_command_creates_two_non_empty_groups() {
 }
 
 #[test]
+fn document_rename_preserves_identity_and_view() {
+    let original = snapshot_with_three_projects();
+    let id = document_id(DOCUMENT_A);
+    let location = document_location("D:/work/shared.txt");
+    let (first, editor_a) = original
+        .with_opened_document(project_id(PROJECT_A), group_id(GROUP_A), id, location)
+        .unwrap();
+    let (original, editor_b) = first
+        .with_opened_document(
+            project_id(PROJECT_B),
+            group_id(GROUP_B),
+            id,
+            document_location("D:/work/shared.txt"),
+        )
+        .unwrap();
+    let target = document_location("D:/work/renamed.md");
+
+    let relocated = original
+        .with_relocated_document(id, target.clone())
+        .unwrap();
+
+    assert_eq!(relocated.document(id), Some(&target));
+    assert_eq!(relocated.registry(), original.registry());
+    assert!(relocated.registry().projects().iter().all(|project| {
+        let views = project.layout().view_keys();
+        match project.id() {
+            value if value == project_id(PROJECT_A) => views.contains(&editor_a),
+            value if value == project_id(PROJECT_B) => views.contains(&editor_b),
+            _ => true,
+        }
+    }));
+}
+
+#[test]
+fn document_relocation_rejects_occupied_target_without_side_effects() {
+    let original = empty_snapshot();
+    let first = document_id(DOCUMENT_A);
+    let second = document_id(DOCUMENT_B);
+    let first_location = document_location("D:/work/a/first.txt");
+    let second_location = document_location("D:/work/a/second.txt");
+    let (original, _) = original
+        .with_opened_document(
+            project_id(PROJECT_A),
+            group_id(GROUP_A),
+            first,
+            first_location.clone(),
+        )
+        .unwrap();
+    let (original, _) = original
+        .with_opened_document(
+            project_id(PROJECT_A),
+            group_id(GROUP_A),
+            second,
+            second_location.clone(),
+        )
+        .unwrap();
+
+    assert_eq!(
+        original.with_relocated_document(first, second_location.clone()),
+        Err(ProjectSnapshotError::DocumentLocationConflict(first))
+    );
+    assert_eq!(original.document(first), Some(&first_location));
+    assert_eq!(original.document(second), Some(&second_location));
+}
+
+#[test]
 fn mixed_view_close_is_atomic_and_retains_external_document() {
     let original = snapshot_with_three_projects();
     let id = document_id(DOCUMENT_A);

@@ -5,14 +5,29 @@ use std::sync::Arc;
 
 use ropey::Rope;
 use slterm_document::{
-    DocumentBody, DocumentConflict, DocumentExternalChange, DocumentExternalRequest, DocumentId,
-    DocumentRegistry, ExternalChangeError,
+    DocumentBody, DocumentConflict, DocumentExternalChange, DocumentExternalRequest,
 };
+#[cfg(test)]
+use slterm_document::{DocumentId, DocumentRegistry, ExternalChangeError};
 use slterm_path::{CanonicalPath, PathGrant, PathOperation, PathPolicy, PathRequest, ResolvedPath};
 use uuid::Uuid;
 
 use super::file_editor::document::Document;
 use crate::platform::document_paths::{DocumentPathResolver, SystemDocumentPathResolver};
+
+pub(crate) struct DocumentExternalResult {
+    pub(crate) change: DocumentExternalChange,
+    pub(crate) paged: Option<Arc<super::paged_document::PagedDocument>>,
+}
+
+impl From<DocumentExternalChange> for DocumentExternalResult {
+    fn from(change: DocumentExternalChange) -> Self {
+        Self {
+            change,
+            paged: None,
+        }
+    }
+}
 
 pub(crate) struct DocumentExternalService {
     resolver: Arc<dyn DocumentPathResolver>,
@@ -27,21 +42,20 @@ impl Default for DocumentExternalService {
 }
 
 impl DocumentExternalService {
+    #[cfg(test)]
     fn request(
         registry: &DocumentRegistry,
         id: DocumentId,
         authorization_generation: u64,
-    ) -> io::Result<Result<DocumentExternalRequest, DocumentExternalChange>> {
+    ) -> io::Result<Option<DocumentExternalRequest>> {
         match registry.external_request(id, authorization_generation) {
-            Ok(request) => Ok(Ok(request)),
-            Err(ExternalChangeError::ReadRevoked) => {
-                Ok(Err(DocumentExternalChange::ReadRevoked { document_id: id }))
-            }
+            Ok(request) => Ok(Some(request)),
+            Err(ExternalChangeError::ReadRevoked) => Ok(None),
             Err(error) => Err(io::Error::other(error)),
         }
     }
 
-    fn authorize(
+    pub(crate) fn authorize(
         request: &DocumentExternalRequest,
         lexical: &CanonicalPath,
         resolved: &ResolvedPath,
@@ -64,28 +78,45 @@ impl DocumentExternalService {
         lexical: &CanonicalPath,
         grants: &[PathGrant],
         current_generation: u64,
-    ) -> io::Result<DocumentExternalChange> {
-        let id = request.document_id();
+    ) -> io::Result<DocumentExternalResult> {
         let resolved = match self.resolver.resolve(lexical) {
             Ok(resolved) => resolved,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                return Ok(DocumentExternalChange::Deleted(request));
+                return Ok(DocumentExternalResult::from(
+                    DocumentExternalChange::Deleted(request),
+                ));
             }
             Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
-                return Ok(DocumentExternalChange::ReadRevoked { document_id: id });
+                let location =
+                    ResolvedPath::new(lexical.clone(), request.location().file_identity());
+                return Ok(DocumentExternalResult::from(
+                    DocumentExternalChange::ReadRevoked { request, location },
+                ));
             }
             Err(error) => return Err(error),
         };
         if !Self::authorize(&request, lexical, &resolved, grants, current_generation) {
-            return Ok(DocumentExternalChange::ReadRevoked { document_id: id });
+            return Ok(DocumentExternalResult::from(
+                DocumentExternalChange::ReadRevoked {
+                    request,
+                    location: resolved,
+                },
+            ));
         }
         let document = match Document::load(resolved.canonical_path().as_path()) {
             Ok(document) => document,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                return Ok(DocumentExternalChange::Deleted(request));
+                return Ok(DocumentExternalResult::from(
+                    DocumentExternalChange::Deleted(request),
+                ));
             }
             Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
-                return Ok(DocumentExternalChange::ReadRevoked { document_id: id });
+                return Ok(DocumentExternalResult::from(
+                    DocumentExternalChange::ReadRevoked {
+                        request,
+                        location: resolved,
+                    },
+                ));
             }
             Err(error) => return Err(error),
         };
@@ -100,16 +131,23 @@ impl DocumentExternalService {
                 &resolved,
                 Some(document.encoding.encoding),
             ) {
-                Ok(paged) => paged,
+                Ok(paged) => Arc::new(paged),
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                    return Ok(DocumentExternalChange::Deleted(request));
+                    return Ok(DocumentExternalResult::from(
+                        DocumentExternalChange::Deleted(request),
+                    ));
                 }
                 Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
-                    return Ok(DocumentExternalChange::ReadRevoked { document_id: id });
+                    return Ok(DocumentExternalResult::from(
+                        DocumentExternalChange::ReadRevoked {
+                            request,
+                            location: resolved,
+                        },
+                    ));
                 }
                 Err(error) => return Err(error),
             };
-            return Ok(DocumentExternalChange::Reload {
+            let change = DocumentExternalChange::Reload {
                 request,
                 content: slterm_document::DocumentBody::Paged(paged.source()),
                 disk_baseline: Arc::default(),
@@ -120,24 +158,62 @@ impl DocumentExternalService {
                 location: resolved,
                 new_state: slterm_document::TextStateId::from_uuid(Uuid::now_v7())
                     .expect("系统生成的 TextStateId 必须为 v7"),
+            };
+            return Ok(DocumentExternalResult {
+                change,
+                paged: Some(paged),
             });
         }
-        Ok(DocumentExternalChange::Reload {
-            request,
-            content: slterm_document::DocumentBody::Editable(Rope::from_str(&document.text)),
-            disk_baseline: document.bytes.clone(),
-            metadata: slterm_document::DocumentMetadata {
-                encoding: document.encoding.clone(),
-                read_only: document.read_only,
+        Ok(DocumentExternalResult::from(
+            DocumentExternalChange::Reload {
+                request,
+                content: slterm_document::DocumentBody::Editable(Rope::from_str(&document.text)),
+                disk_baseline: document.bytes.clone(),
+                metadata: slterm_document::DocumentMetadata {
+                    encoding: document.encoding.clone(),
+                    read_only: document.read_only,
+                },
+                location: document.location().clone(),
+                new_state: slterm_document::TextStateId::from_uuid(Uuid::now_v7())
+                    .expect("系统生成的 TextStateId 必须为 v7"),
             },
-            location: document.location().clone(),
-            new_state: slterm_document::TextStateId::from_uuid(Uuid::now_v7())
-                .expect("系统生成的 TextStateId 必须为 v7"),
-        })
+        ))
     }
 
-    /// 后台刷新；None 表示真实位置与磁盘基线均未变化。
-    pub(crate) fn refresh(
+    /// 后台消费不可变请求；None 表示真实位置、元数据与磁盘正文均未变化。
+    pub(crate) fn refresh_request(
+        &self,
+        request: DocumentExternalRequest,
+        grants: &[PathGrant],
+        current_authorization_generation: u64,
+    ) -> io::Result<Option<DocumentExternalResult>> {
+        let lexical = request.location().canonical_path().clone();
+        let result = self.read(request, &lexical, grants, current_authorization_generation)?;
+        let unchanged = match &result.change {
+            DocumentExternalChange::Reload {
+                request,
+                content,
+                disk_baseline,
+                metadata,
+                location,
+                ..
+            } => {
+                disk_baseline == request.disk_baseline()
+                    && location == request.location()
+                    && metadata == request.metadata()
+                    && content_matches_request(request, content)
+            }
+            _ => false,
+        };
+        if unchanged {
+            Ok(None)
+        } else {
+            Ok(Some(result))
+        }
+    }
+
+    #[cfg(test)]
+    fn refresh(
         &self,
         registry: &DocumentRegistry,
         id: DocumentId,
@@ -145,74 +221,38 @@ impl DocumentExternalService {
         current_authorization_generation: u64,
     ) -> io::Result<Option<DocumentExternalChange>> {
         let request = match Self::request(registry, id, current_authorization_generation)? {
-            Ok(request) => request,
-            Err(change) => return Ok(Some(change)),
+            Some(request) => request,
+            None => return Ok(None),
         };
-        let expected_baseline = request.disk_baseline().clone();
-        let expected_location = request.location().clone();
-        let lexical = request.location().canonical_path().clone();
-        let change = self.read(request, &lexical, grants, current_authorization_generation)?;
-        let unchanged = match &change {
+        Ok(self
+            .refresh_request(request, grants, current_authorization_generation)?
+            .map(|result| result.change))
+    }
+
+    /// 外部改名按请求捕获的身份与磁盘基线重绑；正文比较不读取前台 Registry。
+    pub(crate) fn relocate(
+        &self,
+        request: DocumentExternalRequest,
+        target: &CanonicalPath,
+        grants: &[PathGrant],
+        current_authorization_generation: u64,
+    ) -> io::Result<DocumentExternalResult> {
+        let DocumentExternalResult { change, paged } =
+            self.read(request, target, grants, current_authorization_generation)?;
+        let change = match change {
             DocumentExternalChange::Reload {
+                request,
                 content,
                 disk_baseline,
                 metadata,
                 location,
                 ..
-            } => {
-                disk_baseline == &expected_baseline
-                    && location == &expected_location
-                    && registry.session(id).is_some_and(|session| {
-                        session.encoding() == &metadata.encoding
-                            && session.is_read_only() == metadata.read_only
-                            && content_matches_current(registry, id, content)
-                    })
-            }
-            _ => false,
-        };
-        if unchanged {
-            Ok(None)
-        } else {
-            Ok(Some(change))
-        }
-    }
-
-    /// 外部改名按真实身份与磁盘基线重绑；内容同时变化时交给同一重载／冲突链。
-    pub(crate) fn relocate(
-        &self,
-        registry: &DocumentRegistry,
-        id: DocumentId,
-        target: &CanonicalPath,
-        grants: &[PathGrant],
-        current_authorization_generation: u64,
-    ) -> io::Result<DocumentExternalChange> {
-        let request = match Self::request(registry, id, current_authorization_generation)? {
-            Ok(request) => request,
-            Err(change) => return Ok(change),
-        };
-        let resolved = self.resolver.resolve(target)?;
-        if registry
-            .existing(&resolved)
-            .is_some_and(|existing| existing != id)
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::AlreadyExists,
-                "重定位目标已关联其他 Document",
-            ));
-        }
-        let change = self.read(request, target, grants, current_authorization_generation)?;
-        match change {
-            DocumentExternalChange::Reload {
-                request,
-                content,
-                disk_baseline,
-                location,
-                ..
             } if location.file_identity() == request.location().file_identity()
                 && disk_baseline.as_ref() == request.disk_baseline().as_ref()
-                && content_matches_current(registry, id, &content) =>
+                && &metadata == request.metadata()
+                && content_matches_request(&request, &content) =>
             {
-                Ok(DocumentExternalChange::Relocated { request, location })
+                DocumentExternalChange::Relocated { request, location }
             }
             DocumentExternalChange::Reload {
                 request,
@@ -227,26 +267,21 @@ impl DocumentExternalService {
                     }
                     DocumentBody::Paged(_) => DocumentConflict::modified_paged(location),
                 };
-                Ok(DocumentExternalChange::Conflict { request, conflict })
+                DocumentExternalChange::Conflict { request, conflict }
             }
-            change => Ok(change),
-        }
+            change => change,
+        };
+        Ok(DocumentExternalResult { change, paged })
     }
 }
 
-fn content_matches_current(
-    registry: &DocumentRegistry,
-    id: DocumentId,
-    content: &DocumentBody,
-) -> bool {
-    match content {
-        DocumentBody::Paged(next) => registry
-            .session(id)
-            .and_then(|session| session.paged())
-            .is_some_and(|current| {
-                current.index() == next.index() && current.fingerprint() == next.fingerprint()
-            }),
-        DocumentBody::Editable(_) => true,
+fn content_matches_request(request: &DocumentExternalRequest, content: &DocumentBody) -> bool {
+    match (request.body(), content) {
+        (DocumentBody::Paged(current), DocumentBody::Paged(next)) => {
+            current.index() == next.index() && current.fingerprint() == next.fingerprint()
+        }
+        (DocumentBody::Editable(_), DocumentBody::Editable(_)) => true,
+        _ => false,
     }
 }
 
@@ -406,14 +441,12 @@ mod tests {
             "local"
         );
 
-        // 失权后不再解析或读盘；真实删除也不能把 ReadRevoked 改成 Deleted。
+        // 失权后不再解析、读盘或生成无新事实的重复事件。
         std::fs::remove_file(&file).unwrap();
         let change = DocumentExternalService::default()
             .refresh(&registry, opened.id, &[PathGrant::project_root(root)], 0)
-            .unwrap()
             .unwrap();
-        assert!(matches!(change, DocumentExternalChange::ReadRevoked { .. }));
-        registry.apply_external(change, Instant::now()).unwrap();
+        assert!(change.is_none());
         assert_eq!(
             registry
                 .session(opened.id)
@@ -509,15 +542,16 @@ mod tests {
         let revision = registry.session(opened.id).unwrap().text_revision();
         std::fs::rename(&source, &target).unwrap();
 
+        let request = registry.external_request(opened.id, 0).unwrap();
         let change = DocumentExternalService::default()
             .relocate(
-                &registry,
-                opened.id,
+                request,
                 &CanonicalPath::new(&target).unwrap(),
                 &[PathGrant::project_root(root)],
                 0,
             )
-            .unwrap();
+            .unwrap()
+            .change;
         let outcome = registry.apply_external(change, Instant::now()).unwrap();
 
         assert_eq!(outcome, ExternalApplyOutcome::Relocated);
@@ -527,6 +561,97 @@ mod tests {
         assert_eq!(session.text().unwrap().to_string(), "same");
         assert_eq!(session.location().canonical_path().as_path(), target);
         assert_eq!(registry.existing(session.location()), Some(opened.id));
+    }
+
+    #[test]
+    fn external_rename_with_permission_change_is_not_pure_relocation() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = CanonicalPath::new(dunce::canonicalize(temp.path()).unwrap()).unwrap();
+        let source = temp.path().join("source.txt");
+        let target = temp.path().join("renamed.txt");
+        std::fs::write(&source, "same").unwrap();
+        let mut registry = DocumentRegistry::new();
+        let opened = DocumentOpenService::default()
+            .open(&mut registry, &root, &CanonicalPath::new(&source).unwrap())
+            .unwrap();
+        let mut permissions = std::fs::metadata(&source).unwrap().permissions();
+        permissions.set_readonly(true);
+        std::fs::set_permissions(&source, permissions).unwrap();
+        let request = registry.external_request(opened.id, 0).unwrap();
+        std::fs::rename(&source, &target).unwrap();
+
+        let change = DocumentExternalService::default()
+            .relocate(
+                request,
+                &CanonicalPath::new(&target).unwrap(),
+                &[PathGrant::project_root(root)],
+                0,
+            )
+            .unwrap()
+            .change;
+        assert!(matches!(change, DocumentExternalChange::Reload { .. }));
+        registry.apply_external(change, Instant::now()).unwrap();
+        assert!(registry.session(opened.id).unwrap().is_read_only());
+        assert_eq!(
+            registry
+                .session(opened.id)
+                .unwrap()
+                .location()
+                .canonical_path()
+                .as_path(),
+            target
+        );
+
+        #[allow(clippy::permissions_set_readonly_false)]
+        {
+            let mut permissions = std::fs::metadata(&target).unwrap().permissions();
+            permissions.set_readonly(false);
+            std::fs::set_permissions(&target, permissions).unwrap();
+        }
+    }
+
+    #[test]
+    fn external_rename_identity_replacement_conflicts_without_rebinding() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = CanonicalPath::new(dunce::canonicalize(temp.path()).unwrap()).unwrap();
+        let source = temp.path().join("source.txt");
+        let target = temp.path().join("renamed.txt");
+        std::fs::write(&source, "original").unwrap();
+        let mut registry = DocumentRegistry::new();
+        let opened = DocumentOpenService::default()
+            .open(&mut registry, &root, &CanonicalPath::new(&source).unwrap())
+            .unwrap();
+        let request = registry.external_request(opened.id, 0).unwrap();
+        std::fs::rename(&source, &target).unwrap();
+        std::fs::remove_file(&target).unwrap();
+        std::fs::write(&target, "replacement").unwrap();
+
+        let change = DocumentExternalService::default()
+            .relocate(
+                request,
+                &CanonicalPath::new(&target).unwrap(),
+                &[PathGrant::project_root(root)],
+                0,
+            )
+            .unwrap()
+            .change;
+        assert!(matches!(change, DocumentExternalChange::Conflict { .. }));
+        let outcome = registry.apply_external(change, Instant::now()).unwrap();
+
+        assert_eq!(outcome, ExternalApplyOutcome::Conflict);
+        assert_eq!(
+            registry.session(opened.id).unwrap().text().unwrap(),
+            "original"
+        );
+        assert_eq!(
+            registry
+                .session(opened.id)
+                .unwrap()
+                .location()
+                .canonical_path()
+                .as_path(),
+            source
+        );
     }
 
     #[test]

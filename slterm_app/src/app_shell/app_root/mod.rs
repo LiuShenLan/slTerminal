@@ -5,6 +5,7 @@ mod batch_close;
 pub(crate) mod close_coordinator;
 mod command_registry;
 mod commands;
+mod document_external;
 mod document_recovery;
 mod documents;
 mod events;
@@ -174,7 +175,7 @@ pub(crate) struct AppRoot {
     global_close: Option<GlobalCloseClient>,
     terminal_closes: BTreeMap<slterm_workspace::TerminalId, terminal_close::LocalTerminalClose>,
     terminal_close_batches: BTreeMap<uuid::Uuid, batch_close::LocalTerminalBatchClose>,
-    pending_batch_commits: BTreeMap<uuid::Uuid, ProjectSnapshot>,
+    pending_batch_commits: std::collections::BTreeSet<uuid::Uuid>,
     terminal_close_batch_members: BTreeMap<slterm_workspace::TerminalId, uuid::Uuid>,
     next_terminal_close_sequence: u64,
     project_closes: BTreeMap<ProjectId, project_close::LocalProjectClose>,
@@ -198,6 +199,13 @@ pub(crate) struct AppRoot {
     document_open_active: bool,
     #[allow(dead_code)] // 消费点 = Document 打开请求队列。
     pending_document_opens: VecDeque<documents::DocumentOpenRequest>,
+    document_external_service: Arc<crate::app_shell::document_external::DocumentExternalService>,
+    pending_document_relocations: BTreeMap<slterm_document::DocumentId, CanonicalPath>,
+    pending_document_refreshes: std::collections::BTreeSet<slterm_document::DocumentId>,
+    active_document_relocations: BTreeMap<slterm_document::DocumentId, CanonicalPath>,
+    last_document_relocation_targets: BTreeMap<slterm_document::DocumentId, CanonicalPath>,
+    document_relocation_aliases: BTreeMap<std::path::PathBuf, slterm_document::DocumentId>,
+    fs_watch: Option<crate::app_shell::fs_watch::FsWatchHandle>,
     pending_document_saves: std::collections::BTreeSet<slterm_document::DocumentId>,
     panel_subscriptions: BTreeMap<PanelId, Subscription>,
     panel_focus: BTreeMap<PanelId, FocusRegistration>,
@@ -343,7 +351,7 @@ impl AppRoot {
             global_close,
             terminal_closes: BTreeMap::new(),
             terminal_close_batches: BTreeMap::new(),
-            pending_batch_commits: BTreeMap::new(),
+            pending_batch_commits: std::collections::BTreeSet::new(),
             terminal_close_batch_members: BTreeMap::new(),
             next_terminal_close_sequence: 0,
             project_closes: BTreeMap::new(),
@@ -364,6 +372,15 @@ impl AppRoot {
             ),
             document_open_active: false,
             pending_document_opens: VecDeque::new(),
+            document_external_service: Arc::new(
+                crate::app_shell::document_external::DocumentExternalService::default(),
+            ),
+            pending_document_relocations: BTreeMap::new(),
+            pending_document_refreshes: std::collections::BTreeSet::new(),
+            active_document_relocations: BTreeMap::new(),
+            last_document_relocation_targets: BTreeMap::new(),
+            document_relocation_aliases: BTreeMap::new(),
+            fs_watch: crate::app_shell::fs_watch::FsWatchHandle::new(),
             pending_document_saves: std::collections::BTreeSet::new(),
             panel_subscriptions: BTreeMap::new(),
             panel_focus: BTreeMap::new(),
@@ -388,6 +405,7 @@ impl AppRoot {
             project_paths: Arc::new(SystemProjectPathResolver),
             shell,
         };
+        root.reconcile_fs_watch();
         root.reconcile_split_dividers(cx);
         root.reconcile_tab_scrolls(None);
         root

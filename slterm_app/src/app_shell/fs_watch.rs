@@ -8,38 +8,47 @@
 //! - **引用计数**:同一父目录下打开多个文件只 watch 一次;全部关闭才
 //!   unwatch。父目录已被树根递归覆盖时不重复 watch,树根切换/释放时重新
 //!   对齐,不得把树根 watch 误删。
-//! - watcher 创建失败返回 `None` 并降级(刷新按钮仍可用),不 panic。
+//! - **前台不等待 OS**：`FsWatchHandle` 只更新最新配置并发送有界唤醒；
+//!   专用工作线程执行 notify 创建与 watch/unwatch 的同步 ACK。
+//! - 工作线程创建失败返回 `None`；notify 创建失败记录降级，不 panic。
 
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
 
+use notify::event::{ModifyKind, RenameMode};
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher as _};
 
-/// 一次前台收割的事件路径集:文件脏(精确命中)与目录脏(树根内)。
+/// 一次前台收割的事件路径集：文件脏、目录脏与已配对的文件改名。
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct FsPending {
     pub(crate) files: Vec<PathBuf>,
     pub(crate) dirs: Vec<PathBuf>,
+    pub(crate) renames: Vec<(PathBuf, PathBuf)>,
 }
 
 impl FsPending {
+    #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
-        self.files.is_empty() && self.dirs.is_empty()
+        self.files.is_empty() && self.dirs.is_empty() && self.renames.is_empty()
     }
 }
 
 /// 回调线程与前台共享的分类状态(锁粒度 = 一次事件分类/一次收割)。
 #[derive(Debug, Default)]
 struct WatchState {
-    /// 已登记文件(精确路径过滤;含已关闭 tab 路径时由 retain 清掉)。
+    /// 已登记文件（精确路径过滤；含已关闭 tab 路径时由 retain 清掉）。
     files: HashSet<PathBuf>,
-    /// 当前树根;`tree_active` = 递归 watch 是否建立成功。
-    tree_root: Option<PathBuf>,
-    tree_active: bool,
+    /// 当前全部项目树根；实际 watch 可由某个祖先根覆盖。
+    tree_roots: HashSet<PathBuf>,
     dirty_files: HashSet<PathBuf>,
     dirty_dirs: HashSet<PathBuf>,
+    dirty_renames: Vec<(PathBuf, PathBuf)>,
+    /// 已产出但尚未完成前台对账的改名目标，允许连续 A→B→C 的 B 作为源。
+    rename_targets: HashSet<PathBuf>,
+    /// Windows 将一次改名拆成相邻 From/To；只保留已登记文件或改名目标的 From。
+    pending_rename_from: Option<PathBuf>,
 }
 
 fn lock_state(state: &Mutex<WatchState>) -> std::sync::MutexGuard<'_, WatchState> {
@@ -47,6 +56,117 @@ fn lock_state(state: &Mutex<WatchState>) -> std::sync::MutexGuard<'_, WatchState
     state
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+#[derive(Clone, Default)]
+struct WatchConfig {
+    roots: HashSet<PathBuf>,
+    files: HashSet<PathBuf>,
+}
+
+/// GPUI 前台只持配置与脏集句柄；notify 的同步 ACK 等待全部归工作线程。
+pub(crate) struct FsWatchHandle {
+    state: Arc<Mutex<WatchState>>,
+    wake_rx: Receiver<()>,
+    config: Arc<Mutex<WatchConfig>>,
+    reconcile_tx: Option<mpsc::SyncSender<()>>,
+    #[cfg(test)]
+    worker_probe: std::sync::Weak<()>,
+    _worker: std::thread::JoinHandle<()>,
+}
+
+impl FsWatchHandle {
+    pub(crate) fn new() -> Option<Self> {
+        let state = Arc::new(Mutex::new(WatchState::default()));
+        let config = Arc::new(Mutex::new(WatchConfig::default()));
+        let (wake_tx, wake_rx) = mpsc::sync_channel(1);
+        let (reconcile_tx, reconcile_rx) = mpsc::sync_channel(1);
+        let worker_state = Arc::clone(&state);
+        let worker_config = Arc::clone(&config);
+        let worker_probe = Arc::new(());
+        #[cfg(test)]
+        let probe = Arc::downgrade(&worker_probe);
+        let worker = std::thread::Builder::new()
+            .name("slterm-fs-watch".to_owned())
+            .spawn(move || {
+                let _probe = worker_probe;
+                #[cfg(test)]
+                let mut watch = {
+                    let (_unused_wake_tx, worker_wake_rx) = mpsc::sync_channel(1);
+                    FsWatch::with_state(worker_state, wake_tx, worker_wake_rx)
+                };
+                #[cfg(not(test))]
+                let mut watch = FsWatch::with_state(worker_state, wake_tx);
+                while reconcile_rx.recv().is_ok() {
+                    let next = worker_config
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .clone();
+                    watch.retain_tree_roots(next.roots);
+                    watch.retain_files(next.files);
+                }
+            })
+            .ok()?;
+        Some(Self {
+            state,
+            wake_rx,
+            config,
+            reconcile_tx: Some(reconcile_tx),
+            #[cfg(test)]
+            worker_probe: probe,
+            _worker: worker,
+        })
+    }
+
+    /// 配置满量覆盖且有界合并；队列满时既有信号仍会读取到最新值。
+    pub(crate) fn retain(&self, roots: Vec<PathBuf>, files: Vec<PathBuf>) {
+        let next = WatchConfig {
+            roots: roots.into_iter().collect(),
+            files: files.into_iter().collect(),
+        };
+        *self
+            .config
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = next;
+        if let Some(reconcile) = &self.reconcile_tx {
+            let _ = reconcile.try_send(());
+        }
+    }
+
+    pub(crate) fn take_pending(&mut self) -> FsPending {
+        while self.wake_rx.try_recv().is_ok() {}
+        let mut state = lock_state(&self.state);
+        FsPending {
+            files: state.dirty_files.drain().collect(),
+            dirs: state.dirty_dirs.drain().collect(),
+            renames: std::mem::take(&mut state.dirty_renames)
+                .into_iter()
+                .collect(),
+        }
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn has_interest(&self) -> bool {
+        let state = lock_state(&self.state);
+        !state.files.is_empty() || !state.tree_roots.is_empty()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn tracks_file(&self, path: &std::path::Path) -> bool {
+        lock_state(&self.state).files.contains(path)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn worker_thread_id(&self) -> std::thread::ThreadId {
+        self._worker.thread().id()
+    }
+}
+
+impl Drop for FsWatchHandle {
+    fn drop(&mut self) {
+        // 关闭有界信号通道；工作线程处理完当前配置后退出，前台不 join。
+        self.reconcile_tx.take();
+    }
 }
 
 /// 单实例文件系统监听器(随 workspace 存活;Drop 释放 notify 线程)。
@@ -58,17 +178,30 @@ pub(crate) struct FsWatch {
     parent_refs: HashMap<PathBuf, usize>,
     /// 已单独 watch 的父目录(不含树根递归覆盖的部分)。
     watched_parents: HashSet<PathBuf>,
-    /// 上一次建立递归 watch 失败的根:同根不重复尝试,避免每帧告警。
-    failed_tree_root: Option<PathBuf>,
+    /// 实际建立的递归树根；嵌套根由祖先覆盖，不重复 watch。
+    watched_trees: HashSet<PathBuf>,
+    /// 本轮根集合中建立失败的根；根集合变化后才重试。
+    failed_tree_roots: HashSet<PathBuf>,
     /// 有界唤醒信号:只用于提示前台"有事件了";容量 1,满即丢。
+    #[cfg(test)]
     wake_rx: Receiver<()>,
 }
 
 impl FsWatch {
-    /// 建立 watcher;平台 watcher 不可用时记录降级并返回 `None`。
+    /// 建立仅供测试的同步 worker；生产统一经 `FsWatchHandle`。
+    #[cfg(test)]
     pub(crate) fn new() -> Option<Self> {
         let (wake_tx, wake_rx) = mpsc::sync_channel(1);
         let state = Arc::new(Mutex::new(WatchState::default()));
+        let watch = Self::with_state(state, wake_tx, wake_rx);
+        watch.watcher.is_some().then_some(watch)
+    }
+
+    fn with_state(
+        state: Arc<Mutex<WatchState>>,
+        wake_tx: mpsc::SyncSender<()>,
+        #[cfg(test)] wake_rx: Receiver<()>,
+    ) -> Self {
         let callback_state = Arc::clone(&state);
         let watcher =
             match notify::recommended_watcher(move |result: notify::Result<notify::Event>| {
@@ -79,101 +212,118 @@ impl FsWatch {
                         return;
                     }
                 };
-                // 访问事件(读/打开)不改变磁盘内容,直接丢弃。
                 if matches!(event.kind, EventKind::Access(_)) {
                     return;
                 }
                 let mut state = lock_state(&callback_state);
-                for path in event.paths {
-                    // 命中已登记文件 = 文件脏;树根内路径 = 目录脏。
-                    if state.files.contains(&path) {
-                        state.dirty_files.insert(path.clone());
-                    }
-                    let inside_tree = match state.tree_root.as_ref() {
-                        Some(root) => state.tree_active && path.starts_with(root),
-                        None => false,
-                    };
-                    if inside_tree {
-                        state.dirty_dirs.insert(path);
-                    }
-                }
+                classify_event(&mut state, event);
                 drop(state);
-                // 满 = 前台尚未收割,已有一次唤醒在途;脏集才是真值。
                 let _ = wake_tx.try_send(());
             }) {
-                Ok(watcher) => watcher,
+                Ok(watcher) => Some(watcher),
                 Err(error) => {
                     log::warn!("fs watch: unavailable ({error}); manual refresh still works");
-                    return None;
+                    None
                 }
             };
-        Some(Self {
-            watcher: Some(watcher),
+        Self {
+            watcher,
             state,
             parent_refs: HashMap::new(),
             watched_parents: HashSet::new(),
-            failed_tree_root: None,
+            watched_trees: HashSet::new(),
+            failed_tree_roots: HashSet::new(),
+            #[cfg(test)]
             wake_rx,
-        })
+        }
     }
 
-    /// 切换树根监听(None = 释放)。同一根且已生效时零成本。
-    pub(crate) fn watch_tree_root(&mut self, root: Option<&Path>) {
-        let next = root.map(Path::to_path_buf);
-        let (current, active) = {
-            let state = lock_state(&self.state);
-            (state.tree_root.clone(), state.tree_active)
-        };
-        // 同根已生效,或同根此前建立失败(不重复尝试/告警)均零成本返回。
-        if current == next && (next.is_none() || active || self.failed_tree_root == next) {
-            return;
-        }
-        if current != next {
-            self.failed_tree_root = None;
-        }
-        // 旧根释放:仅在其确实生效时 unwatch;新根建立失败走文件父目录兜底。
-        if current != next
-            && active
-            && let (Some(previous), Some(watcher)) = (current.as_deref(), self.watcher.as_mut())
+    /// 用全部项目根替换递归监听集合；嵌套根复用祖先 watch。
+    pub(crate) fn retain_tree_roots(&mut self, roots: impl IntoIterator<Item = PathBuf>) {
+        let next: HashSet<PathBuf> = roots.into_iter().collect();
         {
-            let _ = watcher.unwatch(previous);
-        }
-        // notify 的 unwatch 按路径生效:必须先撤掉将被新树根覆盖的单独
-        // 父目录 watch,再安装递归根;反序会把刚装上的树根 watch 一起删掉。
-        if let Some(path) = next.as_deref() {
-            let covered: Vec<PathBuf> = self
-                .watched_parents
-                .iter()
-                .filter(|parent| parent.starts_with(path))
-                .cloned()
-                .collect();
-            for parent in covered {
-                if let Some(watcher) = self.watcher.as_mut() {
-                    let _ = watcher.unwatch(&parent);
-                }
-                self.watched_parents.remove(&parent);
+            let mut state = lock_state(&self.state);
+            if state.tree_roots == next {
+                return;
             }
+            // 先切换分类范围，迟到旧根事件不得污染新项目。
+            state.tree_roots = next.clone();
         }
-        let mut active = false;
-        if let (Some(path), Some(watcher)) = (next.as_deref(), self.watcher.as_mut()) {
-            match watcher.watch(path, RecursiveMode::Recursive) {
-                Ok(()) => active = true,
+        self.failed_tree_roots.clear();
+
+        let stale: Vec<PathBuf> = self
+            .watched_trees
+            .iter()
+            .filter(|watched| !next.iter().any(|root| root.starts_with(watched)))
+            .cloned()
+            .collect();
+        for root in stale {
+            if let Some(watcher) = self.watcher.as_mut() {
+                let _ = watcher.unwatch(&root);
+            }
+            self.watched_trees.remove(&root);
+        }
+
+        // notify 的 unwatch 按路径生效；安装递归根前先撤掉将被覆盖的父目录。
+        let covered: Vec<PathBuf> = self
+            .watched_parents
+            .iter()
+            .filter(|parent| next.iter().any(|root| parent.starts_with(root)))
+            .cloned()
+            .collect();
+        for parent in covered {
+            if let Some(watcher) = self.watcher.as_mut() {
+                let _ = watcher.unwatch(&parent);
+            }
+            self.watched_parents.remove(&parent);
+        }
+
+        let mut missing: Vec<PathBuf> = next
+            .iter()
+            .filter(|root| {
+                !self
+                    .watched_trees
+                    .iter()
+                    .any(|watched| root.starts_with(watched))
+            })
+            .cloned()
+            .collect();
+        missing.sort_by_key(|root| root.components().count());
+        for root in missing {
+            let Some(watcher) = self.watcher.as_mut() else {
+                break;
+            };
+            match watcher.watch(&root, RecursiveMode::Recursive) {
+                Ok(()) => {
+                    self.watched_trees.insert(root);
+                }
                 Err(error) => {
-                    self.failed_tree_root = Some(path.to_path_buf());
+                    self.failed_tree_roots.insert(root.clone());
                     log::warn!(
                         "fs watch: cannot watch tree root {}: {error}",
-                        path.display()
+                        root.display()
                     );
                 }
             }
         }
-        {
-            let mut state = lock_state(&self.state);
-            state.tree_root = next;
-            state.tree_active = active;
+
+        // 新祖先生效后，既有嵌套 watch 已成为重复监听。
+        let redundant: Vec<PathBuf> = self
+            .watched_trees
+            .iter()
+            .filter(|root| {
+                self.watched_trees
+                    .iter()
+                    .any(|other| other != *root && root.starts_with(other))
+            })
+            .cloned()
+            .collect();
+        for root in redundant {
+            if let Some(watcher) = self.watcher.as_mut() {
+                let _ = watcher.unwatch(&root);
+            }
+            self.watched_trees.remove(&root);
         }
-        // 树根覆盖范围变了:此前被树根覆盖的文件父目录要补 watch,
-        // 新树根覆盖的父目录要撤销单独 watch。
         self.reconcile_file_watches();
     }
 
@@ -186,40 +336,51 @@ impl FsWatch {
                 return;
             }
             state.files = next.clone();
+            let pending_aliases = state
+                .dirty_renames
+                .iter()
+                .flat_map(|(source, target)| [source.clone(), target.clone()])
+                .collect::<HashSet<_>>();
+            state
+                .rename_targets
+                .retain(|path| next.contains(path) || pending_aliases.contains(path));
         }
         self.parent_refs = parent_counts(&next);
         self.reconcile_file_watches();
     }
 
     /// 收割脏集并清空;顺带排空唤醒信号(信号只是加速提示,不承载数据)。
+    #[cfg(test)]
     pub(crate) fn take_pending(&mut self) -> FsPending {
         while self.wake_rx.try_recv().is_ok() {}
         let mut state = lock_state(&self.state);
         FsPending {
             files: state.dirty_files.drain().collect(),
             dirs: state.dirty_dirs.drain().collect(),
+            renames: std::mem::take(&mut state.dirty_renames)
+                .into_iter()
+                .collect(),
         }
     }
 
-    /// 是否仍有监听兴趣(文件或生效的树根)。无兴趣时前台泵应退出。
+    /// 是否仍有监听兴趣（文件或生效的树根）。无兴趣时前台泵应退出。
+    #[cfg(test)]
     pub(crate) fn has_interest(&self) -> bool {
         let state = lock_state(&self.state);
-        !state.files.is_empty() || (state.tree_root.is_some() && state.tree_active)
+        !state.files.is_empty() || !self.watched_trees.is_empty()
     }
 
-    /// 文件父目录 watch 对账:先补缺,再撤销不再需要且未被树根覆盖的。
+    /// 文件父目录 watch 对账：先补缺，再撤销不再需要且未被树根覆盖的。
     fn reconcile_file_watches(&mut self) {
-        let tree_root = {
-            let state = lock_state(&self.state);
-            state.tree_root.clone().filter(|_| state.tree_active)
-        };
-        // 树根递归覆盖的父目录不单独 watch(含根目录自身)。
+        // 任一实际递归树根覆盖的父目录不单独 watch（含根目录自身）。
         let desired: HashSet<PathBuf> = self
             .parent_refs
             .keys()
-            .filter(|parent| match tree_root.as_ref() {
-                Some(root) => !parent.starts_with(root),
-                None => true,
+            .filter(|parent| {
+                !self
+                    .watched_trees
+                    .iter()
+                    .any(|root| parent.starts_with(root))
             })
             .cloned()
             .collect();
@@ -258,7 +419,63 @@ impl Drop for FsWatch {
     }
 }
 
-/// 文件 → 父目录引用计数;无父目录的裸文件名不参与监听。
+fn record_rename(state: &mut WatchState, source: PathBuf, target: PathBuf) {
+    let pair = (source, target.clone());
+    if !state.dirty_renames.contains(&pair) {
+        state.dirty_renames.push(pair);
+    }
+    state.rename_targets.insert(target);
+}
+
+/// 回调线程只分类当前事件；改名配对也在这里完成，前台不猜测相邻关系。
+fn classify_event(state: &mut WatchState, event: notify::Event) {
+    let rename_mode = match event.kind {
+        EventKind::Modify(ModifyKind::Name(mode)) => Some(mode),
+        _ => None,
+    };
+    let mut paired_source = None;
+    match rename_mode {
+        Some(RenameMode::Both) => {
+            state.pending_rename_from = None;
+            if let [source, target] = event.paths.as_slice()
+                && (state.files.contains(source) || state.rename_targets.contains(source))
+            {
+                record_rename(state, source.clone(), target.clone());
+                paired_source = Some(source.clone());
+            }
+        }
+        Some(RenameMode::From) => {
+            state.pending_rename_from = event
+                .paths
+                .first()
+                .filter(|path| state.files.contains(*path) || state.rename_targets.contains(*path))
+                .cloned();
+        }
+        Some(RenameMode::To) => {
+            if let (Some(source), Some(target)) =
+                (state.pending_rename_from.take(), event.paths.first())
+            {
+                record_rename(state, source.clone(), target.clone());
+                paired_source = Some(source);
+            }
+        }
+        _ => state.pending_rename_from = None,
+    }
+    for path in event.paths {
+        if state.files.contains(&path) {
+            state.dirty_files.insert(path.clone());
+        }
+        if state.tree_roots.iter().any(|root| path.starts_with(root)) {
+            state.dirty_dirs.insert(path);
+        }
+    }
+    // From 的普通文件脏先保留，以覆盖移出监听范围的删除语义；配对后撤销。
+    if let Some(source) = paired_source {
+        state.dirty_files.remove(&source);
+    }
+}
+
+/// 文件 → 父目录引用计数；无父目录的裸文件名不参与监听。
 fn parent_counts(files: &HashSet<PathBuf>) -> HashMap<PathBuf, usize> {
     let mut counts = HashMap::new();
     for file in files {
@@ -298,7 +515,7 @@ mod fs_watch_tests {
     fn tree_root_creation_marks_the_directory_dirty() {
         let directory = tempfile::tempdir().unwrap();
         let mut watch = FsWatch::new().expect("watcher 应可用");
-        watch.watch_tree_root(Some(directory.path()));
+        watch.retain_tree_roots([directory.path().to_path_buf()]);
         assert!(watch.has_interest());
 
         let created = directory.path().join("created.txt");
@@ -395,7 +612,7 @@ mod fs_watch_tests {
         let mut watch = FsWatch::new().expect("watcher 应可用");
         watch.retain_files([path.clone()]);
         assert!(watch.watched_parents.contains(directory.path()));
-        watch.watch_tree_root(Some(directory.path()));
+        watch.retain_tree_roots([directory.path().to_path_buf()]);
         assert!(
             !watch.watched_parents.contains(directory.path()),
             "已被树根覆盖的父目录必须撤销单独 watch"
@@ -415,12 +632,39 @@ mod fs_watch_tests {
 
     /// 根切换:旧根事件不再上报,新根事件正常上报。
     #[test]
+    fn consecutive_rename_reports_the_intermediate_path_as_a_source() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory.path().join("first.txt");
+        let intermediate = directory.path().join("intermediate.txt");
+        let final_path = directory.path().join("final.md");
+        std::fs::write(&first, b"same\n").unwrap();
+        let mut watch = FsWatch::new().expect("watcher 应可用");
+        watch.retain_files([first.clone()]);
+
+        std::fs::rename(&first, &intermediate).unwrap();
+        std::fs::rename(&intermediate, &final_path).unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut renames = Vec::new();
+        loop {
+            renames.extend(watch.take_pending().renames);
+            if renames.contains(&(intermediate.clone(), final_path.clone())) {
+                break;
+            }
+            assert!(Instant::now() < deadline, "连续改名第二段不得丢失");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(renames.contains(&(first, intermediate.clone())));
+        assert!(renames.contains(&(intermediate, final_path)));
+    }
+
+    #[test]
     fn switching_tree_root_moves_the_recursive_watch() {
         let first = tempfile::tempdir().unwrap();
         let second = tempfile::tempdir().unwrap();
         let mut watch = FsWatch::new().expect("watcher 应可用");
-        watch.watch_tree_root(Some(first.path()));
-        watch.watch_tree_root(Some(second.path()));
+        watch.retain_tree_roots([first.path().to_path_buf()]);
+        watch.retain_tree_roots([second.path().to_path_buf()]);
 
         std::fs::write(first.path().join("old-root.txt"), b"old\n").unwrap();
         std::fs::write(second.path().join("new-root.txt"), b"new\n").unwrap();
@@ -439,5 +683,85 @@ mod fs_watch_tests {
             "旧根不得继续上报: {:?}",
             pending.dirs
         );
+    }
+
+    #[test]
+    fn registered_file_rename_reports_the_source_target_pair() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source.txt");
+        let target = directory.path().join("target.md");
+        std::fs::write(&source, b"same\n").unwrap();
+        let mut watch = FsWatch::new().expect("watcher 应可用");
+        watch.retain_files([source.clone()]);
+
+        std::fs::rename(&source, &target).unwrap();
+
+        let pending = wait_for_pending(&mut watch, |pending| !pending.renames.is_empty());
+        assert_eq!(pending.renames, vec![(source.clone(), target.clone())]);
+        assert!(
+            !pending.files.contains(&source),
+            "已配对改名不得再把旧位置当普通修改上报"
+        );
+    }
+
+    #[test]
+    fn multiple_tree_roots_report_events_without_replacing_each_other() {
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        let mut watch = FsWatch::new().expect("watcher 应可用");
+        watch.retain_tree_roots([first.path().to_path_buf(), second.path().to_path_buf()]);
+
+        std::fs::write(first.path().join("first.txt"), b"first\n").unwrap();
+        std::fs::write(second.path().join("second.txt"), b"second\n").unwrap();
+
+        let pending = wait_for_pending(&mut watch, |pending| {
+            ["first.txt", "second.txt"]
+                .iter()
+                .all(|name| pending.dirs.iter().any(|path| path.ends_with(name)))
+        });
+        assert!(pending.dirs.iter().any(|path| path.ends_with("first.txt")));
+        assert!(pending.dirs.iter().any(|path| path.ends_with("second.txt")));
+    }
+
+    #[test]
+    fn handle_applies_watch_registration_on_its_worker_thread() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("tracked.txt");
+        std::fs::write(&path, b"one\n").unwrap();
+        let mut watch = FsWatchHandle::new().expect("watcher 工作线程应可用");
+        assert_ne!(watch.worker_thread_id(), std::thread::current().id());
+
+        watch.retain(vec![directory.path().to_path_buf()], vec![path.clone()]);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !watch.tracks_file(&path) {
+            assert!(Instant::now() < deadline, "工作线程未应用文件兴趣");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        std::fs::write(&path, b"changed\n").unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let pending = watch.take_pending();
+            if pending.files.contains(&path) {
+                break;
+            }
+            assert!(Instant::now() < deadline, "工作线程 watcher 未上报事件");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn dropping_handle_stops_the_worker_without_joining_the_caller() {
+        let watch = FsWatchHandle::new().expect("watcher 工作线程应可用");
+        let probe = watch.worker_probe.clone();
+        assert!(probe.strong_count() > 0);
+
+        drop(watch);
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while probe.strong_count() > 0 {
+            assert!(Instant::now() < deadline, "句柄关闭后工作线程未退出");
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 }

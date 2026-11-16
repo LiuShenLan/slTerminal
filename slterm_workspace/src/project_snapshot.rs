@@ -590,6 +590,32 @@ impl ProjectSnapshot {
         self.documents.retain(|id, _| referenced.contains(id));
     }
 
+    /// 外部改名或另存为只重绑既有 Document 的位置，不改变任何视图身份。
+    pub fn with_relocated_document(
+        &self,
+        document_id: DocumentId,
+        location: ResolvedPath,
+    ) -> Result<Self, ProjectSnapshotError> {
+        self.validate()?;
+        if !self.documents.contains_key(&document_id) {
+            return Err(ProjectSnapshotError::MissingDocument(document_id));
+        }
+        if self.documents.iter().any(|(id, existing)| {
+            *id != document_id
+                && (existing.canonical_path() == location.canonical_path()
+                    || match (existing.file_identity(), location.file_identity()) {
+                        (Some(existing), Some(target)) => existing == target,
+                        _ => false,
+                    })
+        }) {
+            return Err(ProjectSnapshotError::DocumentLocationConflict(document_id));
+        }
+        let mut candidate = self.clone();
+        candidate.documents.insert(document_id, location);
+        candidate.validate()?;
+        Ok(candidate)
+    }
+
     /// 原子加入逻辑终端；任何一致性校验失败都保持原快照。
     pub fn add_terminal(&mut self, record: TerminalRecord) -> Result<(), ProjectSnapshotError> {
         let id = record.id();

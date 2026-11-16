@@ -65,9 +65,6 @@ impl AppRoot {
                     while let Ok(event) = receiver.try_recv() {
                         events.push(event);
                     }
-                    if events.is_empty() {
-                        continue;
-                    }
                     cx.update(|cx| {
                         let _ = window_handle.update(cx, |_root, window, cx| {
                             let _ = this.update(cx, |root, cx| {
@@ -88,6 +85,9 @@ impl AppRoot {
                                         }
                                         break;
                                     }
+                                }
+                                if !root.close_completed {
+                                    root.poll_fs_watch(window, cx);
                                 }
                             });
                         });

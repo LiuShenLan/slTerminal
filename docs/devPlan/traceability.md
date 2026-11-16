@@ -238,7 +238,7 @@
 |---|---|---|
 | 跨项目 Editor 与 Diff 共享文本、撤销和冲突 | `document_shared_across_projects` | 待实现 |
 | 同项目普通视图去重而 Diff 与 GitShow 独立 | `document_duplicate_view_focuses_existing` | 待实现 |
-| 文件跨扩展名改名不自动转换 Panel 类型 | `document_rename_preserves_identity_and_view` | 待实现 |
+| 文件跨扩展名改名不自动转换 Panel 类型 | `document_rename_preserves_identity_and_view` | 已自动化 |
 | 另存为已打开目标时拒绝且两个 Document 不变 | `document_save_as_rejects_open_target` | 已自动化 |
 | 自动保存等待全部编辑视图失焦 | `document_autosave_waits_for_all_views_to_blur` | 已自动化 |
 | 批量关闭部分保存失败时保留所有 Panel | `document_batch_close_partial_save` | 已自动化 |
@@ -257,7 +257,7 @@
 | 全部替换确认后一次撤销回滚整次操作 | `editor_replace_all_single_undo` | 已自动化 |
 | 跨大文件阈值时干净切只读、脏保留缓冲 | `editor_large_file_dirty_preserves_buffer` | 已自动化 |
 | 语言、换行和滚动按 ViewKey 恢复且瞬态清除 | `editor_view_state_restore` | 已自动化 |
-| 外部改名只更新位置与显示而不换视图 | `editor_external_rename_keeps_view_type` | 待实现 |
+| 外部改名只更新位置与显示而不换视图 | `editor_external_rename_keeps_view_type` | 已自动化 |
 | Git 行标打开同 Document Diff 并定位差异 | `editor_git_marker_opens_shared_diff` | 待实现 |
 
 ### Terminal

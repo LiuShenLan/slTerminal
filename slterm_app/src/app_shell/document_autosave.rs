@@ -322,10 +322,11 @@ mod tests {
                 ..Settings::default()
             });
             autosave.on_edit(id, start);
+            let request = registry.external_request(id, 0).unwrap();
             let change = if read_revoked {
-                slterm_document::DocumentExternalChange::ReadRevoked { document_id: id }
+                let location = request.location().clone();
+                slterm_document::DocumentExternalChange::ReadRevoked { request, location }
             } else {
-                let request = registry.external_request(id, 0).unwrap();
                 slterm_document::DocumentExternalChange::Deleted(request)
             };
             registry.apply_external(change, start).unwrap();

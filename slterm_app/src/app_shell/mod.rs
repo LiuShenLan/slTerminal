@@ -38,7 +38,6 @@ pub(crate) mod doc_tabs;
 #[allow(dead_code)] // 生产消费归 AppRoot Document 生命周期与退出链。
 pub(crate) mod document_autosave;
 pub(crate) mod document_close;
-#[allow(dead_code)] // 生产消费归 watcher 与 Document 外部变化接线。
 pub(crate) mod document_external;
 #[allow(dead_code)] // 生产消费点归 AppRoot Document 面板接线。
 pub(crate) mod documents;
@@ -56,7 +55,6 @@ pub(crate) mod file_editor;
 pub(crate) mod paged_document;
 pub(crate) mod text_view;
 // 外部文件系统事件监听(树根递归 + 打开文件父目录;有界唤醒前台)。
-#[allow(dead_code)] // 生产消费归文件与 Git 阶段。
 pub(crate) mod fs_watch;
 pub(crate) mod theme;
 // 窗口视效 + 壁纸:模糊材质/透明度纪律/有界壁纸加载。

@@ -17,6 +17,7 @@ use crate::i18n::Message;
 
 /// 当前语言菜单只持展示与焦点资源；覆盖事实仍归对应 Editor ViewState。
 pub(super) struct LanguageSelectorMenu {
+    pub(super) view_key: ViewKey,
     position: Point<Pixels>,
     menu: Entity<PopupMenu>,
     registration: FocusRegistration,
@@ -103,6 +104,7 @@ impl AppRoot {
             });
         });
         self.language_selector_menu = Some(LanguageSelectorMenu {
+            view_key,
             position,
             menu,
             registration,
@@ -134,7 +136,7 @@ impl AppRoot {
         Ok(())
     }
 
-    fn close_language_selector_menu(
+    pub(super) fn close_language_selector_menu(
         &mut self,
         window: &mut Window,
         cx: &mut Context<'_, Self>,

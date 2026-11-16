@@ -1046,11 +1046,87 @@ mod tests {
     }
 
     #[test]
-    fn read_revoke_and_relocation_preserve_document_identity() {
-        let (mut registry, id, _) = document("local", false);
+    fn stale_read_revoke_cannot_touch_relocated_document() {
+        let (mut registry, id, _) = document("same", false);
+        let request = registry.external_request(id, 0).unwrap();
+        let relocated = slterm_path::ResolvedPath::new(
+            CanonicalPath::new("D:/work/renamed.txt").unwrap(),
+            None,
+        );
         registry
             .apply_external(
-                crate::DocumentExternalChange::ReadRevoked { document_id: id },
+                crate::DocumentExternalChange::Relocated {
+                    request: request.clone(),
+                    location: relocated.clone(),
+                },
+                Instant::now(),
+            )
+            .unwrap();
+
+        assert_eq!(
+            registry.apply_external(
+                crate::DocumentExternalChange::ReadRevoked {
+                    request,
+                    location: relocated.clone(),
+                },
+                Instant::now(),
+            ),
+            Err(crate::ExternalChangeError::StaleExternalChange)
+        );
+        assert!(!registry.session(id).unwrap().is_read_revoked());
+        assert_eq!(registry.session(id).unwrap().location(), &relocated);
+    }
+
+    #[test]
+    fn read_revoke_invalidates_other_inflight_external_results() {
+        let (mut registry, id, _) = document("same", false);
+        let request = registry.external_request(id, 0).unwrap();
+        let location = request.location().clone();
+        registry
+            .apply_external(
+                crate::DocumentExternalChange::ReadRevoked {
+                    request: request.clone(),
+                    location,
+                },
+                Instant::now(),
+            )
+            .unwrap();
+
+        assert_eq!(
+            registry.apply_external(
+                crate::DocumentExternalChange::Deleted(request),
+                Instant::now(),
+            ),
+            Err(crate::ExternalChangeError::StaleExternalChange)
+        );
+        assert!(registry.session(id).unwrap().external_conflict().is_none());
+    }
+
+    #[test]
+    fn exhausted_external_generation_preserves_read_access() {
+        let (mut registry, id, _) = document("same", false);
+        registry.session_mut(id).unwrap().external_generation = u64::MAX;
+        let request = registry.external_request(id, 0).unwrap();
+        let location = request.location().clone();
+
+        assert_eq!(
+            registry.apply_external(
+                crate::DocumentExternalChange::ReadRevoked { request, location },
+                Instant::now(),
+            ),
+            Err(crate::ExternalChangeError::ExternalGenerationExhausted)
+        );
+        assert!(!registry.session(id).unwrap().is_read_revoked());
+    }
+
+    #[test]
+    fn read_revoke_and_relocation_preserve_document_identity() {
+        let (mut registry, id, _) = document("local", false);
+        let request = registry.external_request(id, 0).unwrap();
+        let location = request.location().clone();
+        registry
+            .apply_external(
+                crate::DocumentExternalChange::ReadRevoked { request, location },
                 Instant::now(),
             )
             .unwrap();

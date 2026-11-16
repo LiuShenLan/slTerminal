@@ -69,29 +69,50 @@ impl EditorViewState {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct EditorKey {
+    kind: ViewKeyKind,
     project_id: ProjectId,
     document_id: DocumentId,
 }
 
 impl EditorKey {
     fn new(key: &ViewKey) -> Self {
-        let ViewKey::Editor {
-            project_id,
-            document_id,
-        } = key
-        else {
-            panic!("EditorViewStateStore 只接受 Editor ViewKey")
+        let (kind, project_id, document_id) = match key {
+            ViewKey::Editor {
+                project_id,
+                document_id,
+            } => (ViewKeyKind::Editor, project_id, document_id),
+            ViewKey::Markdown {
+                project_id,
+                document_id,
+            } => (ViewKeyKind::Markdown, project_id, document_id),
+            ViewKey::Diff {
+                project_id,
+                document_id,
+            } => (ViewKeyKind::Diff, project_id, document_id),
+            _ => panic!("EditorViewStateStore 只接受 Document 文本 ViewKey"),
         };
         Self {
+            kind,
             project_id: *project_id,
             document_id: *document_id,
         }
     }
 
     fn view_key(self) -> ViewKey {
-        ViewKey::Editor {
-            project_id: self.project_id,
-            document_id: self.document_id,
+        match self.kind {
+            ViewKeyKind::Editor => ViewKey::Editor {
+                project_id: self.project_id,
+                document_id: self.document_id,
+            },
+            ViewKeyKind::Markdown => ViewKey::Markdown {
+                project_id: self.project_id,
+                document_id: self.document_id,
+            },
+            ViewKeyKind::Diff => ViewKey::Diff {
+                project_id: self.project_id,
+                document_id: self.document_id,
+            },
+            _ => unreachable!("EditorKey 只构造 Document 文本视图"),
         }
     }
 }
@@ -100,15 +121,26 @@ fn decode_editor_view_state(
     key: &ViewKey,
     text: &str,
 ) -> Result<serde_json::Value, InvalidViewState> {
-    if !matches!(key, ViewKey::Editor { .. }) {
+    if !matches!(
+        key,
+        ViewKey::Editor { .. } | ViewKey::Markdown { .. } | ViewKey::Diff { .. }
+    ) {
         return Err(InvalidViewState);
     }
     let state: EditorViewState = serde_json::from_str(text).map_err(|_| InvalidViewState)?;
     serde_json::to_value(state).map_err(|_| InvalidViewState)
 }
 
-pub(crate) fn editor_view_state_schema() -> ViewStateSchema {
-    ViewStateSchema::new(ViewKeyKind::Editor, decode_editor_view_state)
+/// Editor、Markdown 与 Diff 的分页形态共享同一阅读状态 DTO，但保留完整 ViewKey。
+pub(crate) fn document_view_state_schemas() -> Vec<ViewStateSchema> {
+    [
+        ViewKeyKind::Editor,
+        ViewKeyKind::Markdown,
+        ViewKeyKind::Diff,
+    ]
+    .map(|kind| ViewStateSchema::new(kind, decode_editor_view_state))
+    .into_iter()
+    .collect()
 }
 
 #[derive(Clone, Debug)]
@@ -154,8 +186,8 @@ impl EditorViewStateStore {
 
     #[cfg(all(test, feature = "gpui-test-support"))]
     pub(crate) fn transient() -> Self {
-        let registry = ViewStateRegistry::new(&[editor_view_state_schema()])
-            .expect("Editor schema 封闭注册不得重复");
+        let registry = ViewStateRegistry::new(&document_view_state_schemas())
+            .expect("Document 文本 ViewState schema 封闭注册不得重复");
         Self::new(Arc::new(registry), None)
     }
 
@@ -176,6 +208,11 @@ impl EditorViewStateStore {
             key: key.clone(),
             generation,
         }
+    }
+
+    /// 失败回滚后为仍存活的旧视图重新取得最新租约。
+    pub(crate) fn renew(&self, lease: &mut EditorViewStateLease) {
+        *lease = self.lease(&lease.key.clone());
     }
 
     pub(crate) fn state(&self, key: &ViewKey) -> EditorViewState {
@@ -288,7 +325,7 @@ mod tests {
     use crate::persistence::workspace::WorkspaceDatabase;
     use crate::persistence::workspace_writer::{WorkspaceWriter, WorkspaceWriterError};
 
-    use super::{EditorViewState, EditorViewStateStore, editor_view_state_schema};
+    use super::{EditorViewState, EditorViewStateStore, document_view_state_schemas};
 
     fn key() -> slterm_workspace::ViewKey {
         slterm_workspace::ViewKey::Editor {
@@ -299,7 +336,7 @@ mod tests {
 
     #[test]
     fn editor_view_state_rejects_unknown_and_transient_fields() {
-        let registry = ViewStateRegistry::new(&[editor_view_state_schema()]).unwrap();
+        let registry = ViewStateRegistry::new(&document_view_state_schemas()).unwrap();
         let valid = ViewState::new(
             &key(),
             json!({"scroll_line": 3, "scroll_column": 4}),
@@ -322,7 +359,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
         let registry =
-            std::sync::Arc::new(ViewStateRegistry::new(&[editor_view_state_schema()]).unwrap());
+            std::sync::Arc::new(ViewStateRegistry::new(&document_view_state_schemas()).unwrap());
         let observer = WorkspaceDatabase::open(&paths).unwrap();
         let locker = rusqlite::Connection::open(paths.workspace_db_path()).unwrap();
         let writer = WorkspaceWriter::start(paths).unwrap();
@@ -386,7 +423,7 @@ mod tests {
     #[test]
     fn stale_editor_view_state_lease_cannot_overwrite_current_state() {
         let registry =
-            std::sync::Arc::new(ViewStateRegistry::new(&[editor_view_state_schema()]).unwrap());
+            std::sync::Arc::new(ViewStateRegistry::new(&document_view_state_schemas()).unwrap());
         let store = EditorViewStateStore::new(registry, None);
         let old_lease = store.lease(&key());
         store.checkpoint(&old_lease, super::EditorViewState::new(1, 1));
@@ -409,7 +446,7 @@ mod tests {
 
     #[test]
     fn editor_view_state_accepts_registered_language_override() {
-        let registry = ViewStateRegistry::new(&[editor_view_state_schema()]).unwrap();
+        let registry = ViewStateRegistry::new(&document_view_state_schemas()).unwrap();
         for language in LanguageId::ALL {
             let state = ViewState::new(
                 &key(),
@@ -432,7 +469,7 @@ mod tests {
 
     #[test]
     fn editor_view_state_persists_only_explicit_wrap_choice() {
-        let registry = ViewStateRegistry::new(&[editor_view_state_schema()]).unwrap();
+        let registry = ViewStateRegistry::new(&document_view_state_schemas()).unwrap();
         let wrapped = EditorViewState::new(3, 0).with_wrap(true);
         let state =
             ViewState::new(&key(), serde_json::to_value(wrapped).unwrap(), &registry).unwrap();
@@ -449,9 +486,39 @@ mod tests {
     }
 
     #[test]
+    fn document_text_view_states_keep_markdown_and_diff_identity() {
+        let registry =
+            std::sync::Arc::new(ViewStateRegistry::new(&document_view_state_schemas()).unwrap());
+        let slterm_workspace::ViewKey::Editor {
+            project_id,
+            document_id,
+        } = key()
+        else {
+            unreachable!()
+        };
+        for key in [
+            slterm_workspace::ViewKey::Markdown {
+                project_id,
+                document_id,
+            },
+            slterm_workspace::ViewKey::Diff {
+                project_id,
+                document_id,
+            },
+        ] {
+            let store = EditorViewStateStore::new(registry.clone(), None);
+            let lease = store.lease(&key);
+            store.checkpoint(&lease, EditorViewState::new(3, 4));
+            let final_states = store.final_states();
+            assert_eq!(final_states.len(), 1);
+            assert_eq!(final_states[0].0, key);
+        }
+    }
+
+    #[test]
     fn editor_view_state_defaults_do_not_enter_final_writes() {
         let registry =
-            std::sync::Arc::new(ViewStateRegistry::new(&[editor_view_state_schema()]).unwrap());
+            std::sync::Arc::new(ViewStateRegistry::new(&document_view_state_schemas()).unwrap());
         let store = EditorViewStateStore::new(registry, None);
         assert!(store.final_states().is_empty());
         let lease = store.lease(&key());

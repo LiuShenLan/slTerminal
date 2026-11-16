@@ -15,7 +15,7 @@ mod syntax;
 pub(crate) use syntax::DocumentSyntax;
 mod view_state;
 mod wrap;
-pub(crate) use view_state::{EditorViewState, EditorViewStateStore, editor_view_state_schema};
+pub(crate) use view_state::{EditorViewState, EditorViewStateStore, document_view_state_schemas};
 
 gpui::actions!(
     document_text_view,

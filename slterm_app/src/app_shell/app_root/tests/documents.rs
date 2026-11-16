@@ -164,6 +164,8 @@ fn paged_painted_lines(
     })
 }
 
+include!("documents/external.rs");
+
 fn write_recovered_snapshot(
     paths: &AppPaths,
     document: slterm_document::DocumentId,

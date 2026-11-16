@@ -457,9 +457,65 @@ impl TextFileView {
         self.document.as_ref()
     }
 
+    fn rebase_document(
+        &mut self,
+        location: slterm_path::ResolvedPath,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.path = location.canonical_path().as_path().to_path_buf();
+        self.title = file_title(&self.path);
+        self.preview_extensions = preview::extensions(self.path.parent().map(PathBuf::from));
+        self.preview_images
+            .update(cx, |images, cx| images.invalidate(window, cx));
+        self.inline_views.borrow_mut().clear();
+        self.rendered_blocks.borrow_mut().clear();
+        for block in self.blocks.borrow_mut().iter_mut() {
+            *block = None;
+        }
+        if let Some(document) = &mut self.document {
+            document.relocate(location);
+        }
+        cx.notify();
+    }
+
+    /// 外部改名保留 Markdown 视图与编辑瞬态，只同步后续保存和相对资源的位置。
+    pub(crate) fn relocate_document(
+        &mut self,
+        location: slterm_path::ResolvedPath,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.rebase_document(location, window, cx);
+        self.revision = self.revision.wrapping_add(1);
+        self.spawn_loaded_metadata(cx);
+    }
+
+    /// 干净外部重载复用同一载入落点；位置、正文、历史与预览元数据一次更新。
+    pub(crate) fn apply_external_document(
+        &mut self,
+        document: Document,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.rebase_document(document.location().clone(), window, cx);
+        self.apply_loaded(
+            Ok((LoadedDocument::Local(document), None, GitGutter::default())),
+            window,
+            cx,
+        );
+        self.revision = self.revision.wrapping_add(1);
+        self.spawn_loaded_metadata(cx);
+    }
+
     /// 保存中:关闭确认在此态不弹窗,避免与在途写盘竞争。
     pub fn is_saving(&self) -> bool {
         self.saving
+    }
+
+    /// 原生 Markdown 载入或保存尚未回投时，外部变化必须等待而非覆盖输入。
+    pub(crate) fn has_pending_io(&self) -> bool {
+        self.saving || self.loading
     }
 
     /// 测试专用:后台载入完成后的快照文本(本地与 HEAD 同源)。
@@ -478,6 +534,12 @@ impl TextFileView {
     #[cfg(all(test, feature = "gpui-test-support"))]
     pub fn is_preview_for_test(&self) -> bool {
         self.preview
+    }
+
+    /// 测试专用:真实输入实体，输入事件仍经生产订阅更新草稿与脏态。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub fn input_for_test(&self) -> Entity<InputState> {
+        self.input.clone()
     }
 
     /// 测试专用:切换双模态(生产入口为工具栏按钮/ToggleSource 动作)。
@@ -664,6 +726,7 @@ impl TextFileView {
         let path = self.path.clone();
         let text = self.input.read(cx).value().to_string();
         let markdown = self.markdown;
+        let revision = self.revision;
         let task = cx.background_executor().spawn(async move {
             let outline = markdown.then(|| Outline::prepare(&text, path.parent()));
             let gutter = gutter::read_for_path(&path);
@@ -672,6 +735,9 @@ impl TextFileView {
         cx.spawn(async move |this, cx| {
             let (outline, gutter) = task.await;
             let _ = this.update(cx, |view, cx| {
+                if view.revision != revision {
+                    return;
+                }
                 view.gutter = gutter;
                 if let Some(outline) = outline {
                     view.apply_outline(outline, cx);
@@ -1351,5 +1417,69 @@ mod file_editor_tests {
     fn title_prefers_the_file_name() {
         assert_eq!(file_title(Path::new("D:/repo/src/main.rs")), "main.rs");
         assert_eq!(file_title(Path::new("D:/repo")), "repo");
+    }
+}
+
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod relocation_tests {
+    use super::*;
+    use gpui::TestAppContext;
+    use slterm_path::CanonicalPath;
+
+    #[gpui::test]
+    fn markdown_relocation_updates_location_and_resource_base(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            cx.set_global(crate::app_shell::config::Settings::default());
+            crate::app_shell::theme::apply_dark_theme(cx);
+        });
+        let temp = tempfile::tempdir().unwrap();
+        let old_dir = temp.path().join("old");
+        let new_dir = temp.path().join("new");
+        std::fs::create_dir_all(&old_dir).unwrap();
+        std::fs::create_dir_all(&new_dir).unwrap();
+        let source = old_dir.join("note.md");
+        let target = new_dir.join("renamed.txt");
+        for (directory, color) in [(&old_dir, [255, 0, 0, 255]), (&new_dir, [0, 0, 255, 255])] {
+            let mut bytes = Vec::new();
+            let image = image::RgbaImage::from_pixel(2, 2, image::Rgba(color));
+            image::codecs::gif::GifEncoder::new(&mut bytes)
+                .encode(image.as_raw(), 2, 2, image::ExtendedColorType::Rgba8)
+                .unwrap();
+            std::fs::write(directory.join("anim.gif"), bytes).unwrap();
+        }
+        std::fs::write(&source, "![anim](anim.gif)\n").unwrap();
+        let document = Document::load(&source).unwrap();
+        let (view, visual) = cx.add_window_view(|window, cx| {
+            TextFileView::from_document(document, "markdown", true, window, cx)
+        });
+        visual.run_until_parked();
+        let old_outline = visual.update(|_, cx| view.read(cx).outline.blocks.clone());
+        let entity_id = view.entity_id();
+        std::fs::rename(&source, &target).unwrap();
+        let location = slterm_path::ResolvedPath::new(
+            CanonicalPath::new(dunce::canonicalize(&target).unwrap()).unwrap(),
+            Some(
+                crate::atomic_file::file_identity(&std::fs::File::open(&target).unwrap()).unwrap(),
+            ),
+        );
+
+        visual.update(|window, cx| {
+            view.update(cx, |view, cx| {
+                view.relocate_document(location.clone(), window, cx)
+            });
+        });
+
+        visual.run_until_parked();
+        let new_outline = visual.update(|_, cx| view.read(cx).outline.blocks.clone());
+        assert_ne!(new_outline, old_outline, "资源 URL 必须按新目录重建");
+        assert_eq!(view.entity_id(), entity_id);
+        visual.update(|_, cx| {
+            view.update(cx, |view, _| {
+                assert_eq!(view.path, target);
+                assert_eq!(view.title, "renamed.txt");
+                assert_eq!(view.local_document().unwrap().location(), &location);
+            });
+        });
     }
 }

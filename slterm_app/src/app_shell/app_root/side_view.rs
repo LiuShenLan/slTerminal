@@ -17,7 +17,7 @@ use slterm_workspace::{
 
 use super::side_view_host::{SideViewControl, SideViewHost};
 use crate::app_shell::text_view::{
-    EditorViewState, EditorViewStateStore, editor_view_state_schema,
+    EditorViewState, EditorViewStateStore, document_view_state_schemas,
 };
 use crate::persistence::workspace_writer::{WorkspaceWriterClient, WorkspaceWriterError};
 
@@ -543,10 +543,9 @@ impl SideViewControl<Entity<SideView>> for SideViewController<'_> {
 
 /// 工作区 ViewState schema 的唯一应用注册点。
 pub(crate) fn workspace_view_state_registry() -> Arc<ViewStateRegistry> {
-    Arc::new(
-        ViewStateRegistry::new(&[side_view_state_schema(), editor_view_state_schema()])
-            .expect("工作区 ViewState schema 封闭注册不得重复"),
-    )
+    let mut schemas = vec![side_view_state_schema()];
+    schemas.extend(document_view_state_schemas());
+    Arc::new(ViewStateRegistry::new(&schemas).expect("工作区 ViewState schema 封闭注册不得重复"))
 }
 
 impl Render for SideView {

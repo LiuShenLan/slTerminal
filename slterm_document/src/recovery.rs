@@ -26,6 +26,7 @@ pub struct DocumentRecovery {
 pub enum ReauthorizationError {
     DocumentNotFound(DocumentId),
     NotReadRevoked,
+    GenerationExhausted,
     LocationConflict(DocumentId),
 }
 
@@ -34,6 +35,7 @@ impl fmt::Display for ReauthorizationError {
         match self {
             Self::DocumentNotFound(_) => formatter.write_str("Document 不存在"),
             Self::NotReadRevoked => formatter.write_str("Document 当前未处于失权状态"),
+            Self::GenerationExhausted => formatter.write_str("Document 外部变化代次已耗尽"),
             Self::LocationConflict(_) => formatter.write_str("重授权目标已关联其他 Document"),
         }
     }
@@ -90,6 +92,10 @@ impl DocumentRegistry {
         if !session.read_revoked {
             return Err(ReauthorizationError::NotReadRevoked);
         }
+        let Some(next) = session.external_generation.checked_add(1) else {
+            return Err(ReauthorizationError::GenerationExhausted);
+        };
+        session.external_generation = next;
         session.location = location;
         session.disk_baseline = disk_baseline;
         session.external_conflict = external_conflict;
@@ -207,6 +213,73 @@ mod tests {
             registry.reauthorize(id(), location(None), Arc::default(), None),
             Err(ReauthorizationError::NotReadRevoked)
         );
+    }
+
+    #[test]
+    fn stale_read_revoke_cannot_cancel_explicit_reauthorization() {
+        let mut registry = DocumentRegistry::new();
+        registry
+            .open(
+                id(),
+                location(None),
+                Rope::from_str("draft"),
+                state('a'),
+                Arc::from(b"disk".as_slice()),
+                DocumentMetadata::default(),
+            )
+            .unwrap();
+        let request = registry.external_request(id(), 0).unwrap();
+        let revoked = crate::DocumentExternalChange::ReadRevoked {
+            request: request.clone(),
+            location: request.location().clone(),
+        };
+        registry
+            .apply_external(revoked.clone(), std::time::Instant::now())
+            .unwrap();
+        registry
+            .reauthorize(id(), location(None), Arc::from(b"disk".as_slice()), None)
+            .unwrap();
+
+        assert_eq!(
+            registry.apply_external(revoked, std::time::Instant::now()),
+            Err(ExternalChangeError::StaleExternalChange)
+        );
+        assert!(!registry.session(id()).unwrap().is_read_revoked());
+    }
+
+    #[test]
+    fn reauthorization_generation_exhaustion_preserves_revoked_state() {
+        let mut registry = DocumentRegistry::new();
+        registry
+            .open(
+                id(),
+                location(None),
+                Rope::from_str("draft"),
+                state('a'),
+                Arc::from(b"disk".as_slice()),
+                DocumentMetadata::default(),
+            )
+            .unwrap();
+        let request = registry.external_request(id(), 0).unwrap();
+        registry
+            .apply_external(
+                crate::DocumentExternalChange::ReadRevoked {
+                    location: request.location().clone(),
+                    request,
+                },
+                std::time::Instant::now(),
+            )
+            .unwrap();
+        registry.session_mut(id()).unwrap().external_generation = u64::MAX;
+
+        assert_eq!(
+            registry.reauthorize(id(), location(Some(9)), Arc::default(), None),
+            Err(ReauthorizationError::GenerationExhausted)
+        );
+        let session = registry.session(id()).unwrap();
+        assert!(session.is_read_revoked());
+        assert_eq!(session.location(), &location(None));
+        assert_eq!(session.disk_baseline().as_ref(), b"disk");
     }
 
     #[test]

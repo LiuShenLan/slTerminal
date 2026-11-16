@@ -19,6 +19,7 @@ pub struct DocumentExternalRequest {
     body: DocumentBody,
     metadata: DocumentMetadata,
     source_generation: Option<u64>,
+    external_generation: u64,
     authorization_generation: u64,
 }
 
@@ -129,7 +130,8 @@ pub enum DocumentExternalChange {
     },
     Deleted(DocumentExternalRequest),
     ReadRevoked {
-        document_id: DocumentId,
+        request: DocumentExternalRequest,
+        location: ResolvedPath,
     },
     Relocated {
         request: DocumentExternalRequest,
@@ -152,6 +154,7 @@ pub enum ExternalChangeError {
     ReadRevoked,
     StaleExternalChange,
     RevisionExhausted,
+    ExternalGenerationExhausted,
     SourceGenerationExhausted,
     StateConflict,
     TargetOccupied,
@@ -165,6 +168,7 @@ impl fmt::Display for ExternalChangeError {
             Self::ReadRevoked => "Document 读取授权已撤销",
             Self::StaleExternalChange => "外部变化结果已过期",
             Self::RevisionExhausted => "文本 revision 已耗尽",
+            Self::ExternalGenerationExhausted => "外部变化代次已耗尽",
             Self::SourceGenerationExhausted => "分页源代次已耗尽",
             Self::StateConflict => "外部重载复用了既有 TextStateId",
             Self::TargetOccupied => "目标位置已关联其他 Document",
@@ -196,6 +200,7 @@ impl DocumentRegistry {
             body: session.body.clone(),
             metadata: session.metadata.clone(),
             source_generation: session.paged().map(|source| source.source_generation()),
+            external_generation: session.external_generation,
             authorization_generation,
         })
     }
@@ -213,6 +218,7 @@ impl DocumentRegistry {
             || session.location != request.location
             || session.metadata != request.metadata
             || session.paged().map(|source| source.source_generation()) != request.source_generation
+            || session.external_generation != request.external_generation
         {
             return Err(ExternalChangeError::StaleExternalChange);
         }
@@ -225,10 +231,13 @@ impl DocumentRegistry {
         at: Instant,
     ) -> Result<ExternalApplyOutcome, ExternalChangeError> {
         match change {
-            DocumentExternalChange::ReadRevoked { document_id } => {
-                let session = self
-                    .session_mut(document_id)
-                    .ok_or(ExternalChangeError::DocumentNotFound(document_id))?;
+            DocumentExternalChange::ReadRevoked { request, .. } => {
+                self.validate_external_request(&request)?;
+                let session = self.sessions_mut(request.document_id)?;
+                let Some(next) = session.external_generation.checked_add(1) else {
+                    return Err(ExternalChangeError::ExternalGenerationExhausted);
+                };
+                session.external_generation = next;
                 session.read_revoked = true;
                 Ok(ExternalApplyOutcome::ReadRevoked)
             }

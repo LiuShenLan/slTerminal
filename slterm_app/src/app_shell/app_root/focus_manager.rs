@@ -415,6 +415,11 @@ impl FocusManager {
     }
 
     #[cfg(all(test, feature = "gpui-test-support"))]
+    pub fn fail_next_request_focus_for_test(&mut self) {
+        self.faults.fail_next_request_focus.set(true);
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
     pub fn fail_next_project_activation_precheck_for_test(&mut self) {
         self.faults.fail_next_project_activation_precheck.set(true);
     }

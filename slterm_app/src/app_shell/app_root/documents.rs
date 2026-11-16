@@ -39,7 +39,7 @@ pub(super) struct DocumentOpenRequest {
 }
 
 /// 一次面板安装的落点与焦点语义，避免各视图拆开传递开关。
-struct DocumentPanelTarget {
+pub(super) struct DocumentPanelTarget {
     project_id: ProjectId,
     view: ViewKey,
     focus: bool,
@@ -475,13 +475,13 @@ impl AppRoot {
         Ok(syntax)
     }
 
-    fn install_source_panel(
+    pub(super) fn build_source_content(
         &mut self,
-        target: DocumentPanelTarget,
+        target: &DocumentPanelTarget,
         document_id: DocumentId,
         window: &mut Window,
         cx: &mut Context<'_, Self>,
-    ) -> Result<PanelId, AppRootError> {
+    ) -> Result<(PanelContent, FocusHandle), AppRootError> {
         let session = self
             .documents
             .session(document_id)
@@ -500,7 +500,7 @@ impl AppRoot {
             .unwrap_or(automatic_language);
         let syntax = self.document_syntax(document_id, language)?;
         let root = cx.entity().downgrade();
-        let panel = self.install_panel(target, window, cx, move |window, cx| {
+        let build = move |window: &mut Window, cx: &mut Context<'_, Self>| {
             let edit_root = root.clone();
             let selector_key = view_key.clone();
             let editor = cx.new(|cx| {
@@ -548,8 +548,32 @@ impl AppRoot {
                 PanelContent::Editor(EditorContent::new(editor, save_subscription)),
                 focus_handle,
             )
-        })?;
-        Ok(panel)
+        };
+        Ok(build(window, cx))
+    }
+
+    fn install_source_panel(
+        &mut self,
+        target: DocumentPanelTarget,
+        document_id: DocumentId,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<PanelId, AppRootError> {
+        let built = self.build_source_content(&target, document_id, window, cx)?;
+        self.install_panel(target, window, cx, move |_, _| built)
+    }
+
+    pub(super) fn build_markdown_content(
+        _target: &DocumentPanelTarget,
+        document: crate::app_shell::file_editor::document::Document,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> (PanelContent, FocusHandle) {
+        let path = document.location().canonical_path().as_path();
+        let language = crate::app_shell::code_tab::language_for_path(path);
+        let editor = cx.new(|cx| TextFileView::from_document(document, language, true, window, cx));
+        let focus_handle = editor.read(cx).focus_handle(cx);
+        (PanelContent::Markdown(editor), focus_handle)
     }
 
     fn install_markdown_panel(
@@ -559,24 +583,18 @@ impl AppRoot {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Result<PanelId, AppRootError> {
-        self.install_panel(target, window, cx, |window, cx| {
-            let path = document.location().canonical_path().as_path();
-            let language = crate::app_shell::code_tab::language_for_path(path);
-            let editor =
-                cx.new(|cx| TextFileView::from_document(document, language, true, window, cx));
-            let focus_handle = editor.read(cx).focus_handle(cx);
-            (PanelContent::Markdown(editor), focus_handle)
-        })
+        let built = Self::build_markdown_content(&target, document, window, cx);
+        self.install_panel(target, window, cx, move |_, _| built)
     }
 
-    fn install_paged_panel(
+    pub(super) fn build_paged_content(
         &mut self,
-        target: DocumentPanelTarget,
+        target: &DocumentPanelTarget,
         document_id: slterm_document::DocumentId,
         reader: crate::app_shell::paged_document::PageReader,
         window: &mut Window,
         cx: &mut Context<'_, Self>,
-    ) -> Result<PanelId, AppRootError> {
+    ) -> Result<(PanelContent, FocusHandle), AppRootError> {
         let session = self
             .documents
             .session(document_id)
@@ -589,13 +607,74 @@ impl AppRoot {
         let cache = self.page_cache.clone();
         let view_key = target.view.clone();
         let view_states = self.side_view_persistence.editor_view_states();
-        self.install_panel(target, window, cx, move |_, cx| {
+        let build = move |_: &mut Window, cx: &mut Context<'_, Self>| {
             let paged = cx.new(|cx| {
                 PagedTextView::new(&session, cache, reader, request, view_key, view_states, cx)
             });
             let focus_handle = paged.read(cx).focus_handle(cx);
             (PanelContent::Paged(paged), focus_handle)
-        })
+        };
+        Ok(build(window, cx))
+    }
+
+    fn install_paged_panel(
+        &mut self,
+        target: DocumentPanelTarget,
+        document_id: slterm_document::DocumentId,
+        reader: crate::app_shell::paged_document::PageReader,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<PanelId, AppRootError> {
+        let built = self.build_paged_content(&target, document_id, reader, window, cx)?;
+        self.install_panel(target, window, cx, move |_, _| built)
+    }
+
+    /// 外部重载的正文形态变化复用同一内容构造器，不新建布局或 Panel 身份。
+    pub(super) fn build_external_content(
+        &mut self,
+        project_id: ProjectId,
+        view: ViewKey,
+        document_id: DocumentId,
+        paged: Option<&Arc<crate::app_shell::paged_document::PagedDocument>>,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<(PanelContent, FocusHandle), AppRootError> {
+        let target = DocumentPanelTarget {
+            project_id,
+            view,
+            focus: false,
+            activate_project: false,
+        };
+        if self
+            .documents
+            .session(document_id)
+            .is_some_and(|session| session.paged().is_some())
+        {
+            let reader = paged.ok_or(AppRootError::MissingPanel)?.page_reader();
+            self.build_paged_content(&target, document_id, reader, window, cx)
+        } else if matches!(target.view, ViewKey::Markdown { .. }) {
+            let session = self
+                .documents
+                .session(document_id)
+                .cloned()
+                .ok_or(AppRootError::MissingPanel)?;
+            let grants =
+                crate::app_shell::documents::document_project_grants(&self.snapshot, document_id);
+            let write = (!session.is_read_revoked()).then(|| {
+                crate::app_shell::file_editor::document::DocumentWriteContext::new(
+                    grants,
+                    0,
+                    0,
+                    Arc::new(crate::platform::document_paths::SystemDocumentPathResolver),
+                )
+            });
+            let document =
+                crate::app_shell::file_editor::document::Document::from_recovered(&session, write)
+                    .ok_or(AppRootError::MissingPanel)?;
+            Ok(Self::build_markdown_content(&target, document, window, cx))
+        } else {
+            self.build_source_content(&target, document_id, window, cx)
+        }
     }
 
     fn focus_panel_for_open(
@@ -804,7 +883,12 @@ impl AppRoot {
             return;
         }
         let task_id = TaskId::DocumentSave(document_id);
-        if self.tasks.is_registered(task_id) {
+        if self.tasks.is_registered(task_id)
+            || self
+                .tasks
+                .is_registered(TaskId::DocumentExternal(document_id))
+            || self.pending_document_relocations.contains_key(&document_id)
+        {
             self.pending_document_saves.insert(document_id);
             return;
         }
@@ -1000,5 +1084,25 @@ impl AppRoot {
             .retain(|(id, _), _| referenced.contains(id));
         self.pending_document_saves
             .retain(|id| referenced.contains(id));
+        self.pending_document_relocations
+            .retain(|id, _| referenced.contains(id));
+        self.pending_document_refreshes
+            .retain(|id| referenced.contains(id));
+        let cancelled = self
+            .active_document_relocations
+            .keys()
+            .copied()
+            .filter(|id| !referenced.contains(id))
+            .collect::<Vec<_>>();
+        for id in cancelled {
+            self.tasks.cancel(TaskId::DocumentExternal(id));
+        }
+        self.active_document_relocations
+            .retain(|id, _| referenced.contains(id));
+        self.last_document_relocation_targets
+            .retain(|id, _| referenced.contains(id));
+        self.document_relocation_aliases
+            .retain(|_, id| referenced.contains(id));
+        self.reconcile_fs_watch();
     }
 }

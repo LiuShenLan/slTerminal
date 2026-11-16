@@ -233,8 +233,8 @@ impl AppRoot {
             .is_some_and(|close| close.coordinator.phase() == ClosePhase::Running(CloseStage::Save))
         {
             self.start_batch_save(batch_id, cx);
-        } else if self.batch_has_inflight_document_saves(batch_id) {
-            self.pending_batch_commits.insert(batch_id, candidate);
+        } else if self.batch_has_inflight_document_work(batch_id) {
+            self.pending_batch_commits.insert(batch_id);
         } else if self.project_writer.is_some() {
             if let Err(error) =
                 self.start_batch_commit(batch_id, candidate, window.window_handle(), cx)
@@ -400,8 +400,8 @@ impl AppRoot {
             .iter()
             .map(|(view, _)| view.clone())
             .collect::<Vec<_>>();
-        let (candidate, _) = self.snapshot.without_views(&closing)?;
-        self.pending_batch_commits.insert(batch_id, candidate);
+        let _ = self.snapshot.without_views(&closing)?;
+        self.pending_batch_commits.insert(batch_id);
         self.resume_blocked_batch_saves(cx);
         Ok(())
     }
@@ -643,13 +643,15 @@ impl AppRoot {
         Ok(())
     }
 
-    fn batch_has_inflight_document_saves(&self, batch_id: Uuid) -> bool {
+    fn batch_has_inflight_document_work(&self, batch_id: Uuid) -> bool {
         self.terminal_close_batches
             .get(&batch_id)
             .and_then(|close| close.coordinator.intent())
             .is_some_and(|intent| {
                 intent.objects().any(|object| {
-                    matches!(object.id, CloseTarget::Document(id) if self.documents.session(id).is_some_and(|session| session.is_saving()))
+                    matches!(object.id, CloseTarget::Document(id) if self.documents.session(id).is_some_and(|session| session.is_saving())
+                        || self.active_document_relocations.contains_key(&id)
+                        || self.pending_document_relocations.contains_key(&id))
                 })
             })
     }
@@ -668,14 +670,14 @@ impl AppRoot {
                 self.start_batch_save(batch_id, cx);
                 continue;
             }
-            if self.batch_has_inflight_document_saves(batch_id)
+            if self.batch_has_inflight_document_work(batch_id)
                 || self
                     .tasks
                     .is_registered(TaskId::TerminalCloseBatch(batch_id))
             {
                 continue;
             }
-            if !self.pending_batch_commits.contains_key(&batch_id) {
+            if !self.pending_batch_commits.contains(&batch_id) {
                 continue;
             }
             let window = self.terminal_close_batches[&batch_id].window;
@@ -717,9 +719,12 @@ impl AppRoot {
         cx: &mut Context<'_, Self>,
     ) {
         self.tasks.complete(TaskId::TerminalCloseBatch(batch_id));
-        let Some(candidate) = self.pending_batch_commits.remove(&batch_id) else {
+        if self.batch_has_inflight_document_work(batch_id) {
             return;
-        };
+        }
+        if !self.pending_batch_commits.remove(&batch_id) {
+            return;
+        }
         if let Some(intent) = self
             .terminal_close_batches
             .get(&batch_id)
@@ -748,6 +753,31 @@ impl AppRoot {
             cx.notify();
             return;
         }
+        let closing = self
+            .terminal_close_batches
+            .get(&batch_id)
+            .map(|close| {
+                close
+                    .panels
+                    .iter()
+                    .map(|(view, _)| view.clone())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let candidate = match self.snapshot.without_views(&closing) {
+            Ok((candidate, _)) => candidate,
+            Err(error) => {
+                log::warn!("等待后的批量关闭候选重算失败: {error}");
+                if let Some(attempt) = self
+                    .terminal_close_batches
+                    .get(&batch_id)
+                    .and_then(|close| close.coordinator.current_attempt())
+                {
+                    self.fail_batch_close_outcome_unknown(batch_id, attempt);
+                }
+                return;
+            }
+        };
         let result = if self.project_writer.is_some() {
             self.start_batch_commit(batch_id, candidate, window.window_handle(), cx)
         } else {
@@ -784,9 +814,7 @@ impl AppRoot {
             return;
         };
         let grants = self.document_close_grants(&intent);
-        if intent.objects().any(|object| {
-            matches!(object.id, CloseTarget::Document(id) if self.documents.session(id).is_some_and(|session| session.is_saving()))
-        }) {
+        if self.batch_has_inflight_document_work(batch_id) {
             return;
         }
         let prepared = crate::app_shell::document_close::prepare_document_save_stage(
@@ -901,6 +929,10 @@ impl AppRoot {
                 .any(|failure| failure.is_revision_mismatch());
             let _ = close.coordinator.fail(attempt);
             log::warn!("Document 批量保存失败，关闭未提交: {} 项", failures.len());
+            cx.notify();
+            return;
+        }
+        if self.batch_has_inflight_document_work(batch_id) {
             cx.notify();
             return;
         }

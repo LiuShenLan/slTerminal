@@ -28,6 +28,7 @@ pub struct DocumentSession {
     pub(crate) save_generation: u64,
     pub(crate) active_save: Option<u64>,
     pub(crate) external_conflict: Option<crate::DocumentConflict>,
+    pub(crate) external_generation: u64,
     pub(crate) read_revoked: bool,
     pub(crate) metadata: DocumentMetadata,
     pub(crate) history: crate::edit::EditHistory,
@@ -124,7 +125,7 @@ impl fmt::Display for DocumentRegistryError {
 impl std::error::Error for DocumentRegistryError {}
 
 /// 全局存活 Document；文件身份优先，无法取得身份时才按规范路径去重。
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct DocumentRegistry {
     sessions: BTreeMap<DocumentId, DocumentSession>,
     identities: BTreeMap<FileIdentity, DocumentId>,
@@ -225,6 +226,7 @@ impl DocumentRegistry {
                 save_generation: 0,
                 active_save: None,
                 external_conflict: None,
+                external_generation: 0,
                 read_revoked: false,
                 metadata,
                 history: crate::edit::EditHistory::default(),

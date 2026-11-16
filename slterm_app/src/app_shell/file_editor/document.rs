@@ -94,6 +94,11 @@ impl Document {
         &self.location
     }
 
+    /// 纯外部改名只替换保存与展示位置，正文、基线和历史保持不变。
+    pub(crate) fn relocate(&mut self, location: ResolvedPath) {
+        self.location = location;
+    }
+
     /// 有界载入:上限检查先于解码;只读属性/截断/非法编码进入快照合同。
     pub(crate) fn load(path: &Path) -> std::io::Result<Self> {
         Self::load_with_read(path, document_io::read_prefix)

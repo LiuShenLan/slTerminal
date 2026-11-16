@@ -172,6 +172,11 @@ impl DocumentImageCache {
         self.frame_images.clear();
     }
 
+    /// 文档相对资源基址变化后，旧路径解析出的图片不得继续复用。
+    pub(super) fn invalidate(&mut self, window: &mut Window, cx: &mut App) {
+        self.clear(Some(window), cx);
+    }
+
     fn clear(&mut self, window: Option<&mut Window>, cx: &mut App) {
         self.generation = self.generation.wrapping_add(1);
         self.loading.clear();

@@ -449,6 +449,10 @@ impl DocumentTextView {
         self.language_override
     }
 
+    pub(crate) fn renew_view_lease(&mut self) {
+        self.view_states.renew(&mut self.view_lease);
+    }
+
     pub(crate) fn effective_language(&self, language_override: Option<LanguageId>) -> LanguageId {
         language_override.unwrap_or(self.automatic_language)
     }
@@ -473,6 +477,30 @@ impl DocumentTextView {
             .expect("语言 revision 不得耗尽");
         self.persist_view_state();
         self.schedule_syntax_poll(cx);
+        cx.notify();
+    }
+
+    /// 外部改名重算自动语言；手动覆盖保持不变，布局只随有效语言失效。
+    pub(crate) fn relocate_language(
+        &mut self,
+        automatic_language: LanguageId,
+        syntax: Option<Rc<RefCell<DocumentSyntax>>>,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if self.automatic_language == automatic_language {
+            return;
+        }
+        self.automatic_language = automatic_language;
+        if self.language_override.is_none() {
+            self.syntax = syntax;
+            self.applied_syntax = None;
+            self.syntax_poll_task = None;
+            self.language_revision = self
+                .language_revision
+                .checked_add(1)
+                .expect("语言 revision 不得耗尽");
+            self.schedule_syntax_poll(cx);
+        }
         cx.notify();
     }
 
