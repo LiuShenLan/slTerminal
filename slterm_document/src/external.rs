@@ -16,6 +16,8 @@ pub struct DocumentExternalRequest {
     text_state: TextStateId,
     disk_baseline: Arc<[u8]>,
     location: ResolvedPath,
+    body: DocumentBody,
+    metadata: DocumentMetadata,
     source_generation: Option<u64>,
     authorization_generation: u64,
 }
@@ -39,6 +41,15 @@ impl DocumentExternalRequest {
 
     pub fn location(&self) -> &ResolvedPath {
         &self.location
+    }
+
+    /// 重定位在后台只比较捕获时的分页源；Editable 草稿不替代磁盘基线判断。
+    pub fn body(&self) -> &DocumentBody {
+        &self.body
+    }
+
+    pub fn metadata(&self) -> &DocumentMetadata {
+        &self.metadata
     }
 
     pub const fn source_generation(&self) -> Option<u64> {
@@ -182,6 +193,8 @@ impl DocumentRegistry {
             text_state: session.current_state,
             disk_baseline: session.disk_baseline.clone(),
             location: session.location.clone(),
+            body: session.body.clone(),
+            metadata: session.metadata.clone(),
             source_generation: session.paged().map(|source| source.source_generation()),
             authorization_generation,
         })
@@ -197,6 +210,8 @@ impl DocumentRegistry {
         if session.text_revision != request.text_revision
             || session.current_state != request.text_state
             || session.disk_baseline != request.disk_baseline
+            || session.location != request.location
+            || session.metadata != request.metadata
             || session.paged().map(|source| source.source_generation()) != request.source_generation
         {
             return Err(ExternalChangeError::StaleExternalChange);

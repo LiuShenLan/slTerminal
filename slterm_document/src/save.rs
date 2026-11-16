@@ -229,7 +229,9 @@ impl DocumentRegistry {
         }
         let original = receipt.request.location.canonical_path();
         let target = receipt.location.canonical_path();
-        if (!save_as && target != original) || (save_as && target == original) {
+        if (!save_as && (target != original || session.location.canonical_path() != original))
+            || (save_as && target == original)
+        {
             return Err(SaveTransactionError::LocationMismatch);
         }
         let previous_identity = session.location.file_identity();
@@ -239,7 +241,7 @@ impl DocumentRegistry {
         if save_as {
             session.location = receipt.location;
         } else {
-            // 外部改名可能已经提交；普通保存回执只更新身份，不回滚路径。
+            // 普通保存已核对当前位置未偏离，只更新替换后的文件身份。
             session.location = ResolvedPath::new(
                 session.location.canonical_path().clone(),
                 receipt.location.file_identity(),

@@ -766,7 +766,7 @@ mod tests {
     }
 
     #[test]
-    fn in_place_save_completion_does_not_undo_external_relocation() {
+    fn in_place_save_completion_rejects_external_relocation() {
         let (mut registry, id, _) = document("0", false);
         registry
             .apply(
@@ -791,19 +791,22 @@ mod tests {
             )
             .unwrap();
 
-        registry
-            .complete_save(DocumentSaveReceipt::new(
+        assert_eq!(
+            registry.complete_save(DocumentSaveReceipt::new(
                 request,
                 std::sync::Arc::from(b"01".as_slice()),
                 None,
-            ))
-            .unwrap();
+            )),
+            Err(crate::SaveTransactionError::LocationMismatch)
+        );
 
         let session = registry.session(id).unwrap();
         assert_eq!(session.location(), &renamed);
-        assert_eq!(session.disk_baseline().as_ref(), b"01");
-        assert!(!session.is_dirty());
+        assert_eq!(session.disk_baseline().as_ref(), b"0");
+        assert!(session.is_dirty());
+        assert!(session.is_saving());
         assert_eq!(registry.existing(&renamed), Some(id));
+        registry.fail_save(id, 1).unwrap();
     }
 
     #[test]
@@ -1010,6 +1013,35 @@ mod tests {
             Err(crate::ExternalChangeError::StaleExternalChange)
         );
         assert_eq!(text(&registry, id), "local");
+        assert!(registry.session(id).unwrap().external_conflict().is_none());
+    }
+
+    #[test]
+    fn stale_external_result_cannot_touch_relocated_document() {
+        let (mut registry, id, _) = document("same", false);
+        let request = registry.external_request(id, 0).unwrap();
+        let relocated = slterm_path::ResolvedPath::new(
+            CanonicalPath::new("D:/work/renamed.txt").unwrap(),
+            None,
+        );
+        registry
+            .apply_external(
+                crate::DocumentExternalChange::Relocated {
+                    request: request.clone(),
+                    location: relocated.clone(),
+                },
+                Instant::now(),
+            )
+            .unwrap();
+
+        assert_eq!(
+            registry.apply_external(
+                crate::DocumentExternalChange::Deleted(request),
+                Instant::now()
+            ),
+            Err(crate::ExternalChangeError::StaleExternalChange)
+        );
+        assert_eq!(registry.session(id).unwrap().location(), &relocated);
         assert!(registry.session(id).unwrap().external_conflict().is_none());
     }
 
