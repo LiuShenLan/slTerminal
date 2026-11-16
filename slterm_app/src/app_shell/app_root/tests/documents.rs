@@ -2,6 +2,8 @@
 
 use super::close::flush_when_ready;
 use super::*;
+use gpui::Focusable as _;
+use slterm_document::LanguageId;
 
 pub(super) fn open_document(
     root: &Entity<AppRoot>,
@@ -17,6 +19,54 @@ pub(super) fn open_document(
         });
     });
     window.run_until_parked();
+}
+
+fn select_editor_language_override(
+    cx: &TestAppContext,
+    window: &mut VisualTestContext,
+    editor: &Entity<crate::app_shell::text_view::DocumentTextView>,
+    language_override: Option<LanguageId>,
+) {
+    draw_frame(window);
+    let editor_focus = editor.read_with(cx, |view, app| view.focus_handle(app));
+    let selector =
+        Box::leak(format!("document-language-selector-{}", editor.entity_id()).into_boxed_str());
+    let bounds = window.debug_bounds(selector).unwrap();
+    window.simulate_click(bounds.center(), Modifiers::default());
+    draw_frame(window);
+    assert_ne!(
+        window.update(|window, cx| window.focused(cx)),
+        Some(editor_focus.clone()),
+        "语言菜单必须取得焦点"
+    );
+    window.simulate_mouse_move(
+        gpui::point(gpui::px(0.0), gpui::px(0.0)),
+        None,
+        Modifiers::default(),
+    );
+    let down_count = match language_override {
+        None => 1,
+        Some(language) => {
+            LanguageId::ALL
+                .iter()
+                .position(|candidate| *candidate == language)
+                .unwrap()
+                + 2
+        }
+    };
+    let keys = format!(
+        "{} enter",
+        std::iter::repeat_n("down", down_count)
+            .collect::<Vec<_>>()
+            .join(" ")
+    );
+    window.simulate_keystrokes(&keys);
+    draw_frame(window);
+    assert_eq!(
+        window.update(|window, cx| window.focused(cx)),
+        Some(editor_focus),
+        "选择语言后必须还焦 Editor"
+    );
 }
 
 fn editor_text(
@@ -767,6 +817,98 @@ fn shared_source_edit_and_save_use_one_document_session(cx: &mut TestAppContext)
 }
 
 #[gpui::test]
+fn editor_language_override_is_per_view_and_inactive_syntax_tracks_edits(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let root_a = temp.path().join("a");
+    std::fs::create_dir(&root_a).unwrap();
+    let file = root_a.join("shared.txt");
+    std::fs::write(&file, "fn main() {}\n").unwrap();
+    let file = CanonicalPath::new(file).unwrap();
+    let (root, mut window, _) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, root_a.to_str().unwrap());
+    add_project(&root, &mut window, PROJECT_B, temp.path().to_str().unwrap());
+    activate_project(&root, &mut window, PROJECT_A);
+    open_document(&root, &mut window, PROJECT_A, GROUP_A, file.clone());
+    let editor_a = root.read_with(cx, |root, cx| {
+        root.projects[&project_id(PROJECT_A)]
+            .read(cx)
+            .panels
+            .values()
+            .find_map(|panel| panel.editor().cloned())
+            .unwrap()
+    });
+    select_editor_language_override(cx, &mut window, &editor_a, Some(LanguageId::Rust));
+    select_editor_language_override(cx, &mut window, &editor_a, Some(LanguageId::Python));
+
+    activate_project(&root, &mut window, PROJECT_B);
+    open_document(&root, &mut window, PROJECT_B, GROUP_B, file.clone());
+    let editor_b = root.read_with(cx, |root, cx| {
+        root.projects[&project_id(PROJECT_B)]
+            .read(cx)
+            .panels
+            .values()
+            .find_map(|panel| panel.editor().cloned())
+            .unwrap()
+    });
+    let document = editor_a.read_with(cx, |view, _| view.scroll_state_for_test().2);
+    assert_eq!(
+        editor_b.read_with(cx, |view, _| view.language_state_for_test()),
+        (None, LanguageId::PlainText)
+    );
+
+    activate_project(&root, &mut window, PROJECT_A);
+    window.simulate_input("shared ");
+    assert_eq!(
+        editor_text(&root, cx, PROJECT_A, document),
+        "shared fn main() {}\n"
+    );
+    assert_eq!(
+        editor_text(&root, cx, PROJECT_B, document),
+        "shared fn main() {}\n"
+    );
+    select_editor_language_override(cx, &mut window, &editor_a, Some(LanguageId::Rust));
+    for _ in 0..100 {
+        if editor_a.read_with(cx, |view, _| view.syntax_is_current_for_test()) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+        window
+            .executor()
+            .advance_clock(std::time::Duration::from_millis(30));
+        draw_frame(&mut window);
+    }
+    let syntax_status = root.read_with(cx, |root, _| {
+        root.document_syntax
+            .get(&(document, LanguageId::Rust))
+            .map(|syntax| {
+                let syntax = syntax.borrow();
+                (syntax.revision_for_test(), syntax.is_resolved())
+            })
+    });
+    assert!(
+        editor_a.read_with(cx, |view, _| view.syntax_is_current_for_test()),
+        "切回旧语言时必须使用已跟进最新编辑的 worker: {syntax_status:?}"
+    );
+    assert_eq!(
+        editor_b.read_with(cx, |view, _| view.language_state_for_test()),
+        (None, LanguageId::PlainText),
+        "另一 ViewKey 不得继承手动语言覆盖"
+    );
+    select_editor_language_override(cx, &mut window, &editor_a, None);
+    assert_eq!(
+        editor_a.read_with(cx, |view, _| view.language_state_for_test()),
+        (None, LanguageId::PlainText),
+        "自动项必须清除手动覆盖"
+    );
+    assert_eq!(root.read_with(cx, |root, _| root.documents.len()), 1);
+    assert_eq!(
+        std::fs::read_to_string(file.as_path()).unwrap(),
+        "fn main() {}\n",
+        "语言覆盖不得隐式保存或改写磁盘"
+    );
+}
+
+#[gpui::test]
 fn large_file_paged_views_share_a_real_source_across_projects(cx: &mut TestAppContext) {
     let temp = tempfile::tempdir().unwrap();
     let project_root = temp.path().join("project");
@@ -967,7 +1109,9 @@ fn integration_document_global_identity(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn editor_scroll_view_state_survives_restart_and_clears_selection(cx: &mut TestAppContext) {
+fn editor_language_and_scroll_view_state_survive_restart_and_clear_selection(
+    cx: &mut TestAppContext,
+) {
     let temp = tempfile::tempdir().unwrap();
     let project = temp.path().join("project");
     std::fs::create_dir(&project).unwrap();
@@ -990,6 +1134,7 @@ fn editor_scroll_view_state_survives_restart_and_clears_selection(cx: &mut TestA
             .find_map(|panel| panel.editor().cloned())
             .unwrap()
     });
+    select_editor_language_override(cx, &mut window, &editor, Some(LanguageId::Python));
     window.update(|window, cx| {
         editor.update(cx, |view, cx| {
             gpui::EntityInputHandler::set_selected_text_range(view, 0..80, window, cx);
@@ -1006,6 +1151,25 @@ fn editor_scroll_view_state_survives_restart_and_clears_selection(cx: &mut TestA
         project_id: project_id(PROJECT_A),
         document_id: document,
     };
+    assert_eq!(
+        editor.read_with(cx, |view, _| view.language_state_for_test()),
+        (Some(LanguageId::Python), LanguageId::Python)
+    );
+    assert!(
+        root.read_with(cx, |root, _| root
+            .document_syntax
+            .contains_key(&(document, LanguageId::Python))),
+        "选择器必须经 AppRoot 取得 Python 语法"
+    );
+    assert_eq!(
+        root.read_with(cx, |root, _| {
+            root.side_view_persistence
+                .editor_view_states()
+                .state(&key)
+                .language_override()
+        }),
+        Some(LanguageId::Python)
+    );
 
     window.update(|window, _| window.remove_window());
     drop(root);
@@ -1025,11 +1189,34 @@ fn editor_scroll_view_state_survives_restart_and_clears_selection(cx: &mut TestA
             .get(&panel)
             .unwrap();
         let editor = panel.editor().unwrap().read(cx);
-        editor.scroll_state_for_test()
+        (
+            editor.scroll_state_for_test(),
+            editor.language_state_for_test(),
+        )
     });
+    let (restored, restored_language) = restored;
     assert_eq!(restored.0, line);
     assert_eq!(restored.1, column);
     assert_eq!(restored.3, 0..0);
+    assert_eq!(
+        restored_language,
+        (Some(LanguageId::Python), LanguageId::Python)
+    );
+    assert_eq!(
+        root.read_with(cx, |root, _| {
+            root.side_view_persistence
+                .editor_view_states()
+                .state(&key)
+                .language_override()
+        }),
+        Some(LanguageId::Python)
+    );
+    assert!(
+        root.read_with(cx, |root, _| root
+            .document_syntax
+            .contains_key(&(document, LanguageId::Python))),
+        "重启后必须按覆盖安装真实 Python 语法"
+    );
     runtime.shutdown(ControlPlaneCleanup::Succeeded).unwrap();
 }
 

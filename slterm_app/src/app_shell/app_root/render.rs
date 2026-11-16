@@ -437,5 +437,6 @@ impl Render for AppRoot {
             )
             .children(self.render_sidebar_drag_overlay(cx))
             .children(self.render_settings_overlay(cx))
+            .children(self.render_language_selector_menu())
     }
 }

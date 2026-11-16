@@ -4,7 +4,10 @@ use std::path::Path;
 
 use tree_sitter::Language;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "lowercase")]
 pub enum LanguageId {
     Rust,
     Markdown,
@@ -15,6 +18,7 @@ pub enum LanguageId {
     Jsx,
     C,
     Cpp,
+    #[serde(rename = "csharp")]
     CSharp,
     Go,
     Java,
@@ -34,6 +38,7 @@ pub enum LanguageId {
     Diff,
     Dockerfile,
     Make,
+    #[serde(rename = "text")]
     PlainText,
 }
 

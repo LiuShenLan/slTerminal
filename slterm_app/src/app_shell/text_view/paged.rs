@@ -17,8 +17,8 @@ use gpui_component::input::{
     SelectToEndOfLine, SelectToStartOfLine,
 };
 use slterm_document::{
-    DocumentId, DocumentPageCache, DocumentSession, DocumentTextRequest, PageKey, PagedSource,
-    TextStateId,
+    DocumentId, DocumentPageCache, DocumentSession, DocumentTextRequest, LanguageId, PageKey,
+    PagedSource, TextStateId,
 };
 use slterm_workspace::ViewKey;
 
@@ -57,6 +57,7 @@ pub(crate) struct PagedTextView {
     view_lease: EditorViewStateLease,
     view_states: EditorViewStateStore,
     view_state_dirty: bool,
+    language_override: Option<LanguageId>,
     source: PagedSource,
     text_state: TextStateId,
     request: DocumentTextRequest,
@@ -125,6 +126,7 @@ impl PagedTextView {
             view_lease,
             view_states,
             view_state_dirty: false,
+            language_override: restored.language_override(),
             source,
             text_state: session.current_state(),
             request,
@@ -495,7 +497,8 @@ impl PagedTextView {
         self.view_state_dirty = true;
         self.view_states.checkpoint(
             &self.view_lease,
-            EditorViewState::new(self.scroll_line, self.scroll_column),
+            EditorViewState::new(self.scroll_line, self.scroll_column)
+                .with_language_override(self.language_override),
         );
     }
 

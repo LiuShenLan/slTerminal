@@ -11,6 +11,7 @@
     "truncated": "文件超过 8 MB，已截断为只读前缀。",
     "invalid_encoding": "文件不是有效 UTF-8，已只读打开。",
     "read_only": "只读",
+    "language_auto": "自动",
     "reauthorization_required": "此文件位于项目根之外或已失去授权。需要重新授权后才能读取或刷新磁盘内容。",
     "paged_recovery_required": "此分页文档需要专用只读视图；不会把有限前缀作为完整正文打开。",
     "replaced_recovery": "原文件身份已被替换。旧记录未与新 Document 合并，原正文没有可用快照。",

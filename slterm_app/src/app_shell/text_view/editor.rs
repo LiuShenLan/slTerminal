@@ -11,16 +11,17 @@ use gpui::{
     ScrollWheelEvent, ShapedLine, SharedString, Styled as _, Task, TextAlign, TextRun,
     UTF16Selection, Window, canvas, div, fill, point, px, size,
 };
-use gpui_component::ActiveTheme as _;
+use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{
     Backspace, Copy, Delete, Enter, MoveDown, MoveLeft, MoveRight, MoveToEndOfLine,
     MoveToStartOfLine, MoveUp, Paste, Redo, SelectAll, SelectToEndOfLine, SelectToStartOfLine,
     Undo,
 };
+use gpui_component::{ActiveTheme as _, Sizable as _, h_flex};
 use ropey::{LineType, Rope};
 use slterm_document::{
     DocumentId, DocumentSession, EditApplyOutcome, EditOrigin, EditTransaction,
-    EditTransactionError, MergePolicy, TextEdit, TextStateId,
+    EditTransactionError, LanguageId, MergePolicy, TextEdit, TextStateId,
 };
 use slterm_workspace::ViewKey;
 use uuid::Uuid;
@@ -221,6 +222,7 @@ type PaintedSyntax = Rc<RefCell<Vec<(usize, Vec<TextRun>)>>>;
 
 pub(crate) enum DocumentTextEvent {
     Save,
+    OpenLanguageSelector { position: Point<Pixels> },
 }
 
 impl EventEmitter<DocumentTextEvent> for DocumentTextView {}
@@ -236,6 +238,8 @@ pub(crate) struct DocumentTextView {
     text_state: TextStateId,
     read_only: bool,
     edit_sink: DocumentEditSink,
+    automatic_language: LanguageId,
+    language_override: Option<LanguageId>,
     language_revision: u64,
     theme_revision: u64,
     theme_fingerprint: Option<ThemeFingerprint>,
@@ -260,9 +264,9 @@ pub(crate) struct DocumentTextView {
 
 impl DocumentTextView {
     pub(crate) fn new(
-        document_id: DocumentId,
         session: &DocumentSession,
         edit_sink: DocumentEditSink,
+        automatic_language: LanguageId,
         syntax: Option<Rc<RefCell<DocumentSyntax>>>,
         view_key: ViewKey,
         view_states: EditorViewStateStore,
@@ -278,7 +282,7 @@ impl DocumentTextView {
                 - 1,
         );
         let mut view = Self {
-            document_id,
+            document_id: session.id(),
             view_lease,
             view_states,
             view_state_dirty: false,
@@ -287,6 +291,8 @@ impl DocumentTextView {
             text_state: session.current_state(),
             read_only: session.is_read_only(),
             edit_sink,
+            automatic_language,
+            language_override: restored.language_override(),
             language_revision: 0,
             theme_revision: 0,
             theme_fingerprint: None,
@@ -351,6 +357,57 @@ impl DocumentTextView {
                 }
             }
         }));
+    }
+
+    fn open_language_selector(&mut self, position: Point<Pixels>, cx: &mut Context<'_, Self>) {
+        cx.emit(DocumentTextEvent::OpenLanguageSelector { position });
+    }
+
+    pub(crate) fn language_override(&self) -> Option<LanguageId> {
+        self.language_override
+    }
+
+    pub(crate) fn effective_language(&self, language_override: Option<LanguageId>) -> LanguageId {
+        language_override.unwrap_or(self.automatic_language)
+    }
+
+    /// 组合根选定同 Document、同语言的共享语法后，才提交单视图覆盖状态。
+    pub(crate) fn apply_language_override(
+        &mut self,
+        language_override: Option<LanguageId>,
+        syntax: Option<Rc<RefCell<DocumentSyntax>>>,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if self.language_override == language_override {
+            return;
+        }
+        self.language_override = language_override;
+        self.syntax = syntax;
+        self.applied_syntax = None;
+        self.syntax_poll_task = None;
+        self.language_revision = self
+            .language_revision
+            .checked_add(1)
+            .expect("语言 revision 不得耗尽");
+        self.persist_view_state();
+        self.schedule_syntax_poll(cx);
+        cx.notify();
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn language_state_for_test(&self) -> (Option<LanguageId>, LanguageId) {
+        (
+            self.language_override,
+            self.language_override.unwrap_or(self.automatic_language),
+        )
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn syntax_is_current_for_test(&self) -> bool {
+        self.syntax.as_ref().is_some_and(|syntax| {
+            let syntax = syntax.borrow();
+            syntax.revision_for_test() == self.revision && syntax.is_resolved()
+        })
     }
 
     #[cfg(all(test, feature = "gpui-test-support"))]
@@ -843,7 +900,8 @@ impl DocumentTextView {
         self.view_state_dirty = true;
         self.view_states.checkpoint(
             &self.view_lease,
-            EditorViewState::new(self.scroll_line, self.scroll_column),
+            EditorViewState::new(self.scroll_line, self.scroll_column)
+                .with_language_override(self.language_override),
         );
     }
 
@@ -1151,6 +1209,20 @@ impl EntityInputHandler for DocumentTextView {
 }
 
 impl DocumentTextView {
+    fn language_selector(&self, cx: &mut Context<'_, Self>) -> impl gpui::IntoElement + use<> {
+        let id = format!("document-language-selector-{}", cx.entity().entity_id());
+        let selector = id.clone();
+        let effective = self.language_override.unwrap_or(self.automatic_language);
+        Button::new(id)
+            .debug_selector(move || selector.clone())
+            .label(effective.as_str())
+            .ghost()
+            .small()
+            .on_click(cx.listener(|view, event: &gpui::ClickEvent, _, cx| {
+                view.open_language_selector(event.position(), cx);
+            }))
+    }
+
     fn text_canvas(&mut self, cx: &mut Context<'_, Self>) -> gpui::Canvas<PaintFrame> {
         let theme = cx.theme();
         let foreground = theme.foreground;
@@ -1374,10 +1446,13 @@ impl DocumentTextView {
 impl Render for DocumentTextView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<'_, Self>) -> impl gpui::IntoElement {
         let canvas = self.text_canvas(cx);
+        let language_selector = self.language_selector(cx);
         let focus = self.focus.clone();
         div()
             .key_context("DocumentText")
             .track_focus(&focus)
+            .flex()
+            .flex_col()
             .size_full()
             .min_w_0()
             .min_h_0()
@@ -1442,7 +1517,23 @@ impl Render for DocumentTextView {
             .on_scroll_wheel(cx.listener(|view, event: &ScrollWheelEvent, _, cx| {
                 view.scroll_wheel(event, cx);
             }))
-            .child(canvas)
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .w_full()
+                    .overflow_hidden()
+                    .child(canvas),
+            )
+            .child(
+                h_flex()
+                    .h(px(28.0))
+                    .flex_shrink_0()
+                    .justify_end()
+                    .border_t_1()
+                    .border_color(cx.theme().border)
+                    .child(language_selector),
+            )
     }
 }
 

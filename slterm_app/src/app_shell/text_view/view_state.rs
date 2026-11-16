@@ -6,7 +6,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use slterm_document::DocumentId;
+use slterm_document::{DocumentId, LanguageId};
 use slterm_workspace::{
     InvalidViewState, ProjectId, ViewKey, ViewKeyKind, ViewState, ViewStateRegistry,
     ViewStateSchema,
@@ -14,12 +14,14 @@ use slterm_workspace::{
 
 use crate::persistence::workspace_writer::WorkspaceWriterClient;
 
-/// 只保存阅读位置；选区、目标列、IME 与待续动作均为瞬态。
+/// 只保存语言覆盖与阅读位置；选区、目标列、IME 与待续动作均为瞬态。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct EditorViewState {
     scroll_line: u64,
     scroll_column: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    language_override: Option<LanguageId>,
 }
 
 impl EditorViewState {
@@ -27,7 +29,17 @@ impl EditorViewState {
         Self {
             scroll_line: scroll_line as u64,
             scroll_column: scroll_column as u64,
+            language_override: None,
         }
+    }
+
+    pub(crate) fn with_language_override(mut self, language: Option<LanguageId>) -> Self {
+        self.language_override = language;
+        self
+    }
+
+    pub(crate) fn language_override(self) -> Option<LanguageId> {
+        self.language_override
     }
 
     pub(crate) fn scroll_line(self) -> usize {
@@ -253,6 +265,7 @@ impl EditorViewStateStore {
 #[cfg(test)]
 mod tests {
     use serde_json::json;
+    use slterm_document::LanguageId;
     use slterm_path::AppPaths;
     use slterm_workspace::{ViewState, ViewStateRegistry};
 
@@ -282,6 +295,7 @@ mod tests {
             json!({"scroll_line": 3}),
             json!({"scroll_line": 3, "scroll_column": 4, "selection": [1, 2]}),
             json!({"scroll_line": 3, "scroll_column": 4, "pending_motion": true}),
+            json!({"scroll_line": 3, "scroll_column": 4, "language_override": "unknown"}),
         ] {
             assert!(ViewState::new(&key(), state, &registry).is_err());
         }
@@ -375,6 +389,29 @@ mod tests {
             json!({"kind":"editor","state":{"scroll_line":2,"scroll_column":2},"version":1})
                 .to_string()
         );
+    }
+
+    #[test]
+    fn editor_view_state_accepts_registered_language_override() {
+        let registry = ViewStateRegistry::new(&[editor_view_state_schema()]).unwrap();
+        for language in LanguageId::ALL {
+            let state = ViewState::new(
+                &key(),
+                json!({
+                    "scroll_line": 3,
+                    "scroll_column": 4,
+                    "language_override": language.as_str()
+                }),
+                &registry,
+            )
+            .unwrap();
+            assert!(
+                state
+                    .to_canonical_json()
+                    .unwrap()
+                    .contains(&format!("\"language_override\":\"{}\"", language.as_str()))
+            );
+        }
     }
 
     #[test]

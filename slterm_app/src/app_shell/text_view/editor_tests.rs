@@ -95,7 +95,6 @@ impl Host {
         let view = cx.new(|cx| {
             let session = registry.borrow();
             DocumentTextView::new(
-                id,
                 session.session(id).unwrap(),
                 Box::new(move |request, _, _| {
                     let mut registry = sink_registry.borrow_mut();
@@ -116,6 +115,7 @@ impl Host {
                         outcome,
                     })
                 }),
+                language.unwrap_or(LanguageId::PlainText),
                 syntax.clone(),
                 ViewKey::Editor {
                     project_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b".parse().unwrap(),
@@ -382,7 +382,6 @@ fn two_painted_views_independently_adopt_a_shared_syntax_tree(cx: &mut TestAppCo
             let registry_read = registry.borrow();
             let session = registry_read.session(id).unwrap();
             DocumentTextView::new(
-                id,
                 session,
                 Box::new(move |request, _, _| {
                     let mut registry = sink_registry.borrow_mut();
@@ -403,6 +402,7 @@ fn two_painted_views_independently_adopt_a_shared_syntax_tree(cx: &mut TestAppCo
                         outcome,
                     })
                 }),
+                LanguageId::Rust,
                 syntax,
                 ViewKey::Editor {
                     project_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b".parse().unwrap(),

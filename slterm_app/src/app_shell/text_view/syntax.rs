@@ -11,7 +11,7 @@ use slterm_document::{
     SyntaxWorkerError, syntax_transaction_input_edits,
 };
 
-/// 一个 Document 的语法共享体；多视图只读同一最新树，不各建 worker。
+/// 一个 Document + LanguageId 的语法共享体；同语言视图只读同一最新树。
 pub(crate) struct DocumentSyntax {
     worker: SyntaxWorker,
     highlighter: SyntaxHighlighter,
@@ -71,6 +71,11 @@ impl DocumentSyntax {
         self.tree
             .as_ref()
             .map(|tree| (tree.revision(), tree.generation()))
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn revision_for_test(&self) -> u64 {
+        self.revision
     }
 
     /// 当前 revision 已有树，或 worker 已关闭时停止轮询。

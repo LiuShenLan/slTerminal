@@ -340,6 +340,32 @@ impl AppRoot {
         Ok(())
     }
 
+    /// 语法缓存按 Document 与语言隔离；单视图覆盖不改写其他视图的 worker。
+    pub(super) fn document_syntax(
+        &mut self,
+        document_id: DocumentId,
+        language: slterm_document::LanguageId,
+    ) -> Result<Option<Rc<std::cell::RefCell<DocumentSyntax>>>, AppRootError> {
+        if language == slterm_document::LanguageId::PlainText {
+            return Ok(None);
+        }
+        let key = (document_id, language);
+        if let Some(syntax) = self.document_syntax.get(&key) {
+            return Ok(Some(syntax.clone()));
+        }
+        let session = self
+            .documents
+            .session(document_id)
+            .cloned()
+            .ok_or(AppRootError::MissingPanel)?;
+        let syntax = DocumentSyntax::new(&session, language)
+            .map(|syntax| Rc::new(std::cell::RefCell::new(syntax)));
+        if let Some(syntax) = &syntax {
+            self.document_syntax.insert(key, syntax.clone());
+        }
+        Ok(syntax)
+    }
+
     fn install_source_panel(
         &mut self,
         project_id: ProjectId,
@@ -355,23 +381,23 @@ impl AppRoot {
             .cloned()
             .filter(|session| session.text().is_some())
             .ok_or(AppRootError::MissingPanel)?;
-        let language = slterm_document::LanguageRegistry::new()
-            .for_path(session.location().canonical_path().as_path());
-        let syntax = self.document_syntax.get(&document_id).cloned().or_else(|| {
-            language
-                .and_then(|language| DocumentSyntax::new(&session, language))
-                .map(|syntax| Rc::new(std::cell::RefCell::new(syntax)))
-        });
-        let view_syntax = syntax.clone();
+        let automatic_language = slterm_document::LanguageRegistry::new()
+            .for_path(session.location().canonical_path().as_path())
+            .unwrap_or(slterm_document::LanguageId::PlainText);
         let view_key = view.clone();
         let view_states = self.side_view_persistence.editor_view_states();
+        let language = view_states
+            .state(&view_key)
+            .language_override()
+            .unwrap_or(automatic_language);
+        let syntax = self.document_syntax(document_id, language)?;
         let root = cx.entity().downgrade();
         let panel =
             self.install_panel(project_id, view, focus, window, cx, move |window, cx| {
                 let edit_root = root.clone();
+                let selector_key = view_key.clone();
                 let editor = cx.new(|cx| {
                     DocumentTextView::new(
-                        document_id,
                         &session,
                         Box::new(move |request, origin, app| {
                             let root = edit_root
@@ -381,7 +407,8 @@ impl AppRoot {
                                 root.apply_document_edit(document_id, origin, request, cx)
                             })
                         }),
-                        view_syntax,
+                        automatic_language,
+                        syntax,
                         view_key,
                         view_states,
                         cx,
@@ -390,9 +417,19 @@ impl AppRoot {
                 let save_subscription = cx.subscribe_in(
                     &editor,
                     window,
-                    move |root, _, event: &DocumentTextEvent, _, cx| {
-                        if matches!(event, DocumentTextEvent::Save) {
-                            root.save_document(document_id, cx);
+                    move |root, editor, event: &DocumentTextEvent, window, cx| match event {
+                        DocumentTextEvent::Save => root.save_document(document_id, cx),
+                        DocumentTextEvent::OpenLanguageSelector { position } => {
+                            if let Err(error) = root.open_language_selector(
+                                project_id,
+                                selector_key.clone(),
+                                editor.clone(),
+                                *position,
+                                window,
+                                cx,
+                            ) {
+                                log::warn!("打开 Editor 语言选择器失败: {error}");
+                            }
                         }
                     },
                 );
@@ -402,9 +439,6 @@ impl AppRoot {
                     focus_handle,
                 )
             })?;
-        if let Some(syntax) = syntax {
-            self.document_syntax.insert(document_id, syntax);
-        }
         Ok(panel)
     }
 
@@ -507,6 +541,10 @@ impl AppRoot {
         request: DocumentEditRequest,
         cx: &mut Context<'_, Self>,
     ) -> Result<DocumentEditResponse, EditTransactionError> {
+        let before = self
+            .documents
+            .session(document_id)
+            .and_then(|session| session.text().cloned());
         let outcome = match &request {
             DocumentEditRequest::Edit(transaction, state) => {
                 self.documents
@@ -530,6 +568,26 @@ impl AppRoot {
             outcome,
         };
         if outcome == EditApplyOutcome::Applied {
+            // 非当前语言的缓存同样跟进正文，切回时不得发布旧 revision。
+            let after = session.text().expect("普通编辑只接受 Rope").clone();
+            let revision = session.text_revision();
+            for ((actual, _), syntax) in &self.document_syntax {
+                if *actual != document_id {
+                    continue;
+                }
+                match &request {
+                    DocumentEditRequest::Edit(transaction, _) => {
+                        if let Some(before) = &before {
+                            syntax
+                                .borrow_mut()
+                                .edit(before, after.clone(), revision, transaction);
+                        }
+                    }
+                    DocumentEditRequest::Travel { .. } => {
+                        syntax.borrow_mut().rebuild(after.clone(), revision);
+                    }
+                }
+            }
             let views = self
                 .projects
                 .values()
@@ -753,7 +811,8 @@ impl AppRoot {
                 false
             }
         });
-        self.document_syntax.retain(|id, _| referenced.contains(id));
+        self.document_syntax
+            .retain(|(id, _), _| referenced.contains(id));
         self.pending_document_saves
             .retain(|id| referenced.contains(id));
     }

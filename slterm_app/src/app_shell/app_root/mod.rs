@@ -10,6 +10,7 @@ mod documents;
 mod events;
 mod focus_manager;
 pub(crate) mod keymap;
+mod language_selector;
 mod layout;
 mod navigation;
 mod panel_host;
@@ -186,7 +187,7 @@ pub(crate) struct AppRoot {
     paged_documents:
         BTreeMap<slterm_document::DocumentId, Arc<crate::app_shell::paged_document::PagedDocument>>,
     document_syntax: BTreeMap<
-        slterm_document::DocumentId,
+        (slterm_document::DocumentId, slterm_document::LanguageId),
         Rc<RefCell<crate::app_shell::text_view::DocumentSyntax>>,
     >,
     page_cache: Rc<RefCell<DocumentPageCache>>,
@@ -213,6 +214,7 @@ pub(crate) struct AppRoot {
     side_button_menu: Option<SideButtonMenu>,
     layout_menu: Option<LayoutMenu>,
     tab_list_menu: Option<TabListMenu>,
+    language_selector_menu: Option<language_selector::LanguageSelectorMenu>,
     settings_overlay: Option<settings_overlay::SettingsOverlayHost>,
     side_view_persistence: AppRootPersistence,
     launcher: Box<dyn TerminalPanelLauncher>,
@@ -375,6 +377,7 @@ impl AppRoot {
             side_button_menu: None,
             layout_menu: None,
             tab_list_menu: None,
+            language_selector_menu: None,
             settings_overlay: None,
             side_view_persistence: persistence,
             launcher,

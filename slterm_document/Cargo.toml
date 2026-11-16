@@ -17,6 +17,8 @@ slterm_path = { path = "../slterm_path" }
 encoding_rs = "=0.8.42"
 ropey = { version = "=2.0.0-beta.1", default-features = false, features = ["metric_lines_lf", "metric_utf16"] }
 regex = "=1.13.1"
+# 封闭语言 ID 作为 ViewState 的稳定线缆值；不开放自定义语言字符串。
+serde = { version = "1", features = ["derive"] }
 uuid = { version = "=1.28.0", default-features = false }
 # LanguageRegistry 与 SyntaxWorker 共用同一锁定 Tree-sitter 运行时和 grammar 资产。
 tree-sitter = "=0.27.1"
