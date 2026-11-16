@@ -147,12 +147,12 @@ pub(crate) enum AppRootError {
     PanelIdExhausted,
     Launch(io::Error),
     ProjectPath(io::Error),
-    #[allow(dead_code)] // 消费点 = Document 真实打开队列与后续 OpenFile。
-    DocumentOpen(io::Error),
+    DocumentOpen(crate::app_shell::documents::DocumentOpenError),
     DocumentClose(slterm_workspace::DocumentCloseError),
     Focus(FocusError),
     ProjectNotActive,
     NewTerminalTargetUnauthorized,
+    OpenFileTargetUnauthorized,
     MissingPanel,
     NoLayoutActions,
     UnexpectedParameters,
@@ -186,6 +186,9 @@ impl fmt::Display for AppRootError {
             Self::Focus(error) => write!(formatter, "焦点目标不可用: {error:?}"),
             Self::ProjectNotActive => formatter.write_str("只能在活跃项目中显式创建终端"),
             Self::NewTerminalTargetUnauthorized => formatter.write_str("新终端目标项目未获授权"),
+            Self::OpenFileTargetUnauthorized => {
+                formatter.write_str("打开文件没有覆盖它的既有项目根")
+            }
             Self::MissingPanel => formatter.write_str("终端运行面板不存在"),
             Self::NoLayoutActions => formatter.write_str("当前组没有可用布局操作"),
             Self::UnexpectedParameters => formatter.write_str("命令参数与目标命令不匹配"),
@@ -221,9 +224,8 @@ impl std::error::Error for AppRootError {
         match self {
             Self::Project(error) => Some(error),
             Self::Snapshot(error) => Some(error),
-            Self::Launch(error) | Self::ProjectPath(error) | Self::DocumentOpen(error) => {
-                Some(error)
-            }
+            Self::Launch(error) | Self::ProjectPath(error) => Some(error),
+            Self::DocumentOpen(error) => Some(error),
             Self::TerminalCloseWriter(error) | Self::ProjectCloseWriter(error) => Some(error),
             Self::Sidebar(error) => Some(error),
             Self::Registry(_)
@@ -232,6 +234,7 @@ impl std::error::Error for AppRootError {
             | Self::Focus(_)
             | Self::ProjectNotActive
             | Self::NewTerminalTargetUnauthorized
+            | Self::OpenFileTargetUnauthorized
             | Self::MissingPanel
             | Self::NoLayoutActions
             | Self::UnexpectedParameters
@@ -701,7 +704,7 @@ impl AppRoot {
     }
 
     /// 隐藏项目优先复用焦点记忆；未恢复面板时按布局顺序选择既有组。
-    fn hidden_target_group(
+    pub(super) fn hidden_target_group(
         &self,
         project_id: ProjectId,
         cx: &App,
@@ -1017,7 +1020,7 @@ impl AppRoot {
         Ok(panel_id)
     }
 
-    fn restore_focus_after_failed_activation(
+    pub(super) fn restore_focus_after_failed_activation(
         &mut self,
         active: Option<ProjectId>,
         focused: Option<FocusHandle>,

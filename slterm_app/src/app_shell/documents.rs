@@ -39,6 +39,37 @@ pub(crate) struct LoadedDocument {
     body: OpenedDocumentBody,
 }
 
+/// 打开失败必须区分授权边界与普通 I/O，供 handover 映射稳定协议错误。
+#[derive(Debug)]
+pub(crate) enum DocumentOpenError {
+    Unauthorized,
+    Io(io::Error),
+}
+
+impl std::fmt::Display for DocumentOpenError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unauthorized => formatter.write_str("文档读取未获授权"),
+            Self::Io(error) => write!(formatter, "{error}"),
+        }
+    }
+}
+
+impl std::error::Error for DocumentOpenError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Unauthorized => None,
+            Self::Io(error) => Some(error),
+        }
+    }
+}
+
+impl From<io::Error> for DocumentOpenError {
+    fn from(error: io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
 /// 启动读取与所有恢复视图共享同一 Document 的 Ready 项目授权并集。
 pub(crate) fn document_project_grants(
     snapshot: &ProjectSnapshot,
@@ -79,8 +110,11 @@ impl DocumentOpenService {
         &self,
         project_root: &CanonicalPath,
         lexical: &CanonicalPath,
-    ) -> io::Result<ResolvedDocument> {
-        let resolved = self.resolver.resolve(lexical)?;
+    ) -> Result<ResolvedDocument, DocumentOpenError> {
+        let resolved = self
+            .resolver
+            .resolve(lexical)
+            .map_err(DocumentOpenError::Io)?;
         let request = PathRequest {
             operation: PathOperation::Read,
             lexical_path: lexical.as_path().to_path_buf(),
@@ -91,7 +125,7 @@ impl DocumentOpenService {
         let grant = PathGrant::project_root(project_root.clone());
         let authorization =
             PathPolicy::authorize(&request, &resolved, std::slice::from_ref(&grant), 0)
-                .map_err(|_| io::Error::new(io::ErrorKind::PermissionDenied, "文档读取未获授权"))?;
+                .map_err(|_| DocumentOpenError::Unauthorized)?;
         Ok(ResolvedDocument {
             location: authorization.resolved_path().clone(),
             grant,
@@ -179,10 +213,10 @@ impl DocumentOpenService {
         registry: &mut DocumentRegistry,
         project_root: &CanonicalPath,
         lexical: &CanonicalPath,
-    ) -> io::Result<OpenedDocument> {
+    ) -> Result<OpenedDocument, DocumentOpenError> {
         let resolved = self.resolve(project_root, lexical)?;
         let loaded = self.load(resolved)?;
-        Self::register(registry, loaded)
+        Self::register(registry, loaded).map_err(DocumentOpenError::Io)
     }
 }
 
@@ -805,7 +839,7 @@ mod documents_tests {
             Ok(_) => panic!("根外读取不得成功"),
             Err(error) => error,
         };
-        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert!(matches!(error, DocumentOpenError::Unauthorized));
         assert!(registry.is_empty());
     }
 }

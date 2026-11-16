@@ -12,7 +12,7 @@ use super::command_registry::{CommandId, CommandParameters, CommandSource, Comma
 use super::commands::AppRootError;
 use super::focus_manager::FocusError;
 use super::task_service::CancellationToken;
-use crate::app_shell::{SltermShellEvent, handover_error};
+use crate::app_shell::{SltermShellEvent, documents::DocumentOpenError, handover_error};
 
 /// 窗口或实体先行销毁时，也必须为未结算 handover 返回 Closing。
 struct HandoverCompletionGuard {
@@ -217,11 +217,42 @@ impl AppRoot {
                                 Err(error) => Err(error),
                             }
                         }
-                        HandoverParams::OpenFile { .. } => Err(handover_error(
-                            DomainErrorCode::InvalidRequest,
-                            -32000,
-                            "handover request is not implemented",
-                        )),
+                        HandoverParams::OpenFile { path } => {
+                            let path = match CanonicalPath::new(path) {
+                                Ok(path) => path,
+                                Err(_) => {
+                                    let _ = completion.try_send(Err(invalid_open_file_request()));
+                                    return;
+                                }
+                            };
+                            let request = match self.prepare_document_handover(path, window, cx) {
+                                Ok(request) => request,
+                                Err(error) => {
+                                    let _ =
+                                        completion.try_send(Err(open_file_handover_error(error)));
+                                    return;
+                                }
+                            };
+                            let asynchronous_completion =
+                                HandoverCompletionGuard::new(completion.clone());
+                            self.queue_document_open(
+                                request,
+                                Some(Box::new(move |result, window, cx| {
+                                    let response = match result {
+                                        Ok(()) => {
+                                            crate::windowing::focus::focus_window(window);
+                                            cx.notify();
+                                            Ok(HandoverResponse::accepted())
+                                        }
+                                        Err(error) => Err(open_file_handover_error(error)),
+                                    };
+                                    asynchronous_completion.send(response);
+                                })),
+                                window,
+                                cx,
+                            );
+                            return;
+                        }
                     }
                 };
                 // 回执接收端可能已超时退出；非阻塞发送失败只结束本次答复。
@@ -312,6 +343,29 @@ fn open_project_handover_error(error: AppRootError) -> JsonRpcError {
             -32001,
             "open project is not ready",
         ),
+    }
+}
+
+fn invalid_open_file_request() -> JsonRpcError {
+    handover_error(DomainErrorCode::InvalidRequest, -32000, "invalid file path")
+}
+
+fn open_file_handover_error(error: AppRootError) -> JsonRpcError {
+    match error {
+        AppRootError::Closing => closing_handover_error(),
+        AppRootError::Focus(FocusError::ModalActive)
+        | AppRootError::OpenFileTargetUnauthorized
+        | AppRootError::DocumentOpen(DocumentOpenError::Unauthorized) => handover_error(
+            DomainErrorCode::Unauthorized,
+            -32002,
+            "open file is not authorized",
+        ),
+        AppRootError::DocumentOpen(DocumentOpenError::Io(error))
+            if error.kind() == std::io::ErrorKind::InvalidInput =>
+        {
+            invalid_open_file_request()
+        }
+        _ => handover_error(DomainErrorCode::NotReady, -32001, "open file is not ready"),
     }
 }
 
@@ -429,6 +483,52 @@ mod document_save_notice_tests {
             document_save_error_text(&error, UiLanguage::EnUs),
             UiLanguage::EnUs.format(Message::EditorSaveFailed, &[("error", &error.to_string())],)
         );
+    }
+}
+
+#[cfg(test)]
+mod open_file_handover_error_tests {
+    use super::*;
+
+    fn open_io_error(kind: std::io::ErrorKind, message: &'static str) -> AppRootError {
+        AppRootError::DocumentOpen(DocumentOpenError::Io(std::io::Error::new(kind, message)))
+    }
+
+    #[test]
+    fn open_file_errors_preserve_protocol_boundary_without_paths() {
+        let private_path = "D:/private/project/file.txt";
+        let cases = [
+            (AppRootError::Closing, DomainErrorCode::Closing),
+            (
+                AppRootError::Focus(FocusError::ModalActive),
+                DomainErrorCode::Unauthorized,
+            ),
+            (
+                AppRootError::OpenFileTargetUnauthorized,
+                DomainErrorCode::Unauthorized,
+            ),
+            (
+                AppRootError::DocumentOpen(DocumentOpenError::Unauthorized),
+                DomainErrorCode::Unauthorized,
+            ),
+            (
+                open_io_error(std::io::ErrorKind::PermissionDenied, private_path),
+                DomainErrorCode::NotReady,
+            ),
+            (
+                open_io_error(std::io::ErrorKind::InvalidInput, private_path),
+                DomainErrorCode::InvalidRequest,
+            ),
+            (
+                open_io_error(std::io::ErrorKind::NotFound, private_path),
+                DomainErrorCode::NotReady,
+            ),
+        ];
+        for (error, expected) in cases {
+            let error = open_file_handover_error(error);
+            assert_eq!(error.data.unwrap().code, expected);
+            assert!(!error.message.contains(private_path));
+        }
     }
 }
 

@@ -1406,7 +1406,7 @@ fn handover_new_terminal_multi_group_without_focus_falls_back_to_first_group(
 }
 
 #[gpui::test]
-fn handover_open_file_remains_invalid_without_side_effects(cx: &mut TestAppContext) {
+fn handover_open_file_rejects_unauthorized_target_without_side_effects(cx: &mut TestAppContext) {
     let (root, mut window, state) = open_root(cx);
     add_project(&root, &mut window, PROJECT_A, "D:/work/a");
     let panel = new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_A);
@@ -1422,7 +1422,7 @@ fn handover_open_file_remains_invalid_without_side_effects(cx: &mut TestAppConte
     for intent in intents {
         let error = dispatch_handover(&root, &mut window, intent).unwrap_err();
 
-        assert_handover_error(&error, -32000, DomainErrorCode::InvalidRequest);
+        assert_handover_error(&error, -32002, DomainErrorCode::Unauthorized);
         assert!(!error.message.contains("D:/private"));
         assert!(!error.message.contains("sk-test"));
         assert_window_active(&mut window, false);
