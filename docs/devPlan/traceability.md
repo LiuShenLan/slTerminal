@@ -266,7 +266,7 @@
 
 | 验收场景 | 目标测试例名 | 状态 |
 |---|---|---|
-| 新终端未给 cwd 使用项目根且非法 cwd 拒绝 | `terminal_new_uses_project_root` | 待实现 |
+| 新终端未给 cwd 使用项目根且非法 cwd 拒绝 | `new_terminal_cwd_defaults_to_project_root`、`new_terminal_cwd_rejects_paths_outside_project_without_changing_snapshot` | 已自动化 |
 | 重启恢复可见、隐藏和已退出终端的不同运行态 | `terminal_restore_visibility_and_exit_state` | 已自动化 |
 | 存活 PTY 达上限时拒绝新启动且记录不丢 | `terminal_live_pty_limit` | 待实现 |
 | 隐藏期间持续输出重新可见仍连续且只显示新画面 | `terminal_hidden_output_backpressure` | 待实现 |
