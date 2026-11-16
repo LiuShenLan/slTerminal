@@ -252,7 +252,7 @@
 | 验收场景 | 目标测试例名 | 状态 |
 |---|---|---|
 | Editor 与 Diff 编辑保存共享文本和基线 | `editor_diff_share_document` | 待实现 |
-| HTML 系统打开磁盘版本且不隐式保存 | `editor_html_system_open_does_not_save` | 待实现 |
+| HTML 系统打开磁盘版本且不隐式保存 | `editor_html_system_open_does_not_save` | 已自动化 |
 | GBK、非法编码和 NUL 文件分别按规则路由 | `editor_encoding_and_binary_routing` | 已自动化 |
 | 全部替换确认后一次撤销回滚整次操作 | `editor_replace_all_single_undo` | 已自动化 |
 | 跨大文件阈值时干净切只读、脏保留缓冲 | `editor_large_file_dirty_preserves_buffer` | 已自动化 |

@@ -191,6 +191,7 @@ pub(crate) struct AppRoot {
         Rc<RefCell<crate::app_shell::text_view::DocumentSyntax>>,
     >,
     page_cache: Rc<RefCell<DocumentPageCache>>,
+    system_open: Arc<dyn Fn(CanonicalPath) + Send + Sync>,
     #[allow(dead_code)] // 消费点 = Document 真实后台打开。
     document_open_service: Arc<crate::app_shell::documents::DocumentOpenService>,
     #[allow(dead_code)] // 消费点 = Document 单任务 FIFO 调度。
@@ -355,6 +356,9 @@ impl AppRoot {
             paged_documents: BTreeMap::new(),
             document_syntax: BTreeMap::new(),
             page_cache: Rc::new(RefCell::new(DocumentPageCache::new())),
+            system_open: Arc::new(|path| {
+                crate::platform::file_operations::open_in_system(path.as_path());
+            }),
             document_open_service: Arc::new(
                 crate::app_shell::documents::DocumentOpenService::default(),
             ),

@@ -909,6 +909,58 @@ fn editor_language_override_is_per_view_and_inactive_syntax_tracks_edits(cx: &mu
 }
 
 #[gpui::test]
+fn editor_html_system_open_does_not_save(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    let file = project.join("page.html");
+    std::fs::write(&file, "<p>disk</p>").unwrap();
+    let file = CanonicalPath::new(file).unwrap();
+    let (root, mut window, _) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, project.to_str().unwrap());
+    open_document(&root, &mut window, PROJECT_A, GROUP_A, file.clone());
+    let editor = root.read_with(cx, |root, cx| {
+        root.projects[&project_id(PROJECT_A)]
+            .read(cx)
+            .panels
+            .values()
+            .find_map(|panel| panel.editor().cloned())
+            .unwrap()
+    });
+    window.simulate_input("draft ");
+    select_editor_language_override(cx, &mut window, &editor, Some(LanguageId::PlainText));
+    let (opened, opened_rx) = std::sync::mpsc::sync_channel(1);
+    window.update(|_, cx| {
+        root.update(cx, |root, _| {
+            root.system_open = std::sync::Arc::new(move |path| {
+                opened.try_send(path).unwrap();
+            });
+        });
+    });
+
+    draw_frame(&mut window);
+    let selector =
+        Box::leak(format!("document-system-open-{}", editor.entity_id()).into_boxed_str());
+    let bounds = window.debug_bounds(selector).unwrap();
+    window.simulate_click(bounds.center(), Modifiers::default());
+    window.run_until_parked();
+
+    assert_eq!(opened_rx.try_recv().unwrap().as_path(), file.as_path());
+    assert_eq!(
+        std::fs::read_to_string(file.as_path()).unwrap(),
+        "<p>disk</p>"
+    );
+    assert!(root.read_with(cx, |root, _| {
+        let document = root.snapshot().documents().next().unwrap().0;
+        root.documents.session(document).unwrap().is_dirty()
+    }));
+    assert_eq!(
+        editor.read_with(cx, |view, _| view.input_text_for_test()),
+        "draft <p>disk</p>"
+    );
+}
+
+#[gpui::test]
 fn large_file_paged_views_share_a_real_source_across_projects(cx: &mut TestAppContext) {
     let temp = tempfile::tempdir().unwrap();
     let project_root = temp.path().join("project");

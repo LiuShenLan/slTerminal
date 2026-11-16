@@ -12,6 +12,7 @@
     "invalid_encoding": "File is not valid UTF-8; opened read-only.",
     "read_only": "Read-only",
     "language_auto": "Automatic",
+    "open_system": "Open with system default",
     "reauthorization_required": "This file is outside the project root or access was revoked. Reauthorize it before reading or refreshing disk content.",
     "paged_recovery_required": "This paged document requires the dedicated read-only view; a bounded prefix is never opened as the complete body.",
     "replaced_recovery": "The original file identity was replaced. The old record was not merged into the new Document, and no snapshot of its former body is available.",

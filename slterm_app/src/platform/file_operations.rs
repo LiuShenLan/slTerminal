@@ -64,7 +64,6 @@ fn run_recycle_operation(
 }
 
 /// 交给系统默认处理器打开路径(文件树双击的未命中臂)。
-#[cfg(not(all(test, feature = "gpui-test-support")))]
 pub(crate) fn open_in_system(path: &Path) {
     use std::os::windows::ffi::OsStrExt as _;
     use std::ptr;

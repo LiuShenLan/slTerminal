@@ -223,6 +223,7 @@ type PaintedSyntax = Rc<RefCell<Vec<(usize, Vec<TextRun>)>>>;
 pub(crate) enum DocumentTextEvent {
     Save,
     OpenLanguageSelector { position: Point<Pixels> },
+    OpenInSystem,
 }
 
 impl EventEmitter<DocumentTextEvent> for DocumentTextView {}
@@ -1223,6 +1224,29 @@ impl DocumentTextView {
             }))
     }
 
+    fn system_open_button(&self, cx: &mut Context<'_, Self>) -> Option<Button> {
+        if self.automatic_language != LanguageId::Html {
+            return None;
+        }
+        let id = format!("document-system-open-{}", cx.entity().entity_id());
+        let selector = id.clone();
+        let label = cx
+            .global::<crate::app_shell::config::Settings>()
+            .language
+            .text(crate::i18n::Message::EditorOpenSystem)
+            .to_owned();
+        Some(
+            Button::new(id)
+                .debug_selector(move || selector.clone())
+                .label(label)
+                .ghost()
+                .small()
+                .on_click(cx.listener(|_, _, _, cx| {
+                    cx.emit(DocumentTextEvent::OpenInSystem);
+                })),
+        )
+    }
+
     fn text_canvas(&mut self, cx: &mut Context<'_, Self>) -> gpui::Canvas<PaintFrame> {
         let theme = cx.theme();
         let foreground = theme.foreground;
@@ -1447,10 +1471,12 @@ impl Render for DocumentTextView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<'_, Self>) -> impl gpui::IntoElement {
         let canvas = self.text_canvas(cx);
         let language_selector = self.language_selector(cx);
+        let system_open = self.system_open_button(cx);
         let focus = self.focus.clone();
         div()
             .key_context("DocumentText")
             .track_focus(&focus)
+            .relative()
             .flex()
             .flex_col()
             .size_full()
@@ -1533,6 +1559,10 @@ impl Render for DocumentTextView {
                     .border_t_1()
                     .border_color(cx.theme().border)
                     .child(language_selector),
+            )
+            .children(
+                system_open
+                    .map(|button| div().absolute().top(px(8.0)).right(px(8.0)).child(button)),
             )
     }
 }

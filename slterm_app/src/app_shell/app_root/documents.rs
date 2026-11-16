@@ -419,6 +419,9 @@ impl AppRoot {
                     window,
                     move |root, editor, event: &DocumentTextEvent, window, cx| match event {
                         DocumentTextEvent::Save => root.save_document(document_id, cx),
+                        DocumentTextEvent::OpenInSystem => {
+                            root.open_document_in_system(document_id, cx);
+                        }
                         DocumentTextEvent::OpenLanguageSelector { position } => {
                             if let Err(error) = root.open_language_selector(
                                 project_id,
@@ -618,6 +621,38 @@ impl AppRoot {
             }
         }
         Ok(response)
+    }
+
+    /// HTML 系统打开只读取当前磁盘位置，不触发保存；平台调用留在后台任务。
+    fn open_document_in_system(&mut self, document_id: DocumentId, cx: &mut Context<'_, Self>) {
+        if self.ensure_not_closing().is_err() {
+            return;
+        }
+        let Some(path) = self
+            .documents
+            .session(document_id)
+            .map(|session| session.location().canonical_path().clone())
+        else {
+            return;
+        };
+        let task_id = TaskId::DocumentSystemOpen(document_id);
+        if self.tasks.is_registered(task_id) {
+            return;
+        }
+        let opener = self.system_open.clone();
+        let executor = cx.background_executor().clone();
+        let registration = self
+            .tasks
+            .register_with(task_id, CancellationToken::new(), move || {
+                let open = executor.spawn(async move { opener(path) });
+                cx.spawn(async move |this, cx| {
+                    open.await;
+                    let _ = this.update(cx, |root, _| root.tasks.complete(task_id));
+                })
+            });
+        if registration.is_err() {
+            log::debug!("document system open already scheduled");
+        }
     }
 
     pub(super) fn save_document(&mut self, document_id: DocumentId, cx: &mut Context<'_, Self>) {
