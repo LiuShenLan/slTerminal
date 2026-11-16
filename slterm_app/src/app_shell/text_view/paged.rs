@@ -12,7 +12,10 @@ use gpui::{
     point, px, size,
 };
 use gpui_component::ActiveTheme as _;
-use gpui_component::input::{Copy, SelectAll};
+use gpui_component::input::{
+    Copy, MoveDown, MoveLeft, MoveRight, MoveToEndOfLine, MoveToStartOfLine, MoveUp, SelectAll,
+    SelectToEndOfLine, SelectToStartOfLine,
+};
 use slterm_document::{
     DocumentId, DocumentPageCache, DocumentSession, DocumentTextRequest, PageKey, PagedSource,
     TextStateId,
@@ -21,7 +24,27 @@ use slterm_document::{
 use super::layout::{FontMetricsKey, LayoutCache, LayoutMetrics, TextLayoutKey, ThemeFingerprint};
 use super::metrics::DisplayMap;
 use super::source::{PagedTextSource, TextSelection, VisibleLine, VisibleRow};
+use super::{SelectDown, SelectLeft, SelectRight, SelectUp};
 use crate::app_shell::paged_document::{PageReader, PagedReaderChunks};
+
+#[derive(Clone, Copy)]
+struct PagedCursor {
+    byte: usize,
+    line: usize,
+    column: Option<usize>,
+}
+
+#[derive(Clone, Copy)]
+enum PagedMotion {
+    Horizontal { left: bool, select: bool },
+    Vertical { down: bool, select: bool },
+    LineBoundary { end: bool, select: bool },
+}
+
+struct PagedMotionOutcome {
+    cursor: PagedCursor,
+    preferred_column: Option<usize>,
+}
 
 #[cfg(all(test, feature = "gpui-test-support"))]
 type PaintedLines = Rc<RefCell<Vec<(usize, Option<String>)>>>;
@@ -33,6 +56,12 @@ pub(crate) struct PagedTextView {
     text_state: TextStateId,
     request: DocumentTextRequest,
     selection: TextSelection,
+    anchor_line: usize,
+    head_line: usize,
+    anchor_column: Option<usize>,
+    head_column: Option<usize>,
+    preferred_column: Option<usize>,
+    pending_motion: Option<PagedMotion>,
     mouse_anchor: Option<usize>,
     focus: FocusHandle,
     copy_generation: u64,
@@ -85,6 +114,12 @@ impl PagedTextView {
             text_state: session.current_state(),
             request,
             selection: TextSelection { anchor: 0, head: 0 },
+            anchor_line: 0,
+            head_line: 0,
+            anchor_column: Some(0),
+            head_column: Some(0),
+            preferred_column: None,
+            pending_motion: None,
             mouse_anchor: None,
             focus: cx.focus_handle().tab_stop(true),
             copy_generation: 0,
@@ -126,6 +161,7 @@ impl PagedTextView {
         self.closed = true;
         self.tasks.clear();
         self.pending_pages.clear();
+        self.pending_motion = None;
         self.invalidate_copy();
     }
 
@@ -156,14 +192,21 @@ impl PagedTextView {
                 self.failed_pages.insert(page);
             }
         }
+        self.try_pending_motion(cx);
         cx.notify();
     }
 
     fn select_all(&mut self, cx: &mut Context<'_, Self>) {
+        self.pending_motion = None;
         self.selection = TextSelection {
             anchor: 0,
             head: self.source.line_index().total_utf8_bytes(),
         };
+        self.anchor_line = 0;
+        self.head_line = self.source.line_index().line_count().saturating_sub(1);
+        self.anchor_column = Some(0);
+        self.head_column = None;
+        self.preferred_column = None;
         cx.notify();
     }
 
@@ -224,7 +267,229 @@ impl PagedTextView {
         }));
     }
 
-    fn byte_for_point(&self, point: gpui::Point<Pixels>) -> Option<usize> {
+    fn selection_cursor(&self, anchor: bool) -> PagedCursor {
+        if anchor {
+            PagedCursor {
+                byte: self.selection.anchor,
+                line: self.anchor_line,
+                column: self.anchor_column,
+            }
+        } else {
+            PagedCursor {
+                byte: self.selection.head,
+                line: self.head_line,
+                column: self.head_column,
+            }
+        }
+    }
+
+    fn compute_motion(
+        &self,
+        source: &mut PagedTextSource<'_>,
+        motion: PagedMotion,
+    ) -> Option<PagedMotionOutcome> {
+        match motion {
+            PagedMotion::Horizontal { left, select } => {
+                let range = self.selection.range();
+                if !select && !range.is_empty() {
+                    let anchor = if left {
+                        self.selection.anchor <= self.selection.head
+                    } else {
+                        self.selection.anchor >= self.selection.head
+                    };
+                    let mut cursor = self.selection_cursor(anchor);
+                    if cursor.column.is_none() {
+                        cursor.column = Some(source.column_at(cursor.line, cursor.byte)?);
+                    }
+                    return Some(PagedMotionOutcome {
+                        cursor,
+                        preferred_column: None,
+                    });
+                }
+                let byte = if left {
+                    source.previous_grapheme_boundary(self.selection.head)
+                } else {
+                    source.next_grapheme_boundary(self.selection.head)
+                };
+                let Some(byte) = byte else {
+                    let at_boundary = if left {
+                        self.selection.head == 0
+                    } else {
+                        self.selection.head == self.source.line_index().total_utf8_bytes()
+                    };
+                    if !at_boundary {
+                        return None;
+                    }
+                    return Some(PagedMotionOutcome {
+                        cursor: self.selection_cursor(false),
+                        preferred_column: None,
+                    });
+                };
+                let current = source.line_byte_range(self.head_line)?;
+                let line = if byte < current.start {
+                    self.head_line.checked_sub(1)?
+                } else if byte > current.end {
+                    (self.head_line + 1).min(self.source.line_index().line_count() - 1)
+                } else {
+                    self.head_line
+                };
+                let column = source.column_at(line, byte)?;
+                Some(PagedMotionOutcome {
+                    cursor: PagedCursor {
+                        byte,
+                        line,
+                        column: Some(column),
+                    },
+                    preferred_column: None,
+                })
+            }
+            PagedMotion::Vertical { down, .. } => {
+                let target = if down {
+                    (self.head_line + 1).min(self.source.line_index().line_count() - 1)
+                } else {
+                    self.head_line.saturating_sub(1)
+                };
+                if target == self.head_line {
+                    return None;
+                }
+                let current_column = match self.head_column {
+                    Some(column) => Some(column),
+                    None => source.column_at(self.head_line, self.selection.head),
+                };
+                let preferred = match (self.preferred_column, current_column) {
+                    (Some(column), _) => column,
+                    (None, Some(column)) => column,
+                    (None, None) => return None,
+                };
+                let (byte, column) = source.byte_at_column(target, preferred)?;
+                Some(PagedMotionOutcome {
+                    cursor: PagedCursor {
+                        byte,
+                        line: target,
+                        column: Some(column),
+                    },
+                    preferred_column: Some(preferred),
+                })
+            }
+            PagedMotion::LineBoundary { end, .. } => {
+                let range = source.line_byte_range(self.head_line)?;
+                let byte = if end { range.end } else { range.start };
+                let column = if end {
+                    source.column_at(self.head_line, byte)?
+                } else {
+                    0
+                };
+                Some(PagedMotionOutcome {
+                    cursor: PagedCursor {
+                        byte,
+                        line: self.head_line,
+                        column: Some(column),
+                    },
+                    preferred_column: None,
+                })
+            }
+        }
+    }
+
+    fn start_motion(&mut self, motion: PagedMotion, cx: &mut Context<'_, Self>) {
+        if self.closed {
+            return;
+        }
+        self.pending_motion = Some(motion);
+        self.try_pending_motion(cx);
+    }
+
+    fn try_pending_motion(&mut self, cx: &mut Context<'_, Self>) {
+        let Some(motion) = self.pending_motion else {
+            return;
+        };
+        let source = self.source.clone();
+        let cache = self.cache.clone();
+        let (outcome, missing) = {
+            let mut cache = cache.borrow_mut();
+            let mut text =
+                PagedTextSource::new(self.document_id, &source, &mut cache, DisplayMap::new(4));
+            let outcome = self.compute_motion(&mut text, motion);
+            (
+                outcome,
+                text.missing_pages().iter().copied().collect::<Vec<_>>(),
+            )
+        };
+        if let Some(outcome) = outcome {
+            self.pending_motion = None;
+            self.move_to(
+                outcome.cursor,
+                match motion {
+                    PagedMotion::Horizontal { select, .. }
+                    | PagedMotion::Vertical { select, .. }
+                    | PagedMotion::LineBoundary { select, .. } => select,
+                },
+                outcome.preferred_column,
+                cx,
+            );
+        } else if missing.is_empty() {
+            self.pending_motion = None;
+        } else {
+            let requests = self.claim_pages(&missing);
+            if !missing.iter().any(|page| self.pending_pages.contains(page)) {
+                self.pending_motion = None;
+                return;
+            }
+            let tasks = Self::spawn_page_requests(&cx.entity(), requests, cx);
+            self.tasks.extend(tasks);
+        }
+    }
+
+    fn move_to(
+        &mut self,
+        cursor: PagedCursor,
+        select: bool,
+        preferred_column: Option<usize>,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if select {
+            self.selection.head = cursor.byte;
+            self.head_line = cursor.line;
+            self.head_column = cursor.column;
+        } else {
+            self.selection = TextSelection {
+                anchor: cursor.byte,
+                head: cursor.byte,
+            };
+            self.anchor_line = cursor.line;
+            self.head_line = cursor.line;
+            self.anchor_column = cursor.column;
+            self.head_column = cursor.column;
+        }
+        self.preferred_column = preferred_column;
+        self.ensure_cursor_visible();
+        cx.notify();
+    }
+
+    fn ensure_cursor_visible(&mut self) {
+        let Some(metrics) = *self.layout.borrow() else {
+            return;
+        };
+        let visible_rows = (metrics.bounds.size.height / metrics.line_height)
+            .floor()
+            .max(1.0) as usize;
+        if self.head_line < self.scroll_line {
+            self.scroll_line = self.head_line;
+        } else if self.head_line >= self.scroll_line + visible_rows {
+            self.scroll_line = self.head_line + 1 - visible_rows;
+        }
+        let Some(column) = self.head_column else {
+            return;
+        };
+        let visible_columns = metrics.visible_whole_columns();
+        if column < self.scroll_column {
+            self.scroll_column = column;
+        } else if column > self.scroll_column + visible_columns {
+            self.scroll_column = column - visible_columns;
+        }
+    }
+
+    fn byte_for_point(&self, point: gpui::Point<Pixels>) -> Option<PagedCursor> {
         let metrics = (*self.layout.borrow())?;
         let x = (point.x - metrics.bounds.origin.x).max(px(0.0));
         let y = (point.y - metrics.bounds.origin.y).max(px(0.0));
@@ -243,7 +508,12 @@ impl PagedTextView {
         let viewport_column = (x / metrics.cell_width).round() as usize;
         let target_column = self.scroll_column + viewport_column;
         let local = map.byte_at_column_from(line.text(), target_column, line.display_start())?;
-        Some(line.byte_range().start + local)
+        let column = map.column_at_from(line.text(), local, line.display_start())?;
+        Some(PagedCursor {
+            byte: line.byte_range().start + local,
+            line: line.index(),
+            column: Some(column),
+        })
     }
 
     fn mouse_down(
@@ -261,14 +531,23 @@ impl PagedTextView {
         let anchor = if event.modifiers.shift {
             self.selection.anchor
         } else {
-            position
+            position.byte
         };
+        if !event.modifiers.shift {
+            self.anchor_line = position.line;
+            self.anchor_column = position.column;
+        }
+        self.pending_motion = None;
         self.mouse_anchor = Some(anchor);
         self.selection = TextSelection {
             anchor,
-            head: position,
+            head: position.byte,
         };
+        self.head_line = position.line;
+        self.head_column = position.column;
+        self.preferred_column = None;
         window.focus(&self.focus, cx);
+        self.ensure_cursor_visible();
         cx.notify();
         cx.stop_propagation();
     }
@@ -286,8 +565,12 @@ impl PagedTextView {
         };
         self.selection = TextSelection {
             anchor,
-            head: position,
+            head: position.byte,
         };
+        self.head_line = position.line;
+        self.head_column = position.column;
+        self.preferred_column = None;
+        self.ensure_cursor_visible();
         cx.notify();
     }
 
@@ -354,6 +637,16 @@ impl PagedTextView {
             view.tasks.retain(|_, task| !task.is_ready());
             view.claim_pages(&pages)
         });
+        let tasks = Self::spawn_page_requests(view, requests, cx);
+        view.update(cx, |view, _| view.tasks.extend(tasks));
+    }
+
+    fn spawn_page_requests(
+        view: &Entity<Self>,
+        requests: Vec<(usize, u64, [u8; 32], PageReader)>,
+        cx: &mut App,
+    ) -> Vec<(usize, Task<()>)> {
+        let mut tasks = Vec::with_capacity(requests.len());
         for (page, generation, fingerprint, reader) in requests {
             let background = cx.background_executor().spawn(async move { reader(page) });
             let target = view.downgrade();
@@ -366,10 +659,9 @@ impl PagedTextView {
                     view.apply_page_result(page, generation, fingerprint, result, cx);
                 });
             });
-            view.update(cx, |view, _| {
-                view.tasks.insert(page, task);
-            });
+            tasks.push((page, task));
         }
+        tasks
     }
 
     fn shape_line(
@@ -601,6 +893,114 @@ impl Render for PagedTextView {
             .key_context("DocumentText")
             .track_focus(&self.focus)
             .size_full()
+            .on_action(cx.listener(|view, _: &MoveLeft, _, cx| {
+                view.start_motion(
+                    PagedMotion::Horizontal {
+                        left: true,
+                        select: false,
+                    },
+                    cx,
+                );
+            }))
+            .on_action(cx.listener(|view, _: &MoveRight, _, cx| {
+                view.start_motion(
+                    PagedMotion::Horizontal {
+                        left: false,
+                        select: false,
+                    },
+                    cx,
+                );
+            }))
+            .on_action(cx.listener(|view, _: &MoveUp, _, cx| {
+                view.start_motion(
+                    PagedMotion::Vertical {
+                        down: false,
+                        select: false,
+                    },
+                    cx,
+                );
+            }))
+            .on_action(cx.listener(|view, _: &MoveDown, _, cx| {
+                view.start_motion(
+                    PagedMotion::Vertical {
+                        down: true,
+                        select: false,
+                    },
+                    cx,
+                );
+            }))
+            .on_action(cx.listener(|view, _: &SelectLeft, _, cx| {
+                view.start_motion(
+                    PagedMotion::Horizontal {
+                        left: true,
+                        select: true,
+                    },
+                    cx,
+                );
+            }))
+            .on_action(cx.listener(|view, _: &SelectRight, _, cx| {
+                view.start_motion(
+                    PagedMotion::Horizontal {
+                        left: false,
+                        select: true,
+                    },
+                    cx,
+                );
+            }))
+            .on_action(cx.listener(|view, _: &SelectUp, _, cx| {
+                view.start_motion(
+                    PagedMotion::Vertical {
+                        down: false,
+                        select: true,
+                    },
+                    cx,
+                );
+            }))
+            .on_action(cx.listener(|view, _: &SelectDown, _, cx| {
+                view.start_motion(
+                    PagedMotion::Vertical {
+                        down: true,
+                        select: true,
+                    },
+                    cx,
+                );
+            }))
+            .on_action(cx.listener(|view, _: &MoveToStartOfLine, _, cx| {
+                view.start_motion(
+                    PagedMotion::LineBoundary {
+                        end: false,
+                        select: false,
+                    },
+                    cx,
+                );
+            }))
+            .on_action(cx.listener(|view, _: &MoveToEndOfLine, _, cx| {
+                view.start_motion(
+                    PagedMotion::LineBoundary {
+                        end: true,
+                        select: false,
+                    },
+                    cx,
+                );
+            }))
+            .on_action(cx.listener(|view, _: &SelectToStartOfLine, _, cx| {
+                view.start_motion(
+                    PagedMotion::LineBoundary {
+                        end: false,
+                        select: true,
+                    },
+                    cx,
+                );
+            }))
+            .on_action(cx.listener(|view, _: &SelectToEndOfLine, _, cx| {
+                view.start_motion(
+                    PagedMotion::LineBoundary {
+                        end: true,
+                        select: true,
+                    },
+                    cx,
+                );
+            }))
             .on_action(cx.listener(|view, _: &SelectAll, _, cx| view.select_all(cx)))
             .on_action(cx.listener(|view, _: &Copy, _, cx| view.copy(cx)))
             .on_mouse_down(
@@ -640,7 +1040,7 @@ mod tests {
     use slterm_path::{CanonicalPath, ResolvedPath};
     use uuid::Uuid;
 
-    use super::PagedTextView;
+    use super::{PagedMotion, PagedTextView};
     use crate::app_shell::paged_document::PageReader;
 
     fn source_for(pages: &[&str]) -> PagedSource {
@@ -1110,6 +1510,310 @@ mod tests {
                 assert_eq!(host.view.read(cx).selection.range(), 1..5);
             })
             .unwrap();
+    }
+
+    #[gpui::test]
+    fn paged_keyboard_navigation_preserves_unicode_columns_and_expands_selection(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::app_shell::theme::apply_dark_theme(cx);
+            crate::app_shell::text_view::init(cx);
+        });
+        let cache = Rc::new(RefCell::new(DocumentPageCache::new()));
+        let reader: PageReader = Arc::new(|page| {
+            Ok(match page {
+                0 => "中A\nx\n中😀".to_owned(),
+                _ => return Err(io::Error::new(io::ErrorKind::InvalidInput, "页号越界")),
+            })
+        });
+        let window = cx.add_window(|_, cx| {
+            Host::with_source(cache, reader, source_for(&["中A\nx\n中😀"]), cx)
+        });
+        window
+            .update(cx, |host, window, cx| {
+                let focus = host.view.read(cx).focus.clone();
+                window.focus(&focus, cx);
+            })
+            .unwrap();
+        let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.run_until_parked();
+        visual.refresh().unwrap();
+        visual.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+        visual.run_until_parked();
+
+        visual.simulate_keystrokes("right");
+        visual.simulate_keystrokes("down");
+        visual.simulate_keystrokes("down");
+        window
+            .update(cx, |host, _, cx| {
+                let view = host.view.read(cx);
+                assert_eq!(view.selection.range(), 10..10);
+            })
+            .unwrap();
+
+        visual.simulate_keystrokes("shift-home");
+        window
+            .update(cx, |host, _, cx| {
+                let view = host.view.read(cx);
+                assert_eq!(view.selection.range(), 7..10);
+                assert!(view.selection.anchor > view.selection.head);
+            })
+            .unwrap();
+        visual.simulate_keystrokes("end");
+        visual.simulate_keystrokes("left");
+        window
+            .update(cx, |host, _, cx| {
+                assert_eq!(host.view.read(cx).selection.range(), 10..10);
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn paged_keyboard_navigation_resumes_after_loading_the_target_page(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::app_shell::theme::apply_dark_theme(cx);
+            crate::app_shell::text_view::init(cx);
+        });
+        let cache = Rc::new(RefCell::new(DocumentPageCache::new()));
+        let id: DocumentId = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0f2a".parse().unwrap();
+        cache
+            .borrow_mut()
+            .insert(slterm_document::PageKey::new(id, 0, 0), "a\n".to_owned());
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let recorded = requests.clone();
+        let reader: PageReader = Arc::new(move |page| {
+            recorded.lock().unwrap().push(page);
+            Ok(match page {
+                0 => "a\n".to_owned(),
+                1 => "b\n".to_owned(),
+                _ => return Err(io::Error::new(io::ErrorKind::InvalidInput, "页号越界")),
+            })
+        });
+        let view =
+            cx.update(|cx| make_view(cache.clone(), reader, source_for(&["a\n", "b\n"]), cx));
+        view.update(cx, |view, cx| {
+            let mut metrics = super::super::layout::LayoutMetrics {
+                bounds: gpui::Bounds::default(),
+                cell_width: px(8.0),
+                line_height: px(20.0),
+            };
+            metrics.bounds.size = gpui::size(px(80.0), px(20.0));
+            *view.layout.borrow_mut() = Some(metrics);
+            view.start_motion(
+                PagedMotion::Vertical {
+                    down: true,
+                    select: true,
+                },
+                cx,
+            );
+        });
+        assert!(
+            cache
+                .borrow_mut()
+                .get(&slterm_document::PageKey::new(id, 0, 1))
+                .is_none()
+        );
+
+        cx.run_until_parked();
+
+        assert!(requests.lock().unwrap().contains(&1));
+        view.update(cx, |view, _| {
+            assert_eq!(view.selection.range(), 0..2);
+            assert_eq!(view.scroll_line, 1);
+        });
+    }
+
+    #[gpui::test]
+    fn horizontal_boundary_movement_resets_paged_vertical_column(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::app_shell::theme::apply_dark_theme(cx);
+        });
+        let cache = Rc::new(RefCell::new(DocumentPageCache::new()));
+        let id: DocumentId = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0f2a".parse().unwrap();
+        cache.borrow_mut().insert(
+            slterm_document::PageKey::new(id, 0, 0),
+            "abcdef\nx".to_owned(),
+        );
+        let reader: PageReader = Arc::new(|_| Ok("abcdef\nx".to_owned()));
+        let view = cx.update(|cx| make_view(cache, reader, source_for(&["abcdef\nx"]), cx));
+        view.update(cx, |view, cx| {
+            for motion in [
+                PagedMotion::LineBoundary {
+                    end: true,
+                    select: false,
+                },
+                PagedMotion::Vertical {
+                    down: true,
+                    select: false,
+                },
+                PagedMotion::Horizontal {
+                    left: false,
+                    select: false,
+                },
+                PagedMotion::Vertical {
+                    down: false,
+                    select: false,
+                },
+            ] {
+                view.start_motion(motion, cx);
+            }
+            assert_eq!(view.selection.range(), 1..1);
+            assert_eq!(view.preferred_column, Some(1));
+        });
+    }
+
+    #[gpui::test]
+    fn paged_horizontal_navigation_resumes_after_loading_the_next_page(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::app_shell::theme::apply_dark_theme(cx);
+        });
+        let cache = Rc::new(RefCell::new(DocumentPageCache::new()));
+        let id: DocumentId = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0f2a".parse().unwrap();
+        cache
+            .borrow_mut()
+            .insert(slterm_document::PageKey::new(id, 0, 0), "a".to_owned());
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let recorded = requests.clone();
+        let reader: PageReader = Arc::new(move |page| {
+            recorded.lock().unwrap().push(page);
+            Ok(match page {
+                0 => "a".to_owned(),
+                1 => "b".to_owned(),
+                _ => return Err(io::Error::new(io::ErrorKind::InvalidInput, "页号越界")),
+            })
+        });
+        let view = cx.update(|cx| make_view(cache, reader, source_for(&["a", "b"]), cx));
+        view.update(cx, |view, cx| {
+            view.start_motion(
+                PagedMotion::Horizontal {
+                    left: false,
+                    select: true,
+                },
+                cx,
+            );
+        });
+        cx.run_until_parked();
+
+        assert!(requests.lock().unwrap().contains(&1));
+        view.update(cx, |view, _| {
+            assert_eq!(view.selection.range(), 0..1);
+        });
+
+        let reverse_cache = Rc::new(RefCell::new(DocumentPageCache::new()));
+        reverse_cache
+            .borrow_mut()
+            .insert(slterm_document::PageKey::new(id, 0, 1), "b".to_owned());
+        let reverse_reader: PageReader = Arc::new(|page| {
+            Ok(match page {
+                0 => "a".to_owned(),
+                1 => "b".to_owned(),
+                _ => return Err(io::Error::new(io::ErrorKind::InvalidInput, "页号越界")),
+            })
+        });
+        let reverse =
+            cx.update(|cx| make_view(reverse_cache, reverse_reader, source_for(&["a", "b"]), cx));
+        reverse.update(cx, |view, cx| {
+            view.selection = super::super::source::TextSelection { anchor: 1, head: 1 };
+            view.anchor_line = 0;
+            view.head_line = 0;
+            view.anchor_column = Some(1);
+            view.head_column = Some(1);
+            view.start_motion(
+                PagedMotion::Horizontal {
+                    left: true,
+                    select: true,
+                },
+                cx,
+            );
+        });
+        cx.run_until_parked();
+        reverse.update(cx, |view, _| {
+            assert_eq!(view.selection.anchor, 1);
+            assert_eq!(view.selection.head, 0);
+            assert_eq!(view.selection.range(), 0..1);
+        });
+    }
+
+    #[gpui::test]
+    fn failed_paged_navigation_does_not_resume_after_later_cache_fill(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::app_shell::theme::apply_dark_theme(cx);
+        });
+        let cache = Rc::new(RefCell::new(DocumentPageCache::new()));
+        let id: DocumentId = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0f2a".parse().unwrap();
+        cache
+            .borrow_mut()
+            .insert(slterm_document::PageKey::new(id, 0, 0), "a\n".to_owned());
+        let reader: PageReader = Arc::new(|_| Err(io::Error::other("注入失败")));
+        let view =
+            cx.update(|cx| make_view(cache.clone(), reader, source_for(&["a\n", "b\n"]), cx));
+        view.update(cx, |view, cx| {
+            view.start_motion(
+                PagedMotion::Vertical {
+                    down: true,
+                    select: true,
+                },
+                cx,
+            );
+        });
+        cx.run_until_parked();
+        view.update(cx, |view, _| {
+            assert!(view.failed_pages.contains(&1));
+            assert!(view.pending_motion.is_none());
+            assert_eq!(view.selection.range(), 0..0);
+        });
+
+        cache
+            .borrow_mut()
+            .insert(slterm_document::PageKey::new(id, 0, 1), "b\n".to_owned());
+        view.update(cx, |view, cx| {
+            view.apply_page_result(0, 0, [21; 32], Ok("a\n".to_owned()), cx);
+            assert_eq!(view.selection.range(), 0..0);
+        });
+    }
+
+    #[gpui::test]
+    fn collapsing_select_all_to_the_end_reveals_the_real_column(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::app_shell::theme::apply_dark_theme(cx);
+        });
+        let cache = Rc::new(RefCell::new(DocumentPageCache::new()));
+        let id: DocumentId = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0f2a".parse().unwrap();
+        cache
+            .borrow_mut()
+            .insert(slterm_document::PageKey::new(id, 0, 0), "abcdef".to_owned());
+        let reader: PageReader = Arc::new(|_| Ok("abcdef".to_owned()));
+        let view = cx.update(|cx| make_view(cache, reader, source_for(&["abcdef"]), cx));
+        view.update(cx, |view, cx| {
+            let mut metrics = super::super::layout::LayoutMetrics {
+                bounds: gpui::Bounds::default(),
+                cell_width: px(8.0),
+                line_height: px(20.0),
+            };
+            metrics.bounds.size = gpui::size(px(24.0), px(20.0));
+            *view.layout.borrow_mut() = Some(metrics);
+            view.select_all(cx);
+            view.start_motion(
+                PagedMotion::Horizontal {
+                    left: false,
+                    select: false,
+                },
+                cx,
+            );
+
+            assert_eq!(view.selection.range(), 6..6);
+            assert_eq!(view.head_column, Some(6));
+            assert_eq!(view.scroll_column, 3);
+        });
     }
 
     #[gpui::test]

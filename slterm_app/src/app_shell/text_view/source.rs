@@ -193,6 +193,12 @@ struct PagedLineLocation {
     page: usize,
 }
 
+#[derive(Clone, Copy)]
+enum PagedTarget {
+    Byte(usize),
+    Column(usize),
+}
+
 /// 跨页窗口的增量结果；只保留可见文本与当前跨页字素。
 #[derive(Default)]
 struct PagedWindow {
@@ -200,9 +206,40 @@ struct PagedWindow {
     display_start: Option<usize>,
     byte_start: Option<usize>,
     text: String,
+    target: Option<PagedTarget>,
+    target_column: Option<usize>,
+    target_position: Option<(usize, usize)>,
+    materialize: bool,
+}
+
+struct PagedScan {
+    line: VisibleLine,
+    target_column: Option<usize>,
+    target_position: Option<(usize, usize)>,
 }
 
 impl PagedWindow {
+    fn byte_navigation(target_byte: usize) -> Self {
+        Self {
+            target: Some(PagedTarget::Byte(target_byte)),
+            ..Self::default()
+        }
+    }
+
+    fn column_navigation(target_column: usize) -> Self {
+        Self {
+            target: Some(PagedTarget::Column(target_column)),
+            ..Self::default()
+        }
+    }
+
+    fn painted() -> Self {
+        Self {
+            materialize: true,
+            ..Self::default()
+        }
+    }
+
     fn push(
         &mut self,
         display: &DisplayMap,
@@ -212,26 +249,64 @@ impl PagedWindow {
         columns: &Range<usize>,
     ) -> bool {
         let grapheme_column = self.column;
-        self.column += display.grapheme_width(grapheme, self.column);
+        let byte = line_start + start;
+        let width = display.grapheme_width(grapheme, self.column);
+        match self.target {
+            Some(PagedTarget::Byte(target)) if target == byte => {
+                self.target_column = Some(grapheme_column);
+            }
+            Some(PagedTarget::Column(target)) if self.target_position.is_none() => {
+                if target == grapheme_column {
+                    self.target_position = Some((byte, grapheme_column));
+                } else if target > grapheme_column && target < grapheme_column + width {
+                    let offset = target - grapheme_column;
+                    self.target_position = Some(if offset * 2 < width {
+                        (byte, grapheme_column)
+                    } else {
+                        (byte + grapheme.len(), grapheme_column + width)
+                    });
+                }
+            }
+            _ => {}
+        }
+        self.column += width;
         if self.display_start.is_none() && self.column > columns.start {
             self.display_start = Some(grapheme_column);
-            self.byte_start = Some(line_start + start);
+            self.byte_start = Some(byte);
         }
-        if self.display_start.is_some() {
+        if self.materialize && self.display_start.is_some() {
             self.text.push_str(grapheme);
         }
-        self.column >= columns.end
+        self.target_column.is_some() || self.target_position.is_some() || self.column >= columns.end
     }
 
-    fn finish(self, index: usize, line_start: usize, end: usize) -> VisibleLine {
+    fn finish(self, index: usize, line_start: usize, end: usize) -> PagedScan {
         let display_start = self.display_start.unwrap_or(self.column);
         let byte_start = self.byte_start.unwrap_or(line_start + end);
-        VisibleLine {
-            index,
-            byte_range: byte_start..line_start + end,
-            display_start,
-            display_width: self.column - display_start,
-            text: self.text,
+        let target_column = if matches!(
+            self.target,
+            Some(PagedTarget::Byte(target)) if target == line_start + end
+        ) {
+            Some(self.column)
+        } else {
+            self.target_column
+        };
+        let target_position = match self.target {
+            Some(PagedTarget::Column(_)) => self
+                .target_position
+                .or(Some((line_start + end, self.column))),
+            _ => self.target_position,
+        };
+        PagedScan {
+            line: VisibleLine {
+                index,
+                byte_range: byte_start..line_start + end,
+                display_start,
+                display_width: self.column - display_start,
+                text: self.text,
+            },
+            target_column,
+            target_position,
         }
     }
 }
@@ -335,6 +410,138 @@ impl<'a> PagedTextSource<'a> {
         }
     }
 
+    fn cached_chunk(&mut self, byte: usize) -> Option<(Arc<str>, usize)> {
+        let (page, offset) = self.lines.utf8_page(byte)?;
+        let key = PageKey::new(self.document_id, self.source.source_generation(), page);
+        let text = self.cache.get(&key).or_else(|| {
+            self.missing_pages.insert(page);
+            None
+        })?;
+        Some((text, offset))
+    }
+
+    /// 全局 UTF-8 位置按完整字素移动；跨页上下文只读缓存，不物化整行。
+    pub(crate) fn previous_grapheme_boundary(&mut self, byte: usize) -> Option<usize> {
+        let total = self.lines.total_utf8_bytes();
+        if byte == 0 || byte > total {
+            return None;
+        }
+        let (mut chunk, mut chunk_start) = self.cached_chunk(byte)?;
+        let mut cursor = GraphemeCursor::new(byte, total, true);
+        loop {
+            match cursor.prev_boundary(&chunk, chunk_start) {
+                Ok(boundary) => return boundary.or(Some(0)),
+                Err(GraphemeIncomplete::PrevChunk) => {
+                    let previous = cursor.cur_cursor().checked_sub(1)?;
+                    (chunk, chunk_start) = self.cached_chunk(previous)?;
+                }
+                Err(GraphemeIncomplete::PreContext(end)) => {
+                    let previous = end.checked_sub(1)?;
+                    let (context, start) = self.cached_chunk(previous)?;
+                    cursor.provide_context(&context[..end - start], start);
+                }
+                Err(_) => return None,
+            }
+        }
+    }
+
+    pub(crate) fn next_grapheme_boundary(&mut self, byte: usize) -> Option<usize> {
+        let total = self.lines.total_utf8_bytes();
+        if byte >= total {
+            return None;
+        }
+        let (mut chunk, mut chunk_start) = self.cached_chunk(byte)?;
+        let mut cursor = GraphemeCursor::new(byte, total, true);
+        loop {
+            match cursor.next_boundary(&chunk, chunk_start) {
+                Ok(boundary) => return boundary.or(Some(total)),
+                Err(GraphemeIncomplete::NextChunk) => {
+                    let offset = cursor.cur_cursor();
+                    if offset >= total {
+                        return Some(total);
+                    }
+                    (chunk, chunk_start) = self.cached_chunk(offset)?;
+                }
+                Err(GraphemeIncomplete::PreContext(end)) => {
+                    let previous = end.checked_sub(1)?;
+                    let (context, start) = self.cached_chunk(previous)?;
+                    cursor.provide_context(&context[..end - start], start);
+                }
+                Err(_) => return None,
+            }
+        }
+    }
+
+    fn cached_line(
+        &mut self,
+        index: usize,
+    ) -> Option<(PagedLineLocation, Arc<str>, Range<usize>, bool)> {
+        let (page, local_start, page_offset) = self.lines.location(index)?;
+        let key = PageKey::new(self.document_id, self.source.source_generation(), page);
+        let page_text = self.cache.get(&key).or_else(|| {
+            self.missing_pages.insert(page);
+            None
+        })?;
+        let mut local_byte = 0;
+        for (local, segment) in page_text.split('\n').enumerate().take(local_start + 1) {
+            if local == local_start {
+                let ended = self.lines.line_ends_in_page(page, local)?;
+                return Some((
+                    PagedLineLocation {
+                        index,
+                        byte_start: page_offset + local_byte,
+                        page,
+                    },
+                    page_text.clone(),
+                    local_byte..local_byte + segment.len(),
+                    ended || page + 1 == self.source.index().len(),
+                ));
+            }
+            local_byte += segment.len() + 1;
+        }
+        None
+    }
+
+    fn scan_line(
+        &mut self,
+        index: usize,
+        columns: Range<usize>,
+        target: Option<PagedTarget>,
+    ) -> Option<PagedScan> {
+        let (location, page_text, segment, complete) = self.cached_line(index)?;
+        self.read_window(location, page_text, segment, complete, &columns, target)
+    }
+
+    fn line_start(&mut self, index: usize) -> Option<usize> {
+        self.cached_line(index).map(|line| line.0.byte_start)
+    }
+
+    pub(crate) fn line_byte_range(&mut self, index: usize) -> Option<Range<usize>> {
+        if index >= self.lines.line_count() {
+            return None;
+        }
+        if self.source.index().is_empty() {
+            return (index == 0).then_some(0..0);
+        }
+        let start = self.line_start(index)?;
+        let end = if index + 1 < self.lines.line_count() {
+            self.line_start(index + 1)?.checked_sub(1)?
+        } else {
+            self.lines.total_utf8_bytes()
+        };
+        Some(start..end)
+    }
+
+    pub(crate) fn column_at(&mut self, index: usize, byte: usize) -> Option<usize> {
+        self.scan_line(index, 0..usize::MAX, Some(PagedTarget::Byte(byte)))
+            .and_then(|scan| scan.target_column)
+    }
+
+    pub(crate) fn byte_at_column(&mut self, index: usize, column: usize) -> Option<(usize, usize)> {
+        self.scan_line(index, 0..usize::MAX, Some(PagedTarget::Column(column)))
+            .and_then(|scan| scan.target_position)
+    }
+
     /// 保留字素文本状态跨页扫描；页接缝重建游标并先判边界，避免 RI 预上下文重复计数。
     fn read_window(
         &mut self,
@@ -343,7 +550,8 @@ impl<'a> PagedTextSource<'a> {
         mut segment_range: Range<usize>,
         complete_in_page: bool,
         columns: &Range<usize>,
-    ) -> Option<VisibleLine> {
+        target: Option<PagedTarget>,
+    ) -> Option<PagedScan> {
         let PagedLineLocation {
             index,
             byte_start: line_start,
@@ -362,7 +570,11 @@ impl<'a> PagedTextSource<'a> {
         let mut chunk_start = 0;
         let mut grapheme_start = 0;
         let mut continued_grapheme = String::new();
-        let mut window = PagedWindow::default();
+        let mut window = match target {
+            Some(PagedTarget::Byte(byte)) => PagedWindow::byte_navigation(byte),
+            Some(PagedTarget::Column(column)) => PagedWindow::column_navigation(column),
+            None => PagedWindow::painted(),
+        };
         let mut check_seam = false;
         loop {
             let segment = &page_text[segment_range.clone()];
@@ -589,7 +801,9 @@ impl PagedTextSource<'_> {
                         local_byte..local_byte + segment.len(),
                         ended || page + 1 == self.source.index().len(),
                         &columns,
+                        None,
                     );
+                    let line = line.map(|scan| scan.line);
                     rows.push(
                         line.map_or(VisibleRow::Loading { index: line_index }, VisibleRow::Text),
                     );
@@ -817,6 +1031,54 @@ mod tests {
         assert_eq!(line.text(), "c😀");
         assert_eq!(line.byte_range(), 2..7);
         assert_eq!(line.display_start(), 2);
+    }
+
+    #[test]
+    fn paged_navigation_preserves_zero_width_line_prefixes() {
+        let id = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0f2a".parse().unwrap();
+        let content = "\u{301}A\nx";
+        let pages = PageIndex::new(
+            content.len() as u64,
+            vec![SourceByteRange::new(0, content.len() as u64).unwrap()],
+        )
+        .unwrap();
+        let lines = PagedLineIndex::from_page_stats(&[(1, content.len(), false)]);
+        let source = PagedSource::new(pages, [13; 32], lines);
+        let mut cache = DocumentPageCache::new();
+        cache.insert(PageKey::new(id, 0, 0), content.to_owned());
+        let mut text = PagedTextSource::new(id, &source, &mut cache, DisplayMap::new(4));
+
+        assert_eq!(text.line_byte_range(0), Some(0..3));
+        assert_eq!(text.byte_at_column(0, 0), Some((0, 0)));
+    }
+
+    #[test]
+    fn paged_column_navigation_does_not_materialize_the_target_line() {
+        let id = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0f2a".parse().unwrap();
+        let target_len = 256 * 1024;
+        let content = format!("a\n{}", "b".repeat(target_len));
+        let pages = PageIndex::new(
+            content.len() as u64,
+            vec![SourceByteRange::new(0, content.len() as u64).unwrap()],
+        )
+        .unwrap();
+        let lines = PagedLineIndex::from_page_stats(&[(1, content.len(), false)]);
+        let source = PagedSource::new(pages, [13; 32], lines);
+        let mut cache = DocumentPageCache::new();
+        cache.insert(PageKey::new(id, 0, 0), content);
+        let mut text = PagedTextSource::new(id, &source, &mut cache, DisplayMap::new(4));
+
+        ALLOCATED_BYTES.with(|bytes| bytes.set(0));
+        TRACK_ALLOCATIONS.with(|tracking| tracking.set(true));
+        let position = text.byte_at_column(1, target_len + 10);
+        TRACK_ALLOCATIONS.with(|tracking| tracking.set(false));
+        let allocated = ALLOCATED_BYTES.with(Cell::get);
+
+        assert_eq!(position, Some((target_len + 2, target_len)));
+        assert!(
+            allocated < 64 * 1024,
+            "导航物化目标行分配了 {allocated} 字节"
+        );
     }
 
     #[test]
