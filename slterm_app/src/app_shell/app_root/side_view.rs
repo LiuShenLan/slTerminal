@@ -16,6 +16,9 @@ use slterm_workspace::{
 };
 
 use super::side_view_host::{SideViewControl, SideViewHost};
+use crate::app_shell::text_view::{
+    EditorViewState, EditorViewStateStore, editor_view_state_schema,
+};
 use crate::persistence::workspace_writer::{WorkspaceWriterClient, WorkspaceWriterError};
 
 /// 关闭重开共享的内存恢复事实；启动时由 SQLite 在 GPUI 外预载。
@@ -29,6 +32,7 @@ type SideViewPendingFinalStates = Rc<RefCell<BTreeMap<SideViewId, ViewState>>>;
 pub(crate) struct AppRootPersistence {
     cache: SideViewStateCache,
     registry: Arc<ViewStateRegistry>,
+    editor_views: EditorViewStateStore,
     writer: Option<WorkspaceWriterClient>,
     write_barriers: SideViewWriteBarriers,
     pending_final_states: SideViewPendingFinalStates,
@@ -103,6 +107,30 @@ impl AppRootPersistence {
                 log::warn!("could not restore project snapshot: {error}");
             }
         }
+        let editor_keys = persistence
+            .recovered_project_snapshot
+            .as_ref()
+            .into_iter()
+            .flat_map(|snapshot| snapshot.registry().projects())
+            .flat_map(|project| project.layout().view_keys())
+            .filter(|key| matches!(key, slterm_workspace::ViewKey::Editor { .. }))
+            .collect::<Vec<_>>();
+        for key in editor_keys {
+            match store.view_state(&key, &persistence.registry) {
+                Ok(Some(stored)) => {
+                    match serde_json::from_value::<EditorViewState>(stored.state.into_state()) {
+                        Ok(state) => persistence.editor_views.restore(key, state),
+                        Err(error) => {
+                            log::warn!("could not decode Editor ViewState: {error}");
+                        }
+                    }
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    log::warn!("could not restore Editor ViewState: {error}");
+                }
+            }
+        }
         match store.sidebar_state() {
             Ok(Some(recovery)) => {
                 if !recovery.warnings.is_empty() {
@@ -142,9 +170,12 @@ impl AppRootPersistence {
     }
 
     pub(crate) fn empty(writer: Option<WorkspaceWriterClient>) -> Self {
+        let registry = workspace_view_state_registry();
+        let editor_views = EditorViewStateStore::new(registry.clone(), writer.clone());
         Self {
             cache: Rc::default(),
-            registry: side_view_state_registry(),
+            registry,
+            editor_views,
             writer,
             write_barriers: Rc::default(),
             pending_final_states: Rc::default(),
@@ -161,6 +192,10 @@ impl AppRootPersistence {
 
     pub(super) fn writer_client(&self) -> Option<WorkspaceWriterClient> {
         self.writer.clone()
+    }
+
+    pub(super) fn editor_view_states(&self) -> EditorViewStateStore {
+        self.editor_views.clone()
     }
 
     pub(super) fn store_epoch(&self) -> Option<String> {
@@ -280,6 +315,13 @@ impl AppRootPersistence {
         if !self.project_snapshot_recovery_failed {
             record_submission(writer.save_final_project_snapshot(snapshot));
         }
+        for (key, state) in self.editor_views.final_states() {
+            let result = writer.save_final_view_state(&key, &state);
+            if result.is_ok() {
+                self.editor_views.final_submitted(&key);
+            }
+            record_submission(result);
+        }
         if let Some(error) = first_error {
             Err(error)
         } else {
@@ -297,6 +339,11 @@ impl Drop for AppRootPersistence {
             let key = slterm_workspace::ViewKey::SideView { side_view_id: *id };
             if let Err(error) = writer.save_final_view_state(&key, state) {
                 log::warn!("could not queue deferred final SideView ViewState: {error}");
+            }
+        }
+        for (key, state) in self.editor_views.final_states() {
+            if let Err(error) = writer.save_final_view_state(&key, &state) {
+                log::warn!("could not queue deferred final Editor ViewState: {error}");
             }
         }
         if let Some(state) = &self.pending_final_sidebar
@@ -494,11 +541,11 @@ impl SideViewControl<Entity<SideView>> for SideViewController<'_> {
     }
 }
 
-/// SideView schema 的唯一应用注册点。
-pub(crate) fn side_view_state_registry() -> Arc<ViewStateRegistry> {
+/// 工作区 ViewState schema 的唯一应用注册点。
+pub(crate) fn workspace_view_state_registry() -> Arc<ViewStateRegistry> {
     Arc::new(
-        ViewStateRegistry::new(&[side_view_state_schema()])
-            .expect("SideView schema 封闭注册不得重复"),
+        ViewStateRegistry::new(&[side_view_state_schema(), editor_view_state_schema()])
+            .expect("工作区 ViewState schema 封闭注册不得重复"),
     )
 }
 
@@ -642,7 +689,7 @@ mod side_view_state_persistence_tests {
     fn side_view_load_restores_existing_private_state() {
         let temp = tempfile::tempdir().unwrap();
         let paths = paths(&temp);
-        let registry = side_view_state_registry();
+        let registry = workspace_view_state_registry();
         let persisted = persisted_nav(&registry);
         let mut store = WorkspaceDatabase::open(&paths).unwrap();
         store
@@ -672,7 +719,7 @@ mod side_view_state_persistence_tests {
     fn side_view_load_marks_corrupt_state_write_barrier() {
         let temp = tempfile::tempdir().unwrap();
         let paths = paths(&temp);
-        let registry = side_view_state_registry();
+        let registry = workspace_view_state_registry();
         let persisted = persisted_nav(&registry);
         let mut store = WorkspaceDatabase::open(&paths).unwrap();
         store
@@ -871,7 +918,7 @@ mod side_view_state_persistence_tests {
     fn side_view_queue_full_close_is_submitted_at_shutdown() {
         let temp = tempfile::tempdir().unwrap();
         let paths = paths(&temp);
-        let registry = side_view_state_registry();
+        let registry = workspace_view_state_registry();
         let key = ViewKey::SideView {
             side_view_id: SideViewId::Nav,
         };
@@ -921,7 +968,7 @@ mod side_view_state_persistence_tests {
     fn side_view_successful_reopen_supersedes_deferred_final_state() {
         let temp = tempfile::tempdir().unwrap();
         let paths = paths(&temp);
-        let registry = side_view_state_registry();
+        let registry = workspace_view_state_registry();
         let key = ViewKey::SideView {
             side_view_id: SideViewId::Nav,
         };
@@ -984,7 +1031,7 @@ mod side_view_state_persistence_tests {
     fn side_view_drop_saves_and_reopen_restores_persistent_state() {
         let temp = tempfile::tempdir().unwrap();
         let paths = paths(&temp);
-        let registry = side_view_state_registry();
+        let registry = workspace_view_state_registry();
         let persisted = persisted_nav(&registry);
         let cache = Rc::new(RefCell::new(BTreeMap::from([(
             SideViewId::Nav,
@@ -1043,7 +1090,7 @@ mod side_view_state_persistence_tests {
     fn side_view_recovery_barrier_prevents_default_state_overwrite() {
         let temp = tempfile::tempdir().unwrap();
         let paths = paths(&temp);
-        let registry = side_view_state_registry();
+        let registry = workspace_view_state_registry();
         let persisted = persisted_nav(&registry);
         let mut store = WorkspaceDatabase::open(&paths).unwrap();
         store
@@ -1112,7 +1159,7 @@ mod side_view_gpui_persistence_tests {
     fn side_view_same_update_reopen_uses_latest_state_and_blocks_stale_drop(
         cx: &mut TestAppContext,
     ) {
-        let registry = side_view_state_registry();
+        let registry = workspace_view_state_registry();
         let cache = Rc::new(RefCell::new(BTreeMap::from([(
             SideViewId::Nav,
             nav_state(&registry, 7.0),

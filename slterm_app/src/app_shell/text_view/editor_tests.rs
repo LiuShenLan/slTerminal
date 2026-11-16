@@ -13,6 +13,7 @@ use slterm_document::{
     MergePolicy, TextEdit, TextStateId,
 };
 use slterm_path::{CanonicalPath, ResolvedPath};
+use slterm_workspace::ViewKey;
 use uuid::Uuid;
 
 use super::{
@@ -40,6 +41,22 @@ impl Host {
         text: &str,
         read_only: bool,
         language: Option<LanguageId>,
+        cx: &mut Context<'_, Self>,
+    ) -> Self {
+        Self::configured_with_store(
+            text,
+            read_only,
+            language,
+            super::super::view_state::EditorViewStateStore::transient(),
+            cx,
+        )
+    }
+
+    fn configured_with_store(
+        text: &str,
+        read_only: bool,
+        language: Option<LanguageId>,
+        view_states: super::super::view_state::EditorViewStateStore,
         cx: &mut Context<'_, Self>,
     ) -> Self {
         let id: DocumentId = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0f2a".parse().unwrap();
@@ -100,6 +117,11 @@ impl Host {
                     })
                 }),
                 syntax.clone(),
+                ViewKey::Editor {
+                    project_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b".parse().unwrap(),
+                    document_id: id,
+                },
+                view_states,
                 cx,
             )
         });
@@ -126,6 +148,41 @@ impl Render for Host {
     fn render(&mut self, _: &mut Window, _: &mut Context<'_, Self>) -> impl gpui::IntoElement {
         self.view.clone()
     }
+}
+
+#[gpui::test]
+fn extreme_restored_scroll_does_not_overflow_editor_painting_or_hit_testing(
+    cx: &mut TestAppContext,
+) {
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        crate::app_shell::theme::apply_dark_theme(cx);
+    });
+    let states = super::super::view_state::EditorViewStateStore::transient();
+    let key = ViewKey::Editor {
+        project_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b".parse().unwrap(),
+        document_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0f2a".parse().unwrap(),
+    };
+    states.restore(
+        key,
+        super::super::view_state::EditorViewState::new(0, usize::MAX),
+    );
+    let window = cx.add_window(|_, cx| Host::configured_with_store("abc", false, None, states, cx));
+    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    visual.update(|window, cx| {
+        window.draw(cx).clear(cx);
+    });
+    let view = window.update(cx, |host, _, _| host.view.clone()).unwrap();
+    view.update(cx, |view, _| {
+        *view.layout.borrow_mut() = Some(LayoutMetrics {
+            bounds: Bounds::default(),
+            cell_width: px(8.0),
+            line_height: px(20.0),
+        });
+        let _ = view.byte_for_point(gpui::point(px(0.0), px(0.0)));
+    });
 }
 
 struct SharedHost {
@@ -347,6 +404,11 @@ fn two_painted_views_independently_adopt_a_shared_syntax_tree(cx: &mut TestAppCo
                     })
                 }),
                 syntax,
+                ViewKey::Editor {
+                    project_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b".parse().unwrap(),
+                    document_id: id,
+                },
+                super::super::view_state::EditorViewStateStore::transient(),
                 cx,
             )
         });

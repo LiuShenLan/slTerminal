@@ -13,6 +13,8 @@ pub(crate) use paged::PagedTextView;
 mod source;
 mod syntax;
 pub(crate) use syntax::DocumentSyntax;
+mod view_state;
+pub(crate) use view_state::{EditorViewState, EditorViewStateStore, editor_view_state_schema};
 
 gpui::actions!(
     document_text_view,

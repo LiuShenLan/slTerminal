@@ -769,7 +769,7 @@ fn close_flush_submits_rejected_final_snapshot(cx: &mut TestAppContext) {
 
     let mut store = WorkspaceDatabase::open(&paths).unwrap();
     assert_eq!(store.load_project_snapshot().unwrap(), expected);
-    let registry = super::super::side_view::side_view_state_registry();
+    let registry = super::super::side_view::workspace_view_state_registry();
     assert!(
         store
             .view_state(
@@ -821,7 +821,7 @@ fn close_queue_full_retries_without_external_flush(cx: &mut TestAppContext) {
         });
     });
     let expected_sidebar = root.read_with(cx, |root, _| root.side_views.state().clone());
-    let registry = super::super::side_view::side_view_state_registry();
+    let registry = super::super::side_view::workspace_view_state_registry();
     let key = ViewKey::SideView {
         side_view_id: SideViewId::Nav,
     };
@@ -885,7 +885,7 @@ fn close_retry_reconciles_side_view_with_project_recovery_barrier(cx: &mut TestA
     assert!(persistence.project_snapshot_recovery_failed());
     let (root, mut window, _) = open_root_with_persistence(cx, persistence);
 
-    let registry = super::super::side_view::side_view_state_registry();
+    let registry = super::super::side_view::workspace_view_state_registry();
     let key = ViewKey::SideView {
         side_view_id: SideViewId::Nav,
     };
@@ -963,7 +963,7 @@ fn close_retry_persists_side_view_changes_after_failure(cx: &mut TestAppContext)
         .execute_batch("DROP TRIGGER reject_view_state_write")
         .unwrap();
 
-    let registry = super::super::side_view::side_view_state_registry();
+    let registry = super::super::side_view::workspace_view_state_registry();
     let key = ViewKey::SideView {
         side_view_id: SideViewId::Nav,
     };

@@ -363,6 +363,8 @@ impl AppRoot {
                 .map(|syntax| Rc::new(std::cell::RefCell::new(syntax)))
         });
         let view_syntax = syntax.clone();
+        let view_key = view.clone();
+        let view_states = self.side_view_persistence.editor_view_states();
         let root = cx.entity().downgrade();
         let panel =
             self.install_panel(project_id, view, focus, window, cx, move |window, cx| {
@@ -380,6 +382,8 @@ impl AppRoot {
                             })
                         }),
                         view_syntax,
+                        view_key,
+                        view_states,
                         cx,
                     )
                 });
@@ -442,8 +446,12 @@ impl AppRoot {
             .text_request(document_id, 9)
             .map_err(|_| AppRootError::MissingPanel)?;
         let cache = self.page_cache.clone();
-        self.install_panel(project_id, view, true, window, cx, |_, cx| {
-            let paged = cx.new(|cx| PagedTextView::new(&session, cache, reader, request, cx));
+        let view_key = view.clone();
+        let view_states = self.side_view_persistence.editor_view_states();
+        self.install_panel(project_id, view, true, window, cx, move |_, cx| {
+            let paged = cx.new(|cx| {
+                PagedTextView::new(&session, cache, reader, request, view_key, view_states, cx)
+            });
             let focus_handle = paged.read(cx).focus_handle(cx);
             (PanelContent::Paged(paged), focus_handle)
         })

@@ -22,6 +22,7 @@ use slterm_document::{
     DocumentId, DocumentSession, EditApplyOutcome, EditOrigin, EditTransaction,
     EditTransactionError, MergePolicy, TextEdit, TextStateId,
 };
+use slterm_workspace::ViewKey;
 use uuid::Uuid;
 
 use super::layout::{FontMetricsKey, LayoutCache, LayoutMetrics, TextLayoutKey, ThemeFingerprint};
@@ -31,6 +32,7 @@ use super::metrics::{
 };
 use super::source::{RopeTextSource, TextSelection};
 use super::syntax::{DocumentSyntax, capture_color};
+use super::view_state::{EditorViewState, EditorViewStateLease, EditorViewStateStore};
 use super::{SaveFile, SelectDown, SelectLeft, SelectRight, SelectUp};
 
 /// 一次同步提交成功后回投的只读正文快照。
@@ -226,6 +228,9 @@ impl EventEmitter<DocumentTextEvent> for DocumentTextView {}
 /// Document 的专用文本视图；Rope 是不可变展示快照，修改只发 core 事务。
 pub(crate) struct DocumentTextView {
     document_id: DocumentId,
+    view_lease: EditorViewStateLease,
+    view_states: EditorViewStateStore,
+    view_state_dirty: bool,
     text: Rope,
     revision: u64,
     text_state: TextStateId,
@@ -259,10 +264,24 @@ impl DocumentTextView {
         session: &DocumentSession,
         edit_sink: DocumentEditSink,
         syntax: Option<Rc<RefCell<DocumentSyntax>>>,
+        view_key: ViewKey,
+        view_states: EditorViewStateStore,
         cx: &mut Context<'_, Self>,
     ) -> Self {
+        let restored = view_states.state(&view_key);
+        let view_lease = view_states.lease(&view_key);
+        let scroll_line = restored.scroll_line().min(
+            session
+                .text()
+                .expect("Paged 不进入 Rope 编辑器")
+                .len_lines(LineType::LF)
+                - 1,
+        );
         let mut view = Self {
             document_id,
+            view_lease,
+            view_states,
+            view_state_dirty: false,
             text: session.text().expect("Paged 不进入 Rope 编辑器").clone(),
             revision: session.text_revision(),
             text_state: session.current_state(),
@@ -278,8 +297,8 @@ impl DocumentTextView {
             selection: TextSelection { anchor: 0, head: 0 },
             preferred_column: None,
             marked_range: None,
-            scroll_line: 0,
-            scroll_column: 0,
+            scroll_line,
+            scroll_column: restored.scroll_column(),
             wheel_remainder: 0.0,
             mouse_anchor: None,
             focus: cx.focus_handle().tab_stop(true),
@@ -332,6 +351,23 @@ impl DocumentTextView {
                 }
             }
         }));
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn set_scroll_for_test(&mut self, line: usize, column: usize) {
+        self.scroll_line = line;
+        self.scroll_column = column;
+        self.persist_view_state();
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn scroll_state_for_test(&self) -> (usize, usize, DocumentId, Range<usize>) {
+        (
+            self.scroll_line,
+            self.scroll_column,
+            self.document_id,
+            self.selection.range(),
+        )
     }
 
     #[cfg(all(test, feature = "gpui-test-support"))]
@@ -418,9 +454,13 @@ impl DocumentTextView {
         self.text_state = snapshot.text_state;
         self.read_only = snapshot.read_only;
         self.mouse_anchor = None;
+        let previous_scroll_line = self.scroll_line;
         self.scroll_line = self
             .scroll_line
             .min(self.text.len_lines(LineType::LF).saturating_sub(1));
+        if self.scroll_line != previous_scroll_line {
+            self.persist_view_state();
+        }
     }
 
     /// 编辑可能把相邻字符合并为一个字素；最终正文决定可用的瞬态边界。
@@ -799,7 +839,16 @@ impl DocumentTextView {
         self.preferred_column = Some(preferred);
     }
 
+    fn persist_view_state(&mut self) {
+        self.view_state_dirty = true;
+        self.view_states.checkpoint(
+            &self.view_lease,
+            EditorViewState::new(self.scroll_line, self.scroll_column),
+        );
+    }
+
     fn ensure_cursor_visible(&mut self) {
+        let previous = (self.scroll_line, self.scroll_column);
         let Some(metrics) = self.metrics() else {
             return;
         };
@@ -827,8 +876,11 @@ impl DocumentTextView {
         let visible_columns = metrics.visible_whole_columns();
         if column < self.scroll_column {
             self.scroll_column = column;
-        } else if column > self.scroll_column + visible_columns {
+        } else if column > self.scroll_column.saturating_add(visible_columns) {
             self.scroll_column = column - visible_columns;
+        }
+        if previous != (self.scroll_line, self.scroll_column) {
+            self.persist_view_state();
         }
     }
 
@@ -841,12 +893,12 @@ impl DocumentTextView {
         let line = RopeTextSource::new(&self.text, map)
             .visible_line_windows(
                 row..row + 1,
-                self.scroll_column..self.scroll_column + metrics.visible_columns(),
+                self.scroll_column..self.scroll_column.saturating_add(metrics.visible_columns()),
             )
             .into_iter()
             .next()?;
         let viewport_column = (x / metrics.cell_width).round() as usize;
-        let target_column = self.scroll_column + viewport_column;
+        let target_column = self.scroll_column.saturating_add(viewport_column);
         let local = map.byte_at_column_from(line.text(), target_column, line.display_start())?;
         Some(line.byte_range().start + local)
     }
@@ -921,6 +973,7 @@ impl DocumentTextView {
         self.wheel_remainder += pixels;
         let lines = (self.wheel_remainder / metrics.line_height.as_f32().max(1.0)).trunc() as i32;
         self.wheel_remainder -= lines as f32 * metrics.line_height.as_f32();
+        let previous = self.scroll_line;
         if lines > 0 {
             self.scroll_line = self.scroll_line.saturating_sub(lines as usize);
         } else if lines < 0 {
@@ -928,6 +981,9 @@ impl DocumentTextView {
                 .scroll_line
                 .saturating_add(lines.unsigned_abs() as usize)
                 .min(self.text.len_lines(LineType::LF) - 1);
+        }
+        if self.scroll_line != previous {
+            self.persist_view_state();
         }
         cx.notify();
     }
@@ -940,6 +996,14 @@ impl DocumentTextView {
 impl Focusable for DocumentTextView {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus.clone()
+    }
+}
+
+impl Drop for DocumentTextView {
+    fn drop(&mut self) {
+        if self.view_state_dirty {
+            self.persist_view_state();
+        }
     }
 }
 
@@ -1045,7 +1109,7 @@ impl EntityInputHandler for DocumentTextView {
         let line = RopeTextSource::new(&self.text, DisplayMap::new(4))
             .visible_line_windows(
                 row..row + 1,
-                self.scroll_column..self.scroll_column + metrics.visible_columns(),
+                self.scroll_column..self.scroll_column.saturating_add(metrics.visible_columns()),
             )
             .into_iter()
             .next()?;
@@ -1179,7 +1243,7 @@ impl DocumentTextView {
                 let lines = RopeTextSource::new(&text, map)
                     .visible_line_windows(
                         scroll_line..scroll_line + count,
-                        scroll_column..scroll_column + metrics.visible_columns(),
+                        scroll_column..scroll_column.saturating_add(metrics.visible_columns()),
                     )
                     .into_iter()
                     .map(|line| {

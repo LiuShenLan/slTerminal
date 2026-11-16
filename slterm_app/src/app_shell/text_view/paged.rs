@@ -20,10 +20,12 @@ use slterm_document::{
     DocumentId, DocumentPageCache, DocumentSession, DocumentTextRequest, PageKey, PagedSource,
     TextStateId,
 };
+use slterm_workspace::ViewKey;
 
 use super::layout::{FontMetricsKey, LayoutCache, LayoutMetrics, TextLayoutKey, ThemeFingerprint};
 use super::metrics::DisplayMap;
 use super::source::{PagedTextSource, TextSelection, VisibleLine, VisibleRow};
+use super::view_state::{EditorViewState, EditorViewStateLease, EditorViewStateStore};
 use super::{SelectDown, SelectLeft, SelectRight, SelectUp};
 use crate::app_shell::paged_document::{PageReader, PagedReaderChunks};
 
@@ -52,6 +54,9 @@ type PaintedLines = Rc<RefCell<Vec<(usize, Option<String>)>>>;
 /// 只读分页文本视图；正文只来自真实 PagedSource 与共享页缓存。
 pub(crate) struct PagedTextView {
     document_id: DocumentId,
+    view_lease: EditorViewStateLease,
+    view_states: EditorViewStateStore,
+    view_state_dirty: bool,
     source: PagedSource,
     text_state: TextStateId,
     request: DocumentTextRequest,
@@ -97,6 +102,8 @@ impl PagedTextView {
         cache: Rc<RefCell<DocumentPageCache>>,
         reader: PageReader,
         request: DocumentTextRequest,
+        view_key: ViewKey,
+        view_states: EditorViewStateStore,
         cx: &mut Context<'_, Self>,
     ) -> Self {
         let source = session
@@ -108,8 +115,16 @@ impl PagedTextView {
             request.source_generation(),
             Some(source.source_generation())
         );
+        let restored = view_states.state(&view_key);
+        let view_lease = view_states.lease(&view_key);
+        let scroll_line = restored
+            .scroll_line()
+            .min(source.line_index().line_count().saturating_sub(1));
         Self {
             document_id: session.id(),
+            view_lease,
+            view_states,
+            view_state_dirty: false,
             source,
             text_state: session.current_state(),
             request,
@@ -131,8 +146,8 @@ impl PagedTextView {
             failed_pages: BTreeSet::new(),
             tasks: BTreeMap::new(),
             closed: false,
-            scroll_line: 0,
-            scroll_column: 0,
+            scroll_line,
+            scroll_column: restored.scroll_column(),
             wheel_remainder: 0.0,
             layout: Rc::default(),
             layout_cache: Rc::default(),
@@ -146,6 +161,16 @@ impl PagedTextView {
     #[cfg(all(test, feature = "gpui-test-support"))]
     pub(crate) fn painted_lines_for_test(&self) -> Vec<(usize, Option<String>)> {
         self.painted_lines.borrow().clone()
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn scroll_state_for_test(&self) -> (usize, usize, Range<usize>, bool) {
+        (
+            self.scroll_line,
+            self.scroll_column,
+            self.selection.range(),
+            self.pending_motion.is_some(),
+        )
     }
 
     #[cfg(all(test, feature = "gpui-test-support"))]
@@ -466,7 +491,16 @@ impl PagedTextView {
         cx.notify();
     }
 
+    fn persist_view_state(&mut self) {
+        self.view_state_dirty = true;
+        self.view_states.checkpoint(
+            &self.view_lease,
+            EditorViewState::new(self.scroll_line, self.scroll_column),
+        );
+    }
+
     fn ensure_cursor_visible(&mut self) {
+        let previous = (self.scroll_line, self.scroll_column);
         let Some(metrics) = *self.layout.borrow() else {
             return;
         };
@@ -479,13 +513,19 @@ impl PagedTextView {
             self.scroll_line = self.head_line + 1 - visible_rows;
         }
         let Some(column) = self.head_column else {
+            if previous != (self.scroll_line, self.scroll_column) {
+                self.persist_view_state();
+            }
             return;
         };
         let visible_columns = metrics.visible_whole_columns();
         if column < self.scroll_column {
             self.scroll_column = column;
-        } else if column > self.scroll_column + visible_columns {
+        } else if column > self.scroll_column.saturating_add(visible_columns) {
             self.scroll_column = column - visible_columns;
+        }
+        if previous != (self.scroll_line, self.scroll_column) {
+            self.persist_view_state();
         }
     }
 
@@ -500,13 +540,13 @@ impl PagedTextView {
         let row = source
             .visible_line_windows(
                 row..row + 1,
-                self.scroll_column..self.scroll_column + metrics.visible_columns(),
+                self.scroll_column..self.scroll_column.saturating_add(metrics.visible_columns()),
             )
             .into_iter()
             .next()?;
         let line = row.as_text()?;
         let viewport_column = (x / metrics.cell_width).round() as usize;
-        let target_column = self.scroll_column + viewport_column;
+        let target_column = self.scroll_column.saturating_add(viewport_column);
         let local = map.byte_at_column_from(line.text(), target_column, line.display_start())?;
         let column = map.column_at_from(line.text(), local, line.display_start())?;
         Some(PagedCursor {
@@ -591,6 +631,7 @@ impl PagedTextView {
         self.wheel_remainder += pixels;
         let lines = (self.wheel_remainder / metrics.line_height.as_f32().max(1.0)).trunc() as i32;
         self.wheel_remainder -= lines as f32 * metrics.line_height.as_f32();
+        let previous = self.scroll_line;
         if lines > 0 {
             self.scroll_line = self.scroll_line.saturating_sub(lines as usize);
         } else if lines < 0 {
@@ -598,6 +639,9 @@ impl PagedTextView {
                 .scroll_line
                 .saturating_add(lines.unsigned_abs() as usize)
                 .min(self.source.line_index().line_count().saturating_sub(1));
+        }
+        if self.scroll_line != previous {
+            self.persist_view_state();
         }
         if lines != 0 {
             cx.notify();
@@ -682,6 +726,14 @@ impl PagedTextView {
             shaped
         });
         (shaped, line)
+    }
+}
+
+impl Drop for PagedTextView {
+    fn drop(&mut self) {
+        if self.view_state_dirty {
+            self.persist_view_state();
+        }
     }
 }
 
@@ -782,7 +834,7 @@ impl Render for PagedTextView {
                         PagedTextSource::new(document_id, &source, &mut cache, DisplayMap::new(4));
                     let rows = text.visible_line_windows(
                         scroll_line..scroll_line + count,
-                        scroll_column..scroll_column + columns,
+                        scroll_column..scroll_column.saturating_add(columns),
                     );
                     let missing = text.missing_pages().iter().copied().collect::<Vec<_>>();
                     (rows, missing)
@@ -1070,6 +1122,22 @@ mod tests {
         source: PagedSource,
         cx: &mut gpui::App,
     ) -> Entity<PagedTextView> {
+        make_view_with_store(
+            cache,
+            reader,
+            source,
+            super::super::view_state::EditorViewStateStore::transient(),
+            cx,
+        )
+    }
+
+    fn make_view_with_store(
+        cache: Rc<RefCell<DocumentPageCache>>,
+        reader: PageReader,
+        source: PagedSource,
+        view_states: super::super::view_state::EditorViewStateStore,
+        cx: &mut gpui::App,
+    ) -> Entity<PagedTextView> {
         let id: DocumentId = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0f2a".parse().unwrap();
         let mut registry = DocumentRegistry::new();
         registry
@@ -1086,7 +1154,20 @@ mod tests {
             )
             .unwrap();
         let request = registry.text_request(id, 0).unwrap();
-        cx.new(|cx| PagedTextView::new(registry.session(id).unwrap(), cache, reader, request, cx))
+        cx.new(|cx| {
+            PagedTextView::new(
+                registry.session(id).unwrap(),
+                cache,
+                reader,
+                request,
+                slterm_workspace::ViewKey::Editor {
+                    project_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b".parse().unwrap(),
+                    document_id: id,
+                },
+                view_states,
+                cx,
+            )
+        })
     }
 
     struct Host {
@@ -1121,6 +1202,61 @@ mod tests {
         ) -> impl gpui::IntoElement {
             self.view.clone()
         }
+    }
+
+    #[gpui::test]
+    fn paged_view_restores_scroll_state_without_transients(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::app_shell::theme::apply_dark_theme(cx);
+        });
+        let id: DocumentId = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0f2a".parse().unwrap();
+        let key = slterm_workspace::ViewKey::Editor {
+            project_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b".parse().unwrap(),
+            document_id: id,
+        };
+        let states = super::super::view_state::EditorViewStateStore::transient();
+        states.restore(key, super::super::view_state::EditorViewState::new(3, 4));
+        let cache = Rc::new(RefCell::new(DocumentPageCache::new()));
+        let reader: PageReader = Arc::new(|_| Ok("unused\n".to_owned()));
+        let view = cx.update(|cx| {
+            make_view_with_store(cache, reader, source_for(&["0\n1\n2\n3\n4\n"]), states, cx)
+        });
+        view.update(cx, |view, _| {
+            assert_eq!(view.scroll_state_for_test(), (3, 4, 0..0, false));
+        });
+    }
+
+    #[gpui::test]
+    fn extreme_restored_scroll_does_not_overflow_paged_hit_testing(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::app_shell::theme::apply_dark_theme(cx);
+        });
+        let id: DocumentId = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0f2a".parse().unwrap();
+        let states = super::super::view_state::EditorViewStateStore::transient();
+        states.restore(
+            slterm_workspace::ViewKey::Editor {
+                project_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b".parse().unwrap(),
+                document_id: id,
+            },
+            super::super::view_state::EditorViewState::new(0, usize::MAX),
+        );
+        let cache = Rc::new(RefCell::new(DocumentPageCache::new()));
+        cache
+            .borrow_mut()
+            .insert(slterm_document::PageKey::new(id, 0, 0), "abc".to_owned());
+        let reader: PageReader = Arc::new(|_| Ok("abc".to_owned()));
+        let view =
+            cx.update(|cx| make_view_with_store(cache, reader, source_for(&["abc"]), states, cx));
+        view.update(cx, |view, _| {
+            *view.layout.borrow_mut() = Some(super::super::layout::LayoutMetrics {
+                bounds: gpui::Bounds::default(),
+                cell_width: px(8.0),
+                line_height: px(20.0),
+            });
+            let _ = view.byte_for_point(gpui::point(px(0.0), px(0.0)));
+        });
     }
 
     #[gpui::test]

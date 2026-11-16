@@ -1,5 +1,6 @@
 //! Document 在 AppRoot 的真实打开、跨项目身份与失败原子性。
 
+use super::close::flush_when_ready;
 use super::*;
 
 pub(super) fn open_document(
@@ -963,6 +964,73 @@ fn integration_document_global_identity(cx: &mut TestAppContext) {
     assert_eq!(second, first);
     assert_eq!(root.read_with(cx, |root, _| root.documents.len()), 1);
     assert_eq!(editor_text(&root, cx, PROJECT_B, second), "shared body");
+}
+
+#[gpui::test]
+fn editor_scroll_view_state_survives_restart_and_clears_selection(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    let file = project.join("scroll.txt");
+    std::fs::write(&file, format!("{}\n1\n2\n3\n4\n5\n", "a".repeat(80))).unwrap();
+    let file = CanonicalPath::new(dunce::canonicalize(&file).unwrap()).unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let (events, _event_rx) = std::sync::mpsc::sync_channel(64);
+    let runtime = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
+    let persistence =
+        AppRootPersistence::load_with_previous_run(&paths, Some(runtime.client()), None);
+    let (root, mut window, _) = open_root_with_persistence(cx, persistence);
+    add_project(&root, &mut window, PROJECT_A, project.to_str().unwrap());
+    open_document(&root, &mut window, PROJECT_A, GROUP_A, file);
+    let editor = root.read_with(cx, |root, cx| {
+        root.projects[&project_id(PROJECT_A)]
+            .read(cx)
+            .panels
+            .values()
+            .find_map(|panel| panel.editor().cloned())
+            .unwrap()
+    });
+    window.update(|window, cx| {
+        editor.update(cx, |view, cx| {
+            gpui::EntityInputHandler::set_selected_text_range(view, 0..80, window, cx);
+            view.set_scroll_for_test(3, 4);
+        });
+    });
+    flush_when_ready(&runtime.client());
+    let (line, column, document, selection) =
+        editor.read_with(cx, |view, _| view.scroll_state_for_test());
+    assert!(line > 0);
+    assert!(column > 0);
+    assert_eq!(selection, 0..80);
+    let key = ViewKey::Editor {
+        project_id: project_id(PROJECT_A),
+        document_id: document,
+    };
+
+    window.update(|window, _| window.remove_window());
+    drop(root);
+    drop(window);
+    cx.run_until_parked();
+    flush_when_ready(&runtime.client());
+    let persisted =
+        AppRootPersistence::load_with_previous_run(&paths, Some(runtime.client()), None);
+    let (root, _window, _) = open_root_with_persistence(cx, persisted);
+    let restored = root.read_with(cx, |root, cx| {
+        let panel = root
+            .panel_for_view(project_id(PROJECT_A), &key, cx)
+            .unwrap();
+        let panel = root.projects[&project_id(PROJECT_A)]
+            .read(cx)
+            .panels
+            .get(&panel)
+            .unwrap();
+        let editor = panel.editor().unwrap().read(cx);
+        editor.scroll_state_for_test()
+    });
+    assert_eq!(restored.0, line);
+    assert_eq!(restored.1, column);
+    assert_eq!(restored.3, 0..0);
+    runtime.shutdown(ControlPlaneCleanup::Succeeded).unwrap();
 }
 
 #[gpui::test]

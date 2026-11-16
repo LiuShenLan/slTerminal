@@ -8,7 +8,7 @@ use slterm_workspace::{
 
 use super::commands::AppRootError;
 use super::project_view::ProjectView;
-use super::side_view::side_view_state_registry;
+use super::side_view::workspace_view_state_registry;
 use super::task_service::{CancellationToken, TaskId};
 use super::terminal_close::{PtyStopObservation, close_fingerprint, same_close_fact};
 use super::{AppRoot, SideViewId};
@@ -274,6 +274,9 @@ impl AppRoot {
             .state_committed(attempt)
             .map_err(|_| AppRootError::ProjectCloseState)?;
         close.persisted = committed;
+        self.side_view_persistence
+            .editor_view_states()
+            .remove_project(id);
         self.commit_project_snapshot(candidate, cx);
         if was_active && let Some(next_active) = next_active {
             self.restore_project_panels(next_active, window, cx);
@@ -564,7 +567,8 @@ impl AppRoot {
             };
             (writer, close.persisted.clone(), attempt)
         };
-        let response = match writer.cleanup_project_close(&current, side_view_state_registry()) {
+        let response = match writer.cleanup_project_close(&current, workspace_view_state_registry())
+        {
             Ok(response) => response,
             Err(error) => {
                 if let Some(close) = self.project_closes.get_mut(&id) {

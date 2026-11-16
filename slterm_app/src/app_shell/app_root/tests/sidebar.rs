@@ -1721,7 +1721,7 @@ fn production_sidebar_button_replaces_visible_view(cx: &mut TestAppContext) {
     let temp = tempfile::tempdir().unwrap();
     let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
     let writer = WorkspaceWriter::start(paths.clone()).unwrap();
-    let registry = super::super::side_view::side_view_state_registry();
+    let registry = super::super::side_view::workspace_view_state_registry();
     let persistence = AppRootPersistence::load(&paths, Some(writer.client()));
     let (_root, mut window, _) = open_root_with_persistence(cx, persistence);
     draw_frame(&mut window);
