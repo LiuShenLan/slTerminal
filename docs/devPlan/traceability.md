@@ -82,7 +82,7 @@
 | 单实例与 Runtime | [Runtime](design/runtime.md)、[生命周期](design/lifecycle.md)、[工作区](design/workspace.md) | `integration_single_instance_runtime_parity` | 待实现 |
 | Runtime 非交互关闭 | [Runtime](design/runtime.md)、[生命周期](design/lifecycle.md) | `integration_runtime_noninteractive_close` | 待实现 |
 | Runtime 凭据 | [Runtime](design/runtime.md)、[设置与恢复](design/settings-recovery.md) | `integration_runtime_credential_boundaries` | 待实现 |
-| 补全可信边界 | [终端](design/terminal.md) | `integration_completion_trust_boundary` | 待实现 |
+| 补全可信边界 | [终端](design/terminal.md) | `integration_completion_trust_boundary` | 已自动化 |
 | 本地学习数据 | [终端](design/terminal.md)、[持久化](design/persistence.md) | `integration_local_learning_data` | 已自动化 |
 | 终端搜索 | [终端](design/terminal.md) | `integration_terminal_search` | 待实现 |
 | Commit 回滚 | [文件与 Git](design/files-git.md) | `integration_commit_rollback` | 待实现 |
@@ -258,7 +258,7 @@
 | 存活 PTY 达上限时拒绝新启动且记录不丢 | `terminal_live_pty_limit` | 已自动化 |
 | 隐藏期间持续输出重新可见仍连续且只显示新画面 | `terminal_hidden_output_backpressure` | 已自动化 |
 | 不可信镜像不补全不采集且接受候选不自动执行 | `terminal_trusted_line_completion_gate` | 已自动化 |
-| cwd 变化丢弃旧补全且单来源失败不阻塞其他来源 | `completion_generation_and_source_failure` | 待实现 |
+| cwd 变化丢弃旧补全且单来源失败不阻塞其他来源 | `completion_generation_and_source_failure` | 已自动化 |
 | 清空学习同时取消待写并清除内存 | `learning_clear_cancels_pending_writes` | 已自动化 |
 | 回滚搜索只读且不向 PTY 写搜索字节 | `terminal_search_is_read_only` | 待实现 |
 | 非聚焦或隐藏项目 OSC 52 未授权时不改剪贴板 | `terminal_osc52_authorization` | 待实现 |

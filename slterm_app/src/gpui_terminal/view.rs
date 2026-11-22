@@ -497,6 +497,10 @@ impl TerminalView {
             TermEvent::InlineImage { .. } => {}
             TermEvent::UserVar { .. } => {}
         }
+        if cwd_changed {
+            // cwd 属于补全请求身份；旧目录候选与后台结果都必须失效。
+            self.refresh_suggestion(cx);
+        }
     }
 
     /// 测试专用:把一条终端事件喂进事件白集(生产入口 = 会话泵)。

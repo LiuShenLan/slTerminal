@@ -296,6 +296,56 @@ fn popup_navigation_and_accept_edit_the_line_without_submitting(cx: &mut TestApp
     assert_eq!(bytes, selected.edit.insert().as_bytes(), "只写候选余量");
 }
 
+/// cwd 是请求身份：Git 来源失败时路径仍可用，目录变化必须替换旧候选。
+#[gpui::test]
+fn completion_generation_and_source_failure(cx: &mut TestAppContext) {
+    let first = tempfile::tempdir().unwrap();
+    let second = tempfile::tempdir().unwrap();
+    std::fs::write(first.path().join("feature-a.txt"), b"a").unwrap();
+    std::fs::write(second.path().join("feature-b.txt"), b"b").unwrap();
+    let (terminal, mut window, _rx, _registry) = open(cx, CompletionStyle::Popup, true);
+    terminal.update_in(&mut window, |view, _, _| {
+        view.cwd = first.path().to_string_lossy().into_owned();
+        view.exec_context = Some(crate::completion::PaneExecContext::from_pty_options(
+            &slterm_terminal::tty::Options {
+                working_directory: Some(first.path().to_owned()),
+                shell: Some(slterm_terminal::tty::Shell::new(
+                    "cmd.exe".into(),
+                    Vec::new(),
+                )),
+                ..Default::default()
+            },
+        ));
+    });
+    let inserts = |view: &TerminalView| {
+        view.suggest
+            .completion_items
+            .iter()
+            .map(|item| item.edit.insert().to_owned())
+            .collect::<Vec<_>>()
+    };
+
+    type_text(&terminal, &mut window, "git checkout feature-");
+    assert!(
+        terminal.read_with(&window, |view, _| inserts(view).contains(&"a.txt".into())),
+        "非 Git 目录只移除 Git 来源，不得阻塞路径候选"
+    );
+
+    terminal.update_in(&mut window, |view, _, cx| {
+        view.feed_event_for_test(
+            slterm_terminal::event::Event::CwdReport(second.path().to_string_lossy().into_owned()),
+            cx,
+        );
+    });
+    window.run_until_parked();
+    let items = terminal.read_with(&window, |view, _| inserts(view));
+    assert!(
+        items.contains(&"b.txt".into()),
+        "新 cwd 必须重新计算: {items:?}"
+    );
+    assert!(!items.contains(&"a.txt".into()), "旧 cwd 候选不得残留");
+}
+
 /// 可信门控：回显之外的编辑关闭补全；无 Start 或被取消的执行不采集；
 /// 接受候选只编辑当前行，不产生 Enter 或执行记录。
 #[gpui::test]
@@ -374,6 +424,40 @@ fn terminal_trusted_line_completion_gate(cx: &mut TestAppContext) {
     assert_eq!(bytes, b"ommand".to_vec());
     assert!(!bytes.contains(&b'\r'), "接受候选不得自动执行");
     assert!(submitted.borrow().is_empty());
+}
+
+/// 集成边界：可信候选只编辑；Readline 接管后同一来源不得复活或吞键。
+#[gpui::test]
+fn integration_completion_trust_boundary(cx: &mut TestAppContext) {
+    let command = "integration-trusted-command";
+    let (terminal, mut window, rx, _registry) =
+        open_with_history(cx, CompletionStyle::Popup, true, &[command]);
+    type_text(&terminal, &mut window, "integration-trusted");
+    let _ = pty_bytes(&rx);
+    assert!(terminal.read_with(&window, |view, _| !view.suggest.completion_items.is_empty()));
+
+    press(&terminal, &mut window, key("down"));
+    press(&terminal, &mut window, key("enter"));
+    assert_eq!(
+        pty_bytes(&rx),
+        command.as_bytes()["integration-trusted".len()..]
+    );
+    assert_eq!(
+        terminal.read_with(&window, |view, _| view.suggest_line().to_owned()),
+        command
+    );
+
+    press(&terminal, &mut window, key("left"));
+    type_text(&terminal, &mut window, "x");
+    let _ = pty_bytes(&rx);
+    assert!(
+        terminal.read_with(&window, |view, _| {
+            view.suggest.completion_items.is_empty() && view.suggest.suggestion.is_empty()
+        }),
+        "Readline 失效后不得继续呈现候选"
+    );
+    press(&terminal, &mut window, key("tab"));
+    assert_eq!(pty_bytes(&rx), b"\t", "Tab 字节必须交还终端");
 }
 
 /// 原文或输入代次失配的旧候选不得产生任何 PTY 副作用。

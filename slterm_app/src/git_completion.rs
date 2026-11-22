@@ -6,13 +6,13 @@
 use slterm_completions::Suggestion;
 use slterm_completions::semantic::{Context, Source, TrackingMode};
 
-use crate::completion::metadata::Execution;
+use crate::completion::PaneExecContext;
 use crate::git::{GitFacade, inferred_tracking_name};
 
 /// 应用层已证明参数角色与执行作用域,这里只做有界发现与候选投射。
 pub(crate) fn complete_available(
     facade: &GitFacade,
-    execution: &Execution,
+    execution: &PaneExecContext,
     cwd: &str,
     context: &Context,
     cancelled: &dyn Fn() -> bool,
@@ -174,7 +174,7 @@ pub(crate) fn complete_available(
 #[cfg(test)]
 fn complete(
     cache: &GitFacade,
-    execution: &Execution,
+    execution: &PaneExecContext,
     cwd: &str,
     context: &Context,
     cancelled: &dyn Fn() -> bool,
@@ -185,7 +185,6 @@ fn complete(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::suggest::SuggestEnv;
 
     pub(crate) fn retain_snapshot_for_test(facade: &GitFacade) {
         facade.retain_snapshot_for_test();
@@ -234,16 +233,11 @@ pub(crate) mod tests {
         directory
     }
 
-    fn test_execution(cwd: &std::path::Path) -> Execution {
-        Execution::Process {
-            context: crate::completion::PaneExecContext::from_pty_options(
-                &slterm_terminal::tty::Options {
-                    working_directory: Some(cwd.to_owned()),
-                    ..Default::default()
-                },
-            ),
-            scope: SuggestEnv::Local,
-        }
+    fn test_execution(cwd: &std::path::Path) -> PaneExecContext {
+        PaneExecContext::from_pty_options(&slterm_terminal::tty::Options {
+            working_directory: Some(cwd.to_owned()),
+            ..Default::default()
+        })
     }
 
     #[test]

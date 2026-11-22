@@ -11,7 +11,7 @@ use crate::suggest::{self, Input, SuggestEnv, SuggestSources};
 use slterm_completions::command_context::ShellSyntax;
 use slterm_completions::semantic::{Context as SemanticContext, Source};
 
-// 执行元数据：git_completion 复用同一 `Execution` 形态，故 crate 内可见。
+// PTY 启动环境冻结在 `PaneExecContext`，后台 Git 只读面复用同一事实。
 pub(crate) mod metadata;
 pub(crate) mod paths;
 mod project_scripts;
@@ -136,16 +136,17 @@ impl Session {
                     | Source::Tracking { .. }
             )
         }) {
-            metadata::Execution::from_scope(env, execution)
-                .map(|execution| (self.git.clone(), execution))
+            let execution = execution.cloned().unwrap_or_else(|| {
+                PaneExecContext::from_pty_options(&slterm_terminal::tty::Options::default())
+            });
+            Some((self.git.clone(), execution))
         } else {
             None
         };
         let scripts = if semantic.as_ref().is_some_and(|context| {
             matches!(context.source, Source::ProjectScripts | Source::Workspaces)
         }) {
-            metadata::Execution::from_scope(env, execution)
-                .map(|execution| (self.scripts.clone(), execution))
+            Some(self.scripts.clone())
         } else {
             None
         };
@@ -172,33 +173,19 @@ pub(crate) struct Request {
     line: String,
     cursor: usize,
     style: crate::suggest::CompletionStyle,
-    git: Option<(Arc<crate::git::GitFacade>, metadata::Execution)>,
+    git: Option<(Arc<crate::git::GitFacade>, PaneExecContext)>,
     semantic: Option<SemanticContext>,
-    scripts: Option<(Arc<project_scripts::Cache>, metadata::Execution)>,
+    scripts: Option<Arc<project_scripts::Cache>>,
     syntax: ShellSyntax,
     learning: crate::learning::LearningDataSnapshot,
     input_revision: u64,
 }
 
 impl Request {
-    pub(crate) fn calculate(mut self, cancellation: &Cancellation) -> Candidates {
+    pub(crate) fn calculate(self, cancellation: &Cancellation) -> Candidates {
         if cancellation.is_cancelled() || self.semantic.is_none() && self.cursor != self.line.len()
         {
             return Candidates::default();
-        }
-        if self
-            .git
-            .as_mut()
-            .is_some_and(|(_, execution)| !execution.prepare())
-        {
-            self.git = None;
-        }
-        if self
-            .scripts
-            .as_mut()
-            .is_some_and(|(_, execution)| !execution.prepare())
-        {
-            self.scripts = None;
         }
         let semantic = self
             .semantic
@@ -222,7 +209,7 @@ impl Request {
                     .or_else(|| Some(Vec::new()))
                 }),
                 Source::ProjectScripts | Source::Workspaces => {
-                    self.scripts.as_ref().and_then(|(cache, _)| {
+                    self.scripts.as_ref().and_then(|cache| {
                         cache
                             .complete_in(&self.cwd, context, &|| cancellation.is_cancelled())
                             .or_else(|| Some(Vec::new()))
