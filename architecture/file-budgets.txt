@@ -15,4 +15,3 @@ root slterm_sidebar
 root slterm_agents
 root slterm_hooks
 slterm_terminal/src/term/mod.rs 2729
-slterm_terminal/src/event_loop.rs 2185
