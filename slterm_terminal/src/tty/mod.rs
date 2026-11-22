@@ -129,6 +129,27 @@ pub enum ChildEvent {
     Exited(Option<ExitStatus>),
 }
 
+/// 直接子进程的内核身份；PID 与创建时间共同防止 PID 复用错认。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ProcessIdentity {
+    pid: std::num::NonZeroU32,
+    creation_time: u64,
+}
+
+impl ProcessIdentity {
+    pub const fn new(pid: std::num::NonZeroU32, creation_time: u64) -> Self {
+        Self { pid, creation_time }
+    }
+
+    pub const fn pid(self) -> std::num::NonZeroU32 {
+        self.pid
+    }
+
+    pub const fn creation_time(self) -> u64 {
+        self.creation_time
+    }
+}
+
 /// A pseudoterminal (or PTY).
 ///
 /// This is a refinement of EventedReadWrite that also provides a channel through which we can be
@@ -146,6 +167,11 @@ pub trait EventedPty: EventedReadWrite {
         None
     }
 
+    /// 从仍有效的子进程句柄读取 PID 与创建时间。
+    fn child_process_identity(&self) -> Option<ProcessIdentity> {
+        None
+    }
+
     /// 窗口外 DSR 查询剥离门控（DA1/DSR 接管族，event_loop 读侧消费）。
     /// Windows ConPTY 后端按 OS build 预计算覆写：Win10 家族 = true（键
     /// 事件输入下 CPR 应答即 F3 毒键，剥离不答）；其他后端默认 false
@@ -159,5 +185,23 @@ pub trait EventedPty: EventedReadWrite {
     /// 宿主已不再等待，回写会成为 shell 输入；其他后端的首条应用查询不受影响。
     fn suppress_bringup_da1(&self) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+mod process_identity_tests {
+    use std::num::NonZeroU32;
+
+    use super::ProcessIdentity;
+
+    #[test]
+    fn process_identity_distinguishes_reused_pid_by_creation_time() {
+        let pid = NonZeroU32::new(42).unwrap();
+        assert_ne!(
+            ProcessIdentity::new(pid, 100),
+            ProcessIdentity::new(pid, 101)
+        );
+        assert_eq!(ProcessIdentity::new(pid, 100).pid(), pid);
+        assert_eq!(ProcessIdentity::new(pid, 100).creation_time(), 100);
     }
 }

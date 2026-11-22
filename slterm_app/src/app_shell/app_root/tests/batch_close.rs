@@ -1161,8 +1161,7 @@ fn document_batch_close_partial_save(cx: &mut TestAppContext) {
                 .unwrap()
                 .1
                 .read(cx)
-                .session
-                .is_some()
+                .has_live_worker()
         );
         assert_eq!(root.terminal_close_batches.len(), 1);
         assert_eq!(
@@ -1539,8 +1538,7 @@ fn batch_commit_failure_preserves_every_panel_and_pty(cx: &mut TestAppContext) {
                     .unwrap()
                     .1
                     .read(cx)
-                    .session
-                    .is_some()
+                    .has_live_worker()
             );
         }
     });
@@ -1563,8 +1561,7 @@ fn batch_commit_failure_preserves_every_panel_and_pty(cx: &mut TestAppContext) {
                     .unwrap()
                     .1
                     .read(cx)
-                    .session
-                    .is_some()
+                    .has_live_worker()
             );
         }
     });

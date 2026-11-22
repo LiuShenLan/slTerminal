@@ -14,8 +14,8 @@ use polling::{Event, Poller};
 
 use windows_sys::Win32::Foundation::{BOOLEAN, FALSE, HANDLE, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::System::Threading::{
-    GetExitCodeProcess, GetProcessId, INFINITE, RegisterWaitForSingleObject, UnregisterWaitEx,
-    WT_EXECUTEINWAITTHREAD, WT_EXECUTEONLYONCE,
+    GetExitCodeProcess, GetProcessId, GetProcessTimes, INFINITE, RegisterWaitForSingleObject,
+    UnregisterWaitEx, WT_EXECUTEINWAITTHREAD, WT_EXECUTEONLYONCE,
 };
 
 use crate::tty::ChildEvent;
@@ -65,6 +65,17 @@ pub struct ChildExitWatcher {
     event_rx: mpsc::Receiver<ChildEvent>,
     context: ManuallyDrop<Arc<ChildExitSender>>,
     pid: Option<NonZeroU32>,
+    process_identity: Option<crate::tty::ProcessIdentity>,
+}
+
+fn process_creation_time(handle: HANDLE) -> Option<u64> {
+    let mut creation = unsafe { std::mem::zeroed() };
+    let mut exit = unsafe { std::mem::zeroed() };
+    let mut kernel = unsafe { std::mem::zeroed() };
+    let mut user = unsafe { std::mem::zeroed() };
+    let ok = unsafe { GetProcessTimes(handle, &mut creation, &mut exit, &mut kernel, &mut user) };
+    (ok != FALSE)
+        .then(|| u64::from(creation.dwHighDateTime) << 32 | u64::from(creation.dwLowDateTime))
 }
 
 impl ChildExitWatcher {
@@ -74,6 +85,10 @@ impl ChildExitWatcher {
         let mut wait_handle: HANDLE = ptr::null_mut();
         let raw_handle = child_handle.as_raw_handle() as HANDLE;
         let pid = unsafe { NonZeroU32::new(GetProcessId(raw_handle)) };
+        let process_identity = pid.and_then(|pid| {
+            process_creation_time(raw_handle)
+                .map(|creation_time| crate::tty::ProcessIdentity::new(pid, creation_time))
+        });
         let context = Arc::new(ChildExitSender {
             sender: event_tx,
             interest: Mutex::new(None),
@@ -97,6 +112,7 @@ impl ChildExitWatcher {
             Ok(ChildExitWatcher {
                 event_rx,
                 pid,
+                process_identity,
                 context: ManuallyDrop::new(context),
                 wait_handle: AtomicPtr::from(wait_handle),
             })
@@ -133,6 +149,10 @@ impl ChildExitWatcher {
     /// Retrieve the Process ID associated to the underlying child process.
     pub fn pid(&self) -> Option<NonZeroU32> {
         self.pid
+    }
+
+    pub fn process_identity(&self) -> Option<crate::tty::ProcessIdentity> {
+        self.process_identity
     }
 }
 
@@ -181,6 +201,17 @@ mod tests {
 
     fn watch(child: &Child) -> ChildExitWatcher {
         ChildExitWatcher::new(child.as_handle().try_clone_to_owned().unwrap()).unwrap()
+    }
+
+    #[test]
+    fn watcher_reads_process_identity_from_the_live_child_handle() {
+        let mut child = waiting_child();
+        let watcher = watch(&child);
+        let identity = watcher.process_identity().expect("必须读取进程创建时间");
+        assert_eq!(identity.pid().get(), child.id());
+        assert_ne!(identity.creation_time(), 0);
+        child.kill().unwrap();
+        child.wait().unwrap();
     }
 
     #[test]

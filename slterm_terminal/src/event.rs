@@ -88,6 +88,9 @@ pub enum Event {
     /// New terminal content available.
     Wakeup,
 
+    /// 最新不可变显示帧；订阅端可合并连续帧，但不能合并其他语义事件。
+    Frame(Arc<crate::render::TerminalFrame>),
+
     /// Terminal bell ring.
     Bell,
 
@@ -136,6 +139,7 @@ impl Debug for Event {
             Event::MouseCursorDirty => write!(f, "MouseCursorDirty"),
             Event::ResetTitle => write!(f, "ResetTitle"),
             Event::Wakeup => write!(f, "Wakeup"),
+            Event::Frame(frame) => write!(f, "Frame(revision={})", frame.revision()),
             Event::Bell => write!(f, "Bell"),
             Event::Exit => write!(f, "Exit"),
             Event::ChildExit(status) => write!(f, "ChildExit({status:?})"),

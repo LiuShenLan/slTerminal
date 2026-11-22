@@ -121,8 +121,7 @@ fn duplicate_commit_registration_preserves_original_task_and_write_barrier(
                 .unwrap()
                 .1
                 .read(cx)
-                .session
-                .is_some()
+                .has_live_worker()
         );
     });
     let rejected = window.update(|window, cx| {
@@ -698,7 +697,13 @@ fn duplicate_stop_scheduling_waits_for_original_receipt(cx: &mut TestAppContext)
             close.coordinator.phase(),
             ClosePhase::Running(CloseStage::StopPty)
         );
-        assert!(close.terminal.read(cx).session.is_none());
+        assert!(
+            root.terminal_panel(project_id(PROJECT_A), terminal_id(TERMINAL_A), cx)
+                .unwrap()
+                .1
+                .read(cx)
+                .worker_is_retired()
+        );
         (
             close.coordinator.current_attempt().unwrap(),
             root.tasks.task_identity(task_id).unwrap(),

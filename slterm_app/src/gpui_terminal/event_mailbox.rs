@@ -11,14 +11,22 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
-use futures::Stream;
 use futures::channel::mpsc;
+use futures::{SinkExt as _, Stream};
 use slterm_terminal::event::Event;
+use slterm_terminal::render::TerminalFrame;
+
+/// 两个最大事件批次的容量；worker 满载时等待，不丢弃语义事件。
+const EVENT_CHANNEL_CAPACITY: usize = 256;
+
+#[derive(Clone, Default)]
+struct FrameState(Arc<Mutex<Option<Arc<TerminalFrame>>>>);
 
 #[derive(Clone)]
 pub(super) struct EventSender {
-    sender: mpsc::UnboundedSender<Event>,
+    sender: mpsc::Sender<Event>,
     wake_pending: Arc<AtomicBool>,
+    frame: FrameState,
     pub(super) native_prompt: NativePromptState,
 }
 
@@ -34,22 +42,26 @@ pub(super) struct NativePrompt {
 }
 
 pub(crate) struct EventReceiver {
-    receiver: mpsc::UnboundedReceiver<Event>,
+    receiver: mpsc::Receiver<Event>,
     wake_pending: Arc<AtomicBool>,
+    frame: FrameState,
 }
 
 pub(super) fn channel() -> (EventSender, EventReceiver) {
-    let (sender, receiver) = mpsc::unbounded();
+    let (sender, receiver) = mpsc::channel(EVENT_CHANNEL_CAPACITY);
     let wake_pending = Arc::new(AtomicBool::new(false));
+    let frame = FrameState::default();
     (
         EventSender {
             sender,
             wake_pending: wake_pending.clone(),
+            frame: frame.clone(),
             native_prompt: NativePromptState::default(),
         },
         EventReceiver {
             receiver,
             wake_pending,
+            frame,
         },
     )
 }
@@ -139,19 +151,36 @@ impl EventSender {
         {
             self.native_prompt.observe_prompt();
         }
+        let event = match event {
+            Event::Frame(frame) => {
+                *self.frame.0.lock().unwrap() = Some(frame);
+                Event::Wakeup
+            }
+            event => event,
+        };
         let wake = matches!(event, Event::Wakeup);
         if wake && self.wake_pending.swap(true, Ordering::AcqRel) {
             return;
         }
-        if self.sender.unbounded_send(event).is_err() && wake {
+        if futures::executor::block_on(self.sender.clone().send(event)).is_err() && wake {
             self.wake_pending.store(false, Ordering::Release);
+            self.frame.0.lock().unwrap().take();
         }
     }
 }
 
 impl EventReceiver {
+    fn latest_event(&self, event: Event) -> Event {
+        if matches!(event, Event::Wakeup)
+            && let Some(frame) = self.frame.0.lock().unwrap().take()
+        {
+            return Event::Frame(frame);
+        }
+        event
+    }
+
     fn acknowledge(&self, event: &Event) {
-        if matches!(event, Event::Wakeup) {
+        if matches!(event, Event::Wakeup | Event::Frame(_)) {
             // 处理前清零:UI 工作期间到达的输出必须仍能排进下一次重绘。
             self.wake_pending.store(false, Ordering::Release);
         }
@@ -159,6 +188,7 @@ impl EventReceiver {
 
     pub(super) fn try_recv(&mut self) -> Result<Event, mpsc::TryRecvError> {
         let event = self.receiver.try_recv()?;
+        let event = self.latest_event(event);
         self.acknowledge(&event);
         Ok(event)
     }
@@ -167,11 +197,14 @@ impl EventReceiver {
 impl Stream for EventReceiver {
     type Item = Event;
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Event>> {
-        let result = Pin::new(&mut self.receiver).poll_next(cx);
-        if let Poll::Ready(Some(event)) = &result {
-            self.acknowledge(event);
+        match Pin::new(&mut self.receiver).poll_next(cx) {
+            Poll::Ready(Some(event)) => {
+                let event = self.latest_event(event);
+                self.acknowledge(&event);
+                Poll::Ready(Some(event))
+            }
+            result => result,
         }
-        result
     }
 }
 
@@ -236,6 +269,50 @@ mod mailbox_tests {
             sender.send(Event::Wakeup);
             assert!(matches!(receiver.try_recv().unwrap(), Event::Wakeup));
         }
+    }
+
+    #[test]
+    fn event_transport_never_uses_an_unbounded_channel() {
+        let source = include_str!("event_mailbox.rs");
+        for forbidden in [
+            concat!("mpsc::", "unbounded"),
+            concat!("Unbounded", "Sender"),
+            concat!("Unbounded", "Receiver"),
+        ] {
+            assert!(!source.contains(forbidden), "终端事件端点必须有界");
+        }
+    }
+
+    #[test]
+    fn frame_events_coalesce_to_latest_without_losing_semantic_events() {
+        use crate::gpui_terminal::session::GridSize;
+        use slterm_terminal::event::VoidListener;
+        use slterm_terminal::render::TerminalFrame;
+        use slterm_terminal::term::{Config, Term};
+
+        fn frame(revision: u64) -> Event {
+            let term = Term::new(
+                Config::default(),
+                &GridSize {
+                    columns: 80,
+                    screen_lines: 24,
+                },
+                VoidListener,
+            );
+            Event::Frame(Arc::new(TerminalFrame::capture(&term, revision)))
+        }
+
+        let (sender, mut receiver) = channel();
+        sender.send(frame(1));
+        sender.send(frame(2));
+        sender.send(Event::CommandStart);
+
+        let Event::Frame(latest) = receiver.try_recv().unwrap() else {
+            panic!("帧事件必须保留为最新不可变帧");
+        };
+        assert_eq!(latest.revision(), 2);
+        assert!(matches!(receiver.try_recv(), Ok(Event::CommandStart)));
+        assert!(receiver.try_recv().is_err());
     }
 
     #[test]

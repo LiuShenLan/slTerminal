@@ -6,19 +6,35 @@
 use super::*;
 use gpui::{AppContext as _, Entity, Modifiers, TestAppContext, VisualTestContext};
 use gpui_component::Root;
+use slterm_terminal::event_loop::Msg;
+use std::cell::RefCell;
+use std::rc::Rc;
+use std::str::FromStr as _;
+use std::sync::mpsc::Receiver;
 
 /// 挂载一个不带真 PTY 的终端(不存在的可执行文件拉不起会话,测试用
 /// `session::test_session` 顶替),返回视图实体与虚拟窗口。
-fn open(cx: &mut TestAppContext) -> (Entity<TerminalView>, VisualTestContext) {
+fn open(
+    cx: &mut TestAppContext,
+) -> (
+    Entity<TerminalView>,
+    VisualTestContext,
+    Receiver<Msg>,
+    Rc<RefCell<crate::gpui_terminal::registry::TerminalRegistry>>,
+) {
     cx.update(|cx| {
         gpui_component::init(cx);
         cx.set_global(Settings::default());
         crate::app_shell::theme::apply_dark_theme(cx);
     });
     let mut slot = None;
+    let mut rx_slot = None;
+    let registry = Rc::new(RefCell::new(
+        crate::gpui_terminal::registry::TerminalRegistry::default(),
+    ));
     let (_root, window) = cx.add_window_view(|window, cx| {
         let terminal = cx.new(|cx| {
-            TerminalView::new(
+            TerminalView::restore_error(
                 PaneId(1),
                 (80, 24),
                 TerminalLaunch::Local {
@@ -30,15 +46,21 @@ fn open(cx: &mut TestAppContext) -> (Entity<TerminalView>, VisualTestContext) {
                     shell_name: None,
                     explicit_command: false,
                 },
+                "测试禁用真实 PTY".to_owned(),
                 window,
                 cx,
             )
         });
         terminal.update(cx, |view, _| {
-            let (session, _receiver) = session::test_session();
-            view.session = Some(session);
-            view.error = None;
+            let (session, receiver) = session::test_session();
+            view.install_test_worker(
+                &registry,
+                slterm_workspace::TerminalId::from_str("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e08")
+                    .unwrap(),
+                session,
+            );
             view.exited = None;
+            rx_slot = Some(receiver);
         });
         slot = Some(terminal.clone());
         Root::new(terminal, window, cx)
@@ -48,14 +70,12 @@ fn open(cx: &mut TestAppContext) -> (Entity<TerminalView>, VisualTestContext) {
     window.update(|window, cx| {
         window.draw(cx).clear(cx);
     });
-    (slot.unwrap(), window.clone())
+    (slot.unwrap(), window.clone(), rx_slot.unwrap(), registry)
 }
 
 /// 不经 PTY 直接喂字节进 Term(测试注入的标准姿势)。
 fn feed(view: &mut TerminalView, bytes: &[u8]) {
-    let mut term = view.session.as_ref().unwrap().term.lock();
-    let mut parser = vte::ansi::Processor::<vte::ansi::StdSyncHandler>::default();
-    parser.advance(&mut *term, bytes);
+    view.feed_test_bytes(bytes);
 }
 
 /// 指定网格行列的单元格内横向 x_frac 处(窗口坐标)。
@@ -72,7 +92,7 @@ fn cell_point(view: &TerminalView, col: usize, row: usize, x_frac: f32) -> Point
 /// `copy_selection` 落剪贴板(缝合点 8 的形态)。
 #[gpui::test]
 fn drag_selects_rendered_text_and_copies(cx: &mut TestAppContext) {
-    let (terminal, mut window) = open(cx);
+    let (terminal, mut window, rx, _registry) = open(cx);
     terminal.update(&mut window, |view, _| {
         feed(view, b"hello slterm\r\n");
     });
@@ -88,11 +108,8 @@ fn drag_selects_rendered_text_and_copies(cx: &mut TestAppContext) {
     window.simulate_mouse_move(to, MouseButton::Left, Modifiers::default());
     window.simulate_mouse_up(to, MouseButton::Left, Modifiers::default());
 
-    let selected = terminal.read_with(&window, |view, _| {
-        view.session
-            .as_ref()
-            .and_then(|session| session.term.lock().selection_to_string())
-    });
+    terminal.update(&mut window, |view, _| view.pump_test_worker(&rx));
+    let selected = terminal.read_with(&window, |view, _| view.selected_text().map(str::to_owned));
     assert_eq!(selected.as_deref(), Some("hello"));
 
     let copied = terminal.update_in(&mut window, |view, window, cx| {
@@ -102,10 +119,6 @@ fn drag_selects_rendered_text_and_copies(cx: &mut TestAppContext) {
     let clipboard = window.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()));
     assert_eq!(clipboard.as_deref(), Some("hello"));
     // 复制后选区即清(缝合点 8 合同)。
-    let cleared = terminal.read_with(&window, |view, _| {
-        view.session
-            .as_ref()
-            .is_none_or(|session| session.term.lock().selection.is_none())
-    });
+    let cleared = terminal.read_with(&window, |view, _| view.selection_is_empty());
     assert!(cleared);
 }

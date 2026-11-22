@@ -101,6 +101,14 @@ pub enum SelectionType {
     Lines,
 }
 
+/// 前端发往所属 worker 的选区命令；不共享或锁定实时网格。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SelectionCommand {
+    Set(Option<Selection>),
+    Update { point: Point, side: Side },
+    Clear,
+}
+
 /// Describes a region of a 2-dimensional area.
 ///
 /// Used to track a text selection. There are four supported modes, each with its own constructor:

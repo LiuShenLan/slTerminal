@@ -124,12 +124,11 @@ impl Dimensions for GridSize {
 }
 
 pub struct TerminalSession {
-    pub term: Arc<FairMutex<Term<EventProxy>>>,
-    pub notifier: Notifier,
+    term: Arc<FairMutex<Term<EventProxy>>>,
+    pub(super) notifier: Notifier,
     pub(super) native_prompt: super::event_mailbox::NativePromptState,
-    /// PTY 直系 shell PID;关闭确认的 `busy_child(shell_pid)` 判据归 PTY 域。
-    #[allow(dead_code)] // 仅观测;关闭确认消费点归工作区。
-    pub shell_pid: u32,
+    /// PTY 直系 shell 的 PID 与创建时间；不使用 PID 0 代替未知身份。
+    process: tty::ProcessIdentity,
     /// EventLoop 句柄(裁决:`spawn` 返回 must_use 句柄,Drop 兜底发
     /// Shutdown + join)。会话必须持证:句柄随会话 Drop,后台线程才跟 pane
     /// 生命周期走。`None` 仅存在于 test_session(无真 PTY)。
@@ -137,6 +136,27 @@ pub struct TerminalSession {
 }
 
 impl TerminalSession {
+    pub fn process_identity(&self) -> tty::ProcessIdentity {
+        self.process
+    }
+
+    /// 在启动移交或测试装配点捕获不可变帧；运行期帧只由 worker 发布。
+    pub fn capture_frame(&self, revision: u64) -> slterm_terminal::render::TerminalFrame {
+        slterm_terminal::render::TerminalFrame::capture(&self.term.lock(), revision)
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn apply_test_command(&self, command: &Msg) -> bool {
+        slterm_terminal::event_loop::apply_display_command_for_test(&mut self.term.lock(), command)
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn feed_test_bytes(&self, bytes: &[u8]) {
+        let mut term = self.term.lock();
+        let mut parser = vte::ansi::Processor::<vte::ansi::StdSyncHandler>::default();
+        parser.advance(&mut *term, bytes);
+    }
+
     /// 消费会话并显式回收 PTY 线程；join 的 panic 原样交给调用方。
     ///
     /// 此方法会阻塞，只能由后台关闭协调器调用，禁止在 GPUI 前台执行。
@@ -160,7 +180,19 @@ pub(crate) fn test_session() -> (
     TerminalSession,
     std::sync::mpsc::Receiver<slterm_terminal::event_loop::Msg>,
 ) {
-    let (events, _event_rx) = super::event_mailbox::channel();
+    let (session, receiver, _events, _event_tx) = test_session_with_events();
+    (session, receiver)
+}
+
+#[cfg(all(test, feature = "gpui-test-support"))]
+pub(super) fn test_session_with_events() -> (
+    TerminalSession,
+    std::sync::mpsc::Receiver<slterm_terminal::event_loop::Msg>,
+    super::event_mailbox::EventReceiver,
+    super::event_mailbox::EventSender,
+) {
+    let (events, event_rx) = super::event_mailbox::channel();
+    let event_tx = events.clone();
     let proxy = EventProxy { events };
     let term = Term::new(
         Config::default(),
@@ -176,10 +208,12 @@ pub(crate) fn test_session() -> (
             term: Arc::new(FairMutex::new(term)),
             notifier: Notifier(sender),
             native_prompt: proxy.events.native_prompt.clone(),
-            shell_pid: 0,
+            process: tty::ProcessIdentity::new(std::num::NonZeroU32::new(1).unwrap(), 1),
             _event_loop: None,
         },
         receiver,
+        event_rx,
+        event_tx,
     )
 }
 
@@ -262,7 +296,9 @@ pub fn spawn(
 
     // 子进程环境由 options.env 与 core custom 环境块组装，不写父进程环境。
     let pty = tty::new(&options, window_size)?;
-    let shell_pid = pty.child_pid().unwrap_or(0);
+    let process = pty
+        .child_process_identity()
+        .ok_or_else(|| std::io::Error::other("PTY 未提供子进程 PID 与创建时间"))?;
 
     let native_prompt = proxy.events.native_prompt.clone();
     let event_loop = EventLoop::new(Arc::clone(&term), proxy, pty, options.drain_on_exit)?;
@@ -275,7 +311,7 @@ pub fn spawn(
             term,
             notifier,
             native_prompt,
-            shell_pid,
+            process,
             _event_loop: Some(event_loop),
         },
         rx,
@@ -402,6 +438,90 @@ mod shutdown_tests {
         }
     }
 
+    #[test]
+    fn spawn_captures_the_direct_child_process_identity() {
+        let (session, _event_rx) =
+            spawn(real_window_size(), Config::default(), real_options()).expect("真实 PTY 应启动");
+        assert_ne!(session.process_identity().pid().get(), 0);
+        assert_ne!(session.process_identity().creation_time(), 0);
+        session.shutdown().expect("真实 EventLoop join 应成功");
+    }
+
+    #[test]
+    fn spawn_publishes_frames_for_pty_output() {
+        let (session, mut events) =
+            spawn(real_window_size(), Config::default(), real_options()).expect("真实 PTY 应启动");
+        session
+            .notifier
+            .notify(b"echo slterm-frame\r".to_vec())
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let received = loop {
+            match events.try_recv() {
+                Ok(slterm_terminal::event::Event::Frame(_)) => break true,
+                Ok(_) => {}
+                Err(_) if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Err(_) => break false,
+            }
+        };
+        session.shutdown().expect("真实 EventLoop join 应成功");
+        assert!(received, "PTY 输出必须发布不可变帧");
+    }
+
+    #[test]
+    fn exited_pty_worker_continues_publishing_display_frames() {
+        let mut options = real_options();
+        options.shell = Some(tty::Shell::new(
+            "cmd.exe".into(),
+            vec![
+                "/d".into(),
+                "/q".into(),
+                "/c".into(),
+                "exit".into(),
+                "0".into(),
+            ],
+        ));
+        let (session, mut events) =
+            spawn(real_window_size(), Config::default(), options).expect("真实 PTY 应启动");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut last_revision = 0;
+        let mut exited = false;
+        while std::time::Instant::now() < deadline && !exited {
+            match events.try_recv() {
+                Ok(slterm_terminal::event::Event::Frame(frame)) => {
+                    last_revision = frame.revision();
+                }
+                Ok(slterm_terminal::event::Event::Exit) => exited = true,
+                Ok(_) => {}
+                Err(_) => std::thread::sleep(std::time::Duration::from_millis(10)),
+            }
+        }
+        assert!(exited, "子进程必须实际退出");
+
+        session
+            .notifier
+            .0
+            .try_send(Msg::Scroll(slterm_terminal::grid::Scroll::Top))
+            .unwrap();
+        let mut advanced = false;
+        while std::time::Instant::now() < deadline {
+            match events.try_recv() {
+                Ok(slterm_terminal::event::Event::Frame(frame)) => {
+                    if frame.revision() > last_revision {
+                        advanced = true;
+                        break;
+                    }
+                }
+                Ok(_) => {}
+                Err(_) => std::thread::sleep(std::time::Duration::from_millis(10)),
+            }
+        }
+        session.shutdown().expect("退出后的 worker 仍须响应关闭");
+        assert!(advanced, "退出后的显示命令必须继续发布帧");
+    }
+
     /// 正常路径必须经真实 ConPTY/EventLoop 的 join 回收，不用返回值替身。
     #[test]
     fn shutdown_joins_real_pty_event_loop() {
@@ -437,7 +557,9 @@ mod shutdown_tests {
             proxy.clone(),
         )));
         let pty = tty::new(&real_options(), real_window_size()).expect("真实 PTY 应启动");
-        let shell_pid = pty.child_pid().unwrap_or(0);
+        let process = pty
+            .child_process_identity()
+            .expect("真实 PTY 必须提供进程身份");
         let native_prompt = proxy.events.native_prompt.clone();
         let event_loop =
             EventLoop::new(Arc::clone(&term), proxy, pty, false).expect("真实 EventLoop 应创建");
@@ -447,7 +569,7 @@ mod shutdown_tests {
             term,
             notifier,
             native_prompt,
-            shell_pid,
+            process,
             _event_loop: Some(event_loop),
         };
 

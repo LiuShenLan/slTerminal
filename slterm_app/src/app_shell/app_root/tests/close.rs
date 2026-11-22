@@ -590,7 +590,7 @@ fn application_join_panic_requires_explicit_retry_without_second_join(cx: &mut T
                 project.read(cx).panels.values().all(|panel| {
                     panel
                         .terminal()
-                        .is_none_or(|terminal| terminal.read(cx).session.is_none())
+                        .is_none_or(|terminal| terminal.read(cx).worker_is_retired())
                 })
             }),
             "注入 join panic 前必须已移交全部原 session"

@@ -4,14 +4,16 @@
 //! drag,随分屏渲染扩)、补全浮层族(08)、OSC8 链接族(07/09 裁定)、
 //! focus_follows_mouse(06 设置键)、Ctrl+滚轮字号缩放(06,保留消费不缩放)。
 
+use slterm_terminal::index::{Column, Line, Side};
+
 use super::*;
 
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod tests;
 
 impl TerminalView {
-    /// 像素坐标 → 网格坐标(含滚动偏移)与半格判定。
-    pub(super) fn grid_point(&self, position: Point<Pixels>) -> (TermPoint, Side) {
+    /// 像素坐标 → 当前可视网格坐标与半格判定。
+    fn visual_grid_point(&self, position: Point<Pixels>) -> (TermPoint<usize>, Side) {
         let rel_x = (position.x - self.origin.x).as_f32() / self.cell_width.as_f32().max(1.0);
         let rel_y = (position.y - self.origin.y).as_f32() / self.line_height.as_f32().max(1.0);
         let col = (rel_x.floor().max(0.0) as usize).min(self.cols.saturating_sub(1));
@@ -21,23 +23,24 @@ impl TerminalView {
         } else {
             Side::Left
         };
-        let Some(session) = self.session.as_ref() else {
-            return (TermPoint::new(Line(row as i32), Column(col)), side);
+        (TermPoint::new(row, Column(col)), side)
+    }
+
+    /// 可视坐标经最新帧映射到网格坐标，不读取实时 Term。
+    pub(super) fn grid_point(&self, position: Point<Pixels>) -> (TermPoint, Side) {
+        let (point, side) = self.visual_grid_point(position);
+        let Some(frame) = self.frame.as_ref() else {
+            return (TermPoint::new(Line(point.line as i32), point.column), side);
         };
-        let term = session.term.lock();
-        let point = term.visual_viewport_to_point(self.rows, TermPoint::new(row, Column(col)));
-        (point, side)
+        (frame.visual_viewport_to_point(point), side)
     }
 
     pub(super) fn selection_is_empty(&self) -> bool {
-        self.session.as_ref().is_none_or(|session| {
-            session
-                .term
-                .lock()
-                .selection
+        self.selection_cleared
+            || self
+                .frame
                 .as_ref()
-                .is_none_or(|selection| selection.is_empty())
-        })
+                .is_none_or(|frame| frame.selection_is_empty())
     }
 
     /// 应用是否接管了鼠标(vim/htop 等)。Shift 按住时强制旁路——这是
@@ -74,7 +77,7 @@ impl TerminalView {
         cx: &mut Context<'_, Self>,
     ) {
         window.focus(&self.focus_handle, cx);
-        if self.session.is_none() {
+        if self.binding.is_none() {
             return;
         }
         if self.mouse_mode_active(&event.modifiers) {
@@ -92,17 +95,16 @@ impl TerminalView {
             2 => SelectionType::Semantic,
             _ => SelectionType::Lines,
         };
-        if let Some(session) = &self.session {
-            let mut term = session.term.lock();
-            // Shift+单击扩展既有选区到点击处(原生文本框行为,对齐上游);
-            // 其余情况都开新选区。
-            let extend = event.modifiers.shift
-                && event.click_count == 1
-                && term.selection.as_ref().is_some_and(|s| !s.is_empty());
-            match term.selection.as_mut() {
-                Some(selection) if extend => selection.update(point, side),
-                _ => term.selection = Some(Selection::new(ty, point, side)),
-            }
+        // Shift+单击扩展最新帧中的既有选区；其余情况开新选区。
+        let extend = event.modifiers.shift && event.click_count == 1 && !self.selection_is_empty();
+        let command = if extend {
+            slterm_terminal::selection::SelectionCommand::Update { point, side }
+        } else {
+            slterm_terminal::selection::SelectionCommand::Set(Some(Selection::new(ty, point, side)))
+        };
+        self.selection_cleared = false;
+        if let Err(error) = self.send_worker_command(Msg::Select(command)) {
+            log::warn!("终端选区命令发送失败: {error}");
         }
         self.selecting = true;
         // 自动回滚在这里就上弦,而不是等第一次「拖出网格」的移动事件:指针
@@ -124,10 +126,10 @@ impl TerminalView {
                 return;
             }
             let (point, side) = self.grid_point(event.position);
-            if let Some(session) = &self.session
-                && let Some(selection) = session.term.lock().selection.as_mut()
-            {
-                selection.update(point, side);
+            if let Err(error) = self.send_worker_command(Msg::Select(
+                slterm_terminal::selection::SelectionCommand::Update { point, side },
+            )) {
+                log::warn!("终端拖选命令发送失败: {error}");
             }
             // 越界回滚不在这里判:链在按下时就起了(见 start_selection_scroll),
             // 指针是否出了网格由 tick 自己看。
@@ -276,7 +278,7 @@ impl TerminalView {
         if epoch != self.selection_scroll_epoch || !self.selection_scroll_active {
             return false;
         }
-        if !self.selecting || self.session.is_none() {
+        if !self.selecting || self.binding.is_none() {
             self.stop_selection_scroll();
             return false;
         }
@@ -290,17 +292,14 @@ impl TerminalView {
         if lines == 0 {
             return true;
         }
-        if let Some(session) = &self.session {
-            session.term.lock().scroll_display(Scroll::Delta(lines));
-        }
-        // 滚动换了视口到绝对行的映射,选区末端必须按滚动后的网格重算——
-        // 否则视口滑过去了,选区还钉在原来那几行。两段各自取一次锁:
-        // `grid_point` 内部还要读 Term,握着锁进去会自锁。
-        let (point, side) = self.grid_point(position);
-        if let Some(session) = &self.session
-            && let Some(selection) = session.term.lock().selection.as_mut()
-        {
-            selection.update(point, side);
+        let (point, side) = self.visual_grid_point(position);
+        if let Err(error) = self.send_worker_command(Msg::ScrollSelection {
+            scroll: Scroll::Delta(lines),
+            lines: self.rows,
+            point,
+            side,
+        }) {
+            log::warn!("终端自动拖选命令发送失败: {error}");
         }
         cx.notify();
         true
@@ -315,7 +314,7 @@ impl TerminalView {
         cx: &mut Context<'_, Self>,
     ) {
         window.focus(&self.focus_handle, cx);
-        if self.session.is_none() {
+        if self.binding.is_none() {
             return;
         }
         if self.mouse_mode_active(&event.modifiers) && !event.modifiers.control {
@@ -327,11 +326,7 @@ impl TerminalView {
             );
             return;
         }
-        let selected_text = self
-            .session
-            .as_ref()
-            .and_then(|session| session.term.lock().selection_to_string())
-            .filter(|text| !text.is_empty());
+        let selected_text = self.selected_text();
         if selected_text.is_some() {
             self.copy_selection(true, window, cx);
         } else {
@@ -428,7 +423,9 @@ impl TerminalView {
             cx.notify();
             return;
         }
-        let Some(session) = &self.session else { return };
+        if self.binding.is_none() {
+            return;
+        }
         if mode.contains(TermMode::ALT_SCREEN) && mode.contains(TermMode::ALTERNATE_SCROLL) {
             // 备用屏(less/vim):滚轮翻译成方向键。
             let seq: &[u8] = if mode.contains(TermMode::APP_CURSOR) {
@@ -442,11 +439,9 @@ impl TerminalView {
             for _ in 0..lines.unsigned_abs() {
                 bytes.extend_from_slice(seq);
             }
-            if let Err(error) = session.notifier.notify(bytes) {
-                log::warn!("终端滚轮输入发送失败: {error}");
-            }
-        } else {
-            session.term.lock().scroll_display(Scroll::Delta(lines));
+            self.write_bytes(bytes);
+        } else if let Err(error) = self.send_worker_command(Msg::Scroll(Scroll::Delta(lines))) {
+            log::warn!("终端滚轮滚动命令发送失败: {error}");
         }
         cx.notify();
     }

@@ -292,30 +292,35 @@ impl AppRoot {
             .current_attempt()
             .expect("停止阶段必须有 attempt");
         let projects = self.projects.values().cloned().collect::<Vec<_>>();
+        let registry = std::rc::Rc::clone(&self.terminals);
         let executor = cx.background_executor().clone();
         let registration =
             self.tasks
                 .register_with(TaskId::CloseFlush, CancellationToken::new(), move || {
-                    let sessions = projects
+                    let terminal_ids = projects
                         .into_iter()
                         .flat_map(|project| {
-                            project.update(cx, |project, cx| {
+                            project.update(cx, |project, _| {
                                 project
                                     .panels
                                     .values()
-                                    .filter_map(|panel| panel.terminal().cloned())
-                                    .map(|terminal| {
-                                        terminal.update(cx, |terminal, _| {
-                                            terminal.take_session_for_shutdown()
-                                        })
+                                    .filter_map(|panel| match &panel.view_key {
+                                        slterm_workspace::ViewKey::Terminal {
+                                            terminal_id, ..
+                                        } => Some(*terminal_id),
+                                        _ => None,
                                     })
                                     .collect::<Vec<_>>()
                             })
                         })
                         .collect::<Vec<_>>();
+                    let sessions = terminal_ids
+                        .into_iter()
+                        .filter_map(|id| super::commands::take_terminal_worker(&registry, id))
+                        .collect::<Vec<_>>();
                     let stop = executor.spawn(async move {
                         let mut observation = PtyStopObservation::Stopped;
-                        for session in sessions.into_iter().flatten() {
+                        for session in sessions.into_iter() {
                             if session.shutdown().is_err() {
                                 observation = PtyStopObservation::Panicked;
                             }

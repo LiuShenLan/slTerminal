@@ -192,8 +192,7 @@ fn application_disconnected_commit_is_fail_closed_without_reregistration(cx: &mu
                 .unwrap()
                 .1
                 .read(cx)
-                .session
-                .is_some()
+                .has_live_worker()
         );
         assert!(!root.tasks.is_registered(TaskId::CloseFlush));
     });

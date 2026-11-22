@@ -136,9 +136,7 @@ impl TerminalView {
     /// 把旧几何下已可读的字节全部消化掉,绝对 CUP 序列因此不会被解析进新宽度
     /// 的网格。UI 线程自己上锁 resize 就绕过了这道流边界保护。
     fn resize_grid_only(&mut self, viewport: TerminalViewport) {
-        let Some(session) = &self.session else { return };
-        let mut notifier = slterm_terminal::event_loop::Notifier(session.notifier.0.clone());
-        if let Err(error) = notifier.on_resize_grid(viewport.window_size()) {
+        if let Err(error) = self.send_worker_command(Msg::ResizeGrid(viewport.window_size())) {
             log::warn!("终端网格 resize 发送失败: {error}");
         }
     }
@@ -155,12 +153,11 @@ impl TerminalView {
             return;
         }
 
-        if let Some(session) = &self.session {
-            let mut notifier = slterm_terminal::event_loop::Notifier(session.notifier.0.clone());
-            if let Err(error) = notifier.on_resize(next) {
-                log::warn!("终端 PTY resize 发送失败: {error}");
-                return;
-            }
+        if self.binding.is_some()
+            && let Err(error) = self.send_worker_command(Msg::Resize(next))
+        {
+            log::warn!("终端 PTY resize 发送失败: {error}");
+            return;
         }
         self.window_size = next;
     }

@@ -602,6 +602,58 @@ pub enum Msg {
     /// CUP sequences produced at the old width are never parsed into the new
     /// grid. A UI thread reaching into `Term::resize` directly would skip that.
     ResizeGrid(WindowSize),
+
+    /// 只由 worker 修改显示滚动位置。
+    Scroll(crate::grid::Scroll),
+
+    /// 自动拖选：先滚动，再用滚动后的视口更新选区终点。
+    ScrollSelection {
+        scroll: crate::grid::Scroll,
+        lines: usize,
+        point: crate::index::Point<usize>,
+        side: crate::index::Side,
+    },
+
+    /// 只由 worker 修改选区。
+    Select(crate::selection::SelectionCommand),
+
+    /// 配色变化也只进入所属 worker，随后发布新帧。
+    SetColorScheme(bool),
+}
+
+fn apply_display_command<T: EventListener>(terminal: &mut Term<T>, msg: &Msg) -> bool {
+    match msg {
+        Msg::Scroll(scroll) => terminal.scroll_display(*scroll),
+        Msg::ScrollSelection {
+            scroll,
+            lines,
+            point,
+            side,
+        } => {
+            terminal.scroll_display(*scroll);
+            let point = terminal.visual_viewport_to_point(*lines, *point);
+            if let Some(selection) = terminal.selection.as_mut() {
+                selection.update(point, *side);
+            }
+        }
+        Msg::Select(crate::selection::SelectionCommand::Set(selection)) => {
+            terminal.selection = selection.clone();
+        }
+        Msg::Select(crate::selection::SelectionCommand::Update { point, side }) => {
+            if let Some(selection) = terminal.selection.as_mut() {
+                selection.update(*point, *side);
+            }
+        }
+        Msg::Select(crate::selection::SelectionCommand::Clear) => terminal.selection = None,
+        Msg::SetColorScheme(dark) => terminal.set_color_scheme(*dark),
+        Msg::Input(_) | Msg::Shutdown | Msg::Resize(_) | Msg::ResizeGrid(_) => return false,
+    }
+    true
+}
+
+#[cfg(feature = "test-support")]
+pub fn apply_display_command_for_test<T: EventListener>(terminal: &mut Term<T>, msg: &Msg) -> bool {
+    apply_display_command(terminal, msg)
 }
 
 /// The main event loop.
@@ -686,10 +738,28 @@ where
                     });
                 }
                 Msg::Shutdown => return Err(()),
+                Msg::Scroll(_)
+                | Msg::ScrollSelection { .. }
+                | Msg::Select(_)
+                | Msg::SetColorScheme(_) => {
+                    if apply_display_command(&mut self.terminal.lock(), &msg) {
+                        state.display_dirty = true;
+                    }
+                }
             }
         }
 
         Ok(resize)
+    }
+
+    fn publish_frame(&mut self, state: &mut State) {
+        state.frame_revision = state
+            .frame_revision
+            .checked_add(1)
+            .expect("终端帧 revision 不得回绕");
+        let frame =
+            crate::render::TerminalFrame::capture(&self.terminal.lock(), state.frame_revision);
+        self.event_proxy.send_event(Event::Frame(Arc::new(frame)));
     }
 
     /// 向 conhost 要光标真值并把本地网格滚到同一坐标系。
@@ -698,7 +768,7 @@ where
     /// `ResizePseudoConsole` 之后 conhost 若还停在旧几何，它报的行号属于上一
     /// 个坐标系，照它对账会把网格滚到更错的位置。宁可放弃这一次——死线上的
     /// 兜底探针会再来一遍。
-    fn realign_to_conpty(&mut self, stage: &str, expect_rows: Option<u16>) {
+    fn realign_to_conpty(&mut self, stage: &str, expect_rows: Option<u16>, state: &mut State) {
         let Some(probe) = self.pty.child_pid().and_then(conpty_cursor_probe) else {
             return;
         };
@@ -716,7 +786,7 @@ where
         terminal.conpty_realign(probe.row);
         trace_terminal_state(&format!("after-{stage}"), &terminal);
         drop(terminal);
-        self.event_proxy.send_event(Event::Wakeup);
+        self.publish_frame(state);
     }
 
     #[inline]
@@ -807,9 +877,12 @@ where
             }
         }
 
+        drop(terminal);
+        drop(_terminal_lease);
+
         // Queue terminal redraw unless all processed bytes were synchronized.
         if state.stream.sync_bytes_count() < processed && processed > 0 {
-            self.event_proxy.send_event(Event::Wakeup);
+            self.publish_frame(state);
         }
 
         // Boot profiling: a readable wake that carried no bytes is the
@@ -887,6 +960,7 @@ where
                 error!("Event loop registration error: {err}");
                 return (self, state);
             }
+            self.publish_frame(&mut state);
 
             let mut events = Events::with_capacity(NonZeroUsize::new(1024).unwrap());
 
@@ -894,6 +968,9 @@ where
             // the loop: without it the app never learns the session is gone
             // and the tab turns into a zombie (unresponsive input, no notice).
             let mut failure: Option<String> = None;
+            // 子进程退出只停止 PTY I/O；worker 继续服务滚动、选区与复制帧，
+            // 直到显式 Shutdown 才析构 PTY 和进程句柄。
+            let mut pty_active = true;
 
             'event_loop: loop {
                 // Wakeup the event loop when a synchronized update timeout or
@@ -922,7 +999,7 @@ where
                 // 才塌缩的情况，所以不校验视口高度。
                 if state.align_at.is_some_and(|at| Instant::now() >= at) {
                     state.align_at = None;
-                    self.realign_to_conpty("align", None);
+                    self.realign_to_conpty("align", None, &mut state);
                 }
 
                 // Handle synchronized update timeout. The align deadline can
@@ -935,7 +1012,7 @@ where
                         .is_some_and(|st| Instant::now() >= st)
                     {
                         state.stream.stop_sync(&mut *self.terminal.lock());
-                        self.event_proxy.send_event(Event::Wakeup);
+                        self.publish_frame(&mut state);
                     }
                     continue;
                 }
@@ -957,14 +1034,16 @@ where
                     // output can be parsed into a new-width grid. This is the
                     // Drain readable bytes against the old grid before the
                     // size change lands, so CUP sequences keep their geometry.
-                    loop {
-                        match self.pty_read(&mut state, &mut buf) {
-                            Ok(processed) if processed >= MAX_LOCKED_READ => continue,
-                            Ok(_) => break,
-                            Err(err) => {
-                                error!("PTY read before resize failed: {err}");
-                                failure = Some(format!("PTY read before resize failed: {err}"));
-                                break 'event_loop;
+                    if pty_active {
+                        loop {
+                            match self.pty_read(&mut state, &mut buf) {
+                                Ok(processed) if processed >= MAX_LOCKED_READ => continue,
+                                Ok(_) => break,
+                                Err(err) => {
+                                    error!("PTY read before resize failed: {err}");
+                                    failure = Some(format!("PTY read before resize failed: {err}"));
+                                    break 'event_loop;
+                                }
                             }
                         }
                     }
@@ -992,7 +1071,7 @@ where
                     // ResizePseudoConsole and the align probe. The reflow above
                     // is what keeps the viewport on screen honest while a drag
                     // is still in flight.
-                    if notify_pty {
+                    if notify_pty && pty_active {
                         self.pty.on_resize(window_size);
                         state.stream.resize(window_size);
                         // 对账的唯一可信时点就是这里：`ResizePseudoConsole` 是同步
@@ -1003,14 +1082,22 @@ where
                         // 差值归零，判据就永久丢失了（字节取证：分屏后 after-resize
                         // 是 cursor=15/prompts=[15]，120ms 后的 before-align 已经变成
                         // cursor=19/prompts=[15]——错位既成事实却测不出来）。
-                        self.realign_to_conpty("align-sync", Some(window_size.num_lines));
+                        self.realign_to_conpty(
+                            "align-sync",
+                            Some(window_size.num_lines),
+                            &mut state,
+                        );
                         // conhost 事后才做的塌缩/重锚探不到，留一次死线兜底；新
                         // resize 顺延死线，风暴天然合并成一次探针。
                         state.align_at = Some(Instant::now() + ALIGN_DELAY);
-                        self.event_proxy.send_event(Event::Wakeup);
+                        self.publish_frame(&mut state);
                     } else {
-                        self.event_proxy.send_event(Event::Wakeup);
+                        self.publish_frame(&mut state);
                     }
+                }
+
+                if std::mem::take(&mut state.display_dirty) {
+                    self.publish_frame(&mut state);
                 }
 
                 for event in events.iter() {
@@ -1040,8 +1127,11 @@ where
                                     drop(terminal);
                                 }
                                 self.terminal.lock().exit();
-                                self.event_proxy.send_event(Event::Wakeup);
-                                break 'event_loop;
+                                self.publish_frame(&mut state);
+                                let _ = self.pty.deregister(&self.poll);
+                                pty_active = false;
+                                interest.writable = false;
+                                continue 'event_loop;
                             }
                         }
 
@@ -1073,7 +1163,7 @@ where
 
                 // Register write interest if necessary.
                 let needs_write = state.needs_write();
-                if needs_write != interest.writable {
+                if pty_active && needs_write != interest.writable {
                     interest.writable = needs_write;
 
                     // Re-register with new interest.
@@ -1089,11 +1179,13 @@ where
             if let Some(reason) = failure {
                 self.event_proxy.send_event(Event::PtyFailure(reason));
                 self.terminal.lock().exit();
-                self.event_proxy.send_event(Event::Wakeup);
+                self.publish_frame(&mut state);
             }
 
             // The evented instances are not dropped here so deregister them explicitly.
-            let _ = self.pty.deregister(&self.poll);
+            if pty_active {
+                let _ = self.pty.deregister(&self.poll);
+            }
 
             (self, state)
         });
@@ -1250,6 +1342,10 @@ pub struct State {
     write_list: VecDeque<Cow<'static, [u8]>>,
     writing: Option<Writing>,
     stream: StreamProcessor,
+    /// 显示命令已改变网格外观，下一边界必须发布新帧。
+    display_dirty: bool,
+    /// 当前 worker 内单调递增的不可变帧代次。
+    frame_revision: u64,
     /// ConPTY 光标对账的死线：resize 提交后 `ALIGN_DELAY` 触发，见
     /// `conpty_cursor_probe`。
     align_at: Option<Instant>,

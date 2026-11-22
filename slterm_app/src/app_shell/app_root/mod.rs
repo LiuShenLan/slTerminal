@@ -46,6 +46,7 @@ use slterm_workspace::{
 };
 
 use crate::app_shell::global_close::GlobalCloseClient;
+use crate::gpui_terminal::registry::TerminalRegistry;
 use crate::persistence::workspace_writer::WorkspaceWriterClient;
 use crate::platform::project_paths::{ProjectPathResolver, SystemProjectPathResolver};
 
@@ -185,6 +186,7 @@ pub(crate) struct AppRoot {
     project_open_draining: bool,
     panel_ids: PanelIdAllocator,
     documents: DocumentRegistry,
+    terminals: Rc<RefCell<TerminalRegistry>>,
     paged_documents:
         BTreeMap<slterm_document::DocumentId, Arc<crate::app_shell::paged_document::PagedDocument>>,
     document_syntax: BTreeMap<
@@ -361,6 +363,7 @@ impl AppRoot {
             project_open_draining: false,
             panel_ids,
             documents,
+            terminals: Rc::new(RefCell::new(TerminalRegistry::default())),
             paged_documents: BTreeMap::new(),
             document_syntax: BTreeMap::new(),
             page_cache: Rc::new(RefCell::new(DocumentPageCache::new())),

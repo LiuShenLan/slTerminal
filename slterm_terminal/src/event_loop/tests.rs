@@ -52,6 +52,56 @@ fn notifier_reports_input_and_resize_backpressure() {
 }
 
 #[test]
+fn display_commands_are_applied_inside_the_worker() {
+    use crate::index::{Column, Line, Point, Side};
+    use crate::selection::{Selection, SelectionCommand, SelectionType};
+
+    let mut term = Term::new(Config::default(), &TermSize::new(20, 2), VoidListener);
+    let selection = Selection::new(
+        SelectionType::Simple,
+        Point::new(Line(0), Column(0)),
+        Side::Left,
+    );
+
+    assert!(apply_display_command(
+        &mut term,
+        &Msg::Select(SelectionCommand::Set(Some(selection)))
+    ));
+    assert!(term.selection.is_some());
+    assert!(apply_display_command(
+        &mut term,
+        &Msg::Select(SelectionCommand::Update {
+            point: Point::new(Line(0), Column(1)),
+            side: Side::Right,
+        })
+    ));
+    assert!(apply_display_command(
+        &mut term,
+        &Msg::Scroll(crate::grid::Scroll::Bottom)
+    ));
+    assert!(apply_display_command(&mut term, &Msg::SetColorScheme(true)));
+    assert!(apply_display_command(
+        &mut term,
+        &Msg::ScrollSelection {
+            scroll: crate::grid::Scroll::Delta(0),
+            lines: 2,
+            point: Point::new(1, Column(2)),
+            side: Side::Right,
+        }
+    ));
+    assert!(term.selection.is_some());
+    assert!(apply_display_command(
+        &mut term,
+        &Msg::Select(SelectionCommand::Clear)
+    ));
+    assert!(term.selection.is_none());
+    assert!(!apply_display_command(
+        &mut term,
+        &Msg::Input(Cow::Borrowed(b"input"))
+    ));
+}
+
+#[test]
 fn animation_snapshots_cannot_observe_a_partial_synchronized_update() {
     use crate::render::{RenderSnapshot, SnapshotConfig};
     let mut term = Term::new(Config::default(), &TermSize::new(20, 2), VoidListener);

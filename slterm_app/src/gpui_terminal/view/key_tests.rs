@@ -9,12 +9,23 @@ use super::*;
 use gpui::{AppContext as _, Entity, Modifiers, TestAppContext, VisualTestContext};
 use gpui_component::Root;
 use slterm_terminal::event_loop::Msg;
+use slterm_terminal::index::{Column, Line, Side};
+use std::cell::RefCell;
+use std::rc::Rc;
+use std::str::FromStr as _;
 use std::sync::mpsc::Receiver;
 
 /// 挂载一个不带真 PTY 的终端(同 pointer/tests.rs 形态),额外返回
 /// test_session 的 PTY 接收端——键位合同的断言对象就是「哪些字节到了
 /// PTY / 剪贴板动没动」。
-fn open(cx: &mut TestAppContext) -> (Entity<TerminalView>, VisualTestContext, Receiver<Msg>) {
+fn open(
+    cx: &mut TestAppContext,
+) -> (
+    Entity<TerminalView>,
+    VisualTestContext,
+    Receiver<Msg>,
+    Rc<RefCell<crate::gpui_terminal::registry::TerminalRegistry>>,
+) {
     cx.update(|cx| {
         gpui_component::init(cx);
         cx.set_global(Settings::default());
@@ -22,9 +33,12 @@ fn open(cx: &mut TestAppContext) -> (Entity<TerminalView>, VisualTestContext, Re
     });
     let mut slot = None;
     let mut rx_slot = None;
+    let registry = Rc::new(RefCell::new(
+        crate::gpui_terminal::registry::TerminalRegistry::default(),
+    ));
     let (_root, window) = cx.add_window_view(|window, cx| {
         let terminal = cx.new(|cx| {
-            TerminalView::new(
+            TerminalView::restore_error(
                 PaneId(1),
                 (80, 24),
                 TerminalLaunch::Local {
@@ -36,13 +50,19 @@ fn open(cx: &mut TestAppContext) -> (Entity<TerminalView>, VisualTestContext, Re
                     shell_name: None,
                     explicit_command: false,
                 },
+                "测试禁用真实 PTY".to_owned(),
                 window,
                 cx,
             )
         });
         terminal.update(cx, |view, _| {
             let (session, receiver) = session::test_session();
-            view.session = Some(session);
+            view.install_test_worker(
+                &registry,
+                slterm_workspace::TerminalId::from_str("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e07")
+                    .unwrap(),
+                session,
+            );
             view.error = None;
             view.exited = None;
             rx_slot = Some(receiver);
@@ -62,14 +82,12 @@ fn open(cx: &mut TestAppContext) -> (Entity<TerminalView>, VisualTestContext, Re
     window.update(|window, cx| {
         window.draw(cx).clear(cx);
     });
-    (terminal, window.clone(), rx_slot.unwrap())
+    (terminal, window.clone(), rx_slot.unwrap(), registry)
 }
 
 /// 不经 PTY 直接喂字节进 Term(测试注入的标准姿势)。
 fn feed(view: &mut TerminalView, bytes: &[u8]) {
-    let mut term = view.session.as_ref().unwrap().term.lock();
-    let mut parser = vte::ansi::Processor::<vte::ansi::StdSyncHandler>::default();
-    parser.advance(&mut *term, bytes);
+    view.feed_test_bytes(bytes);
 }
 
 /// 真实派发一次 key-down,返回是否继续冒泡(false = 终端已消费)。
@@ -126,14 +144,13 @@ fn clipboard_text(window: &mut VisualTestContext) -> Option<String> {
 /// 程序化构造覆盖首行前 `cols` 列的选区(与拖选同构的 Simple 选区)。
 fn select_first_line(terminal: &Entity<TerminalView>, cx: &mut TestAppContext, cols: usize) {
     terminal.update(cx, |view, _| {
-        let mut term = view.session.as_ref().unwrap().term.lock();
         let mut selection = Selection::new(
             SelectionType::Simple,
             TermPoint::new(Line(0), Column(0)),
             Side::Left,
         );
         selection.update(TermPoint::new(Line(0), Column(cols - 1)), Side::Right);
-        term.selection = Some(selection);
+        view.set_test_selection(selection);
     });
 }
 
@@ -141,7 +158,7 @@ fn select_first_line(terminal: &Entity<TerminalView>, cx: &mut TestAppContext, c
 /// 透传 0x03,剪贴板永不被它触碰。
 #[gpui::test]
 fn ctrl_c_passes_through_interrupt_with_and_without_selection(cx: &mut TestAppContext) {
-    let (terminal, mut window, rx) = open(cx);
+    let (terminal, mut window, rx, _registry) = open(cx);
     window.update(|_, cx| cx.write_to_clipboard(ClipboardItem::new_string("sentinel".to_owned())));
 
     // 无选区:透传 0x03,剪贴板不动。
@@ -157,11 +174,7 @@ fn ctrl_c_passes_through_interrupt_with_and_without_selection(cx: &mut TestAppCo
     assert!(!propagate);
     assert_eq!(pty_bytes(&rx), vec![0x03]);
     assert_eq!(clipboard_text(&mut window).as_deref(), Some("sentinel"));
-    let cleared = terminal.read_with(&window, |view, _| {
-        view.session
-            .as_ref()
-            .is_none_or(|s| s.term.lock().selection.is_none())
-    });
+    let cleared = terminal.read_with(&window, |view, _| view.selection_cleared);
     assert!(cleared, "输入即清选区(write_input 合同)");
 }
 
@@ -169,7 +182,7 @@ fn ctrl_c_passes_through_interrupt_with_and_without_selection(cx: &mut TestAppCo
 /// PTY 零字节 + 停止冒泡。
 #[gpui::test]
 fn ctrl_shift_c_copies_selection_and_feedback_expires_on_controlled_clock(cx: &mut TestAppContext) {
-    let (terminal, mut window, rx) = open(cx);
+    let (terminal, mut window, rx, _registry) = open(cx);
     terminal.update(&mut window, |view, _| feed(view, b"hello slterm\r\n"));
     select_first_line(&terminal, cx, 5);
 
@@ -201,7 +214,7 @@ fn ctrl_shift_c_copies_selection_and_feedback_expires_on_controlled_clock(cx: &m
 /// 静默吞——剪贴板不动、PTY 零字节、不冒泡、无反馈。
 #[gpui::test]
 fn ctrl_shift_c_without_selection_is_swallowed_silently(cx: &mut TestAppContext) {
-    let (_terminal, mut window, rx) = open(cx);
+    let (_terminal, mut window, rx, _registry) = open(cx);
     window.update(|_, cx| cx.write_to_clipboard(ClipboardItem::new_string("sentinel".to_owned())));
 
     let modifiers = Modifiers {
@@ -220,7 +233,7 @@ fn ctrl_shift_c_without_selection_is_swallowed_silently(cx: &mut TestAppContext)
 /// ctrl+shift+v:bracketed-paste 包装 + `\x1b[201~` 注入过滤。
 #[gpui::test]
 fn ctrl_shift_v_pastes_bracketed_and_strips_sentinel(cx: &mut TestAppContext) {
-    let (terminal, mut window, rx) = open(cx);
+    let (terminal, mut window, rx, _registry) = open(cx);
     // 子进程开启 bracketed paste(DECSET 2004)。
     terminal.update(&mut window, |view, _| feed(view, b"\x1b[?2004h"));
     window.update(|_, cx| {
@@ -241,7 +254,7 @@ fn ctrl_shift_v_pastes_bracketed_and_strips_sentinel(cx: &mut TestAppContext) {
 /// shift+pageup 仅主屏:本地翻页,零字节下发;备用屏则透传编码序列。
 #[gpui::test]
 fn shift_pageup_scrolls_main_screen_but_reaches_alt_screen_encoded(cx: &mut TestAppContext) {
-    let (terminal, mut window, rx) = open(cx);
+    let (terminal, mut window, rx, _registry) = open(cx);
     // 40 行输出灌出回滚(屏幕 24 行)。
     terminal.update(&mut window, |view, _| {
         let mut buf = Vec::new();
@@ -250,32 +263,16 @@ fn shift_pageup_scrolls_main_screen_but_reaches_alt_screen_encoded(cx: &mut Test
         }
         feed(view, &buf);
     });
-    let before = terminal.read_with(&window, |view, _| {
-        view.session
-            .as_ref()
-            .unwrap()
-            .term
-            .lock()
-            .grid()
-            .display_offset()
-    });
-
     let modifiers = Modifiers {
         shift: true,
         ..Default::default()
     };
     let propagate = press(&mut window, key("pageup", modifiers));
     assert!(!propagate);
-    let after = terminal.read_with(&window, |view, _| {
-        view.session
-            .as_ref()
-            .unwrap()
-            .term
-            .lock()
-            .grid()
-            .display_offset()
-    });
-    assert!(after > before, "主屏 shift+pageup = 本地翻页");
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(Msg::Scroll(slterm_terminal::grid::Scroll::PageUp))
+    ));
     assert!(pty_bytes(&rx).is_empty(), "翻页不打扰子进程");
 
     // 备用屏(less/vim 一类):不拦截,修饰翻页序列透传给应用。
@@ -288,7 +285,7 @@ fn shift_pageup_scrolls_main_screen_but_reaches_alt_screen_encoded(cx: &mut Test
 /// alt+f4 是原生窗口快捷键:终端不编码、不拦截,交给 DefWindowProc。
 #[gpui::test]
 fn alt_f4_propagates_to_the_host_window(cx: &mut TestAppContext) {
-    let (_terminal, mut window, rx) = open(cx);
+    let (_terminal, mut window, rx, _registry) = open(cx);
     let propagate = press(
         &mut window,
         key(
@@ -307,7 +304,7 @@ fn alt_f4_propagates_to_the_host_window(cx: &mut TestAppContext) {
 /// Windows 在 stop_propagation 后跳过 TranslateMessage,组合必须保住。
 #[gpui::test]
 fn marked_text_keeps_all_keys_off_the_wire(cx: &mut TestAppContext) {
-    let (terminal, mut window, rx) = open(cx);
+    let (terminal, mut window, rx, _registry) = open(cx);
     terminal.update_in(&mut window, |view, window, cx| {
         gpui::EntityInputHandler::replace_and_mark_text_in_range(
             view, None, "ni", None, window, cx,
@@ -329,7 +326,7 @@ fn marked_text_keeps_all_keys_off_the_wire(cx: &mut TestAppContext) {
 /// IME 可测面:marked_text 置/清、提交字节原样(不经编码器)。
 #[gpui::test]
 fn ime_marks_preedit_and_commits_bytes_verbatim(cx: &mut TestAppContext) {
-    let (terminal, mut window, rx) = open(cx);
+    let (terminal, mut window, rx, _registry) = open(cx);
     // 组合中:marked_text 置位,range = 全串(UTF-16 计);折叠选区
     // 让 IME 把组合文本插在光标处。
     let range = terminal.update_in(&mut window, |view, window, cx| {
@@ -369,7 +366,7 @@ fn ime_marks_preedit_and_commits_bytes_verbatim(cx: &mut TestAppContext) {
 /// 合同);`bounds_for_range` 恒回该锚点。
 #[gpui::test]
 fn ime_bounds_follow_the_cursor_cell(cx: &mut TestAppContext) {
-    let (terminal, mut window, _rx) = open(cx);
+    let (terminal, mut window, _rx, _registry) = open(cx);
     terminal.update(&mut window, |view, _| feed(view, b"hi"));
     window.run_until_parked();
     window.refresh().unwrap();

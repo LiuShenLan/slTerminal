@@ -1,5 +1,8 @@
 //! 终端创建:冻结的启动上下文与启动资源。
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use super::*;
 
 /// 已冻结的视图配置与几何；PTY 启动结果单独传递。
@@ -21,32 +24,68 @@ struct PreparedTerminal {
     exec_context: Option<crate::completion::PaneExecContext>,
 }
 
+/// 已注册到固定 PTY 代次的会话与首帧。
+struct BoundSession {
+    binding: crate::gpui_terminal::registry::TerminalBinding,
+    events: super::super::event_mailbox::EventReceiver,
+    frame: slterm_terminal::render::TerminalFrame,
+}
+
 /// 已成功启动、但尚未挂成 GPUI 实体的终端。
 pub(crate) struct LaunchedTerminal {
     prepared: PreparedTerminal,
-    spawned: session::SpawnedSession,
+    spawned: Box<BoundSession>,
 }
 
 /// 恢复构造的会话来源；Exited 只恢复状态，不创建 PTY。
 enum SessionStartup {
-    Spawn(std::io::Result<session::SpawnedSession>),
+    Spawn(Result<Box<BoundSession>, crate::gpui_terminal::registry::RegistryError>),
     Failed(String),
     Exited,
 }
 
 impl TerminalView {
+    fn bind_spawned(
+        registry: &Rc<RefCell<crate::gpui_terminal::registry::TerminalRegistry>>,
+        terminal_id: slterm_workspace::TerminalId,
+        spawned: session::SpawnedSession,
+    ) -> Result<Box<BoundSession>, crate::gpui_terminal::registry::RegistryError> {
+        let (session, events) = spawned;
+        let target = registry
+            .borrow_mut()
+            .launch(terminal_id, || Ok::<_, std::io::Error>(session))?;
+        let binding = crate::gpui_terminal::registry::TerminalBinding::new(registry, target);
+        let frame = registry.borrow().capture_frame(target, 0)?;
+        Ok(Box::new(BoundSession {
+            binding,
+            events,
+            frame,
+        }))
+    }
+
     /// 只执行一次可失败启动；失败时不存在视图、订阅或占位面板。
     pub(crate) fn launch(
         pane_id: PaneId,
+        terminal_id: slterm_workspace::TerminalId,
+        registry: &Rc<RefCell<crate::gpui_terminal::registry::TerminalRegistry>>,
         spawn_grid: (u16, u16),
         launch: TerminalLaunch,
         window: &Window,
         cx: &App,
     ) -> std::io::Result<LaunchedTerminal> {
+        if registry.borrow().target(terminal_id).is_some() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "终端已有存活 worker",
+            ));
+        }
         let (prepared, spawned) = Self::prepare(pane_id, spawn_grid, launch, window, cx, true);
+        let spawned = spawned.expect("启动构造必须执行 PTY 创建")?;
+        let bound =
+            Self::bind_spawned(registry, terminal_id, spawned).map_err(std::io::Error::other)?;
         Ok(LaunchedTerminal {
             prepared,
-            spawned: spawned.expect("启动构造必须执行 PTY 创建")?,
+            spawned: bound,
         })
     }
 
@@ -64,39 +103,28 @@ impl TerminalView {
         )
     }
 
-    /// 测试构造器：允许把启动失败保留在视图内，生产只走 `launch`。
-    #[cfg(all(test, feature = "gpui-test-support"))]
-    pub fn new(
-        pane_id: PaneId,
-        spawn_grid: (u16, u16),
-        launch: TerminalLaunch,
-        window: &mut Window,
-        cx: &mut Context<'_, Self>,
-    ) -> Self {
-        let (prepared, spawned) = Self::prepare(pane_id, spawn_grid, launch, window, cx, true);
-        Self::from_prepared(
-            prepared,
-            SessionStartup::Spawn(spawned.expect("测试启动构造必须执行 PTY 创建")),
-            window,
-            cx,
-        )
-    }
-
     /// 恢复 Launch 面板；失败保留在既有面板内，不复用显式新建的空面板拒绝语义。
     pub(crate) fn restore_launch(
         pane_id: PaneId,
+        terminal_id: slterm_workspace::TerminalId,
+        registry: &Rc<RefCell<crate::gpui_terminal::registry::TerminalRegistry>>,
         spawn_grid: (u16, u16),
         launch: TerminalLaunch,
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Self {
         let (prepared, spawned) = Self::prepare(pane_id, spawn_grid, launch, window, cx, true);
-        Self::from_prepared(
-            prepared,
-            SessionStartup::Spawn(spawned.expect("恢复 Launch 必须执行一次 PTY 创建")),
-            window,
-            cx,
-        )
+        let spawned = spawned.expect("恢复 Launch 必须执行一次 PTY 创建");
+        let startup = match spawned {
+            Ok(spawned) => match Self::bind_spawned(registry, terminal_id, spawned) {
+                Ok(bound) => SessionStartup::Spawn(Ok(bound)),
+                Err(error) => SessionStartup::Spawn(Err(error)),
+            },
+            Err(error) => SessionStartup::Spawn(Err(
+                crate::gpui_terminal::registry::RegistryError::Launch(error),
+            )),
+        };
+        Self::from_prepared(prepared, startup, window, cx)
     }
 
     /// 恢复无法在组装阶段启动的元数据；保留错误，不做有损 Shell 转换。
@@ -263,16 +291,26 @@ impl TerminalView {
             initial_title,
             exec_context,
         } = prepared;
-        let (session, error, exited) = match startup {
-            SessionStartup::Spawn(Ok((session, rx))) => {
-                crate::gpui_terminal::session_pump::attach(rx, cx);
-                (Some(session), None, None)
+        let (binding, session_task, frame, error, exited) = match startup {
+            SessionStartup::Spawn(Ok(bound)) => {
+                let BoundSession {
+                    binding,
+                    events,
+                    frame,
+                } = *bound;
+                let target = binding.target();
+                let task = crate::gpui_terminal::session_pump::attach(target, events, cx);
+                (Some(binding), Some(task), Some(Arc::new(frame)), None, None)
             }
-            SessionStartup::Spawn(Err(error)) => {
-                (None, Some(format!("PTY 启动失败: {error}")), None)
-            }
-            SessionStartup::Failed(error) => (None, Some(error), None),
-            SessionStartup::Exited => (None, None, Some("进程已退出".to_owned())),
+            SessionStartup::Spawn(Err(error)) => (
+                None,
+                None,
+                None,
+                Some(format!("PTY 启动失败: {error}")),
+                None,
+            ),
+            SessionStartup::Failed(error) => (None, None, None, Some(error), None),
+            SessionStartup::Exited => (None, None, None, None, Some("进程已退出".to_owned())),
         };
 
         let focus_handle = cx.focus_handle();
@@ -302,7 +340,10 @@ impl TerminalView {
 
         let mut view = Self {
             pane_id,
-            session,
+            binding,
+            _session_task: session_task,
+            frame,
+            selection_cleared: false,
             exec_context,
             focus_handle,
             font: mono_font(
@@ -377,8 +418,11 @@ impl TerminalView {
         // 出生即把亮暗种进 Term:`Term::color_scheme_dark` 的默认值是「暗」,
         // 若不种,第一次真实翻转会被 `set_color_scheme` 的同值去重吞掉,
         // 订阅方漏收第一条通知。
-        if let Some(session) = &view.session {
-            session.term.lock().set_color_scheme(view.palette.is_dark());
+        if view.binding.is_some()
+            && let Err(error) =
+                view.send_worker_command(Msg::SetColorScheme(view.palette.is_dark()))
+        {
+            log::warn!("终端初始配色命令发送失败: {error}");
         }
         view.restart_cursor_blink(cx);
         view
@@ -389,6 +433,7 @@ impl TerminalView {
 mod startup_tests {
     use std::cell::Cell;
     use std::rc::Rc;
+    use std::str::FromStr as _;
 
     use gpui::{Context, IntoElement, Render, TestAppContext, Window, div};
 
@@ -428,10 +473,22 @@ mod startup_tests {
             crate::app_shell::theme::apply_dark_theme(cx);
         });
         let failed = Rc::new(Cell::new(false));
+        let registry = Rc::new(RefCell::new(
+            crate::gpui_terminal::registry::TerminalRegistry::default(),
+        ));
+        let terminal_id =
+            slterm_workspace::TerminalId::from_str("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e06").unwrap();
         let observed = Rc::clone(&failed);
         let (_root, _window) = cx.add_window_view(|window, cx| {
-            let result =
-                TerminalView::launch(PaneId(1), (80, 24), missing_shell_launch(), window, cx);
+            let result = TerminalView::launch(
+                PaneId(1),
+                terminal_id,
+                &registry,
+                (80, 24),
+                missing_shell_launch(),
+                window,
+                cx,
+            );
             observed.set(result.is_err());
             StartupHarness
         });

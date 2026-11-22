@@ -56,7 +56,7 @@ fn project_join_panic_requires_explicit_retry_without_second_join(cx: &mut TestA
         assert!(close.project.read(cx).panels.values().all(|panel| {
             panel
                 .terminal()
-                .is_none_or(|terminal| terminal.read(cx).session.is_none())
+                .is_none_or(|terminal| terminal.read(cx).worker_is_retired())
         }));
         close.coordinator.current_attempt().unwrap()
     });

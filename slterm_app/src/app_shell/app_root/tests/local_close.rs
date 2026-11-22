@@ -83,8 +83,7 @@ fn persisted_local_close_commits_snapshot_and_completes_intent(cx: &mut TestAppC
                 .unwrap()
                 .1
                 .read(cx)
-                .session
-                .is_some()
+                .has_live_worker()
         );
     });
     assert!(
@@ -221,8 +220,7 @@ fn commit_failure_rolls_back_and_retry_preserves_deferred_exited(cx: &mut TestAp
                 .unwrap()
                 .1
                 .read(cx)
-                .session
-                .is_some()
+                .has_live_worker()
         );
     });
     fault
@@ -577,7 +575,11 @@ fn join_panic_requires_explicit_retry_before_cleanup(cx: &mut TestAppContext) {
             ClosePhase::Running(CloseStage::StopPty)
         );
         assert!(
-            close.terminal.read(cx).session.is_none(),
+            root.terminal_panel(project_id(PROJECT_A), terminal_id(TERMINAL_A), cx)
+                .unwrap()
+                .1
+                .read(cx)
+                .worker_is_retired(),
             "注入 join panic 前必须已移交并消费原 session"
         );
         close.coordinator.current_attempt().unwrap()
@@ -722,8 +724,7 @@ fn writer_without_current_epoch_rejects_close_without_side_effects(cx: &mut Test
                 .unwrap()
                 .1
                 .read(cx)
-                .session
-                .is_some()
+                .has_live_worker()
         );
         assert!(root.snapshot().terminal(terminal_id(TERMINAL_A)).is_some());
     });
@@ -1008,8 +1009,7 @@ fn commit_inflight_rejects_another_local_close_before_any_side_effect(cx: &mut T
                 .unwrap()
                 .1
                 .read(cx)
-                .session
-                .is_some()
+                .has_live_worker()
         );
     });
 }
@@ -1426,8 +1426,7 @@ fn assert_epoch_rejection_has_no_side_effects(cx: &mut TestAppContext, focused: 
                     .unwrap()
                     .1
                     .read(cx)
-                    .session
-                    .is_some()
+                    .has_live_worker()
             );
         }
     });
@@ -1556,8 +1555,7 @@ fn assert_recovery_failure_rejects_close_without_side_effects(
                 .unwrap()
                 .1
                 .read(cx)
-                .session
-                .is_some()
+                .has_live_worker()
         );
     });
     window.update(|window, cx| assert_eq!(window.focused(cx), before_actual_focus));

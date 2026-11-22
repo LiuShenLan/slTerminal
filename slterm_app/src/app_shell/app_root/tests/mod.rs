@@ -119,7 +119,8 @@ impl TerminalPanelLauncher for FakeLauncher {
     fn launch(
         &mut self,
         panel_id: PanelId,
-        _record: &slterm_workspace::TerminalRecord,
+        record: &slterm_workspace::TerminalRecord,
+        terminals: &Rc<RefCell<crate::gpui_terminal::registry::TerminalRegistry>>,
         window: &mut Window,
         cx: &mut App,
     ) -> io::Result<Entity<TerminalView>> {
@@ -148,7 +149,9 @@ impl TerminalPanelLauncher for FakeLauncher {
             )
         });
         let (test_session, receiver) = session::test_session();
-        terminal.update(cx, |view, _| view.install_test_session(test_session));
+        terminal.update(cx, |view, _| {
+            view.install_test_worker(terminals, record.id(), test_session)
+        });
         self.state
             .borrow_mut()
             .sessions
@@ -160,6 +163,7 @@ impl TerminalPanelLauncher for FakeLauncher {
         &mut self,
         panel_id: PanelId,
         record: &slterm_workspace::TerminalRecord,
+        terminals: &Rc<RefCell<crate::gpui_terminal::registry::TerminalRegistry>>,
         window: &mut Window,
         cx: &mut App,
     ) -> Entity<TerminalView> {
@@ -192,7 +196,9 @@ impl TerminalPanelLauncher for FakeLauncher {
         });
         if !fail {
             let (test_session, receiver) = session::test_session();
-            terminal.update(cx, |view, _| view.install_test_session(test_session));
+            terminal.update(cx, |view, _| {
+                view.install_test_worker(terminals, record.id(), test_session)
+            });
             self.state
                 .borrow_mut()
                 .sessions
@@ -627,12 +633,12 @@ fn terminal_restore_visibility_and_exit_state(cx: &mut TestAppContext) {
             .terminal_panel(project_id(PROJECT_A), terminal_id(TERMINAL_A), cx)
             .unwrap()
             .1;
-        assert!(visible.read(cx).session.is_some());
+        assert!(visible.read(cx).has_live_worker());
         let exited = root
             .terminal_panel(project_id(PROJECT_A), terminal_id(TERMINAL_C), cx)
             .unwrap()
             .1;
-        assert!(exited.read(cx).session.is_none());
+        assert!(exited.read(cx).worker_is_retired());
         assert!(exited.read(cx).is_exited());
     });
     assert!(window.update(|window, cx| window.focused(cx)).is_none());
@@ -662,7 +668,7 @@ fn terminal_restore_visibility_and_exit_state(cx: &mut TestAppContext) {
             .terminal_panel(project_id(PROJECT_B), terminal_id(TERMINAL_B), cx)
             .unwrap()
             .1;
-        assert!(lazy.read(cx).session.is_some());
+        assert!(lazy.read(cx).has_live_worker());
     });
     activate_project(&root, &mut window, PROJECT_A);
     activate_project(&root, &mut window, PROJECT_B);
@@ -754,7 +760,7 @@ fn terminal_restore_failure_retains_panel_without_duplicate(cx: &mut TestAppCont
             .terminal_panel(project_id(PROJECT_A), terminal_id(TERMINAL_A), cx)
             .unwrap()
             .1;
-        assert!(failed.read(cx).session.is_none());
+        assert!(failed.read(cx).worker_is_retired());
         assert!(failed.read(cx).has_error(), "恢复失败必须保留错误状态");
     });
     window.update(|window, cx| {
@@ -1405,11 +1411,15 @@ fn local_launcher_rejects_non_unicode_shell_without_lossy_conversion(cx: &mut Te
     )
     .unwrap();
     let (_root, mut window, _state) = open_root(cx);
+    let registry = Rc::new(RefCell::new(
+        crate::gpui_terminal::registry::TerminalRegistry::default(),
+    ));
 
     let result = window.update(|window, cx| {
         LocalTerminalLauncher.launch(
             PanelIdAllocator::new(1).allocate().unwrap(),
             &record,
+            &registry,
             window,
             cx,
         )
@@ -1423,12 +1433,13 @@ fn local_launcher_rejects_non_unicode_shell_without_lossy_conversion(cx: &mut Te
         LocalTerminalLauncher.restore(
             PanelIdAllocator::new(1).allocate().unwrap(),
             &record,
+            &registry,
             window,
             cx,
         )
     });
     restored.read_with(cx, |terminal, _| {
-        assert!(terminal.session.is_none(), "非法恢复元数据不得启动 PTY");
+        assert!(terminal.worker_is_retired(), "非法恢复元数据不得启动 PTY");
         assert!(!terminal.is_exited(), "启动失败不得被伪装成 Exited");
     });
 }

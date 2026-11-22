@@ -7,7 +7,10 @@ use super::*;
 use gpui::{AppContext as _, Entity, Modifiers, TestAppContext, VisualTestContext};
 use gpui_component::Root;
 use slterm_terminal::event_loop::Msg;
+use slterm_terminal::index::{Column, Line, Side};
+use std::cell::RefCell;
 use std::rc::Rc;
+use std::str::FromStr as _;
 use std::sync::mpsc::Receiver;
 
 use crate::completion::{self, Session};
@@ -19,7 +22,12 @@ fn open(
     cx: &mut TestAppContext,
     style: CompletionStyle,
     ghost: bool,
-) -> (Entity<TerminalView>, VisualTestContext, Receiver<Msg>) {
+) -> (
+    Entity<TerminalView>,
+    VisualTestContext,
+    Receiver<Msg>,
+    Rc<RefCell<crate::gpui_terminal::registry::TerminalRegistry>>,
+) {
     cx.update(|cx| {
         gpui_component::init(cx);
         // Tab 必须先命中终端动作(否则 Root 焦点遍历会吞掉它)。
@@ -34,9 +42,12 @@ fn open(
     });
     let mut slot = None;
     let mut rx_slot = None;
+    let registry = Rc::new(RefCell::new(
+        crate::gpui_terminal::registry::TerminalRegistry::default(),
+    ));
     let (_root, window) = cx.add_window_view(|window, cx| {
         let terminal = cx.new(|cx| {
-            let mut view = TerminalView::new(
+            let mut view = TerminalView::restore_error(
                 crate::gpui_terminal::PaneId(1),
                 (80, 24),
                 TerminalLaunch::Local {
@@ -48,6 +59,7 @@ fn open(
                     shell_name: None,
                     explicit_command: false,
                 },
+                "测试禁用真实 PTY".to_owned(),
                 window,
                 cx,
             );
@@ -56,7 +68,12 @@ fn open(
         });
         terminal.update(cx, |view, _| {
             let (session, receiver) = session::test_session();
-            view.session = Some(session);
+            view.install_test_worker(
+                &registry,
+                slterm_workspace::TerminalId::from_str("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e09")
+                    .unwrap(),
+                session,
+            );
             view.error = None;
             view.exited = None;
             rx_slot = Some(receiver);
@@ -75,7 +92,7 @@ fn open(
     window.update(|window, cx| {
         window.draw(cx).clear(cx);
     });
-    (terminal, window.clone(), rx_slot.unwrap())
+    (terminal, window.clone(), rx_slot.unwrap(), registry)
 }
 
 fn press(window: &mut VisualTestContext, keystroke: gpui::Keystroke) -> bool {
@@ -136,7 +153,7 @@ fn pty_bytes(rx: &Receiver<Msg>) -> Vec<u8> {
 fn inline_ghost_accepts_on_tab_and_enter_commits_history(cx: &mut TestAppContext) {
     let unique = "slterm-m95-ghost-";
     completion::insert_history_for_test(&format!("{unique}build --release"));
-    let (terminal, mut window, rx) = open(cx, CompletionStyle::Inline, true);
+    let (terminal, mut window, rx, _registry) = open(cx, CompletionStyle::Inline, true);
 
     type_text(&terminal, &mut window, &format!("{unique}b"));
     let _ = pty_bytes(&rx);
@@ -171,7 +188,7 @@ fn popup_navigation_and_accept_edit_the_line_without_submitting(cx: &mut TestApp
     let unique = "slterm-m95-popup-";
     completion::insert_history_for_test(&format!("{unique}alpha one"));
     completion::insert_history_for_test(&format!("{unique}alpha two"));
-    let (terminal, mut window, rx) = open(cx, CompletionStyle::Popup, true);
+    let (terminal, mut window, rx, _registry) = open(cx, CompletionStyle::Popup, true);
 
     type_text(&terminal, &mut window, &format!("{unique}alpha"));
     let _ = pty_bytes(&rx);
@@ -222,7 +239,7 @@ fn ctrl_tab_is_not_consumed_by_active_completion_popup(cx: &mut TestAppContext) 
     let unique = "slterm-panel-cycle-popup-";
     completion::insert_history_for_test(&format!("{unique}alpha one"));
     completion::insert_history_for_test(&format!("{unique}alpha two"));
-    let (terminal, mut window, rx) = open(cx, CompletionStyle::Popup, true);
+    let (terminal, mut window, rx, _registry) = open(cx, CompletionStyle::Popup, true);
     type_text(&terminal, &mut window, &format!("{unique}alpha"));
     let _ = pty_bytes(&rx);
     assert!(
@@ -269,7 +286,7 @@ fn ctrl_tab_is_not_consumed_by_active_completion_popup(cx: &mut TestAppContext) 
 fn hybrid_tab_requests_popup_and_escape_suppresses_the_same_line(cx: &mut TestAppContext) {
     let unique = "slterm-m95-hybrid-";
     completion::insert_history_for_test(&format!("{unique}launch now"));
-    let (terminal, mut window, rx) = open(cx, CompletionStyle::Hybrid, true);
+    let (terminal, mut window, rx, _registry) = open(cx, CompletionStyle::Hybrid, true);
 
     type_text(&terminal, &mut window, &format!("{unique}la"));
     let _ = pty_bytes(&rx);
@@ -301,22 +318,23 @@ fn hybrid_tab_requests_popup_and_escape_suppresses_the_same_line(cx: &mut TestAp
 /// 公式样式文本只走普通网格:绘制不改写源文本,指针列不做公式反投影。
 #[gpui::test]
 fn formula_source_paint_keeps_plain_grid_text_and_pointer_mapping(cx: &mut TestAppContext) {
-    let (terminal, mut window, _rx) = open(cx, CompletionStyle::Inline, false);
+    let (terminal, mut window, _rx, _registry) = open(cx, CompletionStyle::Inline, false);
     terminal.update(&mut window, |view, _| {
-        let mut term = view.session.as_ref().unwrap().term.lock();
-        let mut parser = vte::ansi::Processor::<vte::ansi::StdSyncHandler>::default();
-        parser.advance(&mut *term, b"$x^2$ suffix\r\n");
+        view.feed_test_bytes(b"$x^2$ suffix\r\n");
     });
     let row_text = |terminal: &Entity<TerminalView>, window: &VisualTestContext| {
         terminal.read_with(window, |view, _| {
-            let term = view.session.as_ref().unwrap().term.lock();
-            (0..term.columns())
-                .map(|col| {
-                    term.grid()[slterm_terminal::index::Line(0)]
-                        [slterm_terminal::index::Column(col)]
-                    .c
-                })
-                .collect::<String>()
+            let frame = view.frame.as_ref().unwrap();
+            let mut cells = vec![" ".to_owned(); frame.render().cols as usize];
+            for segment in &frame.render().segments {
+                if segment.row != 0 {
+                    continue;
+                }
+                for cell in &segment.cells {
+                    cells[cell.col as usize] = cell.text.clone();
+                }
+            }
+            cells.concat()
         })
     };
     let before = row_text(&terminal, &window);
@@ -338,18 +356,15 @@ fn formula_source_paint_keeps_plain_grid_text_and_pointer_mapping(cx: &mut TestA
     assert_eq!(source_column, 6, "suffix 的 s 必须仍命中源网格第 6 列");
 
     terminal.update(&mut window, |view, _| {
-        let mut term = view.session.as_ref().unwrap().term.lock();
-        term.selection = Some(Selection::new(
+        let mut selection = Selection::new(
             SelectionType::Simple,
             TermPoint::new(Line(0), Column(0)),
             Side::Left,
-        ));
-        term.selection
-            .as_mut()
-            .unwrap()
-            .update(TermPoint::new(Line(0), Column(11)), Side::Right);
+        );
+        selection.update(TermPoint::new(Line(0), Column(11)), Side::Right);
+        view.set_test_selection(selection);
         assert_eq!(
-            term.selection_to_string().as_deref(),
+            view.selected_text(),
             Some("$x^2$ suffix"),
             "复制源必须保留公式样式文本的原始字节"
         );

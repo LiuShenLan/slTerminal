@@ -18,10 +18,12 @@
 pub mod boxdraw;
 
 use crate::event::{EventListener, WindowSize};
+use crate::grid::Dimensions as _;
+use crate::index::{Column, Line, Point};
 use crate::term::cell::Flags;
 use crate::term::color::Colors;
-use crate::term::{Term, point_to_viewport_from};
-use vte::ansi::{Color, CursorShape, NamedColor};
+use crate::term::{Term, TermMode, point_to_viewport_from, viewport_to_point_from};
+use vte::ansi::{Color, CursorShape, CursorStyle, NamedColor};
 
 /// Cell metrics measured by the frontend (logical pixels + device scale).
 ///
@@ -457,6 +459,72 @@ impl RenderSnapshot {
         snap
     }
 }
+/// 单个 PTY 代次发布的不可变显示帧；前端不能从帧反取或修改实时网格。
+pub struct TerminalFrame {
+    revision: u64,
+    render: RenderSnapshot,
+    mode: TermMode,
+    cursor_style: CursorStyle,
+    selection_text: Option<String>,
+    selection_is_empty: bool,
+    viewport_origin: Line,
+    bottommost_line: Line,
+    last_column: Column,
+}
+
+impl TerminalFrame {
+    pub fn capture<T: EventListener>(term: &Term<T>, revision: u64) -> Self {
+        let rows = term.screen_lines() as u16;
+        let cols = term.columns() as u16;
+        let render = RenderSnapshot::capture(term, &SnapshotConfig { rows, cols });
+        Self {
+            revision,
+            render,
+            mode: *term.mode(),
+            cursor_style: term.cursor_style(),
+            selection_text: term.selection_to_string(),
+            selection_is_empty: term
+                .selection
+                .as_ref()
+                .is_none_or(|selection| selection.is_empty()),
+            viewport_origin: term.viewport_origin_for(rows as usize),
+            bottommost_line: term.bottommost_line(),
+            last_column: term.last_column(),
+        }
+    }
+
+    pub const fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    pub const fn render(&self) -> &RenderSnapshot {
+        &self.render
+    }
+
+    pub const fn mode(&self) -> &TermMode {
+        &self.mode
+    }
+
+    pub const fn cursor_style(&self) -> CursorStyle {
+        self.cursor_style
+    }
+
+    pub fn selection_text(&self) -> Option<&str> {
+        self.selection_text.as_deref()
+    }
+
+    pub const fn selection_is_empty(&self) -> bool {
+        self.selection_is_empty
+    }
+
+    /// 使用帧内的视口原点与网格边界完成指针映射，不读取实时 Term。
+    pub fn visual_viewport_to_point(&self, point: Point<usize>) -> Point {
+        let mut point = viewport_to_point_from(self.viewport_origin, point);
+        point.line = std::cmp::min(point.line, self.bottommost_line);
+        point.column = std::cmp::min(point.column, self.last_column);
+        point
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -563,6 +631,29 @@ mod tests {
 
     fn cfg(rows: u16, cols: u16) -> SnapshotConfig {
         SnapshotConfig { rows, cols }
+    }
+
+    #[test]
+    fn terminal_frame_captures_display_state_without_exposing_the_grid() {
+        let mut term = term_with(&["ab"]);
+        term.selection = Some(Selection::new(
+            SelectionType::Lines,
+            crate::index::Point::new(Line(0), Column(0)),
+            Side::Left,
+        ));
+
+        let frame = TerminalFrame::capture(&term, 7);
+
+        assert_eq!(frame.revision(), 7);
+        assert_eq!(frame.mode(), term.mode());
+        assert_eq!(frame.selection_text(), Some("ab\n"));
+        assert!(!frame.selection_is_empty());
+        let visual = crate::index::Point::new(99, Column(99));
+        assert_eq!(
+            frame.visual_viewport_to_point(visual),
+            term.visual_viewport_to_point(4, visual)
+        );
+        assert_eq!(frame.render().rows, 4);
     }
 
     #[test]

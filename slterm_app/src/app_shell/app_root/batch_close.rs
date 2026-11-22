@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use gpui::{AnyWindowHandle, App, Context, Entity, Window};
+use gpui::{AnyWindowHandle, App, Context, Window};
 use slterm_document::DocumentId;
 use slterm_workspace::{
     CloseAttempt, CloseCoordinator, CloseDecision, CloseEffect, CloseIntent, CloseObject,
@@ -12,7 +12,6 @@ use slterm_workspace::{
 };
 use uuid::Uuid;
 
-use crate::gpui_terminal::view::TerminalView;
 use crate::persistence::close::{
     CloseCommitError, CloseCommitStatus, CloseStoreError, PersistedCloseIntent,
 };
@@ -24,7 +23,6 @@ use super::terminal_close::{PtyStopObservation, close_fingerprint, same_close_fa
 
 pub(super) struct BatchTerminalMember {
     pub(super) record: TerminalRecord,
-    pub(super) terminal: Entity<TerminalView>,
 }
 
 /// 一个组内关闭操作只有一个协调器；成员映射只负责把显式重试路由回该操作。
@@ -147,13 +145,13 @@ impl AppRoot {
                     .terminal(*terminal_id)
                     .cloned()
                     .ok_or(ProjectSnapshotError::MissingTerminal(*terminal_id))?;
-                let (terminal_panel, terminal) = self
+                let (terminal_panel, _terminal) = self
                     .terminal_panel(project_id, *terminal_id, cx)
                     .ok_or(AppRootError::MissingPanel)?;
                 if terminal_panel != panel_id {
                     return Err(AppRootError::MissingPanel);
                 }
-                members.insert(*terminal_id, BatchTerminalMember { record, terminal });
+                members.insert(*terminal_id, BatchTerminalMember { record });
                 objects.push(CloseObject {
                     id: CloseTarget::Terminal(*terminal_id),
                     generation: self.snapshot_generation,
@@ -1127,11 +1125,8 @@ impl AppRoot {
         let Some(attempt) = close.coordinator.current_attempt() else {
             return;
         };
-        let terminals = close
-            .members
-            .iter()
-            .map(|(terminal_id, member)| (*terminal_id, member.terminal.clone()))
-            .collect::<Vec<_>>();
+        let terminals = close.members.keys().copied().collect::<Vec<_>>();
+        let registry = std::rc::Rc::clone(&self.terminals);
         let executor = cx.background_executor().clone();
         let registration = self.tasks.register_with(
             TaskId::TerminalCloseBatch(batch_id),
@@ -1139,9 +1134,8 @@ impl AppRoot {
             move || {
                 let sessions = terminals
                     .into_iter()
-                    .map(|(terminal_id, terminal)| {
-                        let session =
-                            terminal.update(cx, |terminal, _| terminal.take_session_for_shutdown());
+                    .map(|terminal_id| {
+                        let session = super::commands::take_terminal_worker(&registry, terminal_id);
                         (terminal_id, session)
                     })
                     .collect::<Vec<_>>();

@@ -18,15 +18,16 @@ use gpui::{
     Size, Styled as _, UTF16Selection, Window, div, point, px,
 };
 
+#[cfg(all(test, feature = "gpui-test-support"))]
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use slterm_terminal::event::{Event as TermEvent, WindowSize};
 use slterm_terminal::event_loop::Msg;
-use slterm_terminal::grid::Dimensions as _;
 use slterm_terminal::grid::Scroll;
-use slterm_terminal::index::{Column, Line, Point as TermPoint, Side};
-use slterm_terminal::render::{CellMetrics, TerminalViewport, ViewportTracker};
+use slterm_terminal::index::Point as TermPoint;
+use slterm_terminal::render::{CellMetrics, TerminalFrame, TerminalViewport, ViewportTracker};
 use slterm_terminal::selection::{Selection, SelectionType};
 use slterm_terminal::term::TermMode;
 use vte::ansi::CursorStyle;
@@ -38,7 +39,8 @@ use super::copy_feedback::CopyFeedback;
 use super::element::TerminalElement;
 use super::keymap;
 use super::mouse_protocol;
-use super::session::{self, TerminalSession};
+use super::registry::TerminalBinding;
+use super::session;
 use super::{KEY_CONTEXT, TerminalBackTab, TerminalTab};
 use crate::app_shell::config::Settings;
 use typography::{CELL_WIDTH_MODE, FONT_OFFSET, mono_font};
@@ -129,7 +131,14 @@ pub enum TerminalLaunch {
 
 pub struct TerminalView {
     pub pane_id: PaneId,
-    pub session: Option<TerminalSession>,
+    /// 固定 PTY 代次的弱绑定；worker 由 AppRoot 的 TerminalRegistry 强持。
+    pub(super) binding: Option<TerminalBinding>,
+    /// 仅取消本视图的事件订阅；Drop 不拥有或停止 worker。
+    _session_task: Option<gpui::Task<()>>,
+    /// 当前 PTY 代次的最新不可变显示帧；视图不持实时网格。
+    pub(super) frame: Option<Arc<TerminalFrame>>,
+    /// 显式复制或输入已请求清选区；旧帧不得让同一选区被重复复制。
+    selection_cleared: bool,
     /// PTY 创建时冻结的 shell 与环境快照，仅供后台补全复用。
     pub(crate) exec_context: Option<crate::completion::PaneExecContext>,
     pub focus_handle: FocusHandle,
@@ -325,12 +334,29 @@ impl TerminalView {
         typography::startup_cell_metrics_at_scale(scale, cx)
     }
 
-    /// 终端 mode 的一次锁读取(无会话 = 空 mode,所有协议判定落空)。
+    /// 终端 mode 只读当前不可变帧；无帧时使用空 mode。
     pub(super) fn term_mode(&self) -> TermMode {
-        self.session
+        self.frame
             .as_ref()
-            .map(|s| *s.term.lock().mode())
+            .map(|frame| *frame.mode())
             .unwrap_or_default()
+    }
+
+    fn send_worker_command(&self, command: Msg) -> Result<(), super::registry::RegistryError> {
+        self.binding
+            .as_ref()
+            .ok_or(super::registry::RegistryError::TerminalNotFound)?
+            .send(command)
+    }
+
+    fn selected_text(&self) -> Option<&str> {
+        if self.selection_cleared {
+            return None;
+        }
+        self.frame
+            .as_ref()
+            .and_then(|frame| frame.selection_text())
+            .filter(|text| !text.is_empty())
     }
 
     /// 事件白集:每条臂的归属见改造节;新增事件
@@ -341,6 +367,12 @@ impl TerminalView {
         // 携带目录,不得清掉这两项。
         cwd_report::apply_title_metadata(&mut self.branch, &mut self.running_program, &event);
         match event {
+            TermEvent::Frame(frame) => {
+                self.frame = Some(frame);
+                if self.output_visible {
+                    cx.notify();
+                }
+            }
             TermEvent::Wakeup => {
                 if self.output_visible {
                     cx.notify();
@@ -382,9 +414,9 @@ impl TerminalView {
                 self.write_bytes(formatter(&text).into_bytes());
             }
             TermEvent::ColorRequest(index, formatter) => {
-                let reply = self.session.as_ref().map(|session| {
-                    let term = session.term.lock();
-                    self.palette.query_reply(index, term.colors())
+                let reply = self.frame.as_ref().map(|frame| {
+                    self.palette
+                        .query_reply(index, &frame.render().color_overrides)
                 });
                 if let Some(rgb) = reply {
                     self.write_bytes(formatter(rgb).into_bytes());
@@ -453,6 +485,11 @@ impl TerminalView {
     /// `Exited` 只对宿主发一次;重复的退出信号(ChildExit 之后必然跟 Exit)
     /// 只更新文案。
     fn mark_exited(&mut self, message: String, cx: &mut Context<'_, Self>) {
+        if let Some(binding) = &self.binding
+            && let Err(error) = binding.mark_process_exited()
+        {
+            log::warn!("终端退出状态未能写入 Registry: {error}");
+        }
         if self.exited.is_none() {
             self.exited = Some(message);
             cx.emit(TerminalViewEvent::Exited);
@@ -473,14 +510,85 @@ impl TerminalView {
     }
 
     #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn has_live_worker(&self) -> bool {
+        self.binding
+            .as_ref()
+            .is_some_and(TerminalBinding::is_current)
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn worker_is_retired(&self) -> bool {
+        !self.has_live_worker()
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
     pub(crate) const fn has_error(&self) -> bool {
         self.error.is_some()
     }
 
     #[cfg(all(test, feature = "gpui-test-support"))]
-    pub(crate) fn install_test_session(&mut self, session: session::TerminalSession) {
-        self.session = Some(session);
+    pub(crate) fn install_test_worker(
+        &mut self,
+        registry: &Rc<RefCell<super::registry::TerminalRegistry>>,
+        terminal_id: slterm_workspace::TerminalId,
+        session: session::TerminalSession,
+    ) {
+        let target = registry
+            .borrow_mut()
+            .launch(terminal_id, || Ok::<_, std::io::Error>(session))
+            .expect("测试 worker 身份必须唯一");
+        self.frame = Some(Arc::new(
+            registry.borrow().capture_frame(target, 0).unwrap(),
+        ));
+        self.binding = Some(TerminalBinding::new(registry, target));
+        self.selection_cleared = false;
         self.error = None;
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn feed_test_bytes(&mut self, bytes: &[u8]) {
+        if let Some(binding) = &self.binding {
+            binding.feed_test_bytes(bytes).unwrap();
+        }
+        self.refresh_test_frame();
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn set_test_selection(&mut self, selection: slterm_terminal::selection::Selection) {
+        if let Some(binding) = &self.binding {
+            binding
+                .apply_test_command(&Msg::Select(
+                    slterm_terminal::selection::SelectionCommand::Set(Some(selection)),
+                ))
+                .unwrap();
+        }
+        self.refresh_test_frame();
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn refresh_test_frame(&mut self) {
+        let revision = self
+            .frame
+            .as_ref()
+            .map(|frame| frame.revision().saturating_add(1))
+            .unwrap_or(0);
+        if let Some(binding) = &self.binding {
+            self.frame = Some(Arc::new(binding.capture_test_frame(revision).unwrap()));
+        }
+        self.selection_cleared = false;
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn pump_test_worker(&mut self, receiver: &std::sync::mpsc::Receiver<Msg>) {
+        let mut changed = false;
+        while let Ok(command) = receiver.try_recv() {
+            if let Some(binding) = &self.binding {
+                changed |= binding.apply_test_command(&command).unwrap();
+            }
+        }
+        if changed {
+            self.refresh_test_frame();
+        }
     }
 
     #[cfg(all(test, feature = "gpui-test-support"))]
@@ -493,24 +601,8 @@ impl TerminalView {
         self.output_visible
     }
 
-    /// 把会话所有权移交给后台关闭协调器；此处不发送 Shutdown，也不 join。
-    /// 取走后 `session=None`，视图 Drop 的非拥有型兜底自然不会重复通知。
-    pub fn take_session_for_shutdown(&mut self) -> Option<TerminalSession> {
-        self.session.take()
-    }
-
-    /// 让 EventLoop 退出并回收 ConPTY/子进程。幂等:重复调用只会得到
-    /// 发送失败;线程 join 兜底在会话持有的 EventLoopHandle Drop 上。
-    pub fn shutdown(&self) {
-        if let Some(session) = &self.session {
-            let _ = session.notifier.0.send(Msg::Shutdown);
-        }
-    }
-
     fn write_bytes(&self, bytes: Vec<u8>) {
-        if let Some(session) = &self.session
-            && let Err(error) = session.notifier.notify(bytes)
-        {
+        if let Err(error) = self.send_worker_command(Msg::Input(std::borrow::Cow::Owned(bytes))) {
             log::warn!("终端命令发送失败: {error}");
         }
     }
@@ -527,21 +619,29 @@ impl TerminalView {
 
     /// 输入后回到底部并请求重绘。
     fn write_input(&mut self, bytes: Vec<u8>, cx: &mut Context<'_, Self>) {
-        if let Some(session) = &self.session {
-            {
-                let mut term = session.term.lock();
-                // 原生提示符旁路:编辑控制键不使已盖章的提示符失效
-                // (preserves_native_prompt 判定在入队前,与解析器同锁序)。
-                let preserves_prompt = super::event_mailbox::preserves_native_prompt(&bytes);
-                session.native_prompt.observe_input(
-                    session.native_prompt.snapshot().input_epoch.wrapping_add(1),
-                    preserves_prompt,
-                );
-                term.scroll_display(Scroll::Bottom);
-                term.selection = None;
+        let preserves_prompt = super::event_mailbox::preserves_native_prompt(&bytes);
+        for command in [
+            Msg::Scroll(Scroll::Bottom),
+            Msg::Select(slterm_terminal::selection::SelectionCommand::Clear),
+        ] {
+            if let Err(error) = self.send_worker_command(command) {
+                log::warn!("终端输入前显示命令发送失败: {error}");
             }
-            if let Err(error) = session.notifier.notify(bytes) {
-                log::warn!("终端输入发送失败: {error}");
+        }
+        self.selection_cleared = true;
+        let result = if bytes.is_empty() {
+            Ok(())
+        } else {
+            self.send_worker_command(Msg::Input(std::borrow::Cow::Owned(bytes)))
+        };
+        match result {
+            Err(error) => log::warn!("终端输入发送失败: {error}"),
+            Ok(()) => {
+                if let Some(binding) = &self.binding
+                    && let Err(error) = binding.observe_input(preserves_prompt)
+                {
+                    log::warn!("终端输入镜像更新失败: {error}");
+                }
             }
         }
         self.restart_cursor_blink(cx);
@@ -549,11 +649,10 @@ impl TerminalView {
     }
 
     fn cursor_should_blink(&self) -> bool {
-        self.session.as_ref().is_some_and(|session| {
-            let term = session.term.lock();
-            let mode = term.mode();
+        self.frame.as_ref().is_some_and(|frame| {
+            let mode = frame.mode();
             cursor_blink_allowed(
-                term.cursor_style().blinking,
+                frame.cursor_style().blinking,
                 mode.contains(TermMode::VI),
                 mode.contains(TermMode::SHOW_CURSOR),
                 self.marked_text.is_some(),
@@ -605,25 +704,6 @@ impl TerminalView {
         self.cols
     }
 
-    /// 屏幕观察窗口:终端网格末尾最多 24 行(与屏幕规则注意力区窗口同源)。
-    ///
-    /// 消费点 = workspace 的 1 Hz agent 看门狗;刻意不挂在每个
-    /// `Wakeup` 上——规则匹配随输出洪流放大,屏幕证据只需要拍帧级频率。
-    /// 无会话/零几何(尚未布局)返回 `None`。
-    #[allow(dead_code)] // Agent 看门狗由 Agent 与 Hooks 阶段接入。
-    pub(crate) fn agent_screen_sample(&self) -> Option<String> {
-        let session = self.session.as_ref()?;
-        let term = session.term.lock();
-        let lines = term.screen_lines();
-        let columns = term.columns();
-        if lines == 0 || columns == 0 {
-            return None;
-        }
-        let start = TermPoint::new(Line((lines - lines.min(24)) as i32), Column(0));
-        let end = TermPoint::new(Line(lines as i32 - 1), Column(columns.saturating_sub(1)));
-        Some(term.bounds_to_string(start, end))
-    }
-
     /// 复制选区并返回是否实际写入剪贴板。`notify` 表示显式复制
     /// (Ctrl+Shift+C/右键):成功后清除选区并给 §5.2 对勾反馈;
     /// copy_on_select 刻意静默且保留选区,避免鼠标抬手后立刻失去视觉反馈。
@@ -633,19 +713,20 @@ impl TerminalView {
         _window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> bool {
-        let Some(session) = &self.session else {
-            return false;
-        };
-        let text = session.term.lock().selection_to_string();
-        let Some(text) = text.filter(|text| !text.is_empty()) else {
+        let Some(text) = self.selected_text().map(str::to_owned) else {
             return false;
         };
 
         cx.write_to_clipboard(ClipboardItem::new_string(text));
         if notify {
-            // 原始按键可能紧接着再次到来;先清除选区,下一次 Copy 才能按
+            // 原始按键可能紧接着再次到来;本地撤销旧帧选区,下一次 Copy 才能按
             // 「未处理」传播回终端,而不是重复复制并再次弹反馈。
-            session.term.lock().selection = None;
+            self.selection_cleared = true;
+            if let Err(error) = self.send_worker_command(Msg::Select(
+                slterm_terminal::selection::SelectionCommand::Clear,
+            )) {
+                log::warn!("复制后清选区命令发送失败: {error}");
+            }
             self.copy_feedback
                 .mark_copied(cx, |view| &mut view.copy_feedback);
             cx.notify();
@@ -756,8 +837,8 @@ impl TerminalView {
                 _ => None,
             };
             if let Some(scroll) = scroll {
-                if let Some(session) = &self.session {
-                    session.term.lock().scroll_display(scroll);
+                if let Err(error) = self.send_worker_command(Msg::Scroll(scroll)) {
+                    log::warn!("终端回滚命令发送失败: {error}");
                 }
                 cx.notify();
                 cx.stop_propagation();
@@ -830,15 +911,27 @@ impl TerminalView {
     }
 }
 
-impl EventEmitter<TerminalViewEvent> for TerminalView {}
-
-impl Drop for TerminalView {
-    fn drop(&mut self) {
-        // 兜底清理:无论视图以何种路径销毁(关 Tab、关窗口、退出应用),
-        // 都保证 PTY 线程和子进程被回收。
-        self.shutdown();
+#[cfg(test)]
+mod term_ownership_tests {
+    #[test]
+    fn terminal_view_never_locks_or_directly_accesses_the_live_grid() {
+        for source in [
+            include_str!("view.rs"),
+            include_str!("view/pointer.rs"),
+            include_str!("view/layout.rs"),
+            include_str!("view/startup.rs"),
+        ] {
+            for forbidden in [concat!("session.", "term"), concat!(".term.", "lock")] {
+                assert!(
+                    !source.contains(forbidden),
+                    "视图不得直接访问 worker 网格: {forbidden}"
+                );
+            }
+        }
     }
 }
+
+impl EventEmitter<TerminalViewEvent> for TerminalView {}
 
 impl Focusable for TerminalView {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {

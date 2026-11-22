@@ -2,14 +2,13 @@
 
 use std::collections::BTreeSet;
 
-use gpui::{AnyWindowHandle, App, Context, Entity, Window};
+use gpui::{AnyWindowHandle, App, Context, Window};
 use sha2::{Digest as _, Sha256};
 use slterm_workspace::{
     CloseAttempt, CloseCoordinator, CloseDecision, CloseEffect, CloseIntent, CloseObject,
     ClosePhase, CloseScope, CloseStage, CloseTarget, ProjectSnapshot, TerminalId, TerminalRecord,
 };
 
-use crate::gpui_terminal::view::TerminalView;
 use crate::persistence::close::{
     CloseCommitError, CloseCommitStatus, CloseStoreError, PersistedCloseIntent,
 };
@@ -28,7 +27,6 @@ pub(super) enum PtyStopObservation {
 pub(super) struct LocalTerminalClose {
     pub(super) record: TerminalRecord,
     pub(super) panel_id: slterm_workspace::PanelId,
-    pub(super) terminal: Entity<TerminalView>,
     pub(super) coordinator: CloseCoordinator<CloseTarget>,
     pub(super) persisted: Option<PersistedCloseIntent>,
     pub(super) stop_observation: Option<PtyStopObservation>,
@@ -73,7 +71,7 @@ impl AppRoot {
         self.sync_focus(window, cx);
         let (candidate, record) = self.snapshot.without_terminal(id)?;
         let project_id = record.project_id();
-        let (panel_id, terminal) = self
+        let (panel_id, _terminal) = self
             .terminal_panel(project_id, id, cx)
             .ok_or(AppRootError::MissingPanel)?;
         let scope = CloseScope::Panels { project_id };
@@ -108,7 +106,6 @@ impl AppRoot {
             LocalTerminalClose {
                 record: record.clone(),
                 panel_id,
-                terminal,
                 coordinator,
                 persisted: None,
                 stop_observation: None,
@@ -159,7 +156,7 @@ impl AppRoot {
             .cloned()
             .ok_or(slterm_workspace::ProjectSnapshotError::MissingTerminal(id))?;
         let project_id = record.project_id();
-        let (panel_id, terminal) = self
+        let (panel_id, _terminal) = self
             .terminal_panel(project_id, id, cx)
             .ok_or(AppRootError::MissingPanel)?;
         self.ensure_project_snapshot_command_allowed()?;
@@ -198,7 +195,6 @@ impl AppRoot {
             LocalTerminalClose {
                 record: record.clone(),
                 panel_id,
-                terminal,
                 coordinator,
                 persisted: Some(registration),
                 stop_observation: None,
@@ -504,14 +500,13 @@ impl AppRoot {
         let Some(attempt) = close.coordinator.current_attempt() else {
             return;
         };
-        let terminal = close.terminal.clone();
+        let registry = std::rc::Rc::clone(&self.terminals);
         let executor = cx.background_executor().clone();
         let task_id = TaskId::TerminalClose(id);
         let registration = self
             .tasks
             .register_with(task_id, CancellationToken::new(), move || {
-                let session =
-                    terminal.update(cx, |terminal, _| terminal.take_session_for_shutdown());
+                let session = super::commands::take_terminal_worker(&registry, id);
                 let stop = executor.spawn(async move {
                     match session {
                         Some(session) => session.shutdown(),

@@ -1,8 +1,7 @@
 //! 终端网格的自定义 GPUI Element。
 //!
-//! 热路径约定:paint 内只对 `Term` 加一次锁,通过渲染合同
-//! (`slterm_terminal::render::RenderSnapshot`)把可见网格快照成纯数据后立刻
-//! 放锁;颜色解析(调色板 + OSC 覆盖表)与绘制都在锁外进行。
+//! 热路径约定:paint 只读取 worker 发布的不可变帧;颜色解析与绘制均在
+//! 帧外进行,不接触实时 `Term` 或其锁。
 //!
 //! 定位合同:字形落在 `列号 × cell_width`。逐格塑形逐格绘制(连字
 //! 合并塑形随 ligatures 模块归 06);编辑、光标和选区不能改变无关格的原点。
@@ -18,7 +17,7 @@ use gpui::{
     InspectorElementId, LayoutId, Pixels, Rgba, SharedString, Style, TextRun, UnderlineStyle,
     Window, fill, point, px, relative, size,
 };
-use slterm_terminal::render::{RenderSnapshot, SnapshotConfig, boxdraw};
+use slterm_terminal::render::{TerminalFrame, boxdraw};
 use vte::ansi::CursorShape;
 
 use super::cursor_painter::{CursorPaint, paint_box_glyph};
@@ -33,22 +32,12 @@ impl TerminalElement {
         Self { view }
     }
 
-    /// 在一次 `Term` 锁窗口内截取渲染快照，放锁后再解析颜色与绘制。
+    /// 读取 worker 已发布的最新不可变帧；绘制路径不接触实时网格。
     ///
     /// 分段只反映内容与宽度类,绝不掺入光标状态:per-cell 绘制下反色只是
     /// 换色,若让闪烁相位改变分段,整行会随闪烁重塑形而跳字。
-    fn snapshot(&self, layout: &TermLayout, cx: &mut App) -> Option<RenderSnapshot> {
-        self.view.update(cx, |view, _| {
-            let session = view.session.as_ref()?;
-            let term = session.term.lock();
-            Some(RenderSnapshot::capture(
-                &term,
-                &SnapshotConfig {
-                    rows: layout.rows as u16,
-                    cols: layout.cols as u16,
-                },
-            ))
-        })
+    fn snapshot(&self, cx: &mut App) -> Option<std::sync::Arc<TerminalFrame>> {
+        self.view.read(cx).frame.clone()
     }
 }
 
@@ -197,9 +186,10 @@ impl Element for TerminalElement {
         let focused = focus_handle.is_focused(window);
         // 只有光标本身参与闪烁;IME 预编辑仍复用同一个坐标锚点。
         let cursor_visible = self.view.read(cx).cursor_visible();
-        let Some(snap) = self.snapshot(layout, cx) else {
+        let Some(frame) = self.snapshot(cx) else {
             return;
         };
+        let snap = frame.render();
         let overrides = snap.color_overrides;
 
         let cell_rect = |row: usize, start: usize, count: usize| -> Bounds<Pixels> {
@@ -606,6 +596,23 @@ fn ghost_segments(
         }
     }
     layout
+}
+
+#[cfg(test)]
+mod ownership_tests {
+    #[test]
+    fn terminal_paint_snapshot_never_locks_the_live_term() {
+        let source = include_str!("element.rs");
+        let start = source.find("impl TerminalElement").unwrap();
+        let end = source.find("pub struct TermLayout").unwrap();
+        let snapshot = &source[start..end];
+        for forbidden in ["view.session", ".term.lock", "FairMutex"] {
+            assert!(
+                !snapshot.contains(forbidden),
+                "绘制路径不得直接访问实时终端: {forbidden}"
+            );
+        }
+    }
 }
 
 #[cfg(test)]

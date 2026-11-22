@@ -13,6 +13,7 @@ pub(crate) mod element;
 pub(crate) mod event_mailbox;
 pub(crate) mod keymap;
 pub(crate) mod mouse_protocol;
+pub(crate) mod registry;
 pub(crate) mod session;
 pub(crate) mod session_pump;
 pub(crate) mod view;

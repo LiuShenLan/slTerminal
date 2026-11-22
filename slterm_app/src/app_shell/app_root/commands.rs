@@ -1,5 +1,6 @@
 //! AppRoot 的项目与终端命令。
 
+use std::cell::RefCell;
 use std::fmt;
 use std::io;
 use std::rc::Rc;
@@ -16,6 +17,7 @@ use slterm_workspace::{
 use uuid::Uuid;
 
 use crate::gpui_terminal::PaneId;
+use crate::gpui_terminal::registry::TerminalRegistry;
 use crate::gpui_terminal::view::{TerminalLaunch, TerminalView, TerminalViewEvent};
 
 use super::command_registry::{
@@ -23,6 +25,7 @@ use super::command_registry::{
 };
 use super::focus_manager::{FocusError, FocusToken};
 use super::panel_host::{PanelContent, PanelHost};
+use super::task_service::{CancellationToken, TaskId};
 use super::{AppRoot, ProjectView};
 
 /// 终端面板启动适配器；测试可替换为无真实 PTY 的实现。
@@ -31,6 +34,7 @@ pub(crate) trait TerminalPanelLauncher {
         &mut self,
         panel_id: PanelId,
         record: &TerminalRecord,
+        terminals: &Rc<RefCell<TerminalRegistry>>,
         window: &mut Window,
         cx: &mut App,
     ) -> io::Result<Entity<TerminalView>>;
@@ -40,6 +44,7 @@ pub(crate) trait TerminalPanelLauncher {
         &mut self,
         panel_id: PanelId,
         record: &TerminalRecord,
+        terminals: &Rc<RefCell<TerminalRegistry>>,
         window: &mut Window,
         cx: &mut App,
     ) -> Entity<TerminalView>;
@@ -81,12 +86,15 @@ impl TerminalPanelLauncher for LocalTerminalLauncher {
         &mut self,
         panel_id: PanelId,
         record: &TerminalRecord,
+        terminals: &Rc<RefCell<TerminalRegistry>>,
         window: &mut Window,
         cx: &mut App,
     ) -> io::Result<Entity<TerminalView>> {
         let launch = local_launch(record)?;
         let launched = TerminalView::launch(
             PaneId(panel_id.sequence()),
+            record.id(),
+            terminals,
             (
                 TerminalView::DEFAULT_GRID_COLUMNS,
                 TerminalView::DEFAULT_GRID_LINES,
@@ -102,6 +110,7 @@ impl TerminalPanelLauncher for LocalTerminalLauncher {
         &mut self,
         panel_id: PanelId,
         record: &TerminalRecord,
+        terminals: &Rc<RefCell<TerminalRegistry>>,
         window: &mut Window,
         cx: &mut App,
     ) -> Entity<TerminalView> {
@@ -116,9 +125,17 @@ impl TerminalPanelLauncher for LocalTerminalLauncher {
                 cx.new(|cx| TerminalView::restore_exited(pane_id, grid, launch, window, cx))
             }
             RunIntent::Launch => match local_launch(record) {
-                Ok(launch) => {
-                    cx.new(|cx| TerminalView::restore_launch(pane_id, grid, launch, window, cx))
-                }
+                Ok(launch) => cx.new(|cx| {
+                    TerminalView::restore_launch(
+                        pane_id,
+                        record.id(),
+                        terminals,
+                        grid,
+                        launch,
+                        window,
+                        cx,
+                    )
+                }),
                 Err(error) => {
                     let launch = fallback_launch(record);
                     cx.new(|cx| {
@@ -135,6 +152,14 @@ impl TerminalPanelLauncher for LocalTerminalLauncher {
             },
         }
     }
+}
+
+pub(super) fn take_terminal_worker(
+    registry: &Rc<RefCell<TerminalRegistry>>,
+    terminal_id: TerminalId,
+) -> Option<crate::gpui_terminal::session::TerminalSession> {
+    let target = registry.borrow().target(terminal_id)?;
+    registry.borrow_mut().remove(target).ok()
 }
 
 /// 项目运行命令错误；失败时正式快照与实例表保持不变。
@@ -441,7 +466,9 @@ impl AppRoot {
             ))?;
         let panel_id = self.panel_ids.allocate()?;
         let parent = self.project_focus_token(project_id, cx)?;
-        let terminal = self.launcher.restore(panel_id, record, window, cx);
+        let terminal = self
+            .launcher
+            .restore(panel_id, record, &self.terminals, window, cx);
         terminal.update(cx, |terminal, _| {
             terminal.attach_completion_session(Rc::new(crate::completion::Session::default()));
         });
@@ -454,7 +481,7 @@ impl AppRoot {
         ) {
             Ok(registration) => registration,
             Err(error) => {
-                terminal.read(cx).shutdown();
+                self.retire_terminal_worker(terminal_id, cx);
                 return Err(error.into());
             }
         };
@@ -915,6 +942,31 @@ impl AppRoot {
         }
     }
 
+    /// 启动后接线失败的后台回收；不得在前台析构 worker 或 join。
+    fn retire_terminal_worker(&mut self, terminal_id: TerminalId, cx: &mut Context<'_, Self>) {
+        let task_id = TaskId::TerminalReclaim(terminal_id);
+        if self.tasks.is_registered(task_id) {
+            log::warn!("终端 worker 回收任务重复");
+            return;
+        }
+        let Some(worker) = take_terminal_worker(&self.terminals, terminal_id) else {
+            return;
+        };
+        self.tasks
+            .register_with(task_id, CancellationToken::new(), || {
+                let background = cx.background_executor().spawn(async move {
+                    if worker.shutdown().is_err() {
+                        log::warn!("终端 worker 回收线程异常终止");
+                    }
+                });
+                cx.spawn(async move |root, cx| {
+                    background.await;
+                    let _ = root.update(cx, |root, _| root.tasks.complete(task_id));
+                })
+            })
+            .expect("回收任务预检后必须可登记");
+    }
+
     /// 启动、项目激活、实例登记与实际聚焦全部成功后才提交候选快照。
     fn launch_candidate(
         &mut self,
@@ -938,7 +990,9 @@ impl AppRoot {
             ))?;
         let panel_id = self.panel_ids.allocate()?;
         let parent = self.project_focus_token(project_id, cx)?;
-        let terminal = self.launcher.launch(panel_id, &record, window, cx)?;
+        let terminal = self
+            .launcher
+            .launch(panel_id, &record, &self.terminals, window, cx)?;
         terminal.update(cx, |terminal, _| {
             terminal.attach_completion_session(Rc::new(crate::completion::Session::default()));
         });
@@ -950,7 +1004,7 @@ impl AppRoot {
         ) {
             Ok(registration) => registration,
             Err(error) => {
-                terminal.read(cx).shutdown();
+                self.retire_terminal_worker(terminal_id, cx);
                 return Err(error.into());
             }
         };
@@ -961,7 +1015,7 @@ impl AppRoot {
                 .ensure_project_activation_allowed(project_id, focus_token)
             {
                 let _ = self.focus_manager.unregister(focus_token);
-                terminal.read(cx).shutdown();
+                self.retire_terminal_worker(terminal_id, cx);
                 return Err(error.into());
             }
             let previous_active = self.snapshot.registry().active();
@@ -983,12 +1037,12 @@ impl AppRoot {
                     cx,
                 );
                 let _ = self.focus_manager.unregister(focus_token);
-                terminal.read(cx).shutdown();
+                self.retire_terminal_worker(terminal_id, cx);
                 return Err(error.into());
             }
         } else if let Err(error) = self.focus_manager.request_focus(focus_token, window, cx) {
             let _ = self.focus_manager.unregister(focus_token);
-            terminal.read(cx).shutdown();
+            self.retire_terminal_worker(terminal_id, cx);
             return Err(error.into());
         }
         let subscription = cx.subscribe_in(&terminal, window, move |root, _, event, window, cx| {

@@ -197,6 +197,10 @@ impl EventedPty for Pty {
         self.child_watcher.pid().map(std::num::NonZeroU32::get)
     }
 
+    fn child_process_identity(&self) -> Option<crate::tty::ProcessIdentity> {
+        self.child_watcher.process_identity()
+    }
+
     fn strip_dsr_queries(&self) -> bool {
         self.strip_dsr
     }
