@@ -32,7 +32,7 @@ use crate::tty::windows::spawn::{self, FLAG_WIN32_INPUT_MODE, compute_conpty_fla
 use crate::tty::windows::{Pty, cmdline, win32_string};
 use crate::tty::{Environment, Options};
 
-const PIPE_CAPACITY: usize = crate::event_loop::READ_BUFFER_SIZE;
+const INPUT_PIPE_CAPACITY: usize = crate::event_loop::READ_BUFFER_SIZE;
 
 /// Win10/Win11 分界 build：捆绑判定（`should_bundle`）与 flags 0x4 门控
 /// （`compute_conpty_flags`）、DSR 毒链判定（`conhost_input_corrupts_cpr`）
@@ -383,7 +383,7 @@ pub fn new(config: &Options, window_size: WindowSize) -> Result<Pty> {
         )));
     }
 
-    let mut conout = UnblockedReader::new(conout, PIPE_CAPACITY);
+    let mut conout = UnblockedReader::new(conout);
     // Declared after conout so every error closes the host while its reader
     // still exists. Spawn failures need the same drain-before-close order as Pty.
     let conpty = Conpty {
@@ -397,7 +397,7 @@ pub fn new(config: &Options, window_size: WindowSize) -> Result<Pty> {
             return Err(error);
         }
     };
-    let conin = UnblockedWriter::new(conin, PIPE_CAPACITY);
+    let conin = UnblockedWriter::new(conin, INPUT_PIPE_CAPACITY);
 
     // Job Object 指派（KILL_ON_JOB_CLOSE 孤儿防护）——紧跟 spawn 之后、任何
     // 提前返回之前。指派失败即致命：孤儿防护不能静默丢失，先杀已 spawn 的

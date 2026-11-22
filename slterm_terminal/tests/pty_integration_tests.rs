@@ -337,6 +337,24 @@ fn conpty_spawn_write_read_resize_close_full_chain() {
     driven.shutdown();
 }
 
+/// 超过块数与字节双重预算的真实输出洪峰不得卡死或丢失有序尾部。
+#[test]
+fn conpty_output_burst_backpressure_preserves_tail() {
+    let _guard = integration_lock();
+    let mut driven = DrivenTerm::new(&options("cmd.exe", &["/d", "/q", "/k"]));
+    driven.input(
+        b"for /L %i in (1,1,100000) do @echo FLOOD-%i-0123456789012345678901234567890123456789\r",
+    );
+    driven.input(b"echo SLTERM-FLOOD-DONE\r");
+    let grid = driven.await_grid(Duration::from_secs(30), |grid| {
+        grid.contains("SLTERM-FLOOD-DONE")
+    });
+    for expected in ["FLOOD-99999-", "FLOOD-100000-", "SLTERM-FLOOD-DONE"] {
+        assert!(grid.contains(expected), "洪峰尾部缺少 {expected}");
+    }
+    driven.shutdown();
+}
+
 /// 清理宿主目录：宿主进程可在 ClosePseudoConsole 后异步收尾，Windows
 /// 短暂保留映像映射——PermissionDenied 有限重试（上游范式，5s 上界）。
 fn cleanup_dir(dir: &std::path::Path) {

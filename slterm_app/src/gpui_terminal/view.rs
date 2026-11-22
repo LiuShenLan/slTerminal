@@ -1164,3 +1164,5 @@ mod feedback_tests;
 mod key_tests;
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod shutdown_tests;
+#[cfg(all(test, feature = "gpui-test-support"))]
+mod visibility_tests;

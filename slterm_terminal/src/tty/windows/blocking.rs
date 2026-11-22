@@ -1,16 +1,147 @@
 //! Code for running a reader/writer on another thread while driving it through `polling`.
 
+use std::collections::VecDeque;
 use std::io::prelude::*;
 use std::marker::PhantomData;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::task::{Context, Poll, Wake, Waker};
 use std::{io, thread};
 
-use piper::{Reader, Writer, pipe};
+use piper::{Writer, pipe};
 use polling::os::iocp::{CompletionPacket, PollerIocpExt};
 use polling::{Event, PollMode, Poller};
 
+use crate::event_loop::READ_BUFFER_SIZE;
 use crate::thread::spawn_named;
+
+const OUTPUT_CHUNK_LIMIT: usize = 64;
+const OUTPUT_BYTE_LIMIT: usize = 4 * 1024 * 1024;
+
+struct OutputChunk {
+    bytes: Vec<u8>,
+    consumed: usize,
+}
+
+#[derive(Default)]
+struct OutputState {
+    chunks: VecDeque<OutputChunk>,
+    bytes: usize,
+    closed: bool,
+}
+
+/// 读取线程与解析 worker 间的双上限字节块队列。
+struct OutputQueue {
+    state: Mutex<OutputState>,
+    changed: Condvar,
+    max_chunks: usize,
+    max_bytes: usize,
+}
+
+impl OutputQueue {
+    fn new() -> Self {
+        Self::with_limits(OUTPUT_CHUNK_LIMIT, OUTPUT_BYTE_LIMIT)
+    }
+
+    fn with_limits(max_chunks: usize, max_bytes: usize) -> Self {
+        Self {
+            state: Mutex::new(OutputState::default()),
+            changed: Condvar::new(),
+            max_chunks,
+            max_bytes,
+        }
+    }
+
+    fn push_locked(&self, state: &mut OutputState, bytes: Vec<u8>) -> Result<(), Vec<u8>> {
+        if bytes.is_empty() {
+            return Ok(());
+        }
+        if state.chunks.len() >= self.max_chunks || state.bytes + bytes.len() > self.max_bytes {
+            return Err(bytes);
+        }
+        state.bytes += bytes.len();
+        state.chunks.push_back(OutputChunk { bytes, consumed: 0 });
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn try_push(&self, bytes: Vec<u8>) -> Result<(), Vec<u8>> {
+        let mut state = self.state.lock().unwrap();
+        self.push_locked(&mut state, bytes)?;
+        self.changed.notify_all();
+        Ok(())
+    }
+
+    fn push(&self, mut bytes: Vec<u8>) {
+        let mut state = self.state.lock().unwrap();
+        loop {
+            match self.push_locked(&mut state, bytes) {
+                Ok(()) => {
+                    self.changed.notify_all();
+                    return;
+                }
+                Err(returned) => bytes = returned,
+            }
+            state = self.changed.wait(state).unwrap();
+        }
+    }
+
+    fn read_locked(&self, state: &mut OutputState, output: &mut [u8]) -> usize {
+        let mut written = 0;
+        while written < output.len() {
+            let Some(chunk) = state.chunks.front_mut() else {
+                break;
+            };
+            let available = &chunk.bytes[chunk.consumed..];
+            let count = available.len().min(output.len() - written);
+            output[written..written + count].copy_from_slice(&available[..count]);
+            chunk.consumed += count;
+            written += count;
+            let finished = chunk.consumed == chunk.bytes.len();
+            if finished {
+                state.chunks.pop_front();
+            }
+            state.bytes -= count;
+        }
+        written
+    }
+
+    fn try_read(&self, output: &mut [u8]) -> usize {
+        let mut state = self.state.lock().unwrap();
+        let read = self.read_locked(&mut state, output);
+        if read > 0 {
+            self.changed.notify_all();
+        }
+        read
+    }
+
+    fn read_wait(&self, output: &mut [u8]) -> usize {
+        let mut state = self.state.lock().unwrap();
+        loop {
+            let read = self.read_locked(&mut state, output);
+            if read > 0 {
+                self.changed.notify_all();
+                return read;
+            }
+            if state.closed {
+                return 0;
+            }
+            state = self.changed.wait(state).unwrap();
+        }
+    }
+
+    fn close(&self) {
+        self.state.lock().unwrap().closed = true;
+        self.changed.notify_all();
+    }
+
+    fn is_closed(&self) -> bool {
+        self.state.lock().unwrap().closed
+    }
+
+    fn is_empty(&self) -> bool {
+        self.state.lock().unwrap().chunks.is_empty()
+    }
+}
 
 struct Registration {
     interest: Mutex<Option<Interest>>,
@@ -39,8 +170,8 @@ pub struct UnblockedReader<R> {
     /// The event to send about completion.
     interest: Arc<Registration>,
 
-    /// The pipe that we are reading from.
-    pipe: Reader,
+    /// 读取线程发布的有界输出块。
+    queue: Arc<OutputQueue>,
 
     /// Is this the first time registering?
     first_register: bool,
@@ -50,64 +181,50 @@ pub struct UnblockedReader<R> {
 }
 
 impl<R: Read + Send + 'static> UnblockedReader<R> {
-    /// Spawn a new unblocked reader.
-    pub fn new(mut source: R, pipe_capacity: usize) -> Self {
-        // Create a new pipe.
-        let (reader, mut writer) = pipe(pipe_capacity);
+    /// Spawn a reader thread that forwards bounded byte chunks without parsing.
+    pub fn new(mut source: R) -> Self {
+        let queue = Arc::new(OutputQueue::new());
         let interest = Arc::new(Registration {
             interest: Mutex::<Option<Interest>>::new(None),
             end: PipeEnd::Reader,
         });
 
-        // Spawn the reader thread.
+        let producer_queue = Arc::clone(&queue);
+        let producer_interest = Arc::clone(&interest);
         spawn_named("slterm-tty-reader-thread", move || {
-            let waker = Waker::from(Arc::new(ThreadWaker(thread::current())));
-            let mut context = Context::from_waker(&waker);
-
+            let waker = Waker::from(producer_interest);
+            let mut buf = vec![0; READ_BUFFER_SIZE];
             loop {
-                // Read from the reader into the pipe.
-                match writer.poll_fill(&mut context, &mut source) {
-                    Poll::Ready(Ok(0)) => {
-                        // Either the pipe is closed or the reader is at its EOF.
-                        // In any case, we are done.
+                match source.read(&mut buf) {
+                    Ok(0) => {
                         crate::pty_trace("conout reader thread: EOF");
-                        return;
+                        break;
                     }
-
-                    Poll::Ready(Ok(_)) => {
-                        // Keep reading.
-                        continue;
+                    Ok(read) => {
+                        // 队列满时只阻塞专用读取线程，PTY 管道自然形成背压。
+                        producer_queue.push(buf[..read].to_vec());
+                        waker.wake_by_ref();
                     }
-
-                    Poll::Ready(Err(e)) if e.kind() == io::ErrorKind::Interrupted => {
-                        // We were interrupted; continue.
-                        continue;
-                    }
-
-                    // Windows reports normal anonymous-pipe EOF this way.
-                    Poll::Ready(Err(e)) if e.kind() == io::ErrorKind::BrokenPipe => {
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(error) if error.kind() == io::ErrorKind::BrokenPipe => {
                         crate::pty_trace("conout reader thread: broken pipe");
-                        return;
+                        break;
                     }
-
-                    Poll::Ready(Err(e)) => {
-                        log::error!("error writing to pipe: {}", e);
+                    Err(error) => {
+                        log::error!("error reading from PTY: {error}");
                         crate::pty_trace("conout reader thread: read error");
-                        return;
-                    }
-
-                    Poll::Pending => {
-                        // We are now waiting on the other end to advance. Park the
-                        // thread until they do.
-                        thread::park();
+                        break;
                     }
                 }
             }
+            producer_queue.close();
+            // 关闭也必须唤醒等待方，否则 teardown 的 drain 会永久滞留。
+            waker.wake_by_ref();
         });
 
         Self {
             interest,
-            pipe: reader,
+            queue,
             first_register: true,
             _reader: PhantomData,
         }
@@ -123,7 +240,7 @@ impl<R: Read + Send + 'static> UnblockedReader<R> {
         });
 
         // Send the event to start off with if we have any data.
-        if (!self.pipe.is_empty() && event.readable) || self.first_register {
+        if (!self.queue.is_empty() && event.readable) || self.first_register {
             self.first_register = false;
             poller.post(CompletionPacket::new(event)).ok();
         }
@@ -135,44 +252,14 @@ impl<R: Read + Send + 'static> UnblockedReader<R> {
         *interest = None;
     }
 
-    /// Try to read from the reader.
+    /// Try to read from the queued chunks.
     pub fn try_read(&mut self, buf: &mut [u8]) -> usize {
-        let waker = Waker::from(self.interest.clone());
-
-        let read = match self
-            .pipe
-            .poll_drain_bytes(&mut Context::from_waker(&waker), buf)
-        {
-            Poll::Pending => 0,
-            Poll::Ready(n) => n,
-        };
-
-        // piper 只在「管道为空」的那次读取里注册 read waker，一旦读到数据就
-        // 立刻把它 take 掉，而写入侧的 `wake()` 对空 waker 是 no-op。于是调用
-        // 方在管道仍有数据时停止读取（`pty_read` 到 `MAX_LOCKED_READ` 就会
-        // 返回）时，会同时失去 waker 和待投递的 readable 事件 —— 对端随后一
-        // 静默（AI CLI 答完就不再输出），这批字节便永久留在管道里：画面停在
-        // 一个画到一半的残帧，滚动条却仍在底部，只有按键或 resize 能救回来
-        // （前者触发 reregister 补投，后者走 resize 前的强制排空循环）。
-        //
-        // `PollMode::Level` 承诺的是「只要还有数据就保持可读」，这里补上
-        // piper 不会替我们做的那次投递。
-        //
-        // 判据只能是「这次读到过数据」，不能再加「而且管道当下仍有货」：
-        // `drain_inner` 是在**拷贝之前**就 `reader.take()` 摘掉 waker 的，因此
-        // 「读到过数据」本身即意味着此刻管道处于无 waker 状态，与它当下空不空
-        // 无关。加上 `!is_empty()` 就成了 TOCTOU——只堵住「摘 waker 的瞬间还有
-        // 货」，漏掉「摘完之后才到的货」，而 AI CLI 的收尾字节（输入框、状态栏
-        // 那几百字节）恰好总落在这个窗口里：先打完一屏 diff 把 `pty_read` 顶到
-        // `MAX_LOCKED_READ` 提前 break、管道刚好排空，随后那批收尾字节的
-        // `wake()` 就打在空 waker 上，于是屏幕上缺的正是输入框。
-        //
-        // 多投的代价是 O(1) 且自收敛：event_loop 因此多读一次，读到 0 时
-        // `drain_inner` 会在开头重新注册 waker，状态回到「有 waker 等写入」。
+        let read = self.queue.try_read(buf);
         if read > 0 {
-            waker.wake_by_ref();
+            // `pty_read` 可在达到单次解析预算后提前停止；Level 模式必须再投
+            // 一次 readable，保证静默源留下的队列尾部也会继续被消费。
+            Waker::from(self.interest.clone()).wake_by_ref();
         }
-
         read
     }
 
@@ -183,29 +270,18 @@ impl<R: Read + Send + 'static> UnblockedReader<R> {
     /// full pipe parks the reader thread forever — the close call deadlocks
     /// and the process lingers after its window is gone.
     pub fn drain_detached(&mut self) {
-        let (dead_reader, _dead_writer) = pipe(1);
-        let mut real = std::mem::replace(&mut self.pipe, dead_reader);
+        let queue = Arc::clone(&self.queue);
         spawn_named("slterm-tty-drain-thread", move || {
-            let waker = Waker::from(Arc::new(ThreadWaker(thread::current())));
-            let mut context = Context::from_waker(&waker);
             let mut sink = [0u8; 8192];
-            loop {
-                match real.poll_drain_bytes(&mut context, &mut sink) {
-                    // Writer closed: the reader thread saw EOF — host is gone.
-                    Poll::Ready(0) => return,
-                    Poll::Ready(_) => continue,
-                    Poll::Pending => thread::park(),
-                }
-            }
+            while queue.read_wait(&mut sink) > 0 {}
+            debug_assert!(queue.is_closed());
         });
     }
 }
 
 impl<R: Read + Send + 'static> Read for UnblockedReader<R> {
-    /// 注意：返回的 `Ok(0)` **不是** EOF——管道暂空（`Poll::Pending`）同样
-    /// 归 0，此刻 waker 已注册、写入侧到货即醒。EOF 由 reader 线程退出 +
-    /// 管道关闭表达（见 `poll_fill` 的 `Ok(0)`/`BrokenPipe` 分支）。消费方
-    /// 不得以 `Ok(0)` 判定流关闭。
+    /// `Ok(0)` 只表示队列暂空，不代表 EOF；消费方不得据此判定流关闭。
+    /// EOF 由读取线程关闭队列表达，显式 teardown 的 drain 据此结束。
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         Ok(self.try_read(buf))
     }
@@ -375,6 +451,87 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn output_queue_enforces_byte_limit_without_losing_order() {
+        let queue = OutputQueue::with_limits(4, 5);
+        queue.try_push(b"abc".to_vec()).unwrap();
+        assert_eq!(queue.try_push(b"def".to_vec()), Err(b"def".to_vec()));
+        queue.try_push(b"d".to_vec()).unwrap();
+
+        let mut output = [0; 2];
+        assert_eq!(queue.try_read(&mut output), 2);
+        assert_eq!(&output, b"ab");
+        queue.try_push(b"efg".to_vec()).unwrap();
+
+        let mut rest = Vec::new();
+        let mut buf = [0; 3];
+        loop {
+            let read = queue.try_read(&mut buf);
+            if read == 0 {
+                break;
+            }
+            rest.extend_from_slice(&buf[..read]);
+        }
+        assert_eq!(rest, b"cdefg");
+    }
+
+    #[test]
+    fn output_queue_enforces_chunk_limit_independently() {
+        let queue = OutputQueue::with_limits(2, 1024);
+        queue.try_push(b"a".to_vec()).unwrap();
+        queue.try_push(b"b".to_vec()).unwrap();
+        assert_eq!(queue.try_push(b"c".to_vec()), Err(b"c".to_vec()));
+
+        let mut output = [0; 1];
+        assert_eq!(queue.try_read(&mut output), 1);
+        assert_eq!(&output, b"a");
+        queue.try_push(b"c".to_vec()).unwrap();
+
+        let mut rest = [0; 2];
+        assert_eq!(queue.try_read(&mut rest), 2);
+        assert_eq!(&rest, b"bc");
+    }
+
+    #[test]
+    fn output_queue_push_waits_for_byte_space() {
+        let queue = Arc::new(OutputQueue::with_limits(2, 4));
+        queue.try_push(b"full".to_vec()).unwrap();
+        let producer = Arc::clone(&queue);
+        let (done_tx, done_rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            producer.push(b"!".to_vec());
+            done_tx.send(()).unwrap();
+        });
+        assert!(done_rx.recv_timeout(Duration::from_millis(50)).is_err());
+
+        let mut output = [0; 1];
+        assert_eq!(queue.try_read(&mut output), 1);
+        done_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+
+        let mut rest = [0; 4];
+        assert_eq!(queue.try_read(&mut rest), 4);
+        assert_eq!(&rest, b"ull!");
+    }
+
+    #[test]
+    fn output_queue_close_wakes_a_waiting_drainer() {
+        let queue = Arc::new(OutputQueue::with_limits(1, 4));
+        let drainer = Arc::clone(&queue);
+        let (started_tx, started_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            let mut output = [0; 4];
+            assert_eq!(drainer.read_wait(&mut output), 0);
+            assert!(drainer.is_closed());
+            done_tx.send(()).unwrap();
+        });
+        started_rx.recv().unwrap();
+        assert!(done_rx.recv_timeout(Duration::from_millis(50)).is_err());
+        queue.close();
+        done_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    }
+
     /// 「给一批就静默」的源：`recv` 阻塞住读线程，精确复刻 AI CLI 打完一轮
     /// 就不再输出的时序。源不静默的话总有下一次写入替我们投递事件，缺唤醒
     /// 也就显不出来——静默是这个 bug 的必要条件。
@@ -420,30 +577,20 @@ mod tests {
             .any(|event| event.key == key && event.readable)
     }
 
-    /// 把管道读空之后仍必须补投一次 readable。
-    ///
-    /// 回归防线：判据一旦退回 `read > 0 && !self.pipe.is_empty()`，这一步就再没有
-    /// 事件可等——管道已空、waker 已被 `drain_inner` 在拷贝前摘掉，源再静默下去
-    /// 便没有任何一方会投递，字节永久滞留（症状：画面停在半帧，缺 CLI 输入框，
-    /// 只有按键或 resize 能救回来）。
+    /// 队列读空后仍补投 readable，消费方达到单次解析预算时不会遗留静默尾部。
     #[test]
-    fn reposts_readable_after_draining_the_pipe() {
+    fn reposts_readable_after_draining_the_queue() {
         const KEY: usize = 7;
 
         let (tx, rx) = mpsc::channel();
         let poller = Arc::new(Poller::new().unwrap());
         let event = Event::readable(KEY);
-        let mut reader = UnblockedReader::new(
-            ScriptedSource {
-                rx,
-                pending: Vec::new(),
-            },
-            4096,
-        );
+        let mut reader = UnblockedReader::new(ScriptedSource {
+            rx,
+            pending: Vec::new(),
+        });
 
-        // Readiness permits another poll; it does not guarantee bytes. piper
-        // can deliberately yield for fairness and wake us again, and a queued
-        // notification can outlive the data that originally triggered it.
+        // Readiness 只表示可以再 poll；过期通知可能晚于对应数据，重试必须先等通知。
         // Retry only after a notification so a genuinely lost wake still fails.
         let read_chunk = |reader: &mut UnblockedReader<ScriptedSource>, buf: &mut [u8]| {
             let deadline = Instant::now() + Duration::from_secs(2);
@@ -464,25 +611,24 @@ mod tests {
 
         tx.send(b"hello".to_vec()).unwrap();
         assert!(
-            wait_until(Duration::from_secs(2), || !reader.pipe.is_empty()),
-            "读线程没有把数据搬进管道"
+            wait_until(Duration::from_secs(2), || !reader.queue.is_empty()),
+            "读线程没有把数据搬进队列"
         );
 
         let mut buf = [0u8; 64];
         assert_eq!(read_chunk(&mut reader, &mut buf), 5);
         assert_eq!(&buf[..5], b"hello");
         assert!(
-            reader.pipe.is_empty(),
-            "这一读须把管道读空，否则测不到 TOCTOU 的那一半"
+            reader.queue.is_empty(),
+            "这一读须把队列读空，验证补投自收敛"
         );
 
         assert!(
             readable_arrived(&poller, KEY),
-            "读空管道后没有补投 readable：源一静默，这批字节就永久滞留"
+            "读空队列后没有补投 readable：源一静默，尾部可能永久滞留"
         );
 
-        // 补投是自收敛的：再读一次返回 0，piper 借这次空读重新注册 waker，
-        // 后续写入照样能唤醒——多投的那一次不会把唤醒链弄坏。
+        // 空读不再补投；后续生产仍直接经 Registration 唤醒。
         assert_eq!(reader.try_read(&mut buf), 0);
         tx.send(b"world".to_vec()).unwrap();
         assert!(
