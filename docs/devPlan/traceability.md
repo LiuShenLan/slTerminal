@@ -351,7 +351,7 @@
 | 有效与无效 Mermaid 的静态渲染及错误边界 | `markdown_mermaid_static_final_capability` | 延期 |
 | 远程图片点击前零请求且请求不带凭据或 Referer | `markdown_remote_image_click_authorization` | 已自动化 |
 | 根外文档的相邻图片不因文档可读而获批 | `markdown_outside_document_resource_not_authorized` | 已自动化 |
-| 大文档降级优先于持久渲染形态 | `markdown_large_document_degradation` | 待实现 |
+| 大文档降级优先于持久渲染形态 | `markdown_large_document_degradation` | 已自动化 |
 | Markdown 共享 Document 按统一自动保存触发 | `markdown_shared_document_autosave` | 待实现 |
 
 ### Explorer

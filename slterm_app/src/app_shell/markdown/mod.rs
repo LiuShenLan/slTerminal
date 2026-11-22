@@ -4,6 +4,7 @@ mod decoder;
 mod formula;
 mod link;
 mod local_resource;
+mod progressive;
 mod remote_resource;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
