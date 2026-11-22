@@ -10,7 +10,7 @@
 - **HEAD 错误分类契约**：`head_file` 先 `verify_head`（unborn 判定）再 `cat-file -e HEAD:<relative>` 预检，`git show` 在预检通过后失败也走同一分类臂；`classify_git_failure` 按 stderr（大小写不敏感）分出权限（`GitError::AccessDenied`）与损坏（`GitError::Corrupt`），识别不出归 `GitError::NotInHead`。UI 只做占位文案，不解析具体错误。
 - **只读短 TTL 缓存边界**：`status_cached`/`repository_root_cached` 仅服务只读消费面（gutter、文件树 VCS），TTL 500 毫秒；同 root 的连续/并发读取共享一次子进程。状态缓存键 = 调用方传入的 root 原样（进程级单槽）；仓库根缓存键 = 起始目录（容量上限 16，过期与超限清理，解析失败不缓存）。
 - **未跟踪展开**：共享 `status` 带 `--untracked-files=all`，快照含单文件未跟踪条目；单文件状态由 `file_status_from_snapshot` 从快照派生，不为路径单独 spawn status。
-- **只读操作面**：status/file status/hunks/HEAD 字节；porcelain v2 解析在本模块单源（`parse_status`）。本模块不得执行 checkout、restore、rm 等工作区或索引写操作。
+- **只读操作面**：status/file status/hunks/HEAD 字节与补全 refs/remotes；porcelain v2 解析在本模块单源（`parse_status`）。补全读取只经 `completion::GitFacade` 的语义方法，具体预算与禁网红线见 `completion/CLAUDE.md`。本模块不得执行 checkout、restore、rm 等工作区或索引写操作。
 - **旧 git2 语义资产**：LRU 仓库缓存、不扫 ignored、rename 双检已转对照用例保留。
 
 ## 验收与测试

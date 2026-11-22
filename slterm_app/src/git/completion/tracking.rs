@@ -208,7 +208,7 @@ impl Config {
     }
 }
 
-pub(super) fn inferred_name(value: &str) -> Option<&str> {
+pub(crate) fn inferred_name(value: &str) -> Option<&str> {
     // Git 按实际参数拼写去掉 refs/、remotes/，再去掉第一个路径分量。
     let value = value.strip_prefix("refs/").unwrap_or(value);
     let value = value.strip_prefix("remotes/").unwrap_or(value);

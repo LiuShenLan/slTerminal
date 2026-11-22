@@ -58,8 +58,8 @@ pub(crate) mod document_io;
 #[allow(dead_code)]
 pub(crate) mod encrypted_backup;
 pub mod error;
-// git 子进程执行体 facade(子进程统一已裁):只读面 = 仓库根 +
-// HEAD 字节(gitshow 数据源);四方法执行归 `git::command`。
+// git 子进程执行体 facade:仓库根、HEAD、状态与补全 refs/remotes
+// 共用只读边界；补全语义入口归 `git::GitFacade`。
 #[allow(dead_code)] // 生产消费归文件与 Git 阶段。
 pub(crate) mod git;
 // 有界本地 Git 发现:3s/1MB 双预算 + TTL + 代次失效。

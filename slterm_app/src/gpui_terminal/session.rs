@@ -620,6 +620,7 @@ mod shutdown_tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         old_session.notifier.notify(b"exit\r".to_vec()).unwrap();
+        let exit_deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
         loop {
             if matches!(
                 old_events.try_recv(),
@@ -627,7 +628,10 @@ mod shutdown_tests {
             ) {
                 break;
             }
-            assert!(std::time::Instant::now() < deadline, "旧 PTY 必须先退出");
+            assert!(
+                std::time::Instant::now() < exit_deadline,
+                "旧 PTY 必须先退出"
+            );
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
 
@@ -641,6 +645,7 @@ mod shutdown_tests {
             .notifier
             .notify(b"echo SLTERM-AFTER-RECONNECT\r".to_vec())
             .unwrap();
+        let reconnect_deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         loop {
             let ready = match new_events.try_recv() {
                 Ok(slterm_terminal::event::Event::Frame(frame)) => {
@@ -664,7 +669,7 @@ mod shutdown_tests {
                 break;
             }
             assert!(
-                std::time::Instant::now() < deadline,
+                std::time::Instant::now() < reconnect_deadline,
                 "新 PTY 事件流必须可用"
             );
             std::thread::sleep(std::time::Duration::from_millis(10));

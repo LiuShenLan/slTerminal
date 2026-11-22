@@ -1,67 +1,17 @@
-//! 有界本地 Git 发现:补全请求的后台数据源。
+//! 本地 Git 补全投射:消费 `git::GitFacade` 的语义快照，不直接执行 I/O。
 //!
-//! 双预算纪律:3s 总时限 + 1MB 输出上限,两次元数据读取
-//! (`config --null --get-regexp` 哨兵 + `for-each-ref` 一次取全)共用;
-//! Snapshot 2s TTL + generation 代次失效;取消令牌在每个子进程之间检查。
-//! 语义层(slterm_completions::semantic)只描述来源,本模块才做真实 I/O。
-
-use std::collections::HashSet;
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+//! 双预算、只读 argv、sentinel、2 秒 TTL 与 generation 失效统一归 facade；
+//! 本模块只按语义来源筛选 refs/remotes，并处理候选与路径重名。
 
 use slterm_completions::Suggestion;
 use slterm_completions::semantic::{Context, Source, TrackingMode};
 
 use crate::completion::metadata::Execution;
-
-mod tracking;
-
-#[derive(Clone, Debug)]
-struct Reference {
-    full_name: String,
-    short_name: String,
-    busy: bool,
-    current: bool,
-    commit: bool,
-    symbolic: bool,
-    direct_tracking: bool,
-}
-
-#[derive(Debug, Default)]
-struct Repository {
-    references: Vec<Reference>,
-    guesses: Vec<String>,
-    remotes: Vec<String>,
-    remote_branches: std::collections::BTreeMap<String, Vec<String>>,
-    guess_enabled: bool,
-    local_branches: HashSet<String>,
-}
-
-#[derive(Debug)]
-struct Snapshot {
-    key: String,
-    repository: Arc<Repository>,
-    fetched: Instant,
-}
-
-/// 每个 pane 一份仓库快照;同一仓库的多个前缀复用,不再启动 Git。
-#[derive(Debug, Default)]
-pub(crate) struct Cache(Mutex<(u64, Option<Snapshot>)>);
-
-impl Cache {
-    pub(crate) fn invalidate(&self) {
-        let mut state = self
-            .0
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        state.0 = state.0.wrapping_add(1);
-        state.1 = None;
-    }
-}
+use crate::git::{GitFacade, inferred_tracking_name};
 
 /// 应用层已证明参数角色与执行作用域,这里只做有界发现与候选投射。
 pub(crate) fn complete_available(
-    cache: &Cache,
+    facade: &GitFacade,
     execution: &Execution,
     cwd: &str,
     context: &Context,
@@ -81,57 +31,32 @@ pub(crate) fn complete_available(
     if cwd.is_empty() || cancelled() {
         return None;
     }
-    let key = format!(
-        "{}\0{cwd}\0{:?}\0{}",
-        execution.key(),
-        context.directories,
-        matches!(context.source, Source::Remotes)
-    );
-    let (generation, cached) = {
-        let guard = cache
-            .0
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        (
-            guard.0,
-            guard
-                .1
-                .as_ref()
-                .filter(|snapshot| {
-                    snapshot.key == key && snapshot.fetched.elapsed() < Duration::from_secs(2)
-                })
-                .map(|snapshot| snapshot.repository.clone()),
-        )
-    };
-    let repository = if let Some(cached) = cached {
-        cached
-    } else {
-        let repository = Arc::new(query(execution, cwd, context, cancelled)?);
-        let mut state = cache
-            .0
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // 提交命令可能已使快照失效,较早请求不能把旧仓库状态重新放回缓存。
-        if !cancelled() && state.0 == generation {
-            state.1 = Some(Snapshot {
-                key,
-                repository: repository.clone(),
-                fetched: Instant::now(),
-            });
-        }
-        repository
-    };
     if matches!(context.source, Source::Remotes) {
+        let remotes = facade
+            .remotes(
+                cwd,
+                &context.directories,
+                execution.environment(),
+                cancelled,
+            )
+            .ok()?;
         return Some(
             context.candidates(
-                repository
-                    .remotes
+                remotes
                     .iter()
                     .take_while(|_| !cancelled())
                     .map(String::as_str),
             ),
         );
     }
+    let repository = facade
+        .refs(
+            cwd,
+            &context.directories,
+            execution.environment(),
+            cancelled,
+        )
+        .ok()?;
     if matches!(
         context.source,
         Source::RemoteBranches | Source::PushRefs { destination: true }
@@ -213,7 +138,7 @@ pub(crate) fn complete_available(
                     infer_name: true,
                     ..
                 }
-            ) || tracking::inferred_name(value)
+            ) || inferred_tracking_name(value)
                 .is_some_and(|name| !repository.local_branches.contains(name))
         });
     let guess = context.guesses_branches(repository.guess_enabled);
@@ -248,7 +173,7 @@ pub(crate) fn complete_available(
 
 #[cfg(test)]
 fn complete(
-    cache: &Cache,
+    cache: &GitFacade,
     execution: &Execution,
     cwd: &str,
     context: &Context,
@@ -257,123 +182,13 @@ fn complete(
     complete_available(cache, execution, cwd, context, cancelled).unwrap_or_default()
 }
 
-fn query(
-    execution: &Execution,
-    cwd: &str,
-    context: &Context,
-    cancelled: &dyn Fn() -> bool,
-) -> Option<Repository> {
-    // 两次元数据读取共用总预算;缓存命中及逐字筛选不再启动子进程。
-    let deadline = Instant::now() + Duration::from_secs(3);
-    let stopped = || cancelled() || Instant::now() >= deadline;
-    let mut remaining = 1024 * 1024;
-    let mut read = |args: &[&str]| {
-        if stopped() {
-            return None;
-        }
-        let bytes = execution.git(
-            cwd,
-            &context.directories,
-            args,
-            deadline,
-            remaining,
-            &stopped,
-        )?;
-        remaining -= bytes.len();
-        String::from_utf8(bytes).ok()
-    };
-    if matches!(context.source, Source::Remotes) {
-        let remotes = read(&["remote"])?;
-        return (!stopped()).then_some(Repository {
-            remotes: remotes
-                .lines()
-                .filter(|name| {
-                    !name.is_empty()
-                        && !name.starts_with('-')
-                        && !name.chars().any(char::is_control)
-                })
-                .map(str::to_owned)
-                .collect(),
-            ..Default::default()
-        });
-    }
-    // 哨兵保证无相关配置也是成功的空结果;只读取所需键,不收集 URL、凭据等配置。
-    let config = tracking::Config::parse(&read(&[
-        "config",
-        "--null",
-        "--get-regexp",
-        "^(checkout\\.(guess|defaultremote)|remote\\..*\\.fetch|completion\\.snapshot)$",
-    ])?);
-    let text = read(&[
-        "for-each-ref",
-        "--format=%(refname)%00%(refname:short)%00%(symref)%00%(worktreepath)%00%(objecttype)%00%(*objecttype)%00%(HEAD)",
-    ])?;
-    let references: Vec<_> = text
-        .lines()
-        .filter_map(|line| {
-            let mut fields = line.split('\0');
-            let [
-                Some(full_name),
-                Some(short_name),
-                Some(symref),
-                Some(worktree),
-                Some(object_type),
-                Some(peeled_type),
-                Some(head),
-            ] = std::array::from_fn(|_| fields.next())
-            else {
-                return None;
-            };
-            if fields.next().is_some()
-                || short_name.is_empty()
-                || full_name
-                    .chars()
-                    .chain(short_name.chars())
-                    .any(char::is_control)
-            {
-                return None;
-            }
-            Some(Reference {
-                full_name: full_name.to_owned(),
-                short_name: short_name.to_owned(),
-                busy: !worktree.is_empty(),
-                current: head == "*",
-                commit: object_type == "commit" || peeled_type == "commit",
-                symbolic: !symref.is_empty(),
-                direct_tracking: config.can_track(full_name, &stopped),
-            })
-        })
-        .collect();
-    let guesses = config.guesses(&references, &stopped);
-    let remote_branches = config.remote_branches(&references, &stopped);
-    let local_branches = references
-        .iter()
-        .filter_map(|reference| {
-            reference
-                .full_name
-                .strip_prefix("refs/heads/")
-                .map(str::to_owned)
-        })
-        .collect();
-    (!stopped()).then_some(Repository {
-        references,
-        guesses,
-        guess_enabled: config.guess,
-        remotes: Vec::new(),
-        remote_branches,
-        local_branches,
-    })
-}
-
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
     use crate::suggest::SuggestEnv;
 
-    pub(crate) fn retain_snapshot_for_test(cache: &Cache) {
-        let mut state = cache.0.lock().unwrap();
-        state.1.as_mut().expect("queried repository").fetched =
-            Instant::now() + Duration::from_secs(60);
+    pub(crate) fn retain_snapshot_for_test(facade: &GitFacade) {
+        facade.retain_snapshot_for_test();
     }
 
     use slterm_completions::command_context::ShellSyntax;
@@ -432,11 +247,41 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn real_remotes_are_read_through_the_semantic_facade() {
+        let repository = repository();
+        for remote in ["origin", "upstream"] {
+            git(
+                repository.path(),
+                &[
+                    "remote",
+                    "add",
+                    remote,
+                    "https://example.invalid/completion",
+                ],
+            );
+        }
+        let line = "git push ";
+        let context = Context::parse(line, line.len(), ShellSyntax::Posix).unwrap();
+        assert!(matches!(context.source, Source::Remotes));
+        let values = complete(
+            &GitFacade::default(),
+            &test_execution(repository.path()),
+            repository.path().to_str().unwrap(),
+            &context,
+            &|| false,
+        )
+        .into_iter()
+        .map(|suggestion| suggestion.value)
+        .collect::<Vec<_>>();
+        assert_eq!(values, ["origin", "upstream"]);
+    }
+
+    #[test]
     fn real_explicit_tracking_creates_and_inherits_the_expected_upstream() {
         let repository = repository();
         let cwd = repository.path().to_str().unwrap();
         let execution = test_execution(repository.path());
-        let cache = Cache::default();
+        let cache = GitFacade::default();
         let values = |line: &str| {
             let context = Context::parse(line, line.len(), ShellSyntax::Posix).unwrap();
             complete(&cache, &execution, cwd, &context, &|| false)
@@ -578,7 +423,7 @@ pub(crate) mod tests {
         let repository = repository();
         let cwd = repository.path().to_str().unwrap();
         let execution = test_execution(repository.path());
-        let cache = Cache::default();
+        let cache = GitFacade::default();
         let values = |line: &str| {
             let context = Context::parse(line, line.len(), ShellSyntax::Posix).unwrap();
             // 不可用的元数据是有界请求的合法结果而不是空仓库:
@@ -779,7 +624,7 @@ pub(crate) mod tests {
         let repository = repository();
         let cwd = repository.path().to_str().unwrap();
         let execution = test_execution(repository.path());
-        let cache = Cache::default();
+        let cache = GitFacade::default();
         git(repository.path(), &["pack-refs", "--all"]);
         let query = |line: &str| {
             let context = Context::parse(line, line.len(), ShellSyntax::Posix).unwrap();

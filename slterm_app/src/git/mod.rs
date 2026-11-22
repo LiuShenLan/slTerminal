@@ -19,6 +19,10 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+mod completion;
+
+pub(crate) use completion::{GitFacade, inferred_name as inferred_tracking_name};
+
 /// git 执行体错误。消息保持用户可读(经 i18n `{error}` 占位展示)。
 #[derive(Debug)]
 pub(crate) enum GitError {

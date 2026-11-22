@@ -35,7 +35,7 @@ impl Cancellation {
 
 /// 来源缓存跟随 pane；学习数据由同一服务的不可变快照提供。
 pub(crate) struct Session {
-    git: Arc<crate::git_completion::Cache>,
+    git: Arc<crate::git::GitFacade>,
     scripts: Arc<project_scripts::Cache>,
     learning: crate::learning::LearningService,
 }
@@ -172,7 +172,7 @@ pub(crate) struct Request {
     line: String,
     cursor: usize,
     style: crate::suggest::CompletionStyle,
-    git: Option<(Arc<crate::git_completion::Cache>, metadata::Execution)>,
+    git: Option<(Arc<crate::git::GitFacade>, metadata::Execution)>,
     semantic: Option<SemanticContext>,
     scripts: Option<(Arc<project_scripts::Cache>, metadata::Execution)>,
     syntax: ShellSyntax,
@@ -761,6 +761,7 @@ mod completion_tests {
             ("history.rs", include_str!("history.rs")),
             ("directory_history.rs", include_str!("directory_history.rs")),
             ("git_completion.rs", include_str!("git_completion.rs")),
+            ("git/completion.rs", include_str!("git/completion.rs")),
             ("completion/paths.rs", include_str!("completion/paths.rs")),
             (
                 "completion/metadata.rs",

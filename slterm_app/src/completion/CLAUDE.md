@@ -8,7 +8,7 @@
 - **来源缓存跟随 pane**：`Session` 持有 Git/scripts 缓存，以 PaneId 关联；界面不决定来源适用条件。提交命令事件后必须 `Session::invalidate()`。
 - **取消令牌全链路**：文件遍历、历史扫描、Git 子进程统一为 `Cancellation`（`Arc<AtomicBool>`）；取消后不得回填缓存或呈现部分结果。
 - **源收敛为本地**：远程/SSH/WSL 来源与执行环境整支不迁；`SuggestEnv` 只有 Local。原因：产品定位是 Windows 本地终端。边界：新增远程能力时先改补全设计，不得在本模块私开分支。
-- **执行元数据只描述本机**：`metadata::Execution` 的 `prepare()` 是本地直通；Git 读取必须经 `git::command` 构造口（`--no-optional-locks`），不得另起执行体。
+- **执行元数据只描述本机**：`metadata::Execution` 的 `prepare()` 是本地直通；Git 读取必须经 `git::GitFacade` 的 refs/remotes 语义入口，不得另起执行体或通用 argv 通道。
 - **呈现接线单点**：ghost/popup、按键（Esc/Tab/上下/Enter）与 `suppressed_line` 关闭语义由壳侧统一接线；来源模块只产出候选。
 - **路径转义归属**：shell 引用与转义唯一归 `slterm_completions::command_context`；本模块只决定目录、匹配与拼写。
 
