@@ -61,10 +61,168 @@ pub enum MarkdownBlockKind {
     Html(MarkdownHtmlFragment),
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MarkdownStyle {
+    pub strong: bool,
+    pub emphasis: bool,
+    pub strikethrough: bool,
+    pub subscript: bool,
+    pub superscript: bool,
+    pub kbd: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MarkdownInlineKind {
+    Text,
+    Code,
+    Math,
+    Image,
+    FootnoteReference,
+    LineBreak,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MarkdownInline {
+    kind: MarkdownInlineKind,
+    text: String,
+    style: MarkdownStyle,
+    url: Option<String>,
+    source_range: Range<usize>,
+    /// 范围相对当前块的可见文本；图片与脚注引用为空范围。
+    visible_range: Range<usize>,
+}
+
+impl MarkdownInline {
+    pub const fn kind(&self) -> MarkdownInlineKind {
+        self.kind
+    }
+
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    pub const fn style(&self) -> &MarkdownStyle {
+        &self.style
+    }
+
+    pub fn url(&self) -> Option<&str> {
+        self.url.as_deref()
+    }
+
+    pub fn source_range(&self) -> Range<usize> {
+        self.source_range.clone()
+    }
+
+    pub fn visible_range(&self) -> Range<usize> {
+        self.visible_range.clone()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MarkdownStructure {
+    List(MarkdownList),
+    Table(MarkdownTable),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MarkdownList {
+    items: Vec<MarkdownListItem>,
+}
+
+impl MarkdownList {
+    pub fn items(&self) -> &[MarkdownListItem] {
+        &self.items
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MarkdownListItem {
+    ordinal: Option<usize>,
+    checked: Option<bool>,
+    depth: usize,
+    inlines: Vec<MarkdownInline>,
+    children: Vec<MarkdownListItem>,
+}
+
+impl MarkdownListItem {
+    pub const fn ordinal(&self) -> Option<usize> {
+        self.ordinal
+    }
+
+    pub const fn checked(&self) -> Option<bool> {
+        self.checked
+    }
+
+    pub const fn depth(&self) -> usize {
+        self.depth
+    }
+
+    pub fn inlines(&self) -> &[MarkdownInline] {
+        &self.inlines
+    }
+
+    pub fn children(&self) -> &[MarkdownListItem] {
+        &self.children
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MarkdownAlignment {
+    None,
+    Left,
+    Right,
+    Center,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MarkdownTable {
+    alignments: Vec<MarkdownAlignment>,
+    rows: Vec<MarkdownTableRow>,
+}
+
+impl MarkdownTable {
+    pub fn alignments(&self) -> &[MarkdownAlignment] {
+        &self.alignments
+    }
+
+    pub fn rows(&self) -> &[MarkdownTableRow] {
+        &self.rows
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MarkdownTableRow {
+    header: bool,
+    cells: Vec<MarkdownTableCell>,
+}
+
+impl MarkdownTableRow {
+    pub const fn header(&self) -> bool {
+        self.header
+    }
+
+    pub fn cells(&self) -> &[MarkdownTableCell] {
+        &self.cells
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MarkdownTableCell {
+    inlines: Vec<MarkdownInline>,
+}
+
+impl MarkdownTableCell {
+    pub fn inlines(&self) -> &[MarkdownInline] {
+        &self.inlines
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MarkdownBlock {
     id: BlockId,
     kind: MarkdownBlockKind,
+    structure: Option<MarkdownStructure>,
+    inlines: Vec<MarkdownInline>,
     source_range: Range<usize>,
     visible_range: Range<usize>,
 }
@@ -84,6 +242,14 @@ impl MarkdownBlock {
 
     pub fn visible_range(&self) -> Range<usize> {
         self.visible_range.clone()
+    }
+
+    pub fn inlines(&self) -> &[MarkdownInline] {
+        &self.inlines
+    }
+
+    pub fn structure(&self) -> Option<&MarkdownStructure> {
+        self.structure.as_ref()
     }
 }
 
@@ -281,11 +447,22 @@ impl Projection {
         let id = BlockId(self.blocks.len());
         let source_range = source_range(source, node);
         let kind = block_kind(node);
+        let structure = block_structure(source, node);
+        let inline = if matches!(
+            &kind,
+            MarkdownBlockKind::Code(_)
+                | MarkdownBlockKind::FrontMatter
+                | MarkdownBlockKind::Html(_)
+        ) {
+            InlineProjection::default()
+        } else {
+            project_inlines(source, node)
+        };
         let visible = match &kind {
             MarkdownBlockKind::Code(code) => code.source.clone(),
             MarkdownBlockKind::FrontMatter => String::new(),
             MarkdownBlockKind::Html(fragment) => fragment.visible_text(),
-            _ => visible_inline_text(node),
+            _ => inline.visible.clone(),
         };
         if matches!(kind, MarkdownBlockKind::Heading(_)) {
             let base = anchor_base(&visible);
@@ -335,6 +512,12 @@ impl Projection {
         self.blocks.push(MarkdownBlock {
             id,
             kind,
+            inlines: if structure.is_some() {
+                Vec::new()
+            } else {
+                inline.inlines
+            },
+            structure,
             source_range,
             visible_range,
         });
@@ -506,14 +689,295 @@ impl InlineHtmlState {
     }
 }
 
-fn visible_inline_text<'a>(node: &'a AstNode<'a>) -> String {
-    if let Some(math) = display_math(node) {
-        return math;
+#[derive(Default)]
+struct InlineProjection {
+    visible: String,
+    inlines: Vec<MarkdownInline>,
+}
+
+#[derive(Default)]
+struct RenderInlineState {
+    html: InlineHtmlState,
+    style: MarkdownStyle,
+    html_styles: Vec<String>,
+    html_links: Vec<String>,
+    markdown_link: Option<String>,
+}
+
+impl RenderInlineState {
+    fn current_url(&self) -> Option<String> {
+        self.html_links
+            .last()
+            .cloned()
+            .or_else(|| self.markdown_link.clone())
     }
-    let mut text = String::new();
-    let mut html = InlineHtmlState::default();
-    collect_visible_text(node, &mut text, &mut html);
-    text
+
+    fn refresh_html_style(&mut self) {
+        self.style.subscript = self.html_styles.iter().any(|name| name == "sub");
+        self.style.superscript = self.html_styles.iter().any(|name| name == "sup");
+        self.style.kbd = self.html_styles.iter().any(|name| name == "kbd");
+    }
+}
+
+fn project_inlines<'a>(source: &str, node: &'a AstNode<'a>) -> InlineProjection {
+    let mut projection = InlineProjection::default();
+    let mut state = RenderInlineState::default();
+    if let Some(math) = display_math(node) {
+        push_inline(
+            source,
+            node,
+            MarkdownInlineKind::Math,
+            math.clone(),
+            &state,
+            &mut projection,
+        );
+        return projection;
+    }
+    project_inline_node(source, node, &mut state, &mut projection);
+    projection
+}
+
+fn project_inline_node<'a>(
+    source: &str,
+    node: &'a AstNode<'a>,
+    state: &mut RenderInlineState,
+    projection: &mut InlineProjection,
+) {
+    if let NodeValue::HtmlInline(raw) = &node.data.borrow().value {
+        let Some(tag) = crate::markdown_html::inline_tag(raw) else {
+            return;
+        };
+        let accepted = state.html.accepts(&tag);
+        if accepted && tag.line_break {
+            push_inline(
+                source,
+                node,
+                MarkdownInlineKind::LineBreak,
+                "\n".to_owned(),
+                state,
+                projection,
+            );
+        }
+        if tag.closing {
+            if state.html.suppressed.is_empty() {
+                if tag.name == "a" {
+                    state.html_links.pop();
+                }
+                if let Some(index) = state.html_styles.iter().rposition(|name| name == &tag.name) {
+                    state.html_styles.truncate(index);
+                    state.refresh_html_style();
+                }
+            }
+            return;
+        }
+        if !accepted {
+            return;
+        }
+        if matches!(tag.name.as_str(), "sub" | "sup" | "kbd") {
+            state.html_styles.push(tag.name);
+            state.refresh_html_style();
+        }
+        if let Some(url) = tag.link {
+            state.html_links.push(url);
+        }
+        return;
+    }
+    if !state.html.suppressed.is_empty() {
+        return;
+    }
+    match &node.data.borrow().value {
+        NodeValue::Text(text) => push_inline(
+            source,
+            node,
+            MarkdownInlineKind::Text,
+            text.to_string(),
+            state,
+            projection,
+        ),
+        NodeValue::Code(code) => push_inline(
+            source,
+            node,
+            MarkdownInlineKind::Code,
+            code.literal.clone(),
+            state,
+            projection,
+        ),
+        NodeValue::Math(math) => push_inline(
+            source,
+            node,
+            MarkdownInlineKind::Math,
+            math.literal.clone(),
+            state,
+            projection,
+        ),
+        NodeValue::SoftBreak | NodeValue::LineBreak => push_inline(
+            source,
+            node,
+            MarkdownInlineKind::LineBreak,
+            "\n".to_owned(),
+            state,
+            projection,
+        ),
+        NodeValue::Image(image) => {
+            let mut alt = String::new();
+            for child in node.children() {
+                collect_visible_text(child, &mut alt, &mut InlineHtmlState::default());
+            }
+            let start = projection.visible.len();
+            projection.inlines.push(MarkdownInline {
+                kind: MarkdownInlineKind::Image,
+                text: alt,
+                style: state.style,
+                url: Some(image.url.clone()),
+                source_range: source_range(source, node),
+                visible_range: start..start,
+            });
+            return;
+        }
+        NodeValue::FootnoteReference(reference) => {
+            let start = projection.visible.len();
+            projection.inlines.push(MarkdownInline {
+                kind: MarkdownInlineKind::FootnoteReference,
+                text: reference.name.clone(),
+                style: state.style,
+                url: Some(format!("#fn-{}", anchor_base(&reference.name))),
+                source_range: source_range(source, node),
+                visible_range: start..start,
+            });
+            return;
+        }
+        NodeValue::Link(link) => {
+            let previous = state.markdown_link.replace(link.url.clone());
+            for child in node.children() {
+                project_inline_node(source, child, state, projection);
+            }
+            state.markdown_link = previous;
+            return;
+        }
+        NodeValue::Emph | NodeValue::Strong | NodeValue::Strikethrough => {
+            let field = match &node.data.borrow().value {
+                NodeValue::Emph => &mut state.style.emphasis,
+                NodeValue::Strong => &mut state.style.strong,
+                NodeValue::Strikethrough => &mut state.style.strikethrough,
+                _ => unreachable!(),
+            };
+            let previous = *field;
+            *field = true;
+            for child in node.children() {
+                project_inline_node(source, child, state, projection);
+            }
+            match &node.data.borrow().value {
+                NodeValue::Emph => state.style.emphasis = previous,
+                NodeValue::Strong => state.style.strong = previous,
+                NodeValue::Strikethrough => state.style.strikethrough = previous,
+                _ => unreachable!(),
+            }
+            return;
+        }
+        _ => {}
+    }
+    for child in node.children() {
+        project_inline_node(source, child, state, projection);
+    }
+}
+
+fn block_structure<'a>(source: &str, node: &'a AstNode<'a>) -> Option<MarkdownStructure> {
+    match &node.data.borrow().value {
+        NodeValue::List(_) => Some(MarkdownStructure::List(build_list(source, node, 0))),
+        NodeValue::Table(table) => {
+            let alignments = table
+                .alignments
+                .iter()
+                .map(|alignment| match alignment {
+                    comrak::nodes::TableAlignment::None => MarkdownAlignment::None,
+                    comrak::nodes::TableAlignment::Left => MarkdownAlignment::Left,
+                    comrak::nodes::TableAlignment::Right => MarkdownAlignment::Right,
+                    comrak::nodes::TableAlignment::Center => MarkdownAlignment::Center,
+                })
+                .collect();
+            let rows = node
+                .children()
+                .filter_map(|row| {
+                    let header = match &row.data.borrow().value {
+                        NodeValue::TableRow(header) => *header,
+                        _ => return None,
+                    };
+                    let cells = row
+                        .children()
+                        .map(|cell| MarkdownTableCell {
+                            inlines: project_inlines(source, cell).inlines,
+                        })
+                        .collect();
+                    Some(MarkdownTableRow { header, cells })
+                })
+                .collect();
+            Some(MarkdownStructure::Table(MarkdownTable { alignments, rows }))
+        }
+        _ => None,
+    }
+}
+
+fn build_list<'a>(source: &str, list: &'a AstNode<'a>, depth: usize) -> MarkdownList {
+    let NodeValue::List(metadata) = &list.data.borrow().value else {
+        return MarkdownList { items: Vec::new() };
+    };
+    let items = list
+        .children()
+        .enumerate()
+        .map(|(index, item)| {
+            let checked = match &item.data.borrow().value {
+                NodeValue::TaskItem(task) => Some(task.symbol.is_some()),
+                _ => None,
+            };
+            let ordinal = (metadata.list_type == comrak::nodes::ListType::Ordered)
+                .then_some(metadata.start + index);
+            let mut inlines = Vec::new();
+            let mut children = Vec::new();
+            let mut visible_offset = 0;
+            for child in item.children() {
+                if matches!(child.data.borrow().value, NodeValue::List(_)) {
+                    children.extend(build_list(source, child, depth + 1).items);
+                    continue;
+                }
+                let mut projected = project_inlines(source, child);
+                for inline in &mut projected.inlines {
+                    inline.visible_range.start += visible_offset;
+                    inline.visible_range.end += visible_offset;
+                }
+                visible_offset += projected.visible.len();
+                inlines.extend(projected.inlines);
+            }
+            MarkdownListItem {
+                ordinal,
+                checked,
+                depth,
+                inlines,
+                children,
+            }
+        })
+        .collect();
+    MarkdownList { items }
+}
+
+fn push_inline(
+    source: &str,
+    node: &AstNode<'_>,
+    kind: MarkdownInlineKind,
+    text: String,
+    state: &RenderInlineState,
+    projection: &mut InlineProjection,
+) {
+    let start = projection.visible.len();
+    projection.visible.push_str(&text);
+    let end = projection.visible.len();
+    projection.inlines.push(MarkdownInline {
+        kind,
+        text,
+        style: state.style,
+        url: state.current_url(),
+        source_range: source_range(source, node),
+        visible_range: start..end,
+    });
 }
 
 fn collect_visible_text<'a>(
@@ -845,6 +1309,103 @@ mod tests {
                 "{budget} 超限片段必须携带明确降级事实"
             );
         }
+    }
+
+    #[test]
+    fn inline_projection_shares_styles_images_math_and_visible_ranges() {
+        let source = "Plain **strong *both*** ~~gone~~ `code` $x^2$ ![alt](image.png) [link](https://example.com) <sub>lower</sub><sup>upper</sup><kbd>Ctrl</kbd>\n";
+        let document = MarkdownDocument::parse(source);
+        let inline = document.blocks()[0].inlines();
+        assert!(inline.iter().any(|run| {
+            run.text().trim() == "strong" && run.style().strong && !run.style().emphasis
+        }));
+        assert!(
+            inline
+                .iter()
+                .any(|run| { run.text() == "both" && run.style().strong && run.style().emphasis })
+        );
+        assert!(
+            inline
+                .iter()
+                .any(|run| { run.text() == "gone" && run.style().strikethrough })
+        );
+        assert!(
+            inline
+                .iter()
+                .any(|run| run.kind() == MarkdownInlineKind::Code)
+        );
+        let math = inline
+            .iter()
+            .find(|run| run.kind() == MarkdownInlineKind::Math)
+            .unwrap();
+        assert_eq!(math.text(), "x^2");
+        assert_eq!(&document.visible_text()[math.visible_range()], "x^2");
+        let image = inline
+            .iter()
+            .find(|run| run.kind() == MarkdownInlineKind::Image)
+            .unwrap();
+        assert_eq!(image.text(), "alt");
+        assert_eq!(image.url(), Some("image.png"));
+        assert!(image.visible_range().is_empty());
+        assert!(document.find_literal("alt").is_empty());
+        assert!(
+            inline
+                .iter()
+                .any(|run| { run.text() == "link" && run.url() == Some("https://example.com") })
+        );
+        for (text, expected) in [("lower", "sub"), ("upper", "sup"), ("Ctrl", "kbd")] {
+            let run = inline.iter().find(|run| run.text() == text).unwrap();
+            let style = run.style();
+            assert_eq!(
+                (style.subscript, style.superscript, style.kbd),
+                (expected == "sub", expected == "sup", expected == "kbd")
+            );
+        }
+    }
+
+    #[test]
+    fn list_and_table_structures_share_the_same_ast_projection() {
+        let document = MarkdownDocument::parse(
+            "3. first\n4. second\n\n- [ ] parent\n  - [x] child\n\n| Left | Right |\n|:---|---:|\n| a | **b** |\n",
+        );
+        let lists = document
+            .blocks()
+            .iter()
+            .filter_map(|block| match block.structure() {
+                Some(MarkdownStructure::List(list)) => Some(list),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let ordered = lists[0].items();
+        assert_eq!(ordered[0].ordinal(), Some(3));
+        assert_eq!(ordered[1].ordinal(), Some(4));
+        let parent = &lists[1].items()[0];
+        assert_eq!(parent.checked(), Some(false));
+        assert!(parent.inlines().iter().any(|run| run.text() == "parent"));
+        let child = &parent.children()[0];
+        assert_eq!(child.checked(), Some(true));
+        assert_eq!(child.depth(), 1);
+        assert!(child.inlines().iter().any(|run| run.text() == "child"));
+
+        let table = document
+            .blocks()
+            .iter()
+            .find_map(|block| match block.structure() {
+                Some(MarkdownStructure::Table(table)) => Some(table),
+                _ => None,
+            });
+        let table = table.unwrap();
+        assert_eq!(
+            table.alignments(),
+            [MarkdownAlignment::Left, MarkdownAlignment::Right]
+        );
+        assert!(table.rows()[0].header());
+        assert!(
+            table.rows()[1].cells()[1]
+                .inlines()
+                .iter()
+                .any(|run| run.text() == "b" && run.style().strong)
+        );
     }
 
     #[test]

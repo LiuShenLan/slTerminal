@@ -39,9 +39,11 @@ pub use external::{
 pub use identity::{DocumentId, StableIdError, TextStateId};
 pub use language::{LanguageDescriptor, LanguageId, LanguageRegistry};
 pub use markdown::{
-    BlockId, MarkdownAlertKind, MarkdownAnchor, MarkdownAnchorKind, MarkdownBlock,
-    MarkdownBlockKind, MarkdownCodeBlock, MarkdownDocument, MarkdownHeading, MarkdownLink,
-    MarkdownSearchMatch,
+    BlockId, MarkdownAlertKind, MarkdownAlignment, MarkdownAnchor, MarkdownAnchorKind,
+    MarkdownBlock, MarkdownBlockKind, MarkdownCodeBlock, MarkdownDocument, MarkdownHeading,
+    MarkdownInline, MarkdownInlineKind, MarkdownLink, MarkdownList, MarkdownListItem,
+    MarkdownSearchMatch, MarkdownStructure, MarkdownStyle, MarkdownTable, MarkdownTableCell,
+    MarkdownTableRow,
 };
 pub use markdown_html::{
     MarkdownHtmlAttribute, MarkdownHtmlElement, MarkdownHtmlFragment, MarkdownHtmlNode,
