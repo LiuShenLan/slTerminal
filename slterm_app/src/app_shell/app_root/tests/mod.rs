@@ -204,7 +204,7 @@ impl TerminalPanelLauncher for FakeLauncher {
 
 #[test]
 fn fake_launcher_source_cannot_prepare_a_real_pty() {
-    let source = include_str!("mod.rs");
+    let source = include_str!("mod.rs").replace("\r\n", "\n");
     let start = source
         .find("impl TerminalPanelLauncher for FakeLauncher")
         .unwrap();
