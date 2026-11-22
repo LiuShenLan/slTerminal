@@ -412,17 +412,22 @@ impl TerminalView {
                 cx.notify();
             }
             TermEvent::PtyWrite(text) => self.write_bytes(text.into_bytes()),
-            // OSC 52 写剪贴板(core Osc52 默认 OnlyCopy:选择器 c 已在
-            // 引擎侧放行)。
+            // OSC 52 只写不读：隐藏项目永远拒绝；非聚焦写入还需显式设置。
             TermEvent::ClipboardStore(_, text) => {
-                cx.write_to_clipboard(ClipboardItem::new_string(text));
+                const MAX_OSC52_BYTES: usize = 1024 * 1024;
+                let unfocused_allowed = cx
+                    .try_global::<Settings>()
+                    .is_some_and(|settings| settings.osc52_unfocused);
+                let focused = self.cursor_window_active && self.cursor_pane_focused;
+                if self.output_visible
+                    && (focused || unfocused_allowed)
+                    && text.len() <= MAX_OSC52_BYTES
+                {
+                    cx.write_to_clipboard(ClipboardItem::new_string(text));
+                }
             }
-            TermEvent::ClipboardLoad(_, formatter) => {
-                let text = cx
-                    .read_from_clipboard()
-                    .and_then(|item| item.text())
-                    .unwrap_or_default();
-                self.write_bytes(formatter(&text).into_bytes());
+            TermEvent::ClipboardLoad(_, _) => {
+                // 不读取系统剪贴板，也不向请求方返回空串伪装成功。
             }
             TermEvent::ColorRequest(index, formatter) => {
                 let reply = self.frame.as_ref().map(|frame| {

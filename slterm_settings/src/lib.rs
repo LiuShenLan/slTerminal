@@ -736,6 +736,8 @@ pub struct RuntimeSettings {
     pub dim_inactive_panes: bool,
     /// 裸 shell 风险粘贴确认:开 = 换行/提权命令/控制字符先确认。
     pub multiline_paste_confirm: bool,
+    /// 活跃项目内的非聚焦终端是否可执行 OSC 52 写入；隐藏项目始终禁止。
+    pub osc52_unfocused: bool,
     /// 标签页关闭按钮是否渲染:关 = 不渲染,仍可用中键关闭。
     pub tab_close_visible: bool,
     /// 新建本地终端是否写入 Windows 系统代理环境变量,默认关。
@@ -876,6 +878,7 @@ impl RuntimeSettings {
             focus_follows_mouse: raw.bool_on("focus_follows_mouse"),
             dim_inactive_panes: raw.bool_or_default("dim_inactive_panes"),
             multiline_paste_confirm: raw.bool_or_default("multiline_paste_confirm"),
+            osc52_unfocused: raw.bool_or_default("osc52_unfocused"),
             tab_close_visible: raw.bool_or_default("tab_close_visible"),
             terminal_proxy: raw.bool_or_default("terminal_proxy"),
             refresh_environment: raw.bool_or_default("refresh_environment"),
@@ -1012,6 +1015,7 @@ mod runtime_settings_tests {
             assert!(!settings.copy_on_select);
             assert!(!settings.document_autosave);
             assert!(settings.multiline_paste_confirm, "多行粘贴确认默认开");
+            assert!(!settings.osc52_unfocused, "非聚焦 OSC 52 默认拒绝");
             assert!(settings.tab_close_visible);
             assert!(!settings.terminal_proxy);
             assert!(settings.refresh_environment);
@@ -1103,6 +1107,7 @@ mod runtime_settings_tests {
     "focus_follows_mouse": true,
     "dim_inactive_panes": false,
     "multiline_paste_confirm": false,
+    "osc52_unfocused": true,
     "ligatures": "theme",
     "bell": "audible",
     "ctrl_wheel_font_zoom": false,
@@ -1176,6 +1181,7 @@ mod runtime_settings_tests {
         assert_eq!(settings.focus_follows_mouse, Some(true));
         assert!(!settings.dim_inactive_panes);
         assert!(!settings.multiline_paste_confirm);
+        assert!(settings.osc52_unfocused);
         assert_eq!(settings.ligatures, Ligatures::Theme);
         assert_eq!(settings.bell, BellModeName::Audible);
         assert!(!settings.ctrl_wheel_font_zoom);

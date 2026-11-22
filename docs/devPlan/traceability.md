@@ -261,7 +261,7 @@
 | cwd 变化丢弃旧补全且单来源失败不阻塞其他来源 | `completion_generation_and_source_failure` | 已自动化 |
 | 清空学习同时取消待写并清除内存 | `learning_clear_cancels_pending_writes` | 已自动化 |
 | 回滚搜索只读且不向 PTY 写搜索字节 | `terminal_search_is_read_only` | 待实现 |
-| 非聚焦或隐藏项目 OSC 52 未授权时不改剪贴板 | `terminal_osc52_authorization` | 待实现 |
+| 非聚焦或隐藏项目 OSC 52 未授权时不改剪贴板 | `terminal_osc52_authorization` | 已自动化 |
 
 ### 导航树
 

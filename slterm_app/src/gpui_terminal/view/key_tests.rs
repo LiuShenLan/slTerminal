@@ -393,3 +393,74 @@ fn ime_bounds_follow_the_cursor_cell(cx: &mut TestAppContext) {
     });
     assert_eq!(reported, Some(ime_bounds));
 }
+
+/// OSC 52 只写不读；聚焦、活跃项目、显式非聚焦授权与单条上限共同门控。
+#[gpui::test]
+fn terminal_osc52_authorization(cx: &mut TestAppContext) {
+    let (terminal, mut window, rx, _registry) = open(cx);
+    let store = |terminal: &Entity<TerminalView>, window: &mut VisualTestContext, text: &str| {
+        terminal.update_in(window, |view, _, cx| {
+            view.feed_event_for_test(
+                slterm_terminal::event::Event::ClipboardStore(
+                    slterm_terminal::term::ClipboardType::Clipboard,
+                    text.to_owned(),
+                ),
+                cx,
+            );
+        });
+    };
+    window.update(|_, cx| cx.write_to_clipboard(ClipboardItem::new_string("sentinel".to_owned())));
+    terminal.update_in(&mut window, |view, _, _| {
+        view.cursor_window_active = true;
+        view.cursor_pane_focused = true;
+    });
+    store(&terminal, &mut window, "focused");
+    assert_eq!(clipboard_text(&mut window).as_deref(), Some("focused"));
+
+    terminal.update_in(&mut window, |view, _, _| view.cursor_pane_focused = false);
+    store(&terminal, &mut window, "unfocused-denied");
+    assert_eq!(clipboard_text(&mut window).as_deref(), Some("focused"));
+
+    window.update(|_, cx| {
+        cx.set_global(Settings {
+            osc52_unfocused: true,
+            ..Settings::default()
+        });
+    });
+    store(&terminal, &mut window, "unfocused-allowed");
+    assert_eq!(
+        clipboard_text(&mut window).as_deref(),
+        Some("unfocused-allowed")
+    );
+
+    terminal.update_in(&mut window, |view, _, cx| {
+        view.set_output_visible(false, cx)
+    });
+    store(&terminal, &mut window, "hidden-denied");
+    assert_eq!(
+        clipboard_text(&mut window).as_deref(),
+        Some("unfocused-allowed")
+    );
+
+    terminal.update_in(&mut window, |view, _, cx| {
+        view.set_output_visible(true, cx);
+        view.cursor_pane_focused = true;
+    });
+    store(&terminal, &mut window, &"x".repeat(1024 * 1024 + 1));
+    assert_eq!(
+        clipboard_text(&mut window).as_deref(),
+        Some("unfocused-allowed"),
+        "超过 1 MiB 不得改剪贴板"
+    );
+
+    terminal.update_in(&mut window, |view, _, cx| {
+        view.feed_event_for_test(
+            slterm_terminal::event::Event::ClipboardLoad(
+                slterm_terminal::term::ClipboardType::Clipboard,
+                std::sync::Arc::new(|_| panic!("OSC 52 读取不得访问剪贴板")),
+            ),
+            cx,
+        );
+    });
+    assert!(pty_bytes(&rx).is_empty(), "读取请求不得产生 PTY 应答");
+}

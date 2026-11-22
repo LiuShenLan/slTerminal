@@ -692,6 +692,12 @@ pub static KEYS: &[SettingsKeyDef] = &[
         "paste confirm 粘贴确认",
         true,
     ),
+    boolean(
+        "osc52_unfocused",
+        SettingsDomain::Interaction,
+        "OSC 52 unfocused 非聚焦剪贴板写入",
+        false,
+    ),
     text(
         "ligatures",
         SettingsDomain::Interaction,

@@ -38,6 +38,8 @@ pub struct Settings {
     pub copy_on_select: bool,
     /// 全局 Document 自动保存；视图层不得另设开关。
     pub document_autosave: bool,
+    /// 活跃项目内非聚焦终端的 OSC 52 写入授权；隐藏项目不受影响。
+    pub osc52_unfocused: bool,
     /// 补全呈现形态(Inline/Popup/Hybrid;设置值本体归 `slterm-settings` 键域)。
     pub completion_style: slterm_settings::CompletionStyleName,
     /// AI 内联补全 ghost 开关。
@@ -141,6 +143,7 @@ impl Settings {
             palette,
             copy_on_select: runtime.copy_on_select,
             document_autosave: runtime.document_autosave,
+            osc52_unfocused: runtime.osc52_unfocused,
             completion_style: runtime.completion_style,
             ghost: runtime.ghost,
             scroll_speed: runtime.scroll_speed,
