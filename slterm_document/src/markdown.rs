@@ -1,0 +1,713 @@
+//! Comrak AST 的不可变文档投影；不依赖 GPUI 或外部 I/O。
+
+use std::collections::HashMap;
+use std::ops::Range;
+
+use comrak::nodes::{AlertType, AstNode, NodeValue};
+use comrak::{Arena, Options};
+use unicode_normalization::UnicodeNormalization as _;
+
+use crate::{LanguageId, LanguageRegistry};
+
+/// 当前投影内的块身份；不得持久化到其他 revision。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct BlockId(usize);
+
+impl BlockId {
+    pub const fn index(self) -> usize {
+        self.0
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MarkdownCodeBlock {
+    language: LanguageId,
+    source: String,
+}
+
+impl MarkdownCodeBlock {
+    pub const fn language(&self) -> LanguageId {
+        self.language
+    }
+
+    pub fn source(&self) -> &str {
+        &self.source
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MarkdownAlertKind {
+    Note,
+    Tip,
+    Important,
+    Warning,
+    Caution,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MarkdownBlockKind {
+    Paragraph,
+    Heading(u8),
+    List,
+    Quote,
+    Alert(MarkdownAlertKind),
+    ThematicBreak,
+    Code(MarkdownCodeBlock),
+    Table,
+    Footnote,
+    Math,
+    FrontMatter,
+    Html,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MarkdownBlock {
+    id: BlockId,
+    kind: MarkdownBlockKind,
+    source_range: Range<usize>,
+    visible_range: Range<usize>,
+}
+
+impl MarkdownBlock {
+    pub const fn id(&self) -> BlockId {
+        self.id
+    }
+
+    pub const fn kind(&self) -> &MarkdownBlockKind {
+        &self.kind
+    }
+
+    pub fn source_range(&self) -> Range<usize> {
+        self.source_range.clone()
+    }
+
+    pub fn visible_range(&self) -> Range<usize> {
+        self.visible_range.clone()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MarkdownHeading {
+    text: String,
+    depth: u8,
+    block: BlockId,
+    anchor: String,
+}
+
+impl MarkdownHeading {
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    pub const fn depth(&self) -> u8 {
+        self.depth
+    }
+
+    pub const fn block(&self) -> BlockId {
+        self.block
+    }
+
+    pub fn anchor(&self) -> &str {
+        &self.anchor
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MarkdownAnchorKind {
+    Heading,
+    Footnote,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MarkdownAnchor {
+    id: String,
+    block: BlockId,
+    kind: MarkdownAnchorKind,
+}
+
+impl MarkdownAnchor {
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub const fn block(&self) -> BlockId {
+        self.block
+    }
+
+    pub const fn kind(&self) -> MarkdownAnchorKind {
+        self.kind
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MarkdownLink {
+    block: BlockId,
+    url: String,
+    fragment: Option<String>,
+    target: Option<BlockId>,
+}
+
+impl MarkdownLink {
+    pub const fn block(&self) -> BlockId {
+        self.block
+    }
+
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+
+    pub fn fragment(&self) -> Option<&str> {
+        self.fragment.as_deref()
+    }
+
+    pub const fn target(&self) -> Option<BlockId> {
+        self.target
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MarkdownSearchMatch {
+    range: Range<usize>,
+    block: BlockId,
+}
+
+impl MarkdownSearchMatch {
+    pub fn range(&self) -> Range<usize> {
+        self.range.clone()
+    }
+
+    pub const fn block(&self) -> BlockId {
+        self.block
+    }
+}
+
+/// 大纲、查找、链接和阅读锚点共享的一次性 AST 投影。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MarkdownDocument {
+    blocks: Vec<MarkdownBlock>,
+    headings: Vec<MarkdownHeading>,
+    anchors: Vec<MarkdownAnchor>,
+    links: Vec<MarkdownLink>,
+    visible_text: String,
+}
+
+impl MarkdownDocument {
+    pub fn parse(source: &str) -> Self {
+        let arena = Arena::new();
+        let mut options = markdown_options();
+        let mut root = comrak::parse_document(&arena, source, &options);
+        let invalid_front_matter = root.children().any(|node| match &node.data.borrow().value {
+            NodeValue::FrontMatter(content) => !valid_front_matter(content),
+            _ => false,
+        });
+        if invalid_front_matter {
+            // front matter 只是可选解释；失败必须关闭该扩展并从原文重新解析。
+            options.extension.front_matter_delimiter = None;
+            root = comrak::parse_document(&arena, source, &options);
+        }
+        let mut projection = Projection::default();
+        for node in root.children() {
+            projection.block(source, node);
+        }
+        projection.finish()
+    }
+
+    pub fn blocks(&self) -> &[MarkdownBlock] {
+        &self.blocks
+    }
+
+    pub fn headings(&self) -> &[MarkdownHeading] {
+        &self.headings
+    }
+
+    /// 大纲只是标题表的只读视图，不重新遍历源码或 AST。
+    pub fn outline(&self) -> &[MarkdownHeading] {
+        self.headings()
+    }
+
+    pub fn anchors(&self) -> &[MarkdownAnchor] {
+        &self.anchors
+    }
+
+    pub fn links(&self) -> &[MarkdownLink] {
+        &self.links
+    }
+
+    pub fn visible_text(&self) -> &str {
+        &self.visible_text
+    }
+
+    pub fn resolve_anchor(&self, anchor: &str) -> Option<BlockId> {
+        let anchor = anchor.strip_prefix('#').unwrap_or(anchor);
+        self.anchors
+            .iter()
+            .find(|candidate| candidate.id == anchor)
+            .map(|anchor| anchor.block)
+    }
+
+    pub fn find_literal(&self, query: &str) -> Vec<MarkdownSearchMatch> {
+        if query.is_empty() {
+            return Vec::new();
+        }
+        self.visible_text
+            .match_indices(query)
+            .filter_map(|(start, matched)| {
+                let range = start..start + matched.len();
+                let block = self.blocks.iter().find(|block| {
+                    block.visible_range.start <= start && start < block.visible_range.end
+                })?;
+                Some(MarkdownSearchMatch {
+                    range,
+                    block: block.id,
+                })
+            })
+            .collect()
+    }
+}
+
+#[derive(Default)]
+struct Projection {
+    blocks: Vec<MarkdownBlock>,
+    headings: Vec<MarkdownHeading>,
+    anchors: Vec<MarkdownAnchor>,
+    links: Vec<MarkdownLink>,
+    visible_text: String,
+    anchor_counts: HashMap<String, usize>,
+}
+
+impl Projection {
+    fn block<'a>(&mut self, source: &str, node: &'a AstNode<'a>) {
+        let id = BlockId(self.blocks.len());
+        let source_range = source_range(source, node);
+        let kind = block_kind(node);
+        let visible = match &kind {
+            MarkdownBlockKind::Code(code) => code.source.clone(),
+            MarkdownBlockKind::FrontMatter | MarkdownBlockKind::Html => String::new(),
+            _ => visible_inline_text(node),
+        };
+        if matches!(kind, MarkdownBlockKind::Heading(_)) {
+            let base = anchor_base(&visible);
+            let anchor = self.unique_anchor(base);
+            self.anchors.push(MarkdownAnchor {
+                id: anchor.clone(),
+                block: id,
+                kind: MarkdownAnchorKind::Heading,
+            });
+            self.headings.push(MarkdownHeading {
+                text: visible.clone(),
+                depth: heading_depth(node),
+                block: id,
+                anchor,
+            });
+        }
+        if let NodeValue::FootnoteDefinition(definition) = &node.data.borrow().value {
+            let anchor = format!("fn-{}", anchor_base(&definition.name));
+            self.anchors.push(MarkdownAnchor {
+                id: anchor,
+                block: id,
+                kind: MarkdownAnchorKind::Footnote,
+            });
+        }
+        collect_links(node, id, &mut self.links);
+        if !visible.is_empty() && !self.visible_text.is_empty() {
+            self.visible_text.push('\n');
+        }
+        let visible_start = self.visible_text.len();
+        self.visible_text.push_str(&visible);
+        let visible_range = visible_start..self.visible_text.len();
+        self.blocks.push(MarkdownBlock {
+            id,
+            kind,
+            source_range,
+            visible_range,
+        });
+    }
+
+    fn unique_anchor(&mut self, base: String) -> String {
+        let count = self.anchor_counts.entry(base.clone()).or_insert(0);
+        let anchor = if *count == 0 {
+            base
+        } else {
+            format!("{base}-{count}")
+        };
+        *count += 1;
+        anchor
+    }
+
+    fn finish(mut self) -> MarkdownDocument {
+        for link in &mut self.links {
+            link.target = link.fragment.as_deref().and_then(|fragment| {
+                self.anchors
+                    .iter()
+                    .find(|anchor| anchor.id == fragment)
+                    .map(|anchor| anchor.block)
+            });
+        }
+        MarkdownDocument {
+            blocks: self.blocks,
+            headings: self.headings,
+            anchors: self.anchors,
+            links: self.links,
+            visible_text: self.visible_text,
+        }
+    }
+}
+
+fn markdown_options() -> Options<'static> {
+    let mut options = Options::default();
+    options.extension.strikethrough = true;
+    options.extension.table = true;
+    options.extension.autolink = true;
+    options.extension.tasklist = true;
+    options.extension.footnotes = true;
+    options.extension.alerts = true;
+    options.extension.math_dollars = true;
+    options.extension.front_matter_delimiter = Some("---".to_owned());
+    options
+}
+
+fn valid_front_matter(content: &str) -> bool {
+    const MAX_FRONT_MATTER_BYTES: usize = 64 * 1024;
+    if content.len() > MAX_FRONT_MATTER_BYTES {
+        return false;
+    }
+    let content = content.strip_prefix('\u{feff}').unwrap_or(content);
+    let Some(opening_end) = content.find('\n') else {
+        return false;
+    };
+    let Some(relative_end) = content[opening_end..].rfind("\n---") else {
+        return false;
+    };
+    let yaml = &content[opening_end + 1..opening_end + relative_end];
+    let mut validator = YamlValidator::default();
+    yaml_rust2::parser::Parser::new_from_str(yaml)
+        .load(&mut validator, true)
+        .is_ok()
+        && !validator.exceeded
+}
+
+#[derive(Default)]
+struct YamlValidator {
+    events: usize,
+    depth: usize,
+    exceeded: bool,
+}
+
+impl yaml_rust2::parser::EventReceiver for YamlValidator {
+    fn on_event(&mut self, event: yaml_rust2::parser::Event) {
+        const MAX_YAML_EVENTS: usize = 4096;
+        const MAX_YAML_DEPTH: usize = 64;
+        use yaml_rust2::parser::Event;
+        self.events = self.events.saturating_add(1);
+        match event {
+            Event::MappingStart(..) | Event::SequenceStart(..) => {
+                self.depth = self.depth.saturating_add(1);
+            }
+            Event::MappingEnd | Event::SequenceEnd => {
+                self.depth = self.depth.saturating_sub(1);
+            }
+            _ => {}
+        }
+        // 只消费事件；别名不展开，标签不反序列化，正文不进入值对象。
+        self.exceeded |= self.events > MAX_YAML_EVENTS || self.depth > MAX_YAML_DEPTH;
+    }
+}
+
+fn block_kind<'a>(node: &'a AstNode<'a>) -> MarkdownBlockKind {
+    match &node.data.borrow().value {
+        NodeValue::Heading(heading) => MarkdownBlockKind::Heading(heading.level),
+        NodeValue::Paragraph if display_math(node).is_some() => MarkdownBlockKind::Math,
+        NodeValue::Paragraph => MarkdownBlockKind::Paragraph,
+        NodeValue::List(_) | NodeValue::Item(_) | NodeValue::TaskItem(_) => MarkdownBlockKind::List,
+        NodeValue::BlockQuote | NodeValue::MultilineBlockQuote(_) => MarkdownBlockKind::Quote,
+        NodeValue::Alert(alert) => MarkdownBlockKind::Alert(match alert.alert_type {
+            AlertType::Note => MarkdownAlertKind::Note,
+            AlertType::Tip => MarkdownAlertKind::Tip,
+            AlertType::Important => MarkdownAlertKind::Important,
+            AlertType::Warning => MarkdownAlertKind::Warning,
+            AlertType::Caution => MarkdownAlertKind::Caution,
+        }),
+        NodeValue::ThematicBreak => MarkdownBlockKind::ThematicBreak,
+        NodeValue::CodeBlock(code) => {
+            let alias = code.info.split_whitespace().next().unwrap_or_default();
+            let language = LanguageRegistry::new()
+                .for_markdown_alias(alias)
+                .unwrap_or(LanguageId::PlainText);
+            MarkdownBlockKind::Code(MarkdownCodeBlock {
+                language,
+                source: code.literal.clone(),
+            })
+        }
+        NodeValue::Table(_) => MarkdownBlockKind::Table,
+        NodeValue::FootnoteDefinition(_) => MarkdownBlockKind::Footnote,
+        NodeValue::FrontMatter(_) => MarkdownBlockKind::FrontMatter,
+        NodeValue::HtmlBlock(_) => MarkdownBlockKind::Html,
+        _ => MarkdownBlockKind::Paragraph,
+    }
+}
+
+fn heading_depth(node: &AstNode<'_>) -> u8 {
+    match &node.data.borrow().value {
+        NodeValue::Heading(heading) => heading.level,
+        _ => 0,
+    }
+}
+
+fn display_math<'a>(node: &'a AstNode<'a>) -> Option<String> {
+    let mut children = node.children();
+    let child = children.next()?;
+    if children.next().is_some() {
+        return None;
+    }
+    match &child.data.borrow().value {
+        NodeValue::Math(math) if math.display_math => Some(math.literal.clone()),
+        _ => None,
+    }
+}
+
+fn visible_inline_text<'a>(node: &'a AstNode<'a>) -> String {
+    if let Some(math) = display_math(node) {
+        return math;
+    }
+    let mut text = String::new();
+    collect_visible_text(node, &mut text);
+    text
+}
+
+fn collect_visible_text<'a>(node: &'a AstNode<'a>, output: &mut String) {
+    match &node.data.borrow().value {
+        NodeValue::Text(text) => output.push_str(text),
+        NodeValue::Code(code) => output.push_str(&code.literal),
+        NodeValue::Math(math) => output.push_str(&math.literal),
+        NodeValue::SoftBreak | NodeValue::LineBreak => output.push('\n'),
+        // 图片 alt、URL、原始 HTML 和脚注标记不是普通可见正文查找事实。
+        NodeValue::Image(_) | NodeValue::HtmlInline(_) | NodeValue::FootnoteReference(_) => {
+            return;
+        }
+        _ => {}
+    }
+    for child in node.children() {
+        collect_visible_text(child, output);
+    }
+}
+
+fn collect_links<'a>(node: &'a AstNode<'a>, block: BlockId, links: &mut Vec<MarkdownLink>) {
+    if let NodeValue::Link(link) = &node.data.borrow().value {
+        let fragment = link
+            .url
+            .strip_prefix('#')
+            .filter(|fragment| !fragment.is_empty())
+            .map(str::to_owned);
+        links.push(MarkdownLink {
+            block,
+            url: link.url.clone(),
+            fragment,
+            target: None,
+        });
+    }
+    if let NodeValue::FootnoteReference(reference) = &node.data.borrow().value {
+        let fragment = format!("fn-{}", anchor_base(&reference.name));
+        links.push(MarkdownLink {
+            block,
+            url: format!("#{fragment}"),
+            fragment: Some(fragment),
+            target: None,
+        });
+    }
+    for child in node.children() {
+        collect_links(child, block, links);
+    }
+}
+
+fn source_range(source: &str, node: &AstNode<'_>) -> Range<usize> {
+    let position = node.data.borrow().sourcepos;
+    let start = source_position(source, position.start.line, position.start.column, false);
+    let end = source_position(source, position.end.line, position.end.column, true);
+    match (start, end) {
+        (Some(start), Some(end)) if start <= end => start..end,
+        _ => 0..0,
+    }
+}
+
+fn source_position(source: &str, line: usize, column: usize, end: bool) -> Option<usize> {
+    if line == 0 || column == 0 {
+        return None;
+    }
+    let line_start = source
+        .split_inclusive('\n')
+        .take(line - 1)
+        .map(str::len)
+        .sum::<usize>();
+    let offset = line_start + column - 1 + usize::from(end);
+    (offset <= source.len() && source.is_char_boundary(offset)).then_some(offset)
+}
+
+fn anchor_base(text: &str) -> String {
+    let mut anchor = String::new();
+    let mut separator = false;
+    for character in text.nfkc().flat_map(char::to_lowercase) {
+        if character.is_alphanumeric() || matches!(character, '_' | '-') {
+            if separator && !anchor.is_empty() {
+                anchor.push('-');
+            }
+            separator = false;
+            anchor.push(character);
+        } else if character.is_whitespace() {
+            separator = true;
+        }
+    }
+    if anchor.is_empty() {
+        "section".to_owned()
+    } else {
+        anchor
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::LanguageId;
+
+    #[test]
+    fn front_matter_is_validated_and_invalid_yaml_restarts_as_markdown() {
+        let valid = MarkdownDocument::parse("---\ntitle: Test\n---\n# Body\n");
+        assert!(matches!(
+            valid.blocks()[0].kind(),
+            MarkdownBlockKind::FrontMatter
+        ));
+        assert!(valid.find_literal("title").is_empty());
+        assert_eq!(valid.headings()[0].anchor(), "body");
+
+        for source in [
+            "---\ntitle: [broken\n---\n# Body\n".to_owned(),
+            format!("---\n{}\n---\n# Body\n", "x".repeat(65_537)),
+            format!(
+                "---\n{}---\n# Body\n",
+                (0..4100)
+                    .map(|index| format!("key{index}: value\n"))
+                    .collect::<String>()
+            ),
+            format!(
+                "---\n{}---\n# Body\n",
+                (0..80)
+                    .map(|depth| format!("{}key:\n", "  ".repeat(depth)))
+                    .collect::<String>()
+            ),
+        ] {
+            let invalid = MarkdownDocument::parse(&source);
+            assert!(
+                invalid
+                    .blocks()
+                    .iter()
+                    .all(|block| !matches!(block.kind(), MarkdownBlockKind::FrontMatter)),
+                "非法或超限 YAML 不得保留 front matter 语义"
+            );
+            assert_eq!(invalid.headings().last().unwrap().anchor(), "body");
+        }
+        assert!(
+            MarkdownDocument::parse("---\ntitle: [broken\n---\n# Body\n")
+                .visible_text()
+                .contains("title: [broken")
+        );
+    }
+
+    #[test]
+    fn gfm_alerts_footnotes_math_and_fallbacks_share_the_projection() {
+        let document = MarkdownDocument::parse(
+            "| A |\n| - |\n| ~~x~~ |\n\n- [x] done\n\n> [!NOTE]\n> safe\n\n> [!UNKNOWN]\n> ordinary\n\nFootnote[^ok] and missing[^none].\n\n[^ok]: note text\n\n$$\nx^2\n$$\n\nPrice $5 and $6.\n",
+        );
+        for expected in [
+            MarkdownBlockKind::Table,
+            MarkdownBlockKind::List,
+            MarkdownBlockKind::Alert(MarkdownAlertKind::Note),
+            MarkdownBlockKind::Quote,
+            MarkdownBlockKind::Footnote,
+            MarkdownBlockKind::Math,
+        ] {
+            assert!(
+                document
+                    .blocks()
+                    .iter()
+                    .any(|block| block.kind() == &expected)
+            );
+        }
+        assert!(document.visible_text().contains("note text"));
+        assert!(document.visible_text().contains("missing[^none]"));
+        assert!(document.visible_text().contains("Price $5 and $6."));
+        let note = document
+            .anchors()
+            .iter()
+            .find(|anchor| anchor.kind() == MarkdownAnchorKind::Footnote)
+            .unwrap();
+        assert!(
+            document
+                .links()
+                .iter()
+                .any(|link| link.target() == Some(note.block()))
+        );
+    }
+
+    #[test]
+    fn anchors_normalize_unicode_and_allocate_stable_duplicate_suffixes() {
+        let document = MarkdownDocument::parse("# Ｈｅｌｌｏ　世界！\n\n# !!!\n\n# !!!\n");
+        let anchors = document
+            .headings()
+            .iter()
+            .map(|heading| heading.anchor())
+            .collect::<Vec<_>>();
+        assert_eq!(anchors, ["hello-世界", "section", "section-1"]);
+    }
+
+    #[test]
+    fn source_ranges_preserve_unicode_and_multiline_block_boundaries() {
+        let source = "# 你好\n\n```rust\nfn main() {}\n```\n";
+        let document = MarkdownDocument::parse(source);
+        let ranges = document
+            .blocks()
+            .iter()
+            .map(|block| block.source_range())
+            .collect::<Vec<_>>();
+        assert_eq!(ranges, [0..8, 10..34]);
+        assert_eq!(&source[ranges[0].clone()], "# 你好");
+        assert_eq!(&source[ranges[1].clone()], "```rust\nfn main() {}\n```");
+        assert_eq!(document.find_literal("你好")[0].block(), BlockId(0));
+    }
+
+    #[test]
+    fn one_projection_drives_outline_visible_search_links_and_mermaid_code() {
+        let document = MarkdownDocument::parse(
+            "# Hello\n\n# Hello\n\nVisible [guide](https://example.com) and [next](#hello-1).\n\n```mermaid\ngraph TD; A-->B\n```\n",
+        );
+
+        let headings = document.headings();
+        assert_eq!(headings.len(), 2);
+        assert_eq!(headings[0].anchor(), "hello");
+        assert_eq!(headings[1].anchor(), "hello-1");
+        assert_eq!(document.outline(), headings);
+        assert_eq!(
+            document.resolve_anchor("hello-1"),
+            Some(headings[1].block())
+        );
+
+        let links = document.links();
+        assert_eq!(links.len(), 2);
+        assert_eq!(links[0].url(), "https://example.com");
+        assert_eq!(links[1].fragment(), Some("hello-1"));
+        assert_eq!(links[1].target(), Some(headings[1].block()));
+
+        assert_eq!(document.find_literal("Visible").len(), 1);
+        assert!(document.find_literal("example.com").is_empty());
+        assert!(document.find_literal("# Hello").is_empty());
+        assert_eq!(document.find_literal("graph TD").len(), 1);
+
+        let code = document
+            .blocks()
+            .iter()
+            .find_map(|block| match block.kind() {
+                MarkdownBlockKind::Code(code) => Some(code),
+                _ => None,
+            });
+        assert_eq!(code.unwrap().language(), LanguageId::Mermaid);
+        assert_eq!(code.unwrap().source(), "graph TD; A-->B\n");
+    }
+}

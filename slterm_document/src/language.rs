@@ -36,6 +36,7 @@ pub enum LanguageId {
     Sql,
     Ini,
     Diff,
+    Mermaid,
     Dockerfile,
     Make,
     #[serde(rename = "text")]
@@ -43,7 +44,7 @@ pub enum LanguageId {
 }
 
 impl LanguageId {
-    pub const ALL: [Self; 29] = [
+    pub const ALL: [Self; 30] = [
         Self::Rust,
         Self::Markdown,
         Self::Python,
@@ -70,6 +71,7 @@ impl LanguageId {
         Self::Sql,
         Self::Ini,
         Self::Diff,
+        Self::Mermaid,
         Self::Dockerfile,
         Self::Make,
         Self::PlainText,
@@ -103,6 +105,7 @@ impl LanguageId {
             Self::Sql => "sql",
             Self::Ini => "ini",
             Self::Diff => "diff",
+            Self::Mermaid => "mermaid",
             Self::Dockerfile => "dockerfile",
             Self::Make => "make",
             Self::PlainText => "text",
@@ -468,6 +471,15 @@ static DESCRIPTORS: &[LanguageDescriptor] = &[
         "(rule) @fold"
     ),
     LanguageDescriptor {
+        id: LanguageId::Mermaid,
+        extensions: &[],
+        filenames: &[],
+        markdown_aliases: &["mermaid"],
+        grammar: || None,
+        highlights: || None,
+        folds: None,
+    },
+    LanguageDescriptor {
         id: LanguageId::PlainText,
         extensions: &["txt", "log", "text"],
         filenames: &[],
@@ -552,7 +564,7 @@ mod tests {
         let registry = LanguageRegistry::new();
         for id in LanguageId::ALL {
             let descriptor = registry.descriptor(id);
-            if id == LanguageId::PlainText {
+            if matches!(id, LanguageId::PlainText | LanguageId::Mermaid) {
                 assert!(descriptor.grammar().is_none());
                 continue;
             }

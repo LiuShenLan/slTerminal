@@ -13,6 +13,7 @@ mod encoding;
 mod external;
 mod identity;
 mod language;
+mod markdown;
 mod paged;
 mod recovery;
 mod registry;
@@ -35,6 +36,11 @@ pub use external::{
 };
 pub use identity::{DocumentId, StableIdError, TextStateId};
 pub use language::{LanguageDescriptor, LanguageId, LanguageRegistry};
+pub use markdown::{
+    BlockId, MarkdownAlertKind, MarkdownAnchor, MarkdownAnchorKind, MarkdownBlock,
+    MarkdownBlockKind, MarkdownCodeBlock, MarkdownDocument, MarkdownHeading, MarkdownLink,
+    MarkdownSearchMatch,
+};
 pub use paged::{
     DECODED_PAGE_CACHE_LIMIT_BYTES, DocumentBody, DocumentPageCache, PAGE_SOURCE_BYTES, PageIndex,
     PageIndexError, PageKey, PagedLineIndex, PagedSource, SourceByteRange,
