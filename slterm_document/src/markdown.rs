@@ -7,6 +7,7 @@ use comrak::nodes::{AlertType, AstNode, NodeValue};
 use comrak::{Arena, Options};
 use unicode_normalization::UnicodeNormalization as _;
 
+use crate::markdown_html::MarkdownHtmlFragment;
 use crate::{LanguageId, LanguageRegistry};
 
 /// 当前投影内的块身份；不得持久化到其他 revision。
@@ -57,7 +58,7 @@ pub enum MarkdownBlockKind {
     Footnote,
     Math,
     FrontMatter,
-    Html,
+    Html(MarkdownHtmlFragment),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -282,7 +283,8 @@ impl Projection {
         let kind = block_kind(node);
         let visible = match &kind {
             MarkdownBlockKind::Code(code) => code.source.clone(),
-            MarkdownBlockKind::FrontMatter | MarkdownBlockKind::Html => String::new(),
+            MarkdownBlockKind::FrontMatter => String::new(),
+            MarkdownBlockKind::Html(fragment) => fragment.visible_text(),
             _ => visible_inline_text(node),
         };
         if matches!(kind, MarkdownBlockKind::Heading(_)) {
@@ -308,7 +310,22 @@ impl Projection {
                 kind: MarkdownAnchorKind::Footnote,
             });
         }
-        collect_links(node, id, &mut self.links);
+        let mut html = InlineHtmlState::default();
+        collect_links(node, id, &mut self.links, &mut html);
+        if let MarkdownBlockKind::Html(fragment) = &kind {
+            for url in fragment.links() {
+                let fragment_name = url
+                    .strip_prefix('#')
+                    .filter(|fragment| !fragment.is_empty())
+                    .map(str::to_owned);
+                self.links.push(MarkdownLink {
+                    block: id,
+                    url: url.clone(),
+                    fragment: fragment_name,
+                    target: None,
+                });
+            }
+        }
         if !visible.is_empty() && !self.visible_text.is_empty() {
             self.visible_text.push('\n');
         }
@@ -441,7 +458,9 @@ fn block_kind<'a>(node: &'a AstNode<'a>) -> MarkdownBlockKind {
         NodeValue::Table(_) => MarkdownBlockKind::Table,
         NodeValue::FootnoteDefinition(_) => MarkdownBlockKind::Footnote,
         NodeValue::FrontMatter(_) => MarkdownBlockKind::FrontMatter,
-        NodeValue::HtmlBlock(_) => MarkdownBlockKind::Html,
+        NodeValue::HtmlBlock(html) => {
+            MarkdownBlockKind::Html(crate::markdown_html::project(&html.literal))
+        }
         _ => MarkdownBlockKind::Paragraph,
     }
 }
@@ -465,16 +484,55 @@ fn display_math<'a>(node: &'a AstNode<'a>) -> Option<String> {
     }
 }
 
+#[derive(Default)]
+struct InlineHtmlState {
+    suppressed: Vec<String>,
+}
+
+impl InlineHtmlState {
+    /// 危险标签内的安全外观节点同样不可成为可见文本或链接事实。
+    fn accepts(&mut self, tag: &crate::markdown_html::InlineHtml) -> bool {
+        if tag.closing {
+            if let Some(index) = self.suppressed.iter().rposition(|name| name == &tag.name) {
+                self.suppressed.truncate(index);
+            }
+            false
+        } else if tag.dangerous {
+            self.suppressed.push(tag.name.clone());
+            false
+        } else {
+            self.suppressed.is_empty()
+        }
+    }
+}
+
 fn visible_inline_text<'a>(node: &'a AstNode<'a>) -> String {
     if let Some(math) = display_math(node) {
         return math;
     }
     let mut text = String::new();
-    collect_visible_text(node, &mut text);
+    let mut html = InlineHtmlState::default();
+    collect_visible_text(node, &mut text, &mut html);
     text
 }
 
-fn collect_visible_text<'a>(node: &'a AstNode<'a>, output: &mut String) {
+fn collect_visible_text<'a>(
+    node: &'a AstNode<'a>,
+    output: &mut String,
+    html: &mut InlineHtmlState,
+) {
+    if let NodeValue::HtmlInline(raw) = &node.data.borrow().value {
+        if let Some(tag) = crate::markdown_html::inline_tag(raw)
+            && html.accepts(&tag)
+            && tag.line_break
+        {
+            output.push('\n');
+        }
+        return;
+    }
+    if !html.suppressed.is_empty() {
+        return;
+    }
     match &node.data.borrow().value {
         NodeValue::Text(text) => output.push_str(text),
         NodeValue::Code(code) => output.push_str(&code.literal),
@@ -487,35 +545,61 @@ fn collect_visible_text<'a>(node: &'a AstNode<'a>, output: &mut String) {
         _ => {}
     }
     for child in node.children() {
-        collect_visible_text(child, output);
+        collect_visible_text(child, output, html);
     }
 }
 
-fn collect_links<'a>(node: &'a AstNode<'a>, block: BlockId, links: &mut Vec<MarkdownLink>) {
-    if let NodeValue::Link(link) = &node.data.borrow().value {
-        let fragment = link
-            .url
-            .strip_prefix('#')
-            .filter(|fragment| !fragment.is_empty())
-            .map(str::to_owned);
-        links.push(MarkdownLink {
-            block,
-            url: link.url.clone(),
-            fragment,
-            target: None,
-        });
-    }
-    if let NodeValue::FootnoteReference(reference) = &node.data.borrow().value {
-        let fragment = format!("fn-{}", anchor_base(&reference.name));
-        links.push(MarkdownLink {
-            block,
-            url: format!("#{fragment}"),
-            fragment: Some(fragment),
-            target: None,
-        });
+fn collect_links<'a>(
+    node: &'a AstNode<'a>,
+    block: BlockId,
+    links: &mut Vec<MarkdownLink>,
+    html: &mut InlineHtmlState,
+) {
+    if let NodeValue::HtmlInline(raw) = &node.data.borrow().value {
+        if let Some(tag) = crate::markdown_html::inline_tag(raw)
+            && html.accepts(&tag)
+            && let Some(url) = tag.link
+        {
+            let fragment = url
+                .strip_prefix('#')
+                .filter(|fragment| !fragment.is_empty())
+                .map(str::to_owned);
+            links.push(MarkdownLink {
+                block,
+                url,
+                fragment,
+                target: None,
+            });
+        }
+    } else {
+        if !html.suppressed.is_empty() {
+            return;
+        }
+        if let NodeValue::Link(link) = &node.data.borrow().value {
+            let fragment = link
+                .url
+                .strip_prefix('#')
+                .filter(|fragment| !fragment.is_empty())
+                .map(str::to_owned);
+            links.push(MarkdownLink {
+                block,
+                url: link.url.clone(),
+                fragment,
+                target: None,
+            });
+        }
+        if let NodeValue::FootnoteReference(reference) = &node.data.borrow().value {
+            let fragment = format!("fn-{}", anchor_base(&reference.name));
+            links.push(MarkdownLink {
+                block,
+                url: format!("#{fragment}"),
+                fragment: Some(fragment),
+                target: None,
+            });
+        }
     }
     for child in node.children() {
-        collect_links(child, block, links);
+        collect_links(child, block, links, html);
     }
 }
 
@@ -671,6 +755,96 @@ mod tests {
         assert_eq!(&source[ranges[0].clone()], "# 你好");
         assert_eq!(&source[ranges[1].clone()], "```rust\nfn main() {}\n```");
         assert_eq!(document.find_literal("你好")[0].block(), BlockId(0));
+    }
+
+    #[test]
+    fn unsafe_html_is_projected_to_bounded_whitelisted_nodes() {
+        let document = MarkdownDocument::parse(
+            "<section><script>alert(1)</script><a href=\"https://safe.example\" onclick=\"alert(2)\">Safe</a><a href=\"javascript:alert(3)\">Rejected link</a><img src=\"https://images.example/x.png\" alt=\"Hidden alt\"><kbd>Ctrl</kbd></section>\n",
+        );
+        let fragment = document
+            .blocks()
+            .iter()
+            .find_map(|block| match block.kind() {
+                MarkdownBlockKind::Html(fragment) => Some(fragment),
+                _ => None,
+            });
+        assert!(fragment.is_some());
+        assert!(document.visible_text().contains("Safe"));
+        assert!(document.visible_text().contains("Rejected link"));
+        assert!(document.visible_text().contains("Ctrl"));
+        for hidden in [
+            "alert(1)",
+            "alert(2)",
+            "alert(3)",
+            "Hidden alt",
+            "safe.example",
+            "<section>",
+            "onclick",
+        ] {
+            assert!(
+                !document.visible_text().contains(hidden),
+                "危险或原始 HTML 不得进入查找: {hidden}"
+            );
+        }
+        assert_eq!(
+            document
+                .links()
+                .iter()
+                .map(|link| link.url())
+                .collect::<Vec<_>>(),
+            ["https://safe.example"]
+        );
+
+        let inline = MarkdownDocument::parse(
+            "Before <script>inline_alert()<a href=\"https://hidden.example\">Hidden link</a></script><kbd>Ctrl</kbd> after\n",
+        );
+        assert!(
+            crate::markdown_html::inline_tag("<script>")
+                .unwrap()
+                .dangerous
+        );
+        assert!(
+            crate::markdown_html::inline_tag("</script>")
+                .unwrap()
+                .closing
+        );
+        assert!(inline.visible_text().contains("Before"));
+        assert!(inline.visible_text().contains("Ctrl"));
+        assert!(inline.visible_text().contains("after"));
+        assert!(!inline.visible_text().contains("inline_alert"));
+        assert!(!inline.visible_text().contains("Hidden link"));
+        assert!(inline.links().is_empty());
+    }
+
+    #[test]
+    fn oversized_html_fragment_degrades_without_touching_other_blocks() {
+        let attributes = (0..17)
+            .map(|index| format!("data-budget-{index}=\"x\""))
+            .collect::<Vec<_>>()
+            .join(" ");
+        for (budget, source) in [
+            ("bytes", format!("<div>\n{}\n</div>", "x".repeat(64 * 1024))),
+            ("nodes", "<div>".repeat(4097)),
+            (
+                "text_nodes",
+                "<div>".to_owned() + &"x<!---->".repeat(4097) + "</div>",
+            ),
+            ("depth", "<div>".repeat(80)),
+            ("attributes", format!("<div {attributes}>safe</div>")),
+        ] {
+            let source = format!("{source}\n\n# Safe\n");
+            let document = MarkdownDocument::parse(&source);
+            assert!(document.headings()[0].anchor() == "safe");
+            assert!(!document.visible_text().contains("<div>"));
+            assert!(
+                document.blocks().iter().any(|block| match block.kind() {
+                    MarkdownBlockKind::Html(fragment) => fragment.is_degraded(),
+                    _ => false,
+                }),
+                "{budget} 超限片段必须携带明确降级事实"
+            );
+        }
     }
 
     #[test]

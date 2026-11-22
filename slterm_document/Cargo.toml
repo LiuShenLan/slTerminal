@@ -20,6 +20,7 @@ regex = "=1.13.1"
 comrak = "=0.57.0"
 unicode-normalization = "=0.1.26"
 yaml-rust2 = "=0.13.0"
+html5ever = "=0.27.0"
 # 封闭语言 ID 作为 ViewState 的稳定线缆值；不开放自定义语言字符串。
 serde = { version = "1", features = ["derive"] }
 uuid = { version = "=1.28.0", default-features = false }

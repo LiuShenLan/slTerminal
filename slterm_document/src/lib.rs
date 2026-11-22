@@ -14,6 +14,7 @@ mod external;
 mod identity;
 mod language;
 mod markdown;
+mod markdown_html;
 mod paged;
 mod recovery;
 mod registry;
@@ -40,6 +41,10 @@ pub use markdown::{
     BlockId, MarkdownAlertKind, MarkdownAnchor, MarkdownAnchorKind, MarkdownBlock,
     MarkdownBlockKind, MarkdownCodeBlock, MarkdownDocument, MarkdownHeading, MarkdownLink,
     MarkdownSearchMatch,
+};
+pub use markdown_html::{
+    MarkdownHtmlAttribute, MarkdownHtmlElement, MarkdownHtmlFragment, MarkdownHtmlNode,
+    MarkdownHtmlTag,
 };
 pub use paged::{
     DECODED_PAGE_CACHE_LIMIT_BYTES, DocumentBody, DocumentPageCache, PAGE_SOURCE_BYTES, PageIndex,
