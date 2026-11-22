@@ -20,7 +20,7 @@ pub mod boxdraw;
 use crate::event::{EventListener, WindowSize};
 use crate::grid::Dimensions as _;
 use crate::index::{Column, Line, Point};
-use crate::term::cell::Flags;
+use crate::term::cell::{Flags, Hyperlink};
 use crate::term::color::Colors;
 use crate::term::{Term, TermMode, point_to_viewport_from, viewport_to_point_from};
 use vte::ansi::{Color, CursorShape, CursorStyle, NamedColor};
@@ -189,6 +189,8 @@ pub struct SnapCell {
     pub italic: bool,
     pub underline: bool,
     pub strikethrough: bool,
+    /// OSC 8 链接身份；前端只读复制，不回锁实时网格。
+    pub hyperlink: Option<Hyperlink>,
 }
 
 /// A run of column-contiguous cells sharing one width class. `wide`
@@ -413,6 +415,7 @@ impl RenderSnapshot {
                 italic: flags.intersects(Flags::ITALIC),
                 underline: flags.intersects(Flags::ALL_UNDERLINES),
                 strikethrough: flags.contains(Flags::STRIKEOUT),
+                hyperlink: indexed.cell.hyperlink(),
             };
 
             // 分段只由内容与宽度类决定，任何光标/焦点/闪烁状态都不得掺入：

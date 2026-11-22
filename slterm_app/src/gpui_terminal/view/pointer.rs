@@ -1,7 +1,7 @@
 //! 指针交互:选区、鼠标协议上报、滚轮滚动、选区拖拽自动回滚。
 //!
 //! 裁剪(归属见字段节):滚动条 overlay 族(scrollbar_thumb/grab/
-//! drag,随分屏渲染扩)、补全浮层族(08)、OSC8 链接族(07/09 裁定)、
+//! drag,随分屏渲染扩)、补全浮层族(08)、
 //! focus_follows_mouse(06 设置键)、Ctrl+滚轮字号缩放(06,保留消费不缩放)。
 
 use slterm_terminal::index::{Column, Line, Side};
@@ -10,6 +10,26 @@ use super::*;
 
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod tests;
+
+fn openable_hyperlink(uri: &str) -> bool {
+    const MAX_OSC8_BYTES: usize = 8 * 1024;
+    if uri.is_empty() || uri.len() > MAX_OSC8_BYTES || uri.chars().any(char::is_control) {
+        return false;
+    }
+    let Some((scheme, target)) = uri.split_once(':') else {
+        return false;
+    };
+    if scheme.eq_ignore_ascii_case("mailto") {
+        return !target.is_empty();
+    }
+    if !(scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")) {
+        return false;
+    }
+    target
+        .strip_prefix("//")
+        .and_then(|authority| authority.split(['/', '?', '#']).next())
+        .is_some_and(|host| !host.is_empty())
+}
 
 impl TerminalView {
     /// 像素坐标 → 当前可视网格坐标与半格判定。
@@ -70,6 +90,28 @@ impl TerminalView {
         }
     }
 
+    /// 最新不可变帧中的 OSC 8 目标；绝不回读实时网格。
+    fn hyperlink_at(&self, position: Point<Pixels>) -> Option<String> {
+        let (point, _) = self.visual_grid_point(position);
+        let row = u16::try_from(point.line).ok()?;
+        let col = u16::try_from(point.column.0).ok()?;
+        self.frame
+            .as_ref()?
+            .render()
+            .segments
+            .iter()
+            .filter(|segment| segment.row == row)
+            .flat_map(|segment| {
+                let step = segment.step();
+                segment.cells.iter().map(move |cell| (step, cell))
+            })
+            .find(|(step, cell)| col >= cell.col && col < cell.col + *step)?
+            .1
+            .hyperlink
+            .clone()
+            .map(|link| link.uri().to_owned())
+    }
+
     pub(super) fn on_mouse_down(
         &mut self,
         event: &MouseDownEvent,
@@ -78,6 +120,16 @@ impl TerminalView {
     ) {
         window.focus(&self.focus_handle, cx);
         if self.binding.is_none() {
+            return;
+        }
+        if event.modifiers.control
+            && event.click_count == 1
+            && let Some(uri) = self.hyperlink_at(event.position)
+        {
+            if openable_hyperlink(&uri) {
+                cx.open_url(&uri);
+            }
+            cx.stop_propagation();
             return;
         }
         if self.mouse_mode_active(&event.modifiers) {

@@ -122,3 +122,55 @@ fn drag_selects_rendered_text_and_copies(cx: &mut TestAppContext) {
     let cleared = terminal.read_with(&window, |view, _| view.selection_is_empty());
     assert!(cleared);
 }
+
+/// OSC 8 仅允许有界 http/https/mailto，且必须 Ctrl+单击真实链接单元格。
+#[gpui::test]
+fn ctrl_click_opens_only_bounded_safe_osc8_links(cx: &mut TestAppContext) {
+    let (terminal, mut window, _rx, _registry) = open(cx);
+    let click = |terminal: &Entity<TerminalView>,
+                 window: &mut VisualTestContext,
+                 uri: &str,
+                 row: usize,
+                 control: bool| {
+        terminal.update_in(window, |view, _, _| {
+            if row > 0 {
+                feed(view, b"\r\n");
+            }
+            let start = format!("\x1b]8;;{uri}\x1b\\");
+            feed(view, start.as_bytes());
+            feed(view, b"link\x1b]8;;\x1b\\");
+        });
+        let position = terminal.read_with(window, |view, _| cell_point(view, 0, row, 0.5));
+        let modifiers = Modifiers {
+            control,
+            ..Default::default()
+        };
+        window.simulate_mouse_down(position, MouseButton::Left, modifiers);
+        window.simulate_mouse_up(position, MouseButton::Left, modifiers);
+    };
+
+    click(
+        &terminal,
+        &mut window,
+        "https://example.invalid/safe",
+        0,
+        false,
+    );
+    assert_eq!(cx.opened_url(), None, "普通单击不得打开链接");
+    for (row, uri) in [
+        (1, "file:///C:/secret".to_owned()),
+        (2, "javascript:alert(1)".to_owned()),
+        (3, format!("https://example.invalid/{}", "x".repeat(8192))),
+    ] {
+        click(&terminal, &mut window, &uri, row, true);
+        assert_eq!(cx.opened_url(), None, "非法或超限 URI 不得打开: {row}");
+    }
+    for (row, uri) in [
+        (4, "http://example.invalid/insecure"),
+        (5, "https://example.invalid/safe"),
+        (6, "mailto:test@example.invalid"),
+    ] {
+        click(&terminal, &mut window, uri, row, true);
+        assert_eq!(cx.opened_url().as_deref(), Some(uri));
+    }
+}

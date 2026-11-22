@@ -14,8 +14,8 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::{
     App, Bounds, ClipboardItem, Context, EventEmitter, FocusHandle, Focusable, Font, FontStyle,
     FontWeight, InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, Point, Render, ScrollWheelEvent,
-    Size, Styled as _, UTF16Selection, Window, div, point, px,
+    MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, Point, PromptLevel, Render,
+    ScrollWheelEvent, Size, Styled as _, UTF16Selection, Window, div, point, px,
 };
 
 #[cfg(all(test, feature = "gpui-test-support"))]
@@ -66,6 +66,13 @@ fn selection_scroll_lines(y: f32, top: f32, bottom: f32, max_lines: i32) -> i32 
     } else {
         0
     }
+}
+
+fn paste_requires_confirmation(text: &str) -> bool {
+    let dangerous_control = text
+        .chars()
+        .any(|ch| ch.is_control() && !matches!(ch, '\r' | '\n' | '\t'));
+    dangerous_control || text.lines().count() > 50
 }
 
 fn cursor_blink_allowed(
@@ -219,6 +226,8 @@ pub struct TerminalView {
     pub(super) selection_scroll_active: bool,
     /// 选中即复制;关闭时复制交给右键路径。
     pub(super) copy_on_select: bool,
+    /// 危险粘贴确认的在途任务；重复快捷键不得叠开多个确认框。
+    pending_paste_task: Option<gpui::Task<()>>,
     /// §5.2 复制反馈时限状态机(时限实现单点)。
     pub(super) copy_feedback: CopyFeedback,
     /// 鼠标模式下最后上报的单元格:move 事件按「进入新单元格」去重。
@@ -789,13 +798,46 @@ impl TerminalView {
         true
     }
 
-    /// 粘贴入口。无多行确认(归 AI 集成与通知域):文本直入;bracketed-paste
-    /// 哨兵与注入过滤在 `paste_now_impl`。
-    pub fn paste(&mut self, _window: &mut Window, cx: &mut Context<'_, Self>) {
+    /// 粘贴入口：超限直接拒绝；危险内容经异步原生确认后才写 PTY。
+    pub fn paste(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        const MAX_PASTE_BYTES: usize = 10 * 1024 * 1024;
+        if self.pending_paste_task.is_some() {
+            return;
+        }
         let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
             return;
         };
-        self.paste_now_impl(&text, true, cx);
+        if text.len() > MAX_PASTE_BYTES {
+            self.error = Some("粘贴内容超过 10 MiB，已拒绝".to_owned());
+            cx.notify();
+            return;
+        }
+        let confirm = cx
+            .try_global::<Settings>()
+            .is_none_or(|settings| settings.multiline_paste_confirm)
+            && paste_requires_confirmation(&text);
+        if !confirm {
+            self.paste_now_impl(&text, true, cx);
+            return;
+        }
+        let target = self.binding.as_ref().map(TerminalBinding::target);
+        let response = window.prompt(
+            PromptLevel::Warning,
+            "确认粘贴？",
+            Some("内容包含危险控制字符或超过 50 行。确认框不会展示剪贴板正文。"),
+            &["粘贴", "取消"],
+            cx,
+        );
+        self.pending_paste_task = Some(cx.spawn(async move |this, cx| {
+            let answer = response.await;
+            let _ = this.update(cx, |view, cx| {
+                view.pending_paste_task = None;
+                let same_process = target == view.binding.as_ref().map(TerminalBinding::target);
+                if answer == Ok(0) && same_process && view.exited.is_none() {
+                    view.paste_now_impl(&text, true, cx);
+                }
+            });
+        }));
     }
 
     fn paste_now_impl(&mut self, text: &str, emit: bool, cx: &mut Context<'_, Self>) {
@@ -839,6 +881,11 @@ impl TerminalView {
         let mods = &ks.modifiers;
 
         // 终端惯例快捷键优先于编码器。
+        if mods.shift && !mods.control && !mods.alt && ks.key == "insert" {
+            self.paste(window, cx);
+            cx.stop_propagation();
+            return;
+        }
         if mods.control && mods.shift {
             match ks.key.as_str() {
                 "c" => {

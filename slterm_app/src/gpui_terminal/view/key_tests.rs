@@ -247,8 +247,100 @@ fn ctrl_shift_v_pastes_bracketed_and_strips_sentinel(cx: &mut TestAppContext) {
     };
     let propagate = press(&mut window, key("v", modifiers));
     assert!(!propagate);
+    assert!(cx.has_pending_prompt(), "内嵌 ESC 属于危险控制字符");
+    cx.simulate_prompt_answer("粘贴");
+    window.run_until_parked();
     // 换行归一成 CR;内嵌收尾哨兵被剥掉,防注入截断。
     assert_eq!(pty_bytes(&rx), b"\x1b[200~abcd\ref\x1b[201~".to_vec());
+}
+
+/// 危险粘贴必须等待明确决定；提示只含风险类别，不复制剪贴板正文。
+#[gpui::test]
+fn dangerous_paste_confirmation_does_not_leak_or_write_early(cx: &mut TestAppContext) {
+    let (terminal, mut window, rx, _registry) = open(cx);
+    terminal.update(&mut window, |view, _| feed(view, b"\x1b[?2004h"));
+    let text = "secret\x1b[201~value";
+    window.update(|_, cx| cx.write_to_clipboard(ClipboardItem::new_string(text.to_owned())));
+    let modifiers = Modifiers {
+        control: true,
+        shift: true,
+        ..Default::default()
+    };
+
+    press(&mut window, key("v", modifiers));
+    assert!(pty_bytes(&rx).is_empty(), "确认前不得写 PTY");
+    assert!(cx.has_pending_prompt());
+    let (message, detail) = cx.pending_prompt().unwrap();
+    assert!(!message.contains("secret") && !detail.contains("secret"));
+    cx.simulate_prompt_answer("取消");
+    window.run_until_parked();
+    assert!(pty_bytes(&rx).is_empty(), "取消不得写 PTY");
+
+    press(&mut window, key("v", modifiers));
+    cx.simulate_prompt_answer("粘贴");
+    window.run_until_parked();
+    assert_eq!(pty_bytes(&rx), b"\x1b[200~secretvalue\x1b[201~");
+
+    window.update(|_, cx| {
+        cx.write_to_clipboard(ClipboardItem::new_string("x".repeat(10 * 1024 * 1024 + 1)))
+    });
+    press(&mut window, key("v", modifiers));
+    assert!(!cx.has_pending_prompt());
+    assert!(pty_bytes(&rx).is_empty(), "超过 10 MiB 必须拒绝");
+    assert!(terminal.read_with(&window, |view, _| view.error.is_some()));
+}
+
+#[test]
+fn paste_confirmation_thresholds_cover_controls_and_line_count() {
+    assert!(!paste_requires_confirmation("plain\ttext"));
+    assert!(!paste_requires_confirmation(&"line\n".repeat(50)));
+    assert!(paste_requires_confirmation(&"line\n".repeat(51)));
+    assert!(paste_requires_confirmation("bad\0text"));
+    assert!(paste_requires_confirmation("bad\x1btext"));
+}
+
+#[gpui::test]
+fn shift_insert_pastes_plain_text(cx: &mut TestAppContext) {
+    let (_terminal, mut window, rx, _registry) = open(cx);
+    window
+        .update(|_, cx| cx.write_to_clipboard(ClipboardItem::new_string("plain text".to_owned())));
+    press(
+        &mut window,
+        key(
+            "insert",
+            Modifiers {
+                shift: true,
+                ..Default::default()
+            },
+        ),
+    );
+    assert_eq!(pty_bytes(&rx), b"plain text");
+    assert!(!cx.has_pending_prompt());
+}
+
+#[gpui::test]
+fn paste_confirmation_can_be_disabled_explicitly(cx: &mut TestAppContext) {
+    let (_terminal, mut window, rx, _registry) = open(cx);
+    window.update(|_, cx| {
+        cx.set_global(Settings {
+            multiline_paste_confirm: false,
+            ..Settings::default()
+        });
+        cx.write_to_clipboard(ClipboardItem::new_string("bad\0text".to_owned()));
+    });
+    press(
+        &mut window,
+        key(
+            "v",
+            Modifiers {
+                control: true,
+                shift: true,
+                ..Default::default()
+            },
+        ),
+    );
+    assert!(!cx.has_pending_prompt());
+    assert_eq!(pty_bytes(&rx), b"bad\0text");
 }
 
 /// shift+pageup 仅主屏:本地翻页,零字节下发;备用屏则透传编码序列。

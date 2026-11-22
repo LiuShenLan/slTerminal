@@ -407,6 +407,7 @@ impl TerminalView {
             selection_scroll_epoch: 0,
             selection_scroll_active: false,
             copy_on_select,
+            pending_paste_task: None,
             copy_feedback: CopyFeedback::new(),
             last_report_point: None,
             cursor_visible: true,
