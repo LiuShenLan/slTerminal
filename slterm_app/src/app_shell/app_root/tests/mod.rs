@@ -16,6 +16,7 @@ mod projects;
 mod settings_overlay;
 mod sidebar;
 mod tabs;
+mod terminal_cwd;
 mod terminal_reconnect;
 mod view_tasks;
 

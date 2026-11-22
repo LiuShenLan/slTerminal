@@ -1,6 +1,6 @@
 //! Shell 探测链与 PowerShell 集成注入（旧栈 `pty/shell.rs` 语义资产并入）。
 //!
-//! 探测策略：`pwsh.exe` → `powershell.exe` → `cmd.exe` 存在性回退。
+//! 探测策略：`pwsh.exe` → `powershell.exe` → `cmd.exe` 真实创建与 500ms 存活回退。
 //! PowerShell 经 `-EncodedCommand`（UTF-16LE Base64）内联集成脚本，消除
 //! `%APPDATA%` 文件写入——避免 AMSI/ASR 误杀。禁止 `-NoProfile`：
 //! 用户 profile 必须先于集成脚本原生加载，否则 conda init 等 profile 钩子
@@ -17,8 +17,10 @@
 //! PATHEXT 补全（dir-major，与 cmd 口径一致）。
 
 use std::io::Error;
-use std::os::windows::ffi::OsStrExt;
+use std::os::windows::{ffi::OsStrExt, process::CommandExt};
 use std::path::Path;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
@@ -61,7 +63,71 @@ pub fn shell_kind_of(program: &str) -> ShellKind {
     }
 }
 
-/// 解析 shell 程序：`Some` 走白名单校验后原样采用；`None` 按探测链回退。
+/// 真实创建候选并观察稳定窗；无论通过与否都不留下子进程。
+fn probe_process(program: &str, args: &[&str], stable_window: Duration) -> Result<bool, Error> {
+    let mut child = Command::new(program)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        // GUI 启动探测不得闪现控制台窗口。
+        .creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW)
+        .spawn()?;
+    let deadline = Instant::now() + stable_window;
+    loop {
+        if child.try_wait()?.is_some() {
+            return Ok(false);
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            break;
+        }
+        std::thread::sleep((deadline - now).min(Duration::from_millis(10)));
+    }
+    // 截止时间附近退出同样算失败，不能凭上一次轮询放行。
+    if child.try_wait()?.is_some() {
+        return Ok(false);
+    }
+    if let Err(error) = child.kill() {
+        if child.try_wait()?.is_some() {
+            return Ok(false);
+        }
+        return Err(error);
+    }
+    child.wait()?;
+    Ok(true)
+}
+
+fn probe_shell_program(program: &str) -> Result<bool, Error> {
+    let args: &[&str] = match shell_kind_of(program) {
+        ShellKind::Pwsh | ShellKind::PowerShell => &["-NoLogo", "-NoProfile", "-NonInteractive"],
+        ShellKind::Cmd => &["/d", "/q", "/k"],
+        ShellKind::Other => return Ok(false),
+    };
+    probe_process(program, args, Duration::from_millis(500))
+}
+
+fn resolve_default_shell_with(
+    mut find: impl FnMut(&str) -> Option<String>,
+    mut probe: impl FnMut(&str) -> bool,
+) -> Result<Shell, Error> {
+    for name in ["pwsh.exe", "powershell.exe"] {
+        if let Some(path) = find(name)
+            && probe(&path)
+        {
+            return Ok(build_pwsh_command(&path));
+        }
+    }
+    let cmd = find("cmd.exe")
+        .or_else(|| system32_exe_path("cmd.exe"))
+        .unwrap_or_else(|| r"C:\Windows\System32\cmd.exe".to_owned());
+    if probe(&cmd) {
+        return Ok(Shell::new(cmd, Vec::new()));
+    }
+    Err(Error::other("默认 Shell 均未能通过 500 毫秒存活探测"))
+}
+
+/// 解析 shell 程序：`Some` 走白名单校验后原样采用；`None` 按真实存活探测链回退。
 ///
 /// 返回的 `Shell.program` 恒为完整路径（短名经 `which_full_path` 解析），
 /// 保证 `CreateProcessW` 命令行定位可执行文件不依赖调用方 cwd。
@@ -73,18 +139,16 @@ pub fn resolve_shell(user_shell: Option<&str>) -> Result<Shell, Error> {
             which_full_path(shell).unwrap_or_else(|| shell.to_owned())
         };
         Shell::new(program, Vec::new())
-    } else if let Some(path) = which_full_path("pwsh.exe") {
-        build_pwsh_command(&path)
-    } else if let Some(path) = which_full_path("powershell.exe") {
-        build_pwsh_command(&path)
     } else {
-        // cmd.exe 恒在 System32 下；PATH 不含 System32 的极端情况经系统目录
-        // 兜底解析（与 validate_shell_allowlist 的系统目录放行自洽），环境变量
-        // 全缺时才硬编码 C:\Windows 兜底。
-        let cmd_path = which_full_path("cmd.exe")
-            .or_else(|| system32_exe_path("cmd.exe"))
-            .unwrap_or_else(|| r"C:\Windows\System32\cmd.exe".to_owned());
-        Shell::new(cmd_path, Vec::new())
+        resolve_default_shell_with(which_full_path, |program| {
+            match probe_shell_program(program) {
+                Ok(stable) => stable,
+                Err(error) => {
+                    log::warn!("默认 Shell 探测失败: {error}");
+                    false
+                }
+            }
+        })?
     };
 
     validate_shell_allowlist(shell.program())?;
@@ -481,6 +545,49 @@ mod shell_tests {
         path
     }
 
+    /// PATH 解析测试与真实进程探测解耦；后者由 probe_process 用例负责。
+    fn resolve_found_shell() -> Shell {
+        resolve_default_shell_with(which_full_path, |_| true).expect("PATH 候选应可解析")
+    }
+
+    #[test]
+    fn default_shell_probe_skips_early_exit() {
+        let probed = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let observed = std::rc::Rc::clone(&probed);
+        let shell = resolve_default_shell_with(
+            |name| Some(format!(r"C:\shells\{name}")),
+            move |program| {
+                observed.borrow_mut().push(program.to_owned());
+                !program.ends_with("pwsh.exe")
+            },
+        )
+        .unwrap();
+        assert_eq!(shell_kind_of(shell.program()), ShellKind::PowerShell);
+        assert_eq!(
+            probed.borrow().as_slice(),
+            [r"C:\shells\pwsh.exe", r"C:\shells\powershell.exe"]
+        );
+    }
+
+    #[test]
+    fn probe_process_detects_early_exit_and_reaps_stable_process() {
+        let cmd = system32_exe_path("cmd.exe").expect("cmd 必须存在");
+        let early = probe_process(
+            &cmd,
+            &["/d", "/c", "exit", "0"],
+            std::time::Duration::from_millis(50),
+        )
+        .unwrap();
+        assert!(!early, "稳定窗内退出必须判为探测失败");
+        let stable = probe_process(
+            &cmd,
+            &["/d", "/q", "/k"],
+            std::time::Duration::from_millis(50),
+        )
+        .unwrap();
+        assert!(stable, "超过稳定窗的进程应通过并被回收");
+    }
+
     // ─── encode_utf16le_base64（载体编码）───
 
     #[test]
@@ -793,7 +900,7 @@ mod shell_tests {
         fake_exe(dir.path(), "pwsh.exe");
         {
             let _guard = set_test_path(&[dir.path()]);
-            let shell = resolve_shell(None).expect("应命中 pwsh");
+            let shell = resolve_found_shell();
             let expect = dir.path().join("pwsh.exe");
             assert_eq!(shell.program(), expect.to_string_lossy().as_ref());
             assert!(
@@ -807,7 +914,7 @@ mod shell_tests {
         fake_exe(dir.path(), "powershell.exe");
         {
             let _guard = set_test_path(&[dir.path()]);
-            let shell = resolve_shell(None).expect("应命中 powershell");
+            let shell = resolve_found_shell();
             let expect = dir.path().join("powershell.exe");
             assert_eq!(shell.program(), expect.to_string_lossy().as_ref());
         }
@@ -816,7 +923,7 @@ mod shell_tests {
         std::fs::remove_file(dir.path().join("powershell.exe")).unwrap();
         {
             let _guard = set_test_path(&[dir.path()]);
-            let shell = resolve_shell(None).expect("应回退 cmd");
+            let shell = resolve_found_shell();
             assert!(
                 shell.program().ends_with("cmd.exe"),
                 "应回退 cmd.exe，实际: {}",
@@ -830,7 +937,7 @@ mod shell_tests {
         fake_exe(dir.path(), "powershell.exe");
         {
             let _guard = set_test_path(&[dir.path()]);
-            let shell = resolve_shell(None).expect("应命中 pwsh");
+            let shell = resolve_found_shell();
             let expect = dir.path().join("pwsh.exe");
             assert_eq!(shell.program(), expect.to_string_lossy().as_ref());
         }
@@ -845,7 +952,7 @@ mod shell_tests {
         fake_exe(dir.path(), "pwsh.exe");
         let _guard = set_test_path(&[dir.path()]);
 
-        let shell = resolve_shell(None).expect("应命中 pwsh");
+        let shell = resolve_found_shell();
         assert!(
             !shell.args().iter().any(|a| a == "-NoProfile"),
             "pwsh args 不得含 -NoProfile，实际: {:?}",
