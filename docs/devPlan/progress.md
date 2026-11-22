@@ -21,17 +21,17 @@
 
 ### 当前进度
 
-状态锚：**2026-11-22，工作区与生命周期完成验收，Document 与文本视图开始实施。**
+状态锚：**2026-11-22，Document 与文本视图完成验收，终端、补全与学习开始实施。**
 
-当前实施位置：**Document 与文本视图（进行中）。**
+当前实施位置：**终端、补全与学习（进行中）。**
 
 | 命名阶段 | 状态 | 验收日期 | commit hash | 测试证据／阻塞事实 |
 |---|---|---|---|---|
 | 依赖基线与删减 | 已验收 | 2026-10-26 | `f5b8bf455e2e7357b4d6cbff6c716b0dfeaa09f8` | `grammar_audit`、全量 workspace、GPUI／ConPTY 与脚本门禁通过；[真机证据](../../.claude/docs/architecture/provenance.md)与[许可及体积基线](../../.claude/docs/release/packaging.md)已核验。 |
 | 领域基础 | 已验收 | 2026-10-26 | `c46f0ac048721db82b645f88d3c7ea24c5c2914d` | 临时双根下的数据库事务与损坏分流、授权能力并集、设置单字段回退、原子写及审计对账用例通过；全量 workspace、GPUI、脚本与静态门禁全绿；数据根环境读取仅限启动入口。 |
 | 工作区与生命周期 | 已验收 | 2026-11-22 | `59fe311f46162939dcfeb8f7951955c0b1eaadd4` | `workspace_project_switch_preserves_instances`、`integration_batch_close`、`workspace_startup_layout_before_snapshots`、`handover_rejects_unauthorized_cwd` 等验收与回归例通过；GPUI 全特性、全量 workspace、core release、脚本及静态门禁全绿。 |
-| Document 与文本视图 | 进行中 | — | — | — |
-| 终端、补全与学习 | 未开始 | — | — | — |
+| Document 与文本视图 | 已验收 | 2026-11-22 | `59fe311f46162939dcfeb8f7951955c0b1eaadd4` | `integration_document_global_identity`、`document_autosave_waits_for_all_views_to_blur`、`integration_snapshot_quota`、`ime_commits_utf16_edits_through_the_shared_document` 等主责锚通过；全量 workspace、GPUI 全特性、core release、脚本及静态门禁全绿。 |
+| 终端、补全与学习 | 进行中 | — | — | — |
 | Markdown 与安全资源 | 未开始 | — | — | — |
 | 文件与 Git | 未开始 | — | — | — |
 | Agent 与 Hooks | 未开始 | — | — | — |
