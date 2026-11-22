@@ -257,7 +257,7 @@
 | 重启恢复可见、隐藏和已退出终端的不同运行态 | `terminal_restore_visibility_and_exit_state` | 已自动化 |
 | 存活 PTY 达上限时拒绝新启动且记录不丢 | `terminal_live_pty_limit` | 已自动化 |
 | 隐藏期间持续输出重新可见仍连续且只显示新画面 | `terminal_hidden_output_backpressure` | 已自动化 |
-| 不可信镜像不补全不采集且接受候选不自动执行 | `terminal_trusted_line_completion_gate` | 待实现 |
+| 不可信镜像不补全不采集且接受候选不自动执行 | `terminal_trusted_line_completion_gate` | 已自动化 |
 | cwd 变化丢弃旧补全且单来源失败不阻塞其他来源 | `completion_generation_and_source_failure` | 待实现 |
 | 清空学习同时取消待写并清除内存 | `learning_clear_cancels_pending_writes` | 待实现 |
 | 回滚搜索只读且不向 PTY 写搜索字节 | `terminal_search_is_read_only` | 待实现 |

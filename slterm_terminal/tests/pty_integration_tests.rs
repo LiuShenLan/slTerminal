@@ -397,8 +397,11 @@ fn default_shell_resolve_chain_osc_marks() {
     let deadline = Instant::now() + Duration::from_secs(60);
     let mut has_cwd = false;
     let mut has_prompt_mark = false;
+    let mut has_prompt_snapshot = false;
     let mut has_command_done = false;
-    while Instant::now() < deadline && !(has_cwd && has_prompt_mark && has_command_done) {
+    while Instant::now() < deadline
+        && !(has_cwd && has_prompt_mark && has_prompt_snapshot && has_command_done)
+    {
         // PSReadLine 的窗口外 DSR 查询经 Term 自答——回环防交互组件卡住。
         driven.relay_pty_writes();
         let events = driven.recorder.snapshot();
@@ -409,7 +412,55 @@ fn default_shell_resolve_chain_osc_marks() {
             .iter()
             .any(|e| matches!(e, slterm_terminal::event::Event::CommandDone { .. }));
         has_prompt_mark |= driven.term.lock().slterm_prompt_active();
+        has_prompt_snapshot |= driven.term.lock().slterm_prompt_snapshot().is_some();
         std::thread::sleep(Duration::from_millis(100));
+    }
+    let initial_epoch = driven
+        .term
+        .lock()
+        .slterm_prompt_snapshot()
+        .map(|prompt| prompt.epoch());
+    let mut matched_echo = false;
+    let mut last_echo = None;
+    if has_prompt_snapshot {
+        driven.input(b"echo SLTERM_PROMPT_ECHO");
+        let echo_deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < echo_deadline && !matched_echo {
+            driven.relay_pty_writes();
+            let snapshot = driven.term.lock().slterm_prompt_snapshot();
+            if let Some(prompt) = &snapshot {
+                last_echo = Some((prompt.epoch(), prompt.echo().to_owned()));
+            }
+            matched_echo = snapshot.is_some_and(|prompt| {
+                Some(prompt.epoch()) == initial_epoch && prompt.echo() == "echo SLTERM_PROMPT_ECHO"
+            });
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+    let mut confirmed_execution = false;
+    if matched_echo {
+        let event_base = driven.recorder.snapshot().len();
+        driven.input(b"\r");
+        let execution_deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < execution_deadline && !confirmed_execution {
+            driven.relay_pty_writes();
+            let events = driven.recorder.snapshot();
+            let started = events[event_base..]
+                .iter()
+                .any(|event| matches!(event, slterm_terminal::event::Event::CommandStart));
+            let done = events[event_base..]
+                .iter()
+                .any(|event| matches!(event, slterm_terminal::event::Event::CommandDone { .. }));
+            let next_prompt = driven
+                .term
+                .lock()
+                .slterm_prompt_snapshot()
+                .is_some_and(|prompt| {
+                    Some(prompt.epoch()) > initial_epoch && prompt.echo().is_empty()
+                });
+            confirmed_execution = started && done && next_prompt;
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
     let summary: Vec<String> = driven
         .recorder
@@ -426,6 +477,18 @@ fn default_shell_resolve_chain_osc_marks() {
     assert!(
         has_prompt_mark,
         "集成脚本未置位语义 prompt 标记(OSC 133;A): {summary:?}"
+    );
+    assert!(
+        has_prompt_snapshot,
+        "完整 OSC 133;B 必须产生可对账的回显快照: {summary:?}"
+    );
+    assert!(
+        matched_echo,
+        "真实 Shell 回显必须与本地输入及原提示符代次一致: initial={initial_epoch:?}, last={last_echo:?}, events={summary:?}"
+    );
+    assert!(
+        confirmed_execution,
+        "真实命令必须闭合 Start→Done 并进入下一空提示符: {summary:?}"
     );
     assert!(
         has_command_done,
@@ -455,11 +518,12 @@ fn pwsh_integration_script_osc_semantics() {
     // prelude:自定义 prompt 先于集成脚本定义(脚本包装它,不得覆盖)。
     let prelude = "function global:prompt { 'SLTERM-USER-PROMPT> ' }\n";
     let script = include_str!("../src/tty/windows/shell-integration.ps1");
-    // checks:调包装后的 prompt——自定义文本须保留(管道输出);OSC 经
-    // $Host.UI.Write 进 stdout;分码退出便于定位断言行。
+    // checks:调包装后的 prompt——自定义文本与 133;B 在同一返回值中保序；
+    // 把返回值物理写到 stdout，分码退出便于定位断言行。
     let checks = r#"
-$rendered = (prompt | Out-String)
+$rendered = [string](prompt)
 if ($rendered -notlike '*SLTERM-USER-PROMPT*') { exit 31 }
+[Console]::Write($rendered)
 [Console]::Write('PROMPT-KEPT')
 exit 0
 "#;
@@ -481,10 +545,21 @@ exit 0
         show(&stdout),
         String::from_utf8_lossy(&out.stderr)
     );
-    // 包装 prompt 真跑且自定义文本保留(checks  exit 31 闸 + 标记)。
+    // 包装 prompt 真跑且自定义文本与输入边界经同一返回值保序。
     assert!(
         contains(&stdout, b"PROMPT-KEPT"),
-        "自定义 prompt 未保留: {}",
+        "自定义 prompt 包装链未执行: {}",
+        show(&stdout)
+    );
+    let prompt_at = stdout
+        .windows(b"SLTERM-USER-PROMPT> ".len())
+        .position(|window| window == b"SLTERM-USER-PROMPT> ");
+    let input_at = stdout
+        .windows(b"\x1b]133;B".len())
+        .position(|window| window == b"\x1b]133;B");
+    assert!(
+        prompt_at.is_some_and(|prompt| input_at.is_some_and(|input| prompt < input)),
+        "133;B 必须位于真实 prompt 文本之后: {}",
         show(&stdout)
     );
     // 133;D/133;B 仅包装 prompt 发射(脚本末尾 bringup 只有 133;A+OSC 7)

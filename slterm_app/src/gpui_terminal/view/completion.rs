@@ -42,10 +42,11 @@ impl TerminalView {
 
     /// 当前输入快照的缓存键:输入 + 光标 + 呈现形态 + 命令代际。
     pub(crate) fn completion_key(&self, style: CompletionStyle) -> String {
+        let line = self.shell_line.line();
         format!(
             "{}\0cursor={}\0syntax={:?}",
-            completion::cache_key(&self.cwd, &SuggestEnv::Local, &self.suggest_line, style,),
-            self.suggest_cursor.min(self.suggest_line.len()),
+            completion::cache_key(&self.cwd, &SuggestEnv::Local, line, style,),
+            line.len(),
             self.term_mode().contains(TermMode::ALT_SCREEN),
         )
     }
@@ -55,8 +56,9 @@ impl TerminalView {
         let style = self
             .completion_style
             .active_style(self.suggest.popup_requested);
-        let line = self.suggest_line.clone();
-        if self.exited.is_some() || !self.ghost_enabled || line.is_empty() {
+        let line = self.shell_line.completion_line().map(str::to_owned);
+        if self.exited.is_some() || !self.ghost_enabled || line.as_deref().is_none_or(str::is_empty)
+        {
             self.suggestion_task = None;
             if self.suggest.popup_requested {
                 self.suggest.popup_requested = false;
@@ -64,6 +66,7 @@ impl TerminalView {
             self.suggest.clear_completion_hints();
             return;
         }
+        let line = line.expect("可信非空行已经预检");
         let key = self.completion_key(style);
         if self.suggest.completion_query_matches(&key) {
             if self.suggest.completion_query_ready(&key) {
@@ -86,7 +89,7 @@ impl TerminalView {
         };
         self.suggestion_task = None;
         self.suggest.begin_completion_query(key.clone());
-        let cursor = self.suggest_cursor.min(line.len());
+        let cursor = line.len();
         let cancellation = Cancellation::default();
         let worker_cancellation = cancellation.clone();
         let request = session.request_at(
@@ -110,7 +113,7 @@ impl TerminalView {
                     .completion_style
                     .active_style(view.suggest.popup_requested);
                 if !view.suggest.completion_query_matches(&key)
-                    || view.suggest_line != line
+                    || view.shell_line.completion_line() != Some(line.as_str())
                     || current_style != style
                     || !view.ghost_enabled
                     || view.exited.is_some()
@@ -146,7 +149,7 @@ impl TerminalView {
         let hybrid = self.completion_style == CompletionStyle::Hybrid;
         let popup_active = !self.suggest.completion_items.is_empty();
         if key == "escape" && (hybrid && self.suggest.popup_requested || popup_active) {
-            let line = self.suggest_line.clone();
+            let line = self.shell_line.line().to_owned();
             self.suggestion_task = None;
             self.suggest.completion_popup_dismiss(&line);
             self.refresh_suggestion(cx);
@@ -182,7 +185,14 @@ impl TerminalView {
                 _ => {}
             }
         }
-        if key == "tab" && hybrid && self.ghost_enabled && !self.suggest_line.is_empty() {
+        if key == "tab"
+            && hybrid
+            && self.ghost_enabled
+            && self
+                .shell_line
+                .completion_line()
+                .is_some_and(|line| !line.is_empty())
+        {
             // Tab 请求只改变呈现,不向 PTY 写入。
             self.suggest.request_completion_popup();
             self.refresh_suggestion(cx);
@@ -200,10 +210,11 @@ impl TerminalView {
                 return self.accept_completion_item(item, cx);
             }
             let ghost = std::mem::take(&mut self.suggest.suggestion);
-            for ch in ghost.chars() {
-                self.suggest_line.push(ch);
+            let mut line = self.shell_line.line().to_owned();
+            line.push_str(&ghost);
+            if !self.shell_line.replace_trusted_line(line) {
+                return true;
             }
-            self.suggest_cursor = self.suggest_line.len();
             if !ghost.is_empty() {
                 let bytes = ghost.as_bytes().to_vec();
                 self.write_user_text(ghost, false, bytes, cx);
@@ -230,6 +241,9 @@ impl TerminalView {
         item: SltermCompletionItem,
         cx: &mut Context<'_, Self>,
     ) -> bool {
+        if self.shell_line.completion_line().is_none() {
+            return false;
+        }
         let mode = self.term_mode();
         if item.replace_after_chars > 0 {
             let right = encode_named("right", &mode).unwrap_or_else(|| b"\x1b[C".to_vec());
@@ -242,13 +256,12 @@ impl TerminalView {
                 cx,
             );
         }
-        let mut head = self.suggest_line.clone();
+        let mut head = self.shell_line.line().to_owned();
         for _ in 0..item.replace_chars {
             head.pop();
         }
         head.push_str(&item.insert);
-        self.suggest_line = head.clone();
-        self.suggest_cursor = head.len();
+        self.shell_line.replace_trusted_line(head.clone());
         // 接受后整行已变化;抑制幽灵立即复现,直到下一次真实输入。
         self.suggest.suppressed_line = Some(head);
         self.suggest.completion_items.clear();
@@ -266,36 +279,34 @@ impl TerminalView {
     pub(super) fn note_text_key(&mut self, keystroke: &Keystroke, cx: &mut Context<'_, Self>) {
         let mods = &keystroke.modifiers;
         if mods.control || mods.alt {
+            if keystroke.key == "c" && mods.control {
+                self.shell_line.interrupt();
+            } else {
+                self.shell_line.invalidate();
+            }
+            self.refresh_suggestion(cx);
             return;
         }
         match keystroke.key.as_str() {
             "backspace" => {
-                self.suggest_line.pop();
-                self.suggest_cursor = self.suggest_line.len();
+                self.shell_line.backspace();
             }
             "enter" => {
                 self.commit_line(cx);
                 return;
             }
-            // 光标移动/历史召回/中线删除后无法证明镜像等于屏幕真值;
-            // 记录本轮不可信,Enter 时宁缺毋滥(上游 screen_line 纪律)。
-            "left" | "right" | "home" | "end" | "up" | "down" | "delete" => {
-                self.suggest_line_trusted = false;
+            // 任何非纯文本编辑都无法证明本地镜像仍等于 Shell 行。
+            _ if keystroke.key_char.as_deref().is_none_or(str::is_empty) => {
+                self.shell_line.invalidate();
+                self.refresh_suggestion(cx);
                 return;
             }
-            "tab" | "escape" | "pageup" | "pagedown" | "insert" | "f1" | "f2" | "f3" | "f4"
-            | "f5" | "f6" | "f7" | "f8" | "f9" | "f10" | "f11" | "f12" => return,
             _ => {
-                let text = keystroke
-                    .key_char
-                    .clone()
-                    .filter(|text| !text.is_empty())
-                    .unwrap_or_else(|| keystroke.key.clone());
+                let text = keystroke.key_char.as_deref().unwrap_or(&keystroke.key);
                 if text.chars().count() != 1 || text.chars().any(char::is_control) {
                     return;
                 }
-                self.suggest_line.push_str(&text);
-                self.suggest_cursor = self.suggest_line.len();
+                self.shell_line.note_text(text);
             }
         }
         self.refresh_suggestion(cx);
@@ -305,42 +316,20 @@ impl TerminalView {
     pub(super) fn note_text_input(&mut self, text: &str, cx: &mut Context<'_, Self>) {
         let normalized = text.replace("\r\n", "\n");
         if let Some((head, _)) = normalized.split_once('\n') {
-            self.suggest_line.push_str(head);
-            self.suggest_cursor = self.suggest_line.len();
+            self.shell_line.note_text(head);
             self.commit_line(cx);
             return;
         }
-        self.suggest_line.push_str(&normalized);
-        self.suggest_cursor = self.suggest_line.len();
+        self.shell_line.note_text(&normalized);
         self.refresh_suggestion(cx);
     }
 
-    /// Enter 提交:历史进共享池、来源缓存代次 +1、行镜像清空。
-    ///
-    /// 网格读回(screen_line)是 Windows 下的权威来源,但本视图没有独立的
-    /// 行编辑器快照;使用按键镜像并在记录前要求非空、无控制字符。
-    pub(super) fn commit_line(&mut self, cx: &mut Context<'_, Self>) {
-        let line = self.suggest_line.trim().to_owned();
-        self.last_committed = line.clone();
-        self.suggest_line.clear();
-        self.suggest_cursor = 0;
+    /// Enter 只建立待决执行；历史写入由 CommandStart→CommandDone 闭合。
+    pub(super) fn commit_line(&mut self, _cx: &mut Context<'_, Self>) {
+        self.shell_line.submit();
         if let Some(session) = &self.completion_session {
             session.invalidate();
         }
-        // 备用屏/Vi 模式里 Enter 属于前台应用(编辑器或 AI CLI 输入),
-        // 不是 shell 提交:只清镜像,不污染历史。
-        let shell_owned = !self
-            .term_mode()
-            .intersects(TermMode::ALT_SCREEN | TermMode::VI);
-        if shell_owned
-            && self.suggest_line_trusted
-            && !line.is_empty()
-            && !line.chars().any(char::is_control)
-        {
-            completion::record_command(&crate::history::HistoryScope::Local, &line, &self.cwd);
-            cx.emit(super::TerminalViewEvent::CommandSubmitted(line));
-        }
-        self.suggest_line_trusted = true;
         self.suggest.clear_completion_hints();
         self.suggest.suppressed_line = None;
     }
@@ -360,6 +349,12 @@ fn encode_named(key: &str, mode: &TermMode) -> Option<Vec<u8>> {
 #[cfg(all(test, feature = "gpui-test-support"))]
 impl TerminalView {
     pub(crate) fn suggest_line(&self) -> &str {
-        &self.suggest_line
+        self.shell_line.line()
+    }
+
+    /// 经真实 VT 提示符标记建立测试镜像，不直接伪造 Trusted 状态。
+    pub(crate) fn establish_test_prompt(&mut self) {
+        self.shell_line = crate::gpui_terminal::shell_line::ShellLineTracker::new(Some("cmd.exe"));
+        self.feed_test_bytes(b"\x1b]133;A\x07\x1b]133;B\x07");
     }
 }

@@ -338,6 +338,11 @@ impl TerminalView {
             }),
         ];
 
+        let shell_line = crate::gpui_terminal::shell_line::ShellLineTracker::new(
+            exec_context
+                .as_ref()
+                .and_then(crate::completion::PaneExecContext::shell_program),
+        );
         let mut view = Self {
             pane_id,
             binding,
@@ -372,14 +377,11 @@ impl TerminalView {
             line_height_multiplier: None,
             palette,
             suggest: crate::suggest::SuggestState::default(),
-            suggest_line: String::new(),
-            suggest_cursor: 0,
-            suggest_line_trusted: true,
+            shell_line,
             completion_session: None,
             suggestion_task: None,
             completion_style,
             ghost_enabled,
-            last_committed: String::new(),
             marked_text: None,
             ime_bounds: Bounds::default(),
             title: initial_title,
@@ -450,11 +452,12 @@ impl TerminalView {
         self.exec_context = exec_context;
         self.selection_cleared = false;
         self.suggest = crate::suggest::SuggestState::default();
-        self.suggest_line.clear();
-        self.suggest_cursor = 0;
-        self.suggest_line_trusted = false;
+        self.shell_line = crate::gpui_terminal::shell_line::ShellLineTracker::new(
+            self.exec_context
+                .as_ref()
+                .and_then(crate::completion::PaneExecContext::shell_program),
+        );
         self.suggestion_task = None;
-        self.last_committed.clear();
         self.marked_text = None;
         self.running_program = None;
         self.error = None;

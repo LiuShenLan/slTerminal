@@ -74,6 +74,7 @@ fn open(
                     .unwrap(),
                 session,
             );
+            view.establish_test_prompt();
             view.error = None;
             view.exited = None;
             rx_slot = Some(receiver);
@@ -95,7 +96,7 @@ fn open(
     (terminal, window.clone(), rx_slot.unwrap(), registry)
 }
 
-fn press(window: &mut VisualTestContext, keystroke: gpui::Keystroke) -> bool {
+fn dispatch(window: &mut VisualTestContext, keystroke: gpui::Keystroke) -> bool {
     window
         .update(|window, cx| {
             window.dispatch_event(
@@ -108,6 +109,39 @@ fn press(window: &mut VisualTestContext, keystroke: gpui::Keystroke) -> bool {
             )
         })
         .propagate
+}
+
+fn press(
+    terminal: &Entity<TerminalView>,
+    window: &mut VisualTestContext,
+    keystroke: gpui::Keystroke,
+) -> bool {
+    let before = terminal.read_with(window, |view, _| view.suggest_line().to_owned());
+    let key = keystroke.key.clone();
+    let result = dispatch(window, keystroke);
+    let after = terminal.read_with(window, |view, _| view.suggest_line().to_owned());
+    terminal.update_in(window, |view, _, cx| {
+        if key == "enter" && after.is_empty() {
+            view.feed_test_bytes(b"\r\n\x1b]133;A\x07\x1b]133;B\x07");
+            view.refresh_suggestion(cx);
+            return;
+        }
+        let old: Vec<char> = before.chars().collect();
+        let new: Vec<char> = after.chars().collect();
+        let common = old
+            .iter()
+            .zip(&new)
+            .take_while(|(left, right)| left == right)
+            .count();
+        let mut echo = vec![0x7f; old.len().saturating_sub(common)];
+        echo.extend(new[common..].iter().collect::<String>().as_bytes());
+        if !echo.is_empty() {
+            view.feed_test_bytes(&echo);
+            view.refresh_suggestion(cx);
+        }
+    });
+    window.run_until_parked();
+    result
 }
 
 fn key(name: &str) -> gpui::Keystroke {
@@ -123,6 +157,7 @@ fn key(name: &str) -> gpui::Keystroke {
 fn type_text(terminal: &Entity<TerminalView>, window: &mut VisualTestContext, text: &str) {
     for ch in text.chars() {
         press(
+            terminal,
             window,
             gpui::Keystroke {
                 modifiers: Modifiers::default(),
@@ -133,6 +168,10 @@ fn type_text(terminal: &Entity<TerminalView>, window: &mut VisualTestContext, te
         let text = ch.to_string();
         terminal.update_in(window, |view, window, cx| {
             gpui::EntityInputHandler::replace_text_in_range(view, None, &text, window, cx);
+            // 内存 worker 不产生 PTY 回显；保留输入接收端供字节断言，单独把
+            // 同等字节喂给真实网格，使可信行只能经正常帧与回显对账开放。
+            view.feed_test_bytes(text.as_bytes());
+            view.refresh_suggestion(cx);
         });
     }
     window.run_until_parked();
@@ -160,7 +199,7 @@ fn inline_ghost_accepts_on_tab_and_enter_commits_history(cx: &mut TestAppContext
     let suggestion = terminal.read_with(&window, |view, _| view.suggest.suggestion.clone());
     assert_eq!(suggestion, "uild --release", "ghost 余量来自历史提示");
 
-    let propagate = press(&mut window, key("tab"));
+    let propagate = press(&terminal, &mut window, key("tab"));
     assert!(!propagate, "接受键必须被终端消费");
     assert_eq!(
         pty_bytes(&rx),
@@ -173,7 +212,7 @@ fn inline_ghost_accepts_on_tab_and_enter_commits_history(cx: &mut TestAppContext
         "接受后行镜像完成整条命令"
     );
 
-    let propagate = press(&mut window, key("enter"));
+    let propagate = press(&terminal, &mut window, key("enter"));
     assert!(!propagate);
     assert_eq!(pty_bytes(&rx), b"\r".to_vec(), "Enter 照常提交换行");
     assert!(
@@ -207,7 +246,7 @@ fn popup_navigation_and_accept_edit_the_line_without_submitting(cx: &mut TestApp
     );
 
     // Enter 在没有选中项时不接受,走正常提交换行。
-    let propagate = press(&mut window, key("enter"));
+    let propagate = press(&terminal, &mut window, key("enter"));
     assert!(!propagate);
     assert_eq!(pty_bytes(&rx), b"\r".to_vec());
 
@@ -215,7 +254,7 @@ fn popup_navigation_and_accept_edit_the_line_without_submitting(cx: &mut TestApp
     type_text(&terminal, &mut window, &format!("{unique}alpha"));
     let _ = pty_bytes(&rx);
     window.run_until_parked();
-    press(&mut window, key("down"));
+    press(&terminal, &mut window, key("down"));
     let selected = terminal.read_with(&window, |view, _| {
         view.suggest
             .completion_selected
@@ -223,7 +262,7 @@ fn popup_navigation_and_accept_edit_the_line_without_submitting(cx: &mut TestApp
     });
     let selected = selected.expect("Down 应选中首项");
     assert_eq!(selected.kind, SltermCompletionKind::History);
-    let propagate = press(&mut window, key("enter"));
+    let propagate = press(&terminal, &mut window, key("enter"));
     assert!(!propagate);
     let bytes = pty_bytes(&rx);
     assert!(
@@ -231,6 +270,101 @@ fn popup_navigation_and_accept_edit_the_line_without_submitting(cx: &mut TestApp
         "接受候选的 Enter 不得提交命令: {bytes:?}"
     );
     assert_eq!(bytes, selected.insert.as_bytes(), "只写候选余量");
+}
+
+/// 可信门控：回显之外的编辑关闭补全；无 Start 或被取消的执行不采集；
+/// 接受候选只编辑当前行，不产生 Enter 或执行记录。
+#[gpui::test]
+fn terminal_trusted_line_completion_gate(cx: &mut TestAppContext) {
+    let command = "slterm-trusted-gate-command";
+    completion::insert_history_for_test(command);
+    let (terminal, mut window, rx, _registry) = open(cx, CompletionStyle::Inline, true);
+    let submitted = Rc::new(RefCell::new(Vec::new()));
+    let observed = Rc::clone(&submitted);
+    let _subscription = window.update(|_, cx| {
+        cx.subscribe(&terminal, move |_, event, _| {
+            if let TerminalViewEvent::CommandSubmitted(line) = event {
+                observed.borrow_mut().push(line.clone());
+            }
+        })
+    });
+
+    type_text(&terminal, &mut window, "slterm-trusted-gate-c");
+    let _ = pty_bytes(&rx);
+    assert!(!terminal.read_with(&window, |view, _| view.suggest.suggestion.is_empty()));
+    press(&terminal, &mut window, key("left"));
+    assert!(terminal.read_with(&window, |view, _| {
+        view.suggest.suggestion.is_empty() && view.suggest.completion_items.is_empty()
+    }));
+    let _ = pty_bytes(&rx);
+    terminal.update_in(&mut window, |view, _, cx| {
+        view.feed_event_for_test(TermEvent::CommandStart, cx);
+        view.feed_event_for_test(TermEvent::CommandDone { exit_code: Some(0) }, cx);
+    });
+    window.run_until_parked();
+    assert!(submitted.borrow().is_empty(), "不可信行不得采集");
+
+    terminal.update(&mut window, |view, _| view.establish_test_prompt());
+    type_text(&terminal, &mut window, command);
+    let _ = pty_bytes(&rx);
+    dispatch(&mut window, key("enter"));
+    assert_eq!(pty_bytes(&rx), b"\r".to_vec());
+    terminal.update_in(&mut window, |view, _, cx| {
+        view.feed_event_for_test(TermEvent::CommandDone { exit_code: Some(0) }, cx);
+    });
+    window.run_until_parked();
+    assert!(submitted.borrow().is_empty(), "没有 Start 不得采集");
+
+    terminal.update(&mut window, |view, _| view.establish_test_prompt());
+    type_text(&terminal, &mut window, command);
+    let _ = pty_bytes(&rx);
+    dispatch(&mut window, key("enter"));
+    let _ = pty_bytes(&rx);
+    terminal.update_in(&mut window, |view, _, cx| {
+        view.feed_event_for_test(TermEvent::CommandStart, cx);
+    });
+    press(
+        &terminal,
+        &mut window,
+        gpui::Keystroke {
+            modifiers: Modifiers {
+                control: true,
+                ..Modifiers::default()
+            },
+            key: "c".to_owned(),
+            key_char: None,
+        },
+    );
+    terminal.update_in(&mut window, |view, _, cx| {
+        view.feed_event_for_test(TermEvent::CommandDone { exit_code: Some(0) }, cx);
+    });
+    window.run_until_parked();
+    assert!(submitted.borrow().is_empty(), "取消的执行不得采集");
+    let _ = pty_bytes(&rx);
+
+    terminal.update(&mut window, |view, _| view.establish_test_prompt());
+    type_text(&terminal, &mut window, "slterm-trusted-gate-c");
+    let _ = pty_bytes(&rx);
+    press(&terminal, &mut window, key("tab"));
+    let bytes = pty_bytes(&rx);
+    assert_eq!(bytes, b"ommand".to_vec());
+    assert!(!bytes.contains(&b'\r'), "接受候选不得自动执行");
+    assert!(submitted.borrow().is_empty());
+}
+
+/// 进程退出也是未闭合执行的取消边界，迟到的 Done 不得采集。
+#[gpui::test]
+fn terminal_exit_cancels_unclosed_execution(cx: &mut TestAppContext) {
+    let (terminal, mut window, rx, _registry) = open(cx, CompletionStyle::Inline, true);
+    type_text(&terminal, &mut window, "echo slterm-unclosed-exit");
+    let _ = pty_bytes(&rx);
+    dispatch(&mut window, key("enter"));
+    let _ = pty_bytes(&rx);
+    terminal.update_in(&mut window, |view, _, cx| {
+        view.feed_event_for_test(TermEvent::CommandStart, cx);
+        view.feed_event_for_test(TermEvent::Exit, cx);
+        assert_eq!(view.shell_line.command_done(), None);
+    });
 }
 
 /// 工作区面板循环优先于活动补全弹窗，且不得写入 PTY。
@@ -255,6 +389,7 @@ fn ctrl_tab_is_not_consumed_by_active_completion_popup(cx: &mut TestAppContext) 
 
     for (control, shift) in [(true, false), (true, true)] {
         let propagate = press(
+            &terminal,
             &mut window,
             gpui::Keystroke {
                 modifiers: Modifiers {
@@ -293,7 +428,7 @@ fn hybrid_tab_requests_popup_and_escape_suppresses_the_same_line(cx: &mut TestAp
     window.run_until_parked();
     assert!(!terminal.read_with(&window, |view, _| view.suggest.suggestion.is_empty()));
 
-    let propagate = press(&mut window, key("tab"));
+    let propagate = press(&terminal, &mut window, key("tab"));
     assert!(!propagate);
     window.run_until_parked();
     assert!(
@@ -302,7 +437,7 @@ fn hybrid_tab_requests_popup_and_escape_suppresses_the_same_line(cx: &mut TestAp
     );
     assert!(pty_bytes(&rx).is_empty(), "请求弹窗不写 PTY");
 
-    let propagate = press(&mut window, key("escape"));
+    let propagate = press(&terminal, &mut window, key("escape"));
     assert!(!propagate);
     let state = terminal.read_with(&window, |view, _| {
         (

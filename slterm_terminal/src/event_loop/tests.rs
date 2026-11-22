@@ -221,6 +221,29 @@ fn input_boundaries_require_a_prompt_and_do_not_survive_reflow_or_reset() {
 }
 
 #[test]
+fn prompt_snapshot_tracks_echo_and_prompt_epoch() {
+    let mut terminal = Term::new(Config::default(), &TermSize::new(80, 24), VoidListener);
+    let mut stream = StreamProcessor::default();
+    stream.feed(
+        &mut terminal,
+        &VoidListener,
+        b"\x1b]133;A\x07prompt> \x1b]133;B\x07git",
+    );
+    let first = terminal.slterm_prompt_snapshot().unwrap();
+    assert_eq!(first.echo(), "git");
+    stream.feed(
+        &mut terminal,
+        &VoidListener,
+        b"\r\n\x1b]133;A\x07prompt> \x1b]133;B\x07",
+    );
+    let second = terminal.slterm_prompt_snapshot().unwrap();
+    assert!(second.epoch() > first.epoch());
+    assert_eq!(second.echo(), "");
+    terminal.resize(TermSize::new(40, 24));
+    assert!(terminal.slterm_prompt_snapshot().is_none());
+}
+
+#[test]
 fn shell_semantic_events_track_the_active_prompt() {
     let size = TermSize::new(80, 24);
     let mut terminal = Term::new(Config::default(), &size, VoidListener);

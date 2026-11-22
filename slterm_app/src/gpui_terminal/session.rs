@@ -160,8 +160,10 @@ impl TerminalSession {
     #[cfg(all(test, feature = "gpui-test-support"))]
     pub(crate) fn feed_test_bytes(&self, bytes: &[u8]) {
         let mut term = self.term.lock();
-        let mut parser = vte::ansi::Processor::<vte::ansi::StdSyncHandler>::default();
-        parser.advance(&mut *term, bytes);
+        let (events, _receiver) = super::event_mailbox::channel();
+        let proxy = EventProxy { events };
+        // 测试字节必须经生产的 OSC 提取路径，不能只喂 VT 网格而丢失提示符边界。
+        slterm_terminal::event_loop::StreamProcessor::default().feed(&mut *term, &proxy, bytes);
     }
 
     /// 消费会话并显式回收 PTY 线程；join 的 panic 原样交给调用方。

@@ -158,12 +158,8 @@ pub struct TerminalView {
     pub palette: Arc<Palette>,
     /// 补全关闭/缓存状态:键、抑制行、弹窗请求位与候选。
     pub(crate) suggest: crate::suggest::SuggestState,
-    /// 按键镜像的当前输入行与光标(终端行编辑器不暴露 buffer)。
-    pub(crate) suggest_line: String,
-    pub(crate) suggest_cursor: usize,
-    /// 行镜像是否仍与屏幕输入一致。光标移动/历史召回后无法证明,Enter
-    /// 宁可不记也不记脏(对齐上游 screen_line 优先纪律)。
-    pub(crate) suggest_line_trusted: bool,
+    /// 本地 Shell 行镜像与执行确认；补全不得读取第二份输入缓冲。
+    pub(crate) shell_line: crate::gpui_terminal::shell_line::ShellLineTracker,
     /// 壳侧按 pane 持有的来源缓存句柄(不复制缓存本体)。
     pub(crate) completion_session: Option<Rc<crate::completion::Session>>,
     /// 在飞的候选计算;丢弃即取消。
@@ -171,8 +167,6 @@ pub struct TerminalView {
     pub(crate) completion_style: crate::suggest::CompletionStyle,
     /// AI 内联 ghost 开关。
     pub(crate) ghost_enabled: bool,
-    /// Enter 时捕获的提交行(OSC 133;D 触发判定与程序身份共用)。
-    pub(crate) last_committed: String,
     pub marked_text: Option<String>,
     pub ime_bounds: Bounds<Pixels>,
     pub title: String,
@@ -359,6 +353,19 @@ impl TerminalView {
             .filter(|text| !text.is_empty())
     }
 
+    /// 帧是唯一网格读取口；提示符回显同步驱动本地行镜像。
+    fn adopt_frame(&mut self, frame: Arc<TerminalFrame>) {
+        if frame.mode().intersects(TermMode::ALT_SCREEN | TermMode::VI) {
+            self.shell_line.invalidate();
+        } else if let Some(prompt) = frame.prompt() {
+            self.shell_line
+                .observe_prompt(prompt.epoch(), prompt.echo());
+        } else {
+            self.shell_line.invalidate();
+        }
+        self.frame = Some(frame);
+    }
+
     /// 事件白集:每条臂的归属见改造节;新增事件
     /// 消费须先查归属表,不在此自由发挥。
     pub(super) fn process_event(&mut self, event: TermEvent, cx: &mut Context<'_, Self>) {
@@ -368,9 +375,13 @@ impl TerminalView {
         cwd_report::apply_title_metadata(&mut self.branch, &mut self.running_program, &event);
         match event {
             TermEvent::Frame(frame) => {
-                self.frame = Some(frame);
+                let before = self.shell_line.completion_line().map(str::to_owned);
+                self.adopt_frame(frame);
                 if self.output_visible {
                     cx.notify();
+                }
+                if before != self.shell_line.completion_line().map(str::to_owned) {
+                    self.refresh_suggestion(cx);
                 }
             }
             TermEvent::Wakeup => {
@@ -447,15 +458,22 @@ impl TerminalView {
             // 命令边界:OSC 133;C/D 推进 agent 生命周期。屏幕采样仍走
             // workspace 的 1 Hz 看门狗。
             TermEvent::CommandStart => {
-                if !self.last_committed.trim().is_empty() {
+                if let Some(line) = self.shell_line.command_start() {
                     if self.running_program.is_none() {
-                        self.running_program =
-                            crate::suggest::extract_program(&self.last_committed);
+                        self.running_program = crate::suggest::extract_program(&line);
                     }
                     cx.emit(TerminalViewEvent::CommandStarted);
                 }
             }
             TermEvent::CommandDone { .. } => {
+                if let Some(line) = self.shell_line.command_done() {
+                    crate::completion::record_command(
+                        &crate::history::HistoryScope::Local,
+                        &line,
+                        &self.cwd,
+                    );
+                    cx.emit(TerminalViewEvent::CommandSubmitted(line));
+                }
                 self.running_program = None;
                 cx.emit(TerminalViewEvent::CommandFinished);
             }
@@ -485,6 +503,8 @@ impl TerminalView {
     /// `Exited` 只对宿主发一次;重复的退出信号(ChildExit 之后必然跟 Exit)
     /// 只更新文案。
     fn mark_exited(&mut self, message: String, cx: &mut Context<'_, Self>) {
+        // 进程退出使已开始但未闭合的执行也永久取消，迟到的 Done 不得采集。
+        self.shell_line.interrupt();
         if let Some(binding) = &self.binding
             && let Err(error) = binding.mark_process_exited()
         {
@@ -573,7 +593,8 @@ impl TerminalView {
             .map(|frame| frame.revision().saturating_add(1))
             .unwrap_or(0);
         if let Some(binding) = &self.binding {
-            self.frame = Some(Arc::new(binding.capture_test_frame(revision).unwrap()));
+            let frame = binding.capture_test_frame(revision).unwrap();
+            self.adopt_frame(Arc::new(frame));
         }
         self.selection_cleared = false;
     }

@@ -35,6 +35,7 @@ mod keyboard;
 #[cfg(test)]
 mod keyboard_contract_tests;
 mod prompt;
+pub use prompt::PromptSnapshot;
 mod reconnect;
 mod redraw_anchor;
 #[cfg(test)]
@@ -242,6 +243,8 @@ pub struct Term<T> {
     slterm_prompt_active: bool,
     /// OSC 133;B input start in absolute grid coordinates.
     slterm_prompt_input: Option<(usize, Column)>,
+    /// 每个完整输入边界单调递增；resize/reset 只失效，不回绕代次。
+    slterm_prompt_epoch: u64,
 
     /// 当前默认背景是暗还是亮，供 DECSET 2031 的订阅方使用。
     ///
@@ -398,6 +401,7 @@ impl<T> Term<T> {
             slterm_prompt_marks: Default::default(),
             slterm_prompt_active: false,
             slterm_prompt_input: None,
+            slterm_prompt_epoch: 0,
             active_charset: Default::default(),
             vi_mode_cursor: Default::default(),
             cursor_style: Default::default(),

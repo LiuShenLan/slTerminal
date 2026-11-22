@@ -4,6 +4,23 @@ use crate::event::EventListener;
 use crate::grid::{Dimensions, Scroll};
 use crate::index::{Column, Line, Point};
 
+/// 一个完整提示符边界内的本地输入回显快照。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PromptSnapshot {
+    epoch: u64,
+    echo: String,
+}
+
+impl PromptSnapshot {
+    pub fn epoch(&self) -> u64 {
+        self.epoch
+    }
+
+    pub fn echo(&self) -> &str {
+        &self.echo
+    }
+}
+
 impl<T> Term<T> {
     /// The cursor row in the grid's absolute line numbering (see
     /// [`Grid::scrolled_out`]): stable across scrollback growth, so overlays
@@ -53,6 +70,10 @@ impl<T> Term<T> {
     /// Capture OSC 133;B between parser slices, before input is echoed.
     pub fn slterm_mark_prompt_input(&mut self) {
         if self.slterm_prompt_active() {
+            self.slterm_prompt_epoch = self
+                .slterm_prompt_epoch
+                .checked_add(1)
+                .expect("提示符代次不得回绕");
             let mut line = self.slterm_cursor_abs_line();
             let mut column = self.grid.cursor.point.column;
             if self.grid.cursor.input_needs_wrap {
@@ -90,6 +111,19 @@ impl<T> Term<T> {
         let point = Point::new(Line(i32::try_from(relative).ok()?), column);
         (point.line >= self.grid.topmost_line() && point.line <= self.grid.bottommost_line())
             .then_some(point)
+    }
+
+    /// 捕获当前边界到真实光标之间的回显；光标倒退或边界失效时拒绝。
+    pub fn slterm_prompt_snapshot(&self) -> Option<PromptSnapshot> {
+        let start = self.slterm_prompt_input_point()?;
+        let cursor = self.grid.cursor.point;
+        if cursor.line < start.line || cursor.line == start.line && cursor.column < start.column {
+            return None;
+        }
+        Some(PromptSnapshot {
+            epoch: self.slterm_prompt_epoch,
+            echo: self.bounds_to_string(start, cursor),
+        })
     }
 
     /// Scroll the viewport to the previous (`up`) or next shell prompt mark.

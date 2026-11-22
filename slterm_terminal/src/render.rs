@@ -465,6 +465,7 @@ pub struct TerminalFrame {
     render: RenderSnapshot,
     mode: TermMode,
     cursor_style: CursorStyle,
+    prompt: Option<crate::term::PromptSnapshot>,
     selection_text: Option<String>,
     selection_is_empty: bool,
     viewport_origin: Line,
@@ -482,6 +483,7 @@ impl TerminalFrame {
             render,
             mode: *term.mode(),
             cursor_style: term.cursor_style(),
+            prompt: term.slterm_prompt_snapshot(),
             selection_text: term.selection_to_string(),
             selection_is_empty: term
                 .selection
@@ -507,6 +509,10 @@ impl TerminalFrame {
 
     pub const fn cursor_style(&self) -> CursorStyle {
         self.cursor_style
+    }
+
+    pub fn prompt(&self) -> Option<&crate::term::PromptSnapshot> {
+        self.prompt.as_ref()
     }
 
     pub fn selection_text(&self) -> Option<&str> {

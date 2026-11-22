@@ -16,6 +16,7 @@ pub(crate) mod mouse_protocol;
 pub(crate) mod registry;
 pub(crate) mod session;
 pub(crate) mod session_pump;
+pub(crate) mod shell_line;
 pub(crate) mod view;
 
 use gpui::{App, KeyBinding};

@@ -1206,6 +1206,15 @@ mod shell_tests {
     // ─── 集成脚本嵌入 ───
 
     #[test]
+    fn shell_integration_command_start_never_contains_command_text() {
+        let script = shell_integration_script();
+        assert!(
+            !script.contains("Write-Osc \"133;C\" $line"),
+            "OSC 133;C 只传执行边界，命令正文只能来自可信行镜像"
+        );
+    }
+
+    #[test]
     fn shell_integration_script_embedded() {
         let script = shell_integration_script();
         assert!(!script.is_empty(), "集成脚本不应为空");

@@ -22,7 +22,6 @@ function Update-Cwd {
 }
 
 function Send-PrePrompt { Write-Osc 133 A }
-function Send-PostPrompt { Write-Osc 133 B }
 
 function Send-ExitCode($code) {
     Write-Osc "133;D" $code
@@ -39,24 +38,26 @@ function prompt {
     Send-ExitCode $origLastExitCode
     Send-PrePrompt
     Update-Cwd
-    & $originalPrompt
-    Send-PostPrompt
+    # prompt 的返回值由宿主统一显示；把 133;B 拼在提示符返回值之后，
+    # 避免独立 Write 先于返回值输出，或诱发 PSReadLine 再绘制提示符。
+    $renderedPrompt = [string](& $originalPrompt)
+    $promptOutput = "$renderedPrompt$esc]133;B$esc\"
 
     # 恢复 $? 和 LASTEXITCODE
     $global:LASTEXITCODE = $origLastExitCode
     if ($global:? -ne $origDollarQuestion) {
         if ($origDollarQuestion) { 1+1 } else { Write-Error '' -ErrorAction Ignore }
     }
+    return $promptOutput
 }
 
-# Enter hook：在命令执行前发射 OSC 133 C 携带命令行文本，
-# 供前端检测特定命令（如 claude）以切换页签标题/图标
+# Enter hook：只发射 OSC 133 C 执行边界；命令正文由可信行镜像与回显对账。
 Set-PSReadLineKeyHandler -Chord Enter -ScriptBlock {
     $line = $null
     $cursor = 0
     [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$line, [ref]$cursor)
     if ($line -and $line.Trim()) {
-        Write-Osc "133;C" $line.Trim()
+        Write-Osc 133 C
     }
     [Microsoft.PowerShell.PSConsoleReadLine]::AcceptLine()
 }
