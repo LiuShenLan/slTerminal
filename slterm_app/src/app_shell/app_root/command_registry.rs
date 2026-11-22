@@ -23,7 +23,8 @@ use super::{
     AdjustSplitRight, AdjustSplitUp, AppRoot, CloseActiveTerminal, FocusActivityBar,
     FocusFirstSideButton, FocusLastSideButton, FocusNextPanel, FocusNextSideButton,
     FocusPreviousPanel, FocusPreviousSideButton, NewTerminal, OpenLayoutMenu, OpenSettings,
-    OpenSideButtonMenu, ResetSidebarRatio, ResetSidebarWidth, SplitDown, SplitRight, ToggleSidebar,
+    OpenSideButtonMenu, ReconnectTerminal, ResetSidebarRatio, ResetSidebarWidth, SplitDown,
+    SplitRight, ToggleSidebar,
     commands::AppRootError,
     focus_manager::FocusError,
     sidebar::{SideButtonCommand, SideButtonNavigation, SidebarGeometryCommand},
@@ -36,6 +37,7 @@ pub(crate) enum CommandId {
     SplitRight,
     SplitDown,
     CloseActiveTerminal,
+    ReconnectTerminal,
     CloseOtherViews,
     CloseAllViews,
     FocusNextPanel,
@@ -198,7 +200,7 @@ const APPLICATION_DEFINITIONS: [CommandDefinition; 1] = [CommandDefinition {
     action: || Box::new(OpenSettings),
 }];
 
-const TERMINAL_DEFINITIONS: [CommandDefinition; 4] = [
+const TERMINAL_DEFINITIONS: [CommandDefinition; 5] = [
     CommandDefinition {
         id: CommandId::NewTerminal,
         target: CommandTarget::Focused,
@@ -226,6 +228,13 @@ const TERMINAL_DEFINITIONS: [CommandDefinition; 4] = [
         keystroke: "ctrl-shift-w",
         context: None,
         action: || Box::new(CloseActiveTerminal),
+    },
+    CommandDefinition {
+        id: CommandId::ReconnectTerminal,
+        target: CommandTarget::Focused,
+        keystroke: "ctrl-shift-r",
+        context: None,
+        action: || Box::new(ReconnectTerminal),
     },
 ];
 
@@ -540,6 +549,7 @@ impl CommandRegistry {
                 | CommandId::SplitRight
                 | CommandId::SplitDown
                 | CommandId::CloseActiveTerminal
+                | CommandId::ReconnectTerminal
                 | CommandId::CloseOtherViews
                 | CommandId::CloseAllViews
                 | CommandId::FocusNextPanel
@@ -751,6 +761,9 @@ impl CommandRegistry {
             (CommandId::CloseActiveTerminal, None) => root
                 .close_focused_terminal_from_request(window, cx)
                 .map(CommandOutcome::TerminalClosed),
+            (CommandId::ReconnectTerminal, None) => root
+                .reconnect_focused_terminal_from_request(window, cx)
+                .map(|()| CommandOutcome::Completed),
             (CommandId::FocusNextPanel, None) => root
                 .cycle_panel_from_request(super::navigation::PanelCycleDirection::Next, window, cx)
                 .map(|()| CommandOutcome::Completed),

@@ -20,12 +20,14 @@ const OUTPUT_BYTE_LIMIT: usize = 4 * 1024 * 1024;
 struct OutputChunk {
     bytes: Vec<u8>,
     consumed: usize,
+    watermark: crate::tty::OutputWatermark,
 }
 
 #[derive(Default)]
 struct OutputState {
     chunks: VecDeque<OutputChunk>,
     bytes: usize,
+    issued: u64,
     closed: bool,
 }
 
@@ -59,7 +61,12 @@ impl OutputQueue {
             return Err(bytes);
         }
         state.bytes += bytes.len();
-        state.chunks.push_back(OutputChunk { bytes, consumed: 0 });
+        state.issued = state.issued.checked_add(1).expect("终端输出水位不得回绕");
+        state.chunks.push_back(OutputChunk {
+            bytes,
+            consumed: 0,
+            watermark: crate::tty::OutputWatermark::new(state.issued),
+        });
         Ok(())
     }
 
@@ -85,12 +92,20 @@ impl OutputQueue {
         }
     }
 
-    fn read_locked(&self, state: &mut OutputState, output: &mut [u8]) -> usize {
+    fn read_locked(
+        &self,
+        state: &mut OutputState,
+        output: &mut [u8],
+        watermark: crate::tty::OutputWatermark,
+    ) -> usize {
         let mut written = 0;
         while written < output.len() {
             let Some(chunk) = state.chunks.front_mut() else {
                 break;
             };
+            if chunk.watermark > watermark {
+                break;
+            }
             let available = &chunk.bytes[chunk.consumed..];
             let count = available.len().min(output.len() - written);
             output[written..written + count].copy_from_slice(&available[..count]);
@@ -107,17 +122,30 @@ impl OutputQueue {
 
     fn try_read(&self, output: &mut [u8]) -> usize {
         let mut state = self.state.lock().unwrap();
-        let read = self.read_locked(&mut state, output);
+        let read = self.read_locked(&mut state, output, crate::tty::OutputWatermark::MAX);
         if read > 0 {
             self.changed.notify_all();
         }
         read
     }
 
+    fn try_read_before(&self, output: &mut [u8], watermark: crate::tty::OutputWatermark) -> usize {
+        let mut state = self.state.lock().unwrap();
+        let read = self.read_locked(&mut state, output, watermark);
+        if read > 0 {
+            self.changed.notify_all();
+        }
+        read
+    }
+
+    fn watermark(&self) -> crate::tty::OutputWatermark {
+        crate::tty::OutputWatermark::new(self.state.lock().unwrap().issued)
+    }
+
     fn read_wait(&self, output: &mut [u8]) -> usize {
         let mut state = self.state.lock().unwrap();
         loop {
-            let read = self.read_locked(&mut state, output);
+            let read = self.read_locked(&mut state, output, crate::tty::OutputWatermark::MAX);
             if read > 0 {
                 self.changed.notify_all();
                 return read;
@@ -261,6 +289,18 @@ impl<R: Read + Send + 'static> UnblockedReader<R> {
             Waker::from(self.interest.clone()).wake_by_ref();
         }
         read
+    }
+
+    pub fn output_watermark(&self) -> crate::tty::OutputWatermark {
+        self.queue.watermark()
+    }
+
+    pub fn read_before(
+        &mut self,
+        watermark: crate::tty::OutputWatermark,
+        buf: &mut [u8],
+    ) -> io::Result<usize> {
+        Ok(self.queue.try_read_before(buf, watermark))
     }
 
     /// Hand the receiving end to a detached thread that keeps consuming until
@@ -490,6 +530,20 @@ mod tests {
         let mut rest = [0; 2];
         assert_eq!(queue.try_read(&mut rest), 2);
         assert_eq!(&rest, b"bc");
+    }
+
+    #[test]
+    fn output_queue_watermark_leaves_later_output_for_the_new_geometry() {
+        let queue = OutputQueue::with_limits(2, 1024);
+        queue.try_push(b"old".to_vec()).unwrap();
+        let watermark = queue.watermark();
+        queue.try_push(b"new".to_vec()).unwrap();
+
+        let mut output = [0; 6];
+        assert_eq!(queue.try_read_before(&mut output, watermark), 3);
+        assert_eq!(&output[..3], b"old");
+        assert_eq!(queue.try_read(&mut output), 3);
+        assert_eq!(&output[..3], b"new");
     }
 
     #[test]

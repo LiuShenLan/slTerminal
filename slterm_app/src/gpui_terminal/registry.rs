@@ -9,7 +9,7 @@ use slterm_terminal::event_loop::{EventLoopSendError, Msg};
 use slterm_terminal::tty::ProcessIdentity;
 use slterm_workspace::TerminalId;
 
-use super::session::TerminalSession;
+use super::session::{SharedTerminal, TerminalSession};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct PtyGeneration(u64);
@@ -54,6 +54,7 @@ pub enum RegistryError {
         limit: usize,
     },
     ProcessExited,
+    ProcessStillRunning,
     Launch(std::io::Error),
     Send(EventLoopSendError),
 }
@@ -72,6 +73,7 @@ impl fmt::Display for RegistryError {
                 )
             }
             Self::ProcessExited => formatter.write_str("PTY 进程已退出"),
+            Self::ProcessStillRunning => formatter.write_str("只有进程退出后才能重新连接"),
             Self::Launch(error) => write!(formatter, "终端 worker 启动失败: {error}"),
             Self::Send(error) => write!(formatter, "终端命令发送失败: {error}"),
         }
@@ -146,21 +148,26 @@ impl TerminalRegistry {
     }
 
     /// 重连先证明代次可推进，再启动新 worker；旧 worker 交由关闭链显式回收。
-    #[allow(dead_code)] // 真实重连由后续恢复切片接入。
     pub fn reconnect(
         &mut self,
         terminal_id: TerminalId,
-        factory: impl FnOnce() -> std::io::Result<TerminalSession>,
+        factory: impl FnOnce(SharedTerminal) -> std::io::Result<super::session::SpawnedSession>,
     ) -> Result<TerminalReplacement, RegistryError> {
-        let generation = self
+        let entry = self
             .entries
             .get(&terminal_id)
-            .ok_or(RegistryError::TerminalNotFound)?
+            .ok_or(RegistryError::TerminalNotFound)?;
+        let generation = entry
             .generation
             .next()
             .ok_or(RegistryError::GenerationExhausted)?;
+        if entry.process_live {
+            return Err(RegistryError::ProcessStillRunning);
+        }
+        let terminal = entry.session.shared_term();
         self.ensure_live_capacity()?;
-        let session = factory().map_err(RegistryError::Launch)?;
+        let (session, events) = factory(terminal).map_err(RegistryError::Launch)?;
+        let frame = session.capture_frame(0);
         let process = session.process_identity();
         let previous = self
             .entries
@@ -181,6 +188,8 @@ impl TerminalRegistry {
                 generation,
             },
             previous,
+            events,
+            frame,
         })
     }
 
@@ -364,21 +373,34 @@ impl TerminalBinding {
     }
 }
 
-#[allow(dead_code)] // 旧 worker 的显式回收由真实重连切片接线。
 pub struct TerminalReplacement {
     target: TerminalTarget,
     previous: TerminalSession,
+    events: super::event_mailbox::EventReceiver,
+    frame: slterm_terminal::render::TerminalFrame,
 }
 
-#[allow(dead_code)] // 旧 worker 的显式回收由真实重连切片接线。
 impl TerminalReplacement {
+    #[cfg(all(test, feature = "gpui-test-support"))]
     pub const fn target(&self) -> TerminalTarget {
         self.target
     }
 
     /// 旧 worker 只能移交给后台关闭路径，不能在 GPUI 前台析构 join。
+    #[cfg(all(test, feature = "gpui-test-support"))]
     pub fn into_previous(self) -> TerminalSession {
         self.previous
+    }
+
+    pub fn into_parts(
+        self,
+    ) -> (
+        TerminalTarget,
+        TerminalSession,
+        super::event_mailbox::EventReceiver,
+        slterm_terminal::render::TerminalFrame,
+    ) {
+        (self.target, self.previous, self.events, self.frame)
     }
 }
 
@@ -432,6 +454,26 @@ mod registry_tests {
     }
 
     #[test]
+    fn reconnect_requires_an_exited_process() {
+        let mut registry = TerminalRegistry::default();
+        let terminal_id = id("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e0b");
+        registry
+            .launch(terminal_id, || {
+                Ok::<_, std::io::Error>(session::test_session().0)
+            })
+            .unwrap();
+        let current = registry.target(terminal_id);
+        let mut invoked = false;
+        let result = registry.reconnect(terminal_id, |_| {
+            invoked = true;
+            Err(std::io::Error::other("存活进程重连不应执行工厂"))
+        });
+        assert!(result.is_err(), "存活进程不得被重连替换");
+        assert!(!invoked);
+        assert_eq!(registry.target(terminal_id), current);
+    }
+
+    #[test]
     fn reconnect_invalidates_the_previous_target_and_worker() {
         let mut registry = TerminalRegistry::default();
         let terminal_id = id("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e03");
@@ -439,10 +481,15 @@ mod registry_tests {
         let previous_target = registry
             .launch(terminal_id, || Ok::<_, std::io::Error>(first))
             .unwrap();
-        let (second, second_receiver) = session::test_session();
+        registry.mark_process_exited(previous_target).unwrap();
+        let mut second_receiver = None;
 
         let replacement = registry
-            .reconnect(terminal_id, || Ok::<_, std::io::Error>(second))
+            .reconnect(terminal_id, |terminal| {
+                let (session, receiver, events) = session::test_reconnect_session(terminal);
+                second_receiver = Some(receiver);
+                Ok::<_, std::io::Error>((session, events))
+            })
             .unwrap();
 
         assert_eq!(replacement.target().generation().get(), 2);
@@ -461,7 +508,7 @@ mod registry_tests {
             )
             .unwrap();
         assert!(matches!(
-            second_receiver.recv(),
+            second_receiver.unwrap().recv(),
             Ok(Msg::Input(bytes)) if bytes.as_ref() == b"current"
         ));
     }
@@ -537,10 +584,16 @@ mod registry_tests {
                 .unwrap();
         }
         let current = registry.target(terminal_id(0)).unwrap();
+        registry.mark_process_exited(current).unwrap();
+        registry
+            .launch(terminal_id(slterm_terminal::tty::MAX_PTY_SESSIONS), || {
+                Ok::<_, std::io::Error>(session::test_session().0)
+            })
+            .unwrap();
         let mut invoked = false;
-        let result = registry.reconnect(terminal_id(0), || {
+        let result = registry.reconnect(terminal_id(0), |_| {
             invoked = true;
-            Ok::<_, std::io::Error>(session::test_session().0)
+            Err(std::io::Error::other("达到上限时不应执行重连工厂"))
         });
         assert!(result.is_err(), "达到上限时不得让重连临时超发");
         assert!(!invoked);
@@ -558,9 +611,9 @@ mod registry_tests {
         registry.entries.get_mut(&terminal_id).unwrap().generation = PtyGeneration(u64::MAX);
         let mut invoked = false;
 
-        let result = registry.reconnect(terminal_id, || {
+        let result = registry.reconnect(terminal_id, |_| {
             invoked = true;
-            Ok::<_, std::io::Error>(session::test_session().0)
+            Err(std::io::Error::other("存活进程重连不应执行工厂"))
         });
 
         assert!(matches!(result, Err(RegistryError::GenerationExhausted)));

@@ -592,6 +592,22 @@ impl TerminalView {
     }
 
     #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn mark_test_exited(&mut self, cx: &mut Context<'_, Self>) {
+        self.mark_exited("测试进程退出".to_owned(), cx);
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn has_reconnect_separator(&self) -> bool {
+        self.frame.as_ref().is_some_and(|frame| {
+            frame
+                .render()
+                .box_glyphs
+                .iter()
+                .any(|glyph| glyph.ch == '─')
+        })
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
     pub(crate) const fn is_exited(&self) -> bool {
         self.exited.is_some()
     }
@@ -690,6 +706,10 @@ impl TerminalView {
             });
         })
         .detach();
+    }
+
+    pub(crate) fn pty_window_size(&self) -> WindowSize {
+        self.window_size
     }
 
     pub fn cursor_visible(&self) -> bool {

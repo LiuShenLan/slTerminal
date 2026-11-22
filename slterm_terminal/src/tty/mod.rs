@@ -1,7 +1,7 @@
 //! TTY related functionality.
 
 use std::ffi::OsString;
-use std::io;
+use std::io::{self, Read};
 use std::path::PathBuf;
 use std::process::ExitStatus;
 use std::sync::Arc;
@@ -150,6 +150,18 @@ impl ProcessIdentity {
     }
 }
 
+/// 读取队列中已公布输出的单调水位；resize 只排空虚标之前的块。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub struct OutputWatermark(u64);
+
+impl OutputWatermark {
+    pub(crate) const MAX: Self = Self(u64::MAX);
+
+    pub(crate) const fn new(value: u64) -> Self {
+        Self(value)
+    }
+}
+
 /// A pseudoterminal (or PTY).
 ///
 /// This is a refinement of EventedReadWrite that also provides a channel through which we can be
@@ -170,6 +182,16 @@ pub trait EventedPty: EventedReadWrite {
     /// 从仍有效的子进程句柄读取 PID 与创建时间。
     fn child_process_identity(&self) -> Option<ProcessIdentity> {
         None
+    }
+
+    /// 当前已公布输出水位；resize 只排空该水位之前的字节。
+    fn output_watermark(&self) -> OutputWatermark {
+        OutputWatermark::default()
+    }
+
+    /// 读取不超过指定水位的输出；默认后端没有独立水位，退化为普通读取。
+    fn read_before(&mut self, _watermark: OutputWatermark, buf: &mut [u8]) -> io::Result<usize> {
+        self.reader().read(buf)
     }
 
     /// 窗口外 DSR 查询剥离门控（DA1/DSR 接管族，event_loop 读侧消费）。

@@ -123,8 +123,11 @@ impl Dimensions for GridSize {
     }
 }
 
+/// 同一逻辑终端跨 PTY 代次共享的网格。
+pub(crate) type SharedTerminal = Arc<FairMutex<Term<EventProxy>>>;
+
 pub struct TerminalSession {
-    term: Arc<FairMutex<Term<EventProxy>>>,
+    term: SharedTerminal,
     pub(super) notifier: Notifier,
     pub(super) native_prompt: super::event_mailbox::NativePromptState,
     /// PTY 直系 shell 的 PID 与创建时间；不使用 PID 0 代替未知身份。
@@ -138,6 +141,10 @@ pub struct TerminalSession {
 impl TerminalSession {
     pub fn process_identity(&self) -> tty::ProcessIdentity {
         self.process
+    }
+
+    pub(super) fn shared_term(&self) -> SharedTerminal {
+        Arc::clone(&self.term)
     }
 
     /// 在启动移交或测试装配点捕获不可变帧；运行期帧只由 worker 发布。
@@ -217,6 +224,35 @@ pub(super) fn test_session_with_events() -> (
     )
 }
 
+#[cfg(all(test, feature = "gpui-test-support"))]
+pub(crate) fn test_reconnect_session(
+    term: SharedTerminal,
+) -> (
+    TerminalSession,
+    std::sync::mpsc::Receiver<slterm_terminal::event_loop::Msg>,
+    super::event_mailbox::EventReceiver,
+) {
+    let (events, event_rx) = super::event_mailbox::channel();
+    let proxy = EventProxy { events };
+    {
+        let mut terminal = term.lock();
+        terminal.replace_event_proxy(proxy.clone());
+        terminal.begin_reconnect();
+    }
+    let (sender, receiver) = slterm_terminal::event_loop::EventLoopSender::standalone().unwrap();
+    (
+        TerminalSession {
+            term,
+            notifier: Notifier(sender),
+            native_prompt: proxy.events.native_prompt.clone(),
+            process: tty::ProcessIdentity::new(std::num::NonZeroU32::new(2).unwrap(), 2),
+            _event_loop: None,
+        },
+        receiver,
+        event_rx,
+    )
+}
+
 /// 组装本地 shell 的 PTY 启动参数。
 ///
 /// `shell`:`None` 走 core 探测链(pwsh → powershell → cmd,白名单深检 +
@@ -228,7 +264,7 @@ pub(super) fn test_session_with_events() -> (
 /// `Options` 置位跳过三家白名单(豁免论证见该字段);settings 键
 /// 来源(设置键)必须传 `false`。解析失败直接 Err(「PATH 中找不到
 /// 命令」),由调用方并入 spawn 错误通道呈现。
-pub(super) fn local_options(
+pub(crate) fn local_options(
     shell: Option<tty::Shell>,
     explicit_command: bool,
     pane_id: crate::gpui_terminal::PaneId,
@@ -287,13 +323,33 @@ pub fn spawn(
 ) -> std::io::Result<SpawnedSession> {
     let (tx, rx) = super::event_mailbox::channel();
     let proxy = EventProxy { events: tx };
-
     let grid = GridSize {
         columns: window_size.num_cols as usize,
         screen_lines: window_size.num_lines as usize,
     };
     let term = Arc::new(FairMutex::new(Term::new(term_config, &grid, proxy.clone())));
+    spawn_on_term(window_size, options, term, proxy, rx, false)
+}
 
+/// 新 PTY 复用原逻辑终端的网格；新事件通道替代旧代次订阅。
+pub(crate) fn spawn_reconnect(
+    window_size: WindowSize,
+    options: tty::Options,
+    term: SharedTerminal,
+) -> std::io::Result<SpawnedSession> {
+    let (tx, rx) = super::event_mailbox::channel();
+    let proxy = EventProxy { events: tx };
+    spawn_on_term(window_size, options, term, proxy, rx, true)
+}
+
+fn spawn_on_term(
+    window_size: WindowSize,
+    options: tty::Options,
+    term: SharedTerminal,
+    proxy: EventProxy,
+    rx: super::event_mailbox::EventReceiver,
+    reconnect: bool,
+) -> std::io::Result<SpawnedSession> {
     // 子进程环境由 options.env 与 core custom 环境块组装，不写父进程环境。
     let pty = tty::new(&options, window_size)?;
     let process = pty
@@ -301,9 +357,14 @@ pub fn spawn(
         .ok_or_else(|| std::io::Error::other("PTY 未提供子进程 PID 与创建时间"))?;
 
     let native_prompt = proxy.events.native_prompt.clone();
-    let event_loop = EventLoop::new(Arc::clone(&term), proxy, pty, options.drain_on_exit)?;
+    let event_loop = EventLoop::new(Arc::clone(&term), proxy.clone(), pty, options.drain_on_exit)?;
+    if reconnect {
+        // EventLoop 创建已全部可失败步骤；此后不再让失败破坏旧画面。
+        let mut terminal = term.lock();
+        terminal.replace_event_proxy(proxy);
+        terminal.begin_reconnect();
+    }
     let notifier = Notifier(event_loop.channel());
-    // 句柄随会话持有:Drop 兜底(Shutdown+join)由 EventLoopHandle 保证。
     let event_loop = event_loop.spawn();
 
     Ok((
@@ -520,6 +581,92 @@ mod shutdown_tests {
         }
         session.shutdown().expect("退出后的 worker 仍须响应关闭");
         assert!(advanced, "退出后的显示命令必须继续发布帧");
+    }
+
+    #[test]
+    fn reconnect_preserves_scrollback_and_uses_the_new_event_stream() {
+        fn frame_text(frame: &slterm_terminal::render::TerminalFrame) -> String {
+            frame
+                .render()
+                .segments
+                .iter()
+                .flat_map(|segment| &segment.cells)
+                .map(|cell| cell.text.as_str())
+                .collect()
+        }
+
+        let (old_session, mut old_events) =
+            spawn(real_window_size(), Config::default(), real_options()).unwrap();
+        old_session
+            .notifier
+            .notify(b"echo SLTERM-BEFORE-RECONNECT\r".to_vec())
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let ready = match old_events.try_recv() {
+                Ok(slterm_terminal::event::Event::Frame(frame)) => {
+                    frame_text(&frame).contains("SLTERM-BEFORE-RECONNECT")
+                }
+                _ => false,
+            };
+            if ready {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "旧 PTY 必须先输出");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        old_session.notifier.notify(b"exit\r".to_vec()).unwrap();
+        loop {
+            if matches!(
+                old_events.try_recv(),
+                Ok(slterm_terminal::event::Event::Exit)
+            ) {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "旧 PTY 必须先退出");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        let (new_session, mut new_events) = spawn_reconnect(
+            real_window_size(),
+            real_options(),
+            old_session.shared_term(),
+        )
+        .unwrap();
+        new_session
+            .notifier
+            .notify(b"echo SLTERM-AFTER-RECONNECT\r".to_vec())
+            .unwrap();
+        loop {
+            let ready = match new_events.try_recv() {
+                Ok(slterm_terminal::event::Event::Frame(frame)) => {
+                    frame_text(&frame).contains("SLTERM-AFTER-RECONNECT")
+                }
+                _ => false,
+            };
+            if ready {
+                let frame = new_session.capture_frame(100);
+                let text = frame_text(&frame);
+                assert!(text.contains("SLTERM-BEFORE-RECONNECT"));
+                assert!(
+                    frame
+                        .render()
+                        .box_glyphs
+                        .iter()
+                        .any(|glyph| glyph.ch == '─'),
+                    "重连必须插入新会话分隔"
+                );
+                assert!(text.contains("SLTERM-AFTER-RECONNECT"));
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "新 PTY 事件流必须可用"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        old_session.shutdown().unwrap();
+        new_session.shutdown().unwrap();
     }
 
     /// 正常路径必须经真实 ConPTY/EventLoop 的 join 回收，不用返回值替身。

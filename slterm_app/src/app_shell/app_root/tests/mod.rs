@@ -16,8 +16,10 @@ mod projects;
 mod settings_overlay;
 mod sidebar;
 mod tabs;
+mod terminal_reconnect;
 mod view_tasks;
 
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
@@ -157,6 +159,29 @@ impl TerminalPanelLauncher for FakeLauncher {
             .sessions
             .insert(panel_id.sequence(), receiver);
         Ok(terminal)
+    }
+
+    fn reconnect(
+        &mut self,
+        panel_id: PanelId,
+        _record: &slterm_workspace::TerminalRecord,
+        terminal: crate::gpui_terminal::session::SharedTerminal,
+        _window_size: slterm_terminal::event::WindowSize,
+    ) -> io::Result<super::commands::ReconnectLaunch> {
+        self.state.borrow_mut().attempts += 1;
+        if std::mem::replace(&mut self.state.borrow_mut().fail_next, false) {
+            return Err(io::Error::new(io::ErrorKind::NotFound, "测试重连失败"));
+        }
+        let (session, receiver, events) = session::test_reconnect_session(terminal);
+        self.state
+            .borrow_mut()
+            .sessions
+            .insert(panel_id.sequence(), receiver);
+        Ok(super::commands::ReconnectLaunch {
+            session,
+            events,
+            exec_context: None,
+        })
     }
 
     fn restore(
@@ -798,6 +823,7 @@ fn terminal_command_definitions_preserve_reserved_interrupt() {
             (CommandId::SplitRight, "ctrl-shift-d", None),
             (CommandId::SplitDown, "ctrl-shift-s", None),
             (CommandId::CloseActiveTerminal, "ctrl-shift-w", None),
+            (CommandId::ReconnectTerminal, "ctrl-shift-r", None),
         ]
     );
     let mut unique = BTreeSet::new();

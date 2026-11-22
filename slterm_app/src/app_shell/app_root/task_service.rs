@@ -12,7 +12,7 @@ pub(crate) enum TaskId {
     ShellEvents,
     CloseFlush,
     TerminalClose(slterm_workspace::TerminalId),
-    TerminalReclaim(slterm_workspace::TerminalId),
+    TerminalReclaim(crate::gpui_terminal::registry::TerminalTarget),
     TerminalCloseBatch(uuid::Uuid),
     ProjectClose(slterm_workspace::ProjectId),
     ProjectOpen(uuid::Uuid),

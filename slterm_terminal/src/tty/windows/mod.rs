@@ -206,6 +206,18 @@ impl EventedPty for Pty {
         self.child_watcher.process_identity()
     }
 
+    fn output_watermark(&self) -> crate::tty::OutputWatermark {
+        self.conout.output_watermark()
+    }
+
+    fn read_before(
+        &mut self,
+        watermark: crate::tty::OutputWatermark,
+        buf: &mut [u8],
+    ) -> io::Result<usize> {
+        self.conout.read_before(watermark, buf)
+    }
+
     fn strip_dsr_queries(&self) -> bool {
         self.strip_dsr
     }

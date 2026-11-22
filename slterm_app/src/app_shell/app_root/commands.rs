@@ -17,7 +17,8 @@ use slterm_workspace::{
 use uuid::Uuid;
 
 use crate::gpui_terminal::PaneId;
-use crate::gpui_terminal::registry::TerminalRegistry;
+use crate::gpui_terminal::registry::{RegistryError, TerminalRegistry, TerminalTarget};
+use crate::gpui_terminal::session::SharedTerminal;
 use crate::gpui_terminal::view::{TerminalLaunch, TerminalView, TerminalViewEvent};
 
 use super::command_registry::{
@@ -27,6 +28,12 @@ use super::focus_manager::{FocusError, FocusToken};
 use super::panel_host::{PanelContent, PanelHost};
 use super::task_service::{CancellationToken, TaskId};
 use super::{AppRoot, ProjectView};
+
+pub(crate) struct ReconnectLaunch {
+    pub(crate) session: crate::gpui_terminal::session::TerminalSession,
+    pub(crate) events: crate::gpui_terminal::event_mailbox::EventReceiver,
+    pub(crate) exec_context: Option<crate::completion::PaneExecContext>,
+}
 
 /// 终端面板启动适配器；测试可替换为无真实 PTY 的实现。
 pub(crate) trait TerminalPanelLauncher {
@@ -38,6 +45,14 @@ pub(crate) trait TerminalPanelLauncher {
         window: &mut Window,
         cx: &mut App,
     ) -> io::Result<Entity<TerminalView>>;
+
+    fn reconnect(
+        &mut self,
+        panel_id: PanelId,
+        record: &TerminalRecord,
+        terminal: SharedTerminal,
+        window_size: slterm_terminal::event::WindowSize,
+    ) -> io::Result<ReconnectLaunch>;
 
     /// 恢复既有面板；Launch 失败与 Exited 都保留实体，不重复逻辑记录。
     fn restore(
@@ -106,6 +121,38 @@ impl TerminalPanelLauncher for LocalTerminalLauncher {
         Ok(cx.new(|cx| TerminalView::from_launched(launched, window, cx)))
     }
 
+    fn reconnect(
+        &mut self,
+        panel_id: PanelId,
+        record: &TerminalRecord,
+        terminal: SharedTerminal,
+        window_size: slterm_terminal::event::WindowSize,
+    ) -> io::Result<ReconnectLaunch> {
+        let launch = local_launch(record)?;
+        let TerminalLaunch::Local {
+            cwd,
+            shell,
+            explicit_command,
+            ..
+        } = launch;
+        let options = crate::gpui_terminal::session::local_options(
+            shell,
+            explicit_command,
+            PaneId(panel_id.sequence()),
+            cwd,
+        )?;
+        let exec_context = Some(crate::completion::PaneExecContext::from_pty_options(
+            &options,
+        ));
+        let (session, events) =
+            crate::gpui_terminal::session::spawn_reconnect(window_size, options, terminal)?;
+        Ok(ReconnectLaunch {
+            session,
+            events,
+            exec_context,
+        })
+    }
+
     fn restore(
         &mut self,
         panel_id: PanelId,
@@ -171,6 +218,7 @@ pub(crate) enum AppRootError {
     Layout(LayoutError),
     PanelIdExhausted,
     Launch(io::Error),
+    TerminalReconnect(RegistryError),
     ProjectPath(io::Error),
     DocumentOpen(crate::app_shell::documents::DocumentOpenError),
     DocumentClose(slterm_workspace::DocumentCloseError),
@@ -205,6 +253,7 @@ impl fmt::Display for AppRootError {
             Self::Layout(error) => write!(formatter, "布局命令失败: {error:?}"),
             Self::PanelIdExhausted => formatter.write_str("面板 ID 序列已耗尽"),
             Self::Launch(error) => write!(formatter, "终端启动失败: {error}"),
+            Self::TerminalReconnect(error) => write!(formatter, "终端重连失败: {error}"),
             Self::ProjectPath(error) => write!(formatter, "项目根真实路径解析失败: {error}"),
             Self::DocumentOpen(error) => write!(formatter, "文档打开失败: {error}"),
             Self::DocumentClose(error) => write!(formatter, "文档关闭守卫失败: {error}"),
@@ -250,6 +299,7 @@ impl std::error::Error for AppRootError {
             Self::Project(error) => Some(error),
             Self::Snapshot(error) => Some(error),
             Self::Launch(error) | Self::ProjectPath(error) => Some(error),
+            Self::TerminalReconnect(error) => Some(error),
             Self::DocumentOpen(error) => Some(error),
             Self::TerminalCloseWriter(error) | Self::ProjectCloseWriter(error) => Some(error),
             Self::Sidebar(error) => Some(error),
@@ -942,16 +992,28 @@ impl AppRoot {
         }
     }
 
-    /// 启动后接线失败的后台回收；不得在前台析构 worker 或 join。
     fn retire_terminal_worker(&mut self, terminal_id: TerminalId, cx: &mut Context<'_, Self>) {
-        let task_id = TaskId::TerminalReclaim(terminal_id);
-        if self.tasks.is_registered(task_id) {
-            log::warn!("终端 worker 回收任务重复");
+        let Some(target) = self.terminals.borrow().target(terminal_id) else {
             return;
-        }
+        };
         let Some(worker) = take_terminal_worker(&self.terminals, terminal_id) else {
             return;
         };
+        self.reclaim_terminal_worker(target, worker, cx);
+    }
+
+    /// 按已退休的完整目标回收；连续重连的不同代次拥有不同任务身份。
+    fn reclaim_terminal_worker(
+        &mut self,
+        target: TerminalTarget,
+        worker: crate::gpui_terminal::session::TerminalSession,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let task_id = TaskId::TerminalReclaim(target);
+        debug_assert!(
+            !self.tasks.is_registered(task_id),
+            "已退休代次的回收任务不得重复"
+        );
         self.tasks
             .register_with(task_id, CancellationToken::new(), || {
                 let background = cx.background_executor().spawn(async move {
@@ -1119,6 +1181,72 @@ impl AppRoot {
             .chain(self.oldest_unresolved_batch_failure())
             .min_by_key(|(sequence, _)| *sequence)
             .map(|(_, id)| id)
+    }
+
+    pub(super) fn reconnect_focused_terminal_from_request(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<(), AppRootError> {
+        self.ensure_not_closing()?;
+        self.ensure_project_snapshot_recovery_allowed()?;
+        self.ensure_project_snapshot_command_allowed()?;
+        let terminal_id = self
+            .actual_focused_terminal(window, cx)
+            .ok_or(AppRootError::MissingPanel)?;
+        let record = self
+            .snapshot
+            .terminal(terminal_id)
+            .cloned()
+            .ok_or(AppRootError::MissingPanel)?;
+        if record.run_intent() != RunIntent::Exited {
+            return Err(AppRootError::TerminalReconnect(
+                RegistryError::ProcessStillRunning,
+            ));
+        }
+        // 在产生新 PTY 前完成全部快照与目标预检。
+        let candidate = self
+            .snapshot
+            .with_terminal_run_intent(terminal_id, RunIntent::Launch)?;
+        let project_id = record.project_id();
+        let (panel_id, view) = self
+            .terminal_panel(project_id, terminal_id, cx)
+            .ok_or(AppRootError::MissingPanel)?;
+        let previous_target = self
+            .terminals
+            .borrow()
+            .target(terminal_id)
+            .ok_or(RegistryError::TerminalNotFound)
+            .map_err(AppRootError::TerminalReconnect)?;
+        let window_size = view.read(cx).pty_window_size();
+        let mut exec_context = None;
+        let replacement = {
+            let launcher = &mut self.launcher;
+            self.terminals
+                .borrow_mut()
+                .reconnect(terminal_id, |terminal| {
+                    let launched = launcher.reconnect(panel_id, &record, terminal, window_size)?;
+                    exec_context = launched.exec_context;
+                    Ok((launched.session, launched.events))
+                })
+        };
+        let replacement = match replacement {
+            Ok(replacement) => replacement,
+            Err(error) => {
+                view.update(cx, |view, cx| {
+                    view.reconnect_failed(format!("终端重连失败: {error}"), cx);
+                });
+                return Err(AppRootError::TerminalReconnect(error));
+            }
+        };
+        let (target, previous, events, frame) = replacement.into_parts();
+        view.update(cx, |view, cx| {
+            view.install_reconnect(&self.terminals, target, events, frame, exec_context, cx);
+        });
+        self.reclaim_terminal_worker(previous_target, previous, cx);
+        self.commit_project_snapshot(candidate, cx);
+        cx.notify();
+        Ok(())
     }
 
     pub(super) fn close_focused_terminal_from_request(

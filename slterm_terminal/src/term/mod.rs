@@ -35,6 +35,7 @@ mod keyboard;
 #[cfg(test)]
 mod keyboard_contract_tests;
 mod prompt;
+mod reconnect;
 mod redraw_anchor;
 #[cfg(test)]
 mod redraw_anchor_tests;

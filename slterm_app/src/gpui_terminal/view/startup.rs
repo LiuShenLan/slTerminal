@@ -429,6 +429,52 @@ impl TerminalView {
     }
 }
 
+impl TerminalView {
+    /// 重连成功后切换到新代次；旧订阅随任务替换取消。
+    pub(crate) fn install_reconnect(
+        &mut self,
+        registry: &Rc<RefCell<crate::gpui_terminal::registry::TerminalRegistry>>,
+        target: crate::gpui_terminal::registry::TerminalTarget,
+        events: super::super::event_mailbox::EventReceiver,
+        frame: slterm_terminal::render::TerminalFrame,
+        exec_context: Option<crate::completion::PaneExecContext>,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.binding = Some(crate::gpui_terminal::registry::TerminalBinding::new(
+            registry, target,
+        ));
+        self._session_task = Some(crate::gpui_terminal::session_pump::attach(
+            target, events, cx,
+        ));
+        self.frame = Some(Arc::new(frame));
+        self.exec_context = exec_context;
+        self.selection_cleared = false;
+        self.suggest = crate::suggest::SuggestState::default();
+        self.suggest_line.clear();
+        self.suggest_cursor = 0;
+        self.suggest_line_trusted = false;
+        self.suggestion_task = None;
+        self.last_committed.clear();
+        self.marked_text = None;
+        self.running_program = None;
+        self.error = None;
+        self.exited = None;
+        self.pending_resize = None;
+        self.resize_epoch = self.resize_epoch.wrapping_add(1);
+        self.grid_synced = true;
+        self.spawn_at = std::time::Instant::now();
+        self.selecting = false;
+        self.selection_scroll_active = false;
+        self.restart_cursor_blink(cx);
+        cx.notify();
+    }
+
+    pub(crate) fn reconnect_failed(&mut self, error: String, cx: &mut Context<'_, Self>) {
+        self.error = Some(error);
+        cx.notify();
+    }
+}
+
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod startup_tests {
     use std::cell::Cell;

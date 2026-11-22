@@ -3,7 +3,7 @@
 use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::fmt::{self, Display, Formatter};
-use std::io::{self, ErrorKind, Read, Write};
+use std::io::{self, ErrorKind, Write};
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -81,6 +81,7 @@ fn trace_terminal_state<U: EventListener>(stage: &str, terminal: &Term<U>) {
 struct PendingResize {
     window_size: WindowSize,
     notify_pty: bool,
+    output_watermark: tty::OutputWatermark,
 }
 
 /// conhost 的一次光标真值读数。
@@ -598,9 +599,9 @@ pub enum Msg {
     /// child is debounced.
     ///
     /// Goes through the same channel as `Resize` on purpose: the resize branch
-    /// drains everything readable against the old geometry first, so absolute
-    /// CUP sequences produced at the old width are never parsed into the new
-    /// grid. A UI thread reaching into `Term::resize` directly would skip that.
+    /// captures the received-output watermark and drains only chunks up to that
+    /// mark against the old geometry. Later output stays queued for the new
+    /// geometry, so a continuous producer cannot postpone the resize forever.
     ResizeGrid(WindowSize),
 
     /// 只由 worker 修改显示滚动位置。
@@ -728,6 +729,7 @@ where
                     resize = Some(PendingResize {
                         window_size,
                         notify_pty: true,
+                        output_watermark: self.pty.output_watermark(),
                     })
                 }
                 Msg::ResizeGrid(window_size) => {
@@ -735,6 +737,7 @@ where
                     resize = Some(PendingResize {
                         window_size,
                         notify_pty,
+                        output_watermark: self.pty.output_watermark(),
                     });
                 }
                 Msg::Shutdown => return Err(()),
@@ -791,6 +794,15 @@ where
 
     #[inline]
     fn pty_read(&mut self, state: &mut State, buf: &mut [u8]) -> io::Result<usize> {
+        self.pty_read_until(state, buf, tty::OutputWatermark::MAX)
+    }
+
+    fn pty_read_until(
+        &mut self,
+        state: &mut State,
+        buf: &mut [u8],
+        watermark: tty::OutputWatermark,
+    ) -> io::Result<usize> {
         let mut processed = 0;
         // DA1/DSR 接管族的产出累积（剥离后字节）；替代旧 unprocessed 的原位
         // 累积——剥离只删不增，但跨块残片拼接使进出不再同缓冲。
@@ -802,7 +814,7 @@ where
 
         loop {
             // Read from the PTY.
-            match self.pty.reader().read(buf) {
+            match self.pty.read_before(watermark, buf) {
                 // This is received on Windows/macOS when no more data is readable from the PTY.
                 Ok(0) if stripped.is_empty() => break,
                 Ok(got) => {
@@ -1026,17 +1038,19 @@ where
                 if let Some(PendingResize {
                     window_size,
                     notify_pty,
+                    output_watermark,
                 }) = pending_resize
                 {
                     // A resize is a stream boundary, not a UI-side property.
                     // Drain everything already readable while the grid still
                     // has the old geometry; otherwise old-width absolute CUP
                     // output can be parsed into a new-width grid. This is the
-                    // Drain readable bytes against the old grid before the
-                    // size change lands, so CUP sequences keep their geometry.
+                    // Drain only chunks published at the request watermark while
+                    // the grid still has the old geometry; later chunks retain
+                    // FIFO order and are parsed after the resize lands.
                     if pty_active {
                         loop {
-                            match self.pty_read(&mut state, &mut buf) {
+                            match self.pty_read_until(&mut state, &mut buf, output_watermark) {
                                 Ok(processed) if processed >= MAX_LOCKED_READ => continue,
                                 Ok(_) => break,
                                 Err(err) => {
