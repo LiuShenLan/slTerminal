@@ -150,6 +150,8 @@ notify = "7"
 image = { version = "=0.25.10", default-features = false, features = ["avif-native", "bmp", "gif", "ico", "jpeg", "png", "webp"] }
 # Markdown SVG 仅静态矢量；禁用系统字体、内存映射字体和内嵌位图解码。
 resvg = { version = "=0.46.0", default-features = false }
+# data:image 按 Fetch 标准解码；不手写 base64 或百分号解析。
+data-url = "=0.3.2"
 # Windows 系统代理读取:HKCU Internet Settings 的
 # ProxyEnable/ProxyServer/ProxyOverride;不走 ureq 的 win-system-proxy。
 winreg = "0.56"

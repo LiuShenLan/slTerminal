@@ -31,7 +31,17 @@ pub(crate) struct OpenedDocument {
 
 pub(crate) struct ResolvedDocument {
     pub(crate) location: slterm_path::ResolvedPath,
-    grant: PathGrant,
+    grants: Vec<PathGrant>,
+}
+
+impl ResolvedDocument {
+    pub(crate) fn location(&self) -> &slterm_path::ResolvedPath {
+        &self.location
+    }
+
+    pub(crate) fn grants(&self) -> &[PathGrant] {
+        &self.grants
+    }
 }
 
 pub(crate) struct LoadedDocument {
@@ -128,8 +138,59 @@ impl DocumentOpenService {
                 .map_err(|_| DocumentOpenError::Unauthorized)?;
         Ok(ResolvedDocument {
             location: authorization.resolved_path().clone(),
-            grant,
+            grants: vec![grant],
         })
+    }
+
+    /// 显式本地链接：持久授权优先，未覆盖目标只授予精确文件的会话读能力。
+    pub(crate) fn resolve_link(
+        &self,
+        lexical: &CanonicalPath,
+        persistent_grants: &[PathGrant],
+        current_authorization_generation: u64,
+    ) -> Result<ResolvedDocument, DocumentOpenError> {
+        let resolved = self
+            .resolver
+            .resolve(lexical)
+            .map_err(DocumentOpenError::Io)?;
+        let request = PathRequest {
+            operation: PathOperation::Read,
+            lexical_path: lexical.as_path().to_path_buf(),
+            root_hints: Vec::new(),
+            session_grant: None,
+            expected_authorization_generation: current_authorization_generation,
+        };
+        let authorization = PathPolicy::authorize(
+            &request,
+            &resolved,
+            persistent_grants,
+            current_authorization_generation,
+        );
+        match authorization {
+            Ok(authorization) => Ok(ResolvedDocument {
+                location: authorization.resolved_path().clone(),
+                grants: persistent_grants.to_vec(),
+            }),
+            Err(slterm_path::PathDenial::Unauthorized(PathOperation::Read)) => {
+                let grant = PathGrant::session_file_read(resolved.canonical_path().clone());
+                let request = PathRequest {
+                    session_grant: Some(grant.clone()),
+                    ..request
+                };
+                let authorization = PathPolicy::authorize(
+                    &request,
+                    &resolved,
+                    persistent_grants,
+                    current_authorization_generation,
+                )
+                .map_err(|_| DocumentOpenError::Unauthorized)?;
+                Ok(ResolvedDocument {
+                    location: authorization.resolved_path().clone(),
+                    grants: vec![grant],
+                })
+            }
+            Err(_) => Err(DocumentOpenError::Unauthorized),
+        }
     }
 
     /// 只在后台读取已授权位置；不接触或移走 Registry。
@@ -144,7 +205,7 @@ impl DocumentOpenService {
             OpenedDocumentBody::Paged(document)
         } else {
             let document = Document::load(location.canonical_path().as_path())?.with_write_context(
-                DocumentWriteContext::new(vec![resolved.grant], 0, 0, self.resolver.clone()),
+                DocumentWriteContext::new(resolved.grants.clone(), 0, 0, self.resolver.clone()),
             );
             if document.location() != &location {
                 return Err(io::Error::new(

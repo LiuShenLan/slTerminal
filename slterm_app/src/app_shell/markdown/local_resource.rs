@@ -14,6 +14,7 @@ use slterm_path::{
 
 use super::MarkdownResourceError;
 use super::decoder::{BoundedMarkdownImageDecoder, MarkdownImageKind};
+use super::remote_resource::{RemoteImageFetch, RemoteImageKey, UreqRemoteImageClient};
 use crate::platform::document_paths::{DocumentPathResolver, SystemDocumentPathResolver};
 
 const MAX_RESOURCE_BYTES: usize = 20 * 1024 * 1024;
@@ -58,6 +59,16 @@ impl LocalMarkdownImageRequest {
         url: &str,
         authorization_generation: u64,
     ) -> Result<Self, MarkdownResourceError> {
+        Ok(Self::new(
+            Self::path_from_markdown(document, url)?,
+            authorization_generation,
+        ))
+    }
+
+    pub(crate) fn path_from_markdown(
+        document: &ResolvedPath,
+        url: &str,
+    ) -> Result<CanonicalPath, MarkdownResourceError> {
         let path = url
             .split(['#', '?'])
             .next()
@@ -77,10 +88,7 @@ impl LocalMarkdownImageRequest {
                 .ok_or(MarkdownResourceError::Unsafe)?
                 .join(resource)
         };
-        Ok(Self::new(
-            normalize_resource_path(&lexical)?,
-            authorization_generation,
-        ))
+        normalize_resource_path(&lexical)
     }
 
     pub(crate) fn with_session_grant(mut self, grant: PathGrant) -> Self {
@@ -90,21 +98,24 @@ impl LocalMarkdownImageRequest {
 }
 
 fn has_url_scheme(path: &str) -> bool {
-    let Some(colon) = path.find(':') else {
-        return false;
-    };
+    url_scheme(path).is_some()
+}
+
+pub(super) fn url_scheme(path: &str) -> Option<&str> {
+    let colon = path.find(':')?;
     let windows_drive = colon == 1
         && path.as_bytes()[0].is_ascii_alphabetic()
         && matches!(path.as_bytes().get(2), Some(b'/' | b'\\'));
     if windows_drive {
-        return false;
+        return None;
     }
     let separator = path.find(['/', '\\']).unwrap_or(path.len());
-    colon < separator
+    (colon < separator
         && path.as_bytes()[0].is_ascii_alphabetic()
         && path[..colon]
             .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'.'))
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'.')))
+    .then(|| &path[..colon])
 }
 
 fn normalize_resource_path(path: &Path) -> Result<CanonicalPath, MarkdownResourceError> {
@@ -128,10 +139,19 @@ fn normalize_resource_path(path: &Path) -> Result<CanonicalPath, MarkdownResourc
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct MarkdownResourceKey {
-    location: CanonicalPath,
-    identity: FileIdentity,
-    content_hash: [u8; 32],
+pub(crate) enum MarkdownResourceKey {
+    Local {
+        location: CanonicalPath,
+        identity: FileIdentity,
+        content_hash: [u8; 32],
+    },
+    Remote {
+        authorization: RemoteImageKey,
+        content_hash: [u8; 32],
+    },
+    Data {
+        content_hash: [u8; 32],
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -141,6 +161,10 @@ pub(crate) struct LoadedMarkdownImage {
 }
 
 impl LoadedMarkdownImage {
+    pub(super) fn new(key: MarkdownResourceKey, pixels: Arc<RgbaImage>) -> Self {
+        Self { key, pixels }
+    }
+
     pub(crate) fn key(&self) -> &MarkdownResourceKey {
         &self.key
     }
@@ -150,13 +174,15 @@ impl LoadedMarkdownImage {
     }
 }
 
-pub(crate) struct LocalMarkdownImageService {
-    resolver: Arc<dyn DocumentPathResolver>,
-    decoder: Arc<dyn MarkdownImageDecode>,
-    cache: RasterCache,
+pub(crate) struct MarkdownImageService {
+    pub(super) resolver: Arc<dyn DocumentPathResolver>,
+    pub(super) decoder: Arc<dyn MarkdownImageDecode>,
+    pub(super) remote: Arc<dyn RemoteImageFetch>,
+    pub(super) remote_cache: HashMap<RemoteImageKey, MarkdownResourceKey>,
+    pub(super) cache: RasterCache,
 }
 
-impl Default for LocalMarkdownImageService {
+impl Default for MarkdownImageService {
     fn default() -> Self {
         Self::with_dependencies(
             Arc::new(SystemDocumentPathResolver),
@@ -166,7 +192,7 @@ impl Default for LocalMarkdownImageService {
     }
 }
 
-impl LocalMarkdownImageService {
+impl MarkdownImageService {
     pub(crate) fn with_dependencies(
         resolver: Arc<dyn DocumentPathResolver>,
         decoder: Arc<dyn MarkdownImageDecode>,
@@ -175,6 +201,8 @@ impl LocalMarkdownImageService {
         Self {
             resolver,
             decoder,
+            remote: Arc::new(UreqRemoteImageClient::new()),
+            remote_cache: HashMap::new(),
             cache: RasterCache::new(cache_bytes),
         }
     }
@@ -238,7 +266,7 @@ impl LocalMarkdownImageService {
             return Err(MarkdownResourceError::Changed);
         }
 
-        let key = MarkdownResourceKey {
+        let key = MarkdownResourceKey::Local {
             location: location.canonical_path().clone(),
             identity: actual_identity,
             content_hash: Sha256::digest(&bytes).into(),
@@ -273,7 +301,7 @@ impl LocalMarkdownImageService {
     }
 }
 
-struct RasterCache {
+pub(super) struct RasterCache {
     entries: HashMap<MarkdownResourceKey, RasterEntry>,
     limit: usize,
     used: usize,
@@ -301,20 +329,24 @@ impl RasterCache {
         self.clock
     }
 
-    fn get(&mut self, key: &MarkdownResourceKey) -> Option<Arc<RgbaImage>> {
+    pub(super) fn get(&mut self, key: &MarkdownResourceKey) -> Option<Arc<RgbaImage>> {
         let tick = self.tick();
         let entry = self.entries.get_mut(key)?;
         entry.touched = tick;
         Some(entry.pixels.clone())
     }
 
-    fn remove(&mut self, key: &MarkdownResourceKey) {
+    pub(super) fn remove(&mut self, key: &MarkdownResourceKey) {
         if let Some(entry) = self.entries.remove(key) {
             self.used -= entry.bytes;
         }
     }
 
-    fn insert(&mut self, key: MarkdownResourceKey, pixels: Arc<RgbaImage>) {
+    pub(super) fn contains(&self, key: &MarkdownResourceKey) -> bool {
+        self.entries.contains_key(key)
+    }
+
+    pub(super) fn insert(&mut self, key: MarkdownResourceKey, pixels: Arc<RgbaImage>) {
         self.remove(&key);
         let bytes = pixels.as_raw().len();
         if bytes > self.limit {
@@ -378,11 +410,8 @@ mod tests {
             .unwrap();
     }
 
-    fn service_with_cache(
-        calls: Arc<AtomicUsize>,
-        cache_bytes: usize,
-    ) -> LocalMarkdownImageService {
-        LocalMarkdownImageService::with_dependencies(
+    fn service_with_cache(calls: Arc<AtomicUsize>, cache_bytes: usize) -> MarkdownImageService {
+        MarkdownImageService::with_dependencies(
             Arc::new(SystemDocumentPathResolver),
             Arc::new(CountingDecoder { calls }),
             cache_bytes,

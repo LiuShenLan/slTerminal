@@ -30,6 +30,7 @@
 | `quick-xml` | `0.41.0` | 禁用 DTD／外部实体的 SVG XML 清洗。 | MIT |
 | `usvg`、`resvg` | `0.46.0` | 清洗后 SVG 静态光栅化；不接收源 XML。 | MIT／Apache-2.0 |
 | `tiny-skia` | `0.11.4` | 光栅化底层与位图生成。 | BSD-3-Clause |
+| `data-url` | `0.3.2` | data 图片按 Fetch 标准流式解码；不手写 URL 百分号或 base64 解析。 | MIT／Apache-2.0 |
 | `image` | `0.25.10` | 图片解码与有界帧读取。 | MIT／Apache-2.0 |
 | `tree-sitter` | `0.27.1` | 增量语法、InputEdit、可中止解析。 | MIT |
 | `proptest` | `1.12.0` | 仅开发依赖：布局、编辑、协议和恢复属性测试。 | MIT／Apache-2.0 |

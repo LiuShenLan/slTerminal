@@ -65,6 +65,15 @@ fn run_recycle_operation(
 
 /// 交给系统默认处理器打开路径(文件树双击的未命中臂)。
 pub(crate) fn open_in_system(path: &Path) {
+    let _ = shell_execute_open(path);
+}
+
+/// URL 与本地链接共用同一系统处理程序；错误不携带目标正文。
+pub(crate) fn open_url_in_system(url: &str) -> io::Result<()> {
+    shell_execute_open(Path::new(url))
+}
+
+fn shell_execute_open(path: &Path) -> io::Result<()> {
     use std::os::windows::ffi::OsStrExt as _;
     use std::ptr;
     use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
@@ -74,9 +83,7 @@ pub(crate) fn open_in_system(path: &Path) {
     };
     let file = wide(path.as_os_str());
     let operation = wide(std::ffi::OsStr::new("open"));
-    // 返回值 > 32 才是成功;失败静默(用户已经看到一个没反应的双击,
-    // 再弹系统错误框只会更吵)。
-    unsafe {
+    let result = unsafe {
         windows_sys::Win32::UI::Shell::ShellExecuteW(
             ptr::null_mut(),
             operation.as_ptr(),
@@ -84,7 +91,14 @@ pub(crate) fn open_in_system(path: &Path) {
             ptr::null(),
             ptr::null(),
             SW_SHOWNORMAL,
-        );
+        )
+    } as usize;
+    if result > 32 {
+        Ok(())
+    } else {
+        Err(io::Error::other(format!(
+            "系统处理程序拒绝打开（代码 {result}）"
+        )))
     }
 }
 
