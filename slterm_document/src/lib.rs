@@ -15,6 +15,7 @@ mod identity;
 mod language;
 mod markdown;
 mod markdown_html;
+mod markdown_svg;
 mod paged;
 mod recovery;
 mod registry;
@@ -46,6 +47,7 @@ pub use markdown_html::{
     MarkdownHtmlAttribute, MarkdownHtmlElement, MarkdownHtmlFragment, MarkdownHtmlNode,
     MarkdownHtmlTag,
 };
+pub use markdown_svg::{SanitizedSvg, SvgError};
 pub use paged::{
     DECODED_PAGE_CACHE_LIMIT_BYTES, DocumentBody, DocumentPageCache, PAGE_SOURCE_BYTES, PageIndex,
     PageIndexError, PageKey, PagedLineIndex, PagedSource, SourceByteRange,

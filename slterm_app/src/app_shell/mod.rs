@@ -24,6 +24,9 @@ pub(crate) mod assets;
 #[cfg(test)]
 mod crash_recovery;
 mod global_close;
+// Markdown 安全资源：SVG 静态解码与逐资源本地授权。
+#[allow(dead_code)] // 生产消费归 Markdown 块视图接线。
+pub(crate) mod markdown;
 mod startup_diagnostics;
 // 源码文件 tab:普通源码与 gitshow 只读臂。
 #[allow(dead_code)] // 生产消费归 Document 与文本视图阶段。

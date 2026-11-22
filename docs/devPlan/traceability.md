@@ -347,10 +347,10 @@
 |---|---|---|
 | 源码修改切渲染不读盘且共享最新 Document | `markdown_source_render_share_document` | 待实现 |
 | 形态、大纲、缩放和阅读位置按同一 ViewKey 恢复 | `markdown_view_state_restore` | 待实现 |
-| 危险 HTML、远程字体和外部 SVG 不执行不加载 | `markdown_unsafe_html_svg_blocked` | 待实现 |
+| 危险 HTML、远程字体和外部 SVG 不执行不加载 | `markdown_unsafe_html_svg_blocked` | 已自动化 |
 | 有效与无效 Mermaid 的静态渲染及错误边界 | `markdown_mermaid_static_final_capability` | 延期 |
 | 远程图片点击前零请求且请求不带凭据或 Referer | `markdown_remote_image_click_authorization` | 待实现 |
-| 根外文档的相邻图片不因文档可读而获批 | `markdown_outside_document_resource_not_authorized` | 待实现 |
+| 根外文档的相邻图片不因文档可读而获批 | `markdown_outside_document_resource_not_authorized` | 已自动化 |
 | 大文档降级优先于持久渲染形态 | `markdown_large_document_degradation` | 待实现 |
 | Markdown 共享 Document 按统一自动保存触发 | `markdown_shared_document_autosave` | 待实现 |
 

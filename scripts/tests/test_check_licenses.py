@@ -93,6 +93,14 @@ class LicenseNoticeTests(unittest.TestCase):
         self.assertIn("Actual license", rendered)
         self.assertNotIn("config-only-marker", rendered)
 
+    def test_render_removes_trailing_whitespace_from_source_lines(self):
+        package = self.package("whitespace")
+        root = Path(package["manifest_path"]).parent
+        (root / "LICENSE").write_text("MIT demo  \nnext\t\n", encoding="utf-8")
+        rendered = check_licenses.render_notices(self.metadata([package]))
+        self.assertIn("MIT demo\nnext\n", rendered)
+        self.assertNotIn("MIT demo  \n", rendered)
+
     def test_notice_label_survives_cross_drive_snapshot(self):
         package = self.package("cross-drive")
         root = Path(package["manifest_path"]).parent
@@ -141,6 +149,15 @@ class LicenseNoticeTests(unittest.TestCase):
         self.assertIn("Apache text", rendered)
         self.assertIn("Upstream notice", rendered)
         self.assertNotIn("GPL text", rendered)
+
+    def test_git_package_uses_exact_version_snapshot_when_checkout_lacks_license(self):
+        package = self.package("git-snapshot", source="git+https://example.invalid/repo")
+        snapshot = self.root / "licenses" / "crates" / "git-snapshot-1.0.0"
+        snapshot.mkdir(parents=True)
+        (snapshot / "LICENSE").write_text("Pinned git MIT", encoding="utf-8")
+        with mock.patch.object(check_licenses, "ROOT", self.root):
+            rendered = check_licenses.render_notices(self.metadata([package]))
+        self.assertIn("Pinned git MIT", rendered)
 
     def test_vendored_path_package_is_included_and_requires_license(self):
         package = self.package("dav1d-sys", source=None)

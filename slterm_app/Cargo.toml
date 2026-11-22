@@ -148,6 +148,8 @@ tempfile = "3"
 notify = "7"
 # 壁纸与文档图片的本地解码。
 image = { version = "=0.25.10", default-features = false, features = ["avif-native", "bmp", "gif", "ico", "jpeg", "png", "webp"] }
+# Markdown SVG 仅静态矢量；禁用系统字体、内存映射字体和内嵌位图解码。
+resvg = { version = "=0.46.0", default-features = false }
 # Windows 系统代理读取:HKCU Internet Settings 的
 # ProxyEnable/ProxyServer/ProxyOverride;不走 ureq 的 win-system-proxy。
 winreg = "0.56"

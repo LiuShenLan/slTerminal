@@ -1,0 +1,3 @@
+Package: tree-sitter-less-1.0.0
+Upstream: https://github.com/jimliang/tree-sitter-less/tree/b95f7e9780be5c9c191bb478054106253f04acb9
+License declaration: Cargo.toml declares MIT and author Jimliang; the pinned upstream tree contains no license file.

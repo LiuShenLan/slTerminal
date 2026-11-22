@@ -97,6 +97,17 @@ def select_checkout_files(package: dict, files: list[Path]) -> list[Path]:
     return sorted(licenses + notices)
 
 
+def snapshot_license_files(package: dict) -> list[Path]:
+    """上游包未分发文本时，只接受仓内精确名称与版本的快照。"""
+    snapshot = (
+        ROOT
+        / "licenses"
+        / "crates"
+        / f"{package['name']}-{package['version']}"
+    )
+    return text_files(snapshot)
+
+
 def license_files(package: dict) -> list[Path]:
     root = Path(package["manifest_path"]).parent
     direct = text_files(root)
@@ -107,13 +118,7 @@ def license_files(package: dict) -> list[Path]:
         raise LicenseAuditError(f"{package['name']} 的仓内补丁缺少许可文本")
     if not source.startswith("git+"):
         # 部分 registry 包遗漏 workspace 根许可；只接受仓内精确版本快照。
-        snapshot = (
-            ROOT
-            / "licenses"
-            / "crates"
-            / f"{package['name']}-{package['version']}"
-        )
-        files = text_files(snapshot)
+        files = snapshot_license_files(package)
         if files:
             return files
         raise LicenseAuditError(f"{package['name']} 缺少可定位许可文本")
@@ -123,6 +128,9 @@ def license_files(package: dict) -> list[Path]:
             return files
         if (parent / ".git").exists():
             break
+    files = snapshot_license_files(package)
+    if files:
+        return files
     raise LicenseAuditError(f"{package['name']} 的 Git 来源缺少许可文本")
 
 
@@ -139,11 +147,13 @@ def append_document(lines: list[str], root: Path, path: Path) -> None:
     except ValueError:
         # Windows 跨盘路径无相对形式；快照标签只保留确定性的文件名。
         relative = path.name
+    text = read_text(path).rstrip("\n")
+    text = "\n".join(line.rstrip() for line in text.split("\n"))
     lines.extend(
         [
             f"File: {relative}",
             "---------------------------------------------------------------------",
-            read_text(path).rstrip("\n"),
+            text,
             "",
         ]
     )

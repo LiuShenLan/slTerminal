@@ -1,0 +1,3 @@
+Package: tree-sitter-scss-1.0.0
+Upstream: https://github.com/tree-sitter-grammars/tree-sitter-scss/tree/9ab738d22bb248771d42e8678d1a307d14990df1
+License declaration: Cargo.toml declares MIT and author Amaan Qureshi; the pinned upstream tree contains no license file.
