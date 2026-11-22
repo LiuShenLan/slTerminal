@@ -21,6 +21,8 @@ struct PreparedTerminal {
     initial: WindowSize,
     initial_cwd: String,
     initial_title: String,
+    title_locked: bool,
+    cwd_fallback: bool,
     exec_context: Option<crate::completion::PaneExecContext>,
 }
 
@@ -35,6 +37,20 @@ struct BoundSession {
 pub(crate) struct LaunchedTerminal {
     prepared: PreparedTerminal,
     spawned: Box<BoundSession>,
+}
+
+/// 恢复启动的显示几何与目录回退授权；普通新建没有此上下文。
+pub(crate) struct RestoreLaunchOptions {
+    pub(crate) spawn_grid: (u16, u16),
+    pub(crate) recovery_root: Option<std::path::PathBuf>,
+}
+
+/// 新 PTY 代次回装到既有 View 的全部展示与恢复状态。
+pub(crate) struct ReconnectView {
+    pub(crate) events: super::super::event_mailbox::EventReceiver,
+    pub(crate) frame: slterm_terminal::render::TerminalFrame,
+    pub(crate) exec_context: Option<crate::completion::PaneExecContext>,
+    pub(crate) cwd_fallback: bool,
 }
 
 /// 恢复构造的会话来源；Exited 只恢复状态，不创建 PTY。
@@ -79,7 +95,8 @@ impl TerminalView {
                 "终端已有存活 worker",
             ));
         }
-        let (prepared, spawned) = Self::prepare(pane_id, spawn_grid, launch, window, cx, true);
+        let (prepared, spawned) =
+            Self::prepare(pane_id, spawn_grid, launch, window, cx, true, None);
         let spawned = spawned.expect("启动构造必须执行 PTY 创建")?;
         let bound =
             Self::bind_spawned(registry, terminal_id, spawned).map_err(std::io::Error::other)?;
@@ -108,12 +125,20 @@ impl TerminalView {
         pane_id: PaneId,
         terminal_id: slterm_workspace::TerminalId,
         registry: &Rc<RefCell<crate::gpui_terminal::registry::TerminalRegistry>>,
-        spawn_grid: (u16, u16),
         launch: TerminalLaunch,
+        options: RestoreLaunchOptions,
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Self {
-        let (prepared, spawned) = Self::prepare(pane_id, spawn_grid, launch, window, cx, true);
+        let (prepared, spawned) = Self::prepare(
+            pane_id,
+            options.spawn_grid,
+            launch,
+            window,
+            cx,
+            true,
+            options.recovery_root,
+        );
         let spawned = spawned.expect("恢复 Launch 必须执行一次 PTY 创建");
         let startup = match spawned {
             Ok(spawned) => match Self::bind_spawned(registry, terminal_id, spawned) {
@@ -136,7 +161,8 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Self {
-        let (prepared, spawned) = Self::prepare(pane_id, spawn_grid, launch, window, cx, false);
+        let (prepared, spawned) =
+            Self::prepare(pane_id, spawn_grid, launch, window, cx, false, None);
         debug_assert!(spawned.is_none(), "错误恢复不得创建 PTY");
         Self::from_prepared(prepared, SessionStartup::Failed(error), window, cx)
     }
@@ -149,7 +175,8 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Self {
-        let (prepared, spawned) = Self::prepare(pane_id, spawn_grid, launch, window, cx, false);
+        let (prepared, spawned) =
+            Self::prepare(pane_id, spawn_grid, launch, window, cx, false, None);
         debug_assert!(spawned.is_none(), "Exited 恢复不得创建 PTY");
         Self::from_prepared(prepared, SessionStartup::Exited, window, cx)
     }
@@ -161,6 +188,7 @@ impl TerminalView {
         window: &Window,
         cx: &App,
         spawn: bool,
+        recovery_root: Option<std::path::PathBuf>,
     ) -> (
         PreparedTerminal,
         Option<std::io::Result<session::SpawnedSession>>,
@@ -215,37 +243,56 @@ impl TerminalView {
             cell_width: (cell_w.as_f32() * scale).round().max(1.0) as u16,
             cell_height: (line_h.as_f32() * scale).round().max(1.0) as u16,
         };
-        let (initial_cwd, initial_title, spawned, exec_context) = match launch {
-            TerminalLaunch::Local {
-                cwd,
-                shell,
-                shell_name,
-                explicit_command,
-            } => {
-                let initial_cwd = cwd
-                    .as_ref()
-                    .map(|path| path.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                // 无设置 shell 键:launch 未指定即 None,core 探测链接手。
-                // 显式命令(-e)的解析失败与 spawn 失败同通道呈现。
-                let (spawned, exec_context) = if spawn {
-                    let options = session::local_options(shell, explicit_command, pane_id, cwd);
-                    // 后台补全复用 PTY 创建时冻结的 shell 与环境覆盖;必须在
-                    // options 被 spawn 消费前留一份只读快照。
-                    let exec_context = options
+        let (initial_cwd, initial_title, title_locked, cwd_fallback, spawned, exec_context) =
+            match launch {
+                TerminalLaunch::Local {
+                    cwd,
+                    shell,
+                    shell_name,
+                    explicit_command,
+                } => {
+                    let mut initial_cwd = cwd
                         .as_ref()
-                        .ok()
-                        .map(crate::completion::PaneExecContext::from_pty_options);
-                    let spawned =
-                        options.and_then(|options| session::spawn(initial, term_config, options));
-                    (Some(spawned), exec_context)
-                } else {
-                    (None, None)
-                };
-                let title = shell_name.unwrap_or_else(|| String::from("shell"));
-                (initial_cwd, title, spawned, exec_context)
-            }
-        };
+                        .map(|path| path.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    let mut cwd_fallback = false;
+                    // 无设置 shell 键:launch 未指定即 None,core 探测链接手。
+                    // 只有恢复上下文允许在真实目录错误后回退项目根。
+                    let (spawned, exec_context) = if spawn {
+                        match session::local_options(shell, explicit_command, pane_id, cwd) {
+                            Ok(options) => match session::spawn_local(
+                                initial,
+                                term_config,
+                                options,
+                                recovery_root.as_deref(),
+                                None,
+                            ) {
+                                Ok(local) => {
+                                    if let Some(cwd) = local.cwd {
+                                        initial_cwd = cwd.to_string_lossy().into_owned();
+                                    }
+                                    cwd_fallback = local.cwd_fallback;
+                                    (Some(Ok(local.spawned)), local.exec_context)
+                                }
+                                Err(error) => (Some(Err(error)), None),
+                            },
+                            Err(error) => (Some(Err(error)), None),
+                        }
+                    } else {
+                        (None, None)
+                    };
+                    let title_locked = shell_name.is_some();
+                    let title = shell_name.unwrap_or_else(|| String::from("shell"));
+                    (
+                        initial_cwd,
+                        title,
+                        title_locked,
+                        cwd_fallback,
+                        spawned,
+                        exec_context,
+                    )
+                }
+            };
         (
             PreparedTerminal {
                 pane_id,
@@ -262,6 +309,8 @@ impl TerminalView {
                 initial,
                 initial_cwd,
                 initial_title,
+                title_locked,
+                cwd_fallback,
                 exec_context,
             },
             spawned,
@@ -289,6 +338,8 @@ impl TerminalView {
             initial,
             initial_cwd,
             initial_title,
+            title_locked,
+            cwd_fallback,
             exec_context,
         } = prepared;
         let (binding, session_task, frame, error, exited) = match startup {
@@ -385,6 +436,8 @@ impl TerminalView {
             marked_text: None,
             ime_bounds: Bounds::default(),
             title: initial_title,
+            title_locked,
+            cwd_fallback,
             cwd: initial_cwd,
             branch: String::new(),
             running_program: None,
@@ -408,6 +461,7 @@ impl TerminalView {
             selection_scroll_active: false,
             copy_on_select,
             pending_paste_task: None,
+            pending_resume: None,
             terminal_search: None,
             terminal_search_task: None,
             copy_feedback: CopyFeedback::new(),
@@ -440,11 +494,15 @@ impl TerminalView {
         &mut self,
         registry: &Rc<RefCell<crate::gpui_terminal::registry::TerminalRegistry>>,
         target: crate::gpui_terminal::registry::TerminalTarget,
-        events: super::super::event_mailbox::EventReceiver,
-        frame: slterm_terminal::render::TerminalFrame,
-        exec_context: Option<crate::completion::PaneExecContext>,
+        reconnect: ReconnectView,
         cx: &mut Context<'_, Self>,
     ) {
+        let ReconnectView {
+            events,
+            frame,
+            exec_context,
+            cwd_fallback,
+        } = reconnect;
         self.binding = Some(crate::gpui_terminal::registry::TerminalBinding::new(
             registry, target,
         ));
@@ -453,6 +511,7 @@ impl TerminalView {
         ));
         self.frame = Some(Arc::new(frame));
         self.exec_context = exec_context;
+        self.cwd_fallback = cwd_fallback;
         self.selection_cleared = false;
         self.suggest = crate::suggest::SuggestState::default();
         self.shell_line = crate::gpui_terminal::shell_line::ShellLineTracker::new(
@@ -464,6 +523,7 @@ impl TerminalView {
         self.terminal_search = None;
         self.terminal_search_task = None;
         self.pending_paste_task = None;
+        self.pending_resume = None;
         self.marked_text = None;
         self.running_program = None;
         self.error = None;
@@ -490,7 +550,7 @@ mod startup_tests {
     use std::rc::Rc;
     use std::str::FromStr as _;
 
-    use gpui::{Context, IntoElement, Render, TestAppContext, Window, div};
+    use gpui::{AppContext as _, Context, IntoElement, Render, TestAppContext, Window, div};
 
     use super::*;
 
@@ -516,6 +576,40 @@ mod startup_tests {
             shell_name: None,
             explicit_command: false,
         }
+    }
+
+    #[gpui::test]
+    fn custom_title_survives_cli_title_and_reset_signals(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            cx.set_global(Settings::default());
+            crate::app_shell::theme::apply_dark_theme(cx);
+        });
+        let (_root, window) = cx.add_window_view(|_window, _cx| StartupHarness);
+        let terminal = window.update(|window, cx| {
+            cx.new(|cx| {
+                TerminalView::restore_error(
+                    PaneId(1),
+                    (80, 24),
+                    TerminalLaunch::Local {
+                        cwd: None,
+                        shell: None,
+                        shell_name: Some("我的终端".to_owned()),
+                        explicit_command: false,
+                    },
+                    "测试禁用真实 PTY".to_owned(),
+                    window,
+                    cx,
+                )
+            })
+        });
+        window.update(|_, cx| {
+            terminal.update(cx, |view, cx| {
+                view.feed_event_for_test(TermEvent::Title("Claude Code".to_owned()), cx);
+                view.feed_event_for_test(TermEvent::ResetTitle, cx);
+            });
+        });
+        terminal.read_with(cx, |view, _| assert_eq!(view.title, "我的终端"));
     }
 
     /// 显式创建失败必须向上返回错误，而不是伪装成可挂载的终端。

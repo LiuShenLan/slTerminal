@@ -76,7 +76,7 @@
 | 项目移除与退出 | [生命周期](design/lifecycle.md)、[工作区](design/workspace.md) | `integration_project_remove_and_exit` | 已自动化 |
 | 崩溃恢复 | [生命周期](design/lifecycle.md)、[持久化](design/persistence.md) | `integration_crash_recovery` | 待实现 |
 | 快照配额 | [持久化](design/persistence.md)、[Document](design/document.md) | `integration_snapshot_quota` | 已自动化 |
-| 终端恢复 | [终端](design/terminal.md)、[生命周期](design/lifecycle.md) | `integration_terminal_restore` | 待实现 |
+| 终端恢复 | [终端](design/terminal.md)、[生命周期](design/lifecycle.md) | `integration_terminal_restore` | 已自动化 |
 | PTY 上限 | [终端](design/terminal.md)、[工作区](design/workspace.md) | `integration_pty_limit` | 已自动化 |
 | 新建 cwd | [终端](design/terminal.md)、[工作区](design/workspace.md) | `integration_new_terminal_cwd` | 已自动化 |
 | 单实例与 Runtime | [Runtime](design/runtime.md)、[生命周期](design/lifecycle.md)、[工作区](design/workspace.md) | `integration_single_instance_runtime_parity` | 待实现 |

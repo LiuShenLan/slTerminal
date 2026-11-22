@@ -44,7 +44,7 @@ pub use project_snapshot::{
     SplitTerminalSpec,
 };
 pub use side_view::{SideViewId, UnknownSideViewId};
-pub use terminal_record::{RunIntent, TerminalRecord, TerminalRecordError};
+pub use terminal_record::{RunIntent, TerminalMetadata, TerminalRecord, TerminalRecordError};
 pub use view_key::{ViewKey, ViewKeyError, ViewKeyKind};
 pub use view_state::{
     InvalidViewState, ViewState, ViewStateError, ViewStateRegistry, ViewStateRegistryError,

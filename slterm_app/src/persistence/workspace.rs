@@ -43,7 +43,7 @@ static WORKSPACE_OBJECTS: [SchemaObject; 22] = [
     SchemaObject {
         kind: "table",
         name: "terminals",
-        sql: "CREATE TABLE terminals (terminal_id TEXT NOT NULL PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(project_id) ON DELETE CASCADE, number INTEGER NOT NULL CHECK (number >= 0), cwd TEXT NOT NULL, shell TEXT NOT NULL, custom_title TEXT, run_intent TEXT NOT NULL, UNIQUE (project_id, number))",
+        sql: "CREATE TABLE terminals (terminal_id TEXT NOT NULL PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(project_id) ON DELETE CASCADE, number INTEGER NOT NULL CHECK (number >= 0), cwd TEXT NOT NULL, shell TEXT NOT NULL, custom_title TEXT, agent_source TEXT, agent_session_id TEXT, agent_session_file TEXT, run_intent TEXT NOT NULL, UNIQUE (project_id, number), CHECK (agent_source IS NOT NULL OR (agent_session_id IS NULL AND agent_session_file IS NULL)))",
     },
     SchemaObject {
         kind: "table",

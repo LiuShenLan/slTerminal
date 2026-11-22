@@ -5,8 +5,8 @@ use slterm_path::CanonicalPath;
 use slterm_sidebar::side_view_state_schema;
 use slterm_workspace::{
     CloseIntent, CloseScope, InvalidViewState, PanelGroup, PanelGroupId, ProjectId,
-    ProjectRegistry, RunIntent, SideViewId, TerminalId, TerminalRecord, ViewKeyKind,
-    ViewStateRegistry, ViewStateSchema,
+    ProjectRegistry, RunIntent, SideViewId, TerminalId, TerminalMetadata, TerminalRecord,
+    ViewKeyKind, ViewStateRegistry, ViewStateSchema,
 };
 
 use super::workspace_writer_tests::{
@@ -98,7 +98,7 @@ fn project_close_snapshot() -> ProjectSnapshot {
                 number,
                 root,
                 CanonicalPath::new("C:/shell/pwsh.exe").unwrap(),
-                None,
+                TerminalMetadata::new(None, None),
                 RunIntent::Exited,
             )
             .unwrap(),

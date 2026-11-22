@@ -18,6 +18,7 @@ mod sidebar;
 mod tabs;
 mod terminal_cwd;
 mod terminal_reconnect;
+mod terminal_restore;
 mod view_tasks;
 
 use std::borrow::Cow;
@@ -42,7 +43,7 @@ use slterm_terminal::event_loop::Msg;
 use slterm_workspace::{
     AddProjectOutcome, LogicalSize, NewTerminalSpec, PanelGroupId, PanelId, PanelIdAllocator,
     ProjectId, ProjectSnapshot, RunIntent, SideViewId, SplitTerminalSpec, TerminalId,
-    TerminalRecord, ViewKey,
+    TerminalMetadata, TerminalRecord, ViewKey,
 };
 
 use crate::app_shell::global_close::GlobalCloseClient;
@@ -103,6 +104,7 @@ fn terminal_spec(project: &str, group: &str, terminal: &str) -> NewTerminalSpec 
 struct LauncherState {
     attempts: usize,
     fail_next: bool,
+    resume_ai: Option<bool>,
     sessions: BTreeMap<u64, Receiver<Msg>>,
 }
 
@@ -166,8 +168,10 @@ impl TerminalPanelLauncher for FakeLauncher {
         &mut self,
         panel_id: PanelId,
         _record: &slterm_workspace::TerminalRecord,
-        terminal: crate::gpui_terminal::session::SharedTerminal,
+        _recovery_root: &CanonicalPath,
+        terminal: Option<crate::gpui_terminal::session::SharedTerminal>,
         _window_size: slterm_terminal::event::WindowSize,
+        _term_config: slterm_terminal::term::Config,
     ) -> io::Result<super::commands::ReconnectLaunch> {
         self.state.borrow_mut().attempts += 1;
         if std::mem::replace(&mut self.state.borrow_mut().fail_next, false) {
@@ -182,6 +186,7 @@ impl TerminalPanelLauncher for FakeLauncher {
             session,
             events,
             exec_context: None,
+            cwd_fallback: false,
         })
     }
 
@@ -190,6 +195,7 @@ impl TerminalPanelLauncher for FakeLauncher {
         panel_id: PanelId,
         record: &slterm_workspace::TerminalRecord,
         terminals: &Rc<RefCell<crate::gpui_terminal::registry::TerminalRegistry>>,
+        _recovery_root: &CanonicalPath,
         window: &mut Window,
         cx: &mut App,
     ) -> Entity<TerminalView> {
@@ -324,6 +330,14 @@ fn open_root_with_persistence_and_size_configured(
     });
     let state = Rc::new(RefCell::new(LauncherState::default()));
     configure(&mut state.borrow_mut());
+    if let Some(resume_ai) = state.borrow().resume_ai {
+        cx.update(|cx| {
+            cx.set_global(crate::app_shell::config::Settings {
+                resume_ai,
+                ..crate::app_shell::config::Settings::default()
+            });
+        });
+    }
     let launcher = FakeLauncher {
         state: Rc::clone(&state),
     };
@@ -1405,70 +1419,6 @@ fn exited_terminal_retains_panel_and_marks_run_intent(cx: &mut TestAppContext) {
         state.borrow().sessions[&panel.sequence()].try_recv(),
         Err(TryRecvError::Empty)
     ));
-}
-
-#[gpui::test]
-fn local_launcher_rejects_non_unicode_shell_without_lossy_conversion(cx: &mut TestAppContext) {
-    if !cfg!(windows) {
-        return;
-    }
-    #[cfg(windows)]
-    use std::os::windows::ffi::{OsStrExt as _, OsStringExt as _};
-
-    #[cfg(windows)]
-    let shell = {
-        let mut wide = std::ffi::OsString::from("C:/slterm-test-non-unicode-shell/")
-            .encode_wide()
-            .collect::<Vec<_>>();
-        wide.push(0xd800);
-        wide.extend(std::ffi::OsString::from(".exe").encode_wide());
-        CanonicalPath::new(std::ffi::OsString::from_wide(&wide)).unwrap()
-    };
-    #[cfg(not(windows))]
-    let shell = path("C:/unused");
-
-    let record = TerminalRecord::new(
-        terminal_id(TERMINAL_A),
-        project_id(PROJECT_A),
-        0,
-        path("D:/work/a"),
-        shell,
-        None,
-        RunIntent::Launch,
-    )
-    .unwrap();
-    let (_root, mut window, _state) = open_root(cx);
-    let registry = Rc::new(RefCell::new(
-        crate::gpui_terminal::registry::TerminalRegistry::default(),
-    ));
-
-    let result = window.update(|window, cx| {
-        LocalTerminalLauncher.launch(
-            PanelIdAllocator::new(1).allocate().unwrap(),
-            &record,
-            &registry,
-            window,
-            cx,
-        )
-    });
-
-    assert!(
-        matches!(result, Err(ref error) if error.kind() == io::ErrorKind::InvalidInput),
-        "非 Unicode Shell 必须在 PTY 启动前拒绝，实际: {result:?}"
-    );
-    let restored = window.update(|window, cx| {
-        LocalTerminalLauncher.restore(
-            PanelIdAllocator::new(1).allocate().unwrap(),
-            &record,
-            &registry,
-            window,
-            cx,
-        )
-    });
-    restored.read_with(cx, |terminal, _| {
-        assert!(terminal.worker_is_retired(), "非法恢复元数据不得启动 PTY");
-        assert!(!terminal.is_exited(), "启动失败不得被伪装成 Exited");
-    });
 }
 
 #[gpui::test]

@@ -5,11 +5,13 @@ mod completion;
 mod cwd_report;
 pub(super) mod layout;
 pub(super) mod pointer;
+pub(super) mod restore;
 pub(super) mod search;
 pub(super) mod startup;
 pub(super) mod typography;
 
 pub use broadcast::TerminalInput;
+pub(crate) use startup::{ReconnectView, RestoreLaunchOptions};
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
@@ -178,6 +180,10 @@ pub struct TerminalView {
     pub marked_text: Option<String>,
     pub ime_bounds: Bounds<Pixels>,
     pub title: String,
+    /// 用户自定义标题优先于 CLI/OSC 标题与重置信号。
+    pub(super) title_locked: bool,
+    /// 本代次是否因保存目录失效而回退项目根；只用于一次性提示。
+    pub(super) cwd_fallback: bool,
     /// shell 集成 `SLTERM|cwd|branch|program` 标题上报 / OSC 7 的工作目录;
     /// tab 标签的第一优先来源。
     pub cwd: String,
@@ -229,6 +235,8 @@ pub struct TerminalView {
     pub(super) copy_on_select: bool,
     /// 危险粘贴确认的在途任务；重复快捷键不得叠开多个确认框。
     pending_paste_task: Option<gpui::Task<()>>,
+    /// 每个 PTY 代次至多一次的 Agent 恢复注入；任务随视图或代次销毁。
+    pub(super) pending_resume: Option<restore::PendingResume>,
     /// 当前终端的瞬态普通文本搜索；关闭即销毁查询、位置与任务。
     pub(crate) terminal_search: Option<search::TerminalSearchState>,
     terminal_search_task: Option<gpui::Task<()>>,
@@ -377,6 +385,7 @@ impl TerminalView {
             self.shell_line.invalidate();
         }
         self.frame = Some(frame);
+        self.inject_agent_resume_if_ready();
     }
 
     /// 事件白集:每条臂的归属见改造节;新增事件
@@ -416,14 +425,16 @@ impl TerminalView {
                 if cwd_changed && let Some(session) = &self.completion_session {
                     session.record_directory(&self.cwd);
                 }
-                if !title.starts_with("SLTERM|") {
+                if !self.title_locked && !title.starts_with("SLTERM|") {
                     self.title = title;
                 }
                 cx.emit(TerminalViewEvent::TitleChanged);
                 cx.notify();
             }
             TermEvent::ResetTitle => {
-                self.title = String::from("shell");
+                if !self.title_locked {
+                    self.title = String::from("shell");
+                }
                 cx.emit(TerminalViewEvent::TitleChanged);
                 cx.notify();
             }
@@ -535,6 +546,7 @@ impl TerminalView {
     fn mark_exited(&mut self, message: String, cx: &mut Context<'_, Self>) {
         // 进程退出使已开始但未闭合的执行也永久取消，迟到的 Done 不得采集。
         self.shell_line.interrupt();
+        self.pending_resume = None;
         if let Some(binding) = &self.binding
             && let Err(error) = binding.mark_process_exited()
         {
@@ -660,6 +672,10 @@ impl TerminalView {
                 .iter()
                 .any(|glyph| glyph.ch == '─')
         })
+    }
+
+    pub(crate) const fn used_cwd_fallback(&self) -> bool {
+        self.cwd_fallback
     }
 
     #[cfg(all(test, feature = "gpui-test-support"))]

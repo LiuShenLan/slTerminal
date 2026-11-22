@@ -271,7 +271,8 @@ mod tests {
     use slterm_path::{AppPaths, CanonicalPath};
     use slterm_workspace::{
         PanelGroup, PanelGroupId, Project, ProjectId, ProjectLayout, ProjectRegistry,
-        ProjectRootStatus, ProjectSnapshot, RunIntent, TerminalId, TerminalRecord, ViewKey,
+        ProjectRootStatus, ProjectSnapshot, RunIntent, TerminalId, TerminalMetadata,
+        TerminalRecord, ViewKey,
     };
 
     use super::{
@@ -299,7 +300,7 @@ mod tests {
             number,
             CanonicalPath::new("D:/work").unwrap(),
             CanonicalPath::new("C:/shell/pwsh.exe").unwrap(),
-            None,
+            TerminalMetadata::new(None, None),
             RunIntent::Launch,
         )
         .unwrap()

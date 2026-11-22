@@ -9,7 +9,8 @@ use slterm_sidebar::side_view_state_schema;
 use slterm_workspace::{
     CloseDecision, CloseObject, CloseScope, InvalidViewState, PanelGroup, PanelGroupId, ProjectId,
     ProjectRegistry, ProjectSnapshot, ProjectSnapshotError, RunIntent, SideViewId, TerminalId,
-    TerminalRecord, ViewKey, ViewKeyKind, ViewState, ViewStateRegistry, ViewStateSchema,
+    TerminalMetadata, TerminalRecord, ViewKey, ViewKeyKind, ViewState, ViewStateRegistry,
+    ViewStateSchema,
 };
 use tempfile::TempDir;
 
@@ -164,7 +165,7 @@ fn multi_project_snapshot(active: ProjectId) -> ProjectSnapshot {
                     number,
                     root.clone(),
                     CanonicalPath::new("C:/shell/pwsh.exe").unwrap(),
-                    Some(format!("终端 {terminal}")),
+                    TerminalMetadata::new(Some(format!("终端 {terminal}")), None),
                     RunIntent::Exited,
                 )
                 .unwrap(),

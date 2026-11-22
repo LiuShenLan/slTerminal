@@ -825,6 +825,8 @@ impl AppRoot {
             return;
         };
         if let Some(project) = self.projects.get(&close.record.project_id()) {
+            self.agents
+                .remove(crate::gpui_terminal::PaneId(close.panel_id.sequence()));
             project.update(cx, |project, _| {
                 project.panels.remove(&close.panel_id);
                 if project.focused_panel == Some(close.panel_id) {

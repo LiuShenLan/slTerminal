@@ -385,6 +385,18 @@ pub(crate) fn notify_workspace_write_failed(cx: &mut App) {
     );
 }
 
+pub(crate) fn notify_terminal_cwd_fallback(cx: &mut App) {
+    let language = cx.global::<crate::app_shell::config::Settings>().language;
+    crate::notify::deliver_startup_summary(
+        &crate::notify::Notification::ProcessAlert {
+            text: language
+                .text(crate::i18n::Message::NotifyTerminalCwdFallback)
+                .to_owned(),
+        },
+        cx,
+    );
+}
+
 pub(crate) fn notify_workspace_recovered(
     notice: crate::persistence::startup::WorkspaceRecoveryNotice,
     cx: &mut App,

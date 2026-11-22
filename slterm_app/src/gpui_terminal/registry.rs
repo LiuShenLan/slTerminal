@@ -486,7 +486,7 @@ mod registry_tests {
 
         let replacement = registry
             .reconnect(terminal_id, |terminal| {
-                let (session, receiver, events) = session::test_reconnect_session(terminal);
+                let (session, receiver, events) = session::test_reconnect_session(Some(terminal));
                 second_receiver = Some(receiver);
                 Ok::<_, std::io::Error>((session, events))
             })

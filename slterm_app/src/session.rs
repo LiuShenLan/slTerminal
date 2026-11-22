@@ -41,48 +41,7 @@ pub enum SplitAxis {
     TopBottom,
 }
 
-/// 快照瞬间仍在 pane 前台运行的 AI CLI 对话身份(字段级消费归 AI 集成域)。
-/// 只存安全启动描述——来源名 + 会话 id + 原生会话文件,不存正文、不存启动
-/// 参数原文。
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AgentSession {
-    /// hook 直报的 CLI 名(slug)。
-    pub source: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub session_id: Option<String>,
-    /// 原生会话文件;只在所属 pane 环境内解释。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub session_file: Option<String>,
-}
-
-impl AgentSession {
-    /// 恢复时敲进 shell 的命令行;无法安全构造(未知来源、异形 id、codex
-    /// 缺 id)时返回 `None`,宁可只恢复布局也不上屏可疑字节。
-    ///
-    /// session id 是不可信的 hook/文件输入:`AgentKind::resume_command` 先做
-    /// 字符集与长度校验,绝不加引号硬拼(SEC 注入面)。命令形状与
-    /// `ai_sessions::AiSession::resume_command`(手动恢复面板)保持一致。
-    pub fn resume_command(&self) -> Option<String> {
-        let agent = crate::ai_agents::AgentKind::parse(&self.source)?;
-        if agent == crate::ai_agents::AgentKind::Codex
-            && let Some(id) = self.session_file.as_deref().and_then(codex_rollout_id)
-        {
-            return agent.resume_command(id);
-        }
-        match self.session_id.as_deref() {
-            // Pi 的 `pid-` 前缀是进程身份而非可恢复会话身份。
-            Some(id) if agent == crate::ai_agents::AgentKind::Pi && id.starts_with("pid-") => None,
-            Some(id) => agent.resume_command(id),
-            // claude 无 id(hook 未装、OSC 认出的启动):`--continue` 恢复
-            // 当前目录最近一次对话——pane 的 cwd 已经先被恢复,语义正好。
-            None if agent == crate::ai_agents::AgentKind::Claude => {
-                Some("claude --continue".to_owned())
-            }
-            // codex 没有按目录 continue 的形式,缺 id 只能放弃接续。
-            _ => None,
-        }
-    }
-}
+pub use slterm_agents::{AgentSession, codex_rollout_id, valid_native_session_file};
 
 /// 持久化布局树:叶带逐 pane 启动环境,Split 带轴 + 第一个孩子占比。
 /// 占比用千分比整数——自动保存的变化检测与文件 diff 不被 f32 序列化噪声
@@ -428,44 +387,6 @@ pub fn mark_boot_attempt(session: &mut Session) {
 pub(crate) fn mark_boot_attempt_at(path: &Path, session: &mut Session) -> std::io::Result<()> {
     session.boot_attempts = session.boot_attempts.saturating_add(1);
     save_compact_to(path, session)
-}
-
-/// 同时校验 Windows 与来宾绝对路径,不查宿主文件系统——真实存在性与原生
-/// 身份归宿主侧校验。
-pub(crate) fn valid_native_session_file(path: &str) -> bool {
-    path.len() <= 4096
-        && path.ends_with(".jsonl")
-        && !path.chars().any(char::is_control)
-        && (path.starts_with('/')
-            || path.starts_with(r"\\")
-            || (path.as_bytes().get(1) == Some(&b':')
-                && path.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
-                && matches!(path.as_bytes().get(2), Some(b'/' | b'\\'))))
-}
-
-/// codex rollout 文件名尾部的 thread uuid 是 `codex resume` 认的会话身份。
-/// 形状钉死:`rollout-<日期时间>-<uuid>.jsonl`,uuid 36 字符、连字符位固定。
-pub(crate) fn codex_rollout_id(path: &str) -> Option<&str> {
-    if !valid_native_session_file(path) {
-        return None;
-    }
-    let filename = path.rsplit(['/', '\\']).next()?;
-    let stem = filename.strip_prefix("rollout-")?.strip_suffix(".jsonl")?;
-    let start = stem.len().checked_sub(36)?;
-    let id = stem.get(start..)?;
-    if start == 0 || stem.as_bytes().get(start - 1) != Some(&b'-') {
-        return None;
-    }
-    id.bytes()
-        .enumerate()
-        .all(|(index, byte)| {
-            if matches!(index, 8 | 13 | 18 | 23) {
-                byte == b'-'
-            } else {
-                byte.is_ascii_hexdigit()
-            }
-        })
-        .then_some(id)
 }
 
 #[cfg(test)]

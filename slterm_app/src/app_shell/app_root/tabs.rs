@@ -1,7 +1,7 @@
 //! 面板组页签：布局顺序、完整列表与横向滚动的运行期接线。
 
 use gpui::{
-    AnyElement, Context, DismissEvent, Focusable as _, InteractiveElement as _, IntoElement,
+    AnyElement, App, Context, DismissEvent, Focusable as _, InteractiveElement as _, IntoElement,
     ParentElement as _, Pixels, Point, Styled as _, WeakEntity, Window, anchored, deferred, div,
     px,
 };
@@ -106,7 +106,7 @@ impl AppRoot {
         let clicked_views = views.clone();
         let root = cx.weak_entity();
         let tabs = views.into_iter().map(|view| {
-            let mut tab = Tab::new().label(self.tab_title(&view));
+            let mut tab = Tab::new().label(self.tab_title(&view, cx));
             if let ViewKey::Terminal { terminal_id, .. } = view {
                 let selector = format!("app-root-tab-{terminal_id}");
                 tab = tab.child(
@@ -187,7 +187,7 @@ impl AppRoot {
             .iter()
             .position(|view| view == group.active())
             .expect("激活视图必须属于当前组");
-        let titles: Vec<_> = views.iter().map(|view| self.tab_title(view)).collect();
+        let titles: Vec<_> = views.iter().map(|view| self.tab_title(view, cx)).collect();
         let panel_id = self.panel_for_view(project_id, &active, cx)?;
         let trigger = self
             .panel_focus
@@ -301,18 +301,24 @@ impl AppRoot {
         )
     }
 
-    fn tab_title(&self, view: &ViewKey) -> String {
+    pub(super) fn tab_title(&self, view: &ViewKey, cx: &App) -> String {
         match view {
-            ViewKey::Terminal { terminal_id, .. } => self
-                .snapshot
-                .terminal(*terminal_id)
-                .map(|record| {
-                    record
-                        .custom_title()
-                        .map(str::to_owned)
-                        .unwrap_or_else(|| format!("terminal-{}", record.number()))
-                })
-                .expect("布局中的终端必须有逻辑记录"),
+            ViewKey::Terminal {
+                project_id,
+                terminal_id,
+            } => {
+                let record = self
+                    .snapshot
+                    .terminal(*terminal_id)
+                    .expect("布局中的终端必须有逻辑记录");
+                if let Some(custom) = record.custom_title() {
+                    return custom.to_owned();
+                }
+                self.terminal_panel(*project_id, *terminal_id, cx)
+                    .map(|(_, terminal)| terminal.read(cx).title.clone())
+                    .filter(|title| !title.is_empty())
+                    .unwrap_or_else(|| format!("terminal-{}", record.number()))
+            }
             ViewKey::Editor { document_id, .. } | ViewKey::Markdown { document_id, .. } => self
                 .snapshot
                 .document(*document_id)

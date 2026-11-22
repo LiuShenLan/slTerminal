@@ -5,12 +5,13 @@ use std::fmt;
 use std::str::FromStr;
 
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use slterm_agents::AgentSession;
 use slterm_document::DocumentId;
 use slterm_path::{CanonicalPath, ResolvedPath};
 use slterm_workspace::{
     LayoutDtoError, PROJECT_LAYOUT_DTO_VERSION, PanelGroupId, Project, ProjectId, ProjectLayout,
     ProjectRegistry, ProjectRegistryError, ProjectRootStatus, ProjectSnapshot,
-    ProjectSnapshotError, RunIntent, TerminalId, TerminalRecord,
+    ProjectSnapshotError, RunIntent, TerminalId, TerminalMetadata, TerminalRecord,
 };
 
 #[path = "project_documents.rs"]
@@ -304,11 +305,13 @@ impl WorkspaceDatabase {
         for terminal in terminals {
             transaction.execute(
                 "INSERT INTO terminals \
-                 (terminal_id, project_id, number, cwd, shell, custom_title, run_intent) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
+                 (terminal_id, project_id, number, cwd, shell, custom_title, agent_source, agent_session_id, agent_session_file, run_intent) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) \
                  ON CONFLICT(terminal_id) DO UPDATE SET \
                  cwd = excluded.cwd, shell = excluded.shell, \
-                 custom_title = excluded.custom_title, run_intent = excluded.run_intent",
+                 custom_title = excluded.custom_title, agent_source = excluded.agent_source, \
+                 agent_session_id = excluded.agent_session_id, \
+                 agent_session_file = excluded.agent_session_file, run_intent = excluded.run_intent",
                 params![
                     &terminal.id,
                     &terminal.project_id,
@@ -316,6 +319,9 @@ impl WorkspaceDatabase {
                     &terminal.cwd,
                     &terminal.shell,
                     &terminal.custom_title,
+                    &terminal.agent_source,
+                    &terminal.agent_session_id,
+                    &terminal.agent_session_file,
                     terminal.run_intent,
                 ],
             )?;
@@ -526,6 +532,9 @@ struct EncodedTerminal {
     cwd: String,
     shell: String,
     custom_title: Option<String>,
+    agent_source: Option<String>,
+    agent_session_id: Option<String>,
+    agent_session_file: Option<String>,
     run_intent: &'static str,
 }
 
@@ -548,6 +557,9 @@ impl EncodedTerminal {
                 .ok_or(ProjectStoreError::CorruptRecord)?
                 .to_owned(),
             custom_title: record.custom_title().map(str::to_owned),
+            agent_source: record.agent().map(|agent| agent.source.clone()),
+            agent_session_id: record.agent().and_then(|agent| agent.session_id.clone()),
+            agent_session_file: record.agent().and_then(|agent| agent.session_file.clone()),
             run_intent: match record.run_intent() {
                 RunIntent::Launch => "launch",
                 RunIntent::Exited => "exited",
@@ -597,7 +609,8 @@ fn load_terminal_records(
     connection: &rusqlite::Connection,
 ) -> Result<Vec<TerminalRecord>, ProjectStoreError> {
     let mut statement = connection.prepare(
-        "SELECT terminal_id, project_id, number, cwd, shell, custom_title, run_intent \
+        "SELECT terminal_id, project_id, number, cwd, shell, custom_title, \
+         agent_source, agent_session_id, agent_session_file, run_intent \
          FROM terminals ORDER BY terminal_id",
     )?;
     let rows = statement
@@ -609,13 +622,27 @@ fn load_terminal_records(
                 row.get::<_, String>(3)?,
                 row.get::<_, String>(4)?,
                 row.get::<_, Option<String>>(5)?,
-                row.get::<_, String>(6)?,
+                row.get::<_, Option<String>>(6)?,
+                row.get::<_, Option<String>>(7)?,
+                row.get::<_, Option<String>>(8)?,
+                row.get::<_, String>(9)?,
             ))
         })?
         .collect::<Result<Vec<_>, _>>()?;
     rows.into_iter()
         .map(
-            |(id, project_id, number, cwd, shell, custom_title, run_intent)| {
+            |(
+                id,
+                project_id,
+                number,
+                cwd,
+                shell,
+                custom_title,
+                agent_source,
+                agent_session_id,
+                agent_session_file,
+                run_intent,
+            )| {
                 let id = TerminalId::from_str(&id).map_err(|_| ProjectStoreError::CorruptRecord)?;
                 let project_id = ProjectId::from_str(&project_id)
                     .map_err(|_| ProjectStoreError::CorruptRecord)?;
@@ -628,8 +655,21 @@ fn load_terminal_records(
                     "exited" => RunIntent::Exited,
                     _ => return Err(ProjectStoreError::CorruptRecord),
                 };
-                TerminalRecord::new(id, project_id, number, cwd, shell, custom_title, run_intent)
-                    .map_err(|_| ProjectStoreError::CorruptRecord)
+                let agent = agent_source.map(|source| AgentSession {
+                    source,
+                    session_id: agent_session_id,
+                    session_file: agent_session_file,
+                });
+                TerminalRecord::new(
+                    id,
+                    project_id,
+                    number,
+                    cwd,
+                    shell,
+                    TerminalMetadata::new(custom_title, agent),
+                    run_intent,
+                )
+                .map_err(|_| ProjectStoreError::CorruptRecord)
             },
         )
         .collect()
@@ -782,7 +822,7 @@ mod project_tests {
                             number,
                             root("D:/work/terminal"),
                             root("C:/shell/pwsh.exe"),
-                            None,
+                            TerminalMetadata::new(None, None),
                             RunIntent::Launch,
                         )
                         .unwrap(),
@@ -801,7 +841,7 @@ mod project_tests {
             number,
             root("D:/work/terminal"),
             root("C:/shell/pwsh.exe"),
-            None,
+            TerminalMetadata::new(None, None),
             RunIntent::Launch,
         )
         .unwrap()
@@ -863,7 +903,7 @@ mod project_tests {
                     0,
                     root("D:/work/terminal"),
                     root("C:/shell/pwsh.exe"),
-                    Some(version.to_owned()),
+                    TerminalMetadata::new(Some(version.to_owned()), None),
                     RunIntent::Launch,
                 )
                 .unwrap(),
@@ -958,7 +998,14 @@ mod project_tests {
             40,
             root("D:/work/terminal"),
             root("C:/Program Files/PowerShell/7/pwsh.exe"),
-            Some("构建终端".to_owned()),
+            TerminalMetadata::new(
+                Some("构建终端".to_owned()),
+                Some(AgentSession {
+                    source: "claude".to_owned(),
+                    session_id: Some("session-a".to_owned()),
+                    session_file: None,
+                }),
+            ),
             RunIntent::Exited,
         )
         .unwrap();
@@ -969,6 +1016,17 @@ mod project_tests {
 
         let mut reopened = WorkspaceDatabase::open(&paths).unwrap();
         assert_eq!(reopened.load_project_snapshot().unwrap(), expected);
+        assert!(
+            reopened
+                .database
+                .connection
+                .execute(
+                    "UPDATE terminals SET agent_source = NULL WHERE terminal_id = ?1",
+                    [TERMINAL_A],
+                )
+                .is_err(),
+            "没有来源的会话 ID 不得形成可恢复记录"
+        );
     }
 
     #[test]
@@ -1091,7 +1149,7 @@ mod project_tests {
                     1,
                     root("D:/work/terminal"),
                     root("C:/shell/pwsh.exe"),
-                    None,
+                    TerminalMetadata::new(None, None),
                     RunIntent::Launch,
                 )
                 .unwrap(),
@@ -1127,7 +1185,7 @@ mod project_tests {
                     0,
                     root("D:/work/terminal"),
                     root("C:/shell/pwsh.exe"),
-                    None,
+                    TerminalMetadata::new(None, None),
                     RunIntent::Launch,
                 )
                 .unwrap(),
@@ -1206,7 +1264,7 @@ mod project_tests {
                     0,
                     root("D:/work/terminal"),
                     root("C:/shell/pwsh.exe"),
-                    None,
+                    TerminalMetadata::new(None, None),
                     RunIntent::Launch,
                 )
                 .unwrap(),
@@ -1322,7 +1380,7 @@ mod project_tests {
             0,
             root("D:/work/terminal"),
             root("C:/shell/pwsh.exe"),
-            Some("changed".to_owned()),
+            TerminalMetadata::new(Some("changed".to_owned()), None),
             RunIntent::Exited,
         )
         .unwrap();
@@ -1649,7 +1707,7 @@ mod project_tests {
                 } else {
                     invalid
                 },
-                None,
+                TerminalMetadata::new(None, None),
                 RunIntent::Launch,
             )
             .unwrap();

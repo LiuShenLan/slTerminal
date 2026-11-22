@@ -522,6 +522,7 @@
     "workspace_write_failed": "无法保存工作区状态，最近的项目或布局更改可能无法恢复。",
     "workspace_restored_from_backup": "工作区状态库损坏，已从有效副本恢复；原现场已保留。",
     "workspace_isolated": "工作区状态库及副本均不可恢复，原现场已隔离保留，当前以空工作区启动。",
+    "terminal_cwd_fallback": "终端保存的目录不可用，已回退到所属项目根目录启动。",
     "hook_install_failed": "无法为 {agent} 安装 AI CLI hook",
     "hook_settings_unreadable": "无法读取 AI hook 设置，自愈已跳过"
   },

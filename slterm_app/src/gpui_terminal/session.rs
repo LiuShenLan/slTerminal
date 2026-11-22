@@ -228,7 +228,7 @@ pub(super) fn test_session_with_events() -> (
 
 #[cfg(all(test, feature = "gpui-test-support"))]
 pub(crate) fn test_reconnect_session(
-    term: SharedTerminal,
+    term: Option<SharedTerminal>,
 ) -> (
     TerminalSession,
     std::sync::mpsc::Receiver<slterm_terminal::event_loop::Msg>,
@@ -236,11 +236,23 @@ pub(crate) fn test_reconnect_session(
 ) {
     let (events, event_rx) = super::event_mailbox::channel();
     let proxy = EventProxy { events };
-    {
-        let mut terminal = term.lock();
-        terminal.replace_event_proxy(proxy.clone());
-        terminal.begin_reconnect();
-    }
+    let term = match term {
+        Some(term) => {
+            let mut terminal = term.lock();
+            terminal.replace_event_proxy(proxy.clone());
+            terminal.begin_reconnect();
+            drop(terminal);
+            term
+        }
+        None => Arc::new(FairMutex::new(Term::new(
+            Config::default(),
+            &GridSize {
+                columns: 80,
+                screen_lines: 24,
+            },
+            proxy.clone(),
+        ))),
+    };
     let (sender, receiver) = slterm_terminal::event_loop::EventLoopSender::standalone().unwrap();
     (
         TerminalSession {
@@ -342,6 +354,51 @@ pub(crate) fn spawn_reconnect(
     let (tx, rx) = super::event_mailbox::channel();
     let proxy = EventProxy { events: tx };
     spawn_on_term(window_size, options, term, proxy, rx, true)
+}
+
+/// 恢复／重连共用的本地启动结果；cwd 回退只由真实目录错误触发。
+pub(crate) struct LocalSpawn {
+    pub(crate) spawned: SpawnedSession,
+    pub(crate) exec_context: Option<crate::completion::PaneExecContext>,
+    pub(crate) cwd: Option<std::path::PathBuf>,
+    pub(crate) cwd_fallback: bool,
+}
+
+pub(crate) fn spawn_local(
+    window_size: WindowSize,
+    term_config: Config,
+    mut options: tty::Options,
+    recovery_root: Option<&std::path::Path>,
+    terminal: Option<SharedTerminal>,
+) -> std::io::Result<LocalSpawn> {
+    let attempt = |options: &tty::Options| match terminal.clone() {
+        Some(terminal) => spawn_reconnect(window_size, options.clone(), terminal),
+        None => spawn(window_size, term_config.clone(), options.clone()),
+    };
+    let mut cwd_fallback = false;
+    let spawned = match attempt(&options) {
+        Ok(spawned) => spawned,
+        Err(error)
+            if recovery_root.is_some_and(|root| {
+                Some(root) != options.working_directory.as_deref()
+                    && tty::is_invalid_working_directory_error(&error)
+            }) =>
+        {
+            options.working_directory = recovery_root.map(std::path::Path::to_path_buf);
+            cwd_fallback = true;
+            attempt(&options)?
+        }
+        Err(error) => return Err(error),
+    };
+    let exec_context = Some(crate::completion::PaneExecContext::from_pty_options(
+        &options,
+    ));
+    Ok(LocalSpawn {
+        spawned,
+        exec_context,
+        cwd: options.working_directory,
+        cwd_fallback,
+    })
 }
 
 fn spawn_on_term(

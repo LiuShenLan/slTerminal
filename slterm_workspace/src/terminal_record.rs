@@ -2,6 +2,7 @@
 
 use std::fmt;
 
+use slterm_agents::AgentSession;
 use slterm_path::CanonicalPath;
 
 use crate::{ProjectId, TerminalId};
@@ -11,6 +12,22 @@ use crate::{ProjectId, TerminalId};
 pub enum RunIntent {
     Launch,
     Exited,
+}
+
+/// 与进程生命无关的用户标题和 Agent 恢复元数据。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TerminalMetadata {
+    custom_title: Option<String>,
+    agent: Option<AgentSession>,
+}
+
+impl TerminalMetadata {
+    pub fn new(custom_title: Option<String>, agent: Option<AgentSession>) -> Self {
+        Self {
+            custom_title,
+            agent,
+        }
+    }
 }
 
 /// 自定义标题输入或持久记录非法。
@@ -40,6 +57,7 @@ pub struct TerminalRecord {
     cwd: CanonicalPath,
     shell: CanonicalPath,
     custom_title: Option<String>,
+    agent: Option<AgentSession>,
     run_intent: RunIntent,
 }
 
@@ -50,9 +68,13 @@ impl TerminalRecord {
         number: u64,
         cwd: CanonicalPath,
         shell: CanonicalPath,
-        custom_title: Option<String>,
+        metadata: TerminalMetadata,
         run_intent: RunIntent,
     ) -> Result<Self, TerminalRecordError> {
+        let TerminalMetadata {
+            custom_title,
+            agent,
+        } = metadata;
         if let Some(title) = &custom_title {
             if title.trim().is_empty() {
                 return Err(TerminalRecordError::EmptyTitle);
@@ -68,6 +90,7 @@ impl TerminalRecord {
             cwd,
             shell,
             custom_title,
+            agent,
             run_intent,
         })
     }
@@ -96,8 +119,16 @@ impl TerminalRecord {
         self.custom_title.as_deref()
     }
 
+    pub fn agent(&self) -> Option<&AgentSession> {
+        self.agent.as_ref()
+    }
+
     pub const fn run_intent(&self) -> RunIntent {
         self.run_intent
+    }
+
+    pub(crate) fn set_agent(&mut self, agent: Option<AgentSession>) {
+        self.agent = agent;
     }
 
     pub(crate) fn set_run_intent(&mut self, run_intent: RunIntent) {

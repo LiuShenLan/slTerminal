@@ -7,4 +7,7 @@
 mod identity;
 mod session;
 pub use identity::AgentKind;
-pub use session::{AgentSessionKey, InvalidNativeSessionId};
+pub use session::{
+    AgentSession, AgentSessionKey, InvalidNativeSessionId, codex_rollout_id,
+    valid_native_session_file,
+};

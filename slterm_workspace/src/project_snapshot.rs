@@ -3,13 +3,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+use slterm_agents::AgentSession;
 use slterm_document::DocumentId;
 use slterm_path::{CanonicalPath, ResolvedPath};
 use slterm_split::SplitDirection;
 
 use crate::{
     LayoutError, LogicalSize, PanelGroup, PanelGroupId, Project, ProjectId, ProjectRegistry,
-    ProjectRegistryError, RunIntent, TerminalId, TerminalRecord, TerminalRecordError, ViewKey,
+    ProjectRegistryError, RunIntent, TerminalId, TerminalMetadata, TerminalRecord,
+    TerminalRecordError, ViewKey,
 };
 
 /// 在既有组末尾或空项目首组打开逻辑终端的输入。
@@ -494,6 +496,26 @@ impl ProjectSnapshot {
         Ok(candidate)
     }
 
+    /// 生成更新 Agent 会话身份的候选快照，不改变布局或运行意图。
+    pub fn with_terminal_agent(
+        &self,
+        id: TerminalId,
+        agent: Option<AgentSession>,
+    ) -> Result<Self, ProjectCommandError> {
+        self.validate()?;
+        if self.terminal(id).is_none() {
+            return Err(ProjectSnapshotError::MissingTerminal(id).into());
+        }
+        let mut candidate = self.clone();
+        candidate
+            .terminals
+            .get_mut(&id)
+            .expect("存在性已预检")
+            .set_agent(agent);
+        candidate.validate()?;
+        Ok(candidate)
+    }
+
     fn prepare_record(
         &mut self,
         spec: &NewTerminalSpec,
@@ -520,7 +542,7 @@ impl ProjectSnapshot {
             number,
             cwd,
             spec.shell.clone(),
-            spec.custom_title.clone(),
+            TerminalMetadata::new(spec.custom_title.clone(), None),
             RunIntent::Launch,
         )?;
         let view = ViewKey::Terminal {

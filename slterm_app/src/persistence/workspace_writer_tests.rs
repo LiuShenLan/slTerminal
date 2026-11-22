@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use slterm_workspace::{
     CloseIntent, CloseScope, InvalidViewState, PanelGroup, PanelGroupId, ProjectId,
-    ProjectSnapshot, RunIntent, SideViewId, TerminalId, TerminalRecord, ViewKeyKind,
-    ViewStateRegistry, ViewStateSchema,
+    ProjectSnapshot, RunIntent, SideViewId, TerminalId, TerminalMetadata, TerminalRecord,
+    ViewKeyKind, ViewStateRegistry, ViewStateSchema,
 };
 use tempfile::TempDir;
 
@@ -114,7 +114,7 @@ fn terminal_project_snapshot() -> ProjectSnapshot {
         0,
         slterm_path::CanonicalPath::new("D:/work/terminal").unwrap(),
         slterm_path::CanonicalPath::new("C:/shell/pwsh.exe").unwrap(),
-        Some("构建".to_owned()),
+        TerminalMetadata::new(Some("构建".to_owned()), None),
         RunIntent::Exited,
     )
     .unwrap();

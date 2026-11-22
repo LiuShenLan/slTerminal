@@ -33,6 +33,7 @@ pub(crate) struct ReconnectLaunch {
     pub(crate) session: crate::gpui_terminal::session::TerminalSession,
     pub(crate) events: crate::gpui_terminal::event_mailbox::EventReceiver,
     pub(crate) exec_context: Option<crate::completion::PaneExecContext>,
+    pub(crate) cwd_fallback: bool,
 }
 
 /// 终端面板启动适配器；测试可替换为无真实 PTY 的实现。
@@ -50,8 +51,10 @@ pub(crate) trait TerminalPanelLauncher {
         &mut self,
         panel_id: PanelId,
         record: &TerminalRecord,
-        terminal: SharedTerminal,
+        recovery_root: &CanonicalPath,
+        terminal: Option<SharedTerminal>,
         window_size: slterm_terminal::event::WindowSize,
+        term_config: slterm_terminal::term::Config,
     ) -> io::Result<ReconnectLaunch>;
 
     /// 恢复既有面板；Launch 失败与 Exited 都保留实体，不重复逻辑记录。
@@ -60,6 +63,7 @@ pub(crate) trait TerminalPanelLauncher {
         panel_id: PanelId,
         record: &TerminalRecord,
         terminals: &Rc<RefCell<TerminalRegistry>>,
+        recovery_root: &CanonicalPath,
         window: &mut Window,
         cx: &mut App,
     ) -> Entity<TerminalView>;
@@ -125,8 +129,10 @@ impl TerminalPanelLauncher for LocalTerminalLauncher {
         &mut self,
         panel_id: PanelId,
         record: &TerminalRecord,
-        terminal: SharedTerminal,
+        recovery_root: &CanonicalPath,
+        terminal: Option<SharedTerminal>,
         window_size: slterm_terminal::event::WindowSize,
+        term_config: slterm_terminal::term::Config,
     ) -> io::Result<ReconnectLaunch> {
         let launch = local_launch(record)?;
         let TerminalLaunch::Local {
@@ -141,15 +147,19 @@ impl TerminalPanelLauncher for LocalTerminalLauncher {
             PaneId(panel_id.sequence()),
             cwd,
         )?;
-        let exec_context = Some(crate::completion::PaneExecContext::from_pty_options(
-            &options,
-        ));
-        let (session, events) =
-            crate::gpui_terminal::session::spawn_reconnect(window_size, options, terminal)?;
+        let local = crate::gpui_terminal::session::spawn_local(
+            window_size,
+            term_config,
+            options,
+            Some(recovery_root.as_path()),
+            terminal,
+        )?;
+        let (session, events) = local.spawned;
         Ok(ReconnectLaunch {
             session,
             events,
-            exec_context,
+            exec_context: local.exec_context,
+            cwd_fallback: local.cwd_fallback,
         })
     }
 
@@ -158,6 +168,7 @@ impl TerminalPanelLauncher for LocalTerminalLauncher {
         panel_id: PanelId,
         record: &TerminalRecord,
         terminals: &Rc<RefCell<TerminalRegistry>>,
+        recovery_root: &CanonicalPath,
         window: &mut Window,
         cx: &mut App,
     ) -> Entity<TerminalView> {
@@ -177,8 +188,11 @@ impl TerminalPanelLauncher for LocalTerminalLauncher {
                         pane_id,
                         record.id(),
                         terminals,
-                        grid,
                         launch,
+                        crate::gpui_terminal::view::RestoreLaunchOptions {
+                            spawn_grid: grid,
+                            recovery_root: Some(recovery_root.as_path().to_path_buf()),
+                        },
                         window,
                         cx,
                     )
@@ -516,13 +530,33 @@ impl AppRoot {
             ))?;
         let panel_id = self.panel_ids.allocate()?;
         let parent = self.project_focus_token(project_id, cx)?;
-        let terminal = self
-            .launcher
-            .restore(panel_id, record, &self.terminals, window, cx);
-        terminal.update(cx, |terminal, _| {
+        let recovery_root = self
+            .snapshot
+            .registry()
+            .project(project_id)
+            .ok_or(ProjectRegistryError::ProjectNotFound)?
+            .root()
+            .clone();
+        let terminal = self.launcher.restore(
+            panel_id,
+            record,
+            &self.terminals,
+            &recovery_root,
+            window,
+            cx,
+        );
+        let pane_id = PaneId(panel_id.sequence());
+        self.agents.register(pane_id);
+        if let Some(agent) = record.agent() {
+            self.agents.seed_session(pane_id, agent.clone());
+        }
+        terminal.update(cx, |terminal, cx| {
             terminal.attach_completion_session(Rc::new(crate::completion::Session::new(
                 self.learning.clone(),
             )));
+            if record.run_intent() == RunIntent::Launch {
+                terminal.schedule_agent_resume(record.agent(), cx);
+            }
         });
         let visible = self.snapshot.registry().active() == Some(project_id);
         let focus_registration = match self.focus_manager.register(
@@ -533,6 +567,7 @@ impl AppRoot {
         ) {
             Ok(registration) => registration,
             Err(error) => {
+                self.agents.remove(pane_id);
                 self.retire_terminal_worker(terminal_id, cx);
                 return Err(error.into());
             }
@@ -540,6 +575,7 @@ impl AppRoot {
         let subscription = cx.subscribe_in(&terminal, window, move |root, _, event, window, cx| {
             root.on_terminal_event(panel_id, event, window, cx);
         });
+        let cwd_fallback = terminal.read(cx).used_cwd_fallback();
         project.update(cx, |project, _| {
             project.panels.insert(
                 panel_id,
@@ -555,6 +591,9 @@ impl AppRoot {
         });
         self.panel_focus.insert(panel_id, focus_registration);
         self.panel_subscriptions.insert(panel_id, subscription);
+        if cwd_fallback {
+            super::events::notify_terminal_cwd_fallback(cx);
+        }
         Ok(())
     }
 
@@ -1057,6 +1096,8 @@ impl AppRoot {
         let terminal = self
             .launcher
             .launch(panel_id, &record, &self.terminals, window, cx)?;
+        let pane_id = PaneId(panel_id.sequence());
+        self.agents.register(pane_id);
         terminal.update(cx, |terminal, _| {
             terminal.attach_completion_session(Rc::new(crate::completion::Session::new(
                 self.learning.clone(),
@@ -1070,6 +1111,7 @@ impl AppRoot {
         ) {
             Ok(registration) => registration,
             Err(error) => {
+                self.agents.remove(pane_id);
                 self.retire_terminal_worker(terminal_id, cx);
                 return Err(error.into());
             }
@@ -1081,6 +1123,7 @@ impl AppRoot {
                 .ensure_project_activation_allowed(project_id, focus_token)
             {
                 let _ = self.focus_manager.unregister(focus_token);
+                self.agents.remove(pane_id);
                 self.retire_terminal_worker(terminal_id, cx);
                 return Err(error.into());
             }
@@ -1103,11 +1146,13 @@ impl AppRoot {
                     cx,
                 );
                 let _ = self.focus_manager.unregister(focus_token);
+                self.agents.remove(pane_id);
                 self.retire_terminal_worker(terminal_id, cx);
                 return Err(error.into());
             }
         } else if let Err(error) = self.focus_manager.request_focus(focus_token, window, cx) {
             let _ = self.focus_manager.unregister(focus_token);
+            self.agents.remove(pane_id);
             self.retire_terminal_worker(terminal_id, cx);
             return Err(error.into());
         }
@@ -1213,28 +1258,76 @@ impl AppRoot {
             .snapshot
             .with_terminal_run_intent(terminal_id, RunIntent::Launch)?;
         let project_id = record.project_id();
+        let recovery_root = self
+            .snapshot
+            .registry()
+            .project(project_id)
+            .ok_or(ProjectRegistryError::ProjectNotFound)?
+            .root()
+            .clone();
         let (panel_id, view) = self
             .terminal_panel(project_id, terminal_id, cx)
             .ok_or(AppRootError::MissingPanel)?;
-        let previous_target = self
-            .terminals
-            .borrow()
-            .target(terminal_id)
-            .ok_or(RegistryError::TerminalNotFound)
-            .map_err(AppRootError::TerminalReconnect)?;
+        let previous_target = self.terminals.borrow().target(terminal_id);
         let window_size = view.read(cx).pty_window_size();
+        let term_config = cx
+            .try_global::<crate::app_shell::config::Settings>()
+            .map_or_else(slterm_terminal::term::Config::default, |settings| {
+                settings.term_config()
+            });
         let mut exec_context = None;
-        let replacement = {
+        let mut cwd_fallback = false;
+        let replacement = if previous_target.is_some() {
             let launcher = &mut self.launcher;
             self.terminals
                 .borrow_mut()
                 .reconnect(terminal_id, |terminal| {
-                    let launched = launcher.reconnect(panel_id, &record, terminal, window_size)?;
+                    let launched = launcher.reconnect(
+                        panel_id,
+                        &record,
+                        &recovery_root,
+                        Some(terminal),
+                        window_size,
+                        term_config.clone(),
+                    )?;
                     exec_context = launched.exec_context;
+                    cwd_fallback = launched.cwd_fallback;
                     Ok((launched.session, launched.events))
                 })
+                .map(|replacement| {
+                    let (target, previous, events, frame) = replacement.into_parts();
+                    (target, Some(previous), events, frame)
+                })
+        } else {
+            // 持久化 Exited 没有旧 worker：仍走同一 Registry 容量与启动闸门，
+            // 但不伪造回滚或要求一个不存在的旧代次。
+            let launcher = &mut self.launcher;
+            let mut launched_events = None;
+            let launched = self.terminals.borrow_mut().launch(terminal_id, || {
+                let launched = launcher.reconnect(
+                    panel_id,
+                    &record,
+                    &recovery_root,
+                    None,
+                    window_size,
+                    term_config,
+                )?;
+                exec_context = launched.exec_context;
+                cwd_fallback = launched.cwd_fallback;
+                launched_events = Some(launched.events);
+                Ok(launched.session)
+            });
+            launched.map(|target| {
+                let events = launched_events.expect("成功启动必须返回事件流");
+                let frame = self
+                    .terminals
+                    .borrow()
+                    .capture_frame(target, 0)
+                    .expect("刚登记的 worker 必须可捕获首帧");
+                (target, None, events, frame)
+            })
         };
-        let replacement = match replacement {
+        let (target, previous, events, frame) = match replacement {
             Ok(replacement) => replacement,
             Err(error) => {
                 view.update(cx, |view, cx| {
@@ -1243,11 +1336,26 @@ impl AppRoot {
                 return Err(AppRootError::TerminalReconnect(error));
             }
         };
-        let (target, previous, events, frame) = replacement.into_parts();
         view.update(cx, |view, cx| {
-            view.install_reconnect(&self.terminals, target, events, frame, exec_context, cx);
+            view.install_reconnect(
+                &self.terminals,
+                target,
+                crate::gpui_terminal::view::ReconnectView {
+                    events,
+                    frame,
+                    exec_context,
+                    cwd_fallback,
+                },
+                cx,
+            );
+            view.schedule_agent_resume(record.agent(), cx);
         });
-        self.reclaim_terminal_worker(previous_target, previous, cx);
+        if let (Some(previous_target), Some(previous)) = (previous_target, previous) {
+            self.reclaim_terminal_worker(previous_target, previous, cx);
+        }
+        if cwd_fallback {
+            super::events::notify_terminal_cwd_fallback(cx);
+        }
         self.commit_project_snapshot(candidate, cx);
         cx.notify();
         Ok(())
@@ -1568,6 +1676,62 @@ impl AppRoot {
         })
     }
 
+    #[allow(dead_code)] // 状态徽标归 Agent 展示接线；当前恢复测试直接核验仲裁事实。
+    pub(crate) fn terminal_agent_status(
+        &self,
+        terminal_id: TerminalId,
+        cx: &App,
+    ) -> crate::ai_agents::AgentStatus {
+        let Some(record) = self.snapshot.terminal(terminal_id) else {
+            return crate::ai_agents::AgentStatus::Unknown;
+        };
+        self.terminal_panel(record.project_id(), terminal_id, cx)
+            .and_then(|(panel_id, _)| {
+                self.agents
+                    .host(PaneId(panel_id.sequence()))
+                    .map(|host| host.status())
+            })
+            .unwrap_or(crate::ai_agents::AgentStatus::Unknown)
+    }
+
+    fn sync_agent_command(&mut self, panel_id: PanelId, started: bool, cx: &mut Context<'_, Self>) {
+        let Some(terminal_id) = self.terminal_identity(panel_id, cx) else {
+            return;
+        };
+        let Some(project_id) = self
+            .snapshot
+            .terminal(terminal_id)
+            .map(|record| record.project_id())
+        else {
+            return;
+        };
+        let pane_id = PaneId(panel_id.sequence());
+        if started {
+            let program = self
+                .terminal_panel(project_id, terminal_id, cx)
+                .and_then(|(_, terminal)| terminal.read(cx).running_program.clone());
+            self.agents.command_started(pane_id, program.as_deref());
+        } else {
+            self.agents.command_finished(pane_id);
+        }
+        let agent = self.agents.session_agent(pane_id);
+        let current = self
+            .snapshot
+            .terminal(terminal_id)
+            .and_then(|record| record.agent());
+        if current == agent.as_ref() {
+            cx.notify();
+            return;
+        }
+        match self.snapshot.with_terminal_agent(terminal_id, agent) {
+            Ok(candidate) => {
+                self.commit_project_snapshot(candidate, cx);
+                cx.notify();
+            }
+            Err(error) => log::warn!("终端 Agent 身份提交失败: {error}"),
+        }
+    }
+
     pub(crate) fn on_terminal_event(
         &mut self,
         panel_id: PanelId,
@@ -1581,6 +1745,7 @@ impl AppRoot {
                 let Some(terminal_id) = self.terminal_identity(panel_id, cx) else {
                     return;
                 };
+                self.agents.process_exited(PaneId(panel_id.sequence()));
                 match self
                     .snapshot
                     .with_terminal_run_intent(terminal_id, RunIntent::Exited)
@@ -1592,10 +1757,10 @@ impl AppRoot {
                     Err(error) => log::warn!("终端退出状态提交失败: {error}"),
                 }
             }
+            TerminalViewEvent::CommandStarted => self.sync_agent_command(panel_id, true, cx),
+            TerminalViewEvent::CommandFinished => self.sync_agent_command(panel_id, false, cx),
             TerminalViewEvent::UserInput(_)
             | TerminalViewEvent::CommandSubmitted(_)
-            | TerminalViewEvent::CommandStarted
-            | TerminalViewEvent::CommandFinished
             | TerminalViewEvent::ProgressChanged(_) => {}
         }
     }

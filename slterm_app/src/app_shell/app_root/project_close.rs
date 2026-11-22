@@ -314,6 +314,8 @@ impl AppRoot {
             }
         }
         for panel_id in panel_ids {
+            self.agents
+                .remove(crate::gpui_terminal::PaneId(panel_id.sequence()));
             if let Some(registration) = self.panel_focus.remove(&panel_id)
                 && let Err(error) = self.focus_manager.unregister(registration.token())
             {

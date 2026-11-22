@@ -13,8 +13,8 @@
 //! - 屏幕规则引擎只读(用户覆盖热加载归 `ai_agents` 自身)。
 //!
 //! 缝合点(已接):
-//! - 恢复注入:workspace 恢复 tab 时先 `seed_session`,再让视图
-//!   `restore_agent` 构造并提交 resume 命令;
+//! - 恢复注入:AppRoot 从 TerminalRecord 读取 AgentSession 并 `seed_session`,
+//!   TerminalView 在同一 PTY 代次将就绪后的恢复命令写入 worker;
 //! - TurnDone/NeedsAttention 状态边 → 通知漏斗归 `notify`。
 
 use std::collections::HashMap;
@@ -106,22 +106,25 @@ impl AgentPaneHost {
         true
     }
 
-    /// OSC 133;C 的提交边:已知程序身份时按程序语义(含 codex `/plan`
-    /// 例外)推进,否则走通用 submitted。
-    pub(crate) fn command_started(&mut self) {
-        match self.program.as_deref() {
-            Some(program) => self.activity.submitted_text(program, ""),
-            None => self.activity.submitted(),
-        }
+    /// OSC 133;C 的命令启动边：只有识别为 Agent 的程序才产生工作状态。
+    pub(crate) fn command_started(&mut self, program: Option<&str>) {
+        self.program = program
+            .and_then(AgentKind::parse)
+            .map(|agent| agent.slug().to_owned());
+        self.session = None;
+        self.activity.begin_command(self.program.is_some());
     }
 
-    /// OSC 133;D 的完成边。
+    /// OSC 133;D 的完成边同时结束前台程序身份。
     pub(crate) fn command_finished(&mut self) {
         self.activity.command_finished();
+        self.program = None;
+        self.session = None;
     }
 
     /// 一次屏幕样本(最近至多 24 行)进仲裁器。身份只在没有 hook 权威时
     /// 由屏幕 chrome 建立——hook 永远是更高置信度的来源。
+    #[allow(dead_code)] // 生产消费归 Agent 屏幕看门狗阶段。
     pub(crate) fn observe_screen(&mut self, screen: &str) -> bool {
         if !self.activity.allows_screen() {
             return false;
@@ -143,6 +146,7 @@ impl AgentPaneHost {
     }
 
     /// 当前仲裁状态（页签徽标、关闭守卫与通知消费归工作区）。
+    #[allow(dead_code)] // 生产消费归 Agent 状态徽标；恢复测试已直接覆盖。
     pub(crate) fn status(&self) -> AgentStatus {
         self.activity.status()
     }
@@ -166,6 +170,7 @@ impl AgentPaneHost {
     }
 
     /// 当前屏幕/进程身份（托盘与恢复消费）。
+    #[allow(dead_code)] // 生产消费归托盘与 Agent 展示阶段。
     pub(crate) fn program(&self) -> Option<&str> {
         self.program.as_deref()
     }
@@ -223,6 +228,7 @@ impl AgentHub {
     }
 
     /// 按 pane 读取宿主（关闭守卫、托盘与测试）。
+    #[allow(dead_code)] // 生产消费归 Agent 状态徽标；恢复测试已直接覆盖。
     pub(crate) fn host(&self, pane_id: PaneId) -> Option<&AgentPaneHost> {
         self.hosts.get(&pane_id)
     }
@@ -277,9 +283,9 @@ impl AgentHub {
     }
 
     /// OSC 133;C 的命令启动边。
-    pub(crate) fn command_started(&mut self, pane_id: PaneId) {
+    pub(crate) fn command_started(&mut self, pane_id: PaneId, program: Option<&str>) {
         if let Some(host) = self.hosts.get_mut(&pane_id) {
-            host.command_started();
+            host.command_started(program);
         }
     }
 
@@ -290,7 +296,15 @@ impl AgentHub {
         }
     }
 
+    /// PTY 退出只清理状态；会话身份留给显式重连恢复。
+    pub(crate) fn process_exited(&mut self, pane_id: PaneId) {
+        if let Some(host) = self.hosts.get_mut(&pane_id) {
+            host.activity.reset();
+        }
+    }
+
     /// 屏幕看门狗单步(1 Hz 节奏由 workspace 调度)。无宿主的 pane 静默跳过。
+    #[allow(dead_code)] // 生产消费归 Agent 屏幕看门狗阶段。
     pub(crate) fn observe_screen(&mut self, pane_id: PaneId, screen: &str) -> bool {
         self.hosts
             .get_mut(&pane_id)

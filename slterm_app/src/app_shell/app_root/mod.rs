@@ -189,6 +189,7 @@ pub(crate) struct AppRoot {
     panel_ids: PanelIdAllocator,
     documents: DocumentRegistry,
     terminals: Rc<RefCell<TerminalRegistry>>,
+    agents: crate::agent_host::AgentHub,
     paged_documents:
         BTreeMap<slterm_document::DocumentId, Arc<crate::app_shell::paged_document::PagedDocument>>,
     document_syntax: BTreeMap<
@@ -369,6 +370,7 @@ impl AppRoot {
             panel_ids,
             documents,
             terminals: Rc::new(RefCell::new(TerminalRegistry::default())),
+            agents: crate::agent_host::AgentHub::new(),
             paged_documents: BTreeMap::new(),
             document_syntax: BTreeMap::new(),
             page_cache: Rc::new(RefCell::new(DocumentPageCache::new())),

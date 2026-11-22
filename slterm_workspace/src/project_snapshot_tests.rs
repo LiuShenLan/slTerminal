@@ -8,7 +8,7 @@ use crate::{
     LayoutError, LogicalSize, NewTerminalSpec, PanelGroup, PanelGroupId, Project,
     ProjectCommandError, ProjectId, ProjectLayout, ProjectRegistry, ProjectRegistryError,
     ProjectRootStatus, ProjectSnapshot, ProjectSnapshotError, RunIntent, SplitTerminalSpec,
-    TerminalId, TerminalRecord, TerminalRecordError, ViewKey,
+    TerminalId, TerminalMetadata, TerminalRecord, TerminalRecordError, ViewKey,
 };
 
 const PROJECT_A: &str = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2a";
@@ -44,7 +44,7 @@ fn record(project: &str, terminal: &str, number: u64) -> TerminalRecord {
         number,
         path("D:/work/a"),
         path("C:/Program Files/PowerShell/7/pwsh.exe"),
-        Some("build".to_owned()),
+        TerminalMetadata::new(Some("build".to_owned()), None),
         RunIntent::Launch,
     )
     .unwrap()
@@ -209,7 +209,7 @@ fn terminal_record_preserves_metadata_and_validates_custom_title() {
                 0,
                 path("D:/work/a"),
                 path("C:/shell/pwsh.exe"),
-                title,
+                TerminalMetadata::new(title, None),
                 RunIntent::Launch,
             ),
             Err(TerminalRecordError::EmptyTitle)
@@ -222,10 +222,39 @@ fn terminal_record_preserves_metadata_and_validates_custom_title() {
             0,
             path("D:/work/a"),
             path("C:/shell/pwsh.exe"),
-            Some("界".repeat(129)),
+            TerminalMetadata::new(Some("界".repeat(129)), None),
             RunIntent::Launch,
         ),
         Err(TerminalRecordError::TitleTooLong)
+    );
+}
+
+#[test]
+fn project_snapshot_agent_updates_are_atomic_candidates() {
+    let original = ProjectSnapshot::restore(
+        registry_with_views(1, &[TERMINAL_A]),
+        vec![record(PROJECT_A, TERMINAL_A, 0)],
+    )
+    .unwrap();
+    let agent = slterm_agents::AgentSession {
+        source: "claude".to_owned(),
+        session_id: Some("session-a".to_owned()),
+        session_file: None,
+    };
+    let updated = original
+        .with_terminal_agent(terminal_id(TERMINAL_A), Some(agent.clone()))
+        .unwrap();
+    assert_eq!(
+        updated.terminal(terminal_id(TERMINAL_A)).unwrap().agent(),
+        Some(&agent)
+    );
+    assert_eq!(
+        original.terminal(terminal_id(TERMINAL_A)).unwrap().agent(),
+        None
+    );
+    assert_eq!(
+        original.with_terminal_agent(terminal_id(TERMINAL_B), Some(agent)),
+        Err(ProjectSnapshotError::MissingTerminal(terminal_id(TERMINAL_B)).into())
     );
 }
 

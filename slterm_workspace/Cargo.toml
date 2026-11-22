@@ -15,6 +15,7 @@ path = "src/lib.rs"
 slterm_path = { path = "../slterm_path" }
 slterm_document = { path = "../slterm_document" }
 slterm_split = { package = "slterm-split", path = "../slterm_split" }
+slterm_agents = { path = "../slterm_agents" }
 uuid = { version = "=1.28.0", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }

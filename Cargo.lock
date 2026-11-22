@@ -6447,9 +6447,9 @@ version = "0.0.0"
 name = "slterm_agents"
 version = "0.0.0"
 dependencies = [
+ "serde",
  "slterm-settings",
  "slterm_path",
- "slterm_workspace",
 ]
 
 [[package]]
@@ -6570,6 +6570,7 @@ dependencies = [
  "serde",
  "serde_json",
  "slterm-split",
+ "slterm_agents",
  "slterm_document",
  "slterm_path",
  "uuid",

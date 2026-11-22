@@ -18,7 +18,6 @@ pub(crate) mod atomic_file;
 // 设置写唯一包装(user 层 settings.json + app 设置)+ 哈希对账事件。
 pub(crate) mod audit;
 // 单 pane 宿主:事件泵派发与 AgentActivity 归属。
-#[allow(dead_code)] // 生产消费归 Agent 与 Hooks 阶段。
 pub(crate) mod agent_host;
 // 后台任务注册表:元数据单点、订阅生命周期、重入闸门与
 // 失败策略;1 Hz 看门狗/托盘快照与更新检查/预取收编于此。

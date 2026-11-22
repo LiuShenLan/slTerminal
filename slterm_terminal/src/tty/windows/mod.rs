@@ -32,6 +32,12 @@ pub use spawn::{ConptyInputModes, MAX_PTY_SESSIONS, compute_conpty_flags};
 pub const PTY_CHILD_EVENT_TOKEN: usize = 1;
 pub const PTY_READ_WRITE_TOKEN: usize = 2;
 
+/// CreateProcessW 的 ERROR_DIRECTORY：只允许恢复链据此回退失效工作目录。
+pub fn is_invalid_working_directory_error(error: &io::Error) -> bool {
+    const ERROR_DIRECTORY: i32 = 267;
+    error.raw_os_error() == Some(ERROR_DIRECTORY)
+}
+
 type ReadPipe = UnblockedReader<AnonRead>;
 type WritePipe = UnblockedWriter<AnonWrite>;
 
@@ -298,7 +304,9 @@ pub fn win32_string<S: AsRef<OsStr> + ?Sized>(value: &S) -> Vec<u16> {
 
 #[cfg(test)]
 mod test {
-    use crate::tty::windows::{cmdline, push_escaped_arg};
+    use std::io;
+
+    use crate::tty::windows::{cmdline, is_invalid_working_directory_error, push_escaped_arg};
     use crate::tty::{Options, Shell};
 
     #[test]
@@ -334,6 +342,21 @@ mod test {
             push_escaped_arg(&mut escaped_arg, input);
             assert_eq!(escaped_arg, expected, "Failed for input: {}", input);
         }
+    }
+
+    #[test]
+    fn invalid_working_directory_error_is_an_exact_spawn_signal() {
+        assert!(is_invalid_working_directory_error(
+            &io::Error::from_raw_os_error(267)
+        ));
+        for code in [2, 3, 5] {
+            assert!(!is_invalid_working_directory_error(
+                &io::Error::from_raw_os_error(code)
+            ));
+        }
+        assert!(!is_invalid_working_directory_error(&io::Error::other(
+            "not an OS directory error"
+        )));
     }
 
     #[test]

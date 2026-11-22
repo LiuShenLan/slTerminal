@@ -35,7 +35,7 @@ dependencies = ["slterm_path"]
 
 [crates.slterm_workspace]
 layer = "core"
-dependencies = ["slterm_path", "slterm_document", "slterm_split"]
+dependencies = ["slterm_path", "slterm_document", "slterm_split", "slterm_agents"]
 
 [crates.slterm_sidebar]
 layer = "core"
@@ -43,7 +43,7 @@ dependencies = ["slterm_workspace", "slterm_agents", "slterm_settings"]
 
 [crates.slterm_agents]
 layer = "core"
-dependencies = ["slterm_path", "slterm_settings", "slterm_workspace"]
+dependencies = ["slterm_path", "slterm_settings"]
 
 [crates.slterm_hooks]
 layer = "core"
