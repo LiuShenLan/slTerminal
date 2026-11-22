@@ -17,7 +17,8 @@ use gpui::{
     InspectorElementId, LayoutId, Pixels, Rgba, SharedString, Style, TextRun, UnderlineStyle,
     Window, fill, point, px, relative, size,
 };
-use slterm_terminal::render::{TerminalFrame, boxdraw};
+use slterm_terminal::render::{CellRun, TerminalFrame, boxdraw};
+use slterm_terminal::term::search::Match;
 use vte::ansi::CursorShape;
 
 use super::cursor_painter::{CursorPaint, paint_box_glyph};
@@ -239,6 +240,35 @@ impl Element for TerminalElement {
                 ),
                 color,
             ));
+        }
+        let (search_matches, search_selected) = self
+            .view
+            .read(cx)
+            .terminal_search
+            .as_ref()
+            .map(|search| (search.matches.clone(), search.selected))
+            .unwrap_or_default();
+        for (index, matched) in search_matches.iter().enumerate() {
+            let color = if search_selected == Some(index) {
+                theme.selection
+            } else {
+                theme.dim_foreground.opacity(0.35)
+            };
+            for run in terminal_search_runs(
+                std::slice::from_ref(matched),
+                snap.display_offset,
+                layout.cols,
+                layout.rows,
+            ) {
+                window.paint_quad(fill(
+                    cell_rect(
+                        run.row as usize,
+                        run.start as usize,
+                        (run.end - run.start) as usize,
+                    ),
+                    color,
+                ));
+            }
         }
         let mut painted_selection: Vec<(u16, usize, usize)> = Vec::new();
         for run in &snap.selection_runs {
@@ -500,6 +530,41 @@ fn single_line(text: &str) -> String {
 }
 
 /// 设备像素吸附:几何由渲染合同裁定时,绘制原点对齐物理像素边界。
+fn terminal_search_runs(
+    matches: &[Match],
+    display_offset: usize,
+    cols: usize,
+    rows: usize,
+) -> Vec<CellRun> {
+    let mut runs = Vec::new();
+    for matched in matches {
+        for absolute_line in matched.start().line.0..=matched.end().line.0 {
+            let row = absolute_line + display_offset as i32;
+            if row < 0 || row >= rows as i32 {
+                continue;
+            }
+            let start = if absolute_line == matched.start().line.0 {
+                matched.start().column.0
+            } else {
+                0
+            };
+            let end = if absolute_line == matched.end().line.0 {
+                (matched.end().column.0 + 1).min(cols)
+            } else {
+                cols
+            };
+            if end > start {
+                runs.push(CellRun {
+                    row: row as u16,
+                    start: start as u16,
+                    end: end as u16,
+                });
+            }
+        }
+    }
+    runs
+}
+
 fn snap_to_device(value: Pixels, scale: f32) -> Pixels {
     let scale = scale.max(0.5);
     px((value.as_f32() * scale).round() / scale)
@@ -679,6 +744,31 @@ mod ghost_tests {
                 col: 8,
                 chars: 0..2,
             }]
+        );
+    }
+}
+
+#[cfg(test)]
+mod search_highlight_tests {
+    use super::*;
+    use slterm_terminal::index::{Column, Line, Point as TermPoint};
+
+    #[test]
+    fn search_highlights_map_absolute_lines_to_the_visible_viewport() {
+        let matches = vec![
+            TermPoint::new(Line(-2), Column(2))..=TermPoint::new(Line(-2), Column(4)),
+            TermPoint::new(Line(-1), Column(0))..=TermPoint::new(Line(0), Column(3)),
+        ];
+        let runs = terminal_search_runs(&matches, 2, 8, 3);
+        assert_eq!(runs.len(), 3);
+        assert_eq!((runs[0].row, runs[0].start, runs[0].end), (0, 2, 5));
+        assert_eq!((runs[1].row, runs[1].start, runs[1].end), (1, 0, 8));
+        assert_eq!((runs[2].row, runs[2].start, runs[2].end), (2, 0, 4));
+        let outside = terminal_search_runs(&matches, 0, 8, 3);
+        assert_eq!(outside.len(), 1);
+        assert_eq!(
+            (outside[0].row, outside[0].start, outside[0].end),
+            (0, 0, 4)
         );
     }
 }

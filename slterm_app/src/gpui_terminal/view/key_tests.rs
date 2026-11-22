@@ -486,6 +486,151 @@ fn ime_bounds_follow_the_cursor_cell(cx: &mut TestAppContext) {
     assert_eq!(reported, Some(ime_bounds));
 }
 
+/// 回滚搜索经真实按键与 worker 命令运行；任何阶段都不得写 PTY。
+#[gpui::test]
+fn terminal_search_is_read_only(cx: &mut TestAppContext) {
+    let (terminal, mut window, rx, _registry) = open(cx);
+    terminal.update(&mut window, |view, _| {
+        for index in 0..30 {
+            let text = if index % 10 == 0 {
+                format!("Needle row {index}\r\n")
+            } else {
+                format!("plain row {index}\r\n")
+            };
+            feed(view, text.as_bytes());
+        }
+    });
+    let _ = pty_bytes(&rx);
+    let modifiers = Modifiers {
+        control: true,
+        shift: true,
+        ..Default::default()
+    };
+    press(&mut window, key("f", modifiers));
+    assert!(terminal.read_with(&window, |view, _| view.terminal_search.is_some()));
+
+    terminal.update_in(&mut window, |view, window, cx| {
+        gpui::EntityInputHandler::replace_text_in_range(view, None, "needle", window, cx);
+    });
+    terminal.update_in(&mut window, |view, _, _| view.pump_test_worker(&rx));
+    window.run_until_parked();
+    let (count, selected) = terminal.read_with(&window, |view, _| {
+        let search = view.terminal_search.as_ref().unwrap();
+        (search.matches.len(), search.selected)
+    });
+    assert_eq!(count, 3);
+    assert_eq!(selected, Some(0));
+    assert!(pty_bytes(&rx).is_empty(), "打开与输入不得写 PTY");
+
+    press(&mut window, key("enter", Modifiers::default()));
+    assert_eq!(
+        terminal.read_with(&window, |view, _| view
+            .terminal_search
+            .as_ref()
+            .unwrap()
+            .selected),
+        Some(1)
+    );
+    press(
+        &mut window,
+        key(
+            "enter",
+            Modifiers {
+                shift: true,
+                ..Default::default()
+            },
+        ),
+    );
+    assert_eq!(
+        terminal.read_with(&window, |view, _| view
+            .terminal_search
+            .as_ref()
+            .unwrap()
+            .selected),
+        Some(0)
+    );
+    assert!(pty_bytes(&rx).is_empty(), "前后导航不得写 PTY");
+
+    terminal.update(&mut window, |view, _| feed(view, b"Needle new output\r\n"));
+    assert!(
+        terminal.read_with(&window, |view, _| {
+            view.terminal_search.as_ref().unwrap().matches.is_empty()
+        }),
+        "新输出到达时旧位置必须立即失效"
+    );
+    terminal.update_in(&mut window, |view, _, cx| view.refresh_terminal_search(cx));
+    terminal.update_in(&mut window, |view, _, _| view.pump_test_worker(&rx));
+    window.run_until_parked();
+    assert_eq!(
+        terminal.read_with(&window, |view, _| {
+            view.terminal_search.as_ref().unwrap().matches.len()
+        }),
+        4
+    );
+    assert!(pty_bytes(&rx).is_empty());
+
+    press(&mut window, key("escape", Modifiers::default()));
+    assert!(terminal.read_with(&window, |view, _| view.terminal_search.is_none()));
+    press(&mut window, key("f", modifiers));
+    assert!(
+        terminal.read_with(&window, |view, _| {
+            let search = view.terminal_search.as_ref().unwrap();
+            search.query.is_empty() && search.matches.is_empty()
+        }),
+        "关闭重开不得恢复搜索词或位置"
+    );
+}
+
+/// 集成面：当前匹配滚入视口；切备用屏后不得继续搜索主屏回滚。
+#[gpui::test]
+fn integration_terminal_search(cx: &mut TestAppContext) {
+    let (terminal, mut window, rx, _registry) = open(cx);
+    terminal.update(&mut window, |view, _| {
+        feed(view, b"Needle oldest\r\n");
+        for index in 0..40 {
+            feed(view, format!("plain {index}\r\n").as_bytes());
+        }
+    });
+    press(
+        &mut window,
+        key(
+            "f",
+            Modifiers {
+                control: true,
+                shift: true,
+                ..Default::default()
+            },
+        ),
+    );
+    terminal.update_in(&mut window, |view, window, cx| {
+        gpui::EntityInputHandler::replace_text_in_range(view, None, "needle", window, cx);
+    });
+    terminal.update_in(&mut window, |view, _, _| view.pump_test_worker(&rx));
+    window.run_until_parked();
+    terminal.update_in(&mut window, |view, _, _| view.pump_test_worker(&rx));
+    let visible = terminal.read_with(&window, |view, _| {
+        let search = view.terminal_search.as_ref().unwrap();
+        let line = search.matches[search.selected.unwrap()].start().line.0;
+        let top = -(view.frame.as_ref().unwrap().render().display_offset as i32);
+        let bottom = top + view.frame.as_ref().unwrap().render().rows as i32 - 1;
+        (top..=bottom).contains(&line)
+    });
+    assert!(visible, "当前匹配必须滚入可见区域");
+    assert!(pty_bytes(&rx).is_empty());
+
+    terminal.update(&mut window, |view, _| {
+        feed(view, b"\x1b[?1049hAlt Needle\r\n");
+    });
+    terminal.update_in(&mut window, |view, _, cx| view.refresh_terminal_search(cx));
+    terminal.update_in(&mut window, |view, _, _| view.pump_test_worker(&rx));
+    window.run_until_parked();
+    let count = terminal.read_with(&window, |view, _| {
+        view.terminal_search.as_ref().unwrap().matches.len()
+    });
+    assert_eq!(count, 1, "备用屏只搜索当前可提供内容");
+    assert!(pty_bytes(&rx).is_empty());
+}
+
 /// OSC 52 只写不读；聚焦、活跃项目、显式非聚焦授权与单条上限共同门控。
 #[gpui::test]
 fn terminal_osc52_authorization(cx: &mut TestAppContext) {

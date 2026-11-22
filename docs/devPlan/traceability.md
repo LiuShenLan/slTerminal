@@ -84,7 +84,7 @@
 | Runtime 凭据 | [Runtime](design/runtime.md)、[设置与恢复](design/settings-recovery.md) | `integration_runtime_credential_boundaries` | 待实现 |
 | 补全可信边界 | [终端](design/terminal.md) | `integration_completion_trust_boundary` | 已自动化 |
 | 本地学习数据 | [终端](design/terminal.md)、[持久化](design/persistence.md) | `integration_local_learning_data` | 已自动化 |
-| 终端搜索 | [终端](design/terminal.md) | `integration_terminal_search` | 待实现 |
+| 终端搜索 | [终端](design/terminal.md) | `integration_terminal_search` | 已自动化 |
 | Commit 回滚 | [文件与 Git](design/files-git.md) | `integration_commit_rollback` | 待实现 |
 | Git 与 Document | [文件与 Git](design/files-git.md)、[Document](design/document.md) | `integration_git_document` | 待实现 |
 | 历史删除撤销 | [Agent](design/agents.md)、[生命周期](design/lifecycle.md) | `integration_history_delete_undo` | 待实现 |
@@ -260,7 +260,7 @@
 | 不可信镜像不补全不采集且接受候选不自动执行 | `terminal_trusted_line_completion_gate` | 已自动化 |
 | cwd 变化丢弃旧补全且单来源失败不阻塞其他来源 | `completion_generation_and_source_failure` | 已自动化 |
 | 清空学习同时取消待写并清除内存 | `learning_clear_cancels_pending_writes` | 已自动化 |
-| 回滚搜索只读且不向 PTY 写搜索字节 | `terminal_search_is_read_only` | 待实现 |
+| 回滚搜索只读且不向 PTY 写搜索字节 | `terminal_search_is_read_only` | 已自动化 |
 | 非聚焦或隐藏项目 OSC 52 未授权时不改剪贴板 | `terminal_osc52_authorization` | 已自动化 |
 
 ### 导航树

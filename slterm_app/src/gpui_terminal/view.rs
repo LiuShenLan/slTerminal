@@ -5,6 +5,7 @@ mod completion;
 mod cwd_report;
 pub(super) mod layout;
 pub(super) mod pointer;
+pub(super) mod search;
 pub(super) mod startup;
 pub(super) mod typography;
 
@@ -228,6 +229,9 @@ pub struct TerminalView {
     pub(super) copy_on_select: bool,
     /// 危险粘贴确认的在途任务；重复快捷键不得叠开多个确认框。
     pending_paste_task: Option<gpui::Task<()>>,
+    /// 当前终端的瞬态普通文本搜索；关闭即销毁查询、位置与任务。
+    pub(crate) terminal_search: Option<search::TerminalSearchState>,
+    terminal_search_task: Option<gpui::Task<()>>,
     /// §5.2 复制反馈时限状态机(时限实现单点)。
     pub(super) copy_feedback: CopyFeedback,
     /// 鼠标模式下最后上报的单元格:move 事件按「进入新单元格」去重。
@@ -386,6 +390,9 @@ impl TerminalView {
             TermEvent::Frame(frame) => {
                 let before = self.shell_line.completion_line().map(str::to_owned);
                 self.adopt_frame(frame);
+                if self.terminal_search.is_some() {
+                    self.refresh_terminal_search(cx);
+                }
                 if self.output_visible {
                     cx.notify();
                 }
@@ -594,6 +601,10 @@ impl TerminalView {
             binding.feed_test_bytes(bytes).unwrap();
         }
         self.refresh_test_frame();
+        if let Some(search) = &mut self.terminal_search {
+            search.invalidate();
+        }
+        self.terminal_search_task = None;
     }
 
     #[cfg(all(test, feature = "gpui-test-support"))]
@@ -880,6 +891,15 @@ impl TerminalView {
         let ks = &event.keystroke;
         let mods = &ks.modifiers;
 
+        if mods.control && mods.shift && ks.key == "f" {
+            self.open_terminal_search(cx);
+            cx.stop_propagation();
+            return;
+        }
+        if self.terminal_search.is_some() && self.handle_terminal_search_key(event, cx) {
+            return;
+        }
+
         // 终端惯例快捷键优先于编码器。
         if mods.shift && !mods.control && !mods.alt && ks.key == "insert" {
             self.paste(window, cx);
@@ -905,8 +925,9 @@ impl TerminalView {
                 // 「快捷键没反应」外加一串 CSI 序列被打进 PTY——下面的回滚翻页
                 // 分支只吃**不带 ctrl** 的 shift+pageup,所以 ctrl+shift 这一组
                 // 必须在这里放行。
-                "t" | "w" | "b" | "p" | "f" | "d" | "s" | "g" | "o" | "enter" | "pageup"
-                | "pagedown" => return,
+                "t" | "w" | "b" | "p" | "d" | "s" | "g" | "o" | "enter" | "pageup" | "pagedown" => {
+                    return;
+                }
                 _ => {}
             }
         }
@@ -1091,6 +1112,12 @@ impl gpui::EntityInputHandler for TerminalView {
         _window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
+        if self.terminal_search.is_some() {
+            self.marked_text = None;
+            self.terminal_search_input(text, cx);
+            cx.notify();
+            return;
+        }
         let had_marked_text = self.marked_text.take().is_some();
         if !text.is_empty() && self.exited.is_none() {
             self.note_text_input(text, cx);
@@ -1184,6 +1211,31 @@ impl Render for TerminalView {
             );
         } else {
             root = root.child(TerminalElement::new(cx.entity()));
+            if let Some(search) = &self.terminal_search {
+                let current = search.selected.map_or(0, |index| index + 1);
+                root = root.child(
+                    div()
+                        .id("slterm-terminal-search")
+                        .debug_selector(|| "slterm-terminal-search".to_owned())
+                        .absolute()
+                        .top(px(8.0))
+                        .right(px(8.0))
+                        .px_2()
+                        .py_1()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(self.palette.dim_foreground.opacity(0.6))
+                        .bg(self.palette.background.opacity(0.96))
+                        .text_sm()
+                        .text_color(self.palette.foreground)
+                        .child(format!(
+                            "搜索：{}  {}/{}",
+                            search.query,
+                            current,
+                            search.matches.len()
+                        )),
+                );
+            }
             // 底部浮层统一收进 bottom 锚定的 flex column:自上而下为
             // 补全弹窗、AI 建议条、退出横幅。列式布局保证两者并存时永不
             // 重叠——AI 条换行变高时,弹窗整体上移。

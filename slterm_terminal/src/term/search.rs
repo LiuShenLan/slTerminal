@@ -29,15 +29,38 @@ pub struct RegexSearch {
     right_fdfa: LazyDfa,
 }
 
+fn escape_literal(search: &str) -> String {
+    let mut escaped = String::with_capacity(search.len());
+    for character in search.chars() {
+        if matches!(
+            character,
+            '\\' | '.' | '^' | '$' | '|' | '?' | '*' | '+' | '(' | ')' | '[' | ']' | '{' | '}'
+        ) {
+            escaped.push('\\');
+        }
+        escaped.push(character);
+    }
+    escaped
+}
+
 impl RegexSearch {
-    /// Build the forward and backward search DFAs.
+    /// Build the forward and backward search DFAs with legacy smart-case semantics.
     pub fn new(search: &str) -> Result<RegexSearch, Box<BuildError>> {
+        let case_insensitive = !search.chars().any(|c| c.is_uppercase());
+        Self::build(search, case_insensitive)
+    }
+
+    /// 产品普通文本搜索：正则元字符只作字面量，大小写始终忽略。
+    pub fn new_literal(search: &str) -> Result<RegexSearch, Box<BuildError>> {
+        Self::build(&escape_literal(search), true)
+    }
+
+    fn build(search: &str, case_insensitive: bool) -> Result<RegexSearch, Box<BuildError>> {
         // Setup configs for both DFA directions.
         //
         // Bounds are based on Regex's meta engine:
         // https://github.com/rust-lang/regex/blob/061ee815ef2c44101dba7b0b124600fcb03c1912/regex-automata/src/meta/wrappers.rs#L581-L599
-        let has_uppercase = search.chars().any(|c| c.is_uppercase());
-        let syntax_config = SyntaxConfig::new().case_insensitive(!has_uppercase);
+        let syntax_config = SyntaxConfig::new().case_insensitive(case_insensitive);
         let config = Config::new()
             .minimum_cache_clear_count(Some(3))
             .minimum_bytes_per_state(Some(10));
@@ -154,6 +177,19 @@ impl<T> Term<T> {
             Direction::Right => self.next_match_right(regex, origin, side, max_lines),
             Direction::Left => self.next_match_left(regex, origin, side, max_lines),
         }
+    }
+
+    /// 只读列出当前画面与回滚中的全部普通文本匹配。
+    pub fn search_literal(&self, query: &str) -> Vec<Match> {
+        if query.is_empty() {
+            return Vec::new();
+        }
+        let Ok(mut regex) = RegexSearch::new_literal(query) else {
+            return Vec::new();
+        };
+        let start = Point::new(self.topmost_line(), Column(0));
+        let end = Point::new(self.bottommost_line(), self.last_column());
+        RegexIter::new(start, end, Direction::Right, self, &mut regex).collect()
     }
 
     /// Find the next match to the right of the origin.
@@ -739,6 +775,24 @@ mod tests {
     use crate::index::{Column, Line};
     use crate::term::Config;
     use crate::term::test::{TermSize, mock_term};
+
+    #[test]
+    fn literal_search_is_case_insensitive_without_regex_semantics() {
+        #[rustfmt::skip]
+        let term = mock_term("\
+            Alpha.*\r\n\
+            alpha-x\r\n\
+            ALPHA.*\
+        ");
+        let matches = term.search_literal("alpha.*");
+        assert_eq!(matches.len(), 2);
+        assert_eq!(*matches[0].start(), Point::new(Line(0), Column(0)));
+        assert_eq!(*matches[1].start(), Point::new(Line(2), Column(0)));
+        assert!(
+            term.search_literal("alpha-z").is_empty(),
+            "普通文本不匹配其他内容"
+        );
+    }
 
     #[test]
     fn regex_right() {

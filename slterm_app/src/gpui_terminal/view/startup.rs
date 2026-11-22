@@ -408,6 +408,8 @@ impl TerminalView {
             selection_scroll_active: false,
             copy_on_select,
             pending_paste_task: None,
+            terminal_search: None,
+            terminal_search_task: None,
             copy_feedback: CopyFeedback::new(),
             last_report_point: None,
             cursor_visible: true,
@@ -459,6 +461,9 @@ impl TerminalView {
                 .and_then(crate::completion::PaneExecContext::shell_program),
         );
         self.suggestion_task = None;
+        self.terminal_search = None;
+        self.terminal_search_task = None;
+        self.pending_paste_task = None;
         self.marked_text = None;
         self.running_program = None;
         self.error = None;

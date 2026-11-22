@@ -618,6 +618,12 @@ pub enum Msg {
     /// 只由 worker 修改选区。
     Select(crate::selection::SelectionCommand),
 
+    /// 只读普通文本搜索；worker 返回当前画面与回滚的匹配位置。
+    SearchLiteral {
+        query: String,
+        reply: mpsc::SyncSender<Vec<crate::term::search::Match>>,
+    },
+
     /// 配色变化也只进入所属 worker，随后发布新帧。
     SetColorScheme(bool),
 }
@@ -647,6 +653,10 @@ fn apply_display_command<T: EventListener>(terminal: &mut Term<T>, msg: &Msg) ->
         }
         Msg::Select(crate::selection::SelectionCommand::Clear) => terminal.selection = None,
         Msg::SetColorScheme(dark) => terminal.set_color_scheme(*dark),
+        Msg::SearchLiteral { query, reply } => {
+            let _ = reply.send(terminal.search_literal(query));
+            return false;
+        }
         Msg::Input(_) | Msg::Shutdown | Msg::Resize(_) | Msg::ResizeGrid(_) => return false,
     }
     true
@@ -744,6 +754,7 @@ where
                 Msg::Scroll(_)
                 | Msg::ScrollSelection { .. }
                 | Msg::Select(_)
+                | Msg::SearchLiteral { .. }
                 | Msg::SetColorScheme(_) => {
                     if apply_display_command(&mut self.terminal.lock(), &msg) {
                         state.display_dirty = true;
