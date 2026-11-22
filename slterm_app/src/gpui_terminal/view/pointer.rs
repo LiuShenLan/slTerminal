@@ -442,8 +442,9 @@ impl TerminalView {
             for _ in 0..lines.unsigned_abs() {
                 bytes.extend_from_slice(seq);
             }
-            use slterm_terminal::event::Notify as _;
-            session.notifier.notify(bytes);
+            if let Err(error) = session.notifier.notify(bytes) {
+                log::warn!("终端滚轮输入发送失败: {error}");
+            }
         } else {
             session.term.lock().scroll_display(Scroll::Delta(lines));
         }

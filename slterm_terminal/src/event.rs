@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::fmt::{self, Debug, Formatter};
 use std::process::ExitStatus;
 use std::sync::Arc;
@@ -143,14 +142,6 @@ impl Debug for Event {
             Event::PtyFailure(reason) => write!(f, "PtyFailure({reason})"),
         }
     }
-}
-
-/// Byte sequences are sent to a `Notify` in response to some events.
-pub trait Notify {
-    /// Notify that an escape sequence should be written to the PTY.
-    ///
-    /// TODO this needs to be able to error somehow.
-    fn notify<B: Into<Cow<'static, [u8]>>>(&self, _: B);
 }
 
 #[derive(Copy, Clone, Debug)]

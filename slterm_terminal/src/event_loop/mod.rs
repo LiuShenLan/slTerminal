@@ -7,7 +7,7 @@ use std::io::{self, ErrorKind, Read, Write};
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::sync::OnceLock;
-use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -22,6 +22,9 @@ use crate::sync::FairMutex;
 use crate::term::Term;
 use crate::{thread, tty};
 use vte::ansi;
+
+/// 每个 worker 的命令队列容量；发送方不得在前台阻塞等待空位。
+const COMMAND_CHANNEL_CAPACITY: usize = 64;
 
 /// Max bytes to read from the PTY before forced terminal synchronization.
 pub(crate) const READ_BUFFER_SIZE: usize = 64 * 1024;
@@ -609,7 +612,7 @@ pub struct EventLoop<T: tty::EventedPty, U: EventListener> {
     poll: Arc<Poller>,
     pty: T,
     rx: PeekableReceiver<Msg>,
-    tx: Sender<Msg>,
+    tx: SyncSender<Msg>,
     terminal: Arc<FairMutex<Term<U>>>,
     event_proxy: U,
     drain_on_exit: bool,
@@ -627,7 +630,7 @@ where
         pty: T,
         drain_on_exit: bool,
     ) -> io::Result<EventLoop<T, U>> {
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = mpsc::sync_channel(COMMAND_CHANNEL_CAPACITY);
         let poll = Poller::new()?.into();
         Ok(EventLoop {
             poll,
@@ -1145,32 +1148,28 @@ struct Writing {
 
 pub struct Notifier(pub EventLoopSender);
 
-impl event::Notify for Notifier {
-    fn notify<B>(&self, bytes: B)
+impl Notifier {
+    /// 非阻塞发送 PTY 输入；空输入不产生命令。
+    pub fn notify<B>(&self, bytes: B) -> Result<(), EventLoopSendError>
     where
         B: Into<Cow<'static, [u8]>>,
     {
         let bytes = bytes.into();
-        // Terminal hangs if we send 0 bytes through.
         if bytes.is_empty() {
-            return;
+            return Ok(());
         }
-
-        let _ = self.0.send(Msg::Input(bytes));
+        self.0.try_send(Msg::Input(bytes))
     }
-}
 
-impl event::OnResize for Notifier {
-    fn on_resize(&mut self, window_size: WindowSize) {
-        let _ = self.0.send(Msg::Resize(window_size));
+    /// 非阻塞提交完整 resize；调用方负责处理背压。
+    pub fn on_resize(&mut self, window_size: WindowSize) -> Result<(), EventLoopSendError> {
+        self.0.try_send(Msg::Resize(window_size))
     }
-}
 
-impl Notifier {
     /// Reflow the grid to `window_size` and leave the child on its old size.
     /// See [`Msg::ResizeGrid`] for why the two halves are split.
-    pub fn on_resize_grid(&mut self, window_size: WindowSize) {
-        let _ = self.0.send(Msg::ResizeGrid(window_size));
+    pub fn on_resize_grid(&mut self, window_size: WindowSize) -> Result<(), EventLoopSendError> {
+        self.0.try_send(Msg::ResizeGrid(window_size))
     }
 }
 
@@ -1179,15 +1178,19 @@ pub enum EventLoopSendError {
     /// Error polling the event loop.
     Io(io::Error),
 
-    /// Error sending a message to the event loop.
-    Send(mpsc::SendError<Msg>),
+    /// 非阻塞命令队列已满；调用方必须显式处理，不能假装已送达。
+    QueueFull,
+
+    /// worker 已断开，命令未送达。
+    Disconnected,
 }
 
 impl Display for EventLoopSendError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             EventLoopSendError::Io(err) => err.fmt(f),
-            EventLoopSendError::Send(err) => err.fmt(f),
+            EventLoopSendError::QueueFull => f.write_str("terminal command queue is full"),
+            EventLoopSendError::Disconnected => f.write_str("terminal worker is disconnected"),
         }
     }
 }
@@ -1196,21 +1199,21 @@ impl std::error::Error for EventLoopSendError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             EventLoopSendError::Io(err) => err.source(),
-            EventLoopSendError::Send(err) => err.source(),
+            EventLoopSendError::QueueFull | EventLoopSendError::Disconnected => None,
         }
     }
 }
 
 #[derive(Clone)]
 pub struct EventLoopSender {
-    sender: Sender<Msg>,
+    sender: SyncSender<Msg>,
     poller: Arc<Poller>,
 }
 
 impl EventLoopSender {
     /// 为非 PTY 传输创建消息通道，继续复用应用既有的输入、缩放和关闭协议。
     pub fn standalone() -> io::Result<(Self, Receiver<Msg>)> {
-        let (sender, receiver) = mpsc::channel();
+        let (sender, receiver) = mpsc::sync_channel(COMMAND_CHANNEL_CAPACITY);
         Ok((
             Self {
                 sender,
@@ -1220,8 +1223,20 @@ impl EventLoopSender {
         ))
     }
 
+    /// 阻塞发送只供后台关闭路径使用；前台命令必须走 `try_send`。
     pub fn send(&self, msg: Msg) -> Result<(), EventLoopSendError> {
-        self.sender.send(msg).map_err(EventLoopSendError::Send)?;
+        self.sender
+            .send(msg)
+            .map_err(|_| EventLoopSendError::Disconnected)?;
+        self.poller.notify().map_err(EventLoopSendError::Io)
+    }
+
+    /// 非阻塞发送命令；满载和断连都明确返回，不丢弃后伪报成功。
+    pub fn try_send(&self, msg: Msg) -> Result<(), EventLoopSendError> {
+        self.sender.try_send(msg).map_err(|error| match error {
+            TrySendError::Full(_) => EventLoopSendError::QueueFull,
+            TrySendError::Disconnected(_) => EventLoopSendError::Disconnected,
+        })?;
         self.poller.notify().map_err(EventLoopSendError::Io)
     }
 }

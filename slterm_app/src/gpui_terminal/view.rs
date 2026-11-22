@@ -21,7 +21,7 @@ use gpui::{
 use std::rc::Rc;
 use std::sync::Arc;
 
-use slterm_terminal::event::{Event as TermEvent, Notify as _, WindowSize};
+use slterm_terminal::event::{Event as TermEvent, WindowSize};
 use slterm_terminal::event_loop::Msg;
 use slterm_terminal::grid::Dimensions as _;
 use slterm_terminal::grid::Scroll;
@@ -508,8 +508,10 @@ impl TerminalView {
     }
 
     fn write_bytes(&self, bytes: Vec<u8>) {
-        if let Some(session) = &self.session {
-            session.notifier.notify(bytes);
+        if let Some(session) = &self.session
+            && let Err(error) = session.notifier.notify(bytes)
+        {
+            log::warn!("终端命令发送失败: {error}");
         }
     }
 
@@ -538,7 +540,9 @@ impl TerminalView {
                 term.scroll_display(Scroll::Bottom);
                 term.selection = None;
             }
-            session.notifier.notify(bytes);
+            if let Err(error) = session.notifier.notify(bytes) {
+                log::warn!("终端输入发送失败: {error}");
+            }
         }
         self.restart_cursor_blink(cx);
         cx.notify();

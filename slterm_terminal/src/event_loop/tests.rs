@@ -5,6 +5,53 @@ use crate::term::Config;
 use crate::term::test::TermSize;
 
 #[test]
+fn command_channel_is_bounded_and_preserves_fifo() {
+    let (sender, receiver) = EventLoopSender::standalone().expect("独立命令通道必须可创建");
+    for value in 0..64_u8 {
+        sender
+            .try_send(Msg::Input(std::borrow::Cow::Owned(vec![value])))
+            .expect("容量内的命令必须入队");
+    }
+
+    assert!(
+        sender
+            .try_send(Msg::Input(std::borrow::Cow::Owned(vec![64])))
+            .is_err(),
+        "第 65 条未消费命令必须报告队列已满"
+    );
+
+    for expected in 0..64_u8 {
+        let Msg::Input(actual) = receiver.recv().expect("已入队命令不得丢失") else {
+            panic!("测试只发送输入命令");
+        };
+        assert_eq!(actual.as_ref(), &[expected]);
+    }
+}
+
+#[test]
+fn notifier_reports_input_and_resize_backpressure() {
+    let (sender, _receiver) = EventLoopSender::standalone().expect("独立命令通道必须可创建");
+    let mut notifier = Notifier(sender);
+    for _ in 0..64 {
+        notifier.notify(vec![b'x']).expect("容量内输入必须入队");
+    }
+
+    assert!(matches!(
+        notifier.notify(vec![b'y']),
+        Err(EventLoopSendError::QueueFull)
+    ));
+    assert!(matches!(
+        notifier.on_resize(WindowSize {
+            num_lines: 24,
+            num_cols: 80,
+            cell_width: 8,
+            cell_height: 16,
+        }),
+        Err(EventLoopSendError::QueueFull)
+    ));
+}
+
+#[test]
 fn animation_snapshots_cannot_observe_a_partial_synchronized_update() {
     use crate::render::{RenderSnapshot, SnapshotConfig};
     let mut term = Term::new(Config::default(), &TermSize::new(20, 2), VoidListener);

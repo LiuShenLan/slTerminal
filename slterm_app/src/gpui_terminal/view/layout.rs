@@ -1,7 +1,5 @@
 //! 视口同步与 PTY resize 生命周期。
 
-use slterm_terminal::event::OnResize as _;
-
 use super::*;
 
 impl TerminalView {
@@ -140,7 +138,9 @@ impl TerminalView {
     fn resize_grid_only(&mut self, viewport: TerminalViewport) {
         let Some(session) = &self.session else { return };
         let mut notifier = slterm_terminal::event_loop::Notifier(session.notifier.0.clone());
-        notifier.on_resize_grid(viewport.window_size());
+        if let Err(error) = notifier.on_resize_grid(viewport.window_size()) {
+            log::warn!("终端网格 resize 发送失败: {error}");
+        }
     }
 
     /// 按 grid-before-PTY 序提交一个视口:`ResizePseudoConsole` 之后产出的
@@ -157,7 +157,10 @@ impl TerminalView {
 
         if let Some(session) = &self.session {
             let mut notifier = slterm_terminal::event_loop::Notifier(session.notifier.0.clone());
-            notifier.on_resize(next);
+            if let Err(error) = notifier.on_resize(next) {
+                log::warn!("终端 PTY resize 发送失败: {error}");
+                return;
+            }
         }
         self.window_size = next;
     }
