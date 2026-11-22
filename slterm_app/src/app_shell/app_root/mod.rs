@@ -160,6 +160,7 @@ struct TabListMenu {
 pub(crate) struct AppRootServices {
     pub(crate) persistence: AppRootPersistence,
     pub(crate) global_close: GlobalCloseClient,
+    pub(crate) learning: crate::learning::LearningService,
 }
 
 /// 单窗口运行根；`projects` 只是强实体引用表，不复制项目注册信息。
@@ -229,6 +230,7 @@ pub(crate) struct AppRoot {
     language_selector_menu: Option<language_selector::LanguageSelectorMenu>,
     settings_overlay: Option<settings_overlay::SettingsOverlayHost>,
     side_view_persistence: AppRootPersistence,
+    learning: crate::learning::LearningService,
     launcher: Box<dyn TerminalPanelLauncher>,
     project_paths: Arc<dyn ProjectPathResolver>,
     shell: CanonicalPath,
@@ -241,14 +243,16 @@ impl AppRoot {
         services: AppRootServices,
         cx: &mut Context<'_, Self>,
     ) -> Self {
-        Self::with_launcher(
+        let mut root = Self::with_launcher(
             panel_ids,
             shell,
             Box::new(commands::LocalTerminalLauncher),
             services.persistence,
             Some(services.global_close),
             cx,
-        )
+        );
+        root.learning = services.learning;
+        root
     }
 
     fn with_launcher(
@@ -405,6 +409,7 @@ impl AppRoot {
             language_selector_menu: None,
             settings_overlay: None,
             side_view_persistence: persistence,
+            learning: crate::learning::LearningService::memory_only(),
             launcher,
             project_paths: Arc::new(SystemProjectPathResolver),
             shell,

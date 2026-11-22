@@ -527,6 +527,17 @@ fn run_shell_once(initial_cwd: Option<PathBuf>) -> startup_diagnostics::ShellRun
         Some(workspace_writer_client),
         previous_run,
     );
+    // 学习库独立于工作区库；损坏或高版本只暂停持久学习，不覆盖原文件。
+    let (learning, learning_runtime) = match crate::learning::LearningService::start(app_paths) {
+        Ok(started) => {
+            let (service, runtime) = started;
+            (service, Some(runtime))
+        }
+        Err(error) => {
+            log::warn!("learning database unavailable; using memory only: {error}");
+            (crate::learning::LearningService::memory_only(), None)
+        }
+    };
     // 控制面与 writer 移交给 GPUI 外关闭所有者；窗口只持有有界请求 client。
     let local_control = start_local_control_service(Some(&workspace_writer), shell_tx.clone());
     let global_close =
@@ -573,6 +584,7 @@ fn run_shell_once(initial_cwd: Option<PathBuf>) -> startup_diagnostics::ShellRun
             app_root::AppRootServices {
                 persistence: side_view_persistence,
                 global_close: global_close_client,
+                learning: learning.clone(),
             },
             start_hidden,
             regular_start,
@@ -588,6 +600,12 @@ fn run_shell_once(initial_cwd: Option<PathBuf>) -> startup_diagnostics::ShellRun
             log::warn!("global workspace shutdown failed")
         }
         Err(_) => log::warn!("global close worker terminated abnormally"),
+    }
+    // 学习写线程由 GPUI 外启动作用域独占；窗口结束后仍显式排空并 join。
+    if let Some(runtime) = learning_runtime
+        && let Err(error) = runtime.shutdown()
+    {
+        log::warn!("learning writer shutdown failed: {error}");
     }
     // 托盘收尾:先删图标再退进程,否则任务栏残影要等
     // 用户悬停才消失;join 保证删图标先于进程退出。

@@ -1,22 +1,14 @@
-//! fish 式本地命令历史:jsonl 追加 + `BTreeMap` 前缀范围索引。
+//! fish 式本地命令历史:内存去重 + `BTreeMap` 前缀范围索引。
 //!
 //! 单进程本机形态下历史只有本地单池:远程作用域随定位
 //! 约束整砍,`HistoryScope` 仅保留 `Local`。池容器仍保留 `HashMap` 形态,
 //! 为未来若引入新的执行环境留出分池位;当前 `normalized()` 塌缩为单值。
 //!
-//! 数据流:提交命令(Enter)后 `record` 追加一行 `{ts,cwd,cmd}`;ghost 走
-//! `hint` 的 `BTreeMap` 前缀 range(开销随命中数而非历史总量增长),popup 走
-//! `search_with_cancel` 的 `CommandQuery` 词级评分。扫描期间不持有外部锁。
 
 use std::collections::{BTreeMap, HashMap};
-use std::io::Write;
-use std::path::{Path, PathBuf};
 
 /// 单池上限;超出后淘汰最旧条目。
 const HISTORY_MAX: usize = 5_000;
-
-/// 本地历史文件名(改名映射)。
-pub(crate) const HISTORY_FILE: &str = "history.jsonl";
 
 /// 历史作用域。远程变体已随源收敛整砍,仅剩本地单态。
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
@@ -29,13 +21,9 @@ impl HistoryScope {
     fn normalized(self) -> Self {
         Self::Local
     }
-
-    fn file_name(&self) -> &'static str {
-        HISTORY_FILE
-    }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct HistoryIndex {
     entries: Vec<String>,
     index: BTreeMap<String, usize>,
@@ -89,48 +77,24 @@ impl HistoryIndex {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct SltermHistory {
     /// 单池语义下只有 `Local` 一个键;保留分池容器以备未来执行环境扩展。
     pools: HashMap<HistoryScope, HistoryIndex>,
 }
 
 impl SltermHistory {
-    /// 只读本地 `history.jsonl`;文件缺失/损坏行静默跳过,历史不是启动硬依赖。
-    pub(crate) fn load() -> Self {
-        Self::load_from(&history_path())
-    }
-
-    fn load_from(path: &Path) -> Self {
-        let mut history = Self::default();
-        let Ok(data) = std::fs::read_to_string(path) else {
-            return history;
-        };
-        for line in data.lines() {
-            let Some((scope, cmd)) = parse_record(line) else {
-                continue;
-            };
-            history.pools.entry(scope).or_default().insert(cmd);
-        }
-        history
-    }
-
-    /// 提交一条命令:连续重复去重,jsonl 追加,内存索引前移。
-    pub(crate) fn record(&mut self, scope: &HistoryScope, cmd: &str, cwd: &str) {
+    /// 只更新内存索引；持久化由 LearningService 的独立写队列负责。
+    pub(crate) fn record_memory(&mut self, scope: &HistoryScope, cmd: &str) {
         let scope = scope.clone().normalized();
         let cmd = cmd.trim();
         if cmd.is_empty() {
             return;
         }
-        let pool = self.pools.entry(scope.clone()).or_default();
-        if pool.entries.last().map(String::as_str) == Some(cmd) {
-            return;
-        }
-        append(&scope, cmd, cwd);
-        pool.insert(cmd.to_owned());
+        self.pools.entry(scope).or_default().insert(cmd.to_owned());
     }
 
-    /// 只写内存池的测试入口:避免测试污染真实 `history.jsonl`。
+    /// 只写内存池的测试入口。
     #[cfg(test)]
     pub(crate) fn insert_for_test(&mut self, scope: &HistoryScope, cmd: &str) {
         self.pools
@@ -191,46 +155,6 @@ impl SltermHistory {
             .take(limit)
             .map(|(_, _, command)| command)
             .collect()
-    }
-}
-
-fn history_path() -> PathBuf {
-    crate::platform::dirs::local_dir().join(HISTORY_FILE)
-}
-
-fn append(scope: &HistoryScope, cmd: &str, cwd: &str) {
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or(0);
-    let record = serde_json::json!({ "ts": ts, "cwd": cwd, "cmd": cmd });
-    let path = history_path_for(scope);
-    if let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-    {
-        let _ = writeln!(file, "{record}");
-    }
-}
-
-fn history_path_for(scope: &HistoryScope) -> PathBuf {
-    crate::platform::dirs::local_dir().join(scope.file_name())
-}
-
-/// 单池记录校验:无 `scope` 或 `scope=local` 才属于本地池;远程残留记录拒绝。
-///
-/// 用路径而非内联条件,`load_from` 才能在没有数据目录的测试里复用同一校验。
-fn parse_record(line: &str) -> Option<(HistoryScope, String)> {
-    let value = serde_json::from_str::<serde_json::Value>(line).ok()?;
-    let cmd = value.get("cmd")?.as_str()?.trim();
-    if cmd.is_empty() {
-        return None;
-    }
-    match value.get("scope").and_then(serde_json::Value::as_str) {
-        None | Some("local") => Some((HistoryScope::Local, cmd.to_owned())),
-        // 远程记录不得在单池里复活;未知作用域同样拒绝。
-        Some(_) => None,
     }
 }
 
@@ -329,7 +253,7 @@ mod history_tests {
     #[test]
     fn duplicate_submission_is_skipped_and_pool_is_bounded() {
         let mut history = SltermHistory::default();
-        // `record` 会写数据目录;测试只关心内存池语义,先放一条再走重复分支。
+        // 直接驱动内存池，验证去重与容量，不触碰持久层。
         let pool = history.pools.entry(HistoryScope::Local).or_default();
         pool.insert("echo one".to_owned());
         pool.insert("echo one".to_owned());
@@ -339,31 +263,5 @@ mod history_tests {
         }
         assert_eq!(pool.entries.len(), HISTORY_MAX);
         assert_eq!(pool.entries.last().map(String::as_str), Some("echo 5009"));
-    }
-
-    #[test]
-    fn load_reads_local_records_and_rejects_remote_scope_residue() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join(HISTORY_FILE);
-        std::fs::write(
-            &path,
-            concat!(
-                r#"{"ts":1,"cwd":"D:/","cmd":"git status"}"#,
-                "\n",
-                r#"{"ts":2,"cwd":"D:/","cmd":"cargo test"}"#,
-                "\n",
-                r#"{"ts":3,"cwd":"/","cmd":"sudo apt update","scope":"wsl"}"#,
-                "\n",
-                r#"{"ts":4,"cwd":"/","cmd":"systemctl status","scope":"ssh"}"#,
-                "\n",
-                "not json\n"
-            ),
-        )
-        .unwrap();
-        let history = SltermHistory::load_from(&path);
-        let pool = history.pools.get(&HistoryScope::Local).unwrap();
-        assert_eq!(pool.entries, vec!["git status", "cargo test"]);
-        assert_eq!(history.hint(&HistoryScope::Local, "git "), Some("status"));
-        assert_eq!(history.hint(&HistoryScope::Local, "sudo "), None);
     }
 }

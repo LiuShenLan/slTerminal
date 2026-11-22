@@ -45,7 +45,15 @@ impl TerminalView {
         let line = self.shell_line.line();
         format!(
             "{}\0cursor={}\0syntax={:?}",
-            completion::cache_key(&self.cwd, &SuggestEnv::Local, line, style,),
+            completion::cache_key(
+                &self.cwd,
+                &SuggestEnv::Local,
+                line,
+                style,
+                self.completion_session
+                    .as_ref()
+                    .map_or(0, |session| session.learning_generation()),
+            ),
             line.len(),
             self.term_mode().contains(TermMode::ALT_SCREEN),
         )

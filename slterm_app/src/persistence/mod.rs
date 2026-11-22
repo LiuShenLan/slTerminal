@@ -5,6 +5,7 @@ pub(crate) mod database;
 pub(crate) mod document_snapshot;
 pub(crate) mod journal;
 pub(crate) mod learning;
+pub(crate) mod learning_writer;
 pub(crate) mod metadata;
 pub(crate) mod operation;
 pub(crate) mod project;

@@ -520,7 +520,9 @@ impl AppRoot {
             .launcher
             .restore(panel_id, record, &self.terminals, window, cx);
         terminal.update(cx, |terminal, _| {
-            terminal.attach_completion_session(Rc::new(crate::completion::Session::default()));
+            terminal.attach_completion_session(Rc::new(crate::completion::Session::new(
+                self.learning.clone(),
+            )));
         });
         let visible = self.snapshot.registry().active() == Some(project_id);
         let focus_registration = match self.focus_manager.register(
@@ -1056,7 +1058,9 @@ impl AppRoot {
             .launcher
             .launch(panel_id, &record, &self.terminals, window, cx)?;
         terminal.update(cx, |terminal, _| {
-            terminal.attach_completion_session(Rc::new(crate::completion::Session::default()));
+            terminal.attach_completion_session(Rc::new(crate::completion::Session::new(
+                self.learning.clone(),
+            )));
         });
         let focus_registration = match self.focus_manager.register(
             &terminal.read(cx).focus_handle,

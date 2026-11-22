@@ -4,11 +4,9 @@
 //! 只收当前输入快照与已确认执行环境,后台计算;补全不上按键热路径。
 //! 源收敛后只剩本机单态:远程连接池、WSL/SSH 作用域与文件整支不迁。
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
 
-use crate::directory_history::DirectoryHistory;
-use crate::history::{HistoryScope, SltermHistory};
 use crate::suggest::{self, Input, SuggestEnv, SuggestSources};
 use slterm_completions::command_context::ShellSyntax;
 use slterm_completions::semantic::{Context as SemanticContext, Source};
@@ -20,22 +18,6 @@ mod project_scripts;
 
 pub(crate) use metadata::PaneExecContext;
 pub(crate) use suggest::Candidates;
-
-/// 历史只加载一份,避免多个 pane 在退出时互相覆盖;扫描期间不持有历史锁。
-struct Shared {
-    history: Mutex<SltermHistory>,
-    directories: DirectoryHistory,
-    commands: Arc<Mutex<Vec<String>>>,
-}
-
-fn shared() -> &'static Shared {
-    static SHARED: OnceLock<Shared> = OnceLock::new();
-    SHARED.get_or_init(|| Shared {
-        history: Mutex::new(SltermHistory::load()),
-        directories: crate::directory_history::global(),
-        commands: crate::suggest::commands_handle(),
-    })
-}
 
 /// 协作式取消令牌:文件遍历、历史扫描与 Git 子进程共用同一形态。
 #[derive(Clone, Default)]
@@ -51,14 +33,51 @@ impl Cancellation {
     }
 }
 
-/// 来源缓存跟随 pane,具体来源及其适用条件不再由界面决定。
-#[derive(Debug, Default)]
+/// 来源缓存跟随 pane；学习数据由同一服务的不可变快照提供。
 pub(crate) struct Session {
     git: Arc<crate::git_completion::Cache>,
     scripts: Arc<project_scripts::Cache>,
+    learning: crate::learning::LearningService,
+}
+
+impl Default for Session {
+    fn default() -> Self {
+        Self::new(crate::learning::LearningService::memory_only())
+    }
 }
 
 impl Session {
+    pub(crate) fn new(learning: crate::learning::LearningService) -> Self {
+        Self {
+            git: Arc::default(),
+            scripts: Arc::default(),
+            learning,
+        }
+    }
+
+    pub(crate) fn learning_generation(&self) -> i64 {
+        self.learning.snapshot().generation
+    }
+
+    pub(crate) fn record_command(&self, shell_program: &str, line: &str, cwd: &str) {
+        if let Err(error) = self.learning.record_command(shell_program, line, Some(cwd)) {
+            log::warn!("learning command enqueue failed: {error}");
+        }
+    }
+
+    pub(crate) fn record_directory(&self, cwd: &str) {
+        if let Err(error) = self.learning.record_directory(cwd) {
+            log::warn!("learning directory enqueue failed: {error}");
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn insert_history_for_test(&self, command: &str) {
+        self.learning
+            .record_command("pwsh.exe", command, None)
+            .unwrap();
+    }
+
     /// 提交命令事件后调用:旧后台请求不得把旧仓库/清单快照回填缓存。
     pub(crate) fn invalidate(&self) {
         self.git.invalidate();
@@ -123,6 +142,7 @@ impl Session {
             semantic,
             scripts,
             syntax,
+            learning: self.learning.snapshot(),
         }
     }
 }
@@ -138,6 +158,7 @@ pub(crate) struct Request {
     semantic: Option<SemanticContext>,
     scripts: Option<(Arc<project_scripts::Cache>, metadata::Execution)>,
     syntax: ShellSyntax,
+    learning: crate::learning::LearningDataSnapshot,
 }
 
 impl Request {
@@ -198,12 +219,12 @@ impl Request {
             // 语义上下文存在但来源不可用(如 Git 缓存缺失)返回空候选,
             // 绝不回退本会话历史 —— 历史候选不会凭空复活。
             if self.semantic.is_none() {
-                let sources = shared();
+                let commands = crate::suggest::commands_handle();
                 return suggest::calculate(
                     &SuggestSources {
-                        history: &sources.history,
-                        directories: &sources.directories,
-                        commands: &sources.commands,
+                        history: &self.learning.commands,
+                        directories: &self.learning.directories,
+                        commands: &commands,
                         enabled: true,
                         style: self.style,
                     },
@@ -233,7 +254,7 @@ impl Request {
                     line: &self.line,
                 },
                 self.syntax,
-                &shared().directories,
+                &self.learning.directories,
                 self.style,
                 Some(context),
                 &|| cancellation.is_cancelled(),
@@ -241,17 +262,13 @@ impl Request {
         }
         // 历史只给仍然有效的语义候选提权,不能复活已删除的分支/脚本。
         if !candidates.is_empty() {
-            let recent = {
-                let history = shared()
-                    .history
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                history
-                    .hint_with_cancel(&self.env.history_scope(), &self.line, &|| {
-                        cancellation.is_cancelled()
-                    })
-                    .map(|suffix| format!("{}{suffix}", self.line))
-            };
+            let recent = self
+                .learning
+                .commands
+                .hint_with_cancel(&self.env.history_scope(), &self.line, &|| {
+                    cancellation.is_cancelled()
+                })
+                .map(|suffix| format!("{}{suffix}", self.line));
             if let Some(recent) = recent
                 && let Some(index) = candidates.iter().position(|candidate| {
                     let candidate = &candidate.suggestion;
@@ -270,41 +287,20 @@ impl Request {
     }
 }
 
-/// 缓存键 = cwd + env + line + style + 命令代际。
+/// 缓存键 = cwd + env + line + style + 命令与学习代际。
 pub(crate) fn cache_key(
     cwd: &str,
     env: &SuggestEnv,
     line: &str,
     style: crate::suggest::CompletionStyle,
+    learning_generation: i64,
 ) -> String {
     let commands = crate::suggest::commands_handle();
     let generation = commands.lock().map(|commands| commands.len()).unwrap_or(0);
-    suggest::suggestion_key(&Input { cwd, env, line }, style, generation)
-}
-
-/// Enter 提交后写入历史(连续重复去重由历史池负责)。
-pub(crate) fn record_command(scope: &HistoryScope, line: &str, cwd: &str) {
-    shared()
-        .history
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .record(scope, line, cwd);
-}
-
-/// 权威 cwd 上报/启动成功后记录目录 frecency。
-pub(crate) fn record_directory(cwd: &str) {
-    if !cwd.is_empty() {
-        shared().directories.record(cwd);
-    }
-}
-
-#[cfg(test)]
-pub(crate) fn insert_history_for_test(cmd: &str) {
-    shared()
-        .history
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .insert_for_test(&HistoryScope::Local, cmd);
+    format!(
+        "{}\0learning={learning_generation}",
+        suggest::suggestion_key(&Input { cwd, env, line }, style, generation)
+    )
 }
 
 #[cfg(test)]
@@ -655,8 +651,8 @@ mod completion_tests {
             r#"{"scripts":{"slterm-rank-a":"echo a","slterm-rank-z":"echo z"}}"#,
         )
         .unwrap();
-        insert_history_for_test("npm run slterm-rank-z");
         let session = Session::default();
+        session.insert_history_for_test("npm run slterm-rank-z");
         let query = || {
             session
                 .request_at(
@@ -682,24 +678,24 @@ mod completion_tests {
     /// 绝不回退本会话历史 —— 历史候选不会凭空复活。
     #[test]
     fn missing_git_cache_for_semantic_source_never_falls_back_to_history() {
-        insert_history_for_test("git switch slterm-history-only");
+        let session = Session::default();
+        session.insert_history_for_test("git switch slterm-history-only");
         // 前缀非空:CommandContext 把最后一个词当编辑目标,才能命中 Branches。
         let line = "git switch s";
         let semantic = SemanticContext::parse(line, line.len(), ShellSyntax::Posix)
             .expect("git switch 应有语义上下文");
         assert!(matches!(semantic.source, Source::Branches { .. }));
-        let request = Request {
-            cwd: ".".into(),
-            env: SuggestEnv::Local,
-            line: line.into(),
-            cursor: line.len(),
-            style: CompletionStyle::Popup,
-            git: None,
-            semantic: Some(semantic),
-            scripts: None,
-            syntax: ShellSyntax::Posix,
-        };
-        let result = request.calculate(&Cancellation::default());
+        let result = session
+            .request_at(
+                ".".into(),
+                SuggestEnv::Local,
+                line.into(),
+                line.len(),
+                CompletionStyle::Popup,
+                None,
+                Some(ShellSyntax::Posix),
+            )
+            .calculate(&Cancellation::default());
         assert!(
             result.completion_items.is_empty(),
             "Git 缓存缺失不得回收历史候选"
@@ -791,6 +787,7 @@ mod completion_tests {
             &SuggestEnv::Local,
             "cargo",
             CompletionStyle::Inline,
+            0,
         );
         assert_eq!(
             base,
@@ -798,7 +795,8 @@ mod completion_tests {
                 "D:/work",
                 &SuggestEnv::Local,
                 "cargo",
-                CompletionStyle::Inline
+                CompletionStyle::Inline,
+                0,
             )
         );
         assert_ne!(
@@ -807,7 +805,8 @@ mod completion_tests {
                 "D:/work",
                 &SuggestEnv::Local,
                 "cargo t",
-                CompletionStyle::Inline
+                CompletionStyle::Inline,
+                0,
             )
         );
         assert_ne!(
@@ -816,8 +815,20 @@ mod completion_tests {
                 "D:/work",
                 &SuggestEnv::Local,
                 "cargo",
-                CompletionStyle::Popup
+                CompletionStyle::Popup,
+                0,
             )
+        );
+        assert_ne!(
+            base,
+            cache_key(
+                "D:/work",
+                &SuggestEnv::Local,
+                "cargo",
+                CompletionStyle::Inline,
+                1,
+            ),
+            "清空学习必须使旧候选键失效"
         );
     }
 }

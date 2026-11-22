@@ -47,7 +47,7 @@ pub(crate) mod cli;
 // ghost/popup 呈现与按键接线归终端视图;引擎本体在 slterm_completions。
 #[allow(dead_code)] // 消费点归终端输入路径。
 pub(crate) mod completion;
-// frecency 目录智能:cd 补全与目录 ghost 的数据源。
+// frecency 目录智能:LearningService 快照供 cd 补全与目录 ghost 使用。
 #[allow(dead_code)] // 消费点归 ghost/path 来源。
 pub(crate) mod directory_history;
 // 有界前缀读取:内存上限先于解码生效。
@@ -66,12 +66,13 @@ pub(crate) mod git;
 #[allow(dead_code)]
 pub(crate) mod git_completion;
 pub(crate) mod gpui_terminal;
-// fish 式本地历史:单池 jsonl + 前缀 range。
+// fish 式本地历史:LearningService 持有的内存去重与前缀 range。
 #[allow(dead_code)] // 消费点归提交事件与 ghost。
 pub(crate) mod history;
 // 界面语言:build.rs 静态生成的 typed Message 查询 API;
 // 运行时零解析、零文件读、零锁。
 pub(crate) mod i18n;
+pub(crate) mod learning;
 #[allow(dead_code)] // 控制面仍含仅测试消费的观测接口。
 pub(crate) mod local_control;
 pub(crate) mod logging;

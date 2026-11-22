@@ -88,19 +88,13 @@ pub(crate) enum BackupCategory {
     Session,
     /// 自定义主题文档(`themes/*.slterm-theme.json`)。
     Themes,
-    /// 命令历史 `history.jsonl`。
-    CommandHistory,
-    /// 目录 frecency `directory_history.json`。
-    DirectoryHistory,
 }
 
 /// 类别根归属是备份收集、恢复与撤回共用的唯一寻址规则。
 fn category_root(paths: &AppPaths, category: BackupCategory) -> &Path {
     match category {
         BackupCategory::Settings | BackupCategory::Themes => paths.config_root(),
-        BackupCategory::Session
-        | BackupCategory::CommandHistory
-        | BackupCategory::DirectoryHistory => paths.local_root(),
+        BackupCategory::Session => paths.local_root(),
     }
 }
 
@@ -110,8 +104,6 @@ pub(crate) struct BackupSelection {
     pub settings: bool,
     pub session: bool,
     pub themes: bool,
-    pub command_history: bool,
-    pub directory_history: bool,
 }
 
 impl Default for BackupSelection {
@@ -120,8 +112,6 @@ impl Default for BackupSelection {
             settings: true,
             session: false,
             themes: false,
-            command_history: false,
-            directory_history: false,
         }
     }
 }
@@ -136,8 +126,6 @@ impl BackupSelection {
             BackupCategory::Settings => &mut self.settings,
             BackupCategory::Session => &mut self.session,
             BackupCategory::Themes => &mut self.themes,
-            BackupCategory::CommandHistory => &mut self.command_history,
-            BackupCategory::DirectoryHistory => &mut self.directory_history,
         } = enabled;
     }
 
@@ -147,8 +135,6 @@ impl BackupSelection {
             BackupCategory::Settings => self.settings,
             BackupCategory::Session => self.session,
             BackupCategory::Themes => self.themes,
-            BackupCategory::CommandHistory => self.command_history,
-            BackupCategory::DirectoryHistory => self.directory_history,
         }
     }
 
@@ -157,8 +143,6 @@ impl BackupSelection {
             settings: false,
             session: false,
             themes: false,
-            command_history: false,
-            directory_history: false,
         };
         for category in categories {
             selection.set(category, true);
@@ -171,8 +155,6 @@ impl BackupSelection {
             (self.settings, BackupCategory::Settings),
             (self.session, BackupCategory::Session),
             (self.themes, BackupCategory::Themes),
-            (self.command_history, BackupCategory::CommandHistory),
-            (self.directory_history, BackupCategory::DirectoryHistory),
         ]
         .into_iter()
         .filter_map(|(selected, category)| selected.then_some(category))
@@ -340,16 +322,6 @@ fn collect_from(paths: &AppPaths, selection: BackupSelection) -> Result<BackupAr
                 add_file(root, category, "session.json", &mut entries, identity)?
             }
             BackupCategory::Themes => add_themes(root, &mut entries)?,
-            BackupCategory::CommandHistory => {
-                add_file(root, category, "history.jsonl", &mut entries, identity)?
-            }
-            BackupCategory::DirectoryHistory => add_file(
-                root,
-                category,
-                "directory_history.json",
-                &mut entries,
-                identity,
-            )?,
         }
     }
     Ok(BackupArchive {
@@ -589,10 +561,6 @@ fn validate_archive(archive: &BackupArchive) -> Result<(), String> {
             }
             BackupCategory::Session => entry.name == "session.json" && is_json_object(&entry.bytes),
             BackupCategory::Themes => theme_entry_allowed(&entry.name, &entry.bytes),
-            BackupCategory::CommandHistory => entry.name == "history.jsonl",
-            BackupCategory::DirectoryHistory => {
-                entry.name == "directory_history.json" && is_json_object(&entry.bytes)
-            }
         };
         if !allowed {
             return Err(format!(
@@ -667,8 +635,6 @@ mod encrypted_backup_tests {
                     BackupCategory::Settings,
                     BackupCategory::Session,
                     BackupCategory::Themes,
-                    BackupCategory::CommandHistory,
-                    BackupCategory::DirectoryHistory,
                 ],
             },
             entries: vec![
@@ -686,16 +652,6 @@ mod encrypted_backup_tests {
                     category: BackupCategory::Themes,
                     name: "themes/nord-copy.slterm-theme.json".into(),
                     bytes: theme_bytes(),
-                },
-                BackupEntry {
-                    category: BackupCategory::CommandHistory,
-                    name: "history.jsonl".into(),
-                    bytes: b"{\"cmd\":\"cargo test\"}\n".to_vec(),
-                },
-                BackupEntry {
-                    category: BackupCategory::DirectoryHistory,
-                    name: "directory_history.json".into(),
-                    bytes: br#"{"version":1,"entries":[]}"#.to_vec(),
                 },
             ],
         }
@@ -756,8 +712,6 @@ mod encrypted_backup_tests {
             b"settings.json".as_slice(),
             b"session.json".as_slice(),
             b"themes/nord-copy.slterm-theme.json".as_slice(),
-            b"history.jsonl".as_slice(),
-            b"directory_history.json".as_slice(),
         ] {
             assert!(
                 plaintext
@@ -877,6 +831,7 @@ mod encrypted_backup_tests {
         // 坏主题的硬失败路径由 `invalid_theme_documents_abort_the_backup`
         // 单独覆盖;本用例只验证合法白名单与敏感键剥除。
         // 清单外敏感面:AI 会话库/未知文件/日志/恢复点目录,一律不得入包。
+        fs::write(root.join("learning.db"), b"private-learning-data").unwrap();
         fs::write(root.join("ai_sessions.json"), "{\"sessions\":[]}").unwrap();
         fs::write(root.join("obsolete.txt"), "enabled=true").unwrap();
         fs::write(root.join("slterm_debug.log"), "log").unwrap();
@@ -886,8 +841,6 @@ mod encrypted_backup_tests {
             BackupCategory::Settings,
             BackupCategory::Session,
             BackupCategory::Themes,
-            BackupCategory::CommandHistory,
-            BackupCategory::DirectoryHistory,
         ]);
         let archive = collect_from(&single_root_paths(root), selection).expect("收集");
         let names: HashSet<_> = archive
@@ -900,9 +853,7 @@ mod encrypted_backup_tests {
             HashSet::from([
                 "settings.json",
                 "session.json",
-                "themes/nord-copy.slterm-theme.json",
-                "history.jsonl",
-                "directory_history.json"
+                "themes/nord-copy.slterm-theme.json"
             ])
         );
 
@@ -981,8 +932,6 @@ mod encrypted_backup_tests {
                 BackupCategory::Settings,
                 BackupCategory::Session,
                 BackupCategory::Themes,
-                BackupCategory::CommandHistory,
-                BackupCategory::DirectoryHistory,
             ]),
         )
         .unwrap();
@@ -997,8 +946,6 @@ mod encrypted_backup_tests {
                 "settings.json",
                 "session.json",
                 "themes/nord-copy.slterm-theme.json",
-                "history.jsonl",
-                "directory_history.json",
             ])
         );
         let entry = |name: &str| {
@@ -1015,11 +962,6 @@ mod encrypted_backup_tests {
                 .contains("Nord")
         );
         assert_eq!(entry("session.json"), br#"{"version":1}"#);
-        assert_eq!(entry("history.jsonl"), b"local-history\n");
-        assert_eq!(
-            entry("directory_history.json"),
-            br#"{"version":1,"entries":[]}"#
-        );
     }
 
     /// 防复发:非法主题文档必须整单失败,不得静默缺件。
@@ -1177,8 +1119,6 @@ mod encrypted_backup_tests {
                 .join("themes/nord-copy.slterm-theme.json")
                 .is_file()
         );
-        assert!(directory.path().join("history.jsonl").is_file());
-        assert!(directory.path().join("directory_history.json").is_file());
 
         // 整包往返:open 后的归档与 restore_to 的落盘字节一致。
         let packet = seal(&original, PASSPHRASE).unwrap();
@@ -1205,9 +1145,7 @@ mod encrypted_backup_tests {
                 BackupCategory::Settings | BackupCategory::Themes => {
                     (paths.config_root(), paths.local_root())
                 }
-                BackupCategory::Session
-                | BackupCategory::CommandHistory
-                | BackupCategory::DirectoryHistory => (paths.local_root(), paths.config_root()),
+                BackupCategory::Session => (paths.local_root(), paths.config_root()),
             };
             assert_eq!(
                 fs::read(expected_root.join(&entry.name)).ok(),
@@ -1243,7 +1181,7 @@ mod encrypted_backup_tests {
     #[test]
     fn summary_counts_files_and_bytes_per_category() {
         let summary = full_archive().summary();
-        assert_eq!(summary.len(), 5);
+        assert_eq!(summary.len(), 3);
         let settings = summary
             .iter()
             .find(|item| item.category == BackupCategory::Settings)

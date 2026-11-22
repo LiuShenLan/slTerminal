@@ -13,7 +13,7 @@ use std::rc::Rc;
 use std::str::FromStr as _;
 use std::sync::mpsc::Receiver;
 
-use crate::completion::{self, Session};
+use crate::completion::Session;
 use crate::suggest::{CompletionStyle, SltermCompletionKind};
 
 /// 挂载一个可注入补全会话的终端;返回视图、虚拟窗口、PTY 接收端与
@@ -22,6 +22,20 @@ fn open(
     cx: &mut TestAppContext,
     style: CompletionStyle,
     ghost: bool,
+) -> (
+    Entity<TerminalView>,
+    VisualTestContext,
+    Receiver<Msg>,
+    Rc<RefCell<crate::gpui_terminal::registry::TerminalRegistry>>,
+) {
+    open_with_history(cx, style, ghost, &[])
+}
+
+fn open_with_history(
+    cx: &mut TestAppContext,
+    style: CompletionStyle,
+    ghost: bool,
+    history: &[&str],
 ) -> (
     Entity<TerminalView>,
     VisualTestContext,
@@ -63,7 +77,11 @@ fn open(
                 window,
                 cx,
             );
-            view.attach_completion_session(Rc::new(Session::default()));
+            let session = Rc::new(Session::default());
+            for command in history {
+                session.insert_history_for_test(command);
+            }
+            view.attach_completion_session(session);
             view
         });
         terminal.update(cx, |view, _| {
@@ -191,8 +209,9 @@ fn pty_bytes(rx: &Receiver<Msg>) -> Vec<u8> {
 #[gpui::test]
 fn inline_ghost_accepts_on_tab_and_enter_commits_history(cx: &mut TestAppContext) {
     let unique = "slterm-m95-ghost-";
-    completion::insert_history_for_test(&format!("{unique}build --release"));
-    let (terminal, mut window, rx, _registry) = open(cx, CompletionStyle::Inline, true);
+    let history = format!("{unique}build --release");
+    let (terminal, mut window, rx, _registry) =
+        open_with_history(cx, CompletionStyle::Inline, true, &[&history]);
 
     type_text(&terminal, &mut window, &format!("{unique}b"));
     let _ = pty_bytes(&rx);
@@ -225,9 +244,14 @@ fn inline_ghost_accepts_on_tab_and_enter_commits_history(cx: &mut TestAppContext
 #[gpui::test]
 fn popup_navigation_and_accept_edit_the_line_without_submitting(cx: &mut TestAppContext) {
     let unique = "slterm-m95-popup-";
-    completion::insert_history_for_test(&format!("{unique}alpha one"));
-    completion::insert_history_for_test(&format!("{unique}alpha two"));
-    let (terminal, mut window, rx, _registry) = open(cx, CompletionStyle::Popup, true);
+    let first = format!("{unique}alpha one");
+    let second = format!("{unique}alpha two");
+    let (terminal, mut window, rx, _registry) = open_with_history(
+        cx,
+        CompletionStyle::Popup,
+        true,
+        &[first.as_str(), second.as_str()],
+    );
 
     type_text(&terminal, &mut window, &format!("{unique}alpha"));
     let _ = pty_bytes(&rx);
@@ -277,8 +301,8 @@ fn popup_navigation_and_accept_edit_the_line_without_submitting(cx: &mut TestApp
 #[gpui::test]
 fn terminal_trusted_line_completion_gate(cx: &mut TestAppContext) {
     let command = "slterm-trusted-gate-command";
-    completion::insert_history_for_test(command);
-    let (terminal, mut window, rx, _registry) = open(cx, CompletionStyle::Inline, true);
+    let (terminal, mut window, rx, _registry) =
+        open_with_history(cx, CompletionStyle::Inline, true, &[command]);
     let submitted = Rc::new(RefCell::new(Vec::new()));
     let observed = Rc::clone(&submitted);
     let _subscription = window.update(|_, cx| {
@@ -371,9 +395,14 @@ fn terminal_exit_cancels_unclosed_execution(cx: &mut TestAppContext) {
 #[gpui::test]
 fn ctrl_tab_is_not_consumed_by_active_completion_popup(cx: &mut TestAppContext) {
     let unique = "slterm-panel-cycle-popup-";
-    completion::insert_history_for_test(&format!("{unique}alpha one"));
-    completion::insert_history_for_test(&format!("{unique}alpha two"));
-    let (terminal, mut window, rx, _registry) = open(cx, CompletionStyle::Popup, true);
+    let first = format!("{unique}alpha one");
+    let second = format!("{unique}alpha two");
+    let (terminal, mut window, rx, _registry) = open_with_history(
+        cx,
+        CompletionStyle::Popup,
+        true,
+        &[first.as_str(), second.as_str()],
+    );
     type_text(&terminal, &mut window, &format!("{unique}alpha"));
     let _ = pty_bytes(&rx);
     assert!(
@@ -420,8 +449,9 @@ fn ctrl_tab_is_not_consumed_by_active_completion_popup(cx: &mut TestAppContext) 
 #[gpui::test]
 fn hybrid_tab_requests_popup_and_escape_suppresses_the_same_line(cx: &mut TestAppContext) {
     let unique = "slterm-m95-hybrid-";
-    completion::insert_history_for_test(&format!("{unique}launch now"));
-    let (terminal, mut window, rx, _registry) = open(cx, CompletionStyle::Hybrid, true);
+    let history = format!("{unique}launch now");
+    let (terminal, mut window, rx, _registry) =
+        open_with_history(cx, CompletionStyle::Hybrid, true, &[&history]);
 
     type_text(&terminal, &mut window, &format!("{unique}la"));
     let _ = pty_bytes(&rx);

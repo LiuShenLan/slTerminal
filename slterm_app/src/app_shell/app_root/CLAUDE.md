@@ -4,6 +4,7 @@
 
 ## 决策与红线
 
+- **学习服务单源**：`AppRoot` 持有唯一 `LearningService`，每个补全 `Session` 共享其不可变快照；终端只经 Session 采集已确认命令与受管 cwd。原因：全局静态历史会形成第二写入与清空事实源。边界：不得在 TerminalView 或补全引擎另持历史文件、SQLite 连接或学习写队列。
 - **项目与布局单源**：`AppRoot` 直持 `ProjectSnapshot`；`projects` 只是全部 `ProjectView` 的强实体引用表，不复制项目注册、布局、逻辑终端或 Document 元数据记录。原因：运行实例不得成为第二项目或布局事实源。边界：`ProjectView` 只持 `PanelHost`、项目焦点容器与项目内瞬时焦点，`PanelHost` 以封闭 `PanelContent` 绑定 `TerminalView`、`DocumentTextView`、Markdown 旧宿主或 `PagedTextView`，不得为编辑器伪造终端字段。
 - **渲染只读单源**：画面只沿活跃项目的 `ProjectLayout` 树、组内 active `ViewKey` 与既有 `PanelHost` 组装；隐藏项目不挂载但继续保活，空项目不创建占位终端。原因：渲染不得派生第二布局或触发终端生命周期。边界：组内非激活视图与隐藏项目均不进入当前画面，激活与切换只复用既有实体。
 - **候选原子提交**：新增与拆分先由快照产生候选，再执行一次可失败启动并登记实例，最后提交候选。原因：布局、逻辑终端记录与 PTY 不得出现半提交。边界：启动失败不保留无 worker 的占位面板，正式快照与实例表不变；PanelId 失败消耗后也不复用。

@@ -548,7 +548,9 @@ mod shutdown_tests {
         ));
         let (session, mut events) =
             spawn(real_window_size(), Config::default(), options).expect("真实 PTY 应启动");
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        // 真实 ConPTY 在并行构建后的进程调度可能超过 5 秒；只放宽观测预算，
+        // 退出与退出后显示帧的断言语义不变。
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
         let mut last_revision = 0;
         let mut exited = false;
         while std::time::Instant::now() < deadline && !exited {

@@ -4,29 +4,20 @@
 //! (shell cwd 集成 / 显式记录),不引入任何 shell 特定命令或别名。评分同时
 //! 服务 ghost 余量、路径补全排序与未来的目录选择器。
 //!
-//! 持久化:跨进程文件锁 + 原子写;损坏/未来版本文件只降级为内存态,绝不覆盖。
+//! 持久化只经 `LearningService` 的独立 SQLite 写队列；本文件不读旧 JSON。
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const DATABASE_VERSION: u32 = 1;
 const MAX_TOTAL_RANK: f64 = 10_000.0;
 const MAX_ENTRIES: usize = 2_048;
 const HOUR: u64 = 60 * 60;
 const DAY: u64 = 24 * HOUR;
 const WEEK: u64 = 7 * DAY;
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub(crate) struct DirectoryHistory {
-    state: Arc<Mutex<ServiceState>>,
-}
-
-struct ServiceState {
     database: DirectoryDatabase,
-    pending: Vec<Observation>,
-    path: PathBuf,
-    persistence_enabled: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -36,23 +27,12 @@ struct Observation {
     at: u64,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default)]
 struct DirectoryDatabase {
-    version: u32,
-    #[serde(default)]
     entries: Vec<DirectoryEntry>,
 }
 
-impl Default for DirectoryDatabase {
-    fn default() -> Self {
-        Self {
-            version: DATABASE_VERSION,
-            entries: Vec::new(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone)]
 struct DirectoryEntry {
     path: String,
     rank: f64,
@@ -75,64 +55,54 @@ impl DirectoryEntry {
     }
 }
 
-/// 进程级单例:所有窗口与 pane 共用一份目录智能。
-pub(crate) fn global() -> DirectoryHistory {
-    static INSTANCE: OnceLock<DirectoryHistory> = OnceLock::new();
-    INSTANCE.get_or_init(DirectoryHistory::load).clone()
-}
-
 impl DirectoryHistory {
-    fn load() -> Self {
-        let path = crate::platform::dirs::local_dir().join("directory_history.json");
-        let (database, persistence_enabled) = match read_database(&path) {
-            Ok(Some(database)) => (database, true),
-            Ok(None) => (DirectoryDatabase::default(), true),
-            Err(error) => {
-                log::warn!(
-                    "Directory history {} is invalid or unsupported ({error}); using memory only",
-                    path.display()
-                );
-                (DirectoryDatabase::default(), false)
-            }
-        };
-        Self {
-            state: Arc::new(Mutex::new(ServiceState {
-                database,
-                pending: Vec::new(),
-                path,
-                persistence_enabled,
-            })),
-        }
-    }
-
-    /// 空的内存实例,不碰磁盘。给其它模块的测试用(补齐引擎要一个不产出
-    /// 任何 frecency 候选的数据源,断言才只反映被测分支)。
+    /// 空的内存实例，供补全测试使用。
     #[cfg(test)]
     pub(crate) fn empty() -> Self {
+        Self::default()
+    }
+
+    /// 从学习库恢复快照；不读取旧 JSON 文件。
+    pub(crate) fn from_learning(
+        records: Vec<crate::persistence::learning::DirectoryRecord>,
+    ) -> Self {
+        let entries = records
+            .into_iter()
+            .filter(|entry| {
+                entry.last_used_at_ms >= 0
+                    && entry.rank.is_finite()
+                    && entry.rank > 0.0
+                    && normalize(&entry.path).is_some()
+            })
+            .map(|entry| DirectoryEntry {
+                path: entry.path,
+                rank: entry.rank,
+                last_accessed: (entry.last_used_at_ms / 1_000) as u64,
+            })
+            .collect();
         Self {
-            state: Arc::new(Mutex::new(ServiceState {
-                database: DirectoryDatabase::default(),
-                pending: Vec::new(),
-                path: PathBuf::new(),
-                persistence_enabled: false,
-            })),
+            database: DirectoryDatabase { entries },
         }
     }
 
-    /// 记录一个经本机终端确认的目录;非目录/控制字符/非法编码返回 false。
-    pub(crate) fn record(&self, path: &str) -> bool {
-        let Some(observation) = observation(path, current_time()) else {
-            return false;
-        };
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        state.database.apply(&observation);
-        state.pending.push(observation);
-        state.database.age_and_limit(current_time());
-        flush(&mut state);
-        true
+    /// 在不改变内存的前提下词法校验受管目录并生成 SQLite 规范键。
+    pub(crate) fn normalize_observation(path: &str) -> Option<String> {
+        observation_at(path, 0).map(|observation| observation.normalized)
+    }
+
+    /// 只更新当前内存快照，返回用于 SQLite 去重的规范路径。
+    pub(crate) fn record_memory_at(&mut self, path: &str, at: u64) -> Option<String> {
+        let observation = observation_at(path, at)?;
+        let normalized = observation.normalized.clone();
+        self.database.apply(&observation);
+        self.database.age_and_limit(at);
+        Some(normalized)
+    }
+
+    /// 记录一个经本机终端确认的目录;控制字符/非法编码返回 false。
+    #[cfg(test)]
+    pub(crate) fn record(&mut self, path: &str) -> bool {
+        self.record_memory_at(path, current_time()).is_some()
     }
 
     /// cd 类命令的 frecency 余量(Inline ghost 数据源)。
@@ -152,11 +122,7 @@ impl DirectoryHistory {
         let request = parse_directory_request(line, cwd)?;
         let request_key = normalize(&request.absolute)?;
         let now = current_time();
-        let state = self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut candidates: Vec<&DirectoryEntry> = state
+        let mut candidates: Vec<&DirectoryEntry> = self
             .database
             .entries
             .iter()
@@ -173,13 +139,12 @@ impl DirectoryHistory {
                 .then_with(|| left.path.cmp(&right.path))
         });
 
-        // 只复制最多 12 条路径,随后释放共享锁;慢盘元数据查询不能挡住目录记录。
+        // 只复制最多 12 条路径；后续慢盘元数据查询不再触碰学习服务状态。
         let candidates: Vec<_> = candidates
             .into_iter()
             .take(12)
             .map(|entry| entry.path.clone())
             .collect();
-        drop(state);
         candidates
             .into_iter()
             .take_while(|_| !cancelled())
@@ -197,22 +162,14 @@ impl DirectoryHistory {
     pub(crate) fn score(&self, path: &Path) -> Option<f64> {
         let key = normalize_path(path)?;
         let now = current_time();
-        let state = self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        state.database.score_path_key(&key, now)
+        self.database.score_path_key(&key, now)
     }
 
     /// 通用 UI 候选:有序关键词匹配(不引入产品特定 shell 命令)。
     pub(crate) fn search(&self, query: &str, limit: usize) -> Vec<PathBuf> {
         let keywords: Vec<String> = query.split_whitespace().filter_map(normalize).collect();
         let now = current_time();
-        let state = self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut entries: Vec<&DirectoryEntry> = state
+        let mut entries: Vec<&DirectoryEntry> = self
             .database
             .entries
             .iter()
@@ -239,10 +196,6 @@ impl DirectoryHistory {
         cwd: &str,
     ) -> Vec<slterm_completions::file::FileSuggestion> {
         let now = current_time();
-        let state = self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut scored: Vec<_> = suggestions
             .into_iter()
             .enumerate()
@@ -252,7 +205,7 @@ impl DirectoryHistory {
                     .as_deref()
                     .unwrap_or(&suggestion.path);
                 let score = resolve_candidate(display, cwd)
-                    .and_then(|path| state.database.score_path(&path, now));
+                    .and_then(|path| self.database.score_path(&path, now));
                 (score, order, suggestion)
             })
             .collect();
@@ -308,18 +261,6 @@ impl DirectoryDatabase {
         }
     }
 
-    fn validate(&self) -> Result<(), String> {
-        for entry in &self.entries {
-            if normalize(&entry.path).is_none() {
-                return Err("directory entry contains an empty or control-character path".into());
-            }
-            if !entry.rank.is_finite() || entry.rank <= 0.0 {
-                return Err(format!("directory entry has invalid rank {}", entry.rank));
-            }
-        }
-        Ok(())
-    }
-
     fn score_path(&self, path: &Path, now: u64) -> Option<f64> {
         self.score_path_key(&normalize_path(path)?, now)
     }
@@ -335,67 +276,17 @@ impl DirectoryDatabase {
     }
 }
 
-fn flush(state: &mut ServiceState) {
-    if !state.persistence_enabled || state.pending.is_empty() {
-        return;
-    }
-    let Ok(Some(_lock)) = crate::atomic_file::try_lock(&state.path) else {
-        return;
-    };
-
-    let mut merged = match read_database(&state.path) {
-        Ok(Some(database)) => database,
-        Ok(None) => DirectoryDatabase::default(),
-        Err(error) => {
-            log::warn!("Refusing to overwrite invalid directory history: {error}");
-            state.persistence_enabled = false;
-            return;
-        }
-    };
-    for observation in &state.pending {
-        merged.apply(observation);
-    }
-    merged.age_and_limit(current_time());
-    match save_database(&state.path, &merged) {
-        Ok(()) => {
-            state.database = merged;
-            state.pending.clear();
-        }
-        Err(error) => log::warn!("Failed to save directory history: {error}"),
-    }
-}
-
-fn read_database(path: &Path) -> Result<Option<DirectoryDatabase>, String> {
-    let bytes = match std::fs::read(path) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error.to_string()),
-    };
-    let database: DirectoryDatabase =
-        serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
-    if database.version != DATABASE_VERSION {
-        return Err(format!(
-            "unsupported version {} (expected {DATABASE_VERSION})",
-            database.version
-        ));
-    }
-    database.validate()?;
-    Ok(Some(database))
-}
-
-fn save_database(path: &Path, database: &DirectoryDatabase) -> std::io::Result<()> {
-    let bytes = serde_json::to_vec_pretty(database).map_err(std::io::Error::other)?;
-    crate::atomic_file::write(path, &bytes)
-}
-
 fn observation(path: &str, at: u64) -> Option<Observation> {
+    observation_at(path, at)
+}
+
+fn observation_at(path: &str, at: u64) -> Option<Observation> {
     if path.is_empty() || path.chars().any(char::is_control) {
         return None;
     }
     let path = PathBuf::from(path);
-    if !path.is_dir() {
-        return None;
-    }
+    // 采集入口只接受受管 cwd 的词事实，不在 GPUI 前台做 metadata I/O。
+    // 后台候选查询仍会复核 is_dir，失效目录不会成为可接受候选。
     // 数据库明确使用 UTF-8;拒绝无法无损编码的本地路径,不能用
     // to_string_lossy 生成一个之后再也无法访问的伪路径。
     let path = trim_trailing_separators(path.to_str()?.to_owned());
@@ -607,38 +498,26 @@ mod directory_history_tests {
 
     fn history(entries: &[(&str, f64, u64)]) -> DirectoryHistory {
         DirectoryHistory {
-            state: Arc::new(Mutex::new(ServiceState {
-                database: DirectoryDatabase {
-                    version: DATABASE_VERSION,
-                    entries: entries
-                        .iter()
-                        .map(|(path, rank, last_accessed)| DirectoryEntry {
-                            path: (*path).to_owned(),
-                            rank: *rank,
-                            last_accessed: *last_accessed,
-                        })
-                        .collect(),
-                },
-                pending: Vec::new(),
-                path: PathBuf::new(),
-                persistence_enabled: false,
-            })),
+            database: DirectoryDatabase {
+                entries: entries
+                    .iter()
+                    .map(|(path, rank, last_accessed)| DirectoryEntry {
+                        path: (*path).to_owned(),
+                        rank: *rank,
+                        last_accessed: *last_accessed,
+                    })
+                    .collect(),
+            },
         }
     }
 
     #[test]
-    fn directory_hint_checks_paths_without_holding_the_database_lock() {
+    fn directory_hint_uses_snapshot_without_shared_mutable_state() {
         let temp = tempfile::tempdir().unwrap();
         let target = temp.path().join("candidate");
         std::fs::create_dir(&target).unwrap();
         let history = history(&[(target.to_str().unwrap(), 1.0, current_time())]);
-        let result = history.hint_with_cancel("cd ca", temp.path().to_str().unwrap(), &|| {
-            assert!(
-                history.state.try_lock().is_ok(),
-                "metadata queries must release the database"
-            );
-            false
-        });
+        let result = history.hint_with_cancel("cd ca", temp.path().to_str().unwrap(), &|| false);
         assert!(result.is_some());
         assert!(
             history
@@ -667,7 +546,6 @@ mod directory_history_tests {
     #[test]
     fn aging_bounds_total_rank_and_removes_noise() {
         let mut database = DirectoryDatabase {
-            version: DATABASE_VERSION,
             entries: vec![
                 DirectoryEntry {
                     path: "a".into(),
@@ -724,18 +602,21 @@ mod directory_history_tests {
     }
 
     #[test]
-    fn record_accepts_utf8_spaces_and_rejects_unsafe_or_non_directory_paths() {
+    fn record_accepts_utf8_spaces_and_rejects_unsafe_paths_without_fs_probes() {
         let temp = tempfile::tempdir().unwrap();
         let directory = temp.path().join("项目 空间");
         let file = temp.path().join("plain-file");
         std::fs::create_dir(&directory).unwrap();
         std::fs::write(&file, b"file").unwrap();
-        let history = history(&[]);
+        let mut history = history(&[]);
 
         assert!(history.record(directory.to_str().unwrap()));
         assert!(history.score(&directory).is_some());
         assert_eq!(history.search("项目", 8), vec![directory]);
-        assert!(!history.record(file.to_str().unwrap()));
+        assert!(
+            history.record(file.to_str().unwrap()),
+            "采集入口不得为验证目录而同步读文件系统"
+        );
         assert!(!history.record("bad\npath"));
     }
 
@@ -792,81 +673,6 @@ mod directory_history_tests {
                 format!("alpha{separator}"),
                 format!("zeta{separator}"),
             ]
-        );
-    }
-
-    #[test]
-    fn future_or_unversioned_database_is_rejected_without_overwrite() {
-        let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("directory_history.json");
-        let future = br#"{"version":99,"entries":[]}"#;
-        std::fs::write(&path, future).unwrap();
-        assert!(
-            read_database(&path)
-                .unwrap_err()
-                .contains("unsupported version")
-        );
-
-        let directory = temp.path().join("valid");
-        std::fs::create_dir(&directory).unwrap();
-        let pending = observation(directory.to_str().unwrap(), current_time()).unwrap();
-        let mut state = ServiceState {
-            database: DirectoryDatabase::default(),
-            pending: vec![pending],
-            path: path.clone(),
-            persistence_enabled: true,
-        };
-        flush(&mut state);
-        assert_eq!(std::fs::read(&path).unwrap(), future);
-        assert!(!state.persistence_enabled);
-
-        std::fs::write(&path, br#"{"entries":[]}"#).unwrap();
-        assert!(
-            read_database(&path).is_err(),
-            "version field must be explicit"
-        );
-    }
-
-    #[test]
-    fn lock_contention_keeps_pending_observations_for_the_next_flush() {
-        let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("directory_history.json");
-        let first = temp.path().join("first");
-        let second = temp.path().join("second");
-        std::fs::create_dir(&first).unwrap();
-        std::fs::create_dir(&second).unwrap();
-        let history = DirectoryHistory {
-            state: Arc::new(Mutex::new(ServiceState {
-                database: DirectoryDatabase::default(),
-                pending: Vec::new(),
-                path: path.clone(),
-                persistence_enabled: true,
-            })),
-        };
-
-        let lock = crate::atomic_file::try_lock(&path).unwrap().unwrap();
-        assert!(history.record(first.to_str().unwrap()));
-        assert_eq!(
-            history
-                .state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .pending
-                .len(),
-            1
-        );
-        drop(lock);
-        assert!(history.record(second.to_str().unwrap()));
-
-        let database = read_database(&path).unwrap().unwrap();
-        assert_eq!(database.entries.len(), 2);
-        assert!(
-            history
-                .state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .pending
-                .is_empty()
         );
     }
 

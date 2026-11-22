@@ -397,8 +397,8 @@ impl TerminalView {
                 // `SLTERM|cwd|branch` 标题协议:cwd 已由上面的 cwd_report
                 // 摘走;协议串不是窗口标题,更不是 tab 名。branch 字段的
                 // 消费归工作区 chrome,不存。
-                if cwd_changed {
-                    crate::completion::record_directory(&self.cwd);
+                if cwd_changed && let Some(session) = &self.completion_session {
+                    session.record_directory(&self.cwd);
                 }
                 if !title.starts_with("SLTERM|") {
                     self.title = title;
@@ -450,7 +450,9 @@ impl TerminalView {
                 // `on_terminal_event` 才会 `cx.notify()` 重绘 tab 标题。
                 if cwd_changed {
                     // 目录 frecency 只记本机终端真实上报的目录。
-                    crate::completion::record_directory(&self.cwd);
+                    if let Some(session) = &self.completion_session {
+                        session.record_directory(&self.cwd);
+                    }
                     cx.emit(TerminalViewEvent::TitleChanged);
                     cx.notify();
                 }
@@ -467,11 +469,14 @@ impl TerminalView {
             }
             TermEvent::CommandDone { .. } => {
                 if let Some(line) = self.shell_line.command_done() {
-                    crate::completion::record_command(
-                        &crate::history::HistoryScope::Local,
-                        &line,
-                        &self.cwd,
-                    );
+                    if let Some(session) = &self.completion_session
+                        && let Some(shell) = self
+                            .exec_context
+                            .as_ref()
+                            .and_then(crate::completion::PaneExecContext::shell_program)
+                    {
+                        session.record_command(shell, &line, &self.cwd);
+                    }
                     cx.emit(TerminalViewEvent::CommandSubmitted(line));
                 }
                 self.running_program = None;

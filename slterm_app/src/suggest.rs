@@ -74,8 +74,8 @@ pub(crate) struct Input<'a> {
 
 /// 借用的共享数据源与运行时开关。生命周期只覆盖一次重算调用。
 pub(crate) struct SuggestSources<'a> {
-    /// 历史单持有(Mutex);只在取少量匹配项时加锁,文件扫描期间必须释放。
-    pub history: &'a Mutex<SltermHistory>,
+    /// 当前学习服务的不可变内存快照，无需在匹配期间加锁。
+    pub history: &'a SltermHistory,
     pub directories: &'a DirectoryHistory,
     /// PATH 探针结果(后台线程填充)。
     pub commands: &'a Arc<Mutex<Vec<String>>>,
@@ -223,15 +223,10 @@ pub(crate) fn calculate(
     }
 
     // 历史优先:最新一条整行前缀匹配(索引 range,开销随命中数增长)。
-    let hinted = {
-        let history = sources
-            .history
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        history
-            .hint_with_cancel(&input.env.history_scope(), line, cancelled)
-            .map(clamp_ghost)
-    };
+    let hinted = sources
+        .history
+        .hint_with_cancel(&input.env.history_scope(), line, cancelled)
+        .map(clamp_ghost);
     if let Some(remainder) = hinted {
         result.suggestion = remainder;
         return result;
@@ -391,17 +386,12 @@ fn suggest_collect(
     };
 
     // 整行历史匹配,新者在前。
-    let history_matches = {
-        let history = sources
-            .history
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        history
-            .search_with_cancel(&input.env.history_scope(), input.line, 8, cancelled)
-            .into_iter()
-            .map(str::to_owned)
-            .collect::<Vec<_>>()
-    };
+    let history_matches = sources
+        .history
+        .search_with_cancel(&input.env.history_scope(), input.line, 8, cancelled)
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
     for full in history_matches {
         let (replace_chars, insert) = popup_edit(input.line, &full);
         push(
@@ -691,7 +681,7 @@ mod suggest_tests {
     use std::cell::{Cell, RefCell};
 
     struct Fixture {
-        history: Mutex<SltermHistory>,
+        history: SltermHistory,
         directories: DirectoryHistory,
         commands: Arc<Mutex<Vec<String>>>,
     }
@@ -701,7 +691,7 @@ mod suggest_tests {
         /// 才有的名字,用来验证 PATH 来源。
         fn new() -> Self {
             Self {
-                history: Mutex::new(SltermHistory::default()),
+                history: SltermHistory::default(),
                 directories: DirectoryHistory::empty(),
                 commands: Arc::new(Mutex::new(vec![
                     "notepad.exe".to_owned(),
@@ -779,11 +769,9 @@ mod suggest_tests {
     fn history_hint_wins_before_command_and_paths() {
         let temp = tempfile::tempdir().unwrap();
         std::fs::write(temp.path().join("cargo-build.txt"), b"").unwrap();
-        let fixture = Fixture::new();
+        let mut fixture = Fixture::new();
         fixture
             .history
-            .lock()
-            .unwrap()
             .insert_for_test(&HistoryScope::Local, "cargo build --release");
         let cwd = temp.path().to_str().unwrap();
         assert_eq!(fixture.ghost(cwd, "cargo b"), "uild --release");
@@ -849,10 +837,6 @@ mod suggest_tests {
                 ShellSyntax::PowerShell,
                 &|| {
                     checks.set(checks.get() + 1);
-                    assert!(
-                        fixture.history.try_lock().is_ok(),
-                        "directory work cannot block history submission"
-                    );
                     false
                 },
             );
@@ -865,11 +849,9 @@ mod suggest_tests {
     fn cancellation_discards_every_source() {
         let temp = tempfile::tempdir().unwrap();
         std::fs::write(temp.path().join("candidate.txt"), b"").unwrap();
-        let fixture = Fixture::new();
+        let mut fixture = Fixture::new();
         fixture
             .history
-            .lock()
-            .unwrap()
             .insert_for_test(&HistoryScope::Local, "cargo build");
         for style in [CompletionStyle::Inline, CompletionStyle::Popup] {
             let result = calculate(

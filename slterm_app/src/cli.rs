@@ -1,7 +1,7 @@
 //! 命令行入口：无子命令启动 GUI；本地维护子命令执行后退出。
 //!
-//! `--working-directory` 只影响初始项目。`notify-test` 和
-//! `setup-ai --remove` 不连接运行中实例，也不初始化 GUI 子系统。
+//! `--working-directory` 只影响初始项目。`notify-test`、`setup-ai --remove`
+//! 和 `clear-learning` 不连接运行中实例，也不初始化 GUI 子系统。
 
 use std::path::PathBuf;
 
@@ -35,6 +35,8 @@ pub struct Cli {
 pub enum Subcommands {
     /// 诊断原生通知链：AUMID 注册、配置时长与同步测试 toast。
     NotifyTest,
+    /// 清空本机命令与目录学习数据；不读取或覆盖旧 JSON 历史。
+    ClearLearning,
     /// 安装器在删除安装目录前移除受支持 AI CLI 中的 slTerminal hooks。
     SetupAi(SetupAiOptions),
 }
@@ -50,7 +52,63 @@ pub struct SetupAiOptions {
 pub(crate) fn run_local(command: Subcommands) -> i32 {
     match command {
         Subcommands::NotifyTest => crate::platform::notifications::notify_test(),
+        Subcommands::ClearLearning => run_clear_learning_at(crate::platform::dirs::app_paths()),
         Subcommands::SetupAi(options) => run_setup_ai(options),
+    }
+}
+
+/// 显式维护入口：等待真实清空回执并回收写线程，失败以非零退出码可见。
+fn run_clear_learning_at(paths: &slterm_path::AppPaths) -> i32 {
+    // 复用应用实例锁，拒绝与正在运行的学习内存／写线程并发清空。
+    let _instance =
+        match crate::platform::instance::acquire_at(&paths.local_root().join("instance")) {
+            Ok(Some(guard)) => guard,
+            Ok(None) => {
+                eprintln!("clear-learning: 应用正在运行，请先退出后再清空");
+                return 1;
+            }
+            Err(error) => {
+                eprintln!("clear-learning: 无法取得实例锁: {error}");
+                return 1;
+            }
+        };
+    let (service, runtime) = match crate::learning::LearningService::start(paths) {
+        Ok(started) => started,
+        Err(error) => {
+            eprintln!("clear-learning: {error}");
+            return 1;
+        }
+    };
+    let mut cleared = match service.clear() {
+        Ok(response) => match response.recv_timeout(std::time::Duration::from_secs(10)) {
+            Ok(Ok(())) => true,
+            Ok(Err(error)) => {
+                eprintln!("clear-learning: {error}");
+                false
+            }
+            Err(_) => {
+                eprintln!("clear-learning: 清空回执超时或断连");
+                false
+            }
+        },
+        Err(error) => {
+            eprintln!("clear-learning: {error}");
+            false
+        }
+    };
+    if cleared && service.status() != crate::learning::LearningWriterStatus::Ready {
+        eprintln!("clear-learning: 学习库未处于可写状态");
+        cleared = false;
+    }
+    if let Err(error) = runtime.shutdown() {
+        eprintln!("clear-learning: {error}");
+        cleared = false;
+    }
+    if cleared {
+        println!("clear-learning: OK");
+        0
+    } else {
+        1
     }
 }
 
@@ -180,7 +238,11 @@ mod cli_tests {
 
     #[test]
     fn local_maintenance_verbs_route_to_the_local_persona() {
-        for args in [vec!["notify-test"], vec!["setup-ai", "--remove"]] {
+        for args in [
+            vec!["notify-test"],
+            vec!["setup-ai", "--remove"],
+            vec!["clear-learning"],
+        ] {
             let cli = parse_args(args.clone())
                 .unwrap_or_else(|error| panic!("{args:?} should parse: {error}"));
             assert!(
@@ -221,6 +283,53 @@ mod cli_tests {
     #[test]
     fn setup_ai_without_remove_returns_a_usage_error() {
         assert_eq!(run_setup_ai(SetupAiOptions { remove: false }), 2);
+    }
+
+    #[test]
+    fn clear_learning_command_commits_an_empty_database() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths =
+            slterm_path::AppPaths::new(temp.path().join("config"), temp.path().join("local"))
+                .unwrap();
+        let (service, runtime) = crate::learning::LearningService::start(&paths).unwrap();
+        service.record_command("cmd.exe", "echo old", None).unwrap();
+        runtime.shutdown().unwrap();
+
+        assert_eq!(run_clear_learning_at(&paths), 0);
+        let raw = rusqlite::Connection::open(paths.learning_db_path()).unwrap();
+        assert_eq!(
+            raw.query_row("SELECT COUNT(*) FROM command_history", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn clear_learning_rejects_a_running_instance_without_touching_data() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths =
+            slterm_path::AppPaths::new(temp.path().join("config"), temp.path().join("local"))
+                .unwrap();
+        let (service, runtime) = crate::learning::LearningService::start(&paths).unwrap();
+        service
+            .record_command("cmd.exe", "echo kept", None)
+            .unwrap();
+        runtime.shutdown().unwrap();
+        let _running = crate::platform::instance::acquire_at(&paths.local_root().join("instance"))
+            .unwrap()
+            .expect("测试先持有实例锁");
+
+        assert_eq!(run_clear_learning_at(&paths), 1);
+        let raw = rusqlite::Connection::open(paths.learning_db_path()).unwrap();
+        assert_eq!(
+            raw.query_row("SELECT COUNT(*) FROM command_history", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
+            1
+        );
     }
 
     #[test]
