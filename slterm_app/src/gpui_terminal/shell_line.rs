@@ -21,6 +21,7 @@ pub(crate) struct ShellLineTracker {
     supported: bool,
     epoch: Option<u64>,
     line: String,
+    revision: u64,
     mirror: Mirror,
     pending: Option<PendingExecution>,
 }
@@ -37,9 +38,21 @@ impl ShellLineTracker {
             supported,
             epoch: None,
             line: String::new(),
+            revision: 0,
             mirror: Mirror::Unestablished,
             pending: None,
         }
+    }
+
+    fn advance_revision(&mut self) {
+        self.revision = self
+            .revision
+            .checked_add(1)
+            .expect("Shell 输入代次不得回绕");
+    }
+
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
     }
 
     pub(crate) fn observe_prompt(&mut self, epoch: u64, echo: &str) {
@@ -51,6 +64,7 @@ impl ShellLineTracker {
             self.epoch = Some(epoch);
             self.pending = None;
             self.line = echo.to_owned();
+            self.advance_revision();
             self.mirror = Mirror::Trusted;
             return;
         }
@@ -69,6 +83,7 @@ impl ShellLineTracker {
             return false;
         }
         self.line.push_str(text);
+        self.advance_revision();
         self.mirror = Mirror::AwaitingEcho;
         true
     }
@@ -85,6 +100,7 @@ impl ShellLineTracker {
             return false;
         }
         self.line.pop();
+        self.advance_revision();
         self.mirror = Mirror::AwaitingEcho;
         true
     }
@@ -94,6 +110,7 @@ impl ShellLineTracker {
             return false;
         }
         self.line = line;
+        self.advance_revision();
         self.mirror = Mirror::AwaitingEcho;
         true
     }
@@ -108,6 +125,7 @@ impl ShellLineTracker {
             && !line.is_empty()
             && !line.chars().any(char::is_control);
         self.line.clear();
+        self.advance_revision();
         self.mirror = Mirror::Invalid;
         if accepted {
             self.pending = Some(PendingExecution {
@@ -143,6 +161,7 @@ impl ShellLineTracker {
     /// Readline、历史召回、resize/reset、备用屏或前台接管均走同一失效口。
     pub(crate) fn invalidate(&mut self) {
         self.line.clear();
+        self.advance_revision();
         self.mirror = Mirror::Invalid;
         if self
             .pending
@@ -249,6 +268,22 @@ mod tests {
         assert_eq!(tracker.completion_line(), None);
         tracker.observe_prompt(1, "gi");
         assert_eq!(tracker.completion_line(), Some("gi"));
+    }
+
+    #[test]
+    fn input_revision_tracks_local_edits_but_not_echo() {
+        let mut tracker = tracker();
+        tracker.observe_prompt(1, "");
+        let initial = tracker.revision();
+        tracker.observe_prompt(1, "");
+        assert_eq!(tracker.revision(), initial);
+        tracker.note_text("g");
+        let typed = tracker.revision();
+        assert!(typed > initial);
+        tracker.observe_prompt(1, "g");
+        assert_eq!(tracker.revision(), typed, "PTY 回显不得推进输入代次");
+        assert!(tracker.replace_trusted_line("git".into()));
+        assert!(tracker.revision() > typed);
     }
 
     #[test]

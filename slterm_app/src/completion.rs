@@ -84,10 +84,8 @@ impl Session {
         self.scripts.invalidate();
     }
 
-    /// 构造一次补全请求;方言是输入事实,未证明时只接受通用字面量。
-    ///
-    /// 参数数量由请求快照契约固定;打包成结构只会把同一组事实藏进
-    /// 临时类型,不降低调用方理解成本。
+    /// 测试夹具使用零代次；生产必须经过 `request_at_revision`。
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn request_at(
         &self,
@@ -98,6 +96,25 @@ impl Session {
         style: crate::suggest::CompletionStyle,
         execution: Option<&PaneExecContext>,
         syntax_override: Option<ShellSyntax>,
+    ) -> Request {
+        self.request_at_revision(cwd, env, line, cursor, style, execution, syntax_override, 0)
+    }
+
+    /// 构造一次补全请求;方言是输入事实,未证明时只接受通用字面量。
+    ///
+    /// 参数数量由请求快照契约固定;打包成结构只会把同一组事实藏进
+    /// 临时类型,不降低调用方理解成本。
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn request_at_revision(
+        &self,
+        cwd: String,
+        env: SuggestEnv,
+        line: String,
+        cursor: usize,
+        style: crate::suggest::CompletionStyle,
+        execution: Option<&PaneExecContext>,
+        syntax_override: Option<ShellSyntax>,
+        input_revision: u64,
     ) -> Request {
         let syntax = syntax_override.unwrap_or_else(|| {
             execution
@@ -143,6 +160,7 @@ impl Session {
             scripts,
             syntax,
             learning: self.learning.snapshot(),
+            input_revision,
         }
     }
 }
@@ -159,6 +177,7 @@ pub(crate) struct Request {
     scripts: Option<(Arc<project_scripts::Cache>, metadata::Execution)>,
     syntax: ShellSyntax,
     learning: crate::learning::LearningDataSnapshot,
+    input_revision: u64,
 }
 
 impl Request {
@@ -234,6 +253,7 @@ impl Request {
                         line: &self.line,
                     },
                     self.syntax,
+                    self.input_revision,
                     &|| cancellation.is_cancelled(),
                 );
             }
@@ -283,7 +303,13 @@ impl Request {
         if cancellation.is_cancelled() {
             return Candidates::default();
         }
-        suggest::semantic_candidates_at(&self.line, self.cursor, self.style, candidates)
+        suggest::semantic_candidates_at(
+            &self.line,
+            self.cursor,
+            self.input_revision,
+            self.style,
+            candidates,
+        )
     }
 }
 
@@ -342,19 +368,11 @@ mod completion_tests {
         let item = result
             .completion_items
             .iter()
-            .find(|item| item.insert.contains('文'))
+            .find(|item| item.edit.insert().contains('文'))
             .unwrap();
-        assert!(item.replace_after_chars > 0);
-        let head: String = line[..cursor]
-            .chars()
-            .take(line[..cursor].chars().count() - item.replace_chars)
-            .collect();
-        let tail: String = line[cursor..]
-            .chars()
-            .skip(item.replace_after_chars)
-            .collect();
+        assert!(item.edit.span().end > cursor);
         assert_eq!(
-            format!("{head}{}{tail}", item.insert),
+            item.edit.apply(line, 0).unwrap(),
             "git switch \"feature/中文\" --quiet"
         );
     }
@@ -407,11 +425,7 @@ mod completion_tests {
                     } else {
                         result.suggestion_edit.as_ref().expect(line)
                     };
-                    let accepted: String = line
-                        .chars()
-                        .take(line.chars().count() - item.replace_chars)
-                        .chain(item.insert.chars())
-                        .collect();
+                    let accepted = item.edit.apply(line, 0).unwrap();
                     let decoded = CommandContext::parse(&accepted, accepted.len(), syntax).unwrap();
                     let target = directory.path().join(decoded.prefix());
                     assert!(target.exists(), "{program}: {accepted}");
@@ -529,11 +543,7 @@ mod completion_tests {
                     } else {
                         result.suggestion_edit.as_ref().expect(line)
                     };
-                    let accepted: String = line
-                        .chars()
-                        .take(line.chars().count() - edit.replace_chars)
-                        .chain(edit.insert.chars())
-                        .collect();
+                    let accepted = edit.edit.apply(line, 0).unwrap();
                     assert_eq!(accepted, expected, "{program} {style:?}");
                 }
             }
@@ -628,7 +638,7 @@ mod completion_tests {
             ] {
                 let result = query(line, style);
                 if style == CompletionStyle::Popup {
-                    assert_eq!(result.completion_items[0].insert, insert);
+                    assert_eq!(result.completion_items[0].edit.insert(), insert);
                 } else {
                     assert_eq!(result.suggestion, insert);
                 }
@@ -666,12 +676,12 @@ mod completion_tests {
                 )
                 .calculate(&Cancellation::default())
         };
-        assert_eq!(query().completion_items[0].insert, "z");
+        assert_eq!(query().completion_items[0].edit.insert(), "z");
         std::fs::write(&manifest, r#"{"scripts":{"slterm-rank-a":"echo a"}}"#).unwrap();
         session.invalidate();
         let result = query();
         assert_eq!(result.completion_items.len(), 1);
-        assert_eq!(result.completion_items[0].insert, "a");
+        assert_eq!(result.completion_items[0].edit.insert(), "a");
     }
 
     /// 防复发:语义来源为 Branches 但 Git 缓存缺失时返回空候选,
@@ -723,7 +733,7 @@ mod completion_tests {
             result
                 .completion_items
                 .iter()
-                .any(|item| item.insert == ".txt")
+                .any(|item| item.edit.insert() == ".txt")
         );
     }
 

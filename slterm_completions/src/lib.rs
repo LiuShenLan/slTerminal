@@ -15,6 +15,7 @@
 pub mod command_context;
 pub mod command_search;
 pub mod completer;
+pub mod edit;
 pub mod file;
 pub mod matcher;
 pub mod options;
@@ -29,6 +30,7 @@ mod static_completion;
 
 pub use completer::Completer;
 pub use directory::DirectoryCompletion;
+pub use edit::{CompletionEdit, CompletionEditError};
 pub use matcher::{CandidateMatcher, IgnoreCaseExt};
 pub use options::{CompletionOptions, CompletionSort, InvalidMatchAlgorithm, MatchAlgorithm};
 pub use span::Span;

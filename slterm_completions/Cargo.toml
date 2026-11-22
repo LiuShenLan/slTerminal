@@ -21,5 +21,6 @@ path = "src/lib.rs"
 # ANSI 样式在 GPUI 自绘弹窗无消费端(裁剪不采纳点)。
 [dependencies]
 nucleo-matcher = "0.3"
+sha2 = "0.11"
 unicase = "2.9"
 unicode-segmentation = "1.13"

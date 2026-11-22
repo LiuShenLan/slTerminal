@@ -6457,6 +6457,7 @@ name = "slterm_completions"
 version = "0.0.0"
 dependencies = [
  "nucleo-matcher",
+ "sha2 0.11.1",
  "unicase",
  "unicode-segmentation",
 ]

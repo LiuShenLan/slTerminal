@@ -389,20 +389,15 @@ impl Element for TerminalElement {
         // ghost 余量:画在光标之后,使用主题 dim 前景,不改网格。
         //
         // 光标块占据当前格,ghost 从右侧第一格开始。`suggestion_edit` 存在
-        // 时按终端列宽折行,并先用终端背景遮住接受后会删除的尾部;不存在
-        // 时保持旧行为——只在光标行单行绘制。
-        let (ghost, ghost_replace_after, ghost_has_edit) = {
+        // 时按终端列宽折行；不存在时保持旧行为——只在光标行单行绘制。
+        let (ghost, ghost_has_edit) = {
             let view = self.view.read(cx);
             (
                 view.suggest.suggestion.clone(),
-                view.suggest
-                    .suggestion_edit
-                    .as_ref()
-                    .map_or(0, |item| item.replace_after_chars),
                 view.suggest.suggestion_edit.is_some(),
             )
         };
-        if (!ghost.is_empty() || ghost_replace_after > 0)
+        if !ghost.is_empty()
             && let Some(cursor) = &snap.cursor
         {
             let start_col = cursor.col as usize + 1;
@@ -417,15 +412,7 @@ impl Element for TerminalElement {
                 layout.cols,
                 rows_available,
                 ghost.chars().count(),
-                ghost_replace_after,
             );
-            // 先遮住将被 replace_after 删除的格子(含折行后的格),再画文本。
-            for mask in &ghost_layout.masks {
-                window.paint_quad(fill(
-                    cell_rect(cursor.row as usize + mask.row, mask.col, mask.len),
-                    theme.background,
-                ));
-            }
             for segment in &ghost_layout.segments {
                 let text: String = ghost
                     .chars()
@@ -518,17 +505,6 @@ fn snap_to_device(value: Pixels, scale: f32) -> Pixels {
     px((value.as_f32() * scale).round() / scale)
 }
 
-/// ghost 需要先用终端背景遮住的一段替换格(视觉坐标)。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct GhostSpan {
-    /// 行偏移,0 = 光标所在行。
-    row: usize,
-    /// 该行内起始视觉列。
-    col: usize,
-    /// 连续格数。
-    len: usize,
-}
-
 /// ghost 文本的一段:起点 + 在 ghost 文本中的字符区间。
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct GhostTextSegment {
@@ -537,10 +513,9 @@ struct GhostTextSegment {
     chars: std::ops::Range<usize>,
 }
 
-/// 一帧 ghost 的几何计划:遮罩区间与文本分段。
+/// 一帧 ghost 的文本几何计划。
 #[derive(Debug, Default, PartialEq, Eq)]
 struct GhostLayout {
-    masks: Vec<GhostSpan>,
     segments: Vec<GhostTextSegment>,
 }
 
@@ -548,18 +523,15 @@ struct GhostLayout {
 ///
 /// - `start_col`:光标右侧第一格的视觉列;等于 `cols` 时折到下一行行首。
 /// - `cols`/`rows_available`:终端列宽与光标行起的可用行数。
-/// - `text_chars`:ghost 文本字符数;`replace_after_chars`:接受时删除的
-///   尾部字符数。
+/// - `text_chars`:ghost 文本字符数。
 ///
-/// 遮罩与文本都从 `start_col` 起按终端列宽线性排布:遮罩覆盖
-/// `replace_after_chars` 个格,文本占 `text_chars` 个格,越过底部可用行即
-/// 截断。相邻格合并成连续区间,便于逐区域提交 quad、逐段塑形。
+/// 文本从 `start_col` 起按终端列宽线性排布，越过底部可用行即截断。
+/// 相邻格合并成连续区间，便于逐段塑形。
 fn ghost_segments(
     start_col: usize,
     cols: usize,
     rows_available: usize,
     text_chars: usize,
-    replace_after_chars: usize,
 ) -> GhostLayout {
     let mut layout = GhostLayout::default();
     let capacity = cols.saturating_mul(rows_available);
@@ -568,15 +540,6 @@ fn ghost_segments(
     }
 
     let cell = |position: usize| (position / cols, position % cols);
-    let mask_end = start_col.saturating_add(replace_after_chars).min(capacity);
-    for position in start_col..mask_end {
-        let (row, col) = cell(position);
-        match layout.masks.last_mut() {
-            Some(span) if span.row == row && span.col + span.len == col => span.len += 1,
-            _ => layout.masks.push(GhostSpan { row, col, len: 1 }),
-        }
-    }
-
     let text_end = start_col.saturating_add(text_chars).min(capacity);
     for position in start_col..text_end {
         let (row, col) = cell(position);
@@ -619,14 +582,9 @@ mod ownership_tests {
 mod ghost_tests {
     use super::*;
 
-    fn span(row: usize, col: usize, len: usize) -> GhostSpan {
-        GhostSpan { row, col, len }
-    }
-
     #[test]
     fn ghost_segments_keeps_text_in_one_run_when_it_fits() {
-        let layout = ghost_segments(5, 20, 3, 4, 0);
-        assert!(layout.masks.is_empty(), "无替换尾部时不应有遮罩");
+        let layout = ghost_segments(5, 20, 3, 4);
         assert_eq!(
             layout.segments,
             vec![GhostTextSegment {
@@ -639,7 +597,7 @@ mod ghost_tests {
 
     #[test]
     fn ghost_segments_finishes_exactly_at_the_row_edge() {
-        let layout = ghost_segments(16, 20, 3, 4, 0);
+        let layout = ghost_segments(16, 20, 3, 4);
         assert_eq!(
             layout.segments,
             vec![GhostTextSegment {
@@ -653,7 +611,7 @@ mod ghost_tests {
 
     #[test]
     fn ghost_segments_wraps_text_across_rows() {
-        let layout = ghost_segments(18, 20, 3, 5, 0);
+        let layout = ghost_segments(18, 20, 3, 5);
         assert_eq!(
             layout.segments,
             vec![
@@ -672,16 +630,9 @@ mod ghost_tests {
     }
 
     #[test]
-    fn ghost_segments_masks_replace_after_across_rows() {
-        let layout = ghost_segments(18, 20, 3, 0, 4);
-        assert_eq!(layout.masks, vec![span(0, 18, 2), span(1, 0, 2)]);
-        assert!(layout.segments.is_empty(), "空 ghost 只遮罩不画文本");
-    }
-
-    #[test]
-    fn ghost_segments_truncates_text_and_mask_at_the_bottom() {
+    fn ghost_segments_truncates_text_at_the_bottom() {
         // 光标行起仅剩 2 行:容量 40 格,start=18 → 可用 22 格。
-        let layout = ghost_segments(18, 20, 2, 30, 30);
+        let layout = ghost_segments(18, 20, 2, 30);
         assert_eq!(
             layout.segments,
             vec![
@@ -697,12 +648,11 @@ mod ghost_tests {
                 },
             ]
         );
-        assert_eq!(layout.masks, vec![span(0, 18, 2), span(1, 0, 20)]);
     }
 
     #[test]
     fn ghost_segments_wraps_from_the_last_column_to_the_next_row() {
-        let layout = ghost_segments(20, 20, 2, 3, 0);
+        let layout = ghost_segments(20, 20, 2, 3);
         assert_eq!(
             layout.segments,
             vec![GhostTextSegment {
@@ -713,7 +663,7 @@ mod ghost_tests {
             "末列右侧的第一格是下一行行首"
         );
 
-        let bottom = ghost_segments(20, 20, 1, 3, 0);
+        let bottom = ghost_segments(20, 20, 1, 3);
         assert_eq!(bottom, GhostLayout::default(), "底部最后一格不得越界");
     }
 
@@ -721,7 +671,7 @@ mod ghost_tests {
     fn ghost_segments_without_edit_keeps_single_line_drawing() {
         // 无编辑合同时调用方传 rows_available = 1:只在光标行绘制,
         // 超出列宽的部分截断(旧行为)。
-        let layout = ghost_segments(8, 10, 1, 5, 0);
+        let layout = ghost_segments(8, 10, 1, 5);
         assert_eq!(
             layout.segments,
             vec![GhostTextSegment {
@@ -730,6 +680,5 @@ mod ghost_tests {
                 chars: 0..2,
             }]
         );
-        assert!(layout.masks.is_empty());
     }
 }

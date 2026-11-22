@@ -44,7 +44,7 @@ impl TerminalView {
     pub(crate) fn completion_key(&self, style: CompletionStyle) -> String {
         let line = self.shell_line.line();
         format!(
-            "{}\0cursor={}\0syntax={:?}",
+            "{}\0cursor={}\0syntax={:?}\0revision={}",
             completion::cache_key(
                 &self.cwd,
                 &SuggestEnv::Local,
@@ -56,6 +56,7 @@ impl TerminalView {
             ),
             line.len(),
             self.term_mode().contains(TermMode::ALT_SCREEN),
+            self.shell_line.revision(),
         )
     }
 
@@ -100,7 +101,8 @@ impl TerminalView {
         let cursor = line.len();
         let cancellation = Cancellation::default();
         let worker_cancellation = cancellation.clone();
-        let request = session.request_at(
+        let input_revision = self.shell_line.revision();
+        let request = session.request_at_revision(
             self.cwd.clone(),
             SuggestEnv::Local,
             line.clone(),
@@ -110,6 +112,7 @@ impl TerminalView {
             // 方言是输入事实:由 Session 从冻结的执行环境推导,未证明时
             // 只接受通用字面量。
             None,
+            input_revision,
         );
         let calculation =
             cx.background_spawn(async move { request.calculate(&worker_cancellation) });
@@ -122,6 +125,7 @@ impl TerminalView {
                     .active_style(view.suggest.popup_requested);
                 if !view.suggest.completion_query_matches(&key)
                     || view.shell_line.completion_line() != Some(line.as_str())
+                    || view.shell_line.revision() != input_revision
                     || current_style != style
                     || !view.ghost_enabled
                     || view.exited.is_some()
@@ -211,7 +215,7 @@ impl TerminalView {
                 .suggest
                 .suggestion_edit
                 .as_ref()
-                .is_some_and(|item| item.replace_after_chars != 0);
+                .is_some_and(|item| item.edit.span().start != item.edit.span().end);
         if ghost_available && (key == "right" || key == "tab" && !hybrid) {
             if let Some(item) = self.suggest.suggestion_edit.take() {
                 self.suggest.suggestion.clear();
@@ -242,42 +246,43 @@ impl TerminalView {
         self.accept_completion_item(item, cx)
     }
 
-    /// 把候选的编辑合同写回 PTY:先右移越过已证尾部,再退格替换已打部分,
-    /// 最后键入余量。终端行编辑器证明过的尾部才允许删除。
+    /// 把候选的编辑合同写回 PTY：可信镜像只支持行尾替换，先退格再键入余量。
     pub(super) fn accept_completion_item(
         &mut self,
         item: SltermCompletionItem,
         cx: &mut Context<'_, Self>,
     ) -> bool {
-        if self.shell_line.completion_line().is_none() {
+        let Some(line) = self.shell_line.completion_line().map(str::to_owned) else {
             return false;
-        }
+        };
+        let Ok(head) = item.edit.apply(&line, self.shell_line.revision()) else {
+            self.suggest.clear_completion_hints();
+            self.refresh_suggestion(cx);
+            return true;
+        };
         let mode = self.term_mode();
-        if item.replace_after_chars > 0 {
-            let right = encode_named("right", &mode).unwrap_or_else(|| b"\x1b[C".to_vec());
-            self.write_input(right.repeat(item.replace_after_chars), cx);
+        let span = item.edit.span();
+        if span.end != line.len() {
+            // 可信镜像只覆盖行尾编辑；中间游标候选不得猜测 Readline 操作。
+            self.suggest.clear_completion_hints();
+            self.refresh_suggestion(cx);
+            return true;
         }
-        if item.replace_chars + item.replace_after_chars > 0 {
+        let replace_chars = line[span.start..].chars().count();
+        if replace_chars > 0 {
             let backspace = encode_named("backspace", &mode).unwrap_or_else(|| vec![0x7f]);
-            self.write_input(
-                backspace.repeat(item.replace_chars + item.replace_after_chars),
-                cx,
-            );
+            self.write_input(backspace.repeat(replace_chars), cx);
         }
-        let mut head = self.shell_line.line().to_owned();
-        for _ in 0..item.replace_chars {
-            head.pop();
-        }
-        head.push_str(&item.insert);
         self.shell_line.replace_trusted_line(head.clone());
         // 接受后整行已变化;抑制幽灵立即复现,直到下一次真实输入。
         self.suggest.suppressed_line = Some(head);
         self.suggest.completion_items.clear();
         self.suggest.completion_selected = None;
         self.suggest.popup_requested = false;
-        if !item.insert.is_empty() {
-            let bytes = item.insert.clone().into_bytes();
-            self.write_user_text(item.insert, false, bytes, cx);
+        let insert = item.edit.insert().to_owned();
+        if !insert.is_empty() {
+            let bytes = insert.clone().into_bytes();
+            self.write_user_text(insert, false, bytes, cx);
         }
         self.refresh_suggestion(cx);
         true

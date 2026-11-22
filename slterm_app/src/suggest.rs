@@ -14,7 +14,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use slterm_completions::command_context::ShellSyntax;
-use slterm_completions::{SemanticSuggestion, SuggestionKind};
+use slterm_completions::{CompletionEdit, SemanticSuggestion, SuggestionKind};
 
 use crate::directory_history::DirectoryHistory;
 use crate::history::{HistoryScope, SltermHistory};
@@ -36,13 +36,9 @@ pub(crate) enum SltermCompletionKind {
 pub(crate) struct SltermCompletionItem {
     /// 展示文本(可能左省略)。
     pub label: String,
-    /// 接受时写入 PTY 的字符(用户已打部分的余量)。
-    pub insert: String,
-    /// 光标前替换字符数。
-    pub replace_chars: usize,
-    /// 光标后替换字符数(原生行编辑器证明的尾部)。
-    pub replace_after_chars: usize,
     pub kind: SltermCompletionKind,
+    /// 接受前必须复核的原文与输入代次合同。
+    pub edit: CompletionEdit,
 }
 
 /// 幽灵余量上限:防长路径/长命令溢进 chrome。
@@ -208,6 +204,7 @@ pub(crate) fn calculate(
     sources: &SuggestSources<'_>,
     input: &Input<'_>,
     syntax: ShellSyntax,
+    input_revision: u64,
     cancelled: &dyn Fn() -> bool,
 ) -> Candidates {
     let mut result = Candidates::default();
@@ -218,7 +215,14 @@ pub(crate) fn calculate(
 
     // Popup 计算多候选列表;两种形态按 pane 互斥。
     if sources.style == CompletionStyle::Popup {
-        suggest_collect(sources, input, syntax, &mut result, cancelled);
+        suggest_collect(
+            sources,
+            input,
+            syntax,
+            input_revision,
+            &mut result,
+            cancelled,
+        );
         return result;
     }
 
@@ -228,6 +232,12 @@ pub(crate) fn calculate(
         .hint_with_cancel(&input.env.history_scope(), line, cancelled)
         .map(clamp_ghost);
     if let Some(remainder) = hinted {
+        result.suggestion_edit =
+            tail_edit(line, input_revision, 0, &remainder).map(|edit| SltermCompletionItem {
+                label: format!("{line}{remainder}"),
+                kind: SltermCompletionKind::History,
+                edit,
+            });
         result.suggestion = remainder;
         return result;
     }
@@ -252,7 +262,7 @@ pub(crate) fn calculate(
         None,
         cancelled,
     );
-    semantic_candidates(line, sources.style, paths)
+    semantic_candidates(line, input_revision, sources.style, paths)
 }
 
 /// 输入、执行环境与后台数据代际共同标识候选;异步适配器用它拒绝过期结果。
@@ -290,18 +300,40 @@ fn popup_edit(line: &str, candidate: &str) -> (usize, String) {
     }
 }
 
+fn tail_edit(
+    line: &str,
+    input_revision: u64,
+    replace_chars: usize,
+    insert: &str,
+) -> Option<CompletionEdit> {
+    let retained = line.chars().count().checked_sub(replace_chars)?;
+    let start = line
+        .char_indices()
+        .nth(retained)
+        .map_or(line.len(), |(index, _)| index);
+    CompletionEdit::new(
+        line,
+        input_revision,
+        slterm_completions::Span::new(start, line.len()),
+        insert.to_owned(),
+    )
+    .ok()
+}
+
 /// 把语义 byte span 投影为终端行尾编辑合同。
 pub(crate) fn semantic_candidates(
     line: &str,
+    input_revision: u64,
     style: CompletionStyle,
     candidates: Vec<SemanticSuggestion>,
 ) -> Candidates {
-    semantic_candidates_at(line, line.len(), style, candidates)
+    semantic_candidates_at(line, line.len(), input_revision, style, candidates)
 }
 
 pub(crate) fn semantic_candidates_at(
     line: &str,
     cursor: usize,
+    input_revision: u64,
     style: CompletionStyle,
     candidates: Vec<SemanticSuggestion>,
 ) -> Candidates {
@@ -324,33 +356,37 @@ pub(crate) fn semantic_candidates_at(
                 .take_while(|(a, b)| a == b)
                 .map(|(ch, _)| ch.len_utf8())
                 .sum();
+            let insert = candidate.value[common..].to_owned();
+            let edit = CompletionEdit::new(
+                line,
+                input_revision,
+                slterm_completions::Span::new(candidate.span.start + common, candidate.span.end),
+                insert.clone(),
+            )
+            .ok()?;
             Some(SltermCompletionItem {
                 label: elide_left(candidate.display_value(), 44),
-                insert: candidate.value[common..].to_owned(),
-                replace_chars: token[common..].chars().count(),
-                replace_after_chars: line.get(cursor..candidate.span.end)?.chars().count(),
                 kind: match semantic.kind {
                     Some(SuggestionKind::Directory) => SltermCompletionKind::Dir,
                     Some(SuggestionKind::File) => SltermCompletionKind::File,
                     _ => SltermCompletionKind::Command,
                 },
+                edit,
             })
         })
         .filter(|item| {
             style == CompletionStyle::Popup
-                || item.replace_chars != 0
-                || item.replace_after_chars != 0
-                || !item.insert.is_empty()
+                || item.edit.span().start != item.edit.span().end
+                || !item.edit.insert().is_empty()
         })
         .take(256)
         .collect();
     if style == CompletionStyle::Popup {
         result.completion_items = items;
-    } else if let Some(item) = items
-        .into_iter()
-        .find(|item| !item.insert.is_empty() || item.replace_after_chars != 0)
-    {
-        result.suggestion = clamp_ghost(&item.insert);
+    } else if let Some(item) = items.into_iter().find(|item| {
+        !item.edit.insert().is_empty() || item.edit.span().start != item.edit.span().end
+    }) {
+        result.suggestion = clamp_ghost(item.edit.insert());
         result.suggestion_edit = Some(item);
     }
     result
@@ -361,6 +397,7 @@ fn suggest_collect(
     sources: &SuggestSources<'_>,
     input: &Input<'_>,
     syntax: ShellSyntax,
+    input_revision: u64,
     result: &mut Candidates,
     cancelled: &dyn Fn() -> bool,
 ) {
@@ -371,12 +408,12 @@ fn suggest_collect(
 
     let mut items: Vec<SltermCompletionItem> = Vec::new();
     let push = |items: &mut Vec<SltermCompletionItem>, item: SltermCompletionItem| {
-        if item.insert.is_empty() {
+        if item.edit.insert().is_empty() {
             return;
         }
         if items
             .iter()
-            .any(|seen| seen.insert == item.insert && seen.kind == item.kind)
+            .any(|seen| seen.edit.insert() == item.edit.insert() && seen.kind == item.kind)
         {
             return;
         }
@@ -394,14 +431,15 @@ fn suggest_collect(
         .collect::<Vec<_>>();
     for full in history_matches {
         let (replace_chars, insert) = popup_edit(input.line, &full);
+        let Some(edit) = tail_edit(input.line, input_revision, replace_chars, &insert) else {
+            continue;
+        };
         push(
             &mut items,
             SltermCompletionItem {
-                replace_chars,
-                replace_after_chars: 0,
                 label: elide_left(&full, LABEL_MAX),
-                insert,
                 kind: SltermCompletionKind::History,
+                edit,
             },
         );
     }
@@ -419,14 +457,15 @@ fn suggest_collect(
             if command.eq_ignore_ascii_case(input.line) {
                 insert.push(' ');
             }
+            let Some(edit) = tail_edit(input.line, input_revision, replace_chars, &insert) else {
+                continue;
+            };
             push(
                 &mut items,
                 SltermCompletionItem {
-                    replace_chars,
-                    replace_after_chars: 0,
                     label: elide_left(command, LABEL_MAX),
-                    insert,
                     kind: SltermCompletionKind::Command,
+                    edit,
                 },
             );
         }
@@ -440,7 +479,9 @@ fn suggest_collect(
         None,
         cancelled,
     );
-    for item in semantic_candidates(input.line, CompletionStyle::Popup, paths).completion_items {
+    for item in semantic_candidates(input.line, input_revision, CompletionStyle::Popup, paths)
+        .completion_items
+    {
         push(&mut items, item);
     }
     result.completion_items = items;
@@ -719,6 +760,7 @@ mod suggest_tests {
                     line,
                 },
                 ShellSyntax::PowerShell,
+                0,
                 &|| false,
             )
             .suggestion
@@ -733,11 +775,12 @@ mod suggest_tests {
                     line,
                 },
                 ShellSyntax::PowerShell,
+                0,
                 &|| false,
             )
             .completion_items
             .into_iter()
-            .map(|item| item.insert)
+            .map(|item| item.edit.insert().to_owned())
             .collect()
         }
     }
@@ -835,6 +878,7 @@ mod suggest_tests {
                     line: "cat ca",
                 },
                 ShellSyntax::PowerShell,
+                0,
                 &|| {
                     checks.set(checks.get() + 1);
                     false
@@ -862,6 +906,7 @@ mod suggest_tests {
                     line: "cargo b",
                 },
                 ShellSyntax::PowerShell,
+                0,
                 &|| true,
             );
             assert!(result.suggestion.is_empty());
@@ -912,18 +957,11 @@ mod suggest_tests {
             },
             SuggestionKind::Command("git".into()),
         );
-        let result = semantic_candidates_at(line, cursor, CompletionStyle::Popup, vec![semantic]);
+        let result =
+            semantic_candidates_at(line, cursor, 0, CompletionStyle::Popup, vec![semantic]);
         let item = &result.completion_items[0];
-        let head: String = line[..cursor]
-            .chars()
-            .take(line[..cursor].chars().count() - item.replace_chars)
-            .collect();
-        let tail: String = line[cursor..]
-            .chars()
-            .skip(item.replace_after_chars)
-            .collect();
         assert_eq!(
-            format!("{head}{}{tail}", item.insert),
+            item.edit.apply(line, 0).unwrap(),
             "git switch \"feature/中文\" --quiet"
         );
     }
@@ -946,10 +984,14 @@ mod suggest_tests {
     fn popup_state() -> SuggestState {
         let item = |label: &str, insert: &str| SltermCompletionItem {
             label: label.to_owned(),
-            insert: insert.to_owned(),
-            replace_chars: 0,
-            replace_after_chars: 0,
             kind: SltermCompletionKind::Command,
+            edit: CompletionEdit::new(
+                "",
+                0,
+                slterm_completions::Span::new(0, 0),
+                insert.to_owned(),
+            )
+            .unwrap(),
         };
         SuggestState {
             completion_items: vec![
@@ -975,7 +1017,9 @@ mod suggest_tests {
             state.completion_popup_move(delta);
             assert_eq!(state.completion_selected, Some(0));
             assert_eq!(
-                state.completion_popup_take().map(|item| item.insert),
+                state
+                    .completion_popup_take()
+                    .map(|item| item.edit.insert().to_owned()),
                 Some(" upstream".to_owned())
             );
             assert!(state.completion_items.is_empty());

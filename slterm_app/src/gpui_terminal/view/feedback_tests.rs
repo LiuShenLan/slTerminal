@@ -259,7 +259,7 @@ fn popup_navigation_and_accept_edit_the_line_without_submitting(cx: &mut TestApp
         view.suggest
             .completion_items
             .iter()
-            .map(|item| item.insert.clone())
+            .map(|item| item.edit.insert().to_owned())
             .collect::<Vec<_>>()
     });
     assert!(!items.is_empty(), "Popup 形态自动计算候选: {items:?}");
@@ -293,7 +293,7 @@ fn popup_navigation_and_accept_edit_the_line_without_submitting(cx: &mut TestApp
         !bytes.contains(&b'\r'),
         "接受候选的 Enter 不得提交命令: {bytes:?}"
     );
-    assert_eq!(bytes, selected.insert.as_bytes(), "只写候选余量");
+    assert_eq!(bytes, selected.edit.insert().as_bytes(), "只写候选余量");
 }
 
 /// 可信门控：回显之外的编辑关闭补全；无 Start 或被取消的执行不采集；
@@ -374,6 +374,29 @@ fn terminal_trusted_line_completion_gate(cx: &mut TestAppContext) {
     assert_eq!(bytes, b"ommand".to_vec());
     assert!(!bytes.contains(&b'\r'), "接受候选不得自动执行");
     assert!(submitted.borrow().is_empty());
+}
+
+/// 原文或输入代次失配的旧候选不得产生任何 PTY 副作用。
+#[gpui::test]
+fn completion_edit_rejects_stale_candidate_without_pty_writes(cx: &mut TestAppContext) {
+    let (terminal, mut window, rx, _registry) =
+        open_with_history(cx, CompletionStyle::Popup, true, &["stale-command"]);
+    type_text(&terminal, &mut window, "stale");
+    let _ = pty_bytes(&rx);
+    let stale = terminal.read_with(&window, |view, _| {
+        view.suggest.completion_items.first().cloned().unwrap()
+    });
+    type_text(&terminal, &mut window, "x");
+    let _ = pty_bytes(&rx);
+
+    terminal.update_in(&mut window, |view, _, cx| {
+        assert!(view.accept_completion_item(stale, cx));
+    });
+    assert!(pty_bytes(&rx).is_empty(), "失配候选不得写 PTY");
+    assert_eq!(
+        terminal.read_with(&window, |view, _| view.suggest_line().to_owned()),
+        "stalex"
+    );
 }
 
 /// 进程退出也是未闭合执行的取消边界，迟到的 Done 不得采集。
