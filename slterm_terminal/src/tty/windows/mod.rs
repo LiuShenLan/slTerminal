@@ -9,7 +9,7 @@ use windows_sys::Win32::System::Threading::TerminateProcess;
 
 use crate::event::{OnResize, WindowSize};
 use crate::tty::windows::child::ChildExitWatcher;
-use crate::tty::windows::spawn::JobHandle;
+use crate::tty::windows::spawn::{JobHandle, LiveProcessReservation};
 use crate::tty::{ChildEvent, EventedPty, EventedReadWrite, Options, Shell};
 
 mod blocking;
@@ -42,6 +42,8 @@ pub struct Pty {
     conout: ReadPipe,
     conin: WritePipe,
     child_watcher: ChildExitWatcher,
+    /// 存活进程额度；观察到退出时提前归还，PTY 显示资源仍可保留。
+    live_process: LiveProcessReservation,
     /// Job Object 句柄（KILL_ON_JOB_CLOSE 孤儿防护）——会话期间持有；
     /// 字段序最末：drop 时最后释放，子进程树由 OS 兜底清空（父崩溃路径
     /// 同理经句柄回收触发同一语义）。
@@ -89,6 +91,7 @@ impl Pty {
             conout: conout.into(),
             conin: conin.into(),
             child_watcher,
+            live_process: LiveProcessReservation::default(),
             _job: job,
             strip_dsr,
             suppress_bringup_da1,
@@ -116,8 +119,6 @@ impl Drop for Pty {
         // slterm.exe lingers in task manager" failure. Hand conout to a
         // detached drain thread so the flush always has a consumer.
         self.conout.drain_detached();
-        // 会话计数归还（与 spawn::spawn_locked 的占用登记配对）。
-        spawn::session_closed();
     }
 }
 
@@ -186,11 +187,15 @@ impl EventedReadWrite for Pty {
 
 impl EventedPty for Pty {
     fn next_child_event(&mut self) -> Option<ChildEvent> {
-        match self.child_watcher.event_rx().try_recv() {
+        let event = match self.child_watcher.event_rx().try_recv() {
             Ok(ev) => Some(ev),
             Err(TryRecvError::Empty) => None,
             Err(TryRecvError::Disconnected) => Some(ChildEvent::Exited(None)),
+        };
+        if matches!(&event, Some(ChildEvent::Exited(_))) {
+            self.live_process.release();
         }
+        event
     }
 
     fn child_pid(&self) -> Option<u32> {

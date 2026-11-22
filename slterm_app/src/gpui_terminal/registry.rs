@@ -50,6 +50,9 @@ pub enum RegistryError {
     StaleGeneration,
     #[allow(dead_code)] // 由重连耗尽路径构造；当前已有定向测试。
     GenerationExhausted,
+    PtyLimitReached {
+        limit: usize,
+    },
     ProcessExited,
     Launch(std::io::Error),
     Send(EventLoopSendError),
@@ -62,6 +65,12 @@ impl fmt::Display for RegistryError {
             Self::TerminalNotFound => formatter.write_str("终端 worker 不存在"),
             Self::StaleGeneration => formatter.write_str("PTY 代次已失效"),
             Self::GenerationExhausted => formatter.write_str("PTY 代次已耗尽"),
+            Self::PtyLimitReached { limit } => {
+                write!(
+                    formatter,
+                    "存活 PTY 数已达上限 {limit}，请等待进程退出或关闭终端后重试"
+                )
+            }
             Self::ProcessExited => formatter.write_str("PTY 进程已退出"),
             Self::Launch(error) => write!(formatter, "终端 worker 启动失败: {error}"),
             Self::Send(error) => write!(formatter, "终端命令发送失败: {error}"),
@@ -94,6 +103,20 @@ pub struct TerminalRegistry {
 }
 
 impl TerminalRegistry {
+    fn ensure_live_capacity(&self) -> Result<(), RegistryError> {
+        let live = self
+            .entries
+            .values()
+            .filter(|entry| entry.process_live)
+            .count();
+        if live >= slterm_terminal::tty::MAX_PTY_SESSIONS {
+            return Err(RegistryError::PtyLimitReached {
+                limit: slterm_terminal::tty::MAX_PTY_SESSIONS,
+            });
+        }
+        Ok(())
+    }
+
     /// 只有工厂成功后才公布新代次；重复 TerminalId 不执行工厂。
     pub fn launch(
         &mut self,
@@ -103,6 +126,7 @@ impl TerminalRegistry {
         if self.entries.contains_key(&terminal_id) {
             return Err(RegistryError::DuplicateTerminal);
         }
+        self.ensure_live_capacity()?;
         let session = factory().map_err(RegistryError::Launch)?;
         let generation = PtyGeneration(1);
         let process = session.process_identity();
@@ -135,6 +159,7 @@ impl TerminalRegistry {
             .generation
             .next()
             .ok_or(RegistryError::GenerationExhausted)?;
+        self.ensure_live_capacity()?;
         let session = factory().map_err(RegistryError::Launch)?;
         let process = session.process_identity();
         let previous = self
@@ -463,6 +488,63 @@ mod registry_tests {
         registry
             .send(target, Msg::Scroll(slterm_terminal::grid::Scroll::Bottom))
             .expect("退出后仍须允许显示命令");
+    }
+
+    #[test]
+    fn terminal_live_pty_limit() {
+        let mut registry = TerminalRegistry::default();
+        let terminal_id = |index: usize| id(&format!("018f2f7c-8f5a-7c3d-9e2b-{index:012x}"));
+        for index in 0..slterm_terminal::tty::MAX_PTY_SESSIONS {
+            registry
+                .launch(terminal_id(index), || {
+                    Ok::<_, std::io::Error>(session::test_session().0)
+                })
+                .unwrap();
+        }
+        let rejected = terminal_id(slterm_terminal::tty::MAX_PTY_SESSIONS);
+        let mut invoked = false;
+        let result = registry.launch(rejected, || {
+            invoked = true;
+            Ok::<_, std::io::Error>(session::test_session().0)
+        });
+        assert!(result.is_err(), "第 65 个存活 PTY 必须被拒绝");
+        assert!(!invoked, "达到存活上限时不得执行 worker 工厂");
+        assert!(registry.target(rejected).is_none());
+        assert!(
+            registry.target(terminal_id(0)).is_some(),
+            "既有记录不得丢失"
+        );
+
+        registry
+            .mark_process_exited(registry.target(terminal_id(0)).unwrap())
+            .unwrap();
+        registry
+            .launch(rejected, || {
+                Ok::<_, std::io::Error>(session::test_session().0)
+            })
+            .expect("一个进程退出后必须释放重试额度");
+    }
+
+    #[test]
+    fn reconnect_live_pty_limit_preserves_worker() {
+        let mut registry = TerminalRegistry::default();
+        let terminal_id = |index: usize| id(&format!("018f2f7c-8f5a-7c3d-9e2b-{index:012x}"));
+        for index in 0..slterm_terminal::tty::MAX_PTY_SESSIONS {
+            registry
+                .launch(terminal_id(index), || {
+                    Ok::<_, std::io::Error>(session::test_session().0)
+                })
+                .unwrap();
+        }
+        let current = registry.target(terminal_id(0)).unwrap();
+        let mut invoked = false;
+        let result = registry.reconnect(terminal_id(0), || {
+            invoked = true;
+            Ok::<_, std::io::Error>(session::test_session().0)
+        });
+        assert!(result.is_err(), "达到上限时不得让重连临时超发");
+        assert!(!invoked);
+        assert_eq!(registry.target(terminal_id(0)), Some(current));
     }
 
     #[test]

@@ -3,7 +3,7 @@
 //! 覆盖：cmd 全链（spawn→写→读→resize→关闭）、默认 shell 探测链
 //! （`resolve_shell`）+ pwsh 集成脚本 OSC 语义、DA1 统一身份(
 //! bundled OpenConsole 臂）、bundled 宿主句柄回归（关闭与失败 spawn 后
-//! 句柄归还）、`SPAWN_LOCK` + `MAX_PTY_SESSIONS=32` 容量真验。
+//! 句柄归还）、`SPAWN_LOCK` + `MAX_PTY_SESSIONS=64` 存活进程容量真验。
 //!
 //! **串行纪律**：真进程用例必须 `--test-threads=1` 运行；文件内再以
 //! `INTEGRATION_LOCK` 兜底——容量用例会吃满会话上限，与任何并行用例
@@ -795,16 +795,12 @@ fn handle_child_impl() {
     );
 }
 
-// ─── 用例 6:SPAWN_LOCK 串行化 + MAX_PTY_SESSIONS=32 容量真验 ───
+// ─── SPAWN_LOCK 串行化 + 64 个存活进程容量真验 ───
 
-/// 并发真 spawn 到上限:32 个真 PTY 占满 → 第 33 个被拒;释放 1 个名额
-/// 后 4 线程并发抢,恰 1 成 3 拒(SPAWN_LOCK 内「容量判定 + 占用登记」
-/// 原子);全部 drop 后名额归还,再 spawn 成功。
-///
-/// 走 in-box 臂(`conpty_sideload: false`):容量/串行语义与后端无关,
-/// in-box 避开 OpenConsole 每会话启动税,缩短真机耗时。
+/// 64 个真 PTY 占满后拒绝新启动；一个子进程退出即归还额度，保留其 PTY
+/// 显示资源也不得阻挡重试。释放一个存活名额后，四线程并发抢占必须恰一成三拒。
 #[test]
-fn spawn_lock_serializes_and_capacity_32_enforced() {
+fn integration_pty_limit() {
     let _guard = integration_lock();
     let opts = Options {
         conpty_sideload: false,
@@ -816,10 +812,32 @@ fn spawn_lock_serializes_and_capacity_32_enforced() {
         held.push(tty::new(&opts, SIZE).unwrap_or_else(|e| panic!("第 {i} 个会话 spawn: {e}")));
     }
     let err = match tty::new(&opts, SIZE) {
-        Ok(_) => panic!("第 33 个会话必须被拒"),
+        Ok(_) => panic!("第 65 个存活进程必须被拒"),
         Err(e) => e,
     };
-    assert!(err.to_string().contains("32"), "拒绝消息应含上限值: {err}");
+    assert!(err.to_string().contains("64"), "拒绝消息应含上限值: {err}");
+
+    // 子进程退出即释放存活额度；旧 Pty 继续保留，供最后画面与滚动使用。
+    // SAFETY: 句柄来自仍存活的 Pty；测试只终止自己创建的子进程。
+    assert_ne!(
+        unsafe {
+            windows_sys::Win32::System::Threading::TerminateProcess(
+                held[0].child_watcher().raw_handle(),
+                0,
+            )
+        },
+        0
+    );
+    let exit_deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        if matches!(held[0].next_child_event(), Some(tty::ChildEvent::Exited(_))) {
+            break;
+        }
+        assert!(Instant::now() < exit_deadline, "子进程必须实际退出");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let replacement = tty::new(&opts, SIZE).expect("退出后保留旧 PTY 也必须允许重试");
+    held.push(replacement);
 
     // 并发抢名额:释放 1 个 → 4 线程 barrier 同发 → 恰 1 成 3 拒。
     //

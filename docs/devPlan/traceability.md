@@ -77,7 +77,7 @@
 | 崩溃恢复 | [生命周期](design/lifecycle.md)、[持久化](design/persistence.md) | `integration_crash_recovery` | 待实现 |
 | 快照配额 | [持久化](design/persistence.md)、[Document](design/document.md) | `integration_snapshot_quota` | 已自动化 |
 | 终端恢复 | [终端](design/terminal.md)、[生命周期](design/lifecycle.md) | `integration_terminal_restore` | 待实现 |
-| PTY 上限 | [终端](design/terminal.md)、[工作区](design/workspace.md) | `integration_pty_limit` | 待实现 |
+| PTY 上限 | [终端](design/terminal.md)、[工作区](design/workspace.md) | `integration_pty_limit` | 已自动化 |
 | 新建 cwd | [终端](design/terminal.md)、[工作区](design/workspace.md) | `integration_new_terminal_cwd` | 待实现 |
 | 单实例与 Runtime | [Runtime](design/runtime.md)、[生命周期](design/lifecycle.md)、[工作区](design/workspace.md) | `integration_single_instance_runtime_parity` | 待实现 |
 | Runtime 非交互关闭 | [Runtime](design/runtime.md)、[生命周期](design/lifecycle.md) | `integration_runtime_noninteractive_close` | 待实现 |
@@ -255,7 +255,7 @@
 |---|---|---|
 | 新终端未给 cwd 使用项目根且非法 cwd 拒绝 | `new_terminal_cwd_defaults_to_project_root`、`new_terminal_cwd_rejects_paths_outside_project_without_changing_snapshot` | 已自动化 |
 | 重启恢复可见、隐藏和已退出终端的不同运行态 | `terminal_restore_visibility_and_exit_state` | 已自动化 |
-| 存活 PTY 达上限时拒绝新启动且记录不丢 | `terminal_live_pty_limit` | 待实现 |
+| 存活 PTY 达上限时拒绝新启动且记录不丢 | `terminal_live_pty_limit` | 已自动化 |
 | 隐藏期间持续输出重新可见仍连续且只显示新画面 | `terminal_hidden_output_backpressure` | 待实现 |
 | 不可信镜像不补全不采集且接受候选不自动执行 | `terminal_trusted_line_completion_gate` | 待实现 |
 | cwd 变化丢弃旧补全且单来源失败不阻塞其他来源 | `completion_generation_and_source_failure` | 待实现 |

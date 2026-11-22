@@ -107,16 +107,41 @@ pub fn compute_conpty_flags(build_number: u32, bundled: bool, modes: &ConptyInpu
 
 // ─── SPAWN_LOCK 串行化与会话容量上限 ───
 
-/// PTY 会话总数上限——防止会话无上限堆积耗尽 ConPTY/进程句柄。
-pub const MAX_PTY_SESSIONS: usize = 32;
+/// 存活 PTY 进程上限——防止并发终端耗尽 ConPTY/进程句柄。
+pub const MAX_PTY_SESSIONS: usize = 64;
 
 /// 并发 spawn 会卡死 ConPTY 输出管道——create + spawn 段整段持锁（
 /// 锁界）。容量判定与占用登记在同一把锁内原子化，防并发超发。
 static SPAWN_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
 
-/// 活跃 PTY 会话计数（`spawn_locked` 成功 +1，`Pty::drop` 经
-/// `session_closed` -1）。
-static ACTIVE_PTY_SESSIONS: AtomicUsize = AtomicUsize::new(0);
+/// 存活 PTY 进程计数；创建成功后取得租约，观察到退出或 PTY 销毁时归还。
+static LIVE_PTY_PROCESSES: AtomicUsize = AtomicUsize::new(0);
+
+/// 一个存活进程占用的容量额度；释放恰好一次，退出后的显示资源不继续占额度。
+#[derive(Default)]
+pub(super) struct LiveProcessReservation {
+    acquired: bool,
+}
+
+impl LiveProcessReservation {
+    fn acquire(&mut self) {
+        debug_assert!(!self.acquired, "存活进程额度不得重复取得");
+        LIVE_PTY_PROCESSES.fetch_add(1, Ordering::SeqCst);
+        self.acquired = true;
+    }
+
+    pub(super) fn release(&mut self) {
+        if std::mem::take(&mut self.acquired) {
+            LIVE_PTY_PROCESSES.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+}
+
+impl Drop for LiveProcessReservation {
+    fn drop(&mut self) {
+        self.release();
+    }
+}
 
 /// 会话上限判定纯函数——active 达到 `MAX_PTY_SESSIONS` 即拒绝。
 pub fn ensure_pty_capacity(active: usize) -> Result<(), Error> {
@@ -133,15 +158,10 @@ pub fn ensure_pty_capacity(active: usize) -> Result<(), Error> {
 /// ConPTY 尚未创建，没有要 kill 的半成品；创建失败计数不变。
 pub(super) fn spawn_locked(config: &Options, window_size: WindowSize) -> Result<Pty, Error> {
     let _lock = SPAWN_LOCK.lock();
-    ensure_pty_capacity(ACTIVE_PTY_SESSIONS.load(Ordering::SeqCst))?;
-    let pty = conpty::new(config, window_size)?;
-    ACTIVE_PTY_SESSIONS.fetch_add(1, Ordering::SeqCst);
+    ensure_pty_capacity(LIVE_PTY_PROCESSES.load(Ordering::SeqCst))?;
+    let mut pty = conpty::new(config, window_size)?;
+    pty.live_process.acquire();
     Ok(pty)
-}
-
-/// `Pty::drop` 的计数归还（与 `spawn_locked` 的占用登记配对）。
-pub(super) fn session_closed() {
-    ACTIVE_PTY_SESSIONS.fetch_sub(1, Ordering::SeqCst);
 }
 
 // ─── Job Object 孤儿防护 ───
@@ -372,7 +392,7 @@ mod spawn_tests {
     fn pty_capacity_at_limit_rejected() {
         let err = ensure_pty_capacity(MAX_PTY_SESSIONS).expect_err("达到上限应拒绝");
         assert!(
-            err.to_string().contains("32"),
+            err.to_string().contains("64"),
             "错误消息应含上限值，实际: {err}"
         );
     }
@@ -390,7 +410,7 @@ mod spawn_tests {
     fn spawn_lock_serializes_capacity_check_and_reservation() {
         use std::sync::{Arc, Barrier};
 
-        let prev = ACTIVE_PTY_SESSIONS.swap(MAX_PTY_SESSIONS - 1, Ordering::SeqCst);
+        let prev = LIVE_PTY_PROCESSES.swap(MAX_PTY_SESSIONS - 1, Ordering::SeqCst);
         let barrier = Arc::new(Barrier::new(2));
         let mut results = Vec::new();
         std::thread::scope(|s| {
@@ -400,8 +420,8 @@ mod spawn_tests {
                 handles.push(s.spawn(move || {
                     barrier.wait();
                     let _lock = SPAWN_LOCK.lock();
-                    ensure_pty_capacity(ACTIVE_PTY_SESSIONS.load(Ordering::SeqCst)).map(|()| {
-                        ACTIVE_PTY_SESSIONS.fetch_add(1, Ordering::SeqCst);
+                    ensure_pty_capacity(LIVE_PTY_PROCESSES.load(Ordering::SeqCst)).map(|()| {
+                        LIVE_PTY_PROCESSES.fetch_add(1, Ordering::SeqCst);
                     })
                 }));
             }
@@ -411,8 +431,8 @@ mod spawn_tests {
         });
         let succeeded = results.iter().filter(|r| r.is_ok()).count();
         assert_eq!(succeeded, 1, "上限-1 并发进入：恰一个成功");
-        assert_eq!(ACTIVE_PTY_SESSIONS.load(Ordering::SeqCst), MAX_PTY_SESSIONS);
-        ACTIVE_PTY_SESSIONS.store(prev, Ordering::SeqCst);
+        assert_eq!(LIVE_PTY_PROCESSES.load(Ordering::SeqCst), MAX_PTY_SESSIONS);
+        LIVE_PTY_PROCESSES.store(prev, Ordering::SeqCst);
     }
 
     // ─── Job Object 纯函数族 ───
