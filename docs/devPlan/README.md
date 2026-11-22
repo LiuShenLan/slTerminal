@@ -25,7 +25,7 @@
 
 | 文档 | 用途 |
 |---|---|
-| [实施计划](plan.md) | 命名阶段、依赖顺序、集成检查点和提交规则。 |
+| [实施计划](plan.md) | 有序行为切片、命名阶段、依赖关系、集成检查点和提交规则。 |
 | [进度记录](progress.md) | 当前实施位置、阶段状态与已验收证据。 |
 | [架构](design/architecture.md) | crate 边界、AppRoot 所有权、任务与命令单点。 |
 | [领域模型](design/domain-model.md) | 稳定身份、ViewKey、Document、Terminal、RepositoryBinding 与代次。 |
@@ -44,7 +44,7 @@
 | [Windows](design/windows.md) | 套餐、托盘、通知、语言、更新、诊断、清理和发布。 |
 | [迁移处置](design/migration.md) | 旧模块保留、重写、删除及旧数据边界。 |
 | [测试设计](design/testing.md) | 自动化分层、故障注入、真实进程与豁免规则。 |
-| [追溯矩阵](traceability.md) | 需求场景到设计、测试和人工证据的映射。 |
+| [追溯矩阵](traceability.md) | 需求场景到设计、测试和人工证据的映射，以及独立分区的实现回归锚。 |
 
 ### 实施规则
 
