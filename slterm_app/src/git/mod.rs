@@ -33,10 +33,11 @@ mod show_tests;
 mod status_tests;
 
 mod system_open;
-pub(crate) use system_open::cleanup_expired_system_open;
+pub(crate) use system_open::{
+    GitShowOpenMaterial, cleanup_expired_system_open, open_snapshot as open_gitshow_snapshot,
+};
 
 pub(crate) use completion::{GitFacade, inferred_name as inferred_tracking_name};
-#[cfg(test)]
 pub(crate) use show::{GitShowContent, GitShowSnapshot};
 
 /// git 执行体错误。消息保持用户可读(经 i18n `{error}` 占位展示)。

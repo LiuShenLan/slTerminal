@@ -42,6 +42,7 @@ pub(crate) enum PanelContent {
     Editor(EditorContent),
     Markdown(MarkdownContent),
     Paged(Entity<PagedTextView>),
+    GitShow(Entity<super::git_show::GitShowView>),
     Recovery(Entity<DocumentRecoveryView>),
 }
 
@@ -81,6 +82,7 @@ impl PanelHost {
             PanelContent::Editor(editor) => editor.view.read(cx).focus_handle(cx),
             PanelContent::Markdown(markdown) => markdown.view.read(cx).focus_handle(cx),
             PanelContent::Paged(paged) => paged.read(cx).focus_handle(cx),
+            PanelContent::GitShow(view) => view.read(cx).focus_handle(cx),
             PanelContent::Recovery(recovery) => recovery.read(cx).focus_handle.clone(),
         }
     }

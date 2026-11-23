@@ -304,6 +304,33 @@ impl ProjectSnapshot {
         } else {
             initial
         };
+        candidate.open_view(project_id, target_group, view.clone())?;
+        Ok((candidate, view))
+    }
+
+    /// 打开不新增 Document 的固定视图；同键已存在时只激活，不重复插入。
+    pub fn with_opened_view(
+        &self,
+        project_id: ProjectId,
+        target_group: PanelGroupId,
+        view: ViewKey,
+    ) -> Result<Self, ProjectCommandError> {
+        self.validate()?;
+        let mut candidate = self.clone();
+        candidate.open_view(project_id, target_group, view)?;
+        Ok(candidate)
+    }
+
+    fn open_view(
+        &mut self,
+        project_id: ProjectId,
+        target_group: PanelGroupId,
+        view: ViewKey,
+    ) -> Result<(), ProjectCommandError> {
+        let layout = self
+            .registry_mut()
+            .layout_mut(project_id)
+            .ok_or(ProjectRegistryError::ProjectNotFound)?;
         if let Some(group_id) = layout.group_ids().into_iter().find(|group_id| {
             layout
                 .group(*group_id)
@@ -314,10 +341,10 @@ impl ProjectSnapshot {
             let group = PanelGroup::new(vec![view.clone()], view.clone())?;
             layout.open_first_group(target_group, group)?;
         } else {
-            layout.insert_view(target_group, view.clone())?;
+            layout.insert_view(target_group, view)?;
         }
-        candidate.validate()?;
-        Ok((candidate, view))
+        self.validate()?;
+        Ok(())
     }
 
     /// 生成新增逻辑终端的候选快照；任何失败都不修改原快照。

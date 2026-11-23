@@ -43,10 +43,10 @@ pub(super) struct DocumentOpenRequest {
 
 /// 一次面板安装的落点与焦点语义，避免各视图拆开传递开关。
 pub(super) struct DocumentPanelTarget {
-    project_id: ProjectId,
-    view: ViewKey,
-    focus: bool,
-    activate_project: bool,
+    pub(super) project_id: ProjectId,
+    pub(super) view: ViewKey,
+    pub(super) focus: bool,
+    pub(super) activate_project: bool,
 }
 
 enum DocumentEditPanel {
@@ -804,7 +804,7 @@ impl AppRoot {
         Ok(())
     }
 
-    fn install_panel(
+    pub(super) fn install_panel(
         &mut self,
         target: DocumentPanelTarget,
         window: &mut Window,

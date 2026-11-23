@@ -485,6 +485,29 @@ impl AppRoot {
                         log::warn!("恢复 Document 面板失败: {error}");
                     }
                 }
+                ViewKey::GitShow {
+                    ref repository_binding,
+                    ref repo_path,
+                    ..
+                } => {
+                    if self.panel_for_view(project_id, &view, cx).is_ok() {
+                        continue;
+                    }
+                    if let Err(error) = self.open_gitshow(
+                        super::git_show::GitShowOpenRequest {
+                            project_id,
+                            target_group: None,
+                            binding: (**repository_binding).clone(),
+                            path: repo_path.clone(),
+                            focus: false,
+                            activate_project: false,
+                        },
+                        window,
+                        cx,
+                    ) {
+                        log::warn!("恢复 GitShow 面板失败: {error}");
+                    }
+                }
                 _ => {}
             }
         }
@@ -501,9 +524,10 @@ impl AppRoot {
             Some(ViewKey::Terminal { terminal_id, .. }) => self
                 .terminal_panel(project_id, terminal_id, cx)
                 .map(|(panel_id, _)| panel_id),
-            Some(view @ (ViewKey::Editor { .. } | ViewKey::Markdown { .. })) => {
-                self.panel_for_view(project_id, &view, cx).ok()
-            }
+            Some(
+                view
+                @ (ViewKey::Editor { .. } | ViewKey::Markdown { .. } | ViewKey::GitShow { .. }),
+            ) => self.panel_for_view(project_id, &view, cx).ok(),
             _ => None,
         };
         if let Some(project) = self.projects.get(&project_id)

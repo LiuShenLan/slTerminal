@@ -54,8 +54,8 @@ type PaintedLines = Rc<RefCell<Vec<(usize, Option<String>)>>>;
 /// 只读分页文本视图；正文只来自真实 PagedSource 与共享页缓存。
 pub(crate) struct PagedTextView {
     document_id: DocumentId,
-    view_lease: EditorViewStateLease,
-    view_states: EditorViewStateStore,
+    view_lease: Option<EditorViewStateLease>,
+    view_states: Option<EditorViewStateStore>,
     view_state_dirty: bool,
     language_override: Option<LanguageId>,
     wrap: bool,
@@ -98,6 +98,16 @@ struct PagedPaintFrame {
     rows: Vec<(usize, Option<(ShapedLine, VisibleLine)>)>,
 }
 
+struct PagedTextViewConfig {
+    source: PagedSource,
+    document_id: DocumentId,
+    text_state: TextStateId,
+    cache: Rc<RefCell<DocumentPageCache>>,
+    reader: PageReader,
+    request: DocumentTextRequest,
+    view_state: Option<(ViewKey, EditorViewStateStore)>,
+}
+
 impl PagedTextView {
     pub(crate) fn new(
         session: &DocumentSession,
@@ -108,29 +118,82 @@ impl PagedTextView {
         view_states: EditorViewStateStore,
         cx: &mut Context<'_, Self>,
     ) -> Self {
-        let source = session
-            .paged()
-            .expect("PagedTextView 只接受分页正文")
-            .clone();
-        assert_eq!(request.document_id(), session.id());
+        Self::from_parts(
+            PagedTextViewConfig {
+                source: session
+                    .paged()
+                    .expect("PagedTextView 只接受分页正文")
+                    .clone(),
+                document_id: session.id(),
+                text_state: session.current_state(),
+                cache,
+                reader,
+                request,
+                view_state: Some((view_key, view_states)),
+            },
+            cx,
+        )
+    }
+
+    /// 固定只读分页快照不注册 Document，也不恢复 Editor 阅读位置。
+    pub(crate) fn fixed(
+        source: PagedSource,
+        document_id: DocumentId,
+        text_state: TextStateId,
+        cache: Rc<RefCell<DocumentPageCache>>,
+        reader: PageReader,
+        request: DocumentTextRequest,
+        cx: &mut Context<'_, Self>,
+    ) -> Self {
+        Self::from_parts(
+            PagedTextViewConfig {
+                source,
+                document_id,
+                text_state,
+                cache,
+                reader,
+                request,
+                view_state: None,
+            },
+            cx,
+        )
+    }
+
+    fn from_parts(config: PagedTextViewConfig, cx: &mut Context<'_, Self>) -> Self {
+        let PagedTextViewConfig {
+            source,
+            document_id,
+            text_state,
+            cache,
+            reader,
+            request,
+            view_state,
+        } = config;
+        assert_eq!(request.document_id(), document_id);
         assert_eq!(
             request.source_generation(),
             Some(source.source_generation())
         );
-        let restored = view_states.state(&view_key);
-        let view_lease = view_states.lease(&view_key);
+        let restored = view_state
+            .as_ref()
+            .map(|(key, states)| states.state(key))
+            .unwrap_or_default();
+        let (view_lease, view_states) = view_state.map_or((None, None), |(key, states)| {
+            let lease = states.lease(&key);
+            (Some(lease), Some(states))
+        });
         let scroll_line = restored
             .scroll_line()
             .min(source.line_index().line_count().saturating_sub(1));
         Self {
-            document_id: session.id(),
+            document_id,
             view_lease,
             view_states,
             view_state_dirty: false,
             language_override: restored.language_override(),
             wrap: restored.wrap(),
             source,
-            text_state: session.current_state(),
+            text_state,
             request,
             selection: TextSelection { anchor: 0, head: 0 },
             anchor_line: 0,
@@ -163,7 +226,13 @@ impl PagedTextView {
     }
 
     pub(crate) fn renew_view_lease(&mut self) {
-        self.view_states.renew(&mut self.view_lease);
+        if let (Some(states), Some(lease)) = (&self.view_states, &mut self.view_lease) {
+            states.renew(lease);
+        }
+    }
+
+    pub(crate) fn share_focus(&mut self, focus: FocusHandle) {
+        self.focus = focus;
     }
 
     #[cfg(all(test, feature = "gpui-test-support"))]
@@ -548,9 +617,12 @@ impl PagedTextView {
     }
 
     fn persist_view_state(&mut self) {
+        let (Some(states), Some(lease)) = (&self.view_states, &self.view_lease) else {
+            return;
+        };
         self.view_state_dirty = true;
-        self.view_states.checkpoint(
-            &self.view_lease,
+        states.checkpoint(
+            lease,
             EditorViewState::new(self.scroll_line, self.scroll_column)
                 .with_wrap(self.wrap)
                 .with_language_override(self.language_override),
@@ -789,6 +861,7 @@ impl PagedTextView {
 
 impl Drop for PagedTextView {
     fn drop(&mut self) {
+        self.close();
         if self.view_state_dirty {
             self.persist_view_state();
         }

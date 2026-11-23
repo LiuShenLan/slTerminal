@@ -206,7 +206,12 @@ impl WorkspaceWriterRuntime {
             events,
             WorkspaceWriter::start,
             spawn_workspace_failure_forwarder,
-            crate::git::cleanup_expired_system_open,
+            if cfg!(test) {
+                // 隔离测试不得清理真实用户临时目录；接线故障由 start_with 注入覆盖。
+                (|| Ok(())) as fn() -> std::io::Result<()>
+            } else {
+                crate::git::cleanup_expired_system_open
+            },
         )
     }
 

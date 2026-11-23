@@ -4,6 +4,14 @@
     "choose": "Choose...",
     "copy_suffix": "Copy"
   },
+  "gitshow": {
+    "loading": "Loading the fixed version…",
+    "read_failed": "The fixed-version object is unavailable.",
+    "binary": "This fixed version contains binary data.",
+    "invalid_encoding": "This fixed version is not valid UTF-8.",
+    "large": "Large fixed version; shown read-only.",
+    "open_system": "Open with system default"
+  },
   "editor": {
     "read_failed": "Could not read the file: {error}",
     "image_loading": "Loading image…",

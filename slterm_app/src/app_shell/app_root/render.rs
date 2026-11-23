@@ -175,6 +175,9 @@ impl AppRoot {
                     super::panel_host::PanelContent::Paged(paged) => {
                         paged.clone().into_any_element()
                     }
+                    super::panel_host::PanelContent::GitShow(view) => {
+                        view.clone().into_any_element()
+                    }
                     super::panel_host::PanelContent::Recovery(recovery) => {
                         recovery.clone().into_any_element()
                     }

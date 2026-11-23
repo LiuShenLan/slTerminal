@@ -4,6 +4,14 @@
     "choose": "选择…",
     "copy_suffix": "副本"
   },
+  "gitshow": {
+    "loading": "正在加载固定版本…",
+    "read_failed": "固定版本对象不可用。",
+    "binary": "固定版本包含二进制数据。",
+    "invalid_encoding": "固定版本不是有效 UTF-8。",
+    "large": "固定版本较大，已只读展示。",
+    "open_system": "使用系统默认程序打开"
+  },
   "editor": {
     "read_failed": "无法读取文件：{error}",
     "image_loading": "正在加载图片…",

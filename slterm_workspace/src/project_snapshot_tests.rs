@@ -678,6 +678,50 @@ fn ordinary_open_does_not_deduplicate_diff_or_gitshow() {
 }
 
 #[test]
+fn fixed_view_open_reuses_existing_view_key() {
+    let original = snapshot_with_three_projects();
+    let commit = slterm_document::CommitId::from_str(&"a".repeat(40)).unwrap();
+    let gitshow = ViewKey::GitShow {
+        project_id: project_id(PROJECT_A),
+        repository_binding: Box::new(slterm_document::RepositoryBinding::new(
+            document_location("D:/work"),
+            document_location("D:/work/.git"),
+            document_location("D:/work/.git"),
+            commit.clone(),
+        )),
+        commit_id: commit,
+        repo_path: slterm_document::RepoPath::from_str("shared.txt").unwrap(),
+    };
+    let opened = original
+        .with_opened_view(project_id(PROJECT_A), group_id(GROUP_A), gitshow.clone())
+        .unwrap();
+    let background = opened
+        .with_active_view(&view(PROJECT_A, TERMINAL_A))
+        .unwrap();
+
+    let reopened = background
+        .with_opened_view(project_id(PROJECT_A), group_id(GROUP_A), gitshow.clone())
+        .unwrap();
+
+    let group = reopened
+        .registry()
+        .project(project_id(PROJECT_A))
+        .unwrap()
+        .layout()
+        .group(group_id(GROUP_A))
+        .unwrap();
+    assert_eq!(group.active(), &gitshow);
+    assert_eq!(
+        group
+            .views()
+            .iter()
+            .filter(|view| **view == gitshow)
+            .count(),
+        1
+    );
+}
+
+#[test]
 fn document_relocation_rejects_occupied_target_without_side_effects() {
     let original = empty_snapshot();
     let first = document_id(DOCUMENT_A);

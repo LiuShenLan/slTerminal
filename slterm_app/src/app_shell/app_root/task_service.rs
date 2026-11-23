@@ -21,6 +21,8 @@ pub(crate) enum TaskId {
     DocumentExternal(slterm_document::DocumentId),
     DocumentSave(slterm_document::DocumentId),
     DocumentSystemOpen(slterm_document::DocumentId),
+    GitShowLoad(slterm_workspace::PanelId),
+    GitShowSystemOpen(slterm_workspace::PanelId),
     MarkdownLink(uuid::Uuid),
 }
 

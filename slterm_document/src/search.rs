@@ -89,6 +89,21 @@ impl DocumentTextRequest {
         }
     }
 
+    /// 固定只读分页快照使用同一文本请求合同，但不经过 DocumentRegistry。
+    pub fn for_paged_snapshot(
+        document_id: DocumentId,
+        source: crate::PagedSource,
+        request_generation: u64,
+    ) -> Self {
+        Self {
+            document_id,
+            text_revision: 0,
+            source_generation: Some(source.source_generation()),
+            request_generation,
+            body: DocumentBody::Paged(source),
+        }
+    }
+
     /// Editable 直接流式读取 Rope；Paged 必须由应用的分页端口提供相同源代次的块。
     pub fn chunks(&self) -> Result<TextChunks<'_>, SearchError> {
         match &self.body {

@@ -27,7 +27,6 @@ impl Drop for GitShowOpenMaterial {
     }
 }
 
-#[allow(dead_code)] // 消费点归后续 GitShow 视图系统打开命令。
 pub(crate) fn open_snapshot(snapshot: &GitShowSnapshot) -> io::Result<GitShowOpenMaterial> {
     let root = std::env::temp_dir().join("slterm").join("gitshow");
     open_snapshot_at(snapshot, &root, |path| {

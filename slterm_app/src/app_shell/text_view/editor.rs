@@ -1,3 +1,5 @@
+mod construct;
+
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::ops::Range;
@@ -23,7 +25,6 @@ use slterm_document::{
     DocumentId, DocumentSession, EditApplyOutcome, EditOrigin, EditTransaction,
     EditTransactionError, LanguageId, MergePolicy, TextEdit, TextStateId,
 };
-use slterm_workspace::ViewKey;
 use uuid::Uuid;
 
 use super::layout::{FontMetricsKey, LayoutCache, LayoutMetrics, TextLayoutKey, ThemeFingerprint};
@@ -33,9 +34,7 @@ use super::metrics::{
 };
 use super::source::{RopeTextSource, TextSelection};
 use super::syntax::{DocumentSyntax, capture_color};
-use super::view_state::{
-    DocumentViewStateBinding, EditorViewState, EditorViewStateLease, EditorViewStateStore,
-};
+use super::view_state::{EditorViewState, EditorViewStateLease, EditorViewStateStore};
 use super::wrap::{DisplayPosition, SoftWrapIndex};
 use super::{SaveFile, SelectDown, SelectLeft, SelectRight, SelectUp};
 
@@ -290,8 +289,8 @@ impl EventEmitter<DocumentTextEvent> for DocumentTextView {}
 /// Document 的专用文本视图；Rope 是不可变展示快照，修改只发 core 事务。
 pub(crate) struct DocumentTextView {
     document_id: DocumentId,
-    view_lease: EditorViewStateLease,
-    view_states: EditorViewStateStore,
+    view_lease: Option<EditorViewStateLease>,
+    view_states: Option<EditorViewStateStore>,
     view_state_dirty: bool,
     text: Rope,
     revision: u64,
@@ -333,102 +332,6 @@ pub(crate) struct DocumentTextView {
 }
 
 impl DocumentTextView {
-    pub(crate) fn new(
-        session: &DocumentSession,
-        edit_sink: DocumentEditSink,
-        automatic_language: LanguageId,
-        syntax: Option<Rc<RefCell<DocumentSyntax>>>,
-        view_key: ViewKey,
-        view_states: EditorViewStateStore,
-        cx: &mut Context<'_, Self>,
-    ) -> Self {
-        Self::new_with_binding(
-            session,
-            edit_sink,
-            automatic_language,
-            true,
-            syntax,
-            DocumentViewStateBinding::new(view_key, view_states),
-            cx,
-        )
-    }
-
-    /// 复合视图与内部源码子视图共享同一 ViewKey 租约，避免互相判旧。
-    pub(crate) fn new_with_binding(
-        session: &DocumentSession,
-        edit_sink: DocumentEditSink,
-        automatic_language: LanguageId,
-        allow_language_override: bool,
-        syntax: Option<Rc<RefCell<DocumentSyntax>>>,
-        view_state: DocumentViewStateBinding,
-        cx: &mut Context<'_, Self>,
-    ) -> Self {
-        let restored = view_state.view_states().state(view_state.view_key());
-        let (_view_key, view_states, view_lease) = view_state.into_parts();
-        let wrap = restored.wrap();
-        let scroll_line = if wrap {
-            // 显示行总数依赖首个视口宽度，首帧索引建立后再夹紧。
-            restored.scroll_line()
-        } else {
-            restored.scroll_line().min(
-                session
-                    .text()
-                    .expect("Paged 不进入 Rope 编辑器")
-                    .len_lines(LineType::LF)
-                    - 1,
-            )
-        };
-        let mut view = Self {
-            document_id: session.id(),
-            view_lease,
-            view_states,
-            view_state_dirty: false,
-            text: session.text().expect("Paged 不进入 Rope 编辑器").clone(),
-            revision: session.text_revision(),
-            text_state: session.current_state(),
-            read_only: session.is_read_only(),
-            edit_sink,
-            automatic_language,
-            allow_language_override,
-            language_override: if allow_language_override {
-                restored.language_override()
-            } else {
-                None
-            },
-            language_revision: 0,
-            theme_revision: 0,
-            theme_fingerprint: None,
-            layout_cache: Rc::default(),
-            syntax,
-            applied_syntax: None,
-            syntax_poll_task: None,
-            selection: TextSelection { anchor: 0, head: 0 },
-            preferred_column: None,
-            marked_range: None,
-            scroll_line,
-            scroll_column: if wrap { 0 } else { restored.scroll_column() },
-            wrap,
-            wrap_index: Rc::default(),
-            wrap_build: Rc::default(),
-            caret_affinity: super::wrap::CaretAffinity::AfterWrap,
-            wrap_reveal_cursor: false,
-            wheel_remainder: 0.0,
-            mouse_anchor: None,
-            focus: cx.focus_handle().tab_stop(true),
-            layout: Rc::default(),
-            #[cfg(all(test, feature = "gpui-test-support"))]
-            painted_syntax: Rc::default(),
-            #[cfg(all(test, feature = "gpui-test-support"))]
-            painted_lines: Rc::default(),
-            #[cfg(all(test, feature = "gpui-test-support"))]
-            painted_cursors: Rc::default(),
-            #[cfg(test)]
-            painted_content_mask: Rc::default(),
-        };
-        view.schedule_syntax_poll(cx);
-        view
-    }
-
     fn schedule_syntax_poll(&mut self, cx: &mut Context<'_, Self>) {
         let Some(syntax) = self.syntax.clone() else {
             return;
@@ -482,7 +385,9 @@ impl DocumentTextView {
     }
 
     pub(crate) fn renew_view_lease(&mut self) {
-        self.view_states.renew(&mut self.view_lease);
+        if let (Some(states), Some(lease)) = (&self.view_states, &mut self.view_lease) {
+            states.renew(lease);
+        }
     }
 
     pub(crate) fn share_focus(&mut self, focus: FocusHandle) {
@@ -490,7 +395,9 @@ impl DocumentTextView {
     }
 
     pub(crate) fn share_lease(&mut self, lease: EditorViewStateLease) {
-        self.view_lease = lease;
+        if let Some(current) = &mut self.view_lease {
+            *current = lease;
+        }
     }
 
     pub(crate) fn effective_language(&self, language_override: Option<LanguageId>) -> LanguageId {
@@ -1168,9 +1075,12 @@ impl DocumentTextView {
     }
 
     fn persist_view_state(&mut self) {
+        let (Some(states), Some(lease)) = (&self.view_states, &self.view_lease) else {
+            return;
+        };
         self.view_state_dirty = true;
-        self.view_states.checkpoint(
-            &self.view_lease,
+        states.checkpoint(
+            lease,
             EditorViewState::new(self.scroll_line, self.scroll_column)
                 .with_wrap(self.wrap)
                 .with_language_override(self.language_override),

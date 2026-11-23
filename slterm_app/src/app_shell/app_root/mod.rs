@@ -10,6 +10,7 @@ mod document_recovery;
 mod documents;
 mod events;
 mod focus_manager;
+mod git_show;
 pub(crate) mod keymap;
 mod language_selector;
 mod layout;
@@ -203,6 +204,7 @@ pub(crate) struct AppRoot {
     >,
     markdown_render_services: crate::app_shell::markdown::MarkdownRenderServices,
     page_cache: Rc<RefCell<DocumentPageCache>>,
+    git: Arc<crate::git::GitFacade>,
     system_open: Arc<dyn Fn(CanonicalPath) + Send + Sync>,
     #[allow(dead_code)] // 消费点 = Document 真实后台打开。
     document_open_service: Arc<crate::app_shell::documents::DocumentOpenService>,
@@ -397,6 +399,7 @@ impl AppRoot {
             document_syntax: BTreeMap::new(),
             markdown_render_services: crate::app_shell::markdown::MarkdownRenderServices::default(),
             page_cache: Rc::new(RefCell::new(DocumentPageCache::new())),
+            git: Arc::new(crate::git::GitFacade::default()),
             system_open: Arc::new(|path| {
                 crate::platform::file_operations::open_in_system(path.as_path());
             }),

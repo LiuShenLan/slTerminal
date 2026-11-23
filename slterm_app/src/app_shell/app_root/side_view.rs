@@ -559,7 +559,10 @@ impl SideViewControl<Entity<SideView>> for SideViewController<'_> {
 
 /// 工作区 ViewState schema 的唯一应用注册点。
 pub(crate) fn workspace_view_state_registry() -> Arc<ViewStateRegistry> {
-    let mut schemas = vec![side_view_state_schema()];
+    let mut schemas = vec![
+        side_view_state_schema(),
+        super::git_show::view_state_schema(),
+    ];
     schemas.extend(document_view_state_schemas());
     Arc::new(ViewStateRegistry::new(&schemas).expect("工作区 ViewState schema 封闭注册不得重复"))
 }
