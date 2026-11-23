@@ -19,10 +19,15 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+use sha2::{Digest as _, Sha256};
+use slterm_path::ResolvedPath;
+
 mod completion;
 mod repository;
 #[cfg(test)]
 mod repository_tests;
+#[cfg(test)]
+mod status_tests;
 
 pub(crate) use completion::{GitFacade, inferred_name as inferred_tracking_name};
 
@@ -303,6 +308,9 @@ pub(crate) struct StatusSnapshot {
     pub upstream: Option<String>,
     pub ahead: u32,
     pub behind: u32,
+    pub revision: [u8; 32],
+    /// 应用层真实读取时绑定的 RepoRoot；纯解析输入没有路径事实。
+    pub worktree_root: Option<ResolvedPath>,
     pub entries: Vec<StatusEntry>,
 }
 
@@ -315,6 +323,7 @@ pub(crate) struct StatusEntry {
     pub index: char,
     pub worktree: char,
     pub conflict: bool,
+    pub ignored: bool,
 }
 
 impl StatusEntry {
@@ -332,21 +341,21 @@ impl StatusEntry {
 /// `--untracked-files=all`:未跟踪目录展开为单文件条目,单文件状态可从
 /// 共享快照直接派生(不再为路径单独 spawn 一次 status)。
 pub(crate) fn status(root: &Path) -> Result<StatusSnapshot, GitError> {
-    let output = command(root)
-        .arg("--literal-pathspecs")
-        .args([
-            "status",
-            "--porcelain=v2",
-            "--branch",
-            "-z",
-            "--untracked-files=all",
-        ])
-        .output()
-        .map_err(|error| GitError::Unavailable(format!("无法运行 git: {error}")))?;
+    let mut command = repository::repository_command(root);
+    command.args([
+        "status",
+        "--porcelain=v2",
+        "--branch",
+        "-z",
+        "--untracked-files=all",
+        "--ignored=matching",
+    ]);
+    let output = repository::run_repository(command)?;
     if !output.status.success() {
         return Err(command_failure(root, "status", &output.stderr));
     }
-    let raw = String::from_utf8_lossy(&output.stdout);
+    let raw = String::from_utf8(output.stdout)
+        .map_err(|_| GitError::Command("status 输出不是有效 UTF-8".to_owned()))?;
     parse_status(&raw).map_err(|code| GitError::Command(format!("status 解析失败: {code}")))
 }
 
@@ -415,7 +424,18 @@ pub(crate) fn parse_status(output: &str) -> Result<StatusSnapshot, &'static str>
             }
             continue;
         }
-        if record.starts_with("! ") {
+        if let Some(path) = record.strip_prefix("! ") {
+            if path.is_empty() {
+                return Err("git_invalid_status");
+            }
+            result.entries.push(StatusEntry {
+                path: path.into(),
+                original: None,
+                index: '!',
+                worktree: '!',
+                conflict: false,
+                ignored: true,
+            });
             continue;
         }
         let kind = record
@@ -433,6 +453,7 @@ pub(crate) fn parse_status(output: &str) -> Result<StatusSnapshot, &'static str>
                 index: '?',
                 worktree: '?',
                 conflict: false,
+                ignored: false,
             }
         } else {
             let count = match kind {
@@ -456,6 +477,7 @@ pub(crate) fn parse_status(output: &str) -> Result<StatusSnapshot, &'static str>
                 index: xy[0] as char,
                 worktree: xy[1] as char,
                 conflict: kind == b'u',
+                ignored: false,
             }
         };
         if entry.path.is_empty() || entry.original.as_ref().is_some_and(|path| path.is_empty()) {
@@ -466,6 +488,7 @@ pub(crate) fn parse_status(output: &str) -> Result<StatusSnapshot, &'static str>
     if result.branch.is_empty() || result.head.is_empty() {
         return Err("git_invalid_status");
     }
+    result.revision = Sha256::digest(output.as_bytes()).into();
     Ok(result)
 }
 
@@ -484,7 +507,7 @@ pub(crate) fn file_status_from_snapshot(
     snapshot
         .entries
         .iter()
-        .find(|entry| entry.path == relative)
+        .find(|entry| !entry.ignored && entry.path == relative)
         .map(classify_entry)
 }
 

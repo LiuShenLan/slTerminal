@@ -7,7 +7,10 @@ use std::process::{Command, ExitStatus};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use slterm_path::CanonicalPath;
 use slterm_terminal::tty::Environment;
+
+use super::StatusSnapshot;
 
 use crate::platform::process_output::{ProcessOutputError, read_cancellable};
 
@@ -78,20 +81,45 @@ struct Snapshot {
     fetched: Instant,
 }
 
+#[derive(Debug)]
+pub(super) struct RepositoryStatusCache {
+    pub(super) root: CanonicalPath,
+    pub(super) captured: Instant,
+    pub(super) snapshot: Arc<StatusSnapshot>,
+}
+
 /// 每个补全会话一个 facade；缓存键不包含可变环境，因为 pane 环境在创建时冻结。
 #[derive(Debug, Default)]
 pub(crate) struct GitFacade {
     cache: Mutex<(u64, Option<Snapshot>)>,
+    pub(super) status_cache: Mutex<Option<RepositoryStatusCache>>,
 }
 
 impl GitFacade {
     pub(crate) fn invalidate(&self) {
+        // 与状态读取统一按 status_cache → cache 加锁，避免跨域失效死锁。
+        let mut status = self
+            .status_cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *status = None;
         let mut state = self
             .cache
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         state.0 = state.0.wrapping_add(1);
         state.1 = None;
+    }
+
+    pub(super) fn generation(&self) -> u64 {
+        self.cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .0
+    }
+
+    pub(super) fn is_current(&self, generation: u64) -> bool {
+        self.generation() == generation
     }
 
     pub(crate) fn refs(

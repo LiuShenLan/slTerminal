@@ -1,22 +1,58 @@
 //! GitFacade 的真实仓库绑定捕获与复核；全部进程读取有界且禁网。
 
+use std::path::Path;
 use std::process::Command;
 use std::str::FromStr as _;
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use slterm_document::{CommitId, RepositoryBinding};
 use slterm_path::{CanonicalPath, PathGrant, PathOperation, PathPolicy, PathRequest, ResolvedPath};
 
-use super::{GitError, GitFacade};
+use super::{GitError, GitFacade, StatusSnapshot, completion::RepositoryStatusCache};
 use crate::platform::{
     document_paths::{DocumentPathResolver as _, SystemDocumentPathResolver},
     process_output::{ProcessOutput, ProcessOutputError, run_cancellable},
 };
 
 const REPOSITORY_TIMEOUT: Duration = Duration::from_secs(3);
-const REPOSITORY_OUTPUT_LIMIT: usize = 64 * 1024;
+const REPOSITORY_OUTPUT_LIMIT: usize = 1024 * 1024;
+
+const STATUS_CACHE_TTL: Duration = Duration::from_millis(500);
 
 impl GitFacade {
+    pub(crate) fn status(
+        &self,
+        project_path: &CanonicalPath,
+        grants: &[PathGrant],
+        authorization_generation: u64,
+    ) -> Result<Arc<StatusSnapshot>, GitError> {
+        authorize(project_path, grants, authorization_generation)?;
+        let root = capture_worktree_root(project_path, grants, authorization_generation)?;
+        let mut cache = self
+            .status_cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(cached) = cache.as_ref()
+            && cached.root == *root.canonical_path()
+            && cached.captured.elapsed() < STATUS_CACHE_TTL
+        {
+            return Ok(cached.snapshot.clone());
+        }
+        let generation = self.generation();
+        let mut snapshot = super::status(root.canonical_path().as_path())?;
+        snapshot.worktree_root = Some(root.clone());
+        let snapshot = Arc::new(snapshot);
+        if self.is_current(generation) {
+            *cache = Some(RepositoryStatusCache {
+                root: root.canonical_path().clone(),
+                captured: Instant::now(),
+                snapshot: snapshot.clone(),
+            });
+        }
+        Ok(snapshot)
+    }
+
     pub(crate) fn repository_binding(
         &self,
         project_path: &CanonicalPath,
@@ -24,7 +60,7 @@ impl GitFacade {
         authorization_generation: u64,
     ) -> Result<RepositoryBinding, GitError> {
         authorize(project_path, grants, authorization_generation)?;
-        let mut command = repository_command(project_path);
+        let mut command = repository_command(project_path.as_path());
         command.args([
             "rev-parse",
             "--path-format=absolute",
@@ -75,7 +111,7 @@ impl GitFacade {
                 authorization_generation,
             )
             .map_err(|_| GitError::BindingUnavailable)?;
-        let mut command = repository_command(current.worktree_root().canonical_path());
+        let mut command = repository_command(current.worktree_root().canonical_path().as_path());
         command.args(["cat-file", "-e", &format!("{}^{{commit}}", original.head())]);
         let original_head_exists = run_repository(command)
             .map_err(|_| GitError::BindingUnavailable)?
@@ -87,8 +123,31 @@ impl GitFacade {
     }
 }
 
-fn repository_command(path: &CanonicalPath) -> Command {
-    let mut command = super::command(path.as_path());
+fn capture_worktree_root(
+    project_path: &CanonicalPath,
+    grants: &[PathGrant],
+    authorization_generation: u64,
+) -> Result<ResolvedPath, GitError> {
+    let mut command = repository_command(project_path.as_path());
+    command.args(["rev-parse", "--path-format=absolute", "--show-toplevel"]);
+    let output = run_repository(command)?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(super::classify_git_failure(&stderr)
+            .unwrap_or_else(|| GitError::NotRepository("路径不在可读取的 Git 仓库内".to_owned())));
+    }
+    let stdout = String::from_utf8(output.stdout)
+        .map_err(|_| GitError::Command("Git 仓库根不是有效 UTF-8".to_owned()))?;
+    let mut lines = stdout.lines();
+    let root = lines.next().ok_or_else(invalid_repository_output)?;
+    if root.is_empty() || lines.next().is_some() {
+        return Err(invalid_repository_output());
+    }
+    resolve_authorized(root, grants, authorization_generation)
+}
+
+pub(super) fn repository_command(path: &Path) -> Command {
+    let mut command = super::command(path);
     command
         .arg("--literal-pathspecs")
         .env("GIT_TERMINAL_PROMPT", "0")
@@ -97,7 +156,7 @@ fn repository_command(path: &CanonicalPath) -> Command {
     command
 }
 
-fn run_repository(command: Command) -> Result<ProcessOutput, GitError> {
+pub(super) fn run_repository(command: Command) -> Result<ProcessOutput, GitError> {
     run_cancellable(
         command,
         REPOSITORY_TIMEOUT,
