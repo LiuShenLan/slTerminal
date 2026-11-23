@@ -31,7 +31,11 @@ pub(crate) struct DiffOpenRequest {
     pub(crate) target_line: Option<usize>,
 }
 
+pub(super) type DiffHeadResult =
+    Result<(GitShowSnapshot, Option<slterm_document::DiffBinding>), GitError>;
+
 pub(crate) struct DiffView {
+    root: gpui::WeakEntity<super::AppRoot>,
     document_id: DocumentId,
     focus: FocusHandle,
     left: Entity<GitShowView>,
@@ -49,6 +53,7 @@ pub(crate) struct DiffView {
 
 impl DiffView {
     fn new(
+        root: gpui::WeakEntity<super::AppRoot>,
         document_id: DocumentId,
         right: EditorContent,
         cache: Rc<RefCell<DocumentPageCache>>,
@@ -65,6 +70,7 @@ impl DiffView {
         let left = cx.new(|cx| GitShowView::loading(cache, cx));
         left.update(cx, |view, cx| view.share_focus(focus.clone(), cx));
         Self {
+            root,
             document_id,
             focus,
             left,
@@ -81,14 +87,14 @@ impl DiffView {
         }
     }
 
-    fn apply_head(
-        &mut self,
-        result: Result<GitShowSnapshot, GitError>,
-        cx: &mut Context<'_, Self>,
-    ) {
+    fn apply_head(&mut self, result: DiffHeadResult, cx: &mut Context<'_, Self>) {
         let generation = self.left.read(cx).current_generation();
         match result {
-            Ok(snapshot) => {
+            Ok((snapshot, refreshed)) => {
+                if let Some(binding) = refreshed {
+                    let state = self.view_state().with_binding(binding);
+                    self.view_states.checkpoint_diff(&self.view_lease, state);
+                }
                 self.head = Some(snapshot.clone());
                 self.left.update(cx, |view, cx| {
                     view.apply_result(generation, Ok(snapshot), cx);
@@ -96,7 +102,7 @@ impl DiffView {
                 });
             }
             Err(error) => {
-                self.head = None;
+                // 刷新失败只替换展示错误；保留最后一次已验证的固定快照供恢复与差分使用。
                 self.left
                     .update(cx, |view, cx| view.apply_result(generation, Err(error), cx));
             }
@@ -349,6 +355,11 @@ impl DiffView {
     }
 
     #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn head_bytes_option_for_test(&self) -> Option<std::sync::Arc<[u8]>> {
+        self.head.as_ref().map(|head| head.bytes.clone())
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
     pub(crate) fn head_bytes_for_test(&self) -> std::sync::Arc<[u8]> {
         self.head.as_ref().unwrap().bytes.clone()
     }
@@ -467,7 +478,7 @@ impl super::AppRoot {
         let view_state = view_states.diff_state(&view_key).unwrap_or_else(|| {
             DiffViewState::new(slterm_document::DiffBinding::new(binding, path))
         });
-        let fixed = view_state
+        view_state
             .binding()
             .map_err(|_| super::commands::AppRootError::MissingPanel)?;
         let already_in_layout = self
@@ -495,8 +506,9 @@ impl super::AppRoot {
             return Err(super::commands::AppRootError::MissingPanel);
         };
         let cache = self.page_cache.clone();
+        let root = cx.entity().downgrade();
         let panel_id = self.install_panel(target, window, cx, move |_, cx| {
-            let view = cx.new(|cx| DiffView::new(document_id, right, cache, target_line, cx));
+            let view = cx.new(|cx| DiffView::new(root, document_id, right, cache, target_line, cx));
             let focus = view.read(cx).focus_handle(cx);
             (PanelContent::Diff(view), focus)
         })?;
@@ -506,13 +518,10 @@ impl super::AppRoot {
         // 只有面板真实建立后才发布新固定绑定，失败重试不得继承未生效请求。
         view_states.restore_diff(view_key, view_state);
         let view = self.diff_view(panel_id, cx)?;
-        self.schedule_diff_head(
-            panel_id,
-            view,
-            fixed.repository_binding().clone(),
-            fixed.head_path().clone(),
-            cx,
-        );
+        let owner = super::task_service::ViewTaskOwner::Panel(panel_id);
+        if let Some(ticket) = self.tasks.request_view_refresh(owner) {
+            self.schedule_diff_head(panel_id, view, ticket, false, cx);
+        }
         Ok(panel_id)
     }
 
@@ -531,41 +540,83 @@ impl super::AppRoot {
             .ok_or(super::commands::AppRootError::MissingPanel)
     }
 
-    fn schedule_diff_head(
+    pub(super) fn schedule_diff_head(
         &mut self,
         panel_id: slterm_workspace::PanelId,
         view: Entity<DiffView>,
-        binding: slterm_document::RepositoryBinding,
-        path: slterm_document::RepoPath,
-        cx: &mut Context<'_, Self>,
+        ticket: super::task_service::ViewRefreshTicket,
+        refresh: bool,
+        cx: &mut App,
     ) {
         let task_id = super::task_service::TaskId::DiffHead(panel_id);
-        if self.tasks.is_registered(task_id) {
-            return;
-        }
+        let fixed = view
+            .read(cx)
+            .view_state()
+            .binding()
+            .expect("Diff 固定绑定在读取前必须有效");
         let generation = view.update(cx, |view, cx| {
             view.left.update(cx, |left, _| left.begin_load())
         });
-        let grants = self.gitshow_grants(&binding);
+        let grants = self.gitshow_grants(fixed.repository_binding());
         let git = self.git.clone();
         let executor = cx.background_executor().clone();
-        let load = executor.spawn(async move { git.show(&binding, &path, &grants, 0, generation) });
+        let load = executor.spawn(async move {
+            let binding = if refresh {
+                git.refresh_diff_binding(&fixed, &grants, 0)?
+            } else {
+                fixed
+            };
+            let snapshot = git.show(
+                binding.repository_binding(),
+                binding.head_path(),
+                &grants,
+                0,
+                generation,
+            )?;
+            Ok::<_, GitError>((snapshot, refresh.then_some(binding)))
+        });
+        let root = view.read(cx).root.clone();
         let task_view = view.downgrade();
-        let registration = self.tasks.register_with(
-            task_id,
-            super::task_service::CancellationToken::new(),
-            move || {
-                cx.spawn(async move |root, cx| {
+        let cancellation = super::task_service::CancellationToken::new();
+        let cancelled = cancellation.clone();
+        let registration = self.tasks.register_with(task_id, cancellation, || {
+            view.update(cx, |_, cx| {
+                cx.spawn(async move |_, cx| {
                     let result = load.await;
+                    if cancelled.is_cancelled() {
+                        return;
+                    }
                     let _ = root.update(cx, |root, cx| {
-                        let _ = task_view.update(cx, |view, cx| view.apply_head(result, cx));
-                        root.tasks.complete(task_id);
+                        root.finish_diff_head(panel_id, task_view, ticket, result, cx);
                     });
                 })
-            },
-        );
+            })
+        });
         if registration.is_err() {
             log::debug!("diff HEAD load already scheduled");
+        }
+    }
+
+    pub(super) fn finish_diff_head(
+        &mut self,
+        panel_id: slterm_workspace::PanelId,
+        view: gpui::WeakEntity<DiffView>,
+        ticket: super::task_service::ViewRefreshTicket,
+        result: DiffHeadResult,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let completion = self.tasks.finish_view_refresh(ticket);
+        if completion.outcome == super::task_service::ViewRefreshOutcome::Stale {
+            return;
+        }
+        self.tasks
+            .complete(super::task_service::TaskId::DiffHead(panel_id));
+        let Some(view) = view.upgrade() else {
+            return;
+        };
+        view.update(cx, |view, cx| view.apply_head(result, cx));
+        if let Some(next) = completion.next {
+            self.schedule_diff_head(panel_id, view, next, true, cx);
         }
     }
 }

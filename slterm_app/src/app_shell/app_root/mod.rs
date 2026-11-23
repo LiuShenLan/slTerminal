@@ -470,6 +470,7 @@ impl AppRoot {
         self.reconcile_document_registry(cx);
         self.reconcile_split_dividers(cx);
         self.reconcile_tab_scrolls(Some(&previous));
+        self.sync_project_visibility(cx);
         if self.project_snapshot_recovery_failed {
             return;
         }

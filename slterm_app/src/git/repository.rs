@@ -6,7 +6,7 @@ use std::str::FromStr as _;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use slterm_document::{CommitId, RepositoryBinding};
+use slterm_document::{CommitId, DiffBinding, RepositoryBinding};
 use slterm_path::{CanonicalPath, PathGrant, PathOperation, PathPolicy, PathRequest, ResolvedPath};
 
 use super::{GitError, GitFacade, StatusSnapshot, completion::RepositoryStatusCache};
@@ -104,6 +104,38 @@ impl GitFacade {
         grants: &[PathGrant],
         authorization_generation: u64,
     ) -> Result<(), GitError> {
+        let (current, original_head_exists) =
+            self.current_binding_and_original_head(original, grants, authorization_generation)?;
+        original
+            .revalidate(&current, original_head_exists)
+            .map_err(|_| GitError::BindingUnavailable)
+    }
+
+    /// 只在原仓库身份仍成立时推进 Diff HEAD，旧路径保持不变。
+    pub(crate) fn refresh_diff_binding(
+        &self,
+        original: &DiffBinding,
+        grants: &[PathGrant],
+        authorization_generation: u64,
+    ) -> Result<DiffBinding, GitError> {
+        let (current, original_head_exists) = self.current_binding_and_original_head(
+            original.repository_binding(),
+            grants,
+            authorization_generation,
+        )?;
+        let mut refreshed = original.clone();
+        refreshed
+            .refresh_head(&current, original_head_exists)
+            .map_err(|_| GitError::BindingUnavailable)?;
+        Ok(refreshed)
+    }
+
+    fn current_binding_and_original_head(
+        &self,
+        original: &RepositoryBinding,
+        grants: &[PathGrant],
+        authorization_generation: u64,
+    ) -> Result<(RepositoryBinding, bool), GitError> {
         let current = self
             .repository_binding(
                 original.worktree_root().canonical_path(),
@@ -117,9 +149,7 @@ impl GitFacade {
             .map_err(|_| GitError::BindingUnavailable)?
             .status
             .success();
-        original
-            .revalidate(&current, original_head_exists)
-            .map_err(|_| GitError::BindingUnavailable)
+        Ok((current, original_head_exists))
     }
 }
 

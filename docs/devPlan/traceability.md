@@ -179,11 +179,11 @@
 |---|---|---|
 | 从 Commit 打开脏 Document 时直接使用共享文本 | `diff_uses_shared_document_from_commit` | 已自动化 |
 | Diff 工作区编辑在 Editor 与 Markdown 中一致 | `diff_edit_shared_document` | 已自动化 |
-| 根重定位后不读取新仓库同路径 HEAD | `diff_does_not_rebind_after_relocation` | 待实现 |
+| 根重定位后不读取新仓库同路径 HEAD | `diff_does_not_rebind_after_relocation` | 已自动化 |
 | 根外只读与另一可写根覆盖时仍可保存 | `diff_save_uses_capability_union` | 待实现 |
 | Diff 展示参数恢复且搜索与临时提示清除 | `diff_view_state_restore_clears_transients` | 已自动化 |
 | 冲突快照不随源文本自动更新且不可保存 | `diff_conflict_snapshot_is_immutable` | 已自动化 |
-| 隐藏期间 HEAD 变化重新可见只合并复核 | `diff_hidden_head_refresh_coalesced` | 待实现 |
+| 隐藏期间 HEAD 变化重新可见只合并复核 | `diff_hidden_head_refresh_coalesced` | 已自动化 |
 | 任一侧超限或含 NUL 时按侧降级 | `diff_large_and_binary_side_degradation` | 已自动化 |
 
 ### 系统集成

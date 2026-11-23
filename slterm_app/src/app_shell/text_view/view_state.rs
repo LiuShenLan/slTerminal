@@ -306,6 +306,12 @@ impl DiffViewState {
         }
     }
 
+    pub(crate) fn with_binding(mut self, binding: slterm_document::DiffBinding) -> Self {
+        self.binding = slterm_workspace::diff_binding_to_canonical_json(&binding)
+            .expect("已复核的 DiffBinding 必须可编码");
+        self
+    }
+
     pub(crate) fn binding(
         &self,
     ) -> Result<slterm_document::DiffBinding, slterm_workspace::DiffBindingError> {

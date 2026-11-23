@@ -1591,10 +1591,11 @@ impl AppRoot {
         })
     }
 
-    /// 同步输出与焦点可见性；所有项目的会话泵与实体继续持有。
+    /// 同步输出、焦点与视图复核可见性；所有项目的会话泵与实体继续持有。
     pub(super) fn sync_project_visibility(&mut self, cx: &mut App) {
         let active = self.snapshot.registry().active();
         self.sync_focus_visibility(active, cx);
+        let mut diff_refreshes = Vec::new();
         for (project_id, project) in &self.projects {
             let visible = active == Some(*project_id);
             let terminals = project
@@ -1608,6 +1609,44 @@ impl AppRoot {
                     terminal.set_output_visible(visible, cx);
                 });
             }
+            let diffs = project
+                .read(cx)
+                .panels
+                .iter()
+                .filter_map(|(panel_id, panel)| match &panel.content {
+                    PanelContent::Diff(view) => {
+                        Some((*panel_id, panel.view_key.clone(), view.clone()))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            for (panel_id, view_key, view) in diffs {
+                let view_visible = visible
+                    && self
+                        .snapshot
+                        .registry()
+                        .project(*project_id)
+                        .is_some_and(|project| {
+                            let layout = project.layout();
+                            layout.group_ids().into_iter().any(|group_id| {
+                                layout
+                                    .group(group_id)
+                                    .is_some_and(|group| group.active() == &view_key)
+                            })
+                        });
+                let owner = super::task_service::ViewTaskOwner::Panel(panel_id);
+                let ticket = self.tasks.set_view_visible(owner, view_visible);
+                if !view_visible {
+                    self.tasks
+                        .cancel(super::task_service::TaskId::DiffHead(panel_id));
+                }
+                if let Some(ticket) = ticket {
+                    diff_refreshes.push((panel_id, view, ticket));
+                }
+            }
+        }
+        for (panel_id, view, ticket) in diff_refreshes {
+            self.schedule_diff_head(panel_id, view, ticket, true, cx);
         }
     }
 

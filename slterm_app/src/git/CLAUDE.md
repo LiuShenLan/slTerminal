@@ -14,7 +14,7 @@
 - **状态事实与代次缓存**：`GitFacade::status` 先分别复核项目路径与真实 RepoRoot 的 Read 授权，再使用有界、禁网的 porcelain v2 NUL 输出；`StatusSnapshot` 保存规范字节 SHA-256 revision、真实 worktree 根、staged／unstaged、rename、conflict、ignored 与未知原始状态。`--untracked-files=all` 展开普通未跟踪目录，嵌套仓库和子模块只保留顶层条目；ignored 不进入既有六值 gutter 映射。实例状态缓存 TTL 500 毫秒，`invalidate` 清槽并递增代次，在途旧代次不得写回。原因：状态散列必须来自完整机器输出，路径根、授权和缓存代次不得由 watcher 时间代替。边界：unborn 仓库可读取状态但不能建立需要 HEAD 的 RepositoryBinding；读取失败由调用方保留旧列表并标记可能过期。
 - **未跟踪展开**：共享 `status` 带 `--untracked-files=all`，快照含单文件未跟踪条目；单文件状态由 `file_status_from_snapshot` 从快照派生，不为路径单独 spawn status。
 - **只读操作面**：status/file status/hunks/HEAD 字节与补全 refs/remotes；porcelain v2 解析在本模块单源（`parse_status`）。补全读取只经 `completion::GitFacade` 的语义方法，具体预算与禁网红线见 `completion/CLAUDE.md`。本模块不得执行 checkout、restore、rm 等工作区或索引写操作。
-- **仓库绑定捕获与复核**：`GitFacade::repository_binding` 使用有界、禁网的 `rev-parse` 同时捕获 worktree、gitdir、common dir 的真实路径／身份与完整 HEAD，并分别取得 Read 授权；项目根可以是仓库子目录，但不会因此获得父仓库元数据访问权。`revalidate_binding` 重新捕获当前事实并查询原 HEAD 对象，绑定路径或身份不符只报 `BindingUnavailable`，不改绑原值。原因：Diff／GitShow 不得因 HEAD 移动或根重定位静默落到另一仓库。边界：unborn 仓库不能建立需要 HEAD 的绑定；进程启动、超时、取消、退出与输出限额保持结构化分类。
+- **仓库绑定捕获与复核**：`GitFacade::repository_binding` 使用有界、禁网的 `rev-parse` 同时捕获 worktree、gitdir、common dir 的真实路径／身份与完整 HEAD，并分别取得 Read 授权；项目根可以是仓库子目录，但不会因此获得父仓库元数据访问权。`revalidate_binding` 重新捕获当前事实并查询原 HEAD 对象，绑定路径或身份不符只报 `BindingUnavailable`，不改绑原值；Diff 可见性刷新复用同一当前事实捕获与原 HEAD 存在性查询，仅经 `DiffBinding::refresh_head` 推进提交并保留旧路径。原因：Diff／GitShow 不得因 HEAD 移动或根重定位静默落到另一仓库。边界：unborn 仓库不能建立需要 HEAD 的绑定；进程启动、超时、取消、退出与输出限额保持结构化分类。
 - **旧 git2 语义资产**：LRU 仓库缓存、不扫 ignored、rename 双检已转对照用例保留。
 
 ## 验收与测试

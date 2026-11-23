@@ -314,6 +314,9 @@ impl AppRoot {
             }
         }
         for panel_id in panel_ids {
+            self.tasks.cancel(TaskId::DiffHead(panel_id));
+            self.tasks
+                .remove_view_refresh(super::task_service::ViewTaskOwner::Panel(panel_id));
             self.agents
                 .remove(crate::gpui_terminal::PaneId(panel_id.sequence()));
             if let Some(registration) = self.panel_focus.remove(&panel_id)

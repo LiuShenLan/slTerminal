@@ -797,6 +797,9 @@ impl AppRoot {
             }
         }
         for panel_id in panels {
+            self.tasks.cancel(TaskId::DiffHead(*panel_id));
+            self.tasks
+                .remove_view_refresh(super::task_service::ViewTaskOwner::Panel(*panel_id));
             let focus_token = self.panel_focus.get(panel_id).map(|focus| focus.token());
             if let Some(token) = focus_token
                 && let Err(error) = self.focus_manager.unregister(token)

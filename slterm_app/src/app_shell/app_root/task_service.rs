@@ -184,6 +184,24 @@ impl TaskService {
     }
 
     #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(super) fn view_refresh_generation_for_test(&self, owner: ViewTaskOwner) -> Option<u64> {
+        self.view_refreshes
+            .get(&owner)
+            .map(|state| state.generation)
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(super) fn current_view_refresh_ticket_for_test(
+        &self,
+        owner: ViewTaskOwner,
+    ) -> Option<ViewRefreshTicket> {
+        self.view_refreshes
+            .get(&owner)
+            .and_then(|state| state.in_flight)
+            .map(|generation| ViewRefreshTicket { owner, generation })
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
     pub(super) fn project_open_task_count(&self) -> usize {
         self.tasks
             .keys()
@@ -226,6 +244,11 @@ impl TaskService {
             state.in_flight = None;
         }
         state.start(owner)
+    }
+
+    /// Panel 销毁后使全部迟到票据失效，不保留无所有者的刷新状态。
+    pub(super) fn remove_view_refresh(&mut self, owner: ViewTaskOwner) {
+        self.view_refreshes.remove(&owner);
     }
 
     /// 只有当前代次可结算；旧回执不得清除新任务或触发额外刷新。
