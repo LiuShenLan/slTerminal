@@ -25,23 +25,30 @@ impl From<io::Error> for ProcessOutputError {
     }
 }
 
-/// 运行命令并读取至多 `limit` 字节;超时、取消、超量、非零退出均为错误。
-///
-/// 调用方负责整段请求的总预算:多次读取共用同一 `timeout` 由上层换算。
-pub(crate) fn read_cancellable(
+/// 有界子进程的双通道真实输出；非零退出由 `status` 表达。
+#[derive(Debug)]
+pub(crate) struct ProcessOutput {
+    pub(crate) status: ExitStatus,
+    pub(crate) stdout: Vec<u8>,
+    pub(crate) stderr: Vec<u8>,
+}
+
+/// 运行命令并分别保留有界 stdout/stderr；调用方决定非零退出的领域语义。
+pub(crate) fn run_cancellable(
     mut command: Command,
     timeout: Duration,
     limit: usize,
     cancelled: &dyn Fn() -> bool,
-) -> Result<Vec<u8>, ProcessOutputError> {
+) -> Result<ProcessOutput, ProcessOutputError> {
     if cancelled() {
         return Err(ProcessOutputError::Cancelled);
     }
-    let mut output = tempfile::tempfile()?;
+    let mut stdout = tempfile::tempfile()?;
+    let mut stderr = tempfile::tempfile()?;
     command
         .stdin(Stdio::null())
-        .stdout(output.try_clone()?)
-        .stderr(Stdio::null());
+        .stdout(stdout.try_clone()?)
+        .stderr(stderr.try_clone()?);
     super::process::configure_process_group(&mut command);
     let mut child = command.spawn().map_err(ProcessOutputError::Spawn)?;
     let group = match super::process::ProcessGroup::attach(&child) {
@@ -70,8 +77,11 @@ pub(crate) fn read_cancellable(
             terminate(&group, &mut child);
             return Err(ProcessOutputError::Timeout);
         }
-        match output.metadata() {
-            Ok(metadata) if metadata.len() <= limit as u64 => {}
+        let bytes = stdout
+            .metadata()
+            .and_then(|stdout| stderr.metadata().map(|stderr| stdout.len() + stderr.len()));
+        match bytes {
+            Ok(bytes) if bytes <= limit as u64 => {}
             Ok(_) => {
                 terminate(&group, &mut child);
                 return Err(ProcessOutputError::OutputLimit { limit });
@@ -87,16 +97,41 @@ pub(crate) fn read_cancellable(
     if cancelled() {
         return Err(ProcessOutputError::Cancelled);
     }
-    if !status.success() {
-        return Err(ProcessOutputError::Exit(status));
+    stdout.rewind()?;
+    stderr.rewind()?;
+    let stdout_bytes = read_bounded(stdout, limit)?;
+    let stderr_bytes = read_bounded(stderr, limit)?;
+    if stdout_bytes.len() + stderr_bytes.len() > limit {
+        return Err(ProcessOutputError::OutputLimit { limit });
     }
-    output.rewind()?;
+    Ok(ProcessOutput {
+        status,
+        stdout: stdout_bytes,
+        stderr: stderr_bytes,
+    })
+}
+
+fn read_bounded(output: std::fs::File, limit: usize) -> Result<Vec<u8>, ProcessOutputError> {
     let mut bytes = Vec::new();
     output.take(limit as u64 + 1).read_to_end(&mut bytes)?;
     if bytes.len() > limit {
         return Err(ProcessOutputError::OutputLimit { limit });
     }
     Ok(bytes)
+}
+
+/// 运行命令并读取至多 `limit` 字节;非零退出仍按旧合同映射为 `Exit`。
+pub(crate) fn read_cancellable(
+    command: Command,
+    timeout: Duration,
+    limit: usize,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Vec<u8>, ProcessOutputError> {
+    let output = run_cancellable(command, timeout, limit, cancelled)?;
+    if !output.status.success() {
+        return Err(ProcessOutputError::Exit(output.status));
+    }
+    Ok(output.stdout)
 }
 
 fn terminate(group: &super::process::ProcessGroup, child: &mut Child) {
@@ -136,6 +171,29 @@ mod process_output_tests {
                 &|| false
             ),
             Err(ProcessOutputError::Timeout)
+        ));
+    }
+
+    #[test]
+    fn bounded_process_output_preserves_exit_status_and_stderr() {
+        let mut command = Command::new("cmd.exe");
+        command.args(["/d", "/c", "echo stdout&echo stderr 1>&2&exit 7"]);
+
+        let output = run_cancellable(command, Duration::from_secs(2), 1024, &|| false).unwrap();
+
+        assert_eq!(output.status.code(), Some(7));
+        assert_eq!(output.stdout, b"stdout\r\n");
+        assert_eq!(output.stderr, b"stderr \r\n");
+    }
+
+    #[test]
+    fn bounded_process_output_counts_stderr_toward_the_limit() {
+        let mut command = Command::new("cmd.exe");
+        command.args(["/d", "/c", "echo too-much-stderr 1>&2"]);
+
+        assert!(matches!(
+            run_cancellable(command, Duration::from_secs(2), 4, &|| false),
+            Err(ProcessOutputError::OutputLimit { limit: 4 })
         ));
     }
 
