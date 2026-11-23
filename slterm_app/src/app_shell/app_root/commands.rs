@@ -441,7 +441,9 @@ impl AppRoot {
                         log::warn!("恢复终端面板失败: {error}");
                     }
                 }
-                ViewKey::Editor { document_id, .. } | ViewKey::Markdown { document_id, .. } => {
+                ViewKey::Editor { document_id, .. }
+                | ViewKey::Markdown { document_id, .. }
+                | ViewKey::Diff { document_id, .. } => {
                     if self.panel_for_view(project_id, &view, cx).is_ok() {
                         continue;
                     }
@@ -457,7 +459,11 @@ impl AppRoot {
                             cx,
                         )
                     } else if self.documents.session(document_id).is_some() {
-                        self.restore_document_panel(project_id, view, document_id, window, cx)
+                        if matches!(&view, ViewKey::Diff { .. }) {
+                            self.restore_diff_panel(project_id, &view, document_id, window, cx)
+                        } else {
+                            self.restore_document_panel(project_id, view, document_id, window, cx)
+                        }
                     } else if self
                         .side_view_persistence
                         .document_requires_authorization(document_id)
@@ -525,8 +531,10 @@ impl AppRoot {
                 .terminal_panel(project_id, terminal_id, cx)
                 .map(|(panel_id, _)| panel_id),
             Some(
-                view
-                @ (ViewKey::Editor { .. } | ViewKey::Markdown { .. } | ViewKey::GitShow { .. }),
+                view @ (ViewKey::Editor { .. }
+                | ViewKey::Markdown { .. }
+                | ViewKey::Diff { .. }
+                | ViewKey::GitShow { .. }),
             ) => self.panel_for_view(project_id, &view, cx).ok(),
             _ => None,
         };
@@ -535,6 +543,41 @@ impl AppRoot {
         {
             project.update(cx, |project, _| project.focused_panel = default_panel);
         }
+    }
+
+    fn restore_diff_panel(
+        &mut self,
+        project_id: ProjectId,
+        view: &ViewKey,
+        document_id: slterm_document::DocumentId,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<PanelId, AppRootError> {
+        let state = self
+            .side_view_persistence
+            .editor_view_states()
+            .diff_state(view)
+            .ok_or_else(|| {
+                log::warn!("恢复 Diff 面板失败: 缺少固定绑定");
+                AppRootError::MissingPanel
+            })?;
+        let fixed = state.binding().map_err(|error| {
+            log::warn!("恢复 Diff 固定绑定失败: {error}");
+            AppRootError::MissingPanel
+        })?;
+        self.open_diff(
+            super::diff::DiffOpenRequest {
+                project_id,
+                target_group: None,
+                document_id,
+                binding: fixed.repository_binding().clone(),
+                path: fixed.head_path().clone(),
+                focus: false,
+                target_line: None,
+            },
+            window,
+            cx,
+        )
     }
 
     fn restore_terminal_panel(

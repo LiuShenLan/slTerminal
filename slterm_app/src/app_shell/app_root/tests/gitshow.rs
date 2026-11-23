@@ -9,7 +9,7 @@ use super::super::git_show::{GitShowOpenRequest, GitShowView};
 use super::super::panel_host::PanelContent;
 use super::*;
 
-fn git(repository: &Path, args: &[&str]) -> std::process::Output {
+pub(super) fn git(repository: &Path, args: &[&str]) -> std::process::Output {
     let output = crate::git::command(repository).args(args).output().unwrap();
     assert!(output.status.success(), "测试 Git 命令必须成功");
     output
@@ -19,7 +19,7 @@ fn canonical(path: &Path) -> CanonicalPath {
     CanonicalPath::new(dunce::canonicalize(path).unwrap()).unwrap()
 }
 
-fn repository() -> (tempfile::TempDir, PathBuf, RepositoryBinding) {
+pub(super) fn repository() -> (tempfile::TempDir, PathBuf, RepositoryBinding) {
     let temp = tempfile::tempdir().unwrap();
     let repository = temp.path().join("repo");
     std::fs::create_dir(&repository).unwrap();
@@ -32,7 +32,11 @@ fn repository() -> (tempfile::TempDir, PathBuf, RepositoryBinding) {
     );
     std::fs::write(repository.join("first.txt"), b"fixed first\n").unwrap();
     std::fs::write(repository.join("second.txt"), b"fixed second\n").unwrap();
-    git(&repository, &["add", "--", "first.txt", "second.txt"]);
+    std::fs::write(repository.join("shared.md"), b"# Shared\n\nbody\n").unwrap();
+    git(
+        &repository,
+        &["add", "--", "first.txt", "second.txt", "shared.md"],
+    );
     git(&repository, &["commit", "--quiet", "-m", "initial"]);
     let grants = vec![PathGrant::repo_root(canonical(&repository))];
     let binding = crate::git::GitFacade::default()

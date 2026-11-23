@@ -52,6 +52,7 @@ pub(super) struct DocumentPanelTarget {
 enum DocumentEditPanel {
     Editor(gpui::Entity<DocumentTextView>),
     Markdown(gpui::Entity<MarkdownView>),
+    Diff(gpui::Entity<super::diff::DiffView>),
 }
 
 fn document_open_io(error: io::Error) -> AppRootError {
@@ -919,7 +920,7 @@ impl AppRoot {
                         .panels
                         .values()
                         .filter_map(|panel| {
-                            let matches_document = matches!(&panel.view_key, ViewKey::Editor { document_id: actual, .. } | ViewKey::Markdown { document_id: actual, .. } if *actual == document_id);
+                            let matches_document = matches!(&panel.view_key, ViewKey::Editor { document_id: actual, .. } | ViewKey::Markdown { document_id: actual, .. } | ViewKey::Diff { document_id: actual, .. } if *actual == document_id);
                             if !matches_document {
                                 return None;
                             }
@@ -931,6 +932,9 @@ impl AppRoot {
                                 }
                                 PanelContent::Markdown(markdown) => {
                                     Some(DocumentEditPanel::Markdown(markdown.view.clone()))
+                                }
+                                PanelContent::Diff(diff) => {
+                                    Some(DocumentEditPanel::Diff(diff.clone()))
                                 }
                                 _ => None,
                             }
@@ -954,6 +958,16 @@ impl AppRoot {
                                 view.apply_edit_snapshot(&session, transaction, origin, cx);
                             }
                             DocumentEditRequest::Travel { .. } => view.apply_snapshot(&session, cx),
+                        });
+                    }
+                    DocumentEditPanel::Diff(view) => {
+                        view.update(cx, |view, cx| match &request {
+                            DocumentEditRequest::Edit(transaction, _) => {
+                                view.apply_shared_edit(&session, transaction, origin, cx);
+                            }
+                            DocumentEditRequest::Travel { .. } => {
+                                view.apply_shared_snapshot(&session, cx)
+                            }
                         });
                     }
                 }

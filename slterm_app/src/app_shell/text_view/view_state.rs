@@ -233,10 +233,153 @@ impl MarkdownViewState {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DiffViewMode {
+    #[default]
+    SideBySide,
+    Inline,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DiffCollapsedSide {
+    Head,
+    Worktree,
+}
+
+/// Diff 专属展示参数与固定绑定；正文视图滚动和全部瞬态不进入该 DTO。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DiffViewState {
+    binding: String,
+    #[serde(default)]
+    mode: DiffViewMode,
+    #[serde(default = "default_diff_sync_scroll")]
+    sync_scroll: bool,
+    #[serde(default = "default_diff_column_width")]
+    column_width: u16,
+    #[serde(default)]
+    collapsed: Option<DiffCollapsedSide>,
+    #[serde(default)]
+    swapped: bool,
+    #[serde(default)]
+    whitespace: slterm_document::DiffWhitespaceMode,
+    #[serde(default)]
+    collapse_unchanged: bool,
+    #[serde(default)]
+    source: DiffSourceViewState,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DiffSourceViewState {
+    #[serde(default)]
+    wrap: bool,
+    #[serde(default)]
+    language_override: Option<LanguageId>,
+}
+
+const fn default_diff_sync_scroll() -> bool {
+    true
+}
+
+const fn default_diff_column_width() -> u16 {
+    480
+}
+
+#[allow(dead_code)] // 完整展示控件消费归 Diff 行对布局与工具栏接线。
+impl DiffViewState {
+    pub(crate) fn new(binding: slterm_document::DiffBinding) -> Self {
+        let binding = slterm_workspace::diff_binding_to_canonical_json(&binding)
+            .expect("已校验的 DiffBinding 必须可编码");
+        Self {
+            binding,
+            mode: DiffViewMode::SideBySide,
+            sync_scroll: true,
+            column_width: default_diff_column_width(),
+            collapsed: None,
+            swapped: false,
+            whitespace: slterm_document::DiffWhitespaceMode::Exact,
+            collapse_unchanged: false,
+            source: DiffSourceViewState::default(),
+        }
+    }
+
+    pub(crate) fn binding(
+        &self,
+    ) -> Result<slterm_document::DiffBinding, slterm_workspace::DiffBindingError> {
+        slterm_workspace::diff_binding_from_canonical_json(&self.binding)
+    }
+
+    fn is_valid(&self) -> bool {
+        self.binding().is_ok() && (160..=2_000).contains(&self.column_width)
+    }
+
+    pub(crate) fn with_mode(mut self, mode: DiffViewMode) -> Self {
+        self.mode = mode;
+        self
+    }
+
+    pub(crate) const fn mode(&self) -> DiffViewMode {
+        self.mode
+    }
+
+    pub(crate) fn with_sync_scroll(mut self, enabled: bool) -> Self {
+        self.sync_scroll = enabled;
+        self
+    }
+
+    pub(crate) fn with_column_width(mut self, width: u16) -> Self {
+        self.column_width = width;
+        self
+    }
+
+    pub(crate) fn with_collapsed(mut self, side: Option<DiffCollapsedSide>) -> Self {
+        self.collapsed = side;
+        self
+    }
+
+    pub(crate) fn with_swapped(mut self, swapped: bool) -> Self {
+        self.swapped = swapped;
+        self
+    }
+
+    pub(crate) fn with_whitespace(
+        mut self,
+        whitespace: slterm_document::DiffWhitespaceMode,
+    ) -> Self {
+        self.whitespace = whitespace;
+        self
+    }
+
+    pub(crate) const fn whitespace(&self) -> slterm_document::DiffWhitespaceMode {
+        self.whitespace
+    }
+
+    pub(crate) fn with_collapse_unchanged(mut self, collapsed: bool) -> Self {
+        self.collapse_unchanged = collapsed;
+        self
+    }
+
+    pub(crate) fn with_source(mut self, source: EditorViewState) -> Self {
+        self.source.wrap = source.wrap();
+        self.source.language_override = source.language_override();
+        self
+    }
+
+    pub(crate) fn source(&self) -> EditorViewState {
+        EditorViewState::new(0, 0)
+            .with_wrap(self.source.wrap)
+            .with_language_override(self.source.language_override)
+    }
+}
+
 #[derive(Clone, Debug)]
 enum StoredDocumentViewState {
     Editor(EditorViewState),
     Markdown(MarkdownViewState),
+    Diff(DiffViewState),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -294,9 +437,16 @@ fn decode_editor_view_state(
     text: &str,
 ) -> Result<serde_json::Value, InvalidViewState> {
     match key {
-        ViewKey::Editor { .. } | ViewKey::Diff { .. } => {
+        ViewKey::Editor { .. } => {
             let state: EditorViewState =
                 serde_json::from_str(text).map_err(|_| InvalidViewState)?;
+            serde_json::to_value(state).map_err(|_| InvalidViewState)
+        }
+        ViewKey::Diff { .. } => {
+            let state: DiffViewState = serde_json::from_str(text).map_err(|_| InvalidViewState)?;
+            if !state.is_valid() {
+                return Err(InvalidViewState);
+            }
             serde_json::to_value(state).map_err(|_| InvalidViewState)
         }
         ViewKey::Markdown { .. } => {
@@ -330,7 +480,7 @@ pub(crate) struct EditorViewStateLease {
 }
 
 impl EditorViewStateLease {
-    fn key(&self) -> &ViewKey {
+    pub(crate) fn key(&self) -> &ViewKey {
         &self.key
     }
 }
@@ -417,6 +567,14 @@ impl EditorViewStateStore {
             .insert(key, StoredDocumentViewState::Markdown(state));
     }
 
+    pub(crate) fn restore_diff(&self, key: ViewKey, state: DiffViewState) {
+        let key = EditorKey::new(&key);
+        self.shared
+            .borrow_mut()
+            .restored
+            .insert(key, StoredDocumentViewState::Diff(state));
+    }
+
     pub(crate) fn lease(&self, key: &ViewKey) -> EditorViewStateLease {
         let id = EditorKey::new(key);
         let generation = {
@@ -441,6 +599,7 @@ impl EditorViewStateStore {
         match self.shared.borrow().restored.get(&id) {
             Some(StoredDocumentViewState::Editor(state)) => *state,
             Some(StoredDocumentViewState::Markdown(state)) => state.source(),
+            Some(StoredDocumentViewState::Diff(state)) => state.source(),
             None => EditorViewState::default(),
         }
     }
@@ -450,6 +609,14 @@ impl EditorViewStateStore {
         match self.shared.borrow().restored.get(&id) {
             Some(StoredDocumentViewState::Markdown(state)) => state.clone(),
             _ => MarkdownViewState::default(),
+        }
+    }
+
+    pub(crate) fn diff_state(&self, key: &ViewKey) -> Option<DiffViewState> {
+        let id = EditorKey::new(key);
+        match self.shared.borrow().restored.get(&id) {
+            Some(StoredDocumentViewState::Diff(state)) => Some(state.clone()),
+            _ => None,
         }
     }
 
@@ -469,10 +636,23 @@ impl EditorViewStateStore {
     }
 
     pub(crate) fn checkpoint(&self, lease: &EditorViewStateLease, state: EditorViewState) {
-        let state = if matches!(lease.key(), ViewKey::Markdown { .. }) {
-            StoredDocumentViewState::Markdown(self.markdown_state(lease.key()).with_source(state))
-        } else {
-            StoredDocumentViewState::Editor(state)
+        let state = match lease.key() {
+            ViewKey::Markdown { .. } => StoredDocumentViewState::Markdown(
+                self.markdown_state(lease.key()).with_source(state),
+            ),
+            ViewKey::Diff { .. } => {
+                let Some(current) = self.diff_state(lease.key()) else {
+                    log::warn!("Diff ViewState 缺少固定绑定，拒绝无身份写入");
+                    return;
+                };
+                let next = current.clone().with_source(state);
+                if next == current {
+                    // Diff 滚动是瞬态；没有改变持久字段时不产生写盘。
+                    return;
+                }
+                StoredDocumentViewState::Diff(next)
+            }
+            _ => StoredDocumentViewState::Editor(state),
         };
         self.checkpoint_state(lease, state);
     }
@@ -484,6 +664,14 @@ impl EditorViewStateStore {
     ) {
         let state = state.with_source(self.state(lease.key()));
         self.checkpoint_state(lease, StoredDocumentViewState::Markdown(state));
+    }
+
+    #[allow(dead_code)] // 消费点归 Diff 展示参数的显式编辑。
+    pub(crate) fn checkpoint_diff(&self, lease: &EditorViewStateLease, state: DiffViewState) {
+        if self.diff_state(lease.key()).as_ref() == Some(&state) {
+            return;
+        }
+        self.checkpoint_state(lease, StoredDocumentViewState::Diff(state));
     }
 
     fn checkpoint_state(&self, lease: &EditorViewStateLease, state: StoredDocumentViewState) {
@@ -500,6 +688,7 @@ impl EditorViewStateStore {
         let value = match &state {
             StoredDocumentViewState::Editor(state) => serde_json::to_value(state),
             StoredDocumentViewState::Markdown(state) => serde_json::to_value(state),
+            StoredDocumentViewState::Diff(state) => serde_json::to_value(state),
         }
         .expect("Document ViewState 必须可编码");
         let persisted = match ViewState::new(key, value, &self.registry) {
@@ -540,6 +729,7 @@ impl EditorViewStateStore {
             let value = match &state {
                 StoredDocumentViewState::Editor(state) => serde_json::to_value(state),
                 StoredDocumentViewState::Markdown(state) => serde_json::to_value(state),
+                StoredDocumentViewState::Diff(state) => serde_json::to_value(state),
             }
             .expect("Document ViewState 必须可编码");
             match ViewState::new(&key, value, &self.registry) {
@@ -579,6 +769,98 @@ mod tests {
         slterm_workspace::ViewKey::Editor {
             project_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b".parse().unwrap(),
             document_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0f2a".parse().unwrap(),
+        }
+    }
+
+    fn diff_fixture() -> (slterm_workspace::ViewKey, slterm_document::DiffBinding) {
+        use slterm_document::{CommitId, RepoPath, RepositoryBinding};
+        use slterm_path::{CanonicalPath, FileIdentity, ResolvedPath};
+
+        let resolved = |path: &str, file| {
+            ResolvedPath::new(
+                CanonicalPath::new(path).unwrap(),
+                Some(FileIdentity { volume: 7, file }),
+            )
+        };
+        let binding = slterm_document::DiffBinding::new(
+            RepositoryBinding::new(
+                resolved("D:/repo", 1),
+                resolved("D:/repo/.git", 2),
+                resolved("D:/repo/.git", 2),
+                "a".repeat(40).parse::<CommitId>().unwrap(),
+            ),
+            "dir/file.md".parse::<RepoPath>().unwrap(),
+        );
+        let slterm_workspace::ViewKey::Editor {
+            project_id,
+            document_id,
+        } = key()
+        else {
+            unreachable!()
+        };
+        (
+            slterm_workspace::ViewKey::Diff {
+                project_id,
+                document_id,
+            },
+            binding,
+        )
+    }
+
+    #[test]
+    fn diff_view_state_restores_parameters_without_transients() {
+        let (key, binding) = diff_fixture();
+        let expected = super::DiffViewState::new(binding.clone())
+            .with_mode(super::DiffViewMode::Inline)
+            .with_sync_scroll(false)
+            .with_column_width(720)
+            .with_collapsed(Some(super::DiffCollapsedSide::Head))
+            .with_swapped(true)
+            .with_whitespace(slterm_document::DiffWhitespaceMode::All)
+            .with_collapse_unchanged(true)
+            .with_source(EditorViewState::new(90, 80).with_wrap(true));
+        let registry =
+            std::sync::Arc::new(ViewStateRegistry::new(&document_view_state_schemas()).unwrap());
+        let persisted =
+            ViewState::new(&key, serde_json::to_value(&expected).unwrap(), &registry).unwrap();
+        let encoded = persisted.to_canonical_json().unwrap();
+        for transient in [
+            "selection",
+            "search",
+            "scroll_line",
+            "scroll_column",
+            "active_change",
+            "error",
+        ] {
+            assert!(
+                !encoded.contains(transient),
+                "瞬态字段不得持久化: {transient}"
+            );
+        }
+        let decoded =
+            serde_json::from_value::<super::DiffViewState>(persisted.into_state()).unwrap();
+        assert_eq!(decoded, expected);
+        assert_eq!(decoded.binding().unwrap(), binding);
+
+        let store = EditorViewStateStore::new(registry.clone(), None);
+        store.restore_diff(key.clone(), expected);
+        let lease = store.lease(&key);
+        store.checkpoint(&lease, EditorViewState::new(100, 90).with_wrap(false));
+        let current = store.diff_state(&key).unwrap();
+        assert!(!current.source().wrap());
+        assert_eq!(current.mode(), super::DiffViewMode::Inline);
+        let final_json = store.final_states()[0].1.to_canonical_json().unwrap();
+        assert!(!final_json.contains("scroll_line"));
+        assert!(!final_json.contains("scroll_column"));
+
+        let mut invalid_width = serde_json::to_value(&decoded).unwrap();
+        invalid_width["column_width"] = serde_json::json!(1);
+        for invalid in [
+            serde_json::json!({"search": "transient"}),
+            serde_json::json!({"binding": "not-a-binding"}),
+            invalid_width,
+        ] {
+            assert!(ViewState::new(&key, invalid, &registry).is_err());
         }
     }
 
@@ -744,23 +1026,24 @@ mod tests {
         else {
             unreachable!()
         };
-        for key in [
-            slterm_workspace::ViewKey::Markdown {
-                project_id,
-                document_id,
-            },
-            slterm_workspace::ViewKey::Diff {
-                project_id,
-                document_id,
-            },
-        ] {
-            let store = EditorViewStateStore::new(registry.clone(), None);
-            let lease = store.lease(&key);
-            store.checkpoint(&lease, EditorViewState::new(3, 4));
-            let final_states = store.final_states();
-            assert_eq!(final_states.len(), 1);
-            assert_eq!(final_states[0].0, key);
-        }
+        let key = slterm_workspace::ViewKey::Markdown {
+            project_id,
+            document_id,
+        };
+        let store = EditorViewStateStore::new(registry.clone(), None);
+        let lease = store.lease(&key);
+        store.checkpoint(&lease, EditorViewState::new(3, 4));
+        let final_states = store.final_states();
+        assert_eq!(final_states.len(), 1);
+        assert_eq!(final_states[0].0, key);
+        let (diff_key, binding) = diff_fixture();
+        let store = EditorViewStateStore::new(registry, None);
+        store.restore_diff(diff_key.clone(), super::DiffViewState::new(binding));
+        let lease = store.lease(&diff_key);
+        store.checkpoint(&lease, EditorViewState::new(3, 4).with_wrap(true));
+        let final_states = store.final_states();
+        assert_eq!(final_states.len(), 1);
+        assert_eq!(final_states[0].0, diff_key);
     }
 
     #[test]

@@ -17,7 +17,8 @@ use slterm_workspace::{
 
 use super::side_view_host::{SideViewControl, SideViewHost};
 use crate::app_shell::text_view::{
-    EditorViewState, EditorViewStateStore, MarkdownViewState, document_view_state_schemas,
+    DiffViewState, EditorViewState, EditorViewStateStore, MarkdownViewState,
+    document_view_state_schemas,
 };
 use crate::persistence::workspace_writer::{WorkspaceWriterClient, WorkspaceWriterError};
 
@@ -118,6 +119,7 @@ impl AppRootPersistence {
                     key,
                     slterm_workspace::ViewKey::Editor { .. }
                         | slterm_workspace::ViewKey::Markdown { .. }
+                        | slterm_workspace::ViewKey::Diff { .. }
                 )
             })
             .collect::<Vec<_>>();
@@ -125,20 +127,29 @@ impl AppRootPersistence {
             match store.view_state(&key, &persistence.registry) {
                 Ok(Some(stored)) => {
                     let state = stored.state.into_state();
-                    if matches!(key, slterm_workspace::ViewKey::Markdown { .. }) {
-                        match serde_json::from_value::<MarkdownViewState>(state) {
-                            Ok(state) => persistence.editor_views.restore_markdown(key, state),
-                            Err(error) => {
-                                log::warn!("could not decode Markdown ViewState: {error}");
+                    match key {
+                        slterm_workspace::ViewKey::Markdown { .. } => {
+                            match serde_json::from_value::<MarkdownViewState>(state) {
+                                Ok(state) => persistence.editor_views.restore_markdown(key, state),
+                                Err(error) => {
+                                    log::warn!("could not decode Markdown ViewState: {error}");
+                                }
                             }
                         }
-                    } else {
-                        match serde_json::from_value::<EditorViewState>(state) {
+                        slterm_workspace::ViewKey::Diff { .. } => {
+                            match serde_json::from_value::<DiffViewState>(state) {
+                                Ok(state) => persistence.editor_views.restore_diff(key, state),
+                                Err(error) => {
+                                    log::warn!("could not decode Diff ViewState: {error}");
+                                }
+                            }
+                        }
+                        _ => match serde_json::from_value::<EditorViewState>(state) {
                             Ok(state) => persistence.editor_views.restore(key, state),
                             Err(error) => {
                                 log::warn!("could not decode Editor ViewState: {error}");
                             }
-                        }
+                        },
                     }
                 }
                 Ok(None) => {}

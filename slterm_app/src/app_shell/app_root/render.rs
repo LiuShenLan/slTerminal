@@ -172,6 +172,7 @@ impl AppRoot {
                     super::panel_host::PanelContent::Markdown(markdown) => {
                         markdown.view.clone().into_any_element()
                     }
+                    super::panel_host::PanelContent::Diff(view) => view.clone().into_any_element(),
                     super::panel_host::PanelContent::Paged(paged) => {
                         paged.clone().into_any_element()
                     }

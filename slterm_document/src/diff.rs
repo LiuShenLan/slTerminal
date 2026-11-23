@@ -18,7 +18,10 @@ const PAGED_SIDE_BYTES: usize = 10_000_000;
 const MAX_DIFF_SIDE_BYTES: usize = 50_000_000;
 const MAX_DIFF_SIDE_LINES: usize = 200_000;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
 pub enum DiffWhitespaceMode {
     #[default]
     Exact,

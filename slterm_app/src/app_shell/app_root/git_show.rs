@@ -66,6 +66,11 @@ impl GitShowView {
         }
     }
 
+    #[allow(dead_code)] // 消费点归 Diff 左侧固定 HEAD 视图。
+    pub(crate) fn current_generation(&self) -> u64 {
+        self.generation
+    }
+
     pub(crate) fn begin_load(&mut self) -> u64 {
         self.generation = self.generation.wrapping_add(1);
         self.generation
@@ -170,6 +175,22 @@ impl GitShowView {
         };
         self.snapshot = Some(snapshot);
         cx.notify();
+    }
+
+    #[allow(dead_code)] // 消费点归 Diff 左右侧共享面板焦点。
+    pub(crate) fn share_focus(&mut self, focus: FocusHandle, cx: &mut App) {
+        self.focus = focus.clone();
+        match &self.body {
+            GitShowBody::Text(view) => view.update(cx, |view, _| view.share_focus(focus)),
+            GitShowBody::Paged(view) => view.update(cx, |view, _| view.share_focus(focus)),
+            _ => {}
+        }
+    }
+
+    pub(crate) fn reveal_line(&mut self, line: usize, cx: &mut App) {
+        if let GitShowBody::Text(view) = &self.body {
+            view.update(cx, |view, cx| view.reveal_line(line, cx));
+        }
     }
 
     pub(crate) fn snapshot(&self) -> Option<GitShowSnapshot> {
@@ -434,7 +455,7 @@ impl super::AppRoot {
         }
     }
 
-    fn gitshow_grants(
+    pub(super) fn gitshow_grants(
         &self,
         binding: &slterm_document::RepositoryBinding,
     ) -> Vec<slterm_path::PathGrant> {

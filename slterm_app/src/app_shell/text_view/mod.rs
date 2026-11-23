@@ -15,9 +15,12 @@ mod syntax;
 pub(crate) use syntax::DocumentSyntax;
 mod view_state;
 mod wrap;
+#[cfg(all(test, feature = "gpui-test-support"))]
+pub(crate) use view_state::{DiffCollapsedSide, DiffViewMode};
 pub(crate) use view_state::{
-    DocumentViewStateBinding, EditorViewState, EditorViewStateLease, EditorViewStateStore,
-    MarkdownMode, MarkdownReadingPosition, MarkdownViewState, document_view_state_schemas,
+    DiffViewState, DocumentViewStateBinding, EditorViewState, EditorViewStateLease,
+    EditorViewStateStore, MarkdownMode, MarkdownReadingPosition, MarkdownViewState,
+    document_view_state_schemas,
 };
 
 gpui::actions!(

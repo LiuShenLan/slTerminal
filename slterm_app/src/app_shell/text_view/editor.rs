@@ -39,6 +39,7 @@ use super::wrap::{DisplayPosition, SoftWrapIndex};
 use super::{SaveFile, SelectDown, SelectLeft, SelectRight, SelectUp};
 
 /// 一次同步提交成功后回投的只读正文快照。
+#[derive(Clone)]
 pub(crate) struct DocumentTextSnapshot {
     pub(crate) text: Rope,
     pub(crate) revision: u64,
@@ -380,6 +381,22 @@ impl DocumentTextView {
         cx.emit(DocumentTextEvent::OpenLanguageSelector { position });
     }
 
+    pub(crate) fn text_snapshot(&self) -> DocumentTextSnapshot {
+        DocumentTextSnapshot {
+            text: self.text.clone(),
+            revision: self.revision,
+            text_state: self.text_state,
+            read_only: self.read_only,
+        }
+    }
+
+    /// Diff 导航只改变当前定位，不写持久阅读状态。
+    pub(crate) fn reveal_line(&mut self, line: usize, cx: &mut Context<'_, Self>) {
+        self.scroll_line = line.min(self.text.len_lines(LineType::LF).saturating_sub(1));
+        self.scroll_column = 0;
+        cx.notify();
+    }
+
     pub(crate) fn language_override(&self) -> Option<LanguageId> {
         self.language_override
     }
@@ -398,6 +415,10 @@ impl DocumentTextView {
         if let Some(current) = &mut self.view_lease {
             *current = lease;
         }
+    }
+
+    pub(crate) fn view_state_access(&self) -> Option<(EditorViewStateStore, EditorViewStateLease)> {
+        Some((self.view_states.clone()?, self.view_lease.clone()?))
     }
 
     pub(crate) fn effective_language(&self, language_override: Option<LanguageId>) -> LanguageId {
@@ -452,7 +473,15 @@ impl DocumentTextView {
     }
 
     fn toggle_wrap(&mut self, cx: &mut Context<'_, Self>) {
-        self.wrap = !self.wrap;
+        self.set_wrap(!self.wrap, cx);
+    }
+
+    #[allow(dead_code)] // 消费点归 Diff 显示参数对共享工作区侧的应用。
+    pub(crate) fn set_wrap(&mut self, wrap: bool, cx: &mut Context<'_, Self>) {
+        if self.wrap == wrap {
+            return;
+        }
+        self.wrap = wrap;
         self.invalidate_wrap_index();
         self.preferred_column = None;
         self.mouse_anchor = None;

@@ -5,6 +5,8 @@ mod batch_close;
 pub(crate) mod close_coordinator;
 mod command_registry;
 mod commands;
+#[allow(dead_code)] // 消费点归 Editor 行标、Diff 启动恢复与可见性接线。
+mod diff;
 mod document_external;
 mod document_recovery;
 mod documents;

@@ -15,6 +15,11 @@ pub(crate) struct EditorContent {
 }
 
 impl EditorContent {
+    #[allow(dead_code)] // 消费点归 Diff 复合视图保留保存订阅。
+    pub(crate) fn into_parts(self) -> (Entity<DocumentTextView>, Subscription) {
+        (self.view, self._save_subscription)
+    }
+
     pub(crate) fn new(view: Entity<DocumentTextView>, save_subscription: Subscription) -> Self {
         Self {
             view,
@@ -41,6 +46,8 @@ pub(crate) enum PanelContent {
     Terminal(Entity<TerminalView>),
     Editor(EditorContent),
     Markdown(MarkdownContent),
+    #[allow(dead_code)] // 消费点归共享 Document Diff 面板。
+    Diff(Entity<super::diff::DiffView>),
     Paged(Entity<PagedTextView>),
     GitShow(Entity<super::git_show::GitShowView>),
     Recovery(Entity<DocumentRecoveryView>),
@@ -81,6 +88,7 @@ impl PanelHost {
             PanelContent::Terminal(terminal) => terminal.read(cx).focus_handle.clone(),
             PanelContent::Editor(editor) => editor.view.read(cx).focus_handle(cx),
             PanelContent::Markdown(markdown) => markdown.view.read(cx).focus_handle(cx),
+            PanelContent::Diff(view) => view.read(cx).focus_handle(cx),
             PanelContent::Paged(paged) => paged.read(cx).focus_handle(cx),
             PanelContent::GitShow(view) => view.read(cx).focus_handle(cx),
             PanelContent::Recovery(recovery) => recovery.read(cx).focus_handle.clone(),
