@@ -1,4 +1,4 @@
-//! 文件树单项写操作：先捕获不可变计划，执行前重新解析、授权并比对真实状态。
+//! 文件树单项操作：先捕获不可变计划，执行前重新解析、授权并比对真实状态。
 //! 本服务含阻塞 I/O，只允许在后台执行体调用。
 
 use std::{
@@ -23,6 +23,7 @@ use crate::platform::{
 pub(crate) enum FileOperationKind {
     CreateFile,
     CreateDirectory,
+    Copy,
     Rename,
     Delete,
 }
@@ -46,6 +47,7 @@ struct OperationDestination {
 pub(crate) struct OperationPlan {
     kind: FileOperationKind,
     root_id: FileTreeRoot,
+    source_root_id: Option<FileTreeRoot>,
     authorization_generation: u64,
     lexical_path: CanonicalPath,
     canonical_path: CanonicalPath,
@@ -168,6 +170,7 @@ impl FileOperationService {
         Ok(OperationPlan {
             kind,
             root_id,
+            source_root_id: None,
             authorization_generation,
             lexical_path: target.clone(),
             canonical_path: resolved.canonical_path().clone(),
@@ -175,6 +178,80 @@ impl FileOperationService {
             expected_fingerprint: None,
             parent: Some(parent),
             destination: None,
+            recycle_policy: RecyclePolicy::NotApplicable,
+            document_revision: None,
+            operation_id: Uuid::now_v7(),
+        })
+    }
+
+    pub(crate) fn check_source(
+        &self,
+        source: &CanonicalPath,
+        operation: PathOperation,
+        grants: &[PathGrant],
+        authorization_generation: u64,
+    ) -> Result<(), FileOperationError> {
+        let resolved = self.resolver.resolve(source)?;
+        let resolved = self.authorize_with(
+            operation,
+            source,
+            &resolved,
+            grants,
+            authorization_generation,
+            authorization_generation,
+        )?;
+        fingerprint(&resolved)?;
+        Ok(())
+    }
+
+    pub(crate) fn plan_copy(
+        &self,
+        source_root: FileTreeRoot,
+        destination_root: FileTreeRoot,
+        source: &CanonicalPath,
+        destination: &CanonicalPath,
+        grants: &[PathGrant],
+        authorization_generation: u64,
+    ) -> Result<OperationPlan, FileOperationError> {
+        validate_entry_path(destination)?;
+        let resolved = self.resolver.resolve(source)?;
+        let resolved = self.authorize_with(
+            PathOperation::Read,
+            source,
+            &resolved,
+            grants,
+            authorization_generation,
+            authorization_generation,
+        )?;
+        let expected_fingerprint = fingerprint(&resolved)?;
+        let destination_resolved = self.resolver.resolve_write_target(destination)?;
+        if destination_resolved.file_identity().is_some() {
+            return Err(io::Error::new(io::ErrorKind::AlreadyExists, "目标已存在").into());
+        }
+        let destination_resolved = self.authorize(
+            destination,
+            &destination_resolved,
+            grants,
+            authorization_generation,
+            authorization_generation,
+        )?;
+        let destination_parent = self.resolve_parent(&destination_resolved)?;
+        Ok(OperationPlan {
+            kind: FileOperationKind::Copy,
+            root_id: destination_root,
+            source_root_id: Some(source_root),
+            authorization_generation,
+            lexical_path: source.clone(),
+            canonical_path: resolved.canonical_path().clone(),
+            file_identity: resolved.file_identity(),
+            expected_fingerprint: Some(expected_fingerprint),
+            parent: None,
+            destination: Some(OperationDestination {
+                lexical_path: destination.clone(),
+                canonical_path: destination_resolved.canonical_path().clone(),
+                file_identity: None,
+                parent: destination_parent,
+            }),
             recycle_policy: RecyclePolicy::NotApplicable,
             document_revision: None,
             operation_id: Uuid::now_v7(),
@@ -216,6 +293,7 @@ impl FileOperationService {
         Ok(OperationPlan {
             kind: FileOperationKind::Rename,
             root_id,
+            source_root_id: None,
             authorization_generation,
             lexical_path: source.clone(),
             canonical_path: resolved.canonical_path().clone(),
@@ -253,6 +331,7 @@ impl FileOperationService {
         Ok(OperationPlan {
             kind: FileOperationKind::Delete,
             root_id,
+            source_root_id: None,
             authorization_generation,
             lexical_path: target.clone(),
             canonical_path: resolved.canonical_path().clone(),
@@ -281,6 +360,9 @@ impl FileOperationService {
             }
             FileOperationKind::Rename => {
                 self.execute_rename(plan, grants, current_authorization_generation)?;
+            }
+            FileOperationKind::Copy => {
+                self.execute_copy(plan, grants, current_authorization_generation)?;
             }
             FileOperationKind::Delete => {
                 return self.execute_delete(plan, grants, current_authorization_generation);
@@ -314,10 +396,46 @@ impl FileOperationService {
             FileOperationKind::CreateDirectory => {
                 file_operations::create_directory(plan.lexical_path.as_path())?;
             }
-            FileOperationKind::Rename | FileOperationKind::Delete => {
+            FileOperationKind::Copy | FileOperationKind::Rename | FileOperationKind::Delete => {
                 unreachable!("新建执行体只接受新建计划");
             }
         }
+        Ok(())
+    }
+
+    fn execute_copy(
+        &self,
+        plan: &OperationPlan,
+        grants: &[PathGrant],
+        current_authorization_generation: u64,
+    ) -> Result<(), FileOperationError> {
+        self.recheck_existing(
+            plan,
+            PathOperation::Read,
+            grants,
+            current_authorization_generation,
+        )?;
+        let destination = plan.destination.as_ref().expect("复制计划必须包含目标");
+        let resolved = self
+            .resolver
+            .resolve_write_target(&destination.lexical_path)?;
+        let resolved = self.authorize(
+            &destination.lexical_path,
+            &resolved,
+            grants,
+            plan.authorization_generation,
+            current_authorization_generation,
+        )?;
+        if resolved.canonical_path() != &destination.canonical_path
+            || resolved.file_identity() != destination.file_identity
+        {
+            return Err(FileOperationError::Changed);
+        }
+        self.recheck_parent(&destination.parent)?;
+        file_operations::copy_path(
+            plan.lexical_path.as_path(),
+            destination.lexical_path.as_path(),
+        )?;
         Ok(())
     }
 
@@ -327,7 +445,12 @@ impl FileOperationService {
         grants: &[PathGrant],
         current_authorization_generation: u64,
     ) -> Result<(), FileOperationError> {
-        self.recheck_existing(plan, grants, current_authorization_generation)?;
+        self.recheck_existing(
+            plan,
+            PathOperation::Write,
+            grants,
+            current_authorization_generation,
+        )?;
         let destination = plan.destination.as_ref().expect("重命名计划必须包含目标");
         let resolved = self
             .resolver
@@ -358,7 +481,12 @@ impl FileOperationService {
         grants: &[PathGrant],
         current_authorization_generation: u64,
     ) -> Result<FileOperationOutcome, FileOperationError> {
-        match self.recheck_existing(plan, grants, current_authorization_generation) {
+        match self.recheck_existing(
+            plan,
+            PathOperation::Write,
+            grants,
+            current_authorization_generation,
+        ) {
             Ok(()) => {}
             Err(FileOperationError::Io(error)) if error.kind() == io::ErrorKind::NotFound => {
                 return match std::fs::symlink_metadata(plan.lexical_path.as_path()) {
@@ -380,11 +508,13 @@ impl FileOperationService {
     fn recheck_existing(
         &self,
         plan: &OperationPlan,
+        operation: PathOperation,
         grants: &[PathGrant],
         current_authorization_generation: u64,
     ) -> Result<(), FileOperationError> {
         let resolved = self.resolver.resolve(&plan.lexical_path)?;
-        let resolved = self.authorize(
+        let resolved = self.authorize_with(
+            operation,
             &plan.lexical_path,
             &resolved,
             grants,
@@ -429,8 +559,27 @@ impl FileOperationService {
         expected_generation: u64,
         current_generation: u64,
     ) -> Result<ResolvedPath, FileOperationError> {
+        self.authorize_with(
+            PathOperation::Write,
+            lexical,
+            resolved,
+            grants,
+            expected_generation,
+            current_generation,
+        )
+    }
+
+    fn authorize_with(
+        &self,
+        operation: PathOperation,
+        lexical: &CanonicalPath,
+        resolved: &ResolvedPath,
+        grants: &[PathGrant],
+        expected_generation: u64,
+        current_generation: u64,
+    ) -> Result<ResolvedPath, FileOperationError> {
         let request = PathRequest {
-            operation: PathOperation::Write,
+            operation,
             lexical_path: lexical.as_path().to_path_buf(),
             root_hints: Vec::new(),
             session_grant: None,

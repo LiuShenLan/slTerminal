@@ -1,4 +1,4 @@
-//! 系统文件操作:回收站删除、系统处理器打开与文件树 CRUD。
+//! 系统文件操作:回收站删除、系统处理器打开与文件树 CRUD/复制。
 //!
 //! 删除走 `SHFileOperationW` + `FOF_ALLOWUNDO`(照抄点 25):对齐系统回收站,
 //! 不提供「永久删除」旁路。打开走 `ShellExecuteW`:文件树双击未命中应用内
@@ -218,6 +218,118 @@ pub(crate) fn create_directory(path: &Path) -> io::Result<()> {
     std::fs::create_dir(path)
 }
 
+/// 复制普通文件或目录；reparse point 一律拒绝，不跟随到未授权目标。
+/// 文件先写同目录临时文件并 flush，再以不覆盖目标的 rename 提交。
+pub(crate) fn copy_path(from: &Path, to: &Path) -> io::Result<()> {
+    validate_entry_path(to)?;
+    ensure_parent_directory(to)?;
+    let metadata = std::fs::symlink_metadata(from)?;
+    if is_reparse_point(&metadata) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "复制不得跟随或复制 reparse point",
+        ));
+    }
+    if metadata.is_file() {
+        copy_file_atomically(from, to)
+    } else if metadata.is_dir() {
+        copy_directory(from, to)
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "仅支持普通文件与目录",
+        ))
+    }
+}
+
+fn is_reparse_point(metadata: &std::fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt as _;
+    use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+
+    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+fn copy_file_atomically(from: &Path, to: &Path) -> io::Result<()> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+    };
+
+    if to.try_exists()? {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "Target path already exists",
+        ));
+    }
+    let mut source = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
+        .open(from)?;
+    if is_reparse_point(&source.metadata()?) || !source.metadata()?.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "复制源已不再是普通文件",
+        ));
+    }
+    let parent = to.parent().expect("父目录已校验");
+    let temporary = parent.join(format!(".slterm-copy-{}", uuid::Uuid::now_v7()));
+    let mut target = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)?;
+    let result = (|| {
+        std::io::copy(&mut source, &mut target)?;
+        target.sync_all()?;
+        drop(target);
+        move_file_without_replacing(&temporary, to)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result
+}
+
+fn copy_directory(from: &Path, to: &Path) -> io::Result<()> {
+    let canonical_source = dunce::canonicalize(from)?;
+    let parent = to.parent().expect("父目录已校验");
+    let canonical_target =
+        dunce::canonicalize(parent)?.join(to.file_name().expect("目标名称已校验"));
+    if canonical_target.starts_with(&canonical_source) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "目录不得复制到自身或后代",
+        ));
+    }
+    create_directory(to)?;
+    let mut pending = vec![(from.to_path_buf(), to.to_path_buf())];
+    while let Some((source, target)) = pending.pop() {
+        for entry in std::fs::read_dir(source)? {
+            let entry = entry?;
+            let source_path = entry.path();
+            let metadata = std::fs::symlink_metadata(&source_path)?;
+            if is_reparse_point(&metadata) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "目录复制遇到 reparse point",
+                ));
+            }
+            let target_path = target.join(entry.file_name());
+            if metadata.is_dir() {
+                create_directory(&target_path)?;
+                pending.push((source_path, target_path));
+            } else if metadata.is_file() {
+                copy_file_atomically(&source_path, &target_path)?;
+            } else {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "目录含不支持的文件类型",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// 重命名/移动条目;源缺失 → `NotFound`,目标已存在 → `AlreadyExists`。
 ///
 /// 预检只负责名称与大小写语义；最终 `MoveFileExW` 不带 REPLACE_EXISTING，
@@ -424,6 +536,62 @@ mod file_operations_tests {
         let case_only = directory.path().join("NEW.txt");
         rename_path(&to, &case_only).unwrap();
         assert_eq!(std::fs::read(&case_only).unwrap(), b"content");
+    }
+
+    #[test]
+    fn copy_file_preserves_content_and_never_overwrites_a_target() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source.txt");
+        let target = directory.path().join("target.txt");
+        std::fs::write(&source, b"copy contents").unwrap();
+
+        copy_path(&source, &target).unwrap();
+
+        assert_eq!(std::fs::read(&target).unwrap(), b"copy contents");
+        assert_eq!(std::fs::read(&source).unwrap(), b"copy contents");
+        assert_eq!(
+            copy_path(&source, &target).unwrap_err().kind(),
+            io::ErrorKind::AlreadyExists
+        );
+        assert_eq!(std::fs::read(&target).unwrap(), b"copy contents");
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 2);
+    }
+
+    #[test]
+    fn copy_directory_recurses_but_rejects_reparse_points() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source");
+        let outside = directory.path().join("outside");
+        std::fs::create_dir(&source).unwrap();
+        std::fs::create_dir(source.join("nested")).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+        std::fs::write(source.join("nested/file.txt"), b"nested").unwrap();
+        std::fs::write(outside.join("secret.txt"), b"outside").unwrap();
+        let target = directory.path().join("target");
+
+        copy_path(&source, &target).unwrap();
+        assert_eq!(
+            std::fs::read(target.join("nested/file.txt")).unwrap(),
+            b"nested"
+        );
+
+        let status = std::process::Command::new("cmd.exe")
+            .args(["/C", "mklink", "/J"])
+            .arg(source.join("linked"))
+            .arg(&outside)
+            .status()
+            .unwrap();
+        assert!(status.success(), "Windows 必须能创建临时目录 junction");
+        let rejected = directory.path().join("rejected");
+        assert_eq!(
+            copy_path(&source, &rejected).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert!(!rejected.join("linked/secret.txt").exists());
+        assert_eq!(
+            std::fs::read(outside.join("secret.txt")).unwrap(),
+            b"outside"
+        );
     }
 
     #[test]

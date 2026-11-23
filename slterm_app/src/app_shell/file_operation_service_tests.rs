@@ -6,6 +6,7 @@ use std::{
 };
 
 use slterm_path::{CanonicalPath, PathGrant};
+use slterm_settings::AgentRootId;
 use slterm_sidebar::FileTreeRoot;
 use slterm_workspace::ProjectId;
 
@@ -269,6 +270,56 @@ fn operation_plan_rejects_stale_authorization_generation() {
     ));
     assert_eq!(std::fs::read(file.as_path()).unwrap(), b"keep");
     assert!(recycle_bin.paths().is_empty());
+}
+
+#[test]
+fn explorer_copy_capability_union() {
+    let temp = tempfile::tempdir().unwrap();
+    let agent_path = temp.path().join("agent");
+    let project_path = temp.path().join("project");
+    std::fs::create_dir(&agent_path).unwrap();
+    std::fs::create_dir(&project_path).unwrap();
+    let source = canonical(agent_path.join("source.txt"));
+    std::fs::write(source.as_path(), b"cross root copy").unwrap();
+    let agent = canonical(&agent_path);
+    let project = canonical(&project_path);
+    let grants = vec![
+        PathGrant::agent_root(agent, false, false),
+        PathGrant::project_root(project),
+    ];
+    let agent_root =
+        FileTreeRoot::Agent(AgentRootId::from_str("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b").unwrap());
+    let project_root = root();
+    let (service, _) = service();
+
+    let target = canonical(project_path.join("copied.txt"));
+    let plan = service
+        .plan_copy(
+            agent_root.clone(),
+            project_root.clone(),
+            &source,
+            &target,
+            &grants,
+            0,
+        )
+        .unwrap();
+    service.execute(&plan, &grants, 0).unwrap();
+    assert_eq!(std::fs::read(target.as_path()).unwrap(), b"cross root copy");
+    assert_eq!(std::fs::read(source.as_path()).unwrap(), b"cross root copy");
+
+    let reverse_target = canonical(agent_path.join("rejected.txt"));
+    assert!(matches!(
+        service.plan_copy(
+            project_root,
+            agent_root,
+            &target,
+            &reverse_target,
+            &grants,
+            0,
+        ),
+        Err(FileOperationError::Unauthorized)
+    ));
+    assert!(!reverse_target.as_path().exists());
 }
 
 #[test]

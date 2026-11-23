@@ -61,6 +61,11 @@ pub(crate) mod file_editor;
 // Document 专用文本视图与 Unicode/IME 坐标。
 #[allow(dead_code)] // 生产消费归 AppRoot Paged Document 打开与逐页读取。
 pub(crate) mod paged_document;
+// 粘贴冲突聚合、逐项串行执行与部分成功报告。
+#[allow(dead_code)] // 生产消费归 Explorer 与 Agent 文件树接线。
+pub(crate) mod paste_service;
+#[cfg(test)]
+mod paste_service_tests;
 pub(crate) mod text_view;
 // 外部文件系统事件监听(树根递归 + 打开文件父目录;有界唤醒前台)。
 pub(crate) mod fs_watch;
