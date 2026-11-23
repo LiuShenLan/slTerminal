@@ -17,7 +17,14 @@ pub(crate) struct SystemDocumentPathResolver;
 impl DocumentPathResolver for SystemDocumentPathResolver {
     fn resolve(&self, lexical: &CanonicalPath) -> io::Result<ResolvedPath> {
         let canonical = dunce::canonicalize(lexical.as_path())?;
-        let file = std::fs::File::open(&canonical)?;
+        use std::os::windows::fs::OpenOptionsExt as _;
+        use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
+
+        // 目录身份也必须来自真实句柄；普通 File::open 在 Windows 上拒绝目录。
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(&canonical)?;
         let identity = crate::atomic_file::file_identity(&file)?;
         let canonical = CanonicalPath::new(canonical)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;

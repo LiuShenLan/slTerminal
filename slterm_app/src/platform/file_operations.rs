@@ -220,10 +220,18 @@ pub(crate) fn create_directory(path: &Path) -> io::Result<()> {
 
 /// 重命名/移动条目;源缺失 → `NotFound`,目标已存在 → `AlreadyExists`。
 ///
-/// `std::fs::rename` 在 Windows 带 `MOVEFILE_REPLACE_EXISTING`,会静默覆盖
-/// 同名目标;这里必须自己挡住。唯一放行的是「同一文件换大小写」：二者
-/// canonicalize 后相同,交给系统完成大小写变更。
+/// 预检只负责名称与大小写语义；最终 `MoveFileExW` 不带 REPLACE_EXISTING，
+/// 因此目标在预检后出现也只能得到 `AlreadyExists`，不会被竞态覆盖。
+/// 唯一放行的是「同一文件换大小写」：二者 canonicalize 后相同。
 pub(crate) fn rename_path(from: &Path, to: &Path) -> io::Result<()> {
+    rename_path_with_before_move(from, to, || {})
+}
+
+fn rename_path_with_before_move(
+    from: &Path,
+    to: &Path,
+    before_move: impl FnOnce(),
+) -> io::Result<()> {
     validate_entry_path(to)?;
     if !from.try_exists()? {
         return Err(io::Error::new(
@@ -247,7 +255,29 @@ pub(crate) fn rename_path(from: &Path, to: &Path) -> io::Result<()> {
             ));
         }
     }
-    std::fs::rename(from, to)
+    before_move();
+    move_file_without_replacing(from, to)
+}
+
+fn move_file_without_replacing(from: &Path, to: &Path) -> io::Result<()> {
+    use std::os::windows::ffi::OsStrExt as _;
+    use windows_sys::Win32::Storage::FileSystem::{MOVEFILE_WRITE_THROUGH, MoveFileExW};
+
+    let wide = |path: &Path| {
+        path.as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>()
+    };
+    let from = wide(from);
+    let to = wide(to);
+    // SAFETY: 两个缓冲区均以 NUL 结尾并在调用期间存活，标志明确禁止替换。
+    let moved = unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), MOVEFILE_WRITE_THROUGH) };
+    if moved == 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -391,6 +421,26 @@ mod file_operations_tests {
         // 原名重命名是幂等 no-op,不触碰磁盘。
         rename_path(&to, &to).unwrap();
         assert_eq!(std::fs::read(&to).unwrap(), b"content");
+        let case_only = directory.path().join("NEW.txt");
+        rename_path(&to, &case_only).unwrap();
+        assert_eq!(std::fs::read(&case_only).unwrap(), b"content");
+    }
+
+    #[test]
+    fn rename_rejects_a_target_created_after_the_precheck() {
+        let directory = tempfile::tempdir().unwrap();
+        let from = directory.path().join("from.txt");
+        let to = directory.path().join("to.txt");
+        std::fs::write(&from, b"source").unwrap();
+
+        let error = rename_path_with_before_move(&from, &to, || {
+            std::fs::write(&to, b"concurrent").unwrap();
+        })
+        .unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read(&from).unwrap(), b"source");
+        assert_eq!(std::fs::read(&to).unwrap(), b"concurrent");
     }
 
     /// 非法名字在触碰磁盘前就被拒绝;合法 Unicode 名放行。

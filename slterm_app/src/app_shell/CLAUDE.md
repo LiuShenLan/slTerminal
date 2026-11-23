@@ -11,6 +11,7 @@
 - **诊断宏拦截**：`println!`/`eprintln!` 在本模块文本域内编译期报错；诊断统一走 `try_write_stderr`。原因：无效标准句柄上裸打印会 panic。
 - **壳事件通道**：壳事件使用容量 64 的有界 `sync_channel`，生产发送统一为非阻塞 `try_send`，队列满只记录脱敏诊断。原因：托盘、通知、URL 与 writer 回调不得因事件洪峰无界增长或阻塞前台。边界：不在回调中阻塞等待队列；事件载荷不进入诊断文本。handover 经 application 单点 helper 投递，完成回执使用容量 1 的 `sync_channel`，投递与 AppRoot 回执均用 `try_send`；投递 Full/Disconnected 分别映射 QueueFull/Closing，回执接收端断开只放弃答复，不阻塞或 panic。
 - **文件树 watcher 调度**：`WatcherService` 按 `FileTreeRoot` 登记路径与可见性，事件按 200 毫秒合并，连续事件最长 1,000 毫秒内复核；隐藏期间忽略纯界面事件，重新可见只复核一次，根替换与注销立即丢弃旧待审。原因：不可见 UI 不得维持私有监听或累积重复刷新。边界：实际 OS watch 仍归既有 `FsWatch`，时间结算复用壳事件泵，不新增轮询；Document watcher 不因 UI 隐藏暂停。
+- **单项文件写计划**：Explorer 与 Agent 文件树共用 `FileOperationService`；新建、重命名和删除先生成不可变 `OperationPlan`，执行前重新解析词法目标与真实位置、重新判定 Write 授权，并比较文件身份、目标父目录身份和预期指纹。计划不携带可沿用授权，目录身份经真实 Windows 句柄取得；重命名最终调用不得携带目标替换标志。原因：树加载后的链接重定向、目标或父目录替换、失权不得转化为写盘副作用，预检后的同名目标也不得被覆盖。边界：服务含阻塞 I/O，只在后台调用；系统 CRUD 与回收站仍归 `platform::file_operations`，目标真正不存在可按完成处理，悬空链接等既有对象不得误报缺失，其他变化一律中止且不修改磁盘。
 - **视觉语言**：仅暗色；Linear 为默认；暖黑明度阶梯、发丝线分隔、单强调色、等宽字体、无动效。原因：产品定位与「界面消失」的阅读优先。边界：色值以主题表为真值，不在壳内硬编码；状态用圆点而非 emoji。
 - **布局单点**：运行与持久布局都以 `ProjectLayout` 为权威，只经其规范 DTO 转换。边界：禁止旧 session layout 或第二套序列化回流。
 - **静默启动**：首窗 `show=false`/`focus=false` 创建；本层任何路径不得 show/activate/聚焦窗口。原因：启动不得抢焦点或闪现。

@@ -361,7 +361,7 @@
 | 验收场景 | 目标测试例名 | 状态 |
 |---|---|---|
 | 另一项目已打开脏文件时再次打开复用 Document | `explorer_open_reuses_document` | 待实现 |
-| 树加载后链接重定向会在写前重检并拒绝 | `explorer_rechecks_links_before_mutation` | 待实现 |
+| 树加载后链接重定向会在写前重检并拒绝 | `explorer_rechecks_links_before_mutation` | 已自动化 |
 | 只读 AgentRoot 到可写 ProjectRoot 可复制而反向拒绝 | `explorer_copy_capability_union` | 待实现 |
 | 跨根剪切和目录粘贴到后代逐项拒绝 | `explorer_rejects_cross_root_cut_and_descendant_paste` | 待实现 |
 | 显式 cwd 失效时在终端打开拒绝且不留空 Panel | `explorer_terminal_open_rejects_invalid_cwd` | 待实现 |

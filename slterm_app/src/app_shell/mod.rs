@@ -50,6 +50,11 @@ pub(crate) mod editor_theme;
 // 文件树拖放载荷 + 独立幽灵预览。
 #[allow(dead_code)] // 生产消费归文件与 Git 阶段。
 pub(crate) mod file_drop;
+// Explorer 与 Agent 文件树共用的单项写计划与执行前重检。
+#[allow(dead_code)] // 生产消费归文件与 Git 阶段。
+pub(crate) mod file_operation_service;
+#[cfg(test)]
+mod file_operation_service_tests;
 // Document 真实 I/O、统一保存与 Git 行标端口。
 #[allow(dead_code)] // 生产消费归 Document 与文本视图阶段。
 pub(crate) mod file_editor;
