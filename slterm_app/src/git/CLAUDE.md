@@ -9,6 +9,7 @@
 - **argv 不经 shell**：Windows 一律挂 `CREATE_NO_WINDOW`；路径参数是纯 argv 元素。
 - **HEAD 错误分类契约**：`head_file` 先 `verify_head`（unborn 判定）再 `cat-file -e HEAD:<relative>` 预检，`git show` 在预检通过后失败也走同一分类臂；`classify_git_failure` 按 stderr（大小写不敏感）分出权限（`GitError::AccessDenied`）与损坏（`GitError::Corrupt`），识别不出归 `GitError::NotInHead`。UI 只做占位文案，不解析具体错误。
 - **只读短 TTL 缓存边界**：`status_cached`/`repository_root_cached` 仅服务只读消费面（gutter、文件树 VCS），TTL 500 毫秒；同 root 的连续/并发读取共享一次子进程。状态缓存键 = 调用方传入的 root 原样（进程级单槽）；仓库根缓存键 = 起始目录（容量上限 16，过期与超限清理，解析失败不缓存）。
+- **GitShow 固定对象读取**：`GitFacade::show` 先复核原 RepositoryBinding，再以 `ls-tree -z <固定提交>` 精确解析路径对应的 blob OID，最后只经 `cat-file blob <OID>` 读取；请求携带独立 generation。原因：HEAD 前进、工作区编辑或手动刷新不得改变固定版本，对象缺失不得回退工作区。边界：路径、提交和对象输出严格校验；大文件分页、二进制系统打开与视图状态归后续 GitShow 视图切片。
 - **状态事实与代次缓存**：`GitFacade::status` 先分别复核项目路径与真实 RepoRoot 的 Read 授权，再使用有界、禁网的 porcelain v2 NUL 输出；`StatusSnapshot` 保存规范字节 SHA-256 revision、真实 worktree 根、staged／unstaged、rename、conflict、ignored 与未知原始状态。`--untracked-files=all` 展开普通未跟踪目录，嵌套仓库和子模块只保留顶层条目；ignored 不进入既有六值 gutter 映射。实例状态缓存 TTL 500 毫秒，`invalidate` 清槽并递增代次，在途旧代次不得写回。原因：状态散列必须来自完整机器输出，路径根、授权和缓存代次不得由 watcher 时间代替。边界：unborn 仓库可读取状态但不能建立需要 HEAD 的 RepositoryBinding；读取失败由调用方保留旧列表并标记可能过期。
 - **未跟踪展开**：共享 `status` 带 `--untracked-files=all`，快照含单文件未跟踪条目；单文件状态由 `file_status_from_snapshot` 从快照派生，不为路径单独 spawn status。
 - **只读操作面**：status/file status/hunks/HEAD 字节与补全 refs/remotes；porcelain v2 解析在本模块单源（`parse_status`）。补全读取只经 `completion::GitFacade` 的语义方法，具体预算与禁网红线见 `completion/CLAUDE.md`。本模块不得执行 checkout、restore、rm 等工作区或索引写操作。

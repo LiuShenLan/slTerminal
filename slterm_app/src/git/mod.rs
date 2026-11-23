@@ -26,6 +26,9 @@ mod completion;
 mod repository;
 #[cfg(test)]
 mod repository_tests;
+mod show;
+#[cfg(test)]
+mod show_tests;
 #[cfg(test)]
 mod status_tests;
 
@@ -46,6 +49,8 @@ pub(crate) enum GitError {
     Corrupt(String),
     /// 仓库绑定无法证明仍指向创建时的同一仓库。
     BindingUnavailable,
+    /// 固定提交中的对象已不可用；不得回退其他版本。
+    ObjectUnavailable,
     /// 有界 Git 读取超时或被调用方取消。
     Timeout,
     Cancelled,
@@ -61,6 +66,7 @@ impl std::fmt::Display for GitError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::BindingUnavailable => formatter.write_str("仓库绑定不可用"),
+            Self::ObjectUnavailable => formatter.write_str("固定版本对象不可用"),
             Self::Timeout => formatter.write_str("Git 读取超时"),
             Self::Cancelled => formatter.write_str("Git 读取已取消"),
             Self::OutputLimit { limit } => write!(formatter, "Git 输出超过 {limit} 字节上限"),
