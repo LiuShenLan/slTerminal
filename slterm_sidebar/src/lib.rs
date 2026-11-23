@@ -2,6 +2,9 @@
 
 #![forbid(unsafe_code)]
 
+mod file_clipboard;
+#[cfg(test)]
+mod file_clipboard_tests;
 mod file_tree;
 #[cfg(test)]
 mod file_tree_tests;
@@ -16,6 +19,10 @@ mod sidebar_state_recovery_tests;
 #[cfg(test)]
 mod sidebar_state_tests;
 
+pub use file_clipboard::{
+    FileClipboard, FileClipboardItem, FileClipboardMode, PasteItem, PastePlan, PasteRejection,
+    PasteRejectionReason, PasteTarget,
+};
 pub use file_tree::{
     DirectoryReadRequest, DirectoryStatus, FileTreeEntry, FileTreeEntryKind, FileTreeError,
     FileTreeModel, FileTreeRoot, FileTreeRow,
