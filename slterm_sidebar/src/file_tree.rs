@@ -397,6 +397,13 @@ impl FileTreeModel {
 
     pub fn set_filter(&mut self, filter: &str) {
         self.filter = filter.trim().to_lowercase();
+        if self
+            .selected
+            .as_ref()
+            .is_some_and(|selected| !self.visible_rows().iter().any(|row| &row.path == selected))
+        {
+            self.selected = None;
+        }
     }
 
     pub fn visible_rows(&self) -> Vec<FileTreeRow> {
@@ -418,7 +425,7 @@ impl FileTreeModel {
             let Some(child) = self.nodes.get(path) else {
                 continue;
             };
-            let matches = self.matches_filter(path, child);
+            let matches = self.matches_filter(child);
             let mut descendants = Vec::new();
             if child.kind == FileTreeEntryKind::Directory
                 && (self.filter.is_empty() && child.expanded || !self.filter.is_empty())
@@ -440,18 +447,11 @@ impl FileTreeModel {
         }
     }
 
-    fn matches_filter(&self, path: &CanonicalPath, node: &FileTreeNode) -> bool {
+    fn matches_filter(&self, node: &FileTreeNode) -> bool {
         if self.filter.is_empty() {
             return true;
         }
-        let relative = path
-            .as_path()
-            .strip_prefix(self.root_path.as_path())
-            .unwrap_or(path.as_path())
-            .to_string_lossy()
-            .replace('\\', "/")
-            .to_lowercase();
-        node.name.to_lowercase().contains(&self.filter) || relative.contains(&self.filter)
+        node.name.to_lowercase().contains(&self.filter)
     }
 }
 

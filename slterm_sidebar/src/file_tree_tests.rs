@@ -143,6 +143,10 @@ fn file_tree_expand_select_and_filter_share_visible_projection() {
             .iter()
             .any(|row| row.path == guide && row.selected)
     );
+    tree.set_filter("README");
+    assert!(tree.visible_rows().iter().all(|row| !row.selected));
+    tree.set_filter("");
+    assert!(tree.visible_rows().iter().all(|row| !row.selected));
 
     tree.set_filter("guide");
     assert_eq!(
@@ -152,6 +156,8 @@ fn file_tree_expand_select_and_filter_share_visible_projection() {
             .collect::<Vec<_>>(),
         [("docs", 0), ("guide.md", 1)]
     );
+    tree.set_filter("docs/guide");
+    assert!(tree.visible_rows().is_empty());
     tree.set_filter("");
     tree.collapse(&docs).unwrap();
     assert_eq!(
