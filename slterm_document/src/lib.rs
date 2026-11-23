@@ -8,6 +8,9 @@
 #[cfg(test)]
 mod grammar_audit;
 
+mod diff;
+#[cfg(test)]
+mod diff_tests;
 mod edit;
 mod encoding;
 mod external;
@@ -24,6 +27,12 @@ mod repository;
 mod save;
 mod search;
 mod syntax;
+#[cfg(test)]
+pub use diff::compute_diff_with_deadline;
+pub use diff::{
+    DiffError, DiffInput, DiffLine, DiffPair, DiffPairKind, DiffSideContent, DiffSnapshot,
+    DiffWhitespaceMode, compute_diff,
+};
 pub use edit::{
     EditApplyOutcome, EditOrigin, EditTransaction, EditTransactionError, MergePolicy, TextEdit,
 };
