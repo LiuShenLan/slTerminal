@@ -21,9 +21,9 @@
 
 ### 当前进度
 
-状态锚：**2026-11-23，终端、补全与学习完成验收，Markdown 与安全资源开始实施。**
+状态锚：**2026-11-23，Markdown 与安全资源完成验收，文件与 Git 开始实施。**
 
-当前实施位置：**Markdown 与安全资源（进行中）。**
+当前实施位置：**文件与 Git（进行中）。**
 
 | 命名阶段 | 状态 | 验收日期 | commit hash | 测试证据／阻塞事实 |
 |---|---|---|---|---|
@@ -32,8 +32,8 @@
 | 工作区与生命周期 | 已验收 | 2026-11-22 | `59fe311f46162939dcfeb8f7951955c0b1eaadd4` | `workspace_project_switch_preserves_instances`、`integration_batch_close`、`workspace_startup_layout_before_snapshots`、`handover_rejects_unauthorized_cwd` 等验收与回归例通过；GPUI 全特性、全量 workspace、core release、脚本及静态门禁全绿。 |
 | Document 与文本视图 | 已验收 | 2026-11-22 | `59fe311f46162939dcfeb8f7951955c0b1eaadd4` | `integration_document_global_identity`、`document_autosave_waits_for_all_views_to_blur`、`integration_snapshot_quota`、`ime_commits_utf16_edits_through_the_shared_document` 等主责锚通过；全量 workspace、GPUI 全特性、core release、脚本及静态门禁全绿。 |
 | 终端、补全与学习 | 已验收 | 2026-11-23 | `88e3b4a9c61f5cf6a53922257d0c1fc4d583a833` | `integration_terminal_restore`、真实 ConPTY 自动／懒启动与失效 cwd 回退、`terminal_restore_visibility_and_exit_state`、`integration_pty_limit` 等回归锚通过；全量 workspace、core release、脚本及静态门禁全绿。 |
-| Markdown 与安全资源 | 进行中 | — | — | — |
-| 文件与 Git | 未开始 | — | — | — |
+| Markdown 与安全资源 | 已验收 | 2026-11-23 | `a6eb9f56b2483a56a0c3017c3be21051af5c78e1` | `markdown_source_render_share_document`、`markdown_shared_document_autosave`、`markdown_panel_restores_persistent_reading_state`、真实拖选／查找与退出守卫回归通过；全量 workspace、GPUI 全特性、core release、脚本及静态门禁全绿。 |
+| 文件与 Git | 进行中 | — | — | — |
 | Agent 与 Hooks | 未开始 | — | — | — |
 | 设置、主题与恢复 | 未开始 | — | — | — |
 | Runtime v2 | 未开始 | — | — | — |
