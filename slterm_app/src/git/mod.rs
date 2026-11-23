@@ -20,6 +20,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 mod completion;
+mod repository;
+#[cfg(test)]
+mod repository_tests;
 
 pub(crate) use completion::{GitFacade, inferred_name as inferred_tracking_name};
 
@@ -36,6 +39,15 @@ pub(crate) enum GitError {
     AccessDenied(String),
     /// 仓库/对象损坏:corrupt、bad/loose object、object file 等(stderr 分类所得)。
     Corrupt(String),
+    /// 仓库绑定无法证明仍指向创建时的同一仓库。
+    BindingUnavailable,
+    /// 有界 Git 读取超时或被调用方取消。
+    Timeout,
+    Cancelled,
+    /// stdout 与 stderr 的合并输出超过预算。
+    OutputLimit {
+        limit: usize,
+    },
     /// 其他命令失败(四方法执行复用此臂)。
     Command(String),
 }
@@ -43,6 +55,10 @@ pub(crate) enum GitError {
 impl std::fmt::Display for GitError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::BindingUnavailable => formatter.write_str("仓库绑定不可用"),
+            Self::Timeout => formatter.write_str("Git 读取超时"),
+            Self::Cancelled => formatter.write_str("Git 读取已取消"),
+            Self::OutputLimit { limit } => write!(formatter, "Git 输出超过 {limit} 字节上限"),
             Self::Unavailable(message)
             | Self::NotRepository(message)
             | Self::NotInHead(message)
