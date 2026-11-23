@@ -6,7 +6,7 @@ use slterm_path::CanonicalPath;
 use slterm_settings::AgentRootId;
 use slterm_workspace::ProjectId;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum FileTreeRoot {
     Project(ProjectId),
     Agent(AgentRootId),

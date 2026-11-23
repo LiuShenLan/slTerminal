@@ -63,6 +63,10 @@ pub(crate) mod theme;
 // 窗口视效 + 壁纸:模糊材质/透明度纪律/有界壁纸加载。
 #[allow(dead_code)] // 预览与设置消费归设置、主题与恢复阶段。
 pub(crate) mod wallpaper;
+#[allow(dead_code)] // 生产消费归 Explorer 与 Agent 文件树接线。
+pub(crate) mod watcher_service;
+#[cfg(test)]
+mod watcher_service_tests;
 pub(crate) mod windowing;
 
 use std::borrow::Cow;

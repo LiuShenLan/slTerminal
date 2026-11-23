@@ -368,7 +368,7 @@
 | 过滤与多选清除而展开、滚动和忽略开关恢复 | `explorer_view_state_restore` | 待实现 |
 | 关闭视图不自动提交未确认内联编辑 | `explorer_inline_edit_not_committed_on_destroy` | 待实现 |
 | 粘贴冲突取消零修改且部分失败不回滚成功项 | `explorer_paste_conflict_and_partial_success` | 待实现 |
-| 不可见期间文件事件重新可见只合并复核 | `explorer_hidden_refresh_coalesced` | 待实现 |
+| 不可见期间文件事件重新可见只合并复核 | `explorer_hidden_refresh_coalesced` | 已自动化 |
 | 项目根为仓库子目录时 Git 读取不扩大树根 | `explorer_repo_root_does_not_expand_tree_root` | 待实现 |
 
 ### Agent 全局文件
