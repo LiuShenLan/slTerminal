@@ -199,6 +199,69 @@ fn file_tree_partial_failure_keeps_read_rows_and_reports_root_failure() {
 }
 
 #[test]
+fn file_tree_refresh_preserves_old_rows_on_failure_and_prunes_after_success() {
+    let mut tree = model();
+    let root = path("D:/work/project");
+    let old = path("D:/work/project/old.txt");
+    let docs = path("D:/work/project/docs");
+    let guide = path("D:/work/project/docs/guide.md");
+    let request = tree.request_directory(&root).unwrap();
+    apply(
+        &mut tree,
+        &request,
+        vec![
+            directory("D:/work/project/docs"),
+            file("D:/work/project/old.txt"),
+            file("D:/work/project/keep.txt"),
+        ],
+        true,
+    );
+    let request = tree.expand(&docs).unwrap().unwrap();
+    apply(
+        &mut tree,
+        &request,
+        vec![file("D:/work/project/docs/guide.md")],
+        true,
+    );
+    tree.select(&old).unwrap();
+
+    let request = tree.refresh(&root).unwrap().unwrap();
+    assert!(tree.visible_rows().iter().any(|row| row.path == guide));
+    assert!(
+        tree.visible_rows()
+            .iter()
+            .any(|row| row.path == old && row.selected)
+    );
+    tree.fail_directory(&request).unwrap();
+    assert!(tree.visible_rows().iter().any(|row| row.path == guide));
+    assert!(
+        tree.visible_rows()
+            .iter()
+            .any(|row| row.path == old && row.selected)
+    );
+
+    let request = tree.refresh(&root).unwrap().unwrap();
+    apply(
+        &mut tree,
+        &request,
+        vec![
+            directory("D:/work/project/docs"),
+            file("D:/work/project/keep.txt"),
+            file("D:/work/project/new.txt"),
+        ],
+        true,
+    );
+    assert_eq!(
+        tree.visible_rows()
+            .iter()
+            .map(|row| row.name.as_str())
+            .collect::<Vec<_>>(),
+        ["docs", "guide.md", "keep.txt", "new.txt"]
+    );
+    assert!(tree.visible_rows().iter().all(|row| !row.selected));
+}
+
+#[test]
 fn file_tree_rejects_stale_root_and_directory_read_generations() {
     let mut tree = model();
     let root = path("D:/work/project");

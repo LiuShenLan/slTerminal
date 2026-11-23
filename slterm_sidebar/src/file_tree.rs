@@ -76,6 +76,8 @@ struct FileTreeNode {
     kind: FileTreeEntryKind,
     expanded: bool,
     children: Vec<CanonicalPath>,
+    retained_children: BTreeSet<CanonicalPath>,
+    received_paths: BTreeSet<CanonicalPath>,
     received: usize,
     read_generation: u64,
     status: DirectoryStatus,
@@ -88,6 +90,8 @@ impl FileTreeNode {
             kind: FileTreeEntryKind::Directory,
             expanded: true,
             children: Vec::new(),
+            retained_children: BTreeSet::new(),
+            received_paths: BTreeSet::new(),
             received: 0,
             read_generation: 0,
             status: DirectoryStatus::NotRequested,
@@ -107,6 +111,8 @@ impl FileTreeNode {
             kind: entry.kind,
             expanded: false,
             children: Vec::new(),
+            retained_children: BTreeSet::new(),
+            received_paths: BTreeSet::new(),
             received: 0,
             read_generation: 0,
             status: DirectoryStatus::NotRequested,
@@ -212,6 +218,29 @@ impl FileTreeModel {
         Ok(())
     }
 
+    /// 保留当前投影进行整目录复核；完整成功后清除本次未再出现的旧子项。
+    pub fn refresh(
+        &mut self,
+        directory: &CanonicalPath,
+    ) -> Result<Option<DirectoryReadRequest>, FileTreeError> {
+        let node = self
+            .nodes
+            .get_mut(directory)
+            .ok_or(FileTreeError::NotFound)?;
+        if node.kind != FileTreeEntryKind::Directory {
+            return Err(FileTreeError::NotDirectory);
+        }
+        node.received = 0;
+        node.received_paths.clear();
+        node.retained_children = node.children.iter().cloned().collect();
+        node.status = DirectoryStatus::NotRequested;
+        node.read_generation = node
+            .read_generation
+            .checked_add(1)
+            .expect("目录读取代次不得耗尽");
+        Ok(self.request_directory(directory))
+    }
+
     pub fn invalidate(
         &mut self,
         directory: &CanonicalPath,
@@ -229,6 +258,8 @@ impl FileTreeModel {
         }
         let node = self.nodes.get_mut(directory).expect("失效目录必须保留");
         node.received = 0;
+        node.received_paths.clear();
+        node.retained_children.clear();
         node.status = DirectoryStatus::NotRequested;
         node.read_generation = node
             .read_generation
@@ -292,61 +323,99 @@ impl FileTreeModel {
     ) -> Result<Option<DirectoryReadRequest>, FileTreeError> {
         self.validate_request(request)?;
         let mut batch_paths = BTreeSet::new();
-        for entry in &entries {
-            if !entry.path.as_path().starts_with(self.root_path.as_path()) {
-                return Err(FileTreeError::OutsideRoot);
+        let mut prepared = Vec::with_capacity(entries.len());
+        {
+            let node = &self.nodes[&request.directory];
+            for entry in &entries {
+                if !entry.path.as_path().starts_with(self.root_path.as_path()) {
+                    return Err(FileTreeError::OutsideRoot);
+                }
+                if entry.path.as_path().parent() != Some(request.directory.as_path()) {
+                    return Err(FileTreeError::NotDirectChild);
+                }
+                let duplicate = !batch_paths.insert(entry.path.clone())
+                    || node.received_paths.contains(&entry.path)
+                    || (self.nodes.contains_key(&entry.path)
+                        && !node.retained_children.contains(&entry.path));
+                if duplicate {
+                    return Err(FileTreeError::DuplicateEntry);
+                }
+                prepared.push(FileTreeNode::from_entry(entry)?);
             }
-            if entry.path.as_path().parent() != Some(request.directory.as_path()) {
-                return Err(FileTreeError::NotDirectChild);
-            }
-            if self.nodes.contains_key(&entry.path) || !batch_paths.insert(entry.path.clone()) {
-                return Err(FileTreeError::DuplicateEntry);
-            }
-            FileTreeNode::from_entry(entry)?;
         }
 
-        let mut visible_entries = Vec::new();
-        for entry in &entries {
-            let name = entry.path.as_path().file_name().expect("名称已校验");
-            if name.to_string_lossy().eq_ignore_ascii_case(".git") {
-                continue;
-            }
-            visible_entries.push(FileTreeNode::from_entry(entry)?);
-        }
         let node = self
             .nodes
             .get_mut(&request.directory)
             .expect("请求目录必须存在");
         node.received += entries.len();
-        for (entry, child) in entries
-            .iter()
-            .filter(|entry| {
-                !entry
-                    .path
-                    .as_path()
-                    .file_name()
-                    .expect("名称已校验")
-                    .to_string_lossy()
-                    .eq_ignore_ascii_case(".git")
-            })
-            .zip(visible_entries)
-        {
-            self.nodes.insert(entry.path.clone(), child);
+        node.received_paths.extend(batch_paths);
+        for (entry, child) in entries.iter().zip(prepared) {
+            if entry
+                .path
+                .as_path()
+                .file_name()
+                .expect("名称已校验")
+                .to_string_lossy()
+                .eq_ignore_ascii_case(".git")
+            {
+                continue;
+            }
+            let retained = self.nodes[&request.directory]
+                .retained_children
+                .contains(&entry.path);
+            if retained {
+                if self.nodes[&entry.path].kind != child.kind {
+                    self.remove_subtree(&entry.path);
+                    self.nodes.insert(entry.path.clone(), child);
+                } else {
+                    self.nodes
+                        .get_mut(&entry.path)
+                        .expect("保留子项必须存在")
+                        .name = child.name;
+                }
+                self.nodes
+                    .get_mut(&request.directory)
+                    .expect("请求目录必须存在")
+                    .retained_children
+                    .remove(&entry.path);
+            } else {
+                self.nodes.insert(entry.path.clone(), child);
+                self.nodes
+                    .get_mut(&request.directory)
+                    .expect("请求目录必须存在")
+                    .children
+                    .push(entry.path.clone());
+            }
+        }
+        self.sort_children(&request.directory);
+        if complete {
+            let remaining = {
+                let node = self
+                    .nodes
+                    .get_mut(&request.directory)
+                    .expect("请求目录必须存在");
+                node.status = DirectoryStatus::Loaded;
+                std::mem::take(&mut node.retained_children)
+            };
             self.nodes
                 .get_mut(&request.directory)
                 .expect("请求目录必须存在")
                 .children
-                .push(entry.path.clone());
-        }
-        self.sort_children(&request.directory);
-        let node = self
-            .nodes
-            .get_mut(&request.directory)
-            .expect("请求目录必须存在");
-        if complete {
-            node.status = DirectoryStatus::Loaded;
+                .retain(|path| !remaining.contains(path));
+            for child in remaining {
+                self.remove_subtree(&child);
+            }
+            if self
+                .selected
+                .as_ref()
+                .is_some_and(|path| !self.nodes.contains_key(path))
+            {
+                self.selected = None;
+            }
             Ok(None)
         } else {
+            let node = &self.nodes[&request.directory];
             Ok(Some(DirectoryReadRequest {
                 root_generation: self.root_generation,
                 read_generation: node.read_generation,
