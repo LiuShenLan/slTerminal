@@ -61,6 +61,11 @@ pub(crate) mod file_editor;
 // Document 专用文本视图与 Unicode/IME 坐标。
 #[allow(dead_code)] // 生产消费归 AppRoot Paged Document 打开与逐页读取。
 pub(crate) mod paged_document;
+// 粘贴 Journal 的规范事实与专属启动恢复器。
+#[allow(dead_code)] // 生产消费归文件操作 writer 与启动维护链。
+pub(crate) mod paste_journal;
+#[cfg(test)]
+mod paste_journal_tests;
 // 粘贴冲突聚合、逐项串行执行与部分成功报告。
 #[allow(dead_code)] // 生产消费归 Explorer 与 Agent 文件树接线。
 pub(crate) mod paste_service;
@@ -220,7 +225,7 @@ impl WorkspaceWriterRuntime {
         ) -> std::io::Result<std::thread::JoinHandle<()>>,
     {
         use crate::persistence::startup::{
-            JournalRecovererRegistry, MaintenanceOutcome, MaintenanceRunner,
+            JournalRecoverer, JournalRecovererRegistry, MaintenanceOutcome, MaintenanceRunner,
             open_workspace_with_recovery,
         };
         use crate::persistence::workspace_writer::WorkspaceWriterError;
@@ -246,7 +251,11 @@ impl WorkspaceWriterRuntime {
         let started = store
             .begin_run(&uuid::Uuid::now_v7().to_string(), run)
             .map_err(WorkspaceWriterError::Metadata)?;
-        let recoverers = JournalRecovererRegistry::default();
+        let paste_recoverer = crate::app_shell::paste_journal::PasteJournalRecoverer;
+        let recoverers = JournalRecovererRegistry::from([(
+            crate::app_shell::paste_journal::PASTE_JOURNAL_KIND,
+            &paste_recoverer as &dyn JournalRecoverer,
+        )]);
         let maintenance =
             MaintenanceRunner::new(&mut store, &started.current.store_epoch, &recoverers)
                 .run()

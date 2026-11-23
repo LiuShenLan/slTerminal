@@ -20,6 +20,9 @@ use super::close::{
     CloseCommitError, CloseCommitStatus, CloseStoreError, PersistedCloseIntent, ProjectCleanupError,
 };
 use super::database::DatabaseError;
+use super::journal::{
+    JournalError, JournalRegistration, JournalStatus, JournalStep, ManagedJournal,
+};
 use super::metadata::MetadataError;
 use super::operation::{Operation, OperationError};
 use super::project::ProjectStoreError;
@@ -150,6 +153,22 @@ enum Command {
     QueryOperation {
         operation_id: String,
         response: SyncSender<Result<Option<Operation>, OperationError>>,
+    },
+    RegisterJournal {
+        registration: Box<JournalRegistration>,
+        response: SyncSender<Result<ManagedJournal, JournalError>>,
+    },
+    TransitionJournal {
+        journal_id: String,
+        next: JournalStatus,
+        after: Option<[u8; 32]>,
+        response: SyncSender<Result<ManagedJournal, JournalError>>,
+    },
+    RecordJournalStep {
+        journal_id: String,
+        step_key: String,
+        after: [u8; 32],
+        response: SyncSender<Result<JournalStep, JournalError>>,
     },
     SaveSidebarState {
         state: Box<SidebarState>,
@@ -298,6 +317,68 @@ impl WorkspaceWriterClient {
         self.commands
             .try_send(Command::QueryOperation {
                 operation_id: operation_id.to_owned(),
+                response,
+            })
+            .map_err(|error| match error {
+                TrySendError::Full(_) => WorkspaceWriterError::QueueFull,
+                TrySendError::Disconnected(_) => WorkspaceWriterError::Stopped,
+            })?;
+        Ok(result)
+    }
+
+    /// 非阻塞登记 Journal；调用方只能在后台等待独立回执。
+    pub(crate) fn register_journal(
+        &self,
+        registration: JournalRegistration,
+    ) -> Result<Receiver<Result<ManagedJournal, JournalError>>, WorkspaceWriterError> {
+        let (response, result) = mpsc::sync_channel(1);
+        self.commands
+            .try_send(Command::RegisterJournal {
+                registration: Box::new(registration),
+                response,
+            })
+            .map_err(|error| match error {
+                TrySendError::Full(_) => WorkspaceWriterError::QueueFull,
+                TrySendError::Disconnected(_) => WorkspaceWriterError::Stopped,
+            })?;
+        Ok(result)
+    }
+
+    /// 非阻塞推进 Journal 状态；状态机与世代校验仍由唯一写线程执行。
+    pub(crate) fn transition_journal(
+        &self,
+        journal_id: &str,
+        next: JournalStatus,
+        after: Option<[u8; 32]>,
+    ) -> Result<Receiver<Result<ManagedJournal, JournalError>>, WorkspaceWriterError> {
+        let (response, result) = mpsc::sync_channel(1);
+        self.commands
+            .try_send(Command::TransitionJournal {
+                journal_id: journal_id.to_owned(),
+                next,
+                after,
+                response,
+            })
+            .map_err(|error| match error {
+                TrySendError::Full(_) => WorkspaceWriterError::QueueFull,
+                TrySendError::Disconnected(_) => WorkspaceWriterError::Stopped,
+            })?;
+        Ok(result)
+    }
+
+    /// 非阻塞记录步骤 outcome；调用方只能在后台等待独立回执。
+    pub(crate) fn record_journal_step(
+        &self,
+        journal_id: &str,
+        step_key: &str,
+        after: [u8; 32],
+    ) -> Result<Receiver<Result<JournalStep, JournalError>>, WorkspaceWriterError> {
+        let (response, result) = mpsc::sync_channel(1);
+        self.commands
+            .try_send(Command::RecordJournalStep {
+                journal_id: journal_id.to_owned(),
+                step_key: step_key.to_owned(),
+                after,
                 response,
             })
             .map_err(|error| match error {
@@ -753,6 +834,31 @@ fn run(
                 response,
             } => {
                 let result = store.operation(&operation_id);
+                let _ = response.send(result);
+            }
+            Command::RegisterJournal {
+                registration,
+                response,
+            } => {
+                let result = store.register_journal(*registration);
+                let _ = response.send(result);
+            }
+            Command::TransitionJournal {
+                journal_id,
+                next,
+                after,
+                response,
+            } => {
+                let result = store.transition_journal(&journal_id, next, after);
+                let _ = response.send(result);
+            }
+            Command::RecordJournalStep {
+                journal_id,
+                step_key,
+                after,
+                response,
+            } => {
+                let result = store.record_step_after(&journal_id, &step_key, after);
                 let _ = response.send(result);
             }
             Command::SaveSidebarState { state } => {

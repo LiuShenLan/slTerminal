@@ -1,15 +1,22 @@
-//! 粘贴冲突预检与逐项串行执行；计划不跨项沿用，成功项不因后续失败回滚。
+//! 粘贴冲突预检、逐项串行执行与 Journal 结算；成功项不因后续失败回滚。
 //! 本服务含阻塞 I/O 与互斥等待，只允许在后台执行体调用。
 
-use std::{io, sync::Mutex};
+use std::{
+    io,
+    sync::{Arc, Mutex},
+};
 
 use slterm_path::{CanonicalPath, PathGrant, PathOperation};
 use slterm_sidebar::{
     FileClipboardMode, FileTreeRoot, PasteItem, PastePlan, PasteRejection, PasteTarget,
 };
+use uuid::Uuid;
 
-use super::file_operation_service::{
-    FileOperationError, FileOperationOutcome, FileOperationService, OperationPlan,
+use super::{
+    file_operation_service::{FileOperationError, FileOperationService, OperationPlan},
+    paste_journal::{
+        PasteJournal, PasteJournalRecord, PasteOperationKind, PastePath, outcome_fingerprint,
+    },
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -54,6 +61,7 @@ pub(crate) enum PasteItemOutcome {
     Moved,
     Skipped,
     Failed(FileOperationError),
+    NeedsAttention,
 }
 
 #[derive(Debug)]
@@ -71,18 +79,36 @@ pub(crate) struct PasteReport {
 
 pub(crate) struct PasteService {
     operations: FileOperationService,
+    journal: Option<Arc<dyn PasteJournal>>,
+    store_epoch: String,
     operation_lock: Mutex<()>,
 }
 
 impl PasteService {
-    pub(crate) fn new(operations: FileOperationService) -> Self {
+    pub(crate) fn new(
+        operations: FileOperationService,
+        journal: Arc<dyn PasteJournal>,
+        store_epoch: String,
+    ) -> Self {
         Self {
             operations,
+            journal: Some(journal),
+            store_epoch,
             operation_lock: Mutex::new(()),
         }
     }
 
-    /// 只读预检并聚合全部冲突；返回结果不包含可沿用的单项计划或授权。
+    #[cfg(test)]
+    pub(super) fn without_journal(operations: FileOperationService) -> Self {
+        Self {
+            operations,
+            journal: None,
+            store_epoch: String::new(),
+            operation_lock: Mutex::new(()),
+        }
+    }
+
+    /// 只读预检并聚合全部冲突；冲突删除计划只保存预期事实，不保存授权。
     pub(crate) fn prepare(
         &self,
         plan: &PastePlan,
@@ -188,28 +214,39 @@ impl PasteService {
             FileClipboardMode::Copy => PathOperation::Read,
             FileClipboardMode::Cut => PathOperation::Write,
         };
-        if let Err(error) = self.operations.check_source(
+        let source = match self.operations.check_source(
             &item.source.path,
             source_operation,
             grants,
             current_authorization_generation,
         ) {
-            return PasteItemOutcome::Failed(error);
-        }
-        if let Err(error) =
+            Ok(source) => source,
+            Err(error) => return PasteItemOutcome::Failed(error),
+        };
+        let replacement = delete.paste_snapshot();
+        let destination = PastePath {
+            lexical_path: item.target.clone(),
+            canonical_path: replacement.resolved.canonical_path().clone(),
+        };
+        let kind = match mode {
+            FileClipboardMode::Copy => PasteOperationKind::ReplaceCopy,
+            FileClipboardMode::Cut => PasteOperationKind::ReplaceCut,
+        };
+        self.execute_recorded(kind, mode, source, destination, Some(replacement), || {
             self.operations
-                .execute(&delete, grants, current_authorization_generation)
-        {
-            return PasteItemOutcome::Failed(error);
-        }
-        // 回收完成后必须基于真实状态重建复制／移动计划。
-        self.plan_and_execute(
-            mode,
-            target_root,
-            item,
-            grants,
-            current_authorization_generation,
-        )
+                .execute(&delete, grants, current_authorization_generation)?;
+            // 回收完成后基于真实状态重建复制／移动计划。
+            let plan = self.plan_item(
+                mode,
+                target_root,
+                item,
+                grants,
+                current_authorization_generation,
+            )?;
+            self.operations
+                .execute(&plan, grants, current_authorization_generation)?;
+            Ok(())
+        })
     }
 
     fn plan_and_execute(
@@ -220,26 +257,69 @@ impl PasteService {
         grants: &[PathGrant],
         current_authorization_generation: u64,
     ) -> PasteItemOutcome {
-        let result = self
-            .plan_item(
-                mode,
-                target_root,
-                item,
-                grants,
-                current_authorization_generation,
-            )
-            .and_then(|plan| {
-                self.operations
-                    .execute(&plan, grants, current_authorization_generation)
-            });
-        match result {
-            Ok(FileOperationOutcome::Completed | FileOperationOutcome::AlreadyAbsent) => match mode
-            {
-                FileClipboardMode::Copy => PasteItemOutcome::Copied,
-                FileClipboardMode::Cut => PasteItemOutcome::Moved,
-            },
-            Err(error) => PasteItemOutcome::Failed(error),
+        let plan = match self.plan_item(
+            mode,
+            target_root,
+            item,
+            grants,
+            current_authorization_generation,
+        ) {
+            Ok(plan) => plan,
+            Err(error) => return PasteItemOutcome::Failed(error),
+        };
+        let kind = match mode {
+            FileClipboardMode::Copy => PasteOperationKind::Copy,
+            FileClipboardMode::Cut => PasteOperationKind::Cut,
+        };
+        let source = plan.paste_snapshot();
+        let destination = plan.paste_destination();
+        self.execute_recorded(kind, mode, source, destination, None, || {
+            self.operations
+                .execute(&plan, grants, current_authorization_generation)?;
+            Ok(())
+        })
+    }
+
+    fn execute_recorded(
+        &self,
+        kind: PasteOperationKind,
+        mode: FileClipboardMode,
+        source: super::paste_journal::PasteSnapshot,
+        destination: PastePath,
+        replacement: Option<super::paste_journal::PasteSnapshot>,
+        operation: impl FnOnce() -> Result<(), FileOperationError>,
+    ) -> PasteItemOutcome {
+        let Some(journal) = &self.journal else {
+            return paste_outcome(mode, operation());
+        };
+        let journal_id = Uuid::now_v7().to_string();
+        let registration = match PasteJournalRecord::registration(
+            &journal_id,
+            kind,
+            &source,
+            &destination,
+            replacement.as_ref(),
+            &self.store_epoch,
+        ) {
+            Ok(registration) => registration,
+            Err(_) => return PasteItemOutcome::Failed(FileOperationError::Journal),
+        };
+        if journal.begin(registration).is_err() || journal.mark_applying(&journal_id).is_err() {
+            return PasteItemOutcome::Failed(FileOperationError::Journal);
         }
+
+        let result = operation();
+        let Ok(after) = outcome_fingerprint(destination.lexical_path.as_path()) else {
+            return PasteItemOutcome::NeedsAttention;
+        };
+        if journal
+            .record_after(&journal_id, &journal_id, after)
+            .is_err()
+            || journal.commit(&journal_id, after).is_err()
+        {
+            return PasteItemOutcome::NeedsAttention;
+        }
+        paste_outcome(mode, result)
     }
 
     fn plan_item(
@@ -267,6 +347,19 @@ impl PasteService {
                 authorization_generation,
             ),
         }
+    }
+}
+
+fn paste_outcome(
+    mode: FileClipboardMode,
+    result: Result<(), FileOperationError>,
+) -> PasteItemOutcome {
+    match result {
+        Ok(()) => match mode {
+            FileClipboardMode::Copy => PasteItemOutcome::Copied,
+            FileClipboardMode::Cut => PasteItemOutcome::Moved,
+        },
+        Err(error) => PasteItemOutcome::Failed(error),
     }
 }
 

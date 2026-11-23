@@ -14,6 +14,7 @@ use slterm_path::{
 use slterm_sidebar::FileTreeRoot;
 use uuid::Uuid;
 
+use super::paste_journal::{PastePath, PasteSnapshot};
 use crate::platform::{
     document_paths::{DocumentPathResolver, SystemDocumentPathResolver},
     file_operations,
@@ -60,6 +61,30 @@ pub(crate) struct OperationPlan {
     operation_id: Uuid,
 }
 
+impl OperationPlan {
+    pub(super) fn paste_snapshot(&self) -> PasteSnapshot {
+        PasteSnapshot {
+            lexical_path: self.lexical_path.clone(),
+            resolved: ResolvedPath::new(self.canonical_path.clone(), self.file_identity),
+            fingerprint: self
+                .expected_fingerprint
+                .expect("持久化文件操作必须具有预期指纹"),
+            authorization_generation: self.authorization_generation,
+        }
+    }
+
+    pub(super) fn paste_destination(&self) -> PastePath {
+        let destination = self
+            .destination
+            .as_ref()
+            .expect("复制或移动计划必须包含目标");
+        PastePath {
+            lexical_path: destination.lexical_path.clone(),
+            canonical_path: destination.canonical_path.clone(),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum FileOperationOutcome {
     Completed,
@@ -70,6 +95,7 @@ pub(crate) enum FileOperationOutcome {
 pub(crate) enum FileOperationError {
     Unauthorized,
     Changed,
+    Journal,
     Io(io::Error),
 }
 
@@ -190,7 +216,7 @@ impl FileOperationService {
         operation: PathOperation,
         grants: &[PathGrant],
         authorization_generation: u64,
-    ) -> Result<(), FileOperationError> {
+    ) -> Result<PasteSnapshot, FileOperationError> {
         let resolved = self.resolver.resolve(source)?;
         let resolved = self.authorize_with(
             operation,
@@ -200,8 +226,13 @@ impl FileOperationService {
             authorization_generation,
             authorization_generation,
         )?;
-        fingerprint(&resolved)?;
-        Ok(())
+        let fingerprint = fingerprint(&resolved)?;
+        Ok(PasteSnapshot {
+            lexical_path: source.clone(),
+            resolved,
+            fingerprint,
+            authorization_generation,
+        })
     }
 
     pub(crate) fn plan_copy(
@@ -214,16 +245,14 @@ impl FileOperationService {
         authorization_generation: u64,
     ) -> Result<OperationPlan, FileOperationError> {
         validate_entry_path(destination)?;
-        let resolved = self.resolver.resolve(source)?;
-        let resolved = self.authorize_with(
-            PathOperation::Read,
+        let snapshot = self.check_source(
             source,
-            &resolved,
+            PathOperation::Read,
             grants,
             authorization_generation,
-            authorization_generation,
         )?;
-        let expected_fingerprint = fingerprint(&resolved)?;
+        let resolved = snapshot.resolved.clone();
+        let expected_fingerprint = snapshot.fingerprint;
         let destination_resolved = self.resolver.resolve_write_target(destination)?;
         if destination_resolved.file_identity().is_some() {
             return Err(io::Error::new(io::ErrorKind::AlreadyExists, "目标已存在").into());
