@@ -137,6 +137,7 @@ impl DocumentTextView {
             } else {
                 None
             },
+            git_marks: Vec::new(),
             language_revision: 0,
             theme_revision: 0,
             theme_fingerprint: None,

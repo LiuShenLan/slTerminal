@@ -19,7 +19,10 @@
 - **布局缓存完整失效**：行布局缓存键包含 DocumentId、TextStateId、语言 revision、字体族与度量、视口／换行宽度、首个可视列、DPI 和主题 revision；任一变化只清布局缓存，不重建 Document。主题 revision 由视图对实际文本相关 token 的变化推进，不能假定外部 Theme 自带代次。
 - **Editor 阅读状态**：语言覆盖、Rope 软换行开关、滚动行与列按完整 `ViewKey` 经 ViewStateStore 保存和预载，普通与 Paged 共用该通道；Markdown 在同一 Store 中使用专属 `MarkdownViewState`，内嵌源码阅读字段，容器与源码子视图共享租约；Diff 使用同一 Store 中的专属 `DiffViewState`，保存固定 DiffBinding、显示模式、同步滚动、列宽、侧折叠、交换、空白模式、未变更折叠及源码 wrap／语言覆盖，滚动、选区、搜索、当前差异与临时错误均不持久化；可见性复核成功的 HEAD 身份经同一 DTO 检查点推进，失败不改写，源码子视图与 Diff 共享租约且滚动检查点不得覆盖展示参数。Markdown／Diff 因外部重载转为 Paged 时沿用原 ViewKey 与对应 DTO，不改写为 Editor 身份。语言选择器经 AppRoot 模态焦点链接入，覆盖只改变本视图高亮；外部改名只更新自动语言，手动覆盖保持不变。选区、目标列、IME、鼠标拖拽与待续动作不得进入 DTO。只有实际覆盖、wrap 切换或滚动变更才写盘，启动默认态与未编辑恢复态不得自动回写；普通队列拒收保留终态副本，项目关闭 StateCommitted 后旧实体的迟到检查点与 Drop 不得复活记录；外部形态转换构造失败时须重新签发仍存活旧视图的租约，不得让回滚后的阅读状态静默失写。
 
+- **Editor Git 行标**：行标只是 AppRoot 注入的最新 core 差分行号投影，不属于正文、布局缓存键或持久 ViewState；任一 `TextStateId` 变化立即清空旧行标，后台新结果按当前代次重新投影。行标点击只发 `OpenGitDiff { line }`，视图不读取 Git、不计算差分；普通与软换行布局共用同一逻辑行定位，越界旧行号不得进入绘制。
+
 ## 验收与测试
+
 
 - 纯计算覆盖 Unicode 边界、字素宽度、软换行段、稀疏检查点有界性与 caret affinity；虚拟窗口覆盖选区、IME、布局失效、Rope wrap 切换／恢复／导航／共享边界光标、Rope／Paged 共享正文，以及 Paged 缺页后台回投、滚动请求、键盘导航与缺页续动、失败抑制、代次隔离、真实 Rust 首树、编辑后高亮与主题 token 映射。
 - 真实 OS IME 与像素级手势不得虚称自动化覆盖，按既有豁免登记边界。

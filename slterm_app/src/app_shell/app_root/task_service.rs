@@ -21,6 +21,7 @@ pub(crate) enum TaskId {
     DocumentExternal(slterm_document::DocumentId),
     DocumentSave(slterm_document::DocumentId),
     DocumentSystemOpen(slterm_document::DocumentId),
+    EditorGit(slterm_workspace::PanelId),
     GitShowLoad(slterm_workspace::PanelId),
     GitShowSystemOpen(slterm_workspace::PanelId),
     #[allow(dead_code)] // 消费点归 Diff 固定 HEAD 后台读取。

@@ -34,6 +34,28 @@ pub(crate) struct DiffOpenRequest {
 pub(super) type DiffHeadResult =
     Result<(GitShowSnapshot, Option<slterm_document::DiffBinding>), GitError>;
 
+pub(super) fn diff_change_locations(diff: &DiffSnapshot) -> Vec<(usize, usize)> {
+    let mut locations = Vec::new();
+    let mut in_change = false;
+    let mut last_head = 0;
+    let mut last_worktree = 0;
+    for pair in diff.pairs().unwrap_or(&[]) {
+        if let Some(line) = &pair.head {
+            last_head = line.index;
+        }
+        if let Some(line) = &pair.worktree {
+            last_worktree = line.index;
+        }
+        if pair.kind == DiffPairKind::Equal {
+            in_change = false;
+        } else if !in_change {
+            locations.push((last_head, last_worktree));
+            in_change = true;
+        }
+    }
+    locations
+}
+
 pub(crate) struct DiffView {
     root: gpui::WeakEntity<super::AppRoot>,
     document_id: DocumentId,
@@ -42,6 +64,7 @@ pub(crate) struct DiffView {
     right: Entity<DocumentTextView>,
     _right_subscription: gpui::Subscription,
     head: Option<GitShowSnapshot>,
+    head_loading: bool,
     view_states: EditorViewStateStore,
     view_lease: EditorViewStateLease,
     diff: Option<DiffSnapshot>,
@@ -77,6 +100,7 @@ impl DiffView {
             right,
             _right_subscription: subscription,
             head: None,
+            head_loading: false,
             view_states,
             view_lease,
             diff: None,
@@ -88,6 +112,7 @@ impl DiffView {
     }
 
     fn apply_head(&mut self, result: DiffHeadResult, cx: &mut Context<'_, Self>) {
+        self.head_loading = false;
         let generation = self.left.read(cx).current_generation();
         match result {
             Ok((snapshot, refreshed)) => {
@@ -107,8 +132,11 @@ impl DiffView {
                     .update(cx, |view, cx| view.apply_result(generation, Err(error), cx));
             }
         }
-        self.apply_pending_line(cx);
-        self.schedule_diff(cx);
+        if self.head.is_some() {
+            self.schedule_diff(cx);
+        } else {
+            self.apply_pending_line(cx);
+        }
         cx.notify();
     }
 
@@ -189,7 +217,7 @@ impl DiffView {
 
     fn request_line(&mut self, line: usize, cx: &mut Context<'_, Self>) {
         self.pending_line = Some(line);
-        if self.diff.is_some() {
+        if !self.head_loading && self.diff.is_some() {
             self.apply_pending_line(cx);
         }
         cx.notify();
@@ -237,30 +265,9 @@ impl DiffView {
     }
 
     fn change_locations(&self) -> Vec<(usize, usize)> {
-        let mut locations = Vec::new();
-        let mut in_change = false;
-        let mut last_head = 0;
-        let mut last_worktree = 0;
-        for pair in self
-            .diff
+        self.diff
             .as_ref()
-            .and_then(|diff| diff.pairs())
-            .unwrap_or(&[])
-        {
-            if let Some(line) = &pair.head {
-                last_head = line.index;
-            }
-            if let Some(line) = &pair.worktree {
-                last_worktree = line.index;
-            }
-            if pair.kind == DiffPairKind::Equal {
-                in_change = false;
-            } else if !in_change {
-                locations.push((last_head, last_worktree));
-                in_change = true;
-            }
-        }
-        locations
+            .map_or_else(Vec::new, diff_change_locations)
     }
 
     fn reveal_worktree_line(&mut self, line: usize, cx: &mut Context<'_, Self>) {
@@ -467,11 +474,11 @@ impl super::AppRoot {
             document_id,
         };
         if let Ok(panel_id) = self.panel_for_view(project_id, &view_key, cx) {
+            self.activate_view(view_key, window, cx)?;
             if let Some(line) = target_line {
                 let view = self.diff_view(panel_id, cx)?;
                 view.update(cx, |view, cx| view.request_line(line, cx));
             }
-            self.activate_view(view_key, window, cx)?;
             return Ok(panel_id);
         }
         let view_states = self.side_view_persistence.editor_view_states();
@@ -555,6 +562,7 @@ impl super::AppRoot {
             .binding()
             .expect("Diff 固定绑定在读取前必须有效");
         let generation = view.update(cx, |view, cx| {
+            view.head_loading = true;
             view.left.update(cx, |left, _| left.begin_load())
         });
         let grants = self.gitshow_grants(fixed.repository_binding());

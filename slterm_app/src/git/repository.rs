@@ -6,7 +6,7 @@ use std::str::FromStr as _;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use slterm_document::{CommitId, DiffBinding, RepositoryBinding};
+use slterm_document::{CommitId, DiffBinding, RepoPath, RepositoryBinding};
 use slterm_path::{CanonicalPath, PathGrant, PathOperation, PathPolicy, PathRequest, ResolvedPath};
 
 use super::{GitError, GitFacade, StatusSnapshot, completion::RepositoryStatusCache};
@@ -96,6 +96,34 @@ impl GitFacade {
         let head = CommitId::from_str(head)
             .map_err(|_| GitError::Command("Git HEAD 不是完整对象 ID".to_owned()))?;
         Ok(RepositoryBinding::new(worktree, git_dir, common_dir, head))
+    }
+
+    /// 以项目内真实路径捕获当前 HEAD，并固定 Document 对应的仓库相对旧路径。
+    pub(crate) fn diff_binding_for_path(
+        &self,
+        project_path: &CanonicalPath,
+        document_path: &CanonicalPath,
+        grants: &[PathGrant],
+        authorization_generation: u64,
+    ) -> Result<DiffBinding, GitError> {
+        let binding = self.repository_binding(project_path, grants, authorization_generation)?;
+        let relative = document_path
+            .as_path()
+            .strip_prefix(binding.worktree_root().canonical_path().as_path())
+            .map_err(|_| GitError::NotRepository("Document 不在仓库工作区内".to_owned()))?;
+        let relative = relative
+            .components()
+            .map(|component| {
+                component
+                    .as_os_str()
+                    .to_str()
+                    .ok_or_else(|| GitError::Command("仓库相对路径不是有效 UTF-8".to_owned()))
+            })
+            .collect::<Result<Vec<_>, _>>()?
+            .join("/");
+        let path = RepoPath::from_str(&relative)
+            .map_err(|_| GitError::Command("Document 路径不是规范仓库相对路径".to_owned()))?;
+        Ok(DiffBinding::new(binding, path))
     }
 
     pub(crate) fn revalidate_binding(

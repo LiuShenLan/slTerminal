@@ -601,6 +601,13 @@ impl AppRoot {
                     DocumentTextEvent::OpenInSystem => {
                         root.open_document_in_system(document_id, cx);
                     }
+                    DocumentTextEvent::OpenGitDiff { line } => {
+                        if let Err(error) =
+                            root.open_editor_git_diff(project_id, document_id, *line, window, cx)
+                        {
+                            log::warn!("打开 Editor Git Diff 失败: {error}");
+                        }
+                    }
                     DocumentTextEvent::OpenLanguageSelector { position } => {
                         if let Err(error) = root.open_language_selector(
                             project_id,
@@ -842,6 +849,7 @@ impl AppRoot {
             let _ = self.focus_manager.unregister(focus_registration.token());
             return Err(error);
         }
+        let is_editor = matches!(&view, ViewKey::Editor { .. });
         project.update(cx, |project, _| {
             project.panels.insert(
                 panel_id,
@@ -853,6 +861,9 @@ impl AppRoot {
             );
         });
         self.panel_focus.insert(panel_id, focus_registration);
+        if is_editor {
+            self.schedule_editor_git(panel_id, true, cx);
+        }
         Ok(panel_id)
     }
 
@@ -973,6 +984,7 @@ impl AppRoot {
                 }
             }
         }
+        self.refresh_editor_git_for_document(document_id, cx);
         Ok(response)
     }
 

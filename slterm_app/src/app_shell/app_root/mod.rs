@@ -10,6 +10,7 @@ mod diff;
 mod document_external;
 mod document_recovery;
 mod documents;
+mod editor_git;
 mod events;
 mod focus_manager;
 mod git_show;
@@ -193,6 +194,7 @@ pub(crate) struct AppRoot {
     project_open_draining: bool,
     panel_ids: PanelIdAllocator,
     documents: DocumentRegistry,
+    editor_git: BTreeMap<PanelId, editor_git::EditorGitState>,
     document_session_read_grants: BTreeMap<slterm_document::DocumentId, PathGrant>,
     document_autosave: crate::app_shell::document_autosave::DocumentAutosaveCoordinator,
     focused_document_view: Option<(slterm_document::DocumentId, slterm_workspace::ViewKey)>,
@@ -387,6 +389,7 @@ impl AppRoot {
             project_open_draining: false,
             panel_ids,
             documents,
+            editor_git: BTreeMap::new(),
             document_session_read_grants: BTreeMap::new(),
             document_autosave: cx
                 .try_global::<crate::app_shell::config::Settings>()

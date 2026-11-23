@@ -315,6 +315,7 @@ impl AppRoot {
         }
         for panel_id in panel_ids {
             self.tasks.cancel(TaskId::DiffHead(panel_id));
+            self.remove_editor_git(panel_id);
             self.tasks
                 .remove_view_refresh(super::task_service::ViewTaskOwner::Panel(panel_id));
             self.agents

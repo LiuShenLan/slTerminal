@@ -623,6 +623,7 @@ impl AppRoot {
             }
         }
         for (project_id, panel_id, content, registration) in registered {
+            self.remove_editor_git(panel_id);
             let project = self
                 .projects
                 .get(&project_id)
@@ -759,6 +760,7 @@ impl AppRoot {
                 }
             }
         }
+        self.refresh_editor_git_for_document(document_id, cx);
         Ok(())
     }
 }

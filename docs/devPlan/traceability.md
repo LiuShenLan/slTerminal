@@ -238,14 +238,14 @@
 
 | 验收场景 | 目标测试例名 | 状态 |
 |---|---|---|
-| Editor 与 Diff 编辑保存共享文本和基线 | `editor_diff_share_document` | 待实现 |
+| Editor 与 Diff 编辑保存共享文本和基线 | `editor_diff_share_document` | 已自动化 |
 | HTML 系统打开磁盘版本且不隐式保存 | `editor_html_system_open_does_not_save` | 已自动化 |
 | GBK、非法编码和 NUL 文件分别按规则路由 | `editor_encoding_and_binary_routing` | 已自动化 |
 | 全部替换确认后一次撤销回滚整次操作 | `editor_replace_all_single_undo` | 已自动化 |
 | 跨大文件阈值时干净切只读、脏保留缓冲 | `editor_large_file_dirty_preserves_buffer` | 已自动化 |
 | 语言、换行和滚动按 ViewKey 恢复且瞬态清除 | `editor_view_state_restore` | 已自动化 |
 | 外部改名只更新位置与显示而不换视图 | `editor_external_rename_keeps_view_type` | 已自动化 |
-| Git 行标打开同 Document Diff 并定位差异 | `editor_git_marker_opens_shared_diff` | 待实现 |
+| Git 行标打开同 Document Diff 并定位差异 | `editor_git_marker_opens_shared_diff` | 已自动化 |
 
 ### Terminal
 

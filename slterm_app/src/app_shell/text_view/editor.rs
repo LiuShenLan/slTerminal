@@ -8,9 +8,9 @@ use std::time::Duration;
 
 use gpui::{
     App, Bounds, ContentMask, Context, ElementInputHandler, EntityId, EntityInputHandler,
-    EventEmitter, FocusHandle, Focusable, Font, Hsla, InteractiveElement as _, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, Point, Render,
-    ScrollWheelEvent, ShapedLine, SharedString, Styled as _, Task, TextAlign, TextRun,
+    EventEmitter, FocusHandle, Focusable, Font, Hsla, InteractiveElement as _, IntoElement as _,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, Point,
+    Render, ScrollWheelEvent, ShapedLine, SharedString, Styled as _, Task, TextAlign, TextRun,
     UTF16Selection, Window, canvas, div, fill, point, px, size,
 };
 use gpui_component::button::{Button, ButtonVariants as _};
@@ -283,6 +283,7 @@ pub(crate) enum DocumentTextEvent {
     Save,
     OpenLanguageSelector { position: Point<Pixels> },
     OpenInSystem,
+    OpenGitDiff { line: usize },
 }
 
 impl EventEmitter<DocumentTextEvent> for DocumentTextView {}
@@ -301,6 +302,7 @@ pub(crate) struct DocumentTextView {
     automatic_language: LanguageId,
     allow_language_override: bool,
     language_override: Option<LanguageId>,
+    git_marks: Vec<usize>,
     language_revision: u64,
     theme_revision: u64,
     theme_fingerprint: Option<ThemeFingerprint>,
@@ -388,6 +390,15 @@ impl DocumentTextView {
             text_state: self.text_state,
             read_only: self.read_only,
         }
+    }
+
+    /// Git 行标只是最新 core 差分的展示投影，不进入正文或阅读状态。
+    pub(crate) fn set_git_marks(&mut self, marks: Vec<usize>, cx: &mut Context<'_, Self>) {
+        if self.git_marks == marks {
+            return;
+        }
+        self.git_marks = marks;
+        cx.notify();
     }
 
     /// Diff 导航只改变当前定位，不写持久阅读状态。
@@ -551,6 +562,11 @@ impl DocumentTextView {
     }
 
     #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn git_marks_for_test(&self) -> Vec<usize> {
+        self.git_marks.clone()
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
     pub(crate) fn input_text_for_test(&self) -> String {
         self.text.to_string()
     }
@@ -633,6 +649,8 @@ impl DocumentTextView {
         self.revision = snapshot.revision;
         self.text_state = snapshot.text_state;
         self.read_only = snapshot.read_only;
+        // 旧差分行号在新 TextStateId 下不再有效，必须等新后台结果重新投影。
+        self.git_marks.clear();
         self.mouse_anchor = None;
         self.caret_affinity = super::wrap::CaretAffinity::AfterWrap;
         self.invalidate_wrap_index();
@@ -1523,6 +1541,43 @@ impl DocumentTextView {
         )
     }
 
+    fn git_markers(&self, cx: &mut Context<'_, Self>) -> Vec<gpui::AnyElement> {
+        let scroll_line = self.clamped_scroll_line();
+        self.git_marks
+            .iter()
+            .filter_map(|line| {
+                let line = *line;
+                let row = if self.wrap {
+                    let byte = self.text.line_to_byte_idx(line, LineType::LF);
+                    self.wrap_position(byte)?.row.checked_sub(scroll_line)?
+                } else {
+                    line.checked_sub(scroll_line)?
+                };
+                let id = format!("document-git-marker-{}-{line}", cx.entity().entity_id());
+                let selector = id.clone();
+                Some(
+                    div()
+                        .id(id)
+                        .debug_selector(move || selector.clone())
+                        .absolute()
+                        .left(px(0.0))
+                        .top(px(row as f32 * 20.0))
+                        .w(px(4.0))
+                        .h(px(20.0))
+                        .bg(cx.theme().accent)
+                        .cursor_pointer()
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |_, _, _, cx| {
+                                cx.emit(DocumentTextEvent::OpenGitDiff { line });
+                            }),
+                        )
+                        .into_any_element(),
+                )
+            })
+            .collect()
+    }
+
     fn text_canvas(&mut self, cx: &mut Context<'_, Self>) -> gpui::Canvas<PaintFrame> {
         if self.wrap && self.wrap_index.borrow().is_some() {
             // 布局修正只更新运行态；后续显式滚动才会写回新位置。
@@ -1821,6 +1876,12 @@ impl Render for DocumentTextView {
         let language_selector = self.language_selector(cx);
         let wrap_button = self.wrap_button(cx);
         let system_open = self.system_open_button(cx);
+        let git_markers = self.git_markers(cx);
+        let git_gutter_width = if self.git_marks.is_empty() {
+            px(0.0)
+        } else {
+            px(8.0)
+        };
         let focus = self.focus.clone();
         div()
             .key_context("DocumentText")
@@ -1894,11 +1955,13 @@ impl Render for DocumentTextView {
             }))
             .child(
                 div()
+                    .relative()
                     .flex_1()
                     .min_h_0()
                     .w_full()
                     .overflow_hidden()
-                    .child(canvas),
+                    .child(div().size_full().pl(git_gutter_width).child(canvas))
+                    .children(git_markers),
             )
             .child(
                 h_flex()
