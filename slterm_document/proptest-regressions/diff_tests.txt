@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 1f5d24f95359b0e0d3a0a38a70170c41892140ba9ff1fa941e4ad797c7eb1f62 # shrinks to head = [], worktree = [""]
+cc b3429992e5e0a3233a521e88522b02b0bbd111ddc087b9bf15b8fe89a7bc4981 # shrinks to head = [("", false), ("", false), ("\r\r", false)], worktree = [("a", false), ("", false)], head_trailing_newline = false, worktree_trailing_newline = true, whitespace = Exact

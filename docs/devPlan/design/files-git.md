@@ -59,10 +59,10 @@ git restore --worktree -- <path>
 
 ### Diff 核心
 
-- `DiffBinding { repository_binding, head_path }` 固定创建时仓库与 HEAD 旧路径。DiffInput 是不可变快照，包含 HEAD 内容、工作区内容、空白模式、TextStateId、HEAD 对象身份和计算代次。
+- `DiffBinding { repository_binding, head_path }` 固定创建时仓库与 HEAD 旧路径。DiffInput 是不可变快照，包含 HEAD 内容、工作区内容、空白模式、TextStateId、基线身份和计算代次；Git 对比携带固定 CommitId，磁盘与缓冲冲突对比使用无 HEAD 的 Conflict 基线。
 - 工作区侧直接引用共享 Document；大于 10 MiB 的脏工作区复制为独立只读快照，源 Document 继续可编辑，不强制保存或转只读。冲突对比使用磁盘与当前缓冲快照，不读取 HEAD。
 - 使用 `similar` Myers 行差分，设置 2 秒硬预算。该库 deadline 到期可能返回近似结果，因此返回时发现已到期必须丢弃，不展示近似差异；过期任务由 revision 丢弃，worker 最迟在硬预算退出。
-- 差异计算只接收有界快照；任一侧超过 50 MiB 或无法在安全预算内取得完整输入时返回差异不可用，正文仍可分页阅读，不建立无界内存副本。
+- 差异计算只接收有界快照；任一侧超过 50 MiB、多于 200,000 行或无法在安全预算内取得完整输入时按侧返回差异不可用，另一侧正文仍可分页阅读，不建立无界内存副本。
 - 空白模式只影响行键：行尾模式忽略行尾空格／Tab，全部模式忽略所有空格／Tab；CRLF／LF 和文件末尾换行不进入行键，原始文本保留。
 - 差异操作先形成 hunk，再配对为 `Equal／Delete／Insert／Replace` 行对；空白占位和行内虚拟删除行只由视图生成，不写入 Document。
 - 每个视图只缓存最新输入与结果，键包含 HEAD 对象身份、TextStateId、空白模式和格式参数。保存、重载、HEAD 刷新和可见性变化按代次重算。

@@ -6,14 +6,17 @@ use std::{
     time::{Duration, Instant},
 };
 
-use similar::{Algorithm, DiffOp, DiffTag, capture_diff_slices_by_key_deadline};
+use similar::{
+    Algorithm,
+    algorithms::{CachedLookup, DiffHook, Replace, diff_deadline},
+};
 
-use crate::{CommitId, TextStateId};
+use crate::{BINARY_PROBE_BYTES, CommitId, TextStateId};
 
 const DIFF_BUDGET: Duration = Duration::from_secs(2);
 const PAGED_SIDE_BYTES: usize = 10_000_000;
 const MAX_DIFF_SIDE_BYTES: usize = 50_000_000;
-const BINARY_PROBE_BYTES: usize = 8 * 1024;
+const MAX_DIFF_SIDE_LINES: usize = 200_000;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum DiffWhitespaceMode {
@@ -23,19 +26,25 @@ pub enum DiffWhitespaceMode {
     All,
 }
 
-/// 一次计算的不可变输入；字节、文本状态、HEAD 对象与代次共同固定身份。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DiffBaseline {
+    Commit(CommitId),
+    Conflict,
+}
+
+/// 一次计算的不可变输入；字节、文本状态、基线身份与代次共同固定身份。
 #[derive(Clone, Debug)]
 pub struct DiffInput {
     head: Arc<[u8]>,
     worktree: Arc<[u8]>,
     whitespace: DiffWhitespaceMode,
     text_state_id: TextStateId,
-    head_identity: CommitId,
+    baseline: DiffBaseline,
     generation: u64,
 }
 
 impl DiffInput {
-    pub fn new(
+    pub fn git(
         head: Arc<[u8]>,
         worktree: Arc<[u8]>,
         whitespace: DiffWhitespaceMode,
@@ -48,7 +57,24 @@ impl DiffInput {
             worktree,
             whitespace,
             text_state_id,
-            head_identity,
+            baseline: DiffBaseline::Commit(head_identity),
+            generation,
+        }
+    }
+
+    pub fn conflict(
+        disk: Arc<[u8]>,
+        buffer: Arc<[u8]>,
+        whitespace: DiffWhitespaceMode,
+        text_state_id: TextStateId,
+        generation: u64,
+    ) -> Self {
+        Self {
+            head: disk,
+            worktree: buffer,
+            whitespace,
+            text_state_id,
+            baseline: DiffBaseline::Conflict,
             generation,
         }
     }
@@ -57,25 +83,31 @@ impl DiffInput {
         self.text_state_id
     }
 
-    pub const fn head_identity(&self) -> &CommitId {
-        &self.head_identity
+    pub const fn baseline(&self) -> &DiffBaseline {
+        &self.baseline
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DiffSideContent {
-    Text { text: Arc<str>, paged: bool },
+    Text { text: Arc<str> },
     Binary,
     TooLarge,
+    TooManyLines,
     InvalidUtf8,
 }
 
 impl DiffSideContent {
-    fn text(&self) -> Option<&str> {
+    pub fn text(&self) -> Option<&Arc<str>> {
         match self {
-            Self::Text { text, .. } => Some(text),
-            Self::Binary | Self::TooLarge | Self::InvalidUtf8 => None,
+            Self::Text { text } => Some(text),
+            Self::Binary | Self::TooLarge | Self::TooManyLines | Self::InvalidUtf8 => None,
         }
+    }
+
+    pub fn is_paged(&self) -> bool {
+        self.text()
+            .is_some_and(|text| text.len() > PAGED_SIDE_BYTES)
     }
 }
 
@@ -102,13 +134,39 @@ pub struct DiffPair {
 
 #[derive(Clone, Debug)]
 pub struct DiffSnapshot {
-    pub head: DiffSideContent,
-    pub worktree: DiffSideContent,
-    /// 任一侧不可计算时为 None；空 Vec 表示两侧可计算且没有差异。
-    pub pairs: Option<Vec<DiffPair>>,
-    pub text_state_id: TextStateId,
-    pub head_identity: CommitId,
-    pub generation: u64,
+    head: DiffSideContent,
+    worktree: DiffSideContent,
+    pairs: Vec<DiffPair>,
+    text_state_id: TextStateId,
+    baseline: DiffBaseline,
+    generation: u64,
+}
+
+impl DiffSnapshot {
+    pub const fn head(&self) -> &DiffSideContent {
+        &self.head
+    }
+
+    pub const fn worktree(&self) -> &DiffSideContent {
+        &self.worktree
+    }
+
+    /// 任一侧不可计算时为 None；空切片表示两侧可计算且没有差异。
+    pub fn pairs(&self) -> Option<&[DiffPair]> {
+        (self.head.text().is_some() && self.worktree.text().is_some()).then_some(&self.pairs)
+    }
+
+    pub const fn text_state_id(&self) -> TextStateId {
+        self.text_state_id
+    }
+
+    pub const fn baseline(&self) -> &DiffBaseline {
+        &self.baseline
+    }
+
+    pub const fn generation(&self) -> u64 {
+        self.generation
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -137,72 +195,115 @@ pub fn compute_diff_with_deadline(
 }
 
 fn compute_diff_at(input: &DiffInput, deadline: Instant) -> Result<DiffSnapshot, DiffError> {
-    let head = analyze_side(&input.head);
-    let worktree = analyze_side(&input.worktree);
-    let (Some(head_text), Some(worktree_text)) = (head.text(), worktree.text()) else {
-        return Ok(snapshot(input, head, worktree, None));
+    ensure_within_deadline(deadline)?;
+    let mut head = analyze_side(&input.head, deadline)?;
+    let mut worktree = analyze_side(&input.worktree, deadline)?;
+    let head_text = head.text().cloned();
+    let worktree_text = worktree.text().cloned();
+    let head_lines = match &head_text {
+        Some(text) => raw_lines(text, deadline)?,
+        None => None,
     };
-    let head_lines = raw_lines(head_text);
-    let worktree_lines = raw_lines(worktree_text);
-    let whitespace = input.whitespace;
-    let ops = capture_diff_slices_by_key_deadline(
-        Algorithm::Myers,
-        &head_lines,
-        &worktree_lines,
-        |line| line_key(line, whitespace),
-        Some(deadline),
-    );
-    // similar 到期会返回近似差异；硬预算要求直接丢弃，不展示近似值。
-    if Instant::now() >= deadline {
-        return Err(DiffError::DeadlineExceeded);
+    if head_text.is_some() && head_lines.is_none() {
+        head = DiffSideContent::TooManyLines;
     }
-    let pairs = ops
-        .into_iter()
-        .flat_map(|op| pair_op(op, &head_lines, &worktree_lines))
-        .collect();
-    Ok(snapshot(input, head, worktree, Some(pairs)))
+    let worktree_lines = match &worktree_text {
+        Some(text) => raw_lines(text, deadline)?,
+        None => None,
+    };
+    if worktree_text.is_some() && worktree_lines.is_none() {
+        worktree = DiffSideContent::TooManyLines;
+    }
+    let (Some(head_lines), Some(worktree_lines)) = (head_lines, worktree_lines) else {
+        ensure_within_deadline(deadline)?;
+        return Ok(snapshot(input, head, worktree, Vec::new()));
+    };
+    let whitespace = input.whitespace;
+    let head_keys = CachedLookup::new(head_lines.len(), |index| {
+        line_key(head_lines[index], whitespace)
+    });
+    let worktree_keys = CachedLookup::new(worktree_lines.len(), |index| {
+        line_key(worktree_lines[index], whitespace)
+    });
+    let mut hook = Replace::new(PairBuilder::new(&head_lines, &worktree_lines, deadline));
+    diff_deadline(
+        Algorithm::Myers,
+        &mut hook,
+        &head_keys,
+        0..head_keys.len(),
+        &worktree_keys,
+        0..worktree_keys.len(),
+        Some(deadline),
+    )?;
+    // similar 到期会返回近似差异；硬预算要求直接丢弃，不展示近似值。
+    ensure_within_deadline(deadline)?;
+    Ok(snapshot(input, head, worktree, hook.into_inner().pairs))
+}
+
+fn ensure_within_deadline(deadline: Instant) -> Result<(), DiffError> {
+    if Instant::now() >= deadline {
+        Err(DiffError::DeadlineExceeded)
+    } else {
+        Ok(())
+    }
 }
 
 fn snapshot(
     input: &DiffInput,
     head: DiffSideContent,
     worktree: DiffSideContent,
-    pairs: Option<Vec<DiffPair>>,
+    pairs: Vec<DiffPair>,
 ) -> DiffSnapshot {
     DiffSnapshot {
         head,
         worktree,
         pairs,
         text_state_id: input.text_state_id,
-        head_identity: input.head_identity.clone(),
+        baseline: input.baseline.clone(),
         generation: input.generation,
     }
 }
 
-fn analyze_side(bytes: &Arc<[u8]>) -> DiffSideContent {
+pub(crate) fn analyze_side(bytes: &[u8], deadline: Instant) -> Result<DiffSideContent, DiffError> {
+    ensure_within_deadline(deadline)?;
     if bytes.len() > MAX_DIFF_SIDE_BYTES {
-        return DiffSideContent::TooLarge;
+        return Ok(DiffSideContent::TooLarge);
     }
     if bytes[..bytes.len().min(BINARY_PROBE_BYTES)].contains(&0) {
-        return DiffSideContent::Binary;
+        ensure_within_deadline(deadline)?;
+        return Ok(DiffSideContent::Binary);
     }
-    match std::str::from_utf8(bytes) {
+    let content = match std::str::from_utf8(bytes) {
         Ok(text) => DiffSideContent::Text {
             text: Arc::from(text),
-            paged: bytes.len() > PAGED_SIDE_BYTES,
         },
         Err(_) => DiffSideContent::InvalidUtf8,
-    }
+    };
+    ensure_within_deadline(deadline)?;
+    Ok(content)
 }
 
-fn raw_lines(text: &str) -> Vec<&str> {
-    text.split_inclusive('\n').collect()
+fn raw_lines(text: &str, deadline: Instant) -> Result<Option<Vec<&str>>, DiffError> {
+    let mut lines = Vec::new();
+    for line in text.split_inclusive('\n') {
+        if lines.len() == MAX_DIFF_SIDE_LINES {
+            return Ok(None);
+        }
+        if lines.len().is_multiple_of(4096) {
+            ensure_within_deadline(deadline)?;
+        }
+        lines.push(line);
+    }
+    ensure_within_deadline(deadline)?;
+    Ok(Some(lines))
 }
 
 /// 行键统一忽略 CRLF／LF 与末尾换行；Trailing 只忽略行尾空格和 Tab。
 fn line_key(line: &str, whitespace: DiffWhitespaceMode) -> String {
-    let line = line.strip_suffix('\n').unwrap_or(line);
-    let line = line.strip_suffix('\r').unwrap_or(line);
+    let line = match line.strip_suffix('\n') {
+        Some(line) => line.strip_suffix('\r').unwrap_or(line),
+        None => line,
+    };
     match whitespace {
         DiffWhitespaceMode::Exact => line.to_owned(),
         DiffWhitespaceMode::Trailing => line.trim_end_matches([' ', '\t']).to_owned(),
@@ -213,52 +314,130 @@ fn line_key(line: &str, whitespace: DiffWhitespaceMode) -> String {
     }
 }
 
-fn pair_op(op: DiffOp, head: &[&str], worktree: &[&str]) -> Vec<DiffPair> {
-    let old = op.old_range();
-    let new = op.new_range();
-    let mut pairs = Vec::new();
-    match op.tag() {
-        DiffTag::Equal => {
-            for (old, new) in old.zip(new) {
-                pairs.push(pair(
-                    DiffPairKind::Equal,
-                    head,
-                    worktree,
-                    Some(old),
-                    Some(new),
-                ));
-            }
-        }
-        DiffTag::Delete => {
-            for old in old {
-                pairs.push(pair(DiffPairKind::Delete, head, worktree, Some(old), None));
-            }
-        }
-        DiffTag::Insert => {
-            for new in new {
-                pairs.push(pair(DiffPairKind::Insert, head, worktree, None, Some(new)));
-            }
-        }
-        DiffTag::Replace => {
-            let shared = old.len().min(new.len());
-            for offset in 0..shared {
-                pairs.push(pair(
-                    DiffPairKind::Replace,
-                    head,
-                    worktree,
-                    Some(old.start + offset),
-                    Some(new.start + offset),
-                ));
-            }
-            for old in old.start + shared..old.end {
-                pairs.push(pair(DiffPairKind::Delete, head, worktree, Some(old), None));
-            }
-            for new in new.start + shared..new.end {
-                pairs.push(pair(DiffPairKind::Insert, head, worktree, None, Some(new)));
-            }
+pub(crate) struct PairBuilder<'a> {
+    head: &'a [&'a str],
+    worktree: &'a [&'a str],
+    deadline: Instant,
+    pairs: Vec<DiffPair>,
+}
+
+impl<'a> PairBuilder<'a> {
+    pub(crate) fn new(head: &'a [&'a str], worktree: &'a [&'a str], deadline: Instant) -> Self {
+        Self {
+            head,
+            worktree,
+            deadline,
+            pairs: Vec::new(),
         }
     }
-    pairs
+
+    fn push(&mut self, pair: DiffPair) -> Result<(), DiffError> {
+        if self.pairs.len().is_multiple_of(4096) {
+            ensure_within_deadline(self.deadline)?;
+        }
+        self.pairs.push(pair);
+        Ok(())
+    }
+
+    fn append(
+        &mut self,
+        kind: DiffPairKind,
+        old: std::ops::Range<usize>,
+        new: std::ops::Range<usize>,
+    ) -> Result<(), DiffError> {
+        match kind {
+            DiffPairKind::Equal => {
+                for (old, new) in old.zip(new) {
+                    self.push(pair(
+                        DiffPairKind::Equal,
+                        self.head,
+                        self.worktree,
+                        Some(old),
+                        Some(new),
+                    ))?;
+                }
+            }
+            DiffPairKind::Delete => {
+                for old in old {
+                    self.push(pair(
+                        DiffPairKind::Delete,
+                        self.head,
+                        self.worktree,
+                        Some(old),
+                        None,
+                    ))?;
+                }
+            }
+            DiffPairKind::Insert => {
+                for new in new {
+                    self.push(pair(
+                        DiffPairKind::Insert,
+                        self.head,
+                        self.worktree,
+                        None,
+                        Some(new),
+                    ))?;
+                }
+            }
+            DiffPairKind::Replace => {
+                let shared = old.len().min(new.len());
+                for offset in 0..shared {
+                    self.push(pair(
+                        DiffPairKind::Replace,
+                        self.head,
+                        self.worktree,
+                        Some(old.start + offset),
+                        Some(new.start + offset),
+                    ))?;
+                }
+                self.append(
+                    DiffPairKind::Delete,
+                    old.start + shared..old.end,
+                    new.start..new.start,
+                )?;
+                self.append(
+                    DiffPairKind::Insert,
+                    old.end..old.end,
+                    new.start + shared..new.end,
+                )?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl DiffHook for PairBuilder<'_> {
+    type Error = DiffError;
+
+    fn equal(&mut self, old: usize, new: usize, len: usize) -> Result<(), Self::Error> {
+        self.append(DiffPairKind::Equal, old..old + len, new..new + len)
+    }
+
+    fn delete(&mut self, old: usize, old_len: usize, new: usize) -> Result<(), Self::Error> {
+        self.append(DiffPairKind::Delete, old..old + old_len, new..new)
+    }
+
+    fn insert(&mut self, old: usize, new: usize, new_len: usize) -> Result<(), Self::Error> {
+        self.append(DiffPairKind::Insert, old..old, new..new + new_len)
+    }
+
+    fn replace(
+        &mut self,
+        old: usize,
+        old_len: usize,
+        new: usize,
+        new_len: usize,
+    ) -> Result<(), Self::Error> {
+        self.append(
+            DiffPairKind::Replace,
+            old..old + old_len,
+            new..new + new_len,
+        )
+    }
+
+    fn finish(&mut self) -> Result<(), Self::Error> {
+        ensure_within_deadline(self.deadline)
+    }
 }
 
 fn pair(

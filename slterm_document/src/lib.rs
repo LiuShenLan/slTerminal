@@ -30,8 +30,8 @@ mod syntax;
 #[cfg(test)]
 pub use diff::compute_diff_with_deadline;
 pub use diff::{
-    DiffError, DiffInput, DiffLine, DiffPair, DiffPairKind, DiffSideContent, DiffSnapshot,
-    DiffWhitespaceMode, compute_diff,
+    DiffBaseline, DiffError, DiffInput, DiffLine, DiffPair, DiffPairKind, DiffSideContent,
+    DiffSnapshot, DiffWhitespaceMode, compute_diff,
 };
 pub use edit::{
     EditApplyOutcome, EditOrigin, EditTransaction, EditTransactionError, MergePolicy, TextEdit,
