@@ -1,9 +1,9 @@
 use std::{path::Path, str::FromStr as _};
 
-use slterm_document::RepoPath;
+use slterm_document::{PAGE_SOURCE_BYTES, RepoPath};
 use slterm_path::{CanonicalPath, PathGrant};
 
-use super::{GitError, GitFacade};
+use super::{GitError, GitFacade, GitShowContent, GitShowSnapshot};
 
 fn canonical(path: &Path) -> CanonicalPath {
     CanonicalPath::new(path).unwrap()
@@ -20,6 +20,7 @@ fn committed_repository(file: &[u8]) -> (tempfile::TempDir, std::path::PathBuf) 
     let repository = temp.path().join("repo");
     std::fs::create_dir(&repository).unwrap();
     git(&repository, &["init", "--quiet"]);
+    git(&repository, &["config", "core.autocrlf", "false"]);
     git(&repository, &["config", "user.name", "slTerminal Test"]);
     git(
         &repository,
@@ -29,6 +30,116 @@ fn committed_repository(file: &[u8]) -> (tempfile::TempDir, std::path::PathBuf) 
     git(&repository, &["add", "--", "tracked.txt"]);
     git(&repository, &["commit", "--quiet", "-m", "initial"]);
     (temp, repository)
+}
+
+fn show_committed(file: &[u8]) -> GitShowSnapshot {
+    let (_temp, repository) = committed_repository(file);
+    let grants = vec![PathGrant::repo_root(canonical(&repository))];
+    let facade = GitFacade::default();
+    let binding = facade
+        .repository_binding(&canonical(&repository), &grants, 0)
+        .unwrap();
+    facade
+        .show(
+            &binding,
+            &RepoPath::from_str("tracked.txt").unwrap(),
+            &grants,
+            0,
+            1,
+        )
+        .unwrap()
+}
+
+#[test]
+fn gitshow_large_and_binary_degradation() {
+    let regular = show_committed(&vec![b'x'; 1_000_000]);
+    assert!(matches!(regular.content(), GitShowContent::Text { .. }));
+    assert!(!regular.requires_size_notice());
+
+    let noticed = show_committed(&vec![b'x'; 1_000_001]);
+    assert!(matches!(noticed.content(), GitShowContent::Text { .. }));
+    assert!(noticed.requires_size_notice());
+
+    let largest_inline = show_committed(&vec![b'x'; 10_000_000]);
+    assert!(matches!(
+        largest_inline.content(),
+        GitShowContent::Text { .. }
+    ));
+    assert!(largest_inline.requires_size_notice());
+
+    let paged = show_committed(&vec![b'x'; 10_000_001]);
+    let source = match paged.content() {
+        GitShowContent::Paged(source) => source,
+        _ => panic!("大文本必须分页"),
+    };
+    assert!(source.index().len() > 1);
+    let restored = (0..source.index().len())
+        .map(|page| paged.page_text(page).unwrap())
+        .collect::<String>();
+    assert_eq!(restored.len(), 10_000_001);
+    assert!(restored.bytes().all(|byte| byte == b'x'));
+
+    let (_temp, repository) = committed_repository(b"before\0after");
+    let grants = vec![PathGrant::repo_root(canonical(&repository))];
+    let facade = GitFacade::default();
+    let binding = facade
+        .repository_binding(&canonical(&repository), &grants, 0)
+        .unwrap();
+    let binary = facade
+        .show(
+            &binding,
+            &RepoPath::from_str("tracked.txt").unwrap(),
+            &grants,
+            0,
+            1,
+        )
+        .unwrap();
+    assert!(matches!(binary.content(), GitShowContent::Binary));
+    let transfer_root = tempfile::tempdir().unwrap();
+    let opened = super::system_open::open_snapshot_at(&binary, transfer_root.path(), |path| {
+        assert_eq!(std::fs::read(path).unwrap(), b"before\0after");
+        Ok(())
+    })
+    .unwrap();
+    let transfer_path = opened.path().to_path_buf();
+    assert!(!transfer_path.starts_with(&repository));
+    assert_eq!(transfer_path.extension().unwrap(), "txt");
+    assert!(transfer_path.metadata().unwrap().permissions().readonly());
+    drop(opened);
+    assert!(!transfer_path.exists());
+    assert!(
+        git(&repository, &["status", "--porcelain"])
+            .stdout
+            .is_empty()
+    );
+    let failed = super::system_open::open_snapshot_at(&binary, transfer_root.path(), |_| {
+        Err(std::io::Error::other("injected system opener failure"))
+    });
+    assert!(failed.is_err());
+    assert_eq!(std::fs::read_dir(transfer_root.path()).unwrap().count(), 0);
+
+    let invalid = show_committed(b"\xff");
+    assert!(matches!(invalid.content(), GitShowContent::InvalidUtf8));
+}
+
+#[test]
+fn gitshow_paging_preserves_unicode_and_crlf() {
+    let mut text = format!(
+        "{}😀\r\nnext\r\n",
+        "a".repeat(PAGE_SOURCE_BYTES as usize - 2)
+    );
+    text.push_str(&"x".repeat(10_000_001 - text.len()));
+
+    let snapshot = show_committed(text.as_bytes());
+    let source = match snapshot.content() {
+        GitShowContent::Paged(source) => source,
+        _ => panic!("大文本必须分页"),
+    };
+    let restored = (0..source.index().len())
+        .map(|page| snapshot.page_text(page).unwrap())
+        .collect::<String>();
+
+    assert_eq!(restored, text.replace("\r\n", "\n"));
 }
 
 #[test]

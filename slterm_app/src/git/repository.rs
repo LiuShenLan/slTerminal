@@ -157,19 +157,24 @@ pub(super) fn repository_command(path: &Path) -> Command {
 }
 
 pub(super) fn run_repository(command: Command) -> Result<ProcessOutput, GitError> {
-    run_cancellable(
-        command,
-        REPOSITORY_TIMEOUT,
-        REPOSITORY_OUTPUT_LIMIT,
-        &|| false,
-    )
-    .map_err(|error| match error {
-        ProcessOutputError::Spawn(error) => GitError::Unavailable(format!("无法运行 git: {error}")),
-        ProcessOutputError::Io(_) => GitError::Command("Git 仓库读取失败".to_owned()),
-        ProcessOutputError::Cancelled => GitError::Cancelled,
-        ProcessOutputError::Timeout => GitError::Timeout,
-        ProcessOutputError::OutputLimit { limit } => GitError::OutputLimit { limit },
-        ProcessOutputError::Exit(_) => unreachable!("双通道进程接口保留非零退出码"),
+    run_repository_with_limit(command, REPOSITORY_OUTPUT_LIMIT)
+}
+
+pub(super) fn run_repository_with_limit(
+    command: Command,
+    output_limit: usize,
+) -> Result<ProcessOutput, GitError> {
+    run_cancellable(command, REPOSITORY_TIMEOUT, output_limit, &|| false).map_err(|error| {
+        match error {
+            ProcessOutputError::Spawn(error) => {
+                GitError::Unavailable(format!("无法运行 git: {error}"))
+            }
+            ProcessOutputError::Io(_) => GitError::Command("Git 仓库读取失败".to_owned()),
+            ProcessOutputError::Cancelled => GitError::Cancelled,
+            ProcessOutputError::Timeout => GitError::Timeout,
+            ProcessOutputError::OutputLimit { limit } => GitError::OutputLimit { limit },
+            ProcessOutputError::Exit(_) => unreachable!("双通道进程接口保留非零退出码"),
+        }
     })
 }
 

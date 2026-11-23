@@ -65,7 +65,11 @@ fn run_recycle_operation(
 
 /// 交给系统默认处理器打开路径(文件树双击的未命中臂)。
 pub(crate) fn open_in_system(path: &Path) {
-    let _ = shell_execute_open(path);
+    let _ = try_open_in_system(path);
+}
+
+pub(crate) fn try_open_in_system(path: &Path) -> io::Result<()> {
+    shell_execute_open(path)
 }
 
 /// URL 与本地链接共用同一系统处理程序；错误不携带目标正文。

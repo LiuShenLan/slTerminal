@@ -399,7 +399,7 @@
 | 同一固定版本重复打开聚焦且不重读 | `gitshow_duplicate_view_focuses` | 待实现 |
 | 手动刷新只重读同一固定对象 | `gitshow_refresh_reads_same_object` | 已自动化 |
 | 固定对象不可用时保留错误且不回退工作区 | `gitshow_missing_object_preserves_error` | 已自动化 |
-| 大文件或二进制按阈值降级且系统打开不写工作区 | `gitshow_large_and_binary_degradation` | 待实现 |
+| 大文件或二进制按阈值降级且系统打开不写工作区 | `gitshow_large_and_binary_degradation` | 已自动化 |
 | 固定身份与布局恢复而搜索、滚动和焦点清除 | `gitshow_view_state_restore` | 待实现 |
 
 ### 实现回归场景

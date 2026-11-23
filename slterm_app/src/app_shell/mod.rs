@@ -201,16 +201,21 @@ impl WorkspaceWriterRuntime {
             WorkspaceWriter, spawn_workspace_failure_forwarder,
         };
 
-        Self::start_with(paths, events, WorkspaceWriter::start, |failures, notify| {
-            spawn_workspace_failure_forwarder(failures, notify)
-        })
+        Self::start_with(
+            paths,
+            events,
+            WorkspaceWriter::start,
+            spawn_workspace_failure_forwarder,
+            crate::git::cleanup_expired_system_open,
+        )
     }
 
-    fn start_with<StartWriter, SpawnForwarder>(
+    fn start_with<StartWriter, SpawnForwarder, CleanupTemp>(
         paths: &slterm_path::AppPaths,
         events: mpsc::SyncSender<SltermShellEvent>,
         start_writer: StartWriter,
         spawn_forwarder: SpawnForwarder,
+        cleanup_temp: CleanupTemp,
     ) -> Result<Self, crate::persistence::workspace_writer::WorkspaceWriterError>
     where
         StartWriter: FnOnce(
@@ -223,6 +228,7 @@ impl WorkspaceWriterRuntime {
             mpsc::Receiver<crate::persistence::workspace_writer::WorkspaceWriteFailure>,
             Box<dyn FnMut() + Send>,
         ) -> std::io::Result<std::thread::JoinHandle<()>>,
+        CleanupTemp: FnOnce() -> std::io::Result<()>,
     {
         use crate::persistence::startup::{
             JournalRecoverer, JournalRecovererRegistry, MaintenanceOutcome, MaintenanceRunner,
@@ -264,6 +270,8 @@ impl WorkspaceWriterRuntime {
             return Err(WorkspaceWriterError::MaintenanceNeedsAttention(stage));
         }
         drop(store);
+        // 单实例锁保证此时没有另一实例的存活中转句柄；过期清理失败不阻断工作区。
+        let _ = cleanup_temp();
 
         let mut writer = start_writer(paths.clone())?;
         let client = writer.client();
@@ -994,6 +1002,7 @@ mod shell_event_tests {
         let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
         let (events, _event_rx) = mpsc::sync_channel(super::SHELL_EVENT_CAPACITY);
 
+        let cleanup_called = std::cell::Cell::new(false);
         let error = match WorkspaceWriterRuntime::start_with(
             &paths,
             events,
@@ -1009,6 +1018,12 @@ mod shell_event_tests {
             |_, _| -> std::io::Result<std::thread::JoinHandle<()>> {
                 panic!("writer 启动失败不得创建 forwarder")
             },
+            || {
+                cleanup_called.set(true);
+                Err(std::io::Error::other(
+                    "injected expired temp cleanup failure",
+                ))
+            },
         ) {
             Err(error) => error,
             Ok(_) => panic!("writer 启动失败不得取得 runtime"),
@@ -1021,6 +1036,7 @@ mod shell_event_tests {
             ),
             "实际错误: {error:?}"
         );
+        assert!(cleanup_called.get());
         let raw = rusqlite::Connection::open(paths.workspace_db_path()).unwrap();
         let clean_shutdown = raw
             .query_row(
@@ -1049,6 +1065,7 @@ mod shell_event_tests {
                 Ok(writer)
             },
             |_, _| Err(std::io::Error::other("injected forwarder spawn failure")),
+            || Ok(()),
         ) {
             Err(error) => error,
             Ok(_) => panic!("forwarder 启动失败不得取得 runtime"),
