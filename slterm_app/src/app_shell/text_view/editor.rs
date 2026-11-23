@@ -33,16 +33,18 @@ use super::metrics::{
 };
 use super::source::{RopeTextSource, TextSelection};
 use super::syntax::{DocumentSyntax, capture_color};
-use super::view_state::{EditorViewState, EditorViewStateLease, EditorViewStateStore};
+use super::view_state::{
+    DocumentViewStateBinding, EditorViewState, EditorViewStateLease, EditorViewStateStore,
+};
 use super::wrap::{DisplayPosition, SoftWrapIndex};
 use super::{SaveFile, SelectDown, SelectLeft, SelectRight, SelectUp};
 
 /// 一次同步提交成功后回投的只读正文快照。
 pub(crate) struct DocumentTextSnapshot {
-    text: Rope,
-    revision: u64,
-    text_state: TextStateId,
-    read_only: bool,
+    pub(crate) text: Rope,
+    pub(crate) revision: u64,
+    pub(crate) text_state: TextStateId,
+    pub(crate) read_only: bool,
 }
 
 impl DocumentTextSnapshot {
@@ -67,7 +69,7 @@ pub(crate) struct DocumentEditResponse {
 }
 
 /// 视图只提交事务；组合根同步调用唯一 Registry，并立即返回权威快照。
-type DocumentEditSink = Box<
+pub(crate) type DocumentEditSink = Box<
     dyn FnMut(
         DocumentEditRequest,
         EntityId,
@@ -297,6 +299,7 @@ pub(crate) struct DocumentTextView {
     read_only: bool,
     edit_sink: DocumentEditSink,
     automatic_language: LanguageId,
+    allow_language_override: bool,
     language_override: Option<LanguageId>,
     language_revision: u64,
     theme_revision: u64,
@@ -339,8 +342,29 @@ impl DocumentTextView {
         view_states: EditorViewStateStore,
         cx: &mut Context<'_, Self>,
     ) -> Self {
-        let restored = view_states.state(&view_key);
-        let view_lease = view_states.lease(&view_key);
+        Self::new_with_binding(
+            session,
+            edit_sink,
+            automatic_language,
+            true,
+            syntax,
+            DocumentViewStateBinding::new(view_key, view_states),
+            cx,
+        )
+    }
+
+    /// 复合视图与内部源码子视图共享同一 ViewKey 租约，避免互相判旧。
+    pub(crate) fn new_with_binding(
+        session: &DocumentSession,
+        edit_sink: DocumentEditSink,
+        automatic_language: LanguageId,
+        allow_language_override: bool,
+        syntax: Option<Rc<RefCell<DocumentSyntax>>>,
+        view_state: DocumentViewStateBinding,
+        cx: &mut Context<'_, Self>,
+    ) -> Self {
+        let restored = view_state.view_states().state(view_state.view_key());
+        let (_view_key, view_states, view_lease) = view_state.into_parts();
         let wrap = restored.wrap();
         let scroll_line = if wrap {
             // 显示行总数依赖首个视口宽度，首帧索引建立后再夹紧。
@@ -365,7 +389,12 @@ impl DocumentTextView {
             read_only: session.is_read_only(),
             edit_sink,
             automatic_language,
-            language_override: restored.language_override(),
+            allow_language_override,
+            language_override: if allow_language_override {
+                restored.language_override()
+            } else {
+                None
+            },
             language_revision: 0,
             theme_revision: 0,
             theme_fingerprint: None,
@@ -442,6 +471,9 @@ impl DocumentTextView {
     }
 
     fn open_language_selector(&mut self, position: Point<Pixels>, cx: &mut Context<'_, Self>) {
+        if !self.allow_language_override {
+            return;
+        }
         cx.emit(DocumentTextEvent::OpenLanguageSelector { position });
     }
 
@@ -451,6 +483,14 @@ impl DocumentTextView {
 
     pub(crate) fn renew_view_lease(&mut self) {
         self.view_states.renew(&mut self.view_lease);
+    }
+
+    pub(crate) fn share_focus(&mut self, focus: FocusHandle) {
+        self.focus = focus;
+    }
+
+    pub(crate) fn share_lease(&mut self, lease: EditorViewStateLease) {
+        self.view_lease = lease;
     }
 
     pub(crate) fn effective_language(&self, language_override: Option<LanguageId>) -> LanguageId {
@@ -464,7 +504,7 @@ impl DocumentTextView {
         syntax: Option<Rc<RefCell<DocumentSyntax>>>,
         cx: &mut Context<'_, Self>,
     ) {
-        if self.language_override == language_override {
+        if !self.allow_language_override || self.language_override == language_override {
             return;
         }
         self.language_override = language_override;
@@ -1486,18 +1526,23 @@ impl EntityInputHandler for DocumentTextView {
 }
 
 impl DocumentTextView {
-    fn language_selector(&self, cx: &mut Context<'_, Self>) -> impl gpui::IntoElement + use<> {
+    fn language_selector(&self, cx: &mut Context<'_, Self>) -> Option<Button> {
+        if !self.allow_language_override {
+            return None;
+        }
         let id = format!("document-language-selector-{}", cx.entity().entity_id());
         let selector = id.clone();
         let effective = self.language_override.unwrap_or(self.automatic_language);
-        Button::new(id)
-            .debug_selector(move || selector.clone())
-            .label(effective.as_str())
-            .ghost()
-            .small()
-            .on_click(cx.listener(|view, event: &gpui::ClickEvent, _, cx| {
-                view.open_language_selector(event.position(), cx);
-            }))
+        Some(
+            Button::new(id)
+                .debug_selector(move || selector.clone())
+                .label(effective.as_str())
+                .ghost()
+                .small()
+                .on_click(cx.listener(|view, event: &gpui::ClickEvent, _, cx| {
+                    view.open_language_selector(event.position(), cx);
+                })),
+        )
     }
 
     fn wrap_button(&self, cx: &mut Context<'_, Self>) -> impl gpui::IntoElement + use<> {
@@ -1924,7 +1969,7 @@ impl Render for DocumentTextView {
                     .border_t_1()
                     .border_color(cx.theme().border)
                     .child(wrap_button)
-                    .child(language_selector),
+                    .children(language_selector),
             )
             .children(
                 system_open

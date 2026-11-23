@@ -995,6 +995,31 @@ fn document_open_candidate_binds_layout_and_shared_record_atomically() {
 }
 
 #[test]
+fn markdown_first_open_uses_markdown_view_without_splitting_identity() {
+    let original = empty_snapshot();
+    let id = document_id(DOCUMENT_A);
+    let (_, view) = original
+        .with_opened_document(
+            project_id(PROJECT_A),
+            group_id(GROUP_A),
+            id,
+            document_location("D:/work/a/README.md"),
+        )
+        .unwrap();
+    assert!(matches!(view, ViewKey::Markdown { document_id, .. } if document_id == id));
+
+    let (_, view) = original
+        .with_opened_document(
+            project_id(PROJECT_A),
+            group_id(GROUP_A),
+            id,
+            document_location("D:/work/a/README.markdown"),
+        )
+        .unwrap();
+    assert!(matches!(view, ViewKey::Markdown { document_id, .. } if document_id == id));
+}
+
+#[test]
 fn document_open_reuses_shared_record_and_project_removal_retains_external_reference() {
     let mut registry = ProjectRegistry::new();
     for (project, root) in [(PROJECT_A, "D:/work/a"), (PROJECT_B, "D:/work/b")] {

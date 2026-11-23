@@ -27,7 +27,10 @@ impl SystemLinkOpen for SystemLinkOpener {
 pub(crate) enum MarkdownLinkOutcome {
     Anchor(Option<BlockId>),
     System,
-    Local(crate::app_shell::documents::ResolvedDocument),
+    Local {
+        document: crate::app_shell::documents::ResolvedDocument,
+        fragment: Option<String>,
+    },
     Rejected,
 }
 
@@ -93,7 +96,13 @@ impl MarkdownLinkDispatcher {
                 DocumentOpenError::Unauthorized => MarkdownResourceError::Unauthorized,
                 DocumentOpenError::Io(_) => MarkdownResourceError::Read,
             })?;
-        Ok(MarkdownLinkOutcome::Local(resolved))
+        Ok(MarkdownLinkOutcome::Local {
+            document: resolved,
+            fragment: url
+                .split_once('#')
+                .map(|(_, fragment)| fragment.to_owned())
+                .filter(|fragment| !fragment.is_empty()),
+        })
     }
 }
 
@@ -209,7 +218,10 @@ mod tests {
         let outcome = dispatcher
             .dispatch(&document_location, &document.links()[0], &[], 0)
             .unwrap();
-        let MarkdownLinkOutcome::Local(resolved) = outcome else {
+        let MarkdownLinkOutcome::Local {
+            document: resolved, ..
+        } = outcome
+        else {
             panic!("本地链接必须产生统一文件打开候选")
         };
         assert_eq!(resolved.location().canonical_path(), &canonical(&target));

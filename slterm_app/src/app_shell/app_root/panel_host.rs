@@ -3,7 +3,7 @@
 use gpui::{App, Entity, FocusHandle, Focusable as _, Subscription};
 use slterm_workspace::{PanelId, ViewKey};
 
-use crate::app_shell::file_editor::TextFileView;
+use crate::app_shell::markdown::MarkdownView;
 use crate::app_shell::text_view::{DocumentTextView, PagedTextView};
 use crate::gpui_terminal::view::TerminalView;
 
@@ -23,10 +23,24 @@ impl EditorContent {
     }
 }
 
+pub(crate) struct MarkdownContent {
+    pub(crate) view: Entity<MarkdownView>,
+    _save_subscription: Subscription,
+}
+
+impl MarkdownContent {
+    pub(crate) fn new(view: Entity<MarkdownView>, save_subscription: Subscription) -> Self {
+        Self {
+            view,
+            _save_subscription: save_subscription,
+        }
+    }
+}
+
 pub(crate) enum PanelContent {
     Terminal(Entity<TerminalView>),
     Editor(EditorContent),
-    Markdown(Entity<TextFileView>),
+    Markdown(MarkdownContent),
     Paged(Entity<PagedTextView>),
     Recovery(Entity<DocumentRecoveryView>),
 }
@@ -53,9 +67,10 @@ impl PanelHost {
         }
     }
 
-    pub(crate) fn markdown(&self) -> Option<&Entity<TextFileView>> {
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn markdown(&self) -> Option<&Entity<MarkdownView>> {
         match &self.content {
-            PanelContent::Markdown(markdown) => Some(markdown),
+            PanelContent::Markdown(markdown) => Some(&markdown.view),
             _ => None,
         }
     }
@@ -64,7 +79,7 @@ impl PanelHost {
         match &self.content {
             PanelContent::Terminal(terminal) => terminal.read(cx).focus_handle.clone(),
             PanelContent::Editor(editor) => editor.view.read(cx).focus_handle(cx),
-            PanelContent::Markdown(markdown) => markdown.read(cx).focus_handle(cx),
+            PanelContent::Markdown(markdown) => markdown.view.read(cx).focus_handle(cx),
             PanelContent::Paged(paged) => paged.read(cx).focus_handle(cx),
             PanelContent::Recovery(recovery) => recovery.read(cx).focus_handle.clone(),
         }

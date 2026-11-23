@@ -94,11 +94,7 @@ clap = { version = "=4.6.7", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 # 屏幕规则正则:逐规则编译一次进缓存,detect 热路径只跑匹配。
-# 文档图片 URL 重写(预览)同样复用该正则栈。
 regex = "1"
-# Markdown mdast 解析(编辑器内核:Outline/Projection/块结构单源)。
-# 版本与上游固定基线逐字一致,AST 语义(含 math_flow)才可照抄。
-markdown = "=1.0.0"
 # Markdown 实体解码(Projection 可见文本 ↔ 源码 span 双向映射;数学引擎的
 # 传输层实体解码共用同一实现)。
 html-escape = "0.2.14"
@@ -157,6 +153,8 @@ data-url = "=0.3.2"
 winreg = "0.56"
 
 [dev-dependencies]
+# 数学语料与生产 Markdown 共用同一锁定 Comrak 解析器。
+comrak = "=0.57.0"
 # 审计事件格式断言:测试内作用域订阅器只开 fmt 层,
 # 不引入全局 subscriber(生产仍走 tracing→log 单栈桥接)。
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }

@@ -1082,7 +1082,7 @@ fn open_watched_markdown(
     Entity<AppRoot>,
     VisualTestContext,
     slterm_document::DocumentId,
-    Entity<crate::app_shell::file_editor::TextFileView>,
+    Entity<crate::app_shell::markdown::MarkdownView>,
     std::path::PathBuf,
     std::path::PathBuf,
 ) {
@@ -1106,26 +1106,11 @@ fn open_watched_markdown(
             CanonicalPath::new(dunce::canonicalize(&project).unwrap()).unwrap(),
         )
         .unwrap();
-    let mut project_snapshot = ProjectSnapshot::restore(projects, Vec::new())
+    let project_snapshot = ProjectSnapshot::restore(projects, Vec::new())
         .unwrap()
         .with_opened_document(project_id(PROJECT_A), group_id(GROUP_A), document, location)
         .unwrap()
         .0;
-    let editor = ViewKey::Editor {
-        project_id: project_id(PROJECT_A),
-        document_id: document,
-    };
-    let markdown = ViewKey::Markdown {
-        project_id: project_id(PROJECT_A),
-        document_id: document,
-    };
-    let layout = project_snapshot
-        .registry_mut()
-        .layout_mut(project_id(PROJECT_A))
-        .unwrap();
-    layout.insert_view(group_id(GROUP_A), markdown.clone()).unwrap();
-    layout.close_view(&editor).unwrap();
-    project_snapshot.validate().unwrap();
     WorkspaceDatabase::open(&paths)
         .unwrap()
         .save_project_snapshot(&project_snapshot)
@@ -1140,7 +1125,7 @@ fn open_watched_markdown(
             .panels
             .values()
             .find_map(|panel| match &panel.content {
-                super::super::panel_host::PanelContent::Markdown(view) => Some(view.clone()),
+                super::super::panel_host::PanelContent::Markdown(view) => Some(view.view.clone()),
                 _ => None,
             })
             .unwrap()
@@ -1156,10 +1141,10 @@ fn open_watched_markdown(
 }
 
 fn edit_markdown_draft(
-    view: &Entity<crate::app_shell::file_editor::TextFileView>,
+    view: &Entity<crate::app_shell::markdown::MarkdownView>,
     window: &mut VisualTestContext,
 ) {
-    let input = view.read_with(window, |view, _| view.input_for_test());
+    let input = view.read_with(window, |view, _| view.source_for_test());
     window.update(|window, cx| {
         input.update(cx, |input, cx| {
             gpui::EntityInputHandler::replace_text_in_range(
@@ -1174,6 +1159,46 @@ fn edit_markdown_draft(
 }
 
 #[gpui::test]
+fn markdown_shared_document_autosave(cx: &mut TestAppContext) {
+    let (_temp, root, mut window, document, view, source, _target) = open_watched_markdown(cx);
+    cx.update(|cx| {
+        cx.set_global(crate::app_shell::config::Settings {
+            document_autosave: true,
+            ..crate::app_shell::config::Settings::default()
+        });
+    });
+    edit_markdown_draft(&view, &mut window);
+    assert_eq!(std::fs::read_to_string(&source).unwrap(), "old\n");
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while root.read_with(cx, |root, _| root.documents.session(document).unwrap().is_dirty()) {
+        window.executor().advance_clock(std::time::Duration::from_millis(121));
+        window.run_until_parked();
+        assert!(std::time::Instant::now() < deadline, "Markdown 共享 Document 未自动保存");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(std::fs::read_to_string(&source).unwrap(), "local old\n");
+}
+
+#[gpui::test]
+fn markdown_mode_toggle_uses_shared_draft_without_disk_reload(cx: &mut TestAppContext) {
+    let (_temp, _root, mut window, _document, view, source, _target) = open_watched_markdown(cx);
+    window.update(|window, cx| {
+        view.update(cx, |view, cx| view.toggle_mode_for_test(window, cx));
+    });
+    edit_markdown_draft(&view, &mut window);
+    window.update(|window, cx| {
+        view.update(cx, |view, cx| view.toggle_mode_for_test(window, cx));
+    });
+    window.run_until_parked();
+
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.rendered_text_for_test(), "local old");
+    });
+    assert_eq!(std::fs::read_to_string(&source).unwrap(), "old\n");
+}
+
+#[gpui::test]
 fn dirty_markdown_external_growth_preserves_draft_and_panel(cx: &mut TestAppContext) {
     let (_temp, root, mut window, document, view, source, target) = open_watched_markdown(cx);
     let panel = root.read_with(cx, |root, cx| {
@@ -1182,13 +1207,13 @@ fn dirty_markdown_external_growth_preserves_draft_and_panel(cx: &mut TestAppCont
             .panels
             .values()
             .find_map(|panel| {
-                matches!(&panel.content, super::super::panel_host::PanelContent::Markdown(current) if current == &view)
+                matches!(&panel.content, super::super::panel_host::PanelContent::Markdown(current) if current.view == view)
                     .then_some(panel.id)
             })
             .unwrap()
     });
     edit_markdown_draft(&view, &mut window);
-    assert!(view.read_with(cx, |view, _| view.is_dirty()));
+    assert!(root.read_with(cx, |root, _| root.documents.session(document).unwrap().is_dirty()));
 
     std::fs::rename(&source, &target).unwrap();
     let mut bytes = b"outside\n".to_vec();
@@ -1215,7 +1240,7 @@ fn dirty_markdown_external_growth_preserves_draft_and_panel(cx: &mut TestAppCont
     assert!(root.read_with(cx, |root, cx| {
         matches!(
             root.projects[&project_id(PROJECT_A)].read(cx).panels[&panel].content,
-            super::super::panel_host::PanelContent::Markdown(ref current) if current == &view
+            super::super::panel_host::PanelContent::Markdown(ref current) if current.view == view
         )
     }));
     assert_eq!(
@@ -1271,7 +1296,7 @@ fn clean_markdown_external_growth_switches_to_paged_without_changing_view(
 }
 
 #[gpui::test]
-fn markdown_native_save_defers_external_relocation_without_losing_draft(
+fn markdown_shared_save_defers_external_relocation_without_losing_text(
     cx: &mut TestAppContext,
 ) {
     use crate::platform::document_paths::{DocumentPathResolver as _, SystemDocumentPathResolver};
@@ -1279,9 +1304,9 @@ fn markdown_native_save_defers_external_relocation_without_losing_draft(
     let (_temp, root, mut window, document, view, source, target) = open_watched_markdown(cx);
     edit_markdown_draft(&view, &mut window);
     window.update(|_, cx| {
-        view.update(cx, |view, cx| view.save(cx).detach());
+        root.update(cx, |root, cx| root.save_document(document, cx));
     });
-    assert!(view.read_with(cx, |view, _| view.has_pending_io()));
+    assert!(root.read_with(cx, |root, _| root.documents.session(document).unwrap().is_saving()));
     let request = root.read_with(cx, |root, _| {
         root.documents.external_request(document, 0).unwrap()
     });
@@ -1318,5 +1343,5 @@ fn markdown_native_save_defers_external_relocation_without_losing_draft(
         view.read_with(cx, |view, cx| view.input_text_for_test(cx)),
         "local old\n"
     );
-    assert!(view.read_with(cx, |view, _| view.is_dirty()));
+    assert!(root.read_with(cx, |root, _| root.documents.session(document).unwrap().is_dirty()));
 }

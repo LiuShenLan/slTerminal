@@ -275,6 +275,14 @@ impl ProjectSnapshot {
             project_id,
             document_id,
         };
+        let initial = if slterm_document::LanguageRegistry::new()
+            .for_path(location.canonical_path().as_path())
+            == Some(slterm_document::LanguageId::Markdown)
+        {
+            alternate.clone()
+        } else {
+            preferred.clone()
+        };
         let mut candidate = self.clone();
         candidate.documents.insert(document_id, location);
         let layout = candidate
@@ -288,13 +296,13 @@ impl ProjectSnapshot {
                     .is_some_and(|group| group.views().contains(view))
             })
         };
-        // 普通打开复用同项目既有 Editor／Markdown；Diff／GitShow 身份独立。
+        // 普通打开复用同项目既有 Editor／Markdown；首开形态由语言注册表决定。
         let view = if contains(&preferred) {
             preferred
         } else if contains(&alternate) {
             alternate
         } else {
-            preferred
+            initial
         };
         if let Some(group_id) = layout.group_ids().into_iter().find(|group_id| {
             layout

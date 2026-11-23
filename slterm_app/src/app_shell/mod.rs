@@ -50,7 +50,7 @@ pub(crate) mod editor_theme;
 // 文件树拖放载荷 + 独立幽灵预览。
 #[allow(dead_code)] // 生产消费归文件与 Git 阶段。
 pub(crate) mod file_drop;
-// 文本文件视图骨架(只读视图与编辑内核)。
+// Document 真实 I/O、统一保存与 Git 行标端口。
 #[allow(dead_code)] // 生产消费归 Document 与文本视图阶段。
 pub(crate) mod file_editor;
 // Document 专用文本视图与 Unicode/IME 坐标。
@@ -628,6 +628,7 @@ fn init(cx: &mut App) {
     cx.set_global(settings);
     theme::apply_dark_theme(cx);
     text_view::init(cx);
+    markdown::init(cx);
     crate::gpui_terminal::init(cx);
     app_root::keymap::register(cx);
 }

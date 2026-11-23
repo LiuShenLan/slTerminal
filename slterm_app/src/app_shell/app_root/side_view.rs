@@ -17,7 +17,7 @@ use slterm_workspace::{
 
 use super::side_view_host::{SideViewControl, SideViewHost};
 use crate::app_shell::text_view::{
-    EditorViewState, EditorViewStateStore, document_view_state_schemas,
+    EditorViewState, EditorViewStateStore, MarkdownViewState, document_view_state_schemas,
 };
 use crate::persistence::workspace_writer::{WorkspaceWriterClient, WorkspaceWriterError};
 
@@ -107,27 +107,43 @@ impl AppRootPersistence {
                 log::warn!("could not restore project snapshot: {error}");
             }
         }
-        let editor_keys = persistence
+        let document_keys = persistence
             .recovered_project_snapshot
             .as_ref()
             .into_iter()
             .flat_map(|snapshot| snapshot.registry().projects())
             .flat_map(|project| project.layout().view_keys())
-            .filter(|key| matches!(key, slterm_workspace::ViewKey::Editor { .. }))
+            .filter(|key| {
+                matches!(
+                    key,
+                    slterm_workspace::ViewKey::Editor { .. }
+                        | slterm_workspace::ViewKey::Markdown { .. }
+                )
+            })
             .collect::<Vec<_>>();
-        for key in editor_keys {
+        for key in document_keys {
             match store.view_state(&key, &persistence.registry) {
                 Ok(Some(stored)) => {
-                    match serde_json::from_value::<EditorViewState>(stored.state.into_state()) {
-                        Ok(state) => persistence.editor_views.restore(key, state),
-                        Err(error) => {
-                            log::warn!("could not decode Editor ViewState: {error}");
+                    let state = stored.state.into_state();
+                    if matches!(key, slterm_workspace::ViewKey::Markdown { .. }) {
+                        match serde_json::from_value::<MarkdownViewState>(state) {
+                            Ok(state) => persistence.editor_views.restore_markdown(key, state),
+                            Err(error) => {
+                                log::warn!("could not decode Markdown ViewState: {error}");
+                            }
+                        }
+                    } else {
+                        match serde_json::from_value::<EditorViewState>(state) {
+                            Ok(state) => persistence.editor_views.restore(key, state),
+                            Err(error) => {
+                                log::warn!("could not decode Editor ViewState: {error}");
+                            }
                         }
                     }
                 }
                 Ok(None) => {}
                 Err(error) => {
-                    log::warn!("could not restore Editor ViewState: {error}");
+                    log::warn!("could not restore Document ViewState: {error}");
                 }
             }
         }

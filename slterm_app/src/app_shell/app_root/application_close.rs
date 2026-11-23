@@ -1,6 +1,7 @@
 //! 应用退出的局部关闭段：登记意图、停止全部会话、提交清理完成。
 
-use gpui::{Context, Window};
+use gpui::{App, Context, Window};
+use slterm_document::DocumentId;
 use slterm_workspace::{
     CloseAttempt, CloseCoordinator, CloseDecision, CloseEffect, CloseIntent, CloseObject,
     ClosePhase, CloseScope, CloseStage, CloseTarget,
@@ -20,6 +21,7 @@ pub(super) struct ApplicationClose {
     pub(super) persisted: PersistedCloseIntent,
     pub(super) stop_observation: Option<PtyStopObservation>,
     pub(super) outcome_unknown: bool,
+    pub(super) needs_recollect: bool,
     pub(super) window: gpui::AnyWindowHandle,
 }
 
@@ -76,8 +78,13 @@ impl AppRoot {
             log::warn!("application close rejected without current store epoch");
             return false;
         };
+        if self.has_inflight_document_work() {
+            self.pending_application_close = Some(window.window_handle());
+            self.close_in_progress = true;
+            return false;
+        }
         let scope = CloseScope::ApplicationExit;
-        let objects = self
+        let mut objects = self
             .snapshot
             .terminals()
             .map(|terminal| CloseObject {
@@ -86,6 +93,24 @@ impl AppRoot {
                 decision: CloseDecision::NotRequired,
             })
             .collect::<Vec<_>>();
+        let documents = match self.collect_application_documents(Default::default(), cx) {
+            Ok(documents) => documents,
+            Err(error) => {
+                log::warn!("application close requires document decisions: {error}");
+                let count = self
+                    .documents
+                    .ids()
+                    .filter(|id| {
+                        self.documents
+                            .session(*id)
+                            .is_some_and(|session| session.is_dirty())
+                    })
+                    .count();
+                super::events::notify_application_close_decision_required(count, cx);
+                return false;
+            }
+        };
+        objects.extend(documents);
         let close_id = uuid::Uuid::now_v7().to_string();
         let fingerprint = close_fingerprint(&close_id, &scope, &store_epoch, &objects);
         let intent = match CloseIntent::new(objects, fingerprint) {
@@ -117,6 +142,7 @@ impl AppRoot {
             persisted: registration,
             stop_observation: None,
             outcome_unknown: false,
+            needs_recollect: false,
             window: window.window_handle(),
         });
         self.close_in_progress = true;
@@ -134,11 +160,178 @@ impl AppRoot {
             super::events::notify_workspace_write_failed(cx);
             return false;
         }
-        self.start_application_commit(writer, snapshot, cx);
+        if self
+            .application_close
+            .as_ref()
+            .is_some_and(|close| close.coordinator.phase() == ClosePhase::Running(CloseStage::Save))
+        {
+            self.start_application_save(cx);
+        } else {
+            self.start_application_commit(writer, snapshot, cx);
+        }
         false
     }
 
+    fn has_inflight_document_work(&self) -> bool {
+        self.documents.ids().any(|id| {
+            self.tasks.is_registered(TaskId::DocumentSave(id))
+                || self.tasks.is_registered(TaskId::DocumentExternal(id))
+        }) || !self.pending_document_relocations.is_empty()
+            || !self.pending_document_refreshes.is_empty()
+    }
+
+    pub(super) fn resume_pending_application_close(&mut self, cx: &mut Context<'_, Self>) {
+        let Some(window) = self.pending_application_close else {
+            return;
+        };
+        if self.has_inflight_document_work() {
+            return;
+        }
+        self.pending_application_close = None;
+        self.close_in_progress = false;
+        let root = cx.entity().downgrade();
+        cx.defer(move |cx| {
+            let _ = window.update(cx, |_, window, cx| {
+                let _ = root.update(cx, |root, cx| {
+                    root.start_application_close(window, cx);
+                });
+            });
+        });
+    }
+
+    fn collect_application_documents(
+        &mut self,
+        mut decisions: std::collections::BTreeMap<DocumentId, CloseDecision>,
+        cx: &App,
+    ) -> Result<Vec<CloseObject<CloseTarget>>, slterm_workspace::DocumentCloseError> {
+        decisions.retain(|id, _| {
+            self.documents
+                .session(*id)
+                .is_some_and(|session| session.is_dirty())
+        });
+        self.sync_document_autosave_enabled(cx);
+        for id in self.document_autosave.on_exit(&self.documents) {
+            decisions.entry(id).or_insert(CloseDecision::Save);
+        }
+        let closing = self
+            .snapshot
+            .registry()
+            .projects()
+            .iter()
+            .flat_map(|project| project.layout().view_keys())
+            .collect::<Vec<_>>();
+        slterm_workspace::collect_document_close(
+            &self.snapshot,
+            &self.documents,
+            &closing,
+            &decisions,
+        )
+    }
+
+    fn recollect_application_close(&mut self, cx: &mut Context<'_, Self>) -> bool {
+        let Some((attempt, close_id, store_epoch, old_intent)) =
+            self.application_close.as_mut().and_then(|close| {
+                let CloseEffect::Collect { attempt } = close.coordinator.recollect().ok()? else {
+                    unreachable!()
+                };
+                Some((
+                    attempt,
+                    close.persisted.close_id.clone(),
+                    close.persisted.store_epoch.clone(),
+                    close.coordinator.intent()?.clone(),
+                ))
+            })
+        else {
+            return false;
+        };
+        let mut objects = self
+            .snapshot
+            .terminals()
+            .map(|terminal| CloseObject {
+                id: CloseTarget::Terminal(terminal.id()),
+                generation: self.snapshot_generation,
+                decision: CloseDecision::NotRequired,
+            })
+            .collect::<Vec<_>>();
+        let decisions = old_intent
+            .objects()
+            .filter_map(|object| match object.id {
+                CloseTarget::Document(id)
+                    if matches!(
+                        object.decision,
+                        CloseDecision::Save | CloseDecision::Discard
+                    ) =>
+                {
+                    Some((id, object.decision))
+                }
+                _ => None,
+            })
+            .collect();
+        let documents = match self.collect_application_documents(decisions, cx) {
+            Ok(documents) => documents,
+            Err(error) => {
+                if let Some(close) = self.application_close.as_mut() {
+                    let _ = close.coordinator.fail(attempt);
+                }
+                log::warn!("application close recollect requires document decisions: {error}");
+                let count = self
+                    .documents
+                    .ids()
+                    .filter(|id| {
+                        self.documents
+                            .session(*id)
+                            .is_some_and(|session| session.is_dirty())
+                    })
+                    .count();
+                super::events::notify_application_close_decision_required(count, cx);
+                return false;
+            }
+        };
+        objects.extend(documents);
+        let fingerprint = close_fingerprint(
+            &close_id,
+            &CloseScope::ApplicationExit,
+            &store_epoch,
+            &objects,
+        );
+        let intent = match CloseIntent::new(objects, fingerprint) {
+            Ok(intent) => intent,
+            Err(_) => {
+                if let Some(close) = self.application_close.as_mut() {
+                    let _ = close.coordinator.fail(attempt);
+                }
+                return false;
+            }
+        };
+        let Some(close) = self.application_close.as_mut() else {
+            return false;
+        };
+        if close
+            .coordinator
+            .collected(attempt, intent.clone())
+            .is_err()
+        {
+            let _ = close.coordinator.fail(attempt);
+            return false;
+        }
+        close.persisted.intent = intent;
+        close.needs_recollect = false;
+        true
+    }
+
     fn retry_application_close(&mut self, cx: &mut Context<'_, Self>) {
+        if self
+            .application_close
+            .as_ref()
+            .is_some_and(|close| close.needs_recollect)
+            && !self.recollect_application_close(cx)
+        {
+            self.application_close = None;
+            self.close_in_progress = false;
+            self.side_view_persistence
+                .resume_checkpoint_for_close_retry(&self.side_views, cx);
+            return;
+        }
         let Some(close) = self.application_close.as_mut() else {
             return;
         };
@@ -252,6 +445,7 @@ impl AppRoot {
             return;
         };
         match close.coordinator.phase() {
+            ClosePhase::Running(CloseStage::Save) => self.start_application_save(cx),
             ClosePhase::Running(CloseStage::StopPty) => {
                 if close.stop_observation.is_some() {
                     self.start_application_advance(CloseCommitStatus::PtyStopped, cx);
@@ -281,6 +475,120 @@ impl AppRoot {
             }
             _ => {}
         }
+    }
+
+    fn start_application_save(&mut self, cx: &mut Context<'_, Self>) {
+        if self.tasks.is_registered(TaskId::CloseFlush) {
+            return;
+        }
+        let Some((attempt, intent)) = self.application_close.as_ref().and_then(|close| {
+            Some((
+                close.coordinator.current_attempt()?,
+                close.coordinator.intent()?.clone(),
+            ))
+        }) else {
+            return;
+        };
+        let grants = self.document_close_grants(&intent);
+        let prepared = crate::app_shell::document_close::prepare_document_save_stage(
+            &mut self.documents,
+            &intent,
+            &grants,
+            0,
+        );
+        let pending = prepared
+            .requests
+            .iter()
+            .map(|request| (request.document_id(), request.save_generation()))
+            .collect::<Vec<_>>();
+        let executor = cx.background_executor().clone();
+        let registration =
+            self.tasks
+                .register_with(TaskId::CloseFlush, CancellationToken::new(), move || {
+                    let save = executor.spawn(async move {
+                        let writes = crate::app_shell::document_close::execute_document_save_writes(
+                            prepared.requests,
+                            &grants,
+                            0,
+                        );
+                        (prepared.failures, writes)
+                    });
+                    cx.spawn(async move |this, cx| {
+                        let (failures, writes) = save.await;
+                        let _ = this.update(cx, |root, cx| {
+                            root.finish_application_save(attempt, failures, writes, cx);
+                        });
+                    })
+                });
+        if registration.is_err() {
+            for (id, generation) in pending {
+                let _ = self.documents.fail_save(id, generation);
+            }
+            self.fail_application_close_unknown(attempt);
+        }
+    }
+
+    fn finish_application_save(
+        &mut self,
+        attempt: CloseAttempt,
+        failures: Vec<crate::app_shell::document_close::DocumentSaveFailure>,
+        writes: Vec<crate::app_shell::document_close::DocumentSaveWriteOutcome>,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(close) = self.application_close.as_ref() else {
+            return;
+        };
+        if close.coordinator.current_attempt() != Some(attempt) {
+            return;
+        }
+        let intent = close.coordinator.intent().cloned();
+        let result = crate::app_shell::document_close::complete_document_save_stage(
+            &mut self.documents,
+            failures,
+            writes,
+        )
+        .and_then(|()| {
+            intent.as_ref().map_or(Ok(()), |intent| {
+                crate::app_shell::document_close::validate_document_close_generations(
+                    &self.documents,
+                    intent,
+                )
+            })
+        });
+        self.tasks.complete(TaskId::CloseFlush);
+        if let Err(failures) = result {
+            if let Some(close) = self.application_close.as_mut() {
+                close.needs_recollect |= failures
+                    .iter()
+                    .any(|failure| failure.is_revision_mismatch());
+                let _ = close.coordinator.fail(attempt);
+            }
+            self.close_in_progress = false;
+            self.side_view_persistence
+                .resume_checkpoint_for_close_retry(&self.side_views, cx);
+            log::warn!("应用退出前的 Document 保存失败: {} 项", failures.len());
+            super::events::notify_document_save_error(
+                &crate::text_document::SaveError::Io(std::io::Error::other(
+                    "应用退出前的文档保存失败",
+                )),
+                cx,
+            );
+            cx.notify();
+            return;
+        }
+        let Some(close) = self.application_close.as_mut() else {
+            return;
+        };
+        if close.coordinator.save_succeeded(attempt).is_err() {
+            self.fail_application_close_unknown(attempt);
+            return;
+        }
+        let Some(writer) = self.project_writer.clone() else {
+            self.fail_application_close_unknown(attempt);
+            return;
+        };
+        let snapshot = self.snapshot.clone();
+        self.start_application_commit(writer, snapshot, cx);
     }
 
     fn start_application_stop(&mut self, cx: &mut Context<'_, Self>) {

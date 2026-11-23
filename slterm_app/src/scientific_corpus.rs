@@ -5,7 +5,8 @@
 
 use std::path::PathBuf;
 
-use markdown::mdast::Node;
+use comrak::nodes::{AstNode, NodeValue};
+use comrak::{Arena, Options};
 
 use crate::math::cache::{FormulaCacheKey, LAYOUT_CACHE_BUDGET, MathLayoutCache};
 use crate::math::layout::MathLayout;
@@ -44,65 +45,132 @@ pub(crate) fn read_document(name: &str) -> String {
 }
 
 pub(crate) fn cases(source: &str) -> Vec<Case> {
-    let mut options = markdown::ParseOptions::gfm();
-    options.constructs.math_flow = true;
-    options.constructs.math_text = true;
-    let tree = markdown::to_mdast(source, &options).expect("valid Markdown corpus");
+    let mut events = fixture_events(source);
+    let arena = Arena::new();
+    let mut options = Options::default();
+    options.extension.math_dollars = true;
+    let root = comrak::parse_document(&arena, source, &options);
+    collect_inline_math(root, &mut events);
+    events.sort_by_key(|event| event.line());
     let mut output = Vec::new();
     let mut expectation = (false, false);
-    collect(&tree, &mut expectation, &mut output);
+    for event in events {
+        match event {
+            CorpusEvent::Mark(_, next) => {
+                assert_eq!(expectation, (false, false), "unconsumed expectation marker");
+                expectation = next;
+            }
+            CorpusEvent::Clear(_) => expectation = (false, false),
+            CorpusEvent::Math {
+                source,
+                display,
+                line,
+            } => {
+                output.push(Case {
+                    source,
+                    display,
+                    fallback: expectation.0,
+                    preserve: expectation.1,
+                    line,
+                });
+                expectation = (false, false);
+            }
+        }
+    }
     assert_eq!(expectation, (false, false), "orphan corpus expectation");
     output
 }
 
-fn collect(node: &Node, expectation: &mut (bool, bool), output: &mut Vec<Case>) {
-    // 化学/生物条目已裁：smiles 代码块不再产出用例，但它可能携带期望标记，
-    // 必须在下一个数学用例前消费掉，避免标记串位。
-    if let Node::Code(code) = node
-        && code
-            .lang
-            .as_deref()
-            .is_some_and(|lang| lang.eq_ignore_ascii_case("smiles"))
-    {
-        *expectation = (false, false);
-        return;
+enum CorpusEvent {
+    Mark(usize, (bool, bool)),
+    Clear(usize),
+    Math {
+        source: String,
+        display: bool,
+        line: usize,
+    },
+}
+
+impl CorpusEvent {
+    const fn line(&self) -> usize {
+        match self {
+            Self::Math { line, .. } | Self::Mark(line, _) | Self::Clear(line) => *line,
+        }
     }
-    let content = match node {
-        Node::Html(html) if html.value.trim() == "<!-- slterm-test: source-fallback -->" => {
-            assert_eq!(
-                *expectation,
-                (false, false),
-                "unconsumed expectation marker"
-            );
-            *expectation = (true, false);
-            return;
+}
+
+/// 夹具允许块级公式含空行；这只恢复上游数学输入，不参与生产 Markdown 语义。
+fn fixture_events(source: &str) -> Vec<CorpusEvent> {
+    let lines = source.lines().collect::<Vec<_>>();
+    let mut events = Vec::new();
+    let mut index = 0;
+    while index < lines.len() {
+        let line = lines[index].trim();
+        match line {
+            "<!-- slterm-test: source-fallback -->" => {
+                events.push(CorpusEvent::Mark(index + 1, (true, false)));
+            }
+            "<!-- slterm-test: preserve-source -->" => {
+                events.push(CorpusEvent::Mark(index + 1, (false, true)));
+            }
+            _ => {}
         }
-        Node::Html(html) if html.value.trim() == "<!-- slterm-test: preserve-source -->" => {
-            assert_eq!(
-                *expectation,
-                (false, false),
-                "unconsumed expectation marker"
-            );
-            *expectation = (false, true);
-            return;
+        if let Some(fence) = line.strip_prefix("```") {
+            let clear = fence
+                .split_whitespace()
+                .next()
+                .is_some_and(|language| language.eq_ignore_ascii_case("smiles"));
+            let mut end = index + 1;
+            while end < lines.len() && lines[end].trim() != "```" {
+                end += 1;
+            }
+            assert!(end < lines.len(), "unclosed fixture code fence");
+            if clear {
+                events.push(CorpusEvent::Clear(index + 1));
+            }
+            index = end + 1;
+            continue;
         }
-        Node::Math(math) => Some((&math.value, true)),
-        Node::InlineMath(math) => Some((&math.value, false)),
+        if line == "$$" || (line.starts_with("$$") && line.ends_with("$$") && line.len() > 4) {
+            let (content, end) = if line == "$$" {
+                let mut end = index + 1;
+                while end < lines.len() && lines[end].trim() != "$$" {
+                    end += 1;
+                }
+                assert!(end < lines.len(), "unclosed fixture display math");
+                (lines[index + 1..end].join("\n"), end)
+            } else {
+                (line[2..line.len() - 2].to_owned(), index)
+            };
+            events.push(CorpusEvent::Math {
+                source: content,
+                display: true,
+                line: index + 1,
+            });
+            index = end + 1;
+            continue;
+        }
+        index += 1;
+    }
+    events
+}
+
+fn collect_inline_math<'a>(node: &'a AstNode<'a>, events: &mut Vec<CorpusEvent>) {
+    let data = node.data.borrow();
+    let math = match &data.value {
+        NodeValue::Math(math) if !math.display_math => Some(CorpusEvent::Math {
+            source: math.literal.clone(),
+            display: false,
+            line: data.sourcepos.start.line,
+        }),
         _ => None,
     };
-    if let Some((source, display)) = content {
-        output.push(Case {
-            source: source.clone(),
-            display,
-            fallback: expectation.0,
-            preserve: expectation.1,
-            line: node.position().map_or(0, |position| position.start.line),
-        });
-        *expectation = (false, false);
-    } else if let Some(children) = node.children() {
-        for child in children {
-            collect(child, expectation, output);
-        }
+    drop(data);
+    if let Some(math) = math {
+        events.push(math);
+    }
+    for child in node.children() {
+        collect_inline_math(child, events);
     }
 }
 

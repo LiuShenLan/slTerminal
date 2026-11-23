@@ -161,9 +161,6 @@ impl AppRoot {
         if session.is_saving() {
             return;
         }
-        if self.markdown_has_pending_io(document_id, cx) {
-            return;
-        }
         let Some(target) = self.pending_document_relocations.get(&document_id).cloned() else {
             return;
         };
@@ -208,8 +205,7 @@ impl AppRoot {
         }
         self.reconcile_relocation_aliases(document_id);
         self.reconcile_fs_watch();
-        let grants =
-            crate::app_shell::documents::document_project_grants(&self.snapshot, document_id);
+        let grants = self.document_read_grants(document_id);
         let service = self.document_external_service.clone();
         let executor = cx.background_executor().clone();
         let window_handle = window.window_handle();
@@ -293,53 +289,6 @@ impl AppRoot {
         cx.notify();
     }
 
-    fn markdown_has_pending_io(&self, document_id: DocumentId, cx: &App) -> bool {
-        self.projects.values().any(|project| {
-            project.read(cx).panels.values().any(|panel| {
-                matches!(&panel.view_key, slterm_workspace::ViewKey::Markdown { document_id: id, .. } if *id == document_id)
-                    && matches!(&panel.content, PanelContent::Markdown(view) if view.read(cx).has_pending_io())
-            })
-        })
-    }
-
-    /// Markdown 旧宿主仍有独立输入草稿；脏草稿遇外部重载必须转共享冲突。
-    fn protect_markdown_draft(
-        &self,
-        document_id: DocumentId,
-        change: DocumentExternalChange,
-        cx: &App,
-    ) -> DocumentExternalChange {
-        let dirty = self.projects.values().any(|project| {
-            project.read(cx).panels.values().any(|panel| {
-                matches!(&panel.view_key, slterm_workspace::ViewKey::Markdown { document_id: id, .. } if *id == document_id)
-                    && matches!(&panel.content, PanelContent::Markdown(view) if view.read(cx).is_dirty())
-            })
-        });
-        if !dirty {
-            return change;
-        }
-        match change {
-            DocumentExternalChange::Reload {
-                request,
-                content,
-                disk_baseline,
-                location,
-                ..
-            } => {
-                let conflict = match content {
-                    slterm_document::DocumentBody::Editable(_) => {
-                        slterm_document::DocumentConflict::modified(location, disk_baseline)
-                    }
-                    slterm_document::DocumentBody::Paged(_) => {
-                        slterm_document::DocumentConflict::modified_paged(location)
-                    }
-                };
-                DocumentExternalChange::Conflict { request, conflict }
-            }
-            _ => change,
-        }
-    }
-
     pub(super) fn apply_document_external_result(
         &mut self,
         document_id: DocumentId,
@@ -363,16 +312,17 @@ impl AppRoot {
         }
         let DocumentExternalResult { change, paged } = result;
         let change = self.reauthorize_external_change(document_id, change);
-        if self.markdown_has_pending_io(document_id, cx) {
-            if refresh_only {
-                self.pending_document_refreshes.insert(document_id);
-            }
+        if matches!(&change, DocumentExternalChange::Relocated { .. })
+            && self
+                .documents
+                .session(document_id)
+                .is_some_and(|session| session.is_saving())
+        {
             self.pending_document_relocations
                 .entry(document_id)
                 .or_insert(target);
             return;
         }
-        let change = self.protect_markdown_draft(document_id, change, cx);
         let candidate = match &change {
             DocumentExternalChange::Relocated { location, .. }
             | DocumentExternalChange::Reload { location, .. }
@@ -431,7 +381,7 @@ impl AppRoot {
         }
     }
 
-    /// 回投使用最新项目引用计算 grant 并集，发起时的旧授权不能延长读取权。
+    /// 回投复核最新项目与 Document 会话读取授权，发起时的旧授权不能延长读取权。
     pub(super) fn reauthorize_external_change(
         &self,
         document_id: DocumentId,
@@ -451,8 +401,7 @@ impl AppRoot {
         let Some((request, location)) = request_and_location else {
             return change;
         };
-        let grants =
-            crate::app_shell::documents::document_project_grants(&self.snapshot, document_id);
+        let grants = self.document_read_grants(document_id);
         if Self::external_location_authorized(request, location, &grants) {
             change
         } else {
@@ -538,6 +487,9 @@ impl AppRoot {
                             PanelContent::Editor(editor) => {
                                 Some(ExternalPanel::Editor(editor.view.clone()))
                             }
+                            PanelContent::Markdown(view) => {
+                                Some(ExternalPanel::Markdown(view.view.clone()))
+                            }
                             PanelContent::Paged(view) => Some(ExternalPanel::Paged(view.clone())),
                             _ => None,
                         }
@@ -553,7 +505,9 @@ impl AppRoot {
                 ExternalPanel::Paged(view) => {
                     view.update(cx, |view, _| view.renew_view_lease());
                 }
-                ExternalPanel::Markdown(_) => {}
+                ExternalPanel::Markdown(view) => {
+                    view.update(cx, |view, cx| view.renew_view_lease(cx));
+                }
             }
         }
     }
@@ -749,7 +703,7 @@ impl AppRoot {
                                 Some(ExternalPanel::Editor(editor.view.clone()))
                             }
                             PanelContent::Markdown(view) => {
-                                Some(ExternalPanel::Markdown(view.clone()))
+                                Some(ExternalPanel::Markdown(view.view.clone()))
                             }
                             PanelContent::Paged(view) => Some(ExternalPanel::Paged(view.clone())),
                             _ => None,
@@ -779,32 +733,13 @@ impl AppRoot {
                         view.relocate_language(automatic, syntax, cx);
                     });
                 }
-                ExternalPanel::Markdown(view) if outcome == ExternalApplyOutcome::Reloaded => {
-                    let grants = crate::app_shell::documents::document_project_grants(
-                        &self.snapshot,
-                        document_id,
-                    );
-                    let write = (!session.is_read_revoked()).then(|| {
-                        crate::app_shell::file_editor::document::DocumentWriteContext::new(
-                            grants,
-                            0,
-                            0,
-                            Arc::new(crate::platform::document_paths::SystemDocumentPathResolver),
-                        )
-                    });
-                    if let Some(document) =
-                        crate::app_shell::file_editor::document::Document::from_recovered(
-                            &session, write,
-                        )
-                    {
-                        view.update(cx, |view, cx| {
-                            view.apply_external_document(document, window, cx);
-                        });
-                    }
-                }
                 ExternalPanel::Markdown(view) => {
                     view.update(cx, |view, cx| {
-                        view.relocate_document(session.location().clone(), window, cx);
+                        if outcome == ExternalApplyOutcome::Reloaded {
+                            view.apply_snapshot(&session, cx);
+                        } else {
+                            view.relocate(session.location().clone(), cx);
+                        }
                     });
                 }
                 ExternalPanel::Paged(view) => {
@@ -831,6 +766,6 @@ impl AppRoot {
 /// 收集实体后再更新，避免在 ProjectView 不可变读取期间重入可变更新。
 enum ExternalPanel {
     Editor(Entity<crate::app_shell::text_view::DocumentTextView>),
-    Markdown(Entity<crate::app_shell::file_editor::TextFileView>),
+    Markdown(Entity<crate::app_shell::markdown::MarkdownView>),
     Paged(Entity<crate::app_shell::text_view::PagedTextView>),
 }

@@ -1629,10 +1629,43 @@ impl AppRoot {
         self.sync_focus_projection(window, cx);
     }
 
+    fn sync_document_autosave_focus(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        self.sync_document_autosave_enabled(cx);
+        let focused = window.focused(cx).map(|handle| handle.downgrade());
+        let current = self.projects.values().find_map(|project| {
+            project.read(cx).panels.values().find_map(|panel| {
+                let document_id = match panel.view_key {
+                    ViewKey::Editor { document_id, .. }
+                    | ViewKey::Markdown { document_id, .. }
+                    | ViewKey::Diff { document_id, .. } => document_id,
+                    _ => return None,
+                };
+                (Some(panel.focus_handle(cx).downgrade()) == focused)
+                    .then_some((document_id, panel.view_key.clone()))
+            })
+        });
+        if current == self.focused_document_view {
+            return;
+        }
+        if let Some((document_id, view)) = &current {
+            self.document_autosave.on_focus(*document_id, view.clone());
+        }
+        if let Some((document_id, view)) = self.focused_document_view.take() {
+            let ready = self
+                .document_autosave
+                .on_blur(document_id, view, &self.documents);
+            for document_id in ready {
+                self.save_document(document_id, cx);
+            }
+        }
+        self.focused_document_view = current;
+    }
+
     fn sync_focus_projection(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
         if self.close_in_progress || self.application_close.is_some() {
             return;
         }
+        self.sync_document_autosave_focus(window, cx);
         let focused = window.focused(cx).map(|handle| handle.downgrade());
         let Some(project_id) = self.snapshot.registry().active() else {
             return;

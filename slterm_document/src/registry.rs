@@ -141,6 +141,10 @@ impl DocumentRegistry {
         self.sessions.get(&id)
     }
 
+    pub fn ids(&self) -> impl Iterator<Item = DocumentId> + '_ {
+        self.sessions.keys().copied()
+    }
+
     pub(crate) fn session_mut(&mut self, id: DocumentId) -> Option<&mut DocumentSession> {
         self.sessions.get_mut(&id)
     }

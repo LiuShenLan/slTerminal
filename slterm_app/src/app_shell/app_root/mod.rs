@@ -13,6 +13,7 @@ mod focus_manager;
 pub(crate) mod keymap;
 mod language_selector;
 mod layout;
+mod markdown_links;
 mod navigation;
 mod panel_host;
 mod project_close;
@@ -40,7 +41,7 @@ use gpui::{
 };
 use gpui_component::menu::PopupMenu;
 use slterm_document::{DocumentPageCache, DocumentRegistry};
-use slterm_path::CanonicalPath;
+use slterm_path::{CanonicalPath, PathGrant};
 use slterm_workspace::{
     PanelGroupId, PanelId, PanelIdAllocator, ProjectId, ProjectSnapshot, SideViewId,
 };
@@ -174,6 +175,7 @@ pub(crate) struct AppRoot {
     close_in_progress: bool,
     close_completed: bool,
     application_close: Option<application_close::ApplicationClose>,
+    pending_application_close: Option<gpui::AnyWindowHandle>,
     recovery_global_close: Option<application_close::RecoveryGlobalClose>,
     global_close: Option<GlobalCloseClient>,
     terminal_closes: BTreeMap<slterm_workspace::TerminalId, terminal_close::LocalTerminalClose>,
@@ -188,6 +190,9 @@ pub(crate) struct AppRoot {
     project_open_draining: bool,
     panel_ids: PanelIdAllocator,
     documents: DocumentRegistry,
+    document_session_read_grants: BTreeMap<slterm_document::DocumentId, PathGrant>,
+    document_autosave: crate::app_shell::document_autosave::DocumentAutosaveCoordinator,
+    focused_document_view: Option<(slterm_document::DocumentId, slterm_workspace::ViewKey)>,
     terminals: Rc<RefCell<TerminalRegistry>>,
     agents: crate::agent_host::AgentHub,
     paged_documents:
@@ -196,6 +201,7 @@ pub(crate) struct AppRoot {
         (slterm_document::DocumentId, slterm_document::LanguageId),
         Rc<RefCell<crate::app_shell::text_view::DocumentSyntax>>,
     >,
+    markdown_render_services: crate::app_shell::markdown::MarkdownRenderServices,
     page_cache: Rc<RefCell<DocumentPageCache>>,
     system_open: Arc<dyn Fn(CanonicalPath) + Send + Sync>,
     #[allow(dead_code)] // 消费点 = Document 真实后台打开。
@@ -204,6 +210,13 @@ pub(crate) struct AppRoot {
     document_open_active: bool,
     #[allow(dead_code)] // 消费点 = Document 打开请求队列。
     pending_document_opens: VecDeque<documents::DocumentOpenRequest>,
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    test_document_read_hold: Option<CanonicalPath>,
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    held_document_read: Option<(
+        documents::DocumentOpenRequest,
+        crate::app_shell::documents::ResolvedDocument,
+    )>,
     document_external_service: Arc<crate::app_shell::document_external::DocumentExternalService>,
     pending_document_relocations: BTreeMap<slterm_document::DocumentId, CanonicalPath>,
     pending_document_refreshes: std::collections::BTreeSet<slterm_document::DocumentId>,
@@ -355,6 +368,7 @@ impl AppRoot {
             close_in_progress: false,
             close_completed: false,
             application_close: None,
+            pending_application_close: None,
             recovery_global_close: None,
             global_close,
             terminal_closes: BTreeMap::new(),
@@ -369,10 +383,19 @@ impl AppRoot {
             project_open_draining: false,
             panel_ids,
             documents,
+            document_session_read_grants: BTreeMap::new(),
+            document_autosave: cx
+                .try_global::<crate::app_shell::config::Settings>()
+                .map(
+                    crate::app_shell::document_autosave::DocumentAutosaveCoordinator::from_settings,
+                )
+                .unwrap_or_default(),
+            focused_document_view: None,
             terminals: Rc::new(RefCell::new(TerminalRegistry::default())),
             agents: crate::agent_host::AgentHub::new(),
             paged_documents: BTreeMap::new(),
             document_syntax: BTreeMap::new(),
+            markdown_render_services: crate::app_shell::markdown::MarkdownRenderServices::default(),
             page_cache: Rc::new(RefCell::new(DocumentPageCache::new())),
             system_open: Arc::new(|path| {
                 crate::platform::file_operations::open_in_system(path.as_path());
@@ -382,6 +405,10 @@ impl AppRoot {
             ),
             document_open_active: false,
             pending_document_opens: VecDeque::new(),
+            #[cfg(all(test, feature = "gpui-test-support"))]
+            test_document_read_hold: None,
+            #[cfg(all(test, feature = "gpui-test-support"))]
+            held_document_read: None,
             document_external_service: Arc::new(
                 crate::app_shell::document_external::DocumentExternalService::default(),
             ),

@@ -165,6 +165,7 @@ fn paged_painted_lines(
 }
 
 include!("documents/external.rs");
+include!("documents/links.rs");
 
 fn write_recovered_snapshot(
     paths: &AppPaths,
@@ -1360,6 +1361,73 @@ fn editor_view_state_restore(cx: &mut TestAppContext) {
             .document_syntax
             .contains_key(&(document, LanguageId::Python))),
         "重启后必须按覆盖安装真实 Python 语法"
+    );
+    runtime.shutdown(ControlPlaneCleanup::Succeeded).unwrap();
+}
+
+#[gpui::test]
+fn markdown_panel_restores_persistent_reading_state(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    let file = project.join("note.md");
+    let source = "# One\n\nfirst\n\nsecond\n";
+    std::fs::write(&file, source).unwrap();
+    let file = CanonicalPath::new(dunce::canonicalize(&file).unwrap()).unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let (events, _event_rx) = std::sync::mpsc::sync_channel(64);
+    let runtime = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
+    let persistence =
+        AppRootPersistence::load_with_previous_run(&paths, Some(runtime.client()), None);
+    let (root, mut window, _) = open_root_with_persistence(cx, persistence);
+    add_project(&root, &mut window, PROJECT_A, project.to_str().unwrap());
+    open_document(&root, &mut window, PROJECT_A, GROUP_A, file);
+    let markdown = root.read_with(cx, |root, cx| {
+        root.projects[&project_id(PROJECT_A)]
+            .read(cx)
+            .panels
+            .values()
+            .find_map(|panel| panel.markdown().cloned())
+            .unwrap()
+    });
+    window.update(|_, cx| {
+        markdown.update(cx, |view, cx| {
+            view.set_reading_for_test(2, 12);
+            view.toggle_outline_for_test(cx);
+            view.zoom_in_for_test(cx);
+        });
+    });
+    flush_when_ready(&runtime.client());
+
+    window.update(|window, _| window.remove_window());
+    drop(root);
+    drop(window);
+    cx.run_until_parked();
+    flush_when_ready(&runtime.client());
+    let persisted =
+        AppRootPersistence::load_with_previous_run(&paths, Some(runtime.client()), None);
+    let (root, window, _) = open_root_with_persistence(cx, persisted);
+    window.run_until_parked();
+    let markdown = root.read_with(cx, |root, cx| {
+        root.projects[&project_id(PROJECT_A)]
+            .read(cx)
+            .panels
+            .values()
+            .find_map(|panel| panel.markdown().cloned())
+            .unwrap()
+    });
+    let display = markdown.read_with(cx, |view, _| view.display_state_for_test());
+    assert_eq!(
+        display,
+        (
+            crate::app_shell::text_view::MarkdownMode::Render,
+            false,
+            1_100
+        )
+    );
+    assert_eq!(
+        markdown.read_with(cx, |view, _| view.reading_top_for_test()),
+        (2, 12)
     );
     runtime.shutdown(ControlPlaneCleanup::Succeeded).unwrap();
 }

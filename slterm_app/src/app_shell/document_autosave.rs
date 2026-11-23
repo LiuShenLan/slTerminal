@@ -101,9 +101,8 @@ impl DocumentAutosaveCoordinator {
     }
 
     pub(crate) fn on_exit(&self, registry: &DocumentRegistry) -> Vec<DocumentId> {
-        self.activities
-            .keys()
-            .copied()
+        registry
+            .ids()
             .filter(|id| self.eligible(registry, *id))
             .collect()
     }
@@ -127,10 +126,11 @@ impl DocumentAutosaveCoordinator {
         if !self.enabled {
             return false;
         }
-        let Some(activity) = self.activities.get(&id) else {
-            return false;
-        };
-        if activity.failed_revision.is_some() {
+        if self
+            .activities
+            .get(&id)
+            .is_some_and(|activity| activity.failed_revision.is_some())
+        {
             return false;
         }
         registry.session(id).is_some_and(|session| {
@@ -351,6 +351,17 @@ mod tests {
 
         autosave.set_enabled(true);
         assert_eq!(autosave.on_last_reference(id, &registry), vec![id]);
+        assert_eq!(autosave.on_exit(&registry), vec![id]);
+    }
+
+    #[test]
+    fn exit_considers_restored_dirty_document_without_new_activity() {
+        let (registry, id) = dirty_document();
+        let autosave = DocumentAutosaveCoordinator::from_settings(&Settings {
+            document_autosave: true,
+            ..Settings::default()
+        });
+
         assert_eq!(autosave.on_exit(&registry), vec![id]);
     }
 }

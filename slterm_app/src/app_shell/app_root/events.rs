@@ -88,6 +88,8 @@ impl AppRoot {
                                 }
                                 if !root.close_completed {
                                     root.poll_fs_watch(window, cx);
+                                    root.resume_pending_application_close(cx);
+                                    root.poll_document_autosave(cx);
                                 }
                             });
                         });
@@ -436,6 +438,19 @@ fn document_save_error_text(
     }
 }
 
+fn application_close_decision_text(count: usize, language: crate::i18n::UiLanguage) -> String {
+    language.format(
+        crate::i18n::Message::EditorCloseWindowDetail,
+        &[("count", &count.to_string())],
+    )
+}
+
+pub(crate) fn notify_application_close_decision_required(count: usize, cx: &mut App) {
+    let language = cx.global::<crate::app_shell::config::Settings>().language;
+    let text = application_close_decision_text(count, language);
+    crate::notify::deliver_startup_summary(&crate::notify::Notification::ProcessAlert { text }, cx);
+}
+
 pub(crate) fn notify_document_save_error(error: &crate::text_document::SaveError, cx: &mut App) {
     let language = cx.global::<crate::app_shell::config::Settings>().language;
     let text = document_save_error_text(error, language);
@@ -469,9 +484,19 @@ pub(crate) fn notify_document_save_state(
 
 #[cfg(test)]
 mod document_save_notice_tests {
-    use super::{document_save_error_text, document_save_state_text};
+    use super::{
+        application_close_decision_text, document_save_error_text, document_save_state_text,
+    };
     use crate::i18n::{Message, UiLanguage};
     use crate::text_document::SaveError;
+
+    #[test]
+    fn application_close_decision_notice_preserves_document_count() {
+        assert_eq!(
+            application_close_decision_text(2, UiLanguage::EnUs),
+            UiLanguage::EnUs.format(Message::EditorCloseWindowDetail, &[("count", "2")])
+        );
+    }
 
     #[test]
     fn save_failures_keep_specific_user_visible_causes() {

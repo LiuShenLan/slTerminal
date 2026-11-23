@@ -7,7 +7,7 @@
 //! 解码与同路径 reload;绘制按当帧 bounds 换算(不依赖上一帧矩形)。
 //! 图片 tab 持有独立焦点,工作区动作可到达。
 //!
-//! Document tab 自是 [`TextFileView`] 的渲染态 + 源码态双模态。
+//! Markdown 文档由 AppRoot 的 `MarkdownView` 提供渲染态 + 源码态。
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};

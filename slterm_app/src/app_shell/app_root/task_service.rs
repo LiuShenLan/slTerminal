@@ -21,6 +21,7 @@ pub(crate) enum TaskId {
     DocumentExternal(slterm_document::DocumentId),
     DocumentSave(slterm_document::DocumentId),
     DocumentSystemOpen(slterm_document::DocumentId),
+    MarkdownLink(uuid::Uuid),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

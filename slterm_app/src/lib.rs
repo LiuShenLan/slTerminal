@@ -99,6 +99,7 @@ pub(crate) mod process_tree;
 pub(crate) mod secrets;
 // 回归语料:数学条目逐例编译/栅格不回归;化学/生物条目已裁。
 #[cfg(test)]
+#[cfg(test)]
 pub(crate) mod scientific_corpus;
 #[allow(dead_code)] // 旧 schema 由更新与 Agent 域重写；生产启动不读取。
 pub(crate) mod session;

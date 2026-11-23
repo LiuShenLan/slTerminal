@@ -170,7 +170,7 @@ impl AppRoot {
                         editor.view.clone().into_any_element()
                     }
                     super::panel_host::PanelContent::Markdown(markdown) => {
-                        markdown.clone().into_any_element()
+                        markdown.view.clone().into_any_element()
                     }
                     super::panel_host::PanelContent::Paged(paged) => {
                         paged.clone().into_any_element()

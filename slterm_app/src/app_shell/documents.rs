@@ -8,7 +8,10 @@ use slterm_document::{
     DocumentId, DocumentMetadata, DocumentOpenOutcome, DocumentRegistry, DocumentSaveReceipt,
     DocumentSaveRequest, EDITABLE_LIMIT_BYTES, TextStateId,
 };
-use slterm_path::{CanonicalPath, PathGrant, PathOperation, PathPolicy, PathRequest};
+use slterm_path::{
+    CanonicalPath, Capabilities, GrantPersistence, PathGrant, PathOperation, PathPolicy,
+    PathRequest,
+};
 use slterm_workspace::{ProjectRootStatus, ProjectSnapshot, ViewKey};
 use uuid::Uuid;
 
@@ -41,6 +44,17 @@ impl ResolvedDocument {
 
     pub(crate) fn grants(&self) -> &[PathGrant] {
         &self.grants
+    }
+
+    pub(crate) fn session_read_grant(&self) -> Option<PathGrant> {
+        self.grants
+            .iter()
+            .find(|grant| {
+                grant.persistence() == GrantPersistence::Session
+                    && grant.capabilities() == Capabilities::READ
+                    && grant.path() == self.location.canonical_path()
+            })
+            .cloned()
     }
 }
 

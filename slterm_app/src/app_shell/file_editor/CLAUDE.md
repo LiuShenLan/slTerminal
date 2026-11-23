@@ -1,33 +1,25 @@
 # file_editor
 
-> 文件编辑器与预览：源码编辑、保存、脏标记、撤销、文档图片与 git gutter。
+> Document 的真实读盘、条件保存、自动保存协调与 Git 行标端口。
 
 ## 决策与红线
 
-- **只读是类型层合同**：`TextSnapshot` 的 `read_only` 在 `encode` 入口拒绝；UI 的 `disabled` 只是辅助，不得作为唯一防线。普通源码 tab 的源码态可编辑。原因：只读意图必须在写入边界强制。边界：只读文档（truncated/gitshow/diff）不得挂 gutter，也不得经可写入口。
-- **保存链单点**：`DocumentSaveService` 消费 core 捕获的不可变保存请求，与既有视图保存共用 `Document` 的「重新解析与 Write 授权 → 真实句柄身份、权限和磁盘字节复核 → core 编码 → `atomic_file` 原子替换」链；保存只写当前绑定位置，不接受调用方另传路径。Changed/ReadOnly/Unauthorized/TargetOpen/TargetExists/Unrepresentable/Io 结果经提示横幅或保存回执上抛，失败不破坏磁盘；替换后的文件身份直接来自原子写句柄。原因：重定向、失权、外部修改与编码失败必须可观测且不得产生半份文件。
-- **另存为边界**：`DocumentSaveService::save_as` 使用用户选定目标的单文件 Write 授权，允许尚不存在的目标但只规范化其父目录并拒绝悬空链接；目标已关联任何打开 Document 时写前拒绝，目标虽未打开但已存在时必须有 `OverwriteConfirmed` 决定。编码后、原子替换前再次解析并比较目标，成功回执只写新位置并保持 DocumentId，原文件不变。原因：另存为不得覆盖其他实时聚合或跟随编码期间的重定向。
-- **自动保存单点**：`interaction.document_autosave` 默认关闭，经全局 `Settings` 注入唯一 `DocumentAutosaveCoordinator`；Editor、Markdown 与可编辑 Diff 以 ViewKey 共享 DocumentId 的停止修改 1 秒、全部编辑视图失焦、最后引用和退出触发。只读、在途保存、外部冲突与 ReadRevoked 暂停；失败按请求 revision 抑制，旧失败不得压住保存期间的新编辑。原因：自动保存不得按面板分叉或自动覆盖冲突。边界：协调器只返回待保存 DocumentId，实际写盘仍经 `DocumentSaveService`。
-- **脏标记语义**：当前输入文本 vs 已保存快照；保存完成只清理「写完时」的版本，保存期间的新草稿仍保持脏。脏 tab 关闭必须走确认（保存/不保存/取消）。
-- **后台读盘**：读盘/解码在后台 executor，前台只在载入结果回调里落快照；Gitshow 的 HEAD 字节与本地文件走同一快照通路，区别只在数据源与只读意图。`Document` 在真实打开句柄上记录规范位置与 core 文件身份，并在读取后复核同一句柄长度，读取期间增长或缩短一律原子失败；保存后刷新替换目标的身份；`app_shell::documents` 是唯一真实打开服务，依次执行解析、PathPolicy 读授权、聚合查重、bounded load 与身份复核；Markdown 显式本地链接先复用持久 Read，未覆盖目标只附加该精确文件的 Session Read，不派生写或资源能力；AppRoot 的 Markdown 旧宿主只经 `TextFileView::from_document` 消费已载入快照；普通源码改由 `DocumentTextView` 直接消费 Session，既有聚合的新视图均不得再次读盘。原因：前台不得阻塞 I/O，且授权、正文与文件身份不得因重定向错绑。边界：服务只由后台执行体调用；不得在前台整文件物化，失败不得注册空 Document。
-- **外部变化服务**：`DocumentExternalService` 在后台重新解析并执行 Read 授权，只经 `Document::load` 有界读取；干净修改生成重载，脏修改与在途保存由 core 转为共享冲突，删除保留正文。PathPolicy 拒绝与 OS PermissionDenied 都标记 ReadRevoked，之后不再解析或读盘；真实改名在后台复核身份与基线，由 `ProjectSnapshot` 候选和 core 最终复核目标占用后经 `Relocated` 重绑；Markdown 旧宿主保留实体与阅读滚动，只更新保存位置、标题和相对资源基址并失效旧图片与物化块；原生载入或保存未回投时延期外部变化，独立 InputState 脏草稿遇 Reload 转为共享冲突，不得被磁盘正文或 Paged 转换覆盖；干净外部重载经同一 `apply_loaded` 落点更新正文和历史，不另开读盘通道。原因：外部事件不得绕过授权、覆盖本地草稿或重建 Document。
-- **大文件语义**：真实字节数与内容分流由 core `DocumentContent` 决定；不超过 50,000,000 字节才允许建立完整可编辑正文。AppRoot 超限打开直接经 `PagedDocument` 建立完整只读页索引并安装 `PagedTextView`，不得把有限前缀注册为 Rope；GitShow／Diff 的有界预览仍保持只读。超过 10,000,000 关闭文档内补全，超过 200,000,000 关闭语法。原因：尺寸上限必须先于解码生效，有限前缀不得伪装成完整正文。边界：未知编码、非法序列和 NUL 在真实 Document 打开时直接失败，不建立空正文或可保存基线。
-- **内核族语义**：outline/inline_edit/block_*/input_rules 照抄上游语义；未消费件带 `#[allow(dead_code)]` + 消费点注释，不得靠删测试规避。
-- **撤销单栈**：根视图 `capture_action` 拦截 `input::{Undo,Redo}` 并走 `EditHistory::travel`；`InputState::replace` 是静默更新（不触发 Change 订阅），程序化替换必须显式记录历史/脏标记/预览失效。原因：第二份撤销栈会产生状态分叉。边界：不得引入平行撤销实现。
-- **预览虚拟化**：`Outline` 块清单 → `gpui::list` 只物化可见行；切走 tab 由 workspace 调 `set_render_active(false)` 释放块槽与图片激活，草稿/历史存活。
-- **语法高亮降档**：钉版组件未启用 tree-sitter 语言集，`SyntaxHighlighter` 对映射语言回退纯文本——按「朴素渲染 + 语言标签」呈现，不回填旧编辑器高亮栈。原因：避免为单一呈现能力引入大依赖面。
-- **文档图片**：GIF/动画 WebP 压单帧 PNG 进缓存是正确性措施（共用 element id 越界 panic 链）；文档级解码图走 `DocumentImageCache` 的字节/条目双上限 LRU，不得进进程级常驻资产图。引用式图片 `![alt][id]` 的定义 `[id]: url` 同走压帧；纯链接引用不改写。
-- **git gutter**：数据源 = `slterm_app::git` 子进程（`file_status` + `file_hunks`），与文件树 VCS 同一执行体；仓库根经 `repository_root_cached` 短 TTL 缓存，状态查询走共享缓存。触发点 = 打开/保存/重载 + watcher 检测到外部修改（`refresh_gutter_from_disk`）；文件状态为 `None` 时直接空行标，不为无变更文件起 hunk 子进程。行标只在行标变化时推进 revision。行标颜色只引用 `EditorThemeTokens`，禁裸色值；滚动同步读输入实体上一帧布局（`visible_row_range`/`scroll_offset`）。
+- **保存链单点**：`DocumentSaveService` 消费 core 捕获的不可变保存请求，统一执行「重新解析与 Write 授权 → 真实句柄身份、权限和磁盘字节复核 → core 编码 → `atomic_file` 原子替换」。保存只写当前绑定位置；Changed/ReadOnly/Unauthorized/TargetOpen/TargetExists/Unrepresentable/Io 均上抛，失败不破坏磁盘。原因：重定向、失权、外部修改与编码失败必须可观测且不得产生半份文件。
+- **另存为边界**：`save_as` 使用用户选定目标的单文件 Write 授权，允许尚不存在的目标但拒绝悬空链接；目标关联其他打开 Document 时写前拒绝，既有目标必须取得 OverwriteConfirmed。原子替换前再次解析并比较目标，成功回执保持 DocumentId。原因：另存为不得覆盖其他实时聚合或跟随编码期间的重定向。
+- **自动保存单点**：`interaction.document_autosave` 默认关闭，经全局 Settings 注入唯一 `DocumentAutosaveCoordinator`；接入统一 Registry 的编辑视图按 DocumentId 共享停止修改 1 秒、全部编辑视图失焦、最后引用与退出触发。只读、在途保存、外部冲突与 ReadRevoked 暂停；失败按请求 revision 抑制，新编辑解除。原因：自动保存不得按面板分叉或自动覆盖冲突。边界：协调器只产生待保存 DocumentId，实际写盘仍经统一保存服务；显式 Discard 不得被自动保存覆盖。
+- **后台读盘**：读盘与解码只在后台执行体；`app_shell::documents` 依次执行解析、PathPolicy 授权、聚合查重、有界读取与身份复核。普通源码由 `DocumentTextView` 直接消费 Session，Markdown 由 `MarkdownView` 直接消费同一 Session；既有聚合的新视图不得再次读盘。原因：前台不得阻塞 I/O，授权、正文与文件身份不得因重定向错绑。
+- **外部变化单点**：后台服务重新解析、授权并读取，回投只由 core Session 判定重载、冲突、删除、失权或改名；视图不得另持草稿覆盖规则。纯改名遇在途保存先在 AppRoot 排队，保存回执后再提交，避免同文件保存被旧位置误判失败。原因：watcher 迟到结果不得覆盖新编辑或错绑保存位置。
+- **大文件语义**：真实字节数与内容分流由 core `DocumentContent` 决定；超过 50,000,000 字节直接进入完整只读分页，不把有限前缀注册为 Rope。超过 10,000,000 关闭文档内补全，超过 200,000,000 关闭语法。未知编码、非法序列和 NUL 不得建立可保存正文基线。
+- **git gutter**：数据源只经统一 GitFacade；行标颜色只引用 `EditorThemeTokens`，不在组件写裸色值。只读文档不挂 gutter。
 
 ## 验收与测试
 
 - 定向测试：`cargo test -p slterm --test lib_tests <filter> -- --test-threads=1`；禁止 `--lib` 或裸 filter 直打默认 lib target。
-- 虚拟窗口：`cargo test -p slterm --test lib_tests --features gpui-test-support -- --test-threads=1`。
-- 必测面：保存链三类结果、脏标记与脏关闭、撤销/重做、大文件截断、文档图片压帧与 LRU、gutter 状态映射与 revision 推进、gutter 点击打开只读双栏 diff。
-- 像素级对齐与真实手势等不可自动化边界见 `.claude/docs/testing/exemptions.md`。
+- 虚拟窗口：`cargo test -p slterm --test lib_tests --features gpui-test-support`。
+- 必测面：条件保存与原子失败、共享 Document 的 idle／失焦／最后引用／退出自动保存、保存失败 revision 抑制、外部修改与改名排队、大文件分页、真实重启后的 Editor／Markdown ViewState、gutter 映射。
+- 像素级对齐与真实手势边界见 `.claude/docs/testing/exemptions.md`。
 
 ## 操作
 
-- 打开文件：经 `doc_tabs::openable_in_app` 路由到 Code/Document/Image；gitshow 只读臂复用 Code tab。
-- 保存：只经统一保存链；不要绕过 `encode` 或直接写盘。
-- 预览：由 workspace 控制渲染激活；切走 tab 时释放块槽与图片激活。
+- 保存只经统一保存链；不得从视图直接写盘。
+- 新增编辑视图必须接入 AppRoot 的同步编辑、广播、自动保存与关闭链，不新建正文或撤销栈。

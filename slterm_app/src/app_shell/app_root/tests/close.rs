@@ -1,6 +1,7 @@
 //! 关闭协调与事件泵生命周期测试。
 
 use super::*;
+use crate::app_shell::app_root::task_service::{CancellationToken, TaskId};
 use crate::persistence::close::CloseCommitStatus;
 use crate::persistence::workspace_writer::{WorkspaceWriterClient, WorkspaceWriterError};
 use slterm_workspace::{ClosePhase, CloseScope, CloseStage};
@@ -232,6 +233,246 @@ fn close_flush_success_closes_window_and_marks_clean_shutdown(cx: &mut TestAppCo
         .unwrap()
         .unwrap();
     assert!(metadata.clean_shutdown);
+}
+
+struct ApplicationMarkdownFixture {
+    _temp: tempfile::TempDir,
+    paths: AppPaths,
+    runtime: WorkspaceWriterRuntime,
+    root: Entity<AppRoot>,
+    window: VisualTestContext,
+    markdown: Entity<crate::app_shell::markdown::MarkdownView>,
+    document: slterm_document::DocumentId,
+    source: std::path::PathBuf,
+}
+
+fn application_markdown_fixture(
+    cx: &mut TestAppContext,
+    autosave: bool,
+) -> ApplicationMarkdownFixture {
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    let source = project.join("note.md");
+    std::fs::write(&source, "old\n").unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let (events, _event_rx) = std::sync::mpsc::sync_channel(64);
+    let runtime = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
+    let persistence =
+        AppRootPersistence::load_with_previous_run(&paths, Some(runtime.client()), None);
+    let (root, mut window, _) = open_root_with_persistence(cx, persistence);
+    add_project(&root, &mut window, PROJECT_A, project.to_str().unwrap());
+    super::documents::open_document(
+        &root,
+        &mut window,
+        PROJECT_A,
+        GROUP_A,
+        CanonicalPath::new(&source).unwrap(),
+    );
+    flush_when_ready(&runtime.client());
+    cx.update(|cx| {
+        cx.set_global(crate::app_shell::config::Settings {
+            document_autosave: autosave,
+            ..crate::app_shell::config::Settings::default()
+        });
+    });
+    let markdown = root.read_with(cx, |root, cx| {
+        root.projects[&project_id(PROJECT_A)]
+            .read(cx)
+            .panels
+            .values()
+            .find_map(|panel| panel.markdown().cloned())
+            .unwrap()
+    });
+    let document = root.read_with(cx, |root, _| {
+        let source = CanonicalPath::new(dunce::canonicalize(&source).unwrap()).unwrap();
+        root.snapshot
+            .documents()
+            .find_map(|(id, location)| (location.canonical_path() == &source).then_some(id))
+            .unwrap()
+    });
+    window.update(|window, cx| {
+        markdown
+            .update(cx, |view, _| view.source_for_test())
+            .update(cx, |source, cx| {
+                gpui::EntityInputHandler::replace_text_in_range(
+                    source,
+                    Some(0..0),
+                    "local ",
+                    window,
+                    cx,
+                );
+            });
+    });
+    ApplicationMarkdownFixture {
+        _temp: temp,
+        paths,
+        runtime,
+        root,
+        window,
+        markdown,
+        document,
+        source,
+    }
+}
+
+#[gpui::test]
+fn application_close_autosaves_shared_markdown_before_completion(cx: &mut TestAppContext) {
+    let mut fixture = application_markdown_fixture(cx, true);
+    assert!(!fixture.window.simulate_close());
+    fixture.window.run_until_parked();
+    assert_eq!(
+        std::fs::read_to_string(&fixture.source).unwrap(),
+        "local old\n"
+    );
+    assert!(fixture.root.read_with(cx, |root, _| root.close_completed));
+    drop(fixture.root);
+    cx.update(|_| {});
+    fixture
+        .runtime
+        .shutdown(ControlPlaneCleanup::Succeeded)
+        .unwrap();
+    let metadata = WorkspaceDatabase::open(&fixture.paths)
+        .unwrap()
+        .metadata()
+        .unwrap()
+        .unwrap();
+    assert!(metadata.clean_shutdown);
+}
+
+#[gpui::test]
+fn application_close_recollects_document_revision_before_save_retry(cx: &mut TestAppContext) {
+    let mut fixture = application_markdown_fixture(cx, true);
+    assert!(!fixture.window.simulate_close());
+    fixture.window.update(|window, cx| {
+        fixture
+            .markdown
+            .update(cx, |view, _| view.source_for_test())
+            .update(cx, |source, cx| {
+                gpui::EntityInputHandler::replace_text_in_range(
+                    source,
+                    Some(0..0),
+                    "again ",
+                    window,
+                    cx,
+                );
+            });
+    });
+    fixture.window.run_until_parked();
+    assert!(fixture.root.read_with(cx, |root, _| {
+        root.application_close
+            .as_ref()
+            .is_some_and(|close| close.coordinator.phase() == ClosePhase::Failed(CloseStage::Save))
+    }));
+    let expected = fixture
+        .markdown
+        .read_with(cx, |view, cx| view.input_text_for_test(cx));
+
+    assert!(!fixture.window.simulate_close());
+    fixture.window.run_until_parked();
+
+    assert_eq!(std::fs::read_to_string(&fixture.source).unwrap(), expected);
+    assert!(fixture.root.read_with(cx, |root, _| root.close_completed));
+    drop(fixture.root);
+    cx.update(|_| {});
+    fixture
+        .runtime
+        .shutdown(ControlPlaneCleanup::Succeeded)
+        .unwrap();
+}
+
+#[gpui::test]
+fn application_close_waits_for_inflight_document_save(cx: &mut TestAppContext) {
+    let mut fixture = application_markdown_fixture(cx, true);
+    fixture.window.update(|_, cx| {
+        fixture.root.update(cx, |root, cx| {
+            root.save_document(fixture.document, cx);
+        });
+    });
+
+    assert!(!fixture.window.simulate_close());
+    fixture.window.run_until_parked();
+
+    assert_eq!(
+        std::fs::read_to_string(&fixture.source).unwrap(),
+        "local old\n"
+    );
+    assert!(fixture.root.read_with(cx, |root, _| root.close_completed));
+    drop(fixture.root);
+    cx.update(|_| {});
+    fixture
+        .runtime
+        .shutdown(ControlPlaneCleanup::Succeeded)
+        .unwrap();
+}
+
+#[gpui::test]
+fn application_close_waits_for_inflight_external_refresh(cx: &mut TestAppContext) {
+    let mut fixture = application_markdown_fixture(cx, true);
+    let (_sender, receiver) = std::sync::mpsc::sync_channel(64);
+    fixture.window.update(|window, cx| {
+        fixture.root.update(cx, |root, cx| {
+            root.start_shell_event_pump(receiver, window.window_handle(), cx);
+            root.tasks
+                .register(
+                    TaskId::DocumentExternal(fixture.document),
+                    CancellationToken::new(),
+                    cx.spawn(async move |_, _| std::future::pending::<()>().await),
+                )
+                .unwrap();
+        });
+    });
+
+    assert!(!fixture.window.simulate_close());
+    assert!(fixture.root.read_with(cx, |root, _| {
+        root.pending_application_close.is_some() && !root.close_completed
+    }));
+    fixture.root.update(cx, |root, _| {
+        root.tasks
+            .complete(TaskId::DocumentExternal(fixture.document));
+    });
+    fixture
+        .window
+        .executor()
+        .advance_clock(Duration::from_millis(121));
+    fixture.window.run_until_parked();
+
+    assert!(fixture.root.read_with(cx, |root, _| root.close_completed));
+    drop(fixture.root);
+    cx.update(|_| {});
+    fixture
+        .runtime
+        .shutdown(ControlPlaneCleanup::Succeeded)
+        .unwrap();
+}
+
+#[gpui::test]
+fn application_close_requires_decision_when_autosave_is_disabled(cx: &mut TestAppContext) {
+    let mut fixture = application_markdown_fixture(cx, false);
+    let document = fixture.document;
+
+    assert!(!fixture.window.simulate_close());
+    fixture.window.run_until_parked();
+
+    assert!(!fixture.root.read_with(cx, |root, _| root.close_completed));
+    assert!(fixture.root.read_with(cx, |root, _| {
+        root.documents.session(document).unwrap().is_dirty()
+    }));
+    assert_eq!(std::fs::read_to_string(&fixture.source).unwrap(), "old\n");
+    assert!(
+        !WorkspaceDatabase::open(&fixture.paths)
+            .unwrap()
+            .metadata()
+            .unwrap()
+            .unwrap()
+            .clean_shutdown
+    );
+    drop(fixture.root);
+    cx.update(|_| {});
+    fixture
+        .runtime
+        .shutdown(ControlPlaneCleanup::Succeeded)
+        .unwrap();
 }
 
 #[gpui::test]

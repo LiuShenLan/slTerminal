@@ -3,17 +3,13 @@
 use std::collections::{HashMap, VecDeque};
 use std::ops::Range;
 
-use slterm_document::{BlockId, MarkdownBlock, MarkdownBlockKind, MarkdownDocument};
+use slterm_document::{BlockId, MarkdownBlock, MarkdownDocument};
+
+use crate::app_shell::text_view::MarkdownMode;
 
 const PROGRESSIVE_SOURCE_BYTES: usize = 5_000_000;
 const FORBIDDEN_SOURCE_BYTES: usize = 50_000_000;
 const PROGRESSIVE_SOURCE_LINES: usize = 100_000;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum MarkdownMode {
-    Source,
-    Render,
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MarkdownRenderDecision {
@@ -72,7 +68,7 @@ pub(crate) struct BlockCompletion {
     block: BlockId,
     document_revision: u64,
     render_generation: u64,
-    result: Result<MarkdownBlockKind, MarkdownBlockFailure>,
+    result: Result<MarkdownBlock, MarkdownBlockFailure>,
 }
 
 impl BlockCompletion {
@@ -85,7 +81,7 @@ impl BlockCompletion {
             block: task.block.id(),
             document_revision,
             render_generation,
-            result: Ok(task.block.kind().clone()),
+            result: Ok(task.block.clone()),
         }
     }
 
@@ -113,7 +109,7 @@ pub(crate) enum MarkdownBlockFailure {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum MarkdownBlockOutcome {
-    Rendered(MarkdownBlockKind),
+    Rendered(MarkdownBlock),
     Fallback {
         source: String,
         failure: MarkdownBlockFailure,
@@ -189,7 +185,7 @@ impl ProgressiveMarkdownRenderer {
             return;
         };
         let outcome = match completion.result {
-            Ok(kind) => MarkdownBlockOutcome::Rendered(kind),
+            Ok(block) => MarkdownBlockOutcome::Rendered(block),
             Err(failure) => MarkdownBlockOutcome::Fallback {
                 source: task.source,
                 failure,

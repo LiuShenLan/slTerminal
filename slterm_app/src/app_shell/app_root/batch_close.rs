@@ -172,11 +172,10 @@ impl AppRoot {
             })
             .cloned()
             .collect::<Vec<_>>();
-        objects.extend(slterm_workspace::collect_document_close(
-            &self.snapshot,
-            &self.documents,
+        objects.extend(self.collect_document_close_with_autosave(
             &documents_to_close,
             &document_decisions,
+            cx,
         )?);
         let (candidate, _) = self.snapshot.without_views(&closing)?;
         let batch_id = Uuid::now_v7();
@@ -275,19 +274,33 @@ impl AppRoot {
         &mut self,
         batch_id: Uuid,
         document_decisions: &BTreeMap<DocumentId, CloseDecision>,
+        cx: &App,
     ) -> Result<(), AppRootError> {
-        let close = self
-            .terminal_close_batches
-            .get(&batch_id)
-            .ok_or(AppRootError::MissingPanel)?;
-        let previous = close
-            .coordinator
-            .intent()
-            .cloned()
-            .ok_or(AppRootError::TerminalCloseState)?;
+        let (previous, scope, persisted_epoch, panels) = {
+            let close = self
+                .terminal_close_batches
+                .get(&batch_id)
+                .ok_or(AppRootError::MissingPanel)?;
+            (
+                close
+                    .coordinator
+                    .intent()
+                    .cloned()
+                    .ok_or(AppRootError::TerminalCloseState)?,
+                close
+                    .coordinator
+                    .scope()
+                    .cloned()
+                    .ok_or(AppRootError::TerminalCloseState)?,
+                close
+                    .persisted
+                    .as_ref()
+                    .map(|persisted| persisted.store_epoch.clone()),
+                close.panels.clone(),
+            )
+        };
         // 仍有效的原决定保留；已经变干净或存在外部引用的对象不再携带旧决定。
-        let closing = close
-            .panels
+        let closing = panels
             .iter()
             .filter(|(view, _)| match view {
                 ViewKey::Editor { document_id, .. }
@@ -336,30 +349,15 @@ impl AppRoot {
                 decisions.insert(id, object.decision);
             }
         }
-        let mut objects = slterm_workspace::collect_document_close(
-            &self.snapshot,
-            &self.documents,
-            &closing,
-            &decisions,
-        )?;
+        let mut objects = self.collect_document_close_with_autosave(&closing, &decisions, cx)?;
         objects.extend(
             previous
                 .objects()
                 .filter(|object| matches!(object.id, CloseTarget::Terminal(_)))
                 .cloned(),
         );
-        let scope = close
-            .coordinator
-            .scope()
-            .cloned()
-            .ok_or(AppRootError::TerminalCloseState)?;
-        let fingerprint = close.persisted.as_ref().map_or([0; 32], |persisted| {
-            close_fingerprint(
-                &batch_id.to_string(),
-                &scope,
-                &persisted.store_epoch,
-                &objects,
-            )
+        let fingerprint = persisted_epoch.as_ref().map_or([0; 32], |store_epoch| {
+            close_fingerprint(&batch_id.to_string(), &scope, store_epoch, &objects)
         });
         let intent =
             CloseIntent::new(objects, fingerprint).map_err(|_| AppRootError::TerminalCloseState)?;
@@ -424,7 +422,7 @@ impl AppRoot {
             }
         }
         if close.needs_recollect {
-            self.recollect_batch_close(batch_id, document_decisions)?;
+            self.recollect_batch_close(batch_id, document_decisions, cx)?;
             if self
                 .terminal_close_batches
                 .get(&batch_id)
@@ -794,6 +792,34 @@ impl AppRoot {
         }
     }
 
+    fn collect_document_close_with_autosave(
+        &mut self,
+        closing: &[ViewKey],
+        decisions: &BTreeMap<DocumentId, CloseDecision>,
+        cx: &App,
+    ) -> Result<Vec<CloseObject<CloseTarget>>, slterm_workspace::DocumentCloseError> {
+        self.sync_document_autosave_enabled(cx);
+        let mut decisions = decisions.clone();
+        loop {
+            match slterm_workspace::collect_document_close(
+                &self.snapshot,
+                &self.documents,
+                closing,
+                &decisions,
+            ) {
+                Err(slterm_workspace::DocumentCloseError::MissingDecision(id))
+                    if self
+                        .document_autosave
+                        .on_last_reference(id, &self.documents)
+                        == vec![id] =>
+                {
+                    decisions.insert(id, CloseDecision::Save);
+                }
+                result => return result,
+            }
+        }
+    }
+
     fn start_batch_save(&mut self, batch_id: Uuid, cx: &mut Context<'_, Self>) {
         let task_id = TaskId::TerminalCloseBatch(batch_id);
         if self.tasks.is_registered(task_id) {
@@ -853,7 +879,7 @@ impl AppRoot {
         }
     }
 
-    fn document_close_grants(
+    pub(super) fn document_close_grants(
         &self,
         intent: &CloseIntent<CloseTarget>,
     ) -> BTreeMap<DocumentId, Vec<slterm_path::PathGrant>> {

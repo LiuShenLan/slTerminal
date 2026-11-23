@@ -426,6 +426,7 @@ fn application_global_receipt_validates_identity_attempt_and_disconnect(cx: &mut
                 },
                 stop_observation: Some(super::super::terminal_close::PtyStopObservation::Stopped),
                 outcome_unknown: false,
+                needs_recollect: false,
                 window: window_handle,
             });
             root.close_in_progress = true;
