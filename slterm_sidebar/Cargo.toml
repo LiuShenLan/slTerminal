@@ -13,6 +13,7 @@ path = "src/lib.rs"
 
 [dependencies]
 slterm_workspace = { path = "../slterm_workspace" }
+slterm_path = { path = "../slterm_path" }
 slterm_agents = { path = "../slterm_agents" }
 slterm-settings = { path = "../slterm_settings" }
 serde = { version = "1", features = ["derive"] }
