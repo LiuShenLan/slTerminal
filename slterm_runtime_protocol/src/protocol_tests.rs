@@ -1076,6 +1076,40 @@ fn git_open_methods_require_safe_repository_relative_paths() {
 }
 
 #[test]
+fn panel_open_file_and_save_validate_envelope_and_payload() {
+    let open = RuntimeRequest::new(
+        JsonRpcId::Number(33),
+        RuntimeMethod::PanelOpenFile,
+        serde_json::json!({"client_id":"c","mutation_id":"m-open","expected_revision":null,"request":{"path":"D:/work/a/README.md"}}),
+    );
+    match parse_client_request(&serde_json::to_vec(&open).unwrap()).unwrap() {
+        ClientRequest::Runtime(parsed) => assert_eq!(parsed.method, RuntimeMethod::PanelOpenFile),
+        other => panic!("panel.open_file 必须解析为 Runtime 请求: {other:?}"),
+    }
+    let save = RuntimeRequest::new(
+        JsonRpcId::Number(34),
+        RuntimeMethod::PanelSave,
+        serde_json::json!({"client_id":"c","mutation_id":"m-save","expected_revision":null,"request":{"view":"{\"kind\":\"editor\",\"version\":1}"}}),
+    );
+    match parse_client_request(&serde_json::to_vec(&save).unwrap()).unwrap() {
+        ClientRequest::Runtime(parsed) => assert_eq!(parsed.method, RuntimeMethod::PanelSave),
+        other => panic!("panel.save 必须解析为 Runtime 请求: {other:?}"),
+    }
+
+    for invalid in [
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"panel.open_file","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"path":"  "}}}),
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"panel.open_file","params":{"client_id":" ","mutation_id":"m","expected_revision":null,"request":{"path":"D:/a.txt"}}}),
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"panel.save","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"view":""}}}),
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"panel.save","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"view":" ","extra":1}}}),
+    ] {
+        assert!(
+            parse_client_request(invalid.to_string().as_bytes()).is_err(),
+            "非法 Panel 请求必须拒绝: {invalid}"
+        );
+    }
+}
+
+#[test]
 fn params_hash_is_stable_and_json_serialization_dependent() {
     let a = serde_json::json!({"z": 1, "a": {"n": [1, 2]}});
     let b = serde_json::json!({"a": {"n": [1, 2]}, "z": 1});
@@ -1150,6 +1184,8 @@ fn describe_lists_the_method_registry_with_contract_hashes() {
             "panel.activate",
             "panel.move",
             "panel.open_settings",
+            "panel.open_file",
+            "panel.save",
             "terminal.create",
             "terminal.input",
             "terminal.execute",

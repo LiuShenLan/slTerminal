@@ -1595,6 +1595,8 @@
         "panel.activate",
         "panel.move",
         "panel.open_settings",
+        "panel.open_file",
+        "panel.save",
         "terminal.create",
         "terminal.input",
         "terminal.execute",

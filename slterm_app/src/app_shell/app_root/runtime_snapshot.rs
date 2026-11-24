@@ -14,6 +14,7 @@ use crate::gpui_terminal::PaneId;
 use super::AppRoot;
 use super::command_registry::{CommandId, CommandParameters, CommandSource, CommandTarget};
 use super::commands::AppRootError;
+use super::events::open_file_handover_error;
 use super::focus_manager::FocusError;
 use crate::app_shell::RuntimeMutationReply;
 use crate::app_shell::control_error;
@@ -49,23 +50,96 @@ impl AppRoot {
     pub(super) fn handle_runtime_mutation(
         &mut self,
         mutation: RuntimeMutation,
+        completion: &std::sync::mpsc::SyncSender<Result<RuntimeMutationReply, JsonRpcError>>,
         window: &mut Window,
         cx: &mut Context<'_, Self>,
-    ) -> Result<RuntimeMutationReply, JsonRpcError> {
+    ) -> RuntimeMutationDispatch {
         if self.close_in_progress || self.application_close.is_some() || self.close_completed {
-            return Err(closing_error());
+            return RuntimeMutationDispatch::Reply(Err(closing_error()));
         }
         match mutation {
             RuntimeMutation::GitRollback { .. } | RuntimeMutation::GitDelete { .. } => {
-                self.resolve_runtime_git_write(mutation)
+                RuntimeMutationDispatch::Reply(self.resolve_runtime_git_write(mutation))
             }
             RuntimeMutation::GitOpenDiff { .. } | RuntimeMutation::GitOpenDeleted { .. } => {
-                self.resolve_runtime_git_open(mutation)
+                RuntimeMutationDispatch::Reply(self.resolve_runtime_git_open(mutation))
             }
-            mutation => self
-                .execute_runtime_mutation(mutation, window, cx)
-                .map(|()| RuntimeMutationReply::Done(Ok(()))),
+            RuntimeMutation::PanelOpenFile { path } => {
+                self.start_runtime_panel_open(path, completion, window, cx)
+            }
+            RuntimeMutation::PanelSave { view } => {
+                self.start_runtime_panel_save(view, completion, cx)
+            }
+            mutation => RuntimeMutationDispatch::Reply(
+                self.execute_runtime_mutation(mutation, window, cx)
+                    .map(|()| RuntimeMutationReply::Done(Ok(()))),
+            ),
         }
+    }
+
+    /// 打开文件到文本面板：准备失败立即回执，真正打开完成后回执。
+    fn start_runtime_panel_open(
+        &mut self,
+        path: String,
+        completion: &std::sync::mpsc::SyncSender<Result<RuntimeMutationReply, JsonRpcError>>,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> RuntimeMutationDispatch {
+        let path = match CanonicalPath::new(path) {
+            Ok(path) => path,
+            Err(_) => return RuntimeMutationDispatch::Reply(Err(invalid_request_error())),
+        };
+        let request = match self.prepare_document_handover(path, window, cx) {
+            Ok(request) => request,
+            Err(error) => {
+                return RuntimeMutationDispatch::Reply(Err(open_file_handover_error(error)));
+            }
+        };
+        let mut completion = RuntimeMutationCompletion::new(completion.clone());
+        self.queue_document_open(
+            request,
+            Some(Box::new(move |result, _window, _cx| {
+                let reply = match result {
+                    Ok(()) => RuntimeMutationReply::Done(Ok(())),
+                    Err(error) => RuntimeMutationReply::Done(Err(open_file_handover_error(error))),
+                };
+                completion.send(reply);
+            })),
+            window,
+            cx,
+        );
+        RuntimeMutationDispatch::Deferred
+    }
+
+    /// 保存视图绑定的 Document：回执由唯一保存链在落定后发送。
+    fn start_runtime_panel_save(
+        &mut self,
+        view: ViewKey,
+        completion: &std::sync::mpsc::SyncSender<Result<RuntimeMutationReply, JsonRpcError>>,
+        cx: &mut Context<'_, Self>,
+    ) -> RuntimeMutationDispatch {
+        let document_id = match &view {
+            ViewKey::Editor { document_id, .. } | ViewKey::Markdown { document_id, .. } => {
+                *document_id
+            }
+            _ => return RuntimeMutationDispatch::Reply(Err(invalid_request_error())),
+        };
+        let view_exists = self
+            .snapshot
+            .registry()
+            .projects()
+            .iter()
+            .any(|project| project.layout().view_keys().contains(&view));
+        let document_open = self.snapshot.documents().any(|(id, _)| id == document_id);
+        if !view_exists || !document_open {
+            return RuntimeMutationDispatch::Reply(Err(invalid_request_error()));
+        }
+        self.runtime_save_waiters
+            .entry(document_id)
+            .or_default()
+            .push(completion.clone());
+        self.save_document(document_id, cx);
+        RuntimeMutationDispatch::Deferred
     }
 
     /// Git 打开目标：校验路径形状并解析项目；仓库绑定与打开链都在后台发起。
@@ -435,7 +509,9 @@ impl AppRoot {
             RuntimeMutation::GitRollback { .. }
             | RuntimeMutation::GitDelete { .. }
             | RuntimeMutation::GitOpenDiff { .. }
-            | RuntimeMutation::GitOpenDeleted { .. } => Err(invalid_request_error()),
+            | RuntimeMutation::GitOpenDeleted { .. }
+            | RuntimeMutation::PanelOpenFile { .. }
+            | RuntimeMutation::PanelSave { .. } => Err(invalid_request_error()),
         }
     }
 
@@ -778,6 +854,41 @@ fn path_text(path: &CanonicalPath) -> Result<String, JsonRpcError> {
         .to_str()
         .map(str::to_owned)
         .ok_or_else(snapshot_encoding_error)
+}
+
+/// 写意图处理结果：立即回执，或已移交异步完成回调。
+pub(super) enum RuntimeMutationDispatch {
+    Reply(Result<RuntimeMutationReply, JsonRpcError>),
+    Deferred,
+}
+
+/// 异步写意图完成回执守卫：正常发送后不重复；释放时未发送即回执 Closing。
+struct RuntimeMutationCompletion {
+    completion: Option<std::sync::mpsc::SyncSender<Result<RuntimeMutationReply, JsonRpcError>>>,
+}
+
+impl RuntimeMutationCompletion {
+    fn new(
+        completion: std::sync::mpsc::SyncSender<Result<RuntimeMutationReply, JsonRpcError>>,
+    ) -> Self {
+        Self {
+            completion: Some(completion),
+        }
+    }
+
+    fn send(&mut self, reply: RuntimeMutationReply) {
+        if let Some(completion) = self.completion.take() {
+            let _ = completion.try_send(Ok(reply));
+        }
+    }
+}
+
+impl Drop for RuntimeMutationCompletion {
+    fn drop(&mut self) {
+        if let Some(completion) = self.completion.take() {
+            let _ = completion.try_send(Err(closing_error()));
+        }
+    }
 }
 
 fn closing_error() -> JsonRpcError {

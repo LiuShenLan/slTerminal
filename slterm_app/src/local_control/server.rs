@@ -19,13 +19,13 @@ use slterm_runtime_protocol::{
     GitStatusResponse, HandoverParams, HandoverResponse, HelloResponse, JsonRpcError,
     JsonRpcErrorData, JsonRpcId, JsonRpcResponse, OPERATION_WAIT_LIMIT_MS, OperationQueryParams,
     OperationResource, OperationWaitParams, PanelActivateParams, PanelGroupMergeParams,
-    PanelGroupResizeParams, PanelGroupSplitParams, PanelMoveParams, PanelOpenSettingsParams,
-    ProjectActivateParams, ProjectListResponse, ProjectRemoveParams, ProjectRenameParams,
-    ProjectReorderParams, RuntimeEvent, RuntimeMethod, RuntimeRequest, RuntimeResult,
-    SnapshotResources, SnapshotResponse, SplitDirectionWire, TerminalCloseParams,
-    TerminalCreateParams, TerminalExecuteParams, TerminalInputParams, TerminalReadRequest,
-    TerminalReadResponse, TerminalReconnectParams, TerminalRenameParams, TerminalWaitRequest,
-    TerminalWaitResponse, ViewportSize, parse_client_request,
+    PanelGroupResizeParams, PanelGroupSplitParams, PanelMoveParams, PanelOpenFileParams,
+    PanelOpenSettingsParams, PanelSaveParams, ProjectActivateParams, ProjectListResponse,
+    ProjectRemoveParams, ProjectRenameParams, ProjectReorderParams, RuntimeEvent, RuntimeMethod,
+    RuntimeRequest, RuntimeResult, SnapshotResources, SnapshotResponse, SplitDirectionWire,
+    TerminalCloseParams, TerminalCreateParams, TerminalExecuteParams, TerminalInputParams,
+    TerminalReadRequest, TerminalReadResponse, TerminalReconnectParams, TerminalRenameParams,
+    TerminalWaitRequest, TerminalWaitResponse, ViewportSize, parse_client_request,
 };
 use slterm_split::SplitDirection;
 use slterm_workspace::{LogicalSize, PanelGroupId, ProjectId, ViewKey};
@@ -1160,6 +1160,35 @@ fn handle_connection<F>(
                             params.mutation_id,
                             params.expected_revision,
                             Ok(RuntimeMutation::PanelOpenSettings),
+                        )
+                    }
+                    RuntimeMethod::PanelOpenFile => {
+                        let Some(params) = request.parse::<PanelOpenFileParams>() else {
+                            return;
+                        };
+                        respond_mutation(
+                            &runtime,
+                            request.id,
+                            params.client_id,
+                            params.mutation_id,
+                            params.expected_revision,
+                            Ok(RuntimeMutation::PanelOpenFile {
+                                path: params.request.path,
+                            }),
+                        )
+                    }
+                    RuntimeMethod::PanelSave => {
+                        let Some(params) = request.parse::<PanelSaveParams>() else {
+                            return;
+                        };
+                        respond_mutation(
+                            &runtime,
+                            request.id,
+                            params.client_id,
+                            params.mutation_id,
+                            params.expected_revision,
+                            parse_view(&params.request.view)
+                                .map(|view| RuntimeMutation::PanelSave { view }),
                         )
                     }
                     RuntimeMethod::PanelMove => {

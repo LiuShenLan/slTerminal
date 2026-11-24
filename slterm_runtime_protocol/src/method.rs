@@ -152,6 +152,16 @@ fn panel_open_settings_params_schema() -> schemars::Schema {
 }
 
 #[cfg(feature = "schema")]
+fn panel_open_file_params_schema() -> schemars::Schema {
+    schemars::schema_for!(crate::protocol::PanelOpenFileParams)
+}
+
+#[cfg(feature = "schema")]
+fn panel_save_params_schema() -> schemars::Schema {
+    schemars::schema_for!(crate::protocol::PanelSaveParams)
+}
+
+#[cfg(feature = "schema")]
 fn terminal_create_params_schema() -> schemars::Schema {
     schemars::schema_for!(crate::protocol::TerminalCreateParams)
 }
@@ -469,6 +479,26 @@ pub static METHODS: &[MethodSpec] = &[
         result_schema: operation_result_schema,
     },
     MethodSpec {
+        method: ControlMethod::RuntimePanelOpenFile,
+        scopes: &[ControlScope::Runtime],
+        kind: MethodKind::Mutation,
+        idempotent: true,
+        #[cfg(feature = "schema")]
+        params_schema: panel_open_file_params_schema,
+        #[cfg(feature = "schema")]
+        result_schema: operation_result_schema,
+    },
+    MethodSpec {
+        method: ControlMethod::RuntimePanelSave,
+        scopes: &[ControlScope::Runtime],
+        kind: MethodKind::Mutation,
+        idempotent: true,
+        #[cfg(feature = "schema")]
+        params_schema: panel_save_params_schema,
+        #[cfg(feature = "schema")]
+        result_schema: operation_result_schema,
+    },
+    MethodSpec {
         method: ControlMethod::RuntimeTerminalCreate,
         scopes: &[ControlScope::Runtime],
         kind: MethodKind::Mutation,
@@ -771,6 +801,8 @@ mod method_tests {
                 method_name(ControlMethod::RuntimePanelActivate),
                 method_name(ControlMethod::RuntimePanelMove),
                 method_name(ControlMethod::RuntimePanelOpenSettings),
+                method_name(ControlMethod::RuntimePanelOpenFile),
+                method_name(ControlMethod::RuntimePanelSave),
                 method_name(ControlMethod::RuntimeTerminalCreate),
                 method_name(ControlMethod::RuntimeTerminalInput),
                 method_name(ControlMethod::RuntimeTerminalExecute),
@@ -888,6 +920,8 @@ mod method_tests {
                 ControlMethod::RuntimePanelActivate,
                 ControlMethod::RuntimePanelMove,
                 ControlMethod::RuntimePanelOpenSettings,
+                ControlMethod::RuntimePanelOpenFile,
+                ControlMethod::RuntimePanelSave,
                 ControlMethod::RuntimeTerminalCreate,
                 ControlMethod::RuntimeTerminalInput,
                 ControlMethod::RuntimeTerminalExecute,

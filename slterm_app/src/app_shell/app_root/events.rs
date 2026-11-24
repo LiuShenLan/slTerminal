@@ -329,10 +329,12 @@ impl AppRoot {
             SltermShellEvent::RuntimeMutation {
                 mutation,
                 completion,
-            } => {
-                let result = self.handle_runtime_mutation(mutation, window, cx);
-                let _ = completion.try_send(result);
-            }
+            } => match self.handle_runtime_mutation(mutation, &completion, window, cx) {
+                super::runtime_snapshot::RuntimeMutationDispatch::Reply(reply) => {
+                    let _ = completion.try_send(reply);
+                }
+                super::runtime_snapshot::RuntimeMutationDispatch::Deferred => {}
+            },
             SltermShellEvent::RuntimeRead {
                 terminal_id,
                 generation,
@@ -517,7 +519,7 @@ fn invalid_open_file_request() -> JsonRpcError {
     handover_error(DomainErrorCode::InvalidRequest, -32000, "invalid file path")
 }
 
-fn open_file_handover_error(error: AppRootError) -> JsonRpcError {
+pub(super) fn open_file_handover_error(error: AppRootError) -> JsonRpcError {
     match error {
         AppRootError::Closing => closing_handover_error(),
         AppRootError::Focus(FocusError::ModalActive)

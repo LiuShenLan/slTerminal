@@ -267,6 +267,18 @@ pub(crate) struct AppRoot {
     document_relocation_aliases: BTreeMap<std::path::PathBuf, slterm_document::DocumentId>,
     fs_watch: Option<crate::app_shell::fs_watch::FsWatchHandle>,
     pending_document_saves: std::collections::BTreeSet<slterm_document::DocumentId>,
+    /// Runtime `panel.save` 等待者：保存落定后由唯一保存链回执。
+    runtime_save_waiters: BTreeMap<
+        slterm_document::DocumentId,
+        Vec<
+            std::sync::mpsc::SyncSender<
+                Result<
+                    crate::app_shell::RuntimeMutationReply,
+                    slterm_runtime_protocol::JsonRpcError,
+                >,
+            >,
+        >,
+    >,
     panel_subscriptions: BTreeMap<PanelId, Subscription>,
     panel_focus: BTreeMap<PanelId, FocusRegistration>,
     split_dividers: BTreeMap<(ProjectId, Vec<bool>), SplitDividerFocus>,
@@ -523,6 +535,7 @@ impl AppRoot {
             document_relocation_aliases: BTreeMap::new(),
             fs_watch: crate::app_shell::fs_watch::FsWatchHandle::new(),
             pending_document_saves: std::collections::BTreeSet::new(),
+            runtime_save_waiters: BTreeMap::new(),
             panel_subscriptions: BTreeMap::new(),
             panel_focus: BTreeMap::new(),
             split_dividers: BTreeMap::new(),

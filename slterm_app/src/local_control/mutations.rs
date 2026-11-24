@@ -52,6 +52,12 @@ pub(crate) enum RuntimeMutation {
         target_index: usize,
     },
     PanelOpenSettings,
+    PanelOpenFile {
+        path: String,
+    },
+    PanelSave {
+        view: ViewKey,
+    },
     TerminalCreate {
         project_root: Option<String>,
         cwd: Option<String>,
@@ -142,6 +148,8 @@ impl RuntimeMutation {
             Self::PanelActivate { .. } => "panel.activate",
             Self::PanelMove { .. } => "panel.move",
             Self::PanelOpenSettings => "panel.open_settings",
+            Self::PanelOpenFile { .. } => "panel.open_file",
+            Self::PanelSave { .. } => "panel.save",
             Self::TerminalCreate { .. } => "terminal.create",
             Self::TerminalInput { .. } => "terminal.input",
             Self::TerminalExecute { .. } => "terminal.execute",
@@ -223,6 +231,10 @@ impl RuntimeMutation {
                 "target_index": target_index,
             })),
             Self::PanelOpenSettings => Ok(serde_json::json!({})),
+            Self::PanelOpenFile { path } => Ok(serde_json::json!({"path": path})),
+            Self::PanelSave { view } => Ok(serde_json::json!({
+                "view": view.to_canonical_json().map_err(|_| ())?,
+            })),
             Self::TerminalCreate { project_root, cwd } => Ok(serde_json::json!({
                 "project_root": project_root,
                 "cwd": cwd,

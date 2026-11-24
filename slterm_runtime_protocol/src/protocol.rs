@@ -128,6 +128,10 @@ pub enum RuntimeMethod {
     PanelMove,
     #[serde(rename = "panel.open_settings")]
     PanelOpenSettings,
+    #[serde(rename = "panel.open_file")]
+    PanelOpenFile,
+    #[serde(rename = "panel.save")]
+    PanelSave,
     #[serde(rename = "terminal.create")]
     TerminalCreate,
     #[serde(rename = "terminal.input")]
@@ -614,6 +618,26 @@ pub type PanelMoveParams = MutationParams<PanelMoveRequest>;
 /// 设置入口不接收参数；有项目时打开项目设置，无项目时打开应用浮层。
 pub type PanelOpenSettingsParams = MutationParams<EmptyParams>;
 
+/// 打开文件到文本面板；`path` 是绝对 OS 路径，类型与授权由 application 裁定。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct PanelOpenFileRequest {
+    pub path: String,
+}
+
+pub type PanelOpenFileParams = MutationParams<PanelOpenFileRequest>;
+
+/// 保存视图绑定的 Document；`view` 是规范 ViewKey JSON 文本。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct PanelSaveRequest {
+    pub view: String,
+}
+
+pub type PanelSaveParams = MutationParams<PanelSaveRequest>;
+
 /// 写请求信封：幂等键与客户端身份是必填，期望代次可选。
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -1034,6 +1058,19 @@ fn runtime_request_is_valid(request: &RuntimeRequest) -> bool {
         RuntimeMethod::PanelOpenSettings => request
             .parse::<PanelOpenSettingsParams>()
             .is_some_and(|params| params.has_valid_envelope()),
+        RuntimeMethod::PanelOpenFile => {
+            request
+                .parse::<PanelOpenFileParams>()
+                .is_some_and(|params| {
+                    let request = &params.request;
+                    params.has_valid_envelope()
+                        && !request.path.trim().is_empty()
+                        && !request.path.contains('\0')
+                })
+        }
+        RuntimeMethod::PanelSave => request.parse::<PanelSaveParams>().is_some_and(|params| {
+            params.has_valid_envelope() && !params.request.view.trim().is_empty()
+        }),
         RuntimeMethod::TerminalCreate => {
             request
                 .parse::<TerminalCreateParams>()
@@ -1332,6 +1369,8 @@ pub enum ControlMethod {
     RuntimePanelActivate,
     RuntimePanelMove,
     RuntimePanelOpenSettings,
+    RuntimePanelOpenFile,
+    RuntimePanelSave,
     RuntimeTerminalCreate,
     RuntimeTerminalInput,
     RuntimeTerminalExecute,
@@ -1359,7 +1398,7 @@ pub enum ControlMethod {
 }
 
 impl ControlMethod {
-    pub const ALL: [Self; 42] = [
+    pub const ALL: [Self; 44] = [
         Self::RuntimeHello,
         Self::RuntimeDescribe,
         Self::RuntimeSnapshot,
@@ -1378,6 +1417,8 @@ impl ControlMethod {
         Self::RuntimePanelActivate,
         Self::RuntimePanelMove,
         Self::RuntimePanelOpenSettings,
+        Self::RuntimePanelOpenFile,
+        Self::RuntimePanelSave,
         Self::RuntimeTerminalCreate,
         Self::RuntimeTerminalInput,
         Self::RuntimeTerminalExecute,
@@ -1424,6 +1465,8 @@ impl ControlMethod {
             Self::RuntimePanelActivate => "panel.activate",
             Self::RuntimePanelMove => "panel.move",
             Self::RuntimePanelOpenSettings => "panel.open_settings",
+            Self::RuntimePanelOpenFile => "panel.open_file",
+            Self::RuntimePanelSave => "panel.save",
             Self::RuntimeTerminalCreate => "terminal.create",
             Self::RuntimeTerminalInput => "terminal.input",
             Self::RuntimeTerminalExecute => "terminal.execute",

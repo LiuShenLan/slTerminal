@@ -324,6 +324,91 @@ fn runtime_panel_open_settings_routes_through_dispatcher() {
 }
 
 #[test]
+fn runtime_panel_open_file_and_save_route_through_dispatcher() {
+    let mutations = Arc::new(AtomicUsize::new(0));
+    let mutations_by_callback = Arc::clone(&mutations);
+    let (mut server, _calls) = start_dual_scope_server_with_mutation(move |request| {
+        match &request.mutation {
+            crate::local_control::mutations::RuntimeMutation::PanelOpenFile { path } => {
+                assert_eq!(path, "D:/work/a/README.md");
+            }
+            crate::local_control::mutations::RuntimeMutation::PanelSave { view } => {
+                assert!(matches!(view, slterm_workspace::ViewKey::Editor { .. }));
+            }
+            other => panic!("意外写意图: {other:?}"),
+        }
+        mutations_by_callback.fetch_add(1, Ordering::SeqCst);
+        Ok(OperationResource {
+            operation_id: "operation-panel".to_owned(),
+            status: OperationStatus::Succeeded,
+            result: Some(serde_json::json!({})),
+            error: None,
+        })
+    });
+    let mut stream = connect(&server);
+    stream.set_read_timeout(Some(TEST_TIMEOUT)).unwrap();
+    write_json(
+        &mut stream,
+        &hello_scoped("sk-test-runtime", ControlScope::Runtime),
+    );
+    assert!(read_line(&mut stream).contains("store"));
+
+    write_json(
+        &mut stream,
+        &RuntimeRequest::new(
+            JsonRpcId::Number(70),
+            RuntimeMethod::PanelOpenFile,
+            slterm_runtime_protocol::PanelOpenFileParams {
+                client_id: "client-runtime".to_owned(),
+                mutation_id: "mutation-open-file".to_owned(),
+                expected_revision: None,
+                request: slterm_runtime_protocol::PanelOpenFileRequest {
+                    path: "D:/work/a/README.md".to_owned(),
+                },
+            },
+        ),
+    );
+    let reply: serde_json::Value = serde_json::from_str(&read_line(&mut stream)).unwrap();
+    assert_eq!(reply["result"]["status"], "succeeded");
+
+    let view = slterm_workspace::ViewKey::Editor {
+        project_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b".parse().unwrap(),
+        document_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2e".parse().unwrap(),
+    };
+    write_json(
+        &mut stream,
+        &RuntimeRequest::new(
+            JsonRpcId::Number(71),
+            RuntimeMethod::PanelSave,
+            slterm_runtime_protocol::PanelSaveParams {
+                client_id: "client-runtime".to_owned(),
+                mutation_id: "mutation-save".to_owned(),
+                expected_revision: None,
+                request: slterm_runtime_protocol::PanelSaveRequest {
+                    view: view.to_canonical_json().unwrap(),
+                },
+            },
+        ),
+    );
+    let reply: serde_json::Value = serde_json::from_str(&read_line(&mut stream)).unwrap();
+    assert_eq!(reply["result"]["status"], "succeeded");
+    assert_eq!(mutations.load(Ordering::SeqCst), 2);
+
+    write_json(
+        &mut stream,
+        &RuntimeRequest::new(
+            JsonRpcId::Number(72),
+            RuntimeMethod::PanelSave,
+            serde_json::json!({"client_id":"c","mutation_id":"m-invalid","expected_revision":null,"request":{"view":"not-a-view-key"}}),
+        ),
+    );
+    let reply: serde_json::Value = serde_json::from_str(&read_line(&mut stream)).unwrap();
+    assert_eq!(reply["error"]["data"]["code"], "invalid_request");
+    assert_eq!(mutations.load(Ordering::SeqCst), 2, "非法视图不得进入回调");
+    server.shutdown().unwrap();
+}
+
+#[test]
 fn runtime_terminal_input_and_execute_route_through_dispatcher() {
     let mutations = Arc::new(AtomicUsize::new(0));
     let mutations_by_callback = Arc::clone(&mutations);
@@ -1678,6 +1763,8 @@ fn runtime_describe_returns_registry_and_contract_hashes() {
             "panel.activate",
             "panel.move",
             "panel.open_settings",
+            "panel.open_file",
+            "panel.save",
             "terminal.create",
             "terminal.input",
             "terminal.execute",

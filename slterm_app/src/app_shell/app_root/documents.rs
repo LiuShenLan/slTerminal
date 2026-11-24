@@ -10,6 +10,7 @@ use std::time::Instant;
 use gpui::{App, AppContext as _, Context, EntityId, FocusHandle, Focusable as _, Window};
 use slterm_document::{DocumentId, DocumentOpenOutcome, EditApplyOutcome, EditTransactionError};
 use slterm_path::{CanonicalPath, PathGrant};
+use slterm_runtime_protocol::JsonRpcError;
 use slterm_workspace::{PanelGroupId, PanelId, ProjectId, ProjectRegistryError, ViewKey};
 
 use super::AppRoot;
@@ -17,6 +18,7 @@ use super::commands::AppRootError;
 use super::focus_manager::FocusToken;
 use super::panel_host::{EditorContent, MarkdownContent, PanelContent, PanelHost};
 use super::task_service::{CancellationToken, TaskId};
+use crate::app_shell::RuntimeMutationReply;
 use crate::app_shell::documents::{
     DocumentOpenError, OpenedDocument, OpenedDocumentBody, ResolvedDocument,
 };
@@ -55,6 +57,23 @@ enum DocumentEditPanel {
     Editor(gpui::Entity<DocumentTextView>),
     Markdown(gpui::Entity<MarkdownView>),
     Diff(gpui::Entity<super::diff::DiffView>),
+}
+
+/// 保存完成回执的封闭错误：不携带路径或底层错误文本。
+fn runtime_save_error(closing: bool) -> JsonRpcError {
+    if closing {
+        crate::app_shell::control_error(
+            slterm_runtime_protocol::DomainErrorCode::Closing,
+            -32004,
+            "closing",
+        )
+    } else {
+        crate::app_shell::control_error(
+            slterm_runtime_protocol::DomainErrorCode::NotReady,
+            -32001,
+            "document save not ready",
+        )
+    }
 }
 
 fn document_open_io(error: io::Error) -> AppRootError {
@@ -1046,6 +1065,7 @@ impl AppRoot {
 
     pub(super) fn save_document(&mut self, document_id: DocumentId, cx: &mut Context<'_, Self>) {
         if self.close_in_progress || self.application_close.is_some() || self.close_completed {
+            self.finish_runtime_save_waiters(document_id, Err(runtime_save_error(true)));
             return;
         }
         let task_id = TaskId::DocumentSave(document_id);
@@ -1064,6 +1084,7 @@ impl AppRoot {
             .session(document_id)
             .is_none_or(|session| !session.is_dirty())
         {
+            self.finish_runtime_save_waiters(document_id, Ok(()));
             return;
         }
         let grants = self.document_grants(document_id);
@@ -1072,6 +1093,7 @@ impl AppRoot {
             Err(error) => {
                 log::warn!("Document 保存请求未建立: {error}");
                 super::events::notify_document_save_state(error, cx);
+                self.finish_runtime_save_waiters(document_id, Err(runtime_save_error(false)));
                 return;
             }
         };
@@ -1100,6 +1122,13 @@ impl AppRoot {
                                         attempted_revision,
                                     );
                                     super::events::notify_document_save_state(error, cx);
+                                    root.finish_runtime_save_waiters(
+                                        document_id,
+                                        Err(runtime_save_error(false)),
+                                    );
+                                } else if !root.pending_document_saves.contains(&document_id) {
+                                    // 仍有排队保存时不提前回执，由后续保存尝试落定。
+                                    root.finish_runtime_save_waiters(document_id, Ok(()));
                                 }
                             }
                             Err(error) => {
@@ -1115,6 +1144,10 @@ impl AppRoot {
                                 );
                                 log::warn!("Document 保存失败: {error}");
                                 super::events::notify_document_save_error(&error, cx);
+                                root.finish_runtime_save_waiters(
+                                    document_id,
+                                    Err(runtime_save_error(false)),
+                                );
                             }
                         }
                         if root.pending_document_saves.remove(&document_id) {
@@ -1131,6 +1164,21 @@ impl AppRoot {
             self.document_autosave
                 .save_failed(&self.documents, document_id, attempted_revision);
             log::warn!("Document 保存任务未登记: {error:?}");
+            self.finish_runtime_save_waiters(document_id, Err(runtime_save_error(false)));
+        }
+    }
+
+    /// 保存链唯一出口：一次性回执所有 Runtime `panel.save` 等待者。
+    fn finish_runtime_save_waiters(
+        &mut self,
+        document_id: DocumentId,
+        result: Result<(), JsonRpcError>,
+    ) {
+        let Some(waiters) = self.runtime_save_waiters.remove(&document_id) else {
+            return;
+        };
+        for waiter in waiters {
+            let _ = waiter.try_send(Ok(RuntimeMutationReply::Done(result.clone())));
         }
     }
 
