@@ -43,6 +43,11 @@ pub(crate) fn load_runtime_settings() -> RuntimeSettings {
     load_runtime_settings_at(&settings_path())
 }
 
+/// 设置运行值初始化：宽容读取原始值树（含未知段），供全局写队列持有。
+pub(crate) fn load_raw_settings_lenient() -> RawSettings {
+    RawSettings::try_load_at(&settings_path()).unwrap_or_default()
+}
+
 fn load_runtime_settings_at(path: &Path) -> RuntimeSettings {
     let raw = RawSettings::try_load_at(path).unwrap_or_default();
     RuntimeSettings::from_raw(&raw)

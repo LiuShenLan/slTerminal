@@ -629,6 +629,7 @@ pub(crate) fn workspace_view_state_registry() -> Arc<ViewStateRegistry> {
         super::git_show::view_state_schema(),
     ];
     schemas.extend(document_view_state_schemas());
+    schemas.extend(crate::settings_state::settings_view_state_schemas());
     Arc::new(ViewStateRegistry::new(&schemas).expect("工作区 ViewState schema 封闭注册不得重复"))
 }
 

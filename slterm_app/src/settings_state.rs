@@ -8,8 +8,128 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::time::{Duration, Instant};
 
+use serde::{Deserialize, Serialize};
 use slterm_settings::json::Value;
 use slterm_settings::{RawSettings, RuntimeSettings, keys};
+use slterm_workspace::{
+    InvalidViewState, ViewKey, ViewKeyKind, ViewState, ViewStateError, ViewStateRegistry,
+    ViewStateSchema,
+};
+
+/// 设置页的封闭页面集合；Hooks 页只经有 CLI 编辑能力的宿主提供。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SettingsPageId {
+    Appearance,
+    Scrolling,
+    Interaction,
+    Session,
+    System,
+    AgentHooks,
+    Hooks,
+}
+
+impl SettingsPageId {
+    pub(crate) const ALL: [Self; 7] = [
+        Self::Appearance,
+        Self::Scrolling,
+        Self::Interaction,
+        Self::Session,
+        Self::System,
+        Self::AgentHooks,
+        Self::Hooks,
+    ];
+}
+
+/// 设置页仅持久化选中页与声明式页内参数；搜索、录制、临时错误、
+/// 普通输入草稿以及 Hooks 层级／GUI 模式都是瞬态，不进入本 DTO。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SettingsViewState {
+    selected_page: SettingsPageId,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    declared_page_params: BTreeMap<String, String>,
+}
+
+impl SettingsViewState {
+    pub(crate) fn new(selected_page: SettingsPageId) -> Self {
+        Self {
+            selected_page,
+            declared_page_params: BTreeMap::new(),
+        }
+    }
+
+    pub(crate) fn selected_page(&self) -> SettingsPageId {
+        self.selected_page
+    }
+
+    pub(crate) fn declared_page_params(&self) -> &BTreeMap<String, String> {
+        &self.declared_page_params
+    }
+
+    pub(crate) fn with_page_param(mut self, key: &str, value: &str) -> Self {
+        self.declared_page_params
+            .insert(key.to_owned(), value.to_owned());
+        self
+    }
+
+    /// 失效选中页回退到宿主第一个可用页并报告回退；不得创建空白页。
+    pub(crate) fn restore(
+        selected_page: SettingsPageId,
+        declared_page_params: BTreeMap<String, String>,
+        available: &[SettingsPageId],
+    ) -> (Self, bool) {
+        if available.contains(&selected_page) {
+            return (
+                Self {
+                    selected_page,
+                    declared_page_params,
+                },
+                false,
+            );
+        }
+        let fallback = available
+            .first()
+            .copied()
+            .unwrap_or(SettingsPageId::Appearance);
+        (
+            Self {
+                selected_page: fallback,
+                declared_page_params,
+            },
+            true,
+        )
+    }
+
+    pub(crate) fn to_view_state(
+        &self,
+        view_key: &ViewKey,
+        registry: &ViewStateRegistry,
+    ) -> Result<ViewState, ViewStateError> {
+        let value = serde_json::to_value(self).map_err(|_| ViewStateError::Encode)?;
+        ViewState::new(view_key, value, registry)
+    }
+}
+
+/// Settings 面板与无项目浮层各自按完整 ViewKey 解码同一 DTO。
+pub(crate) fn settings_view_state_schemas() -> Vec<ViewStateSchema> {
+    [ViewKeyKind::Settings, ViewKeyKind::AppSettingsOverlay]
+        .map(|kind| ViewStateSchema::new(kind, decode_settings_view_state))
+        .into_iter()
+        .collect()
+}
+
+fn decode_settings_view_state(
+    key: &ViewKey,
+    text: &str,
+) -> Result<serde_json::Value, InvalidViewState> {
+    match key {
+        ViewKey::Settings { .. } | ViewKey::AppSettingsOverlay => {}
+        _ => return Err(InvalidViewState),
+    }
+    let state: SettingsViewState = serde_json::from_str(text).map_err(|_| InvalidViewState)?;
+    serde_json::to_value(state).map_err(|_| InvalidViewState)
+}
 
 /// 自动保存延迟：停止编辑满 2 秒后落盘。
 pub(crate) const AUTO_SAVE_DELAY: Duration = Duration::from_secs(2);
@@ -265,6 +385,76 @@ mod tests {
             )
             .unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    /// 选中页按完整 ViewKey 恢复；瞬态字段拒绝，失效页回退并报告。
+    #[test]
+    fn settings_page_view_state_restore() {
+        use slterm_workspace::{ViewKey, ViewKeyKind, ViewState, ViewStateRegistry};
+        use std::collections::BTreeSet;
+        use std::str::FromStr as _;
+
+        let registry = ViewStateRegistry::new(&settings_view_state_schemas()).unwrap();
+        let project =
+            slterm_workspace::ProjectId::from_str("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2a").unwrap();
+        let project_key = ViewKey::Settings {
+            project_id: project,
+        };
+        let state =
+            SettingsViewState::new(SettingsPageId::Session).with_page_param("focus", "terminal");
+        let project_state = state.to_view_state(&project_key, &registry).unwrap();
+        let overlay_state = state
+            .to_view_state(&ViewKey::AppSettingsOverlay, &registry)
+            .unwrap();
+        assert_ne!(
+            project_state.to_canonical_json().unwrap(),
+            overlay_state.to_canonical_json().unwrap(),
+            "项目 Settings 与浮层按完整 ViewKey 独立存取"
+        );
+
+        let persisted = project_state
+            .state()
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            persisted,
+            BTreeSet::from([
+                "declared_page_params".to_owned(),
+                "selected_page".to_owned()
+            ]),
+            "搜索、录制与普通输入等瞬态不得进入持久状态"
+        );
+
+        let text = project_state.to_canonical_json().unwrap();
+        let restored = ViewState::from_canonical_json(&text, &project_key, &registry).unwrap();
+        assert_eq!(restored.kind(), ViewKeyKind::Settings);
+        assert_eq!(restored.state(), project_state.state());
+
+        let mut envelope: serde_json::Value = serde_json::from_str(&text).unwrap();
+        envelope["state"]["search"] = serde_json::json!("transient");
+        let bad = serde_json::to_string(&envelope).unwrap();
+        assert!(
+            ViewState::from_canonical_json(&bad, &project_key, &registry).is_err(),
+            "未登记瞬态字段必须拒绝"
+        );
+
+        let (restored, fell_back) = SettingsViewState::restore(
+            SettingsPageId::Hooks,
+            BTreeMap::new(),
+            &[SettingsPageId::Appearance, SettingsPageId::Session],
+        );
+        assert_eq!(restored.selected_page(), SettingsPageId::Appearance);
+        assert!(fell_back, "失效选中页必须回退到首个可用页");
+        let (restored, fell_back) = SettingsViewState::restore(
+            SettingsPageId::Session,
+            BTreeMap::new(),
+            &[SettingsPageId::Appearance, SettingsPageId::Session],
+        );
+        assert_eq!(restored.selected_page(), SettingsPageId::Session);
+        assert!(!fell_back);
     }
 
     /// 读侧分流：缺失无警示、单字段非法只回退自身、损坏隔离并标记。

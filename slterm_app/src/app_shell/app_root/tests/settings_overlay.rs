@@ -1,6 +1,101 @@
 //! 无项目设置浮层的应用级所有权与焦点测试。
 
+use std::time::Instant;
+
+use slterm_agents::AgentKind;
+
 use super::*;
+use crate::ai_hook::draft_host::{HooksDraft, HooksDraftKey, HooksDraftLayer};
+
+fn install_user_hooks_draft(root: &Entity<AppRoot>, cx: &mut TestAppContext) -> HooksDraftKey {
+    let panel = PanelIdAllocator::new(31).allocate().unwrap();
+    let key = HooksDraftKey {
+        panel,
+        agent: AgentKind::Claude,
+        layer: HooksDraftLayer::User,
+    };
+    root.update(cx, |root, _| {
+        let text = r#"{"Stop":[]}"#;
+        root.hook_drafts.insert(
+            key,
+            HooksDraft::loaded(
+                None,
+                text.to_owned(),
+                crate::ai_hook::draft::parse_hooks_json(text).unwrap(),
+            ),
+        );
+    });
+    key
+}
+
+/// 浮层重复入口不重置 Hooks 草稿与全局待写；项目激活不销毁浮层。
+#[gpui::test]
+fn app_settings_overlay_keeps_hooks_draft(cx: &mut TestAppContext) {
+    let (root, mut window, _state) = open_root(cx);
+    focus_workspace(&root, &mut window);
+    open_settings(&mut window);
+    let key = install_user_hooks_draft(&root, cx);
+    root.update(cx, |root, _| {
+        assert!(root.settings.set_auto(
+            "font_size",
+            slterm_settings::json::Value::Number(15.0),
+            Instant::now(),
+        ));
+    });
+
+    open_settings(&mut window);
+    root.read_with(cx, |root, _| {
+        assert!(root.settings_overlay.is_some(), "重复入口必须复用同一浮层");
+        assert!(
+            root.hook_drafts.get(key).is_some(),
+            "重复入口不得重置浮层 Hooks 草稿"
+        );
+        assert_eq!(root.settings.pending_len(), 1);
+    });
+}
+
+/// 项目激活与切换后浮层、Hooks 草稿与全局写队列全部保留。
+#[gpui::test]
+fn settings_overlay_keeps_draft_and_queue(cx: &mut TestAppContext) {
+    let (root, mut window, _state) = open_root(cx);
+    focus_workspace(&root, &mut window);
+    open_settings(&mut window);
+    let key = install_user_hooks_draft(&root, cx);
+    root.update(cx, |root, _| {
+        assert!(root.settings.set_auto(
+            "font_size",
+            slterm_settings::json::Value::Number(15.0),
+            Instant::now(),
+        ));
+    });
+    let entity_id = root.read_with(&*cx, |root, _| {
+        root.settings_overlay.as_ref().unwrap().view.entity_id()
+    });
+
+    add_project(&root, &mut window, PROJECT_A, "D:/work/a");
+    add_project(&root, &mut window, PROJECT_B, "D:/work/b");
+    activate_project(&root, &mut window, PROJECT_A);
+
+    root.read_with(cx, |root, _| {
+        assert_eq!(
+            root.settings_overlay
+                .as_ref()
+                .map(|host| host.view.entity_id()),
+            Some(entity_id),
+            "激活或切换项目不得销毁无项目浮层"
+        );
+        assert_eq!(
+            root.hook_drafts.get(key).map(|draft| draft.text()),
+            Some(r#"{"Stop":[]}"#),
+            "项目激活不得丢失浮层 Hooks 草稿"
+        );
+        assert_eq!(
+            root.settings.pending_len(),
+            1,
+            "关闭或切换视图不得取消全局待写"
+        );
+    });
+}
 
 fn open_settings(window: &mut VisualTestContext) {
     window.simulate_keystrokes("ctrl-,");

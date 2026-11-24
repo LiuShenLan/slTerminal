@@ -269,6 +269,9 @@ pub(crate) struct AppRoot {
     side_view_persistence: AppRootPersistence,
     /// Hooks 草稿只按「面板实例＋CLI＋层级」隔离存活；项目移除与根重定位前守卫。
     hook_drafts: crate::ai_hook::draft_host::HooksDraftHost,
+    /// 设置运行值与唯一写队列：项目 Settings 与无项目浮层共享。
+    #[allow(dead_code)] // 消费点归设置中心视图。
+    settings: crate::settings_state::SettingsStore,
     learning: crate::learning::LearningService,
     launcher: Box<dyn TerminalPanelLauncher>,
     project_paths: Arc<dyn ProjectPathResolver>,
@@ -504,6 +507,9 @@ impl AppRoot {
             settings_overlay: None,
             side_view_persistence: persistence,
             hook_drafts: crate::ai_hook::draft_host::HooksDraftHost::default(),
+            settings: crate::settings_state::SettingsStore::new(
+                crate::settings_store::load_raw_settings_lenient(),
+            ),
             learning: crate::learning::LearningService::memory_only(),
             launcher,
             project_paths: Arc::new(SystemProjectPathResolver),

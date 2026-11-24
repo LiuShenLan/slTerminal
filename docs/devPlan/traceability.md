@@ -211,7 +211,7 @@
 | 共享 Document 只有最后引用关闭才触发内容守卫 | `document_last_reference_close_guard` | 已自动化 |
 | 批量保存失败取消关闭并保留全部 Panel 与 PTY | `workspace_batch_save_failure_cancels_close`、`document_batch_close_partial_save` | 已自动化 |
 | 项目移除先完成守卫与删除意图再销毁资源 | `project_remove_commits_intent_before_destroy` | 已自动化 |
-| 激活项目不关闭无项目浮层或其 Hooks 草稿 | `app_settings_overlay_keeps_hooks_draft` | 待实现 |
+| 激活项目不关闭无项目浮层或其 Hooks 草稿 | `app_settings_overlay_keeps_hooks_draft` | 已自动化 |
 | 移交显式 cwd 未授权时拒绝且不改投项目 | `handover_rejects_unauthorized_cwd` | 已自动化 |
 | 最终退出提交失败后允许知情放弃状态 | `close_final_commit_failure_allows_explicit_abandon`、`application_global_abandon_closes_without_clean_shutdown` | 已自动化 |
 | 异常启动先布局后对账且不重复 Panel 或 PTY | `workspace_startup_layout_before_snapshots` | 已自动化 |
@@ -306,8 +306,8 @@
 
 | 验收场景 | 目标测试例名 | 状态 |
 |---|---|---|
-| 浮层 Hooks 草稿与全局队列在激活项目后保留 | `settings_overlay_keeps_draft_and_queue` | 待实现 |
-| 选中页按 ViewKey 恢复而搜索与录制态清除 | `settings_page_view_state_restore` | 待实现 |
+| 浮层 Hooks 草稿与全局队列在激活项目后保留 | `settings_overlay_keeps_draft_and_queue` | 已自动化 |
+| 选中页按 ViewKey 恢复而搜索与录制态清除 | `settings_page_view_state_restore` | 已自动化 |
 | 多 Settings 视图同步生效值且关闭不取消队列 | `settings_views_share_global_queue` | 已自动化 |
 | 终端中断与文件树复制按上下文独立绑定 | `keybinding_reserved_contexts` | 已自动化 |
 | 完整主题可用、缺项零写入且使用中删除需另选 | `theme_import_complete_or_zero_write` | 待实现 |
