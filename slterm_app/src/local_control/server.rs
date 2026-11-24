@@ -16,10 +16,10 @@ use slterm_runtime_protocol::{
     HelloResponse, JsonRpcError, JsonRpcErrorData, JsonRpcId, JsonRpcResponse,
     OPERATION_WAIT_LIMIT_MS, OperationQueryParams, OperationResource, OperationWaitParams,
     PanelActivateParams, PanelGroupMergeParams, PanelGroupResizeParams, PanelGroupSplitParams,
-    PanelMoveParams, ProjectActivateParams, ProjectListResponse, ProjectRemoveParams,
-    ProjectRenameParams, ProjectReorderParams, RuntimeEvent, RuntimeMethod, RuntimeRequest,
-    RuntimeResult, SnapshotResources, SnapshotResponse, SplitDirectionWire, ViewportSize,
-    parse_client_request,
+    PanelMoveParams, PanelOpenSettingsParams, ProjectActivateParams, ProjectListResponse,
+    ProjectRemoveParams, ProjectRenameParams, ProjectReorderParams, RuntimeEvent, RuntimeMethod,
+    RuntimeRequest, RuntimeResult, SnapshotResources, SnapshotResponse, SplitDirectionWire,
+    ViewportSize, parse_client_request,
 };
 use slterm_split::SplitDirection;
 use slterm_workspace::{LogicalSize, PanelGroupId, ProjectId, ViewKey};
@@ -660,6 +660,19 @@ fn handle_connection<F>(
                             params.expected_revision,
                             parse_view(&params.request.view)
                                 .map(|view| RuntimeMutation::PanelActivate { view }),
+                        )
+                    }
+                    RuntimeMethod::PanelOpenSettings => {
+                        let Some(params) = request.parse::<PanelOpenSettingsParams>() else {
+                            return;
+                        };
+                        respond_mutation(
+                            &runtime,
+                            request.id,
+                            params.client_id,
+                            params.mutation_id,
+                            params.expected_revision,
+                            Ok(RuntimeMutation::PanelOpenSettings),
                         )
                     }
                     RuntimeMethod::PanelMove => {

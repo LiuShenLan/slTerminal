@@ -704,6 +704,35 @@
         "request"
       ]
     },
+    "MutationParams10": {
+      "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
+      "type": "object",
+      "properties": {
+        "client_id": {
+          "type": "string"
+        },
+        "expected_revision": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "mutation_id": {
+          "type": "string"
+        },
+        "request": {
+          "$ref": "#/$defs/EmptyParams"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "client_id",
+        "mutation_id",
+        "request"
+      ]
+    },
     "MutationParams2": {
       "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
       "type": "object",
@@ -1288,7 +1317,8 @@
         "panel_group.merge",
         "panel_group.resize",
         "panel.activate",
-        "panel.move"
+        "panel.move",
+        "panel.open_settings"
       ]
     },
     "RuntimeParams": {
@@ -1332,6 +1362,9 @@
         },
         {
           "$ref": "#/$defs/MutationParams9"
+        },
+        {
+          "$ref": "#/$defs/MutationParams10"
         }
       ]
     },

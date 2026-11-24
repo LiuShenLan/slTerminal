@@ -13,9 +13,9 @@ use slterm_runtime_protocol::{
     HelloMethod, HelloParams, HelloRequest, HelloResponse, JsonRpcError, JsonRpcErrorData,
     JsonRpcId, JsonRpcRequest, OperationQueryParams, OperationResource, OperationStatus,
     OperationWaitParams, PanelGroupResource, PanelGroupSplitParams, PanelGroupSplitRequest,
-    ProjectActivateParams, ProjectActivateRequest, ProjectResource, RuntimeEvent, RuntimeMethod,
-    RuntimeRequest, SnapshotResources, SplitDirectionWire, TerminalResource, ViewResource,
-    ViewportSize,
+    PanelOpenSettingsParams, ProjectActivateParams, ProjectActivateRequest, ProjectResource,
+    RuntimeEvent, RuntimeMethod, RuntimeRequest, SnapshotResources, SplitDirectionWire,
+    TerminalResource, ViewResource, ViewportSize,
 };
 
 use super::LocalControlServer;
@@ -682,6 +682,45 @@ fn runtime_panel_mutations_route_through_dispatcher_and_reject_bad_views() {
 }
 
 #[test]
+fn runtime_panel_open_settings_routes_through_dispatcher() {
+    let mutations = Arc::new(AtomicUsize::new(0));
+    let mutations_by_callback = Arc::clone(&mutations);
+    let (mut server, _calls) = start_dual_scope_server_with_mutation(move |request| {
+        assert_eq!(request.mutation.method(), "panel.open_settings");
+        mutations_by_callback.fetch_add(1, Ordering::SeqCst);
+        Ok(OperationResource {
+            operation_id: "operation-settings".to_owned(),
+            status: OperationStatus::Succeeded,
+            result: Some(serde_json::json!({})),
+            error: None,
+        })
+    });
+    let mut stream = connect(&server);
+    stream.set_read_timeout(Some(TEST_TIMEOUT)).unwrap();
+    write_json(
+        &mut stream,
+        &hello_scoped("sk-test-runtime", ControlScope::Runtime),
+    );
+    assert!(read_line(&mut stream).contains("store"));
+
+    let request = RuntimeRequest::new(
+        JsonRpcId::Number(9),
+        RuntimeMethod::PanelOpenSettings,
+        PanelOpenSettingsParams {
+            client_id: "client-runtime".to_owned(),
+            mutation_id: "mutation-settings".to_owned(),
+            expected_revision: None,
+            request: EmptyParams {},
+        },
+    );
+    write_json(&mut stream, &request);
+    let reply: serde_json::Value = serde_json::from_str(&read_line(&mut stream)).unwrap();
+    assert_eq!(reply["result"]["status"], "succeeded");
+    assert_eq!(mutations.load(Ordering::SeqCst), 1);
+    server.shutdown().unwrap();
+}
+
+#[test]
 fn runtime_project_list_and_mutations_route_through_callbacks() {
     let mutations = Arc::new(AtomicUsize::new(0));
     let mutations_by_callback = Arc::clone(&mutations);
@@ -935,6 +974,7 @@ fn runtime_describe_returns_registry_and_contract_hashes() {
             "panel_group.resize",
             "panel.activate",
             "panel.move",
+            "panel.open_settings",
             "instance.handover"
         ]
     );

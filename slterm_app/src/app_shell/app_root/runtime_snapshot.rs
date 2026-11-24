@@ -163,6 +163,9 @@ impl AppRoot {
                 )
                 .map(|_| ())
                 .map_err(runtime_mutation_error),
+            RuntimeMutation::PanelOpenSettings => self
+                .open_settings_from_request(window, cx)
+                .map_err(runtime_mutation_error),
         }
     }
 

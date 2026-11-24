@@ -146,6 +146,11 @@ fn panel_move_params_schema() -> schemars::Schema {
     schemars::schema_for!(crate::protocol::PanelMoveParams)
 }
 
+#[cfg(feature = "schema")]
+fn panel_open_settings_params_schema() -> schemars::Schema {
+    schemars::schema_for!(crate::protocol::PanelOpenSettingsParams)
+}
+
 /// 全部真实可用方法；顺序即对外呈现顺序。
 pub static METHODS: &[MethodSpec] = &[
     MethodSpec {
@@ -319,6 +324,16 @@ pub static METHODS: &[MethodSpec] = &[
         result_schema: operation_result_schema,
     },
     MethodSpec {
+        method: ControlMethod::RuntimePanelOpenSettings,
+        scopes: &[ControlScope::Runtime],
+        kind: MethodKind::Mutation,
+        idempotent: true,
+        #[cfg(feature = "schema")]
+        params_schema: panel_open_settings_params_schema,
+        #[cfg(feature = "schema")]
+        result_schema: operation_result_schema,
+    },
+    MethodSpec {
         method: ControlMethod::InstanceHandover,
         scopes: &[ControlScope::Handover],
         kind: MethodKind::Mutation,
@@ -390,6 +405,7 @@ mod method_tests {
                 method_name(ControlMethod::RuntimePanelGroupResize),
                 method_name(ControlMethod::RuntimePanelActivate),
                 method_name(ControlMethod::RuntimePanelMove),
+                method_name(ControlMethod::RuntimePanelOpenSettings),
                 method_name(ControlMethod::InstanceHandover),
             ]
         );
@@ -483,6 +499,7 @@ mod method_tests {
                 ControlMethod::RuntimePanelGroupResize,
                 ControlMethod::RuntimePanelActivate,
                 ControlMethod::RuntimePanelMove,
+                ControlMethod::RuntimePanelOpenSettings,
             ]
         );
         let handover_methods: Vec<ControlMethod> = methods_for(ControlScope::Handover)

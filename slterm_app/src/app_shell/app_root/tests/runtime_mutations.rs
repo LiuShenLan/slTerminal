@@ -156,6 +156,39 @@ fn runtime_panel_mutations_reuse_layout_commands(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn runtime_panel_open_settings_reuses_existing_entry(cx: &mut TestAppContext) {
+    let (root, mut window, _state) = open_root(cx);
+    dispatch_mutation(&root, &mut window, RuntimeMutation::PanelOpenSettings)
+        .expect("无项目时必须打开应用级设置浮层");
+    root.read_with(cx, |root, _| {
+        assert!(root.settings_overlay.is_some(), "应用级设置浮层必须存在");
+    });
+
+    let (root, mut window, _state) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, "D:/work/a");
+    new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_A);
+    dispatch_mutation(&root, &mut window, RuntimeMutation::PanelOpenSettings)
+        .expect("有项目时必须打开项目设置视图");
+    root.read_with(cx, |root, _| {
+        let layout = root
+            .snapshot()
+            .registry()
+            .project(project_id(PROJECT_A))
+            .unwrap()
+            .layout();
+        let has_settings = layout.group_ids().iter().any(|group| {
+            layout
+                .group(*group)
+                .unwrap()
+                .views()
+                .iter()
+                .any(|view| view.kind_str() == "settings")
+        });
+        assert!(has_settings, "项目设置视图必须进入布局");
+    });
+}
+
+#[gpui::test]
 fn runtime_project_mutations_are_rejected_while_closing(cx: &mut TestAppContext) {
     let (root, mut window, _state) = open_root(cx);
     add_project(&root, &mut window, PROJECT_A, "D:/work/a");

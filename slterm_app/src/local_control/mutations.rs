@@ -50,6 +50,7 @@ pub(crate) enum RuntimeMutation {
         target_group: PanelGroupId,
         target_index: usize,
     },
+    PanelOpenSettings,
 }
 
 impl RuntimeMutation {
@@ -65,6 +66,7 @@ impl RuntimeMutation {
             Self::PanelGroupResize { .. } => "panel_group.resize",
             Self::PanelActivate { .. } => "panel.activate",
             Self::PanelMove { .. } => "panel.move",
+            Self::PanelOpenSettings => "panel.open_settings",
         }
     }
 
@@ -130,6 +132,7 @@ impl RuntimeMutation {
                 "target_group": target_group.to_string(),
                 "target_index": target_index,
             })),
+            Self::PanelOpenSettings => Ok(serde_json::json!({})),
         }
     }
 }

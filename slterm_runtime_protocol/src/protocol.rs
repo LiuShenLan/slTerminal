@@ -126,6 +126,8 @@ pub enum RuntimeMethod {
     PanelActivate,
     #[serde(rename = "panel.move")]
     PanelMove,
+    #[serde(rename = "panel.open_settings")]
+    PanelOpenSettings,
 }
 
 /// 封闭拆分方向；与布局树的轴向一一对应。
@@ -200,6 +202,8 @@ pub type PanelGroupMergeParams = MutationParams<PanelGroupMergeRequest>;
 pub type PanelGroupResizeParams = MutationParams<PanelGroupResizeRequest>;
 pub type PanelActivateParams = MutationParams<PanelActivateRequest>;
 pub type PanelMoveParams = MutationParams<PanelMoveRequest>;
+/// 设置入口不接收参数；有项目时打开项目设置，无项目时打开应用浮层。
+pub type PanelOpenSettingsParams = MutationParams<EmptyParams>;
 
 /// 写请求信封：幂等键与客户端身份是必填，期望代次可选。
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -364,6 +368,7 @@ pub enum RuntimeParams {
     PanelGroupResize(PanelGroupResizeParams),
     PanelActivate(PanelActivateParams),
     PanelMove(PanelMoveParams),
+    PanelOpenSettings(PanelOpenSettingsParams),
 }
 
 /// 单实例移交只接受 instance.handover。
@@ -614,6 +619,9 @@ fn runtime_request_is_valid(request: &RuntimeRequest) -> bool {
                 && present(&params.request.view)
                 && present(&params.request.target_group)
         }),
+        RuntimeMethod::PanelOpenSettings => request
+            .parse::<PanelOpenSettingsParams>()
+            .is_some_and(|params| params.has_valid_envelope()),
     }
 }
 
@@ -682,11 +690,12 @@ pub enum ControlMethod {
     RuntimePanelGroupResize,
     RuntimePanelActivate,
     RuntimePanelMove,
+    RuntimePanelOpenSettings,
     InstanceHandover,
 }
 
 impl ControlMethod {
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 19] = [
         Self::RuntimeHello,
         Self::RuntimeDescribe,
         Self::RuntimeSnapshot,
@@ -704,6 +713,7 @@ impl ControlMethod {
         Self::RuntimePanelGroupResize,
         Self::RuntimePanelActivate,
         Self::RuntimePanelMove,
+        Self::RuntimePanelOpenSettings,
         Self::InstanceHandover,
     ];
 
@@ -726,6 +736,7 @@ impl ControlMethod {
             Self::RuntimePanelGroupResize => "panel_group.resize",
             Self::RuntimePanelActivate => "panel.activate",
             Self::RuntimePanelMove => "panel.move",
+            Self::RuntimePanelOpenSettings => "panel.open_settings",
             Self::InstanceHandover => "instance.handover",
         }
     }

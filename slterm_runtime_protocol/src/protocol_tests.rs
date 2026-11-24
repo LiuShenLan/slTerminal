@@ -674,6 +674,7 @@ fn describe_lists_the_method_registry_with_contract_hashes() {
             "panel_group.resize",
             "panel.activate",
             "panel.move",
+            "panel.open_settings",
             "instance.handover"
         ]
     );
