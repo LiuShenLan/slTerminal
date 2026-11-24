@@ -331,6 +331,24 @@ mod tests {
         );
     }
 
+    /// 域外段读取只放行白名单段；注册表段不能经此绕过字段校验。
+    #[test]
+    fn external_segment_reads_only_whitelisted_segments() {
+        use super::{AGENT_ROOTS_SEGMENT, agent_roots_from_segment};
+        use crate::RawSettings;
+
+        let raw = RawSettings::from_json_bytes(
+            br#"{"agent_roots":{"roots":[]},"appearance":{"theme":"linear"}}"#,
+        );
+        assert!(raw.external_segment(AGENT_ROOTS_SEGMENT).is_some());
+        assert!(raw.external_segment("appearance").is_none());
+        assert!(
+            agent_roots_from_segment(raw.external_segment(AGENT_ROOTS_SEGMENT))
+                .unwrap()
+                .is_empty()
+        );
+    }
+
     /// 解码必须拒绝缺字段与非法值，不生成部分根。
     #[test]
     fn agent_root_decode_rejects_partial_values() {

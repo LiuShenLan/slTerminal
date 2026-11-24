@@ -99,6 +99,14 @@ impl RawSettings {
         self.tree.get(def.domain.segment())?.get(key)
     }
 
+    /// 域外段整体读取；只放行白名单段，注册表段不得经此绕过字段校验。
+    pub fn external_segment(&self, name: &str) -> Option<&Value> {
+        if !keys::is_external_segment(name) {
+            return None;
+        }
+        self.tree.get(name)
+    }
+
     /// 只返回通过所属注册字段校验器的持久值。
     fn valid_value(&self, key: &str) -> Option<&Value> {
         let def = keys::lookup(key)?;
