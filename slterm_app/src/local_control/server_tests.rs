@@ -12,9 +12,10 @@ use slterm_runtime_protocol::{
     EventsSubscribedResponse, HandoverMethod, HandoverParams, HandoverRequest, HandoverResponse,
     HelloMethod, HelloParams, HelloRequest, HelloResponse, JsonRpcError, JsonRpcErrorData,
     JsonRpcId, JsonRpcRequest, OperationQueryParams, OperationResource, OperationStatus,
-    OperationWaitParams, PanelGroupResource, ProjectActivateParams, ProjectActivateRequest,
-    ProjectResource, RuntimeEvent, RuntimeMethod, RuntimeRequest, SnapshotResources,
-    TerminalResource, ViewResource,
+    OperationWaitParams, PanelGroupResource, PanelGroupSplitParams, PanelGroupSplitRequest,
+    ProjectActivateParams, ProjectActivateRequest, ProjectResource, RuntimeEvent, RuntimeMethod,
+    RuntimeRequest, SnapshotResources, SplitDirectionWire, TerminalResource, ViewResource,
+    ViewportSize,
 };
 
 use super::LocalControlServer;
@@ -615,6 +616,71 @@ where
     (server, calls)
 }
 
+fn terminal_view_key() -> String {
+    slterm_workspace::ViewKey::Terminal {
+        project_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b".parse().unwrap(),
+        terminal_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2d".parse().unwrap(),
+    }
+    .to_canonical_json()
+    .unwrap()
+}
+
+fn panel_split_request(view: &str) -> RuntimeRequest {
+    RuntimeRequest::new(
+        JsonRpcId::Number(8),
+        RuntimeMethod::PanelGroupSplit,
+        PanelGroupSplitParams {
+            client_id: "client-runtime".to_owned(),
+            mutation_id: "mutation-split".to_owned(),
+            expected_revision: None,
+            request: PanelGroupSplitRequest {
+                view: view.to_owned(),
+                target_group: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0a2a".to_owned(),
+                direction: SplitDirectionWire::LeftRight,
+                ratio: 0.5,
+                viewport: ViewportSize {
+                    width: 800.0,
+                    height: 600.0,
+                },
+            },
+        },
+    )
+}
+
+#[test]
+fn runtime_panel_mutations_route_through_dispatcher_and_reject_bad_views() {
+    let mutations = Arc::new(AtomicUsize::new(0));
+    let mutations_by_callback = Arc::clone(&mutations);
+    let (mut server, _calls) = start_dual_scope_server_with_mutation(move |request| {
+        assert_eq!(request.mutation.method(), "panel_group.split");
+        mutations_by_callback.fetch_add(1, Ordering::SeqCst);
+        Ok(OperationResource {
+            operation_id: "operation-split".to_owned(),
+            status: OperationStatus::Succeeded,
+            result: Some(serde_json::json!({})),
+            error: None,
+        })
+    });
+    let mut stream = connect(&server);
+    stream.set_read_timeout(Some(TEST_TIMEOUT)).unwrap();
+    write_json(
+        &mut stream,
+        &hello_scoped("sk-test-runtime", ControlScope::Runtime),
+    );
+    assert!(read_line(&mut stream).contains("store"));
+
+    write_json(&mut stream, &panel_split_request(&terminal_view_key()));
+    let reply: serde_json::Value = serde_json::from_str(&read_line(&mut stream)).unwrap();
+    assert_eq!(reply["result"]["status"], "succeeded");
+    assert_eq!(mutations.load(Ordering::SeqCst), 1);
+
+    write_json(&mut stream, &panel_split_request("not-a-view-key"));
+    let reply: serde_json::Value = serde_json::from_str(&read_line(&mut stream)).unwrap();
+    assert_eq!(reply["error"]["data"]["code"], "invalid_request");
+    assert_eq!(mutations.load(Ordering::SeqCst), 1);
+    server.shutdown().unwrap();
+}
+
 #[test]
 fn runtime_project_list_and_mutations_route_through_callbacks() {
     let mutations = Arc::new(AtomicUsize::new(0));
@@ -864,6 +930,11 @@ fn runtime_describe_returns_registry_and_contract_hashes() {
             "project.rename",
             "project.reorder",
             "project.remove",
+            "panel_group.split",
+            "panel_group.merge",
+            "panel_group.resize",
+            "panel.activate",
+            "panel.move",
             "instance.handover"
         ]
     );

@@ -791,6 +791,151 @@
         "request"
       ]
     },
+    "MutationParams5": {
+      "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
+      "type": "object",
+      "properties": {
+        "client_id": {
+          "type": "string"
+        },
+        "expected_revision": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "mutation_id": {
+          "type": "string"
+        },
+        "request": {
+          "$ref": "#/$defs/PanelGroupSplitRequest"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "client_id",
+        "mutation_id",
+        "request"
+      ]
+    },
+    "MutationParams6": {
+      "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
+      "type": "object",
+      "properties": {
+        "client_id": {
+          "type": "string"
+        },
+        "expected_revision": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "mutation_id": {
+          "type": "string"
+        },
+        "request": {
+          "$ref": "#/$defs/PanelGroupMergeRequest"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "client_id",
+        "mutation_id",
+        "request"
+      ]
+    },
+    "MutationParams7": {
+      "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
+      "type": "object",
+      "properties": {
+        "client_id": {
+          "type": "string"
+        },
+        "expected_revision": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "mutation_id": {
+          "type": "string"
+        },
+        "request": {
+          "$ref": "#/$defs/PanelGroupResizeRequest"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "client_id",
+        "mutation_id",
+        "request"
+      ]
+    },
+    "MutationParams8": {
+      "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
+      "type": "object",
+      "properties": {
+        "client_id": {
+          "type": "string"
+        },
+        "expected_revision": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "mutation_id": {
+          "type": "string"
+        },
+        "request": {
+          "$ref": "#/$defs/PanelActivateRequest"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "client_id",
+        "mutation_id",
+        "request"
+      ]
+    },
+    "MutationParams9": {
+      "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
+      "type": "object",
+      "properties": {
+        "client_id": {
+          "type": "string"
+        },
+        "expected_revision": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "mutation_id": {
+          "type": "string"
+        },
+        "request": {
+          "$ref": "#/$defs/PanelMoveRequest"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "client_id",
+        "mutation_id",
+        "request"
+      ]
+    },
     "OperationQueryParams": {
       "description": "按操作标识查询持久结果；operation.get 与 operation.wait 共用身份。",
       "type": "object",
@@ -856,6 +1001,61 @@
         "operation_id"
       ]
     },
+    "PanelActivateRequest": {
+      "description": "激活视图；`view` 是规范 ViewKey JSON 文本。",
+      "type": "object",
+      "properties": {
+        "view": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "view"
+      ]
+    },
+    "PanelGroupMergeRequest": {
+      "description": "合并两个稳定组；顺序由布局转换裁定。",
+      "type": "object",
+      "properties": {
+        "source_group": {
+          "type": "string"
+        },
+        "target_group": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "source_group",
+        "target_group"
+      ]
+    },
+    "PanelGroupResizeRequest": {
+      "description": "调整分割比例；`path` 是从根到分割节点的布尔路径。",
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "array",
+          "items": {
+            "type": "boolean"
+          }
+        },
+        "ratio": {
+          "type": "number",
+          "format": "float"
+        },
+        "viewport": {
+          "$ref": "#/$defs/ViewportSize"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "ratio",
+        "viewport"
+      ]
+    },
     "PanelGroupResource": {
       "description": "快照中的面板组；`views` 按持久顺序，`active_view` 为组内激活视图。",
       "type": "object",
@@ -882,6 +1082,59 @@
         "group_id",
         "views",
         "active_view"
+      ]
+    },
+    "PanelGroupSplitRequest": {
+      "description": "从源视图拆分新组；`view` 是规范 ViewKey JSON 文本。",
+      "type": "object",
+      "properties": {
+        "direction": {
+          "$ref": "#/$defs/SplitDirectionWire"
+        },
+        "ratio": {
+          "type": "number",
+          "format": "float"
+        },
+        "target_group": {
+          "type": "string"
+        },
+        "view": {
+          "type": "string"
+        },
+        "viewport": {
+          "$ref": "#/$defs/ViewportSize"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "view",
+        "target_group",
+        "direction",
+        "ratio",
+        "viewport"
+      ]
+    },
+    "PanelMoveRequest": {
+      "description": "将视图移动到目标组指定位置。",
+      "type": "object",
+      "properties": {
+        "target_group": {
+          "type": "string"
+        },
+        "target_index": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "view": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "view",
+        "target_group",
+        "target_index"
       ]
     },
     "ProjectActivateRequest": {
@@ -1030,7 +1283,12 @@
         "project.activate",
         "project.rename",
         "project.reorder",
-        "project.remove"
+        "project.remove",
+        "panel_group.split",
+        "panel_group.merge",
+        "panel_group.resize",
+        "panel.activate",
+        "panel.move"
       ]
     },
     "RuntimeParams": {
@@ -1059,6 +1317,21 @@
         },
         {
           "$ref": "#/$defs/MutationParams4"
+        },
+        {
+          "$ref": "#/$defs/MutationParams5"
+        },
+        {
+          "$ref": "#/$defs/MutationParams6"
+        },
+        {
+          "$ref": "#/$defs/MutationParams7"
+        },
+        {
+          "$ref": "#/$defs/MutationParams8"
+        },
+        {
+          "$ref": "#/$defs/MutationParams9"
         }
       ]
     },
@@ -1177,6 +1450,14 @@
         "resources"
       ]
     },
+    "SplitDirectionWire": {
+      "description": "封闭拆分方向；与布局树的轴向一一对应。",
+      "type": "string",
+      "enum": [
+        "left_right",
+        "top_bottom"
+      ]
+    },
     "TerminalResource": {
       "description": "快照中的逻辑终端；不含 PTY、输出或回滚正文。",
       "type": "object",
@@ -1234,6 +1515,25 @@
       "required": [
         "kind",
         "key"
+      ]
+    },
+    "ViewportSize": {
+      "description": "布局操作使用的逻辑像素尺寸。",
+      "type": "object",
+      "properties": {
+        "height": {
+          "type": "number",
+          "format": "float"
+        },
+        "width": {
+          "type": "number",
+          "format": "float"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "width",
+        "height"
       ]
     }
   }

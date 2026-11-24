@@ -15,11 +15,14 @@ use slterm_runtime_protocol::{
     EventsSubscribeParams, EventsUnsubscribedResponse, HandoverParams, HandoverResponse,
     HelloResponse, JsonRpcError, JsonRpcErrorData, JsonRpcId, JsonRpcResponse,
     OPERATION_WAIT_LIMIT_MS, OperationQueryParams, OperationResource, OperationWaitParams,
-    ProjectActivateParams, ProjectListResponse, ProjectRemoveParams, ProjectRenameParams,
-    ProjectReorderParams, RuntimeEvent, RuntimeMethod, RuntimeRequest, RuntimeResult,
-    SnapshotResources, SnapshotResponse, parse_client_request,
+    PanelActivateParams, PanelGroupMergeParams, PanelGroupResizeParams, PanelGroupSplitParams,
+    PanelMoveParams, ProjectActivateParams, ProjectListResponse, ProjectRemoveParams,
+    ProjectRenameParams, ProjectReorderParams, RuntimeEvent, RuntimeMethod, RuntimeRequest,
+    RuntimeResult, SnapshotResources, SnapshotResponse, SplitDirectionWire, ViewportSize,
+    parse_client_request,
 };
-use slterm_workspace::ProjectId;
+use slterm_split::SplitDirection;
+use slterm_workspace::{LogicalSize, PanelGroupId, ProjectId, ViewKey};
 
 use super::events::Subscription;
 use super::mutations::{RuntimeMutation, RuntimeMutationRequest};
@@ -582,6 +585,107 @@ fn handle_connection<F>(
                                 .map(|project_id| RuntimeMutation::ProjectRemove { project_id }),
                         )
                     }
+                    RuntimeMethod::PanelGroupSplit => {
+                        let Some(params) = request.parse::<PanelGroupSplitParams>() else {
+                            return;
+                        };
+                        let mutation = parse_view(&params.request.view).and_then(|view| {
+                            parse_group(&params.request.target_group).map(|target_group| {
+                                RuntimeMutation::PanelGroupSplit {
+                                    view,
+                                    target_group,
+                                    direction: split_direction(params.request.direction),
+                                    ratio: params.request.ratio,
+                                    viewport: logical_viewport(params.request.viewport),
+                                }
+                            })
+                        });
+                        respond_mutation(
+                            &runtime,
+                            request.id,
+                            params.client_id,
+                            params.mutation_id,
+                            params.expected_revision,
+                            mutation,
+                        )
+                    }
+                    RuntimeMethod::PanelGroupMerge => {
+                        let Some(params) = request.parse::<PanelGroupMergeParams>() else {
+                            return;
+                        };
+                        let mutation =
+                            parse_group(&params.request.source_group).and_then(|source_group| {
+                                parse_group(&params.request.target_group).map(|target_group| {
+                                    RuntimeMutation::PanelGroupMerge {
+                                        source_group,
+                                        target_group,
+                                    }
+                                })
+                            });
+                        respond_mutation(
+                            &runtime,
+                            request.id,
+                            params.client_id,
+                            params.mutation_id,
+                            params.expected_revision,
+                            mutation,
+                        )
+                    }
+                    RuntimeMethod::PanelGroupResize => {
+                        let Some(params) = request.parse::<PanelGroupResizeParams>() else {
+                            return;
+                        };
+                        respond_mutation(
+                            &runtime,
+                            request.id,
+                            params.client_id,
+                            params.mutation_id,
+                            params.expected_revision,
+                            Ok(RuntimeMutation::PanelGroupResize {
+                                path: params.request.path,
+                                ratio: params.request.ratio,
+                                viewport: logical_viewport(params.request.viewport),
+                            }),
+                        )
+                    }
+                    RuntimeMethod::PanelActivate => {
+                        let Some(params) = request.parse::<PanelActivateParams>() else {
+                            return;
+                        };
+                        respond_mutation(
+                            &runtime,
+                            request.id,
+                            params.client_id,
+                            params.mutation_id,
+                            params.expected_revision,
+                            parse_view(&params.request.view)
+                                .map(|view| RuntimeMutation::PanelActivate { view }),
+                        )
+                    }
+                    RuntimeMethod::PanelMove => {
+                        let Some(params) = request.parse::<PanelMoveParams>() else {
+                            return;
+                        };
+                        let mutation = parse_view(&params.request.view).and_then(|view| {
+                            parse_group(&params.request.target_group).and_then(|target_group| {
+                                usize::try_from(params.request.target_index)
+                                    .map(|target_index| RuntimeMutation::PanelMove {
+                                        view,
+                                        target_group,
+                                        target_index,
+                                    })
+                                    .map_err(|_| invalid_request_error())
+                            })
+                        });
+                        respond_mutation(
+                            &runtime,
+                            request.id,
+                            params.client_id,
+                            params.mutation_id,
+                            params.expected_revision,
+                            mutation,
+                        )
+                    }
                 };
                 if write_json(&mut stream, &response).is_err() {
                     return;
@@ -677,6 +781,29 @@ fn invalid_request_error() -> JsonRpcError {
 fn parse_project_id(text: &str) -> Result<ProjectId, JsonRpcError> {
     text.parse::<ProjectId>()
         .map_err(|_| invalid_request_error())
+}
+
+fn parse_view(text: &str) -> Result<ViewKey, JsonRpcError> {
+    ViewKey::from_canonical_json(text).map_err(|_| invalid_request_error())
+}
+
+fn parse_group(text: &str) -> Result<PanelGroupId, JsonRpcError> {
+    text.parse::<PanelGroupId>()
+        .map_err(|_| invalid_request_error())
+}
+
+fn split_direction(direction: SplitDirectionWire) -> SplitDirection {
+    match direction {
+        SplitDirectionWire::LeftRight => SplitDirection::LeftRight,
+        SplitDirectionWire::TopBottom => SplitDirection::TopBottom,
+    }
+}
+
+fn logical_viewport(viewport: ViewportSize) -> LogicalSize {
+    LogicalSize {
+        width: viewport.width,
+        height: viewport.height,
+    }
 }
 
 /// 写意图统一投递给派发器；身份解析失败不登记任何 Operation。

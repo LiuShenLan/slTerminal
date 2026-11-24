@@ -121,6 +121,31 @@ fn project_list_result_schema() -> schemars::Schema {
     schemars::schema_for!(crate::protocol::ProjectListResponse)
 }
 
+#[cfg(feature = "schema")]
+fn panel_group_split_params_schema() -> schemars::Schema {
+    schemars::schema_for!(crate::protocol::PanelGroupSplitParams)
+}
+
+#[cfg(feature = "schema")]
+fn panel_group_merge_params_schema() -> schemars::Schema {
+    schemars::schema_for!(crate::protocol::PanelGroupMergeParams)
+}
+
+#[cfg(feature = "schema")]
+fn panel_group_resize_params_schema() -> schemars::Schema {
+    schemars::schema_for!(crate::protocol::PanelGroupResizeParams)
+}
+
+#[cfg(feature = "schema")]
+fn panel_activate_params_schema() -> schemars::Schema {
+    schemars::schema_for!(crate::protocol::PanelActivateParams)
+}
+
+#[cfg(feature = "schema")]
+fn panel_move_params_schema() -> schemars::Schema {
+    schemars::schema_for!(crate::protocol::PanelMoveParams)
+}
+
 /// 全部真实可用方法；顺序即对外呈现顺序。
 pub static METHODS: &[MethodSpec] = &[
     MethodSpec {
@@ -244,6 +269,56 @@ pub static METHODS: &[MethodSpec] = &[
         result_schema: operation_result_schema,
     },
     MethodSpec {
+        method: ControlMethod::RuntimePanelGroupSplit,
+        scopes: &[ControlScope::Runtime],
+        kind: MethodKind::Mutation,
+        idempotent: true,
+        #[cfg(feature = "schema")]
+        params_schema: panel_group_split_params_schema,
+        #[cfg(feature = "schema")]
+        result_schema: operation_result_schema,
+    },
+    MethodSpec {
+        method: ControlMethod::RuntimePanelGroupMerge,
+        scopes: &[ControlScope::Runtime],
+        kind: MethodKind::Mutation,
+        idempotent: true,
+        #[cfg(feature = "schema")]
+        params_schema: panel_group_merge_params_schema,
+        #[cfg(feature = "schema")]
+        result_schema: operation_result_schema,
+    },
+    MethodSpec {
+        method: ControlMethod::RuntimePanelGroupResize,
+        scopes: &[ControlScope::Runtime],
+        kind: MethodKind::Mutation,
+        idempotent: true,
+        #[cfg(feature = "schema")]
+        params_schema: panel_group_resize_params_schema,
+        #[cfg(feature = "schema")]
+        result_schema: operation_result_schema,
+    },
+    MethodSpec {
+        method: ControlMethod::RuntimePanelActivate,
+        scopes: &[ControlScope::Runtime],
+        kind: MethodKind::Mutation,
+        idempotent: true,
+        #[cfg(feature = "schema")]
+        params_schema: panel_activate_params_schema,
+        #[cfg(feature = "schema")]
+        result_schema: operation_result_schema,
+    },
+    MethodSpec {
+        method: ControlMethod::RuntimePanelMove,
+        scopes: &[ControlScope::Runtime],
+        kind: MethodKind::Mutation,
+        idempotent: true,
+        #[cfg(feature = "schema")]
+        params_schema: panel_move_params_schema,
+        #[cfg(feature = "schema")]
+        result_schema: operation_result_schema,
+    },
+    MethodSpec {
         method: ControlMethod::InstanceHandover,
         scopes: &[ControlScope::Handover],
         kind: MethodKind::Mutation,
@@ -310,6 +385,11 @@ mod method_tests {
                 method_name(ControlMethod::RuntimeProjectRename),
                 method_name(ControlMethod::RuntimeProjectReorder),
                 method_name(ControlMethod::RuntimeProjectRemove),
+                method_name(ControlMethod::RuntimePanelGroupSplit),
+                method_name(ControlMethod::RuntimePanelGroupMerge),
+                method_name(ControlMethod::RuntimePanelGroupResize),
+                method_name(ControlMethod::RuntimePanelActivate),
+                method_name(ControlMethod::RuntimePanelMove),
                 method_name(ControlMethod::InstanceHandover),
             ]
         );
@@ -398,6 +478,11 @@ mod method_tests {
                 ControlMethod::RuntimeProjectRename,
                 ControlMethod::RuntimeProjectReorder,
                 ControlMethod::RuntimeProjectRemove,
+                ControlMethod::RuntimePanelGroupSplit,
+                ControlMethod::RuntimePanelGroupMerge,
+                ControlMethod::RuntimePanelGroupResize,
+                ControlMethod::RuntimePanelActivate,
+                ControlMethod::RuntimePanelMove,
             ]
         );
         let handover_methods: Vec<ControlMethod> = methods_for(ControlScope::Handover)

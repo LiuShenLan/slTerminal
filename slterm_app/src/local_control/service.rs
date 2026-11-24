@@ -255,7 +255,13 @@ impl LocalControlService {
                 ));
             };
             let method = request.mutation.method();
-            let params = request.mutation.params_value();
+            let params = request.mutation.params_value().map_err(|_| {
+                control_error(
+                    DomainErrorCode::InvalidRequest,
+                    -32000,
+                    "invalid mutation params",
+                )
+            })?;
             dispatcher.dispatch(
                 DispatchRequest {
                     client_id: &request.client_id,

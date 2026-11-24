@@ -116,7 +116,90 @@ pub enum RuntimeMethod {
     ProjectReorder,
     #[serde(rename = "project.remove")]
     ProjectRemove,
+    #[serde(rename = "panel_group.split")]
+    PanelGroupSplit,
+    #[serde(rename = "panel_group.merge")]
+    PanelGroupMerge,
+    #[serde(rename = "panel_group.resize")]
+    PanelGroupResize,
+    #[serde(rename = "panel.activate")]
+    PanelActivate,
+    #[serde(rename = "panel.move")]
+    PanelMove,
 }
+
+/// 封闭拆分方向；与布局树的轴向一一对应。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum SplitDirectionWire {
+    LeftRight,
+    TopBottom,
+}
+
+/// 布局操作使用的逻辑像素尺寸。
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct ViewportSize {
+    pub width: f32,
+    pub height: f32,
+}
+
+/// 从源视图拆分新组；`view` 是规范 ViewKey JSON 文本。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct PanelGroupSplitRequest {
+    pub view: String,
+    pub target_group: String,
+    pub direction: SplitDirectionWire,
+    pub ratio: f32,
+    pub viewport: ViewportSize,
+}
+
+/// 合并两个稳定组；顺序由布局转换裁定。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct PanelGroupMergeRequest {
+    pub source_group: String,
+    pub target_group: String,
+}
+
+/// 调整分割比例；`path` 是从根到分割节点的布尔路径。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct PanelGroupResizeRequest {
+    pub path: Vec<bool>,
+    pub ratio: f32,
+    pub viewport: ViewportSize,
+}
+
+/// 激活视图；`view` 是规范 ViewKey JSON 文本。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct PanelActivateRequest {
+    pub view: String,
+}
+
+/// 将视图移动到目标组指定位置。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct PanelMoveRequest {
+    pub view: String,
+    pub target_group: String,
+    pub target_index: u64,
+}
+
+pub type PanelGroupSplitParams = MutationParams<PanelGroupSplitRequest>;
+pub type PanelGroupMergeParams = MutationParams<PanelGroupMergeRequest>;
+pub type PanelGroupResizeParams = MutationParams<PanelGroupResizeRequest>;
+pub type PanelActivateParams = MutationParams<PanelActivateRequest>;
+pub type PanelMoveParams = MutationParams<PanelMoveRequest>;
 
 /// 写请求信封：幂等键与客户端身份是必填，期望代次可选。
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -276,6 +359,11 @@ pub enum RuntimeParams {
     ProjectRename(ProjectRenameParams),
     ProjectReorder(ProjectReorderParams),
     ProjectRemove(ProjectRemoveParams),
+    PanelGroupSplit(PanelGroupSplitParams),
+    PanelGroupMerge(PanelGroupMergeParams),
+    PanelGroupResize(PanelGroupResizeParams),
+    PanelActivate(PanelActivateParams),
+    PanelMove(PanelMoveParams),
 }
 
 /// 单实例移交只接受 instance.handover。
@@ -486,7 +574,58 @@ fn runtime_request_is_valid(request: &RuntimeRequest) -> bool {
                     params.has_valid_envelope() && present(&params.request.project_id)
                 })
         }
+        RuntimeMethod::PanelGroupSplit => {
+            request
+                .parse::<PanelGroupSplitParams>()
+                .is_some_and(|params| {
+                    let request = &params.request;
+                    params.has_valid_envelope()
+                        && present(&request.view)
+                        && present(&request.target_group)
+                        && valid_ratio(request.ratio)
+                        && valid_viewport(request.viewport)
+                })
+        }
+        RuntimeMethod::PanelGroupMerge => {
+            request
+                .parse::<PanelGroupMergeParams>()
+                .is_some_and(|params| {
+                    params.has_valid_envelope()
+                        && present(&params.request.source_group)
+                        && present(&params.request.target_group)
+                })
+        }
+        RuntimeMethod::PanelGroupResize => {
+            request
+                .parse::<PanelGroupResizeParams>()
+                .is_some_and(|params| {
+                    let request = &params.request;
+                    params.has_valid_envelope()
+                        && !request.path.is_empty()
+                        && valid_ratio(request.ratio)
+                        && valid_viewport(request.viewport)
+                })
+        }
+        RuntimeMethod::PanelActivate => request
+            .parse::<PanelActivateParams>()
+            .is_some_and(|params| params.has_valid_envelope() && present(&params.request.view)),
+        RuntimeMethod::PanelMove => request.parse::<PanelMoveParams>().is_some_and(|params| {
+            params.has_valid_envelope()
+                && present(&params.request.view)
+                && present(&params.request.target_group)
+        }),
     }
+}
+
+fn valid_ratio(ratio: f32) -> bool {
+    ratio.is_finite() && (0.0..=1.0).contains(&ratio)
+}
+
+fn valid_viewport(viewport: ViewportSize) -> bool {
+    viewport.width.is_finite()
+        && viewport.height.is_finite()
+        && viewport.width > 0.0
+        && viewport.height > 0.0
 }
 
 /// 当前已实现的客户端请求；新增方法必须显式扩展封闭集合。
@@ -538,11 +677,16 @@ pub enum ControlMethod {
     RuntimeProjectRename,
     RuntimeProjectReorder,
     RuntimeProjectRemove,
+    RuntimePanelGroupSplit,
+    RuntimePanelGroupMerge,
+    RuntimePanelGroupResize,
+    RuntimePanelActivate,
+    RuntimePanelMove,
     InstanceHandover,
 }
 
 impl ControlMethod {
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 18] = [
         Self::RuntimeHello,
         Self::RuntimeDescribe,
         Self::RuntimeSnapshot,
@@ -555,6 +699,11 @@ impl ControlMethod {
         Self::RuntimeProjectRename,
         Self::RuntimeProjectReorder,
         Self::RuntimeProjectRemove,
+        Self::RuntimePanelGroupSplit,
+        Self::RuntimePanelGroupMerge,
+        Self::RuntimePanelGroupResize,
+        Self::RuntimePanelActivate,
+        Self::RuntimePanelMove,
         Self::InstanceHandover,
     ];
 
@@ -572,6 +721,11 @@ impl ControlMethod {
             Self::RuntimeProjectRename => "project.rename",
             Self::RuntimeProjectReorder => "project.reorder",
             Self::RuntimeProjectRemove => "project.remove",
+            Self::RuntimePanelGroupSplit => "panel_group.split",
+            Self::RuntimePanelGroupMerge => "panel_group.merge",
+            Self::RuntimePanelGroupResize => "panel_group.resize",
+            Self::RuntimePanelActivate => "panel.activate",
+            Self::RuntimePanelMove => "panel.move",
             Self::InstanceHandover => "instance.handover",
         }
     }

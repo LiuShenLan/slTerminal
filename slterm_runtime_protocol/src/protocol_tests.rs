@@ -5,10 +5,12 @@ use crate::protocol::{
     DiscoveryRecord, DocumentResource, DomainErrorCode, EmptyParams, HandoverMethod,
     HandoverParams, HandoverRequest, HelloMethod, HelloParams, HelloRequest, HelloResponse,
     JsonRpcError, JsonRpcErrorData, JsonRpcId, JsonRpcRequest, JsonRpcResponse, MutationParams,
-    OperationQueryParams, OperationResource, OperationWaitParams, PanelGroupResource,
-    ProjectActivateRequest, ProjectRemoveRequest, ProjectRenameRequest, ProjectReorderRequest,
-    ProjectResource, ProtocolError, RuntimeMethod, RuntimeRequest, SnapshotResources,
-    SnapshotResponse, TerminalResource, ViewResource, params_sha256, parse_client_request,
+    OperationQueryParams, OperationResource, OperationWaitParams, PanelActivateRequest,
+    PanelGroupMergeRequest, PanelGroupResizeRequest, PanelGroupResource, PanelGroupSplitRequest,
+    PanelMoveRequest, ProjectActivateRequest, ProjectRemoveRequest, ProjectRenameRequest,
+    ProjectReorderRequest, ProjectResource, ProtocolError, RuntimeMethod, RuntimeRequest,
+    SnapshotResources, SnapshotResponse, SplitDirectionWire, TerminalResource, ViewResource,
+    ViewportSize, params_sha256, parse_client_request,
 };
 use crate::{MethodKind, OperationStatus};
 
@@ -521,6 +523,84 @@ fn project_methods_require_idempotency_envelope_and_project_identity() {
 }
 
 #[test]
+fn panel_methods_validate_layout_identities_and_bounds() {
+    let view = r#"{"kind":"terminal","project_id":"018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b","terminal_id":"018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2d","version":1}"#;
+    let group = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0a2a";
+    for request in [
+        project_mutation(
+            RuntimeMethod::PanelGroupSplit,
+            PanelGroupSplitRequest {
+                view: view.to_owned(),
+                target_group: group.to_owned(),
+                direction: SplitDirectionWire::LeftRight,
+                ratio: 0.5,
+                viewport: ViewportSize {
+                    width: 800.0,
+                    height: 600.0,
+                },
+            },
+        ),
+        project_mutation(
+            RuntimeMethod::PanelGroupMerge,
+            PanelGroupMergeRequest {
+                source_group: group.to_owned(),
+                target_group: group.to_owned(),
+            },
+        ),
+        project_mutation(
+            RuntimeMethod::PanelGroupResize,
+            PanelGroupResizeRequest {
+                path: vec![true, false],
+                ratio: 0.25,
+                viewport: ViewportSize {
+                    width: 800.0,
+                    height: 600.0,
+                },
+            },
+        ),
+        project_mutation(
+            RuntimeMethod::PanelActivate,
+            PanelActivateRequest {
+                view: view.to_owned(),
+            },
+        ),
+        project_mutation(
+            RuntimeMethod::PanelMove,
+            PanelMoveRequest {
+                view: view.to_owned(),
+                target_group: group.to_owned(),
+                target_index: 1,
+            },
+        ),
+    ] {
+        let encoded = serde_json::to_value(&request).unwrap();
+        let parsed = parse_client_request(encoded.to_string().as_bytes()).unwrap();
+        match parsed {
+            ClientRequest::Runtime(parsed) => assert_eq!(parsed.method, request.method),
+            other => panic!("面板写请求必须解析为 Runtime 请求: {other:?}"),
+        }
+    }
+
+    for invalid in [
+        // 空视图
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"panel.activate","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"view":""}}}),
+        // ratio 越界
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"panel_group.split","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"view":"v","target_group":"g","direction":"left_right","ratio":1.5,"viewport":{"width":800.0,"height":600.0}}}}),
+        // viewport 非正
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"panel_group.resize","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"path":[true],"ratio":0.5,"viewport":{"width":0.0,"height":600.0}}}}),
+        // path 为空
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"panel_group.resize","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"path":[],"ratio":0.5,"viewport":{"width":800.0,"height":600.0}}}}),
+        // 未知方向
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"panel_group.split","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"view":"v","target_group":"g","direction":"diagonal","ratio":0.5,"viewport":{"width":800.0,"height":600.0}}}}),
+    ] {
+        assert!(
+            parse_client_request(invalid.to_string().as_bytes()).is_err(),
+            "非法面板请求必须拒绝: {invalid}"
+        );
+    }
+}
+
+#[test]
 fn params_hash_is_stable_and_json_serialization_dependent() {
     let a = serde_json::json!({"z": 1, "a": {"n": [1, 2]}});
     let b = serde_json::json!({"a": {"n": [1, 2]}, "z": 1});
@@ -589,6 +669,11 @@ fn describe_lists_the_method_registry_with_contract_hashes() {
             "project.rename",
             "project.reorder",
             "project.remove",
+            "panel_group.split",
+            "panel_group.merge",
+            "panel_group.resize",
+            "panel.activate",
+            "panel.move",
             "instance.handover"
         ]
     );

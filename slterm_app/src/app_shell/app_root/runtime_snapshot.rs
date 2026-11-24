@@ -82,6 +82,87 @@ impl AppRoot {
                 )
                 .map(|_| ())
                 .map_err(runtime_mutation_error),
+            RuntimeMutation::PanelGroupSplit {
+                view,
+                target_group,
+                direction,
+                ratio,
+                viewport,
+            } => self
+                .execute_command(
+                    CommandId::SplitView,
+                    CommandSource::Application,
+                    CommandTarget::Focused,
+                    Some(CommandParameters::SplitView {
+                        view,
+                        target_group,
+                        direction,
+                        ratio,
+                        viewport,
+                    }),
+                    window,
+                    cx,
+                )
+                .map(|_| ())
+                .map_err(runtime_mutation_error),
+            RuntimeMutation::PanelGroupMerge {
+                source_group,
+                target_group,
+            } => self
+                .execute_command(
+                    CommandId::MergeGroups,
+                    CommandSource::Application,
+                    CommandTarget::Focused,
+                    Some(CommandParameters::MergeGroups {
+                        source_group,
+                        target_group,
+                    }),
+                    window,
+                    cx,
+                )
+                .map(|_| ())
+                .map_err(runtime_mutation_error),
+            RuntimeMutation::PanelGroupResize {
+                path,
+                ratio,
+                viewport,
+            } => self
+                .execute_command(
+                    CommandId::ResizeSplit,
+                    CommandSource::Application,
+                    CommandTarget::Focused,
+                    Some(CommandParameters::ResizeSplit {
+                        path,
+                        ratio,
+                        viewport,
+                    }),
+                    window,
+                    cx,
+                )
+                .map(|_| ())
+                .map_err(runtime_mutation_error),
+            RuntimeMutation::PanelActivate { view } => self
+                .activate_view(view, window, cx)
+                .map_err(runtime_mutation_error),
+            RuntimeMutation::PanelMove {
+                view,
+                target_group,
+                target_index,
+            } => self
+                .execute_command(
+                    CommandId::MoveView,
+                    CommandSource::Application,
+                    CommandTarget::Focused,
+                    Some(CommandParameters::MoveView {
+                        view,
+                        target_group,
+                        target_index,
+                    }),
+                    window,
+                    cx,
+                )
+                .map(|_| ())
+                .map_err(runtime_mutation_error),
         }
     }
 
