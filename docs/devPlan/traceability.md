@@ -312,8 +312,8 @@
 | 终端中断与文件树复制按上下文独立绑定 | `keybinding_reserved_contexts` | 已自动化 |
 | 完整主题可用、缺项零写入且使用中删除需另选 | `theme_import_complete_or_zero_write` | 已自动化 |
 | Editor、Markdown、Diff 遵循同一 Document 自动保存 | `settings_document_autosave_is_global` | 已自动化 |
-| 套餐不读取 CLI 凭据且专用 token 不回显 | `settings_plan_token_not_cli_credentials` | 待实现 |
-| 后台周期提交后按新周期运行且隐藏仍查询 | `settings_plan_schedule_commit_and_visibility` | 待实现 |
+| 套餐不读取 CLI 凭据且专用 token 不回显 | `settings_plan_token_not_cli_credentials` | 已自动化 |
+| 后台周期提交后按新周期运行且隐藏仍查询 | `settings_plan_schedule_commit_and_visibility` | 已自动化 |
 | 自定义根真实目录重复拒绝且删除立即撤销授权 | `agent_root_duplicate_and_revocation` | 已自动化 |
 | AgentRoot 默认只读且写与终端分别拒绝 | `agent_root_default_capabilities` | 已自动化 |
 | Hooks 外部修改时不覆盖文件或静默丢草稿 | `hooks_external_modification_guard` | 已自动化 |

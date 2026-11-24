@@ -602,6 +602,52 @@ mod background_task_tests {
         assert!(begin(AUTO_UPDATE_DOWNLOAD).is_some(), "轮末释放闸门");
     }
 
+    /// 套餐配置提交后按新周期运行；隐藏（无导航视图）仍查询，禁用后停止。
+    #[test]
+    fn settings_plan_schedule_commit_and_visibility() {
+        reset_for_test();
+        apply_config(PLAN_BALANCE, Some(true), Some(120)).expect("合法配置");
+        assert_eq!(interval_sec(PLAN_BALANCE), 120, "提交后按新周期运行");
+        let subscription = subscribe(PLAN_BALANCE).expect("已注册");
+        let mut ran = 0;
+        assert_eq!(
+            run_once(PLAN_BALANCE, || {
+                ran += 1;
+                Ok(())
+            }),
+            TaskRunOutcome::Ran
+        );
+
+        apply_config(PLAN_BALANCE, Some(false), None).expect("合法配置");
+        assert_eq!(
+            run_once(PLAN_BALANCE, || {
+                ran += 1;
+                Ok(())
+            }),
+            TaskRunOutcome::Inactive,
+            "禁用提交后下一轮不得运行"
+        );
+
+        apply_config(PLAN_BALANCE, Some(true), Some(600)).expect("合法配置");
+        assert_eq!(
+            run_once(PLAN_BALANCE, || {
+                ran += 1;
+                Ok(())
+            }),
+            TaskRunOutcome::Ran,
+            "重新启用后同一订阅继续运行"
+        );
+        assert_eq!(ran, 2);
+        drop(subscription);
+        assert_eq!(
+            run_once(PLAN_BALANCE, || {
+                ran += 1;
+                Ok(())
+            }),
+            TaskRunOutcome::Inactive
+        );
+    }
+
     /// 套餐调度不依赖导航视图可见性；订阅释放后即停止。
     #[test]
     fn plan_balance_runs_while_navigation_hidden() {

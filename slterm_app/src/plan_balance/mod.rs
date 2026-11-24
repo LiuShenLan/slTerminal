@@ -142,6 +142,39 @@ mod credential_tests {
         }
     }
 
+    /// 设置页 token 只写专用凭据目标；解析层不读取环境或 CLI 认证材料。
+    #[test]
+    fn settings_plan_token_not_cli_credentials() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        for file in [
+            "src/plan_balance/mod.rs",
+            "src/plan_balance/deepseek.rs",
+            "src/plan_balance/kimi.rs",
+        ] {
+            let source = std::fs::read_to_string(root.join(file)).unwrap();
+            let production = source.split("#[cfg(test)]").next().unwrap();
+            for forbidden in [
+                "std::env",
+                "ANTHROPIC_API_KEY",
+                "OPENAI_API_KEY",
+                "settings.json",
+            ] {
+                assert!(
+                    !production.contains(forbidden),
+                    "{file} 不得经 {forbidden} 读取认证材料"
+                );
+            }
+        }
+        for source in [PlanBalanceSource::DeepSeek, PlanBalanceSource::Kimi] {
+            assert!(
+                source
+                    .credential_target()
+                    .starts_with("slterm/plan-balance/"),
+                "套餐凭据必须使用专用命名空间而非 CLI 凭据"
+            );
+        }
+    }
+
     /// 套餐只使用专用 Windows 凭据目标，材料不含 token。
     #[test]
     fn plan_balance_uses_dedicated_credential() {
