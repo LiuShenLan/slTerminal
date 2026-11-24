@@ -9,8 +9,8 @@ use std::io;
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     AnyElement, AppContext as _, Context, Focusable as _, InteractiveElement as _, IntoElement,
-    MouseButton, MouseDownEvent, ParentElement as _, Styled as _, Task, WeakEntity, Window, div,
-    px,
+    MouseButton, MouseDownEvent, ParentElement as _, StatefulInteractiveElement as _, Styled as _,
+    Task, WeakEntity, Window, div, px,
 };
 use gpui_component::ActiveTheme as _;
 use slterm_path::{CanonicalPath, PathGrant, PathOperation, PathPolicy, PathRequest};
@@ -96,7 +96,15 @@ pub(super) struct ExplorerRuntime {
     pending_reads: VecDeque<DirectoryReadRequest>,
     pending_expanded: BTreeSet<CanonicalPath>,
     restoring_row: Option<SideViewPath>,
+    /// 待根批次回投后应用的持久滚动偏移。
+    restoring_scroll: Option<f64>,
     inline_edit: Option<InlineEdit>,
+    filter: String,
+    show_ignored: bool,
+    multi_selection: BTreeSet<CanonicalPath>,
+    scroll_handle: gpui::ScrollHandle,
+    filter_input: Option<gpui::Entity<gpui_component::input::InputState>>,
+    _filter_change: Option<gpui::Subscription>,
     reading: bool,
     /// 用户动作产生的持久变更；恢复本身不写盘。
     dirty: bool,
@@ -116,7 +124,14 @@ impl ExplorerRuntime {
             pending_reads: VecDeque::new(),
             pending_expanded: BTreeSet::new(),
             restoring_row: None,
+            restoring_scroll: None,
             inline_edit: None,
+            filter: String::new(),
+            show_ignored: false,
+            multi_selection: BTreeSet::new(),
+            scroll_handle: gpui::ScrollHandle::new(),
+            filter_input: None,
+            _filter_change: None,
             reading: false,
             dirty: false,
             task: None,
@@ -141,13 +156,20 @@ impl ExplorerRuntime {
         self.pending_reads.clear();
         self.pending_expanded.clear();
         self.restoring_row = None;
+        self.restoring_scroll = None;
         self.inline_edit = None;
+        self.filter.clear();
+        self.multi_selection.clear();
+        self.show_ignored = false;
+        self.scroll_handle = gpui::ScrollHandle::new();
+        self.filter_input = None;
+        self._filter_change = None;
         self.dirty = false;
         self.error = None;
         self.restore(restored);
     }
 
-    /// 恢复只登记待展开目录与待选行；级联展开在真实批次回投后推进。
+    /// 恢复只登记待展开目录、待选行与滚动；级联展开在真实批次回投后推进。
     fn restore(&mut self, restored: Option<&ExplorerProjectState>) {
         let Some(restored) = restored else {
             return;
@@ -158,6 +180,8 @@ impl ExplorerRuntime {
             .filter_map(|path| join_relative(&root, path.as_str()))
             .collect();
         self.restoring_row = restored.current_row().cloned();
+        self.show_ignored = restored.show_ignored();
+        self.restoring_scroll = Some(restored.scroll());
     }
 }
 
@@ -213,7 +237,7 @@ fn persistent_path(root: &CanonicalPath, path: &CanonicalPath) -> Option<SideVie
 
 impl AppRoot {
     /// 实例生命周期或活跃项目根变化后同步 Explorer 根；根未变时零副作用。
-    pub(super) fn sync_side_view_roots(&mut self, cx: &mut Context<'_, Self>) {
+    pub(super) fn sync_side_view_roots(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
         let active = self.snapshot.registry().active();
         let target = active.and_then(|project_id| {
             let project = self.snapshot.registry().project(project_id)?;
@@ -231,7 +255,7 @@ impl AppRoot {
                 if id == SideViewId::Explorer {
                     match &target {
                         Some((project_id, root)) => {
-                            view.sync_explorer_root(*project_id, root.clone(), cx)
+                            view.sync_explorer_root(*project_id, root.clone(), window, cx)
                         }
                         None => view.clear_explorer_root(cx),
                     }
@@ -447,6 +471,7 @@ impl SideView {
         &mut self,
         project: ProjectId,
         root: CanonicalPath,
+        window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
         let restored = match &self.state {
@@ -458,6 +483,7 @@ impl SideView {
             .as_ref()
             .is_some_and(|runtime| runtime.matches(project, &root));
         if unchanged {
+            self.ensure_explorer_filter_input(window, cx);
             return;
         }
         self.checkpoint_explorer_state();
@@ -467,8 +493,34 @@ impl SideView {
                 self.explorer = Some(ExplorerRuntime::new(project, root, restored.as_ref()));
             }
         }
+        self.ensure_explorer_filter_input(window, cx);
         self.request_explorer_root(cx);
         cx.notify();
+    }
+
+    /// 过滤输入实体随视图生命周期存在；关闭重开即清空草稿。
+    fn ensure_explorer_filter_input(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        let Some(runtime) = &self.explorer else {
+            return;
+        };
+        if runtime.filter_input.is_some() {
+            return;
+        }
+        let input = cx.new(|cx| gpui_component::input::InputState::new(window, cx));
+        let change = cx.subscribe_in(
+            &input,
+            window,
+            |view, input, event: &gpui_component::input::InputEvent, _, cx| {
+                if matches!(event, gpui_component::input::InputEvent::Change) {
+                    let text = input.read(cx).value().to_string();
+                    view.explorer_set_filter(&text, cx);
+                }
+            },
+        );
+        if let Some(runtime) = &mut self.explorer {
+            runtime.filter_input = Some(input);
+            runtime._filter_change = Some(change);
+        }
     }
 
     /// 无活跃项目时清空树，不保留上一项目的可操作行。
@@ -501,6 +553,9 @@ impl SideView {
             .tree
             .selected()
             .and_then(|path| persistent_path(&root, path));
+        // GPUI 滚动偏移为负值；持久语义用向下滚动的正像素数。
+        let scroll = f64::from(-runtime.scroll_handle.offset().y.as_f32()).max(0.0);
+        let show_ignored = runtime.show_ignored;
         let _ = self.edit_state(|state| {
             let SideViewState::Explorer(explorer) = state else {
                 return;
@@ -508,6 +563,8 @@ impl SideView {
             let project = explorer.project_mut(project);
             project.set_expanded(expanded);
             project.set_current_row(current_row);
+            project.set_scroll(scroll);
+            project.set_show_ignored(show_ignored);
         });
         if let Some(runtime) = &mut self.explorer {
             runtime.dirty = false;
@@ -631,7 +688,110 @@ impl SideView {
             let _ = runtime.tree.select(&path);
             runtime.restoring_row = None;
         }
+        // 根批次已回投后才应用滚动，避免被空内容夹紧。
+        if runtime.tree.directory_status(runtime.tree.root_path()) == DirectoryStatus::Loaded
+            && let Some(scroll) = runtime.restoring_scroll.take()
+            && scroll > 0.0
+        {
+            runtime
+                .scroll_handle
+                .set_offset(gpui::point(gpui::px(0.0), gpui::px(-(scroll as f32))));
+        }
         self.start_explorer_reads(cx);
+    }
+
+    /// 单击选中：清空多选并记录当前行；不产生跨域意图。
+    pub(super) fn explorer_select_at(&mut self, path: &CanonicalPath, cx: &mut Context<'_, Self>) {
+        let Some(runtime) = &mut self.explorer else {
+            return;
+        };
+        if runtime.tree.select(path).is_err() {
+            return;
+        }
+        runtime.multi_selection.clear();
+        runtime.dirty = true;
+        cx.notify();
+    }
+
+    /// Ctrl 点击：在当前行之外切换多选集合，瞬态不写盘。
+    pub(super) fn explorer_toggle_multi_selection(
+        &mut self,
+        path: &CanonicalPath,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(runtime) = &mut self.explorer else {
+            return;
+        };
+        if runtime.tree.kind_of(path).is_none() {
+            return;
+        }
+        if !runtime.multi_selection.remove(path) {
+            runtime.multi_selection.insert(path.clone());
+        }
+        cx.notify();
+    }
+
+    /// 过滤只作用于已加载投影，瞬态不进入 ViewState。
+    pub(super) fn explorer_set_filter(&mut self, text: &str, cx: &mut Context<'_, Self>) {
+        let Some(runtime) = &mut self.explorer else {
+            return;
+        };
+        if runtime.filter == text {
+            return;
+        }
+        runtime.filter = text.to_owned();
+        runtime.tree.set_filter(text);
+        cx.notify();
+    }
+
+    /// 忽略开关是持久展示偏好；真实过滤归后续 Git 状态投影。
+    pub(super) fn explorer_set_show_ignored(&mut self, show: bool, cx: &mut Context<'_, Self>) {
+        let Some(runtime) = &mut self.explorer else {
+            return;
+        };
+        if runtime.show_ignored == show {
+            return;
+        }
+        runtime.show_ignored = show;
+        runtime.dirty = true;
+        cx.notify();
+    }
+
+    pub(super) fn explorer_scroll_handle(&self) -> Option<&gpui::ScrollHandle> {
+        self.explorer.as_ref().map(|runtime| &runtime.scroll_handle)
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(super) fn explorer_is_expanded(&self, path: &CanonicalPath) -> bool {
+        self.explorer
+            .as_ref()
+            .is_some_and(|runtime| runtime.tree.is_expanded(path))
+    }
+
+    pub(super) fn explorer_selected(&self) -> Option<&CanonicalPath> {
+        self.explorer
+            .as_ref()
+            .and_then(|runtime| runtime.tree.selected())
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(super) fn explorer_filter(&self) -> &str {
+        self.explorer
+            .as_ref()
+            .map(|runtime| runtime.filter.as_str())
+            .unwrap_or_default()
+    }
+
+    pub(super) fn explorer_show_ignored(&self) -> bool {
+        self.explorer
+            .as_ref()
+            .is_some_and(|runtime| runtime.show_ignored)
+    }
+
+    pub(super) fn explorer_multi_selection(&self) -> Option<&BTreeSet<CanonicalPath>> {
+        self.explorer
+            .as_ref()
+            .map(|runtime| &runtime.multi_selection)
     }
 
     /// 单击或键盘激活树行：目录只改展开，文件只产生打开意图。
@@ -730,6 +890,18 @@ impl SideView {
             .as_ref()
             .and_then(|runtime| runtime.inline_edit.as_ref())
             .map(|edit| edit.input.clone())
+    }
+
+    /// Enter 入口：激活当前选中行（文件打开、目录切换展开）。
+    pub(super) fn explorer_activate_selected(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(path) = self.explorer_selected().cloned() else {
+            return;
+        };
+        self.explorer_activate_at(&path, window, cx);
     }
 
     /// F2 入口：对当前选中行开始内联重命名。
@@ -881,13 +1053,20 @@ impl SideView {
 /// 文件树画面只读运行态快照；点击行复用同一激活入口。
 pub(super) fn render_explorer(view: &mut SideView, cx: &mut Context<'_, SideView>) -> AnyElement {
     let inline_input = view.explorer_inline_edit_input();
+    let scroll_handle = view.explorer_scroll_handle().cloned();
+    let multi_selection = view.explorer_multi_selection().cloned().unwrap_or_default();
     let Some(runtime) = &view.explorer else {
+        return div().size_full().into_any_element();
+    };
+    let Some(scroll_handle) = scroll_handle else {
         return div().size_full().into_any_element();
     };
     let root = runtime.tree.root_path().clone();
     let rows = runtime.tree.visible_rows();
     let error = runtime.error;
     let inline_target = runtime.inline_edit.as_ref().map(|edit| edit.target.clone());
+    let filter_input = runtime.filter_input.clone();
+    let show_ignored = runtime.show_ignored;
     let expanded = rows
         .iter()
         .filter(|row| runtime.tree.is_expanded(&row.path))
@@ -897,9 +1076,10 @@ pub(super) fn render_explorer(view: &mut SideView, cx: &mut Context<'_, SideView
         .id("explorer-tree")
         .flex()
         .flex_col()
-        .size_full()
+        .flex_grow(1.0)
         .min_h_0()
-        .overflow_hidden()
+        .overflow_y_scroll()
+        .track_scroll(&scroll_handle)
         .text_sm();
     if let Some(error) = error {
         let message = match error {
@@ -928,6 +1108,7 @@ pub(super) fn render_explorer(view: &mut SideView, cx: &mut Context<'_, SideView
         let indent = 8.0 + row.depth as f32 * 12.0;
         let selector = format!("explorer-row-{relative}");
         let editing = inline_target.as_ref() == Some(&row.path);
+        let multi = multi_selection.contains(&row.path);
         let path = row.path;
         let text_color = if selected {
             cx.theme().foreground
@@ -940,17 +1121,25 @@ pub(super) fn render_explorer(view: &mut SideView, cx: &mut Context<'_, SideView
             .id(("explorer-row", index))
             .h(px(22.0))
             .pl(px(indent))
-            .when(selected, |element| element.bg(selection))
+            .when(selected || multi, |element| element.bg(selection))
             .text_color(text_color)
             .debug_selector(move || selector.clone())
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |view, event: &MouseDownEvent, window, cx| {
-                    // 双击在终端打开，单击复用选中/展开/打开语义。
                     if event.click_count >= 2 {
-                        view.explorer_open_terminal_at(&path, window, cx);
-                    } else {
+                        if is_directory {
+                            view.explorer_open_terminal_at(&path, window, cx);
+                        } else {
+                            view.explorer_activate_at(&path, window, cx);
+                        }
+                    } else if event.modifiers.control {
+                        view.explorer_toggle_multi_selection(&path, cx);
+                    } else if is_directory {
+                        view.explorer_select_at(&path, cx);
                         view.explorer_activate_at(&path, window, cx);
+                    } else {
+                        view.explorer_select_at(&path, cx);
                     }
                 }),
             );
@@ -960,5 +1149,50 @@ pub(super) fn render_explorer(view: &mut SideView, cx: &mut Context<'_, SideView
         };
         list = list.child(row_element);
     }
-    list.into_any_element()
+
+    let mut header = div()
+        .id("explorer-header")
+        .flex()
+        .items_center()
+        .gap(px(4.0))
+        .px_2()
+        .py_1();
+    if let Some(input) = filter_input {
+        header = header.child(
+            div()
+                .flex_grow(1.0)
+                .min_w_0()
+                .child(gpui_component::input::Input::new(&input)),
+        );
+    }
+    header = header.child(
+        div()
+            .id("explorer-show-ignored")
+            .flex_none()
+            .cursor_pointer()
+            .debug_selector(|| "explorer-show-ignored".to_owned())
+            .text_color(cx.theme().muted_foreground)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|view, _, _, cx| {
+                    let next = !view.explorer_show_ignored();
+                    view.explorer_set_show_ignored(next, cx);
+                }),
+            )
+            .child(if show_ignored {
+                "ignored: on"
+            } else {
+                "ignored: off"
+            }),
+    );
+
+    div()
+        .id("explorer-panel")
+        .flex()
+        .flex_col()
+        .size_full()
+        .min_h_0()
+        .child(header)
+        .child(list)
+        .into_any_element()
 }

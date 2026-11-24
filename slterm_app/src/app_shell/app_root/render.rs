@@ -238,7 +238,9 @@ impl Render for AppRoot {
         // Explorer 根接线幂等且只读项目快照；实际后台读取延迟到 effect 周期。
         if self.side_view_roots_generation != Some(self.snapshot_generation) {
             self.side_view_roots_generation = Some(self.snapshot_generation);
-            cx.defer_in(window, |root, _, cx| root.sync_side_view_roots(cx));
+            cx.defer_in(window, |root, window, cx| {
+                root.sync_side_view_roots(window, cx)
+            });
         }
         div()
             .size_full()

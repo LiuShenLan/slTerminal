@@ -644,6 +644,7 @@ impl Render for SideView {
                     match event.keystroke.key.as_str() {
                         "f2" => view.explorer_begin_rename_selected(window, cx),
                         "escape" => view.explorer_cancel_inline_edit(cx),
+                        "enter" => view.explorer_activate_selected(window, cx),
                         _ => {}
                     }
                 }))

@@ -228,3 +228,157 @@ fn explorer_inline_edit_not_committed_on_destroy(cx: &mut TestAppContext) {
         "显式提交必须经真实文件操作完成重命名"
     );
 }
+
+fn explorer_project(temp: &tempfile::TempDir) -> (std::path::PathBuf, CanonicalPath) {
+    let project_root = temp.path().join("project");
+    let docs = project_root.join("docs");
+    std::fs::create_dir_all(&docs).unwrap();
+    std::fs::write(
+        docs.join("note.txt"),
+        "note
+",
+    )
+    .unwrap();
+    std::fs::write(
+        project_root.join("other.txt"),
+        "other
+",
+    )
+    .unwrap();
+    // 足够多的行才能形成真实滚动偏移。
+    for index in 0..60 {
+        std::fs::write(
+            project_root.join(format!("filler-{index:02}.txt")),
+            "x
+",
+        )
+        .unwrap();
+    }
+    let canonical =
+        |path: std::path::PathBuf| CanonicalPath::new(dunce::canonicalize(path).unwrap()).unwrap();
+    (project_root.clone(), canonical(project_root))
+}
+
+#[gpui::test]
+fn explorer_view_state_restore(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let (events, _event_rx) = std::sync::mpsc::sync_channel(64);
+    let runtime = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
+    let persistence =
+        AppRootPersistence::load_with_previous_run(&paths, Some(runtime.client()), None);
+    let (root, mut window, _) = open_root_with_persistence(cx, persistence);
+    let (project_root, _root_path) = explorer_project(&temp);
+    let canonical =
+        |path: std::path::PathBuf| CanonicalPath::new(dunce::canonicalize(path).unwrap()).unwrap();
+    let docs = canonical(project_root.join("docs"));
+    let note = canonical(project_root.join("docs/note.txt"));
+    let other = canonical(project_root.join("other.txt"));
+    add_project(
+        &root,
+        &mut window,
+        PROJECT_A,
+        project_root.to_str().unwrap(),
+    );
+    let explorer = open_explorer(&root, &mut window, cx);
+    activate_explorer_row(&explorer, &docs, &mut window);
+    window.update(|_, cx| {
+        explorer.update(cx, |view, cx| {
+            view.explorer_select_at(&note, cx);
+            view.explorer_set_show_ignored(true, cx);
+            let handle = view.explorer_scroll_handle().unwrap();
+            // GPUI 向下滚动 offset 为负值。
+            handle.set_offset(gpui::point(gpui::px(0.0), gpui::px(-40.0)));
+            assert_eq!(
+                handle.offset().y,
+                gpui::px(-40.0),
+                "闭包内 set_offset 必须生效"
+            );
+        });
+    });
+
+    let (before_close, max_offset) = explorer.read_with(cx, |view, _| {
+        let handle = view.explorer_scroll_handle().unwrap();
+        (handle.offset().y.as_f32(), handle.max_offset().y.as_f32())
+    });
+    assert!(
+        (-before_close - 40.0).abs() < 1.0,
+        "closed_before offset={before_close} max={max_offset}"
+    );
+    window.simulate_keystrokes("ctrl-shift-n");
+    window.run_until_parked();
+    super::close::flush_when_ready(&runtime.client());
+    let store = WorkspaceDatabase::open(&paths).unwrap();
+    let key = ViewKey::SideView {
+        side_view_id: slterm_workspace::SideViewId::Explorer,
+    };
+    let stored = store
+        .view_state(
+            &key,
+            &super::super::side_view::workspace_view_state_registry(),
+        )
+        .unwrap()
+        .expect("Explorer ViewState 必须已持久化");
+    assert_eq!(
+        stored.state.state()["projects"][0]["scroll"].as_f64(),
+        Some(40.0),
+        "关闭检查点必须写入当前滚动"
+    );
+    let explorer = open_explorer(&root, &mut window, cx);
+    window.run_until_parked();
+    explorer.read_with(cx, |view, _| {
+        assert!(view.explorer_is_expanded(&docs), "展开目录必须恢复");
+        assert_eq!(view.explorer_selected(), Some(&note), "当前行必须恢复");
+        assert!(view.explorer_show_ignored(), "忽略开关必须恢复");
+        assert!(
+            (-view.explorer_scroll_handle().unwrap().offset().y.as_f32() - 40.0).abs() < 1.0,
+            "滚动位置必须恢复"
+        );
+        assert!(view.explorer_filter().is_empty(), "过滤必须清除");
+        assert!(
+            view.explorer_multi_selection().unwrap().is_empty(),
+            "多选必须清除"
+        );
+    });
+
+    // 瞬态不跨重开：在新实例设置后再次重开必须回到默认。
+    window.update(|_, cx| {
+        explorer.update(cx, |view, cx| {
+            view.explorer_set_filter("note", cx);
+            view.explorer_toggle_multi_selection(&other, cx);
+        });
+    });
+    window.simulate_keystrokes("ctrl-shift-n");
+    window.run_until_parked();
+    let explorer = open_explorer(&root, &mut window, cx);
+    window.run_until_parked();
+    explorer.read_with(cx, |view, _| {
+        assert!(view.explorer_filter().is_empty());
+        assert!(view.explorer_multi_selection().unwrap().is_empty());
+        assert!(view.explorer_is_expanded(&docs), "瞬态变化不得丢失持久展开");
+        assert_eq!(view.explorer_selected(), Some(&note));
+    });
+
+    window.update(|window, _| window.remove_window());
+    drop(root);
+    drop(window);
+    cx.run_until_parked();
+    super::close::flush_when_ready(&runtime.client());
+
+    let persisted =
+        AppRootPersistence::load_with_previous_run(&paths, Some(runtime.client()), None);
+    let (root, mut window, _) = open_root_with_persistence(cx, persisted);
+    draw_frame(&mut window);
+    let explorer = open_explorer(&root, &mut window, cx);
+    window.run_until_parked();
+    explorer.read_with(cx, |view, _| {
+        assert!(view.explorer_is_expanded(&docs), "重启后展开目录必须恢复");
+        assert_eq!(
+            view.explorer_selected(),
+            Some(&note),
+            "重启后当前行必须恢复"
+        );
+        assert!(view.explorer_show_ignored());
+        assert!((-view.explorer_scroll_handle().unwrap().offset().y.as_f32() - 40.0).abs() < 1.0);
+    });
+}
