@@ -35,3 +35,47 @@ pub(crate) struct PlanBalanceInfo {
     pub amount: Option<AmountInfo>,
     pub windows: Option<WindowsInfo>,
 }
+
+/// 错过完整周期后才标记过期：从上次成功查询起算，一个周期前仍视为有效。
+/// 时钟回拨不判过期，避免把未知时间误标为陈旧。
+pub(crate) fn balance_stale(
+    last_success: std::time::SystemTime,
+    now: std::time::SystemTime,
+    period: std::time::Duration,
+) -> bool {
+    match now.duration_since(last_success) {
+        Ok(elapsed) => elapsed >= period,
+        Err(_) => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::balance_stale;
+    use std::time::{Duration, SystemTime};
+
+    fn at(seconds: u64) -> SystemTime {
+        SystemTime::UNIX_EPOCH + Duration::from_secs(seconds)
+    }
+
+    #[test]
+    fn plan_balance_stale_after_full_period() {
+        let period = Duration::from_secs(60);
+        assert!(
+            !balance_stale(at(1_000), at(1_059), period),
+            "未满一个周期不得标记过期"
+        );
+        assert!(
+            balance_stale(at(1_000), at(1_060), period),
+            "满一个完整周期必须标记过期"
+        );
+        assert!(
+            balance_stale(at(1_000), at(2_000), period),
+            "长间隔必须过期"
+        );
+        assert!(
+            !balance_stale(at(1_000), at(900), period),
+            "时钟回拨不得标记过期"
+        );
+    }
+}
