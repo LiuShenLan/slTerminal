@@ -502,6 +502,38 @@ impl AppRoot {
                         log::warn!("恢复 Document 面板失败: {error}");
                     }
                 }
+                ViewKey::Settings { .. } => {
+                    if self.panel_for_view(project_id, &view, cx).is_ok() {
+                        continue;
+                    }
+                    let view_states = self.side_view_persistence.settings_view_states();
+                    let settings_key = view.clone();
+                    let result = self.install_panel(
+                        super::documents::DocumentPanelTarget {
+                            project_id,
+                            view: view.clone(),
+                            focus: false,
+                            activate_project: false,
+                        },
+                        window,
+                        cx,
+                        move |_, cx| {
+                            let settings = cx.new(|cx| {
+                                super::settings_overlay::SettingsView::with_state(
+                                    cx,
+                                    settings_key,
+                                    Some(view_states),
+                                    false,
+                                )
+                            });
+                            let focus = settings.read(cx).focus_handle.clone();
+                            (super::panel_host::PanelContent::Settings(settings), focus)
+                        },
+                    );
+                    if let Err(error) = result {
+                        log::warn!("恢复设置面板失败: {error}");
+                    }
+                }
                 ViewKey::GitShow {
                     ref repository_binding,
                     ref repo_path,

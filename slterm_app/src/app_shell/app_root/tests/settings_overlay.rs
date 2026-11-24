@@ -103,6 +103,80 @@ fn integration_settings_singleton(cx: &mut TestAppContext) {
     );
 }
 
+/// 重启恢复：持久布局中的设置面板按 ViewKey 重建，不启动任何 PTY。
+#[gpui::test]
+fn settings_panel_restores_from_snapshot(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("settings-restore");
+    std::fs::create_dir(&project).unwrap();
+    let mut snapshot = ProjectSnapshot::default();
+    snapshot
+        .registry_mut()
+        .add_project(project_id(PROJECT_A), CanonicalPath::new(project).unwrap())
+        .unwrap();
+    snapshot = snapshot
+        .with_opened_view(
+            project_id(PROJECT_A),
+            group_id(GROUP_A),
+            ViewKey::Settings {
+                project_id: project_id(PROJECT_A),
+            },
+        )
+        .unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    save_terminal_recovery_snapshot(&paths, &snapshot);
+    let persistence = AppRootPersistence::load(&paths, None);
+    let (root, window, state) = open_root_with_persistence(cx, persistence);
+    window.run_until_parked();
+    assert_eq!(state.borrow().attempts, 0);
+    assert!(
+        settings_panel(&root, cx, project_id(PROJECT_A)).is_some(),
+        "持久布局中的设置面板必须重建"
+    );
+}
+
+/// 设置面板渲染完整页面列表，点击切换选中页。
+#[gpui::test]
+fn settings_panel_lists_pages_and_switches(cx: &mut TestAppContext) {
+    let (root, mut window, _state) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, "D:/work/settings");
+    focus_workspace(&root, &mut window);
+    open_settings(&mut window);
+    draw_frame(&mut window);
+
+    let settings = root.read_with(cx, |root, cx| {
+        let panel = root.projects[&project_id(PROJECT_A)]
+            .read(cx)
+            .panels
+            .values()
+            .find(|panel| matches!(panel.view_key, ViewKey::Settings { .. }))
+            .unwrap();
+        let super::super::panel_host::PanelContent::Settings(view) = &panel.content else {
+            panic!("设置面板内容形态错误");
+        };
+        view.clone()
+    });
+    assert_eq!(
+        settings.read_with(cx, |view, _| view.selected_page_for_test()),
+        crate::settings_state::SettingsPageId::Appearance
+    );
+    for index in 0..crate::settings_state::SettingsPageId::ALL.len() {
+        let selector = Box::leak(format!("settings-page-{index}").into_boxed_str());
+        assert!(
+            window.debug_bounds(selector).is_some(),
+            "设置页列表必须渲染第 {index} 项"
+        );
+    }
+    let target = window.debug_bounds("settings-page-2").unwrap();
+    window.simulate_click(target.center(), Modifiers::default());
+    draw_frame(&mut window);
+    assert_eq!(
+        settings.read_with(cx, |view, _| view.selected_page_for_test()),
+        crate::settings_state::SettingsPageId::Interaction,
+        "点击必须切换选中页"
+    );
+}
+
 /// 浮层重复入口不重置 Hooks 草稿与全局待写；项目激活不销毁浮层。
 #[gpui::test]
 fn app_settings_overlay_keeps_hooks_draft(cx: &mut TestAppContext) {

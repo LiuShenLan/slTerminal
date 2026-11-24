@@ -1,9 +1,10 @@
 //! 无项目设置浮层：AppRoot 独立持有实体、应用级 ViewKey 与焦点注册。
 
+use gpui::prelude::FluentBuilder as _;
 use gpui::{
     AnyElement, App, AppContext as _, Context, Entity, EventEmitter, InteractiveElement as _,
     IntoElement, KeyDownEvent, MouseButton, ParentElement as _, Render, Styled as _, Subscription,
-    Window, div, relative,
+    Window, div, px, relative,
 };
 use gpui_component::ActiveTheme as _;
 use slterm_workspace::{PanelGroupId, ViewKey};
@@ -12,21 +13,70 @@ use super::AppRoot;
 use super::commands::AppRootError;
 use super::focus_manager::{FocusRegistration, FocusToken};
 use super::panel_host::PanelContent;
+use crate::settings_state::{SettingsPageId, SettingsViewState, SettingsViewStateStore};
 
 pub(super) struct SettingsView {
     pub(super) focus_handle: gpui::FocusHandle,
+    selected_page: SettingsPageId,
+    /// 应用级浮层可用 Escape／返回工作区关闭；项目面板走统一面板关闭链。
+    overlay: bool,
+    view_key: ViewKey,
+    view_states: Option<SettingsViewStateStore>,
 }
 
 impl SettingsView {
-    fn new(cx: &mut Context<'_, Self>) -> Self {
+    fn new_overlay(cx: &mut Context<'_, Self>) -> Self {
+        Self::with_state(cx, ViewKey::AppSettingsOverlay, None, true)
+    }
+
+    pub(super) fn with_state(
+        cx: &mut Context<'_, Self>,
+        view_key: ViewKey,
+        view_states: Option<SettingsViewStateStore>,
+        overlay: bool,
+    ) -> Self {
+        let selected_page = view_states
+            .as_ref()
+            .and_then(|store| store.state(&view_key))
+            .map(|state| state.selected_page())
+            .unwrap_or(SettingsPageId::Appearance);
         Self {
             focus_handle: cx.focus_handle(),
+            selected_page,
+            overlay,
+            view_key,
+            view_states,
         }
     }
 
     #[cfg(all(test, feature = "gpui-test-support"))]
     pub(super) const fn view_key(&self) -> ViewKey {
         ViewKey::AppSettingsOverlay
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(super) const fn selected_page_for_test(&self) -> SettingsPageId {
+        self.selected_page
+    }
+
+    fn select_page(&mut self, page: SettingsPageId, cx: &mut Context<'_, Self>) {
+        if self.selected_page == page {
+            return;
+        }
+        self.selected_page = page;
+        if let Some(store) = &self.view_states {
+            // 声明式页内参数随页面保留；选中页是唯一可变的持久事实。
+            let params = store
+                .state(&self.view_key)
+                .map(|state| state.declared_page_params().clone())
+                .unwrap_or_default();
+            let mut state = SettingsViewState::new(page);
+            for (key, value) in params {
+                state = state.with_page_param(&key, &value);
+            }
+            store.checkpoint(&self.view_key, state);
+        }
+        cx.notify();
     }
 
     fn request_close(cx: &mut Context<'_, Self>) {
@@ -43,12 +93,41 @@ impl EventEmitter<SettingsViewEvent> for SettingsView {}
 impl Render for SettingsView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
         let language = cx.global::<crate::app_shell::config::Settings>().language;
+        let selected = self.selected_page;
+        let page_list = SettingsPageId::ALL
+            .into_iter()
+            .enumerate()
+            .map(|(index, page)| {
+                let is_selected = page == selected;
+                div()
+                    .id(("settings-page", index))
+                    .h(px(24.0))
+                    .px_2()
+                    .flex()
+                    .items_center()
+                    .cursor_pointer()
+                    .text_sm()
+                    .when(is_selected, |element| {
+                        element.text_color(cx.theme().foreground)
+                    })
+                    .when(!is_selected, |element| {
+                        element.text_color(cx.theme().muted_foreground)
+                    })
+                    .debug_selector(move || format!("settings-page-{index}"))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |view, _, _, cx| view.select_page(page, cx)),
+                    )
+                    .child(language.text(page.message()))
+            })
+            .collect::<Vec<_>>();
         div()
             .size_full()
+            .min_h_0()
             .track_focus(&self.focus_handle)
-            .key_context("AppSettingsOverlay")
-            .on_key_down(cx.listener(|_view, event: &KeyDownEvent, _window, cx| {
-                if event.keystroke.key == "escape" {
+            .key_context("SettingsPanel")
+            .on_key_down(cx.listener(|view, event: &KeyDownEvent, _window, cx| {
+                if view.overlay && event.keystroke.key == "escape" {
                     Self::request_close(cx);
                 }
             }))
@@ -65,15 +144,49 @@ impl Render for SettingsView {
                             .text_color(cx.theme().foreground)
                             .child(language.text(crate::i18n::Message::SettingsTitle)),
                     )
+                    .when(self.overlay, |element| {
+                        element.child(
+                            div()
+                                .text_color(cx.theme().accent)
+                                .cursor_pointer()
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|_view, _event, _window, cx| {
+                                        Self::request_close(cx)
+                                    }),
+                                )
+                                .child(language.text(crate::i18n::Message::SettingsNavBack)),
+                        )
+                    }),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .flex_grow(1.0)
+                    .min_h_0()
                     .child(
                         div()
-                            .text_color(cx.theme().accent)
-                            .cursor_pointer()
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|_view, _event, _window, cx| Self::request_close(cx)),
-                            )
-                            .child(language.text(crate::i18n::Message::SettingsNavBack)),
+                            .w(px(160.0))
+                            .flex()
+                            .flex_col()
+                            .border_r_1()
+                            .border_color(cx.theme().border)
+                            .py_1()
+                            .children(page_list),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_grow(1.0)
+                            .p_4()
+                            .debug_selector(|| "settings-page-content".to_owned())
+                            .child(
+                                div()
+                                    .text_color(cx.theme().foreground)
+                                    .child(language.text(selected.message())),
+                            ),
                     ),
             )
     }
@@ -116,6 +229,8 @@ impl AppRoot {
             self.snapshot
                 .with_opened_view(project_id, target_group, view_key.clone())?;
         candidate.validate()?;
+        let view_states = self.side_view_persistence.settings_view_states();
+        let settings_key = view_key.clone();
         self.install_panel(
             super::documents::DocumentPanelTarget {
                 project_id,
@@ -125,8 +240,9 @@ impl AppRoot {
             },
             window,
             cx,
-            |_, cx| {
-                let view = cx.new(SettingsView::new);
+            move |_, cx| {
+                let view = cx
+                    .new(|cx| SettingsView::with_state(cx, settings_key, Some(view_states), false));
                 let focus = view.read(cx).focus_handle.clone();
                 (PanelContent::Settings(view), focus)
             },
@@ -157,7 +273,7 @@ impl AppRoot {
             .focus_manager
             .observed_focus_token()
             .unwrap_or_else(|| self.focus_manager.workspace_token());
-        let view = cx.new(SettingsView::new);
+        let view = cx.new(SettingsView::new_overlay);
         let registration = self.focus_manager.register(
             &view.read(cx).focus_handle,
             self.focus_manager.workspace_token(),

@@ -805,8 +805,9 @@ mod documents_tests {
         assert!(registry.session(opened.id).unwrap().is_dirty());
     }
 
+    /// 链接与文件身份：硬链接别名必须复用同一 Document 身份与正文。
     #[test]
-    fn path_file_identity_deduplicates_document() {
+    fn integration_links_and_file_identity() {
         let temp = tempfile::tempdir().unwrap();
         let root = CanonicalPath::new(temp.path()).unwrap();
         let file = temp.path().join("file.txt");

@@ -187,7 +187,11 @@
       "localization": "Language",
       "reset": "Reset",
       "agents": "Agents",
-      "group_agents": "AI agents"
+      "group_agents": "AI agents",
+      "scrolling": "Scrolling",
+      "session": "Session",
+      "system": "System",
+      "hooks": "Hooks"
     },
     "status": {
       "corrupted": "The settings file was corrupted; backup or defaults were loaded and the original kept.",

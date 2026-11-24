@@ -1246,6 +1246,94 @@ fn integration_document_global_identity(cx: &mut TestAppContext) {
     assert_eq!(editor_text(&root, cx, PROJECT_B, second), "shared body");
 }
 
+/// 视图身份重开：关闭后布局不再持有该 ViewKey，重开只产生一个新的运行实例。
+#[gpui::test]
+fn integration_view_identity_reopen(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+    let file_path = project.join("identity.txt");
+    std::fs::write(&file_path, "identity body\n").unwrap();
+    let file = CanonicalPath::new(dunce::canonicalize(&file_path).unwrap()).unwrap();
+    let (root, mut window, _) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, project.to_str().unwrap());
+    open_document(&root, &mut window, PROJECT_A, GROUP_A, file.clone());
+
+    let (first_panel, first_key) = root.read_with(cx, |root, cx| {
+        let panel = root.projects[&project_id(PROJECT_A)]
+            .read(cx)
+            .panels
+            .values()
+            .next()
+            .unwrap();
+        (panel.id, panel.view_key.clone())
+    });
+    assert!(matches!(first_key, ViewKey::Editor { .. }));
+
+    window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.close_all_views_from_request(group_id(GROUP_A), BTreeMap::new(), window, cx)
+                .unwrap();
+        });
+    });
+    window.run_until_parked();
+    root.read_with(cx, |root, _| {
+        assert!(
+            !root
+                .snapshot()
+                .registry()
+                .project(project_id(PROJECT_A))
+                .unwrap()
+                .layout()
+                .view_keys()
+                .contains(&first_key),
+            "关闭后布局不得继续持有该 ViewKey"
+        );
+    });
+
+    open_document(&root, &mut window, PROJECT_A, GROUP_A, file);
+    let (second_panel, second_key, matching) = root.read_with(cx, |root, cx| {
+        let project = root.projects[&project_id(PROJECT_A)].read(cx);
+        let panel = project.panels.values().next().unwrap();
+        let matching = project
+            .panels
+            .values()
+            .filter(|panel| matches!(panel.view_key, ViewKey::Editor { .. }))
+            .count();
+        (panel.id, panel.view_key.clone(), matching)
+    });
+    assert_eq!(matching, 1, "重开不得产生重复视图身份");
+    assert_ne!(second_panel, first_panel, "重开是新的运行实例");
+    assert!(
+        matches!(
+            second_key,
+            ViewKey::Editor {
+                project_id: owner,
+                ..
+            } if owner == project_id(PROJECT_A)
+        ),
+        "重开视图必须归属原项目"
+    );
+    assert!(
+        first_key != second_key,
+        "Document 释放后重开使用新的持久身份，不得复用已销毁记录"
+    );
+    root.read_with(cx, |root, _| {
+        let layout_keys = root
+            .snapshot()
+            .registry()
+            .project(project_id(PROJECT_A))
+            .unwrap()
+            .layout()
+            .view_keys();
+        assert_eq!(
+            layout_keys.iter().filter(|key| **key == second_key).count(),
+            1,
+            "布局中重开后的视图身份必须唯一"
+        );
+    });
+}
+
 #[gpui::test]
 fn editor_view_state_restore(cx: &mut TestAppContext) {
     let temp = tempfile::tempdir().unwrap();

@@ -187,7 +187,11 @@
       "localization": "语言",
       "reset": "重置",
       "agents": "智能体",
-      "group_agents": "AI 智能体"
+      "group_agents": "AI 智能体",
+      "scrolling": "滚动",
+      "session": "会话",
+      "system": "系统",
+      "hooks": "Hooks"
     },
     "status": {
       "corrupted": "配置文件损坏，已回退到备份或默认值；损坏原件已保留。",

@@ -4,8 +4,11 @@
 //! 修改或显式重试继续；关闭任一订阅视图不取消全局待写。Hooks 草稿不走
 //! 本队列（草稿归 `ai_hook::draft_host`）。
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
+use std::rc::Rc;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -15,6 +18,8 @@ use slterm_workspace::{
     InvalidViewState, ViewKey, ViewKeyKind, ViewState, ViewStateError, ViewStateRegistry,
     ViewStateSchema,
 };
+
+use crate::persistence::workspace_writer::WorkspaceWriterClient;
 
 /// 设置页的封闭页面集合；Hooks 页只经有 CLI 编辑能力的宿主提供。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -39,6 +44,20 @@ impl SettingsPageId {
         Self::AgentHooks,
         Self::Hooks,
     ];
+
+    /// 页面标题只经 typed i18n 查询，不拼接英文枚举名。
+    pub(crate) const fn message(self) -> crate::i18n::Message {
+        use crate::i18n::Message;
+        match self {
+            Self::Appearance => Message::SettingsSidebarAppearance,
+            Self::Scrolling => Message::SettingsSidebarScrolling,
+            Self::Interaction => Message::SettingsSidebarInteraction,
+            Self::Session => Message::SettingsSidebarSession,
+            Self::System => Message::SettingsSidebarSystem,
+            Self::AgentHooks => Message::SettingsSidebarAgents,
+            Self::Hooks => Message::SettingsSidebarHooks,
+        }
+    }
 }
 
 /// 设置页仅持久化选中页与声明式页内参数；搜索、录制、临时错误、
@@ -117,6 +136,62 @@ pub(crate) fn settings_view_state_schemas() -> Vec<ViewStateSchema> {
         .map(|kind| ViewStateSchema::new(kind, decode_settings_view_state))
         .into_iter()
         .collect()
+}
+
+/// Settings 面板的 ViewState 通道：同 ViewKey 关闭重开与重启恢复共用一份状态。
+#[derive(Clone)]
+pub(crate) struct SettingsViewStateStore {
+    registry: Arc<ViewStateRegistry>,
+    writer: Option<WorkspaceWriterClient>,
+    restored: Rc<RefCell<Vec<(ViewKey, SettingsViewState)>>>,
+}
+
+impl SettingsViewStateStore {
+    pub(crate) fn new(
+        registry: Arc<ViewStateRegistry>,
+        writer: Option<WorkspaceWriterClient>,
+    ) -> Self {
+        Self {
+            registry,
+            writer,
+            restored: Rc::default(),
+        }
+    }
+
+    pub(crate) fn restore(&self, key: ViewKey, state: SettingsViewState) {
+        self.insert(key, state);
+    }
+
+    pub(crate) fn state(&self, key: &ViewKey) -> Option<SettingsViewState> {
+        self.restored
+            .borrow()
+            .iter()
+            .find(|(existing, _)| existing == key)
+            .map(|(_, state)| state.clone())
+    }
+
+    fn insert(&self, key: ViewKey, state: SettingsViewState) {
+        let mut restored = self.restored.borrow_mut();
+        if let Some((_, existing)) = restored.iter_mut().find(|(existing, _)| *existing == key) {
+            *existing = state;
+        } else {
+            restored.push((key, state));
+        }
+    }
+
+    /// 显式切页才写盘；写失败保留内存状态供后续重试，不回滚当前选择。
+    pub(crate) fn checkpoint(&self, key: &ViewKey, state: SettingsViewState) {
+        self.insert(key.clone(), state.clone());
+        let Ok(view_state) = state.to_view_state(key, &self.registry) else {
+            log::warn!("设置页状态编码失败，保留内存状态");
+            return;
+        };
+        if let Some(writer) = &self.writer
+            && let Err(error) = writer.save_view_state(key, &view_state)
+        {
+            log::warn!("设置页状态写请求失败: {error}");
+        }
+    }
 }
 
 fn decode_settings_view_state(

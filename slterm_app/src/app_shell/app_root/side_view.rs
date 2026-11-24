@@ -38,6 +38,7 @@ pub(crate) struct AppRootPersistence {
     cache: SideViewStateCache,
     registry: Arc<ViewStateRegistry>,
     editor_views: EditorViewStateStore,
+    settings_views: crate::settings_state::SettingsViewStateStore,
     writer: Option<WorkspaceWriterClient>,
     write_barriers: SideViewWriteBarriers,
     pending_final_states: SideViewPendingFinalStates,
@@ -162,6 +163,32 @@ impl AppRootPersistence {
                 }
             }
         }
+        let settings_keys = persistence
+            .recovered_project_snapshot
+            .as_ref()
+            .into_iter()
+            .flat_map(|snapshot| snapshot.registry().projects())
+            .flat_map(|project| project.layout().view_keys())
+            .filter(|key| matches!(key, slterm_workspace::ViewKey::Settings { .. }))
+            .collect::<Vec<_>>();
+        for key in settings_keys {
+            match store.view_state(&key, &persistence.registry) {
+                Ok(Some(stored)) => {
+                    match serde_json::from_value::<crate::settings_state::SettingsViewState>(
+                        stored.state.into_state(),
+                    ) {
+                        Ok(state) => persistence.settings_views.restore(key, state),
+                        Err(error) => {
+                            log::warn!("could not decode Settings ViewState: {error}");
+                        }
+                    }
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    log::warn!("could not restore Settings ViewState: {error}");
+                }
+            }
+        }
         match store.sidebar_state() {
             Ok(Some(recovery)) => {
                 if !recovery.warnings.is_empty() {
@@ -203,10 +230,13 @@ impl AppRootPersistence {
     pub(crate) fn empty(writer: Option<WorkspaceWriterClient>) -> Self {
         let registry = workspace_view_state_registry();
         let editor_views = EditorViewStateStore::new(registry.clone(), writer.clone());
+        let settings_views =
+            crate::settings_state::SettingsViewStateStore::new(registry.clone(), writer.clone());
         Self {
             cache: Rc::default(),
             registry,
             editor_views,
+            settings_views,
             writer,
             write_barriers: Rc::default(),
             pending_final_states: Rc::default(),
@@ -227,6 +257,10 @@ impl AppRootPersistence {
 
     pub(super) fn editor_view_states(&self) -> EditorViewStateStore {
         self.editor_views.clone()
+    }
+
+    pub(super) fn settings_view_states(&self) -> crate::settings_state::SettingsViewStateStore {
+        self.settings_views.clone()
     }
 
     pub(super) fn store_epoch(&self) -> Option<String> {
