@@ -476,7 +476,11 @@ impl FileTreeModel {
 
     /// 可见投影中的展开目录，作为按项目持久恢复快照；根不计入。
     pub fn expanded_paths(&self) -> Vec<CanonicalPath> {
-        fn collect(model: &FileTreeModel, directory: &CanonicalPath, paths: &mut Vec<CanonicalPath>) {
+        fn collect(
+            model: &FileTreeModel,
+            directory: &CanonicalPath,
+            paths: &mut Vec<CanonicalPath>,
+        ) {
             let Some(node) = model.nodes.get(directory) else {
                 return;
             };

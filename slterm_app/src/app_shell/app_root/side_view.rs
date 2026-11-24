@@ -717,7 +717,10 @@ mod side_view_state_persistence_tests {
         let key = ViewKey::SideView {
             side_view_id: SideViewId::Explorer,
         };
-        let stored = store.view_state(&key, &persistence.registry).unwrap().unwrap();
+        let stored = store
+            .view_state(&key, &persistence.registry)
+            .unwrap()
+            .unwrap();
         let restored = SideViewState::from_view_state(SideViewId::Explorer, stored.state).unwrap();
         let SideViewState::Explorer(explorer) = &restored else {
             unreachable!()

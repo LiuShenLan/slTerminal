@@ -195,7 +195,8 @@ impl ExplorerState {
         {
             Ok(index) => index,
             Err(index) => {
-                self.projects.insert(index, ExplorerProjectState::new(project_id));
+                self.projects
+                    .insert(index, ExplorerProjectState::new(project_id));
                 index
             }
         };
