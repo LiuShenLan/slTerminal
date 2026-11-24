@@ -8,13 +8,15 @@ use std::sync::Arc;
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     App, AppContext as _, Context, Entity, FocusHandle, InteractiveElement as _, IntoElement,
-    MouseButton, Render, Styled as _, Window, div,
+    MouseButton, ParentElement as _, Render, Styled as _, WeakEntity, Window, div,
 };
 use slterm_sidebar::{SideViewState, SidebarState, side_view_state_schema};
 use slterm_workspace::{
     ProjectId, ProjectSnapshot, SideViewId, ViewState, ViewStateError, ViewStateRegistry,
 };
 
+use super::AppRoot;
+use super::explorer::ExplorerRuntime;
 use super::side_view_host::{SideViewControl, SideViewHost};
 use crate::app_shell::text_view::{
     DiffViewState, EditorViewState, EditorViewStateStore, MarkdownViewState,
@@ -385,12 +387,16 @@ impl Drop for AppRootPersistence {
 pub(crate) struct SideView {
     /// 仅纯持久化测试没有 GPUI 上下文；生产控制器在返回实体前安装。
     pub(super) focus_handle: Option<FocusHandle>,
-    state: SideViewState,
+    pub(super) state: SideViewState,
     cache: SideViewStateCache,
     registry: Arc<ViewStateRegistry>,
     writer: Option<WorkspaceWriterClient>,
     write_barriers: SideViewWriteBarriers,
     pending_final_states: SideViewPendingFinalStates,
+    /// Explorer 运行态；其它视图恒为 None。
+    pub(super) explorer: Option<ExplorerRuntime>,
+    /// AppRoot 在实例创建后注入；跨域意图只经该弱引用延迟派发。
+    pub(super) root_handle: Option<WeakEntity<AppRoot>>,
     /// 同步关闭后禁止旧实体延迟析构再次回写。
     closed: bool,
 }
@@ -417,6 +423,8 @@ impl SideView {
             writer,
             write_barriers,
             pending_final_states,
+            explorer: None,
+            root_handle: None,
             closed: false,
         }
     }
@@ -509,6 +517,8 @@ impl SideView {
         if self.closed {
             return None;
         }
+        // 未写回的用户动作必须在关闭前统一进入唯一状态。
+        self.checkpoint_explorer_state();
         self.closed = true;
         let id = self.state.id();
         self.cache.borrow_mut().insert(id, self.state.clone());
@@ -613,6 +623,11 @@ impl Render for SideView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
         let id = self.state.id();
         let focus = self.focus_handle.clone();
+        let content = if id == SideViewId::Explorer {
+            Some(super::explorer::render_explorer(self, cx))
+        } else {
+            None
+        };
         div()
             .size_full()
             .min_w_0()
@@ -623,6 +638,7 @@ impl Render for SideView {
                     cx.listener(move |_, _, window, cx| focus.focus(window, cx)),
                 )
             })
+            .when_some(content, |element, content| element.child(content))
             .debug_selector(move || format!("app-root-side-view-{}", id.id_str()))
     }
 }
@@ -713,7 +729,7 @@ mod side_view_state_persistence_tests {
             "显式编辑必须解除损坏恢复的写屏障"
         );
         writer.flush().unwrap();
-        let mut store = WorkspaceDatabase::open(&paths).unwrap();
+        let store = WorkspaceDatabase::open(&paths).unwrap();
         let key = ViewKey::SideView {
             side_view_id: SideViewId::Explorer,
         };

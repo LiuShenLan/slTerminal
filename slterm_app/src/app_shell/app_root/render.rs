@@ -235,6 +235,11 @@ fn render_empty() -> AnyElement {
 
 impl Render for AppRoot {
     fn render(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
+        // Explorer 根接线幂等且只读项目快照；实际后台读取延迟到 effect 周期。
+        if self.side_view_roots_generation != Some(self.snapshot_generation) {
+            self.side_view_roots_generation = Some(self.snapshot_generation);
+            cx.defer_in(window, |root, _, cx| root.sync_side_view_roots(cx));
+        }
         div()
             .size_full()
             .min_w_0()

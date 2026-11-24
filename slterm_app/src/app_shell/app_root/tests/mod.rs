@@ -5,6 +5,7 @@ mod batch_close;
 mod close;
 mod diff;
 mod documents;
+mod explorer;
 mod gitshow;
 mod handover;
 mod layout;

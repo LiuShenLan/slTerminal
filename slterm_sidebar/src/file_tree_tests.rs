@@ -313,6 +313,7 @@ fn file_tree_exposes_expanded_and_selected_paths_for_restore() {
     assert_eq!(tree.kind_of(&docs), Some(FileTreeEntryKind::Directory));
     assert_eq!(tree.kind_of(&guide), None, "未加载节点不得伪造类型");
     assert_eq!(tree.selected(), None);
+    assert!(!tree.is_expanded(&docs));
 
     let request = tree.expand(&docs).unwrap().unwrap();
     apply(
@@ -327,11 +328,14 @@ fn file_tree_exposes_expanded_and_selected_paths_for_restore() {
     let request = tree.expand(&sub).unwrap().unwrap();
     apply(&mut tree, &request, Vec::new(), true);
     assert_eq!(tree.expanded_paths(), vec![docs.clone(), sub.clone()]);
+    assert!(tree.is_expanded(&docs));
+    assert!(tree.is_expanded(&sub));
 
     tree.select(&guide).unwrap();
     assert_eq!(tree.selected(), Some(&guide));
 
     tree.collapse(&docs).unwrap();
+    assert!(!tree.is_expanded(&docs));
     assert_eq!(
         tree.expanded_paths(),
         Vec::<CanonicalPath>::new(),

@@ -502,6 +502,8 @@ impl AppRoot {
             self.side_view_persistence
                 .save_sidebar_state(self.side_views.state());
         }
+        // 新实例创建后立即接线；根未变时零副作用。
+        self.sync_side_view_roots(cx);
 
         if let Some(view) = transition.focus {
             if let Some(registration) = self.side_view_focus.get(&view) {

@@ -474,6 +474,13 @@ impl FileTreeModel {
         self.nodes.get(path).map(|node| node.kind)
     }
 
+    /// 目录的展开意图；未加载路径与非目录均为 false。
+    pub fn is_expanded(&self, path: &CanonicalPath) -> bool {
+        self.nodes
+            .get(path)
+            .is_some_and(|node| node.kind == FileTreeEntryKind::Directory && node.expanded)
+    }
+
     /// 可见投影中的展开目录，作为按项目持久恢复快照；根不计入。
     pub fn expanded_paths(&self) -> Vec<CanonicalPath> {
         fn collect(

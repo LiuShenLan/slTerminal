@@ -12,6 +12,7 @@ mod document_recovery;
 mod documents;
 mod editor_git;
 mod events;
+mod explorer;
 mod focus_manager;
 mod git_show;
 pub(crate) mod keymap;
@@ -172,6 +173,8 @@ pub(crate) struct AppRootServices {
 pub(crate) struct AppRoot {
     snapshot: ProjectSnapshot,
     snapshot_generation: u64,
+    /// 最近一次 Explorer 根同步对应的快照代次；渲染只在差异时延迟接线。
+    side_view_roots_generation: Option<u64>,
     project_writer: Option<WorkspaceWriterClient>,
     store_epoch: Option<String>,
     pending_final_project_snapshot: Option<ProjectSnapshot>,
@@ -367,6 +370,7 @@ impl AppRoot {
         let mut root = Self {
             snapshot,
             snapshot_generation: 0,
+            side_view_roots_generation: None,
             project_writer,
             store_epoch,
             pending_final_project_snapshot: None,
