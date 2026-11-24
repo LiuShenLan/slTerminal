@@ -16,6 +16,10 @@ use crate::ai_agents::AgentKind;
 pub struct AgentGlobalDir {
     /// CLI profile id(= [`AgentKind::slug`])。
     pub cli_id: String,
+    /// 内置 AgentRoot 的稳定身份；文件树根与 ViewState 分区共用。
+    pub root_id: slterm_settings::AgentRootId,
+    /// 展示名(catalog 声明)。
+    pub display_name: String,
     /// 解析后的绝对路径(home + 相对目录;不做 canonicalize,展示与命令
     /// 参数回传用,沙箱校验侧自行双侧 canonicalize 比较)。
     pub path: PathBuf,
@@ -34,6 +38,8 @@ fn resolve_agent_dirs(home: Option<&Path>) -> Vec<AgentGlobalDir> {
             let path = home.join(relative);
             Some(AgentGlobalDir {
                 cli_id: kind.slug().to_owned(),
+                root_id: kind.builtin_root_id(),
+                display_name: kind.display_name().to_owned(),
                 exists: path.is_dir(),
                 path,
             })
@@ -70,6 +76,8 @@ mod agent_dirs_tests {
             .unwrap();
         assert_eq!(claude.path, home.path().join(".claude"));
         assert!(claude.exists);
+        assert_eq!(claude.root_id, AgentKind::Claude.builtin_root_id());
+        assert_eq!(claude.display_name, "Claude Code");
         let codex = dirs
             .iter()
             .find(|directory| directory.cli_id == "codex")
