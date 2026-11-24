@@ -29,6 +29,7 @@ mod project_close;
 mod project_view;
 mod projects;
 mod render;
+mod runtime_snapshot;
 mod settings_agents;
 mod settings_controls;
 mod settings_overlay;

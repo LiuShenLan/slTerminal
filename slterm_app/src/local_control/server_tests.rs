@@ -7,11 +7,18 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use slterm_runtime_protocol::{
-    ControlScope, Credential, HandoverMethod, HandoverParams, HandoverRequest, HandoverResponse,
-    HelloMethod, HelloParams, HelloRequest, HelloResponse, JsonRpcId, JsonRpcRequest,
+    ControlScope, Credential, DocumentResource, EmptyParams, HandoverMethod, HandoverParams,
+    HandoverRequest, HandoverResponse, HelloMethod, HelloParams, HelloRequest, HelloResponse,
+    JsonRpcError, JsonRpcErrorData, JsonRpcId, JsonRpcRequest, PanelGroupResource, ProjectResource,
+    RuntimeMethod, RuntimeRequest, SnapshotResources, TerminalResource, ViewResource,
 };
 
 use super::LocalControlServer;
+use crate::secrets::SecretBytes;
+
+fn test_secret(value: &str) -> SecretBytes {
+    SecretBytes::new(value.to_owned().into_bytes())
+}
 
 // 负载裕度，非断言/语义放宽：等待真实 loopback 线程调度与关闭。
 const TEST_TIMEOUT: Duration = Duration::from_secs(5);
@@ -44,12 +51,11 @@ fn hello_response() -> HelloResponse {
 fn start_server() -> (LocalControlServer, Arc<AtomicUsize>) {
     let calls = Arc::new(AtomicUsize::new(0));
     let callback_calls = Arc::clone(&calls);
-    let server =
-        LocalControlServer::start(Credential::new("sk-test"), hello_response(), move |_| {
-            callback_calls.fetch_add(1, Ordering::SeqCst);
-            Ok(HandoverResponse::accepted())
-        })
-        .unwrap();
+    let server = LocalControlServer::start(test_secret("sk-test"), hello_response(), move |_| {
+        callback_calls.fetch_add(1, Ordering::SeqCst);
+        Ok(HandoverResponse::accepted())
+    })
+    .unwrap();
     (server, calls)
 }
 
@@ -211,7 +217,7 @@ fn local_control_frame_budget_excludes_next_frame_prefix() {
 #[test]
 fn local_control_rejected_handover_is_not_a_success_result() {
     let mut server =
-        LocalControlServer::start(Credential::new("sk-test"), hello_response(), move |_| {
+        LocalControlServer::start(test_secret("sk-test"), hello_response(), move |_| {
             Ok(serde_json::from_str::<HandoverResponse>("{\"accepted\":false}").unwrap())
         })
         .unwrap();
@@ -229,7 +235,7 @@ fn local_control_rejected_handover_is_not_a_success_result() {
 #[test]
 fn local_control_response_budget_is_enforced() {
     let mut server = LocalControlServer::start(
-        Credential::new("sk-test"),
+        test_secret("sk-test"),
         HelloResponse::new(
             "x".repeat(1024 * 1024),
             "stream",
@@ -251,7 +257,7 @@ fn local_control_response_budget_is_enforced() {
 #[test]
 fn local_control_worker_panic_closes_connection() {
     let mut server = LocalControlServer::start(
-        Credential::new("sk-test"),
+        test_secret("sk-test"),
         hello_response(),
         move |_| -> Result<HandoverResponse, slterm_runtime_protocol::JsonRpcError> {
             panic!("injected worker panic")
@@ -274,7 +280,7 @@ fn local_control_shutdown_replays_worker_join_failure() {
     let (release_tx, release_rx) = std::sync::mpsc::channel();
     let release_rx = Arc::new(std::sync::Mutex::new(release_rx));
     let mut server = LocalControlServer::start(
-        Credential::new("sk-test"),
+        test_secret("sk-test"),
         hello_response(),
         move |_| -> Result<HandoverResponse, slterm_runtime_protocol::JsonRpcError> {
             started_tx.send(()).unwrap();
@@ -308,7 +314,7 @@ fn local_control_shutdown_continues_after_worker_join_failure() {
     let (release_tx, release_rx) = std::sync::mpsc::channel();
     let release_rx = Arc::new(std::sync::Mutex::new(release_rx));
     let mut server = LocalControlServer::start(
-        Credential::new("sk-test"),
+        test_secret("sk-test"),
         hello_response(),
         move |_| -> Result<HandoverResponse, slterm_runtime_protocol::JsonRpcError> {
             started_tx.send(()).unwrap();
@@ -407,19 +413,176 @@ fn hello_scoped(credential: &str, scope: ControlScope) -> HelloRequest {
 }
 
 fn start_dual_scope_server() -> (LocalControlServer, Arc<AtomicUsize>) {
+    start_dual_scope_server_with_snapshot(|| Ok(SnapshotResources::default()))
+}
+
+fn start_dual_scope_server_with_snapshot<S>(
+    on_snapshot: S,
+) -> (LocalControlServer, Arc<AtomicUsize>)
+where
+    S: Fn() -> Result<SnapshotResources, JsonRpcError> + Send + Sync + 'static,
+{
     let calls = Arc::new(AtomicUsize::new(0));
     let callback_calls = Arc::clone(&calls);
     let server = LocalControlServer::start_with_runtime(
-        Credential::new("sk-test"),
-        Credential::new("sk-test-runtime"),
+        test_secret("sk-test"),
+        test_secret("sk-test-runtime"),
         hello_response(),
         move |_| {
             callback_calls.fetch_add(1, Ordering::SeqCst);
             Ok(HandoverResponse::accepted())
         },
+        Arc::new(on_snapshot),
     )
     .unwrap();
     (server, calls)
+}
+
+fn runtime_request(method: RuntimeMethod) -> RuntimeRequest {
+    JsonRpcRequest::new(JsonRpcId::Number(2), method, EmptyParams {})
+}
+
+fn sample_resources() -> SnapshotResources {
+    SnapshotResources {
+        projects: vec![ProjectResource {
+            project_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b".to_owned(),
+            display_name: "Repo".to_owned(),
+            root: "D:/work/a".to_owned(),
+            active: true,
+        }],
+        groups: vec![PanelGroupResource {
+            project_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b".to_owned(),
+            group_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2c".to_owned(),
+            views: vec![ViewResource {
+                kind: "terminal".to_owned(),
+                key: r#"{"kind":"terminal","version":1}"#.to_owned(),
+            }],
+            active_view: r#"{"kind":"terminal","version":1}"#.to_owned(),
+        }],
+        terminals: vec![TerminalResource {
+            terminal_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2d".to_owned(),
+            project_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b".to_owned(),
+            number: 1,
+            cwd: "D:/work/a".to_owned(),
+            shell: "pwsh.exe".to_owned(),
+            title: None,
+            run_intent: "launch".to_owned(),
+        }],
+        documents: vec![DocumentResource {
+            document_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2e".to_owned(),
+            path: "D:/work/a/README.md".to_owned(),
+        }],
+    }
+}
+
+#[test]
+fn runtime_describe_returns_registry_and_contract_hashes() {
+    let (mut server, calls) = start_dual_scope_server();
+    let mut stream = connect(&server);
+    stream.set_read_timeout(Some(TEST_TIMEOUT)).unwrap();
+    write_json(
+        &mut stream,
+        &hello_scoped("sk-test-runtime", ControlScope::Runtime),
+    );
+    assert!(read_line(&mut stream).contains("store"));
+    write_json(&mut stream, &runtime_request(RuntimeMethod::Describe));
+    let reply = read_line(&mut stream);
+    let value: serde_json::Value = serde_json::from_str(&reply).unwrap();
+
+    assert_eq!(value["result"]["protocol_sha256"], "protocol-hash");
+    assert_eq!(value["result"]["schema_sha256"], "schema-hash");
+    let methods: Vec<&str> = value["result"]["methods"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|method| method["method"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        methods,
+        [
+            "runtime.hello",
+            "runtime.describe",
+            "runtime.snapshot",
+            "instance.handover"
+        ]
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    server.shutdown().unwrap();
+}
+
+#[test]
+fn runtime_snapshot_returns_injected_resources_with_hello_generation() {
+    let (mut server, calls) = start_dual_scope_server_with_snapshot(|| Ok(sample_resources()));
+    let mut stream = connect(&server);
+    stream.set_read_timeout(Some(TEST_TIMEOUT)).unwrap();
+    write_json(
+        &mut stream,
+        &hello_scoped("sk-test-runtime", ControlScope::Runtime),
+    );
+    assert!(read_line(&mut stream).contains("store"));
+    write_json(&mut stream, &runtime_request(RuntimeMethod::Snapshot));
+    let reply = read_line(&mut stream);
+    let value: serde_json::Value = serde_json::from_str(&reply).unwrap();
+
+    assert_eq!(value["result"]["store_epoch"], "store");
+    assert_eq!(value["result"]["stream_epoch"], "stream");
+    assert_eq!(value["result"]["revision"], 7);
+    let resources = &value["result"]["resources"];
+    assert_eq!(resources["projects"][0]["display_name"], "Repo");
+    assert_eq!(resources["terminals"][0]["run_intent"], "launch");
+    assert_eq!(resources["documents"][0]["path"], "D:/work/a/README.md");
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    server.shutdown().unwrap();
+}
+
+#[test]
+fn runtime_snapshot_failure_returns_structured_error_and_keeps_connection() {
+    let (mut server, _calls) = start_dual_scope_server_with_snapshot(|| {
+        Err(JsonRpcError::new(
+            -32001,
+            "not ready",
+            Some(JsonRpcErrorData {
+                code: slterm_runtime_protocol::DomainErrorCode::NotReady,
+            }),
+        ))
+    });
+    let mut stream = connect(&server);
+    stream.set_read_timeout(Some(TEST_TIMEOUT)).unwrap();
+    write_json(
+        &mut stream,
+        &hello_scoped("sk-test-runtime", ControlScope::Runtime),
+    );
+    assert!(read_line(&mut stream).contains("store"));
+    write_json(&mut stream, &runtime_request(RuntimeMethod::Snapshot));
+    let reply = read_line(&mut stream);
+    let value: serde_json::Value = serde_json::from_str(&reply).unwrap();
+    assert_eq!(value["error"]["data"]["code"], "not_ready");
+
+    // 结构化错误不关闭连接；后续 describe 仍可用。
+    write_json(&mut stream, &runtime_request(RuntimeMethod::Describe));
+    assert!(read_line(&mut stream).contains("protocol-hash"));
+    server.shutdown().unwrap();
+}
+
+#[test]
+fn handover_connection_rejects_runtime_methods_after_handshake() {
+    let (mut server, calls) = start_dual_scope_server();
+    let mut stream = connect(&server);
+    stream.set_read_timeout(Some(TEST_TIMEOUT)).unwrap();
+    write_json(
+        &mut stream,
+        &hello_scoped("sk-test", ControlScope::Handover),
+    );
+    assert!(read_line(&mut stream).contains("store"));
+    write_json(&mut stream, &runtime_request(RuntimeMethod::Describe));
+
+    assert_eq!(
+        read_line(&mut stream),
+        "",
+        "handover 连接不得执行 Runtime 方法"
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    server.shutdown().unwrap();
 }
 
 #[test]

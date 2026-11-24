@@ -10,9 +10,12 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use slterm_runtime_protocol::{
-    ClientRequest, ControlScope, Credential, DomainErrorCode, HandoverParams, HandoverResponse,
-    HelloResponse, JsonRpcError, JsonRpcErrorData, JsonRpcResponse, parse_client_request,
+    ClientRequest, ControlScope, Credential, DescribeResponse, DomainErrorCode, HandoverParams,
+    HandoverResponse, HelloResponse, JsonRpcError, JsonRpcErrorData, JsonRpcResponse,
+    RuntimeMethod, RuntimeResult, SnapshotResources, SnapshotResponse, parse_client_request,
 };
+
+use crate::secrets::SecretBytes;
 
 const REQUEST_BUDGET: usize = 128 * 1024;
 const RESPONSE_BUDGET: usize = 1024 * 1024;
@@ -54,25 +57,36 @@ impl Drop for WorkerGuard {
     }
 }
 
+/// Runtime 快照端口：由应用壳按请求生成同一时刻的只读资源。
+pub(super) type SnapshotCallback =
+    Arc<dyn Fn() -> Result<SnapshotResources, JsonRpcError> + Send + Sync + 'static>;
+
 impl LocalControlServer {
     /// 只服务 handover 作用域（测试与无 Runtime 组合）。
     pub(crate) fn start<F>(
-        credential: Credential,
+        credential: SecretBytes,
         hello: HelloResponse,
         on_handover: F,
     ) -> io::Result<Self>
     where
         F: Fn(HandoverParams) -> Result<HandoverResponse, JsonRpcError> + Send + Sync + 'static,
     {
-        Self::start_scoped(credential, None, hello, on_handover)
+        Self::start_scoped(
+            credential,
+            None,
+            hello,
+            on_handover,
+            Arc::new(not_ready_snapshot),
+        )
     }
 
     /// 同一端点服务 Runtime 与 handover 两个作用域，凭据各自独立。
     pub(crate) fn start_with_runtime<F>(
-        handover_credential: Credential,
-        runtime_credential: Credential,
+        handover_credential: SecretBytes,
+        runtime_credential: SecretBytes,
         hello: HelloResponse,
         on_handover: F,
+        on_snapshot: SnapshotCallback,
     ) -> io::Result<Self>
     where
         F: Fn(HandoverParams) -> Result<HandoverResponse, JsonRpcError> + Send + Sync + 'static,
@@ -82,14 +96,16 @@ impl LocalControlServer {
             Some(runtime_credential),
             hello,
             on_handover,
+            on_snapshot,
         )
     }
 
     fn start_scoped<F>(
-        credential: Credential,
-        runtime_credential: Option<Credential>,
+        credential: SecretBytes,
+        runtime_credential: Option<SecretBytes>,
         hello: HelloResponse,
         on_handover: F,
+        snapshot: SnapshotCallback,
     ) -> io::Result<Self>
     where
         F: Fn(HandoverParams) -> Result<HandoverResponse, JsonRpcError> + Send + Sync + 'static,
@@ -101,10 +117,10 @@ impl LocalControlServer {
         let workers = Arc::new(Mutex::new(BTreeMap::new()));
         let active_workers = Arc::new(AtomicUsize::new(0));
         let callback = Arc::new(on_handover);
-        let credentials = ScopedCredentials {
+        let credentials = Arc::new(ScopedCredentials {
             handover: credential,
             runtime: runtime_credential,
-        };
+        });
         let accept = {
             let shutdown = Arc::clone(&shutdown);
             let workers = Arc::clone(&workers);
@@ -116,7 +132,10 @@ impl LocalControlServer {
                         listener,
                         credentials,
                         hello,
-                        callback,
+                        ConnectionHandlers {
+                            handover: callback,
+                            snapshot,
+                        },
                         shutdown,
                         workers,
                         active_workers,
@@ -183,15 +202,20 @@ impl Drop for LocalControlServer {
     }
 }
 
-/// 同一端点的两项作用域凭据；未开放的作用域为 None。
-#[derive(Clone)]
+/// 同一端点的两项作用域凭据句柄；未开放的作用域为 None。
 struct ScopedCredentials {
-    handover: Credential,
-    runtime: Option<Credential>,
+    handover: SecretBytes,
+    runtime: Option<SecretBytes>,
+}
+
+/// 每个连接共享的两类应用回调；避免把回调拆成更多线程参数。
+struct ConnectionHandlers<F> {
+    handover: Arc<F>,
+    snapshot: SnapshotCallback,
 }
 
 impl ScopedCredentials {
-    fn for_scope(&self, scope: ControlScope) -> Option<&Credential> {
+    fn for_scope(&self, scope: ControlScope) -> Option<&SecretBytes> {
         match scope {
             ControlScope::Handover => Some(&self.handover),
             ControlScope::Runtime => self.runtime.as_ref(),
@@ -201,9 +225,9 @@ impl ScopedCredentials {
 
 fn accept_loop<F>(
     listener: TcpListener,
-    credentials: ScopedCredentials,
+    credentials: Arc<ScopedCredentials>,
     hello: HelloResponse,
-    callback: Arc<F>,
+    handlers: ConnectionHandlers<F>,
     shutdown: Arc<AtomicBool>,
     workers: Arc<Mutex<BTreeMap<u64, Worker>>>,
     active_workers: Arc<AtomicUsize>,
@@ -250,7 +274,8 @@ fn accept_loop<F>(
                     continue;
                 }
             };
-            let callback = Arc::clone(&callback);
+            let callback = Arc::clone(&handlers.handover);
+            let snapshot = Arc::clone(&handlers.snapshot);
             let credentials = credentials.clone();
             let hello = hello.clone();
             let shutdown = Arc::clone(&shutdown);
@@ -265,7 +290,7 @@ fn accept_loop<F>(
                         workers: workers_for_thread,
                         active_workers: active_workers_for_thread,
                     };
-                    handle_connection(stream, credentials, hello, callback, shutdown)
+                    handle_connection(stream, credentials, hello, callback, snapshot, shutdown)
                 });
             match handle {
                 Ok(handle) => {
@@ -288,9 +313,10 @@ fn accept_loop<F>(
 
 fn handle_connection<F>(
     mut stream: TcpStream,
-    credentials: ScopedCredentials,
+    credentials: Arc<ScopedCredentials>,
     hello: HelloResponse,
     callback: Arc<F>,
+    snapshot: SnapshotCallback,
     shutdown: Arc<AtomicBool>,
 ) where
     F: Fn(HandoverParams) -> Result<HandoverResponse, JsonRpcError> + Send + Sync + 'static,
@@ -323,7 +349,12 @@ fn handle_connection<F>(
     if !authorized {
         return;
     }
-    if write_json(&mut stream, &JsonRpcResponse::result(request.id, hello)).is_err() {
+    if write_json(
+        &mut stream,
+        &JsonRpcResponse::result(request.id, hello.clone()),
+    )
+    .is_err()
+    {
         return;
     }
     loop {
@@ -341,48 +372,108 @@ fn handle_connection<F>(
         let Ok(request) = parse_client_request(&frame) else {
             return;
         };
-        let ClientRequest::Handover(request) = request else {
-            return;
-        };
-        if scope != ControlScope::Handover {
-            return;
-        }
         if shutdown.load(Ordering::SeqCst) {
-            let error = JsonRpcError::new(
-                -32004,
-                "closing",
-                Some(JsonRpcErrorData {
-                    code: DomainErrorCode::Closing,
-                }),
-            );
-            let _ = write_json(
-                &mut stream,
-                &JsonRpcResponse::<HandoverResponse>::error(request.id, error),
-            );
+            let _ = match request {
+                ClientRequest::Runtime(request) => write_json(
+                    &mut stream,
+                    &JsonRpcResponse::<RuntimeResult>::error(request.id, closing_error()),
+                ),
+                ClientRequest::Handover(request) => write_json(
+                    &mut stream,
+                    &JsonRpcResponse::<HandoverResponse>::error(request.id, closing_error()),
+                ),
+                ClientRequest::Hello(request) => write_json(
+                    &mut stream,
+                    &JsonRpcResponse::<HelloResponse>::error(request.id, closing_error()),
+                ),
+            };
             return;
         }
-        let response = match callback(request.params) {
-            Ok(result) if result.is_accepted() => JsonRpcResponse::result(request.id, result),
-            Ok(_) => JsonRpcResponse::error(
-                request.id,
-                JsonRpcError::new(
-                    -32000,
-                    "handover rejected",
-                    Some(JsonRpcErrorData {
-                        code: DomainErrorCode::InvalidRequest,
-                    }),
-                ),
-            ),
-            Err(error) => JsonRpcResponse::error(request.id, error),
-        };
-        if write_json(&mut stream, &response).is_err() {
-            return;
+        match request {
+            ClientRequest::Runtime(request) => {
+                if scope != ControlScope::Runtime {
+                    return;
+                }
+                let response = match request.method {
+                    // describe 只读方法注册表与握手同一散列，不需要回前台。
+                    RuntimeMethod::Describe => JsonRpcResponse::result(
+                        request.id,
+                        RuntimeResult::Describe(DescribeResponse::current(
+                            hello.protocol_sha256.clone(),
+                            hello.schema_sha256.clone(),
+                        )),
+                    ),
+                    // 事件环接入前，revision 固定为握手起点；Hub 切片接管实时代次。
+                    RuntimeMethod::Snapshot => match snapshot() {
+                        Ok(resources) => JsonRpcResponse::result(
+                            request.id,
+                            RuntimeResult::Snapshot(SnapshotResponse {
+                                store_epoch: hello.store_epoch.clone(),
+                                stream_epoch: hello.stream_epoch.clone(),
+                                revision: hello.revision,
+                                resources,
+                            }),
+                        ),
+                        Err(error) => JsonRpcResponse::error(request.id, error),
+                    },
+                };
+                if write_json(&mut stream, &response).is_err() {
+                    return;
+                }
+            }
+            ClientRequest::Handover(request) => {
+                if scope != ControlScope::Handover {
+                    return;
+                }
+                let response = match callback(request.params) {
+                    Ok(result) if result.is_accepted() => {
+                        JsonRpcResponse::result(request.id, result)
+                    }
+                    Ok(_) => JsonRpcResponse::error(
+                        request.id,
+                        JsonRpcError::new(
+                            -32000,
+                            "handover rejected",
+                            Some(JsonRpcErrorData {
+                                code: DomainErrorCode::InvalidRequest,
+                            }),
+                        ),
+                    ),
+                    Err(error) => JsonRpcResponse::error(request.id, error),
+                };
+                if write_json(&mut stream, &response).is_err() {
+                    return;
+                }
+            }
+            // 握手后再次 hello 不属于已认证会话的合法方法序列。
+            ClientRequest::Hello(_) => return,
         }
     }
 }
 
-fn credential_matches(expected: &Credential, actual: &Credential) -> bool {
-    let expected = expected.as_str().as_bytes();
+fn closing_error() -> JsonRpcError {
+    JsonRpcError::new(
+        -32004,
+        "closing",
+        Some(JsonRpcErrorData {
+            code: DomainErrorCode::Closing,
+        }),
+    )
+}
+
+/// 无 Runtime 组合下的快照端口：明确 NotReady，不伪造空资源。
+fn not_ready_snapshot() -> Result<SnapshotResources, JsonRpcError> {
+    Err(JsonRpcError::new(
+        -32001,
+        "snapshot not ready",
+        Some(JsonRpcErrorData {
+            code: DomainErrorCode::NotReady,
+        }),
+    ))
+}
+
+fn credential_matches(expected: &SecretBytes, actual: &Credential) -> bool {
+    let expected = expected.as_bytes();
     let actual = actual.as_str().as_bytes();
     let mut difference = 0_u8;
     for (left, right) in expected.iter().zip(actual) {

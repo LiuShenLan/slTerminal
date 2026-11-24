@@ -20,6 +20,7 @@ mod project_close_preflight;
 mod project_close_receipts;
 mod projects;
 mod relocation;
+mod runtime_snapshot;
 mod settings_overlay;
 mod sidebar;
 mod tabs;

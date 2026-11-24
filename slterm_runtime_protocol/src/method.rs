@@ -3,11 +3,15 @@
 //! 只登记真实可用方法；新增方法必须先在此登记作用域、读写类别与
 //! 参数／结果 schema，再由服务器与客户端接入。
 
+use serde::{Deserialize, Serialize};
+
 use crate::protocol::ControlMethod;
 use crate::protocol::ControlScope;
 
 /// 方法读写类别：查询无副作用，写操作必须携带幂等语义。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
 pub enum MethodKind {
     Query,
     Mutation,
@@ -47,6 +51,21 @@ fn handover_result_schema() -> schemars::Schema {
     schemars::schema_for!(crate::protocol::HandoverResponse)
 }
 
+#[cfg(feature = "schema")]
+fn empty_params_schema() -> schemars::Schema {
+    schemars::schema_for!(crate::protocol::EmptyParams)
+}
+
+#[cfg(feature = "schema")]
+fn describe_result_schema() -> schemars::Schema {
+    schemars::schema_for!(crate::protocol::DescribeResponse)
+}
+
+#[cfg(feature = "schema")]
+fn snapshot_result_schema() -> schemars::Schema {
+    schemars::schema_for!(crate::protocol::SnapshotResponse)
+}
+
 /// 全部真实可用方法；顺序即对外呈现顺序。
 pub static METHODS: &[MethodSpec] = &[
     MethodSpec {
@@ -58,6 +77,26 @@ pub static METHODS: &[MethodSpec] = &[
         params_schema: hello_params_schema,
         #[cfg(feature = "schema")]
         result_schema: hello_result_schema,
+    },
+    MethodSpec {
+        method: ControlMethod::RuntimeDescribe,
+        scopes: &[ControlScope::Runtime],
+        kind: MethodKind::Query,
+        idempotent: true,
+        #[cfg(feature = "schema")]
+        params_schema: empty_params_schema,
+        #[cfg(feature = "schema")]
+        result_schema: describe_result_schema,
+    },
+    MethodSpec {
+        method: ControlMethod::RuntimeSnapshot,
+        scopes: &[ControlScope::Runtime],
+        kind: MethodKind::Query,
+        idempotent: true,
+        #[cfg(feature = "schema")]
+        params_schema: empty_params_schema,
+        #[cfg(feature = "schema")]
+        result_schema: snapshot_result_schema,
     },
     MethodSpec {
         method: ControlMethod::InstanceHandover,
@@ -115,6 +154,8 @@ mod method_tests {
             names,
             vec![
                 method_name(ControlMethod::RuntimeHello),
+                method_name(ControlMethod::RuntimeDescribe),
+                method_name(ControlMethod::RuntimeSnapshot),
                 method_name(ControlMethod::InstanceHandover),
             ]
         );
@@ -163,7 +204,23 @@ mod method_tests {
             lookup("runtime.hello").unwrap().method,
             ControlMethod::RuntimeHello
         );
-        assert!(lookup("runtime.describe").is_none(), "未实现方法不得登记");
+        assert_eq!(
+            lookup("runtime.describe").unwrap().method,
+            ControlMethod::RuntimeDescribe
+        );
+        assert_eq!(
+            lookup("runtime.snapshot").unwrap().method,
+            ControlMethod::RuntimeSnapshot
+        );
+        assert!(lookup("runtime.unknown").is_none(), "未实现方法不得登记");
+        assert!(!allows(
+            ControlMethod::RuntimeDescribe,
+            ControlScope::Handover
+        ));
+        assert!(!allows(
+            ControlMethod::RuntimeSnapshot,
+            ControlScope::Handover
+        ));
 
         let handover = lookup("instance.handover").unwrap();
         assert_eq!(handover.kind, MethodKind::Mutation);
@@ -172,7 +229,14 @@ mod method_tests {
         let runtime_methods: Vec<ControlMethod> = methods_for(ControlScope::Runtime)
             .map(|spec| spec.method)
             .collect();
-        assert_eq!(runtime_methods, vec![ControlMethod::RuntimeHello]);
+        assert_eq!(
+            runtime_methods,
+            vec![
+                ControlMethod::RuntimeHello,
+                ControlMethod::RuntimeDescribe,
+                ControlMethod::RuntimeSnapshot
+            ]
+        );
         let handover_methods: Vec<ControlMethod> = methods_for(ControlScope::Handover)
             .map(|spec| spec.method)
             .collect();

@@ -90,6 +90,22 @@ pub enum HelloMethod {
     RuntimeHello,
 }
 
+/// 认证后的 Runtime 查询方法；写方法族由后续切片逐个接入。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub enum RuntimeMethod {
+    #[serde(rename = "runtime.describe")]
+    Describe,
+    #[serde(rename = "runtime.snapshot")]
+    Snapshot,
+}
+
+/// 当前 Runtime 查询方法都不接受参数；未知字段一律拒绝。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct EmptyParams {}
+
 /// 单实例移交只接受 instance.handover。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -202,6 +218,7 @@ impl HandoverParams {
 
 pub type HelloRequest = JsonRpcRequest<HelloMethod, HelloParams>;
 pub type HandoverRequest = JsonRpcRequest<HandoverMethod, HandoverParams>;
+pub type RuntimeRequest = JsonRpcRequest<RuntimeMethod, EmptyParams>;
 
 /// 当前已实现的客户端请求；新增方法必须显式扩展封闭集合。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -210,6 +227,7 @@ pub type HandoverRequest = JsonRpcRequest<HandoverMethod, HandoverParams>;
 pub enum ClientRequest {
     Hello(HelloRequest),
     Handover(HandoverRequest),
+    Runtime(RuntimeRequest),
 }
 
 impl ClientRequest {
@@ -224,6 +242,7 @@ impl ClientRequest {
             Self::Handover(request) => {
                 request.has_valid_envelope() && request.params.has_valid_paths()
             }
+            Self::Runtime(request) => request.has_valid_envelope(),
         };
         if valid {
             Ok(())
@@ -233,22 +252,158 @@ impl ClientRequest {
     }
 }
 
-/// 当前方法注册表同时用于 hello 能力摘要与 schema 覆盖检查。
+/// 当前方法注册表同时用于 hello 能力摘要、describe 与 schema 覆盖检查。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ControlMethod {
     RuntimeHello,
+    RuntimeDescribe,
+    RuntimeSnapshot,
     InstanceHandover,
 }
 
 impl ControlMethod {
-    pub const ALL: [Self; 2] = [Self::RuntimeHello, Self::InstanceHandover];
+    pub const ALL: [Self; 4] = [
+        Self::RuntimeHello,
+        Self::RuntimeDescribe,
+        Self::RuntimeSnapshot,
+        Self::InstanceHandover,
+    ];
 
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::RuntimeHello => "runtime.hello",
+            Self::RuntimeDescribe => "runtime.describe",
+            Self::RuntimeSnapshot => "runtime.snapshot",
             Self::InstanceHandover => "instance.handover",
         }
     }
+}
+
+/// `runtime.describe` 的单个方法合同：与注册表共用同一事实。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct MethodDescriptor {
+    pub method: String,
+    pub scopes: Vec<ControlScope>,
+    pub kind: crate::MethodKind,
+    pub idempotent: bool,
+}
+
+/// `runtime.describe` 返回方法注册与当前合同散列。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct DescribeResponse {
+    pub protocol_sha256: String,
+    pub schema_sha256: String,
+    pub methods: Vec<MethodDescriptor>,
+}
+
+impl DescribeResponse {
+    /// 只从方法注册表派生；散列由握手同一来源传入。
+    pub fn current(protocol_sha256: impl Into<String>, schema_sha256: impl Into<String>) -> Self {
+        let methods = crate::METHODS
+            .iter()
+            .map(|spec| MethodDescriptor {
+                method: spec.method.as_str().to_owned(),
+                scopes: spec.scopes.to_vec(),
+                kind: spec.kind,
+                idempotent: spec.idempotent,
+            })
+            .collect();
+        Self {
+            protocol_sha256: protocol_sha256.into(),
+            schema_sha256: schema_sha256.into(),
+            methods,
+        }
+    }
+}
+
+/// 快照中的项目资源身份与元数据。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct ProjectResource {
+    pub project_id: String,
+    pub display_name: String,
+    pub root: String,
+    pub active: bool,
+}
+
+/// 快照中的面板组；`views` 按持久顺序，`active_view` 为组内激活视图。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct PanelGroupResource {
+    pub project_id: String,
+    pub group_id: String,
+    pub views: Vec<ViewResource>,
+    pub active_view: String,
+}
+
+/// 视图身份：封闭类型名与规范 ViewKey JSON 文本。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct ViewResource {
+    pub kind: String,
+    pub key: String,
+}
+
+/// 快照中的逻辑终端；不含 PTY、输出或回滚正文。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct TerminalResource {
+    pub terminal_id: String,
+    pub project_id: String,
+    pub number: u64,
+    pub cwd: String,
+    pub shell: String,
+    pub title: Option<String>,
+    /// 封闭运行意图：`launch` 或 `exited`。
+    pub run_intent: String,
+}
+
+/// 快照中的 Document 位置元数据；不含正文。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct DocumentResource {
+    pub document_id: String,
+    pub path: String,
+}
+
+/// 同一代次资源模型：项目、面板组、终端与 Document。
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct SnapshotResources {
+    pub projects: Vec<ProjectResource>,
+    pub groups: Vec<PanelGroupResource>,
+    pub terminals: Vec<TerminalResource>,
+    pub documents: Vec<DocumentResource>,
+}
+
+/// `runtime.snapshot` 的不可变资源快照与世代。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct SnapshotResponse {
+    pub store_epoch: String,
+    pub stream_epoch: String,
+    pub revision: u64,
+    pub resources: SnapshotResources,
+}
+
+/// Runtime 查询方法的封闭结果集合；服务端按方法构造。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(untagged)]
+pub enum RuntimeResult {
+    Describe(DescribeResponse),
+    Snapshot(SnapshotResponse),
 }
 
 /// 当前客户端可调用的方法集合。
@@ -432,8 +587,10 @@ pub struct JsonRpcErrorResponse {
 pub enum ControlMessage {
     Hello(HelloRequest),
     Handover(HandoverRequest),
+    Runtime(RuntimeRequest),
     HelloResponse(JsonRpcResult<HelloResponse>),
     HandoverResponse(JsonRpcResult<HandoverResponse>),
+    RuntimeResponse(JsonRpcResult<RuntimeResult>),
     Error(JsonRpcErrorResponse),
     Discovery(DiscoveryRecord),
 }

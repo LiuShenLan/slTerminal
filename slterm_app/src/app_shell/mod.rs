@@ -94,6 +94,7 @@ use gpui::{App, QuitMode};
 use slterm_path::CanonicalPath;
 use slterm_runtime_protocol::{
     DomainErrorCode, HandoverParams, HandoverResponse, JsonRpcError, JsonRpcErrorData,
+    SnapshotResources,
 };
 
 /// GPUI 主窗标准错误句柄不可依赖:保留父进程重定向诊断,但写失败不能再把
@@ -125,6 +126,10 @@ pub(crate) enum SltermShellEvent {
         params: HandoverParams,
         completion: mpsc::SyncSender<Result<HandoverResponse, JsonRpcError>>,
     },
+    /// Runtime 快照请求与一次性回执；资源只在前台同一时刻读取。
+    RuntimeSnapshot {
+        completion: mpsc::SyncSender<Result<SnapshotResources, JsonRpcError>>,
+    },
 }
 
 const SHELL_EVENT_CAPACITY: usize = 64;
@@ -149,6 +154,15 @@ pub(crate) fn try_send_shell_event(
 }
 
 fn handover_error(domain: DomainErrorCode, numeric: i32, message: &'static str) -> JsonRpcError {
+    control_error(domain, numeric, message)
+}
+
+/// 控制面结构化错误构造；handover 与 Runtime 共用同一数值/领域码映射。
+pub(crate) fn control_error(
+    domain: DomainErrorCode,
+    numeric: i32,
+    message: &'static str,
+) -> JsonRpcError {
     JsonRpcError::new(numeric, message, Some(JsonRpcErrorData { code: domain }))
 }
 
@@ -171,6 +185,24 @@ pub(crate) fn try_send_handover(
         Err(mpsc::TrySendError::Disconnected(_)) => {
             log::debug!("handover event channel closed");
             Err(handover_error(DomainErrorCode::Closing, -32004, "closing"))
+        }
+    }
+}
+
+/// 非阻塞投递 Runtime 快照请求；调用方只在后台执行体等待完成回执。
+pub(crate) fn try_send_runtime_snapshot(
+    sender: &mpsc::SyncSender<SltermShellEvent>,
+) -> Result<mpsc::Receiver<Result<SnapshotResources, JsonRpcError>>, JsonRpcError> {
+    let (completion, response) = mpsc::sync_channel(1);
+    match sender.try_send(SltermShellEvent::RuntimeSnapshot { completion }) {
+        Ok(()) => Ok(response),
+        Err(mpsc::TrySendError::Full(_)) => Err(control_error(
+            DomainErrorCode::QueueFull,
+            -32003,
+            "snapshot queue full",
+        )),
+        Err(mpsc::TrySendError::Disconnected(_)) => {
+            Err(control_error(DomainErrorCode::Closing, -32004, "closing"))
         }
     }
 }

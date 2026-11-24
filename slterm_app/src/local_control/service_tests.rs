@@ -473,7 +473,7 @@ fn service_publish_failure_reports_real_server_cleanup_failure() {
         store_ref,
         &path,
         TEST_TIMEOUT,
-        move |credential, runtime_credential, hello, _on_handover| {
+        move |credential, runtime_credential, hello, _on_handover, on_snapshot| {
             let server = LocalControlServer::start_with_runtime(
                 credential,
                 runtime_credential,
@@ -483,6 +483,7 @@ fn service_publish_failure_reports_real_server_cleanup_failure() {
                     release_worker_rx.lock().unwrap().recv().unwrap();
                     panic!("injected publish-cleanup worker panic")
                 },
+                on_snapshot,
             )?;
             *bound_by_server.lock().unwrap() = Some(server.endpoint().to_owned());
             let run = metadata().run;
@@ -555,12 +556,13 @@ fn service_publish_failure_reclaims_listener_without_new_endpoint() {
         &store,
         &path,
         TEST_TIMEOUT,
-        move |credential, runtime_credential, hello, on_handover| {
+        move |credential, runtime_credential, hello, on_handover, on_snapshot| {
             let server = LocalControlServer::start_with_runtime(
                 credential,
                 runtime_credential,
                 hello,
                 move |params| on_handover(params),
+                on_snapshot,
             )?;
             *bound_by_server.lock().unwrap() = Some(server.endpoint().to_owned());
             Ok(server)

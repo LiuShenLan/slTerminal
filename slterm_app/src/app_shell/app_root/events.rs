@@ -75,12 +75,20 @@ impl AppRoot {
                                         // 关闭后不再消费领域事件，但同批 handover 必须得到
                                         // 结构化 Closing，不能只让调用方观察发送端断连。
                                         for event in events {
-                                            if let SltermShellEvent::Handover {
-                                                completion, ..
-                                            } = event
-                                            {
-                                                let _ = completion
-                                                    .try_send(Err(closing_handover_error()));
+                                            match event {
+                                                SltermShellEvent::Handover {
+                                                    completion, ..
+                                                } => {
+                                                    let _ = completion
+                                                        .try_send(Err(closing_handover_error()));
+                                                }
+                                                SltermShellEvent::RuntimeSnapshot {
+                                                    completion,
+                                                } => {
+                                                    let _ = completion
+                                                        .try_send(Err(closing_snapshot_error()));
+                                                }
+                                                _ => {}
                                             }
                                         }
                                         break;
@@ -261,6 +269,17 @@ impl AppRoot {
                 // 回执接收端可能已超时退出；非阻塞发送失败只结束本次答复。
                 let _ = completion.try_send(response);
             }
+            SltermShellEvent::RuntimeSnapshot { completion } => {
+                let result = if self.close_in_progress
+                    || self.application_close.is_some()
+                    || self.close_completed
+                {
+                    Err(closing_snapshot_error())
+                } else {
+                    self.runtime_snapshot_resources()
+                };
+                let _ = completion.try_send(result);
+            }
             SltermShellEvent::OpenDirectories(paths) => {
                 for path in paths {
                     match CanonicalPath::new(path) {
@@ -373,6 +392,10 @@ fn open_file_handover_error(error: AppRootError) -> JsonRpcError {
 }
 
 fn closing_handover_error() -> JsonRpcError {
+    handover_error(DomainErrorCode::Closing, -32004, "closing")
+}
+
+fn closing_snapshot_error() -> JsonRpcError {
     handover_error(DomainErrorCode::Closing, -32004, "closing")
 }
 

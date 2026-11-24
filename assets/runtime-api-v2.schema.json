@@ -10,10 +10,16 @@
       "$ref": "#/$defs/JsonRpcRequest2"
     },
     {
+      "$ref": "#/$defs/JsonRpcRequest3"
+    },
+    {
       "$ref": "#/$defs/JsonRpcResult"
     },
     {
       "$ref": "#/$defs/JsonRpcResult2"
+    },
+    {
+      "$ref": "#/$defs/JsonRpcResult3"
     },
     {
       "$ref": "#/$defs/JsonRpcErrorResponse"
@@ -51,6 +57,30 @@
     "Credential": {
       "description": "线缆凭据只参与序列化与认证比较，调试输出永远脱敏。",
       "type": "string"
+    },
+    "DescribeResponse": {
+      "description": "`runtime.describe` 返回方法注册与当前合同散列。",
+      "type": "object",
+      "properties": {
+        "methods": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MethodDescriptor"
+          }
+        },
+        "protocol_sha256": {
+          "type": "string"
+        },
+        "schema_sha256": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "protocol_sha256",
+        "schema_sha256",
+        "methods"
+      ]
     },
     "DiscoveryRecord": {
       "description": "本机控制面发现记录；认证材料只经凭据门面独立获取。",
@@ -90,6 +120,23 @@
         "process_created_at_ms"
       ]
     },
+    "DocumentResource": {
+      "description": "快照中的 Document 位置元数据；不含正文。",
+      "type": "object",
+      "properties": {
+        "document_id": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "document_id",
+        "path"
+      ]
+    },
     "DomainErrorCode": {
       "description": "结构化领域错误码，不与 JSON-RPC 数值码混用。",
       "type": "string",
@@ -100,6 +147,11 @@
         "closing",
         "invalid_request"
       ]
+    },
+    "EmptyParams": {
+      "description": "当前 Runtime 查询方法都不接受参数；未知字段一律拒绝。",
+      "type": "object",
+      "additionalProperties": false
     },
     "HandoverMethod": {
       "description": "单实例移交只接受 instance.handover。",
@@ -404,6 +456,34 @@
         "params"
       ]
     },
+    "JsonRpcRequest3": {
+      "description": "带封闭方法类型的 JSON-RPC 请求信封。",
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/JsonRpcId"
+        },
+        "jsonrpc": {
+          "type": "string",
+          "enum": [
+            "2.0"
+          ]
+        },
+        "method": {
+          "$ref": "#/$defs/RuntimeMethod"
+        },
+        "params": {
+          "$ref": "#/$defs/EmptyParams"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "jsonrpc",
+        "id",
+        "method",
+        "params"
+      ]
+    },
     "JsonRpcResult": {
       "description": "hello 成功响应的静态形状，与通用错误响应严格分离。",
       "type": "object",
@@ -450,6 +530,261 @@
         "jsonrpc",
         "id",
         "result"
+      ]
+    },
+    "JsonRpcResult3": {
+      "description": "hello 成功响应的静态形状，与通用错误响应严格分离。",
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/JsonRpcId"
+        },
+        "jsonrpc": {
+          "type": "string",
+          "enum": [
+            "2.0"
+          ]
+        },
+        "result": {
+          "$ref": "#/$defs/RuntimeResult"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "jsonrpc",
+        "id",
+        "result"
+      ]
+    },
+    "MethodDescriptor": {
+      "description": "`runtime.describe` 的单个方法合同：与注册表共用同一事实。",
+      "type": "object",
+      "properties": {
+        "idempotent": {
+          "type": "boolean"
+        },
+        "kind": {
+          "$ref": "#/$defs/MethodKind"
+        },
+        "method": {
+          "type": "string"
+        },
+        "scopes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ControlScope"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "method",
+        "scopes",
+        "kind",
+        "idempotent"
+      ]
+    },
+    "MethodKind": {
+      "description": "方法读写类别：查询无副作用，写操作必须携带幂等语义。",
+      "type": "string",
+      "enum": [
+        "query",
+        "mutation"
+      ]
+    },
+    "PanelGroupResource": {
+      "description": "快照中的面板组；`views` 按持久顺序，`active_view` 为组内激活视图。",
+      "type": "object",
+      "properties": {
+        "active_view": {
+          "type": "string"
+        },
+        "group_id": {
+          "type": "string"
+        },
+        "project_id": {
+          "type": "string"
+        },
+        "views": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ViewResource"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "project_id",
+        "group_id",
+        "views",
+        "active_view"
+      ]
+    },
+    "ProjectResource": {
+      "description": "快照中的项目资源身份与元数据。",
+      "type": "object",
+      "properties": {
+        "active": {
+          "type": "boolean"
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "project_id": {
+          "type": "string"
+        },
+        "root": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "project_id",
+        "display_name",
+        "root",
+        "active"
+      ]
+    },
+    "RuntimeMethod": {
+      "description": "认证后的 Runtime 查询方法；写方法族由后续切片逐个接入。",
+      "type": "string",
+      "enum": [
+        "runtime.describe",
+        "runtime.snapshot"
+      ]
+    },
+    "RuntimeResult": {
+      "description": "Runtime 查询方法的封闭结果集合；服务端按方法构造。",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DescribeResponse"
+        },
+        {
+          "$ref": "#/$defs/SnapshotResponse"
+        }
+      ]
+    },
+    "SnapshotResources": {
+      "description": "同一代次资源模型：项目、面板组、终端与 Document。",
+      "type": "object",
+      "properties": {
+        "documents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DocumentResource"
+          }
+        },
+        "groups": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PanelGroupResource"
+          }
+        },
+        "projects": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProjectResource"
+          }
+        },
+        "terminals": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TerminalResource"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "projects",
+        "groups",
+        "terminals",
+        "documents"
+      ]
+    },
+    "SnapshotResponse": {
+      "description": "`runtime.snapshot` 的不可变资源快照与世代。",
+      "type": "object",
+      "properties": {
+        "resources": {
+          "$ref": "#/$defs/SnapshotResources"
+        },
+        "revision": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "store_epoch": {
+          "type": "string"
+        },
+        "stream_epoch": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "store_epoch",
+        "stream_epoch",
+        "revision",
+        "resources"
+      ]
+    },
+    "TerminalResource": {
+      "description": "快照中的逻辑终端；不含 PTY、输出或回滚正文。",
+      "type": "object",
+      "properties": {
+        "cwd": {
+          "type": "string"
+        },
+        "number": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "project_id": {
+          "type": "string"
+        },
+        "run_intent": {
+          "description": "封闭运行意图：`launch` 或 `exited`。",
+          "type": "string"
+        },
+        "shell": {
+          "type": "string"
+        },
+        "terminal_id": {
+          "type": "string"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "terminal_id",
+        "project_id",
+        "number",
+        "cwd",
+        "shell",
+        "run_intent"
+      ]
+    },
+    "ViewResource": {
+      "description": "视图身份：封闭类型名与规范 ViewKey JSON 文本。",
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "key"
       ]
     }
   }

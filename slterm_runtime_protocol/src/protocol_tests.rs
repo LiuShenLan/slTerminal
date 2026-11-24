@@ -1,10 +1,13 @@
 //! Runtime hello 与单实例移交的线缆合同测试。
 
+use crate::MethodKind;
 use crate::protocol::{
-    ClientRequest, ControlMessage, ControlMethod, ControlScope, Credential, DiscoveryRecord,
-    DomainErrorCode, HandoverMethod, HandoverParams, HandoverRequest, HelloMethod, HelloParams,
-    HelloRequest, HelloResponse, JsonRpcError, JsonRpcErrorData, JsonRpcId, JsonRpcRequest,
-    JsonRpcResponse, ProtocolError, parse_client_request,
+    ClientRequest, ControlMessage, ControlMethod, ControlScope, Credential, DescribeResponse,
+    DiscoveryRecord, DocumentResource, DomainErrorCode, EmptyParams, HandoverMethod,
+    HandoverParams, HandoverRequest, HelloMethod, HelloParams, HelloRequest, HelloResponse,
+    JsonRpcError, JsonRpcErrorData, JsonRpcId, JsonRpcRequest, JsonRpcResponse, PanelGroupResource,
+    ProjectResource, ProtocolError, RuntimeMethod, RuntimeRequest, SnapshotResources,
+    SnapshotResponse, TerminalResource, ViewResource, parse_client_request,
 };
 
 #[cfg(feature = "schema")]
@@ -348,6 +351,121 @@ fn method_registry_drives_hello_capabilities() {
     }
 }
 
+fn runtime_request(method: RuntimeMethod) -> RuntimeRequest {
+    JsonRpcRequest::new(JsonRpcId::Number(7), method, EmptyParams {})
+}
+
+#[test]
+fn runtime_requests_are_closed_and_require_empty_params() {
+    for (method, wire) in [
+        (RuntimeMethod::Describe, "runtime.describe"),
+        (RuntimeMethod::Snapshot, "runtime.snapshot"),
+    ] {
+        let encoded = serde_json::to_value(runtime_request(method)).unwrap();
+        let parsed = parse_client_request(encoded.to_string().as_bytes()).unwrap();
+        match parsed {
+            ClientRequest::Runtime(request) => assert_eq!(request.method, method),
+            other => panic!("{wire} 必须解析为 Runtime 请求: {other:?}"),
+        }
+    }
+    for invalid in [
+        serde_json::json!({"jsonrpc":"2.0","id":7,"method":"runtime.unknown","params":{}}),
+        serde_json::json!({"jsonrpc":"2.0","id":7,"method":"runtime.describe","params":{"extra":1}}),
+        serde_json::json!({"jsonrpc":"2.0","id":7,"method":"runtime.describe","params":null}),
+        serde_json::json!({"jsonrpc":"2.0","id":7,"method":"runtime.snapshot"}),
+        serde_json::json!({"jsonrpc":"1.0","id":7,"method":"runtime.describe","params":{}}),
+    ] {
+        assert!(
+            parse_client_request(invalid.to_string().as_bytes()).is_err(),
+            "非法 Runtime 请求必须拒绝: {invalid}"
+        );
+    }
+}
+
+#[test]
+fn describe_lists_the_method_registry_with_contract_hashes() {
+    let describe = DescribeResponse::current("protocol-hash", "schema-hash");
+    assert_eq!(describe.protocol_sha256, "protocol-hash");
+    assert_eq!(describe.schema_sha256, "schema-hash");
+    let names: Vec<&str> = describe
+        .methods
+        .iter()
+        .map(|method| method.method.as_str())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "runtime.hello",
+            "runtime.describe",
+            "runtime.snapshot",
+            "instance.handover"
+        ]
+    );
+    let runtime_describe = describe
+        .methods
+        .iter()
+        .find(|method| method.method == "runtime.describe")
+        .unwrap();
+    assert_eq!(runtime_describe.scopes, [ControlScope::Runtime]);
+    assert_eq!(runtime_describe.kind, MethodKind::Query);
+    assert!(runtime_describe.idempotent);
+    let encoded = serde_json::to_value(&describe).unwrap();
+    assert_eq!(encoded["methods"][1]["kind"], "query");
+    assert_eq!(encoded["methods"][1]["scopes"][0], "runtime");
+    assert_eq!(encoded["methods"][1]["idempotent"], true);
+}
+
+fn sample_snapshot() -> SnapshotResponse {
+    SnapshotResponse {
+        store_epoch: "store".to_owned(),
+        stream_epoch: "stream".to_owned(),
+        revision: 3,
+        resources: SnapshotResources {
+            projects: vec![ProjectResource {
+                project_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b".to_owned(),
+                display_name: "Repo".to_owned(),
+                root: "D:/work/a".to_owned(),
+                active: true,
+            }],
+            groups: vec![PanelGroupResource {
+                project_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b".to_owned(),
+                group_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2c".to_owned(),
+                views: vec![ViewResource {
+                    kind: "terminal".to_owned(),
+                    key: r#"{"kind":"terminal","version":1}"#.to_owned(),
+                }],
+                active_view: r#"{"kind":"terminal","version":1}"#.to_owned(),
+            }],
+            terminals: vec![TerminalResource {
+                terminal_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2d".to_owned(),
+                project_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b".to_owned(),
+                number: 1,
+                cwd: "D:/work/a".to_owned(),
+                shell: "C:/Program Files/PowerShell/7/pwsh.exe".to_owned(),
+                title: Some("build".to_owned()),
+                run_intent: "launch".to_owned(),
+            }],
+            documents: vec![DocumentResource {
+                document_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2e".to_owned(),
+                path: "D:/work/a/README.md".to_owned(),
+            }],
+        },
+    }
+}
+
+#[test]
+fn snapshot_response_round_trips_and_rejects_unknown_fields() {
+    let snapshot = sample_snapshot();
+    let encoded = serde_json::to_value(&snapshot).unwrap();
+    assert_eq!(
+        serde_json::from_value::<SnapshotResponse>(encoded.clone()).unwrap(),
+        snapshot
+    );
+    let mut with_extra = encoded;
+    with_extra["extra"] = serde_json::Value::from(1);
+    assert!(serde_json::from_value::<SnapshotResponse>(with_extra).is_err());
+}
+
 #[cfg(feature = "schema")]
 fn packaged_schema() -> String {
     std::fs::read_to_string(concat!(
@@ -458,6 +576,21 @@ fn schema_accepts_real_requests_and_rejects_unknown_methods() {
     );
     validator
         .validate(&serde_json::to_value(hello_response).unwrap())
+        .unwrap();
+    let describe_request = serde_json::to_value(runtime_request(RuntimeMethod::Describe)).unwrap();
+    validator.validate(&describe_request).unwrap();
+    let snapshot_request = serde_json::to_value(runtime_request(RuntimeMethod::Snapshot)).unwrap();
+    validator.validate(&snapshot_request).unwrap();
+    let describe_response = JsonRpcResponse::result(
+        JsonRpcId::Number(1),
+        DescribeResponse::current("protocol", "schema"),
+    );
+    validator
+        .validate(&serde_json::to_value(describe_response).unwrap())
+        .unwrap();
+    let snapshot_response = JsonRpcResponse::result(JsonRpcId::Number(1), sample_snapshot());
+    validator
+        .validate(&serde_json::to_value(snapshot_response).unwrap())
         .unwrap();
     let handover_response =
         JsonRpcResponse::result(JsonRpcId::Number(1), HandoverResponse::accepted());

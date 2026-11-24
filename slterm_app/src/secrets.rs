@@ -360,9 +360,13 @@ mod secrets_tests {
 
     // ---- SecretBytes::as_bytes 借出白名单 ----
 
-    /// 允许借出 SecretBytes 字节的调用点:凭据域内部与控制面凭据的
-    /// 校验/写入;新增请求组装点须先登记凭据域边界。
-    const AS_BYTES_WHITELIST: [&str; 2] = ["secrets.rs", "local_control/credentials.rs"];
+    /// 允许借出 SecretBytes 字节的调用点:凭据域内部、控制面凭据校验/写入,
+    /// 以及 server 在首包认证时的常量时间比较;新增请求组装点须先登记凭据域边界。
+    const AS_BYTES_WHITELIST: [&str; 3] = [
+        "secrets.rs",
+        "local_control/credentials.rs",
+        "local_control/server.rs",
+    ];
 
     /// 取 `:` 前的标识符(用于识别 SecretBytes 绑定)。
     fn identifier_before(text: &str, end: usize) -> Option<&str> {

@@ -9,35 +9,35 @@ use std::time::Duration;
 
 use sha2::{Digest as _, Sha256};
 use slterm_runtime_protocol::{
-    ControlScope, Credential, DiscoveryRecord, DomainErrorCode, HandoverParams, HandoverResponse,
+    ControlScope, DiscoveryRecord, DomainErrorCode, HandoverParams, HandoverResponse,
     HelloResponse, JsonRpcError, JsonRpcErrorData,
 };
 
 use super::credentials::load_or_create_at;
 use super::discovery::{DiscoveryGuard, endpoint_path, publish_at};
-use super::server::LocalControlServer;
-use crate::app_shell::{SltermShellEvent, try_send_handover};
+use super::server::{LocalControlServer, SnapshotCallback};
+use crate::app_shell::{SltermShellEvent, try_send_handover, try_send_runtime_snapshot};
 use crate::persistence::metadata::WorkspaceMetadata;
-use crate::secrets::{CredentialStore, WindowsCredentialStore};
+use crate::secrets::{CredentialStore, SecretBytes, WindowsCredentialStore};
 
 pub(super) const HANDOVER_REPLY_TIMEOUT: Duration = Duration::from_secs(4);
+/// 快照只读前台内存；2 秒足够覆盖事件泵唤醒与回执调度。
+pub(super) const SNAPSHOT_REPLY_TIMEOUT: Duration = Duration::from_secs(2);
 const PROTOCOL_DOMAIN: &[u8] = b"slterm-runtime-v2";
 const RUNTIME_SCHEMA: &[u8] = include_bytes!("../../../assets/runtime-api-v2.schema.json");
 
 pub(super) type HandoverCallback =
     Arc<dyn Fn(HandoverParams) -> Result<HandoverResponse, JsonRpcError> + Send + Sync + 'static>;
 
-/// 读取或创建指定作用域的线缆凭据；只由持锁首实例调用。
+/// 读取或创建指定作用域的线缆凭据句柄；只由持锁首实例调用。
+///
+/// 句柄在 server 认证点直接与请求凭据比较，不落成第二份字符串副本。
 fn load_credential(
     scope: ControlScope,
     local_root: &Path,
     store: &dyn CredentialStore,
-) -> io::Result<Credential> {
-    let handle = load_or_create_at(scope, local_root, store)?;
-    let value = handle
-        .into_string()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "控制面凭据不是有效 UTF-8"))?;
-    Ok(Credential::new(value.as_str()))
+) -> io::Result<SecretBytes> {
+    load_or_create_at(scope, local_root, store)
 }
 
 /// 已持 OS 单实例锁的首实例服务；显式 shutdown 只能在 GPUI 外执行。
@@ -62,10 +62,14 @@ impl LocalControlService {
             &store,
             &endpoint_path(),
             HANDOVER_REPLY_TIMEOUT,
-            |handover, runtime, hello, on_handover| {
-                LocalControlServer::start_with_runtime(handover, runtime, hello, move |params| {
-                    on_handover(params)
-                })
+            |handover, runtime, hello, on_handover, on_snapshot| {
+                LocalControlServer::start_with_runtime(
+                    handover,
+                    runtime,
+                    hello,
+                    move |params| on_handover(params),
+                    on_snapshot,
+                )
             },
         )
     }
@@ -84,10 +88,14 @@ impl LocalControlService {
             store,
             discovery_path,
             reply_timeout,
-            |handover, runtime, hello, on_handover| {
-                LocalControlServer::start_with_runtime(handover, runtime, hello, move |params| {
-                    on_handover(params)
-                })
+            |handover, runtime, hello, on_handover, on_snapshot| {
+                LocalControlServer::start_with_runtime(
+                    handover,
+                    runtime,
+                    hello,
+                    move |params| on_handover(params),
+                    on_snapshot,
+                )
             },
         )
     }
@@ -102,10 +110,11 @@ impl LocalControlService {
     ) -> io::Result<Self>
     where
         B: FnOnce(
-            Credential,
-            Credential,
+            SecretBytes,
+            SecretBytes,
             HelloResponse,
             HandoverCallback,
+            SnapshotCallback,
         ) -> io::Result<LocalControlServer>,
     {
         let local_root = discovery_path.parent().ok_or_else(|| {
@@ -121,6 +130,7 @@ impl LocalControlService {
             protocol_sha256,
             schema_sha256,
         );
+        let snapshot_events = events.clone();
         let on_handover: HandoverCallback = Arc::new(move |params| {
             let receipt = try_send_handover(&events, params)?;
             match receipt.recv_timeout(reply_timeout) {
@@ -135,7 +145,28 @@ impl LocalControlService {
                 }
             }
         });
-        let server = bind(credential, runtime_credential, hello, on_handover)?;
+        // 快照请求经同一壳事件通道到前台；worker 只做有界等待。
+        let on_snapshot: SnapshotCallback = Arc::new(move || {
+            let receipt = try_send_runtime_snapshot(&snapshot_events)?;
+            match receipt.recv_timeout(SNAPSHOT_REPLY_TIMEOUT) {
+                Ok(result) => result,
+                Err(RecvTimeoutError::Timeout) => Err(control_error(
+                    DomainErrorCode::NotReady,
+                    -32001,
+                    "snapshot not ready",
+                )),
+                Err(RecvTimeoutError::Disconnected) => {
+                    Err(control_error(DomainErrorCode::Closing, -32004, "closing"))
+                }
+            }
+        });
+        let server = bind(
+            credential,
+            runtime_credential,
+            hello,
+            on_handover,
+            on_snapshot,
+        )?;
         let record = DiscoveryRecord {
             protocol_version: 2,
             endpoint: server

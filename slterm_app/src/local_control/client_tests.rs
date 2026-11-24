@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use slterm_runtime_protocol::{
-    ControlMethod, ControlScope, Credential, DiscoveryRecord, DomainErrorCode, HandoverMethod,
+    ControlMethod, ControlScope, DiscoveryRecord, DomainErrorCode, HandoverMethod,
     HandoverParams, HandoverRequest, HandoverResponse, HelloMethod, HelloRequest, HelloResponse,
     JsonRpcError, JsonRpcErrorData, JsonRpcId, JsonRpcResponse,
 };
@@ -46,7 +46,7 @@ fn start_real_server(
     let received = Arc::new(Mutex::new(Vec::new()));
     let callback_received = Arc::clone(&received);
     let server = LocalControlServer::start(
-        Credential::new(expected_credential),
+        credential(expected_credential),
         hello_response(),
         move |params| {
             callback_received.lock().unwrap().push(params);
