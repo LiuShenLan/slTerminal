@@ -18,6 +18,18 @@ enum BatchStatus {
     Prepared,
     /// 完成时间已提交，进入撤销窗口。
     Completed,
+    /// 已按当前批次整体撤销；材料由撤销流程保留或恢复。
+    Undone,
+}
+
+/// 撤销点击的重新检查结论；只有 `Allowed` 才可执行恢复动作。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum UndoDecision {
+    Allowed,
+    Unknown,
+    NotCompleted,
+    Expired,
+    AlreadyUndone,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -90,9 +102,34 @@ impl HistoryQuarantine {
     pub(crate) fn expired(&self, now: SystemTime) -> Vec<QuarantineBatchId> {
         self.batches
             .iter()
+            .filter(|(_, batch)| batch.status == BatchStatus::Completed)
             .filter(|(id, _)| !self.undoable(**id, now))
             .map(|(id, _)| *id)
             .collect()
+    }
+
+    /// 撤销点击：重新检查状态与绝对期限，全部通过才允许恢复并标记已撤销。
+    pub(crate) fn try_begin_undo(
+        &mut self,
+        id: QuarantineBatchId,
+        now: SystemTime,
+    ) -> UndoDecision {
+        let Some(status) = self.batches.get(&id).map(|batch| batch.status) else {
+            return UndoDecision::Unknown;
+        };
+        match status {
+            BatchStatus::Prepared => UndoDecision::NotCompleted,
+            BatchStatus::Undone => UndoDecision::AlreadyUndone,
+            BatchStatus::Completed => {
+                if !self.undoable(id, now) {
+                    return UndoDecision::Expired;
+                }
+                if let Some(batch) = self.batches.get_mut(&id) {
+                    batch.status = BatchStatus::Undone;
+                }
+                UndoDecision::Allowed
+            }
+        }
     }
 }
 
@@ -141,6 +178,48 @@ mod tests {
         assert!(!service.undoable(batch(2), at(108)));
         assert_eq!(service.expired(at(105)), vec![batch(1)]);
         assert_eq!(service.expired(at(110)), vec![batch(1), batch(2)]);
+    }
+
+    /// 撤销点击重新检查期限与状态：到期、未完成、已撤销分别拒绝且不改状态。
+    #[test]
+    fn quarantine_undo_rechecks_deadline() {
+        let mut service = HistoryQuarantine::new();
+        assert!(service.start_batch(batch(4)));
+        assert_eq!(
+            service.try_begin_undo(batch(4), at(100)),
+            UndoDecision::NotCompleted,
+            "未完成批次不得撤销"
+        );
+        assert!(service.complete_batch(batch(4), at(100)));
+        assert_eq!(
+            service.try_begin_undo(batch(4), at(104)),
+            UndoDecision::Allowed
+        );
+        assert_eq!(
+            service.try_begin_undo(batch(4), at(104)),
+            UndoDecision::AlreadyUndone,
+            "重复点击不得再次恢复"
+        );
+        assert!(
+            !service.expired(at(200)).contains(&batch(4)),
+            "已撤销批次不进入到期清理"
+        );
+
+        assert!(service.start_batch(batch(5)));
+        assert!(service.complete_batch(batch(5), at(100)));
+        assert_eq!(
+            service.try_begin_undo(batch(5), at(105)),
+            UndoDecision::Expired,
+            "点击时超过绝对期限必须拒绝"
+        );
+        assert!(
+            service.undoable(batch(5), at(105)) == false,
+            "到期判定与撤销检查必须一致"
+        );
+        assert_eq!(
+            service.try_begin_undo(batch(6), at(100)),
+            UndoDecision::Unknown
+        );
     }
 
     /// 未完成批次不可撤销也不得到期；重复完成不重启窗口。
