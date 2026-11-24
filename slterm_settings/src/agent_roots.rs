@@ -263,8 +263,8 @@ mod tests {
         assert_eq!(decoded, root);
         assert_eq!(decoded.id(), root.id());
         assert_eq!(decoded.path(), r"C:\work");
-        assert_eq!(decoded.capabilities().write, true);
-        assert_eq!(decoded.capabilities().terminal, false);
+        assert!(decoded.capabilities().write);
+        assert!(!decoded.capabilities().terminal);
     }
 
     /// 改路径必须换身份：旧根撤销、新根登记由调用方按两个 id 完成。

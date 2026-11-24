@@ -314,6 +314,7 @@ impl AppRoot {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)] // 消费点 = gpui 功能测试；非 UI 测试构建不引用注入端口。
     pub(crate) fn replace_agent_hooks_for_test(
         &mut self,
         inspect: fn() -> Vec<AgentIntegration>,

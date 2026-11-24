@@ -66,9 +66,11 @@ class PlanBalanceRetirementTests(unittest.TestCase):
                     f"旧套餐查询或轮询执行面不得回流: {relative} / {marker}",
                 )
 
+        # 新调度只经 background_tasks 注册表（TaskSchedule）驱动，任务 id 与
+        # 注册表常量属于现行架构；这里只禁止旧轮询执行体与旧启动接线回流。
         wiring = {
             "app_shell/mod.rs": ("start_background_poll",),
-            "background_tasks.rs": ("PLAN_BALANCE", "poll_once_executor"),
+            "background_tasks.rs": ("poll_once_executor",),
         }
         for relative, markers in wiring.items():
             text = (APP_SOURCE / relative).read_text(encoding="utf-8")
