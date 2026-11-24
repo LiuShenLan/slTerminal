@@ -115,6 +115,33 @@ impl HistoryQuarantine {
         }
     }
 
+    /// 持久事实：批次身份与已提交的完成时间；缺失完成时间的批次重启后进入待处理。
+    pub(crate) fn persisted_windows(&self) -> Vec<(QuarantineBatchId, Option<SystemTime>)> {
+        self.batches
+            .iter()
+            .map(|(id, batch)| (*id, batch.completed_at))
+            .collect()
+    }
+
+    /// 重启恢复：完成时间缺失的批次进入 NeedsAttention，不伪装为可撤销或已到期。
+    pub(crate) fn from_persisted(windows: &[(QuarantineBatchId, Option<SystemTime>)]) -> Self {
+        let mut service = Self::new();
+        for (id, completed_at) in windows {
+            let status = match completed_at {
+                Some(_) => BatchStatus::Completed,
+                None => BatchStatus::Prepared,
+            };
+            service.batches.insert(
+                *id,
+                QuarantineBatch {
+                    status,
+                    completed_at: *completed_at,
+                },
+            );
+        }
+        service
+    }
+
     /// 已到期且已完成、尚未收割的批次身份；调用方负责显式清理与永久化。
     pub(crate) fn expired(&self, now: SystemTime) -> Vec<QuarantineBatchId> {
         self.batches
@@ -195,6 +222,37 @@ mod tests {
         assert!(!service.undoable(batch(2), at(108)));
         assert_eq!(service.expired(at(105)), vec![batch(1)]);
         assert_eq!(service.expired(at(110)), vec![batch(1), batch(2)]);
+    }
+
+    /// 删除后重启仍保留未到期窗口：完成时间随记录恢复，判定基于原绝对期限。
+    #[test]
+    fn quarantine_restart_preserves_undo_window() {
+        let mut first = HistoryQuarantine::new();
+        assert!(first.start_batch(batch(8)));
+        assert!(first.start_batch(batch(9)));
+        assert!(first.start_batch(batch(10)));
+        assert!(first.complete_batch(batch(8), at(100)));
+        assert!(first.complete_batch(batch(9), at(1_000)));
+        let windows = first.persisted_windows();
+
+        let restored = HistoryQuarantine::from_persisted(&windows);
+        assert!(
+            restored.undoable(batch(8), at(104)),
+            "重启后未到期批次必须仍可撤销"
+        );
+        assert!(
+            !restored.undoable(batch(8), at(105)),
+            "重启不得延长绝对期限"
+        );
+        assert!(restored.undoable(batch(9), at(1_004)));
+        assert!(
+            !restored.undoable(batch(10), at(100)),
+            "缺完成时间的批次不得伪装为可撤销"
+        );
+        assert!(
+            restored.expired(at(2_000)).contains(&batch(9)),
+            "到期批次按原完成时间判到期"
+        );
     }
 
     /// 目标外部新增或修改时不覆盖：拒绝恢复、保留材料且不消耗撤销窗口。
