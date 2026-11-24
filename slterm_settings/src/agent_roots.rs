@@ -145,6 +145,31 @@ impl AgentRoot {
     }
 }
 
+/// 自定义根段名（settings.json 顶层段）。
+pub const AGENT_ROOTS_SEGMENT: &str = "agent_roots";
+
+/// 段解码：缺失段或缺失 `roots` 视为空；结构非法整段拒绝，不返回部分根。
+pub fn agent_roots_from_segment(value: Option<&Value>) -> Result<Vec<AgentRoot>, AgentRootError> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    let Some(roots) = value.get("roots") else {
+        return Ok(Vec::new());
+    };
+    let Value::Array(items) = roots else {
+        return Err(AgentRootError::MissingField);
+    };
+    items.iter().map(AgentRoot::from_value).collect()
+}
+
+/// 段编码：始终写出 `roots` 数组；空列表也写空数组。
+pub fn agent_roots_to_segment(roots: &[AgentRoot]) -> Value {
+    Value::Object(vec![(
+        "roots".to_owned(),
+        Value::Array(roots.iter().map(AgentRoot::to_value).collect()),
+    )])
+}
+
 fn validate_name(name: &str) -> Result<(), AgentRootError> {
     if name.trim().is_empty() {
         return Err(AgentRootError::EmptyName);
@@ -255,6 +280,55 @@ mod tests {
         assert_eq!(moved.display_name(), root.display_name());
         assert_eq!(moved.capabilities(), root.capabilities());
         assert!(root.with_path(root_id(), "relative".to_owned()).is_err());
+    }
+
+    /// 段往返保真；缺失段与缺失 roots 都视为空配置。
+    #[test]
+    fn agent_root_segment_roundtrips_and_defaults_empty() {
+        use super::{agent_roots_from_segment, agent_roots_to_segment};
+
+        assert!(agent_roots_from_segment(None).unwrap().is_empty());
+        assert!(
+            agent_roots_from_segment(Some(&Value::empty_object()))
+                .unwrap()
+                .is_empty()
+        );
+        let root = AgentRoot::custom(root_id(), "工作区".to_owned(), r"C:\work".to_owned())
+            .unwrap()
+            .with_capabilities(AgentRootCapabilities {
+                write: true,
+                terminal: true,
+            });
+        let segment = agent_roots_to_segment(std::slice::from_ref(&root));
+        assert_eq!(
+            agent_roots_from_segment(Some(&segment)).unwrap(),
+            vec![root]
+        );
+        assert_eq!(
+            agent_roots_to_segment(&[]),
+            Value::Object(vec![("roots".to_owned(), Value::Array(Vec::new()))])
+        );
+    }
+
+    /// 段结构非法或元素残缺时整段拒绝，不返回部分根。
+    #[test]
+    fn agent_root_segment_rejects_malformed() {
+        use super::agent_roots_from_segment;
+
+        let wrong_shape = Value::Object(vec![(
+            "roots".to_owned(),
+            Value::String("not-an-array".to_owned()),
+        )]);
+        assert!(agent_roots_from_segment(Some(&wrong_shape)).is_err());
+
+        let partial = Value::Object(vec![(
+            "roots".to_owned(),
+            Value::Array(vec![Value::empty_object()]),
+        )]);
+        assert_eq!(
+            agent_roots_from_segment(Some(&partial)).unwrap_err(),
+            AgentRootError::MissingField
+        );
     }
 
     /// 解码必须拒绝缺字段与非法值，不生成部分根。

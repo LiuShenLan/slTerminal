@@ -14,7 +14,10 @@ use std::io;
 mod agent_hooks;
 mod agent_roots;
 pub use agent_hooks::AgentHook;
-pub use agent_roots::{AgentRoot, AgentRootCapabilities, AgentRootError};
+pub use agent_roots::{
+    AGENT_ROOTS_SEGMENT, AgentRoot, AgentRootCapabilities, AgentRootError,
+    agent_roots_from_segment, agent_roots_to_segment,
+};
 mod cursor_motion;
 mod custom_theme;
 mod identity;
