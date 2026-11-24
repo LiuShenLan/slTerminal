@@ -631,7 +631,7 @@ impl CommandRegistry {
                 return Err(AppRootError::UnexpectedParameters);
             }
             return root
-                .open_settings_overlay_from_request(window, cx)
+                .open_settings_from_request(window, cx)
                 .map(|()| CommandOutcome::Completed);
         }
         if id == CommandId::ActivateSideView {

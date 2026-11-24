@@ -6,12 +6,12 @@ use gpui::{
     Window, div, relative,
 };
 use gpui_component::ActiveTheme as _;
-#[cfg(all(test, feature = "gpui-test-support"))]
-use slterm_workspace::ViewKey;
+use slterm_workspace::{PanelGroupId, ViewKey};
 
 use super::AppRoot;
 use super::commands::AppRootError;
 use super::focus_manager::{FocusRegistration, FocusToken};
+use super::panel_host::PanelContent;
 
 pub(super) struct SettingsView {
     pub(super) focus_handle: gpui::FocusHandle,
@@ -87,6 +87,55 @@ pub(super) struct SettingsOverlayHost {
 }
 
 impl AppRoot {
+    /// 设置入口：有活跃项目时在聚焦组打开项目设置面板（同项目单例），
+    /// 无项目时打开应用级浮层。重复入口只还焦既有视图。
+    pub(crate) fn open_settings_from_request(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<(), AppRootError> {
+        if self.snapshot.registry().active().is_none() {
+            return self.open_settings_overlay_from_request(window, cx);
+        }
+        self.ensure_not_closing()?;
+        self.ensure_project_snapshot_command_allowed()?;
+        self.focus_manager.ensure_activation_allowed()?;
+        self.sync_focus(window, cx);
+        let project_id = self.active_project()?;
+        let view_key = ViewKey::Settings { project_id };
+        if self.panel_for_view(project_id, &view_key, cx).is_ok() {
+            return self.activate_view(view_key, window, cx);
+        }
+        let target_group = match self.focused_group(project_id, cx)? {
+            Some(group_id) => group_id,
+            None => {
+                PanelGroupId::from_uuid(uuid::Uuid::now_v7()).expect("系统生成的 UUID 必须为 v7")
+            }
+        };
+        let candidate =
+            self.snapshot
+                .with_opened_view(project_id, target_group, view_key.clone())?;
+        candidate.validate()?;
+        self.install_panel(
+            super::documents::DocumentPanelTarget {
+                project_id,
+                view: view_key,
+                focus: true,
+                activate_project: false,
+            },
+            window,
+            cx,
+            |_, cx| {
+                let view = cx.new(SettingsView::new);
+                let focus = view.read(cx).focus_handle.clone();
+                (PanelContent::Settings(view), focus)
+            },
+        )?;
+        self.commit_project_snapshot(candidate, cx);
+        cx.notify();
+        Ok(())
+    }
+
     pub(super) fn open_settings_overlay_from_request(
         &mut self,
         window: &mut Window,

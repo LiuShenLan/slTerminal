@@ -89,10 +89,10 @@
 | Git 与 Document | [文件与 Git](design/files-git.md)、[Document](design/document.md) | `integration_git_document` | 已自动化 |
 | 历史删除撤销 | [Agent](design/agents.md)、[生命周期](design/lifecycle.md) | `integration_history_delete_undo` | 已自动化 |
 | 套餐凭据 | [Windows](design/windows.md)、[设置与恢复](design/settings-recovery.md) | `integration_plan_credentials` | 待实现 |
-| 套餐调度 | [Windows](design/windows.md)、[生命周期](design/lifecycle.md) | `integration_plan_schedule` | 待实现 |
+| 套餐调度 | [Windows](design/windows.md)、[生命周期](design/lifecycle.md) | `integration_plan_schedule` | 已自动化 |
 | 自定义主题 | [设置与恢复](design/settings-recovery.md) | `integration_custom_theme` | 待实现 |
 | Markdown 与 Mermaid | [Markdown](design/markdown.md)、[Document](design/document.md) | `integration_markdown_mermaid_final` | 延期 |
-| 设置单例 | [设置与恢复](design/settings-recovery.md)、[工作区](design/workspace.md)、[Hooks](design/hooks.md) | `integration_settings_singleton` | 待实现 |
+| 设置单例 | [设置与恢复](design/settings-recovery.md)、[工作区](design/workspace.md)、[Hooks](design/hooks.md) | `integration_settings_singleton` | 已自动化 |
 | 加密备份 | [设置与恢复](design/settings-recovery.md)、[持久化](design/persistence.md)、[生命周期](design/lifecycle.md) | `integration_encrypted_backup` | 已自动化 |
 | 更新 | [Windows](design/windows.md)、[生命周期](design/lifecycle.md) | `integration_update` | 待实现 |
 | 通知与任务栏 | [Windows](design/windows.md) | `integration_notification_taskbar` | 待实现 |

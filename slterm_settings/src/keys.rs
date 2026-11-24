@@ -850,10 +850,15 @@ pub const KEYBIND_SEGMENT: &str = "keybind";
 pub const CONPTY_INPUT_MODES_SEGMENT: &str = "conpty_input_modes";
 
 /// 全部域外顶层段(不占注册表 leaf 条目,结构由所属领域锚定)。
-pub const EXTERNAL_SEGMENTS: [&str; 3] = [
+/// 后台任务运行期配置：`{ task_id: { enabled, interval } }`，由后台任务
+/// 领域消费；未知任务与非法项跳过。
+pub const BACKGROUND_TASKS_SEGMENT: &str = "backgroundTasks";
+
+pub const EXTERNAL_SEGMENTS: [&str; 4] = [
     KEYBIND_SEGMENT,
     CONPTY_INPUT_MODES_SEGMENT,
     crate::agent_roots::AGENT_ROOTS_SEGMENT,
+    BACKGROUND_TASKS_SEGMENT,
 ];
 
 /// 域外段判定:写通道按段整体替换,不做段内 leaf 校验。

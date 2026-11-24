@@ -28,6 +28,81 @@ fn install_user_hooks_draft(root: &Entity<AppRoot>, cx: &mut TestAppContext) -> 
     key
 }
 
+fn settings_panel(
+    root: &Entity<AppRoot>,
+    cx: &TestAppContext,
+    project: ProjectId,
+) -> Option<PanelId> {
+    root.read_with(cx, |root, cx| {
+        root.projects.get(&project).and_then(|view| {
+            view.read(cx)
+                .panels
+                .values()
+                .find(|panel| {
+                    matches!(
+                        panel.view_key,
+                        ViewKey::Settings { project_id } if project_id == project
+                    )
+                })
+                .map(|panel| panel.id)
+        })
+    })
+}
+
+/// 设置单例：无项目复用浮层，有项目按项目复用面板，浮层与草稿保留。
+#[gpui::test]
+fn integration_settings_singleton(cx: &mut TestAppContext) {
+    let (root, mut window, _state) = open_root(cx);
+    focus_workspace(&root, &mut window);
+    open_settings(&mut window);
+    let overlay_id = root.read_with(cx, |root, _| {
+        root.settings_overlay
+            .as_ref()
+            .expect("无项目时创建设置浮层")
+            .view
+            .entity_id()
+    });
+    open_settings(&mut window);
+    assert_eq!(
+        root.read_with(cx, |root, _| root
+            .settings_overlay
+            .as_ref()
+            .unwrap()
+            .view
+            .entity_id()),
+        overlay_id,
+        "无项目重复入口必须复用同一浮层"
+    );
+
+    add_project(&root, &mut window, PROJECT_A, "D:/work/a");
+    activate_project(&root, &mut window, PROJECT_A);
+    focus_workspace(&root, &mut window);
+    open_settings(&mut window);
+    let project_a =
+        settings_panel(&root, cx, project_id(PROJECT_A)).expect("有活跃项目时打开项目设置面板");
+    open_settings(&mut window);
+    assert_eq!(
+        settings_panel(&root, cx, project_id(PROJECT_A)),
+        Some(project_a),
+        "同项目重复入口必须复用同一设置面板"
+    );
+
+    add_project(&root, &mut window, PROJECT_B, "D:/work/b");
+    focus_workspace(&root, &mut window);
+    open_settings(&mut window);
+    let project_b =
+        settings_panel(&root, cx, project_id(PROJECT_B)).expect("新活跃项目必须有自己的设置面板");
+    assert_ne!(project_a, project_b, "不同项目不得共享设置面板");
+    assert!(
+        settings_panel(&root, cx, project_id(PROJECT_A)).is_some(),
+        "隐藏项目的设置面板必须保活"
+    );
+    assert!(
+        root.read_with(cx, |root, _| root.settings_overlay.is_some()),
+        "项目设置面板不得销毁应用级浮层"
+    );
+}
+
 /// 浮层重复入口不重置 Hooks 草稿与全局待写；项目激活不销毁浮层。
 #[gpui::test]
 fn app_settings_overlay_keeps_hooks_draft(cx: &mut TestAppContext) {

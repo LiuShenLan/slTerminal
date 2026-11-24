@@ -92,7 +92,7 @@ impl TaskRuntime {
 
 /// 任务配置落盘段名(契约锚点;本模块无用户可配任务,写通道消费点归 06/10)。
 #[allow(dead_code)]
-pub(crate) const SETTINGS_KEY: &str = "backgroundTasks";
+pub(crate) const SETTINGS_KEY: &str = slterm_settings::keys::BACKGROUND_TASKS_SEGMENT;
 
 /// 任务注册表(元数据单点)——同序 zip [`RUNTIMES`],等长由测试锁死。
 pub(crate) static TASKS: &[TaskDef] = &[
@@ -311,6 +311,28 @@ pub(crate) fn apply_config(
         runtime.interval_sec.store(sec, Ordering::Relaxed);
     }
     Ok(())
+}
+
+/// 从设置段应用运行期配置：只接受已注册任务与合法边界，非法项跳过。
+pub(crate) fn apply_settings(raw: &slterm_settings::RawSettings) {
+    let Some(entries) = raw.external_value(SETTINGS_KEY) else {
+        return;
+    };
+    for task_id in entries.object_keys() {
+        let Some(config) = entries.get(task_id) else {
+            continue;
+        };
+        let enabled = config.get("enabled").and_then(|value| value.as_bool());
+        let interval = config
+            .get("interval")
+            .and_then(|value| value.as_f64())
+            .filter(|value| *value >= 0.0)
+            .map(|value| value as u64);
+        if enabled.is_none() && interval.is_none() {
+            continue;
+        }
+        let _ = apply_config(task_id, enabled, interval);
+    }
 }
 
 /// 启动时按注册表默认值复位运行时原子量(壳启动调用一次)。
@@ -600,6 +622,48 @@ mod background_task_tests {
         assert!(begin(AUTO_UPDATE_DOWNLOAD).is_none(), "在飞轮必须跳过");
         drop(guard);
         assert!(begin(AUTO_UPDATE_DOWNLOAD).is_some(), "轮末释放闸门");
+    }
+
+    /// 集成：设置段提交后按新周期运行，禁用提交停止，与导航可见性无关。
+    #[test]
+    fn integration_plan_schedule() {
+        use super::apply_settings;
+
+        reset_for_test();
+        let raw = slterm_settings::RawSettings::from_json_bytes(
+            br#"{"backgroundTasks":{"planBalance":{"enabled":true,"interval":120}}}"#,
+        );
+        apply_settings(&raw);
+        assert_eq!(interval_sec(PLAN_BALANCE), 120);
+        let subscription = subscribe(PLAN_BALANCE).expect("已注册");
+        let mut ran = 0;
+        assert_eq!(
+            run_once(PLAN_BALANCE, || {
+                ran += 1;
+                Ok(())
+            }),
+            TaskRunOutcome::Ran
+        );
+
+        let raw = slterm_settings::RawSettings::from_json_bytes(
+            br#"{"backgroundTasks":{"planBalance":{"enabled":false}}}"#,
+        );
+        apply_settings(&raw);
+        assert_eq!(
+            run_once(PLAN_BALANCE, || {
+                ran += 1;
+                Ok(())
+            }),
+            TaskRunOutcome::Inactive,
+            "设置段禁用提交后必须停止"
+        );
+        assert_eq!(ran, 1);
+        // 未知任务与非法项被跳过，不影响已注册任务。
+        apply_settings(&slterm_settings::RawSettings::from_json_bytes(
+            br#"{"backgroundTasks":{"unknownTask":{"enabled":true},"planBalance":{"interval":999999}}}"#,
+        ));
+        assert_eq!(interval_sec(PLAN_BALANCE), 120, "越界间隔不得生效");
+        drop(subscription);
     }
 
     /// 套餐配置提交后按新周期运行；隐藏（无导航视图）仍查询，禁用后停止。

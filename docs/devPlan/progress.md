@@ -21,9 +21,9 @@
 
 ### 当前进度
 
-状态锚：**2026-11-24，文件与 Git 完成验收，Agent 与 Hooks 开始实施。**
+状态锚：**2026-11-24，文件与 Git 完成验收；Agent 与 Hooks 待收尾，设置、主题与恢复推进中。**
 
-当前实施位置：**Agent 与 Hooks（进行中）。**
+当前实施位置：**设置、主题与恢复（进行中）；Agent 与 Hooks 待收尾。**
 
 | 命名阶段 | 状态 | 验收日期 | commit hash | 测试证据／阻塞事实 |
 |---|---|---|---|---|
@@ -34,8 +34,8 @@
 | 终端、补全与学习 | 已验收 | 2026-11-23 | `88e3b4a9c61f5cf6a53922257d0c1fc4d583a833` | `integration_terminal_restore`、真实 ConPTY 自动／懒启动与失效 cwd 回退、`terminal_restore_visibility_and_exit_state`、`integration_pty_limit` 等回归锚通过；全量 workspace、core release、脚本及静态门禁全绿。 |
 | Markdown 与安全资源 | 已验收 | 2026-11-23 | `a6eb9f56b2483a56a0c3017c3be21051af5c78e1` | `markdown_source_render_share_document`、`markdown_shared_document_autosave`、`markdown_panel_restores_persistent_reading_state`、真实拖选／查找与退出守卫回归通过；全量 workspace、GPUI 全特性、core release、脚本及静态门禁全绿。 |
 | 文件与 Git | 已验收 | 2026-11-24 | `87beb99` | Explorer、Commit、Diff、GitShow 全部验收锚（含 `explorer_repo_root_does_not_expand_tree_root`、`commit_rollback_preserves_staged_changes`、`commit_staged_added_delete_sequence`、`diff_hidden_head_refresh_coalesced`、`gitshow_fixed_commit_after_head_move`）通过；全量 workspace、GPUI 全特性、core release、脚本及静态门禁全绿。 |
-| Agent 与 Hooks | 进行中 | — | — | — |
-| 设置、主题与恢复 | 未开始 | — | — | — |
+| Agent 与 Hooks | 进行中 | — | — | hook 小进程零依赖桥、白名单事件与真实进程生命周期用例通过；历史扫描／恢复与 Hooks 编辑 UI 待收尾。 |
+| 设置、主题与恢复 | 进行中 | — | — | 设置运行值与单写队列、导入导出白名单、自定义主题导入锚、备份格式与撤回指纹冲突已实现；设置中心 UI、DPAPI 恢复点与维护期回滚待接。 |
 | Runtime v2 | 未开始 | — | — | — |
 | Windows 与发布 | 未开始 | — | — | — |
 | 全量验收 | 未开始 | — | — | — |

@@ -51,6 +51,7 @@ pub(crate) enum PanelContent {
     Paged(Entity<PagedTextView>),
     GitShow(Entity<super::git_show::GitShowView>),
     Recovery(Entity<DocumentRecoveryView>),
+    Settings(Entity<super::settings_overlay::SettingsView>),
 }
 
 pub(crate) struct PanelHost {
@@ -92,6 +93,7 @@ impl PanelHost {
             PanelContent::Paged(paged) => paged.read(cx).focus_handle(cx),
             PanelContent::GitShow(view) => view.read(cx).focus_handle(cx),
             PanelContent::Recovery(recovery) => recovery.read(cx).focus_handle.clone(),
+            PanelContent::Settings(view) => view.read(cx).focus_handle.clone(),
         }
     }
 }
