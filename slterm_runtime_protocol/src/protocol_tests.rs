@@ -1049,6 +1049,33 @@ fn git_delete_requires_expected_shape_and_defaults_to_recycle_bin() {
 }
 
 #[test]
+fn git_open_methods_require_safe_repository_relative_paths() {
+    for method in [RuntimeMethod::GitOpenDiff, RuntimeMethod::GitOpenDeleted] {
+        let request = RuntimeRequest::new(
+            JsonRpcId::Number(32),
+            method,
+            serde_json::json!({"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"project_id":null,"path":"src/main.rs"}}),
+        );
+        match parse_client_request(&serde_json::to_vec(&request).unwrap()).unwrap() {
+            ClientRequest::Runtime(parsed) => assert_eq!(parsed.method, method),
+            other => panic!("Git 打开请求必须解析为 Runtime 请求: {other:?}"),
+        }
+    }
+
+    for invalid in [
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"git.open_diff","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"project_id":null,"path":""}}}),
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"git.open_diff","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"project_id":null,"path":"../escape"}}}),
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"git.open_deleted","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"project_id":null,"path":"/absolute"}}}),
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"git.open_deleted","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"project_id":" ","path":"a.txt"}}}),
+    ] {
+        assert!(
+            parse_client_request(invalid.to_string().as_bytes()).is_err(),
+            "非法 Git 打开请求必须拒绝: {invalid}"
+        );
+    }
+}
+
+#[test]
 fn params_hash_is_stable_and_json_serialization_dependent() {
     let a = serde_json::json!({"z": 1, "a": {"n": [1, 2]}});
     let b = serde_json::json!({"a": {"n": [1, 2]}, "z": 1});
@@ -1144,6 +1171,8 @@ fn describe_lists_the_method_registry_with_contract_hashes() {
             "git.diff",
             "git.rollback",
             "git.delete",
+            "git.open_diff",
+            "git.open_deleted",
             "instance.handover"
         ]
     );

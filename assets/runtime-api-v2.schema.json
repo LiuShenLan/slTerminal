@@ -1615,7 +1615,9 @@
         "git.status",
         "git.diff",
         "git.rollback",
-        "git.delete"
+        "git.delete",
+        "git.open_diff",
+        "git.open_deleted"
       ]
     },
     "RuntimeParams": {

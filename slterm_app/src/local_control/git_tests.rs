@@ -8,7 +8,9 @@ use std::sync::{Arc, Mutex};
 use slterm_path::CanonicalPath;
 use slterm_runtime_protocol::{DomainErrorCode, GitDeleteExpected, GitRollbackExpected};
 
-use super::git::{GitWriteIntent, execute_git_write, git_diff_snapshot};
+use super::git::{
+    GitOpenIntent, GitWriteIntent, execute_git_open, execute_git_write, git_diff_snapshot,
+};
 use crate::app_shell::file_operation_service::{FileOperationService, RecycleBin};
 use crate::app_shell::{GitWriteTarget, RuntimeGitDiffTarget};
 use crate::git::GitFacade;
@@ -349,4 +351,88 @@ fn assert_delete_precondition_failure(root: &Path, target: &GitWriteTarget) {
     )
     .expect_err("已跟踪文件不得按未跟踪删除");
     assert_eq!(error.data.unwrap().code, DomainErrorCode::RevisionConflict);
+}
+
+/// 锚：打开方式必须与状态映射一致；匹配时才把绑定与路径交给前台。
+#[test]
+fn git_open_requires_matching_status_mapping() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    use crate::app_shell::{GitOpenTarget, RuntimeGitOpenKind, SltermShellEvent};
+
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("repo");
+    init_repo(&root);
+    commit_file(&root, "modified.txt", "one\n");
+    commit_file(&root, "deleted.txt", "gone\n");
+    std::fs::write(root.join("modified.txt"), "one\ntwo\n").unwrap();
+    std::fs::remove_file(root.join("deleted.txt")).unwrap();
+    std::fs::write(root.join("untracked.txt"), "fresh\n").unwrap();
+
+    let target = GitOpenTarget {
+        project_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b".parse().unwrap(),
+        root: CanonicalPath::new(&root).unwrap(),
+        git: Arc::new(GitFacade::default()),
+    };
+    let (events, receiver) = mpsc::sync_channel(1);
+    let no_event = || receiver.try_recv().is_err();
+
+    // 删除条目不得按 Diff 打开；修改条目不得按固定版本打开。
+    for intent in [
+        GitOpenIntent::Diff {
+            path: "deleted.txt".to_owned(),
+        },
+        GitOpenIntent::Deleted {
+            path: "modified.txt".to_owned(),
+        },
+        GitOpenIntent::Diff {
+            path: "untracked.txt".to_owned(),
+        },
+    ] {
+        let error = execute_git_open(intent, &target, &events, Duration::from_millis(50))
+            .expect_err("映射不一致必须拒绝");
+        assert_eq!(error.data.unwrap().code, DomainErrorCode::InvalidRequest);
+        assert!(no_event(), "映射不一致不得投递打开事件");
+    }
+
+    // 未暂存修改映射为 Diff：事件携带绑定与原路径，前台回执决定结果。
+    let target_for_worker = GitOpenTarget {
+        project_id: target.project_id,
+        root: target.root.clone(),
+        git: Arc::clone(&target.git),
+    };
+    let events_for_worker = events.clone();
+    let worker = std::thread::spawn(move || {
+        execute_git_open(
+            GitOpenIntent::Diff {
+                path: "modified.txt".to_owned(),
+            },
+            &target_for_worker,
+            &events_for_worker,
+            Duration::from_secs(5),
+        )
+    });
+    let event = receiver
+        .recv_timeout(Duration::from_secs(5))
+        .expect("匹配的打开必须投递事件");
+    match event {
+        SltermShellEvent::RuntimeGitOpen {
+            project_id,
+            path,
+            kind,
+            completion,
+            ..
+        } => {
+            assert_eq!(project_id, target.project_id);
+            assert_eq!(kind, RuntimeGitOpenKind::Diff);
+            let expected =
+                CanonicalPath::new(dunce::canonicalize(root.join("modified.txt")).unwrap())
+                    .unwrap();
+            assert_eq!(path, expected);
+            let _ = completion.try_send(Ok(()));
+        }
+        _ => panic!("必须是 Git 打开事件"),
+    }
+    worker.join().unwrap().expect("前台接受后必须成功");
 }

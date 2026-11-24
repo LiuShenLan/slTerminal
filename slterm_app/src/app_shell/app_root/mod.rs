@@ -7,6 +7,7 @@ pub(crate) mod close_coordinator;
 mod command_registry;
 mod commands;
 mod commit;
+pub(crate) use commit::{CommitOpenKind, open_kind_for_status};
 #[allow(dead_code)] // 消费点归 Editor 行标、Diff 启动恢复与可见性接线。
 mod diff;
 mod document_external;

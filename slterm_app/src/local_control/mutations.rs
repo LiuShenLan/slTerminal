@@ -118,6 +118,14 @@ pub(crate) enum RuntimeMutation {
         expected: GitDeleteExpected,
         permanent: bool,
     },
+    GitOpenDiff {
+        project_id: Option<ProjectId>,
+        path: String,
+    },
+    GitOpenDeleted {
+        project_id: Option<ProjectId>,
+        path: String,
+    },
 }
 
 impl RuntimeMutation {
@@ -147,6 +155,8 @@ impl RuntimeMutation {
             Self::AgentFork { .. } => "agent.fork",
             Self::GitRollback { .. } => "git.rollback",
             Self::GitDelete { .. } => "git.delete",
+            Self::GitOpenDiff { .. } => "git.open_diff",
+            Self::GitOpenDeleted { .. } => "git.open_deleted",
         }
     }
 
@@ -326,6 +336,12 @@ impl RuntimeMutation {
                 "expected": expected,
                 "permanent": permanent,
             })),
+            Self::GitOpenDiff { project_id, path } | Self::GitOpenDeleted { project_id, path } => {
+                Ok(serde_json::json!({
+                    "project_id": project_id.map(|id| id.to_string()),
+                    "path": path,
+                }))
+            }
         }
     }
 }

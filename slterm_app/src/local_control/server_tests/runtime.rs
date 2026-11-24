@@ -1237,6 +1237,17 @@ fn runtime_git_writes_route_expected_state_and_project() {
                 );
                 assert!(*permanent);
             }
+            crate::local_control::mutations::RuntimeMutation::GitOpenDiff { project_id, path } => {
+                assert!(project_id.is_none());
+                assert_eq!(path, "src/main.rs");
+            }
+            crate::local_control::mutations::RuntimeMutation::GitOpenDeleted {
+                project_id,
+                path,
+            } => {
+                assert!(project_id.is_none());
+                assert_eq!(path, "gone.txt");
+            }
             other => panic!("意外写意图: {other:?}"),
         }
         mutations_by_callback.fetch_add(1, Ordering::SeqCst);
@@ -1283,7 +1294,35 @@ fn runtime_git_writes_route_expected_state_and_project() {
     );
     let reply: serde_json::Value = serde_json::from_str(&read_line(&mut stream)).unwrap();
     assert_eq!(reply["error"]["data"]["code"], "invalid_request");
-    assert_eq!(mutations.load(Ordering::SeqCst), 2, "非法项目不得进入回调");
+    write_json(
+        &mut stream,
+        &RuntimeRequest::new(
+            JsonRpcId::Number(63),
+            RuntimeMethod::GitOpenDiff,
+            serde_json::json!({"client_id":"c","mutation_id":"m-open-diff","expected_revision":null,"request":{"project_id":null,"path":"src/main.rs"}}),
+        ),
+    );
+    let reply: serde_json::Value = serde_json::from_str(&read_line(&mut stream)).unwrap();
+    assert_eq!(reply["result"]["status"], "succeeded");
+
+    write_json(
+        &mut stream,
+        &RuntimeRequest::new(
+            JsonRpcId::Number(64),
+            RuntimeMethod::GitOpenDeleted,
+            serde_json::json!({"client_id":"c","mutation_id":"m-open-deleted","expected_revision":null,"request":{"project_id":null,"path":"gone.txt"}}),
+        ),
+    );
+    let reply: serde_json::Value = serde_json::from_str(&read_line(&mut stream)).unwrap();
+    assert_eq!(reply["result"]["status"], "succeeded");
+
+    write_json(
+        &mut stream,
+        &serde_json::json!({"jsonrpc":"2.0","id":65,"method":"git.open_diff","params":{"client_id":"c","mutation_id":"m-invalid-open","expected_revision":null,"request":{"project_id":"not-a-project","path":"src/main.rs"}}}),
+    );
+    let reply: serde_json::Value = serde_json::from_str(&read_line(&mut stream)).unwrap();
+    assert_eq!(reply["error"]["data"]["code"], "invalid_request");
+    assert_eq!(mutations.load(Ordering::SeqCst), 4, "非法项目不得进入回调");
     server.shutdown().unwrap();
 }
 
@@ -1660,6 +1699,8 @@ fn runtime_describe_returns_registry_and_contract_hashes() {
             "git.diff",
             "git.rollback",
             "git.delete",
+            "git.open_diff",
+            "git.open_deleted",
             "instance.handover"
         ]
     );

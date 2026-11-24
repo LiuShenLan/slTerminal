@@ -59,10 +59,64 @@ impl AppRoot {
             RuntimeMutation::GitRollback { .. } | RuntimeMutation::GitDelete { .. } => {
                 self.resolve_runtime_git_write(mutation)
             }
+            RuntimeMutation::GitOpenDiff { .. } | RuntimeMutation::GitOpenDeleted { .. } => {
+                self.resolve_runtime_git_open(mutation)
+            }
             mutation => self
                 .execute_runtime_mutation(mutation, window, cx)
                 .map(|()| RuntimeMutationReply::Done(Ok(()))),
         }
+    }
+
+    /// Git 打开目标：校验路径形状并解析项目；仓库绑定与打开链都在后台发起。
+    fn resolve_runtime_git_open(
+        &self,
+        mutation: RuntimeMutation,
+    ) -> Result<RuntimeMutationReply, JsonRpcError> {
+        let (project_id, path) = match &mutation {
+            RuntimeMutation::GitOpenDiff {
+                project_id, path, ..
+            }
+            | RuntimeMutation::GitOpenDeleted {
+                project_id, path, ..
+            } => (*project_id, path.as_str()),
+            _ => return Err(invalid_request_error()),
+        };
+        if path.trim().is_empty() || !valid_repo_relative_path(path) {
+            return Err(invalid_request_error());
+        }
+        let target = self.runtime_git_target(project_id)?;
+        Ok(RuntimeMutationReply::GitOpen(
+            crate::app_shell::GitOpenTarget {
+                project_id: target.project_id,
+                root: target.root,
+                git: target.git,
+            },
+        ))
+    }
+
+    /// Runtime Git 打开：已捕获的仓库绑定在前台复用 Commit 的同一打开链。
+    pub(super) fn handle_runtime_git_open(
+        &mut self,
+        project_id: slterm_workspace::ProjectId,
+        binding: Box<slterm_document::RepositoryBinding>,
+        path: slterm_path::CanonicalPath,
+        kind: crate::app_shell::RuntimeGitOpenKind,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<(), JsonRpcError> {
+        if self.close_in_progress || self.application_close.is_some() || self.close_completed {
+            return Err(closing_error());
+        }
+        match kind {
+            crate::app_shell::RuntimeGitOpenKind::Diff => {
+                self.open_commit_diff_path(project_id, *binding, path, window, cx)
+            }
+            crate::app_shell::RuntimeGitOpenKind::Deleted => {
+                self.open_commit_gitshow_path(project_id, *binding, path, window, cx)
+            }
+        }
+        .map_err(runtime_mutation_error)
     }
 
     /// Git 破坏写目标：校验路径形状并解析项目；不做任何阻塞读取。
@@ -377,10 +431,11 @@ impl AppRoot {
                     .ok_or_else(agent_command_unsupported)?;
                 self.start_agent_terminal(command, project_root, cwd, window, cx)
             }
-            // Git 破坏写由 handle_runtime_mutation 分流到目标解析，不到达这里。
-            RuntimeMutation::GitRollback { .. } | RuntimeMutation::GitDelete { .. } => {
-                Err(invalid_request_error())
-            }
+            // Git 破坏写与打开由 handle_runtime_mutation 分流到目标解析，不到达这里。
+            RuntimeMutation::GitRollback { .. }
+            | RuntimeMutation::GitDelete { .. }
+            | RuntimeMutation::GitOpenDiff { .. }
+            | RuntimeMutation::GitOpenDeleted { .. } => Err(invalid_request_error()),
         }
     }
 

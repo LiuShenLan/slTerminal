@@ -29,7 +29,9 @@ fn dispatch_mutation(
     });
     match response.try_recv().expect("AppRoot 必须返回写意图回执") {
         Ok(RuntimeMutationReply::Done(result)) => result,
-        Ok(RuntimeMutationReply::Git(_)) => panic!("普通写意图不得返回 Git 目标"),
+        Ok(RuntimeMutationReply::Git(_)) | Ok(RuntimeMutationReply::GitOpen(_)) => {
+            panic!("普通写意图不得返回 Git 目标")
+        }
         Err(error) => Err(error),
     }
 }

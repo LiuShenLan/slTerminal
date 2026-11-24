@@ -216,3 +216,133 @@ fn runtime_git_write_target_resolves_project_and_validates_path(cx: &mut TestApp
         Some(DomainErrorCode::Closing)
     );
 }
+
+fn dispatch_git_open(
+    root: &Entity<AppRoot>,
+    window: &mut VisualTestContext,
+    project_id: ProjectId,
+    binding: slterm_document::RepositoryBinding,
+    path: CanonicalPath,
+    kind: crate::app_shell::RuntimeGitOpenKind,
+) -> Result<(), JsonRpcError> {
+    let (completion, response) = mpsc::sync_channel(1);
+    window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.handle_shell_event(
+                SltermShellEvent::RuntimeGitOpen {
+                    project_id,
+                    binding: Box::new(binding),
+                    path,
+                    kind,
+                    completion,
+                },
+                window,
+                cx,
+            );
+        });
+    });
+    response.try_recv().expect("AppRoot 必须返回 Git 打开回执")
+}
+
+fn capture_binding(repository: &std::path::Path) -> slterm_document::RepositoryBinding {
+    let root = CanonicalPath::new(dunce::canonicalize(repository).unwrap()).unwrap();
+    let grants = crate::app_shell::app_root::status_grants(&root).unwrap();
+    crate::git::GitFacade::default()
+        .repository_binding(&root, &grants, 0)
+        .unwrap()
+}
+
+fn has_panel(
+    root: &Entity<AppRoot>,
+    cx: &mut TestAppContext,
+    matches: impl Fn(&crate::app_shell::app_root::panel_host::PanelContent) -> bool,
+) -> bool {
+    root.read_with(cx, |root, cx| {
+        root.projects[&project_id(PROJECT_A)]
+            .read(cx)
+            .panels
+            .values()
+            .any(|panel| matches(&panel.content))
+    })
+}
+
+#[gpui::test]
+fn runtime_git_open_reuses_the_commit_open_chain(cx: &mut TestAppContext) {
+    use crate::app_shell::RuntimeGitOpenKind;
+    use crate::app_shell::app_root::panel_host::PanelContent;
+
+    // 临时仓库：跟踪文件先修改，再从未暂存删除。
+    let temp = tempfile::tempdir().unwrap();
+    let repository = temp.path().join("repo");
+    std::fs::create_dir(&repository).unwrap();
+    let git = |args: &[&str]| super::gitshow::git(&repository, args);
+    git(&["init", "--quiet"]);
+    git(&["config", "user.email", "test@example.invalid"]);
+    git(&["config", "user.name", "test"]);
+    std::fs::write(repository.join("tracked.txt"), "one\n").unwrap();
+    git(&["add", "--", "tracked.txt"]);
+    git(&["commit", "--quiet", "-m", "base"]);
+    std::fs::write(repository.join("tracked.txt"), "one\ntwo\n").unwrap();
+
+    let (root, mut window, _) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, repository.to_str().unwrap());
+    let project = project_id(PROJECT_A);
+    let file =
+        CanonicalPath::new(dunce::canonicalize(repository.join("tracked.txt")).unwrap()).unwrap();
+
+    // 未暂存修改映射为共享 Diff。
+    dispatch_git_open(
+        &root,
+        &mut window,
+        project,
+        capture_binding(&repository),
+        file.clone(),
+        RuntimeGitOpenKind::Diff,
+    )
+    .expect("未暂存修改必须打开 Diff");
+    draw_frame(&mut window);
+    window.run_until_parked();
+    assert!(
+        has_panel(&root, cx, |content| matches!(
+            content,
+            PanelContent::Diff(_)
+        )),
+        "Diff 打开链必须真正产生 Diff 面板"
+    );
+
+    // 未暂存删除映射为固定版本。
+    std::fs::remove_file(repository.join("tracked.txt")).unwrap();
+    dispatch_git_open(
+        &root,
+        &mut window,
+        project,
+        capture_binding(&repository),
+        file.clone(),
+        RuntimeGitOpenKind::Deleted,
+    )
+    .expect("未暂存删除必须打开固定版本");
+    window.run_until_parked();
+    assert!(
+        has_panel(&root, cx, |content| matches!(
+            content,
+            PanelContent::GitShow(_)
+        )),
+        "删除条目必须打开 GitShow 固定版本"
+    );
+
+    root.update(cx, |root, _| root.close_in_progress = true);
+    let Err(error) = dispatch_git_open(
+        &root,
+        &mut window,
+        project,
+        capture_binding(&repository),
+        CanonicalPath::new(repository.join("tracked.txt")).unwrap(),
+        RuntimeGitOpenKind::Deleted,
+    ) else {
+        panic!("关闭中必须拒绝");
+    };
+    assert_eq!(
+        error.data.as_ref().map(|data| data.code),
+        Some(DomainErrorCode::Closing)
+    );
+}

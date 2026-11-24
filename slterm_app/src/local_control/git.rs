@@ -297,3 +297,99 @@ fn git_precondition_error() -> JsonRpcError {
         "git state changed",
     )
 }
+
+/// Git 打开意图副本：目标解析在前台，绑定捕获与打开链在本线程后台完成。
+pub(crate) enum GitOpenIntent {
+    Diff { path: String },
+    Deleted { path: String },
+}
+
+impl GitOpenIntent {
+    /// 只从已登记的打开意图派生；其他方法返回 None。
+    pub(crate) fn from_mutation(mutation: &super::mutations::RuntimeMutation) -> Option<Self> {
+        match mutation {
+            super::mutations::RuntimeMutation::GitOpenDiff { path, .. } => {
+                Some(Self::Diff { path: path.clone() })
+            }
+            super::mutations::RuntimeMutation::GitOpenDeleted { path, .. } => {
+                Some(Self::Deleted { path: path.clone() })
+            }
+            _ => None,
+        }
+    }
+}
+
+/// 复核状态映射后把打开请求交给前台；打开只复用 Commit 的同一打开链。
+pub(crate) fn execute_git_open(
+    intent: GitOpenIntent,
+    target: &crate::app_shell::GitOpenTarget,
+    events: &std::sync::mpsc::SyncSender<crate::app_shell::SltermShellEvent>,
+    reply_timeout: std::time::Duration,
+) -> Result<(), JsonRpcError> {
+    use crate::app_shell::RuntimeGitOpenKind;
+    use crate::app_shell::app_root::{CommitOpenKind, open_kind_for_status};
+
+    let (path, expected) = match intent {
+        GitOpenIntent::Diff { path } => (path, RuntimeGitOpenKind::Diff),
+        GitOpenIntent::Deleted { path } => (path, RuntimeGitOpenKind::Deleted),
+    };
+    let grants =
+        crate::app_shell::app_root::status_grants(&target.root).map_err(git_error_to_rpc)?;
+    let snapshot = target
+        .git
+        .status(&target.root, &grants, 0)
+        .map_err(git_error_to_rpc)?;
+    // 打开映射固定：方法声明的形态必须与当前状态映射一致。
+    let entry = snapshot
+        .entries
+        .iter()
+        .find(|entry| entry.path.trim_matches('/') == path)
+        .ok_or_else(git_target_changed)?;
+    let open_kind =
+        open_kind_for_status(entry.index, entry.worktree, entry.conflict, entry.ignored);
+    let mapping_ok = match expected {
+        RuntimeGitOpenKind::Diff => open_kind == Some(CommitOpenKind::Diff),
+        RuntimeGitOpenKind::Deleted => open_kind == Some(CommitOpenKind::GitShow),
+    };
+    if !mapping_ok {
+        return Err(git_target_changed());
+    }
+    let binding = target
+        .git
+        .repository_binding(&target.root, &grants, 0)
+        .map_err(git_error_to_rpc)?;
+    let worktree_root = binding.worktree_root().canonical_path();
+    let path = CanonicalPath::new(
+        worktree_root
+            .as_path()
+            .join(path.replace('/', std::path::MAIN_SEPARATOR_STR)),
+    )
+    .map_err(|_| git_target_changed())?;
+    let receipt = crate::app_shell::try_send_runtime_git_open(
+        events,
+        target.project_id,
+        binding,
+        path,
+        expected,
+    )?;
+    match receipt.recv_timeout(reply_timeout) {
+        Ok(result) => result,
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(control_error(
+            DomainErrorCode::NotReady,
+            -32001,
+            "git open not ready",
+        )),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            Err(control_error(DomainErrorCode::Closing, -32004, "closing"))
+        }
+    }
+}
+
+/// 目标条目消失或与请求的打开方式不一致：调用方必须重新读取状态。
+fn git_target_changed() -> JsonRpcError {
+    control_error(
+        DomainErrorCode::InvalidRequest,
+        -32000,
+        "git target changed",
+    )
+}

@@ -127,6 +127,13 @@ impl AppRoot {
                                                     let _ = completion
                                                         .try_send(Err(closing_snapshot_error()));
                                                 }
+                                                SltermShellEvent::RuntimeGitOpen {
+                                                    completion,
+                                                    ..
+                                                } => {
+                                                    let _ = completion
+                                                        .try_send(Err(closing_snapshot_error()));
+                                                }
                                                 _ => {}
                                             }
                                         }
@@ -396,6 +403,17 @@ impl AppRoot {
                 } else {
                     self.runtime_git_diff_target(project_id, path)
                 };
+                let _ = completion.try_send(result);
+            }
+            SltermShellEvent::RuntimeGitOpen {
+                project_id,
+                binding,
+                path,
+                kind,
+                completion,
+            } => {
+                let result =
+                    self.handle_runtime_git_open(project_id, binding, path, kind, window, cx);
                 let _ = completion.try_send(result);
             }
             SltermShellEvent::RuntimeGitRefresh { project_id } => {

@@ -18,7 +18,8 @@ use super::credentials::load_or_create_at;
 use super::discovery::{DiscoveryGuard, endpoint_path, publish_at};
 use super::events::EventHub;
 use super::git::{
-    GitWriteIntent, execute_git_write, git_diff_snapshot, git_error_to_rpc, git_status_response,
+    GitOpenIntent, GitWriteIntent, execute_git_open, execute_git_write, git_diff_snapshot,
+    git_error_to_rpc, git_status_response,
 };
 use super::operations::{
     DispatchOutcome, DispatchRequest, OperationDispatcher, operation_resource, writer_error,
@@ -187,6 +188,7 @@ impl LocalControlService {
         let git_events = events.clone();
         let git_diff_events = events.clone();
         let git_refresh_events = events.clone();
+        let git_open_events = events.clone();
         let on_handover: HandoverCallback = Arc::new(move |params| {
             let receipt = try_send_handover(&events, params)?;
             match receipt.recv_timeout(reply_timeout) {
@@ -397,8 +399,9 @@ impl LocalControlService {
                     "invalid mutation params",
                 )
             })?;
-            // Git 破坏写只在前台解析目标；阻塞读写仍归本连接线程。
+            // Git 破坏写与打开只在前台解析目标；阻塞读写仍归本连接线程。
             let git_write = GitWriteIntent::from_mutation(&request.mutation);
+            let git_open = GitOpenIntent::from_mutation(&request.mutation);
             dispatcher.dispatch(
                 DispatchRequest {
                     client_id: &request.client_id,
@@ -417,6 +420,26 @@ impl LocalControlService {
                         }
                         Ok(Ok(RuntimeMutationReply::Done(Err(error)))) => {
                             DispatchOutcome::Failed(error_value(error))
+                        }
+                        Ok(Ok(RuntimeMutationReply::GitOpen(target))) => {
+                            let result = match git_open {
+                                Some(intent) => execute_git_open(
+                                    intent,
+                                    &target,
+                                    &git_open_events,
+                                    SNAPSHOT_REPLY_TIMEOUT,
+                                ),
+                                // 前台不得为普通写意图返回 Git 打开目标。
+                                None => Err(control_error(
+                                    DomainErrorCode::InvalidRequest,
+                                    -32000,
+                                    "mutation target missing",
+                                )),
+                            };
+                            match result {
+                                Ok(()) => DispatchOutcome::Succeeded(serde_json::json!({})),
+                                Err(error) => DispatchOutcome::Failed(error_value(error)),
+                            }
                         }
                         Ok(Ok(RuntimeMutationReply::Git(target))) => {
                             let result = match git_write {

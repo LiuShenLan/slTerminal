@@ -11,9 +11,10 @@ use gpui::{
 use gpui_component::ActiveTheme as _;
 use slterm_path::CanonicalPath;
 use slterm_sidebar::SideViewState;
-use slterm_workspace::ProjectId;
+use slterm_workspace::{ProjectId, ProjectRegistryError};
 
 use super::AppRoot;
+use super::commands::AppRootError;
 use super::side_view::SideView;
 use super::task_service::{CancellationToken, TaskId};
 
@@ -55,7 +56,7 @@ pub(super) struct CommitRow {
 
 /// 打开映射只区分三种落点；unknown 缺失文件不产生意图。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum CommitOpenKind {
+pub(crate) enum CommitOpenKind {
     Document,
     Diff,
     GitShow,
@@ -208,13 +209,24 @@ pub(super) fn rollback_availability(row: &CommitRow) -> Result<RollbackKind, Rol
 /// 打开映射：ignored 不打开；untracked/added 走普通文档；
 /// deleted 走固定版本；modified/renamed/conflict 走共享 Diff。
 fn open_kind(row: &CommitRow) -> Option<CommitOpenKind> {
-    if row.ignored {
+    open_kind_for_status(row.index, row.worktree, row.conflict, row.ignored)
+}
+
+/// 状态条目到打开方式的固定映射；Commit 行激活与 Runtime 打开方法共用。
+pub(crate) fn open_kind_for_status(
+    index: char,
+    worktree: char,
+    conflict: bool,
+    ignored: bool,
+) -> Option<CommitOpenKind> {
+    if ignored {
         return None;
     }
-    if row.conflict || row.status_label.contains('M') || row.status_label.contains('R') {
+    let label = status_label(index, worktree, conflict);
+    if conflict || label.contains('M') || label.contains('R') {
         return Some(CommitOpenKind::Diff);
     }
-    if row.status_label.contains('D') {
+    if label.contains('D') {
         return Some(CommitOpenKind::GitShow);
     }
     Some(CommitOpenKind::Document)
@@ -1078,22 +1090,35 @@ impl AppRoot {
         let Ok(binding) = result else {
             return;
         };
-        if self.snapshot.registry().project(project_id).is_none() {
-            return;
-        }
+        let _ = self.open_commit_diff_path(project_id, binding, path, window, cx);
+    }
+
+    /// 以已捕获的仓库绑定打开共享 Document Diff；Document 未注册时排队等待打开完成。
+    ///
+    /// Commit 行激活与 Runtime `git.open_diff` 共用同一打开链与落点规则。
+    pub(super) fn open_commit_diff_path(
+        &mut self,
+        project_id: ProjectId,
+        binding: slterm_document::RepositoryBinding,
+        path: CanonicalPath,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<(), AppRootError> {
+        self.snapshot
+            .registry()
+            .project(project_id)
+            .ok_or(ProjectRegistryError::ProjectNotFound)?;
         let repo_root = binding.worktree_root().canonical_path().clone();
-        let Ok(repo_path) = repo_path_from(&repo_root, &path) else {
-            return;
-        };
-        let target_group = match self.focused_group(project_id, cx) {
-            Ok(Some(group)) => group,
+        let repo_path =
+            repo_path_from(&repo_root, &path).map_err(|_| AppRootError::UnexpectedParameters)?;
+        let target_group = match self.focused_group(project_id, cx)? {
+            Some(group) => group,
             // 空项目按规格创建首组，不退回隐藏项目。
-            Ok(None) => slterm_workspace::PanelGroupId::from_uuid(uuid::Uuid::now_v7())
+            None => slterm_workspace::PanelGroupId::from_uuid(uuid::Uuid::now_v7())
                 .expect("系统生成的 UUID 必须为 v7"),
-            Err(_) => return,
         };
         if let Some(document_id) = self.document_id_at(&path) {
-            let _ = self.open_diff(
+            self.open_diff(
                 super::diff::DiffOpenRequest {
                     project_id,
                     target_group: Some(target_group),
@@ -1105,8 +1130,8 @@ impl AppRoot {
                 },
                 window,
                 cx,
-            );
-            return;
+            )?;
+            return Ok(());
         }
         // Document 尚未注册：登记待打开 Diff，由打开完成链统一收尾。
         self.pending_commit_diffs.insert(
@@ -1121,12 +1146,13 @@ impl AppRoot {
         let request = match self.prepare_document_open(project_id, Some(target_group), path, false)
         {
             Ok(request) => request,
-            Err(_) => {
+            Err(error) => {
                 self.pending_commit_diffs.clear();
-                return;
+                return Err(error);
             }
         };
         self.queue_document_open(request, None, window, cx);
+        Ok(())
     }
 
     /// Document 打开成功后兑现同一路径的待打开 Diff；其它路径保持等待。
@@ -1445,19 +1471,33 @@ impl AppRoot {
         let Ok(binding) = result else {
             return;
         };
+        let _ = self.open_commit_gitshow_path(project_id, binding, row.path, window, cx);
+    }
+
+    /// 以已捕获的仓库绑定打开固定版本；Commit 行激活与 Runtime `git.open_deleted` 共用。
+    pub(super) fn open_commit_gitshow_path(
+        &mut self,
+        project_id: ProjectId,
+        binding: slterm_document::RepositoryBinding,
+        path: CanonicalPath,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<(), AppRootError> {
+        self.snapshot
+            .registry()
+            .project(project_id)
+            .ok_or(ProjectRegistryError::ProjectNotFound)?;
         let repo_root = binding.worktree_root().canonical_path().clone();
-        let Ok(repo_path) = repo_path_from(&repo_root, &row.path) else {
-            return;
-        };
-        let target_group = match self.focused_group(project_id, cx) {
-            Ok(Some(group)) => Some(group),
-            Ok(None) => Some(
+        let repo_path =
+            repo_path_from(&repo_root, &path).map_err(|_| AppRootError::UnexpectedParameters)?;
+        let target_group = match self.focused_group(project_id, cx)? {
+            Some(group) => Some(group),
+            None => Some(
                 slterm_workspace::PanelGroupId::from_uuid(uuid::Uuid::now_v7())
                     .expect("系统生成的 UUID 必须为 v7"),
             ),
-            Err(_) => return,
         };
-        let _ = self.open_gitshow(
+        self.open_gitshow(
             super::git_show::GitShowOpenRequest {
                 project_id,
                 target_group,
@@ -1468,7 +1508,8 @@ impl AppRoot {
             },
             window,
             cx,
-        );
+        )?;
+        Ok(())
     }
 
     /// Runtime Git 写完成后按真实状态刷新 Commit 视图；只刷新同一项目。

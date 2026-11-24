@@ -42,7 +42,8 @@ fn dispatch_mutation(
     });
     match response.try_recv().expect("AppRoot 必须返回写意图回执") {
         Ok(crate::app_shell::RuntimeMutationReply::Done(result)) => result,
-        Ok(crate::app_shell::RuntimeMutationReply::Git(_)) => {
+        Ok(crate::app_shell::RuntimeMutationReply::Git(_))
+        | Ok(crate::app_shell::RuntimeMutationReply::GitOpen(_)) => {
             panic!("Agent 写意图不得返回 Git 目标")
         }
         Err(error) => Err(error),

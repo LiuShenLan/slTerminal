@@ -170,6 +170,10 @@ pub enum RuntimeMethod {
     GitRollback,
     #[serde(rename = "git.delete")]
     GitDelete,
+    #[serde(rename = "git.open_diff")]
+    GitOpenDiff,
+    #[serde(rename = "git.open_deleted")]
+    GitOpenDeleted,
 }
 
 /// 原始输入：显式写入 PTY，不追加回车，也不模拟键盘事件。
@@ -499,6 +503,30 @@ pub struct GitDeleteRequest {
 }
 
 pub type GitDeleteParams = MutationParams<GitDeleteRequest>;
+
+/// 打开共享 Diff：目标必须是当前映射为差异的条目（modified／renamed／conflict）。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct GitOpenDiffRequest {
+    pub project_id: Option<String>,
+    /// 仓库相对路径，使用 `/` 分隔。
+    pub path: String,
+}
+
+pub type GitOpenDiffParams = MutationParams<GitOpenDiffRequest>;
+
+/// 打开固定版本：目标必须是当前映射为删除的条目。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct GitOpenDeletedRequest {
+    pub project_id: Option<String>,
+    /// 仓库相对路径，使用 `/` 分隔。
+    pub path: String,
+}
+
+pub type GitOpenDeletedParams = MutationParams<GitOpenDeletedRequest>;
 
 /// 新建终端：Shell 固定为应用默认，只开放目标项目与工作目录选择。
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1197,6 +1225,30 @@ fn runtime_request_is_valid(request: &RuntimeRequest) -> bool {
                 && !request.path.trim().is_empty()
                 && valid_repo_relative_path(&request.path)
         }),
+        RuntimeMethod::GitOpenDiff => request.parse::<GitOpenDiffParams>().is_some_and(|params| {
+            let request = &params.request;
+            params.has_valid_envelope()
+                && request
+                    .project_id
+                    .as_deref()
+                    .is_none_or(|id| !id.trim().is_empty())
+                && !request.path.trim().is_empty()
+                && valid_repo_relative_path(&request.path)
+        }),
+        RuntimeMethod::GitOpenDeleted => {
+            request
+                .parse::<GitOpenDeletedParams>()
+                .is_some_and(|params| {
+                    let request = &params.request;
+                    params.has_valid_envelope()
+                        && request
+                            .project_id
+                            .as_deref()
+                            .is_none_or(|id| !id.trim().is_empty())
+                        && !request.path.trim().is_empty()
+                        && valid_repo_relative_path(&request.path)
+                })
+        }
     }
 }
 
@@ -1301,11 +1353,13 @@ pub enum ControlMethod {
     RuntimeGitDiff,
     RuntimeGitRollback,
     RuntimeGitDelete,
+    RuntimeGitOpenDiff,
+    RuntimeGitOpenDeleted,
     InstanceHandover,
 }
 
 impl ControlMethod {
-    pub const ALL: [Self; 40] = [
+    pub const ALL: [Self; 42] = [
         Self::RuntimeHello,
         Self::RuntimeDescribe,
         Self::RuntimeSnapshot,
@@ -1345,6 +1399,8 @@ impl ControlMethod {
         Self::RuntimeGitDiff,
         Self::RuntimeGitRollback,
         Self::RuntimeGitDelete,
+        Self::RuntimeGitOpenDiff,
+        Self::RuntimeGitOpenDeleted,
         Self::InstanceHandover,
     ];
 
@@ -1389,6 +1445,8 @@ impl ControlMethod {
             Self::RuntimeGitDiff => "git.diff",
             Self::RuntimeGitRollback => "git.rollback",
             Self::RuntimeGitDelete => "git.delete",
+            Self::RuntimeGitOpenDiff => "git.open_diff",
+            Self::RuntimeGitOpenDeleted => "git.open_deleted",
             Self::InstanceHandover => "instance.handover",
         }
     }
