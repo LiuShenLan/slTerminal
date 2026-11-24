@@ -19,9 +19,9 @@ use slterm_runtime_protocol::{
     PanelMoveParams, PanelOpenSettingsParams, ProjectActivateParams, ProjectListResponse,
     ProjectRemoveParams, ProjectRenameParams, ProjectReorderParams, RuntimeEvent, RuntimeMethod,
     RuntimeRequest, RuntimeResult, SnapshotResources, SnapshotResponse, SplitDirectionWire,
-    TerminalCreateParams, TerminalExecuteParams, TerminalInputParams, TerminalReadRequest,
-    TerminalReadResponse, TerminalWaitRequest, TerminalWaitResponse, ViewportSize,
-    parse_client_request,
+    TerminalCloseParams, TerminalCreateParams, TerminalExecuteParams, TerminalInputParams,
+    TerminalReadRequest, TerminalReadResponse, TerminalWaitRequest, TerminalWaitResponse,
+    ViewportSize, parse_client_request,
 };
 use slterm_split::SplitDirection;
 use slterm_workspace::{LogicalSize, PanelGroupId, ProjectId, ViewKey};
@@ -781,6 +781,26 @@ fn handle_connection<F>(
                             ),
                             Err(error) => JsonRpcResponse::error(request.id, error),
                         }
+                    }
+                    RuntimeMethod::TerminalClose => {
+                        let Some(params) = request.parse::<TerminalCloseParams>() else {
+                            return;
+                        };
+                        let mutation =
+                            parse_terminal_id(&params.request.terminal_id).map(|terminal_id| {
+                                RuntimeMutation::TerminalClose {
+                                    terminal_id,
+                                    generation: params.request.generation,
+                                }
+                            });
+                        respond_mutation(
+                            &runtime,
+                            request.id,
+                            params.client_id,
+                            params.mutation_id,
+                            params.expected_revision,
+                            mutation,
+                        )
                     }
                     RuntimeMethod::TerminalCreate => {
                         let Some(params) = request.parse::<TerminalCreateParams>() else {

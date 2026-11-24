@@ -219,6 +219,26 @@ impl AppRoot {
                     .update(cx, |view, cx| view.runtime_input(bytes, cx))
                     .map_err(|_| not_ready_error("terminal not ready"))
             }
+            RuntimeMutation::TerminalClose {
+                terminal_id,
+                generation,
+            } => {
+                self.snapshot
+                    .terminal(terminal_id)
+                    .ok_or_else(invalid_request_error)?;
+                let current = self
+                    .terminals
+                    .borrow()
+                    .target(terminal_id)
+                    .map(|target| target.generation().get())
+                    .unwrap_or(0);
+                if current != generation {
+                    return Err(revision_conflict_error());
+                }
+                self.close_terminal(terminal_id, window, cx)
+                    .map(|_| ())
+                    .map_err(runtime_mutation_error)
+            }
         }
     }
 
@@ -346,6 +366,13 @@ impl AppRoot {
 
         let mut terminals = Vec::new();
         for terminal in self.snapshot.terminals() {
+            // 代次以 Registry 为准；没有存活 worker 的持久化记录为零。
+            let generation = self
+                .terminals
+                .borrow()
+                .target(terminal.id())
+                .map(|target| target.generation().get())
+                .unwrap_or(0);
             terminals.push(TerminalResource {
                 terminal_id: terminal.id().to_string(),
                 project_id: terminal.project_id().to_string(),
@@ -357,6 +384,7 @@ impl AppRoot {
                     RunIntent::Launch => "launch".to_owned(),
                     RunIntent::Exited => "exited".to_owned(),
                 },
+                generation,
             });
         }
 
@@ -394,6 +422,15 @@ fn invalid_request_error() -> JsonRpcError {
 
 fn not_ready_error(message: &'static str) -> JsonRpcError {
     control_error(DomainErrorCode::NotReady, -32001, message)
+}
+
+/// 目标代次与快照不一致：客户端必须重新快照后再写。
+fn revision_conflict_error() -> JsonRpcError {
+    control_error(
+        DomainErrorCode::RevisionConflict,
+        -32005,
+        "revision conflict",
+    )
 }
 
 /// 写意图错误映射为封闭领域码；不携带路径、SQL 或正文。

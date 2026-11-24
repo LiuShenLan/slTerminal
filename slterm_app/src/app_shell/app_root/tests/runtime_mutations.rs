@@ -361,6 +361,67 @@ fn runtime_terminal_input_rejects_stale_generation(cx: &mut TestAppContext) {
     );
 }
 
+/// 锚：close 必须匹配快照代次；匹配后逻辑终端与面板一并移除。
+#[gpui::test]
+fn runtime_terminal_close_requires_current_generation(cx: &mut TestAppContext) {
+    let (root, mut window, _state) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, "D:/work/a");
+    new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_A);
+    let generation = terminal_generation(&root, cx);
+
+    let error = dispatch_mutation(
+        &root,
+        &mut window,
+        RuntimeMutation::TerminalClose {
+            terminal_id: terminal_id(TERMINAL_A),
+            generation: generation + 1,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(error.code, -32005);
+    assert_eq!(
+        error.data.as_ref().map(|data| data.code),
+        Some(DomainErrorCode::RevisionConflict)
+    );
+    root.read_with(cx, |root, _| {
+        assert!(
+            root.snapshot().terminal(terminal_id(TERMINAL_A)).is_some(),
+            "代次冲突不得关闭终端"
+        );
+    });
+
+    dispatch_mutation(
+        &root,
+        &mut window,
+        RuntimeMutation::TerminalClose {
+            terminal_id: terminal_id(TERMINAL_A),
+            generation,
+        },
+    )
+    .expect("当前代次必须允许关闭");
+    root.read_with(cx, |root, _| {
+        assert!(
+            root.snapshot().terminal(terminal_id(TERMINAL_A)).is_none(),
+            "关闭后逻辑终端必须移除"
+        );
+    });
+
+    let error = dispatch_mutation(
+        &root,
+        &mut window,
+        RuntimeMutation::TerminalClose {
+            terminal_id: terminal_id(TERMINAL_A),
+            generation: 0,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.data.as_ref().map(|data| data.code),
+        Some(DomainErrorCode::InvalidRequest),
+        "未知终端必须明确拒绝"
+    );
+}
+
 #[gpui::test]
 fn runtime_project_mutations_are_rejected_while_closing(cx: &mut TestAppContext) {
     let (root, mut window, _state) = open_root(cx);

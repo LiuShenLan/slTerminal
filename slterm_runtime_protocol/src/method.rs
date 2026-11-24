@@ -186,6 +186,11 @@ fn terminal_wait_result_schema() -> schemars::Schema {
     schemars::schema_for!(crate::protocol::TerminalWaitResponse)
 }
 
+#[cfg(feature = "schema")]
+fn terminal_close_params_schema() -> schemars::Schema {
+    schemars::schema_for!(crate::protocol::TerminalCloseParams)
+}
+
 /// 全部真实可用方法；顺序即对外呈现顺序。
 pub static METHODS: &[MethodSpec] = &[
     MethodSpec {
@@ -419,6 +424,16 @@ pub static METHODS: &[MethodSpec] = &[
         result_schema: terminal_wait_result_schema,
     },
     MethodSpec {
+        method: ControlMethod::RuntimeTerminalClose,
+        scopes: &[ControlScope::Runtime],
+        kind: MethodKind::Mutation,
+        idempotent: true,
+        #[cfg(feature = "schema")]
+        params_schema: terminal_close_params_schema,
+        #[cfg(feature = "schema")]
+        result_schema: operation_result_schema,
+    },
+    MethodSpec {
         method: ControlMethod::InstanceHandover,
         scopes: &[ControlScope::Handover],
         kind: MethodKind::Mutation,
@@ -496,6 +511,7 @@ mod method_tests {
                 method_name(ControlMethod::RuntimeTerminalExecute),
                 method_name(ControlMethod::RuntimeTerminalRead),
                 method_name(ControlMethod::RuntimeTerminalWait),
+                method_name(ControlMethod::RuntimeTerminalClose),
                 method_name(ControlMethod::InstanceHandover),
             ]
         );
@@ -595,6 +611,7 @@ mod method_tests {
                 ControlMethod::RuntimeTerminalExecute,
                 ControlMethod::RuntimeTerminalRead,
                 ControlMethod::RuntimeTerminalWait,
+                ControlMethod::RuntimeTerminalClose,
             ]
         );
         let handover_methods: Vec<ControlMethod> = methods_for(ControlScope::Handover)

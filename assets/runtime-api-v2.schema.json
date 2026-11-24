@@ -1415,7 +1415,8 @@
         "terminal.input",
         "terminal.execute",
         "terminal.read",
-        "terminal.wait"
+        "terminal.wait",
+        "terminal.close"
       ]
     },
     "RuntimeParams": {
@@ -1710,6 +1711,12 @@
         "cwd": {
           "type": "string"
         },
+        "generation": {
+          "description": "当前 PTY 代次；零表示没有存活 worker（持久化 Exited）。",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
         "number": {
           "type": "integer",
           "format": "uint64",
@@ -1742,7 +1749,8 @@
         "number",
         "cwd",
         "shell",
-        "run_intent"
+        "run_intent",
+        "generation"
       ]
     },
     "TerminalWaitResponse": {

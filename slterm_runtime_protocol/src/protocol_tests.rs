@@ -9,9 +9,10 @@ use crate::protocol::{
     PanelGroupMergeRequest, PanelGroupResizeRequest, PanelGroupResource, PanelGroupSplitRequest,
     PanelMoveRequest, ProjectActivateRequest, ProjectRemoveRequest, ProjectRenameRequest,
     ProjectReorderRequest, ProjectResource, ProtocolError, RuntimeMethod, RuntimeRequest,
-    SnapshotResources, SnapshotResponse, SplitDirectionWire, TerminalCreateRequest,
-    TerminalExecuteRequest, TerminalInputRequest, TerminalReadRequest, TerminalResource,
-    TerminalWaitRequest, ViewResource, ViewportSize, params_sha256, parse_client_request,
+    SnapshotResources, SnapshotResponse, SplitDirectionWire, TerminalCloseRequest,
+    TerminalCreateRequest, TerminalExecuteRequest, TerminalInputRequest, TerminalReadRequest,
+    TerminalResource, TerminalWaitRequest, ViewResource, ViewportSize, params_sha256,
+    parse_client_request,
 };
 use crate::{MethodKind, OperationStatus};
 
@@ -628,6 +629,13 @@ fn terminal_methods_validate_generation_and_payloads() {
                 command: "cargo test".to_owned(),
             },
         ),
+        project_mutation(
+            RuntimeMethod::TerminalClose,
+            TerminalCloseRequest {
+                terminal_id: terminal.to_owned(),
+                generation: 3,
+            },
+        ),
     ] {
         let encoded = serde_json::to_value(&request).unwrap();
         let parsed = parse_client_request(encoded.to_string().as_bytes()).unwrap();
@@ -705,6 +713,10 @@ fn terminal_methods_validate_generation_and_payloads() {
         serde_json::json!({"jsonrpc":"2.0","id":1,"method":"terminal.wait","params":{"terminal_id":"t","generation":1,"since_revision":0,"timeout_ms":0}}),
         // 超上限等待
         serde_json::json!({"jsonrpc":"2.0","id":1,"method":"terminal.wait","params":{"terminal_id":"t","generation":1,"since_revision":0,"timeout_ms":600001}}),
+        // 空身份关闭
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"terminal.close","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"terminal_id":" ","generation":1}}}),
+        // 关闭未知字段
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"terminal.close","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"terminal_id":"t","generation":1,"force":true}}}),
     ] {
         assert!(
             parse_client_request(invalid.to_string().as_bytes()).is_err(),
@@ -793,6 +805,7 @@ fn describe_lists_the_method_registry_with_contract_hashes() {
             "terminal.execute",
             "terminal.read",
             "terminal.wait",
+            "terminal.close",
             "instance.handover"
         ]
     );
@@ -839,6 +852,7 @@ fn sample_snapshot() -> SnapshotResponse {
                 shell: "C:/Program Files/PowerShell/7/pwsh.exe".to_owned(),
                 title: Some("build".to_owned()),
                 run_intent: "launch".to_owned(),
+                generation: 1,
             }],
             documents: vec![DocumentResource {
                 document_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2e".to_owned(),

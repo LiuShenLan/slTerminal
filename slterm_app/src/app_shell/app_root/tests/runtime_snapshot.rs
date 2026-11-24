@@ -59,6 +59,10 @@ fn runtime_snapshot_returns_workspace_resources_and_identity(cx: &mut TestAppCon
     );
     assert_eq!(snapshot.terminals[0].run_intent, "launch");
     assert_eq!(snapshot.terminals[0].cwd, "D:/work/a");
+    assert_eq!(
+        snapshot.terminals[0].generation, 1,
+        "快照必须暴露当前 PTY 代次供写方法定位"
+    );
 }
 
 #[gpui::test]
