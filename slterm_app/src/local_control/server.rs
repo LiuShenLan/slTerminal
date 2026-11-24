@@ -11,18 +11,19 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use slterm_runtime_protocol::{
-    AgentCloseParams, AgentGetRequest, AgentInputParams, AgentListResponse, AgentResource,
-    ClientRequest, ControlScope, Credential, DescribeResponse, DomainErrorCode, EventNotification,
-    EventsSubscribeParams, EventsUnsubscribedResponse, HandoverParams, HandoverResponse,
-    HelloResponse, JsonRpcError, JsonRpcErrorData, JsonRpcId, JsonRpcResponse,
-    OPERATION_WAIT_LIMIT_MS, OperationQueryParams, OperationResource, OperationWaitParams,
-    PanelActivateParams, PanelGroupMergeParams, PanelGroupResizeParams, PanelGroupSplitParams,
-    PanelMoveParams, PanelOpenSettingsParams, ProjectActivateParams, ProjectListResponse,
-    ProjectRemoveParams, ProjectRenameParams, ProjectReorderParams, RuntimeEvent, RuntimeMethod,
-    RuntimeRequest, RuntimeResult, SnapshotResources, SnapshotResponse, SplitDirectionWire,
-    TerminalCloseParams, TerminalCreateParams, TerminalExecuteParams, TerminalInputParams,
-    TerminalReadRequest, TerminalReadResponse, TerminalReconnectParams, TerminalRenameParams,
-    TerminalWaitRequest, TerminalWaitResponse, ViewportSize, parse_client_request,
+    AgentCloseParams, AgentGetRequest, AgentInputParams, AgentListResponse, AgentReadRequest,
+    AgentResource, AgentWaitRequest, ClientRequest, ControlScope, Credential, DescribeResponse,
+    DomainErrorCode, EventNotification, EventsSubscribeParams, EventsUnsubscribedResponse,
+    HandoverParams, HandoverResponse, HelloResponse, JsonRpcError, JsonRpcErrorData, JsonRpcId,
+    JsonRpcResponse, OPERATION_WAIT_LIMIT_MS, OperationQueryParams, OperationResource,
+    OperationWaitParams, PanelActivateParams, PanelGroupMergeParams, PanelGroupResizeParams,
+    PanelGroupSplitParams, PanelMoveParams, PanelOpenSettingsParams, ProjectActivateParams,
+    ProjectListResponse, ProjectRemoveParams, ProjectRenameParams, ProjectReorderParams,
+    RuntimeEvent, RuntimeMethod, RuntimeRequest, RuntimeResult, SnapshotResources,
+    SnapshotResponse, SplitDirectionWire, TerminalCloseParams, TerminalCreateParams,
+    TerminalExecuteParams, TerminalInputParams, TerminalReadRequest, TerminalReadResponse,
+    TerminalReconnectParams, TerminalRenameParams, TerminalWaitRequest, TerminalWaitResponse,
+    ViewportSize, parse_client_request,
 };
 use slterm_split::SplitDirection;
 use slterm_workspace::{LogicalSize, PanelGroupId, ProjectId, ViewKey};
@@ -96,11 +97,13 @@ pub(crate) type MutationCallback =
 pub(crate) type ReadCallback =
     Arc<dyn Fn(TerminalReadTarget) -> Result<TerminalTextSnapshot, JsonRpcError> + Send + Sync>;
 
-/// 终端等待状态目标：稳定身份与 PTY 代次。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// 终端等待状态目标：稳定身份、PTY 代次与可选 Agent 身份。
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TerminalStatusTarget {
     pub(crate) terminal_id: slterm_workspace::TerminalId,
     pub(crate) generation: u64,
+    /// `Some` 表示 agent.wait，必须再匹配该终端当前对外身份。
+    pub(crate) agent_id: Option<String>,
 }
 
 /// Runtime 终端等待端口：读取前台最近发布帧的 revision。
@@ -814,43 +817,34 @@ fn handle_connection<F>(
                         let Some(params) = request.parse::<TerminalReadRequest>() else {
                             return;
                         };
-                        match parse_terminal_id(&params.terminal_id).and_then(|terminal_id| {
-                            (runtime.read)(TerminalReadTarget {
-                                terminal_id,
-                                generation: params.generation,
-                            })
-                        }) {
-                            Ok(snapshot) => {
-                                match read_page(
-                                    snapshot.text.as_bytes(),
-                                    ReadGeneration {
-                                        generation: snapshot.generation,
-                                        revision: snapshot.revision,
-                                    },
-                                    params.cursor.as_deref(),
-                                    PAGE_BUDGET_BYTES,
-                                ) {
-                                    Ok(page) => match String::from_utf8(page.bytes) {
-                                        Ok(data) => JsonRpcResponse::result(
-                                            request.id,
-                                            RuntimeResult::TerminalRead(TerminalReadResponse {
-                                                terminal_id: params.terminal_id,
-                                                generation: snapshot.generation,
-                                                revision: snapshot.revision,
-                                                data,
-                                                next_cursor: page.next_cursor,
-                                            }),
-                                        ),
-                                        Err(_) => JsonRpcResponse::error(
-                                            request.id,
-                                            read_encoding_error(),
-                                        ),
-                                    },
-                                    Err(ReadError::StaleCursor) => {
-                                        JsonRpcResponse::error(request.id, stale_cursor_error())
-                                    }
-                                }
-                            }
+                        respond_read(
+                            &runtime,
+                            request.id,
+                            &params.terminal_id,
+                            params.generation,
+                            None,
+                            params.cursor.as_deref(),
+                        )
+                    }
+                    RuntimeMethod::AgentRead => {
+                        let Some(params) = request.parse::<AgentReadRequest>() else {
+                            return;
+                        };
+                        respond_read(
+                            &runtime,
+                            request.id,
+                            &params.terminal_id,
+                            params.generation,
+                            Some(params.agent_id),
+                            params.cursor.as_deref(),
+                        )
+                    }
+                    RuntimeMethod::AgentWait => {
+                        match wait_terminal(&runtime, &request, &shutdown) {
+                            Ok(resource) => JsonRpcResponse::result(
+                                request.id,
+                                RuntimeResult::TerminalWait(resource),
+                            ),
                             Err(error) => JsonRpcResponse::error(request.id, error),
                         }
                     }
@@ -1241,24 +1235,24 @@ fn wait_terminal(
     request: &RuntimeRequest,
     shutdown: &AtomicBool,
 ) -> Result<TerminalWaitResponse, JsonRpcError> {
-    let Some(params) = request.parse::<TerminalWaitRequest>() else {
+    let Some(target) = parse_wait_target(request) else {
         return Err(not_ready_error("terminal wait params missing"));
     };
-    let terminal_id = parse_terminal_id(&params.terminal_id)?;
-    let timeout_ms = params.timeout_ms.unwrap_or(OPERATION_WAIT_LIMIT_MS);
+    let timeout_ms = target.timeout_ms.unwrap_or(OPERATION_WAIT_LIMIT_MS);
     let deadline = Instant::now() + Duration::from_millis(timeout_ms);
     loop {
         if shutdown.load(Ordering::SeqCst) {
             return Err(closing_error());
         }
         let revision = (runtime.wait_status)(TerminalStatusTarget {
-            terminal_id,
-            generation: params.generation,
+            terminal_id: target.terminal_id,
+            generation: target.generation,
+            agent_id: target.agent_id.clone(),
         })?;
-        if revision > params.since_revision {
+        if revision > target.since_revision {
             return Ok(TerminalWaitResponse {
-                terminal_id: params.terminal_id,
-                generation: params.generation,
+                terminal_id: target.terminal_id.to_string(),
+                generation: target.generation,
                 revision,
             });
         }
@@ -1267,6 +1261,82 @@ fn wait_terminal(
             return Err(not_ready_error("terminal wait not ready"));
         }
         std::thread::sleep(OPERATION_WAIT_POLL.min(deadline - now));
+    }
+}
+
+/// terminal.wait 与 agent.wait 的统一等待目标。
+struct WaitTarget {
+    terminal_id: slterm_workspace::TerminalId,
+    generation: u64,
+    since_revision: u64,
+    timeout_ms: Option<u64>,
+    agent_id: Option<String>,
+}
+
+fn parse_wait_target(request: &RuntimeRequest) -> Option<WaitTarget> {
+    if let Some(params) = request.parse::<TerminalWaitRequest>() {
+        return Some(WaitTarget {
+            terminal_id: parse_terminal_id(&params.terminal_id).ok()?,
+            generation: params.generation,
+            since_revision: params.since_revision,
+            timeout_ms: params.timeout_ms,
+            agent_id: None,
+        });
+    }
+    let params = request.parse::<AgentWaitRequest>()?;
+    Some(WaitTarget {
+        terminal_id: parse_terminal_id(&params.terminal_id).ok()?,
+        generation: params.generation,
+        since_revision: params.since_revision,
+        timeout_ms: params.timeout_ms,
+        agent_id: Some(params.agent_id),
+    })
+}
+
+/// terminal.read 与 agent.read 共用分页响应；身份与代次由前台复核。
+fn respond_read(
+    runtime: &RuntimeCallbacks,
+    id: JsonRpcId,
+    terminal_id_text: &str,
+    generation: u64,
+    agent_id: Option<String>,
+    cursor: Option<&str>,
+) -> JsonRpcResponse<RuntimeResult> {
+    let target = match parse_terminal_id(terminal_id_text) {
+        Ok(terminal_id) => TerminalReadTarget {
+            terminal_id,
+            generation,
+            agent_id,
+        },
+        Err(error) => return JsonRpcResponse::error(id, error),
+    };
+    let snapshot = match (runtime.read)(target) {
+        Ok(snapshot) => snapshot,
+        Err(error) => return JsonRpcResponse::error(id, error),
+    };
+    match read_page(
+        snapshot.text.as_bytes(),
+        ReadGeneration {
+            generation: snapshot.generation,
+            revision: snapshot.revision,
+        },
+        cursor,
+        PAGE_BUDGET_BYTES,
+    ) {
+        Ok(page) => match String::from_utf8(page.bytes) {
+            Ok(data) => JsonRpcResponse::result(
+                id,
+                RuntimeResult::TerminalRead(TerminalReadResponse {
+                    terminal_id: terminal_id_text.to_owned(),
+                    generation: snapshot.generation,
+                    revision: snapshot.revision,
+                    data,
+                    next_cursor: page.next_cursor,
+                }),
+            ),
+            Err(_) => JsonRpcResponse::error(id, read_encoding_error()),
+        },
+        Err(ReadError::StaleCursor) => JsonRpcResponse::error(id, stale_cursor_error()),
     }
 }
 

@@ -1479,7 +1479,9 @@
         "agent.list",
         "agent.get",
         "agent.input",
-        "agent.close"
+        "agent.close",
+        "agent.read",
+        "agent.wait"
       ]
     },
     "RuntimeParams": {

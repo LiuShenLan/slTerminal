@@ -20,6 +20,7 @@ fn dispatch_read(
                 SltermShellEvent::RuntimeRead {
                     terminal_id,
                     generation,
+                    agent_id: None,
                     completion,
                 },
                 window,
@@ -123,6 +124,7 @@ fn dispatch_wait(
                 SltermShellEvent::RuntimeWait {
                     terminal_id,
                     generation,
+                    agent_id: None,
                     completion,
                 },
                 window,

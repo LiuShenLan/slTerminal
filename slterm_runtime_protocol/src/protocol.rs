@@ -152,6 +152,10 @@ pub enum RuntimeMethod {
     AgentInput,
     #[serde(rename = "agent.close")]
     AgentClose,
+    #[serde(rename = "agent.read")]
+    AgentRead,
+    #[serde(rename = "agent.wait")]
+    AgentWait,
 }
 
 /// 原始输入：显式写入 PTY，不追加回车，也不模拟键盘事件。
@@ -310,6 +314,29 @@ pub struct AgentCloseRequest {
 }
 
 pub type AgentCloseParams = MutationParams<AgentCloseRequest>;
+
+/// Agent 关联终端的分页读取；目标身份与代次必须同时匹配。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct AgentReadRequest {
+    pub agent_id: String,
+    pub terminal_id: String,
+    pub generation: u64,
+    pub cursor: Option<String>,
+}
+
+/// 等待 Agent 关联终端的输出 revision 超过 `since_revision`。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct AgentWaitRequest {
+    pub agent_id: String,
+    pub terminal_id: String,
+    pub generation: u64,
+    pub since_revision: u64,
+    pub timeout_ms: Option<u64>,
+}
 
 /// 新建终端：Shell 固定为应用默认，只开放目标项目与工作目录选择。
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -923,6 +950,23 @@ fn runtime_request_is_valid(request: &RuntimeRequest) -> bool {
                 && present(&request.agent_id)
                 && present(&request.terminal_id)
         }),
+        RuntimeMethod::AgentRead => request.parse::<AgentReadRequest>().is_some_and(|params| {
+            present(&params.agent_id)
+                && present(&params.terminal_id)
+                && params.generation > 0
+                && params
+                    .cursor
+                    .as_deref()
+                    .is_none_or(|cursor| !cursor.is_empty())
+        }),
+        RuntimeMethod::AgentWait => request.parse::<AgentWaitRequest>().is_some_and(|params| {
+            present(&params.agent_id)
+                && present(&params.terminal_id)
+                && params.generation > 0
+                && params
+                    .timeout_ms
+                    .is_none_or(|timeout| (1..=OPERATION_WAIT_LIMIT_MS).contains(&timeout))
+        }),
     }
 }
 
@@ -1004,11 +1048,13 @@ pub enum ControlMethod {
     RuntimeAgentGet,
     RuntimeAgentInput,
     RuntimeAgentClose,
+    RuntimeAgentRead,
+    RuntimeAgentWait,
     InstanceHandover,
 }
 
 impl ControlMethod {
-    pub const ALL: [Self; 31] = [
+    pub const ALL: [Self; 33] = [
         Self::RuntimeHello,
         Self::RuntimeDescribe,
         Self::RuntimeSnapshot,
@@ -1039,6 +1085,8 @@ impl ControlMethod {
         Self::RuntimeAgentGet,
         Self::RuntimeAgentInput,
         Self::RuntimeAgentClose,
+        Self::RuntimeAgentRead,
+        Self::RuntimeAgentWait,
         Self::InstanceHandover,
     ];
 
@@ -1074,6 +1122,8 @@ impl ControlMethod {
             Self::RuntimeAgentGet => "agent.get",
             Self::RuntimeAgentInput => "agent.input",
             Self::RuntimeAgentClose => "agent.close",
+            Self::RuntimeAgentRead => "agent.read",
+            Self::RuntimeAgentWait => "agent.wait",
             Self::InstanceHandover => "instance.handover",
         }
     }

@@ -152,6 +152,99 @@ fn runtime_agent_input_and_close_require_matching_identity(cx: &mut TestAppConte
     });
 }
 
+/// 锚：agent.read/wait 必须先匹配目标终端的当前对外身份。
+#[gpui::test]
+fn runtime_agent_read_and_wait_require_matching_identity(cx: &mut TestAppContext) {
+    let (root, mut window, state) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, "D:/work/a");
+    let panel = new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_A);
+    seed_agent(&root, cx, panel);
+    let generation = runtime_generation(&root, cx);
+
+    let (completion, response) = mpsc::sync_channel(1);
+    window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.handle_shell_event(
+                SltermShellEvent::RuntimeRead {
+                    terminal_id: terminal_id(TERMINAL_A),
+                    generation,
+                    agent_id: Some("claude:other".to_owned()),
+                    completion,
+                },
+                window,
+                cx,
+            );
+        });
+    });
+    let error = response.try_recv().unwrap().unwrap_err();
+    assert_eq!(
+        error.data.as_ref().map(|data| data.code),
+        Some(DomainErrorCode::UnknownAgent)
+    );
+
+    let (completion, response) = mpsc::sync_channel(1);
+    window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.handle_shell_event(
+                SltermShellEvent::RuntimeRead {
+                    terminal_id: terminal_id(TERMINAL_A),
+                    generation,
+                    agent_id: Some("claude:session-a".to_owned()),
+                    completion,
+                },
+                window,
+                cx,
+            );
+        });
+    });
+    let worker_receipt = response
+        .try_recv()
+        .expect("匹配身份的读取必须入队")
+        .expect("匹配身份的读取必须成功");
+    let reply = {
+        let mut state = state.borrow_mut();
+        let receiver = state
+            .sessions
+            .get_mut(&panel.sequence())
+            .expect("终端会话必须存在");
+        loop {
+            match receiver.try_recv() {
+                Ok(Msg::ReadText { reply }) => break reply,
+                Ok(_) => {}
+                Err(TryRecvError::Empty) => panic!("worker 未收到读取命令"),
+                Err(TryRecvError::Disconnected) => panic!("worker 通道不得提前断开"),
+            }
+        }
+    };
+    let expected = slterm_terminal::term::TextSnapshot {
+        revision: 3,
+        text: "hello".to_owned(),
+    };
+    reply.send(expected.clone()).expect("读取回执端必须存活");
+    assert_eq!(worker_receipt.recv().unwrap(), expected);
+
+    let (completion, response) = mpsc::sync_channel(1);
+    window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.handle_shell_event(
+                SltermShellEvent::RuntimeWait {
+                    terminal_id: terminal_id(TERMINAL_A),
+                    generation,
+                    agent_id: Some("claude:other".to_owned()),
+                    completion,
+                },
+                window,
+                cx,
+            );
+        });
+    });
+    let error = response.try_recv().unwrap().unwrap_err();
+    assert_eq!(
+        error.data.as_ref().map(|data| data.code),
+        Some(DomainErrorCode::UnknownAgent)
+    );
+}
+
 #[gpui::test]
 fn runtime_agents_derive_from_session_identity_and_status(cx: &mut TestAppContext) {
     let (root, mut window, _state) = open_root(cx);

@@ -338,6 +338,7 @@ impl AppRoot {
         &self,
         terminal_id: slterm_workspace::TerminalId,
         generation: u64,
+        agent_id: Option<&str>,
         cx: &App,
     ) -> Result<std::sync::mpsc::Receiver<slterm_terminal::term::TextSnapshot>, JsonRpcError> {
         let terminal = self.runtime_terminal_view(
@@ -346,6 +347,9 @@ impl AppRoot {
             RuntimeTerminalAccess::Display,
             cx,
         )?;
+        if let Some(agent_id) = agent_id {
+            self.ensure_runtime_agent(agent_id, terminal_id, cx)?;
+        }
         terminal
             .read(cx)
             .runtime_text_snapshot()
@@ -357,6 +361,7 @@ impl AppRoot {
         &self,
         terminal_id: slterm_workspace::TerminalId,
         generation: u64,
+        agent_id: Option<&str>,
         cx: &App,
     ) -> Result<u64, JsonRpcError> {
         let terminal = self.runtime_terminal_view(
@@ -365,6 +370,9 @@ impl AppRoot {
             RuntimeTerminalAccess::Display,
             cx,
         )?;
+        if let Some(agent_id) = agent_id {
+            self.ensure_runtime_agent(agent_id, terminal_id, cx)?;
+        }
         Ok(terminal.read(cx).runtime_revision())
     }
 

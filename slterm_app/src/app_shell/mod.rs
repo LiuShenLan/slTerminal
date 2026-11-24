@@ -139,6 +139,8 @@ pub(crate) enum SltermShellEvent {
     RuntimeRead {
         terminal_id: slterm_workspace::TerminalId,
         generation: u64,
+        /// `Some` 表示 agent.read，必须再匹配该终端当前对外身份。
+        agent_id: Option<String>,
         completion: mpsc::SyncSender<
             Result<mpsc::Receiver<slterm_terminal::term::TextSnapshot>, JsonRpcError>,
         >,
@@ -147,6 +149,8 @@ pub(crate) enum SltermShellEvent {
     RuntimeWait {
         terminal_id: slterm_workspace::TerminalId,
         generation: u64,
+        /// `Some` 表示 agent.wait，必须再匹配该终端当前对外身份。
+        agent_id: Option<String>,
         completion: mpsc::SyncSender<Result<u64, JsonRpcError>>,
     },
     /// Runtime Agent 资源请求与一次性回执；资源只在前台同一时刻读取。
@@ -258,6 +262,7 @@ pub(crate) fn try_send_runtime_read(
     sender: &mpsc::SyncSender<SltermShellEvent>,
     terminal_id: slterm_workspace::TerminalId,
     generation: u64,
+    agent_id: Option<String>,
 ) -> Result<
     mpsc::Receiver<Result<mpsc::Receiver<slterm_terminal::term::TextSnapshot>, JsonRpcError>>,
     JsonRpcError,
@@ -266,6 +271,7 @@ pub(crate) fn try_send_runtime_read(
     match sender.try_send(SltermShellEvent::RuntimeRead {
         terminal_id,
         generation,
+        agent_id,
         completion,
     }) {
         Ok(()) => Ok(response),
@@ -285,11 +291,13 @@ pub(crate) fn try_send_runtime_wait(
     sender: &mpsc::SyncSender<SltermShellEvent>,
     terminal_id: slterm_workspace::TerminalId,
     generation: u64,
+    agent_id: Option<String>,
 ) -> Result<mpsc::Receiver<Result<u64, JsonRpcError>>, JsonRpcError> {
     let (completion, response) = mpsc::sync_channel(1);
     match sender.try_send(SltermShellEvent::RuntimeWait {
         terminal_id,
         generation,
+        agent_id,
         completion,
     }) {
         Ok(()) => Ok(response),

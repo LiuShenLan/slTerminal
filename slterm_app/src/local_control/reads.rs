@@ -11,11 +11,13 @@ use slterm_workspace::TerminalId;
 /// 在现实最坏 2 倍转义后仍低于 1 MiB 响应上限，不会因极限页面断开连接。
 pub(crate) const PAGE_BUDGET_BYTES: usize = 384 * 1024;
 
-/// 终端读取目标：稳定身份与 PTY 代次；两者都必须由前台复核。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// 终端读取目标：稳定身份、PTY 代次与可选 Agent 身份；都由前台复核。
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TerminalReadTarget {
     pub(crate) terminal_id: TerminalId,
     pub(crate) generation: u64,
+    /// `Some` 表示 agent.read，必须再匹配该终端当前对外身份。
+    pub(crate) agent_id: Option<String>,
 }
 
 /// service 从 worker 文本快照包装出的读取结果。

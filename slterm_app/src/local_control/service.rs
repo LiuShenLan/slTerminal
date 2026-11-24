@@ -210,7 +210,12 @@ impl LocalControlService {
         // 终端读取经前台定位 worker，再由后台等待文本快照；前台从不锁实时网格。
         let on_read: ReadCallback = Arc::new(move |target| {
             let generation = target.generation;
-            let receipt = try_send_runtime_read(&read_events, target.terminal_id, generation)?;
+            let receipt = try_send_runtime_read(
+                &read_events,
+                target.terminal_id,
+                generation,
+                target.agent_id,
+            )?;
             let worker_receipt = match receipt.recv_timeout(SNAPSHOT_REPLY_TIMEOUT) {
                 Ok(Ok(receipt)) => receipt,
                 Ok(Err(error)) => return Err(error),
@@ -244,8 +249,12 @@ impl LocalControlService {
         });
         // 终端等待只读前台最近帧 revision；每轮请求都经同一壳事件通道。
         let on_wait_status: WaitStatusCallback = Arc::new(move |target| {
-            let receipt =
-                try_send_runtime_wait(&wait_events, target.terminal_id, target.generation)?;
+            let receipt = try_send_runtime_wait(
+                &wait_events,
+                target.terminal_id,
+                target.generation,
+                target.agent_id,
+            )?;
             match receipt.recv_timeout(SNAPSHOT_REPLY_TIMEOUT) {
                 Ok(result) => result,
                 Err(RecvTimeoutError::Timeout) => Err(control_error(

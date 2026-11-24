@@ -8,18 +8,18 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use slterm_runtime_protocol::{
-    AgentCloseParams, AgentCloseRequest, AgentInputParams, AgentInputRequest, ControlScope,
-    Credential, DocumentResource, EmptyParams, EventsSubscribeParams, EventsSubscribedResponse,
-    HandoverMethod, HandoverParams, HandoverRequest, HandoverResponse, HelloMethod, HelloParams,
-    HelloRequest, HelloResponse, JsonRpcError, JsonRpcErrorData, JsonRpcId, JsonRpcRequest,
-    OperationQueryParams, OperationResource, OperationStatus, OperationWaitParams,
-    PanelGroupResource, PanelGroupSplitParams, PanelGroupSplitRequest, PanelOpenSettingsParams,
-    ProjectActivateParams, ProjectActivateRequest, ProjectResource, RuntimeEvent, RuntimeMethod,
-    RuntimeRequest, SnapshotResources, SplitDirectionWire, TerminalCloseParams,
-    TerminalCloseRequest, TerminalExecuteParams, TerminalExecuteRequest, TerminalInputParams,
-    TerminalInputRequest, TerminalReadRequest, TerminalReconnectParams, TerminalReconnectRequest,
-    TerminalRenameParams, TerminalRenameRequest, TerminalResource, TerminalWaitRequest,
-    ViewResource, ViewportSize,
+    AgentCloseParams, AgentCloseRequest, AgentInputParams, AgentInputRequest, AgentReadRequest,
+    AgentWaitRequest, ControlScope, Credential, DocumentResource, EmptyParams,
+    EventsSubscribeParams, EventsSubscribedResponse, HandoverMethod, HandoverParams,
+    HandoverRequest, HandoverResponse, HelloMethod, HelloParams, HelloRequest, HelloResponse,
+    JsonRpcError, JsonRpcErrorData, JsonRpcId, JsonRpcRequest, OperationQueryParams,
+    OperationResource, OperationStatus, OperationWaitParams, PanelGroupResource,
+    PanelGroupSplitParams, PanelGroupSplitRequest, PanelOpenSettingsParams, ProjectActivateParams,
+    ProjectActivateRequest, ProjectResource, RuntimeEvent, RuntimeMethod, RuntimeRequest,
+    SnapshotResources, SplitDirectionWire, TerminalCloseParams, TerminalCloseRequest,
+    TerminalExecuteParams, TerminalExecuteRequest, TerminalInputParams, TerminalInputRequest,
+    TerminalReadRequest, TerminalReconnectParams, TerminalReconnectRequest, TerminalRenameParams,
+    TerminalRenameRequest, TerminalResource, TerminalWaitRequest, ViewResource, ViewportSize,
 };
 
 use super::LocalControlServer;
@@ -863,6 +863,72 @@ fn runtime_terminal_input_and_execute_route_through_dispatcher() {
 }
 
 #[test]
+fn runtime_agent_read_and_wait_route_agent_identity() {
+    let (mut server, _calls) = start_dual_scope_server_with_read(|target| {
+        assert_eq!(target.agent_id.as_deref(), Some("claude:session-a"));
+        Ok(super::reads::TerminalTextSnapshot {
+            generation: target.generation,
+            revision: 2,
+            text: "agent output".to_owned(),
+        })
+    });
+    let mut stream = connect(&server);
+    stream.set_read_timeout(Some(TEST_TIMEOUT)).unwrap();
+    write_json(
+        &mut stream,
+        &hello_scoped("sk-test-runtime", ControlScope::Runtime),
+    );
+    assert!(read_line(&mut stream).contains("store"));
+
+    write_json(
+        &mut stream,
+        &RuntimeRequest::new(
+            JsonRpcId::Number(23),
+            RuntimeMethod::AgentRead,
+            AgentReadRequest {
+                agent_id: "claude:session-a".to_owned(),
+                terminal_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2d".to_owned(),
+                generation: 2,
+                cursor: None,
+            },
+        ),
+    );
+    let reply: serde_json::Value = serde_json::from_str(&read_line(&mut stream)).unwrap();
+    assert_eq!(reply["result"]["data"], "agent output");
+    assert_eq!(reply["result"]["revision"], 2);
+    server.shutdown().unwrap();
+
+    let (mut server, _calls) = start_dual_scope_server_with_wait_status(|target| {
+        assert_eq!(target.agent_id.as_deref(), Some("claude:session-a"));
+        Ok(6)
+    });
+    let mut stream = connect(&server);
+    stream.set_read_timeout(Some(TEST_TIMEOUT)).unwrap();
+    write_json(
+        &mut stream,
+        &hello_scoped("sk-test-runtime", ControlScope::Runtime),
+    );
+    assert!(read_line(&mut stream).contains("store"));
+    write_json(
+        &mut stream,
+        &RuntimeRequest::new(
+            JsonRpcId::Number(24),
+            RuntimeMethod::AgentWait,
+            AgentWaitRequest {
+                agent_id: "claude:session-a".to_owned(),
+                terminal_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2d".to_owned(),
+                generation: 2,
+                since_revision: 5,
+                timeout_ms: Some(1_000),
+            },
+        ),
+    );
+    let reply: serde_json::Value = serde_json::from_str(&read_line(&mut stream)).unwrap();
+    assert_eq!(reply["result"]["revision"], 6);
+    server.shutdown().unwrap();
+}
+
+#[test]
 fn runtime_terminal_close_and_reconnect_route_through_dispatcher() {
     let mutations = Arc::new(AtomicUsize::new(0));
     let mutations_by_callback = Arc::clone(&mutations);
@@ -1616,6 +1682,8 @@ fn runtime_describe_returns_registry_and_contract_hashes() {
             "agent.get",
             "agent.input",
             "agent.close",
+            "agent.read",
+            "agent.wait",
             "instance.handover"
         ]
     );
