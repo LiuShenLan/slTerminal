@@ -19,7 +19,7 @@ pub(crate) fn credential_target(scope: ControlScope) -> String {
     credential_target_at(scope, dirs::local_dir())
 }
 
-fn credential_target_at(scope: ControlScope, local_root: &Path) -> String {
+pub(super) fn credential_target_at(scope: ControlScope, local_root: &Path) -> String {
     let scope = match scope {
         ControlScope::Runtime => "runtime",
         ControlScope::Handover => "handover",
@@ -79,6 +79,26 @@ pub(super) fn load_or_create_at(
     let secret = generate_credential()?;
     store.store(&target, secret.as_bytes())?;
     Ok(secret)
+}
+
+/// 显式轮换：只覆盖指定作用域；调用方必须持有单实例锁或为维护子命令。
+pub(super) fn rotate_at(
+    scope: ControlScope,
+    local_root: &Path,
+    store: &dyn CredentialStore,
+) -> io::Result<SecretBytes> {
+    let target = credential_target_at(scope, local_root);
+    let secret = generate_credential()?;
+    store.store(&target, secret.as_bytes())?;
+    Ok(secret)
+}
+
+/// 维护子命令入口：轮换 Runtime 凭据，handover 凭据与目标保持不变。
+pub(crate) fn rotate_runtime_at(
+    paths: &slterm_path::AppPaths,
+    store: &dyn CredentialStore,
+) -> io::Result<()> {
+    rotate_at(ControlScope::Runtime, paths.local_root(), store).map(|_| ())
 }
 
 fn validate_credential(secret: &SecretBytes) -> io::Result<()> {
@@ -220,6 +240,34 @@ mod tests {
         );
         assert!(!target.contains("root-a"));
         assert!(!target.contains(&root.to_string_lossy().into_owned()));
+    }
+
+    /// 轮换只覆盖指定作用域；另一作用域凭据与目标保持原值。
+    #[test]
+    fn rotation_replaces_only_the_requested_scope() {
+        let root = Path::new(r"C:\slterm-test\rotate-root");
+        let store = MemoryCredentialStore::default();
+        let runtime_before =
+            secret_text(load_or_create_at(ControlScope::Runtime, root, &store).unwrap());
+        let handover_before =
+            secret_text(load_or_create_at(ControlScope::Handover, root, &store).unwrap());
+
+        let rotated = secret_text(rotate_at(ControlScope::Runtime, root, &store).unwrap());
+        assert_ne!(rotated, runtime_before, "轮换必须生成新值");
+        assert_eq!(
+            store.stored(&credential_target_at(ControlScope::Runtime, root)),
+            Some(rotated.as_bytes().to_vec())
+        );
+        assert_eq!(
+            store.stored(&credential_target_at(ControlScope::Handover, root)),
+            Some(handover_before.as_bytes().to_vec()),
+            "轮换不得改写另一作用域"
+        );
+        assert_eq!(
+            secret_text(load_credential_at(ControlScope::Runtime, root, &store).unwrap()),
+            rotated,
+            "轮换后的值必须可被客户端读取"
+        );
     }
 
     #[test]

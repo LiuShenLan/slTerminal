@@ -50,6 +50,38 @@ pub(crate) fn read_discovery() -> io::Result<DiscoveryRecord> {
     read_discovery_at(&endpoint_path())
 }
 
+/// `slterm runtime discover --json` 的唯一 token 输出：端点元数据 + Runtime 凭据。
+///
+/// 端点文件本身永不携带 token；token 只从当前用户的凭据域读取。
+pub(crate) fn discover_json_at(
+    paths: &slterm_path::AppPaths,
+    store: &dyn crate::secrets::CredentialStore,
+) -> io::Result<String> {
+    let record = read_discovery_at(&paths.local_root().join(ENDPOINT_FILE_NAME))?;
+    let token = super::credentials::load_credential_at(
+        slterm_runtime_protocol::ControlScope::Runtime,
+        paths.local_root(),
+        store,
+    )?;
+    let token = token
+        .into_string()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Runtime 凭据不是有效 UTF-8"))?;
+    let output = serde_json::json!({
+        "protocol_version": record.protocol_version,
+        "endpoint": record.endpoint.to_string(),
+        "run_id": record.run_id,
+        "process_id": record.process_id,
+        "process_created_at_ms": record.process_created_at_ms,
+        "runtime_token": token.as_str(),
+    });
+    Ok(output.to_string())
+}
+
+/// 非 JSON 摘要读取：只返回非敏感端点元数据，绝不携带 token。
+pub(crate) fn read_discovery_for(paths: &slterm_path::AppPaths) -> io::Result<DiscoveryRecord> {
+    read_discovery_at(&paths.local_root().join(ENDPOINT_FILE_NAME))
+}
+
 pub(super) fn read_discovery_at(path: &Path) -> io::Result<DiscoveryRecord> {
     let file = File::open(path)?;
     let mut contents = Vec::new();

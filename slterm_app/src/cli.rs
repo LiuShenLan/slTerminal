@@ -39,6 +39,8 @@ pub enum Subcommands {
     ClearLearning,
     /// 安装器在删除安装目录前移除受支持 AI CLI 中的 slTerminal hooks。
     SetupAi(SetupAiOptions),
+    /// Runtime v2 发现与凭据维护；不初始化 GUI。
+    Runtime(RuntimeOptions),
 }
 
 #[derive(Args, Debug)]
@@ -48,12 +50,104 @@ pub struct SetupAiOptions {
     pub remove: bool,
 }
 
+/// Runtime v2 客户端维护命令；token 只能来自凭据门面。
+#[derive(Args, Debug)]
+pub struct RuntimeOptions {
+    #[command(subcommand)]
+    pub command: RuntimeCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum RuntimeCommand {
+    /// 输出当前运行实例的发现记录；`--json` 是唯一输出 Runtime token 的入口。
+    Discover {
+        /// 输出含 Runtime token 的完整 JSON。
+        #[arg(long)]
+        json: bool,
+    },
+    /// 轮换 Runtime 凭据；应用必须未运行，handover 凭据不受影响。
+    Rotate,
+}
+
 /// 本地维护命令总入口；退出码语义与安装器、通知诊断调用方一致。
 pub(crate) fn run_local(command: Subcommands) -> i32 {
     match command {
         Subcommands::NotifyTest => crate::platform::notifications::notify_test(),
         Subcommands::ClearLearning => run_clear_learning_at(crate::platform::dirs::app_paths()),
         Subcommands::SetupAi(options) => run_setup_ai(options),
+        Subcommands::Runtime(options) => {
+            run_runtime_at(crate::platform::dirs::app_paths(), options)
+        }
+    }
+}
+
+/// Runtime 维护命令：discover 只读，rotate 必须独占实例锁。
+fn run_runtime_at(paths: &slterm_path::AppPaths, options: RuntimeOptions) -> i32 {
+    let store = crate::secrets::WindowsCredentialStore;
+    match options.command {
+        RuntimeCommand::Discover { json } => run_runtime_discover(paths, &store, json),
+        RuntimeCommand::Rotate => run_runtime_rotate(paths, &store),
+    }
+}
+
+fn run_runtime_discover(
+    paths: &slterm_path::AppPaths,
+    store: &dyn crate::secrets::CredentialStore,
+    json: bool,
+) -> i32 {
+    if json {
+        return match crate::local_control::discover_json_at(paths, store) {
+            Ok(output) => {
+                println!("{output}");
+                0
+            }
+            Err(error) => {
+                eprintln!("runtime discover: {error}");
+                1
+            }
+        };
+    }
+    match crate::local_control::read_discovery_for(paths) {
+        Ok(record) => {
+            println!("endpoint: {}", record.endpoint);
+            println!("run_id: {}", record.run_id);
+            println!("process_id: {}", record.process_id);
+            println!("process_created_at_ms: {}", record.process_created_at_ms);
+            0
+        }
+        Err(error) => {
+            eprintln!("runtime discover: {error}");
+            1
+        }
+    }
+}
+
+fn run_runtime_rotate(
+    paths: &slterm_path::AppPaths,
+    store: &dyn crate::secrets::CredentialStore,
+) -> i32 {
+    // 轮换会替换运行中会话的凭据；必须确认没有实例持有锁。
+    let _instance =
+        match crate::platform::instance::acquire_at(&paths.local_root().join("instance")) {
+            Ok(Some(guard)) => guard,
+            Ok(None) => {
+                eprintln!("runtime rotate: 应用正在运行，请先退出");
+                return 1;
+            }
+            Err(error) => {
+                eprintln!("runtime rotate: 无法取得实例锁: {error}");
+                return 1;
+            }
+        };
+    match crate::local_control::rotate_runtime_at(paths, store) {
+        Ok(()) => {
+            println!("runtime rotate: OK");
+            0
+        }
+        Err(error) => {
+            eprintln!("runtime rotate: {error}");
+            1
+        }
     }
 }
 
@@ -234,6 +328,55 @@ mod cli_tests {
                 "旧 Runtime 命令必须拒绝: {args:?}"
             );
         }
+    }
+
+    #[test]
+    fn runtime_verbs_parse_to_discover_and_rotate() {
+        match parse(["runtime", "discover", "--json"])
+            .unwrap()
+            .subcommands
+        {
+            Some(Subcommands::Runtime(options)) => match options.command {
+                RuntimeCommand::Discover { json } => assert!(json),
+                other => panic!("unexpected command: {other:?}"),
+            },
+            other => panic!("unexpected command: {other:?}"),
+        }
+        match parse(["runtime", "discover"]).unwrap().subcommands {
+            Some(Subcommands::Runtime(options)) => match options.command {
+                RuntimeCommand::Discover { json } => assert!(!json),
+                other => panic!("unexpected command: {other:?}"),
+            },
+            other => panic!("unexpected command: {other:?}"),
+        }
+        assert!(matches!(
+            parse(["runtime", "rotate"]).unwrap().subcommands,
+            Some(Subcommands::Runtime(RuntimeOptions {
+                command: RuntimeCommand::Rotate
+            }))
+        ));
+    }
+
+    #[test]
+    fn runtime_verbs_require_a_valid_subcommand() {
+        for args in [
+            vec!["runtime"],
+            vec!["runtime", "bogus"],
+            vec!["runtime", "discover", "extra"],
+            vec!["runtime", "rotate", "--json"],
+        ] {
+            assert!(
+                parse_args(args.clone()).is_err(),
+                "非法 Runtime 命令必须拒绝: {args:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_options_carry_no_token_channel() {
+        // 凭据只能来自凭据门面；命令行不接受 token 注入。
+        assert!(parse(["runtime", "discover", "--token", "sk-test"]).is_err());
+        assert!(parse(["runtime", "rotate", "--token", "sk-test"]).is_err());
     }
 
     #[test]

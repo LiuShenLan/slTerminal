@@ -1,5 +1,7 @@
 //! 本机控制面与单实例移交服务。
 
+#[cfg(test)]
+mod boundary_tests;
 mod client;
 #[cfg(test)]
 mod client_tests;
@@ -18,7 +20,11 @@ mod startup_tests;
 #[allow(unused_imports)]
 pub(crate) use client::{HandoverError, handover};
 #[allow(unused_imports)]
-pub(crate) use discovery::{DiscoveryGuard, publish, read_discovery};
+pub(crate) use credentials::rotate_runtime_at;
+#[allow(unused_imports)]
+pub(crate) use discovery::{
+    DiscoveryGuard, discover_json_at, publish, read_discovery, read_discovery_for,
+};
 #[allow(unused_imports)]
 pub(crate) use server::LocalControlServer;
 #[allow(unused_imports)]
