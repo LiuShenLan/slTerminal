@@ -12,10 +12,11 @@
 use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value, json};
+use sha2::{Digest as _, Sha256};
 
 use crate::i18n::{Message, UiLanguage};
 
-use super::CLAUDE_EVENTS;
+use super::{CLAUDE_EVENTS, DraftWriteGuard, draft_write_guard};
 
 /// handler 矩阵单源在 `slterm_hooks`；校验与表单共用同一类型锚点。
 pub(crate) use slterm_hooks::HookHandlerType;
@@ -296,6 +297,8 @@ pub(crate) struct HooksDocument {
     path: PathBuf,
     editable: Value,
     owned: Value,
+    /// 加载时的完整文件指纹；保存前重读比较，外部修改一律拒绝。
+    baseline: Option<[u8; 32]>,
 }
 
 impl HooksDocument {
@@ -312,7 +315,7 @@ impl HooksDocument {
 
     /// 显式路径加载(设置页注入端与测试 tempdir 假 home)。
     pub(crate) fn load_at(path: &Path) -> Result<Self, String> {
-        let root = read_root(path)?;
+        let (root, baseline) = read_root_with_fingerprint(path)?;
         let root = root
             .as_object()
             .ok_or_else(|| "配置文件根必须是 JSON 对象".to_owned())?;
@@ -351,6 +354,7 @@ impl HooksDocument {
             path: path.to_path_buf(),
             editable: Value::Object(editable),
             owned: Value::Object(owned),
+            baseline,
         })
     }
 
@@ -391,13 +395,13 @@ impl HooksDocument {
             .unwrap_or_default()
     }
 
-    /// 提交编辑:解析 → 校验 → 与磁盘现状合并(认领组原样保留)
-    /// → 原子写。失败零写盘。
+    /// 提交编辑:解析 → 校验 → 锁内重读并比较基线指纹 → 与磁盘现状合并
+    /// (认领组原样保留) → 原子写。任何失败零写盘，草稿由调用方保留。
     pub(crate) fn save_editable(&self, raw: &str) -> Result<(), String> {
         let editable: Value =
             serde_json::from_str(raw).map_err(|error| format!("hooks JSON 语法错误: {error}"))?;
         validate_editable(&editable)?;
-        write_editable_at(&self.path, &editable)
+        write_editable_at(&self.path, self.baseline, &editable)
     }
 
     /// 保存成功后重读(认领组可能因安装器并发自愈而变化)。
@@ -470,23 +474,35 @@ fn validate_editable(hooks: &Value) -> Result<(), String> {
     Ok(())
 }
 
-/// 读根对象:缺失 = 首次创建(空对象);损坏/IO 错误向上传播。
-fn read_root(path: &Path) -> Result<Value, String> {
-    match std::fs::read_to_string(path) {
-        Ok(raw) => serde_json::from_str(&raw)
-            .map_err(|error| format!("配置文件 JSON 损坏，拒绝编辑: {error}")),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(json!({})),
+/// 读根对象与完整文件指纹:缺失 = 首次创建(空对象、无基线);
+/// 损坏/IO 错误向上传播，不当空配置。
+fn read_root_with_fingerprint(path: &Path) -> Result<(Value, Option<[u8; 32]>), String> {
+    match std::fs::read(path) {
+        Ok(bytes) => {
+            let baseline = Some(Sha256::digest(&bytes).into());
+            let root = serde_json::from_slice(&bytes)
+                .map_err(|error| format!("配置文件 JSON 损坏，拒绝编辑: {error}"))?;
+            Ok((root, baseline))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok((json!({}), None)),
         Err(error) => Err(error.to_string()),
     }
 }
 
-/// 读-改-写主体:锁内重读 → 保留认领组、清掉旧用户组 → 追加编辑组 →
-/// 原子写。其余顶层键(hooks 以外的用户配置)原样保留。
-fn write_editable_at(path: &Path, editable: &Value) -> Result<(), String> {
+/// 读-改-写主体:锁内重读并比较基线 → 保留认领组、清掉旧用户组 →
+/// 追加编辑组 → 原子写。其余顶层键(hooks 以外的用户配置)原样保留。
+fn write_editable_at(
+    path: &Path,
+    baseline: Option<[u8; 32]>,
+    editable: &Value,
+) -> Result<(), String> {
     let _lock = crate::atomic_file::try_lock(path)
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "hooks 配置文件正被另一个操作占用，请稍后重试".to_owned())?;
-    let mut root = read_root(path)?;
+    let (mut root, current) = read_root_with_fingerprint(path)?;
+    if draft_write_guard(baseline, current) == DraftWriteGuard::ExternalModified {
+        return Err("hooks 配置文件已被外部修改，请重新加载后再保存".to_owned());
+    }
     let object = root
         .as_object_mut()
         .ok_or_else(|| "配置文件根必须是 JSON 对象".to_owned())?;
@@ -618,6 +634,40 @@ mod editor_tests {
             after["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"],
             json!("prompt-user")
         );
+    }
+
+    /// 外部修改含删除后，旧草稿保存必须拒绝且文件原样保留；重新加载才可保存。
+    #[test]
+    fn hooks_external_modification_guard_blocks_stale_save() {
+        let (_directory, path) = fixture();
+        write(&path, r#"{"hooks":{}}"#);
+        let document = HooksDocument::load_at(&path).unwrap();
+        let external = r#"{"model":"external","hooks":{"Stop":[{"hooks":[{"type":"command","command":"external"}]}]}}"#;
+        write(&path, external);
+
+        let error = document
+            .save_editable(r#"{"Stop":[{"hooks":[{"type":"command","command":"stale"}]}]}"#)
+            .unwrap_err();
+        assert!(error.contains("外部修改"), "错误必须点明外部修改: {error}");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            external,
+            "外部内容必须原样保留"
+        );
+
+        std::fs::remove_file(&path).unwrap();
+        let error = document
+            .save_editable(r#"{"Stop":[{"hooks":[{"type":"command","command":"stale"}]}]}"#)
+            .unwrap_err();
+        assert!(error.contains("外部修改"), "外部删除同样拒绝: {error}");
+        assert!(!path.exists(), "被外部删除的文件不得被静默重建");
+
+        write(&path, external);
+        let reloaded = HooksDocument::load_at(&path).unwrap();
+        reloaded
+            .save_editable(r#"{"Stop":[{"hooks":[{"type":"command","command":"fresh"}]}]}"#)
+            .unwrap();
+        assert_eq!(read(&path)["model"], json!("external"), "其他顶层键保留");
     }
 
     #[test]
