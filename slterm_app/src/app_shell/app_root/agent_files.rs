@@ -193,11 +193,8 @@ impl AgentFilesRuntime {
         self.filter.push_str(filter);
     }
 
-    pub(super) fn filter(&self) -> &str {
-        &self.filter
-    }
-
     /// 当前显示根的显示名，调试与测试共用。
+    #[cfg(all(test, feature = "gpui-test-support"))]
     pub(super) fn visible_root_names(&self) -> Vec<String> {
         self.roots
             .iter()
