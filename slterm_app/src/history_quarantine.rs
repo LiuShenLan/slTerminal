@@ -4,7 +4,11 @@
 //! 悬停、聚焦、关闭视图、退出或重启都不延长也不提前永久化。
 //! 文件复制、来源删除与启动对账由后续接线消费本状态机。
 
+use std::io;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
+
+use sha2::{Digest as _, Sha256};
 
 /// 绝对撤销窗口：从批次完成时间起算，不随页面活动顺延。
 pub(crate) const UNDO_WINDOW: Duration = Duration::from_secs(5);
@@ -88,6 +92,155 @@ pub(crate) fn precheck_undo_target(target_exists: bool) -> UndoTargetDecision {
     } else {
         UndoTargetDecision::Proceed
     }
+}
+
+/// 隔离清单单项：原始位置、隔离副本与确认删除时的来源指纹。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct QuarantineEntry {
+    pub(crate) source: PathBuf,
+    pub(crate) copy: PathBuf,
+    pub(crate) source_fingerprint: [u8; 32],
+}
+
+/// 一个隔离批次的完整材料；撤销与到期清理都以整批为单位。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct QuarantineBatchMaterial {
+    pub(crate) id: QuarantineBatchId,
+    pub(crate) entries: Vec<QuarantineEntry>,
+}
+
+/// 单项目撤销预检失败原因；任一失败即整批零恢复。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum UndoBlockReason {
+    /// 目标位置已有外部对象（新增或修改）。
+    TargetExists,
+    /// 隔离副本已不存在。
+    CopyMissing,
+    /// 隔离副本指纹与确认删除时不一致。
+    CopyCorrupted,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct UndoBlockage {
+    pub(crate) entry: usize,
+    pub(crate) reason: UndoBlockReason,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum UndoRestoreOutcome {
+    /// 全部恢复；副本材料保留，到期清理单独处理。
+    Restored,
+    /// 预检失败：零恢复，来源与副本原样保留供重试。
+    Blocked(Vec<UndoBlockage>),
+}
+
+fn sha256(bytes: &[u8]) -> [u8; 32] {
+    Sha256::digest(bytes).into()
+}
+
+/// 全批撤销：先逐项预检目标不存在与副本完整性，全部通过才逐项恢复。
+///
+/// 预检失败返回 [`UndoRestoreOutcome::Blocked`] 且零写入；恢复阶段错误
+/// 按 `Err` 上抛，已创建的部分来源保留（与副本构成双份材料）供人工处理。
+pub(crate) fn restore_quarantine_batch(
+    material: &QuarantineBatchMaterial,
+) -> io::Result<UndoRestoreOutcome> {
+    let mut blockages = Vec::new();
+    for (index, entry) in material.entries.iter().enumerate() {
+        if precheck_undo_target(entry.source.exists()) == UndoTargetDecision::ExternalTarget {
+            blockages.push(UndoBlockage {
+                entry: index,
+                reason: UndoBlockReason::TargetExists,
+            });
+            continue;
+        }
+        match std::fs::read(&entry.copy) {
+            Ok(bytes) if sha256(&bytes) == entry.source_fingerprint => {}
+            Ok(_) => blockages.push(UndoBlockage {
+                entry: index,
+                reason: UndoBlockReason::CopyCorrupted,
+            }),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                blockages.push(UndoBlockage {
+                    entry: index,
+                    reason: UndoBlockReason::CopyMissing,
+                });
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    if !blockages.is_empty() {
+        return Ok(UndoRestoreOutcome::Blocked(blockages));
+    }
+    for entry in &material.entries {
+        restore_entry(entry)?;
+    }
+    Ok(UndoRestoreOutcome::Restored)
+}
+
+/// 单项目恢复：`create_new` 保证不覆盖预检后新出现的外部对象。
+fn restore_entry(entry: &QuarantineEntry) -> io::Result<()> {
+    let mut target = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&entry.source)?;
+    let mut copy = std::fs::File::open(&entry.copy)?;
+    if let Err(error) = io::copy(&mut copy, &mut target) {
+        drop(target);
+        let _ = std::fs::remove_file(&entry.source);
+        return Err(error);
+    }
+    target.sync_all()?;
+    Ok(())
+}
+
+/// 执行删除的隔离阶段：写副本并校验 → 全批复核来源指纹后删除来源。
+///
+/// 副本写入或校验失败时不删除任何来源；返回材料供撤销与到期清理。
+pub(crate) fn quarantine_batch(
+    store: &Path,
+    id: QuarantineBatchId,
+    items: &[(PathBuf, [u8; 32])],
+) -> io::Result<QuarantineBatchMaterial> {
+    std::fs::create_dir_all(store)?;
+    let mut entries = Vec::with_capacity(items.len());
+    for (index, (source, fingerprint)) in items.iter().enumerate() {
+        let bytes = std::fs::read(source)?;
+        if sha256(&bytes) != *fingerprint {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "来源指纹与确认删除时不一致",
+            ));
+        }
+        let file_name = source
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "来源缺少有效名称"))?;
+        let copy = store.join(format!("{}-{index}-{file_name}", id.0));
+        crate::atomic_file::write(&copy, &bytes)?;
+        if sha256(&std::fs::read(&copy)?) != *fingerprint {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "隔离副本校验失败",
+            ));
+        }
+        entries.push(QuarantineEntry {
+            source: source.clone(),
+            copy,
+            source_fingerprint: *fingerprint,
+        });
+    }
+    for entry in &entries {
+        let bytes = std::fs::read(&entry.source)?;
+        if sha256(&bytes) != entry.source_fingerprint {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "来源在隔离期间被外部修改",
+            ));
+        }
+        std::fs::remove_file(&entry.source)?;
+    }
+    Ok(QuarantineBatchMaterial { id, entries })
 }
 
 /// 撤销点击的重新检查结论；只有 `Allowed` 才可执行恢复动作。
@@ -232,6 +385,162 @@ impl HistoryQuarantine {
 mod tests {
     use super::*;
     use std::time::{Duration, SystemTime};
+
+    fn sha(bytes: &[u8]) -> [u8; 32] {
+        use sha2::{Digest as _, Sha256};
+        Sha256::digest(bytes).into()
+    }
+
+    fn stage_material(
+        directory: &std::path::Path,
+        items: &[(&str, &str)],
+    ) -> QuarantineBatchMaterial {
+        let store = directory.join("quarantine");
+        std::fs::create_dir_all(&store).unwrap();
+        let entries = items
+            .iter()
+            .map(|(name, content)| {
+                let copy = store.join(name);
+                std::fs::write(&copy, content).unwrap();
+                QuarantineEntry {
+                    source: directory.join(name),
+                    copy,
+                    source_fingerprint: sha(content.as_bytes()),
+                }
+            })
+            .collect();
+        QuarantineBatchMaterial {
+            id: batch(11),
+            entries,
+        }
+    }
+
+    /// 目标外部新增、副本缺失或指纹不符时零恢复并保留全部材料。
+    #[test]
+    fn quarantine_undo_rejects_external_target_at_file_level() {
+        let directory = tempfile::tempdir().unwrap();
+        let material = stage_material(directory.path(), &[("a.txt", "old-a"), ("b.txt", "old-b")]);
+
+        std::fs::write(directory.path().join("a.txt"), "external").unwrap();
+        let outcome = restore_quarantine_batch(&material).unwrap();
+        assert_eq!(
+            outcome,
+            UndoRestoreOutcome::Blocked(vec![UndoBlockage {
+                entry: 0,
+                reason: UndoBlockReason::TargetExists,
+            }]),
+            "外部目标必须拒绝恢复"
+        );
+        assert_eq!(
+            std::fs::read_to_string(directory.path().join("a.txt")).unwrap(),
+            "external",
+            "外部内容不得被覆盖"
+        );
+        assert!(
+            !directory.path().join("b.txt").exists(),
+            "任一预检失败必须零恢复"
+        );
+        assert!(material.entries.iter().all(|entry| entry.copy.exists()));
+
+        std::fs::remove_file(directory.path().join("a.txt")).unwrap();
+        std::fs::write(&material.entries[1].copy, "tampered").unwrap();
+        let outcome = restore_quarantine_batch(&material).unwrap();
+        assert_eq!(
+            outcome,
+            UndoRestoreOutcome::Blocked(vec![UndoBlockage {
+                entry: 1,
+                reason: UndoBlockReason::CopyCorrupted,
+            }]),
+            "副本指纹不符必须拒绝恢复"
+        );
+        assert!(!directory.path().join("a.txt").exists(), "拒绝时零恢复");
+
+        std::fs::remove_file(&material.entries[1].copy).unwrap();
+        let outcome = restore_quarantine_batch(&material).unwrap();
+        assert_eq!(
+            outcome,
+            UndoRestoreOutcome::Blocked(vec![UndoBlockage {
+                entry: 1,
+                reason: UndoBlockReason::CopyMissing,
+            }]),
+            "副本缺失必须拒绝恢复"
+        );
+
+        std::fs::write(&material.entries[1].copy, "old-b").unwrap();
+        assert_eq!(
+            restore_quarantine_batch(&material).unwrap(),
+            UndoRestoreOutcome::Restored
+        );
+        assert_eq!(
+            std::fs::read_to_string(directory.path().join("a.txt")).unwrap(),
+            "old-a"
+        );
+        assert_eq!(
+            std::fs::read_to_string(directory.path().join("b.txt")).unwrap(),
+            "old-b"
+        );
+        assert!(
+            material.entries.iter().all(|entry| entry.copy.exists()),
+            "撤销后副本材料保留，到期清理单独处理"
+        );
+    }
+
+    /// 端到端：删除形成批次 → 完成窗口内撤销恢复；窗口内外部重建时整批拒绝。
+    #[test]
+    fn integration_history_delete_undo() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = directory.path().join("quarantine");
+        let sources = [
+            (directory.path().join("one.jsonl"), b"one".to_vec()),
+            (directory.path().join("two.jsonl"), b"two".to_vec()),
+        ];
+        for (path, bytes) in &sources {
+            std::fs::write(path, bytes).unwrap();
+        }
+        let items = sources
+            .iter()
+            .map(|(path, bytes)| (path.clone(), sha(bytes)))
+            .collect::<Vec<_>>();
+
+        let material = quarantine_batch(&store, batch(12), &items).unwrap();
+        for (path, _) in &sources {
+            assert!(!path.exists(), "成功隔离后来源必须删除");
+        }
+        assert_eq!(material.entries.len(), 2);
+        assert!(material.entries.iter().all(|entry| entry.copy.exists()));
+
+        let mut service = HistoryQuarantine::new();
+        assert!(service.start_batch(material.id));
+        assert!(service.complete_batch(material.id, at(100)));
+        assert_eq!(
+            service.try_begin_undo(material.id, at(104)),
+            UndoDecision::Allowed
+        );
+        assert_eq!(
+            restore_quarantine_batch(&material).unwrap(),
+            UndoRestoreOutcome::Restored,
+            "窗口内撤销必须恢复全部来源"
+        );
+        assert_eq!(
+            std::fs::read(&sources[0].0).unwrap(),
+            b"one",
+            "恢复内容必须来自隔离副本"
+        );
+
+        let material = quarantine_batch(&store, batch(13), &items).unwrap();
+        std::fs::write(&sources[0].0, b"external").unwrap();
+        let outcome = restore_quarantine_batch(&material).unwrap();
+        assert_eq!(
+            outcome,
+            UndoRestoreOutcome::Blocked(vec![UndoBlockage {
+                entry: 0,
+                reason: UndoBlockReason::TargetExists,
+            }])
+        );
+        assert_eq!(std::fs::read(&sources[0].0).unwrap(), b"external");
+        assert!(!sources[1].0.exists(), "整批拒绝时不得部分恢复");
+        assert!(material.entries.iter().all(|entry| entry.copy.exists()));
+    }
 
     fn at(seconds: u64) -> SystemTime {
         SystemTime::UNIX_EPOCH + Duration::from_secs(seconds)
