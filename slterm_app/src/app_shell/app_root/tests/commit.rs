@@ -247,3 +247,181 @@ fn commit_view_state_restore(cx: &mut TestAppContext) {
         assert!(view.commit_filter().is_empty(), "过滤必须清除");
     });
 }
+
+fn staged_and_unstaged_repository(temp: &tempfile::TempDir) -> (std::path::PathBuf, CanonicalPath) {
+    let repository = temp.path().join("repo");
+    std::fs::create_dir(&repository).unwrap();
+    super::gitshow::git(&repository, &["init", "--quiet"]);
+    super::gitshow::git(&repository, &["config", "core.autocrlf", "false"]);
+    super::gitshow::git(&repository, &["config", "user.name", "slTerminal Test"]);
+    super::gitshow::git(
+        &repository,
+        &["config", "user.email", "slterm-test@example.invalid"],
+    );
+    std::fs::write(repository.join("tracked.txt"), "base\n").unwrap();
+    super::gitshow::git(&repository, &["add", "--", "tracked.txt"]);
+    super::gitshow::git(&repository, &["commit", "--quiet", "-m", "base"]);
+    std::fs::write(repository.join("tracked.txt"), "staged\n").unwrap();
+    super::gitshow::git(&repository, &["add", "--", "tracked.txt"]);
+    std::fs::write(repository.join("tracked.txt"), "worktree\n").unwrap();
+    let file =
+        CanonicalPath::new(dunce::canonicalize(repository.join("tracked.txt")).unwrap()).unwrap();
+    (repository, file)
+}
+
+#[gpui::test]
+fn commit_rollback_preserves_staged_changes(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let (repository, file) = staged_and_unstaged_repository(&temp);
+    let (root, mut window, _) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, repository.to_str().unwrap());
+    let commit = open_commit(&root, &mut window, cx);
+    window.update(|window, cx| {
+        commit.update(cx, |view, cx| view.commit_rollback(&file, window, cx));
+    });
+    window.run_until_parked();
+    draw_frame(&mut window);
+    window.run_until_parked();
+
+    assert_eq!(
+        std::fs::read_to_string(repository.join("tracked.txt")).unwrap(),
+        "staged\n",
+        "回滚必须只放弃未暂存变化"
+    );
+    let staged = super::gitshow::git(&repository, &["diff", "--cached", "--stat"]);
+    assert!(!staged.stdout.is_empty(), "staged 差异必须保留");
+    let unstaged = super::gitshow::git(&repository, &["diff", "--stat"]);
+    assert!(unstaged.stdout.is_empty(), "未暂存差异必须被放弃");
+}
+
+#[gpui::test]
+fn commit_rollback_document_guard(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let (repository, file) = staged_and_unstaged_repository(&temp);
+    let (root, mut window, _) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, repository.to_str().unwrap());
+    super::documents::open_document(&root, &mut window, PROJECT_A, GROUP_A, file.clone());
+    let document = root.read_with(cx, |root, _| root.snapshot().documents().next().unwrap().0);
+    let editor = root.read_with(cx, |root, cx| {
+        root.projects[&project_id(PROJECT_A)]
+            .read(cx)
+            .panels
+            .values()
+            .find_map(|panel| panel.editor().cloned())
+            .unwrap()
+    });
+    window.update(|window, cx| {
+        editor.update(cx, |view, cx| {
+            let length = view.input_text_for_test().len();
+            gpui::EntityInputHandler::replace_text_in_range(
+                view,
+                Some(0..length),
+                "dirty draft\n",
+                window,
+                cx,
+            );
+        });
+    });
+    let commit = open_commit(&root, &mut window, cx);
+    window.update(|window, cx| {
+        commit.update(cx, |view, cx| view.commit_rollback(&file, window, cx));
+    });
+    window.run_until_parked();
+
+    assert_eq!(
+        std::fs::read_to_string(repository.join("tracked.txt")).unwrap(),
+        "worktree\n",
+        "脏 Document 未取得决定前不得执行 Git 回滚"
+    );
+    assert_eq!(
+        editor.read_with(cx, |view, _| view.input_text_for_test()),
+        "dirty draft\n",
+        "脏正文必须保留"
+    );
+    assert!(root.read_with(cx, |root, _| {
+        root.documents.session(document).unwrap().is_dirty()
+    }));
+}
+
+#[gpui::test]
+fn commit_rechecks_state_before_rollback(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let (repository, file) = staged_and_unstaged_repository(&temp);
+    let (root, mut window, _) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, repository.to_str().unwrap());
+    let commit = open_commit(&root, &mut window, cx);
+    // 列表快照仍显示未暂存修改；执行前外部把文件删除，形态不再是 modified。
+    std::fs::remove_file(repository.join("tracked.txt")).unwrap();
+    window.update(|window, cx| {
+        commit.update(cx, |view, cx| view.commit_rollback(&file, window, cx));
+    });
+    window.run_until_parked();
+    draw_frame(&mut window);
+    window.run_until_parked();
+
+    assert!(
+        !repository.join("tracked.txt").exists(),
+        "写前重检发现形态变化必须中止恢复"
+    );
+}
+
+#[gpui::test]
+fn commit_deleted_restores_index_version(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let repository = temp.path().join("repo");
+    std::fs::create_dir(&repository).unwrap();
+    super::gitshow::git(&repository, &["init", "--quiet"]);
+    super::gitshow::git(&repository, &["config", "core.autocrlf", "false"]);
+    super::gitshow::git(&repository, &["config", "user.name", "slTerminal Test"]);
+    super::gitshow::git(
+        &repository,
+        &["config", "user.email", "slterm-test@example.invalid"],
+    );
+    std::fs::write(repository.join("gone.txt"), "indexed\n").unwrap();
+    super::gitshow::git(&repository, &["add", "--", "gone.txt"]);
+    super::gitshow::git(&repository, &["commit", "--quiet", "-m", "base"]);
+    std::fs::remove_file(repository.join("gone.txt")).unwrap();
+    let repo_root = CanonicalPath::new(dunce::canonicalize(&repository).unwrap()).unwrap();
+    let file = CanonicalPath::new(repo_root.as_path().join("gone.txt")).unwrap();
+    let (root, mut window, _) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, repository.to_str().unwrap());
+    let commit = open_commit(&root, &mut window, cx);
+    window.update(|window, cx| {
+        commit.update(cx, |view, cx| view.commit_rollback(&file, window, cx));
+    });
+    window.run_until_parked();
+    draw_frame(&mut window);
+    window.run_until_parked();
+
+    assert_eq!(
+        std::fs::read_to_string(repository.join("gone.txt")).unwrap(),
+        "indexed\n",
+        "删除回滚必须从索引恢复"
+    );
+}
+
+#[gpui::test]
+fn commit_rollback_capability_union(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let (repository, _file) = staged_and_unstaged_repository(&temp);
+    let project = repository.join("nested/project");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::write(project.join("inside.txt"), "inside\n").unwrap();
+    let outside =
+        CanonicalPath::new(dunce::canonicalize(repository.join("tracked.txt")).unwrap()).unwrap();
+    let (root, mut window, _) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, project.to_str().unwrap());
+    let commit = open_commit(&root, &mut window, cx);
+    window.update(|window, cx| {
+        commit.update(cx, |view, cx| view.commit_rollback(&outside, window, cx));
+    });
+    window.run_until_parked();
+    draw_frame(&mut window);
+    window.run_until_parked();
+
+    assert_eq!(
+        std::fs::read_to_string(repository.join("tracked.txt")).unwrap(),
+        "worktree\n",
+        "项目根外目标没有写能力，不得回滚"
+    );
+}

@@ -326,17 +326,17 @@
 
 | 验收场景 | 目标测试例名 | 状态 |
 |---|---|---|
-| staged 与 unstaged 并存时回滚保留 staged 差异 | `commit_rollback_preserves_staged_changes` | 待实现 |
-| 纯 staged、staged rename 和 conflict 禁用通用回滚 | `commit_rollback_disabled_shapes` | 待实现 |
-| 未暂存 deleted 从索引版本恢复而非 HEAD | `commit_deleted_restores_index_version` | 待实现 |
+| staged 与 unstaged 并存时回滚保留 staged 差异 | `commit_rollback_preserves_staged_changes` | 已自动化 |
+| 纯 staged、staged rename 和 conflict 禁用通用回滚 | `commit_rollback_disabled_shapes` | 已自动化 |
+| 未暂存 deleted 从索引版本恢复而非 HEAD | `commit_deleted_restores_index_version` | 已自动化 |
 | 未暂存 rename 恢复旧路径并清除新路径且不改索引 | `commit_unstaged_rename_rollback` | 待实现 |
-| 回滚前完成脏 Document 守卫且取消不写盘 | `commit_rollback_document_guard` | 待实现 |
+| 回滚前完成脏 Document 守卫且取消不写盘 | `commit_rollback_document_guard` | 已自动化 |
 | Commit 打开已有脏 Document 的 Diff 使用共享文本 | `commit_opens_shared_document_diff` | 已自动化 |
 | GitShow 创建后不随 HEAD 或项目根变化 | `commit_gitshow_fixed_version` | 已自动化 |
 | staged added 删除先取消暂存再进回收站 | `commit_staged_added_delete_sequence` | 待实现 |
 | 无回收站时永久删除必须再次明确确认 | `commit_untracked_permanent_delete_requires_confirmation` | 待实现 |
-| RepoRoot 只读与另一可写根按能力并集判定 | `commit_rollback_capability_union` | 待实现 |
-| 菜单打开后状态变化会在写前重检并中止 | `commit_rechecks_state_before_rollback` | 待实现 |
+| RepoRoot 只读与另一可写根按能力并集判定 | `commit_rollback_capability_union` | 已自动化 |
+| 菜单打开后状态变化会在写前重检并中止 | `commit_rechecks_state_before_rollback` | 已自动化 |
 | 折叠、ignored 和滚动恢复且过滤与错误清除 | `commit_view_state_restore` | 已自动化 |
 
 ### Markdown

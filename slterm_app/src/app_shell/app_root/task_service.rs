@@ -30,6 +30,7 @@ pub(crate) enum TaskId {
     CommitStatus,
     CommitDiff,
     CommitGitShow,
+    CommitRollback,
     #[allow(dead_code)] // 消费点归 Diff 固定 HEAD 后台读取。
     DiffHead(slterm_workspace::PanelId),
     MarkdownLink(uuid::Uuid),

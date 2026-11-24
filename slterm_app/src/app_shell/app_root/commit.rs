@@ -44,6 +44,8 @@ pub(super) struct CommitRow {
     pub repo_relative: String,
     pub name: String,
     pub group: CommitGroup,
+    pub index: char,
+    pub worktree: char,
     pub status_label: String,
     pub conflict: bool,
     pub ignored: bool,
@@ -78,6 +80,12 @@ pub(super) enum CommitIntent {
         project_id: ProjectId,
         root: CanonicalPath,
         generation: u64,
+    },
+    Rollback {
+        project_id: ProjectId,
+        root: CanonicalPath,
+        row: CommitRow,
+        kind: RollbackKind,
     },
 }
 
@@ -133,6 +141,8 @@ pub(super) fn build_rows(
             repo_relative: relative,
             name,
             group,
+            index: entry.index,
+            worktree: entry.worktree,
             status_label: status_label(entry.index, entry.worktree, entry.conflict),
             conflict: entry.conflict,
             ignored: entry.ignored,
@@ -146,6 +156,47 @@ pub(super) fn build_rows(
             .then_with(|| left.repo_relative.cmp(&right.repo_relative))
     });
     rows
+}
+
+/// 通用回滚只覆盖精确的未暂存 modified/deleted。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum RollbackKind {
+    Modified,
+    Deleted,
+}
+
+/// 不具备可放弃的未暂存变化或形态不可靠时明确禁用。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum RollbackDisabled {
+    Conflict,
+    StagedOnly,
+    StagedRename,
+    NotTracked,
+    Indeterminate,
+}
+
+pub(super) fn rollback_availability(row: &CommitRow) -> Result<RollbackKind, RollbackDisabled> {
+    if row.conflict {
+        return Err(RollbackDisabled::Conflict);
+    }
+    if row.ignored || row.untracked {
+        return Err(RollbackDisabled::NotTracked);
+    }
+    if row.index == 'R' {
+        return Err(RollbackDisabled::StagedRename);
+    }
+    if row.worktree == 'R' {
+        return Err(RollbackDisabled::Indeterminate);
+    }
+    if matches!(row.index, 'A' | 'D') {
+        return Err(RollbackDisabled::StagedOnly);
+    }
+    match row.worktree {
+        'M' => Ok(RollbackKind::Modified),
+        'D' => Ok(RollbackKind::Deleted),
+        '.' | ' ' => Err(RollbackDisabled::StagedOnly),
+        _ => Err(RollbackDisabled::Indeterminate),
+    }
 }
 
 /// 打开映射：ignored 不打开；untracked/added 走普通文档；
@@ -165,10 +216,14 @@ fn open_kind(row: &CommitRow) -> Option<CommitOpenKind> {
 
 pub(super) struct CommitRuntime {
     project: ProjectId,
-    root: Option<CanonicalPath>,
+    /// 活跃项目根：写能力与打开落点只认它。
+    project_root: Option<CanonicalPath>,
+    /// 仓库数据根：行路径一律相对它拼接。
+    repo_root: Option<CanonicalPath>,
     rows: Vec<CommitRow>,
     filter: String,
     show_ignored: bool,
+    selected: Option<CanonicalPath>,
     collapsed: [bool; 3],
     scroll_handle: gpui::ScrollHandle,
     restoring_scroll: Option<f64>,
@@ -184,10 +239,12 @@ impl CommitRuntime {
     fn new(project: ProjectId) -> Self {
         Self {
             project,
-            root: None,
+            project_root: None,
+            repo_root: None,
             rows: Vec::new(),
             filter: String::new(),
             show_ignored: false,
+            selected: None,
             collapsed: [false, false, false],
             scroll_handle: gpui::ScrollHandle::new(),
             restoring_scroll: None,
@@ -254,7 +311,7 @@ impl SideView {
             _ => None,
         };
         let unchanged = self.commit.as_ref().is_some_and(|runtime| {
-            runtime.project == project && runtime.root.as_ref() == Some(&root)
+            runtime.project == project && runtime.project_root.as_ref() == Some(&root)
         });
         if unchanged {
             return;
@@ -266,8 +323,9 @@ impl SideView {
             .unwrap_or(1);
         let mut runtime = CommitRuntime::new(project);
         runtime.generation = generation;
-        runtime.root = Some(root.clone());
+        runtime.project_root = Some(root.clone());
         runtime.filter.clear();
+        runtime.selected = None;
         runtime.rows.clear();
         runtime.loading = true;
         if let Some(restored) = restored {
@@ -339,20 +397,11 @@ impl SideView {
         if runtime.generation != generation {
             return;
         }
-        if repo_root.as_path()
-            != runtime
-                .root
-                .as_ref()
-                .map(|root| root.as_path())
-                .unwrap_or(repo_root.as_path())
-        {
-            // 显示根可用于后续投影；树与列表仍按当前视图代次结算。
-        }
         runtime.loading = false;
         match snapshot {
             Ok(snapshot) => {
-                let root = runtime.root.clone().expect("数据根必须存在");
-                runtime.rows = build_rows(&root, &snapshot);
+                runtime.repo_root = Some(repo_root.clone());
+                runtime.rows = build_rows(&repo_root, &snapshot);
                 runtime.stale = false;
             }
             Err(()) => {
@@ -443,8 +492,72 @@ impl SideView {
             .unwrap_or_default()
     }
 
+    pub(super) fn commit_generation_for_refresh(&self) -> Option<u64> {
+        self.commit.as_ref().map(|runtime| runtime.generation)
+    }
+
     pub(super) fn commit_scroll_handle(&self) -> Option<&gpui::ScrollHandle> {
         self.commit.as_ref().map(|runtime| &runtime.scroll_handle)
+    }
+
+    /// 单击选中不打开；选中行是 Ctrl+R 回滚与后续菜单动作的目标。
+    pub(super) fn commit_select_at(&mut self, path: &CanonicalPath, cx: &mut Context<'_, Self>) {
+        let Some(runtime) = &mut self.commit else {
+            return;
+        };
+        if runtime.row_for_path(path).is_none() {
+            return;
+        }
+        runtime.selected = Some(path.clone());
+        cx.notify();
+    }
+
+    /// 键盘入口：对选中行请求回滚。
+    pub(super) fn commit_rollback_selected(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(path) = self
+            .commit
+            .as_ref()
+            .and_then(|runtime| runtime.selected.clone())
+        else {
+            return;
+        };
+        self.commit_rollback(&path, window, cx);
+    }
+
+    /// 回滚入口：只有可放弃的未暂存变化才产生意图；脏 Document 由 AppRoot 拒绝。
+    pub(super) fn commit_rollback(
+        &mut self,
+        path: &CanonicalPath,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(runtime) = &self.commit else {
+            return;
+        };
+        let Some(row) = runtime.row_for_path(path).cloned() else {
+            return;
+        };
+        let Ok(kind) = rollback_availability(&row) else {
+            return;
+        };
+        let Some(root) = runtime.repo_root.clone() else {
+            return;
+        };
+        let project_id = runtime.project;
+        self.dispatch_commit_intent(
+            CommitIntent::Rollback {
+                project_id,
+                root,
+                row,
+                kind,
+            },
+            window,
+            cx,
+        );
     }
 
     /// 激活行：按状态映射打开 Document、Diff 或 GitShow。
@@ -463,7 +576,7 @@ impl SideView {
         let Some(kind) = open_kind(&row) else {
             return;
         };
-        let Some(root) = runtime.root.clone() else {
+        let Some(root) = runtime.repo_root.clone() else {
             return;
         };
         let project_id = runtime.project;
@@ -609,6 +722,8 @@ pub(super) fn render_commit(view: &mut SideView, cx: &mut Context<'_, SideView>)
                         cx.listener(move |view, event: &MouseDownEvent, window, cx| {
                             if event.click_count >= 2 {
                                 view.commit_activate_row(&path, window, cx);
+                            } else {
+                                view.commit_select_at(&path, cx);
                             }
                         }),
                     )
@@ -681,6 +796,12 @@ impl AppRoot {
                 root,
                 generation,
             } => self.start_commit_status(project_id, root, generation, window, cx),
+            CommitIntent::Rollback {
+                project_id,
+                root,
+                row,
+                kind,
+            } => self.start_commit_rollback(project_id, root, row, kind, window, cx),
             CommitIntent::Open {
                 project_id,
                 root,
@@ -912,6 +1033,131 @@ impl AppRoot {
         );
     }
 
+    /// 回滚前先过脏 Document 守卫，再后台重检状态并只从索引恢复工作区。
+    fn start_commit_rollback(
+        &mut self,
+        project_id: ProjectId,
+        root: CanonicalPath,
+        row: CommitRow,
+        kind: RollbackKind,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if self.tasks.is_registered(TaskId::CommitRollback) {
+            return;
+        }
+        if self.snapshot.registry().active() != Some(project_id) {
+            return;
+        }
+        // 写能力只来自项目根；仓库根兄弟位置仅可读，不得借此扩大写授权。
+        let Some(project_root) = self
+            .snapshot
+            .registry()
+            .project(project_id)
+            .map(|project| project.root().clone())
+        else {
+            return;
+        };
+        if !row.path.as_path().starts_with(project_root.as_path()) {
+            return;
+        }
+        // 脏 Document 未取得保存／丢弃决定前不得触碰工作区。
+        if let Some(document_id) = self.document_id_at(&row.path)
+            && self
+                .documents
+                .session(document_id)
+                .is_some_and(|session| session.is_dirty())
+        {
+            return;
+        }
+        let executor = cx.background_executor().clone();
+        let window_handle = window.window_handle();
+        let repo_root = root.clone();
+        let repo_relative = row.repo_relative.clone();
+        let expected_worktree = match kind {
+            RollbackKind::Modified => 'M',
+            RollbackKind::Deleted => 'D',
+        };
+        self.tasks
+            .register_with(
+                TaskId::CommitRollback,
+                CancellationToken::new(),
+                move || {
+                    let rolling_back = executor.spawn(async move {
+                        let grants = super::explorer::status_grants(&repo_root)?;
+                        let snapshot =
+                            crate::git::GitFacade::default().status(&repo_root, &grants, 0)?;
+                        // 写前重检：未暂存形态必须仍在，且索引形态未变为新增/删除/改名/冲突。
+                        let current = snapshot
+                            .entries
+                            .iter()
+                            .find(|entry| entry.path.trim_matches('/') == repo_relative)
+                            .ok_or_else(|| {
+                                crate::git::GitError::Command("回滚目标状态已变化".to_owned())
+                            })?;
+                        let changed = current.conflict
+                            || current.worktree != expected_worktree
+                            || matches!(current.index, 'A' | 'D' | 'R' | 'U');
+                        if changed {
+                            return Err(crate::git::GitError::Command(
+                                "回滚目标状态已变化".to_owned(),
+                            ));
+                        }
+                        crate::git::restore_from_index(
+                            repo_root.as_path(),
+                            &[repo_relative.as_str()],
+                        )
+                    });
+                    cx.spawn(async move |this, cx| {
+                        let result = rolling_back.await;
+                        let _ = window_handle.update(cx, |_, window, cx| {
+                            let _ = this.update(cx, |root, cx| {
+                                root.finish_commit_rollback(project_id, result, window, cx)
+                            });
+                        });
+                    })
+                },
+            )
+            .expect("CommitRollback 单任务登记必须唯一");
+    }
+
+    fn finish_commit_rollback(
+        &mut self,
+        project_id: ProjectId,
+        result: Result<(), crate::git::GitError>,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.tasks.complete(TaskId::CommitRollback);
+        let _ = (project_id, result);
+        // 无论成功或失败都刷新真实现状；工作区重载由既有 watcher 外部变化链完成。
+        if let Some(project) = self.snapshot.registry().active() {
+            let root = self
+                .snapshot
+                .registry()
+                .project(project)
+                .map(|project| project.root().clone());
+            if let Some(root) = root {
+                let generation = self
+                    .side_views
+                    .instance(slterm_workspace::SideViewId::Commit)
+                    .and_then(|instance| instance.read(cx).commit_generation_for_refresh());
+                if let Some(generation) = generation {
+                    let _ = window;
+                    self.handle_commit_intent(
+                        CommitIntent::LoadStatus {
+                            project_id: project,
+                            root,
+                            generation,
+                        },
+                        window,
+                        cx,
+                    );
+                }
+            }
+        }
+    }
+
     fn start_commit_gitshow(
         &mut self,
         project_id: ProjectId,
@@ -1007,4 +1253,76 @@ fn repo_path_from(
         .ok_or(())?
         .join("/");
     text.parse().map_err(|_| ())
+}
+
+#[cfg(test)]
+mod commit_rollback_tests {
+    use super::*;
+
+    fn row(
+        index: char,
+        worktree: char,
+        conflict: bool,
+        untracked: bool,
+        ignored: bool,
+    ) -> CommitRow {
+        CommitRow {
+            path: CanonicalPath::new("C:/repo/file.txt").unwrap(),
+            repo_relative: "file.txt".to_owned(),
+            name: "file.txt".to_owned(),
+            group: if untracked {
+                CommitGroup::Unversioned
+            } else {
+                CommitGroup::Changes
+            },
+            index,
+            worktree,
+            status_label: status_label(index, worktree, conflict),
+            conflict,
+            ignored,
+            untracked,
+            renamed_from: None,
+        }
+    }
+
+    /// 回滚只覆盖精确的未暂存 modified/deleted；其余形态一律明确禁用。
+    #[test]
+    fn commit_rollback_disabled_shapes() {
+        assert_eq!(
+            rollback_availability(&row('.', 'M', false, false, false)),
+            Ok(RollbackKind::Modified)
+        );
+        assert_eq!(
+            rollback_availability(&row('.', 'D', false, false, false)),
+            Ok(RollbackKind::Deleted)
+        );
+        assert_eq!(
+            rollback_availability(&row('M', '.', false, false, false)),
+            Err(RollbackDisabled::StagedOnly)
+        );
+        assert_eq!(
+            rollback_availability(&row('D', '.', false, false, false)),
+            Err(RollbackDisabled::StagedOnly)
+        );
+        assert_eq!(
+            rollback_availability(&row('R', '.', false, false, false)),
+            Err(RollbackDisabled::StagedRename)
+        );
+        assert_eq!(
+            rollback_availability(&row('A', '.', false, false, false)),
+            Err(RollbackDisabled::StagedOnly)
+        );
+        assert_eq!(
+            rollback_availability(&row('U', 'U', true, false, false)),
+            Err(RollbackDisabled::Conflict)
+        );
+        assert_eq!(
+            rollback_availability(&row('?', '?', false, true, false)),
+            Err(RollbackDisabled::NotTracked)
+        );
+        assert_eq!(
+            rollback_availability(&row('!', '!', false, false, true)),
+            Err(RollbackDisabled::NotTracked)
+        );
+    }
 }

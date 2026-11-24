@@ -195,3 +195,42 @@ fn git_facade_status_supports_an_unborn_repository() {
     assert!(snapshot.entries.iter().any(|entry| entry.path == "new.txt"));
     assert!(snapshot.worktree_root.is_some());
 }
+
+/// 回滚只从当前索引恢复工作区，不把索引重置到 HEAD。
+#[test]
+fn git_restore_from_index_keeps_staged_changes() {
+    let temp = tempfile::tempdir().unwrap();
+    let repository = temp.path().join("repo");
+    std::fs::create_dir(&repository).unwrap();
+    git(&repository, &["init", "--quiet"]);
+    git(&repository, &["config", "core.autocrlf", "false"]);
+    git(&repository, &["config", "user.name", "slTerminal Test"]);
+    git(
+        &repository,
+        &["config", "user.email", "slterm-test@example.invalid"],
+    );
+    std::fs::write(repository.join("tracked.txt"), b"base\n").unwrap();
+    git(&repository, &["add", "--", "tracked.txt"]);
+    git(&repository, &["commit", "--quiet", "-m", "base"]);
+    std::fs::write(repository.join("tracked.txt"), b"staged\n").unwrap();
+    git(&repository, &["add", "--", "tracked.txt"]);
+    std::fs::write(repository.join("tracked.txt"), b"worktree\n").unwrap();
+
+    super::restore_from_index(&repository, &["tracked.txt"]).unwrap();
+
+    assert_eq!(
+        std::fs::read_to_string(repository.join("tracked.txt")).unwrap(),
+        "staged\n",
+        "工作区必须匹配当前索引"
+    );
+    let staged = super::command(&repository)
+        .args(["diff", "--cached", "--stat"])
+        .output()
+        .unwrap();
+    assert!(!staged.stdout.is_empty(), "staged 差异必须保留");
+    let unstaged = super::command(&repository)
+        .args(["diff", "--stat"])
+        .output()
+        .unwrap();
+    assert!(unstaged.stdout.is_empty(), "未暂存差异必须被放弃");
+}

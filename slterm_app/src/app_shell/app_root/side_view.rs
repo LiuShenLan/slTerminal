@@ -642,6 +642,13 @@ impl Render for SideView {
                     cx.listener(move |_, _, window, cx| focus.focus(window, cx)),
                 )
             })
+            .when(id == SideViewId::Commit, |element| {
+                element.on_key_down(cx.listener(|view, event: &gpui::KeyDownEvent, window, cx| {
+                    if event.keystroke.key == "r" && event.keystroke.modifiers.control {
+                        view.commit_rollback_selected(window, cx);
+                    }
+                }))
+            })
             .when(id == SideViewId::Explorer, |element| {
                 // 树内键盘入口与渲染共用同一运行态动作。
                 element.on_key_down(cx.listener(|view, event: &gpui::KeyDownEvent, window, cx| {

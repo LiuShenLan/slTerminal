@@ -348,6 +348,23 @@ impl StatusEntry {
     }
 }
 
+/// 从当前索引恢复工作区路径；不重置索引，不切换 HEAD。
+///
+/// 写操作只由 Commit 回滚在后台调用，执行前必须由应用层完成状态与授权重检。
+pub(crate) fn restore_from_index(root: &Path, paths: &[&str]) -> Result<(), GitError> {
+    if paths.is_empty() {
+        return Ok(());
+    }
+    let mut command = repository::repository_command(root);
+    command.arg("checkout").arg("--");
+    command.args(paths);
+    let output = repository::run_repository(command)?;
+    if !output.status.success() {
+        return Err(command_failure(root, "checkout", &output.stderr));
+    }
+    Ok(())
+}
+
 /// 采集仓库状态快照;每条命令都带 `--no-optional-locks`。
 ///
 /// `--untracked-files=all`:未跟踪目录展开为单文件条目,单文件状态可从
