@@ -19,6 +19,22 @@ use super::document::{DocumentError, MAX_DOCUMENT_BYTES, ThemeDocument, builtin_
 
 /// 自定义主题文件数上限(契约数值):超限拒绝新建。
 pub const MAX_CUSTOM_THEMES: usize = 128;
+
+/// 删除当前启用主题的处置：必须先另选一个主题才能删除。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ThemeDeletion {
+    Delete,
+    RequiresReplacement,
+}
+
+/// 纯判定：删除目标正是当前启用主题时拒绝，须用户先另选。
+pub fn resolve_theme_deletion(active_theme: Option<&str>, deleting: &str) -> ThemeDeletion {
+    if active_theme == Some(deleting) {
+        ThemeDeletion::RequiresReplacement
+    } else {
+        ThemeDeletion::Delete
+    }
+}
 /// 自定义主题文件后缀。
 pub const THEME_FILE_SUFFIX: &str = ".slterm-theme.json";
 
@@ -789,6 +805,71 @@ mod store_tests {
         assert_ne!(first.id(), second.id());
         assert_eq!(first.id(), Some("nord-2"));
         assert_eq!(second.id(), Some("nord-3"));
+    }
+
+    /// 完整主题才可导入；缺项、未知字段与非法色值全部零写入。
+    #[test]
+    fn theme_import_complete_or_zero_write() {
+        let (directory, store) = fixture();
+        let complete = directory.path().join("complete.json");
+        fs::write(&complete, import_source_bytes("Complete")).unwrap();
+        let imported = store.import_json_file(&complete).unwrap();
+        assert_eq!(imported.name(), "Complete");
+        assert!(imported.id().is_some());
+        let baseline = store.list().unwrap().custom.len();
+        assert_eq!(baseline, 1);
+
+        let document: serde_json::Value =
+            serde_json::from_slice(&import_source_bytes("Broken")).unwrap();
+        let mut missing = document.clone();
+        missing["ui"].as_object_mut().unwrap().remove("accent");
+        let mut unknown = document.clone();
+        unknown["ui"]["future_slot"] = serde_json::json!("#123456");
+        let mut invalid = document.clone();
+        invalid["terminal"]["background"] = serde_json::json!("not-a-color");
+
+        let mut accepted = Vec::new();
+        for (tag, value) in [
+            ("missing", missing),
+            ("unknown", unknown),
+            ("invalid", invalid),
+        ] {
+            let path = directory.path().join(format!("{tag}.json"));
+            fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+            if let Ok(document) = store.import_json_file(&path) {
+                accepted.push(format!("{tag} -> {}", document.name()));
+            }
+            assert_eq!(
+                store.list().unwrap().custom.len(),
+                baseline,
+                "{tag} 失败不得产生库内部分写入"
+            );
+        }
+        assert!(
+            accepted.is_empty(),
+            "缺项、未知字段与非法色值主题不得导入: {accepted:?}"
+        );
+        assert!(
+            !store
+                .path_for("broken")
+                .map(|path| path.exists())
+                .unwrap_or(true),
+            "失败导入不得留下主题文件"
+        );
+
+        assert_eq!(
+            resolve_theme_deletion(Some("complete"), "complete"),
+            ThemeDeletion::RequiresReplacement,
+            "删除当前使用中的主题必须先另选"
+        );
+        assert_eq!(
+            resolve_theme_deletion(Some("complete"), "other"),
+            ThemeDeletion::Delete
+        );
+        assert_eq!(
+            resolve_theme_deletion(None, "complete"),
+            ThemeDeletion::Delete
+        );
     }
 
     #[test]

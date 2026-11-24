@@ -10,4 +10,5 @@ mod store;
 pub(crate) use document::{DocumentError, ThemeDocument};
 #[cfg(test)]
 pub(crate) use document::{builtin_documents, from_definition};
-pub(crate) use store::{StoreError, ThemeLibraryStore};
+#[allow(unused_imports)] // 消费点归主题设置页删除入口。
+pub(crate) use store::{StoreError, ThemeDeletion, ThemeLibraryStore, resolve_theme_deletion};

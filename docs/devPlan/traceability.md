@@ -310,7 +310,7 @@
 | 选中页按 ViewKey 恢复而搜索与录制态清除 | `settings_page_view_state_restore` | 已自动化 |
 | 多 Settings 视图同步生效值且关闭不取消队列 | `settings_views_share_global_queue` | 已自动化 |
 | 终端中断与文件树复制按上下文独立绑定 | `keybinding_reserved_contexts` | 已自动化 |
-| 完整主题可用、缺项零写入且使用中删除需另选 | `theme_import_complete_or_zero_write` | 待实现 |
+| 完整主题可用、缺项零写入且使用中删除需另选 | `theme_import_complete_or_zero_write` | 已自动化 |
 | Editor、Markdown、Diff 遵循同一 Document 自动保存 | `settings_document_autosave_is_global` | 已自动化 |
 | 套餐不读取 CLI 凭据且专用 token 不回显 | `settings_plan_token_not_cli_credentials` | 待实现 |
 | 后台周期提交后按新周期运行且隐藏仍查询 | `settings_plan_schedule_commit_and_visibility` | 待实现 |

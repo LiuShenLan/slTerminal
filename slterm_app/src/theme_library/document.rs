@@ -25,6 +25,7 @@ const TERMINAL_COLORS: &[&str] = &[
     "foreground",
     "cursor",
     "cursor_text",
+    "cursor_stroke",
     "selection_background",
     "selection_foreground",
 ];
@@ -537,6 +538,24 @@ fn validate_and_normalize(value: &mut Value) -> Result<(), DocumentError> {
         .as_object_mut()
         .ok_or_else(|| DocumentError::Invalid("root must be an object".to_owned()))?;
     reject_reserved_keys(root)?;
+    reject_unknown_fields(
+        root,
+        &[
+            "schema_version",
+            "revision",
+            "builtin",
+            "name",
+            "id",
+            "terminal",
+            "ui",
+            "typography",
+            "layout",
+            "effects",
+            "metadata",
+            "extensions",
+        ],
+        "root",
+    )?;
     if root.get("schema_version").and_then(Value::as_u64) != Some(SCHEMA_VERSION) {
         return Err(DocumentError::Invalid(format!(
             "schema_version must be {SCHEMA_VERSION}"
@@ -583,6 +602,15 @@ fn validate_terminal(value: &mut Value) -> Result<(), DocumentError> {
         .as_object_mut()
         .ok_or_else(|| DocumentError::Invalid("terminal must be an object".to_owned()))?;
     reject_reserved_keys(object)?;
+    for (key, _) in object.iter() {
+        if !TERMINAL_COLORS.contains(&key.as_str())
+            && !matches!(key.as_str(), "palette" | "indexed")
+        {
+            return Err(DocumentError::Invalid(format!(
+                "terminal.{key} is not a known field"
+            )));
+        }
+    }
     for key in TERMINAL_COLORS {
         if object.get(*key).is_some_and(|value| !value.is_null()) {
             normalize_color(object, key)?;
@@ -629,6 +657,14 @@ fn validate_ui(value: &mut Value) -> Result<(), DocumentError> {
         .as_object_mut()
         .ok_or_else(|| DocumentError::Invalid("ui must be an object".to_owned()))?;
     reject_reserved_keys(object)?;
+    // 未知 UI 槽必须拒绝：不生成部分主题，也不静默忽略未来字段拼写错误。
+    for (key, _) in object.iter() {
+        if key != "derive" && !UI_COLORS.contains(&key.as_str()) {
+            return Err(DocumentError::Invalid(format!(
+                "ui.{key} is not a known slot"
+            )));
+        }
+    }
     if object.get("derive").and_then(Value::as_bool).is_none() {
         return Err(DocumentError::Invalid(
             "ui.derive must be boolean".to_owned(),
@@ -666,6 +702,21 @@ fn validate_typography(value: &Value) -> Result<(), DocumentError> {
     let object = value
         .as_object()
         .ok_or_else(|| DocumentError::Invalid("typography must be an object".to_owned()))?;
+    reject_unknown_fields(
+        object,
+        &[
+            "enabled",
+            "font_family",
+            "ui_font_family",
+            "font_size",
+            "ui_font_size",
+            "font_weight",
+            "line_height",
+            "letter_spacing",
+            "ligatures",
+        ],
+        "typography",
+    )?;
     required_bool(object, "enabled")?;
     required_bool(object, "ligatures")?;
     optional_string_with_limit(object, "font_family", 256)?;
@@ -684,6 +735,18 @@ fn validate_layout(value: &Value) -> Result<(), DocumentError> {
     let object = value
         .as_object()
         .ok_or_else(|| DocumentError::Invalid("layout must be an object".to_owned()))?;
+    reject_unknown_fields(
+        object,
+        &[
+            "padding_x",
+            "padding_y",
+            "radius",
+            "gutter",
+            "shadow",
+            "divider_width",
+        ],
+        "layout",
+    )?;
     optional_bounded_number(object, "padding_x", 0.0, 48.0)?;
     optional_bounded_number(object, "padding_y", 0.0, 40.0)?;
     bounded_number(object, "radius", 0.0, f64::from(MAX_PANE_CARD_RADIUS))?;
@@ -700,6 +763,22 @@ fn validate_effects(value: &Value) -> Result<(), DocumentError> {
     let object = value
         .as_object()
         .ok_or_else(|| DocumentError::Invalid("effects must be an object".to_owned()))?;
+    reject_unknown_fields(
+        object,
+        &[
+            "material",
+            "blur",
+            "opacity",
+            "veil",
+            "background_image",
+            "background_image_opacity",
+            "background_image_fit",
+            "background_image_alignment",
+            "background_image_cover_chrome",
+            "cursor_shape",
+        ],
+        "effects",
+    )?;
     let material = required_string(object, "material", 16)?;
     if !matches!(material, "solid" | "glass") {
         return Err(DocumentError::Invalid(
@@ -937,6 +1016,19 @@ fn validate_id(id: &str) -> Result<(), DocumentError> {
     Ok(())
 }
 
+fn reject_unknown_fields(
+    object: &Map<String, Value>,
+    known: &[&str],
+    section: &str,
+) -> Result<(), DocumentError> {
+    if let Some(key) = object.keys().find(|key| !known.contains(&key.as_str())) {
+        return Err(DocumentError::Invalid(format!(
+            "{section}.{key} is not a known field"
+        )));
+    }
+    Ok(())
+}
+
 fn reject_reserved_keys(object: &Map<String, Value>) -> Result<(), DocumentError> {
     if let Some(key) = object
         .keys()
@@ -1122,12 +1214,22 @@ mod document_tests {
             ThemeDocument::from_json_bytes(&oversized),
             Err(DocumentError::TooLarge { .. })
         ));
-        let mut value = builtin_documents().remove(0).to_value();
-        value["vendor"] = json!({ "future": true });
-        value["terminal"]["vendor_color"] = json!("keep");
-        let document = ThemeDocument::from_value(value.clone()).unwrap();
-        assert_eq!(document.to_value()["vendor"], value["vendor"]);
-        assert_eq!(document.to_value()["terminal"]["vendor_color"], "keep");
+        // 未知字段一律拒绝：不生成部分主题，也不静默忽略拼写错误。
+        let mut unknown_root = builtin_documents().remove(0).to_value();
+        unknown_root["vendor"] = json!({ "future": true });
+        assert!(ThemeDocument::from_value(unknown_root).is_err());
+        let mut unknown_terminal = builtin_documents().remove(0).to_value();
+        unknown_terminal["terminal"]["vendor_color"] = json!("keep");
+        assert!(ThemeDocument::from_value(unknown_terminal).is_err());
+        // 扩展命名空间是显式开放对象，内容不参与主题语义。
+        let mut extension = builtin_documents().remove(0).to_value();
+        extension["extensions"]["vendor"] = json!({ "future": true });
+        let document = ThemeDocument::from_value(extension.clone()).unwrap();
+        assert_eq!(
+            document.to_value()["extensions"],
+            extension["extensions"],
+            "显式扩展命名空间原样保留"
+        );
     }
 
     #[test]
