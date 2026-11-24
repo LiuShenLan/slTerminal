@@ -4,8 +4,10 @@
 
 #![forbid(unsafe_code)]
 
+mod catalog;
 mod identity;
 mod session;
+pub use catalog::{AgentCatalogEntry, HistoryAdapter, HooksAdapter};
 pub use identity::AgentKind;
 pub use session::{
     AgentSession, AgentSessionKey, InvalidNativeSessionId, codex_rollout_id,
