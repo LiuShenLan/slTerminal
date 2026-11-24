@@ -10,6 +10,7 @@ mod discovery;
 #[cfg(test)]
 mod event_ring_tests;
 mod events;
+mod mutations;
 #[cfg(test)]
 mod operation_dispatch_tests;
 mod operations;
@@ -34,6 +35,8 @@ pub(crate) use credentials::rotate_runtime_at;
 pub(crate) use discovery::{
     DiscoveryGuard, discover_json_at, publish, read_discovery, read_discovery_for,
 };
+#[allow(unused_imports)]
+pub(crate) use mutations::{RuntimeMutation, RuntimeMutationRequest};
 #[allow(unused_imports)]
 pub(crate) use server::LocalControlServer;
 #[allow(unused_imports)]

@@ -88,6 +88,13 @@ impl AppRoot {
                                                     let _ = completion
                                                         .try_send(Err(closing_snapshot_error()));
                                                 }
+                                                SltermShellEvent::RuntimeMutation {
+                                                    completion,
+                                                    ..
+                                                } => {
+                                                    let _ = completion
+                                                        .try_send(Err(closing_snapshot_error()));
+                                                }
                                                 _ => {}
                                             }
                                         }
@@ -278,6 +285,13 @@ impl AppRoot {
                 } else {
                     self.runtime_snapshot_resources()
                 };
+                let _ = completion.try_send(result);
+            }
+            SltermShellEvent::RuntimeMutation {
+                mutation,
+                completion,
+            } => {
+                let result = self.handle_runtime_mutation(mutation, window, cx);
                 let _ = completion.try_send(result);
             }
             SltermShellEvent::OpenDirectories(paths) => {

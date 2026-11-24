@@ -13,12 +13,16 @@ use serde::Serialize;
 use slterm_runtime_protocol::{
     ClientRequest, ControlScope, Credential, DescribeResponse, DomainErrorCode, EventNotification,
     EventsSubscribeParams, EventsUnsubscribedResponse, HandoverParams, HandoverResponse,
-    HelloResponse, JsonRpcError, JsonRpcErrorData, JsonRpcResponse, OPERATION_WAIT_LIMIT_MS,
-    OperationResource, RuntimeEvent, RuntimeMethod, RuntimeParams, RuntimeResult,
+    HelloResponse, JsonRpcError, JsonRpcErrorData, JsonRpcId, JsonRpcResponse,
+    OPERATION_WAIT_LIMIT_MS, OperationQueryParams, OperationResource, OperationWaitParams,
+    ProjectActivateParams, ProjectListResponse, ProjectRemoveParams, ProjectRenameParams,
+    ProjectReorderParams, RuntimeEvent, RuntimeMethod, RuntimeRequest, RuntimeResult,
     SnapshotResources, SnapshotResponse, parse_client_request,
 };
+use slterm_workspace::ProjectId;
 
 use super::events::Subscription;
+use super::mutations::{RuntimeMutation, RuntimeMutationRequest};
 use crate::secrets::SecretBytes;
 
 const REQUEST_BUDGET: usize = 128 * 1024;
@@ -74,11 +78,16 @@ pub(crate) type EventSubscribeCallback = Arc<
     dyn Fn(EventsSubscribeParams) -> Result<Subscription, JsonRpcError> + Send + Sync + 'static,
 >;
 
+/// Runtime 写意图端口：登记、执行与终态全部经唯一派发器。
+pub(crate) type MutationCallback =
+    Arc<dyn Fn(RuntimeMutationRequest) -> Result<OperationResource, JsonRpcError> + Send + Sync>;
+
 /// Runtime 作用域的应用回调集合。
 pub(crate) struct RuntimeCallbacks {
     pub(crate) snapshot: SnapshotCallback,
     pub(crate) operation: OperationQueryCallback,
     pub(crate) events: EventSubscribeCallback,
+    pub(crate) mutation: MutationCallback,
 }
 
 /// operation.wait 轮询间隔：只做有界查询与关闭检查。
@@ -103,6 +112,7 @@ impl LocalControlServer {
                 snapshot: Arc::new(not_ready_snapshot),
                 operation: Arc::new(not_ready_operation),
                 events: Arc::new(not_ready_events),
+                mutation: Arc::new(not_ready_mutation),
             },
         )
     }
@@ -444,7 +454,7 @@ fn handle_connection<F>(
                         Err(error) => JsonRpcResponse::error(request.id, error),
                     },
                     RuntimeMethod::OperationGet => {
-                        let RuntimeParams::OperationQuery(params) = &request.params else {
+                        let Some(params) = request.parse::<OperationQueryParams>() else {
                             return;
                         };
                         match (runtime.operation)(&params.operation_id) {
@@ -459,7 +469,7 @@ fn handle_connection<F>(
                         }
                     }
                     RuntimeMethod::OperationWait => {
-                        match wait_operation(&runtime, &request.params, &shutdown) {
+                        match wait_operation(&runtime, &request, &shutdown) {
                             Ok(resource) => JsonRpcResponse::result(
                                 request.id,
                                 RuntimeResult::Operation(resource),
@@ -468,7 +478,7 @@ fn handle_connection<F>(
                         }
                     }
                     RuntimeMethod::EventsSubscribe => {
-                        let RuntimeParams::EventsSubscribe(params) = request.params.clone() else {
+                        let Some(params) = request.parse::<EventsSubscribeParams>() else {
                             return;
                         };
                         match (runtime.events)(params) {
@@ -497,6 +507,81 @@ fn handle_connection<F>(
                         request.id,
                         not_ready_error("no active subscription"),
                     ),
+                    RuntimeMethod::ProjectList => match (runtime.snapshot)() {
+                        Ok(resources) => JsonRpcResponse::result(
+                            request.id,
+                            RuntimeResult::Projects(ProjectListResponse {
+                                projects: resources.projects,
+                            }),
+                        ),
+                        Err(error) => JsonRpcResponse::error(request.id, error),
+                    },
+                    RuntimeMethod::ProjectActivate => {
+                        let Some(params) = request.parse::<ProjectActivateParams>() else {
+                            return;
+                        };
+                        respond_mutation(
+                            &runtime,
+                            request.id,
+                            params.client_id,
+                            params.mutation_id,
+                            params.expected_revision,
+                            parse_project_id(&params.request.project_id)
+                                .map(|project_id| RuntimeMutation::ProjectActivate { project_id }),
+                        )
+                    }
+                    RuntimeMethod::ProjectRename => {
+                        let Some(params) = request.parse::<ProjectRenameParams>() else {
+                            return;
+                        };
+                        respond_mutation(
+                            &runtime,
+                            request.id,
+                            params.client_id,
+                            params.mutation_id,
+                            params.expected_revision,
+                            parse_project_id(&params.request.project_id).map(|project_id| {
+                                RuntimeMutation::ProjectRename {
+                                    project_id,
+                                    name: params.request.name,
+                                }
+                            }),
+                        )
+                    }
+                    RuntimeMethod::ProjectReorder => {
+                        let Some(params) = request.parse::<ProjectReorderParams>() else {
+                            return;
+                        };
+                        respond_mutation(
+                            &runtime,
+                            request.id,
+                            params.client_id,
+                            params.mutation_id,
+                            params.expected_revision,
+                            parse_project_id(&params.request.project_id).and_then(|project_id| {
+                                usize::try_from(params.request.new_index)
+                                    .map(|new_index| RuntimeMutation::ProjectReorder {
+                                        project_id,
+                                        new_index,
+                                    })
+                                    .map_err(|_| invalid_request_error())
+                            }),
+                        )
+                    }
+                    RuntimeMethod::ProjectRemove => {
+                        let Some(params) = request.parse::<ProjectRemoveParams>() else {
+                            return;
+                        };
+                        respond_mutation(
+                            &runtime,
+                            request.id,
+                            params.client_id,
+                            params.mutation_id,
+                            params.expected_revision,
+                            parse_project_id(&params.request.project_id)
+                                .map(|project_id| RuntimeMutation::ProjectRemove { project_id }),
+                        )
+                    }
                 };
                 if write_json(&mut stream, &response).is_err() {
                     return;
@@ -575,6 +660,49 @@ fn not_ready_events(_: EventsSubscribeParams) -> Result<Subscription, JsonRpcErr
     Err(not_ready_error("event subscription not ready"))
 }
 
+fn not_ready_mutation(_: RuntimeMutationRequest) -> Result<OperationResource, JsonRpcError> {
+    Err(not_ready_error("mutation not ready"))
+}
+
+fn invalid_request_error() -> JsonRpcError {
+    JsonRpcError::new(
+        -32000,
+        "invalid request",
+        Some(JsonRpcErrorData {
+            code: DomainErrorCode::InvalidRequest,
+        }),
+    )
+}
+
+fn parse_project_id(text: &str) -> Result<ProjectId, JsonRpcError> {
+    text.parse::<ProjectId>()
+        .map_err(|_| invalid_request_error())
+}
+
+/// 写意图统一投递给派发器；身份解析失败不登记任何 Operation。
+fn respond_mutation(
+    runtime: &RuntimeCallbacks,
+    id: JsonRpcId,
+    client_id: String,
+    mutation_id: String,
+    expected_revision: Option<u64>,
+    mutation: Result<RuntimeMutation, JsonRpcError>,
+) -> JsonRpcResponse<RuntimeResult> {
+    let mutation = match mutation {
+        Ok(mutation) => mutation,
+        Err(error) => return JsonRpcResponse::error(id, error),
+    };
+    match (runtime.mutation)(RuntimeMutationRequest {
+        client_id,
+        mutation_id,
+        expected_revision,
+        mutation,
+    }) {
+        Ok(resource) => JsonRpcResponse::result(id, RuntimeResult::Operation(resource)),
+        Err(error) => JsonRpcResponse::error(id, error),
+    }
+}
+
 /// 订阅连接：事件由独立写线程推送，worker 只等待取消订阅或断开。
 ///
 /// 取消订阅、客户端断开与关闭都先关闭流再 join 事件线程；
@@ -651,27 +779,19 @@ fn stream_subscription(
 /// operation.wait 只在后台 worker 轮询；关闭与超时都返回结构化终态。
 fn wait_operation(
     runtime: &RuntimeCallbacks,
-    params: &RuntimeParams,
+    request: &RuntimeRequest,
     shutdown: &AtomicBool,
 ) -> Result<OperationResource, JsonRpcError> {
-    let (operation_id, timeout_ms) = match params {
-        RuntimeParams::OperationQuery(params) => {
-            (params.operation_id.as_str(), OPERATION_WAIT_LIMIT_MS)
-        }
-        RuntimeParams::OperationWait(params) => (
-            params.operation_id.as_str(),
-            params.timeout_ms.unwrap_or(OPERATION_WAIT_LIMIT_MS),
-        ),
-        RuntimeParams::Empty(_) | RuntimeParams::EventsSubscribe(_) => {
-            return Err(not_ready_error("operation wait params missing"));
-        }
+    let Some(params) = request.parse::<OperationWaitParams>() else {
+        return Err(not_ready_error("operation wait params missing"));
     };
+    let timeout_ms = params.timeout_ms.unwrap_or(OPERATION_WAIT_LIMIT_MS);
     let deadline = Instant::now() + Duration::from_millis(timeout_ms);
     loop {
         if shutdown.load(Ordering::SeqCst) {
             return Err(closing_error());
         }
-        match (runtime.operation)(operation_id) {
+        match (runtime.operation)(&params.operation_id) {
             Ok(Some(resource)) if resource.status.is_terminal() => return Ok(resource),
             Ok(Some(_)) => {}
             Ok(None) => return Err(unknown_operation_error()),

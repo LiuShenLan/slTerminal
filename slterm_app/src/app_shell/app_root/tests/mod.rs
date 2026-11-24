@@ -21,6 +21,7 @@ mod project_close_receipts;
 mod projects;
 mod relocation;
 mod runtime_events;
+mod runtime_mutations;
 mod runtime_snapshot;
 mod settings_overlay;
 mod sidebar;

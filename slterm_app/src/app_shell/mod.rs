@@ -130,6 +130,11 @@ pub(crate) enum SltermShellEvent {
     RuntimeSnapshot {
         completion: mpsc::SyncSender<Result<SnapshotResources, JsonRpcError>>,
     },
+    /// Runtime 写意图与一次性回执；AppRoot 复用既有命令执行。
+    RuntimeMutation {
+        mutation: crate::local_control::RuntimeMutation,
+        completion: mpsc::SyncSender<Result<(), JsonRpcError>>,
+    },
 }
 
 const SHELL_EVENT_CAPACITY: usize = 64;
@@ -200,6 +205,28 @@ pub(crate) fn try_send_runtime_snapshot(
             DomainErrorCode::QueueFull,
             -32003,
             "snapshot queue full",
+        )),
+        Err(mpsc::TrySendError::Disconnected(_)) => {
+            Err(control_error(DomainErrorCode::Closing, -32004, "closing"))
+        }
+    }
+}
+
+/// 非阻塞投递 Runtime 写意图；调用方只在后台执行体等待完成回执。
+pub(crate) fn try_send_runtime_mutation(
+    sender: &mpsc::SyncSender<SltermShellEvent>,
+    mutation: crate::local_control::RuntimeMutation,
+) -> Result<mpsc::Receiver<Result<(), JsonRpcError>>, JsonRpcError> {
+    let (completion, response) = mpsc::sync_channel(1);
+    match sender.try_send(SltermShellEvent::RuntimeMutation {
+        mutation,
+        completion,
+    }) {
+        Ok(()) => Ok(response),
+        Err(mpsc::TrySendError::Full(_)) => Err(control_error(
+            DomainErrorCode::QueueFull,
+            -32003,
+            "mutation queue full",
         )),
         Err(mpsc::TrySendError::Disconnected(_)) => {
             Err(control_error(DomainErrorCode::Closing, -32004, "closing"))

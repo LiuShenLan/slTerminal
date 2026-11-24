@@ -10,7 +10,7 @@
       "$ref": "#/$defs/JsonRpcRequest2"
     },
     {
-      "$ref": "#/$defs/JsonRpcRequest3"
+      "$ref": "#/$defs/RuntimeRequest"
     },
     {
       "$ref": "#/$defs/JsonRpcResult"
@@ -567,34 +567,6 @@
         "params"
       ]
     },
-    "JsonRpcRequest3": {
-      "description": "带封闭方法类型的 JSON-RPC 请求信封。",
-      "type": "object",
-      "properties": {
-        "id": {
-          "$ref": "#/$defs/JsonRpcId"
-        },
-        "jsonrpc": {
-          "type": "string",
-          "enum": [
-            "2.0"
-          ]
-        },
-        "method": {
-          "$ref": "#/$defs/RuntimeMethod"
-        },
-        "params": {
-          "$ref": "#/$defs/RuntimeParams"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "jsonrpc",
-        "id",
-        "method",
-        "params"
-      ]
-    },
     "JsonRpcResult": {
       "description": "hello 成功响应的静态形状，与通用错误响应严格分离。",
       "type": "object",
@@ -703,6 +675,122 @@
         "mutation"
       ]
     },
+    "MutationParams": {
+      "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
+      "type": "object",
+      "properties": {
+        "client_id": {
+          "type": "string"
+        },
+        "expected_revision": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "mutation_id": {
+          "type": "string"
+        },
+        "request": {
+          "$ref": "#/$defs/ProjectActivateRequest"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "client_id",
+        "mutation_id",
+        "request"
+      ]
+    },
+    "MutationParams2": {
+      "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
+      "type": "object",
+      "properties": {
+        "client_id": {
+          "type": "string"
+        },
+        "expected_revision": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "mutation_id": {
+          "type": "string"
+        },
+        "request": {
+          "$ref": "#/$defs/ProjectRenameRequest"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "client_id",
+        "mutation_id",
+        "request"
+      ]
+    },
+    "MutationParams3": {
+      "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
+      "type": "object",
+      "properties": {
+        "client_id": {
+          "type": "string"
+        },
+        "expected_revision": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "mutation_id": {
+          "type": "string"
+        },
+        "request": {
+          "$ref": "#/$defs/ProjectReorderRequest"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "client_id",
+        "mutation_id",
+        "request"
+      ]
+    },
+    "MutationParams4": {
+      "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
+      "type": "object",
+      "properties": {
+        "client_id": {
+          "type": "string"
+        },
+        "expected_revision": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "mutation_id": {
+          "type": "string"
+        },
+        "request": {
+          "$ref": "#/$defs/ProjectRemoveRequest"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "client_id",
+        "mutation_id",
+        "request"
+      ]
+    },
     "OperationQueryParams": {
       "description": "按操作标识查询持久结果；operation.get 与 operation.wait 共用身份。",
       "type": "object",
@@ -796,6 +884,80 @@
         "active_view"
       ]
     },
+    "ProjectActivateRequest": {
+      "type": "object",
+      "properties": {
+        "project_id": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "project_id"
+      ]
+    },
+    "ProjectListResponse": {
+      "description": "`project.list`：按导航顺序返回项目摘要；与 snapshot 的项目资源同构。",
+      "type": "object",
+      "properties": {
+        "projects": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProjectResource"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "projects"
+      ]
+    },
+    "ProjectRemoveRequest": {
+      "type": "object",
+      "properties": {
+        "project_id": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "project_id"
+      ]
+    },
+    "ProjectRenameRequest": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "project_id": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "project_id",
+        "name"
+      ]
+    },
+    "ProjectReorderRequest": {
+      "type": "object",
+      "properties": {
+        "new_index": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "project_id": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "project_id",
+        "new_index"
+      ]
+    },
     "ProjectResource": {
       "description": "快照中的项目资源身份与元数据。",
       "type": "object",
@@ -863,11 +1025,16 @@
         "runtime.operation_get",
         "runtime.operation_wait",
         "events.subscribe",
-        "events.unsubscribe"
+        "events.unsubscribe",
+        "project.list",
+        "project.activate",
+        "project.rename",
+        "project.reorder",
+        "project.remove"
       ]
     },
     "RuntimeParams": {
-      "description": "Runtime 方法的封闭参数集合；服务端按方法名交叉校验。",
+      "description": "Runtime 方法参数形状的 schema 汇总；运行时不参与分派。",
       "anyOf": [
         {
           "$ref": "#/$defs/EmptyParams"
@@ -880,7 +1047,47 @@
         },
         {
           "$ref": "#/$defs/EventsSubscribeParams"
+        },
+        {
+          "$ref": "#/$defs/MutationParams"
+        },
+        {
+          "$ref": "#/$defs/MutationParams2"
+        },
+        {
+          "$ref": "#/$defs/MutationParams3"
+        },
+        {
+          "$ref": "#/$defs/MutationParams4"
         }
+      ]
+    },
+    "RuntimeRequest": {
+      "description": "认证后的 Runtime 请求：信封先携带方法名，参数再按方法二次解析。\n\n这样同构参数（例如同为 `{project_id}` 的两个写方法）不会在 untagged\n反序列化中互相吞并；业务语义只由 `method` 决定。",
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/JsonRpcId"
+        },
+        "jsonrpc": {
+          "type": "string",
+          "enum": [
+            "2.0"
+          ]
+        },
+        "method": {
+          "$ref": "#/$defs/RuntimeMethod"
+        },
+        "params": {
+          "$ref": "#/$defs/RuntimeParams"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "jsonrpc",
+        "id",
+        "method",
+        "params"
       ]
     },
     "RuntimeResult": {
@@ -900,6 +1107,9 @@
         },
         {
           "$ref": "#/$defs/EventsUnsubscribedResponse"
+        },
+        {
+          "$ref": "#/$defs/ProjectListResponse"
         }
       ]
     },

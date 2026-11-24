@@ -106,6 +106,76 @@ pub enum RuntimeMethod {
     EventsSubscribe,
     #[serde(rename = "events.unsubscribe")]
     EventsUnsubscribe,
+    #[serde(rename = "project.list")]
+    ProjectList,
+    #[serde(rename = "project.activate")]
+    ProjectActivate,
+    #[serde(rename = "project.rename")]
+    ProjectRename,
+    #[serde(rename = "project.reorder")]
+    ProjectReorder,
+    #[serde(rename = "project.remove")]
+    ProjectRemove,
+}
+
+/// 写请求信封：幂等键与客户端身份是必填，期望代次可选。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct MutationParams<P> {
+    pub client_id: String,
+    pub mutation_id: String,
+    pub expected_revision: Option<u64>,
+    pub request: P,
+}
+
+impl<P> MutationParams<P> {
+    fn has_valid_envelope(&self) -> bool {
+        !self.client_id.trim().is_empty() && !self.mutation_id.trim().is_empty()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct ProjectActivateRequest {
+    pub project_id: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct ProjectRenameRequest {
+    pub project_id: String,
+    pub name: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct ProjectReorderRequest {
+    pub project_id: String,
+    pub new_index: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct ProjectRemoveRequest {
+    pub project_id: String,
+}
+
+pub type ProjectActivateParams = MutationParams<ProjectActivateRequest>;
+pub type ProjectRenameParams = MutationParams<ProjectRenameRequest>;
+pub type ProjectReorderParams = MutationParams<ProjectReorderRequest>;
+pub type ProjectRemoveParams = MutationParams<ProjectRemoveRequest>;
+
+/// `project.list`：按导航顺序返回项目摘要；与 snapshot 的项目资源同构。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct ProjectListResponse {
+    pub projects: Vec<ProjectResource>,
 }
 
 /// 无参数的 Runtime 方法；未知字段一律拒绝。
@@ -193,33 +263,19 @@ impl EventNotification {
     }
 }
 
-/// Runtime 方法的封闭参数集合；服务端按方法名交叉校验。
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+/// Runtime 方法参数形状的 schema 汇总；运行时不参与分派。
+#[cfg(feature = "schema")]
+#[derive(schemars::JsonSchema)]
 #[serde(untagged)]
 pub enum RuntimeParams {
     Empty(EmptyParams),
     OperationQuery(OperationQueryParams),
     OperationWait(OperationWaitParams),
     EventsSubscribe(EventsSubscribeParams),
-}
-
-impl RuntimeParams {
-    fn operation_id(&self) -> Option<&str> {
-        match self {
-            Self::Empty(_) | Self::EventsSubscribe(_) => None,
-            Self::OperationQuery(params) => Some(&params.operation_id),
-            Self::OperationWait(params) => Some(&params.operation_id),
-        }
-    }
-
-    fn wait_timeout_ms(&self) -> Option<Option<u64>> {
-        match self {
-            Self::OperationWait(params) => Some(params.timeout_ms),
-            Self::OperationQuery(_) => Some(None),
-            Self::Empty(_) | Self::EventsSubscribe(_) => None,
-        }
-    }
+    ProjectActivate(ProjectActivateParams),
+    ProjectRename(ProjectRenameParams),
+    ProjectReorder(ProjectReorderParams),
+    ProjectRemove(ProjectRemoveParams),
 }
 
 /// 单实例移交只接受 instance.handover。
@@ -334,44 +390,107 @@ impl HandoverParams {
 
 pub type HelloRequest = JsonRpcRequest<HelloMethod, HelloParams>;
 pub type HandoverRequest = JsonRpcRequest<HandoverMethod, HandoverParams>;
-pub type RuntimeRequest = JsonRpcRequest<RuntimeMethod, RuntimeParams>;
+
+/// 认证后的 Runtime 请求：信封先携带方法名，参数再按方法二次解析。
+///
+/// 这样同构参数（例如同为 `{project_id}` 的两个写方法）不会在 untagged
+/// 反序列化中互相吞并；业务语义只由 `method` 决定。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeRequest {
+    #[cfg_attr(feature = "schema", schemars(extend("enum" = ["2.0"])))]
+    pub jsonrpc: String,
+    pub id: JsonRpcId,
+    pub method: RuntimeMethod,
+    #[cfg_attr(feature = "schema", schemars(with = "RuntimeParams"))]
+    pub params: serde_json::Value,
+}
+
+impl RuntimeRequest {
+    pub fn new(id: JsonRpcId, method: RuntimeMethod, params: impl Serialize) -> Self {
+        Self {
+            jsonrpc: "2.0".to_owned(),
+            id,
+            method,
+            params: serde_json::to_value(params).expect("Runtime 参数必须可序列化"),
+        }
+    }
+
+    fn has_valid_envelope(&self) -> bool {
+        self.jsonrpc == "2.0"
+    }
+
+    /// 按方法把参数解析为封闭结构；未知字段由目标类型的 `deny_unknown_fields` 拒绝。
+    pub fn parse<P: serde::de::DeserializeOwned>(&self) -> Option<P> {
+        serde_json::from_value(self.params.clone()).ok()
+    }
+}
 
 /// operation.wait 的等待上限与 transport 的请求等待一致。
 pub const OPERATION_WAIT_LIMIT_MS: u64 = 600_000;
 
 /// 方法名与参数形状必须同属一个封闭组合。
 fn runtime_request_is_valid(request: &RuntimeRequest) -> bool {
-    let operation_present = request
-        .params
-        .operation_id()
-        .is_some_and(|operation_id| !operation_id.trim().is_empty());
+    fn present(value: &str) -> bool {
+        !value.trim().is_empty()
+    }
     match request.method {
-        RuntimeMethod::Describe | RuntimeMethod::Snapshot => {
-            matches!(request.params, RuntimeParams::Empty(_))
+        RuntimeMethod::Describe | RuntimeMethod::Snapshot | RuntimeMethod::EventsUnsubscribe => {
+            request.parse::<EmptyParams>().is_some()
         }
-        RuntimeMethod::OperationGet => {
-            operation_present && matches!(request.params, RuntimeParams::OperationQuery(_))
-        }
+        RuntimeMethod::OperationGet => request
+            .parse::<OperationQueryParams>()
+            .is_some_and(|params| present(&params.operation_id)),
         RuntimeMethod::OperationWait => {
-            operation_present
-                && request
-                    .params
-                    .wait_timeout_ms()
-                    .flatten()
-                    .is_none_or(|timeout| (1..=OPERATION_WAIT_LIMIT_MS).contains(&timeout))
+            request
+                .parse::<OperationWaitParams>()
+                .is_some_and(|params| {
+                    present(&params.operation_id)
+                        && params
+                            .timeout_ms
+                            .is_none_or(|timeout| (1..=OPERATION_WAIT_LIMIT_MS).contains(&timeout))
+                })
         }
-        RuntimeMethod::EventsSubscribe => match &request.params {
-            RuntimeParams::EventsSubscribe(params) => {
-                !params.store_epoch.trim().is_empty() && !params.stream_epoch.trim().is_empty()
-            }
-            _ => false,
-        },
-        RuntimeMethod::EventsUnsubscribe => matches!(request.params, RuntimeParams::Empty(_)),
+        RuntimeMethod::EventsSubscribe => request
+            .parse::<EventsSubscribeParams>()
+            .is_some_and(|params| present(&params.store_epoch) && present(&params.stream_epoch)),
+        RuntimeMethod::ProjectList => request.parse::<EmptyParams>().is_some(),
+        RuntimeMethod::ProjectActivate => {
+            request
+                .parse::<ProjectActivateParams>()
+                .is_some_and(|params| {
+                    params.has_valid_envelope() && present(&params.request.project_id)
+                })
+        }
+        RuntimeMethod::ProjectRename => {
+            request
+                .parse::<ProjectRenameParams>()
+                .is_some_and(|params| {
+                    params.has_valid_envelope()
+                        && present(&params.request.project_id)
+                        && present(&params.request.name)
+                })
+        }
+        RuntimeMethod::ProjectReorder => {
+            request
+                .parse::<ProjectReorderParams>()
+                .is_some_and(|params| {
+                    params.has_valid_envelope() && present(&params.request.project_id)
+                })
+        }
+        RuntimeMethod::ProjectRemove => {
+            request
+                .parse::<ProjectRemoveParams>()
+                .is_some_and(|params| {
+                    params.has_valid_envelope() && present(&params.request.project_id)
+                })
+        }
     }
 }
 
 /// 当前已实现的客户端请求；新增方法必须显式扩展封闭集合。
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(untagged)]
 pub enum ClientRequest {
@@ -414,11 +533,16 @@ pub enum ControlMethod {
     RuntimeOperationWait,
     RuntimeEventsSubscribe,
     RuntimeEventsUnsubscribe,
+    RuntimeProjectList,
+    RuntimeProjectActivate,
+    RuntimeProjectRename,
+    RuntimeProjectReorder,
+    RuntimeProjectRemove,
     InstanceHandover,
 }
 
 impl ControlMethod {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 13] = [
         Self::RuntimeHello,
         Self::RuntimeDescribe,
         Self::RuntimeSnapshot,
@@ -426,6 +550,11 @@ impl ControlMethod {
         Self::RuntimeOperationWait,
         Self::RuntimeEventsSubscribe,
         Self::RuntimeEventsUnsubscribe,
+        Self::RuntimeProjectList,
+        Self::RuntimeProjectActivate,
+        Self::RuntimeProjectRename,
+        Self::RuntimeProjectReorder,
+        Self::RuntimeProjectRemove,
         Self::InstanceHandover,
     ];
 
@@ -438,6 +567,11 @@ impl ControlMethod {
             Self::RuntimeOperationWait => "runtime.operation_wait",
             Self::RuntimeEventsSubscribe => "events.subscribe",
             Self::RuntimeEventsUnsubscribe => "events.unsubscribe",
+            Self::RuntimeProjectList => "project.list",
+            Self::RuntimeProjectActivate => "project.activate",
+            Self::RuntimeProjectRename => "project.rename",
+            Self::RuntimeProjectReorder => "project.reorder",
+            Self::RuntimeProjectRemove => "project.remove",
             Self::InstanceHandover => "instance.handover",
         }
     }
@@ -582,6 +716,7 @@ pub enum RuntimeResult {
     Operation(OperationResource),
     Subscribed(EventsSubscribedResponse),
     Unsubscribed(EventsUnsubscribedResponse),
+    Projects(ProjectListResponse),
 }
 
 /// 当前客户端可调用的方法集合。
@@ -771,7 +906,7 @@ pub struct JsonRpcErrorResponse {
 }
 
 /// 当前请求、响应与发现记录的根集合，schema 与各领域 DTO 共用此边界。
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(untagged)]
 pub enum ControlMessage {

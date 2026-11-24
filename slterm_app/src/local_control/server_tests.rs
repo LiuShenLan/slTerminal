@@ -12,8 +12,9 @@ use slterm_runtime_protocol::{
     EventsSubscribedResponse, HandoverMethod, HandoverParams, HandoverRequest, HandoverResponse,
     HelloMethod, HelloParams, HelloRequest, HelloResponse, JsonRpcError, JsonRpcErrorData,
     JsonRpcId, JsonRpcRequest, OperationQueryParams, OperationResource, OperationStatus,
-    OperationWaitParams, PanelGroupResource, ProjectResource, RuntimeEvent, RuntimeMethod,
-    RuntimeParams, RuntimeRequest, SnapshotResources, TerminalResource, ViewResource,
+    OperationWaitParams, PanelGroupResource, ProjectActivateParams, ProjectActivateRequest,
+    ProjectResource, RuntimeEvent, RuntimeMethod, RuntimeRequest, SnapshotResources,
+    TerminalResource, ViewResource,
 };
 
 use super::LocalControlServer;
@@ -21,6 +22,18 @@ use crate::secrets::SecretBytes;
 
 fn test_secret(value: &str) -> SecretBytes {
     SecretBytes::new(value.to_owned().into_bytes())
+}
+
+fn unavailable_mutation(
+    _: super::mutations::RuntimeMutationRequest,
+) -> Result<OperationResource, JsonRpcError> {
+    Err(JsonRpcError::new(
+        -32001,
+        "mutation not ready",
+        Some(JsonRpcErrorData {
+            code: slterm_runtime_protocol::DomainErrorCode::NotReady,
+        }),
+    ))
 }
 
 // 负载裕度，非断言/语义放宽：等待真实 loopback 线程调度与关闭。
@@ -447,6 +460,7 @@ where
                     }),
                 ))
             }),
+            mutation: Arc::new(unavailable_mutation),
         },
     )
     .unwrap();
@@ -454,31 +468,27 @@ where
 }
 
 fn runtime_request(method: RuntimeMethod) -> RuntimeRequest {
-    JsonRpcRequest::new(
-        JsonRpcId::Number(2),
-        method,
-        RuntimeParams::Empty(EmptyParams {}),
-    )
+    RuntimeRequest::new(JsonRpcId::Number(2), method, EmptyParams {})
 }
 
 fn operation_get(operation_id: &str) -> RuntimeRequest {
-    JsonRpcRequest::new(
+    RuntimeRequest::new(
         JsonRpcId::Number(3),
         RuntimeMethod::OperationGet,
-        RuntimeParams::OperationQuery(OperationQueryParams {
+        OperationQueryParams {
             operation_id: operation_id.to_owned(),
-        }),
+        },
     )
 }
 
 fn operation_wait(operation_id: &str, timeout_ms: u64) -> RuntimeRequest {
-    JsonRpcRequest::new(
+    RuntimeRequest::new(
         JsonRpcId::Number(4),
         RuntimeMethod::OperationWait,
-        RuntimeParams::OperationWait(OperationWaitParams {
+        OperationWaitParams {
             operation_id: operation_id.to_owned(),
             timeout_ms: Some(timeout_ms),
-        }),
+        },
     )
 }
 
@@ -525,6 +535,7 @@ where
                     }),
                 ))
             }),
+            mutation: Arc::new(unavailable_mutation),
         },
     )
     .unwrap();
@@ -532,23 +543,118 @@ where
 }
 
 fn subscribe_request() -> RuntimeRequest {
-    JsonRpcRequest::new(
+    RuntimeRequest::new(
         JsonRpcId::Number(5),
         RuntimeMethod::EventsSubscribe,
-        RuntimeParams::EventsSubscribe(EventsSubscribeParams {
+        EventsSubscribeParams {
             store_epoch: "store".to_owned(),
             stream_epoch: "stream".to_owned(),
             since_revision: 0,
-        }),
+        },
     )
 }
 
 fn unsubscribe_request() -> RuntimeRequest {
-    JsonRpcRequest::new(
+    RuntimeRequest::new(
         JsonRpcId::Number(6),
         RuntimeMethod::EventsUnsubscribe,
-        RuntimeParams::Empty(EmptyParams {}),
+        EmptyParams {},
     )
+}
+
+fn project_activate_request(project_id: &str) -> RuntimeRequest {
+    RuntimeRequest::new(
+        JsonRpcId::Number(7),
+        RuntimeMethod::ProjectActivate,
+        ProjectActivateParams {
+            client_id: "client-runtime".to_owned(),
+            mutation_id: "mutation-activate".to_owned(),
+            expected_revision: None,
+            request: ProjectActivateRequest {
+                project_id: project_id.to_owned(),
+            },
+        },
+    )
+}
+
+fn start_dual_scope_server_with_mutation<M>(
+    on_mutation: M,
+) -> (LocalControlServer, Arc<AtomicUsize>)
+where
+    M: Fn(super::mutations::RuntimeMutationRequest) -> Result<OperationResource, JsonRpcError>
+        + Send
+        + Sync
+        + 'static,
+{
+    let calls = Arc::new(AtomicUsize::new(0));
+    let callback_calls = Arc::clone(&calls);
+    let server = LocalControlServer::start_with_runtime(
+        test_secret("sk-test"),
+        test_secret("sk-test-runtime"),
+        hello_response(),
+        move |_| {
+            callback_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(HandoverResponse::accepted())
+        },
+        super::server::RuntimeCallbacks {
+            snapshot: Arc::new(|| Ok(sample_resources())),
+            operation: Arc::new(|_| Ok(None)),
+            events: Arc::new(|_| {
+                Err(JsonRpcError::new(
+                    -32001,
+                    "event subscription not ready",
+                    Some(JsonRpcErrorData {
+                        code: slterm_runtime_protocol::DomainErrorCode::NotReady,
+                    }),
+                ))
+            }),
+            mutation: Arc::new(on_mutation),
+        },
+    )
+    .unwrap();
+    (server, calls)
+}
+
+#[test]
+fn runtime_project_list_and_mutations_route_through_callbacks() {
+    let mutations = Arc::new(AtomicUsize::new(0));
+    let mutations_by_callback = Arc::clone(&mutations);
+    let (mut server, _calls) = start_dual_scope_server_with_mutation(move |request| {
+        assert_eq!(request.mutation.method(), "project.activate");
+        mutations_by_callback.fetch_add(1, Ordering::SeqCst);
+        Ok(OperationResource {
+            operation_id: "operation-project".to_owned(),
+            status: OperationStatus::Succeeded,
+            result: Some(serde_json::json!({})),
+            error: None,
+        })
+    });
+    let mut stream = connect(&server);
+    stream.set_read_timeout(Some(TEST_TIMEOUT)).unwrap();
+    write_json(
+        &mut stream,
+        &hello_scoped("sk-test-runtime", ControlScope::Runtime),
+    );
+    assert!(read_line(&mut stream).contains("store"));
+
+    write_json(&mut stream, &runtime_request(RuntimeMethod::ProjectList));
+    let reply: serde_json::Value = serde_json::from_str(&read_line(&mut stream)).unwrap();
+    assert_eq!(reply["result"]["projects"][0]["display_name"], "Repo");
+
+    write_json(
+        &mut stream,
+        &project_activate_request("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b"),
+    );
+    let reply: serde_json::Value = serde_json::from_str(&read_line(&mut stream)).unwrap();
+    assert_eq!(reply["result"]["status"], "succeeded");
+    assert_eq!(mutations.load(Ordering::SeqCst), 1);
+
+    // 非法稳定身份在调用派发器前拒绝。
+    write_json(&mut stream, &project_activate_request("not-a-uuid"));
+    let reply: serde_json::Value = serde_json::from_str(&read_line(&mut stream)).unwrap();
+    assert_eq!(reply["error"]["data"]["code"], "invalid_request");
+    assert_eq!(mutations.load(Ordering::SeqCst), 1);
+    server.shutdown().unwrap();
 }
 
 fn start_dual_scope_server_with_events<E>(on_events: E) -> (LocalControlServer, Arc<AtomicUsize>)
@@ -572,6 +678,7 @@ where
             snapshot: Arc::new(|| Ok(SnapshotResources::default())),
             operation: Arc::new(|_| Ok(None)),
             events: Arc::new(on_events),
+            mutation: Arc::new(unavailable_mutation),
         },
     )
     .unwrap();
@@ -752,6 +859,11 @@ fn runtime_describe_returns_registry_and_contract_hashes() {
             "runtime.operation_wait",
             "events.subscribe",
             "events.unsubscribe",
+            "project.list",
+            "project.activate",
+            "project.rename",
+            "project.reorder",
+            "project.remove",
             "instance.handover"
         ]
     );

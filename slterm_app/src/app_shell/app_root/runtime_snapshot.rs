@@ -1,5 +1,6 @@
 //! Runtime v2 资源快照：从前台唯一项目快照派生只读 DTO。
 
+use gpui::{Context, Window};
 use slterm_path::CanonicalPath;
 use slterm_runtime_protocol::{
     DocumentResource, DomainErrorCode, JsonRpcError, PanelGroupResource, ProjectResource,
@@ -8,7 +9,11 @@ use slterm_runtime_protocol::{
 use slterm_workspace::RunIntent;
 
 use super::AppRoot;
+use super::command_registry::{CommandId, CommandParameters, CommandSource, CommandTarget};
+use super::commands::AppRootError;
+use super::focus_manager::FocusError;
 use crate::app_shell::control_error;
+use crate::local_control::RuntimeMutation;
 
 impl AppRoot {
     /// 发布轻量资源事件；关闭开始后不再回填过期事件。
@@ -25,6 +30,59 @@ impl AppRoot {
             resource,
             generation: self.snapshot_generation,
         });
+    }
+
+    /// 执行 Runtime 写意图；参数校验、授权、事务与关闭策略全部复用既有命令。
+    pub(super) fn handle_runtime_mutation(
+        &mut self,
+        mutation: RuntimeMutation,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<(), JsonRpcError> {
+        if self.close_in_progress || self.application_close.is_some() || self.close_completed {
+            return Err(closing_error());
+        }
+        match mutation {
+            RuntimeMutation::ProjectActivate { project_id } => self
+                .activate_project(project_id, window, cx)
+                .map_err(runtime_mutation_error),
+            RuntimeMutation::ProjectRename { project_id, name } => self
+                .execute_command(
+                    CommandId::RenameProject,
+                    CommandSource::Application,
+                    CommandTarget::Project(project_id),
+                    Some(CommandParameters::RenameProject { name }),
+                    window,
+                    cx,
+                )
+                .map(|_| ())
+                .map_err(runtime_mutation_error),
+            RuntimeMutation::ProjectReorder {
+                project_id,
+                new_index,
+            } => self
+                .execute_command(
+                    CommandId::MoveProject,
+                    CommandSource::Application,
+                    CommandTarget::Project(project_id),
+                    Some(CommandParameters::MoveProject { new_index }),
+                    window,
+                    cx,
+                )
+                .map(|_| ())
+                .map_err(runtime_mutation_error),
+            RuntimeMutation::ProjectRemove { project_id } => self
+                .execute_command(
+                    CommandId::RemoveProject,
+                    CommandSource::Application,
+                    CommandTarget::Project(project_id),
+                    None,
+                    window,
+                    cx,
+                )
+                .map(|_| ())
+                .map_err(runtime_mutation_error),
+        }
     }
 
     /// 在 GPUI 前台按当前时刻生成同一份资源快照。
@@ -106,6 +164,30 @@ fn path_text(path: &CanonicalPath) -> Result<String, JsonRpcError> {
         .to_str()
         .map(str::to_owned)
         .ok_or_else(snapshot_encoding_error)
+}
+
+fn closing_error() -> JsonRpcError {
+    control_error(DomainErrorCode::Closing, -32004, "closing")
+}
+
+/// 写意图错误映射为封闭领域码；不携带路径、SQL 或正文。
+fn runtime_mutation_error(error: AppRootError) -> JsonRpcError {
+    match error {
+        AppRootError::Closing => closing_error(),
+        AppRootError::Focus(FocusError::ModalActive) => {
+            control_error(DomainErrorCode::Unauthorized, -32002, "modal active")
+        }
+        AppRootError::UnexpectedParameters
+        | AppRootError::Registry(_)
+        | AppRootError::Project(_)
+        | AppRootError::Snapshot(_)
+        | AppRootError::Layout(_) => control_error(
+            DomainErrorCode::InvalidRequest,
+            -32000,
+            "invalid project request",
+        ),
+        _ => control_error(DomainErrorCode::NotReady, -32001, "mutation not ready"),
+    }
 }
 
 fn snapshot_encoding_error() -> JsonRpcError {

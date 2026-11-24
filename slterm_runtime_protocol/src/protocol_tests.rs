@@ -4,11 +4,11 @@ use crate::protocol::{
     ClientRequest, ControlMessage, ControlMethod, ControlScope, Credential, DescribeResponse,
     DiscoveryRecord, DocumentResource, DomainErrorCode, EmptyParams, HandoverMethod,
     HandoverParams, HandoverRequest, HelloMethod, HelloParams, HelloRequest, HelloResponse,
-    JsonRpcError, JsonRpcErrorData, JsonRpcId, JsonRpcRequest, JsonRpcResponse,
+    JsonRpcError, JsonRpcErrorData, JsonRpcId, JsonRpcRequest, JsonRpcResponse, MutationParams,
     OperationQueryParams, OperationResource, OperationWaitParams, PanelGroupResource,
-    ProjectResource, ProtocolError, RuntimeMethod, RuntimeParams, RuntimeRequest,
-    SnapshotResources, SnapshotResponse, TerminalResource, ViewResource, params_sha256,
-    parse_client_request,
+    ProjectActivateRequest, ProjectRemoveRequest, ProjectRenameRequest, ProjectReorderRequest,
+    ProjectResource, ProtocolError, RuntimeMethod, RuntimeRequest, SnapshotResources,
+    SnapshotResponse, TerminalResource, ViewResource, params_sha256, parse_client_request,
 };
 use crate::{MethodKind, OperationStatus};
 
@@ -354,31 +354,27 @@ fn method_registry_drives_hello_capabilities() {
 }
 
 fn runtime_request(method: RuntimeMethod) -> RuntimeRequest {
-    JsonRpcRequest::new(
-        JsonRpcId::Number(7),
-        method,
-        RuntimeParams::Empty(EmptyParams {}),
-    )
+    RuntimeRequest::new(JsonRpcId::Number(7), method, EmptyParams {})
 }
 
 fn operation_get_request() -> RuntimeRequest {
-    JsonRpcRequest::new(
+    RuntimeRequest::new(
         JsonRpcId::Number(9),
         RuntimeMethod::OperationGet,
-        RuntimeParams::OperationQuery(OperationQueryParams {
+        OperationQueryParams {
             operation_id: "operation-a".to_owned(),
-        }),
+        },
     )
 }
 
 fn operation_wait_request(timeout_ms: u64) -> RuntimeRequest {
-    JsonRpcRequest::new(
+    RuntimeRequest::new(
         JsonRpcId::Number(10),
         RuntimeMethod::OperationWait,
-        RuntimeParams::OperationWait(OperationWaitParams {
+        OperationWaitParams {
             operation_id: "operation-a".to_owned(),
             timeout_ms: Some(timeout_ms),
-        }),
+        },
     )
 }
 
@@ -422,12 +418,13 @@ fn operation_queries_parse_with_method_specific_params() {
             other => panic!("操作查询必须解析为 Runtime 请求: {other:?}"),
         }
     }
-    let wait_without_timeout = JsonRpcRequest::new(
+    let wait_without_timeout = RuntimeRequest::new(
         JsonRpcId::Number(11),
         RuntimeMethod::OperationWait,
-        RuntimeParams::OperationQuery(OperationQueryParams {
+        OperationWaitParams {
             operation_id: "operation-a".to_owned(),
-        }),
+            timeout_ms: None,
+        },
     );
     let encoded = serde_json::to_value(wait_without_timeout).unwrap();
     assert!(parse_client_request(encoded.to_string().as_bytes()).is_ok());
@@ -446,6 +443,79 @@ fn operation_queries_parse_with_method_specific_params() {
         assert!(
             parse_client_request(invalid.to_string().as_bytes()).is_err(),
             "非法操作查询必须拒绝: {invalid}"
+        );
+    }
+}
+
+fn project_mutation<P: serde::Serialize>(method: RuntimeMethod, request: P) -> RuntimeRequest {
+    RuntimeRequest::new(
+        JsonRpcId::Number(20),
+        method,
+        MutationParams {
+            client_id: "client-runtime".to_owned(),
+            mutation_id: "mutation-1".to_owned(),
+            expected_revision: Some(3),
+            request,
+        },
+    )
+}
+
+#[test]
+fn project_methods_require_idempotency_envelope_and_project_identity() {
+    let project_id = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b";
+    for request in [
+        project_mutation(
+            RuntimeMethod::ProjectActivate,
+            ProjectActivateRequest {
+                project_id: project_id.to_owned(),
+            },
+        ),
+        project_mutation(
+            RuntimeMethod::ProjectRename,
+            ProjectRenameRequest {
+                project_id: project_id.to_owned(),
+                name: "renamed".to_owned(),
+            },
+        ),
+        project_mutation(
+            RuntimeMethod::ProjectReorder,
+            ProjectReorderRequest {
+                project_id: project_id.to_owned(),
+                new_index: 2,
+            },
+        ),
+        project_mutation(
+            RuntimeMethod::ProjectRemove,
+            ProjectRemoveRequest {
+                project_id: project_id.to_owned(),
+            },
+        ),
+    ] {
+        let encoded = serde_json::to_value(&request).unwrap();
+        let parsed = parse_client_request(encoded.to_string().as_bytes()).unwrap();
+        match parsed {
+            ClientRequest::Runtime(parsed) => assert_eq!(parsed.method, request.method),
+            other => panic!("项目写请求必须解析为 Runtime 请求: {other:?}"),
+        }
+    }
+    let list = RuntimeRequest::new(
+        JsonRpcId::Number(21),
+        RuntimeMethod::ProjectList,
+        EmptyParams {},
+    );
+    assert!(parse_client_request(&serde_json::to_vec(&list).unwrap()).is_ok());
+
+    for invalid in [
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"project.activate","params":{"client_id":"","mutation_id":"m","expected_revision":null,"request":{"project_id":"018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b"}}}),
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"project.activate","params":{"client_id":"c","mutation_id":"","expected_revision":null,"request":{"project_id":"018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b"}}}),
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"project.activate","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"project_id":""}}}),
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"project.rename","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"project_id":"018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b","name":" "}}}),
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"project.reorder","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"project_id":"018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b","new_index":0,"extra":1}}}),
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"project.list","params":{"extra":1}}),
+    ] {
+        assert!(
+            parse_client_request(invalid.to_string().as_bytes()).is_err(),
+            "非法项目请求必须拒绝: {invalid}"
         );
     }
 }
@@ -514,6 +584,11 @@ fn describe_lists_the_method_registry_with_contract_hashes() {
             "runtime.operation_wait",
             "events.subscribe",
             "events.unsubscribe",
+            "project.list",
+            "project.activate",
+            "project.rename",
+            "project.reorder",
+            "project.remove",
             "instance.handover"
         ]
     );

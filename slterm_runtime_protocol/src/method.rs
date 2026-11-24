@@ -96,6 +96,31 @@ fn events_unsubscribed_result_schema() -> schemars::Schema {
     schemars::schema_for!(crate::protocol::EventsUnsubscribedResponse)
 }
 
+#[cfg(feature = "schema")]
+fn project_activate_params_schema() -> schemars::Schema {
+    schemars::schema_for!(crate::protocol::ProjectActivateParams)
+}
+
+#[cfg(feature = "schema")]
+fn project_rename_params_schema() -> schemars::Schema {
+    schemars::schema_for!(crate::protocol::ProjectRenameParams)
+}
+
+#[cfg(feature = "schema")]
+fn project_reorder_params_schema() -> schemars::Schema {
+    schemars::schema_for!(crate::protocol::ProjectReorderParams)
+}
+
+#[cfg(feature = "schema")]
+fn project_remove_params_schema() -> schemars::Schema {
+    schemars::schema_for!(crate::protocol::ProjectRemoveParams)
+}
+
+#[cfg(feature = "schema")]
+fn project_list_result_schema() -> schemars::Schema {
+    schemars::schema_for!(crate::protocol::ProjectListResponse)
+}
+
 /// 全部真实可用方法；顺序即对外呈现顺序。
 pub static METHODS: &[MethodSpec] = &[
     MethodSpec {
@@ -169,6 +194,56 @@ pub static METHODS: &[MethodSpec] = &[
         result_schema: events_unsubscribed_result_schema,
     },
     MethodSpec {
+        method: ControlMethod::RuntimeProjectList,
+        scopes: &[ControlScope::Runtime],
+        kind: MethodKind::Query,
+        idempotent: true,
+        #[cfg(feature = "schema")]
+        params_schema: empty_params_schema,
+        #[cfg(feature = "schema")]
+        result_schema: project_list_result_schema,
+    },
+    MethodSpec {
+        method: ControlMethod::RuntimeProjectActivate,
+        scopes: &[ControlScope::Runtime],
+        kind: MethodKind::Mutation,
+        idempotent: true,
+        #[cfg(feature = "schema")]
+        params_schema: project_activate_params_schema,
+        #[cfg(feature = "schema")]
+        result_schema: operation_result_schema,
+    },
+    MethodSpec {
+        method: ControlMethod::RuntimeProjectRename,
+        scopes: &[ControlScope::Runtime],
+        kind: MethodKind::Mutation,
+        idempotent: true,
+        #[cfg(feature = "schema")]
+        params_schema: project_rename_params_schema,
+        #[cfg(feature = "schema")]
+        result_schema: operation_result_schema,
+    },
+    MethodSpec {
+        method: ControlMethod::RuntimeProjectReorder,
+        scopes: &[ControlScope::Runtime],
+        kind: MethodKind::Mutation,
+        idempotent: true,
+        #[cfg(feature = "schema")]
+        params_schema: project_reorder_params_schema,
+        #[cfg(feature = "schema")]
+        result_schema: operation_result_schema,
+    },
+    MethodSpec {
+        method: ControlMethod::RuntimeProjectRemove,
+        scopes: &[ControlScope::Runtime],
+        kind: MethodKind::Mutation,
+        idempotent: true,
+        #[cfg(feature = "schema")]
+        params_schema: project_remove_params_schema,
+        #[cfg(feature = "schema")]
+        result_schema: operation_result_schema,
+    },
+    MethodSpec {
         method: ControlMethod::InstanceHandover,
         scopes: &[ControlScope::Handover],
         kind: MethodKind::Mutation,
@@ -230,6 +305,11 @@ mod method_tests {
                 method_name(ControlMethod::RuntimeOperationWait),
                 method_name(ControlMethod::RuntimeEventsSubscribe),
                 method_name(ControlMethod::RuntimeEventsUnsubscribe),
+                method_name(ControlMethod::RuntimeProjectList),
+                method_name(ControlMethod::RuntimeProjectActivate),
+                method_name(ControlMethod::RuntimeProjectRename),
+                method_name(ControlMethod::RuntimeProjectReorder),
+                method_name(ControlMethod::RuntimeProjectRemove),
                 method_name(ControlMethod::InstanceHandover),
             ]
         );
@@ -312,7 +392,12 @@ mod method_tests {
                 ControlMethod::RuntimeOperationGet,
                 ControlMethod::RuntimeOperationWait,
                 ControlMethod::RuntimeEventsSubscribe,
-                ControlMethod::RuntimeEventsUnsubscribe
+                ControlMethod::RuntimeEventsUnsubscribe,
+                ControlMethod::RuntimeProjectList,
+                ControlMethod::RuntimeProjectActivate,
+                ControlMethod::RuntimeProjectRename,
+                ControlMethod::RuntimeProjectReorder,
+                ControlMethod::RuntimeProjectRemove,
             ]
         );
         let handover_methods: Vec<ControlMethod> = methods_for(ControlScope::Handover)

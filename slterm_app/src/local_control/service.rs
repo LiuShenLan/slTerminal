@@ -1,5 +1,6 @@
 //! 首实例控制面服务组合：凭据、真实运行元数据、发现记录与统一关闭。
 
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::io;
 use std::path::Path;
@@ -16,12 +17,16 @@ use slterm_runtime_protocol::{
 use super::credentials::load_or_create_at;
 use super::discovery::{DiscoveryGuard, endpoint_path, publish_at};
 use super::events::EventHub;
-use super::operations::{operation_resource, writer_error};
-use super::server::{
-    EventSubscribeCallback, LocalControlServer, OperationQueryCallback, RuntimeCallbacks,
-    SnapshotCallback,
+use super::operations::{
+    DispatchOutcome, DispatchRequest, OperationDispatcher, operation_resource, writer_error,
 };
-use crate::app_shell::{SltermShellEvent, try_send_handover, try_send_runtime_snapshot};
+use super::server::{
+    EventSubscribeCallback, LocalControlServer, MutationCallback, OperationQueryCallback,
+    RuntimeCallbacks, SnapshotCallback,
+};
+use crate::app_shell::{
+    SltermShellEvent, try_send_handover, try_send_runtime_mutation, try_send_runtime_snapshot,
+};
 use crate::persistence::metadata::WorkspaceMetadata;
 use crate::persistence::workspace_writer::WorkspaceWriterClient;
 use crate::secrets::{CredentialStore, SecretBytes, WindowsCredentialStore};
@@ -29,6 +34,8 @@ use crate::secrets::{CredentialStore, SecretBytes, WindowsCredentialStore};
 pub(super) const HANDOVER_REPLY_TIMEOUT: Duration = Duration::from_secs(4);
 /// 快照只读前台内存；2 秒足够覆盖事件泵唤醒与回执调度。
 pub(super) const SNAPSHOT_REPLY_TIMEOUT: Duration = Duration::from_secs(2);
+/// 写意图在壳内执行的完成回执上限；与 handover 的 4 秒一致。
+const MUTATION_REPLY_TIMEOUT: Duration = Duration::from_secs(4);
 const PROTOCOL_DOMAIN: &[u8] = b"slterm-runtime-v2";
 const RUNTIME_SCHEMA: &[u8] = include_bytes!("../../../assets/runtime-api-v2.schema.json");
 
@@ -165,6 +172,7 @@ impl LocalControlService {
             schema_sha256,
         );
         let snapshot_events = events.clone();
+        let mutation_events = events.clone();
         let on_handover: HandoverCallback = Arc::new(move |params| {
             let receipt = try_send_handover(&events, params)?;
             match receipt.recv_timeout(reply_timeout) {
@@ -195,8 +203,9 @@ impl LocalControlService {
             }
         });
         // Operation 查询只经唯一写线程；缺失 writer 时明确 NotReady。
+        let operation_writer = writer.clone();
         let on_operation: OperationQueryCallback = Arc::new(move |operation_id| {
-            let Some(writer) = &writer else {
+            let Some(writer) = &operation_writer else {
                 return Err(control_error(
                     DomainErrorCode::NotReady,
                     -32001,
@@ -230,6 +239,46 @@ impl LocalControlService {
         let hub_for_events = Arc::clone(&event_hub);
         let on_events: EventSubscribeCallback =
             Arc::new(move |params| hub_for_events.subscribe(params));
+        // 写派发只经唯一 writer；执行体把意图经壳事件交给 AppRoot。
+        let dispatcher = writer.map(|writer| {
+            Arc::new(OperationDispatcher::new(
+                writer,
+                metadata.store_epoch.clone(),
+            ))
+        });
+        let on_mutation: MutationCallback = Arc::new(move |request| {
+            let Some(dispatcher) = &dispatcher else {
+                return Err(control_error(
+                    DomainErrorCode::NotReady,
+                    -32001,
+                    "mutation not ready",
+                ));
+            };
+            let method = request.mutation.method();
+            let params = request.mutation.params_value();
+            dispatcher.dispatch(
+                DispatchRequest {
+                    client_id: &request.client_id,
+                    mutation_id: &request.mutation_id,
+                    method,
+                    params: &params,
+                    // 资源代次由执行体在提交前复核，派发器不重复猜测。
+                    expected_revision: None,
+                    current_revision: 0,
+                    resource_generations: BTreeMap::new(),
+                },
+                || match try_send_runtime_mutation(&mutation_events, request.mutation) {
+                    Ok(receipt) => match receipt.recv_timeout(MUTATION_REPLY_TIMEOUT) {
+                        Ok(Ok(())) => DispatchOutcome::Succeeded(serde_json::json!({})),
+                        Ok(Err(error)) => DispatchOutcome::Failed(error_value(error)),
+                        Err(_) => DispatchOutcome::OutcomeUnknown(
+                            serde_json::json!({"code": "outcome_unknown"}),
+                        ),
+                    },
+                    Err(error) => DispatchOutcome::Failed(error_value(error)),
+                },
+            )
+        });
         let server = bind(
             credential,
             runtime_credential,
@@ -239,6 +288,7 @@ impl LocalControlService {
                 snapshot: on_snapshot,
                 operation: on_operation,
                 events: on_events,
+                mutation: on_mutation,
             },
         )?;
         let record = DiscoveryRecord {
@@ -354,6 +404,11 @@ pub(super) fn shutdown_components(
 
 fn control_error(domain: DomainErrorCode, numeric: i32, message: &'static str) -> JsonRpcError {
     JsonRpcError::new(numeric, message, Some(JsonRpcErrorData { code: domain }))
+}
+
+/// 结构化错误写入 Operation 的错误字段；序列化失败只保留封闭码。
+fn error_value(error: JsonRpcError) -> serde_json::Value {
+    serde_json::to_value(&error).unwrap_or_else(|_| serde_json::json!({"code": "unknown"}))
 }
 
 /// Runtime 合同散列唯一推导点：协议散列覆盖域分隔前缀与同一 schema 原始字节。
