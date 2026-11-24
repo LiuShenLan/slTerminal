@@ -359,6 +359,19 @@ pub(crate) fn index_bytes(root: &Path, repo_relative: &str) -> Result<Vec<u8>, G
     Ok(output.stdout)
 }
 
+/// 取消单路径暂存（索引回退到 HEAD）；只用于 staged added 删除的前置步骤。
+///
+/// 写操作只由 Commit 删除在后台调用，执行前必须由应用层完成状态与授权重检。
+pub(crate) fn unstage_path(root: &Path, repo_relative: &str) -> Result<(), GitError> {
+    let mut command = repository::repository_command(root);
+    command.args(["reset", "--quiet", "--"]).arg(repo_relative);
+    let output = repository::run_repository(command)?;
+    if !output.status.success() {
+        return Err(command_failure(root, "reset", &output.stderr));
+    }
+    Ok(())
+}
+
 /// 从当前索引恢复工作区路径；不重置索引，不切换 HEAD。
 ///
 /// 写操作只由 Commit 回滚在后台调用，执行前必须由应用层完成状态与授权重检。

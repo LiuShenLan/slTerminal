@@ -469,3 +469,126 @@ fn commit_unstaged_rename_rollback(cx: &mut TestAppContext) {
         "索引不得改变且工作区应回到干净状态"
     );
 }
+
+struct FakeRecycleBin {
+    dir: std::path::PathBuf,
+    fail: bool,
+}
+
+impl crate::app_shell::file_operation_service::RecycleBin for FakeRecycleBin {
+    fn send_to_recycle_bin(&self, path: &std::path::Path) -> std::io::Result<()> {
+        if self.fail {
+            return Err(std::io::Error::other("回收站不可用"));
+        }
+        std::fs::create_dir_all(&self.dir)?;
+        let name = path.file_name().unwrap();
+        std::fs::rename(path, self.dir.join(name))
+    }
+}
+
+fn delete_repository(temp: &tempfile::TempDir) -> std::path::PathBuf {
+    let repository = temp.path().join("repo");
+    std::fs::create_dir(&repository).unwrap();
+    super::gitshow::git(&repository, &["init", "--quiet"]);
+    super::gitshow::git(&repository, &["config", "core.autocrlf", "false"]);
+    super::gitshow::git(&repository, &["config", "user.name", "slTerminal Test"]);
+    super::gitshow::git(
+        &repository,
+        &["config", "user.email", "slterm-test@example.invalid"],
+    );
+    std::fs::write(repository.join("base.txt"), "base\n").unwrap();
+    super::gitshow::git(&repository, &["add", "--", "base.txt"]);
+    super::gitshow::git(&repository, &["commit", "--quiet", "-m", "base"]);
+    repository
+}
+
+#[gpui::test]
+fn commit_staged_added_delete_sequence(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let repository = delete_repository(&temp);
+    std::fs::write(repository.join("added.txt"), "added\n").unwrap();
+    super::gitshow::git(&repository, &["add", "--", "added.txt"]);
+    let file =
+        CanonicalPath::new(dunce::canonicalize(repository.join("added.txt")).unwrap()).unwrap();
+    let recycle = temp.path().join("recycle");
+    let (root, mut window, _) = open_root(cx);
+    root.update(cx, |root, _| {
+        root.replace_file_operations_for_test(
+            crate::app_shell::file_operation_service::FileOperationService::with_recycle_bin_for_test(
+                std::sync::Arc::new(FakeRecycleBin {
+                    dir: recycle.clone(),
+                    fail: false,
+                }),
+            ),
+        );
+    });
+    add_project(&root, &mut window, PROJECT_A, repository.to_str().unwrap());
+    let commit = open_commit(&root, &mut window, cx);
+    window.update(|window, cx| {
+        commit.update(cx, |view, cx| view.commit_delete_row(&file, window, cx));
+    });
+    window.run_until_parked();
+    draw_frame(&mut window);
+    window.run_until_parked();
+
+    assert!(!repository.join("added.txt").exists(), "文件必须移入回收站");
+    assert!(recycle.join("added.txt").exists(), "回收站必须收到文件");
+    let indexed = super::gitshow::git(&repository, &["ls-files", "--", "added.txt"]);
+    assert!(indexed.stdout.is_empty(), "取消暂存必须先于删除");
+    let status = super::gitshow::git(&repository, &["status", "--porcelain"]);
+    assert!(status.stdout.is_empty(), "删除后工作区应干净");
+}
+
+#[gpui::test]
+fn commit_untracked_permanent_delete_requires_confirmation(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let repository = delete_repository(&temp);
+    std::fs::write(repository.join("untracked.txt"), "loose\n").unwrap();
+    let file =
+        CanonicalPath::new(dunce::canonicalize(repository.join("untracked.txt")).unwrap()).unwrap();
+    let (root, mut window, _) = open_root(cx);
+    root.update(cx, |root, _| {
+        root.replace_file_operations_for_test(
+            crate::app_shell::file_operation_service::FileOperationService::with_recycle_bin_for_test(
+                std::sync::Arc::new(FakeRecycleBin {
+                    dir: temp.path().join("recycle"),
+                    fail: true,
+                }),
+            ),
+        );
+    });
+    add_project(&root, &mut window, PROJECT_A, repository.to_str().unwrap());
+    let commit = open_commit(&root, &mut window, cx);
+    window.update(|window, cx| {
+        commit.update(cx, |view, cx| view.commit_delete_row(&file, window, cx));
+    });
+    window.run_until_parked();
+    assert!(
+        repository.join("untracked.txt").exists(),
+        "回收站不可用时不得静默永久删除"
+    );
+    let pending = window.update(|_, cx| {
+        commit
+            .read(cx)
+            .commit_pending_permanent_path()
+            .map(|path| path.as_path().to_path_buf())
+    });
+    assert_eq!(
+        pending.as_deref(),
+        Some(file.as_path()),
+        "回收站失败必须记录待永久确认目标"
+    );
+
+    window.update(|window, cx| {
+        commit.update(cx, |view, cx| {
+            view.commit_force_delete_row(&file, window, cx);
+        });
+    });
+    window.run_until_parked();
+    draw_frame(&mut window);
+    window.run_until_parked();
+    assert!(
+        !repository.join("untracked.txt").exists(),
+        "显式确认后永久删除"
+    );
+}

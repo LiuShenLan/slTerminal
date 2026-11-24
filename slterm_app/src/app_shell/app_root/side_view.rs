@@ -646,6 +646,8 @@ impl Render for SideView {
                 element.on_key_down(cx.listener(|view, event: &gpui::KeyDownEvent, window, cx| {
                     if event.keystroke.key == "r" && event.keystroke.modifiers.control {
                         view.commit_rollback_selected(window, cx);
+                    } else if event.keystroke.key == "delete" {
+                        view.commit_delete_selected(window, cx);
                     }
                 }))
             })

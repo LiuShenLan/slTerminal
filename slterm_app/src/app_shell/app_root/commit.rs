@@ -87,6 +87,12 @@ pub(super) enum CommitIntent {
         row: CommitRow,
         kind: RollbackKind,
     },
+    Delete {
+        project_id: ProjectId,
+        root: CanonicalPath,
+        row: CommitRow,
+        permanent: bool,
+    },
 }
 
 fn status_label(index: char, worktree: char, conflict: bool) -> String {
@@ -231,6 +237,8 @@ pub(super) struct CommitRuntime {
     _filter_change: Option<gpui::Subscription>,
     loading: bool,
     stale: bool,
+    /// 回收站删除失败后的待永久确认目标；仅该路径允许再次按 Delete 永久删除。
+    pending_permanent: Option<CanonicalPath>,
     generation: u64,
     task: Option<Task<()>>,
 }
@@ -252,6 +260,7 @@ impl CommitRuntime {
             _filter_change: None,
             loading: false,
             stale: false,
+            pending_permanent: None,
             generation: 0,
             task: None,
         }
@@ -500,6 +509,49 @@ impl SideView {
         self.commit.as_ref().map(|runtime| &runtime.scroll_handle)
     }
 
+    /// 待永久确认目标；只有该路径的 Delete 会被提升为永久删除。
+    pub(super) fn commit_pending_permanent_path(&self) -> Option<&CanonicalPath> {
+        self.commit
+            .as_ref()
+            .and_then(|runtime| runtime.pending_permanent.as_ref())
+    }
+
+    /// 删除失败回投：仅回收站不可用且非永久请求时保留待确认窗口。
+    pub(super) fn commit_set_pending_permanent(
+        &mut self,
+        path: Option<CanonicalPath>,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(runtime) = &mut self.commit else {
+            return;
+        };
+        if runtime.pending_permanent == path {
+            return;
+        }
+        runtime.pending_permanent = path;
+        cx.notify();
+    }
+
+    /// 键盘入口：选中行普通删除；已处于待确认的同一行提升为永久删除。
+    pub(super) fn commit_delete_selected(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(path) = self
+            .commit
+            .as_ref()
+            .and_then(|runtime| runtime.selected.clone())
+        else {
+            return;
+        };
+        if self.commit_pending_permanent_path() == Some(&path) {
+            self.commit_force_delete_row(&path, window, cx);
+        } else {
+            self.commit_delete_row(&path, window, cx);
+        }
+    }
+
     /// 单击选中不打开；选中行是 Ctrl+R 回滚与后续菜单动作的目标。
     pub(super) fn commit_select_at(&mut self, path: &CanonicalPath, cx: &mut Context<'_, Self>) {
         let Some(runtime) = &mut self.commit else {
@@ -526,6 +578,59 @@ impl SideView {
             return;
         };
         self.commit_rollback(&path, window, cx);
+    }
+
+    /// untracked／staged added 删除入口；回收站不可用时由 AppRoot 保留待确认。
+    pub(super) fn commit_delete_row(
+        &mut self,
+        path: &CanonicalPath,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.commit_request_delete(path, false, window, cx);
+    }
+
+    /// 显式确认后的永久删除入口；只在回收站不可用的后续确认使用。
+    pub(super) fn commit_force_delete_row(
+        &mut self,
+        path: &CanonicalPath,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.commit_request_delete(path, true, window, cx);
+    }
+
+    fn commit_request_delete(
+        &mut self,
+        path: &CanonicalPath,
+        permanent: bool,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(runtime) = &self.commit else {
+            return;
+        };
+        let Some(row) = runtime.row_for_path(path).cloned() else {
+            return;
+        };
+        // 只有 untracked 与 staged added 可删除；其他形态必须先回滚或提交。
+        if !(row.untracked || row.index == 'A') {
+            return;
+        }
+        let Some(root) = runtime.repo_root.clone() else {
+            return;
+        };
+        let project_id = runtime.project;
+        self.dispatch_commit_intent(
+            CommitIntent::Delete {
+                project_id,
+                root,
+                row,
+                permanent,
+            },
+            window,
+            cx,
+        );
     }
 
     /// 回滚入口：只有可放弃的未暂存变化才产生意图；脏 Document 由 AppRoot 拒绝。
@@ -709,7 +814,10 @@ pub(super) fn render_commit(view: &mut SideView, cx: &mut Context<'_, SideView>)
             let path = row.path.clone();
             let relative = row.repo_relative.clone();
             let selector = format!("commit-row-{relative}");
-            let label = format!("{} {} — {}", row.status_label, row.name, relative);
+            let mut label = format!("{} {} — {}", row.status_label, row.name, relative);
+            if runtime.pending_permanent.as_ref() == Some(&row.path) {
+                label.push_str("（回收站不可用，按 Delete 永久删除）");
+            }
             list = list.child(
                 div()
                     .id(("commit-row", index * 1024 + row_index))
@@ -802,6 +910,12 @@ impl AppRoot {
                 row,
                 kind,
             } => self.start_commit_rollback(project_id, root, row, kind, window, cx),
+            CommitIntent::Delete {
+                project_id,
+                root,
+                row,
+                permanent,
+            } => self.start_commit_delete(project_id, root, row, permanent, window, cx),
             CommitIntent::Open {
                 project_id,
                 root,
@@ -1031,6 +1145,165 @@ impl AppRoot {
             window,
             cx,
         );
+    }
+
+    /// 删除先过脏 Document 守卫；staged added 先取消暂存，再回收站或永久删除。
+    fn start_commit_delete(
+        &mut self,
+        project_id: ProjectId,
+        root: CanonicalPath,
+        row: CommitRow,
+        permanent: bool,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if self.tasks.is_registered(TaskId::CommitDelete) {
+            return;
+        }
+        if self.snapshot.registry().active() != Some(project_id) {
+            return;
+        }
+        // 写能力只来自项目根；仓库根兄弟位置仅可读。
+        let Some(project_root) = self
+            .snapshot
+            .registry()
+            .project(project_id)
+            .map(|project| project.root().clone())
+        else {
+            return;
+        };
+        if !row.path.as_path().starts_with(project_root.as_path()) {
+            return;
+        }
+        // 脏 Document 未取得保存／丢弃决定前不得触碰工作区。
+        if let Some(document_id) = self.document_id_at(&row.path)
+            && self
+                .documents
+                .session(document_id)
+                .is_some_and(|session| session.is_dirty())
+        {
+            return;
+        }
+        let service = std::sync::Arc::clone(&self.file_operations);
+        let executor = cx.background_executor().clone();
+        let window_handle = window.window_handle();
+        let repo_root = root.clone();
+        let write_root = project_root.clone();
+        let repo_relative = row.repo_relative.clone();
+        let target = row.path.clone();
+        let target_for_finish = target.clone();
+        let staged = row.index == 'A';
+        self.tasks
+            .register_with(TaskId::CommitDelete, CancellationToken::new(), move || {
+                let deleting = executor.spawn(async move {
+                    let grants = super::explorer::status_grants(&repo_root)?;
+                    let snapshot =
+                        crate::git::GitFacade::default().status(&repo_root, &grants, 0)?;
+                    // 写前重检：目标必须仍是同形态的 untracked 或 staged added。
+                    let current = snapshot
+                        .entries
+                        .iter()
+                        .find(|entry| entry.path.trim_matches('/') == repo_relative)
+                        .ok_or_else(|| {
+                            crate::git::GitError::Command("删除目标状态已变化".to_owned())
+                        })?;
+                    let shape_ok = if staged {
+                        current.index == 'A' && current.worktree == '.'
+                    } else {
+                        current.index == '?' && current.worktree == '?'
+                    };
+                    if !shape_ok || current.conflict {
+                        return Err(crate::git::GitError::Command(
+                            "删除目标状态已变化".to_owned(),
+                        ));
+                    }
+                    // staged added 先取消暂存，失败即中止，避免索引与工作区不一致。
+                    if staged {
+                        crate::git::unstage_path(repo_root.as_path(), repo_relative.as_str())?;
+                    }
+                    if permanent {
+                        std::fs::remove_file(target.as_path()).map_err(|_| {
+                            crate::git::GitError::Command("永久删除失败".to_owned())
+                        })?;
+                        return Ok(());
+                    }
+                    let write_grants = [slterm_path::PathGrant::project_root(write_root)];
+                    let plan = service
+                        .plan_delete(
+                            slterm_sidebar::FileTreeRoot::Project(project_id),
+                            &target,
+                            &write_grants,
+                            0,
+                        )
+                        .map_err(|_| crate::git::GitError::Command("删除计划失败".to_owned()))?;
+                    service
+                        .execute(&plan, &write_grants, 0)
+                        .map(|_| ())
+                        .map_err(|_| crate::git::GitError::Command("回收站删除失败".to_owned()))
+                });
+                cx.spawn(async move |this, cx| {
+                    let result = deleting.await;
+                    let _ = window_handle.update(cx, |_, window, cx| {
+                        let _ = this.update(cx, |root, cx| {
+                            root.finish_commit_delete(
+                                target_for_finish,
+                                permanent,
+                                result,
+                                window,
+                                cx,
+                            )
+                        });
+                    });
+                })
+            })
+            .expect("CommitDelete 单任务登记必须唯一");
+    }
+
+    fn finish_commit_delete(
+        &mut self,
+        path: CanonicalPath,
+        permanent: bool,
+        result: Result<(), crate::git::GitError>,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.tasks.complete(TaskId::CommitDelete);
+        let retry_permanent = result.is_err() && !permanent;
+        let target = self
+            .side_views
+            .instance(slterm_workspace::SideViewId::Commit)
+            .cloned();
+        if let Some(target) = target {
+            target.update(cx, |view, cx| {
+                view.commit_set_pending_permanent(retry_permanent.then(|| path.clone()), cx);
+            });
+        }
+        // 无论成功或失败都刷新真实现状；失败保留原行以支持显式永久确认。
+        if let Some(project) = self.snapshot.registry().active() {
+            let root = self
+                .snapshot
+                .registry()
+                .project(project)
+                .map(|project| project.root().clone());
+            if let Some(root) = root {
+                let generation = self
+                    .side_views
+                    .instance(slterm_workspace::SideViewId::Commit)
+                    .and_then(|instance| instance.read(cx).commit_generation_for_refresh());
+                if let Some(generation) = generation {
+                    let _ = window;
+                    self.handle_commit_intent(
+                        CommitIntent::LoadStatus {
+                            project_id: project,
+                            root,
+                            generation,
+                        },
+                        window,
+                        cx,
+                    );
+                }
+            }
+        }
     }
 
     /// 回滚前先过脏 Document 守卫，再后台重检状态并只从索引恢复工作区。

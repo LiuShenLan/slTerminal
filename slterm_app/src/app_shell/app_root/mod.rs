@@ -265,6 +265,17 @@ pub(crate) struct AppRoot {
     shell: CanonicalPath,
 }
 
+#[cfg(all(test, feature = "gpui-test-support"))]
+impl AppRoot {
+    /// 测试注入回收站端口；生产固定系统回收站。
+    pub(crate) fn replace_file_operations_for_test(
+        &mut self,
+        service: crate::app_shell::file_operation_service::FileOperationService,
+    ) {
+        self.file_operations = std::sync::Arc::new(service);
+    }
+}
+
 impl AppRoot {
     pub(crate) fn new(
         panel_ids: PanelIdAllocator,
