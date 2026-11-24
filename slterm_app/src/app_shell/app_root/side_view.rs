@@ -16,6 +16,7 @@ use slterm_workspace::{
 };
 
 use super::AppRoot;
+use super::agent_files::AgentFilesRuntime;
 use super::explorer::ExplorerRuntime;
 use super::side_view_host::{SideViewControl, SideViewHost};
 use crate::app_shell::text_view::{
@@ -397,6 +398,8 @@ pub(crate) struct SideView {
     pub(super) explorer: Option<ExplorerRuntime>,
     /// Commit 运行态；其它视图恒为 None。
     pub(super) commit: Option<super::commit::CommitRuntime>,
+    /// Agent 全局文件树运行态；其它视图恒为 None。
+    pub(super) agent_files: Option<AgentFilesRuntime>,
     /// AppRoot 在实例创建后注入；跨域意图只经该弱引用延迟派发。
     pub(super) root_handle: Option<WeakEntity<AppRoot>>,
     /// 同步关闭后禁止旧实体延迟析构再次回写。
@@ -427,6 +430,7 @@ impl SideView {
             pending_final_states,
             explorer: None,
             commit: None,
+            agent_files: None,
             root_handle: None,
             closed: false,
         }
@@ -523,6 +527,7 @@ impl SideView {
         // 未写回的用户动作必须在关闭前统一进入唯一状态。
         self.checkpoint_explorer_state();
         self.checkpoint_commit_state();
+        self.checkpoint_agent_files_state();
         self.closed = true;
         let id = self.state.id();
         self.cache.borrow_mut().insert(id, self.state.clone());
@@ -630,7 +635,8 @@ impl Render for SideView {
         let content = match id {
             SideViewId::Explorer => Some(super::explorer::render_explorer(self, cx)),
             SideViewId::Commit => Some(super::commit::render_commit(self, cx)),
-            SideViewId::Nav | SideViewId::AgentFiles => None,
+            SideViewId::AgentFiles => Some(super::agent_files::render_agent_files(self, cx)),
+            SideViewId::Nav => None,
         };
         div()
             .size_full()

@@ -372,11 +372,12 @@ impl AgentFilesState {
         }
     }
 
-    pub fn root_expanded(&self, agent_root_id: AgentRootId) -> bool {
+    /// `None` 表示该根没有持久记录（新根保持运行态默认展开）。
+    pub fn root_expanded(&self, agent_root_id: AgentRootId) -> Option<bool> {
         self.roots
             .iter()
             .find(|root| root.agent_root_id == agent_root_id)
-            .is_some_and(|root| root.expanded)
+            .map(|root| root.expanded)
     }
 
     pub fn root_directories<'a>(

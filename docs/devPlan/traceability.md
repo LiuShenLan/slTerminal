@@ -385,7 +385,7 @@
 | 跨根复制逐项执行而跨根剪切拒绝 | `agent_files_cross_root_copy_and_cut` | 待实现 |
 | 根层过滤不读取被隐藏内容且不是授权 | `agent_files_filter_is_not_authorization` | 待实现 |
 | 从 Agent 树打开同一文件仍复用共享 Document | `agent_files_open_reuses_document` | 待实现 |
-| 展开、当前行和滚动恢复而多选与错误清除 | `agent_files_view_state_restore` | 待实现 |
+| 展开、当前行和滚动恢复而多选与错误清除 | `agent_files_view_state_restore` | 已自动化 |
 | 根改路径后旧授权与相对视图状态不套用 | `agent_root_path_change_resets_state_and_authorization` | 待实现 |
 | 不可见或根收起时释放监听且无过期结果回填 | `agent_files_visibility_controls_watchers` | 待实现 |
 

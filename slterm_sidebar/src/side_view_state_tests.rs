@@ -628,12 +628,12 @@ fn agent_files_state_exposes_roots_and_current_row() {
     let skills = SideViewPath::new("skills".to_owned()).unwrap();
     let mut state = AgentFilesState::default();
     state.set_root(root, true, vec![skills.clone()]);
-    assert!(state.root_expanded(root));
+    assert_eq!(state.root_expanded(root), Some(true));
     assert_eq!(
         state.root_directories(root).collect::<Vec<_>>(),
         vec![&skills]
     );
-    assert!(!state.root_expanded(ROOT_B.parse().unwrap()));
+    assert_eq!(state.root_expanded(ROOT_B.parse().unwrap()), None);
 
     state.set_current_row(root, Some(skills.clone()));
     assert_eq!(state.current_row(), Some((root, Some(&skills))));

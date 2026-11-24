@@ -209,7 +209,7 @@ impl ExplorerRuntime {
 }
 
 /// 读取单层目录；非目录/文件条目（链接、设备等）不进入树。
-fn read_directory(directory: &CanonicalPath) -> io::Result<Vec<FileTreeEntry>> {
+pub(super) fn read_directory(directory: &CanonicalPath) -> io::Result<Vec<FileTreeEntry>> {
     let mut entries = Vec::new();
     for entry in std::fs::read_dir(directory.as_path())? {
         let Ok(entry) = entry else {
@@ -234,7 +234,7 @@ fn read_directory(directory: &CanonicalPath) -> io::Result<Vec<FileTreeEntry>> {
     Ok(entries)
 }
 
-fn join_relative(root: &CanonicalPath, relative: &str) -> Option<CanonicalPath> {
+pub(super) fn join_relative(root: &CanonicalPath, relative: &str) -> Option<CanonicalPath> {
     let path = root
         .as_path()
         .join(relative.replace('/', std::path::MAIN_SEPARATOR_STR));
@@ -242,7 +242,7 @@ fn join_relative(root: &CanonicalPath, relative: &str) -> Option<CanonicalPath> 
 }
 
 /// 根相对正斜杠文本；非 Unicode 组件返回 None（不持久伪造路径）。
-fn relative_text(root: &CanonicalPath, path: &CanonicalPath) -> Option<String> {
+pub(super) fn relative_text(root: &CanonicalPath, path: &CanonicalPath) -> Option<String> {
     let relative = path.as_path().strip_prefix(root.as_path()).ok()?;
     let parts = relative
         .components()
@@ -254,7 +254,7 @@ fn relative_text(root: &CanonicalPath, path: &CanonicalPath) -> Option<String> {
     Some(parts.join("/"))
 }
 
-fn persistent_path(root: &CanonicalPath, path: &CanonicalPath) -> Option<SideViewPath> {
+pub(super) fn persistent_path(root: &CanonicalPath, path: &CanonicalPath) -> Option<SideViewPath> {
     SideViewPath::new(relative_text(root, path)?).ok()
 }
 
@@ -292,6 +292,7 @@ impl AppRoot {
                 }
             });
         }
+        self.sync_agent_files_roots(cx);
         self.side_view_roots_generation = Some(self.snapshot_generation);
     }
 

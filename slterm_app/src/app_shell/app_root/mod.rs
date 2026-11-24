@@ -1,5 +1,6 @@
 //! 项目工作区运行根：唯一持有项目快照与全部项目面板实例。
 
+mod agent_files;
 mod application_close;
 mod batch_close;
 pub(crate) mod close_coordinator;
@@ -218,6 +219,8 @@ pub(crate) struct AppRoot {
     path_resolver: Arc<dyn crate::platform::document_paths::DocumentPathResolver>,
     /// 文件树单项操作唯一执行体；含阻塞 I/O，只在后台调用。
     file_operations: Arc<crate::app_shell::file_operation_service::FileOperationService>,
+    /// Agent 全局目录快照；None 表示按 catalog 与 home 实时解析。
+    agent_global_dirs: Option<Vec<crate::agent_dirs::AgentGlobalDir>>,
     system_open: Arc<dyn Fn(CanonicalPath) + Send + Sync>,
     #[allow(dead_code)] // 消费点 = Document 真实后台打开。
     document_open_service: Arc<crate::app_shell::documents::DocumentOpenService>,
@@ -273,6 +276,14 @@ impl AppRoot {
         service: crate::app_shell::file_operation_service::FileOperationService,
     ) {
         self.file_operations = std::sync::Arc::new(service);
+    }
+
+    /// 测试注入 Agent 全局目录快照；避免触碰真实用户 home。
+    pub(crate) fn replace_agent_global_dirs_for_test(
+        &mut self,
+        dirs: Vec<crate::agent_dirs::AgentGlobalDir>,
+    ) {
+        self.agent_global_dirs = Some(dirs);
     }
 }
 
@@ -431,6 +442,7 @@ impl AppRoot {
             file_operations: Arc::new(
                 crate::app_shell::file_operation_service::FileOperationService::default(),
             ),
+            agent_global_dirs: None,
             system_open: Arc::new(|path| {
                 crate::platform::file_operations::open_in_system(path.as_path());
             }),
