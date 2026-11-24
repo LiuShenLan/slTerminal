@@ -406,6 +406,52 @@ mod tests {
         assert!(registry.capability_union_at(&outside).is_none());
     }
 
+    /// Agent 根之间跨根复制逐项产生目标；跨根剪切逐项拒绝且不产生目标。
+    #[test]
+    fn agent_files_cross_root_copy_and_cut() {
+        use slterm_sidebar::{
+            FileClipboard, FileClipboardItem, FileClipboardMode, FileTreeEntryKind, FileTreeRoot,
+            PasteRejectionReason, PasteTarget,
+        };
+
+        let temp = tempfile::tempdir().unwrap();
+        let source_dir = temp.path().join("clip-a");
+        let target_dir = temp.path().join("clip-b");
+        std::fs::create_dir_all(&source_dir).unwrap();
+        std::fs::create_dir_all(&target_dir).unwrap();
+        std::fs::write(source_dir.join("one.txt"), "one\n").unwrap();
+        let source =
+            CanonicalPath::new(dunce::canonicalize(source_dir.join("one.txt")).unwrap()).unwrap();
+        let target = CanonicalPath::new(dunce::canonicalize(&target_dir).unwrap()).unwrap();
+        let source_root = FileTreeRoot::Agent(id(1));
+        let target_root = FileTreeRoot::Agent(id(2));
+        let item = FileClipboardItem {
+            root: source_root,
+            path: source,
+            kind: FileTreeEntryKind::File,
+        };
+
+        let copied = FileClipboard::new(FileClipboardMode::Copy, vec![item.clone()]).plan_paste(
+            PasteTarget {
+                root: target_root.clone(),
+                directory: target.clone(),
+            },
+        );
+        assert_eq!(copied.items.len(), 1, "跨根复制必须逐项产生目标");
+        assert_eq!(
+            copied.items[0].target,
+            CanonicalPath::new(target_dir.join("one.txt")).unwrap()
+        );
+        assert!(copied.rejections.is_empty());
+
+        let cut = FileClipboard::new(FileClipboardMode::Cut, vec![item]).plan_paste(PasteTarget {
+            root: target_root,
+            directory: target,
+        });
+        assert!(cut.items.is_empty(), "跨根剪切不得产生目标");
+        assert_eq!(cut.rejections[0].reason, PasteRejectionReason::CrossRootCut);
+    }
+
     /// 链接别名指向同一真实目录时不形成重复根。
     #[test]
     fn agent_root_real_directory_dedup() {
