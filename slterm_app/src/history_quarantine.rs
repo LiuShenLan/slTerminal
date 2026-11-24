@@ -22,6 +22,57 @@ enum BatchStatus {
     Undone,
 }
 
+/// 未完成批次的持久阶段；完成提交前的异常退出从这里继续。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum IncompleteProgress {
+    /// 尚未写入隔离副本。
+    Prepared,
+    /// 副本已校验、来源尚未删除。
+    Copied,
+    /// 来源已删除、完成时间尚未提交。
+    SourceRemoved,
+}
+
+/// 对账时读取到的文件事实。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ReconcileFacts {
+    pub copy_intact: bool,
+    pub source_present: bool,
+}
+
+/// 启动对账结论：未完成项不得伪装完成，已隐藏项进入待处理。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ReconcileDecision {
+    /// 未完成：保留（或恢复）来源，不属于撤销集合。
+    RetainSource,
+    /// 来源已删除但缺完成时间：继续隐藏并待人工确认。
+    HiddenNeedsAttention,
+    /// 材料或来源状态矛盾：保留全部可用材料并待处理。
+    NeedsAttention,
+}
+
+/// 对账只看真实事实；任何缺副本或矛盾状态都进入待处理而不是自动提交。
+pub(crate) fn reconcile_incomplete(
+    progress: IncompleteProgress,
+    facts: ReconcileFacts,
+) -> ReconcileDecision {
+    if !facts.copy_intact {
+        return ReconcileDecision::NeedsAttention;
+    }
+    match progress {
+        IncompleteProgress::Prepared | IncompleteProgress::Copied => {
+            ReconcileDecision::RetainSource
+        }
+        IncompleteProgress::SourceRemoved => {
+            if facts.source_present {
+                ReconcileDecision::NeedsAttention
+            } else {
+                ReconcileDecision::HiddenNeedsAttention
+            }
+        }
+    }
+}
+
 /// 单目标撤销预检：目标已存在（外部新增或修改）时不得覆盖。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum UndoTargetDecision {
@@ -222,6 +273,67 @@ mod tests {
         assert!(!service.undoable(batch(2), at(108)));
         assert_eq!(service.expired(at(105)), vec![batch(1)]);
         assert_eq!(service.expired(at(110)), vec![batch(1), batch(2)]);
+    }
+
+    /// 完成提交前异常退出：先对账来源与副本，未完成项保留来源，缺副本进入待处理。
+    #[test]
+    fn quarantine_startup_reconciles_incomplete_batch() {
+        use ReconcileDecision::{HiddenNeedsAttention, NeedsAttention, RetainSource};
+
+        assert_eq!(
+            reconcile_incomplete(
+                IncompleteProgress::Copied,
+                ReconcileFacts {
+                    copy_intact: true,
+                    source_present: true,
+                },
+            ),
+            RetainSource,
+            "副本已校验但未删除来源时必须保留来源"
+        );
+        assert_eq!(
+            reconcile_incomplete(
+                IncompleteProgress::Prepared,
+                ReconcileFacts {
+                    copy_intact: true,
+                    source_present: true,
+                },
+            ),
+            RetainSource
+        );
+        assert_eq!(
+            reconcile_incomplete(
+                IncompleteProgress::SourceRemoved,
+                ReconcileFacts {
+                    copy_intact: true,
+                    source_present: false,
+                },
+            ),
+            HiddenNeedsAttention,
+            "来源已删但缺完成时间必须继续隐藏并待处理"
+        );
+        assert_eq!(
+            reconcile_incomplete(
+                IncompleteProgress::SourceRemoved,
+                ReconcileFacts {
+                    copy_intact: false,
+                    source_present: false,
+                },
+            ),
+            NeedsAttention,
+            "副本缺失不得伪装完成"
+        );
+        assert_eq!(
+            reconcile_incomplete(
+                IncompleteProgress::SourceRemoved,
+                ReconcileFacts {
+                    copy_intact: true,
+                    source_present: true,
+                },
+            ),
+            NeedsAttention,
+            "来源重新出现属于矛盾状态"
+        );
     }
 
     /// 删除后重启仍保留未到期窗口：完成时间随记录恢复，判定基于原绝对期限。
