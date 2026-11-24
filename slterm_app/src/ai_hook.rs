@@ -16,6 +16,8 @@
 //! TurnDone/NeedsAttention 两个状态边归 `notify`。
 
 mod bridges;
+/// Hooks 草稿 JSON 子树解析（重复键/坏 JSON/非法 UTF-8 拒绝）。
+pub(crate) mod draft;
 /// 设置页 hooks 编辑域(轨二):用户/第三方 handler 可编辑,marker 认领组只读。
 pub(crate) mod editor;
 mod event;
