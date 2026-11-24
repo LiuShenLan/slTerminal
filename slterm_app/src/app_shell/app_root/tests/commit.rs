@@ -270,9 +270,10 @@ fn staged_and_unstaged_repository(temp: &tempfile::TempDir) -> (std::path::PathB
 }
 
 #[gpui::test]
-fn commit_rollback_preserves_staged_changes(cx: &mut TestAppContext) {
+fn integration_commit_rollback(cx: &mut TestAppContext) {
     let temp = tempfile::tempdir().unwrap();
     let (repository, file) = staged_and_unstaged_repository(&temp);
+    let index_before = super::gitshow::git(&repository, &["ls-files", "-s", "--", "tracked.txt"]);
     let (root, mut window, _) = open_root(cx);
     add_project(&root, &mut window, PROJECT_A, repository.to_str().unwrap());
     let commit = open_commit(&root, &mut window, cx);
@@ -292,6 +293,11 @@ fn commit_rollback_preserves_staged_changes(cx: &mut TestAppContext) {
     assert!(!staged.stdout.is_empty(), "staged 差异必须保留");
     let unstaged = super::gitshow::git(&repository, &["diff", "--stat"]);
     assert!(unstaged.stdout.is_empty(), "未暂存差异必须被放弃");
+    let index_after = super::gitshow::git(&repository, &["ls-files", "-s", "--", "tracked.txt"]);
+    assert_eq!(
+        index_before.stdout, index_after.stdout,
+        "回滚不得改变索引 blob"
+    );
 }
 
 #[gpui::test]

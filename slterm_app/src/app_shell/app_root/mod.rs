@@ -17,6 +17,7 @@ mod events;
 mod explorer;
 pub(crate) use explorer::status_grants;
 mod focus_manager;
+pub(crate) mod git_changes;
 mod git_show;
 mod hooks_page;
 pub(crate) mod keymap;

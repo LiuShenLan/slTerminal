@@ -398,6 +398,15 @@ impl AppRoot {
                 };
                 let _ = completion.try_send(result);
             }
+            SltermShellEvent::RuntimeGitRefresh { project_id } => {
+                // Git 写已完成；只刷新同一项目的 Commit 视图，其他视图由 watcher 刷新。
+                if !(self.close_in_progress
+                    || self.application_close.is_some()
+                    || self.close_completed)
+                {
+                    self.refresh_commit_view_for_project(project_id, window, cx);
+                }
+            }
             SltermShellEvent::OpenDirectories(paths) => {
                 for path in paths {
                     match CanonicalPath::new(path) {

@@ -3,6 +3,7 @@
 //! 意图只携带稳定身份与已校验参数；路径、授权、事务与关闭策略
 //! 全部由 AppRoot 复用既有命令目录处理。
 
+use slterm_runtime_protocol::{GitDeleteExpected, GitRollbackExpected};
 use slterm_split::SplitDirection;
 use slterm_workspace::{LogicalSize, PanelGroupId, ProjectId, TerminalId, ViewKey};
 
@@ -106,6 +107,17 @@ pub(crate) enum RuntimeMutation {
         project_root: Option<String>,
         cwd: Option<String>,
     },
+    GitRollback {
+        project_id: Option<ProjectId>,
+        path: String,
+        expected: GitRollbackExpected,
+    },
+    GitDelete {
+        project_id: Option<ProjectId>,
+        path: String,
+        expected: GitDeleteExpected,
+        permanent: bool,
+    },
 }
 
 impl RuntimeMutation {
@@ -133,6 +145,8 @@ impl RuntimeMutation {
             Self::AgentStart { .. } => "agent.start",
             Self::AgentResume { .. } => "agent.resume",
             Self::AgentFork { .. } => "agent.fork",
+            Self::GitRollback { .. } => "git.rollback",
+            Self::GitDelete { .. } => "git.delete",
         }
     }
 
@@ -291,6 +305,26 @@ impl RuntimeMutation {
                 "session_id": session_id,
                 "project_root": project_root,
                 "cwd": cwd,
+            })),
+            Self::GitRollback {
+                project_id,
+                path,
+                expected,
+            } => Ok(serde_json::json!({
+                "project_id": project_id.map(|id| id.to_string()),
+                "path": path,
+                "expected": expected,
+            })),
+            Self::GitDelete {
+                project_id,
+                path,
+                expected,
+                permanent,
+            } => Ok(serde_json::json!({
+                "project_id": project_id.map(|id| id.to_string()),
+                "path": path,
+                "expected": expected,
+                "permanent": permanent,
             })),
         }
     }

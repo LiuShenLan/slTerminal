@@ -10,7 +10,7 @@ use slterm_workspace::ProjectId;
 
 use crate::app_shell::control_error;
 use crate::document_io::read_prefix;
-use crate::git::{self, GitError, StatusSnapshot};
+use crate::git::{self, GitError, GitFacade, StatusSnapshot};
 use crate::text_document::{MAX_BYTES, TextSnapshot};
 
 /// 将 porcelain v2 快照映射为线缆 DTO；非 Unicode 仓库路径明确失败。
@@ -174,4 +174,126 @@ fn diff_too_large() -> JsonRpcError {
 
 fn diff_unavailable() -> JsonRpcError {
     control_error(DomainErrorCode::NotReady, -32001, "git diff not ready")
+}
+
+/// Git 破坏写的意图副本：目标解析在前台，执行只认已解析目标。
+pub(crate) enum GitWriteIntent {
+    Rollback {
+        path: String,
+        expected: slterm_runtime_protocol::GitRollbackExpected,
+    },
+    Delete {
+        path: String,
+        expected: slterm_runtime_protocol::GitDeleteExpected,
+        permanent: bool,
+    },
+}
+
+impl GitWriteIntent {
+    /// 只从已登记的 Git 写意图派生；其他方法返回 None。
+    pub(crate) fn from_mutation(mutation: &super::mutations::RuntimeMutation) -> Option<Self> {
+        match mutation {
+            super::mutations::RuntimeMutation::GitRollback { path, expected, .. } => {
+                Some(Self::Rollback {
+                    path: path.clone(),
+                    expected: *expected,
+                })
+            }
+            super::mutations::RuntimeMutation::GitDelete {
+                path,
+                expected,
+                permanent,
+                ..
+            } => Some(Self::Delete {
+                path: path.clone(),
+                expected: *expected,
+                permanent: *permanent,
+            }),
+            _ => None,
+        }
+    }
+}
+
+/// 在后台执行 Git 破坏写；写前重检失败不产生任何写盘。
+///
+/// 状态重检使用独立 facade，避免命中共享缓存；成功后使共享状态缓存失效。
+pub(crate) fn execute_git_write(
+    intent: GitWriteIntent,
+    target: &crate::app_shell::GitWriteTarget,
+) -> Result<(), JsonRpcError> {
+    use crate::app_shell::app_root::git_changes::{
+        DeleteChangeKind, GitChangeError, UnstagedChangeKind,
+    };
+
+    let git = GitFacade::default();
+    let result = match intent {
+        GitWriteIntent::Rollback { path, expected } => {
+            let kind = match expected {
+                slterm_runtime_protocol::GitRollbackExpected::Modified => {
+                    UnstagedChangeKind::Modified
+                }
+                slterm_runtime_protocol::GitRollbackExpected::Deleted => {
+                    UnstagedChangeKind::Deleted
+                }
+            };
+            crate::app_shell::app_root::git_changes::rollback_unstaged(
+                &git,
+                &target.root,
+                &target.root,
+                &path,
+                kind,
+                "runtime",
+            )
+        }
+        GitWriteIntent::Delete {
+            path,
+            expected,
+            permanent,
+        } => {
+            let kind = match expected {
+                slterm_runtime_protocol::GitDeleteExpected::Untracked => {
+                    DeleteChangeKind::Untracked
+                }
+                slterm_runtime_protocol::GitDeleteExpected::StagedAdded => {
+                    DeleteChangeKind::StagedAdded
+                }
+            };
+            crate::app_shell::app_root::git_changes::delete_change(
+                &git,
+                &target.root,
+                &target.root,
+                target.project_id,
+                &target.file_operations,
+                &path,
+                kind,
+                permanent,
+                "runtime",
+            )
+        }
+    };
+    match result {
+        Ok(()) => {
+            // 共享 facade 的短 TTL 缓存可能保留写前状态。
+            target.git.invalidate();
+            Ok(())
+        }
+        Err(GitChangeError::Precondition) => Err(git_precondition_error()),
+        Err(GitChangeError::Unauthorized) => Err(git_error_to_rpc(GitError::AccessDenied(
+            "写目标不在项目根内".to_owned(),
+        ))),
+        Err(GitChangeError::Failed) => Err(control_error(
+            DomainErrorCode::NotReady,
+            -32001,
+            "git write not ready",
+        )),
+    }
+}
+
+/// 破坏前置条件不再成立：客户端必须重新读取状态后再决定。
+fn git_precondition_error() -> JsonRpcError {
+    control_error(
+        DomainErrorCode::RevisionConflict,
+        -32005,
+        "git state changed",
+    )
 }

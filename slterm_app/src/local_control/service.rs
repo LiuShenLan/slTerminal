@@ -17,7 +17,9 @@ use slterm_runtime_protocol::{
 use super::credentials::load_or_create_at;
 use super::discovery::{DiscoveryGuard, endpoint_path, publish_at};
 use super::events::EventHub;
-use super::git::{git_diff_snapshot, git_error_to_rpc, git_status_response};
+use super::git::{
+    GitWriteIntent, execute_git_write, git_diff_snapshot, git_error_to_rpc, git_status_response,
+};
 use super::operations::{
     DispatchOutcome, DispatchRequest, OperationDispatcher, operation_resource, writer_error,
 };
@@ -28,9 +30,10 @@ use super::server::{
     WaitStatusCallback,
 };
 use crate::app_shell::{
-    SltermShellEvent, try_send_handover, try_send_runtime_agents, try_send_runtime_git_diff,
-    try_send_runtime_git_status, try_send_runtime_mutation, try_send_runtime_read,
-    try_send_runtime_snapshot, try_send_runtime_wait,
+    RuntimeMutationReply, SltermShellEvent, try_send_handover, try_send_runtime_agents,
+    try_send_runtime_git_diff, try_send_runtime_git_refresh, try_send_runtime_git_status,
+    try_send_runtime_mutation, try_send_runtime_read, try_send_runtime_snapshot,
+    try_send_runtime_wait,
 };
 use crate::persistence::metadata::WorkspaceMetadata;
 use crate::persistence::workspace_writer::WorkspaceWriterClient;
@@ -183,6 +186,7 @@ impl LocalControlService {
         let agent_events = events.clone();
         let git_events = events.clone();
         let git_diff_events = events.clone();
+        let git_refresh_events = events.clone();
         let on_handover: HandoverCallback = Arc::new(move |params| {
             let receipt = try_send_handover(&events, params)?;
             match receipt.recv_timeout(reply_timeout) {
@@ -393,6 +397,8 @@ impl LocalControlService {
                     "invalid mutation params",
                 )
             })?;
+            // Git 破坏写只在前台解析目标；阻塞读写仍归本连接线程。
+            let git_write = GitWriteIntent::from_mutation(&request.mutation);
             dispatcher.dispatch(
                 DispatchRequest {
                     client_id: &request.client_id,
@@ -406,7 +412,34 @@ impl LocalControlService {
                 },
                 || match try_send_runtime_mutation(&mutation_events, request.mutation) {
                     Ok(receipt) => match receipt.recv_timeout(MUTATION_REPLY_TIMEOUT) {
-                        Ok(Ok(())) => DispatchOutcome::Succeeded(serde_json::json!({})),
+                        Ok(Ok(RuntimeMutationReply::Done(Ok(())))) => {
+                            DispatchOutcome::Succeeded(serde_json::json!({}))
+                        }
+                        Ok(Ok(RuntimeMutationReply::Done(Err(error)))) => {
+                            DispatchOutcome::Failed(error_value(error))
+                        }
+                        Ok(Ok(RuntimeMutationReply::Git(target))) => {
+                            let result = match git_write {
+                                Some(intent) => execute_git_write(intent, &target),
+                                // 前台不得为普通写意图返回 Git 目标。
+                                None => Err(control_error(
+                                    DomainErrorCode::InvalidRequest,
+                                    -32000,
+                                    "mutation target missing",
+                                )),
+                            };
+                            match result {
+                                Ok(()) => {
+                                    // 尽力刷新对应项目的 Git 视图；失败不影响已完成的写。
+                                    try_send_runtime_git_refresh(
+                                        &git_refresh_events,
+                                        target.project_id,
+                                    );
+                                    DispatchOutcome::Succeeded(serde_json::json!({}))
+                                }
+                                Err(error) => DispatchOutcome::Failed(error_value(error)),
+                            }
+                        }
                         Ok(Err(error)) => DispatchOutcome::Failed(error_value(error)),
                         Err(_) => DispatchOutcome::OutcomeUnknown(
                             serde_json::json!({"code": "outcome_unknown"}),

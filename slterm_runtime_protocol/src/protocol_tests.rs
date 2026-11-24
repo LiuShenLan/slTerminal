@@ -4,14 +4,15 @@ use crate::protocol::{
     AgentCloseRequest, AgentForkRequest, AgentGetRequest, AgentInputRequest, AgentReadRequest,
     AgentResumeRequest, AgentStartRequest, AgentWaitRequest, ClientRequest, ControlMessage,
     ControlMethod, ControlScope, Credential, DescribeResponse, DiscoveryRecord, DocumentResource,
-    DomainErrorCode, EmptyParams, GitDiffRequest, GitStatusRequest, HandoverMethod, HandoverParams,
-    HandoverRequest, HelloMethod, HelloParams, HelloRequest, HelloResponse, JsonRpcError,
-    JsonRpcErrorData, JsonRpcId, JsonRpcRequest, JsonRpcResponse, MutationParams,
-    OperationQueryParams, OperationResource, OperationWaitParams, PanelActivateRequest,
-    PanelGroupMergeRequest, PanelGroupResizeRequest, PanelGroupResource, PanelGroupSplitRequest,
-    PanelMoveRequest, ProjectActivateRequest, ProjectRemoveRequest, ProjectRenameRequest,
-    ProjectReorderRequest, ProjectResource, ProtocolError, RuntimeMethod, RuntimeRequest,
-    SnapshotResources, SnapshotResponse, SplitDirectionWire, TerminalCloseRequest,
+    DomainErrorCode, EmptyParams, GitDeleteExpected, GitDeleteParams, GitDeleteRequest,
+    GitDiffRequest, GitRollbackExpected, GitRollbackParams, GitRollbackRequest, GitStatusRequest,
+    HandoverMethod, HandoverParams, HandoverRequest, HelloMethod, HelloParams, HelloRequest,
+    HelloResponse, JsonRpcError, JsonRpcErrorData, JsonRpcId, JsonRpcRequest, JsonRpcResponse,
+    MutationParams, OperationQueryParams, OperationResource, OperationWaitParams,
+    PanelActivateRequest, PanelGroupMergeRequest, PanelGroupResizeRequest, PanelGroupResource,
+    PanelGroupSplitRequest, PanelMoveRequest, ProjectActivateRequest, ProjectRemoveRequest,
+    ProjectRenameRequest, ProjectReorderRequest, ProjectResource, ProtocolError, RuntimeMethod,
+    RuntimeRequest, SnapshotResources, SnapshotResponse, SplitDirectionWire, TerminalCloseRequest,
     TerminalCreateRequest, TerminalExecuteRequest, TerminalInputRequest, TerminalReadRequest,
     TerminalReconnectRequest, TerminalRenameRequest, TerminalResource, TerminalWaitRequest,
     ViewResource, ViewportSize, params_sha256, parse_client_request,
@@ -969,6 +970,85 @@ fn git_diff_requires_a_safe_repository_relative_path() {
 }
 
 #[test]
+fn git_rollback_requires_expected_state_and_safe_path() {
+    let request = RuntimeRequest::new(
+        JsonRpcId::Number(30),
+        RuntimeMethod::GitRollback,
+        GitRollbackParams {
+            client_id: "client-a".to_owned(),
+            mutation_id: "mutation-a".to_owned(),
+            expected_revision: None,
+            request: GitRollbackRequest {
+                project_id: Some("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b".to_owned()),
+                path: "src/main.rs".to_owned(),
+                expected: GitRollbackExpected::Deleted,
+            },
+        },
+    );
+    match parse_client_request(&serde_json::to_vec(&request).unwrap()).unwrap() {
+        ClientRequest::Runtime(parsed) => assert_eq!(parsed.method, RuntimeMethod::GitRollback),
+        other => panic!("Git 回滚请求必须解析为 Runtime 请求: {other:?}"),
+    }
+
+    for invalid in [
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"git.rollback","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"project_id":null,"path":"","expected":"modified"}}}),
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"git.rollback","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"project_id":null,"path":"../escape","expected":"modified"}}}),
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"git.rollback","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"project_id":null,"path":"a.txt"}}}),
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"git.rollback","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"project_id":null,"path":"a.txt","expected":"renamed"}}}),
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"git.rollback","params":{"client_id":" ","mutation_id":"m","expected_revision":null,"request":{"project_id":null,"path":"a.txt","expected":"modified"}}}),
+    ] {
+        assert!(
+            parse_client_request(invalid.to_string().as_bytes()).is_err(),
+            "非法 Git 回滚请求必须拒绝: {invalid}"
+        );
+    }
+}
+
+#[test]
+fn git_delete_requires_expected_shape_and_defaults_to_recycle_bin() {
+    let request = RuntimeRequest::new(
+        JsonRpcId::Number(31),
+        RuntimeMethod::GitDelete,
+        GitDeleteParams {
+            client_id: "client-a".to_owned(),
+            mutation_id: "mutation-a".to_owned(),
+            expected_revision: None,
+            request: GitDeleteRequest {
+                project_id: None,
+                path: "notes.txt".to_owned(),
+                expected: GitDeleteExpected::Untracked,
+                permanent: false,
+            },
+        },
+    );
+    match parse_client_request(&serde_json::to_vec(&request).unwrap()).unwrap() {
+        ClientRequest::Runtime(parsed) => assert_eq!(parsed.method, RuntimeMethod::GitDelete),
+        other => panic!("Git 删除请求必须解析为 Runtime 请求: {other:?}"),
+    }
+    // 缺省 `permanent` 表示回收站语义，不是永久删除。
+    let absent = serde_json::json!({"jsonrpc":"2.0","id":2,"method":"git.delete","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"project_id":null,"path":"notes.txt","expected":"staged_added"}}});
+    match parse_client_request(absent.to_string().as_bytes()).unwrap() {
+        ClientRequest::Runtime(parsed) => {
+            assert_eq!(parsed.method, RuntimeMethod::GitDelete);
+            let params = parsed.parse::<GitDeleteParams>().unwrap();
+            assert!(!params.request.permanent);
+        }
+        other => panic!("Git 删除请求必须解析为 Runtime 请求: {other:?}"),
+    }
+
+    for invalid in [
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"git.delete","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"project_id":null,"path":" ","expected":"untracked"}}}),
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"git.delete","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"project_id":null,"path":"/absolute","expected":"untracked"}}}),
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"git.delete","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"project_id":null,"path":"a.txt","expected":"ignored"}}}),
+    ] {
+        assert!(
+            parse_client_request(invalid.to_string().as_bytes()).is_err(),
+            "非法 Git 删除请求必须拒绝: {invalid}"
+        );
+    }
+}
+
+#[test]
 fn params_hash_is_stable_and_json_serialization_dependent() {
     let a = serde_json::json!({"z": 1, "a": {"n": [1, 2]}});
     let b = serde_json::json!({"a": {"n": [1, 2]}, "z": 1});
@@ -1062,6 +1142,8 @@ fn describe_lists_the_method_registry_with_contract_hashes() {
             "agent.fork",
             "git.status",
             "git.diff",
+            "git.rollback",
+            "git.delete",
             "instance.handover"
         ]
     );

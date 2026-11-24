@@ -131,9 +131,11 @@ pub(crate) enum SltermShellEvent {
         completion: mpsc::SyncSender<Result<SnapshotResources, JsonRpcError>>,
     },
     /// Runtime 写意图与一次性回执；AppRoot 复用既有命令执行。
+    ///
+    /// Git 破坏写只在前台解析目标与授权，阻塞读写由回执接收方在后台执行。
     RuntimeMutation {
         mutation: crate::local_control::RuntimeMutation,
-        completion: mpsc::SyncSender<Result<(), JsonRpcError>>,
+        completion: mpsc::SyncSender<Result<RuntimeMutationReply, JsonRpcError>>,
     },
     /// Runtime 终端读取目标与一次性回执；回执携带 worker 文本快照接收端。
     RuntimeRead {
@@ -169,6 +171,10 @@ pub(crate) enum SltermShellEvent {
         path: String,
         completion: mpsc::SyncSender<Result<RuntimeGitDiffTarget, JsonRpcError>>,
     },
+    /// Git 写已完成后通知前台刷新对应项目的视图；尽力投递，不携带结果。
+    RuntimeGitRefresh {
+        project_id: slterm_workspace::ProjectId,
+    },
 }
 
 /// Runtime Git 读取目标：前台只解析项目与仓库入口，阻塞读取归后台。
@@ -184,6 +190,23 @@ pub(crate) struct RuntimeGitDiffTarget {
     pub(crate) root: slterm_path::CanonicalPath,
     pub(crate) path: String,
     pub(crate) git: std::sync::Arc<crate::git::GitFacade>,
+}
+
+/// 写意图在前台的处理结果：当场完成，或只解析了 Git 写目标。
+pub(crate) enum RuntimeMutationReply {
+    /// 前台已完成全部副作用或已给出结构化失败。
+    Done(Result<(), JsonRpcError>),
+    /// 前台只解析项目与授权；阻塞读写由调用方在后台执行。
+    Git(GitWriteTarget),
+}
+
+/// Git 破坏写目标：项目根是唯一写授权来源；阻塞执行归后台。
+pub(crate) struct GitWriteTarget {
+    pub(crate) project_id: slterm_workspace::ProjectId,
+    pub(crate) root: slterm_path::CanonicalPath,
+    pub(crate) git: std::sync::Arc<crate::git::GitFacade>,
+    pub(crate) file_operations:
+        std::sync::Arc<crate::app_shell::file_operation_service::FileOperationService>,
 }
 
 const SHELL_EVENT_CAPACITY: usize = 64;
@@ -265,7 +288,7 @@ pub(crate) fn try_send_runtime_snapshot(
 pub(crate) fn try_send_runtime_mutation(
     sender: &mpsc::SyncSender<SltermShellEvent>,
     mutation: crate::local_control::RuntimeMutation,
-) -> Result<mpsc::Receiver<Result<(), JsonRpcError>>, JsonRpcError> {
+) -> Result<mpsc::Receiver<Result<RuntimeMutationReply, JsonRpcError>>, JsonRpcError> {
     let (completion, response) = mpsc::sync_channel(1);
     match sender.try_send(SltermShellEvent::RuntimeMutation {
         mutation,
@@ -403,6 +426,18 @@ pub(crate) fn try_send_runtime_git_diff(
             Err(control_error(DomainErrorCode::Closing, -32004, "closing"))
         }
     }
+}
+
+/// 尽力通知前台刷新 Git 视图；队列满或通道关闭都不阻断已完成的写。
+pub(crate) fn try_send_runtime_git_refresh(
+    sender: &mpsc::SyncSender<SltermShellEvent>,
+    project_id: slterm_workspace::ProjectId,
+) {
+    try_send_shell_event(
+        sender,
+        SltermShellEvent::RuntimeGitRefresh { project_id },
+        "git refresh",
+    );
 }
 
 /// 控制面清理结果；未启动服务按成功处理，失败只闸门正常退出标记。

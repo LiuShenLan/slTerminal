@@ -505,6 +505,16 @@ impl SideView {
         self.commit.as_ref().map(|runtime| runtime.generation)
     }
 
+    /// 同一项目的刷新目标；视图未打开或数据根不一致时返回 None。
+    pub(super) fn commit_refresh_target(&self) -> Option<(ProjectId, CanonicalPath, u64)> {
+        let runtime = self.commit.as_ref()?;
+        Some((
+            runtime.project,
+            runtime.project_root.clone()?,
+            runtime.generation,
+        ))
+    }
+
     pub(super) fn commit_scroll_handle(&self) -> Option<&gpui::ScrollHandle> {
         self.commit.as_ref().map(|runtime| &runtime.scroll_handle)
     }
@@ -1190,56 +1200,27 @@ impl AppRoot {
         let repo_root = root.clone();
         let write_root = project_root.clone();
         let repo_relative = row.repo_relative.clone();
-        let target = row.path.clone();
-        let target_for_finish = target.clone();
-        let staged = row.index == 'A';
+        let target_for_finish = row.path.clone();
+        let kind = if row.index == 'A' {
+            super::git_changes::DeleteChangeKind::StagedAdded
+        } else {
+            super::git_changes::DeleteChangeKind::Untracked
+        };
         self.tasks
             .register_with(TaskId::CommitDelete, CancellationToken::new(), move || {
                 let deleting = executor.spawn(async move {
-                    let grants = super::explorer::status_grants(&repo_root)?;
-                    let snapshot =
-                        crate::git::GitFacade::default().status(&repo_root, &grants, 0)?;
-                    // 写前重检：目标必须仍是同形态的 untracked 或 staged added。
-                    let current = snapshot
-                        .entries
-                        .iter()
-                        .find(|entry| entry.path.trim_matches('/') == repo_relative)
-                        .ok_or_else(|| {
-                            crate::git::GitError::Command("删除目标状态已变化".to_owned())
-                        })?;
-                    let shape_ok = if staged {
-                        current.index == 'A' && current.worktree == '.'
-                    } else {
-                        current.index == '?' && current.worktree == '?'
-                    };
-                    if !shape_ok || current.conflict {
-                        return Err(crate::git::GitError::Command(
-                            "删除目标状态已变化".to_owned(),
-                        ));
-                    }
-                    // staged added 先取消暂存，失败即中止，避免索引与工作区不一致。
-                    if staged {
-                        crate::git::unstage_path(repo_root.as_path(), repo_relative.as_str())?;
-                    }
-                    if permanent {
-                        std::fs::remove_file(target.as_path()).map_err(|_| {
-                            crate::git::GitError::Command("永久删除失败".to_owned())
-                        })?;
-                        return Ok(());
-                    }
-                    let write_grants = [slterm_path::PathGrant::project_root(write_root)];
-                    let plan = service
-                        .plan_delete(
-                            slterm_sidebar::FileTreeRoot::Project(project_id),
-                            &target,
-                            &write_grants,
-                            0,
-                        )
-                        .map_err(|_| crate::git::GitError::Command("删除计划失败".to_owned()))?;
-                    service
-                        .execute(&plan, &write_grants, 0)
-                        .map(|_| ())
-                        .map_err(|_| crate::git::GitError::Command("回收站删除失败".to_owned()))
+                    // 唯一执行体：写前重检、取消暂存与回收站/永久删除都在同一处。
+                    super::git_changes::delete_change(
+                        &crate::git::GitFacade::default(),
+                        &repo_root,
+                        &write_root,
+                        project_id,
+                        &service,
+                        &repo_relative,
+                        kind,
+                        permanent,
+                        "commit",
+                    )
                 });
                 cx.spawn(async move |this, cx| {
                     let result = deleting.await;
@@ -1263,7 +1244,7 @@ impl AppRoot {
         &mut self,
         path: CanonicalPath,
         permanent: bool,
-        result: Result<(), crate::git::GitError>,
+        result: Result<(), super::git_changes::GitChangeError>,
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
@@ -1346,10 +1327,11 @@ impl AppRoot {
         let executor = cx.background_executor().clone();
         let window_handle = window.window_handle();
         let repo_root = root.clone();
+        let project_root = project_root.clone();
         let repo_relative = row.repo_relative.clone();
-        let expected_worktree = match kind {
-            RollbackKind::Modified => 'M',
-            RollbackKind::Deleted => 'D',
+        let kind = match kind {
+            RollbackKind::Modified => super::git_changes::UnstagedChangeKind::Modified,
+            RollbackKind::Deleted => super::git_changes::UnstagedChangeKind::Deleted,
         };
         self.tasks
             .register_with(
@@ -1357,58 +1339,15 @@ impl AppRoot {
                 CancellationToken::new(),
                 move || {
                     let rolling_back = executor.spawn(async move {
-                        let grants = super::explorer::status_grants(&repo_root)?;
-                        let snapshot =
-                            crate::git::GitFacade::default().status(&repo_root, &grants, 0)?;
-                        // 写前重检：未暂存形态必须仍在，且索引形态未变为新增/删除/改名/冲突。
-                        let current = snapshot
-                            .entries
-                            .iter()
-                            .find(|entry| entry.path.trim_matches('/') == repo_relative)
-                            .ok_or_else(|| {
-                                crate::git::GitError::Command("回滚目标状态已变化".to_owned())
-                            })?;
-                        let changed = current.conflict
-                            || current.worktree != expected_worktree
-                            || matches!(current.index, 'A' | 'D' | 'R' | 'U');
-                        if changed {
-                            return Err(crate::git::GitError::Command(
-                                "回滚目标状态已变化".to_owned(),
-                            ));
-                        }
-                        // 未暂存 rename：旧路径 deleted 与内容相同的 untracked 镜像成对出现。
-                        let mirror = if kind == RollbackKind::Deleted {
-                            let indexed = crate::git::index_bytes(
-                                repo_root.as_path(),
-                                repo_relative.as_str(),
-                            )?;
-                            snapshot
-                                .entries
-                                .iter()
-                                .filter(|entry| entry.index == '?')
-                                .find_map(|entry| {
-                                    let candidate = repo_root.as_path().join(
-                                        entry.path.replace('/', std::path::MAIN_SEPARATOR_STR),
-                                    );
-                                    (std::fs::read(&candidate).ok()? == indexed)
-                                        .then_some(candidate)
-                                })
-                        } else {
-                            None
-                        };
-                        crate::git::restore_from_index(
-                            repo_root.as_path(),
-                            &[repo_relative.as_str()],
-                        )?;
-                        // 新路径清除失败属于部分成功：旧路径已按索引恢复，残留如实上报。
-                        if let Some(mirror) = mirror {
-                            std::fs::remove_file(&mirror).map_err(|_| {
-                                crate::git::GitError::Command(
-                                    "旧路径已恢复，但新路径清除失败".to_owned(),
-                                )
-                            })?;
-                        }
-                        Ok(())
+                        // 唯一执行体：写前重检、镜像清理与写盘都在同一处。
+                        super::git_changes::rollback_unstaged(
+                            &crate::git::GitFacade::default(),
+                            &repo_root,
+                            &project_root,
+                            &repo_relative,
+                            kind,
+                            "commit",
+                        )
                     });
                     cx.spawn(async move |this, cx| {
                         let result = rolling_back.await;
@@ -1426,7 +1365,7 @@ impl AppRoot {
     fn finish_commit_rollback(
         &mut self,
         project_id: ProjectId,
-        result: Result<(), crate::git::GitError>,
+        result: Result<(), super::git_changes::GitChangeError>,
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
@@ -1526,6 +1465,38 @@ impl AppRoot {
                 path: repo_path,
                 focus: true,
                 activate_project: false,
+            },
+            window,
+            cx,
+        );
+    }
+
+    /// Runtime Git 写完成后按真实状态刷新 Commit 视图；只刷新同一项目。
+    pub(super) fn refresh_commit_view_for_project(
+        &mut self,
+        project_id: ProjectId,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if self.snapshot.registry().project(project_id).is_none() {
+            return;
+        }
+        let target = self
+            .side_views
+            .instance(slterm_workspace::SideViewId::Commit)
+            .and_then(|instance| instance.read(cx).commit_refresh_target());
+        let Some((view_project, root, generation)) = target else {
+            return;
+        };
+        if view_project != project_id {
+            return;
+        }
+        let _ = window;
+        self.handle_commit_intent(
+            CommitIntent::LoadStatus {
+                project_id,
+                root,
+                generation,
             },
             window,
             cx,

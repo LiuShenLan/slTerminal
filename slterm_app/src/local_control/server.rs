@@ -14,17 +14,17 @@ use slterm_runtime_protocol::{
     AgentCloseParams, AgentForkParams, AgentGetRequest, AgentInputParams, AgentListResponse,
     AgentReadRequest, AgentResource, AgentResumeParams, AgentStartParams, AgentWaitRequest,
     ClientRequest, ControlScope, Credential, DescribeResponse, DomainErrorCode, EventNotification,
-    EventsSubscribeParams, EventsUnsubscribedResponse, GitDiffRequest, GitDiffResponse,
-    GitStatusRequest, GitStatusResponse, HandoverParams, HandoverResponse, HelloResponse,
-    JsonRpcError, JsonRpcErrorData, JsonRpcId, JsonRpcResponse, OPERATION_WAIT_LIMIT_MS,
-    OperationQueryParams, OperationResource, OperationWaitParams, PanelActivateParams,
-    PanelGroupMergeParams, PanelGroupResizeParams, PanelGroupSplitParams, PanelMoveParams,
-    PanelOpenSettingsParams, ProjectActivateParams, ProjectListResponse, ProjectRemoveParams,
-    ProjectRenameParams, ProjectReorderParams, RuntimeEvent, RuntimeMethod, RuntimeRequest,
-    RuntimeResult, SnapshotResources, SnapshotResponse, SplitDirectionWire, TerminalCloseParams,
-    TerminalCreateParams, TerminalExecuteParams, TerminalInputParams, TerminalReadRequest,
-    TerminalReadResponse, TerminalReconnectParams, TerminalRenameParams, TerminalWaitRequest,
-    TerminalWaitResponse, ViewportSize, parse_client_request,
+    EventsSubscribeParams, EventsUnsubscribedResponse, GitDeleteParams, GitDiffRequest,
+    GitDiffResponse, GitRollbackParams, GitStatusRequest, GitStatusResponse, HandoverParams,
+    HandoverResponse, HelloResponse, JsonRpcError, JsonRpcErrorData, JsonRpcId, JsonRpcResponse,
+    OPERATION_WAIT_LIMIT_MS, OperationQueryParams, OperationResource, OperationWaitParams,
+    PanelActivateParams, PanelGroupMergeParams, PanelGroupResizeParams, PanelGroupSplitParams,
+    PanelMoveParams, PanelOpenSettingsParams, ProjectActivateParams, ProjectListResponse,
+    ProjectRemoveParams, ProjectRenameParams, ProjectReorderParams, RuntimeEvent, RuntimeMethod,
+    RuntimeRequest, RuntimeResult, SnapshotResources, SnapshotResponse, SplitDirectionWire,
+    TerminalCloseParams, TerminalCreateParams, TerminalExecuteParams, TerminalInputParams,
+    TerminalReadRequest, TerminalReadResponse, TerminalReconnectParams, TerminalRenameParams,
+    TerminalWaitRequest, TerminalWaitResponse, ViewportSize, parse_client_request,
 };
 use slterm_split::SplitDirection;
 use slterm_workspace::{LogicalSize, PanelGroupId, ProjectId, ViewKey};
@@ -691,6 +691,57 @@ fn handle_connection<F>(
                                 project_id,
                                 params.path,
                                 params.cursor.as_deref(),
+                            ),
+                            None => JsonRpcResponse::error(request.id, invalid_request_error()),
+                        }
+                    }
+                    RuntimeMethod::GitRollback => {
+                        let Some(params) = request.parse::<GitRollbackParams>() else {
+                            return;
+                        };
+                        let project_id = match params.request.project_id.as_deref() {
+                            None => Some(None),
+                            Some(text) => parse_project_id(text).ok().map(Some),
+                        };
+                        let mutation = project_id.map(|project_id| RuntimeMutation::GitRollback {
+                            project_id,
+                            path: params.request.path,
+                            expected: params.request.expected,
+                        });
+                        match mutation {
+                            Some(mutation) => respond_mutation(
+                                &runtime,
+                                request.id,
+                                params.client_id,
+                                params.mutation_id,
+                                params.expected_revision,
+                                Ok(mutation),
+                            ),
+                            None => JsonRpcResponse::error(request.id, invalid_request_error()),
+                        }
+                    }
+                    RuntimeMethod::GitDelete => {
+                        let Some(params) = request.parse::<GitDeleteParams>() else {
+                            return;
+                        };
+                        let project_id = match params.request.project_id.as_deref() {
+                            None => Some(None),
+                            Some(text) => parse_project_id(text).ok().map(Some),
+                        };
+                        let mutation = project_id.map(|project_id| RuntimeMutation::GitDelete {
+                            project_id,
+                            path: params.request.path,
+                            expected: params.request.expected,
+                            permanent: params.request.permanent,
+                        });
+                        match mutation {
+                            Some(mutation) => respond_mutation(
+                                &runtime,
+                                request.id,
+                                params.client_id,
+                                params.mutation_id,
+                                params.expected_revision,
+                                Ok(mutation),
                             ),
                             None => JsonRpcResponse::error(request.id, invalid_request_error()),
                         }

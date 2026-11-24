@@ -85,7 +85,7 @@
 | 补全可信边界 | [终端](design/terminal.md) | `integration_completion_trust_boundary` | 已自动化 |
 | 本地学习数据 | [终端](design/terminal.md)、[持久化](design/persistence.md) | `integration_local_learning_data` | 已自动化 |
 | 终端搜索 | [终端](design/terminal.md) | `integration_terminal_search` | 已自动化 |
-| Commit 回滚 | [文件与 Git](design/files-git.md) | `integration_commit_rollback` | 待实现 |
+| Commit 回滚 | [文件与 Git](design/files-git.md) | `integration_commit_rollback` | 已自动化 |
 | Git 与 Document | [文件与 Git](design/files-git.md)、[Document](design/document.md) | `integration_git_document` | 已自动化 |
 | 历史删除撤销 | [Agent](design/agents.md)、[生命周期](design/lifecycle.md) | `integration_history_delete_undo` | 已自动化 |
 | 套餐凭据 | [Windows](design/windows.md)、[设置与恢复](design/settings-recovery.md) | `integration_plan_credentials` | 待实现 |
@@ -135,7 +135,7 @@
 | v1 方法、旧资源和旧发现格式明确拒绝 | `runtime_v1_rejected` | 已自动化 |
 | 脏关闭未提供策略时返回决定错误且不弹模态 | `runtime_close_requires_decision` | 待实现 |
 | 显式 cwd 越权时不创建空 Panel 或改投活跃项目 | `runtime_cwd_does_not_fallback` | 已自动化 |
-| 破坏操作状态校验失败时不执行写入 | `runtime_destructive_precondition` | 待实现 |
+| 破坏操作状态校验失败时不执行写入 | `runtime_destructive_precondition` | 已自动化 |
 | 结果不明时可按操作标识查询而不盲目重放 | `runtime_outcome_queryable` | 已自动化 |
 | 端点、设置、备份和诊断不含 Runtime token | `runtime_token_absent_from_materials` | 待实现 |
 | 隐藏或切项目仍收合法事件且销毁后无过期事件 | `runtime_events_visibility_and_generation` | 已自动化 |

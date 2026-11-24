@@ -166,6 +166,10 @@ pub enum RuntimeMethod {
     GitStatus,
     #[serde(rename = "git.diff")]
     GitDiff,
+    #[serde(rename = "git.rollback")]
+    GitRollback,
+    #[serde(rename = "git.delete")]
+    GitDelete,
 }
 
 /// 原始输入：显式写入 PTY，不追加回车，也不模拟键盘事件。
@@ -446,6 +450,55 @@ pub struct GitDiffResponse {
     pub data: String,
     pub next_cursor: Option<String>,
 }
+
+/// 回滚前置形态：只允许放弃精确的未暂存修改或删除。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum GitRollbackExpected {
+    Modified,
+    Deleted,
+}
+
+/// 放弃未暂存更改并恢复索引版本；`expected` 是专用前置条件。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct GitRollbackRequest {
+    pub project_id: Option<String>,
+    /// 仓库相对路径，使用 `/` 分隔。
+    pub path: String,
+    /// 调用方观察到的未暂存形态；执行前必须复核一致。
+    pub expected: GitRollbackExpected,
+}
+
+pub type GitRollbackParams = MutationParams<GitRollbackRequest>;
+
+/// 删除前置形态：未跟踪文件或已暂存新增。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum GitDeleteExpected {
+    Untracked,
+    StagedAdded,
+}
+
+/// 受限删除：`expected` 是专用前置条件，`permanent` 是显式处置策略。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct GitDeleteRequest {
+    pub project_id: Option<String>,
+    /// 仓库相对路径，使用 `/` 分隔。
+    pub path: String,
+    /// 调用方观察到的条目形态；执行前必须复核一致。
+    pub expected: GitDeleteExpected,
+    /// 跳过回收站直接永久删除；缺省走回收站。
+    #[serde(default)]
+    pub permanent: bool,
+}
+
+pub type GitDeleteParams = MutationParams<GitDeleteRequest>;
 
 /// 新建终端：Shell 固定为应用默认，只开放目标项目与工作目录选择。
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1124,6 +1177,26 @@ fn runtime_request_is_valid(request: &RuntimeRequest) -> bool {
                     .as_deref()
                     .is_none_or(|cursor| !cursor.is_empty())
         }),
+        RuntimeMethod::GitRollback => request.parse::<GitRollbackParams>().is_some_and(|params| {
+            let request = &params.request;
+            params.has_valid_envelope()
+                && request
+                    .project_id
+                    .as_deref()
+                    .is_none_or(|id| !id.trim().is_empty())
+                && !request.path.trim().is_empty()
+                && valid_repo_relative_path(&request.path)
+        }),
+        RuntimeMethod::GitDelete => request.parse::<GitDeleteParams>().is_some_and(|params| {
+            let request = &params.request;
+            params.has_valid_envelope()
+                && request
+                    .project_id
+                    .as_deref()
+                    .is_none_or(|id| !id.trim().is_empty())
+                && !request.path.trim().is_empty()
+                && valid_repo_relative_path(&request.path)
+        }),
     }
 }
 
@@ -1226,11 +1299,13 @@ pub enum ControlMethod {
     RuntimeAgentFork,
     RuntimeGitStatus,
     RuntimeGitDiff,
+    RuntimeGitRollback,
+    RuntimeGitDelete,
     InstanceHandover,
 }
 
 impl ControlMethod {
-    pub const ALL: [Self; 38] = [
+    pub const ALL: [Self; 40] = [
         Self::RuntimeHello,
         Self::RuntimeDescribe,
         Self::RuntimeSnapshot,
@@ -1268,6 +1343,8 @@ impl ControlMethod {
         Self::RuntimeAgentFork,
         Self::RuntimeGitStatus,
         Self::RuntimeGitDiff,
+        Self::RuntimeGitRollback,
+        Self::RuntimeGitDelete,
         Self::InstanceHandover,
     ];
 
@@ -1310,6 +1387,8 @@ impl ControlMethod {
             Self::RuntimeAgentFork => "agent.fork",
             Self::RuntimeGitStatus => "git.status",
             Self::RuntimeGitDiff => "git.diff",
+            Self::RuntimeGitRollback => "git.rollback",
+            Self::RuntimeGitDelete => "git.delete",
             Self::InstanceHandover => "instance.handover",
         }
     }
@@ -1696,12 +1775,32 @@ impl std::error::Error for ProtocolError {}
 
 /// 写请求参数的规范散列：客户端与服务端必须对同一 JSON 得到同一值。
 ///
-/// 对象键序由 `serde_json` 的映射实现决定；本 crate 不启用 `preserve_order`，
-/// 因此同一逻辑参数的不同键序得到相同散列。
+/// 对象键按字典序递归规范化后再散列，不依赖 `serde_json` 的映射实现；
+/// 工作区特性统一可能启用 `preserve_order`，键序不得因此改变幂等身份。
 pub fn params_sha256(params: &serde_json::Value) -> [u8; 32] {
     use sha2::{Digest as _, Sha256};
-    let encoded = serde_json::to_vec(params).expect("JSON Value 序列化不会失败");
+    let canonical = canonical_json(params);
+    let encoded = serde_json::to_vec(&canonical).expect("JSON Value 序列化不会失败");
     Sha256::digest(encoded).into()
+}
+
+/// 递归规范化 JSON：对象键排序，数组保持元素顺序。
+fn canonical_json(value: &serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(map) => {
+            let mut entries: Vec<(&String, &serde_json::Value)> = map.iter().collect();
+            entries.sort_by(|left, right| left.0.cmp(right.0));
+            let mut sorted = serde_json::Map::new();
+            for (key, value) in entries {
+                sorted.insert(key.clone(), canonical_json(value));
+            }
+            serde_json::Value::Object(sorted)
+        }
+        serde_json::Value::Array(values) => {
+            serde_json::Value::Array(values.iter().map(canonical_json).collect())
+        }
+        other => other.clone(),
+    }
 }
 
 /// 解析单个 JSON Lines 请求并执行结构、版本与参数校验。

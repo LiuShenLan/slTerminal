@@ -133,7 +133,7 @@ impl Default for FileOperationService {
 
 impl FileOperationService {
     #[cfg(test)]
-    pub(super) fn with_recycle_bin_for_test(recycle_bin: Arc<dyn RecycleBin>) -> Self {
+    pub(crate) fn with_recycle_bin_for_test(recycle_bin: Arc<dyn RecycleBin>) -> Self {
         Self {
             recycle_bin,
             ..Self::default()

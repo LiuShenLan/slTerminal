@@ -6,6 +6,7 @@ use slterm_runtime_protocol::{DomainErrorCode, JsonRpcError};
 use slterm_workspace::{LogicalSize, ViewKey};
 
 use super::*;
+use crate::app_shell::RuntimeMutationReply;
 use crate::local_control::RuntimeMutation;
 
 fn dispatch_mutation(
@@ -26,7 +27,11 @@ fn dispatch_mutation(
             );
         });
     });
-    response.try_recv().expect("AppRoot 必须返回写意图回执")
+    match response.try_recv().expect("AppRoot 必须返回写意图回执") {
+        Ok(RuntimeMutationReply::Done(result)) => result,
+        Ok(RuntimeMutationReply::Git(_)) => panic!("普通写意图不得返回 Git 目标"),
+        Err(error) => Err(error),
+    }
 }
 
 #[gpui::test]

@@ -1613,7 +1613,9 @@
         "agent.resume",
         "agent.fork",
         "git.status",
-        "git.diff"
+        "git.diff",
+        "git.rollback",
+        "git.delete"
       ]
     },
     "RuntimeParams": {

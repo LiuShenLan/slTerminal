@@ -15,6 +15,7 @@ use super::AppRoot;
 use super::command_registry::{CommandId, CommandParameters, CommandSource, CommandTarget};
 use super::commands::AppRootError;
 use super::focus_manager::FocusError;
+use crate::app_shell::RuntimeMutationReply;
 use crate::app_shell::control_error;
 use crate::local_control::RuntimeMutation;
 
@@ -43,15 +44,61 @@ impl AppRoot {
     }
 
     /// 执行 Runtime 写意图；参数校验、授权、事务与关闭策略全部复用既有命令。
+    ///
+    /// Git 破坏写只在前台解析项目与写授权；阻塞执行由调用方在后台完成。
     pub(super) fn handle_runtime_mutation(
         &mut self,
         mutation: RuntimeMutation,
         window: &mut Window,
         cx: &mut Context<'_, Self>,
-    ) -> Result<(), JsonRpcError> {
+    ) -> Result<RuntimeMutationReply, JsonRpcError> {
         if self.close_in_progress || self.application_close.is_some() || self.close_completed {
             return Err(closing_error());
         }
+        match mutation {
+            RuntimeMutation::GitRollback { .. } | RuntimeMutation::GitDelete { .. } => {
+                self.resolve_runtime_git_write(mutation)
+            }
+            mutation => self
+                .execute_runtime_mutation(mutation, window, cx)
+                .map(|()| RuntimeMutationReply::Done(Ok(()))),
+        }
+    }
+
+    /// Git 破坏写目标：校验路径形状并解析项目；不做任何阻塞读取。
+    fn resolve_runtime_git_write(
+        &self,
+        mutation: RuntimeMutation,
+    ) -> Result<RuntimeMutationReply, JsonRpcError> {
+        let (project_id, path) = match &mutation {
+            RuntimeMutation::GitRollback {
+                project_id, path, ..
+            }
+            | RuntimeMutation::GitDelete {
+                project_id, path, ..
+            } => (*project_id, path.as_str()),
+            _ => return Err(invalid_request_error()),
+        };
+        if path.trim().is_empty() || !valid_repo_relative_path(path) {
+            return Err(invalid_request_error());
+        }
+        let target = self.runtime_git_target(project_id)?;
+        Ok(RuntimeMutationReply::Git(
+            crate::app_shell::GitWriteTarget {
+                project_id: target.project_id,
+                root: target.root,
+                git: target.git,
+                file_operations: std::sync::Arc::clone(&self.file_operations),
+            },
+        ))
+    }
+
+    fn execute_runtime_mutation(
+        &mut self,
+        mutation: RuntimeMutation,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<(), JsonRpcError> {
         match mutation {
             RuntimeMutation::ProjectActivate { project_id } => self
                 .activate_project(project_id, window, cx)
@@ -329,6 +376,10 @@ impl AppRoot {
                     .fork_command(&session_id)
                     .ok_or_else(agent_command_unsupported)?;
                 self.start_agent_terminal(command, project_root, cwd, window, cx)
+            }
+            // Git 破坏写由 handle_runtime_mutation 分流到目标解析，不到达这里。
+            RuntimeMutation::GitRollback { .. } | RuntimeMutation::GitDelete { .. } => {
+                Err(invalid_request_error())
             }
         }
     }

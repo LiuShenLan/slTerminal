@@ -262,6 +262,16 @@ fn git_diff_result_schema() -> schemars::Schema {
 }
 
 #[cfg(feature = "schema")]
+fn git_rollback_params_schema() -> schemars::Schema {
+    schemars::schema_for!(crate::protocol::GitRollbackParams)
+}
+
+#[cfg(feature = "schema")]
+fn git_delete_params_schema() -> schemars::Schema {
+    schemars::schema_for!(crate::protocol::GitDeleteParams)
+}
+
+#[cfg(feature = "schema")]
 fn agent_list_result_schema() -> schemars::Schema {
     schemars::schema_for!(crate::protocol::AgentListResponse)
 }
@@ -639,6 +649,26 @@ pub static METHODS: &[MethodSpec] = &[
         result_schema: git_diff_result_schema,
     },
     MethodSpec {
+        method: ControlMethod::RuntimeGitRollback,
+        scopes: &[ControlScope::Runtime],
+        kind: MethodKind::Mutation,
+        idempotent: true,
+        #[cfg(feature = "schema")]
+        params_schema: git_rollback_params_schema,
+        #[cfg(feature = "schema")]
+        result_schema: operation_result_schema,
+    },
+    MethodSpec {
+        method: ControlMethod::RuntimeGitDelete,
+        scopes: &[ControlScope::Runtime],
+        kind: MethodKind::Mutation,
+        idempotent: true,
+        #[cfg(feature = "schema")]
+        params_schema: git_delete_params_schema,
+        #[cfg(feature = "schema")]
+        result_schema: operation_result_schema,
+    },
+    MethodSpec {
         method: ControlMethod::InstanceHandover,
         scopes: &[ControlScope::Handover],
         kind: MethodKind::Mutation,
@@ -730,6 +760,8 @@ mod method_tests {
                 method_name(ControlMethod::RuntimeAgentFork),
                 method_name(ControlMethod::RuntimeGitStatus),
                 method_name(ControlMethod::RuntimeGitDiff),
+                method_name(ControlMethod::RuntimeGitRollback),
+                method_name(ControlMethod::RuntimeGitDelete),
                 method_name(ControlMethod::InstanceHandover),
             ]
         );
@@ -843,6 +875,8 @@ mod method_tests {
                 ControlMethod::RuntimeAgentFork,
                 ControlMethod::RuntimeGitStatus,
                 ControlMethod::RuntimeGitDiff,
+                ControlMethod::RuntimeGitRollback,
+                ControlMethod::RuntimeGitDelete,
             ]
         );
         let handover_methods: Vec<ControlMethod> = methods_for(ControlScope::Handover)
