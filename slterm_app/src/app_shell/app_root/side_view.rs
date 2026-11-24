@@ -638,6 +638,16 @@ impl Render for SideView {
                     cx.listener(move |_, _, window, cx| focus.focus(window, cx)),
                 )
             })
+            .when(id == SideViewId::Explorer, |element| {
+                // 树内键盘入口与渲染共用同一运行态动作。
+                element.on_key_down(cx.listener(|view, event: &gpui::KeyDownEvent, window, cx| {
+                    match event.keystroke.key.as_str() {
+                        "f2" => view.explorer_begin_rename_selected(window, cx),
+                        "escape" => view.explorer_cancel_inline_edit(cx),
+                        _ => {}
+                    }
+                }))
+            })
             .when_some(content, |element, content| element.child(content))
             .debug_selector(move || format!("app-root-side-view-{}", id.id_str()))
     }

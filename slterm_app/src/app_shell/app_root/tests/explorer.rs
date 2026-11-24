@@ -159,3 +159,72 @@ fn explorer_terminal_open_rejects_invalid_cwd(cx: &mut TestAppContext) {
         assert_eq!(record.cwd(), &live_path, "终端必须落在解析后的真实目录");
     });
 }
+
+#[gpui::test]
+fn explorer_inline_edit_not_committed_on_destroy(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let project_root = temp.path().join("project");
+    std::fs::create_dir_all(&project_root).unwrap();
+    std::fs::write(project_root.join("old.txt"), "x\n").unwrap();
+    let (root, mut window, _) = open_root(cx);
+    add_project(
+        &root,
+        &mut window,
+        PROJECT_A,
+        project_root.to_str().unwrap(),
+    );
+    let explorer = open_explorer(&root, &mut window, cx);
+    let old_path =
+        CanonicalPath::new(dunce::canonicalize(project_root.join("old.txt")).unwrap()).unwrap();
+
+    window.update(|window, cx| {
+        explorer.update(cx, |view, cx| {
+            view.explorer_begin_inline_edit(&old_path, window, cx);
+        });
+    });
+    let input = explorer
+        .read_with(cx, |view, _| view.explorer_inline_edit_input())
+        .expect("内联编辑必须有真实输入实体");
+    window.update(|window, cx| {
+        input.update(cx, |state, cx| state.set_value("renamed.txt", window, cx));
+    });
+    window.simulate_keystrokes("ctrl-shift-n");
+    window.run_until_parked();
+    draw_frame(&mut window);
+
+    assert!(project_root.join("old.txt").exists());
+    assert!(
+        !project_root.join("renamed.txt").exists(),
+        "销毁视图不得提交未确认的内联编辑"
+    );
+
+    let explorer = open_explorer(&root, &mut window, cx);
+    assert!(
+        explorer
+            .read_with(cx, |view, _| view.explorer_inline_edit_input())
+            .is_none(),
+        "重开 Explorer 不得恢复已丢弃草稿"
+    );
+
+    window.update(|window, cx| {
+        explorer.update(cx, |view, cx| {
+            view.explorer_begin_inline_edit(&old_path, window, cx);
+        });
+    });
+    let input = explorer
+        .read_with(cx, |view, _| view.explorer_inline_edit_input())
+        .unwrap();
+    window.update(|window, cx| {
+        input.update(cx, |state, cx| state.set_value("renamed.txt", window, cx));
+    });
+    window.update(|window, cx| {
+        explorer.update(cx, |view, cx| view.explorer_commit_inline_edit(window, cx));
+    });
+    window.run_until_parked();
+    assert!(!project_root.join("old.txt").exists());
+    assert_eq!(
+        std::fs::read_to_string(project_root.join("renamed.txt")).unwrap(),
+        "x\n",
+        "显式提交必须经真实文件操作完成重命名"
+    );
+}

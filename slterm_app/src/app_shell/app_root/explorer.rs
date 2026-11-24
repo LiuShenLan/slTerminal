@@ -8,8 +8,9 @@ use std::io;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AnyElement, Context, InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent,
-    ParentElement as _, Styled as _, Task, WeakEntity, Window, div, px,
+    AnyElement, AppContext as _, Context, Focusable as _, InteractiveElement as _, IntoElement,
+    MouseButton, MouseDownEvent, ParentElement as _, Styled as _, Task, WeakEntity, Window, div,
+    px,
 };
 use gpui_component::ActiveTheme as _;
 use slterm_path::{CanonicalPath, PathGrant, PathOperation, PathPolicy, PathRequest};
@@ -34,6 +35,19 @@ pub(super) enum ExplorerIntent {
         root: CanonicalPath,
         cwd: CanonicalPath,
     },
+    RenameFile {
+        project_id: ProjectId,
+        root: CanonicalPath,
+        from: CanonicalPath,
+        to: CanonicalPath,
+    },
+}
+
+/// 未确认的内联编辑只存在于运行态；视图销毁即丢弃，不产生文件副作用。
+pub(super) struct InlineEdit {
+    target: CanonicalPath,
+    input: gpui::Entity<gpui_component::input::InputState>,
+    _enter: gpui::Subscription,
 }
 
 /// Explorer 错误只区分根不可读与目录读取失败，不回显路径。
@@ -82,6 +96,7 @@ pub(super) struct ExplorerRuntime {
     pending_reads: VecDeque<DirectoryReadRequest>,
     pending_expanded: BTreeSet<CanonicalPath>,
     restoring_row: Option<SideViewPath>,
+    inline_edit: Option<InlineEdit>,
     reading: bool,
     /// 用户动作产生的持久变更；恢复本身不写盘。
     dirty: bool,
@@ -101,6 +116,7 @@ impl ExplorerRuntime {
             pending_reads: VecDeque::new(),
             pending_expanded: BTreeSet::new(),
             restoring_row: None,
+            inline_edit: None,
             reading: false,
             dirty: false,
             task: None,
@@ -125,6 +141,7 @@ impl ExplorerRuntime {
         self.pending_reads.clear();
         self.pending_expanded.clear();
         self.restoring_row = None;
+        self.inline_edit = None;
         self.dirty = false;
         self.error = None;
         self.restore(restored);
@@ -249,7 +266,98 @@ impl AppRoot {
                 root,
                 cwd,
             } => self.start_explorer_terminal_cwd(project_id, root, cwd, window, cx),
+            ExplorerIntent::RenameFile {
+                project_id,
+                root,
+                from,
+                to,
+            } => self.start_explorer_rename(project_id, root, from, to, window, cx),
         }
+    }
+
+    /// 重命名在后台重新解析、授权并执行；成功后只重读原父目录。
+    fn start_explorer_rename(
+        &mut self,
+        project_id: ProjectId,
+        root: CanonicalPath,
+        from: CanonicalPath,
+        to: CanonicalPath,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if self.tasks.is_registered(TaskId::ExplorerFileOperation) {
+            return;
+        }
+        let service = std::sync::Arc::clone(&self.file_operations);
+        let executor = cx.background_executor().clone();
+        let window_handle = window.window_handle();
+        let task_from = from.clone();
+        let task_to = to.clone();
+        self.tasks
+            .register_with(
+                TaskId::ExplorerFileOperation,
+                CancellationToken::new(),
+                move || {
+                    let executing = executor.spawn(async move {
+                        let grants = [PathGrant::project_root(root.clone())];
+                        let plan = service.plan_rename(
+                            FileTreeRoot::Project(project_id),
+                            &task_from,
+                            &task_to,
+                            &grants,
+                            0,
+                        )?;
+                        service.execute(&plan, &grants, 0)
+                    });
+                    cx.spawn(async move |this, cx| {
+                        let result = executing.await;
+                        let _ = window_handle.update(cx, |_, window, cx| {
+                            let _ = this.update(cx, |root, cx| {
+                                root.finish_explorer_rename(
+                                    project_id, from, to, result, window, cx,
+                                );
+                            });
+                        });
+                    })
+                },
+            )
+            .expect("ExplorerFileOperation 单任务登记必须唯一");
+    }
+
+    fn finish_explorer_rename(
+        &mut self,
+        project_id: ProjectId,
+        from: CanonicalPath,
+        to: CanonicalPath,
+        result: Result<
+            crate::app_shell::file_operation_service::FileOperationOutcome,
+            crate::app_shell::file_operation_service::FileOperationError,
+        >,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.tasks.complete(TaskId::ExplorerFileOperation);
+        let _ = window;
+        if result.is_err() {
+            return;
+        }
+        if self.snapshot.registry().project(project_id).is_none() {
+            return;
+        }
+        let Some(parent) = from.as_path().parent().map(|parent| parent.to_path_buf()) else {
+            return;
+        };
+        let Ok(parent) = CanonicalPath::new(parent) else {
+            return;
+        };
+        if let Some(explorer) = self
+            .side_views
+            .instance(slterm_workspace::SideViewId::Explorer)
+            .cloned()
+        {
+            explorer.update(cx, |view, cx| view.explorer_refresh_directory(&parent, cx));
+        }
+        let _ = to;
     }
 
     /// cwd 预检只在后台解析真实目录与授权，回前台再复核项目身份。
@@ -565,6 +673,157 @@ impl SideView {
         cx.notify();
     }
 
+    /// 开始内联重命名；草稿输入实体由运行态独占，销毁即丢弃。
+    pub(super) fn explorer_begin_inline_edit(
+        &mut self,
+        path: &CanonicalPath,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(runtime) = &mut self.explorer else {
+            return;
+        };
+        if runtime.tree.kind_of(path).is_none() {
+            return;
+        }
+        if runtime
+            .inline_edit
+            .as_ref()
+            .is_some_and(|edit| &edit.target == path)
+        {
+            return;
+        }
+        let name = path
+            .as_path()
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let input = cx.new(|cx| {
+            let mut state = gpui_component::input::InputState::new(window, cx);
+            state.set_value(name, window, cx);
+            state
+        });
+        let enter = cx.subscribe_in(
+            &input,
+            window,
+            |view, _, event: &gpui_component::input::InputEvent, window, cx| {
+                if matches!(event, gpui_component::input::InputEvent::PressEnter { .. }) {
+                    view.explorer_commit_inline_edit(window, cx);
+                }
+            },
+        );
+        let focus = input.read(cx).focus_handle(cx);
+        focus.focus(window, cx);
+        runtime.inline_edit = Some(InlineEdit {
+            target: path.clone(),
+            input,
+            _enter: enter,
+        });
+        cx.notify();
+    }
+
+    /// 渲染或测试读取当前草稿输入实体；未编辑时为 None。
+    pub(super) fn explorer_inline_edit_input(
+        &self,
+    ) -> Option<gpui::Entity<gpui_component::input::InputState>> {
+        self.explorer
+            .as_ref()
+            .and_then(|runtime| runtime.inline_edit.as_ref())
+            .map(|edit| edit.input.clone())
+    }
+
+    /// F2 入口：对当前选中行开始内联重命名。
+    pub(super) fn explorer_begin_rename_selected(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(runtime) = &self.explorer else {
+            return;
+        };
+        let Some(path) = runtime.tree.selected().cloned() else {
+            return;
+        };
+        self.explorer_begin_inline_edit(&path, window, cx);
+    }
+
+    /// 显式提交才产生文件操作意图；空名、含分隔符或未改变一律视为取消。
+    pub(super) fn explorer_commit_inline_edit(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(runtime) = &mut self.explorer else {
+            return;
+        };
+        let Some(edit) = runtime.inline_edit.take() else {
+            return;
+        };
+        let name = edit.input.read(cx).value().to_string();
+        let name = name.trim();
+        if name.is_empty() || name.contains(['/', '\\']) || name == "." || name == ".." {
+            cx.notify();
+            return;
+        }
+        let Some(parent) = edit.target.as_path().parent() else {
+            cx.notify();
+            return;
+        };
+        let Ok(to) = CanonicalPath::new(parent.join(name)) else {
+            cx.notify();
+            return;
+        };
+        if to == edit.target {
+            cx.notify();
+            return;
+        }
+        let intent = ExplorerIntent::RenameFile {
+            project_id: runtime.project,
+            root: runtime.tree.root_path().clone(),
+            from: edit.target.clone(),
+            to,
+        };
+        self.dispatch_explorer_intent(intent, window, cx);
+        cx.notify();
+    }
+
+    /// 显式取消或失焦放弃；不触碰任何持久事实。
+    pub(super) fn explorer_cancel_inline_edit(&mut self, cx: &mut Context<'_, Self>) {
+        let Some(runtime) = &mut self.explorer else {
+            return;
+        };
+        if runtime.inline_edit.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    /// 文件操作成功后重读目录；根外与未加载目录不扩读。
+    pub(super) fn explorer_refresh_directory(
+        &mut self,
+        directory: &CanonicalPath,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(runtime) = &mut self.explorer else {
+            return;
+        };
+        if !directory
+            .as_path()
+            .starts_with(runtime.tree.root_path().as_path())
+        {
+            return;
+        }
+        if runtime.tree.kind_of(directory) != Some(FileTreeEntryKind::Directory) {
+            return;
+        }
+        match runtime.tree.refresh(directory) {
+            Ok(Some(request)) => runtime.pending_reads.push_back(request),
+            Ok(None) => {}
+            Err(_) => return,
+        }
+        self.start_explorer_reads(cx);
+        cx.notify();
+    }
+
     /// 在终端打开目录（文件行取父目录）；真实位置与授权由 AppRoot 后台预检。
     pub(super) fn explorer_open_terminal_at(
         &mut self,
@@ -621,12 +880,14 @@ impl SideView {
 
 /// 文件树画面只读运行态快照；点击行复用同一激活入口。
 pub(super) fn render_explorer(view: &mut SideView, cx: &mut Context<'_, SideView>) -> AnyElement {
+    let inline_input = view.explorer_inline_edit_input();
     let Some(runtime) = &view.explorer else {
         return div().size_full().into_any_element();
     };
     let root = runtime.tree.root_path().clone();
     let rows = runtime.tree.visible_rows();
     let error = runtime.error;
+    let inline_target = runtime.inline_edit.as_ref().map(|edit| edit.target.clone());
     let expanded = rows
         .iter()
         .filter(|row| runtime.tree.is_expanded(&row.path))
@@ -666,6 +927,7 @@ pub(super) fn render_explorer(view: &mut SideView, cx: &mut Context<'_, SideView
         };
         let indent = 8.0 + row.depth as f32 * 12.0;
         let selector = format!("explorer-row-{relative}");
+        let editing = inline_target.as_ref() == Some(&row.path);
         let path = row.path;
         let text_color = if selected {
             cx.theme().foreground
@@ -673,27 +935,30 @@ pub(super) fn render_explorer(view: &mut SideView, cx: &mut Context<'_, SideView
             cx.theme().muted_foreground
         };
         let selection = cx.theme().list_active;
-        list = list.child(
-            div()
-                .id(("explorer-row", index))
-                .h(px(22.0))
-                .pl(px(indent))
-                .when(selected, |element| element.bg(selection))
-                .text_color(text_color)
-                .debug_selector(move || selector.clone())
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |view, event: &MouseDownEvent, window, cx| {
-                        // 双击在终端打开，单击复用选中/展开/打开语义。
-                        if event.click_count >= 2 {
-                            view.explorer_open_terminal_at(&path, window, cx);
-                        } else {
-                            view.explorer_activate_at(&path, window, cx);
-                        }
-                    }),
-                )
-                .child(label),
-        );
+        let editing_input = editing.then(|| inline_input.clone()).flatten();
+        let mut row_element = div()
+            .id(("explorer-row", index))
+            .h(px(22.0))
+            .pl(px(indent))
+            .when(selected, |element| element.bg(selection))
+            .text_color(text_color)
+            .debug_selector(move || selector.clone())
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |view, event: &MouseDownEvent, window, cx| {
+                    // 双击在终端打开，单击复用选中/展开/打开语义。
+                    if event.click_count >= 2 {
+                        view.explorer_open_terminal_at(&path, window, cx);
+                    } else {
+                        view.explorer_activate_at(&path, window, cx);
+                    }
+                }),
+            );
+        row_element = match editing_input {
+            Some(input) => row_element.child(gpui_component::input::Input::new(&input)),
+            None => row_element.child(label),
+        };
+        list = list.child(row_element);
     }
     list.into_any_element()
 }

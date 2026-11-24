@@ -214,6 +214,8 @@ pub(crate) struct AppRoot {
     git: Arc<crate::git::GitFacade>,
     /// 真实位置解析端口；Explorer 终端 cwd 与其它打开链共用同一实现。
     path_resolver: Arc<dyn crate::platform::document_paths::DocumentPathResolver>,
+    /// 文件树单项操作唯一执行体；含阻塞 I/O，只在后台调用。
+    file_operations: Arc<crate::app_shell::file_operation_service::FileOperationService>,
     system_open: Arc<dyn Fn(CanonicalPath) + Send + Sync>,
     #[allow(dead_code)] // 消费点 = Document 真实后台打开。
     document_open_service: Arc<crate::app_shell::documents::DocumentOpenService>,
@@ -412,6 +414,9 @@ impl AppRoot {
             page_cache: Rc::new(RefCell::new(DocumentPageCache::new())),
             git: Arc::new(crate::git::GitFacade::default()),
             path_resolver: Arc::new(crate::platform::document_paths::SystemDocumentPathResolver),
+            file_operations: Arc::new(
+                crate::app_shell::file_operation_service::FileOperationService::default(),
+            ),
             system_open: Arc::new(|path| {
                 crate::platform::file_operations::open_in_system(path.as_path());
             }),
