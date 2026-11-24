@@ -16,6 +16,8 @@
 //!   语义由其消费;段名常量由该领域模块引用,禁二次字面量。
 //! - [`CONPTY_INPUT_MODES_SEGMENT`]:ConPTY 输入模式矩阵,由 ConPTY 输入领域锚定,
 //!   段名常量由该领域模块引用。
+//! - [`crate::agent_roots::AGENT_ROOTS_SEGMENT`]:自定义 AgentRoot 列表,
+//!   结构与消费由 Agent 根领域锚定。
 //!
 //! 写通道顶层白名单 = [`segment_whitelist`] = 域段 + 域外段。
 
@@ -848,7 +850,11 @@ pub const KEYBIND_SEGMENT: &str = "keybind";
 pub const CONPTY_INPUT_MODES_SEGMENT: &str = "conpty_input_modes";
 
 /// 全部域外顶层段(不占注册表 leaf 条目,结构由所属领域锚定)。
-pub const EXTERNAL_SEGMENTS: [&str; 2] = [KEYBIND_SEGMENT, CONPTY_INPUT_MODES_SEGMENT];
+pub const EXTERNAL_SEGMENTS: [&str; 3] = [
+    KEYBIND_SEGMENT,
+    CONPTY_INPUT_MODES_SEGMENT,
+    crate::agent_roots::AGENT_ROOTS_SEGMENT,
+];
 
 /// 域外段判定:写通道按段整体替换,不做段内 leaf 校验。
 pub fn is_external_segment(name: &str) -> bool {
@@ -1002,6 +1008,10 @@ mod registry_tests {
             assert!(is_external_segment(external));
         }
         assert!(!is_external_segment("appearance"));
+        assert!(
+            is_external_segment(crate::agent_roots::AGENT_ROOTS_SEGMENT),
+            "agent_roots 是自定义根域外段,写通道必须整段放行"
+        );
         for def in KEYS {
             assert!(
                 unique.contains(def.domain.segment()),
