@@ -195,6 +195,25 @@ impl AgentRootRegistry {
         self.roots.iter().map(|(root, _)| root)
     }
 
+    /// 覆盖该路径的全部根能力并集：读恒可，写与终端逐项取或。
+    /// 撤销任一根后并集按剩余根重算；无根覆盖返回 None。
+    pub(crate) fn capability_union_at(
+        &self,
+        path: &CanonicalPath,
+    ) -> Option<slterm_settings::AgentRootCapabilities> {
+        let mut covered = false;
+        let mut union = slterm_settings::AgentRootCapabilities::READ_ONLY;
+        for (root, real) in &self.roots {
+            if !path.as_path().starts_with(real.as_path()) {
+                continue;
+            }
+            covered = true;
+            union.write |= root.capabilities().write;
+            union.terminal |= root.capabilities().terminal;
+        }
+        covered.then_some(union)
+    }
+
     fn resolve(&self, lexical: &CanonicalPath) -> Result<CanonicalPath, AgentRootRegistryError> {
         self.resolver
             .resolve(lexical)
@@ -352,6 +371,39 @@ mod tests {
             .is_ok(),
             "显式终端能力根必须可作为 cwd"
         );
+    }
+
+    /// 多根覆盖同一文件时能力并集取或；撤销可写根后按剩余根重算。
+    #[test]
+    fn agent_root_capability_union_and_revoke() {
+        let temp = tempfile::tempdir().unwrap();
+        let outer = temp.path().join("outer");
+        let inner = outer.join("inner");
+        std::fs::create_dir_all(&inner).unwrap();
+        let file = CanonicalPath::new(inner.join("file.txt")).unwrap();
+        let mut registry = AgentRootRegistry::new(resolver());
+        // 先登记可写内层、后登记只读外层：并集退化为覆盖赋值时首断言即失败。
+        let writable = root(2, &inner).with_capabilities(slterm_settings::AgentRootCapabilities {
+            write: true,
+            terminal: false,
+        });
+        registry
+            .register(writable, &CanonicalPath::new(&inner).unwrap())
+            .unwrap();
+        registry
+            .register(root(1, &outer), &CanonicalPath::new(&outer).unwrap())
+            .unwrap();
+
+        let union = registry.capability_union_at(&file).unwrap();
+        assert!(union.write, "外层只读与内层可写必须取并集");
+        assert!(!union.terminal);
+
+        registry.remove(id(2)).unwrap();
+        let union = registry.capability_union_at(&file).unwrap();
+        assert!(!union.write, "撤销可写根后并集必须按剩余根重算");
+
+        let outside = CanonicalPath::new(temp.path().join("elsewhere")).unwrap();
+        assert!(registry.capability_union_at(&outside).is_none());
     }
 
     /// 链接别名指向同一真实目录时不形成重复根。
