@@ -378,7 +378,7 @@
 | 验收场景 | 目标测试例名 | 状态 |
 |---|---|---|
 | 新 AgentRoot 默认可读但写入和终端分别拒绝 | `agent_files_default_capabilities` | 已自动化 |
-| 开启写入不隐含终端 cwd 能力 | `agent_files_write_does_not_imply_terminal` | 待实现 |
+| 开启写入不隐含终端 cwd 能力 | `agent_files_write_does_not_imply_terminal` | 已自动化 |
 | 链接别名指向同一真实目录时不形成重复根 | `agent_root_real_directory_dedup` | 已自动化 |
 | 删除根后 Document 保留且既有 PTY 不被强杀 | `agent_root_delete_preserves_document_and_pty` | 待实现 |
 | 多根覆盖同一文件时保存按能力并集与撤销更新 | `agent_root_capability_union_and_revoke` | 待实现 |

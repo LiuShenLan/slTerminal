@@ -317,6 +317,43 @@ mod tests {
         assert!(!registered.capabilities().allows_terminal());
     }
 
+    /// 写能力不隐含终端：写根授权的 TerminalCwd 请求仍被拒绝。
+    #[test]
+    fn agent_files_write_does_not_imply_terminal() {
+        use slterm_path::{PathGrant, PathOperation, PathPolicy, PathRequest, ResolvedPath};
+
+        let temp = tempfile::tempdir().unwrap();
+        let dir = CanonicalPath::new(dunce::canonicalize(temp.path()).unwrap()).unwrap();
+        let request = PathRequest {
+            operation: PathOperation::TerminalCwd,
+            lexical_path: dir.as_path().to_path_buf(),
+            root_hints: Vec::new(),
+            session_grant: None,
+            expected_authorization_generation: 0,
+        };
+        let resolved = ResolvedPath::new(dir.clone(), None);
+        assert!(
+            PathPolicy::authorize(
+                &request,
+                &resolved,
+                &[PathGrant::agent_root(dir.clone(), true, false)],
+                0,
+            )
+            .is_err(),
+            "写能力不得隐含终端 cwd 授权"
+        );
+        assert!(
+            PathPolicy::authorize(
+                &request,
+                &resolved,
+                &[PathGrant::agent_root(dir.clone(), false, true)],
+                0,
+            )
+            .is_ok(),
+            "显式终端能力根必须可作为 cwd"
+        );
+    }
+
     /// 链接别名指向同一真实目录时不形成重复根。
     #[test]
     fn agent_root_real_directory_dedup() {
