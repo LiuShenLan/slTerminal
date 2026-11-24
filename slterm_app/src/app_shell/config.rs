@@ -352,7 +352,7 @@ mod config_tests {
     }
 
     #[test]
-    fn custom_theme_documents_resolve_through_the_library_root() {
+    fn integration_custom_theme() {
         let directory = tempfile::tempdir().unwrap();
         let themes = directory.path().join("themes");
         let store = crate::theme_library::ThemeLibraryStore::new(&themes);
@@ -388,6 +388,12 @@ mod config_tests {
         assert_eq!(
             indexed,
             Some(crate::gpui_terminal::colors::from_rgb8([0xaa, 0xbb, 0xcc]))
+        );
+
+        // 使用中的自定义主题删除必须先另选。
+        assert_eq!(
+            crate::theme_library::resolve_theme_deletion(Some(id), id),
+            crate::theme_library::ThemeDeletion::RequiresReplacement
         );
 
         // 缺失/损坏的自定义主题回退内置主题,不炸启动。
