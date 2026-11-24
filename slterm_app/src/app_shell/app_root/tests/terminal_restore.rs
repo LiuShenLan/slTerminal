@@ -51,6 +51,53 @@ fn open_real_root_with_persistence(
     )
 }
 
+/// 跨机恢复：RelocationRequired 项目在重新授权前不启动 PTY、不恢复面板。
+#[gpui::test]
+fn backup_cross_machine_requires_relocation(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let project_a = temp.path().join("a");
+    std::fs::create_dir_all(&project_a).unwrap();
+    let mut snapshot = ProjectSnapshot::default();
+    snapshot
+        .registry_mut()
+        .add_project(
+            project_id(PROJECT_A),
+            CanonicalPath::new(project_a).unwrap(),
+        )
+        .unwrap();
+    snapshot = snapshot
+        .with_new_terminal(terminal_spec(PROJECT_A, GROUP_A, TERMINAL_A))
+        .unwrap()
+        .0;
+    snapshot
+        .registry_mut()
+        .set_root_status(
+            project_id(PROJECT_A),
+            slterm_workspace::ProjectRootStatus::RelocationRequired,
+        )
+        .unwrap();
+
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    save_terminal_recovery_snapshot(&paths, &snapshot);
+    let persistence = AppRootPersistence::load(&paths, None);
+    let (root, mut window, state) = open_root_with_persistence(cx, persistence);
+    window.run_until_parked();
+
+    assert_eq!(state.borrow().attempts, 0, "未重新授权前不得启动任何 PTY");
+    root.read_with(cx, |root, cx| {
+        assert_eq!(
+            root.panel_count(project_id(PROJECT_A), cx),
+            0,
+            "未授权项目不得恢复运行面板"
+        );
+        assert_eq!(
+            root.snapshot().terminals().count(),
+            1,
+            "布局与终端记录本身必须保留"
+        );
+    });
+}
+
 #[gpui::test]
 fn terminal_restore_real_pty_auto_and_lazy_launch(cx: &mut TestAppContext) {
     if !cfg!(windows) {

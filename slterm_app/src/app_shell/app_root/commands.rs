@@ -427,6 +427,11 @@ impl AppRoot {
         let Some(project) = self.snapshot.registry().project(project_id) else {
             return;
         };
+        // 跨机或根重定位未完成：重新授权前不启动 PTY、不读正文。
+        if project.root_status() != slterm_workspace::ProjectRootStatus::Ready {
+            log::info!("项目根未就绪，跳过面板恢复: {project_id:?}");
+            return;
+        }
         let views = project.layout().view_keys();
         for view in views {
             match view {

@@ -109,7 +109,7 @@
 | 条目篡改或口令错误时整包拒绝且零写入 | `backup_tamper_rejected_zero_write` | 已自动化 |
 | 恢复中断后可由恢复点回滚 | `backup_interrupted_restore_rolls_back` | 已自动化 |
 | 恢复后修改对象时撤回保留冲突项 | `backup_undo_fingerprint_conflict` | 已自动化 |
-| 跨机恢复未完成重定位前不读正文或启动 PTY | `backup_cross_machine_requires_relocation` | 待实现 |
+| 跨机恢复未完成重定位前不读正文或启动 PTY | `backup_cross_machine_requires_relocation` | 已自动化 |
 | 目标机缺凭据时不从包内提取凭据 | `backup_restore_does_not_restore_credentials` | 已自动化 |
 
 ### 跨域约定
