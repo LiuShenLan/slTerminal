@@ -276,6 +276,74 @@ mod recovery_tests {
         }
     }
 
+    /// 端到端：收集 → 密封 → 打开 → 选择性恢复 → 撤回恢复前现场。
+    #[test]
+    fn integration_encrypted_backup() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = split_paths(directory.path());
+        fs::create_dir_all(paths.config_root()).unwrap();
+        fs::create_dir_all(paths.local_root()).unwrap();
+        let settings = br#"{"appearance":{"theme":"Linear"}}"#.to_vec();
+        fs::write(paths.config_root().join("settings.json"), &settings).unwrap();
+        fs::write(paths.local_root().join("session.json"), br#"{"version":0}"#).unwrap();
+        fs::create_dir_all(paths.config_root().join("themes")).unwrap();
+        let theme = crate::theme_library::builtin_documents()
+            .first()
+            .expect("内置主题文档非空")
+            .to_json_bytes()
+            .expect("内置主题文档可序列化");
+        let theme_path = paths.config_root().join("themes/copy.slterm-theme.json");
+        fs::write(&theme_path, &theme).unwrap();
+
+        let archive = collect_from(
+            &paths,
+            BackupSelection::from_categories([
+                BackupCategory::Settings,
+                BackupCategory::Session,
+                BackupCategory::Themes,
+            ]),
+        )
+        .unwrap();
+        let packet = seal(&archive, PASSPHRASE).unwrap();
+        let opened = open(&packet, PASSPHRASE).unwrap();
+        assert_eq!(opened, archive);
+
+        fs::write(
+            paths.config_root().join("settings.json"),
+            br#"{"appearance":{"theme":"Nord"}}"#,
+        )
+        .unwrap();
+        fs::write(&theme_path, b"external").unwrap();
+        let point = restore_selected_at(
+            &paths,
+            &opened,
+            BackupSelection::from_categories([
+                BackupCategory::Settings,
+                BackupCategory::Session,
+                BackupCategory::Themes,
+            ]),
+            PASSPHRASE,
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read(paths.config_root().join("settings.json")).unwrap(),
+            settings
+        );
+        assert_eq!(fs::read(&theme_path).unwrap(), theme);
+        assert_eq!(
+            fs::read(paths.local_root().join("session.json")).unwrap(),
+            br#"{"version":0}"#
+        );
+
+        undo_at(&paths, &point, PASSPHRASE).unwrap();
+        assert_eq!(
+            fs::read(paths.config_root().join("settings.json")).unwrap(),
+            br#"{"appearance":{"theme":"Nord"}}"#,
+            "撤回必须回到恢复前现场"
+        );
+        assert_eq!(fs::read(&theme_path).unwrap(), b"external");
+    }
+
     /// 撤回逐项检查恢复后指纹：外部修改项保留当前并报告冲突，其余项回滚。
     #[test]
     fn backup_undo_fingerprint_conflict() {
