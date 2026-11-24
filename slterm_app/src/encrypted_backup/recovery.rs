@@ -9,6 +9,8 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use sha2::{Digest as _, Sha256};
+
 use super::*;
 
 /// 恢复目标的类别与根内相对名共同构成身份，禁止跨根伪造。
@@ -38,6 +40,17 @@ struct OriginalFile {
     target: RestoreTarget,
     /// None = 恢复前该文件不存在;撤回时删除,而不是留下恢复新建的文件。
     bytes: Option<Vec<u8>>,
+    /// 恢复成功后的文件指纹；撤回时逐项比较，后续修改项保留当前内容。
+    #[serde(default)]
+    after: Option<[u8; 32]>,
+}
+
+fn file_fingerprint(path: &Path) -> Result<Option<[u8; 32]>, String> {
+    match fs::read(path) {
+        Ok(bytes) => Ok(Some(Sha256::digest(&bytes).into())),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("读取撤回目标指纹失败: {error}")),
+    }
 }
 
 fn read_original(paths: &AppPaths, entry: &BackupEntry) -> Result<OriginalFile, String> {
@@ -57,6 +70,7 @@ fn read_original(paths: &AppPaths, entry: &BackupEntry) -> Result<OriginalFile, 
             name: name.clone(),
         },
         bytes,
+        after: None,
     })
 }
 
@@ -121,7 +135,7 @@ fn restore_selected_at(
         .categories
         .retain(|category| categories.contains(category));
 
-    let originals = selected
+    let mut originals = selected
         .entries
         .iter()
         .map(|entry| read_original(paths, entry))
@@ -142,6 +156,19 @@ fn restore_selected_at(
             Err(rollback) => Err(format!("{error}; {rollback}; 恢复点: {}", path.display())),
         };
     }
+    // 恢复成功后补记每项恢复后指纹：撤回只回滚未被后续修改的文件。
+    for file in originals.iter_mut() {
+        let target = restore_path(
+            category_root(paths, file.target.category),
+            &file.target.name,
+        )?;
+        file.after = file_fingerprint(&target)?;
+    }
+    let plaintext = Zeroizing::new(
+        serde_json::to_vec(&originals).map_err(|error| format!("序列化恢复点失败: {error}"))?,
+    );
+    crate::atomic_file::write(&path, &encrypt_bytes(&plaintext, passphrase)?)
+        .map_err(|error| format!("更新恢复点失败: {error}"))?;
     Ok(RestorePoint {
         path,
         targets: originals.into_iter().map(|file| file.target).collect(),
@@ -164,7 +191,8 @@ fn recovery_point_path(root: &Path) -> Result<PathBuf, String> {
     Err("无法分配恢复点文件名".to_owned())
 }
 
-/// 凭口令撤回:解密恢复点 → 目标名集合与句柄精确比对 → 写回原现场。
+/// 凭口令撤回:解密恢复点 → 目标名集合与句柄精确比对 → 逐项指纹检查 →
+/// 写回未被后续修改的原现场；被修改项标冲突并保留当前内容。
 pub(crate) fn undo(point: &RestorePoint, passphrase: &str) -> Result<(), String> {
     undo_at(crate::platform::dirs::app_paths(), point, passphrase)
 }
@@ -182,7 +210,35 @@ fn undo_at(paths: &AppPaths, point: &RestorePoint, passphrase: &str) -> Result<(
     {
         return Err("恢复点目标集合不匹配".to_owned());
     }
-    write_originals(paths, &originals)
+    let mut matched = Vec::new();
+    let mut conflicts = Vec::new();
+    for file in originals {
+        let target = restore_path(
+            category_root(paths, file.target.category),
+            &file.target.name,
+        )?;
+        let current = file_fingerprint(&target)?;
+        if current == file.after {
+            matched.push(file);
+        } else if current
+            == file
+                .bytes
+                .as_deref()
+                .map(|bytes| Sha256::digest(bytes).into())
+        {
+            // 已是撤回前现场（重复撤回）：不需要再次写盘，也不构成冲突。
+        } else {
+            conflicts.push(file.target.name);
+        }
+    }
+    write_originals(paths, &matched)?;
+    if !conflicts.is_empty() {
+        return Err(format!(
+            "撤回冲突：以下文件在恢复后被修改，已保留当前内容: {}",
+            conflicts.join(", ")
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -218,6 +274,55 @@ mod recovery_tests {
                 },
             ],
         }
+    }
+
+    /// 撤回逐项检查恢复后指纹：外部修改项保留当前并报告冲突，其余项回滚。
+    #[test]
+    fn backup_undo_fingerprint_conflict() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = split_paths(directory.path());
+        fs::create_dir_all(paths.config_root()).unwrap();
+        fs::create_dir_all(paths.local_root()).unwrap();
+        fs::write(
+            paths.settings_path(),
+            br#"{"appearance":{"theme":"Linear"}}"#,
+        )
+        .unwrap();
+        fs::write(paths.local_root().join("session.json"), br#"{"version":0}"#).unwrap();
+
+        let point = restore_selected_at(
+            &paths,
+            &archive(),
+            BackupSelection::from_categories([BackupCategory::Settings, BackupCategory::Session]),
+            PASSPHRASE,
+        )
+        .unwrap();
+        fs::write(
+            paths.settings_path(),
+            br#"{"appearance":{"theme":"MintDark"}}"#,
+        )
+        .unwrap();
+
+        let error = undo_at(&paths, &point, PASSPHRASE).unwrap_err();
+        assert!(error.contains("冲突"), "撤回必须报告指纹冲突: {error}");
+        assert!(error.contains("settings.json"), "冲突项必须点名: {error}");
+        assert_eq!(
+            fs::read(paths.settings_path()).unwrap(),
+            br#"{"appearance":{"theme":"MintDark"}}"#,
+            "冲突项必须保留当前内容"
+        );
+        assert_eq!(
+            fs::read(paths.local_root().join("session.json")).unwrap(),
+            br#"{"version":0}"#,
+            "未修改项必须回滚"
+        );
+
+        fs::write(paths.settings_path(), br#"{"appearance":{"theme":"Nord"}}"#).unwrap();
+        undo_at(&paths, &point, PASSPHRASE).expect("指纹恢复一致后可撤回");
+        assert_eq!(
+            fs::read(paths.settings_path()).unwrap(),
+            br#"{"appearance":{"theme":"Linear"}}"#
+        );
     }
 
     #[test]
@@ -387,6 +492,7 @@ mod recovery_tests {
                     name: "settings.json".into(),
                 },
                 bytes: Some(b"forged".to_vec()),
+                after: None,
             },
             OriginalFile {
                 target: RestoreTarget {
@@ -394,6 +500,7 @@ mod recovery_tests {
                     name: "session.json".into(),
                 },
                 bytes: None,
+                after: None,
             },
         ];
         let plaintext = serde_json::to_vec(&forged_originals).unwrap();
@@ -430,6 +537,7 @@ mod recovery_tests {
                 name: "settings.json".into(),
             },
             bytes: Some(b"forged".to_vec()),
+            after: None,
         }];
         let packet =
             encrypt_bytes(&serde_json::to_vec(&forged_originals).unwrap(), PASSPHRASE).unwrap();
@@ -443,7 +551,7 @@ mod recovery_tests {
     }
 
     #[test]
-    fn failed_restore_rolls_back_originals() {
+    fn backup_interrupted_restore_rolls_back() {
         let root = tempfile::tempdir().unwrap();
         fs::write(root.path().join("settings.json"), b"original").unwrap();
         // 第 0 条写成功后注入失败:第 1 条不再写,回滚必须恢复第 0 条、

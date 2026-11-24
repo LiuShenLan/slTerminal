@@ -5,7 +5,7 @@
 //! 来源文件(`~/.claude/settings.json`)永不读写进出备份;清单外文件不存在
 //! 「顺手带上」的通道,导入导出同一道边界。
 //!
-//! 格式:`TRMBK001 | salt(16) | nonce(12) | ciphertext`。魔数同时作
+//! 格式:`SLTMBK01 | salt(16) | nonce(12) | ciphertext`。魔数同时作
 //! AES-256-GCM 的 AAD,格式身份与密文认证绑死——魔数不符即
 //! 「非本应用备份」一票拒解。密钥派生 = Argon2id v0x13,m=19456 KiB、
 //! t=2、p=1(契约数值随上游基线)。派生密钥、解密明文与恢复点明文全程
@@ -36,7 +36,7 @@ use zeroize::Zeroizing;
 pub(crate) mod recovery;
 
 /// 备份格式魔数(已裁:去品牌,8 字节,同时作 AAD)。
-const MAGIC: &[u8; 8] = b"TRMBK001";
+const MAGIC: &[u8; 8] = b"SLTMBK01";
 /// 归档格式版本;不符即「版本不支持」一票拒。
 const ARCHIVE_VERSION: u32 = 1;
 const SALT_LEN: usize = 16;
@@ -230,7 +230,7 @@ fn derive_key(passphrase: &str, salt: &[u8]) -> Result<[u8; KEY_LEN], String> {
     Ok(key)
 }
 
-/// 序列化并密封归档 → `TRMBK001 | salt | nonce | ciphertext`。
+/// 序列化并密封归档 → `SLTMBK01 | salt | nonce | ciphertext`。
 pub(crate) fn seal(archive: &BackupArchive, passphrase: &str) -> Result<Vec<u8>, String> {
     validate_passphrase(passphrase)?;
     if archive.manifest.version != ARCHIVE_VERSION {
@@ -723,6 +723,38 @@ mod encrypted_backup_tests {
         assert_eq!(fs::read(&theme_path).unwrap(), theme_bytes());
     }
 
+    /// 恢复不还原凭据：导出剥除敏感键，恢复后文件与凭据域均不含凭据值。
+    #[test]
+    fn backup_restore_does_not_restore_credentials() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = split_paths(directory.path());
+        fs::create_dir_all(paths.config_root()).unwrap();
+        fs::create_dir_all(paths.local_root()).unwrap();
+        fs::write(
+            paths.config_root().join("settings.json"),
+            br#"{"appearance":{"theme":"Nord"},"token":"sk-test-secret","handmade":{"password":"sk-test-secret"}}"#,
+        )
+        .unwrap();
+
+        let archive = collect_from(&paths, BackupSelection::default()).unwrap();
+        let settings = archive
+            .entries
+            .iter()
+            .find(|entry| entry.name == "settings.json")
+            .expect("设置类别必须入包");
+        let text = String::from_utf8_lossy(&settings.bytes);
+        assert!(!text.contains("sk-test-secret"), "敏感键值必须从导出中剥除");
+        assert!(!text.contains("\"token\"") && !text.contains("\"password\""));
+
+        let packet = seal(&archive, PASSPHRASE).unwrap();
+        restore_at(&paths, &packet, PASSPHRASE).unwrap();
+        let restored = fs::read_to_string(paths.config_root().join("settings.json")).unwrap();
+        assert!(
+            !restored.contains("sk-test-secret"),
+            "恢复不得把凭据值写回任何文件"
+        );
+    }
+
     /// 类别排除：物理库与凭据域材料永不进入任何备份包。
     #[test]
     fn backup_workspace_category_exclusions() {
@@ -847,7 +879,7 @@ mod encrypted_backup_tests {
                 &Nonce::try_from(&nonce[..]).unwrap(),
                 Payload {
                     msg: &plaintext,
-                    aad: b"TRMBK000",
+                    aad: b"SLTMBK00",
                 },
             )
             .unwrap();
