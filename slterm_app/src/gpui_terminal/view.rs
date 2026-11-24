@@ -719,6 +719,14 @@ impl TerminalView {
         result
     }
 
+    /// 最近发布帧的代次；无帧时为 0。Runtime 等待只读该值。
+    pub(crate) fn runtime_revision(&self) -> u64 {
+        self.frame
+            .as_ref()
+            .map(|frame| frame.revision())
+            .unwrap_or(0)
+    }
+
     /// Runtime 只读文本快照：命令进入唯一 worker，等待由后台读取方完成。
     pub(crate) fn runtime_text_snapshot(
         &self,

@@ -20,7 +20,8 @@ use slterm_runtime_protocol::{
     ProjectRemoveParams, ProjectRenameParams, ProjectReorderParams, RuntimeEvent, RuntimeMethod,
     RuntimeRequest, RuntimeResult, SnapshotResources, SnapshotResponse, SplitDirectionWire,
     TerminalCreateParams, TerminalExecuteParams, TerminalInputParams, TerminalReadRequest,
-    TerminalReadResponse, ViewportSize, parse_client_request,
+    TerminalReadResponse, TerminalWaitRequest, TerminalWaitResponse, ViewportSize,
+    parse_client_request,
 };
 use slterm_split::SplitDirection;
 use slterm_workspace::{LogicalSize, PanelGroupId, ProjectId, ViewKey};
@@ -94,6 +95,17 @@ pub(crate) type MutationCallback =
 pub(crate) type ReadCallback =
     Arc<dyn Fn(TerminalReadTarget) -> Result<TerminalTextSnapshot, JsonRpcError> + Send + Sync>;
 
+/// 终端等待状态目标：稳定身份与 PTY 代次。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct TerminalStatusTarget {
+    pub(crate) terminal_id: slterm_workspace::TerminalId,
+    pub(crate) generation: u64,
+}
+
+/// Runtime 终端等待端口：读取前台最近发布帧的 revision。
+pub(crate) type WaitStatusCallback =
+    Arc<dyn Fn(TerminalStatusTarget) -> Result<u64, JsonRpcError> + Send + Sync>;
+
 /// Runtime 作用域的应用回调集合。
 pub(crate) struct RuntimeCallbacks {
     pub(crate) snapshot: SnapshotCallback,
@@ -101,6 +113,7 @@ pub(crate) struct RuntimeCallbacks {
     pub(crate) events: EventSubscribeCallback,
     pub(crate) mutation: MutationCallback,
     pub(crate) read: ReadCallback,
+    pub(crate) wait_status: WaitStatusCallback,
 }
 
 /// operation.wait 轮询间隔：只做有界查询与关闭检查。
@@ -127,6 +140,7 @@ impl LocalControlServer {
                 events: Arc::new(not_ready_events),
                 mutation: Arc::new(not_ready_mutation),
                 read: Arc::new(not_ready_read),
+                wait_status: Arc::new(not_ready_wait_status),
             },
         )
     }
@@ -759,6 +773,15 @@ fn handle_connection<F>(
                             Err(error) => JsonRpcResponse::error(request.id, error),
                         }
                     }
+                    RuntimeMethod::TerminalWait => {
+                        match wait_terminal(&runtime, &request, &shutdown) {
+                            Ok(resource) => JsonRpcResponse::result(
+                                request.id,
+                                RuntimeResult::TerminalWait(resource),
+                            ),
+                            Err(error) => JsonRpcResponse::error(request.id, error),
+                        }
+                    }
                     RuntimeMethod::TerminalCreate => {
                         let Some(params) = request.parse::<TerminalCreateParams>() else {
                             return;
@@ -896,6 +919,10 @@ fn not_ready_mutation(_: RuntimeMutationRequest) -> Result<OperationResource, Js
 
 fn not_ready_read(_: TerminalReadTarget) -> Result<TerminalTextSnapshot, JsonRpcError> {
     Err(not_ready_error("terminal read not ready"))
+}
+
+fn not_ready_wait_status(_: TerminalStatusTarget) -> Result<u64, JsonRpcError> {
+    Err(not_ready_error("terminal wait not ready"))
 }
 
 /// 游标失效必须显式要求重读，不得把旧页拼成完整结果。
@@ -1051,6 +1078,41 @@ fn stream_subscription(
     let _ = stream.shutdown(Shutdown::Both);
     let _ = event_thread.join();
     result
+}
+
+/// terminal.wait 在连接线程内轮询前台帧 revision；超时 NotReady、关闭 Closing。
+fn wait_terminal(
+    runtime: &RuntimeCallbacks,
+    request: &RuntimeRequest,
+    shutdown: &AtomicBool,
+) -> Result<TerminalWaitResponse, JsonRpcError> {
+    let Some(params) = request.parse::<TerminalWaitRequest>() else {
+        return Err(not_ready_error("terminal wait params missing"));
+    };
+    let terminal_id = parse_terminal_id(&params.terminal_id)?;
+    let timeout_ms = params.timeout_ms.unwrap_or(OPERATION_WAIT_LIMIT_MS);
+    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+    loop {
+        if shutdown.load(Ordering::SeqCst) {
+            return Err(closing_error());
+        }
+        let revision = (runtime.wait_status)(TerminalStatusTarget {
+            terminal_id,
+            generation: params.generation,
+        })?;
+        if revision > params.since_revision {
+            return Ok(TerminalWaitResponse {
+                terminal_id: params.terminal_id,
+                generation: params.generation,
+                revision,
+            });
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            return Err(not_ready_error("terminal wait not ready"));
+        }
+        std::thread::sleep(OPERATION_WAIT_POLL.min(deadline - now));
+    }
 }
 
 /// operation.wait 只在后台 worker 轮询；关闭与超时都返回结构化终态。

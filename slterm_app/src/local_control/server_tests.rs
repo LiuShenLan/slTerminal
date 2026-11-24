@@ -16,7 +16,7 @@ use slterm_runtime_protocol::{
     PanelOpenSettingsParams, ProjectActivateParams, ProjectActivateRequest, ProjectResource,
     RuntimeEvent, RuntimeMethod, RuntimeRequest, SnapshotResources, SplitDirectionWire,
     TerminalExecuteParams, TerminalExecuteRequest, TerminalInputParams, TerminalInputRequest,
-    TerminalReadRequest, TerminalResource, ViewResource, ViewportSize,
+    TerminalReadRequest, TerminalResource, TerminalWaitRequest, ViewResource, ViewportSize,
 };
 
 use super::LocalControlServer;
@@ -44,6 +44,16 @@ fn unavailable_read(
     Err(JsonRpcError::new(
         -32001,
         "terminal read not ready",
+        Some(JsonRpcErrorData {
+            code: slterm_runtime_protocol::DomainErrorCode::NotReady,
+        }),
+    ))
+}
+
+fn unavailable_wait_status(_: super::server::TerminalStatusTarget) -> Result<u64, JsonRpcError> {
+    Err(JsonRpcError::new(
+        -32001,
+        "terminal wait not ready",
         Some(JsonRpcErrorData {
             code: slterm_runtime_protocol::DomainErrorCode::NotReady,
         }),
@@ -476,6 +486,7 @@ where
             }),
             mutation: Arc::new(unavailable_mutation),
             read: Arc::new(unavailable_read),
+            wait_status: Arc::new(unavailable_wait_status),
         },
     )
     .unwrap();
@@ -552,6 +563,7 @@ where
             }),
             mutation: Arc::new(unavailable_mutation),
             read: Arc::new(unavailable_read),
+            wait_status: Arc::new(unavailable_wait_status),
         },
     )
     .unwrap();
@@ -626,6 +638,7 @@ where
             }),
             mutation: Arc::new(on_mutation),
             read: Arc::new(unavailable_read),
+            wait_status: Arc::new(unavailable_wait_status),
         },
     )
     .unwrap();
@@ -866,6 +879,7 @@ where
             }),
             mutation: Arc::new(unavailable_mutation),
             read: Arc::new(on_read),
+            wait_status: Arc::new(unavailable_wait_status),
         },
     )
     .unwrap();
@@ -947,6 +961,88 @@ fn runtime_terminal_read_pages_snapshot_and_rejects_stale_cursor() {
     server.shutdown().unwrap();
 }
 
+fn start_dual_scope_server_with_wait_status<W>(
+    on_wait_status: W,
+) -> (LocalControlServer, Arc<AtomicUsize>)
+where
+    W: Fn(super::server::TerminalStatusTarget) -> Result<u64, JsonRpcError> + Send + Sync + 'static,
+{
+    let calls = Arc::new(AtomicUsize::new(0));
+    let callback_calls = Arc::clone(&calls);
+    let server = LocalControlServer::start_with_runtime(
+        test_secret("sk-test"),
+        test_secret("sk-test-runtime"),
+        hello_response(),
+        move |_| {
+            callback_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(HandoverResponse::accepted())
+        },
+        super::server::RuntimeCallbacks {
+            snapshot: Arc::new(|| Ok(SnapshotResources::default())),
+            operation: Arc::new(|_| Ok(None)),
+            events: Arc::new(|_| {
+                Err(JsonRpcError::new(
+                    -32001,
+                    "event subscription not ready",
+                    Some(JsonRpcErrorData {
+                        code: slterm_runtime_protocol::DomainErrorCode::NotReady,
+                    }),
+                ))
+            }),
+            mutation: Arc::new(unavailable_mutation),
+            read: Arc::new(unavailable_read),
+            wait_status: Arc::new(on_wait_status),
+        },
+    )
+    .unwrap();
+    (server, calls)
+}
+
+fn terminal_wait_request(
+    terminal: &str,
+    generation: u64,
+    since_revision: u64,
+    timeout_ms: u64,
+) -> RuntimeRequest {
+    RuntimeRequest::new(
+        JsonRpcId::Number(15),
+        RuntimeMethod::TerminalWait,
+        TerminalWaitRequest {
+            terminal_id: terminal.to_owned(),
+            generation,
+            since_revision,
+            timeout_ms: Some(timeout_ms),
+        },
+    )
+}
+
+#[test]
+fn runtime_terminal_wait_returns_newer_revision_and_times_out() {
+    let terminal = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2d";
+    let (mut server, _calls) = start_dual_scope_server_with_wait_status(move |target| {
+        assert_eq!(target.terminal_id.to_string(), terminal);
+        assert_eq!(target.generation, 3);
+        Ok(6)
+    });
+    let mut stream = connect(&server);
+    stream.set_read_timeout(Some(TEST_TIMEOUT)).unwrap();
+    write_json(
+        &mut stream,
+        &hello_scoped("sk-test-runtime", ControlScope::Runtime),
+    );
+    assert!(read_line(&mut stream).contains("store"));
+
+    write_json(&mut stream, &terminal_wait_request(terminal, 3, 5, 1_000));
+    let reply: serde_json::Value = serde_json::from_str(&read_line(&mut stream)).unwrap();
+    assert_eq!(reply["result"]["revision"], 6);
+    assert_eq!(reply["result"]["generation"], 3);
+
+    write_json(&mut stream, &terminal_wait_request(terminal, 3, 100, 1));
+    let reply: serde_json::Value = serde_json::from_str(&read_line(&mut stream)).unwrap();
+    assert_eq!(reply["error"]["data"]["code"], "not_ready");
+    server.shutdown().unwrap();
+}
+
 #[test]
 fn runtime_project_list_and_mutations_route_through_callbacks() {
     let mutations = Arc::new(AtomicUsize::new(0));
@@ -1012,6 +1108,7 @@ where
             events: Arc::new(on_events),
             mutation: Arc::new(unavailable_mutation),
             read: Arc::new(unavailable_read),
+            wait_status: Arc::new(unavailable_wait_status),
         },
     )
     .unwrap();
@@ -1207,6 +1304,7 @@ fn runtime_describe_returns_registry_and_contract_hashes() {
             "terminal.input",
             "terminal.execute",
             "terminal.read",
+            "terminal.wait",
             "instance.handover"
         ]
     );

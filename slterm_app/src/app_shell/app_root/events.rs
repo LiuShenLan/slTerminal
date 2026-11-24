@@ -102,6 +102,13 @@ impl AppRoot {
                                                     let _ = completion
                                                         .try_send(Err(closing_snapshot_error()));
                                                 }
+                                                SltermShellEvent::RuntimeWait {
+                                                    completion,
+                                                    ..
+                                                } => {
+                                                    let _ = completion
+                                                        .try_send(Err(closing_snapshot_error()));
+                                                }
                                                 _ => {}
                                             }
                                         }
@@ -313,6 +320,21 @@ impl AppRoot {
                     Err(closing_snapshot_error())
                 } else {
                     self.handle_runtime_read(terminal_id, generation, cx)
+                };
+                let _ = completion.try_send(result);
+            }
+            SltermShellEvent::RuntimeWait {
+                terminal_id,
+                generation,
+                completion,
+            } => {
+                let result = if self.close_in_progress
+                    || self.application_close.is_some()
+                    || self.close_completed
+                {
+                    Err(closing_snapshot_error())
+                } else {
+                    self.handle_runtime_wait(terminal_id, generation, cx)
                 };
                 let _ = completion.try_send(result);
             }

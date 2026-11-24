@@ -1414,7 +1414,8 @@
         "terminal.create",
         "terminal.input",
         "terminal.execute",
-        "terminal.read"
+        "terminal.read",
+        "terminal.wait"
       ]
     },
     "RuntimeParams": {
@@ -1524,6 +1525,9 @@
         },
         {
           "$ref": "#/$defs/TerminalReadResponse"
+        },
+        {
+          "$ref": "#/$defs/TerminalWaitResponse"
         }
       ]
     },
@@ -1739,6 +1743,31 @@
         "cwd",
         "shell",
         "run_intent"
+      ]
+    },
+    "TerminalWaitResponse": {
+      "description": "等待结果：`revision` 一定大于请求的 `since_revision`。",
+      "type": "object",
+      "properties": {
+        "generation": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "revision": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "terminal_id": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "terminal_id",
+        "generation",
+        "revision"
       ]
     },
     "ViewResource": {

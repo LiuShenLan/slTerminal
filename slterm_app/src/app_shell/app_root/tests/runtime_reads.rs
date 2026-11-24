@@ -110,6 +110,66 @@ fn runtime_read_rejects_stale_generation_and_close(cx: &mut TestAppContext) {
     );
 }
 
+fn dispatch_wait(
+    root: &Entity<AppRoot>,
+    window: &mut VisualTestContext,
+    terminal_id: TerminalId,
+    generation: u64,
+) -> Result<u64, JsonRpcError> {
+    let (completion, response) = mpsc::sync_channel(1);
+    window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.handle_shell_event(
+                SltermShellEvent::RuntimeWait {
+                    terminal_id,
+                    generation,
+                    completion,
+                },
+                window,
+                cx,
+            );
+        });
+    });
+    response.try_recv().expect("AppRoot 必须返回等待回执")
+}
+
+#[gpui::test]
+fn runtime_wait_reads_current_revision_and_rejects_stale_generation(cx: &mut TestAppContext) {
+    let (root, mut window, _state) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, "D:/work/a");
+    new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_A);
+    let generation = root.read_with(cx, |root, _| {
+        root.terminals
+            .borrow()
+            .target(terminal_id(TERMINAL_A))
+            .expect("测试终端必须已在 Registry 注册")
+            .generation()
+            .get()
+    });
+
+    assert_eq!(
+        dispatch_wait(&root, &mut window, terminal_id(TERMINAL_A), generation)
+            .expect("等待查询必须成功"),
+        0,
+        "测试 worker 的初始帧 revision 为零"
+    );
+
+    let error = dispatch_wait(&root, &mut window, terminal_id(TERMINAL_A), generation + 1)
+        .expect_err("过期代次必须拒绝");
+    assert_eq!(
+        error.data.as_ref().map(|data| data.code),
+        Some(DomainErrorCode::NotReady)
+    );
+
+    root.update(cx, |root, _| root.close_in_progress = true);
+    let error = dispatch_wait(&root, &mut window, terminal_id(TERMINAL_A), generation)
+        .expect_err("关闭中必须拒绝");
+    assert_eq!(
+        error.data.as_ref().map(|data| data.code),
+        Some(DomainErrorCode::Closing)
+    );
+}
+
 /// 通道中不得残留读取命令；非读取命令只记录并跳过。
 fn no_pending_read(state: &Rc<RefCell<LauncherState>>, panel: PanelId) -> bool {
     let mut state = state.borrow_mut();

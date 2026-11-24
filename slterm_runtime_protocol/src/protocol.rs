@@ -136,6 +136,8 @@ pub enum RuntimeMethod {
     TerminalExecute,
     #[serde(rename = "terminal.read")]
     TerminalRead,
+    #[serde(rename = "terminal.wait")]
+    TerminalWait,
 }
 
 /// 原始输入：显式写入 PTY，不追加回车，也不模拟键盘事件。
@@ -181,6 +183,27 @@ pub struct TerminalReadResponse {
     pub revision: u64,
     pub data: String,
     pub next_cursor: Option<String>,
+}
+
+/// 等待终端输出推进到 `since_revision` 之后；超时映射 NotReady。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct TerminalWaitRequest {
+    pub terminal_id: String,
+    pub generation: u64,
+    pub since_revision: u64,
+    pub timeout_ms: Option<u64>,
+}
+
+/// 等待结果：`revision` 一定大于请求的 `since_revision`。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct TerminalWaitResponse {
+    pub terminal_id: String,
+    pub generation: u64,
+    pub revision: u64,
 }
 
 /// 新建终端：Shell 固定为应用默认，只开放目标项目与工作目录选择。
@@ -740,6 +763,17 @@ fn runtime_request_is_valid(request: &RuntimeRequest) -> bool {
                             .is_none_or(|cursor| !cursor.is_empty())
                 })
         }
+        RuntimeMethod::TerminalWait => {
+            request
+                .parse::<TerminalWaitRequest>()
+                .is_some_and(|params| {
+                    present(&params.terminal_id)
+                        && params.generation > 0
+                        && params
+                            .timeout_ms
+                            .is_none_or(|timeout| (1..=OPERATION_WAIT_LIMIT_MS).contains(&timeout))
+                })
+        }
     }
 }
 
@@ -813,11 +847,12 @@ pub enum ControlMethod {
     RuntimeTerminalInput,
     RuntimeTerminalExecute,
     RuntimeTerminalRead,
+    RuntimeTerminalWait,
     InstanceHandover,
 }
 
 impl ControlMethod {
-    pub const ALL: [Self; 23] = [
+    pub const ALL: [Self; 24] = [
         Self::RuntimeHello,
         Self::RuntimeDescribe,
         Self::RuntimeSnapshot,
@@ -840,6 +875,7 @@ impl ControlMethod {
         Self::RuntimeTerminalInput,
         Self::RuntimeTerminalExecute,
         Self::RuntimeTerminalRead,
+        Self::RuntimeTerminalWait,
         Self::InstanceHandover,
     ];
 
@@ -867,6 +903,7 @@ impl ControlMethod {
             Self::RuntimeTerminalInput => "terminal.input",
             Self::RuntimeTerminalExecute => "terminal.execute",
             Self::RuntimeTerminalRead => "terminal.read",
+            Self::RuntimeTerminalWait => "terminal.wait",
             Self::InstanceHandover => "instance.handover",
         }
     }
@@ -1013,6 +1050,7 @@ pub enum RuntimeResult {
     Unsubscribed(EventsUnsubscribedResponse),
     Projects(ProjectListResponse),
     TerminalRead(TerminalReadResponse),
+    TerminalWait(TerminalWaitResponse),
 }
 
 /// 当前客户端可调用的方法集合。

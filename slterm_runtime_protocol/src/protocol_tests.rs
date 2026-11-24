@@ -11,7 +11,7 @@ use crate::protocol::{
     ProjectReorderRequest, ProjectResource, ProtocolError, RuntimeMethod, RuntimeRequest,
     SnapshotResources, SnapshotResponse, SplitDirectionWire, TerminalCreateRequest,
     TerminalExecuteRequest, TerminalInputRequest, TerminalReadRequest, TerminalResource,
-    ViewResource, ViewportSize, params_sha256, parse_client_request,
+    TerminalWaitRequest, ViewResource, ViewportSize, params_sha256, parse_client_request,
 };
 use crate::{MethodKind, OperationStatus};
 
@@ -656,6 +656,26 @@ fn terminal_methods_validate_generation_and_payloads() {
         other => panic!("终端读取必须解析为 Runtime 请求: {other:?}"),
     }
 
+    let wait = RuntimeRequest::new(
+        JsonRpcId::Number(23),
+        RuntimeMethod::TerminalWait,
+        TerminalWaitRequest {
+            terminal_id: terminal.to_owned(),
+            generation: 3,
+            since_revision: 9,
+            timeout_ms: Some(1_000),
+        },
+    );
+    let parsed = parse_client_request(serde_json::to_vec(&wait).unwrap().as_slice()).unwrap();
+    match parsed {
+        ClientRequest::Runtime(parsed) => {
+            assert_eq!(parsed.method, RuntimeMethod::TerminalWait);
+            let params = parsed.parse::<TerminalWaitRequest>().unwrap();
+            assert_eq!(params.since_revision, 9);
+        }
+        other => panic!("终端等待必须解析为 Runtime 请求: {other:?}"),
+    }
+
     for invalid in [
         // 空白终端身份
         serde_json::json!({"jsonrpc":"2.0","id":1,"method":"terminal.input","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"terminal_id":"","generation":1,"data":"ls"}}}),
@@ -679,6 +699,12 @@ fn terminal_methods_validate_generation_and_payloads() {
         serde_json::json!({"jsonrpc":"2.0","id":1,"method":"terminal.read","params":{"terminal_id":"t","generation":1,"cursor":""}}),
         // 未知字段
         serde_json::json!({"jsonrpc":"2.0","id":1,"method":"terminal.read","params":{"terminal_id":"t","generation":1,"cursor":null,"extra":1}}),
+        // 零代次的等待
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"terminal.wait","params":{"terminal_id":"t","generation":0,"since_revision":0,"timeout_ms":null}}),
+        // 零超时
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"terminal.wait","params":{"terminal_id":"t","generation":1,"since_revision":0,"timeout_ms":0}}),
+        // 超上限等待
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"terminal.wait","params":{"terminal_id":"t","generation":1,"since_revision":0,"timeout_ms":600001}}),
     ] {
         assert!(
             parse_client_request(invalid.to_string().as_bytes()).is_err(),
@@ -766,6 +792,7 @@ fn describe_lists_the_method_registry_with_contract_hashes() {
             "terminal.input",
             "terminal.execute",
             "terminal.read",
+            "terminal.wait",
             "instance.handover"
         ]
     );

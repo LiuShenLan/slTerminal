@@ -243,6 +243,22 @@ impl AppRoot {
             .map_err(|_| not_ready_error("terminal not ready"))
     }
 
+    /// Runtime 终端等待：返回最近发布帧的 revision；前台不阻塞等待变化。
+    pub(super) fn handle_runtime_wait(
+        &self,
+        terminal_id: slterm_workspace::TerminalId,
+        generation: u64,
+        cx: &App,
+    ) -> Result<u64, JsonRpcError> {
+        let terminal = self.runtime_terminal_view(
+            terminal_id,
+            generation,
+            RuntimeTerminalAccess::Display,
+            cx,
+        )?;
+        Ok(terminal.read(cx).runtime_revision())
+    }
+
     /// 按完整目标（稳定身份 + PTY 代次）定位仍存活的终端视图。
     ///
     /// 写输入要求 Launch 意图；只读画面允许已退出终端。代次必须与请求一致

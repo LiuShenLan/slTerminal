@@ -23,11 +23,11 @@ use super::operations::{
 use super::reads::TerminalTextSnapshot;
 use super::server::{
     EventSubscribeCallback, LocalControlServer, MutationCallback, OperationQueryCallback,
-    ReadCallback, RuntimeCallbacks, SnapshotCallback,
+    ReadCallback, RuntimeCallbacks, SnapshotCallback, WaitStatusCallback,
 };
 use crate::app_shell::{
     SltermShellEvent, try_send_handover, try_send_runtime_mutation, try_send_runtime_read,
-    try_send_runtime_snapshot,
+    try_send_runtime_snapshot, try_send_runtime_wait,
 };
 use crate::persistence::metadata::WorkspaceMetadata;
 use crate::persistence::workspace_writer::WorkspaceWriterClient;
@@ -176,6 +176,7 @@ impl LocalControlService {
         let snapshot_events = events.clone();
         let mutation_events = events.clone();
         let read_events = events.clone();
+        let wait_events = events.clone();
         let on_handover: HandoverCallback = Arc::new(move |params| {
             let receipt = try_send_handover(&events, params)?;
             match receipt.recv_timeout(reply_timeout) {
@@ -234,6 +235,22 @@ impl LocalControlService {
                     DomainErrorCode::NotReady,
                     -32001,
                     "terminal read not ready",
+                )),
+                Err(RecvTimeoutError::Disconnected) => {
+                    Err(control_error(DomainErrorCode::Closing, -32004, "closing"))
+                }
+            }
+        });
+        // 终端等待只读前台最近帧 revision；每轮请求都经同一壳事件通道。
+        let on_wait_status: WaitStatusCallback = Arc::new(move |target| {
+            let receipt =
+                try_send_runtime_wait(&wait_events, target.terminal_id, target.generation)?;
+            match receipt.recv_timeout(SNAPSHOT_REPLY_TIMEOUT) {
+                Ok(result) => result,
+                Err(RecvTimeoutError::Timeout) => Err(control_error(
+                    DomainErrorCode::NotReady,
+                    -32001,
+                    "terminal wait not ready",
                 )),
                 Err(RecvTimeoutError::Disconnected) => {
                     Err(control_error(DomainErrorCode::Closing, -32004, "closing"))
@@ -334,6 +351,7 @@ impl LocalControlService {
                 events: on_events,
                 mutation: on_mutation,
                 read: on_read,
+                wait_status: on_wait_status,
             },
         )?;
         let record = DiscoveryRecord {
