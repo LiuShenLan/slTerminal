@@ -151,6 +151,11 @@ fn panel_open_settings_params_schema() -> schemars::Schema {
     schemars::schema_for!(crate::protocol::PanelOpenSettingsParams)
 }
 
+#[cfg(feature = "schema")]
+fn terminal_create_params_schema() -> schemars::Schema {
+    schemars::schema_for!(crate::protocol::TerminalCreateParams)
+}
+
 /// 全部真实可用方法；顺序即对外呈现顺序。
 pub static METHODS: &[MethodSpec] = &[
     MethodSpec {
@@ -334,6 +339,16 @@ pub static METHODS: &[MethodSpec] = &[
         result_schema: operation_result_schema,
     },
     MethodSpec {
+        method: ControlMethod::RuntimeTerminalCreate,
+        scopes: &[ControlScope::Runtime],
+        kind: MethodKind::Mutation,
+        idempotent: true,
+        #[cfg(feature = "schema")]
+        params_schema: terminal_create_params_schema,
+        #[cfg(feature = "schema")]
+        result_schema: operation_result_schema,
+    },
+    MethodSpec {
         method: ControlMethod::InstanceHandover,
         scopes: &[ControlScope::Handover],
         kind: MethodKind::Mutation,
@@ -406,6 +421,7 @@ mod method_tests {
                 method_name(ControlMethod::RuntimePanelActivate),
                 method_name(ControlMethod::RuntimePanelMove),
                 method_name(ControlMethod::RuntimePanelOpenSettings),
+                method_name(ControlMethod::RuntimeTerminalCreate),
                 method_name(ControlMethod::InstanceHandover),
             ]
         );
@@ -500,6 +516,7 @@ mod method_tests {
                 ControlMethod::RuntimePanelActivate,
                 ControlMethod::RuntimePanelMove,
                 ControlMethod::RuntimePanelOpenSettings,
+                ControlMethod::RuntimeTerminalCreate,
             ]
         );
         let handover_methods: Vec<ControlMethod> = methods_for(ControlScope::Handover)

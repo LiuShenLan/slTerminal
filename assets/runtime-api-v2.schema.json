@@ -733,6 +733,35 @@
         "request"
       ]
     },
+    "MutationParams11": {
+      "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
+      "type": "object",
+      "properties": {
+        "client_id": {
+          "type": "string"
+        },
+        "expected_revision": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "mutation_id": {
+          "type": "string"
+        },
+        "request": {
+          "$ref": "#/$defs/TerminalCreateRequest"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "client_id",
+        "mutation_id",
+        "request"
+      ]
+    },
     "MutationParams2": {
       "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
       "type": "object",
@@ -1318,7 +1347,8 @@
         "panel_group.resize",
         "panel.activate",
         "panel.move",
-        "panel.open_settings"
+        "panel.open_settings",
+        "terminal.create"
       ]
     },
     "RuntimeParams": {
@@ -1365,6 +1395,9 @@
         },
         {
           "$ref": "#/$defs/MutationParams10"
+        },
+        {
+          "$ref": "#/$defs/MutationParams11"
         }
       ]
     },
@@ -1490,6 +1523,25 @@
         "left_right",
         "top_bottom"
       ]
+    },
+    "TerminalCreateRequest": {
+      "description": "新建终端：Shell 固定为应用默认，只开放目标项目与工作目录选择。",
+      "type": "object",
+      "properties": {
+        "cwd": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "project_root": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
     },
     "TerminalResource": {
       "description": "快照中的逻辑终端；不含 PTY、输出或回滚正文。",

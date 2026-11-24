@@ -19,7 +19,7 @@ use slterm_runtime_protocol::{
     PanelMoveParams, PanelOpenSettingsParams, ProjectActivateParams, ProjectListResponse,
     ProjectRemoveParams, ProjectRenameParams, ProjectReorderParams, RuntimeEvent, RuntimeMethod,
     RuntimeRequest, RuntimeResult, SnapshotResources, SnapshotResponse, SplitDirectionWire,
-    ViewportSize, parse_client_request,
+    TerminalCreateParams, ViewportSize, parse_client_request,
 };
 use slterm_split::SplitDirection;
 use slterm_workspace::{LogicalSize, PanelGroupId, ProjectId, ViewKey};
@@ -660,6 +660,22 @@ fn handle_connection<F>(
                             params.expected_revision,
                             parse_view(&params.request.view)
                                 .map(|view| RuntimeMutation::PanelActivate { view }),
+                        )
+                    }
+                    RuntimeMethod::TerminalCreate => {
+                        let Some(params) = request.parse::<TerminalCreateParams>() else {
+                            return;
+                        };
+                        respond_mutation(
+                            &runtime,
+                            request.id,
+                            params.client_id,
+                            params.mutation_id,
+                            params.expected_revision,
+                            Ok(RuntimeMutation::TerminalCreate {
+                                project_root: params.request.project_root,
+                                cwd: params.request.cwd,
+                            }),
                         )
                     }
                     RuntimeMethod::PanelOpenSettings => {

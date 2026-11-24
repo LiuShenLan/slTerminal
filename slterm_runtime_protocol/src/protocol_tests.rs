@@ -675,6 +675,7 @@ fn describe_lists_the_method_registry_with_contract_hashes() {
             "panel.activate",
             "panel.move",
             "panel.open_settings",
+            "terminal.create",
             "instance.handover"
         ]
     );

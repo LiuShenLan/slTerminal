@@ -128,7 +128,20 @@ pub enum RuntimeMethod {
     PanelMove,
     #[serde(rename = "panel.open_settings")]
     PanelOpenSettings,
+    #[serde(rename = "terminal.create")]
+    TerminalCreate,
 }
+
+/// 新建终端：Shell 固定为应用默认，只开放目标项目与工作目录选择。
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct TerminalCreateRequest {
+    pub project_root: Option<String>,
+    pub cwd: Option<String>,
+}
+
+pub type TerminalCreateParams = MutationParams<TerminalCreateRequest>;
 
 /// 封闭拆分方向；与布局树的轴向一一对应。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -369,6 +382,7 @@ pub enum RuntimeParams {
     PanelActivate(PanelActivateParams),
     PanelMove(PanelMoveParams),
     PanelOpenSettings(PanelOpenSettingsParams),
+    TerminalCreate(TerminalCreateParams),
 }
 
 /// 单实例移交只接受 instance.handover。
@@ -622,6 +636,22 @@ fn runtime_request_is_valid(request: &RuntimeRequest) -> bool {
         RuntimeMethod::PanelOpenSettings => request
             .parse::<PanelOpenSettingsParams>()
             .is_some_and(|params| params.has_valid_envelope()),
+        RuntimeMethod::TerminalCreate => {
+            request
+                .parse::<TerminalCreateParams>()
+                .is_some_and(|params| {
+                    let request = &params.request;
+                    params.has_valid_envelope()
+                        && request
+                            .project_root
+                            .as_deref()
+                            .is_none_or(|path| !path.trim().is_empty())
+                        && request
+                            .cwd
+                            .as_deref()
+                            .is_none_or(|path| !path.trim().is_empty())
+                })
+        }
     }
 }
 
@@ -691,11 +721,12 @@ pub enum ControlMethod {
     RuntimePanelActivate,
     RuntimePanelMove,
     RuntimePanelOpenSettings,
+    RuntimeTerminalCreate,
     InstanceHandover,
 }
 
 impl ControlMethod {
-    pub const ALL: [Self; 19] = [
+    pub const ALL: [Self; 20] = [
         Self::RuntimeHello,
         Self::RuntimeDescribe,
         Self::RuntimeSnapshot,
@@ -714,6 +745,7 @@ impl ControlMethod {
         Self::RuntimePanelActivate,
         Self::RuntimePanelMove,
         Self::RuntimePanelOpenSettings,
+        Self::RuntimeTerminalCreate,
         Self::InstanceHandover,
     ];
 
@@ -737,6 +769,7 @@ impl ControlMethod {
             Self::RuntimePanelActivate => "panel.activate",
             Self::RuntimePanelMove => "panel.move",
             Self::RuntimePanelOpenSettings => "panel.open_settings",
+            Self::RuntimeTerminalCreate => "terminal.create",
             Self::InstanceHandover => "instance.handover",
         }
     }

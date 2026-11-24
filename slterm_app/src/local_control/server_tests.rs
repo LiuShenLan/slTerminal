@@ -975,6 +975,7 @@ fn runtime_describe_returns_registry_and_contract_hashes() {
             "panel.activate",
             "panel.move",
             "panel.open_settings",
+            "terminal.create",
             "instance.handover"
         ]
     );

@@ -166,6 +166,19 @@ impl AppRoot {
             RuntimeMutation::PanelOpenSettings => self
                 .open_settings_from_request(window, cx)
                 .map_err(runtime_mutation_error),
+            RuntimeMutation::TerminalCreate { project_root, cwd } => {
+                let project_root = project_root
+                    .map(CanonicalPath::new)
+                    .transpose()
+                    .map_err(|_| invalid_request_error())?;
+                let cwd = cwd
+                    .map(CanonicalPath::new)
+                    .transpose()
+                    .map_err(|_| invalid_request_error())?;
+                self.new_terminal_from_request(self.shell.clone(), project_root, cwd, window, cx)
+                    .map(|_| ())
+                    .map_err(runtime_mutation_error)
+            }
         }
     }
 
@@ -254,12 +267,19 @@ fn closing_error() -> JsonRpcError {
     control_error(DomainErrorCode::Closing, -32004, "closing")
 }
 
+fn invalid_request_error() -> JsonRpcError {
+    control_error(DomainErrorCode::InvalidRequest, -32000, "invalid request")
+}
+
 /// 写意图错误映射为封闭领域码；不携带路径、SQL 或正文。
 fn runtime_mutation_error(error: AppRootError) -> JsonRpcError {
     match error {
         AppRootError::Closing => closing_error(),
         AppRootError::Focus(FocusError::ModalActive) => {
             control_error(DomainErrorCode::Unauthorized, -32002, "modal active")
+        }
+        AppRootError::NewTerminalTargetUnauthorized | AppRootError::OpenFileTargetUnauthorized => {
+            control_error(DomainErrorCode::Unauthorized, -32002, "target unauthorized")
         }
         AppRootError::UnexpectedParameters
         | AppRootError::Registry(_)
