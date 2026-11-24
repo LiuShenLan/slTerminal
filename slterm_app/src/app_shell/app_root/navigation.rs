@@ -1,7 +1,63 @@
-//! 活跃项目的面板循环与关闭后的布局落点。
+//! 活跃项目的面板循环、关闭后的布局落点与历史归属。
 
 use gpui::{App, Context, Window};
+use slterm_path::CanonicalPath;
 use slterm_workspace::{PanelId, ProjectId, ProjectSnapshot};
+
+/// 历史 cwd → 词法最深项目根；只比较路径组件，不访问文件系统。
+///
+/// 目录暂时不可访问不改变归属；空、相对或无匹配 cwd 返回 None（未归属）。
+#[allow(dead_code)] // 消费点归导航历史视图。
+pub(super) fn deepest_project_for_cwd<'a>(
+    roots: impl Iterator<Item = (ProjectId, &'a CanonicalPath)>,
+    cwd: &CanonicalPath,
+) -> Option<ProjectId> {
+    roots
+        .filter(|(_, root)| cwd.as_path().starts_with(root.as_path()))
+        .max_by_key(|(_, root)| root.as_path().components().count())
+        .map(|(project, _)| project)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use super::deepest_project_for_cwd;
+    use slterm_path::CanonicalPath;
+    use slterm_workspace::ProjectId;
+
+    fn project(text: &str) -> ProjectId {
+        ProjectId::from_str(text).unwrap()
+    }
+
+    fn path(text: &str) -> CanonicalPath {
+        CanonicalPath::new(text).unwrap()
+    }
+
+    #[test]
+    fn navigation_history_lexical_deepest_match() {
+        let shallow = project("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0b2a");
+        let deep = project("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0b2b");
+        let other = project("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0b2c");
+        let roots = [
+            (shallow, path("C:/work")),
+            (deep, path("C:/work/deep")),
+            (other, path("D:/other")),
+        ];
+        let lookup = |cwd: &CanonicalPath| {
+            deepest_project_for_cwd(roots.iter().map(|(project, root)| (*project, root)), cwd)
+        };
+        assert_eq!(lookup(&path("C:/work/deep/x/y")), Some(deep));
+        assert_eq!(lookup(&path("C:/work/file.txt")), Some(shallow));
+        assert_eq!(lookup(&path("C:/work2/x")), None, "非组件前缀不得误归属");
+        assert_eq!(lookup(&path("E:/elsewhere")), None);
+        assert_eq!(
+            lookup(&path("D:/other/missing/dir")),
+            Some(other),
+            "目录不可访问不改变词法归属"
+        );
+    }
+}
 
 use super::AppRoot;
 use super::commands::AppRootError;
