@@ -18,6 +18,57 @@ pub(super) fn deepest_project_for_cwd<'a>(
         .map(|(project, _)| project)
 }
 
+/// 历史恢复的落点：保存 cwd 失效时只在已确定项目内回退项目根。
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(dead_code)] // 消费点归历史恢复任务。
+pub(super) enum RestoreCwd {
+    Saved(CanonicalPath),
+    /// 保存 cwd 不可用，已回退到项目根；调用方必须提示而非静默。
+    ProjectRootFallback(CanonicalPath),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)] // 消费点归历史恢复任务。
+pub(super) enum RestoreCwdError {
+    /// 保存 cwd 与项目根都不可用：明确失败，不改用其他目录。
+    Unavailable,
+}
+
+/// 纯判定：cwd 有效用 cwd；cwd 失效且项目根有效回退项目根；否则失败。
+#[allow(dead_code)] // 消费点归历史恢复任务。
+pub(super) fn resolve_restore_cwd(
+    saved: &CanonicalPath,
+    saved_available: bool,
+    project_root: &CanonicalPath,
+    project_root_available: bool,
+) -> Result<RestoreCwd, RestoreCwdError> {
+    if saved_available {
+        return Ok(RestoreCwd::Saved(saved.clone()));
+    }
+    if project_root_available {
+        return Ok(RestoreCwd::ProjectRootFallback(project_root.clone()));
+    }
+    Err(RestoreCwdError::Unavailable)
+}
+
+/// Shell 就绪等待上限；注入只尝试一次，不因超时重复建终端。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)] // 消费点归历史恢复任务。
+pub(super) enum RestoreShell {
+    PowerShell,
+    Cmd,
+    Other,
+}
+
+#[allow(dead_code)] // 消费点归历史恢复任务。
+pub(super) fn restore_injection_timeout(shell: RestoreShell) -> std::time::Duration {
+    match shell {
+        RestoreShell::PowerShell => std::time::Duration::from_secs(10),
+        RestoreShell::Cmd => std::time::Duration::from_millis(500),
+        RestoreShell::Other => std::time::Duration::from_millis(500),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
@@ -32,6 +83,45 @@ mod tests {
 
     fn path(text: &str) -> CanonicalPath {
         CanonicalPath::new(text).unwrap()
+    }
+
+    /// cwd 失效回退项目根、项目根失效才失败；注入超时按 Shell 类型且只一次。
+    #[test]
+    fn navigation_restore_fallback_and_injection_retry() {
+        use super::{
+            RestoreCwd, RestoreCwdError, RestoreShell, resolve_restore_cwd,
+            restore_injection_timeout,
+        };
+        use std::time::Duration;
+
+        let saved = path("C:/work/agent");
+        let project = path("C:/work");
+        assert_eq!(
+            resolve_restore_cwd(&saved, true, &project, true),
+            Ok(RestoreCwd::Saved(saved.clone()))
+        );
+        assert_eq!(
+            resolve_restore_cwd(&saved, false, &project, true),
+            Ok(RestoreCwd::ProjectRootFallback(project.clone())),
+            "cwd 失效必须回退已确定项目根"
+        );
+        assert_eq!(
+            resolve_restore_cwd(&saved, false, &project, false),
+            Err(RestoreCwdError::Unavailable),
+            "项目根也失效时必须明确失败"
+        );
+        assert_eq!(
+            restore_injection_timeout(RestoreShell::PowerShell),
+            Duration::from_secs(10)
+        );
+        assert_eq!(
+            restore_injection_timeout(RestoreShell::Cmd),
+            Duration::from_millis(500)
+        );
+        assert_eq!(
+            restore_injection_timeout(RestoreShell::Other),
+            Duration::from_millis(500)
+        );
     }
 
     #[test]
