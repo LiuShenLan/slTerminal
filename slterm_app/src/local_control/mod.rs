@@ -13,6 +13,9 @@ mod events;
 #[cfg(test)]
 mod operation_dispatch_tests;
 mod operations;
+#[cfg(test)]
+mod read_page_tests;
+mod reads;
 mod server;
 #[cfg(test)]
 mod server_tests;
