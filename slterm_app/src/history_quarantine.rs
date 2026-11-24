@@ -213,7 +213,7 @@ mod tests {
             "点击时超过绝对期限必须拒绝"
         );
         assert!(
-            service.undoable(batch(5), at(105)) == false,
+            !service.undoable(batch(5), at(105)),
             "到期判定与撤销检查必须一致"
         );
         assert_eq!(
