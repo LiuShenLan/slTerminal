@@ -166,6 +166,18 @@ impl RawSettings {
         self.tree.get(name)
     }
 
+    /// 纯更新：已登记键落到所属段，域外段整段替换，未知键与用户手改段原位保留。
+    pub fn with_updates(&self, updates: &[(&str, Value)]) -> Self {
+        Self {
+            tree: apply_updates(&self.tree, updates),
+        }
+    }
+
+    /// 原始值树只读视图（设置页初始化与导出投影）。
+    pub fn tree(&self) -> &Value {
+        &self.tree
+    }
+
     /// 文件树中实际出现且已登记的键名遍历。
     pub fn keys(&self) -> impl Iterator<Item = &'static str> + '_ {
         keys::KEYS
@@ -1519,6 +1531,22 @@ mod persist_tests {
         ));
         std::fs::create_dir_all(&directory).unwrap();
         directory
+    }
+
+    /// 运行值更新包装与 apply_updates 同语义：未知段保留、字段可读回。
+    #[test]
+    fn raw_settings_with_updates_returns_a_readable_updated_value() {
+        let raw = RawSettings::from_json_bytes(
+            br#"{"handmade":{"note":"keep"},"appearance":{"theme":"Nord"}}"#,
+        );
+        let updated = raw.with_updates(&[("font_size", Value::Number(18.0))]);
+        assert_eq!(updated.f32("font_size"), Some(18.0));
+        assert_eq!(updated.value("theme"), Some("Nord"));
+        assert!(
+            updated.tree().get("handmade").is_some(),
+            "未知段必须原位保留"
+        );
+        assert_eq!(raw.f32("font_size"), None, "原值不得被原地修改");
     }
 
     #[test]

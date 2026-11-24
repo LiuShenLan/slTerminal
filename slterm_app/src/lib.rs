@@ -115,6 +115,9 @@ pub(crate) mod session;
 pub(crate) mod side_panel;
 // settings.json 写通道适配层:白名单校验/保存锁/原子写/.bak/
 // 损坏三态;`slterm-settings` 保持值权威与零生产依赖。
+/// 设置运行值与唯一写队列；项目设置与浮层共享同一状态。
+#[allow(dead_code)] // 消费点归设置中心视图。
+pub(crate) mod settings_state;
 #[allow(dead_code)] // 设置写由后续设置协调器接入。
 pub(crate) mod settings_store;
 // 补全/建议计算核心:ghost 余量与 popup 多候选同源。
