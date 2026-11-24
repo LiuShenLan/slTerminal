@@ -25,6 +25,34 @@ pub(super) struct ProjectOpenRequest {
 }
 
 impl AppRoot {
+    /// 项目根重定位：新根须由调用方在后台完成真实路径解析与目录校验。
+    ///
+    /// 守卫顺序 = 关闭／快照屏障 → Hooks Project／Local 草稿 → 根冲突 →
+    /// 候选校验；成功只替换根关联，PTY cwd、Document、Diff 与 GitShow 绑定
+    /// 一律不动，历史归属按新根词法即时重算。
+    #[allow(dead_code)] // 消费点归项目根重定位命令与导航视图入口。
+    pub(crate) fn relocate_project(
+        &mut self,
+        project_id: ProjectId,
+        new_root: CanonicalPath,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<(), AppRootError> {
+        self.ensure_not_closing()?;
+        self.ensure_project_snapshot_command_allowed()?;
+        self.focus_manager.ensure_activation_allowed()?;
+        if self.hook_drafts.project_has_drafts(project_id) {
+            return Err(AppRootError::HooksDraftPending);
+        }
+        let mut candidate = self.snapshot.clone();
+        candidate
+            .registry_mut()
+            .relocate_project(project_id, new_root)?;
+        candidate.validate()?;
+        self.commit_project_snapshot(candidate, cx);
+        cx.notify();
+        Ok(())
+    }
+
     pub(super) fn rename_project_from_request(
         &mut self,
         project_id: ProjectId,

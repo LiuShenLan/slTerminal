@@ -267,6 +267,8 @@ pub(crate) struct AppRoot {
     language_selector_menu: Option<language_selector::LanguageSelectorMenu>,
     settings_overlay: Option<settings_overlay::SettingsOverlayHost>,
     side_view_persistence: AppRootPersistence,
+    /// Hooks 草稿只按「面板实例＋CLI＋层级」隔离存活；项目移除与根重定位前守卫。
+    hook_drafts: crate::ai_hook::draft_host::HooksDraftHost,
     learning: crate::learning::LearningService,
     launcher: Box<dyn TerminalPanelLauncher>,
     project_paths: Arc<dyn ProjectPathResolver>,
@@ -501,6 +503,7 @@ impl AppRoot {
             language_selector_menu: None,
             settings_overlay: None,
             side_view_persistence: persistence,
+            hook_drafts: crate::ai_hook::draft_host::HooksDraftHost::default(),
             learning: crate::learning::LearningService::memory_only(),
             launcher,
             project_paths: Arc::new(SystemProjectPathResolver),

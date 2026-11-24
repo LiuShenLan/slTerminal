@@ -43,6 +43,9 @@ impl AppRoot {
                 ClosePhase::Idle | ClosePhase::Completed => Err(AppRootError::ProjectCloseState),
             };
         }
+        if self.hook_drafts.project_has_drafts(id) {
+            return Err(AppRootError::HooksDraftPending);
+        }
         if !self.project_closes.is_empty()
             || self
                 .terminal_closes
@@ -277,6 +280,8 @@ impl AppRoot {
         self.side_view_persistence
             .editor_view_states()
             .remove_project(id);
+        // 项目已从快照移除：项目专属 Hooks 草稿随同一提交清理，User 草稿保留。
+        self.hook_drafts.clear_project(id);
         self.commit_project_snapshot(candidate, cx);
         if was_active && let Some(next_active) = next_active {
             self.restore_project_panels(next_active, window, cx);

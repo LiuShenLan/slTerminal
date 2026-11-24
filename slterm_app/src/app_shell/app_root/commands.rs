@@ -253,6 +253,8 @@ pub(crate) enum AppRootError {
     ProjectCloseState,
     ProjectCloseOutcomeUnknown,
     WorkspaceEpochUnavailable,
+    /// 目标项目仍有未提交 Hooks 草稿：须先保存、丢弃或取消。
+    HooksDraftPending,
     TerminalCloseWriter(crate::persistence::workspace_writer::WorkspaceWriterError),
     ProjectCloseWriter(crate::persistence::workspace_writer::WorkspaceWriterError),
     Sidebar(SidebarError),
@@ -300,6 +302,9 @@ impl fmt::Display for AppRootError {
             Self::WorkspaceEpochUnavailable => {
                 formatter.write_str("工作区当前世代不可用，拒绝关闭")
             }
+            Self::HooksDraftPending => {
+                formatter.write_str("项目仍有未提交的 Hooks 草稿，请先保存或丢弃")
+            }
             Self::TerminalCloseWriter(error) => write!(formatter, "终端关闭写请求失败: {error}"),
             Self::ProjectCloseWriter(error) => write!(formatter, "项目关闭写请求失败: {error}"),
             Self::Sidebar(error) => write!(formatter, "侧栏命令失败: {error}"),
@@ -337,7 +342,8 @@ impl std::error::Error for AppRootError {
             | Self::ProjectCloseRunning
             | Self::ProjectCloseState
             | Self::ProjectCloseOutcomeUnknown
-            | Self::WorkspaceEpochUnavailable => None,
+            | Self::WorkspaceEpochUnavailable
+            | Self::HooksDraftPending => None,
         }
     }
 }
