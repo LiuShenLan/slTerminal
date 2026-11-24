@@ -22,6 +22,23 @@ enum BatchStatus {
     Undone,
 }
 
+/// 单目标撤销预检：目标已存在（外部新增或修改）时不得覆盖。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum UndoTargetDecision {
+    Proceed,
+    /// 目标位置已有外部对象：拒绝恢复并保留双份材料。
+    ExternalTarget,
+}
+
+/// 目标存在即拒绝；由撤销流程用真实读取结果填入。
+pub(crate) fn precheck_undo_target(target_exists: bool) -> UndoTargetDecision {
+    if target_exists {
+        UndoTargetDecision::ExternalTarget
+    } else {
+        UndoTargetDecision::Proceed
+    }
+}
+
 /// 撤销点击的重新检查结论；只有 `Allowed` 才可执行恢复动作。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum UndoDecision {
@@ -178,6 +195,34 @@ mod tests {
         assert!(!service.undoable(batch(2), at(108)));
         assert_eq!(service.expired(at(105)), vec![batch(1)]);
         assert_eq!(service.expired(at(110)), vec![batch(1), batch(2)]);
+    }
+
+    /// 目标外部新增或修改时不覆盖：拒绝恢复、保留材料且不消耗撤销窗口。
+    #[test]
+    fn quarantine_undo_rejects_external_target() {
+        assert_eq!(precheck_undo_target(false), UndoTargetDecision::Proceed);
+        assert_eq!(
+            precheck_undo_target(true),
+            UndoTargetDecision::ExternalTarget,
+            "目标已存在必须拒绝覆盖"
+        );
+
+        let mut service = HistoryQuarantine::new();
+        assert!(service.start_batch(batch(7)));
+        assert!(service.complete_batch(batch(7), at(100)));
+        assert_eq!(
+            precheck_undo_target(true),
+            UndoTargetDecision::ExternalTarget
+        );
+        assert!(
+            service.undoable(batch(7), at(101)),
+            "拒绝预检不得消耗撤销窗口"
+        );
+        assert_eq!(
+            service.try_begin_undo(batch(7), at(102)),
+            UndoDecision::Allowed,
+            "外部目标消失后仍可在窗口内撤销"
+        );
     }
 
     /// 撤销点击重新检查期限与状态：到期、未完成、已撤销分别拒绝且不改状态。
