@@ -5,8 +5,8 @@
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AppContext as _, Context, InteractiveElement as _, IntoElement, MouseButton,
-    ParentElement as _, StatefulInteractiveElement as _, Styled as _, Window, div, px,
+    Context, InteractiveElement as _, IntoElement, MouseButton, ParentElement as _,
+    StatefulInteractiveElement as _, Styled as _, Window, div, px,
 };
 use gpui_component::ActiveTheme as _;
 use slterm_workspace::ProjectId;
