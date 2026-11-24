@@ -106,3 +106,56 @@ fn explorer_open_reuses_document(cx: &mut TestAppContext) {
         "同一项目重复打开只还焦既有视图"
     );
 }
+
+#[gpui::test]
+fn explorer_terminal_open_rejects_invalid_cwd(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let project_root = temp.path().join("project");
+    let live = project_root.join("live");
+    let gone = project_root.join("gone");
+    std::fs::create_dir_all(&live).unwrap();
+    std::fs::create_dir(&gone).unwrap();
+    std::fs::write(project_root.join("note.txt"), "x\n").unwrap();
+    let (root, mut window, state) = open_root(cx);
+    add_project(
+        &root,
+        &mut window,
+        PROJECT_A,
+        project_root.to_str().unwrap(),
+    );
+    let explorer = open_explorer(&root, &mut window, cx);
+
+    let gone_path = CanonicalPath::new(dunce::canonicalize(&gone).unwrap()).unwrap();
+    std::fs::remove_dir(&gone).unwrap();
+    let before = root.read_with(cx, |root, _| root.snapshot().clone());
+    let attempts = state.borrow().attempts;
+    window.update(|window, cx| {
+        explorer.update(cx, |view, cx| {
+            view.explorer_open_terminal_at(&gone_path, window, cx);
+        });
+    });
+    window.run_until_parked();
+    assert_eq!(
+        root.read_with(cx, |root, _| root.snapshot().clone()),
+        before,
+        "失效 cwd 不得改变项目快照"
+    );
+    assert_eq!(
+        state.borrow().attempts,
+        attempts,
+        "失效 cwd 不得启动 worker 或留下空 Panel"
+    );
+
+    let live_path = CanonicalPath::new(dunce::canonicalize(&live).unwrap()).unwrap();
+    window.update(|window, cx| {
+        explorer.update(cx, |view, cx| {
+            view.explorer_open_terminal_at(&live_path, window, cx);
+        });
+    });
+    window.run_until_parked();
+    assert_eq!(state.borrow().attempts, attempts + 1);
+    root.read_with(cx, |root, _| {
+        let record = root.snapshot().terminals().next().unwrap();
+        assert_eq!(record.cwd(), &live_path, "终端必须落在解析后的真实目录");
+    });
+}

@@ -8,11 +8,11 @@ use std::io;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AnyElement, Context, InteractiveElement as _, IntoElement, MouseButton, ParentElement as _,
-    Styled as _, Task, WeakEntity, Window, div, px,
+    AnyElement, Context, InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent,
+    ParentElement as _, Styled as _, Task, WeakEntity, Window, div, px,
 };
 use gpui_component::ActiveTheme as _;
-use slterm_path::CanonicalPath;
+use slterm_path::{CanonicalPath, PathGrant, PathOperation, PathPolicy, PathRequest};
 use slterm_sidebar::{
     DirectoryReadRequest, DirectoryStatus, ExplorerProjectState, FileTreeEntry, FileTreeEntryKind,
     FileTreeError, FileTreeModel, FileTreeRoot, SideViewPath, SideViewState,
@@ -21,12 +21,18 @@ use slterm_workspace::{ProjectId, ProjectRootStatus, SideViewId};
 
 use super::AppRoot;
 use super::side_view::SideView;
+use super::task_service::{CancellationToken, TaskId};
 
 /// Explorer 触发的跨域意图；只承载已解析的树行事实。
 pub(super) enum ExplorerIntent {
     OpenDocument {
         project_id: ProjectId,
         path: CanonicalPath,
+    },
+    OpenTerminal {
+        project_id: ProjectId,
+        root: CanonicalPath,
+        cwd: CanonicalPath,
     },
 }
 
@@ -35,6 +41,38 @@ pub(super) enum ExplorerIntent {
 pub(super) enum ExplorerError {
     RootUnavailable,
     DirectoryRead,
+}
+
+/// 终端 cwd 后台预检只对调用方区分失败类别；不进入用户可见错误文本。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ExplorerCwdError {
+    Unavailable,
+    Unauthorized,
+}
+
+/// 在后台验证真实目录身份与 cwd 授权；不触碰快照或 launcher。
+fn verify_terminal_cwd(
+    resolver: &std::sync::Arc<dyn crate::platform::document_paths::DocumentPathResolver>,
+    root: &CanonicalPath,
+    cwd: &CanonicalPath,
+) -> Result<CanonicalPath, ExplorerCwdError> {
+    let resolved = resolver
+        .resolve(cwd)
+        .map_err(|_| ExplorerCwdError::Unavailable)?;
+    if !resolved.canonical_path().as_path().is_dir() {
+        return Err(ExplorerCwdError::Unavailable);
+    }
+    let request = PathRequest {
+        operation: PathOperation::TerminalCwd,
+        lexical_path: cwd.as_path().to_path_buf(),
+        root_hints: Vec::new(),
+        session_grant: None,
+        expected_authorization_generation: 0,
+    };
+    let grant = PathGrant::project_root(root.clone());
+    let authorization = PathPolicy::authorize(&request, &resolved, std::slice::from_ref(&grant), 0)
+        .map_err(|_| ExplorerCwdError::Unauthorized)?;
+    Ok(authorization.resolved_path().canonical_path().clone())
 }
 
 /// 单视图运行态；目录读取串行，旧根回执由模型代次拒绝。
@@ -193,16 +231,100 @@ impl AppRoot {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
-        let ExplorerIntent::OpenDocument { project_id, path } = intent;
-        let target_group = match self.focused_group(project_id, cx) {
-            Ok(group) => group,
-            Err(_) => return,
+        match intent {
+            ExplorerIntent::OpenDocument { project_id, path } => {
+                let target_group = match self.focused_group(project_id, cx) {
+                    Ok(group) => group,
+                    Err(_) => return,
+                };
+                let request =
+                    match self.prepare_document_open(project_id, target_group, path, false) {
+                        Ok(request) => request,
+                        Err(_) => return,
+                    };
+                self.queue_document_open(request, None, window, cx);
+            }
+            ExplorerIntent::OpenTerminal {
+                project_id,
+                root,
+                cwd,
+            } => self.start_explorer_terminal_cwd(project_id, root, cwd, window, cx),
+        }
+    }
+
+    /// cwd 预检只在后台解析真实目录与授权，回前台再复核项目身份。
+    fn start_explorer_terminal_cwd(
+        &mut self,
+        project_id: ProjectId,
+        root: CanonicalPath,
+        cwd: CanonicalPath,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if self.tasks.is_registered(TaskId::ExplorerTerminalCwd) {
+            return;
+        }
+        let resolver = std::sync::Arc::clone(&self.path_resolver);
+        let executor = cx.background_executor().clone();
+        let window_handle = window.window_handle();
+        let requested_root = root.clone();
+        let verify_root = root.clone();
+        let verify_cwd = cwd.clone();
+        self.tasks
+            .register_with(
+                TaskId::ExplorerTerminalCwd,
+                CancellationToken::new(),
+                move || {
+                    let verifying = executor.spawn(async move {
+                        verify_terminal_cwd(&resolver, &verify_root, &verify_cwd)
+                    });
+                    cx.spawn(async move |this, cx| {
+                        let result = verifying.await;
+                        let _ = window_handle.update(cx, |_, window, cx| {
+                            let _ = this.update(cx, |root, cx| {
+                                root.finish_explorer_terminal_cwd(
+                                    project_id,
+                                    requested_root,
+                                    result,
+                                    window,
+                                    cx,
+                                );
+                            });
+                        });
+                    })
+                },
+            )
+            .expect("ExplorerTerminalCwd 单任务登记必须唯一");
+    }
+
+    fn finish_explorer_terminal_cwd(
+        &mut self,
+        project_id: ProjectId,
+        requested_root: CanonicalPath,
+        result: Result<CanonicalPath, ExplorerCwdError>,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.tasks.complete(TaskId::ExplorerTerminalCwd);
+        let Ok(cwd) = result else {
+            return;
         };
-        let request = match self.prepare_document_open(project_id, target_group, path, false) {
-            Ok(request) => request,
-            Err(_) => return,
+        // 解析期间项目关闭或根重定位时授权不再成立。
+        let Some(project) = self.snapshot.registry().project(project_id) else {
+            return;
         };
-        self.queue_document_open(request, None, window, cx);
+        if project.root() != &requested_root
+            || self.snapshot.registry().active() != Some(project_id)
+        {
+            return;
+        }
+        let _ = self.new_terminal_from_request(
+            self.shell.clone(),
+            Some(requested_root),
+            Some(cwd),
+            window,
+            cx,
+        );
     }
 }
 
@@ -443,6 +565,39 @@ impl SideView {
         cx.notify();
     }
 
+    /// 在终端打开目录（文件行取父目录）；真实位置与授权由 AppRoot 后台预检。
+    pub(super) fn explorer_open_terminal_at(
+        &mut self,
+        path: &CanonicalPath,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(runtime) = &mut self.explorer else {
+            return;
+        };
+        let Some(kind) = runtime.tree.kind_of(path) else {
+            return;
+        };
+        let cwd = match kind {
+            FileTreeEntryKind::Directory => path.clone(),
+            FileTreeEntryKind::File => {
+                let Some(parent) = path.as_path().parent() else {
+                    return;
+                };
+                let Ok(parent) = CanonicalPath::new(parent.to_path_buf()) else {
+                    return;
+                };
+                parent
+            }
+        };
+        let intent = ExplorerIntent::OpenTerminal {
+            project_id: runtime.project,
+            root: runtime.tree.root_path().clone(),
+            cwd,
+        };
+        self.dispatch_explorer_intent(intent, window, cx);
+    }
+
     /// 广播结束后再交给 AppRoot，避免快照 reconcile 重入当前实体。
     fn dispatch_explorer_intent(
         &mut self,
@@ -528,8 +683,13 @@ pub(super) fn render_explorer(view: &mut SideView, cx: &mut Context<'_, SideView
                 .debug_selector(move || selector.clone())
                 .on_mouse_down(
                     MouseButton::Left,
-                    cx.listener(move |view, _, window, cx| {
-                        view.explorer_activate_at(&path, window, cx);
+                    cx.listener(move |view, event: &MouseDownEvent, window, cx| {
+                        // 双击在终端打开，单击复用选中/展开/打开语义。
+                        if event.click_count >= 2 {
+                            view.explorer_open_terminal_at(&path, window, cx);
+                        } else {
+                            view.explorer_activate_at(&path, window, cx);
+                        }
                     }),
                 )
                 .child(label),

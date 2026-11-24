@@ -24,6 +24,7 @@ pub(crate) enum TaskId {
     EditorGit(slterm_workspace::PanelId),
     GitShowLoad(slterm_workspace::PanelId),
     GitShowSystemOpen(slterm_workspace::PanelId),
+    ExplorerTerminalCwd,
     #[allow(dead_code)] // 消费点归 Diff 固定 HEAD 后台读取。
     DiffHead(slterm_workspace::PanelId),
     MarkdownLink(uuid::Uuid),
