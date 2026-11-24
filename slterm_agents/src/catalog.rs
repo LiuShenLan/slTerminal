@@ -12,14 +12,18 @@ pub enum HistoryAdapter {
     Codex,
 }
 
-/// Hooks 适配器标识：对应 `slterm_hook` 已实现的注入与事件形态。
+/// Hooks 适配器标识：对应已声明的 CLI 注入适配（见 `design/hooks.md`）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HooksAdapter {
     Claude,
     Codex,
-    Kimi,
     OpenCode,
+    Cursor,
+    Kimi,
     Pi,
+    OhMyPi,
+    Copilot,
+    Grok,
 }
 
 /// 目录条目：只承载 [`AgentKind`] 之外的跨域事实。
@@ -59,8 +63,13 @@ impl AgentKind {
                 Some(HooksAdapter::OpenCode),
                 Some(".config/opencode"),
             ),
-            Self::Copilot => ("copilot", None, None, Some(".copilot")),
-            Self::Cursor => ("agent", None, None, Some(".cursor")),
+            Self::Copilot => (
+                "copilot",
+                None,
+                Some(HooksAdapter::Copilot),
+                Some(".copilot"),
+            ),
+            Self::Cursor => ("agent", None, Some(HooksAdapter::Cursor), Some(".cursor")),
             Self::Goose => (
                 "goose",
                 None,
@@ -73,9 +82,9 @@ impl AgentKind {
             Self::Hermes => ("hermes", None, None, Some(".hermes")),
             Self::Vibe => ("vibe", None, None, Some(".vibe")),
             Self::Antigravity => ("agy", None, None, Some(".gemini/antigravity-cli")),
-            Self::Grok => ("grok", None, None, Some(".grok")),
+            Self::Grok => ("grok", None, Some(HooksAdapter::Grok), Some(".grok")),
             Self::Qwen => ("qwen", None, None, Some(".qwen")),
-            Self::OhMyPi => ("omp", None, None, Some(".omp")),
+            Self::OhMyPi => ("omp", None, Some(HooksAdapter::OhMyPi), Some(".omp")),
             Self::Cline => ("cline", None, None, Some(".cline")),
             Self::Devin => ("devin", None, None, Some("AppData/Roaming/devin")),
             Self::Kimi => ("kimi", None, Some(HooksAdapter::Kimi), Some(".kimi-code")),
@@ -218,14 +227,18 @@ mod tests {
                 kind,
                 AgentKind::Claude
                     | AgentKind::Codex
-                    | AgentKind::Kimi
                     | AgentKind::OpenCode
+                    | AgentKind::Cursor
+                    | AgentKind::Kimi
                     | AgentKind::Pi
+                    | AgentKind::OhMyPi
+                    | AgentKind::Copilot
+                    | AgentKind::Grok
             );
             assert_eq!(
                 entry.hooks_adapter.is_some(),
                 has_hooks,
-                "{kind:?} Hooks 适配器声明与 slterm_hook 能力不符"
+                "{kind:?} Hooks 适配器声明与注入适配清单不符"
             );
             if has_hooks {
                 assert!(matches!(
@@ -233,9 +246,13 @@ mod tests {
                     Some(
                         HooksAdapter::Claude
                             | HooksAdapter::Codex
-                            | HooksAdapter::Kimi
                             | HooksAdapter::OpenCode
+                            | HooksAdapter::Cursor
+                            | HooksAdapter::Kimi
                             | HooksAdapter::Pi
+                            | HooksAdapter::OhMyPi
+                            | HooksAdapter::Copilot
+                            | HooksAdapter::Grok
                     )
                 ));
             }
