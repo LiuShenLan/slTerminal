@@ -280,7 +280,7 @@
 | 完成提交前异常退出先对账来源与副本 | `quarantine_startup_reconciles_incomplete_batch` | 已自动化 |
 | 撤销目标外部新增或修改时不覆盖且保留材料 | `quarantine_undo_rejects_external_target` | 待实现 |
 | 套餐只使用专用 Windows 凭据且材料不含 token | `plan_balance_uses_dedicated_credential` | 已自动化 |
-| 导航隐藏时套餐继续调度且退出后停止 | `plan_balance_runs_while_navigation_hidden` | 待实现 |
+| 导航隐藏时套餐继续调度且退出后停止 | `plan_balance_runs_while_navigation_hidden` | 已自动化 |
 | 错过完整周期后才标记套餐结果过期 | `plan_balance_stale_after_full_period` | 已自动化 |
 | 导航瞬态清除而未到期隔离批次按规则恢复 | `navigation_transient_and_quarantine_restore` | 已自动化 |
 

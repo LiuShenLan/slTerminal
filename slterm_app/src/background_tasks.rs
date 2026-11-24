@@ -25,6 +25,8 @@ pub(crate) const AGENT_SCREEN_WATCHDOG: &str = "agentScreenWatchdog";
 pub(crate) const AUTO_UPDATE_CHECK: &str = "autoUpdateCheck";
 /// 更新可用后的按需后台预取。
 pub(crate) const AUTO_UPDATE_DOWNLOAD: &str = "autoUpdateDownload";
+/// 套餐余额周期查询；调度与导航视图可见性无关。
+pub(crate) const PLAN_BALANCE: &str = "planBalance";
 
 /// 任务触发形态。周期/一次性/事件驱动共用同一生命周期与失败策略,
 /// 只有驱动方决定何时调用。
@@ -125,13 +127,24 @@ pub(crate) static TASKS: &[TaskDef] = &[
         executor: None,
         schedule: TaskSchedule::OnDemand,
     },
+    TaskDef {
+        task_id: PLAN_BALANCE,
+        title: "套餐余额查询",
+        interval_min: 60,
+        interval_max: 3600,
+        interval_default: 300,
+        enabled_default: true,
+        executor: None,
+        schedule: TaskSchedule::Interval,
+    },
 ];
 
 /// 运行时内存配置存储(静态引用见 [`RUNTIMES`];原子量需要具名 static)。
-static RUNTIME_STORE: [TaskRuntime; 3] = [
+static RUNTIME_STORE: [TaskRuntime; 4] = [
     TaskRuntime::new(true, 1),
     TaskRuntime::new(true, 12),
     TaskRuntime::new(true, 0),
+    TaskRuntime::new(true, 300),
 ];
 
 /// 运行时内存配置(与 [`TASKS`] 同序;静态初值 = 注册表默认值)。
@@ -329,9 +342,9 @@ mod background_task_tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::{
-        AGENT_SCREEN_WATCHDOG, AUTO_UPDATE_CHECK, AUTO_UPDATE_DOWNLOAD, RUNTIMES, SETTINGS_KEY,
-        TASKS, TaskRunOutcome, TaskSchedule, apply_config, begin, interval_sec, reset_for_test,
-        run_once, subscribe,
+        AGENT_SCREEN_WATCHDOG, AUTO_UPDATE_CHECK, AUTO_UPDATE_DOWNLOAD, PLAN_BALANCE, RUNTIMES,
+        SETTINGS_KEY, TASKS, TaskRunOutcome, TaskSchedule, apply_config, begin, interval_sec,
+        reset_for_test, run_once, subscribe,
     };
 
     fn counter() -> Arc<AtomicUsize> {
@@ -357,7 +370,8 @@ mod background_task_tests {
             [
                 AGENT_SCREEN_WATCHDOG,
                 AUTO_UPDATE_CHECK,
-                AUTO_UPDATE_DOWNLOAD
+                AUTO_UPDATE_DOWNLOAD,
+                PLAN_BALANCE
             ]
         );
 
@@ -633,5 +647,36 @@ mod startup_timing_tests {
         executor.advance_clock(Duration::from_secs(12));
         executor.run_until_parked();
         assert_eq!(calls.load(Ordering::SeqCst), 1, "一次性任务不得重跑");
+    }
+    /// 套餐调度不依赖导航视图可见性；订阅释放后即停止。
+    #[test]
+    fn plan_balance_runs_while_navigation_hidden() {
+        reset_for_test();
+        let def = super::find(PLAN_BALANCE).expect("套餐任务必须已注册");
+        assert_eq!(def.schedule, TaskSchedule::Interval);
+        assert!(def.enabled_default);
+
+        let subscription = subscribe(PLAN_BALANCE).expect("已注册");
+        let mut ran = 0;
+        assert_eq!(
+            run_once(PLAN_BALANCE, || {
+                ran += 1;
+                Ok(())
+            }),
+            TaskRunOutcome::Ran,
+            "没有导航视图时周期任务仍须执行"
+        );
+        assert_eq!(ran, 1);
+
+        drop(subscription);
+        assert_eq!(
+            run_once(PLAN_BALANCE, || {
+                ran += 1;
+                Ok(())
+            }),
+            TaskRunOutcome::Inactive,
+            "退出（订阅释放）后必须停止调度"
+        );
+        assert_eq!(ran, 1);
     }
 }
