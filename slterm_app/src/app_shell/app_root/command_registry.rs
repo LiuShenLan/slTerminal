@@ -959,3 +959,28 @@ impl AppRoot {
         )
     }
 }
+
+#[cfg(test)]
+mod command_registry_tests {
+    use super::*;
+
+    /// 命令目录不得占用 Ctrl+C 或 Ctrl+Shift+C：中断直通 PTY，复制归终端视图。
+    #[test]
+    fn command_registry_reserved_terminal_interrupt() {
+        for definition in APPLICATION_DEFINITIONS
+            .iter()
+            .chain(TERMINAL_DEFINITIONS.iter())
+            .chain(PANEL_DEFINITIONS.iter())
+            .chain(LAYOUT_DEFINITIONS.iter())
+            .chain(SIDEBAR_DEFINITIONS.iter())
+        {
+            let keystroke = definition.keystroke.to_ascii_lowercase();
+            assert_ne!(keystroke, "ctrl-c", "命令目录不得占用终端中断键");
+            assert_ne!(
+                keystroke, "ctrl-shift-c",
+                "复制语义归终端视图，不得进入命令目录"
+            );
+        }
+        assert!(!TERMINAL_DEFINITIONS.is_empty());
+    }
+}

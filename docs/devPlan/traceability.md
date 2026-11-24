@@ -118,7 +118,7 @@
 
 | 验收场景 | 目标测试例名 | 状态 |
 |---|---|---|
-| 文件树与补全重绑后命令一致且终端中断保留 | `command_registry_reserved_terminal_interrupt` | 待实现 |
+| 文件树与补全重绑后命令一致且终端中断保留 | `command_registry_reserved_terminal_interrupt` | 已自动化 |
 | 非模态操作栏不偷焦且可键盘到达 | `focus_nonmodal_no_steal` | 已自动化 |
 | 模态触发控件销毁后按链还焦 | `focus_modal_fallback_after_owner_destroy` | 已自动化 |
 | 重新可见只合并复核且丢弃过期结果 | `visibility_coalesces_refresh_and_drops_stale` | 已自动化 |
@@ -147,8 +147,8 @@
 
 | 验收场景 | 目标测试例名 | 状态 |
 |---|---|---|
-| 多项目与浮层修改后关闭视图不取消全局队列 | `settings_single_queue_across_views` | 待实现 |
-| 权限、损坏、高版本和字段错误严格分流 | `settings_damage_classification` | 待实现 |
+| 多项目与浮层修改后关闭视图不取消全局队列 | `settings_single_queue_across_views` | 已自动化 |
+| 权限、损坏、高版本和字段错误严格分流 | `settings_damage_classification` | 已自动化 |
 | 状态库及副本均不可恢复时隔离并明确提示 | `workspace_unrecoverable_isolated`、`workspace_missing_disaster_copy_is_not_a_valid_empty_backup`、`workspace_isolation_emits_explicit_startup_notice` | 已自动化 |
 | 快照配额不足时不驱逐打开脏 Document | `snapshot_quota_does_not_evict_dirty` | 已自动化 |
 | 异常启动先布局后对账且不重复创建 Panel | `startup_reconciles_layout_before_snapshot` | 已自动化 |
@@ -308,8 +308,8 @@
 |---|---|---|
 | 浮层 Hooks 草稿与全局队列在激活项目后保留 | `settings_overlay_keeps_draft_and_queue` | 待实现 |
 | 选中页按 ViewKey 恢复而搜索与录制态清除 | `settings_page_view_state_restore` | 待实现 |
-| 多 Settings 视图同步生效值且关闭不取消队列 | `settings_views_share_global_queue` | 待实现 |
-| 终端中断与文件树复制按上下文独立绑定 | `keybinding_reserved_contexts` | 待实现 |
+| 多 Settings 视图同步生效值且关闭不取消队列 | `settings_views_share_global_queue` | 已自动化 |
+| 终端中断与文件树复制按上下文独立绑定 | `keybinding_reserved_contexts` | 已自动化 |
 | 完整主题可用、缺项零写入且使用中删除需另选 | `theme_import_complete_or_zero_write` | 待实现 |
 | Editor、Markdown、Diff 遵循同一 Document 自动保存 | `settings_document_autosave_is_global` | 已自动化 |
 | 套餐不读取 CLI 凭据且专用 token 不回显 | `settings_plan_token_not_cli_credentials` | 待实现 |

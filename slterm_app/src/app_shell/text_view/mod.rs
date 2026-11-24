@@ -28,8 +28,11 @@ gpui::actions!(
     [SelectLeft, SelectRight, SelectUp, SelectDown, SaveFile]
 );
 
+/// 专用文本视图的键盘上下文；复制键与终端中断按上下文独立。
+pub(crate) const TEXT_VIEW_CONTEXT: &str = "DocumentText";
+
 /// 专用文本视图的键盘合同；复制键不与终端中断争用。
-pub(crate) fn init(cx: &mut gpui::App) {
+pub(crate) fn key_bindings() -> Vec<gpui::KeyBinding> {
     use self::{SaveFile, SelectDown, SelectLeft, SelectRight, SelectUp};
     use gpui::KeyBinding;
     use gpui_component::input::{
@@ -38,8 +41,8 @@ pub(crate) fn init(cx: &mut gpui::App) {
         Undo,
     };
 
-    const CONTEXT: &str = "DocumentText";
-    cx.bind_keys([
+    const CONTEXT: &str = TEXT_VIEW_CONTEXT;
+    vec![
         KeyBinding::new("left", MoveLeft, Some(CONTEXT)),
         KeyBinding::new("right", MoveRight, Some(CONTEXT)),
         KeyBinding::new("up", MoveUp, Some(CONTEXT)),
@@ -77,5 +80,43 @@ pub(crate) fn init(cx: &mut gpui::App) {
         KeyBinding::new("ctrl-shift-c", Copy, Some(CONTEXT)),
         KeyBinding::new("ctrl-shift-v", Paste, Some(CONTEXT)),
         KeyBinding::new("ctrl-s", SaveFile, Some(CONTEXT)),
-    ]);
+    ]
+}
+
+pub(crate) fn init(cx: &mut gpui::App) {
+    cx.bind_keys(key_bindings());
+}
+
+#[cfg(test)]
+mod keyboard_context_tests {
+    use super::{TEXT_VIEW_CONTEXT, key_bindings};
+    use gpui::{KeyContext, Keymap, Keystroke};
+    use gpui_component::input::Copy;
+
+    /// 复制键按上下文独立绑定：文本视图命中 Copy，终端上下文不命中；
+    /// Ctrl+C 在任何文本视图绑定中都不出现，留给终端中断。
+    #[test]
+    fn keybinding_reserved_contexts() {
+        let keymap = Keymap::new(key_bindings());
+        let document = [KeyContext::parse(TEXT_VIEW_CONTEXT).unwrap()];
+        let terminal = [KeyContext::parse("SltermTerminal").unwrap()];
+        let copy = [Keystroke::parse("ctrl-shift-c").unwrap()];
+
+        let (bindings, pending) = keymap.bindings_for_input(&copy, &document);
+        assert!(!pending);
+        assert_eq!(bindings.len(), 1);
+        assert!(
+            bindings[0].action().as_any().is::<Copy>(),
+            "文本视图必须命中复制动作"
+        );
+        let (bindings, _) = keymap.bindings_for_input(&copy, &terminal);
+        assert!(bindings.is_empty(), "文本复制绑定不得在终端上下文命中");
+
+        let interrupt = [Keystroke::parse("ctrl-c").unwrap()];
+        let (bindings, _) = keymap.bindings_for_input(&interrupt, &document);
+        assert!(
+            bindings.is_empty(),
+            "Ctrl+C 不得进入文本视图绑定，必须保留终端中断语义"
+        );
+    }
 }
