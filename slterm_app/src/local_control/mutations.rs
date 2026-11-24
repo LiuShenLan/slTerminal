@@ -73,6 +73,10 @@ pub(crate) enum RuntimeMutation {
         terminal_id: TerminalId,
         generation: u64,
     },
+    TerminalRename {
+        terminal_id: TerminalId,
+        title: Option<String>,
+    },
 }
 
 impl RuntimeMutation {
@@ -94,6 +98,7 @@ impl RuntimeMutation {
             Self::TerminalExecute { .. } => "terminal.execute",
             Self::TerminalClose { .. } => "terminal.close",
             Self::TerminalReconnect { .. } => "terminal.reconnect",
+            Self::TerminalRename { .. } => "terminal.rename",
         }
     }
 
@@ -195,6 +200,10 @@ impl RuntimeMutation {
             } => Ok(serde_json::json!({
                 "terminal_id": terminal_id.to_string(),
                 "generation": generation,
+            })),
+            Self::TerminalRename { terminal_id, title } => Ok(serde_json::json!({
+                "terminal_id": terminal_id.to_string(),
+                "title": title,
             })),
         }
     }

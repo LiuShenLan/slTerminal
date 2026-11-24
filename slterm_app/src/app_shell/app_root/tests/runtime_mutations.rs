@@ -501,6 +501,82 @@ fn runtime_terminal_reconnect_requires_exited_terminal_and_current_generation(
     );
 }
 
+/// 锚：rename 只改自定义标题；空白、超长与未知终端零副作用。
+#[gpui::test]
+fn runtime_terminal_rename_updates_title_and_validates(cx: &mut TestAppContext) {
+    let (root, mut window, _state) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, "D:/work/a");
+    new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_A);
+
+    dispatch_mutation(
+        &root,
+        &mut window,
+        RuntimeMutation::TerminalRename {
+            terminal_id: terminal_id(TERMINAL_A),
+            title: Some("build".to_owned()),
+        },
+    )
+    .expect("合法标题必须写入");
+    root.read_with(cx, |root, _| {
+        assert_eq!(
+            root.snapshot()
+                .terminal(terminal_id(TERMINAL_A))
+                .unwrap()
+                .custom_title(),
+            Some("build")
+        );
+    });
+
+    dispatch_mutation(
+        &root,
+        &mut window,
+        RuntimeMutation::TerminalRename {
+            terminal_id: terminal_id(TERMINAL_A),
+            title: None,
+        },
+    )
+    .expect("清除标题必须成功");
+    root.read_with(cx, |root, _| {
+        assert_eq!(
+            root.snapshot()
+                .terminal(terminal_id(TERMINAL_A))
+                .unwrap()
+                .custom_title(),
+            None
+        );
+    });
+
+    for title in [Some("  ".to_owned()), Some("界".repeat(129))] {
+        let error = dispatch_mutation(
+            &root,
+            &mut window,
+            RuntimeMutation::TerminalRename {
+                terminal_id: terminal_id(TERMINAL_A),
+                title,
+            },
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.data.as_ref().map(|data| data.code),
+            Some(DomainErrorCode::InvalidRequest)
+        );
+    }
+
+    let error = dispatch_mutation(
+        &root,
+        &mut window,
+        RuntimeMutation::TerminalRename {
+            terminal_id: terminal_id(TERMINAL_B),
+            title: Some("ghost".to_owned()),
+        },
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.data.as_ref().map(|data| data.code),
+        Some(DomainErrorCode::InvalidRequest)
+    );
+}
+
 #[gpui::test]
 fn runtime_project_mutations_are_rejected_while_closing(cx: &mut TestAppContext) {
     let (root, mut window, _state) = open_root(cx);

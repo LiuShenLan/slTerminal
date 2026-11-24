@@ -1368,6 +1368,26 @@ impl AppRoot {
         self.reconnect_terminal(terminal_id, cx)
     }
 
+    /// 更新终端自定义标题并提交同一快照；布局、焦点与 PTY 保持不变。
+    ///
+    /// 空白与超长标题在候选阶段拒绝；`None` 表示清除自定义标题。
+    pub(super) fn rename_terminal(
+        &mut self,
+        terminal_id: TerminalId,
+        custom_title: Option<String>,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<(), AppRootError> {
+        self.ensure_not_closing()?;
+        self.ensure_project_snapshot_recovery_allowed()?;
+        self.ensure_project_snapshot_command_allowed()?;
+        let candidate = self
+            .snapshot
+            .with_terminal_custom_title(terminal_id, custom_title)?;
+        self.commit_project_snapshot(candidate, cx);
+        cx.notify();
+        Ok(())
+    }
+
     /// 按稳定身份重连已退出终端；Runtime 与焦点命令共用同一实现。
     pub(super) fn reconnect_terminal(
         &mut self,

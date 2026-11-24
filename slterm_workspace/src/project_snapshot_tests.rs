@@ -259,6 +259,58 @@ fn project_snapshot_agent_updates_are_atomic_candidates() {
 }
 
 #[test]
+fn project_snapshot_custom_title_updates_are_atomic_candidates() {
+    let original = ProjectSnapshot::restore(
+        registry_with_views(1, &[TERMINAL_A]),
+        vec![record(PROJECT_A, TERMINAL_A, 0)],
+    )
+    .unwrap();
+    let updated = original
+        .with_terminal_custom_title(terminal_id(TERMINAL_A), Some("界".to_owned()))
+        .unwrap();
+    assert_eq!(
+        updated
+            .terminal(terminal_id(TERMINAL_A))
+            .unwrap()
+            .custom_title(),
+        Some("界")
+    );
+    assert_eq!(
+        original
+            .terminal(terminal_id(TERMINAL_A))
+            .unwrap()
+            .custom_title(),
+        Some("build"),
+        "候选更新不得修改原快照"
+    );
+    let cleared = updated
+        .with_terminal_custom_title(terminal_id(TERMINAL_A), None)
+        .unwrap();
+    assert_eq!(
+        cleared
+            .terminal(terminal_id(TERMINAL_A))
+            .unwrap()
+            .custom_title(),
+        None
+    );
+
+    for (title, expected) in [
+        (Some(String::new()), TerminalRecordError::EmptyTitle),
+        (Some(" \t".to_owned()), TerminalRecordError::EmptyTitle),
+        (Some("界".repeat(129)), TerminalRecordError::TitleTooLong),
+    ] {
+        assert_eq!(
+            original.with_terminal_custom_title(terminal_id(TERMINAL_A), title),
+            Err(expected.into())
+        );
+    }
+    assert_eq!(
+        original.with_terminal_custom_title(terminal_id(TERMINAL_B), Some("title".to_owned())),
+        Err(ProjectSnapshotError::MissingTerminal(terminal_id(TERMINAL_B)).into())
+    );
+}
+
+#[test]
 fn project_snapshot_restores_terminal_metadata_by_stable_id() {
     let registry = registry_with_views(1, &[TERMINAL_A]);
     let record = record(PROJECT_A, TERMINAL_A, 0);

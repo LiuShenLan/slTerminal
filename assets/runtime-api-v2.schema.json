@@ -1417,7 +1417,8 @@
         "terminal.read",
         "terminal.wait",
         "terminal.close",
-        "terminal.reconnect"
+        "terminal.reconnect",
+        "terminal.rename"
       ]
     },
     "RuntimeParams": {

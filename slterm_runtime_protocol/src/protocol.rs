@@ -142,6 +142,8 @@ pub enum RuntimeMethod {
     TerminalClose,
     #[serde(rename = "terminal.reconnect")]
     TerminalReconnect,
+    #[serde(rename = "terminal.rename")]
+    TerminalRename,
 }
 
 /// 原始输入：显式写入 PTY，不追加回车，也不模拟键盘事件。
@@ -231,6 +233,17 @@ pub struct TerminalReconnectRequest {
 }
 
 pub type TerminalReconnectParams = MutationParams<TerminalReconnectRequest>;
+
+/// 更新终端自定义标题；`None` 表示清除，空白与超过 128 字符拒绝。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct TerminalRenameRequest {
+    pub terminal_id: String,
+    pub title: Option<String>,
+}
+
+pub type TerminalRenameParams = MutationParams<TerminalRenameRequest>;
 
 /// 新建终端：Shell 固定为应用默认，只开放目标项目与工作目录选择。
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -814,6 +827,18 @@ fn runtime_request_is_valid(request: &RuntimeRequest) -> bool {
                     params.has_valid_envelope() && present(&params.request.terminal_id)
                 })
         }
+        RuntimeMethod::TerminalRename => {
+            request
+                .parse::<TerminalRenameParams>()
+                .is_some_and(|params| {
+                    let request = &params.request;
+                    params.has_valid_envelope()
+                        && present(&request.terminal_id)
+                        && request.title.as_deref().is_none_or(|title| {
+                            !title.trim().is_empty() && title.chars().count() <= 128
+                        })
+                })
+        }
     }
 }
 
@@ -890,11 +915,12 @@ pub enum ControlMethod {
     RuntimeTerminalWait,
     RuntimeTerminalClose,
     RuntimeTerminalReconnect,
+    RuntimeTerminalRename,
     InstanceHandover,
 }
 
 impl ControlMethod {
-    pub const ALL: [Self; 26] = [
+    pub const ALL: [Self; 27] = [
         Self::RuntimeHello,
         Self::RuntimeDescribe,
         Self::RuntimeSnapshot,
@@ -920,6 +946,7 @@ impl ControlMethod {
         Self::RuntimeTerminalWait,
         Self::RuntimeTerminalClose,
         Self::RuntimeTerminalReconnect,
+        Self::RuntimeTerminalRename,
         Self::InstanceHandover,
     ];
 
@@ -950,6 +977,7 @@ impl ControlMethod {
             Self::RuntimeTerminalWait => "terminal.wait",
             Self::RuntimeTerminalClose => "terminal.close",
             Self::RuntimeTerminalReconnect => "terminal.reconnect",
+            Self::RuntimeTerminalRename => "terminal.rename",
             Self::InstanceHandover => "instance.handover",
         }
     }

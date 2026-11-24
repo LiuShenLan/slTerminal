@@ -531,6 +531,28 @@ impl ProjectSnapshot {
         Ok(candidate)
     }
 
+    /// 生成更新自定义标题的候选快照，不改变布局或运行意图。
+    ///
+    /// 空白与超过 128 个 Unicode 字符的标题拒绝；`None` 表示清除。
+    pub fn with_terminal_custom_title(
+        &self,
+        id: TerminalId,
+        custom_title: Option<String>,
+    ) -> Result<Self, ProjectCommandError> {
+        self.validate()?;
+        if self.terminal(id).is_none() {
+            return Err(ProjectSnapshotError::MissingTerminal(id).into());
+        }
+        let mut candidate = self.clone();
+        candidate
+            .terminals
+            .get_mut(&id)
+            .expect("存在性已预检")
+            .set_custom_title(custom_title)?;
+        candidate.validate()?;
+        Ok(candidate)
+    }
+
     /// 生成更新 Agent 会话身份的候选快照，不改变布局或运行意图。
     pub fn with_terminal_agent(
         &self,

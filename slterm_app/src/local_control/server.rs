@@ -20,8 +20,8 @@ use slterm_runtime_protocol::{
     ProjectRemoveParams, ProjectRenameParams, ProjectReorderParams, RuntimeEvent, RuntimeMethod,
     RuntimeRequest, RuntimeResult, SnapshotResources, SnapshotResponse, SplitDirectionWire,
     TerminalCloseParams, TerminalCreateParams, TerminalExecuteParams, TerminalInputParams,
-    TerminalReadRequest, TerminalReadResponse, TerminalReconnectParams, TerminalWaitRequest,
-    TerminalWaitResponse, ViewportSize, parse_client_request,
+    TerminalReadRequest, TerminalReadResponse, TerminalReconnectParams, TerminalRenameParams,
+    TerminalWaitRequest, TerminalWaitResponse, ViewportSize, parse_client_request,
 };
 use slterm_split::SplitDirection;
 use slterm_workspace::{LogicalSize, PanelGroupId, ProjectId, ViewKey};
@@ -811,6 +811,26 @@ fn handle_connection<F>(
                                 RuntimeMutation::TerminalReconnect {
                                     terminal_id,
                                     generation: params.request.generation,
+                                }
+                            });
+                        respond_mutation(
+                            &runtime,
+                            request.id,
+                            params.client_id,
+                            params.mutation_id,
+                            params.expected_revision,
+                            mutation,
+                        )
+                    }
+                    RuntimeMethod::TerminalRename => {
+                        let Some(params) = request.parse::<TerminalRenameParams>() else {
+                            return;
+                        };
+                        let mutation =
+                            parse_terminal_id(&params.request.terminal_id).map(|terminal_id| {
+                                RuntimeMutation::TerminalRename {
+                                    terminal_id,
+                                    title: params.request.title,
                                 }
                             });
                         respond_mutation(

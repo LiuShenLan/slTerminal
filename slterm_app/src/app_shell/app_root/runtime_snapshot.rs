@@ -247,6 +247,14 @@ impl AppRoot {
                     .map(|_| ())
                     .map_err(runtime_mutation_error)
             }
+            RuntimeMutation::TerminalRename { terminal_id, title } => {
+                self.snapshot
+                    .terminal(terminal_id)
+                    .ok_or_else(invalid_request_error)?;
+                self.rename_terminal(terminal_id, title, cx)
+                    .map(|_| ())
+                    .map_err(runtime_mutation_error)
+            }
         }
     }
 

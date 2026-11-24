@@ -17,7 +17,8 @@ use slterm_runtime_protocol::{
     RuntimeEvent, RuntimeMethod, RuntimeRequest, SnapshotResources, SplitDirectionWire,
     TerminalCloseParams, TerminalCloseRequest, TerminalExecuteParams, TerminalExecuteRequest,
     TerminalInputParams, TerminalInputRequest, TerminalReadRequest, TerminalReconnectParams,
-    TerminalReconnectRequest, TerminalResource, TerminalWaitRequest, ViewResource, ViewportSize,
+    TerminalReconnectRequest, TerminalRenameParams, TerminalRenameRequest, TerminalResource,
+    TerminalWaitRequest, ViewResource, ViewportSize,
 };
 
 use super::LocalControlServer;
@@ -859,6 +860,9 @@ fn runtime_terminal_close_and_reconnect_route_through_dispatcher() {
             super::mutations::RuntimeMutation::TerminalReconnect { generation, .. } => {
                 assert_eq!(*generation, 5);
             }
+            super::mutations::RuntimeMutation::TerminalRename { title, .. } => {
+                assert_eq!(title.as_deref(), Some("build"));
+            }
             other => panic!("意外写意图: {other:?}"),
         }
         mutations_by_callback.fetch_add(1, Ordering::SeqCst);
@@ -916,6 +920,26 @@ fn runtime_terminal_close_and_reconnect_route_through_dispatcher() {
     let reply: serde_json::Value = serde_json::from_str(&read_line(&mut stream)).unwrap();
     assert_eq!(reply["result"]["status"], "succeeded");
     assert_eq!(mutations.load(Ordering::SeqCst), 2);
+
+    write_json(
+        &mut stream,
+        &RuntimeRequest::new(
+            JsonRpcId::Number(18),
+            RuntimeMethod::TerminalRename,
+            TerminalRenameParams {
+                client_id: "client-runtime".to_owned(),
+                mutation_id: "mutation-rename".to_owned(),
+                expected_revision: None,
+                request: TerminalRenameRequest {
+                    terminal_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2d".to_owned(),
+                    title: Some("build".to_owned()),
+                },
+            },
+        ),
+    );
+    let reply: serde_json::Value = serde_json::from_str(&read_line(&mut stream)).unwrap();
+    assert_eq!(reply["result"]["status"], "succeeded");
+    assert_eq!(mutations.load(Ordering::SeqCst), 3);
     server.shutdown().unwrap();
 }
 
@@ -1381,6 +1405,7 @@ fn runtime_describe_returns_registry_and_contract_hashes() {
             "terminal.wait",
             "terminal.close",
             "terminal.reconnect",
+            "terminal.rename",
             "instance.handover"
         ]
     );

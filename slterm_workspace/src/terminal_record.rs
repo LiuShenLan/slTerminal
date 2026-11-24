@@ -75,14 +75,7 @@ impl TerminalRecord {
             custom_title,
             agent,
         } = metadata;
-        if let Some(title) = &custom_title {
-            if title.trim().is_empty() {
-                return Err(TerminalRecordError::EmptyTitle);
-            }
-            if title.chars().count() > 128 {
-                return Err(TerminalRecordError::TitleTooLong);
-            }
-        }
+        validate_custom_title(custom_title.as_deref())?;
         Ok(Self {
             id,
             project_id,
@@ -134,4 +127,27 @@ impl TerminalRecord {
     pub(crate) fn set_run_intent(&mut self, run_intent: RunIntent) {
         self.run_intent = run_intent;
     }
+
+    /// 更新自定义标题；空白与超长输入保持原记录不变。
+    pub(crate) fn set_custom_title(
+        &mut self,
+        custom_title: Option<String>,
+    ) -> Result<(), TerminalRecordError> {
+        validate_custom_title(custom_title.as_deref())?;
+        self.custom_title = custom_title;
+        Ok(())
+    }
+}
+
+/// 自定义标题只拒绝空白与超过 128 个 Unicode 字符。
+fn validate_custom_title(custom_title: Option<&str>) -> Result<(), TerminalRecordError> {
+    if let Some(title) = custom_title {
+        if title.trim().is_empty() {
+            return Err(TerminalRecordError::EmptyTitle);
+        }
+        if title.chars().count() > 128 {
+            return Err(TerminalRecordError::TitleTooLong);
+        }
+    }
+    Ok(())
 }
