@@ -155,3 +155,52 @@ mod ownership_tests {
         assert!(!contains_helper("--previous-notify C:/x/notify.exe codex"));
     }
 }
+
+/// 注入以用户级设置文件提交为边界的三种结果。
+///
+/// 提交后清理失败必须保留「已提交」事实并提供只清理的重试；提交前失败
+/// 已回滚准备材料，只能重新安装，不得伪装为部分成功。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HookCommitState {
+    Committed,
+    CommittedCleanupFailed,
+    RolledBack,
+}
+
+/// 结果对应的显式重试动作；`Committed` 没有可重试的副作用。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HookRetryAction {
+    /// 设置文件已提交，重试只清理材料，不重写配置。
+    CleanupOnly,
+    /// 提交前失败，重新走完整安装。
+    Reinstall,
+}
+
+pub(crate) fn hook_retry_action(state: HookCommitState) -> Option<HookRetryAction> {
+    match state {
+        HookCommitState::Committed => None,
+        HookCommitState::CommittedCleanupFailed => Some(HookRetryAction::CleanupOnly),
+        HookCommitState::RolledBack => Some(HookRetryAction::Reinstall),
+    }
+}
+
+#[cfg(test)]
+mod hook_commit_tests {
+    use super::{HookCommitState, HookRetryAction, hook_retry_action};
+
+    /// 提交后清理失败显示为已提交并只重试清理；回滚后只能重装。
+    #[test]
+    fn hooks_post_commit_cleanup_failure_is_visible() {
+        assert_eq!(hook_retry_action(HookCommitState::Committed), None);
+        assert_eq!(
+            hook_retry_action(HookCommitState::CommittedCleanupFailed),
+            Some(HookRetryAction::CleanupOnly),
+            "清理失败必须保留已提交事实并只重试清理"
+        );
+        assert_eq!(
+            hook_retry_action(HookCommitState::RolledBack),
+            Some(HookRetryAction::Reinstall),
+            "提交前失败只能重新安装"
+        );
+    }
+}
