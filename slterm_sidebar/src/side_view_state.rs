@@ -346,6 +346,72 @@ pub struct AgentFilesState {
     scroll: f64,
 }
 
+impl AgentFilesState {
+    /// 写入单根展开快照；目录排序并去重，与解码归一保持同一形态。
+    pub fn set_root(
+        &mut self,
+        agent_root_id: AgentRootId,
+        expanded: bool,
+        mut directories: Vec<SideViewPath>,
+    ) {
+        directories.sort();
+        directories.dedup();
+        if let Some(root) = self
+            .roots
+            .iter_mut()
+            .find(|root| root.agent_root_id == agent_root_id)
+        {
+            root.expanded = expanded;
+            root.directories = directories;
+        } else {
+            self.roots.push(AgentRootState {
+                agent_root_id,
+                expanded,
+                directories,
+            });
+        }
+    }
+
+    pub fn root_expanded(&self, agent_root_id: AgentRootId) -> bool {
+        self.roots
+            .iter()
+            .find(|root| root.agent_root_id == agent_root_id)
+            .is_some_and(|root| root.expanded)
+    }
+
+    pub fn root_directories<'a>(
+        &'a self,
+        agent_root_id: AgentRootId,
+    ) -> impl Iterator<Item = &'a SideViewPath> + 'a {
+        self.roots
+            .iter()
+            .filter(move |root| root.agent_root_id == agent_root_id)
+            .flat_map(|root| root.directories.iter())
+    }
+
+    /// 当前行连同所属根返回；`Some((root, None))` 表示根自身为当前行。
+    pub fn current_row(&self) -> Option<(AgentRootId, Option<&SideViewPath>)> {
+        self.current_row
+            .as_ref()
+            .map(|current| (current.agent_root_id, current.path.as_ref()))
+    }
+
+    pub fn set_current_row(&mut self, agent_root_id: AgentRootId, path: Option<SideViewPath>) {
+        self.current_row = Some(AgentCurrentRow {
+            agent_root_id,
+            path,
+        });
+    }
+
+    pub fn scroll(&self) -> f64 {
+        self.scroll
+    }
+
+    pub fn set_scroll(&mut self, scroll: f64) {
+        self.scroll = scroll;
+    }
+}
+
 impl Normalize for AgentFilesState {
     fn normalize(&mut self) -> Result<(), InvalidViewState> {
         canonical_unique_by(&mut self.roots, |root| root.agent_root_id)?;

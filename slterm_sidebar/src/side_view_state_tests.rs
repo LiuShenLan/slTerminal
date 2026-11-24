@@ -619,3 +619,27 @@ fn commit_state_typed_edits_roundtrip_through_the_schema() {
     assert!(restored.show_ignored());
     assert_eq!(restored.scroll(), 36.0);
 }
+
+#[test]
+fn agent_files_state_exposes_roots_and_current_row() {
+    use super::{AgentFilesState, SideViewPath};
+
+    let root = ROOT_A.parse().unwrap();
+    let skills = SideViewPath::new("skills".to_owned()).unwrap();
+    let mut state = AgentFilesState::default();
+    state.set_root(root, true, vec![skills.clone()]);
+    assert!(state.root_expanded(root));
+    assert_eq!(
+        state.root_directories(root).collect::<Vec<_>>(),
+        vec![&skills]
+    );
+    assert!(!state.root_expanded(ROOT_B.parse().unwrap()));
+
+    state.set_current_row(root, Some(skills.clone()));
+    assert_eq!(state.current_row(), Some((root, Some(&skills))));
+    state.set_current_row(root, None);
+    assert_eq!(state.current_row(), Some((root, None)));
+
+    state.set_scroll(12.5);
+    assert_eq!(state.scroll(), 12.5);
+}
