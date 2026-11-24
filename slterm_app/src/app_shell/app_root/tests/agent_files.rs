@@ -271,3 +271,81 @@ fn agent_files_open_reuses_document(cx: &mut TestAppContext) {
         assert_eq!(note_views, 2, "两个文件各一个编辑器，note 不得重复");
     });
 }
+
+#[gpui::test]
+fn agent_root_capability_union_and_revoke(cx: &mut TestAppContext) {
+    use slterm_path::{PathOperation, PathPolicy, PathRequest, ResolvedPath};
+
+    let temp = tempfile::tempdir().unwrap();
+    let project_root = temp.path().join("union-project");
+    let agent_dir = temp.path().join("union-agent");
+    std::fs::create_dir_all(&project_root).unwrap();
+    std::fs::create_dir_all(&agent_dir).unwrap();
+    std::fs::write(agent_dir.join("note.txt"), "one\n").unwrap();
+    let note = canonical(agent_dir.join("note.txt"));
+    let (root, mut window, _) = open_root(cx);
+    add_project(
+        &root,
+        &mut window,
+        PROJECT_A,
+        project_root.to_str().unwrap(),
+    );
+    let writable = slterm_settings::AgentRoot::custom(
+        agent_root_id(),
+        "Agent".to_owned(),
+        agent_dir.to_string_lossy().into_owned(),
+    )
+    .unwrap()
+    .with_capabilities(slterm_settings::AgentRootCapabilities {
+        write: true,
+        terminal: false,
+    });
+    root.update(cx, |root, _| {
+        root.replace_agent_global_dirs_for_test(Vec::new());
+        root.replace_custom_agent_roots_for_test(vec![writable]);
+    });
+
+    let view = open_agent_files(&root, &mut window, cx);
+    window.run_until_parked();
+    draw_frame(&mut window);
+    window.run_until_parked();
+    window.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.agent_files_open_at(&note, window, cx);
+        });
+    });
+    window.run_until_parked();
+    draw_frame(&mut window);
+    window.run_until_parked();
+
+    let document = root.read_with(cx, |root, _| {
+        assert_eq!(root.documents.len(), 1, "项目外 Agent 文件必须能打开");
+        root.snapshot().documents().next().unwrap().0
+    });
+    let write_request = PathRequest {
+        operation: PathOperation::Write,
+        lexical_path: note.as_path().to_path_buf(),
+        root_hints: Vec::new(),
+        session_grant: None,
+        expected_authorization_generation: 0,
+    };
+    let resolved = ResolvedPath::new(note.clone(), None);
+    root.read_with(cx, |root, _| {
+        let grants = root.document_grants(document);
+        assert!(
+            PathPolicy::authorize(&write_request, &resolved, &grants, 0).is_ok(),
+            "可写 Agent 根必须提供保存授权"
+        );
+    });
+
+    root.update(cx, |root, _| {
+        root.replace_custom_agent_roots_for_test(Vec::new());
+    });
+    root.read_with(cx, |root, _| {
+        let grants = root.document_grants(document);
+        assert!(
+            PathPolicy::authorize(&write_request, &resolved, &grants, 0).is_err(),
+            "撤销可写根后保存必须失去写授权"
+        );
+    });
+}

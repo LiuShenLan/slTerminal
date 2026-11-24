@@ -290,6 +290,15 @@ impl AppRoot {
         self.agent_global_dirs = Some(dirs);
         self.agent_roots_loaded = true;
     }
+
+    /// 测试注入自定义 Agent 根配置；与内置目录快照同批生效。
+    pub(crate) fn replace_custom_agent_roots_for_test(
+        &mut self,
+        roots: Vec<slterm_settings::AgentRoot>,
+    ) {
+        self.custom_agent_roots = roots;
+        self.agent_roots_loaded = true;
+    }
 }
 
 impl AppRoot {

@@ -135,6 +135,16 @@ impl DocumentOpenService {
         project_root: &CanonicalPath,
         lexical: &CanonicalPath,
     ) -> Result<ResolvedDocument, DocumentOpenError> {
+        self.resolve_with_grants(project_root, lexical, &[])
+    }
+
+    /// 项目根之外再叠加打开方的只读来源（如 Agent 根能力）。
+    pub(crate) fn resolve_with_grants(
+        &self,
+        project_root: &CanonicalPath,
+        lexical: &CanonicalPath,
+        extra_read_grants: &[PathGrant],
+    ) -> Result<ResolvedDocument, DocumentOpenError> {
         let resolved = self
             .resolver
             .resolve(lexical)
@@ -146,13 +156,13 @@ impl DocumentOpenService {
             session_grant: None,
             expected_authorization_generation: 0,
         };
-        let grant = PathGrant::project_root(project_root.clone());
-        let authorization =
-            PathPolicy::authorize(&request, &resolved, std::slice::from_ref(&grant), 0)
-                .map_err(|_| DocumentOpenError::Unauthorized)?;
+        let mut grants = vec![PathGrant::project_root(project_root.clone())];
+        grants.extend(extra_read_grants.iter().cloned());
+        let authorization = PathPolicy::authorize(&request, &resolved, &grants, 0)
+            .map_err(|_| DocumentOpenError::Unauthorized)?;
         Ok(ResolvedDocument {
             location: authorization.resolved_path().clone(),
-            grants: vec![grant],
+            grants,
         })
     }
 

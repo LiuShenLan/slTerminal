@@ -12,7 +12,7 @@ use gpui::{
     StatefulInteractiveElement as _, Styled as _, Task, Window, div, px,
 };
 use gpui_component::ActiveTheme as _;
-use slterm_path::CanonicalPath;
+use slterm_path::{CanonicalPath, PathGrant};
 use slterm_settings::AgentRootId;
 use slterm_sidebar::{
     AgentFilesState, DirectoryReadRequest, DirectoryStatus, FileTreeEntry, FileTreeEntryKind,
@@ -692,11 +692,58 @@ impl AppRoot {
             Ok(group) => group,
             Err(_) => return,
         };
-        let request = match self.prepare_document_open(project_id, target_group, path, false) {
+        let mut request = match self.prepare_document_open(project_id, target_group, path, false) {
             Ok(request) => request,
             Err(_) => return,
         };
+        request.read_grants = self.agent_root_grants_for_path(&request.path);
         self.queue_document_open(request, None, window, cx);
+    }
+
+    /// 覆盖该路径的 Agent 根只读／可写授权；根快照未就绪时为空。
+    pub(super) fn agent_root_grants_for_path(&self, path: &CanonicalPath) -> Vec<PathGrant> {
+        if !self.agent_roots_loaded {
+            return Vec::new();
+        }
+        let mut grants = Vec::new();
+        for dir in self.agent_global_dirs.iter().flatten() {
+            if let Ok(root_path) = CanonicalPath::new(dir.path.clone())
+                && path.as_path().starts_with(root_path.as_path())
+            {
+                // 内置根固定只读、禁止终端。
+                grants.push(PathGrant::agent_root(root_path, false, false));
+            }
+        }
+        for root in &self.custom_agent_roots {
+            if let Ok(root_path) = CanonicalPath::new(root.path())
+                && path.as_path().starts_with(root_path.as_path())
+            {
+                grants.push(PathGrant::agent_root(
+                    root_path,
+                    root.capabilities().allows_write(),
+                    root.capabilities().allows_terminal(),
+                ));
+            }
+        }
+        grants
+    }
+
+    /// Document 打开／保存授权：项目根并集再叠加 Agent 根能力。
+    pub(super) fn document_grants(
+        &self,
+        document_id: slterm_document::DocumentId,
+    ) -> Vec<PathGrant> {
+        let mut grants =
+            crate::app_shell::documents::document_project_grants(&self.snapshot, document_id);
+        let path = self
+            .snapshot
+            .documents()
+            .find(|(id, _)| *id == document_id)
+            .map(|(_, location)| location.canonical_path().clone());
+        if let Some(path) = path {
+            grants.extend(self.agent_root_grants_for_path(&path));
+        }
+        grants
     }
 
     /// 视图打开/根同步：安装运行态并交给视图自行读取。

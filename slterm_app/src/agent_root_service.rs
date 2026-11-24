@@ -375,7 +375,7 @@ mod tests {
 
     /// 多根覆盖同一文件时能力并集取或；撤销可写根后按剩余根重算。
     #[test]
-    fn agent_root_capability_union_and_revoke() {
+    fn agent_root_capability_union_service_semantics() {
         let temp = tempfile::tempdir().unwrap();
         let outer = temp.path().join("outer");
         let inner = outer.join("inner");

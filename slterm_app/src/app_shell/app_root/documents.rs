@@ -33,12 +33,14 @@ pub(super) struct DocumentOpenRequest {
     project_id: ProjectId,
     target_group: Option<PanelGroupId>,
     project_root: CanonicalPath,
-    path: CanonicalPath,
+    pub(super) path: CanonicalPath,
     activate_on_open: bool,
     completion: Option<DocumentOpenCompletion>,
     resolved: Option<ResolvedDocument>,
     markdown_fragment: Option<String>,
     session_read_grant: Option<PathGrant>,
+    /// 打开方附加的只读来源（如 Agent 根能力）；打开与保存授权并集共用。
+    pub(super) read_grants: Vec<PathGrant>,
 }
 
 /// 一次面板安装的落点与焦点语义，避免各视图拆开传递开关。
@@ -61,8 +63,7 @@ fn document_open_io(error: io::Error) -> AppRootError {
 
 impl AppRoot {
     pub(super) fn document_read_grants(&self, document_id: DocumentId) -> Vec<PathGrant> {
-        let mut grants =
-            crate::app_shell::documents::document_project_grants(&self.snapshot, document_id);
+        let mut grants = self.document_grants(document_id);
         if let Some(grant) = self.document_session_read_grants.get(&document_id) {
             grants.push(grant.clone());
         }
@@ -145,6 +146,7 @@ impl AppRoot {
             resolved: None,
             markdown_fragment: None,
             session_read_grant: None,
+            read_grants: Vec::new(),
         })
     }
 
@@ -197,7 +199,11 @@ impl AppRoot {
         self.tasks
             .register_with(TaskId::DocumentOpen, CancellationToken::new(), move || {
                 let resolving = executor.spawn(async move {
-                    let result = service.resolve(&request.project_root, &request.path);
+                    let result = service.resolve_with_grants(
+                        &request.project_root,
+                        &request.path,
+                        &request.read_grants,
+                    );
                     (request, result)
                 });
                 cx.spawn(async move |this, cx| {
@@ -663,8 +669,7 @@ impl AppRoot {
         let view_key = target.view.clone();
         let view_states = self.side_view_persistence.editor_view_states();
         let render_services = self.markdown_render_services.clone();
-        let resource_grants =
-            crate::app_shell::documents::document_project_grants(&self.snapshot, document_id);
+        let resource_grants = self.document_grants(document_id);
         let root = cx.entity().downgrade();
         let editor = cx.new(|cx| {
             MarkdownView::new(
@@ -1061,8 +1066,7 @@ impl AppRoot {
         {
             return;
         }
-        let grants =
-            crate::app_shell::documents::document_project_grants(&self.snapshot, document_id);
+        let grants = self.document_grants(document_id);
         let request = match self.documents.begin_save(document_id, 0) {
             Ok(request) => request,
             Err(error) => {
