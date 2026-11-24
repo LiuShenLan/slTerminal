@@ -219,8 +219,12 @@ pub(crate) struct AppRoot {
     path_resolver: Arc<dyn crate::platform::document_paths::DocumentPathResolver>,
     /// 文件树单项操作唯一执行体；含阻塞 I/O，只在后台调用。
     file_operations: Arc<crate::app_shell::file_operation_service::FileOperationService>,
-    /// Agent 全局目录快照；None 表示按 catalog 与 home 实时解析。
+    /// Agent 全局目录快照；由后台任务在首帧后加载，前台不触碰 home。
     agent_global_dirs: Option<Vec<crate::agent_dirs::AgentGlobalDir>>,
+    /// 自定义 Agent 根配置快照（与 `agent_global_dirs` 同批加载）。
+    custom_agent_roots: Vec<slterm_settings::AgentRoot>,
+    /// 根快照是否已由后台加载完成；未完成时 Agent 树与授权保持空集。
+    agent_roots_loaded: bool,
     system_open: Arc<dyn Fn(CanonicalPath) + Send + Sync>,
     #[allow(dead_code)] // 消费点 = Document 真实后台打开。
     document_open_service: Arc<crate::app_shell::documents::DocumentOpenService>,
@@ -284,6 +288,7 @@ impl AppRoot {
         dirs: Vec<crate::agent_dirs::AgentGlobalDir>,
     ) {
         self.agent_global_dirs = Some(dirs);
+        self.agent_roots_loaded = true;
     }
 }
 
@@ -443,6 +448,8 @@ impl AppRoot {
                 crate::app_shell::file_operation_service::FileOperationService::default(),
             ),
             agent_global_dirs: None,
+            custom_agent_roots: Vec::new(),
+            agent_roots_loaded: false,
             system_open: Arc::new(|path| {
                 crate::platform::file_operations::open_in_system(path.as_path());
             }),

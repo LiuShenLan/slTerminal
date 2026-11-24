@@ -32,6 +32,7 @@ pub(crate) enum TaskId {
     CommitGitShow,
     CommitRollback,
     CommitDelete,
+    AgentRootsLoad,
     #[allow(dead_code)] // 消费点归 Diff 固定 HEAD 后台读取。
     DiffHead(slterm_workspace::PanelId),
     MarkdownLink(uuid::Uuid),

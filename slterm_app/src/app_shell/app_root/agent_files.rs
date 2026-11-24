@@ -8,9 +8,8 @@ use std::io;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AppContext as _, Context, InteractiveElement as _, IntoElement, MouseButton,
-    ParentElement as _, ScrollHandle, StatefulInteractiveElement as _, Styled as _, Task, Window,
-    div, px,
+    Context, InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, ScrollHandle,
+    StatefulInteractiveElement as _, Styled as _, Task, Window, div, px,
 };
 use gpui_component::ActiveTheme as _;
 use slterm_path::CanonicalPath;
@@ -24,6 +23,7 @@ use slterm_workspace::SideViewId;
 use super::AppRoot;
 use super::explorer::{join_relative, persistent_path, read_directory};
 use super::side_view::SideView;
+use super::task_service::{CancellationToken, TaskId};
 
 /// 单根运行态：内置根与自定义根共用同一形态。
 pub(super) struct AgentFilesRoot {
@@ -709,15 +709,58 @@ impl AppRoot {
     }
 
     pub(super) fn agent_files_roots(&self) -> Vec<(AgentRootId, String, CanonicalPath)> {
-        let dirs = match &self.agent_global_dirs {
-            Some(dirs) => dirs.clone(),
-            None => crate::agent_dirs::agent_global_dirs(),
-        };
-        dirs.into_iter()
+        if !self.agent_roots_loaded {
+            return Vec::new();
+        }
+        let mut roots = self
+            .agent_global_dirs
+            .iter()
+            .flatten()
             .filter_map(|dir| {
-                let path = CanonicalPath::new(dir.path).ok()?;
-                Some((dir.root_id, dir.display_name, path))
+                let path = CanonicalPath::new(dir.path.clone()).ok()?;
+                Some((dir.root_id, dir.display_name.clone(), path))
             })
-            .collect()
+            .collect::<Vec<_>>();
+        roots.extend(self.custom_agent_roots.iter().filter_map(|root| {
+            let path = CanonicalPath::new(root.path()).ok()?;
+            Some((root.id(), root.display_name().to_owned(), path))
+        }));
+        roots
+    }
+
+    /// 首帧后单任务加载 Agent 根快照；前台不触碰 home 与设置文件。
+    pub(super) fn ensure_agent_roots_loading(&mut self, cx: &mut Context<'_, Self>) {
+        if self.agent_roots_loaded || self.tasks.is_registered(TaskId::AgentRootsLoad) {
+            return;
+        }
+        let executor = cx.background_executor().clone();
+        self.tasks
+            .register_with(
+                TaskId::AgentRootsLoad,
+                CancellationToken::new(),
+                move || {
+                    let loading = executor.spawn(async move {
+                        let dirs = crate::agent_dirs::agent_global_dirs();
+                        let roots =
+                            crate::agent_root_service::load_agent_roots().unwrap_or_default();
+                        (dirs, roots)
+                    });
+                    cx.spawn(async move |this, cx| {
+                        let (dirs, roots) = loading.await;
+                        let _ = this.update(cx, |root, cx| {
+                            // 已注入或更早完成的快照优先，迟到回投不得覆盖。
+                            if root.agent_roots_loaded {
+                                return;
+                            }
+                            root.agent_global_dirs = Some(dirs);
+                            root.custom_agent_roots = roots;
+                            root.agent_roots_loaded = true;
+                            root.sync_agent_files_roots(cx);
+                            cx.notify();
+                        });
+                    })
+                },
+            )
+            .expect("AgentRootsLoad 单任务登记必须唯一");
     }
 }
