@@ -552,6 +552,95 @@ fn workspace_writer_close_commit_disconnect_is_rejected() {
     ));
 }
 
+fn runtime_operation_registration() -> crate::persistence::operation::OperationRegistration {
+    crate::persistence::operation::OperationRegistration {
+        operation_id: "operation-writer".into(),
+        store_epoch: "epoch-operation".into(),
+        client_id: "client-writer".into(),
+        mutation_id: "mutation-writer".into(),
+        method: "panel.save".into(),
+        params_dto_version: 1,
+        params_hash: [7; 32],
+        resource_generations: std::collections::BTreeMap::from([("document:alpha".into(), 42)]),
+    }
+}
+
+#[test]
+fn writer_registers_and_transitions_runtime_operations_idempotently() {
+    use crate::persistence::operation::RegistrationOutcome;
+    use slterm_runtime_protocol::OperationStatus;
+
+    let temp = tempfile::tempdir().unwrap();
+    let paths = fixture(&temp);
+    let mut observer = WorkspaceDatabase::open(&paths).unwrap();
+    observer
+        .begin_run(
+            "epoch-operation",
+            RunMarker {
+                run_id: "run-operation".into(),
+                process_id: 3,
+                process_created_at_ms: 5,
+            },
+        )
+        .unwrap();
+    let writer = WorkspaceWriter::start(paths).unwrap();
+    let client = writer.client();
+    let timeout = std::time::Duration::from_secs(4);
+
+    let registered = client
+        .register_operation(runtime_operation_registration())
+        .unwrap()
+        .recv_timeout(timeout)
+        .unwrap()
+        .unwrap();
+    assert!(matches!(registered, RegistrationOutcome::Registered(_)));
+    let existing = client
+        .register_operation(runtime_operation_registration())
+        .unwrap()
+        .recv_timeout(timeout)
+        .unwrap()
+        .unwrap();
+    assert!(matches!(existing, RegistrationOutcome::Existing(_)));
+
+    let running = client
+        .transition_operation("operation-writer", OperationStatus::Running, None, None)
+        .unwrap()
+        .recv_timeout(timeout)
+        .unwrap()
+        .unwrap();
+    assert_eq!(running.status, OperationStatus::Running);
+    let succeeded = client
+        .transition_operation(
+            "operation-writer",
+            OperationStatus::Succeeded,
+            Some(json!({"revision": 9})),
+            None,
+        )
+        .unwrap()
+        .recv_timeout(timeout)
+        .unwrap()
+        .unwrap();
+    assert_eq!(succeeded.status, OperationStatus::Succeeded);
+    assert_eq!(succeeded.result, Some(json!({"revision": 9})));
+
+    let queried = client
+        .query_operation("operation-writer")
+        .unwrap()
+        .recv_timeout(timeout)
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(queried.status, OperationStatus::Succeeded);
+    assert_eq!(
+        queried.resource_generations.get("document:alpha"),
+        Some(&42)
+    );
+
+    writer.shutdown().unwrap();
+    let persisted = observer.operation("operation-writer").unwrap().unwrap();
+    assert_eq!(persisted.status, OperationStatus::Succeeded);
+}
+
 #[test]
 fn operation_query_queue_full_and_disconnect_are_explicit() {
     let temp = tempfile::tempdir().unwrap();

@@ -491,7 +491,8 @@ fn start_local_control_service(
     events: mpsc::SyncSender<SltermShellEvent>,
 ) -> Option<crate::local_control::LocalControlService> {
     let metadata = workspace_writer?.metadata().clone();
-    match crate::local_control::LocalControlService::start(metadata, events) {
+    let writer = workspace_writer?.client();
+    match crate::local_control::LocalControlService::start(metadata, events, Some(writer)) {
         Ok(service) => Some(service),
         Err(error) => {
             log::warn!("local control service startup failed: {}", error.kind());

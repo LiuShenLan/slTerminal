@@ -66,6 +66,21 @@ fn snapshot_result_schema() -> schemars::Schema {
     schemars::schema_for!(crate::protocol::SnapshotResponse)
 }
 
+#[cfg(feature = "schema")]
+fn operation_query_params_schema() -> schemars::Schema {
+    schemars::schema_for!(crate::protocol::OperationQueryParams)
+}
+
+#[cfg(feature = "schema")]
+fn operation_wait_params_schema() -> schemars::Schema {
+    schemars::schema_for!(crate::protocol::OperationWaitParams)
+}
+
+#[cfg(feature = "schema")]
+fn operation_result_schema() -> schemars::Schema {
+    schemars::schema_for!(crate::protocol::OperationResource)
+}
+
 /// 全部真实可用方法；顺序即对外呈现顺序。
 pub static METHODS: &[MethodSpec] = &[
     MethodSpec {
@@ -97,6 +112,26 @@ pub static METHODS: &[MethodSpec] = &[
         params_schema: empty_params_schema,
         #[cfg(feature = "schema")]
         result_schema: snapshot_result_schema,
+    },
+    MethodSpec {
+        method: ControlMethod::RuntimeOperationGet,
+        scopes: &[ControlScope::Runtime],
+        kind: MethodKind::Query,
+        idempotent: true,
+        #[cfg(feature = "schema")]
+        params_schema: operation_query_params_schema,
+        #[cfg(feature = "schema")]
+        result_schema: operation_result_schema,
+    },
+    MethodSpec {
+        method: ControlMethod::RuntimeOperationWait,
+        scopes: &[ControlScope::Runtime],
+        kind: MethodKind::Query,
+        idempotent: true,
+        #[cfg(feature = "schema")]
+        params_schema: operation_wait_params_schema,
+        #[cfg(feature = "schema")]
+        result_schema: operation_result_schema,
     },
     MethodSpec {
         method: ControlMethod::InstanceHandover,
@@ -156,6 +191,8 @@ mod method_tests {
                 method_name(ControlMethod::RuntimeHello),
                 method_name(ControlMethod::RuntimeDescribe),
                 method_name(ControlMethod::RuntimeSnapshot),
+                method_name(ControlMethod::RuntimeOperationGet),
+                method_name(ControlMethod::RuntimeOperationWait),
                 method_name(ControlMethod::InstanceHandover),
             ]
         );
@@ -234,7 +271,9 @@ mod method_tests {
             vec![
                 ControlMethod::RuntimeHello,
                 ControlMethod::RuntimeDescribe,
-                ControlMethod::RuntimeSnapshot
+                ControlMethod::RuntimeSnapshot,
+                ControlMethod::RuntimeOperationGet,
+                ControlMethod::RuntimeOperationWait
             ]
         );
         let handover_methods: Vec<ControlMethod> = methods_for(ControlScope::Handover)

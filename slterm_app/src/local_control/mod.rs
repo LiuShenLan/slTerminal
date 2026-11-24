@@ -7,6 +7,9 @@ mod client;
 mod client_tests;
 mod credentials;
 mod discovery;
+#[cfg(test)]
+mod operation_dispatch_tests;
+mod operations;
 mod server;
 #[cfg(test)]
 mod server_tests;

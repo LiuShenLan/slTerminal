@@ -1,14 +1,16 @@
 //! Runtime hello 与单实例移交的线缆合同测试。
 
-use crate::MethodKind;
 use crate::protocol::{
     ClientRequest, ControlMessage, ControlMethod, ControlScope, Credential, DescribeResponse,
     DiscoveryRecord, DocumentResource, DomainErrorCode, EmptyParams, HandoverMethod,
     HandoverParams, HandoverRequest, HelloMethod, HelloParams, HelloRequest, HelloResponse,
-    JsonRpcError, JsonRpcErrorData, JsonRpcId, JsonRpcRequest, JsonRpcResponse, PanelGroupResource,
-    ProjectResource, ProtocolError, RuntimeMethod, RuntimeRequest, SnapshotResources,
-    SnapshotResponse, TerminalResource, ViewResource, parse_client_request,
+    JsonRpcError, JsonRpcErrorData, JsonRpcId, JsonRpcRequest, JsonRpcResponse,
+    OperationQueryParams, OperationResource, OperationWaitParams, PanelGroupResource,
+    ProjectResource, ProtocolError, RuntimeMethod, RuntimeParams, RuntimeRequest,
+    SnapshotResources, SnapshotResponse, TerminalResource, ViewResource, params_sha256,
+    parse_client_request,
 };
+use crate::{MethodKind, OperationStatus};
 
 #[cfg(feature = "schema")]
 use crate::protocol::HandoverResponse;
@@ -352,7 +354,32 @@ fn method_registry_drives_hello_capabilities() {
 }
 
 fn runtime_request(method: RuntimeMethod) -> RuntimeRequest {
-    JsonRpcRequest::new(JsonRpcId::Number(7), method, EmptyParams {})
+    JsonRpcRequest::new(
+        JsonRpcId::Number(7),
+        method,
+        RuntimeParams::Empty(EmptyParams {}),
+    )
+}
+
+fn operation_get_request() -> RuntimeRequest {
+    JsonRpcRequest::new(
+        JsonRpcId::Number(9),
+        RuntimeMethod::OperationGet,
+        RuntimeParams::OperationQuery(OperationQueryParams {
+            operation_id: "operation-a".to_owned(),
+        }),
+    )
+}
+
+fn operation_wait_request(timeout_ms: u64) -> RuntimeRequest {
+    JsonRpcRequest::new(
+        JsonRpcId::Number(10),
+        RuntimeMethod::OperationWait,
+        RuntimeParams::OperationWait(OperationWaitParams {
+            operation_id: "operation-a".to_owned(),
+            timeout_ms: Some(timeout_ms),
+        }),
+    )
 }
 
 #[test]
@@ -383,6 +410,91 @@ fn runtime_requests_are_closed_and_require_empty_params() {
 }
 
 #[test]
+fn operation_queries_parse_with_method_specific_params() {
+    for (request, expected) in [
+        (operation_get_request(), RuntimeMethod::OperationGet),
+        (operation_wait_request(1_000), RuntimeMethod::OperationWait),
+    ] {
+        let encoded = serde_json::to_value(request).unwrap();
+        let parsed = parse_client_request(encoded.to_string().as_bytes()).unwrap();
+        match parsed {
+            ClientRequest::Runtime(request) => assert_eq!(request.method, expected),
+            other => panic!("操作查询必须解析为 Runtime 请求: {other:?}"),
+        }
+    }
+    let wait_without_timeout = JsonRpcRequest::new(
+        JsonRpcId::Number(11),
+        RuntimeMethod::OperationWait,
+        RuntimeParams::OperationQuery(OperationQueryParams {
+            operation_id: "operation-a".to_owned(),
+        }),
+    );
+    let encoded = serde_json::to_value(wait_without_timeout).unwrap();
+    assert!(parse_client_request(encoded.to_string().as_bytes()).is_ok());
+    for invalid in [
+        // get 不接受 timeouts
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"runtime.operation_get","params":{"operation_id":"a","timeout_ms":10}}),
+        // 空身份
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"runtime.operation_get","params":{"operation_id":""}}),
+        // wait 超时上限 600 秒
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"runtime.operation_wait","params":{"operation_id":"a","timeout_ms":600001}}),
+        // describe 不接受操作参数
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"runtime.describe","params":{"operation_id":"a"}}),
+        // 方法未登记
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"runtime.operation_cancel","params":{"operation_id":"a"}}),
+    ] {
+        assert!(
+            parse_client_request(invalid.to_string().as_bytes()).is_err(),
+            "非法操作查询必须拒绝: {invalid}"
+        );
+    }
+}
+
+#[test]
+fn params_hash_is_stable_and_json_serialization_dependent() {
+    let a = serde_json::json!({"z": 1, "a": {"n": [1, 2]}});
+    let b = serde_json::json!({"a": {"n": [1, 2]}, "z": 1});
+    assert_eq!(params_sha256(&a), params_sha256(&b), "对象键序不得影响散列");
+    assert_ne!(
+        params_sha256(&a),
+        params_sha256(&serde_json::json!({"z": 2, "a": {"n": [1, 2]}}))
+    );
+}
+
+#[test]
+fn operation_resource_round_trips_terminal_states() {
+    for status in OperationStatus::ALL {
+        let resource = OperationResource {
+            operation_id: "operation-a".to_owned(),
+            status,
+            result: status
+                .eq(&OperationStatus::Succeeded)
+                .then(|| serde_json::json!({"ok": true})),
+            error: matches!(
+                status,
+                OperationStatus::Failed
+                    | OperationStatus::Cancelled
+                    | OperationStatus::OutcomeUnknown
+            )
+            .then(|| serde_json::json!({"code": "decision_required"})),
+        };
+        let encoded = serde_json::to_value(&resource).unwrap();
+        assert_eq!(
+            serde_json::from_value::<OperationResource>(encoded.clone()).unwrap(),
+            resource
+        );
+    }
+    let encoded = serde_json::to_value(OperationResource {
+        operation_id: "operation-a".to_owned(),
+        status: OperationStatus::OutcomeUnknown,
+        result: None,
+        error: Some(serde_json::json!({"code": "side_effect_unknown"})),
+    })
+    .unwrap();
+    assert_eq!(encoded["status"], "outcome_unknown");
+}
+
+#[test]
 fn describe_lists_the_method_registry_with_contract_hashes() {
     let describe = DescribeResponse::current("protocol-hash", "schema-hash");
     assert_eq!(describe.protocol_sha256, "protocol-hash");
@@ -398,6 +510,8 @@ fn describe_lists_the_method_registry_with_contract_hashes() {
             "runtime.hello",
             "runtime.describe",
             "runtime.snapshot",
+            "runtime.operation_get",
+            "runtime.operation_wait",
             "instance.handover"
         ]
     );
@@ -591,6 +705,22 @@ fn schema_accepts_real_requests_and_rejects_unknown_methods() {
     let snapshot_response = JsonRpcResponse::result(JsonRpcId::Number(1), sample_snapshot());
     validator
         .validate(&serde_json::to_value(snapshot_response).unwrap())
+        .unwrap();
+    let operation_get = serde_json::to_value(operation_get_request()).unwrap();
+    validator.validate(&operation_get).unwrap();
+    let operation_wait = serde_json::to_value(operation_wait_request(1_000)).unwrap();
+    validator.validate(&operation_wait).unwrap();
+    let operation_response = JsonRpcResponse::result(
+        JsonRpcId::Number(1),
+        OperationResource {
+            operation_id: "operation-a".to_owned(),
+            status: OperationStatus::OutcomeUnknown,
+            result: None,
+            error: Some(serde_json::json!({"code": "side_effect_unknown"})),
+        },
+    );
+    validator
+        .validate(&serde_json::to_value(operation_response).unwrap())
         .unwrap();
     let handover_response =
         JsonRpcResponse::result(JsonRpcId::Number(1), HandoverResponse::accepted());

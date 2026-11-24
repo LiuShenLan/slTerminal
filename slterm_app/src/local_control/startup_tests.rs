@@ -133,6 +133,7 @@ fn start_service(
         store,
         &root.join("endpoint.json"),
         TEST_TIMEOUT,
+        None,
     )
     .expect("绑定真实 loopback 服务");
     service.publish_discovery().expect("开放真实服务");

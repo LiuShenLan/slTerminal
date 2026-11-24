@@ -12,7 +12,8 @@ use serde::Serialize;
 use slterm_runtime_protocol::{
     ClientRequest, ControlScope, Credential, DescribeResponse, DomainErrorCode, HandoverParams,
     HandoverResponse, HelloResponse, JsonRpcError, JsonRpcErrorData, JsonRpcResponse,
-    RuntimeMethod, RuntimeResult, SnapshotResources, SnapshotResponse, parse_client_request,
+    OPERATION_WAIT_LIMIT_MS, OperationResource, RuntimeMethod, RuntimeParams, RuntimeResult,
+    SnapshotResources, SnapshotResponse, parse_client_request,
 };
 
 use crate::secrets::SecretBytes;
@@ -58,8 +59,21 @@ impl Drop for WorkerGuard {
 }
 
 /// Runtime 快照端口：由应用壳按请求生成同一时刻的只读资源。
-pub(super) type SnapshotCallback =
+pub(crate) type SnapshotCallback =
     Arc<dyn Fn() -> Result<SnapshotResources, JsonRpcError> + Send + Sync + 'static>;
+
+/// Runtime Operation 查询端口：只经唯一工作区写线程读取持久结果。
+pub(crate) type OperationQueryCallback =
+    Arc<dyn Fn(&str) -> Result<Option<OperationResource>, JsonRpcError> + Send + Sync + 'static>;
+
+/// Runtime 作用域的应用回调集合。
+pub(crate) struct RuntimeCallbacks {
+    pub(crate) snapshot: SnapshotCallback,
+    pub(crate) operation: OperationQueryCallback,
+}
+
+/// operation.wait 轮询间隔：只做有界查询与关闭检查。
+const OPERATION_WAIT_POLL: Duration = Duration::from_millis(100);
 
 impl LocalControlServer {
     /// 只服务 handover 作用域（测试与无 Runtime 组合）。
@@ -76,7 +90,10 @@ impl LocalControlServer {
             None,
             hello,
             on_handover,
-            Arc::new(not_ready_snapshot),
+            RuntimeCallbacks {
+                snapshot: Arc::new(not_ready_snapshot),
+                operation: Arc::new(not_ready_operation),
+            },
         )
     }
 
@@ -86,7 +103,7 @@ impl LocalControlServer {
         runtime_credential: SecretBytes,
         hello: HelloResponse,
         on_handover: F,
-        on_snapshot: SnapshotCallback,
+        callbacks: RuntimeCallbacks,
     ) -> io::Result<Self>
     where
         F: Fn(HandoverParams) -> Result<HandoverResponse, JsonRpcError> + Send + Sync + 'static,
@@ -96,7 +113,7 @@ impl LocalControlServer {
             Some(runtime_credential),
             hello,
             on_handover,
-            on_snapshot,
+            callbacks,
         )
     }
 
@@ -105,7 +122,7 @@ impl LocalControlServer {
         runtime_credential: Option<SecretBytes>,
         hello: HelloResponse,
         on_handover: F,
-        snapshot: SnapshotCallback,
+        callbacks: RuntimeCallbacks,
     ) -> io::Result<Self>
     where
         F: Fn(HandoverParams) -> Result<HandoverResponse, JsonRpcError> + Send + Sync + 'static,
@@ -134,7 +151,7 @@ impl LocalControlServer {
                         hello,
                         ConnectionHandlers {
                             handover: callback,
-                            snapshot,
+                            runtime: Arc::new(callbacks),
                         },
                         shutdown,
                         workers,
@@ -208,10 +225,10 @@ struct ScopedCredentials {
     runtime: Option<SecretBytes>,
 }
 
-/// 每个连接共享的两类应用回调；避免把回调拆成更多线程参数。
+/// 每个连接共享的应用回调；避免把回调拆成更多线程参数。
 struct ConnectionHandlers<F> {
     handover: Arc<F>,
-    snapshot: SnapshotCallback,
+    runtime: Arc<RuntimeCallbacks>,
 }
 
 impl ScopedCredentials {
@@ -275,7 +292,7 @@ fn accept_loop<F>(
                 }
             };
             let callback = Arc::clone(&handlers.handover);
-            let snapshot = Arc::clone(&handlers.snapshot);
+            let runtime = Arc::clone(&handlers.runtime);
             let credentials = credentials.clone();
             let hello = hello.clone();
             let shutdown = Arc::clone(&shutdown);
@@ -290,7 +307,7 @@ fn accept_loop<F>(
                         workers: workers_for_thread,
                         active_workers: active_workers_for_thread,
                     };
-                    handle_connection(stream, credentials, hello, callback, snapshot, shutdown)
+                    handle_connection(stream, credentials, hello, callback, runtime, shutdown)
                 });
             match handle {
                 Ok(handle) => {
@@ -316,7 +333,7 @@ fn handle_connection<F>(
     credentials: Arc<ScopedCredentials>,
     hello: HelloResponse,
     callback: Arc<F>,
-    snapshot: SnapshotCallback,
+    runtime: Arc<RuntimeCallbacks>,
     shutdown: Arc<AtomicBool>,
 ) where
     F: Fn(HandoverParams) -> Result<HandoverResponse, JsonRpcError> + Send + Sync + 'static,
@@ -404,7 +421,7 @@ fn handle_connection<F>(
                         )),
                     ),
                     // 事件环接入前，revision 固定为握手起点；Hub 切片接管实时代次。
-                    RuntimeMethod::Snapshot => match snapshot() {
+                    RuntimeMethod::Snapshot => match (runtime.snapshot)() {
                         Ok(resources) => JsonRpcResponse::result(
                             request.id,
                             RuntimeResult::Snapshot(SnapshotResponse {
@@ -416,6 +433,30 @@ fn handle_connection<F>(
                         ),
                         Err(error) => JsonRpcResponse::error(request.id, error),
                     },
+                    RuntimeMethod::OperationGet => {
+                        let RuntimeParams::OperationQuery(params) = &request.params else {
+                            return;
+                        };
+                        match (runtime.operation)(&params.operation_id) {
+                            Ok(Some(resource)) => JsonRpcResponse::result(
+                                request.id,
+                                RuntimeResult::Operation(resource),
+                            ),
+                            Ok(None) => {
+                                JsonRpcResponse::error(request.id, unknown_operation_error())
+                            }
+                            Err(error) => JsonRpcResponse::error(request.id, error),
+                        }
+                    }
+                    RuntimeMethod::OperationWait => {
+                        match wait_operation(&runtime, &request.params, &shutdown) {
+                            Ok(resource) => JsonRpcResponse::result(
+                                request.id,
+                                RuntimeResult::Operation(resource),
+                            ),
+                            Err(error) => JsonRpcResponse::error(request.id, error),
+                        }
+                    }
                 };
                 if write_json(&mut stream, &response).is_err() {
                     return;
@@ -461,15 +502,67 @@ fn closing_error() -> JsonRpcError {
     )
 }
 
-/// 无 Runtime 组合下的快照端口：明确 NotReady，不伪造空资源。
-fn not_ready_snapshot() -> Result<SnapshotResources, JsonRpcError> {
-    Err(JsonRpcError::new(
+fn not_ready_error(message: &'static str) -> JsonRpcError {
+    JsonRpcError::new(
         -32001,
-        "snapshot not ready",
+        message,
         Some(JsonRpcErrorData {
             code: DomainErrorCode::NotReady,
         }),
-    ))
+    )
+}
+
+fn unknown_operation_error() -> JsonRpcError {
+    JsonRpcError::new(
+        -32000,
+        "unknown operation",
+        Some(JsonRpcErrorData {
+            code: DomainErrorCode::UnknownOperation,
+        }),
+    )
+}
+
+/// 无 Runtime 组合下的快照端口：明确 NotReady，不伪造空资源。
+fn not_ready_snapshot() -> Result<SnapshotResources, JsonRpcError> {
+    Err(not_ready_error("snapshot not ready"))
+}
+
+fn not_ready_operation(_: &str) -> Result<Option<OperationResource>, JsonRpcError> {
+    Err(not_ready_error("operation query not ready"))
+}
+
+/// operation.wait 只在后台 worker 轮询；关闭与超时都返回结构化终态。
+fn wait_operation(
+    runtime: &RuntimeCallbacks,
+    params: &RuntimeParams,
+    shutdown: &AtomicBool,
+) -> Result<OperationResource, JsonRpcError> {
+    let (operation_id, timeout_ms) = match params {
+        RuntimeParams::OperationQuery(params) => {
+            (params.operation_id.as_str(), OPERATION_WAIT_LIMIT_MS)
+        }
+        RuntimeParams::OperationWait(params) => (
+            params.operation_id.as_str(),
+            params.timeout_ms.unwrap_or(OPERATION_WAIT_LIMIT_MS),
+        ),
+        RuntimeParams::Empty(_) => return Err(not_ready_error("operation wait params missing")),
+    };
+    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+    loop {
+        if shutdown.load(Ordering::SeqCst) {
+            return Err(closing_error());
+        }
+        match (runtime.operation)(operation_id) {
+            Ok(Some(resource)) if resource.status.is_terminal() => return Ok(resource),
+            Ok(Some(_)) => {}
+            Ok(None) => return Err(unknown_operation_error()),
+            Err(error) => return Err(error),
+        }
+        if Instant::now() >= deadline {
+            return Err(not_ready_error("operation wait timed out"));
+        }
+        std::thread::sleep(OPERATION_WAIT_POLL);
+    }
 }
 
 fn credential_matches(expected: &SecretBytes, actual: &Credential) -> bool {

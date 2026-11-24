@@ -24,12 +24,13 @@ use super::journal::{
     JournalError, JournalRegistration, JournalStatus, JournalStep, ManagedJournal,
 };
 use super::metadata::MetadataError;
-use super::operation::{Operation, OperationError};
+use super::operation::{Operation, OperationError, OperationRegistration, RegistrationOutcome};
 use super::project::ProjectStoreError;
 use super::sidebar::SidebarStateStoreError;
 use super::startup::{MaintenanceError, MaintenanceStage};
 use super::view_state::{ViewStateStoreError, remove_project_from_side_view_state};
 use super::workspace::WorkspaceDatabase;
+use slterm_runtime_protocol::OperationStatus;
 
 const VIEW_STATE_DEBOUNCE: Duration = Duration::from_millis(500);
 const SIDEBAR_STATE_DEBOUNCE: Duration = Duration::from_millis(500);
@@ -153,6 +154,17 @@ enum Command {
     QueryOperation {
         operation_id: String,
         response: SyncSender<Result<Option<Operation>, OperationError>>,
+    },
+    RegisterOperation {
+        registration: Box<OperationRegistration>,
+        response: SyncSender<Result<RegistrationOutcome, OperationError>>,
+    },
+    TransitionOperation {
+        operation_id: String,
+        next: OperationStatus,
+        result: Option<serde_json::Value>,
+        error: Option<serde_json::Value>,
+        response: SyncSender<Result<Operation, OperationError>>,
     },
     RegisterJournal {
         registration: Box<JournalRegistration>,
@@ -307,8 +319,49 @@ impl WorkspaceWriterClient {
         Ok(result)
     }
 
+    /// 非阻塞登记 Runtime 写操作；幂等判定与世代闸门由唯一写线程执行。
+    pub(crate) fn register_operation(
+        &self,
+        registration: OperationRegistration,
+    ) -> Result<Receiver<Result<RegistrationOutcome, OperationError>>, WorkspaceWriterError> {
+        let (response, result) = mpsc::sync_channel(1);
+        self.commands
+            .try_send(Command::RegisterOperation {
+                registration: Box::new(registration),
+                response,
+            })
+            .map_err(|error| match error {
+                TrySendError::Full(_) => WorkspaceWriterError::QueueFull,
+                TrySendError::Disconnected(_) => WorkspaceWriterError::Stopped,
+            })?;
+        Ok(result)
+    }
+
+    /// 非阻塞推进 Runtime 写操作状态；非法边与世代冲突不改写。
+    pub(crate) fn transition_operation(
+        &self,
+        operation_id: &str,
+        next: OperationStatus,
+        result: Option<serde_json::Value>,
+        error: Option<serde_json::Value>,
+    ) -> Result<Receiver<Result<Operation, OperationError>>, WorkspaceWriterError> {
+        let (response, completed) = mpsc::sync_channel(1);
+        self.commands
+            .try_send(Command::TransitionOperation {
+                operation_id: operation_id.to_owned(),
+                next,
+                result,
+                error,
+                response,
+            })
+            .map_err(|error| match error {
+                TrySendError::Full(_) => WorkspaceWriterError::QueueFull,
+                TrySendError::Disconnected(_) => WorkspaceWriterError::Stopped,
+            })?;
+        Ok(completed)
+    }
+
     /// 非阻塞查询显式操作结果；调用方在后台等待，视图显隐不改变持久结果。
-    #[allow(dead_code)] // 生产消费点归显式保存、文件操作与 Runtime 结果重查。
     pub(crate) fn query_operation(
         &self,
         operation_id: &str,
@@ -835,6 +888,23 @@ fn run(
             } => {
                 let result = store.operation(&operation_id);
                 let _ = response.send(result);
+            }
+            Command::RegisterOperation {
+                registration,
+                response,
+            } => {
+                let result = store.register_operation(*registration);
+                let _ = response.send(result);
+            }
+            Command::TransitionOperation {
+                operation_id,
+                next,
+                result,
+                error,
+                response,
+            } => {
+                let outcome = store.transition_operation(&operation_id, next, result, error);
+                let _ = response.send(outcome);
             }
             Command::RegisterJournal {
                 registration,

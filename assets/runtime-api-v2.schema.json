@@ -139,17 +139,46 @@
     },
     "DomainErrorCode": {
       "description": "结构化领域错误码，不与 JSON-RPC 数值码混用。",
-      "type": "string",
-      "enum": [
-        "not_ready",
-        "unauthorized",
-        "queue_full",
-        "closing",
-        "invalid_request"
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "not_ready",
+            "unauthorized",
+            "queue_full",
+            "closing",
+            "invalid_request"
+          ]
+        },
+        {
+          "description": "幂等键已绑定其他方法、参数版本或参数散列。",
+          "type": "string",
+          "const": "mutation_conflict"
+        },
+        {
+          "description": "`expected_revision` 与执行前复核的资源代次不一致。",
+          "type": "string",
+          "const": "revision_conflict"
+        },
+        {
+          "description": "破坏操作缺少显式处置策略；调用方须使用新 mutation_id 重试。",
+          "type": "string",
+          "const": "decision_required"
+        },
+        {
+          "description": "副作用无法证明；Operation 为可查询终态，禁止自动重发。",
+          "type": "string",
+          "const": "outcome_unknown"
+        },
+        {
+          "description": "查询的操作标识不存在。",
+          "type": "string",
+          "const": "unknown_operation"
+        }
       ]
     },
     "EmptyParams": {
-      "description": "当前 Runtime 查询方法都不接受参数；未知字段一律拒绝。",
+      "description": "无参数的 Runtime 方法；未知字段一律拒绝。",
       "type": "object",
       "additionalProperties": false
     },
@@ -473,7 +502,7 @@
           "$ref": "#/$defs/RuntimeMethod"
         },
         "params": {
-          "$ref": "#/$defs/EmptyParams"
+          "$ref": "#/$defs/RuntimeParams"
         }
       },
       "additionalProperties": false,
@@ -592,6 +621,71 @@
         "mutation"
       ]
     },
+    "OperationQueryParams": {
+      "description": "按操作标识查询持久结果；operation.get 与 operation.wait 共用身份。",
+      "type": "object",
+      "properties": {
+        "operation_id": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "operation_id"
+      ]
+    },
+    "OperationResource": {
+      "description": "持久 Operation 的查询视图；结果不明同样可查询且不自动重发。",
+      "type": "object",
+      "properties": {
+        "error": true,
+        "operation_id": {
+          "type": "string"
+        },
+        "result": true,
+        "status": {
+          "$ref": "#/$defs/OperationStatus"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "operation_id",
+        "status"
+      ]
+    },
+    "OperationStatus": {
+      "description": "Runtime 写操作的持久生命周期状态。",
+      "type": "string",
+      "enum": [
+        "queued",
+        "running",
+        "succeeded",
+        "failed",
+        "cancelled",
+        "outcome_unknown"
+      ]
+    },
+    "OperationWaitParams": {
+      "description": "有界等待：超时缺省为服务端上限，显式值不得超过 600 秒。",
+      "type": "object",
+      "properties": {
+        "operation_id": {
+          "type": "string"
+        },
+        "timeout_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "operation_id"
+      ]
+    },
     "PanelGroupResource": {
       "description": "快照中的面板组；`views` 按持久顺序，`active_view` 为组内激活视图。",
       "type": "object",
@@ -646,21 +740,40 @@
       ]
     },
     "RuntimeMethod": {
-      "description": "认证后的 Runtime 查询方法；写方法族由后续切片逐个接入。",
+      "description": "认证后的 Runtime 方法；写方法族由后续切片逐个接入。",
       "type": "string",
       "enum": [
         "runtime.describe",
-        "runtime.snapshot"
+        "runtime.snapshot",
+        "runtime.operation_get",
+        "runtime.operation_wait"
+      ]
+    },
+    "RuntimeParams": {
+      "description": "Runtime 方法的封闭参数集合；服务端按方法名交叉校验。",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/EmptyParams"
+        },
+        {
+          "$ref": "#/$defs/OperationQueryParams"
+        },
+        {
+          "$ref": "#/$defs/OperationWaitParams"
+        }
       ]
     },
     "RuntimeResult": {
-      "description": "Runtime 查询方法的封闭结果集合；服务端按方法构造。",
+      "description": "Runtime 方法的封闭结果集合；服务端按方法构造。",
       "anyOf": [
         {
           "$ref": "#/$defs/DescribeResponse"
         },
         {
           "$ref": "#/$defs/SnapshotResponse"
+        },
+        {
+          "$ref": "#/$defs/OperationResource"
         }
       ]
     },

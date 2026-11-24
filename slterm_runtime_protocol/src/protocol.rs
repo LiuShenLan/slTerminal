@@ -90,7 +90,7 @@ pub enum HelloMethod {
     RuntimeHello,
 }
 
-/// 认证后的 Runtime 查询方法；写方法族由后续切片逐个接入。
+/// 认证后的 Runtime 方法；写方法族由后续切片逐个接入。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum RuntimeMethod {
@@ -98,13 +98,62 @@ pub enum RuntimeMethod {
     Describe,
     #[serde(rename = "runtime.snapshot")]
     Snapshot,
+    #[serde(rename = "runtime.operation_get")]
+    OperationGet,
+    #[serde(rename = "runtime.operation_wait")]
+    OperationWait,
 }
 
-/// 当前 Runtime 查询方法都不接受参数；未知字段一律拒绝。
+/// 无参数的 Runtime 方法；未知字段一律拒绝。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct EmptyParams {}
+
+/// 按操作标识查询持久结果；operation.get 与 operation.wait 共用身份。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct OperationQueryParams {
+    pub operation_id: String,
+}
+
+/// 有界等待：超时缺省为服务端上限，显式值不得超过 600 秒。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct OperationWaitParams {
+    pub operation_id: String,
+    pub timeout_ms: Option<u64>,
+}
+
+/// Runtime 方法的封闭参数集合；服务端按方法名交叉校验。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(untagged)]
+pub enum RuntimeParams {
+    Empty(EmptyParams),
+    OperationQuery(OperationQueryParams),
+    OperationWait(OperationWaitParams),
+}
+
+impl RuntimeParams {
+    fn operation_id(&self) -> Option<&str> {
+        match self {
+            Self::Empty(_) => None,
+            Self::OperationQuery(params) => Some(&params.operation_id),
+            Self::OperationWait(params) => Some(&params.operation_id),
+        }
+    }
+
+    fn wait_timeout_ms(&self) -> Option<Option<u64>> {
+        match self {
+            Self::OperationWait(params) => Some(params.timeout_ms),
+            Self::OperationQuery(_) => Some(None),
+            Self::Empty(_) => None,
+        }
+    }
+}
 
 /// 单实例移交只接受 instance.handover。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -218,7 +267,34 @@ impl HandoverParams {
 
 pub type HelloRequest = JsonRpcRequest<HelloMethod, HelloParams>;
 pub type HandoverRequest = JsonRpcRequest<HandoverMethod, HandoverParams>;
-pub type RuntimeRequest = JsonRpcRequest<RuntimeMethod, EmptyParams>;
+pub type RuntimeRequest = JsonRpcRequest<RuntimeMethod, RuntimeParams>;
+
+/// operation.wait 的等待上限与 transport 的请求等待一致。
+pub const OPERATION_WAIT_LIMIT_MS: u64 = 600_000;
+
+/// 方法名与参数形状必须同属一个封闭组合。
+fn runtime_request_is_valid(request: &RuntimeRequest) -> bool {
+    let operation_present = request
+        .params
+        .operation_id()
+        .is_some_and(|operation_id| !operation_id.trim().is_empty());
+    match request.method {
+        RuntimeMethod::Describe | RuntimeMethod::Snapshot => {
+            matches!(request.params, RuntimeParams::Empty(_))
+        }
+        RuntimeMethod::OperationGet => {
+            operation_present && matches!(request.params, RuntimeParams::OperationQuery(_))
+        }
+        RuntimeMethod::OperationWait => {
+            operation_present
+                && request
+                    .params
+                    .wait_timeout_ms()
+                    .flatten()
+                    .is_none_or(|timeout| (1..=OPERATION_WAIT_LIMIT_MS).contains(&timeout))
+        }
+    }
+}
 
 /// 当前已实现的客户端请求；新增方法必须显式扩展封闭集合。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -242,7 +318,9 @@ impl ClientRequest {
             Self::Handover(request) => {
                 request.has_valid_envelope() && request.params.has_valid_paths()
             }
-            Self::Runtime(request) => request.has_valid_envelope(),
+            Self::Runtime(request) => {
+                request.has_valid_envelope() && runtime_request_is_valid(request)
+            }
         };
         if valid {
             Ok(())
@@ -258,14 +336,18 @@ pub enum ControlMethod {
     RuntimeHello,
     RuntimeDescribe,
     RuntimeSnapshot,
+    RuntimeOperationGet,
+    RuntimeOperationWait,
     InstanceHandover,
 }
 
 impl ControlMethod {
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 6] = [
         Self::RuntimeHello,
         Self::RuntimeDescribe,
         Self::RuntimeSnapshot,
+        Self::RuntimeOperationGet,
+        Self::RuntimeOperationWait,
         Self::InstanceHandover,
     ];
 
@@ -274,6 +356,8 @@ impl ControlMethod {
             Self::RuntimeHello => "runtime.hello",
             Self::RuntimeDescribe => "runtime.describe",
             Self::RuntimeSnapshot => "runtime.snapshot",
+            Self::RuntimeOperationGet => "runtime.operation_get",
+            Self::RuntimeOperationWait => "runtime.operation_wait",
             Self::InstanceHandover => "instance.handover",
         }
     }
@@ -397,13 +481,25 @@ pub struct SnapshotResponse {
     pub resources: SnapshotResources,
 }
 
-/// Runtime 查询方法的封闭结果集合；服务端按方法构造。
+/// 持久 Operation 的查询视图；结果不明同样可查询且不自动重发。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct OperationResource {
+    pub operation_id: String,
+    pub status: crate::OperationStatus,
+    pub result: Option<serde_json::Value>,
+    pub error: Option<serde_json::Value>,
+}
+
+/// Runtime 方法的封闭结果集合；服务端按方法构造。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(untagged)]
 pub enum RuntimeResult {
     Describe(DescribeResponse),
     Snapshot(SnapshotResponse),
+    Operation(OperationResource),
 }
 
 /// 当前客户端可调用的方法集合。
@@ -484,6 +580,16 @@ pub enum DomainErrorCode {
     QueueFull,
     Closing,
     InvalidRequest,
+    /// 幂等键已绑定其他方法、参数版本或参数散列。
+    MutationConflict,
+    /// `expected_revision` 与执行前复核的资源代次不一致。
+    RevisionConflict,
+    /// 破坏操作缺少显式处置策略；调用方须使用新 mutation_id 重试。
+    DecisionRequired,
+    /// 副作用无法证明；Operation 为可查询终态，禁止自动重发。
+    OutcomeUnknown,
+    /// 查询的操作标识不存在。
+    UnknownOperation,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -618,6 +724,16 @@ impl fmt::Display for ProtocolError {
 }
 
 impl std::error::Error for ProtocolError {}
+
+/// 写请求参数的规范散列：客户端与服务端必须对同一 JSON 得到同一值。
+///
+/// 对象键序由 `serde_json` 的映射实现决定；本 crate 不启用 `preserve_order`，
+/// 因此同一逻辑参数的不同键序得到相同散列。
+pub fn params_sha256(params: &serde_json::Value) -> [u8; 32] {
+    use sha2::{Digest as _, Sha256};
+    let encoded = serde_json::to_vec(params).expect("JSON Value 序列化不会失败");
+    Sha256::digest(encoded).into()
+}
 
 /// 解析单个 JSON Lines 请求并执行结构、版本与参数校验。
 pub fn parse_client_request(input: &[u8]) -> Result<ClientRequest, ProtocolError> {

@@ -15,9 +15,13 @@ use slterm_runtime_protocol::{
 
 use super::credentials::load_or_create_at;
 use super::discovery::{DiscoveryGuard, endpoint_path, publish_at};
-use super::server::{LocalControlServer, SnapshotCallback};
+use super::operations::{operation_resource, writer_error};
+use super::server::{
+    LocalControlServer, OperationQueryCallback, RuntimeCallbacks, SnapshotCallback,
+};
 use crate::app_shell::{SltermShellEvent, try_send_handover, try_send_runtime_snapshot};
 use crate::persistence::metadata::WorkspaceMetadata;
+use crate::persistence::workspace_writer::WorkspaceWriterClient;
 use crate::secrets::{CredentialStore, SecretBytes, WindowsCredentialStore};
 
 pub(super) const HANDOVER_REPLY_TIMEOUT: Duration = Duration::from_secs(4);
@@ -51,9 +55,12 @@ pub(crate) struct LocalControlService {
 
 impl LocalControlService {
     /// 生产入口；调用方必须先取得并持续持有 OS 单实例锁。
+    ///
+    /// `writer` 为唯一工作区写线程的 client；缺失时 operation 查询明确 NotReady。
     pub(crate) fn start(
         metadata: WorkspaceMetadata,
         events: SyncSender<SltermShellEvent>,
+        writer: Option<WorkspaceWriterClient>,
     ) -> io::Result<Self> {
         let store = WindowsCredentialStore;
         Self::start_with(
@@ -62,13 +69,14 @@ impl LocalControlService {
             &store,
             &endpoint_path(),
             HANDOVER_REPLY_TIMEOUT,
-            |handover, runtime, hello, on_handover, on_snapshot| {
+            writer,
+            |handover, runtime, hello, on_handover, callbacks| {
                 LocalControlServer::start_with_runtime(
                     handover,
                     runtime,
                     hello,
                     move |params| on_handover(params),
-                    on_snapshot,
+                    callbacks,
                 )
             },
         )
@@ -81,6 +89,7 @@ impl LocalControlService {
         store: &dyn CredentialStore,
         discovery_path: &Path,
         reply_timeout: Duration,
+        writer: Option<WorkspaceWriterClient>,
     ) -> io::Result<Self> {
         Self::start_with(
             metadata,
@@ -88,13 +97,14 @@ impl LocalControlService {
             store,
             discovery_path,
             reply_timeout,
-            |handover, runtime, hello, on_handover, on_snapshot| {
+            writer,
+            |handover, runtime, hello, on_handover, callbacks| {
                 LocalControlServer::start_with_runtime(
                     handover,
                     runtime,
                     hello,
                     move |params| on_handover(params),
-                    on_snapshot,
+                    callbacks,
                 )
             },
         )
@@ -106,6 +116,7 @@ impl LocalControlService {
         store: &dyn CredentialStore,
         discovery_path: &Path,
         reply_timeout: Duration,
+        writer: Option<WorkspaceWriterClient>,
         bind: B,
     ) -> io::Result<Self>
     where
@@ -114,7 +125,7 @@ impl LocalControlService {
             SecretBytes,
             HelloResponse,
             HandoverCallback,
-            SnapshotCallback,
+            RuntimeCallbacks,
         ) -> io::Result<LocalControlServer>,
     {
         let local_root = discovery_path.parent().ok_or_else(|| {
@@ -160,12 +171,43 @@ impl LocalControlService {
                 }
             }
         });
+        // Operation 查询只经唯一写线程；缺失 writer 时明确 NotReady。
+        let on_operation: OperationQueryCallback = Arc::new(move |operation_id| {
+            let Some(writer) = &writer else {
+                return Err(control_error(
+                    DomainErrorCode::NotReady,
+                    -32001,
+                    "operation query not ready",
+                ));
+            };
+            let receipt = writer.query_operation(operation_id).map_err(writer_error)?;
+            match receipt.recv_timeout(SNAPSHOT_REPLY_TIMEOUT) {
+                Ok(Ok(Some(operation))) => Ok(Some(operation_resource(operation))),
+                Ok(Ok(None)) => Ok(None),
+                Ok(Err(_error)) => Err(control_error(
+                    DomainErrorCode::NotReady,
+                    -32001,
+                    "operation store unavailable",
+                )),
+                Err(RecvTimeoutError::Timeout) => Err(control_error(
+                    DomainErrorCode::NotReady,
+                    -32001,
+                    "operation query not ready",
+                )),
+                Err(RecvTimeoutError::Disconnected) => {
+                    Err(control_error(DomainErrorCode::Closing, -32004, "closing"))
+                }
+            }
+        });
         let server = bind(
             credential,
             runtime_credential,
             hello,
             on_handover,
-            on_snapshot,
+            RuntimeCallbacks {
+                snapshot: on_snapshot,
+                operation: on_operation,
+            },
         )?;
         let record = DiscoveryRecord {
             protocol_version: 2,

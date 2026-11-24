@@ -87,9 +87,15 @@ fn start_service(
     store: &dyn CredentialStore,
     events: SyncSender<SltermShellEvent>,
 ) -> LocalControlService {
-    let mut service =
-        LocalControlService::start_at(metadata(), events, store, discovery_path, TEST_TIMEOUT)
-            .expect("绑定真实 loopback 服务组合");
+    let mut service = LocalControlService::start_at(
+        metadata(),
+        events,
+        store,
+        discovery_path,
+        TEST_TIMEOUT,
+        None,
+    )
+    .expect("绑定真实 loopback 服务组合");
     service.publish_discovery().expect("开放真实服务");
     service
 }
@@ -147,7 +153,8 @@ fn service_publishes_discovery_only_after_explicit_open() {
     let store = MemoryCredentialStore::default();
     let (events, _event_rx) = event_channel();
     let mut service =
-        LocalControlService::start_at(metadata(), events, &store, &path, TEST_TIMEOUT).unwrap();
+        LocalControlService::start_at(metadata(), events, &store, &path, TEST_TIMEOUT, None)
+            .unwrap();
 
     assert!(matches!(
         read_discovery_at(&path),
@@ -318,7 +325,7 @@ fn service_maps_receipt_timeout_to_not_ready() {
     let store = MemoryCredentialStore::default();
     let (events, event_rx) = event_channel();
     let mut service =
-        LocalControlService::start_at(metadata(), events, &store, &path, SHORT_REPLY_TIMEOUT)
+        LocalControlService::start_at(metadata(), events, &store, &path, SHORT_REPLY_TIMEOUT, None)
             .unwrap();
     service.publish_discovery().unwrap();
     let foreground = std::thread::spawn(move || {
@@ -375,7 +382,7 @@ fn service_shutdown_joins_inflight_receipt_wait_and_reclaims_endpoint() {
     let store = MemoryCredentialStore::default();
     let (events, event_rx) = event_channel();
     let mut service =
-        LocalControlService::start_at(metadata(), events, &store, &path, SHORT_REPLY_TIMEOUT)
+        LocalControlService::start_at(metadata(), events, &store, &path, SHORT_REPLY_TIMEOUT, None)
             .unwrap();
     service.publish_discovery().unwrap();
     let record = read_discovery_at(&path).unwrap();
@@ -473,7 +480,8 @@ fn service_publish_failure_reports_real_server_cleanup_failure() {
         store_ref,
         &path,
         TEST_TIMEOUT,
-        move |credential, runtime_credential, hello, _on_handover, on_snapshot| {
+        None,
+        move |credential, runtime_credential, hello, _on_handover, callbacks| {
             let server = LocalControlServer::start_with_runtime(
                 credential,
                 runtime_credential,
@@ -483,7 +491,7 @@ fn service_publish_failure_reports_real_server_cleanup_failure() {
                     release_worker_rx.lock().unwrap().recv().unwrap();
                     panic!("injected publish-cleanup worker panic")
                 },
-                on_snapshot,
+                callbacks,
             )?;
             *bound_by_server.lock().unwrap() = Some(server.endpoint().to_owned());
             let run = metadata().run;
@@ -556,13 +564,18 @@ fn service_publish_failure_reclaims_listener_without_new_endpoint() {
         &store,
         &path,
         TEST_TIMEOUT,
-        move |credential, runtime_credential, hello, on_handover, on_snapshot| {
+        None,
+        move |credential,
+              runtime_credential,
+              hello,
+              on_handover: super::service::HandoverCallback,
+              callbacks| {
             let server = LocalControlServer::start_with_runtime(
                 credential,
                 runtime_credential,
                 hello,
                 move |params| on_handover(params),
-                on_snapshot,
+                callbacks,
             )?;
             *bound_by_server.lock().unwrap() = Some(server.endpoint().to_owned());
             Ok(server)

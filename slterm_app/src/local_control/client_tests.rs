@@ -9,9 +9,9 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use slterm_runtime_protocol::{
-    ControlMethod, ControlScope, DiscoveryRecord, DomainErrorCode, HandoverMethod,
-    HandoverParams, HandoverRequest, HandoverResponse, HelloMethod, HelloRequest, HelloResponse,
-    JsonRpcError, JsonRpcErrorData, JsonRpcId, JsonRpcResponse,
+    ControlMethod, ControlScope, DiscoveryRecord, DomainErrorCode, HandoverMethod, HandoverParams,
+    HandoverRequest, HandoverResponse, HelloMethod, HelloRequest, HelloResponse, JsonRpcError,
+    JsonRpcErrorData, JsonRpcId, JsonRpcResponse,
 };
 
 use super::client::{HandoverError, find_newline_since, handover};

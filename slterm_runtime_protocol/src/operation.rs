@@ -1,7 +1,11 @@
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+
 /// Runtime 写操作的持久生命周期状态。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
 pub enum OperationStatus {
     Queued,
     Running,

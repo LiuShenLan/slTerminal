@@ -9,8 +9,10 @@ use std::time::Duration;
 use slterm_runtime_protocol::{
     ControlScope, Credential, DocumentResource, EmptyParams, HandoverMethod, HandoverParams,
     HandoverRequest, HandoverResponse, HelloMethod, HelloParams, HelloRequest, HelloResponse,
-    JsonRpcError, JsonRpcErrorData, JsonRpcId, JsonRpcRequest, PanelGroupResource, ProjectResource,
-    RuntimeMethod, RuntimeRequest, SnapshotResources, TerminalResource, ViewResource,
+    JsonRpcError, JsonRpcErrorData, JsonRpcId, JsonRpcRequest, OperationQueryParams,
+    OperationResource, OperationStatus, OperationWaitParams, PanelGroupResource, ProjectResource,
+    RuntimeMethod, RuntimeParams, RuntimeRequest, SnapshotResources, TerminalResource,
+    ViewResource,
 };
 
 use super::LocalControlServer;
@@ -432,14 +434,138 @@ where
             callback_calls.fetch_add(1, Ordering::SeqCst);
             Ok(HandoverResponse::accepted())
         },
-        Arc::new(on_snapshot),
+        super::server::RuntimeCallbacks {
+            snapshot: Arc::new(on_snapshot),
+            operation: Arc::new(|_| Ok(None)),
+        },
     )
     .unwrap();
     (server, calls)
 }
 
 fn runtime_request(method: RuntimeMethod) -> RuntimeRequest {
-    JsonRpcRequest::new(JsonRpcId::Number(2), method, EmptyParams {})
+    JsonRpcRequest::new(
+        JsonRpcId::Number(2),
+        method,
+        RuntimeParams::Empty(EmptyParams {}),
+    )
+}
+
+fn operation_get(operation_id: &str) -> RuntimeRequest {
+    JsonRpcRequest::new(
+        JsonRpcId::Number(3),
+        RuntimeMethod::OperationGet,
+        RuntimeParams::OperationQuery(OperationQueryParams {
+            operation_id: operation_id.to_owned(),
+        }),
+    )
+}
+
+fn operation_wait(operation_id: &str, timeout_ms: u64) -> RuntimeRequest {
+    JsonRpcRequest::new(
+        JsonRpcId::Number(4),
+        RuntimeMethod::OperationWait,
+        RuntimeParams::OperationWait(OperationWaitParams {
+            operation_id: operation_id.to_owned(),
+            timeout_ms: Some(timeout_ms),
+        }),
+    )
+}
+
+fn operation_resource(status: OperationStatus) -> OperationResource {
+    OperationResource {
+        operation_id: "operation-a".to_owned(),
+        status,
+        result: status
+            .eq(&OperationStatus::Succeeded)
+            .then(|| serde_json::json!({"revision": 3})),
+        error: matches!(
+            status,
+            OperationStatus::Failed | OperationStatus::Cancelled | OperationStatus::OutcomeUnknown
+        )
+        .then(|| serde_json::json!({"code": "side_effect_unknown"})),
+    }
+}
+
+fn start_dual_scope_server_with_operation<O>(
+    on_operation: O,
+) -> (LocalControlServer, Arc<AtomicUsize>)
+where
+    O: Fn(&str) -> Result<Option<OperationResource>, JsonRpcError> + Send + Sync + 'static,
+{
+    let calls = Arc::new(AtomicUsize::new(0));
+    let callback_calls = Arc::clone(&calls);
+    let server = LocalControlServer::start_with_runtime(
+        test_secret("sk-test"),
+        test_secret("sk-test-runtime"),
+        hello_response(),
+        move |_| {
+            callback_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(HandoverResponse::accepted())
+        },
+        super::server::RuntimeCallbacks {
+            snapshot: Arc::new(|| Ok(SnapshotResources::default())),
+            operation: Arc::new(on_operation),
+        },
+    )
+    .unwrap();
+    (server, calls)
+}
+
+#[test]
+fn runtime_operation_get_returns_persisted_result_or_structured_unknown() {
+    let (mut server, calls) = start_dual_scope_server_with_operation(|operation_id| {
+        Ok((operation_id == "operation-a")
+            .then(|| operation_resource(OperationStatus::OutcomeUnknown)))
+    });
+    let mut stream = connect(&server);
+    stream.set_read_timeout(Some(TEST_TIMEOUT)).unwrap();
+    write_json(
+        &mut stream,
+        &hello_scoped("sk-test-runtime", ControlScope::Runtime),
+    );
+    assert!(read_line(&mut stream).contains("store"));
+
+    write_json(&mut stream, &operation_get("operation-a"));
+    let reply: serde_json::Value = serde_json::from_str(&read_line(&mut stream)).unwrap();
+    assert_eq!(reply["result"]["operation_id"], "operation-a");
+    assert_eq!(reply["result"]["status"], "outcome_unknown");
+    assert_eq!(reply["result"]["error"]["code"], "side_effect_unknown");
+
+    write_json(&mut stream, &operation_get("operation-missing"));
+    let reply: serde_json::Value = serde_json::from_str(&read_line(&mut stream)).unwrap();
+    assert_eq!(reply["error"]["data"]["code"], "unknown_operation");
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    server.shutdown().unwrap();
+}
+
+#[test]
+fn runtime_operation_wait_polls_until_terminal_then_returns_result() {
+    let polls = Arc::new(AtomicUsize::new(0));
+    let polls_by_callback = Arc::clone(&polls);
+    let (mut server, _calls) = start_dual_scope_server_with_operation(move |operation_id| {
+        assert_eq!(operation_id, "operation-a");
+        let round = polls_by_callback.fetch_add(1, Ordering::SeqCst);
+        Ok(Some(if round == 0 {
+            operation_resource(OperationStatus::Running)
+        } else {
+            operation_resource(OperationStatus::Succeeded)
+        }))
+    });
+    let mut stream = connect(&server);
+    stream.set_read_timeout(Some(TEST_TIMEOUT)).unwrap();
+    write_json(
+        &mut stream,
+        &hello_scoped("sk-test-runtime", ControlScope::Runtime),
+    );
+    assert!(read_line(&mut stream).contains("store"));
+
+    write_json(&mut stream, &operation_wait("operation-a", 2_000));
+    let reply: serde_json::Value = serde_json::from_str(&read_line(&mut stream)).unwrap();
+    assert_eq!(reply["result"]["status"], "succeeded");
+    assert_eq!(reply["result"]["result"]["revision"], 3);
+    assert!(polls.load(Ordering::SeqCst) >= 2);
+    server.shutdown().unwrap();
 }
 
 fn sample_resources() -> SnapshotResources {
@@ -503,6 +629,8 @@ fn runtime_describe_returns_registry_and_contract_hashes() {
             "runtime.hello",
             "runtime.describe",
             "runtime.snapshot",
+            "runtime.operation_get",
+            "runtime.operation_wait",
             "instance.handover"
         ]
     );
