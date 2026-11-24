@@ -259,6 +259,15 @@ pub struct Capabilities {
     pub methods: BTreeSet<String>,
 }
 
+impl Capabilities {
+    /// 能力摘要只从方法注册表派生，禁止第二份方法名单。
+    pub fn current() -> Self {
+        Self {
+            methods: crate::method_names().map(str::to_owned).collect(),
+        }
+    }
+}
+
 /// hello 握手返回的世代、事件起点与合同散列。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -286,12 +295,7 @@ impl HelloResponse {
             revision,
             protocol_sha256: protocol_sha256.into(),
             schema_sha256: schema_sha256.into(),
-            capabilities: Capabilities {
-                methods: ControlMethod::ALL
-                    .into_iter()
-                    .map(|method| method.as_str().to_owned())
-                    .collect(),
-            },
+            capabilities: Capabilities::current(),
         }
     }
 }
