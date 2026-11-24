@@ -156,6 +156,12 @@ pub enum RuntimeMethod {
     AgentRead,
     #[serde(rename = "agent.wait")]
     AgentWait,
+    #[serde(rename = "agent.start")]
+    AgentStart,
+    #[serde(rename = "agent.resume")]
+    AgentResume,
+    #[serde(rename = "agent.fork")]
+    AgentFork,
 }
 
 /// 原始输入：显式写入 PTY，不追加回车，也不模拟键盘事件。
@@ -337,6 +343,43 @@ pub struct AgentWaitRequest {
     pub since_revision: u64,
     pub timeout_ms: Option<u64>,
 }
+
+/// 在目标项目新建终端并启动指定 CLI；不隐式创建项目。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct AgentStartRequest {
+    pub kind: String,
+    pub project_root: Option<String>,
+    pub cwd: Option<String>,
+}
+
+/// 恢复已有原生会话：会话身份必须由 AgentCatalog 校验后构造命令。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct AgentResumeRequest {
+    pub source: String,
+    pub session_id: Option<String>,
+    pub session_file: Option<String>,
+    pub project_root: Option<String>,
+    pub cwd: Option<String>,
+}
+
+/// 从已有原生会话创建独立分支，原会话不变。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct AgentForkRequest {
+    pub source: String,
+    pub session_id: String,
+    pub project_root: Option<String>,
+    pub cwd: Option<String>,
+}
+
+pub type AgentStartParams = MutationParams<AgentStartRequest>;
+pub type AgentResumeParams = MutationParams<AgentResumeRequest>;
+pub type AgentForkParams = MutationParams<AgentForkRequest>;
 
 /// 新建终端：Shell 固定为应用默认，只开放目标项目与工作目录选择。
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -967,7 +1010,42 @@ fn runtime_request_is_valid(request: &RuntimeRequest) -> bool {
                     .timeout_ms
                     .is_none_or(|timeout| (1..=OPERATION_WAIT_LIMIT_MS).contains(&timeout))
         }),
+        RuntimeMethod::AgentStart => request.parse::<AgentStartParams>().is_some_and(|params| {
+            let request = &params.request;
+            params.has_valid_envelope()
+                && present(&request.kind)
+                && valid_optional_path(request.project_root.as_deref())
+                && valid_optional_path(request.cwd.as_deref())
+        }),
+        RuntimeMethod::AgentResume => request.parse::<AgentResumeParams>().is_some_and(|params| {
+            let request = &params.request;
+            params.has_valid_envelope()
+                && present(&request.source)
+                && valid_optional_path(request.project_root.as_deref())
+                && valid_optional_path(request.cwd.as_deref())
+                && request
+                    .session_id
+                    .as_deref()
+                    .is_none_or(|id| !id.trim().is_empty())
+                && request
+                    .session_file
+                    .as_deref()
+                    .is_none_or(|path| !path.trim().is_empty())
+        }),
+        RuntimeMethod::AgentFork => request.parse::<AgentForkParams>().is_some_and(|params| {
+            let request = &params.request;
+            params.has_valid_envelope()
+                && present(&request.source)
+                && present(&request.session_id)
+                && valid_optional_path(request.project_root.as_deref())
+                && valid_optional_path(request.cwd.as_deref())
+        }),
     }
+}
+
+/// 可选路径要么缺省，要么非空白。
+fn valid_optional_path(path: Option<&str>) -> bool {
+    path.is_none_or(|path| !path.trim().is_empty())
 }
 
 fn valid_ratio(ratio: f32) -> bool {
@@ -1050,11 +1128,14 @@ pub enum ControlMethod {
     RuntimeAgentClose,
     RuntimeAgentRead,
     RuntimeAgentWait,
+    RuntimeAgentStart,
+    RuntimeAgentResume,
+    RuntimeAgentFork,
     InstanceHandover,
 }
 
 impl ControlMethod {
-    pub const ALL: [Self; 33] = [
+    pub const ALL: [Self; 36] = [
         Self::RuntimeHello,
         Self::RuntimeDescribe,
         Self::RuntimeSnapshot,
@@ -1087,6 +1168,9 @@ impl ControlMethod {
         Self::RuntimeAgentClose,
         Self::RuntimeAgentRead,
         Self::RuntimeAgentWait,
+        Self::RuntimeAgentStart,
+        Self::RuntimeAgentResume,
+        Self::RuntimeAgentFork,
         Self::InstanceHandover,
     ];
 
@@ -1124,6 +1208,9 @@ impl ControlMethod {
             Self::RuntimeAgentClose => "agent.close",
             Self::RuntimeAgentRead => "agent.read",
             Self::RuntimeAgentWait => "agent.wait",
+            Self::RuntimeAgentStart => "agent.start",
+            Self::RuntimeAgentResume => "agent.resume",
+            Self::RuntimeAgentFork => "agent.fork",
             Self::InstanceHandover => "instance.handover",
         }
     }

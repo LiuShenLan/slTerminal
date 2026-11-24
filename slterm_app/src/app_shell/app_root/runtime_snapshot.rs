@@ -291,7 +291,81 @@ impl AppRoot {
                     .map(|_| ())
                     .map_err(runtime_mutation_error)
             }
+            RuntimeMutation::AgentStart {
+                kind,
+                project_root,
+                cwd,
+            } => {
+                let kind =
+                    crate::ai_agents::AgentKind::parse(&kind).ok_or_else(invalid_request_error)?;
+                self.start_agent_terminal(kind.slug().to_owned(), project_root, cwd, window, cx)
+            }
+            RuntimeMutation::AgentResume {
+                source,
+                session_id,
+                session_file,
+                project_root,
+                cwd,
+            } => {
+                let session = slterm_agents::AgentSession {
+                    source,
+                    session_id,
+                    session_file,
+                };
+                let command = session
+                    .resume_command()
+                    .ok_or_else(agent_command_unsupported)?;
+                self.start_agent_terminal(command, project_root, cwd, window, cx)
+            }
+            RuntimeMutation::AgentFork {
+                source,
+                session_id,
+                project_root,
+                cwd,
+            } => {
+                let kind = crate::ai_agents::AgentKind::parse(&source)
+                    .ok_or_else(invalid_request_error)?;
+                let command = kind
+                    .fork_command(&session_id)
+                    .ok_or_else(agent_command_unsupported)?;
+                self.start_agent_terminal(command, project_root, cwd, window, cx)
+            }
         }
+    }
+
+    /// 新建终端后把 AgentCatalog 构造的命令排入首个真实提示符注入。
+    fn start_agent_terminal(
+        &mut self,
+        command: String,
+        project_root: Option<String>,
+        cwd: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<(), JsonRpcError> {
+        let project_root = project_root
+            .map(CanonicalPath::new)
+            .transpose()
+            .map_err(|_| invalid_request_error())?;
+        let cwd = cwd
+            .map(CanonicalPath::new)
+            .transpose()
+            .map_err(|_| invalid_request_error())?;
+        let panel_id = self
+            .new_terminal_from_request(self.shell.clone(), project_root, cwd, window, cx)
+            .map_err(runtime_mutation_error)?;
+        let terminal_id = self
+            .terminal_identity(panel_id, cx)
+            .ok_or_else(|| not_ready_error("terminal panel missing"))?;
+        let project_id = self
+            .snapshot
+            .terminal(terminal_id)
+            .map(slterm_workspace::TerminalRecord::project_id)
+            .ok_or_else(|| not_ready_error("terminal record missing"))?;
+        let (_, view) = self
+            .terminal_panel(project_id, terminal_id, cx)
+            .ok_or_else(|| not_ready_error("terminal panel missing"))?;
+        view.update(cx, |view, cx| view.schedule_agent_command(command, cx));
+        Ok(())
     }
 
     /// 写方法必须证明目标终端当前的对外 Agent 身份与请求一致。
@@ -583,6 +657,15 @@ fn revision_conflict_error() -> JsonRpcError {
 /// 请求的对外 Agent 身份与目标终端当前关联不一致。
 fn unknown_agent_error() -> JsonRpcError {
     control_error(DomainErrorCode::UnknownAgent, -32000, "unknown agent")
+}
+
+/// AgentCatalog 未声明该动作或不接受该会话身份。
+fn agent_command_unsupported() -> JsonRpcError {
+    control_error(
+        DomainErrorCode::InvalidRequest,
+        -32000,
+        "agent command unsupported",
+    )
 }
 
 /// 写意图错误映射为封闭领域码；不携带路径、SQL 或正文。

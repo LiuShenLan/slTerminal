@@ -36,17 +36,27 @@ impl TerminalView {
         agent: Option<&AgentSession>,
         cx: &mut Context<'_, Self>,
     ) {
-        self.pending_resume = None;
-        if self.exited.is_some()
-            || !cx
-                .try_global::<Settings>()
-                .is_none_or(|settings| settings.resume_ai)
+        if !cx
+            .try_global::<Settings>()
+            .is_none_or(|settings| settings.resume_ai)
         {
             return;
         }
         let Some(command) = agent.and_then(AgentSession::resume_command) else {
             return;
         };
+        self.schedule_agent_command(command, cx);
+    }
+
+    /// 显式 Agent 启动／恢复／分支注入：不读 `resume_ai`，提示符或超时后只执行一次。
+    ///
+    /// 命令必须由 AgentCatalog 构造并校验；退出、关闭、重连替换与 View
+    /// 销毁都会取消待注入任务，迟到回执不补写。
+    pub(crate) fn schedule_agent_command(&mut self, command: String, cx: &mut Context<'_, Self>) {
+        self.pending_resume = None;
+        if self.exited.is_some() {
+            return;
+        }
         let delay = resume_delay(
             self.exec_context
                 .as_ref()

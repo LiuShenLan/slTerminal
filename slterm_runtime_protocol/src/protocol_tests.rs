@@ -1,19 +1,20 @@
 //! Runtime hello 与单实例移交的线缆合同测试。
 
 use crate::protocol::{
-    AgentCloseRequest, AgentGetRequest, AgentInputRequest, AgentReadRequest, AgentWaitRequest,
-    ClientRequest, ControlMessage, ControlMethod, ControlScope, Credential, DescribeResponse,
-    DiscoveryRecord, DocumentResource, DomainErrorCode, EmptyParams, HandoverMethod,
-    HandoverParams, HandoverRequest, HelloMethod, HelloParams, HelloRequest, HelloResponse,
-    JsonRpcError, JsonRpcErrorData, JsonRpcId, JsonRpcRequest, JsonRpcResponse, MutationParams,
-    OperationQueryParams, OperationResource, OperationWaitParams, PanelActivateRequest,
-    PanelGroupMergeRequest, PanelGroupResizeRequest, PanelGroupResource, PanelGroupSplitRequest,
-    PanelMoveRequest, ProjectActivateRequest, ProjectRemoveRequest, ProjectRenameRequest,
-    ProjectReorderRequest, ProjectResource, ProtocolError, RuntimeMethod, RuntimeRequest,
-    SnapshotResources, SnapshotResponse, SplitDirectionWire, TerminalCloseRequest,
-    TerminalCreateRequest, TerminalExecuteRequest, TerminalInputRequest, TerminalReadRequest,
-    TerminalReconnectRequest, TerminalRenameRequest, TerminalResource, TerminalWaitRequest,
-    ViewResource, ViewportSize, params_sha256, parse_client_request,
+    AgentCloseRequest, AgentForkRequest, AgentGetRequest, AgentInputRequest, AgentReadRequest,
+    AgentResumeRequest, AgentStartRequest, AgentWaitRequest, ClientRequest, ControlMessage,
+    ControlMethod, ControlScope, Credential, DescribeResponse, DiscoveryRecord, DocumentResource,
+    DomainErrorCode, EmptyParams, HandoverMethod, HandoverParams, HandoverRequest, HelloMethod,
+    HelloParams, HelloRequest, HelloResponse, JsonRpcError, JsonRpcErrorData, JsonRpcId,
+    JsonRpcRequest, JsonRpcResponse, MutationParams, OperationQueryParams, OperationResource,
+    OperationWaitParams, PanelActivateRequest, PanelGroupMergeRequest, PanelGroupResizeRequest,
+    PanelGroupResource, PanelGroupSplitRequest, PanelMoveRequest, ProjectActivateRequest,
+    ProjectRemoveRequest, ProjectRenameRequest, ProjectReorderRequest, ProjectResource,
+    ProtocolError, RuntimeMethod, RuntimeRequest, SnapshotResources, SnapshotResponse,
+    SplitDirectionWire, TerminalCloseRequest, TerminalCreateRequest, TerminalExecuteRequest,
+    TerminalInputRequest, TerminalReadRequest, TerminalReconnectRequest, TerminalRenameRequest,
+    TerminalResource, TerminalWaitRequest, ViewResource, ViewportSize, params_sha256,
+    parse_client_request,
 };
 use crate::{MethodKind, OperationStatus};
 
@@ -831,6 +832,33 @@ fn agent_methods_require_identity_and_list_accepts_empty_params() {
                 generation: 2,
             },
         ),
+        project_mutation(
+            RuntimeMethod::AgentStart,
+            AgentStartRequest {
+                kind: "claude".to_owned(),
+                project_root: None,
+                cwd: Some("D:/work/a".to_owned()),
+            },
+        ),
+        project_mutation(
+            RuntimeMethod::AgentResume,
+            AgentResumeRequest {
+                source: "claude".to_owned(),
+                session_id: Some("session-a".to_owned()),
+                session_file: None,
+                project_root: None,
+                cwd: None,
+            },
+        ),
+        project_mutation(
+            RuntimeMethod::AgentFork,
+            AgentForkRequest {
+                source: "claude".to_owned(),
+                session_id: "session-a".to_owned(),
+                project_root: None,
+                cwd: None,
+            },
+        ),
     ] {
         let encoded = serde_json::to_value(&request).unwrap();
         let parsed = parse_client_request(encoded.to_string().as_bytes()).unwrap();
@@ -858,6 +886,12 @@ fn agent_methods_require_identity_and_list_accepts_empty_params() {
         serde_json::json!({"jsonrpc":"2.0","id":1,"method":"agent.read","params":{"agent_id":"a","terminal_id":"t","generation":1,"cursor":""}}),
         // 等待缺 Agent 身份
         serde_json::json!({"jsonrpc":"2.0","id":1,"method":"agent.wait","params":{"agent_id":" ","terminal_id":"t","generation":1,"since_revision":0,"timeout_ms":null}}),
+        // 空 CLI 类型
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"agent.start","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"kind":"","project_root":null,"cwd":null}}}),
+        // 空白路径
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"agent.resume","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"source":"claude","session_id":"s","session_file":null,"project_root":"  ","cwd":null}}}),
+        // 分支缺会话身份
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"agent.fork","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"source":"claude","session_id":"","project_root":null,"cwd":null}}}),
     ] {
         assert!(
             parse_client_request(invalid.to_string().as_bytes()).is_err(),
@@ -955,6 +989,9 @@ fn describe_lists_the_method_registry_with_contract_hashes() {
             "agent.close",
             "agent.read",
             "agent.wait",
+            "agent.start",
+            "agent.resume",
+            "agent.fork",
             "instance.handover"
         ]
     );

@@ -11,19 +11,19 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use slterm_runtime_protocol::{
-    AgentCloseParams, AgentGetRequest, AgentInputParams, AgentListResponse, AgentReadRequest,
-    AgentResource, AgentWaitRequest, ClientRequest, ControlScope, Credential, DescribeResponse,
-    DomainErrorCode, EventNotification, EventsSubscribeParams, EventsUnsubscribedResponse,
-    HandoverParams, HandoverResponse, HelloResponse, JsonRpcError, JsonRpcErrorData, JsonRpcId,
-    JsonRpcResponse, OPERATION_WAIT_LIMIT_MS, OperationQueryParams, OperationResource,
-    OperationWaitParams, PanelActivateParams, PanelGroupMergeParams, PanelGroupResizeParams,
-    PanelGroupSplitParams, PanelMoveParams, PanelOpenSettingsParams, ProjectActivateParams,
-    ProjectListResponse, ProjectRemoveParams, ProjectRenameParams, ProjectReorderParams,
-    RuntimeEvent, RuntimeMethod, RuntimeRequest, RuntimeResult, SnapshotResources,
-    SnapshotResponse, SplitDirectionWire, TerminalCloseParams, TerminalCreateParams,
-    TerminalExecuteParams, TerminalInputParams, TerminalReadRequest, TerminalReadResponse,
-    TerminalReconnectParams, TerminalRenameParams, TerminalWaitRequest, TerminalWaitResponse,
-    ViewportSize, parse_client_request,
+    AgentCloseParams, AgentForkParams, AgentGetRequest, AgentInputParams, AgentListResponse,
+    AgentReadRequest, AgentResource, AgentResumeParams, AgentStartParams, AgentWaitRequest,
+    ClientRequest, ControlScope, Credential, DescribeResponse, DomainErrorCode, EventNotification,
+    EventsSubscribeParams, EventsUnsubscribedResponse, HandoverParams, HandoverResponse,
+    HelloResponse, JsonRpcError, JsonRpcErrorData, JsonRpcId, JsonRpcResponse,
+    OPERATION_WAIT_LIMIT_MS, OperationQueryParams, OperationResource, OperationWaitParams,
+    PanelActivateParams, PanelGroupMergeParams, PanelGroupResizeParams, PanelGroupSplitParams,
+    PanelMoveParams, PanelOpenSettingsParams, ProjectActivateParams, ProjectListResponse,
+    ProjectRemoveParams, ProjectRenameParams, ProjectReorderParams, RuntimeEvent, RuntimeMethod,
+    RuntimeRequest, RuntimeResult, SnapshotResources, SnapshotResponse, SplitDirectionWire,
+    TerminalCloseParams, TerminalCreateParams, TerminalExecuteParams, TerminalInputParams,
+    TerminalReadRequest, TerminalReadResponse, TerminalReconnectParams, TerminalRenameParams,
+    TerminalWaitRequest, TerminalWaitResponse, ViewportSize, parse_client_request,
 };
 use slterm_split::SplitDirection;
 use slterm_workspace::{LogicalSize, PanelGroupId, ProjectId, ViewKey};
@@ -578,6 +578,60 @@ fn handle_connection<F>(
                             params.mutation_id,
                             params.expected_revision,
                             mutation,
+                        )
+                    }
+                    RuntimeMethod::AgentStart => {
+                        let Some(params) = request.parse::<AgentStartParams>() else {
+                            return;
+                        };
+                        respond_mutation(
+                            &runtime,
+                            request.id,
+                            params.client_id,
+                            params.mutation_id,
+                            params.expected_revision,
+                            Ok(RuntimeMutation::AgentStart {
+                                kind: params.request.kind,
+                                project_root: params.request.project_root,
+                                cwd: params.request.cwd,
+                            }),
+                        )
+                    }
+                    RuntimeMethod::AgentResume => {
+                        let Some(params) = request.parse::<AgentResumeParams>() else {
+                            return;
+                        };
+                        respond_mutation(
+                            &runtime,
+                            request.id,
+                            params.client_id,
+                            params.mutation_id,
+                            params.expected_revision,
+                            Ok(RuntimeMutation::AgentResume {
+                                source: params.request.source,
+                                session_id: params.request.session_id,
+                                session_file: params.request.session_file,
+                                project_root: params.request.project_root,
+                                cwd: params.request.cwd,
+                            }),
+                        )
+                    }
+                    RuntimeMethod::AgentFork => {
+                        let Some(params) = request.parse::<AgentForkParams>() else {
+                            return;
+                        };
+                        respond_mutation(
+                            &runtime,
+                            request.id,
+                            params.client_id,
+                            params.mutation_id,
+                            params.expected_revision,
+                            Ok(RuntimeMutation::AgentFork {
+                                source: params.request.source,
+                                session_id: params.request.session_id,
+                                project_root: params.request.project_root,
+                                cwd: params.request.cwd,
+                            }),
                         )
                     }
                     RuntimeMethod::OperationWait => {

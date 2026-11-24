@@ -1481,7 +1481,10 @@
         "agent.input",
         "agent.close",
         "agent.read",
-        "agent.wait"
+        "agent.wait",
+        "agent.start",
+        "agent.resume",
+        "agent.fork"
       ]
     },
     "RuntimeParams": {

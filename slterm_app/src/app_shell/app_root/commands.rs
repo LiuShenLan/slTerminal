@@ -1891,7 +1891,7 @@ impl AppRoot {
         }
     }
 
-    fn terminal_identity(&self, panel_id: PanelId, cx: &App) -> Option<TerminalId> {
+    pub(super) fn terminal_identity(&self, panel_id: PanelId, cx: &App) -> Option<TerminalId> {
         self.projects.values().find_map(|project| {
             let project = project.read(cx);
             let panel = project.panels.get(&panel_id)?;

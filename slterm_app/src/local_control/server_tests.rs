@@ -1265,6 +1265,21 @@ fn runtime_agent_input_and_close_route_through_dispatcher() {
                 assert_eq!(agent_id, "claude:session-a");
                 assert_eq!(*generation, 2);
             }
+            super::mutations::RuntimeMutation::AgentStart { kind, .. } => {
+                assert_eq!(kind, "claude");
+            }
+            super::mutations::RuntimeMutation::AgentResume {
+                source, session_id, ..
+            } => {
+                assert_eq!(source, "claude");
+                assert_eq!(session_id.as_deref(), Some("abc"));
+            }
+            super::mutations::RuntimeMutation::AgentFork {
+                source, session_id, ..
+            } => {
+                assert_eq!(source, "claude");
+                assert_eq!(session_id, "abc");
+            }
             other => panic!("意外写意图: {other:?}"),
         }
         mutations_by_callback.fetch_add(1, Ordering::SeqCst);
@@ -1324,7 +1339,30 @@ fn runtime_agent_input_and_close_route_through_dispatcher() {
     );
     let reply: serde_json::Value = serde_json::from_str(&read_line(&mut stream)).unwrap();
     assert_eq!(reply["result"]["status"], "succeeded");
-    assert_eq!(mutations.load(Ordering::SeqCst), 2);
+
+    for (index, (method, params)) in [
+        (
+            RuntimeMethod::AgentStart,
+            serde_json::json!({"client_id":"c","mutation_id":"m-start","expected_revision":null,"request":{"kind":"claude","project_root":null,"cwd":null}}),
+        ),
+        (
+            RuntimeMethod::AgentResume,
+            serde_json::json!({"client_id":"c","mutation_id":"m-resume","expected_revision":null,"request":{"source":"claude","session_id":"abc","session_file":null,"project_root":null,"cwd":null}}),
+        ),
+        (
+            RuntimeMethod::AgentFork,
+            serde_json::json!({"client_id":"c","mutation_id":"m-fork","expected_revision":null,"request":{"source":"claude","session_id":"abc","project_root":null,"cwd":null}}),
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let request = RuntimeRequest::new(JsonRpcId::Number(30 + index as i64), method, params);
+        write_json(&mut stream, &request);
+        let reply: serde_json::Value = serde_json::from_str(&read_line(&mut stream)).unwrap();
+        assert_eq!(reply["result"]["status"], "succeeded");
+    }
+    assert_eq!(mutations.load(Ordering::SeqCst), 5);
     server.shutdown().unwrap();
 }
 
@@ -1684,6 +1722,9 @@ fn runtime_describe_returns_registry_and_contract_hashes() {
             "agent.close",
             "agent.read",
             "agent.wait",
+            "agent.start",
+            "agent.resume",
+            "agent.fork",
             "instance.handover"
         ]
     );

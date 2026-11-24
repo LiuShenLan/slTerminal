@@ -88,6 +88,24 @@ pub(crate) enum RuntimeMutation {
         terminal_id: TerminalId,
         generation: u64,
     },
+    AgentStart {
+        kind: String,
+        project_root: Option<String>,
+        cwd: Option<String>,
+    },
+    AgentResume {
+        source: String,
+        session_id: Option<String>,
+        session_file: Option<String>,
+        project_root: Option<String>,
+        cwd: Option<String>,
+    },
+    AgentFork {
+        source: String,
+        session_id: String,
+        project_root: Option<String>,
+        cwd: Option<String>,
+    },
 }
 
 impl RuntimeMutation {
@@ -112,6 +130,9 @@ impl RuntimeMutation {
             Self::TerminalRename { .. } => "terminal.rename",
             Self::AgentInput { .. } => "agent.input",
             Self::AgentClose { .. } => "agent.close",
+            Self::AgentStart { .. } => "agent.start",
+            Self::AgentResume { .. } => "agent.resume",
+            Self::AgentFork { .. } => "agent.fork",
         }
     }
 
@@ -237,6 +258,39 @@ impl RuntimeMutation {
                 "agent_id": agent_id,
                 "terminal_id": terminal_id.to_string(),
                 "generation": generation,
+            })),
+            Self::AgentStart {
+                kind,
+                project_root,
+                cwd,
+            } => Ok(serde_json::json!({
+                "kind": kind,
+                "project_root": project_root,
+                "cwd": cwd,
+            })),
+            Self::AgentResume {
+                source,
+                session_id,
+                session_file,
+                project_root,
+                cwd,
+            } => Ok(serde_json::json!({
+                "source": source,
+                "session_id": session_id,
+                "session_file": session_file,
+                "project_root": project_root,
+                "cwd": cwd,
+            })),
+            Self::AgentFork {
+                source,
+                session_id,
+                project_root,
+                cwd,
+            } => Ok(serde_json::json!({
+                "source": source,
+                "session_id": session_id,
+                "project_root": project_root,
+                "cwd": cwd,
             })),
         }
     }

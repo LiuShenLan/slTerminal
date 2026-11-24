@@ -245,6 +245,103 @@ fn runtime_agent_read_and_wait_require_matching_identity(cx: &mut TestAppContext
     );
 }
 
+/// 锚：start/resume/fork 各建一个终端；未知 CLI 与不支持的动作明确拒绝。
+#[gpui::test]
+fn runtime_agent_start_resume_and_fork_create_terminals(cx: &mut TestAppContext) {
+    let (root, mut window, _state) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, "D:/work/a");
+
+    dispatch_mutation(
+        &root,
+        &mut window,
+        crate::local_control::RuntimeMutation::AgentStart {
+            kind: "claude".to_owned(),
+            project_root: None,
+            cwd: None,
+        },
+    )
+    .expect("启动 Agent 必须成功");
+    root.read_with(cx, |root, _| {
+        assert_eq!(root.snapshot().terminals().count(), 1);
+    });
+
+    let error = dispatch_mutation(
+        &root,
+        &mut window,
+        crate::local_control::RuntimeMutation::AgentStart {
+            kind: "unknown-cli".to_owned(),
+            project_root: None,
+            cwd: None,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.data.as_ref().map(|data| data.code),
+        Some(DomainErrorCode::InvalidRequest)
+    );
+
+    let error = dispatch_mutation(
+        &root,
+        &mut window,
+        crate::local_control::RuntimeMutation::AgentResume {
+            source: "aider".to_owned(),
+            session_id: Some("abc".to_owned()),
+            session_file: None,
+            project_root: None,
+            cwd: None,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.data.as_ref().map(|data| data.code),
+        Some(DomainErrorCode::InvalidRequest)
+    );
+
+    dispatch_mutation(
+        &root,
+        &mut window,
+        crate::local_control::RuntimeMutation::AgentResume {
+            source: "claude".to_owned(),
+            session_id: Some("abc".to_owned()),
+            session_file: None,
+            project_root: None,
+            cwd: None,
+        },
+    )
+    .expect("恢复支持的会话必须成功");
+
+    dispatch_mutation(
+        &root,
+        &mut window,
+        crate::local_control::RuntimeMutation::AgentFork {
+            source: "claude".to_owned(),
+            session_id: "abc".to_owned(),
+            project_root: None,
+            cwd: None,
+        },
+    )
+    .expect("分支支持的会话必须成功");
+    root.read_with(cx, |root, _| {
+        assert_eq!(root.snapshot().terminals().count(), 3);
+    });
+
+    let error = dispatch_mutation(
+        &root,
+        &mut window,
+        crate::local_control::RuntimeMutation::AgentFork {
+            source: "aider".to_owned(),
+            session_id: "abc".to_owned(),
+            project_root: None,
+            cwd: None,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.data.as_ref().map(|data| data.code),
+        Some(DomainErrorCode::InvalidRequest)
+    );
+}
+
 #[gpui::test]
 fn runtime_agents_derive_from_session_identity_and_status(cx: &mut TestAppContext) {
     let (root, mut window, _state) = open_root(cx);

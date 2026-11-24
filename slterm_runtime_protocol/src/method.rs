@@ -227,6 +227,21 @@ fn agent_wait_params_schema() -> schemars::Schema {
 }
 
 #[cfg(feature = "schema")]
+fn agent_start_params_schema() -> schemars::Schema {
+    schemars::schema_for!(crate::protocol::AgentStartParams)
+}
+
+#[cfg(feature = "schema")]
+fn agent_resume_params_schema() -> schemars::Schema {
+    schemars::schema_for!(crate::protocol::AgentResumeParams)
+}
+
+#[cfg(feature = "schema")]
+fn agent_fork_params_schema() -> schemars::Schema {
+    schemars::schema_for!(crate::protocol::AgentForkParams)
+}
+
+#[cfg(feature = "schema")]
 fn agent_list_result_schema() -> schemars::Schema {
     schemars::schema_for!(crate::protocol::AgentListResponse)
 }
@@ -554,6 +569,36 @@ pub static METHODS: &[MethodSpec] = &[
         result_schema: terminal_wait_result_schema,
     },
     MethodSpec {
+        method: ControlMethod::RuntimeAgentStart,
+        scopes: &[ControlScope::Runtime],
+        kind: MethodKind::Mutation,
+        idempotent: true,
+        #[cfg(feature = "schema")]
+        params_schema: agent_start_params_schema,
+        #[cfg(feature = "schema")]
+        result_schema: operation_result_schema,
+    },
+    MethodSpec {
+        method: ControlMethod::RuntimeAgentResume,
+        scopes: &[ControlScope::Runtime],
+        kind: MethodKind::Mutation,
+        idempotent: true,
+        #[cfg(feature = "schema")]
+        params_schema: agent_resume_params_schema,
+        #[cfg(feature = "schema")]
+        result_schema: operation_result_schema,
+    },
+    MethodSpec {
+        method: ControlMethod::RuntimeAgentFork,
+        scopes: &[ControlScope::Runtime],
+        kind: MethodKind::Mutation,
+        idempotent: true,
+        #[cfg(feature = "schema")]
+        params_schema: agent_fork_params_schema,
+        #[cfg(feature = "schema")]
+        result_schema: operation_result_schema,
+    },
+    MethodSpec {
         method: ControlMethod::InstanceHandover,
         scopes: &[ControlScope::Handover],
         kind: MethodKind::Mutation,
@@ -640,6 +685,9 @@ mod method_tests {
                 method_name(ControlMethod::RuntimeAgentClose),
                 method_name(ControlMethod::RuntimeAgentRead),
                 method_name(ControlMethod::RuntimeAgentWait),
+                method_name(ControlMethod::RuntimeAgentStart),
+                method_name(ControlMethod::RuntimeAgentResume),
+                method_name(ControlMethod::RuntimeAgentFork),
                 method_name(ControlMethod::InstanceHandover),
             ]
         );
@@ -748,6 +796,9 @@ mod method_tests {
                 ControlMethod::RuntimeAgentClose,
                 ControlMethod::RuntimeAgentRead,
                 ControlMethod::RuntimeAgentWait,
+                ControlMethod::RuntimeAgentStart,
+                ControlMethod::RuntimeAgentResume,
+                ControlMethod::RuntimeAgentFork,
             ]
         );
         let handover_methods: Vec<ControlMethod> = methods_for(ControlScope::Handover)
