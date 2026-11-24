@@ -12,6 +12,9 @@ pub mod dirs;
 pub(crate) mod distribution;
 #[allow(dead_code)] // 生产消费点归 AppRoot Document 打开任务。
 pub(crate) mod document_paths;
+/// DPAPI CurrentUser 加密原语；消费点归恢复点落盘。
+#[allow(dead_code)]
+pub(crate) mod dpapi;
 pub(crate) mod elevation;
 // 系统文件操作:回收站删除 + 系统处理器打开。
 #[allow(dead_code)] // 生产消费归文件与 Git 阶段。

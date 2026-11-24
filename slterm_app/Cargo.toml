@@ -186,6 +186,8 @@ windows = { version = "=0.61.3", features = [
     # 凭据管理器原语:CredReadW/CredWriteW/CredDeleteW/
     # CredFree 与 CREDENTIALW。
     "Win32_Security_Credentials",
+    # 恢复点 DPAPI CurrentUser 加密(CryptProtectData/CryptUnprotectData)。
+    "Win32_Security_Cryptography",
 ] }
 windows-sys = { version = "0.59", features = [
     # AUMID 注册(RegSetKeyValueW)。

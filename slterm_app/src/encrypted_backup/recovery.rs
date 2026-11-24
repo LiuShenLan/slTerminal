@@ -100,26 +100,19 @@ fn write_originals(paths: &AppPaths, originals: &[OriginalFile]) -> Result<(), S
     Ok(())
 }
 
-/// 选择性恢复:先采原字节与「不存在」状态 → 本机加密落盘恢复点 →
-/// 原子写恢复;恢复失败自动回滚。
+/// 选择性恢复:先采原字节与「不存在」状态 → DPAPI 本机加密落盘恢复点 →
+/// 原子写恢复;恢复失败自动回滚。恢复点不要求再次输入口令。
 pub(crate) fn restore_selected(
     archive: &BackupArchive,
     selection: BackupSelection,
-    passphrase: &str,
 ) -> Result<RestorePoint, String> {
-    restore_selected_at(
-        crate::platform::dirs::app_paths(),
-        archive,
-        selection,
-        passphrase,
-    )
+    restore_selected_at(crate::platform::dirs::app_paths(), archive, selection)
 }
 
 fn restore_selected_at(
     paths: &AppPaths,
     archive: &BackupArchive,
     selection: BackupSelection,
-    passphrase: &str,
 ) -> Result<RestorePoint, String> {
     validate_archive(archive)?;
     let categories: HashSet<_> = selection.categories().collect();
@@ -143,7 +136,8 @@ fn restore_selected_at(
     let plaintext = Zeroizing::new(
         serde_json::to_vec(&originals).map_err(|error| format!("序列化恢复点失败: {error}"))?,
     );
-    let packet = encrypt_bytes(&plaintext, passphrase)?;
+    let packet = crate::platform::dpapi::protect(&plaintext)
+        .map_err(|error| format!("恢复点 DPAPI 加密失败: {error}"))?;
     let path = recovery_point_path(paths.local_root())?;
     fs::create_dir_all(path.parent().ok_or("恢复点路径无效")?)
         .map_err(|error| format!("创建恢复点目录失败: {error}"))?;
@@ -167,7 +161,9 @@ fn restore_selected_at(
     let plaintext = Zeroizing::new(
         serde_json::to_vec(&originals).map_err(|error| format!("序列化恢复点失败: {error}"))?,
     );
-    crate::atomic_file::write(&path, &encrypt_bytes(&plaintext, passphrase)?)
+    let packet = crate::platform::dpapi::protect(&plaintext)
+        .map_err(|error| format!("恢复点 DPAPI 加密失败: {error}"))?;
+    crate::atomic_file::write(&path, &packet)
         .map_err(|error| format!("更新恢复点失败: {error}"))?;
     Ok(RestorePoint {
         path,
@@ -191,15 +187,16 @@ fn recovery_point_path(root: &Path) -> Result<PathBuf, String> {
     Err("无法分配恢复点文件名".to_owned())
 }
 
-/// 凭口令撤回:解密恢复点 → 目标名集合与句柄精确比对 → 逐项指纹检查 →
+/// 撤回:DPAPI 解密恢复点 → 目标名集合与句柄精确比对 → 逐项指纹检查 →
 /// 写回未被后续修改的原现场；被修改项标冲突并保留当前内容。
-pub(crate) fn undo(point: &RestorePoint, passphrase: &str) -> Result<(), String> {
-    undo_at(crate::platform::dirs::app_paths(), point, passphrase)
+pub(crate) fn undo(point: &RestorePoint) -> Result<(), String> {
+    undo_at(crate::platform::dirs::app_paths(), point)
 }
 
-fn undo_at(paths: &AppPaths, point: &RestorePoint, passphrase: &str) -> Result<(), String> {
+fn undo_at(paths: &AppPaths, point: &RestorePoint) -> Result<(), String> {
     let packet = fs::read(&point.path).map_err(|error| format!("读取恢复点失败: {error}"))?;
-    let plaintext = decrypt_bytes(&packet, passphrase)?;
+    let plaintext = crate::platform::dpapi::unprotect(&packet)
+        .map_err(|error| format!("恢复点 DPAPI 解密失败: {error}"))?;
     let originals: Vec<OriginalFile> =
         serde_json::from_slice(&plaintext).map_err(|error| format!("恢复点内容无效: {error}"))?;
     // 只接受该次已验证恢复操作拥有的目标集合;外部导入文件不能借撤回扩展白名单。
@@ -322,7 +319,6 @@ mod recovery_tests {
                 BackupCategory::Session,
                 BackupCategory::Themes,
             ]),
-            PASSPHRASE,
         )
         .unwrap();
         assert_eq!(
@@ -335,7 +331,7 @@ mod recovery_tests {
             br#"{"version":0}"#
         );
 
-        undo_at(&paths, &point, PASSPHRASE).unwrap();
+        undo_at(&paths, &point).unwrap();
         assert_eq!(
             fs::read(paths.config_root().join("settings.json")).unwrap(),
             br#"{"appearance":{"theme":"Nord"}}"#,
@@ -362,7 +358,6 @@ mod recovery_tests {
             &paths,
             &archive(),
             BackupSelection::from_categories([BackupCategory::Settings, BackupCategory::Session]),
-            PASSPHRASE,
         )
         .unwrap();
         fs::write(
@@ -371,7 +366,7 @@ mod recovery_tests {
         )
         .unwrap();
 
-        let error = undo_at(&paths, &point, PASSPHRASE).unwrap_err();
+        let error = undo_at(&paths, &point).unwrap_err();
         assert!(error.contains("冲突"), "撤回必须报告指纹冲突: {error}");
         assert!(error.contains("settings.json"), "冲突项必须点名: {error}");
         assert_eq!(
@@ -386,7 +381,7 @@ mod recovery_tests {
         );
 
         fs::write(paths.settings_path(), br#"{"appearance":{"theme":"Nord"}}"#).unwrap();
-        undo_at(&paths, &point, PASSPHRASE).expect("指纹恢复一致后可撤回");
+        undo_at(&paths, &point).expect("指纹恢复一致后可撤回");
         assert_eq!(
             fs::read(paths.settings_path()).unwrap(),
             br#"{"appearance":{"theme":"Linear"}}"#
@@ -405,7 +400,6 @@ mod recovery_tests {
             &single_root_paths(root.path()),
             &archive(),
             BackupSelection::default(),
-            PASSPHRASE,
         )
         .expect("选择性恢复");
         assert_eq!(
@@ -431,8 +425,15 @@ mod recovery_tests {
             "恢复点落在本机 backup-recovery 目录"
         );
 
-        assert!(undo_at(&single_root_paths(root.path()), &point, "wrong horse").is_err());
-        undo_at(&single_root_paths(root.path()), &point, PASSPHRASE).expect("撤回");
+        // DPAPI 密文被篡改后撤回必须失败且零写入。
+        let packet = fs::read(point.path()).unwrap();
+        let mut tampered = packet.clone();
+        let last = tampered.len() - 1;
+        tampered[last] ^= 0xff;
+        fs::write(point.path(), tampered).unwrap();
+        assert!(undo_at(&single_root_paths(root.path()), &point).is_err());
+        fs::write(point.path(), packet).unwrap();
+        undo_at(&single_root_paths(root.path()), &point).expect("撤回");
         assert_eq!(
             fs::read(root.path().join("settings.json")).unwrap(),
             br#"{"appearance":{"theme":"Linear"}}"#
@@ -443,11 +444,10 @@ mod recovery_tests {
             &single_root_paths(root.path()),
             &archive(),
             BackupSelection::from_categories([BackupCategory::Session]),
-            PASSPHRASE,
         )
         .expect("会话恢复");
         assert!(root.path().join("session.json").exists());
-        undo_at(&single_root_paths(root.path()), &point, PASSPHRASE).expect("撤回会话");
+        undo_at(&single_root_paths(root.path()), &point).expect("撤回会话");
         assert!(!root.path().join("session.json").exists());
     }
 
@@ -470,7 +470,6 @@ mod recovery_tests {
             &paths,
             &archive(),
             BackupSelection::from_categories([BackupCategory::Settings, BackupCategory::Session]),
-            PASSPHRASE,
         )
         .unwrap();
         assert_eq!(
@@ -496,7 +495,7 @@ mod recovery_tests {
             "恢复点必须始终归本地根"
         );
 
-        undo_at(&paths, &point, PASSPHRASE).unwrap();
+        undo_at(&paths, &point).unwrap();
         assert_eq!(
             fs::read(paths.settings_path()).unwrap(),
             br#"{"appearance":{"theme":"Linear"}}"#
@@ -527,11 +526,10 @@ mod recovery_tests {
             &single_root_paths(root.path()),
             &archive(),
             BackupSelection::default(),
-            PASSPHRASE,
         )
         .expect("选择性恢复");
         let packet = fs::read(point.path()).unwrap();
-        assert_eq!(&packet[..MAGIC.len()], MAGIC, "恢复点是加密报文");
+        // DPAPI 报文无固定魔数；加密性由「不含明文 + 篡改拒绝」两条断言锁定。
         assert!(
             !packet
                 .windows("Linear-SECRET-MARKER".len())
@@ -548,7 +546,6 @@ mod recovery_tests {
             &single_root_paths(root.path()),
             &archive(),
             BackupSelection::default(),
-            PASSPHRASE,
         )
         .expect("选择性恢复");
 
@@ -572,14 +569,14 @@ mod recovery_tests {
             },
         ];
         let plaintext = serde_json::to_vec(&forged_originals).unwrap();
-        let packet = encrypt_bytes(&plaintext, PASSPHRASE).unwrap();
+        let packet = crate::platform::dpapi::protect(&plaintext).unwrap();
         let forged = RestorePoint {
             path: point.path.clone(),
             targets: point.targets.clone(),
         };
         fs::write(&forged.path, packet).unwrap();
         let before = fs::read(root.path().join("settings.json")).unwrap();
-        assert!(undo_at(&single_root_paths(root.path()), &forged, PASSPHRASE).is_err());
+        assert!(undo_at(&single_root_paths(root.path()), &forged).is_err());
         assert_eq!(fs::read(root.path().join("settings.json")).unwrap(), before);
         assert!(!root.path().join("session.json").exists());
     }
@@ -595,8 +592,7 @@ mod recovery_tests {
             br#"{"appearance":{"theme":"Linear"}}"#,
         )
         .unwrap();
-        let point = restore_selected_at(&paths, &archive(), BackupSelection::default(), PASSPHRASE)
-            .unwrap();
+        let point = restore_selected_at(&paths, &archive(), BackupSelection::default()).unwrap();
 
         // 文件名与句柄一致，仅类别被伪造；完整目标比对必须拒绝跨根写入。
         let forged_originals = vec![OriginalFile {
@@ -608,9 +604,10 @@ mod recovery_tests {
             after: None,
         }];
         let packet =
-            encrypt_bytes(&serde_json::to_vec(&forged_originals).unwrap(), PASSPHRASE).unwrap();
+            crate::platform::dpapi::protect(&serde_json::to_vec(&forged_originals).unwrap())
+                .unwrap();
         fs::write(point.path(), packet).unwrap();
-        assert!(undo_at(&paths, &point, PASSPHRASE).is_err());
+        assert!(undo_at(&paths, &point).is_err());
         assert_eq!(
             fs::read(paths.settings_path()).unwrap(),
             br#"{"appearance":{"theme":"Nord"}}"#
@@ -629,7 +626,6 @@ mod recovery_tests {
             &single_root_paths(root.path()),
             &archive(),
             BackupSelection::from_categories([BackupCategory::Settings, BackupCategory::Session]),
-            PASSPHRASE,
         );
         *super::super::RESTORE_FAILPOINT.lock().unwrap() = None;
         assert!(result.is_err(), "故障注入必须向上传播");
@@ -656,7 +652,6 @@ mod recovery_tests {
                 &single_root_paths(root.path()),
                 &archive(),
                 BackupSelection::from_categories([]),
-                PASSPHRASE
             )
             .is_err()
         );
