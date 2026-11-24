@@ -9,8 +9,9 @@ use crate::protocol::{
     PanelGroupMergeRequest, PanelGroupResizeRequest, PanelGroupResource, PanelGroupSplitRequest,
     PanelMoveRequest, ProjectActivateRequest, ProjectRemoveRequest, ProjectRenameRequest,
     ProjectReorderRequest, ProjectResource, ProtocolError, RuntimeMethod, RuntimeRequest,
-    SnapshotResources, SnapshotResponse, SplitDirectionWire, TerminalResource, ViewResource,
-    ViewportSize, params_sha256, parse_client_request,
+    SnapshotResources, SnapshotResponse, SplitDirectionWire, TerminalCreateRequest,
+    TerminalExecuteRequest, TerminalInputRequest, TerminalResource, ViewResource, ViewportSize,
+    params_sha256, parse_client_request,
 };
 use crate::{MethodKind, OperationStatus};
 
@@ -601,6 +602,67 @@ fn panel_methods_validate_layout_identities_and_bounds() {
 }
 
 #[test]
+fn terminal_methods_validate_generation_and_payloads() {
+    let terminal = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2d";
+    for request in [
+        project_mutation(
+            RuntimeMethod::TerminalCreate,
+            TerminalCreateRequest {
+                project_root: None,
+                cwd: Some("D:/work/a".to_owned()),
+            },
+        ),
+        project_mutation(
+            RuntimeMethod::TerminalInput,
+            TerminalInputRequest {
+                terminal_id: terminal.to_owned(),
+                generation: 1,
+                data: "echo hi".to_owned(),
+            },
+        ),
+        project_mutation(
+            RuntimeMethod::TerminalExecute,
+            TerminalExecuteRequest {
+                terminal_id: terminal.to_owned(),
+                generation: 2,
+                command: "cargo test".to_owned(),
+            },
+        ),
+    ] {
+        let encoded = serde_json::to_value(&request).unwrap();
+        let parsed = parse_client_request(encoded.to_string().as_bytes()).unwrap();
+        match parsed {
+            ClientRequest::Runtime(parsed) => assert_eq!(parsed.method, request.method),
+            other => panic!("终端写请求必须解析为 Runtime 请求: {other:?}"),
+        }
+    }
+
+    for invalid in [
+        // 空白终端身份
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"terminal.input","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"terminal_id":"","generation":1,"data":"ls"}}}),
+        // 代次为零
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"terminal.input","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"terminal_id":"t","generation":0,"data":"ls"}}}),
+        // 空原始输入
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"terminal.input","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"terminal_id":"t","generation":1,"data":""}}}),
+        // 未知字段
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"terminal.input","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"terminal_id":"t","generation":1,"data":"ls","bytes":"ls"}}}),
+        // 空命令
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"terminal.execute","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"terminal_id":"t","generation":1,"command":" "}}}),
+        // 多行命令
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"terminal.execute","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"terminal_id":"t","generation":1,"command":"ls\nwhoami"}}}),
+        // 回车与控制字符
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"terminal.execute","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"terminal_id":"t","generation":1,"command":"ls\r"}}}),
+        // 空路径不能伪装成显式目标
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"terminal.create","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"project_root":"  "}}}),
+    ] {
+        assert!(
+            parse_client_request(invalid.to_string().as_bytes()).is_err(),
+            "非法终端请求必须拒绝: {invalid}"
+        );
+    }
+}
+
+#[test]
 fn params_hash_is_stable_and_json_serialization_dependent() {
     let a = serde_json::json!({"z": 1, "a": {"n": [1, 2]}});
     let b = serde_json::json!({"a": {"n": [1, 2]}, "z": 1});
@@ -676,6 +738,8 @@ fn describe_lists_the_method_registry_with_contract_hashes() {
             "panel.move",
             "panel.open_settings",
             "terminal.create",
+            "terminal.input",
+            "terminal.execute",
             "instance.handover"
         ]
     );

@@ -19,7 +19,8 @@ use slterm_runtime_protocol::{
     PanelMoveParams, PanelOpenSettingsParams, ProjectActivateParams, ProjectListResponse,
     ProjectRemoveParams, ProjectRenameParams, ProjectReorderParams, RuntimeEvent, RuntimeMethod,
     RuntimeRequest, RuntimeResult, SnapshotResources, SnapshotResponse, SplitDirectionWire,
-    TerminalCreateParams, ViewportSize, parse_client_request,
+    TerminalCreateParams, TerminalExecuteParams, TerminalInputParams, ViewportSize,
+    parse_client_request,
 };
 use slterm_split::SplitDirection;
 use slterm_workspace::{LogicalSize, PanelGroupId, ProjectId, ViewKey};
@@ -662,6 +663,48 @@ fn handle_connection<F>(
                                 .map(|view| RuntimeMutation::PanelActivate { view }),
                         )
                     }
+                    RuntimeMethod::TerminalInput => {
+                        let Some(params) = request.parse::<TerminalInputParams>() else {
+                            return;
+                        };
+                        let mutation =
+                            parse_terminal_id(&params.request.terminal_id).map(|terminal_id| {
+                                RuntimeMutation::TerminalInput {
+                                    terminal_id,
+                                    generation: params.request.generation,
+                                    data: params.request.data,
+                                }
+                            });
+                        respond_mutation(
+                            &runtime,
+                            request.id,
+                            params.client_id,
+                            params.mutation_id,
+                            params.expected_revision,
+                            mutation,
+                        )
+                    }
+                    RuntimeMethod::TerminalExecute => {
+                        let Some(params) = request.parse::<TerminalExecuteParams>() else {
+                            return;
+                        };
+                        let mutation =
+                            parse_terminal_id(&params.request.terminal_id).map(|terminal_id| {
+                                RuntimeMutation::TerminalExecute {
+                                    terminal_id,
+                                    generation: params.request.generation,
+                                    command: params.request.command,
+                                }
+                            });
+                        respond_mutation(
+                            &runtime,
+                            request.id,
+                            params.client_id,
+                            params.mutation_id,
+                            params.expected_revision,
+                            mutation,
+                        )
+                    }
                     RuntimeMethod::TerminalCreate => {
                         let Some(params) = request.parse::<TerminalCreateParams>() else {
                             return;
@@ -809,6 +852,11 @@ fn invalid_request_error() -> JsonRpcError {
 
 fn parse_project_id(text: &str) -> Result<ProjectId, JsonRpcError> {
     text.parse::<ProjectId>()
+        .map_err(|_| invalid_request_error())
+}
+
+fn parse_terminal_id(text: &str) -> Result<slterm_workspace::TerminalId, JsonRpcError> {
+    text.parse::<slterm_workspace::TerminalId>()
         .map_err(|_| invalid_request_error())
 }
 

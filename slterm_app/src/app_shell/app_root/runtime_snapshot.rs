@@ -1,12 +1,12 @@
 //! Runtime v2 资源快照：从前台唯一项目快照派生只读 DTO。
 
-use gpui::{Context, Window};
+use gpui::{App, Context, Entity, Window};
 use slterm_path::CanonicalPath;
 use slterm_runtime_protocol::{
     DocumentResource, DomainErrorCode, JsonRpcError, PanelGroupResource, ProjectResource,
     SnapshotResources, TerminalResource, ViewResource,
 };
-use slterm_workspace::RunIntent;
+use slterm_workspace::{RunIntent, ViewKey};
 
 use super::AppRoot;
 use super::command_registry::{CommandId, CommandParameters, CommandSource, CommandTarget};
@@ -179,7 +179,73 @@ impl AppRoot {
                     .map(|_| ())
                     .map_err(runtime_mutation_error)
             }
+            RuntimeMutation::TerminalInput {
+                terminal_id,
+                generation,
+                data,
+            } => {
+                let terminal = self.runtime_terminal_view(terminal_id, generation, cx)?;
+                terminal
+                    .update(cx, |view, cx| view.runtime_input(data.into_bytes(), cx))
+                    .map_err(|_| not_ready_error("terminal not ready"))
+            }
+            RuntimeMutation::TerminalExecute {
+                terminal_id,
+                generation,
+                command,
+            } => {
+                let terminal = self.runtime_terminal_view(terminal_id, generation, cx)?;
+                // execute 是显式执行：只追加一次回车，不模拟键盘事件。
+                let mut bytes = command.into_bytes();
+                bytes.push(b'\r');
+                terminal
+                    .update(cx, |view, cx| view.runtime_input(bytes, cx))
+                    .map_err(|_| not_ready_error("terminal not ready"))
+            }
         }
+    }
+
+    /// 按完整目标（稳定身份 + PTY 代次）定位运行中的终端视图。
+    ///
+    /// 目标必须处于 Launch 意图、代次与请求一致且面板仍存活；
+    /// 任一不满足都明确失败，不猜测重连后的新进程。
+    fn runtime_terminal_view(
+        &self,
+        terminal_id: slterm_workspace::TerminalId,
+        generation: u64,
+        cx: &App,
+    ) -> Result<Entity<crate::gpui_terminal::view::TerminalView>, JsonRpcError> {
+        let record = self
+            .snapshot
+            .terminal(terminal_id)
+            .ok_or_else(invalid_request_error)?;
+        if record.run_intent() != RunIntent::Launch {
+            return Err(not_ready_error("terminal not running"));
+        }
+        let target = self
+            .terminals
+            .borrow()
+            .target(terminal_id)
+            .ok_or_else(|| not_ready_error("terminal target missing"))?;
+        if target.generation().get() != generation {
+            return Err(not_ready_error("terminal generation mismatch"));
+        }
+        let project_id = record.project_id();
+        let view = ViewKey::Terminal {
+            project_id,
+            terminal_id,
+        };
+        let project = self
+            .projects
+            .get(&project_id)
+            .ok_or_else(|| not_ready_error("project view missing"))?;
+        project
+            .read(cx)
+            .panels
+            .values()
+            .find(|host| host.view_key == view)
+            .and_then(|host| host.terminal().cloned())
+            .ok_or_else(|| not_ready_error("terminal panel missing"))
     }
 
     /// 在 GPUI 前台按当前时刻生成同一份资源快照。
@@ -269,6 +335,10 @@ fn closing_error() -> JsonRpcError {
 
 fn invalid_request_error() -> JsonRpcError {
     control_error(DomainErrorCode::InvalidRequest, -32000, "invalid request")
+}
+
+fn not_ready_error(message: &'static str) -> JsonRpcError {
+    control_error(DomainErrorCode::NotReady, -32001, message)
 }
 
 /// 写意图错误映射为封闭领域码；不携带路径、SQL 或正文。

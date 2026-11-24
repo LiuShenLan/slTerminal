@@ -15,6 +15,7 @@ use slterm_runtime_protocol::{
     OperationWaitParams, PanelGroupResource, PanelGroupSplitParams, PanelGroupSplitRequest,
     PanelOpenSettingsParams, ProjectActivateParams, ProjectActivateRequest, ProjectResource,
     RuntimeEvent, RuntimeMethod, RuntimeRequest, SnapshotResources, SplitDirectionWire,
+    TerminalExecuteParams, TerminalExecuteRequest, TerminalInputParams, TerminalInputRequest,
     TerminalResource, ViewResource, ViewportSize,
 };
 
@@ -721,6 +722,103 @@ fn runtime_panel_open_settings_routes_through_dispatcher() {
 }
 
 #[test]
+fn runtime_terminal_input_and_execute_route_through_dispatcher() {
+    let mutations = Arc::new(AtomicUsize::new(0));
+    let mutations_by_callback = Arc::clone(&mutations);
+    let (mut server, _calls) = start_dual_scope_server_with_mutation(move |request| {
+        let method = request.mutation.method().to_owned();
+        match &request.mutation {
+            super::mutations::RuntimeMutation::TerminalInput {
+                generation, data, ..
+            } => {
+                assert_eq!(method, "terminal.input");
+                assert_eq!(*generation, 3);
+                assert_eq!(data, "echo hi");
+            }
+            super::mutations::RuntimeMutation::TerminalExecute {
+                generation,
+                command,
+                ..
+            } => {
+                assert_eq!(method, "terminal.execute");
+                assert_eq!(*generation, 4);
+                assert_eq!(command, "cargo test");
+            }
+            other => panic!("意外写意图: {other:?}"),
+        }
+        mutations_by_callback.fetch_add(1, Ordering::SeqCst);
+        Ok(OperationResource {
+            operation_id: format!("operation-{method}"),
+            status: OperationStatus::Succeeded,
+            result: Some(serde_json::json!({})),
+            error: None,
+        })
+    });
+    let mut stream = connect(&server);
+    stream.set_read_timeout(Some(TEST_TIMEOUT)).unwrap();
+    write_json(
+        &mut stream,
+        &hello_scoped("sk-test-runtime", ControlScope::Runtime),
+    );
+    assert!(read_line(&mut stream).contains("store"));
+
+    let terminal = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2d";
+    write_json(
+        &mut stream,
+        &RuntimeRequest::new(
+            JsonRpcId::Number(10),
+            RuntimeMethod::TerminalInput,
+            TerminalInputParams {
+                client_id: "client-runtime".to_owned(),
+                mutation_id: "mutation-input".to_owned(),
+                expected_revision: None,
+                request: TerminalInputRequest {
+                    terminal_id: terminal.to_owned(),
+                    generation: 3,
+                    data: "echo hi".to_owned(),
+                },
+            },
+        ),
+    );
+    let reply: serde_json::Value = serde_json::from_str(&read_line(&mut stream)).unwrap();
+    assert_eq!(reply["result"]["status"], "succeeded");
+    assert_eq!(mutations.load(Ordering::SeqCst), 1);
+
+    write_json(
+        &mut stream,
+        &RuntimeRequest::new(
+            JsonRpcId::Number(11),
+            RuntimeMethod::TerminalExecute,
+            TerminalExecuteParams {
+                client_id: "client-runtime".to_owned(),
+                mutation_id: "mutation-execute".to_owned(),
+                expected_revision: None,
+                request: TerminalExecuteRequest {
+                    terminal_id: terminal.to_owned(),
+                    generation: 4,
+                    command: "cargo test".to_owned(),
+                },
+            },
+        ),
+    );
+    let reply: serde_json::Value = serde_json::from_str(&read_line(&mut stream)).unwrap();
+    assert_eq!(reply["result"]["status"], "succeeded");
+    assert_eq!(mutations.load(Ordering::SeqCst), 2);
+
+    // 稳定身份非法必须在进入派发器前拒绝，且不断开连接。
+    for invalid in [
+        serde_json::json!({"jsonrpc":"2.0","id":12,"method":"terminal.input","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"terminal_id":"not-a-terminal-id","generation":1,"data":"ls"}}}),
+        serde_json::json!({"jsonrpc":"2.0","id":13,"method":"terminal.execute","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"terminal_id":"not-a-terminal-id","generation":1,"command":"ls"}}}),
+    ] {
+        write_json(&mut stream, &invalid);
+        let reply: serde_json::Value = serde_json::from_str(&read_line(&mut stream)).unwrap();
+        assert_eq!(reply["error"]["data"]["code"], "invalid_request");
+    }
+    assert_eq!(mutations.load(Ordering::SeqCst), 2);
+    server.shutdown().unwrap();
+}
+
+#[test]
 fn runtime_project_list_and_mutations_route_through_callbacks() {
     let mutations = Arc::new(AtomicUsize::new(0));
     let mutations_by_callback = Arc::clone(&mutations);
@@ -976,6 +1074,8 @@ fn runtime_describe_returns_registry_and_contract_hashes() {
             "panel.move",
             "panel.open_settings",
             "terminal.create",
+            "terminal.input",
+            "terminal.execute",
             "instance.handover"
         ]
     );

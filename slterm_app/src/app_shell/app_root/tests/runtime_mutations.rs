@@ -244,6 +244,123 @@ fn runtime_cwd_does_not_fallback(cx: &mut TestAppContext) {
     });
 }
 
+/// 当前测试终端的 PTY 代次；Runtime 输入必须精确绑定该代次。
+fn terminal_generation(root: &Entity<AppRoot>, cx: &mut TestAppContext) -> u64 {
+    root.read_with(cx, |root, _| {
+        root.terminals
+            .borrow()
+            .target(terminal_id(TERMINAL_A))
+            .expect("测试终端必须已在 Registry 注册")
+            .generation()
+            .get()
+    })
+}
+
+/// 取 worker 收到的下一段输入；跳过安装期的非输入命令。
+fn pending_terminal_input(state: &Rc<RefCell<LauncherState>>, panel: PanelId) -> Option<Vec<u8>> {
+    let mut state = state.borrow_mut();
+    let receiver = state
+        .sessions
+        .get_mut(&panel.sequence())
+        .expect("终端会话必须存在");
+    loop {
+        match receiver.try_recv() {
+            Ok(Msg::Input(input)) => return Some(input.into_owned()),
+            Ok(_) => {}
+            Err(TryRecvError::Empty) => return None,
+            Err(TryRecvError::Disconnected) => panic!("worker 通道不得提前断开"),
+        }
+    }
+}
+
+/// 锚：原始输入不追加回车，execute 只追加一次回车；过期代次拒绝且零写入。
+#[gpui::test]
+fn runtime_terminal_input_reaches_worker_with_exact_bytes(cx: &mut TestAppContext) {
+    let (root, mut window, state) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, "D:/work/a");
+    let panel = new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_A);
+    let generation = terminal_generation(&root, cx);
+
+    dispatch_mutation(
+        &root,
+        &mut window,
+        RuntimeMutation::TerminalInput {
+            terminal_id: terminal_id(TERMINAL_A),
+            generation,
+            data: "echo hi".to_owned(),
+        },
+    )
+    .expect("原始输入必须写入 PTY");
+    assert_eq!(
+        pending_terminal_input(&state, panel).as_deref(),
+        Some(b"echo hi".as_slice()),
+        "input 必须原样写入，不得追加回车"
+    );
+
+    dispatch_mutation(
+        &root,
+        &mut window,
+        RuntimeMutation::TerminalExecute {
+            terminal_id: terminal_id(TERMINAL_A),
+            generation,
+            command: "cargo test".to_owned(),
+        },
+    )
+    .expect("单行执行必须写入 PTY");
+    assert_eq!(
+        pending_terminal_input(&state, panel).as_deref(),
+        Some(b"cargo test\r".as_slice()),
+        "execute 只追加一次回车"
+    );
+}
+
+#[gpui::test]
+fn runtime_terminal_input_rejects_stale_generation(cx: &mut TestAppContext) {
+    let (root, mut window, state) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, "D:/work/a");
+    let panel = new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_A);
+    let generation = terminal_generation(&root, cx);
+
+    let error = dispatch_mutation(
+        &root,
+        &mut window,
+        RuntimeMutation::TerminalInput {
+            terminal_id: terminal_id(TERMINAL_A),
+            generation: generation + 1,
+            data: "echo hi".to_owned(),
+        },
+    )
+    .unwrap_err();
+    assert_eq!(error.code, -32001);
+    assert_eq!(
+        error.data.as_ref().map(|data| data.code),
+        Some(DomainErrorCode::NotReady)
+    );
+    assert!(
+        pending_terminal_input(&state, panel).is_none(),
+        "过期代次不得写入 PTY"
+    );
+
+    let error = dispatch_mutation(
+        &root,
+        &mut window,
+        RuntimeMutation::TerminalExecute {
+            terminal_id: terminal_id(TERMINAL_A),
+            generation: 0,
+            command: "echo hi".to_owned(),
+        },
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.data.as_ref().map(|data| data.code),
+        Some(DomainErrorCode::NotReady)
+    );
+    assert!(
+        pending_terminal_input(&state, panel).is_none(),
+        "非法代次不得写入 PTY"
+    );
+}
+
 #[gpui::test]
 fn runtime_project_mutations_are_rejected_while_closing(cx: &mut TestAppContext) {
     let (root, mut window, _state) = open_root(cx);

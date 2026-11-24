@@ -4,7 +4,7 @@
 //! 全部由 AppRoot 复用既有命令目录处理。
 
 use slterm_split::SplitDirection;
-use slterm_workspace::{LogicalSize, PanelGroupId, ProjectId, ViewKey};
+use slterm_workspace::{LogicalSize, PanelGroupId, ProjectId, TerminalId, ViewKey};
 
 /// 当前可执行的写意图；新增方法必须先接入真实命令再登记。
 ///
@@ -55,6 +55,16 @@ pub(crate) enum RuntimeMutation {
         project_root: Option<String>,
         cwd: Option<String>,
     },
+    TerminalInput {
+        terminal_id: TerminalId,
+        generation: u64,
+        data: String,
+    },
+    TerminalExecute {
+        terminal_id: TerminalId,
+        generation: u64,
+        command: String,
+    },
 }
 
 impl RuntimeMutation {
@@ -72,6 +82,8 @@ impl RuntimeMutation {
             Self::PanelMove { .. } => "panel.move",
             Self::PanelOpenSettings => "panel.open_settings",
             Self::TerminalCreate { .. } => "terminal.create",
+            Self::TerminalInput { .. } => "terminal.input",
+            Self::TerminalExecute { .. } => "terminal.execute",
         }
     }
 
@@ -141,6 +153,24 @@ impl RuntimeMutation {
             Self::TerminalCreate { project_root, cwd } => Ok(serde_json::json!({
                 "project_root": project_root,
                 "cwd": cwd,
+            })),
+            Self::TerminalInput {
+                terminal_id,
+                generation,
+                data,
+            } => Ok(serde_json::json!({
+                "terminal_id": terminal_id.to_string(),
+                "generation": generation,
+                "data": data,
+            })),
+            Self::TerminalExecute {
+                terminal_id,
+                generation,
+                command,
+            } => Ok(serde_json::json!({
+                "terminal_id": terminal_id.to_string(),
+                "generation": generation,
+                "command": command,
             })),
         }
     }

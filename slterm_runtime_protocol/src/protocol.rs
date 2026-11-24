@@ -130,7 +130,34 @@ pub enum RuntimeMethod {
     PanelOpenSettings,
     #[serde(rename = "terminal.create")]
     TerminalCreate,
+    #[serde(rename = "terminal.input")]
+    TerminalInput,
+    #[serde(rename = "terminal.execute")]
+    TerminalExecute,
 }
+
+/// 原始输入：显式写入 PTY，不追加回车，也不模拟键盘事件。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct TerminalInputRequest {
+    pub terminal_id: String,
+    pub generation: u64,
+    pub data: String,
+}
+
+/// 可信 Shell 行执行：只接受单行命令，服务端追加一次回车。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct TerminalExecuteRequest {
+    pub terminal_id: String,
+    pub generation: u64,
+    pub command: String,
+}
+
+pub type TerminalInputParams = MutationParams<TerminalInputRequest>;
+pub type TerminalExecuteParams = MutationParams<TerminalExecuteRequest>;
 
 /// 新建终端：Shell 固定为应用默认，只开放目标项目与工作目录选择。
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -383,6 +410,8 @@ pub enum RuntimeParams {
     PanelMove(PanelMoveParams),
     PanelOpenSettings(PanelOpenSettingsParams),
     TerminalCreate(TerminalCreateParams),
+    TerminalInput(TerminalInputParams),
+    TerminalExecute(TerminalExecuteParams),
 }
 
 /// 单实例移交只接受 instance.handover。
@@ -652,6 +681,29 @@ fn runtime_request_is_valid(request: &RuntimeRequest) -> bool {
                             .is_none_or(|path| !path.trim().is_empty())
                 })
         }
+        RuntimeMethod::TerminalInput => {
+            request
+                .parse::<TerminalInputParams>()
+                .is_some_and(|params| {
+                    let request = &params.request;
+                    params.has_valid_envelope()
+                        && present(&request.terminal_id)
+                        && request.generation > 0
+                        && !request.data.is_empty()
+                })
+        }
+        RuntimeMethod::TerminalExecute => {
+            request
+                .parse::<TerminalExecuteParams>()
+                .is_some_and(|params| {
+                    let request = &params.request;
+                    params.has_valid_envelope()
+                        && present(&request.terminal_id)
+                        && request.generation > 0
+                        && present(&request.command)
+                        && !request.command.contains(['\0', '\r', '\n'])
+                })
+        }
     }
 }
 
@@ -722,11 +774,13 @@ pub enum ControlMethod {
     RuntimePanelMove,
     RuntimePanelOpenSettings,
     RuntimeTerminalCreate,
+    RuntimeTerminalInput,
+    RuntimeTerminalExecute,
     InstanceHandover,
 }
 
 impl ControlMethod {
-    pub const ALL: [Self; 20] = [
+    pub const ALL: [Self; 22] = [
         Self::RuntimeHello,
         Self::RuntimeDescribe,
         Self::RuntimeSnapshot,
@@ -746,6 +800,8 @@ impl ControlMethod {
         Self::RuntimePanelMove,
         Self::RuntimePanelOpenSettings,
         Self::RuntimeTerminalCreate,
+        Self::RuntimeTerminalInput,
+        Self::RuntimeTerminalExecute,
         Self::InstanceHandover,
     ];
 
@@ -770,6 +826,8 @@ impl ControlMethod {
             Self::RuntimePanelMove => "panel.move",
             Self::RuntimePanelOpenSettings => "panel.open_settings",
             Self::RuntimeTerminalCreate => "terminal.create",
+            Self::RuntimeTerminalInput => "terminal.input",
+            Self::RuntimeTerminalExecute => "terminal.execute",
             Self::InstanceHandover => "instance.handover",
         }
     }

@@ -704,6 +704,21 @@ impl TerminalView {
         self.write_input(bytes, cx);
     }
 
+    /// Runtime 原始输入：显式写入 PTY，不追加回车，也不做用户编辑镜像更新。
+    ///
+    /// 代次与存活校验由调用方在命令前完成；worker 仍会拒绝已退出进程。
+    pub(crate) fn runtime_input(
+        &mut self,
+        bytes: Vec<u8>,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<(), super::registry::RegistryError> {
+        let result = self.send_worker_command(Msg::Input(std::borrow::Cow::Owned(bytes)));
+        if result.is_ok() {
+            self.restart_cursor_blink(cx);
+        }
+        result
+    }
+
     /// 输入后回到底部并请求重绘。
     fn write_input(&mut self, bytes: Vec<u8>, cx: &mut Context<'_, Self>) {
         let preserves_prompt = super::event_mailbox::preserves_native_prompt(&bytes);

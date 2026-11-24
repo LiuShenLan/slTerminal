@@ -762,6 +762,64 @@
         "request"
       ]
     },
+    "MutationParams12": {
+      "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
+      "type": "object",
+      "properties": {
+        "client_id": {
+          "type": "string"
+        },
+        "expected_revision": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "mutation_id": {
+          "type": "string"
+        },
+        "request": {
+          "$ref": "#/$defs/TerminalInputRequest"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "client_id",
+        "mutation_id",
+        "request"
+      ]
+    },
+    "MutationParams13": {
+      "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
+      "type": "object",
+      "properties": {
+        "client_id": {
+          "type": "string"
+        },
+        "expected_revision": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "mutation_id": {
+          "type": "string"
+        },
+        "request": {
+          "$ref": "#/$defs/TerminalExecuteRequest"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "client_id",
+        "mutation_id",
+        "request"
+      ]
+    },
     "MutationParams2": {
       "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
       "type": "object",
@@ -1348,7 +1406,9 @@
         "panel.activate",
         "panel.move",
         "panel.open_settings",
-        "terminal.create"
+        "terminal.create",
+        "terminal.input",
+        "terminal.execute"
       ]
     },
     "RuntimeParams": {
@@ -1398,6 +1458,12 @@
         },
         {
           "$ref": "#/$defs/MutationParams11"
+        },
+        {
+          "$ref": "#/$defs/MutationParams12"
+        },
+        {
+          "$ref": "#/$defs/MutationParams13"
         }
       ]
     },
@@ -1542,6 +1608,52 @@
         }
       },
       "additionalProperties": false
+    },
+    "TerminalExecuteRequest": {
+      "description": "可信 Shell 行执行：只接受单行命令，服务端追加一次回车。",
+      "type": "object",
+      "properties": {
+        "command": {
+          "type": "string"
+        },
+        "generation": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "terminal_id": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "terminal_id",
+        "generation",
+        "command"
+      ]
+    },
+    "TerminalInputRequest": {
+      "description": "原始输入：显式写入 PTY，不追加回车，也不模拟键盘事件。",
+      "type": "object",
+      "properties": {
+        "data": {
+          "type": "string"
+        },
+        "generation": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "terminal_id": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "terminal_id",
+        "generation",
+        "data"
+      ]
     },
     "TerminalResource": {
       "description": "快照中的逻辑终端；不含 PTY、输出或回滚正文。",
