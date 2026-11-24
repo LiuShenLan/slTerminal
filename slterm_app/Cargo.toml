@@ -60,6 +60,7 @@ slterm_runtime_protocol = { path = "../slterm_runtime_protocol" }
 slterm_path = { path = "../slterm_path" }
 slterm_document = { path = "../slterm_document" }
 slterm_agents = { path = "../slterm_agents" }
+slterm_hooks = { path = "../slterm_hooks" }
 # SQLite 仅由 application 持久化适配持有；bundled 固定内嵌实现，backup 用于灾难副本。
 rusqlite = { version = "=0.41.0", features = ["bundled", "backup"] }
 ropey = { version = "=2.0.0-beta.1", default-features = false }

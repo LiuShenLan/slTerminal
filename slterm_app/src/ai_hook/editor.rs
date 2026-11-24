@@ -17,57 +17,12 @@ use crate::i18n::{Message, UiLanguage};
 
 use super::CLAUDE_EVENTS;
 
-/// 事件类型 handler 矩阵(旧栈 hooksConfigGui.ts 语义):校验与表单共用的
-/// 单一类型锚点;字段集合见 [`HookHandlerType::required_fields`]。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum HookHandlerType {
-    Command,
-    Http,
-    McpTool,
-    Prompt,
-    Agent,
-}
-
-impl HookHandlerType {
-    pub(crate) const ALL: [Self; 5] = [
-        Self::Command,
-        Self::Http,
-        Self::McpTool,
-        Self::Prompt,
-        Self::Agent,
-    ];
-
-    pub(crate) const fn as_str(self) -> &'static str {
-        match self {
-            Self::Command => "command",
-            Self::Http => "http",
-            Self::McpTool => "mcp_tool",
-            Self::Prompt => "prompt",
-            Self::Agent => "agent",
-        }
-    }
-
-    pub(crate) fn parse_type(value: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|kind| kind.as_str() == value)
-    }
-
-    /// 每型必填字段(非空字符串)。
-    pub(crate) const fn required_fields(self) -> &'static [&'static str] {
-        match self {
-            Self::Command => &["command"],
-            Self::Http => &["url"],
-            Self::McpTool => &["server", "tool"],
-            Self::Prompt | Self::Agent => &["prompt"],
-        }
-    }
-}
-
-/// 编辑器可选事件(与安装器订阅白名单同源;静态存储保证借用期)。
-static EDITOR_EVENTS: [&str; CLAUDE_EVENTS.len()] = CLAUDE_EVENTS;
+/// handler 矩阵单源在 `slterm_hooks`；校验与表单共用同一类型锚点。
+pub(crate) use slterm_hooks::HookHandlerType;
 
 /// 编辑器可选事件(与安装器订阅白名单同源)。
 pub(crate) fn hook_events() -> &'static [&'static str] {
-    &EDITOR_EVENTS
+    &CLAUDE_EVENTS
 }
 
 /// 结构化表单字段(文本输入或布尔开关);键名与 hooks JSON 一致。
@@ -489,7 +444,7 @@ fn validate_editable(hooks: &Value) -> Result<(), String> {
                 let Some(kind) = handler
                     .get("type")
                     .and_then(Value::as_str)
-                    .and_then(HookHandlerType::parse_type)
+                    .and_then(HookHandlerType::parse)
                 else {
                     let allowed = HookHandlerType::ALL
                         .iter()

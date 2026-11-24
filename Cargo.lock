@@ -6715,6 +6715,7 @@ dependencies = [
  "slterm_agents",
  "slterm_completions",
  "slterm_document",
+ "slterm_hooks",
  "slterm_path",
  "slterm_runtime_protocol",
  "slterm_sidebar",

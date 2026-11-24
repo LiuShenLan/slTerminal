@@ -113,20 +113,8 @@ fn is_helper_shell_command(command: &str, source: &str) -> bool {
 /// 重解析整行——那正是上游 #80 炸掉的形态。
 const HELPER_ARGS: [&str; 1] = ["claude"];
 
-/// 我们订阅的 claude hook 事件。会话边界携带 resume/fork 需要的 id;
-/// PostToolUse 让过期的权限状态在整个回合完成之前就能回到 working。
-const CLAUDE_EVENTS: [&str; 10] = [
-    "SessionStart",
-    "UserPromptSubmit",
-    "Notification",
-    "PermissionRequest",
-    "PreToolUse",
-    "PostToolUse",
-    "PostToolUseFailure",
-    "Stop",
-    "StopFailure",
-    "SessionEnd",
-];
+/// 我们订阅的 claude hook 事件；白名单单源在 `slterm_hooks`。
+pub(crate) use slterm_hooks::CLAUDE_EVENTS;
 
 /// 卸载器入口(`setup-ai --remove`):移除全部 AI CLI 的 hook 注入。
 pub(crate) use local::settings::remove_all as remove_all_hooks;

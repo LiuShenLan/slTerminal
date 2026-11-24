@@ -7,43 +7,43 @@
 /// CLI hooks 事件封闭集合；GUI、schema、保存校验与注入识别共用本目录。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum HookEvent {
+    SessionStart,
+    UserPromptSubmit,
+    Notification,
+    PermissionRequest,
     PreToolUse,
     PostToolUse,
-    PermissionRequest,
-    Notification,
-    UserPromptSubmit,
+    PostToolUseFailure,
     Stop,
-    SubagentStop,
-    PreCompact,
-    SessionStart,
+    StopFailure,
     SessionEnd,
 }
 
 impl HookEvent {
     pub const ALL: [Self; 10] = [
+        Self::SessionStart,
+        Self::UserPromptSubmit,
+        Self::Notification,
+        Self::PermissionRequest,
         Self::PreToolUse,
         Self::PostToolUse,
-        Self::PermissionRequest,
-        Self::Notification,
-        Self::UserPromptSubmit,
+        Self::PostToolUseFailure,
         Self::Stop,
-        Self::SubagentStop,
-        Self::PreCompact,
-        Self::SessionStart,
+        Self::StopFailure,
         Self::SessionEnd,
     ];
 
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::SessionStart => "SessionStart",
+            Self::UserPromptSubmit => "UserPromptSubmit",
+            Self::Notification => "Notification",
+            Self::PermissionRequest => "PermissionRequest",
             Self::PreToolUse => "PreToolUse",
             Self::PostToolUse => "PostToolUse",
-            Self::PermissionRequest => "PermissionRequest",
-            Self::Notification => "Notification",
-            Self::UserPromptSubmit => "UserPromptSubmit",
+            Self::PostToolUseFailure => "PostToolUseFailure",
             Self::Stop => "Stop",
-            Self::SubagentStop => "SubagentStop",
-            Self::PreCompact => "PreCompact",
-            Self::SessionStart => "SessionStart",
+            Self::StopFailure => "StopFailure",
             Self::SessionEnd => "SessionEnd",
         }
     }
@@ -57,25 +57,43 @@ impl HookEvent {
     pub const fn supports_matcher(self) -> bool {
         matches!(
             self,
-            Self::PreToolUse | Self::PostToolUse | Self::PermissionRequest
+            Self::PreToolUse
+                | Self::PostToolUse
+                | Self::PostToolUseFailure
+                | Self::PermissionRequest
         )
     }
 
     /// 事件声明的 payload 字段；GUI 与 schema 只认该集合。
     pub const fn fields(self) -> &'static [&'static str] {
         match self {
-            Self::PreToolUse => &["tool_name", "tool_input", "tool_use_id"],
+            Self::PreToolUse | Self::PermissionRequest => {
+                &["tool_name", "tool_input", "tool_use_id"]
+            }
             Self::PostToolUse => &["tool_name", "tool_input", "tool_response", "tool_use_id"],
-            Self::PermissionRequest => &["tool_name", "tool_input", "tool_use_id"],
+            Self::PostToolUseFailure => &["tool_name", "tool_input", "error", "tool_use_id"],
             Self::Notification => &["message", "title"],
             Self::UserPromptSubmit => &["prompt"],
-            Self::Stop | Self::SubagentStop => &["stop_hook_active"],
-            Self::PreCompact => &["trigger", "custom_instructions"],
+            Self::Stop | Self::StopFailure => &["stop_hook_active"],
             Self::SessionStart => &["source"],
             Self::SessionEnd => &["reason"],
         }
     }
 }
+
+/// 安装器订阅的 Claude 事件白名单；注入器与编辑器共用同一顺序。
+pub const CLAUDE_EVENTS: [&str; 10] = [
+    HookEvent::SessionStart.as_str(),
+    HookEvent::UserPromptSubmit.as_str(),
+    HookEvent::Notification.as_str(),
+    HookEvent::PermissionRequest.as_str(),
+    HookEvent::PreToolUse.as_str(),
+    HookEvent::PostToolUse.as_str(),
+    HookEvent::PostToolUseFailure.as_str(),
+    HookEvent::Stop.as_str(),
+    HookEvent::StopFailure.as_str(),
+    HookEvent::SessionEnd.as_str(),
+];
 
 /// handler 类型封闭集合；目录之外的类型一律拒绝保存。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -111,6 +129,16 @@ impl HookHandlerType {
             .into_iter()
             .find(|handler| handler.as_str() == value)
     }
+
+    /// 保存校验与表单共用的必填字段矩阵。
+    pub const fn required_fields(self) -> &'static [&'static str] {
+        match self {
+            Self::Command => &["command"],
+            Self::Http => &["url"],
+            Self::McpTool => &["server", "tool"],
+            Self::Prompt | Self::Agent => &["prompt"],
+        }
+    }
 }
 
 /// 托管标识值：版本化，只由注入器写入 marker 字段。
@@ -139,13 +167,24 @@ mod tests {
         assert_eq!(HookEvent::parse("stop"), None, "事件名大小写严格");
     }
 
-    /// handler 类型目录封闭且名称唯一。
+    /// Claude 订阅白名单与事件目录同源且顺序固定。
+    #[test]
+    fn claude_events_derive_from_catalog() {
+        assert_eq!(CLAUDE_EVENTS.len(), HookEvent::ALL.len());
+        for name in CLAUDE_EVENTS {
+            assert!(HookEvent::parse(name).is_some(), "{name} 不在事件目录");
+        }
+        assert_eq!(CLAUDE_EVENTS[0], "SessionStart", "安装器事件顺序不得漂移");
+    }
+
+    /// handler 类型目录封闭且名称唯一；必填字段来自同一矩阵。
     #[test]
     fn hook_handler_types_are_closed() {
         let mut names = std::collections::HashSet::new();
         for handler in HookHandlerType::ALL {
             assert!(names.insert(handler.as_str()));
             assert_eq!(HookHandlerType::parse(handler.as_str()), Some(handler));
+            assert!(!handler.required_fields().is_empty());
         }
         assert_eq!(names.len(), 5);
         assert_eq!(HookHandlerType::parse("shell"), None);
@@ -157,7 +196,10 @@ mod tests {
         for event in HookEvent::ALL {
             let expected = matches!(
                 event,
-                HookEvent::PreToolUse | HookEvent::PostToolUse | HookEvent::PermissionRequest
+                HookEvent::PreToolUse
+                    | HookEvent::PostToolUse
+                    | HookEvent::PostToolUseFailure
+                    | HookEvent::PermissionRequest
             );
             assert_eq!(event.supports_matcher(), expected, "{event:?}");
         }
