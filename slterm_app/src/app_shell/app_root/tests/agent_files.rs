@@ -203,3 +203,71 @@ fn agent_files_view_state_restore(cx: &mut TestAppContext) {
         );
     });
 }
+
+#[gpui::test]
+fn agent_files_open_reuses_document(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let project_root = temp.path().join("agent-project");
+    std::fs::create_dir_all(&project_root).unwrap();
+    std::fs::write(project_root.join("note.txt"), "one\ntwo\n").unwrap();
+    std::fs::write(project_root.join("other.txt"), "other\n").unwrap();
+    let (root, mut window, _) = open_root(cx);
+    add_project(
+        &root,
+        &mut window,
+        PROJECT_A,
+        project_root.to_str().unwrap(),
+    );
+    let file =
+        CanonicalPath::new(dunce::canonicalize(project_root.join("note.txt")).unwrap()).unwrap();
+    super::documents::open_document(&root, &mut window, PROJECT_A, GROUP_A, file.clone());
+    root.update(cx, |root, _| {
+        root.replace_agent_global_dirs_for_test(agent_dirs(&project_root, &project_root));
+    });
+
+    let view = open_agent_files(&root, &mut window, cx);
+    window.run_until_parked();
+    draw_frame(&mut window);
+    window.run_until_parked();
+    let other =
+        CanonicalPath::new(dunce::canonicalize(project_root.join("other.txt")).unwrap()).unwrap();
+    window.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.agent_files_open_at(&other, window, cx);
+        });
+    });
+    window.run_until_parked();
+    draw_frame(&mut window);
+    window.run_until_parked();
+    root.read_with(cx, |root, _| {
+        assert_eq!(
+            root.documents.len(),
+            2,
+            "Agent 树打开必须真实经过统一打开链"
+        );
+    });
+
+    window.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.agent_files_open_at(&file, window, cx);
+        });
+    });
+    window.run_until_parked();
+    draw_frame(&mut window);
+    window.run_until_parked();
+
+    root.read_with(cx, |root, cx| {
+        assert_eq!(
+            root.documents.len(),
+            2,
+            "再次打开同一文件不得新建第二份 Document"
+        );
+        let project = root.projects[&project_id(PROJECT_A)].read(cx);
+        let note_views = project
+            .panels
+            .values()
+            .filter(|panel| panel.editor().is_some())
+            .count();
+        assert_eq!(note_views, 2, "两个文件各一个编辑器，note 不得重复");
+    });
+}

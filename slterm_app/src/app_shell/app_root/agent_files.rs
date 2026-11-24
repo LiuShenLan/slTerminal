@@ -8,8 +8,9 @@ use std::io;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    Context, InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, ScrollHandle,
-    StatefulInteractiveElement as _, Styled as _, Task, div, px,
+    AppContext as _, Context, InteractiveElement as _, IntoElement, MouseButton,
+    ParentElement as _, ScrollHandle, StatefulInteractiveElement as _, Styled as _, Task, Window,
+    div, px,
 };
 use gpui_component::ActiveTheme as _;
 use slterm_path::CanonicalPath;
@@ -327,8 +328,12 @@ pub(super) fn render_agent_files(
                     })
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(move |view, _, _, cx| {
-                            view.agent_files_activate_path(&path, cx);
+                        cx.listener(move |view, event: &gpui::MouseDownEvent, window, cx| {
+                            if event.click_count >= 2 {
+                                view.agent_files_open_at(&path, window, cx);
+                            } else {
+                                view.agent_files_activate_path(&path, cx);
+                            }
                         }),
                     )
                     .child(label),
@@ -560,6 +565,36 @@ impl SideView {
         cx.notify();
     }
 
+    /// 文件行打开：只对文件生效，意图在广播结束后由 AppRoot 统一打开。
+    pub(super) fn agent_files_open_at(
+        &mut self,
+        path: &CanonicalPath,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(runtime) = &self.agent_files else {
+            return;
+        };
+        let Some(root) = runtime.root_for_path(path) else {
+            return;
+        };
+        if root.tree.kind_of(path) != Some(FileTreeEntryKind::File) {
+            return;
+        }
+        let Some(root_handle) = self.root_handle.clone() else {
+            return;
+        };
+        let path = path.clone();
+        let window_handle = window.window_handle();
+        cx.defer(move |cx| {
+            let _ = window_handle.update(cx, |_, window, cx| {
+                let _ = root_handle.update(cx, |root, cx| {
+                    root.handle_agent_files_open(path, window, cx);
+                });
+            });
+        });
+    }
+
     pub(super) fn agent_files_activate_path(
         &mut self,
         path: &CanonicalPath,
@@ -643,6 +678,27 @@ impl SideView {
 }
 
 impl AppRoot {
+    /// Agent 树文件打开：活跃项目聚焦组 + 统一 Document 打开链。
+    pub(super) fn handle_agent_files_open(
+        &mut self,
+        path: CanonicalPath,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(project_id) = self.snapshot.registry().active() else {
+            return;
+        };
+        let target_group = match self.focused_group(project_id, cx) {
+            Ok(group) => group,
+            Err(_) => return,
+        };
+        let request = match self.prepare_document_open(project_id, target_group, path, false) {
+            Ok(request) => request,
+            Err(_) => return,
+        };
+        self.queue_document_open(request, None, window, cx);
+    }
+
     /// 视图打开/根同步：安装运行态并交给视图自行读取。
     pub(super) fn sync_agent_files_roots(&mut self, cx: &mut Context<'_, Self>) {
         let roots = self.agent_files_roots();
