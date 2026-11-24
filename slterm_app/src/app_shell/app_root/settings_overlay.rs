@@ -17,7 +17,7 @@ use gpui_component::ActiveTheme as _;
 use gpui_component::input::{Input, InputEvent, InputState};
 use slterm_settings::SettingsRegistry;
 use slterm_settings::json::Value;
-use slterm_workspace::{PanelGroupId, ViewKey};
+use slterm_workspace::{PanelGroupId, ProjectId, ViewKey};
 
 use super::AppRoot;
 use super::commands::AppRootError;
@@ -36,7 +36,7 @@ pub(super) struct SettingsView {
     view_key: ViewKey,
     view_states: Option<SettingsViewStateStore>,
     /// 字段修改统一交给 AppRoot：运行值、写队列、热应用与副作用单点。
-    root: WeakEntity<AppRoot>,
+    pub(super) root: WeakEntity<AppRoot>,
     /// 文本／颜色字段的输入实体按字段键缓存，跨页切换保留未提交编辑。
     inputs: BTreeMap<&'static str, Entity<InputState>>,
     /// 仅用于保持 InputState 订阅存活，不直接读取。
@@ -124,6 +124,10 @@ impl SettingsView {
         ViewKey::AppSettingsOverlay
     }
 
+    pub(super) const fn current_page(&self) -> SettingsPageId {
+        self.selected_page
+    }
+
     #[cfg(all(test, feature = "gpui-test-support"))]
     pub(super) const fn selected_page_for_test(&self) -> SettingsPageId {
         self.selected_page
@@ -134,6 +138,12 @@ impl SettingsView {
             return;
         }
         self.selected_page = page;
+        // AgentHooks 页首次进入才探测安装状态：探测是阻塞 I/O，只在后台执行。
+        if page == SettingsPageId::AgentHooks
+            && let Some(root) = self.root.upgrade()
+        {
+            root.update(cx, |root, cx| root.request_agent_hooks_inspect(cx));
+        }
         if let Some(store) = &self.view_states {
             // 声明式页内参数随页面保留；选中页是唯一可变的持久事实。
             let params = store
@@ -202,6 +212,9 @@ impl SettingsView {
     }
 
     fn render_page(&mut self, cx: &mut Context<'_, Self>) -> AnyElement {
+        if self.selected_page == SettingsPageId::AgentHooks {
+            return super::settings_agents::render_agent_hooks_page(self, cx);
+        }
         let values = self.field_values(cx);
         let mut children: Vec<AnyElement> = Vec::new();
         let mut current_section = None;
@@ -697,6 +710,7 @@ impl AppRoot {
             },
         )?;
         self.commit_project_snapshot(candidate, cx);
+        self.request_agent_hooks_if_selected(project_id, cx);
         cx.notify();
         Ok(())
     }
@@ -745,12 +759,16 @@ impl AppRoot {
                 }
             }
         });
+        let restored_page = view.read(cx).current_page();
         self.settings_overlay = Some(SettingsOverlayHost {
             view,
             registration,
             return_focus,
             _close: close,
         });
+        if restored_page == SettingsPageId::AgentHooks {
+            self.request_agent_hooks_inspect(cx);
+        }
         cx.notify();
         Ok(())
     }
@@ -817,7 +835,7 @@ impl AppRoot {
     }
 
     /// 运行值 → 全局设置快照 + 主题/语言/托盘/后台任务即时生效。
-    fn reload_settings_snapshot(&mut self, cx: &mut Context<'_, Self>) {
+    pub(super) fn reload_settings_snapshot(&mut self, cx: &mut Context<'_, Self>) {
         let runtime = self.settings.runtime();
         let settings = crate::app_shell::config::Settings::from_runtime(&runtime);
         let language = settings.language;
@@ -864,6 +882,30 @@ impl AppRoot {
             // 注册失败时恢复在途标记，下一节拍重试同一批快照。
             self.settings.abort_save();
             log::warn!("设置保存任务注册失败: {error:?}");
+        }
+    }
+
+    /// 恢复或新建的项目设置面板若停在 AgentHooks 页，打开即探测安装状态。
+    pub(super) fn request_agent_hooks_if_selected(
+        &mut self,
+        project_id: ProjectId,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let view = self.projects.get(&project_id).and_then(|project| {
+            project
+                .read(cx)
+                .panels
+                .values()
+                .find_map(|panel| match &panel.content {
+                    PanelContent::Settings(view) => Some(view.clone()),
+                    _ => None,
+                })
+        });
+        let Some(view) = view else {
+            return;
+        };
+        if view.read(cx).current_page() == SettingsPageId::AgentHooks {
+            self.request_agent_hooks_inspect(cx);
         }
     }
 

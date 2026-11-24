@@ -28,6 +28,7 @@ mod project_close;
 mod project_view;
 mod projects;
 mod render;
+mod settings_agents;
 mod settings_controls;
 mod settings_overlay;
 mod side_view;
@@ -174,6 +175,14 @@ pub(crate) struct AppRootServices {
 }
 
 /// 单窗口运行根；`projects` 只是强实体引用表，不复制项目注册信息。
+/// 测试注入的 AgentHooks 探测端口；生产恒走后台真实探测。
+#[cfg(test)]
+type AgentHooksInspectPort = fn() -> Vec<crate::ai_hook::integrations::AgentIntegration>;
+
+/// 测试注入的 hook 安装端口；生产恒走后台真实安装。
+#[cfg(test)]
+type AgentHookApplyPort = fn(slterm_settings::AgentHook, bool) -> Result<(), String>;
+
 pub(crate) struct AppRoot {
     snapshot: ProjectSnapshot,
     snapshot_generation: u64,
@@ -271,8 +280,16 @@ pub(crate) struct AppRoot {
     /// Hooks 草稿只按「面板实例＋CLI＋层级」隔离存活；项目移除与根重定位前守卫。
     hook_drafts: crate::ai_hook::draft_host::HooksDraftHost,
     /// 设置运行值与唯一写队列：项目 Settings 与无项目浮层共享。
-    #[allow(dead_code)] // 消费点归设置中心视图。
     settings: crate::settings_state::SettingsStore,
+    /// AgentHooks 页的安装状态快照；None = 尚未探测。
+    agent_integrations: Option<Vec<crate::ai_hook::integrations::AgentIntegration>>,
+    agent_hooks_inspecting: bool,
+    /// 安装/卸载失败的脱敏标记；成功后清除。
+    agent_hooks_error: bool,
+    #[cfg(test)]
+    agent_hooks_inspect_for_test: Option<AgentHooksInspectPort>,
+    #[cfg(test)]
+    agent_hook_apply_for_test: Option<AgentHookApplyPort>,
     learning: crate::learning::LearningService,
     launcher: Box<dyn TerminalPanelLauncher>,
     project_paths: Arc<dyn ProjectPathResolver>,
@@ -511,6 +528,13 @@ impl AppRoot {
             settings: crate::settings_state::SettingsStore::new(
                 crate::settings_store::load_raw_settings_lenient(),
             ),
+            agent_integrations: None,
+            agent_hooks_inspecting: false,
+            agent_hooks_error: false,
+            #[cfg(test)]
+            agent_hooks_inspect_for_test: None,
+            #[cfg(test)]
+            agent_hook_apply_for_test: None,
             learning: crate::learning::LearningService::memory_only(),
             launcher,
             project_paths: Arc::new(SystemProjectPathResolver),

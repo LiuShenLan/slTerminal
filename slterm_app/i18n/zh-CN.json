@@ -314,6 +314,8 @@
       "failed": "钩子操作失败：{error}",
       "confirm_statusline": "确认并重试",
       "restart": "更改钩子安装后请重启对应 CLI。",
+      "apply_failed": "钩子安装失败，请查看日志中的脱敏类别。",
+      "refresh_state": "刷新钩子状态",
       "editor_group": "Hooks 配置",
       "editor_description": "仅你的自有 handler 可编辑；slTerminal 安装的分组只读，保存时原样保留。",
       "editor_owned": "安装器维护分组（只读）：{count}",

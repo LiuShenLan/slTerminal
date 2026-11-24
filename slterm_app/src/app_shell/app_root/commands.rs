@@ -536,8 +536,9 @@ impl AppRoot {
                             (super::panel_host::PanelContent::Settings(settings), focus)
                         },
                     );
-                    if let Err(error) = result {
-                        log::warn!("恢复设置面板失败: {error}");
+                    match result {
+                        Ok(_panel) => self.request_agent_hooks_if_selected(project_id, cx),
+                        Err(error) => log::warn!("恢复设置面板失败: {error}"),
                     }
                 }
                 ViewKey::GitShow {

@@ -35,6 +35,10 @@ pub(crate) enum TaskId {
     CommitRollback,
     CommitDelete,
     AgentRootsLoad,
+    /// 设置页 AgentHooks 页的安装状态后台探测。
+    AgentHooksInspect,
+    /// 单个 agent 的 hook 安装/卸载后台执行。
+    AgentHookApply(slterm_settings::AgentHook),
     #[allow(dead_code)] // 消费点归 Diff 固定 HEAD 后台读取。
     DiffHead(slterm_workspace::PanelId),
     MarkdownLink(uuid::Uuid),

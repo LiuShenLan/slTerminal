@@ -314,6 +314,8 @@
       "failed": "Hook operation failed: {error}",
       "confirm_statusline": "Confirm and retry",
       "restart": "Restart the CLI after changing hook installation.",
+      "apply_failed": "Hook installation failed; see logs for the redacted category.",
+      "refresh_state": "Refresh hook status",
       "editor_group": "Hooks configuration",
       "editor_description": "Only your own handlers are editable. Groups installed by slTerminal are read-only and survive saves unchanged.",
       "editor_owned": "Installer-managed groups (read-only): {count}",

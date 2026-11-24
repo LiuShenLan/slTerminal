@@ -306,6 +306,86 @@ fn settings_overlay_controls_write_runtime_values_and_queue(cx: &mut TestAppCont
     assert_eq!(runtime_speed, global_speed, "全局快照必须与运行值同源");
 }
 
+/// AgentHooks 页：状态快照与授权开关只经注入端口，不触碰真实用户配置。
+#[gpui::test]
+fn agent_hooks_page_renders_status_and_toggles_through_injected_ports(cx: &mut TestAppContext) {
+    static APPLIED: std::sync::Mutex<Vec<(slterm_settings::AgentHook, bool)>> =
+        std::sync::Mutex::new(Vec::new());
+    fn inspect() -> Vec<crate::ai_hook::integrations::AgentIntegration> {
+        use crate::ai_hook::integrations::{AgentIntegration, HookInspection};
+        vec![
+            AgentIntegration {
+                agent: slterm_settings::AgentHook::Claude,
+                executable: Some(std::path::PathBuf::from("claude")),
+                inspection: HookInspection {
+                    available: true,
+                    installed: true,
+                    enabled: true,
+                    ..HookInspection::default()
+                },
+            },
+            AgentIntegration {
+                agent: slterm_settings::AgentHook::Codex,
+                executable: None,
+                inspection: HookInspection::default(),
+            },
+        ]
+    }
+    fn apply(hook: slterm_settings::AgentHook, enabled: bool) -> Result<(), String> {
+        APPLIED.lock().unwrap().push((hook, enabled));
+        Ok(())
+    }
+    APPLIED.lock().unwrap().clear();
+
+    let (root, mut window, _state) = open_root(cx);
+    root.update(cx, |root, _| {
+        root.replace_agent_hooks_for_test(inspect, apply)
+    });
+    focus_workspace(&root, &mut window);
+    open_settings(&mut window);
+    draw_frame(&mut window);
+
+    let page = window.debug_bounds("settings-page-5").unwrap();
+    window.simulate_click(page.center(), Modifiers::default());
+    draw_frame(&mut window);
+    for slug in ["claude", "codex"] {
+        assert!(
+            window
+                .debug_bounds(Box::leak(format!("settings-agent-{slug}").into_boxed_str()))
+                .is_some(),
+            "AgentHooks 页必须渲染 {slug} 行"
+        );
+        assert!(
+            window
+                .debug_bounds(Box::leak(
+                    format!("settings-agent-{slug}-state").into_boxed_str()
+                ))
+                .is_some(),
+            "AgentHooks 页必须渲染 {slug} 状态"
+        );
+    }
+
+    let toggle = window.debug_bounds("settings-agent-claude-toggle").unwrap();
+    window.simulate_click(toggle.center(), Modifiers::default());
+    draw_frame(&mut window);
+
+    assert_eq!(
+        APPLIED.lock().unwrap().as_slice(),
+        [(slterm_settings::AgentHook::Claude, false)],
+        "开关必须经注入的安装端口执行一次卸载"
+    );
+    root.read_with(cx, |root, _| {
+        assert_eq!(root.settings.pending_len(), 1, "显式字段必须立即入队");
+        assert_eq!(
+            root.settings
+                .values()
+                .bool_on(slterm_settings::AgentHook::Claude.settings_key()),
+            Some(false),
+            "授权键必须写入显式设置值"
+        );
+    });
+}
+
 fn open_settings(window: &mut VisualTestContext) {
     window.simulate_keystrokes("ctrl-,");
     draw_frame(window);
