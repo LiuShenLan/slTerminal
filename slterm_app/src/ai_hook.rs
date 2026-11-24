@@ -204,3 +204,58 @@ mod hook_commit_tests {
         );
     }
 }
+
+/// Hooks 草稿写前重读结论。
+///
+/// 只有基线（草稿进入编辑时观察到的文件指纹）与当前指纹一致才允许写入；
+/// 外部修改、删除或外部新建都保留草稿并要求重新加载，绝不自动合并。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DraftWriteGuard {
+    Write,
+    ExternalModified,
+}
+
+/// 指纹为文件内容 SHA-256；`None` 表示文件不存在。
+pub(crate) fn draft_write_guard(
+    baseline: Option<[u8; 32]>,
+    current: Option<[u8; 32]>,
+) -> DraftWriteGuard {
+    if baseline == current {
+        DraftWriteGuard::Write
+    } else {
+        DraftWriteGuard::ExternalModified
+    }
+}
+
+#[cfg(test)]
+mod draft_guard_tests {
+    use super::{DraftWriteGuard, draft_write_guard};
+
+    /// 写前重读：基线缺失、外部新建、修改与删除都拒绝写入并保留草稿。
+    #[test]
+    fn hooks_external_modification_guard() {
+        let a = [0x11_u8; 32];
+        let b = [0x22_u8; 32];
+        assert_eq!(
+            draft_write_guard(None, None),
+            DraftWriteGuard::Write,
+            "文件不存在时按空配置创建"
+        );
+        assert_eq!(draft_write_guard(Some(a), Some(a)), DraftWriteGuard::Write);
+        assert_eq!(
+            draft_write_guard(Some(a), Some(b)),
+            DraftWriteGuard::ExternalModified,
+            "外部修改必须保留草稿"
+        );
+        assert_eq!(
+            draft_write_guard(Some(a), None),
+            DraftWriteGuard::ExternalModified,
+            "外部删除必须保留草稿"
+        );
+        assert_eq!(
+            draft_write_guard(None, Some(a)),
+            DraftWriteGuard::ExternalModified,
+            "外部新建不得被覆盖"
+        );
+    }
+}
