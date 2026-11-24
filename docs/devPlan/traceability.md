@@ -272,7 +272,7 @@
 | 导航移除项目经统一守卫与删除意图 | `navigation_project_remove_uses_workspace_guard` | 已自动化 |
 | 根重定位检查冲突与 Hooks 且保持既有 PTY cwd | `navigation_relocation_guards_and_reassigns_history` | 待实现 |
 | 嵌套或暂不可访问根仍按词法最深匹配归属 | `navigation_history_lexical_deepest_match` | 已自动化 |
-| 未归属历史恢复新项目前先确认目标根 | `navigation_unowned_restore_requires_project_confirmation` | 待实现 |
+| 未归属历史恢复新项目前先确认目标根 | `navigation_unowned_restore_requires_project_confirmation` | 已自动化 |
 | 历史 cwd 失效可回退且注入失败不重复建终端 | `navigation_restore_fallback_and_injection_retry` | 已自动化 |
 | 连续删除的隔离批次期限彼此独立 | `quarantine_batches_have_independent_deadlines` | 已自动化 |
 | 撤销点击时重新检查绝对期限与批次状态 | `quarantine_undo_rechecks_deadline` | 已自动化 |

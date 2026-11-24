@@ -69,6 +69,27 @@ pub(super) fn restore_injection_timeout(shell: RestoreShell) -> std::time::Durat
     }
 }
 
+/// 历史恢复的项目落点：未归属时必须先展示目标根并取得交互确认。
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(dead_code)] // 消费点归历史恢复任务与导航视图。
+pub(super) enum RestoreProject {
+    /// 已词法归属既有项目，直接复用。
+    Reuse(ProjectId),
+    /// 未归属：确认前不得创建项目；Runtime 无隐式创建分支。
+    RequiresConfirmation(CanonicalPath),
+}
+
+#[allow(dead_code)] // 消费点归历史恢复任务与导航视图。
+pub(super) fn resolve_restore_project(
+    attributed: Option<ProjectId>,
+    unowned_root: &CanonicalPath,
+) -> RestoreProject {
+    match attributed {
+        Some(project) => RestoreProject::Reuse(project),
+        None => RestoreProject::RequiresConfirmation(unowned_root.clone()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
@@ -83,6 +104,25 @@ mod tests {
 
     fn path(text: &str) -> CanonicalPath {
         CanonicalPath::new(text).unwrap()
+    }
+
+    /// 未归属历史必须先确认目标根；已归属直接复用，不隐式创建项目。
+    #[test]
+    fn navigation_unowned_restore_requires_project_confirmation() {
+        use super::{RestoreProject, resolve_restore_project};
+
+        let project = project("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0b2a");
+        let root = path("C:/work/unknown");
+        assert_eq!(
+            resolve_restore_project(Some(project), &root),
+            RestoreProject::Reuse(project),
+            "已归属历史直接复用既有项目"
+        );
+        assert_eq!(
+            resolve_restore_project(None, &root),
+            RestoreProject::RequiresConfirmation(root.clone()),
+            "未归属历史必须先确认目标根"
+        );
     }
 
     /// cwd 失效回退项目根、项目根失效才失败；注入超时按 Shell 类型且只一次。
