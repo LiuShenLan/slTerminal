@@ -5,7 +5,10 @@
 
 use serde::de::{self, MapAccess, SeqAccess, Visitor};
 use serde_json::{Map, Value};
+use sha2::{Digest as _, Sha256};
 use std::fmt;
+use std::io;
+use std::path::Path;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum DraftParseError {
@@ -40,6 +43,41 @@ pub(crate) fn parse_hooks_json(text: &str) -> Result<Value, DraftParseError> {
 pub(crate) fn parse_hooks_bytes(bytes: &[u8]) -> Result<Value, DraftParseError> {
     let text = std::str::from_utf8(bytes).map_err(|_| DraftParseError::InvalidUtf8)?;
     parse_hooks_json(text)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DraftSaveOutcome {
+    /// 已原子写入；调用方用新基线替换草稿基线并清除草稿。
+    Saved { baseline: [u8; 32] },
+    /// 外部修改（含外部删除）：零写入，草稿与文件均保持原样供用户重载或显式覆盖。
+    ExternalModified,
+}
+
+/// 保存前重读完整文件并比较基线指纹，一致才原子写入。
+///
+/// 权限与锁失败按 `Err` 传播，不折成 [`DraftSaveOutcome::ExternalModified`]；
+/// 不做自动合并或覆盖，也不在外部删除后静默重建文件。
+pub(crate) fn save_hooks_draft(
+    path: &Path,
+    baseline: Option<[u8; 32]>,
+    contents: &[u8],
+) -> io::Result<DraftSaveOutcome> {
+    let current = read_fingerprint(path)?;
+    if super::draft_write_guard(baseline, current) == super::DraftWriteGuard::ExternalModified {
+        return Ok(DraftSaveOutcome::ExternalModified);
+    }
+    crate::atomic_file::write(path, contents)?;
+    Ok(DraftSaveOutcome::Saved {
+        baseline: Sha256::digest(contents).into(),
+    })
+}
+
+fn read_fingerprint(path: &Path) -> io::Result<Option<[u8; 32]>> {
+    match std::fs::read(path) {
+        Ok(bytes) => Ok(Some(Sha256::digest(&bytes).into())),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
 }
 
 fn classify(error: serde_json::Error) -> DraftParseError {
@@ -132,8 +170,59 @@ impl<'de> serde::Deserialize<'de> for StrictWrapped {
 
 #[cfg(test)]
 mod tests {
-    use super::{DraftParseError, parse_hooks_bytes, parse_hooks_json};
+    use super::{
+        DraftParseError, DraftSaveOutcome, parse_hooks_bytes, parse_hooks_json, save_hooks_draft,
+    };
     use serde_json::json;
+    use sha2::{Digest as _, Sha256};
+    use std::fs;
+
+    fn sha(bytes: &[u8]) -> [u8; 32] {
+        Sha256::digest(bytes).into()
+    }
+
+    /// 外部修改后保存必须拒绝且不覆盖文件；外部删除不得被当成空配置重建。
+    #[test]
+    fn hooks_draft_save_refuses_external_modification() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(&path, br#"{"hooks":{}}"#).unwrap();
+        let baseline = Some(sha(br#"{"hooks":{}}"#));
+        fs::write(&path, br#"{"hooks":{},"external":true}"#).unwrap();
+
+        let outcome = save_hooks_draft(&path, baseline, br#"{"hooks":{"Stop":[]}}"#).unwrap();
+        assert!(matches!(outcome, DraftSaveOutcome::ExternalModified));
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            br#"{"hooks":{},"external":true}"#,
+            "外部修改必须原样保留"
+        );
+
+        fs::remove_file(&path).unwrap();
+        let outcome = save_hooks_draft(&path, baseline, br#"{"hooks":{"Stop":[]}}"#).unwrap();
+        assert!(matches!(outcome, DraftSaveOutcome::ExternalModified));
+        assert!(!path.exists(), "被外部删除的文件不得被静默重建");
+    }
+
+    /// 基线一致才写入；成功后返回新基线，首次创建按需建立父目录。
+    #[test]
+    fn hooks_draft_save_writes_only_with_matching_baseline() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested/settings.json");
+        let outcome = save_hooks_draft(&path, None, br#"{"hooks":{"Stop":[]}}"#).unwrap();
+        let DraftSaveOutcome::Saved { baseline } = outcome else {
+            panic!("首次保存应成功: {outcome:?}");
+        };
+        assert_eq!(baseline, sha(br#"{"hooks":{"Stop":[]}}"#));
+
+        let next = br#"{"hooks":{}}"#;
+        let outcome = save_hooks_draft(&path, Some(baseline), next).unwrap();
+        let DraftSaveOutcome::Saved { baseline } = outcome else {
+            panic!("基线一致应写入: {outcome:?}");
+        };
+        assert_eq!(baseline, sha(next));
+        assert_eq!(fs::read(&path).unwrap(), next);
+    }
 
     /// 重复键在任意层级都拒绝，不静默合并为最后值。
     #[test]
