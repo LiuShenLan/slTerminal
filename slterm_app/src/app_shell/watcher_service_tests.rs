@@ -101,3 +101,51 @@ fn watcher_root_replacement_drops_old_path_events() {
     assert!(service.poll(now + Duration::from_millis(200)).is_empty());
     assert_eq!(service.visible_roots(), vec![path("D:/work/new")]);
 }
+
+#[test]
+fn agent_files_visibility_controls_watchers() {
+    use slterm_settings::AgentRootId;
+
+    let agent_root =
+        FileTreeRoot::Agent(AgentRootId::from_str("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2c").unwrap());
+    let now = Instant::now();
+    let mut service = WatcherService::new();
+    service.register(agent_root.clone(), path("D:/agents/work"), true);
+    assert_eq!(service.visible_roots(), vec![path("D:/agents/work")]);
+
+    service.on_path_event(&path("D:/agents/work/a.txt"), now);
+    assert_eq!(
+        service.poll(now + Duration::from_millis(200)),
+        vec![agent_root.clone()],
+        "可见根的事件合并为一次复核"
+    );
+    assert!(
+        service.poll(now + Duration::from_millis(400)).is_empty(),
+        "同一次复核不得重复回填"
+    );
+
+    // 根收起/整个视图不可见：交出可见集合时移除该根，期间事件不累计。
+    service.set_visible(&agent_root, false, now);
+    assert!(service.visible_roots().is_empty());
+    service.on_path_event(
+        &path("D:/agents/work/b.txt"),
+        now + Duration::from_millis(500),
+    );
+    assert!(
+        service.poll(now + Duration::from_millis(10_000)).is_empty(),
+        "不可见根的事件不得形成待复核"
+    );
+
+    // 重新可见只复核一次，随后回到静默。
+    service.set_visible(&agent_root, true, now + Duration::from_millis(20_000));
+    assert_eq!(service.visible_roots(), vec![path("D:/agents/work")]);
+    assert_eq!(
+        service.poll(now + Duration::from_millis(20_000)),
+        vec![agent_root.clone()],
+        "重新可见必须复核一次"
+    );
+    assert!(
+        service.poll(now + Duration::from_millis(30_000)).is_empty(),
+        "复核后不得再产生迟到回填"
+    );
+}

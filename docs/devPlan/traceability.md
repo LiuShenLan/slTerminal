@@ -387,7 +387,7 @@
 | 从 Agent 树打开同一文件仍复用共享 Document | `agent_files_open_reuses_document` | 已自动化 |
 | 展开、当前行和滚动恢复而多选与错误清除 | `agent_files_view_state_restore` | 已自动化 |
 | 根改路径后旧授权与相对视图状态不套用 | `agent_root_path_change_resets_state_and_authorization` | 已自动化 |
-| 不可见或根收起时释放监听且无过期结果回填 | `agent_files_visibility_controls_watchers` | 待实现 |
+| 不可见或根收起时释放监听且无过期结果回填 | `agent_files_visibility_controls_watchers` | 已自动化 |
 
 ### GitShow
 
