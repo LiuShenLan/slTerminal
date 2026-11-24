@@ -70,7 +70,7 @@
 | PathPolicy 能力并集 | [架构](design/architecture.md)、[文件与 Git](design/files-git.md) | `integration_path_capability_union` | 已自动化 |
 | 链接与文件身份 | [架构](design/architecture.md)、[文件与 Git](design/files-git.md)、[Document](design/document.md) | `integration_links_and_file_identity` | 待实现 |
 | 会话级授权恢复 | [生命周期](design/lifecycle.md)、[持久化](design/persistence.md)、[Document](design/document.md) | `integration_session_grant_restore` | 已自动化 |
-| 根重定位 | [工作区](design/workspace.md)、[领域模型](design/domain-model.md)、[文件与 Git](design/files-git.md) | `integration_project_relocation` | 待实现 |
+| 根重定位 | [工作区](design/workspace.md)、[领域模型](design/domain-model.md)、[文件与 Git](design/files-git.md) | `integration_project_relocation` | 已自动化 |
 | 最后引用关闭 | [生命周期](design/lifecycle.md)、[Document](design/document.md) | `integration_last_reference_close` | 已自动化 |
 | 批量关闭 | [生命周期](design/lifecycle.md)、[工作区](design/workspace.md) | `integration_batch_close` | 已自动化 |
 | 项目移除与退出 | [生命周期](design/lifecycle.md)、[工作区](design/workspace.md) | `integration_project_remove_and_exit` | 已自动化 |
@@ -87,7 +87,7 @@
 | 终端搜索 | [终端](design/terminal.md) | `integration_terminal_search` | 已自动化 |
 | Commit 回滚 | [文件与 Git](design/files-git.md) | `integration_commit_rollback` | 待实现 |
 | Git 与 Document | [文件与 Git](design/files-git.md)、[Document](design/document.md) | `integration_git_document` | 已自动化 |
-| 历史删除撤销 | [Agent](design/agents.md)、[生命周期](design/lifecycle.md) | `integration_history_delete_undo` | 待实现 |
+| 历史删除撤销 | [Agent](design/agents.md)、[生命周期](design/lifecycle.md) | `integration_history_delete_undo` | 已自动化 |
 | 套餐凭据 | [Windows](design/windows.md)、[设置与恢复](design/settings-recovery.md) | `integration_plan_credentials` | 待实现 |
 | 套餐调度 | [Windows](design/windows.md)、[生命周期](design/lifecycle.md) | `integration_plan_schedule` | 待实现 |
 | 自定义主题 | [设置与恢复](design/settings-recovery.md) | `integration_custom_theme` | 待实现 |
@@ -168,7 +168,7 @@
 | 根外文件重启后只显示重新授权占位 | `outside_document_restart_requires_authorization` | 已自动化 |
 | 根外快照异常恢复不自动重读磁盘或恢复授权 | `outside_snapshot_restores_without_disk_read` | 已自动化 |
 | 失去读授权后保留内容并停止刷新 | `document_retains_content_after_read_revoke` | 已自动化 |
-| 项目根重定位不改绑既有 Diff 与 GitShow | `repository_binding_survives_project_relocation` | 待实现 |
+| 项目根重定位不改绑既有 Diff 与 GitShow | `repository_binding_survives_project_relocation` | 已自动化 |
 | 真实路径查重失败时保留原项目关系 | `project_realpath_dedupe_failure_preserves_relation`、`project_realpath_resolution_preserves_request_order` | 已自动化 |
 
 ### Diff
@@ -270,7 +270,7 @@
 | 验收场景 | 目标测试例名 | 状态 |
 |---|---|---|
 | 导航移除项目经统一守卫与删除意图 | `navigation_project_remove_uses_workspace_guard` | 已自动化 |
-| 根重定位检查冲突与 Hooks 且保持既有 PTY cwd | `navigation_relocation_guards_and_reassigns_history` | 待实现 |
+| 根重定位检查冲突与 Hooks 且保持既有 PTY cwd | `navigation_relocation_guards_and_reassigns_history` | 已自动化 |
 | 嵌套或暂不可访问根仍按词法最深匹配归属 | `navigation_history_lexical_deepest_match` | 已自动化 |
 | 未归属历史恢复新项目前先确认目标根 | `navigation_unowned_restore_requires_project_confirmation` | 已自动化 |
 | 历史 cwd 失效可回退且注入失败不重复建终端 | `navigation_restore_fallback_and_injection_retry` | 已自动化 |
@@ -278,7 +278,7 @@
 | 撤销点击时重新检查绝对期限与批次状态 | `quarantine_undo_rechecks_deadline` | 已自动化 |
 | 删除后重启仍保留未到期撤销窗口 | `quarantine_restart_preserves_undo_window` | 已自动化 |
 | 完成提交前异常退出先对账来源与副本 | `quarantine_startup_reconciles_incomplete_batch` | 已自动化 |
-| 撤销目标外部新增或修改时不覆盖且保留材料 | `quarantine_undo_rejects_external_target` | 待实现 |
+| 撤销目标外部新增或修改时不覆盖且保留材料 | `quarantine_undo_rejects_external_target` | 已自动化 |
 | 套餐只使用专用 Windows 凭据且材料不含 token | `plan_balance_uses_dedicated_credential` | 已自动化 |
 | 导航隐藏时套餐继续调度且退出后停止 | `plan_balance_runs_while_navigation_hidden` | 已自动化 |
 | 错过完整周期后才标记套餐结果过期 | `plan_balance_stale_after_full_period` | 已自动化 |
@@ -316,7 +316,7 @@
 | 后台周期提交后按新周期运行且隐藏仍查询 | `settings_plan_schedule_commit_and_visibility` | 待实现 |
 | 自定义根真实目录重复拒绝且删除立即撤销授权 | `agent_root_duplicate_and_revocation` | 已自动化 |
 | AgentRoot 默认只读且写与终端分别拒绝 | `agent_root_default_capabilities` | 已自动化 |
-| Hooks 外部修改时不覆盖文件或静默丢草稿 | `hooks_external_modification_guard` | 待实现 |
+| Hooks 外部修改时不覆盖文件或静默丢草稿 | `hooks_external_modification_guard` | 已自动化 |
 | 注入提交后清理失败显示已提交与重试 | `hooks_post_commit_cleanup_failure_is_visible` | 已自动化 |
 | 导入拒绝凭据／高版本且恢复默认不删凭据 Hooks | `settings_import_and_reset_preserve_secrets` | 待实现 |
 
