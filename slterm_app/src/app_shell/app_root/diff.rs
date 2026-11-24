@@ -163,11 +163,17 @@ impl DiffView {
     pub(crate) fn apply_shared_snapshot(
         &mut self,
         session: &slterm_document::DocumentSession,
+        origin: gpui::EntityId,
         cx: &mut Context<'_, Self>,
     ) {
-        self.right
-            .update(cx, |view, cx| view.apply_snapshot(session, cx));
-        self.schedule_diff(cx);
+        if self.right.entity_id() != origin {
+            self.right
+                .update(cx, |view, cx| view.apply_snapshot(session, cx));
+        }
+        let target = cx.entity().downgrade();
+        cx.defer(move |cx| {
+            let _ = target.update(cx, |view, cx| view.schedule_diff(cx));
+        });
         cx.notify();
     }
 

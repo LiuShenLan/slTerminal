@@ -810,12 +810,17 @@ impl DocumentTextView {
             None
         };
         let new_state = TextStateId::from_uuid(Uuid::now_v7()).expect("系统 UUIDv7 必须有效");
+        let merge_policy = if range.start == 0 && range.end == self.text.len() {
+            MergePolicy::Disallowed
+        } else {
+            MergePolicy::Adjacent
+        };
         let transaction = EditTransaction {
             document_id: self.document_id,
             expected_text_revision: self.revision,
             edits: vec![TextEdit::new(range, text)],
             origin: EditOrigin::UserInput,
-            merge_policy: MergePolicy::Adjacent,
+            merge_policy,
         };
         let syntax_transaction = transaction.clone();
         let before = self.text.clone();

@@ -977,7 +977,7 @@ impl AppRoot {
                                 view.apply_shared_edit(&session, transaction, origin, cx);
                             }
                             DocumentEditRequest::Travel { .. } => {
-                                view.apply_shared_snapshot(&session, cx)
+                                view.apply_shared_snapshot(&session, origin, cx)
                             }
                         });
                     }

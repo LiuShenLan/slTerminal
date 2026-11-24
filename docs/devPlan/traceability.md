@@ -86,7 +86,7 @@
 | 本地学习数据 | [终端](design/terminal.md)、[持久化](design/persistence.md) | `integration_local_learning_data` | 已自动化 |
 | 终端搜索 | [终端](design/terminal.md) | `integration_terminal_search` | 已自动化 |
 | Commit 回滚 | [文件与 Git](design/files-git.md) | `integration_commit_rollback` | 待实现 |
-| Git 与 Document | [文件与 Git](design/files-git.md)、[Document](design/document.md) | `integration_git_document` | 待实现 |
+| Git 与 Document | [文件与 Git](design/files-git.md)、[Document](design/document.md) | `integration_git_document` | 已自动化 |
 | 历史删除撤销 | [Agent](design/agents.md)、[生命周期](design/lifecycle.md) | `integration_history_delete_undo` | 待实现 |
 | 套餐凭据 | [Windows](design/windows.md)、[设置与恢复](design/settings-recovery.md) | `integration_plan_credentials` | 待实现 |
 | 套餐调度 | [Windows](design/windows.md)、[生命周期](design/lifecycle.md) | `integration_plan_schedule` | 待实现 |
@@ -180,7 +180,7 @@
 | 从 Commit 打开脏 Document 时直接使用共享文本 | `diff_uses_shared_document_from_commit` | 已自动化 |
 | Diff 工作区编辑在 Editor 与 Markdown 中一致 | `diff_edit_shared_document` | 已自动化 |
 | 根重定位后不读取新仓库同路径 HEAD | `diff_does_not_rebind_after_relocation` | 已自动化 |
-| 根外只读与另一可写根覆盖时仍可保存 | `diff_save_uses_capability_union` | 待实现 |
+| 根外只读与另一可写根覆盖时仍可保存 | `diff_save_uses_capability_union` | 已自动化 |
 | Diff 展示参数恢复且搜索与临时提示清除 | `diff_view_state_restore_clears_transients` | 已自动化 |
 | 冲突快照不随源文本自动更新且不可保存 | `diff_conflict_snapshot_is_immutable` | 已自动化 |
 | 隐藏期间 HEAD 变化重新可见只合并复核 | `diff_hidden_head_refresh_coalesced` | 已自动化 |
@@ -223,7 +223,7 @@
 
 | 验收场景 | 目标测试例名 | 状态 |
 |---|---|---|
-| 跨项目 Editor 与 Diff 共享文本、撤销和冲突 | `document_shared_across_projects` | 待实现 |
+| 跨项目 Editor 与 Diff 共享文本、撤销和冲突 | `document_shared_across_projects` | 已自动化 |
 | 同项目普通视图去重而 Diff 与 GitShow 独立 | `document_duplicate_view_focuses_existing`、`ordinary_open_does_not_deduplicate_diff_or_gitshow` | 已自动化 |
 | 文件跨扩展名改名不自动转换 Panel 类型 | `document_rename_preserves_identity_and_view` | 已自动化 |
 | 另存为已打开目标时拒绝且两个 Document 不变 | `document_save_as_rejects_open_target` | 已自动化 |
