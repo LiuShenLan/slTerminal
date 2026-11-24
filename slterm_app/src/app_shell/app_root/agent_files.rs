@@ -8,8 +8,9 @@ use std::io;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    Context, InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, ScrollHandle,
-    StatefulInteractiveElement as _, Styled as _, Task, Window, div, px,
+    AppContext as _, Context, InteractiveElement as _, IntoElement, MouseButton,
+    ParentElement as _, ScrollHandle, StatefulInteractiveElement as _, Styled as _, Task, Window,
+    div, px,
 };
 use gpui_component::ActiveTheme as _;
 use slterm_path::{CanonicalPath, PathGrant};
@@ -55,6 +56,10 @@ pub(super) struct AgentFilesRuntime {
     restoring_scroll: Option<f64>,
     selected: Option<CanonicalPath>,
     multi_selection: BTreeSet<CanonicalPath>,
+    /// 根层显示过滤：只影响渲染与读取调度，不是授权边界。
+    filter: String,
+    filter_input: Option<gpui::Entity<gpui_component::input::InputState>>,
+    _filter_change: Option<gpui::Subscription>,
     pub(super) scroll_handle: ScrollHandle,
     reading: bool,
     /// 用户动作产生的持久变更；恢复本身不写盘。
@@ -79,6 +84,9 @@ impl AgentFilesRuntime {
             restoring_scroll: None,
             selected: None,
             multi_selection: BTreeSet::new(),
+            filter: String::new(),
+            filter_input: None,
+            _filter_change: None,
             scroll_handle: ScrollHandle::new(),
             reading: false,
             dirty: false,
@@ -174,6 +182,30 @@ impl AgentFilesRuntime {
 
     /// 根标题点击：折叠/展开整根。
     /// 撤销单根：移除模型、在途请求与属于该根的分区状态，选中清空。
+    /// 只匹配根显示名（大小写不敏感）；空过滤显示全部根。
+    pub(super) fn matches_root(&self, root: &AgentFilesRoot) -> bool {
+        let filter = self.filter.trim().to_lowercase();
+        filter.is_empty() || root.display_name.to_lowercase().contains(&filter)
+    }
+
+    pub(super) fn set_filter(&mut self, filter: &str) {
+        self.filter.clear();
+        self.filter.push_str(filter);
+    }
+
+    pub(super) fn filter(&self) -> &str {
+        &self.filter
+    }
+
+    /// 当前显示根的显示名，调试与测试共用。
+    pub(super) fn visible_root_names(&self) -> Vec<String> {
+        self.roots
+            .iter()
+            .filter(|root| self.matches_root(root))
+            .map(|root| root.display_name.clone())
+            .collect()
+    }
+
     pub(super) fn remove_root(&mut self, root_id: AgentRootId) {
         self.roots.retain(|root| root.root_id != root_id);
         self.pending_reads
@@ -267,6 +299,7 @@ pub(super) fn render_agent_files(
     let roots = runtime
         .roots
         .iter()
+        .filter(|root| runtime.matches_root(root))
         .map(|root| {
             (
                 root.root_id,
@@ -399,7 +432,7 @@ impl SideView {
     pub(super) fn agent_files_begin(&mut self, cx: &mut Context<'_, Self>) {
         if let Some(runtime) = &mut self.agent_files {
             for index in 0..runtime.roots.len() {
-                if !runtime.roots[index].expanded {
+                if !runtime.roots[index].expanded || !runtime.matches_root(&runtime.roots[index]) {
                     continue;
                 }
                 let root_id = runtime.roots[index].root_id;
@@ -670,6 +703,61 @@ impl SideView {
         cx.notify();
     }
 
+    /// 根层过滤变化：只重排显示与读取调度，不改变任何授权来源。
+    pub(super) fn agent_files_set_filter(&mut self, filter: &str, cx: &mut Context<'_, Self>) {
+        if let Some(runtime) = &mut self.agent_files {
+            runtime.set_filter(filter);
+        }
+        self.agent_files_begin(cx);
+        cx.notify();
+    }
+
+    fn ensure_agent_files_filter_input(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        if self
+            .agent_files
+            .as_ref()
+            .is_none_or(|runtime| runtime.filter_input.is_some())
+        {
+            return;
+        }
+        let input = cx.new(|cx| gpui_component::input::InputState::new(window, cx));
+        let change = cx.subscribe_in(
+            &input,
+            window,
+            |view, input, event: &gpui_component::input::InputEvent, _, cx| {
+                if matches!(event, gpui_component::input::InputEvent::Change) {
+                    let text = input.read(cx).value().to_string();
+                    view.agent_files_set_filter(&text, cx);
+                }
+            },
+        );
+        if let Some(runtime) = &mut self.agent_files {
+            runtime.filter_input = Some(input);
+            runtime._filter_change = Some(change);
+        }
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(super) fn agent_files_root_status_for_test(
+        &self,
+        root_id: AgentRootId,
+    ) -> Option<DirectoryStatus> {
+        self.agent_files
+            .as_ref()?
+            .roots
+            .iter()
+            .find(|root| root.root_id == root_id)
+            .map(|root| root.tree.directory_status(&root.path))
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(super) fn agent_files_visible_roots_for_test(&self) -> Vec<String> {
+        self.agent_files
+            .as_ref()
+            .map(|runtime| runtime.visible_root_names())
+            .unwrap_or_default()
+    }
+
     /// 关闭/退出共用检查点出口；无用户动作时不写盘。
     pub(super) fn checkpoint_agent_files_state(&mut self) {
         let Some(runtime) = &self.agent_files else {
@@ -799,7 +887,23 @@ impl AppRoot {
     }
 
     /// 视图打开/根同步：安装运行态并交给视图自行读取。
-    pub(super) fn sync_agent_files_roots(&mut self, cx: &mut Context<'_, Self>) {
+    pub(super) fn sync_agent_files_roots(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let roots = self.agent_files_roots();
+        let Some(view) = self.side_views.instance(SideViewId::AgentFiles).cloned() else {
+            return;
+        };
+        view.update(cx, |view, cx| {
+            view.ensure_agent_files_filter_input(window, cx);
+            view.agent_files_sync(roots, cx);
+        });
+    }
+
+    /// 后台根快照回投：只同步根与读取，输入框由下一次带窗口的同步安装。
+    pub(super) fn sync_agent_files_roots_after_load(&mut self, cx: &mut Context<'_, Self>) {
         let roots = self.agent_files_roots();
         let Some(view) = self.side_views.instance(SideViewId::AgentFiles).cloned() else {
             return;
@@ -854,7 +958,7 @@ impl AppRoot {
                             root.agent_global_dirs = Some(dirs);
                             root.custom_agent_roots = roots;
                             root.agent_roots_loaded = true;
-                            root.sync_agent_files_roots(cx);
+                            root.sync_agent_files_roots_after_load(cx);
                             cx.notify();
                         });
                     })

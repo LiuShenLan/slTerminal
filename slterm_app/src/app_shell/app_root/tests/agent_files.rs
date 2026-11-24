@@ -512,7 +512,7 @@ fn agent_root_delete_preserves_document_and_pty(cx: &mut TestAppContext) {
     root.update(cx, |root, _| {
         root.replace_custom_agent_roots_for_test(Vec::new());
     });
-    root.update(cx, |root, cx| root.sync_agent_files_roots(cx));
+    root.update(cx, |root, cx| root.sync_agent_files_roots_after_load(cx));
     window.run_until_parked();
     root.read_with(cx, |root, _| {
         assert_eq!(root.documents.len(), 1, "删除根不得删除 Document");
@@ -535,4 +535,101 @@ fn agent_root_delete_preserves_document_and_pty(cx: &mut TestAppContext) {
         };
         assert_eq!(state.root_expanded(agent_root_id()), None);
     });
+}
+
+#[gpui::test]
+fn agent_files_filter_is_not_authorization(cx: &mut TestAppContext) {
+    use slterm_path::{PathOperation, PathPolicy, PathRequest, ResolvedPath};
+    use slterm_sidebar::DirectoryStatus;
+
+    let temp = tempfile::tempdir().unwrap();
+    let project_root = temp.path().join("filter-project");
+    let alpha_dir = temp.path().join("filter-alpha");
+    let beta_dir = temp.path().join("filter-beta");
+    let gamma_dir = temp.path().join("filter-gamma");
+    for dir in [&project_root, &alpha_dir, &beta_dir, &gamma_dir] {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+    std::fs::write(alpha_dir.join("a.txt"), "a\n").unwrap();
+    std::fs::write(beta_dir.join("b.txt"), "b\n").unwrap();
+    std::fs::write(gamma_dir.join("c.txt"), "c\n").unwrap();
+    let beta_file = canonical(beta_dir.join("b.txt"));
+    let (root, mut window, _) = open_root(cx);
+    add_project(
+        &root,
+        &mut window,
+        PROJECT_A,
+        project_root.to_str().unwrap(),
+    );
+    let alpha = slterm_settings::AgentRoot::custom(
+        agent_root_id(),
+        "Alpha".to_owned(),
+        alpha_dir.to_string_lossy().into_owned(),
+    )
+    .unwrap();
+    let beta = slterm_settings::AgentRoot::custom(
+        second_agent_root_id(),
+        "Beta".to_owned(),
+        beta_dir.to_string_lossy().into_owned(),
+    )
+    .unwrap()
+    .with_capabilities(slterm_settings::AgentRootCapabilities {
+        write: true,
+        terminal: false,
+    });
+    root.update(cx, |root, _| {
+        root.replace_agent_global_dirs_for_test(Vec::new());
+        root.replace_custom_agent_roots_for_test(vec![alpha.clone(), beta.clone()]);
+    });
+    let view = open_agent_files(&root, &mut window, cx);
+    window.run_until_parked();
+    draw_frame(&mut window);
+    window.run_until_parked();
+    window.update(|_, cx| {
+        view.update(cx, |view, cx| {
+            view.agent_files_set_filter("alpha", cx);
+        });
+    });
+    assert_eq!(
+        view.read_with(cx, |view, _| view.agent_files_visible_roots_for_test()),
+        vec!["Alpha".to_owned()],
+        "过滤只显示名称匹配的根"
+    );
+
+    // 过滤生效后新增的隐藏根不得被读取（不发起目录请求）。
+    let gamma = slterm_settings::AgentRoot::custom(
+        AgentRootId::from_str("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2e").unwrap(),
+        "Gamma".to_owned(),
+        gamma_dir.to_string_lossy().into_owned(),
+    )
+    .unwrap();
+    root.update(cx, |root, _| {
+        root.replace_custom_agent_roots_for_test(vec![alpha, beta, gamma]);
+    });
+    root.update(cx, |root, cx| root.sync_agent_files_roots_after_load(cx));
+    window.run_until_parked();
+    view.read_with(cx, |view, _| {
+        assert_eq!(
+            view.agent_files_root_status_for_test(
+                AgentRootId::from_str("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2e").unwrap()
+            ),
+            Some(DirectoryStatus::NotRequested),
+            "被过滤根不得发起目录读取"
+        );
+    });
+
+    // 过滤不是授权：隐藏的可写根仍提供保存写授权。
+    let grants = root.read_with(cx, |root, _| root.agent_root_grants_for_path(&beta_file));
+    let request = PathRequest {
+        operation: PathOperation::Write,
+        lexical_path: beta_file.as_path().to_path_buf(),
+        root_hints: Vec::new(),
+        session_grant: None,
+        expected_authorization_generation: 0,
+    };
+    let resolved = ResolvedPath::new(beta_file.clone(), None);
+    assert!(
+        PathPolicy::authorize(&request, &resolved, &grants, 0).is_ok(),
+        "显示过滤不得改变授权"
+    );
 }
