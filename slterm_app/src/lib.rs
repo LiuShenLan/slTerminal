@@ -71,6 +71,9 @@ pub(crate) mod gpui_terminal;
 // fish 式本地历史:LearningService 持有的内存去重与前缀 range。
 #[allow(dead_code)] // 消费点归提交事件与 ghost。
 pub(crate) mod history;
+// 历史隔离批次的撤销窗口状态机；文件复制、来源删除与启动对账由后续接线消费。
+#[allow(dead_code)] // 消费点归隔离服务、维护恢复器与导航视图。
+pub(crate) mod history_quarantine;
 // 界面语言:build.rs 静态生成的 typed Message 查询 API;
 // 运行时零解析、零文件读、零锁。
 pub(crate) mod i18n;

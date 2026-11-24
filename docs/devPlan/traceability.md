@@ -274,7 +274,7 @@
 | 嵌套或暂不可访问根仍按词法最深匹配归属 | `navigation_history_lexical_deepest_match` | 已自动化 |
 | 未归属历史恢复新项目前先确认目标根 | `navigation_unowned_restore_requires_project_confirmation` | 待实现 |
 | 历史 cwd 失效可回退且注入失败不重复建终端 | `navigation_restore_fallback_and_injection_retry` | 待实现 |
-| 连续删除的隔离批次期限彼此独立 | `quarantine_batches_have_independent_deadlines` | 待实现 |
+| 连续删除的隔离批次期限彼此独立 | `quarantine_batches_have_independent_deadlines` | 已自动化 |
 | 撤销点击时重新检查绝对期限与批次状态 | `quarantine_undo_rechecks_deadline` | 待实现 |
 | 删除后重启仍保留未到期撤销窗口 | `quarantine_restart_preserves_undo_window` | 待实现 |
 | 完成提交前异常退出先对账来源与副本 | `quarantine_startup_reconciles_incomplete_batch` | 待实现 |
