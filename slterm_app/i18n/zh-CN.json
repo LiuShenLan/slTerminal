@@ -198,6 +198,7 @@
       "reset_backup": "已恢复默认设置，原设置已备份：{path}",
       "reset_done": "已恢复默认设置",
       "operation_failed": "设置操作失败：{error}",
+      "invalid_value": "该值不被接受",
       "save_failed": "设置保存失败",
       "theme_imported": "已导入主题「{name}」",
       "theme_import_failed": "主题导入失败：{error}"
@@ -282,7 +283,19 @@
       "wallpaper_align_bottom_right": "右下",
       "wallpaper_error_read": "无法读取所选图片文件。",
       "wallpaper_error_decode": "所选文件不是可解码的图片。",
-      "wallpaper_error_too_large": "图片超出壁纸尺寸上限。"
+      "wallpaper_error_too_large": "图片超出壁纸尺寸上限。",
+      "font_family_cjk": "中文字体",
+      "ui_font_family": "界面字体",
+      "ui_font_size": "界面字号",
+      "vcs_display": "侧栏版本控制",
+      "blur": "窗口材质",
+      "background_color": "背景色",
+      "theme_foreground": "文字颜色",
+      "card_geometry": "面板卡片",
+      "pane_card_radius": "圆角",
+      "pane_card_gutter": "卡片间距",
+      "pane_card_shadow": "卡片投影",
+      "pane_card_divider": "卡片分隔线"
     },
     "agents": {
       "integration_group": "AI CLI 接入",
@@ -389,7 +402,10 @@
       "keybind_recording": "请按下新组合（Esc 取消）",
       "keybind_unbound": "未绑定",
       "keybind_reserved_error": "该快捷键由终端保留：{combo}",
-      "keybind_invalid_error": "无效的快捷键：{combo}"
+      "keybind_invalid_error": "无效的快捷键：{combo}",
+      "document_autosave": "文档自动保存",
+      "osc52_unfocused": "非聚焦时允许 OSC 52 写剪贴板",
+      "ctrl_wheel_zoom": "Ctrl+滚轮缩放字号"
     },
     "advanced": {
       "session": "会话生命周期",
@@ -411,6 +427,7 @@
       "export_workspace": "导出工作区",
       "export_workspace_description": "把全部标签、分屏与工作目录保存为 JSON 文件。",
       "export_workspace_action": "导出",
+      "shell": "默认 Shell",
       "export_workspace_done": "工作区已导出到 {path}",
       "export_workspace_failed": "工作区导出失败"
     },
@@ -435,6 +452,7 @@
     },
     "options": {
       "block": "实心框",
+      "follow_system": "跟随系统",
       "bar": "条形",
       "underline": "下划线",
       "hollow": "空心框",

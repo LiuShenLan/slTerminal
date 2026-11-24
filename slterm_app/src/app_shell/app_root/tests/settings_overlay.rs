@@ -246,6 +246,66 @@ fn settings_overlay_keeps_draft_and_queue(cx: &mut TestAppContext) {
     });
 }
 
+/// 字段控件真实写入运行值、全局快照与唯一写队列；页面切换与滚动容器渲染。
+#[gpui::test]
+fn settings_overlay_controls_write_runtime_values_and_queue(cx: &mut TestAppContext) {
+    let (root, mut window, _state) = open_root(cx);
+    focus_workspace(&root, &mut window);
+    open_settings(&mut window);
+    draw_frame(&mut window);
+
+    let before = root.read_with(cx, |root, _| root.settings.runtime().copy_on_select);
+
+    // 切到 Interaction 页后点击「选中即复制」开关。
+    let page = window.debug_bounds("settings-page-2").unwrap();
+    window.simulate_click(page.center(), Modifiers::default());
+    draw_frame(&mut window);
+    assert!(
+        window.debug_bounds("settings-page-content").is_some(),
+        "页面内容必须渲染"
+    );
+    let toggle = window
+        .debug_bounds("settings-field-copy_on_select-toggle")
+        .expect("Interaction 页必须渲染 copy_on_select 开关");
+    window.simulate_click(toggle.center(), Modifiers::default());
+    draw_frame(&mut window);
+
+    let runtime_value = root.read_with(cx, |root, _| root.settings.runtime().copy_on_select);
+    let global_value = cx.update(|cx| {
+        cx.global::<crate::app_shell::config::Settings>()
+            .copy_on_select
+    });
+    assert_ne!(runtime_value, before, "点击开关必须翻转运行值");
+    assert_eq!(runtime_value, global_value, "全局快照必须与运行值同源");
+    root.read_with(cx, |root, _| {
+        assert_eq!(root.settings.pending_len(), 1, "修改必须进入唯一写队列");
+    });
+
+    // Scrolling 页的步进控件：点击 + 必须按步长推进运行值。
+    let page = window.debug_bounds("settings-page-1").unwrap();
+    window.simulate_click(page.center(), Modifiers::default());
+    draw_frame(&mut window);
+    let before = root.read_with(cx, |root, _| root.settings.runtime().scroll_speed);
+    let up = window
+        .debug_bounds("settings-field-scroll_speed-up")
+        .expect("Scrolling 页必须渲染 scroll_speed 步进控件");
+    window.simulate_click(up.center(), Modifiers::default());
+    draw_frame(&mut window);
+    root.read_with(cx, |root, _| {
+        let after = root.settings.runtime().scroll_speed;
+        assert!(
+            after > before || (before - slterm_settings::MAX_SCROLL_SPEED).abs() < 1e-6,
+            "步进必须推进或已在上限: {before} -> {after}"
+        );
+    });
+    let runtime_speed = root.read_with(cx, |root, _| root.settings.runtime().scroll_speed);
+    let global_speed = cx.update(|cx| {
+        cx.global::<crate::app_shell::config::Settings>()
+            .scroll_speed
+    });
+    assert_eq!(runtime_speed, global_speed, "全局快照必须与运行值同源");
+}
+
 fn open_settings(window: &mut VisualTestContext) {
     window.simulate_keystrokes("ctrl-,");
     draw_frame(window);

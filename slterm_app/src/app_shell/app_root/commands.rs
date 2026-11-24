@@ -508,6 +508,9 @@ impl AppRoot {
                     }
                     let view_states = self.side_view_persistence.settings_view_states();
                     let settings_key = view.clone();
+                    let root_handle = cx.entity().downgrade();
+                    let initial_values =
+                        super::settings_controls::initial_field_values(self.settings.values());
                     let result = self.install_panel(
                         super::documents::DocumentPanelTarget {
                             project_id,
@@ -517,13 +520,16 @@ impl AppRoot {
                         },
                         window,
                         cx,
-                        move |_, cx| {
+                        move |window, cx| {
                             let settings = cx.new(|cx| {
                                 super::settings_overlay::SettingsView::with_state(
+                                    window,
                                     cx,
                                     settings_key,
                                     Some(view_states),
                                     false,
+                                    root_handle,
+                                    initial_values,
                                 )
                             });
                             let focus = settings.read(cx).focus_handle.clone();

@@ -215,6 +215,8 @@ pub(crate) struct SettingsStore {
     pending: BTreeMap<String, Value>,
     last_edit: Option<Instant>,
     persist_failed: bool,
+    /// 后台写盘在途标记：同一时刻只允许一批，避免前台重复启动任务。
+    in_flight: bool,
     subscribers: BTreeSet<u64>,
     next_subscriber: u64,
 }
@@ -226,6 +228,7 @@ impl SettingsStore {
             pending: BTreeMap::new(),
             last_edit: None,
             persist_failed: false,
+            in_flight: false,
             subscribers: BTreeSet::new(),
             next_subscriber: 0,
         }
@@ -271,6 +274,75 @@ impl SettingsStore {
             self.pending.insert((*key).to_owned(), value.clone());
         }
         self.flush(now, write)
+    }
+
+    /// 显式字段（授权开关）：只入队并立即到期，真实写盘仍走后台批量。
+    pub(crate) fn queue_explicit(&mut self, updates: &[(&str, Value)], now: Instant) -> bool {
+        if updates.iter().any(|(key, _)| keys::lookup(key).is_none()) {
+            return false;
+        }
+        self.values = self.values.with_updates(updates);
+        for (key, value) in updates {
+            self.pending.insert((*key).to_owned(), value.clone());
+        }
+        // 立即到期等价于「满足去抖窗口」，仍由下一节拍的后台写盘接管。
+        self.last_edit = Some(now.checked_sub(AUTO_SAVE_DELAY).unwrap_or(now));
+        true
+    }
+
+    /// 后台写盘批次入口：到期且无在途时返回待写快照；不清空 pending。
+    pub(crate) fn begin_save(&mut self, now: Instant) -> Option<Vec<(String, Value)>> {
+        if self.in_flight || self.pending.is_empty() {
+            return None;
+        }
+        let last_edit = self.last_edit?;
+        if now.saturating_duration_since(last_edit) < AUTO_SAVE_DELAY {
+            return None;
+        }
+        self.in_flight = true;
+        Some(
+            self.pending
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect(),
+        )
+    }
+
+    /// 任务注册失败时撤销在途标记，使同一批快照可在下一节拍重试。
+    pub(crate) fn abort_save(&mut self) {
+        self.in_flight = false;
+    }
+
+    /// 结算后台写盘：成功只清除与写入值一致的待写项，较新编辑保留；
+    /// 失败保留全部并从 `now` 起退避一个延迟窗口。
+    pub(crate) fn finish_save(
+        &mut self,
+        written: &[(String, Value)],
+        result: io::Result<()>,
+        now: Instant,
+    ) {
+        self.in_flight = false;
+        match result {
+            Ok(()) => {
+                for (key, value) in written {
+                    if self
+                        .pending
+                        .get(key)
+                        .is_some_and(|current| current == value)
+                    {
+                        self.pending.remove(key);
+                    }
+                }
+                self.persist_failed = false;
+                if self.pending.is_empty() {
+                    self.last_edit = None;
+                }
+            }
+            Err(_) => {
+                self.persist_failed = true;
+                self.last_edit = Some(now);
+            }
+        }
     }
 
     /// 自动保存时机：距最后一次编辑满 [`AUTO_SAVE_DELAY`] 且有可写项。
@@ -372,6 +444,88 @@ mod tests {
             Ok(())
         };
         (writes, Box::new(write))
+    }
+
+    /// 后台写盘：在途不重复启动；写入期间的新编辑保留；失败退避后重试。
+    #[test]
+    fn settings_async_save_keeps_newer_edits_and_backs_off_on_failure() {
+        let mut store = store();
+        let t0 = Instant::now();
+        assert!(store.set_auto("theme", Value::String("Nord".to_owned()), t0));
+        assert!(
+            store
+                .begin_save(t0 + Duration::from_millis(1_999))
+                .is_none(),
+            "未满 2 秒不得开始写盘"
+        );
+        let batch = store
+            .begin_save(t0 + AUTO_SAVE_DELAY)
+            .expect("到期必须返回待写快照");
+        assert_eq!(
+            batch,
+            vec![("theme".to_owned(), Value::String("Nord".to_owned()))]
+        );
+        assert!(
+            store
+                .begin_save(t0 + Duration::from_millis(2_100))
+                .is_none(),
+            "在途写盘不得重复启动"
+        );
+
+        // 写入在途期间的新编辑必须保留，且旧快照成功不得清掉新值。
+        assert!(store.set_auto(
+            "theme",
+            Value::String("MintDark".to_owned()),
+            t0 + Duration::from_millis(2_050)
+        ));
+        store.finish_save(&batch, Ok(()), t0 + Duration::from_millis(2_100));
+        assert_eq!(store.pending_len(), 1, "较新编辑必须保留");
+        let retried = store
+            .begin_save(t0 + Duration::from_millis(4_100))
+            .expect("新值到期后重试");
+        assert_eq!(
+            retried,
+            vec![("theme".to_owned(), Value::String("MintDark".to_owned()))]
+        );
+
+        store.finish_save(
+            &retried,
+            Err(io::Error::other("disk full")),
+            t0 + Duration::from_millis(4_100),
+        );
+        assert!(store.persist_failed());
+        assert_eq!(store.pending_len(), 1, "失败保留待写");
+        assert!(
+            store
+                .begin_save(t0 + Duration::from_millis(5_000))
+                .is_none(),
+            "失败后按同一延迟退避"
+        );
+        let recovered = store
+            .begin_save(t0 + Duration::from_millis(6_200))
+            .expect("退避到期必须重试");
+        store.finish_save(&recovered, Ok(()), t0 + Duration::from_millis(6_200));
+        assert!(!store.persist_failed());
+        assert_eq!(store.pending_len(), 0);
+    }
+
+    /// 显式字段（授权开关）只入队并立即到期，未知键拒绝。
+    #[test]
+    fn settings_explicit_fields_queue_immediately_and_reject_unknown_keys() {
+        let mut store = store();
+        let t0 = Instant::now();
+        assert!(!store.queue_explicit(&[("not_a_key", Value::Bool(true))], t0));
+        assert!(
+            store.queue_explicit(&[("slterm_ai_hooks", Value::Bool(true))], t0),
+            "全局授权键必须可入队"
+        );
+        let batch = store.begin_save(t0).expect("显式字段必须立即到期");
+        assert_eq!(
+            batch,
+            vec![("slterm_ai_hooks".to_owned(), Value::Bool(true))]
+        );
+        store.finish_save(&batch, Ok(()), t0 + Duration::from_millis(2_100));
+        assert_eq!(store.pending_len(), 0);
     }
 
     /// 两个视图的修改进入同一队列；关闭一个视图不取消全局待写。

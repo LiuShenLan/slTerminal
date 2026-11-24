@@ -10,6 +10,8 @@ use gpui::Task;
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) enum TaskId {
     ShellEvents,
+    /// 设置去抖批量的后台写盘；前台只提交快照与结算回执。
+    SettingsSave,
     CloseFlush,
     TerminalClose(slterm_workspace::TerminalId),
     TerminalReclaim(crate::gpui_terminal::registry::TerminalTarget),

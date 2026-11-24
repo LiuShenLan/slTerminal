@@ -1,18 +1,31 @@
 //! 无项目设置浮层：AppRoot 独立持有实体、应用级 ViewKey 与焦点注册。
+//!
+//! 页面内容由 `settings_controls` 的字段表驱动：标量控件实时写运行值与
+//! 唯一写队列，AppRoot 负责全局快照热应用与字段级副作用。
+
+use std::collections::BTreeMap;
+use std::time::Instant;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     AnyElement, App, AppContext as _, Context, Entity, EventEmitter, InteractiveElement as _,
-    IntoElement, KeyDownEvent, MouseButton, ParentElement as _, Render, Styled as _, Subscription,
-    Window, div, px, relative,
+    IntoElement, KeyDownEvent, MouseButton, ParentElement as _, Render,
+    StatefulInteractiveElement as _, Styled as _, Subscription, WeakEntity, Window, div, px,
+    relative,
 };
 use gpui_component::ActiveTheme as _;
+use gpui_component::input::{Input, InputEvent, InputState};
+use slterm_settings::SettingsRegistry;
+use slterm_settings::json::Value;
 use slterm_workspace::{PanelGroupId, ViewKey};
 
 use super::AppRoot;
 use super::commands::AppRootError;
 use super::focus_manager::{FocusRegistration, FocusToken};
 use super::panel_host::PanelContent;
+use super::settings_controls::{
+    FIELDS, SettingsControl, SettingsFieldUi, fields_for_page, typed_value,
+};
 use crate::settings_state::{SettingsPageId, SettingsViewState, SettingsViewStateStore};
 
 pub(super) struct SettingsView {
@@ -22,30 +35,87 @@ pub(super) struct SettingsView {
     overlay: bool,
     view_key: ViewKey,
     view_states: Option<SettingsViewStateStore>,
+    /// 字段修改统一交给 AppRoot：运行值、写队列、热应用与副作用单点。
+    root: WeakEntity<AppRoot>,
+    /// 文本／颜色字段的输入实体按字段键缓存，跨页切换保留未提交编辑。
+    inputs: BTreeMap<&'static str, Entity<InputState>>,
+    /// 仅用于保持 InputState 订阅存活，不直接读取。
+    #[allow(dead_code)]
+    input_subscriptions: Vec<Subscription>,
+    /// 校验失败瞬态标记：只在本次视图内提示，不进入持久状态。
+    invalid_fields: BTreeMap<&'static str, Instant>,
 }
 
 impl SettingsView {
-    fn new_overlay(cx: &mut Context<'_, Self>) -> Self {
-        Self::with_state(cx, ViewKey::AppSettingsOverlay, None, true)
+    fn new_overlay(
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+        root: WeakEntity<AppRoot>,
+        initial_values: BTreeMap<&'static str, Option<Value>>,
+    ) -> Self {
+        Self::with_state(
+            window,
+            cx,
+            ViewKey::AppSettingsOverlay,
+            None,
+            true,
+            root,
+            initial_values,
+        )
     }
 
     pub(super) fn with_state(
+        window: &mut Window,
         cx: &mut Context<'_, Self>,
         view_key: ViewKey,
         view_states: Option<SettingsViewStateStore>,
         overlay: bool,
+        root: WeakEntity<AppRoot>,
+        initial_values: BTreeMap<&'static str, Option<Value>>,
     ) -> Self {
         let selected_page = view_states
             .as_ref()
             .and_then(|store| store.state(&view_key))
             .map(|state| state.selected_page())
             .unwrap_or(SettingsPageId::Appearance);
+        let mut inputs = BTreeMap::new();
+        let mut input_subscriptions = Vec::new();
+        for field in FIELDS {
+            if !matches!(
+                field.control,
+                SettingsControl::Text | SettingsControl::Color
+            ) {
+                continue;
+            }
+            let initial = text_field_value(initial_values.get(field.key).and_then(Option::as_ref));
+            let key = field.key;
+            let input = cx.new(|cx| {
+                let mut state = InputState::new(window, cx);
+                state.set_value(initial, window, cx);
+                state
+            });
+            let subscription = cx.subscribe_in(
+                &input,
+                window,
+                move |view, input, event: &InputEvent, window, cx| {
+                    if matches!(event, InputEvent::Change) {
+                        view.on_input_change(key, input.clone(), window, cx);
+                    }
+                },
+            );
+            inputs.insert(key, input);
+            input_subscriptions.push(subscription);
+        }
         Self {
             focus_handle: cx.focus_handle(),
             selected_page,
             overlay,
             view_key,
             view_states,
+            root,
+            inputs,
+            input_subscriptions,
+            invalid_fields: BTreeMap::new(),
         }
     }
 
@@ -81,6 +151,374 @@ impl SettingsView {
 
     fn request_close(cx: &mut Context<'_, Self>) {
         cx.emit(SettingsViewEvent::Close);
+    }
+
+    /// 各字段当前值快照；借用只在函数内完成，渲染与监听不持有 store 引用。
+    fn field_values(&self, cx: &App) -> BTreeMap<&'static str, Option<Value>> {
+        let registry = SettingsRegistry::new();
+        let root_entity = self.root.upgrade();
+        let root_ref = root_entity.as_ref().map(|root| root.read(cx));
+        let fallback = slterm_settings::RawSettings::default();
+        let raw = root_ref
+            .as_ref()
+            .map_or(&fallback, |root| root.settings.values());
+        FIELDS
+            .iter()
+            .map(|field| {
+                (
+                    field.key,
+                    registry
+                        .recover(raw, field.key)
+                        .and_then(|recovery| recovery.value),
+                )
+            })
+            .collect()
+    }
+
+    /// 控件提交：注册表校验是唯一闸门；非法值只显示瞬态提示。
+    fn commit_field(&mut self, key: &'static str, value: Value, cx: &mut Context<'_, Self>) {
+        let registry = SettingsRegistry::new();
+        if registry.validate(key, &value) != Some(true) {
+            self.invalid_fields.insert(key, Instant::now());
+            cx.notify();
+            return;
+        }
+        self.invalid_fields.remove(key);
+        if let Some(root) = self.root.upgrade() {
+            root.update(cx, |root, cx| root.apply_settings_field(key, value, cx));
+        }
+        cx.notify();
+    }
+
+    fn on_input_change(
+        &mut self,
+        key: &'static str,
+        input: Entity<InputState>,
+        _window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let text = input.read(cx).value().to_string();
+        self.commit_field(key, Value::String(text), cx);
+    }
+
+    fn render_page(&mut self, cx: &mut Context<'_, Self>) -> AnyElement {
+        let values = self.field_values(cx);
+        let mut children: Vec<AnyElement> = Vec::new();
+        let mut current_section = None;
+        for field in fields_for_page(self.selected_page) {
+            if current_section != Some(field.section) {
+                current_section = Some(field.section);
+                children.push(
+                    div()
+                        .pt_3()
+                        .pb_1()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(
+                            cx.global::<crate::app_shell::config::Settings>()
+                                .language
+                                .text(field.section),
+                        )
+                        .into_any_element(),
+                );
+            }
+            children.push(self.render_field(
+                field,
+                values.get(field.key).and_then(Option::as_ref),
+                cx,
+            ));
+        }
+        if children.is_empty() {
+            children.push(
+                div()
+                    .p_2()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(
+                        cx.global::<crate::app_shell::config::Settings>()
+                            .language
+                            .text(self.selected_page.message()),
+                    )
+                    .into_any_element(),
+            );
+        }
+        div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .children(children)
+            .into_any_element()
+    }
+
+    fn render_field(
+        &mut self,
+        field: &'static SettingsFieldUi,
+        current: Option<&Value>,
+        cx: &mut Context<'_, Self>,
+    ) -> AnyElement {
+        let language = cx.global::<crate::app_shell::config::Settings>().language;
+        let registry = SettingsRegistry::new();
+        let def = registry
+            .lookup(field.key)
+            .expect("控件字段必须已在注册表登记");
+        let key = field.key;
+        let control: AnyElement = match &field.control {
+            SettingsControl::Toggle => {
+                let enabled = matches!(current, Some(Value::Bool(true)));
+                let next = Value::Bool(!enabled);
+                div()
+                    .id(gpui::ElementId::Name(
+                        format!("settings-toggle-{key}").into(),
+                    ))
+                    .w(px(36.0))
+                    .h(px(20.0))
+                    .rounded_full()
+                    .border_1()
+                    .border_color(if enabled {
+                        cx.theme().accent
+                    } else {
+                        cx.theme().border
+                    })
+                    .bg(if enabled {
+                        cx.theme().accent.opacity(0.35)
+                    } else {
+                        cx.theme().transparent
+                    })
+                    .cursor_pointer()
+                    .debug_selector(move || format!("settings-field-{key}-toggle"))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |view, _, _, cx| view.commit_field(key, next.clone(), cx)),
+                    )
+                    .child(
+                        div()
+                            .size(px(14.0))
+                            .m(px(3.0))
+                            .rounded_full()
+                            .when(enabled, |dot| dot.ml(px(19.0)))
+                            .bg(if enabled {
+                                cx.theme().accent
+                            } else {
+                                cx.theme().muted_foreground
+                            }),
+                    )
+                    .into_any_element()
+            }
+            SettingsControl::Choice(options) => {
+                let current_text = value_text(current);
+                let pills = options.iter().map(|option| {
+                    let is_selected = current_text.as_deref() == Some(option.value);
+                    let value = typed_value(def, option.value);
+                    let label = option
+                        .label
+                        .map(|message| language.text(message))
+                        .unwrap_or(option.value);
+                    let pill_key = option.value;
+                    div()
+                        .id(gpui::ElementId::Name(
+                            format!("settings-choice-{key}-{pill_key}").into(),
+                        ))
+                        .px_2()
+                        .h(px(22.0))
+                        .flex()
+                        .items_center()
+                        .rounded_md()
+                        .border_1()
+                        .text_xs()
+                        .cursor_pointer()
+                        .border_color(if is_selected {
+                            cx.theme().accent
+                        } else {
+                            cx.theme().border
+                        })
+                        .text_color(if is_selected {
+                            cx.theme().foreground
+                        } else {
+                            cx.theme().muted_foreground
+                        })
+                        .debug_selector(move || format!("settings-choice-{key}-{pill_key}"))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |view, _, _, cx| {
+                                view.commit_field(key, value.clone(), cx)
+                            }),
+                        )
+                        .child(label)
+                });
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .justify_end()
+                    .gap_1()
+                    .children(pills)
+                    .into_any_element()
+            }
+            SettingsControl::Stepper { min, max, step } => {
+                let (min, max, step) = (*min, *max, *step);
+                let current_number = current.and_then(value_number);
+                let display = current_number
+                    .map(format_number)
+                    .unwrap_or_else(|| "—".to_owned());
+                let step_value = move |direction: f64| {
+                    let base = current_number.unwrap_or(min);
+                    let next = (base + direction * step).clamp(min, max);
+                    let snapped = min + ((next - min) / step).round() * step;
+                    Value::Number(if (snapped - snapped.round()).abs() < 1e-9 {
+                        snapped.round()
+                    } else {
+                        snapped
+                    })
+                };
+                let down = step_value(-1.0);
+                let up = step_value(1.0);
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .id(gpui::ElementId::Name(
+                                format!("settings-step-down-{key}").into(),
+                            ))
+                            .px_2()
+                            .h(px(22.0))
+                            .flex()
+                            .items_center()
+                            .rounded_md()
+                            .border_1()
+                            .border_color(cx.theme().border)
+                            .cursor_pointer()
+                            .debug_selector(move || format!("settings-field-{key}-down"))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |view, _, _, cx| {
+                                    view.commit_field(key, down.clone(), cx)
+                                }),
+                            )
+                            .child("−"),
+                    )
+                    .child(
+                        div()
+                            .min_w(px(44.0))
+                            .text_center()
+                            .text_sm()
+                            .text_color(cx.theme().foreground)
+                            .child(display),
+                    )
+                    .child(
+                        div()
+                            .id(gpui::ElementId::Name(
+                                format!("settings-step-up-{key}").into(),
+                            ))
+                            .px_2()
+                            .h(px(22.0))
+                            .flex()
+                            .items_center()
+                            .rounded_md()
+                            .border_1()
+                            .border_color(cx.theme().border)
+                            .cursor_pointer()
+                            .debug_selector(move || format!("settings-field-{key}-up"))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |view, _, _, cx| {
+                                    view.commit_field(key, up.clone(), cx)
+                                }),
+                            )
+                            .child("+"),
+                    )
+                    .into_any_element()
+            }
+            SettingsControl::Text | SettingsControl::Color => {
+                let input = self.inputs.get(key).expect("文本字段的输入实体必须已创建");
+                div()
+                    .w(px(220.0))
+                    .debug_selector(move || format!("settings-field-{key}-input"))
+                    .child(Input::new(input))
+                    .into_any_element()
+            }
+        };
+        let invalid = self.invalid_fields.contains_key(key);
+        div()
+            .py_1()
+            .flex()
+            .justify_between()
+            .items_start()
+            .gap_4()
+            .debug_selector(move || format!("settings-field-{key}"))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().foreground)
+                            .child(language.text(field.label)),
+                    )
+                    .when_some(field.description, |element, description| {
+                        element.child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(language.text(description)),
+                        )
+                    })
+                    .when(invalid, |element| {
+                        element.child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().danger)
+                                .debug_selector(move || format!("settings-field-{key}-invalid"))
+                                .child(
+                                    language.text(crate::i18n::Message::SettingsStatusInvalidValue),
+                                ),
+                        )
+                    }),
+            )
+            .child(control)
+            .into_any_element()
+    }
+}
+
+/// 当前字段值的文本形态；数值去掉多余的 `.0`。
+fn value_text(value: Option<&Value>) -> Option<String> {
+    match value {
+        Some(Value::String(text)) => Some(text.clone()),
+        Some(Value::Number(number)) => Some(format_number(*number)),
+        Some(Value::Bool(flag)) => Some(flag.to_string()),
+        Some(Value::Null) | None => None,
+        Some(Value::Array(_)) | Some(Value::Object(_)) => None,
+    }
+}
+
+fn text_field_value(value: Option<&Value>) -> String {
+    match value {
+        Some(Value::String(text)) => text.clone(),
+        _ => String::new(),
+    }
+}
+
+fn value_number(value: &Value) -> Option<f64> {
+    match value {
+        Value::Number(number) => Some(*number),
+        Value::String(text) => text.parse().ok(),
+        _ => None,
+    }
+}
+
+fn format_number(number: f64) -> String {
+    if (number - number.round()).abs() < 1e-9 {
+        format!("{}", number.round() as i64)
+    } else {
+        let mut text = format!("{number:.2}");
+        while text.ends_with('0') {
+            text.pop();
+        }
+        if text.ends_with('.') {
+            text.pop();
+        }
+        text
     }
 }
 
@@ -177,16 +615,16 @@ impl Render for SettingsView {
                     )
                     .child(
                         div()
+                            .id("settings-page-scroll")
                             .flex()
                             .flex_col()
                             .flex_grow(1.0)
+                            .min_w_0()
+                            .h_full()
+                            .overflow_y_scroll()
                             .p_4()
                             .debug_selector(|| "settings-page-content".to_owned())
-                            .child(
-                                div()
-                                    .text_color(cx.theme().foreground)
-                                    .child(language.text(selected.message())),
-                            ),
+                            .child(self.render_page(cx)),
                     ),
             )
     }
@@ -231,6 +669,8 @@ impl AppRoot {
         candidate.validate()?;
         let view_states = self.side_view_persistence.settings_view_states();
         let settings_key = view_key.clone();
+        let root_handle = cx.entity().downgrade();
+        let initial_values = super::settings_controls::initial_field_values(self.settings.values());
         self.install_panel(
             super::documents::DocumentPanelTarget {
                 project_id,
@@ -240,9 +680,18 @@ impl AppRoot {
             },
             window,
             cx,
-            move |_, cx| {
-                let view = cx
-                    .new(|cx| SettingsView::with_state(cx, settings_key, Some(view_states), false));
+            move |window, cx| {
+                let view = cx.new(|cx| {
+                    SettingsView::with_state(
+                        window,
+                        cx,
+                        settings_key,
+                        Some(view_states),
+                        false,
+                        root_handle,
+                        initial_values,
+                    )
+                });
                 let focus = view.read(cx).focus_handle.clone();
                 (PanelContent::Settings(view), focus)
             },
@@ -273,7 +722,9 @@ impl AppRoot {
             .focus_manager
             .observed_focus_token()
             .unwrap_or_else(|| self.focus_manager.workspace_token());
-        let view = cx.new(SettingsView::new_overlay);
+        let root_handle = cx.entity().downgrade();
+        let initial_values = super::settings_controls::initial_field_values(self.settings.values());
+        let view = cx.new(|cx| SettingsView::new_overlay(window, cx, root_handle, initial_values));
         let registration = self.focus_manager.register(
             &view.read(cx).focus_handle,
             self.focus_manager.workspace_token(),
@@ -323,6 +774,97 @@ impl AppRoot {
         self.focus_manager.unregister(host.registration.token())?;
         cx.notify();
         Ok(())
+    }
+
+    /// 字段修改的唯一入口：注册表校验 → 运行值与写队列 → 全局快照热应用。
+    pub(super) fn apply_settings_field(
+        &mut self,
+        key: &'static str,
+        value: Value,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let registry = SettingsRegistry::new();
+        let Some(def) = registry.lookup(key) else {
+            return;
+        };
+        if registry.validate(key, &value) != Some(true) {
+            return;
+        }
+        let now = Instant::now();
+        let accepted = match def.save_mode {
+            slterm_settings::SettingsSaveMode::Automatic => {
+                self.settings.set_auto(key, value.clone(), now)
+            }
+            slterm_settings::SettingsSaveMode::Explicit => {
+                self.settings.queue_explicit(&[(key, value.clone())], now)
+            }
+        };
+        if !accepted {
+            return;
+        }
+        match key {
+            "launch_at_login" => {
+                let enabled = matches!(value, Value::Bool(true));
+                if let Err(error) = crate::platform::startup::set_launch_at_login(enabled) {
+                    log::warn!("更新开机启动失败: {error}");
+                }
+            }
+            "tray" => crate::tray::set_enabled(matches!(value, Value::Bool(true))),
+            _ => {}
+        }
+        self.reload_settings_snapshot(cx);
+        cx.notify();
+    }
+
+    /// 运行值 → 全局设置快照 + 主题/语言/托盘/后台任务即时生效。
+    fn reload_settings_snapshot(&mut self, cx: &mut Context<'_, Self>) {
+        let runtime = self.settings.runtime();
+        let settings = crate::app_shell::config::Settings::from_runtime(&runtime);
+        let language = settings.language;
+        let tray = settings.tray;
+        cx.set_global(settings);
+        gpui_component::set_locale(language.gpui_component_locale());
+        crate::tray::set_enabled(tray);
+        crate::background_tasks::apply_settings(self.settings.values());
+        crate::app_shell::theme::apply_dark_theme(cx);
+        cx.refresh_windows();
+    }
+
+    /// 设置去抖到期后交给后台写盘；前台只提交快照与结算回执。
+    pub(super) fn poll_settings_save(&mut self, cx: &mut Context<'_, Self>) {
+        let Some(entries) = self.settings.begin_save(Instant::now()) else {
+            return;
+        };
+        let cancellation = super::task_service::CancellationToken::new();
+        let written = entries.clone();
+        let task = cx.spawn(async move |this, cx| {
+            let to_write = written.clone();
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    let pairs: Vec<(&str, Value)> = to_write
+                        .iter()
+                        .map(|(key, value)| (key.as_str(), value.clone()))
+                        .collect();
+                    crate::settings_store::save_settings_blocking(&pairs)
+                })
+                .await;
+            let _ = this.update(cx, |root, cx| {
+                root.settings.finish_save(&written, result, Instant::now());
+                root.tasks
+                    .complete(super::task_service::TaskId::SettingsSave);
+                cx.notify();
+            });
+        });
+        if let Err(error) = self.tasks.register(
+            super::task_service::TaskId::SettingsSave,
+            cancellation,
+            task,
+        ) {
+            // 注册失败时恢复在途标记，下一节拍重试同一批快照。
+            self.settings.abort_save();
+            log::warn!("设置保存任务注册失败: {error:?}");
+        }
     }
 
     pub(super) fn render_settings_overlay(&self, cx: &App) -> Option<AnyElement> {

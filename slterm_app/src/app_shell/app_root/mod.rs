@@ -28,6 +28,7 @@ mod project_close;
 mod project_view;
 mod projects;
 mod render;
+mod settings_controls;
 mod settings_overlay;
 mod side_view;
 mod side_view_host;

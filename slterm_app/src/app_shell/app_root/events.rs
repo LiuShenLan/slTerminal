@@ -90,6 +90,7 @@ impl AppRoot {
                                     root.poll_fs_watch(window, cx);
                                     root.resume_pending_application_close(cx);
                                     root.poll_document_autosave(cx);
+                                    root.poll_settings_save(cx);
                                 }
                             });
                         });

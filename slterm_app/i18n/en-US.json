@@ -198,6 +198,7 @@
       "reset_backup": "Defaults restored; previous settings backed up: {path}",
       "reset_done": "Defaults restored",
       "operation_failed": "Settings operation failed: {error}",
+      "invalid_value": "Value not accepted",
       "save_failed": "Failed to save settings",
       "theme_imported": "Imported theme \"{name}\"",
       "theme_import_failed": "Theme import failed: {error}"
@@ -282,7 +283,19 @@
       "wallpaper_align_bottom_right": "Bottom right",
       "wallpaper_error_read": "Cannot read the selected image file.",
       "wallpaper_error_decode": "The selected file is not a decodable image.",
-      "wallpaper_error_too_large": "The image exceeds the wallpaper size limits."
+      "wallpaper_error_too_large": "The image exceeds the wallpaper size limits.",
+      "font_family_cjk": "CJK font family",
+      "ui_font_family": "Interface font family",
+      "ui_font_size": "Interface font size",
+      "vcs_display": "Sidebar version control",
+      "blur": "Window material",
+      "background_color": "Background color",
+      "theme_foreground": "Text color",
+      "card_geometry": "Pane cards",
+      "pane_card_radius": "Card radius",
+      "pane_card_gutter": "Card gutter",
+      "pane_card_shadow": "Card shadow",
+      "pane_card_divider": "Card divider"
     },
     "agents": {
       "integration_group": "AI CLI integrations",
@@ -389,7 +402,10 @@
       "keybind_recording": "Press a shortcut (Esc cancels)",
       "keybind_unbound": "Unbound",
       "keybind_reserved_error": "Reserved shortcut: {combo}",
-      "keybind_invalid_error": "Invalid shortcut: {combo}"
+      "keybind_invalid_error": "Invalid shortcut: {combo}",
+      "document_autosave": "Autosave documents",
+      "osc52_unfocused": "Allow OSC 52 clipboard writes while unfocused",
+      "ctrl_wheel_zoom": "Ctrl+wheel font zoom"
     },
     "advanced": {
       "session": "Session lifecycle",
@@ -411,6 +427,7 @@
       "export_workspace": "Export workspace",
       "export_workspace_description": "Save all tabs, panes and working directories to a JSON file.",
       "export_workspace_action": "Export",
+      "shell": "Default shell",
       "export_workspace_done": "Workspace exported to {path}",
       "export_workspace_failed": "Workspace export failed"
     },
@@ -435,6 +452,7 @@
     },
     "options": {
       "block": "Block",
+      "follow_system": "Follow system",
       "bar": "Bar",
       "underline": "Underline",
       "hollow": "Hollow",
