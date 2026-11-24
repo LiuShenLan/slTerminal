@@ -69,7 +69,7 @@ enum ExplorerCwdError {
 }
 
 /// 状态读取授权 = 项目根与只读父仓库根的并集；仓库根仅作读取。
-pub(super) fn status_grants(root: &CanonicalPath) -> Result<Vec<PathGrant>, crate::git::GitError> {
+pub(crate) fn status_grants(root: &CanonicalPath) -> Result<Vec<PathGrant>, crate::git::GitError> {
     let mut grants = vec![PathGrant::project_root(root.clone())];
     let repo_root = crate::git::repository_root_cached(root.as_path())?;
     let repo_root = CanonicalPath::new(repo_root)

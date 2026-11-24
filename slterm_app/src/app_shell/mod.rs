@@ -158,6 +158,18 @@ pub(crate) enum SltermShellEvent {
         completion:
             mpsc::SyncSender<Result<Vec<slterm_runtime_protocol::AgentResource>, JsonRpcError>>,
     },
+    /// Runtime Git 状态目标请求与一次性回执；仓库读取由后台执行体完成。
+    RuntimeGitStatus {
+        project_id: Option<slterm_workspace::ProjectId>,
+        completion: mpsc::SyncSender<Result<RuntimeGitTarget, JsonRpcError>>,
+    },
+}
+
+/// Runtime Git 读取目标：前台只解析项目与仓库入口，阻塞读取归后台。
+pub(crate) struct RuntimeGitTarget {
+    pub(crate) project_id: slterm_workspace::ProjectId,
+    pub(crate) root: slterm_path::CanonicalPath,
+    pub(crate) git: std::sync::Arc<crate::git::GitFacade>,
 }
 
 const SHELL_EVENT_CAPACITY: usize = 64;
@@ -326,6 +338,28 @@ pub(crate) fn try_send_runtime_agents(
             DomainErrorCode::QueueFull,
             -32003,
             "agent list queue full",
+        )),
+        Err(mpsc::TrySendError::Disconnected(_)) => {
+            Err(control_error(DomainErrorCode::Closing, -32004, "closing"))
+        }
+    }
+}
+
+/// 非阻塞投递 Runtime Git 状态目标请求；调用方只在后台执行体等待回执。
+pub(crate) fn try_send_runtime_git_status(
+    sender: &mpsc::SyncSender<SltermShellEvent>,
+    project_id: Option<slterm_workspace::ProjectId>,
+) -> Result<mpsc::Receiver<Result<RuntimeGitTarget, JsonRpcError>>, JsonRpcError> {
+    let (completion, response) = mpsc::sync_channel(1);
+    match sender.try_send(SltermShellEvent::RuntimeGitStatus {
+        project_id,
+        completion,
+    }) {
+        Ok(()) => Ok(response),
+        Err(mpsc::TrySendError::Full(_)) => Err(control_error(
+            DomainErrorCode::QueueFull,
+            -32003,
+            "git status queue full",
         )),
         Err(mpsc::TrySendError::Disconnected(_)) => {
             Err(control_error(DomainErrorCode::Closing, -32004, "closing"))

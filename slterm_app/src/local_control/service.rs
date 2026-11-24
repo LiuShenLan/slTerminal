@@ -17,17 +17,20 @@ use slterm_runtime_protocol::{
 use super::credentials::load_or_create_at;
 use super::discovery::{DiscoveryGuard, endpoint_path, publish_at};
 use super::events::EventHub;
+use super::git::{git_error_to_rpc, git_status_response};
 use super::operations::{
     DispatchOutcome, DispatchRequest, OperationDispatcher, operation_resource, writer_error,
 };
 use super::reads::TerminalTextSnapshot;
 use super::server::{
-    AgentsCallback, EventSubscribeCallback, LocalControlServer, MutationCallback,
-    OperationQueryCallback, ReadCallback, RuntimeCallbacks, SnapshotCallback, WaitStatusCallback,
+    AgentsCallback, EventSubscribeCallback, GitStatusCallback, LocalControlServer,
+    MutationCallback, OperationQueryCallback, ReadCallback, RuntimeCallbacks, SnapshotCallback,
+    WaitStatusCallback,
 };
 use crate::app_shell::{
-    SltermShellEvent, try_send_handover, try_send_runtime_agents, try_send_runtime_mutation,
-    try_send_runtime_read, try_send_runtime_snapshot, try_send_runtime_wait,
+    SltermShellEvent, try_send_handover, try_send_runtime_agents, try_send_runtime_git_status,
+    try_send_runtime_mutation, try_send_runtime_read, try_send_runtime_snapshot,
+    try_send_runtime_wait,
 };
 use crate::persistence::metadata::WorkspaceMetadata;
 use crate::persistence::workspace_writer::WorkspaceWriterClient;
@@ -178,6 +181,7 @@ impl LocalControlService {
         let read_events = events.clone();
         let wait_events = events.clone();
         let agent_events = events.clone();
+        let git_events = events.clone();
         let on_handover: HandoverCallback = Arc::new(move |params| {
             let receipt = try_send_handover(&events, params)?;
             match receipt.recv_timeout(reply_timeout) {
@@ -282,6 +286,31 @@ impl LocalControlService {
                 }
             }
         });
+        // Git 状态：前台只解析项目与仓库入口，阻塞子进程在连接线程内后台执行。
+        let on_git_status: GitStatusCallback = Arc::new(move |project_id| {
+            let receipt = try_send_runtime_git_status(&git_events, project_id)?;
+            let target = match receipt.recv_timeout(SNAPSHOT_REPLY_TIMEOUT) {
+                Ok(Ok(target)) => target,
+                Ok(Err(error)) => return Err(error),
+                Err(RecvTimeoutError::Timeout) => {
+                    return Err(control_error(
+                        DomainErrorCode::NotReady,
+                        -32001,
+                        "git status not ready",
+                    ));
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    return Err(control_error(DomainErrorCode::Closing, -32004, "closing"));
+                }
+            };
+            let grants = crate::app_shell::app_root::status_grants(&target.root)
+                .map_err(git_error_to_rpc)?;
+            let snapshot = target
+                .git
+                .status(&target.root, &grants, 0)
+                .map_err(git_error_to_rpc)?;
+            git_status_response(target.project_id, &target.root, &snapshot)
+        });
         // Operation 查询只经唯一写线程；缺失 writer 时明确 NotReady。
         let operation_writer = writer.clone();
         let on_operation: OperationQueryCallback = Arc::new(move |operation_id| {
@@ -378,6 +407,7 @@ impl LocalControlService {
                 read: on_read,
                 wait_status: on_wait_status,
                 agents: on_agents,
+                git_status: on_git_status,
             },
         )?;
         let record = DiscoveryRecord {

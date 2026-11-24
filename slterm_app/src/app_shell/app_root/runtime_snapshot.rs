@@ -494,6 +494,29 @@ impl AppRoot {
             .ok_or_else(|| not_ready_error("terminal panel missing"))
     }
 
+    /// Runtime Git 读取目标：只解析项目与仓库入口，不在前台执行 git。
+    pub(super) fn runtime_git_target(
+        &self,
+        project_id: Option<slterm_workspace::ProjectId>,
+    ) -> Result<crate::app_shell::RuntimeGitTarget, JsonRpcError> {
+        let project_id = match project_id {
+            Some(project_id) => project_id,
+            None => self
+                .active_project()
+                .map_err(|_| not_ready_error("no active project"))?,
+        };
+        let project = self
+            .snapshot
+            .registry()
+            .project(project_id)
+            .ok_or_else(invalid_request_error)?;
+        Ok(crate::app_shell::RuntimeGitTarget {
+            project_id,
+            root: project.root().clone(),
+            git: std::sync::Arc::clone(&self.git),
+        })
+    }
+
     /// Runtime Agent 资源：持久会话身份与运行期仲裁状态派生，不另存映射。
     ///
     /// 纯 Shell 不产生关联行；同一原生会话 ID 可出现在多个终端关联中。

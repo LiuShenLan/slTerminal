@@ -162,6 +162,8 @@ pub enum RuntimeMethod {
     AgentResume,
     #[serde(rename = "agent.fork")]
     AgentFork,
+    #[serde(rename = "git.status")]
+    GitStatus,
 }
 
 /// 原始输入：显式写入 PTY，不追加回车，也不模拟键盘事件。
@@ -380,6 +382,45 @@ pub struct AgentForkRequest {
 pub type AgentStartParams = MutationParams<AgentStartRequest>;
 pub type AgentResumeParams = MutationParams<AgentResumeRequest>;
 pub type AgentForkParams = MutationParams<AgentForkRequest>;
+
+/// 项目仓库状态查询；`project_id` 缺省时使用活跃项目。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct GitStatusRequest {
+    pub project_id: Option<String>,
+}
+
+/// 单个工作区条目的 porcelain v2 状态。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct GitStatusEntry {
+    /// 仓库相对路径（`/` 分隔）。
+    pub path: String,
+    pub original: Option<String>,
+    pub index: String,
+    pub worktree: String,
+    pub conflict: bool,
+    pub ignored: bool,
+    pub staged: bool,
+    pub unstaged: bool,
+}
+
+/// 项目仓库状态：分支、上游与完整条目集，不含正文。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct GitStatusResponse {
+    pub project_id: String,
+    pub root: String,
+    pub branch: String,
+    pub head: String,
+    pub upstream: Option<String>,
+    pub ahead: u32,
+    pub behind: u32,
+    pub entries: Vec<GitStatusEntry>,
+}
 
 /// 新建终端：Shell 固定为应用默认，只开放目标项目与工作目录选择。
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1040,6 +1081,12 @@ fn runtime_request_is_valid(request: &RuntimeRequest) -> bool {
                 && valid_optional_path(request.project_root.as_deref())
                 && valid_optional_path(request.cwd.as_deref())
         }),
+        RuntimeMethod::GitStatus => request.parse::<GitStatusRequest>().is_some_and(|params| {
+            params
+                .project_id
+                .as_deref()
+                .is_none_or(|id| !id.trim().is_empty())
+        }),
     }
 }
 
@@ -1131,11 +1178,12 @@ pub enum ControlMethod {
     RuntimeAgentStart,
     RuntimeAgentResume,
     RuntimeAgentFork,
+    RuntimeGitStatus,
     InstanceHandover,
 }
 
 impl ControlMethod {
-    pub const ALL: [Self; 36] = [
+    pub const ALL: [Self; 37] = [
         Self::RuntimeHello,
         Self::RuntimeDescribe,
         Self::RuntimeSnapshot,
@@ -1171,6 +1219,7 @@ impl ControlMethod {
         Self::RuntimeAgentStart,
         Self::RuntimeAgentResume,
         Self::RuntimeAgentFork,
+        Self::RuntimeGitStatus,
         Self::InstanceHandover,
     ];
 
@@ -1211,6 +1260,7 @@ impl ControlMethod {
             Self::RuntimeAgentStart => "agent.start",
             Self::RuntimeAgentResume => "agent.resume",
             Self::RuntimeAgentFork => "agent.fork",
+            Self::RuntimeGitStatus => "git.status",
             Self::InstanceHandover => "instance.handover",
         }
     }
@@ -1361,6 +1411,7 @@ pub enum RuntimeResult {
     TerminalRead(TerminalReadResponse),
     TerminalWait(TerminalWaitResponse),
     Agents(AgentListResponse),
+    GitStatus(GitStatusResponse),
 }
 
 /// 当前客户端可调用的方法集合。

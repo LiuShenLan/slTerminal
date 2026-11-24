@@ -15,6 +15,7 @@ mod documents;
 mod editor_git;
 mod events;
 mod explorer;
+pub(crate) use explorer::status_grants;
 mod focus_manager;
 mod git_show;
 mod hooks_page;

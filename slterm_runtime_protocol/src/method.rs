@@ -242,6 +242,16 @@ fn agent_fork_params_schema() -> schemars::Schema {
 }
 
 #[cfg(feature = "schema")]
+fn git_status_params_schema() -> schemars::Schema {
+    schemars::schema_for!(crate::protocol::GitStatusRequest)
+}
+
+#[cfg(feature = "schema")]
+fn git_status_result_schema() -> schemars::Schema {
+    schemars::schema_for!(crate::protocol::GitStatusResponse)
+}
+
+#[cfg(feature = "schema")]
 fn agent_list_result_schema() -> schemars::Schema {
     schemars::schema_for!(crate::protocol::AgentListResponse)
 }
@@ -599,6 +609,16 @@ pub static METHODS: &[MethodSpec] = &[
         result_schema: operation_result_schema,
     },
     MethodSpec {
+        method: ControlMethod::RuntimeGitStatus,
+        scopes: &[ControlScope::Runtime],
+        kind: MethodKind::Query,
+        idempotent: true,
+        #[cfg(feature = "schema")]
+        params_schema: git_status_params_schema,
+        #[cfg(feature = "schema")]
+        result_schema: git_status_result_schema,
+    },
+    MethodSpec {
         method: ControlMethod::InstanceHandover,
         scopes: &[ControlScope::Handover],
         kind: MethodKind::Mutation,
@@ -688,6 +708,7 @@ mod method_tests {
                 method_name(ControlMethod::RuntimeAgentStart),
                 method_name(ControlMethod::RuntimeAgentResume),
                 method_name(ControlMethod::RuntimeAgentFork),
+                method_name(ControlMethod::RuntimeGitStatus),
                 method_name(ControlMethod::InstanceHandover),
             ]
         );
@@ -799,6 +820,7 @@ mod method_tests {
                 ControlMethod::RuntimeAgentStart,
                 ControlMethod::RuntimeAgentResume,
                 ControlMethod::RuntimeAgentFork,
+                ControlMethod::RuntimeGitStatus,
             ]
         );
         let handover_methods: Vec<ControlMethod> = methods_for(ControlScope::Handover)

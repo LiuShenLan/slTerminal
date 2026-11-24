@@ -113,6 +113,13 @@ impl AppRoot {
                                                     let _ = completion
                                                         .try_send(Err(closing_snapshot_error()));
                                                 }
+                                                SltermShellEvent::RuntimeGitStatus {
+                                                    completion,
+                                                    ..
+                                                } => {
+                                                    let _ = completion
+                                                        .try_send(Err(closing_snapshot_error()));
+                                                }
                                                 _ => {}
                                             }
                                         }
@@ -352,6 +359,20 @@ impl AppRoot {
                     Err(closing_snapshot_error())
                 } else {
                     self.runtime_agents(cx)
+                };
+                let _ = completion.try_send(result);
+            }
+            SltermShellEvent::RuntimeGitStatus {
+                project_id,
+                completion,
+            } => {
+                let result = if self.close_in_progress
+                    || self.application_close.is_some()
+                    || self.close_completed
+                {
+                    Err(closing_snapshot_error())
+                } else {
+                    self.runtime_git_target(project_id)
                 };
                 let _ = completion.try_send(result);
             }

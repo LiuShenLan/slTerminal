@@ -4,17 +4,17 @@ use crate::protocol::{
     AgentCloseRequest, AgentForkRequest, AgentGetRequest, AgentInputRequest, AgentReadRequest,
     AgentResumeRequest, AgentStartRequest, AgentWaitRequest, ClientRequest, ControlMessage,
     ControlMethod, ControlScope, Credential, DescribeResponse, DiscoveryRecord, DocumentResource,
-    DomainErrorCode, EmptyParams, HandoverMethod, HandoverParams, HandoverRequest, HelloMethod,
-    HelloParams, HelloRequest, HelloResponse, JsonRpcError, JsonRpcErrorData, JsonRpcId,
-    JsonRpcRequest, JsonRpcResponse, MutationParams, OperationQueryParams, OperationResource,
-    OperationWaitParams, PanelActivateRequest, PanelGroupMergeRequest, PanelGroupResizeRequest,
-    PanelGroupResource, PanelGroupSplitRequest, PanelMoveRequest, ProjectActivateRequest,
-    ProjectRemoveRequest, ProjectRenameRequest, ProjectReorderRequest, ProjectResource,
-    ProtocolError, RuntimeMethod, RuntimeRequest, SnapshotResources, SnapshotResponse,
-    SplitDirectionWire, TerminalCloseRequest, TerminalCreateRequest, TerminalExecuteRequest,
-    TerminalInputRequest, TerminalReadRequest, TerminalReconnectRequest, TerminalRenameRequest,
-    TerminalResource, TerminalWaitRequest, ViewResource, ViewportSize, params_sha256,
-    parse_client_request,
+    DomainErrorCode, EmptyParams, GitStatusRequest, HandoverMethod, HandoverParams,
+    HandoverRequest, HelloMethod, HelloParams, HelloRequest, HelloResponse, JsonRpcError,
+    JsonRpcErrorData, JsonRpcId, JsonRpcRequest, JsonRpcResponse, MutationParams,
+    OperationQueryParams, OperationResource, OperationWaitParams, PanelActivateRequest,
+    PanelGroupMergeRequest, PanelGroupResizeRequest, PanelGroupResource, PanelGroupSplitRequest,
+    PanelMoveRequest, ProjectActivateRequest, ProjectRemoveRequest, ProjectRenameRequest,
+    ProjectReorderRequest, ProjectResource, ProtocolError, RuntimeMethod, RuntimeRequest,
+    SnapshotResources, SnapshotResponse, SplitDirectionWire, TerminalCloseRequest,
+    TerminalCreateRequest, TerminalExecuteRequest, TerminalInputRequest, TerminalReadRequest,
+    TerminalReconnectRequest, TerminalRenameRequest, TerminalResource, TerminalWaitRequest,
+    ViewResource, ViewportSize, params_sha256, parse_client_request,
 };
 use crate::{MethodKind, OperationStatus};
 
@@ -901,6 +901,34 @@ fn agent_methods_require_identity_and_list_accepts_empty_params() {
 }
 
 #[test]
+fn git_status_accepts_optional_project_and_validates_shape() {
+    for project_id in [
+        None,
+        Some("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b".to_owned()),
+    ] {
+        let request = RuntimeRequest::new(
+            JsonRpcId::Number(28),
+            RuntimeMethod::GitStatus,
+            GitStatusRequest { project_id },
+        );
+        match parse_client_request(&serde_json::to_vec(&request).unwrap()).unwrap() {
+            ClientRequest::Runtime(parsed) => assert_eq!(parsed.method, RuntimeMethod::GitStatus),
+            other => panic!("Git 状态请求必须解析为 Runtime 请求: {other:?}"),
+        }
+    }
+
+    for invalid in [
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"git.status","params":{"project_id":"  "}}),
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"git.status","params":{"project_id":null,"extra":1}}),
+    ] {
+        assert!(
+            parse_client_request(invalid.to_string().as_bytes()).is_err(),
+            "非法 Git 状态请求必须拒绝: {invalid}"
+        );
+    }
+}
+
+#[test]
 fn params_hash_is_stable_and_json_serialization_dependent() {
     let a = serde_json::json!({"z": 1, "a": {"n": [1, 2]}});
     let b = serde_json::json!({"a": {"n": [1, 2]}, "z": 1});
@@ -992,6 +1020,7 @@ fn describe_lists_the_method_registry_with_contract_hashes() {
             "agent.start",
             "agent.resume",
             "agent.fork",
+            "git.status",
             "instance.handover"
         ]
     );

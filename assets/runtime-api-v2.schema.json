@@ -326,6 +326,100 @@
       "type": "object",
       "additionalProperties": false
     },
+    "GitStatusEntry": {
+      "description": "单个工作区条目的 porcelain v2 状态。",
+      "type": "object",
+      "properties": {
+        "conflict": {
+          "type": "boolean"
+        },
+        "ignored": {
+          "type": "boolean"
+        },
+        "index": {
+          "type": "string"
+        },
+        "original": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "description": "仓库相对路径（`/` 分隔）。",
+          "type": "string"
+        },
+        "staged": {
+          "type": "boolean"
+        },
+        "unstaged": {
+          "type": "boolean"
+        },
+        "worktree": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "index",
+        "worktree",
+        "conflict",
+        "ignored",
+        "staged",
+        "unstaged"
+      ]
+    },
+    "GitStatusResponse": {
+      "description": "项目仓库状态：分支、上游与完整条目集，不含正文。",
+      "type": "object",
+      "properties": {
+        "ahead": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "behind": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "branch": {
+          "type": "string"
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/GitStatusEntry"
+          }
+        },
+        "head": {
+          "type": "string"
+        },
+        "project_id": {
+          "type": "string"
+        },
+        "root": {
+          "type": "string"
+        },
+        "upstream": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "project_id",
+        "root",
+        "branch",
+        "head",
+        "ahead",
+        "behind",
+        "entries"
+      ]
+    },
     "HandoverMethod": {
       "description": "单实例移交只接受 instance.handover。",
       "type": "string",
@@ -1484,7 +1578,8 @@
         "agent.wait",
         "agent.start",
         "agent.resume",
-        "agent.fork"
+        "agent.fork",
+        "git.status"
       ]
     },
     "RuntimeParams": {
@@ -1600,6 +1695,9 @@
         },
         {
           "$ref": "#/$defs/AgentListResponse"
+        },
+        {
+          "$ref": "#/$defs/GitStatusResponse"
         }
       ]
     },

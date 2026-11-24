@@ -14,16 +14,17 @@ use slterm_runtime_protocol::{
     AgentCloseParams, AgentForkParams, AgentGetRequest, AgentInputParams, AgentListResponse,
     AgentReadRequest, AgentResource, AgentResumeParams, AgentStartParams, AgentWaitRequest,
     ClientRequest, ControlScope, Credential, DescribeResponse, DomainErrorCode, EventNotification,
-    EventsSubscribeParams, EventsUnsubscribedResponse, HandoverParams, HandoverResponse,
-    HelloResponse, JsonRpcError, JsonRpcErrorData, JsonRpcId, JsonRpcResponse,
-    OPERATION_WAIT_LIMIT_MS, OperationQueryParams, OperationResource, OperationWaitParams,
-    PanelActivateParams, PanelGroupMergeParams, PanelGroupResizeParams, PanelGroupSplitParams,
-    PanelMoveParams, PanelOpenSettingsParams, ProjectActivateParams, ProjectListResponse,
-    ProjectRemoveParams, ProjectRenameParams, ProjectReorderParams, RuntimeEvent, RuntimeMethod,
-    RuntimeRequest, RuntimeResult, SnapshotResources, SnapshotResponse, SplitDirectionWire,
-    TerminalCloseParams, TerminalCreateParams, TerminalExecuteParams, TerminalInputParams,
-    TerminalReadRequest, TerminalReadResponse, TerminalReconnectParams, TerminalRenameParams,
-    TerminalWaitRequest, TerminalWaitResponse, ViewportSize, parse_client_request,
+    EventsSubscribeParams, EventsUnsubscribedResponse, GitStatusRequest, GitStatusResponse,
+    HandoverParams, HandoverResponse, HelloResponse, JsonRpcError, JsonRpcErrorData, JsonRpcId,
+    JsonRpcResponse, OPERATION_WAIT_LIMIT_MS, OperationQueryParams, OperationResource,
+    OperationWaitParams, PanelActivateParams, PanelGroupMergeParams, PanelGroupResizeParams,
+    PanelGroupSplitParams, PanelMoveParams, PanelOpenSettingsParams, ProjectActivateParams,
+    ProjectListResponse, ProjectRemoveParams, ProjectRenameParams, ProjectReorderParams,
+    RuntimeEvent, RuntimeMethod, RuntimeRequest, RuntimeResult, SnapshotResources,
+    SnapshotResponse, SplitDirectionWire, TerminalCloseParams, TerminalCreateParams,
+    TerminalExecuteParams, TerminalInputParams, TerminalReadRequest, TerminalReadResponse,
+    TerminalReconnectParams, TerminalRenameParams, TerminalWaitRequest, TerminalWaitResponse,
+    ViewportSize, parse_client_request,
 };
 use slterm_split::SplitDirection;
 use slterm_workspace::{LogicalSize, PanelGroupId, ProjectId, ViewKey};
@@ -114,6 +115,13 @@ pub(crate) type WaitStatusCallback =
 pub(crate) type AgentsCallback =
     Arc<dyn Fn() -> Result<Vec<AgentResource>, JsonRpcError> + Send + Sync>;
 
+/// Runtime Git 状态端口：目标解析在前台，仓库读取在后台执行体。
+pub(crate) type GitStatusCallback = Arc<
+    dyn Fn(Option<slterm_workspace::ProjectId>) -> Result<GitStatusResponse, JsonRpcError>
+        + Send
+        + Sync,
+>;
+
 /// Runtime 作用域的应用回调集合。
 pub(crate) struct RuntimeCallbacks {
     pub(crate) snapshot: SnapshotCallback,
@@ -123,6 +131,7 @@ pub(crate) struct RuntimeCallbacks {
     pub(crate) read: ReadCallback,
     pub(crate) wait_status: WaitStatusCallback,
     pub(crate) agents: AgentsCallback,
+    pub(crate) git_status: GitStatusCallback,
 }
 
 /// operation.wait 轮询间隔：只做有界查询与关闭检查。
@@ -151,6 +160,7 @@ impl LocalControlServer {
                 read: Arc::new(not_ready_read),
                 wait_status: Arc::new(not_ready_wait_status),
                 agents: Arc::new(not_ready_agents),
+                git_status: Arc::new(not_ready_git_status),
             },
         )
     }
@@ -634,6 +644,25 @@ fn handle_connection<F>(
                             }),
                         )
                     }
+                    RuntimeMethod::GitStatus => {
+                        let Some(params) = request.parse::<GitStatusRequest>() else {
+                            return;
+                        };
+                        let project_id = match params.project_id.as_deref() {
+                            None => Some(None),
+                            Some(text) => parse_project_id(text).ok().map(Some),
+                        };
+                        match project_id {
+                            Some(project_id) => match (runtime.git_status)(project_id) {
+                                Ok(status) => JsonRpcResponse::result(
+                                    request.id,
+                                    RuntimeResult::GitStatus(status),
+                                ),
+                                Err(error) => JsonRpcResponse::error(request.id, error),
+                            },
+                            None => JsonRpcResponse::error(request.id, invalid_request_error()),
+                        }
+                    }
                     RuntimeMethod::OperationWait => {
                         match wait_operation(&runtime, &request, &shutdown) {
                             Ok(resource) => JsonRpcResponse::result(
@@ -1116,6 +1145,12 @@ fn not_ready_wait_status(_: TerminalStatusTarget) -> Result<u64, JsonRpcError> {
 
 fn not_ready_agents() -> Result<Vec<AgentResource>, JsonRpcError> {
     Err(not_ready_error("agent list not ready"))
+}
+
+fn not_ready_git_status(
+    _: Option<slterm_workspace::ProjectId>,
+) -> Result<GitStatusResponse, JsonRpcError> {
+    Err(not_ready_error("git status not ready"))
 }
 
 fn unknown_agent_error() -> JsonRpcError {

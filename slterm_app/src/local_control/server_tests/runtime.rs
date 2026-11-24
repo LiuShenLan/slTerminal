@@ -1,456 +1,6 @@
-//! LocalControlServer 的真实 loopback 生命周期测试。
+//! Runtime 方法路由测试：快照、操作、事件、项目、面板、终端、Agent 与 Git。
 
-use std::io::{BufRead, Read, Write};
-use std::net::TcpStream;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
-
-use slterm_runtime_protocol::{
-    AgentCloseParams, AgentCloseRequest, AgentInputParams, AgentInputRequest, AgentReadRequest,
-    AgentWaitRequest, ControlScope, Credential, DocumentResource, EmptyParams,
-    EventsSubscribeParams, EventsSubscribedResponse, HandoverMethod, HandoverParams,
-    HandoverRequest, HandoverResponse, HelloMethod, HelloParams, HelloRequest, HelloResponse,
-    JsonRpcError, JsonRpcErrorData, JsonRpcId, JsonRpcRequest, OperationQueryParams,
-    OperationResource, OperationStatus, OperationWaitParams, PanelGroupResource,
-    PanelGroupSplitParams, PanelGroupSplitRequest, PanelOpenSettingsParams, ProjectActivateParams,
-    ProjectActivateRequest, ProjectResource, RuntimeEvent, RuntimeMethod, RuntimeRequest,
-    SnapshotResources, SplitDirectionWire, TerminalCloseParams, TerminalCloseRequest,
-    TerminalExecuteParams, TerminalExecuteRequest, TerminalInputParams, TerminalInputRequest,
-    TerminalReadRequest, TerminalReconnectParams, TerminalReconnectRequest, TerminalRenameParams,
-    TerminalRenameRequest, TerminalResource, TerminalWaitRequest, ViewResource, ViewportSize,
-};
-
-use super::LocalControlServer;
-use crate::secrets::SecretBytes;
-
-fn test_secret(value: &str) -> SecretBytes {
-    SecretBytes::new(value.to_owned().into_bytes())
-}
-
-fn unavailable_mutation(
-    _: super::mutations::RuntimeMutationRequest,
-) -> Result<OperationResource, JsonRpcError> {
-    Err(JsonRpcError::new(
-        -32001,
-        "mutation not ready",
-        Some(JsonRpcErrorData {
-            code: slterm_runtime_protocol::DomainErrorCode::NotReady,
-        }),
-    ))
-}
-
-fn unavailable_read(
-    _: super::reads::TerminalReadTarget,
-) -> Result<super::reads::TerminalTextSnapshot, JsonRpcError> {
-    Err(JsonRpcError::new(
-        -32001,
-        "terminal read not ready",
-        Some(JsonRpcErrorData {
-            code: slterm_runtime_protocol::DomainErrorCode::NotReady,
-        }),
-    ))
-}
-
-fn unavailable_wait_status(_: super::server::TerminalStatusTarget) -> Result<u64, JsonRpcError> {
-    Err(JsonRpcError::new(
-        -32001,
-        "terminal wait not ready",
-        Some(JsonRpcErrorData {
-            code: slterm_runtime_protocol::DomainErrorCode::NotReady,
-        }),
-    ))
-}
-
-fn unavailable_agents() -> Result<Vec<slterm_runtime_protocol::AgentResource>, JsonRpcError> {
-    Err(JsonRpcError::new(
-        -32001,
-        "agent list not ready",
-        Some(JsonRpcErrorData {
-            code: slterm_runtime_protocol::DomainErrorCode::NotReady,
-        }),
-    ))
-}
-
-// 负载裕度，非断言/语义放宽：等待真实 loopback 线程调度与关闭。
-const TEST_TIMEOUT: Duration = Duration::from_secs(5);
-
-struct ChunkedReader {
-    inner: std::io::Cursor<Vec<u8>>,
-    chunk_size: usize,
-}
-
-impl ChunkedReader {
-    fn new(input: Vec<u8>, chunk_size: usize) -> Self {
-        Self {
-            inner: std::io::Cursor::new(input),
-            chunk_size,
-        }
-    }
-}
-
-impl Read for ChunkedReader {
-    fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
-        let limit = self.chunk_size.min(output.len());
-        self.inner.read(&mut output[..limit])
-    }
-}
-
-fn hello_response() -> HelloResponse {
-    HelloResponse::new("store", "stream", 7, "protocol-hash", "schema-hash")
-}
-
-fn start_server() -> (LocalControlServer, Arc<AtomicUsize>) {
-    let calls = Arc::new(AtomicUsize::new(0));
-    let callback_calls = Arc::clone(&calls);
-    let server = LocalControlServer::start(test_secret("sk-test"), hello_response(), move |_| {
-        callback_calls.fetch_add(1, Ordering::SeqCst);
-        Ok(HandoverResponse::accepted())
-    })
-    .unwrap();
-    (server, calls)
-}
-
-fn connect(server: &LocalControlServer) -> TcpStream {
-    TcpStream::connect(server.endpoint()).unwrap()
-}
-
-fn write_json<T: serde::Serialize>(stream: &mut TcpStream, value: &T) {
-    let mut encoded = serde_json::to_vec(value).unwrap();
-    encoded.push(b'\n');
-    stream.write_all(&encoded).unwrap();
-}
-
-fn hello(credential: &str) -> HelloRequest {
-    JsonRpcRequest::new(
-        JsonRpcId::Number(1),
-        HelloMethod::RuntimeHello,
-        HelloParams {
-            protocol_version: 2,
-            client_id: "loopback-test".to_owned(),
-            credential: Credential::new(credential),
-            scope: ControlScope::Handover,
-        },
-    )
-}
-
-fn focus() -> HandoverRequest {
-    JsonRpcRequest::new(
-        JsonRpcId::Number(2),
-        HandoverMethod::InstanceHandover,
-        HandoverParams::Focus,
-    )
-}
-
-fn read_line_result(stream: &mut TcpStream) -> std::io::Result<String> {
-    let mut line = String::new();
-    std::io::BufReader::new(stream).read_line(&mut line)?;
-    Ok(line)
-}
-
-fn read_line(stream: &mut TcpStream) -> String {
-    read_line_result(stream).unwrap()
-}
-
-#[test]
-fn local_control_accepts_hello_and_focus_over_loopback() {
-    let (mut server, calls) = start_server();
-    let mut stream = connect(&server);
-    write_json(&mut stream, &hello("sk-test"));
-    let hello_reply = read_line(&mut stream);
-    assert!(hello_reply.contains("store"));
-    assert!(hello_reply.contains("instance.handover"));
-
-    write_json(&mut stream, &focus());
-    let focus_reply = read_line(&mut stream);
-    assert!(focus_reply.contains("accepted"));
-    assert!(focus_reply.contains("true"));
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
-    server.shutdown().unwrap();
-}
-
-#[test]
-fn local_control_invalid_credential_closes_without_response() {
-    let (mut server, calls) = start_server();
-    let mut stream = connect(&server);
-    stream.set_read_timeout(Some(TEST_TIMEOUT)).unwrap();
-    write_json(&mut stream, &hello("sk-wrong"));
-
-    assert_eq!(read_line(&mut stream), "");
-    assert_eq!(calls.load(Ordering::SeqCst), 0);
-    server.shutdown().unwrap();
-}
-
-#[test]
-fn local_control_rejects_handover_before_hello() {
-    let (mut server, calls) = start_server();
-    let mut stream = connect(&server);
-    stream.set_read_timeout(Some(TEST_TIMEOUT)).unwrap();
-    write_json(&mut stream, &focus());
-
-    assert_eq!(read_line(&mut stream), "");
-    assert_eq!(calls.load(Ordering::SeqCst), 0);
-    server.shutdown().unwrap();
-}
-
-#[test]
-fn local_control_rejects_oversized_frame() {
-    let (mut server, calls) = start_server();
-    let mut stream = connect(&server);
-    write_json(&mut stream, &hello("sk-test"));
-    let _ = read_line(&mut stream);
-    stream.set_read_timeout(Some(TEST_TIMEOUT)).unwrap();
-    stream.write_all(&vec![b' '; 128 * 1024 + 1]).unwrap();
-
-    assert_eq!(read_line(&mut stream), "");
-    assert_eq!(calls.load(Ordering::SeqCst), 0);
-    server.shutdown().unwrap();
-}
-
-#[test]
-fn local_control_shutdown_releases_open_connection_and_listener() {
-    let (mut server, calls) = start_server();
-    let endpoint = server.endpoint().to_owned();
-    let mut stream = connect(&server);
-    write_json(&mut stream, &hello("sk-test"));
-    let _ = read_line(&mut stream);
-
-    server.shutdown().unwrap();
-    server.shutdown().unwrap();
-    assert!(TcpStream::connect(&endpoint).is_err());
-    assert_eq!(read_line(&mut stream), "");
-    assert_eq!(calls.load(Ordering::SeqCst), 0);
-}
-
-#[test]
-fn local_control_accepts_near_budget_frame_with_next_frame_prefix() {
-    let (mut server, calls) = start_server();
-    let mut stream = connect(&server);
-    write_json(&mut stream, &hello("sk-test"));
-    let _ = read_line(&mut stream);
-    let mut frame = serde_json::to_vec(&focus()).unwrap();
-    let next_prefix = b"{\"jsonrpc\":";
-    let padding = 128 * 1024 - frame.len() - 1;
-    frame.extend_from_slice(&vec![b' '; padding]);
-    frame.push(b'\n');
-    frame.extend_from_slice(next_prefix);
-    stream.write_all(&frame).unwrap();
-
-    let response = read_line(&mut stream);
-    assert!(response.contains("accepted"));
-    assert!(response.contains("true"));
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
-    server.shutdown().unwrap();
-}
-
-#[test]
-fn local_control_frame_budget_excludes_next_frame_prefix() {
-    let mut input = serde_json::to_vec(&focus()).unwrap();
-    let next_prefix = b"{\"jsonrpc\":";
-    let padding = 128 * 1024 - input.len() - 2;
-    input.extend_from_slice(&vec![b' '; padding]);
-    input.push(b'\n');
-    input.extend_from_slice(next_prefix);
-    let mut reader = ChunkedReader::new(input, 1023);
-    let mut buffer = Vec::new();
-
-    let frame = super::server::read_frame(
-        &mut reader,
-        &mut buffer,
-        std::time::Instant::now() + super::server::REQUEST_TIMEOUT,
-        &AtomicBool::new(false),
-    )
-    .unwrap()
-    .unwrap();
-    assert_eq!(frame.len(), 128 * 1024 - 1);
-    assert_eq!(buffer, next_prefix);
-}
-
-#[test]
-fn local_control_rejected_handover_is_not_a_success_result() {
-    let mut server =
-        LocalControlServer::start(test_secret("sk-test"), hello_response(), move |_| {
-            Ok(serde_json::from_str::<HandoverResponse>("{\"accepted\":false}").unwrap())
-        })
-        .unwrap();
-    let mut stream = connect(&server);
-    write_json(&mut stream, &hello("sk-test"));
-    let _ = read_line(&mut stream);
-    write_json(&mut stream, &focus());
-
-    let response = read_line(&mut stream);
-    assert!(response.contains("error"));
-    assert!(!response.contains("accepted"));
-    server.shutdown().unwrap();
-}
-
-#[test]
-fn local_control_response_budget_is_enforced() {
-    let mut server = LocalControlServer::start(
-        test_secret("sk-test"),
-        HelloResponse::new(
-            "x".repeat(1024 * 1024),
-            "stream",
-            7,
-            "protocol-hash",
-            "schema-hash",
-        ),
-        move |_| Ok(HandoverResponse::accepted()),
-    )
-    .unwrap();
-    let mut stream = connect(&server);
-    stream.set_read_timeout(Some(TEST_TIMEOUT)).unwrap();
-    write_json(&mut stream, &hello("sk-test"));
-
-    assert_eq!(read_line(&mut stream), "");
-    server.shutdown().unwrap();
-}
-
-#[test]
-fn local_control_worker_panic_closes_connection() {
-    let mut server = LocalControlServer::start(
-        test_secret("sk-test"),
-        hello_response(),
-        move |_| -> Result<HandoverResponse, slterm_runtime_protocol::JsonRpcError> {
-            panic!("injected worker panic")
-        },
-    )
-    .unwrap();
-    let mut stream = connect(&server);
-    write_json(&mut stream, &hello("sk-test"));
-    let _ = read_line(&mut stream);
-    write_json(&mut stream, &focus());
-    stream.set_read_timeout(Some(TEST_TIMEOUT)).unwrap();
-
-    assert_eq!(read_line(&mut stream), "");
-    server.shutdown().unwrap();
-}
-
-#[test]
-fn local_control_shutdown_replays_worker_join_failure() {
-    let (started_tx, started_rx) = std::sync::mpsc::channel();
-    let (release_tx, release_rx) = std::sync::mpsc::channel();
-    let release_rx = Arc::new(std::sync::Mutex::new(release_rx));
-    let mut server = LocalControlServer::start(
-        test_secret("sk-test"),
-        hello_response(),
-        move |_| -> Result<HandoverResponse, slterm_runtime_protocol::JsonRpcError> {
-            started_tx.send(()).unwrap();
-            release_rx.lock().unwrap().recv().unwrap();
-            panic!("injected repeated-shutdown worker panic")
-        },
-    )
-    .unwrap();
-    let mut stream = connect(&server);
-    write_json(&mut stream, &hello("sk-test"));
-    let _ = read_line(&mut stream);
-    write_json(&mut stream, &focus());
-    started_rx.recv().unwrap();
-
-    std::thread::scope(|scope| {
-        let shutdown = scope.spawn(|| server.shutdown());
-        assert_eq!(read_line(&mut stream), "");
-        release_tx.send(()).unwrap();
-        assert!(shutdown.join().unwrap().is_err());
-    });
-    assert!(
-        server.shutdown().is_err(),
-        "后续 shutdown 必须保留首次 join 终止错误"
-    );
-    assert_eq!(server.active_workers(), 0);
-}
-
-#[test]
-fn local_control_shutdown_continues_after_worker_join_failure() {
-    let (started_tx, started_rx) = std::sync::mpsc::channel();
-    let (release_tx, release_rx) = std::sync::mpsc::channel();
-    let release_rx = Arc::new(std::sync::Mutex::new(release_rx));
-    let mut server = LocalControlServer::start(
-        test_secret("sk-test"),
-        hello_response(),
-        move |_| -> Result<HandoverResponse, slterm_runtime_protocol::JsonRpcError> {
-            started_tx.send(()).unwrap();
-            release_rx.lock().unwrap().recv().unwrap();
-            panic!("injected worker panic")
-        },
-    )
-    .unwrap();
-    let mut first = connect(&server);
-    write_json(&mut first, &hello("sk-test"));
-    let _ = read_line(&mut first);
-    let mut second = connect(&server);
-    write_json(&mut second, &hello("sk-test"));
-    let _ = read_line(&mut second);
-    write_json(&mut first, &focus());
-    started_rx.recv().unwrap();
-
-    std::thread::scope(|scope| {
-        let shutdown = scope.spawn(|| server.shutdown());
-        assert_eq!(read_line(&mut first), "");
-        release_tx.send(()).unwrap();
-        let result = shutdown.join().unwrap();
-        assert!(result.is_err());
-    });
-    assert_eq!(read_line(&mut second), "");
-    assert_eq!(server.active_workers(), 0);
-}
-
-#[test]
-fn local_control_enforces_connection_limit() {
-    let (mut server, _calls) = start_server();
-    let mut streams = Vec::new();
-    for _ in 0..64 {
-        let mut stream = connect(&server);
-        write_json(&mut stream, &hello("sk-test"));
-        let _ = read_line(&mut stream);
-        streams.push(stream);
-    }
-    let mut extra = connect(&server);
-    extra.set_read_timeout(Some(TEST_TIMEOUT)).unwrap();
-    write_json(&mut extra, &hello("sk-test"));
-
-    match read_line_result(&mut extra) {
-        Ok(line) => assert_eq!(line, ""),
-        Err(error) => assert_eq!(error.kind(), std::io::ErrorKind::ConnectionReset),
-    }
-    drop(streams);
-    server.shutdown().unwrap();
-}
-
-#[test]
-fn local_control_handshake_times_out_after_five_seconds() {
-    let (mut server, _calls) = start_server();
-    let mut stream = connect(&server);
-    stream
-        .set_read_timeout(Some(Duration::from_secs(10)))
-        .unwrap();
-    let started = std::time::Instant::now();
-
-    assert_eq!(read_line(&mut stream), "");
-    assert!(started.elapsed() >= Duration::from_secs(4));
-    assert!(started.elapsed() < Duration::from_secs(10));
-    server.shutdown().unwrap();
-}
-
-#[test]
-fn local_control_request_deadline_expires_without_waiting() {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-    let mut stream = TcpStream::connect(address).unwrap();
-    let _ = listener.accept().unwrap();
-    let error = super::server::read_frame(
-        &mut stream,
-        &mut Vec::new(),
-        std::time::Instant::now(),
-        &AtomicBool::new(false),
-    )
-    .unwrap_err();
-
-    assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
-    assert_eq!(super::server::REQUEST_TIMEOUT, Duration::from_secs(600));
-    assert_eq!(super::server::HANDSHAKE_TIMEOUT, Duration::from_secs(5));
-}
+use super::*;
 
 fn hello_scoped(credential: &str, scope: ControlScope) -> HelloRequest {
     JsonRpcRequest::new(
@@ -485,7 +35,7 @@ where
             callback_calls.fetch_add(1, Ordering::SeqCst);
             Ok(HandoverResponse::accepted())
         },
-        super::server::RuntimeCallbacks {
+        crate::local_control::server::RuntimeCallbacks {
             snapshot: Arc::new(on_snapshot),
             operation: Arc::new(|_| Ok(None)),
             events: Arc::new(|_| {
@@ -501,6 +51,7 @@ where
             read: Arc::new(unavailable_read),
             wait_status: Arc::new(unavailable_wait_status),
             agents: Arc::new(unavailable_agents),
+            git_status: Arc::new(unavailable_git_status),
         },
     )
     .unwrap();
@@ -563,7 +114,7 @@ where
             callback_calls.fetch_add(1, Ordering::SeqCst);
             Ok(HandoverResponse::accepted())
         },
-        super::server::RuntimeCallbacks {
+        crate::local_control::server::RuntimeCallbacks {
             snapshot: Arc::new(|| Ok(SnapshotResources::default())),
             operation: Arc::new(on_operation),
             events: Arc::new(|_| {
@@ -579,6 +130,7 @@ where
             read: Arc::new(unavailable_read),
             wait_status: Arc::new(unavailable_wait_status),
             agents: Arc::new(unavailable_agents),
+            git_status: Arc::new(unavailable_git_status),
         },
     )
     .unwrap();
@@ -624,7 +176,7 @@ fn start_dual_scope_server_with_mutation<M>(
     on_mutation: M,
 ) -> (LocalControlServer, Arc<AtomicUsize>)
 where
-    M: Fn(super::mutations::RuntimeMutationRequest) -> Result<OperationResource, JsonRpcError>
+    M: Fn(crate::local_control::mutations::RuntimeMutationRequest) -> Result<OperationResource, JsonRpcError>
         + Send
         + Sync
         + 'static,
@@ -639,7 +191,7 @@ where
             callback_calls.fetch_add(1, Ordering::SeqCst);
             Ok(HandoverResponse::accepted())
         },
-        super::server::RuntimeCallbacks {
+        crate::local_control::server::RuntimeCallbacks {
             snapshot: Arc::new(|| Ok(sample_resources())),
             operation: Arc::new(|_| Ok(None)),
             events: Arc::new(|_| {
@@ -655,6 +207,7 @@ where
             read: Arc::new(unavailable_read),
             wait_status: Arc::new(unavailable_wait_status),
             agents: Arc::new(unavailable_agents),
+            git_status: Arc::new(unavailable_git_status),
         },
     )
     .unwrap();
@@ -772,14 +325,14 @@ fn runtime_terminal_input_and_execute_route_through_dispatcher() {
     let (mut server, _calls) = start_dual_scope_server_with_mutation(move |request| {
         let method = request.mutation.method().to_owned();
         match &request.mutation {
-            super::mutations::RuntimeMutation::TerminalInput {
+            crate::local_control::mutations::RuntimeMutation::TerminalInput {
                 generation, data, ..
             } => {
                 assert_eq!(method, "terminal.input");
                 assert_eq!(*generation, 3);
                 assert_eq!(data, "echo hi");
             }
-            super::mutations::RuntimeMutation::TerminalExecute {
+            crate::local_control::mutations::RuntimeMutation::TerminalExecute {
                 generation,
                 command,
                 ..
@@ -866,7 +419,7 @@ fn runtime_terminal_input_and_execute_route_through_dispatcher() {
 fn runtime_agent_read_and_wait_route_agent_identity() {
     let (mut server, _calls) = start_dual_scope_server_with_read(|target| {
         assert_eq!(target.agent_id.as_deref(), Some("claude:session-a"));
-        Ok(super::reads::TerminalTextSnapshot {
+        Ok(crate::local_control::reads::TerminalTextSnapshot {
             generation: target.generation,
             revision: 2,
             text: "agent output".to_owned(),
@@ -934,13 +487,13 @@ fn runtime_terminal_close_and_reconnect_route_through_dispatcher() {
     let mutations_by_callback = Arc::clone(&mutations);
     let (mut server, _calls) = start_dual_scope_server_with_mutation(move |request| {
         match &request.mutation {
-            super::mutations::RuntimeMutation::TerminalClose { generation, .. } => {
+            crate::local_control::mutations::RuntimeMutation::TerminalClose { generation, .. } => {
                 assert_eq!(*generation, 4);
             }
-            super::mutations::RuntimeMutation::TerminalReconnect { generation, .. } => {
+            crate::local_control::mutations::RuntimeMutation::TerminalReconnect { generation, .. } => {
                 assert_eq!(*generation, 5);
             }
-            super::mutations::RuntimeMutation::TerminalRename { title, .. } => {
+            crate::local_control::mutations::RuntimeMutation::TerminalRename { title, .. } => {
                 assert_eq!(title.as_deref(), Some("build"));
             }
             other => panic!("意外写意图: {other:?}"),
@@ -1026,8 +579,8 @@ fn runtime_terminal_close_and_reconnect_route_through_dispatcher() {
 fn start_dual_scope_server_with_read<R>(on_read: R) -> (LocalControlServer, Arc<AtomicUsize>)
 where
     R: Fn(
-            super::reads::TerminalReadTarget,
-        ) -> Result<super::reads::TerminalTextSnapshot, JsonRpcError>
+            crate::local_control::reads::TerminalReadTarget,
+        ) -> Result<crate::local_control::reads::TerminalTextSnapshot, JsonRpcError>
         + Send
         + Sync
         + 'static,
@@ -1042,7 +595,7 @@ where
             callback_calls.fetch_add(1, Ordering::SeqCst);
             Ok(HandoverResponse::accepted())
         },
-        super::server::RuntimeCallbacks {
+        crate::local_control::server::RuntimeCallbacks {
             snapshot: Arc::new(|| Ok(SnapshotResources::default())),
             operation: Arc::new(|_| Ok(None)),
             events: Arc::new(|_| {
@@ -1058,6 +611,7 @@ where
             read: Arc::new(on_read),
             wait_status: Arc::new(unavailable_wait_status),
             agents: Arc::new(unavailable_agents),
+            git_status: Arc::new(unavailable_git_status),
         },
     )
     .unwrap();
@@ -1079,14 +633,14 @@ fn terminal_read_request(terminal: &str, generation: u64, cursor: Option<&str>) 
 #[test]
 fn runtime_terminal_read_pages_snapshot_and_rejects_stale_cursor() {
     let terminal = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2d";
-    let text = format!("{}\ntail", "a".repeat(super::reads::PAGE_BUDGET_BYTES));
+    let text = format!("{}\ntail", "a".repeat(crate::local_control::reads::PAGE_BUDGET_BYTES));
     let snapshot_state = Arc::new(Mutex::new((3u64, 5u64, text)));
     let read_state = Arc::clone(&snapshot_state);
     let (mut server, _calls) = start_dual_scope_server_with_read(move |target| {
         assert_eq!(target.terminal_id.to_string(), terminal);
         assert_eq!(target.generation, 3);
         let state = read_state.lock().expect("读取快照");
-        Ok(super::reads::TerminalTextSnapshot {
+        Ok(crate::local_control::reads::TerminalTextSnapshot {
             generation: state.0,
             revision: state.1,
             text: state.2.clone(),
@@ -1104,7 +658,7 @@ fn runtime_terminal_read_pages_snapshot_and_rejects_stale_cursor() {
     let reply: serde_json::Value = serde_json::from_str(&read_line(&mut stream)).unwrap();
     assert_eq!(
         reply["result"]["data"].as_str().unwrap().len(),
-        super::reads::PAGE_BUDGET_BYTES
+        crate::local_control::reads::PAGE_BUDGET_BYTES
     );
     assert_eq!(reply["result"]["generation"], 3);
     assert_eq!(reply["result"]["revision"], 5);
@@ -1156,7 +710,7 @@ where
             callback_calls.fetch_add(1, Ordering::SeqCst);
             Ok(HandoverResponse::accepted())
         },
-        super::server::RuntimeCallbacks {
+        crate::local_control::server::RuntimeCallbacks {
             snapshot: Arc::new(|| Ok(SnapshotResources::default())),
             operation: Arc::new(|_| Ok(None)),
             events: Arc::new(|_| {
@@ -1172,6 +726,7 @@ where
             read: Arc::new(unavailable_read),
             wait_status: Arc::new(unavailable_wait_status),
             agents: Arc::new(on_agents),
+            git_status: Arc::new(unavailable_git_status),
         },
     )
     .unwrap();
@@ -1247,7 +802,7 @@ fn runtime_agent_input_and_close_route_through_dispatcher() {
     let mutations_by_callback = Arc::clone(&mutations);
     let (mut server, _calls) = start_dual_scope_server_with_mutation(move |request| {
         match &request.mutation {
-            super::mutations::RuntimeMutation::AgentInput {
+            crate::local_control::mutations::RuntimeMutation::AgentInput {
                 agent_id,
                 generation,
                 data,
@@ -1257,7 +812,7 @@ fn runtime_agent_input_and_close_route_through_dispatcher() {
                 assert_eq!(*generation, 2);
                 assert_eq!(data, "ls");
             }
-            super::mutations::RuntimeMutation::AgentClose {
+            crate::local_control::mutations::RuntimeMutation::AgentClose {
                 agent_id,
                 generation,
                 ..
@@ -1265,16 +820,16 @@ fn runtime_agent_input_and_close_route_through_dispatcher() {
                 assert_eq!(agent_id, "claude:session-a");
                 assert_eq!(*generation, 2);
             }
-            super::mutations::RuntimeMutation::AgentStart { kind, .. } => {
+            crate::local_control::mutations::RuntimeMutation::AgentStart { kind, .. } => {
                 assert_eq!(kind, "claude");
             }
-            super::mutations::RuntimeMutation::AgentResume {
+            crate::local_control::mutations::RuntimeMutation::AgentResume {
                 source, session_id, ..
             } => {
                 assert_eq!(source, "claude");
                 assert_eq!(session_id.as_deref(), Some("abc"));
             }
-            super::mutations::RuntimeMutation::AgentFork {
+            crate::local_control::mutations::RuntimeMutation::AgentFork {
                 source, session_id, ..
             } => {
                 assert_eq!(source, "claude");
@@ -1366,11 +921,16 @@ fn runtime_agent_input_and_close_route_through_dispatcher() {
     server.shutdown().unwrap();
 }
 
-fn start_dual_scope_server_with_wait_status<W>(
-    on_wait_status: W,
+fn start_dual_scope_server_with_git_status<G>(
+    on_git_status: G,
 ) -> (LocalControlServer, Arc<AtomicUsize>)
 where
-    W: Fn(super::server::TerminalStatusTarget) -> Result<u64, JsonRpcError> + Send + Sync + 'static,
+    G: Fn(
+            Option<slterm_workspace::ProjectId>,
+        ) -> Result<slterm_runtime_protocol::GitStatusResponse, JsonRpcError>
+        + Send
+        + Sync
+        + 'static,
 {
     let calls = Arc::new(AtomicUsize::new(0));
     let callback_calls = Arc::clone(&calls);
@@ -1382,7 +942,124 @@ where
             callback_calls.fetch_add(1, Ordering::SeqCst);
             Ok(HandoverResponse::accepted())
         },
-        super::server::RuntimeCallbacks {
+        crate::local_control::server::RuntimeCallbacks {
+            snapshot: Arc::new(|| Ok(SnapshotResources::default())),
+            operation: Arc::new(|_| Ok(None)),
+            events: Arc::new(|_| {
+                Err(JsonRpcError::new(
+                    -32001,
+                    "event subscription not ready",
+                    Some(JsonRpcErrorData {
+                        code: slterm_runtime_protocol::DomainErrorCode::NotReady,
+                    }),
+                ))
+            }),
+            mutation: Arc::new(unavailable_mutation),
+            read: Arc::new(unavailable_read),
+            wait_status: Arc::new(unavailable_wait_status),
+            agents: Arc::new(unavailable_agents),
+            git_status: Arc::new(on_git_status),
+        },
+    )
+    .unwrap();
+    (server, calls)
+}
+
+#[test]
+fn runtime_git_status_routes_project_selection() {
+    let selected = Arc::new(Mutex::new(Vec::new()));
+    let selected_by_callback = Arc::clone(&selected);
+    let (mut server, _calls) = start_dual_scope_server_with_git_status(move |project_id| {
+        selected_by_callback
+            .lock()
+            .expect("项目选择记录")
+            .push(project_id);
+        Ok(slterm_runtime_protocol::GitStatusResponse {
+            project_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b".to_owned(),
+            root: "D:/work/a".to_owned(),
+            branch: "main".to_owned(),
+            head: "abc".to_owned(),
+            upstream: None,
+            ahead: 0,
+            behind: 0,
+            entries: vec![slterm_runtime_protocol::GitStatusEntry {
+                path: "src/main.rs".to_owned(),
+                original: None,
+                index: "M".to_owned(),
+                worktree: ".".to_owned(),
+                conflict: false,
+                ignored: false,
+                staged: true,
+                unstaged: false,
+            }],
+        })
+    });
+    let mut stream = connect(&server);
+    stream.set_read_timeout(Some(TEST_TIMEOUT)).unwrap();
+    write_json(
+        &mut stream,
+        &hello_scoped("sk-test-runtime", ControlScope::Runtime),
+    );
+    assert!(read_line(&mut stream).contains("store"));
+
+    write_json(
+        &mut stream,
+        &RuntimeRequest::new(
+            JsonRpcId::Number(40),
+            RuntimeMethod::GitStatus,
+            slterm_runtime_protocol::GitStatusRequest { project_id: None },
+        ),
+    );
+    let reply: serde_json::Value = serde_json::from_str(&read_line(&mut stream)).unwrap();
+    assert_eq!(reply["result"]["branch"], "main");
+    assert_eq!(reply["result"]["entries"][0]["path"], "src/main.rs");
+    assert_eq!(reply["result"]["entries"][0]["staged"], true);
+
+    write_json(
+        &mut stream,
+        &RuntimeRequest::new(
+            JsonRpcId::Number(41),
+            RuntimeMethod::GitStatus,
+            slterm_runtime_protocol::GitStatusRequest {
+                project_id: Some("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b".to_owned()),
+            },
+        ),
+    );
+    let reply: serde_json::Value = serde_json::from_str(&read_line(&mut stream)).unwrap();
+    assert_eq!(reply["result"]["branch"], "main");
+    assert_eq!(selected.lock().expect("项目选择记录").len(), 2);
+    assert!(
+        selected.lock().expect("项目选择记录")[1].is_some(),
+        "显式项目必须透传给回调"
+    );
+
+    write_json(
+        &mut stream,
+        &serde_json::json!({"jsonrpc":"2.0","id":42,"method":"git.status","params":{"project_id":"not-a-project"}}),
+    );
+    let reply: serde_json::Value = serde_json::from_str(&read_line(&mut stream)).unwrap();
+    assert_eq!(reply["error"]["data"]["code"], "invalid_request");
+    assert_eq!(selected.lock().expect("项目选择记录").len(), 2);
+    server.shutdown().unwrap();
+}
+
+fn start_dual_scope_server_with_wait_status<W>(
+    on_wait_status: W,
+) -> (LocalControlServer, Arc<AtomicUsize>)
+where
+    W: Fn(crate::local_control::server::TerminalStatusTarget) -> Result<u64, JsonRpcError> + Send + Sync + 'static,
+{
+    let calls = Arc::new(AtomicUsize::new(0));
+    let callback_calls = Arc::clone(&calls);
+    let server = LocalControlServer::start_with_runtime(
+        test_secret("sk-test"),
+        test_secret("sk-test-runtime"),
+        hello_response(),
+        move |_| {
+            callback_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(HandoverResponse::accepted())
+        },
+        crate::local_control::server::RuntimeCallbacks {
             snapshot: Arc::new(|| Ok(SnapshotResources::default())),
             operation: Arc::new(|_| Ok(None)),
             events: Arc::new(|_| {
@@ -1398,6 +1075,7 @@ where
             read: Arc::new(unavailable_read),
             wait_status: Arc::new(on_wait_status),
             agents: Arc::new(unavailable_agents),
+            git_status: Arc::new(unavailable_git_status),
         },
     )
     .unwrap();
@@ -1493,7 +1171,7 @@ fn runtime_project_list_and_mutations_route_through_callbacks() {
 
 fn start_dual_scope_server_with_events<E>(on_events: E) -> (LocalControlServer, Arc<AtomicUsize>)
 where
-    E: Fn(EventsSubscribeParams) -> Result<super::events::Subscription, JsonRpcError>
+    E: Fn(EventsSubscribeParams) -> Result<crate::local_control::events::Subscription, JsonRpcError>
         + Send
         + Sync
         + 'static,
@@ -1508,7 +1186,7 @@ where
             callback_calls.fetch_add(1, Ordering::SeqCst);
             Ok(HandoverResponse::accepted())
         },
-        super::server::RuntimeCallbacks {
+        crate::local_control::server::RuntimeCallbacks {
             snapshot: Arc::new(|| Ok(SnapshotResources::default())),
             operation: Arc::new(|_| Ok(None)),
             events: Arc::new(on_events),
@@ -1516,6 +1194,7 @@ where
             read: Arc::new(unavailable_read),
             wait_status: Arc::new(unavailable_wait_status),
             agents: Arc::new(unavailable_agents),
+            git_status: Arc::new(unavailable_git_status),
         },
     )
     .unwrap();
@@ -1524,7 +1203,7 @@ where
 
 #[test]
 fn runtime_subscription_streams_events_and_accepts_unsubscribe() {
-    let (events_tx, events_rx) = mpsc::sync_channel(super::events::CLIENT_QUEUE_CAPACITY);
+    let (events_tx, events_rx) = mpsc::sync_channel(crate::local_control::events::CLIENT_QUEUE_CAPACITY);
     let receiver_slot = Arc::new(Mutex::new(Some(events_rx)));
     let slot = Arc::clone(&receiver_slot);
     let (mut server, _calls) = start_dual_scope_server_with_events(move |_| {
@@ -1533,7 +1212,7 @@ fn runtime_subscription_streams_events_and_accepts_unsubscribe() {
             .expect("订阅槽")
             .take()
             .expect("每次连接只订阅一次");
-        Ok(super::events::Subscription {
+        Ok(crate::local_control::events::Subscription {
             confirmed: EventsSubscribedResponse {
                 stream_epoch: "stream".to_owned(),
                 revision: 0,
@@ -1725,6 +1404,7 @@ fn runtime_describe_returns_registry_and_contract_hashes() {
             "agent.start",
             "agent.resume",
             "agent.fork",
+            "git.status",
             "instance.handover"
         ]
     );
