@@ -41,6 +41,10 @@ pub(super) enum ExplorerIntent {
         from: CanonicalPath,
         to: CanonicalPath,
     },
+    LoadStatus {
+        project_id: ProjectId,
+        root: CanonicalPath,
+    },
 }
 
 /// 未确认的内联编辑只存在于运行态；视图销毁即丢弃，不产生文件副作用。
@@ -62,6 +66,18 @@ pub(super) enum ExplorerError {
 enum ExplorerCwdError {
     Unavailable,
     Unauthorized,
+}
+
+/// 状态读取授权 = 项目根与只读父仓库根的并集；仓库根仅作读取。
+fn explorer_status_grants(root: &CanonicalPath) -> Result<Vec<PathGrant>, crate::git::GitError> {
+    let mut grants = vec![PathGrant::project_root(root.clone())];
+    let repo_root = crate::git::repository_root_cached(root.as_path())?;
+    let repo_root = CanonicalPath::new(repo_root)
+        .map_err(|_| crate::git::GitError::Command("仓库根不是规范绝对路径".to_owned()))?;
+    if repo_root != *root {
+        grants.push(PathGrant::repo_root(repo_root));
+    }
+    Ok(grants)
 }
 
 /// 在后台验证真实目录身份与 cwd 授权；不触碰快照或 launcher。
@@ -103,6 +119,9 @@ pub(super) struct ExplorerRuntime {
     show_ignored: bool,
     multi_selection: BTreeSet<CanonicalPath>,
     scroll_handle: gpui::ScrollHandle,
+    /// 发现到的父仓库根与状态条目数；只作展示，不参与树根。
+    repo_root: Option<CanonicalPath>,
+    status_entries: usize,
     filter_input: Option<gpui::Entity<gpui_component::input::InputState>>,
     _filter_change: Option<gpui::Subscription>,
     reading: bool,
@@ -130,6 +149,8 @@ impl ExplorerRuntime {
             show_ignored: false,
             multi_selection: BTreeSet::new(),
             scroll_handle: gpui::ScrollHandle::new(),
+            repo_root: None,
+            status_entries: 0,
             filter_input: None,
             _filter_change: None,
             reading: false,
@@ -162,6 +183,8 @@ impl ExplorerRuntime {
         self.multi_selection.clear();
         self.show_ignored = false;
         self.scroll_handle = gpui::ScrollHandle::new();
+        self.repo_root = None;
+        self.status_entries = 0;
         self.filter_input = None;
         self._filter_change = None;
         self.dirty = false;
@@ -296,6 +319,78 @@ impl AppRoot {
                 from,
                 to,
             } => self.start_explorer_rename(project_id, root, from, to, window, cx),
+            ExplorerIntent::LoadStatus { project_id, root } => {
+                self.start_explorer_status(project_id, root, window, cx)
+            }
+        }
+    }
+
+    /// 状态读取先发现父仓库根，再以 ProjectRoot 与只读 RepoRoot 并集授权。
+    fn start_explorer_status(
+        &mut self,
+        project_id: ProjectId,
+        root: CanonicalPath,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if self.tasks.is_registered(TaskId::ExplorerStatus) {
+            return;
+        }
+        let git = std::sync::Arc::clone(&self.git);
+        let executor = cx.background_executor().clone();
+        let window_handle = window.window_handle();
+        let project_root = root.clone();
+        self.tasks
+            .register_with(
+                TaskId::ExplorerStatus,
+                CancellationToken::new(),
+                move || {
+                    let loading = executor.spawn(async move {
+                        let grants = explorer_status_grants(&project_root)?;
+                        let snapshot = git.status(&project_root, &grants, 0)?;
+                        Ok::<_, crate::git::GitError>(snapshot)
+                    });
+                    cx.spawn(async move |this, cx| {
+                        let result = loading.await;
+                        let _ = window_handle.update(cx, |_, window, cx| {
+                            let _ = this.update(cx, |root, cx| {
+                                root.finish_explorer_status(project_id, result, window, cx);
+                            });
+                        });
+                    })
+                },
+            )
+            .expect("ExplorerStatus 单任务登记必须唯一");
+    }
+
+    fn finish_explorer_status(
+        &mut self,
+        project_id: ProjectId,
+        result: Result<std::sync::Arc<crate::git::StatusSnapshot>, crate::git::GitError>,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.tasks.complete(TaskId::ExplorerStatus);
+        let _ = window;
+        let Ok(snapshot) = result else {
+            return;
+        };
+        if self.snapshot.registry().project(project_id).is_none() {
+            return;
+        }
+        let repo_root = snapshot
+            .worktree_root
+            .as_ref()
+            .map(|root| root.canonical_path().clone());
+        let entries = snapshot.entries.len();
+        if let Some(explorer) = self
+            .side_views
+            .instance(slterm_workspace::SideViewId::Explorer)
+            .cloned()
+        {
+            explorer.update(cx, |view, cx| {
+                view.explorer_set_status(repo_root, entries, cx)
+            });
         }
     }
 
@@ -486,6 +581,7 @@ impl SideView {
             self.ensure_explorer_filter_input(window, cx);
             return;
         }
+        let status_root = root.clone();
         self.checkpoint_explorer_state();
         match &mut self.explorer {
             Some(runtime) => runtime.reset(project, root, restored.as_ref()),
@@ -495,6 +591,14 @@ impl SideView {
         }
         self.ensure_explorer_filter_input(window, cx);
         self.request_explorer_root(cx);
+        self.dispatch_explorer_intent(
+            ExplorerIntent::LoadStatus {
+                project_id: project,
+                root: status_root,
+            },
+            window,
+            cx,
+        );
         cx.notify();
     }
 
@@ -759,6 +863,58 @@ impl SideView {
 
     pub(super) fn explorer_scroll_handle(&self) -> Option<&gpui::ScrollHandle> {
         self.explorer.as_ref().map(|runtime| &runtime.scroll_handle)
+    }
+
+    /// 状态回执只更新展示事实；树根与已加载行保持原样。
+    pub(super) fn explorer_set_status(
+        &mut self,
+        repo_root: Option<CanonicalPath>,
+        entries: usize,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(runtime) = &mut self.explorer else {
+            return;
+        };
+        runtime.repo_root = repo_root;
+        runtime.status_entries = entries;
+        cx.notify();
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(super) fn explorer_repo_root(&self) -> Option<&CanonicalPath> {
+        self.explorer
+            .as_ref()
+            .and_then(|runtime| runtime.repo_root.as_ref())
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(super) fn explorer_tree_root(&self) -> Option<&CanonicalPath> {
+        self.explorer
+            .as_ref()
+            .map(|runtime| runtime.tree.root_path())
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(super) fn explorer_visible_paths(&self) -> Vec<CanonicalPath> {
+        self.explorer
+            .as_ref()
+            .map(|runtime| {
+                runtime
+                    .tree
+                    .visible_rows()
+                    .into_iter()
+                    .map(|row| row.path)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(super) fn explorer_status_entries(&self) -> usize {
+        self.explorer
+            .as_ref()
+            .map(|runtime| runtime.status_entries)
+            .unwrap_or_default()
     }
 
     #[cfg(all(test, feature = "gpui-test-support"))]
@@ -1067,6 +1223,10 @@ pub(super) fn render_explorer(view: &mut SideView, cx: &mut Context<'_, SideView
     let inline_target = runtime.inline_edit.as_ref().map(|edit| edit.target.clone());
     let filter_input = runtime.filter_input.clone();
     let show_ignored = runtime.show_ignored;
+    let status_label = runtime
+        .repo_root
+        .as_ref()
+        .map(|_| format!("changes: {}", runtime.status_entries));
     let expanded = rows
         .iter()
         .filter(|row| runtime.tree.is_expanded(&row.path))
@@ -1163,6 +1323,15 @@ pub(super) fn render_explorer(view: &mut SideView, cx: &mut Context<'_, SideView
                 .flex_grow(1.0)
                 .min_w_0()
                 .child(gpui_component::input::Input::new(&input)),
+        );
+    }
+    if let Some(label) = status_label {
+        header = header.child(
+            div()
+                .flex_none()
+                .debug_selector(|| "explorer-status".to_owned())
+                .text_color(cx.theme().muted_foreground)
+                .child(label),
         );
     }
     header = header.child(

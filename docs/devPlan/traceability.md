@@ -360,16 +360,16 @@
 
 | 验收场景 | 目标测试例名 | 状态 |
 |---|---|---|
-| 另一项目已打开脏文件时再次打开复用 Document | `explorer_open_reuses_document` | 待实现 |
+| 另一项目已打开脏文件时再次打开复用 Document | `explorer_open_reuses_document` | 已自动化 |
 | 树加载后链接重定向会在写前重检并拒绝 | `explorer_rechecks_links_before_mutation` | 已自动化 |
 | 只读 AgentRoot 到可写 ProjectRoot 可复制而反向拒绝 | `explorer_copy_capability_union` | 已自动化 |
 | 跨根剪切和目录粘贴到后代逐项拒绝 | `explorer_rejects_cross_root_cut_and_descendant_paste` | 已自动化 |
-| 显式 cwd 失效时在终端打开拒绝且不留空 Panel | `explorer_terminal_open_rejects_invalid_cwd` | 待实现 |
-| 过滤与多选清除而展开、滚动和忽略开关恢复 | `explorer_view_state_restore` | 待实现 |
-| 关闭视图不自动提交未确认内联编辑 | `explorer_inline_edit_not_committed_on_destroy` | 待实现 |
+| 显式 cwd 失效时在终端打开拒绝且不留空 Panel | `explorer_terminal_open_rejects_invalid_cwd` | 已自动化 |
+| 过滤与多选清除而展开、滚动和忽略开关恢复 | `explorer_view_state_restore` | 已自动化 |
+| 关闭视图不自动提交未确认内联编辑 | `explorer_inline_edit_not_committed_on_destroy` | 已自动化 |
 | 粘贴冲突取消零修改且部分失败不回滚成功项 | `explorer_paste_conflict_and_partial_success` | 已自动化 |
 | 不可见期间文件事件重新可见只合并复核 | `explorer_hidden_refresh_coalesced` | 已自动化 |
-| 项目根为仓库子目录时 Git 读取不扩大树根 | `explorer_repo_root_does_not_expand_tree_root` | 待实现 |
+| 项目根为仓库子目录时 Git 读取不扩大树根 | `explorer_repo_root_does_not_expand_tree_root` | 已自动化 |
 
 ### Agent 全局文件
 

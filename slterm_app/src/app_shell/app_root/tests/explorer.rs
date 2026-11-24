@@ -382,3 +382,46 @@ fn explorer_view_state_restore(cx: &mut TestAppContext) {
         assert!((-view.explorer_scroll_handle().unwrap().offset().y.as_f32() - 40.0).abs() < 1.0);
     });
 }
+
+#[gpui::test]
+fn explorer_repo_root_does_not_expand_tree_root(cx: &mut TestAppContext) {
+    let (_temp, repository, _binding) = super::gitshow::repository();
+    let project = repository.join("nested/project");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::write(project.join("inner.txt"), "inner\n").unwrap();
+    std::fs::write(repository.join("first.txt"), "changed\n").unwrap();
+    let project_root = CanonicalPath::new(dunce::canonicalize(&project).unwrap()).unwrap();
+    let repo_root = CanonicalPath::new(dunce::canonicalize(&repository).unwrap()).unwrap();
+    let (root, mut window, _) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, project.to_str().unwrap());
+    let explorer = open_explorer(&root, &mut window, cx);
+    window.run_until_parked();
+    draw_frame(&mut window);
+    window.run_until_parked();
+
+    explorer.read_with(cx, |view, _| {
+        assert_eq!(
+            view.explorer_repo_root(),
+            Some(&repo_root),
+            "必须真实读到父仓库根"
+        );
+        assert_eq!(
+            view.explorer_tree_root(),
+            Some(&project_root),
+            "Git 读取不得扩大文件树根"
+        );
+        let rows = view.explorer_visible_paths();
+        assert!(!rows.is_empty());
+        assert!(
+            rows.iter()
+                .all(|path| path.as_path().starts_with(project_root.as_path())),
+            "所有可见行必须位于项目根内"
+        );
+        assert!(
+            rows.iter()
+                .all(|path| path.as_path() != repo_root.as_path().join("first.txt")),
+            "仓库根兄弟文件不得进入文件树"
+        );
+        assert!(view.explorer_status_entries() > 0, "仓库状态必须真实读取");
+    });
+}
