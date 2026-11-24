@@ -601,6 +601,38 @@ mod background_task_tests {
         drop(guard);
         assert!(begin(AUTO_UPDATE_DOWNLOAD).is_some(), "轮末释放闸门");
     }
+
+    /// 套餐调度不依赖导航视图可见性；订阅释放后即停止。
+    #[test]
+    fn plan_balance_runs_while_navigation_hidden() {
+        reset_for_test();
+        let def = super::find(PLAN_BALANCE).expect("套餐任务必须已注册");
+        assert_eq!(def.schedule, TaskSchedule::Interval);
+        assert!(def.enabled_default);
+
+        let subscription = subscribe(PLAN_BALANCE).expect("已注册");
+        let mut ran = 0;
+        assert_eq!(
+            run_once(PLAN_BALANCE, || {
+                ran += 1;
+                Ok(())
+            }),
+            TaskRunOutcome::Ran,
+            "没有导航视图时周期任务仍须执行"
+        );
+        assert_eq!(ran, 1);
+
+        drop(subscription);
+        assert_eq!(
+            run_once(PLAN_BALANCE, || {
+                ran += 1;
+                Ok(())
+            }),
+            TaskRunOutcome::Inactive,
+            "退出（订阅释放）后必须停止调度"
+        );
+        assert_eq!(ran, 1);
+    }
 }
 
 /// GPUI 虚拟时钟下的 12s 一次性延迟契约(物化 `startup_delay` 的时序语义)。
@@ -647,36 +679,5 @@ mod startup_timing_tests {
         executor.advance_clock(Duration::from_secs(12));
         executor.run_until_parked();
         assert_eq!(calls.load(Ordering::SeqCst), 1, "一次性任务不得重跑");
-    }
-    /// 套餐调度不依赖导航视图可见性；订阅释放后即停止。
-    #[test]
-    fn plan_balance_runs_while_navigation_hidden() {
-        reset_for_test();
-        let def = super::find(PLAN_BALANCE).expect("套餐任务必须已注册");
-        assert_eq!(def.schedule, TaskSchedule::Interval);
-        assert!(def.enabled_default);
-
-        let subscription = subscribe(PLAN_BALANCE).expect("已注册");
-        let mut ran = 0;
-        assert_eq!(
-            run_once(PLAN_BALANCE, || {
-                ran += 1;
-                Ok(())
-            }),
-            TaskRunOutcome::Ran,
-            "没有导航视图时周期任务仍须执行"
-        );
-        assert_eq!(ran, 1);
-
-        drop(subscription);
-        assert_eq!(
-            run_once(PLAN_BALANCE, || {
-                ran += 1;
-                Ok(())
-            }),
-            TaskRunOutcome::Inactive,
-            "退出（订阅释放）后必须停止调度"
-        );
-        assert_eq!(ran, 1);
     }
 }
