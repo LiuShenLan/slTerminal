@@ -349,3 +349,112 @@ fn agent_root_capability_union_and_revoke(cx: &mut TestAppContext) {
         );
     });
 }
+
+#[gpui::test]
+fn agent_root_path_change_resets_state_and_authorization(cx: &mut TestAppContext) {
+    use slterm_path::{PathOperation, PathPolicy, PathRequest, ResolvedPath};
+
+    let temp = tempfile::tempdir().unwrap();
+    let project_root = temp.path().join("path-project");
+    let root_a_dir = temp.path().join("path-root-a");
+    let root_b_dir = temp.path().join("path-root-b");
+    std::fs::create_dir_all(&project_root).unwrap();
+    std::fs::create_dir_all(root_a_dir.join("skills")).unwrap();
+    std::fs::write(root_a_dir.join("skills/run.md"), "a\n").unwrap();
+    std::fs::create_dir_all(&root_b_dir).unwrap();
+    let skills_dir = canonical(root_a_dir.join("skills"));
+    let skill = canonical(root_a_dir.join("skills/run.md"));
+    let (root, mut window, _) = open_root(cx);
+    add_project(
+        &root,
+        &mut window,
+        PROJECT_A,
+        project_root.to_str().unwrap(),
+    );
+    let custom_a = slterm_settings::AgentRoot::custom(
+        agent_root_id(),
+        "A".to_owned(),
+        root_a_dir.to_string_lossy().into_owned(),
+    )
+    .unwrap();
+    let custom_b = slterm_settings::AgentRoot::custom(
+        second_agent_root_id(),
+        "B".to_owned(),
+        root_b_dir.to_string_lossy().into_owned(),
+    )
+    .unwrap();
+    root.update(cx, |root, _| {
+        root.replace_agent_global_dirs_for_test(Vec::new());
+        root.replace_custom_agent_roots_for_test(vec![custom_a, custom_b.clone()]);
+    });
+    let view = open_agent_files(&root, &mut window, cx);
+    window.run_until_parked();
+    draw_frame(&mut window);
+    window.run_until_parked();
+    window.update(|_, cx| {
+        view.update(cx, |view, cx| {
+            view.agent_files_activate_path(&skills_dir, cx);
+        });
+    });
+    window.run_until_parked();
+    draw_frame(&mut window);
+    window.run_until_parked();
+    window.update(|_, cx| {
+        view.update(cx, |view, cx| {
+            view.agent_files_activate_path(&skill, cx);
+        });
+    });
+    window.run_until_parked();
+
+    window.update(|_, cx| {
+        view.update(cx, |view, _| view.checkpoint_agent_files_state());
+    });
+    view.read_with(cx, |view, _| {
+        let slterm_sidebar::SideViewState::AgentFiles(state) = &view.state else {
+            panic!("必须是 AgentFiles 状态");
+        };
+        assert_eq!(
+            state.root_expanded(agent_root_id()),
+            Some(true),
+            "撤销前旧根分区必须真实存在"
+        );
+    });
+
+    window.update(|_, cx| {
+        view.update(cx, |view, cx| {
+            view.agent_files_remove_root(agent_root_id(), cx);
+        });
+    });
+    view.read_with(cx, |view, _| {
+        let slterm_sidebar::SideViewState::AgentFiles(state) = &view.state else {
+            panic!("必须是 AgentFiles 状态");
+        };
+        assert_eq!(
+            state.root_expanded(agent_root_id()),
+            None,
+            "改路径后旧根分区必须移除"
+        );
+        assert_eq!(
+            view.agent_files_selected_text_for_test(),
+            None,
+            "旧根当前行不得套用"
+        );
+    });
+
+    root.update(cx, |root, _| {
+        root.replace_custom_agent_roots_for_test(vec![custom_b]);
+    });
+    let grants = root.read_with(cx, |root, _| root.agent_root_grants_for_path(&skill));
+    let request = PathRequest {
+        operation: PathOperation::Write,
+        lexical_path: skill.as_path().to_path_buf(),
+        root_hints: Vec::new(),
+        session_grant: None,
+        expected_authorization_generation: 0,
+    };
+    let resolved = ResolvedPath::new(skill.clone(), None);
+    assert!(
+        PathPolicy::authorize(&request, &resolved, &grants, 0).is_err(),
+        "改路径后旧根授权不得套用"
+    );
+}

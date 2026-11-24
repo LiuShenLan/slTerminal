@@ -173,6 +173,23 @@ impl AgentFilesRuntime {
     }
 
     /// 根标题点击：折叠/展开整根。
+    /// 撤销单根：移除模型、在途请求与属于该根的分区状态，选中清空。
+    pub(super) fn remove_root(&mut self, root_id: AgentRootId) {
+        self.roots.retain(|root| root.root_id != root_id);
+        self.pending_reads
+            .retain(|(pending_root, _)| *pending_root != root_id);
+        self.pending_expanded
+            .retain(|(pending_root, _)| *pending_root != root_id);
+        if self
+            .selected
+            .as_ref()
+            .is_some_and(|path| self.root_for_path(path).is_none())
+        {
+            self.selected = None;
+        }
+        self.dirty = true;
+    }
+
     pub(super) fn toggle_root(&mut self, root_id: AgentRootId) {
         if let Some(root) = self.roots.iter_mut().find(|root| root.root_id == root_id) {
             root.expanded = !root.expanded;
@@ -614,8 +631,43 @@ impl SideView {
         cx: &mut Context<'_, Self>,
     ) {
         self.ensure_agent_files();
+        // 配置中消失的根按撤销处理：运行态与持久分区一并清理，新根按新身份登记。
+        let next = roots
+            .iter()
+            .map(|(root_id, _, _)| *root_id)
+            .collect::<BTreeSet<_>>();
+        let removed = self
+            .agent_files
+            .as_ref()
+            .map(|runtime| {
+                runtime
+                    .roots
+                    .iter()
+                    .map(|root| root.root_id)
+                    .filter(|root_id| !next.contains(root_id))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        for root_id in removed {
+            self.agent_files_remove_root(root_id, cx);
+        }
         self.agent_files_set_roots(roots);
         self.agent_files_begin(cx);
+    }
+
+    /// 根改路径回执：撤销旧身份的运行态与持久分区，新根按新身份登记。
+    pub(super) fn agent_files_remove_root(
+        &mut self,
+        root_id: AgentRootId,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if let Some(runtime) = &mut self.agent_files {
+            runtime.remove_root(root_id);
+        }
+        let _ = self.edit_state(|state| {
+            state.remove_agent_root(root_id);
+        });
+        cx.notify();
     }
 
     /// 关闭/退出共用检查点出口；无用户动作时不写盘。

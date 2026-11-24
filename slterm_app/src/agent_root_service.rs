@@ -465,7 +465,7 @@ mod tests {
 
     /// 改路径换身份：旧 id 撤销、新 id 继承能力，旧 id 不再可授权。
     #[test]
-    fn agent_root_path_change_resets_state_and_authorization() {
+    fn agent_root_path_change_service_semantics() {
         let temp = tempfile::tempdir().unwrap();
         let first = temp.path().join("first");
         let second = temp.path().join("second");

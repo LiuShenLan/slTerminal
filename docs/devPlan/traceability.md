@@ -315,7 +315,7 @@
 | 套餐不读取 CLI 凭据且专用 token 不回显 | `settings_plan_token_not_cli_credentials` | 待实现 |
 | 后台周期提交后按新周期运行且隐藏仍查询 | `settings_plan_schedule_commit_and_visibility` | 待实现 |
 | 自定义根真实目录重复拒绝且删除立即撤销授权 | `agent_root_duplicate_and_revocation` | 已自动化 |
-| AgentRoot 默认只读且写与终端分别拒绝 | `agent_root_default_capabilities` | 待实现 |
+| AgentRoot 默认只读且写与终端分别拒绝 | `agent_root_default_capabilities` | 已自动化 |
 | Hooks 外部修改时不覆盖文件或静默丢草稿 | `hooks_external_modification_guard` | 待实现 |
 | 注入提交后清理失败显示已提交与重试 | `hooks_post_commit_cleanup_failure_is_visible` | 待实现 |
 | 导入拒绝凭据／高版本且恢复默认不删凭据 Hooks | `settings_import_and_reset_preserve_secrets` | 待实现 |
@@ -386,7 +386,7 @@
 | 根层过滤不读取被隐藏内容且不是授权 | `agent_files_filter_is_not_authorization` | 待实现 |
 | 从 Agent 树打开同一文件仍复用共享 Document | `agent_files_open_reuses_document` | 已自动化 |
 | 展开、当前行和滚动恢复而多选与错误清除 | `agent_files_view_state_restore` | 已自动化 |
-| 根改路径后旧授权与相对视图状态不套用 | `agent_root_path_change_resets_state_and_authorization` | 待实现 |
+| 根改路径后旧授权与相对视图状态不套用 | `agent_root_path_change_resets_state_and_authorization` | 已自动化 |
 | 不可见或根收起时释放监听且无过期结果回填 | `agent_files_visibility_controls_watchers` | 待实现 |
 
 ### GitShow
