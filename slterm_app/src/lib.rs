@@ -120,6 +120,9 @@ pub(crate) mod side_panel;
 pub(crate) mod settings_state;
 #[allow(dead_code)] // 设置写由后续设置协调器接入。
 pub(crate) mod settings_store;
+/// 普通设置导入导出白名单投影。
+#[allow(dead_code)] // 消费点归设置中心导入导出入口。
+pub(crate) mod settings_transfer;
 // 补全/建议计算核心:ghost 余量与 popup 多候选同源。
 #[allow(dead_code)] // 消费点归呈现接线。
 pub(crate) mod suggest;

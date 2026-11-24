@@ -178,6 +178,11 @@ impl RawSettings {
         &self.tree
     }
 
+    /// 登记键的持久原值（不校验；普通设置导出投影用）。
+    pub fn persisted_value(&self, key: &str) -> Option<&Value> {
+        self.segment_value(key)
+    }
+
     /// 文件树中实际出现且已登记的键名遍历。
     pub fn keys(&self) -> impl Iterator<Item = &'static str> + '_ {
         keys::KEYS

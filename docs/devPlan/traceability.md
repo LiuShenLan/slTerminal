@@ -154,7 +154,7 @@
 | 异常启动先布局后对账且不重复创建 Panel | `startup_reconciles_layout_before_snapshot` | 已自动化 |
 | 无主快照无活跃项目时保留并等待显式处置 | `orphan_snapshot_requires_explicit_target` | 已自动化 |
 | 最终提交失败后放弃状态退出有旧状态提示 | `close_abandon_warns_about_old_state` | 已自动化 |
-| 普通设置导入拒绝未知版本或凭据字段 | `settings_import_rejects_unknown_or_credentials` | 待实现 |
+| 普通设置导入拒绝未知版本或凭据字段 | `settings_import_rejects_unknown_or_credentials` | 已自动化 |
 
 ### PathPolicy
 
@@ -318,7 +318,7 @@
 | AgentRoot 默认只读且写与终端分别拒绝 | `agent_root_default_capabilities` | 已自动化 |
 | Hooks 外部修改时不覆盖文件或静默丢草稿 | `hooks_external_modification_guard` | 已自动化 |
 | 注入提交后清理失败显示已提交与重试 | `hooks_post_commit_cleanup_failure_is_visible` | 已自动化 |
-| 导入拒绝凭据／高版本且恢复默认不删凭据 Hooks | `settings_import_and_reset_preserve_secrets` | 待实现 |
+| 导入拒绝凭据／高版本且恢复默认不删凭据 Hooks | `settings_import_and_reset_preserve_secrets` | 已自动化 |
 
 ### Commit
 
