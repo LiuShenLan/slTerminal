@@ -1477,7 +1477,9 @@
         "terminal.reconnect",
         "terminal.rename",
         "agent.list",
-        "agent.get"
+        "agent.get",
+        "agent.input",
+        "agent.close"
       ]
     },
     "RuntimeParams": {

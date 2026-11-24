@@ -11,18 +11,18 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use slterm_runtime_protocol::{
-    AgentGetRequest, AgentListResponse, AgentResource, ClientRequest, ControlScope, Credential,
-    DescribeResponse, DomainErrorCode, EventNotification, EventsSubscribeParams,
-    EventsUnsubscribedResponse, HandoverParams, HandoverResponse, HelloResponse, JsonRpcError,
-    JsonRpcErrorData, JsonRpcId, JsonRpcResponse, OPERATION_WAIT_LIMIT_MS, OperationQueryParams,
-    OperationResource, OperationWaitParams, PanelActivateParams, PanelGroupMergeParams,
-    PanelGroupResizeParams, PanelGroupSplitParams, PanelMoveParams, PanelOpenSettingsParams,
-    ProjectActivateParams, ProjectListResponse, ProjectRemoveParams, ProjectRenameParams,
-    ProjectReorderParams, RuntimeEvent, RuntimeMethod, RuntimeRequest, RuntimeResult,
-    SnapshotResources, SnapshotResponse, SplitDirectionWire, TerminalCloseParams,
-    TerminalCreateParams, TerminalExecuteParams, TerminalInputParams, TerminalReadRequest,
-    TerminalReadResponse, TerminalReconnectParams, TerminalRenameParams, TerminalWaitRequest,
-    TerminalWaitResponse, ViewportSize, parse_client_request,
+    AgentCloseParams, AgentGetRequest, AgentInputParams, AgentListResponse, AgentResource,
+    ClientRequest, ControlScope, Credential, DescribeResponse, DomainErrorCode, EventNotification,
+    EventsSubscribeParams, EventsUnsubscribedResponse, HandoverParams, HandoverResponse,
+    HelloResponse, JsonRpcError, JsonRpcErrorData, JsonRpcId, JsonRpcResponse,
+    OPERATION_WAIT_LIMIT_MS, OperationQueryParams, OperationResource, OperationWaitParams,
+    PanelActivateParams, PanelGroupMergeParams, PanelGroupResizeParams, PanelGroupSplitParams,
+    PanelMoveParams, PanelOpenSettingsParams, ProjectActivateParams, ProjectListResponse,
+    ProjectRemoveParams, ProjectRenameParams, ProjectReorderParams, RuntimeEvent, RuntimeMethod,
+    RuntimeRequest, RuntimeResult, SnapshotResources, SnapshotResponse, SplitDirectionWire,
+    TerminalCloseParams, TerminalCreateParams, TerminalExecuteParams, TerminalInputParams,
+    TerminalReadRequest, TerminalReadResponse, TerminalReconnectParams, TerminalRenameParams,
+    TerminalWaitRequest, TerminalWaitResponse, ViewportSize, parse_client_request,
 };
 use slterm_split::SplitDirection;
 use slterm_workspace::{LogicalSize, PanelGroupId, ProjectId, ViewKey};
@@ -533,6 +533,49 @@ fn handle_connection<F>(
                             }
                             Err(error) => JsonRpcResponse::error(request.id, error),
                         }
+                    }
+                    RuntimeMethod::AgentInput => {
+                        let Some(params) = request.parse::<AgentInputParams>() else {
+                            return;
+                        };
+                        let mutation =
+                            parse_terminal_id(&params.request.terminal_id).map(|terminal_id| {
+                                RuntimeMutation::AgentInput {
+                                    agent_id: params.request.agent_id,
+                                    terminal_id,
+                                    generation: params.request.generation,
+                                    data: params.request.data,
+                                }
+                            });
+                        respond_mutation(
+                            &runtime,
+                            request.id,
+                            params.client_id,
+                            params.mutation_id,
+                            params.expected_revision,
+                            mutation,
+                        )
+                    }
+                    RuntimeMethod::AgentClose => {
+                        let Some(params) = request.parse::<AgentCloseParams>() else {
+                            return;
+                        };
+                        let mutation =
+                            parse_terminal_id(&params.request.terminal_id).map(|terminal_id| {
+                                RuntimeMutation::AgentClose {
+                                    agent_id: params.request.agent_id,
+                                    terminal_id,
+                                    generation: params.request.generation,
+                                }
+                            });
+                        respond_mutation(
+                            &runtime,
+                            request.id,
+                            params.client_id,
+                            params.mutation_id,
+                            params.expected_revision,
+                            mutation,
+                        )
                     }
                     RuntimeMethod::OperationWait => {
                         match wait_operation(&runtime, &request, &shutdown) {

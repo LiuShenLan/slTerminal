@@ -148,6 +148,10 @@ pub enum RuntimeMethod {
     AgentList,
     #[serde(rename = "agent.get")]
     AgentGet,
+    #[serde(rename = "agent.input")]
+    AgentInput,
+    #[serde(rename = "agent.close")]
+    AgentClose,
 }
 
 /// 原始输入：显式写入 PTY，不追加回车，也不模拟键盘事件。
@@ -281,6 +285,31 @@ pub struct AgentListResponse {
 pub struct AgentGetRequest {
     pub agent_id: String,
 }
+
+/// Agent 写方法的目标：对外身份 + TerminalId + PTY 代次唯一定位。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct AgentInputRequest {
+    pub agent_id: String,
+    pub terminal_id: String,
+    pub generation: u64,
+    pub data: String,
+}
+
+pub type AgentInputParams = MutationParams<AgentInputRequest>;
+
+/// 关闭 Agent 关联的终端；身份与代次必须同时匹配。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct AgentCloseRequest {
+    pub agent_id: String,
+    pub terminal_id: String,
+    pub generation: u64,
+}
+
+pub type AgentCloseParams = MutationParams<AgentCloseRequest>;
 
 /// 新建终端：Shell 固定为应用默认，只开放目标项目与工作目录选择。
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -880,6 +909,20 @@ fn runtime_request_is_valid(request: &RuntimeRequest) -> bool {
         RuntimeMethod::AgentGet => request
             .parse::<AgentGetRequest>()
             .is_some_and(|params| present(&params.agent_id)),
+        RuntimeMethod::AgentInput => request.parse::<AgentInputParams>().is_some_and(|params| {
+            let request = &params.request;
+            params.has_valid_envelope()
+                && present(&request.agent_id)
+                && present(&request.terminal_id)
+                && request.generation > 0
+                && !request.data.is_empty()
+        }),
+        RuntimeMethod::AgentClose => request.parse::<AgentCloseParams>().is_some_and(|params| {
+            let request = &params.request;
+            params.has_valid_envelope()
+                && present(&request.agent_id)
+                && present(&request.terminal_id)
+        }),
     }
 }
 
@@ -959,11 +1002,13 @@ pub enum ControlMethod {
     RuntimeTerminalRename,
     RuntimeAgentList,
     RuntimeAgentGet,
+    RuntimeAgentInput,
+    RuntimeAgentClose,
     InstanceHandover,
 }
 
 impl ControlMethod {
-    pub const ALL: [Self; 29] = [
+    pub const ALL: [Self; 31] = [
         Self::RuntimeHello,
         Self::RuntimeDescribe,
         Self::RuntimeSnapshot,
@@ -992,6 +1037,8 @@ impl ControlMethod {
         Self::RuntimeTerminalRename,
         Self::RuntimeAgentList,
         Self::RuntimeAgentGet,
+        Self::RuntimeAgentInput,
+        Self::RuntimeAgentClose,
         Self::InstanceHandover,
     ];
 
@@ -1025,6 +1072,8 @@ impl ControlMethod {
             Self::RuntimeTerminalRename => "terminal.rename",
             Self::RuntimeAgentList => "agent.list",
             Self::RuntimeAgentGet => "agent.get",
+            Self::RuntimeAgentInput => "agent.input",
+            Self::RuntimeAgentClose => "agent.close",
             Self::InstanceHandover => "instance.handover",
         }
     }

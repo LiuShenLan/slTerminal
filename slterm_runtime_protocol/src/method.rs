@@ -207,6 +207,16 @@ fn agent_get_params_schema() -> schemars::Schema {
 }
 
 #[cfg(feature = "schema")]
+fn agent_input_params_schema() -> schemars::Schema {
+    schemars::schema_for!(crate::protocol::AgentInputParams)
+}
+
+#[cfg(feature = "schema")]
+fn agent_close_params_schema() -> schemars::Schema {
+    schemars::schema_for!(crate::protocol::AgentCloseParams)
+}
+
+#[cfg(feature = "schema")]
 fn agent_list_result_schema() -> schemars::Schema {
     schemars::schema_for!(crate::protocol::AgentListResponse)
 }
@@ -494,6 +504,26 @@ pub static METHODS: &[MethodSpec] = &[
         result_schema: agent_list_result_schema,
     },
     MethodSpec {
+        method: ControlMethod::RuntimeAgentInput,
+        scopes: &[ControlScope::Runtime],
+        kind: MethodKind::Mutation,
+        idempotent: true,
+        #[cfg(feature = "schema")]
+        params_schema: agent_input_params_schema,
+        #[cfg(feature = "schema")]
+        result_schema: operation_result_schema,
+    },
+    MethodSpec {
+        method: ControlMethod::RuntimeAgentClose,
+        scopes: &[ControlScope::Runtime],
+        kind: MethodKind::Mutation,
+        idempotent: true,
+        #[cfg(feature = "schema")]
+        params_schema: agent_close_params_schema,
+        #[cfg(feature = "schema")]
+        result_schema: operation_result_schema,
+    },
+    MethodSpec {
         method: ControlMethod::InstanceHandover,
         scopes: &[ControlScope::Handover],
         kind: MethodKind::Mutation,
@@ -576,6 +606,8 @@ mod method_tests {
                 method_name(ControlMethod::RuntimeTerminalRename),
                 method_name(ControlMethod::RuntimeAgentList),
                 method_name(ControlMethod::RuntimeAgentGet),
+                method_name(ControlMethod::RuntimeAgentInput),
+                method_name(ControlMethod::RuntimeAgentClose),
                 method_name(ControlMethod::InstanceHandover),
             ]
         );
@@ -680,6 +712,8 @@ mod method_tests {
                 ControlMethod::RuntimeTerminalRename,
                 ControlMethod::RuntimeAgentList,
                 ControlMethod::RuntimeAgentGet,
+                ControlMethod::RuntimeAgentInput,
+                ControlMethod::RuntimeAgentClose,
             ]
         );
         let handover_methods: Vec<ControlMethod> = methods_for(ControlScope::Handover)

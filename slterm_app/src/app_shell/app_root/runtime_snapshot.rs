@@ -258,7 +258,68 @@ impl AppRoot {
                     .map(|_| ())
                     .map_err(runtime_mutation_error)
             }
+            RuntimeMutation::AgentInput {
+                agent_id,
+                terminal_id,
+                generation,
+                data,
+            } => {
+                let terminal = self.runtime_terminal_view(
+                    terminal_id,
+                    generation,
+                    RuntimeTerminalAccess::Running,
+                    cx,
+                )?;
+                self.ensure_runtime_agent(&agent_id, terminal_id, cx)?;
+                terminal
+                    .update(cx, |view, cx| view.runtime_input(data.into_bytes(), cx))
+                    .map_err(|_| not_ready_error("terminal not ready"))
+            }
+            RuntimeMutation::AgentClose {
+                agent_id,
+                terminal_id,
+                generation,
+            } => {
+                self.snapshot
+                    .terminal(terminal_id)
+                    .ok_or_else(invalid_request_error)?;
+                if self.runtime_terminal_generation(terminal_id) != generation {
+                    return Err(revision_conflict_error());
+                }
+                self.ensure_runtime_agent(&agent_id, terminal_id, cx)?;
+                self.close_terminal(terminal_id, window, cx)
+                    .map(|_| ())
+                    .map_err(runtime_mutation_error)
+            }
         }
+    }
+
+    /// 写方法必须证明目标终端当前的对外 Agent 身份与请求一致。
+    fn ensure_runtime_agent(
+        &self,
+        agent_id: &str,
+        terminal_id: slterm_workspace::TerminalId,
+        cx: &App,
+    ) -> Result<(), JsonRpcError> {
+        if self.runtime_agent_id(terminal_id, cx).as_deref() == Some(agent_id) {
+            Ok(())
+        } else {
+            Err(unknown_agent_error())
+        }
+    }
+
+    /// 目标终端的对外 Agent 身份；纯 Shell 或无关联时为 None。
+    fn runtime_agent_id(
+        &self,
+        terminal_id: slterm_workspace::TerminalId,
+        cx: &App,
+    ) -> Option<String> {
+        let terminal_id = terminal_id.to_string();
+        self.runtime_agents(cx)
+            .ok()?
+            .into_iter()
+            .find(|agent| agent.terminal_id == terminal_id)
+            .map(|agent| agent.agent_id)
     }
 
     /// 当前 Registry 代次；没有存活 worker 的持久化记录为零。
@@ -509,6 +570,11 @@ fn revision_conflict_error() -> JsonRpcError {
         -32005,
         "revision conflict",
     )
+}
+
+/// 请求的对外 Agent 身份与目标终端当前关联不一致。
+fn unknown_agent_error() -> JsonRpcError {
+    control_error(DomainErrorCode::UnknownAgent, -32000, "unknown agent")
 }
 
 /// 写意图错误映射为封闭领域码；不携带路径、SQL 或正文。

@@ -77,6 +77,17 @@ pub(crate) enum RuntimeMutation {
         terminal_id: TerminalId,
         title: Option<String>,
     },
+    AgentInput {
+        agent_id: String,
+        terminal_id: TerminalId,
+        generation: u64,
+        data: String,
+    },
+    AgentClose {
+        agent_id: String,
+        terminal_id: TerminalId,
+        generation: u64,
+    },
 }
 
 impl RuntimeMutation {
@@ -99,6 +110,8 @@ impl RuntimeMutation {
             Self::TerminalClose { .. } => "terminal.close",
             Self::TerminalReconnect { .. } => "terminal.reconnect",
             Self::TerminalRename { .. } => "terminal.rename",
+            Self::AgentInput { .. } => "agent.input",
+            Self::AgentClose { .. } => "agent.close",
         }
     }
 
@@ -204,6 +217,26 @@ impl RuntimeMutation {
             Self::TerminalRename { terminal_id, title } => Ok(serde_json::json!({
                 "terminal_id": terminal_id.to_string(),
                 "title": title,
+            })),
+            Self::AgentInput {
+                agent_id,
+                terminal_id,
+                generation,
+                data,
+            } => Ok(serde_json::json!({
+                "agent_id": agent_id,
+                "terminal_id": terminal_id.to_string(),
+                "generation": generation,
+                "data": data,
+            })),
+            Self::AgentClose {
+                agent_id,
+                terminal_id,
+                generation,
+            } => Ok(serde_json::json!({
+                "agent_id": agent_id,
+                "terminal_id": terminal_id.to_string(),
+                "generation": generation,
             })),
         }
     }
