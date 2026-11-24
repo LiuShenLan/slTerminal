@@ -33,8 +33,21 @@ struct MemoryCredentialStore {
 impl MemoryCredentialStore {
     fn replace_only_credential(&self) {
         let mut entries = self.entries.lock().expect("内存凭据锁");
-        assert_eq!(entries.len(), 1, "服务只应创建一项 handover 凭据");
-        let value = entries.values_mut().next().expect("唯一凭据");
+        assert_eq!(
+            entries.len(),
+            2,
+            "服务必须创建 handover 与 runtime 两项独立凭据"
+        );
+        let handover = entries
+            .keys()
+            .find(|target| target.contains("/handover/"))
+            .cloned()
+            .expect("handover 凭据");
+        assert!(
+            entries.keys().any(|target| target.contains("/runtime/")),
+            "runtime 凭据必须同时创建"
+        );
+        let value = entries.get_mut(&handover).expect("handover 凭据值");
         let replacement = if value.first() == Some(&b'0') {
             b'1'
         } else {

@@ -392,3 +392,115 @@ fn local_control_request_deadline_expires_without_waiting() {
     assert_eq!(super::server::REQUEST_TIMEOUT, Duration::from_secs(600));
     assert_eq!(super::server::HANDSHAKE_TIMEOUT, Duration::from_secs(5));
 }
+
+fn hello_scoped(credential: &str, scope: ControlScope) -> HelloRequest {
+    JsonRpcRequest::new(
+        JsonRpcId::Number(1),
+        HelloMethod::RuntimeHello,
+        HelloParams {
+            protocol_version: 2,
+            client_id: "loopback-test".to_owned(),
+            credential: Credential::new(credential),
+            scope,
+        },
+    )
+}
+
+fn start_dual_scope_server() -> (LocalControlServer, Arc<AtomicUsize>) {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let callback_calls = Arc::clone(&calls);
+    let server = LocalControlServer::start_with_runtime(
+        Credential::new("sk-test"),
+        Credential::new("sk-test-runtime"),
+        hello_response(),
+        move |_| {
+            callback_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(HandoverResponse::accepted())
+        },
+    )
+    .unwrap();
+    (server, calls)
+}
+
+#[test]
+fn runtime_scope_handshake_uses_its_own_credential() {
+    let (mut server, _calls) = start_dual_scope_server();
+    let mut stream = connect(&server);
+    stream.set_read_timeout(Some(TEST_TIMEOUT)).unwrap();
+    write_json(
+        &mut stream,
+        &hello_scoped("sk-test-runtime", ControlScope::Runtime),
+    );
+    let reply = read_line(&mut stream);
+
+    assert!(
+        reply.contains("store"),
+        "Runtime 作用域必须完成握手: {reply}"
+    );
+    server.shutdown().unwrap();
+}
+
+#[test]
+fn runtime_and_handover_credentials_are_isolated() {
+    let (mut server, calls) = start_dual_scope_server();
+
+    // Runtime 作用域不接受 handover 凭据。
+    let mut runtime_stream = connect(&server);
+    runtime_stream.set_read_timeout(Some(TEST_TIMEOUT)).unwrap();
+    write_json(
+        &mut runtime_stream,
+        &hello_scoped("sk-test", ControlScope::Runtime),
+    );
+    assert_eq!(read_line(&mut runtime_stream), "");
+
+    // Handover 作用域不接受 runtime 凭据。
+    let mut handover_stream = connect(&server);
+    handover_stream
+        .set_read_timeout(Some(TEST_TIMEOUT))
+        .unwrap();
+    write_json(
+        &mut handover_stream,
+        &hello_scoped("sk-test-runtime", ControlScope::Handover),
+    );
+    assert_eq!(read_line(&mut handover_stream), "");
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    server.shutdown().unwrap();
+}
+
+#[test]
+fn runtime_v1_rejected() {
+    let (mut server, _calls) = start_dual_scope_server();
+    let mut stream = connect(&server);
+    stream.set_read_timeout(Some(TEST_TIMEOUT)).unwrap();
+    let v1 = JsonRpcRequest::new(
+        JsonRpcId::Number(1),
+        HelloMethod::RuntimeHello,
+        HelloParams {
+            protocol_version: 1,
+            client_id: "v1-client".to_owned(),
+            credential: Credential::new("sk-test-runtime"),
+            scope: ControlScope::Runtime,
+        },
+    );
+    write_json(&mut stream, &v1);
+
+    assert_eq!(read_line(&mut stream), "", "v1 协议必须无响应断开");
+    server.shutdown().unwrap();
+}
+
+#[test]
+fn runtime_connection_rejects_handover_method_after_handshake() {
+    let (mut server, calls) = start_dual_scope_server();
+    let mut stream = connect(&server);
+    stream.set_read_timeout(Some(TEST_TIMEOUT)).unwrap();
+    write_json(
+        &mut stream,
+        &hello_scoped("sk-test-runtime", ControlScope::Runtime),
+    );
+    assert!(read_line(&mut stream).contains("store"));
+    write_json(&mut stream, &focus());
+
+    assert_eq!(read_line(&mut stream), "", "Runtime 连接不得执行 handover");
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    server.shutdown().unwrap();
+}

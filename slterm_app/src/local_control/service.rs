@@ -27,6 +27,19 @@ const RUNTIME_SCHEMA: &[u8] = include_bytes!("../../../assets/runtime-api-v2.sch
 pub(super) type HandoverCallback =
     Arc<dyn Fn(HandoverParams) -> Result<HandoverResponse, JsonRpcError> + Send + Sync + 'static>;
 
+/// 读取或创建指定作用域的线缆凭据；只由持锁首实例调用。
+fn load_credential(
+    scope: ControlScope,
+    local_root: &Path,
+    store: &dyn CredentialStore,
+) -> io::Result<Credential> {
+    let handle = load_or_create_at(scope, local_root, store)?;
+    let value = handle
+        .into_string()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "控制面凭据不是有效 UTF-8"))?;
+    Ok(Credential::new(value.as_str()))
+}
+
 /// 已持 OS 单实例锁的首实例服务；显式 shutdown 只能在 GPUI 外执行。
 pub(crate) struct LocalControlService {
     server: LocalControlServer,
@@ -49,8 +62,10 @@ impl LocalControlService {
             &store,
             &endpoint_path(),
             HANDOVER_REPLY_TIMEOUT,
-            |credential, hello, on_handover| {
-                LocalControlServer::start(credential, hello, move |params| on_handover(params))
+            |handover, runtime, hello, on_handover| {
+                LocalControlServer::start_with_runtime(handover, runtime, hello, move |params| {
+                    on_handover(params)
+                })
             },
         )
     }
@@ -69,8 +84,10 @@ impl LocalControlService {
             store,
             discovery_path,
             reply_timeout,
-            |credential, hello, on_handover| {
-                LocalControlServer::start(credential, hello, move |params| on_handover(params))
+            |handover, runtime, hello, on_handover| {
+                LocalControlServer::start_with_runtime(handover, runtime, hello, move |params| {
+                    on_handover(params)
+                })
             },
         )
     }
@@ -84,16 +101,18 @@ impl LocalControlService {
         bind: B,
     ) -> io::Result<Self>
     where
-        B: FnOnce(Credential, HelloResponse, HandoverCallback) -> io::Result<LocalControlServer>,
+        B: FnOnce(
+            Credential,
+            Credential,
+            HelloResponse,
+            HandoverCallback,
+        ) -> io::Result<LocalControlServer>,
     {
         let local_root = discovery_path.parent().ok_or_else(|| {
             io::Error::new(io::ErrorKind::InvalidInput, "控制面发现路径缺少数据根")
         })?;
-        let credential = load_or_create_at(ControlScope::Handover, local_root, store)?;
-        let credential = credential.into_string().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidData, "控制面凭据不是有效 UTF-8")
-        })?;
-        let credential = Credential::new(credential.as_str());
+        let credential = load_credential(ControlScope::Handover, local_root, store)?;
+        let runtime_credential = load_credential(ControlScope::Runtime, local_root, store)?;
         let (schema_sha256, protocol_sha256) = runtime_contract_hashes();
         let hello = HelloResponse::new(
             metadata.store_epoch.clone(),
@@ -116,7 +135,7 @@ impl LocalControlService {
                 }
             }
         });
-        let server = bind(credential, hello, on_handover)?;
+        let server = bind(credential, runtime_credential, hello, on_handover)?;
         let record = DiscoveryRecord {
             protocol_version: 2,
             endpoint: server

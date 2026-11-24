@@ -4,7 +4,7 @@
 
 ## 决策与红线
 
-- **首包认证**：连接首条请求必须是 `runtime.hello`，版本、client_id、凭据和 handover 作用域全部有效才开放 `instance.handover`；认证失败直接断开，不返回协议预言机，不记录请求行或凭据。
+- **首包认证与双作用域**：连接首条请求必须是 `runtime.hello`，协议版本、client_id 与作用域凭据全部有效才完成握手；`runtime` 与 `handover` 使用两项独立凭据，同一连接只接受自身作用域的方法，作用域不匹配或方法不属于该作用域直接断开。认证失败不返回协议预言机，不记录请求行或凭据。原因：两个作用域的安全边界不同，凭据混用会把移交意图提升为 Runtime 能力。边界：Runtime 作用域当前只开放握手，后续方法由注册表与对应服务切片逐个接入，不为未实现方法保留路由。
 - **有界传输**：请求上限 128 KiB，握手读取限时 5 秒，后续读取限时 600 秒；单连接顺序处理，连接上限 64。超限或无效请求不得进入应用回调。
 - **线程所有权**：accept 与连接 worker 均有显式句柄和 shutdown 路径；关闭拒绝新请求，唤醒 accept、断开活跃连接并 join，不留孤儿线程。首个 join 终止错误必须由 server 保存并在后续 shutdown/Drop 重放，正常重复关闭仍返回成功。不得在 GPUI 前台执行监听、读取、写入或 join。
 - **客户端前台禁令**：同步 handover 客户端只在 `run()` 创建 GPUI 前的第二实例启动路径调用；更晚的调用点必须改用后台执行体，禁止 GPUI 前台阻塞。原因：客户端包含有界但阻塞的连接、写入与读取。边界：发现、只读凭据加载与客户端移交依次完成，任一失败均终止第二实例，不得返回可创建窗口的实例 guard。
@@ -15,7 +15,7 @@
 - **回执有界等待**：server 回调只经 `app_shell::try_send_handover` 投递，worker 等待回执的生产上限为 4 秒；超时映射 NotReady，回执发送端断开映射 Closing，helper 错误原样返回。原因：客户端总 deadline 为 5 秒，服务端必须更早给出结构化终态且不能无界占用 worker。边界：不在回执等待后追加无界 join。
 - **统一关闭**：服务显式 shutdown 必须依次尝试 server shutdown 与发现撤销，前者失败不得跳过后者，汇总首个错误；重复调用保持安全，Drop 仅尽力。原因：监听与发现记录是同一服务的两个可观察资源，不能只回收一半。边界：正常退出必须显式调用并处理错误，不能依赖 Drop。
 - **发现记录无凭据**：端点发现只使用 Runtime v2 封闭 DTO，读取预算 4 KiB；发布经原子写收敛为仅当前用户的受保护 DACL，guard 绑定文件身份与内容，撤销排除所有其他读写句柄并把最终组件按 reparse 点自身打开，显式撤销上抛错误，Drop 只尽力清理。原因：端点可供本机客户端发现，但 token 不得进入普通文件，旧实例不得误删替代记录或链接目标，delete-pending 不得伪装为目录项已撤销。边界：客户端只读；损坏、未知字段、非 loopback、零端口与超限记录一律失败，正常关闭必须先显式撤销。
-- **能力边界**：当前只实现 hello 与 handover，不添加 Runtime 占位方法。OpenProject 在 AppRoot 先纯校验规范路径，再复用项目打开命令；仅成功后前置窗口，新增根不自动创建终端，重复根只激活既有项目。NewTerminal 在 AppRoot 纯校验可选 project_root/cwd 后复用同一 CommandRegistry，只选择既有项目，不在传输层或前台做文件系统解析；非法路径为 InvalidRequest，未知根、无覆盖 cwd、跨根 cwd 与模态为 Unauthorized，其他启动或未就绪失败为 NotReady，Closing 优先，错误脱敏。OpenFile 仍返回 InvalidRequest。原因：控制面只转发封闭意图，项目选择、原子启动、授权与窗口行为必须由 AppRoot 单点复核。边界：仅成功后前置窗口并返回 accepted，不得隐式创建项目或改投活跃项目。
+- **能力边界**：当前只实现 hello、handover 与 Runtime 握手，不添加 Runtime 占位方法；方法注册表登记真实可用方法，服务器只在对应作用域存活时接受其凭据。OpenProject 在 AppRoot 先纯校验规范路径，再复用项目打开命令；仅成功后前置窗口，新增根不自动创建终端，重复根只激活既有项目。NewTerminal 在 AppRoot 纯校验可选 project_root/cwd 后复用同一 CommandRegistry，只选择既有项目，不在传输层或前台做文件系统解析；非法路径为 InvalidRequest，未知根、无覆盖 cwd、跨根 cwd 与模态为 Unauthorized，其他启动或未就绪失败为 NotReady，Closing 优先，错误脱敏。OpenFile 仍返回 InvalidRequest。原因：控制面只转发封闭意图，项目选择、原子启动、授权与窗口行为必须由 AppRoot 单点复核。边界：仅成功后前置窗口并返回 accepted，不得隐式创建项目或改投活跃项目。
 
 ## 验收与测试
 

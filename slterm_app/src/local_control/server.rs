@@ -55,8 +55,39 @@ impl Drop for WorkerGuard {
 }
 
 impl LocalControlServer {
+    /// 只服务 handover 作用域（测试与无 Runtime 组合）。
     pub(crate) fn start<F>(
         credential: Credential,
+        hello: HelloResponse,
+        on_handover: F,
+    ) -> io::Result<Self>
+    where
+        F: Fn(HandoverParams) -> Result<HandoverResponse, JsonRpcError> + Send + Sync + 'static,
+    {
+        Self::start_scoped(credential, None, hello, on_handover)
+    }
+
+    /// 同一端点服务 Runtime 与 handover 两个作用域，凭据各自独立。
+    pub(crate) fn start_with_runtime<F>(
+        handover_credential: Credential,
+        runtime_credential: Credential,
+        hello: HelloResponse,
+        on_handover: F,
+    ) -> io::Result<Self>
+    where
+        F: Fn(HandoverParams) -> Result<HandoverResponse, JsonRpcError> + Send + Sync + 'static,
+    {
+        Self::start_scoped(
+            handover_credential,
+            Some(runtime_credential),
+            hello,
+            on_handover,
+        )
+    }
+
+    fn start_scoped<F>(
+        credential: Credential,
+        runtime_credential: Option<Credential>,
         hello: HelloResponse,
         on_handover: F,
     ) -> io::Result<Self>
@@ -70,6 +101,10 @@ impl LocalControlServer {
         let workers = Arc::new(Mutex::new(BTreeMap::new()));
         let active_workers = Arc::new(AtomicUsize::new(0));
         let callback = Arc::new(on_handover);
+        let credentials = ScopedCredentials {
+            handover: credential,
+            runtime: runtime_credential,
+        };
         let accept = {
             let shutdown = Arc::clone(&shutdown);
             let workers = Arc::clone(&workers);
@@ -79,7 +114,7 @@ impl LocalControlServer {
                 .spawn(move || {
                     accept_loop(
                         listener,
-                        credential,
+                        credentials,
                         hello,
                         callback,
                         shutdown,
@@ -148,9 +183,25 @@ impl Drop for LocalControlServer {
     }
 }
 
+/// 同一端点的两项作用域凭据；未开放的作用域为 None。
+#[derive(Clone)]
+struct ScopedCredentials {
+    handover: Credential,
+    runtime: Option<Credential>,
+}
+
+impl ScopedCredentials {
+    fn for_scope(&self, scope: ControlScope) -> Option<&Credential> {
+        match scope {
+            ControlScope::Handover => Some(&self.handover),
+            ControlScope::Runtime => self.runtime.as_ref(),
+        }
+    }
+}
+
 fn accept_loop<F>(
     listener: TcpListener,
-    credential: Credential,
+    credentials: ScopedCredentials,
     hello: HelloResponse,
     callback: Arc<F>,
     shutdown: Arc<AtomicBool>,
@@ -200,7 +251,7 @@ fn accept_loop<F>(
                 }
             };
             let callback = Arc::clone(&callback);
-            let credential = credential.clone();
+            let credentials = credentials.clone();
             let hello = hello.clone();
             let shutdown = Arc::clone(&shutdown);
             let workers_for_thread = Arc::clone(&worker_registry);
@@ -214,7 +265,7 @@ fn accept_loop<F>(
                         workers: workers_for_thread,
                         active_workers: active_workers_for_thread,
                     };
-                    handle_connection(stream, credential, hello, callback, shutdown)
+                    handle_connection(stream, credentials, hello, callback, shutdown)
                 });
             match handle {
                 Ok(handle) => {
@@ -237,7 +288,7 @@ fn accept_loop<F>(
 
 fn handle_connection<F>(
     mut stream: TcpStream,
-    credential: Credential,
+    credentials: ScopedCredentials,
     hello: HelloResponse,
     callback: Arc<F>,
     shutdown: Arc<AtomicBool>,
@@ -264,9 +315,12 @@ fn handle_connection<F>(
     let Ok(ClientRequest::Hello(request)) = parse_client_request(&frame) else {
         return;
     };
-    if request.params.scope != ControlScope::Handover
-        || !credential_matches(&credential, &request.params.credential)
-    {
+    // 首包作用域决定本连接凭据来源；Runtime 作用域只在该作用域开放时存在。
+    let scope = request.params.scope;
+    let authorized = credentials
+        .for_scope(scope)
+        .is_some_and(|expected| credential_matches(expected, &request.params.credential));
+    if !authorized {
         return;
     }
     if write_json(&mut stream, &JsonRpcResponse::result(request.id, hello)).is_err() {
@@ -283,9 +337,16 @@ fn handle_connection<F>(
         .flatten() else {
             return;
         };
-        let Ok(ClientRequest::Handover(request)) = parse_client_request(&frame) else {
+        // 作用域与方法的对应关系由方法注册表约束；未知组合直接断开。
+        let Ok(request) = parse_client_request(&frame) else {
             return;
         };
+        let ClientRequest::Handover(request) = request else {
+            return;
+        };
+        if scope != ControlScope::Handover {
+            return;
+        }
         if shutdown.load(Ordering::SeqCst) {
             let error = JsonRpcError::new(
                 -32004,

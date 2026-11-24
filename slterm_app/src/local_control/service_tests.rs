@@ -473,9 +473,10 @@ fn service_publish_failure_reports_real_server_cleanup_failure() {
         store_ref,
         &path,
         TEST_TIMEOUT,
-        move |credential, hello, _on_handover| {
-            let server = LocalControlServer::start(
+        move |credential, runtime_credential, hello, _on_handover| {
+            let server = LocalControlServer::start_with_runtime(
                 credential,
+                runtime_credential,
                 hello,
                 move |_| -> Result<HandoverResponse, slterm_runtime_protocol::JsonRpcError> {
                     worker_started_tx.send(()).unwrap();
@@ -554,9 +555,13 @@ fn service_publish_failure_reclaims_listener_without_new_endpoint() {
         &store,
         &path,
         TEST_TIMEOUT,
-        move |credential, hello, on_handover| {
-            let server =
-                LocalControlServer::start(credential, hello, move |params| on_handover(params))?;
+        move |credential, runtime_credential, hello, on_handover| {
+            let server = LocalControlServer::start_with_runtime(
+                credential,
+                runtime_credential,
+                hello,
+                move |params| on_handover(params),
+            )?;
             *bound_by_server.lock().unwrap() = Some(server.endpoint().to_owned());
             Ok(server)
         },
