@@ -80,7 +80,7 @@ fn backup_cross_machine_requires_relocation(cx: &mut TestAppContext) {
     let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
     save_terminal_recovery_snapshot(&paths, &snapshot);
     let persistence = AppRootPersistence::load(&paths, None);
-    let (root, mut window, state) = open_root_with_persistence(cx, persistence);
+    let (root, window, state) = open_root_with_persistence(cx, persistence);
     window.run_until_parked();
 
     assert_eq!(state.borrow().attempts, 0, "未重新授权前不得启动任何 PTY");
