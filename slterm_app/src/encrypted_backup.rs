@@ -695,6 +695,84 @@ mod encrypted_backup_tests {
         assert!(!selection.get(BackupCategory::Session));
     }
 
+    /// 篡改包在鉴权阶段失败，目标目录零写入。
+    #[test]
+    fn backup_tamper_rejected_zero_write() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = split_paths(directory.path());
+        fs::create_dir_all(paths.config_root()).unwrap();
+        fs::create_dir_all(paths.local_root()).unwrap();
+        let settings = br#"{"appearance":{"theme":"Nord"}}"#.to_vec();
+        fs::write(paths.config_root().join("settings.json"), &settings).unwrap();
+        fs::create_dir_all(paths.config_root().join("themes")).unwrap();
+        let theme_path = paths.config_root().join("themes/user.slterm-theme.json");
+        fs::write(&theme_path, theme_bytes()).unwrap();
+
+        let mut packet = seal(&full_archive(), PASSPHRASE).unwrap();
+        let last = packet.len() - 1;
+        packet[last] ^= 0xff;
+        assert!(
+            restore_at(&paths, &packet, PASSPHRASE).is_err(),
+            "篡改包必须在鉴权阶段拒绝"
+        );
+        assert_eq!(
+            fs::read(paths.config_root().join("settings.json")).unwrap(),
+            settings,
+            "鉴权失败必须零写入"
+        );
+        assert_eq!(fs::read(&theme_path).unwrap(), theme_bytes());
+    }
+
+    /// 类别排除：物理库与凭据域材料永不进入任何备份包。
+    #[test]
+    fn backup_workspace_category_exclusions() {
+        use BackupCategory::{Session, Settings, Themes};
+
+        let directory = tempfile::tempdir().unwrap();
+        let paths = split_paths(directory.path());
+        fs::create_dir_all(paths.config_root()).unwrap();
+        fs::create_dir_all(paths.local_root()).unwrap();
+        fs::write(
+            paths.config_root().join("settings.json"),
+            br#"{"appearance":{"theme":"Nord"}}"#,
+        )
+        .unwrap();
+        fs::write(paths.local_root().join("session.json"), br#"{"version":1}"#).unwrap();
+        fs::write(paths.local_root().join("workspace.db"), b"sqlite").unwrap();
+        fs::create_dir_all(paths.config_root().join("themes")).unwrap();
+        fs::write(
+            paths.config_root().join("themes/copy.slterm-theme.json"),
+            theme_bytes(),
+        )
+        .unwrap();
+
+        let archive = collect_from(
+            &paths,
+            BackupSelection::from_categories([Settings, Session, Themes]),
+        )
+        .unwrap();
+        let names = archive
+            .entries
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect::<Vec<_>>();
+        assert!(names.contains(&"settings.json"));
+        assert!(names.contains(&"session.json"));
+        assert!(names.iter().any(|name| name.starts_with("themes/")));
+        for name in names {
+            assert!(
+                !name.contains("workspace.db") && !name.ends_with(".db"),
+                "物理数据库不得进入备份：{name}"
+            );
+            for forbidden in ["credential", "secret", "token"] {
+                assert!(
+                    !name.to_ascii_lowercase().contains(forbidden),
+                    "凭据域材料不得进入备份：{name}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn seal_open_round_trips_every_category() {
         let original = full_archive();
