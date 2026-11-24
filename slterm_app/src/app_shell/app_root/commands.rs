@@ -537,7 +537,10 @@ impl AppRoot {
                         },
                     );
                     match result {
-                        Ok(_panel) => self.request_agent_hooks_if_selected(project_id, cx),
+                        Ok(panel) => {
+                            self.bind_settings_panel(panel, project_id, cx);
+                            self.request_agent_hooks_if_selected(project_id, cx);
+                        }
                         Err(error) => log::warn!("恢复设置面板失败: {error}"),
                     }
                 }

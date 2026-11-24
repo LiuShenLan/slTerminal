@@ -17,6 +17,7 @@ mod events;
 mod explorer;
 mod focus_manager;
 mod git_show;
+mod hooks_page;
 pub(crate) mod keymap;
 mod language_selector;
 mod layout;
@@ -290,6 +291,12 @@ pub(crate) struct AppRoot {
     agent_hooks_inspect_for_test: Option<AgentHooksInspectPort>,
     #[cfg(test)]
     agent_hook_apply_for_test: Option<AgentHookApplyPort>,
+    /// Hooks 编辑器的文档、在途载入与失败诊断。
+    hooks_editor: hooks_page::HooksEditorState,
+    /// 草稿文本同步代次：载入/保存/丢弃后自增，驱动编辑器回填。
+    hooks_generation: u64,
+    #[cfg(test)]
+    hooks_claude_dir_for_test: Option<std::path::PathBuf>,
     learning: crate::learning::LearningService,
     launcher: Box<dyn TerminalPanelLauncher>,
     project_paths: Arc<dyn ProjectPathResolver>,
@@ -535,6 +542,10 @@ impl AppRoot {
             agent_hooks_inspect_for_test: None,
             #[cfg(test)]
             agent_hook_apply_for_test: None,
+            hooks_editor: hooks_page::HooksEditorState::default(),
+            hooks_generation: 0,
+            #[cfg(test)]
+            hooks_claude_dir_for_test: None,
             learning: crate::learning::LearningService::memory_only(),
             launcher,
             project_paths: Arc::new(SystemProjectPathResolver),

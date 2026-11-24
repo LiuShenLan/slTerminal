@@ -1,7 +1,7 @@
 /// slTerminal 能作为一等终端负载识别的 AI 客户端。
 /// slug 是跨域身份事实单源：hook 事件 source、设置页、恢复命令、目录表全部
 /// 消费 slug，禁止第二份枚举。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum AgentKind {
     Claude,
     Codex,

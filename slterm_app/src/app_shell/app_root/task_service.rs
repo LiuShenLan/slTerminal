@@ -39,6 +39,9 @@ pub(crate) enum TaskId {
     AgentHooksInspect,
     /// 单个 agent 的 hook 安装/卸载后台执行。
     AgentHookApply(slterm_settings::AgentHook),
+    /// Hooks 编辑器的磁盘载入与保存。
+    HooksDraftLoad(slterm_workspace::PanelId),
+    HooksDraftSave(slterm_workspace::PanelId),
     #[allow(dead_code)] // 消费点归 Diff 固定 HEAD 后台读取。
     DiffHead(slterm_workspace::PanelId),
     MarkdownLink(uuid::Uuid),

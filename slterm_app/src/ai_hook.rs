@@ -121,6 +121,7 @@ const HELPER_ARGS: [&str; 1] = ["claude"];
 pub(crate) use slterm_hooks::CLAUDE_EVENTS;
 
 /// 卸载器入口(`setup-ai --remove`):移除全部 AI CLI 的 hook 注入。
+pub(crate) use local::claude_config_dir;
 pub(crate) use local::settings::remove_all as remove_all_hooks;
 
 // 管道服务仅由独立集成测试启动；生产接入归后续 Agent 协调器。

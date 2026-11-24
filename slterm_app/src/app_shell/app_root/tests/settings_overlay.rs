@@ -386,6 +386,150 @@ fn agent_hooks_page_renders_status_and_toggles_through_injected_ports(cx: &mut T
     });
 }
 
+/// Hooks 页：三层草稿载入、编辑保存、外部修改守卫与丢弃全部在临时目录。
+#[gpui::test]
+fn hooks_page_loads_saves_external_guard_and_discards(cx: &mut TestAppContext) {
+    use crate::ai_hook::draft_host::{HooksDraftKey, HooksDraftLayer};
+
+    let temp = tempfile::tempdir().unwrap();
+    let claude_dir = temp.path().join("claude");
+    std::fs::create_dir_all(&claude_dir).unwrap();
+    std::fs::write(
+        claude_dir.join("settings.json"),
+        br#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo user"}]}]}}"#,
+    )
+    .unwrap();
+    let project_dir = temp.path().join("project");
+    std::fs::create_dir_all(project_dir.join(".claude")).unwrap();
+    let project_settings = project_dir.join(".claude/settings.json");
+    std::fs::write(
+        &project_settings,
+        br#"{"keep":true,"hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo old"}]}]}}"#,
+    )
+    .unwrap();
+
+    let (root, mut window, _state) = open_root(cx);
+    root.update(cx, |root, _| {
+        root.replace_hooks_claude_dir_for_test(claude_dir)
+    });
+    add_project(&root, &mut window, PROJECT_A, project_dir.to_str().unwrap());
+    focus_workspace(&root, &mut window);
+    open_settings(&mut window);
+    draw_frame(&mut window);
+
+    let page = window.debug_bounds("settings-page-6").unwrap();
+    window.simulate_click(page.center(), Modifiers::default());
+    draw_frame(&mut window);
+    window.run_until_parked();
+    draw_frame(&mut window);
+
+    let panel = settings_panel(&root, cx, project_id(PROJECT_A)).expect("设置面板必须存在");
+    let key = HooksDraftKey {
+        panel,
+        agent: slterm_agents::AgentKind::Claude,
+        layer: HooksDraftLayer::Project(project_id(PROJECT_A)),
+    };
+    assert!(
+        window.debug_bounds("settings-hooks-editor").is_some(),
+        "Hooks 页必须渲染编辑区"
+    );
+    for selector in [
+        "settings-hooks-save",
+        "settings-hooks-discard",
+        "settings-hooks-layer-user",
+    ] {
+        assert!(
+            window
+                .debug_bounds(Box::leak(selector.to_owned().into_boxed_str()))
+                .is_some(),
+            "Hooks 页必须渲染 {selector}"
+        );
+    }
+    root.read_with(cx, |root, _| {
+        let draft = root.hook_drafts.get(key).expect("Project 层草稿必须载入");
+        assert!(
+            draft.text().contains("echo old"),
+            "草稿必须来自项目层文件: {}",
+            draft.text()
+        );
+    });
+
+    // 编辑并保存：未知顶层字段保留，钩子子树替换为新内容。
+    let edited = r#"{"Stop":[{"hooks":[{"type":"command","command":"echo hi"}]}]}"#;
+    root.update(cx, |root, cx| root.update_hooks_draft_text(key, edited, cx));
+    draw_frame(&mut window);
+    let save = window.debug_bounds("settings-hooks-save").unwrap();
+    window.simulate_click(save.center(), Modifiers::default());
+    window.run_until_parked();
+    draw_frame(&mut window);
+    let saved: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&project_settings).unwrap()).unwrap();
+    assert_eq!(
+        saved["keep"],
+        serde_json::json!(true),
+        "未知顶层字段必须保留"
+    );
+    assert_eq!(
+        saved["hooks"]["Stop"][0]["hooks"][0]["command"],
+        serde_json::json!("echo hi")
+    );
+    root.read_with(cx, |root, _| {
+        assert!(
+            !root.hook_drafts.get(key).unwrap().dirty(),
+            "保存成功后草稿必须回到干净态"
+        );
+    });
+
+    // 外部修改守卫：保存前重读，文件保持外部内容且草稿保留。
+    root.update(cx, |root, cx| {
+        root.update_hooks_draft_text(key, r#"{"Stop":[]}"#, cx)
+    });
+    std::fs::write(&project_settings, br#"{"keep":false,"hooks":{}}"#).unwrap();
+    root.update(cx, |root, cx| root.save_hooks_draft_for(key, cx));
+    window.run_until_parked();
+    assert_eq!(
+        std::fs::read(&project_settings).unwrap(),
+        br#"{"keep":false,"hooks":{}}"#,
+        "外部修改必须零写入"
+    );
+    draw_frame(&mut window);
+    assert!(
+        window.debug_bounds("settings-hooks-error").is_some(),
+        "外部修改必须给出可见错误"
+    );
+    root.read_with(cx, |root, _| {
+        assert!(root.hook_drafts.get(key).unwrap().dirty());
+    });
+
+    // 丢弃：移除草稿后按磁盘现状重新载入。
+    root.update(cx, |root, cx| root.discard_hooks_draft_for(key, cx));
+    window.run_until_parked();
+    root.read_with(cx, |root, _| {
+        let draft = root.hook_drafts.get(key).expect("丢弃后必须重新载入");
+        assert!(!draft.dirty());
+        assert_eq!(draft.text(), "{}");
+    });
+
+    // 切 User 层：独立草稿来自注入的 Claude 配置目录。
+    let user_layer = window.debug_bounds("settings-hooks-layer-user").unwrap();
+    window.simulate_click(user_layer.center(), Modifiers::default());
+    window.run_until_parked();
+    draw_frame(&mut window);
+    let user_key = HooksDraftKey {
+        panel,
+        agent: slterm_agents::AgentKind::Claude,
+        layer: HooksDraftLayer::User,
+    };
+    root.read_with(cx, |root, _| {
+        let draft = root.hook_drafts.get(user_key).expect("User 层草稿必须载入");
+        assert!(
+            draft.text().contains("echo user"),
+            "User 层草稿必须来自注入的 Claude 目录: {}",
+            draft.text()
+        );
+    });
+}
+
 fn open_settings(window: &mut VisualTestContext) {
     window.simulate_keystrokes("ctrl-,");
     draw_frame(window);

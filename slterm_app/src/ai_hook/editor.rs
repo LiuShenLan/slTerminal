@@ -358,6 +358,11 @@ impl HooksDocument {
         })
     }
 
+    /// 载入时的完整文件指纹；草稿宿主据此判断外部修改。
+    pub(crate) fn baseline(&self) -> Option<[u8; 32]> {
+        self.baseline
+    }
+
     /// 可编辑子树的 JSON 文本(编辑器显示值;事件名 → 用户 matcher 组)。
     pub(crate) fn editable_json(&self) -> String {
         serde_json::to_string_pretty(&self.editable).unwrap_or_else(|_| "{}".to_owned())

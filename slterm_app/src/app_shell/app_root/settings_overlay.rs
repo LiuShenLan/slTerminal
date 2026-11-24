@@ -44,6 +44,15 @@ pub(super) struct SettingsView {
     input_subscriptions: Vec<Subscription>,
     /// 校验失败瞬态标记：只在本次视图内提示，不进入持久状态。
     invalid_fields: BTreeMap<&'static str, Instant>,
+    /// 稳定面板身份；项目设置面板安装后绑定，Hooks 草稿键据此隔离。
+    panel_id: Option<slterm_workspace::PanelId>,
+    hooks_layer: crate::ai_hook::draft_host::HooksDraftLayer,
+    /// Hooks JSON 多行编辑器；内容由帧间同步与草稿一致。
+    hooks_input: Option<Entity<InputState>>,
+    #[allow(dead_code)]
+    hooks_input_subscription: Option<Subscription>,
+    hooks_sync_key: Option<crate::ai_hook::draft_host::HooksDraftKey>,
+    hooks_synced_generation: u64,
 }
 
 impl SettingsView {
@@ -78,6 +87,12 @@ impl SettingsView {
             .and_then(|store| store.state(&view_key))
             .map(|state| state.selected_page())
             .unwrap_or(SettingsPageId::Appearance);
+        let hooks_layer = match &view_key {
+            ViewKey::Settings { project_id } => {
+                crate::ai_hook::draft_host::HooksDraftLayer::Project(*project_id)
+            }
+            _ => crate::ai_hook::draft_host::HooksDraftLayer::User,
+        };
         let mut inputs = BTreeMap::new();
         let mut input_subscriptions = Vec::new();
         for field in FIELDS {
@@ -106,6 +121,16 @@ impl SettingsView {
             inputs.insert(key, input);
             input_subscriptions.push(subscription);
         }
+        let hooks_input = cx.new(|cx| InputState::new(window, cx).multi_line(true));
+        let hooks_input_subscription = cx.subscribe_in(
+            &hooks_input,
+            window,
+            |view, input, event: &InputEvent, window, cx| {
+                if matches!(event, InputEvent::Change) {
+                    view.on_hooks_text_change(input.clone(), window, cx);
+                }
+            },
+        );
         Self {
             focus_handle: cx.focus_handle(),
             selected_page,
@@ -116,6 +141,12 @@ impl SettingsView {
             inputs,
             input_subscriptions,
             invalid_fields: BTreeMap::new(),
+            panel_id: None,
+            hooks_layer,
+            hooks_input: Some(hooks_input),
+            hooks_input_subscription: Some(hooks_input_subscription),
+            hooks_sync_key: None,
+            hooks_synced_generation: 0,
         }
     }
 
@@ -143,6 +174,9 @@ impl SettingsView {
             && let Some(root) = self.root.upgrade()
         {
             root.update(cx, |root, cx| root.request_agent_hooks_inspect(cx));
+        }
+        if page == SettingsPageId::Hooks {
+            self.request_hooks_draft(cx);
         }
         if let Some(store) = &self.view_states {
             // 声明式页内参数随页面保留；选中页是唯一可变的持久事实。
@@ -211,9 +245,89 @@ impl SettingsView {
         self.commit_field(key, Value::String(text), cx);
     }
 
-    fn render_page(&mut self, cx: &mut Context<'_, Self>) -> AnyElement {
+    /// Hooks JSON 编辑只写内存草稿；非法文本保留最后合法模型。
+    fn on_hooks_text_change(
+        &mut self,
+        input: Entity<InputState>,
+        _window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(key) = self.hooks_sync_key else {
+            return;
+        };
+        let text = input.read(cx).value().to_string();
+        if let Some(root) = self.root.upgrade() {
+            root.update(cx, |root, cx| root.update_hooks_draft_text(key, &text, cx));
+        }
+    }
+
+    /// 面板安装后绑定稳定身份；载入由 AppRoot 在绑定后显式触发。
+    pub(super) fn bind_panel_id(
+        &mut self,
+        panel_id: slterm_workspace::PanelId,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if self.panel_id == Some(panel_id) {
+            return;
+        }
+        self.panel_id = Some(panel_id);
+        cx.notify();
+    }
+
+    pub(super) const fn panel_id_value(&self) -> Option<slterm_workspace::PanelId> {
+        self.panel_id
+    }
+
+    pub(super) const fn hooks_layer_value(&self) -> crate::ai_hook::draft_host::HooksDraftLayer {
+        self.hooks_layer
+    }
+
+    pub(super) fn set_hooks_layer_value(
+        &mut self,
+        layer: crate::ai_hook::draft_host::HooksDraftLayer,
+    ) {
+        self.hooks_layer = layer;
+    }
+
+    pub(super) fn reset_hooks_sync(&mut self) {
+        self.hooks_sync_key = None;
+    }
+
+    pub(super) fn hooks_input(&self) -> Option<&Entity<InputState>> {
+        self.hooks_input.as_ref()
+    }
+
+    /// 输入框内容是否已经对应当前草稿键与同步代次。
+    pub(super) fn hooks_sync_matches(
+        &self,
+        key: crate::ai_hook::draft_host::HooksDraftKey,
+        generation: u64,
+    ) -> bool {
+        self.hooks_sync_key == Some(key) && self.hooks_synced_generation == generation
+    }
+
+    /// 帧间同步：把草稿文本回填到多行编辑器并记录已同步代次。
+    pub(super) fn apply_hooks_sync(
+        &mut self,
+        key: crate::ai_hook::draft_host::HooksDraftKey,
+        text: String,
+        generation: u64,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if let Some(input) = &self.hooks_input {
+            input.update(cx, |state, cx| state.set_value(text, window, cx));
+        }
+        self.hooks_sync_key = Some(key);
+        self.hooks_synced_generation = generation;
+    }
+
+    fn render_page(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> AnyElement {
         if self.selected_page == SettingsPageId::AgentHooks {
             return super::settings_agents::render_agent_hooks_page(self, cx);
+        }
+        if self.selected_page == SettingsPageId::Hooks {
+            return super::hooks_page::render_hooks_page(self, window, cx);
         }
         let values = self.field_values(cx);
         let mut children: Vec<AnyElement> = Vec::new();
@@ -542,7 +656,7 @@ enum SettingsViewEvent {
 impl EventEmitter<SettingsViewEvent> for SettingsView {}
 
 impl Render for SettingsView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
         let language = cx.global::<crate::app_shell::config::Settings>().language;
         let selected = self.selected_page;
         let page_list = SettingsPageId::ALL
@@ -637,7 +751,7 @@ impl Render for SettingsView {
                             .overflow_y_scroll()
                             .p_4()
                             .debug_selector(|| "settings-page-content".to_owned())
-                            .child(self.render_page(cx)),
+                            .child(self.render_page(window, cx)),
                     ),
             )
     }
@@ -684,7 +798,7 @@ impl AppRoot {
         let settings_key = view_key.clone();
         let root_handle = cx.entity().downgrade();
         let initial_values = super::settings_controls::initial_field_values(self.settings.values());
-        self.install_panel(
+        let panel_id = self.install_panel(
             super::documents::DocumentPanelTarget {
                 project_id,
                 view: view_key,
@@ -710,6 +824,7 @@ impl AppRoot {
             },
         )?;
         self.commit_project_snapshot(candidate, cx);
+        self.bind_settings_panel(panel_id, project_id, cx);
         self.request_agent_hooks_if_selected(project_id, cx);
         cx.notify();
         Ok(())

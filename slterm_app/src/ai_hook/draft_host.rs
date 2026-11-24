@@ -10,7 +10,7 @@ use slterm_workspace::{PanelId, ProjectId};
 use super::draft::{DraftParseError, parse_hooks_json};
 
 /// Claude 编辑器可用的三层；Project／Local 绑定 Settings 所属项目根。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum HooksDraftLayer {
     User,
     Project(ProjectId),
@@ -27,7 +27,7 @@ impl HooksDraftLayer {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct HooksDraftKey {
     pub(crate) panel: PanelId,
     pub(crate) agent: AgentKind,
