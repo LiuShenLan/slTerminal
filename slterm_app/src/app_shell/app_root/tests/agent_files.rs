@@ -458,3 +458,81 @@ fn agent_root_path_change_resets_state_and_authorization(cx: &mut TestAppContext
         "改路径后旧根授权不得套用"
     );
 }
+
+#[gpui::test]
+fn agent_root_delete_preserves_document_and_pty(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let project_root = temp.path().join("delete-project");
+    let agent_dir = temp.path().join("delete-agent");
+    std::fs::create_dir_all(&project_root).unwrap();
+    std::fs::create_dir_all(&agent_dir).unwrap();
+    std::fs::write(agent_dir.join("note.txt"), "one\n").unwrap();
+    let note = canonical(agent_dir.join("note.txt"));
+    let (root, mut window, _) = open_root(cx);
+    add_project(
+        &root,
+        &mut window,
+        PROJECT_A,
+        project_root.to_str().unwrap(),
+    );
+    new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_A);
+    let custom = slterm_settings::AgentRoot::custom(
+        agent_root_id(),
+        "Agent".to_owned(),
+        agent_dir.to_string_lossy().into_owned(),
+    )
+    .unwrap();
+    root.update(cx, |root, _| {
+        root.replace_agent_global_dirs_for_test(Vec::new());
+        root.replace_custom_agent_roots_for_test(vec![custom]);
+    });
+    let view = open_agent_files(&root, &mut window, cx);
+    window.run_until_parked();
+    draw_frame(&mut window);
+    window.run_until_parked();
+    window.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.agent_files_open_at(&note, window, cx);
+        });
+    });
+    window.run_until_parked();
+    draw_frame(&mut window);
+    window.run_until_parked();
+    root.read_with(cx, |root, _| {
+        assert_eq!(root.documents.len(), 1);
+        assert!(
+            root.terminals
+                .borrow()
+                .target(terminal_id(TERMINAL_A))
+                .is_some(),
+            "删除根前终端必须存活"
+        );
+    });
+
+    root.update(cx, |root, _| {
+        root.replace_custom_agent_roots_for_test(Vec::new());
+    });
+    root.update(cx, |root, cx| root.sync_agent_files_roots(cx));
+    window.run_until_parked();
+    root.read_with(cx, |root, _| {
+        assert_eq!(root.documents.len(), 1, "删除根不得删除 Document");
+        assert!(
+            root.terminals
+                .borrow()
+                .target(terminal_id(TERMINAL_A))
+                .is_some(),
+            "删除根不得强杀既有 PTY"
+        );
+    });
+    view.read_with(cx, |view, _| {
+        assert!(
+            !view.agent_files_expanded_for_test(agent_root_id()),
+            "删除根后运行态不得保留"
+        );
+        assert_eq!(view.agent_files_selected_text_for_test(), None);
+        let slterm_sidebar::SideViewState::AgentFiles(state) = &view.state else {
+            panic!("必须是 AgentFiles 状态");
+        };
+        assert_eq!(state.root_expanded(agent_root_id()), None);
+    });
+}
