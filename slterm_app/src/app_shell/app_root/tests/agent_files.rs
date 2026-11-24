@@ -633,3 +633,83 @@ fn agent_files_filter_is_not_authorization(cx: &mut TestAppContext) {
         "显示过滤不得改变授权"
     );
 }
+
+#[gpui::test]
+fn integration_path_capability_union(cx: &mut TestAppContext) {
+    use slterm_path::{PathGrant, PathOperation, PathPolicy, PathRequest, ResolvedPath};
+
+    let temp = tempfile::tempdir().unwrap();
+    let project_root = temp.path().join("union-cross-project");
+    let agent_dir = temp.path().join("union-cross-agent");
+    std::fs::create_dir_all(&project_root).unwrap();
+    std::fs::create_dir_all(&agent_dir).unwrap();
+    std::fs::write(agent_dir.join("note.txt"), "one\n").unwrap();
+    let note = canonical(agent_dir.join("note.txt"));
+    let (root, mut window, _) = open_root(cx);
+    add_project(
+        &root,
+        &mut window,
+        PROJECT_A,
+        project_root.to_str().unwrap(),
+    );
+    let writable = slterm_settings::AgentRoot::custom(
+        agent_root_id(),
+        "Agent".to_owned(),
+        agent_dir.to_string_lossy().into_owned(),
+    )
+    .unwrap()
+    .with_capabilities(slterm_settings::AgentRootCapabilities {
+        write: true,
+        terminal: false,
+    });
+    root.update(cx, |root, _| {
+        root.replace_agent_global_dirs_for_test(Vec::new());
+        root.replace_custom_agent_roots_for_test(vec![writable]);
+    });
+    let view = open_agent_files(&root, &mut window, cx);
+    window.run_until_parked();
+    draw_frame(&mut window);
+    window.run_until_parked();
+    window.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.agent_files_open_at(&note, window, cx);
+        });
+    });
+    window.run_until_parked();
+    draw_frame(&mut window);
+    window.run_until_parked();
+    let document = root.read_with(cx, |root, _| root.snapshot().documents().next().unwrap().0);
+    let resolved = ResolvedPath::new(note.clone(), None);
+    let request = |operation| PathRequest {
+        operation,
+        lexical_path: note.as_path().to_path_buf(),
+        root_hints: Vec::new(),
+        session_grant: None,
+        expected_authorization_generation: 0,
+    };
+    let read_only_repo = [PathGrant::repo_root(canonical(agent_dir.clone()))];
+    assert!(
+        PathPolicy::authorize(&request(PathOperation::Read), &resolved, &read_only_repo, 0).is_ok(),
+        "只读仓库根必须提供读取"
+    );
+    assert!(
+        PathPolicy::authorize(
+            &request(PathOperation::Write),
+            &resolved,
+            &read_only_repo,
+            0
+        )
+        .is_err(),
+        "只读仓库根不得提供写入"
+    );
+    root.read_with(cx, |root, _| {
+        let grants = root.document_grants(document);
+        assert!(
+            PathPolicy::authorize(&request(PathOperation::Read), &resolved, &grants, 0).is_ok()
+        );
+        assert!(
+            PathPolicy::authorize(&request(PathOperation::Write), &resolved, &grants, 0).is_ok(),
+            "可写 Agent 根与项目根并集必须覆盖保存"
+        );
+    });
+}
