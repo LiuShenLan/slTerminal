@@ -11,17 +11,18 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use slterm_runtime_protocol::{
-    ClientRequest, ControlScope, Credential, DescribeResponse, DomainErrorCode, EventNotification,
-    EventsSubscribeParams, EventsUnsubscribedResponse, HandoverParams, HandoverResponse,
-    HelloResponse, JsonRpcError, JsonRpcErrorData, JsonRpcId, JsonRpcResponse,
-    OPERATION_WAIT_LIMIT_MS, OperationQueryParams, OperationResource, OperationWaitParams,
-    PanelActivateParams, PanelGroupMergeParams, PanelGroupResizeParams, PanelGroupSplitParams,
-    PanelMoveParams, PanelOpenSettingsParams, ProjectActivateParams, ProjectListResponse,
-    ProjectRemoveParams, ProjectRenameParams, ProjectReorderParams, RuntimeEvent, RuntimeMethod,
-    RuntimeRequest, RuntimeResult, SnapshotResources, SnapshotResponse, SplitDirectionWire,
-    TerminalCloseParams, TerminalCreateParams, TerminalExecuteParams, TerminalInputParams,
-    TerminalReadRequest, TerminalReadResponse, TerminalReconnectParams, TerminalRenameParams,
-    TerminalWaitRequest, TerminalWaitResponse, ViewportSize, parse_client_request,
+    AgentGetRequest, AgentListResponse, AgentResource, ClientRequest, ControlScope, Credential,
+    DescribeResponse, DomainErrorCode, EventNotification, EventsSubscribeParams,
+    EventsUnsubscribedResponse, HandoverParams, HandoverResponse, HelloResponse, JsonRpcError,
+    JsonRpcErrorData, JsonRpcId, JsonRpcResponse, OPERATION_WAIT_LIMIT_MS, OperationQueryParams,
+    OperationResource, OperationWaitParams, PanelActivateParams, PanelGroupMergeParams,
+    PanelGroupResizeParams, PanelGroupSplitParams, PanelMoveParams, PanelOpenSettingsParams,
+    ProjectActivateParams, ProjectListResponse, ProjectRemoveParams, ProjectRenameParams,
+    ProjectReorderParams, RuntimeEvent, RuntimeMethod, RuntimeRequest, RuntimeResult,
+    SnapshotResources, SnapshotResponse, SplitDirectionWire, TerminalCloseParams,
+    TerminalCreateParams, TerminalExecuteParams, TerminalInputParams, TerminalReadRequest,
+    TerminalReadResponse, TerminalReconnectParams, TerminalRenameParams, TerminalWaitRequest,
+    TerminalWaitResponse, ViewportSize, parse_client_request,
 };
 use slterm_split::SplitDirection;
 use slterm_workspace::{LogicalSize, PanelGroupId, ProjectId, ViewKey};
@@ -106,6 +107,10 @@ pub(crate) struct TerminalStatusTarget {
 pub(crate) type WaitStatusCallback =
     Arc<dyn Fn(TerminalStatusTarget) -> Result<u64, JsonRpcError> + Send + Sync>;
 
+/// Runtime Agent 资源端口：由前台持久会话身份与运行期状态派生。
+pub(crate) type AgentsCallback =
+    Arc<dyn Fn() -> Result<Vec<AgentResource>, JsonRpcError> + Send + Sync>;
+
 /// Runtime 作用域的应用回调集合。
 pub(crate) struct RuntimeCallbacks {
     pub(crate) snapshot: SnapshotCallback,
@@ -114,6 +119,7 @@ pub(crate) struct RuntimeCallbacks {
     pub(crate) mutation: MutationCallback,
     pub(crate) read: ReadCallback,
     pub(crate) wait_status: WaitStatusCallback,
+    pub(crate) agents: AgentsCallback,
 }
 
 /// operation.wait 轮询间隔：只做有界查询与关闭检查。
@@ -141,6 +147,7 @@ impl LocalControlServer {
                 mutation: Arc::new(not_ready_mutation),
                 read: Arc::new(not_ready_read),
                 wait_status: Arc::new(not_ready_wait_status),
+                agents: Arc::new(not_ready_agents),
             },
         )
     }
@@ -492,6 +499,37 @@ fn handle_connection<F>(
                             ),
                             Ok(None) => {
                                 JsonRpcResponse::error(request.id, unknown_operation_error())
+                            }
+                            Err(error) => JsonRpcResponse::error(request.id, error),
+                        }
+                    }
+                    RuntimeMethod::AgentList => match (runtime.agents)() {
+                        Ok(agents) => JsonRpcResponse::result(
+                            request.id,
+                            RuntimeResult::Agents(AgentListResponse { agents }),
+                        ),
+                        Err(error) => JsonRpcResponse::error(request.id, error),
+                    },
+                    RuntimeMethod::AgentGet => {
+                        let Some(params) = request.parse::<AgentGetRequest>() else {
+                            return;
+                        };
+                        match (runtime.agents)() {
+                            Ok(agents) => {
+                                let matched: Vec<AgentResource> = agents
+                                    .into_iter()
+                                    .filter(|agent| agent.agent_id == params.agent_id)
+                                    .collect();
+                                if matched.is_empty() {
+                                    JsonRpcResponse::error(request.id, unknown_agent_error())
+                                } else {
+                                    JsonRpcResponse::result(
+                                        request.id,
+                                        RuntimeResult::Agents(AgentListResponse {
+                                            agents: matched,
+                                        }),
+                                    )
+                                }
                             }
                             Err(error) => JsonRpcResponse::error(request.id, error),
                         }
@@ -983,6 +1021,20 @@ fn not_ready_read(_: TerminalReadTarget) -> Result<TerminalTextSnapshot, JsonRpc
 
 fn not_ready_wait_status(_: TerminalStatusTarget) -> Result<u64, JsonRpcError> {
     Err(not_ready_error("terminal wait not ready"))
+}
+
+fn not_ready_agents() -> Result<Vec<AgentResource>, JsonRpcError> {
+    Err(not_ready_error("agent list not ready"))
+}
+
+fn unknown_agent_error() -> JsonRpcError {
+    JsonRpcError::new(
+        -32000,
+        "unknown agent",
+        Some(JsonRpcErrorData {
+            code: DomainErrorCode::UnknownAgent,
+        }),
+    )
 }
 
 /// 游标失效必须显式要求重读，不得把旧页拼成完整结果。

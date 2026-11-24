@@ -1,15 +1,15 @@
 //! Runtime hello 与单实例移交的线缆合同测试。
 
 use crate::protocol::{
-    ClientRequest, ControlMessage, ControlMethod, ControlScope, Credential, DescribeResponse,
-    DiscoveryRecord, DocumentResource, DomainErrorCode, EmptyParams, HandoverMethod,
-    HandoverParams, HandoverRequest, HelloMethod, HelloParams, HelloRequest, HelloResponse,
-    JsonRpcError, JsonRpcErrorData, JsonRpcId, JsonRpcRequest, JsonRpcResponse, MutationParams,
-    OperationQueryParams, OperationResource, OperationWaitParams, PanelActivateRequest,
-    PanelGroupMergeRequest, PanelGroupResizeRequest, PanelGroupResource, PanelGroupSplitRequest,
-    PanelMoveRequest, ProjectActivateRequest, ProjectRemoveRequest, ProjectRenameRequest,
-    ProjectReorderRequest, ProjectResource, ProtocolError, RuntimeMethod, RuntimeRequest,
-    SnapshotResources, SnapshotResponse, SplitDirectionWire, TerminalCloseRequest,
+    AgentGetRequest, ClientRequest, ControlMessage, ControlMethod, ControlScope, Credential,
+    DescribeResponse, DiscoveryRecord, DocumentResource, DomainErrorCode, EmptyParams,
+    HandoverMethod, HandoverParams, HandoverRequest, HelloMethod, HelloParams, HelloRequest,
+    HelloResponse, JsonRpcError, JsonRpcErrorData, JsonRpcId, JsonRpcRequest, JsonRpcResponse,
+    MutationParams, OperationQueryParams, OperationResource, OperationWaitParams,
+    PanelActivateRequest, PanelGroupMergeRequest, PanelGroupResizeRequest, PanelGroupResource,
+    PanelGroupSplitRequest, PanelMoveRequest, ProjectActivateRequest, ProjectRemoveRequest,
+    ProjectRenameRequest, ProjectReorderRequest, ProjectResource, ProtocolError, RuntimeMethod,
+    RuntimeRequest, SnapshotResources, SnapshotResponse, SplitDirectionWire, TerminalCloseRequest,
     TerminalCreateRequest, TerminalExecuteRequest, TerminalInputRequest, TerminalReadRequest,
     TerminalReconnectRequest, TerminalRenameRequest, TerminalResource, TerminalWaitRequest,
     ViewResource, ViewportSize, params_sha256, parse_client_request,
@@ -755,6 +755,45 @@ fn terminal_methods_validate_generation_and_payloads() {
 }
 
 #[test]
+fn agent_methods_require_identity_and_list_accepts_empty_params() {
+    let list = RuntimeRequest::new(
+        JsonRpcId::Number(24),
+        RuntimeMethod::AgentList,
+        EmptyParams {},
+    );
+    assert!(parse_client_request(&serde_json::to_vec(&list).unwrap()).is_ok());
+
+    let get = RuntimeRequest::new(
+        JsonRpcId::Number(25),
+        RuntimeMethod::AgentGet,
+        AgentGetRequest {
+            agent_id: "claude:session-a".to_owned(),
+        },
+    );
+    match parse_client_request(&serde_json::to_vec(&get).unwrap()).unwrap() {
+        ClientRequest::Runtime(parsed) => {
+            assert_eq!(parsed.method, RuntimeMethod::AgentGet);
+            assert_eq!(
+                parsed.parse::<AgentGetRequest>().unwrap().agent_id,
+                "claude:session-a"
+            );
+        }
+        other => panic!("Agent 查询必须解析为 Runtime 请求: {other:?}"),
+    }
+
+    for invalid in [
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"agent.get","params":{"agent_id":" "}}),
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"agent.get","params":{"agent_id":"x","extra":1}}),
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"agent.list","params":{"extra":1}}),
+    ] {
+        assert!(
+            parse_client_request(invalid.to_string().as_bytes()).is_err(),
+            "非法 Agent 请求必须拒绝: {invalid}"
+        );
+    }
+}
+
+#[test]
 fn params_hash_is_stable_and_json_serialization_dependent() {
     let a = serde_json::json!({"z": 1, "a": {"n": [1, 2]}});
     let b = serde_json::json!({"a": {"n": [1, 2]}, "z": 1});
@@ -837,6 +876,8 @@ fn describe_lists_the_method_registry_with_contract_hashes() {
             "terminal.close",
             "terminal.reconnect",
             "terminal.rename",
+            "agent.list",
+            "agent.get",
             "instance.handover"
         ]
     );

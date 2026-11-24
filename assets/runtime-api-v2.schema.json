@@ -32,6 +32,58 @@
     }
   ],
   "$defs": {
+    "AgentListResponse": {
+      "description": "agent.list 与 agent.get 共用的关联集合；空集合表示没有匹配。",
+      "type": "object",
+      "properties": {
+        "agents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AgentResource"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "agents"
+      ]
+    },
+    "AgentResource": {
+      "description": "活跃 Agent 关联：一个对外身份可关联多个终端。\n\n有原生会话 ID 时 `agent_id = kind:native_session_id`，否则按\n`kind@terminal_id`；写方法必须再提供 TerminalId 与 PTY 代次唯一定位。",
+      "type": "object",
+      "properties": {
+        "agent_id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "native_session_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "project_id": {
+          "type": "string"
+        },
+        "status": {
+          "description": "封闭状态：`idle`、`working`、`blocked`、`done` 或 `unknown`。",
+          "type": "string"
+        },
+        "terminal_id": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "agent_id",
+        "terminal_id",
+        "project_id",
+        "kind",
+        "status"
+      ]
+    },
     "Capabilities": {
       "description": "当前客户端可调用的方法集合。",
       "type": "object",
@@ -187,6 +239,11 @@
           "description": "分页游标非法、越界或资源代次／revision 已变化；客户端必须重新读取。",
           "type": "string",
           "const": "stale_cursor"
+        },
+        {
+          "description": "对外 Agent 身份没有匹配关联。",
+          "type": "string",
+          "const": "unknown_agent"
         }
       ]
     },
@@ -1418,7 +1475,9 @@
         "terminal.wait",
         "terminal.close",
         "terminal.reconnect",
-        "terminal.rename"
+        "terminal.rename",
+        "agent.list",
+        "agent.get"
       ]
     },
     "RuntimeParams": {
@@ -1531,6 +1590,9 @@
         },
         {
           "$ref": "#/$defs/TerminalWaitResponse"
+        },
+        {
+          "$ref": "#/$defs/AgentListResponse"
         }
       ]
     },

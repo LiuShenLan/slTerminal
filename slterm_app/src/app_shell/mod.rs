@@ -149,6 +149,11 @@ pub(crate) enum SltermShellEvent {
         generation: u64,
         completion: mpsc::SyncSender<Result<u64, JsonRpcError>>,
     },
+    /// Runtime Agent 资源请求与一次性回执；资源只在前台同一时刻读取。
+    RuntimeAgents {
+        completion:
+            mpsc::SyncSender<Result<Vec<slterm_runtime_protocol::AgentResource>, JsonRpcError>>,
+    },
 }
 
 const SHELL_EVENT_CAPACITY: usize = 64;
@@ -292,6 +297,27 @@ pub(crate) fn try_send_runtime_wait(
             DomainErrorCode::QueueFull,
             -32003,
             "wait queue full",
+        )),
+        Err(mpsc::TrySendError::Disconnected(_)) => {
+            Err(control_error(DomainErrorCode::Closing, -32004, "closing"))
+        }
+    }
+}
+
+/// 非阻塞投递 Runtime Agent 资源请求；调用方只在后台执行体等待回执。
+pub(crate) fn try_send_runtime_agents(
+    sender: &mpsc::SyncSender<SltermShellEvent>,
+) -> Result<
+    mpsc::Receiver<Result<Vec<slterm_runtime_protocol::AgentResource>, JsonRpcError>>,
+    JsonRpcError,
+> {
+    let (completion, response) = mpsc::sync_channel(1);
+    match sender.try_send(SltermShellEvent::RuntimeAgents { completion }) {
+        Ok(()) => Ok(response),
+        Err(mpsc::TrySendError::Full(_)) => Err(control_error(
+            DomainErrorCode::QueueFull,
+            -32003,
+            "agent list queue full",
         )),
         Err(mpsc::TrySendError::Disconnected(_)) => {
             Err(control_error(DomainErrorCode::Closing, -32004, "closing"))

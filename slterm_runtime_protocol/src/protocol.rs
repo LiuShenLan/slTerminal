@@ -144,6 +144,10 @@ pub enum RuntimeMethod {
     TerminalReconnect,
     #[serde(rename = "terminal.rename")]
     TerminalRename,
+    #[serde(rename = "agent.list")]
+    AgentList,
+    #[serde(rename = "agent.get")]
+    AgentGet,
 }
 
 /// 原始输入：显式写入 PTY，不追加回车，也不模拟键盘事件。
@@ -244,6 +248,39 @@ pub struct TerminalRenameRequest {
 }
 
 pub type TerminalRenameParams = MutationParams<TerminalRenameRequest>;
+
+/// 活跃 Agent 关联：一个对外身份可关联多个终端。
+///
+/// 有原生会话 ID 时 `agent_id = kind:native_session_id`，否则按
+/// `kind@terminal_id`；写方法必须再提供 TerminalId 与 PTY 代次唯一定位。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct AgentResource {
+    pub agent_id: String,
+    pub terminal_id: String,
+    pub project_id: String,
+    pub kind: String,
+    /// 封闭状态：`idle`、`working`、`blocked`、`done` 或 `unknown`。
+    pub status: String,
+    pub native_session_id: Option<String>,
+}
+
+/// agent.list 与 agent.get 共用的关联集合；空集合表示没有匹配。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct AgentListResponse {
+    pub agents: Vec<AgentResource>,
+}
+
+/// 按对外 Agent 身份查询关联。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct AgentGetRequest {
+    pub agent_id: String,
+}
 
 /// 新建终端：Shell 固定为应用默认，只开放目标项目与工作目录选择。
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -839,6 +876,10 @@ fn runtime_request_is_valid(request: &RuntimeRequest) -> bool {
                         })
                 })
         }
+        RuntimeMethod::AgentList => request.parse::<EmptyParams>().is_some(),
+        RuntimeMethod::AgentGet => request
+            .parse::<AgentGetRequest>()
+            .is_some_and(|params| present(&params.agent_id)),
     }
 }
 
@@ -916,11 +957,13 @@ pub enum ControlMethod {
     RuntimeTerminalClose,
     RuntimeTerminalReconnect,
     RuntimeTerminalRename,
+    RuntimeAgentList,
+    RuntimeAgentGet,
     InstanceHandover,
 }
 
 impl ControlMethod {
-    pub const ALL: [Self; 27] = [
+    pub const ALL: [Self; 29] = [
         Self::RuntimeHello,
         Self::RuntimeDescribe,
         Self::RuntimeSnapshot,
@@ -947,6 +990,8 @@ impl ControlMethod {
         Self::RuntimeTerminalClose,
         Self::RuntimeTerminalReconnect,
         Self::RuntimeTerminalRename,
+        Self::RuntimeAgentList,
+        Self::RuntimeAgentGet,
         Self::InstanceHandover,
     ];
 
@@ -978,6 +1023,8 @@ impl ControlMethod {
             Self::RuntimeTerminalClose => "terminal.close",
             Self::RuntimeTerminalReconnect => "terminal.reconnect",
             Self::RuntimeTerminalRename => "terminal.rename",
+            Self::RuntimeAgentList => "agent.list",
+            Self::RuntimeAgentGet => "agent.get",
             Self::InstanceHandover => "instance.handover",
         }
     }
@@ -1127,6 +1174,7 @@ pub enum RuntimeResult {
     Projects(ProjectListResponse),
     TerminalRead(TerminalReadResponse),
     TerminalWait(TerminalWaitResponse),
+    Agents(AgentListResponse),
 }
 
 /// 当前客户端可调用的方法集合。
@@ -1221,6 +1269,8 @@ pub enum DomainErrorCode {
     ResyncRequired,
     /// 分页游标非法、越界或资源代次／revision 已变化；客户端必须重新读取。
     StaleCursor,
+    /// 对外 Agent 身份没有匹配关联。
+    UnknownAgent,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

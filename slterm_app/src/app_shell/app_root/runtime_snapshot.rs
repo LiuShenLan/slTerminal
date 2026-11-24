@@ -3,10 +3,13 @@
 use gpui::{App, Context, Entity, Window};
 use slterm_path::CanonicalPath;
 use slterm_runtime_protocol::{
-    DocumentResource, DomainErrorCode, JsonRpcError, PanelGroupResource, ProjectResource,
-    SnapshotResources, TerminalResource, ViewResource,
+    AgentResource, DocumentResource, DomainErrorCode, JsonRpcError, PanelGroupResource,
+    ProjectResource, SnapshotResources, TerminalResource, ViewResource,
 };
 use slterm_workspace::{RunIntent, ViewKey};
+
+use crate::ai_agents::AgentStatus;
+use crate::gpui_terminal::PaneId;
 
 use super::AppRoot;
 use super::command_registry::{CommandId, CommandParameters, CommandSource, CommandTarget};
@@ -348,6 +351,45 @@ impl AppRoot {
             .ok_or_else(|| not_ready_error("terminal panel missing"))
     }
 
+    /// Runtime Agent 资源：持久会话身份与运行期仲裁状态派生，不另存映射。
+    ///
+    /// 纯 Shell 不产生关联行；同一原生会话 ID 可出现在多个终端关联中。
+    pub(super) fn runtime_agents(&self, cx: &App) -> Result<Vec<AgentResource>, JsonRpcError> {
+        let mut agents = Vec::new();
+        for terminal in self.snapshot.terminals() {
+            let Some((panel_id, _)) = self.terminal_panel(terminal.project_id(), terminal.id(), cx)
+            else {
+                continue;
+            };
+            let pane = PaneId(panel_id.sequence());
+            let session = self
+                .agents
+                .session_agent(pane)
+                .or_else(|| terminal.agent().cloned());
+            let Some(session) = session else {
+                continue;
+            };
+            let status = self
+                .agents
+                .host(pane)
+                .map(|host| host.status())
+                .unwrap_or_default();
+            let agent_id = match &session.session_id {
+                Some(native) => format!("{}:{native}", session.source),
+                None => format!("{}@{}", session.source, terminal.id()),
+            };
+            agents.push(AgentResource {
+                agent_id,
+                terminal_id: terminal.id().to_string(),
+                project_id: terminal.project_id().to_string(),
+                kind: session.source.clone(),
+                status: agent_status_text(status),
+                native_session_id: session.session_id.clone(),
+            });
+        }
+        Ok(agents)
+    }
+
     /// 在 GPUI 前台按当前时刻生成同一份资源快照。
     ///
     /// 非 Unicode 路径与规范 ViewKey 编码失败明确报错，不把截断内容伪装成完整快照。
@@ -428,6 +470,17 @@ impl AppRoot {
             documents,
         })
     }
+}
+
+fn agent_status_text(status: AgentStatus) -> String {
+    match status {
+        AgentStatus::Idle => "idle",
+        AgentStatus::Working => "working",
+        AgentStatus::Blocked => "blocked",
+        AgentStatus::Done => "done",
+        AgentStatus::Unknown => "unknown",
+    }
+    .to_owned()
 }
 
 fn path_text(path: &CanonicalPath) -> Result<String, JsonRpcError> {

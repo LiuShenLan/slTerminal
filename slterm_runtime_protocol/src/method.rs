@@ -201,6 +201,16 @@ fn terminal_rename_params_schema() -> schemars::Schema {
     schemars::schema_for!(crate::protocol::TerminalRenameParams)
 }
 
+#[cfg(feature = "schema")]
+fn agent_get_params_schema() -> schemars::Schema {
+    schemars::schema_for!(crate::protocol::AgentGetRequest)
+}
+
+#[cfg(feature = "schema")]
+fn agent_list_result_schema() -> schemars::Schema {
+    schemars::schema_for!(crate::protocol::AgentListResponse)
+}
+
 /// 全部真实可用方法；顺序即对外呈现顺序。
 pub static METHODS: &[MethodSpec] = &[
     MethodSpec {
@@ -464,6 +474,26 @@ pub static METHODS: &[MethodSpec] = &[
         result_schema: operation_result_schema,
     },
     MethodSpec {
+        method: ControlMethod::RuntimeAgentList,
+        scopes: &[ControlScope::Runtime],
+        kind: MethodKind::Query,
+        idempotent: true,
+        #[cfg(feature = "schema")]
+        params_schema: empty_params_schema,
+        #[cfg(feature = "schema")]
+        result_schema: agent_list_result_schema,
+    },
+    MethodSpec {
+        method: ControlMethod::RuntimeAgentGet,
+        scopes: &[ControlScope::Runtime],
+        kind: MethodKind::Query,
+        idempotent: true,
+        #[cfg(feature = "schema")]
+        params_schema: agent_get_params_schema,
+        #[cfg(feature = "schema")]
+        result_schema: agent_list_result_schema,
+    },
+    MethodSpec {
         method: ControlMethod::InstanceHandover,
         scopes: &[ControlScope::Handover],
         kind: MethodKind::Mutation,
@@ -544,6 +574,8 @@ mod method_tests {
                 method_name(ControlMethod::RuntimeTerminalClose),
                 method_name(ControlMethod::RuntimeTerminalReconnect),
                 method_name(ControlMethod::RuntimeTerminalRename),
+                method_name(ControlMethod::RuntimeAgentList),
+                method_name(ControlMethod::RuntimeAgentGet),
                 method_name(ControlMethod::InstanceHandover),
             ]
         );
@@ -646,6 +678,8 @@ mod method_tests {
                 ControlMethod::RuntimeTerminalClose,
                 ControlMethod::RuntimeTerminalReconnect,
                 ControlMethod::RuntimeTerminalRename,
+                ControlMethod::RuntimeAgentList,
+                ControlMethod::RuntimeAgentGet,
             ]
         );
         let handover_methods: Vec<ControlMethod> = methods_for(ControlScope::Handover)

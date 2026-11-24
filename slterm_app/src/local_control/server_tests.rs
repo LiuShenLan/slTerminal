@@ -62,6 +62,16 @@ fn unavailable_wait_status(_: super::server::TerminalStatusTarget) -> Result<u64
     ))
 }
 
+fn unavailable_agents() -> Result<Vec<slterm_runtime_protocol::AgentResource>, JsonRpcError> {
+    Err(JsonRpcError::new(
+        -32001,
+        "agent list not ready",
+        Some(JsonRpcErrorData {
+            code: slterm_runtime_protocol::DomainErrorCode::NotReady,
+        }),
+    ))
+}
+
 // 负载裕度，非断言/语义放宽：等待真实 loopback 线程调度与关闭。
 const TEST_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -489,6 +499,7 @@ where
             mutation: Arc::new(unavailable_mutation),
             read: Arc::new(unavailable_read),
             wait_status: Arc::new(unavailable_wait_status),
+            agents: Arc::new(unavailable_agents),
         },
     )
     .unwrap();
@@ -566,6 +577,7 @@ where
             mutation: Arc::new(unavailable_mutation),
             read: Arc::new(unavailable_read),
             wait_status: Arc::new(unavailable_wait_status),
+            agents: Arc::new(unavailable_agents),
         },
     )
     .unwrap();
@@ -641,6 +653,7 @@ where
             mutation: Arc::new(on_mutation),
             read: Arc::new(unavailable_read),
             wait_status: Arc::new(unavailable_wait_status),
+            agents: Arc::new(unavailable_agents),
         },
     )
     .unwrap();
@@ -977,6 +990,7 @@ where
             mutation: Arc::new(unavailable_mutation),
             read: Arc::new(on_read),
             wait_status: Arc::new(unavailable_wait_status),
+            agents: Arc::new(unavailable_agents),
         },
     )
     .unwrap();
@@ -1058,6 +1072,108 @@ fn runtime_terminal_read_pages_snapshot_and_rejects_stale_cursor() {
     server.shutdown().unwrap();
 }
 
+fn start_dual_scope_server_with_agents<A>(on_agents: A) -> (LocalControlServer, Arc<AtomicUsize>)
+where
+    A: Fn() -> Result<Vec<slterm_runtime_protocol::AgentResource>, JsonRpcError>
+        + Send
+        + Sync
+        + 'static,
+{
+    let calls = Arc::new(AtomicUsize::new(0));
+    let callback_calls = Arc::clone(&calls);
+    let server = LocalControlServer::start_with_runtime(
+        test_secret("sk-test"),
+        test_secret("sk-test-runtime"),
+        hello_response(),
+        move |_| {
+            callback_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(HandoverResponse::accepted())
+        },
+        super::server::RuntimeCallbacks {
+            snapshot: Arc::new(|| Ok(SnapshotResources::default())),
+            operation: Arc::new(|_| Ok(None)),
+            events: Arc::new(|_| {
+                Err(JsonRpcError::new(
+                    -32001,
+                    "event subscription not ready",
+                    Some(JsonRpcErrorData {
+                        code: slterm_runtime_protocol::DomainErrorCode::NotReady,
+                    }),
+                ))
+            }),
+            mutation: Arc::new(unavailable_mutation),
+            read: Arc::new(unavailable_read),
+            wait_status: Arc::new(unavailable_wait_status),
+            agents: Arc::new(on_agents),
+        },
+    )
+    .unwrap();
+    (server, calls)
+}
+
+#[test]
+fn runtime_agent_list_and_get_filter_by_identity() {
+    let (mut server, _calls) = start_dual_scope_server_with_agents(|| {
+        Ok(vec![
+            slterm_runtime_protocol::AgentResource {
+                agent_id: "claude:session-a".to_owned(),
+                terminal_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2d".to_owned(),
+                project_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b".to_owned(),
+                kind: "claude".to_owned(),
+                status: "working".to_owned(),
+                native_session_id: Some("session-a".to_owned()),
+            },
+            slterm_runtime_protocol::AgentResource {
+                agent_id: "claude:session-a".to_owned(),
+                terminal_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2e".to_owned(),
+                project_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b".to_owned(),
+                kind: "claude".to_owned(),
+                status: "unknown".to_owned(),
+                native_session_id: Some("session-a".to_owned()),
+            },
+        ])
+    });
+    let mut stream = connect(&server);
+    stream.set_read_timeout(Some(TEST_TIMEOUT)).unwrap();
+    write_json(
+        &mut stream,
+        &hello_scoped("sk-test-runtime", ControlScope::Runtime),
+    );
+    assert!(read_line(&mut stream).contains("store"));
+
+    write_json(&mut stream, &runtime_request(RuntimeMethod::AgentList));
+    let reply: serde_json::Value = serde_json::from_str(&read_line(&mut stream)).unwrap();
+    assert_eq!(reply["result"]["agents"].as_array().unwrap().len(), 2);
+    assert_eq!(reply["result"]["agents"][0]["status"], "working");
+
+    write_json(
+        &mut stream,
+        &RuntimeRequest::new(
+            JsonRpcId::Number(19),
+            RuntimeMethod::AgentGet,
+            slterm_runtime_protocol::AgentGetRequest {
+                agent_id: "claude:session-a".to_owned(),
+            },
+        ),
+    );
+    let reply: serde_json::Value = serde_json::from_str(&read_line(&mut stream)).unwrap();
+    assert_eq!(reply["result"]["agents"].as_array().unwrap().len(), 2);
+
+    write_json(
+        &mut stream,
+        &RuntimeRequest::new(
+            JsonRpcId::Number(20),
+            RuntimeMethod::AgentGet,
+            slterm_runtime_protocol::AgentGetRequest {
+                agent_id: "codex:missing".to_owned(),
+            },
+        ),
+    );
+    let reply: serde_json::Value = serde_json::from_str(&read_line(&mut stream)).unwrap();
+    assert_eq!(reply["error"]["data"]["code"], "unknown_agent");
+    server.shutdown().unwrap();
+}
+
 fn start_dual_scope_server_with_wait_status<W>(
     on_wait_status: W,
 ) -> (LocalControlServer, Arc<AtomicUsize>)
@@ -1089,6 +1205,7 @@ where
             mutation: Arc::new(unavailable_mutation),
             read: Arc::new(unavailable_read),
             wait_status: Arc::new(on_wait_status),
+            agents: Arc::new(unavailable_agents),
         },
     )
     .unwrap();
@@ -1206,6 +1323,7 @@ where
             mutation: Arc::new(unavailable_mutation),
             read: Arc::new(unavailable_read),
             wait_status: Arc::new(unavailable_wait_status),
+            agents: Arc::new(unavailable_agents),
         },
     )
     .unwrap();
@@ -1406,6 +1524,8 @@ fn runtime_describe_returns_registry_and_contract_hashes() {
             "terminal.close",
             "terminal.reconnect",
             "terminal.rename",
+            "agent.list",
+            "agent.get",
             "instance.handover"
         ]
     );
