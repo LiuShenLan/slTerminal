@@ -8,6 +8,9 @@ mod client_tests;
 mod credentials;
 mod discovery;
 #[cfg(test)]
+mod event_ring_tests;
+mod events;
+#[cfg(test)]
 mod operation_dispatch_tests;
 mod operations;
 mod server;
@@ -31,5 +34,5 @@ pub(crate) use discovery::{
 #[allow(unused_imports)]
 pub(crate) use server::LocalControlServer;
 #[allow(unused_imports)]
-pub(crate) use service::LocalControlService;
+pub(crate) use service::{LocalControlService, RuntimeEventPublisher};
 pub(crate) use startup::{InstanceStartup, start_instance};

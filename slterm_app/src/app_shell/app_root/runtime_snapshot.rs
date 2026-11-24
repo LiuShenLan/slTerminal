@@ -11,6 +11,22 @@ use super::AppRoot;
 use crate::app_shell::control_error;
 
 impl AppRoot {
+    /// 发布轻量资源事件；关闭开始后不再回填过期事件。
+    pub(super) fn publish_runtime_event(&self, kind: &str, resource: String) {
+        if self.close_in_progress || self.application_close.is_some() || self.close_completed {
+            return;
+        }
+        let Some(publisher) = &self.runtime_events else {
+            return;
+        };
+        let _ = publisher.publish(slterm_runtime_protocol::RuntimeEvent {
+            revision: 0,
+            kind: kind.to_owned(),
+            resource,
+            generation: self.snapshot_generation,
+        });
+    }
+
     /// 在 GPUI 前台按当前时刻生成同一份资源快照。
     ///
     /// 非 Unicode 路径与规范 ViewKey 编码失败明确报错，不把截断内容伪装成完整快照。

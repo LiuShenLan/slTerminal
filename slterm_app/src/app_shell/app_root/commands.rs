@@ -817,6 +817,8 @@ impl AppRoot {
         self.focus_manager
             .activate_project(id, activation_default, window, cx)?;
         self.commit_project_snapshot(candidate, cx);
+        // 前台状态提交成功后才发布事件；隐藏项目切换同样产生合法事件。
+        self.publish_runtime_event("project.activated", id.to_string());
         self.sync_project_visibility(cx);
         cx.notify();
         Ok(())

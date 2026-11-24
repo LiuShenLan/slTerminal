@@ -2,17 +2,18 @@
 
 use std::io::{BufRead, Read, Write};
 use std::net::TcpStream;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use slterm_runtime_protocol::{
-    ControlScope, Credential, DocumentResource, EmptyParams, HandoverMethod, HandoverParams,
-    HandoverRequest, HandoverResponse, HelloMethod, HelloParams, HelloRequest, HelloResponse,
-    JsonRpcError, JsonRpcErrorData, JsonRpcId, JsonRpcRequest, OperationQueryParams,
-    OperationResource, OperationStatus, OperationWaitParams, PanelGroupResource, ProjectResource,
-    RuntimeMethod, RuntimeParams, RuntimeRequest, SnapshotResources, TerminalResource,
-    ViewResource,
+    ControlScope, Credential, DocumentResource, EmptyParams, EventsSubscribeParams,
+    EventsSubscribedResponse, HandoverMethod, HandoverParams, HandoverRequest, HandoverResponse,
+    HelloMethod, HelloParams, HelloRequest, HelloResponse, JsonRpcError, JsonRpcErrorData,
+    JsonRpcId, JsonRpcRequest, OperationQueryParams, OperationResource, OperationStatus,
+    OperationWaitParams, PanelGroupResource, ProjectResource, RuntimeEvent, RuntimeMethod,
+    RuntimeParams, RuntimeRequest, SnapshotResources, TerminalResource, ViewResource,
 };
 
 use super::LocalControlServer;
@@ -437,6 +438,15 @@ where
         super::server::RuntimeCallbacks {
             snapshot: Arc::new(on_snapshot),
             operation: Arc::new(|_| Ok(None)),
+            events: Arc::new(|_| {
+                Err(JsonRpcError::new(
+                    -32001,
+                    "event subscription not ready",
+                    Some(JsonRpcErrorData {
+                        code: slterm_runtime_protocol::DomainErrorCode::NotReady,
+                    }),
+                ))
+            }),
         },
     )
     .unwrap();
@@ -506,10 +516,119 @@ where
         super::server::RuntimeCallbacks {
             snapshot: Arc::new(|| Ok(SnapshotResources::default())),
             operation: Arc::new(on_operation),
+            events: Arc::new(|_| {
+                Err(JsonRpcError::new(
+                    -32001,
+                    "event subscription not ready",
+                    Some(JsonRpcErrorData {
+                        code: slterm_runtime_protocol::DomainErrorCode::NotReady,
+                    }),
+                ))
+            }),
         },
     )
     .unwrap();
     (server, calls)
+}
+
+fn subscribe_request() -> RuntimeRequest {
+    JsonRpcRequest::new(
+        JsonRpcId::Number(5),
+        RuntimeMethod::EventsSubscribe,
+        RuntimeParams::EventsSubscribe(EventsSubscribeParams {
+            store_epoch: "store".to_owned(),
+            stream_epoch: "stream".to_owned(),
+            since_revision: 0,
+        }),
+    )
+}
+
+fn unsubscribe_request() -> RuntimeRequest {
+    JsonRpcRequest::new(
+        JsonRpcId::Number(6),
+        RuntimeMethod::EventsUnsubscribe,
+        RuntimeParams::Empty(EmptyParams {}),
+    )
+}
+
+fn start_dual_scope_server_with_events<E>(on_events: E) -> (LocalControlServer, Arc<AtomicUsize>)
+where
+    E: Fn(EventsSubscribeParams) -> Result<super::events::Subscription, JsonRpcError>
+        + Send
+        + Sync
+        + 'static,
+{
+    let calls = Arc::new(AtomicUsize::new(0));
+    let callback_calls = Arc::clone(&calls);
+    let server = LocalControlServer::start_with_runtime(
+        test_secret("sk-test"),
+        test_secret("sk-test-runtime"),
+        hello_response(),
+        move |_| {
+            callback_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(HandoverResponse::accepted())
+        },
+        super::server::RuntimeCallbacks {
+            snapshot: Arc::new(|| Ok(SnapshotResources::default())),
+            operation: Arc::new(|_| Ok(None)),
+            events: Arc::new(on_events),
+        },
+    )
+    .unwrap();
+    (server, calls)
+}
+
+#[test]
+fn runtime_subscription_streams_events_and_accepts_unsubscribe() {
+    let (events_tx, events_rx) = mpsc::sync_channel(super::events::CLIENT_QUEUE_CAPACITY);
+    let receiver_slot = Arc::new(Mutex::new(Some(events_rx)));
+    let slot = Arc::clone(&receiver_slot);
+    let (mut server, _calls) = start_dual_scope_server_with_events(move |_| {
+        let events = slot
+            .lock()
+            .expect("订阅槽")
+            .take()
+            .expect("每次连接只订阅一次");
+        Ok(super::events::Subscription {
+            confirmed: EventsSubscribedResponse {
+                stream_epoch: "stream".to_owned(),
+                revision: 0,
+            },
+            events,
+        })
+    });
+    let mut stream = connect(&server);
+    stream.set_read_timeout(Some(TEST_TIMEOUT)).unwrap();
+    write_json(
+        &mut stream,
+        &hello_scoped("sk-test-runtime", ControlScope::Runtime),
+    );
+    assert!(read_line(&mut stream).contains("store"));
+
+    write_json(&mut stream, &subscribe_request());
+    let reply: serde_json::Value = serde_json::from_str(&read_line(&mut stream)).unwrap();
+    assert_eq!(reply["result"]["stream_epoch"], "stream");
+    assert_eq!(reply["result"]["revision"], 0);
+
+    events_tx
+        .send(RuntimeEvent {
+            revision: 1,
+            kind: "project.activated".to_owned(),
+            resource: "project-a".to_owned(),
+            generation: 1,
+        })
+        .unwrap();
+    let notification: serde_json::Value = serde_json::from_str(&read_line(&mut stream)).unwrap();
+    assert_eq!(notification["method"], "events.event");
+    assert_eq!(notification["params"]["revision"], 1);
+    assert_eq!(notification["params"]["kind"], "project.activated");
+    assert_eq!(notification["params"]["resource"], "project-a");
+
+    write_json(&mut stream, &unsubscribe_request());
+    let reply: serde_json::Value = serde_json::from_str(&read_line(&mut stream)).unwrap();
+    assert_eq!(reply["result"], serde_json::json!({}));
+    assert_eq!(read_line(&mut stream), "", "取消订阅后连接必须结束");
+    server.shutdown().unwrap();
 }
 
 #[test]
@@ -631,6 +750,8 @@ fn runtime_describe_returns_registry_and_contract_hashes() {
             "runtime.snapshot",
             "runtime.operation_get",
             "runtime.operation_wait",
+            "events.subscribe",
+            "events.unsubscribe",
             "instance.handover"
         ]
     );

@@ -81,6 +81,21 @@ fn operation_result_schema() -> schemars::Schema {
     schemars::schema_for!(crate::protocol::OperationResource)
 }
 
+#[cfg(feature = "schema")]
+fn events_subscribe_params_schema() -> schemars::Schema {
+    schemars::schema_for!(crate::protocol::EventsSubscribeParams)
+}
+
+#[cfg(feature = "schema")]
+fn events_subscribed_result_schema() -> schemars::Schema {
+    schemars::schema_for!(crate::protocol::EventsSubscribedResponse)
+}
+
+#[cfg(feature = "schema")]
+fn events_unsubscribed_result_schema() -> schemars::Schema {
+    schemars::schema_for!(crate::protocol::EventsUnsubscribedResponse)
+}
+
 /// 全部真实可用方法；顺序即对外呈现顺序。
 pub static METHODS: &[MethodSpec] = &[
     MethodSpec {
@@ -132,6 +147,26 @@ pub static METHODS: &[MethodSpec] = &[
         params_schema: operation_wait_params_schema,
         #[cfg(feature = "schema")]
         result_schema: operation_result_schema,
+    },
+    MethodSpec {
+        method: ControlMethod::RuntimeEventsSubscribe,
+        scopes: &[ControlScope::Runtime],
+        kind: MethodKind::Query,
+        idempotent: true,
+        #[cfg(feature = "schema")]
+        params_schema: events_subscribe_params_schema,
+        #[cfg(feature = "schema")]
+        result_schema: events_subscribed_result_schema,
+    },
+    MethodSpec {
+        method: ControlMethod::RuntimeEventsUnsubscribe,
+        scopes: &[ControlScope::Runtime],
+        kind: MethodKind::Query,
+        idempotent: true,
+        #[cfg(feature = "schema")]
+        params_schema: empty_params_schema,
+        #[cfg(feature = "schema")]
+        result_schema: events_unsubscribed_result_schema,
     },
     MethodSpec {
         method: ControlMethod::InstanceHandover,
@@ -193,6 +228,8 @@ mod method_tests {
                 method_name(ControlMethod::RuntimeSnapshot),
                 method_name(ControlMethod::RuntimeOperationGet),
                 method_name(ControlMethod::RuntimeOperationWait),
+                method_name(ControlMethod::RuntimeEventsSubscribe),
+                method_name(ControlMethod::RuntimeEventsUnsubscribe),
                 method_name(ControlMethod::InstanceHandover),
             ]
         );
@@ -273,7 +310,9 @@ mod method_tests {
                 ControlMethod::RuntimeDescribe,
                 ControlMethod::RuntimeSnapshot,
                 ControlMethod::RuntimeOperationGet,
-                ControlMethod::RuntimeOperationWait
+                ControlMethod::RuntimeOperationWait,
+                ControlMethod::RuntimeEventsSubscribe,
+                ControlMethod::RuntimeEventsUnsubscribe
             ]
         );
         let handover_methods: Vec<ControlMethod> = methods_for(ControlScope::Handover)

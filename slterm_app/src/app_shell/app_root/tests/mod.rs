@@ -20,6 +20,7 @@ mod project_close_preflight;
 mod project_close_receipts;
 mod projects;
 mod relocation;
+mod runtime_events;
 mod runtime_snapshot;
 mod settings_overlay;
 mod sidebar;
@@ -360,6 +361,7 @@ fn open_root_with_persistence_and_size_configured(
                 Box::new(launcher),
                 persistence,
                 global_close,
+                None,
                 cx,
             );
             root.project_paths = Arc::new(TestProjectPaths);

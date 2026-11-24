@@ -4,18 +4,21 @@ use std::collections::BTreeMap;
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Shutdown, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use slterm_runtime_protocol::{
-    ClientRequest, ControlScope, Credential, DescribeResponse, DomainErrorCode, HandoverParams,
-    HandoverResponse, HelloResponse, JsonRpcError, JsonRpcErrorData, JsonRpcResponse,
-    OPERATION_WAIT_LIMIT_MS, OperationResource, RuntimeMethod, RuntimeParams, RuntimeResult,
+    ClientRequest, ControlScope, Credential, DescribeResponse, DomainErrorCode, EventNotification,
+    EventsSubscribeParams, EventsUnsubscribedResponse, HandoverParams, HandoverResponse,
+    HelloResponse, JsonRpcError, JsonRpcErrorData, JsonRpcResponse, OPERATION_WAIT_LIMIT_MS,
+    OperationResource, RuntimeEvent, RuntimeMethod, RuntimeParams, RuntimeResult,
     SnapshotResources, SnapshotResponse, parse_client_request,
 };
 
+use super::events::Subscription;
 use crate::secrets::SecretBytes;
 
 const REQUEST_BUDGET: usize = 128 * 1024;
@@ -66,10 +69,16 @@ pub(crate) type SnapshotCallback =
 pub(crate) type OperationQueryCallback =
     Arc<dyn Fn(&str) -> Result<Option<OperationResource>, JsonRpcError> + Send + Sync + 'static>;
 
+/// Runtime 事件订阅端口：校验三元组并注册容量 64 的订阅队列。
+pub(crate) type EventSubscribeCallback = Arc<
+    dyn Fn(EventsSubscribeParams) -> Result<Subscription, JsonRpcError> + Send + Sync + 'static,
+>;
+
 /// Runtime 作用域的应用回调集合。
 pub(crate) struct RuntimeCallbacks {
     pub(crate) snapshot: SnapshotCallback,
     pub(crate) operation: OperationQueryCallback,
+    pub(crate) events: EventSubscribeCallback,
 }
 
 /// operation.wait 轮询间隔：只做有界查询与关闭检查。
@@ -93,6 +102,7 @@ impl LocalControlServer {
             RuntimeCallbacks {
                 snapshot: Arc::new(not_ready_snapshot),
                 operation: Arc::new(not_ready_operation),
+                events: Arc::new(not_ready_events),
             },
         )
     }
@@ -457,6 +467,36 @@ fn handle_connection<F>(
                             Err(error) => JsonRpcResponse::error(request.id, error),
                         }
                     }
+                    RuntimeMethod::EventsSubscribe => {
+                        let RuntimeParams::EventsSubscribe(params) = request.params.clone() else {
+                            return;
+                        };
+                        match (runtime.events)(params) {
+                            Ok(subscription) => {
+                                let confirmed = subscription.confirmed.clone();
+                                let response = JsonRpcResponse::result(
+                                    request.id,
+                                    RuntimeResult::Subscribed(confirmed),
+                                );
+                                if write_json(&mut stream, &response).is_err() {
+                                    return;
+                                }
+                                // 订阅连接只承载事件；取消订阅或断开后结束本连接。
+                                let _ = stream_subscription(
+                                    &mut stream,
+                                    subscription.events,
+                                    &shutdown,
+                                );
+                                return;
+                            }
+                            Err(error) => JsonRpcResponse::error(request.id, error),
+                        }
+                    }
+                    // 未订阅连接没有可取消的订阅。
+                    RuntimeMethod::EventsUnsubscribe => JsonRpcResponse::error(
+                        request.id,
+                        not_ready_error("no active subscription"),
+                    ),
                 };
                 if write_json(&mut stream, &response).is_err() {
                     return;
@@ -531,6 +571,83 @@ fn not_ready_operation(_: &str) -> Result<Option<OperationResource>, JsonRpcErro
     Err(not_ready_error("operation query not ready"))
 }
 
+fn not_ready_events(_: EventsSubscribeParams) -> Result<Subscription, JsonRpcError> {
+    Err(not_ready_error("event subscription not ready"))
+}
+
+/// 订阅连接：事件由独立写线程推送，worker 只等待取消订阅或断开。
+///
+/// 取消订阅、客户端断开与关闭都先关闭流再 join 事件线程；
+/// 事件写与取消确认共用同一写锁，保证 JSON 行不交错。
+fn stream_subscription(
+    stream: &mut TcpStream,
+    events: Receiver<RuntimeEvent>,
+    shutdown: &Arc<AtomicBool>,
+) -> io::Result<()> {
+    let writer = Arc::new(Mutex::new(stream.try_clone()?));
+    let writer_for_events = Arc::clone(&writer);
+    let shutdown_for_events = Arc::clone(shutdown);
+    let event_thread = std::thread::Builder::new()
+        .name("slterm-runtime-events".to_owned())
+        .spawn(move || {
+            loop {
+                match events.recv_timeout(OPERATION_WAIT_POLL) {
+                    Ok(event) => {
+                        let Ok(mut writer) = writer_for_events.lock() else {
+                            break;
+                        };
+                        if write_json(&mut writer, &EventNotification::new(event)).is_err() {
+                            break;
+                        }
+                    }
+                    Err(RecvTimeoutError::Timeout) => {
+                        if shutdown_for_events.load(Ordering::SeqCst) {
+                            break;
+                        }
+                    }
+                    Err(RecvTimeoutError::Disconnected) => break,
+                }
+            }
+        })?;
+    let result = (|| -> io::Result<()> {
+        let mut buffer = Vec::new();
+        loop {
+            match read_frame(
+                stream,
+                &mut buffer,
+                Instant::now() + Duration::from_secs(1),
+                shutdown,
+            ) {
+                Ok(Some(frame)) => {
+                    let Ok(ClientRequest::Runtime(request)) = parse_client_request(&frame) else {
+                        return Ok(());
+                    };
+                    if request.method != RuntimeMethod::EventsUnsubscribe {
+                        return Ok(());
+                    }
+                    let mut writer = writer
+                        .lock()
+                        .map_err(|_| io::Error::other("subscription writer poisoned"))?;
+                    write_json(
+                        &mut writer,
+                        &JsonRpcResponse::result(
+                            request.id,
+                            RuntimeResult::Unsubscribed(EventsUnsubscribedResponse {}),
+                        ),
+                    )?;
+                    return Ok(());
+                }
+                Ok(None) => return Ok(()),
+                Err(error) if error.kind() == io::ErrorKind::TimedOut => continue,
+                Err(error) => return Err(error),
+            }
+        }
+    })();
+    let _ = stream.shutdown(Shutdown::Both);
+    let _ = event_thread.join();
+    result
+}
+
 /// operation.wait 只在后台 worker 轮询；关闭与超时都返回结构化终态。
 fn wait_operation(
     runtime: &RuntimeCallbacks,
@@ -545,7 +662,9 @@ fn wait_operation(
             params.operation_id.as_str(),
             params.timeout_ms.unwrap_or(OPERATION_WAIT_LIMIT_MS),
         ),
-        RuntimeParams::Empty(_) => return Err(not_ready_error("operation wait params missing")),
+        RuntimeParams::Empty(_) | RuntimeParams::EventsSubscribe(_) => {
+            return Err(not_ready_error("operation wait params missing"));
+        }
     };
     let deadline = Instant::now() + Duration::from_millis(timeout_ms);
     loop {

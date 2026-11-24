@@ -102,6 +102,10 @@ pub enum RuntimeMethod {
     OperationGet,
     #[serde(rename = "runtime.operation_wait")]
     OperationWait,
+    #[serde(rename = "events.subscribe")]
+    EventsSubscribe,
+    #[serde(rename = "events.unsubscribe")]
+    EventsUnsubscribe,
 }
 
 /// 无参数的 Runtime 方法；未知字段一律拒绝。
@@ -127,6 +131,68 @@ pub struct OperationWaitParams {
     pub timeout_ms: Option<u64>,
 }
 
+/// 事件续传三元组：世代与起点必须同时匹配事件环，否则要求重新快照。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct EventsSubscribeParams {
+    pub store_epoch: String,
+    pub stream_epoch: String,
+    pub since_revision: u64,
+}
+
+/// 订阅确认：返回事件流身份与该订阅看到的当前末尾 revision。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct EventsSubscribedResponse {
+    pub stream_epoch: String,
+    pub revision: u64,
+}
+
+/// 取消订阅的确认；订阅身份绑定连接，不另行分配。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct EventsUnsubscribedResponse {}
+
+/// 轻量事件：资源身份、代次与必要元数据；终端正文只经分页读取。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeEvent {
+    /// 单调 revision；缺口只能以重新快照补偿。
+    pub revision: u64,
+    /// 封闭事件类型名。
+    pub kind: String,
+    /// 资源身份文本（稳定 ID 或规范 ViewKey JSON）。
+    pub resource: String,
+    /// 资源代次；旧代次事件不覆盖新代次状态。
+    pub generation: u64,
+}
+
+/// 服务器到客户端的事件通知；客户端不得回复，连接只承载订阅事件。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct EventNotification {
+    #[cfg_attr(feature = "schema", schemars(extend("enum" = ["2.0"])))]
+    pub jsonrpc: String,
+    #[cfg_attr(feature = "schema", schemars(extend("enum" = ["events.event"])))]
+    pub method: String,
+    pub params: RuntimeEvent,
+}
+
+impl EventNotification {
+    pub fn new(event: RuntimeEvent) -> Self {
+        Self {
+            jsonrpc: "2.0".to_owned(),
+            method: "events.event".to_owned(),
+            params: event,
+        }
+    }
+}
+
 /// Runtime 方法的封闭参数集合；服务端按方法名交叉校验。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -135,12 +201,13 @@ pub enum RuntimeParams {
     Empty(EmptyParams),
     OperationQuery(OperationQueryParams),
     OperationWait(OperationWaitParams),
+    EventsSubscribe(EventsSubscribeParams),
 }
 
 impl RuntimeParams {
     fn operation_id(&self) -> Option<&str> {
         match self {
-            Self::Empty(_) => None,
+            Self::Empty(_) | Self::EventsSubscribe(_) => None,
             Self::OperationQuery(params) => Some(&params.operation_id),
             Self::OperationWait(params) => Some(&params.operation_id),
         }
@@ -150,7 +217,7 @@ impl RuntimeParams {
         match self {
             Self::OperationWait(params) => Some(params.timeout_ms),
             Self::OperationQuery(_) => Some(None),
-            Self::Empty(_) => None,
+            Self::Empty(_) | Self::EventsSubscribe(_) => None,
         }
     }
 }
@@ -293,6 +360,13 @@ fn runtime_request_is_valid(request: &RuntimeRequest) -> bool {
                     .flatten()
                     .is_none_or(|timeout| (1..=OPERATION_WAIT_LIMIT_MS).contains(&timeout))
         }
+        RuntimeMethod::EventsSubscribe => match &request.params {
+            RuntimeParams::EventsSubscribe(params) => {
+                !params.store_epoch.trim().is_empty() && !params.stream_epoch.trim().is_empty()
+            }
+            _ => false,
+        },
+        RuntimeMethod::EventsUnsubscribe => matches!(request.params, RuntimeParams::Empty(_)),
     }
 }
 
@@ -338,16 +412,20 @@ pub enum ControlMethod {
     RuntimeSnapshot,
     RuntimeOperationGet,
     RuntimeOperationWait,
+    RuntimeEventsSubscribe,
+    RuntimeEventsUnsubscribe,
     InstanceHandover,
 }
 
 impl ControlMethod {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 8] = [
         Self::RuntimeHello,
         Self::RuntimeDescribe,
         Self::RuntimeSnapshot,
         Self::RuntimeOperationGet,
         Self::RuntimeOperationWait,
+        Self::RuntimeEventsSubscribe,
+        Self::RuntimeEventsUnsubscribe,
         Self::InstanceHandover,
     ];
 
@@ -358,6 +436,8 @@ impl ControlMethod {
             Self::RuntimeSnapshot => "runtime.snapshot",
             Self::RuntimeOperationGet => "runtime.operation_get",
             Self::RuntimeOperationWait => "runtime.operation_wait",
+            Self::RuntimeEventsSubscribe => "events.subscribe",
+            Self::RuntimeEventsUnsubscribe => "events.unsubscribe",
             Self::InstanceHandover => "instance.handover",
         }
     }
@@ -500,6 +580,8 @@ pub enum RuntimeResult {
     Describe(DescribeResponse),
     Snapshot(SnapshotResponse),
     Operation(OperationResource),
+    Subscribed(EventsSubscribedResponse),
+    Unsubscribed(EventsUnsubscribedResponse),
 }
 
 /// 当前客户端可调用的方法集合。
@@ -590,6 +672,8 @@ pub enum DomainErrorCode {
     OutcomeUnknown,
     /// 查询的操作标识不存在。
     UnknownOperation,
+    /// 事件续传三元组不匹配或历史缺口；客户端必须重新快照后订阅。
+    ResyncRequired,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -697,6 +781,7 @@ pub enum ControlMessage {
     HelloResponse(JsonRpcResult<HelloResponse>),
     HandoverResponse(JsonRpcResult<HandoverResponse>),
     RuntimeResponse(JsonRpcResult<RuntimeResult>),
+    EventNotification(EventNotification),
     Error(JsonRpcErrorResponse),
     Discovery(DiscoveryRecord),
 }

@@ -22,6 +22,9 @@
       "$ref": "#/$defs/JsonRpcResult3"
     },
     {
+      "$ref": "#/$defs/EventNotification"
+    },
+    {
       "$ref": "#/$defs/JsonRpcErrorResponse"
     },
     {
@@ -174,11 +177,90 @@
           "description": "查询的操作标识不存在。",
           "type": "string",
           "const": "unknown_operation"
+        },
+        {
+          "description": "事件续传三元组不匹配或历史缺口；客户端必须重新快照后订阅。",
+          "type": "string",
+          "const": "resync_required"
         }
       ]
     },
     "EmptyParams": {
       "description": "无参数的 Runtime 方法；未知字段一律拒绝。",
+      "type": "object",
+      "additionalProperties": false
+    },
+    "EventNotification": {
+      "description": "服务器到客户端的事件通知；客户端不得回复，连接只承载订阅事件。",
+      "type": "object",
+      "properties": {
+        "jsonrpc": {
+          "type": "string",
+          "enum": [
+            "2.0"
+          ]
+        },
+        "method": {
+          "type": "string",
+          "enum": [
+            "events.event"
+          ]
+        },
+        "params": {
+          "$ref": "#/$defs/RuntimeEvent"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "jsonrpc",
+        "method",
+        "params"
+      ]
+    },
+    "EventsSubscribeParams": {
+      "description": "事件续传三元组：世代与起点必须同时匹配事件环，否则要求重新快照。",
+      "type": "object",
+      "properties": {
+        "since_revision": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "store_epoch": {
+          "type": "string"
+        },
+        "stream_epoch": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "store_epoch",
+        "stream_epoch",
+        "since_revision"
+      ]
+    },
+    "EventsSubscribedResponse": {
+      "description": "订阅确认：返回事件流身份与该订阅看到的当前末尾 revision。",
+      "type": "object",
+      "properties": {
+        "revision": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "stream_epoch": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "stream_epoch",
+        "revision"
+      ]
+    },
+    "EventsUnsubscribedResponse": {
+      "description": "取消订阅的确认；订阅身份绑定连接，不另行分配。",
       "type": "object",
       "additionalProperties": false
     },
@@ -739,6 +821,39 @@
         "active"
       ]
     },
+    "RuntimeEvent": {
+      "description": "轻量事件：资源身份、代次与必要元数据；终端正文只经分页读取。",
+      "type": "object",
+      "properties": {
+        "generation": {
+          "description": "资源代次；旧代次事件不覆盖新代次状态。",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "kind": {
+          "description": "封闭事件类型名。",
+          "type": "string"
+        },
+        "resource": {
+          "description": "资源身份文本（稳定 ID 或规范 ViewKey JSON）。",
+          "type": "string"
+        },
+        "revision": {
+          "description": "单调 revision；缺口只能以重新快照补偿。",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "revision",
+        "kind",
+        "resource",
+        "generation"
+      ]
+    },
     "RuntimeMethod": {
       "description": "认证后的 Runtime 方法；写方法族由后续切片逐个接入。",
       "type": "string",
@@ -746,7 +861,9 @@
         "runtime.describe",
         "runtime.snapshot",
         "runtime.operation_get",
-        "runtime.operation_wait"
+        "runtime.operation_wait",
+        "events.subscribe",
+        "events.unsubscribe"
       ]
     },
     "RuntimeParams": {
@@ -760,6 +877,9 @@
         },
         {
           "$ref": "#/$defs/OperationWaitParams"
+        },
+        {
+          "$ref": "#/$defs/EventsSubscribeParams"
         }
       ]
     },
@@ -774,6 +894,12 @@
         },
         {
           "$ref": "#/$defs/OperationResource"
+        },
+        {
+          "$ref": "#/$defs/EventsSubscribedResponse"
+        },
+        {
+          "$ref": "#/$defs/EventsUnsubscribedResponse"
         }
       ]
     },

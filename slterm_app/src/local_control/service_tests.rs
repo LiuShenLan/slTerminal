@@ -448,10 +448,14 @@ fn service_shutdown_attempts_both_failures_and_returns_first_error() {
             attempts.set(attempts.get() + 1);
             Err(io::Error::other("injected discovery revoke failure"))
         },
+        || {
+            attempts.set(attempts.get() + 1);
+            Err(io::Error::other("injected event hub shutdown failure"))
+        },
     )
-    .expect_err("双失败必须汇总错误");
+    .expect_err("多失败必须汇总首个错误");
 
-    assert_eq!(attempts.get(), 2, "server 失败不得跳过 discovery revoke");
+    assert_eq!(attempts.get(), 3, "任一失败不得跳过后续组件回收");
     assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
     assert_eq!(error.to_string(), "injected server shutdown failure");
 }

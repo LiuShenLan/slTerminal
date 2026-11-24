@@ -489,11 +489,17 @@ fn start_workspace_writer(
 fn start_local_control_service(
     workspace_writer: Option<&WorkspaceWriterRuntime>,
     events: mpsc::SyncSender<SltermShellEvent>,
-) -> Option<crate::local_control::LocalControlService> {
+) -> Option<(
+    crate::local_control::LocalControlService,
+    crate::local_control::RuntimeEventPublisher,
+)> {
     let metadata = workspace_writer?.metadata().clone();
     let writer = workspace_writer?.client();
     match crate::local_control::LocalControlService::start(metadata, events, Some(writer)) {
-        Ok(service) => Some(service),
+        Ok(service) => {
+            let publisher = service.event_publisher();
+            Some((service, publisher))
+        }
         Err(error) => {
             log::warn!("local control service startup failed: {}", error.kind());
             None
@@ -622,7 +628,11 @@ fn run_shell_once(initial_cwd: Option<PathBuf>) -> startup_diagnostics::ShellRun
         }
     };
     // 控制面与 writer 移交给 GPUI 外关闭所有者；窗口只持有有界请求 client。
-    let local_control = start_local_control_service(Some(&workspace_writer), shell_tx.clone());
+    let (local_control, runtime_events) =
+        match start_local_control_service(Some(&workspace_writer), shell_tx.clone()) {
+            Some((service, publisher)) => (Some(service), Some(publisher)),
+            None => (None, None),
+        };
     let global_close =
         match global_close::GlobalCloseRuntime::start(workspace_writer, local_control) {
             Ok(runtime) => runtime,
@@ -668,6 +678,7 @@ fn run_shell_once(initial_cwd: Option<PathBuf>) -> startup_diagnostics::ShellRun
                 persistence: side_view_persistence,
                 global_close: global_close_client,
                 learning: learning.clone(),
+                runtime_events,
             },
             start_hidden,
             regular_start,

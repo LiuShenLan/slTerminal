@@ -174,6 +174,8 @@ pub(crate) struct AppRootServices {
     pub(crate) persistence: AppRootPersistence,
     pub(crate) global_close: GlobalCloseClient,
     pub(crate) learning: crate::learning::LearningService,
+    /// Runtime 事件发布端口；无控制面时为 None。
+    pub(crate) runtime_events: Option<crate::local_control::RuntimeEventPublisher>,
 }
 
 /// 单窗口运行根；`projects` 只是强实体引用表，不复制项目注册信息。
@@ -188,6 +190,8 @@ type AgentHookApplyPort = fn(slterm_settings::AgentHook, bool) -> Result<(), Str
 pub(crate) struct AppRoot {
     snapshot: ProjectSnapshot,
     snapshot_generation: u64,
+    /// Runtime 轻量事件发布端口；关闭开始后不再发布。
+    runtime_events: Option<crate::local_control::RuntimeEventPublisher>,
     /// 最近一次 Explorer 根同步对应的快照代次；渲染只在差异时延迟接线。
     side_view_roots_generation: Option<u64>,
     project_writer: Option<WorkspaceWriterClient>,
@@ -346,6 +350,7 @@ impl AppRoot {
             Box::new(commands::LocalTerminalLauncher),
             services.persistence,
             Some(services.global_close),
+            services.runtime_events,
             cx,
         );
         root.learning = services.learning;
@@ -358,6 +363,7 @@ impl AppRoot {
         launcher: Box<dyn TerminalPanelLauncher>,
         mut persistence: AppRootPersistence,
         global_close: Option<GlobalCloseClient>,
+        runtime_events: Option<crate::local_control::RuntimeEventPublisher>,
         cx: &mut Context<'_, Self>,
     ) -> Self {
         let workspace_focus = cx.focus_handle();
@@ -444,6 +450,7 @@ impl AppRoot {
         let mut root = Self {
             snapshot,
             snapshot_generation: 0,
+            runtime_events,
             side_view_roots_generation: None,
             project_writer,
             store_epoch,

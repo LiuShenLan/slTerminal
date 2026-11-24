@@ -15,9 +15,11 @@ use slterm_runtime_protocol::{
 
 use super::credentials::load_or_create_at;
 use super::discovery::{DiscoveryGuard, endpoint_path, publish_at};
+use super::events::EventHub;
 use super::operations::{operation_resource, writer_error};
 use super::server::{
-    LocalControlServer, OperationQueryCallback, RuntimeCallbacks, SnapshotCallback,
+    EventSubscribeCallback, LocalControlServer, OperationQueryCallback, RuntimeCallbacks,
+    SnapshotCallback,
 };
 use crate::app_shell::{SltermShellEvent, try_send_handover, try_send_runtime_snapshot};
 use crate::persistence::metadata::WorkspaceMetadata;
@@ -33,6 +35,26 @@ const RUNTIME_SCHEMA: &[u8] = include_bytes!("../../../assets/runtime-api-v2.sch
 pub(super) type HandoverCallback =
     Arc<dyn Fn(HandoverParams) -> Result<HandoverResponse, JsonRpcError> + Send + Sync + 'static>;
 
+/// 事件发布端口：窗口只经它向 hub 提交轻量事件；队列满时返回 false。
+#[derive(Clone)]
+pub(crate) struct RuntimeEventPublisher {
+    publish: Arc<dyn Fn(slterm_runtime_protocol::RuntimeEvent) -> bool + Send + Sync>,
+}
+
+impl RuntimeEventPublisher {
+    pub(crate) fn from_callback(
+        publish: impl Fn(slterm_runtime_protocol::RuntimeEvent) -> bool + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            publish: Arc::new(publish),
+        }
+    }
+
+    pub(crate) fn publish(&self, event: slterm_runtime_protocol::RuntimeEvent) -> bool {
+        (self.publish)(event)
+    }
+}
+
 /// 读取或创建指定作用域的线缆凭据句柄；只由持锁首实例调用。
 ///
 /// 句柄在 server 认证点直接与请求凭据比较，不落成第二份字符串副本。
@@ -47,6 +69,7 @@ fn load_credential(
 /// 已持 OS 单实例锁的首实例服务；显式 shutdown 只能在 GPUI 外执行。
 pub(crate) struct LocalControlService {
     server: LocalControlServer,
+    event_hub: Arc<EventHub>,
     discovery_path: std::path::PathBuf,
     record: Option<DiscoveryRecord>,
     discovery: Option<DiscoveryGuard>,
@@ -199,6 +222,14 @@ impl LocalControlService {
                 }
             }
         });
+        // 事件环由专用 hub 线程独占；发布者只经有界命令通道进入。
+        let event_hub = Arc::new(EventHub::start(
+            metadata.store_epoch.clone(),
+            metadata.run.run_id.clone(),
+        )?);
+        let hub_for_events = Arc::clone(&event_hub);
+        let on_events: EventSubscribeCallback =
+            Arc::new(move |params| hub_for_events.subscribe(params));
         let server = bind(
             credential,
             runtime_credential,
@@ -207,6 +238,7 @@ impl LocalControlService {
             RuntimeCallbacks {
                 snapshot: on_snapshot,
                 operation: on_operation,
+                events: on_events,
             },
         )?;
         let record = DiscoveryRecord {
@@ -221,10 +253,19 @@ impl LocalControlService {
         };
         Ok(Self {
             server,
+            event_hub,
             discovery_path: discovery_path.to_owned(),
             record: Some(record),
             discovery: None,
             closed: false,
+        })
+    }
+
+    /// 事件发布端口：可在窗口闭包中持有，只经有界命令通道进入 hub。
+    pub(crate) fn event_publisher(&self) -> RuntimeEventPublisher {
+        RuntimeEventPublisher::from_callback({
+            let hub = Arc::clone(&self.event_hub);
+            move |event| hub.publish(event)
         })
     }
 
@@ -247,10 +288,19 @@ impl LocalControlService {
             Ok(discovery) => discovery,
             Err(publish_error) => {
                 self.closed = true;
-                // 保留发布根因与 kind；回收失败必须以安全文本一并可观察。
-                return match self.server.shutdown() {
-                    Ok(()) => Err(publish_error),
-                    Err(cleanup_error) => Err(io::Error::new(
+                // 保留发布根因与 kind；server 与 hub 回收失败都必须一并可观察。
+                let server_cleanup = self.server.shutdown().err();
+                if let Err(hub_error) = self.event_hub.shutdown()
+                    && server_cleanup.is_none()
+                {
+                    return Err(io::Error::new(
+                        publish_error.kind(),
+                        format!("{publish_error}; 控制面事件环回收失败: {hub_error}"),
+                    ));
+                }
+                return match server_cleanup {
+                    None => Err(publish_error),
+                    Some(cleanup_error) => Err(io::Error::new(
                         publish_error.kind(),
                         format!("{publish_error}; 控制面 server 回收失败: {cleanup_error}"),
                     )),
@@ -261,7 +311,7 @@ impl LocalControlService {
         Ok(())
     }
 
-    /// 两个关闭动作都必定尝试；未发布记录时只关闭监听，重复调用保持幂等。
+    /// 三个关闭动作都必定尝试；未发布记录时只关闭监听，重复调用保持幂等。
     pub(crate) fn shutdown(&mut self) -> io::Result<()> {
         self.closed = true;
         shutdown_components(
@@ -270,6 +320,7 @@ impl LocalControlService {
                 Some(discovery) => discovery.revoke(),
                 None => Ok(()),
             },
+            || self.event_hub.shutdown(),
         )
     }
 }
@@ -284,13 +335,20 @@ impl Drop for LocalControlService {
 pub(super) fn shutdown_components(
     server: impl FnOnce() -> io::Result<()>,
     discovery: impl FnOnce() -> io::Result<()>,
+    events: impl FnOnce() -> io::Result<()>,
 ) -> io::Result<()> {
-    let server = server();
-    let discovery = discovery();
-    match (server, discovery) {
-        (Err(error), _) => Err(error),
-        (Ok(()), Err(error)) => Err(error),
-        (Ok(()), Ok(())) => Ok(()),
+    let results = [server(), discovery(), events()];
+    let mut first_error = None;
+    for result in results {
+        if let Err(error) = result
+            && first_error.is_none()
+        {
+            first_error = Some(error);
+        }
+    }
+    match first_error {
+        Some(error) => Err(error),
+        None => Ok(()),
     }
 }
 

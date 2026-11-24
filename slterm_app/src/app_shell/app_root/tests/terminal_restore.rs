@@ -34,6 +34,7 @@ fn open_real_root_with_persistence(
                     Box::new(LocalTerminalLauncher),
                     persistence,
                     None,
+                    None,
                     cx,
                 )
             });

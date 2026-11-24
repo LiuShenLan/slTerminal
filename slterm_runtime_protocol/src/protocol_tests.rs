@@ -512,6 +512,8 @@ fn describe_lists_the_method_registry_with_contract_hashes() {
             "runtime.snapshot",
             "runtime.operation_get",
             "runtime.operation_wait",
+            "events.subscribe",
+            "events.unsubscribe",
             "instance.handover"
         ]
     );
