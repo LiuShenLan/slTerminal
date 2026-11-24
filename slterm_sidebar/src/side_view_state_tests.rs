@@ -533,3 +533,60 @@ fn side_view_schemas_require_exact_field_sets() {
         Err(ViewStateError::InvalidState)
     );
 }
+
+/// Explorer 持久分区可经强类型 API 读写，并按项目身份确定排序。
+#[test]
+fn explorer_state_typed_edits_roundtrip_through_the_schema() {
+    use std::str::FromStr;
+
+    use slterm_workspace::ProjectId;
+
+    use super::{ExplorerState, SideViewPath};
+
+    let project_a = ProjectId::from_str(PROJECT_A).unwrap();
+    let project_b = ProjectId::from_str(PROJECT_B).unwrap();
+    let mut explorer = ExplorerState::default();
+    assert!(explorer.project(project_a).is_none());
+
+    let project = explorer.project_mut(project_b);
+    project.set_scroll(12.0);
+    let project = explorer.project_mut(project_a);
+    project.set_expanded(vec![
+        SideViewPath::new("src".to_owned()).unwrap(),
+        SideViewPath::new("docs".to_owned()).unwrap(),
+    ]);
+    project.set_current_row(Some(SideViewPath::new("src/main.rs".to_owned()).unwrap()));
+    project.set_scroll(24.0);
+    project.set_show_ignored(true);
+    assert_eq!(explorer.project_mut(project_a).scroll(), 24.0);
+
+    let state = SideViewState::Explorer(explorer);
+    let encoded = state.to_view_state(&registry()).unwrap();
+    let projects = encoded.state()["projects"].as_array().unwrap();
+    assert_eq!(projects.len(), 2);
+    assert_eq!(
+        projects[0]["project_id"],
+        json!(PROJECT_A),
+        "分区必须按稳定身份排序"
+    );
+    assert_eq!(projects[0]["expanded"], json!(["docs", "src"]));
+    assert_eq!(projects[0]["current_row"], json!("src/main.rs"));
+    assert_eq!(projects[0]["scroll"], json!(24.0));
+    assert_eq!(projects[0]["show_ignored"], json!(true));
+    assert_eq!(projects[1]["project_id"], json!(PROJECT_B));
+    assert_eq!(projects[1]["scroll"], json!(12.0));
+
+    let restored = SideViewState::from_view_state(SideViewId::Explorer, encoded).unwrap();
+    let SideViewState::Explorer(restored) = &restored else {
+        unreachable!()
+    };
+    let project = restored.project(project_a).unwrap();
+    let expanded = project
+        .expanded()
+        .map(SideViewPath::as_str)
+        .collect::<Vec<_>>();
+    assert_eq!(expanded, ["docs", "src"]);
+    assert_eq!(project.current_row().unwrap().as_str(), "src/main.rs");
+    assert_eq!(project.scroll(), 24.0);
+    assert!(project.show_ignored());
+}

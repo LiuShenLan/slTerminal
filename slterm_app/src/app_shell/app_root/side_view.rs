@@ -473,6 +473,37 @@ impl SideView {
         self.closed = false;
     }
 
+    /// 显式编辑统一入口：更新强类型状态、解除损坏恢复屏障并经 schema 入普通队列。
+    /// 已关闭实体不得借迟到编辑复活记录。
+    pub(super) fn edit_state(
+        &mut self,
+        edit: impl FnOnce(&mut SideViewState),
+    ) -> Result<(), ViewStateError> {
+        if self.closed {
+            return Ok(());
+        }
+        edit(&mut self.state);
+        let id = self.state.id();
+        self.cache.borrow_mut().insert(id, self.state.clone());
+        self.write_barriers.borrow_mut().remove(&id);
+        let view_state = self.view_state()?;
+        if let Some(writer) = &self.writer {
+            let key = slterm_workspace::ViewKey::SideView { side_view_id: id };
+            match writer.save_view_state(&key, &view_state) {
+                Ok(()) => {
+                    self.pending_final_states.borrow_mut().remove(&id);
+                }
+                Err(error) => {
+                    self.pending_final_states
+                        .borrow_mut()
+                        .insert(id, view_state);
+                    log::warn!("could not queue SideView ViewState: {error}");
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// 每个实体只提交一次最终状态，同步关闭与退出析构共用此出口。
     pub(super) fn checkpoint(&mut self) -> Option<ViewState> {
         if self.closed {
@@ -639,6 +670,59 @@ mod side_view_state_persistence_tests {
             registry,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn side_view_explicit_edit_clears_write_barrier_and_persists() {
+        use std::str::FromStr as _;
+
+        use slterm_sidebar::SideViewState;
+        use slterm_workspace::ProjectId;
+
+        let temp = tempfile::tempdir().unwrap();
+        let paths = paths(&temp);
+        let writer = WorkspaceWriter::start(paths.clone()).unwrap();
+        let persistence = AppRootPersistence::load(&paths, Some(writer.client()));
+        persistence
+            .write_barriers
+            .borrow_mut()
+            .insert(SideViewId::Explorer);
+        let mut view = SideView::with_persistence(
+            SideViewId::Explorer,
+            Rc::clone(&persistence.cache),
+            Arc::clone(&persistence.registry),
+            Some(writer.client()),
+            Rc::clone(&persistence.write_barriers),
+            Rc::clone(&persistence.pending_final_states),
+        );
+        let project = ProjectId::from_str("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2a").unwrap();
+
+        view.edit_state(|state| {
+            let SideViewState::Explorer(explorer) = state else {
+                unreachable!()
+            };
+            explorer.project_mut(project).set_scroll(42.0);
+        })
+        .unwrap();
+
+        assert!(
+            !persistence
+                .write_barriers
+                .borrow()
+                .contains(&SideViewId::Explorer),
+            "显式编辑必须解除损坏恢复的写屏障"
+        );
+        writer.flush().unwrap();
+        let mut store = WorkspaceDatabase::open(&paths).unwrap();
+        let key = ViewKey::SideView {
+            side_view_id: SideViewId::Explorer,
+        };
+        let stored = store.view_state(&key, &persistence.registry).unwrap().unwrap();
+        let restored = SideViewState::from_view_state(SideViewId::Explorer, stored.state).unwrap();
+        let SideViewState::Explorer(explorer) = &restored else {
+            unreachable!()
+        };
+        assert_eq!(explorer.project(project).unwrap().scroll(), 42.0);
     }
 
     #[test]

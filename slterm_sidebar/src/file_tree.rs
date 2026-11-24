@@ -464,6 +464,40 @@ impl FileTreeModel {
         Ok(())
     }
 
+    /// 当前选择行；缺失表达根或仅展开未选中。
+    pub fn selected(&self) -> Option<&CanonicalPath> {
+        self.selected.as_ref()
+    }
+
+    /// 已加载节点的真实类型；未加载路径返回 None，不按命名猜测。
+    pub fn kind_of(&self, path: &CanonicalPath) -> Option<FileTreeEntryKind> {
+        self.nodes.get(path).map(|node| node.kind)
+    }
+
+    /// 可见投影中的展开目录，作为按项目持久恢复快照；根不计入。
+    pub fn expanded_paths(&self) -> Vec<CanonicalPath> {
+        fn collect(model: &FileTreeModel, directory: &CanonicalPath, paths: &mut Vec<CanonicalPath>) {
+            let Some(node) = model.nodes.get(directory) else {
+                return;
+            };
+            for child in &node.children {
+                let Some(child_node) = model.nodes.get(child) else {
+                    continue;
+                };
+                if child_node.kind != FileTreeEntryKind::Directory {
+                    continue;
+                }
+                if child_node.expanded {
+                    paths.push(child.clone());
+                    collect(model, child, paths);
+                }
+            }
+        }
+        let mut paths = Vec::new();
+        collect(self, &self.root_path, &mut paths);
+        paths
+    }
+
     pub fn set_filter(&mut self, filter: &str) {
         self.filter = filter.trim().to_lowercase();
         if self

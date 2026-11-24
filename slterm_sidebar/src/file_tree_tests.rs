@@ -290,3 +290,51 @@ fn file_tree_rejects_stale_root_and_directory_read_generations() {
     );
     assert!(tree.visible_rows().is_empty());
 }
+
+/// 恢复快照只导出可见投影中的展开目录与当前选择，不伪造未加载节点。
+#[test]
+fn file_tree_exposes_expanded_and_selected_paths_for_restore() {
+    let mut tree = model();
+    let root = path("D:/work/project");
+    let docs = path("D:/work/project/docs");
+    let sub = path("D:/work/project/docs/sub");
+    let guide = path("D:/work/project/docs/guide.md");
+    let request = tree.request_directory(&root).unwrap();
+    apply(
+        &mut tree,
+        &request,
+        vec![
+            directory("D:/work/project/docs"),
+            file("D:/work/project/a.txt"),
+        ],
+        true,
+    );
+    assert_eq!(tree.expanded_paths(), Vec::<CanonicalPath>::new());
+    assert_eq!(tree.kind_of(&docs), Some(FileTreeEntryKind::Directory));
+    assert_eq!(tree.kind_of(&guide), None, "未加载节点不得伪造类型");
+    assert_eq!(tree.selected(), None);
+
+    let request = tree.expand(&docs).unwrap().unwrap();
+    apply(
+        &mut tree,
+        &request,
+        vec![
+            directory("D:/work/project/docs/sub"),
+            file("D:/work/project/docs/guide.md"),
+        ],
+        true,
+    );
+    let request = tree.expand(&sub).unwrap().unwrap();
+    apply(&mut tree, &request, Vec::new(), true);
+    assert_eq!(tree.expanded_paths(), vec![docs.clone(), sub.clone()]);
+
+    tree.select(&guide).unwrap();
+    assert_eq!(tree.selected(), Some(&guide));
+
+    tree.collapse(&docs).unwrap();
+    assert_eq!(
+        tree.expanded_paths(),
+        Vec::<CanonicalPath>::new(),
+        "折叠祖先不得把不可见后代导出为恢复快照"
+    );
+}

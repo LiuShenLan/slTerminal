@@ -179,6 +179,30 @@ pub struct ExplorerState {
     projects: Vec<ExplorerProjectState>,
 }
 
+impl ExplorerState {
+    /// 按项目身份读取持久分区；缺失表示该项目尚无持久展开事实。
+    pub fn project(&self, project_id: ProjectId) -> Option<&ExplorerProjectState> {
+        self.projects
+            .iter()
+            .find(|project| project.project_id == project_id)
+    }
+
+    /// 按需创建分区；插入后保持稳定身份排序，编码字节与恢复顺序一致。
+    pub fn project_mut(&mut self, project_id: ProjectId) -> &mut ExplorerProjectState {
+        let index = match self
+            .projects
+            .binary_search_by_key(&project_id, |project| project.project_id)
+        {
+            Ok(index) => index,
+            Err(index) => {
+                self.projects.insert(index, ExplorerProjectState::new(project_id));
+                index
+            }
+        };
+        &mut self.projects[index]
+    }
+}
+
 impl Normalize for ExplorerState {
     fn normalize(&mut self) -> Result<(), InvalidViewState> {
         canonical_unique_by(&mut self.projects, |project| project.project_id)?;
@@ -190,9 +214,10 @@ impl Normalize for ExplorerState {
     }
 }
 
+/// Explorer 单项目持久分区；字段私有，运行态只经方法读写。
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ExplorerProjectState {
+pub struct ExplorerProjectState {
     #[serde(
         serialize_with = "serialize_stable_id",
         deserialize_with = "deserialize_stable_id"
@@ -203,6 +228,54 @@ struct ExplorerProjectState {
     current_row: Option<SideViewPath>,
     scroll: f64,
     show_ignored: bool,
+}
+
+impl ExplorerProjectState {
+    fn new(project_id: ProjectId) -> Self {
+        Self {
+            project_id,
+            expanded: Vec::new(),
+            current_row: None,
+            scroll: 0.0,
+            show_ignored: false,
+        }
+    }
+
+    pub fn expanded(&self) -> impl Iterator<Item = &SideViewPath> {
+        self.expanded.iter()
+    }
+
+    pub fn current_row(&self) -> Option<&SideViewPath> {
+        self.current_row.as_ref()
+    }
+
+    pub fn scroll(&self) -> f64 {
+        self.scroll
+    }
+
+    pub fn show_ignored(&self) -> bool {
+        self.show_ignored
+    }
+
+    /// 展开集合是树快照；重复路径按最后一次状态去重并保持有序。
+    pub fn set_expanded(&mut self, expanded: Vec<SideViewPath>) {
+        let mut expanded = expanded;
+        expanded.sort();
+        expanded.dedup();
+        self.expanded = expanded;
+    }
+
+    pub fn set_current_row(&mut self, row: Option<SideViewPath>) {
+        self.current_row = row;
+    }
+
+    pub fn set_scroll(&mut self, scroll: f64) {
+        self.scroll = scroll;
+    }
+
+    pub fn set_show_ignored(&mut self, show_ignored: bool) {
+        self.show_ignored = show_ignored;
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -275,10 +348,10 @@ struct AgentCurrentRow {
 /// 视图状态内的根相对路径；空路径由根节点身份表达，不伪造为文件行。
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(transparent)]
-struct SideViewPath(String);
+pub struct SideViewPath(String);
 
 impl SideViewPath {
-    fn new(text: String) -> Result<Self, InvalidViewState> {
+    pub fn new(text: String) -> Result<Self, InvalidViewState> {
         let bytes = text.as_bytes();
         let drive_prefixed = bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
         if text.is_empty()
@@ -293,6 +366,16 @@ impl SideViewPath {
             return Err(InvalidViewState);
         }
         Ok(Self(text))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for SideViewPath {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
     }
 }
 

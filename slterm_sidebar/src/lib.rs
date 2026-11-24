@@ -27,7 +27,9 @@ pub use file_tree::{
     DirectoryReadRequest, DirectoryStatus, FileTreeEntry, FileTreeEntryKind, FileTreeError,
     FileTreeModel, FileTreeRoot, FileTreeRow,
 };
-pub use side_view_state::{SideViewState, side_view_state_schema};
+pub use side_view_state::{
+    ExplorerProjectState, ExplorerState, SideViewPath, SideViewState, side_view_state_schema,
+};
 pub use sidebar_state::{
     ButtonMovement, SideSlot, SidebarDtoError, SidebarError, SidebarRecovery, SidebarRecoveryError,
     SidebarRecoveryWarning, SidebarState, SidebarTransition,
