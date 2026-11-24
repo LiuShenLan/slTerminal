@@ -28,7 +28,8 @@ pub use file_tree::{
     FileTreeModel, FileTreeRoot, FileTreeRow,
 };
 pub use side_view_state::{
-    ExplorerProjectState, ExplorerState, SideViewPath, SideViewState, side_view_state_schema,
+    CommitState, ExplorerProjectState, ExplorerState, SideViewPath, SideViewState,
+    side_view_state_schema,
 };
 pub use sidebar_state::{
     ButtonMovement, SideSlot, SidebarDtoError, SidebarError, SidebarRecovery, SidebarRecoveryError,

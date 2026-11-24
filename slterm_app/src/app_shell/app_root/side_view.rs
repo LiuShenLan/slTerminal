@@ -395,6 +395,8 @@ pub(crate) struct SideView {
     pending_final_states: SideViewPendingFinalStates,
     /// Explorer 运行态；其它视图恒为 None。
     pub(super) explorer: Option<ExplorerRuntime>,
+    /// Commit 运行态；其它视图恒为 None。
+    pub(super) commit: Option<super::commit::CommitRuntime>,
     /// AppRoot 在实例创建后注入；跨域意图只经该弱引用延迟派发。
     pub(super) root_handle: Option<WeakEntity<AppRoot>>,
     /// 同步关闭后禁止旧实体延迟析构再次回写。
@@ -424,6 +426,7 @@ impl SideView {
             write_barriers,
             pending_final_states,
             explorer: None,
+            commit: None,
             root_handle: None,
             closed: false,
         }
@@ -623,10 +626,10 @@ impl Render for SideView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
         let id = self.state.id();
         let focus = self.focus_handle.clone();
-        let content = if id == SideViewId::Explorer {
-            Some(super::explorer::render_explorer(self, cx))
-        } else {
-            None
+        let content = match id {
+            SideViewId::Explorer => Some(super::explorer::render_explorer(self, cx)),
+            SideViewId::Commit => Some(super::commit::render_commit(self, cx)),
+            SideViewId::Nav | SideViewId::AgentFiles => None,
         };
         div()
             .size_full()

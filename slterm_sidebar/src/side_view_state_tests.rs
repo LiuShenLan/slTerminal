@@ -590,3 +590,32 @@ fn explorer_state_typed_edits_roundtrip_through_the_schema() {
     assert_eq!(project.scroll(), 24.0);
     assert!(project.show_ignored());
 }
+
+/// Commit 持久展示参数可经强类型 API 读写并原样往返。
+#[test]
+fn commit_state_typed_edits_roundtrip_through_the_schema() {
+    use super::CommitState;
+
+    let mut commit = CommitState::default();
+    assert!(!commit.show_ignored());
+    commit.set_changes_collapsed(true);
+    commit.set_unversioned_collapsed(true);
+    commit.set_ignored_collapsed(true);
+    commit.set_show_ignored(true);
+    commit.set_scroll(36.0);
+
+    let state = SideViewState::Commit(commit);
+    let encoded = state.to_view_state(&registry()).unwrap();
+    assert_eq!(encoded.state()["changes_collapsed"], json!(true));
+    assert_eq!(encoded.state()["scroll"], json!(36.0));
+
+    let restored = SideViewState::from_view_state(SideViewId::Commit, encoded).unwrap();
+    let SideViewState::Commit(restored) = &restored else {
+        unreachable!()
+    };
+    assert!(restored.changes_collapsed());
+    assert!(restored.unversioned_collapsed());
+    assert!(restored.ignored_collapsed());
+    assert!(restored.show_ignored());
+    assert_eq!(restored.scroll(), 36.0);
+}

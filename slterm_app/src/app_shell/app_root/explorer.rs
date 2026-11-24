@@ -69,7 +69,7 @@ enum ExplorerCwdError {
 }
 
 /// 状态读取授权 = 项目根与只读父仓库根的并集；仓库根仅作读取。
-fn explorer_status_grants(root: &CanonicalPath) -> Result<Vec<PathGrant>, crate::git::GitError> {
+pub(super) fn status_grants(root: &CanonicalPath) -> Result<Vec<PathGrant>, crate::git::GitError> {
     let mut grants = vec![PathGrant::project_root(root.clone())];
     let repo_root = crate::git::repository_root_cached(root.as_path())?;
     let repo_root = CanonicalPath::new(repo_root)
@@ -275,13 +275,20 @@ impl AppRoot {
         for (id, instance) in instances {
             instance.update(cx, |view, cx| {
                 view.set_root_handle(weak.clone());
-                if id == SideViewId::Explorer {
-                    match &target {
+                match id {
+                    SideViewId::Explorer => match &target {
                         Some((project_id, root)) => {
                             view.sync_explorer_root(*project_id, root.clone(), window, cx)
                         }
                         None => view.clear_explorer_root(cx),
-                    }
+                    },
+                    SideViewId::Commit => match &target {
+                        Some((project_id, root)) => {
+                            view.sync_commit_root(*project_id, root.clone(), window, cx)
+                        }
+                        None => view.clear_commit_root(cx),
+                    },
+                    SideViewId::Nav | SideViewId::AgentFiles => {}
                 }
             });
         }
@@ -346,7 +353,7 @@ impl AppRoot {
                 CancellationToken::new(),
                 move || {
                     let loading = executor.spawn(async move {
-                        let grants = explorer_status_grants(&project_root)?;
+                        let grants = status_grants(&project_root)?;
                         let snapshot = git.status(&project_root, &grants, 0)?;
                         Ok::<_, crate::git::GitError>(snapshot)
                     });

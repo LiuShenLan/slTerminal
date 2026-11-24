@@ -289,6 +289,48 @@ pub struct CommitState {
     scroll: f64,
 }
 
+impl CommitState {
+    pub fn changes_collapsed(&self) -> bool {
+        self.changes_collapsed
+    }
+
+    pub fn unversioned_collapsed(&self) -> bool {
+        self.unversioned_collapsed
+    }
+
+    pub fn ignored_collapsed(&self) -> bool {
+        self.ignored_collapsed
+    }
+
+    pub fn show_ignored(&self) -> bool {
+        self.show_ignored
+    }
+
+    pub fn scroll(&self) -> f64 {
+        self.scroll
+    }
+
+    pub fn set_changes_collapsed(&mut self, value: bool) {
+        self.changes_collapsed = value;
+    }
+
+    pub fn set_unversioned_collapsed(&mut self, value: bool) {
+        self.unversioned_collapsed = value;
+    }
+
+    pub fn set_ignored_collapsed(&mut self, value: bool) {
+        self.ignored_collapsed = value;
+    }
+
+    pub fn set_show_ignored(&mut self, value: bool) {
+        self.show_ignored = value;
+    }
+
+    pub fn set_scroll(&mut self, value: f64) {
+        self.scroll = value;
+    }
+}
+
 impl Normalize for CommitState {
     fn normalize(&mut self) -> Result<(), InvalidViewState> {
         normalize_scroll(&mut self.scroll)

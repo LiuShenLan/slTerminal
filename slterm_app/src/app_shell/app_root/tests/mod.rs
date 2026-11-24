@@ -3,6 +3,7 @@
 mod application_close_receipts;
 mod batch_close;
 mod close;
+mod commit;
 mod diff;
 mod documents;
 mod explorer;

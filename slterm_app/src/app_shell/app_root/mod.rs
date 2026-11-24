@@ -5,6 +5,7 @@ mod batch_close;
 pub(crate) mod close_coordinator;
 mod command_registry;
 mod commands;
+mod commit;
 #[allow(dead_code)] // 消费点归 Editor 行标、Diff 启动恢复与可见性接线。
 mod diff;
 mod document_external;
@@ -198,6 +199,7 @@ pub(crate) struct AppRoot {
     panel_ids: PanelIdAllocator,
     documents: DocumentRegistry,
     editor_git: BTreeMap<PanelId, editor_git::EditorGitState>,
+    pending_commit_diffs: BTreeMap<CanonicalPath, commit::PendingCommitDiff>,
     document_session_read_grants: BTreeMap<slterm_document::DocumentId, PathGrant>,
     document_autosave: crate::app_shell::document_autosave::DocumentAutosaveCoordinator,
     focused_document_view: Option<(slterm_document::DocumentId, slterm_workspace::ViewKey)>,
@@ -398,6 +400,7 @@ impl AppRoot {
             panel_ids,
             documents,
             editor_git: BTreeMap::new(),
+            pending_commit_diffs: BTreeMap::new(),
             document_session_read_grants: BTreeMap::new(),
             document_autosave: cx
                 .try_global::<crate::app_shell::config::Settings>()

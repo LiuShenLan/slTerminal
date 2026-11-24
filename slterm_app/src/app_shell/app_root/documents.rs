@@ -355,6 +355,7 @@ impl AppRoot {
             return;
         }
         let completion = request.completion.take();
+        let opened_path = request.path.clone();
         let session_read_grant = request.session_read_grant.take();
         let markdown_fragment = request.markdown_fragment.take();
         let outcome = match result {
@@ -379,6 +380,9 @@ impl AppRoot {
         self.reconcile_document_registry(cx);
         if let Err(error) = &outcome {
             log::warn!("Document 打开未提交: {error}");
+        }
+        if outcome.is_ok() {
+            self.flush_pending_commit_diff(&opened_path, window, cx);
         }
         if let Some(completion) = completion {
             completion(outcome, window, cx);
