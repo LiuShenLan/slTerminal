@@ -12,7 +12,9 @@
 use std::io;
 
 mod agent_hooks;
+mod agent_roots;
 pub use agent_hooks::AgentHook;
+pub use agent_roots::{AgentRoot, AgentRootCapabilities, AgentRootError};
 mod cursor_motion;
 mod custom_theme;
 mod identity;

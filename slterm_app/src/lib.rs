@@ -40,6 +40,9 @@ pub(crate) mod agent_dirs;
 // per-pane 环境注入消费点归 PTY spawn 链。
 #[allow(dead_code)]
 pub(crate) mod agent_env;
+// 自定义 AgentRoot 注册表:真实目录查重、能力查询、改路径与撤权。
+#[allow(dead_code)] // 消费点归 Agent 文件树与设置页。
+pub(crate) mod agent_root_service;
 pub mod brand;
 pub(crate) mod cli;
 // 补全应用层:Session/Request 分层、来源缓存与后台计算。
