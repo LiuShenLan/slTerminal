@@ -329,7 +329,7 @@
 | staged 与 unstaged 并存时回滚保留 staged 差异 | `commit_rollback_preserves_staged_changes` | 已自动化 |
 | 纯 staged、staged rename 和 conflict 禁用通用回滚 | `commit_rollback_disabled_shapes` | 已自动化 |
 | 未暂存 deleted 从索引版本恢复而非 HEAD | `commit_deleted_restores_index_version` | 已自动化 |
-| 未暂存 rename 恢复旧路径并清除新路径且不改索引 | `commit_unstaged_rename_rollback` | 待实现 |
+| 未暂存 rename 恢复旧路径并清除新路径且不改索引 | `commit_unstaged_rename_rollback` | 已自动化 |
 | 回滚前完成脏 Document 守卫且取消不写盘 | `commit_rollback_document_guard` | 已自动化 |
 | Commit 打开已有脏 Document 的 Diff 使用共享文本 | `commit_opens_shared_document_diff` | 已自动化 |
 | GitShow 创建后不随 HEAD 或项目根变化 | `commit_gitshow_fixed_version` | 已自动化 |

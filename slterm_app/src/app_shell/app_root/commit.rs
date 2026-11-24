@@ -1103,10 +1103,39 @@ impl AppRoot {
                                 "回滚目标状态已变化".to_owned(),
                             ));
                         }
+                        // 未暂存 rename：旧路径 deleted 与内容相同的 untracked 镜像成对出现。
+                        let mirror = if kind == RollbackKind::Deleted {
+                            let indexed = crate::git::index_bytes(
+                                repo_root.as_path(),
+                                repo_relative.as_str(),
+                            )?;
+                            snapshot
+                                .entries
+                                .iter()
+                                .filter(|entry| entry.index == '?')
+                                .find_map(|entry| {
+                                    let candidate = repo_root.as_path().join(
+                                        entry.path.replace('/', std::path::MAIN_SEPARATOR_STR),
+                                    );
+                                    (std::fs::read(&candidate).ok()? == indexed)
+                                        .then_some(candidate)
+                                })
+                        } else {
+                            None
+                        };
                         crate::git::restore_from_index(
                             repo_root.as_path(),
                             &[repo_relative.as_str()],
-                        )
+                        )?;
+                        // 新路径清除失败属于部分成功：旧路径已按索引恢复，残留如实上报。
+                        if let Some(mirror) = mirror {
+                            std::fs::remove_file(&mirror).map_err(|_| {
+                                crate::git::GitError::Command(
+                                    "旧路径已恢复，但新路径清除失败".to_owned(),
+                                )
+                            })?;
+                        }
+                        Ok(())
                     });
                     cx.spawn(async move |this, cx| {
                         let result = rolling_back.await;

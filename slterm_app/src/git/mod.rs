@@ -348,6 +348,17 @@ impl StatusEntry {
     }
 }
 
+/// 读取索引中某路径的字节内容；用于未暂存 rename 的镜像确认。
+pub(crate) fn index_bytes(root: &Path, repo_relative: &str) -> Result<Vec<u8>, GitError> {
+    let mut command = repository::repository_command(root);
+    command.arg("show").arg(format!(":{repo_relative}"));
+    let output = repository::run_repository(command)?;
+    if !output.status.success() {
+        return Err(command_failure(root, "show", &output.stderr));
+    }
+    Ok(output.stdout)
+}
+
 /// 从当前索引恢复工作区路径；不重置索引，不切换 HEAD。
 ///
 /// 写操作只由 Commit 回滚在后台调用，执行前必须由应用层完成状态与授权重检。

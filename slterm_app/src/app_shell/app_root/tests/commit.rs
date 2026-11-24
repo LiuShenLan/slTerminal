@@ -425,3 +425,47 @@ fn commit_rollback_capability_union(cx: &mut TestAppContext) {
         "项目根外目标没有写能力，不得回滚"
     );
 }
+
+#[gpui::test]
+fn commit_unstaged_rename_rollback(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let repository = temp.path().join("repo");
+    std::fs::create_dir(&repository).unwrap();
+    super::gitshow::git(&repository, &["init", "--quiet"]);
+    super::gitshow::git(&repository, &["config", "core.autocrlf", "false"]);
+    super::gitshow::git(&repository, &["config", "user.name", "slTerminal Test"]);
+    super::gitshow::git(
+        &repository,
+        &["config", "user.email", "slterm-test@example.invalid"],
+    );
+    std::fs::write(repository.join("old.txt"), "shared\n").unwrap();
+    super::gitshow::git(&repository, &["add", "--", "old.txt"]);
+    super::gitshow::git(&repository, &["commit", "--quiet", "-m", "base"]);
+    std::fs::rename(repository.join("old.txt"), repository.join("new.txt")).unwrap();
+    let repo_root = CanonicalPath::new(dunce::canonicalize(&repository).unwrap()).unwrap();
+    let old = CanonicalPath::new(repo_root.as_path().join("old.txt")).unwrap();
+    let (root, mut window, _) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, repository.to_str().unwrap());
+    let commit = open_commit(&root, &mut window, cx);
+    window.update(|window, cx| {
+        commit.update(cx, |view, cx| view.commit_rollback(&old, window, cx));
+    });
+    window.run_until_parked();
+    draw_frame(&mut window);
+    window.run_until_parked();
+
+    assert_eq!(
+        std::fs::read_to_string(repository.join("old.txt")).unwrap(),
+        "shared\n",
+        "旧路径必须从索引恢复"
+    );
+    assert!(
+        !repository.join("new.txt").exists(),
+        "新路径工作区条目必须清除"
+    );
+    let status = super::gitshow::git(&repository, &["status", "--porcelain"]);
+    assert!(
+        status.stdout.is_empty(),
+        "索引不得改变且工作区应回到干净状态"
+    );
+}
