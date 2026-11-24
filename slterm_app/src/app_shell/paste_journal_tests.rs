@@ -80,7 +80,8 @@ fn register(
 fn try_recover(store: &mut WorkspaceDatabase) -> Result<MaintenanceOutcome, MaintenanceError> {
     let recoverer = PasteJournalRecoverer;
     let recoverers = BTreeMap::from([(PASTE_JOURNAL_KIND, &recoverer as &dyn JournalRecoverer)]);
-    MaintenanceRunner::new(store, EPOCH, &recoverers).run()
+    let requests = crate::persistence::startup::MaintenanceRequestRecovererRegistry::default();
+    MaintenanceRunner::new(store, EPOCH, &recoverers, &requests).run()
 }
 
 fn recover(store: &mut WorkspaceDatabase) -> MaintenanceOutcome {

@@ -33,6 +33,7 @@ use serde_json::Value;
 use slterm_path::AppPaths;
 use zeroize::Zeroizing;
 
+pub(crate) mod maintenance;
 pub(crate) mod recovery;
 
 /// 备份格式魔数(已裁:去品牌,8 字节,同时作 AAD)。

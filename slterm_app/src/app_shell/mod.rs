@@ -236,7 +236,8 @@ impl WorkspaceWriterRuntime {
         CleanupTemp: FnOnce() -> std::io::Result<()>,
     {
         use crate::persistence::startup::{
-            JournalRecoverer, JournalRecovererRegistry, MaintenanceOutcome, MaintenanceRunner,
+            JournalRecoverer, JournalRecovererRegistry, MaintenanceOutcome,
+            MaintenanceRequestRecoverer, MaintenanceRequestRecovererRegistry, MaintenanceRunner,
             open_workspace_with_recovery,
         };
         use crate::persistence::workspace_writer::WorkspaceWriterError;
@@ -267,10 +268,20 @@ impl WorkspaceWriterRuntime {
             crate::app_shell::paste_journal::PASTE_JOURNAL_KIND,
             &paste_recoverer as &dyn JournalRecoverer,
         )]);
-        let maintenance =
-            MaintenanceRunner::new(&mut store, &started.current.store_epoch, &recoverers)
-                .run()
-                .map_err(WorkspaceWriterError::Maintenance)?;
+        let backup_recoverer =
+            crate::encrypted_backup::maintenance::BackupRestoreRecoverer::new(paths.clone());
+        let request_recoverers = MaintenanceRequestRecovererRegistry::from([(
+            crate::encrypted_backup::maintenance::BACKUP_RESTORE_KIND,
+            &backup_recoverer as &dyn MaintenanceRequestRecoverer,
+        )]);
+        let maintenance = MaintenanceRunner::new(
+            &mut store,
+            &started.current.store_epoch,
+            &recoverers,
+            &request_recoverers,
+        )
+        .run()
+        .map_err(WorkspaceWriterError::Maintenance)?;
         if let MaintenanceOutcome::NeedsAttention { stage } = maintenance {
             return Err(WorkspaceWriterError::MaintenanceNeedsAttention(stage));
         }

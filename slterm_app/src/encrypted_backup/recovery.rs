@@ -15,9 +15,9 @@ use super::*;
 
 /// 恢复目标的类别与根内相对名共同构成身份，禁止跨根伪造。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-struct RestoreTarget {
-    category: BackupCategory,
-    name: String,
+pub(super) struct RestoreTarget {
+    pub(super) category: BackupCategory,
+    pub(super) name: String,
 }
 
 /// 一次选择性恢复之前的本机现场句柄。
@@ -36,13 +36,55 @@ impl RestorePoint {
 }
 
 #[derive(Serialize, Deserialize)]
-struct OriginalFile {
-    target: RestoreTarget,
+pub(super) struct OriginalFile {
+    pub(super) target: RestoreTarget,
     /// None = 恢复前该文件不存在;撤回时删除,而不是留下恢复新建的文件。
-    bytes: Option<Vec<u8>>,
+    pub(super) bytes: Option<Vec<u8>>,
     /// 恢复成功后的文件指纹；撤回时逐项比较，后续修改项保留当前内容。
     #[serde(default)]
-    after: Option<[u8; 32]>,
+    pub(super) after: Option<[u8; 32]>,
+}
+
+/// 恢复点正文加密（DPAPI CurrentUser）：明文不落盘。
+pub(super) fn encode_point(originals: &[OriginalFile]) -> Result<Vec<u8>, String> {
+    let plaintext = Zeroizing::new(
+        serde_json::to_vec(originals).map_err(|error| format!("序列化恢复点失败: {error}"))?,
+    );
+    crate::platform::dpapi::protect(&plaintext)
+        .map_err(|error| format!("恢复点 DPAPI 加密失败: {error}"))
+}
+
+/// 恢复点正文明文；篡改密文或跨账户解密失败。
+pub(super) fn decode_point(packet: &[u8]) -> Result<Vec<OriginalFile>, String> {
+    let plaintext = Zeroizing::new(
+        crate::platform::dpapi::unprotect(packet)
+            .map_err(|error| format!("恢复点 DPAPI 解密失败: {error}"))?,
+    );
+    serde_json::from_slice(&plaintext).map_err(|error| format!("恢复点内容无效: {error}"))
+}
+
+/// 维护期恢复点落盘：文件名由请求拥有，目录固定在本地根恢复点目录。
+pub(super) fn write_point(
+    paths: &AppPaths,
+    file_name: &str,
+    originals: &[OriginalFile],
+) -> Result<PathBuf, String> {
+    let name = Path::new(file_name);
+    if file_name.is_empty()
+        || name.is_absolute()
+        || name
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        return Err("恢复点文件名无效".to_owned());
+    }
+    let directory = restore_path(paths.local_root(), "backup-recovery")?;
+    fs::create_dir_all(&directory).map_err(|error| format!("创建恢复点目录失败: {error}"))?;
+    let path = directory.join(name);
+    let packet = encode_point(originals)?;
+    crate::atomic_file::write(&path, &packet)
+        .map_err(|error| format!("保存恢复点失败: {error}"))?;
+    Ok(path)
 }
 
 fn file_fingerprint(path: &Path) -> Result<Option<[u8; 32]>, String> {
@@ -53,7 +95,7 @@ fn file_fingerprint(path: &Path) -> Result<Option<[u8; 32]>, String> {
     }
 }
 
-fn read_original(paths: &AppPaths, entry: &BackupEntry) -> Result<OriginalFile, String> {
+pub(super) fn read_original(paths: &AppPaths, entry: &BackupEntry) -> Result<OriginalFile, String> {
     let name = &entry.name;
     let path = restore_path(category_root(paths, entry.category), name)?;
     if fs::symlink_metadata(&path).is_ok_and(|meta| meta.file_type().is_symlink()) {
@@ -74,7 +116,7 @@ fn read_original(paths: &AppPaths, entry: &BackupEntry) -> Result<OriginalFile, 
     })
 }
 
-fn write_originals(paths: &AppPaths, originals: &[OriginalFile]) -> Result<(), String> {
+pub(super) fn write_originals(paths: &AppPaths, originals: &[OriginalFile]) -> Result<(), String> {
     let restore_paths = originals
         .iter()
         .map(|file| {
@@ -133,11 +175,7 @@ fn restore_selected_at(
         .iter()
         .map(|entry| read_original(paths, entry))
         .collect::<Result<Vec<_>, _>>()?;
-    let plaintext = Zeroizing::new(
-        serde_json::to_vec(&originals).map_err(|error| format!("序列化恢复点失败: {error}"))?,
-    );
-    let packet = crate::platform::dpapi::protect(&plaintext)
-        .map_err(|error| format!("恢复点 DPAPI 加密失败: {error}"))?;
+    let packet = encode_point(&originals)?;
     let path = recovery_point_path(paths.local_root())?;
     fs::create_dir_all(path.parent().ok_or("恢复点路径无效")?)
         .map_err(|error| format!("创建恢复点目录失败: {error}"))?;
@@ -158,11 +196,7 @@ fn restore_selected_at(
         )?;
         file.after = file_fingerprint(&target)?;
     }
-    let plaintext = Zeroizing::new(
-        serde_json::to_vec(&originals).map_err(|error| format!("序列化恢复点失败: {error}"))?,
-    );
-    let packet = crate::platform::dpapi::protect(&plaintext)
-        .map_err(|error| format!("恢复点 DPAPI 加密失败: {error}"))?;
+    let packet = encode_point(&originals)?;
     crate::atomic_file::write(&path, &packet)
         .map_err(|error| format!("更新恢复点失败: {error}"))?;
     Ok(RestorePoint {
@@ -195,10 +229,7 @@ pub(crate) fn undo(point: &RestorePoint) -> Result<(), String> {
 
 fn undo_at(paths: &AppPaths, point: &RestorePoint) -> Result<(), String> {
     let packet = fs::read(&point.path).map_err(|error| format!("读取恢复点失败: {error}"))?;
-    let plaintext = crate::platform::dpapi::unprotect(&packet)
-        .map_err(|error| format!("恢复点 DPAPI 解密失败: {error}"))?;
-    let originals: Vec<OriginalFile> =
-        serde_json::from_slice(&plaintext).map_err(|error| format!("恢复点内容无效: {error}"))?;
+    let originals = decode_point(&packet)?;
     // 只接受该次已验证恢复操作拥有的目标集合;外部导入文件不能借撤回扩展白名单。
     if originals
         .iter()

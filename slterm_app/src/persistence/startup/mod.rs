@@ -6,6 +6,7 @@ pub(crate) mod recovery;
 #[allow(unused_imports)] // 生产消费点归后续启动链。
 pub(crate) use maintenance::{
     JournalRecoverer, JournalRecovererRegistry, MaintenanceError, MaintenanceOutcome,
+    MaintenanceRequestError, MaintenanceRequestRecoverer, MaintenanceRequestRecovererRegistry,
     MaintenanceRunner, MaintenanceStage,
 };
 pub(crate) use recovery::{

@@ -12,7 +12,8 @@ mod tests {
     use crate::persistence::close::{CloseCommitStatus, PersistedCloseIntent};
     use crate::persistence::metadata::RunMarker;
     use crate::persistence::startup::{
-        JournalRecovererRegistry, MaintenanceOutcome, MaintenanceRunner, MaintenanceStage,
+        JournalRecovererRegistry, MaintenanceOutcome, MaintenanceRequestRecovererRegistry,
+        MaintenanceRunner, MaintenanceStage,
     };
     use crate::persistence::workspace::WorkspaceDatabase;
 
@@ -119,10 +120,12 @@ mod tests {
                 )
                 .unwrap();
             assert!(!run.previous.unwrap().clean_shutdown);
+            let requests = MaintenanceRequestRecovererRegistry::default();
             let maintenance = MaintenanceRunner::new(
                 &mut store,
                 &run.current.store_epoch,
                 &JournalRecovererRegistry::default(),
+                &requests,
             )
             .run()
             .unwrap();
