@@ -5,6 +5,7 @@
 //!
 //! 服务含阻塞 I/O，只在后台调用；本模块不启动线程、不持有 GPUI 实体。
 
+use std::path::Path;
 use std::sync::Arc;
 
 use slterm_path::CanonicalPath;
@@ -27,6 +28,59 @@ pub(crate) enum AgentRootRegistryError {
 pub(crate) struct AgentRootPathChange {
     pub(crate) revoked: AgentRootId,
     pub(crate) registered: AgentRootId,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AgentRootLoadError {
+    Io,
+    /// 段结构或元素非法：不得当作空配置。
+    Invalid,
+}
+
+/// 自定义根读取（生产设置路径）。
+pub(crate) fn load_agent_roots() -> Result<Vec<AgentRoot>, AgentRootLoadError> {
+    let loaded = crate::settings_store::load_settings().map_err(|_| AgentRootLoadError::Io)?;
+    decode_agent_roots(
+        loaded
+            .data
+            .external_segment(slterm_settings::AGENT_ROOTS_SEGMENT),
+    )
+}
+
+/// 显式路径读取（测试注入与启动恢复共用）。
+pub(crate) fn load_agent_roots_at(path: &Path) -> Result<Vec<AgentRoot>, AgentRootLoadError> {
+    let loaded =
+        crate::settings_store::load_settings_at(path).map_err(|_| AgentRootLoadError::Io)?;
+    decode_agent_roots(
+        loaded
+            .data
+            .external_segment(slterm_settings::AGENT_ROOTS_SEGMENT),
+    )
+}
+
+fn decode_agent_roots(
+    segment: Option<&slterm_settings::json::Value>,
+) -> Result<Vec<AgentRoot>, AgentRootLoadError> {
+    slterm_settings::agent_roots_from_segment(segment).map_err(|_| AgentRootLoadError::Invalid)
+}
+
+/// 自定义根保存（生产设置路径）：经统一设置写通道。
+pub(crate) fn save_agent_roots(roots: &[AgentRoot]) -> std::io::Result<()> {
+    crate::settings_store::save_settings_blocking(&[(
+        slterm_settings::AGENT_ROOTS_SEGMENT,
+        slterm_settings::agent_roots_to_segment(roots),
+    )])
+}
+
+/// 显式路径保存（测试注入）。
+pub(crate) fn save_agent_roots_at(path: &Path, roots: &[AgentRoot]) -> std::io::Result<()> {
+    crate::settings_store::save_settings_blocking_at(
+        path,
+        &[(
+            slterm_settings::AGENT_ROOTS_SEGMENT,
+            slterm_settings::agent_roots_to_segment(roots),
+        )],
+    )
 }
 
 pub(crate) struct AgentRootRegistry {
@@ -206,6 +260,32 @@ mod tests {
             path.to_string_lossy().into_owned(),
         )
         .unwrap()
+    }
+
+    /// 自定义根经统一设置写通道往返；清空后读回空列表。
+    #[test]
+    fn agent_roots_roundtrip_through_settings_channel() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("settings.json");
+        let root = root(1, temp.path()).with_capabilities(slterm_settings::AgentRootCapabilities {
+            write: true,
+            terminal: false,
+        });
+        save_agent_roots_at(&path, std::slice::from_ref(&root)).unwrap();
+        assert_eq!(load_agent_roots_at(&path).unwrap(), vec![root]);
+        save_agent_roots_at(&path, &[]).unwrap();
+        assert!(load_agent_roots_at(&path).unwrap().is_empty());
+    }
+
+    /// 段结构非法时读取报错且不覆盖原文件，不把损坏当空配置。
+    #[test]
+    fn agent_roots_load_rejects_malformed_segment_without_overwrite() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("settings.json");
+        let original = br#"{"agent_roots":{"roots":"broken"}}"#;
+        std::fs::write(&path, original).unwrap();
+        assert!(load_agent_roots_at(&path).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), original);
     }
 
     /// 新根默认可读但写与终端分别拒绝；开启写不隐含终端能力。
