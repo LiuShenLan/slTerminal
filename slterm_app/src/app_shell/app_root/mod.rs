@@ -21,6 +21,7 @@ pub(crate) mod keymap;
 mod language_selector;
 mod layout;
 mod markdown_links;
+mod nav;
 mod navigation;
 mod panel_host;
 mod project_close;

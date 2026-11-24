@@ -294,6 +294,7 @@ impl AppRoot {
         }
         self.ensure_agent_roots_loading(cx);
         self.sync_agent_files_roots(window, cx);
+        self.sync_nav_projects(cx);
         self.side_view_roots_generation = Some(self.snapshot_generation);
     }
 

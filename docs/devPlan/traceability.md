@@ -269,7 +269,7 @@
 
 | 验收场景 | 目标测试例名 | 状态 |
 |---|---|---|
-| 导航移除项目经统一守卫与删除意图 | `navigation_project_remove_uses_workspace_guard` | 待实现 |
+| 导航移除项目经统一守卫与删除意图 | `navigation_project_remove_uses_workspace_guard` | 已自动化 |
 | 根重定位检查冲突与 Hooks 且保持既有 PTY cwd | `navigation_relocation_guards_and_reassigns_history` | 待实现 |
 | 嵌套或暂不可访问根仍按词法最深匹配归属 | `navigation_history_lexical_deepest_match` | 已自动化 |
 | 未归属历史恢复新项目前先确认目标根 | `navigation_unowned_restore_requires_project_confirmation` | 待实现 |
