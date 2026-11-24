@@ -474,23 +474,33 @@ fn validate_editable(hooks: &Value) -> Result<(), String> {
     Ok(())
 }
 
-/// 读根对象与完整文件指纹:缺失 = 首次创建(空对象、无基线);
+/// 根对象、完整文件指纹与原文三元组；基线是内容代次前置条件。
+type RootRead = (Value, Option<[u8; 32]>, Option<String>);
+
+/// 读根对象、完整文件指纹与原文:缺失 = 首次创建(空对象、无基线、无原文);
 /// 损坏/IO 错误向上传播，不当空配置。
-fn read_root_with_fingerprint(path: &Path) -> Result<(Value, Option<[u8; 32]>), String> {
+fn read_root_text(path: &Path) -> Result<RootRead, String> {
     match std::fs::read(path) {
         Ok(bytes) => {
             let baseline = Some(Sha256::digest(&bytes).into());
-            let root = serde_json::from_slice(&bytes)
+            let text = String::from_utf8(bytes)
+                .map_err(|_| "配置文件不是合法 UTF-8，拒绝编辑".to_owned())?;
+            let root = serde_json::from_str(&text)
                 .map_err(|error| format!("配置文件 JSON 损坏，拒绝编辑: {error}"))?;
-            Ok((root, baseline))
+            Ok((root, baseline, Some(text)))
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok((json!({}), None)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok((json!({}), None, None)),
         Err(error) => Err(error.to_string()),
     }
 }
 
-/// 读-改-写主体:锁内重读并比较基线 → 保留认领组、清掉旧用户组 →
-/// 追加编辑组 → 原子写。其余顶层键(hooks 以外的用户配置)原样保留。
+fn read_root_with_fingerprint(path: &Path) -> Result<(Value, Option<[u8; 32]>), String> {
+    read_root_text(path).map(|(root, baseline, _)| (root, baseline))
+}
+
+/// 读-改-写主体:锁内重读并比较基线 → 合并认领组与编辑组 →
+/// 只替换 hooks 子树字节范围 → 先写上一代 .bak → 原子写。
+/// hooks 以外的字段、键序与空白字节原样保留。
 fn write_editable_at(
     path: &Path,
     baseline: Option<[u8; 32]>,
@@ -499,7 +509,7 @@ fn write_editable_at(
     let _lock = crate::atomic_file::try_lock(path)
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "hooks 配置文件正被另一个操作占用，请稍后重试".to_owned())?;
-    let (mut root, current) = read_root_with_fingerprint(path)?;
+    let (mut root, current, original_text) = read_root_text(path)?;
     if draft_write_guard(baseline, current) == DraftWriteGuard::ExternalModified {
         return Err("hooks 配置文件已被外部修改，请重新加载后再保存".to_owned());
     }
@@ -531,8 +541,162 @@ fn write_editable_at(
             .ok_or_else(|| format!("事件 {event} 的值必须是数组"))?;
         current.extend(groups.iter().cloned());
     }
-    let text = serde_json::to_string_pretty(&root).map_err(|error| error.to_string())? + "\n";
+    let text = replace_hooks_subtree(original_text.as_deref(), &root)?;
+    if let Some(original) = &original_text {
+        let backup = backup_path(path);
+        crate::atomic_file::write(&backup, original.as_bytes())
+            .map_err(|error| format!("hooks 配置备份失败，保留草稿: {error}"))?;
+    }
     crate::atomic_file::write(path, text.as_bytes()).map_err(|error| error.to_string())
+}
+
+/// 与 settings_store 同名的 `.bak` 上一代备份。
+fn backup_path(path: &Path) -> PathBuf {
+    let mut name = path
+        .file_name()
+        .map(|name| name.to_os_string())
+        .unwrap_or_default();
+    name.push(".bak");
+    path.with_file_name(name)
+}
+
+/// 只替换根对象中 hooks 值的字节范围；缺失时在根对象闭合前追加，
+/// 其余字节（键序、空白、其他字段）一律原样保留。
+fn replace_hooks_subtree(original: Option<&str>, root: &Value) -> Result<String, String> {
+    let hooks = root.get("hooks").cloned().unwrap_or_else(|| json!({}));
+    let subtree = serde_json::to_string_pretty(&hooks).map_err(|error| error.to_string())?;
+    let Some(original) = original else {
+        return Ok(format!("{{\"hooks\":{subtree}}}\n"));
+    };
+    let scan = scan_root_object(original).ok_or_else(|| "配置文件根必须是 JSON 对象".to_owned())?;
+    if let Some(range) = scan.hooks {
+        return Ok(format!(
+            "{}{}{}",
+            &original[..range.start],
+            subtree,
+            &original[range.end..]
+        ));
+    }
+    let separator = if scan.has_members { "," } else { "" };
+    Ok(format!(
+        "{}{separator}\"hooks\":{subtree}{}",
+        &original[..scan.end],
+        &original[scan.end..]
+    ))
+}
+
+struct RootObjectScan {
+    /// 根对象闭合 `}` 的字节位置。
+    end: usize,
+    /// hooks 值的字节范围（含两端结构）。
+    hooks: Option<std::ops::Range<usize>>,
+    /// 根对象是否有成员（决定追加时是否需要逗号）。
+    has_members: bool,
+}
+
+/// 轻量 JSON 扫描：只为根对象定位 hooks 值范围与闭合位置，不重排或修复。
+fn scan_root_object(text: &str) -> Option<RootObjectScan> {
+    let bytes = text.as_bytes();
+    let mut index = skip_json_whitespace(bytes, 0)?;
+    if bytes.get(index) != Some(&b'{') {
+        return None;
+    }
+    index += 1;
+    let mut hooks = None;
+    let mut has_members = false;
+    loop {
+        index = skip_json_whitespace(bytes, index)?;
+        match bytes.get(index)? {
+            b'}' => {
+                return Some(RootObjectScan {
+                    end: index,
+                    hooks,
+                    has_members,
+                });
+            }
+            b',' => index += 1,
+            b'"' => {
+                has_members = true;
+                let key_start = index;
+                let key_end = scan_json_string(bytes, index)?;
+                let key = &text[key_start + 1..key_end - 1];
+                index = skip_json_whitespace(bytes, key_end)?;
+                if bytes.get(index) != Some(&b':') {
+                    return None;
+                }
+                index = skip_json_whitespace(bytes, index + 1)?;
+                let value_start = index;
+                index = scan_json_value(bytes, index)?;
+                if key == "hooks" {
+                    hooks = Some(value_start..index);
+                }
+            }
+            _ => return None,
+        }
+    }
+}
+
+fn skip_json_whitespace(bytes: &[u8], mut index: usize) -> Option<usize> {
+    while index < bytes.len() && matches!(bytes[index], b' ' | b'\t' | b'\r' | b'\n') {
+        index += 1;
+    }
+    (index < bytes.len()).then_some(index)
+}
+
+/// 返回字符串结束后的位置；转义跳过两个字节。
+fn scan_json_string(bytes: &[u8], start: usize) -> Option<usize> {
+    if bytes.get(start) != Some(&b'"') {
+        return None;
+    }
+    let mut index = start + 1;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\\' => index += 2,
+            b'"' => return Some(index + 1),
+            _ => index += 1,
+        }
+    }
+    None
+}
+
+fn scan_json_value(bytes: &[u8], start: usize) -> Option<usize> {
+    match bytes.get(start)? {
+        b'"' => scan_json_string(bytes, start),
+        b'{' | b'[' => {
+            let mut depth = 0_usize;
+            let mut index = start;
+            while index < bytes.len() {
+                match bytes[index] {
+                    b'"' => {
+                        index = scan_json_string(bytes, index)?;
+                        continue;
+                    }
+                    b'{' | b'[' => depth += 1,
+                    b'}' | b']' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            return Some(index + 1);
+                        }
+                    }
+                    _ => {}
+                }
+                index += 1;
+            }
+            None
+        }
+        _ => {
+            let mut index = start;
+            while index < bytes.len()
+                && !matches!(
+                    bytes[index],
+                    b',' | b'}' | b']' | b' ' | b'\t' | b'\r' | b'\n'
+                )
+            {
+                index += 1;
+            }
+            (index > start).then_some(index)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -633,6 +797,86 @@ mod editor_tests {
         assert_eq!(
             after["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"],
             json!("prompt-user")
+        );
+    }
+
+    /// 保存只替换 hooks 子树：其余字段与空白字节原样保留，并留下上一代 .bak。
+    #[test]
+    fn hooks_save_replaces_only_the_hooks_subtree_and_keeps_a_backup() {
+        let (_directory, path) = fixture();
+        let original = "{\n  \"model\":  \"opus\",\n  \"env\": {\"A\": 1},\n  \"hooks\": { \"Stop\": [] }\n}\n";
+        write(&path, original);
+        let document = HooksDocument::load_at(&path).unwrap();
+        let edited = json!({
+            "Stop": [{"hooks": [{"type": "command", "command": "new-user"}]}]
+        });
+        document.save_editable(&edited.to_string()).unwrap();
+
+        let saved = std::fs::read_to_string(&path).unwrap();
+        let prefix = "{\n  \"model\":  \"opus\",\n  \"env\": {\"A\": 1},\n  \"hooks\": ";
+        assert!(
+            saved.starts_with(prefix),
+            "hooks 之前的字节必须原样保留: {saved}"
+        );
+        assert!(saved.ends_with("\n}\n"), "hooks 之后的字节必须原样保留");
+        let parsed: Value = serde_json::from_str(&saved).unwrap();
+        assert_eq!(parsed["model"], json!("opus"));
+        assert_eq!(parsed["env"]["A"], json!(1));
+        assert_eq!(
+            parsed["hooks"]["Stop"][0]["hooks"][0]["command"],
+            json!("new-user")
+        );
+        assert_eq!(
+            std::fs::read_to_string(path.with_file_name("settings.json.bak")).unwrap(),
+            original,
+            "保存前必须留下上一代有效备份"
+        );
+    }
+
+    /// hooks 缺失时在根对象末尾追加子树，不改动既有字段与结尾字节。
+    #[test]
+    fn hooks_save_appends_missing_subtree_without_rewriting_other_bytes() {
+        let (_directory, path) = fixture();
+        let original = "{\n  \"model\": \"opus\"\n}\n";
+        write(&path, original);
+        let document = HooksDocument::load_at(&path).unwrap();
+        let edited = json!({
+            "Stop": [{"hooks": [{"type": "command", "command": "added"}]}]
+        });
+        document.save_editable(&edited.to_string()).unwrap();
+
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            saved.starts_with("{\n  \"model\": \"opus\"\n"),
+            "既有字段字节不得重写: {saved}"
+        );
+        assert!(saved.contains("\"hooks\":"), "缺失的 hooks 必须被追加");
+        assert!(saved.ends_with("}\n"));
+        let parsed: Value = serde_json::from_str(&saved).unwrap();
+        assert_eq!(parsed["model"], json!("opus"));
+        assert_eq!(
+            parsed["hooks"]["Stop"][0]["hooks"][0]["command"],
+            json!("added")
+        );
+    }
+
+    /// 备份失败必须保留原文件与草稿，不得继续写入主文件。
+    #[test]
+    fn hooks_save_backup_failure_keeps_original_untouched() {
+        let (_directory, path) = fixture();
+        let original = "{\"model\":\"opus\",\"hooks\":{}}\n";
+        write(&path, original);
+        let document = HooksDocument::load_at(&path).unwrap();
+        std::fs::create_dir(path.with_file_name("settings.json.bak")).unwrap();
+
+        let error = document
+            .save_editable(r#"{"Stop":[{"hooks":[{"type":"command","command":"x"}]}]}"#)
+            .unwrap_err();
+        assert!(error.contains("备份失败"), "错误必须点明备份失败: {error}");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            original,
+            "备份失败不得覆盖原文件"
         );
     }
 
