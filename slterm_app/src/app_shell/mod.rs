@@ -135,6 +135,14 @@ pub(crate) enum SltermShellEvent {
         mutation: crate::local_control::RuntimeMutation,
         completion: mpsc::SyncSender<Result<(), JsonRpcError>>,
     },
+    /// Runtime 终端读取目标与一次性回执；回执携带 worker 文本快照接收端。
+    RuntimeRead {
+        terminal_id: slterm_workspace::TerminalId,
+        generation: u64,
+        completion: mpsc::SyncSender<
+            Result<mpsc::Receiver<slterm_terminal::term::TextSnapshot>, JsonRpcError>,
+        >,
+    },
 }
 
 const SHELL_EVENT_CAPACITY: usize = 64;
@@ -227,6 +235,33 @@ pub(crate) fn try_send_runtime_mutation(
             DomainErrorCode::QueueFull,
             -32003,
             "mutation queue full",
+        )),
+        Err(mpsc::TrySendError::Disconnected(_)) => {
+            Err(control_error(DomainErrorCode::Closing, -32004, "closing"))
+        }
+    }
+}
+
+/// 非阻塞投递 Runtime 终端读取请求；调用方只在后台执行体等待 worker 回执。
+pub(crate) fn try_send_runtime_read(
+    sender: &mpsc::SyncSender<SltermShellEvent>,
+    terminal_id: slterm_workspace::TerminalId,
+    generation: u64,
+) -> Result<
+    mpsc::Receiver<Result<mpsc::Receiver<slterm_terminal::term::TextSnapshot>, JsonRpcError>>,
+    JsonRpcError,
+> {
+    let (completion, response) = mpsc::sync_channel(1);
+    match sender.try_send(SltermShellEvent::RuntimeRead {
+        terminal_id,
+        generation,
+        completion,
+    }) {
+        Ok(()) => Ok(response),
+        Err(mpsc::TrySendError::Full(_)) => Err(control_error(
+            DomainErrorCode::QueueFull,
+            -32003,
+            "read queue full",
         )),
         Err(mpsc::TrySendError::Disconnected(_)) => {
             Err(control_error(DomainErrorCode::Closing, -32004, "closing"))

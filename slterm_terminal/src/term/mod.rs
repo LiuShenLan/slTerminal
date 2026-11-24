@@ -46,6 +46,8 @@ pub mod search;
 use damage::TermDamageState;
 pub use damage::{LineDamageBounds, TermDamage, TermDamageIterator};
 pub use renderable::{RenderableContent, RenderableCursor};
+mod text_snapshot;
+pub use text_snapshot::TextSnapshot;
 
 /// Minimum number of columns.
 ///

@@ -15,6 +15,13 @@ use super::focus_manager::FocusError;
 use crate::app_shell::control_error;
 use crate::local_control::RuntimeMutation;
 
+/// Runtime 访问终端的运行要求：写输入必须 Launch；只读画面允许已退出。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RuntimeTerminalAccess {
+    Running,
+    Display,
+}
+
 impl AppRoot {
     /// 发布轻量资源事件；关闭开始后不再回填过期事件。
     pub(super) fn publish_runtime_event(&self, kind: &str, resource: String) {
@@ -184,7 +191,12 @@ impl AppRoot {
                 generation,
                 data,
             } => {
-                let terminal = self.runtime_terminal_view(terminal_id, generation, cx)?;
+                let terminal = self.runtime_terminal_view(
+                    terminal_id,
+                    generation,
+                    RuntimeTerminalAccess::Running,
+                    cx,
+                )?;
                 terminal
                     .update(cx, |view, cx| view.runtime_input(data.into_bytes(), cx))
                     .map_err(|_| not_ready_error("terminal not ready"))
@@ -194,7 +206,12 @@ impl AppRoot {
                 generation,
                 command,
             } => {
-                let terminal = self.runtime_terminal_view(terminal_id, generation, cx)?;
+                let terminal = self.runtime_terminal_view(
+                    terminal_id,
+                    generation,
+                    RuntimeTerminalAccess::Running,
+                    cx,
+                )?;
                 // execute 是显式执行：只追加一次回车，不模拟键盘事件。
                 let mut bytes = command.into_bytes();
                 bytes.push(b'\r');
@@ -205,21 +222,43 @@ impl AppRoot {
         }
     }
 
-    /// 按完整目标（稳定身份 + PTY 代次）定位运行中的终端视图。
+    /// Runtime 只读文本快照：校验稳定身份与代次后把 worker 命令入队。
     ///
-    /// 目标必须处于 Launch 意图、代次与请求一致且面板仍存活；
-    /// 任一不满足都明确失败，不猜测重连后的新进程。
+    /// 等待由调用方在后台完成，前台不锁实时网格；面板已退出仍可读最后画面。
+    pub(super) fn handle_runtime_read(
+        &self,
+        terminal_id: slterm_workspace::TerminalId,
+        generation: u64,
+        cx: &App,
+    ) -> Result<std::sync::mpsc::Receiver<slterm_terminal::term::TextSnapshot>, JsonRpcError> {
+        let terminal = self.runtime_terminal_view(
+            terminal_id,
+            generation,
+            RuntimeTerminalAccess::Display,
+            cx,
+        )?;
+        terminal
+            .read(cx)
+            .runtime_text_snapshot()
+            .map_err(|_| not_ready_error("terminal not ready"))
+    }
+
+    /// 按完整目标（稳定身份 + PTY 代次）定位仍存活的终端视图。
+    ///
+    /// 写输入要求 Launch 意图；只读画面允许已退出终端。代次必须与请求一致
+    /// 且面板仍存活，任一不满足都明确失败，不猜测重连后的新进程。
     fn runtime_terminal_view(
         &self,
         terminal_id: slterm_workspace::TerminalId,
         generation: u64,
+        access: RuntimeTerminalAccess,
         cx: &App,
     ) -> Result<Entity<crate::gpui_terminal::view::TerminalView>, JsonRpcError> {
         let record = self
             .snapshot
             .terminal(terminal_id)
             .ok_or_else(invalid_request_error)?;
-        if record.run_intent() != RunIntent::Launch {
+        if access == RuntimeTerminalAccess::Running && record.run_intent() != RunIntent::Launch {
             return Err(not_ready_error("terminal not running"));
         }
         let target = self

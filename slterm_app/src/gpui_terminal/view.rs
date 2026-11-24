@@ -719,6 +719,18 @@ impl TerminalView {
         result
     }
 
+    /// Runtime 只读文本快照：命令进入唯一 worker，等待由后台读取方完成。
+    pub(crate) fn runtime_text_snapshot(
+        &self,
+    ) -> Result<
+        std::sync::mpsc::Receiver<slterm_terminal::term::TextSnapshot>,
+        super::registry::RegistryError,
+    > {
+        let (reply, response) = std::sync::mpsc::sync_channel(1);
+        self.send_worker_command(Msg::ReadText { reply })?;
+        Ok(response)
+    }
+
     /// 输入后回到底部并请求重绘。
     fn write_input(&mut self, bytes: Vec<u8>, cx: &mut Context<'_, Self>) {
         let preserves_prompt = super::event_mailbox::preserves_native_prompt(&bytes);

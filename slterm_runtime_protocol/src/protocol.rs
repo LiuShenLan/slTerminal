@@ -134,6 +134,8 @@ pub enum RuntimeMethod {
     TerminalInput,
     #[serde(rename = "terminal.execute")]
     TerminalExecute,
+    #[serde(rename = "terminal.read")]
+    TerminalRead,
 }
 
 /// 原始输入：显式写入 PTY，不追加回车，也不模拟键盘事件。
@@ -158,6 +160,28 @@ pub struct TerminalExecuteRequest {
 
 pub type TerminalInputParams = MutationParams<TerminalInputRequest>;
 pub type TerminalExecuteParams = MutationParams<TerminalExecuteRequest>;
+
+/// 终端输出分页读取；游标只由服务端生成，客户端不得构造。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct TerminalReadRequest {
+    pub terminal_id: String,
+    pub generation: u64,
+    pub cursor: Option<String>,
+}
+
+/// 终端输出页面；`next_cursor` 存在即表示尾部仍有内容。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct TerminalReadResponse {
+    pub terminal_id: String,
+    pub generation: u64,
+    pub revision: u64,
+    pub data: String,
+    pub next_cursor: Option<String>,
+}
 
 /// 新建终端：Shell 固定为应用默认，只开放目标项目与工作目录选择。
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -704,6 +728,18 @@ fn runtime_request_is_valid(request: &RuntimeRequest) -> bool {
                         && !request.command.contains(['\0', '\r', '\n'])
                 })
         }
+        RuntimeMethod::TerminalRead => {
+            request
+                .parse::<TerminalReadRequest>()
+                .is_some_and(|params| {
+                    present(&params.terminal_id)
+                        && params.generation > 0
+                        && params
+                            .cursor
+                            .as_deref()
+                            .is_none_or(|cursor| !cursor.is_empty())
+                })
+        }
     }
 }
 
@@ -776,11 +812,12 @@ pub enum ControlMethod {
     RuntimeTerminalCreate,
     RuntimeTerminalInput,
     RuntimeTerminalExecute,
+    RuntimeTerminalRead,
     InstanceHandover,
 }
 
 impl ControlMethod {
-    pub const ALL: [Self; 22] = [
+    pub const ALL: [Self; 23] = [
         Self::RuntimeHello,
         Self::RuntimeDescribe,
         Self::RuntimeSnapshot,
@@ -802,6 +839,7 @@ impl ControlMethod {
         Self::RuntimeTerminalCreate,
         Self::RuntimeTerminalInput,
         Self::RuntimeTerminalExecute,
+        Self::RuntimeTerminalRead,
         Self::InstanceHandover,
     ];
 
@@ -828,6 +866,7 @@ impl ControlMethod {
             Self::RuntimeTerminalCreate => "terminal.create",
             Self::RuntimeTerminalInput => "terminal.input",
             Self::RuntimeTerminalExecute => "terminal.execute",
+            Self::RuntimeTerminalRead => "terminal.read",
             Self::InstanceHandover => "instance.handover",
         }
     }
@@ -973,6 +1012,7 @@ pub enum RuntimeResult {
     Subscribed(EventsSubscribedResponse),
     Unsubscribed(EventsUnsubscribedResponse),
     Projects(ProjectListResponse),
+    TerminalRead(TerminalReadResponse),
 }
 
 /// 当前客户端可调用的方法集合。
@@ -1065,6 +1105,8 @@ pub enum DomainErrorCode {
     UnknownOperation,
     /// 事件续传三元组不匹配或历史缺口；客户端必须重新快照后订阅。
     ResyncRequired,
+    /// 分页游标非法、越界或资源代次／revision 已变化；客户端必须重新读取。
+    StaleCursor,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

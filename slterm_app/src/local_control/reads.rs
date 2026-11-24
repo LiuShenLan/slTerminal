@@ -3,8 +3,28 @@
 //! 终端、Git diff 与 Agent 读取共用同一分页语义；截断必须显式返回
 //! 续读游标，不得把半个字符或半行内容伪装成完整结果。
 
-/// 单页响应预算与协议响应上限一致。
-pub(crate) const PAGE_BUDGET_BYTES: usize = 1024 * 1024;
+use slterm_workspace::TerminalId;
+
+/// 单页正文预算：低于 1 MiB 响应上限，为 JSON 封装与转义留出裕度。
+///
+/// 终端文本经 `serde_json` 编码后引号、反斜杠与换行会翻倍；384 KiB 正文
+/// 在现实最坏 2 倍转义后仍低于 1 MiB 响应上限，不会因极限页面断开连接。
+pub(crate) const PAGE_BUDGET_BYTES: usize = 384 * 1024;
+
+/// 终端读取目标：稳定身份与 PTY 代次；两者都必须由前台复核。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct TerminalReadTarget {
+    pub(crate) terminal_id: TerminalId,
+    pub(crate) generation: u64,
+}
+
+/// service 从 worker 文本快照包装出的读取结果。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct TerminalTextSnapshot {
+    pub(crate) generation: u64,
+    pub(crate) revision: u64,
+    pub(crate) text: String,
+}
 
 /// 资源代次与输出 revision；任一变化都使旧游标失效。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

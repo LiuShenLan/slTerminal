@@ -166,6 +166,16 @@ fn terminal_execute_params_schema() -> schemars::Schema {
     schemars::schema_for!(crate::protocol::TerminalExecuteParams)
 }
 
+#[cfg(feature = "schema")]
+fn terminal_read_params_schema() -> schemars::Schema {
+    schemars::schema_for!(crate::protocol::TerminalReadRequest)
+}
+
+#[cfg(feature = "schema")]
+fn terminal_read_result_schema() -> schemars::Schema {
+    schemars::schema_for!(crate::protocol::TerminalReadResponse)
+}
+
 /// 全部真实可用方法；顺序即对外呈现顺序。
 pub static METHODS: &[MethodSpec] = &[
     MethodSpec {
@@ -379,6 +389,16 @@ pub static METHODS: &[MethodSpec] = &[
         result_schema: operation_result_schema,
     },
     MethodSpec {
+        method: ControlMethod::RuntimeTerminalRead,
+        scopes: &[ControlScope::Runtime],
+        kind: MethodKind::Query,
+        idempotent: true,
+        #[cfg(feature = "schema")]
+        params_schema: terminal_read_params_schema,
+        #[cfg(feature = "schema")]
+        result_schema: terminal_read_result_schema,
+    },
+    MethodSpec {
         method: ControlMethod::InstanceHandover,
         scopes: &[ControlScope::Handover],
         kind: MethodKind::Mutation,
@@ -454,6 +474,7 @@ mod method_tests {
                 method_name(ControlMethod::RuntimeTerminalCreate),
                 method_name(ControlMethod::RuntimeTerminalInput),
                 method_name(ControlMethod::RuntimeTerminalExecute),
+                method_name(ControlMethod::RuntimeTerminalRead),
                 method_name(ControlMethod::InstanceHandover),
             ]
         );
@@ -551,6 +572,7 @@ mod method_tests {
                 ControlMethod::RuntimeTerminalCreate,
                 ControlMethod::RuntimeTerminalInput,
                 ControlMethod::RuntimeTerminalExecute,
+                ControlMethod::RuntimeTerminalRead,
             ]
         );
         let handover_methods: Vec<ControlMethod> = methods_for(ControlScope::Handover)

@@ -16,7 +16,7 @@ use slterm_runtime_protocol::{
     PanelOpenSettingsParams, ProjectActivateParams, ProjectActivateRequest, ProjectResource,
     RuntimeEvent, RuntimeMethod, RuntimeRequest, SnapshotResources, SplitDirectionWire,
     TerminalExecuteParams, TerminalExecuteRequest, TerminalInputParams, TerminalInputRequest,
-    TerminalResource, ViewResource, ViewportSize,
+    TerminalReadRequest, TerminalResource, ViewResource, ViewportSize,
 };
 
 use super::LocalControlServer;
@@ -32,6 +32,18 @@ fn unavailable_mutation(
     Err(JsonRpcError::new(
         -32001,
         "mutation not ready",
+        Some(JsonRpcErrorData {
+            code: slterm_runtime_protocol::DomainErrorCode::NotReady,
+        }),
+    ))
+}
+
+fn unavailable_read(
+    _: super::reads::TerminalReadTarget,
+) -> Result<super::reads::TerminalTextSnapshot, JsonRpcError> {
+    Err(JsonRpcError::new(
+        -32001,
+        "terminal read not ready",
         Some(JsonRpcErrorData {
             code: slterm_runtime_protocol::DomainErrorCode::NotReady,
         }),
@@ -463,6 +475,7 @@ where
                 ))
             }),
             mutation: Arc::new(unavailable_mutation),
+            read: Arc::new(unavailable_read),
         },
     )
     .unwrap();
@@ -538,6 +551,7 @@ where
                 ))
             }),
             mutation: Arc::new(unavailable_mutation),
+            read: Arc::new(unavailable_read),
         },
     )
     .unwrap();
@@ -611,6 +625,7 @@ where
                 ))
             }),
             mutation: Arc::new(on_mutation),
+            read: Arc::new(unavailable_read),
         },
     )
     .unwrap();
@@ -818,6 +833,120 @@ fn runtime_terminal_input_and_execute_route_through_dispatcher() {
     server.shutdown().unwrap();
 }
 
+fn start_dual_scope_server_with_read<R>(on_read: R) -> (LocalControlServer, Arc<AtomicUsize>)
+where
+    R: Fn(
+            super::reads::TerminalReadTarget,
+        ) -> Result<super::reads::TerminalTextSnapshot, JsonRpcError>
+        + Send
+        + Sync
+        + 'static,
+{
+    let calls = Arc::new(AtomicUsize::new(0));
+    let callback_calls = Arc::clone(&calls);
+    let server = LocalControlServer::start_with_runtime(
+        test_secret("sk-test"),
+        test_secret("sk-test-runtime"),
+        hello_response(),
+        move |_| {
+            callback_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(HandoverResponse::accepted())
+        },
+        super::server::RuntimeCallbacks {
+            snapshot: Arc::new(|| Ok(SnapshotResources::default())),
+            operation: Arc::new(|_| Ok(None)),
+            events: Arc::new(|_| {
+                Err(JsonRpcError::new(
+                    -32001,
+                    "event subscription not ready",
+                    Some(JsonRpcErrorData {
+                        code: slterm_runtime_protocol::DomainErrorCode::NotReady,
+                    }),
+                ))
+            }),
+            mutation: Arc::new(unavailable_mutation),
+            read: Arc::new(on_read),
+        },
+    )
+    .unwrap();
+    (server, calls)
+}
+
+fn terminal_read_request(terminal: &str, generation: u64, cursor: Option<&str>) -> RuntimeRequest {
+    RuntimeRequest::new(
+        JsonRpcId::Number(14),
+        RuntimeMethod::TerminalRead,
+        TerminalReadRequest {
+            terminal_id: terminal.to_owned(),
+            generation,
+            cursor: cursor.map(str::to_owned),
+        },
+    )
+}
+
+#[test]
+fn runtime_terminal_read_pages_snapshot_and_rejects_stale_cursor() {
+    let terminal = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2d";
+    let text = format!("{}\ntail", "a".repeat(super::reads::PAGE_BUDGET_BYTES));
+    let snapshot_state = Arc::new(Mutex::new((3u64, 5u64, text)));
+    let read_state = Arc::clone(&snapshot_state);
+    let (mut server, _calls) = start_dual_scope_server_with_read(move |target| {
+        assert_eq!(target.terminal_id.to_string(), terminal);
+        assert_eq!(target.generation, 3);
+        let state = read_state.lock().expect("读取快照");
+        Ok(super::reads::TerminalTextSnapshot {
+            generation: state.0,
+            revision: state.1,
+            text: state.2.clone(),
+        })
+    });
+    let mut stream = connect(&server);
+    stream.set_read_timeout(Some(TEST_TIMEOUT)).unwrap();
+    write_json(
+        &mut stream,
+        &hello_scoped("sk-test-runtime", ControlScope::Runtime),
+    );
+    assert!(read_line(&mut stream).contains("store"));
+
+    write_json(&mut stream, &terminal_read_request(terminal, 3, None));
+    let reply: serde_json::Value = serde_json::from_str(&read_line(&mut stream)).unwrap();
+    assert_eq!(
+        reply["result"]["data"].as_str().unwrap().len(),
+        super::reads::PAGE_BUDGET_BYTES
+    );
+    assert_eq!(reply["result"]["generation"], 3);
+    assert_eq!(reply["result"]["revision"], 5);
+    let cursor = reply["result"]["next_cursor"]
+        .as_str()
+        .expect("尾部仍有内容必须返回续读游标")
+        .to_owned();
+
+    write_json(
+        &mut stream,
+        &terminal_read_request(terminal, 3, Some(&cursor)),
+    );
+    let reply: serde_json::Value = serde_json::from_str(&read_line(&mut stream)).unwrap();
+    assert_eq!(reply["result"]["data"], "\ntail");
+    assert!(reply["result"]["next_cursor"].is_null());
+
+    // 输出 revision 变化后旧游标必须失效。
+    snapshot_state.lock().expect("读取快照").1 = 6;
+    write_json(
+        &mut stream,
+        &terminal_read_request(terminal, 3, Some(&cursor)),
+    );
+    let reply: serde_json::Value = serde_json::from_str(&read_line(&mut stream)).unwrap();
+    assert_eq!(reply["error"]["data"]["code"], "stale_cursor");
+
+    write_json(
+        &mut stream,
+        &terminal_read_request("not-a-terminal-id", 3, None),
+    );
+    let reply: serde_json::Value = serde_json::from_str(&read_line(&mut stream)).unwrap();
+    assert_eq!(reply["error"]["data"]["code"], "invalid_request");
+    server.shutdown().unwrap();
+}
+
 #[test]
 fn runtime_project_list_and_mutations_route_through_callbacks() {
     let mutations = Arc::new(AtomicUsize::new(0));
@@ -882,6 +1011,7 @@ where
             operation: Arc::new(|_| Ok(None)),
             events: Arc::new(on_events),
             mutation: Arc::new(unavailable_mutation),
+            read: Arc::new(unavailable_read),
         },
     )
     .unwrap();
@@ -1076,6 +1206,7 @@ fn runtime_describe_returns_registry_and_contract_hashes() {
             "terminal.create",
             "terminal.input",
             "terminal.execute",
+            "terminal.read",
             "instance.handover"
         ]
     );

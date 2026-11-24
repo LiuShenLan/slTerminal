@@ -19,14 +19,18 @@ use slterm_runtime_protocol::{
     PanelMoveParams, PanelOpenSettingsParams, ProjectActivateParams, ProjectListResponse,
     ProjectRemoveParams, ProjectRenameParams, ProjectReorderParams, RuntimeEvent, RuntimeMethod,
     RuntimeRequest, RuntimeResult, SnapshotResources, SnapshotResponse, SplitDirectionWire,
-    TerminalCreateParams, TerminalExecuteParams, TerminalInputParams, ViewportSize,
-    parse_client_request,
+    TerminalCreateParams, TerminalExecuteParams, TerminalInputParams, TerminalReadRequest,
+    TerminalReadResponse, ViewportSize, parse_client_request,
 };
 use slterm_split::SplitDirection;
 use slterm_workspace::{LogicalSize, PanelGroupId, ProjectId, ViewKey};
 
 use super::events::Subscription;
 use super::mutations::{RuntimeMutation, RuntimeMutationRequest};
+use super::reads::{
+    PAGE_BUDGET_BYTES, ReadError, ReadGeneration, TerminalReadTarget, TerminalTextSnapshot,
+    read_page,
+};
 use crate::secrets::SecretBytes;
 
 const REQUEST_BUDGET: usize = 128 * 1024;
@@ -86,12 +90,17 @@ pub(crate) type EventSubscribeCallback = Arc<
 pub(crate) type MutationCallback =
     Arc<dyn Fn(RuntimeMutationRequest) -> Result<OperationResource, JsonRpcError> + Send + Sync>;
 
+/// Runtime 终端读取端口：只返回前台复核对代次后的不可变文本快照。
+pub(crate) type ReadCallback =
+    Arc<dyn Fn(TerminalReadTarget) -> Result<TerminalTextSnapshot, JsonRpcError> + Send + Sync>;
+
 /// Runtime 作用域的应用回调集合。
 pub(crate) struct RuntimeCallbacks {
     pub(crate) snapshot: SnapshotCallback,
     pub(crate) operation: OperationQueryCallback,
     pub(crate) events: EventSubscribeCallback,
     pub(crate) mutation: MutationCallback,
+    pub(crate) read: ReadCallback,
 }
 
 /// operation.wait 轮询间隔：只做有界查询与关闭检查。
@@ -117,6 +126,7 @@ impl LocalControlServer {
                 operation: Arc::new(not_ready_operation),
                 events: Arc::new(not_ready_events),
                 mutation: Arc::new(not_ready_mutation),
+                read: Arc::new(not_ready_read),
             },
         )
     }
@@ -705,6 +715,50 @@ fn handle_connection<F>(
                             mutation,
                         )
                     }
+                    RuntimeMethod::TerminalRead => {
+                        let Some(params) = request.parse::<TerminalReadRequest>() else {
+                            return;
+                        };
+                        match parse_terminal_id(&params.terminal_id).and_then(|terminal_id| {
+                            (runtime.read)(TerminalReadTarget {
+                                terminal_id,
+                                generation: params.generation,
+                            })
+                        }) {
+                            Ok(snapshot) => {
+                                match read_page(
+                                    snapshot.text.as_bytes(),
+                                    ReadGeneration {
+                                        generation: snapshot.generation,
+                                        revision: snapshot.revision,
+                                    },
+                                    params.cursor.as_deref(),
+                                    PAGE_BUDGET_BYTES,
+                                ) {
+                                    Ok(page) => match String::from_utf8(page.bytes) {
+                                        Ok(data) => JsonRpcResponse::result(
+                                            request.id,
+                                            RuntimeResult::TerminalRead(TerminalReadResponse {
+                                                terminal_id: params.terminal_id,
+                                                generation: snapshot.generation,
+                                                revision: snapshot.revision,
+                                                data,
+                                                next_cursor: page.next_cursor,
+                                            }),
+                                        ),
+                                        Err(_) => JsonRpcResponse::error(
+                                            request.id,
+                                            read_encoding_error(),
+                                        ),
+                                    },
+                                    Err(ReadError::StaleCursor) => {
+                                        JsonRpcResponse::error(request.id, stale_cursor_error())
+                                    }
+                                }
+                            }
+                            Err(error) => JsonRpcResponse::error(request.id, error),
+                        }
+                    }
                     RuntimeMethod::TerminalCreate => {
                         let Some(params) = request.parse::<TerminalCreateParams>() else {
                             return;
@@ -838,6 +892,25 @@ fn not_ready_events(_: EventsSubscribeParams) -> Result<Subscription, JsonRpcErr
 
 fn not_ready_mutation(_: RuntimeMutationRequest) -> Result<OperationResource, JsonRpcError> {
     Err(not_ready_error("mutation not ready"))
+}
+
+fn not_ready_read(_: TerminalReadTarget) -> Result<TerminalTextSnapshot, JsonRpcError> {
+    Err(not_ready_error("terminal read not ready"))
+}
+
+/// 游标失效必须显式要求重读，不得把旧页拼成完整结果。
+fn stale_cursor_error() -> JsonRpcError {
+    JsonRpcError::new(
+        -32000,
+        "stale cursor",
+        Some(JsonRpcErrorData {
+            code: DomainErrorCode::StaleCursor,
+        }),
+    )
+}
+
+fn read_encoding_error() -> JsonRpcError {
+    not_ready_error("terminal read encoding failed")
 }
 
 fn invalid_request_error() -> JsonRpcError {

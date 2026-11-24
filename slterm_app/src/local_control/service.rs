@@ -20,12 +20,14 @@ use super::events::EventHub;
 use super::operations::{
     DispatchOutcome, DispatchRequest, OperationDispatcher, operation_resource, writer_error,
 };
+use super::reads::TerminalTextSnapshot;
 use super::server::{
     EventSubscribeCallback, LocalControlServer, MutationCallback, OperationQueryCallback,
-    RuntimeCallbacks, SnapshotCallback,
+    ReadCallback, RuntimeCallbacks, SnapshotCallback,
 };
 use crate::app_shell::{
-    SltermShellEvent, try_send_handover, try_send_runtime_mutation, try_send_runtime_snapshot,
+    SltermShellEvent, try_send_handover, try_send_runtime_mutation, try_send_runtime_read,
+    try_send_runtime_snapshot,
 };
 use crate::persistence::metadata::WorkspaceMetadata;
 use crate::persistence::workspace_writer::WorkspaceWriterClient;
@@ -173,6 +175,7 @@ impl LocalControlService {
         );
         let snapshot_events = events.clone();
         let mutation_events = events.clone();
+        let read_events = events.clone();
         let on_handover: HandoverCallback = Arc::new(move |params| {
             let receipt = try_send_handover(&events, params)?;
             match receipt.recv_timeout(reply_timeout) {
@@ -196,6 +199,41 @@ impl LocalControlService {
                     DomainErrorCode::NotReady,
                     -32001,
                     "snapshot not ready",
+                )),
+                Err(RecvTimeoutError::Disconnected) => {
+                    Err(control_error(DomainErrorCode::Closing, -32004, "closing"))
+                }
+            }
+        });
+        // 终端读取经前台定位 worker，再由后台等待文本快照；前台从不锁实时网格。
+        let on_read: ReadCallback = Arc::new(move |target| {
+            let generation = target.generation;
+            let receipt = try_send_runtime_read(&read_events, target.terminal_id, generation)?;
+            let worker_receipt = match receipt.recv_timeout(SNAPSHOT_REPLY_TIMEOUT) {
+                Ok(Ok(receipt)) => receipt,
+                Ok(Err(error)) => return Err(error),
+                Err(RecvTimeoutError::Timeout) => {
+                    return Err(control_error(
+                        DomainErrorCode::NotReady,
+                        -32001,
+                        "terminal read not ready",
+                    ));
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    return Err(control_error(DomainErrorCode::Closing, -32004, "closing"));
+                }
+            };
+            // worker 文本复制可能涉及整段回滚，等待仍在连接线程内且有界。
+            match worker_receipt.recv_timeout(SNAPSHOT_REPLY_TIMEOUT) {
+                Ok(snapshot) => Ok(TerminalTextSnapshot {
+                    generation,
+                    revision: snapshot.revision,
+                    text: snapshot.text,
+                }),
+                Err(RecvTimeoutError::Timeout) => Err(control_error(
+                    DomainErrorCode::NotReady,
+                    -32001,
+                    "terminal read not ready",
                 )),
                 Err(RecvTimeoutError::Disconnected) => {
                     Err(control_error(DomainErrorCode::Closing, -32004, "closing"))
@@ -295,6 +333,7 @@ impl LocalControlService {
                 operation: on_operation,
                 events: on_events,
                 mutation: on_mutation,
+                read: on_read,
             },
         )?;
         let record = DiscoveryRecord {

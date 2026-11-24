@@ -182,6 +182,11 @@
           "description": "事件续传三元组不匹配或历史缺口；客户端必须重新快照后订阅。",
           "type": "string",
           "const": "resync_required"
+        },
+        {
+          "description": "分页游标非法、越界或资源代次／revision 已变化；客户端必须重新读取。",
+          "type": "string",
+          "const": "stale_cursor"
         }
       ]
     },
@@ -1408,7 +1413,8 @@
         "panel.open_settings",
         "terminal.create",
         "terminal.input",
-        "terminal.execute"
+        "terminal.execute",
+        "terminal.read"
       ]
     },
     "RuntimeParams": {
@@ -1515,6 +1521,9 @@
         },
         {
           "$ref": "#/$defs/ProjectListResponse"
+        },
+        {
+          "$ref": "#/$defs/TerminalReadResponse"
         }
       ]
     },
@@ -1652,6 +1661,41 @@
       "required": [
         "terminal_id",
         "generation",
+        "data"
+      ]
+    },
+    "TerminalReadResponse": {
+      "description": "终端输出页面；`next_cursor` 存在即表示尾部仍有内容。",
+      "type": "object",
+      "properties": {
+        "data": {
+          "type": "string"
+        },
+        "generation": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "revision": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "terminal_id": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "terminal_id",
+        "generation",
+        "revision",
         "data"
       ]
     },

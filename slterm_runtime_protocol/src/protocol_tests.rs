@@ -10,8 +10,8 @@ use crate::protocol::{
     PanelMoveRequest, ProjectActivateRequest, ProjectRemoveRequest, ProjectRenameRequest,
     ProjectReorderRequest, ProjectResource, ProtocolError, RuntimeMethod, RuntimeRequest,
     SnapshotResources, SnapshotResponse, SplitDirectionWire, TerminalCreateRequest,
-    TerminalExecuteRequest, TerminalInputRequest, TerminalResource, ViewResource, ViewportSize,
-    params_sha256, parse_client_request,
+    TerminalExecuteRequest, TerminalInputRequest, TerminalReadRequest, TerminalResource,
+    ViewResource, ViewportSize, params_sha256, parse_client_request,
 };
 use crate::{MethodKind, OperationStatus};
 
@@ -637,6 +637,25 @@ fn terminal_methods_validate_generation_and_payloads() {
         }
     }
 
+    let read = RuntimeRequest::new(
+        JsonRpcId::Number(22),
+        RuntimeMethod::TerminalRead,
+        TerminalReadRequest {
+            terminal_id: terminal.to_owned(),
+            generation: 3,
+            cursor: Some("v1:1:2:0".to_owned()),
+        },
+    );
+    let parsed = parse_client_request(serde_json::to_vec(&read).unwrap().as_slice()).unwrap();
+    match parsed {
+        ClientRequest::Runtime(parsed) => {
+            assert_eq!(parsed.method, RuntimeMethod::TerminalRead);
+            let params = parsed.parse::<TerminalReadRequest>().unwrap();
+            assert_eq!(params.cursor.as_deref(), Some("v1:1:2:0"));
+        }
+        other => panic!("终端读取必须解析为 Runtime 请求: {other:?}"),
+    }
+
     for invalid in [
         // 空白终端身份
         serde_json::json!({"jsonrpc":"2.0","id":1,"method":"terminal.input","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"terminal_id":"","generation":1,"data":"ls"}}}),
@@ -654,6 +673,12 @@ fn terminal_methods_validate_generation_and_payloads() {
         serde_json::json!({"jsonrpc":"2.0","id":1,"method":"terminal.execute","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"terminal_id":"t","generation":1,"command":"ls\r"}}}),
         // 空路径不能伪装成显式目标
         serde_json::json!({"jsonrpc":"2.0","id":1,"method":"terminal.create","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"project_root":"  "}}}),
+        // 零代次的读取
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"terminal.read","params":{"terminal_id":"t","generation":0,"cursor":null}}),
+        // 空游标
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"terminal.read","params":{"terminal_id":"t","generation":1,"cursor":""}}),
+        // 未知字段
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"terminal.read","params":{"terminal_id":"t","generation":1,"cursor":null,"extra":1}}),
     ] {
         assert!(
             parse_client_request(invalid.to_string().as_bytes()).is_err(),
@@ -740,6 +765,7 @@ fn describe_lists_the_method_registry_with_contract_hashes() {
             "terminal.create",
             "terminal.input",
             "terminal.execute",
+            "terminal.read",
             "instance.handover"
         ]
     );

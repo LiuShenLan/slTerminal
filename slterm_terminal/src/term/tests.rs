@@ -1420,3 +1420,31 @@ fn parse_cargo_version() {
     assert_eq!(version_number("1.2.3-dev"), 1_02_03);
     assert_eq!(version_number("999.99.99"), 9_99_99_99);
 }
+
+/// 读取快照覆盖回滚与可见区，行尾收束且宽字符原样保留。
+#[test]
+fn scrollback_text_includes_history_and_visible_grid() {
+    let size = TermSize::new(4, 2);
+    let mut term = Term::new(Config::default(), &size, VoidListener);
+    let mut parser: ansi::Processor = ansi::Processor::new();
+
+    assert_eq!(term.scrollback_text(), "\n", "两行空屏收束为一个换行");
+
+    parser.advance(&mut term, "one\r\n世界\r\nok".as_bytes());
+    assert_eq!(
+        term.scrollback_text(),
+        "one\n世界\nok",
+        "回滚行与可见行按文本顺序输出"
+    );
+}
+
+/// 自动换行行拼接为一行文本，不插入额外换行。
+#[test]
+fn scrollback_text_joins_wrapped_lines() {
+    let size = TermSize::new(4, 2);
+    let mut term = Term::new(Config::default(), &size, VoidListener);
+    let mut parser: ansi::Processor = ansi::Processor::new();
+
+    parser.advance(&mut term, b"abcdef");
+    assert_eq!(term.scrollback_text(), "abcdef");
+}

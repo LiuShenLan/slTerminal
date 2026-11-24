@@ -22,6 +22,7 @@ mod projects;
 mod relocation;
 mod runtime_events;
 mod runtime_mutations;
+mod runtime_reads;
 mod runtime_snapshot;
 mod settings_overlay;
 mod sidebar;

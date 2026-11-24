@@ -624,6 +624,11 @@ pub enum Msg {
         reply: mpsc::SyncSender<Vec<crate::term::search::Match>>,
     },
 
+    /// 只读导出当前画面与回滚文本；worker 返回输出 revision 与纯文本。
+    ReadText {
+        reply: mpsc::SyncSender<crate::term::TextSnapshot>,
+    },
+
     /// 配色变化也只进入所属 worker，随后发布新帧。
     SetColorScheme(bool),
 }
@@ -657,7 +662,13 @@ fn apply_display_command<T: EventListener>(terminal: &mut Term<T>, msg: &Msg) ->
             let _ = reply.send(terminal.search_literal(query));
             return false;
         }
-        Msg::Input(_) | Msg::Shutdown | Msg::Resize(_) | Msg::ResizeGrid(_) => return false,
+        Msg::Input(_)
+        | Msg::Shutdown
+        | Msg::Resize(_)
+        | Msg::ResizeGrid(_)
+        | Msg::ReadText { .. } => {
+            return false;
+        }
     }
     true
 }
@@ -759,6 +770,17 @@ where
                     if apply_display_command(&mut self.terminal.lock(), &msg) {
                         state.display_dirty = true;
                     }
+                }
+                Msg::ReadText { reply } => {
+                    // 文本快照在 worker 内同锁捕获；游标绑定最近发布的帧
+                    // revision，任何网格或显示边界都保守地使旧页失效。
+                    let terminal = self.terminal.lock();
+                    let text = terminal.scrollback_text();
+                    drop(terminal);
+                    let _ = reply.send(crate::term::TextSnapshot {
+                        revision: state.frame_revision,
+                        text,
+                    });
                 }
             }
         }
