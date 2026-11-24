@@ -163,12 +163,26 @@ pub(crate) enum SltermShellEvent {
         project_id: Option<slterm_workspace::ProjectId>,
         completion: mpsc::SyncSender<Result<RuntimeGitTarget, JsonRpcError>>,
     },
+    /// Runtime Git diff 目标请求与一次性回执；路径与仓库读取分离。
+    RuntimeGitDiff {
+        project_id: Option<slterm_workspace::ProjectId>,
+        path: String,
+        completion: mpsc::SyncSender<Result<RuntimeGitDiffTarget, JsonRpcError>>,
+    },
 }
 
 /// Runtime Git 读取目标：前台只解析项目与仓库入口，阻塞读取归后台。
 pub(crate) struct RuntimeGitTarget {
     pub(crate) project_id: slterm_workspace::ProjectId,
     pub(crate) root: slterm_path::CanonicalPath,
+    pub(crate) git: std::sync::Arc<crate::git::GitFacade>,
+}
+
+/// Runtime Git diff 目标：仓库入口与已校验的仓库相对路径。
+pub(crate) struct RuntimeGitDiffTarget {
+    pub(crate) project_id: slterm_workspace::ProjectId,
+    pub(crate) root: slterm_path::CanonicalPath,
+    pub(crate) path: String,
     pub(crate) git: std::sync::Arc<crate::git::GitFacade>,
 }
 
@@ -360,6 +374,30 @@ pub(crate) fn try_send_runtime_git_status(
             DomainErrorCode::QueueFull,
             -32003,
             "git status queue full",
+        )),
+        Err(mpsc::TrySendError::Disconnected(_)) => {
+            Err(control_error(DomainErrorCode::Closing, -32004, "closing"))
+        }
+    }
+}
+
+/// 非阻塞投递 Runtime Git diff 目标请求；调用方只在后台执行体等待回执。
+pub(crate) fn try_send_runtime_git_diff(
+    sender: &mpsc::SyncSender<SltermShellEvent>,
+    project_id: Option<slterm_workspace::ProjectId>,
+    path: String,
+) -> Result<mpsc::Receiver<Result<RuntimeGitDiffTarget, JsonRpcError>>, JsonRpcError> {
+    let (completion, response) = mpsc::sync_channel(1);
+    match sender.try_send(SltermShellEvent::RuntimeGitDiff {
+        project_id,
+        path,
+        completion,
+    }) {
+        Ok(()) => Ok(response),
+        Err(mpsc::TrySendError::Full(_)) => Err(control_error(
+            DomainErrorCode::QueueFull,
+            -32003,
+            "git diff queue full",
         )),
         Err(mpsc::TrySendError::Disconnected(_)) => {
             Err(control_error(DomainErrorCode::Closing, -32004, "closing"))

@@ -252,6 +252,16 @@ fn git_status_result_schema() -> schemars::Schema {
 }
 
 #[cfg(feature = "schema")]
+fn git_diff_params_schema() -> schemars::Schema {
+    schemars::schema_for!(crate::protocol::GitDiffRequest)
+}
+
+#[cfg(feature = "schema")]
+fn git_diff_result_schema() -> schemars::Schema {
+    schemars::schema_for!(crate::protocol::GitDiffResponse)
+}
+
+#[cfg(feature = "schema")]
 fn agent_list_result_schema() -> schemars::Schema {
     schemars::schema_for!(crate::protocol::AgentListResponse)
 }
@@ -619,6 +629,16 @@ pub static METHODS: &[MethodSpec] = &[
         result_schema: git_status_result_schema,
     },
     MethodSpec {
+        method: ControlMethod::RuntimeGitDiff,
+        scopes: &[ControlScope::Runtime],
+        kind: MethodKind::Query,
+        idempotent: true,
+        #[cfg(feature = "schema")]
+        params_schema: git_diff_params_schema,
+        #[cfg(feature = "schema")]
+        result_schema: git_diff_result_schema,
+    },
+    MethodSpec {
         method: ControlMethod::InstanceHandover,
         scopes: &[ControlScope::Handover],
         kind: MethodKind::Mutation,
@@ -709,6 +729,7 @@ mod method_tests {
                 method_name(ControlMethod::RuntimeAgentResume),
                 method_name(ControlMethod::RuntimeAgentFork),
                 method_name(ControlMethod::RuntimeGitStatus),
+                method_name(ControlMethod::RuntimeGitDiff),
                 method_name(ControlMethod::InstanceHandover),
             ]
         );
@@ -821,6 +842,7 @@ mod method_tests {
                 ControlMethod::RuntimeAgentResume,
                 ControlMethod::RuntimeAgentFork,
                 ControlMethod::RuntimeGitStatus,
+                ControlMethod::RuntimeGitDiff,
             ]
         );
         let handover_methods: Vec<ControlMethod> = methods_for(ControlScope::Handover)

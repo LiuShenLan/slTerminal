@@ -164,6 +164,8 @@ pub enum RuntimeMethod {
     AgentFork,
     #[serde(rename = "git.status")]
     GitStatus,
+    #[serde(rename = "git.diff")]
+    GitDiff,
 }
 
 /// 原始输入：显式写入 PTY，不追加回车，也不模拟键盘事件。
@@ -420,6 +422,29 @@ pub struct GitStatusResponse {
     pub ahead: u32,
     pub behind: u32,
     pub entries: Vec<GitStatusEntry>,
+}
+
+/// 读取单个仓库相对路径的 HEAD 与工作区差异；游标只由服务端生成。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct GitDiffRequest {
+    pub project_id: Option<String>,
+    /// 仓库相对路径，使用 `/` 分隔。
+    pub path: String,
+    pub cursor: Option<String>,
+}
+
+/// Git diff 页面；`next_cursor` 存在即表示尾部仍有内容。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct GitDiffResponse {
+    pub project_id: String,
+    pub path: String,
+    pub revision: u64,
+    pub data: String,
+    pub next_cursor: Option<String>,
 }
 
 /// 新建终端：Shell 固定为应用默认，只开放目标项目与工作目录选择。
@@ -1087,7 +1112,28 @@ fn runtime_request_is_valid(request: &RuntimeRequest) -> bool {
                 .as_deref()
                 .is_none_or(|id| !id.trim().is_empty())
         }),
+        RuntimeMethod::GitDiff => request.parse::<GitDiffRequest>().is_some_and(|params| {
+            params
+                .project_id
+                .as_deref()
+                .is_none_or(|id| !id.trim().is_empty())
+                && !params.path.trim().is_empty()
+                && valid_repo_relative_path(&params.path)
+                && params
+                    .cursor
+                    .as_deref()
+                    .is_none_or(|cursor| !cursor.is_empty())
+        }),
     }
+}
+
+/// 仓库相对路径：非空、无 NUL、不以分隔符开头且不含 `.`/`..` 组件。
+fn valid_repo_relative_path(path: &str) -> bool {
+    if path.is_empty() || path.starts_with('/') || path.contains(['\0', '\\']) {
+        return false;
+    }
+    path.split('/')
+        .all(|component| !component.is_empty() && component != "." && component != "..")
 }
 
 /// 可选路径要么缺省，要么非空白。
@@ -1179,11 +1225,12 @@ pub enum ControlMethod {
     RuntimeAgentResume,
     RuntimeAgentFork,
     RuntimeGitStatus,
+    RuntimeGitDiff,
     InstanceHandover,
 }
 
 impl ControlMethod {
-    pub const ALL: [Self; 37] = [
+    pub const ALL: [Self; 38] = [
         Self::RuntimeHello,
         Self::RuntimeDescribe,
         Self::RuntimeSnapshot,
@@ -1220,6 +1267,7 @@ impl ControlMethod {
         Self::RuntimeAgentResume,
         Self::RuntimeAgentFork,
         Self::RuntimeGitStatus,
+        Self::RuntimeGitDiff,
         Self::InstanceHandover,
     ];
 
@@ -1261,6 +1309,7 @@ impl ControlMethod {
             Self::RuntimeAgentResume => "agent.resume",
             Self::RuntimeAgentFork => "agent.fork",
             Self::RuntimeGitStatus => "git.status",
+            Self::RuntimeGitDiff => "git.diff",
             Self::InstanceHandover => "instance.handover",
         }
     }
@@ -1412,6 +1461,7 @@ pub enum RuntimeResult {
     TerminalWait(TerminalWaitResponse),
     Agents(AgentListResponse),
     GitStatus(GitStatusResponse),
+    GitDiff(GitDiffResponse),
 }
 
 /// 当前客户端可调用的方法集合。

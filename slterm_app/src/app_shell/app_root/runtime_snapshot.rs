@@ -517,6 +517,24 @@ impl AppRoot {
         })
     }
 
+    /// Runtime Git diff 目标：项目解析复用状态入口，路径必须是无 `..` 的仓库相对路径。
+    pub(super) fn runtime_git_diff_target(
+        &self,
+        project_id: Option<slterm_workspace::ProjectId>,
+        path: String,
+    ) -> Result<crate::app_shell::RuntimeGitDiffTarget, JsonRpcError> {
+        if path.trim().is_empty() || !valid_repo_relative_path(&path) {
+            return Err(invalid_request_error());
+        }
+        let base = self.runtime_git_target(project_id)?;
+        Ok(crate::app_shell::RuntimeGitDiffTarget {
+            project_id: base.project_id,
+            root: base.root,
+            path,
+            git: base.git,
+        })
+    }
+
     /// Runtime Agent 资源：持久会话身份与运行期仲裁状态派生，不另存映射。
     ///
     /// 纯 Shell 不产生关联行；同一原生会话 ID 可出现在多个终端关联中。
@@ -680,6 +698,15 @@ fn revision_conflict_error() -> JsonRpcError {
 /// 请求的对外 Agent 身份与目标终端当前关联不一致。
 fn unknown_agent_error() -> JsonRpcError {
     control_error(DomainErrorCode::UnknownAgent, -32000, "unknown agent")
+}
+
+/// 仓库相对路径：非空、无 NUL、不以分隔符开头且不含 `.`/`..` 组件。
+fn valid_repo_relative_path(path: &str) -> bool {
+    if path.is_empty() || path.starts_with('/') || path.contains(['\0', '\\']) {
+        return false;
+    }
+    path.split('/')
+        .all(|component| !component.is_empty() && component != "." && component != "..")
 }
 
 /// AgentCatalog 未声明该动作或不接受该会话身份。

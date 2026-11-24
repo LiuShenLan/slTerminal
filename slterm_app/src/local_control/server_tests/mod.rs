@@ -85,6 +85,25 @@ fn unavailable_git_status(
     ))
 }
 
+fn unavailable_git_diff(
+    _: Option<slterm_workspace::ProjectId>,
+    _: String,
+) -> Result<
+    (
+        slterm_workspace::ProjectId,
+        crate::local_control::git::GitDiffSnapshot,
+    ),
+    JsonRpcError,
+> {
+    Err(JsonRpcError::new(
+        -32001,
+        "git diff not ready",
+        Some(JsonRpcErrorData {
+            code: slterm_runtime_protocol::DomainErrorCode::NotReady,
+        }),
+    ))
+}
+
 // 负载裕度，非断言/语义放宽：等待真实 loopback 线程调度与关闭。
 const TEST_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -463,6 +482,5 @@ fn local_control_request_deadline_expires_without_waiting() {
     assert_eq!(super::server::REQUEST_TIMEOUT, Duration::from_secs(600));
     assert_eq!(super::server::HANDSHAKE_TIMEOUT, Duration::from_secs(5));
 }
-
 
 mod runtime;

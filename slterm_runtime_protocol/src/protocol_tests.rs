@@ -4,7 +4,7 @@ use crate::protocol::{
     AgentCloseRequest, AgentForkRequest, AgentGetRequest, AgentInputRequest, AgentReadRequest,
     AgentResumeRequest, AgentStartRequest, AgentWaitRequest, ClientRequest, ControlMessage,
     ControlMethod, ControlScope, Credential, DescribeResponse, DiscoveryRecord, DocumentResource,
-    DomainErrorCode, EmptyParams, GitStatusRequest, HandoverMethod, HandoverParams,
+    DomainErrorCode, EmptyParams, GitDiffRequest, GitStatusRequest, HandoverMethod, HandoverParams,
     HandoverRequest, HelloMethod, HelloParams, HelloRequest, HelloResponse, JsonRpcError,
     JsonRpcErrorData, JsonRpcId, JsonRpcRequest, JsonRpcResponse, MutationParams,
     OperationQueryParams, OperationResource, OperationWaitParams, PanelActivateRequest,
@@ -929,6 +929,46 @@ fn git_status_accepts_optional_project_and_validates_shape() {
 }
 
 #[test]
+fn git_diff_requires_a_safe_repository_relative_path() {
+    for (project_id, cursor) in [
+        (None, None),
+        (
+            Some("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b".to_owned()),
+            Some("v1:0:5:3".to_owned()),
+        ),
+    ] {
+        let request = RuntimeRequest::new(
+            JsonRpcId::Number(29),
+            RuntimeMethod::GitDiff,
+            GitDiffRequest {
+                project_id,
+                path: "src/main.rs".to_owned(),
+                cursor,
+            },
+        );
+        match parse_client_request(&serde_json::to_vec(&request).unwrap()).unwrap() {
+            ClientRequest::Runtime(parsed) => assert_eq!(parsed.method, RuntimeMethod::GitDiff),
+            other => panic!("Git diff 请求必须解析为 Runtime 请求: {other:?}"),
+        }
+    }
+
+    for invalid in [
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"git.diff","params":{"project_id":null,"path":"","cursor":null}}),
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"git.diff","params":{"project_id":null,"path":"   ","cursor":null}}),
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"git.diff","params":{"project_id":null,"path":"../escape","cursor":null}}),
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"git.diff","params":{"project_id":null,"path":"/absolute","cursor":null}}),
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"git.diff","params":{"project_id":null,"path":"a\\\\b","cursor":null}}),
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"git.diff","params":{"project_id":"  ","path":"a.txt","cursor":null}}),
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"git.diff","params":{"project_id":null,"path":"a.txt","cursor":""}}),
+    ] {
+        assert!(
+            parse_client_request(invalid.to_string().as_bytes()).is_err(),
+            "非法 Git diff 请求必须拒绝: {invalid}"
+        );
+    }
+}
+
+#[test]
 fn params_hash_is_stable_and_json_serialization_dependent() {
     let a = serde_json::json!({"z": 1, "a": {"n": [1, 2]}});
     let b = serde_json::json!({"a": {"n": [1, 2]}, "z": 1});
@@ -1021,6 +1061,7 @@ fn describe_lists_the_method_registry_with_contract_hashes() {
             "agent.resume",
             "agent.fork",
             "git.status",
+            "git.diff",
             "instance.handover"
         ]
     );

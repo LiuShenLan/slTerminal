@@ -12,6 +12,8 @@
 - **GitShow 固定对象读取**：`GitFacade::show` 先复核原 RepositoryBinding，再以 `ls-tree -z <固定提交>` 精确解析路径对应的 blob OID，最后只经 `cat-file blob <OID>` 读取；请求携带独立 generation。原因：HEAD 前进、工作区编辑或手动刷新不得改变固定版本，对象缺失不得回退工作区。边界：路径、提交和对象输出严格校验；面板按完整 ViewKey 复用并在后台读取，重复打开只聚焦，固定身份与布局可恢复。
 - **GitShow 内容路由与系统中转**：不超过 1,000,000 字节常规只读，1,000,001–10,000,000 字节提示，大于 10,000,000 字节建立完整内存页索引并逐页严格 UTF-8 解码，前 8192 字节含 NUL 按二进制处理，非法 UTF-8 不生成伪文本。系统打开只把固定 blob 写入当前用户系统临时根下带原扩展名的只读文件，不写工作区；打开失败立即清理，句柄 Drop 覆盖关闭与正常退出，单实例启动维护只清理已超过 24 小时且属于本前缀的遗留文件。原因：固定对象不得借系统打开污染仓库，也不得把有限前缀冒充完整分页正文。边界：系统调用仍在后台执行；过期清理失败不阻断已通过持久维护的启动，存活句柄不由过期清理删除。
 - **状态事实与代次缓存**：`GitFacade::status` 先分别复核项目路径与真实 RepoRoot 的 Read 授权，再使用有界、禁网的 porcelain v2 NUL 输出；`StatusSnapshot` 保存规范字节 SHA-256 revision、真实 worktree 根、staged／unstaged、rename、conflict、ignored 与未知原始状态。`--untracked-files=all` 展开普通未跟踪目录，嵌套仓库和子模块只保留顶层条目；ignored 不进入既有六值 gutter 映射。实例状态缓存 TTL 500 毫秒，`invalidate` 清槽并递增代次，在途旧代次不得写回。原因：状态散列必须来自完整机器输出，路径根、授权和缓存代次不得由 watcher 时间代替。边界：unborn 仓库可读取状态但不能建立需要 HEAD 的 RepositoryBinding；读取失败由调用方保留旧列表并标记可能过期。
+- **Runtime diff 读取复用**：Runtime `git.diff` 在连接线程内复用 `head_file`、有界工作区读取与 core `compute_diff`，与 Diff 面板共用同一差分语义与 HEAD 分类；渲染只含变更行，revision 取正文散列。原因：Git 差异不得出现第二套解析或渲染通道。边界：Runtime 不执行 `git diff` 子命令，也不把二进制、非法编码或超限降级伪装成空差异。
+
 - **Runtime 状态读取复用**：Runtime `git.status` 与 Explorer 共用 `status_grants` 授权并集与 `GitFacade::status`；Runtime 只在前台解析项目与仓库入口，子进程与 porcelain 解析在连接线程内后台执行，不新增第二读取通道。原因：Git 状态必须与 Explorer 同源。边界：Runtime 不直接执行 `git` 命令或解析 porcelain。
 
 - **未跟踪展开**：共享 `status` 带 `--untracked-files=all`，快照含单文件未跟踪条目；单文件状态由 `file_status_from_snapshot` 从快照派生，不为路径单独 spawn status。

@@ -11,6 +11,8 @@ mod discovery;
 mod event_ring_tests;
 mod events;
 mod git;
+#[cfg(test)]
+mod git_tests;
 mod mutations;
 #[cfg(test)]
 mod operation_dispatch_tests;

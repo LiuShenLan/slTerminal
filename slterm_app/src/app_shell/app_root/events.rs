@@ -120,6 +120,13 @@ impl AppRoot {
                                                     let _ = completion
                                                         .try_send(Err(closing_snapshot_error()));
                                                 }
+                                                SltermShellEvent::RuntimeGitDiff {
+                                                    completion,
+                                                    ..
+                                                } => {
+                                                    let _ = completion
+                                                        .try_send(Err(closing_snapshot_error()));
+                                                }
                                                 _ => {}
                                             }
                                         }
@@ -373,6 +380,21 @@ impl AppRoot {
                     Err(closing_snapshot_error())
                 } else {
                     self.runtime_git_target(project_id)
+                };
+                let _ = completion.try_send(result);
+            }
+            SltermShellEvent::RuntimeGitDiff {
+                project_id,
+                path,
+                completion,
+            } => {
+                let result = if self.close_in_progress
+                    || self.application_close.is_some()
+                    || self.close_completed
+                {
+                    Err(closing_snapshot_error())
+                } else {
+                    self.runtime_git_diff_target(project_id, path)
                 };
                 let _ = completion.try_send(result);
             }

@@ -326,6 +326,39 @@
       "type": "object",
       "additionalProperties": false
     },
+    "GitDiffResponse": {
+      "description": "Git diff 页面；`next_cursor` 存在即表示尾部仍有内容。",
+      "type": "object",
+      "properties": {
+        "data": {
+          "type": "string"
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "type": "string"
+        },
+        "project_id": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "project_id",
+        "path",
+        "revision",
+        "data"
+      ]
+    },
     "GitStatusEntry": {
       "description": "单个工作区条目的 porcelain v2 状态。",
       "type": "object",
@@ -1579,7 +1612,8 @@
         "agent.start",
         "agent.resume",
         "agent.fork",
-        "git.status"
+        "git.status",
+        "git.diff"
       ]
     },
     "RuntimeParams": {
@@ -1698,6 +1732,9 @@
         },
         {
           "$ref": "#/$defs/GitStatusResponse"
+        },
+        {
+          "$ref": "#/$defs/GitDiffResponse"
         }
       ]
     },

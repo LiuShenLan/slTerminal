@@ -52,6 +52,7 @@ where
             wait_status: Arc::new(unavailable_wait_status),
             agents: Arc::new(unavailable_agents),
             git_status: Arc::new(unavailable_git_status),
+            git_diff: Arc::new(unavailable_git_diff),
         },
     )
     .unwrap();
@@ -131,6 +132,7 @@ where
             wait_status: Arc::new(unavailable_wait_status),
             agents: Arc::new(unavailable_agents),
             git_status: Arc::new(unavailable_git_status),
+            git_diff: Arc::new(unavailable_git_diff),
         },
     )
     .unwrap();
@@ -176,7 +178,9 @@ fn start_dual_scope_server_with_mutation<M>(
     on_mutation: M,
 ) -> (LocalControlServer, Arc<AtomicUsize>)
 where
-    M: Fn(crate::local_control::mutations::RuntimeMutationRequest) -> Result<OperationResource, JsonRpcError>
+    M: Fn(
+            crate::local_control::mutations::RuntimeMutationRequest,
+        ) -> Result<OperationResource, JsonRpcError>
         + Send
         + Sync
         + 'static,
@@ -208,6 +212,7 @@ where
             wait_status: Arc::new(unavailable_wait_status),
             agents: Arc::new(unavailable_agents),
             git_status: Arc::new(unavailable_git_status),
+            git_diff: Arc::new(unavailable_git_diff),
         },
     )
     .unwrap();
@@ -326,7 +331,9 @@ fn runtime_terminal_input_and_execute_route_through_dispatcher() {
         let method = request.mutation.method().to_owned();
         match &request.mutation {
             crate::local_control::mutations::RuntimeMutation::TerminalInput {
-                generation, data, ..
+                generation,
+                data,
+                ..
             } => {
                 assert_eq!(method, "terminal.input");
                 assert_eq!(*generation, 3);
@@ -487,10 +494,15 @@ fn runtime_terminal_close_and_reconnect_route_through_dispatcher() {
     let mutations_by_callback = Arc::clone(&mutations);
     let (mut server, _calls) = start_dual_scope_server_with_mutation(move |request| {
         match &request.mutation {
-            crate::local_control::mutations::RuntimeMutation::TerminalClose { generation, .. } => {
+            crate::local_control::mutations::RuntimeMutation::TerminalClose {
+                generation, ..
+            } => {
                 assert_eq!(*generation, 4);
             }
-            crate::local_control::mutations::RuntimeMutation::TerminalReconnect { generation, .. } => {
+            crate::local_control::mutations::RuntimeMutation::TerminalReconnect {
+                generation,
+                ..
+            } => {
                 assert_eq!(*generation, 5);
             }
             crate::local_control::mutations::RuntimeMutation::TerminalRename { title, .. } => {
@@ -612,6 +624,7 @@ where
             wait_status: Arc::new(unavailable_wait_status),
             agents: Arc::new(unavailable_agents),
             git_status: Arc::new(unavailable_git_status),
+            git_diff: Arc::new(unavailable_git_diff),
         },
     )
     .unwrap();
@@ -633,7 +646,10 @@ fn terminal_read_request(terminal: &str, generation: u64, cursor: Option<&str>) 
 #[test]
 fn runtime_terminal_read_pages_snapshot_and_rejects_stale_cursor() {
     let terminal = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2d";
-    let text = format!("{}\ntail", "a".repeat(crate::local_control::reads::PAGE_BUDGET_BYTES));
+    let text = format!(
+        "{}\ntail",
+        "a".repeat(crate::local_control::reads::PAGE_BUDGET_BYTES)
+    );
     let snapshot_state = Arc::new(Mutex::new((3u64, 5u64, text)));
     let read_state = Arc::clone(&snapshot_state);
     let (mut server, _calls) = start_dual_scope_server_with_read(move |target| {
@@ -727,6 +743,7 @@ where
             wait_status: Arc::new(unavailable_wait_status),
             agents: Arc::new(on_agents),
             git_status: Arc::new(unavailable_git_status),
+            git_diff: Arc::new(unavailable_git_diff),
         },
     )
     .unwrap();
@@ -824,13 +841,17 @@ fn runtime_agent_input_and_close_route_through_dispatcher() {
                 assert_eq!(kind, "claude");
             }
             crate::local_control::mutations::RuntimeMutation::AgentResume {
-                source, session_id, ..
+                source,
+                session_id,
+                ..
             } => {
                 assert_eq!(source, "claude");
                 assert_eq!(session_id.as_deref(), Some("abc"));
             }
             crate::local_control::mutations::RuntimeMutation::AgentFork {
-                source, session_id, ..
+                source,
+                session_id,
+                ..
             } => {
                 assert_eq!(source, "claude");
                 assert_eq!(session_id, "abc");
@@ -921,6 +942,143 @@ fn runtime_agent_input_and_close_route_through_dispatcher() {
     server.shutdown().unwrap();
 }
 
+fn start_dual_scope_server_with_git_diff<D>(
+    on_git_diff: D,
+) -> (LocalControlServer, Arc<AtomicUsize>)
+where
+    D: Fn(
+            Option<slterm_workspace::ProjectId>,
+            String,
+        ) -> Result<
+            (
+                slterm_workspace::ProjectId,
+                crate::local_control::git::GitDiffSnapshot,
+            ),
+            JsonRpcError,
+        > + Send
+        + Sync
+        + 'static,
+{
+    let calls = Arc::new(AtomicUsize::new(0));
+    let callback_calls = Arc::clone(&calls);
+    let server = LocalControlServer::start_with_runtime(
+        test_secret("sk-test"),
+        test_secret("sk-test-runtime"),
+        hello_response(),
+        move |_| {
+            callback_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(HandoverResponse::accepted())
+        },
+        crate::local_control::server::RuntimeCallbacks {
+            snapshot: Arc::new(|| Ok(SnapshotResources::default())),
+            operation: Arc::new(|_| Ok(None)),
+            events: Arc::new(|_| {
+                Err(JsonRpcError::new(
+                    -32001,
+                    "event subscription not ready",
+                    Some(JsonRpcErrorData {
+                        code: slterm_runtime_protocol::DomainErrorCode::NotReady,
+                    }),
+                ))
+            }),
+            mutation: Arc::new(unavailable_mutation),
+            read: Arc::new(unavailable_read),
+            wait_status: Arc::new(unavailable_wait_status),
+            agents: Arc::new(unavailable_agents),
+            git_status: Arc::new(unavailable_git_status),
+            git_diff: Arc::new(on_git_diff),
+        },
+    )
+    .unwrap();
+    (server, calls)
+}
+
+#[test]
+fn runtime_git_diff_paginates_and_rejects_stale_cursor() {
+    let text = format!(
+        "{}\ntail",
+        "a".repeat(crate::local_control::reads::PAGE_BUDGET_BYTES)
+    );
+    let revision = Arc::new(Mutex::new(5u64));
+    let revision_by_callback = Arc::clone(&revision);
+    let (mut server, _calls) = start_dual_scope_server_with_git_diff(move |project_id, path| {
+        assert!(project_id.is_none(), "缺省项目由前台解析");
+        assert_eq!(path, "src/main.rs");
+        Ok((
+            "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b"
+                .parse()
+                .expect("测试项目身份必须合法"),
+            crate::local_control::git::GitDiffSnapshot {
+                revision: *revision_by_callback.lock().expect("revision"),
+                text: text.clone(),
+            },
+        ))
+    });
+    let mut stream = connect(&server);
+    stream.set_read_timeout(Some(TEST_TIMEOUT)).unwrap();
+    write_json(
+        &mut stream,
+        &hello_scoped("sk-test-runtime", ControlScope::Runtime),
+    );
+    assert!(read_line(&mut stream).contains("store"));
+
+    write_json(
+        &mut stream,
+        &RuntimeRequest::new(
+            JsonRpcId::Number(50),
+            RuntimeMethod::GitDiff,
+            slterm_runtime_protocol::GitDiffRequest {
+                project_id: None,
+                path: "src/main.rs".to_owned(),
+                cursor: None,
+            },
+        ),
+    );
+    let reply: serde_json::Value = serde_json::from_str(&read_line(&mut stream)).unwrap();
+    assert_eq!(
+        reply["result"]["data"].as_str().unwrap().len(),
+        crate::local_control::reads::PAGE_BUDGET_BYTES
+    );
+    assert_eq!(reply["result"]["revision"], 5);
+    let cursor = reply["result"]["next_cursor"]
+        .as_str()
+        .expect("尾部仍有内容必须返回续读游标")
+        .to_owned();
+
+    write_json(
+        &mut stream,
+        &RuntimeRequest::new(
+            JsonRpcId::Number(51),
+            RuntimeMethod::GitDiff,
+            slterm_runtime_protocol::GitDiffRequest {
+                project_id: None,
+                path: "src/main.rs".to_owned(),
+                cursor: Some(cursor.clone()),
+            },
+        ),
+    );
+    let reply: serde_json::Value = serde_json::from_str(&read_line(&mut stream)).unwrap();
+    assert_eq!(reply["result"]["data"], "\ntail");
+    assert!(reply["result"]["next_cursor"].is_null());
+
+    *revision.lock().expect("revision") = 6;
+    write_json(
+        &mut stream,
+        &RuntimeRequest::new(
+            JsonRpcId::Number(52),
+            RuntimeMethod::GitDiff,
+            slterm_runtime_protocol::GitDiffRequest {
+                project_id: None,
+                path: "src/main.rs".to_owned(),
+                cursor: Some(cursor),
+            },
+        ),
+    );
+    let reply: serde_json::Value = serde_json::from_str(&read_line(&mut stream)).unwrap();
+    assert_eq!(reply["error"]["data"]["code"], "stale_cursor");
+    server.shutdown().unwrap();
+}
+
 fn start_dual_scope_server_with_git_status<G>(
     on_git_status: G,
 ) -> (LocalControlServer, Arc<AtomicUsize>)
@@ -959,6 +1117,7 @@ where
             wait_status: Arc::new(unavailable_wait_status),
             agents: Arc::new(unavailable_agents),
             git_status: Arc::new(on_git_status),
+            git_diff: Arc::new(unavailable_git_diff),
         },
     )
     .unwrap();
@@ -1047,7 +1206,10 @@ fn start_dual_scope_server_with_wait_status<W>(
     on_wait_status: W,
 ) -> (LocalControlServer, Arc<AtomicUsize>)
 where
-    W: Fn(crate::local_control::server::TerminalStatusTarget) -> Result<u64, JsonRpcError> + Send + Sync + 'static,
+    W: Fn(crate::local_control::server::TerminalStatusTarget) -> Result<u64, JsonRpcError>
+        + Send
+        + Sync
+        + 'static,
 {
     let calls = Arc::new(AtomicUsize::new(0));
     let callback_calls = Arc::clone(&calls);
@@ -1076,6 +1238,7 @@ where
             wait_status: Arc::new(on_wait_status),
             agents: Arc::new(unavailable_agents),
             git_status: Arc::new(unavailable_git_status),
+            git_diff: Arc::new(unavailable_git_diff),
         },
     )
     .unwrap();
@@ -1171,7 +1334,9 @@ fn runtime_project_list_and_mutations_route_through_callbacks() {
 
 fn start_dual_scope_server_with_events<E>(on_events: E) -> (LocalControlServer, Arc<AtomicUsize>)
 where
-    E: Fn(EventsSubscribeParams) -> Result<crate::local_control::events::Subscription, JsonRpcError>
+    E: Fn(
+            EventsSubscribeParams,
+        ) -> Result<crate::local_control::events::Subscription, JsonRpcError>
         + Send
         + Sync
         + 'static,
@@ -1195,6 +1360,7 @@ where
             wait_status: Arc::new(unavailable_wait_status),
             agents: Arc::new(unavailable_agents),
             git_status: Arc::new(unavailable_git_status),
+            git_diff: Arc::new(unavailable_git_diff),
         },
     )
     .unwrap();
@@ -1203,7 +1369,8 @@ where
 
 #[test]
 fn runtime_subscription_streams_events_and_accepts_unsubscribe() {
-    let (events_tx, events_rx) = mpsc::sync_channel(crate::local_control::events::CLIENT_QUEUE_CAPACITY);
+    let (events_tx, events_rx) =
+        mpsc::sync_channel(crate::local_control::events::CLIENT_QUEUE_CAPACITY);
     let receiver_slot = Arc::new(Mutex::new(Some(events_rx)));
     let slot = Arc::clone(&receiver_slot);
     let (mut server, _calls) = start_dual_scope_server_with_events(move |_| {
@@ -1405,6 +1572,7 @@ fn runtime_describe_returns_registry_and_contract_hashes() {
             "agent.resume",
             "agent.fork",
             "git.status",
+            "git.diff",
             "instance.handover"
         ]
     );

@@ -14,17 +14,17 @@ use slterm_runtime_protocol::{
     AgentCloseParams, AgentForkParams, AgentGetRequest, AgentInputParams, AgentListResponse,
     AgentReadRequest, AgentResource, AgentResumeParams, AgentStartParams, AgentWaitRequest,
     ClientRequest, ControlScope, Credential, DescribeResponse, DomainErrorCode, EventNotification,
-    EventsSubscribeParams, EventsUnsubscribedResponse, GitStatusRequest, GitStatusResponse,
-    HandoverParams, HandoverResponse, HelloResponse, JsonRpcError, JsonRpcErrorData, JsonRpcId,
-    JsonRpcResponse, OPERATION_WAIT_LIMIT_MS, OperationQueryParams, OperationResource,
-    OperationWaitParams, PanelActivateParams, PanelGroupMergeParams, PanelGroupResizeParams,
-    PanelGroupSplitParams, PanelMoveParams, PanelOpenSettingsParams, ProjectActivateParams,
-    ProjectListResponse, ProjectRemoveParams, ProjectRenameParams, ProjectReorderParams,
-    RuntimeEvent, RuntimeMethod, RuntimeRequest, RuntimeResult, SnapshotResources,
-    SnapshotResponse, SplitDirectionWire, TerminalCloseParams, TerminalCreateParams,
-    TerminalExecuteParams, TerminalInputParams, TerminalReadRequest, TerminalReadResponse,
-    TerminalReconnectParams, TerminalRenameParams, TerminalWaitRequest, TerminalWaitResponse,
-    ViewportSize, parse_client_request,
+    EventsSubscribeParams, EventsUnsubscribedResponse, GitDiffRequest, GitDiffResponse,
+    GitStatusRequest, GitStatusResponse, HandoverParams, HandoverResponse, HelloResponse,
+    JsonRpcError, JsonRpcErrorData, JsonRpcId, JsonRpcResponse, OPERATION_WAIT_LIMIT_MS,
+    OperationQueryParams, OperationResource, OperationWaitParams, PanelActivateParams,
+    PanelGroupMergeParams, PanelGroupResizeParams, PanelGroupSplitParams, PanelMoveParams,
+    PanelOpenSettingsParams, ProjectActivateParams, ProjectListResponse, ProjectRemoveParams,
+    ProjectRenameParams, ProjectReorderParams, RuntimeEvent, RuntimeMethod, RuntimeRequest,
+    RuntimeResult, SnapshotResources, SnapshotResponse, SplitDirectionWire, TerminalCloseParams,
+    TerminalCreateParams, TerminalExecuteParams, TerminalInputParams, TerminalReadRequest,
+    TerminalReadResponse, TerminalReconnectParams, TerminalRenameParams, TerminalWaitRequest,
+    TerminalWaitResponse, ViewportSize, parse_client_request,
 };
 use slterm_split::SplitDirection;
 use slterm_workspace::{LogicalSize, PanelGroupId, ProjectId, ViewKey};
@@ -122,6 +122,17 @@ pub(crate) type GitStatusCallback = Arc<
         + Sync,
 >;
 
+/// Runtime Git diff 端口：返回实际项目身份与 diff 文本快照。
+pub(crate) type GitDiffCallback = Arc<
+    dyn Fn(
+            Option<slterm_workspace::ProjectId>,
+            String,
+        )
+            -> Result<(slterm_workspace::ProjectId, super::git::GitDiffSnapshot), JsonRpcError>
+        + Send
+        + Sync,
+>;
+
 /// Runtime 作用域的应用回调集合。
 pub(crate) struct RuntimeCallbacks {
     pub(crate) snapshot: SnapshotCallback,
@@ -132,6 +143,7 @@ pub(crate) struct RuntimeCallbacks {
     pub(crate) wait_status: WaitStatusCallback,
     pub(crate) agents: AgentsCallback,
     pub(crate) git_status: GitStatusCallback,
+    pub(crate) git_diff: GitDiffCallback,
 }
 
 /// operation.wait 轮询间隔：只做有界查询与关闭检查。
@@ -161,6 +173,7 @@ impl LocalControlServer {
                 wait_status: Arc::new(not_ready_wait_status),
                 agents: Arc::new(not_ready_agents),
                 git_status: Arc::new(not_ready_git_status),
+                git_diff: Arc::new(not_ready_git_diff),
             },
         )
     }
@@ -663,6 +676,25 @@ fn handle_connection<F>(
                             None => JsonRpcResponse::error(request.id, invalid_request_error()),
                         }
                     }
+                    RuntimeMethod::GitDiff => {
+                        let Some(params) = request.parse::<GitDiffRequest>() else {
+                            return;
+                        };
+                        let project_id = match params.project_id.as_deref() {
+                            None => Some(None),
+                            Some(text) => parse_project_id(text).ok().map(Some),
+                        };
+                        match project_id {
+                            Some(project_id) => respond_git_diff(
+                                &runtime,
+                                request.id,
+                                project_id,
+                                params.path,
+                                params.cursor.as_deref(),
+                            ),
+                            None => JsonRpcResponse::error(request.id, invalid_request_error()),
+                        }
+                    }
                     RuntimeMethod::OperationWait => {
                         match wait_operation(&runtime, &request, &shutdown) {
                             Ok(resource) => JsonRpcResponse::result(
@@ -1151,6 +1183,51 @@ fn not_ready_git_status(
     _: Option<slterm_workspace::ProjectId>,
 ) -> Result<GitStatusResponse, JsonRpcError> {
     Err(not_ready_error("git status not ready"))
+}
+
+fn not_ready_git_diff(
+    _: Option<slterm_workspace::ProjectId>,
+    _: String,
+) -> Result<(slterm_workspace::ProjectId, super::git::GitDiffSnapshot), JsonRpcError> {
+    Err(not_ready_error("git diff not ready"))
+}
+
+/// terminal.read、agent.read 与 git.diff 共用有界页面响应。
+fn respond_git_diff(
+    runtime: &RuntimeCallbacks,
+    id: JsonRpcId,
+    project_id: Option<slterm_workspace::ProjectId>,
+    path: String,
+    cursor: Option<&str>,
+) -> JsonRpcResponse<RuntimeResult> {
+    let (project_id, snapshot) = match (runtime.git_diff)(project_id, path.clone()) {
+        Ok(result) => result,
+        Err(error) => return JsonRpcResponse::error(id, error),
+    };
+    match read_page(
+        snapshot.text.as_bytes(),
+        ReadGeneration {
+            generation: 0,
+            revision: snapshot.revision,
+        },
+        cursor,
+        PAGE_BUDGET_BYTES,
+    ) {
+        Ok(page) => match String::from_utf8(page.bytes) {
+            Ok(data) => JsonRpcResponse::result(
+                id,
+                RuntimeResult::GitDiff(GitDiffResponse {
+                    project_id: project_id.to_string(),
+                    path,
+                    revision: snapshot.revision,
+                    data,
+                    next_cursor: page.next_cursor,
+                }),
+            ),
+            Err(_) => JsonRpcResponse::error(id, read_encoding_error()),
+        },
+        Err(ReadError::StaleCursor) => JsonRpcResponse::error(id, stale_cursor_error()),
+    }
 }
 
 fn unknown_agent_error() -> JsonRpcError {
