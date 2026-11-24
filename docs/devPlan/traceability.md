@@ -314,7 +314,7 @@
 | Editor、Markdown、Diff 遵循同一 Document 自动保存 | `settings_document_autosave_is_global` | 已自动化 |
 | 套餐不读取 CLI 凭据且专用 token 不回显 | `settings_plan_token_not_cli_credentials` | 待实现 |
 | 后台周期提交后按新周期运行且隐藏仍查询 | `settings_plan_schedule_commit_and_visibility` | 待实现 |
-| 自定义根真实目录重复拒绝且删除立即撤销授权 | `agent_root_duplicate_and_revocation` | 待实现 |
+| 自定义根真实目录重复拒绝且删除立即撤销授权 | `agent_root_duplicate_and_revocation` | 已自动化 |
 | AgentRoot 默认只读且写与终端分别拒绝 | `agent_root_default_capabilities` | 待实现 |
 | Hooks 外部修改时不覆盖文件或静默丢草稿 | `hooks_external_modification_guard` | 待实现 |
 | 注入提交后清理失败显示已提交与重试 | `hooks_post_commit_cleanup_failure_is_visible` | 待实现 |
@@ -377,9 +377,9 @@
 
 | 验收场景 | 目标测试例名 | 状态 |
 |---|---|---|
-| 新 AgentRoot 默认可读但写入和终端分别拒绝 | `agent_files_default_capabilities` | 待实现 |
+| 新 AgentRoot 默认可读但写入和终端分别拒绝 | `agent_files_default_capabilities` | 已自动化 |
 | 开启写入不隐含终端 cwd 能力 | `agent_files_write_does_not_imply_terminal` | 待实现 |
-| 链接别名指向同一真实目录时不形成重复根 | `agent_root_real_directory_dedup` | 待实现 |
+| 链接别名指向同一真实目录时不形成重复根 | `agent_root_real_directory_dedup` | 已自动化 |
 | 删除根后 Document 保留且既有 PTY 不被强杀 | `agent_root_delete_preserves_document_and_pty` | 待实现 |
 | 多根覆盖同一文件时保存按能力并集与撤销更新 | `agent_root_capability_union_and_revoke` | 待实现 |
 | 跨根复制逐项执行而跨根剪切拒绝 | `agent_files_cross_root_copy_and_cut` | 待实现 |
