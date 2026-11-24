@@ -140,6 +140,8 @@ pub enum RuntimeMethod {
     TerminalWait,
     #[serde(rename = "terminal.close")]
     TerminalClose,
+    #[serde(rename = "terminal.reconnect")]
+    TerminalReconnect,
 }
 
 /// 原始输入：显式写入 PTY，不追加回车，也不模拟键盘事件。
@@ -218,6 +220,17 @@ pub struct TerminalCloseRequest {
 }
 
 pub type TerminalCloseParams = MutationParams<TerminalCloseRequest>;
+
+/// 重连已退出终端：代次必须与快照中的当前 PTY 代次一致（无 worker 时为零）。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct TerminalReconnectRequest {
+    pub terminal_id: String,
+    pub generation: u64,
+}
+
+pub type TerminalReconnectParams = MutationParams<TerminalReconnectRequest>;
 
 /// 新建终端：Shell 固定为应用默认，只开放目标项目与工作目录选择。
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -794,6 +807,13 @@ fn runtime_request_is_valid(request: &RuntimeRequest) -> bool {
                     params.has_valid_envelope() && present(&params.request.terminal_id)
                 })
         }
+        RuntimeMethod::TerminalReconnect => {
+            request
+                .parse::<TerminalReconnectParams>()
+                .is_some_and(|params| {
+                    params.has_valid_envelope() && present(&params.request.terminal_id)
+                })
+        }
     }
 }
 
@@ -869,11 +889,12 @@ pub enum ControlMethod {
     RuntimeTerminalRead,
     RuntimeTerminalWait,
     RuntimeTerminalClose,
+    RuntimeTerminalReconnect,
     InstanceHandover,
 }
 
 impl ControlMethod {
-    pub const ALL: [Self; 25] = [
+    pub const ALL: [Self; 26] = [
         Self::RuntimeHello,
         Self::RuntimeDescribe,
         Self::RuntimeSnapshot,
@@ -898,6 +919,7 @@ impl ControlMethod {
         Self::RuntimeTerminalRead,
         Self::RuntimeTerminalWait,
         Self::RuntimeTerminalClose,
+        Self::RuntimeTerminalReconnect,
         Self::InstanceHandover,
     ];
 
@@ -927,6 +949,7 @@ impl ControlMethod {
             Self::RuntimeTerminalRead => "terminal.read",
             Self::RuntimeTerminalWait => "terminal.wait",
             Self::RuntimeTerminalClose => "terminal.close",
+            Self::RuntimeTerminalReconnect => "terminal.reconnect",
             Self::InstanceHandover => "instance.handover",
         }
     }

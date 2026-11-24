@@ -20,8 +20,8 @@ use slterm_runtime_protocol::{
     ProjectRemoveParams, ProjectRenameParams, ProjectReorderParams, RuntimeEvent, RuntimeMethod,
     RuntimeRequest, RuntimeResult, SnapshotResources, SnapshotResponse, SplitDirectionWire,
     TerminalCloseParams, TerminalCreateParams, TerminalExecuteParams, TerminalInputParams,
-    TerminalReadRequest, TerminalReadResponse, TerminalWaitRequest, TerminalWaitResponse,
-    ViewportSize, parse_client_request,
+    TerminalReadRequest, TerminalReadResponse, TerminalReconnectParams, TerminalWaitRequest,
+    TerminalWaitResponse, ViewportSize, parse_client_request,
 };
 use slterm_split::SplitDirection;
 use slterm_workspace::{LogicalSize, PanelGroupId, ProjectId, ViewKey};
@@ -789,6 +789,26 @@ fn handle_connection<F>(
                         let mutation =
                             parse_terminal_id(&params.request.terminal_id).map(|terminal_id| {
                                 RuntimeMutation::TerminalClose {
+                                    terminal_id,
+                                    generation: params.request.generation,
+                                }
+                            });
+                        respond_mutation(
+                            &runtime,
+                            request.id,
+                            params.client_id,
+                            params.mutation_id,
+                            params.expected_revision,
+                            mutation,
+                        )
+                    }
+                    RuntimeMethod::TerminalReconnect => {
+                        let Some(params) = request.parse::<TerminalReconnectParams>() else {
+                            return;
+                        };
+                        let mutation =
+                            parse_terminal_id(&params.request.terminal_id).map(|terminal_id| {
+                                RuntimeMutation::TerminalReconnect {
                                     terminal_id,
                                     generation: params.request.generation,
                                 }

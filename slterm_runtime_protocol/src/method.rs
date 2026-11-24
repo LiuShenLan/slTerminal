@@ -191,6 +191,11 @@ fn terminal_close_params_schema() -> schemars::Schema {
     schemars::schema_for!(crate::protocol::TerminalCloseParams)
 }
 
+#[cfg(feature = "schema")]
+fn terminal_reconnect_params_schema() -> schemars::Schema {
+    schemars::schema_for!(crate::protocol::TerminalReconnectParams)
+}
+
 /// 全部真实可用方法；顺序即对外呈现顺序。
 pub static METHODS: &[MethodSpec] = &[
     MethodSpec {
@@ -434,6 +439,16 @@ pub static METHODS: &[MethodSpec] = &[
         result_schema: operation_result_schema,
     },
     MethodSpec {
+        method: ControlMethod::RuntimeTerminalReconnect,
+        scopes: &[ControlScope::Runtime],
+        kind: MethodKind::Mutation,
+        idempotent: true,
+        #[cfg(feature = "schema")]
+        params_schema: terminal_reconnect_params_schema,
+        #[cfg(feature = "schema")]
+        result_schema: operation_result_schema,
+    },
+    MethodSpec {
         method: ControlMethod::InstanceHandover,
         scopes: &[ControlScope::Handover],
         kind: MethodKind::Mutation,
@@ -512,6 +527,7 @@ mod method_tests {
                 method_name(ControlMethod::RuntimeTerminalRead),
                 method_name(ControlMethod::RuntimeTerminalWait),
                 method_name(ControlMethod::RuntimeTerminalClose),
+                method_name(ControlMethod::RuntimeTerminalReconnect),
                 method_name(ControlMethod::InstanceHandover),
             ]
         );
@@ -612,6 +628,7 @@ mod method_tests {
                 ControlMethod::RuntimeTerminalRead,
                 ControlMethod::RuntimeTerminalWait,
                 ControlMethod::RuntimeTerminalClose,
+                ControlMethod::RuntimeTerminalReconnect,
             ]
         );
         let handover_methods: Vec<ControlMethod> = methods_for(ControlScope::Handover)

@@ -11,8 +11,8 @@ use crate::protocol::{
     ProjectReorderRequest, ProjectResource, ProtocolError, RuntimeMethod, RuntimeRequest,
     SnapshotResources, SnapshotResponse, SplitDirectionWire, TerminalCloseRequest,
     TerminalCreateRequest, TerminalExecuteRequest, TerminalInputRequest, TerminalReadRequest,
-    TerminalResource, TerminalWaitRequest, ViewResource, ViewportSize, params_sha256,
-    parse_client_request,
+    TerminalReconnectRequest, TerminalResource, TerminalWaitRequest, ViewResource, ViewportSize,
+    params_sha256, parse_client_request,
 };
 use crate::{MethodKind, OperationStatus};
 
@@ -636,6 +636,13 @@ fn terminal_methods_validate_generation_and_payloads() {
                 generation: 3,
             },
         ),
+        project_mutation(
+            RuntimeMethod::TerminalReconnect,
+            TerminalReconnectRequest {
+                terminal_id: terminal.to_owned(),
+                generation: 3,
+            },
+        ),
     ] {
         let encoded = serde_json::to_value(&request).unwrap();
         let parsed = parse_client_request(encoded.to_string().as_bytes()).unwrap();
@@ -717,6 +724,8 @@ fn terminal_methods_validate_generation_and_payloads() {
         serde_json::json!({"jsonrpc":"2.0","id":1,"method":"terminal.close","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"terminal_id":" ","generation":1}}}),
         // 关闭未知字段
         serde_json::json!({"jsonrpc":"2.0","id":1,"method":"terminal.close","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"terminal_id":"t","generation":1,"force":true}}}),
+        // 空身份重连
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"terminal.reconnect","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"terminal_id":"","generation":1}}}),
     ] {
         assert!(
             parse_client_request(invalid.to_string().as_bytes()).is_err(),
@@ -806,6 +815,7 @@ fn describe_lists_the_method_registry_with_contract_hashes() {
             "terminal.read",
             "terminal.wait",
             "terminal.close",
+            "terminal.reconnect",
             "instance.handover"
         ]
     );

@@ -16,8 +16,8 @@ use slterm_runtime_protocol::{
     PanelOpenSettingsParams, ProjectActivateParams, ProjectActivateRequest, ProjectResource,
     RuntimeEvent, RuntimeMethod, RuntimeRequest, SnapshotResources, SplitDirectionWire,
     TerminalCloseParams, TerminalCloseRequest, TerminalExecuteParams, TerminalExecuteRequest,
-    TerminalInputParams, TerminalInputRequest, TerminalReadRequest, TerminalResource,
-    TerminalWaitRequest, ViewResource, ViewportSize,
+    TerminalInputParams, TerminalInputRequest, TerminalReadRequest, TerminalReconnectParams,
+    TerminalReconnectRequest, TerminalResource, TerminalWaitRequest, ViewResource, ViewportSize,
 };
 
 use super::LocalControlServer;
@@ -848,13 +848,16 @@ fn runtime_terminal_input_and_execute_route_through_dispatcher() {
 }
 
 #[test]
-fn runtime_terminal_close_routes_through_dispatcher() {
+fn runtime_terminal_close_and_reconnect_route_through_dispatcher() {
     let mutations = Arc::new(AtomicUsize::new(0));
     let mutations_by_callback = Arc::clone(&mutations);
     let (mut server, _calls) = start_dual_scope_server_with_mutation(move |request| {
         match &request.mutation {
             super::mutations::RuntimeMutation::TerminalClose { generation, .. } => {
                 assert_eq!(*generation, 4);
+            }
+            super::mutations::RuntimeMutation::TerminalReconnect { generation, .. } => {
+                assert_eq!(*generation, 5);
             }
             other => panic!("意外写意图: {other:?}"),
         }
@@ -893,6 +896,26 @@ fn runtime_terminal_close_routes_through_dispatcher() {
     let reply: serde_json::Value = serde_json::from_str(&read_line(&mut stream)).unwrap();
     assert_eq!(reply["result"]["status"], "succeeded");
     assert_eq!(mutations.load(Ordering::SeqCst), 1);
+
+    write_json(
+        &mut stream,
+        &RuntimeRequest::new(
+            JsonRpcId::Number(17),
+            RuntimeMethod::TerminalReconnect,
+            TerminalReconnectParams {
+                client_id: "client-runtime".to_owned(),
+                mutation_id: "mutation-reconnect".to_owned(),
+                expected_revision: None,
+                request: TerminalReconnectRequest {
+                    terminal_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2d".to_owned(),
+                    generation: 5,
+                },
+            },
+        ),
+    );
+    let reply: serde_json::Value = serde_json::from_str(&read_line(&mut stream)).unwrap();
+    assert_eq!(reply["result"]["status"], "succeeded");
+    assert_eq!(mutations.load(Ordering::SeqCst), 2);
     server.shutdown().unwrap();
 }
 
@@ -1357,6 +1380,7 @@ fn runtime_describe_returns_registry_and_contract_hashes() {
             "terminal.read",
             "terminal.wait",
             "terminal.close",
+            "terminal.reconnect",
             "instance.handover"
         ]
     );

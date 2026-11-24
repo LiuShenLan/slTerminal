@@ -226,20 +226,37 @@ impl AppRoot {
                 self.snapshot
                     .terminal(terminal_id)
                     .ok_or_else(invalid_request_error)?;
-                let current = self
-                    .terminals
-                    .borrow()
-                    .target(terminal_id)
-                    .map(|target| target.generation().get())
-                    .unwrap_or(0);
-                if current != generation {
+                if self.runtime_terminal_generation(terminal_id) != generation {
                     return Err(revision_conflict_error());
                 }
                 self.close_terminal(terminal_id, window, cx)
                     .map(|_| ())
                     .map_err(runtime_mutation_error)
             }
+            RuntimeMutation::TerminalReconnect {
+                terminal_id,
+                generation,
+            } => {
+                self.snapshot
+                    .terminal(terminal_id)
+                    .ok_or_else(invalid_request_error)?;
+                if self.runtime_terminal_generation(terminal_id) != generation {
+                    return Err(revision_conflict_error());
+                }
+                self.reconnect_terminal(terminal_id, cx)
+                    .map(|_| ())
+                    .map_err(runtime_mutation_error)
+            }
         }
+    }
+
+    /// 当前 Registry 代次；没有存活 worker 的持久化记录为零。
+    fn runtime_terminal_generation(&self, terminal_id: slterm_workspace::TerminalId) -> u64 {
+        self.terminals
+            .borrow()
+            .target(terminal_id)
+            .map(|target| target.generation().get())
+            .unwrap_or(0)
     }
 
     /// Runtime 只读文本快照：校验稳定身份与代次后把 worker 命令入队。

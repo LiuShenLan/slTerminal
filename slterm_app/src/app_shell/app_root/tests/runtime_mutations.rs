@@ -422,6 +422,85 @@ fn runtime_terminal_close_requires_current_generation(cx: &mut TestAppContext) {
     );
 }
 
+/// 锚：reconnect 只接受已退出终端且代次必须匹配；成功后代次推进到新进程。
+#[gpui::test]
+fn runtime_terminal_reconnect_requires_exited_terminal_and_current_generation(
+    cx: &mut TestAppContext,
+) {
+    let (root, mut window, _state) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, "D:/work/a");
+    new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_A);
+    let terminal = root.read_with(cx, |root, cx| {
+        root.terminal_panel(project_id(PROJECT_A), terminal_id(TERMINAL_A), cx)
+            .unwrap()
+            .1
+    });
+    window.update(|_, cx| {
+        terminal.update(cx, |view, cx| view.mark_test_exited(cx));
+    });
+    window.run_until_parked();
+    let generation = terminal_generation(&root, cx);
+
+    let error = dispatch_mutation(
+        &root,
+        &mut window,
+        RuntimeMutation::TerminalReconnect {
+            terminal_id: terminal_id(TERMINAL_A),
+            generation: generation + 1,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.data.as_ref().map(|data| data.code),
+        Some(DomainErrorCode::RevisionConflict)
+    );
+
+    dispatch_mutation(
+        &root,
+        &mut window,
+        RuntimeMutation::TerminalReconnect {
+            terminal_id: terminal_id(TERMINAL_A),
+            generation,
+        },
+    )
+    .expect("已退出终端必须可重连");
+    window.run_until_parked();
+    root.read_with(cx, |root, _| {
+        assert_eq!(
+            root.terminals
+                .borrow()
+                .target(terminal_id(TERMINAL_A))
+                .unwrap()
+                .generation()
+                .get(),
+            generation + 1,
+            "重连必须分配新 PTY 代次"
+        );
+        assert_eq!(
+            root.snapshot
+                .terminal(terminal_id(TERMINAL_A))
+                .unwrap()
+                .run_intent(),
+            RunIntent::Launch
+        );
+    });
+
+    let error = dispatch_mutation(
+        &root,
+        &mut window,
+        RuntimeMutation::TerminalReconnect {
+            terminal_id: terminal_id(TERMINAL_A),
+            generation: generation + 1,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.data.as_ref().map(|data| data.code),
+        Some(DomainErrorCode::NotReady),
+        "运行中终端不得重连"
+    );
+}
+
 #[gpui::test]
 fn runtime_project_mutations_are_rejected_while_closing(cx: &mut TestAppContext) {
     let (root, mut window, _state) = open_root(cx);

@@ -1365,6 +1365,18 @@ impl AppRoot {
         let terminal_id = self
             .actual_focused_terminal(window, cx)
             .ok_or(AppRootError::MissingPanel)?;
+        self.reconnect_terminal(terminal_id, cx)
+    }
+
+    /// 按稳定身份重连已退出终端；Runtime 与焦点命令共用同一实现。
+    pub(super) fn reconnect_terminal(
+        &mut self,
+        terminal_id: TerminalId,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<(), AppRootError> {
+        self.ensure_not_closing()?;
+        self.ensure_project_snapshot_recovery_allowed()?;
+        self.ensure_project_snapshot_command_allowed()?;
         let record = self
             .snapshot
             .terminal(terminal_id)

@@ -69,6 +69,10 @@ pub(crate) enum RuntimeMutation {
         terminal_id: TerminalId,
         generation: u64,
     },
+    TerminalReconnect {
+        terminal_id: TerminalId,
+        generation: u64,
+    },
 }
 
 impl RuntimeMutation {
@@ -89,6 +93,7 @@ impl RuntimeMutation {
             Self::TerminalInput { .. } => "terminal.input",
             Self::TerminalExecute { .. } => "terminal.execute",
             Self::TerminalClose { .. } => "terminal.close",
+            Self::TerminalReconnect { .. } => "terminal.reconnect",
         }
     }
 
@@ -178,6 +183,13 @@ impl RuntimeMutation {
                 "command": command,
             })),
             Self::TerminalClose {
+                terminal_id,
+                generation,
+            } => Ok(serde_json::json!({
+                "terminal_id": terminal_id.to_string(),
+                "generation": generation,
+            })),
+            Self::TerminalReconnect {
                 terminal_id,
                 generation,
             } => Ok(serde_json::json!({
