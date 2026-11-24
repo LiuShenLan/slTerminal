@@ -522,6 +522,7 @@ impl SideView {
         }
         // 未写回的用户动作必须在关闭前统一进入唯一状态。
         self.checkpoint_explorer_state();
+        self.checkpoint_commit_state();
         self.closed = true;
         let id = self.state.id();
         self.cache.borrow_mut().insert(id, self.state.clone());

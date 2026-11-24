@@ -4,8 +4,9 @@
 //! 打开动作统一产生 `CommitIntent`，由 AppRoot 复用既有打开链。
 
 use gpui::{
-    AnyElement, Context, InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent,
-    ParentElement as _, StatefulInteractiveElement as _, Styled as _, Task, Window, div, px,
+    AnyElement, AppContext as _, Context, InteractiveElement as _, IntoElement, MouseButton,
+    MouseDownEvent, ParentElement as _, StatefulInteractiveElement as _, Styled as _, Task, Window,
+    div, px,
 };
 use gpui_component::ActiveTheme as _;
 use slterm_path::CanonicalPath;
@@ -76,6 +77,7 @@ pub(super) enum CommitIntent {
     LoadStatus {
         project_id: ProjectId,
         root: CanonicalPath,
+        generation: u64,
     },
 }
 
@@ -169,8 +171,12 @@ pub(super) struct CommitRuntime {
     show_ignored: bool,
     collapsed: [bool; 3],
     scroll_handle: gpui::ScrollHandle,
+    restoring_scroll: Option<f64>,
+    filter_input: Option<gpui::Entity<gpui_component::input::InputState>>,
+    _filter_change: Option<gpui::Subscription>,
     loading: bool,
     stale: bool,
+    generation: u64,
     task: Option<Task<()>>,
 }
 
@@ -184,8 +190,12 @@ impl CommitRuntime {
             show_ignored: false,
             collapsed: [false, false, false],
             scroll_handle: gpui::ScrollHandle::new(),
+            restoring_scroll: None,
+            filter_input: None,
+            _filter_change: None,
             loading: false,
             stale: false,
+            generation: 0,
             task: None,
         }
     }
@@ -250,7 +260,12 @@ impl SideView {
             return;
         }
         let previous = self.commit.take();
+        let generation = previous
+            .as_ref()
+            .map(|old| old.generation.wrapping_add(1))
+            .unwrap_or(1);
         let mut runtime = CommitRuntime::new(project);
+        runtime.generation = generation;
         runtime.root = Some(root.clone());
         runtime.filter.clear();
         runtime.rows.clear();
@@ -262,19 +277,46 @@ impl SideView {
                 restored.unversioned_collapsed(),
                 restored.ignored_collapsed(),
             ];
+            runtime.restoring_scroll = Some(restored.scroll());
         }
         // 旧任务随旧运行态释放；迟到回执由视图代次拒绝。
         runtime.task = previous.and_then(|mut old| old.task.take());
         self.commit = Some(runtime);
+        self.ensure_commit_filter_input(window, cx);
         self.dispatch_commit_intent(
             CommitIntent::LoadStatus {
                 project_id: project,
                 root,
+                generation,
             },
             window,
             cx,
         );
         cx.notify();
+    }
+
+    fn ensure_commit_filter_input(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        let Some(runtime) = &self.commit else {
+            return;
+        };
+        if runtime.filter_input.is_some() {
+            return;
+        }
+        let input = cx.new(|cx| gpui_component::input::InputState::new(window, cx));
+        let change = cx.subscribe_in(
+            &input,
+            window,
+            |view, input, event: &gpui_component::input::InputEvent, _, cx| {
+                if matches!(event, gpui_component::input::InputEvent::Change) {
+                    let text = input.read(cx).value().to_string();
+                    view.commit_set_filter(&text, cx);
+                }
+            },
+        );
+        if let Some(runtime) = &mut self.commit {
+            runtime.filter_input = Some(input);
+            runtime._filter_change = Some(change);
+        }
     }
 
     pub(super) fn clear_commit_root(&mut self, cx: &mut Context<'_, Self>) {
@@ -286,6 +328,7 @@ impl SideView {
     /// 状态回执只替换列表；失败保留旧列表并标记可能过期。
     pub(super) fn commit_apply_status(
         &mut self,
+        generation: u64,
         repo_root: CanonicalPath,
         snapshot: Result<std::sync::Arc<crate::git::StatusSnapshot>, ()>,
         cx: &mut Context<'_, Self>,
@@ -293,8 +336,17 @@ impl SideView {
         let Some(runtime) = &mut self.commit else {
             return;
         };
-        if runtime.root.as_ref() != Some(&repo_root) {
+        if runtime.generation != generation {
             return;
+        }
+        if repo_root.as_path()
+            != runtime
+                .root
+                .as_ref()
+                .map(|root| root.as_path())
+                .unwrap_or(repo_root.as_path())
+        {
+            // 显示根可用于后续投影；树与列表仍按当前视图代次结算。
         }
         runtime.loading = false;
         match snapshot {
@@ -307,7 +359,88 @@ impl SideView {
                 runtime.stale = !runtime.rows.is_empty();
             }
         }
+        if let Some(scroll) = runtime.restoring_scroll.take()
+            && scroll > 0.0
+        {
+            runtime
+                .scroll_handle
+                .set_offset(gpui::point(gpui::px(0.0), gpui::px(-(scroll as f32))));
+        }
         cx.notify();
+    }
+
+    /// 折叠、忽略开关与滚动是唯一持久展示参数；过滤与当前行不写盘。
+    pub(super) fn checkpoint_commit_state(&mut self) {
+        let Some(runtime) = &self.commit else {
+            return;
+        };
+        let collapsed = runtime.collapsed;
+        let show_ignored = runtime.show_ignored;
+        let scroll = f64::from(-runtime.scroll_handle.offset().y.as_f32()).max(0.0);
+        let _ = self.edit_state(|state| {
+            let SideViewState::Commit(state) = state else {
+                return;
+            };
+            state.set_changes_collapsed(collapsed[0]);
+            state.set_unversioned_collapsed(collapsed[1]);
+            state.set_ignored_collapsed(collapsed[2]);
+            state.set_show_ignored(show_ignored);
+            state.set_scroll(scroll);
+        });
+    }
+
+    pub(super) fn commit_set_show_ignored(&mut self, show: bool, cx: &mut Context<'_, Self>) {
+        if let Some(runtime) = &mut self.commit {
+            runtime.show_ignored = show;
+        }
+        self.checkpoint_commit_state();
+        cx.notify();
+    }
+
+    pub(super) fn commit_toggle_group(&mut self, group: CommitGroup, cx: &mut Context<'_, Self>) {
+        if let Some(runtime) = &mut self.commit {
+            let index = CommitRuntime::group_index(group);
+            runtime.collapsed[index] = !runtime.collapsed[index];
+        }
+        self.checkpoint_commit_state();
+        cx.notify();
+    }
+
+    pub(super) fn commit_set_filter(&mut self, text: &str, cx: &mut Context<'_, Self>) {
+        if let Some(runtime) = &mut self.commit {
+            runtime.filter = text.to_owned();
+        }
+        cx.notify();
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(super) fn commit_visible_row_count_for_test(&self) -> usize {
+        self.commit
+            .as_ref()
+            .map(|runtime| runtime.visible_rows().len())
+            .unwrap_or_default()
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(super) fn commit_show_ignored(&self) -> bool {
+        self.commit
+            .as_ref()
+            .is_some_and(|runtime| runtime.show_ignored)
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(super) fn commit_group_collapsed(&self, group: CommitGroup) -> bool {
+        self.commit
+            .as_ref()
+            .is_some_and(|runtime| runtime.collapsed[CommitRuntime::group_index(group)])
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(super) fn commit_filter(&self) -> &str {
+        self.commit
+            .as_ref()
+            .map(|runtime| runtime.filter.as_str())
+            .unwrap_or_default()
     }
 
     pub(super) fn commit_scroll_handle(&self) -> Option<&gpui::ScrollHandle> {
@@ -392,6 +525,7 @@ pub(super) fn render_commit(view: &mut SideView, cx: &mut Context<'_, SideView>)
             .count()
     });
     let show_ignored = runtime.show_ignored;
+    let filter_input = runtime.filter_input.clone();
     let loading = runtime.loading;
     let stale = runtime.stale;
 
@@ -445,21 +579,7 @@ pub(super) fn render_commit(view: &mut SideView, cx: &mut Context<'_, SideView>)
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |view, _, _, cx| {
-                        if let Some(runtime) = &mut view.commit {
-                            runtime.collapsed[index] = !runtime.collapsed[index];
-                            let collapsed = runtime.collapsed;
-                            let show_ignored = runtime.show_ignored;
-                            let _ = view.edit_state(|state| {
-                                let SideViewState::Commit(state) = state else {
-                                    return;
-                                };
-                                state.set_changes_collapsed(collapsed[0]);
-                                state.set_unversioned_collapsed(collapsed[1]);
-                                state.set_ignored_collapsed(collapsed[2]);
-                                state.set_show_ignored(show_ignored);
-                            });
-                        }
-                        cx.notify();
+                        view.commit_toggle_group(group, cx);
                     }),
                 )
                 .child(format!(
@@ -504,6 +624,14 @@ pub(super) fn render_commit(view: &mut SideView, cx: &mut Context<'_, SideView>)
         .gap(px(4.0))
         .px_2()
         .py_1();
+    if let Some(input) = filter_input {
+        header = header.child(
+            div()
+                .flex_grow(1.0)
+                .min_w_0()
+                .child(gpui_component::input::Input::new(&input)),
+        );
+    }
     header = header.child(
         div()
             .id("commit-show-ignored")
@@ -518,16 +646,7 @@ pub(super) fn render_commit(view: &mut SideView, cx: &mut Context<'_, SideView>)
                         .commit
                         .as_ref()
                         .is_some_and(|runtime| !runtime.show_ignored);
-                    if let Some(runtime) = &mut view.commit {
-                        runtime.show_ignored = next;
-                    }
-                    let _ = view.edit_state(|state| {
-                        let SideViewState::Commit(state) = state else {
-                            return;
-                        };
-                        state.set_show_ignored(next);
-                    });
-                    cx.notify();
+                    view.commit_set_show_ignored(next, cx);
                 }),
             )
             .child(if show_ignored {
@@ -557,9 +676,11 @@ impl AppRoot {
         cx: &mut Context<'_, Self>,
     ) {
         match intent {
-            CommitIntent::LoadStatus { project_id, root } => {
-                self.start_commit_status(project_id, root, window, cx)
-            }
+            CommitIntent::LoadStatus {
+                project_id,
+                root,
+                generation,
+            } => self.start_commit_status(project_id, root, generation, window, cx),
             CommitIntent::Open {
                 project_id,
                 root,
@@ -593,6 +714,7 @@ impl AppRoot {
         &mut self,
         project_id: ProjectId,
         root: CanonicalPath,
+        generation: u64,
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
@@ -614,7 +736,7 @@ impl AppRoot {
                     let result = loading.await;
                     let _ = window_handle.update(cx, |_, window, cx| {
                         let _ = this.update(cx, |root, cx| {
-                            root.finish_commit_status(project_id, result, window, cx)
+                            root.finish_commit_status(project_id, generation, result, window, cx)
                         });
                     });
                 })
@@ -625,6 +747,7 @@ impl AppRoot {
     fn finish_commit_status(
         &mut self,
         project_id: ProjectId,
+        generation: u64,
         result: Result<std::sync::Arc<crate::git::StatusSnapshot>, crate::git::GitError>,
         window: &mut Window,
         cx: &mut Context<'_, Self>,
@@ -659,7 +782,7 @@ impl AppRoot {
             Err(_) => project_root,
         };
         explorer.update(cx, |view, cx| {
-            view.commit_apply_status(repo_root, result.map_err(|_| ()), cx)
+            view.commit_apply_status(generation, repo_root, result.map_err(|_| ()), cx)
         });
     }
 
@@ -719,7 +842,10 @@ impl AppRoot {
         };
         let target_group = match self.focused_group(project_id, cx) {
             Ok(Some(group)) => group,
-            _ => return,
+            // 空项目按规格创建首组，不退回隐藏项目。
+            Ok(None) => slterm_workspace::PanelGroupId::from_uuid(uuid::Uuid::now_v7())
+                .expect("系统生成的 UUID 必须为 v7"),
+            Err(_) => return,
         };
         if let Some(document_id) = self.document_id_at(&path) {
             let _ = self.open_diff(
@@ -837,7 +963,11 @@ impl AppRoot {
             return;
         };
         let target_group = match self.focused_group(project_id, cx) {
-            Ok(group) => group,
+            Ok(Some(group)) => Some(group),
+            Ok(None) => Some(
+                slterm_workspace::PanelGroupId::from_uuid(uuid::Uuid::now_v7())
+                    .expect("系统生成的 UUID 必须为 v7"),
+            ),
             Err(_) => return,
         };
         let _ = self.open_gitshow(

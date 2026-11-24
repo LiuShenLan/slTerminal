@@ -2,6 +2,7 @@
 
 use super::*;
 
+use super::super::commit::CommitGroup;
 use super::super::panel_host::PanelContent;
 
 fn open_commit(
@@ -93,4 +94,156 @@ fn commit_opens_shared_document_diff(cx: &mut TestAppContext) {
         1,
         "不得为 Diff 另建第二份 Document"
     );
+}
+
+#[gpui::test]
+fn commit_gitshow_fixed_version(cx: &mut TestAppContext) {
+    let (_temp, repository, _binding) = super::gitshow::repository();
+    std::fs::remove_file(repository.join("first.txt")).unwrap();
+    let (root, mut window, _) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, repository.to_str().unwrap());
+    let repo_root = CanonicalPath::new(dunce::canonicalize(&repository).unwrap()).unwrap();
+    let file = CanonicalPath::new(repo_root.as_path().join("first.txt")).unwrap();
+    let commit = open_commit(&root, &mut window, cx);
+    activate_commit_row(&commit, &file, &mut window);
+
+    let gitshow = root.read_with(cx, |root, cx| {
+        root.projects[&project_id(PROJECT_A)]
+            .read(cx)
+            .panels
+            .values()
+            .find_map(|panel| match &panel.content {
+                PanelContent::GitShow(view) => Some(view.clone()),
+                _ => None,
+            })
+            .expect("deleted 行必须打开 GitShow")
+    });
+    gitshow.read_with(cx, |view, _| {
+        assert_eq!(
+            view.snapshot().unwrap().bytes.as_ref(),
+            b"fixed first\n",
+            "固定版本必须来自创建时的 HEAD"
+        );
+    });
+
+    // HEAD 前进后固定面板不得改写为工作区或新提交内容。
+    std::fs::write(repository.join("second.txt"), "second moved\n").unwrap();
+    super::gitshow::git(&repository, &["add", "--", "second.txt"]);
+    super::gitshow::git(&repository, &["commit", "--quiet", "-m", "move head"]);
+    activate_commit_row(&commit, &file, &mut window);
+    gitshow.read_with(cx, |view, _| {
+        assert_eq!(
+            view.snapshot().unwrap().bytes.as_ref(),
+            b"fixed first\n",
+            "HEAD 移动不得改变已打开固定版本"
+        );
+    });
+}
+
+#[gpui::test]
+fn commit_view_state_restore(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let (_repo_temp, repository, _binding) = super::gitshow::repository();
+    for index in 0..60 {
+        std::fs::write(repository.join(format!("filler-{index:02}.txt")), "x\n").unwrap();
+    }
+    super::gitshow::git(&repository, &["add", "--", "filler-00.txt"]);
+    for name in (0..60).map(|index| format!("filler-{index:02}.txt")) {
+        super::gitshow::git(&repository, &["add", "--", name.as_str()]);
+    }
+    super::gitshow::git(&repository, &["commit", "--quiet", "-m", "fillers"]);
+    for index in 0..60 {
+        std::fs::write(
+            repository.join(format!("filler-{index:02}.txt")),
+            "changed\n",
+        )
+        .unwrap();
+    }
+    std::fs::write(repository.join("first.txt"), "changed\n").unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let (events, _event_rx) = std::sync::mpsc::sync_channel(64);
+    let runtime = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
+    let persistence =
+        AppRootPersistence::load_with_previous_run(&paths, Some(runtime.client()), None);
+    let (root, mut window, _) = open_root_with_persistence(cx, persistence);
+    add_project(&root, &mut window, PROJECT_A, repository.to_str().unwrap());
+    let commit = open_commit(&root, &mut window, cx);
+    window.update(|_, cx| {
+        commit.update(cx, |view, cx| {
+            view.commit_set_show_ignored(true, cx);
+            view.commit_toggle_group(CommitGroup::Unversioned, cx);
+            view.commit_set_filter("filler", cx);
+        });
+    });
+    draw_frame(&mut window);
+    let max_offset = commit.read_with(cx, |view, _| {
+        view.commit_scroll_handle().unwrap().max_offset().y.as_f32()
+    });
+    window.update(|_, cx| {
+        commit.update(cx, |view, _| {
+            view.commit_scroll_handle()
+                .unwrap()
+                .set_offset(gpui::point(gpui::px(0.0), gpui::px(-40.0)));
+        });
+    });
+
+    let (before_close, before_visible) = commit.read_with(cx, |view, _| {
+        (
+            view.commit_scroll_handle().unwrap().offset().y.as_f32(),
+            view.commit_visible_row_count_for_test(),
+        )
+    });
+    let status = super::gitshow::git(&repository, &["status", "--porcelain"]);
+    let status_text = String::from_utf8_lossy(&status.stdout);
+    assert!(
+        before_visible >= 60,
+        "close_before visible={before_visible} status={status_text}"
+    );
+    assert!(
+        (-before_close - 40.0).abs() < 1.0,
+        "close_before offset={before_close} max={max_offset}"
+    );
+    window.simulate_keystrokes("ctrl-shift-n");
+    window.run_until_parked();
+    super::close::flush_when_ready(&runtime.client());
+    let store = WorkspaceDatabase::open(&paths).unwrap();
+    let key = ViewKey::SideView {
+        side_view_id: slterm_workspace::SideViewId::Commit,
+    };
+    let stored = store
+        .view_state(
+            &key,
+            &super::super::side_view::workspace_view_state_registry(),
+        )
+        .unwrap()
+        .expect("Commit ViewState 必须已持久化");
+    assert_eq!(
+        stored.state.state()["scroll"].as_f64(),
+        Some(40.0),
+        "checkpoint 必须写入滚动"
+    );
+    let commit = open_commit(&root, &mut window, cx);
+    window.run_until_parked();
+    draw_frame(&mut window);
+    window.run_until_parked();
+    draw_frame(&mut window);
+    let after_open = commit.read_with(cx, |view, _| {
+        view.commit_scroll_handle().unwrap().offset().y.as_f32()
+    });
+    assert!(
+        (-after_open - 40.0).abs() < 1.0,
+        "after_open offset={after_open}"
+    );
+    commit.read_with(cx, |view, _| {
+        assert!(view.commit_show_ignored(), "忽略开关必须恢复");
+        assert!(
+            view.commit_group_collapsed(CommitGroup::Unversioned),
+            "分组折叠必须恢复"
+        );
+        assert!(
+            (-view.commit_scroll_handle().unwrap().offset().y.as_f32() - 40.0).abs() < 1.0,
+            "滚动位置必须恢复"
+        );
+        assert!(view.commit_filter().is_empty(), "过滤必须清除");
+    });
 }
