@@ -49,6 +49,9 @@ pub(crate) mod cli;
 // ghost/popup 呈现与按键接线归终端视图;引擎本体在 slterm_completions。
 #[allow(dead_code)] // 消费点归终端输入路径。
 pub(crate) mod completion;
+// 诊断服务:健康快照、白名单材料、脱敏预览与原子导出。
+#[allow(dead_code)] // 消费点 = 诊断页复制/导出与自检接线。
+pub(crate) mod diagnostics;
 // frecency 目录智能:LearningService 快照供 cd 补全与目录 ghost 使用。
 #[allow(dead_code)] // 消费点归 ghost/path 来源。
 pub(crate) mod directory_history;
