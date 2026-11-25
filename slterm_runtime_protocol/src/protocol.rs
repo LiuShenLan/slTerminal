@@ -731,6 +731,12 @@ pub struct ProjectReorderRequest {
 #[serde(deny_unknown_fields)]
 pub struct ProjectRemoveRequest {
     pub project_id: String,
+    /// 项目范围内 Document 的处置策略；缺省时脏 Document 触发 `decision_required`。
+    #[serde(default)]
+    pub documents: Option<CloseDocumentsPolicy>,
+    /// 项目 Hooks 草稿的处置策略；缺省时草稿触发 `decision_required`。
+    #[serde(default)]
+    pub hooks: Option<CloseHooksPolicy>,
 }
 
 pub type ProjectActivateParams = MutationParams<ProjectActivateRequest>;

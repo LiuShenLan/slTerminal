@@ -495,6 +495,8 @@ fn project_methods_require_idempotency_envelope_and_project_identity() {
             RuntimeMethod::ProjectRemove,
             ProjectRemoveRequest {
                 project_id: project_id.to_owned(),
+                documents: None,
+                hooks: None,
             },
         ),
     ] {
@@ -1187,6 +1189,40 @@ fn panel_close_validates_view_and_disposition() {
         assert!(
             parse_client_request(invalid.to_string().as_bytes()).is_err(),
             "非法 panel.close 请求必须拒绝: {invalid}"
+        );
+    }
+}
+
+#[test]
+fn project_remove_accepts_explicit_close_dispositions() {
+    for (documents, hooks) in [(Some("save"), None), (Some("discard"), Some("discard"))] {
+        let request = RuntimeRequest::new(
+            JsonRpcId::Number(38),
+            RuntimeMethod::ProjectRemove,
+            serde_json::json!({
+                "client_id": "c",
+                "mutation_id": "m-remove",
+                "expected_revision": null,
+                "request": {"project_id": "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b", "documents": documents, "hooks": hooks},
+            }),
+        );
+        match parse_client_request(&serde_json::to_vec(&request).unwrap()).unwrap() {
+            ClientRequest::Runtime(parsed) => {
+                assert_eq!(parsed.method, RuntimeMethod::ProjectRemove)
+            }
+            other => panic!("project.remove 必须解析为 Runtime 请求: {other:?}"),
+        }
+    }
+    // 缺省策略字段保持可解析，由服务端在执行前决定是否需要 decision_required。
+    let absent = serde_json::json!({"jsonrpc":"2.0","id":1,"method":"project.remove","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"project_id":"018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b"}}});
+    assert!(parse_client_request(absent.to_string().as_bytes()).is_ok());
+    for invalid in [
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"project.remove","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"project_id":"018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b","documents":"force"}}}),
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"project.remove","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"project_id":"018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b","hooks":"save"}}}),
+    ] {
+        assert!(
+            parse_client_request(invalid.to_string().as_bytes()).is_err(),
+            "非法项目移除策略必须拒绝: {invalid}"
         );
     }
 }

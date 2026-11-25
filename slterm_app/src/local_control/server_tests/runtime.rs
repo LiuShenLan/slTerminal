@@ -537,6 +537,62 @@ fn runtime_panel_close_routes_view_identity_and_disposition() {
 }
 
 #[test]
+fn runtime_project_remove_routes_explicit_close_dispositions() {
+    let mutations = Arc::new(AtomicUsize::new(0));
+    let mutations_by_callback = Arc::clone(&mutations);
+    let (mut server, _calls) = start_dual_scope_server_with_mutation(move |request| {
+        match &request.mutation {
+            crate::local_control::mutations::RuntimeMutation::ProjectRemove {
+                project_id,
+                documents,
+                hooks,
+            } => {
+                assert_eq!(
+                    project_id.to_string(),
+                    "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b"
+                );
+                assert_eq!(
+                    *documents,
+                    Some(slterm_runtime_protocol::CloseDocumentsPolicy::Save)
+                );
+                assert_eq!(
+                    *hooks,
+                    Some(slterm_runtime_protocol::CloseHooksPolicy::Discard)
+                );
+            }
+            other => panic!("意外写意图: {other:?}"),
+        }
+        mutations_by_callback.fetch_add(1, Ordering::SeqCst);
+        Ok(OperationResource {
+            operation_id: "operation-project-remove".to_owned(),
+            status: OperationStatus::Succeeded,
+            result: Some(serde_json::json!({})),
+            error: None,
+        })
+    });
+    let mut stream = connect(&server);
+    stream.set_read_timeout(Some(TEST_TIMEOUT)).unwrap();
+    write_json(
+        &mut stream,
+        &hello_scoped("sk-test-runtime", ControlScope::Runtime),
+    );
+    assert!(read_line(&mut stream).contains("store"));
+
+    write_json(
+        &mut stream,
+        &RuntimeRequest::new(
+            JsonRpcId::Number(74),
+            RuntimeMethod::ProjectRemove,
+            serde_json::json!({"client_id":"c","mutation_id":"m-remove","expected_revision":null,"request":{"project_id":"018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b","documents":"save","hooks":"discard"}}),
+        ),
+    );
+    let reply: serde_json::Value = serde_json::from_str(&read_line(&mut stream)).unwrap();
+    assert_eq!(reply["result"]["status"], "succeeded");
+    assert_eq!(mutations.load(Ordering::SeqCst), 1);
+    server.shutdown().unwrap();
+}
+
+#[test]
 fn runtime_terminal_input_and_execute_route_through_dispatcher() {
     let mutations = Arc::new(AtomicUsize::new(0));
     let mutations_by_callback = Arc::clone(&mutations);

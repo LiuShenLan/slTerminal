@@ -142,6 +142,69 @@ impl AppRoot {
         RuntimeMutationDispatch::Deferred
     }
 
+    /// 非交互项目移除：Hooks 草稿与项目范围 Document 都需要显式决定。
+    fn start_runtime_project_remove(
+        &mut self,
+        project_id: slterm_workspace::ProjectId,
+        documents: Option<slterm_runtime_protocol::CloseDocumentsPolicy>,
+        hooks: Option<slterm_runtime_protocol::CloseHooksPolicy>,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<(), JsonRpcError> {
+        if self.close_in_progress || self.application_close.is_some() || self.close_completed {
+            return Err(closing_error());
+        }
+        let views = self
+            .snapshot
+            .registry()
+            .project(project_id)
+            .map(|project| project.layout().view_keys())
+            .ok_or_else(invalid_request_error)?;
+        if self.hook_drafts.project_has_drafts(project_id) {
+            match hooks {
+                Some(slterm_runtime_protocol::CloseHooksPolicy::Discard) => {
+                    self.discard_project_hooks_drafts_for_close(project_id, cx);
+                }
+                None => return Err(decision_required_error()),
+            }
+        }
+        let mut decisions = std::collections::BTreeMap::new();
+        match documents {
+            Some(policy) => {
+                let decision = match policy {
+                    slterm_runtime_protocol::CloseDocumentsPolicy::Save => {
+                        slterm_workspace::CloseDecision::Save
+                    }
+                    slterm_runtime_protocol::CloseDocumentsPolicy::Discard => {
+                        slterm_workspace::CloseDecision::Discard
+                    }
+                };
+                for document_id in views.iter().filter_map(view_document_id) {
+                    if self
+                        .documents
+                        .session(document_id)
+                        .is_some_and(|session| session.is_dirty())
+                    {
+                        decisions.insert(document_id, decision);
+                    }
+                }
+            }
+            None => match self.collect_document_close_with_autosave(
+                &views,
+                &std::collections::BTreeMap::new(),
+                cx,
+            ) {
+                Ok(_) => {}
+                Err(slterm_workspace::DocumentCloseError::MissingDecision(_)) => {
+                    return Err(decision_required_error());
+                }
+                Err(_) => return Err(invalid_request_error()),
+            },
+        }
+        self.remove_project_with_decisions(project_id, decisions, window, cx)
+            .map_err(runtime_mutation_error)
+    }
+
     /// 单面板非交互关闭：只关闭目标视图，脏 Document 需要显式决定。
     fn start_runtime_panel_close(
         &mut self,
@@ -381,17 +444,11 @@ impl AppRoot {
                 )
                 .map(|_| ())
                 .map_err(runtime_mutation_error),
-            RuntimeMutation::ProjectRemove { project_id } => self
-                .execute_command(
-                    CommandId::RemoveProject,
-                    CommandSource::Application,
-                    CommandTarget::Project(project_id),
-                    None,
-                    window,
-                    cx,
-                )
-                .map(|_| ())
-                .map_err(runtime_mutation_error),
+            RuntimeMutation::ProjectRemove {
+                project_id,
+                documents,
+                hooks,
+            } => self.start_runtime_project_remove(project_id, documents, hooks, window, cx),
             RuntimeMutation::PanelGroupSplit {
                 view,
                 target_group,
@@ -971,6 +1028,16 @@ impl AppRoot {
             terminals,
             documents,
         })
+    }
+}
+
+/// 文本视图绑定的 Document；其他视图没有可保存内容。
+fn view_document_id(view: &ViewKey) -> Option<slterm_document::DocumentId> {
+    match view {
+        ViewKey::Editor { document_id, .. }
+        | ViewKey::Markdown { document_id, .. }
+        | ViewKey::Diff { document_id, .. } => Some(*document_id),
+        _ => None,
     }
 }
 

@@ -28,6 +28,8 @@ pub(crate) enum RuntimeMutation {
     },
     ProjectRemove {
         project_id: ProjectId,
+        documents: Option<CloseDocumentsPolicy>,
+        hooks: Option<CloseHooksPolicy>,
     },
     PanelGroupSplit {
         view: ViewKey,
@@ -200,9 +202,15 @@ impl RuntimeMutation {
                 "project_id": project_id.to_string(),
                 "new_index": new_index,
             })),
-            Self::ProjectRemove { project_id } => {
-                Ok(serde_json::json!({"project_id": project_id.to_string()}))
-            }
+            Self::ProjectRemove {
+                project_id,
+                documents,
+                hooks,
+            } => Ok(serde_json::json!({
+                "project_id": project_id.to_string(),
+                "documents": documents,
+                "hooks": hooks,
+            })),
             Self::PanelGroupSplit {
                 view,
                 target_group,

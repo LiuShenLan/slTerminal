@@ -1,6 +1,7 @@
 //! 项目移除：删除意图提交后停止所属 PTY，再清理项目事实并销毁运行实体。
 
 use gpui::{App, Context, Entity, Window};
+use slterm_document::DocumentId;
 use slterm_workspace::{
     CloseAttempt, CloseCoordinator, CloseDecision, CloseEffect, CloseIntent, CloseObject,
     ClosePhase, CloseScope, CloseStage, ProjectId, ProjectSnapshot,
@@ -22,6 +23,7 @@ pub(super) struct LocalProjectClose {
     pub(super) persisted: PersistedCloseIntent,
     pub(super) stop_observation: Option<PtyStopObservation>,
     pub(super) outcome_unknown: bool,
+    pub(super) window: gpui::AnyWindowHandle,
 }
 
 impl AppRoot {
@@ -29,6 +31,17 @@ impl AppRoot {
     pub(crate) fn remove_project(
         &mut self,
         id: ProjectId,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<(), AppRootError> {
+        self.remove_project_with_decisions(id, Default::default(), window, cx)
+    }
+
+    /// 带显式 Document 处置的项目移除；保存阶段先于删除意图提交。
+    pub(super) fn remove_project_with_decisions(
+        &mut self,
+        id: ProjectId,
+        document_decisions: std::collections::BTreeMap<DocumentId, CloseDecision>,
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Result<(), AppRootError> {
@@ -74,7 +87,7 @@ impl AppRoot {
         self.sync_focus(window, cx);
         let (candidate, _) = self.snapshot.without_project(id)?;
         let scope = CloseScope::Project { project_id: id };
-        let objects = self
+        let mut objects = self
             .snapshot
             .terminals()
             .filter(|terminal| terminal.project_id() == id)
@@ -84,6 +97,17 @@ impl AppRoot {
                 decision: CloseDecision::NotRequired,
             })
             .collect::<Vec<_>>();
+        let project_views = self
+            .snapshot
+            .registry()
+            .project(id)
+            .map(|project| project.layout().view_keys())
+            .unwrap_or_default();
+        objects.extend(self.collect_document_close_with_autosave(
+            &project_views,
+            &document_decisions,
+            cx,
+        )?);
         let close_id = uuid::Uuid::now_v7().to_string();
         let fingerprint = close_fingerprint(&close_id, &scope, &store_epoch, &objects);
         let intent =
@@ -113,10 +137,133 @@ impl AppRoot {
                 persisted: registration,
                 stop_observation: None,
                 outcome_unknown: false,
+                window: window.window_handle(),
             },
         );
-        self.start_project_commit(id, candidate, window, cx)?;
+        if self
+            .project_closes
+            .get(&id)
+            .is_some_and(|close| close.coordinator.phase() == ClosePhase::Running(CloseStage::Save))
+        {
+            self.start_project_save(id, cx);
+            return Ok(());
+        }
+        self.start_project_commit(id, candidate, window.window_handle(), cx)?;
         Ok(())
+    }
+
+    /// 项目移除的保存阶段：真实写盘与代次校验先于删除意图提交。
+    fn start_project_save(&mut self, id: ProjectId, cx: &mut Context<'_, Self>) {
+        let task_id = TaskId::ProjectClose(id);
+        if self.tasks.is_registered(task_id) {
+            return;
+        }
+        let Some((attempt, intent)) = self.project_closes.get(&id).and_then(|close| {
+            Some((
+                close.coordinator.current_attempt()?,
+                close.coordinator.intent()?.clone(),
+            ))
+        }) else {
+            return;
+        };
+        let grants = self.document_close_grants(&intent);
+        let prepared = crate::app_shell::document_close::prepare_document_save_stage(
+            &mut self.documents,
+            &intent,
+            &grants,
+            0,
+        );
+        let pending = prepared
+            .requests
+            .iter()
+            .map(|request| (request.document_id(), request.save_generation()))
+            .collect::<Vec<_>>();
+        let executor = cx.background_executor().clone();
+        let registration = self
+            .tasks
+            .register_with(task_id, CancellationToken::new(), move || {
+                let save = executor.spawn(async move {
+                    let writes = crate::app_shell::document_close::execute_document_save_writes(
+                        prepared.requests,
+                        &grants,
+                        0,
+                    );
+                    (prepared.failures, writes)
+                });
+                cx.spawn(async move |this, cx| {
+                    let (failures, writes) = save.await;
+                    let _ = this.update(cx, |root, cx| {
+                        root.finish_project_save(id, attempt, failures, writes, cx);
+                    });
+                })
+            });
+        if registration.is_err() {
+            for (document_id, generation) in pending {
+                let _ = self.documents.fail_save(document_id, generation);
+            }
+            self.fail_project_close_outcome_unknown(id, attempt);
+        }
+    }
+
+    fn finish_project_save(
+        &mut self,
+        id: ProjectId,
+        attempt: CloseAttempt,
+        failures: Vec<crate::app_shell::document_close::DocumentSaveFailure>,
+        writes: Vec<crate::app_shell::document_close::DocumentSaveWriteOutcome>,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(close) = self.project_closes.get(&id) else {
+            return;
+        };
+        if close.coordinator.current_attempt() != Some(attempt) {
+            return;
+        }
+        let intent = close.coordinator.intent().cloned();
+        let result = crate::app_shell::document_close::complete_document_save_stage(
+            &mut self.documents,
+            failures,
+            writes,
+        )
+        .and_then(|()| {
+            intent.as_ref().map_or(Ok(()), |intent| {
+                crate::app_shell::document_close::validate_document_close_generations(
+                    &self.documents,
+                    intent,
+                )
+            })
+        });
+        self.tasks.complete(TaskId::ProjectClose(id));
+        if let Err(failures) = result {
+            if let Some(close) = self.project_closes.get_mut(&id) {
+                let _ = close.coordinator.fail(attempt);
+            }
+            log::warn!("项目移除前的 Document 保存失败: {} 项", failures.len());
+            super::events::notify_document_save_error(
+                &crate::text_document::SaveError::Io(std::io::Error::other(
+                    "项目移除前的文档保存失败",
+                )),
+                cx,
+            );
+            cx.notify();
+            return;
+        }
+        let Some(close) = self.project_closes.get_mut(&id) else {
+            return;
+        };
+        if close.coordinator.save_succeeded(attempt).is_err() {
+            self.fail_project_close_outcome_unknown(id, attempt);
+            return;
+        }
+        let Some(window) = self.project_closes.get(&id).map(|close| close.window) else {
+            return;
+        };
+        let Ok((candidate, _)) = self.snapshot.without_project(id) else {
+            return;
+        };
+        if let Err(error) = self.start_project_commit(id, candidate, window, cx) {
+            log::warn!("项目移除提交无法开始: {error}");
+        }
     }
 
     fn retry_project_close(
@@ -142,7 +289,7 @@ impl AppRoot {
         &mut self,
         id: ProjectId,
         candidate: ProjectSnapshot,
-        window: &mut Window,
+        window: gpui::AnyWindowHandle,
         cx: &mut Context<'_, Self>,
     ) -> Result<(), AppRootError> {
         let (writer, registration, attempt) = {
@@ -171,7 +318,6 @@ impl AppRoot {
                 return Err(AppRootError::ProjectCloseWriter(error));
             }
         };
-        let window = window.window_handle();
         let executor = cx.background_executor().clone();
         let registration = self.tasks.register_with(
             TaskId::ProjectClose(id),
@@ -352,6 +498,10 @@ impl AppRoot {
             return Ok(());
         };
         match close.coordinator.phase() {
+            ClosePhase::Running(CloseStage::Save) => {
+                self.start_project_save(id, cx);
+                Ok(())
+            }
             ClosePhase::Running(CloseStage::StopPty) => {
                 if close.stop_observation.is_some() {
                     self.start_project_advance(id, CloseCommitStatus::PtyStopped, cx);

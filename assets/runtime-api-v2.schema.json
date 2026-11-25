@@ -101,6 +101,21 @@
         "methods"
       ]
     },
+    "CloseDocumentsPolicy": {
+      "description": "关闭集合中 Document 的处置策略。",
+      "type": "string",
+      "enum": [
+        "save",
+        "discard"
+      ]
+    },
+    "CloseHooksPolicy": {
+      "description": "非交互关闭可用的 Hooks 草稿处置；保存需要交互确认，不在线缆内。",
+      "type": "string",
+      "enum": [
+        "discard"
+      ]
+    },
     "ControlScope": {
       "description": "Runtime 与 handover 使用独立授权的同名作用域。",
       "type": "string",
@@ -1473,6 +1488,30 @@
     "ProjectRemoveRequest": {
       "type": "object",
       "properties": {
+        "documents": {
+          "description": "项目范围内 Document 的处置策略；缺省时脏 Document 触发 `decision_required`。",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CloseDocumentsPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "hooks": {
+          "description": "项目 Hooks 草稿的处置策略；缺省时草稿触发 `decision_required`。",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CloseHooksPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "project_id": {
           "type": "string"
         }

@@ -14,6 +14,7 @@ use gpui::{
 use gpui_component::ActiveTheme as _;
 use gpui_component::input::Input;
 use slterm_agents::AgentKind;
+use slterm_workspace::ProjectId;
 
 use super::AppRoot;
 use super::settings_overlay::SettingsView;
@@ -511,6 +512,20 @@ impl AppRoot {
     }
 
     /// 丢弃：移除草稿与文档后重新载入磁盘现状。
+    /// 非交互项目移除前丢弃该项目草稿：只清内存，不再发起重载。
+    pub(super) fn discard_project_hooks_drafts_for_close(
+        &mut self,
+        project: ProjectId,
+        cx: &mut Context<'_, Self>,
+    ) {
+        for key in self.hook_drafts.clear_project(project) {
+            self.hooks_editor.documents.remove(&key);
+            self.hooks_editor.errors.remove(&key);
+        }
+        self.hooks_generation = self.hooks_generation.wrapping_add(1);
+        cx.notify();
+    }
+
     /// 非交互应用关闭前丢弃全部草稿：只清内存，不再发起重载。
     pub(super) fn discard_all_hooks_drafts_for_close(&mut self, cx: &mut Context<'_, Self>) {
         for key in self.hook_drafts.keys() {

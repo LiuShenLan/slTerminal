@@ -11,6 +11,8 @@
 - **面板身份与布局参数**：Panel 与 PanelGroup 方法不暴露运行期 `PanelId`；视图身份使用规范 ViewKey JSON 文本，组身份使用稳定 `PanelGroupId` 文本。拆分参数带封闭方向、比例与逻辑视口；resize 带从根到分割节点的布尔路径。原因：PanelId 不属于持久身份，暴露后客户端可伪造运行实例。边界：路径、项目归属、空组与几何约束由 application 的布局转换裁定，schema 只保证结构与非空/有限值。
 - **应用聚焦与关闭**：`app.focus` 无参数；`app.close` 携带可选 `documents`（`save｜discard`）与 `hooks`（仅 `discard`，保存需要交互确认，不在线缆内）。两者都是写方法（结果 `OperationResource`）。缺少策略且存在脏 Document 或 Hooks 草稿时返回 `decision_required`，由调用方以新 `mutation_id` 重试；服务端不得弹模态或自动丢弃。原因：非交互关闭必须由调用方作出显式决定。边界：真实保存、关闭协调与最终退出由 application 复用 CloseCoordinator；`app.close` 的成功表示关闭已被接受并开始推进，进程退出与连接断开仍可能发生。
 
+- **项目移除策略**：`project.remove` 在 `project_id` 之外携带可选 `documents`（`save｜discard`）与 `hooks`（`discard`）。项目范围内最后引用的脏 Document 或 Hooks 草稿缺少策略时返回 `decision_required`；缺省字段仍可解析，由服务端在执行前判定。原因：非交互移除不得静默丢弃正文或草稿。边界：保存、关闭协调与项目事实删除由 application 复用 CloseCoordinator；`hooks` 的保存仍需交互确认，不在线缆内。
+
 - **面板打开、保存与关闭**：`panel.open_file` 携带绝对 `path`，`panel.save` 与 `panel.close` 携带规范 ViewKey JSON 文本；三者都是写方法（结果 `OperationResource`）。`panel.close` 另带可选 `documents`（`save｜discard`），关闭最后引用的脏 Document 而缺少策略时返回 `decision_required`。`panel.open_file` 只接受可应用内编辑且落在既有项目根内的路径，`panel.save` 只接受 `editor｜markdown` 视图绑定的 Document。原因：Runtime 不得隐式创建项目，也不得另建打开或保存通道。边界：路径授权、类型判定与真实打开/保存由 application 复用同一 Document 链与保存链；完成回执必须在打开或写盘落定后发送，失败不伪装成功。
 
 - **终端输入与执行**：`terminal.input` 携带 `terminal_id + generation + data`，`data` 必须原样写入 PTY，不追加回车；`terminal.execute` 只接受单行命令（拒绝 `\0`、`\r`、`\n`）并由服务端追加一次回车。两者都以稳定 `TerminalId` 文本与 PTY 代次定位，`generation` 必须大于零。原因：原始输入与显式执行是两种语义，自动补回车必须且只能由 execute 承担。边界：schema 只保证结构、非空与代次范围；终端身份解析、运行意图与代次匹配由 application 裁定；不得把 execute 建模为键盘事件序列。

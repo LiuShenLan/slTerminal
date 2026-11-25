@@ -954,8 +954,13 @@ fn handle_connection<F>(
                             params.client_id,
                             params.mutation_id,
                             params.expected_revision,
-                            parse_project_id(&params.request.project_id)
-                                .map(|project_id| RuntimeMutation::ProjectRemove { project_id }),
+                            parse_project_id(&params.request.project_id).map(|project_id| {
+                                RuntimeMutation::ProjectRemove {
+                                    project_id,
+                                    documents: params.request.documents,
+                                    hooks: params.request.hooks,
+                                }
+                            }),
                         )
                     }
                     RuntimeMethod::PanelGroupSplit => {
