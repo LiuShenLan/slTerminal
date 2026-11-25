@@ -45,6 +45,9 @@ pub(crate) mod agent_env;
 pub(crate) mod agent_root_service;
 pub mod brand;
 pub(crate) mod cli;
+// 清理服务:所有者候选、活跃代次排除与逐项审计。
+#[allow(dead_code)] // 消费点 = 诊断/清理页的计划与执行接线。
+pub(crate) mod cleanup;
 // 补全应用层:Session/Request 分层、来源缓存与后台计算。
 // ghost/popup 呈现与按键接线归终端视图;引擎本体在 slterm_completions。
 #[allow(dead_code)] // 消费点归终端输入路径。
