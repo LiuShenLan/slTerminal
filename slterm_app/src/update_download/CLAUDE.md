@@ -16,7 +16,7 @@
 ## 验收与测试
 
 - 定向测试：`cargo test -p slterm --test lib_tests <filter> -- --test-threads=1`；禁止 `--lib` 或裸 filter 直打默认 lib target。
-- 必测面：校验链、代次失配、文件机 commit/cancel 与孤儿恢复、restore ticket 尝试次数与防重放、安装目录归属判定。
+- 必测面：校验链（`update_asset_validation_rejects_mismatch`）、代次失配、文件机 commit/cancel 与孤儿恢复、restore ticket 尝试次数与防重放、安装目录归属判定。
 - `fake_release_server_full_chain_rehearsal_is_green` 覆盖发布链彩排；`update-test-source` 提供隔离彩排通道。
 - 真实 setup.exe 覆盖安装与提权链由构建产物人工验收，边界见 `.claude/docs/testing/exemptions.md`。
 

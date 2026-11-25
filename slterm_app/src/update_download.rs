@@ -777,6 +777,43 @@ mod update_download_tests {
         assert!(super::network_error_text(Error::StatusCode(503)).contains("HTTP 503"));
     }
 
+    /// 锚：架构或哈希不符的更新资产不安装不执行。
+    #[test]
+    fn update_asset_validation_rejects_mismatch() {
+        let names = crate::update_check::assets::native_names("1.6.0");
+        for name in [
+            "slTerminal-v1.6.0-windows-arm64-setup.exe",
+            "slTerminal-v1.6.0-windows-x64.zip",
+            "slTerminal-v1.6.0-linux-x64-setup.exe",
+        ] {
+            let mut asset = branded_asset();
+            asset.name = name.to_owned();
+            assert!(
+                validate_asset_contract(&asset, &names).is_err(),
+                "架构或安装形态不符必须拒绝: {name}"
+            );
+        }
+
+        // 哈希、长度或 PE 头不符都不进入安装。
+        let body = b"MZinstaller-wrapper";
+        let mut asset = branded_asset();
+        asset.size = Some(body.len() as u64);
+        asset.digest = Some("0".repeat(64));
+        assert!(
+            verify_download(body.len() as u64, b"MZ", Sha256::digest(body), &asset).is_err(),
+            "哈希不符不得进入安装"
+        );
+        asset.digest = Some(sha256(body));
+        assert!(
+            verify_download(body.len() as u64 + 1, b"MZ", Sha256::digest(body), &asset).is_err(),
+            "长度不符不得进入安装"
+        );
+        assert!(
+            verify_download(body.len() as u64, b"PK", Sha256::digest(body), &asset).is_err(),
+            "非 Windows PE 不得进入安装"
+        );
+    }
+
     #[test]
     fn accepts_exact_official_asset_contract() {
         let url = "https://github.com/LiuShenLan/slTerminal/releases/download/v1.4.0/slTerminal-v1.4.0-windows-x64-setup.exe";
