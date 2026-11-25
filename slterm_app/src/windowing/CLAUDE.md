@@ -10,11 +10,12 @@
 - **HWND 单源**：开窗时 `publish_window` 发布句柄；任务栏闪烁/进度与全局退出确认框 owner 只经 `window_hwnd` 查询。虚拟窗口无原生句柄 → None；测试与 GPUI 已退出兜底按空 owner 处理，正常生产关窗必须携带仍存活主窗。
 - **托盘退出**：托盘命令只经 AppRoot 壳事件入口触发关窗；不得另建绕过统一关闭链的退出入口。
 - **静默启动窗口形态**：首窗 `show=false`/`focus=false` 创建，不进入 present-then-show；托盘「显示」经本 facade 的 GPUI `activate_window` 消费首窗 placement 完成曝光 + 前台化。显式 CLI 目录启动恒不静默。
+- **窗口几何单点**：`geometry::WindowGeometry` 是按机器持久化的窗口尺寸、位置、最大化与保存时显示器工作区；`restored_bounds` 把几何夹回当前可见工作区，保存显示器已移除时落到主显示器，DPI 或工作区缩小后整窗仍完整可达。恢复只在开窗前使用，运行变化经 AppRoot 观察去抖保存。原因：窗口几何必须跨会话一致，且不同机器的显示器布局互不适用。边界：不做第二套几何序列化或显示器枚举；全屏按最大化意图保存；无显示器信息时回退默认尺寸。
 
 ## 验收与测试
 
 - 定向测试：`cargo test -p slterm --test lib_tests <filter> -- --test-threads=1`；禁止 `--lib` 或裸 filter 直打默认 lib target。
-- 必测面：`minimized_window_restores_before_foregrounding`、`win32_focus_calls_only_live_in_the_facade`、AppRoot 通知回窗与所属面板激活、壳事件泵排水。
+- 必测面：`minimized_window_restores_before_foregrounding`、`win32_focus_calls_only_live_in_the_facade`、`windows_geometry_clamped_to_work_area`、AppRoot 通知回窗与所属面板激活、壳事件泵排水。
 - 真实窗口还原/前置与视觉前台化由构建产物人工 smoke 兜底，边界见 `.claude/docs/testing/exemptions.md`。
 
 ## 操作

@@ -157,7 +157,7 @@ pub(crate) fn run(error: WorkspaceWriterError) -> ShellRunOutcome {
         .with_quit_mode(gpui::QuitMode::LastWindowClosed);
     application.run(move |cx| {
         init_diagnostic(cx);
-        let mut options = super::windowing::workspace_window_options(cx, true);
+        let mut options = super::windowing::workspace_window_options(cx, true, None);
         let deferred_show = crate::platform::startup::first_frame::defer_show(&mut options);
         let result = cx.open_window(options, move |window, cx| {
             window.set_window_title(crate::brand::NAME);

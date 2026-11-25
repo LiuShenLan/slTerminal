@@ -205,6 +205,9 @@ fn wait_for_failure(writer: &WorkspaceWriter) -> Option<ViewStateWriteFailure> {
             Some(WorkspaceWriteFailure::SidebarState(_)) => {
                 panic!("ViewState 测试不得收到侧栏组织状态失败")
             }
+            Some(WorkspaceWriteFailure::WindowGeometry(_)) => {
+                panic!("ViewState 测试不得收到窗口几何失败")
+            }
             None if Instant::now() < deadline => {
                 std::thread::sleep(Duration::from_millis(10));
             }
@@ -1243,6 +1246,114 @@ fn workspace_writer_failure_isolated_to_one_view_key() {
     );
     assert_eq!(read_position(&observer), Some((8, 1)));
     assert_eq!(read_position_for(&observer, &explorer), Some((21, 1)));
+}
+
+fn geometry_at(x: f32) -> crate::windowing::geometry::WindowGeometry {
+    crate::windowing::geometry::WindowGeometry {
+        x,
+        y: 40.0,
+        width: 1000.0,
+        height: 700.0,
+        maximized: false,
+        display: None,
+    }
+}
+
+fn wait_for_window_geometry(
+    store: &WorkspaceDatabase,
+    machine_key: &str,
+) -> Option<crate::windowing::geometry::WindowGeometry> {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let current = store.window_geometry(machine_key).unwrap();
+        if current.is_some() || Instant::now() >= deadline {
+            return current;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// 窗口几何只写最新版本，且在 500 毫秒去抖到期前不落盘。
+#[test]
+fn workspace_writer_debounces_window_geometry_to_latest() {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = fixture(&temp);
+    let observer = WorkspaceDatabase::open(&paths).unwrap();
+    let writer = WorkspaceWriter::start(paths).unwrap();
+    let client = writer.client();
+
+    assert_eq!(WINDOW_GEOMETRY_DEBOUNCE, Duration::from_millis(500));
+    for x in [100.0, 200.0, 300.0] {
+        client
+            .save_window_geometry("machine-a", &geometry_at(x))
+            .unwrap();
+    }
+    assert!(
+        observer.window_geometry("machine-a").unwrap().is_none(),
+        "窗口几何去抖到期前不得写盘"
+    );
+
+    let restored = wait_for_window_geometry(&observer, "machine-a").expect("去抖到期后必须写盘");
+    assert_eq!(restored.x, 300.0);
+    assert_eq!(writer.flush().unwrap(), WorkspaceFlushReport::default());
+    writer.shutdown().unwrap();
+}
+
+/// 窗口几何写失败保留最新副本，后续 flush 重试成功。
+#[test]
+fn window_geometry_save_failure_retains_latest() {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = fixture(&temp);
+    let mut observer = WorkspaceDatabase::open(&paths).unwrap();
+    observer
+        .save_window_geometry("machine-a", &geometry_at(50.0))
+        .unwrap();
+    let writer = WorkspaceWriter::start(paths).unwrap();
+    let client = writer.client();
+    observer
+        .database
+        .connection
+        .execute_batch(
+            "CREATE TRIGGER reject_window_geometry_write BEFORE UPDATE ON window_geometry \
+             BEGIN SELECT RAISE(ABORT, 'injected write failure'); END;",
+        )
+        .unwrap();
+
+    client
+        .save_window_geometry("machine-a", &geometry_at(400.0))
+        .unwrap();
+    assert_eq!(
+        writer.flush().unwrap(),
+        WorkspaceFlushReport {
+            written: 0,
+            failed: 1,
+        }
+    );
+    assert!(matches!(
+        writer.try_recv_failure(),
+        Some(WorkspaceWriteFailure::WindowGeometry(_))
+    ));
+    assert_eq!(
+        observer.window_geometry("machine-a").unwrap().unwrap().x,
+        50.0
+    );
+
+    observer
+        .database
+        .connection
+        .execute_batch("DROP TRIGGER reject_window_geometry_write")
+        .unwrap();
+    assert_eq!(
+        writer.shutdown().unwrap(),
+        WorkspaceFlushReport {
+            written: 1,
+            failed: 0,
+        }
+    );
+    assert_eq!(
+        observer.window_geometry("machine-a").unwrap().unwrap().x,
+        400.0
+    );
 }
 
 /// 未显式 shutdown 时，Drop 仍先冲刷待写状态并回收线程。

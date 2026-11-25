@@ -650,11 +650,7 @@ fn settings_overlay_explains_the_unusable_tray_fallback(cx: &mut TestAppContext)
     windows.set_tray_available(false);
     root.update(cx, |root, cx| {
         root.replace_windows_for_test(windows.clone());
-        root.apply_settings_field(
-            "silent_start",
-            slterm_settings::json::Value::Bool(true),
-            cx,
-        );
+        root.apply_settings_field("silent_start", slterm_settings::json::Value::Bool(true), cx);
         root.apply_settings_field("tray", slterm_settings::json::Value::Bool(true), cx);
     });
     focus_workspace(&root, &mut window);
@@ -680,6 +676,53 @@ fn settings_overlay_explains_the_unusable_tray_fallback(cx: &mut TestAppContext)
     assert!(
         window.debug_bounds("settings-field-tray-actual").is_some(),
         "托盘不可用时托盘字段必须说明"
+    );
+}
+
+/// 材质不支持：档位置灰不可点，当前不支持档位显示回退说明。
+#[gpui::test]
+fn settings_overlay_disables_unsupported_window_material(cx: &mut TestAppContext) {
+    let (root, mut window, _state) = open_root(cx);
+    let windows = std::sync::Arc::new(
+        crate::platform::windows_integration::FakeWindowsIntegration::default(),
+    );
+    windows.set_blur_support(crate::platform::material::BlurSupport::NoneFallback);
+    root.update(cx, |root, cx| {
+        root.replace_windows_for_test(windows.clone());
+        root.apply_settings_field(
+            "blur",
+            slterm_settings::json::Value::String("mica".to_owned()),
+            cx,
+        );
+    });
+    focus_workspace(&root, &mut window);
+    open_settings(&mut window);
+    draw_frame(&mut window);
+
+    assert!(
+        window.debug_bounds("settings-field-blur-actual").is_some(),
+        "不支持档位必须显示说明"
+    );
+    let mica = window
+        .debug_bounds("settings-choice-blur-mica")
+        .expect("mica 档位必须渲染");
+    window.simulate_click(mica.center(), Modifiers::default());
+    draw_frame(&mut window);
+    assert_eq!(
+        root.read_with(cx, |root, _| root.settings.runtime().blur),
+        slterm_settings::BlurMode::Mica,
+        "禁用档位不得被点击改写"
+    );
+
+    // 可用档位仍可正常切换。
+    let aero = window
+        .debug_bounds("settings-choice-blur-aero")
+        .expect("aero 档位必须渲染");
+    window.simulate_click(aero.center(), Modifiers::default());
+    draw_frame(&mut window);
+    assert_eq!(
+        root.read_with(cx, |root, _| root.settings.runtime().blur),
+        slterm_settings::BlurMode::Aero
     );
 }
 

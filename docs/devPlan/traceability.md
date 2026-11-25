@@ -193,7 +193,7 @@
 | 验收场景 | 目标测试例名 | 状态 |
 |---|---|---|
 | 托盘启用时关窗与托盘退出都走统一关闭 | `close_flush_success_closes_window_and_marks_clean_shutdown`、`close_flush_failure_keeps_window_and_allows_retry`、`application_global_close_commits_clean_shutdown_before_window_destroy` | 已自动化 |
-| 移除显示器后窗口夹回可见工作区 | `windows_geometry_clamped_to_work_area` | 待实现 |
+| 移除显示器后窗口夹回可见工作区 | `windows_geometry_clamped_to_work_area` | 已自动化 |
 | 架构或哈希不符的更新资产不安装不执行 | `update_asset_validation_rejects_mismatch` | 待实现 |
 | 更新安装前先完成脏 Document 关闭守卫 | `update_install_uses_close_guard` | 待实现 |
 | 桌面通知与任务栏闪烁独立判定 | `notification_and_taskbar_switches_independent` | 待实现 |

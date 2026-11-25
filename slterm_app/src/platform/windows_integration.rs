@@ -5,6 +5,10 @@
 
 use std::path::{Path, PathBuf};
 
+use slterm_settings::BlurMode;
+use slterm_settings::json::Value;
+
+use crate::platform::material::BlurSupport;
 use crate::platform::startup::{self, LoginStartState};
 
 /// application 访问 Windows 集成能力的唯一端口。
@@ -22,6 +26,9 @@ pub(crate) trait WindowsIntegration: Send + Sync {
 
     /// 写入开机启动项；失败原样上抛。
     fn set_login_start(&self, enabled: bool) -> std::io::Result<()>;
+
+    /// 窗口材质在当前系统的实际形态；不支持时设置页禁用并说明。
+    fn blur_support(&self, mode: BlurMode) -> BlurSupport;
 
     /// 设置值与 Windows 实际启动项的对账报告。
     fn login_start_report(&self, setting_enabled: bool) -> LoginStartReport {
@@ -89,16 +96,19 @@ pub(crate) enum IntegrationNote {
     LoginStartEnabledButOff,
     /// 托盘不可用：静默驻留会回退为显示窗口。
     TrayUnavailable,
+    /// 材质在当前系统以经典模糊近似。
+    BlurFallback,
+    /// 材质在当前系统不生效：档位已禁用。
+    BlurUnsupported,
 }
 
-/// 按设置字段与端口的实际事实生成说明；一致或无关字段返回 None。
-///
-/// `setting_enabled` 是该字段当前运行值，不是 Windows 事实。
+/// 按设置字段的当前值与端口事实生成说明；一致或无关字段返回 None。
 pub(crate) fn settings_note(
     key: &str,
-    setting_enabled: bool,
+    setting: Option<&Value>,
     windows: &dyn WindowsIntegration,
 ) -> Option<IntegrationNote> {
+    let setting_enabled = matches!(setting, Some(Value::Bool(true)));
     match key {
         "launch_at_login" => {
             let report = windows.login_start_report(setting_enabled);
@@ -121,8 +131,31 @@ pub(crate) fn settings_note(
         "silent_start" | "tray" if setting_enabled && !windows.tray_available() => {
             Some(IntegrationNote::TrayUnavailable)
         }
+        "blur" => {
+            let mode = match setting {
+                Some(Value::String(value)) => BlurMode::from_settings(value)?,
+                _ => BlurMode::None,
+            };
+            match windows.blur_support(mode) {
+                BlurSupport::Native => None,
+                BlurSupport::BlurredFallback => Some(IntegrationNote::BlurFallback),
+                BlurSupport::NoneFallback => Some(IntegrationNote::BlurUnsupported),
+            }
+        }
         _ => None,
     }
+}
+
+/// 设置页选项是否可选：不支持的材质档位明确禁用，不宣称静默生效。
+pub(crate) fn choice_is_selectable(
+    key: &str,
+    option: &str,
+    windows: &dyn WindowsIntegration,
+) -> bool {
+    if key != "blur" {
+        return true;
+    }
+    BlurMode::from_settings(option).is_none_or(|mode| windows.blur_support(mode).is_selectable())
 }
 
 /// 生产实现：委托托盘与登录启动平台模块。
@@ -143,6 +176,10 @@ impl WindowsIntegration for SystemWindowsIntegration {
 
     fn set_login_start(&self, enabled: bool) -> std::io::Result<()> {
         startup::set_launch_at_login(enabled)
+    }
+
+    fn blur_support(&self, mode: BlurMode) -> BlurSupport {
+        crate::platform::material::blur_support(mode)
     }
 }
 
@@ -210,21 +247,27 @@ mod tests {
 
         // 实际与设置一致：不产生说明。
         windows.set_actual_state(LoginStartState::Disabled);
-        assert_eq!(settings_note("launch_at_login", false, &windows), None);
+        assert_eq!(
+            settings_note("launch_at_login", Some(&Value::Bool(false)), &windows),
+            None
+        );
         windows.set_actual_state(LoginStartState::Enabled);
-        assert_eq!(settings_note("launch_at_login", true, &windows), None);
+        assert_eq!(
+            settings_note("launch_at_login", Some(&Value::Bool(true)), &windows),
+            None
+        );
 
         // 设置开启但启动项缺失。
         windows.set_actual_state(LoginStartState::Disabled);
         assert_eq!(
-            settings_note("launch_at_login", true, &windows),
+            settings_note("launch_at_login", Some(&Value::Bool(true)), &windows),
             Some(IntegrationNote::LoginStartMissing)
         );
 
         // 指向其他程序时带出真实目标。
         windows.set_actual_state(LoginStartState::OtherTarget(PathBuf::from("other.exe")));
         assert_eq!(
-            settings_note("launch_at_login", false, &windows),
+            settings_note("launch_at_login", Some(&Value::Bool(false)), &windows),
             Some(IntegrationNote::LoginStartOtherTarget(PathBuf::from(
                 "other.exe"
             )))
@@ -233,14 +276,14 @@ mod tests {
         // 读失败不伪造启用或禁用。
         windows.set_actual_state(LoginStartState::Unreadable);
         assert_eq!(
-            settings_note("launch_at_login", true, &windows),
+            settings_note("launch_at_login", Some(&Value::Bool(true)), &windows),
             Some(IntegrationNote::LoginStartUnreadable)
         );
 
         // 实际启用而应用设置关闭。
         windows.set_actual_state(LoginStartState::Enabled);
         assert_eq!(
-            settings_note("launch_at_login", false, &windows),
+            settings_note("launch_at_login", Some(&Value::Bool(false)), &windows),
             Some(IntegrationNote::LoginStartEnabledButOff)
         );
 
@@ -248,21 +291,69 @@ mod tests {
         windows.set_actual_state(LoginStartState::Disabled);
         windows.set_tray_available(false);
         assert_eq!(
-            settings_note("silent_start", true, &windows),
+            settings_note("silent_start", Some(&Value::Bool(true)), &windows),
             Some(IntegrationNote::TrayUnavailable)
         );
         assert_eq!(
-            settings_note("tray", true, &windows),
+            settings_note("tray", Some(&Value::Bool(true)), &windows),
             Some(IntegrationNote::TrayUnavailable)
         );
         windows.set_tray_available(true);
-        assert_eq!(settings_note("silent_start", true, &windows), None);
-        assert_eq!(settings_note("unrelated", true, &windows), None);
+        assert_eq!(
+            settings_note("silent_start", Some(&Value::Bool(true)), &windows),
+            None
+        );
+        assert_eq!(
+            settings_note("unrelated", Some(&Value::Bool(true)), &windows),
+            None
+        );
 
         // 托盘设置本身关闭不是「不可用」：用户主动关闭不产生故障说明。
         windows.set_tray_available(false);
-        assert_eq!(settings_note("tray", false, &windows), None);
-        assert_eq!(settings_note("silent_start", false, &windows), None);
+        assert_eq!(
+            settings_note("tray", Some(&Value::Bool(false)), &windows),
+            None
+        );
+        assert_eq!(
+            settings_note("silent_start", Some(&Value::Bool(false)), &windows),
+            None
+        );
+    }
+
+    /// 材质档位不支持时给出回退/禁用说明，选项明确不可选。
+    #[test]
+    fn blur_notes_follow_the_material_capability() {
+        let windows = FakeWindowsIntegration::default();
+        let mica = Value::String("mica".to_owned());
+        assert_eq!(settings_note("blur", Some(&mica), &windows), None);
+        assert!(choice_is_selectable("blur", "mica", &windows));
+
+        windows.set_blur_support(BlurSupport::BlurredFallback);
+        assert_eq!(
+            settings_note("blur", Some(&mica), &windows),
+            Some(IntegrationNote::BlurFallback)
+        );
+        assert!(
+            choice_is_selectable("blur", "mica", &windows),
+            "经典模糊仍可选"
+        );
+
+        windows.set_blur_support(BlurSupport::NoneFallback);
+        assert_eq!(
+            settings_note("blur", Some(&mica), &windows),
+            Some(IntegrationNote::BlurUnsupported)
+        );
+        assert!(
+            !choice_is_selectable("blur", "mica", &windows),
+            "不支持档位必须禁用"
+        );
+        assert!(choice_is_selectable("blur", "none", &windows));
+        assert!(choice_is_selectable("blur", "aero", &windows));
+        assert!(choice_is_selectable("font_size", "mica", &windows));
+
+        // 当前选择为 none 时无说明。
+        let none = Value::String("none".to_owned());
+        assert_eq!(settings_note("blur", Some(&none), &windows), None);
     }
 
     /// 设置值与真实端口写入分离：写入失败原样上抛，不吞掉也不改实际状态。
@@ -294,6 +385,7 @@ struct FakeState {
     tray_enabled: bool,
     login_start: Option<LoginStartState>,
     fail_writes: bool,
+    blur_support: BlurSupport,
 }
 
 #[cfg(test)]
@@ -305,6 +397,7 @@ impl Default for FakeState {
             tray_enabled: false,
             login_start: None,
             fail_writes: false,
+            blur_support: BlurSupport::Native,
         }
     }
 }
@@ -313,6 +406,11 @@ impl Default for FakeState {
 impl FakeWindowsIntegration {
     pub(crate) fn set_tray_available(&self, available: bool) {
         self.lock().tray_available = available;
+    }
+
+    /// 覆盖依赖系统 backdrop 的档位形态；None/Aero 始终原生可用。
+    pub(crate) fn set_blur_support(&self, support: BlurSupport) {
+        self.lock().blur_support = support;
     }
 
     pub(crate) fn set_actual_state(&self, state: LoginStartState) {
@@ -374,5 +472,12 @@ impl WindowsIntegration for FakeWindowsIntegration {
             LoginStartState::Disabled
         });
         Ok(())
+    }
+
+    fn blur_support(&self, mode: BlurMode) -> BlurSupport {
+        if matches!(mode, BlurMode::None | BlurMode::Aero) {
+            return BlurSupport::Native;
+        }
+        self.lock().blur_support
     }
 }

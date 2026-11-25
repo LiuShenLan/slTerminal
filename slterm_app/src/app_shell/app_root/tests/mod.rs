@@ -36,6 +36,7 @@ mod terminal_cwd;
 mod terminal_reconnect;
 mod terminal_restore;
 mod view_tasks;
+mod window_geometry;
 
 use std::borrow::Cow;
 use std::cell::RefCell;
@@ -70,6 +71,33 @@ use crate::gpui_terminal::view::{TerminalLaunch, TerminalView, TerminalViewEvent
 use crate::persistence::metadata::RunMarker;
 use crate::persistence::workspace::WorkspaceDatabase;
 use crate::persistence::workspace_writer::WorkspaceWriter;
+
+/// 启动恢复按机器读取窗口几何，只交付一次。
+#[test]
+fn startup_persistence_reads_the_machine_window_geometry() {
+    use crate::windowing::geometry::WindowGeometry;
+
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let geometry = WindowGeometry {
+        x: 123.0,
+        y: 45.0,
+        width: 900.0,
+        height: 640.0,
+        maximized: true,
+        display: None,
+    };
+    {
+        let mut store = WorkspaceDatabase::open(&paths).unwrap();
+        store
+            .save_window_geometry(&crate::platform::machine::machine_key(), &geometry)
+            .unwrap();
+    }
+
+    let mut persistence = AppRootPersistence::load(&paths, None);
+    assert_eq!(persistence.take_window_geometry(), Some(geometry));
+    assert_eq!(persistence.take_window_geometry(), None, "只交付一次");
+}
 
 use super::command_registry::{
     CommandId, CommandOutcome, CommandParameters, CommandRegistry, CommandSource, CommandTarget,

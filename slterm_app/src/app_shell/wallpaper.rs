@@ -17,8 +17,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 #[cfg(windows)]
-use std::sync::OnceLock;
-
 use gpui::{
     App, Bounds, Corners, IntoElement, ParentElement, Pixels, RenderImage, Styled, Window,
     WindowBackgroundAppearance, div, point, px, size,
@@ -332,7 +330,7 @@ pub(crate) fn initial_background_appearance(cx: &App) -> WindowBackgroundAppeara
 
 fn background_appearance(blur: BlurMode) -> WindowBackgroundAppearance {
     #[cfg(windows)]
-    let build = windows_build_number();
+    let build = crate::platform::material::windows_build_number();
     #[cfg(not(windows))]
     let build = u32::MAX;
     background_appearance_for(blur, build)
@@ -421,23 +419,6 @@ fn apply_window_effects(cx: &mut App) {
             windows: applied,
         });
     });
-}
-
-/// `GetVersionEx` 受应用兼容清单影响;RtlGetVersion 才能可靠判断公开的
-/// `DWMWA_SYSTEMBACKDROP_TYPE` 是否存在。缓存结果,热切换不重复进内核。
-#[cfg(windows)]
-fn windows_build_number() -> u32 {
-    static BUILD: OnceLock<u32> = OnceLock::new();
-    *BUILD.get_or_init(|| {
-        use windows_sys::Wdk::System::SystemServices::RtlGetVersion;
-        use windows_sys::Win32::System::SystemInformation::OSVERSIONINFOW;
-
-        // SAFETY: 输出结构按系统约定先写 Size;失败返回 0 走退化路径。
-        let mut info: OSVERSIONINFOW = unsafe { std::mem::zeroed() };
-        info.dwOSVersionInfoSize = std::mem::size_of_val(&info) as u32;
-        let status = unsafe { RtlGetVersion(&mut info) };
-        if status == 0 { info.dwBuildNumber } else { 0 }
-    })
 }
 
 /// 窗口材质落盘计划:把「平台 build / 材质档 / 系统 backdrop 是否可用」
@@ -635,7 +616,7 @@ fn apply_windows_accent_policy(
         true
     };
 
-    let build = windows_build_number();
+    let build = crate::platform::material::windows_build_number();
     let provisional = material_plan(blur, appearance, build, false);
     // 先移除旧 WCA 层;随后写入 DWM backdrop,最后按可用性决定是否叠加
     // AccentPolicy 兜底。

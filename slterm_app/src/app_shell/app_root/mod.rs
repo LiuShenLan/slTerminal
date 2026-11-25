@@ -44,6 +44,7 @@ mod task_service;
 mod terminal_close;
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod tests;
+mod window_geometry;
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, VecDeque};
@@ -207,6 +208,11 @@ pub(crate) struct AppRoot {
     runtime_events: Option<crate::local_control::RuntimeEventPublisher>,
     /// Windows 集成端口：设置页对账与平台副作用只经此访问。
     windows: std::sync::Arc<dyn crate::platform::windows_integration::WindowsIntegration>,
+    /// 本机窗口几何的最近值与去抖保存任务；无 writer 时只观察不写盘。
+    window_geometry: Option<crate::windowing::geometry::WindowGeometry>,
+    window_geometry_save_task: Option<gpui::Task<()>>,
+    window_geometry_subscription: Option<gpui::Subscription>,
+    machine_key: String,
     /// 最近一次 Explorer 根同步对应的快照代次；渲染只在差异时延迟接线。
     side_view_roots_generation: Option<u64>,
     project_writer: Option<WorkspaceWriterClient>,
@@ -497,6 +503,10 @@ impl AppRoot {
             snapshot_generation: 0,
             runtime_events,
             windows,
+            window_geometry: None,
+            window_geometry_save_task: None,
+            window_geometry_subscription: None,
+            machine_key: crate::platform::machine::machine_key(),
             side_view_roots_generation: None,
             project_writer,
             store_epoch,

@@ -289,6 +289,8 @@
       "ui_font_size": "Interface font size",
       "vcs_display": "Sidebar version control",
       "blur": "Window material",
+      "blur_fallback": "This system renders the selected material as classic blur.",
+      "blur_unsupported": "This system does not support the selected material; the option is disabled.",
       "background_color": "Background color",
       "theme_foreground": "Text color",
       "card_geometry": "Pane cards",

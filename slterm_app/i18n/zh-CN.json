@@ -289,6 +289,8 @@
       "ui_font_size": "界面字号",
       "vcs_display": "侧栏版本控制",
       "blur": "窗口材质",
+      "blur_fallback": "当前系统以经典模糊呈现所选材质。",
+      "blur_unsupported": "当前系统不支持所选材质：该档位已禁用。",
       "background_color": "背景色",
       "theme_foreground": "文字颜色",
       "card_geometry": "面板卡片",

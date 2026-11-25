@@ -451,6 +451,12 @@ impl SettingsView {
                         .map(|message| language.text(message))
                         .unwrap_or(option.value);
                     let pill_key = option.value;
+                    // 不受支持的材质档位不可选：不提供点击入口，不宣称静默生效。
+                    let disabled = !crate::platform::windows_integration::choice_is_selectable(
+                        key,
+                        option.value,
+                        &*self.windows,
+                    );
                     div()
                         .id(gpui::ElementId::Name(
                             format!("settings-choice-{key}-{pill_key}").into(),
@@ -462,7 +468,6 @@ impl SettingsView {
                         .rounded_md()
                         .border_1()
                         .text_xs()
-                        .cursor_pointer()
                         .border_color(if is_selected {
                             cx.theme().accent
                         } else {
@@ -474,12 +479,15 @@ impl SettingsView {
                             cx.theme().muted_foreground
                         })
                         .debug_selector(move || format!("settings-choice-{key}-{pill_key}"))
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |view, _, _, cx| {
-                                view.commit_field(key, value.clone(), cx)
-                            }),
-                        )
+                        .when(disabled, |pill| pill.opacity(0.4))
+                        .when(!disabled, |pill| {
+                            pill.cursor_pointer().on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |view, _, _, cx| {
+                                    view.commit_field(key, value.clone(), cx)
+                                }),
+                            )
+                        })
                         .child(label)
                 });
                 div()
@@ -577,11 +585,8 @@ impl SettingsView {
         };
         let invalid = self.invalid_fields.contains_key(key);
         // Windows 实际状态说明：设置值只表达意图，外部改动必须显形。
-        let note = crate::platform::windows_integration::settings_note(
-            key,
-            matches!(current, Some(Value::Bool(true))),
-            &*self.windows,
-        );
+        let note =
+            crate::platform::windows_integration::settings_note(key, current, &*self.windows);
         div()
             .py_1()
             .flex()
@@ -1118,5 +1123,7 @@ fn integration_note_message(
             (Message::SettingsAdvancedLoginStartEnabledButOff, None)
         }
         IntegrationNote::TrayUnavailable => (Message::SettingsAdvancedTrayUnavailable, None),
+        IntegrationNote::BlurFallback => (Message::SettingsAppearanceBlurFallback, None),
+        IntegrationNote::BlurUnsupported => (Message::SettingsAppearanceBlurUnsupported, None),
     }
 }

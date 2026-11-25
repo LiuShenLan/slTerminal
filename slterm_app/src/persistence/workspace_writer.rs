@@ -29,11 +29,14 @@ use super::project::ProjectStoreError;
 use super::sidebar::SidebarStateStoreError;
 use super::startup::{MaintenanceError, MaintenanceStage};
 use super::view_state::{ViewStateStoreError, remove_project_from_side_view_state};
+use super::window_geometry::WindowGeometryStoreError;
 use super::workspace::WorkspaceDatabase;
+use crate::windowing::geometry::WindowGeometry;
 use slterm_runtime_protocol::OperationStatus;
 
 const VIEW_STATE_DEBOUNCE: Duration = Duration::from_millis(500);
 const SIDEBAR_STATE_DEBOUNCE: Duration = Duration::from_millis(500);
+const WINDOW_GEOMETRY_DEBOUNCE: Duration = Duration::from_millis(500);
 const PROJECT_SNAPSHOT_DEBOUNCE: Duration = Duration::from_secs(2);
 const COMMAND_CAPACITY: usize = 64;
 
@@ -48,6 +51,7 @@ pub(crate) struct WorkspaceFlushReport {
 pub(crate) enum WorkspaceWriteFailure {
     ViewState(ViewStateWriteFailure),
     SidebarState(SidebarStateStoreError),
+    WindowGeometry(WindowGeometryStoreError),
     ProjectSnapshot(ProjectStoreError),
 }
 
@@ -184,6 +188,10 @@ enum Command {
     },
     SaveSidebarState {
         state: Box<SidebarState>,
+    },
+    SaveWindowGeometry {
+        machine_key: String,
+        geometry: Box<WindowGeometry>,
     },
     Flush {
         response: SyncSender<WorkspaceFlushReport>,
@@ -456,6 +464,23 @@ impl WorkspaceWriterClient {
             })
     }
 
+    /// 非阻塞提交最新窗口几何；同一机器只保留一个待写版本。
+    pub(crate) fn save_window_geometry(
+        &self,
+        machine_key: &str,
+        geometry: &WindowGeometry,
+    ) -> Result<(), WorkspaceWriterError> {
+        self.commands
+            .try_send(Command::SaveWindowGeometry {
+                machine_key: machine_key.to_owned(),
+                geometry: Box::new(*geometry),
+            })
+            .map_err(|error| match error {
+                TrySendError::Full(_) => WorkspaceWriterError::QueueFull,
+                TrySendError::Disconnected(_) => WorkspaceWriterError::Stopped,
+            })
+    }
+
     /// 非阻塞移交项目快照最终状态；只由 AppRoot 在退出时调用。
     pub(crate) fn save_final_project_snapshot(
         &self,
@@ -690,6 +715,12 @@ struct PendingSidebarState {
     due: Option<Instant>,
 }
 
+struct PendingWindowGeometry {
+    machine_key: String,
+    geometry: WindowGeometry,
+    due: Option<Instant>,
+}
+
 struct FinalStateReceivers {
     view_states: Receiver<(ViewKey, ViewState)>,
     sidebar_state: Receiver<SidebarState>,
@@ -700,6 +731,7 @@ struct FinalStateReceivers {
 struct PendingWrites {
     view_states: BTreeMap<String, PendingViewState>,
     sidebar_state: Option<PendingSidebarState>,
+    window_geometry: Option<PendingWindowGeometry>,
     project_snapshot: Option<PendingProjectSnapshot>,
 }
 
@@ -937,6 +969,16 @@ fn run(
                     due: Some(Instant::now() + SIDEBAR_STATE_DEBOUNCE),
                 });
             }
+            Command::SaveWindowGeometry {
+                machine_key,
+                geometry,
+            } => {
+                pending.window_geometry = Some(PendingWindowGeometry {
+                    machine_key,
+                    geometry: *geometry,
+                    due: Some(Instant::now() + WINDOW_GEOMETRY_DEBOUNCE),
+                });
+            }
             Command::Flush { response } => {
                 let report =
                     write_pending(&mut store, &mut pending, &failures, true, &final_states);
@@ -963,6 +1005,12 @@ fn next_wait(pending: &PendingWrites) -> Option<Duration> {
         .chain(
             pending
                 .sidebar_state
+                .as_ref()
+                .and_then(|pending| pending.due),
+        )
+        .chain(
+            pending
+                .window_geometry
                 .as_ref()
                 .and_then(|pending| pending.due),
         )
@@ -1085,6 +1133,35 @@ fn write_pending(
                 sidebar.due = None;
                 report.failed += 1;
                 let _ = failures.try_send(WorkspaceWriteFailure::SidebarState(error));
+            }
+        }
+    }
+
+    let geometry_ready = pending
+        .window_geometry
+        .as_ref()
+        .is_some_and(|pending| all || pending.due.is_some_and(|due| due <= now));
+    if geometry_ready {
+        let result = {
+            let geometry = pending
+                .window_geometry
+                .as_ref()
+                .expect("就绪窗口几何必须存在");
+            store.save_window_geometry(&geometry.machine_key, &geometry.geometry)
+        };
+        match result {
+            Ok(()) => {
+                pending.window_geometry = None;
+                report.written += 1;
+            }
+            Err(error) => {
+                let geometry = pending
+                    .window_geometry
+                    .as_mut()
+                    .expect("失败窗口几何必须保留");
+                geometry.due = None;
+                report.failed += 1;
+                let _ = failures.try_send(WorkspaceWriteFailure::WindowGeometry(error));
             }
         }
     }

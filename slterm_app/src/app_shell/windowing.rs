@@ -36,8 +36,22 @@ fn fit_to_display(
     ))
 }
 
-/// 窗口定形唯一函数。新根尚未恢复几何，统一使用终端网格基准尺寸。
-pub(crate) fn workspace_window_options(cx: &App, focus: bool) -> WindowOptions {
+/// 启动窗口边界：优先恢复本机几何并夹回可见工作区，否则按终端网格定形。
+fn startup_window_bounds(
+    cx: &App,
+    geometry: Option<crate::windowing::geometry::WindowGeometry>,
+) -> WindowBounds {
+    if let Some(geometry) = geometry {
+        let visible = cx
+            .displays()
+            .iter()
+            .map(|display| display.visible_bounds())
+            .collect::<Vec<_>>();
+        let primary = cx.primary_display().map(|display| display.visible_bounds());
+        if let Some(bounds) = geometry.restored_bounds(&visible, primary) {
+            return bounds;
+        }
+    }
     let fallback =
         startup_geometry::preferred_size(cx).unwrap_or_else(|| size(px(1080.0), px(720.0)));
     let preferred = fallback.max(&size(px(MIN_WINDOW_SIZE.0), px(MIN_WINDOW_SIZE.1)));
@@ -46,9 +60,22 @@ pub(crate) fn workspace_window_options(cx: &App, focus: bool) -> WindowOptions {
         cx.primary_display().map(|display| display.visible_bounds()),
     )
     .unwrap_or_else(|| Bounds::centered(None, preferred, cx));
+    WindowBounds::Windowed(bounds)
+}
+
+/// 窗口定形唯一函数：恢复几何经同一夹回规则后进入平台窗口。
+pub(crate) fn workspace_window_options(
+    cx: &App,
+    focus: bool,
+    geometry: Option<crate::windowing::geometry::WindowGeometry>,
+) -> WindowOptions {
+    let bounds = startup_window_bounds(cx, geometry);
+    let restore_size = bounds.get_bounds().size;
     WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(bounds)),
-        window_min_size: Some(size(px(MIN_WINDOW_SIZE.0), px(MIN_WINDOW_SIZE.1)).min(&bounds.size)),
+        window_bounds: Some(bounds),
+        window_min_size: Some(
+            size(px(MIN_WINDOW_SIZE.0), px(MIN_WINDOW_SIZE.1)).min(&restore_size),
+        ),
         titlebar: Some(TitleBar::title_bar_options()),
         app_id: Some(brand::WINDOWS_APP_ID.to_owned()),
         // 首帧即平台 backdrop:Mica/MicaAlt/Acrylic(22H2+)
@@ -94,16 +121,28 @@ fn request_control_plane_open(client: super::global_close::GlobalCloseClient) {
 }
 
 /// 启动链调一次的开窗入口：只消费进入 GPUI 前冻结的 Shell 与项目根。
-pub(crate) fn open_initial_window(
-    cx: &mut App,
-    shell_rx: mpsc::Receiver<SltermShellEvent>,
-    initial_root: CanonicalPath,
-    shell: CanonicalPath,
-    services: AppRootServices,
-    start_hidden: bool,
-    regular_start: bool,
-) {
-    let mut options = workspace_window_options(cx, !start_hidden);
+/// 首个窗口的完整启动参数：开窗只消费这一份冻结输入。
+pub(crate) struct InitialWindowSpec {
+    pub(crate) shell_rx: mpsc::Receiver<SltermShellEvent>,
+    pub(crate) initial_root: CanonicalPath,
+    pub(crate) shell: CanonicalPath,
+    pub(crate) services: AppRootServices,
+    pub(crate) window_geometry: Option<crate::windowing::geometry::WindowGeometry>,
+    pub(crate) start_hidden: bool,
+    pub(crate) regular_start: bool,
+}
+
+pub(crate) fn open_initial_window(cx: &mut App, initial: InitialWindowSpec) {
+    let InitialWindowSpec {
+        shell_rx,
+        initial_root,
+        shell,
+        services,
+        window_geometry,
+        start_hidden,
+        regular_start,
+    } = initial;
+    let mut options = workspace_window_options(cx, !start_hidden, window_geometry);
     apply_start_hidden(&mut options, start_hidden);
     // 首帧黑窗/半构窗口不曝光:先同步画一帧再 activate(first_frame 因果链)。
     // 静默窗口不曝光,defer_show 自然返回 false,不进 present-then-show。
@@ -122,6 +161,7 @@ pub(crate) fn open_initial_window(
         });
         root.update(cx, |root, cx| {
             root.observe_focus(window, cx);
+            root.observe_window_geometry(window, cx);
             root.restore_active_project(window, cx);
             let should_open_initial = should_open_initial_project(
                 regular_start,

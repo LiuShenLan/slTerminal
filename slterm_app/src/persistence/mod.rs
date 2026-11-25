@@ -13,5 +13,6 @@ pub(crate) mod project;
 pub(crate) mod sidebar;
 pub(crate) mod startup;
 pub(crate) mod view_state;
+pub(crate) mod window_geometry;
 pub(crate) mod workspace;
 pub(crate) mod workspace_writer;

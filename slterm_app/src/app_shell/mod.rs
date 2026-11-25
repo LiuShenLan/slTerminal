@@ -520,11 +520,13 @@ fn run_shell_once(initial_cwd: Option<PathBuf>) -> startup_diagnostics::ShellRun
             }
         };
     // 首帧前恢复视图私有状态与上一运行退出事实；读取或解码失败只设置对应写屏障。
-    let side_view_persistence = app_root::AppRootPersistence::load_with_previous_run(
+    let mut side_view_persistence = app_root::AppRootPersistence::load_with_previous_run(
         app_paths,
         Some(workspace_writer_client),
         previous_run,
     );
+    // 本机窗口几何在开窗前只交付一次；损坏或无记录回退默认尺寸。
+    let window_geometry = side_view_persistence.take_window_geometry();
     // 学习库独立于工作区库；损坏或高版本只暂停持久学习，不覆盖原文件。
     let (learning, learning_runtime) = match crate::learning::LearningService::start(app_paths) {
         Ok(started) => {
@@ -584,18 +586,21 @@ fn run_shell_once(initial_cwd: Option<PathBuf>) -> startup_diagnostics::ShellRun
         );
         windowing::open_initial_window(
             cx,
-            shell_rx,
-            initial_root,
-            shell,
-            app_root::AppRootServices {
-                persistence: side_view_persistence,
-                global_close: global_close_client,
-                learning: learning.clone(),
-                runtime_events,
-                windows: windows.clone(),
+            windowing::InitialWindowSpec {
+                shell_rx,
+                initial_root,
+                shell,
+                services: app_root::AppRootServices {
+                    persistence: side_view_persistence,
+                    global_close: global_close_client,
+                    learning: learning.clone(),
+                    runtime_events,
+                    windows: windows.clone(),
+                },
+                window_geometry,
+                start_hidden,
+                regular_start,
             },
-            start_hidden,
-            regular_start,
         );
     });
     // 正常路径已在窗口销毁前完成全局段；异常返回由断连兜底回收。

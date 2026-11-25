@@ -24,6 +24,8 @@ pub(crate) mod keyboard;
 // 补全路径拼写:大小写语义与回写分隔符;shell 引用仍归
 // slterm_completions 的 command_context。
 pub(crate) mod local_paths;
+pub(crate) mod machine;
+pub(crate) mod material;
 // 原生通知(AUMID 注册 + WinRT toast MTA worker)。
 #[allow(dead_code)] // 通知展示由后续领域协调器接入。
 pub(crate) mod notifications;

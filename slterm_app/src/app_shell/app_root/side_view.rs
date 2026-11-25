@@ -52,6 +52,8 @@ pub(crate) struct AppRootPersistence {
     project_snapshot_recovery_failed: bool,
     store_epoch: Option<String>,
     pending_final_sidebar: Option<SidebarState>,
+    /// 按机器恢复的窗口几何；只交付一次给开窗链。
+    recovered_window_geometry: Option<crate::windowing::geometry::WindowGeometry>,
 }
 
 impl AppRootPersistence {
@@ -95,6 +97,10 @@ impl AppRootPersistence {
             Err(error) => {
                 log::warn!("could not restore workspace store epoch: {error}");
             }
+        }
+        match store.window_geometry(&crate::platform::machine::machine_key()) {
+            Ok(geometry) => persistence.recovered_window_geometry = geometry,
+            Err(error) => log::warn!("could not restore window geometry: {error}"),
         }
         let mut snapshots =
             crate::persistence::document_snapshot::recovery::DocumentSnapshotRecoverer::new(paths);
@@ -248,6 +254,7 @@ impl AppRootPersistence {
             project_snapshot_recovery_failed: false,
             store_epoch: None,
             pending_final_sidebar: None,
+            recovered_window_geometry: None,
         }
     }
 
@@ -277,6 +284,13 @@ impl AppRootPersistence {
 
     pub(super) fn take_documents(&mut self) -> slterm_document::DocumentRegistry {
         std::mem::take(&mut self.recovered_documents)
+    }
+
+    /// 交付本机窗口几何；损坏或无记录时为 None，由开窗链回退默认尺寸。
+    pub(crate) fn take_window_geometry(
+        &mut self,
+    ) -> Option<crate::windowing::geometry::WindowGeometry> {
+        self.recovered_window_geometry.take()
     }
 
     #[cfg(test)]

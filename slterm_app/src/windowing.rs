@@ -4,3 +4,4 @@
 //! 查询归本模块,避免 Win32 焦点原语散落到业务路径。
 
 pub(crate) mod focus;
+pub(crate) mod geometry;
