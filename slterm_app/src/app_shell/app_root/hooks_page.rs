@@ -511,6 +511,17 @@ impl AppRoot {
     }
 
     /// 丢弃：移除草稿与文档后重新载入磁盘现状。
+    /// 非交互应用关闭前丢弃全部草稿：只清内存，不再发起重载。
+    pub(super) fn discard_all_hooks_drafts_for_close(&mut self, cx: &mut Context<'_, Self>) {
+        for key in self.hook_drafts.keys() {
+            self.hook_drafts.discard(key);
+        }
+        self.hooks_editor.documents.clear();
+        self.hooks_editor.errors.clear();
+        self.hooks_generation = self.hooks_generation.wrapping_add(1);
+        cx.notify();
+    }
+
     pub(super) fn discard_hooks_draft_for(
         &mut self,
         key: HooksDraftKey,

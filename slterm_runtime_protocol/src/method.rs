@@ -282,6 +282,16 @@ fn git_delete_params_schema() -> schemars::Schema {
 }
 
 #[cfg(feature = "schema")]
+fn app_focus_params_schema() -> schemars::Schema {
+    schemars::schema_for!(crate::protocol::AppFocusParams)
+}
+
+#[cfg(feature = "schema")]
+fn app_close_params_schema() -> schemars::Schema {
+    schemars::schema_for!(crate::protocol::AppCloseParams)
+}
+
+#[cfg(feature = "schema")]
 fn git_open_diff_params_schema() -> schemars::Schema {
     schemars::schema_for!(crate::protocol::GitOpenDiffParams)
 }
@@ -729,6 +739,26 @@ pub static METHODS: &[MethodSpec] = &[
         result_schema: operation_result_schema,
     },
     MethodSpec {
+        method: ControlMethod::RuntimeAppFocus,
+        scopes: &[ControlScope::Runtime],
+        kind: MethodKind::Mutation,
+        idempotent: true,
+        #[cfg(feature = "schema")]
+        params_schema: app_focus_params_schema,
+        #[cfg(feature = "schema")]
+        result_schema: operation_result_schema,
+    },
+    MethodSpec {
+        method: ControlMethod::RuntimeAppClose,
+        scopes: &[ControlScope::Runtime],
+        kind: MethodKind::Mutation,
+        idempotent: true,
+        #[cfg(feature = "schema")]
+        params_schema: app_close_params_schema,
+        #[cfg(feature = "schema")]
+        result_schema: operation_result_schema,
+    },
+    MethodSpec {
         method: ControlMethod::InstanceHandover,
         scopes: &[ControlScope::Handover],
         kind: MethodKind::Mutation,
@@ -826,6 +856,8 @@ mod method_tests {
                 method_name(ControlMethod::RuntimeGitDelete),
                 method_name(ControlMethod::RuntimeGitOpenDiff),
                 method_name(ControlMethod::RuntimeGitOpenDeleted),
+                method_name(ControlMethod::RuntimeAppFocus),
+                method_name(ControlMethod::RuntimeAppClose),
                 method_name(ControlMethod::InstanceHandover),
             ]
         );
@@ -945,6 +977,8 @@ mod method_tests {
                 ControlMethod::RuntimeGitDelete,
                 ControlMethod::RuntimeGitOpenDiff,
                 ControlMethod::RuntimeGitOpenDeleted,
+                ControlMethod::RuntimeAppFocus,
+                ControlMethod::RuntimeAppClose,
             ]
         );
         let handover_methods: Vec<ControlMethod> = methods_for(ControlScope::Handover)

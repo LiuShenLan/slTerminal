@@ -13,19 +13,20 @@ use serde::Serialize;
 use slterm_runtime_protocol::{
     AgentCloseParams, AgentForkParams, AgentGetRequest, AgentInputParams, AgentListResponse,
     AgentReadRequest, AgentResource, AgentResumeParams, AgentStartParams, AgentWaitRequest,
-    ClientRequest, ControlScope, Credential, DescribeResponse, DomainErrorCode, EventNotification,
-    EventsSubscribeParams, EventsUnsubscribedResponse, GitDeleteParams, GitDiffRequest,
-    GitDiffResponse, GitOpenDeletedParams, GitOpenDiffParams, GitRollbackParams, GitStatusRequest,
-    GitStatusResponse, HandoverParams, HandoverResponse, HelloResponse, JsonRpcError,
-    JsonRpcErrorData, JsonRpcId, JsonRpcResponse, OPERATION_WAIT_LIMIT_MS, OperationQueryParams,
-    OperationResource, OperationWaitParams, PanelActivateParams, PanelGroupMergeParams,
-    PanelGroupResizeParams, PanelGroupSplitParams, PanelMoveParams, PanelOpenFileParams,
-    PanelOpenSettingsParams, PanelSaveParams, ProjectActivateParams, ProjectListResponse,
-    ProjectRemoveParams, ProjectRenameParams, ProjectReorderParams, RuntimeEvent, RuntimeMethod,
-    RuntimeRequest, RuntimeResult, SnapshotResources, SnapshotResponse, SplitDirectionWire,
-    TerminalCloseParams, TerminalCreateParams, TerminalExecuteParams, TerminalInputParams,
-    TerminalReadRequest, TerminalReadResponse, TerminalReconnectParams, TerminalRenameParams,
-    TerminalWaitRequest, TerminalWaitResponse, ViewportSize, parse_client_request,
+    AppCloseParams, AppFocusParams, ClientRequest, ControlScope, Credential, DescribeResponse,
+    DomainErrorCode, EventNotification, EventsSubscribeParams, EventsUnsubscribedResponse,
+    GitDeleteParams, GitDiffRequest, GitDiffResponse, GitOpenDeletedParams, GitOpenDiffParams,
+    GitRollbackParams, GitStatusRequest, GitStatusResponse, HandoverParams, HandoverResponse,
+    HelloResponse, JsonRpcError, JsonRpcErrorData, JsonRpcId, JsonRpcResponse,
+    OPERATION_WAIT_LIMIT_MS, OperationQueryParams, OperationResource, OperationWaitParams,
+    PanelActivateParams, PanelGroupMergeParams, PanelGroupResizeParams, PanelGroupSplitParams,
+    PanelMoveParams, PanelOpenFileParams, PanelOpenSettingsParams, PanelSaveParams,
+    ProjectActivateParams, ProjectListResponse, ProjectRemoveParams, ProjectRenameParams,
+    ProjectReorderParams, RuntimeEvent, RuntimeMethod, RuntimeRequest, RuntimeResult,
+    SnapshotResources, SnapshotResponse, SplitDirectionWire, TerminalCloseParams,
+    TerminalCreateParams, TerminalExecuteParams, TerminalInputParams, TerminalReadRequest,
+    TerminalReadResponse, TerminalReconnectParams, TerminalRenameParams, TerminalWaitRequest,
+    TerminalWaitResponse, ViewportSize, parse_client_request,
 };
 use slterm_split::SplitDirection;
 use slterm_workspace::{LogicalSize, PanelGroupId, ProjectId, ViewKey};
@@ -795,6 +796,35 @@ fn handle_connection<F>(
                             ),
                             None => JsonRpcResponse::error(request.id, invalid_request_error()),
                         }
+                    }
+                    RuntimeMethod::AppFocus => {
+                        let Some(params) = request.parse::<AppFocusParams>() else {
+                            return;
+                        };
+                        respond_mutation(
+                            &runtime,
+                            request.id,
+                            params.client_id,
+                            params.mutation_id,
+                            params.expected_revision,
+                            Ok(RuntimeMutation::AppFocus),
+                        )
+                    }
+                    RuntimeMethod::AppClose => {
+                        let Some(params) = request.parse::<AppCloseParams>() else {
+                            return;
+                        };
+                        respond_mutation(
+                            &runtime,
+                            request.id,
+                            params.client_id,
+                            params.mutation_id,
+                            params.expected_revision,
+                            Ok(RuntimeMutation::AppClose {
+                                documents: params.request.documents,
+                                hooks: params.request.hooks,
+                            }),
+                        )
                     }
                     RuntimeMethod::OperationWait => {
                         match wait_operation(&runtime, &request, &shutdown) {

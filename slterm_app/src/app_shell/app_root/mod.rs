@@ -267,6 +267,9 @@ pub(crate) struct AppRoot {
     document_relocation_aliases: BTreeMap<std::path::PathBuf, slterm_document::DocumentId>,
     fs_watch: Option<crate::app_shell::fs_watch::FsWatchHandle>,
     pending_document_saves: std::collections::BTreeSet<slterm_document::DocumentId>,
+    /// 关闭在途工作期间挂起的应用关闭所携带的 Document 决定。
+    pending_application_close_decisions:
+        BTreeMap<slterm_document::DocumentId, slterm_workspace::CloseDecision>,
     /// Runtime `panel.save` 等待者：保存落定后由唯一保存链回执。
     runtime_save_waiters: BTreeMap<
         slterm_document::DocumentId,
@@ -535,6 +538,7 @@ impl AppRoot {
             document_relocation_aliases: BTreeMap::new(),
             fs_watch: crate::app_shell::fs_watch::FsWatchHandle::new(),
             pending_document_saves: std::collections::BTreeSet::new(),
+            pending_application_close_decisions: BTreeMap::new(),
             runtime_save_waiters: BTreeMap::new(),
             panel_subscriptions: BTreeMap::new(),
             panel_focus: BTreeMap::new(),

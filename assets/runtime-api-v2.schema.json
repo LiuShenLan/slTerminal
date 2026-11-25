@@ -1619,7 +1619,9 @@
         "git.rollback",
         "git.delete",
         "git.open_diff",
-        "git.open_deleted"
+        "git.open_deleted",
+        "app.focus",
+        "app.close"
       ]
     },
     "RuntimeParams": {

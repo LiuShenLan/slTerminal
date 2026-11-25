@@ -484,3 +484,4 @@ fn local_control_request_deadline_expires_without_waiting() {
 }
 
 mod runtime;
+mod runtime_git;

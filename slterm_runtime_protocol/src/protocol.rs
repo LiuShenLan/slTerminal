@@ -178,6 +178,10 @@ pub enum RuntimeMethod {
     GitOpenDiff,
     #[serde(rename = "git.open_deleted")]
     GitOpenDeleted,
+    #[serde(rename = "app.focus")]
+    AppFocus,
+    #[serde(rename = "app.close")]
+    AppClose,
 }
 
 /// 原始输入：显式写入 PTY，不追加回车，也不模拟键盘事件。
@@ -458,6 +462,36 @@ pub struct GitDiffResponse {
     pub data: String,
     pub next_cursor: Option<String>,
 }
+
+/// 关闭集合中 Document 的处置策略。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum CloseDocumentsPolicy {
+    Save,
+    Discard,
+}
+
+/// 非交互关闭可用的 Hooks 草稿处置；保存需要交互确认，不在线缆内。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum CloseHooksPolicy {
+    Discard,
+}
+
+/// 应用关闭：缺省策略不写入任何决定，必要时返回 `decision_required`。
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct AppCloseRequest {
+    pub documents: Option<CloseDocumentsPolicy>,
+    pub hooks: Option<CloseHooksPolicy>,
+}
+
+/// 应用聚焦：把主窗口带到前台，不改工作区状态。
+pub type AppFocusParams = MutationParams<EmptyParams>;
+pub type AppCloseParams = MutationParams<AppCloseRequest>;
 
 /// 回滚前置形态：只允许放弃精确的未暂存修改或删除。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1286,6 +1320,12 @@ fn runtime_request_is_valid(request: &RuntimeRequest) -> bool {
                         && valid_repo_relative_path(&request.path)
                 })
         }
+        RuntimeMethod::AppFocus => request
+            .parse::<AppFocusParams>()
+            .is_some_and(|params| params.has_valid_envelope()),
+        RuntimeMethod::AppClose => request
+            .parse::<AppCloseParams>()
+            .is_some_and(|params| params.has_valid_envelope()),
     }
 }
 
@@ -1394,11 +1434,13 @@ pub enum ControlMethod {
     RuntimeGitDelete,
     RuntimeGitOpenDiff,
     RuntimeGitOpenDeleted,
+    RuntimeAppFocus,
+    RuntimeAppClose,
     InstanceHandover,
 }
 
 impl ControlMethod {
-    pub const ALL: [Self; 44] = [
+    pub const ALL: [Self; 46] = [
         Self::RuntimeHello,
         Self::RuntimeDescribe,
         Self::RuntimeSnapshot,
@@ -1442,6 +1484,8 @@ impl ControlMethod {
         Self::RuntimeGitDelete,
         Self::RuntimeGitOpenDiff,
         Self::RuntimeGitOpenDeleted,
+        Self::RuntimeAppFocus,
+        Self::RuntimeAppClose,
         Self::InstanceHandover,
     ];
 
@@ -1490,6 +1534,8 @@ impl ControlMethod {
             Self::RuntimeGitDelete => "git.delete",
             Self::RuntimeGitOpenDiff => "git.open_diff",
             Self::RuntimeGitOpenDeleted => "git.open_deleted",
+            Self::RuntimeAppFocus => "app.focus",
+            Self::RuntimeAppClose => "app.close",
             Self::InstanceHandover => "instance.handover",
         }
     }

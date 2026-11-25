@@ -142,6 +142,63 @@ impl AppRoot {
         RuntimeMutationDispatch::Deferred
     }
 
+    /// 非交互应用关闭：策略齐备才登记关闭，缺少决定只返回结构化错误。
+    fn start_runtime_application_close(
+        &mut self,
+        documents: Option<slterm_runtime_protocol::CloseDocumentsPolicy>,
+        hooks: Option<slterm_runtime_protocol::CloseHooksPolicy>,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<(), JsonRpcError> {
+        if self.close_in_progress || self.application_close.is_some() || self.close_completed {
+            return Err(closing_error());
+        }
+        if !self.hook_drafts.is_empty() {
+            match hooks {
+                Some(slterm_runtime_protocol::CloseHooksPolicy::Discard) => {
+                    self.discard_all_hooks_drafts_for_close(cx);
+                }
+                None => return Err(decision_required_error()),
+            }
+        }
+        let decisions = match documents {
+            Some(policy) => {
+                let decision = match policy {
+                    slterm_runtime_protocol::CloseDocumentsPolicy::Save => {
+                        slterm_workspace::CloseDecision::Save
+                    }
+                    slterm_runtime_protocol::CloseDocumentsPolicy::Discard => {
+                        slterm_workspace::CloseDecision::Discard
+                    }
+                };
+                self.documents
+                    .ids()
+                    .filter(|id| {
+                        self.documents
+                            .session(*id)
+                            .is_some_and(|session| session.is_dirty())
+                    })
+                    .map(|id| (id, decision))
+                    .collect()
+            }
+            None => std::collections::BTreeMap::new(),
+        };
+        match self.start_application_close_with_decisions(decisions, false, window, cx) {
+            Ok(
+                super::application_close::ApplicationCloseStart::Completed
+                | super::application_close::ApplicationCloseStart::Started
+                | super::application_close::ApplicationCloseStart::Deferred,
+            ) => Ok(()),
+            Ok(super::application_close::ApplicationCloseStart::Rejected) => {
+                Err(not_ready_error("application close not ready"))
+            }
+            Err(slterm_workspace::DocumentCloseError::MissingDecision(_)) => {
+                Err(decision_required_error())
+            }
+            Err(_) => Err(not_ready_error("application close not ready")),
+        }
+    }
+
     /// Git 打开目标：校验路径形状并解析项目；仓库绑定与打开链都在后台发起。
     fn resolve_runtime_git_open(
         &self,
@@ -504,6 +561,14 @@ impl AppRoot {
                     .fork_command(&session_id)
                     .ok_or_else(agent_command_unsupported)?;
                 self.start_agent_terminal(command, project_root, cwd, window, cx)
+            }
+            RuntimeMutation::AppFocus => {
+                crate::windowing::focus::focus_window(window);
+                cx.notify();
+                Ok(())
+            }
+            RuntimeMutation::AppClose { documents, hooks } => {
+                self.start_runtime_application_close(documents, hooks, window, cx)
             }
             // Git 破坏写与打开由 handle_runtime_mutation 分流到目标解析，不到达这里。
             RuntimeMutation::GitRollback { .. }
@@ -909,6 +974,15 @@ fn revision_conflict_error() -> JsonRpcError {
         DomainErrorCode::RevisionConflict,
         -32005,
         "revision conflict",
+    )
+}
+
+/// 非交互关闭缺少显式处置决定：调用方必须使用新 mutation_id 重试。
+fn decision_required_error() -> JsonRpcError {
+    control_error(
+        DomainErrorCode::DecisionRequired,
+        -32006,
+        "decision required",
     )
 }
 

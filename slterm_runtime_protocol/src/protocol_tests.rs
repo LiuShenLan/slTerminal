@@ -2,13 +2,13 @@
 
 use crate::protocol::{
     AgentCloseRequest, AgentForkRequest, AgentGetRequest, AgentInputRequest, AgentReadRequest,
-    AgentResumeRequest, AgentStartRequest, AgentWaitRequest, ClientRequest, ControlMessage,
-    ControlMethod, ControlScope, Credential, DescribeResponse, DiscoveryRecord, DocumentResource,
-    DomainErrorCode, EmptyParams, GitDeleteExpected, GitDeleteParams, GitDeleteRequest,
-    GitDiffRequest, GitRollbackExpected, GitRollbackParams, GitRollbackRequest, GitStatusRequest,
-    HandoverMethod, HandoverParams, HandoverRequest, HelloMethod, HelloParams, HelloRequest,
-    HelloResponse, JsonRpcError, JsonRpcErrorData, JsonRpcId, JsonRpcRequest, JsonRpcResponse,
-    MutationParams, OperationQueryParams, OperationResource, OperationWaitParams,
+    AgentResumeRequest, AgentStartRequest, AgentWaitRequest, AppFocusParams, ClientRequest,
+    ControlMessage, ControlMethod, ControlScope, Credential, DescribeResponse, DiscoveryRecord,
+    DocumentResource, DomainErrorCode, EmptyParams, GitDeleteExpected, GitDeleteParams,
+    GitDeleteRequest, GitDiffRequest, GitRollbackExpected, GitRollbackParams, GitRollbackRequest,
+    GitStatusRequest, HandoverMethod, HandoverParams, HandoverRequest, HelloMethod, HelloParams,
+    HelloRequest, HelloResponse, JsonRpcError, JsonRpcErrorData, JsonRpcId, JsonRpcRequest,
+    JsonRpcResponse, MutationParams, OperationQueryParams, OperationResource, OperationWaitParams,
     PanelActivateRequest, PanelGroupMergeRequest, PanelGroupResizeRequest, PanelGroupResource,
     PanelGroupSplitRequest, PanelMoveRequest, ProjectActivateRequest, ProjectRemoveRequest,
     ProjectRenameRequest, ProjectReorderRequest, ProjectResource, ProtocolError, RuntimeMethod,
@@ -1110,6 +1110,57 @@ fn panel_open_file_and_save_validate_envelope_and_payload() {
 }
 
 #[test]
+fn app_focus_and_close_validate_closed_dispositions() {
+    let focus = RuntimeRequest::new(
+        JsonRpcId::Number(35),
+        RuntimeMethod::AppFocus,
+        AppFocusParams {
+            client_id: "c".to_owned(),
+            mutation_id: "m-focus".to_owned(),
+            expected_revision: None,
+            request: EmptyParams {},
+        },
+    );
+    match parse_client_request(&serde_json::to_vec(&focus).unwrap()).unwrap() {
+        ClientRequest::Runtime(parsed) => assert_eq!(parsed.method, RuntimeMethod::AppFocus),
+        other => panic!("app.focus 必须解析为 Runtime 请求: {other:?}"),
+    }
+
+    for (documents, hooks) in [
+        (None, None),
+        (Some("save"), Some("discard")),
+        (Some("discard"), None),
+    ] {
+        let request = RuntimeRequest::new(
+            JsonRpcId::Number(36),
+            RuntimeMethod::AppClose,
+            serde_json::json!({
+                "client_id": "c",
+                "mutation_id": "m-close",
+                "expected_revision": null,
+                "request": {"documents": documents, "hooks": hooks},
+            }),
+        );
+        match parse_client_request(&serde_json::to_vec(&request).unwrap()).unwrap() {
+            ClientRequest::Runtime(parsed) => assert_eq!(parsed.method, RuntimeMethod::AppClose),
+            other => panic!("app.close 必须解析为 Runtime 请求: {other:?}"),
+        }
+    }
+
+    for invalid in [
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"app.close","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"documents":"force","hooks":null}}}),
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"app.close","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"documents":null,"hooks":"save"}}}),
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"app.close","params":{"client_id":" ","mutation_id":"m","expected_revision":null,"request":{"documents":null,"hooks":null}}}),
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"app.focus","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"extra":1}}}),
+    ] {
+        assert!(
+            parse_client_request(invalid.to_string().as_bytes()).is_err(),
+            "非法应用请求必须拒绝: {invalid}"
+        );
+    }
+}
+
+#[test]
 fn params_hash_is_stable_and_json_serialization_dependent() {
     let a = serde_json::json!({"z": 1, "a": {"n": [1, 2]}});
     let b = serde_json::json!({"a": {"n": [1, 2]}, "z": 1});
@@ -1209,6 +1260,8 @@ fn describe_lists_the_method_registry_with_contract_hashes() {
             "git.delete",
             "git.open_diff",
             "git.open_deleted",
+            "app.focus",
+            "app.close",
             "instance.handover"
         ]
     );

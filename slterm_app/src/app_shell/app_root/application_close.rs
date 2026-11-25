@@ -16,6 +16,15 @@ use crate::persistence::close::{
     CloseCommitError, CloseCommitStatus, CloseStoreError, PersistedCloseIntent,
 };
 
+/// 应用关闭启动结果：同步完成、异步推进、等待在途工作或未开始。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ApplicationCloseStart {
+    Completed,
+    Started,
+    Deferred,
+    Rejected,
+}
+
 pub(super) struct ApplicationClose {
     pub(super) coordinator: CloseCoordinator<CloseTarget>,
     pub(super) persisted: PersistedCloseIntent,
@@ -39,62 +48,10 @@ impl AppRoot {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> bool {
-        if !self.terminal_closes.is_empty()
-            || !self.terminal_close_batches.is_empty()
-            || !self.project_closes.is_empty()
-        {
-            return false;
-        }
-        if self.application_close.is_some() {
-            self.retry_application_close(cx);
-            return false;
-        }
-        if self.close_in_progress {
-            return false;
-        }
-        let Some(writer) = self.project_writer.clone() else {
-            self.close_in_progress = true;
-            self.close_completed = true;
-            window.remove_window();
-            return true;
-        };
-        if self.project_snapshot_recovery_failed {
-            let window_handle = window.window_handle();
-            let recovery = self
-                .recovery_global_close
-                .get_or_insert_with(|| RecoveryGlobalClose {
-                    close_id: uuid::Uuid::now_v7().to_string(),
-                    attempt: 0,
-                    outcome_unknown: false,
-                    window: window_handle,
-                });
-            if recovery.outcome_unknown {
-                return false;
-            }
-            self.close_in_progress = true;
-            return self.start_close_flush(writer, window_handle, cx);
-        }
-        let Some(store_epoch) = self.store_epoch.clone().filter(|epoch| !epoch.is_empty()) else {
-            log::warn!("application close rejected without current store epoch");
-            return false;
-        };
-        if self.has_inflight_document_work() {
-            self.pending_application_close = Some(window.window_handle());
-            self.close_in_progress = true;
-            return false;
-        }
-        let scope = CloseScope::ApplicationExit;
-        let mut objects = self
-            .snapshot
-            .terminals()
-            .map(|terminal| CloseObject {
-                id: CloseTarget::Terminal(terminal.id()),
-                generation: self.snapshot_generation,
-                decision: CloseDecision::NotRequired,
-            })
-            .collect::<Vec<_>>();
-        let documents = match self.collect_application_documents(Default::default(), cx) {
-            Ok(documents) => documents,
+        match self.start_application_close_with_decisions(Default::default(), true, window, cx) {
+            Ok(ApplicationCloseStart::Completed) => true,
+            Ok(ApplicationCloseStart::Started | ApplicationCloseStart::Deferred) => false,
+            Ok(ApplicationCloseStart::Rejected) => false,
             Err(error) => {
                 log::warn!("application close requires document decisions: {error}");
                 let count = self
@@ -107,15 +64,97 @@ impl AppRoot {
                     })
                     .count();
                 super::events::notify_application_close_decision_required(count, cx);
-                return false;
+                false
             }
+        }
+    }
+
+    /// 带显式 Document 决定的应用关闭；缺决定只返回错误，不弹任何交互。
+    pub(super) fn start_application_close_with_decisions(
+        &mut self,
+        decisions: std::collections::BTreeMap<DocumentId, CloseDecision>,
+        defer_on_inflight: bool,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<ApplicationCloseStart, slterm_workspace::DocumentCloseError> {
+        if !self.terminal_closes.is_empty()
+            || !self.terminal_close_batches.is_empty()
+            || !self.project_closes.is_empty()
+        {
+            return Ok(ApplicationCloseStart::Rejected);
+        }
+        if self.application_close.is_some() {
+            self.retry_application_close(cx);
+            return Ok(ApplicationCloseStart::Rejected);
+        }
+        if self.close_in_progress {
+            return Ok(ApplicationCloseStart::Rejected);
+        }
+        // 在途文档保存期间无法稳定判定决定齐备性：UI 路径延后，Runtime 明确拒绝。
+        if self.has_inflight_document_work() {
+            if !defer_on_inflight {
+                return Ok(ApplicationCloseStart::Rejected);
+            }
+            self.pending_application_close = Some(window.window_handle());
+            self.pending_application_close_decisions = decisions;
+            self.close_in_progress = true;
+            return Ok(ApplicationCloseStart::Deferred);
+        }
+        // 决定齐备性先于任何完成路径：没有 writer 也不得丢弃脏正文。
+        let documents = self.collect_application_documents(decisions, cx)?;
+        let Some(writer) = self.project_writer.clone() else {
+            // 无 writer 无法持久关闭意图，也不得假装已保存：需要保存时明确拒绝。
+            if documents
+                .iter()
+                .any(|object| object.decision == CloseDecision::Save)
+            {
+                return Ok(ApplicationCloseStart::Rejected);
+            }
+            self.close_in_progress = true;
+            self.close_completed = true;
+            window.remove_window();
+            return Ok(ApplicationCloseStart::Completed);
         };
+        if self.project_snapshot_recovery_failed {
+            let window_handle = window.window_handle();
+            let recovery = self
+                .recovery_global_close
+                .get_or_insert_with(|| RecoveryGlobalClose {
+                    close_id: uuid::Uuid::now_v7().to_string(),
+                    attempt: 0,
+                    outcome_unknown: false,
+                    window: window_handle,
+                });
+            if recovery.outcome_unknown {
+                return Ok(ApplicationCloseStart::Rejected);
+            }
+            self.close_in_progress = true;
+            return Ok(if self.start_close_flush(writer, window_handle, cx) {
+                ApplicationCloseStart::Completed
+            } else {
+                ApplicationCloseStart::Started
+            });
+        }
+        let Some(store_epoch) = self.store_epoch.clone().filter(|epoch| !epoch.is_empty()) else {
+            log::warn!("application close rejected without current store epoch");
+            return Ok(ApplicationCloseStart::Rejected);
+        };
+        let scope = CloseScope::ApplicationExit;
+        let mut objects = self
+            .snapshot
+            .terminals()
+            .map(|terminal| CloseObject {
+                id: CloseTarget::Terminal(terminal.id()),
+                generation: self.snapshot_generation,
+                decision: CloseDecision::NotRequired,
+            })
+            .collect::<Vec<_>>();
         objects.extend(documents);
         let close_id = uuid::Uuid::now_v7().to_string();
         let fingerprint = close_fingerprint(&close_id, &scope, &store_epoch, &objects);
         let intent = match CloseIntent::new(objects, fingerprint) {
             Ok(intent) => intent,
-            Err(_) => return false,
+            Err(_) => return Ok(ApplicationCloseStart::Rejected),
         };
         let registration = PersistedCloseIntent {
             close_id,
@@ -135,7 +174,7 @@ impl AppRoot {
             .collected(attempt, registration.intent.clone())
             .is_err()
         {
-            return false;
+            return Ok(ApplicationCloseStart::Rejected);
         }
         self.application_close = Some(ApplicationClose {
             coordinator,
@@ -158,7 +197,7 @@ impl AppRoot {
                 .resume_checkpoint_for_close_retry(&self.side_views, cx);
             log::warn!("application close final-state handoff failed: {error}");
             super::events::notify_workspace_write_failed(cx);
-            return false;
+            return Ok(ApplicationCloseStart::Rejected);
         }
         if self
             .application_close
@@ -169,7 +208,7 @@ impl AppRoot {
         } else {
             self.start_application_commit(writer, snapshot, cx);
         }
-        false
+        Ok(ApplicationCloseStart::Started)
     }
 
     fn has_inflight_document_work(&self) -> bool {
@@ -189,11 +228,13 @@ impl AppRoot {
         }
         self.pending_application_close = None;
         self.close_in_progress = false;
+        let decisions = std::mem::take(&mut self.pending_application_close_decisions);
         let root = cx.entity().downgrade();
         cx.defer(move |cx| {
             let _ = window.update(cx, |_, window, cx| {
                 let _ = root.update(cx, |root, cx| {
-                    root.start_application_close(window, cx);
+                    let _ =
+                        root.start_application_close_with_decisions(decisions, true, window, cx);
                 });
             });
         });

@@ -21,6 +21,7 @@ mod project_close_receipts;
 mod projects;
 mod relocation;
 mod runtime_agents;
+mod runtime_close;
 mod runtime_events;
 mod runtime_git;
 mod runtime_mutations;

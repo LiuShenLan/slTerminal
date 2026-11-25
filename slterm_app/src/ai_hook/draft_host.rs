@@ -151,6 +151,10 @@ impl HooksDraftHost {
         self.drafts.is_empty()
     }
 
+    pub(crate) fn keys(&self) -> Vec<HooksDraftKey> {
+        self.drafts.iter().map(|(key, _)| *key).collect()
+    }
+
     pub(crate) fn len(&self) -> usize {
         self.drafts.len()
     }

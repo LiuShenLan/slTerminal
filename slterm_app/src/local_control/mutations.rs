@@ -3,7 +3,9 @@
 //! 意图只携带稳定身份与已校验参数；路径、授权、事务与关闭策略
 //! 全部由 AppRoot 复用既有命令目录处理。
 
-use slterm_runtime_protocol::{GitDeleteExpected, GitRollbackExpected};
+use slterm_runtime_protocol::{
+    CloseDocumentsPolicy, CloseHooksPolicy, GitDeleteExpected, GitRollbackExpected,
+};
 use slterm_split::SplitDirection;
 use slterm_workspace::{LogicalSize, PanelGroupId, ProjectId, TerminalId, ViewKey};
 
@@ -57,6 +59,11 @@ pub(crate) enum RuntimeMutation {
     },
     PanelSave {
         view: ViewKey,
+    },
+    AppFocus,
+    AppClose {
+        documents: Option<CloseDocumentsPolicy>,
+        hooks: Option<CloseHooksPolicy>,
     },
     TerminalCreate {
         project_root: Option<String>,
@@ -150,6 +157,8 @@ impl RuntimeMutation {
             Self::PanelOpenSettings => "panel.open_settings",
             Self::PanelOpenFile { .. } => "panel.open_file",
             Self::PanelSave { .. } => "panel.save",
+            Self::AppFocus => "app.focus",
+            Self::AppClose { .. } => "app.close",
             Self::TerminalCreate { .. } => "terminal.create",
             Self::TerminalInput { .. } => "terminal.input",
             Self::TerminalExecute { .. } => "terminal.execute",
@@ -234,6 +243,11 @@ impl RuntimeMutation {
             Self::PanelOpenFile { path } => Ok(serde_json::json!({"path": path})),
             Self::PanelSave { view } => Ok(serde_json::json!({
                 "view": view.to_canonical_json().map_err(|_| ())?,
+            })),
+            Self::AppFocus => Ok(serde_json::json!({})),
+            Self::AppClose { documents, hooks } => Ok(serde_json::json!({
+                "documents": documents,
+                "hooks": hooks,
             })),
             Self::TerminalCreate { project_root, cwd } => Ok(serde_json::json!({
                 "project_root": project_root,
