@@ -125,10 +125,51 @@ pub fn set_launch_at_login(enabled: bool) -> std::io::Result<()> {
     set_launch_at_login_at(&path, enabled, &shortcut)
 }
 
-/// 登录启动是否已登记(设置页显示以实际 `.lnk` 为准:安装器与设置页
-/// 管理同一 Startup 快捷方式)。
-pub(crate) fn launch_at_login() -> bool {
-    startup_shortcut().is_ok_and(|path| path.is_file())
+/// 登录启动的实际状态：以 Startup 快捷方式内容对账，不信任设置值。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum LoginStartState {
+    /// 没有快捷方式。
+    Disabled,
+    /// 快捷方式指向当前可执行文件。
+    Enabled,
+    /// 快捷方式指向其他程序：外部修改后设置值不再代表实际启动项。
+    OtherTarget(PathBuf),
+    /// 文件存在但读回失败：不清楚就不伪造启用或禁用。
+    Unreadable,
+}
+
+/// 显式路径的登录启动实际状态（tempdir 测试与安装器核验共用）。
+pub(crate) fn login_start_state_at(path: &Path, executable: &Path) -> LoginStartState {
+    if !path.is_file() {
+        return LoginStartState::Disabled;
+    }
+    match read_shortcut_at(path) {
+        Ok(shortcut) if same_executable(&shortcut.target, executable) => LoginStartState::Enabled,
+        Ok(shortcut) => LoginStartState::OtherTarget(shortcut.target),
+        Err(_) => LoginStartState::Unreadable,
+    }
+}
+
+/// 生产实际状态：当前进程 exe 对账用户 Startup 快捷方式。
+#[allow(dead_code)] // 消费点 = 设置页对账（下一接线步骤）。
+pub(crate) fn launch_at_login_state() -> LoginStartState {
+    let Ok(path) = startup_shortcut() else {
+        return LoginStartState::Unreadable;
+    };
+    let Ok(executable) = std::env::current_exe() else {
+        return LoginStartState::Unreadable;
+    };
+    login_start_state_at(&path, &executable)
+}
+
+/// 目标比较：优先规范路径，无法规范化时按 Windows 不区分大小写比较。
+fn same_executable(left: &Path, right: &Path) -> bool {
+    match (dunce::canonicalize(left), dunce::canonicalize(right)) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => left
+            .to_string_lossy()
+            .eq_ignore_ascii_case(&right.to_string_lossy()),
+    }
 }
 
 /// 当前进程对应的快捷方式内容:目标 exe、home 工作目录、exe 自带图标。
@@ -364,6 +405,57 @@ mod startup_tests {
         assert!(!path.exists(), "关闭必须删除 .lnk");
         set_launch_at_login_at(&path, false, &shortcut)
             .expect("重复关闭不得报错(NotFound 视为成功)");
+    }
+
+    /// 实际登录启动状态以快捷方式内容对账：外部改指向其他程序不算启用。
+    #[test]
+    fn login_start_state_reconciles_the_actual_shortcut_target() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(SHORTCUT_FILE_NAME);
+        let target = directory.path().join("slterm.exe");
+        std::fs::write(&target, b"exe").unwrap();
+        assert_eq!(
+            login_start_state_at(&path, &target),
+            LoginStartState::Disabled
+        );
+
+        let shortcut = Shortcut {
+            target: target.clone(),
+            arguments: String::new(),
+            working_directory: None,
+            icon: None,
+        };
+        set_launch_at_login_at(&path, true, &shortcut).unwrap();
+        assert_eq!(
+            login_start_state_at(&path, &target),
+            LoginStartState::Enabled
+        );
+
+        // 外部改写为其他程序：设置值不再代表 Windows 实际启动项。
+        let other = directory.path().join("other.exe");
+        std::fs::write(&other, b"exe").unwrap();
+        set_launch_at_login_at(
+            &path,
+            true,
+            &Shortcut {
+                target: other.clone(),
+                arguments: String::new(),
+                working_directory: None,
+                icon: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            login_start_state_at(&path, &target),
+            LoginStartState::OtherTarget(other)
+        );
+
+        // 读回失败不伪造为启用或禁用。
+        std::fs::write(&path, b"not a shortcut").unwrap();
+        assert_eq!(
+            login_start_state_at(&path, &target),
+            LoginStartState::Unreadable
+        );
     }
 
     /// 生产路径 = 用户 Startup 已知文件夹 + 品牌文件名(P-8),不写注册表。

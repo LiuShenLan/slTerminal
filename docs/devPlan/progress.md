@@ -21,9 +21,9 @@
 
 ### 当前进度
 
-状态锚：**2026-11-25，Agent 与 Hooks、设置、主题与恢复完成验收；Runtime v2 推进中。**
+状态锚：**2026-11-25，Runtime v2 方法族与验收锚完成；Windows 与发布阶段推进中。**
 
-当前实施位置：**Runtime v2（进行中）。**
+当前实施位置：**Windows 与发布（进行中）。**
 
 | 命名阶段 | 状态 | 验收日期 | commit hash | 测试证据／阻塞事实 |
 |---|---|---|---|---|
@@ -37,7 +37,7 @@
 | Agent 与 Hooks | 已验收 | 2026-11-25 | `6e1fea36` | 能力目录、历史扫描／恢复／隔离批次与撤销、Agent 文件树、hook 小进程桥锚全量自动化；Hooks 编辑页新增 `hooks_page_loads_saves_external_guard_and_discards`，AgentHooks 页新增 `agent_hooks_page_renders_status_and_toggles_through_injected_ports`；全量 workspace、GPUI 全特性（2049 passed）、core release（141 passed）与脚本门禁（95 tests）全绿。 |
 | 设置、主题与恢复 | 已验收 | 2026-11-25 | `6e1fea36` | `settings_single_queue_across_views`、`settings_overlay_controls_write_runtime_values_and_queue`、`theme_import_complete_or_zero_write`、`backup_tamper_rejected_zero_write`、`backup_interrupted_restore_rolls_back`、`staged_restore_is_applied_at_startup_and_rotates_store_epoch`、`interrupted_apply_is_rolled_back_on_restart`、`backup_undo_fingerprint_conflict`、`backup_cross_machine_requires_relocation`、`backup_restore_does_not_restore_credentials` 通过；DPAPI 恢复点与维护期世代轮换已落地；全量 workspace、GPUI 全特性、core release 与脚本门禁全绿。 |
 | Runtime v2 | 进行中 | — | — | 全部方法族（含非交互关闭）与单实例同构锚已落地；仅余 `runtime_token_absent_from_materials`，随 DiagnosticService 切片核销。 |
-| Windows 与发布 | 未开始 | — | — | — |
+| Windows 与发布 | 进行中 | — | — | 平台接入、几何、套餐、调度、通知、i18n、更新、诊断、清理与发布链逐切片推进。 |
 | 全量验收 | 未开始 | — | — | — |
 
 ### 更新方式
