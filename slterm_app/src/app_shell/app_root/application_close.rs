@@ -112,6 +112,7 @@ impl AppRoot {
             }
             self.close_in_progress = true;
             self.close_completed = true;
+            self.finish_update_install();
             window.remove_window();
             return Ok(ApplicationCloseStart::Completed);
         };
@@ -944,6 +945,7 @@ impl AppRoot {
                 let window = recovery.window;
                 self.close_in_progress = false;
                 self.close_completed = true;
+                self.finish_update_install();
                 let _ = window.update(cx, |_, window, _| window.remove_window());
             }
             Ok(Err(GlobalCloseError::ControlPlaneCleanupFailed)) => {
@@ -1028,6 +1030,7 @@ impl AppRoot {
                     .window;
                 self.close_in_progress = false;
                 self.close_completed = true;
+                self.finish_update_install();
                 let _ = window.update(cx, |_, window, _| window.remove_window());
             }
             Ok(Err(GlobalCloseError::ControlPlaneCleanupFailed)) => {

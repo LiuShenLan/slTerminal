@@ -496,6 +496,44 @@ pub(super) fn failure_unseen(root: &Path, executable: Option<&Path>, prompt_stat
     }
 }
 
+/// 更新安装的关闭守卫：预约先落盘，关闭未完成时由 Drop 撤销预约。
+///
+/// 只有统一关闭的最终状态提交完成（[`Self::install_scheduled`]）才保留预约；
+/// 关闭被取消、失败或 AppRoot 销毁时自动写回 `null`，下次启动不安装。
+pub(crate) struct UpdateInstallGuard {
+    root: PathBuf,
+    armed: bool,
+}
+
+impl UpdateInstallGuard {
+    /// 排定下次启动安装并持有守卫；预约失败不产生守卫。
+    pub(crate) fn arm(root: &Path, asset: &UpdateAsset) -> Result<Self, String> {
+        schedule_at(root, asset)?;
+        Ok(Self {
+            root: root.to_owned(),
+            armed: true,
+        })
+    }
+
+    /// 统一关闭完成（最终状态提交成功）：保留预约并解除守卫。
+    pub(crate) fn install_scheduled(mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for UpdateInstallGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        if let Err(error) =
+            crate::atomic_file::write(&self.root.join("updates/install-next.json"), b"null")
+        {
+            log::warn!("撤销更新安装预约失败: {error}");
+        }
+    }
+}
+
 /// 预约下次启动安装(不授予安装权限;`apply_scheduled` 启动早期消费)。
 pub(crate) fn schedule(asset: &UpdateAsset) -> Result<(), String> {
     schedule_at(crate::platform::dirs::local_dir(), asset)

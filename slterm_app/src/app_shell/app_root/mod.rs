@@ -45,6 +45,7 @@ mod terminal_close;
 mod terminal_events;
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod tests;
+mod update_install;
 mod window_geometry;
 
 use std::cell::RefCell;
@@ -214,6 +215,8 @@ pub(crate) struct AppRoot {
     window_geometry_save_task: Option<gpui::Task<()>>,
     window_geometry_subscription: Option<gpui::Subscription>,
     machine_key: String,
+    /// 更新安装的关闭守卫；关闭完成前不留下安装预约。
+    update_install: Option<crate::update_download::handoff::UpdateInstallGuard>,
     /// 最近一次 Explorer 根同步对应的快照代次；渲染只在差异时延迟接线。
     side_view_roots_generation: Option<u64>,
     project_writer: Option<WorkspaceWriterClient>,
@@ -508,6 +511,7 @@ impl AppRoot {
             window_geometry_save_task: None,
             window_geometry_subscription: None,
             machine_key: crate::platform::machine::machine_key(),
+            update_install: None,
             side_view_roots_generation: None,
             project_writer,
             store_epoch,

@@ -11,6 +11,7 @@
 - **helper 红线**：不按映像名杀进程、不自行安装、不绕过参与者身份核对；helper 物化自 `handoff.ps1`，`SLTERM_UPDATE_RESTORE`/`SLTERM_CONFIG_DIR`/`SLTERM_LOCAL_DIR` 为单名恢复变量，计划必须同时保存双数据根。
 - **restore ticket**：成功或回滚恢复都要版本匹配；最多 3 次尝试，`restored.json` 留档防重放。
 - **安装目录归属**：安装器管理的安装（旁置 `unins000.exe`）才允许自覆盖；便携 zip 走下载页手动替换。原因：覆盖不受管的目录会破坏用户文件。
+- **关闭守卫**：更新安装预约经 `UpdateInstallGuard` 先落盘；只有统一关闭的最终状态提交完成（`install_scheduled`）才保留预约，关闭取消、失败或 AppRoot 销毁时守卫由 Drop 写回 `null`，下次启动不安装。原因：安装预约不得绕过脏 Document 关闭守卫。边界：`AppRoot::begin_update_install` 只在关闭前登记守卫并启动关闭；`cancel_update_install` 是用户显式放弃入口；启动消费仍走 `apply_scheduled`。
 - **消费面**：启动链只消费 `installation_in_progress` 安装事务守卫；`prepare/commit/schedule` 与 restore ticket 由更新域的新快照协调器装配，不读取旧 session。
 
 ## 验收与测试

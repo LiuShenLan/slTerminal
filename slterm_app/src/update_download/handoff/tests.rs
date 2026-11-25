@@ -334,6 +334,35 @@ fn restore_ticket_covers_success_rollback_attempts_and_acknowledgement() {
     assert!(restore_ticket_at(root.path(), &executable, "9.9.9").is_none());
 }
 
+/// 锚：更新安装只在统一关闭完成后保留预约；取消或失败撤销预约。
+#[test]
+fn update_install_uses_close_guard() {
+    let root = tempfile::tempdir().unwrap();
+    let body = b"MZclose guard fixture";
+    let asset = installer_asset(body);
+    stage_ready_package(root.path(), &asset, body);
+    let arm_path = root.path().join("updates/install-next.json");
+
+    // 关闭未完成（守卫提前释放）：预约必须撤销。
+    {
+        let _guard = UpdateInstallGuard::arm(root.path(), &asset).unwrap();
+        let armed: UpdateAsset =
+            serde_json::from_slice(&std::fs::read(&arm_path).unwrap()).unwrap();
+        assert_eq!(armed, asset);
+    }
+    assert_eq!(
+        std::fs::read(&arm_path).unwrap(),
+        b"null",
+        "取消或失败的关闭必须撤销预约"
+    );
+
+    // 关闭完成：预约保留到下次启动。
+    let guard = UpdateInstallGuard::arm(root.path(), &asset).unwrap();
+    guard.install_scheduled();
+    let armed: UpdateAsset = serde_json::from_slice(&std::fs::read(&arm_path).unwrap()).unwrap();
+    assert_eq!(armed, asset);
+}
+
 #[test]
 fn schedule_requires_a_ready_package_and_writes_the_arm_file() {
     let root = tempfile::tempdir().unwrap();

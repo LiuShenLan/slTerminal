@@ -195,7 +195,7 @@
 | 托盘启用时关窗与托盘退出都走统一关闭 | `close_flush_success_closes_window_and_marks_clean_shutdown`、`close_flush_failure_keeps_window_and_allows_retry`、`application_global_close_commits_clean_shutdown_before_window_destroy` | 已自动化 |
 | 移除显示器后窗口夹回可见工作区 | `windows_geometry_clamped_to_work_area` | 已自动化 |
 | 架构或哈希不符的更新资产不安装不执行 | `update_asset_validation_rejects_mismatch` | 已自动化 |
-| 更新安装前先完成脏 Document 关闭守卫 | `update_install_uses_close_guard` | 待实现 |
+| 更新安装前先完成脏 Document 关闭守卫 | `update_install_uses_close_guard` | 已自动化 |
 | 桌面通知与任务栏闪烁独立判定 | `notification_and_taskbar_switches_independent` | 已自动化 |
 | 错误优先且工作进度不伪造百分比 | `taskbar_priority_and_indeterminate_progress` | 已自动化 |
 | 切换语言不重建工作区且缺译回退英文 | `i18n_switch_preserves_workspace` | 已自动化 |

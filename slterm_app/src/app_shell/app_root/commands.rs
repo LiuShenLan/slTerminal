@@ -258,6 +258,8 @@ pub(crate) enum AppRootError {
     TerminalCloseWriter(crate::persistence::workspace_writer::WorkspaceWriterError),
     ProjectCloseWriter(crate::persistence::workspace_writer::WorkspaceWriterError),
     Sidebar(SidebarError),
+    /// 更新安装预约失败或已有在途安装：拒绝新的安装请求。
+    UpdateInstall,
 }
 
 impl fmt::Display for AppRootError {
@@ -308,6 +310,7 @@ impl fmt::Display for AppRootError {
             Self::TerminalCloseWriter(error) => write!(formatter, "终端关闭写请求失败: {error}"),
             Self::ProjectCloseWriter(error) => write!(formatter, "项目关闭写请求失败: {error}"),
             Self::Sidebar(error) => write!(formatter, "侧栏命令失败: {error}"),
+            Self::UpdateInstall => formatter.write_str("更新安装无法开始"),
         }
     }
 }
@@ -343,7 +346,8 @@ impl std::error::Error for AppRootError {
             | Self::ProjectCloseState
             | Self::ProjectCloseOutcomeUnknown
             | Self::WorkspaceEpochUnavailable
-            | Self::HooksDraftPending => None,
+            | Self::HooksDraftPending
+            | Self::UpdateInstall => None,
         }
     }
 }
