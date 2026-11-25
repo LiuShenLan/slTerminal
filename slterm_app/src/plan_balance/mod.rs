@@ -7,6 +7,7 @@
 pub(crate) mod client;
 pub(crate) mod deepseek;
 pub(crate) mod kimi;
+pub(crate) mod service;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct AmountInfo {
@@ -89,6 +90,9 @@ pub(crate) enum PlanBalanceSource {
 }
 
 impl PlanBalanceSource {
+    /// 固定来源全集；顺序稳定，供调度与展示共用。
+    pub(crate) const ALL: [Self; 2] = [Self::DeepSeek, Self::Kimi];
+
     pub(crate) const fn credential_target(self) -> &'static str {
         match self {
             Self::DeepSeek => "slterm/plan-balance/deepseek",
