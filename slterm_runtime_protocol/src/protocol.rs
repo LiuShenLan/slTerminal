@@ -132,6 +132,8 @@ pub enum RuntimeMethod {
     PanelOpenFile,
     #[serde(rename = "panel.save")]
     PanelSave,
+    #[serde(rename = "panel.close")]
+    PanelClose,
     #[serde(rename = "terminal.create")]
     TerminalCreate,
     #[serde(rename = "terminal.input")]
@@ -672,6 +674,18 @@ pub struct PanelSaveRequest {
 
 pub type PanelSaveParams = MutationParams<PanelSaveRequest>;
 
+/// 关闭单个面板；`documents` 缺省时脏 Document 会返回 `decision_required`。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct PanelCloseRequest {
+    /// 规范 ViewKey JSON 文本。
+    pub view: String,
+    pub documents: Option<CloseDocumentsPolicy>,
+}
+
+pub type PanelCloseParams = MutationParams<PanelCloseRequest>;
+
 /// 写请求信封：幂等键与客户端身份是必填，期望代次可选。
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -1105,6 +1119,9 @@ fn runtime_request_is_valid(request: &RuntimeRequest) -> bool {
         RuntimeMethod::PanelSave => request.parse::<PanelSaveParams>().is_some_and(|params| {
             params.has_valid_envelope() && !params.request.view.trim().is_empty()
         }),
+        RuntimeMethod::PanelClose => request.parse::<PanelCloseParams>().is_some_and(|params| {
+            params.has_valid_envelope() && !params.request.view.trim().is_empty()
+        }),
         RuntimeMethod::TerminalCreate => {
             request
                 .parse::<TerminalCreateParams>()
@@ -1411,6 +1428,7 @@ pub enum ControlMethod {
     RuntimePanelOpenSettings,
     RuntimePanelOpenFile,
     RuntimePanelSave,
+    RuntimePanelClose,
     RuntimeTerminalCreate,
     RuntimeTerminalInput,
     RuntimeTerminalExecute,
@@ -1440,7 +1458,7 @@ pub enum ControlMethod {
 }
 
 impl ControlMethod {
-    pub const ALL: [Self; 46] = [
+    pub const ALL: [Self; 47] = [
         Self::RuntimeHello,
         Self::RuntimeDescribe,
         Self::RuntimeSnapshot,
@@ -1461,6 +1479,7 @@ impl ControlMethod {
         Self::RuntimePanelOpenSettings,
         Self::RuntimePanelOpenFile,
         Self::RuntimePanelSave,
+        Self::RuntimePanelClose,
         Self::RuntimeTerminalCreate,
         Self::RuntimeTerminalInput,
         Self::RuntimeTerminalExecute,
@@ -1511,6 +1530,7 @@ impl ControlMethod {
             Self::RuntimePanelOpenSettings => "panel.open_settings",
             Self::RuntimePanelOpenFile => "panel.open_file",
             Self::RuntimePanelSave => "panel.save",
+            Self::RuntimePanelClose => "panel.close",
             Self::RuntimeTerminalCreate => "terminal.create",
             Self::RuntimeTerminalInput => "terminal.input",
             Self::RuntimeTerminalExecute => "terminal.execute",

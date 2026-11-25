@@ -99,7 +99,6 @@ impl AppRoot {
         }
         self.ensure_project_snapshot_recovery_allowed()?;
         self.ensure_project_snapshot_command_allowed()?;
-        let store_epoch = self.terminal_close_store_epoch()?;
         self.sync_focus(window, cx);
         let project_id = self.active_project()?;
         let project = self
@@ -128,6 +127,88 @@ impl AppRoot {
             self.panel_for_view(project_id, &active, cx)?;
         }
 
+        self.begin_views_close(
+            project_id,
+            group_id,
+            closing,
+            document_decisions,
+            window,
+            cx,
+        )
+    }
+
+    /// 单视图关闭入口：只关闭给定视图，复用同一批量关闭链与重试语义。
+    pub(super) fn close_view_from_request(
+        &mut self,
+        view: ViewKey,
+        document_decisions: BTreeMap<DocumentId, CloseDecision>,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<(), AppRootError> {
+        self.ensure_not_closing()?;
+        if let Some(terminal_id) = self.oldest_unresolved_terminal_close_failure() {
+            return self.close_terminal(terminal_id, window, cx).map(|_| ());
+        }
+        if let Some(batch_id) = self.batch_for_view(&view) {
+            return self
+                .retry_batch_close(batch_id, &document_decisions, cx)
+                .map(|_| ());
+        }
+        self.ensure_project_snapshot_recovery_allowed()?;
+        self.ensure_project_snapshot_command_allowed()?;
+        self.sync_focus(window, cx);
+        let project_id = self.active_project()?;
+        if view.project_id() != Some(project_id) {
+            return Err(AppRootError::ProjectNotActive);
+        }
+        let group_id = self.group_for_view(project_id, &view)?;
+        self.begin_views_close(
+            project_id,
+            group_id,
+            vec![view],
+            document_decisions,
+            window,
+            cx,
+        )
+    }
+
+    fn group_for_view(
+        &self,
+        project_id: ProjectId,
+        view: &ViewKey,
+    ) -> Result<PanelGroupId, AppRootError> {
+        let project = self
+            .snapshot
+            .registry()
+            .project(project_id)
+            .ok_or(ProjectRegistryError::ProjectNotFound)?;
+        project
+            .layout()
+            .group_ids()
+            .into_iter()
+            .find(|group_id| {
+                project
+                    .layout()
+                    .group(*group_id)
+                    .is_some_and(|group| group.views().contains(view))
+            })
+            .ok_or(AppRootError::MissingPanel)
+    }
+
+    /// 批量关闭共同主干：从确定视图集合开始收集、持久登记并推进阶段。
+    fn begin_views_close(
+        &mut self,
+        project_id: ProjectId,
+        group_id: PanelGroupId,
+        closing: Vec<ViewKey>,
+        document_decisions: BTreeMap<DocumentId, CloseDecision>,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<(), AppRootError> {
+        if closing.is_empty() {
+            return Ok(());
+        }
+        let store_epoch = self.terminal_close_store_epoch()?;
         let mut panels = Vec::new();
         let mut members = BTreeMap::new();
         let mut objects = Vec::new();
@@ -244,6 +325,13 @@ impl AppRoot {
             self.drive_batch_close_in_memory(batch_id, cx)?;
         }
         Ok(())
+    }
+
+    fn batch_for_view(&self, view: &ViewKey) -> Option<Uuid> {
+        self.terminal_close_batches
+            .iter()
+            .find(|(_, close)| close.panels.iter().any(|(candidate, _)| candidate == view))
+            .map(|(id, _)| *id)
     }
 
     fn batch_for_group(&self, group_id: PanelGroupId) -> Option<Uuid> {
@@ -792,7 +880,7 @@ impl AppRoot {
         }
     }
 
-    fn collect_document_close_with_autosave(
+    pub(super) fn collect_document_close_with_autosave(
         &mut self,
         closing: &[ViewKey],
         decisions: &BTreeMap<DocumentId, CloseDecision>,

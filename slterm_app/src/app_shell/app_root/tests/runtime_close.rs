@@ -161,3 +161,94 @@ fn runtime_app_close_save_policy_without_writer_is_structurally_rejected(cx: &mu
 "
     );
 }
+
+fn editor_view(root: &Entity<AppRoot>, cx: &mut TestAppContext) -> ViewKey {
+    root.read_with(cx, |root, _| {
+        root.snapshot
+            .registry()
+            .project(project_id(PROJECT_A))
+            .unwrap()
+            .layout()
+            .view_keys()
+            .into_iter()
+            .find(|view| matches!(view, ViewKey::Editor { .. }))
+            .unwrap()
+    })
+}
+
+fn view_exists(root: &Entity<AppRoot>, cx: &mut TestAppContext, view: &ViewKey) -> bool {
+    root.read_with(cx, |root, _| {
+        root.snapshot
+            .registry()
+            .project(project_id(PROJECT_A))
+            .unwrap()
+            .layout()
+            .view_keys()
+            .contains(view)
+    })
+}
+
+#[gpui::test]
+fn runtime_panel_close_requires_decision_and_honors_policies(cx: &mut TestAppContext) {
+    let (_temp, root, mut window, file) = dirty_document(cx);
+    let view = editor_view(&root, cx);
+
+    // 无策略：决定错误，面板与正文保持。
+    let Err(error) = dispatch_runtime_mutation(
+        &root,
+        &mut window,
+        crate::local_control::RuntimeMutation::PanelClose {
+            view: view.clone(),
+            documents: None,
+        },
+    ) else {
+        panic!("缺少决定必须拒绝");
+    };
+    assert_eq!(
+        error.data.as_ref().map(|data| data.code),
+        Some(DomainErrorCode::DecisionRequired)
+    );
+    assert!(view_exists(&root, cx, &view));
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "old\n");
+
+    // Discard：关闭面板且不写盘。
+    match dispatch_runtime_mutation(
+        &root,
+        &mut window,
+        crate::local_control::RuntimeMutation::PanelClose {
+            view: view.clone(),
+            documents: Some(CloseDocumentsPolicy::Discard),
+        },
+    ) {
+        Ok(crate::app_shell::RuntimeMutationReply::Done(Ok(()))) => {}
+        _ => panic!("显式策略必须被接受"),
+    }
+    window.run_until_parked();
+    assert!(!view_exists(&root, cx, &view));
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "old\n");
+}
+
+#[gpui::test]
+fn runtime_panel_close_save_policy_persists_before_destroying(cx: &mut TestAppContext) {
+    let (_temp, root, mut window, file) = dirty_document(cx);
+    let view = editor_view(&root, cx);
+
+    match dispatch_runtime_mutation(
+        &root,
+        &mut window,
+        crate::local_control::RuntimeMutation::PanelClose {
+            view: view.clone(),
+            documents: Some(CloseDocumentsPolicy::Save),
+        },
+    ) {
+        Ok(crate::app_shell::RuntimeMutationReply::Done(Ok(()))) => {}
+        _ => panic!("显式保存策略必须被接受"),
+    }
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while view_exists(&root, cx, &view) {
+        assert!(Instant::now() < deadline, "保存后关闭必须完成");
+        window.run_until_parked();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "draft\n");
+}

@@ -480,6 +480,63 @@ fn runtime_app_focus_and_close_route_explicit_dispositions() {
 }
 
 #[test]
+fn runtime_panel_close_routes_view_identity_and_disposition() {
+    let mutations = Arc::new(AtomicUsize::new(0));
+    let mutations_by_callback = Arc::clone(&mutations);
+    let (mut server, _calls) = start_dual_scope_server_with_mutation(move |request| {
+        match &request.mutation {
+            crate::local_control::mutations::RuntimeMutation::PanelClose { view, documents } => {
+                assert!(matches!(view, slterm_workspace::ViewKey::Editor { .. }));
+                assert_eq!(
+                    *documents,
+                    Some(slterm_runtime_protocol::CloseDocumentsPolicy::Discard)
+                );
+            }
+            other => panic!("意外写意图: {other:?}"),
+        }
+        mutations_by_callback.fetch_add(1, Ordering::SeqCst);
+        Ok(OperationResource {
+            operation_id: "operation-panel-close".to_owned(),
+            status: OperationStatus::Succeeded,
+            result: Some(serde_json::json!({})),
+            error: None,
+        })
+    });
+    let mut stream = connect(&server);
+    stream.set_read_timeout(Some(TEST_TIMEOUT)).unwrap();
+    write_json(
+        &mut stream,
+        &hello_scoped("sk-test-runtime", ControlScope::Runtime),
+    );
+    assert!(read_line(&mut stream).contains("store"));
+
+    let view = slterm_workspace::ViewKey::Editor {
+        project_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b".parse().unwrap(),
+        document_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2e".parse().unwrap(),
+    };
+    write_json(
+        &mut stream,
+        &RuntimeRequest::new(
+            JsonRpcId::Number(73),
+            RuntimeMethod::PanelClose,
+            slterm_runtime_protocol::PanelCloseParams {
+                client_id: "client-runtime".to_owned(),
+                mutation_id: "mutation-panel-close".to_owned(),
+                expected_revision: None,
+                request: slterm_runtime_protocol::PanelCloseRequest {
+                    view: view.to_canonical_json().unwrap(),
+                    documents: Some(slterm_runtime_protocol::CloseDocumentsPolicy::Discard),
+                },
+            },
+        ),
+    );
+    let reply: serde_json::Value = serde_json::from_str(&read_line(&mut stream)).unwrap();
+    assert_eq!(reply["result"]["status"], "succeeded");
+    assert_eq!(mutations.load(Ordering::SeqCst), 1);
+    server.shutdown().unwrap();
+}
+
+#[test]
 fn runtime_terminal_input_and_execute_route_through_dispatcher() {
     let mutations = Arc::new(AtomicUsize::new(0));
     let mutations_by_callback = Arc::clone(&mutations);
@@ -1452,6 +1509,7 @@ fn runtime_describe_returns_registry_and_contract_hashes() {
             "panel.open_settings",
             "panel.open_file",
             "panel.save",
+            "panel.close",
             "terminal.create",
             "terminal.input",
             "terminal.execute",

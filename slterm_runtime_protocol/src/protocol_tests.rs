@@ -1161,6 +1161,37 @@ fn app_focus_and_close_validate_closed_dispositions() {
 }
 
 #[test]
+fn panel_close_validates_view_and_disposition() {
+    for documents in [None, Some("save"), Some("discard")] {
+        let request = RuntimeRequest::new(
+            JsonRpcId::Number(37),
+            RuntimeMethod::PanelClose,
+            serde_json::json!({
+                "client_id": "c",
+                "mutation_id": "m-close",
+                "expected_revision": null,
+                "request": {"view": "{\"kind\":\"editor\",\"version\":1}", "documents": documents},
+            }),
+        );
+        match parse_client_request(&serde_json::to_vec(&request).unwrap()).unwrap() {
+            ClientRequest::Runtime(parsed) => assert_eq!(parsed.method, RuntimeMethod::PanelClose),
+            other => panic!("panel.close 必须解析为 Runtime 请求: {other:?}"),
+        }
+    }
+
+    for invalid in [
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"panel.close","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"view":"","documents":null}}}),
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"panel.close","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"view":" ","documents":"force"}}}),
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"panel.close","params":{"client_id":" ","mutation_id":"m","expected_revision":null,"request":{"view":"v","documents":null}}}),
+    ] {
+        assert!(
+            parse_client_request(invalid.to_string().as_bytes()).is_err(),
+            "非法 panel.close 请求必须拒绝: {invalid}"
+        );
+    }
+}
+
+#[test]
 fn params_hash_is_stable_and_json_serialization_dependent() {
     let a = serde_json::json!({"z": 1, "a": {"n": [1, 2]}});
     let b = serde_json::json!({"a": {"n": [1, 2]}, "z": 1});
@@ -1237,6 +1268,7 @@ fn describe_lists_the_method_registry_with_contract_hashes() {
             "panel.open_settings",
             "panel.open_file",
             "panel.save",
+            "panel.close",
             "terminal.create",
             "terminal.input",
             "terminal.execute",

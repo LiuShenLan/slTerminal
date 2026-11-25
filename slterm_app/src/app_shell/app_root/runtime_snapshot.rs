@@ -142,6 +142,74 @@ impl AppRoot {
         RuntimeMutationDispatch::Deferred
     }
 
+    /// 单面板非交互关闭：只关闭目标视图，脏 Document 需要显式决定。
+    fn start_runtime_panel_close(
+        &mut self,
+        view: ViewKey,
+        documents: Option<slterm_runtime_protocol::CloseDocumentsPolicy>,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<(), JsonRpcError> {
+        if self.close_in_progress || self.application_close.is_some() || self.close_completed {
+            return Err(closing_error());
+        }
+        let project_id = view.project_id().ok_or_else(invalid_request_error)?;
+        let project = self
+            .snapshot
+            .registry()
+            .project(project_id)
+            .ok_or_else(invalid_request_error)?;
+        if self.snapshot.registry().active() != Some(project_id) {
+            return Err(not_ready_error("project not active"));
+        }
+        if !project.layout().view_keys().contains(&view) {
+            return Err(invalid_request_error());
+        }
+        let document_ids = match &view {
+            ViewKey::Editor { document_id, .. }
+            | ViewKey::Markdown { document_id, .. }
+            | ViewKey::Diff { document_id, .. } => vec![*document_id],
+            _ => Vec::new(),
+        };
+        let mut decisions = std::collections::BTreeMap::new();
+        match documents {
+            Some(policy) => {
+                let decision = match policy {
+                    slterm_runtime_protocol::CloseDocumentsPolicy::Save => {
+                        slterm_workspace::CloseDecision::Save
+                    }
+                    slterm_runtime_protocol::CloseDocumentsPolicy::Discard => {
+                        slterm_workspace::CloseDecision::Discard
+                    }
+                };
+                for document_id in document_ids {
+                    if self
+                        .documents
+                        .session(document_id)
+                        .is_some_and(|session| session.is_dirty())
+                    {
+                        decisions.insert(document_id, decision);
+                    }
+                }
+            }
+            None => {
+                match self.collect_document_close_with_autosave(
+                    std::slice::from_ref(&view),
+                    &std::collections::BTreeMap::new(),
+                    cx,
+                ) {
+                    Ok(_) => {}
+                    Err(slterm_workspace::DocumentCloseError::MissingDecision(_)) => {
+                        return Err(decision_required_error());
+                    }
+                    Err(_) => return Err(invalid_request_error()),
+                }
+            }
+        }
+        self.close_view_from_request(view, decisions, window, cx)
+            .map_err(runtime_mutation_error)
+    }
+
     /// 非交互应用关闭：策略齐备才登记关闭，缺少决定只返回结构化错误。
     fn start_runtime_application_close(
         &mut self,
@@ -561,6 +629,9 @@ impl AppRoot {
                     .fork_command(&session_id)
                     .ok_or_else(agent_command_unsupported)?;
                 self.start_agent_terminal(command, project_root, cwd, window, cx)
+            }
+            RuntimeMutation::PanelClose { view, documents } => {
+                self.start_runtime_panel_close(view, documents, window, cx)
             }
             RuntimeMutation::AppFocus => {
                 crate::windowing::focus::focus_window(window);

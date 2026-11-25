@@ -19,11 +19,11 @@ use slterm_runtime_protocol::{
     GitRollbackParams, GitStatusRequest, GitStatusResponse, HandoverParams, HandoverResponse,
     HelloResponse, JsonRpcError, JsonRpcErrorData, JsonRpcId, JsonRpcResponse,
     OPERATION_WAIT_LIMIT_MS, OperationQueryParams, OperationResource, OperationWaitParams,
-    PanelActivateParams, PanelGroupMergeParams, PanelGroupResizeParams, PanelGroupSplitParams,
-    PanelMoveParams, PanelOpenFileParams, PanelOpenSettingsParams, PanelSaveParams,
-    ProjectActivateParams, ProjectListResponse, ProjectRemoveParams, ProjectRenameParams,
-    ProjectReorderParams, RuntimeEvent, RuntimeMethod, RuntimeRequest, RuntimeResult,
-    SnapshotResources, SnapshotResponse, SplitDirectionWire, TerminalCloseParams,
+    PanelActivateParams, PanelCloseParams, PanelGroupMergeParams, PanelGroupResizeParams,
+    PanelGroupSplitParams, PanelMoveParams, PanelOpenFileParams, PanelOpenSettingsParams,
+    PanelSaveParams, ProjectActivateParams, ProjectListResponse, ProjectRemoveParams,
+    ProjectRenameParams, ProjectReorderParams, RuntimeEvent, RuntimeMethod, RuntimeRequest,
+    RuntimeResult, SnapshotResources, SnapshotResponse, SplitDirectionWire, TerminalCloseParams,
     TerminalCreateParams, TerminalExecuteParams, TerminalInputParams, TerminalReadRequest,
     TerminalReadResponse, TerminalReconnectParams, TerminalRenameParams, TerminalWaitRequest,
     TerminalWaitResponse, ViewportSize, parse_client_request,
@@ -796,6 +796,24 @@ fn handle_connection<F>(
                             ),
                             None => JsonRpcResponse::error(request.id, invalid_request_error()),
                         }
+                    }
+                    RuntimeMethod::PanelClose => {
+                        let Some(params) = request.parse::<PanelCloseParams>() else {
+                            return;
+                        };
+                        respond_mutation(
+                            &runtime,
+                            request.id,
+                            params.client_id,
+                            params.mutation_id,
+                            params.expected_revision,
+                            parse_view(&params.request.view).map(|view| {
+                                RuntimeMutation::PanelClose {
+                                    view,
+                                    documents: params.request.documents,
+                                }
+                            }),
+                        )
                     }
                     RuntimeMethod::AppFocus => {
                         let Some(params) = request.parse::<AppFocusParams>() else {

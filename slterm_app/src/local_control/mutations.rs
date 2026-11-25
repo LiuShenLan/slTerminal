@@ -60,6 +60,10 @@ pub(crate) enum RuntimeMutation {
     PanelSave {
         view: ViewKey,
     },
+    PanelClose {
+        view: ViewKey,
+        documents: Option<CloseDocumentsPolicy>,
+    },
     AppFocus,
     AppClose {
         documents: Option<CloseDocumentsPolicy>,
@@ -157,6 +161,7 @@ impl RuntimeMutation {
             Self::PanelOpenSettings => "panel.open_settings",
             Self::PanelOpenFile { .. } => "panel.open_file",
             Self::PanelSave { .. } => "panel.save",
+            Self::PanelClose { .. } => "panel.close",
             Self::AppFocus => "app.focus",
             Self::AppClose { .. } => "app.close",
             Self::TerminalCreate { .. } => "terminal.create",
@@ -243,6 +248,10 @@ impl RuntimeMutation {
             Self::PanelOpenFile { path } => Ok(serde_json::json!({"path": path})),
             Self::PanelSave { view } => Ok(serde_json::json!({
                 "view": view.to_canonical_json().map_err(|_| ())?,
+            })),
+            Self::PanelClose { view, documents } => Ok(serde_json::json!({
+                "view": view.to_canonical_json().map_err(|_| ())?,
+                "documents": documents,
             })),
             Self::AppFocus => Ok(serde_json::json!({})),
             Self::AppClose { documents, hooks } => Ok(serde_json::json!({
