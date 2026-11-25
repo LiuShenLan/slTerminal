@@ -4,6 +4,7 @@
 //! 环境认证材料,不接触凭据、网络与调度。字段缺失或不可解析返回 Err,
 //! 不把缺失数据伪造为 0;结果类型不承载 token。
 
+pub(crate) mod client;
 pub(crate) mod deepseek;
 pub(crate) mod kimi;
 

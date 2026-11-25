@@ -88,7 +88,7 @@
 | Commit 回滚 | [文件与 Git](design/files-git.md) | `integration_commit_rollback` | 已自动化 |
 | Git 与 Document | [文件与 Git](design/files-git.md)、[Document](design/document.md) | `integration_git_document` | 已自动化 |
 | 历史删除撤销 | [Agent](design/agents.md)、[生命周期](design/lifecycle.md) | `integration_history_delete_undo` | 已自动化 |
-| 套餐凭据 | [Windows](design/windows.md)、[设置与恢复](design/settings-recovery.md) | `integration_plan_credentials` | 待实现 |
+| 套餐凭据 | [Windows](design/windows.md)、[设置与恢复](design/settings-recovery.md) | `integration_plan_credentials` | 已自动化 |
 | 套餐调度 | [Windows](design/windows.md)、[生命周期](design/lifecycle.md) | `integration_plan_schedule` | 已自动化 |
 | 自定义主题 | [设置与恢复](design/settings-recovery.md) | `integration_custom_theme` | 已自动化 |
 | Markdown 与 Mermaid | [Markdown](design/markdown.md)、[Document](design/document.md) | `integration_markdown_mermaid_final` | 延期 |
