@@ -29,6 +29,7 @@
   - 生产 AppId 静默安装成功，落点 `%LOCALAPPDATA%\Programs\slTerminal`；卸载后卸载项、App Paths 与快捷方式无残留。
   - 已知边界：安装目录可能残留 `.slterm-update.slterm-lock`，导致目录本身保留；`setup-ai --remove` 子命令不存在，卸载 hook 清理为 no-op；开始菜单快捷方式落在 `Programs\(Default)` 组。
   - 用户数据 `%APPDATA%\slterm` 与 ConPTY 提取缓存 `%LOCALAPPDATA%\slterm\conpty` 在卸载后保留，属预期。
+- 2026-11-26 阶段回归证据：`package-release.tests.ps1` PASS（profile 钉值与体积预算未漂移；实测 setup 17.12 MiB、zip 22.35 MiB，均低于预算）与 `windows-runtime.tests.ps1` PASS（x64 钉文件、复用、修复与拒绝归档）。本机未安装 Inno Setup，安装器重建与真实安装／更新链复验按豁免留待发布机执行；2026-10-18／10-26 实机证据仍为最新安装器形态证据，新包体的实机核验不得以本次钉测试结果冒充。
 - 2026-10-26 依赖基线本机核验证据：
   - 环境：Windows 11 Pro build 26300，PowerShell 7.6.8，Inno Setup 6.7.3。
   - 共享 release 二进制：`slterm.exe` 53,623,808 字节；`slterm-hook.exe` 274,432 字节。
