@@ -1,6 +1,6 @@
 # Runtime v2 控制面合同
 
-> 登记 `runtime.hello`、`instance.handover` 与端点发现的操作语义和安全边界；字段形状只由生成的 [JSON Schema](runtime-api-v2.schema.json) 拥有。
+> 登记 Runtime 方法族、`instance.handover` 与端点发现的操作语义和安全边界；字段形状只由生成的 [JSON Schema](runtime-api-v2.schema.json) 拥有。
 
 ## 决策与红线
 
@@ -11,6 +11,11 @@
 - 合同散列均以随包 `runtime-api-v2.schema.json` 的原始字节为输入，输出 64 个小写 ASCII hex：`schema_sha256 = SHA-256(schema_bytes)`；`protocol_sha256 = SHA-256(b"slterm-runtime-v2" || schema_bytes)`。域分隔前缀后不得补 NUL、换行或其他分隔符，两个散列必须使用同一份字节且不得改动 schema 字段。
 - handover 回执在服务端 worker 中有界等待，生产上限 4 秒；超时返回数值码 `-32001` 与领域码 `not_ready`，回执发送端断开返回 `-32004` 与 `closing`，事件投递 helper 的 QueueFull 等错误保持原数值码和领域码。
 - `instance.handover` 只接受仅聚焦、打开既有项目、打开文件和新建终端。打开或新建不得隐式创建项目；路径与 cwd 必须重新经过 PathPolicy 和命令目录校验，显式 cwd 未授权或无效时拒绝，不回退到活跃项目。
+- 写方法只接受 `MutationParams` 信封并返回 `OperationResource`；`runtime.operation_get`／`runtime.operation_wait` 只读持久记录，相同幂等键与参数不重跑，`decision_required` 与 `outcome_unknown` 都是可查询终态。
+- 终端与 Agent：`terminal.input` 原样写 PTY，`terminal.execute` 只接受单行并追加一次回车；写目标由稳定 `terminal_id` 与 `generation` 共同定位，`terminal.read`／`terminal.wait` 与 `agent.read`／`agent.wait` 使用分页游标与 revision。Agent 身份由同一 PTY 映射派生，写方法必须同时匹配 `agent_id + terminal_id + generation`。
+- 布局与面板：Project／PanelGroup／Panel 方法只使用稳定身份与规范 ViewKey JSON 文本；`panel.open_file`、`panel.save` 与 `panel.close` 复用同一 Document 打开、保存与关闭链，完成回执在落定后发送。
+- Git：`git.status`／`git.diff` 只读；`git.rollback`／`git.delete` 是带 `expected` 前置条件的破坏写，`git.open_diff`／`git.open_deleted` 只接受与当前状态映射一致的条目；所有仓库读取与写盘都在连接线程内后台执行。
+- 非交互关闭：`app.close`、`panel.close` 与 `project.remove` 必须显式提供 Document／Hooks 处置策略；缺少策略时返回 `decision_required`，不弹模态、不自动丢弃。`app.focus` 只前置主窗口。
 - 响应的 `result` 与 `error` 必须恰好一个存在。标准 JSON-RPC 数值码与封闭 `error.data.code` 不得混用。
 
 ## 验收与测试
