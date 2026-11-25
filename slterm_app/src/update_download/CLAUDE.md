@@ -12,7 +12,7 @@
 - **restore ticket**：成功或回滚恢复都要版本匹配；最多 3 次尝试，`restored.json` 留档防重放。
 - **安装目录归属**：安装器管理的安装（旁置 `unins000.exe`）才允许自覆盖；便携 zip 走下载页手动替换。原因：覆盖不受管的目录会破坏用户文件。
 - **关闭守卫**：更新安装预约经 `UpdateInstallGuard` 先落盘；只有统一关闭的最终状态提交完成（`install_scheduled`）才保留预约，关闭取消、失败或 AppRoot 销毁时守卫由 Drop 写回 `null`，下次启动不安装。原因：安装预约不得绕过脏 Document 关闭守卫。边界：`AppRoot::begin_update_install` 只在关闭前登记守卫并启动关闭；`cancel_update_install` 是用户显式放弃入口；启动消费仍走 `apply_scheduled`。
-- **消费面**：启动链只消费 `installation_in_progress` 安装事务守卫；`prepare/commit/schedule` 与 restore ticket 由更新域的新快照协调器装配，不读取旧 session。
+- **消费面**：启动链在系统安装事务守卫之后消费 `apply_scheduled`：预约成功即退出进程交给 helper 覆盖安装，失败解除预约并继续正常启动；`prepare/commit/schedule` 与 restore ticket 由更新域的协调器装配，不读取旧 session。`integration_update` 覆盖退出中断（未 commit 按 cancel 收尾）、已 commit 等待 helper 结果与回滚恢复票防重放。
 
 ## 验收与测试
 

@@ -94,7 +94,7 @@
 | Markdown 与 Mermaid | [Markdown](design/markdown.md)、[Document](design/document.md) | `integration_markdown_mermaid_final` | 延期 |
 | 设置单例 | [设置与恢复](design/settings-recovery.md)、[工作区](design/workspace.md)、[Hooks](design/hooks.md) | `integration_settings_singleton` | 已自动化 |
 | 加密备份 | [设置与恢复](design/settings-recovery.md)、[持久化](design/persistence.md)、[生命周期](design/lifecycle.md) | `integration_encrypted_backup` | 已自动化 |
-| 更新 | [Windows](design/windows.md)、[生命周期](design/lifecycle.md) | `integration_update` | 待实现 |
+| 更新 | [Windows](design/windows.md)、[生命周期](design/lifecycle.md) | `integration_update` | 已自动化 |
 | 通知与任务栏 | [Windows](design/windows.md) | `integration_notification_taskbar` | 已自动化 |
 | 语言 | [Windows](design/windows.md) | `integration_language` | 已自动化 |
 | 诊断与清理 | [Windows](design/windows.md)、[持久化](design/persistence.md) | `integration_diagnostics_cleanup` | 待实现 |

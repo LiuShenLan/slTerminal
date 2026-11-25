@@ -465,6 +465,78 @@ fn installation_guard_lock_reports_an_in_progress_transaction() {
     assert!(!installation_in_progress_at(&executable).unwrap());
 }
 
+/// 集成锚：退出后中断与重开对账——未 commit 按 cancel 收尾，已 commit
+/// 等待 helper 结果，回滚事实生成恢复票且确认后防重放。
+#[test]
+fn integration_update() {
+    let root = tempfile::tempdir().unwrap();
+    let body = b"MZintegration update fixture";
+    let asset = installer_asset(body);
+    stage_ready_package(root.path(), &asset, body);
+    let (paths, executable) = fixture_paths(root.path());
+
+    // A. plan/ready 后中断（未 commit）：重开按 cancel 收尾，不安装。
+    {
+        let prepared = prepare_with(&asset, paths.clone(), spawn_fake_helper).unwrap();
+        assert_eq!(
+            transaction_state(&prepared.directory),
+            TransactionState::Prepared
+        );
+    }
+    let cancelled = last_handoff_path(root.path()).expect("handoff 目录必须登记");
+    let cancelled = cancelled.parent().unwrap().to_owned();
+    assert_eq!(transaction_state(&cancelled), TransactionState::Cancelled);
+
+    // B. commit 后中断：helper 结果落定后为 Finished，重开不得重复安装。
+    let mut prepared = prepare_with(&asset, paths.clone(), spawn_fake_helper).unwrap();
+    let directory = prepared.directory.clone();
+    prepared
+        .commit(&[Session::new(0, Vec::new())])
+        .expect("commit 授予安装权限");
+    wait_for(&directory.join("result.json"));
+    assert_eq!(transaction_state(&directory), TransactionState::Finished);
+    let result: serde_json::Value = read_json(&directory.join("result.json")).unwrap();
+    assert_eq!(result["success"], true);
+    assert_eq!(result["version"], "1.6.0");
+
+    // C. 新版本启动对账：回滚事实生成恢复票，确认后留档防重放。
+    let current = env!("CARGO_PKG_VERSION");
+    let mut plan: serde_json::Value = read_json(&directory.join("plan.json")).unwrap();
+    plan["original_version"] = json!(current);
+    crate::atomic_file::write(
+        &directory.join("plan.json"),
+        &serde_json::to_vec(&plan).unwrap(),
+    )
+    .unwrap();
+    crate::atomic_file::write(
+        &directory.join("result.json"),
+        &serde_json::to_vec(&json!({
+            "transaction": plan["transaction"],
+            "success": false,
+            "recovered_original": true,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    // 串行测试：进程级环境变量在本用例内独占。
+    unsafe { std::env::set_var("SLTERM_UPDATE_RESTORE", directory.join("plan.json")) };
+    reset_restore_state();
+    let windows = restore_ticket_at(root.path(), &executable, current).expect("回滚恢复票");
+    assert_eq!(windows.len(), 1);
+    acknowledge_restore(1);
+    assert!(
+        directory.join("restored.json").is_file(),
+        "启动确认必须留档"
+    );
+    assert!(
+        restore_ticket_at(root.path(), &executable, current).is_none(),
+        "确认后的恢复不得重放"
+    );
+    unsafe { std::env::remove_var("SLTERM_UPDATE_RESTORE") };
+    reset_restore_state();
+}
+
 /// 假 release 服务器全链:检查 → 资产选择 → 流式下载校验 → handoff 事务。
 #[test]
 fn fake_release_server_full_chain_rehearsal_is_green() {

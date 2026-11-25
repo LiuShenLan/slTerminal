@@ -495,6 +495,12 @@ fn run_shell_once(initial_cwd: Option<PathBuf>) -> startup_diagnostics::ShellRun
         Err(error) => log::warn!("could not inspect installation ownership: {error}"),
         Ok(false) => {}
     }
+    // 预约安装：helper 就绪后本进程必须退出，覆盖安装由 helper 完成。
+    // 无预约、便携版或需手动重装时立即返回 false，继续正常启动。
+    if crate::update_download::handoff::apply_scheduled() {
+        log::info!("scheduled update handed off; exiting for installation");
+        return startup_diagnostics::ShellRunOutcome::Exit;
+    }
     let regular_start = initial_cwd.is_none();
     // Windows 集成端口:启动静默判定与设置页对账共用同一真实实例。
     let windows: std::sync::Arc<dyn crate::platform::windows_integration::WindowsIntegration> =
