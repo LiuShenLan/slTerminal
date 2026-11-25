@@ -734,6 +734,22 @@ pub(super) static FIELDS: &[SettingsFieldUi] = &[
         Toggle,
     ),
     field(
+        "desktop_notifications",
+        SettingsPageId::System,
+        Message::SettingsAdvancedUpdates,
+        Message::SettingsProfilesDesktopNotifications,
+        Some(Message::SettingsProfilesDesktopNotificationsDescription),
+        Toggle,
+    ),
+    field(
+        "taskbar_flash",
+        SettingsPageId::System,
+        Message::SettingsAdvancedUpdates,
+        Message::SettingsProfilesTaskbarFlash,
+        Some(Message::SettingsProfilesTaskbarFlashDescription),
+        Toggle,
+    ),
+    field(
         "notification_duration",
         SettingsPageId::System,
         Message::SettingsAdvancedUpdates,

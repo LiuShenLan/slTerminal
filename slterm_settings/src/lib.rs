@@ -793,6 +793,10 @@ pub struct RuntimeSettings {
     pub bell: BellModeName,
     /// 应用内 AI 消息卡片;系统通知与终端/标签状态相互独立。
     pub ai_toasts: bool,
+    /// 系统桌面通知总开关;只控制系统 toast,应用内错误仍显示。
+    pub desktop_notifications: bool,
+    /// 失焦时任务栏闪烁;与桌面通知独立判定。
+    pub taskbar_flash: bool,
     /// 应用内卡片存活时长;Default = 不覆盖各类自带时长。
     pub notification_duration: NotificationDuration,
     /// 新会话欢迎屏 fastfetch(默认关:启动速度优先)。
@@ -938,6 +942,8 @@ impl RuntimeSettings {
                 .unwrap_or_default(),
             bell: BellModeName::from_settings(raw.value_or_default("bell")).unwrap_or_default(),
             ai_toasts: raw.bool_or_default("ai_toasts"),
+            desktop_notifications: raw.bool_or_default("desktop_notifications"),
+            taskbar_flash: raw.bool_or_default("taskbar_flash"),
             notification_duration: NotificationDuration::from_settings(
                 raw.value_or_default("notification_duration"),
             )
@@ -1060,6 +1066,8 @@ mod runtime_settings_tests {
             assert_eq!(settings.vcs_display, VcsDisplayName::Auto);
             assert_eq!(settings.bell, BellModeName::Both);
             assert!(settings.ai_toasts);
+            assert!(settings.desktop_notifications);
+            assert!(settings.taskbar_flash);
             assert_eq!(
                 settings.notification_duration,
                 NotificationDuration::Default

@@ -390,6 +390,10 @@
       "completion_style": "补全样式",
       "accept": "接受补全键",
       "ai_toasts": "AI 消息通知",
+      "desktop_notifications": "桌面通知",
+      "desktop_notifications_description": "仅控制系统通知：应用内错误仍会显示。",
+      "taskbar_flash": "任务栏闪烁",
+      "taskbar_flash_description": "仅在窗口未聚焦时闪烁。",
       "notification_duration": "通知时长",
       "notification_duration_description": "默认档不覆盖各消息自带时长。",
       "bell": "终端铃声"

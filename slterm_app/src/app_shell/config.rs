@@ -55,6 +55,10 @@ pub struct Settings {
     /// 常驻系统托盘图标:1 Hz 节拍按此值增删图标,
     /// 线程留驻不随开关销毁。
     pub tray: bool,
+    /// 系统桌面通知总开关:只控制系统 toast,应用内反馈仍显示。
+    pub desktop_notifications: bool,
+    /// 失焦时任务栏闪烁:与桌面通知独立判定。
+    pub taskbar_flash: bool,
     /// 静默启动:与 `tray` 合取决定首窗是否隐藏;
     /// 显式 CLI 目录启动恒不静默。
     pub silent_start: bool,
@@ -155,6 +159,8 @@ impl Settings {
             scroll_speed: runtime.scroll_speed,
             language: LanguagePreference::from(runtime.language).resolved(),
             tray: runtime.tray,
+            desktop_notifications: runtime.desktop_notifications,
+            taskbar_flash: runtime.taskbar_flash,
             silent_start: runtime.silent_start,
             blur,
             opacity,

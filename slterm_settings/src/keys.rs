@@ -805,6 +805,18 @@ pub static KEYS: &[SettingsKeyDef] = &[
         "ai toast 消息通知",
         true,
     ),
+    boolean(
+        "desktop_notifications",
+        SettingsDomain::System,
+        "desktop notification 桌面通知",
+        true,
+    ),
+    boolean(
+        "taskbar_flash",
+        SettingsDomain::System,
+        "taskbar flash 任务栏闪烁",
+        true,
+    ),
     text(
         "notification_duration",
         SettingsDomain::System,

@@ -400,6 +400,31 @@ pub(crate) struct DeliveryPlan {
     pub(crate) toast: Option<(String, String)>,
 }
 
+/// 桌面通知与任务栏闪烁两路开关:默认全开,互不代偿。
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct DeliverySwitches {
+    pub(crate) desktop: bool,
+    pub(crate) taskbar: bool,
+}
+
+impl Default for DeliverySwitches {
+    fn default() -> Self {
+        Self {
+            desktop: true,
+            taskbar: true,
+        }
+    }
+}
+
+/// 一次投递的上下文：聚焦、请求身份、启动汇总与两路开关。
+#[derive(Clone, Copy, Debug)]
+struct DeliveryContext {
+    focused: bool,
+    request: Option<u64>,
+    startup_summary: bool,
+    switches: DeliverySwitches,
+}
+
 /// 漏斗状态:节流窗口 + 失败 episode。时钟注入使全部策略可在单元层断言。
 #[derive(Default)]
 pub(crate) struct Funnel {
@@ -427,7 +452,59 @@ impl Funnel {
         request: Option<u64>,
         now: Instant,
     ) -> DeliveryPlan {
-        self.plan_with(notification, pane_id, focused, request, false, now)
+        self.plan_with_switches(
+            notification,
+            pane_id,
+            focused,
+            request,
+            DeliverySwitches::default(),
+            now,
+        )
+    }
+
+    /// 带桌面/任务栏开关的计划；两路独立，聚焦门控不受开关影响。
+    pub(crate) fn plan_with_switches(
+        &mut self,
+        notification: &Notification,
+        pane_id: PaneId,
+        focused: bool,
+        request: Option<u64>,
+        switches: DeliverySwitches,
+        now: Instant,
+    ) -> DeliveryPlan {
+        self.plan_with(
+            notification,
+            pane_id,
+            DeliveryContext {
+                focused,
+                request,
+                startup_summary: false,
+                switches,
+            },
+            now,
+        )
+    }
+
+    pub(crate) fn plan_startup_with_switches(
+        &mut self,
+        notification: &Notification,
+        pane_id: PaneId,
+        focused: bool,
+        request: Option<u64>,
+        switches: DeliverySwitches,
+        now: Instant,
+    ) -> DeliveryPlan {
+        self.plan_with(
+            notification,
+            pane_id,
+            DeliveryContext {
+                focused,
+                request,
+                startup_summary: true,
+                switches,
+            },
+            now,
+        )
     }
 
     /// 启动期一次性汇总豁免①前台门控(其余节流层不变)。
@@ -439,28 +516,44 @@ impl Funnel {
         request: Option<u64>,
         now: Instant,
     ) -> DeliveryPlan {
-        self.plan_with(notification, pane_id, focused, request, true, now)
+        self.plan_startup_with_switches(
+            notification,
+            pane_id,
+            focused,
+            request,
+            DeliverySwitches::default(),
+            now,
+        )
     }
 
     fn plan_with(
         &mut self,
         notification: &Notification,
         pane_id: PaneId,
-        focused: bool,
-        request: Option<u64>,
-        startup_summary: bool,
+        context: DeliveryContext,
         now: Instant,
     ) -> DeliveryPlan {
+        let DeliveryContext {
+            focused,
+            request,
+            startup_summary,
+            switches,
+        } = context;
         // ① 聚焦中不打扰:全部变体零投递,连闪烁也不发。启动汇总例外。
         if focused && !startup_summary {
             return DeliveryPlan::default();
         }
         // ② 闪烁是「恢复中」信号,先于一切节流;被节流时仍恰好发生一次。
-        // 启动汇总不闪(窗口已在前台,闪烁无意义)。
+        // 启动汇总不闪(窗口已在前台,闪烁无意义);开关关闭时同样不闪。
         let mut plan = DeliveryPlan {
-            flash: !startup_summary,
+            flash: switches.taskbar && !startup_summary,
             toast: None,
         };
+        // 桌面通知关闭:只闪不弹,且不消耗任何 toast 节流状态,
+        // 重新打开后不会继承关闭期间的空窗。
+        if !switches.desktop {
+            return plan;
+        }
         // ③ 全局间隔:窗口内任何 pane 的第二条 toast 被吞。
         if self
             .last_toast
@@ -494,6 +587,15 @@ static FOREGROUND: AtomicBool = AtomicBool::new(false);
 /// 壳窗口激活态变化唯一写入口(workspace 的 activation observer 调用)。
 pub(crate) fn set_foreground(focused: bool) {
     FOREGROUND.store(focused, Ordering::Relaxed);
+}
+
+/// 桌面通知与任务栏闪烁开关:从全局壳快照读取,缺省全开。
+fn delivery_switches(cx: &App) -> DeliverySwitches {
+    cx.try_global::<crate::app_shell::config::Settings>()
+        .map_or(DeliverySwitches::default(), |settings| DeliverySwitches {
+            desktop: settings.desktop_notifications,
+            taskbar: settings.taskbar_flash,
+        })
 }
 
 fn foreground() -> bool {
@@ -584,10 +686,25 @@ fn deliver_with(
         .lock()
         .unwrap_or_else(|poison| poison.into_inner());
     let request = confirmation.as_ref().map(|confirmation| confirmation.0);
+    let switches = delivery_switches(cx);
     let plan = if startup_summary {
-        funnel.plan_startup(notification, pane_id, foreground(), request, Instant::now())
+        funnel.plan_startup_with_switches(
+            notification,
+            pane_id,
+            foreground(),
+            request,
+            switches,
+            Instant::now(),
+        )
     } else {
-        funnel.plan(notification, pane_id, foreground(), request, Instant::now())
+        funnel.plan_with_switches(
+            notification,
+            pane_id,
+            foreground(),
+            request,
+            switches,
+            Instant::now(),
+        )
     };
     drop(funnel);
     if plan.flash {
@@ -931,6 +1048,57 @@ mod notification_tests {
                 "{notification:?}"
             );
         }
+    }
+
+    /// 桌面通知与任务栏闪烁独立判定：互不代偿或连带关闭。
+    #[test]
+    fn notification_and_taskbar_switches_independent() {
+        let notification = ai_turn("claude", None, false);
+        let now = Instant::now();
+        let plan = |desktop: bool, taskbar: bool| {
+            let mut funnel = Funnel::new();
+            funnel.plan_with_switches(
+                &notification,
+                PaneId(1),
+                false,
+                None,
+                DeliverySwitches { desktop, taskbar },
+                now,
+            )
+        };
+
+        let both = plan(true, true);
+        assert!(both.flash, "两开:闪烁在");
+        assert!(both.toast.is_some(), "两开:toast 在");
+
+        let desktop_only = plan(true, false);
+        assert!(!desktop_only.flash, "关闭任务栏闪烁不得再闪");
+        assert!(desktop_only.toast.is_some(), "桌面通知不受影响");
+
+        let taskbar_only = plan(false, true);
+        assert!(taskbar_only.flash, "任务栏闪烁不受桌面开关影响");
+        assert!(taskbar_only.toast.is_none(), "关闭桌面通知不得产生 toast");
+
+        let none = plan(false, false);
+        assert!(!none.flash);
+        assert!(none.toast.is_none());
+
+        // 聚焦时两路都不投递,与开关无关。
+        let mut funnel = Funnel::new();
+        assert_eq!(
+            funnel.plan_with_switches(
+                &notification,
+                PaneId(1),
+                true,
+                None,
+                DeliverySwitches {
+                    desktop: true,
+                    taskbar: true
+                },
+                now,
+            ),
+            DeliveryPlan::default()
+        );
     }
 
     /// 闪烁先行:被全局节流拦下时 flash 仍恰好为一次,toast 为 None;

@@ -390,6 +390,10 @@
       "completion_style": "Completion style",
       "accept": "Accept completion key",
       "ai_toasts": "AI notifications",
+      "desktop_notifications": "Desktop notifications",
+      "desktop_notifications_description": "Only controls system toasts; in-app errors still show.",
+      "taskbar_flash": "Taskbar flash",
+      "taskbar_flash_description": "Flashes only while the window is unfocused.",
       "notification_duration": "Notification duration",
       "notification_duration_description": "Default keeps each notification's own duration.",
       "bell": "Terminal bell"

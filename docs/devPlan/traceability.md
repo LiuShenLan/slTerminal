@@ -196,7 +196,7 @@
 | 移除显示器后窗口夹回可见工作区 | `windows_geometry_clamped_to_work_area` | 已自动化 |
 | 架构或哈希不符的更新资产不安装不执行 | `update_asset_validation_rejects_mismatch` | 待实现 |
 | 更新安装前先完成脏 Document 关闭守卫 | `update_install_uses_close_guard` | 待实现 |
-| 桌面通知与任务栏闪烁独立判定 | `notification_and_taskbar_switches_independent` | 待实现 |
+| 桌面通知与任务栏闪烁独立判定 | `notification_and_taskbar_switches_independent` | 已自动化 |
 | 错误优先且工作进度不伪造百分比 | `taskbar_priority_and_indeterminate_progress` | 待实现 |
 | 切换语言不重建工作区且缺译回退英文 | `i18n_switch_preserves_workspace` | 待实现 |
 | 清理排除活跃恢复材料且审计独立确认 | `cleanup_excludes_active_recovery_material` | 待实现 |
