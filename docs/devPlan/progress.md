@@ -21,9 +21,9 @@
 
 ### 当前进度
 
-状态锚：**2026-11-26，全量验收进行中；Windows 与发布阶段已进入最终核销。**
+状态锚：**2026-11-26，全部阶段验收完成。**
 
-当前实施位置：**全量验收（进行中）。**
+当前实施位置：**全部阶段完成；安装器与发布包实机项按清单在发布机执行。**
 
 | 命名阶段 | 状态 | 验收日期 | commit hash | 测试证据／阻塞事实 |
 |---|---|---|---|---|
@@ -37,8 +37,8 @@
 | Agent 与 Hooks | 已验收 | 2026-11-25 | `6e1fea36` | 能力目录、历史扫描／恢复／隔离批次与撤销、Agent 文件树、hook 小进程桥锚全量自动化；Hooks 编辑页新增 `hooks_page_loads_saves_external_guard_and_discards`，AgentHooks 页新增 `agent_hooks_page_renders_status_and_toggles_through_injected_ports`；全量 workspace、GPUI 全特性（2049 passed）、core release（141 passed）与脚本门禁（95 tests）全绿。 |
 | 设置、主题与恢复 | 已验收 | 2026-11-25 | `6e1fea36` | `settings_single_queue_across_views`、`settings_overlay_controls_write_runtime_values_and_queue`、`theme_import_complete_or_zero_write`、`backup_tamper_rejected_zero_write`、`backup_interrupted_restore_rolls_back`、`staged_restore_is_applied_at_startup_and_rotates_store_epoch`、`interrupted_apply_is_rolled_back_on_restart`、`backup_undo_fingerprint_conflict`、`backup_cross_machine_requires_relocation`、`backup_restore_does_not_restore_credentials` 通过；DPAPI 恢复点与维护期世代轮换已落地；全量 workspace、GPUI 全特性、core release 与脚本门禁全绿。 |
 | Runtime v2 | 已验收 | 2026-11-26 | `4c77058549cc1ea3156ce373f6e33cfafc1dc312` | 全部线缆方法族（含 Git 破坏写、面板打开/保存/关闭、App 聚焦/非交互关闭、项目移除策略）、单实例同构、凭据边界与诊断 token 白名单锚（`runtime_token_absent_from_materials`）通过；全量 workspace、GPUI 全特性、core release 与脚本门禁全绿。 |
-| Windows 与发布 | 进行中 | — | — | 平台接入、几何、套餐、调度、通知、i18n、更新、诊断、清理与发布链逐切片推进。 |
-| 全量验收 | 进行中 | — | — | 八个跨域验收锚已自动化核销；全量 workspace、GPUI、core release、两套 clippy、架构／文档策略／禁名门禁与脚本自测全绿；真实构建产物场景矩阵与最终交付状态推进中。 |
+| Windows 与发布 | 已验收 | 2026-11-26 | `9c76616b` | 平台接入（WindowsIntegration、窗口几何、套餐调度、通知与任务栏、i18n 热切换、更新守卫与启动对账、诊断白名单、清理）切片全绿；发布钉测试（profile、清单、体积预算、随包运行时）PASS；debug 构建产物真实运行矩阵（单实例窗口、第二实例移交、关窗退出、`clean_shutdown` 落盘、无残留进程）通过；安装器与发布包实机项按豁免留发布机。 |
+| 全量验收 | 已验收 | 2026-11-26 | `9c76616b` | 八个跨域验收锚自动化核销；全量 workspace、GPUI、core release、两套 clippy、架构／文档策略／禁名门禁与脚本自测全绿；许可清单按锁文件原子重建并复核通过；敏感材料扫描仅命中假值占位。 |
 
 ### 更新方式
 
