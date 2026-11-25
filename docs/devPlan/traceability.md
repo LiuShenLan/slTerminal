@@ -53,11 +53,11 @@
 
 | 验收场景 | 目标测试例名 | 状态 |
 |---|---|---|
-| 所有者判据可观察、可复现且不依赖内部状态 | `acceptance_user_contract_observable` | 待实现 |
-| 最终排除项没有隐藏入口或迁移占位 | `acceptance_excluded_surface_absent` | 待实现 |
-| 跨域集成不存在第二缓冲、授权或关闭通道 | `integration_single_authority_channels` | 待实现 |
-| 平台或第三方能力缺失按边界降级或失败 | `integration_platform_boundary_failure` | 待实现 |
-| 不可自动化面有豁免、兜底和人工记录 | `acceptance_exemptions_registered` | 待实现 |
+| 所有者判据可观察、可复现且不依赖内部状态 | `acceptance_user_contract_observable` | 已自动化 |
+| 最终排除项没有隐藏入口或迁移占位 | `acceptance_excluded_surface_absent` | 已自动化 |
+| 跨域集成不存在第二缓冲、授权或关闭通道 | `integration_single_authority_channels` | 已自动化 |
+| 平台或第三方能力缺失按边界降级或失败 | `integration_platform_boundary_failure` | 已自动化 |
+| 不可自动化面有豁免、兜底和人工记录 | `acceptance_exemptions_registered` | 已自动化 |
 
 ### 跨域集成场景
 
@@ -74,7 +74,7 @@
 | 最后引用关闭 | [生命周期](design/lifecycle.md)、[Document](design/document.md) | `integration_last_reference_close` | 已自动化 |
 | 批量关闭 | [生命周期](design/lifecycle.md)、[工作区](design/workspace.md) | `integration_batch_close` | 已自动化 |
 | 项目移除与退出 | [生命周期](design/lifecycle.md)、[工作区](design/workspace.md) | `integration_project_remove_and_exit` | 已自动化 |
-| 崩溃恢复 | [生命周期](design/lifecycle.md)、[持久化](design/persistence.md) | `integration_crash_recovery` | 待实现 |
+| 崩溃恢复 | [生命周期](design/lifecycle.md)、[持久化](design/persistence.md) | `integration_crash_recovery` | 已自动化 |
 | 快照配额 | [持久化](design/persistence.md)、[Document](design/document.md) | `integration_snapshot_quota` | 已自动化 |
 | 终端恢复 | [终端](design/terminal.md)、[生命周期](design/lifecycle.md) | `integration_terminal_restore` | 已自动化 |
 | PTY 上限 | [终端](design/terminal.md)、[工作区](design/workspace.md) | `integration_pty_limit` | 已自动化 |
@@ -123,8 +123,8 @@
 | 模态触发控件销毁后按链还焦 | `focus_modal_fallback_after_owner_destroy` | 已自动化 |
 | 重新可见只合并复核且丢弃过期结果 | `visibility_coalesces_refresh_and_drops_stale` | 已自动化 |
 | 隐藏后显式保存或文件操作结果仍可查询 | `operation_result_survives_view_hidden` | 已自动化 |
-| 日志、错误、备份和诊断不含敏感正文或凭据 | `sensitive_material_excluded_from_outputs` | 待实现 |
-| 性能数值具有测量条件或属于契约数值 | `performance_claims_have_conditions` | 待实现 |
+| 日志、错误、备份和诊断不含敏感正文或凭据 | `sensitive_material_excluded_from_outputs` | 已自动化 |
+| 性能数值具有测量条件或属于契约数值 | `performance_claims_have_conditions` | 已自动化 |
 
 ### Runtime v2
 
