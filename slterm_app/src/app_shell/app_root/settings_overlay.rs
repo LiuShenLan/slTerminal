@@ -1010,6 +1010,7 @@ impl AppRoot {
         let tray = settings.tray;
         cx.set_global(settings);
         gpui_component::set_locale(language.gpui_component_locale());
+        crate::notify::set_language(language);
         self.windows.set_tray_enabled(tray);
         crate::background_tasks::apply_settings(self.settings.values());
         crate::app_shell::theme::apply_dark_theme(cx);

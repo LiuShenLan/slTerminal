@@ -637,6 +637,8 @@ fn init(cx: &mut App) {
     let settings = config::Settings::load();
     // 组件库 locale 与自有文案分层:组件内置文案跟解析后的 UiLanguage。
     gpui_component::set_locale(settings.language.gpui_component_locale());
+    // 通知投递不读盘:语言只随壳快照热应用。
+    crate::notify::set_language(settings.language);
     cx.set_global(settings);
     theme::apply_dark_theme(cx);
     text_view::init(cx);

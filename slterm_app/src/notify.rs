@@ -250,9 +250,23 @@ impl Notification {
     }
 }
 
+/// 投递路径的当前文案语言：由壳快照热应用，不读磁盘，切换即时生效。
+static LANGUAGE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// 更新通知文案语言；启动与每次设置快照重建时调用。
+pub(crate) fn set_language(language: UiLanguage) {
+    let code = match language {
+        UiLanguage::EnUs => 0,
+        UiLanguage::ZhCn => 1,
+    };
+    LANGUAGE.store(code, Ordering::Relaxed);
+}
+
 fn notification_language() -> UiLanguage {
-    crate::i18n::LanguagePreference::from(crate::settings_store::load_runtime_settings().language)
-        .resolved()
+    match LANGUAGE.load(Ordering::Relaxed) {
+        1 => UiLanguage::ZhCn,
+        _ => UiLanguage::EnUs,
+    }
 }
 
 fn turn_issue_text(outcome: AiTurnOutcome, message: Option<&str>, language: UiLanguage) -> String {

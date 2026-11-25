@@ -96,7 +96,7 @@
 | 加密备份 | [设置与恢复](design/settings-recovery.md)、[持久化](design/persistence.md)、[生命周期](design/lifecycle.md) | `integration_encrypted_backup` | 已自动化 |
 | 更新 | [Windows](design/windows.md)、[生命周期](design/lifecycle.md) | `integration_update` | 待实现 |
 | 通知与任务栏 | [Windows](design/windows.md) | `integration_notification_taskbar` | 已自动化 |
-| 语言 | [Windows](design/windows.md) | `integration_language` | 待实现 |
+| 语言 | [Windows](design/windows.md) | `integration_language` | 已自动化 |
 | 诊断与清理 | [Windows](design/windows.md)、[持久化](design/persistence.md) | `integration_diagnostics_cleanup` | 待实现 |
 
 ### 加密备份与恢复
@@ -198,7 +198,7 @@
 | 更新安装前先完成脏 Document 关闭守卫 | `update_install_uses_close_guard` | 待实现 |
 | 桌面通知与任务栏闪烁独立判定 | `notification_and_taskbar_switches_independent` | 已自动化 |
 | 错误优先且工作进度不伪造百分比 | `taskbar_priority_and_indeterminate_progress` | 已自动化 |
-| 切换语言不重建工作区且缺译回退英文 | `i18n_switch_preserves_workspace` | 待实现 |
+| 切换语言不重建工作区且缺译回退英文 | `i18n_switch_preserves_workspace` | 已自动化 |
 | 清理排除活跃恢复材料且审计独立确认 | `cleanup_excludes_active_recovery_material` | 待实现 |
 
 ### 工作区壳

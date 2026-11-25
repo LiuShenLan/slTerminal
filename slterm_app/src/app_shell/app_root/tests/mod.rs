@@ -10,6 +10,7 @@ mod documents;
 mod explorer;
 mod gitshow;
 mod handover;
+mod language;
 mod layout;
 mod local_close;
 mod local_close_receipts;
