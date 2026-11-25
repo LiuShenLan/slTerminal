@@ -831,6 +831,11 @@ impl AppRoot {
         if let Some(project) = self.projects.get(&close.record.project_id()) {
             self.agents
                 .remove(crate::gpui_terminal::PaneId(close.panel_id.sequence()));
+            // 面板关闭即清自己的任务栏进度,不留残条。
+            crate::notify::clear_taskbar_for(
+                crate::gpui_terminal::PaneId(close.panel_id.sequence()),
+                crate::windowing::focus::window_hwnd(cx),
+            );
             project.update(cx, |project, _| {
                 project.panels.remove(&close.panel_id);
                 if project.focused_panel == Some(close.panel_id) {

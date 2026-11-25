@@ -66,6 +66,11 @@ pub(crate) fn publish_window(window: &Window) {
 /// `_cx` 保留设计签名槽:当前实现读开窗时发布的进程级句柄;多窗回扩时
 /// 改为按 `cx` 的活动窗口查询。
 pub(crate) fn window_hwnd(_cx: &App) -> Option<isize> {
+    published_hwnd()
+}
+
+/// 已发布主窗 HWND 的上下文无关查询点（通知聚焦清理等无 App 路径）。
+pub(crate) fn published_hwnd() -> Option<isize> {
     match MAIN_WINDOW_HWND.load(Ordering::Relaxed) {
         0 => None,
         hwnd => Some(hwnd),

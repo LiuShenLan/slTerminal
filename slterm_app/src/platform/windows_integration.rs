@@ -30,6 +30,9 @@ pub(crate) trait WindowsIntegration: Send + Sync {
     /// 窗口材质在当前系统的实际形态；不支持时设置页禁用并说明。
     fn blur_support(&self, mode: BlurMode) -> BlurSupport;
 
+    /// 任务栏进度；无原生窗口句柄时静默跳过。
+    fn set_taskbar_progress(&self, hwnd: Option<isize>, progress: crate::taskbar::TaskProgress);
+
     /// 设置值与 Windows 实际启动项的对账报告。
     fn login_start_report(&self, setting_enabled: bool) -> LoginStartReport {
         LoginStartReport {
@@ -180,6 +183,12 @@ impl WindowsIntegration for SystemWindowsIntegration {
 
     fn blur_support(&self, mode: BlurMode) -> BlurSupport {
         crate::platform::material::blur_support(mode)
+    }
+
+    fn set_taskbar_progress(&self, hwnd: Option<isize>, progress: crate::taskbar::TaskProgress) {
+        if let Some(hwnd) = hwnd {
+            crate::taskbar::apply(hwnd, progress);
+        }
     }
 }
 
@@ -386,6 +395,7 @@ struct FakeState {
     login_start: Option<LoginStartState>,
     fail_writes: bool,
     blur_support: BlurSupport,
+    taskbar_progress: Vec<crate::taskbar::TaskProgress>,
 }
 
 #[cfg(test)]
@@ -398,6 +408,7 @@ impl Default for FakeState {
             login_start: None,
             fail_writes: false,
             blur_support: BlurSupport::Native,
+            taskbar_progress: Vec::new(),
         }
     }
 }
@@ -411,6 +422,11 @@ impl FakeWindowsIntegration {
     /// 覆盖依赖系统 backdrop 的档位形态；None/Aero 始终原生可用。
     pub(crate) fn set_blur_support(&self, support: BlurSupport) {
         self.lock().blur_support = support;
+    }
+
+    /// 取走已投递的任务栏进度序列。
+    pub(crate) fn take_taskbar_progress(&self) -> Vec<crate::taskbar::TaskProgress> {
+        std::mem::take(&mut self.lock().taskbar_progress)
     }
 
     pub(crate) fn set_actual_state(&self, state: LoginStartState) {
@@ -479,5 +495,9 @@ impl WindowsIntegration for FakeWindowsIntegration {
             return BlurSupport::Native;
         }
         self.lock().blur_support
+    }
+
+    fn set_taskbar_progress(&self, _hwnd: Option<isize>, progress: crate::taskbar::TaskProgress) {
+        self.lock().taskbar_progress.push(progress);
     }
 }

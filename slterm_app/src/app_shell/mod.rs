@@ -558,6 +558,8 @@ fn run_shell_once(initial_cwd: Option<PathBuf>) -> startup_diagnostics::ShellRun
     // AUMID 预注册幂等,必须早于第一条通知。
     crate::notify::init_gpui_activation(shell_tx.clone());
     crate::platform::notifications::prepare();
+    // 通知与设置页共用同一 Windows 集成端口：任务栏进度只经端口落平台。
+    crate::notify::install_windows_integration(windows.clone());
     // 托盘命令回调:托盘线程只经此把用户动作送回壳事件队列。
     crate::tray::init_gpui({
         let shell_events = shell_tx.clone();

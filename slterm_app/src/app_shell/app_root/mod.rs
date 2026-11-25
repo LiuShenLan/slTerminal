@@ -42,6 +42,7 @@ mod sidebar;
 mod tabs;
 mod task_service;
 mod terminal_close;
+mod terminal_events;
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod tests;
 mod window_geometry;

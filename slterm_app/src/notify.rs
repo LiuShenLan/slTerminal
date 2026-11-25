@@ -584,9 +584,116 @@ impl Funnel {
 
 static FOREGROUND: AtomicBool = AtomicBool::new(false);
 
+/// 生产启动注册的 Windows 集成端口；任务栏投递只经此访问平台。
+static WINDOWS_INTEGRATION: Mutex<
+    Option<Arc<dyn crate::platform::windows_integration::WindowsIntegration>>,
+> = Mutex::new(None);
+
+/// 任务栏状态与 OSC 进度共享一条进度条；全局单实例。
+static TASKBAR_STATE: Mutex<Option<crate::taskbar::TaskbarState>> = Mutex::new(None);
+
+/// 启动链注册 Windows 集成端口（任务栏投递与设置页共用同一实例）。
+pub(crate) fn install_windows_integration(
+    windows: Arc<dyn crate::platform::windows_integration::WindowsIntegration>,
+) {
+    *WINDOWS_INTEGRATION
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = Some(windows);
+}
+
+#[cfg(test)]
+pub(crate) fn reset_windows_integration_for_test() {
+    *WINDOWS_INTEGRATION
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = None;
+    reset_taskbar_for_test();
+}
+
+#[cfg(test)]
+fn reset_taskbar_for_test() {
+    *TASKBAR_STATE
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = None;
+}
+
+/// 应用一条任务栏信号；只把仲裁后的变化交给平台。
+pub(crate) fn apply_taskbar_signal(signal: crate::taskbar::TaskbarSignal, hwnd: Option<isize>) {
+    let progress = {
+        let mut state = TASKBAR_STATE
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        state
+            .get_or_insert_with(crate::taskbar::TaskbarState::new)
+            .apply_signal(signal)
+    };
+    publish_taskbar_update(progress, hwnd);
+}
+
+/// 聚焦 pane 的 OSC 9;4 进度：与信号层共用同一条任务栏。
+pub(crate) fn observe_taskbar_progress(
+    pane: PaneId,
+    progress: crate::taskbar::TaskProgress,
+    hwnd: Option<isize>,
+) {
+    let update = {
+        let mut state = TASKBAR_STATE
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        state
+            .get_or_insert_with(crate::taskbar::TaskbarState::new)
+            .observe(pane, progress)
+    };
+    publish_taskbar_update(update, hwnd);
+}
+
+/// 面板关闭或焦点切走：只清除该 pane 自己的进度。
+pub(crate) fn clear_taskbar_for(pane: PaneId, hwnd: Option<isize>) {
+    let update = {
+        let mut state = TASKBAR_STATE
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        state
+            .get_or_insert_with(crate::taskbar::TaskbarState::new)
+            .clear_for(pane)
+    };
+    publish_taskbar_update(update, hwnd);
+}
+
+fn publish_taskbar_update(progress: Option<crate::taskbar::TaskProgress>, hwnd: Option<isize>) {
+    let Some(progress) = progress else {
+        return;
+    };
+    let windows = WINDOWS_INTEGRATION
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .clone();
+    if let Some(windows) = windows {
+        windows.set_taskbar_progress(hwnd, progress);
+    }
+}
+
+/// 通知类别 → 任务栏信号：失败最高，等待输入其次，完成清理等待与错误。
+fn taskbar_signals(notification: &Notification) -> &'static [crate::taskbar::TaskbarSignal] {
+    use crate::taskbar::TaskbarSignal;
+    if notification.is_failure() {
+        &[TaskbarSignal::ErrorRaised]
+    } else if notification.is_attention() {
+        &[TaskbarSignal::AttentionRaised]
+    } else {
+        &[TaskbarSignal::AttentionCleared, TaskbarSignal::ErrorCleared]
+    }
+}
+
 /// 壳窗口激活态变化唯一写入口(workspace 的 activation observer 调用)。
 pub(crate) fn set_foreground(focused: bool) {
     FOREGROUND.store(focused, Ordering::Relaxed);
+    if focused {
+        // 重新聚焦清理等待提示；错误保留到解决或关闭。
+        apply_taskbar_signal(
+            crate::taskbar::TaskbarSignal::AttentionCleared,
+            crate::windowing::focus::published_hwnd(),
+        );
+    }
 }
 
 /// 桌面通知与任务栏闪烁开关:从全局壳快照读取,缺省全开。
@@ -707,9 +814,14 @@ fn deliver_with(
         )
     };
     drop(funnel);
+    let hwnd = crate::windowing::focus::window_hwnd(cx);
+    // 任务栏状态与桌面/任务栏闪烁开关独立:类别决定优先级,开关只管投递通道。
+    for signal in taskbar_signals(notification) {
+        apply_taskbar_signal(*signal, hwnd);
+    }
     if plan.flash {
         // 闪烁先行:节流只挡系统 toast,不挡任务栏提示。
-        crate::platform::notifications::flash_taskbar(crate::windowing::focus::window_hwnd(cx));
+        crate::platform::notifications::flash_taskbar(hwnd);
     }
     let Some((title, body)) = plan.toast else {
         log::debug!(
@@ -1048,6 +1160,62 @@ mod notification_tests {
                 "{notification:?}"
             );
         }
+    }
+
+    /// 集成锚：通知类别驱动任务栏状态，错误优先且信号不伪造百分比。
+    #[test]
+    fn integration_notification_taskbar() {
+        use crate::platform::windows_integration::FakeWindowsIntegration;
+        use crate::taskbar::{TaskProgress, TaskbarSignal};
+
+        reset_windows_integration_for_test();
+        let windows = std::sync::Arc::new(FakeWindowsIntegration::default());
+        install_windows_integration(windows.clone());
+
+        // 类别映射：失败最高，等待输入其次，完成清理等待与错误。
+        assert_eq!(
+            taskbar_signals(&ai_turn("claude", None, true)),
+            &[TaskbarSignal::AttentionRaised]
+        );
+        assert_eq!(
+            taskbar_signals(&ai_issue(None, AiTurnOutcome::Failed)),
+            &[TaskbarSignal::ErrorRaised]
+        );
+        assert_eq!(
+            taskbar_signals(&ai_turn("claude", None, false)),
+            &[TaskbarSignal::AttentionCleared, TaskbarSignal::ErrorCleared]
+        );
+
+        apply_taskbar_signal(TaskbarSignal::AttentionRaised, Some(1));
+        assert_eq!(
+            windows.take_taskbar_progress(),
+            vec![TaskProgress::Paused(None)],
+            "等待输入只染色不编百分比"
+        );
+        apply_taskbar_signal(TaskbarSignal::ErrorRaised, Some(1));
+        assert_eq!(
+            windows.take_taskbar_progress(),
+            vec![TaskProgress::Error(None)]
+        );
+        apply_taskbar_signal(TaskbarSignal::AttentionCleared, Some(1));
+        assert!(
+            windows.take_taskbar_progress().is_empty(),
+            "错误优先，低优先级变化不投递"
+        );
+        apply_taskbar_signal(TaskbarSignal::ErrorCleared, Some(1));
+        assert_eq!(windows.take_taskbar_progress(), vec![TaskProgress::None]);
+
+        // 重新聚焦清理等待提示；任务栏进度与闪烁/桌面开关独立。
+        apply_taskbar_signal(TaskbarSignal::AttentionRaised, Some(1));
+        assert_eq!(
+            windows.take_taskbar_progress(),
+            vec![TaskProgress::Paused(None)]
+        );
+        set_foreground(true);
+        assert_eq!(windows.take_taskbar_progress(), vec![TaskProgress::None]);
+        set_foreground(false);
+
+        reset_windows_integration_for_test();
     }
 
     /// 桌面通知与任务栏闪烁独立判定：互不代偿或连带关闭。

@@ -32,6 +32,7 @@ mod runtime_snapshot;
 mod settings_overlay;
 mod sidebar;
 mod tabs;
+mod taskbar;
 mod terminal_cwd;
 mod terminal_reconnect;
 mod terminal_restore;

@@ -19,7 +19,7 @@ use uuid::Uuid;
 use crate::gpui_terminal::PaneId;
 use crate::gpui_terminal::registry::{RegistryError, TerminalRegistry, TerminalTarget};
 use crate::gpui_terminal::session::SharedTerminal;
-use crate::gpui_terminal::view::{TerminalLaunch, TerminalView, TerminalViewEvent};
+use crate::gpui_terminal::view::{TerminalLaunch, TerminalView};
 
 use super::command_registry::{
     CommandId, CommandOutcome, CommandParameters, CommandSource, CommandTarget,
@@ -1615,7 +1615,15 @@ impl AppRoot {
             .ok_or(AppRootError::MissingPanel)?;
         self.focus_manager.request_focus(focus_token, window, cx)?;
         self.commit_project_snapshot(candidate, cx);
+        let previous = project.read(cx).focused_panel;
         project.update(cx, |project, _| project.focused_panel = Some(panel_id));
+        if let Some(previous) = previous.filter(|previous| *previous != panel_id) {
+            // 切走的面板不得把旧任务栏进度留在新聚焦 pane 名下。
+            crate::notify::clear_taskbar_for(
+                crate::gpui_terminal::PaneId(previous.sequence()),
+                crate::windowing::focus::window_hwnd(cx),
+            );
+        }
         cx.notify();
         Ok(())
     }
@@ -1922,76 +1930,5 @@ impl AppRoot {
                     .map(|host| host.status())
             })
             .unwrap_or(crate::ai_agents::AgentStatus::Unknown)
-    }
-
-    fn sync_agent_command(&mut self, panel_id: PanelId, started: bool, cx: &mut Context<'_, Self>) {
-        let Some(terminal_id) = self.terminal_identity(panel_id, cx) else {
-            return;
-        };
-        let Some(project_id) = self
-            .snapshot
-            .terminal(terminal_id)
-            .map(|record| record.project_id())
-        else {
-            return;
-        };
-        let pane_id = PaneId(panel_id.sequence());
-        if started {
-            let program = self
-                .terminal_panel(project_id, terminal_id, cx)
-                .and_then(|(_, terminal)| terminal.read(cx).running_program.clone());
-            self.agents.command_started(pane_id, program.as_deref());
-        } else {
-            self.agents.command_finished(pane_id);
-        }
-        let agent = self.agents.session_agent(pane_id);
-        let current = self
-            .snapshot
-            .terminal(terminal_id)
-            .and_then(|record| record.agent());
-        if current == agent.as_ref() {
-            cx.notify();
-            return;
-        }
-        match self.snapshot.with_terminal_agent(terminal_id, agent) {
-            Ok(candidate) => {
-                self.commit_project_snapshot(candidate, cx);
-                cx.notify();
-            }
-            Err(error) => log::warn!("终端 Agent 身份提交失败: {error}"),
-        }
-    }
-
-    pub(crate) fn on_terminal_event(
-        &mut self,
-        panel_id: PanelId,
-        event: &TerminalViewEvent,
-        _window: &mut Window,
-        cx: &mut Context<'_, Self>,
-    ) {
-        match event {
-            TerminalViewEvent::TitleChanged => cx.notify(),
-            TerminalViewEvent::Exited => {
-                let Some(terminal_id) = self.terminal_identity(panel_id, cx) else {
-                    return;
-                };
-                self.agents.process_exited(PaneId(panel_id.sequence()));
-                match self
-                    .snapshot
-                    .with_terminal_run_intent(terminal_id, RunIntent::Exited)
-                {
-                    Ok(candidate) => {
-                        self.commit_project_snapshot(candidate, cx);
-                        cx.notify();
-                    }
-                    Err(error) => log::warn!("终端退出状态提交失败: {error}"),
-                }
-            }
-            TerminalViewEvent::CommandStarted => self.sync_agent_command(panel_id, true, cx),
-            TerminalViewEvent::CommandFinished => self.sync_agent_command(panel_id, false, cx),
-            TerminalViewEvent::UserInput(_)
-            | TerminalViewEvent::CommandSubmitted(_)
-            | TerminalViewEvent::ProgressChanged(_) => {}
-        }
     }
 }
