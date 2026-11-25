@@ -612,3 +612,101 @@ fn app_overlay_does_not_close_on_project_activation(cx: &mut TestAppContext) {
         );
     });
 }
+
+/// 设置页对账：启动项被外部改成其他程序时显示实际状态，不拿设置值冒充。
+#[gpui::test]
+fn settings_overlay_reports_the_actual_login_start_state(cx: &mut TestAppContext) {
+    let (root, mut window, _state) = open_root(cx);
+    let windows = std::sync::Arc::new(
+        crate::platform::windows_integration::FakeWindowsIntegration::default(),
+    );
+    windows.set_actual_state(crate::platform::startup::LoginStartState::OtherTarget(
+        "other.exe".into(),
+    ));
+    root.update(cx, |root, _| root.replace_windows_for_test(windows.clone()));
+    focus_workspace(&root, &mut window);
+    open_settings(&mut window);
+
+    let page = window
+        .debug_bounds("settings-page-3")
+        .expect("Session 页入口必须存在");
+    window.simulate_click(page.center(), Modifiers::default());
+    draw_frame(&mut window);
+    assert!(
+        window
+            .debug_bounds("settings-field-launch_at_login-actual")
+            .is_some(),
+        "启动项被外部修改后必须显示实际状态说明"
+    );
+}
+
+/// 托盘不可用：静默启动与托盘字段都必须说明回退到可见窗口。
+#[gpui::test]
+fn settings_overlay_explains_the_unusable_tray_fallback(cx: &mut TestAppContext) {
+    let (root, mut window, _state) = open_root(cx);
+    let windows = std::sync::Arc::new(
+        crate::platform::windows_integration::FakeWindowsIntegration::default(),
+    );
+    windows.set_tray_available(false);
+    root.update(cx, |root, cx| {
+        root.replace_windows_for_test(windows.clone());
+        root.apply_settings_field(
+            "silent_start",
+            slterm_settings::json::Value::Bool(true),
+            cx,
+        );
+        root.apply_settings_field("tray", slterm_settings::json::Value::Bool(true), cx);
+    });
+    focus_workspace(&root, &mut window);
+    open_settings(&mut window);
+
+    let page = window
+        .debug_bounds("settings-page-3")
+        .expect("Session 页入口必须存在");
+    window.simulate_click(page.center(), Modifiers::default());
+    draw_frame(&mut window);
+    assert!(
+        window
+            .debug_bounds("settings-field-silent_start-actual")
+            .is_some(),
+        "托盘不可用时静默启动必须说明回退"
+    );
+
+    let page = window
+        .debug_bounds("settings-page-4")
+        .expect("System 页入口必须存在");
+    window.simulate_click(page.center(), Modifiers::default());
+    draw_frame(&mut window);
+    assert!(
+        window.debug_bounds("settings-field-tray-actual").is_some(),
+        "托盘不可用时托盘字段必须说明"
+    );
+}
+
+/// 字段写入经 WindowsIntegration 端口：启动项与托盘副作用同源。
+#[gpui::test]
+fn settings_field_writes_use_the_windows_integration_port(cx: &mut TestAppContext) {
+    let (root, _window, _state) = open_root(cx);
+    let windows = std::sync::Arc::new(
+        crate::platform::windows_integration::FakeWindowsIntegration::default(),
+    );
+    root.update(cx, |root, _| root.replace_windows_for_test(windows.clone()));
+
+    root.update(cx, |root, cx| {
+        root.apply_settings_field(
+            "launch_at_login",
+            slterm_settings::json::Value::Bool(true),
+            cx,
+        );
+    });
+    assert_eq!(
+        windows.current_login_start_state(),
+        crate::platform::startup::LoginStartState::Enabled,
+        "开机启动写入必须经端口"
+    );
+
+    root.update(cx, |root, cx| {
+        root.apply_settings_field("tray", slterm_settings::json::Value::Bool(true), cx);
+    });
+    assert!(windows.tray_enabled(), "托盘启用必须经端口");
+}

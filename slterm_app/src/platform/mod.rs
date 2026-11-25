@@ -38,5 +38,6 @@ pub(crate) mod process_snapshot;
 pub(crate) mod project_paths;
 #[allow(dead_code)] // 登录启动设置归 Windows 与发布阶段。
 pub(crate) mod startup;
+pub(crate) mod windows_integration;
 // 安装器 handoff 的原生面:路径规范化/进程身份/helper 启动。
 pub(crate) mod update_installation;

@@ -34,7 +34,12 @@ fn open_real_root_with_persistence(
                     Box::new(LocalTerminalLauncher),
                     persistence,
                     None,
-                    None,
+                    AppRootPorts {
+                        runtime_events: None,
+                        windows: std::sync::Arc::new(
+                            crate::platform::windows_integration::FakeWindowsIntegration::default(),
+                        ),
+                    },
                     cx,
                 )
             });

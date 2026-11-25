@@ -201,6 +201,21 @@ pub(crate) fn set_enabled(enabled: bool) {
     }
 }
 
+/// 托盘可用性：已请求启用且托盘线程已正常起跑。
+///
+/// 建窗失败会复位启动闸门并允许后续重试，因此这里读的是「最近一次
+/// 启动请求未被判定失败」，用于启动期决定能否隐藏窗口。
+pub(crate) fn available() -> bool {
+    #[cfg(windows)]
+    {
+        lock_state().enabled && win::thread_started()
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
 /// 发布最新 agent 清单。内容没变就不打扰托盘线程(1 Hz 调用方无需去抖)。
 pub(crate) fn update(agents: Vec<TrayAgent>, language: UiLanguage) {
     let (changed, enabled) = {
@@ -458,6 +473,11 @@ mod win {
                 windows_sys::Win32::UI::WindowsAndMessaging::PostMessageW(hwnd as _, message, 0, 0);
             }
         }
+    }
+
+    /// 托盘线程是否已正常起跑(建窗失败会复位,用于可用性判定)。
+    pub(super) fn thread_started() -> bool {
+        THREAD_STARTED.load(Ordering::SeqCst)
     }
 
     pub(super) fn ensure_thread() {

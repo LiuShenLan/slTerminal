@@ -509,6 +509,7 @@ impl AppRoot {
                     let view_states = self.side_view_persistence.settings_view_states();
                     let settings_key = view.clone();
                     let root_handle = cx.entity().downgrade();
+                    let windows = self.windows.clone();
                     let initial_values =
                         super::settings_controls::initial_field_values(self.settings.values());
                     let result = self.install_panel(
@@ -528,7 +529,10 @@ impl AppRoot {
                                     settings_key,
                                     Some(view_states),
                                     false,
-                                    root_handle,
+                                    super::settings_overlay::SettingsViewRoots {
+                                        root: root_handle,
+                                        windows,
+                                    },
                                     initial_values,
                                 )
                             });

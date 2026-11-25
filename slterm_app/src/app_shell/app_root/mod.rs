@@ -179,6 +179,16 @@ pub(crate) struct AppRootServices {
     pub(crate) learning: crate::learning::LearningService,
     /// Runtime 事件发布端口；无控制面时为 None。
     pub(crate) runtime_events: Option<crate::local_control::RuntimeEventPublisher>,
+    /// Windows 集成端口：设置页对账与平台副作用只经此访问。
+    pub(crate) windows:
+        std::sync::Arc<dyn crate::platform::windows_integration::WindowsIntegration>,
+}
+
+/// 启动期运行端口：Runtime 事件发布与 Windows 集成，不含持久化依赖。
+pub(crate) struct AppRootPorts {
+    pub(crate) runtime_events: Option<crate::local_control::RuntimeEventPublisher>,
+    pub(crate) windows:
+        std::sync::Arc<dyn crate::platform::windows_integration::WindowsIntegration>,
 }
 
 /// 单窗口运行根；`projects` 只是强实体引用表，不复制项目注册信息。
@@ -195,6 +205,8 @@ pub(crate) struct AppRoot {
     snapshot_generation: u64,
     /// Runtime 轻量事件发布端口；关闭开始后不再发布。
     runtime_events: Option<crate::local_control::RuntimeEventPublisher>,
+    /// Windows 集成端口：设置页对账与平台副作用只经此访问。
+    windows: std::sync::Arc<dyn crate::platform::windows_integration::WindowsIntegration>,
     /// 最近一次 Explorer 根同步对应的快照代次；渲染只在差异时延迟接线。
     side_view_roots_generation: Option<u64>,
     project_writer: Option<WorkspaceWriterClient>,
@@ -336,6 +348,14 @@ impl AppRoot {
         self.file_operations = std::sync::Arc::new(service);
     }
 
+    /// 测试注入 Windows 集成端口；覆盖启动项外部变化与托盘不可用。
+    pub(crate) fn replace_windows_for_test(
+        &mut self,
+        windows: std::sync::Arc<dyn crate::platform::windows_integration::WindowsIntegration>,
+    ) {
+        self.windows = windows;
+    }
+
     /// 测试注入 Agent 全局目录快照；避免触碰真实用户 home。
     pub(crate) fn replace_agent_global_dirs_for_test(
         &mut self,
@@ -368,7 +388,10 @@ impl AppRoot {
             Box::new(commands::LocalTerminalLauncher),
             services.persistence,
             Some(services.global_close),
-            services.runtime_events,
+            AppRootPorts {
+                runtime_events: services.runtime_events,
+                windows: services.windows,
+            },
             cx,
         );
         root.learning = services.learning;
@@ -381,9 +404,13 @@ impl AppRoot {
         launcher: Box<dyn TerminalPanelLauncher>,
         mut persistence: AppRootPersistence,
         global_close: Option<GlobalCloseClient>,
-        runtime_events: Option<crate::local_control::RuntimeEventPublisher>,
+        ports: AppRootPorts,
         cx: &mut Context<'_, Self>,
     ) -> Self {
+        let AppRootPorts {
+            runtime_events,
+            windows,
+        } = ports;
         let workspace_focus = cx.focus_handle();
         let mut focus_manager = FocusManager::new(&workspace_focus);
         let project_writer = persistence.writer_client();
@@ -469,6 +496,7 @@ impl AppRoot {
             snapshot,
             snapshot_generation: 0,
             runtime_events,
+            windows,
             side_view_roots_generation: None,
             project_writer,
             store_epoch,

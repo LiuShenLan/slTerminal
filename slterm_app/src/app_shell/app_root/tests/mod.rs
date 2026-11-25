@@ -77,7 +77,7 @@ use super::command_registry::{
 use super::commands::{AppRootError, LocalTerminalLauncher};
 use super::focus_manager::FocusError;
 use super::side_view::AppRootPersistence;
-use super::{AppRoot, TerminalPanelLauncher};
+use super::{AppRoot, AppRootPorts, TerminalPanelLauncher};
 
 const PROJECT_A: &str = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2a";
 const PROJECT_B: &str = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b";
@@ -368,7 +368,12 @@ fn open_root_with_persistence_and_size_configured(
                 Box::new(launcher),
                 persistence,
                 global_close,
-                None,
+                AppRootPorts {
+                    runtime_events: None,
+                    windows: std::sync::Arc::new(
+                        crate::platform::windows_integration::FakeWindowsIntegration::default(),
+                    ),
+                },
                 cx,
             );
             root.project_paths = Arc::new(TestProjectPaths);

@@ -37,6 +37,8 @@ pub(super) struct SettingsView {
     view_states: Option<SettingsViewStateStore>,
     /// 字段修改统一交给 AppRoot：运行值、写队列、热应用与副作用单点。
     pub(super) root: WeakEntity<AppRoot>,
+    /// Windows 集成端口：设置页展示实际启动项与托盘可用性的只读事实。
+    windows: std::sync::Arc<dyn crate::platform::windows_integration::WindowsIntegration>,
     /// 文本／颜色字段的输入实体按字段键缓存，跨页切换保留未提交编辑。
     inputs: BTreeMap<&'static str, Entity<InputState>>,
     /// 仅用于保持 InputState 订阅存活，不直接读取。
@@ -55,11 +57,18 @@ pub(super) struct SettingsView {
     hooks_synced_generation: u64,
 }
 
+/// 设置视图的共享运行根与平台端口：构造参数聚合，避免位置参数继续膨胀。
+pub(super) struct SettingsViewRoots {
+    pub(super) root: WeakEntity<AppRoot>,
+    pub(super) windows:
+        std::sync::Arc<dyn crate::platform::windows_integration::WindowsIntegration>,
+}
+
 impl SettingsView {
     fn new_overlay(
         window: &mut Window,
         cx: &mut Context<'_, Self>,
-        root: WeakEntity<AppRoot>,
+        roots: SettingsViewRoots,
         initial_values: BTreeMap<&'static str, Option<Value>>,
     ) -> Self {
         Self::with_state(
@@ -68,7 +77,7 @@ impl SettingsView {
             ViewKey::AppSettingsOverlay,
             None,
             true,
-            root,
+            roots,
             initial_values,
         )
     }
@@ -79,9 +88,10 @@ impl SettingsView {
         view_key: ViewKey,
         view_states: Option<SettingsViewStateStore>,
         overlay: bool,
-        root: WeakEntity<AppRoot>,
+        roots: SettingsViewRoots,
         initial_values: BTreeMap<&'static str, Option<Value>>,
     ) -> Self {
+        let SettingsViewRoots { root, windows } = roots;
         let selected_page = view_states
             .as_ref()
             .and_then(|store| store.state(&view_key))
@@ -138,6 +148,7 @@ impl SettingsView {
             view_key,
             view_states,
             root,
+            windows,
             inputs,
             input_subscriptions,
             invalid_fields: BTreeMap::new(),
@@ -565,6 +576,12 @@ impl SettingsView {
             }
         };
         let invalid = self.invalid_fields.contains_key(key);
+        // Windows 实际状态说明：设置值只表达意图，外部改动必须显形。
+        let note = crate::platform::windows_integration::settings_note(
+            key,
+            matches!(current, Some(Value::Bool(true))),
+            &*self.windows,
+        );
         div()
             .py_1()
             .flex()
@@ -600,6 +617,20 @@ impl SettingsView {
                                 .child(
                                     language.text(crate::i18n::Message::SettingsStatusInvalidValue),
                                 ),
+                        )
+                    })
+                    .when_some(note, |element, note| {
+                        let (message, path) = integration_note_message(&note);
+                        let text = match path {
+                            Some(path) => language.format(message, &[("path", &path)]),
+                            None => language.text(message).to_owned(),
+                        };
+                        element.child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .debug_selector(move || format!("settings-field-{key}-actual"))
+                                .child(text),
                         )
                     }),
             )
@@ -797,6 +828,7 @@ impl AppRoot {
         let view_states = self.side_view_persistence.settings_view_states();
         let settings_key = view_key.clone();
         let root_handle = cx.entity().downgrade();
+        let windows = self.windows.clone();
         let initial_values = super::settings_controls::initial_field_values(self.settings.values());
         let panel_id = self.install_panel(
             super::documents::DocumentPanelTarget {
@@ -815,7 +847,10 @@ impl AppRoot {
                         settings_key,
                         Some(view_states),
                         false,
-                        root_handle,
+                        SettingsViewRoots {
+                            root: root_handle,
+                            windows,
+                        },
                         initial_values,
                     )
                 });
@@ -852,8 +887,19 @@ impl AppRoot {
             .observed_focus_token()
             .unwrap_or_else(|| self.focus_manager.workspace_token());
         let root_handle = cx.entity().downgrade();
+        let windows = self.windows.clone();
         let initial_values = super::settings_controls::initial_field_values(self.settings.values());
-        let view = cx.new(|cx| SettingsView::new_overlay(window, cx, root_handle, initial_values));
+        let view = cx.new(|cx| {
+            SettingsView::new_overlay(
+                window,
+                cx,
+                SettingsViewRoots {
+                    root: root_handle,
+                    windows,
+                },
+                initial_values,
+            )
+        });
         let registration = self.focus_manager.register(
             &view.read(cx).focus_handle,
             self.focus_manager.workspace_token(),
@@ -938,11 +984,13 @@ impl AppRoot {
         match key {
             "launch_at_login" => {
                 let enabled = matches!(value, Value::Bool(true));
-                if let Err(error) = crate::platform::startup::set_launch_at_login(enabled) {
+                if let Err(error) = self.windows.set_login_start(enabled) {
                     log::warn!("更新开机启动失败: {error}");
                 }
             }
-            "tray" => crate::tray::set_enabled(matches!(value, Value::Bool(true))),
+            "tray" => self
+                .windows
+                .set_tray_enabled(matches!(value, Value::Bool(true))),
             _ => {}
         }
         self.reload_settings_snapshot(cx);
@@ -957,7 +1005,7 @@ impl AppRoot {
         let tray = settings.tray;
         cx.set_global(settings);
         gpui_component::set_locale(language.gpui_component_locale());
-        crate::tray::set_enabled(tray);
+        self.windows.set_tray_enabled(tray);
         crate::background_tasks::apply_settings(self.settings.values());
         crate::app_shell::theme::apply_dark_theme(cx);
         cx.refresh_windows();
@@ -1048,5 +1096,27 @@ impl AppRoot {
                 )
                 .into_any_element(),
         )
+    }
+}
+
+/// Windows 实际状态说明 → typed 文案；只有「指向其他程序」携带路径参数。
+fn integration_note_message(
+    note: &crate::platform::windows_integration::IntegrationNote,
+) -> (crate::i18n::Message, Option<String>) {
+    use crate::i18n::Message;
+    use crate::platform::windows_integration::IntegrationNote;
+    match note {
+        IntegrationNote::LoginStartMissing => (Message::SettingsAdvancedLoginStartMissing, None),
+        IntegrationNote::LoginStartOtherTarget(target) => (
+            Message::SettingsAdvancedLoginStartOtherTarget,
+            Some(target.to_string_lossy().into_owned()),
+        ),
+        IntegrationNote::LoginStartUnreadable => {
+            (Message::SettingsAdvancedLoginStartUnreadable, None)
+        }
+        IntegrationNote::LoginStartEnabledButOff => {
+            (Message::SettingsAdvancedLoginStartEnabledButOff, None)
+        }
+        IntegrationNote::TrayUnavailable => (Message::SettingsAdvancedTrayUnavailable, None),
     }
 }

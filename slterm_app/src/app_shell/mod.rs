@@ -438,8 +438,19 @@ fn frozen_startup_paths(
 ///
 /// 设置两条件(`silent_start && tray`)由 [`config::Settings::start_hidden`]
 /// 单点判定;显式 CLI 目录启动恒不静默——用户主动发起时把窗口藏起来没有意义。
-fn starts_hidden(restore_tabs: bool, settings: &config::Settings) -> bool {
-    restore_tabs && settings.start_hidden()
+/// 托盘不可用时同样不隐藏:隐藏窗口没有恢复入口。启动路径顺带把托盘设置
+/// 交给端口,使可用性判定基于本次真实运行而非设置值。
+fn starts_hidden(
+    restore_tabs: bool,
+    settings: &config::Settings,
+    windows: &dyn crate::platform::windows_integration::WindowsIntegration,
+) -> bool {
+    windows.set_tray_enabled(settings.tray);
+    crate::platform::windows_integration::start_hidden_with(
+        restore_tabs,
+        settings.start_hidden(),
+        windows,
+    )
 }
 
 /// 托盘线程 → 壳事件队列的翻译单点(托盘线程不碰 GPUI 状态)。
@@ -485,6 +496,9 @@ fn run_shell_once(initial_cwd: Option<PathBuf>) -> startup_diagnostics::ShellRun
         Ok(false) => {}
     }
     let regular_start = initial_cwd.is_none();
+    // Windows 集成端口:启动静默判定与设置页对账共用同一真实实例。
+    let windows: std::sync::Arc<dyn crate::platform::windows_integration::WindowsIntegration> =
+        std::sync::Arc::new(crate::platform::windows_integration::SystemWindowsIntegration);
     let (shell, initial_root) = match frozen_startup_paths(initial_cwd) {
         Ok(paths) => paths,
         Err(error) => {
@@ -563,7 +577,11 @@ fn run_shell_once(initial_cwd: Option<PathBuf>) -> startup_diagnostics::ShellRun
         init(cx);
         // 静默启动:仅无显式 CLI 目录时参与;窗口以隐藏
         // 形态创建,托盘「显示」经 focus facade 回窗。
-        let start_hidden = starts_hidden(regular_start, cx.global::<config::Settings>());
+        let start_hidden = starts_hidden(
+            regular_start,
+            cx.global::<config::Settings>(),
+            windows.as_ref(),
+        );
         windowing::open_initial_window(
             cx,
             shell_rx,
@@ -574,6 +592,7 @@ fn run_shell_once(initial_cwd: Option<PathBuf>) -> startup_diagnostics::ShellRun
                 global_close: global_close_client,
                 learning: learning.clone(),
                 runtime_events,
+                windows: windows.clone(),
             },
             start_hidden,
             regular_start,
@@ -663,6 +682,7 @@ mod shell_event_tests {
     use crate::persistence::startup::{MaintenanceError, MaintenanceStage};
     use crate::persistence::workspace::WorkspaceDatabase;
     use crate::persistence::workspace_writer::{WorkspaceWriter, WorkspaceWriterError};
+    use crate::platform::windows_integration::FakeWindowsIntegration;
     use crate::tray::GpuiTrayCommand;
 
     fn silent_settings() -> crate::app_shell::config::Settings {
@@ -673,12 +693,27 @@ mod shell_event_tests {
     }
 
     /// 显式 CLI 启动(`--working-directory`/`-e`)恒不静默;无显式参数
-    /// 的常规启动才允许设置两条件生效。
+    /// 的常规启动才允许设置两条件生效,并且启动路径把托盘设置交给端口。
     #[test]
     fn explicit_cli_launch_never_starts_hidden() {
         let settings = silent_settings();
-        assert!(starts_hidden(true, &settings), "常规启动可静默");
-        assert!(!starts_hidden(false, &settings), "显式 CLI 启动不得隐藏");
+        let windows = FakeWindowsIntegration::default();
+        assert!(starts_hidden(true, &settings, &windows), "常规启动可静默");
+        assert!(
+            !starts_hidden(false, &settings, &windows),
+            "显式 CLI 启动不得隐藏"
+        );
+        assert!(windows.tray_enabled(), "启动路径必须应用托盘设置");
+    }
+
+    /// 托盘不可用时静默驻留让位:隐藏窗口没有恢复入口。
+    #[test]
+    fn silent_start_falls_back_to_a_visible_window_without_a_usable_tray() {
+        let settings = silent_settings();
+        let windows = FakeWindowsIntegration::default();
+        windows.set_tray_available(false);
+        assert!(!starts_hidden(true, &settings, &windows));
+        assert!(windows.tray_enabled(), "托盘设置仍须交给端口");
     }
 
     #[test]
