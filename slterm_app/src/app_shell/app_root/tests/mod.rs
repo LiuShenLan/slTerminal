@@ -26,6 +26,7 @@ mod runtime_events;
 mod runtime_git;
 mod runtime_mutations;
 mod runtime_panel;
+mod runtime_parity;
 mod runtime_reads;
 mod runtime_snapshot;
 mod settings_overlay;
