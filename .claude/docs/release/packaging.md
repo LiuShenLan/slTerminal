@@ -30,6 +30,7 @@
   - 已知边界：安装目录可能残留 `.slterm-update.slterm-lock`，导致目录本身保留；`setup-ai --remove` 子命令不存在，卸载 hook 清理为 no-op；开始菜单快捷方式落在 `Programs\(Default)` 组。
   - 用户数据 `%APPDATA%\slterm` 与 ConPTY 提取缓存 `%LOCALAPPDATA%\slterm\conpty` 在卸载后保留，属预期。
 - 2026-11-26 阶段回归证据：`package-release.tests.ps1` PASS（profile 钉值与体积预算未漂移；实测 setup 17.12 MiB、zip 22.35 MiB，均低于预算）与 `windows-runtime.tests.ps1` PASS（x64 钉文件、复用、修复与拒绝归档）。本机未安装 Inno Setup，安装器重建与真实安装／更新链复验按豁免留待发布机执行；2026-10-18／10-26 实机证据仍为最新安装器形态证据，新包体的实机核验不得以本次钉测试结果冒充。
+- 2026-11-26 debug 构建产物运行矩阵（隔离双数据根）：真实窗口出现后启动第二实例，第二实例经单实例移交退出码 0 且首实例存活；关窗后首实例退出码 0，工作区库 `workspace_meta` 落盘 `clean_shutdown=1` 且 `run_id` 与 `store_epoch` 有效，无残留 `slterm` 进程。安装器、发布包实机安装与更新链仍按 `scripts/release-checklist.md` 留待发布机。
 - 2026-10-26 依赖基线本机核验证据：
   - 环境：Windows 11 Pro build 26300，PowerShell 7.6.8，Inno Setup 6.7.3。
   - 共享 release 二进制：`slterm.exe` 53,623,808 字节；`slterm-hook.exe` 274,432 字节。

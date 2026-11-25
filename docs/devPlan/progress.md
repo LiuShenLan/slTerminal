@@ -21,9 +21,9 @@
 
 ### 当前进度
 
-状态锚：**2026-11-26，Runtime v2 验收；Windows 与发布阶段推进中。**
+状态锚：**2026-11-26，全量验收进行中；Windows 与发布阶段已进入最终核销。**
 
-当前实施位置：**Windows 与发布（进行中）。**
+当前实施位置：**全量验收（进行中）。**
 
 | 命名阶段 | 状态 | 验收日期 | commit hash | 测试证据／阻塞事实 |
 |---|---|---|---|---|
@@ -38,7 +38,7 @@
 | 设置、主题与恢复 | 已验收 | 2026-11-25 | `6e1fea36` | `settings_single_queue_across_views`、`settings_overlay_controls_write_runtime_values_and_queue`、`theme_import_complete_or_zero_write`、`backup_tamper_rejected_zero_write`、`backup_interrupted_restore_rolls_back`、`staged_restore_is_applied_at_startup_and_rotates_store_epoch`、`interrupted_apply_is_rolled_back_on_restart`、`backup_undo_fingerprint_conflict`、`backup_cross_machine_requires_relocation`、`backup_restore_does_not_restore_credentials` 通过；DPAPI 恢复点与维护期世代轮换已落地；全量 workspace、GPUI 全特性、core release 与脚本门禁全绿。 |
 | Runtime v2 | 已验收 | 2026-11-26 | `4c77058549cc1ea3156ce373f6e33cfafc1dc312` | 全部线缆方法族（含 Git 破坏写、面板打开/保存/关闭、App 聚焦/非交互关闭、项目移除策略）、单实例同构、凭据边界与诊断 token 白名单锚（`runtime_token_absent_from_materials`）通过；全量 workspace、GPUI 全特性、core release 与脚本门禁全绿。 |
 | Windows 与发布 | 进行中 | — | — | 平台接入、几何、套餐、调度、通知、i18n、更新、诊断、清理与发布链逐切片推进。 |
-| 全量验收 | 未开始 | — | — | — |
+| 全量验收 | 进行中 | — | — | 八个跨域验收锚已自动化核销；全量 workspace、GPUI、core release、两套 clippy、架构／文档策略／禁名门禁与脚本自测全绿；真实构建产物场景矩阵与最终交付状态推进中。 |
 
 ### 更新方式
 
