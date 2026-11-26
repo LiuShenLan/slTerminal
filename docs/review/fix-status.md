@@ -159,7 +159,7 @@
 | stage_restore 把解密后的备份条目明文写盘 | 已修：staged 材料先序列化为 `Zeroizing` 明文再经 DPAPI CurrentUser 保护，磁盘与指纹只绑定密文；维护期解密后应用，解密失败阻断且不落盘；测试 `staged_restore_is_dpapi_protected_and_carries_no_plaintext` |
 | 灾难副本从未生成与刷新 | 待修 |
 | 备份恢复在 store_epoch 轮换与 Applied 之间崩溃会永久阻断启动 | 已修：新增 `complete_maintenance_apply`，在同一 Immediate 事务内核对 run_id 与旧世代、轮换 `store_epoch` 并推进 `Applied`；任一冲突都不改写世代或状态；测试 `apply_completion_rotates_and_transitions_atomically`、`staged_restore_is_applied_at_startup_and_rotates_store_epoch` |
-| 双损隔离部分失败或中断后，重试以空工作区正常启动 | 待修 |
+| 双损隔离部分失败或中断后，重试以空工作区正常启动 | 已修：隔离目录先写 `.incomplete` 标记再改名，空库打开成功后才移除；启动先完成遗留改名并返回 Isolated 通知，原位与隔离副本并存明确阻断；测试 `interrupted_isolation_is_completed_before_opening_the_empty_workspace`、`interrupted_isolation_with_duplicate_files_blocks_startup`、`workspace_unrecoverable_isolated` |
 | 备份明文没有 64 MiB 上限 | 已修：密封与解封双向 64 MiB 硬上限，解封在派生密钥前拒绝超限包；测试 `archive_plaintext_is_bounded_to_64_mib` |
 | 设置导出使用敏感键黑名单而不是登记字段白名单，Session 原文完全未过滤 | 已修：设置类别改为 `SettingsRegistry` 导出白名单投影，未知段/未登记/敏感字段在导出与导入复验两侧一致拒绝；删除 Session／Themes 类别，主题并入设置类别，Session 原文与学习历史不再存在入包通道；所有收集目标要求根内普通文件；测试 `collection_uses_registry_export_allowlist`、`import_validation_rejects_unknown_or_sensitive_settings`、`backup_excludes_local_workspace_and_credentials`、`collection_rejects_empty_selection_unparseable_or_non_file_settings` |
 | 恢复点与暂存目录没有当前用户 ACL 限制 | 已修：新增 `atomic_file::create_dir_current_user`，恢复点目录/文件与 `maintenance/`、请求目录/staged 文件全部收敛为当前用户显式 DACL 并切断继承；测试 `current_user_directory_cuts_inheritance_and_has_one_ace`、`recovery_point_is_encrypted_and_round_trips`、`staged_restore_is_dpapi_protected_and_carries_no_plaintext`（真实 Win32 DACL 断言） |

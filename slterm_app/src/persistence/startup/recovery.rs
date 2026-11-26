@@ -134,8 +134,18 @@ impl RecoveredWorkspace {
 pub(crate) fn open_workspace_with_recovery(
     paths: &AppPaths,
 ) -> Result<RecoveredWorkspace, WorkspaceOpenError> {
+    // 先完成上次崩溃遗留的隔离改名；只有改名全部落定后才允许打开空工作区。
+    let interrupted_isolation = complete_interrupted_isolation(paths)?;
     match WorkspaceDatabase::open(paths) {
         Ok(store) => {
+            if let Some(quarantine_path) = interrupted_isolation {
+                finalize_isolation(&quarantine_path)?;
+                return Ok(RecoveredWorkspace {
+                    store,
+                    disposition: WorkspaceOpenDisposition::Isolated,
+                    quarantine_path: Some(quarantine_path),
+                });
+            }
             return Ok(RecoveredWorkspace {
                 store,
                 disposition: WorkspaceOpenDisposition::Clean,
@@ -175,11 +185,82 @@ pub(crate) fn open_workspace_with_recovery(
     }
 
     let quarantine_path = quarantine_files(paths)?;
+    let store = WorkspaceDatabase::open(paths)?;
+    finalize_isolation(&quarantine_path)?;
     Ok(RecoveredWorkspace {
-        store: WorkspaceDatabase::open(paths)?,
+        store,
         disposition: WorkspaceOpenDisposition::Isolated,
         quarantine_path: Some(quarantine_path),
     })
+}
+
+/// 隔离改名进行中的持久标记；完成改名与空库打开后才移除。
+const ISOLATION_MARKER: &str = ".incomplete";
+
+fn workspace_sources(paths: &AppPaths) -> Vec<PathBuf> {
+    let mut sources = vec![paths.workspace_db_path()];
+    sources.extend(
+        ["-wal", "-shm"]
+            .into_iter()
+            .map(|suffix| sidecar_path(&paths.workspace_db_path(), suffix)),
+    );
+    let backup = paths.workspace_disaster_copy_path();
+    sources.push(backup.clone());
+    sources.extend(
+        ["-wal", "-shm"]
+            .into_iter()
+            .map(|suffix| sidecar_path(&backup, suffix)),
+    );
+    sources
+}
+
+/// 完成上次崩溃遗留的隔离改名；返回仍需收尾的隔离目录。
+///
+/// 标记存在即代表双损隔离已开始。此时只向前完成改名：任一文件同时存在于
+/// 原位与隔离目录视为矛盾，明确失败；绝不把中间态交给「首次使用」空库路径。
+fn complete_interrupted_isolation(paths: &AppPaths) -> Result<Option<PathBuf>, WorkspaceOpenError> {
+    let root = paths.local_root().join("quarantine");
+    let entries = match std::fs::read_dir(&root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(WorkspaceOpenError::Isolation(error)),
+    };
+    let mut incomplete = Vec::new();
+    for entry in entries {
+        let directory = entry?.path();
+        if directory.join(ISOLATION_MARKER).is_file() {
+            incomplete.push(directory);
+        }
+    }
+    incomplete.sort();
+    for directory in &incomplete {
+        for source in workspace_sources(paths) {
+            let file_name = source
+                .file_name()
+                .ok_or_else(|| WorkspaceOpenError::Isolation(io::Error::other("隔离文件名无效")))?;
+            let quarantined = directory.join(file_name);
+            let source_present = source.try_exists()?;
+            let quarantined_present = quarantined.try_exists()?;
+            match (source_present, quarantined_present) {
+                (true, true) => {
+                    return Err(WorkspaceOpenError::Isolation(io::Error::other(
+                        "隔离中间态同时存在原位与副本",
+                    )));
+                }
+                (true, false) => std::fs::rename(&source, &quarantined)?,
+                (false, _) => {}
+            }
+        }
+    }
+    Ok(incomplete.pop())
+}
+
+fn finalize_isolation(directory: &Path) -> Result<(), WorkspaceOpenError> {
+    match std::fs::remove_file(directory.join(ISOLATION_MARKER)) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(WorkspaceOpenError::Isolation(error)),
+    }
 }
 
 fn quarantine_directory(paths: &AppPaths) -> Result<PathBuf, WorkspaceOpenError> {
@@ -231,20 +312,14 @@ fn remove_temporary_database(path: &Path) {
 /// 同一本地卷内改名保留原始字节；任一步失败均不得继续建立空工作区。
 fn quarantine_files(paths: &AppPaths) -> Result<PathBuf, WorkspaceOpenError> {
     let directory = quarantine_directory(paths)?;
-    let mut sources = vec![paths.workspace_db_path()];
-    sources.extend(
-        ["-wal", "-shm"]
-            .into_iter()
-            .map(|suffix| sidecar_path(&paths.workspace_db_path(), suffix)),
-    );
-    let backup = paths.workspace_disaster_copy_path();
-    sources.push(backup.clone());
-    sources.extend(
-        ["-wal", "-shm"]
-            .into_iter()
-            .map(|suffix| sidecar_path(&backup, suffix)),
-    );
-    for source in sources {
+    // 标记先于任何改名落定：崩溃后重启必须继续完成隔离，而不是初始化空库。
+    let marker = directory.join(ISOLATION_MARKER);
+    std::fs::write(&marker, b"")?;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&marker)?
+        .sync_all()?;
+    for source in workspace_sources(paths) {
         match std::fs::metadata(&source) {
             Ok(_) => {}
             Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
@@ -439,6 +514,69 @@ mod tests {
             corrupt
         );
         assert!(paths.workspace_disaster_copy_path().exists());
+    }
+
+    /// 隔离改名中途崩溃后，重启先完成改名再建空库，不把中间态当首次使用。
+    #[test]
+    fn interrupted_isolation_is_completed_before_opening_the_empty_workspace() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = paths(&temp);
+        std::fs::create_dir_all(paths.local_root()).unwrap();
+        let main = b"corrupt-main-workspace";
+        let backup = b"corrupt-backup-workspace";
+        let quarantine = paths
+            .local_root()
+            .join("quarantine")
+            .join("workspace-interrupted");
+        std::fs::create_dir_all(&quarantine).unwrap();
+        std::fs::write(quarantine.join(super::ISOLATION_MARKER), b"").unwrap();
+        // 模拟只完成了主库改名。
+        std::fs::write(quarantine.join("workspace.db"), main).unwrap();
+        std::fs::write(paths.workspace_disaster_copy_path(), backup).unwrap();
+
+        let mut opened = open_workspace_with_recovery(&paths).unwrap();
+
+        assert_eq!(opened.disposition, WorkspaceOpenDisposition::Isolated);
+        assert!(
+            !quarantine.join(super::ISOLATION_MARKER).exists(),
+            "完成隔离后必须移除标记"
+        );
+        assert!(
+            paths.workspace_db_path().exists(),
+            "完成后应创建新的空工作区库"
+        );
+        assert!(!paths.workspace_disaster_copy_path().exists());
+        assert_eq!(
+            std::fs::read(quarantine.join("workspace.db")).unwrap(),
+            main
+        );
+        assert_eq!(
+            std::fs::read(quarantine.join("workspace.backup.db")).unwrap(),
+            backup
+        );
+        assert_eq!(
+            opened.store.load_project_snapshot().unwrap(),
+            ProjectSnapshot::default()
+        );
+    }
+
+    /// 原位与隔离副本同时存在是矛盾中间态，必须阻断而不是静默覆盖。
+    #[test]
+    fn interrupted_isolation_with_duplicate_files_blocks_startup() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = paths(&temp);
+        std::fs::create_dir_all(paths.local_root()).unwrap();
+        let quarantine = paths
+            .local_root()
+            .join("quarantine")
+            .join("workspace-duplicate");
+        std::fs::create_dir_all(&quarantine).unwrap();
+        std::fs::write(quarantine.join(super::ISOLATION_MARKER), b"").unwrap();
+        std::fs::write(quarantine.join("workspace.db"), b"copy").unwrap();
+        std::fs::write(paths.workspace_db_path(), b"source").unwrap();
+
+        assert!(open_workspace_with_recovery(&paths).is_err());
+        assert_eq!(std::fs::read(paths.workspace_db_path()).unwrap(), b"source");
     }
 
     #[test]
