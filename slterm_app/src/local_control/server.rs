@@ -1546,6 +1546,8 @@ fn stream_subscription(
     let writer = Arc::new(Mutex::new(stream.try_clone()?));
     let writer_for_events = Arc::clone(&writer);
     let shutdown_for_events = Arc::clone(shutdown);
+    let events_done = Arc::new(AtomicBool::new(false));
+    let events_done_for_thread = Arc::clone(&events_done);
     let event_thread = std::thread::Builder::new()
         .name("slterm-runtime-events".to_owned())
         .spawn(move || {
@@ -1567,6 +1569,9 @@ fn stream_subscription(
                     Err(RecvTimeoutError::Disconnected) => break,
                 }
             }
+            // 事件源结束（滞后被移除、关闭或写失败）必须让连接线程退出，
+            // 不能让客户端停在“无事件”的静默状态。
+            events_done_for_thread.store(true, Ordering::SeqCst);
         })?;
     let result = (|| -> io::Result<()> {
         let mut buffer = Vec::new();
@@ -1597,7 +1602,12 @@ fn stream_subscription(
                     return Ok(());
                 }
                 Ok(None) => return Ok(()),
-                Err(error) if error.kind() == io::ErrorKind::TimedOut => continue,
+                Err(error) if error.kind() == io::ErrorKind::TimedOut => {
+                    if events_done.load(Ordering::SeqCst) {
+                        return Ok(());
+                    }
+                    continue;
+                }
                 Err(error) => return Err(error),
             }
         }

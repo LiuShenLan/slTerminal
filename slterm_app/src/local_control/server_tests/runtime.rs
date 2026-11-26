@@ -1437,6 +1437,47 @@ fn runtime_subscription_streams_events_and_accepts_unsubscribe() {
     server.shutdown().unwrap();
 }
 
+/// 事件源结束（滞后订阅被移除或发送端关闭）必须结束连接，不能静默挂起。
+#[test]
+fn runtime_subscription_closes_when_the_event_source_ends() {
+    let (events_tx, events_rx) =
+        mpsc::sync_channel(crate::local_control::events::CLIENT_QUEUE_CAPACITY);
+    let receiver_slot = Arc::new(Mutex::new(Some(events_rx)));
+    let slot = Arc::clone(&receiver_slot);
+    let (mut server, _calls) = start_dual_scope_server_with_events(move |_| {
+        let events = slot
+            .lock()
+            .expect("订阅槽")
+            .take()
+            .expect("每次连接只订阅一次");
+        Ok(crate::local_control::events::Subscription {
+            confirmed: EventsSubscribedResponse {
+                stream_epoch: "stream".to_owned(),
+                revision: 0,
+            },
+            events,
+        })
+    });
+    let mut stream = connect(&server);
+    stream.set_read_timeout(Some(TEST_TIMEOUT)).unwrap();
+    write_json(
+        &mut stream,
+        &hello_scoped("sk-test-runtime", ControlScope::Runtime),
+    );
+    assert!(read_line(&mut stream).contains("store"));
+    write_json(&mut stream, &subscribe_request());
+    assert!(read_line(&mut stream).contains("stream"));
+
+    drop(events_tx);
+    let started = std::time::Instant::now();
+    assert_eq!(read_line(&mut stream), "", "事件源结束后连接必须关闭");
+    assert!(
+        started.elapsed() < Duration::from_secs(3),
+        "事件源结束后必须及时关闭连接"
+    );
+    server.shutdown().unwrap();
+}
+
 #[test]
 fn runtime_operation_get_returns_persisted_result_or_structured_unknown() {
     let (mut server, calls) = start_dual_scope_server_with_operation(|operation_id| {

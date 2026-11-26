@@ -203,7 +203,7 @@
 | Runtime `git.diff` 路径校验放过盘符绝对路径/符号链接，工作区读取越过仓库根 | 已修：协议拒绝冒号/控制字符（盘符、ADS），应用层对规范位置做仓库根包含检查；测试 `git_diff_requires_a_safe_repository_relative_path`、`git_diff_snapshot_rejects_targets_outside_the_worktree` |
 | 快照 revision 固定为握手起点，事件续传进入不可恢复 resync 循环 | 已修：`RuntimeCallbacks` 增加事件环末尾 revision 回调，`EventHub` 原子维护最新发布 revision，`runtime.snapshot` 返回该值；测试 `event_hub_latest_revision_tracks_published_events`、`runtime_snapshot_returns_injected_resources_with_hello_generation` |
 | 非交互关闭在保存、停止或清理落定前返回 Succeeded | 待修 |
-| 事件环移除滞后订阅后，订阅连接保持静默 | 待修 |
+| 事件环移除滞后订阅后，订阅连接保持静默 | 已修：订阅事件写线程在事件源结束（滞后移除／发送端关闭／写失败）置完成标记，连接线程 1 秒读超时内检测并关闭连接，客户端收到 EOF；测试 `runtime_subscription_closes_when_the_event_source_ends` |
 | expected_revision 在线上端到端未生效 | 待修 |
 | Operation 停在 Queued/Running 后没有恢复路径 | 待修 |
 | 项目、布局、面板与终端写 Operation 在持久快照提交前报告成功 | 待修 |
