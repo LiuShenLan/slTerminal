@@ -265,19 +265,11 @@ impl Ansi16 {
         )
     }
 
-    /// 解析完整 xterm 256 色索引；16 色以外不保存第二份色表。
+    /// 解析完整 xterm 256 色索引；16 色以外复用唯一派生公式。
     pub fn color(self, index: u8) -> Rgb8 {
-        const LEVELS: [u8; 6] = [0, 95, 135, 175, 215, 255];
         match index {
             0..=15 => self.0[usize::from(index)],
-            16..=231 => {
-                let cube = usize::from(index - 16);
-                [LEVELS[cube / 36], LEVELS[(cube / 6) % 6], LEVELS[cube % 6]]
-            }
-            232..=255 => {
-                let level = 8 + (index - 232) * 10;
-                [level; 3]
-            }
+            _ => crate::custom_theme::xterm_indexed_color(index),
         }
     }
 }

@@ -23,7 +23,7 @@ mod custom_theme;
 mod identity;
 pub use cursor_motion::CursorMotion;
 pub use custom_theme::{
-    IndexedPalette, TerminalThemeColors, ThemeDefinition, ThemeUiColors, ThemeValidationError,
+    TerminalThemeColors, ThemeDefinition, ThemeUiColors, ThemeValidationError, xterm_indexed_color,
 };
 pub use identity::{AgentRootId, StableIdError, ThemeId};
 pub mod diagnostics;

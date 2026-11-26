@@ -336,7 +336,7 @@ mod config_tests {
         definition.name = "Custom".to_owned();
         definition.terminal.background = [0x01, 0x02, 0x03];
         definition.terminal.foreground = [0xd0, 0xd1, 0xd2];
-        definition.terminal.palette.colors[16] = [0xaa, 0xbb, 0xcc];
+        definition.terminal.ansi[4] = [0xaa, 0xbb, 0xcc];
         let document = crate::theme_library::from_definition(&definition).unwrap();
         let stored = store.import(&document).unwrap();
         let id = stored.id().unwrap();
@@ -353,16 +353,18 @@ mod config_tests {
             settings.palette.foreground,
             crate::gpui_terminal::colors::from_rgb8([0xd0, 0xd1, 0xd2])
         );
-        // 完整 256 色表进入 indexed 覆盖(OSC 4/渲染同一来源)。
-        let indexed = settings
-            .palette
-            .indexed
-            .iter()
-            .find(|(index, _)| *index == 16)
-            .map(|(_, color)| *color);
+        // ANSI 槽位进入实例调色板；16–255 由 xterm 公式派生，不随主题保存。
         assert_eq!(
-            indexed,
-            Some(crate::gpui_terminal::colors::from_rgb8([0xaa, 0xbb, 0xcc]))
+            settings.palette.ansi[4],
+            crate::gpui_terminal::colors::from_rgb8([0xaa, 0xbb, 0xcc])
+        );
+        let derived =
+            settings
+                .palette
+                .resolve(vte::ansi::Color::Indexed(16), &Default::default(), false);
+        assert_eq!(
+            derived,
+            crate::gpui_terminal::colors::from_rgb8(slterm_settings::xterm_indexed_color(16))
         );
 
         // 使用中的自定义主题删除必须先另选。

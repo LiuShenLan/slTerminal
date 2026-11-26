@@ -46,8 +46,6 @@ pub struct Palette {
     pub ansi: [Rgba; 16],
     /// Dim 0-7。
     pub dim: [Rgba; 8],
-    /// 16-255 的 indexed 覆盖。
-    pub indexed: Vec<(u8, Rgba)>,
 }
 
 impl Default for Palette {
@@ -95,7 +93,6 @@ impl Default for Palette {
                 rgb8(0x4d, 0x77, 0x70),
                 rgb8(0x8e, 0x8e, 0x8e),
             ],
-            indexed: Vec::new(),
         }
     }
 }
@@ -141,8 +138,8 @@ impl Palette {
         palette
     }
 
-    /// 自定义主题完整定义 → 实例调色板。前 16 色是 ANSI 镜像;16..255
-    /// 整表进 indexed 覆盖,OSC 4 查询与渲染共用同一份。
+    /// 自定义主题完整定义 → 实例调色板。主题只携带 ANSI 0..15;
+    /// 16..255 由唯一 xterm 公式派生,不保存第二份色表。
     pub fn from_definition(
         definition: &ThemeDefinition,
         foreground_override: Option<Rgb8>,
@@ -157,7 +154,7 @@ impl Palette {
         palette.bright_foreground = foreground;
         palette.dim_foreground = Self::dim_of(foreground);
         for index in 0..16 {
-            palette.ansi[index] = from_rgb8(terminal.palette.colors[index]);
+            palette.ansi[index] = from_rgb8(terminal.ansi[index]);
             if index < 8 {
                 palette.dim[index] = Self::dim_of(palette.ansi[index]);
             }
@@ -176,9 +173,6 @@ impl Palette {
             },
         };
         palette.selection_foreground = terminal.selection_foreground.map(from_rgb8);
-        palette.indexed = (16..256)
-            .map(|index| (index as u8, from_rgb8(terminal.palette.colors[index])))
-            .collect();
         palette
     }
 
@@ -208,22 +202,10 @@ impl Palette {
     }
 
     fn indexed_default(&self, index: u8) -> Rgba {
-        if index >= 16
-            && let Some((_, color)) = self.indexed.iter().find(|(i, _)| *i == index)
-        {
-            return *color;
-        }
         match index {
             0..=15 => self.ansi[index as usize],
-            16..=231 => {
-                let idx = index as u16 - 16;
-                let comp = |c: u16| -> u8 { if c == 0 { 0 } else { (c * 40 + 55) as u8 } };
-                rgb8(comp(idx / 36), comp(idx / 6 % 6), comp(idx % 6))
-            }
-            232..=255 => {
-                let v = 8 + 10 * (index - 232);
-                rgb8(v, v, v)
-            }
+            // 16–255 复用设置层唯一派生公式。
+            _ => from_rgb8(slterm_settings::xterm_indexed_color(index)),
         }
     }
 
@@ -355,7 +337,6 @@ mod colors_tests {
         );
         assert_eq!(palette.ansi.len(), 16);
         assert_eq!(palette.dim.len(), 8);
-        assert!(palette.indexed.is_empty());
         // dim 前景 = 前景 × 0.66。
         let dim = palette.dim_foreground;
         assert_eq!(to_u8(dim.r), to_u8(palette.foreground.r * 0.66));

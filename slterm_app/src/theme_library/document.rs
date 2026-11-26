@@ -167,27 +167,12 @@ impl ThemeDocument {
                 DocumentError::Invalid("terminal.palette must be an array".to_owned())
             })?;
         for (index, value) in palette.iter().enumerate() {
-            definition.terminal.palette.colors[index] =
-                parse_hex_rgb(value.as_str().ok_or_else(|| {
-                    DocumentError::Invalid(format!("terminal.palette[{index}] must be a color"))
-                })?)
-                .ok_or_else(|| {
-                    DocumentError::Invalid(format!("terminal.palette[{index}] must be a color"))
-                })?;
-        }
-        if let Some(indexed) = terminal.get("indexed").and_then(Value::as_object) {
-            for (key, value) in indexed {
-                let index = key.parse::<usize>().map_err(|_| {
-                    DocumentError::Invalid(format!("indexed color key {key} is not an integer"))
-                })?;
-                let color = parse_hex_rgb(value.as_str().ok_or_else(|| {
-                    DocumentError::Invalid(format!("indexed color {key} must be a color"))
-                })?)
-                .ok_or_else(|| {
-                    DocumentError::Invalid(format!("indexed color {key} must be a color"))
-                })?;
-                definition.terminal.palette.colors[index] = color;
-            }
+            definition.terminal.ansi[index] = parse_hex_rgb(value.as_str().ok_or_else(|| {
+                DocumentError::Invalid(format!("terminal.palette[{index}] must be a color"))
+            })?)
+            .ok_or_else(|| {
+                DocumentError::Invalid(format!("terminal.palette[{index}] must be a color"))
+            })?;
         }
 
         let ui = object(&self.value, "ui")?;
@@ -204,8 +189,7 @@ impl ThemeDocument {
         definition.ui.error = color(ui, "danger")?;
         definition.ui.success = color(ui, "success")?;
         definition.ui.warning = color(ui, "warning")?;
-        definition.ui.info =
-            optional_color(ui, "info")?.unwrap_or(definition.terminal.palette.colors[14]);
+        definition.ui.info = optional_color(ui, "info")?.unwrap_or(definition.terminal.ansi[14]);
 
         definition
             .validate()
@@ -354,21 +338,12 @@ pub fn seed_document(
 pub fn from_definition(definition: &ThemeDefinition) -> Result<ThemeDocument, DocumentError> {
     let terminal = &definition.terminal;
     let ui = &definition.ui;
-    let palette = terminal.palette.colors[..16]
+    let palette = terminal
+        .ansi
         .iter()
         .copied()
         .map(format_hex_rgb)
         .collect::<Vec<_>>();
-    let indexed = terminal.palette.colors[16..]
-        .iter()
-        .enumerate()
-        .map(|(offset, color)| {
-            (
-                (16 + offset).to_string(),
-                Value::String(format_hex_rgb(*color)),
-            )
-        })
-        .collect::<Map<_, _>>();
     let value = json!({
         "schema_version": SCHEMA_VERSION,
         "revision": 0,
@@ -383,7 +358,6 @@ pub fn from_definition(definition: &ThemeDefinition) -> Result<ThemeDocument, Do
             "selection_background": terminal.selection_background.map(format_hex_rgb),
             "selection_foreground": terminal.selection_foreground.map(format_hex_rgb),
             "palette": palette,
-            "indexed": indexed,
         },
         "ui": {
             "derive": ui.derive,
@@ -467,9 +441,7 @@ fn validate_terminal(value: &mut Value) -> Result<(), DocumentError> {
         .ok_or_else(|| DocumentError::Invalid("terminal must be an object".to_owned()))?;
     reject_reserved_keys(object)?;
     for (key, _) in object.iter() {
-        if !TERMINAL_COLORS.contains(&key.as_str())
-            && !matches!(key.as_str(), "palette" | "indexed")
-        {
+        if !TERMINAL_COLORS.contains(&key.as_str()) && key != "palette" {
             return Err(DocumentError::Invalid(format!(
                 "terminal.{key} is not a known field"
             )));
@@ -495,23 +467,6 @@ fn validate_terminal(value: &mut Value) -> Result<(), DocumentError> {
     }
     for (index, value) in values.iter_mut().enumerate() {
         normalize_color_value(value, &format!("terminal.palette[{index}]"), false)?;
-    }
-    if let Some(indexed) = object.get_mut("indexed") {
-        let values = indexed.as_object_mut().ok_or_else(|| {
-            DocumentError::Invalid("terminal.indexed must be an object".to_owned())
-        })?;
-        reject_reserved_keys(values)?;
-        for (index, value) in values.iter_mut() {
-            let number: u16 = index.parse().map_err(|_| {
-                DocumentError::Invalid(format!("indexed color key {index} is not an integer"))
-            })?;
-            if !(16..=255).contains(&number) {
-                return Err(DocumentError::Invalid(format!(
-                    "indexed color key {index} must be 16..255"
-                )));
-            }
-            normalize_color_value(value, &format!("terminal.indexed.{index}"), false)?;
-        }
     }
     Ok(())
 }
@@ -931,6 +886,28 @@ mod document_tests {
             error.to_string().contains("typography"),
             "旧非颜色区段必须按未知字段拒绝: {error}"
         );
+    }
+
+    #[test]
+    fn extended_indexed_colors_are_derived_not_persisted() {
+        // 16–255 只按 xterm 公式派生：文档不得写出第二份索引色表。
+        let document = builtin_document(ThemeName::Nord).unwrap();
+        assert!(
+            document.to_value()["terminal"].get("indexed").is_none(),
+            "主题文档不得持久化 16–255 索引色表"
+        );
+        // 旧文档携带 indexed 视为未知字段。
+        let mut legacy = document.to_value();
+        legacy["terminal"]["indexed"] = json!({ "16": "#000000" });
+        assert!(matches!(
+            ThemeDocument::from_value(legacy),
+            Err(DocumentError::Invalid(message)) if message.contains("indexed")
+        ));
+        // 派生值与 xterm 常量一致。
+        let definition = document.definition().unwrap();
+        assert_eq!(definition.terminal.indexed(21), Some([0, 0, 255]));
+        assert_eq!(definition.terminal.indexed(232), Some([8, 8, 8]));
+        assert_eq!(definition.terminal.indexed(255), Some([238, 238, 238]));
     }
 
     #[test]

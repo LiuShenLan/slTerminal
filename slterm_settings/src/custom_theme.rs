@@ -35,8 +35,6 @@ impl ThemeDefinition {
             selection_background: Some(palette.shell),
         });
 
-        let indexed = IndexedPalette::from_ansi(exact.ansi);
-
         Self {
             name: base.prompt_name().to_owned(),
             base,
@@ -48,7 +46,7 @@ impl ThemeDefinition {
                 cursor_stroke: exact.cursor_stroke,
                 selection_foreground: exact.selection_foreground,
                 selection_background: exact.selection_background,
-                palette: indexed,
+                ansi: exact.ansi,
             },
             ui: ThemeUiColors::from_palette(palette),
         }
@@ -119,24 +117,13 @@ impl ThemeDefinition {
         theme
     }
 
-    /// 返回副本:改写一个 ANSI 槽位。ANSI 槽位与前 16 个索引色保持镜像,
-    /// 导出器不可能对同一终端色产出两个不同值。
+    /// 返回副本:改写一个 ANSI 槽位。16–255 不是可编辑槽位。
     pub fn with_ansi(&self, index: usize, color: Rgb8) -> Option<Self> {
         if index >= 16 {
             return None;
         }
         let mut theme = self.clone();
-        theme.terminal.palette.set(index, color);
-        Some(theme)
-    }
-
-    /// 返回副本:改写一个索引色。0..15 同样合法并按 ANSI 编辑处理。
-    pub fn with_indexed(&self, index: usize, color: Rgb8) -> Option<Self> {
-        if index >= 256 {
-            return None;
-        }
-        let mut theme = self.clone();
-        theme.terminal.palette.set(index, color);
+        theme.terminal.ansi[index] = color;
         Some(theme)
     }
 
@@ -167,65 +154,36 @@ pub struct TerminalThemeColors {
     pub cursor_stroke: Option<Rgb8>,
     pub selection_foreground: Option<Rgb8>,
     pub selection_background: Option<Rgb8>,
-    /// ANSI 0..15 与索引色 16..255 共一张定长表。
-    pub palette: IndexedPalette,
+    /// ANSI 0..15；索引色 16..255 只按 xterm 公式派生。
+    pub ansi: [Rgb8; 16],
 }
 
 impl TerminalThemeColors {
     pub fn ansi(&self, index: usize) -> Option<Rgb8> {
-        self.palette.get(index)
+        self.ansi.get(index).copied()
     }
 
+    /// 完整 xterm 256 色索引：16 色以外不保存第二份色表。
     pub fn indexed(&self, index: usize) -> Option<Rgb8> {
-        self.palette.get(index)
+        match index {
+            0..=15 => self.ansi.get(index).copied(),
+            _ => u8::try_from(index).ok().map(xterm_indexed_color),
+        }
     }
 }
 
-/// 完整 xterm 256 色表:前 16 = ANSI 镜像;16..231 色立方 / 232..255
-/// 灰阶按 xterm 常量生成,测试逐字节锁定。
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct IndexedPalette {
-    pub colors: [Rgb8; 256],
-}
-
-impl IndexedPalette {
-    pub fn from_ansi(ansi: [Rgb8; 16]) -> Self {
-        let mut colors = [[0; 3]; 256];
-        colors[..16].copy_from_slice(&ansi);
-
-        const LEVELS: [u8; 6] = [0, 95, 135, 175, 215, 255];
-        for (index, slot) in colors.iter_mut().enumerate().take(232).skip(16) {
-            let cube = index - 16;
-            *slot = [LEVELS[cube / 36], LEVELS[(cube / 6) % 6], LEVELS[cube % 6]];
+/// xterm 16–255 索引色的唯一派生公式（6×6×6 色立方 + 灰阶）。
+pub fn xterm_indexed_color(index: u8) -> Rgb8 {
+    const LEVELS: [u8; 6] = [0, 95, 135, 175, 215, 255];
+    match index {
+        16..=231 => {
+            let cube = usize::from(index - 16);
+            [LEVELS[cube / 36], LEVELS[(cube / 6) % 6], LEVELS[cube % 6]]
         }
-        for (index, slot) in colors.iter_mut().enumerate().skip(232) {
-            let level = 8 + ((index - 232) * 10) as u8;
-            *slot = [level; 3];
+        _ => {
+            let level = 8 + (index - 232) * 10;
+            [level; 3]
         }
-        Self { colors }
-    }
-
-    pub fn get(&self, index: usize) -> Option<Rgb8> {
-        self.colors.get(index).copied()
-    }
-
-    pub fn set(&mut self, index: usize, color: Rgb8) -> bool {
-        let Some(slot) = self.colors.get_mut(index) else {
-            return false;
-        };
-        *slot = color;
-        true
-    }
-
-    pub fn ansi_colors(&self) -> [Rgb8; 16] {
-        let mut ansi = [[0; 3]; 16];
-        ansi.copy_from_slice(&self.colors[..16]);
-        ansi
-    }
-
-    /// 整表已含全部索引色。
-    pub fn indexed_colors(&self) -> &[Rgb8; 256] {
-        &self.colors
     }
 }
 
@@ -275,11 +233,11 @@ impl ThemeUiColors {
     pub fn from_terminal(terminal: &TerminalThemeColors) -> Self {
         let background = terminal.background;
         let foreground = terminal.foreground;
-        let muted = terminal.palette.colors[8];
+        let muted = terminal.ansi[8];
         let accent = terminal
             .cursor
             .or(terminal.cursor_stroke)
-            .unwrap_or(terminal.palette.colors[14]);
+            .unwrap_or(terminal.ansi[14]);
         let selection = terminal.selection_background.map_or_else(
             || {
                 let rgb = mix_rgb(background, foreground, 0.18);
@@ -298,10 +256,10 @@ impl ThemeUiColors {
             selection,
             line: [muted[0], muted[1], muted[2], 255],
             frame: muted,
-            error: terminal.palette.colors[9],
-            success: terminal.palette.colors[10],
-            warning: terminal.palette.colors[11],
-            info: terminal.palette.colors[14],
+            error: terminal.ansi[9],
+            success: terminal.ansi[10],
+            warning: terminal.ansi[11],
+            info: terminal.ansi[14],
         }
     }
 
@@ -394,8 +352,8 @@ mod custom_theme_tests {
                 (255, [238, 238, 238]),
             ] {
                 assert_eq!(
-                    snapshot.terminal.palette.colors[index],
-                    expected,
+                    snapshot.terminal.indexed(index),
+                    Some(expected),
                     "{} index {index}",
                     name.prompt_name()
                 );
@@ -416,12 +374,7 @@ mod custom_theme_tests {
                 "{}",
                 name.prompt_name()
             );
-            assert_eq!(
-                snapshot.terminal.palette.ansi_colors(),
-                exact.ansi,
-                "{}",
-                name.prompt_name()
-            );
+            assert_eq!(snapshot.terminal.ansi, exact.ansi, "{}", name.prompt_name());
             assert_eq!(
                 snapshot.terminal.cursor,
                 exact.cursor,
@@ -469,8 +422,8 @@ mod custom_theme_tests {
         assert!(ui.derive);
         let expected_shell = mix_rgb(terminal.background, [255, 255, 255], 0.06);
         assert_eq!(ui.shell, expected_shell);
-        assert_eq!(ui.muted, terminal.palette.colors[8]);
-        assert_eq!(ui.error, terminal.palette.colors[9]);
+        assert_eq!(ui.muted, terminal.ansi[8]);
+        assert_eq!(ui.error, terminal.ansi[9]);
         assert_eq!(ui.line_rgb(), ui.muted);
         // 选区有显式声明时逐字采用,不参与混合。
         assert_eq!(
@@ -480,14 +433,20 @@ mod custom_theme_tests {
     }
 
     #[test]
-    fn indexed_palette_is_complete_and_ansi_is_mirrored() {
+    fn indexed_colors_are_derived_from_the_single_xterm_formula() {
         let theme = ThemeDefinition::from_builtin(ThemeName::CatppuccinMocha);
-        let ansi = theme.terminal.palette.ansi_colors();
-        assert_eq!(&ansi[..], &theme.terminal.palette.colors[..16]);
-        assert!(theme.terminal.palette.get(255).is_some());
-        assert_eq!(theme.terminal.palette.colors[232], [8; 3]);
-        assert_eq!(theme.terminal.palette.colors[255], [238; 3]);
-        assert_eq!(theme.terminal.ansi(3), theme.terminal.indexed(3));
+        assert_eq!(theme.terminal.indexed(3), theme.terminal.ansi(3));
+        assert_eq!(theme.terminal.indexed(232), Some([8; 3]));
+        assert_eq!(theme.terminal.indexed(255), Some([238; 3]));
+        assert_eq!(theme.terminal.indexed(256), None);
+        // 前 16 色与派生索引色来自同一函数，不会出现第二份表。
+        for index in 0..16usize {
+            assert_eq!(
+                theme.terminal.indexed(index),
+                Some(theme.terminal.ansi[index])
+            );
+        }
+        assert_eq!(xterm_indexed_color(231), [255, 255, 255]);
     }
 
     #[test]
@@ -497,10 +456,9 @@ mod custom_theme_tests {
         assert_eq!(source.terminal.foreground, [0xf1, 0xf6, 0xff]);
         assert_eq!(edited.terminal.foreground, [1, 2, 3]);
         let edited = source.with_ansi(0, [9, 8, 7]).unwrap();
-        assert_eq!(source.terminal.palette.colors[0], [0x3b, 0x42, 0x52]);
-        assert_eq!(edited.terminal.palette.colors[0], [9, 8, 7]);
+        assert_eq!(source.terminal.ansi[0], [0x3b, 0x42, 0x52]);
+        assert_eq!(edited.terminal.ansi[0], [9, 8, 7]);
         assert!(source.with_ansi(16, [0, 0, 0]).is_none());
-        assert!(source.with_indexed(256, [0, 0, 0]).is_none());
         let with_cursor = source.with_cursor(Some([1, 1, 1]), None, Some([2, 2, 2]));
         assert_eq!(with_cursor.terminal.cursor, Some([1, 1, 1]));
         assert_eq!(with_cursor.terminal.cursor_text, None);
@@ -510,8 +468,6 @@ mod custom_theme_tests {
             with_selection.terminal.selection_foreground,
             Some([3, 3, 3])
         );
-        let mut palette = source.terminal.palette.clone();
-        assert!(!palette.set(256, [0, 0, 0]));
     }
 
     #[test]
