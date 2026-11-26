@@ -45,7 +45,7 @@
 
 - **Runtime 读取端口**：`handle_runtime_read` 与写意图共用 `runtime_terminal_view` 的稳定身份与 PTY 代次校验，写输入要求 Launch 意图、只读画面允许已退出终端；校验通过只向唯一 worker 发送 `ReadText` 并把应答端交还调用方，前台不等待文本、不锁实时网格。`handle_runtime_wait` 复用同一校验，只返回视图最近帧 revision，不等待变化。关闭中、关闭完成或存在 application close 时在命令前返回结构化 Closing。原因：读取必须与绘制同源且不得在前台阻塞。边界：不缓存正文、不提供增量输出流；代次不匹配、目标或面板缺失一律 NotReady。
 
-- **Runtime 事件发布**：轻量事件只在后台状态提交成功后由 `publish_runtime_event` 发布（当前含项目激活；面板与终端事件随各方法族接入），负载只含类型名、资源身份与 `snapshot_generation`，revision 由事件环分配。发布经 `RuntimeEventPublisher` 非阻塞提交，队列满丢弃事件；关闭中、关闭完成或存在 application close 时不发布，避免销毁后回填过期事件。原因：事件必须与前台状态同源、同序，且不得反压 UI 或 PTY。边界：事件不含正文、路径内容、凭据或终端输出；隐藏项目的状态变更同样发布；不提供补发或内存重放通道。
+- **Runtime 事件发布**：轻量事件只在后台状态提交成功后由 `publish_runtime_event` 发布；协议封闭枚举当前只有 `project.activated`，面板与终端事件在真实发布点接线前不得登记，客户端以快照与读取／等待 revision 对齐。负载只含类型名、资源身份与 `snapshot_generation`，revision 由事件环分配。发布经 `RuntimeEventPublisher` 非阻塞提交，队列满丢弃事件；关闭中、关闭完成或存在 application close 时不发布，避免销毁后回填过期事件。原因：事件必须与前台状态同源、同序，且不得反压 UI 或 PTY。边界：事件不含正文、路径内容、凭据或终端输出；隐藏项目的状态变更同样发布；不提供补发或内存重放通道。
 
 - **单实例文件移交**：`HandoverParams::OpenFile` 先纯校验 `CanonicalPath`，选择覆盖目标的最深既有项目根，不隐式创建项目；复用 Document FIFO 后台解析与读取，活跃项目使用聚焦组，隐藏项目复用焦点记忆或布局首组，空项目的首组延迟到请求完成时按最新布局解析，排队请求不得持有过期组 ID。项目激活、视图去重或安装、Editor 落点和真实焦点全部成功后才提交候选并前置窗口；失败恢复原 active 与实际焦点，不留下新 Document 或空 Panel，共享 Document 不误删。全部可失败准备完成后才移交 completion，活动、排队与在途请求在关闭时恰好结算一次 Closing；非法路径与不支持类型映射 InvalidRequest，无覆盖根、解析越权与模态映射 Unauthorized，其他读取与未就绪失败映射 NotReady，回执不得携带路径或正文。原因：第二实例必须与应用内打开共享身份、授权、布局和焦点事实，且不能出现半激活或丢失回执。边界：不为 OpenFile 创建第二套读取、落点或占位面板通道。
 - **生产身份与落点**：打开项目、新建与拆分命令由 application 以 UUIDv7 生成稳定身份；固定身份入口只供恢复协调与测试。普通新建进入活跃项目当前聚焦组，空项目生成首组；handover 新终端按移交规则选择目标项目与组；拆分必须已有聚焦组，关闭聚焦终端复用同一显式关闭链。原因：调用方不得自行拼身份或另判布局落点。边界：无活跃项目或应有聚焦组而缺失时明确失败，不隐式选择隐藏项目。

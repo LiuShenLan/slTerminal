@@ -22,7 +22,7 @@ fn event_ring_assigns_monotonic_revisions_and_resumes_without_gap() {
     assert_eq!(ring.latest_revision(), 0);
     for index in 0..3 {
         let revision = ring.publish(event(
-            RuntimeEventKind::PanelActivated,
+            RuntimeEventKind::ProjectActivated,
             &format!("panel-{index}"),
         ));
         assert_eq!(revision, index + 1);
@@ -30,7 +30,7 @@ fn event_ring_assigns_monotonic_revisions_and_resumes_without_gap() {
     let resumed = ring.resume("store-a", "stream-a", 1).unwrap();
     assert_eq!(resumed.len(), 2);
     assert_eq!(resumed[0].revision, 2);
-    assert_eq!(resumed[1].kind, RuntimeEventKind::PanelActivated);
+    assert_eq!(resumed[1].kind, RuntimeEventKind::ProjectActivated);
 
     // 已见最新事件时返回空增量，而不是错误。
     assert!(ring.resume("store-a", "stream-a", 3).unwrap().is_empty());
@@ -41,7 +41,7 @@ fn event_ring_keeps_only_the_bounded_tail_and_requests_resync_on_gap() {
     let mut ring = EventRing::new("store-a", "stream-a");
     for index in 0..(EVENT_RING_CAPACITY + 5) {
         ring.publish(event(
-            RuntimeEventKind::TerminalOutput,
+            RuntimeEventKind::ProjectActivated,
             &format!("terminal-{index}"),
         ));
     }
@@ -123,7 +123,7 @@ fn lagging_subscription_is_removed_without_blocking_publishers() {
         super::events::deliver_event(
             &mut subscribers,
             event(
-                RuntimeEventKind::TerminalOutput,
+                RuntimeEventKind::ProjectActivated,
                 &format!("terminal-{index}"),
             ),
         );
@@ -147,7 +147,7 @@ fn event_hub_backlog_over_client_capacity_requires_resync() {
     // 命令通道有界：满时短暂重试，确保全部发布都进入 hub。
     for index in 0..(CLIENT_QUEUE_CAPACITY + 1) {
         while !hub.publish(event(
-            RuntimeEventKind::TerminalOutput,
+            RuntimeEventKind::ProjectActivated,
             &format!("terminal-{index}"),
         )) {
             std::thread::sleep(Duration::from_millis(5));

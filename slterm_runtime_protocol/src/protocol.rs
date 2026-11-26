@@ -924,21 +924,15 @@ pub struct RuntimeEvent {
 }
 
 /// Runtime 事件类型的封闭线缆枚举。
+///
+/// 当前只登记真实发布点：项目激活。面板与终端输出事件在接线前不得进入
+/// 封闭枚举，客户端以快照与 `terminal.read`／`terminal.wait` 的 revision 为准。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum RuntimeEventKind {
     /// 项目激活 [resource=project id]。
     #[serde(rename = "project.activated")]
     ProjectActivated,
-    /// 面板激活 [resource=规范 ViewKey JSON]。
-    #[serde(rename = "panel.activated")]
-    PanelActivated,
-    /// 面板关闭 [resource=规范 ViewKey JSON]。
-    #[serde(rename = "panel.closed")]
-    PanelClosed,
-    /// 终端输出代次推进 [resource=terminal id]。
-    #[serde(rename = "terminal.output")]
-    TerminalOutput,
 }
 
 /// 服务器到客户端的事件通知；客户端不得回复，连接只承载订阅事件。

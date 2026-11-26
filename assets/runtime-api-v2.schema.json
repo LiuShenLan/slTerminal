@@ -5163,26 +5163,11 @@
       "type": "object"
     },
     "RuntimeEventKind": {
-      "description": "Runtime 事件类型的封闭线缆枚举。",
+      "description": "Runtime 事件类型的封闭线缆枚举。\n\n当前只登记真实发布点：项目激活。面板与终端输出事件在接线前不得进入\n封闭枚举，客户端以快照与 `terminal.read`／`terminal.wait` 的 revision 为准。",
       "oneOf": [
         {
           "const": "project.activated",
           "description": "项目激活 [resource=project id]。",
-          "type": "string"
-        },
-        {
-          "const": "panel.activated",
-          "description": "面板激活 [resource=规范 ViewKey JSON]。",
-          "type": "string"
-        },
-        {
-          "const": "panel.closed",
-          "description": "面板关闭 [resource=规范 ViewKey JSON]。",
-          "type": "string"
-        },
-        {
-          "const": "terminal.output",
-          "description": "终端输出代次推进 [resource=terminal id]。",
           "type": "string"
         }
       ]

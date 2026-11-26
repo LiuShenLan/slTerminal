@@ -141,7 +141,7 @@ fn runtime_events_are_suppressed_while_close_is_in_progress(cx: &mut TestAppCont
     root.update(cx, |root, _| {
         root.close_in_progress = true;
         root.publish_runtime_event(
-            slterm_runtime_protocol::RuntimeEventKind::PanelClosed,
+            slterm_runtime_protocol::RuntimeEventKind::ProjectActivated,
             "panel-a".to_owned(),
         );
     });

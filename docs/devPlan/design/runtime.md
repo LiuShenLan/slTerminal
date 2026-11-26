@@ -17,7 +17,7 @@
 ### 握手、快照与事件
 
 - 握手返回 store_epoch、stream_epoch、revision、协议／schema SHA-256 和能力摘要。`runtime.describe` 返回方法注册与能力，`runtime.snapshot` 返回同一资源模型的不可变快照。
-- 全局事件环保留最近 1,024 个轻量事件，每客户端待发送队列 64 项；事件只携带资源身份、代次和必要元数据，终端正文只经分页读取，事件只携带输出 revision。
+- 全局事件环保留最近 1,024 个轻量事件，每客户端待发送队列 64 项；事件只携带资源身份、代次和必要元数据，终端正文只经分页读取。当前事件面只发布 `project.activated`；终端输出进度由 `terminal.read`／`terminal.wait` 的 revision 表达，面板与终端事件必须先有真实发布点才可登记进协议枚举。
 - 事件续传必须同时匹配 store_epoch、stream_epoch 和 revision，否则返回 `resync_required`。普通进程重启只更换 stream_epoch；整库恢复、重置或灾难恢复更换 store_epoch。
 - 客户端滞后只终止其订阅并要求重新快照，不反压 UI、PTY 或其他客户端。取消订阅、资源销毁、关闭开始和应用退出后不得回填过期事件。
 - RuntimeHub 发布不可变快照与轻量事件；前台状态更新先于事件发布，事件环有界，缺口不能靠重复事件补偿。

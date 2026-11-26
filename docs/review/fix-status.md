@@ -218,7 +218,7 @@
 | 随包 schema 未覆盖多数方法的请求结构，method 与 params/result 无关联校验 | 已修：schema 生成器遍历方法注册表，把每个方法的 `params`／`result` schema 汇入根 `$defs`，并生成 `$defs.MethodContracts` 方法名到合同的封闭映射；`RuntimeRequest` 用逐方法 `oneOf` 绑定方法名与参数结构；测试 `packaged_schema_covers_every_registered_method_contract`、`packaged_schema_binds_each_method_to_its_params` 逐方法核对并拒绝错误配对 |
 | Runtime 合同测试不在任何固定门禁内 | 已修：CI 与 `release.ps1` 前置强制执行 `cargo test -p slterm_runtime_protocol --features schema --test lib_tests`，逐字节核对随包 schema 资产、生成器重建与真实请求校验；命令矩阵与协议 CLAUDE.md 同步 |
 | Runtime 双进程 conformance 与事件断线矩阵缺失 | 待修 |
-| 事件面只发布项目激活 | 待修 |
+| 事件面只发布项目激活 | 已修（按审查允许路径降级）：协议封闭枚举只保留有真实发布点的 `project.activated`，删除 `panel.activated`／`panel.closed`／`terminal.output`，不再宣称不存在的事件能力；客户端以快照与 `terminal.read`／`terminal.wait` 的 revision 对齐状态；随包 schema 重新生成，featureSpec／设计／协议与壳文档同步降级；测试 `event_ring_assigns_monotonic_revisions_and_resumes_without_gap`、`runtime_events_visibility_and_generation`、`generated_schema_matches_the_packaged_asset` |
 | 路由与能力摘要不按方法注册表作用域执行 | 已修：server 路由以注册表 `lookup(...).scopes` 复核 Runtime／Handover 方法，hello 能力与 describe 按已认证作用域经 `for_scope` 收窄；测试 `handover_hello_capabilities_are_scoped`、`runtime_hello_capabilities_exclude_handover`、`runtime_describe_returns_registry_and_contract_hashes` |
 | `GitStatusResponse.root` 返回项目根而不是仓库根 | 已修：状态 DTO 根取 `StatusSnapshot.worktree_root`，缺省才回退项目根；测试 `git_status_reports_the_repository_worktree_root` |
 | 快照不暴露布局树与分割几何，resize 路径不可推导且视口由客户端自报 | 已修：快照新增 `ProjectLayoutResource`／`LayoutNodeResource` 分割树（方向、比例、组身份，空布局为 null），resize 布尔路径可从树推导；split／resize 线缆删除客户端视口，AppRoot 使用前台真实内容视口校验最小空间；测试 `snapshot_layout_tree_round_trips_and_rejects_unknown_nodes`、`runtime_snapshot_returns_workspace_resources_and_identity`、`panel_methods_validate_layout_identities_and_bounds` |
