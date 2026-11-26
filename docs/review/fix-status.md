@@ -104,11 +104,11 @@
 | 脚注引用不渲染、不可点击 | 待修 |
 | 安全 HTML 白名单只做文本降级 | 待修 |
 | 程序化滚动与恢复位置不走视口调度 | 待修 |
-| 每次滚动清空全部已渲染 outcome | 待修 |
+| 每次滚动清空全部已渲染 outcome | 已修：同一 Document revision 的 `outcomes`/`inflight` 保留且渲染代次不推进，滚动只补排未渲染块；测试 `same_revision_scroll_keeps_rendered_outcomes` |
 | 高 DPI 下公式位图被放大后再按 1:1 逻辑像素显示 | 已修：`logical_formula_size` 按窗口 scale 除回逻辑尺寸，块级与行内公式均设显式逻辑宽度（zoom 保留在位图内）；测试 `formula_logical_size_undoes_window_scale_but_keeps_reading_zoom` |
 | 已加载的远程图片再次点击仍发起新请求 | 已修：已加载或有在途任务时重复点击不再重启请求；测试 `repeated_image_click_does_not_restart_requests` |
 | 渲染查找在前台按匹配数乘块数扫描 | 待修 |
-| 每次滚动在前台复制整篇文档文本 | 待修 |
+| 每次滚动在前台复制整篇文档文本 | 已修：`ProgressiveMarkdownRenderer::schedule` 接收 `&Rope`，按块 `source_range.try_slice` 只取可见块文本；测试 `same_revision_scroll_keeps_rendered_outcomes` 及渐进渲染组 |
 | 大纲无层级且常驻挤占内容区 | 待修 |
 | 渲染态缺少键盘滚动、大纲与链接激活 | 待修 |
 | 安全与授权关键路径只有服务/投影测试 | 待修 |

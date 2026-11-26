@@ -267,7 +267,7 @@ impl MarkdownView {
         self.render_task = None;
         self.prune_resources(visible.clone(), 4);
         self.renderer
-            .schedule(self.revision, &self.text.to_string(), &document, visible, 4);
+            .schedule(self.revision, &self.text, &document, visible, 4);
         self.spawn_render_batch(cx);
     }
 

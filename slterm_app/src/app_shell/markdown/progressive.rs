@@ -3,6 +3,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::ops::Range;
 
+use ropey::Rope;
 use slterm_document::{BlockId, MarkdownBlock, MarkdownDocument};
 
 use crate::app_shell::text_view::MarkdownMode;
@@ -130,19 +131,22 @@ impl ProgressiveMarkdownRenderer {
     pub(crate) fn schedule(
         &mut self,
         document_revision: u64,
-        source: &str,
+        source: &Rope,
         document: &MarkdownDocument,
         visible: Range<usize>,
         overscan: usize,
     ) {
-        if self.started {
+        let same_revision = self.document_revision == Some(document_revision);
+        if self.started && !same_revision {
             self.advance_generation();
         }
         self.started = true;
         self.document_revision = Some(document_revision);
         self.pending.clear();
-        self.inflight.clear();
-        self.outcomes.clear();
+        if !same_revision {
+            self.inflight.clear();
+            self.outcomes.clear();
+        }
         if visible.is_empty() {
             return;
         }
@@ -150,10 +154,14 @@ impl ProgressiveMarkdownRenderer {
         let start = visible.start.saturating_sub(overscan).min(count);
         let end = visible.end.saturating_add(overscan).min(count);
         for block in &document.blocks()[start..end] {
+            let id = block.id();
+            if self.outcomes.contains_key(&id) || self.inflight.contains_key(&id) {
+                continue;
+            }
             let source = source
-                .get(block.source_range().clone())
-                .unwrap_or_default()
-                .to_owned();
+                .try_slice(block.source_range().clone())
+                .map(|slice| slice.to_string())
+                .unwrap_or_default();
             self.pending.push_back(BlockRenderTask {
                 document_revision,
                 render_generation: self.render_generation,
@@ -257,7 +265,7 @@ mod tests {
             .collect::<String>();
         let document = MarkdownDocument::parse(&source);
         let mut renderer = ProgressiveMarkdownRenderer::default();
-        renderer.schedule(7, &source, &document, 2..4, 1);
+        renderer.schedule(7, &Rope::from_str(&source), &document, 2..4, 1);
         let tasks = renderer.next_chunk(2);
         assert_eq!(
             tasks
@@ -282,11 +290,40 @@ mod tests {
         renderer.cancel();
         renderer.complete(BlockCompletion::success(&tasks[0], 7, generation));
         assert!(renderer.outcome(tasks[0].block().id()).is_none());
-        renderer.schedule(7, &source, &document, 2..3, 0);
+        renderer.schedule(7, &Rope::from_str(&source), &document, 2..3, 0);
         let current = renderer.next_chunk(1);
         assert_eq!(current[0].render_generation(), 2);
         renderer.complete(BlockCompletion::success(&current[0], 7, 2));
         assert!(renderer.outcome(current[0].block().id()).is_some());
+    }
+
+    /// 同一 revision 的滚动不得丢弃已渲染结果或重排仍在视口的块。
+    #[test]
+    fn same_revision_scroll_keeps_rendered_outcomes() {
+        let source = (0..8)
+            .map(|index| format!("paragraph {index}\n\n"))
+            .collect::<String>();
+        let document = MarkdownDocument::parse(&source);
+        let mut renderer = ProgressiveMarkdownRenderer::default();
+        renderer.schedule(7, &Rope::from_str(&source), &document, 0..2, 0);
+        let tasks = renderer.next_chunk(2);
+        let generation = tasks[0].render_generation();
+        let rendered_id = tasks[0].block().id();
+        renderer.complete(BlockCompletion::success(&tasks[0], 7, generation));
+        assert!(renderer.outcome(rendered_id).is_some());
+
+        renderer.schedule(7, &Rope::from_str(&source), &document, 1..3, 0);
+        assert!(
+            renderer.outcome(rendered_id).is_some(),
+            "同一 revision 的已渲染块必须保留"
+        );
+        assert!(
+            renderer
+                .next_chunk(10)
+                .iter()
+                .all(|task| task.block().id() != rendered_id),
+            "已渲染块不得重新排入后台"
+        );
     }
 
     #[test]
@@ -296,7 +333,7 @@ mod tests {
         let mut renderer = ProgressiveMarkdownRenderer::default();
         let start = 2;
         let end = 1;
-        renderer.schedule(1, source, &document, start..end, 0);
+        renderer.schedule(1, &Rope::from_str(source), &document, start..end, 0);
         assert!(renderer.next_chunk(2).is_empty());
     }
 
@@ -305,7 +342,7 @@ mod tests {
         let source = "first\n\nsecond\n";
         let document = MarkdownDocument::parse(source);
         let mut renderer = ProgressiveMarkdownRenderer::default();
-        renderer.schedule(3, source, &document, 0..2, 0);
+        renderer.schedule(3, &Rope::from_str(source), &document, 0..2, 0);
         let tasks = renderer.next_chunk(2);
         renderer.complete(BlockCompletion::failure(
             &tasks[0],
