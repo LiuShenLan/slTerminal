@@ -298,7 +298,7 @@ pub(crate) fn execute_git_write(
         Err(GitChangeError::Unauthorized) => Err(git_error_to_rpc(GitError::AccessDenied(
             "写目标不在项目根内".to_owned(),
         ))),
-        Err(GitChangeError::Failed) => Err(control_error(
+        Err(GitChangeError::RecycleUnavailable | GitChangeError::Failed) => Err(control_error(
             DomainErrorCode::NotReady,
             -32001,
             "git write not ready",

@@ -1275,7 +1275,7 @@ impl AppRoot {
         cx: &mut Context<'_, Self>,
     ) {
         self.tasks.complete(TaskId::CommitDelete);
-        let retry_permanent = result.is_err() && !permanent;
+        let retry_permanent = offers_permanent_retry(&result, permanent);
         let target = self
             .side_views
             .instance(slterm_workspace::SideViewId::Commit)
@@ -1567,6 +1567,18 @@ fn repo_path_from(
         .ok_or(())?
         .join("/");
     text.parse().map_err(|_| ())
+}
+
+/// 只有「回收站不可用」可升级为永久删除；其他失败保留原因并如实显示。
+pub(crate) fn offers_permanent_retry(
+    result: &Result<(), super::git_changes::GitChangeError>,
+    permanent: bool,
+) -> bool {
+    !permanent
+        && matches!(
+            result,
+            Err(super::git_changes::GitChangeError::RecycleUnavailable)
+        )
 }
 
 #[cfg(test)]

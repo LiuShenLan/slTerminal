@@ -33,6 +33,8 @@ pub(crate) enum FileOperationKind {
 enum RecyclePolicy {
     NotApplicable,
     RecycleBin,
+    /// 用户显式确认的永久删除；仍走同一身份/父目录/授权复核。
+    Permanent,
 }
 
 #[derive(Clone, Debug)]
@@ -96,6 +98,8 @@ pub(crate) enum FileOperationError {
     Unauthorized,
     Changed,
     Journal,
+    /// 回收站不可用：唯一的「允许改为永久删除」失败类别。
+    RecycleBin(io::Error),
     Io(io::Error),
 }
 
@@ -348,6 +352,40 @@ impl FileOperationService {
         grants: &[PathGrant],
         authorization_generation: u64,
     ) -> Result<OperationPlan, FileOperationError> {
+        self.plan_delete_with_policy(
+            root_id,
+            target,
+            grants,
+            authorization_generation,
+            RecyclePolicy::RecycleBin,
+        )
+    }
+
+    /// 用户显式确认后的永久删除计划：与非永久删除共享全部身份与授权复核。
+    pub(crate) fn plan_delete_permanent(
+        &self,
+        root_id: FileTreeRoot,
+        target: &CanonicalPath,
+        grants: &[PathGrant],
+        authorization_generation: u64,
+    ) -> Result<OperationPlan, FileOperationError> {
+        self.plan_delete_with_policy(
+            root_id,
+            target,
+            grants,
+            authorization_generation,
+            RecyclePolicy::Permanent,
+        )
+    }
+
+    fn plan_delete_with_policy(
+        &self,
+        root_id: FileTreeRoot,
+        target: &CanonicalPath,
+        grants: &[PathGrant],
+        authorization_generation: u64,
+        recycle_policy: RecyclePolicy,
+    ) -> Result<OperationPlan, FileOperationError> {
         let resolved = self.resolver.resolve(target)?;
         let resolved = self.authorize(
             target,
@@ -368,7 +406,7 @@ impl FileOperationService {
             expected_fingerprint: Some(expected_fingerprint),
             parent: None,
             destination: None,
-            recycle_policy: RecyclePolicy::RecycleBin,
+            recycle_policy,
             document_revision: None,
             operation_id: Uuid::now_v7(),
         })
@@ -528,9 +566,19 @@ impl FileOperationService {
             }
             Err(error) => return Err(error),
         }
-        debug_assert_eq!(plan.recycle_policy, RecyclePolicy::RecycleBin);
-        self.recycle_bin
-            .send_to_recycle_bin(plan.lexical_path.as_path())?;
+        match plan.recycle_policy {
+            RecyclePolicy::RecycleBin => {
+                self.recycle_bin
+                    .send_to_recycle_bin(plan.lexical_path.as_path())
+                    .map_err(FileOperationError::RecycleBin)?;
+            }
+            RecyclePolicy::Permanent => {
+                std::fs::remove_file(plan.lexical_path.as_path())?;
+            }
+            RecyclePolicy::NotApplicable => {
+                unreachable!("删除计划必须携带删除策略");
+            }
+        }
         Ok(FileOperationOutcome::Completed)
     }
 

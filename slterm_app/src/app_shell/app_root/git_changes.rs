@@ -32,6 +32,8 @@ pub(crate) enum DeleteChangeKind {
 pub(crate) enum GitChangeError {
     Precondition,
     Unauthorized,
+    /// 回收站不可用：唯一允许用户显式升级为永久删除的失败。
+    RecycleUnavailable,
     Failed,
 }
 
@@ -48,6 +50,7 @@ impl From<FileOperationError> for GitChangeError {
     fn from(error: FileOperationError) -> Self {
         match error {
             FileOperationError::Unauthorized => Self::Unauthorized,
+            FileOperationError::RecycleBin(_) => Self::RecycleUnavailable,
             _ => Self::Failed,
         }
     }
@@ -151,18 +154,25 @@ pub(crate) fn delete_change(
         if kind == DeleteChangeKind::StagedAdded {
             crate::git::unstage_path(repo_root.as_path(), repo_relative)?;
         }
-        if permanent {
-            std::fs::remove_file(&target_path).map_err(|_| GitChangeError::Failed)?;
-            return Ok(());
-        }
         let target = CanonicalPath::new(target_path).map_err(|_| GitChangeError::Unauthorized)?;
         let write_grants = [PathGrant::project_root(write_root.clone())];
-        let plan = file_operations.plan_delete(
-            slterm_sidebar::FileTreeRoot::Project(project_id),
-            &target,
-            &write_grants,
-            0,
-        )?;
+        // 永久删除同样经统一计划/执行体：身份、父目录、链接与授权复核不因
+        // 用户再次确认而被绕过。
+        let plan = if permanent {
+            file_operations.plan_delete_permanent(
+                slterm_sidebar::FileTreeRoot::Project(project_id),
+                &target,
+                &write_grants,
+                0,
+            )?
+        } else {
+            file_operations.plan_delete(
+                slterm_sidebar::FileTreeRoot::Project(project_id),
+                &target,
+                &write_grants,
+                0,
+            )?
+        };
         file_operations.execute(&plan, &write_grants, 0)?;
         Ok(())
     })();

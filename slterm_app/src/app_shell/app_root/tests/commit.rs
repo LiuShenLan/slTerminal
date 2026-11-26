@@ -545,6 +545,119 @@ fn commit_staged_added_delete_sequence(cx: &mut TestAppContext) {
     assert!(status.stdout.is_empty(), "删除后工作区应干净");
 }
 
+/// 永久删除仍走统一计划/执行体：目录不得被递归删除，形态失配不得被
+/// 当成可升级的回收站失败。
+#[test]
+fn permanent_delete_never_bypasses_the_shared_operation_executor() {
+    use crate::app_shell::app_root::git_changes::{DeleteChangeKind, GitChangeError};
+    let temp = tempfile::tempdir().unwrap();
+    let repository = delete_repository(&temp);
+    std::fs::create_dir(repository.join("loose-dir")).unwrap();
+    std::fs::write(
+        repository.join("loose-dir").join("file.txt"),
+        "x
+",
+    )
+    .unwrap();
+    let write_root = CanonicalPath::new(dunce::canonicalize(&repository).unwrap()).unwrap();
+    let service = crate::app_shell::file_operation_service::FileOperationService::default();
+    let result = crate::app_shell::app_root::git_changes::delete_change(
+        &crate::git::GitFacade::default(),
+        &write_root,
+        &write_root,
+        PROJECT_A.parse::<ProjectId>().unwrap(),
+        &service,
+        "loose-dir",
+        DeleteChangeKind::Untracked,
+        true,
+        "test",
+    );
+    assert_eq!(result, Err(GitChangeError::Precondition));
+    assert!(
+        repository.join("loose-dir").join("file.txt").exists(),
+        "永久删除不得递归移除目录"
+    );
+}
+
+/// 回收站失败与形态失配必须分开归类：只有前者允许升级确认。
+#[test]
+fn recycle_unavailable_is_distinct_from_other_delete_failures() {
+    use crate::app_shell::app_root::git_changes::{DeleteChangeKind, GitChangeError};
+    let temp = tempfile::tempdir().unwrap();
+    let repository = delete_repository(&temp);
+    std::fs::write(
+        repository.join("loose.txt"),
+        "loose
+",
+    )
+    .unwrap();
+    let write_root = CanonicalPath::new(dunce::canonicalize(&repository).unwrap()).unwrap();
+    let service =
+        crate::app_shell::file_operation_service::FileOperationService::with_recycle_bin_for_test(
+            std::sync::Arc::new(FakeRecycleBin {
+                dir: temp.path().join("recycle"),
+                fail: true,
+            }),
+        );
+    let error = crate::app_shell::app_root::git_changes::delete_change(
+        &crate::git::GitFacade::default(),
+        &write_root,
+        &write_root,
+        PROJECT_A.parse::<ProjectId>().unwrap(),
+        &service,
+        "loose.txt",
+        DeleteChangeKind::Untracked,
+        false,
+        "test",
+    )
+    .unwrap_err();
+    assert_eq!(error, GitChangeError::RecycleUnavailable);
+    assert!(repository.join("loose.txt").exists(), "失败不得删除文件");
+    let error = crate::app_shell::app_root::git_changes::delete_change(
+        &crate::git::GitFacade::default(),
+        &write_root,
+        &write_root,
+        PROJECT_A.parse::<ProjectId>().unwrap(),
+        &service,
+        "missing.txt",
+        DeleteChangeKind::Untracked,
+        false,
+        "test",
+    )
+    .unwrap_err();
+    assert_eq!(error, GitChangeError::Precondition);
+}
+
+/// 永久删除只允许由「回收站不可用」这一种失败升级；其他失败保留原因，
+/// 不得借第二次确认绕过身份与授权复核。
+#[test]
+fn permanent_retry_is_offered_only_for_recycle_unavailable() {
+    use crate::app_shell::app_root::git_changes::GitChangeError;
+    let ok: Result<(), GitChangeError> = Ok(());
+    assert!(!super::super::commit::offers_permanent_retry(&ok, false));
+    for error in [
+        GitChangeError::Precondition,
+        GitChangeError::Unauthorized,
+        GitChangeError::Failed,
+    ] {
+        assert!(
+            !super::super::commit::offers_permanent_retry(&Err(error), false),
+            "非回收站失败不得升级为永久删除: {error:?}"
+        );
+    }
+    assert!(super::super::commit::offers_permanent_retry(
+        &Err(GitChangeError::RecycleUnavailable),
+        false
+    ));
+    assert!(
+        !super::super::commit::offers_permanent_retry(
+            &Err(GitChangeError::RecycleUnavailable),
+            true
+        ),
+        "已是永久删除时不得再次升级"
+    );
+}
+
 #[gpui::test]
 fn commit_untracked_permanent_delete_requires_confirmation(cx: &mut TestAppContext) {
     let temp = tempfile::tempdir().unwrap();
