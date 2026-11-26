@@ -286,11 +286,11 @@ impl TerminalView {
     /// 字体度量变化属结构性几何变化(`mark_structural_resize`),下一帧
     /// 网格观测直接同步 Term 与 ConPTY,不进尾沿去抖;仅调色板/复制语义
     /// 变化只重绘。
-    #[allow(dead_code)] // 设置协调器接入后消费。
     pub fn apply_settings(&mut self, settings: &Settings, cx: &mut Context<'_, Self>) {
         let font_changed = self.font.family.as_ref() != settings.font_family.as_str()
             || (self.font_size.as_f32() - settings.font_size_px).abs() > f32::EPSILON
             || self.ligatures != settings.ligatures;
+        let dark_before = self.palette.is_dark();
         self.font = mono_font(
             &settings.font_family,
             FontWeight::NORMAL,
@@ -321,6 +321,12 @@ impl TerminalView {
         self.completion_style = settings.completion_style;
         self.ghost_enabled = settings.ghost;
         self.palette = Arc::new(settings.palette.clone());
+        if self.palette.is_dark() != dark_before
+            && let Err(error) =
+                self.send_worker_command(Msg::SetColorScheme(self.palette.is_dark()))
+        {
+            log::warn!("终端配色热应用命令发送失败: {error}");
+        }
         if font_changed {
             self.mark_structural_resize();
         }

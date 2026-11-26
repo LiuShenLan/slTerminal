@@ -451,6 +451,65 @@ fn activity_bar_settings_button_opens_the_settings_overlay(cx: &mut TestAppConte
     );
 }
 
+/// 设置快照提交必须扇出到既有终端视图：字号与主题立即生效。
+#[gpui::test]
+fn terminal_views_hot_apply_settings_snapshot(cx: &mut TestAppContext) {
+    let (root, mut window, _state) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, "D:/work/a");
+    new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_A);
+    add_project(&root, &mut window, PROJECT_B, "D:/work/b");
+    new_terminal(&root, &mut window, PROJECT_B, GROUP_B, TERMINAL_B);
+    activate_project(&root, &mut window, PROJECT_A);
+    let terminals = root.read_with(cx, |root, cx| {
+        root.projects
+            .values()
+            .flat_map(|project| {
+                project
+                    .read(cx)
+                    .panels
+                    .values()
+                    .filter_map(|panel| panel.terminal().cloned())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(terminals.len(), 2, "两个项目各有一个终端");
+    let background_before = terminals[0].read_with(cx, |view, _| view.palette.background);
+    for terminal in &terminals {
+        terminal.read_with(cx, |view, _| {
+            assert_ne!(view.font_size, gpui::px(20.0));
+        });
+    }
+
+    root.update(cx, |root, cx| {
+        root.apply_settings_field("font_size", slterm_settings::json::Value::Number(20.0), cx);
+        root.apply_settings_field(
+            "theme",
+            slterm_settings::json::Value::String("Nord".to_owned()),
+            cx,
+        );
+    });
+    window.run_until_parked();
+
+    for terminal in &terminals {
+        terminal.read_with(cx, |view, _| {
+            assert_eq!(
+                view.font_size,
+                gpui::px(20.0),
+                "既有终端（含隐藏项目）必须热应用字号"
+            );
+            assert_ne!(
+                view.palette.background, background_before,
+                "既有终端必须热应用主题调色板"
+            );
+            assert_eq!(
+                view.font.family.as_ref(),
+                crate::app_shell::assets::REQUIRED_FONT_FAMILY
+            );
+        });
+    }
+}
+
 /// 自定义主题提交在后台预载；后续无关字段热应用只查缓存，不读主题文件。
 #[gpui::test]
 fn custom_theme_hot_apply_uses_the_background_preloaded_cache(cx: &mut TestAppContext) {

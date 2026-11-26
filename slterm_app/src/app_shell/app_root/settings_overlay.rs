@@ -1091,6 +1091,7 @@ impl AppRoot {
         let settings = crate::app_shell::config::Settings::from_runtime(&runtime);
         let language = settings.language;
         let tray = settings.tray;
+        self.apply_settings_to_terminal_views(&settings, cx);
         cx.set_global(settings);
         gpui_component::set_locale(language.gpui_component_locale());
         crate::notify::set_language(language);
@@ -1098,6 +1099,30 @@ impl AppRoot {
         crate::background_tasks::apply_settings(self.settings.values());
         crate::app_shell::theme::apply_dark_theme(cx);
         cx.refresh_windows();
+    }
+
+    /// 设置快照提交后向全部既有终端扇出一次，隐藏项目同样更新；
+    /// 新建终端直接读取同一全局快照。
+    fn apply_settings_to_terminal_views(
+        &self,
+        settings: &crate::app_shell::config::Settings,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let terminals = self
+            .projects
+            .values()
+            .flat_map(|project| {
+                project
+                    .read(cx)
+                    .panels
+                    .values()
+                    .filter_map(|panel| panel.terminal().cloned())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        for terminal in terminals {
+            terminal.update(cx, |view, cx| view.apply_settings(settings, cx));
+        }
     }
 
     /// 设置去抖到期后交给后台写盘；前台只提交快照与结算回执。
