@@ -423,3 +423,15 @@
 | 项目打开完成重入不重复创建任务 | [PathPolicy](../featureSpec/path-policy.md)；[工作区](design/workspace.md) | `project_open_completion_reentry_does_not_duplicate_tasks` | 已自动化 |
 | 关闭或窗口销毁前排空待处理项目打开移交 | [工作区壳](../featureSpec/workspace/shell.md)；[生命周期](design/lifecycle.md)、[工作区](design/workspace.md) | `closing_drains_pending_project_open_handovers`、`destroyed_window_drains_pending_project_open_handovers` | 已自动化 |
 | 系统目录解析拒绝不存在目录并归一目录联接 | [PathPolicy](../featureSpec/path-policy.md)；[领域模型](design/domain-model.md)、[文件与 Git](design/files-git.md) | `system_resolver_requires_an_existing_directory`、`system_resolver_normalizes_directory_junction` | 已自动化 |
+
+### 人工豁免场景
+
+> 仅登记真实桌面、GPU、安装器或用户观感边界；兜底用例与人工核验记录见[测试豁免表](../../.claude/docs/testing/exemptions.md)。
+
+| 验收场景 | 豁免登记 | 状态 |
+|---|---|---|
+| 真实托盘图标、菜单点击与通知区视觉 | 豁免表“真实托盘交互”行 | 人工豁免 |
+| 真实窗口材质与本地背景图合成观感 | 豁免表“真实 DWM 材质渲染与壁纸 GPU 合成”行 | 人工豁免 |
+| 真实系统通知投递与任务栏进度视觉 | 豁免表“真实系统 toast 投递”与“真实任务栏进度投递”行 | 人工豁免 |
+| 真实输入法候选窗、CJK 排版与公式观感 | 豁免表“渲染与系统观感的人工验收面”各行 | 人工豁免 |
+| 真实安装器覆盖安装与更新移交 | 豁免表“真实 setup.exe 覆盖安装与 helper 提权链”行 | 人工豁免 |

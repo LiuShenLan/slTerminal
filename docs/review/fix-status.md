@@ -275,7 +275,7 @@
 | 追溯矩阵引用不存在的测试例名 | 已修：8 个失效锚改为真实例名（`integration_encrypted_backup_round_trips_without_touching_disk`、`interrupted_apply_is_rolled_back_on_restart`、`maintenance_restore_leaves_credentials_and_unlisted_files_untouched`、`integration_commit_rollback`、`agent_root_default_capabilities`、`path_file_identity_deduplicates_document` 等），硬链接别名补真实 AppRoot 用例 `path_file_identity_deduplicates_document`；新增 `scripts/check_traceability.py` 门禁与自测 `test_traceability.py`，已自动化行锚点必须解析到源码唯一测试函数 |
 | 部分矩阵例名存在，但覆盖的不是声明场景 | 待修 |
 | 全量验收锚以源码字符串和局部状态代替跨域行为 | 待修 |
-| 测试豁免表含失效设计路径、目标态待实现项与超范围无障碍项 | 待修 |
+| 测试豁免表含失效设计路径、目标态待实现项与超范围无障碍项 | 已修：失效例名改为真实锚（`spawn_lock_serializes_capacity_check_and_reservation` 等），删除已退役 restore ticket 与不存在数学用例；观感段改用现行 featureSpec／design 路径与真实兜底例名，删除范围外的读屏无障碍行；追溯矩阵新增“人工豁免场景”分区引用豁免行 |
 | 架构总览与常驻规则仍使用旧栈数据名、类型名与已取消的校验 | 已修：根规则改指真实类型 `PanelContent`/`ViewKeyKind`/`ProjectLayout`；overview ownership 表补齐全部 workspace 成员，数据文件改为实际的 `settings.json`／`workspace.db`／`workspace.backup.db`／`learning.db`／`themes/` 等 |
 | README、CHANGELOG 与发布说明的用户能力清单停留在旧栈 | 已修：中英 README、CHANGELOG 0.3.0 与中英发布说明按当前能力重写（项目/面板组/共享 Document/Runtime v2/纯颜色主题/背景图），删除标签页、窗格缩放、图片面板、只读双栏 Diff、WindowState 与旧设置页清单；版本状态改为 2026-10-18 首发 |
 | 被排除的图片面板实现仍编译存在 | 已修：删除 `ImageTabView`、图片几何/解码、`image_viewable` 与 `openable_in_app`，`doc_tabs` 只保留 Markdown 判定；`acceptance_excluded_surface_absent` 改为递归扫描 `src/` 生产段并覆盖图片面板与旧 Diff/拖放符号 |
