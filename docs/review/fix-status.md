@@ -107,7 +107,7 @@
 | 每次滚动清空全部已渲染 outcome | 已修：同一 Document revision 的 `outcomes`/`inflight` 保留且渲染代次不推进，滚动只补排未渲染块；测试 `same_revision_scroll_keeps_rendered_outcomes` |
 | 高 DPI 下公式位图被放大后再按 1:1 逻辑像素显示 | 已修：`logical_formula_size` 按窗口 scale 除回逻辑尺寸，块级与行内公式均设显式逻辑宽度（zoom 保留在位图内）；测试 `formula_logical_size_undoes_window_scale_but_keeps_reading_zoom` |
 | 已加载的远程图片再次点击仍发起新请求 | 已修：已加载或有在途任务时重复点击不再重启请求；测试 `repeated_image_click_does_not_restart_requests` |
-| 渲染查找在前台按匹配数乘块数扫描 | 待修 |
+| 渲染查找在前台按匹配数乘块数扫描 | 已修：`find_literal` 用单向前进的块游标把匹配映射到所属块；Markdown 搜索移到后台执行，回执按查询与代次对账，过期结果不覆盖当前输入；测试 `literal_search_maps_each_match_to_its_own_block`、`markdown_rendered_search_navigates_visible_matches` |
 | 每次滚动在前台复制整篇文档文本 | 已修：`ProgressiveMarkdownRenderer::schedule` 接收 `&Rope`，按块 `source_range.try_slice` 只取可见块文本；测试 `same_revision_scroll_keeps_rendered_outcomes` 及渐进渲染组 |
 | 大纲无层级且常驻挤占内容区 | 待修 |
 | 渲染态缺少键盘滚动、大纲与链接激活 | 待修 |

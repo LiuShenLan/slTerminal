@@ -416,15 +416,24 @@ impl MarkdownDocument {
         if query.is_empty() {
             return Vec::new();
         }
+        // 块按可见区间顺序排列：匹配扫描只前进块游标，避免每个匹配重扫全部块。
+        let mut next_block = 0;
         self.visible_text
             .match_indices(query)
             .filter_map(|(start, matched)| {
-                let range = start..start + matched.len();
-                let block = self.blocks.iter().find(|block| {
-                    block.visible_range.start <= start && start < block.visible_range.end
-                })?;
+                while self
+                    .blocks
+                    .get(next_block)
+                    .is_some_and(|block| start >= block.visible_range.end)
+                {
+                    next_block += 1;
+                }
+                let block = self
+                    .blocks
+                    .get(next_block)
+                    .filter(|block| block.visible_range.start <= start)?;
                 Some(MarkdownSearchMatch {
-                    range,
+                    range: start..start + matched.len(),
                     block: block.id,
                 })
             })
@@ -1444,5 +1453,18 @@ mod tests {
             });
         assert_eq!(code.unwrap().language(), LanguageId::Mermaid);
         assert_eq!(code.unwrap().source(), "graph TD; A-->B\n");
+    }
+
+    #[test]
+    fn literal_search_maps_each_match_to_its_own_block() {
+        let source = (0..12)
+            .map(|index| format!("needle {index}\n\n"))
+            .collect::<String>();
+        let document = MarkdownDocument::parse(&source);
+        let matches = document.find_literal("needle");
+        assert_eq!(matches.len(), 12);
+        for (index, matched) in matches.iter().enumerate() {
+            assert_eq!(matched.block(), BlockId(index));
+        }
     }
 }

@@ -10,6 +10,8 @@ pub(super) struct MarkdownSearch {
     pub(super) input: Entity<InputState>,
     pub(super) matches: Vec<MarkdownSearchMatch>,
     pub(super) active: Option<usize>,
+    generation: u64,
+    task: Option<gpui::Task<()>>,
     _subscription: Subscription,
 }
 
@@ -39,28 +41,60 @@ impl MarkdownView {
             input,
             matches: Vec::new(),
             active: None,
+            generation: 0,
+            task: None,
             _subscription: subscription,
         });
         cx.notify();
     }
 
     pub(super) fn refresh_search(&mut self, cx: &mut Context<'_, Self>) {
-        let target = self.search.as_mut().and_then(|search| {
-            let query = search.input.read(cx).value();
-            search.matches = if self.document_revision == Some(self.revision) {
-                self.document
-                    .as_deref()
-                    .map(|document| document.find_literal(&query))
-                    .unwrap_or_default()
-            } else {
-                Vec::new()
-            };
-            search.active = (!search.matches.is_empty()).then_some(0);
-            search.matches.first().map(|matched| matched.block())
+        let document = (self.document_revision == Some(self.revision))
+            .then(|| self.document.clone())
+            .flatten();
+        let Some(search) = self.search.as_mut() else {
+            return;
+        };
+        let query = search.input.read(cx).value();
+        search.matches.clear();
+        search.active = None;
+        search.generation = search.generation.wrapping_add(1);
+        let generation = search.generation;
+        let Some(document) = document.filter(|_| !query.is_empty()) else {
+            search.task = None;
+            cx.notify();
+            return;
+        };
+
+        // 匹配扫描可能覆盖整篇可见文本，必须在后台执行；回执按查询与代次对账。
+        let executor = cx.background_executor().clone();
+        let background_query = query.clone();
+        let task = cx.spawn(async move |this, cx| {
+            let matches = executor
+                .spawn(async move { document.find_literal(&background_query) })
+                .await;
+            let _ = this.update(cx, |view, cx| {
+                let current = view.search.as_ref().is_some_and(|search| {
+                    search.generation == generation && search.input.read(cx).value() == query
+                });
+                if !current {
+                    return;
+                }
+                let target = {
+                    let Some(search) = view.search.as_mut() else {
+                        return;
+                    };
+                    search.matches = matches;
+                    search.active = (!search.matches.is_empty()).then_some(0);
+                    search.matches.first().map(|matched| matched.block())
+                };
+                if let Some(target) = target {
+                    view.scroll_to_block(target);
+                }
+                cx.notify();
+            });
         });
-        if let Some(target) = target {
-            self.scroll_to_block(target);
-        }
+        search.task = Some(task);
         cx.notify();
     }
 
