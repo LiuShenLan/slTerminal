@@ -56,11 +56,13 @@ impl AppRoot {
         let task = {
             let cancellation = cancellation.clone();
             cx.spawn(async move |this, cx| {
+                let mut tray_tick = 0_u32;
                 loop {
                     executor.timer(Duration::from_millis(120)).await;
                     if cancellation.is_cancelled() {
                         break;
                     }
+                    tray_tick = tray_tick.wrapping_add(1);
                     let mut events = Vec::new();
                     while let Ok(event) = receiver.try_recv() {
                         events.push(event);
@@ -145,6 +147,9 @@ impl AppRoot {
                                     root.resume_pending_application_close(cx);
                                     root.poll_document_autosave(cx);
                                     root.poll_settings_save(cx);
+                                    if tray_tick.is_multiple_of(8) {
+                                        root.poll_tray(cx);
+                                    }
                                 }
                             });
                         });
@@ -158,6 +163,63 @@ impl AppRoot {
         {
             log::warn!("壳事件泵重复注册被拒绝: {error:?}");
         }
+    }
+
+    /// 1 Hz 托盘快照：内容去抖；启用态每次重投挂载请求，成为 `NIM_ADD`
+    /// 失败后的真实重试节拍。只在前台派生，不触碰 Win32 阻塞调用。
+    pub(crate) fn poll_tray(&mut self, cx: &mut Context<'_, Self>) {
+        let settings = cx.global::<crate::app_shell::config::Settings>();
+        if !settings.tray {
+            return;
+        }
+        let language = settings.language;
+        let agents = self.tray_agents(cx);
+        let _ = crate::background_tasks::run_once(
+            crate::background_tasks::AGENT_SCREEN_WATCHDOG,
+            || {
+                crate::tray::set_enabled(true);
+                crate::tray::update(agents, language);
+                Ok(())
+            },
+        );
+    }
+
+    fn tray_agents(&self, cx: &App) -> Vec<crate::tray::TrayAgent> {
+        let mut agents = Vec::new();
+        for terminal in self.snapshot.terminals() {
+            let Some((panel_id, _)) = self.terminal_panel(terminal.project_id(), terminal.id(), cx)
+            else {
+                continue;
+            };
+            let pane = crate::gpui_terminal::PaneId(panel_id.sequence());
+            let session = self
+                .agents
+                .session_agent(pane)
+                .or_else(|| terminal.agent().cloned());
+            let Some(session) = session else {
+                continue;
+            };
+            let status = self
+                .agents
+                .host(pane)
+                .map(|host| host.status())
+                .unwrap_or_default();
+            let tail = terminal
+                .cwd()
+                .as_path()
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned());
+            let label = match tail {
+                Some(tail) if !tail.is_empty() => format!("{} · {tail}", session.source),
+                _ => session.source.clone(),
+            };
+            agents.push(crate::tray::TrayAgent {
+                pane,
+                label,
+                needs_attention: status == crate::ai_agents::AgentStatus::Blocked,
+            });
+        }
+        agents
     }
 
     pub(crate) fn handle_shell_event(

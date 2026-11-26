@@ -201,14 +201,23 @@ pub(crate) fn set_enabled(enabled: bool) {
     }
 }
 
-/// 托盘可用性：已请求启用且托盘线程已正常起跑。
+/// 托盘可用性 = 用户启用 ∧ 托盘窗口已创建 ∧ 图标已成功挂载。
 ///
-/// 建窗失败会复位启动闸门并允许后续重试，因此这里读的是「最近一次
-/// 启动请求未被判定失败」，用于启动期决定能否隐藏窗口。
+/// 只看线程启动请求不足以决定静默启动是否安全：建窗或 `NIM_ADD` 失败时
+/// 窗口隐藏后没有恢复入口。失败路径由 1 Hz 快照节拍重复 `set_enabled`
+/// 触发重试。
+pub(crate) const fn availability(enabled: bool, window_ready: bool, icon_mounted: bool) -> bool {
+    enabled && window_ready && icon_mounted
+}
+
 pub(crate) fn available() -> bool {
     #[cfg(windows)]
     {
-        lock_state().enabled && win::thread_started()
+        availability(
+            lock_state().enabled,
+            win::window_ready(),
+            win::icon_mounted(),
+        )
     }
     #[cfg(not(windows))]
     {
@@ -455,6 +464,10 @@ mod win {
     /// 托盘窗口句柄(isize 形态跨线程存取;0 = 线程未起或窗口未建)。
     static HWND: AtomicIsize = AtomicIsize::new(0);
     static THREAD_STARTED: AtomicBool = AtomicBool::new(false);
+    /// 托盘窗口创建成功；失败或收尾时复位。
+    static WINDOW_READY: AtomicBool = AtomicBool::new(false);
+    /// 图标已成功挂载到通知区；NIM_ADD 失败或删除后复位。
+    static ICON_MOUNTED: AtomicBool = AtomicBool::new(false);
     /// 收尾标志:窗口尚未建好就收到 shutdown 时,线程建完窗立刻退出。
     static SHUTDOWN: AtomicBool = AtomicBool::new(false);
     /// 托盘线程句柄:收尾时 join,保证图标删干净后才回到进程退出路径。
@@ -475,9 +488,12 @@ mod win {
         }
     }
 
-    /// 托盘线程是否已正常起跑(建窗失败会复位,用于可用性判定)。
-    pub(super) fn thread_started() -> bool {
-        THREAD_STARTED.load(Ordering::SeqCst)
+    pub(super) fn window_ready() -> bool {
+        WINDOW_READY.load(Ordering::Acquire)
+    }
+
+    pub(super) fn icon_mounted() -> bool {
+        ICON_MOUNTED.load(Ordering::Acquire)
     }
 
     pub(super) fn ensure_thread() {
@@ -575,10 +591,12 @@ mod win {
             // 窗口创建失败必须复位闸门,让后续 set_enabled/init 重试;
             // 否则本进程内托盘入口永久缺失(静默启动下窗口已隐藏)。
             THREAD_STARTED.store(false, Ordering::SeqCst);
+            WINDOW_READY.store(false, Ordering::Release);
             log::warn!("tray: CreateWindowExW failed; tray icon disabled (will retry)");
             return;
         }
         HWND.store(hwnd as isize, Ordering::Release);
+        WINDOW_READY.store(true, Ordering::Release);
 
         // 建窗与 shutdown 竞态:shutdown 先到则不留图标直接退出。
         if SHUTDOWN.load(Ordering::SeqCst) {
@@ -604,6 +622,11 @@ mod win {
                 DispatchMessageW(&message);
             }
         }
+        // 线程退出后不得再声称可用；1 Hz 节拍可重新拉起。
+        HWND.store(0, Ordering::Release);
+        WINDOW_READY.store(false, Ordering::Release);
+        ICON_MOUNTED.store(false, Ordering::Release);
+        THREAD_STARTED.store(false, Ordering::SeqCst);
     }
 
     unsafe extern "system" fn tray_wnd_proc(
@@ -823,6 +846,9 @@ mod win {
                     if unsafe { Shell_NotifyIconW(NIM_ADD, &data) } != 0 {
                         icons.added = true;
                         added_now = true;
+                        ICON_MOUNTED.store(true, Ordering::Release);
+                    } else {
+                        ICON_MOUNTED.store(false, Ordering::Release);
                     }
                 }
                 super::MountAction::Remove => {
@@ -830,6 +856,7 @@ mod win {
                     // SAFETY: 删除只需要 hWnd/uID。
                     unsafe { Shell_NotifyIconW(NIM_DELETE, &data) };
                     icons.added = false;
+                    ICON_MOUNTED.store(false, Ordering::Release);
                 }
                 super::MountAction::None => {}
             }
@@ -854,6 +881,7 @@ mod win {
                 icons.added = false;
             }
         });
+        ICON_MOUNTED.store(false, Ordering::Release);
     }
 
     // ─── 图标像素 ────────────────────────────────────────────────────────
@@ -1091,6 +1119,15 @@ mod tray_tests {
             "关闭态重复调用不得空转打扰托盘线程"
         );
         reset_for_test();
+    }
+
+    /// 可用性必须同时满足启用、窗口已建与图标已挂载；任一失败都不得隐藏窗口。
+    #[test]
+    fn availability_requires_a_mounted_icon() {
+        assert!(!availability(false, true, true));
+        assert!(!availability(true, false, true));
+        assert!(!availability(true, true, false));
+        assert!(availability(true, true, true));
     }
 
     /// 决策面:未挂载且开启时每次调用都返回 Add;挂载成功后退到 None。

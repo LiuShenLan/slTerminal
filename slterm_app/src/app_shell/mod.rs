@@ -465,6 +465,10 @@ fn starts_hidden(
     windows: &dyn crate::platform::windows_integration::WindowsIntegration,
 ) -> bool {
     windows.set_tray_enabled(settings.tray);
+    // 静默启动必须等托盘真实挂载：建窗或图标失败时隐藏窗口没有恢复入口。
+    if autostart && settings.start_hidden() && settings.tray {
+        windows.wait_tray_available(std::time::Duration::from_secs(2));
+    }
     crate::platform::windows_integration::start_hidden_with(
         autostart,
         settings.start_hidden(),

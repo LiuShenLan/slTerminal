@@ -228,7 +228,6 @@ impl AgentHub {
     }
 
     /// 按 pane 读取宿主（关闭守卫、托盘与测试）。
-    #[allow(dead_code)] // 生产消费归 Agent 状态徽标；恢复测试已直接覆盖。
     pub(crate) fn host(&self, pane_id: PaneId) -> Option<&AgentPaneHost> {
         self.hosts.get(&pane_id)
     }

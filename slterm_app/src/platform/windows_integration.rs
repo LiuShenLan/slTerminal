@@ -15,11 +15,25 @@ use crate::platform::startup::{self, LoginStartState};
 ///
 /// 新增 Windows 能力先在此登记方法、补真实实现与假实现，再接入业务服务。
 pub(crate) trait WindowsIntegration: Send + Sync {
-    /// 托盘当前是否真实可用：已请求启用且托盘线程未被判定失败。
+    /// 托盘当前是否真实可用：已启用、窗口已创建且图标已挂载。
     fn tray_available(&self) -> bool;
 
     /// 请求托盘启用状态；热应用与启动路径共用。
     fn set_tray_enabled(&self, enabled: bool);
+
+    /// 静默启动前等待托盘真实可用；超时返回 false，调用方必须显示窗口。
+    fn wait_tray_available(&self, timeout: std::time::Duration) -> bool {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            if self.tray_available() {
+                return true;
+            }
+            if std::time::Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
 
     /// Windows 实际开机启动项状态；不读取应用设置。
     fn login_start_state(&self) -> LoginStartState;
@@ -468,6 +482,11 @@ impl WindowsIntegration for FakeWindowsIntegration {
 
     fn set_tray_enabled(&self, enabled: bool) {
         self.lock().tray_enabled = enabled;
+    }
+
+    /// 测试替身按当前状态立即回答，不等待真实托盘线程。
+    fn wait_tray_available(&self, _timeout: std::time::Duration) -> bool {
+        self.tray_available()
     }
 
     fn login_start_state(&self) -> LoginStartState {
