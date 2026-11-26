@@ -168,6 +168,7 @@ pub(crate) fn redact(line: &str) -> String {
     loop {
         let lower = rest.to_ascii_lowercase();
         // 键名集合与备份敏感键表对齐：两套安全输出通道不得口径漂移。
+        let hex_token = find_lower_hex_token(rest);
         let (index, key_len) = [
             ("sk-", 0usize),
             ("bearer ", 0usize),
@@ -200,6 +201,15 @@ pub(crate) fn redact(line: &str) -> String {
         .filter_map(|(needle, keep)| lower.find(needle).map(|index| (index, keep)))
         .min_by_key(|(index, _)| *index)
         .unwrap_or((rest.len(), 0));
+        // 裸 Runtime 凭据形态：恰好 64 位小写 hex，无键名前缀。
+        if let Some((start, end)) = hex_token
+            && start < index
+        {
+            out.push_str(&rest[..start]);
+            out.push_str(MARK);
+            rest = &rest[end..];
+            continue;
+        }
         if index == rest.len() {
             out.push_str(rest);
             break;
@@ -229,6 +239,27 @@ pub(crate) fn redact(line: &str) -> String {
         rest = &rest[end..];
     }
     out
+}
+
+/// 查找恰好 64 位小写 hex 的连续段；更长 hex 段不截断匹配。
+fn find_lower_hex_token(line: &str) -> Option<(usize, usize)> {
+    let bytes = line.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        let is_hex = |byte: u8| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte);
+        if !is_hex(bytes[index]) {
+            index += 1;
+            continue;
+        }
+        let start = index;
+        while index < bytes.len() && is_hex(bytes[index]) {
+            index += 1;
+        }
+        if index - start == 64 {
+            return Some((start, index));
+        }
+    }
+    None
 }
 
 /// 从 `start` 起跳过空白与引号后吞掉一个值；`extra_tokens` 额外吞掉
@@ -307,7 +338,9 @@ mod diagnostics_tests {
     /// 锚：端点、设置、备份和诊断不含 Runtime token。
     #[test]
     fn runtime_token_absent_from_materials() {
-        let token = "sk-test-runtime-token-value";
+        // Runtime 凭据真实形态是 64 位小写 hex，不带 `sk-` 前缀。
+        let token = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        assert_eq!(token.len(), 64);
         let mut report = DiagnosticReport::new(snapshot());
         report.push_event(&format!("runtime handshake accepted for token={token}"));
         report.push_event(&format!("Authorization: Bearer {token}"));
@@ -364,6 +397,15 @@ mod diagnostics_tests {
         assert_eq!(
             redact(r#"{"authorization":"Bearer abc"}"#),
             r#"{"authorization":"[redacted]"}"#
+        );
+        let token = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        assert_eq!(
+            redact(&format!(r#"{{"value":"{token}"}}"#)),
+            r#"{"value":"[redacted]"}"#
+        );
+        assert_eq!(
+            redact(&format!("plain {token} value")),
+            "plain [redacted] value"
         );
     }
 

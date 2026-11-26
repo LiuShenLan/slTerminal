@@ -197,7 +197,7 @@
 | 启动安装依赖已退役的 session.json，恢复票没有消费方 | 待修 |
 | 托盘可用性判定早于建窗，失败后没有恢复节拍 | 待修 |
 | 合同冲突：静默启动的触发范围 | 需裁决 |
-| 诊断脱敏不覆盖真实 Runtime token 形态 | 待修 |
+| 诊断脱敏不覆盖真实 Runtime token 形态 | 已修：`redact` 增加恰好 64 位小写 hex 的裸凭据识别（更长 hex 段不截断），验收 token 改为真实 64 位 hex 假值并覆盖键值、Bearer、裸值三种形态；测试 `runtime_token_absent_from_materials`、`redaction_covers_credential_shapes` |
 | 追溯矩阵把服务层或注册表层用例标成运行态集成 | 待修 |
 | 套餐周期契约与后台任务注册表不一致 | 待修 |
 | Runtime `git.diff` 路径校验放过盘符绝对路径/符号链接，工作区读取越过仓库根 | 已修：协议拒绝冒号/控制字符（盘符、ADS），应用层对规范位置做仓库根包含检查；测试 `git_diff_requires_a_safe_repository_relative_path`、`git_diff_snapshot_rejects_targets_outside_the_worktree` |
