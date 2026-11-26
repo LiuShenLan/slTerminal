@@ -23,7 +23,7 @@
 | 批量/项目关闭遗留 pane 级任务栏与 AgentHub 清理 | 已修：新增 `AppRoot::forget_panel_runtime`，单终端、批量摘除、批量销毁与项目移除共用同一 AgentHub／任务栏清理入口；测试 `integration_batch_close`、`project_remove_commits_intent_before_destroy` |
 | 活动栏缺少固定底部配置按钮 | 已修：活动栏固定底部 `app-root-settings-button` 复用 `OpenSettings` 命令与唯一浮层，不参与视图组织（提交 d72c614a）；测试 `activity_bar_settings_button_opens_the_settings_overlay` |
 | 浮层已打开时设置入口改开项目面板 | 已修：`settings_overlay` 存在时入口只还焦浮层，项目面板只在浮层关闭后的下一次入口使用（提交 44112ce5）；测试 `integration_settings_singleton` |
-| Commit/Explorer 数据根切换时在途状态读取被丢弃或错投 | 已修：两者在途读取期间的新请求只保留合并位，`finish_*_status` 统一匹配当前项目、根与 generation，旧回执丢弃后立即重投当前根；Explorer 运行态新增 generation 并随根切换推进，状态只写入同代次视图；测试 `commit_runtime_defers_reload_to_inflight_status_result`、`explorer_runtime_advances_generation_and_defers_status`、Commit／Explorer UI 既有用例 |
+| Commit/Explorer 数据根切换时在途状态读取被丢弃或错投 | 已修（提交 93ca5cf5）：两者在途读取期间的新请求只保留合并位，`finish_*_status` 统一匹配当前项目、根与 generation，旧回执丢弃后立即重投当前根；Explorer 运行态新增 generation 并随根切换推进，状态只写入同代次视图；测试 `commit_runtime_defers_reload_to_inflight_status_result`、`explorer_runtime_advances_generation_and_defers_status`、Commit／Explorer UI 既有用例 |
 | 项目重定位与导航历史恢复没有生产入口 | 待修 |
 | 启动恢复对缺失/不可解码的干净 Document 不建面板 | 已修：新增 `DocumentRecoveryKind::Unavailable` 占位与 typed 文案，未知 Document 不再 `continue` 丢面板，可由页签关闭入口移除；测试 `missing_clean_document_restores_unavailable_placeholder` |
 | Agent 根路径变更（同 id）沿用旧 ViewState | 已修：`agent_files_sync` 把「同 id 不同路径」视为移除并重登记，旧持久分区、展开目录与当前行一并清理；测试改走真实同步入口 `agent_root_path_change_resets_state_and_authorization` |
