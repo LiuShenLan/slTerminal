@@ -125,6 +125,39 @@ fn snapshot_envelope_round_trip_and_rejects_damage() {
     assert!(DocumentSnapshot::decode(&encoded[..encoded.len() - 1]).is_err());
 }
 
+/// 无关损坏文件不得阻断新快照写入；恢复扫描仍把它列为隔离候选。
+#[test]
+fn unrelated_corrupt_snapshot_does_not_block_writes() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut store = store(&temp, 1024 * 1024);
+    let (_registry, a) = snapshot('a', "draft");
+    store.write(&a, &protected(&[])).unwrap();
+    let corrupt = temp.path().join("local/snapshots/garbage.snap");
+    std::fs::create_dir_all(corrupt.parent().unwrap()).unwrap();
+    std::fs::write(&corrupt, b"not a snapshot").unwrap();
+    store
+        .write(&a, &protected(&[]))
+        .expect("损坏旁路文件不得阻断写入");
+    let scan = store.scan_for_recovery().unwrap();
+    assert!(scan.corrupt.contains(&corrupt));
+}
+
+/// 文件名与头身份不一致时按头身份恢复，而不是当作损坏。
+#[test]
+fn snapshot_header_identity_wins_over_file_name() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = store(&temp, 1024 * 1024);
+    let (_registry, a) = snapshot('a', "draft");
+    let directory = temp.path().join("local/snapshots");
+    std::fs::create_dir_all(&directory).unwrap();
+    let wrong_name = directory.join(format!("{}.snap", id('b')));
+    std::fs::write(&wrong_name, a.encode().unwrap()).unwrap();
+    let scan = store.scan_for_recovery().unwrap();
+    assert_eq!(scan.snapshots.len(), 1);
+    assert_eq!(scan.snapshots[0].document_id(), a.document_id());
+    assert!(scan.corrupt.is_empty());
+}
+
 #[test]
 fn snapshot_quota_does_not_evict_dirty() {
     let temp = tempfile::tempdir().unwrap();

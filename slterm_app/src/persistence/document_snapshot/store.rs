@@ -66,7 +66,8 @@ impl DocumentSnapshotStore {
         candidate: &DocumentSnapshot,
         protected: &BTreeSet<DocumentId>,
     ) -> Result<(), SnapshotStoreError> {
-        let mut stored = self.scan()?;
+        // 无关损坏文件留给启动隔离；运行期写入不因旁路文件失败。
+        let (mut stored, _corrupt) = self.scan_entries(true)?;
         let body_len = candidate.body_len() as u64;
         if body_len > SNAPSHOT_BODY_LIMIT_BYTES {
             return Err(SnapshotStoreError::QuotaExceeded);
@@ -109,14 +110,18 @@ impl DocumentSnapshotStore {
         }
 
         let path = self.path(candidate.document_id());
-        if let Some(old) = old_candidate
-            && old.path != path
-        {
-            return Err(SnapshotStoreError::Corrupt);
-        }
+        // 头身份优先：同一 Document 的旧文件即使文件名不符也按身份覆盖，
+        // 写成功后清除旧位置的残留文件。
+        let stale_path = old_candidate
+            .as_ref()
+            .filter(|old| old.path != path)
+            .map(|old| old.path.clone());
         crate::atomic_file::write_current_user(&path, &candidate.encode()?)?;
         for eviction in evictions {
             remove_file(&eviction.path)?;
+        }
+        if let Some(stale) = stale_path {
+            remove_file(&stale)?;
         }
         Ok(())
     }
@@ -190,15 +195,6 @@ impl DocumentSnapshotStore {
         Ok(target)
     }
 
-    fn scan(&self) -> Result<Vec<StoredSnapshot>, SnapshotStoreError> {
-        let (entries, corrupt) = self.scan_entries(false)?;
-        if corrupt.is_empty() {
-            Ok(entries)
-        } else {
-            Err(SnapshotStoreError::Corrupt)
-        }
-    }
-
     fn scan_entries(
         &self,
         allow_corrupt: bool,
@@ -221,9 +217,8 @@ impl DocumentSnapshotStore {
             if !entry.file_type()?.is_file() {
                 return Err(SnapshotStoreError::Corrupt);
             }
-            let decoded = DocumentSnapshot::decode(&std::fs::read(&path)?)
-                .ok()
-                .filter(|snapshot| self.path(snapshot.document_id()) == path);
+            // 文件身份以信封头为准：文件名不一致不构成损坏。
+            let decoded = DocumentSnapshot::decode(&std::fs::read(&path)?).ok();
             if let Some(snapshot) = decoded {
                 snapshots.push(StoredSnapshot {
                     snapshot,

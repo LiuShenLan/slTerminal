@@ -45,6 +45,8 @@ const NONCE_LEN: usize = 12;
 const KEY_LEN: usize = 32;
 /// 口令最小长度(chars 计数,契约数值随上游基线);UI 前置校验同源引用。
 pub(crate) const MIN_PASSPHRASE_CHARS: usize = 8;
+/// 备份归档明文硬上限(契约数值):超出即拒绝密封与解封。
+const MAX_ARCHIVE_PLAINTEXT_BYTES: usize = 64 * 1024 * 1024;
 
 /// 自定义主题文件名后缀(与主题库持久化规则同源)。
 const THEME_FILE_SUFFIX: &str = ".slterm-theme.json";
@@ -164,6 +166,7 @@ impl BackupSelection {
 
 /// 归档中的单个文件条目;`name` 是相对类别所属数据根的归档名(正斜杠)。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct BackupEntry {
     pub category: BackupCategory,
     pub name: String,
@@ -172,12 +175,14 @@ pub(crate) struct BackupEntry {
 
 /// 归档清单。设备名字段不迁(无本地消费方)。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct BackupManifest {
     pub version: u32,
     pub categories: Vec<BackupCategory>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct BackupArchive {
     pub manifest: BackupManifest,
     pub entries: Vec<BackupEntry>,
@@ -246,6 +251,9 @@ pub(crate) fn seal(archive: &BackupArchive, passphrase: &str) -> Result<Vec<u8>,
 
 fn encrypt_bytes(plaintext: &[u8], passphrase: &str) -> Result<Vec<u8>, String> {
     validate_passphrase(passphrase)?;
+    if plaintext.len() > MAX_ARCHIVE_PLAINTEXT_BYTES {
+        return Err("备份明文超过 64 MiB 上限".to_owned());
+    }
     let mut salt = [0; SALT_LEN];
     let mut nonce = [0; NONCE_LEN];
     getrandom::fill(&mut salt).map_err(|error| format!("系统随机源失败: {error}"))?;
@@ -280,6 +288,10 @@ pub(crate) fn open(packet: &[u8], passphrase: &str) -> Result<BackupArchive, Str
 fn decrypt_bytes(packet: &[u8], passphrase: &str) -> Result<Zeroizing<Vec<u8>>, String> {
     validate_passphrase(passphrase)?;
     let header_len = MAGIC.len() + SALT_LEN + NONCE_LEN;
+    // 密文 = 明文 + 16 字节 GCM tag；超限包在解密前拒绝，避免无界分配。
+    if packet.len().saturating_sub(header_len) > MAX_ARCHIVE_PLAINTEXT_BYTES + 16 {
+        return Err("备份明文超过 64 MiB 上限".to_owned());
+    }
     // 先验魔数再派生密钥:魔数不符即一票拒解,不浪费派生成本。
     if packet.len() <= header_len || packet.get(..MAGIC.len()) != Some(MAGIC) {
         return Err("不是本应用的加密备份或版本不受支持".to_owned());
@@ -550,6 +562,9 @@ fn validate_archive(archive: &BackupArchive) -> Result<(), String> {
     if categories.len() != archive.manifest.categories.len() {
         return Err("备份类别清单存在重复项".to_owned());
     }
+    if categories.is_empty() || archive.entries.is_empty() {
+        return Err("备份归档不含任何条目".to_owned());
+    }
     let mut names = HashSet::new();
     for entry in &archive.entries {
         if !categories.contains(&entry.category) || !names.insert(entry.name.clone()) {
@@ -804,6 +819,51 @@ mod encrypted_backup_tests {
                 );
             }
         }
+    }
+
+    /// 归档 DTO 拒绝未知字段；空类别集/零条目不得解封成功。
+    #[test]
+    fn archive_rejects_unknown_fields_and_empty_selection() {
+        let archive = full_archive();
+        let mut value = serde_json::to_value(&archive).unwrap();
+        value["extra"] = serde_json::json!(1);
+        assert!(
+            serde_json::from_value::<BackupArchive>(value).is_err(),
+            "归档 DTO 必须拒绝未知字段"
+        );
+        let mut entry_extra = serde_json::to_value(&archive).unwrap();
+        entry_extra["entries"][0]["extra"] = serde_json::json!(1);
+        assert!(serde_json::from_value::<BackupArchive>(entry_extra).is_err());
+
+        let mut empty = archive;
+        empty.entries.clear();
+        empty.manifest.categories.clear();
+        assert!(validate_archive(&empty).is_err(), "空归档不得视为有效备份");
+    }
+
+    /// 归档明文双向硬上限 64 MiB：密封与解封都在解析前拒绝。
+    #[test]
+    fn archive_plaintext_is_bounded_to_64_mib() {
+        let oversized = vec![0u8; MAX_ARCHIVE_PLAINTEXT_BYTES + 1];
+        assert!(
+            encrypt_bytes(&oversized, PASSPHRASE)
+                .unwrap_err()
+                .contains("64 MiB")
+        );
+
+        let mut packet = Vec::new();
+        packet.extend_from_slice(MAGIC);
+        packet.extend_from_slice(&[0u8; SALT_LEN + NONCE_LEN]);
+        packet.extend(std::iter::repeat_n(
+            0u8,
+            MAX_ARCHIVE_PLAINTEXT_BYTES + 16 + 1,
+        ));
+        assert!(
+            decrypt_bytes(&packet, PASSPHRASE)
+                .unwrap_err()
+                .contains("64 MiB"),
+            "超限密文必须在解密前拒绝"
+        );
     }
 
     #[test]
