@@ -628,10 +628,10 @@ fn write_editable_at(
     let text = replace_hooks_subtree(original_text.as_deref(), &root)?;
     if let Some(original) = &original_text {
         let backup = backup_path(path);
-        crate::atomic_file::write(&backup, original.as_bytes())
+        crate::audit::write_hook_editor(&backup, original, "ai_hook::editor_backup")
             .map_err(|error| HooksEditError::BackupFailed(error.to_string()))?;
     }
-    crate::atomic_file::write(path, text.as_bytes())
+    crate::audit::write_hook_editor(path, &text, "ai_hook::editor")
         .map_err(|error| HooksEditError::Io(error.to_string()))
 }
 
@@ -959,6 +959,33 @@ mod editor_tests {
         assert_eq!(
             parsed["hooks"]["Stop"][0]["hooks"][0]["command"],
             json!("added")
+        );
+    }
+
+    /// Hooks 编辑器保存必须经审计通道，且事件不含文件内容。
+    #[test]
+    fn saving_hooks_emits_audit_event_without_content() {
+        let (_directory, path) = fixture();
+        write(&path, r#"{"hooks":{}}"#);
+        let document = HooksDocument::load_at(&path).unwrap();
+        let captured = crate::audit::test_support::capture_events();
+        document
+            .save_editable(r#"{"Stop":[{"hooks":[{"type":"command","command":"echo audit"}]}]}"#)
+            .unwrap();
+        let text = captured.text();
+        assert!(text.contains("audit"), "事件必须落在 audit target: {text}");
+        assert!(
+            text.contains("operation=\"hook_editor_write\""),
+            "必须使用 hooks 编辑器写操作类别: {text}"
+        );
+        assert!(
+            text.contains("source=\"ai_hook::editor\""),
+            "必须标明编辑器写来源: {text}"
+        );
+        assert!(text.contains("result=\"ok\""), "成功写必须记录结果: {text}");
+        assert!(
+            !text.contains("echo audit"),
+            "审计事件不得携带文件内容: {text}"
         );
     }
 

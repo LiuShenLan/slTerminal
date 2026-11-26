@@ -112,6 +112,8 @@ pub(crate) fn record(event: AuditEvent<'_>) {
 const OP_SETTINGS_WRITE: &str = "settings_write";
 /// user 层 settings.json 写入的操作类别。
 const OP_USER_SETTINGS_WRITE: &str = "user_settings_write";
+/// Hooks 编辑器保存写入的操作类别。
+const OP_HOOK_EDITOR_WRITE: &str = "hook_editor_write";
 /// 恢复默认设置的操作类别。
 const OP_SETTINGS_RESET: &str = "settings_reset";
 /// 归属对账不一致的操作类别。
@@ -131,6 +133,15 @@ pub(crate) fn write_user_settings(
     source: &'static str,
 ) -> io::Result<()> {
     write_audited(OP_USER_SETTINGS_WRITE, path, content.as_bytes(), source)
+}
+
+/// Hooks 编辑器保存：审计 + 原子写；事件只记路径与结果，不记内容。
+pub(crate) fn write_hook_editor(
+    path: &Path,
+    content: &str,
+    source: &'static str,
+) -> io::Result<()> {
+    write_audited(OP_HOOK_EDITOR_WRITE, path, content.as_bytes(), source)
 }
 
 /// 私有写核心:审计包装之外的设置写调用点由源码扫描用例拒绝。
@@ -312,6 +323,25 @@ mod audit_tests {
         assert_eq!(
             std::fs::read_to_string(&path).expect("读取写入结果"),
             r#"{"hooks":{}}"#
+        );
+    }
+
+    /// Hooks 编辑器保存事件使用独立 operation，不携带文件内容。
+    #[test]
+    fn hook_editor_write_emits_audit_event_without_content() {
+        let captured = test_support::capture_events();
+        let directory = tempfile::tempdir().expect("创建临时目录");
+        let path = directory.path().join("settings.json");
+        write_hook_editor(&path, r#"{"hooks":{}}"#, "ai_hook::editor").expect("审计包装写入");
+
+        let text = captured.text();
+        assert_field(&text, "operation", "hook_editor_write");
+        assert_field(&text, "source", "ai_hook::editor");
+        assert_field(&text, "result", "ok");
+        assert!(text.contains("settings.json"), "事件必须含目标路径: {text}");
+        assert!(
+            !text.contains(r#"{"hooks":{}}"#),
+            "事件不得含文件内容: {text}"
         );
     }
 
