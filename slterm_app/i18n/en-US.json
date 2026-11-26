@@ -302,12 +302,7 @@
       "blur_fallback": "This system renders the selected material as classic blur.",
       "blur_unsupported": "This system does not support the selected material; the option is disabled.",
       "background_color": "Background color",
-      "theme_foreground": "Text color",
-      "card_geometry": "Pane cards",
-      "pane_card_radius": "Card radius",
-      "pane_card_gutter": "Card gutter",
-      "pane_card_shadow": "Card shadow",
-      "pane_card_divider": "Card divider"
+      "theme_foreground": "Text color"
     },
     "agents": {
       "integration_group": "AI CLI integrations",
@@ -514,6 +509,7 @@
       "instant": "Instant",
       "standard": "Standard",
       "density_compact": "Compact",
+      "density_loose": "Loose",
       "after_current": "After current tab",
       "end_of_list": "End of list",
       "auto_detect": "Auto detect",

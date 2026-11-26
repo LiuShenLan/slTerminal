@@ -165,6 +165,8 @@ mod acceptance_tests {
             "openable_in_app",
             "DiffTabView",
             "FileTreeDrag",
+            // 卡片几何已从设置与主题值模型删除，不得重新引入。
+            "pane_card_",
         ];
         // 扫描全部应用源码的生产段，而不是固定入口文件清单。
         fn scan(directory: &Path, violations: &mut Vec<String>) {

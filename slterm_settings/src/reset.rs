@@ -118,7 +118,7 @@ mod reset_tests {
     "opacity": 0.65,
     "background": "#101216",
     "custom_theme": "my-night",
-    "pane_card_radius": 20
+    "font_size": 18
   },
   "scrolling": {
     "scrollback_lines": 100000,
@@ -147,7 +147,7 @@ mod reset_tests {
         assert_eq!(settings.scrollback_lines, 10_000);
         assert_eq!(settings.scroll_speed, 1.0);
         assert_eq!(settings.custom_theme, None);
-        assert_eq!(settings.pane_card_radius, None);
+        assert_eq!(settings.font_size_px, None);
         // 授权类选择原样保留(resettable=false)。
         let hooks = restored.get("agent_hooks").unwrap();
         assert_eq!(hooks.get("slterm_ai_hooks").unwrap().as_bool(), Some(false));

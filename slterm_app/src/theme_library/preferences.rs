@@ -108,7 +108,7 @@ mod preferences_tests {
             .unwrap();
         std::fs::write(
             &path,
-            r##"{"appearance":{"font_size":14,"font_family":"Old Font","opacity":0.5,"blur":"none","pane_card_radius":2,"theme_foreground":"#ffffff"}}"##,
+            r##"{"appearance":{"font_size":14,"font_family":"Old Font","opacity":0.5,"blur":"none","theme_foreground":"#ffffff"}}"##,
         )
         .unwrap();
         let foreground = [0xf0, 0xd0, 0xa0];
@@ -131,7 +131,6 @@ mod preferences_tests {
         assert_eq!(runtime.font_family.as_deref(), Some("Old Font"));
         assert!((runtime.opacity - 0.5).abs() < 1e-6);
         assert_eq!(runtime.blur, slterm_settings::BlurMode::None);
-        assert_eq!(runtime.pane_card_radius, Some(2.0));
     }
 
     #[test]

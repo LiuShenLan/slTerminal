@@ -639,26 +639,6 @@ pub static KEYS: &[SettingsKeyDef] = &[
         "wallpaper chrome 壁纸铺满",
         false,
     ),
-    optional_number(
-        "pane_card_radius",
-        SettingsDomain::Appearance,
-        "card radius 圆角",
-    ),
-    optional_number(
-        "pane_card_gutter",
-        SettingsDomain::Appearance,
-        "card gutter 卡缝",
-    ),
-    optional_boolean(
-        "pane_card_shadow",
-        SettingsDomain::Appearance,
-        "card shadow 投影",
-    ),
-    optional_number(
-        "pane_card_divider",
-        SettingsDomain::Appearance,
-        "divider 分界线",
-    ),
     // ---- scrolling:回滚与滚速 ----
     integer(
         "scrollback_lines",
@@ -1143,10 +1123,6 @@ mod registry_tests {
             ("background_image", SettingsValueType::String),
             ("background_image_fit", SettingsValueType::String),
             ("background_image_alignment", SettingsValueType::String),
-            ("pane_card_radius", SettingsValueType::Number),
-            ("pane_card_gutter", SettingsValueType::Number),
-            ("pane_card_shadow", SettingsValueType::Boolean),
-            ("pane_card_divider", SettingsValueType::Number),
             ("cursor_shape", SettingsValueType::String),
             ("cursor_blink", SettingsValueType::Boolean),
             ("focus_follows_mouse", SettingsValueType::Boolean),

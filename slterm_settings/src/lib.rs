@@ -348,17 +348,6 @@ impl ThemeName {
             fresh => themes::fresh_terminal(fresh),
         }
     }
-
-    /// 内置主题共享「铺满」卡几何;窗口/控件圆角与此分离。
-    /// 显式用户几何仍可配置;选择预设即恢复其几何。
-    pub fn card_geometry(self) -> ThemeCardGeometry {
-        ThemeCardGeometry {
-            radius: 0.0,
-            gutter: 0.0,
-            shadow: false,
-            divider: 1.0,
-        }
-    }
 }
 
 /// 主题明确携带的终端色表。`None` 字段 = 主题未声明该值,调用方保留
@@ -523,27 +512,31 @@ impl TabRevealName {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
 pub enum DensityName {
+    Compact,
+    /// 规格默认档：紧凑、标准、宽松。
     #[default]
     Standard,
-    Compact,
+    Loose,
 }
 
 impl DensityName {
-    pub const ALL: [Self; 2] = [Self::Standard, Self::Compact];
-    pub const VALUES: [&'static str; 2] = ["standard", "compact"];
+    pub const ALL: [Self; 3] = [Self::Compact, Self::Standard, Self::Loose];
+    pub const VALUES: [&'static str; 3] = ["compact", "standard", "loose"];
 
     pub fn from_settings(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
-            "standard" => Some(Self::Standard),
             "compact" => Some(Self::Compact),
+            "standard" => Some(Self::Standard),
+            "loose" => Some(Self::Loose),
             _ => None,
         }
     }
 
     pub fn settings_value(self) -> &'static str {
         match self {
-            Self::Standard => "standard",
             Self::Compact => "compact",
+            Self::Standard => "standard",
+            Self::Loose => "loose",
         }
     }
 }
@@ -835,40 +828,7 @@ pub struct RuntimeSettings {
     /// 壁纸铺满整窗(含侧栏/标题栏)而非仅终端卡。
     pub background_image_cover_chrome: bool,
     pub panel_resize: bool,
-    /// 终端卡圆角(逻辑像素)。`None` = 跟随主题自带几何
-    /// ([`ThemeName::card_geometry`])。
-    pub pane_card_radius: Option<f32>,
-    /// 终端卡与周围 chrome 的卡缝(逻辑像素)。**只作用于左/右/下三边**,
-    /// 上边恒为零(侧栏/终端卡/右侧抽屉顶边都贴 chrome 下沿)。
-    pub pane_card_gutter: Option<f32>,
-    /// 终端卡投影;关掉 + 半径与卡缝归零 = 「铺满到边」形态。
-    pub pane_card_shadow: Option<bool>,
-    /// 侧栏与终端之间的竖线宽度(0 = 不画);卡缝归零形态的结构分界。
-    pub pane_card_divider: Option<f32>,
 }
-
-/// 主题自带的终端卡几何。四键一组:radius(圆角)、gutter(卡缝)、
-/// shadow(投影)、divider(分界竖线);卡几何跟主题走。
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct ThemeCardGeometry {
-    pub radius: f32,
-    pub gutter: f32,
-    pub shadow: bool,
-    pub divider: f32,
-}
-
-/// 终端卡几何的单一真源——半径/卡缝曾各写一份字面量,两处漂移就是
-/// 那圈白边的来源;默认值只许从这里取。
-///
-/// 上限 28 是半径不超过卡最窄边一半之前的实用上界;0 与卡缝 0 搭配 =
-/// 「铺满到窗口边、无圆角」形态。
-pub const DEFAULT_PANE_CARD_RADIUS: f32 = 14.0;
-pub const MIN_PANE_CARD_RADIUS: f32 = 0.0;
-pub const MAX_PANE_CARD_RADIUS: f32 = 28.0;
-pub const DEFAULT_PANE_CARD_GUTTER: f32 = 8.0;
-pub const MIN_PANE_CARD_GUTTER: f32 = 0.0;
-pub const MAX_PANE_CARD_GUTTER: f32 = 32.0;
-pub const MAX_PANE_CARD_DIVIDER: f32 = 4.0;
 
 /// 壁纸默认透明度(壁纸压不过文字)。
 pub const DEFAULT_BACKGROUND_IMAGE_OPACITY: f32 = 0.38;
@@ -974,18 +934,6 @@ impl RuntimeSettings {
             background_image_alignment: raw.value("background_image_alignment").map(str::to_owned),
             background_image_cover_chrome: raw.bool_or_default("background_image_cover_chrome"),
             panel_resize: raw.bool_or_default("panel_resize"),
-            // 这四项一律保留 `Option`:`None` 就是「用户没设过」,让主题默认
-            // 生效;若在这里 unwrap 成具体数字,切主题便再也换不了形态。
-            pane_card_radius: raw
-                .f32("pane_card_radius")
-                .map(|radius| radius.clamp(MIN_PANE_CARD_RADIUS, MAX_PANE_CARD_RADIUS)),
-            pane_card_gutter: raw
-                .f32("pane_card_gutter")
-                .map(|gutter| gutter.clamp(MIN_PANE_CARD_GUTTER, MAX_PANE_CARD_GUTTER)),
-            pane_card_shadow: raw.bool_on("pane_card_shadow"),
-            pane_card_divider: raw
-                .f32("pane_card_divider")
-                .map(|divider| divider.clamp(0.0, MAX_PANE_CARD_DIVIDER)),
         }
     }
 
@@ -1124,11 +1072,7 @@ mod runtime_settings_tests {
     "background_image_opacity": 0.5,
     "background_image_fit": "cover",
     "background_image_alignment": "center",
-    "background_image_cover_chrome": true,
-    "pane_card_radius": 999,
-    "pane_card_gutter": 12,
-    "pane_card_shadow": true,
-    "pane_card_divider": 99
+    "background_image_cover_chrome": true
   },
   "scrolling": {
     "scrollback_lines": 50000,
@@ -1202,11 +1146,6 @@ mod runtime_settings_tests {
         assert_eq!(settings.background_image_opacity, 0.5);
         assert_eq!(settings.background_image_fit.as_deref(), Some("cover"));
         assert!(settings.background_image_cover_chrome);
-        // 卡几何越界钳制而非丢弃。
-        assert_eq!(settings.pane_card_radius, Some(MAX_PANE_CARD_RADIUS));
-        assert_eq!(settings.pane_card_gutter, Some(12.0));
-        assert_eq!(settings.pane_card_shadow, Some(true));
-        assert_eq!(settings.pane_card_divider, Some(MAX_PANE_CARD_DIVIDER));
         assert_eq!(settings.scrollback_lines, 50_000);
         assert_eq!(settings.scroll_speed, 1.75);
         assert_eq!(settings.cursor_shape, Some(CursorShapeName::Beam));
@@ -1297,15 +1236,6 @@ mod runtime_settings_tests {
         assert!(!nulled.opacity_is_explicit());
         assert!(!nulled.blur_is_explicit());
         assert_eq!(nulled.custom_theme, None);
-    }
-
-    #[test]
-    fn card_geometry_keys_stay_none_until_the_user_sets_them() {
-        let untouched = RuntimeSettings::from_raw(&raw(r#"{"appearance": {"theme": "Nord"}}"#));
-        assert_eq!(untouched.pane_card_radius, None);
-        assert_eq!(untouched.pane_card_gutter, None);
-        assert_eq!(untouched.pane_card_shadow, None);
-        assert_eq!(untouched.pane_card_divider, None);
     }
 
     #[test]
@@ -1512,19 +1442,6 @@ mod term_theme_tests {
         assert_eq!(linear.ansi[15], [0xf0, 0xed, 0xe8]);
         assert_eq!(linear.cursor, Some([0x6e, 0x9f, 0xf2]));
         assert_eq!(linear.selection_foreground, Some([0xf0, 0xed, 0xe8]));
-    }
-
-    #[test]
-    fn card_geometry_is_the_single_source_of_the_flush_shape() {
-        // 内置主题全部共享「铺满」几何:半径与卡缝归零、一条竖线分界。
-        // 四个数一起构成形态,逐项钉死而非只断言 radius。
-        for theme in ThemeName::BUILTIN {
-            let geometry = theme.card_geometry();
-            assert_eq!(geometry.radius, 0.0);
-            assert_eq!(geometry.gutter, 0.0);
-            assert_eq!(geometry.divider, 1.0);
-            assert!(!geometry.shadow);
-        }
     }
 }
 

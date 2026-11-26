@@ -122,8 +122,9 @@ const WALLPAPER_ALIGNMENTS: &[ChoiceOption] = &[
 ];
 
 const DENSITIES: &[ChoiceOption] = &[
-    option("standard", Message::SettingsOptionsStandard),
     option("compact", Message::SettingsOptionsDensityCompact),
+    option("standard", Message::SettingsOptionsStandard),
+    option("loose", Message::SettingsOptionsDensityLoose),
 ];
 
 const CELL_WIDTHS: &[ChoiceOption] = &[
@@ -404,50 +405,6 @@ pub(super) static FIELDS: &[SettingsFieldUi] = &[
         Message::SettingsAppearanceLigatures,
         Some(Message::SettingsAppearanceLigaturesDescription),
         Choice(LIGATURE_MODES),
-    ),
-    field(
-        "pane_card_radius",
-        SettingsPageId::Appearance,
-        Message::SettingsAppearanceCardGeometry,
-        Message::SettingsAppearancePaneCardRadius,
-        None,
-        Stepper {
-            min: 0.0,
-            max: slterm_settings::MAX_PANE_CARD_RADIUS as f64,
-            step: 1.0,
-        },
-    ),
-    field(
-        "pane_card_gutter",
-        SettingsPageId::Appearance,
-        Message::SettingsAppearanceCardGeometry,
-        Message::SettingsAppearancePaneCardGutter,
-        None,
-        Stepper {
-            min: 0.0,
-            max: slterm_settings::MAX_PANE_CARD_GUTTER as f64,
-            step: 1.0,
-        },
-    ),
-    field(
-        "pane_card_shadow",
-        SettingsPageId::Appearance,
-        Message::SettingsAppearanceCardGeometry,
-        Message::SettingsAppearancePaneCardShadow,
-        None,
-        Toggle,
-    ),
-    field(
-        "pane_card_divider",
-        SettingsPageId::Appearance,
-        Message::SettingsAppearanceCardGeometry,
-        Message::SettingsAppearancePaneCardDivider,
-        None,
-        Stepper {
-            min: 0.0,
-            max: slterm_settings::MAX_PANE_CARD_DIVIDER as f64,
-            step: 1.0,
-        },
     ),
     // ---- Scrolling ----
     field(
@@ -790,6 +747,39 @@ mod settings_control_tests {
     /// 宿主管理或已退休的键：不进标量字段行，但注册表仍保留旧值。
     /// 光标形状固定竖线、平滑移动不在行为真值内，旧键不再暴露。
     const EDITOR_MANAGED: [&str; 3] = ["custom_theme", "cursor_shape", "cursor_motion"];
+
+    /// 最终排除项不得出现在真实字段表；密度按规格给紧凑／标准／宽松三档。
+    #[test]
+    fn excluded_appearance_fields_are_absent_and_density_has_three_levels() {
+        const EXCLUDED: [&str; 5] = [
+            "cursor_shape",
+            "pane_card_radius",
+            "pane_card_gutter",
+            "pane_card_shadow",
+            "pane_card_divider",
+        ];
+        for field in FIELDS {
+            assert!(
+                !EXCLUDED.contains(&field.key),
+                "排除项 {} 不得出现在设置页字段表",
+                field.key
+            );
+        }
+        let density = FIELDS
+            .iter()
+            .find(|field| field.key == "density")
+            .expect("密度字段必须存在");
+        let SettingsControl::Choice(options) = &density.control else {
+            panic!("密度字段必须是选择控件");
+        };
+        assert_eq!(
+            options
+                .iter()
+                .map(|option| option.value)
+                .collect::<Vec<_>>(),
+            ["compact", "standard", "loose"]
+        );
+    }
 
     #[test]
     fn every_setting_field_in_displayed_domains_has_exactly_one_control() {
