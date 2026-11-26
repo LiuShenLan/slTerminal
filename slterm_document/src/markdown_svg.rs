@@ -296,8 +296,7 @@ mod tests {
     fn attribute_values_are_escaped_so_reparsing_preserves_the_attribute_set() {
         // 单引号属性内的字面双引号在重建时必须转义；否则重建文本会多出
         // 一个白名单从未检查过的属性。
-        let source =
-            r#"<svg xmlns="http://www.w3.org/2000/svg"><rect fill='#fff" onload="alert(1)'/></svg>"#;
+        let source = r#"<svg xmlns="http://www.w3.org/2000/svg"><rect fill='#fff" onload="alert(1)'/></svg>"#;
         let sanitized = SanitizedSvg::parse(source).expect("单引号属性是合法 XML");
         let mut reader = Reader::from_str(sanitized.as_str());
         let mut rect_attributes: Option<Vec<(String, String)>> = None;
@@ -330,7 +329,10 @@ mod tests {
         }
         assert_eq!(
             rect_attributes,
-            Some(vec![("fill".to_owned(), r#"#fff" onload="alert(1)"#.to_owned())]),
+            Some(vec![(
+                "fill".to_owned(),
+                r#"#fff" onload="alert(1)"#.to_owned()
+            )]),
             "重建不得引入新属性，原值必须完整保留"
         );
         assert!(

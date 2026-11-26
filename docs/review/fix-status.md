@@ -98,7 +98,7 @@
 | 同一规范路径的外部重载在身份变化时覆写其他 Document 身份索引 | 待修 |
 | 可编辑 Document 缺行尾切换、编码重开与手动只读活体通道 | 待修 |
 | 查找与替换只实现字面量查找和全部替换，且没有生产接线 | 待修 |
-| 本地图片路径在授权前被解析，UNC 可自动触发 SMB 认证 | 待修 |
+| 本地图片路径在授权前被解析，UNC 可自动触发 SMB 认证 | 已修：`PathGrant::lexically_covers` 纯词法预检先于解析，未授权目标（含 UNC）不触碰文件系统；测试 `lexical_precheck_covers_subtree_and_exact_scope_without_io`、`authorization_precedes_resolution_and_unc_never_resolves_without_grant` |
 | 行内公式与行内图片被移出文本流 | 待修 |
 | 引用、列表与脚注内的块结构被压平 | 待修 |
 | 脚注引用不渲染、不可点击 | 待修 |

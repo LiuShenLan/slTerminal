@@ -313,6 +313,42 @@ impl PathGrant {
             GrantScope::ExactFile => self.path == *target,
         }
     }
+
+    /// 解析 I/O 之前的词法覆盖预检。
+    ///
+    /// 只用于决定"是否值得去解析目标"：未覆盖的路径必须在触碰文件系统之前
+    /// 拒绝，避免未授权的 UNC/设备目标触发网络认证。真实授权判定仍由
+    /// [`PathPolicy::authorize`] 基于解析结果与文件身份完成。
+    pub fn lexically_covers(&self, target: &Path) -> bool {
+        if target
+            .components()
+            .any(|component| matches!(component, Component::ParentDir))
+        {
+            return false;
+        }
+        let mut target_components = target.components();
+        for grant_component in self.path.as_path().components() {
+            match target_components.next() {
+                Some(target_component) if component_eq(grant_component, target_component) => {}
+                _ => return false,
+            }
+        }
+        match self.scope {
+            GrantScope::Subtree => true,
+            GrantScope::ExactFile => target_components.next().is_none(),
+        }
+    }
+}
+
+/// 词法组件比较：Windows 文件系统忽略 ASCII 大小写，其余平台精确比较。
+fn component_eq(left: Component<'_>, right: Component<'_>) -> bool {
+    if cfg!(windows) {
+        left.as_os_str()
+            .to_string_lossy()
+            .eq_ignore_ascii_case(&right.as_os_str().to_string_lossy())
+    } else {
+        left == right
+    }
 }
 
 /// 统一路径请求；词法路径与根提示由 application PathResolver 消费。

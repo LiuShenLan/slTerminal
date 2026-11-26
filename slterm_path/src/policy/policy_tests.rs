@@ -362,6 +362,32 @@ fn containment_is_component_aware_and_unc_is_not_implicit() {
     }
 }
 
+/// 解析前的词法预检：子树与精确文件都按组件、Windows 忽略 ASCII 大小写。
+#[test]
+fn lexical_precheck_covers_subtree_and_exact_scope_without_io() {
+    let root = PathGrant::project_root(canonical("root"));
+    assert!(root.lexically_covers(std::path::Path::new(&absolute("root/file"))));
+    assert!(root.lexically_covers(std::path::Path::new(&absolute("root/nested/deep/file"))));
+    assert!(!root.lexically_covers(std::path::Path::new(&absolute("root-other/file"))));
+    assert!(
+        !root.lexically_covers(std::path::Path::new(&absolute("root/../outside"))),
+        "父目录跳转不得通过词法预检"
+    );
+    if cfg!(windows) {
+        let upper = PathBuf::from(absolute("root/file").to_string_lossy().to_uppercase());
+        assert!(
+            root.lexically_covers(&upper),
+            "Windows 词法比较忽略 ASCII 大小写"
+        );
+        let unc = PathGrant::repo_root(CanonicalPath::new("//server/share/root").unwrap());
+        assert!(!unc.lexically_covers(std::path::Path::new("//other/share/root/file")));
+        assert!(unc.lexically_covers(std::path::Path::new("//server/share/root/file")));
+    }
+    let exact = PathGrant::session_file_read(canonical("root/file"));
+    assert!(exact.lexically_covers(std::path::Path::new(&absolute("root/file"))));
+    assert!(!exact.lexically_covers(std::path::Path::new(&absolute("root/other"))));
+}
+
 /// 决策携带本次解析结果、命中最小能力与持久性。
 #[test]
 fn authorization_carries_current_resolution_and_scoped_capabilities() {

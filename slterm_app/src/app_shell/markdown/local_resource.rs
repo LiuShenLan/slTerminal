@@ -214,6 +214,16 @@ impl MarkdownImageService {
         persistent_grants: &[PathGrant],
         current_authorization_generation: u64,
     ) -> Result<LoadedMarkdownImage, MarkdownResourceError> {
+        // 解析会触碰文件系统（UNC 目标还会触发 SMB 认证），因此先用纯词法
+        // 覆盖预检拒绝未授权目标；真实授权仍由下方 PathPolicy 基于解析结果
+        // 与文件身份完成。
+        let lexically_granted = persistent_grants
+            .iter()
+            .chain(request.session_grant.as_ref())
+            .any(|grant| grant.lexically_covers(request.lexical_path.as_path()));
+        if !lexically_granted {
+            return Err(MarkdownResourceError::Unauthorized);
+        }
         let resolved = self
             .resolver
             .resolve(&request.lexical_path)
@@ -416,6 +426,66 @@ mod tests {
             Arc::new(CountingDecoder { calls }),
             cache_bytes,
         )
+    }
+
+    struct CountingResolver {
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl DocumentPathResolver for CountingResolver {
+        fn resolve(&self, lexical: &CanonicalPath) -> std::io::Result<slterm_path::ResolvedPath> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            SystemDocumentPathResolver.resolve(lexical)
+        }
+    }
+
+    #[test]
+    fn authorization_precedes_resolution_and_unc_never_resolves_without_grant() {
+        let directory = TempDir::new().unwrap();
+        let image = directory.path().join("image.png");
+        write_png(&image, [1, 2, 3, 255]);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut service = MarkdownImageService::with_dependencies(
+            Arc::new(CountingResolver {
+                calls: calls.clone(),
+            }),
+            Arc::new(BoundedMarkdownImageDecoder),
+            IMAGE_CACHE_BYTES,
+        );
+        let request = LocalMarkdownImageRequest::new(canonical(&image), 0);
+        assert_eq!(
+            service.load(&request, &[], 0).unwrap_err(),
+            MarkdownResourceError::Unauthorized
+        );
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "未授权目标不得先解析（解析可能触发 UNC/SMB 认证）"
+        );
+
+        service
+            .load(
+                &request,
+                &[PathGrant::project_root(canonical(directory.path()))],
+                0,
+            )
+            .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "已授权目标只解析一次");
+
+        if cfg!(windows) {
+            let unc = CanonicalPath::new(r"\\server\share\image.png").unwrap();
+            let request = LocalMarkdownImageRequest::new(unc, 0);
+            let before = calls.load(Ordering::SeqCst);
+            assert_eq!(
+                service.load(&request, &[], 0).unwrap_err(),
+                MarkdownResourceError::Unauthorized
+            );
+            assert_eq!(
+                calls.load(Ordering::SeqCst),
+                before,
+                "未授权的 UNC 目标必须在触碰网络之前拒绝"
+            );
+        }
     }
 
     #[test]
