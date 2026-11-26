@@ -190,7 +190,7 @@
 | 诊断与清理没有产品面 | 待修 |
 | 通知事件源与托盘快照没有接入 | 待修 |
 | 系统关机与注销不走统一关闭链 | 待修 |
-| 通知前台状态从未写入 | 待修 |
+| 通知前台状态从未写入 | 已修：`AppRoot::observe_focus` 经 `observe_window_activation` 把真实窗口激活态写入 `notify::set_foreground`，注册时先同步一次；测试 `window_activation_updates_notification_foreground` |
 | 应用内错误不可见，错误类别不进入任务栏错误态 | 待修 |
 | 任务栏聚合没有资源身份 | 待修 |
 | 更新预约在崩溃或知情放弃关闭时仍保留 | 待修 |

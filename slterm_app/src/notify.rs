@@ -723,6 +723,11 @@ fn foreground() -> bool {
     FOREGROUND.load(Ordering::Relaxed)
 }
 
+#[cfg(test)]
+pub(crate) fn foreground_for_test() -> bool {
+    foreground()
+}
+
 // ─── toast 激活回窗 ──────────────────────────────────────────────────────
 
 static GPUI_ACTIVATION: OnceLock<mpsc::SyncSender<SltermShellEvent>> = OnceLock::new();

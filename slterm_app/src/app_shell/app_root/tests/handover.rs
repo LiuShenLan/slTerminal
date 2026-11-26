@@ -1496,3 +1496,25 @@ fn handover_completion_receiver_may_be_dropped(cx: &mut TestAppContext) {
 
     assert_eq!(state.borrow().attempts, 0);
 }
+
+/// 窗口激活观察必须写入通知漏斗的前台状态。
+#[gpui::test]
+fn window_activation_updates_notification_foreground(cx: &mut TestAppContext) {
+    let (_root, mut window, _state) = open_root(cx);
+    window.run_until_parked();
+
+    // 进程级前台状态在测试间共享：先确保窗口确实处于激活态再验证翻转。
+    window.update(|window, _| window.activate_window());
+    window.run_until_parked();
+    assert!(
+        crate::notify::foreground_for_test(),
+        "窗口激活必须写入前台状态"
+    );
+
+    window.deactivate_window();
+    window.run_until_parked();
+    assert!(
+        !crate::notify::foreground_for_test(),
+        "窗口失焦必须写入非前台状态"
+    );
+}

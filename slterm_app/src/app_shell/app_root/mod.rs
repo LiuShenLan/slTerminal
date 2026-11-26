@@ -315,6 +315,7 @@ pub(crate) struct AppRoot {
     tasks: TaskService,
     focus_manager: FocusManager,
     focus_subscriptions: Option<FocusSubscriptions>,
+    window_activation_subscription: Option<gpui::Subscription>,
     side_views: SideViewHost<Entity<SideView>>,
     side_view_focus: BTreeMap<SideViewId, FocusRegistration>,
     side_buttons: BTreeMap<SideViewId, SideButtonFocus>,
@@ -604,6 +605,7 @@ impl AppRoot {
             tasks: TaskService::new(),
             focus_manager,
             focus_subscriptions: None,
+            window_activation_subscription: None,
             side_views,
             side_view_focus,
             side_buttons,
@@ -656,6 +658,11 @@ impl AppRoot {
             |root, window, cx| root.sync_focus(window, cx),
             |root, window, cx| root.recover_focus(window, cx),
         ));
+        // 通知漏斗的唯一前台状态写入口：激活观察在注册时先按当前窗口状态同步一次。
+        self.window_activation_subscription =
+            Some(cx.observe_window_activation(window, |_root, window, _cx| {
+                crate::notify::set_foreground(window.is_window_active());
+            }));
     }
 
     /// 快照只在候选提交后进入既有写队列；关闭屏障期间仅更新内存并延期发布。
