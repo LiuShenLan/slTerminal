@@ -97,7 +97,7 @@ impl Host {
         });
         let view = cx.new(|cx| {
             let session = registry.borrow();
-            DocumentTextView::new(
+            let mut view = DocumentTextView::new(
                 session.session(id).unwrap(),
                 Box::new(move |request, _, _| {
                     let mut registry = sink_registry.borrow_mut();
@@ -126,7 +126,10 @@ impl Host {
                 },
                 view_states,
                 cx,
-            )
+            );
+            // 测试夹具按满宽测量软换行；生产编辑域固定预留行标槽位。
+            view.git_gutter = false;
+            view
         });
         Self {
             registry,

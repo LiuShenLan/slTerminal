@@ -323,6 +323,8 @@ pub(crate) struct DocumentTextView {
     wrap_build: SharedWrapBuild,
     caret_affinity: super::wrap::CaretAffinity,
     wrap_reveal_cursor: bool,
+    /// 编辑域固定预留行标槽位；不随瞬态 `git_marks` 显隐变化。
+    git_gutter: bool,
     /// 索引未就绪时待揭示的逻辑行；索引完成后换算为显示行。
     wrap_reveal_line: Option<usize>,
     wheel_remainder: f32,
@@ -578,6 +580,14 @@ impl DocumentTextView {
             self.document_id,
             self.selection.range(),
         )
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn content_mask_width_for_test(&self) -> Option<f32> {
+        self.painted_content_mask
+            .borrow()
+            .as_ref()
+            .map(|mask| f32::from(mask.bounds.size.width))
     }
 
     #[cfg(all(test, feature = "gpui-test-support"))]
@@ -1863,11 +1873,8 @@ impl Render for DocumentTextView {
         let wrap_button = self.wrap_button(cx);
         let system_open = self.system_open_button(cx);
         let git_markers = self.git_markers(cx);
-        let git_gutter_width = if self.git_marks.is_empty() {
-            px(0.0)
-        } else {
-            px(8.0)
-        };
+        // 行标显隐属于瞬态投影：编辑域 gutter 宽度必须稳定，否则正文位移会触发换行重排。
+        let git_gutter_width = if self.git_gutter { px(8.0) } else { px(0.0) };
         let focus = self.focus.clone();
         div()
             .key_context("DocumentText")

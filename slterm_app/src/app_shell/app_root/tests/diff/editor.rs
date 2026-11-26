@@ -720,3 +720,44 @@ fn out_of_range_git_marks_are_ignored_during_painting(cx: &mut TestAppContext) {
     });
     draw_frame(&mut window);
 }
+
+/// 行标显隐不得改变正文宽度或触发换行重排：gutter 槽位恒定。
+#[gpui::test]
+fn git_gutter_keeps_text_width_stable_when_marks_change(cx: &mut TestAppContext) {
+    let (_temp, repository, _binding) = super::gitshow::repository();
+    let (root, mut window, _) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, repository.to_str().unwrap());
+    let file =
+        CanonicalPath::new(dunce::canonicalize(repository.join("first.txt")).unwrap()).unwrap();
+    super::documents::open_document(&root, &mut window, PROJECT_A, GROUP_A, file);
+    let editor = root.read_with(cx, |root, cx| {
+        root.projects[&project_id(PROJECT_A)]
+            .read(cx)
+            .panels
+            .values()
+            .find_map(|panel| panel.editor().cloned())
+            .unwrap()
+    });
+    draw_frame(&mut window);
+    let without_marks = editor.read_with(cx, |view, _| view.content_mask_width_for_test());
+
+    editor.update(cx, |view, cx| {
+        view.set_git_marks(
+            vec![crate::app_shell::text_view::GitMark {
+                line: 0,
+                kind: crate::app_shell::text_view::GitMarkKind::Modified,
+            }],
+            cx,
+        );
+    });
+    draw_frame(&mut window);
+    let with_marks = editor.read_with(cx, |view, _| view.content_mask_width_for_test());
+
+    editor.update(cx, |view, cx| view.set_git_marks(Vec::new(), cx));
+    draw_frame(&mut window);
+    let cleared = editor.read_with(cx, |view, _| view.content_mask_width_for_test());
+
+    assert!(without_marks.is_some(), "前置：编辑器必须已绘制");
+    assert_eq!(without_marks, with_marks, "行标出现不得改变正文宽度");
+    assert_eq!(without_marks, cleared, "行标清空不得改变正文宽度");
+}
