@@ -50,6 +50,47 @@ fn settings_panel(
     })
 }
 
+/// 读取失败提供显式重试入口；重读成功后采用磁盘值并清除警示。
+#[gpui::test]
+fn settings_read_failure_offers_retry_and_adopts_loaded_values(cx: &mut TestAppContext) {
+    let (root, mut window, _state) = open_root(cx);
+    root.update(cx, |root, _| {
+        root.settings_load_warning = Some(crate::settings_state::SettingsLoadWarning::ReadFailed);
+    });
+    focus_workspace(&root, &mut window);
+    open_settings(&mut window);
+    draw_frame(&mut window);
+    assert!(
+        window.debug_bounds("settings-retry-load").is_some(),
+        "读取失败必须提供重试入口"
+    );
+
+    root.update(cx, |root, cx| {
+        root.finish_settings_load_retry(
+            Ok(crate::settings_store::LoadResult {
+                data: slterm_settings::RawSettings::from_json_bytes(
+                    br#"{"appearance":{"theme":"Nord"}}"#,
+                ),
+                corrupted: false,
+                unsupported_version: None,
+            }),
+            cx,
+        );
+    });
+    draw_frame(&mut window);
+    root.read_with(cx, |root, _| {
+        assert_eq!(root.settings_load_warning, None);
+        assert_eq!(
+            root.settings.runtime().theme,
+            slterm_settings::ThemeName::Nord
+        );
+    });
+    assert!(
+        window.debug_bounds("settings-retry-load").is_none(),
+        "重读成功后不得继续显示重试入口"
+    );
+}
+
 /// 加载降级、单字段回退与写盘失败都必须在设置页出现可见状态条。
 #[gpui::test]
 fn settings_status_surfaces_load_fallback_and_save_failure(cx: &mut TestAppContext) {

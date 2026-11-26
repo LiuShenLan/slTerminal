@@ -268,6 +268,16 @@ impl SettingsStore {
         RuntimeSettings::from_raw(&self.values)
     }
 
+    /// 重读成功后接收磁盘值：本次运行的待写编辑仍按原顺序覆盖磁盘值，
+    /// 不因重试丢失尚未落盘的修改。
+    pub(crate) fn adopt_loaded(&mut self, loaded: RawSettings) {
+        let mut values = loaded;
+        for (key, value) in &self.pending {
+            values = values.with_updates(&[(key.as_str(), value.clone())]);
+        }
+        self.values = values;
+    }
+
     pub(crate) fn values(&self) -> &RawSettings {
         &self.values
     }
@@ -511,6 +521,24 @@ mod tests {
             Some("Nord"),
             "内置主题选择必须生效"
         );
+    }
+
+    /// 重读设置不丢本轮尚未落盘的编辑：磁盘值先铺底，待写覆盖其上。
+    #[test]
+    fn adopting_loaded_settings_preserves_pending_edits() {
+        let mut store = SettingsStore::new(RawSettings::default());
+        let now = Instant::now();
+        assert!(store.set_auto("font_size", Value::Number(20.0), now));
+        store.adopt_loaded(RawSettings::from_json_bytes(
+            br#"{"appearance":{"font_size":12,"theme":"Nord"}}"#,
+        ));
+        assert_eq!(store.runtime().theme, slterm_settings::ThemeName::Nord);
+        assert_eq!(
+            store.runtime().font_size_px,
+            Some(20.0),
+            "待写编辑必须覆盖重读的磁盘值"
+        );
+        assert_eq!(store.pending_len(), 1);
     }
 
     /// 后台写盘：在途不重复启动；写入期间的新编辑保留；失败退避后重试。

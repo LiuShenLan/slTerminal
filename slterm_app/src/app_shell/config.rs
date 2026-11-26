@@ -157,6 +157,11 @@ impl Settings {
         Self::snapshot(runtime, palette, ui)
     }
 
+    /// 后台重读设置后的主题预载：只解析并安装缓存，不构造消费视图。
+    pub(crate) fn preload_theme_cold(runtime: &RuntimeSettings) {
+        let _ = resolve_theme_cold(runtime, None);
+    }
+
     fn snapshot(runtime: &RuntimeSettings, palette: Palette, ui: ThemeUiColors) -> Self {
         let family = runtime
             .font_family

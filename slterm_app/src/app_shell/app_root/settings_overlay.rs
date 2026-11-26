@@ -789,6 +789,10 @@ impl Render for SettingsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
         let language = cx.global::<crate::app_shell::config::Settings>().language;
         let status_messages = self.status_messages(cx);
+        let retry_read = self.root.upgrade().is_some_and(|root| {
+            root.read(cx).settings_load_warning
+                == Some(crate::settings_state::SettingsLoadWarning::ReadFailed)
+        });
         let selected = self.selected_page;
         let page_list = SettingsPageId::ALL
             .into_iter()
@@ -868,7 +872,27 @@ impl Render for SettingsView {
                         .border_color(cx.theme().danger.opacity(0.4))
                         .children(status_messages.into_iter().map(|message| {
                             div().text_xs().text_color(cx.theme().danger).child(message)
-                        })),
+                        }))
+                        .when(retry_read, |element| {
+                            element.child(
+                                div()
+                                    .debug_selector(|| "settings-retry-load".to_owned())
+                                    .text_xs()
+                                    .text_color(cx.theme().accent)
+                                    .cursor_pointer()
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|view, _, _, cx| {
+                                            if let Some(root) = view.root.upgrade() {
+                                                root.update(cx, |root, cx| {
+                                                    root.retry_settings_load(cx)
+                                                });
+                                            }
+                                        }),
+                                    )
+                                    .child(language.text(crate::i18n::Message::PagedRetry)),
+                            )
+                        }),
                 )
             })
             .child(
@@ -1227,6 +1251,69 @@ impl AppRoot {
         for terminal in terminals {
             terminal.update(cx, |view, cx| view.apply_settings(settings, cx));
         }
+    }
+
+    /// 读取失败后的显式重试：后台重读磁盘与冷路径主题，前台只结算结果。
+    pub(super) fn retry_settings_load(&mut self, cx: &mut Context<'_, Self>) {
+        let cancellation = super::task_service::CancellationToken::new();
+        let task = cx.spawn(async move |this, cx| {
+            let loaded = cx
+                .background_executor()
+                .spawn(async move {
+                    let result = crate::settings_store::load_settings();
+                    if let Ok(loaded) = &result {
+                        let runtime = slterm_settings::RuntimeSettings::from_raw(&loaded.data);
+                        crate::app_shell::config::Settings::preload_theme_cold(&runtime);
+                    }
+                    result
+                })
+                .await;
+            let _ = this.update(cx, |root, cx| {
+                root.finish_settings_load_retry(loaded, cx);
+            });
+        });
+        if let Err(error) = self.tasks.register(
+            super::task_service::TaskId::SettingsLoad,
+            cancellation,
+            task,
+        ) {
+            log::warn!("设置重读任务注册失败: {error:?}");
+        }
+    }
+
+    pub(super) fn finish_settings_load_retry(
+        &mut self,
+        result: std::io::Result<crate::settings_store::LoadResult>,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.tasks
+            .complete(super::task_service::TaskId::SettingsLoad);
+        match result {
+            Ok(loaded) => {
+                self.settings.adopt_loaded(loaded.data);
+                self.settings_load_warning = if let Some(version) = loaded.unsupported_version {
+                    log::warn!(
+                        "settings.json 版本 {version} 高于当前程序支持；保持默认值且不会覆盖原文件"
+                    );
+                    Some(crate::settings_state::SettingsLoadWarning::UnsupportedVersion(version))
+                } else if loaded.corrupted {
+                    log::warn!("settings.json 损坏，重读已回退备份或默认值");
+                    Some(crate::settings_state::SettingsLoadWarning::Corrupted)
+                } else {
+                    None
+                };
+                cx.set_global(crate::settings_state::SettingsLoadState {
+                    warning: self.settings_load_warning,
+                });
+                self.reload_settings_snapshot(cx);
+            }
+            Err(error) => {
+                log::warn!("重读设置失败: {error}");
+                self.settings_load_warning =
+                    Some(crate::settings_state::SettingsLoadWarning::ReadFailed);
+            }
+        }
+        cx.notify();
     }
 
     /// 设置去抖到期后交给后台写盘；前台只提交快照与结算回执。
