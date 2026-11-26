@@ -1,8 +1,9 @@
 //! 备份恢复的 staged 维护请求：启动维护期按类别应用，失败或中断全回滚。
 //!
-//! 运行期只投影所选类别并原子暂存，不落口令、不写目标文件；恢复点正文经
-//! DPAPI 加密，应用中断后重启只回滚、不重放未知副作用。应用成功才更换
-//! `store_epoch`，使旧世代的 Journal／Operation 写全部失效。
+//! 运行期只投影所选类别并原子暂存，不落口令、不写目标文件；staged 条目与
+//! 恢复点正文都经 DPAPI CurrentUser 加密，应用中断后重启只回滚、不重放未知
+//! 副作用。应用成功才在同一事务内更换 `store_epoch` 并推进 `Applied`，使
+//! 旧世代的 Journal／Operation 写全部失效。
 
 use std::collections::{BTreeSet, HashSet};
 use std::fs;
@@ -12,6 +13,7 @@ use std::path::{Component, Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use slterm_path::AppPaths;
+use zeroize::Zeroizing;
 
 use super::recovery::{
     OriginalFile, RestoreTarget, decode_point, read_original, write_originals, write_point,
@@ -105,8 +107,13 @@ pub(crate) fn stage_restore(
     let request_id = uuid::Uuid::now_v7().to_string();
     let relative = format!("maintenance/{request_id}/staged.restore");
     let path = local_path(paths, &relative)?;
-    let payload = serde_json::to_vec(&StagedRestore { entries })
-        .map_err(|error| format!("序列化暂存材料失败: {error}"))?;
+    let plaintext = Zeroizing::new(
+        serde_json::to_vec(&StagedRestore { entries })
+            .map_err(|error| format!("序列化暂存材料失败: {error}"))?,
+    );
+    // 暂存件不得以明文携带解密条目：与恢复点同一 DPAPI CurrentUser 保护。
+    let payload = crate::platform::dpapi::protect(&plaintext)
+        .map_err(|error| format!("加密暂存材料失败: {error}"))?;
     crate::atomic_file::write(&path, &payload)
         .map_err(|error| format!("写入暂存材料失败: {error}"))?;
     let epoch = store
@@ -152,7 +159,11 @@ impl BackupRestoreRecoverer {
         if fingerprint != request.staged_fingerprint {
             return self.block(store, request, "暂存材料指纹不符");
         }
-        let staged: StagedRestore = match serde_json::from_slice(&staged_bytes) {
+        let staged_plaintext = match crate::platform::dpapi::unprotect(&staged_bytes) {
+            Ok(plaintext) => Zeroizing::new(plaintext),
+            Err(_) => return self.block(store, request, "暂存材料无法解密"),
+        };
+        let staged: StagedRestore = match serde_json::from_slice(&staged_plaintext) {
             Ok(staged) => staged,
             Err(_) => return self.block(store, request, "暂存材料内容无效"),
         };
@@ -386,6 +397,7 @@ impl MaintenanceRequestRecoverer for BackupRestoreRecoverer {
 mod maintenance_restore_tests {
     use std::fs;
 
+    use sha2::{Digest as _, Sha256};
     use slterm_path::AppPaths;
     use tempfile::TempDir;
 
@@ -573,6 +585,37 @@ mod maintenance_restore_tests {
             store.register_journal(stale),
             Err(JournalError::StoreEpochConflict)
         ));
+    }
+
+    /// 暂存件以 DPAPI 保护，不得在磁盘上泄露解密条目。
+    #[test]
+    fn staged_restore_is_dpapi_protected_and_carries_no_plaintext() {
+        let temp = tempfile::tempdir().unwrap();
+        let (paths, mut store) = setup(&temp);
+        let mut candidate = archive();
+        candidate.entries[0].bytes = br#"{"appearance":{"font_family":"SecretMarker"}}"#.to_vec();
+        let request = stage_restore(&mut store, &paths, &candidate, selection()).unwrap();
+        let staged = fs::read(paths.local_root().join(&request.staged_path)).unwrap();
+        assert!(
+            !staged
+                .windows("SecretMarker".len())
+                .any(|window| window == b"SecretMarker"),
+            "暂存件不得以明文携带条目"
+        );
+        let plaintext = crate::platform::dpapi::unprotect(&staged).expect("暂存件可由当前用户解密");
+        let decoded: super::StagedRestore = serde_json::from_slice(&plaintext).unwrap();
+        assert!(
+            decoded.entries[0]
+                .bytes
+                .windows("SecretMarker".len())
+                .any(|window| window == b"SecretMarker"),
+            "DPAPI 明文应还原原始条目"
+        );
+        assert_eq!(
+            request.staged_fingerprint,
+            <[u8; 32]>::from(Sha256::digest(&staged)),
+            "指纹绑定 DPAPI 密文"
+        );
     }
 
     /// 世代轮换与 Applied 在同一事务提交；错误旧世代不得留下半提交事实。
