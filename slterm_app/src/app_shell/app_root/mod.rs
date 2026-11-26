@@ -721,6 +721,15 @@ impl AppRoot {
         }
     }
 
+    pub(crate) fn current_authorization_generation(&self) -> u64 {
+        crate::app_shell::authorization::current_generation()
+    }
+
+    /// 撤销或路径身份变化必须推进代次，使旧计划与在途保存失败。
+    pub(crate) fn advance_authorization_generation(&self) -> u64 {
+        crate::app_shell::authorization::advance_generation()
+    }
+
     pub(crate) const fn project_snapshot_recovery_failed(&self) -> bool {
         self.project_snapshot_recovery_failed
     }

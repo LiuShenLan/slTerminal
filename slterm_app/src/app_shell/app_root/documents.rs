@@ -1160,7 +1160,8 @@ impl AppRoot {
             return;
         }
         let grants = self.document_grants(document_id);
-        let request = match self.documents.begin_save(document_id, 0) {
+        let current_generation = self.current_authorization_generation();
+        let request = match self.documents.begin_save(document_id, current_generation) {
             Ok(request) => request,
             Err(error) => {
                 log::warn!("Document 保存请求未建立: {error}");
@@ -1176,8 +1177,9 @@ impl AppRoot {
             .tasks
             .register_with(task_id, CancellationToken::new(), move || {
                 let background = executor.spawn(async move {
+                    let current = crate::app_shell::authorization::current_generation();
                     crate::app_shell::documents::DocumentSaveService::default()
-                        .save(request, &grants, 0)
+                        .save(request, &grants, current)
                 });
                 cx.spawn(async move |this, cx| {
                     let result = background.await;

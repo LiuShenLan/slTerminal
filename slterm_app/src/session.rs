@@ -743,9 +743,9 @@ mod schema_tests {
             Some("claude --resume abc-123")
         );
         assert_eq!(
-            agent("claude", None, None).resume_command().as_deref(),
-            Some("claude --continue"),
-            "claude 缺 id 时按目录 continue"
+            agent("claude", None, None).resume_command(),
+            None,
+            "无原生会话 ID 时不得降级为目录 continue（可能属于另一会话）"
         );
         assert_eq!(
             agent("codex", Some("abc-123"), None)

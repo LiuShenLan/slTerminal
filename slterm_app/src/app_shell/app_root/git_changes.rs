@@ -123,13 +123,18 @@ pub(crate) fn rollback_unstaged(
         if let Some(mirror) = mirror {
             let lexical = CanonicalPath::new(mirror).map_err(|_| GitChangeError::Unauthorized)?;
             let grants = [PathGrant::project_root(write_root.clone())];
+            let generation = crate::app_shell::authorization::current_generation();
             let plan = file_operations.plan_delete(
                 slterm_sidebar::FileTreeRoot::Project(project_id),
                 &lexical,
                 &grants,
-                0,
+                generation,
             )?;
-            file_operations.execute(&plan, &grants, 0)?;
+            file_operations.execute(
+                &plan,
+                &grants,
+                crate::app_shell::authorization::current_generation(),
+            )?;
         }
         Ok(())
     })();
@@ -179,22 +184,27 @@ pub(crate) fn delete_change(
         let write_grants = [PathGrant::project_root(write_root.clone())];
         // 永久删除同样经统一计划/执行体：身份、父目录、链接与授权复核不因
         // 用户再次确认而被绕过。
+        let generation = crate::app_shell::authorization::current_generation();
         let plan = if permanent {
             file_operations.plan_delete_permanent(
                 slterm_sidebar::FileTreeRoot::Project(project_id),
                 &target,
                 &write_grants,
-                0,
+                generation,
             )?
         } else {
             file_operations.plan_delete(
                 slterm_sidebar::FileTreeRoot::Project(project_id),
                 &target,
                 &write_grants,
-                0,
+                generation,
             )?
         };
-        file_operations.execute(&plan, &write_grants, 0)?;
+        file_operations.execute(
+            &plan,
+            &write_grants,
+            crate::app_shell::authorization::current_generation(),
+        )?;
         Ok(())
     })();
     record_git_change("git_delete", source, audited_path.as_deref(), &result);

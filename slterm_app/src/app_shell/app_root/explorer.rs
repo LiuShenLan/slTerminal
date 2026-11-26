@@ -97,11 +97,16 @@ fn verify_terminal_cwd(
         lexical_path: cwd.as_path().to_path_buf(),
         root_hints: Vec::new(),
         session_grant: None,
-        expected_authorization_generation: 0,
+        expected_authorization_generation: crate::app_shell::authorization::current_generation(),
     };
     let grant = PathGrant::project_root(root.clone());
-    let authorization = PathPolicy::authorize(&request, &resolved, std::slice::from_ref(&grant), 0)
-        .map_err(|_| ExplorerCwdError::Unauthorized)?;
+    let authorization = PathPolicy::authorize(
+        &request,
+        &resolved,
+        std::slice::from_ref(&grant),
+        crate::app_shell::authorization::current_generation(),
+    )
+    .map_err(|_| ExplorerCwdError::Unauthorized)?;
     Ok(authorization.resolved_path().canonical_path().clone())
 }
 
@@ -429,14 +434,19 @@ impl AppRoot {
                 move || {
                     let executing = executor.spawn(async move {
                         let grants = [PathGrant::project_root(root.clone())];
+                        let generation = crate::app_shell::authorization::current_generation();
                         let plan = service.plan_rename(
                             FileTreeRoot::Project(project_id),
                             &task_from,
                             &task_to,
                             &grants,
-                            0,
+                            generation,
                         )?;
-                        service.execute(&plan, &grants, 0)
+                        service.execute(
+                            &plan,
+                            &grants,
+                            crate::app_shell::authorization::current_generation(),
+                        )
                     });
                     cx.spawn(async move |this, cx| {
                         let result = executing.await;

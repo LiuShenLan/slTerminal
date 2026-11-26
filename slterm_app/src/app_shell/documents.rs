@@ -154,12 +154,18 @@ impl DocumentOpenService {
             lexical_path: lexical.as_path().to_path_buf(),
             root_hints: Vec::new(),
             session_grant: None,
-            expected_authorization_generation: 0,
+            expected_authorization_generation: crate::app_shell::authorization::current_generation(
+            ),
         };
         let mut grants = vec![PathGrant::project_root(project_root.clone())];
         grants.extend(extra_read_grants.iter().cloned());
-        let authorization = PathPolicy::authorize(&request, &resolved, &grants, 0)
-            .map_err(|_| DocumentOpenError::Unauthorized)?;
+        let authorization = PathPolicy::authorize(
+            &request,
+            &resolved,
+            &grants,
+            crate::app_shell::authorization::current_generation(),
+        )
+        .map_err(|_| DocumentOpenError::Unauthorized)?;
         Ok(ResolvedDocument {
             location: authorization.resolved_path().clone(),
             grants,

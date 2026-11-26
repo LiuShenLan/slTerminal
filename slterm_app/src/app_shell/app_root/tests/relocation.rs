@@ -139,6 +139,26 @@ fn navigation_relocation_guards_and_reassigns_history(cx: &mut TestAppContext) {
     assert_eq!(state.borrow().attempts, 1, "重定位不得重建 PTY");
 }
 
+/// 根路径变化即授权撤销：授权代次必须推进，旧计划与在途保存失效。
+#[gpui::test]
+fn project_relocation_advances_the_authorization_generation(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let old_root = temp.path().join("old");
+    let new_root = temp.path().join("new");
+    std::fs::create_dir(&old_root).unwrap();
+    std::fs::create_dir(&new_root).unwrap();
+    let (root, mut window, _) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, old_root.to_str().unwrap());
+    let before = root.read_with(cx, |root, _| root.current_authorization_generation());
+    let new_root = CanonicalPath::new(dunce::canonicalize(&new_root).unwrap()).unwrap();
+    relocate(&root, &mut window, project_id(PROJECT_A), new_root.clone()).unwrap();
+    let after = root.read_with(cx, |root, _| root.current_authorization_generation());
+    assert!(
+        after > before,
+        "重定位后授权代次必须推进: {before} -> {after}"
+    );
+}
+
 /// 项目移除同样要求绑定该项目的未提交 Hooks 草稿先解决；干净草稿与 User 草稿不阻塞。
 #[gpui::test]
 fn project_remove_requires_hooks_drafts_resolved(cx: &mut TestAppContext) {

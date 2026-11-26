@@ -661,6 +661,24 @@ impl SideView {
         cx: &mut Context<'_, Self>,
     ) {
         self.ensure_agent_files();
+        let previous_paths = self
+            .agent_files
+            .as_ref()
+            .map(|runtime| {
+                runtime
+                    .roots
+                    .iter()
+                    .map(|root| (root.root_id, root.path.clone()))
+                    .collect::<std::collections::BTreeMap<_, _>>()
+            })
+            .unwrap_or_default();
+        let next_paths = roots
+            .iter()
+            .map(|(root_id, _, path)| (*root_id, path.clone()))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        if previous_paths != next_paths {
+            crate::app_shell::authorization::advance_generation();
+        }
         // 配置中消失的根按撤销处理：运行态与持久分区一并清理，新根按新身份登记。
         let next = roots
             .iter()

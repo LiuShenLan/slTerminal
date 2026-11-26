@@ -536,7 +536,7 @@ impl AppRoot {
             &mut self.documents,
             &intent,
             &grants,
-            0,
+            crate::app_shell::authorization::current_generation(),
         );
         let pending = prepared
             .requests
@@ -551,7 +551,7 @@ impl AppRoot {
                         let writes = crate::app_shell::document_close::execute_document_save_writes(
                             prepared.requests,
                             &grants,
-                            0,
+                            crate::app_shell::authorization::current_generation(),
                         );
                         (prepared.failures, writes)
                     });

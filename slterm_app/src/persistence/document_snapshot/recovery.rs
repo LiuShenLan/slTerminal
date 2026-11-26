@@ -455,10 +455,16 @@ impl DocumentSnapshotRecoverer {
             lexical_path: location.canonical_path().as_path().to_path_buf(),
             root_hints: Vec::new(),
             session_grant,
-            expected_authorization_generation: 0,
+            expected_authorization_generation: crate::app_shell::authorization::current_generation(
+            ),
         };
-        let authorization = PathPolicy::authorize(&request, &resolved, grants, 0)
-            .map_err(|_| io::Error::new(io::ErrorKind::PermissionDenied, "文档恢复未获授权"))?;
+        let authorization = PathPolicy::authorize(
+            &request,
+            &resolved,
+            grants,
+            crate::app_shell::authorization::current_generation(),
+        )
+        .map_err(|_| io::Error::new(io::ErrorKind::PermissionDenied, "文档恢复未获授权"))?;
         let resolved = authorization.resolved_path().clone();
         let mut file = std::fs::File::open(resolved.canonical_path().as_path())?;
         let metadata = file.metadata()?;
@@ -521,9 +527,15 @@ fn automatically_authorized(location: &ResolvedPath, grants: &[PathGrant]) -> bo
         lexical_path: location.canonical_path().as_path().to_path_buf(),
         root_hints: Vec::new(),
         session_grant: None,
-        expected_authorization_generation: 0,
+        expected_authorization_generation: crate::app_shell::authorization::current_generation(),
     };
-    PathPolicy::authorize(&request, location, grants, 0).is_ok()
+    PathPolicy::authorize(
+        &request,
+        location,
+        grants,
+        crate::app_shell::authorization::current_generation(),
+    )
+    .is_ok()
 }
 
 fn disk_baseline(disk: &DiskDocument) -> Arc<[u8]> {

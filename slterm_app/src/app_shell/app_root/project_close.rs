@@ -177,7 +177,7 @@ impl AppRoot {
             &mut self.documents,
             &intent,
             &grants,
-            0,
+            crate::app_shell::authorization::current_generation(),
         );
         let pending = prepared
             .requests
@@ -192,7 +192,7 @@ impl AppRoot {
                     let writes = crate::app_shell::document_close::execute_document_save_writes(
                         prepared.requests,
                         &grants,
-                        0,
+                        crate::app_shell::authorization::current_generation(),
                     );
                     (prepared.failures, writes)
                 });
@@ -547,7 +547,9 @@ impl AppRoot {
         self.side_view_persistence
             .editor_view_states()
             .remove_project(id);
-        // 项目已从快照移除：项目专属 Hooks 草稿与文档随同一提交清理，User 草稿保留。
+        // 项目已从快照移除：授权代次推进，旧计划与在途保存不得继续生效。
+        self.advance_authorization_generation();
+        // 项目专属 Hooks 草稿与文档随同一提交清理，User 草稿保留。
         let hooks_keys = self.hook_drafts.clear_project(id);
         self.forget_hooks_draft_keys(&hooks_keys);
         self.commit_project_snapshot(candidate, cx);

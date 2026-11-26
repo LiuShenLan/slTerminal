@@ -21,6 +21,7 @@ macro_rules! eprintln {
 
 pub(crate) mod app_root;
 pub(crate) mod assets;
+pub(crate) mod authorization;
 #[cfg(test)]
 mod crash_recovery;
 mod global_close;

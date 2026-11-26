@@ -27,7 +27,7 @@
 | 项目重定位与导航历史恢复没有生产入口 | 待修 |
 | 启动恢复对缺失/不可解码的干净 Document 不建面板 | 已修：新增 `DocumentRecoveryKind::Unavailable` 占位与 typed 文案，未知 Document 不再 `continue` 丢面板，可由页签关闭入口移除；测试 `missing_clean_document_restores_unavailable_placeholder` |
 | Agent 根路径变更（同 id）沿用旧 ViewState | 已修：`agent_files_sync` 把「同 id 不同路径」视为移除并重登记，旧持久分区、展开目录与当前行一并清理；测试改走真实同步入口 `agent_root_path_change_resets_state_and_authorization` |
-| 授权代次在生产路径恒为零 | 待修 |
+| 授权代次在生产路径恒为零 | 已修：新增进程级 `app_shell::authorization` 代次单源，项目移除／重定位与 Agent 根变更推进代次；Document 保存、关闭保存、Explorer 重命名、Git 回滚/删除与各 PathPolicy 判定均读取真实代次，执行前重读最新值；测试 `project_relocation_advances_the_authorization_generation`、`agent_root_path_change_resets_state_and_authorization` |
 | GitShow 非法 UTF-8 的合同冲突 | 需裁决 |
 
 ## 设置、主题、导航与 Agent

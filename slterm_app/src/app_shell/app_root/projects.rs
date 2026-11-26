@@ -48,6 +48,8 @@ impl AppRoot {
             .registry_mut()
             .relocate_project(project_id, new_root)?;
         candidate.validate()?;
+        // 根路径变化即授权撤销：推进代次，旧计划与在途保存不得继续生效。
+        self.advance_authorization_generation();
         self.commit_project_snapshot(candidate, cx);
         cx.notify();
         Ok(())
@@ -64,6 +66,8 @@ impl AppRoot {
         let mut candidate = self.snapshot.clone();
         candidate.registry_mut().rename_project(project_id, &name)?;
         candidate.validate()?;
+        // 根路径变化即授权撤销：推进代次，旧计划与在途保存不得继续生效。
+        self.advance_authorization_generation();
         self.commit_project_snapshot(candidate, cx);
         cx.notify();
         Ok(())
@@ -82,6 +86,8 @@ impl AppRoot {
             .registry_mut()
             .move_project(project_id, new_index)?;
         candidate.validate()?;
+        // 根路径变化即授权撤销：推进代次，旧计划与在途保存不得继续生效。
+        self.advance_authorization_generation();
         self.commit_project_snapshot(candidate, cx);
         cx.notify();
         Ok(())

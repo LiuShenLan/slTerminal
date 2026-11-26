@@ -622,11 +622,16 @@ fn authorize_hook_write(path: &Path, authorized_root: &Path) -> Result<(), Hooks
         lexical_path: path.to_path_buf(),
         root_hints: Vec::new(),
         session_grant: None,
-        expected_authorization_generation: 0,
+        expected_authorization_generation: crate::app_shell::authorization::current_generation(),
     };
-    PathPolicy::authorize(&request, &resolved, std::slice::from_ref(&grant), 0)
-        .map(|_| ())
-        .map_err(|_| HooksEditError::Unauthorized)
+    PathPolicy::authorize(
+        &request,
+        &resolved,
+        std::slice::from_ref(&grant),
+        crate::app_shell::authorization::current_generation(),
+    )
+    .map(|_| ())
+    .map_err(|_| HooksEditError::Unauthorized)
 }
 
 /// 目标文件可能尚未创建：沿祖先取最近真实规范路径，再拼回缺失后缀。

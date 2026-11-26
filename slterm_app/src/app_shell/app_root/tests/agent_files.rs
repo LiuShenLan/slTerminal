@@ -450,6 +450,7 @@ fn agent_root_path_change_resets_state_and_authorization(cx: &mut TestAppContext
         );
     });
 
+    let generation_before = root.read_with(cx, |root, _| root.current_authorization_generation());
     // 同一根 id 改路径必须走真实同步入口：旧分区与当前行一并撤销。
     let moved = slterm_settings::AgentRoot::custom(
         agent_root_id(),
@@ -464,6 +465,11 @@ fn agent_root_path_change_resets_state_and_authorization(cx: &mut TestAppContext
         });
     });
     window.run_until_parked();
+    let generation_after = root.read_with(cx, |root, _| root.current_authorization_generation());
+    assert!(
+        generation_after > generation_before,
+        "Agent 根路径变化必须推进授权代次"
+    );
     view.read_with(cx, |view, _| {
         let slterm_sidebar::SideViewState::AgentFiles(state) = &view.state else {
             panic!("必须是 AgentFiles 状态");

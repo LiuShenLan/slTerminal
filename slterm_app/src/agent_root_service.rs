@@ -348,7 +348,8 @@ mod tests {
             lexical_path: dir.as_path().to_path_buf(),
             root_hints: Vec::new(),
             session_grant: None,
-            expected_authorization_generation: 0,
+            expected_authorization_generation: crate::app_shell::authorization::current_generation(
+            ),
         };
         let resolved = ResolvedPath::new(dir.clone(), None);
         assert!(
@@ -356,7 +357,7 @@ mod tests {
                 &request,
                 &resolved,
                 &[PathGrant::agent_root(dir.clone(), true, false)],
-                0,
+                crate::app_shell::authorization::current_generation(),
             )
             .is_err(),
             "写能力不得隐含终端 cwd 授权"
@@ -366,7 +367,7 @@ mod tests {
                 &request,
                 &resolved,
                 &[PathGrant::agent_root(dir.clone(), false, true)],
-                0,
+                crate::app_shell::authorization::current_generation(),
             )
             .is_ok(),
             "显式终端能力根必须可作为 cwd"
