@@ -29,15 +29,10 @@ mod global_close;
 #[allow(dead_code)] // 生产消费归 Markdown 块视图接线。
 pub(crate) mod markdown;
 mod startup_diagnostics;
-// 源码文件 tab:普通源码与 gitshow 只读臂。
-#[allow(dead_code)] // 生产消费归 Document 与文本视图阶段。
+// 文件树按文本打开的路由判定。
 pub(crate) mod code_tab;
 pub(crate) mod config;
-// 通用 diff 对照面(双栏只读)。
-#[allow(dead_code)] // 生产消费归文件与 Git 阶段。
-pub(crate) mod diff_tab;
-// 文档/图片 tab + openable_in_app 路由单判定。
-#[allow(dead_code)] // 生产消费归 Document 与 Markdown 阶段。
+// 文档打开路由判定(Markdown 归 AppRoot 渲染面板)。
 pub(crate) mod doc_tabs;
 #[allow(dead_code)] // 生产消费归 AppRoot Document 生命周期与退出链。
 pub(crate) mod document_autosave;
@@ -48,9 +43,6 @@ pub(crate) mod documents;
 // 编辑器语义槽装配(颜色单源 = UI token)。
 #[allow(dead_code)] // 生产消费归 Document 与文本视图阶段。
 pub(crate) mod editor_theme;
-// 文件树拖放载荷 + 独立幽灵预览。
-#[allow(dead_code)] // 生产消费归文件与 Git 阶段。
-pub(crate) mod file_drop;
 // Explorer 与 Agent 文件树共用的单项写计划与执行前重检。
 #[allow(dead_code)] // 生产消费归文件与 Git 阶段。
 pub(crate) mod file_operation_service;

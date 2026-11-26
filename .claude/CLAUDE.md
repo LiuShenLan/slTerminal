@@ -63,8 +63,8 @@ workspace 成员、ownership、类型锚点、错误信封、数据目录与命�
 - **凭据红线**：真实凭据值禁止写入任何 git 追踪文件——代码、测试夹具、文档、脚本一律不行；测试与文档仅允许假值占位符（`sk-test` 形态）。真实凭据只存 Windows 凭据管理器；token/key 不出凭据域，日志/错误消息禁插值。
 - **审计通道**：安全写事件与哈希对账只经 `tracing` target `audit`；事件字段只含 `operation/path/source/result` 与 `expected/actual` 指纹，禁插值凭据值或文件内容。
 - **配色单点**：颜色定义于主题/设置体系，组件经语义 token 引用，禁硬编码颜色；仅暗色。新增方案/色值须提供完整语义 token 映射；不做对比度校验、不提示、不自动回退。
-- **布局单点**：会话布局只经 session schema 的 layout 转换对存取；禁第二套序列化或绕过快照。
-- **面板封闭**：tab 与侧栏视图为封闭枚举（`WorkspaceTab`/`SideViewId`）；新增类型须在单一注册点登记，恢复时过滤未知类型。
+- **布局单点**：项目布局只经 `slterm_workspace` 的 `ProjectLayout` 规范 DTO 转换存取；禁第二套序列化或绕过 `ProjectSnapshot`。
+- **面板封闭**：面板内容与侧栏视图为封闭枚举（`PanelContent`/`SideViewId`），持久视图类型为封闭 `ViewKeyKind`；新增类型须在单一注册点登记，恢复时过滤未知类型。
 - **测试覆盖**：改动的代码可自动化部分必须添加全量自动化测试用例覆盖；不可自动化部分须在 `.claude/docs/testing/exemptions.md` 登记豁免原因与兜底层级，禁止未登记豁免。
 - **门禁常挂**：提交前全部门禁全绿（架构/依赖、文档策略、禁名、clippy、fmt、测试）；禁名词表只允许 `slTerminal`/`slterm`，旧品牌名不得回流。
 

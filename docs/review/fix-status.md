@@ -276,18 +276,18 @@
 | 部分矩阵例名存在，但覆盖的不是声明场景 | 待修 |
 | 全量验收锚以源码字符串和局部状态代替跨域行为 | 待修 |
 | 测试豁免表含失效设计路径、目标态待实现项与超范围无障碍项 | 待修 |
-| 架构总览与常驻规则仍使用旧栈数据名、类型名与已取消的校验 | 待修 |
+| 架构总览与常驻规则仍使用旧栈数据名、类型名与已取消的校验 | 已修：根规则改指真实类型 `PanelContent`/`ViewKeyKind`/`ProjectLayout`；overview ownership 表补齐全部 workspace 成员，数据文件改为实际的 `settings.json`／`workspace.db`／`workspace.backup.db`／`learning.db`／`themes/` 等 |
 | README、CHANGELOG 与发布说明的用户能力清单停留在旧栈 | 待修 |
-| 被排除的图片面板实现仍编译存在 | 待修 |
-| featureSpec 未覆盖已实现的壁纸与屏幕检测 | 待修 |
+| 被排除的图片面板实现仍编译存在 | 已修：删除 `ImageTabView`、图片几何/解码、`image_viewable` 与 `openable_in_app`，`doc_tabs` 只保留 Markdown 判定；`acceptance_excluded_surface_absent` 改为递归扫描 `src/` 生产段并覆盖图片面板与旧 Diff/拖放符号 |
+| featureSpec 未覆盖已实现的壁纸与屏幕检测 | 已修：外观页登记本地背景壁纸的适应/对齐/不透明度与有界解码边界；终端规格把“状态信号”明确为 hooks 未给权威状态时的画面特征兜底，且不得猜测未知 CLI |
 | Mermaid 终态在 featureSpec、devPlan 与进度之间构成合同冲突 | 已裁决为延期：featureSpec 与验收场景明确当前只显示普通代码块，静态图实现另行评审；traceability 的延期状态不再与 featureSpec 冲突 |
-| devPlan core crate 依赖方向与实际策略相反 | 待修 |
-| devPlan Runtime 方法表写错 operation.get/wait | 待修 |
+| devPlan core crate 依赖方向与实际策略相反 | 已修：`architecture.md` 的允许依赖改为与 `architecture/dependencies.toml` 一致（workspace 依赖 path／document／split／agents；agents 依赖 path／settings；sidebar 依赖 path／settings／workspace／agents） |
+| devPlan Runtime 方法表写错 operation.get/wait | 已核验无需修复：设计方法表已使用 `runtime.operation_get`／`runtime.operation_wait`，全 devPlan 无点号形式残留 |
 | 进度与追溯文档保留测试通过计数、过期状态锚与计划期自述 | 待修 |
 | 模块与设计文档存在第二份源码式复述 | 待修 |
 | Runtime v2 验收 hash 指向 Windows 阶段提交 | 待修 |
 | “全部阶段验收完成”与安装器、发布包实机待办矛盾 | 待修 |
-| 旧实现与最终排除面未清理 | 待修 |
+| 旧实现与最终排除面未清理 | 已修：删除 `diff_tab`（旧双栏 `InputState`）、`file_drop`（无消费拖放载荷）、`code_tab::language_for_path` 第二语言路由与图片查看器；壁纸保留并补入 featureSpec，主题非颜色字段此前已删除；排除面验收改为全源码生产段扫描 |
 | 进度表用同一提交充当多个阶段锚 | 待修 |
 | 追溯矩阵存在同名测试与重复行 | 已修：删除跨域重复行与设置／工作区重复锚；服务层同名例改名为 `registry_aliases_resolve_to_the_same_document_by_file_identity`、`paged_reload_is_read_only_for_clean_and_conflicts_for_dirty`、`snapshot_recovery_runs_after_layout_reconciliation`、`outside_snapshot_recovery_marks_requires_authorization`、`application_exit_coordinator_allows_abandon_after_final_commit_failure`、`final_commit_failure_sets_old_state_abandon_warning` 与三个 crate 的 `*_stable_id_errors_describe_the_rejection`；门禁强制全仓测试例名唯一 |
 | 计划行为切片没有可核销例名 | 待修 |

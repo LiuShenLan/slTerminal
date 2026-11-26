@@ -9,8 +9,14 @@
 
   | crate | owns | must not become |
   |---|---|---|
-  | `slterm_app`（lib+bin `slterm`） | GPUI 壳、workspace/tab/pane 生命周期、设置 UI 与写通道、平台适配、AI 集成、文件/编辑器、i18n、打包入口 | 不承载 VT/PTY 解析；不把业务逻辑塞进渲染层；不绕过领域通道直写磁盘/凭据 |
+  | `slterm_app`（lib+bin `slterm`） | GPUI 壳、窗口/面板/侧栏生命周期、设置 UI 与写通道、平台适配、AI 集成、文件/编辑器、i18n、打包入口 | 不承载 VT/PTY 解析；不把业务逻辑塞进渲染层；不绕过领域通道直写磁盘/凭据 |
   | `slterm_terminal` | 网格、VT 解析、PTY 行为、输入编码、选择与回放、渲染快照 | 不依赖产品视图、窗口状态或 GPUI 类型 |
+  | `slterm_document` | 文本、编码、差分、语法、Markdown 投影与公式语义 | 不持 GPUI 类型或执行 I/O；不建第二份编辑或保存入口 |
+  | `slterm_workspace` | 稳定 ID、`ViewKey`/`ViewState`、`ProjectLayout`、项目聚合与关闭恢复状态机 | 纯状态与纯转换；不执行 I/O 或持有运行实体 |
+  | `slterm_agents` | AgentCatalog、会话身份、命令构造与原生记录解析 | 不读取 CLI 认证材料；不执行外部进程 |
+  | `slterm_hooks` | Hooks 目录、schema、草稿模型与托管识别 | 不写 CLI 配置文件；不持 GUI 状态 |
+  | `slterm_sidebar` | 侧栏与文件树的纯状态、过滤与选择模型 | 不执行文件 I/O 或持有 watcher |
+  | `slterm_runtime_protocol` | v2 线缆 DTO 与 schema 生成 | 不依赖内部领域 crate；不承载业务执行 |
   | `slterm_settings` | 设置值模型、JSON 值与键注册表、主题色表 | 零生产依赖；不持数据根权威或写通道硬机制 |
   | `slterm_path` | 不可变 `AppPaths`、路径与授权纯规则 | 不读取环境、不执行 I/O、不依赖 UI |
   | `slterm_split` | 分屏树、几何切割、拖拽比例与导航纯函数 | 零生产依赖；不出现 UI 框架类型 |
@@ -22,7 +28,7 @@
 - **错误信封**：统一使用 `slterm_app::error::AppError`；变体与 `From` 转换以类型定义为准。原因：调用点语义统一，领域不得另立 envelope。边界：错误消息是用户可见语义，禁止携带凭据值；领域失败经统一通用出口，不新增平行错误类型。
 - **平台分支收敛**：业务 `#[cfg(windows)]` 仅允许出现在 PTY/平台封装模块；终端 core 的 Windows 适配收在 `tty/windows`。原因：平台差异单点可达，便于替换与测试。边界：业务模块不得散落平台条件编译。
 - **模块不穿透**：crate 内模块共享只经公开小接口/类型锚点；跨 crate 共享只经 core crate 公开 API。原因：单一执行体与单一读取通道，防止状态双源。边界：禁领域自建第二套读取/执行/写盘通道。
-- **数据根与命名**：`slterm_path::AppPaths` 是不可变双根值对象；application 启动入口只读取一次 `SLTERM_CONFIG_DIR`、`SLTERM_LOCAL_DIR`，缺省经 Known Folder API 得 `%APPDATA%\slterm` 与 `%LOCALAPPDATA%\slterm`。覆盖值只接受绝对路径，非法即明确失败；生产调用点只读启动缓存。设置、设置备份与主题归配置根，数据库、会话、历史、日志、实例锁、恢复材料与更新材料归本地根。文件名去品牌：`settings.json`、`session.json`、`history.jsonl`、`directory_history.json`、`instance`、`themes/*.slterm-theme.json`。原因：配置与机器本地状态须独立寻址，路径双源会导致读写分叉。边界：旧版 exe 同级数据不看不迁；任何新持久化文件沿用去品牌命名与原子写纪律。
+- **数据根与命名**：`slterm_path::AppPaths` 是不可变双根值对象；application 启动入口只读取一次 `SLTERM_CONFIG_DIR`、`SLTERM_LOCAL_DIR`，缺省经 Known Folder API 得 `%APPDATA%\slterm` 与 `%LOCALAPPDATA%\slterm`。覆盖值只接受绝对路径，非法即明确失败；生产调用点只读启动缓存。配置根保存 `settings.json`、设置备份与 `themes/*.slterm-theme.json`；本地根保存 `workspace.db`、`workspace.backup.db`、`learning.db`、日志、`instance` 锁、恢复材料与更新材料。原因：配置与机器本地状态须独立寻址，路径双源会导致读写分叉。边界：旧版 exe 同级数据不看不迁；任何新持久化文件沿用去品牌命名与原子写纪律。
 - **架构门禁**：`architecture/file-budgets.txt` 行数棘轮、`architecture/dependencies.toml` 依赖方向、`scripts/check_architecture.py` 机械校验，git hooks 常挂。原因：边界只有机械化才可持续。边界：新增 crate/依赖必须先过策略与预算；renderer 依赖误入 core 即红。
 
 ## 验收与测试

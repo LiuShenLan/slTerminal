@@ -1,14 +1,6 @@
-//! 代码文件的语言路由；真实源码面板归 AppRoot 的 DocumentTextView。
+//! 文件树打开路由：判定哪些路径可按文本进入 AppRoot 的文档面板。
 
 use std::path::Path;
-
-/// 路径映射唯一来自 core 的封闭 LanguageRegistry。
-pub(crate) fn language_for_path(path: &Path) -> &'static str {
-    slterm_document::LanguageRegistry::new()
-        .for_path(path)
-        .map(slterm_document::LanguageId::as_str)
-        .unwrap_or("text")
-}
 
 /// 文件树双击是否进源码面板。
 /// 已知二进制/封装格式不进入文本 Editor；其余（含未知扩展名与无扩展名）
@@ -60,24 +52,6 @@ mod code_tab_tests {
             assert!(
                 viewable_file(Path::new(path)),
                 "{path} 必须可尝试按文本打开"
-            );
-        }
-    }
-
-    #[test]
-    fn language_ids_group_extension_families() {
-        assert_eq!(language_for_path(Path::new("a.rs")), "rust");
-        assert_eq!(language_for_path(Path::new("a.MJS")), "javascript");
-        assert_eq!(language_for_path(Path::new("a.yaml")), "yaml");
-        assert_eq!(language_for_path(Path::new("a.unknown")), "text");
-        assert_eq!(language_for_path(Path::new("Dockerfile")), "dockerfile");
-        assert_eq!(language_for_path(Path::new("Makefile")), "make");
-        assert_eq!(language_for_path(Path::new("config.JSONC")), "jsonc");
-        for unsupported in ["script.rb", "page.php", "video.swift"] {
-            assert_eq!(language_for_path(Path::new(unsupported)), "text");
-            assert!(
-                viewable_file(Path::new(unsupported)),
-                "未知语言必须回落纯文本而不是拒绝打开"
             );
         }
     }

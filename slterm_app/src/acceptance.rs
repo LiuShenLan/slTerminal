@@ -154,25 +154,54 @@ mod acceptance_tests {
     /// 锚：最终排除项没有隐藏入口或迁移占位。
     #[test]
     fn acceptance_excluded_surface_absent() {
-        for relative in [
-            "src/lib.rs",
-            "src/app_shell/mod.rs",
-            "src/persistence/mod.rs",
-        ] {
-            let source = production_source(relative);
-            for forbidden in [
-                "legacy_session",
-                "session_v1",
-                "migrate_old",
-                "old_schema",
-                "SessionJson",
-            ] {
-                assert!(
-                    !source.contains(forbidden),
-                    "{relative} 不得含旧通道 {forbidden}"
-                );
+        const FORBIDDEN: &[&str] = &[
+            "legacy_session",
+            "session_v1",
+            "migrate_old",
+            "old_schema",
+            "SessionJson",
+            "ImageTabView",
+            "image_viewable",
+            "openable_in_app",
+            "DiffTabView",
+            "FileTreeDrag",
+        ];
+        // 扫描全部应用源码的生产段，而不是固定入口文件清单。
+        fn scan(directory: &Path, violations: &mut Vec<String>) {
+            let Ok(entries) = std::fs::read_dir(directory) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    scan(&path, violations);
+                    continue;
+                }
+                if path.extension().is_none_or(|extension| extension != "rs")
+                    || path.file_name().is_some_and(|name| name == "acceptance.rs")
+                {
+                    continue;
+                }
+                let source = std::fs::read_to_string(&path).unwrap_or_default();
+                let production = source.split("#[cfg(test)]").next().unwrap_or_default();
+                for forbidden in FORBIDDEN {
+                    if production.contains(forbidden) {
+                        violations.push(format!(
+                            "{} 不得含旧通道或排除面 {forbidden}",
+                            path.display()
+                        ));
+                    }
+                }
             }
         }
+
+        let mut violations = Vec::new();
+        scan(&crate_root().join("src"), &mut violations);
+        assert!(
+            violations.is_empty(),
+            "最终排除项仍有隐藏实现：\n{}",
+            violations.join("\n")
+        );
         assert_eq!(crate::brand::NAME, "slTerminal");
         assert!(!crate::brand::WINDOWS_APP_ID.is_empty());
     }
