@@ -633,6 +633,66 @@ fn terminal_search_is_read_only(cx: &mut TestAppContext) {
     );
 }
 
+/// 新输出帧触发的搜索刷新必须保留当前导航位置，且不得形成滚动回环。
+#[gpui::test]
+fn frame_driven_search_refresh_preserves_selection(cx: &mut TestAppContext) {
+    let (terminal, mut window, rx, _registry) = open(cx);
+    terminal.update(&mut window, |view, _| {
+        feed(
+            view,
+            b"needle one
+needle two
+",
+        );
+        for index in 0..30 {
+            feed(
+                view,
+                format!(
+                    "plain {index}
+"
+                )
+                .as_bytes(),
+            );
+        }
+    });
+    press(
+        &mut window,
+        key(
+            "f",
+            Modifiers {
+                control: true,
+                shift: true,
+                ..Default::default()
+            },
+        ),
+    );
+    terminal.update_in(&mut window, |view, window, cx| {
+        gpui::EntityInputHandler::replace_text_in_range(view, None, "needle", window, cx);
+    });
+    terminal.update_in(&mut window, |view, _, _| view.pump_test_worker(&rx));
+    window.run_until_parked();
+    terminal.update_in(&mut window, |view, _, _| view.pump_test_worker(&rx));
+    // 导航到第二处匹配。
+    press(&mut window, key("down", Modifiers::default()));
+    let selected_before = terminal.read_with(&window, |view, _| {
+        view.terminal_search.as_ref().unwrap().selected
+    });
+    assert_eq!(selected_before, Some(1));
+
+    // 模拟新输出帧到达：刷新必须保留当前位置。
+    let frame = terminal.read_with(&window, |view, _| view.frame.clone().unwrap());
+    terminal.update_in(&mut window, |view, _, cx| {
+        view.feed_event_for_test(slterm_terminal::event::Event::Frame(frame), cx);
+    });
+    terminal.update_in(&mut window, |view, _, _| view.pump_test_worker(&rx));
+    window.run_until_parked();
+    terminal.update_in(&mut window, |view, _, _| view.pump_test_worker(&rx));
+    let selected_after = terminal.read_with(&window, |view, _| {
+        view.terminal_search.as_ref().unwrap().selected
+    });
+    assert_eq!(selected_after, Some(1), "新帧刷新不得重置导航位置");
+}
+
 /// 集成面：当前匹配滚入视口；切备用屏后不得继续搜索主屏回滚。
 #[gpui::test]
 fn integration_terminal_search(cx: &mut TestAppContext) {

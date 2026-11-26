@@ -400,7 +400,7 @@ impl TerminalView {
                 let before = self.shell_line.completion_line().map(str::to_owned);
                 self.adopt_frame(frame);
                 if self.terminal_search.is_some() {
-                    self.refresh_terminal_search(cx);
+                    self.refresh_terminal_search_from_frame(cx);
                 }
                 if self.output_visible {
                     cx.notify();

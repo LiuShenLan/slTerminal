@@ -86,9 +86,32 @@ impl TerminalView {
 
     /// 新查询或新帧都先作废旧位置；只有同代次 worker 回包可回填。
     pub(super) fn refresh_terminal_search(&mut self, cx: &mut Context<'_, Self>) {
+        self.refresh_terminal_search_inner(false, cx);
+    }
+
+    /// 输出帧驱动的刷新：保留当前导航位置、不滚动，避免
+    /// 「刷新 → 滚动 → 新帧 → 再刷新」的回环风暴；在途请求只让位于
+    /// 下一次新帧，不取消重排。
+    pub(super) fn refresh_terminal_search_from_frame(&mut self, cx: &mut Context<'_, Self>) {
+        if self.terminal_search_task.is_some() {
+            return;
+        }
+        self.refresh_terminal_search_inner(true, cx);
+    }
+
+    fn refresh_terminal_search_inner(
+        &mut self,
+        preserve_selection: bool,
+        cx: &mut Context<'_, Self>,
+    ) {
         self.terminal_search_task = None;
         let Some(search) = &mut self.terminal_search else {
             return;
+        };
+        let previous_selected = if preserve_selection {
+            search.selected
+        } else {
+            None
         };
         search.invalidate();
         let generation = search.generation;
@@ -120,8 +143,16 @@ impl TerminalView {
                     return;
                 };
                 search.matches = matches;
-                search.selected = (!search.matches.is_empty()).then_some(0);
-                view.scroll_to_terminal_match(cx);
+                search.selected = if search.matches.is_empty() {
+                    None
+                } else if preserve_selection {
+                    Some(previous_selected.unwrap_or(0).min(search.matches.len() - 1))
+                } else {
+                    Some(0)
+                };
+                if !preserve_selection {
+                    view.scroll_to_terminal_match(cx);
+                }
                 cx.notify();
             });
         }));
