@@ -70,6 +70,11 @@ impl AppRoot {
             RuntimeMutation::PanelSave { view } => {
                 self.start_runtime_panel_save(view, completion, cx)
             }
+            RuntimeMutation::AgentStart { .. }
+            | RuntimeMutation::AgentResume { .. }
+            | RuntimeMutation::AgentFork { .. } => {
+                self.start_runtime_agent(mutation, completion, window, cx)
+            }
             mutation => RuntimeMutationDispatch::Reply(
                 self.execute_runtime_mutation(mutation, window, cx)
                     .map(|()| RuntimeMutationReply::Done(Ok(()))),
@@ -678,51 +683,10 @@ impl AppRoot {
                     .map(|_| ())
                     .map_err(runtime_mutation_error)
             }
-            RuntimeMutation::AgentStart {
-                kind,
-                project_root,
-                cwd,
-            } => {
-                let kind =
-                    crate::ai_agents::AgentKind::parse(&kind).ok_or_else(invalid_request_error)?;
-                self.start_agent_terminal(
-                    kind.catalog().builtin_command.to_owned(),
-                    project_root,
-                    cwd,
-                    window,
-                    cx,
-                )
-            }
-            RuntimeMutation::AgentResume {
-                source,
-                session_id,
-                session_file,
-                project_root,
-                cwd,
-            } => {
-                let session = slterm_agents::AgentSession {
-                    source,
-                    session_id,
-                    session_file,
-                };
-                let command = session
-                    .resume_command()
-                    .ok_or_else(agent_command_unsupported)?;
-                self.start_agent_terminal(command, project_root, cwd, window, cx)
-            }
-            RuntimeMutation::AgentFork {
-                source,
-                session_id,
-                project_root,
-                cwd,
-            } => {
-                let kind = crate::ai_agents::AgentKind::parse(&source)
-                    .ok_or_else(invalid_request_error)?;
-                let command = kind
-                    .fork_command(&session_id)
-                    .ok_or_else(agent_command_unsupported)?;
-                self.start_agent_terminal(command, project_root, cwd, window, cx)
-            }
+            // Agent 启动由 handle_runtime_mutation 延迟到注入落定后回执。
+            RuntimeMutation::AgentStart { .. }
+            | RuntimeMutation::AgentResume { .. }
+            | RuntimeMutation::AgentFork { .. } => Err(invalid_request_error()),
             RuntimeMutation::PanelClose { view, documents } => {
                 self.start_runtime_panel_close(view, documents, window, cx)
             }
@@ -744,39 +708,147 @@ impl AppRoot {
         }
     }
 
+    /// 构造 AgentCatalog 命令，并把回执延迟到真实提示符注入落定。
+    fn start_runtime_agent(
+        &mut self,
+        mutation: RuntimeMutation,
+        completion: &std::sync::mpsc::SyncSender<Result<RuntimeMutationReply, JsonRpcError>>,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> RuntimeMutationDispatch {
+        let command = match mutation {
+            RuntimeMutation::AgentStart {
+                kind,
+                project_root,
+                cwd,
+            } => {
+                let kind = match crate::ai_agents::AgentKind::parse(&kind) {
+                    Some(kind) => kind,
+                    None => return RuntimeMutationDispatch::Reply(Err(invalid_request_error())),
+                };
+                Ok((kind.catalog().builtin_command.to_owned(), project_root, cwd))
+            }
+            RuntimeMutation::AgentResume {
+                source,
+                session_id,
+                session_file,
+                project_root,
+                cwd,
+            } => {
+                let session = slterm_agents::AgentSession {
+                    source,
+                    session_id,
+                    session_file,
+                };
+                session
+                    .resume_command()
+                    .ok_or_else(agent_command_unsupported)
+                    .map(|command| (command, project_root, cwd))
+            }
+            RuntimeMutation::AgentFork {
+                source,
+                session_id,
+                project_root,
+                cwd,
+            } => {
+                let kind = match crate::ai_agents::AgentKind::parse(&source) {
+                    Some(kind) => kind,
+                    None => return RuntimeMutationDispatch::Reply(Err(invalid_request_error())),
+                };
+                kind.fork_command(&session_id)
+                    .ok_or_else(agent_command_unsupported)
+                    .map(|command| (command, project_root, cwd))
+            }
+            _ => return RuntimeMutationDispatch::Reply(Err(invalid_request_error())),
+        };
+        let (command, project_root, cwd) = match command {
+            Ok(parts) => parts,
+            Err(error) => return RuntimeMutationDispatch::Reply(Err(error)),
+        };
+        self.start_agent_terminal(command, project_root, cwd, completion.clone(), window, cx)
+    }
+
     /// 新建终端后把 AgentCatalog 构造的命令排入首个真实提示符注入。
+    ///
+    /// 回执只在注入成功或明确失败时发送；回执方断开或 View 销毁时不补写，
+    /// 由服务端按结果不明处理。
     fn start_agent_terminal(
         &mut self,
         command: String,
         project_root: Option<String>,
         cwd: Option<String>,
+        completion: std::sync::mpsc::SyncSender<Result<RuntimeMutationReply, JsonRpcError>>,
         window: &mut Window,
         cx: &mut Context<'_, Self>,
-    ) -> Result<(), JsonRpcError> {
-        let project_root = project_root
+    ) -> RuntimeMutationDispatch {
+        let project_root = match project_root
             .map(CanonicalPath::new)
             .transpose()
-            .map_err(|_| invalid_request_error())?;
-        let cwd = cwd
+            .map_err(|_| invalid_request_error())
+        {
+            Ok(root) => root,
+            Err(error) => return RuntimeMutationDispatch::Reply(Err(error)),
+        };
+        let cwd = match cwd
             .map(CanonicalPath::new)
             .transpose()
-            .map_err(|_| invalid_request_error())?;
-        let panel_id = self
-            .new_terminal_from_request(self.shell.clone(), project_root, cwd, window, cx)
-            .map_err(runtime_mutation_error)?;
-        let terminal_id = self
-            .terminal_identity(panel_id, cx)
-            .ok_or_else(|| not_ready_error("terminal panel missing"))?;
-        let project_id = self
+            .map_err(|_| invalid_request_error())
+        {
+            Ok(cwd) => cwd,
+            Err(error) => return RuntimeMutationDispatch::Reply(Err(error)),
+        };
+        let panel_id =
+            match self.new_terminal_from_request(self.shell.clone(), project_root, cwd, window, cx)
+            {
+                Ok(panel_id) => panel_id,
+                Err(error) => {
+                    return RuntimeMutationDispatch::Reply(Err(runtime_mutation_error(error)));
+                }
+            };
+        let terminal_id = match self.terminal_identity(panel_id, cx) {
+            Some(terminal_id) => terminal_id,
+            None => {
+                return RuntimeMutationDispatch::Reply(Err(not_ready_error(
+                    "terminal panel missing",
+                )));
+            }
+        };
+        let project_id = match self
             .snapshot
             .terminal(terminal_id)
             .map(slterm_workspace::TerminalRecord::project_id)
-            .ok_or_else(|| not_ready_error("terminal record missing"))?;
-        let (_, view) = self
-            .terminal_panel(project_id, terminal_id, cx)
-            .ok_or_else(|| not_ready_error("terminal panel missing"))?;
-        view.update(cx, |view, cx| view.schedule_agent_command(command, cx));
-        Ok(())
+        {
+            Some(project_id) => project_id,
+            None => {
+                return RuntimeMutationDispatch::Reply(Err(not_ready_error(
+                    "terminal record missing",
+                )));
+            }
+        };
+        let (_, view) = match self.terminal_panel(project_id, terminal_id, cx) {
+            Some(panel) => panel,
+            None => {
+                return RuntimeMutationDispatch::Reply(Err(not_ready_error(
+                    "terminal panel missing",
+                )));
+            }
+        };
+        let callback: crate::gpui_terminal::AgentCommandCompletion = Box::new(move |outcome| {
+            let reply = match outcome {
+                crate::gpui_terminal::AgentCommandOutcome::Injected => {
+                    RuntimeMutationReply::Done(Ok(()))
+                }
+                crate::gpui_terminal::AgentCommandOutcome::Failed => {
+                    RuntimeMutationReply::Done(Err(not_ready_error("agent injection failed")))
+                }
+            };
+            // 发送端断开由服务端按结果不明处理，不伪造失败或成功。
+            let _ = completion.try_send(Ok(reply));
+        });
+        view.update(cx, |view, cx| {
+            view.schedule_agent_command(command, Some(callback), cx);
+        });
+        RuntimeMutationDispatch::Deferred
     }
 
     /// 写方法必须证明目标终端当前的对外 Agent 身份与请求一致。

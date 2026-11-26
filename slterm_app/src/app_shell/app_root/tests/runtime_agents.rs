@@ -40,6 +40,11 @@ fn dispatch_mutation(
             );
         });
     });
+    // Agent 回执延迟到提示符注入超时落定；推进虚拟时钟让注入发生。
+    window
+        .executor()
+        .advance_clock(std::time::Duration::from_secs(11));
+    window.run_until_parked();
     match response.try_recv().expect("AppRoot 必须返回写意图回执") {
         Ok(crate::app_shell::RuntimeMutationReply::Done(result)) => result,
         Ok(crate::app_shell::RuntimeMutationReply::Git(_))
@@ -258,16 +263,23 @@ fn runtime_agent_read_and_wait_require_matching_identity(cx: &mut TestAppContext
 fn runtime_agent_start_injects_catalog_builtin_command(cx: &mut TestAppContext) {
     let (root, mut window, _state) = open_root(cx);
     add_project(&root, &mut window, PROJECT_A, "D:/work/a");
-    dispatch_mutation(
-        &root,
-        &mut window,
-        crate::local_control::RuntimeMutation::AgentStart {
-            kind: "cursor".to_owned(),
-            project_root: None,
-            cwd: None,
-        },
-    )
-    .expect("启动 Cursor 必须成功");
+    let (completion, response) = mpsc::sync_channel(1);
+    window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.handle_shell_event(
+                SltermShellEvent::RuntimeMutation {
+                    mutation: crate::local_control::RuntimeMutation::AgentStart {
+                        kind: "cursor".to_owned(),
+                        project_root: None,
+                        cwd: None,
+                    },
+                    completion,
+                },
+                window,
+                cx,
+            );
+        });
+    });
 
     let command = root.read_with(cx, |root, cx| {
         let terminal_id = root
@@ -288,6 +300,19 @@ fn runtime_agent_start_injects_catalog_builtin_command(cx: &mut TestAppContext) 
         Some("agent"),
         "必须注入 AgentCatalog 入口名而非 slug"
     );
+
+    assert!(
+        response.try_recv().is_err(),
+        "提示符注入落定前不得提前报告成功"
+    );
+    window
+        .executor()
+        .advance_clock(std::time::Duration::from_secs(11));
+    window.run_until_parked();
+    assert!(matches!(
+        response.try_recv().expect("注入落定后必须回执"),
+        Ok(crate::app_shell::RuntimeMutationReply::Done(Ok(())))
+    ));
 }
 
 /// 锚：start/resume/fork 各建一个终端；未知 CLI 与不支持的动作明确拒绝。

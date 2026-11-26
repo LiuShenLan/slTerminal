@@ -19,6 +19,8 @@ pub(crate) mod session_pump;
 pub(crate) mod shell_line;
 pub(crate) mod view;
 
+pub(crate) use view::restore::{AgentCommandCompletion, AgentCommandOutcome};
+
 use gpui::{App, KeyBinding};
 
 // 终端按键上下文与 Tab 动作(上游 terminal/mod.rs 同构):终端必须先于

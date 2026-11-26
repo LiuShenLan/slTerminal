@@ -43,8 +43,10 @@ use crate::secrets::{CredentialStore, SecretBytes, WindowsCredentialStore};
 pub(super) const HANDOVER_REPLY_TIMEOUT: Duration = Duration::from_secs(4);
 /// 快照只读前台内存；2 秒足够覆盖事件泵唤醒与回执调度。
 pub(super) const SNAPSHOT_REPLY_TIMEOUT: Duration = Duration::from_secs(2);
-/// 写意图在壳内执行的完成回执上限；与 handover 的 4 秒一致。
+/// 普通写意图在壳内执行的完成回执上限；与 handover 的 4 秒一致。
 const MUTATION_REPLY_TIMEOUT: Duration = Duration::from_secs(4);
+/// Agent 启动回执覆盖首个真实提示符注入；视图超时为 10 秒，另留余量。
+const AGENT_MUTATION_REPLY_TIMEOUT: Duration = Duration::from_secs(12);
 const PROTOCOL_DOMAIN: &[u8] = b"slterm-runtime-v2";
 const RUNTIME_SCHEMA: &[u8] = include_bytes!("../../../assets/runtime-api-v2.schema.json");
 
@@ -406,6 +408,14 @@ impl LocalControlService {
             let mutation_id = request.mutation_id.clone();
             let expected_revision = request.expected_revision;
             let method = request.mutation.method();
+            let reply_timeout = match &request.mutation {
+                super::mutations::RuntimeMutation::AgentStart { .. }
+                | super::mutations::RuntimeMutation::AgentResume { .. }
+                | super::mutations::RuntimeMutation::AgentFork { .. } => {
+                    AGENT_MUTATION_REPLY_TIMEOUT
+                }
+                _ => MUTATION_REPLY_TIMEOUT,
+            };
             dispatcher.dispatch(
                 DispatchRequest {
                     client_id: &client_id,
@@ -417,7 +427,7 @@ impl LocalControlService {
                     resource_generations: BTreeMap::new(),
                 },
                 || match try_send_runtime_mutation(&mutation_events, request.mutation) {
-                    Ok(receipt) => match receipt.recv_timeout(MUTATION_REPLY_TIMEOUT) {
+                    Ok(receipt) => match receipt.recv_timeout(reply_timeout) {
                         Ok(Ok(RuntimeMutationReply::Done(Ok(())))) => {
                             DispatchOutcome::Succeeded(serde_json::json!({}))
                         }

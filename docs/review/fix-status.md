@@ -227,7 +227,7 @@
 | 分页游标不绑定资源身份，也接受非 UTF-8 字符边界偏移 | 已修：`ReadCursor` v2 绑定资源身份散列（终端＋agent 身份、Git 项目＋路径），偏移落在 UTF-8 续字节立即失效；测试 `cursors_are_bound_to_resource_identity_and_character_boundaries`、`stale_generation_or_revision_invalidates_the_cursor` |
 | Handover 客户端不核对 hello 协议版本与合同散列 | 已修：客户端比较 hello 的 `protocol_sha256`／`schema_sha256` 与本实例合同，失配在发送 handover 前返回 `ContractMismatch`；发现记录协议版本仍由 `DiscoveryRecord::validate` 核对；测试 `client_rejects_a_contract_hash_mismatch_before_handover` |
 | git.open_diff/git.open_deleted 超时按失败处理但打开可能仍完成 | 已修：打开事件投递后回执超时或断连返回 `GitOpenOutcome::Unknown`，派发器记为可查询 `OutcomeUnknown`，只有落定回执才成功；测试 `git_open_timeout_reports_unknown_outcome`、`git_open_unknown_outcome_is_not_reported_as_failure` |
-| agent.start/resume/fork 在提示符注入前报告成功 | 待修 |
+| agent.start/resume/fork 在提示符注入前报告成功 | 已修：Agent 启动写意图延迟为 `RuntimeMutationDispatch::Deferred`，完成回调只在真实 PTY 写入成功或明确失败时回执，取消／销毁不回写并按 OutcomeUnknown 处理；服务端 Agent 写回执上限扩至 12 秒覆盖 10 秒提示符超时；测试 `runtime_agent_start_injects_catalog_builtin_command`、`explicit_agent_injection_reports_failure_without_a_worker` |
 | 封闭文本字段在 DTO 与 schema 中仍是自由字符串 | 待修 |
 
 ## 脚本、发布、许可与依赖
