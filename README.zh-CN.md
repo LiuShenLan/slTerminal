@@ -6,13 +6,14 @@ slTerminal 是单进程 GPUI 应用：单窗口单实例、仅暗色模式、GPU
 
 ## 功能
 
-- **原生终端核心** — VT 解析、ConPTY、滚动回看、选择、复制/粘贴、Shell 集成，以及 Win10 的新版 ConPTY 捆绑回退。
-- **标签页与分屏** — 终端标签页、网格分屏、窗格缩放、拖拽停靠、终端标签页会话恢复。
-- **AI CLI 集成** — AI CLI 的屏幕检测规则、Claude Code / Kimi / Codex / Pi / OpenCode 的 hook 安装、Agent 状态投影，以及 Claude Code 与 Codex 会话历史。
-- **文件与编辑** — 文件浏览器、源码编辑器、Markdown/图片标签页、只读双栏 diff、git gutter 与 Markdown 数学渲染。
-- **设置与主题** — 设置中心（应用/外观/配置/交互/高级/本地化/重置 + Agent 组）；内置暗色主题（默认 Linear）；中英双语界面。
-- **系统集成** — 托盘、Windows toast 通知、任务栏进度、开机启动、窗口材质与壁纸、更新检查与下载。
-- **安全** — 凭据只存 Windows 凭据管理器、设置写审计、严格白名单的本地加密备份。
+- **原生终端核心** — VT 解析、ConPTY、有界滚动回看与只读搜索、选择、复制/粘贴守卫、Shell 集成、补全，以及 Win10 的新版 ConPTY 捆绑运行时。
+- **项目与工作区** — 单窗口单实例；项目切换保留运行中的终端；面板组、分隔线、布局与逐视图状态按稳定 `ViewKey` 恢复。
+- **共享文档** — 同一真实文件跨项目只有一份实时 Document；Editor、Markdown 与 Diff 共享文本、撤销、脏状态与外部冲突；自动保存与崩溃恢复支持显式重授权。
+- **侧栏** — 活动栏、带计划式文件操作与回收站删除的文件浏览器、Commit 视图与 Agent 全局文件根。
+- **AI CLI 集成** — Claude Code、Codex、OpenCode、Kimi、Pi 与 OhMyPi 的 hook 安装与状态信号；终端画面状态兜底与 Agent 能力范围。
+- **外观与设置** — 仅暗色；内置与自定义纯颜色主题（默认 Linear）、窗口材质、字体与本地背景图；中英双语界面。
+- **Runtime 控制面** — 仅 loopback 的 Runtime v2：发现、快照、项目激活事件与面板/终端操作；token 只存 Windows 凭据管理器。
+- **安全** — PathPolicy 授权、设置写审计、严格白名单的本地加密备份。
 - **打包** — 本地可复现发布链：Inno Setup 安装器、便携 zip、SHA-256 校验与体积预算钉测试。
 
 ## 环境要求
@@ -47,6 +48,7 @@ cargo clippy --workspace --all-targets
 cargo fmt --all -- --check
 python scripts/check_architecture.py
 python scripts/check_doc_policy.py full
+python scripts/check_traceability.py
 python scripts/check_brand_regress.py staged
 ```
 

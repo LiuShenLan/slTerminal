@@ -21,24 +21,24 @@
 
 ### 当前进度
 
-状态锚：**2026-11-26，全部阶段验收完成。**
+状态锚：**2026-11-26 的最近阶段验收记录；命名阶段的历史验收不表示发布就绪。**
 
-当前实施位置：**全部阶段完成；安装器与发布包实机项按清单在发布机执行。**
+当前实施位置：**评审修复与未接线产品面补齐进行中；安装器与发布包实机项仍待发布机核验。**
 
 | 命名阶段 | 状态 | 验收日期 | commit hash | 测试证据／阻塞事实 |
 |---|---|---|---|---|
-| 依赖基线与删减 | 已验收 | 2026-10-26 | `f5b8bf455e2e7357b4d6cbff6c716b0dfeaa09f8` | `grammar_audit`、全量 workspace、GPUI／ConPTY 与脚本门禁通过；[真机证据](../../.claude/docs/architecture/provenance.md)与[许可及体积基线](../../.claude/docs/release/packaging.md)已核验。 |
-| 领域基础 | 已验收 | 2026-10-26 | `c46f0ac048721db82b645f88d3c7ea24c5c2914d` | 临时双根下的数据库事务与损坏分流、授权能力并集、设置单字段回退、原子写及审计对账用例通过；全量 workspace、GPUI、脚本与静态门禁全绿；数据根环境读取仅限启动入口。 |
-| 工作区与生命周期 | 已验收 | 2026-11-22 | `59fe311f46162939dcfeb8f7951955c0b1eaadd4` | `workspace_project_switch_preserves_instances`、`integration_batch_close`、`workspace_startup_layout_before_snapshots`、`handover_rejects_unauthorized_cwd` 等验收与回归例通过；GPUI 全特性、全量 workspace、core release、脚本及静态门禁全绿。 |
-| Document 与文本视图 | 已验收 | 2026-11-22 | `59fe311f46162939dcfeb8f7951955c0b1eaadd4` | `integration_document_global_identity`、`document_autosave_waits_for_all_views_to_blur`、`integration_snapshot_quota`、`ime_commits_utf16_edits_through_the_shared_document` 等主责锚通过；全量 workspace、GPUI 全特性、core release、脚本及静态门禁全绿。 |
+| 依赖基线与删减 | 已验收 | 2026-10-26 | `e4f4d88b` | `javascript_grammar_loads_with_real_highlights`、全量 workspace、GPUI／ConPTY 与脚本门禁通过；[真机证据](../../.claude/docs/architecture/provenance.md)与[许可及体积基线](../../.claude/docs/release/packaging.md)已核验。 |
+| 领域基础 | 已验收 | 2026-10-26 | `c38267b2` | 临时双根下的数据库事务与损坏分流、授权能力并集、设置单字段回退、原子写及审计对账用例通过；全量 workspace、GPUI、脚本与静态门禁全绿；数据根环境读取仅限启动入口。 |
+| 工作区与生命周期 | 已验收 | 2026-11-22 | `ed4da6df` | `workspace_project_switch_preserves_instances`、`integration_batch_close`、`workspace_startup_layout_before_snapshots`、`handover_rejects_unauthorized_cwd` 等验收与回归例通过；GPUI 全特性、全量 workspace、core release、脚本及静态门禁全绿。 |
+| Document 与文本视图 | 已验收 | 2026-11-22 | `97cb2b3c` | `integration_document_global_identity`、`document_autosave_waits_for_all_views_to_blur`、`integration_snapshot_quota`、`ime_commits_utf16_edits_through_the_shared_document` 等主责锚通过；全量 workspace、GPUI 全特性、core release、脚本及静态门禁全绿。 |
 | 终端、补全与学习 | 已验收 | 2026-11-23 | `88e3b4a9c61f5cf6a53922257d0c1fc4d583a833` | `integration_terminal_restore`、真实 ConPTY 自动／懒启动与失效 cwd 回退、`terminal_restore_visibility_and_exit_state`、`integration_pty_limit` 等回归锚通过；全量 workspace、core release、脚本及静态门禁全绿。 |
 | Markdown 与安全资源 | 已验收 | 2026-11-23 | `a6eb9f56b2483a56a0c3017c3be21051af5c78e1` | `markdown_source_render_share_document`、`markdown_shared_document_autosave`、`markdown_panel_restores_persistent_reading_state`、真实拖选／查找与退出守卫回归通过；全量 workspace、GPUI 全特性、core release、脚本及静态门禁全绿。 |
-| 文件与 Git | 已验收 | 2026-11-24 | `87beb99` | Explorer、Commit、Diff、GitShow 全部验收锚（含 `explorer_repo_root_does_not_expand_tree_root`、`commit_rollback_preserves_staged_changes`、`commit_staged_added_delete_sequence`、`diff_hidden_head_refresh_coalesced`、`gitshow_fixed_commit_after_head_move`）通过；全量 workspace、GPUI 全特性、core release、脚本及静态门禁全绿。 |
-| Agent 与 Hooks | 已验收 | 2026-11-25 | `6e1fea36` | 能力目录、历史扫描／恢复／隔离批次与撤销、Agent 文件树、hook 小进程桥锚全量自动化；Hooks 编辑页新增 `hooks_page_loads_saves_external_guard_and_discards`，AgentHooks 页新增 `agent_hooks_page_renders_status_and_toggles_through_injected_ports`；全量 workspace、GPUI 全特性（2049 passed）、core release（141 passed）与脚本门禁（95 tests）全绿。 |
-| 设置、主题与恢复 | 已验收 | 2026-11-25 | `6e1fea36` | `settings_single_queue_across_views`、`settings_overlay_controls_write_runtime_values_and_queue`、`theme_import_complete_or_zero_write`、`backup_tamper_rejected_zero_write`、`backup_interrupted_restore_rolls_back`、`staged_restore_is_applied_at_startup_and_rotates_store_epoch`、`interrupted_apply_is_rolled_back_on_restart`、`backup_undo_fingerprint_conflict`、`backup_cross_machine_requires_relocation`、`backup_restore_does_not_restore_credentials` 通过；DPAPI 恢复点与维护期世代轮换已落地；全量 workspace、GPUI 全特性、core release 与脚本门禁全绿。 |
-| Runtime v2 | 已验收 | 2026-11-26 | `4c77058549cc1ea3156ce373f6e33cfafc1dc312` | 全部线缆方法族（含 Git 破坏写、面板打开/保存/关闭、App 聚焦/非交互关闭、项目移除策略）、单实例同构、凭据边界与诊断 token 白名单锚（`runtime_token_absent_from_materials`）通过；全量 workspace、GPUI 全特性、core release 与脚本门禁全绿。 |
-| Windows 与发布 | 已验收 | 2026-11-26 | `9c76616b` | 平台接入（WindowsIntegration、窗口几何、套餐调度、通知与任务栏、i18n 热切换、更新守卫与启动对账、诊断白名单、清理）切片全绿；发布钉测试（profile、清单、体积预算、随包运行时）PASS；debug 构建产物真实运行矩阵（单实例窗口、第二实例移交、关窗退出、`clean_shutdown` 落盘、无残留进程）通过；安装器与发布包实机项按豁免留发布机。 |
-| 全量验收 | 已验收 | 2026-11-26 | `9c76616b` | 八个跨域验收锚自动化核销；全量 workspace、GPUI、core release、两套 clippy、架构／文档策略／禁名门禁与脚本自测全绿；许可清单按锁文件原子重建并复核通过；敏感材料扫描仅命中假值占位。 |
+| 文件与 Git | 已验收 | 2026-11-24 | `0c92d3f5` | Explorer、Commit、Diff、GitShow 全部验收锚（含 `explorer_repo_root_does_not_expand_tree_root`、`integration_commit_rollback`、`commit_staged_added_delete_sequence`、`diff_hidden_head_refresh_coalesced`、`gitshow_fixed_commit_after_head_move`）通过；全量 workspace、GPUI 全特性、core release、脚本及静态门禁全绿。 |
+| Agent 与 Hooks | 已验收 | 2026-11-25 | `aadca3fa` | 能力目录、历史扫描／恢复／隔离批次与撤销、Agent 文件树、hook 小进程桥锚全量自动化；Hooks 编辑页新增 `hooks_page_loads_saves_external_guard_and_discards`，AgentHooks 页新增 `agent_hooks_page_renders_status_and_toggles_through_injected_ports`；全量 workspace、GPUI 全特性、core release 与脚本门禁全绿。 |
+| 设置、主题与恢复 | 已验收 | 2026-11-25 | `d9fba527` | `settings_single_queue_across_views`、`settings_overlay_controls_write_runtime_values_and_queue`、`theme_import_complete_or_zero_write`、`backup_tamper_rejected_zero_write`、`staged_restore_is_applied_at_startup_and_rotates_store_epoch`、`interrupted_apply_is_rolled_back_on_restart`、`backup_cross_machine_requires_relocation`、`maintenance_restore_leaves_credentials_and_unlisted_files_untouched` 通过；DPAPI 恢复点与维护期世代轮换已落地；全量 workspace、GPUI 全特性、core release 与脚本门禁全绿。 |
+| Runtime v2 | 已验收 | 2026-11-25 | `b47e9b92` | 全部线缆方法族（含 Git 破坏写、面板打开/保存/关闭、App 聚焦/非交互关闭、项目移除策略）、单实例同构、凭据边界与诊断 token 白名单锚（`runtime_token_absent_from_materials`）通过；全量 workspace、GPUI 全特性、core release 与脚本门禁全绿。 |
+| Windows 与发布 | 已验收 | 2026-11-26 | `4a82ca15` | 平台接入（WindowsIntegration、窗口几何、套餐调度、通知与任务栏、i18n 热切换、更新守卫与启动对账、诊断白名单、清理）切片全绿；发布钉测试（profile、清单、体积预算、随包运行时）PASS；debug 构建产物真实运行矩阵（单实例窗口、第二实例移交、关窗退出、`clean_shutdown` 落盘、无残留进程）通过；安装器与发布包实机项按豁免留发布机。 |
+| 全量验收 | 已验收 | 2026-11-26 | `f8c42a32` | 跨域验收锚自动化核销；全量 workspace、GPUI、core release、两套 clippy、架构／文档策略／禁名门禁与脚本自测全绿；许可清单按锁文件原子重建并复核通过；敏感材料扫描仅命中假值占位。 |
 
 ### 更新方式
 

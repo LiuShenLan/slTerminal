@@ -40,14 +40,14 @@
 
 | 行为切片 | 前置 | 交付与验收锚 |
 |---|---|---|
-| 布局命令与 GPUI 接线 | 既有 `ProjectLayout` 转换对与稳定身份 | 把拆分、合并、移动、尺寸调整接入统一命令与 AppRoot；以“布局操作保留实例与焦点”为回归锚，不重建布局核心。 |
-| 页签溢出与完整列表 | 布局命令接线 | 实现横向溢出和完整列表面板，验证无 ViewKey 丢失、焦点与激活项一致；以“页签横向溢出与完整列表不丢失视图且焦点跟随激活项”为回归锚。 |
+| 布局命令与 GPUI 接线 | 既有 `ProjectLayout` 转换对与稳定身份 | 把拆分、合并、移动、尺寸调整接入统一命令与 AppRoot；以 `move_view_reuses_panel_and_focuses_moved_terminal`、`merge_groups_preserves_instances_and_focuses_actual_active`、`resize_split_changes_only_geometry` 为回归锚，不重建布局核心。 |
+| 页签溢出与完整列表 | 布局命令接线 | 实现横向溢出和完整列表面板，验证无 ViewKey 丢失、焦点与激活项一致；以 `narrow_tab_bar_scrolls_horizontally_without_losing_views`、`complete_list_activates_every_view_without_recreating_panels` 为回归锚。 |
 | 多项目运行态集成 | 既有 ProjectView 与 TerminalRegistry | 只补项目切换的跨域证据，确认实例、PTY 与隐藏输出不重建；以 `workspace_project_switch_preserves_instances` 及项目焦点恢复测试为回归锚。 |
 | 侧栏显隐跨域集成 | 既有 SideViewHost、TaskService | 复用现有实例语义补齐可见性集成证据；以 `integration_sidebar_visibility_semantics` 为回归锚，不重写侧栏生命周期。 |
-| 项目重命名、排序与查重失败 | 既有 `ProjectRegistry`、真实路径端口 | 接通剩余项目命令；以项目身份、布局、实例和真实路径查重失败相关测试为回归锚。 |
+| 项目重命名、排序与查重失败 | 既有 `ProjectRegistry`、真实路径端口 | 接通剩余项目命令；以 `project_rename_and_reorder_preserve_identity_layout_and_instances` 与真实路径查重失败用例为回归锚。 |
 | 组内批量关闭 | 既有 `CloseCoordinator`、布局命令 | 完成关闭其他／全部、空组清理与失败保留，以 `integration_batch_close` 为回归锚；共享 Document 的真实守卫留 Document 阶段扩展同一协调器。 |
 | 退出放弃的旧状态提示 | 既有全局退出与知情放弃链 | 补足最终提交失败后放弃的实际提示与测试证据；以 `close_abandon_warns_about_old_state` 为回归锚，不改变既有提交顺序。 |
-| 面板循环与关闭还焦 | 既有 FocusManager、PanelHost | 补齐 `Ctrl+Tab`／反向循环及剩余关闭落点，验证终端和编辑器不能截获全局路由。 |
+| 面板循环与关闭还焦 | 既有 FocusManager、PanelHost | 补齐 `Ctrl+Tab`／反向循环及剩余关闭落点，验证终端和编辑器不能截获全局路由；以 `ctrl_tab_cycles_all_project_panels_without_terminal_input`、`panel_cycle_keymap_is_global_in_terminal_and_editor_contexts` 为回归锚。 |
 | 任务结果代次与可见性复核 | AppRoot 所有权树、既有 TaskService | 完成隐藏后合并复核、过期结果丢弃和显式操作结果查询，以 `visibility_coalesces_refresh_and_drops_stale`、`operation_result_survives_view_hidden` 为回归锚。 |
 | 启动布局与快照对账骨架 | 布局持久化、既有 MaintenanceRunner | 保证布局先于快照且非法引用确定归一；只使用测试假端口，以 `workspace_startup_layout_before_snapshots`、`workspace_unrecoverable_isolated` 为回归锚，真实快照恢复器留 Document 阶段。 |
 | 单实例显式路径复核 | 既有 LocalControlServer 与 handover | 补齐显式 cwd 越权拒绝且不改投项目，以 `handover_rejects_unauthorized_cwd` 为回归锚；`OpenFile` 不在此阶段接占位链。 |
@@ -66,7 +66,7 @@
 | 行为切片 | 前置 | 交付与验收锚 |
 |---|---|---|
 | Document 聚合与真实打开 | 工作区 PanelHost、PathAuthority | 收编现有编辑入口为唯一 DocumentRegistry／DocumentSession，按文件身份去重并保证打开失败不留空 Panel；以 `integration_document_global_identity`、`path_file_identity_deduplicates_document` 为回归锚。 |
-| 编辑事务与撤销清脏 | DocumentSession | 实现 `EditTransaction`、`text_revision`、`TextStateId`、合并与预算；以 Rope 属性测试覆盖 Unicode、撤销／redo 和清脏。 |
+| 编辑事务与撤销清脏 | DocumentSession | 实现 `EditTransaction`、`text_revision`、`TextStateId`、合并与预算；以 `edit_transaction_applies_unicode_ranges_and_undo_restores_state_identity`、`saved_state_controls_dirty_across_undo_and_redo` 与 Unicode 属性测试为回归锚。 |
 | 编码与内容路由 | 真实文件读取端口、DocumentSession | 完成 BOM、编码、行尾、末尾换行、NUL、非法编码和大小阈值分流；以 `editor_encoding_and_binary_routing` 为回归锚。 |
 | 并发原子保存 | 编辑事务、原子文件端口 | 后台编码与写前复核，保存期间编辑保持当前脏态；覆盖 ACL、不可表示字符和 rename 失败，以 `path_capabilities_union_for_save`、`path_rechecks_redirect_before_write` 为回归锚。 |
 | 另存为与外部变化 | 并发保存、文件身份与授权代次 | 完成目标占用拒绝、外部修改／删除、共享冲突与位置重绑；以 `document_save_as_rejects_open_target`、`document_location_change_does_not_rebuild`、`document_retains_content_after_read_revoke` 为回归锚。 |
@@ -76,8 +76,8 @@
 | 后台查找、复制与替换全部 | Rope／Paged TextSource | 实现代次取消、完整复制、正则捕获和单撤销替换；以 `editor_replace_all_single_undo` 为回归锚。 |
 | 崩溃快照写入与配额 | TextStateId、原子文件与独立写队列 | 实现自描述快照、flush、配额和删除时机；以 `snapshot_quota_does_not_evict_dirty`、`integration_snapshot_quota` 为回归锚，并覆盖快照删除边界崩溃。 |
 | 快照启动恢复器 | 快照写入、既有 MaintenanceRunner | 注册真实快照恢复器，区分有主、无主与根外授权；以 `startup_reconciles_layout_before_snapshot`、`outside_snapshot_restores_without_disk_read`、`orphan_snapshot_requires_explicit_target`、`outside_document_restart_requires_authorization`、`integration_session_grant_restore` 为回归锚。 |
-| 语言注册与增量语法 | 编辑事务、既有 grammar 资产 | 完成封闭 LanguageRegistry、真实查询映射和 SyntaxWorker 中止；覆盖隐藏释放、revision 丢弃和重新可见重建。 |
-| 专用文本视图与 IME | DocumentSession、FocusManager | 收编现有视图为 Rope／Paged `TextSource`，完成可见行、布局缓存、选区、Unicode 显示宽度与 IME；禁止第二份实时 String 缓冲。 |
+| 语言注册与增量语法 | 编辑事务、既有 grammar 资产 | 完成封闭 LanguageRegistry、真实查询映射和 SyntaxWorker 中止；覆盖隐藏释放、revision 丢弃和重新可见重建；以 `language_registry_resolves_paths_and_markdown_aliases`、`every_registered_language_has_real_highlight_and_fold_queries`、`worker_applies_every_edit_in_a_transaction` 为回归锚。 |
+| 专用文本视图与 IME | DocumentSession、FocusManager | 收编现有视图为 Rope／Paged `TextSource`，完成可见行、布局缓存、选区、Unicode 显示宽度与 IME；禁止第二份实时 String 缓冲；以 `ime_commits_utf16_edits_through_the_shared_document`、`layout_cache_reuses_lines_and_invalidates_text_and_theme`、`rope_source_materializes_only_requested_lines_with_document_offsets` 为回归锚。 |
 | Editor 视图与身份集成 | 专用文本视图、PanelHost | 完成 ViewState、改名身份保持、普通视图去重、HTML 系统打开与跨项目 Editor 共享；以 `editor_view_state_restore`、`editor_external_rename_keeps_view_type`、`editor_html_system_open_does_not_save`、`document_rename_preserves_identity_and_view`、`document_duplicate_view_focuses_existing` 为回归锚，跨项目 Diff 共享在 Diff 接线后最终核销。 |
 | 真实 OpenFile 移交 | Editor 视图集成、既有 LocalControlServer | 将 `instance.handover` 的 `OpenFile` 接入真实 Document 与 Editor 落点；以 `integration_cross_project_views` 为回归锚，越权或打开失败不得创建空 Panel。 |
 
@@ -93,15 +93,15 @@
 
 | 行为切片 | 前置 | 交付与验收锚 |
 |---|---|---|
-| TerminalRegistry 与单 worker 所有权 | Document 阶段完成、既有终端记录 | 收紧 TerminalId、PTY 代次、进程身份和有界端点，确保 Panel 与 Runtime 不直持 Term 或子进程句柄。 |
+| TerminalRegistry 与单 worker 所有权 | Document 阶段完成、既有终端记录 | 收紧 TerminalId、PTY 代次、进程身份和有界端点，确保 Panel 与 Runtime 不直持 Term 或子进程句柄；以 `stale_worker_after_reconnect_cannot_mutate_grid_or_reach_new_proxy`、`notifier_reports_input_and_resize_backpressure` 为回归锚。 |
 | 真实 ConPTY 与存活上限 | 单 worker 所有权 | 接通真实创建、输入输出、退出保留与失败重试；核销 `terminal_live_pty_limit`、`integration_pty_limit`。 |
 | 输出背压与隐藏恢复 | ConPTY worker | 同时限制块数与字节，隐藏只暂停绘制且恢复最新画面；核销 `terminal_hidden_output_backpressure`。 |
-| resize 水位与重连代次 | 输出背压 | 完成水位后排版、初始尺寸、重连分隔和旧搜索／读取失效；真实 ConPTY 覆盖洪峰、resize 与重连。 |
+| resize 水位与重连代次 | 输出背压 | 完成水位后排版、初始尺寸、重连分隔和旧搜索／读取失效；真实 ConPTY 覆盖洪峰、resize 与重连；以 `output_queue_watermark_leaves_later_output_for_the_new_geometry` 与真实 PTY 集成为回归锚。 |
 | Shell 探测与 cwd 授权 | ConPTY、PathPolicy | 收编显式／默认 Shell、确定性探测和终端 cwd 复核；以 `new_terminal_cwd_defaults_to_project_root`、`new_terminal_cwd_rejects_paths_outside_project_without_changing_snapshot` 为回归锚，核销 `integration_new_terminal_cwd`。 |
-| ShellLineTracker 与执行确认 | Shell 适配器、PTY 语义事件 | 闭合 PowerShell／cmd 的本地镜像、回显对账、失效条件与执行确认；未闭合前不得开放采集或补全。 |
+| ShellLineTracker 与执行确认 | Shell 适配器、PTY 语义事件 | 闭合 PowerShell／cmd 的本地镜像、回显对账、失效条件与执行确认；未闭合前不得开放采集或补全；以 `echo_mismatch_blocks_completion_until_match`、`execution_is_confirmed_only_by_start_then_done`、`unsupported_shell_never_opens_the_mirror` 为回归锚。 |
 | 学习写队列与清空 | 可信 Shell 行、独立学习库端口 | 完成可信采集、去重／frecency、容量、损坏暂停和代次清空；核销 `learning_clear_cancels_pending_writes`、`integration_local_learning_data`。 |
-| 纯补全方言与编辑计算 | ShellLineTracker | 收编 `slterm_completions` 的方言、匹配和 `CompletionEdit`，覆盖原文指纹与接受后不执行。 |
-| GitFacade 只读收编 | 既有 `git_completion` 查询与执行元数据 | 在 application 服务建立语义化 refs／remotes 只读入口，迁移现有消费者；覆盖取消、超时、输出上限、禁止网络与写命令，禁止另建 argv 通道。 |
+| 纯补全方言与编辑计算 | ShellLineTracker | 收编 `slterm_completions` 的方言、匹配和 `CompletionEdit`，覆盖原文指纹与接受后不执行；以 `for_program_maps_the_four_shell_dialects`、`completion_edit_rejects_stale_revision_and_original_text` 为回归锚。 |
+| GitFacade 只读收编 | 既有 `git_completion` 查询与执行元数据 | 在 application 服务建立语义化 refs／remotes 只读入口，迁移现有消费者；覆盖取消、超时、输出上限、禁止网络与写命令，禁止另建 argv 通道；以 `real_remotes_are_read_through_the_semantic_facade`、`real_remote_guesses_follow_configuration_and_refspecs` 为回归锚。 |
 | CompletionService 调度与来源 | 纯补全核心、GitFacade 只读入口、可信边界 | 完成历史、目录、命令、路径、Git 与静态项目脚本来源及代次取消；核销 `completion_generation_and_source_failure`、`terminal_trusted_line_completion_gate`、`integration_completion_trust_boundary`。 |
 | 按键、粘贴与 OSC 授权 | CommandRegistry、终端 worker | 完成保留键、括号粘贴、危险确认、OSC 8／52；核销 `terminal_osc52_authorization`，为统一重绑验收提供终端中断与补全上下文。 |
 | 只读回滚搜索 | 终端 worker 快照 | 搜索只读当前画面与回滚，新输出使旧结果失效；核销 `terminal_search_is_read_only`、`integration_terminal_search`。 |
@@ -119,11 +119,11 @@
 
 | 行为切片 | 前置 | 交付与验收锚 |
 |---|---|---|
-| Comrak 唯一块投影 | DocumentSession、Comrak | 完成 GFM、front matter、块模型、标题锚点、大纲、查找和链接事实；Mermaid 仅保留普通代码块。 |
-| 安全 HTML 白名单投影 | Comrak 投影、html5ever TreeSink | 完成有界白名单与危险语料，禁止 HTML／WebView 输出，为统一危险 HTML／SVG 验收提供 HTML 安全链。 |
+| Comrak 唯一块投影 | DocumentSession、Comrak | 完成 GFM、front matter、块模型、标题锚点、大纲、查找和链接事实；Mermaid 仅保留普通代码块；以 `source_ranges_preserve_unicode_and_multiline_block_boundaries`、`inline_projection_shares_styles_images_math_and_visible_ranges` 为回归锚。 |
+| 安全 HTML 白名单投影 | Comrak 投影、html5ever TreeSink | 完成有界白名单与危险语料，禁止 HTML／WebView 输出，为统一危险 HTML／SVG 验收提供 HTML 安全链；以 `unsafe_html_is_projected_to_bounded_whitelisted_nodes`、`oversized_html_fragment_degrades_without_touching_other_blocks` 为回归锚。 |
 | SVG 与本地图片安全链 | 安全 HTML 投影、PathAuthority、图片解码端口 | 完成 SVG 清洗、静态光栅化、逐资源授权、解码预算和缓存；核销 `markdown_unsafe_html_svg_blocked`、`markdown_outside_document_resource_not_authorized`。 |
 | 远程图片与链接分派 | 资源授权键、有界 HTTP 与系统打开端口 | 完成逐 URL 单次授权、srcset 独立判定、无重定向／凭据／Referer 和本地链接授权；核销 `markdown_remote_image_click_authorization`。 |
-| 本地公式与位图缓存 | 既有公式能力、主题 revision | 收编 OpenType MATH 布局、后台位图和失败降级，验证缓存键与零外部请求。 |
+| 本地公式与位图缓存 | 既有公式能力、主题 revision | 收编 OpenType MATH 布局、后台位图和失败降级，验证缓存键与零外部请求；以 `formula_bitmap_cache_keys_cover_source_layout_theme_and_zoom`、`formula_failures_preserve_source_and_do_not_poison_other_formulas` 为回归锚。 |
 | 虚拟化渐进渲染 | 块投影、公式／图片服务 | 完成视口分片、取消、单块失败与大文档强制降级；核销 `markdown_large_document_degradation`。 |
 | Markdown 双态与阅读状态 | GPUI 块视图、Editor 文本能力 | 源码／渲染共享 Document，接入统一自动保存和 ViewState；核销 `markdown_source_render_share_document`、`markdown_shared_document_autosave`、`markdown_view_state_restore`。 |
 
@@ -139,17 +139,17 @@
 
 | 行为切片 | 前置 | 交付与验收锚 |
 |---|---|---|
-| 共享 FileTreeModel | SideViewHost、PathPolicy | 完成分批读取、稳定排序、过滤、根代次与树边界；为 Explorer 仓库边界验收提供固定 ProjectRoot 的模型证据。 |
+| 共享 FileTreeModel | SideViewHost、PathPolicy | 完成分批读取、稳定排序、过滤、根代次与树边界；为 Explorer 仓库边界验收提供固定 ProjectRoot 的模型证据；以 `file_tree_batches_have_stable_directory_first_order`、`file_tree_filters_hidden_git_and_enforces_direct_child_boundaries`、`file_tree_rejects_stale_root_and_directory_read_generations` 为回归锚。 |
 | 根作用域 WatcherService | FileTreeModel、TaskService | 完成事件合并、可见性暂停、重新可见复核与所有者回收；核销 `explorer_hidden_refresh_coalesced`。 |
 | OperationPlan 与单项操作 | PathResolver、原子文件与回收站端口 | 完成新建、重命名、单项删除及执行前重解析；核销 `explorer_rechecks_links_before_mutation`，为链接与文件身份集成验收提供删除侧证据。 |
 | 批量复制、剪切与替换恢复 | OperationPlan、ManagedOperationJournal | 完成冲突聚合、部分成功、跨根规则与专属恢复器；核销 `explorer_paste_conflict_and_partial_success`、`explorer_rejects_cross_root_cut_and_descendant_paste`、`explorer_copy_capability_union`、`integration_links_and_file_identity`，覆盖真实提交边界崩溃。 |
-| GitFacade 状态与仓库绑定 | 终端阶段只读 GitFacade | 扩展同一服务实例，接入 porcelain v2、进程预算、仓库代次与绑定复核；为 PathPolicy 能力并集提供 RepoRoot 只读侧证据。 |
+| GitFacade 状态与仓库绑定 | 终端阶段只读 GitFacade | 扩展同一服务实例，接入 porcelain v2、进程预算、仓库代次与绑定复核；为 PathPolicy 能力并集提供 RepoRoot 只读侧证据；以 `repository_binding_survives_project_relocation` 与 `git_diff_snapshot_rejects_targets_outside_the_worktree` 为回归锚。 |
 | DiffBinding 与差异核心 | Document TextStateId、RepositoryBinding | 完成不可变输入、Myers 行对、空白模式、deadline 和按侧降级；核销 `diff_large_and_binary_side_degradation`、`diff_conflict_snapshot_is_immutable`。 |
 | GitShow 固定版本 | GitFacade、Paged TextSource | 完成固定对象读取、对象错误、大文件／二进制降级和系统打开中转；核销 `gitshow_fixed_commit_after_head_move`、`gitshow_duplicate_view_focuses`、`gitshow_refresh_reads_same_object`、`gitshow_missing_object_preserves_error`、`gitshow_large_and_binary_degradation`、`gitshow_view_state_restore`。 |
 | Diff GPUI 与 Editor 行标 | Diff 核心、专用文本视图 | 接入共享工作区 Document、HEAD 刷新、ViewState 与行标定位；核销 `diff_uses_shared_document_from_commit`、`diff_edit_shared_document`、`diff_save_uses_capability_union`、`editor_diff_share_document`、`editor_git_marker_opens_shared_diff`、`diff_hidden_head_refresh_coalesced`、`diff_view_state_restore_clears_transients`、`document_shared_across_projects`、`integration_git_document`。 |
 | Explorer 完整接线 | 文件操作、WatcherService、DocumentRegistry、TerminalRegistry | 完成内联编辑、打开复用、终端落点和 ViewState；核销 `explorer_open_reuses_document`、`explorer_terminal_open_rejects_invalid_cwd`、`explorer_inline_edit_not_committed_on_destroy`、`explorer_view_state_restore`、`explorer_repo_root_does_not_expand_tree_root`，为统一重绑验收提供文件树上下文。 |
 | Commit 模型与完整打开映射 | GitFacade 状态、Diff、GitShow | 完成分组、过滤、ignored、ViewState 和 Document／Diff／GitShow 落点；核销 `commit_opens_shared_document_diff`、`commit_gitshow_fixed_version`、`commit_view_state_restore`。 |
-| 通用回滚与写前重检 | OperationPlan、Document 关闭守卫、Journal 恢复器 | 完成脏 Document 决定、当前索引恢复和禁用形态；核销 `commit_rollback_document_guard`、`commit_rechecks_state_before_rollback`、`commit_rollback_preserves_staged_changes`、`commit_rollback_disabled_shapes`、`commit_deleted_restores_index_version`、`commit_rollback_capability_union`。 |
+| 通用回滚与写前重检 | OperationPlan、Document 关闭守卫、Journal 恢复器 | 完成脏 Document 决定、当前索引恢复和禁用形态；核销 `commit_rollback_document_guard`、`commit_rechecks_state_before_rollback`、`integration_commit_rollback`、`commit_rollback_disabled_shapes`、`commit_deleted_restores_index_version`、`commit_rollback_capability_union`。 |
 | 未暂存 rename 回滚 | 通用回滚、FileOperationService | 从索引恢复旧路径并清除新路径且不改索引，失败按部分成功报告；核销 `commit_unstaged_rename_rollback`，覆盖双路径提交边界崩溃。 |
 | staged added 删除与永久确认 | 通用回滚、回收站策略 | 先取消暂存再进入回收站，无回收站时再次明确确认；核销 `commit_staged_added_delete_sequence`、`commit_untracked_permanent_delete_requires_confirmation`。 |
 
@@ -165,22 +165,22 @@
 
 | 行为切片 | 前置 | 交付与验收锚 |
 |---|---|---|
-| AgentCatalog 收编 | 既有 `slterm_agents`、SettingsRegistry | 统一 AgentKind、别名、会话 ID 和 start／resume／fork 构造器，删除 UI 或 Runtime 的平行名单。 |
+| AgentCatalog 收编 | 既有 `slterm_agents`、SettingsRegistry | 统一 AgentKind、别名、会话 ID 和 start／resume／fork 构造器，删除 UI 或 Runtime 的平行名单；以 `catalog_covers_every_agent_kind`、`commands_are_exact_and_injection_safe` 为回归锚。 |
 | AgentRoot 注册与撤权 | PathAuthority、设置持久化 | 完成真实目录查重、独立能力、改路径和删除撤权；核销 `agent_root_duplicate_and_revocation`、`agent_root_default_capabilities`、`agent_root_real_directory_dedup`、`agent_root_path_change_resets_state_and_authorization`。 |
-| 活跃会话事件关联 | TerminalRegistry、AgentCatalog | 由终端事件派生关联，覆盖 PTY 代次失效、重复目标与纯 Shell 排除，不建立第二持久映射。 |
+| 活跃会话事件关联 | TerminalRegistry、AgentCatalog | 由终端事件派生关联，覆盖 PTY 代次失效、重复目标与纯 Shell 排除，不建立第二持久映射；以 `turn_done_updates_only_its_owning_pane`、`complete_hooks_own_every_state_even_when_screen_disagrees` 为回归锚。 |
 | 原生历史适配与可见扫描 | 本地文件读取、NavigationTree | 接入 Claude／Codex 有限元数据、来源失败保留和可见性调度；核销 `navigation_history_lexical_deepest_match`。 |
 | 历史恢复与分支 | AgentCatalog、终端恢复注入 | 完成归属、未归属项目确认、cwd 回退、Shell 就绪和去重重试；核销 `navigation_unowned_restore_requires_project_confirmation`、`navigation_restore_fallback_and_injection_retry`。 |
 | 历史隔离副本与来源删除 | ManagedOperationJournal、原子文件 | 建立批次与逐项清单，完成副本校验、指纹复核和部分失败；核销 `quarantine_batches_have_independent_deadlines`，覆盖副本与来源删除边界崩溃。 |
 | 历史隔离启动恢复器 | 隔离批次、既有 MaintenanceRunner | 在真实维护顺序注册恢复器，对账未完成批次且先于历史展示；核销 `quarantine_startup_reconciles_incomplete_batch`、`quarantine_restart_preserves_undo_window`、`navigation_transient_and_quarantine_restore`。 |
 | 全批撤销预检与恢复 | 隔离启动恢复器 | 重新检查绝对期限、状态、副本和目标指纹，任一失败零恢复；核销 `quarantine_undo_rechecks_deadline`、`quarantine_undo_rejects_external_target`、`integration_history_delete_undo`。 |
-| 隔离到期清理与 ZIP 导出 | 隔离批次状态机 | 到期只处理已完成批次，失败可重试或原子导出；导出不清除材料，覆盖清理提交边界崩溃。 |
-| 隔离永久删除确认 | 隔离清理与导出 | 独立实现显式永久删除及失败保留，不把导出当删除，不扩大诊断或备份边界。 |
-| Agent 文件树复用 | AgentRoot、FileTreeModel、FileOperationService | 完成根过滤、跨根操作、打开复用、ViewState 与监听回收；核销 `agent_files_default_capabilities`、`agent_files_write_does_not_imply_terminal`、`agent_files_cross_root_copy_and_cut`、`agent_files_open_reuses_document`、`agent_root_delete_preserves_document_and_pty`、`agent_root_capability_union_and_revoke`、`agent_files_filter_is_not_authorization`、`agent_files_view_state_restore`、`agent_files_visibility_controls_watchers`、`integration_path_capability_union`。 |
-| Hooks 目录与 JSON 子树草稿 | 既有 `slterm_hooks`、Settings 视图宿主 | 收编能力目录、适配声明、重复键／未知字段保留和三层草稿；不把普通输入草稿写入全局设置队列。 |
+| 隔离到期清理与 ZIP 导出 | 隔离批次状态机 | 到期只处理已完成批次，失败可重试或原子导出；导出不清除材料，覆盖清理提交边界崩溃。（到期清理与 ZIP 导出尚未实现，接线后补核销锚。） |
+| 隔离永久删除确认 | 隔离清理与导出 | 独立实现显式永久删除及失败保留，不把导出当删除，不扩大诊断或备份边界。（永久删除产品入口尚未实现，接线后补核销锚。） |
+| Agent 文件树复用 | AgentRoot、FileTreeModel、FileOperationService | 完成根过滤、跨根操作、打开复用、ViewState 与监听回收；核销 `agent_root_default_capabilities`、`agent_files_write_does_not_imply_terminal`、`agent_files_cross_root_copy_and_cut`、`agent_files_open_reuses_document`、`agent_root_delete_preserves_document_and_pty`、`agent_root_capability_union_and_revoke`、`agent_files_filter_is_not_authorization`、`agent_files_view_state_restore`、`agent_files_visibility_controls_watchers`、`integration_path_capability_union`。 |
+| Hooks 目录与 JSON 子树草稿 | 既有 `slterm_hooks`、Settings 视图宿主 | 收编能力目录、适配声明、重复键／未知字段保留和三层草稿；不把普通输入草稿写入全局设置队列；以 `hooks_draft_preserves_unknown_fields_and_rejects_invalid`、`hooks_drafts_are_isolated_per_panel_agent_and_layer` 为回归锚。 |
 | Hooks 外部修改与统一关闭守卫 | Hooks 草稿、HookService、CloseCoordinator | 完成写前重读、外部修改、项目移除和根重定位守卫；核销 `hooks_external_modification_guard`、`navigation_project_remove_uses_workspace_guard`、`navigation_relocation_guards_and_reassigns_history`、`repository_binding_survives_project_relocation`、`diff_does_not_rebind_after_relocation`、`integration_project_relocation`。 |
-| Hooks 子树原子保存 | PathPolicy 受限能力、原子文件 | 完成锁、备份、子树替换和代次前置，失败保留草稿且不覆盖外部修改。 |
+| Hooks 子树原子保存 | PathPolicy 受限能力、原子文件 | 完成锁、备份、子树替换和代次前置，失败保留草稿且不覆盖外部修改；以 `hooks_save_replaces_only_the_hooks_subtree_and_keeps_a_backup`、`hooks_save_backup_failure_keeps_original_untouched`、`hooks_external_modification_guard_blocks_stale_save` 为回归锚。 |
 | Hooks 注入与卸载恢复 | HookService、ManagedOperationJournal | 完成危险命令确认、注入／卸载恢复器和提交后清理可见；核销 `hooks_post_commit_cleanup_failure_is_visible`，覆盖真实提交边界崩溃。 |
-| hook 小进程事件桥 | Agent 活跃关联、Windows 命名管道端口 | 收编零依赖桥、白名单事件和显式生命周期；与 Runtime 传输保持隔离并验证无孤儿进程。 |
+| hook 小进程事件桥 | Agent 活跃关联、Windows 命名管道端口 | 收编零依赖桥、白名单事件和显式生命周期；与 Runtime 传输保持隔离并验证无孤儿进程；以 `ordinary_completed_payload_exits_silently`、`stdin_kept_open_cannot_pin_a_native_hook_executable`、`oversized_stdin_is_drained_but_never_forwarded_as_truncated_json` 为回归锚。 |
 
 **退出证据**：能力目录与命令构造测试、历史来源故障、逐批崩溃对账、全批撤销预检、Hooks 外部修改和注入提交边界通过；不形成第二长期正文库。
 
@@ -199,11 +199,11 @@
 | 普通设置导入导出与恢复默认 | 设置队列、完整字段元数据 | 独立于加密备份实现白名单操作，未知版本／命名空间和敏感字段严格分流；核销 `settings_import_rejects_unknown_or_credentials`、`settings_import_and_reset_preserve_secrets`。 |
 | 自定义主题完整 JSON | 既有 ThemeTokens、设置存储 | 收编完整 token／ANSI、UUIDv7、冲突、revision 改名和使用中删除；核销 `theme_import_complete_or_zero_write`、`integration_custom_theme`，零写入失败且不重载 Document／PTY。 |
 | CredentialFacade 统一隔离 | Windows 凭据管理器端口 | 收编套餐、Runtime 与 handover 专用目标、秘密清零和设置页不回显；以 `settings_plan_token_not_cli_credentials` 为后续集成锚。 |
-| BackupPayload 逻辑类别投影 | 设置、主题与工作区 DTO 稳定 | 完成类别选择、永久排除、逻辑工作区导出和跨机几何标记；核销 `backup_workspace_category_exclusions`，不复制物理库或任意文件。 |
+| BackupPayload 逻辑类别投影 | 设置、主题与工作区 DTO 稳定 | 完成类别选择、永久排除、逻辑工作区导出和跨机几何标记；目标锚 `backup_workspace_category_exclusions`（工作区类别尚未实现，待接线后核销），不复制物理库或任意文件。 |
 | 加密导出与整包鉴权 | BackupPayload、密码学依赖 | 以目标 `SLTMBK01` 格式替换旧实现，完成 AAD、大小边界、原子导出和篡改零写入；核销 `backup_tamper_rejected_zero_write`，后续恢复预览必须复用同一整包鉴权入口。 |
-| DPAPI 恢复点与关闭预检 | 加密备份、CredentialFacade、CloseCoordinator | 完成受控暂存、恢复预览、恢复点和关闭取消零材料；覆盖恢复点提交边界崩溃，为凭据排除验收提供恢复前证据。 |
-| 维护期应用与回滚 | 恢复点、既有 MaintenanceRunner | 注册维护请求恢复器，按类别应用、失败全回滚并更换 store_epoch；核销 `backup_interrupted_restore_rolls_back`、`backup_restore_does_not_restore_credentials`，旧代次写与事件全部失效。 |
-| 撤回冲突与跨机重定位 | 维护期恢复、PathAuthority | 完成指纹冲突保留、撤回恢复器和 `RelocationRequired`；核销 `backup_undo_fingerprint_conflict`、`backup_cross_machine_requires_relocation`、`integration_encrypted_backup`，未授权前不读正文或启动 PTY。 |
+| DPAPI 恢复点与关闭预检 | 加密备份、CredentialFacade、CloseCoordinator | 完成受控暂存、恢复预览、恢复点和关闭取消零材料；覆盖恢复点提交边界崩溃，为凭据排除验收提供恢复前证据；以 `recovery_point_is_encrypted_and_round_trips`、`staged_restore_is_dpapi_protected_and_carries_no_plaintext`、`discard_prepared_request_never_removes_started_material` 为回归锚。 |
+| 维护期应用与回滚 | 恢复点、既有 MaintenanceRunner | 注册维护请求恢复器，按类别应用、失败全回滚并更换 store_epoch；核销 `interrupted_apply_is_rolled_back_on_restart`、`maintenance_restore_leaves_credentials_and_unlisted_files_untouched`，旧代次写与事件全部失效。 |
+| 撤回冲突与跨机重定位 | 维护期恢复、PathAuthority | 完成指纹冲突保留、撤回恢复器和 `RelocationRequired`；目标锚 `backup_undo_fingerprint_conflict`（撤回产品能力尚未接线，待实现）、`backup_cross_machine_requires_relocation`、`integration_encrypted_backup_round_trips_without_touching_disk`，未授权前不读正文或启动 PTY。 |
 
 **退出证据**：设置队列、主题零写入失败、备份篡改、类别排除、恢复中断、指纹撤回和 store_epoch 更换通过；任何产物均不含真实凭据或永久排除数据。
 
@@ -217,16 +217,16 @@
 
 | 行为切片 | 前置 | 交付与验收锚 |
 |---|---|---|
-| 方法注册与完整 schema 骨架 | 既有 `slterm_runtime_protocol`、hello／handover DTO | 扩展方法注册表、封闭错误和生成器，使路由、capabilities、describe 与 schema 同源；只登记真实可用能力，不添加空方法。 |
+| 方法注册与完整 schema 骨架 | 既有 `slterm_runtime_protocol`、hello／handover DTO | 扩展方法注册表、封闭错误和生成器，使路由、capabilities、describe 与 schema 同源；只登记真实可用能力，不添加空方法；以 `service_hello_uses_real_generations_and_packaged_schema_digests`、`packaged_schema_includes_the_discover_output_contract` 为回归锚。 |
 | Runtime 作用域与传输约束 | 既有 LocalControlServer、CredentialFacade | 扩展首包认证、双作用域、连接／请求限制和关闭约束；核销 `runtime_v1_rejected`，不另开服务器。 |
 | 发现 CLI 与凭据轮换 | 双作用域认证、既有发现记录 | 完成非敏感端点、唯一 token 输出和 Runtime／handover 隔离轮换；核销 `integration_runtime_credential_boundaries`，为全部持久材料排除 Runtime token 的最终验收提供端点、设置与备份证据。 |
-| describe 与不可变快照 | 方法注册表、资源快照端口 | 返回真实能力、协议散列和同一代次资源快照；同步 DTO、生成资产和 GUI／CLI conformance。 |
+| describe 与不可变快照 | 方法注册表、资源快照端口 | 返回真实能力、协议散列和同一代次资源快照；同步 DTO、生成资产和 GUI／CLI conformance；以 `runtime_describe_returns_registry_and_contract_hashes`、`runtime_snapshot_returns_injected_resources_with_hello_generation` 为回归锚。 |
 | Operation 持久派发 | 既有 Operation／Journal、store_epoch | 完成参数散列、expected_revision、断线重查和 OutcomeUnknown；核销 `runtime_outcome_queryable`，不可证明副作用的操作不得自动重发。 |
 | RuntimeHub 与事件续传 | 资源代次、store／stream epoch | 完成有界事件环、客户端队列、续传三元组和缺口 resync；核销 `runtime_events_visibility_and_generation`。 |
-| 有界读取与分页游标 | RuntimeHub、不可变资源快照 | 统一终端、Git diff 与 Agent 读取的页面预算和代次失效，不把截断伪装为完整结果。 |
-| Project／PanelGroup／Panel 方法族 | CommandRegistry、Operation、Document 真实打开 | 逐方法接入布局、面板与路径语义，同步 DTO、schema 和 conformance；核销 `runtime_cwd_does_not_fallback`。 |
+| 有界读取与分页游标 | RuntimeHub、不可变资源快照 | 统一终端、Git diff 与 Agent 读取的页面预算和代次失效，不把截断伪装为完整结果；以 `runtime_terminal_read_pages_snapshot_and_rejects_stale_cursor`、`truncation_is_explicit_and_never_claims_complete_output` 为回归锚。 |
+| Project／PanelGroup／Panel 方法族 | CommandRegistry、Operation、Document 真实打开 | 逐方法接入布局、面板与路径语义，同步 DTO、schema 和 conformance；核销 `runtime_cwd_does_not_fallback`、`runtime_project_list_and_mutations_route_through_callbacks`、`runtime_project_remove_routes_explicit_close_dispositions`。 |
 | 非交互关闭方法族 | CloseCoordinator、Operation | 为 app、project 与 panel 关闭提供显式处置策略和 `decision_required`；核销 `runtime_close_requires_decision`、`integration_runtime_noninteractive_close`。 |
-| Terminal 与 Agent 方法族 | 终端、Agent、分页读取 | 接入可信 execute、原始 input、代次目标和恢复／分支；同步 schema 与 conformance，无法证明的输入副作用进入 OutcomeUnknown。 |
+| Terminal 与 Agent 方法族 | 终端、Agent、分页读取 | 接入可信 execute、原始 input、代次目标和恢复／分支；同步 schema 与 conformance，无法证明的输入副作用进入 OutcomeUnknown；以 `runtime_terminal_input_and_execute_route_through_dispatcher`、`runtime_agent_read_and_wait_route_agent_identity`、`runtime_terminal_close_and_reconnect_route_through_dispatcher` 为回归锚。 |
 | Git 方法族与破坏前置 | GitFacade、FileOperationService、Operation | 接入状态、Diff、固定版本与受限破坏操作；核销 `runtime_destructive_precondition`、`integration_commit_rollback`。 |
 | handover 同构与完整 conformance | 各资源方法族、真实 OpenFile 链 | 复核单实例与 Runtime 共用授权、命令和关闭，不重新实现 OpenFile；核销 `integration_single_instance_runtime_parity`，完成真实 GUI／CLI 全方法与事件断线矩阵。 |
 
@@ -242,7 +242,7 @@
 
 | 行为切片 | 前置 | 交付与验收锚 |
 |---|---|---|
-| WindowsIntegration 统一接入 | 既有托盘、启动与统一关闭 | 收编平台端口和假实现，对账登录启动实际状态与托盘可用性；复用既有关闭链，以托盘关窗与托盘退出统一关闭测试为回归锚，不新增托盘退出分支。 |
+| WindowsIntegration 统一接入 | 既有托盘、启动与统一关闭 | 收编平台端口和假实现，对账登录启动实际状态与托盘可用性；复用既有关闭链，以 `silent_residency_requires_a_usable_tray`、`start_hidden_truth_table_requires_silent_start_and_tray`、`tray_commands_map_to_focus_and_quit_shell_events` 为回归锚，不新增托盘退出分支。 |
 | 按机器窗口几何与能力降级 | WindowsIntegration、几何持久化 | 完成离屏夹回、DPI／显示器变化和材质能力说明；核销 `windows_geometry_clamped_to_work_area`，真实桌面行为按豁免验收。 |
 | 固定来源套餐客户端 | CredentialFacade、有界 HTTP 端口 | 收编 DeepSeek／Kimi 请求与解析，覆盖固定路径、无重定向、超时、响应预算和 token 隔离；核销 `plan_balance_uses_dedicated_credential`、`settings_plan_token_not_cli_credentials`、`integration_plan_credentials`。 |
 | PlanBalanceService 调度 | 固定来源客户端、TaskService、假 Clock | 完成防重入、冷却、隐藏调度、过期和凭据代次失效；核销 `plan_balance_runs_while_navigation_hidden`、`plan_balance_stale_after_full_period`、`settings_plan_schedule_commit_and_visibility`、`integration_plan_schedule`。 |
@@ -254,7 +254,7 @@
 | 退出后安装与启动对账 | UpdateHandoff、真实安装器 | 完成旁置锁、PID＋创建时间、旧版回退和独立日志；新版本启动后才标记成功，覆盖退出后中断与重开对账，核销 `integration_update`。 |
 | DiagnosticService 白名单 | 结构化健康快照、原子导出、Runtime 凭据边界 | 收编复制／导出同一 DTO、脱敏预览和异步自检；核销 `runtime_token_absent_from_materials`，为全量敏感材料验收提供诊断证据。 |
 | CleanupService 所有者清理 | 各恢复材料所有者、诊断 DTO | 完成计划／执行、活跃排除代次、逐项结果和审计独立确认；核销 `cleanup_excludes_active_recovery_material`、`integration_diagnostics_cleanup`。 |
-| 发布包与实机核验 | 全部发布功能、Runtime v2 资产 | 收编安装器／便携包、许可、体积基线和发布清单；核验 schema、版本、架构、更新回退与无孤儿进程。 |
+| 发布包与实机核验 | 全部发布功能、Runtime v2 资产 | 收编安装器／便携包、许可、体积基线和发布清单；核验 schema、版本、架构、更新回退与无孤儿进程；自动化锚为 `scripts/tests/package-release.tests.ps1`，实机项按发布清单与豁免登记留证。 |
 
 **退出证据**：固定来源查询与凭据隔离、更新校验和 handoff 对账、诊断白名单、清理活跃排除、安装器与便携包验收通过；更新安装不得绕过关闭守卫。
 
@@ -270,7 +270,7 @@
 |---|---|---|
 | 所有者与跨域追溯核销 | 各功能实现及测试已存在 | 逐场景核对真实例名、执行输出或豁免，修正设计漂移；核销 `acceptance_user_contract_observable`、`acceptance_exemptions_registered`，延期项不冒充完成。 |
 | 单一权威与完整崩溃集成 | 各领域恢复器与真实提交测试 | 复核无第二缓冲、授权、执行或关闭通道，并补齐跨域崩溃序列；核销 `integration_single_authority_channels`、`integration_crash_recovery`。 |
-| 全量门禁与资源回收 | 追溯差异已处理 | 串行执行全部自动化门禁、故障注入和重复创建／销毁检查，登记实际失败、跳过与资源证据。 |
+| 全量门禁与资源回收 | 追溯差异已处理 | 串行执行全部自动化门禁、故障注入和重复创建／销毁检查，登记实际失败、跳过与资源证据；以 `.claude/docs/operations/commands.md` 的门禁命令与 `scripts/tests/package-release.tests.ps1` 为核销锚。 |
 | 真实 Windows 场景矩阵 | 真实可执行文件和发布包 | 验证双实例、ConPTY、备份维护中断、Runtime 双进程、更新移交与安装包；核销 `integration_platform_boundary_failure`，人工项按既有豁免留证。 |
 | 最终排除与交付状态 | 所有未决场景已核销或登记延期／豁免 | 核销 `acceptance_excluded_surface_absent`、`sensitive_material_excluded_from_outputs`、`performance_claims_have_conditions`，复核敏感材料、许可和发布内容后更新最终进度与验收 hash。 |
 

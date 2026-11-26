@@ -6,13 +6,14 @@ slTerminal is a single-process GPUI application: one window, one instance, dark 
 
 ## Features
 
-- **Native terminal core** — VT parsing, ConPTY, scrollback, selection, copy/paste, shell integration and a bundled ConPTY fallback for Windows 10.
-- **Tabs and split panes** — terminal tabs, grid splits, pane zoom, drag-to-dock, session restore for terminal tabs.
-- **AI CLI integration** — screen detection rules for AI CLI agents, hook installation for Claude Code / Kimi / Codex / Pi / OpenCode, agent status projection, and Claude Code and Codex session history.
-- **Files and editing** — file explorer, code editor, Markdown and image tabs, read-only dual-pane diff, git gutter, and Markdown math rendering.
-- **Settings and themes** — settings center with application/appearance/profiles/interaction/advanced/localization/reset and an agent group; built-in dark themes (Linear default); English and Chinese UI.
-- **System integration** — tray icon, Windows toast notifications, taskbar progress, launch at login, window materials and wallpaper, update checks and downloads.
-- **Security** — credentials stay in Windows Credential Manager, audited settings writes, encrypted local backup with a strict allow-list.
+- **Native terminal core** — VT parsing, ConPTY, bounded scrollback with read-only search, selection, copy/paste guards, shell integration, completion and a bundled ConPTY runtime for Windows 10.
+- **Projects and workspace** — one window and one instance; project switching preserves running terminals; panel groups, splitters, layout and per-view state restore by stable `ViewKey`.
+- **Shared documents** — one live Document per real file across projects; Editor, Markdown and Diff share text, undo, dirty state and external-change conflicts; autosave and crash recovery with explicit reauthorization.
+- **Sidebar** — activity bar, file explorer with planned file operations and recycle-bin delete, Commit view and agent global file roots.
+- **AI CLI integration** — hook installation and status signals for Claude Code, Codex, OpenCode, Kimi, Pi and OhMyPi; terminal status fallback and agent capability scopes.
+- **Appearance and settings** — dark mode only; built-in and custom color-only themes (Linear default), window materials, fonts and a local background image; English and Chinese UI.
+- **Runtime control plane** — loopback-only Runtime v2 for discovery, snapshots, project activation events and panel/terminal operations, with tokens held in Windows Credential Manager.
+- **Security** — PathPolicy authorization, audited settings writes, encrypted local backup with a strict allow-list.
 - **Packaging** — reproducible local release chain: Inno Setup installer, portable zip, SHA-256 checksums and a pinned size budget.
 
 ## Requirements
@@ -47,6 +48,7 @@ cargo clippy --workspace --all-targets
 cargo fmt --all -- --check
 python scripts/check_architecture.py
 python scripts/check_doc_policy.py full
+python scripts/check_traceability.py
 python scripts/check_brand_regress.py staged
 ```
 
