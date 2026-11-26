@@ -334,6 +334,7 @@
       "hooks_invalid_utf8": "File is not valid UTF-8",
       "hooks_external_modified": "The file changed on disk; reload before saving.",
       "hooks_project_missing": "The project is no longer available.",
+      "hooks_root_unavailable": "The project root is unavailable; Project and Local layers are disabled.",
       "hooks_document_not_loaded": "The hooks document is not loaded yet.",
       "hooks_baseline_missing": "Could not read the file baseline after saving.",
       "hooks_config_dir_unavailable": "The Claude config directory could not be resolved.",

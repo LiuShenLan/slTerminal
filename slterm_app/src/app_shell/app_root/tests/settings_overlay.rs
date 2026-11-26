@@ -708,6 +708,97 @@ fn hooks_page_loads_saves_external_guard_and_discards(cx: &mut TestAppContext) {
     });
 }
 
+/// 项目根在编辑期间被删除：Project 层禁用、保存拒绝且不得重建配置目录。
+#[gpui::test]
+fn hooks_project_root_loss_disables_layers_and_never_recreates_config(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let claude_dir = temp.path().join("claude");
+    std::fs::create_dir_all(&claude_dir).unwrap();
+    std::fs::write(claude_dir.join("settings.json"), br#"{"hooks":{}}"#).unwrap();
+    let project_dir = temp.path().join("project");
+    std::fs::create_dir_all(project_dir.join(".claude")).unwrap();
+    let project_settings = project_dir.join(".claude/settings.json");
+    std::fs::write(&project_settings, br#"{"hooks":{}}"#).unwrap();
+
+    let (root, mut window, _state) = open_root(cx);
+    root.update(cx, |root, _| {
+        root.replace_hooks_claude_dir_for_test(claude_dir)
+    });
+    add_project(&root, &mut window, PROJECT_A, project_dir.to_str().unwrap());
+    focus_workspace(&root, &mut window);
+    open_settings(&mut window);
+    draw_frame(&mut window);
+    let page = window.debug_bounds("settings-page-6").unwrap();
+    window.simulate_click(page.center(), Modifiers::default());
+    draw_frame(&mut window);
+    window.run_until_parked();
+    draw_frame(&mut window);
+
+    let panel = settings_panel(&root, cx, project_id(PROJECT_A)).expect("设置面板必须存在");
+    let key = HooksDraftKey {
+        panel,
+        agent: AgentKind::Claude,
+        layer: HooksDraftLayer::Project(project_id(PROJECT_A)),
+    };
+    let project_layer = window.debug_bounds("settings-hooks-layer-project").unwrap();
+    window.simulate_click(project_layer.center(), Modifiers::default());
+    window.run_until_parked();
+    draw_frame(&mut window);
+    root.read_with(cx, |root, _| {
+        assert!(root.hook_drafts.get(key).is_some(), "项目层草稿必须载入")
+    });
+
+    root.update(cx, |root, cx| {
+        root.update_hooks_draft_text(key, r#"{"Stop":[]}"#, cx)
+    });
+    std::fs::remove_dir_all(&project_dir).unwrap();
+    root.update(cx, |root, cx| root.save_hooks_draft_for(key, cx));
+    window.run_until_parked();
+    draw_frame(&mut window);
+
+    assert!(!project_settings.exists(), "缺失项目根下不得重建配置文件");
+    assert!(!project_dir.exists(), "缺失项目根不得被重新创建");
+    assert!(
+        window.debug_bounds("settings-hooks-error").is_some(),
+        "保存失败必须可见"
+    );
+    assert!(
+        window
+            .debug_bounds("settings-hooks-root-unavailable")
+            .is_some(),
+        "Project／Local 层必须标明已禁用"
+    );
+}
+
+/// User 层配置目录不存在：载入失败可见且不得创建目录。
+#[gpui::test]
+fn hooks_missing_user_config_dir_is_reported_without_creating_it(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let missing = temp.path().join("missing-claude");
+    let project_dir = temp.path().join("project");
+    std::fs::create_dir_all(&project_dir).unwrap();
+
+    let (root, mut window, _state) = open_root(cx);
+    root.update(cx, |root, _| {
+        root.replace_hooks_claude_dir_for_test(missing.clone())
+    });
+    add_project(&root, &mut window, PROJECT_A, project_dir.to_str().unwrap());
+    focus_workspace(&root, &mut window);
+    open_settings(&mut window);
+    draw_frame(&mut window);
+    let page = window.debug_bounds("settings-page-6").unwrap();
+    window.simulate_click(page.center(), Modifiers::default());
+    draw_frame(&mut window);
+    window.run_until_parked();
+    draw_frame(&mut window);
+
+    assert!(
+        window.debug_bounds("settings-hooks-error").is_some(),
+        "缺失配置目录必须给出可见错误"
+    );
+    assert!(!missing.exists(), "缺失配置目录不得被创建");
+}
+
 fn open_settings(window: &mut VisualTestContext) {
     window.simulate_keystrokes("ctrl-,");
     draw_frame(window);

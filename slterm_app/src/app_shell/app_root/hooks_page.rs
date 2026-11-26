@@ -29,6 +29,7 @@ use crate::i18n::Message;
 pub(super) enum HooksPageError {
     ProjectMissing,
     ConfigDirUnavailable,
+    RootUnavailable,
     DocumentNotLoaded,
     BaselineMissing,
     Edit(HooksEditError),
@@ -113,6 +114,7 @@ fn hooks_error_text(language: crate::i18n::UiLanguage, error: &HooksPageError) -
     use Message::{
         SettingsAgentsHooksBaselineMissing, SettingsAgentsHooksConfigDirUnavailable,
         SettingsAgentsHooksDocumentNotLoaded, SettingsAgentsHooksProjectMissing,
+        SettingsAgentsHooksRootUnavailable,
     };
     match error {
         HooksPageError::ProjectMissing => {
@@ -121,6 +123,9 @@ fn hooks_error_text(language: crate::i18n::UiLanguage, error: &HooksPageError) -
         HooksPageError::ConfigDirUnavailable => language
             .text(SettingsAgentsHooksConfigDirUnavailable)
             .to_owned(),
+        HooksPageError::RootUnavailable => {
+            language.text(SettingsAgentsHooksRootUnavailable).to_owned()
+        }
         HooksPageError::DocumentNotLoaded => language
             .text(SettingsAgentsHooksDocumentNotLoaded)
             .to_owned(),
@@ -137,6 +142,8 @@ pub(super) struct HooksEditorState {
     documents: BTreeMap<HooksDraftKey, HooksDocument>,
     loading: BTreeSet<HooksDraftKey>,
     errors: BTreeMap<HooksDraftKey, HooksPageError>,
+    /// 载入时真实目录不存在的项目根：Project／Local 层据此禁用。
+    unavailable_roots: BTreeSet<ProjectId>,
 }
 
 fn layer_label(layer: HooksDraftLayer) -> Message {
@@ -186,9 +193,13 @@ pub(super) fn render_hooks_page(
     let mut error: Option<HooksPageError> = None;
     let mut owned = 0usize;
     let mut generation = 0u64;
+    let mut project_layers_available = true;
     if let (Some(root), Some(key)) = (root_entity.as_ref(), key) {
         let root = root.read(cx);
         generation = root.hooks_generation;
+        if let Some(project) = view.hooks_project() {
+            project_layers_available = !root.hooks_editor.unavailable_roots.contains(&project);
+        }
         if let Some(draft) = root.hook_drafts.get(key) {
             draft_text = Some(draft.text().to_owned());
             draft_diagnostic = draft.diagnostic().cloned();
@@ -215,8 +226,10 @@ pub(super) fn render_hooks_page(
 
     let layers: Vec<HooksDraftLayer> = view.available_hooks_layers();
     let selected_layer = view.hooks_layer_value();
+    let current_layer_enabled = selected_layer == HooksDraftLayer::User || project_layers_available;
     let layer_pills = layers.into_iter().map(|layer| {
         let selected = layer == selected_layer;
+        let enabled = layer == HooksDraftLayer::User || project_layers_available;
         let slug = layer_slug(layer);
         div()
             .id(SharedString::from(format!("settings-hooks-layer-{slug}")))
@@ -227,22 +240,25 @@ pub(super) fn render_hooks_page(
             .rounded_md()
             .border_1()
             .text_xs()
-            .cursor_pointer()
             .border_color(if selected {
                 cx.theme().accent
             } else {
                 cx.theme().border
             })
-            .text_color(if selected {
+            .text_color(if !enabled {
+                cx.theme().muted_foreground.opacity(0.4)
+            } else if selected {
                 cx.theme().foreground
             } else {
                 cx.theme().muted_foreground
             })
             .debug_selector(move || format!("settings-hooks-layer-{slug}"))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |view, _, _, cx| view.set_hooks_layer(layer, cx)),
-            )
+            .when(enabled, |element| {
+                element.cursor_pointer().on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |view, _, _, cx| view.set_hooks_layer(layer, cx)),
+                )
+            })
             .child(language.text(layer_label(layer)))
     });
 
@@ -271,6 +287,18 @@ pub(super) fn render_hooks_page(
                 .gap_1()
                 .debug_selector(|| "settings-hooks-layers".to_owned())
                 .children(layer_pills),
+        )
+        .when(
+            view.hooks_project().is_some() && !project_layers_available,
+            |element| {
+                element.child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().danger)
+                        .debug_selector(|| "settings-hooks-root-unavailable".to_owned())
+                        .child(language.text(Message::SettingsAgentsHooksRootUnavailable)),
+                )
+            },
         )
         .when(owned > 0, |element| {
             element.child(
@@ -322,7 +350,7 @@ pub(super) fn render_hooks_page(
                         .items_center()
                         .rounded_md()
                         .border_1()
-                        .border_color(if saveable {
+                        .border_color(if saveable && current_layer_enabled {
                             cx.theme().accent
                         } else {
                             cx.theme().border
@@ -351,7 +379,7 @@ pub(super) fn render_hooks_page(
                         .items_center()
                         .rounded_md()
                         .border_1()
-                        .border_color(if dirty {
+                        .border_color(if dirty && current_layer_enabled {
                             cx.theme().border
                         } else {
                             cx.theme().border.opacity(0.5)
@@ -463,6 +491,29 @@ impl AppRoot {
         crate::ai_hook::claude_config_dir().ok_or(HooksPageError::ConfigDirUnavailable)
     }
 
+    /// 层写入根：Project／Local 为项目根，User 为 Claude 配置目录；
+    /// 目录真实存在是读写前置条件。
+    fn hooks_layer_root(&self, layer: HooksDraftLayer) -> Result<PathBuf, HooksPageError> {
+        match layer {
+            HooksDraftLayer::User => self.hooks_claude_dir(),
+            HooksDraftLayer::Project(project) | HooksDraftLayer::Local(project) => self
+                .snapshot
+                .registry()
+                .project(project)
+                .map(|project| project.root().as_path().to_path_buf())
+                .ok_or(HooksPageError::ProjectMissing),
+        }
+    }
+
+    /// 记录层根不可用：Project／Local pill 据此禁用，成功载入后恢复。
+    fn note_hooks_layer_failure(&mut self, key: HooksDraftKey, error: &HooksPageError) {
+        if let Some(project) = key.layer.project()
+            && matches!(error, HooksPageError::RootUnavailable)
+        {
+            self.hooks_editor.unavailable_roots.insert(project);
+        }
+    }
+
     fn hooks_layer_path(&self, layer: HooksDraftLayer) -> Result<PathBuf, HooksPageError> {
         match layer {
             HooksDraftLayer::User => Ok(self.hooks_claude_dir()?.join("settings.json")),
@@ -498,12 +549,31 @@ impl AppRoot {
                 return;
             }
         };
+        let guard_root = match self.hooks_layer_root(key.layer) {
+            Ok(root) => root,
+            Err(message) => {
+                self.hooks_editor.errors.insert(key, message);
+                cx.notify();
+                return;
+            }
+        };
+        let user_layer = key.layer == HooksDraftLayer::User;
         self.hooks_editor.loading.insert(key);
         let cancellation = CancellationToken::new();
         let task = cx.spawn(async move |this, cx| {
             let loaded = cx
                 .background_executor()
-                .spawn(async move { HooksDocument::load_at(&path) })
+                .spawn(async move {
+                    // 目录真实存在才允许读写：缺失根下不得重建配置。
+                    if !guard_root.is_dir() {
+                        return Err(if user_layer {
+                            HooksPageError::Edit(HooksEditError::ConfigDirMissing)
+                        } else {
+                            HooksPageError::RootUnavailable
+                        });
+                    }
+                    HooksDocument::load_at(&path).map_err(HooksPageError::Edit)
+                })
                 .await;
             let _ = this.update(cx, |root, cx| {
                 root.hooks_editor.loading.remove(&key);
@@ -521,10 +591,9 @@ impl AppRoot {
                         }
                         root.hooks_generation = root.hooks_generation.wrapping_add(1);
                     }
-                    Err(message) => {
-                        root.hooks_editor
-                            .errors
-                            .insert(key, HooksPageError::Edit(message));
+                    Err(error) => {
+                        root.note_hooks_layer_failure(key, &error);
+                        root.hooks_editor.errors.insert(key, error);
                     }
                 }
                 cx.notify();
@@ -568,6 +637,15 @@ impl AppRoot {
             return;
         };
         let submitted = draft.text().to_owned();
+        let guard_root = match self.hooks_layer_root(key.layer) {
+            Ok(root) => root,
+            Err(message) => {
+                self.hooks_editor.errors.insert(key, message);
+                cx.notify();
+                return;
+            }
+        };
+        let user_layer = key.layer == HooksDraftLayer::User;
         let text = submitted.clone();
         let cancellation = CancellationToken::new();
         let task = cx.spawn(async move |this, cx| {
@@ -577,8 +655,18 @@ impl AppRoot {
                     let document = document.clone();
                     let text = text.clone();
                     async move {
-                        document.save_editable(&text)?;
-                        document.reload()
+                        // 保存前复核目录仍然存在：根被删除后不得重建配置。
+                        if !guard_root.is_dir() {
+                            return Err(if user_layer {
+                                HooksPageError::Edit(HooksEditError::ConfigDirMissing)
+                            } else {
+                                HooksPageError::RootUnavailable
+                            });
+                        }
+                        document
+                            .save_editable(&text)
+                            .map_err(HooksPageError::Edit)?;
+                        document.reload().map_err(HooksPageError::Edit)
                     }
                 })
                 .await;
@@ -604,10 +692,9 @@ impl AppRoot {
                                 .insert(key, HooksPageError::BaselineMissing);
                         }
                     },
-                    Err(message) => {
-                        root.hooks_editor
-                            .errors
-                            .insert(key, HooksPageError::Edit(message));
+                    Err(error) => {
+                        root.note_hooks_layer_failure(key, &error);
+                        root.hooks_editor.errors.insert(key, error);
                     }
                 }
                 cx.notify();
