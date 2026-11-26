@@ -105,7 +105,7 @@
 | 安全 HTML 白名单只做文本降级 | 待修 |
 | 程序化滚动与恢复位置不走视口调度 | 待修 |
 | 每次滚动清空全部已渲染 outcome | 待修 |
-| 高 DPI 下公式位图被放大后再按 1:1 逻辑像素显示 | 待修 |
+| 高 DPI 下公式位图被放大后再按 1:1 逻辑像素显示 | 已修：`logical_formula_size` 按窗口 scale 除回逻辑尺寸，块级与行内公式均设显式逻辑宽度（zoom 保留在位图内）；测试 `formula_logical_size_undoes_window_scale_but_keeps_reading_zoom` |
 | 已加载的远程图片再次点击仍发起新请求 | 已修：已加载或有在途任务时重复点击不再重启请求；测试 `repeated_image_click_does_not_restart_requests` |
 | 渲染查找在前台按匹配数乘块数扫描 | 待修 |
 | 每次滚动在前台复制整篇文档文本 | 待修 |
@@ -136,7 +136,7 @@
 | 读取线程 EOF 或读取错误不会转成退出/故障事件 | 已修：`EventedPty::output_closed` 暴露读取端关闭，宽限 2 秒内无子进程退出事件即报告 `PtyFailure`；测试 `reader_reports_output_closed_after_eof`、`output_closed_without_child_exit_reports_transport_failure` |
 | OSC 原始缓冲无界，嗅探上限在分发后才生效 | 已修：`OscGate` 在进入 VT 解析器前把 OSC 负载限制在 24 MiB（覆盖内联图片 base64 上界），超限丢弃负载、保留终止符；测试 `osc_gate_bounds_unterminated_payload_and_recovers_after_terminator`、`osc_gate_keeps_st_terminator_across_chunk_boundaries` |
 | 运行时设置未作用到终端核心 | 待修 |
-| 搜索的帧驱动重查会重置导航位置并形成搜索风暴 | 待修 |
+| 搜索的帧驱动重查会重置导航位置并形成搜索风暴 | 已修：新帧刷新保留选中项且不滚动，在途请求跳过重排；测试 `frame_driven_search_refresh_preserves_selection`（提交 ac25b809） |
 | 退出后键盘复制、搜索与回滚全部失效 | 已修：退出后保留复制/搜索/回滚，粘贴与编码路径关闭；测试 `exited_terminal_keeps_copy_and_scroll_but_rejects_input` |
 | 一次瞬态操作错误会替换并永久遮住终端画面 | 待修 |
 | Ctrl+Enter 未发送 LF，行镜像把修饰 Enter 当作提交 | 已修：`encode_for_program` 对 Ctrl+Enter 恒发 LF，行镜像 control 分支已使镜像失效；测试 `ctrl_enter_always_sends_lf` |
