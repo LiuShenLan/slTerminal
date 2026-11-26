@@ -44,18 +44,30 @@ pub(crate) fn git_status_response(
         entries: snapshot
             .entries
             .iter()
-            .map(|entry| GitStatusEntry {
-                path: entry.path.clone(),
-                original: entry.original.clone(),
-                index: entry.index.to_string(),
-                worktree: entry.worktree.to_string(),
-                conflict: entry.conflict,
-                ignored: entry.ignored,
-                staged: entry.staged(),
-                unstaged: entry.unstaged(),
+            .map(|entry| {
+                Ok(GitStatusEntry {
+                    path: entry.path.clone(),
+                    original: entry.original.clone(),
+                    index: slterm_runtime_protocol::GitStatusCode::from_char(entry.index)
+                        .ok_or_else(git_status_encoding_error)?,
+                    worktree: slterm_runtime_protocol::GitStatusCode::from_char(entry.worktree)
+                        .ok_or_else(git_status_encoding_error)?,
+                    conflict: entry.conflict,
+                    ignored: entry.ignored,
+                    staged: entry.staged(),
+                    unstaged: entry.unstaged(),
+                })
             })
-            .collect(),
+            .collect::<Result<_, _>>()?,
     })
+}
+
+fn git_status_encoding_error() -> JsonRpcError {
+    control_error(
+        DomainErrorCode::NotReady,
+        -32001,
+        "git status encoding failed",
+    )
 }
 
 /// Git 错误映射为封闭领域码；不携带命令输出、路径或仓库正文。

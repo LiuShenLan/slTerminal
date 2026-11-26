@@ -3,14 +3,14 @@
 use std::sync::mpsc::TryRecvError;
 use std::time::Duration;
 
-use slterm_runtime_protocol::{EventsSubscribeParams, RuntimeEvent};
+use slterm_runtime_protocol::{EventsSubscribeParams, RuntimeEvent, RuntimeEventKind};
 
 use super::events::{CLIENT_QUEUE_CAPACITY, EVENT_RING_CAPACITY, EventHub, EventRing, ResumeError};
 
-fn event(kind: &str, resource: &str) -> RuntimeEvent {
+fn event(kind: RuntimeEventKind, resource: &str) -> RuntimeEvent {
     RuntimeEvent {
         revision: 0,
-        kind: kind.to_owned(),
+        kind,
         resource: resource.to_owned(),
         generation: 1,
     }
@@ -21,13 +21,16 @@ fn event_ring_assigns_monotonic_revisions_and_resumes_without_gap() {
     let mut ring = EventRing::new("store-a", "stream-a");
     assert_eq!(ring.latest_revision(), 0);
     for index in 0..3 {
-        let revision = ring.publish(event("panel.active", &format!("panel-{index}")));
+        let revision = ring.publish(event(
+            RuntimeEventKind::PanelActivated,
+            &format!("panel-{index}"),
+        ));
         assert_eq!(revision, index + 1);
     }
     let resumed = ring.resume("store-a", "stream-a", 1).unwrap();
     assert_eq!(resumed.len(), 2);
     assert_eq!(resumed[0].revision, 2);
-    assert_eq!(resumed[1].kind, "panel.active");
+    assert_eq!(resumed[1].kind, RuntimeEventKind::PanelActivated);
 
     // 已见最新事件时返回空增量，而不是错误。
     assert!(ring.resume("store-a", "stream-a", 3).unwrap().is_empty());
@@ -37,7 +40,10 @@ fn event_ring_assigns_monotonic_revisions_and_resumes_without_gap() {
 fn event_ring_keeps_only_the_bounded_tail_and_requests_resync_on_gap() {
     let mut ring = EventRing::new("store-a", "stream-a");
     for index in 0..(EVENT_RING_CAPACITY + 5) {
-        ring.publish(event("terminal.output", &format!("terminal-{index}")));
+        ring.publish(event(
+            RuntimeEventKind::TerminalOutput,
+            &format!("terminal-{index}"),
+        ));
     }
     assert_eq!(ring.len(), EVENT_RING_CAPACITY);
     assert_eq!(
@@ -55,7 +61,7 @@ fn event_ring_keeps_only_the_bounded_tail_and_requests_resync_on_gap() {
 #[test]
 fn event_ring_rejects_stale_store_or_stream_epoch() {
     let mut ring = EventRing::new("store-a", "stream-a");
-    ring.publish(event("project.added", "project-a"));
+    ring.publish(event(RuntimeEventKind::ProjectActivated, "project-a"));
     assert_eq!(
         ring.resume("store-b", "stream-a", 0),
         Err(ResumeError::ResyncRequired)
@@ -89,13 +95,13 @@ fn event_hub_publishes_incrementally_and_rejects_resync() {
     assert_eq!(subscription.confirmed.revision, 0);
     assert_eq!(subscription.confirmed.stream_epoch, "stream-a");
 
-    assert!(hub.publish(event("project.activated", "project-a")));
+    assert!(hub.publish(event(RuntimeEventKind::ProjectActivated, "project-a")));
     let received = subscription
         .events
         .recv_timeout(Duration::from_secs(2))
         .expect("发布事件必须送达订阅端");
     assert_eq!(received.revision, 1);
-    assert_eq!(received.kind, "project.activated");
+    assert_eq!(received.kind, RuntimeEventKind::ProjectActivated);
 
     assert!(
         hub.subscribe(subscribe_params("store-b", "stream-a", 0))
@@ -116,7 +122,10 @@ fn lagging_subscription_is_removed_without_blocking_publishers() {
     for index in 0..(CLIENT_QUEUE_CAPACITY + 2) {
         super::events::deliver_event(
             &mut subscribers,
-            event("terminal.output", &format!("terminal-{index}")),
+            event(
+                RuntimeEventKind::TerminalOutput,
+                &format!("terminal-{index}"),
+            ),
         );
     }
     assert!(subscribers.is_empty(), "滞后订阅必须被移除");
@@ -137,7 +146,10 @@ fn event_hub_backlog_over_client_capacity_requires_resync() {
     let hub = EventHub::start("store-a", "stream-a").unwrap();
     // 命令通道有界：满时短暂重试，确保全部发布都进入 hub。
     for index in 0..(CLIENT_QUEUE_CAPACITY + 1) {
-        while !hub.publish(event("terminal.output", &format!("terminal-{index}"))) {
+        while !hub.publish(event(
+            RuntimeEventKind::TerminalOutput,
+            &format!("terminal-{index}"),
+        )) {
             std::thread::sleep(Duration::from_millis(5));
         }
     }

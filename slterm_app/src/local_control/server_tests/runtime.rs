@@ -1102,7 +1102,7 @@ fn runtime_agent_list_and_get_filter_by_identity() {
                 terminal_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2d".to_owned(),
                 project_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b".to_owned(),
                 kind: "claude".to_owned(),
-                status: "working".to_owned(),
+                status: slterm_runtime_protocol::AgentState::Working,
                 native_session_id: Some("session-a".to_owned()),
             },
             slterm_runtime_protocol::AgentResource {
@@ -1110,7 +1110,7 @@ fn runtime_agent_list_and_get_filter_by_identity() {
                 terminal_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2e".to_owned(),
                 project_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b".to_owned(),
                 kind: "claude".to_owned(),
-                status: "unknown".to_owned(),
+                status: slterm_runtime_protocol::AgentState::Unknown,
                 native_session_id: Some("session-a".to_owned()),
             },
         ])
@@ -1488,7 +1488,7 @@ fn runtime_subscription_streams_events_and_accepts_unsubscribe() {
     events_tx
         .send(RuntimeEvent {
             revision: 1,
-            kind: "project.activated".to_owned(),
+            kind: slterm_runtime_protocol::RuntimeEventKind::ProjectActivated,
             resource: "project-a".to_owned(),
             generation: 1,
         })
@@ -1650,7 +1650,7 @@ fn sample_resources() -> SnapshotResources {
             project_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b".to_owned(),
             group_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2c".to_owned(),
             views: vec![ViewResource {
-                kind: "terminal".to_owned(),
+                kind: slterm_runtime_protocol::ViewKind::Terminal,
                 key: r#"{"kind":"terminal","version":1}"#.to_owned(),
             }],
             active_view: r#"{"kind":"terminal","version":1}"#.to_owned(),
@@ -1662,7 +1662,7 @@ fn sample_resources() -> SnapshotResources {
             cwd: "D:/work/a".to_owned(),
             shell: "pwsh.exe".to_owned(),
             title: None,
-            run_intent: "launch".to_owned(),
+            run_intent: slterm_runtime_protocol::TerminalRunIntent::Launch,
             generation: 1,
         }],
         documents: vec![DocumentResource {

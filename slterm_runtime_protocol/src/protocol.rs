@@ -6,6 +6,7 @@ use std::net::SocketAddr;
 use serde::{Deserialize, Serialize};
 
 use crate::handshake::{DescribeResponse, HelloResponse};
+use crate::snapshot::{ProjectResource, SnapshotResponse};
 
 const REQUEST_BUDGET: usize = 128 * 1024;
 
@@ -328,6 +329,19 @@ pub struct TerminalRenameRequest {
 
 pub type TerminalRenameParams = MutationParams<TerminalRenameRequest>;
 
+/// Agent 会话状态的封闭线缆枚举。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum AgentState {
+    Idle,
+    Working,
+    Blocked,
+    Done,
+    #[default]
+    Unknown,
+}
+
 /// 活跃 Agent 关联：一个对外身份可关联多个终端。
 ///
 /// 有原生会话 ID 时 `agent_id = kind:native_session_id`，否则按
@@ -339,9 +353,10 @@ pub struct AgentResource {
     pub agent_id: String,
     pub terminal_id: String,
     pub project_id: String,
+    /// AI CLI slug；持久来源可能先于目录登记，保持开放文本。
     pub kind: String,
-    /// 封闭状态：`idle`、`working`、`blocked`、`done` 或 `unknown`。
-    pub status: String,
+    /// 封闭运行状态；新增值必须先登记协议。
+    pub status: AgentState,
     pub native_session_id: Option<String>,
 }
 
@@ -462,12 +477,71 @@ pub struct GitStatusEntry {
     /// 仓库相对路径（`/` 分隔）。
     pub path: String,
     pub original: Option<String>,
-    pub index: String,
-    pub worktree: String,
+    pub index: GitStatusCode,
+    pub worktree: GitStatusCode,
     pub conflict: bool,
     pub ignored: bool,
     pub staged: bool,
     pub unstaged: bool,
+}
+
+/// Git porcelain v2 的 XY 状态字符封闭域。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub enum GitStatusCode {
+    #[serde(rename = ".")]
+    Unmodified,
+    #[serde(rename = "M")]
+    Modified,
+    #[serde(rename = "T")]
+    TypeChanged,
+    #[serde(rename = "A")]
+    Added,
+    #[serde(rename = "D")]
+    Deleted,
+    #[serde(rename = "R")]
+    Renamed,
+    #[serde(rename = "C")]
+    Copied,
+    #[serde(rename = "U")]
+    Unmerged,
+    #[serde(rename = "?")]
+    Untracked,
+    #[serde(rename = "!")]
+    Ignored,
+}
+
+impl GitStatusCode {
+    pub const fn from_char(value: char) -> Option<Self> {
+        match value {
+            '.' => Some(Self::Unmodified),
+            'M' => Some(Self::Modified),
+            'T' => Some(Self::TypeChanged),
+            'A' => Some(Self::Added),
+            'D' => Some(Self::Deleted),
+            'R' => Some(Self::Renamed),
+            'C' => Some(Self::Copied),
+            'U' => Some(Self::Unmerged),
+            '?' => Some(Self::Untracked),
+            '!' => Some(Self::Ignored),
+            _ => None,
+        }
+    }
+
+    pub const fn as_char(self) -> char {
+        match self {
+            Self::Unmodified => '.',
+            Self::Modified => 'M',
+            Self::TypeChanged => 'T',
+            Self::Added => 'A',
+            Self::Deleted => 'D',
+            Self::Renamed => 'R',
+            Self::Copied => 'C',
+            Self::Unmerged => 'U',
+            Self::Untracked => '?',
+            Self::Ignored => '!',
+        }
+    }
 }
 
 /// 项目仓库状态：分支、上游与完整条目集，不含正文。
@@ -850,12 +924,30 @@ pub struct EventsUnsubscribedResponse {}
 pub struct RuntimeEvent {
     /// 单调 revision；缺口只能以重新快照补偿。
     pub revision: u64,
-    /// 封闭事件类型名。
-    pub kind: String,
+    /// 封闭事件类型；新增值必须先登记协议与发布点。
+    pub kind: RuntimeEventKind,
     /// 资源身份文本（稳定 ID 或规范 ViewKey JSON）。
     pub resource: String,
     /// 资源代次；旧代次事件不覆盖新代次状态。
     pub generation: u64,
+}
+
+/// Runtime 事件类型的封闭线缆枚举。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub enum RuntimeEventKind {
+    /// 项目激活 [resource=project id]。
+    #[serde(rename = "project.activated")]
+    ProjectActivated,
+    /// 面板激活 [resource=规范 ViewKey JSON]。
+    #[serde(rename = "panel.activated")]
+    PanelActivated,
+    /// 面板关闭 [resource=规范 ViewKey JSON]。
+    #[serde(rename = "panel.closed")]
+    PanelClosed,
+    /// 终端输出代次推进 [resource=terminal id]。
+    #[serde(rename = "terminal.output")]
+    TerminalOutput,
 }
 
 /// 服务器到客户端的事件通知；客户端不得回复，连接只承载订阅事件。
@@ -1616,85 +1708,6 @@ impl ControlMethod {
             Self::InstanceHandover => "instance.handover",
         }
     }
-}
-
-/// 快照中的项目资源身份与元数据。
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(deny_unknown_fields)]
-pub struct ProjectResource {
-    pub project_id: String,
-    pub display_name: String,
-    pub root: String,
-    pub active: bool,
-}
-
-/// 快照中的面板组；`views` 按持久顺序，`active_view` 为组内激活视图。
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(deny_unknown_fields)]
-pub struct PanelGroupResource {
-    pub project_id: String,
-    pub group_id: String,
-    pub views: Vec<ViewResource>,
-    pub active_view: String,
-}
-
-/// 视图身份：封闭类型名与规范 ViewKey JSON 文本。
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(deny_unknown_fields)]
-pub struct ViewResource {
-    pub kind: String,
-    pub key: String,
-}
-
-/// 快照中的逻辑终端；不含 PTY、输出或回滚正文。
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(deny_unknown_fields)]
-pub struct TerminalResource {
-    pub terminal_id: String,
-    pub project_id: String,
-    pub number: u64,
-    pub cwd: String,
-    pub shell: String,
-    pub title: Option<String>,
-    /// 封闭运行意图：`launch` 或 `exited`。
-    pub run_intent: String,
-    /// 当前 PTY 代次；零表示没有存活 worker（持久化 Exited）。
-    pub generation: u64,
-}
-
-/// 快照中的 Document 位置元数据；不含正文。
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(deny_unknown_fields)]
-pub struct DocumentResource {
-    pub document_id: String,
-    pub path: String,
-}
-
-/// 同一代次资源模型：项目、面板组、终端与 Document。
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(deny_unknown_fields)]
-pub struct SnapshotResources {
-    pub projects: Vec<ProjectResource>,
-    pub groups: Vec<PanelGroupResource>,
-    pub terminals: Vec<TerminalResource>,
-    pub documents: Vec<DocumentResource>,
-}
-
-/// `runtime.snapshot` 的不可变资源快照与世代。
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(deny_unknown_fields)]
-pub struct SnapshotResponse {
-    pub store_epoch: String,
-    pub stream_epoch: String,
-    pub revision: u64,
-    pub resources: SnapshotResources,
 }
 
 /// 持久 Operation 的查询视图；结果不明同样可查询且不自动重发。

@@ -207,8 +207,8 @@ fn runtime_git_status_routes_project_selection() {
             entries: vec![slterm_runtime_protocol::GitStatusEntry {
                 path: "src/main.rs".to_owned(),
                 original: None,
-                index: "M".to_owned(),
-                worktree: ".".to_owned(),
+                index: slterm_runtime_protocol::GitStatusCode::Modified,
+                worktree: slterm_runtime_protocol::GitStatusCode::Unmodified,
                 conflict: false,
                 ignored: false,
                 staged: true,

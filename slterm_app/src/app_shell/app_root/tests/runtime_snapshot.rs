@@ -40,7 +40,10 @@ fn runtime_snapshot_returns_workspace_resources_and_identity(cx: &mut TestAppCon
     assert_eq!(snapshot.groups.len(), 1);
     assert_eq!(snapshot.groups[0].group_id, group_id(GROUP_A).to_string());
     assert_eq!(snapshot.groups[0].views.len(), 1);
-    assert_eq!(snapshot.groups[0].views[0].kind, "terminal");
+    assert_eq!(
+        snapshot.groups[0].views[0].kind,
+        slterm_runtime_protocol::ViewKind::Terminal
+    );
     assert!(
         snapshot.groups[0].views[0].key.contains("\"terminal\""),
         "视图 key 必须是规范 ViewKey JSON: {}",
@@ -57,7 +60,10 @@ fn runtime_snapshot_returns_workspace_resources_and_identity(cx: &mut TestAppCon
         snapshot.terminals[0].project_id,
         project_id(PROJECT_A).to_string()
     );
-    assert_eq!(snapshot.terminals[0].run_intent, "launch");
+    assert_eq!(
+        snapshot.terminals[0].run_intent,
+        slterm_runtime_protocol::TerminalRunIntent::Launch
+    );
     assert_eq!(snapshot.terminals[0].cwd, "D:/work/a");
     assert_eq!(
         snapshot.terminals[0].generation, 1,

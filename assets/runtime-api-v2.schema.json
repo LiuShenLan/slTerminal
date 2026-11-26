@@ -59,6 +59,7 @@
           "type": "string"
         },
         "kind": {
+          "description": "AI CLI slug；持久来源可能先于目录登记，保持开放文本。",
           "type": "string"
         },
         "native_session_id": {
@@ -71,8 +72,8 @@
           "type": "string"
         },
         "status": {
-          "description": "封闭状态：`idle`、`working`、`blocked`、`done` 或 `unknown`。",
-          "type": "string"
+          "description": "封闭运行状态；新增值必须先登记协议。",
+          "$ref": "#/$defs/AgentState"
         },
         "terminal_id": {
           "type": "string"
@@ -85,6 +86,17 @@
         "project_id",
         "kind",
         "status"
+      ]
+    },
+    "AgentState": {
+      "description": "Agent 会话状态的封闭线缆枚举。",
+      "type": "string",
+      "enum": [
+        "idle",
+        "working",
+        "blocked",
+        "done",
+        "unknown"
       ]
     },
     "Capabilities": {
@@ -421,6 +433,22 @@
         "data"
       ]
     },
+    "GitStatusCode": {
+      "description": "Git porcelain v2 的 XY 状态字符封闭域。",
+      "type": "string",
+      "enum": [
+        ".",
+        "M",
+        "T",
+        "A",
+        "D",
+        "R",
+        "C",
+        "U",
+        "?",
+        "!"
+      ]
+    },
     "GitStatusEntry": {
       "description": "单个工作区条目的 porcelain v2 状态。",
       "type": "object",
@@ -432,7 +460,7 @@
           "type": "boolean"
         },
         "index": {
-          "type": "string"
+          "$ref": "#/$defs/GitStatusCode"
         },
         "original": {
           "type": [
@@ -451,7 +479,7 @@
           "type": "boolean"
         },
         "worktree": {
-          "type": "string"
+          "$ref": "#/$defs/GitStatusCode"
         }
       },
       "additionalProperties": false,
@@ -1647,8 +1675,8 @@
           "minimum": 0
         },
         "kind": {
-          "description": "封闭事件类型名。",
-          "type": "string"
+          "description": "封闭事件类型；新增值必须先登记协议与发布点。",
+          "$ref": "#/$defs/RuntimeEventKind"
         },
         "resource": {
           "description": "资源身份文本（稳定 ID 或规范 ViewKey JSON）。",
@@ -1667,6 +1695,31 @@
         "kind",
         "resource",
         "generation"
+      ]
+    },
+    "RuntimeEventKind": {
+      "description": "Runtime 事件类型的封闭线缆枚举。",
+      "oneOf": [
+        {
+          "description": "项目激活 [resource=project id]。",
+          "type": "string",
+          "const": "project.activated"
+        },
+        {
+          "description": "面板激活 [resource=规范 ViewKey JSON]。",
+          "type": "string",
+          "const": "panel.activated"
+        },
+        {
+          "description": "面板关闭 [resource=规范 ViewKey JSON]。",
+          "type": "string",
+          "const": "panel.closed"
+        },
+        {
+          "description": "终端输出代次推进 [resource=terminal id]。",
+          "type": "string",
+          "const": "terminal.output"
+        }
       ]
     },
     "RuntimeMethod": {
@@ -2036,8 +2089,8 @@
           "type": "string"
         },
         "run_intent": {
-          "description": "封闭运行意图：`launch` 或 `exited`。",
-          "type": "string"
+          "description": "封闭运行意图；新增值必须先登记协议。",
+          "$ref": "#/$defs/TerminalRunIntent"
         },
         "shell": {
           "type": "string"
@@ -2061,6 +2114,14 @@
         "shell",
         "run_intent",
         "generation"
+      ]
+    },
+    "TerminalRunIntent": {
+      "description": "终端持久运行意图的线缆枚举。",
+      "type": "string",
+      "enum": [
+        "launch",
+        "exited"
       ]
     },
     "TerminalWaitResponse": {
@@ -2088,15 +2149,29 @@
         "revision"
       ]
     },
+    "ViewKind": {
+      "description": "视图类型的线缆枚举；与持久 ViewKey 注册点使用同一文本。",
+      "type": "string",
+      "enum": [
+        "terminal",
+        "editor",
+        "markdown",
+        "diff",
+        "git_show",
+        "settings",
+        "side_view",
+        "app_settings_overlay"
+      ]
+    },
     "ViewResource": {
-      "description": "视图身份：封闭类型名与规范 ViewKey JSON 文本。",
+      "description": "视图身份：封闭类型与规范 ViewKey JSON 文本。",
       "type": "object",
       "properties": {
         "key": {
           "type": "string"
         },
         "kind": {
-          "type": "string"
+          "$ref": "#/$defs/ViewKind"
         }
       },
       "additionalProperties": false,

@@ -32,7 +32,7 @@ fn runtime_events_visibility_and_generation(cx: &mut TestAppContext) {
 
     let mut activated = Vec::new();
     while let Ok(event) = events.try_recv() {
-        if event.kind == "project.activated" {
+        if event.kind == slterm_runtime_protocol::RuntimeEventKind::ProjectActivated {
             activated.push(event);
         }
     }
@@ -56,7 +56,10 @@ fn runtime_events_are_suppressed_after_close_starts(cx: &mut TestAppContext) {
     let events = install_publisher(&root, cx);
     root.update(cx, |root, _| {
         root.close_completed = true;
-        root.publish_runtime_event("project.activated", "late-resource".to_owned());
+        root.publish_runtime_event(
+            slterm_runtime_protocol::RuntimeEventKind::ProjectActivated,
+            "late-resource".to_owned(),
+        );
     });
 
     assert!(events.try_recv().is_err(), "关闭完成后不得再发布过期事件");
@@ -68,7 +71,10 @@ fn runtime_events_are_suppressed_while_close_is_in_progress(cx: &mut TestAppCont
     let events = install_publisher(&root, cx);
     root.update(cx, |root, _| {
         root.close_in_progress = true;
-        root.publish_runtime_event("panel.closed", "panel-a".to_owned());
+        root.publish_runtime_event(
+            slterm_runtime_protocol::RuntimeEventKind::PanelClosed,
+            "panel-a".to_owned(),
+        );
     });
 
     assert!(events.try_recv().is_err(), "关闭进行中不得回填事件");

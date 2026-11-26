@@ -290,7 +290,7 @@ mod latest_revision_tests {
         assert_eq!(hub.latest_revision(), 0);
         assert!(hub.publish(RuntimeEvent {
             revision: 0,
-            kind: "test.event".to_owned(),
+            kind: slterm_runtime_protocol::RuntimeEventKind::ProjectActivated,
             resource: "r".to_owned(),
             generation: 1,
         }));

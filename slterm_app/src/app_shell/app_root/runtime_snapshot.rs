@@ -3,10 +3,11 @@
 use gpui::{App, Context, Entity, Window};
 use slterm_path::CanonicalPath;
 use slterm_runtime_protocol::{
-    AgentResource, DocumentResource, DomainErrorCode, JsonRpcError, PanelGroupResource,
-    ProjectResource, SnapshotResources, TerminalResource, ViewResource,
+    AgentResource, AgentState, DocumentResource, DomainErrorCode, JsonRpcError, PanelGroupResource,
+    ProjectResource, SnapshotResources, TerminalResource, TerminalRunIntent, ViewKind,
+    ViewResource,
 };
-use slterm_workspace::{RunIntent, ViewKey};
+use slterm_workspace::{RunIntent, ViewKey, ViewKeyKind};
 
 use crate::ai_agents::AgentStatus;
 use crate::gpui_terminal::PaneId;
@@ -29,7 +30,11 @@ enum RuntimeTerminalAccess {
 
 impl AppRoot {
     /// 发布轻量资源事件；关闭开始后不再回填过期事件。
-    pub(super) fn publish_runtime_event(&self, kind: &str, resource: String) {
+    pub(super) fn publish_runtime_event(
+        &self,
+        kind: slterm_runtime_protocol::RuntimeEventKind,
+        resource: String,
+    ) {
         if self.close_in_progress || self.application_close.is_some() || self.close_completed {
             return;
         }
@@ -38,7 +43,7 @@ impl AppRoot {
         };
         let _ = publisher.publish(slterm_runtime_protocol::RuntimeEvent {
             revision: 0,
-            kind: kind.to_owned(),
+            kind,
             resource,
             generation: self.snapshot_generation,
         });
@@ -1050,7 +1055,7 @@ impl AppRoot {
                 terminal_id: terminal.id().to_string(),
                 project_id: terminal.project_id().to_string(),
                 kind: session.source.clone(),
-                status: agent_status_text(status),
+                status: runtime_agent_state(status),
                 native_session_id: session.session_id.clone(),
             });
         }
@@ -1082,7 +1087,7 @@ impl AppRoot {
                         .to_canonical_json()
                         .map_err(|_| snapshot_encoding_error())?;
                     views.push(ViewResource {
-                        kind: view.kind_str().to_owned(),
+                        kind: runtime_view_kind(view.kind()),
                         key,
                     });
                 }
@@ -1115,8 +1120,8 @@ impl AppRoot {
                 shell: path_text(terminal.shell())?,
                 title: terminal.custom_title().map(str::to_owned),
                 run_intent: match terminal.run_intent() {
-                    RunIntent::Launch => "launch".to_owned(),
-                    RunIntent::Exited => "exited".to_owned(),
+                    RunIntent::Launch => TerminalRunIntent::Launch,
+                    RunIntent::Exited => TerminalRunIntent::Exited,
                 },
                 generation,
             });
@@ -1149,15 +1154,27 @@ fn view_document_id(view: &ViewKey) -> Option<slterm_document::DocumentId> {
     }
 }
 
-fn agent_status_text(status: AgentStatus) -> String {
+fn runtime_agent_state(status: AgentStatus) -> AgentState {
     match status {
-        AgentStatus::Idle => "idle",
-        AgentStatus::Working => "working",
-        AgentStatus::Blocked => "blocked",
-        AgentStatus::Done => "done",
-        AgentStatus::Unknown => "unknown",
+        AgentStatus::Idle => AgentState::Idle,
+        AgentStatus::Working => AgentState::Working,
+        AgentStatus::Blocked => AgentState::Blocked,
+        AgentStatus::Done => AgentState::Done,
+        AgentStatus::Unknown => AgentState::Unknown,
     }
-    .to_owned()
+}
+
+fn runtime_view_kind(kind: ViewKeyKind) -> ViewKind {
+    match kind {
+        ViewKeyKind::Terminal => ViewKind::Terminal,
+        ViewKeyKind::Editor => ViewKind::Editor,
+        ViewKeyKind::Markdown => ViewKind::Markdown,
+        ViewKeyKind::Diff => ViewKind::Diff,
+        ViewKeyKind::GitShow => ViewKind::GitShow,
+        ViewKeyKind::Settings => ViewKind::Settings,
+        ViewKeyKind::SideView => ViewKind::SideView,
+        ViewKeyKind::AppSettingsOverlay => ViewKind::AppSettingsOverlay,
+    }
 }
 
 fn path_text(path: &CanonicalPath) -> Result<String, JsonRpcError> {

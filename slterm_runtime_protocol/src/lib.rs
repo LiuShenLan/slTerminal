@@ -11,7 +11,9 @@ mod protocol;
 mod protocol_tests;
 #[cfg(feature = "schema")]
 pub mod schema;
+mod snapshot;
 pub use handshake::*;
 pub use method::*;
 pub use operation::{InvalidOperationTransition, OperationStatus};
 pub use protocol::*;
+pub use snapshot::*;

@@ -2,22 +2,25 @@
 
 use crate::protocol::{
     AgentCloseRequest, AgentForkRequest, AgentGetRequest, AgentInputRequest, AgentReadRequest,
-    AgentResumeRequest, AgentStartRequest, AgentWaitRequest, AppFocusParams, ClientRequest,
-    ControlMessage, ControlMethod, ControlScope, Credential, DiscoverOutput, DiscoveryRecord,
-    DocumentResource, DomainErrorCode, EmptyParams, GitDeleteExpected, GitDeleteParams,
-    GitDeleteRequest, GitDiffRequest, GitRollbackExpected, GitRollbackParams, GitRollbackRequest,
-    GitStatusRequest, HandoverMethod, HandoverParams, HandoverRequest, HelloMethod, HelloParams,
-    HelloRequest, JsonRpcError, JsonRpcErrorData, JsonRpcId, JsonRpcRequest, JsonRpcResponse,
-    MutationParams, OperationQueryParams, OperationResource, OperationWaitParams,
-    PanelActivateRequest, PanelGroupMergeRequest, PanelGroupResizeRequest, PanelGroupResource,
-    PanelGroupSplitRequest, PanelMoveRequest, ProjectActivateRequest, ProjectRemoveRequest,
-    ProjectRenameRequest, ProjectReorderRequest, ProjectResource, ProtocolError, RuntimeMethod,
-    RuntimeRequest, SnapshotResources, SnapshotResponse, SplitDirectionWire, TerminalCloseRequest,
-    TerminalCreateRequest, TerminalExecuteRequest, TerminalInputRequest, TerminalReadRequest,
-    TerminalReconnectRequest, TerminalRenameRequest, TerminalResource, TerminalWaitRequest,
-    ViewResource, ViewportSize, params_sha256, parse_client_request,
+    AgentResource, AgentResumeRequest, AgentStartRequest, AgentState, AgentWaitRequest,
+    AppFocusParams, ClientRequest, ControlMessage, ControlMethod, ControlScope, Credential,
+    DiscoverOutput, DiscoveryRecord, DomainErrorCode, EmptyParams, GitDeleteExpected,
+    GitDeleteParams, GitDeleteRequest, GitDiffRequest, GitRollbackExpected, GitRollbackParams,
+    GitRollbackRequest, GitStatusEntry, GitStatusRequest, HandoverMethod, HandoverParams,
+    HandoverRequest, HelloMethod, HelloParams, HelloRequest, JsonRpcError, JsonRpcErrorData,
+    JsonRpcId, JsonRpcRequest, JsonRpcResponse, MutationParams, OperationQueryParams,
+    OperationResource, OperationWaitParams, PanelActivateRequest, PanelGroupMergeRequest,
+    PanelGroupResizeRequest, PanelGroupSplitRequest, PanelMoveRequest, ProjectActivateRequest,
+    ProjectRemoveRequest, ProjectRenameRequest, ProjectReorderRequest, ProtocolError, RuntimeEvent,
+    RuntimeMethod, RuntimeRequest, SplitDirectionWire, TerminalCloseRequest, TerminalCreateRequest,
+    TerminalExecuteRequest, TerminalInputRequest, TerminalReadRequest, TerminalReconnectRequest,
+    TerminalRenameRequest, TerminalWaitRequest, ViewportSize, params_sha256, parse_client_request,
 };
-use crate::{DescribeResponse, HelloResponse, MethodKind, OperationStatus};
+use crate::{
+    DescribeResponse, DocumentResource, HelloResponse, MethodKind, OperationStatus,
+    PanelGroupResource, ProjectResource, SnapshotResources, SnapshotResponse, TerminalResource,
+    TerminalRunIntent, ViewKind, ViewResource,
+};
 
 #[cfg(feature = "schema")]
 use crate::protocol::HandoverResponse;
@@ -1397,7 +1400,7 @@ fn sample_snapshot() -> SnapshotResponse {
                 project_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b".to_owned(),
                 group_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2c".to_owned(),
                 views: vec![ViewResource {
-                    kind: "terminal".to_owned(),
+                    kind: ViewKind::Terminal,
                     key: r#"{"kind":"terminal","version":1}"#.to_owned(),
                 }],
                 active_view: r#"{"kind":"terminal","version":1}"#.to_owned(),
@@ -1409,7 +1412,7 @@ fn sample_snapshot() -> SnapshotResponse {
                 cwd: "D:/work/a".to_owned(),
                 shell: "C:/Program Files/PowerShell/7/pwsh.exe".to_owned(),
                 title: Some("build".to_owned()),
-                run_intent: "launch".to_owned(),
+                run_intent: TerminalRunIntent::Launch,
                 generation: 1,
             }],
             documents: vec![DocumentResource {
@@ -1418,6 +1421,55 @@ fn sample_snapshot() -> SnapshotResponse {
             }],
         },
     }
+}
+
+/// 资源状态与视图类型是封闭域；未知文本必须在反序列化时拒绝。
+#[test]
+fn closed_resource_text_fields_reject_unknown_values() {
+    let terminal = serde_json::json!({
+        "terminal_id": "t",
+        "project_id": "p",
+        "number": 1,
+        "cwd": "D:/work/a",
+        "shell": "pwsh.exe",
+        "title": null,
+        "run_intent": "paused",
+        "generation": 0,
+    });
+    assert!(serde_json::from_value::<TerminalResource>(terminal).is_err());
+
+    let view = serde_json::json!({"kind": "browser", "key": "{}"});
+    assert!(serde_json::from_value::<ViewResource>(view).is_err());
+
+    let agent = serde_json::json!({
+        "agent_id": "claude@t",
+        "terminal_id": "t",
+        "project_id": "p",
+        "kind": "claude",
+        "status": "sleeping",
+        "native_session_id": null,
+    });
+    assert!(serde_json::from_value::<AgentResource>(agent).is_err());
+
+    let event = serde_json::json!({
+        "revision": 1,
+        "kind": "mystery.event",
+        "resource": "r",
+        "generation": 0,
+    });
+    assert!(serde_json::from_value::<RuntimeEvent>(event).is_err());
+
+    let entry = serde_json::json!({
+        "path": "src/main.rs",
+        "original": null,
+        "index": "Z",
+        "worktree": ".",
+        "conflict": false,
+        "ignored": false,
+        "staged": false,
+        "unstaged": false,
+    });
+    assert!(serde_json::from_value::<GitStatusEntry>(entry).is_err());
 }
 
 #[test]

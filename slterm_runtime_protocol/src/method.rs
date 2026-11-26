@@ -65,7 +65,7 @@ fn describe_result_schema() -> schemars::Schema {
 
 #[cfg(feature = "schema")]
 fn snapshot_result_schema() -> schemars::Schema {
-    schemars::schema_for!(crate::protocol::SnapshotResponse)
+    schemars::schema_for!(crate::SnapshotResponse)
 }
 
 #[cfg(feature = "schema")]

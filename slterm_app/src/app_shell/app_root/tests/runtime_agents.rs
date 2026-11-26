@@ -441,7 +441,10 @@ fn runtime_agents_derive_from_session_identity_and_status(cx: &mut TestAppContex
     assert_eq!(agents[0].terminal_id, terminal_id(TERMINAL_A).to_string());
     assert_eq!(agents[0].project_id, project_id(PROJECT_A).to_string());
     assert_eq!(agents[0].kind, "claude");
-    assert_eq!(agents[0].status, "unknown");
+    assert_eq!(
+        agents[0].status,
+        slterm_runtime_protocol::AgentState::Unknown
+    );
     assert_eq!(agents[0].native_session_id.as_deref(), Some("session-a"));
 
     root.update(cx, |root, _| root.close_in_progress = true);
