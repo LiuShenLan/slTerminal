@@ -137,7 +137,7 @@
 | 显式 cwd 越权时不创建空 Panel 或改投活跃项目 | `runtime_cwd_does_not_fallback` | 已自动化 |
 | 破坏操作状态校验失败时不执行写入 | `runtime_destructive_precondition` | 已自动化 |
 | 结果不明时可按操作标识查询而不盲目重放 | `runtime_outcome_queryable` | 已自动化 |
-| 端点、设置、备份和诊断不含 Runtime token | `runtime_token_absent_from_materials` | 已自动化 |
+| 端点、设置、备份和诊断不含 Runtime token | `integration_runtime_credential_boundaries`（端点／设置／凭据域）＋ `runtime_token_shape_outside_registered_fields_never_enters_backup`（备份）＋ `runtime_token_absent_from_materials`（诊断，真实 64 位 hex 形态） | 已自动化 |
 | 隐藏或切项目仍收合法事件且销毁后无过期事件 | `runtime_events_visibility_and_generation` | 已自动化 |
 | 存活窗口首帧后才开放控制面，断连取消排队或在途开放 | `service_publishes_discovery_only_after_explicit_open`、`destroyed_window_does_not_signal_readiness`、`queued_open_is_cancelled_when_window_clients_disconnect`、`disconnect_during_open_immediately_closes_control_plane` | 已自动化 |
 

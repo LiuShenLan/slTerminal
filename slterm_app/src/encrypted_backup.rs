@@ -693,6 +693,36 @@ mod encrypted_backup_tests {
         assert!(!opened_text.contains("sk-test-secret"));
     }
 
+    /// Runtime 凭据真实形态（64 位小写 hex）不得经未登记字段进入备份。
+    #[test]
+    fn runtime_token_shape_outside_registered_fields_never_enters_backup() {
+        let token = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        assert_eq!(token.len(), 64);
+        let directory = tempfile::tempdir().unwrap();
+        let paths = split_paths(directory.path());
+        fs::create_dir_all(paths.config_root()).unwrap();
+        fs::create_dir_all(paths.local_root()).unwrap();
+        fs::write(
+            paths.config_root().join("settings.json"),
+            format!(
+                r#"{{"appearance":{{"theme":"Nord"}},"handmade":{{"runtime_token":"{token}"}}}}"#
+            ),
+        )
+        .unwrap();
+
+        let archive = collect_from(&paths, BackupSelection::default()).unwrap();
+        assert!(
+            !serde_json::to_string(&archive).unwrap().contains(token),
+            "未登记字段携带的 Runtime token 不得入包"
+        );
+        let packet = seal(&archive, PASSPHRASE).unwrap();
+        assert!(
+            !packet
+                .windows(token.len())
+                .any(|window| window == token.as_bytes())
+        );
+    }
+
     /// 工作区物理文件与学习历史永不进入设置类别。
     #[test]
     fn backup_excludes_local_workspace_and_credentials() {

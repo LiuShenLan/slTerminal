@@ -138,5 +138,11 @@ fn integration_runtime_credential_boundaries() {
         assert!(!contains_bytes(&published, token.as_bytes()));
     }
 
+    // 设置文件不属于凭据域：创建与轮换都不得把任一 token 写入设置材料。
+    let settings = std::fs::read(paths.settings_path()).unwrap_or_default();
+    for token in [&runtime, &rotated, &handover] {
+        assert!(!contains_bytes(&settings, token.as_bytes()));
+    }
+
     guard.revoke().unwrap();
 }

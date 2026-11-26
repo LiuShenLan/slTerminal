@@ -223,7 +223,7 @@
 | `GitStatusResponse.root` 返回项目根而不是仓库根 | 已修：状态 DTO 根取 `StatusSnapshot.worktree_root`，缺省才回退项目根；测试 `git_status_reports_the_repository_worktree_root` |
 | 快照不暴露布局树与分割几何，resize 路径不可推导且视口由客户端自报 | 已修：快照新增 `ProjectLayoutResource`／`LayoutNodeResource` 分割树（方向、比例、组身份，空布局为 null），resize 布尔路径可从树推导；split／resize 线缆删除客户端视口，AppRoot 使用前台真实内容视口校验最小空间；测试 `snapshot_layout_tree_round_trips_and_rejects_unknown_nodes`、`runtime_snapshot_returns_workspace_resources_and_identity`、`panel_methods_validate_layout_identities_and_bounds` |
 | 等待操作不能因客户端断开而取消 | 已修：`terminal.wait`／`agent.wait` 与 `operation.wait` 每轮非阻塞探测连接 EOF，断开即返回 Closing 并停止轮询；测试 `runtime_operation_wait_cancels_when_the_client_disconnects` |
-| `runtime_token_absent_from_materials` 锚只覆盖诊断材料 | 待修 |
+| `runtime_token_absent_from_materials` 锚只覆盖诊断材料 | 已修：追溯行改为三个证据锚——`integration_runtime_credential_boundaries` 覆盖端点文件、设置文件与凭据域，`runtime_token_shape_outside_registered_fields_never_enters_backup` 覆盖备份归档与密文，`runtime_token_absent_from_materials` 覆盖诊断导出；三处都使用真实 64 位 hex 假值形态 |
 | 注册表 kind/idempotent 语义与真实副作用不符 | 已修：新增 `MethodKind::Connection`，`events.subscribe`／`events.unsubscribe` 登记为连接级且不可重试，`instance.handover` 取消幂等声明；describe 与 schema 同步暴露；测试 `connection_methods_and_handover_do_not_claim_retry_safety`、`describe_lists_the_method_registry_with_contract_hashes` |
 | 握手后的解析失败直接断开连接 | 已修：认证后协议解析失败在可取到 `id` 时返回封闭 `InvalidRequest` 并保留连接，无法解析 `id` 才断开；首包认证仍不返回协议预言机；测试 `local_control_authenticated_parse_failure_keeps_the_connection` |
 | 分页与响应预算按原始字节估算 | 已修：分页预算降至 160 KiB，按 `serde_json` 控制字符最坏六倍转义保证低于 1 MiB；所有 Runtime 响应编码后复核预算，超限返回封闭 `ResponseTooLarge` 并保留连接，无界快照／状态不再静默断开；测试 `runtime_terminal_read_control_characters_stay_within_response_budget`、`runtime_snapshot_over_budget_returns_structured_error_and_keeps_connection` |
