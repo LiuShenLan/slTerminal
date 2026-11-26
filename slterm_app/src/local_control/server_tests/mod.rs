@@ -485,3 +485,37 @@ fn local_control_request_deadline_expires_without_waiting() {
 
 mod runtime;
 mod runtime_git;
+
+/// 认证后的未知方法／非法参数返回结构化 InvalidRequest，并保留连接。
+#[test]
+fn local_control_authenticated_parse_failure_keeps_the_connection() {
+    let (mut server, calls) = start_server();
+    let mut stream = connect(&server);
+    stream.set_read_timeout(Some(TEST_TIMEOUT)).unwrap();
+    write_json(&mut stream, &hello("sk-test"));
+    assert!(read_line(&mut stream).contains("store"));
+
+    stream
+        .write_all(br#"{"jsonrpc":"2.0","id":9,"method":"bogus.method","params":{}}"#)
+        .unwrap();
+    stream
+        .write_all(
+            b"
+",
+        )
+        .unwrap();
+    let error = read_line(&mut stream);
+    assert!(
+        error.contains("invalid_request"),
+        "非法方法必须返回封闭错误: {error}"
+    );
+    assert!(
+        error.contains("\"id\":9"),
+        "错误回执必须保留请求 id: {error}"
+    );
+
+    write_json(&mut stream, &focus());
+    assert!(read_line(&mut stream).contains("accepted"));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    server.shutdown().unwrap();
+}

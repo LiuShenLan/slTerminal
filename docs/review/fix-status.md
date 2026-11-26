@@ -221,7 +221,7 @@
 | 等待操作不能因客户端断开而取消 | 待修 |
 | `runtime_token_absent_from_materials` 锚只覆盖诊断材料 | 待修 |
 | 注册表 kind/idempotent 语义与真实副作用不符 | 待修 |
-| 握手后的解析失败直接断开连接 | 待修 |
+| 握手后的解析失败直接断开连接 | 已修：认证后协议解析失败在可取到 `id` 时返回封闭 `InvalidRequest` 并保留连接，无法解析 `id` 才断开；首包认证仍不返回协议预言机；测试 `local_control_authenticated_parse_failure_keeps_the_connection` |
 | 分页与响应预算按原始字节估算 | 待修 |
 | 分页游标不绑定资源身份，也接受非 UTF-8 字符边界偏移 | 待修 |
 | Handover 客户端不核对 hello 协议版本与合同散列 | 待修 |

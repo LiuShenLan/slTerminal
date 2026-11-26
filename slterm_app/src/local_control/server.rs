@@ -470,9 +470,16 @@ fn handle_connection<F>(
         .flatten() else {
             return;
         };
-        // 作用域与方法的对应关系由方法注册表约束；未知组合直接断开。
-        let Ok(request) = parse_client_request(&frame) else {
-            return;
+        // 认证后参数错误必须回结构化 InvalidRequest 并保留连接；只有
+        // 无法解析 id 时才断开。作用域不匹配仍由下方直接断开。
+        let request = match parse_client_request(&frame) {
+            Ok(request) => request,
+            Err(_) => {
+                if write_protocol_error(&mut stream, &frame).is_err() {
+                    return;
+                }
+                continue;
+            }
         };
         if shutdown.load(Ordering::SeqCst) {
             let _ = match request {
@@ -1438,6 +1445,22 @@ fn stale_cursor_error() -> JsonRpcError {
 
 fn read_encoding_error() -> JsonRpcError {
     not_ready_error("terminal read encoding failed")
+}
+
+/// 认证后的协议解析失败：尽力从原始帧取 id，返回封闭 InvalidRequest。
+fn write_protocol_error(stream: &mut TcpStream, frame: &[u8]) -> io::Result<()> {
+    let value: serde_json::Value = serde_json::from_slice(frame)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid request id"))?;
+    let id = value
+        .get("id")
+        .cloned()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing request id"))?;
+    let id: JsonRpcId = serde_json::from_value(id)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid request id"))?;
+    write_json(
+        stream,
+        &JsonRpcResponse::<RuntimeResult>::error(id, invalid_request_error()),
+    )
 }
 
 fn invalid_request_error() -> JsonRpcError {
