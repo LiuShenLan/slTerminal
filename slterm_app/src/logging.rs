@@ -118,7 +118,11 @@ impl log::Log for Logger {
         let target = &record.target()[..index];
 
         // 只放自家 crate;Trace 档下外来 crate 的 Error/Warn 也放行。
-        if !self.enabled(record.metadata()) || !is_allowed_target(record.level(), target) {
+        // audit 通道不受常态 Warn 档位压制：成功审计走 info，若按档位
+        // 过滤会让"成功写盘"类安全事件在生产日志中消失。
+        if !level_allowed(record.level(), target, log::max_level())
+            || !is_allowed_target(record.level(), target)
+        {
             return;
         }
 
@@ -162,6 +166,16 @@ fn create_log_message(record: &log::Record<'_>, target: &str, start: Instant) ->
     message
 }
 
+/// 档位判定：audit 通道恒放行，其余按全局最大档位过滤。
+fn level_allowed(level: Level, target: &str, max: LevelFilter) -> bool {
+    target == "audit" || level <= max
+}
+
+/// 主日志文件路径：本地数据根下的按进程号日志。
+fn log_file_path() -> PathBuf {
+    crate::platform::dirs::local_dir().join(format!("slterm-{}.log", process::id()))
+}
+
 /// target 是否放行。
 fn is_allowed_target(level: Level, target: &str) -> bool {
     match (level, log::max_level()) {
@@ -179,8 +193,7 @@ struct OnDemandLogFile {
 
 impl OnDemandLogFile {
     fn new() -> Self {
-        let mut path = env::temp_dir();
-        path.push(format!("slterm-{}.log", process::id()));
+        let path = log_file_path();
 
         // 路径经环境变量发布,启动失败诊断可读回。
         unsafe {
@@ -257,6 +270,22 @@ mod logging_tests {
         assert!(is_allowed_target(Level::Warn, "gpui"));
         assert!(!is_allowed_target(Level::Info, "gpui"));
         log::set_max_level(LevelFilter::Warn);
+    }
+
+    /// 成功审计走 info 级；常态 Warn 档位不得把审计成功事件过滤掉。
+    #[test]
+    fn audit_records_bypass_the_warn_level_gate() {
+        assert!(level_allowed(Level::Info, "audit", LevelFilter::Warn));
+        assert!(level_allowed(Level::Info, "audit", LevelFilter::Error));
+        assert!(!level_allowed(Level::Info, "slterm", LevelFilter::Warn));
+        assert!(level_allowed(Level::Warn, "slterm", LevelFilter::Warn));
+    }
+
+    /// 主日志文件归本地数据根，不散落在系统临时目录。
+    #[test]
+    fn log_file_lives_under_the_local_data_root() {
+        let path = log_file_path();
+        assert_eq!(path.parent(), Some(crate::platform::dirs::local_dir()));
     }
 
     #[test]
