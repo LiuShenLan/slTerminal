@@ -350,6 +350,49 @@ mod workspace_tests {
         assert_eq!(scalar_i64(&connection, "PRAGMA user_version"), 2);
     }
 
+    /// 高版本库必须以只读连接打开：主库与 WAL 字节在打开前后完全不变。
+    #[test]
+    fn higher_version_wal_database_is_opened_read_only_without_touching_data_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = fixture(&temp);
+        drop(WorkspaceDatabase::open(&paths).unwrap());
+        let raw = raw_connection(&paths);
+        raw.pragma_update(None, "journal_mode", "wal").unwrap();
+        raw.pragma_update(None, "wal_autocheckpoint", 0).unwrap();
+        raw.execute_batch(
+            "CREATE TABLE future_field (value TEXT);              INSERT INTO future_field VALUES ('kept')",
+        )
+        .unwrap();
+        raw.pragma_update(None, "user_version", 2_u32).unwrap();
+        // 连接保持打开时热复制主库与 WAL，确保快照带真实 WAL 内容。
+        let snapshot_root = temp.path().join("snap-local");
+        fs::create_dir_all(&snapshot_root).unwrap();
+        let snapshot = AppPaths::new(temp.path().join("snap-config"), &snapshot_root).unwrap();
+        let source_db = paths.workspace_db_path();
+        let target_db = snapshot.workspace_db_path();
+        fs::create_dir_all(target_db.parent().unwrap()).unwrap();
+        fs::copy(&source_db, &target_db).unwrap();
+        let wal = |path: &Path| std::path::PathBuf::from(format!("{}-wal", path.display()));
+        let source_wal = wal(&source_db);
+        if source_wal.exists() {
+            fs::copy(&source_wal, wal(&target_db)).unwrap();
+        }
+        drop(raw);
+
+        let db_before = fs::read(&target_db).unwrap();
+        let wal_before = fs::read(wal(&target_db)).ok();
+        let store = WorkspaceDatabase::open(&snapshot).unwrap();
+        assert_eq!(store.access(), DatabaseAccess::ReadOnlyHigherVersion);
+        assert_eq!(store.schema_version(), 2);
+        drop(store);
+        assert_eq!(fs::read(&target_db).unwrap(), db_before, "主库字节不得改变");
+        assert_eq!(
+            fs::read(wal(&target_db)).ok(),
+            wal_before,
+            "WAL 字节不得改变"
+        );
+    }
+
     #[test]
     fn workspace_separates_corruption_and_current_schema_damage() {
         let corrupt_temp = tempfile::tempdir().unwrap();

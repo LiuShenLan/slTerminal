@@ -7,7 +7,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use rusqlite::{Connection, TransactionBehavior, params};
+use rusqlite::{Connection, OpenFlags, TransactionBehavior, params};
 
 /// 当前连接允许的持久化操作。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -101,52 +101,75 @@ impl Database {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let mut connection = Connection::open(path)?;
-        connection.busy_timeout(Duration::from_secs(2))?;
-        connection.pragma_update(None, "foreign_keys", true)?;
-
-        let application_id = pragma_i64(&connection, "application_id")?;
-        let raw_version = pragma_i64(&connection, "user_version")?;
+        // 版本判定必须先于任何可写打开：SQLite 在读写打开阶段可能恢复
+        // WAL 并改写主库，高版本库的「只读、不降级、不覆盖」合同不能
+        // 靠打开后的 query_only 补救。
+        if !path.exists() {
+            return Self::open_read_write(path, spec, true);
+        }
+        let probe = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        probe.busy_timeout(Duration::from_secs(2))?;
+        let application_id = pragma_i64(&probe, "application_id")?;
+        let raw_version = pragma_i64(&probe, "user_version")?;
         let schema_version =
             u32::try_from(raw_version).map_err(|_| DatabaseError::IncompatibleSchema)?;
         let object_count = scalar_i64(
-            &connection,
+            &probe,
             "SELECT COUNT(*) FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'",
             [],
         )?;
-        let is_new = application_id == 0 && schema_version == 0 && object_count == 0;
+        if application_id == 0 && schema_version == 0 && object_count == 0 {
+            // 既有空文件：关闭只读探测连接后按新库初始化。
+            drop(probe);
+            return Self::open_read_write(path, spec, true);
+        }
+        if application_id != i64::from(spec.application_id) {
+            return Err(DatabaseError::WrongApplication);
+        }
+        if schema_version > spec.schema_version {
+            // 只读连接本身即写屏障；query_only 仅作纵深防御。
+            probe.pragma_update(None, "query_only", true)?;
+            validate_storage(&probe)?;
+            return Ok(Self {
+                connection: probe,
+                access: DatabaseAccess::ReadOnlyHigherVersion,
+                schema_version,
+                spec,
+            });
+        }
+        if schema_version < spec.schema_version {
+            return Err(DatabaseError::IncompatibleSchema);
+        }
+        drop(probe);
+        Self::open_read_write(path, spec, false)
+    }
 
-        let access = if is_new {
+    fn open_read_write(
+        path: &Path,
+        spec: &'static DatabaseSpec,
+        is_new: bool,
+    ) -> Result<Self, DatabaseError> {
+        let mut connection = Connection::open(path)?;
+        connection.busy_timeout(Duration::from_secs(2))?;
+        connection.pragma_update(None, "foreign_keys", true)?;
+        if is_new {
             initialize(&mut connection, spec)?;
-            DatabaseAccess::ReadWrite
-        } else {
-            if application_id != i64::from(spec.application_id) {
-                return Err(DatabaseError::WrongApplication);
-            }
-            let access = if schema_version > spec.schema_version {
-                connection.pragma_update(None, "query_only", true)?;
-                DatabaseAccess::ReadOnlyHigherVersion
-            } else if schema_version < spec.schema_version {
-                return Err(DatabaseError::IncompatibleSchema);
-            } else {
-                DatabaseAccess::ReadWrite
-            };
-            validate_storage(&connection)?;
-            if access == DatabaseAccess::ReadWrite {
-                validate_schema(&connection, spec)?;
-            }
-            access
-        };
-
-        let schema_version = if is_new {
-            spec.schema_version
-        } else {
-            schema_version
-        };
+            return Ok(Self {
+                connection,
+                access: DatabaseAccess::ReadWrite,
+                schema_version: spec.schema_version,
+                spec,
+            });
+        }
+        validate_storage(&connection)?;
+        validate_schema(&connection, spec)?;
         Ok(Self {
             connection,
-            access,
-            schema_version,
+            access: DatabaseAccess::ReadWrite,
+            schema_version: spec.schema_version,
             spec,
         })
     }
