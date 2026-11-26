@@ -244,7 +244,7 @@
 | “清单即合同”没有机械化全等检查 | 待修 |
 | CI 不执行许可清单核验 | 待修 |
 | CI 未按发布口径验证（无 --locked、无 release 构建、无 dumpbin） | 待修 |
-| 架构门禁未使用 --base | 待修 |
+| 架构门禁未使用 --base | 已修：CI 检出完整历史，PR 用 `base.sha`、push 用 `before` 传入 `check_architecture.py --base`，零基线回退全量；测试 `test_ci_architecture_gate_compares_against_the_change_base` |
 | 版本校验与默认值跨脚本不一致 | 待修 |
 | 发布产物无签名链 | 待修 |
 | i18n 合同只约束目录占位符 | 已修：生成器输出 `Message::placeholders()` 与 `Message::ALL`；`format` 在 debug 构建校验参数名集合完全一致，合同测试用声明占位符遍历全部消息与语言并断言无残留 `{name}`；测试 `every_message_formats_with_its_declared_placeholders` |

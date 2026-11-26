@@ -39,6 +39,13 @@ class GovernanceTests(unittest.TestCase):
             "CI 必须按架构层执行 core release 串行测试",
         )
 
+
+    def test_ci_architecture_gate_compares_against_the_change_base(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        self.assertIn("fetch-depth: 0", workflow, "架构门禁 --base 需要完整历史")
+        self.assertIn("pull_request.base.sha", workflow)
+        self.assertIn('check_architecture.py --base $base', workflow)
+
     def test_license_compliance_artifacts_exist(self):
         license_text = (ROOT / "LICENSE").read_text(encoding="utf-8")
         self.assertIn("GNU GENERAL PUBLIC LICENSE", license_text)

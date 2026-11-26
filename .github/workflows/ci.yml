@@ -15,6 +15,9 @@ jobs:
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
+        with:
+          # --base 需要完整历史以定位 PR/push 基线。
+          fetch-depth: 0
 
       - name: 安装 Rust 工具链（读取 rust-toolchain.toml，启用缓存）
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -64,7 +67,14 @@ jobs:
 
       - name: 架构门禁
         shell: pwsh
-        run: python scripts/check_architecture.py
+        run: |
+          $base = "${{ github.event.pull_request.base.sha }}"
+          if (-not $base) { $base = "${{ github.event.before }}" }
+          if (-not $base -or $base -match '^0+$') {
+            python scripts/check_architecture.py
+          } else {
+            python scripts/check_architecture.py --base $base
+          }
 
       - name: 文档策略门禁
         shell: pwsh
