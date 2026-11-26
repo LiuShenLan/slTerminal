@@ -333,7 +333,7 @@ const SIDEBAR_DEFINITIONS: [CommandDefinition; 23] = [
     CommandDefinition {
         id: CommandId::ActivateSideView,
         target: CommandTarget::SideView(SideViewId::AgentFiles),
-        keystroke: "ctrl-shift-a",
+        keystroke: "ctrl-shift-i",
         context: None,
         action: || Box::new(ActivateAgentFiles),
     },
@@ -996,6 +996,10 @@ mod command_registry_tests {
             assert_ne!(
                 keystroke, "ctrl-shift-c",
                 "复制语义归终端视图，不得进入命令目录"
+            );
+            assert_ne!(
+                keystroke, "ctrl-shift-a",
+                "全选语义归终端视图，不得进入命令目录"
             );
         }
         assert!(!TERMINAL_DEFINITIONS.is_empty());

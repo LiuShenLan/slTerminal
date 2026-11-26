@@ -12,7 +12,7 @@ use std::ops::{Bound, Range, RangeBounds};
 use crate::grid::{Dimensions, GridCell, Indexed};
 use crate::index::{Boundary, Column, Line, Point, Side};
 use crate::term::Term;
-use crate::term::cell::{Cell, Flags};
+use crate::term::cell::{Cell, Flags, LineLength};
 use vte::ansi::CursorShape;
 
 /// A Point and side within that point.
@@ -106,6 +106,7 @@ pub enum SelectionType {
 pub enum SelectionCommand {
     Set(Option<Selection>),
     Update { point: Point, side: Side },
+    SelectAll,
     Clear,
 }
 
@@ -417,6 +418,38 @@ impl Selection {
         })
     }
 }
+
+impl<T> Term<T> {
+    /// 选中回滚与当前屏幕的全部文本；备用屏没有回滚，等价于选中整屏。
+    ///
+    /// 首尾空白行不计入选区，末列取该行最后一个占用格：全选后复制
+    /// 不会凭空多出尾随换行，粘贴时也不会误触执行。
+    pub fn select_all(&mut self) {
+        let grid = self.grid();
+        let mut start_line = grid.topmost_line();
+        let mut end_line = grid.bottommost_line();
+        while start_line < end_line && grid[start_line].line_length().0 == 0 {
+            start_line += 1;
+        }
+        while end_line > start_line && grid[end_line].line_length().0 == 0 {
+            end_line -= 1;
+        }
+        if grid[end_line].line_length().0 == 0 {
+            self.selection = None;
+            return;
+        }
+
+        let last_column = Column(grid[end_line].line_length().0 - 1);
+        let mut selection = Selection::new(
+            SelectionType::Simple,
+            Point::new(start_line, Column(0)),
+            Side::Left,
+        );
+        selection.update(Point::new(end_line, last_column), Side::Right);
+        self.selection = Some(selection);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

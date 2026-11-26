@@ -667,11 +667,23 @@ fn activity_bar_lower_group_is_anchored_to_bottom(cx: &mut TestAppContext) {
     let lower = window
         .debug_bounds("app-root-side-button-explorer")
         .unwrap();
+    let settings = window
+        .debug_bounds("app-root-settings-button")
+        .expect("活动栏底部必须保留固定配置按钮");
     let viewport = window.update(|window, _| window.viewport_size());
     assert!(lower.origin.y > upper.origin.y);
+    // 固定配置按钮占底部：下按钮组与其相隔 4 像素上边距，按钮自身保留 8 像素窗底内边距。
     assert!(
-        (f32::from(viewport.height) - f32::from(lower.bottom()) - 8.0).abs() <= 1.0,
-        "下按钮组必须贴齐活动栏底部并保留 8 像素内边距"
+        (f32::from(lower.bottom()) + 4.0 - f32::from(settings.origin.y)).abs() <= 1.0,
+        "下按钮组必须贴齐配置按钮上方（lower.bottom={}, settings.top={}）",
+        lower.bottom(),
+        settings.origin.y
+    );
+    assert!(
+        (f32::from(viewport.height) - f32::from(settings.bottom()) - 8.0).abs() <= 1.0,
+        "配置按钮必须贴齐活动栏底部并保留 8 像素内边距（viewport={:?}, settings.bottom={}）",
+        viewport.height,
+        settings.bottom()
     );
 
     focus_side_button(&root, &mut window, cx, SideViewId::AgentFiles);
@@ -1278,7 +1290,7 @@ fn side_view_shortcut_bindings_cover_all_registered_views(cx: &mut TestAppContex
         ("ctrl-shift-n", SideViewId::Nav),
         ("ctrl-shift-e", SideViewId::Explorer),
         ("ctrl-shift-g", SideViewId::Commit),
-        ("ctrl-shift-a", SideViewId::AgentFiles),
+        ("ctrl-shift-i", SideViewId::AgentFiles),
     ] {
         window.simulate_keystrokes(keys);
         draw_frame(&mut window);

@@ -688,6 +688,15 @@ impl TerminalView {
         }
     }
 
+    /// 应用测试已显式取出的 worker 命令；用于先断言命令集再结算显示状态。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn apply_test_worker_command(&mut self, command: &Msg) {
+        if let Some(binding) = &self.binding {
+            binding.apply_test_command(command).unwrap();
+        }
+        self.refresh_test_frame();
+    }
+
     #[cfg(all(test, feature = "gpui-test-support"))]
     pub(crate) fn mark_test_exited(&mut self, cx: &mut Context<'_, Self>) {
         self.mark_exited("测试进程退出".to_owned(), cx);
@@ -989,6 +998,18 @@ impl TerminalView {
         }
         if mods.control && mods.shift {
             match ks.key.as_str() {
+                "a" => {
+                    // 全选覆盖回滚与屏幕；只改 worker 选区，不写 PTY。
+                    self.selection_cleared = false;
+                    if let Err(error) = self.send_worker_command(Msg::Select(
+                        slterm_terminal::selection::SelectionCommand::SelectAll,
+                    )) {
+                        log::warn!("终端全选命令发送失败: {error}");
+                    }
+                    cx.notify();
+                    cx.stop_propagation();
+                    return;
+                }
                 "c" => {
                     // 默认语义:无选区也 stop_propagation 静默吞——
                     // 复制键永不入 PTY;负反馈/透传中断的权衡见待沉淀决策。

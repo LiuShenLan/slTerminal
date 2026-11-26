@@ -210,6 +210,53 @@ fn ctrl_shift_c_copies_selection_and_feedback_expires_on_controlled_clock(cx: &m
     assert!(!terminal.read_with(&window, |view, _| view.copy_feedback.is_copied()));
 }
 
+/// ctrl+shift+a 全选回滚与屏幕:只发选择命令、零 PTY 字节，复制得到完整文本。
+#[gpui::test]
+fn ctrl_shift_a_selects_all_terminal_text_without_pty_write(cx: &mut TestAppContext) {
+    let (terminal, mut window, rx, _registry) = open(cx);
+    terminal.update(&mut window, |view, _| {
+        let mut buf = Vec::new();
+        for i in 0..40 {
+            buf.extend_from_slice(format!("line {i:02}\r\n").as_bytes());
+        }
+        feed(view, &buf);
+    });
+
+    let modifiers = Modifiers {
+        control: true,
+        shift: true,
+        ..Default::default()
+    };
+    let propagate = press(&mut window, key("a", modifiers));
+    assert!(!propagate, "全选键必须先于编码器消费");
+
+    let mut commands = Vec::new();
+    while let Ok(command) = rx.try_recv() {
+        commands.push(command);
+    }
+    assert!(
+        matches!(
+            commands.as_slice(),
+            [Msg::Select(
+                slterm_terminal::selection::SelectionCommand::SelectAll
+            )]
+        ),
+        "全选路径只允许一条选择命令，不得向 PTY 写字节: {commands:?}"
+    );
+    terminal.update(&mut window, |view, _| {
+        for command in &commands {
+            view.apply_test_worker_command(command);
+        }
+    });
+
+    let text = terminal
+        .read_with(&window, |view, _| view.selected_text().map(str::to_owned))
+        .expect("全选必须形成可复制文本");
+    assert!(text.starts_with("line 00"), "{text:?}");
+    assert!(text.ends_with("line 39"), "{text:?}");
+    assert!(!text.ends_with('\n'), "全选不得凭空追加尾随换行");
+}
+
 /// 默认语义(待沉淀,按默认实现):无选区的 ctrl+shift+c
 /// 静默吞——剪贴板不动、PTY 零字节、不冒泡、无反馈。
 #[gpui::test]

@@ -666,6 +666,7 @@ fn apply_display_command<T: EventListener>(terminal: &mut Term<T>, msg: &Msg) ->
                 selection.update(*point, *side);
             }
         }
+        Msg::Select(crate::selection::SelectionCommand::SelectAll) => terminal.select_all(),
         Msg::Select(crate::selection::SelectionCommand::Clear) => terminal.selection = None,
         Msg::SetColorScheme(dark) => terminal.set_color_scheme(*dark),
         Msg::SearchLiteral { query, reply } => {

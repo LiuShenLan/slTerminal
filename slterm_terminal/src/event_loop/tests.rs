@@ -122,6 +122,39 @@ fn display_commands_are_applied_inside_the_worker() {
     ));
 }
 
+/// 全选命令覆盖回滚与当前屏幕；命令只改选区，不写 PTY。
+#[test]
+fn select_all_covers_scrollback_and_screen() {
+    use crate::selection::SelectionCommand;
+
+    let mut term = Term::new(Config::default(), &TermSize::new(20, 3), VoidListener);
+    let mut stream = StreamProcessor::default();
+    for i in 0..6 {
+        stream.feed(&mut term, &VoidListener, format!("line {i}\r\n").as_bytes());
+    }
+
+    assert!(apply_display_command(
+        &mut term,
+        &Msg::Select(SelectionCommand::SelectAll)
+    ));
+    assert_eq!(
+        term.selection_to_string().as_deref(),
+        Some("line 0\nline 1\nline 2\nline 3\nline 4\nline 5")
+    );
+    assert!(!apply_display_command(
+        &mut term,
+        &Msg::Input(Cow::Borrowed(b"input"))
+    ));
+
+    // 空画面全选不产生只含空格的伪选区。
+    let mut blank = Term::new(Config::default(), &TermSize::new(20, 3), VoidListener);
+    assert!(apply_display_command(
+        &mut blank,
+        &Msg::Select(SelectionCommand::SelectAll)
+    ));
+    assert_eq!(blank.selection_to_string(), None);
+}
+
 #[test]
 fn animation_snapshots_cannot_observe_a_partial_synchronized_update() {
     use crate::render::{RenderSnapshot, SnapshotConfig};

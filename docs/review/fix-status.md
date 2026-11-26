@@ -140,8 +140,8 @@
 | 退出后键盘复制、搜索与回滚全部失效 | 已修：退出后保留复制/搜索/回滚，粘贴与编码路径关闭；测试 `exited_terminal_keeps_copy_and_scroll_but_rejects_input` |
 | 一次瞬态操作错误会替换并永久遮住终端画面 | 已修：超限粘贴与 Agent 注入失败的 `notice` 瞬态提示不再替换终端元素，可点击关闭（提交 ba269cdb）；测试 `oversized_paste_keeps_terminal_visible_with_dismissible_notice`、`dangerous_paste_confirmation_does_not_leak_or_write_early` |
 | Ctrl+Enter 未发送 LF，行镜像把修饰 Enter 当作提交 | 已修：`encode_for_program` 对 Ctrl+Enter 恒发 LF，行镜像 control 分支已使镜像失效；测试 `ctrl_enter_always_sends_lf` |
-| 键盘选区扩展与全选未实现，Shift+PageUp/PageDown/Home/End 语义相反 | 待修 |
-| Ctrl+Shift+A 同时被终端全选与侧栏 Agent 文件占用 | 待修 |
+| 键盘选区扩展未实现，Shift+PageUp/PageDown/Home/End 语义相反 | 待修（全选部分已随 `Ctrl+Shift+A` 行修复） |
+| Ctrl+Shift+A 同时被终端全选与侧栏 Agent 文件占用 | 已修：终端独占 `Ctrl+Shift+A` 全选（`SelectionCommand::SelectAll` 覆盖回滚与屏幕，尾部空白不产生尾随换行，零 PTY 写入）；侧栏 Agent 文件改绑 `Ctrl+Shift+I`，命令目录新增保留键断言；测试 `select_all_covers_scrollback_and_screen`、`ctrl_shift_a_selects_all_terminal_text_without_pty_write`、`side_view_shortcut_bindings_cover_all_registered_views` |
 | 光标形状、闪烁与相关设置不符合行为真值 | 待修 |
 | 主题、字体、字号、连字与复制/补全外观设置不热应用 | 待修 |
 | 真实 ConPTY 验收场景覆盖不足 | 待修 |
