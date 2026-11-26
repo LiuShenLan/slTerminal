@@ -461,6 +461,7 @@ impl TerminalView {
             branch: String::new(),
             running_program: None,
             error,
+            notice: None,
             exited,
             origin: point(px(0.0), px(0.0)),
             cell_width: cell_w,

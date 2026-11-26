@@ -18,7 +18,8 @@ use gpui::{
     App, Bounds, ClipboardItem, Context, EventEmitter, FocusHandle, Focusable, Font, FontStyle,
     FontWeight, InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, Point, PromptLevel, Render,
-    ScrollWheelEvent, Size, Styled as _, UTF16Selection, Window, div, point, px,
+    ScrollWheelEvent, Size, StatefulInteractiveElement as _, Styled as _, UTF16Selection, Window,
+    div, point, px,
 };
 
 #[cfg(all(test, feature = "gpui-test-support"))]
@@ -192,6 +193,8 @@ pub struct TerminalView {
     /// 标题协议里的前台程序名;Agent 身份与命令生命周期共用。
     pub running_program: Option<String>,
     pub(super) error: Option<String>,
+    /// 单次操作被拒绝的瞬态提示；不替换终端画面，可点击关闭。
+    pub(super) notice: Option<String>,
     pub(super) exited: Option<String>,
     pub(super) origin: Point<Pixels>,
     pub(super) cell_width: Pixels,
@@ -597,6 +600,11 @@ impl TerminalView {
     }
 
     #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn notice_for_test(&self) -> Option<&str> {
+        self.notice.as_deref()
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
     pub(crate) fn install_test_worker(
         &mut self,
         registry: &Rc<RefCell<super::registry::TerminalRegistry>>,
@@ -878,7 +886,7 @@ impl TerminalView {
             return;
         };
         if text.len() > MAX_PASTE_BYTES {
-            self.error = Some("粘贴内容超过 10 MiB，已拒绝".to_owned());
+            self.notice = Some("粘贴内容超过 10 MiB，已拒绝".to_owned());
             cx.notify();
             return;
         }
@@ -1347,6 +1355,27 @@ impl Render for TerminalView {
                     );
                 }
                 bottom_stack = bottom_stack.child(list);
+            }
+            if let Some(notice) = &self.notice {
+                let view = cx.entity();
+                bottom_stack = bottom_stack.child(
+                    div()
+                        .id("slterm-terminal-notice")
+                        .debug_selector(|| "slterm-terminal-notice".to_owned())
+                        .px_2()
+                        .py_1()
+                        .rounded_md()
+                        .bg(gpui::opaque_grey(0.2, 0.9))
+                        .text_sm()
+                        .cursor_pointer()
+                        .child(notice.clone())
+                        .on_click(move |_, _, cx| {
+                            view.update(cx, |view, cx| {
+                                view.notice = None;
+                                cx.notify();
+                            });
+                        }),
+                );
             }
             if let Some(exited) = &self.exited {
                 bottom_stack = bottom_stack.child(

@@ -287,7 +287,64 @@ fn dangerous_paste_confirmation_does_not_leak_or_write_early(cx: &mut TestAppCon
     press(&mut window, key("v", modifiers));
     assert!(!cx.has_pending_prompt());
     assert!(pty_bytes(&rx).is_empty(), "超过 10 MiB 必须拒绝");
-    assert!(terminal.read_with(&window, |view, _| view.error.is_some()));
+    assert!(
+        terminal.read_with(&window, |view, _| view.notice.is_some()),
+        "超限粘贴只产生瞬态提示"
+    );
+}
+
+/// 超限粘贴只产生可关闭的瞬态提示，不得替换或遮挡终端画面。
+#[gpui::test]
+fn oversized_paste_keeps_terminal_visible_with_dismissible_notice(cx: &mut TestAppContext) {
+    let (terminal, mut window, rx, _registry) = open(cx);
+    terminal.update(&mut window, |view, _| {
+        feed(
+            view,
+            b"still visible
+",
+        )
+    });
+    window.run_until_parked();
+    window.update(|_, cx| {
+        cx.write_to_clipboard(ClipboardItem::new_string("x".repeat(10 * 1024 * 1024 + 1)));
+    });
+    terminal.update_in(&mut window, |view, window, cx| view.paste(window, cx));
+    window.run_until_parked();
+    assert!(
+        window.update(|_, cx| terminal.read(cx).notice_for_test().is_some()),
+        "超限粘贴必须给出瞬态提示"
+    );
+    assert!(
+        !window.update(|_, cx| terminal.read(cx).has_error()),
+        "瞬态失败不得升级为致命错误"
+    );
+    let notice = window
+        .debug_bounds("slterm-terminal-notice")
+        .expect("提示必须可见");
+    assert!(
+        window.debug_bounds("slterm-terminal-error").is_none(),
+        "终端画面不得被错误文本替换"
+    );
+    assert!(
+        window.debug_bounds("slterm-terminal").is_some(),
+        "终端元素必须继续渲染"
+    );
+    window.simulate_click(notice.center(), gpui::Modifiers::default());
+    window.run_until_parked();
+    assert!(
+        window.debug_bounds("slterm-terminal-notice").is_none(),
+        "点击后提示必须关闭"
+    );
+
+    // 超限拒绝不写 PTY。
+    terminal.update_in(&mut window, |_, _, _| {
+        while let Ok(message) = rx.try_recv() {
+            assert!(
+                !matches!(message, Msg::Input(_)),
+                "超限粘贴不得写入 PTY: {message:?}"
+            );
+        }
+    });
 }
 
 #[test]

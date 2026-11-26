@@ -104,7 +104,8 @@ impl TerminalView {
             .is_err()
         {
             // 不携带命令正文；本代次已消费，不以自动重试制造重复执行。
-            self.error = Some("Agent 会话恢复注入失败".to_owned());
+            // 单次发送失败是瞬态提示，不替换终端画面。
+            self.notice = Some("Agent 会话恢复注入失败".to_owned());
         }
     }
 }
