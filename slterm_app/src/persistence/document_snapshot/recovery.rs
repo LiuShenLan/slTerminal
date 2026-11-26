@@ -47,6 +47,26 @@ impl DiskDocument {
     }
 }
 
+/// 后台重授权读盘结果；只能交回同一恢复器的 `finish_reauthorize` 结算。
+pub(crate) struct ReauthorizedDocument {
+    disk: DiskDocument,
+}
+
+/// 显式会话授权的真实读盘：不触碰 Registry 或前台状态，可放后台执行。
+pub(crate) fn read_reauthorized_document(
+    location: &ResolvedPath,
+    grant: PathGrant,
+) -> io::Result<ReauthorizedDocument> {
+    read_disk(
+        &SystemDocumentPathResolver,
+        location,
+        &[],
+        Some(grant),
+        None,
+    )
+    .map(|disk| ReauthorizedDocument { disk })
+}
+
 /// 真实启动恢复器；正文与授权占位都只依附已经归一的布局。
 pub(crate) struct DocumentSnapshotRecoverer {
     store: DocumentSnapshotStore,
@@ -103,24 +123,47 @@ impl DocumentSnapshotRecoverer {
         self.identity_replaced_documents.contains(&id)
     }
 
-    /// 根外文档只能由本次显式会话授权重新读盘；快照正文与 DocumentId 不变。
-    pub(crate) fn reauthorize(
+    fn document_location(&self, id: DocumentId) -> Option<ResolvedPath> {
+        self.layout.as_ref().and_then(|layout| {
+            layout
+                .documents()
+                .find_map(|(document, location)| (document == id).then(|| location.clone()))
+        })
+    }
+
+    /// 前台只取记录位置与精确文件会话授权；真实读盘留在后台。
+    pub(crate) fn prepare_reauthorize(&self, id: DocumentId) -> Option<(ResolvedPath, PathGrant)> {
+        if !self.requires_authorization.contains(&id) {
+            return None;
+        }
+        let location = self.document_location(id)?;
+        let grant = PathGrant::session_file_read(location.canonical_path().clone());
+        Some((location, grant))
+    }
+
+    /// 后台读取完成后在前台结算：复核目标未偏离记录位置、保留 DocumentId 与正文状态。
+    pub(crate) fn finish_reauthorize(
         &mut self,
         registry: &mut DocumentRegistry,
         id: DocumentId,
-        grant: PathGrant,
+        prepared: ReauthorizedDocument,
     ) -> io::Result<()> {
-        let location = self
-            .layout
-            .as_ref()
-            .and_then(|layout| {
-                layout
-                    .documents()
-                    .find_map(|(document, location)| (document == id).then_some(location))
-            })
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "布局中不存在该 Document"))?
-            .clone();
-        let disk = self.read(&location, &[], Some(grant), None)?;
+        if !self.requires_authorization.contains(&id) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Document 不处于待授权状态",
+            ));
+        }
+        let recorded = self
+            .document_location(id)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "布局中不存在该 Document"))?;
+        let disk = prepared.disk;
+        if disk.location().canonical_path() != recorded.canonical_path() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "重授权目标已偏离记录位置",
+            ));
+        }
         if registry.session(id).is_some() {
             let conflict = match &disk {
                 DiskDocument::Editable {
@@ -445,66 +488,81 @@ impl DocumentSnapshotRecoverer {
         session_grant: Option<PathGrant>,
         requested: Option<DocumentEncoding>,
     ) -> io::Result<DiskDocument> {
-        let resolved = self.resolver.resolve(location.canonical_path())?;
-        let request = PathRequest {
-            operation: if session_grant.is_some() {
-                PathOperation::Read
-            } else {
-                PathOperation::AutomaticRead
-            },
-            lexical_path: location.canonical_path().as_path().to_path_buf(),
-            root_hints: Vec::new(),
-            session_grant,
-            expected_authorization_generation: crate::app_shell::authorization::current_generation(
-            ),
-        };
-        let authorization = PathPolicy::authorize(
-            &request,
-            &resolved,
+        read_disk(
+            self.resolver.as_ref(),
+            location,
             grants,
-            crate::app_shell::authorization::current_generation(),
+            session_grant,
+            requested,
         )
-        .map_err(|_| io::Error::new(io::ErrorKind::PermissionDenied, "文档恢复未获授权"))?;
-        let resolved = authorization.resolved_path().clone();
-        let mut file = std::fs::File::open(resolved.canonical_path().as_path())?;
-        let metadata = file.metadata()?;
-        let identity = crate::atomic_file::file_identity(&file)?;
-        let location = ResolvedPath::new(resolved.canonical_path().clone(), Some(identity));
-        if metadata.len() > EDITABLE_LIMIT_BYTES {
-            return match PagedDocument::open(&location, requested) {
-                Ok(paged) => Ok(DiskDocument::Paged {
-                    location,
-                    source: paged.source(),
-                    metadata: DocumentMetadata {
-                        encoding: paged.encoding().clone(),
-                        read_only: true,
-                    },
-                }),
-                Err(error) if error.kind() == io::ErrorKind::InvalidData => {
-                    Ok(DiskDocument::Unavailable { location })
-                }
-                Err(error) => Err(error),
-            };
-        }
-        let mut bytes = Vec::with_capacity(metadata.len() as usize);
-        std::io::Read::read_to_end(&mut file, &mut bytes)?;
-        if bytes.len() as u64 != metadata.len() {
-            return Err(io::Error::other("恢复读取期间文件长度已变化"));
-        }
-        let content = DocumentContent::decode(bytes, metadata.len(), requested);
-        match content {
-            DocumentContent::Editable(decoded) => Ok(DiskDocument::Editable {
+    }
+}
+
+fn read_disk(
+    resolver: &dyn DocumentPathResolver,
+    location: &ResolvedPath,
+    grants: &[PathGrant],
+    session_grant: Option<PathGrant>,
+    requested: Option<DocumentEncoding>,
+) -> io::Result<DiskDocument> {
+    let resolved = resolver.resolve(location.canonical_path())?;
+    let request = PathRequest {
+        operation: if session_grant.is_some() {
+            PathOperation::Read
+        } else {
+            PathOperation::AutomaticRead
+        },
+        lexical_path: location.canonical_path().as_path().to_path_buf(),
+        root_hints: Vec::new(),
+        session_grant,
+        expected_authorization_generation: crate::app_shell::authorization::current_generation(),
+    };
+    let authorization = PathPolicy::authorize(
+        &request,
+        &resolved,
+        grants,
+        crate::app_shell::authorization::current_generation(),
+    )
+    .map_err(|_| io::Error::new(io::ErrorKind::PermissionDenied, "文档恢复未获授权"))?;
+    let resolved = authorization.resolved_path().clone();
+    let mut file = std::fs::File::open(resolved.canonical_path().as_path())?;
+    let metadata = file.metadata()?;
+    let identity = crate::atomic_file::file_identity(&file)?;
+    let location = ResolvedPath::new(resolved.canonical_path().clone(), Some(identity));
+    if metadata.len() > EDITABLE_LIMIT_BYTES {
+        return match PagedDocument::open(&location, requested) {
+            Ok(paged) => Ok(DiskDocument::Paged {
                 location,
-                text: decoded.text,
-                baseline: decoded.disk_baseline,
+                source: paged.source(),
                 metadata: DocumentMetadata {
-                    encoding: decoded.encoding,
-                    read_only: metadata.permissions().readonly(),
+                    encoding: paged.encoding().clone(),
+                    read_only: true,
                 },
             }),
-            DocumentContent::Paged(_) | DocumentContent::Unavailable(_) => {
+            Err(error) if error.kind() == io::ErrorKind::InvalidData => {
                 Ok(DiskDocument::Unavailable { location })
             }
+            Err(error) => Err(error),
+        };
+    }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    std::io::Read::read_to_end(&mut file, &mut bytes)?;
+    if bytes.len() as u64 != metadata.len() {
+        return Err(io::Error::other("恢复读取期间文件长度已变化"));
+    }
+    let content = DocumentContent::decode(bytes, metadata.len(), requested);
+    match content {
+        DocumentContent::Editable(decoded) => Ok(DiskDocument::Editable {
+            location,
+            text: decoded.text,
+            baseline: decoded.disk_baseline,
+            metadata: DocumentMetadata {
+                encoding: decoded.encoding,
+                read_only: metadata.permissions().readonly(),
+            },
+        }),
+        DocumentContent::Paged(_) | DocumentContent::Unavailable(_) => {
+            Ok(DiskDocument::Unavailable { location })
         }
     }
 }

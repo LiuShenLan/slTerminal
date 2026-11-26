@@ -470,7 +470,9 @@ impl AppRoot {
                         self.restore_recovery_panel(
                             project_id,
                             view,
+                            document_id,
                             super::document_recovery::DocumentRecoveryKind::Paged,
+                            window,
                             cx,
                         )
                     } else if self.documents.session(document_id).is_some() {
@@ -486,7 +488,9 @@ impl AppRoot {
                         self.restore_recovery_panel(
                             project_id,
                             view,
+                            document_id,
                             super::document_recovery::DocumentRecoveryKind::Authorization,
+                            window,
                             cx,
                         )
                     } else if self
@@ -496,7 +500,9 @@ impl AppRoot {
                         self.restore_recovery_panel(
                             project_id,
                             view,
+                            document_id,
                             super::document_recovery::DocumentRecoveryKind::Replaced,
+                            window,
                             cx,
                         )
                     } else {
@@ -504,7 +510,9 @@ impl AppRoot {
                         self.restore_recovery_panel(
                             project_id,
                             view,
+                            document_id,
                             super::document_recovery::DocumentRecoveryKind::Unavailable,
+                            window,
                             cx,
                         )
                     };

@@ -1168,7 +1168,7 @@ impl AppRoot {
 }
 
 /// 文本视图绑定的 Document；其他视图没有可保存内容。
-fn view_document_id(view: &ViewKey) -> Option<slterm_document::DocumentId> {
+pub(super) fn view_document_id(view: &ViewKey) -> Option<slterm_document::DocumentId> {
     match view {
         ViewKey::Editor { document_id, .. }
         | ViewKey::Markdown { document_id, .. }

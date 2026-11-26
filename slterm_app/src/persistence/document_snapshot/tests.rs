@@ -1144,14 +1144,21 @@ fn integration_session_grant_restore() {
     std::fs::write(&file, "changed").unwrap();
     let canonical = CanonicalPath::new(dunce::canonicalize(&file).unwrap()).unwrap();
 
+    let (location, grant) = recoverer
+        .prepare_reauthorize(snapshot.document_id())
+        .unwrap();
+    assert_eq!(location.canonical_path(), &canonical);
+    let prepared = super::recovery::read_reauthorized_document(&location, grant).unwrap();
     let mut registry = recoverer.take_registry();
     recoverer
-        .reauthorize(
-            &mut registry,
-            snapshot.document_id(),
-            slterm_path::PathGrant::session_file_read(canonical),
-        )
+        .finish_reauthorize(&mut registry, snapshot.document_id(), prepared)
         .unwrap();
+    assert!(
+        recoverer
+            .prepare_reauthorize(snapshot.document_id())
+            .is_none(),
+        "成功后不得再次重授权"
+    );
 
     let session = registry.session(snapshot.document_id()).unwrap();
     assert!(!session.is_read_revoked());

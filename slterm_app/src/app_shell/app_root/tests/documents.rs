@@ -6,6 +6,7 @@ use gpui::Focusable as _;
 use slterm_document::LanguageId;
 
 include!("documents/open_file.rs");
+include!("documents/recovery.rs");
 
 pub(super) fn open_document(
     root: &Entity<AppRoot>,

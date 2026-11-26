@@ -169,7 +169,7 @@
 | 备份恢复、应用、回滚与撤回没有审计/恢复日志，设置写绕过 settings_store | 已修：暂存、逐项应用、恢复点、提交、回滚与清理只经 `audit` 记录 operation/path/source/result；设置条目经 `settings_store` 合并写并保留本机未知字段，回滚设置经审计包装且受 1 MiB 上限；设置条目超过上限在归档校验期拒绝；测试 `backup_restore_emits_audit_events_for_each_security_write`、`settings_restore_merges_exported_values_and_preserves_local_fields`、`oversized_settings_entry_is_rejected_before_staging` |
 | 审计成功事件在 Warn 级日志过滤下被丢弃 | 已修：`level_allowed` 让 audit target 恒放行；测试 `audit_records_bypass_the_warn_level_gate` |
 | 主日志写入系统临时目录而不是本地数据根 | 已修：`log_file_path` 归本地数据根；测试 `log_file_lives_under_the_local_data_root` |
-| 根外 Document 的会话重授权没有生产调用点 | 待修 |
+| 根外 Document 的会话重授权没有生产调用点 | 已修：授权占位提供真实“重新授权”入口；前台只取记录位置与精确文件会话授权，真实读盘走后台，回执复核目标未偏离记录位置后经启动恢复器结算并一次替换该 Document 的全部授权占位，分页正文切专用占位，失败保留占位并可重试；测试 `outside_document_reauthorization_replaces_placeholder`、`failed_outside_document_reauthorization_keeps_placeholder`、`diff_authorization_placeholder_reauthorizes_into_real_views`、`integration_session_grant_restore` |
 | 布局或快照领域恢复失败时静默以空工作区开窗 | 待修 |
 | 未完成关闭意图、NeedsAttention 维护请求与遗留恢复点只有阻断 | 待修 |
 | 更高版本数据库先以读写连接打开 | 已修：既有库先经 `SQLITE_OPEN_READ_ONLY` 探测版本，高版本直接保留只读连接（提交 c8290344）；测试 `higher_version_wal_database_is_opened_read_only_without_touching_data_files`、`workspace_higher_version_is_query_only_and_not_downgraded` |

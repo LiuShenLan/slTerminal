@@ -23,6 +23,8 @@ pub(crate) enum TaskId {
     #[allow(dead_code)] // 消费点 = Document 后台真实打开队列。
     DocumentOpen,
     DocumentExternal(slterm_document::DocumentId),
+    /// 根外 Document 的显式重授权后台读盘；同一 Document 同时最多一个。
+    DocumentReauthorize(slterm_document::DocumentId),
     DocumentSave(slterm_document::DocumentId),
     DocumentSystemOpen(slterm_document::DocumentId),
     EditorGit(slterm_workspace::PanelId),

@@ -700,6 +700,27 @@ impl AppRoot {
         self.install_panel(target, window, cx, move |_, _| built)
     }
 
+    /// Diff 复合视图：工作区侧复用来源 Editor 与专属 ViewState 租约，固定 HEAD 由后台刷新。
+    pub(super) fn build_diff_content(
+        &mut self,
+        target: &DocumentPanelTarget,
+        document_id: DocumentId,
+        target_line: Option<usize>,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<(PanelContent, FocusHandle), AppRootError> {
+        let (right, _) = self.build_source_content(target, document_id, window, cx)?;
+        let PanelContent::Editor(right) = right else {
+            return Err(AppRootError::MissingPanel);
+        };
+        let cache = self.page_cache.clone();
+        let root = cx.entity().downgrade();
+        let view = cx
+            .new(|cx| super::diff::DiffView::new(root, document_id, right, cache, target_line, cx));
+        let focus = view.read(cx).focus_handle(cx);
+        Ok((PanelContent::Diff(view), focus))
+    }
+
     pub(super) fn build_markdown_content(
         &mut self,
         target: &DocumentPanelTarget,
@@ -853,8 +874,18 @@ impl AppRoot {
             | ViewKey::Diff { document_id, .. } => *document_id,
             _ => return Err(AppRootError::MissingPanel),
         };
-        let (content, focus) =
-            self.build_external_content(project_id, view, document_id, paged.as_ref(), window, cx)?;
+        let diff = matches!(&view, ViewKey::Diff { .. });
+        let (content, focus) = if diff {
+            let target = DocumentPanelTarget {
+                project_id,
+                view: view.clone(),
+                focus: false,
+                activate_project: false,
+            };
+            self.build_diff_content(&target, document_id, None, window, cx)?
+        } else {
+            self.build_external_content(project_id, view, document_id, paged.as_ref(), window, cx)?
+        };
         let parent = self.project_focus_token(project_id, cx)?;
         let registration = self.focus_manager.register(
             &focus,
@@ -877,7 +908,213 @@ impl AppRoot {
         if let Some(previous) = self.panel_focus.insert(panel_id, registration) {
             let _ = self.focus_manager.unregister(previous.token());
         }
+        if diff && let Ok(view) = self.diff_view(panel_id, cx) {
+            let owner = super::task_service::ViewTaskOwner::Panel(panel_id);
+            if let Some(ticket) = self.tasks.request_view_refresh(owner) {
+                self.schedule_diff_head(panel_id, view, ticket, false, cx);
+            }
+        }
+        self.panel_subscriptions.remove(&panel_id);
         Ok(())
+    }
+
+    fn authorization_placeholder(
+        &self,
+        project_id: ProjectId,
+        panel_id: PanelId,
+        cx: &App,
+    ) -> Option<gpui::Entity<super::document_recovery::DocumentRecoveryView>> {
+        let project = self.projects.get(&project_id)?.read(cx);
+        let PanelContent::Recovery(view) = &project.panels.get(&panel_id)?.content else {
+            return None;
+        };
+        (view.read(cx).kind() == super::document_recovery::DocumentRecoveryKind::Authorization)
+            .then(|| view.clone())
+    }
+
+    /// 根外授权占位的唯一生产入口：前台只取记录与精确会话授权，真实读盘走后台。
+    pub(super) fn start_document_reauthorization(
+        &mut self,
+        project_id: ProjectId,
+        view: ViewKey,
+        document_id: DocumentId,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let task_id = TaskId::DocumentReauthorize(document_id);
+        if self.tasks.is_registered(task_id) {
+            return;
+        }
+        let Ok(panel_id) = self.panel_for_view(project_id, &view, cx) else {
+            return;
+        };
+        if self
+            .authorization_placeholder(project_id, panel_id, cx)
+            .is_none()
+        {
+            return;
+        }
+        let Some((location, grant)) = self
+            .side_view_persistence
+            .prepare_document_reauthorization(document_id)
+        else {
+            // 正文已读入而占位替换曾失败：直接从现有会话重建全部相关面板，不重复读盘。
+            self.replace_authorization_placeholders(
+                document_id,
+                Some((project_id, panel_id)),
+                window,
+                cx,
+            );
+            return;
+        };
+        let executor = cx.background_executor().clone();
+        let window_handle = window.window_handle();
+        self.tasks
+            .register_with(task_id, CancellationToken::new(), move || {
+                let reading = executor.spawn(async move {
+                    crate::persistence::document_snapshot::recovery::read_reauthorized_document(
+                        &location, grant,
+                    )
+                });
+                cx.spawn(async move |this, cx| {
+                    let result = reading.await;
+                    let _ = window_handle.update(cx, |_, window, cx| {
+                        let _ = this.update(cx, |root, cx| {
+                            root.finish_document_reauthorization(
+                                project_id,
+                                view,
+                                document_id,
+                                result,
+                                window,
+                                cx,
+                            );
+                        });
+                    });
+                })
+            })
+            .expect("重授权任务必须按 DocumentId 唯一");
+    }
+
+    pub(super) fn finish_document_reauthorization(
+        &mut self,
+        project_id: ProjectId,
+        view: ViewKey,
+        document_id: DocumentId,
+        result: io::Result<crate::persistence::document_snapshot::recovery::ReauthorizedDocument>,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.tasks
+            .complete(TaskId::DocumentReauthorize(document_id));
+        if self.close_in_progress || self.application_close.is_some() || self.close_completed {
+            return;
+        }
+        if !self.snapshot.documents().any(|(id, _)| id == document_id) {
+            return;
+        }
+        let Ok(panel_id) = self.panel_for_view(project_id, &view, cx) else {
+            return;
+        };
+        let Some(recovery) = self.authorization_placeholder(project_id, panel_id, cx) else {
+            return;
+        };
+        let prepared = match result {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                log::warn!("Document 重授权读取失败: {}", error.kind());
+                recovery.update(cx, |view, cx| view.show_reauthorization_failed(cx));
+                return;
+            }
+        };
+        if let Err(error) = self.side_view_persistence.finish_document_reauthorization(
+            &mut self.documents,
+            document_id,
+            prepared,
+        ) {
+            log::warn!("Document 重授权结算失败: {}", error.kind());
+            recovery.update(cx, |view, cx| view.show_reauthorization_failed(cx));
+            return;
+        }
+        self.replace_authorization_placeholders(
+            document_id,
+            Some((project_id, panel_id)),
+            window,
+            cx,
+        );
+    }
+
+    /// 同一次显式授权必须恢复该 Document 的全部占位视图；分页正文无 reader 时切专用占位。
+    fn replace_authorization_placeholders(
+        &mut self,
+        document_id: DocumentId,
+        focus: Option<(ProjectId, PanelId)>,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let mut targets = Vec::new();
+        for (project_id, project) in &self.projects {
+            let project = project.read(cx);
+            for panel in project.panels.values() {
+                if super::runtime_snapshot::view_document_id(&panel.view_key) != Some(document_id) {
+                    continue;
+                }
+                let PanelContent::Recovery(view) = &panel.content else {
+                    continue;
+                };
+                if view.read(cx).kind()
+                    != super::document_recovery::DocumentRecoveryKind::Authorization
+                {
+                    continue;
+                }
+                targets.push((*project_id, panel.id, panel.view_key.clone(), view.clone()));
+            }
+        }
+        if self
+            .documents
+            .session(document_id)
+            .is_some_and(|session| session.paged().is_some())
+        {
+            for (_, _, _, view) in targets {
+                view.update(cx, |view, cx| {
+                    view.set_kind(super::document_recovery::DocumentRecoveryKind::Paged, cx);
+                });
+            }
+        } else {
+            for (project_id, panel_id, view_key, view) in targets {
+                if let Err(error) =
+                    self.replace_recovery_panel(project_id, panel_id, view_key, None, window, cx)
+                {
+                    log::warn!("恢复占位替换失败: {error}");
+                    view.update(cx, |view, cx| view.show_reauthorization_failed(cx));
+                }
+            }
+        }
+        if let Some((project_id, panel_id)) = focus {
+            self.focus_recovered_panel(project_id, panel_id, window, cx);
+        }
+    }
+
+    fn focus_recovered_panel(
+        &mut self,
+        project_id: ProjectId,
+        panel_id: PanelId,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(token) = self
+            .panel_focus
+            .get(&panel_id)
+            .map(super::focus_manager::FocusRegistration::token)
+        else {
+            return;
+        };
+        if let Err(error) = self.focus_panel_for_open(project_id, token, false, window, cx) {
+            log::warn!("恢复面板送焦失败: {error}");
+            return;
+        }
+        if let Some(project) = self.projects.get(&project_id) {
+            project.update(cx, |project, _| project.focused_panel = Some(panel_id));
+        }
     }
 
     fn focus_panel_for_open(
@@ -1281,7 +1518,9 @@ impl AppRoot {
         &mut self,
         project_id: ProjectId,
         view: ViewKey,
+        document_id: DocumentId,
         kind: super::document_recovery::DocumentRecoveryKind,
+        window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Result<PanelId, AppRootError> {
         let project = self
@@ -1292,6 +1531,21 @@ impl AppRoot {
         let panel_id = self.panel_ids.allocate()?;
         let parent = self.project_focus_token(project_id, cx)?;
         let recovery = cx.new(|cx| super::document_recovery::DocumentRecoveryView::new(kind, cx));
+        let event_view = view.clone();
+        let subscription = cx.subscribe_in(&recovery, window, move |root, _, event, window, cx| {
+            if matches!(
+                event,
+                super::document_recovery::DocumentRecoveryEvent::Reauthorize
+            ) {
+                root.start_document_reauthorization(
+                    project_id,
+                    event_view.clone(),
+                    document_id,
+                    window,
+                    cx,
+                );
+            }
+        });
         let visible = self.snapshot.registry().active() == Some(project_id);
         let focus = self.focus_manager.register(
             &recovery.read(cx).focus_handle,
@@ -1310,6 +1564,7 @@ impl AppRoot {
             );
         });
         self.panel_focus.insert(panel_id, focus);
+        self.panel_subscriptions.insert(panel_id, subscription);
         Ok(panel_id)
     }
 

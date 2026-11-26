@@ -330,6 +330,32 @@ impl AppRootPersistence {
             .is_some_and(|recoverer| recoverer.identity_was_replaced(id))
     }
 
+    /// 待重授权文档的记录位置与精确文件会话授权；只取启动恢复事实，不读盘。
+    pub(crate) fn prepare_document_reauthorization(
+        &self,
+        id: slterm_document::DocumentId,
+    ) -> Option<(slterm_path::ResolvedPath, slterm_path::PathGrant)> {
+        self.document_recoverer
+            .as_ref()
+            .and_then(|recoverer| recoverer.prepare_reauthorize(id))
+    }
+
+    /// 后台读盘回执只经由启动恢复器结算，保持正文状态与 DocumentId。
+    pub(crate) fn finish_document_reauthorization(
+        &mut self,
+        registry: &mut slterm_document::DocumentRegistry,
+        id: slterm_document::DocumentId,
+        prepared: crate::persistence::document_snapshot::recovery::ReauthorizedDocument,
+    ) -> std::io::Result<()> {
+        let Some(recoverer) = self.document_recoverer.as_mut() else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "没有可用的快照恢复器",
+            ));
+        };
+        recoverer.finish_reauthorize(registry, id, prepared)
+    }
+
     pub(super) fn take_sidebar_state(&mut self) -> SidebarState {
         self.recovered_sidebar.take().unwrap_or_default()
     }

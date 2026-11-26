@@ -103,7 +103,7 @@ pub(crate) struct DiffView {
 }
 
 impl DiffView {
-    fn new(
+    pub(super) fn new(
         root: gpui::WeakEntity<super::AppRoot>,
         document_id: DocumentId,
         right: EditorContent,
@@ -542,17 +542,8 @@ impl super::AppRoot {
             focus,
             activate_project: false,
         };
-        let right = self.build_source_content(&target, document_id, window, cx)?;
-        let PanelContent::Editor(right) = right.0 else {
-            return Err(super::commands::AppRootError::MissingPanel);
-        };
-        let cache = self.page_cache.clone();
-        let root = cx.entity().downgrade();
-        let panel_id = self.install_panel(target, window, cx, move |_, cx| {
-            let view = cx.new(|cx| DiffView::new(root, document_id, right, cache, target_line, cx));
-            let focus = view.read(cx).focus_handle(cx);
-            (PanelContent::Diff(view), focus)
-        })?;
+        let built = self.build_diff_content(&target, document_id, target_line, window, cx)?;
+        let panel_id = self.install_panel(target, window, cx, move |_, _| built)?;
         if let Some(candidate) = candidate {
             self.commit_project_snapshot(candidate, cx);
         }
@@ -566,7 +557,7 @@ impl super::AppRoot {
         Ok(panel_id)
     }
 
-    fn diff_view(
+    pub(super) fn diff_view(
         &self,
         panel_id: slterm_workspace::PanelId,
         cx: &App,
