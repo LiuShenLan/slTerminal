@@ -5,12 +5,12 @@ use std::time::Instant;
 use slterm_agents::AgentKind;
 
 use super::*;
-use crate::ai_hook::draft_host::{HooksDraft, HooksDraftKey, HooksDraftLayer};
+use crate::ai_hook::draft_host::{HooksDraft, HooksDraftKey, HooksDraftLayer, HooksDraftOwner};
 
 fn install_user_hooks_draft(root: &Entity<AppRoot>, cx: &mut TestAppContext) -> HooksDraftKey {
     let panel = PanelIdAllocator::new(31).allocate().unwrap();
     let key = HooksDraftKey {
-        panel,
+        owner: HooksDraftOwner::Panel(panel),
         agent: AgentKind::Claude,
         layer: HooksDraftLayer::User,
     };
@@ -47,6 +47,70 @@ fn settings_panel(
                 .map(|panel| panel.id)
         })
     })
+}
+
+/// 无项目浮层 Hooks 页使用 Overlay 草稿键，关闭浮层即释放草稿。
+#[gpui::test]
+fn app_overlay_hooks_page_uses_overlay_draft_and_releases_it_on_close(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let claude_dir = temp.path().join("claude");
+    std::fs::create_dir_all(&claude_dir).unwrap();
+    std::fs::write(
+        claude_dir.join("settings.json"),
+        br#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo overlay"}]}]}}"#,
+    )
+    .unwrap();
+    let (root, mut window, _state) = open_root(cx);
+    root.update(cx, |root, _| {
+        root.replace_hooks_claude_dir_for_test(claude_dir)
+    });
+    focus_workspace(&root, &mut window);
+    open_settings(&mut window);
+    draw_frame(&mut window);
+
+    let page = window.debug_bounds("settings-page-6").unwrap();
+    window.simulate_click(page.center(), Modifiers::default());
+    draw_frame(&mut window);
+    window.run_until_parked();
+    draw_frame(&mut window);
+
+    let key = HooksDraftKey {
+        owner: HooksDraftOwner::Overlay,
+        agent: AgentKind::Claude,
+        layer: HooksDraftLayer::User,
+    };
+    root.read_with(cx, |root, _| {
+        let draft = root
+            .hook_drafts
+            .get(key)
+            .expect("浮层 Hooks 页必须载入 Overlay 草稿");
+        assert!(
+            draft.text().contains("echo overlay"),
+            "Overlay 草稿必须来自注入的 User 层文件: {}",
+            draft.text()
+        );
+    });
+
+    let focus = root.read_with(cx, |root, cx| {
+        root.settings_overlay
+            .as_ref()
+            .expect("浮层必须存在")
+            .view
+            .read(cx)
+            .focus_handle
+            .clone()
+    });
+    window.update(|window, cx| focus.focus(window, cx));
+    window.simulate_keystrokes("escape");
+    window.run_until_parked();
+    draw_frame(&mut window);
+    assert!(root.read_with(cx, |root, _| root.settings_overlay.is_none()));
+    root.read_with(cx, |root, _| {
+        assert!(
+            root.hook_drafts.get(key).is_none(),
+            "关闭浮层必须释放 Overlay 草稿"
+        );
+    });
 }
 
 /// 设置单例：无项目复用浮层，有项目按项目复用面板，浮层与草稿保留。
@@ -93,8 +157,19 @@ fn integration_settings_singleton(cx: &mut TestAppContext) {
         "浮层存在时重复入口只能还焦既有浮层"
     );
     // 关闭浮层后的下一次入口才使用项目 Settings 面板。
+    let focus = root.read_with(cx, |root, cx| {
+        root.settings_overlay
+            .as_ref()
+            .expect("浮层必须存在")
+            .view
+            .read(cx)
+            .focus_handle
+            .clone()
+    });
+    window.update(|window, cx| focus.focus(window, cx));
     window.simulate_keystrokes("escape");
     window.run_until_parked();
+    draw_frame(&mut window);
     assert!(root.read_with(cx, |root, _| root.settings_overlay.is_none()));
     focus_workspace(&root, &mut window);
     open_settings(&mut window);
@@ -554,7 +629,7 @@ fn hooks_page_loads_saves_external_guard_and_discards(cx: &mut TestAppContext) {
 
     let panel = settings_panel(&root, cx, project_id(PROJECT_A)).expect("设置面板必须存在");
     let key = HooksDraftKey {
-        panel,
+        owner: HooksDraftOwner::Panel(panel),
         agent: slterm_agents::AgentKind::Claude,
         layer: HooksDraftLayer::Project(project_id(PROJECT_A)),
     };
@@ -579,7 +654,7 @@ fn hooks_page_loads_saves_external_guard_and_discards(cx: &mut TestAppContext) {
     }
     // 项目面板重建视图默认回 User 层；User 草稿来自注入的 Claude 目录。
     let user_key = HooksDraftKey {
-        panel,
+        owner: HooksDraftOwner::Panel(panel),
         agent: slterm_agents::AgentKind::Claude,
         layer: HooksDraftLayer::User,
     };
@@ -749,7 +824,10 @@ fn closing_settings_panel_releases_hooks_drafts(cx: &mut TestAppContext) {
     let panel = settings_panel(&root, cx, project_id(PROJECT_A)).expect("设置面板必须存在");
     root.read_with(cx, |root, _| {
         assert!(
-            root.hook_drafts.keys().iter().any(|key| key.panel == panel),
+            root.hook_drafts
+                .keys()
+                .iter()
+                .any(|key| key.panel() == Some(panel)),
             "前置：Hooks 页必须已载入草稿"
         );
     });
@@ -774,7 +852,11 @@ fn closing_settings_panel_releases_hooks_drafts(cx: &mut TestAppContext) {
     }
     root.read_with(cx, |root, _| {
         assert!(
-            !root.hook_drafts.keys().iter().any(|key| key.panel == panel),
+            !root
+                .hook_drafts
+                .keys()
+                .iter()
+                .any(|key| key.panel() == Some(panel)),
             "面板销毁后不得保留孤儿草稿"
         );
         assert!(
@@ -812,7 +894,7 @@ fn hooks_project_root_loss_disables_layers_and_never_recreates_config(cx: &mut T
 
     let panel = settings_panel(&root, cx, project_id(PROJECT_A)).expect("设置面板必须存在");
     let key = HooksDraftKey {
-        panel,
+        owner: HooksDraftOwner::Panel(panel),
         agent: AgentKind::Claude,
         layer: HooksDraftLayer::Project(project_id(PROJECT_A)),
     };

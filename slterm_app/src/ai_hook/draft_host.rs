@@ -27,11 +27,27 @@ impl HooksDraftLayer {
     }
 }
 
+/// 草稿所有者：项目设置面板或应用级设置浮层。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum HooksDraftOwner {
+    Panel(PanelId),
+    Overlay,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct HooksDraftKey {
-    pub(crate) panel: PanelId,
+    pub(crate) owner: HooksDraftOwner,
     pub(crate) agent: AgentKind,
     pub(crate) layer: HooksDraftLayer,
+}
+
+impl HooksDraftKey {
+    pub(crate) const fn panel(self) -> Option<PanelId> {
+        match self.owner {
+            HooksDraftOwner::Panel(panel) => Some(panel),
+            HooksDraftOwner::Overlay => None,
+        }
+    }
 }
 
 /// 单个草稿：原始 JSON 文本、最后合法模型、磁盘基线指纹与诊断。
@@ -188,11 +204,11 @@ impl HooksDraftHost {
             .any(|(key, draft)| key.layer.project() == Some(project) && draft.dirty())
     }
 
-    /// 面板销毁时释放该面板的全部层级草稿，避免键指向已销毁的 PanelId。
-    pub(crate) fn clear_panel(&mut self, panel: PanelId) -> Vec<HooksDraftKey> {
+    /// 所有者销毁时释放其全部层级草稿。
+    pub(crate) fn clear_owner(&mut self, owner: HooksDraftOwner) -> Vec<HooksDraftKey> {
         let mut cleared = Vec::new();
         self.drafts.retain(|(key, _)| {
-            if key.panel == panel {
+            if key.owner == owner {
                 cleared.push(*key);
                 false
             } else {
@@ -200,6 +216,11 @@ impl HooksDraftHost {
             }
         });
         cleared
+    }
+
+    /// 面板销毁时释放该面板的全部层级草稿，避免键指向已销毁的 PanelId。
+    pub(crate) fn clear_panel(&mut self, panel: PanelId) -> Vec<HooksDraftKey> {
+        self.clear_owner(HooksDraftOwner::Panel(panel))
     }
 
     /// 项目专属草稿随项目移除清理；User 草稿保留，不因项目存亡丢失。
@@ -244,7 +265,7 @@ mod tests {
     fn hooks_drafts_are_isolated_per_panel_agent_and_layer() {
         let mut host = HooksDraftHost::default();
         let key_user = HooksDraftKey {
-            panel: panel(1),
+            owner: HooksDraftOwner::Panel(panel(1)),
             agent: AgentKind::Claude,
             layer: HooksDraftLayer::User,
         };
@@ -257,7 +278,7 @@ mod tests {
             ..key_user
         };
         let key_other_panel = HooksDraftKey {
-            panel: panel(2),
+            owner: HooksDraftOwner::Panel(panel(2)),
             ..key_user
         };
         host.insert(key_user, draft(r#"{"Stop":[]}"#));
@@ -319,12 +340,12 @@ mod tests {
         let closing = panel(11);
         let survivor = panel(12);
         let closing_key = HooksDraftKey {
-            panel: closing,
+            owner: HooksDraftOwner::Panel(closing),
             agent: AgentKind::Claude,
             layer: HooksDraftLayer::Project(project(PROJECT_A)),
         };
         let survivor_key = HooksDraftKey {
-            panel: survivor,
+            owner: HooksDraftOwner::Panel(survivor),
             ..closing_key
         };
         host.insert(closing_key, draft(r#"{"Stop":[]}"#));
@@ -358,7 +379,7 @@ mod tests {
         let project_a = project(PROJECT_A);
         let project_b = project(PROJECT_B);
         let user_key = HooksDraftKey {
-            panel,
+            owner: HooksDraftOwner::Panel(panel),
             agent: AgentKind::Claude,
             layer: HooksDraftLayer::User,
         };

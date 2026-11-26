@@ -20,7 +20,7 @@ use super::AppRoot;
 use super::settings_overlay::SettingsView;
 use super::task_service::{CancellationToken, TaskId};
 use crate::ai_hook::draft::DraftParseError;
-use crate::ai_hook::draft_host::{HooksDraft, HooksDraftKey, HooksDraftLayer};
+use crate::ai_hook::draft_host::{HooksDraft, HooksDraftKey, HooksDraftLayer, HooksDraftOwner};
 use crate::ai_hook::editor::{HooksDocument, HooksEditError};
 use crate::i18n::Message;
 
@@ -457,8 +457,13 @@ pub(super) fn render_hooks_page(
 impl SettingsView {
     /// 当前 Hooks 草稿键：面板绑定后固定 Claude 适配。
     pub(super) fn hooks_key(&self) -> Option<HooksDraftKey> {
+        let owner = match self.panel_id_value() {
+            Some(panel) => HooksDraftOwner::Panel(panel),
+            None if self.is_overlay() => HooksDraftOwner::Overlay,
+            None => return None,
+        };
         Some(HooksDraftKey {
-            panel: self.panel_id_value()?,
+            owner,
             agent: AgentKind::Claude,
             layer: self.hooks_layer_value(),
         })
@@ -525,7 +530,7 @@ impl AppRoot {
             let layer = view.read(cx).hooks_layer_value();
             self.request_hooks_draft(
                 HooksDraftKey {
-                    panel: panel_id,
+                    owner: HooksDraftOwner::Panel(panel_id),
                     agent: AgentKind::Claude,
                     layer,
                 },
@@ -789,17 +794,26 @@ impl AppRoot {
         }
     }
 
+    /// 所有者销毁：释放其全部层级草稿与文档，避免孤儿键。
+    pub(super) fn discard_hooks_owner_for_close(
+        &mut self,
+        owner: HooksDraftOwner,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let keys = self.hook_drafts.clear_owner(owner);
+        self.forget_hooks_draft_keys(&keys);
+        if !keys.is_empty() {
+            cx.notify();
+        }
+    }
+
     /// 面板销毁：释放该面板全部层级草稿与文档，避免孤儿键指向失效 PanelId。
     pub(super) fn discard_panel_hooks_for_close(
         &mut self,
         panel: slterm_workspace::PanelId,
         cx: &mut Context<'_, Self>,
     ) {
-        let keys = self.hook_drafts.clear_panel(panel);
-        self.forget_hooks_draft_keys(&keys);
-        if !keys.is_empty() {
-            cx.notify();
-        }
+        self.discard_hooks_owner_for_close(HooksDraftOwner::Panel(panel), cx);
     }
 
     /// 丢弃：移除草稿与文档后重新载入磁盘现状。
@@ -848,7 +862,7 @@ impl AppRoot {
             .documents
             .keys()
             .chain(self.hooks_editor.errors.keys())
-            .any(|key| key.panel == panel)
+            .any(|key| key.panel() == Some(panel))
     }
 
     #[cfg(test)]

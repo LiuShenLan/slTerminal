@@ -19,6 +19,8 @@ use slterm_settings::SettingsRegistry;
 use slterm_settings::json::Value;
 use slterm_workspace::{PanelGroupId, ProjectId, ViewKey};
 
+use crate::ai_hook::draft_host::HooksDraftOwner;
+
 use super::AppRoot;
 use super::commands::AppRootError;
 use super::focus_manager::{FocusRegistration, FocusToken};
@@ -165,6 +167,11 @@ impl SettingsView {
             ViewKey::Settings { project_id } => Some(*project_id),
             _ => None,
         }
+    }
+
+    /// 应用级浮层身份：没有项目面板 PanelId，Hooks 草稿归 Overlay 所有者。
+    pub(super) const fn is_overlay(&self) -> bool {
+        self.overlay
     }
 
     #[cfg(all(test, feature = "gpui-test-support"))]
@@ -964,6 +971,8 @@ impl AppRoot {
             return Err(error.into());
         }
         self.focus_manager.unregister(host.registration.token())?;
+        // 浮层关闭即释放其 Hooks 草稿与文档，不留下无所有者的应用级草稿。
+        self.discard_hooks_owner_for_close(HooksDraftOwner::Overlay, cx);
         cx.notify();
         Ok(())
     }

@@ -11,7 +11,7 @@ use super::super::git_show::GitShowOpenRequest;
 use super::super::navigation::deepest_project_for_cwd;
 use super::super::panel_host::PanelContent;
 use super::*;
-use crate::ai_hook::draft_host::{HooksDraft, HooksDraftKey, HooksDraftLayer};
+use crate::ai_hook::draft_host::{HooksDraft, HooksDraftKey, HooksDraftLayer, HooksDraftOwner};
 
 fn project_root(root: &Entity<AppRoot>, cx: &TestAppContext, id: ProjectId) -> CanonicalPath {
     root.read_with(cx, |root, _| {
@@ -52,7 +52,7 @@ fn attribute(
 
 fn draft_key(panel: PanelId, layer: HooksDraftLayer) -> HooksDraftKey {
     HooksDraftKey {
-        panel,
+        owner: HooksDraftOwner::Panel(panel),
         agent: AgentKind::Claude,
         layer,
     }

@@ -17,7 +17,7 @@
 | 关闭保存授权漏掉 AgentRoot 能力并集 | 已修：`document_close_grants` 复用 `document_grants`，关闭保存叠加可写 AgentRoot（提交 599debed）；测试 `agent_root_capability_union_and_revoke` |
 | 页签缺少脏标记、CLI 状态与单面板关闭入口 | 已修：页签投影共享 Document 脏标记与 AgentHub 状态（工作=实心圆／阻塞=实心方／完成=空心圆），每页签带关闭按钮；新增 `CloseActivePanel`（`ctrl-w`）复用批量关闭链（提交 e9c59e61 及形状区分补充）；测试 `tab_bar_projects_dirty_status_and_closes_a_single_panel`、`close_active_panel_command_closes_a_focused_editor` |
 | Runtime 关闭策略覆盖非最后引用文档 | 已修：`last_reference_decisions` 只为关闭集合内最后引用的脏文档生成 Save／Discard，共享文档不产生决定（提交 dfc8330e）；测试 `runtime_panel_close_ignores_documents_shared_outside_the_closing_view` |
-| 无项目浮层 Hooks 页没有草稿键 | 待修 |
+| 无项目浮层 Hooks 页没有草稿键 | 已修：`HooksDraftKey` 所有者改为 `HooksDraftOwner::{Panel,Overlay}`，浮层以 Overlay 键载入 User 层草稿，关闭浮层释放其草稿与文档；测试 `app_overlay_hooks_page_uses_overlay_draft_and_releases_it_on_close` |
 | IME 组合期间全局命令仍经 GPUI 键位层派发 | 已修：组合态同步至全局 `ImeComposition`，AppRoot 的 keystroke interceptor 在绑定派发前拦截（提交 420d0044）；测试 `marked_text_toggles_the_ime_command_gate`、`ime_composition_blocks_global_command_dispatch`、`marked_text_keeps_all_keys_off_the_wire` |
 | 布局与侧栏恢复警告只写日志 | 已修：`AppRootPersistence` 聚合恢复跳过／修复计数（快照、侧栏、Editor/Markdown/Diff/Settings/SideView ViewState），AppRoot 首帧经 `notify_workspace_repairs` 以 typed i18n 提示，提示不含路径；测试 `side_view_load_marks_corrupt_state_write_barrier`、`side_view_load_restores_existing_private_state`、`workspace_repair_notice_states_the_skipped_item_count` |
 | 批量/项目关闭遗留 pane 级任务栏与 AgentHub 清理 | 已修：新增 `AppRoot::forget_panel_runtime`，单终端、批量摘除、批量销毁与项目移除共用同一 AgentHub／任务栏清理入口；测试 `integration_batch_close`、`project_remove_commits_intent_before_destroy` |

@@ -354,7 +354,7 @@ mod tests {
     /// 否则切层载入会被误判为重复任务而静默丢弃。
     #[gpui::test]
     fn hooks_draft_task_identity_includes_layer_and_agent(cx: &mut TestAppContext) {
-        use crate::ai_hook::draft_host::{HooksDraftKey, HooksDraftLayer};
+        use crate::ai_hook::draft_host::{HooksDraftKey, HooksDraftLayer, HooksDraftOwner};
         use slterm_agents::AgentKind;
         use slterm_workspace::{PanelIdAllocator, ProjectId};
 
@@ -363,12 +363,12 @@ mod tests {
             let panel = PanelIdAllocator::new(1).allocate().unwrap();
             let project = ProjectId::from_uuid(uuid::Uuid::now_v7()).unwrap();
             let user_key = HooksDraftKey {
-                panel,
+                owner: HooksDraftOwner::Panel(panel),
                 agent: AgentKind::Claude,
                 layer: HooksDraftLayer::User,
             };
             let project_key = HooksDraftKey {
-                panel,
+                owner: HooksDraftOwner::Panel(panel),
                 agent: AgentKind::Claude,
                 layer: HooksDraftLayer::Project(project),
             };

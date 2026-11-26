@@ -47,10 +47,10 @@ fn insert_dirty_hooks_draft(
     cx: &mut TestAppContext,
     layer: crate::ai_hook::draft_host::HooksDraftLayer,
 ) -> crate::ai_hook::draft_host::HooksDraftKey {
-    use crate::ai_hook::draft_host::{HooksDraft, HooksDraftKey};
+    use crate::ai_hook::draft_host::{HooksDraft, HooksDraftKey, HooksDraftOwner};
     let panel = PanelIdAllocator::new(91).allocate().unwrap();
     let key = HooksDraftKey {
-        panel,
+        owner: HooksDraftOwner::Panel(panel),
         agent: slterm_agents::AgentKind::Claude,
         layer,
     };
