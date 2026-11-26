@@ -257,6 +257,8 @@ pub(crate) fn execute_git_write(
                 &git,
                 &target.root,
                 &target.root,
+                target.project_id,
+                &target.file_operations,
                 &path,
                 kind,
                 "runtime",

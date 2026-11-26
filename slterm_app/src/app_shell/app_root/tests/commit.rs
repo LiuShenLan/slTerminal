@@ -476,6 +476,85 @@ fn commit_unstaged_rename_rollback(cx: &mut TestAppContext) {
     );
 }
 
+/// 回滚未暂存删除时，同内容镜像只在同一父目录内才可视为改名目标。
+#[gpui::test]
+fn unstaged_delete_rollback_never_removes_same_content_files_outside_the_parent(
+    cx: &mut TestAppContext,
+) {
+    let temp = tempfile::tempdir().unwrap();
+    let repository = temp.path().join("repo");
+    std::fs::create_dir(&repository).unwrap();
+    super::gitshow::git(&repository, &["init", "--quiet"]);
+    super::gitshow::git(&repository, &["config", "core.autocrlf", "false"]);
+    super::gitshow::git(&repository, &["config", "user.name", "slTerminal Test"]);
+    super::gitshow::git(
+        &repository,
+        &["config", "user.email", "slterm-test@example.invalid"],
+    );
+    std::fs::write(
+        repository.join("old.txt"),
+        "shared
+",
+    )
+    .unwrap();
+    super::gitshow::git(&repository, &["add", "--", "old.txt"]);
+    super::gitshow::git(&repository, &["commit", "--quiet", "-m", "base"]);
+    std::fs::remove_file(repository.join("old.txt")).unwrap();
+    std::fs::create_dir(repository.join("sub")).unwrap();
+    std::fs::write(
+        repository.join("sub").join("new.txt"),
+        "shared
+",
+    )
+    .unwrap();
+    let repo_root = CanonicalPath::new(dunce::canonicalize(&repository).unwrap()).unwrap();
+    let old = CanonicalPath::new(repo_root.as_path().join("old.txt")).unwrap();
+    let (root, mut window, _) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, repository.to_str().unwrap());
+    let commit = open_commit(&root, &mut window, cx);
+    window.update(|window, cx| {
+        commit.update(cx, |view, cx| view.commit_rollback(&old, window, cx));
+    });
+    window.run_until_parked();
+    draw_frame(&mut window);
+    window.run_until_parked();
+
+    assert_eq!(
+        std::fs::read_to_string(repository.join("old.txt")).unwrap(),
+        "shared
+",
+        "旧路径必须从索引恢复"
+    );
+    assert!(
+        repository.join("sub").join("new.txt").exists(),
+        "跨目录同内容文件不是改名目标，不得被回滚删除"
+    );
+}
+
+/// 删除前必须经统一写授权：项目根外的同目录镜像不得被触碰。
+#[gpui::test]
+fn unstaged_delete_rollback_keeps_mirrors_outside_the_write_root(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let repository = delete_repository(&temp);
+    std::fs::remove_file(repository.join("base.txt")).unwrap();
+    let repo_root = CanonicalPath::new(dunce::canonicalize(&repository).unwrap()).unwrap();
+    let base = CanonicalPath::new(repo_root.as_path().join("base.txt")).unwrap();
+    // 项目根 = 仓库内的子目录；仓库根不在写授权内。
+    let project = repository.join("project");
+    std::fs::create_dir(&project).unwrap();
+    let (root, mut window, _) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, project.to_str().unwrap());
+    let commit = open_commit(&root, &mut window, cx);
+    window.update(|window, cx| {
+        commit.update(cx, |view, cx| view.commit_rollback(&base, window, cx));
+    });
+    window.run_until_parked();
+    assert!(
+        !repository.join("base.txt").exists(),
+        "项目根外目标没有写能力，不得回滚"
+    );
+}
+
 struct FakeRecycleBin {
     dir: std::path::PathBuf,
     fail: bool,

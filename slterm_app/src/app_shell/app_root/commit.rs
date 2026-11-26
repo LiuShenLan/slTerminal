@@ -1355,6 +1355,7 @@ impl AppRoot {
         let repo_root = root.clone();
         let project_root = project_root.clone();
         let repo_relative = row.repo_relative.clone();
+        let service = std::sync::Arc::clone(&self.file_operations);
         let kind = match kind {
             RollbackKind::Modified => super::git_changes::UnstagedChangeKind::Modified,
             RollbackKind::Deleted => super::git_changes::UnstagedChangeKind::Deleted,
@@ -1370,6 +1371,8 @@ impl AppRoot {
                             &crate::git::GitFacade::default(),
                             &repo_root,
                             &project_root,
+                            project_id,
+                            &service,
                             &repo_relative,
                             kind,
                             "commit",

@@ -59,10 +59,13 @@ impl From<FileOperationError> for GitChangeError {
 /// 放弃精确的未暂存更改并恢复索引版本；不重置索引、不切换 HEAD。
 ///
 /// `git_root` 只用于状态读取与仓库解析；`write_root` 是唯一写授权来源。
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn rollback_unstaged(
     git: &GitFacade,
     git_root: &CanonicalPath,
     write_root: &CanonicalPath,
+    project_id: ProjectId,
+    file_operations: &FileOperationService,
     repo_relative: &str,
     kind: UnstagedChangeKind,
     source: &'static str,
@@ -91,7 +94,11 @@ pub(crate) fn rollback_unstaged(
         if changed {
             return Err(GitChangeError::Precondition);
         }
-        // 未暂存 rename：旧路径 deleted 与内容相同的 untracked 镜像成对出现。
+        // 未暂存 rename：旧路径 deleted 与同目录内内容相同的 untracked 镜像
+        // 成对出现。跨目录同内容文件不是改名事实，不参与清理。
+        let target_parent = repo_path(&repo_root, repo_relative)
+            .parent()
+            .map(std::path::Path::to_path_buf);
         let mirror = if kind == UnstagedChangeKind::Deleted {
             let indexed = crate::git::index_bytes(repo_root.as_path(), repo_relative)?;
             snapshot
@@ -100,15 +107,29 @@ pub(crate) fn rollback_unstaged(
                 .filter(|entry| entry.index == '?')
                 .find_map(|entry| {
                     let candidate = repo_path(&repo_root, entry.path.trim_matches('/'));
+                    if target_parent.as_deref() != candidate.parent() {
+                        return None;
+                    }
+                    if !candidate.starts_with(write_root.as_path()) {
+                        return None;
+                    }
                     (std::fs::read(&candidate).ok()? == indexed).then_some(candidate)
                 })
         } else {
             None
         };
         crate::git::restore_from_index(repo_root.as_path(), &[repo_relative])?;
-        // 新路径清除失败属于部分成功：旧路径已按索引恢复，残留如实上报。
+        // 新路径清除同样经统一写授权与身份复核；失败属于部分成功，如实上报。
         if let Some(mirror) = mirror {
-            std::fs::remove_file(&mirror).map_err(|_| GitChangeError::Failed)?;
+            let lexical = CanonicalPath::new(mirror).map_err(|_| GitChangeError::Unauthorized)?;
+            let grants = [PathGrant::project_root(write_root.clone())];
+            let plan = file_operations.plan_delete(
+                slterm_sidebar::FileTreeRoot::Project(project_id),
+                &lexical,
+                &grants,
+                0,
+            )?;
+            file_operations.execute(&plan, &grants, 0)?;
         }
         Ok(())
     })();
