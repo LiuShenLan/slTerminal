@@ -565,6 +565,7 @@ fn hooks_page_loads_saves_external_guard_and_discards(cx: &mut TestAppContext) {
     for selector in [
         "settings-hooks-save",
         "settings-hooks-discard",
+        "settings-hooks-reload",
         "settings-hooks-layer-user",
         "settings-hooks-layer-project",
         "settings-hooks-layer-local",
@@ -591,11 +592,20 @@ fn hooks_page_loads_saves_external_guard_and_discards(cx: &mut TestAppContext) {
         );
     });
 
+    assert!(
+        window.debug_bounds("settings-hooks-user-warning").is_some(),
+        "User 层必须显示任意命令执行警告"
+    );
+
     // 切到项目层后使用项目文件草稿。
     let project_layer = window.debug_bounds("settings-hooks-layer-project").unwrap();
     window.simulate_click(project_layer.center(), Modifiers::default());
     window.run_until_parked();
     draw_frame(&mut window);
+    assert!(
+        window.debug_bounds("settings-hooks-user-warning").is_none(),
+        "Project 层不显示 User 专属警告"
+    );
     root.read_with(cx, |root, _| {
         let draft = root.hook_drafts.get(key).expect("Project 层草稿必须载入");
         assert!(
@@ -626,10 +636,14 @@ fn hooks_page_loads_saves_external_guard_and_discards(cx: &mut TestAppContext) {
     );
     root.read_with(cx, |root, _| {
         assert!(
-            !root.hook_drafts.get(key).unwrap().dirty(),
-            "保存成功后草稿必须回到干净态"
+            root.hook_drafts.get(key).is_none(),
+            "保存成功后草稿必须清除"
         );
     });
+    assert!(
+        window.debug_bounds("settings-hooks-saved-hint").is_some(),
+        "保存成功后必须提示重启 CLI 会话"
+    );
 
     // 保存期间继续编辑：迟到回执不得覆盖新文本。
     let in_flight = r#"{"Stop":[{"hooks":[{"type":"command","command":"echo slow"}]}]}"#;

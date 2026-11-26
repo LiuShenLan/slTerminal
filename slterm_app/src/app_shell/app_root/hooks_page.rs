@@ -146,6 +146,8 @@ pub(super) struct HooksEditorState {
     errors: BTreeMap<HooksDraftKey, HooksPageError>,
     /// 载入时真实目录不存在的项目根：Project／Local 层据此禁用。
     unavailable_roots: BTreeSet<ProjectId>,
+    /// 最近一次成功保存的草稿键；用于「重启 CLI 生效」提示。
+    saved_hint: Option<HooksDraftKey>,
 }
 
 fn layer_label(layer: HooksDraftLayer) -> Message {
@@ -196,6 +198,7 @@ pub(super) fn render_hooks_page(
     let mut owned = 0usize;
     let mut generation = 0u64;
     let mut project_layers_available = true;
+    let mut saved_just_now = false;
     if let (Some(root), Some(key)) = (root_entity.as_ref(), key) {
         let root = root.read(cx);
         generation = root.hooks_generation;
@@ -209,6 +212,7 @@ pub(super) fn render_hooks_page(
             dirty = draft.dirty();
         }
         error = root.hooks_editor.errors.get(&key).cloned();
+        saved_just_now = root.hooks_editor.saved_hint == Some(key);
         owned = root
             .hooks_editor
             .documents
@@ -270,8 +274,10 @@ pub(super) fn render_hooks_page(
     let input = input.clone();
     let save_root = view.root.clone();
     let discard_root = view.root.clone();
+    let reload_root = view.root.clone();
     let save_key = key;
     let discard_key = key;
+    let reload_key = key;
 
     div()
         .flex()
@@ -290,6 +296,24 @@ pub(super) fn render_hooks_page(
                 .debug_selector(|| "settings-hooks-layers".to_owned())
                 .children(layer_pills),
         )
+        .when(selected_layer == HooksDraftLayer::User, |element| {
+            element.child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().danger)
+                    .debug_selector(|| "settings-hooks-user-warning".to_owned())
+                    .child(language.text(Message::SettingsAgentsHooksUserWarning)),
+            )
+        })
+        .when(saved_just_now, |element| {
+            element.child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .debug_selector(|| "settings-hooks-saved-hint".to_owned())
+                    .child(language.text(Message::SettingsAgentsHooksSavedRestart)),
+            )
+        })
         .when(
             view.hooks_project().is_some() && !project_layers_available,
             |element| {
@@ -400,6 +424,31 @@ pub(super) fn render_hooks_page(
                             }),
                         )
                         .child(language.text(Message::SettingsAgentsHooksDiscard)),
+                )
+                .child(
+                    div()
+                        .id("settings-hooks-reload")
+                        .px_2()
+                        .h(px(24.0))
+                        .flex()
+                        .items_center()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(cx.theme().border)
+                        .text_xs()
+                        .cursor_pointer()
+                        .debug_selector(|| "settings-hooks-reload".to_owned())
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |_view, _, _, cx| {
+                                let (Some(root), Some(key)) = (reload_root.upgrade(), reload_key)
+                                else {
+                                    return;
+                                };
+                                root.update(cx, |root, cx| root.discard_hooks_draft_for(key, cx));
+                            }),
+                        )
+                        .child(language.text(Message::SettingsAgentsHooksReload)),
                 ),
         )
         .into_any_element()
@@ -617,6 +666,22 @@ impl AppRoot {
         text: &str,
         cx: &mut Context<'_, Self>,
     ) {
+        if self.hooks_editor.saved_hint == Some(key) {
+            self.hooks_editor.saved_hint = None;
+        }
+        if self.hook_drafts.get(key).is_none()
+            && let Some(document) = self.hooks_editor.documents.get(&key)
+        {
+            // 保存成功后草稿已清除；继续编辑时从磁盘基线重建草稿。
+            self.hook_drafts.insert(
+                key,
+                HooksDraft::loaded(
+                    document.baseline(),
+                    document.editable_json(),
+                    document.editable_value().clone(),
+                ),
+            );
+        }
         if let Some(draft) = self.hook_drafts.get_mut(key) {
             draft.set_text(text);
             cx.notify();
@@ -685,6 +750,9 @@ impl AppRoot {
                             });
                             root.hooks_editor.errors.remove(&key);
                             if applied {
+                                // 保存成功即清除草稿；继续编辑会从磁盘基线重建。
+                                root.hook_drafts.discard(key);
+                                root.hooks_editor.saved_hint = Some(key);
                                 root.hooks_generation = root.hooks_generation.wrapping_add(1);
                             }
                         }
@@ -765,6 +833,9 @@ impl AppRoot {
         self.hook_drafts.discard(key);
         self.hooks_editor.documents.remove(&key);
         self.hooks_editor.errors.remove(&key);
+        if self.hooks_editor.saved_hint == Some(key) {
+            self.hooks_editor.saved_hint = None;
+        }
         self.hooks_generation = self.hooks_generation.wrapping_add(1);
         self.request_hooks_draft(key, cx);
         cx.notify();
