@@ -82,7 +82,7 @@
 | config_guard 没有生产调用点 | 待修 |
 | AgentHooks 开关状态按 AgentHook::ALL 顺序索引 AGENTS 行 | 已修：行开关按 `AGENTS` 自身顺序读取设置键；测试 `agent_row_states_follow_agents_order_not_all_order` |
 | 保存进行中继续编辑会被保存回执静默覆盖 | 已修：`HooksDraft::finish_save` 以提交文本比对结算，期间编辑保留正文与脏态、只推进基线；任务身份按完整草稿键隔离（提交 29094491）；测试 `save_receipt_keeps_edits_made_while_the_save_was_in_flight`、`hooks_page_loads_saves_external_guard_and_discards` |
-| Hooks 层默认与切换错误 | 待修 |
+| Hooks 层默认与切换错误 | 已修：项目面板重建视图恒回 User 层，`available_hooks_layers` 按视图身份恒给三层，User↔Project 可往返（提交 94ca8256）；测试 `hooks_page_loads_saves_external_guard_and_discards` |
 | Hooks 草稿任务身份只含面板 | 已修：`TaskId::HooksDraftLoad/Save` 改携完整 `HooksDraftKey`（提交 5a9fb9e1）；测试 `hooks_draft_task_identity_includes_layer_and_agent` |
 | statusline 用量桥接与信号通道整体缺失 | 待修 |
 | 追溯矩阵与进度把未接线的生产链记为已自动化/已验收 | 待修 |
