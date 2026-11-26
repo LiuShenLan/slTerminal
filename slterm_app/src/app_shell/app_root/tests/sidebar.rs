@@ -1279,6 +1279,20 @@ fn focus_activity_bar_skips_hidden_buttons(cx: &mut TestAppContext) {
     assert_side_button_focused(&root, &mut window, cx, SideViewId::Explorer);
 }
 
+/// 测试根预置空 Agent 根快照，任何后台加载都不得读取真实 home。
+#[gpui::test]
+fn test_root_preloads_empty_agent_roots(cx: &mut TestAppContext) {
+    let (root, _window, _) = open_root(cx);
+    root.read_with(cx, |root, _| {
+        assert!(root.agent_roots_loaded, "测试根必须禁用后台真实目录加载");
+        assert_eq!(
+            root.agent_global_dirs.as_ref().map(Vec::len),
+            Some(0),
+            "测试根默认不得带真实 Agent 目录"
+        );
+    });
+}
+
 #[gpui::test]
 fn side_view_shortcut_bindings_cover_all_registered_views(cx: &mut TestAppContext) {
     let (root, mut window, _) = open_root(cx);

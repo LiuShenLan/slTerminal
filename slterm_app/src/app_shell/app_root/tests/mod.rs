@@ -407,6 +407,8 @@ fn open_root_with_persistence_and_size_configured(
                 },
                 cx,
             );
+            // 测试根默认禁用真实 Agent 目录加载；专用用例显式注入临时根。
+            root.replace_agent_global_dirs_for_test(Vec::new());
             root.project_paths = Arc::new(TestProjectPaths);
             root
         });

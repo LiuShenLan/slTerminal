@@ -294,7 +294,7 @@
 |---|---|
 | 显式终端 cwd 只做词法包含校验，未解析真实目标 | 待修 |
 | 工作区布局恢复没有未知 ViewKey 过滤与重复视图归一 | 已修：新增 `ProjectLayout::from_canonical_json_lossy`，恢复链过滤未知视图类型、重复视图保留首个、空组塌缩并重排树；测试 `lossy_recovery_filters_unknown_views_collapses_empty_groups_and_dedupes`、`startup_filters_unknown_and_duplicate_views` |
-| AppRoot 后台 Agent 根加载不可注入，虚拟窗口用例读取真实 home | 待修 |
+| AppRoot 后台 Agent 根加载不可注入，虚拟窗口用例读取真实 home | 已修：虚拟窗口测试根构造时预置空 Agent 根快照并置 `agent_roots_loaded`，后台加载在测试中显式禁用；专用用例继续经 `replace_agent_global_dirs_for_test` 注入临时根；测试 `test_root_preloads_empty_agent_roots` |
 | 共享编辑（Diff/Markdown）缺少可见性门控与取消协议 | 待修 |
 | 历史隔离到期清理、ZIP 导出与永久删除未实现 | 待修 |
 | 脚本自测依赖共享 %TEMP% | 待修 |
