@@ -120,7 +120,7 @@
 | 外部快照与撤销/重做把滚动位置重置到顶部 | 待修 |
 | Git 行标丢失增改删语义，颜色与越界防护不满足合同 | 待修 |
 | reveal_line 在软换行下把逻辑行当显示行 | 待修 |
-| 未知扩展名的文本文件在读取前被拒绝 | 待修 |
+| 未知扩展名的文本文件在读取前被拒绝 | 已修：`viewable_file` 仅拒绝已知二进制扩展名，未知/无扩展名按纯文本尝试，NUL 与编码在真实读取后裁决（提交 8a3bb0de）；测试 `viewable_file_maps_known_source_extensions_case_insensitively`、`openable_in_app_routes_known_binaries_and_accepts_unknown_text`、`unknown_extension_utf8_opens_as_plain_text_and_binary_is_rejected` |
 | 分页恢复占位是无出口面板 | 待修 |
 | 布局缓存没有容量或可见窗口回收 | 待修 |
 
