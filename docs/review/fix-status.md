@@ -7,7 +7,7 @@
 | 问题 | 状态 |
 |---|---|
 | 交互式关闭没有保存/丢弃/取消决定入口 | 待修 |
-| Commit 永久删除确认把任意失败升级为绕过执行体的强删 | 待修 |
+| Commit 永久删除确认把任意失败升级为绕过执行体的强删 | 已修：永久删除经 `plan_delete_permanent` + `execute` 复用同一身份/父目录/链接/授权复核；`RecycleUnavailable` 单独分类，只有回收站失败可升级确认（提交 cd140797）；测试 `permanent_retry_is_offered_only_for_recycle_unavailable`、`permanent_delete_never_bypasses_the_shared_operation_executor`、`recycle_unavailable_is_distinct_from_other_delete_failures` |
 | 未暂存删除回滚删除任意同内容未跟踪文件 | 待修 |
 | 文件树 watcher 未接线 | 待修 |
 | 外部冲突与另存为没有生产落点 | 待修 |
