@@ -11,6 +11,8 @@
 
 use std::path::{Path, PathBuf};
 
+use slterm_path::CanonicalPath;
+
 use serde_json::{Map, Value, json};
 use sha2::{Digest as _, Sha256};
 
@@ -309,6 +311,7 @@ pub(crate) enum HooksEditError {
     ExternalModified,
     LockBusy,
     BackupFailed(String),
+    Unauthorized,
     Io(String),
     Serialize(String),
 }
@@ -356,6 +359,7 @@ impl std::fmt::Display for HooksEditError {
             Self::ExternalModified => formatter.write_str("hooks file changed on disk"),
             Self::LockBusy => formatter.write_str("hooks file is busy"),
             Self::BackupFailed(detail) => write!(formatter, "hooks backup failed: {detail}"),
+            Self::Unauthorized => formatter.write_str("hooks target outside authorized root"),
             Self::Io(detail) => write!(formatter, "hooks io failed: {detail}"),
             Self::Serialize(detail) => write!(formatter, "hooks serialize failed: {detail}"),
         }
@@ -475,12 +479,18 @@ impl HooksDocument {
     }
 
     /// 提交编辑:解析 → 校验 → 锁内重读并比较基线指纹 → 与磁盘现状合并
-    /// (认领组原样保留) → 原子写。任何失败零写盘，草稿由调用方保留。
-    pub(crate) fn save_editable(&self, raw: &str) -> Result<(), HooksEditError> {
+    /// (认领组原样保留) → 授权复核 → 原子写。任何失败零写盘，草稿由调用方保留。
+    /// `authorized_root` 是本层唯一允许写入的真实根
+    /// （项目根或 Claude 配置目录），实际目标仍须经 `slterm_path` 判定。
+    pub(crate) fn save_editable(
+        &self,
+        raw: &str,
+        authorized_root: &Path,
+    ) -> Result<(), HooksEditError> {
         let editable: Value = serde_json::from_str(raw)
             .map_err(|error| HooksEditError::JsonSyntax(error.to_string()))?;
         validate_editable(&editable)?;
-        write_editable_at(&self.path, self.baseline, &editable)
+        write_editable_at(&self.path, self.baseline, &editable, authorized_root)
     }
 
     /// 保存成功后重读(认领组可能因安装器并发自愈而变化)。
@@ -589,10 +599,91 @@ fn read_root_with_fingerprint(path: &Path) -> Result<(Value, Option<[u8; 32]>), 
 /// 读-改-写主体:锁内重读并比较基线 → 合并认领组与编辑组 →
 /// 只替换 hooks 子树字节范围 → 先写上一代 .bak → 原子写。
 /// hooks 以外的字段、键序与空白字节原样保留。
+/// 写入前路径授权：目标真实规范位置必须位于本层根内，并以
+/// `PathOperation::HooksWrite` 的精确文件 grant 经 `PathPolicy` 复核。
+fn authorize_hook_write(path: &Path, authorized_root: &Path) -> Result<(), HooksEditError> {
+    use slterm_path::{
+        CanonicalPath, PathGrant, PathOperation, PathPolicy, PathRequest, ResolvedPath,
+    };
+
+    let canonical_root = dunce::canonicalize(authorized_root)
+        .map_err(|error| HooksEditError::Io(error.to_string()))?;
+    let canonical_root =
+        CanonicalPath::new(canonical_root).map_err(|_| HooksEditError::Unauthorized)?;
+    let target = canonicalize_write_target(path)?;
+    let target = CanonicalPath::new(target).map_err(|_| HooksEditError::Unauthorized)?;
+    if !path_within(&target, &canonical_root) {
+        return Err(HooksEditError::Unauthorized);
+    }
+    let resolved = ResolvedPath::new(target, None);
+    let grant = PathGrant::hooks_write_target(resolved.canonical_path().clone());
+    let request = PathRequest {
+        operation: PathOperation::HooksWrite,
+        lexical_path: path.to_path_buf(),
+        root_hints: Vec::new(),
+        session_grant: None,
+        expected_authorization_generation: 0,
+    };
+    PathPolicy::authorize(&request, &resolved, std::slice::from_ref(&grant), 0)
+        .map(|_| ())
+        .map_err(|_| HooksEditError::Unauthorized)
+}
+
+/// 目标文件可能尚未创建：沿祖先取最近真实规范路径，再拼回缺失后缀。
+fn canonicalize_write_target(path: &Path) -> Result<PathBuf, HooksEditError> {
+    let mut existing = path.to_path_buf();
+    let mut missing: Vec<std::ffi::OsString> = Vec::new();
+    loop {
+        match dunce::canonicalize(&existing) {
+            Ok(canonical) => {
+                let mut resolved = canonical;
+                for component in missing.iter().rev() {
+                    resolved.push(component);
+                }
+                return Ok(resolved);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let name = existing
+                    .file_name()
+                    .ok_or_else(|| HooksEditError::Io(error.to_string()))?;
+                missing.push(name.to_owned());
+                existing = existing
+                    .parent()
+                    .ok_or_else(|| HooksEditError::Io(error.to_string()))?
+                    .to_path_buf();
+            }
+            Err(error) => return Err(HooksEditError::Io(error.to_string())),
+        }
+    }
+}
+
+/// 规范路径包含判定：Windows 文件系统忽略 ASCII 大小写。
+fn path_within(path: &CanonicalPath, root: &CanonicalPath) -> bool {
+    let mut target = path.as_path().components();
+    for component in root.as_path().components() {
+        let Some(candidate) = target.next() else {
+            return false;
+        };
+        let equal = if cfg!(windows) {
+            candidate
+                .as_os_str()
+                .to_string_lossy()
+                .eq_ignore_ascii_case(&component.as_os_str().to_string_lossy())
+        } else {
+            candidate == component
+        };
+        if !equal {
+            return false;
+        }
+    }
+    true
+}
+
 fn write_editable_at(
     path: &Path,
     baseline: Option<[u8; 32]>,
     editable: &Value,
+    authorized_root: &Path,
 ) -> Result<(), HooksEditError> {
     let _lock = crate::atomic_file::try_lock(path)
         .map_err(|error| HooksEditError::Io(error.to_string()))?
@@ -601,6 +692,7 @@ fn write_editable_at(
     if draft_write_guard(baseline, current) == DraftWriteGuard::ExternalModified {
         return Err(HooksEditError::ExternalModified);
     }
+    authorize_hook_write(path, authorized_root)?;
     let object = root.as_object_mut().ok_or(HooksEditError::RootNotObject)?;
     let hooks = object.entry("hooks").or_insert_with(|| json!({}));
     let hooks = hooks
@@ -885,7 +977,9 @@ mod editor_tests {
                 {"hooks": [{"type": "command", "command": "prompt-user"}]}
             ]
         });
-        document.save_editable(&edited.to_string()).unwrap();
+        document
+            .save_editable(&edited.to_string(), path.parent().unwrap())
+            .unwrap();
         let after = read(&path);
         assert_eq!(after["model"], json!("opus"), "hooks 以外的顶层键原样保留");
         let groups = after["hooks"]["Stop"].as_array().unwrap();
@@ -912,7 +1006,9 @@ mod editor_tests {
         let edited = json!({
             "Stop": [{"hooks": [{"type": "command", "command": "new-user"}]}]
         });
-        document.save_editable(&edited.to_string()).unwrap();
+        document
+            .save_editable(&edited.to_string(), path.parent().unwrap())
+            .unwrap();
 
         let saved = std::fs::read_to_string(&path).unwrap();
         let prefix = "{\n  \"model\":  \"opus\",\n  \"env\": {\"A\": 1},\n  \"hooks\": ";
@@ -945,7 +1041,9 @@ mod editor_tests {
         let edited = json!({
             "Stop": [{"hooks": [{"type": "command", "command": "added"}]}]
         });
-        document.save_editable(&edited.to_string()).unwrap();
+        document
+            .save_editable(&edited.to_string(), path.parent().unwrap())
+            .unwrap();
 
         let saved = std::fs::read_to_string(&path).unwrap();
         assert!(
@@ -970,7 +1068,10 @@ mod editor_tests {
         let document = HooksDocument::load_at(&path).unwrap();
         let captured = crate::audit::test_support::capture_events();
         document
-            .save_editable(r#"{"Stop":[{"hooks":[{"type":"command","command":"echo audit"}]}]}"#)
+            .save_editable(
+                r#"{"Stop":[{"hooks":[{"type":"command","command":"echo audit"}]}]}"#,
+                path.parent().unwrap(),
+            )
             .unwrap();
         let text = captured.text();
         assert!(text.contains("audit"), "事件必须落在 audit target: {text}");
@@ -989,6 +1090,35 @@ mod editor_tests {
         );
     }
 
+    /// 授权根之外的目标必须零写入：即使目标文件合法存在也不得越界保存。
+    #[test]
+    fn save_rejects_target_outside_the_authorized_root_without_writing() {
+        let (_directory, path) = fixture();
+        let original = r#"{"hooks":{}}"#;
+        write(&path, original);
+        let outside = tempfile::tempdir().unwrap();
+        let document = HooksDocument::load_at(&path).unwrap();
+        let error = document
+            .save_editable(
+                r#"{"Stop":[{"hooks":[{"type":"command","command":"escape"}]}]}"#,
+                outside.path(),
+            )
+            .unwrap_err();
+        assert!(
+            matches!(error, HooksEditError::Unauthorized),
+            "越界保存必须拒绝: {error}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            original,
+            "越界保存不得写入目标"
+        );
+        assert!(
+            !path.with_file_name("settings.json.bak").exists(),
+            "越界保存不得产生备份"
+        );
+    }
+
     /// 备份失败必须保留原文件与草稿，不得继续写入主文件。
     #[test]
     fn hooks_save_backup_failure_keeps_original_untouched() {
@@ -999,7 +1129,10 @@ mod editor_tests {
         std::fs::create_dir(path.with_file_name("settings.json.bak")).unwrap();
 
         let error = document
-            .save_editable(r#"{"Stop":[{"hooks":[{"type":"command","command":"x"}]}]}"#)
+            .save_editable(
+                r#"{"Stop":[{"hooks":[{"type":"command","command":"x"}]}]}"#,
+                path.parent().unwrap(),
+            )
             .unwrap_err();
         assert!(
             matches!(error, HooksEditError::BackupFailed(_)),
@@ -1022,7 +1155,10 @@ mod editor_tests {
         write(&path, external);
 
         let error = document
-            .save_editable(r#"{"Stop":[{"hooks":[{"type":"command","command":"stale"}]}]}"#)
+            .save_editable(
+                r#"{"Stop":[{"hooks":[{"type":"command","command":"stale"}]}]}"#,
+                path.parent().unwrap(),
+            )
             .unwrap_err();
         assert!(
             matches!(error, HooksEditError::ExternalModified),
@@ -1036,7 +1172,10 @@ mod editor_tests {
 
         std::fs::remove_file(&path).unwrap();
         let error = document
-            .save_editable(r#"{"Stop":[{"hooks":[{"type":"command","command":"stale"}]}]}"#)
+            .save_editable(
+                r#"{"Stop":[{"hooks":[{"type":"command","command":"stale"}]}]}"#,
+                path.parent().unwrap(),
+            )
             .unwrap_err();
         assert!(
             matches!(error, HooksEditError::ExternalModified),
@@ -1047,7 +1186,10 @@ mod editor_tests {
         write(&path, external);
         let reloaded = HooksDocument::load_at(&path).unwrap();
         reloaded
-            .save_editable(r#"{"Stop":[{"hooks":[{"type":"command","command":"fresh"}]}]}"#)
+            .save_editable(
+                r#"{"Stop":[{"hooks":[{"type":"command","command":"fresh"}]}]}"#,
+                path.parent().unwrap(),
+            )
             .unwrap();
         assert_eq!(read(&path)["model"], json!("external"), "其他顶层键保留");
     }
@@ -1085,7 +1227,9 @@ mod editor_tests {
             ),
         ];
         for (invalid, expected) in cases {
-            let error = document.save_editable(&invalid.to_string()).unwrap_err();
+            let error = document
+                .save_editable(&invalid.to_string(), path.parent().unwrap())
+                .unwrap_err();
             assert!(expected(&error), "错误类别不符: {error}");
             assert_eq!(std::fs::read(&path).unwrap(), before, "校验失败不得落盘");
         }
@@ -1124,7 +1268,7 @@ mod editor_tests {
                 event: [{"hooks": [{"type": "command", "command": "echo ok"}]}]
             });
             document
-                .save_editable(&hooks.to_string())
+                .save_editable(&hooks.to_string(), path.parent().unwrap())
                 .unwrap_or_else(|error| panic!("{event}: {error}"));
             document = document.reload().unwrap();
         }
@@ -1348,7 +1492,9 @@ mod dual_track_tests {
         let before: Value =
             serde_json::from_str(&std::fs::read_to_string(&claude_path).unwrap()).unwrap();
         let document = HooksDocument::load_at(&claude_path).unwrap();
-        document.save_editable(&document.editable_json()).unwrap();
+        document
+            .save_editable(&document.editable_json(), temp.path())
+            .unwrap();
         let after: Value =
             serde_json::from_str(&std::fs::read_to_string(&claude_path).unwrap()).unwrap();
         assert_eq!(

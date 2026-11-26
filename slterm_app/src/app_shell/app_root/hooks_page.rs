@@ -47,6 +47,7 @@ fn hooks_edit_error_text(language: crate::i18n::UiLanguage, error: &HooksEditErr
         SettingsAgentsHooksMatcherHooksMissing, SettingsAgentsHooksMatcherNotObject,
         SettingsAgentsHooksMatcherShapeInvalid, SettingsAgentsHooksRootNotObject,
         SettingsAgentsHooksSerializeFailed, SettingsAgentsHooksSubtreeNotObject,
+        SettingsAgentsHooksUnauthorized,
     };
     match error {
         HooksEditError::ConfigDirUnavailable => language
@@ -100,6 +101,7 @@ fn hooks_edit_error_text(language: crate::i18n::UiLanguage, error: &HooksEditErr
         HooksEditError::BackupFailed(detail) => {
             language.format(SettingsAgentsHooksBackupFailed, &[("detail", detail)])
         }
+        HooksEditError::Unauthorized => language.text(SettingsAgentsHooksUnauthorized).to_owned(),
         HooksEditError::Io(detail) => {
             language.format(SettingsAgentsHooksIoFailed, &[("detail", detail)])
         }
@@ -664,7 +666,7 @@ impl AppRoot {
                             });
                         }
                         document
-                            .save_editable(&text)
+                            .save_editable(&text, &guard_root)
                             .map_err(HooksPageError::Edit)?;
                         document.reload().map_err(HooksPageError::Edit)
                     }

@@ -335,6 +335,7 @@
       "hooks_external_modified": "文件已被外部修改；请重新加载后再保存。",
       "hooks_project_missing": "项目不存在。",
       "hooks_root_unavailable": "项目根不可访问；Project 与 Local 层已禁用。",
+      "hooks_unauthorized": "目标文件不在授权范围内。",
       "hooks_document_not_loaded": "Hooks 文档尚未加载。",
       "hooks_baseline_missing": "保存后无法读取文件基线。",
       "hooks_config_dir_unavailable": "无法解析 Claude 配置目录。",
