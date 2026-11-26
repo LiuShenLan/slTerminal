@@ -106,7 +106,7 @@
 | 程序化滚动与恢复位置不走视口调度 | 待修 |
 | 每次滚动清空全部已渲染 outcome | 待修 |
 | 高 DPI 下公式位图被放大后再按 1:1 逻辑像素显示 | 待修 |
-| 已加载的远程图片再次点击仍发起新请求 | 待修 |
+| 已加载的远程图片再次点击仍发起新请求 | 已修：已加载或有在途任务时重复点击不再重启请求；测试 `repeated_image_click_does_not_restart_requests` |
 | 渲染查找在前台按匹配数乘块数扫描 | 待修 |
 | 每次滚动在前台复制整篇文档文本 | 待修 |
 | 大纲无层级且常驻挤占内容区 | 待修 |
@@ -137,9 +137,9 @@
 | OSC 原始缓冲无界，嗅探上限在分发后才生效 | 已修：`OscGate` 在进入 VT 解析器前把 OSC 负载限制在 24 MiB（覆盖内联图片 base64 上界），超限丢弃负载、保留终止符；测试 `osc_gate_bounds_unterminated_payload_and_recovers_after_terminator`、`osc_gate_keeps_st_terminator_across_chunk_boundaries` |
 | 运行时设置未作用到终端核心 | 待修 |
 | 搜索的帧驱动重查会重置导航位置并形成搜索风暴 | 待修 |
-| 退出后键盘复制、搜索与回滚全部失效 | 待修 |
+| 退出后键盘复制、搜索与回滚全部失效 | 已修：退出后保留复制/搜索/回滚，粘贴与编码路径关闭；测试 `exited_terminal_keeps_copy_and_scroll_but_rejects_input` |
 | 一次瞬态操作错误会替换并永久遮住终端画面 | 待修 |
-| Ctrl+Enter 未发送 LF，行镜像把修饰 Enter 当作提交 | 待修 |
+| Ctrl+Enter 未发送 LF，行镜像把修饰 Enter 当作提交 | 已修：`encode_for_program` 对 Ctrl+Enter 恒发 LF，行镜像 control 分支已使镜像失效；测试 `ctrl_enter_always_sends_lf` |
 | 键盘选区扩展与全选未实现，Shift+PageUp/PageDown/Home/End 语义相反 | 待修 |
 | Ctrl+Shift+A 同时被终端全选与侧栏 Agent 文件占用 | 待修 |
 | 光标形状、闪烁与相关设置不符合行为真值 | 待修 |
