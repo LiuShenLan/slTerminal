@@ -207,7 +207,7 @@
 | expected_revision 在线上端到端未生效 | 待修 |
 | Operation 停在 Queued/Running 后没有恢复路径 | 待修 |
 | 项目、布局、面板与终端写 Operation 在持久快照提交前报告成功 | 待修 |
-| Hooks 草稿在决定齐备前被丢弃 | 待修 |
+| Hooks 草稿在决定齐备前被丢弃 | 已修：Runtime `app.close`／`project.remove` 先收集文档决定、预检并通过关闭登记后才按 `Discard` 清理草稿；项目移除以显式 `allow_hooks_discard` 跳过交互守卫（提交 c2b50b9d）；测试 `runtime_hooks_discard_waits_for_complete_document_decisions`、`runtime_project_hooks_discard_waits_for_document_decisions`、`runtime_project_remove_honors_discard_and_save_policies` |
 | 合同冲突：app.close 回执语义与“保存失败返回失败”冲突 | 需裁决 |
 | 合同冲突：非交互关闭缺少运行终端处置策略 | 需裁决 |
 | 控制面一次 join 失败被永久重放 | 待修 |
