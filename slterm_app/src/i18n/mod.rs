@@ -46,9 +46,25 @@ impl UiLanguage {
     }
 
     /// 带参数翻译:唯一允许创建 `String` 的翻译路径。
+    ///
+    /// debug 构建校验参数名集合与目录完全一致；漏传或错传在测试中直接失败，
+    /// 不把 `{name}` 原样送到界面。
     pub fn format(self, message: Message, args: &[(&str, &str)]) -> String {
+        debug_assert!(
+            message_arguments_match(message, args),
+            "translation arguments mismatch for {message:?}: expected {:?}",
+            message.placeholders()
+        );
         format::substitute(self.text(message), args)
     }
+}
+
+fn message_arguments_match(message: Message, args: &[(&str, &str)]) -> bool {
+    let expected = message.placeholders();
+    args.len() == expected.len()
+        && expected
+            .iter()
+            .all(|name| args.iter().filter(|(argument, _)| argument == name).count() == 1)
 }
 
 #[cfg(test)]
@@ -124,10 +140,12 @@ mod i18n_tests {
             ),
             "设置操作失败：磁盘已满"
         );
-        // 缺失参数原样可见。
-        assert_eq!(
-            UiLanguage::EnUs.format(Message::SettingsStatusOperationFailed, &[]),
-            "Settings operation failed: {error}"
+        // debug 构建拒绝缺失参数，避免占位符原样进入界面。
+        assert!(
+            std::panic::catch_unwind(|| {
+                UiLanguage::EnUs.format(Message::SettingsStatusOperationFailed, &[])
+            })
+            .is_err()
         );
     }
 }

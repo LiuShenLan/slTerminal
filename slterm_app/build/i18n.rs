@@ -38,13 +38,21 @@ pub fn generate(directory: &Path, output: &Path) -> Result<(), String> {
             "English and Simplified Chinese must have identical nonempty message ids".into(),
         );
     }
+    let mut placeholders = BTreeMap::new();
     for (locale, messages) in &catalogs {
         for (key, message) in messages {
             let base = english
                 .get(key)
                 .ok_or_else(|| format!("{locale}: unknown message id {key}"))?;
-            if catalog::placeholders(base)? != catalog::placeholders(message)? {
+            let expected = catalog::placeholders(base)?;
+            if expected != catalog::placeholders(message)? {
                 return Err(format!("{locale}: placeholder mismatch for {key}"));
+            }
+            if *locale == "en-US" {
+                placeholders.insert(
+                    key.clone(),
+                    expected.into_iter().map(str::to_owned).collect::<Vec<_>>(),
+                );
             }
         }
     }
@@ -147,6 +155,31 @@ pub fn generate(directory: &Path, output: &Path) -> Result<(), String> {
         keys.len()
     )
     .unwrap();
+    // 生成占位符元数据：调用点参数名可在 debug 断言与合同测试中校验。
+    writeln!(
+        code,
+        "#[allow(dead_code)]\nstatic PLACEHOLDERS: [&[&str]; {}] = [",
+        keys.len()
+    )
+    .unwrap();
+    for key in &keys {
+        let names = placeholders
+            .get(key.as_str())
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        code.push_str("&[");
+        for name in names {
+            write!(code, "{name:?},").unwrap();
+        }
+        code.push_str("],\n");
+    }
+    code.push_str("];\n#[allow(dead_code)]\nimpl Message {\npub const ALL: &'static [Self] = &[");
+    for key in &keys {
+        write!(code, "Self::{},", message_variant(key)?).unwrap();
+    }
+    code.push_str(
+        "];\npub const fn placeholders(self) -> &'static [&'static str] { PLACEHOLDERS[self as usize] }\n}\n",
+    );
     let bytes = catalogs
         .values()
         .flat_map(|messages| messages.values())

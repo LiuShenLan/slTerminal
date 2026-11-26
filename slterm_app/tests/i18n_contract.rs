@@ -155,3 +155,25 @@ fn resolved_locale_and_typed_formatting_follow_the_catalog() {
         "Settings operation failed: boom"
     );
 }
+
+/// 目录中的每个占位符都必须有可格式化的调用参数元数据；全量消息用声明
+/// 占位符格式化后不得残留任何 `{name}`。
+#[test]
+fn every_message_formats_with_its_declared_placeholders() {
+    for message in i18n::Message::ALL {
+        let placeholders = message.placeholders();
+        let values = placeholders
+            .iter()
+            .map(|name| (*name, "value"))
+            .collect::<Vec<_>>();
+        for language in i18n::UiLanguage::ALL {
+            let formatted = language.format(*message, &values);
+            for name in placeholders {
+                assert!(
+                    !formatted.contains(&format!("{{{name}}}")),
+                    "{message:?} left placeholder {name} in {language:?}"
+                );
+            }
+        }
+    }
+}

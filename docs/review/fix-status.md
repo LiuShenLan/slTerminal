@@ -247,7 +247,7 @@
 | 架构门禁未使用 --base | 待修 |
 | 版本校验与默认值跨脚本不一致 | 待修 |
 | 发布产物无签名链 | 待修 |
-| i18n 合同只约束目录占位符 | 待修 |
+| i18n 合同只约束目录占位符 | 已修：生成器输出 `Message::placeholders()` 与 `Message::ALL`；`format` 在 debug 构建校验参数名集合完全一致，合同测试用声明占位符遍历全部消息与语言并断言无残留 `{name}`；测试 `every_message_formats_with_its_declared_placeholders` |
 | 数学语料引用不存在的测试、主题与截图 | 待修 |
 
 ## 安全、凭据与依赖
