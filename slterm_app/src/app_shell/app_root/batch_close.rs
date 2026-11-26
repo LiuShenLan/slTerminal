@@ -768,13 +768,18 @@ impl AppRoot {
             .coordinator
             .state_committed(attempt)
             .map_err(|_| AppRootError::TerminalCloseState)?;
+        let mut committed_for_snapshots = None;
         if let Some(committed) = committed {
             if committed.commit_status != CloseCommitStatus::StateCommitted {
                 return Err(AppRootError::TerminalCloseState);
             }
             close.persisted = Some(committed);
+            committed_for_snapshots = close.persisted.clone();
         }
         self.commit_project_snapshot(candidate, cx);
+        if let Some(persisted) = &committed_for_snapshots {
+            self.delete_closed_document_snapshots(persisted);
+        }
         self.detach_batch_terminals(batch_id, preferred_panel, divider_focus_removed, window, cx);
         Ok(())
     }
@@ -1058,6 +1063,13 @@ impl AppRoot {
                     )
                 })
         });
+        if let Some(intent) = self
+            .terminal_close_batches
+            .get(&batch_id)
+            .and_then(|close| close.coordinator.intent().cloned())
+        {
+            self.sync_snapshots_for_close_intent(&intent);
+        }
         let Some(close) = self.terminal_close_batches.get(&batch_id) else {
             self.reconcile_document_registry(cx);
             return;

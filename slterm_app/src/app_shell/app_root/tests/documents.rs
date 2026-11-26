@@ -7,6 +7,7 @@ use slterm_document::LanguageId;
 
 include!("documents/open_file.rs");
 include!("documents/recovery.rs");
+include!("documents/snapshots.rs");
 
 pub(super) fn open_document(
     root: &Entity<AppRoot>,

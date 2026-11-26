@@ -259,6 +259,9 @@ impl AppRoot {
             })
         });
         self.tasks.complete(TaskId::ProjectClose(id));
+        if let Some(intent) = &intent {
+            self.sync_snapshots_for_close_intent(intent);
+        }
         if let Err(failures) = result {
             let needs_recollect = failures
                 .iter()
@@ -563,6 +566,8 @@ impl AppRoot {
             .state_committed(attempt)
             .map_err(|_| AppRootError::ProjectCloseState)?;
         close.persisted = committed;
+        let persisted = close.persisted.clone();
+        self.delete_closed_document_snapshots(&persisted);
         self.side_view_persistence
             .editor_view_states()
             .remove_project(id);

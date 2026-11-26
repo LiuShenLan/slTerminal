@@ -1321,6 +1321,10 @@ impl AppRoot {
                 }
             }
         }
+        if outcome == EditApplyOutcome::Applied {
+            // 脏正文进入崩溃快照队列；撤销回干净基线会排入删除。
+            self.sync_document_snapshot(&session);
+        }
         self.refresh_editor_git_for_document(document_id, cx);
         Ok(response)
     }
@@ -1437,9 +1441,13 @@ impl AppRoot {
                                         document_id,
                                         Err(runtime_save_error(false)),
                                     );
-                                } else if !root.pending_document_saves.contains(&document_id) {
-                                    // 仍有排队保存时不提前回执，由后续保存尝试落定。
-                                    root.finish_runtime_save_waiters(document_id, Ok(()));
+                                } else {
+                                    // 保存清脏后冗余快照排入删除；失败路径保留现场。
+                                    root.reconcile_saved_document(document_id);
+                                    if !root.pending_document_saves.contains(&document_id) {
+                                        // 仍有排队保存时不提前回执，由后续保存尝试落定。
+                                        root.finish_runtime_save_waiters(document_id, Ok(()));
+                                    }
                                 }
                             }
                             Err(error) => {

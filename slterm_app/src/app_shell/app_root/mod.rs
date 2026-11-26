@@ -40,6 +40,7 @@ mod settings_overlay;
 mod side_view;
 mod side_view_host;
 mod sidebar;
+mod snapshot;
 mod tabs;
 mod task_service;
 mod terminal_close;
@@ -187,6 +188,11 @@ pub(crate) struct AppRootServices {
     /// Windows 集成端口：设置页对账与平台副作用只经此访问。
     pub(crate) windows:
         std::sync::Arc<dyn crate::platform::windows_integration::WindowsIntegration>,
+    /// 崩溃快照写线程 client；写线程本体留在 GPUI 外启动作用域。
+    pub(crate) snapshot_client:
+        Option<crate::persistence::document_snapshot::writer::DocumentSnapshotClient>,
+    /// 本次运行的稳定身份，写入快照信封头。
+    pub(crate) snapshot_run_id: String,
 }
 
 /// 启动期运行端口：Runtime 事件发布与 Windows 集成，不含持久化依赖。
@@ -224,6 +230,9 @@ pub(crate) struct AppRoot {
     /// 最近一次 Explorer 根同步对应的快照代次；渲染只在差异时延迟接线。
     side_view_roots_generation: Option<u64>,
     project_writer: Option<WorkspaceWriterClient>,
+    /// 崩溃快照写线程 client 与本次运行身份；None = 只保留内存正文。
+    snapshot_client: Option<crate::persistence::document_snapshot::writer::DocumentSnapshotClient>,
+    snapshot_run_id: String,
     store_epoch: Option<String>,
     pending_final_project_snapshot: Option<ProjectSnapshot>,
     project_snapshot_recovery_failed: bool,
@@ -416,6 +425,8 @@ impl AppRoot {
         services: AppRootServices,
         cx: &mut Context<'_, Self>,
     ) -> Self {
+        let snapshot_client = services.snapshot_client.clone();
+        let snapshot_run_id = services.snapshot_run_id.clone();
         let mut root = Self::with_launcher(
             panel_ids,
             shell,
@@ -429,6 +440,7 @@ impl AppRoot {
             cx,
         );
         root.learning = services.learning;
+        root.install_snapshot_client(snapshot_client, snapshot_run_id);
         root
     }
 
@@ -549,6 +561,8 @@ impl AppRoot {
             update_install: None,
             side_view_roots_generation: None,
             project_writer,
+            snapshot_client: None,
+            snapshot_run_id: String::new(),
             store_epoch,
             pending_final_project_snapshot: None,
             project_snapshot_recovery_failed,

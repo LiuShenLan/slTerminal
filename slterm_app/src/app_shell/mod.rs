@@ -559,6 +559,19 @@ fn run_shell_once(
     }
     // 本机窗口几何在开窗前只交付一次；损坏或无记录回退默认尺寸。
     let window_geometry = side_view_persistence.take_window_geometry();
+    // 崩溃快照写线程与工作区 writer 同层：本体留在 GPUI 外，前台只持 client。
+    let snapshot_run_id = workspace_writer.metadata().run.run_id.clone();
+    let mut snapshot_writer =
+        match crate::persistence::document_snapshot::writer::DocumentSnapshotWriter::start(
+            app_paths,
+        ) {
+            Ok(writer) => Some(writer),
+            Err(error) => {
+                log::warn!("document snapshot writer unavailable: {error}");
+                None
+            }
+        };
+    let snapshot_client = snapshot_writer.as_ref().map(|writer| writer.client());
     // 学习库独立于工作区库；损坏或高版本只暂停持久学习，不覆盖原文件。
     let (learning, learning_runtime) = match crate::learning::LearningService::start(app_paths) {
         Ok(started) => {
@@ -664,6 +677,8 @@ fn run_shell_once(
                     learning: learning.clone(),
                     runtime_events,
                     windows: windows.clone(),
+                    snapshot_client,
+                    snapshot_run_id,
                 },
                 window_geometry,
                 start_hidden,
@@ -693,6 +708,12 @@ fn run_shell_once(
         && let Err(error) = runtime.shutdown()
     {
         log::warn!("learning writer shutdown failed: {error}");
+    }
+    // 崩溃快照最终冲刷：窗口销毁后仍保留待写正文，失败保留给下次启动恢复。
+    if let Some(mut writer) = snapshot_writer.take()
+        && let Err(error) = writer.shutdown()
+    {
+        log::warn!("document snapshot writer shutdown failed: {error}");
     }
     // 托盘收尾:先删图标再退进程,否则任务栏残影要等
     // 用户悬停才消失;join 保证删图标先于进程退出。

@@ -529,6 +529,9 @@ impl AppRoot {
                     return;
                 }
                 close.persisted = committed;
+                let persisted = close.persisted.clone();
+                // 状态已越过 StateCommitted：最后引用 Document 的冗余快照可删。
+                self.delete_closed_document_snapshots(&persisted);
                 self.drive_application_close(cx);
             }
             Ok(Err(error)) => {
@@ -695,6 +698,9 @@ impl AppRoot {
             })
         });
         self.tasks.complete(TaskId::CloseFlush);
+        if let Some(intent) = &intent {
+            self.sync_snapshots_for_close_intent(intent);
+        }
         if let Err(failures) = result {
             if let Some(close) = self.application_close.as_mut() {
                 close.needs_recollect |= failures
