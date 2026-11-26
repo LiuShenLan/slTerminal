@@ -109,6 +109,16 @@ fn kitty_escape(ks: &Keystroke, mode: &TermMode) -> Option<Vec<u8>> {
 }
 
 /// 默认多行和弦对无协商键盘协议的字节流读者同样有效。
+fn is_ctrl_enter(ks: &Keystroke) -> bool {
+    let mods = &ks.modifiers;
+    ks.key == "enter"
+        && mods.control
+        && !mods.shift
+        && !mods.alt
+        && !mods.platform
+        && !mods.function
+}
+
 fn is_shift_enter(ks: &Keystroke) -> bool {
     let mods = &ks.modifiers;
     ks.key == "enter"
@@ -124,7 +134,9 @@ pub(super) fn encode_for_program(
     mode: &TermMode,
     program: Option<&str>,
 ) -> Option<Vec<u8>> {
-    if is_shift_enter(ks) && shift_enter_as_lf(program, *mode) {
+    // featureSpec：Ctrl+Enter 恒发送 LF，先于任何协议协商；Shift+Enter
+    // 仅在目标程序/传统 VT 支持时降级为 LF。
+    if is_ctrl_enter(ks) || (is_shift_enter(ks) && shift_enter_as_lf(program, *mode)) {
         Some(b"\n".to_vec())
     } else {
         encode(ks, mode)
@@ -920,11 +932,28 @@ mod tests {
             );
         }
         // 非裸 shift+enter 永不吃换行回退。
-        for chord in ["enter", "ctrl-enter", "alt-enter", "ctrl-shift-enter"] {
+        for chord in ["enter", "alt-enter", "ctrl-shift-enter"] {
             let key = Keystroke::parse(chord).unwrap();
             assert_eq!(
                 encode_for_program(&key, &mode, Some("claude")),
                 encode(&key, &mode)
+            );
+        }
+    }
+
+    /// featureSpec：Ctrl+Enter 恒发送 LF，不受协议协商或程序识别影响。
+    #[test]
+    fn ctrl_enter_always_sends_lf() {
+        let key = Keystroke::parse("ctrl-enter").unwrap();
+        for mode in [
+            TermMode::empty(),
+            TermMode::WIN32_INPUT_MODE,
+            pi_keyboard_mode(),
+        ] {
+            assert_eq!(encode_for_program(&key, &mode, None), Some(b"\n".to_vec()));
+            assert_eq!(
+                encode_for_program(&key, &mode, Some("claude")),
+                Some(b"\n".to_vec())
             );
         }
     }

@@ -84,8 +84,11 @@ impl MarkdownView {
         owner: &WeakEntity<MarkdownView>,
         cx: &mut App,
     ) {
+        // 已加载或已有在途请求：重复点击只保留原请求，不重启网络/绑定代次。
+        if self.images.contains_key(url) || self.image_tasks.contains_key(url) {
+            return;
+        }
         self.image_failures.remove(url);
-        self.image_tasks.remove(url);
         let remote = url.starts_with("http://") || url.starts_with("https://");
         let generation = if remote {
             let generation = self

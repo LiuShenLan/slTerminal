@@ -343,6 +343,58 @@ fn paste_confirmation_can_be_disabled_explicitly(cx: &mut TestAppContext) {
     assert_eq!(pty_bytes(&rx), b"bad\0text");
 }
 
+/// 退出后只读：复制与回滚仍可用，普通输入不再写入 PTY。
+#[gpui::test]
+fn exited_terminal_keeps_copy_and_scroll_but_rejects_input(cx: &mut TestAppContext) {
+    let (terminal, mut window, rx, _registry) = open(cx);
+    terminal.update(&mut window, |view, _| {
+        feed(
+            view,
+            b"line one
+line two
+",
+        )
+    });
+    select_first_line(&terminal, cx, 4);
+    terminal.update(&mut window, |view, _| {
+        view.exited = Some("进程已退出".to_owned());
+    });
+
+    window.update(|_, cx| cx.write_to_clipboard(ClipboardItem::new_string("sentinel".to_owned())));
+    let modifiers = Modifiers {
+        control: true,
+        shift: true,
+        ..Default::default()
+    };
+    let _ = press(&mut window, key("c", modifiers));
+    assert_eq!(
+        clipboard_text(&mut window).as_deref(),
+        Some("line"),
+        "退出后复制必须可用"
+    );
+
+    let _ = press(
+        &mut window,
+        key(
+            "pageup",
+            Modifiers {
+                shift: true,
+                ..Default::default()
+            },
+        ),
+    );
+    let mut saw_scroll = false;
+    while let Ok(msg) = rx.try_recv() {
+        if matches!(msg, Msg::Scroll(_)) {
+            saw_scroll = true;
+        }
+    }
+    assert!(saw_scroll, "退出后回滚必须可用");
+
+    let _ = press(&mut window, key("a", Modifiers::default()));
+    assert!(pty_bytes(&rx).is_empty(), "退出后不得向 PTY 写输入");
+}
+
 /// shift+pageup 仅主屏:本地翻页,零字节下发;备用屏则透传编码序列。
 #[gpui::test]
 fn shift_pageup_scrolls_main_screen_but_reaches_alt_screen_encoded(cx: &mut TestAppContext) {

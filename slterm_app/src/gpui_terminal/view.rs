@@ -938,9 +938,6 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
-        if self.exited.is_some() {
-            return;
-        }
         // IME 组合和 Windows 原生窗口快捷键不编码、不拦截。GPUI Windows
         // 在 `stop_propagation` 后会跳过 `TranslateMessage`/`DispatchMessage`,
         // 必须保留输入法组合、窗口关闭和系统菜单的默认处理。
@@ -961,8 +958,11 @@ impl TerminalView {
 
         // 终端惯例快捷键优先于编码器。
         if mods.shift && !mods.control && !mods.alt && ks.key == "insert" {
-            self.paste(window, cx);
-            cx.stop_propagation();
+            // 退出后粘贴不再写 PTY；只读快捷键不受影响。
+            if self.exited.is_none() {
+                self.paste(window, cx);
+                cx.stop_propagation();
+            }
             return;
         }
         if mods.control && mods.shift {
@@ -975,8 +975,10 @@ impl TerminalView {
                     return;
                 }
                 "v" => {
-                    self.paste(window, cx);
-                    cx.stop_propagation();
+                    if self.exited.is_none() {
+                        self.paste(window, cx);
+                        cx.stop_propagation();
+                    }
                     return;
                 }
                 // 应用级快捷键(新建/关闭 Tab、分屏、缩放等):不编码、不拦截,
@@ -994,17 +996,6 @@ impl TerminalView {
         if mods.control && !mods.alt && ks.key.as_str() == "tab" {
             return;
         }
-        // 补全导航/接受优先于普通键编码;消费按键时不进入编码器。
-        if self.handle_completion_key(&ks.key, mods, cx) {
-            cx.stop_propagation();
-            return;
-        }
-        // 分屏焦点导航(ctrl+alt+方向)同样冒泡给 workspace,不编码成
-        // CSI 1;7 序列。
-        if mods.control && mods.alt && matches!(ks.key.as_str(), "left" | "right" | "up" | "down") {
-            return;
-        }
-
         let mode = self.term_mode();
 
         // 回滚快捷键(仅主屏):Shift+PageUp/PageDown 翻页、Shift+Home/End
@@ -1026,6 +1017,22 @@ impl TerminalView {
                 cx.stop_propagation();
                 return;
             }
+        }
+
+        // 子进程退出后只保留只读能力：复制、搜索与回滚已在上方处理，
+        // 其余按键不得进入补全或编码器写 PTY。
+        if self.exited.is_some() {
+            return;
+        }
+        // 补全导航/接受优先于普通键编码;消费按键时不进入编码器。
+        if self.handle_completion_key(&ks.key, mods, cx) {
+            cx.stop_propagation();
+            return;
+        }
+        // 分屏焦点导航(ctrl+alt+方向)同样冒泡给 workspace,不编码成
+        // CSI 1;7 序列。
+        if mods.control && mods.alt && matches!(ks.key.as_str(), "left" | "right" | "up" | "down") {
+            return;
         }
 
         // 编码器路径:Some(bytes) → 写 PTY + 上报语义输入;None(纯文本键)

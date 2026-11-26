@@ -199,6 +199,25 @@ fn stale_resource_receipts_cannot_overwrite_same_revision_retries(cx: &mut TestA
 }
 
 #[gpui::test]
+fn repeated_image_click_does_not_restart_requests(cx: &mut TestAppContext) {
+    let (view, mut visual) = resource_view(cx);
+    let owner = view.downgrade();
+    visual.update(|_, cx| {
+        view.update(cx, |view, cx| {
+            let url = "https://images.example/a.png";
+            view.load_image_on_click(url, &owner, cx);
+            let first = view.remote_image_generations[url];
+            assert!(view.image_tasks.contains_key(url));
+            view.load_image_on_click(url, &owner, cx);
+            assert_eq!(
+                view.remote_image_generations[url], first,
+                "已发起或已加载的图片重复点击不得重启请求"
+            );
+        });
+    });
+}
+
+#[gpui::test]
 fn markdown_viewport_releases_offscreen_resource_bitmaps(cx: &mut TestAppContext) {
     let (view, mut visual) = resource_view(cx);
     visual.run_until_parked();
