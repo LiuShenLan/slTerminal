@@ -78,8 +78,28 @@ fn integration_settings_singleton(cx: &mut TestAppContext) {
     activate_project(&root, &mut window, PROJECT_A);
     focus_workspace(&root, &mut window);
     open_settings(&mut window);
+    assert!(
+        settings_panel(&root, cx, project_id(PROJECT_A)).is_none(),
+        "浮层打开期间不得改开项目设置面板"
+    );
+    assert_eq!(
+        root.read_with(cx, |root, _| root
+            .settings_overlay
+            .as_ref()
+            .unwrap()
+            .view
+            .entity_id()),
+        overlay_id,
+        "浮层存在时重复入口只能还焦既有浮层"
+    );
+    // 关闭浮层后的下一次入口才使用项目 Settings 面板。
+    window.simulate_keystrokes("escape");
+    window.run_until_parked();
+    assert!(root.read_with(cx, |root, _| root.settings_overlay.is_none()));
+    focus_workspace(&root, &mut window);
+    open_settings(&mut window);
     let project_a =
-        settings_panel(&root, cx, project_id(PROJECT_A)).expect("有活跃项目时打开项目设置面板");
+        settings_panel(&root, cx, project_id(PROJECT_A)).expect("浮层关闭后打开项目设置面板");
     open_settings(&mut window);
     assert_eq!(
         settings_panel(&root, cx, project_id(PROJECT_A)),
@@ -98,8 +118,8 @@ fn integration_settings_singleton(cx: &mut TestAppContext) {
         "隐藏项目的设置面板必须保活"
     );
     assert!(
-        root.read_with(cx, |root, _| root.settings_overlay.is_some()),
-        "项目设置面板不得销毁应用级浮层"
+        root.read_with(cx, |root, _| root.settings_overlay.is_none()),
+        "项目设置面板入口不得重建应用级浮层"
     );
 }
 

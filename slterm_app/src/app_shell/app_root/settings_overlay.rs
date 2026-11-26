@@ -810,7 +810,9 @@ impl AppRoot {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Result<(), AppRootError> {
-        if self.snapshot.registry().active().is_none() {
+        // 浮层打开期间继续共享应用设置并保留草稿：入口先还焦既有浮层；
+        // 项目 Settings 面板只在浮层关闭后的下一次入口使用。
+        if self.settings_overlay.is_some() || self.snapshot.registry().active().is_none() {
             return self.open_settings_overlay_from_request(window, cx);
         }
         self.ensure_not_closing()?;
