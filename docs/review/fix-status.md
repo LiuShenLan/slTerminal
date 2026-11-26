@@ -138,7 +138,7 @@
 | 运行时设置未作用到终端核心 | 待修 |
 | 搜索的帧驱动重查会重置导航位置并形成搜索风暴 | 已修：新帧刷新保留选中项且不滚动，在途请求跳过重排；测试 `frame_driven_search_refresh_preserves_selection`（提交 ac25b809） |
 | 退出后键盘复制、搜索与回滚全部失效 | 已修：退出后保留复制/搜索/回滚，粘贴与编码路径关闭；测试 `exited_terminal_keeps_copy_and_scroll_but_rejects_input` |
-| 一次瞬态操作错误会替换并永久遮住终端画面 | 待修 |
+| 一次瞬态操作错误会替换并永久遮住终端画面 | 已修：超限粘贴与 Agent 注入失败的 `notice` 瞬态提示不再替换终端元素，可点击关闭（提交 ba269cdb）；测试 `oversized_paste_keeps_terminal_visible_with_dismissible_notice`、`dangerous_paste_confirmation_does_not_leak_or_write_early` |
 | Ctrl+Enter 未发送 LF，行镜像把修饰 Enter 当作提交 | 已修：`encode_for_program` 对 Ctrl+Enter 恒发 LF，行镜像 control 分支已使镜像失效；测试 `ctrl_enter_always_sends_lf` |
 | 键盘选区扩展与全选未实现，Shift+PageUp/PageDown/Home/End 语义相反 | 待修 |
 | Ctrl+Shift+A 同时被终端全选与侧栏 Agent 文件占用 | 待修 |
