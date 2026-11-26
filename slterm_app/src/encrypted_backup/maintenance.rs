@@ -135,17 +135,58 @@ pub(crate) fn stage_restore(
     };
     // owner 行先落定，材料随后写入：崩溃只留下可判定的 Prepared 缺失材料，
     // 不会产生无主文件；写失败时显式撤掉该 owner。
-    store
-        .register_maintenance_request(&request)
-        .map_err(|error| format!("登记维护请求失败: {error}"))?;
+    if let Err(error) = store.register_maintenance_request(&request) {
+        audit_backup(
+            "backup_restore_stage",
+            &path,
+            crate::audit::AuditResult::Error,
+        );
+        return Err(format!("登记维护请求失败: {error}"));
+    }
     if let Err(error) = crate::atomic_file::write_current_user(&path, &payload) {
+        audit_backup(
+            "backup_restore_stage",
+            &path,
+            crate::audit::AuditResult::Error,
+        );
         let cleanup = store.discard_prepared_maintenance_request(&request.request_id);
         return Err(match cleanup {
             Ok(()) => format!("写入暂存材料失败: {error}"),
             Err(cleanup) => format!("写入暂存材料失败: {error}; 撤销维护请求失败: {cleanup}"),
         });
     }
+    audit_backup("backup_restore_stage", &path, crate::audit::AuditResult::Ok);
     Ok(request)
+}
+
+fn audit_backup(operation: &'static str, path: &Path, result: crate::audit::AuditResult) {
+    crate::audit::record(
+        crate::audit::AuditEvent::new(operation, "encrypted_backup::maintenance", result)
+            .with_path(path),
+    );
+}
+
+/// 应用单个条目：设置文件经统一 settings_store 合并写，其余为原子文件写。
+///
+/// 设置合并保留本机未知命名空间；大小与导出白名单已在归档校验时锁定。
+fn write_backup_entry(target: &Path, entry: &BackupEntry) -> Result<(), String> {
+    if entry.name == "settings.json" {
+        let raw = slterm_settings::RawSettings::from_json_bytes(&entry.bytes);
+        let updates = slterm_settings::keys::KEYS
+            .iter()
+            .filter(|def| def.exportable && !def.sensitive)
+            .filter_map(|def| {
+                raw.persisted_value(def.key)
+                    .map(|value| (def.key, value.clone()))
+            })
+            .collect::<Vec<_>>();
+        crate::settings_store::save_settings_blocking_at(target, &updates)
+            .map_err(|error| format!("应用 {} 失败: {error}", entry.name))?;
+    } else {
+        crate::atomic_file::write(target, &entry.bytes)
+            .map_err(|error| format!("应用 {} 失败: {error}", entry.name))?;
+    }
+    Ok(())
 }
 
 /// 启动维护期恢复器：Prepared 应用，Applying 中断回滚，其他交由人工处理。
@@ -247,13 +288,20 @@ impl BackupRestoreRecoverer {
                 );
             }
             let target = restore_path(category_root(&self.paths, entry.category), &entry.name)?;
-            if let Err(error) = crate::atomic_file::write(&target, &entry.bytes) {
-                return self.roll_back_after_failure(
-                    store,
-                    request,
-                    &originals,
-                    format!("应用 {} 失败: {error}", entry.name),
-                );
+            match write_backup_entry(&target, entry) {
+                Ok(()) => audit_backup(
+                    "backup_restore_apply",
+                    &target,
+                    crate::audit::AuditResult::Ok,
+                ),
+                Err(error) => {
+                    audit_backup(
+                        "backup_restore_apply",
+                        &target,
+                        crate::audit::AuditResult::Error,
+                    );
+                    return self.roll_back_after_failure(store, request, &originals, error);
+                }
             }
         }
 
@@ -264,14 +312,25 @@ impl BackupRestoreRecoverer {
             .metadata()
             .map_err(|error| format!("读取工作区运行事实失败: {error}"))?
             .ok_or("工作区运行元数据缺失")?;
-        store
-            .complete_maintenance_apply(
-                &request.request_id,
-                &metadata.run.run_id,
-                &request.store_epoch,
-                &uuid::Uuid::now_v7().to_string(),
-            )
-            .map_err(|error| format!("完成维护应用失败: {error}"))?;
+        let staged = local_path(&self.paths, &request.staged_path)?;
+        if let Err(error) = store.complete_maintenance_apply(
+            &request.request_id,
+            &metadata.run.run_id,
+            &request.store_epoch,
+            &uuid::Uuid::now_v7().to_string(),
+        ) {
+            audit_backup(
+                "backup_restore_commit",
+                &staged,
+                crate::audit::AuditResult::Error,
+            );
+            return Err(format!("完成维护应用失败: {error}"));
+        }
+        audit_backup(
+            "backup_restore_commit",
+            &staged,
+            crate::audit::AuditResult::Ok,
+        );
         self.cleanup(store, request)
     }
 
@@ -374,19 +433,30 @@ impl BackupRestoreRecoverer {
     ) -> Result<(), String> {
         // 先删材料再清登记：删文件失败时登记仍在，留下可判定的阻断事实；
         // 反过来会在清理失败后丢失材料身份。
-        remove_file(&local_path(
-            &self.paths,
-            &point_relative(&request.request_id),
-        )?)?;
         let staged = local_path(&self.paths, &request.staged_path)?;
-        remove_file(&staged)?;
-        if let Some(parent) = staged.parent() {
-            let _ = fs::remove_dir(parent);
-        }
-        store
-            .clear_recovery_points(&request.request_id)
-            .map_err(|error| format!("清理恢复点登记失败: {error}"))?;
-        Ok(())
+        let result = (|| -> Result<(), String> {
+            remove_file(&local_path(
+                &self.paths,
+                &point_relative(&request.request_id),
+            )?)?;
+            remove_file(&staged)?;
+            if let Some(parent) = staged.parent() {
+                let _ = fs::remove_dir(parent);
+            }
+            store
+                .clear_recovery_points(&request.request_id)
+                .map_err(|error| format!("清理恢复点登记失败: {error}"))
+        })();
+        audit_backup(
+            "backup_restore_cleanup",
+            &staged,
+            if result.is_ok() {
+                crate::audit::AuditResult::Ok
+            } else {
+                crate::audit::AuditResult::Error
+            },
+        );
+        result
     }
 }
 
@@ -561,7 +631,10 @@ mod maintenance_restore_tests {
             maintenance(&mut store, &paths).unwrap(),
             MaintenanceOutcome::Ready
         );
-        assert_eq!(fs::read(paths.settings_path()).unwrap(), NEW_SETTINGS);
+        let restored = slterm_settings::RawSettings::from_json_bytes(
+            &fs::read(paths.settings_path()).unwrap(),
+        );
+        assert_eq!(restored.value("theme"), Some("Nord"));
         assert_eq!(
             fs::read(paths.config_root().join(NEW_THEME)).unwrap(),
             theme_bytes()
@@ -608,6 +681,94 @@ mod maintenance_restore_tests {
             store.register_journal(stale),
             Err(JournalError::StoreEpochConflict)
         ));
+    }
+
+    /// 设置恢复经 settings_store 合并：覆盖导出字段，同时保留本机未知命名空间。
+    #[test]
+    fn settings_restore_merges_exported_values_and_preserves_local_fields() {
+        let temp = tempfile::tempdir().unwrap();
+        let (paths, mut store) = setup(&temp);
+        fs::write(
+            paths.settings_path(),
+            br#"{"appearance":{"theme":"Linear","font_family":"LocalFont"},"handmade":{"note":"keep"}}"#,
+        )
+        .unwrap();
+        let request = stage_restore(&mut store, &paths, &archive(), selection()).unwrap();
+        assert_eq!(
+            maintenance(&mut store, &paths).unwrap(),
+            MaintenanceOutcome::Ready
+        );
+        let restored = fs::read_to_string(paths.settings_path()).unwrap();
+        assert!(restored.contains("Nord"), "导出字段必须覆盖: {restored}");
+        assert!(
+            restored.contains("LocalFont"),
+            "未入包的已登记字段保持本机值: {restored}"
+        );
+        assert!(
+            restored.contains("handmade") && restored.contains("keep"),
+            "未知命名空间必须原位保留: {restored}"
+        );
+        assert_eq!(
+            store
+                .maintenance_request(&request.request_id)
+                .unwrap()
+                .unwrap()
+                .status,
+            MaintenanceRequestStatus::Applied
+        );
+    }
+
+    /// 设置条目超过设置写通道 1 MiB 上限时整单拒绝。
+    #[test]
+    fn oversized_settings_entry_is_rejected_before_staging() {
+        let temp = tempfile::tempdir().unwrap();
+        let (paths, mut store) = setup(&temp);
+        let mut oversized = archive();
+        let padding = "x".repeat(slterm_settings::MAX_PERSIST_BYTES);
+        oversized.entries[0].bytes =
+            format!(r#"{{"appearance":{{"font_family":"{padding}"}}}}"#).into_bytes();
+        assert!(stage_restore(&mut store, &paths, &oversized, selection()).is_err());
+        assert!(store.unfinished_maintenance_requests().unwrap().is_empty());
+    }
+
+    /// 暂存、应用、提交与清理都产生 audit 事件；事件不含内容或凭据。
+    #[test]
+    fn backup_restore_emits_audit_events_for_each_security_write() {
+        let temp = tempfile::tempdir().unwrap();
+        let (paths, mut store) = setup(&temp);
+        let captured = crate::audit::test_support::capture_events();
+        let request = stage_restore(&mut store, &paths, &archive(), selection()).unwrap();
+        assert_eq!(
+            maintenance(&mut store, &paths).unwrap(),
+            MaintenanceOutcome::Ready
+        );
+        let text = captured.text();
+        for operation in [
+            "backup_restore_stage",
+            "backup_restore_apply",
+            "backup_restore_commit",
+            "backup_restore_cleanup",
+            "backup_recovery_point",
+        ] {
+            assert!(
+                text.contains(&format!("operation={operation}"))
+                    || text.contains(&format!("operation=\"{operation}\"")),
+                "缺少审计事件 {operation}: {text}"
+            );
+        }
+        assert!(
+            text.contains("target=audit") || text.contains("audit"),
+            "{text}"
+        );
+        assert!(!text.contains("Nord"), "审计不得携带设置内容: {text}");
+        assert_eq!(
+            store
+                .maintenance_request(&request.request_id)
+                .unwrap()
+                .unwrap()
+                .status,
+            MaintenanceRequestStatus::Applied
+        );
     }
 
     /// 撤销 owner 只允许未开始的 Prepared 请求。

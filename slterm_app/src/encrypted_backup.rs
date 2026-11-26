@@ -516,7 +516,9 @@ fn validate_archive(archive: &BackupArchive) -> Result<(), String> {
         safe_path(Path::new("."), &entry.name)?;
         let allowed = match entry.category {
             BackupCategory::Settings => {
-                (entry.name == "settings.json" && settings_document_is_exportable(&entry.bytes))
+                (entry.name == "settings.json"
+                    && entry.bytes.len() <= slterm_settings::MAX_PERSIST_BYTES
+                    && settings_document_is_exportable(&entry.bytes))
                     || theme_entry_allowed(&entry.name, &entry.bytes)
             }
         };

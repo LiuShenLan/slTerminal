@@ -66,8 +66,21 @@ pub(super) fn write_point(
         .map_err(|error| format!("创建恢复点目录失败: {error}"))?;
     let path = directory.join(name);
     let packet = encode_point(originals)?;
-    crate::atomic_file::write_current_user(&path, &packet)
-        .map_err(|error| format!("保存恢复点失败: {error}"))?;
+    let result = crate::atomic_file::write_current_user(&path, &packet)
+        .map_err(|error| format!("保存恢复点失败: {error}"));
+    crate::audit::record(
+        crate::audit::AuditEvent::new(
+            "backup_recovery_point",
+            "encrypted_backup::recovery",
+            if result.is_ok() {
+                crate::audit::AuditResult::Ok
+            } else {
+                crate::audit::AuditResult::Error
+            },
+        )
+        .with_path(&path),
+    );
+    result?;
     Ok(path)
 }
 
@@ -103,17 +116,51 @@ pub(super) fn write_originals(paths: &AppPaths, originals: &[OriginalFile]) -> R
         })
         .collect::<Result<Vec<_>, _>>()?;
     for (original, path) in originals.iter().zip(restore_paths) {
-        match &original.bytes {
-            Some(bytes) => crate::atomic_file::write(&path, bytes)
-                .map_err(|error| format!("撤回 {} 失败: {error}", original.target.name))?,
-            None => match fs::remove_file(path) {
-                Ok(()) => {}
-                Err(error) if error.kind() == ErrorKind::NotFound => {}
-                Err(error) => {
-                    return Err(format!("撤回 {} 失败: {error}", original.target.name));
+        let result = (|| -> Result<(), String> {
+            match &original.bytes {
+                Some(bytes) => {
+                    if original.target.name == "settings.json" {
+                        // 回滚必须恢复精确原文件；设置写仍经审计包装并遵守大小上限。
+                        if bytes.len() > slterm_settings::MAX_PERSIST_BYTES {
+                            return Err("撤回设置超过 1 MiB 上限".to_owned());
+                        }
+                        let text = String::from_utf8(bytes.clone())
+                            .map_err(|_| "撤回设置不是合法 UTF-8".to_owned())?;
+                        crate::audit::write_settings(
+                            &path,
+                            &text,
+                            "encrypted_backup::rollback_settings",
+                        )
+                        .map_err(|error| format!("撤回 {} 失败: {error}", original.target.name))?;
+                    } else {
+                        crate::atomic_file::write(&path, bytes).map_err(|error| {
+                            format!("撤回 {} 失败: {error}", original.target.name)
+                        })?;
+                    }
                 }
-            },
-        }
+                None => match fs::remove_file(&path) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == ErrorKind::NotFound => {}
+                    Err(error) => {
+                        return Err(format!("撤回 {} 失败: {error}", original.target.name));
+                    }
+                },
+            }
+            Ok(())
+        })();
+        crate::audit::record(
+            crate::audit::AuditEvent::new(
+                "backup_restore_rollback",
+                "encrypted_backup::recovery",
+                if result.is_ok() {
+                    crate::audit::AuditResult::Ok
+                } else {
+                    crate::audit::AuditResult::Error
+                },
+            )
+            .with_path(&path),
+        );
+        result?;
     }
     Ok(())
 }

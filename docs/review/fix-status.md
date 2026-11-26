@@ -165,8 +165,8 @@
 | 恢复点与暂存目录没有当前用户 ACL 限制 | 已修：新增 `atomic_file::create_dir_current_user`，恢复点目录/文件与 `maintenance/`、请求目录/staged 文件全部收敛为当前用户显式 DACL 并切断继承；测试 `current_user_directory_cuts_inheritance_and_has_one_ace`、`recovery_point_is_encrypted_and_round_trips`、`staged_restore_is_dpapi_protected_and_carries_no_plaintext`（真实 Win32 DACL 断言） |
 | 暂存明文先于 owner 落盘，清理先清行后删文件 | 已修：暂存改为先登记 Prepared owner（指纹绑定 DPAPI 密文）再原子写材料，写失败经 `discard_prepared_maintenance_request` 撤销且只允许 Prepared；清理改为先删恢复点与 staged 材料、再清恢复点登记，删除失败保留阻断事实；测试 `discard_prepared_request_never_removes_started_material`、`staged_restore_is_dpapi_protected_and_carries_no_plaintext` |
 | 即时恢复在指纹回写失败时已写盘却返回失败 | 已修：整条运行期即时恢复通道删除，落盘、恢复点采样与回滚只在启动维护期执行，不再存在写完目标后补记指纹的失败分支 |
-| 撤回只返回单一错误，逐项结果不可见，成功后恢复点不失效 | 待修 |
-| 备份恢复、应用、回滚与撤回没有审计/恢复日志，设置写绕过 settings_store | 待修 |
+| 撤回只返回单一错误，逐项结果不可见，成功后恢复点不失效 | 已随运行期即时撤回通道删除而消除；撤回产品能力仍待接线，实现时必须走维护请求并逐项回报、按结局失效材料（归入生产入口条目） |
+| 备份恢复、应用、回滚与撤回没有审计/恢复日志，设置写绕过 settings_store | 已修：暂存、逐项应用、恢复点、提交、回滚与清理只经 `audit` 记录 operation/path/source/result；设置条目经 `settings_store` 合并写并保留本机未知字段，回滚设置经审计包装且受 1 MiB 上限；设置条目超过上限在归档校验期拒绝；测试 `backup_restore_emits_audit_events_for_each_security_write`、`settings_restore_merges_exported_values_and_preserves_local_fields`、`oversized_settings_entry_is_rejected_before_staging` |
 | 审计成功事件在 Warn 级日志过滤下被丢弃 | 已修：`level_allowed` 让 audit target 恒放行；测试 `audit_records_bypass_the_warn_level_gate` |
 | 主日志写入系统临时目录而不是本地数据根 | 已修：`log_file_path` 归本地数据根；测试 `log_file_lives_under_the_local_data_root` |
 | 根外 Document 的会话重授权没有生产调用点 | 待修 |
