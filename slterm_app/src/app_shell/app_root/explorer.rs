@@ -44,6 +44,7 @@ pub(super) enum ExplorerIntent {
     LoadStatus {
         project_id: ProjectId,
         root: CanonicalPath,
+        generation: u64,
     },
 }
 
@@ -127,6 +128,10 @@ pub(super) struct ExplorerRuntime {
     /// 发现到的父仓库根与状态条目数；只作展示，不参与树根。
     repo_root: Option<CanonicalPath>,
     status_entries: usize,
+    /// 数据根切换代次；状态回执只结算同一代次。
+    generation: u64,
+    /// 在途状态读取期间的新数据根：只保留合并位，回执后重投。
+    pending_status: bool,
     filter_input: Option<gpui::Entity<gpui_component::input::InputState>>,
     _filter_change: Option<gpui::Subscription>,
     reading: bool,
@@ -156,6 +161,8 @@ impl ExplorerRuntime {
             scroll_handle: gpui::ScrollHandle::new(),
             repo_root: None,
             status_entries: 0,
+            generation: 1,
+            pending_status: false,
             filter_input: None,
             _filter_change: None,
             reading: false,
@@ -169,6 +176,14 @@ impl ExplorerRuntime {
 
     fn matches(&self, project: ProjectId, root: &CanonicalPath) -> bool {
         self.project == project && self.tree.root_path() == root
+    }
+
+    fn defer_status(&mut self) {
+        self.pending_status = true;
+    }
+
+    fn take_deferred_status(&mut self) -> bool {
+        std::mem::take(&mut self.pending_status)
     }
 
     fn reset(
@@ -190,6 +205,8 @@ impl ExplorerRuntime {
         self.scroll_handle = gpui::ScrollHandle::new();
         self.repo_root = None;
         self.status_entries = 0;
+        self.generation = self.generation.wrapping_add(1);
+        self.pending_status = false;
         self.filter_input = None;
         self._filter_change = None;
         self.dirty = false;
@@ -335,9 +352,11 @@ impl AppRoot {
                 from,
                 to,
             } => self.start_explorer_rename(project_id, root, from, to, window, cx),
-            ExplorerIntent::LoadStatus { project_id, root } => {
-                self.start_explorer_status(project_id, root, window, cx)
-            }
+            ExplorerIntent::LoadStatus {
+                project_id,
+                root,
+                generation,
+            } => self.start_explorer_status(project_id, root, generation, window, cx),
         }
     }
 
@@ -346,10 +365,18 @@ impl AppRoot {
         &mut self,
         project_id: ProjectId,
         root: CanonicalPath,
+        generation: u64,
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
         if self.tasks.is_registered(TaskId::ExplorerStatus) {
+            if let Some(view) = self
+                .side_views
+                .instance(slterm_workspace::SideViewId::Explorer)
+                .cloned()
+            {
+                view.update(cx, |view, _| view.explorer_defer_status(generation));
+            }
             return;
         }
         let git = std::sync::Arc::clone(&self.git);
@@ -370,7 +397,9 @@ impl AppRoot {
                         let result = loading.await;
                         let _ = window_handle.update(cx, |_, window, cx| {
                             let _ = this.update(cx, |root, cx| {
-                                root.finish_explorer_status(project_id, result, window, cx);
+                                root.finish_explorer_status(
+                                    project_id, generation, result, window, cx,
+                                );
                             });
                         });
                     })
@@ -382,31 +411,46 @@ impl AppRoot {
     fn finish_explorer_status(
         &mut self,
         project_id: ProjectId,
+        generation: u64,
         result: Result<std::sync::Arc<crate::git::StatusSnapshot>, crate::git::GitError>,
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
         self.tasks.complete(TaskId::ExplorerStatus);
-        let _ = window;
-        let Ok(snapshot) = result else {
-            return;
-        };
-        if self.snapshot.registry().project(project_id).is_none() {
-            return;
-        }
-        let repo_root = snapshot
-            .worktree_root
-            .as_ref()
-            .map(|root| root.canonical_path().clone());
-        let entries = snapshot.entries.len();
-        if let Some(explorer) = self
+        let explorer_view = self
             .side_views
             .instance(slterm_workspace::SideViewId::Explorer)
-            .cloned()
+            .cloned();
+        let reload = explorer_view
+            .as_ref()
+            .is_some_and(|view| view.update(cx, |view, _| view.explorer_take_deferred_status()));
+        let current = explorer_view
+            .as_ref()
+            .and_then(|view| view.read(cx).explorer_status_target());
+        // 回执必须同时匹配当前项目、根与代次；旧根结果不得写入新视图。
+        let matches = current
+            .as_ref()
+            .is_some_and(|(project, _, current_generation)| {
+                *project == project_id && *current_generation == generation
+            });
+        if matches
+            && let Ok(snapshot) = result
+            && let Some(view) = explorer_view.as_ref()
         {
-            explorer.update(cx, |view, cx| {
+            let repo_root = snapshot
+                .worktree_root
+                .as_ref()
+                .map(|root| root.canonical_path().clone());
+            let entries = snapshot.entries.len();
+            view.update(cx, |view, cx| {
                 view.explorer_set_status(repo_root, entries, cx)
             });
+        }
+        if reload
+            && let Some((project, root, generation)) = current
+            && self.snapshot.registry().project(project).is_some()
+        {
+            self.start_explorer_status(project, root, generation, window, cx);
         }
     }
 
@@ -612,15 +656,45 @@ impl SideView {
         }
         self.ensure_explorer_filter_input(window, cx);
         self.request_explorer_root(cx);
+        let generation = self
+            .explorer
+            .as_ref()
+            .map(|runtime| runtime.generation)
+            .unwrap_or(0);
         self.dispatch_explorer_intent(
             ExplorerIntent::LoadStatus {
                 project_id: project,
                 root: status_root,
+                generation,
             },
             window,
             cx,
         );
         cx.notify();
+    }
+
+    pub(super) fn explorer_defer_status(&mut self, generation: u64) {
+        if let Some(runtime) = &mut self.explorer
+            && runtime.generation == generation
+        {
+            runtime.defer_status();
+        }
+    }
+
+    pub(super) fn explorer_take_deferred_status(&mut self) -> bool {
+        self.explorer
+            .as_mut()
+            .is_some_and(ExplorerRuntime::take_deferred_status)
+    }
+
+    pub(super) fn explorer_status_target(&self) -> Option<(ProjectId, CanonicalPath, u64)> {
+        self.explorer.as_ref().map(|runtime| {
+            (
+                runtime.project,
+                runtime.tree.root_path().clone(),
+                runtime.generation,
+            )
+        })
     }
 
     /// 过滤输入实体随视图生命周期存在；关闭重开即清空草稿。
@@ -1385,4 +1459,26 @@ pub(super) fn render_explorer(view: &mut SideView, cx: &mut Context<'_, SideView
         .child(header)
         .child(list)
         .into_any_element()
+}
+
+#[cfg(test)]
+mod explorer_status_tests {
+    use super::*;
+    use std::str::FromStr as _;
+
+    /// 根切换推进代次并丢弃旧合并位；在途回执只结算当前代次。
+    #[test]
+    fn explorer_runtime_advances_generation_and_defers_status() {
+        let project = ProjectId::from_str("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2a").unwrap();
+        let root = CanonicalPath::new("C:/work/a").unwrap();
+        let mut runtime = ExplorerRuntime::new(project, root.clone(), None);
+        let first = runtime.generation;
+        runtime.defer_status();
+        assert!(runtime.take_deferred_status());
+
+        runtime.reset(project, root, None);
+
+        assert!(runtime.generation > first, "根切换必须推进代次");
+        assert!(!runtime.take_deferred_status(), "新根不得继承旧合并位");
+    }
 }

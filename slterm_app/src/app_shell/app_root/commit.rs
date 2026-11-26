@@ -252,6 +252,8 @@ pub(super) struct CommitRuntime {
     /// 回收站删除失败后的待永久确认目标；仅该路径允许再次按 Delete 永久删除。
     pending_permanent: Option<CanonicalPath>,
     generation: u64,
+    /// 在途状态读取期间又出现新数据根：只保留合并位，回执后重投。
+    pending_status: bool,
     task: Option<Task<()>>,
 }
 
@@ -274,8 +276,19 @@ impl CommitRuntime {
             stale: false,
             pending_permanent: None,
             generation: 0,
+            pending_status: false,
             task: None,
         }
+    }
+
+    /// 在途读取期间的新请求只保留合并位；回执完成后由同一 owner 重投。
+    fn defer_status(&mut self) {
+        self.pending_status = true;
+        self.loading = true;
+    }
+
+    fn take_deferred_status(&mut self) -> bool {
+        std::mem::take(&mut self.pending_status)
     }
 
     fn group_index(group: CommitGroup) -> usize {
@@ -518,6 +531,20 @@ impl SideView {
     }
 
     /// 同一项目的刷新目标；视图未打开或数据根不一致时返回 None。
+    pub(super) fn commit_defer_status(&mut self, generation: u64) {
+        if let Some(runtime) = &mut self.commit
+            && runtime.generation == generation
+        {
+            runtime.defer_status();
+        }
+    }
+
+    pub(super) fn commit_take_deferred_status(&mut self) -> bool {
+        self.commit
+            .as_mut()
+            .is_some_and(CommitRuntime::take_deferred_status)
+    }
+
     pub(super) fn commit_refresh_target(&self) -> Option<(ProjectId, CanonicalPath, u64)> {
         let runtime = self.commit.as_ref()?;
         Some((
@@ -976,6 +1003,13 @@ impl AppRoot {
         cx: &mut Context<'_, Self>,
     ) {
         if self.tasks.is_registered(TaskId::CommitStatus) {
+            if let Some(view) = self
+                .side_views
+                .instance(slterm_workspace::SideViewId::Commit)
+                .cloned()
+            {
+                view.update(cx, |view, _| view.commit_defer_status(generation));
+            }
             return;
         }
         let git = std::sync::Arc::clone(&self.git);
@@ -1010,37 +1044,49 @@ impl AppRoot {
         cx: &mut Context<'_, Self>,
     ) {
         self.tasks.complete(TaskId::CommitStatus);
-        let _ = window;
-        if self.snapshot.registry().project(project_id).is_none() {
-            return;
-        }
-        let Some(explorer) = self
+        let commit_view = self
             .side_views
             .instance(slterm_workspace::SideViewId::Commit)
-            .cloned()
-        else {
-            return;
-        };
-        let root = self
-            .snapshot
-            .registry()
-            .project(project_id)
-            .map(|project| project.root().clone());
-        let Some(project_root) = root else {
-            return;
-        };
-        // 数据根由视图保留的仓库根决定；回投只按当前视图根匹配。
-        let repo_root = match &result {
-            Ok(snapshot) => snapshot
-                .worktree_root
-                .as_ref()
-                .map(|root| root.canonical_path().clone())
-                .unwrap_or(project_root),
-            Err(_) => project_root,
-        };
-        explorer.update(cx, |view, cx| {
-            view.commit_apply_status(generation, repo_root, result.map_err(|_| ()), cx)
-        });
+            .cloned();
+        let reload = commit_view
+            .as_ref()
+            .is_some_and(|view| view.update(cx, |view, _| view.commit_take_deferred_status()));
+        // 回执只结算当前数据根；旧根结果丢弃后由合并位重投。
+        let current = commit_view
+            .as_ref()
+            .and_then(|view| view.read(cx).commit_refresh_target());
+        let matches = current
+            .as_ref()
+            .is_some_and(|(current_project, _, current_generation)| {
+                *current_project == project_id && *current_generation == generation
+            });
+        if matches
+            && let Some(view) = commit_view.as_ref()
+            && let Some(project_root) = self
+                .snapshot
+                .registry()
+                .project(project_id)
+                .map(|project| project.root().clone())
+        {
+            // 数据根由视图保留的仓库根决定；回投只按当前视图根匹配。
+            let repo_root = match &result {
+                Ok(snapshot) => snapshot
+                    .worktree_root
+                    .as_ref()
+                    .map(|root| root.canonical_path().clone())
+                    .unwrap_or(project_root),
+                Err(_) => project_root,
+            };
+            view.update(cx, |view, cx| {
+                view.commit_apply_status(generation, repo_root, result.map_err(|_| ()), cx)
+            });
+        }
+        if reload
+            && let Some((project, root, generation)) = current
+            && self.snapshot.registry().project(project).is_some()
+        {
+            self.start_commit_status(project, root, generation, window, cx);
+        }
     }
 
     /// Diff 打开先在后台捕获仓库绑定，再复用共享 Document 打开链。
@@ -1587,6 +1633,7 @@ pub(crate) fn offers_permanent_retry(
 #[cfg(test)]
 mod commit_rollback_tests {
     use super::*;
+    use std::str::FromStr as _;
 
     fn row(
         index: char,
@@ -1612,6 +1659,19 @@ mod commit_rollback_tests {
             untracked,
             renamed_from: None,
         }
+    }
+
+    /// 在途状态读取期间出现的新数据根只保留合并位，回执后必须重投。
+    #[test]
+    fn commit_runtime_defers_reload_to_inflight_status_result() {
+        let project = ProjectId::from_str("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2a").unwrap();
+        let mut runtime = CommitRuntime::new(project);
+        runtime.generation = 3;
+        assert!(!runtime.take_deferred_status());
+        runtime.defer_status();
+        assert!(runtime.loading, "合并期间保持加载态");
+        assert!(runtime.take_deferred_status());
+        assert!(!runtime.take_deferred_status(), "合并位只能消费一次");
     }
 
     /// 回滚只覆盖精确的未暂存 modified/deleted；其余形态一律明确禁用。
