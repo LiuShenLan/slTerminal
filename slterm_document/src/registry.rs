@@ -24,6 +24,10 @@ pub struct DocumentSession {
     pub(crate) text_revision: u64,
     pub(crate) current_state: TextStateId,
     pub(crate) saved_state: TextStateId,
+    /// 最近一次保存完成的编码事实；行尾切换只改当前编码并使其进入脏态。
+    pub(crate) saved_encoding: TextEncoding,
+    /// 用户手动只读：瞬态、不进入快照或持久状态，只可对干净可编辑正文开启。
+    pub(crate) manual_read_only: bool,
     pub(crate) disk_baseline: Arc<[u8]>,
     pub(crate) save_generation: u64,
     pub(crate) active_save: Option<u64>,
@@ -87,11 +91,22 @@ impl DocumentSession {
     }
 
     pub fn is_dirty(&self) -> bool {
-        self.current_state != self.saved_state
+        self.current_state != self.saved_state || self.metadata.encoding != self.saved_encoding
     }
 
     pub const fn is_read_only(&self) -> bool {
+        self.metadata.read_only
+            || self.manual_read_only
+            || matches!(&self.body, DocumentBody::Paged(_))
+    }
+
+    /// 磁盘或大文件导致的持久只读原因；手动只读不在此列。
+    pub const fn is_inherently_read_only(&self) -> bool {
         self.metadata.read_only || matches!(&self.body, DocumentBody::Paged(_))
+    }
+
+    pub const fn is_manually_read_only(&self) -> bool {
+        self.manual_read_only
     }
 
     pub const fn encoding(&self) -> &TextEncoding {
@@ -110,6 +125,28 @@ pub enum DocumentRegistryError {
     DocumentIdConflict(DocumentId),
     RecoveryTargetOccupied(DocumentId),
 }
+
+/// 文档元数据显式切换的封闭失败：不存在、只读或脏态不允许。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DocumentMetadataError {
+    DocumentNotFound(DocumentId),
+    ReadOnly,
+    Dirty,
+    NotEditable,
+}
+
+impl fmt::Display for DocumentMetadataError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::DocumentNotFound(_) => "Document 不存在",
+            Self::ReadOnly => "只读 Document 不接受元数据写入",
+            Self::Dirty => "存在未保存修改时不得开启手动只读",
+            Self::NotEditable => "分页或不可编辑正文没有行尾切换",
+        })
+    }
+}
+
+impl std::error::Error for DocumentMetadataError {}
 
 impl fmt::Display for DocumentRegistryError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -226,6 +263,8 @@ impl DocumentRegistry {
                 text_revision: 0,
                 current_state: state,
                 saved_state: state,
+                saved_encoding: metadata.encoding.clone(),
+                manual_read_only: false,
                 disk_baseline,
                 save_generation: 0,
                 active_save: None,
@@ -268,6 +307,49 @@ impl DocumentRegistry {
                 self.identities.insert(identity, id);
             }
         }
+    }
+
+    /// 行尾切换属于一次 Document 修改：不留撤销步，保存时统一为所选行尾。
+    pub fn set_line_ending(
+        &mut self,
+        id: DocumentId,
+        line_ending: crate::LineEnding,
+    ) -> Result<(), DocumentMetadataError> {
+        let session = self
+            .session_mut(id)
+            .ok_or(DocumentMetadataError::DocumentNotFound(id))?;
+        if !matches!(&session.body, DocumentBody::Editable(_)) {
+            return Err(DocumentMetadataError::NotEditable);
+        }
+        if session.is_read_only() {
+            return Err(DocumentMetadataError::ReadOnly);
+        }
+        session.metadata.encoding.line_ending = line_ending;
+        Ok(())
+    }
+
+    /// 手动只读只对干净可编辑正文开启，可随时关闭；不覆盖持久只读原因。
+    pub fn set_manual_read_only(
+        &mut self,
+        id: DocumentId,
+        enabled: bool,
+    ) -> Result<(), DocumentMetadataError> {
+        let session = self
+            .session_mut(id)
+            .ok_or(DocumentMetadataError::DocumentNotFound(id))?;
+        if enabled {
+            if session.is_inherently_read_only() {
+                return Err(DocumentMetadataError::ReadOnly);
+            }
+            if !matches!(&session.body, DocumentBody::Editable(_)) {
+                return Err(DocumentMetadataError::NotEditable);
+            }
+            if session.is_dirty() {
+                return Err(DocumentMetadataError::Dirty);
+            }
+        }
+        session.manual_read_only = enabled;
+        Ok(())
     }
 
     /// 回收聚合及其全部别名索引；不存在时不产生副作用。
@@ -502,6 +584,105 @@ mod registry_tests {
         assert_eq!(registry.len(), 1);
         assert!(registry.session(id(DOCUMENT_A)).is_some());
         assert_eq!(registry.existing(&location("D:/work/b.txt", None)), None);
+    }
+
+    #[test]
+    fn line_ending_change_is_a_revertible_document_modification() {
+        let mut registry = DocumentRegistry::new();
+        registry
+            .open(
+                id(DOCUMENT_A),
+                location("D:/work/a.txt", None),
+                Rope::from_str("a"),
+                state(),
+                Arc::default(),
+                DocumentMetadata::default(),
+            )
+            .unwrap();
+        assert!(!registry.session(id(DOCUMENT_A)).unwrap().is_dirty());
+
+        registry
+            .set_line_ending(id(DOCUMENT_A), crate::LineEnding::Lf)
+            .unwrap();
+        assert_eq!(
+            registry
+                .session(id(DOCUMENT_A))
+                .unwrap()
+                .encoding()
+                .line_ending,
+            crate::LineEnding::Lf
+        );
+        assert!(
+            registry.session(id(DOCUMENT_A)).unwrap().is_dirty(),
+            "行尾切换属于 Document 修改"
+        );
+        registry
+            .set_line_ending(id(DOCUMENT_A), crate::LineEnding::Crlf)
+            .unwrap();
+        assert!(
+            !registry.session(id(DOCUMENT_A)).unwrap().is_dirty(),
+            "切回已保存行尾即恢复干净"
+        );
+    }
+
+    #[test]
+    fn manual_read_only_requires_clean_editable_text_and_blocks_edits() {
+        use crate::{
+            DocumentMetadataError, EditApplyOutcome, EditOrigin, EditTransaction, MergePolicy,
+            TextEdit,
+        };
+
+        let mut registry = DocumentRegistry::new();
+        registry
+            .open(
+                id(DOCUMENT_A),
+                location("D:/work/a.txt", None),
+                Rope::from_str("abc"),
+                state(),
+                Arc::default(),
+                DocumentMetadata::default(),
+            )
+            .unwrap();
+        registry.set_manual_read_only(id(DOCUMENT_A), true).unwrap();
+        let session = registry.session(id(DOCUMENT_A)).unwrap();
+        assert!(session.is_read_only());
+        assert!(session.is_manually_read_only());
+        let blocked = registry.apply(
+            EditTransaction {
+                document_id: id(DOCUMENT_A),
+                expected_text_revision: 0,
+                edits: vec![TextEdit::new(0..1, "x")],
+                origin: EditOrigin::UserInput,
+                merge_policy: MergePolicy::Disallowed,
+            },
+            crate::TextStateId::from_str("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0f2a").unwrap(),
+            std::time::Instant::now(),
+        );
+        assert!(blocked.is_err());
+        registry
+            .set_manual_read_only(id(DOCUMENT_A), false)
+            .unwrap();
+        assert_eq!(
+            registry
+                .apply(
+                    EditTransaction {
+                        document_id: id(DOCUMENT_A),
+                        expected_text_revision: 0,
+                        edits: vec![TextEdit::new(0..1, "x")],
+                        origin: EditOrigin::UserInput,
+                        merge_policy: MergePolicy::Disallowed,
+                    },
+                    crate::TextStateId::from_str("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0f2b").unwrap(),
+                    std::time::Instant::now(),
+                )
+                .unwrap(),
+            EditApplyOutcome::Applied
+        );
+        assert_eq!(
+            registry.set_manual_read_only(id(DOCUMENT_A), true),
+            Err(DocumentMetadataError::Dirty),
+            "脏正文不得开启手动只读"
+        );
     }
 
     #[test]

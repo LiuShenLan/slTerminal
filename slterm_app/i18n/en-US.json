@@ -39,6 +39,7 @@
     "save_failed": "Could not save the file: {error}",
     "save_changed": "The file changed on disk after opening; it was not overwritten.",
     "save_read_only": "The document is read-only and cannot be saved.",
+    "editable": "Editable",
     "save_ui": "Save",
     "saving_ui": "Saving…",
     "source": "Source",

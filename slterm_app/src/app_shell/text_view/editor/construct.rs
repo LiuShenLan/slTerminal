@@ -55,7 +55,7 @@ impl DocumentTextView {
         view_state: DocumentViewStateBinding,
         cx: &mut Context<'_, Self>,
     ) -> Self {
-        Self::from_parts(
+        let mut view = Self::from_parts(
             DocumentTextViewConfig {
                 snapshot: DocumentTextSnapshot::from_session(session),
                 document_id: session.id(),
@@ -66,7 +66,11 @@ impl DocumentTextView {
                 view_state: Some(view_state),
             },
             cx,
-        )
+        );
+        view.encoding = session.encoding().clone();
+        view.manual_read_only = session.is_manually_read_only();
+        view.inherently_read_only = session.is_inherently_read_only();
+        view
     }
 
     /// 固定只读快照不注册 Document，也不持有 Editor ViewState 租约。
@@ -129,6 +133,9 @@ impl DocumentTextView {
             revision: snapshot.revision,
             text_state: snapshot.text_state,
             read_only: snapshot.read_only,
+            manual_read_only: false,
+            inherently_read_only: snapshot.read_only,
+            encoding: slterm_document::TextEncoding::default(),
             edit_sink,
             automatic_language,
             allow_language_override,

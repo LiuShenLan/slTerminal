@@ -139,6 +139,17 @@ impl DiffView {
         }
     }
 
+    /// 只同步工作区来源视图的只读与编码元数据。
+    pub(crate) fn apply_document_metadata(
+        &mut self,
+        session: &slterm_document::DocumentSession,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.right
+            .update(cx, |view, cx| view.apply_document_metadata(session, cx));
+        cx.notify();
+    }
+
     fn apply_head(&mut self, result: DiffHeadResult, cx: &mut Context<'_, Self>) {
         self.head_loading = false;
         let generation = self.left.read(cx).current_generation();

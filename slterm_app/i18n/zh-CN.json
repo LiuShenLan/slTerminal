@@ -39,6 +39,7 @@
     "save_failed": "无法保存文件：{error}",
     "save_changed": "文件在打开后已被外部修改，未覆盖磁盘内容。",
     "save_read_only": "文档处于只读状态，无法保存。",
+    "editable": "可编辑",
     "save_ui": "保存",
     "saving_ui": "保存中…",
     "source": "源码",

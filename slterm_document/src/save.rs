@@ -246,6 +246,8 @@ impl DocumentRegistry {
         let previous_identity = session.location.file_identity();
         let location_changed = save_as && session.location.canonical_path() != target;
         session.saved_state = receipt.request.text_state;
+        // 保存请求捕获的编码成为新基线；期间再次切换行尾仍保持脏态。
+        session.saved_encoding = receipt.request.encoding.clone();
         session.disk_baseline = receipt.disk_baseline;
         if save_as {
             session.location = receipt.location;

@@ -1,3 +1,4 @@
+mod buttons;
 mod construct;
 mod scroll;
 
@@ -14,13 +15,12 @@ use gpui::{
     Render, ScrollWheelEvent, ShapedLine, SharedString, Styled as _, Task, TextAlign, TextRun,
     UTF16Selection, Window, canvas, div, fill, point, px, size,
 };
-use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{
     Backspace, Copy, Delete, Enter, MoveDown, MoveLeft, MoveRight, MoveToEndOfLine,
     MoveToStartOfLine, MoveUp, Paste, Redo, SelectAll, SelectToEndOfLine, SelectToStartOfLine,
     Undo,
 };
-use gpui_component::{ActiveTheme as _, Sizable as _, h_flex};
+use gpui_component::{ActiveTheme as _, h_flex};
 use ropey::{LineType, Rope};
 use slterm_document::{
     DocumentId, DocumentSession, EditApplyOutcome, EditOrigin, EditTransaction,
@@ -287,6 +287,8 @@ pub(crate) enum DocumentTextEvent {
     OpenLanguageSelector { position: Point<Pixels> },
     OpenInSystem,
     OpenGitDiff { line: usize },
+    ToggleLineEnding,
+    ToggleManualReadOnly,
 }
 
 impl EventEmitter<DocumentTextEvent> for DocumentTextView {}
@@ -301,6 +303,9 @@ pub(crate) struct DocumentTextView {
     revision: u64,
     text_state: TextStateId,
     read_only: bool,
+    manual_read_only: bool,
+    inherently_read_only: bool,
+    encoding: slterm_document::TextEncoding,
     edit_sink: DocumentEditSink,
     automatic_language: LanguageId,
     allow_language_override: bool,
@@ -601,6 +606,19 @@ impl DocumentTextView {
     #[cfg(all(test, feature = "gpui-test-support"))]
     pub(crate) fn input_text_for_test(&self) -> String {
         self.text.to_string()
+    }
+
+    /// 只同步只读与编码元数据，不触碰正文、选区或组合态。
+    pub(crate) fn apply_document_metadata(
+        &mut self,
+        session: &DocumentSession,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.read_only = session.is_read_only();
+        self.manual_read_only = session.is_manually_read_only();
+        self.inherently_read_only = session.is_inherently_read_only();
+        self.encoding = session.encoding().clone();
+        cx.notify();
     }
 
     /// 无编辑增量的外部快照无法保留逻辑位置，必须取消组合并复位选区。
@@ -1472,64 +1490,6 @@ impl EntityInputHandler for DocumentTextView {
 }
 
 impl DocumentTextView {
-    fn language_selector(&self, cx: &mut Context<'_, Self>) -> Option<Button> {
-        if !self.allow_language_override {
-            return None;
-        }
-        let id = format!("document-language-selector-{}", cx.entity().entity_id());
-        let selector = id.clone();
-        let effective = self.language_override.unwrap_or(self.automatic_language);
-        Some(
-            Button::new(id)
-                .debug_selector(move || selector.clone())
-                .label(effective.as_str())
-                .ghost()
-                .small()
-                .on_click(cx.listener(|view, event: &gpui::ClickEvent, _, cx| {
-                    view.open_language_selector(event.position(), cx);
-                })),
-        )
-    }
-
-    fn wrap_button(&self, cx: &mut Context<'_, Self>) -> impl gpui::IntoElement + use<> {
-        let id = format!("document-wrap-toggle-{}", cx.entity().entity_id());
-        let selector = id.clone();
-        let label = cx
-            .global::<crate::app_shell::config::Settings>()
-            .language
-            .text(crate::i18n::Message::EditorWrap)
-            .to_owned();
-        Button::new(id)
-            .debug_selector(move || selector.clone())
-            .label(label)
-            .ghost()
-            .small()
-            .on_click(cx.listener(|view, _, _, cx| view.toggle_wrap(cx)))
-    }
-
-    fn system_open_button(&self, cx: &mut Context<'_, Self>) -> Option<Button> {
-        if self.automatic_language != LanguageId::Html {
-            return None;
-        }
-        let id = format!("document-system-open-{}", cx.entity().entity_id());
-        let selector = id.clone();
-        let label = cx
-            .global::<crate::app_shell::config::Settings>()
-            .language
-            .text(crate::i18n::Message::EditorOpenSystem)
-            .to_owned();
-        Some(
-            Button::new(id)
-                .debug_selector(move || selector.clone())
-                .label(label)
-                .ghost()
-                .small()
-                .on_click(cx.listener(|_, _, _, cx| {
-                    cx.emit(DocumentTextEvent::OpenInSystem);
-                })),
-        )
-    }
-
     fn git_markers(&self, cx: &mut Context<'_, Self>) -> Vec<gpui::AnyElement> {
         let scroll_line = self.clamped_scroll_line();
         let last_line = self.text.len_lines(LineType::LF).saturating_sub(1);
@@ -1871,6 +1831,8 @@ impl Render for DocumentTextView {
         let canvas = self.text_canvas(cx);
         let language_selector = self.language_selector(cx);
         let wrap_button = self.wrap_button(cx);
+        let line_ending_button = self.line_ending_button(cx);
+        let read_only_button = self.read_only_button(cx);
         let system_open = self.system_open_button(cx);
         let git_markers = self.git_markers(cx);
         // 行标显隐属于瞬态投影：编辑域 gutter 宽度必须稳定，否则正文位移会触发换行重排。
@@ -1964,6 +1926,8 @@ impl Render for DocumentTextView {
                     .border_t_1()
                     .border_color(cx.theme().border)
                     .child(wrap_button)
+                    .children(line_ending_button)
+                    .children(read_only_button)
                     .children(language_selector),
             )
             .children(

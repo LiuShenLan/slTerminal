@@ -310,6 +310,18 @@ impl MarkdownView {
         }));
     }
 
+    /// 只同步只读与编码元数据，不重建渲染、正文或选区。
+    pub(crate) fn apply_document_metadata(
+        &mut self,
+        session: &DocumentSession,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.read_only = session.is_read_only();
+        self.source
+            .update(cx, |source, cx| source.apply_document_metadata(session, cx));
+        cx.notify();
+    }
+
     pub(crate) fn apply_snapshot(&mut self, session: &DocumentSession, cx: &mut Context<'_, Self>) {
         let snapshot = DocumentTextSnapshot::from_session(session);
         self.adopt_snapshot(snapshot, session.location().clone());

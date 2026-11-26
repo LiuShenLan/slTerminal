@@ -666,6 +666,12 @@ impl AppRoot {
                             log::warn!("打开 Editor Git Diff 失败: {error}");
                         }
                     }
+                    DocumentTextEvent::ToggleLineEnding => {
+                        root.toggle_document_line_ending(document_id, cx);
+                    }
+                    DocumentTextEvent::ToggleManualReadOnly => {
+                        root.toggle_document_manual_read_only(document_id, cx);
+                    }
                     DocumentTextEvent::OpenLanguageSelector { position } => {
                         if let Err(error) = root.open_language_selector(
                             project_id,
@@ -1485,6 +1491,93 @@ impl AppRoot {
             log::warn!("Document 保存任务未登记: {error:?}");
             self.finish_runtime_save_waiters(document_id, Err(runtime_save_error(false)));
         }
+    }
+
+    /// 行尾切换写入共享 Document；保存时统一为所选行尾。
+    pub(super) fn toggle_document_line_ending(
+        &mut self,
+        document_id: DocumentId,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if self.ensure_not_closing().is_err() {
+            return;
+        }
+        let Some(next) = self.documents.session(document_id).map(|session| {
+            match session.encoding().line_ending {
+                slterm_document::LineEnding::Lf => slterm_document::LineEnding::Crlf,
+                slterm_document::LineEnding::Crlf => slterm_document::LineEnding::Lf,
+            }
+        }) else {
+            return;
+        };
+        if let Err(error) = self.documents.set_line_ending(document_id, next) {
+            log::warn!("行尾切换未生效: {error}");
+            return;
+        }
+        self.broadcast_document_metadata(document_id, cx);
+    }
+
+    /// 手动只读是瞬态；开启只允许干净可编辑正文。
+    pub(super) fn toggle_document_manual_read_only(
+        &mut self,
+        document_id: DocumentId,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if self.ensure_not_closing().is_err() {
+            return;
+        }
+        let Some(enable) = self
+            .documents
+            .session(document_id)
+            .map(|session| !session.is_manually_read_only())
+        else {
+            return;
+        };
+        if let Err(error) = self.documents.set_manual_read_only(document_id, enable) {
+            log::warn!("手动只读切换未生效: {error}");
+            return;
+        }
+        self.broadcast_document_metadata(document_id, cx);
+    }
+
+    /// 元数据变更广播到全部引用视图，不重建正文或 Document。
+    fn broadcast_document_metadata(&mut self, document_id: DocumentId, cx: &mut Context<'_, Self>) {
+        let Some(session) = self.documents.session(document_id).cloned() else {
+            return;
+        };
+        let mut editors = Vec::new();
+        let mut markdowns = Vec::new();
+        let mut diffs = Vec::new();
+        for project in self.projects.values() {
+            for panel in project.read(cx).panels.values() {
+                let matches_document = matches!(
+                    &panel.view_key,
+                    ViewKey::Editor { document_id: actual, .. }
+                        | ViewKey::Markdown { document_id: actual, .. }
+                        | ViewKey::Diff { document_id: actual, .. }
+                        if *actual == document_id
+                );
+                if !matches_document {
+                    continue;
+                }
+                match &panel.content {
+                    PanelContent::Editor(editor) => editors.push(editor.view.clone()),
+                    PanelContent::Markdown(markdown) => markdowns.push(markdown.view.clone()),
+                    PanelContent::Diff(diff) => diffs.push(diff.clone()),
+                    _ => {}
+                }
+            }
+        }
+        for editor in editors {
+            editor.update(cx, |view, cx| view.apply_document_metadata(&session, cx));
+        }
+        for markdown in markdowns {
+            markdown.update(cx, |view, cx| view.apply_document_metadata(&session, cx));
+        }
+        for diff in diffs {
+            diff.update(cx, |view, cx| view.apply_document_metadata(&session, cx));
+        }
+        cx.notify();
     }
 
     /// 保存链唯一出口：一次性回执所有 Runtime `panel.save` 等待者。

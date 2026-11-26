@@ -65,7 +65,8 @@ pub use paged::{
 };
 pub use recovery::{DocumentRecovery, ReauthorizationError};
 pub use registry::{
-    DocumentMetadata, DocumentOpenOutcome, DocumentRegistry, DocumentRegistryError, DocumentSession,
+    DocumentMetadata, DocumentMetadataError, DocumentOpenOutcome, DocumentRegistry,
+    DocumentRegistryError, DocumentSession,
 };
 pub use replace::{DocumentReplaceRequest, DocumentReplacement, ReplacePlanError};
 pub use repository::{

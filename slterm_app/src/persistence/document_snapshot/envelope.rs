@@ -81,6 +81,10 @@ impl DocumentSnapshot {
         if !session.is_dirty() {
             return Err(SnapshotCaptureError::NotDirty);
         }
+        // 仅行尾偏好变化没有正文恢复材料；信封要求 saved/current 状态不同。
+        if session.saved_state() == session.current_state() {
+            return Err(SnapshotCaptureError::NotDirty);
+        }
         let text = session
             .text()
             .ok_or(SnapshotCaptureError::ReadOnly)?
