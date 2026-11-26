@@ -1,4 +1,4 @@
-//! handoff 文件态机、restore ticket 与假 release 服务器全链演练。
+//! handoff 文件态机与假 release 服务器全链演练。
 //!
 //! 全部用例使用 tempdir 数据根 + 本地回环夹具;不触碰真实用户目录与网络。
 
@@ -194,10 +194,8 @@ fn handoff_file_machine_commits_and_cancels_without_installation_authority() {
     assert!(!directory.join("commit.json").exists());
     assert_eq!(transaction_state(&directory), TransactionState::Prepared);
 
-    let workspace = vec![Session::new(0, Vec::new())];
-    prepared.commit(&workspace).unwrap();
+    prepared.commit().unwrap();
     assert!(directory.join("commit.json").is_file());
-    assert!(directory.join("workspace.json").is_file());
     wait_for(&directory.join("result.json"));
     assert_eq!(transaction_state(&directory), TransactionState::Finished);
     drop(prepared);
@@ -246,92 +244,6 @@ fn orphan_and_prepared_transactions_are_cancelled_on_recovery() {
     );
     assert!(!finished.join("cancel.json").exists(), "终态事务不得改写");
     assert_eq!(transaction_state(&orphan), TransactionState::Cancelled);
-}
-
-#[test]
-fn restore_ticket_covers_success_rollback_attempts_and_acknowledgement() {
-    crate::update_download::handoff::reset_restore_state();
-    let root = tempfile::tempdir().unwrap();
-    let executable = std::env::current_exe().unwrap();
-    let version = env!("CARGO_PKG_VERSION").to_owned();
-    let directory = root.path().join("updates/handoffs/restore-test");
-    std::fs::create_dir_all(&directory).unwrap();
-    let plan = Plan {
-        schema: PLAN_SCHEMA,
-        asset: installer_asset(b"MZrestore fixture"),
-        transaction: "restore-test".into(),
-        executable: canonical(&executable).unwrap(),
-        installation: root.path().join("install"),
-        config_directory: root.path().to_owned(),
-        local_directory: root.path().to_owned(),
-        installer: root.path().join("fixture"),
-        sha256: String::new(),
-        bytes: 1,
-        version: version.clone(),
-        original_version: version.clone(),
-        guard_path: root.path().join("guard"),
-        participants: Vec::new(),
-    };
-    let save = |name: &str, value: serde_json::Value| {
-        std::fs::write(directory.join(name), serde_json::to_vec(&value).unwrap()).unwrap();
-    };
-    std::fs::write(
-        root.path().join("updates/last-handoff.json"),
-        serde_json::to_vec(&directory.join("plan.json")).unwrap(),
-    )
-    .unwrap();
-    save(
-        "workspace.json",
-        serde_json::to_value(vec![Session::new(0, Vec::new())]).unwrap(),
-    );
-    save("plan.json", serde_json::to_value(&plan).unwrap());
-
-    // 事务不匹配 → 拒绝。
-    save(
-        "result.json",
-        json!({ "transaction": "wrong", "success": true }),
-    );
-    assert!(restore_ticket_at(root.path(), &executable, &version).is_none());
-
-    // 成功恢复 → 计数 +1;确认窗口数不符不留档,相符才留档。
-    save(
-        "result.json",
-        json!({ "transaction": "restore-test", "success": true }),
-    );
-    assert_eq!(
-        restore_ticket_at(root.path(), &executable, &version)
-            .unwrap()
-            .len(),
-        1
-    );
-    acknowledge_restore(2);
-    assert!(!directory.join("restored.json").exists());
-    acknowledge_restore(1);
-    assert!(directory.join("restored.json").exists());
-    assert!(
-        restore_ticket_at(root.path(), &executable, &version).is_none(),
-        "已确认的恢复不得重放"
-    );
-    std::fs::remove_file(directory.join("restored.json")).unwrap();
-
-    // 崩溃循环上限:第 3 次尝试后拒绝。
-    save("restore-attempts.json", json!(MAX_RESTORE_ATTEMPTS));
-    assert!(restore_ticket_at(root.path(), &executable, &version).is_none());
-    save("restore-attempts.json", json!(0));
-
-    // 回滚恢复:失败但原版本仍在运行。
-    save(
-        "result.json",
-        json!({
-            "transaction": "restore-test",
-            "success": false,
-            "recovered_original": true,
-        }),
-    );
-    assert!(restore_ticket_at(root.path(), &executable, &version).is_some());
-
-    // 版本不匹配 → 拒绝。
-    assert!(restore_ticket_at(root.path(), &executable, "9.9.9").is_none());
 }
 
 /// 锚：更新安装只在统一关闭完成后保留预约；取消或失败撤销预约。
@@ -455,9 +367,7 @@ fn stale_failure_evidence_is_superseded_by_a_newer_download_record() {
 
 /// 走完 commit 授权,再写一份失败 result(模拟 installer 失败)。
 fn committed_failure(prepared: &mut PreparedUpdate, directory: &Path) {
-    prepared
-        .commit(&[Session::new(0, Vec::new())])
-        .expect("commit");
+    prepared.commit().expect("commit");
     // 先终止脚本化 helper,避免它抢写成功 result(真实 helper 的失败
     // result 由 helper 侧原子写入,这里由用例直接模拟)。
     prepared.helper.terminate();
@@ -492,14 +402,14 @@ fn installation_guard_lock_reports_an_in_progress_transaction() {
 }
 
 /// 集成锚：退出后中断与重开对账——未 commit 按 cancel 收尾，已 commit
-/// 等待 helper 结果，回滚事实生成恢复票且确认后防重放。
+/// 等待 helper 结果；工作区不依赖旧 session 快照。
 #[test]
 fn integration_update() {
     let root = tempfile::tempdir().unwrap();
     let body = b"MZintegration update fixture";
     let asset = installer_asset(body);
     stage_ready_package(root.path(), &asset, body);
-    let (paths, executable) = fixture_paths(root.path());
+    let (paths, _) = fixture_paths(root.path());
 
     // A. plan/ready 后中断（未 commit）：重开按 cancel 收尾，不安装。
     {
@@ -516,51 +426,12 @@ fn integration_update() {
     // B. commit 后中断：helper 结果落定后为 Finished，重开不得重复安装。
     let mut prepared = prepare_with(&asset, paths.clone(), spawn_fake_helper).unwrap();
     let directory = prepared.directory.clone();
-    prepared
-        .commit(&[Session::new(0, Vec::new())])
-        .expect("commit 授予安装权限");
+    prepared.commit().expect("commit 授予安装权限");
     wait_for(&directory.join("result.json"));
     assert_eq!(transaction_state(&directory), TransactionState::Finished);
     let result: serde_json::Value = read_json(&directory.join("result.json")).unwrap();
     assert_eq!(result["success"], true);
     assert_eq!(result["version"], "1.6.0");
-
-    // C. 新版本启动对账：回滚事实生成恢复票，确认后留档防重放。
-    let current = env!("CARGO_PKG_VERSION");
-    let mut plan: serde_json::Value = read_json(&directory.join("plan.json")).unwrap();
-    plan["original_version"] = json!(current);
-    crate::atomic_file::write(
-        &directory.join("plan.json"),
-        &serde_json::to_vec(&plan).unwrap(),
-    )
-    .unwrap();
-    crate::atomic_file::write(
-        &directory.join("result.json"),
-        &serde_json::to_vec(&json!({
-            "transaction": plan["transaction"],
-            "success": false,
-            "recovered_original": true,
-        }))
-        .unwrap(),
-    )
-    .unwrap();
-
-    // 串行测试：进程级环境变量在本用例内独占。
-    unsafe { std::env::set_var("SLTERM_UPDATE_RESTORE", directory.join("plan.json")) };
-    reset_restore_state();
-    let windows = restore_ticket_at(root.path(), &executable, current).expect("回滚恢复票");
-    assert_eq!(windows.len(), 1);
-    acknowledge_restore(1);
-    assert!(
-        directory.join("restored.json").is_file(),
-        "启动确认必须留档"
-    );
-    assert!(
-        restore_ticket_at(root.path(), &executable, current).is_none(),
-        "确认后的恢复不得重放"
-    );
-    unsafe { std::env::remove_var("SLTERM_UPDATE_RESTORE") };
-    reset_restore_state();
 }
 
 /// 假 release 服务器全链:检查 → 资产选择 → 流式下载校验 → handoff 事务。
@@ -622,9 +493,7 @@ fn fake_release_server_full_chain_rehearsal_is_green() {
     let directory = prepared.directory.clone();
     assert!(directory.join("plan.json").is_file());
     assert!(directory.join("ready.json").is_file());
-    prepared
-        .commit(&[Session::new(0, Vec::new())])
-        .expect("commit authorizes installation");
+    prepared.commit().expect("commit authorizes installation");
     wait_for(&directory.join("result.json"));
     let result: serde_json::Value =
         serde_json::from_slice(&std::fs::read(directory.join("result.json")).unwrap()).unwrap();

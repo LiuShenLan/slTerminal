@@ -53,9 +53,8 @@ function Read-Version([string]$Executable) {
     } finally { $probe.Dispose() }
 }
 
-# 重启新进程并注入一次性恢复票 + 双数据根(单名,双名别名层不迁)。
+# 重启新进程并注入双数据根(单名,双名别名层不迁);工作区由新版本自行恢复。
 function Launch-Workspace {
-    $env:SLTERM_UPDATE_RESTORE = $PlanPath
     $env:SLTERM_CONFIG_DIR = $plan.config_directory
     $env:SLTERM_LOCAL_DIR = $plan.local_directory
     Start-Process -FilePath $exe -WorkingDirectory $installation | Out-Null

@@ -9,43 +9,29 @@
 //! helper 没有 commit.json 就没有安装权威;未 commit 即 Drop 的
 //! [`PreparedUpdate`] 自动写 cancel.json 并终止自己的 helper。
 //!
-//! 启动恢复:result.json 成功且版本匹配,或回滚后原版本匹配,才发
-//! restore ticket;最多 3 次恢复尝试,`restored.json` 留档防重放。
+//! 启动恢复:安装成功或回滚后原版本匹配时,helper 直接重启新版本;
+//! 工作区由启动链从当前 `workspace.db` 恢复,不再保存旧 session 快照。
 //! 崩溃遗留的未 commit 事务(孤儿 plan / ready 无 commit)按 cancel 安全
 //! 默认收尾——绝不因为「文件存在」就授权安装。
 //!
-//! **消费面。** 启动链只消费安装事务守卫；prepare/commit/schedule 与
-//! restore ticket 由更新域的新快照协调器装配。仅测试消费的机器可验 API
-//! 由整模块 dead_code 豁免兜住。
+//! **消费面。** 启动链只消费安装事务守卫；prepare/commit/schedule 由更新域
+//! 的协调器装配。仅测试消费的机器可验 API 由整模块 dead_code 豁免兜住。
 #![allow(dead_code)]
 
 use std::io::{self, ErrorKind, Read as _};
 use std::path::{Path, PathBuf};
 use std::process::Child;
-use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
 use crate::platform::update_installation::{canonical, current_process_created};
-use crate::session::Session;
 use crate::update_check::UpdateAsset;
 
 /// 事务 schema;与 `handoff.ps1` 内联校验值一致。
 const PLAN_SCHEMA: u32 = 1;
 /// helper 从启动到 ready 的等待预算(契约值照抄上游 Windows 分支)。
 const PREPARE_TIMEOUT: Duration = Duration::from_secs(30);
-/// 工作区快照上限:单窗应用远小于此,防御损坏/恶意文件。
-const MAX_WORKSPACE_WINDOWS: usize = 32;
-/// restore ticket 的最大尝试次数(崩溃循环上限)。
-const MAX_RESTORE_ATTEMPTS: u32 = 3;
-
-struct ActiveRestore {
-    directory: PathBuf,
-    expected_windows: usize,
-}
-
-static ACTIVE_RESTORE: Mutex<Option<ActiveRestore>> = Mutex::new(None);
 
 #[derive(Serialize, Deserialize)]
 struct Participant {
@@ -137,11 +123,8 @@ pub(crate) struct PreparedUpdate {
 
 impl PreparedUpdate {
     /// 原子写 commit.json —— 唯一授权动作。工作区快照先落盘,helper 再
-    /// 等本进程退出后覆盖安装。
-    pub(crate) fn commit(&mut self, windows: &[Session]) -> Result<(), String> {
-        let snapshot = serde_json::to_vec(windows).map_err(|error| error.to_string())?;
-        crate::atomic_file::write(&self.directory.join("workspace.json"), &snapshot)
-            .map_err(|error| format!("无法保存更新前的工作区快照:{error}"))?;
+    /// 等本进程退出后覆盖安装；工作区由新版本从当前工作区库自行恢复。
+    pub(crate) fn commit(&mut self) -> Result<(), String> {
         if !self.helper.running()? {
             return Err("更新 helper 在 commit 前已退出".into());
         }
@@ -357,96 +340,6 @@ fn last_handoff_path(root: &Path) -> Option<PathBuf> {
     read_json(&root.join("updates/last-handoff.json"))
 }
 
-/// 恢复 ticket:按工作区快照恢复,最多 3 次尝试;成功后留档防重放。
-pub(crate) fn restore_ticket() -> Option<Vec<Session>> {
-    let root = crate::platform::dirs::local_dir();
-    let executable = std::env::current_exe().ok()?;
-    restore_ticket_at(root, &executable, env!("CARGO_PKG_VERSION"))
-}
-
-pub(crate) fn restore_ticket_at(
-    root: &Path,
-    executable: &Path,
-    current_version: &str,
-) -> Option<Vec<Session>> {
-    let path = std::env::var_os("SLTERM_UPDATE_RESTORE")
-        .map(PathBuf::from)
-        .or_else(|| last_handoff_path(root))?;
-    let path = canonical(&path).ok()?;
-    let handoffs = handoffs_root(root)?;
-    if !path.starts_with(&handoffs) || path.file_name()? != "plan.json" {
-        return None;
-    }
-    let plan: Plan = read_json(&path)?;
-    if plan.schema != PLAN_SCHEMA
-        || canonical(&plan.executable).ok()? != canonical(executable).ok()?
-    {
-        return None;
-    }
-    let directory = path.parent()?;
-    let result: serde_json::Value = read_json(&directory.join("result.json"))?;
-    let succeeded = result["success"] == true && plan.version == current_version;
-    let recovered_original = result["success"] == false
-        && result["recovered_original"] == true
-        && plan.original_version == current_version;
-    if (!succeeded && !recovered_original) || result["transaction"] != plan.transaction {
-        return None;
-    }
-    let windows: Vec<Session> = read_json(&directory.join("workspace.json"))?;
-    if !workspace_is_valid(&windows) {
-        return None;
-    }
-    let count: u32 = read_json(&directory.join("restore-attempts.json")).unwrap_or(0);
-    if count >= MAX_RESTORE_ATTEMPTS || directory.join("restored.json").exists() {
-        return None;
-    }
-    crate::atomic_file::write(
-        &directory.join("restore-attempts.json"),
-        (count + 1).to_string().as_bytes(),
-    )
-    .ok()?;
-    *ACTIVE_RESTORE
-        .lock()
-        .unwrap_or_else(|error| error.into_inner()) = Some(ActiveRestore {
-        directory: directory.to_owned(),
-        expected_windows: windows.len(),
-    });
-    Some(windows)
-}
-
-fn workspace_is_valid(windows: &[Session]) -> bool {
-    !windows.is_empty()
-        && windows.len() <= MAX_WORKSPACE_WINDOWS
-        && windows
-            .iter()
-            .all(|session| session.version == crate::session::VERSION)
-}
-
-/// 宿主侧确认恢复完成(窗口数与 ticket 预期一致才留档)。
-pub(crate) fn acknowledge_restore(restored_windows: usize) {
-    let mut active = ACTIVE_RESTORE
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    let Some(ticket) = active.as_ref() else {
-        return;
-    };
-    if restored_windows != ticket.expected_windows {
-        return;
-    }
-    if let Err(error) = crate::atomic_file::write(&ticket.directory.join("restored.json"), b"{}") {
-        log::warn!("Could not acknowledge update recovery: {error}");
-    } else {
-        *active = None;
-    }
-}
-
-#[cfg(test)]
-pub(crate) fn reset_restore_state() {
-    *ACTIVE_RESTORE
-        .lock()
-        .unwrap_or_else(|error| error.into_inner()) = None;
-}
-
 /// 最近一次 handoff 失败(启动 hydrate 的持久证据)。
 pub(super) fn failed_update_at(root: &Path, executable: &Path) -> Option<(UpdateAsset, String)> {
     let path = canonical(&last_handoff_path(root)?).ok()?;
@@ -606,15 +499,7 @@ pub(crate) fn apply_scheduled_at(paths: &PreparePaths) -> bool {
         return false;
     }
     super::hydrate_at(&paths.root, Some(&paths.executable));
-    let result = prepare_at_paths(&asset, paths.clone()).and_then(|mut prepared| {
-        let workspaces: Vec<Session> = crate::session::load_from(&paths.root.join("session.json"))
-            .map(|session| vec![session])
-            .unwrap_or_default();
-        if workspaces.is_empty() {
-            return Err("缺少可恢复的工作区快照".to_owned());
-        }
-        prepared.commit(&workspaces)
-    });
+    let result = prepare_at_paths(&asset, paths.clone()).and_then(|mut prepared| prepared.commit());
     match result {
         Ok(()) => true,
         Err(error) => {
