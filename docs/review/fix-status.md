@@ -26,7 +26,7 @@
 | Commit/Explorer 数据根切换时在途状态读取被丢弃或错投 | 待修 |
 | 项目重定位与导航历史恢复没有生产入口 | 待修 |
 | 启动恢复对缺失/不可解码的干净 Document 不建面板 | 待修 |
-| Agent 根路径变更（同 id）沿用旧 ViewState | 待修 |
+| Agent 根路径变更（同 id）沿用旧 ViewState | 已修：`agent_files_sync` 把「同 id 不同路径」视为移除并重登记，旧持久分区、展开目录与当前行一并清理；测试改走真实同步入口 `agent_root_path_change_resets_state_and_authorization` |
 | 授权代次在生产路径恒为零 | 待修 |
 | GitShow 非法 UTF-8 的合同冲突 | 需裁决 |
 

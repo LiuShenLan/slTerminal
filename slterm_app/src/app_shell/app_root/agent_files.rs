@@ -666,6 +666,10 @@ impl SideView {
             .iter()
             .map(|(root_id, _, _)| *root_id)
             .collect::<BTreeSet<_>>();
+        let next_paths = roots
+            .iter()
+            .map(|(root_id, _, path)| (*root_id, path.clone()))
+            .collect::<std::collections::BTreeMap<_, _>>();
         let removed = self
             .agent_files
             .as_ref()
@@ -673,8 +677,14 @@ impl SideView {
                 runtime
                     .roots
                     .iter()
+                    // 同 id 改路径同样是新身份：旧分区与运行态必须先撤销。
+                    .filter(|root| {
+                        !next.contains(&root.root_id)
+                            || next_paths
+                                .get(&root.root_id)
+                                .is_some_and(|path| path != &root.path)
+                    })
                     .map(|root| root.root_id)
-                    .filter(|root_id| !next.contains(root_id))
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();

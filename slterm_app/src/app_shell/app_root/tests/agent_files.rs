@@ -450,11 +450,20 @@ fn agent_root_path_change_resets_state_and_authorization(cx: &mut TestAppContext
         );
     });
 
-    window.update(|_, cx| {
-        view.update(cx, |view, cx| {
-            view.agent_files_remove_root(agent_root_id(), cx);
+    // 同一根 id 改路径必须走真实同步入口：旧分区与当前行一并撤销。
+    let moved = slterm_settings::AgentRoot::custom(
+        agent_root_id(),
+        "A".to_owned(),
+        root_b_dir.to_string_lossy().into_owned(),
+    )
+    .unwrap();
+    window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.replace_custom_agent_roots_for_test(vec![moved, custom_b.clone()]);
+            root.sync_agent_files_roots(window, cx);
         });
     });
+    window.run_until_parked();
     view.read_with(cx, |view, _| {
         let slterm_sidebar::SideViewState::AgentFiles(state) = &view.state else {
             panic!("必须是 AgentFiles 状态");
@@ -471,9 +480,6 @@ fn agent_root_path_change_resets_state_and_authorization(cx: &mut TestAppContext
         );
     });
 
-    root.update(cx, |root, _| {
-        root.replace_custom_agent_roots_for_test(vec![custom_b]);
-    });
     let grants = root.read_with(cx, |root, _| root.agent_root_grants_for_path(&skill));
     let request = PathRequest {
         operation: PathOperation::Write,
