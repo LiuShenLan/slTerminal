@@ -633,6 +633,85 @@ fn shared_document_restore_preserves_project_grant_union(cx: &mut TestAppContext
     assert_eq!(std::fs::read_to_string(file).unwrap(), "changed");
 }
 
+/// 未知扩展名的 UTF-8 文本必须按纯文本进入 Editor；二进制在真实读取后拒绝。
+#[gpui::test]
+fn unknown_extension_utf8_opens_as_plain_text_and_binary_is_rejected(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let text_file = temp.path().join("notes.log");
+    std::fs::write(
+        &text_file,
+        "line one
+line two
+",
+    )
+    .unwrap();
+    let binary_file = temp.path().join("payload.data");
+    std::fs::write(&binary_file, b"a b").unwrap();
+    let text_path = CanonicalPath::new(&text_file).unwrap();
+    let binary_path = CanonicalPath::new(&binary_file).unwrap();
+    let (root, mut window, _) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, temp.path().to_str().unwrap());
+    open_document(&root, &mut window, PROJECT_A, GROUP_A, text_path);
+    let document = root.read_with(cx, |root, _| {
+        root.snapshot
+            .registry()
+            .project(project_id(PROJECT_A))
+            .unwrap()
+            .layout()
+            .view_keys()
+            .into_iter()
+            .find_map(|view| match view {
+                ViewKey::Editor { document_id, .. } => Some(document_id),
+                _ => None,
+            })
+            .expect("未知扩展名的文本文件必须进入 Editor")
+    });
+    assert_eq!(
+        root.read_with(cx, |root, _| root
+            .documents
+            .session(document)
+            .unwrap()
+            .text()
+            .unwrap()
+            .to_string()),
+        "line one
+line two
+"
+    );
+
+    window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.open_document(
+                project_id(PROJECT_A),
+                group_id(GROUP_A),
+                binary_path,
+                window,
+                cx,
+            )
+            .unwrap();
+        });
+    });
+    window.run_until_parked();
+    root.read_with(cx, |root, _| {
+        assert_eq!(
+            root.snapshot().documents().count(),
+            1,
+            "二进制读取失败不得留下 Document 或占位面板"
+        );
+        let editor_count = root
+            .snapshot
+            .registry()
+            .project(project_id(PROJECT_A))
+            .unwrap()
+            .layout()
+            .view_keys()
+            .into_iter()
+            .filter(|view| matches!(view, ViewKey::Editor { .. }))
+            .count();
+        assert_eq!(editor_count, 1, "失败打开不得新增 Editor 面板");
+    });
+}
+
 #[gpui::test]
 fn inflight_open_does_not_suspend_existing_source_editing_or_saving(cx: &mut TestAppContext) {
     let temp = tempfile::tempdir().unwrap();

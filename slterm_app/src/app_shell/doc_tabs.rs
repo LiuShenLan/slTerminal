@@ -491,11 +491,14 @@ mod doc_tabs_tests {
         }
     }
 
-    /// 三判定反例:未知扩展名/二进制/无扩展名一律交系统处理器。
+    /// 已知二进制交系统处理器；未知扩展名按纯文本尝试，内容判定归读取。
     #[test]
-    fn openable_in_app_rejects_unknown_files() {
-        for path in ["archive.zip", "app.exe", "no_extension"] {
+    fn openable_in_app_routes_known_binaries_and_accepts_unknown_text() {
+        for path in ["archive.zip", "app.exe", "payload.dll", "media.mp4"] {
             assert!(!openable_in_app(Path::new(path)), "{path}");
+        }
+        for path in ["no_extension", "script.rb", "notes.log", "data.dat"] {
+            assert!(openable_in_app(Path::new(path)), "{path}");
         }
     }
 
