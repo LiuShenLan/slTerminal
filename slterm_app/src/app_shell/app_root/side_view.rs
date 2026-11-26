@@ -220,6 +220,26 @@ impl AppRootPersistence {
                 }
             }
         }
+        // 无项目浮层是应用级逻辑视图：与项目 Settings 按完整 ViewKey 独立存取。
+        let overlay_key = slterm_workspace::ViewKey::AppSettingsOverlay;
+        match store.view_state(&overlay_key, &persistence.registry) {
+            Ok(Some(stored)) => {
+                match serde_json::from_value::<crate::settings_state::SettingsViewState>(
+                    stored.state.into_state(),
+                ) {
+                    Ok(state) => persistence.settings_views.restore(overlay_key, state),
+                    Err(error) => {
+                        persistence.recovery_warning_count += 1;
+                        log::warn!("could not decode overlay Settings ViewState: {error}");
+                    }
+                }
+            }
+            Ok(None) => {}
+            Err(error) => {
+                persistence.recovery_warning_count += 1;
+                log::warn!("could not restore overlay Settings ViewState: {error}");
+            }
+        }
         match store.sidebar_state() {
             Ok(Some(recovery)) => {
                 persistence.recovery_warning_count += recovery.warnings.len();

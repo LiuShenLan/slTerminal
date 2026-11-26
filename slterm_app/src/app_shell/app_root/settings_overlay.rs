@@ -72,6 +72,7 @@ impl SettingsView {
     fn new_overlay(
         window: &mut Window,
         cx: &mut Context<'_, Self>,
+        view_states: SettingsViewStateStore,
         roots: SettingsViewRoots,
         initial_values: BTreeMap<&'static str, Option<Value>>,
     ) -> Self {
@@ -79,7 +80,7 @@ impl SettingsView {
             window,
             cx,
             ViewKey::AppSettingsOverlay,
-            None,
+            Some(view_states),
             true,
             roots,
             initial_values,
@@ -96,11 +97,27 @@ impl SettingsView {
         initial_values: BTreeMap<&'static str, Option<Value>>,
     ) -> Self {
         let SettingsViewRoots { root, windows } = roots;
-        let selected_page = view_states
+        // 失效页回退到宿主可用页并提示；回退结果立即写回，后续重开稳定。
+        let restored = view_states
             .as_ref()
-            .and_then(|store| store.state(&view_key))
-            .map(|state| state.selected_page())
-            .unwrap_or(SettingsPageId::Appearance);
+            .and_then(|store| store.state(&view_key));
+        let (selected_page, fell_back) = match restored {
+            Some(state) => {
+                let (state, fell_back) = SettingsViewState::restore(
+                    state.selected_page(),
+                    state.declared_page_params().clone(),
+                    &SettingsPageId::ALL,
+                );
+                (state.selected_page(), fell_back)
+            }
+            None => (SettingsPageId::Appearance, false),
+        };
+        if fell_back {
+            super::events::notify_settings_page_fallback(cx);
+            if let Some(store) = &view_states {
+                store.checkpoint(&view_key, SettingsViewState::new(selected_page));
+            }
+        }
         // 重建视图（关闭重开、重启）恒回 User 层；项目／Local 层由用户显式切换。
         let hooks_layer = crate::ai_hook::draft_host::HooksDraftLayer::User;
         let mut inputs = BTreeMap::new();
@@ -989,11 +1006,13 @@ impl AppRoot {
             .unwrap_or_else(|| self.focus_manager.workspace_token());
         let root_handle = cx.entity().downgrade();
         let windows = self.windows.clone();
+        let view_states = self.side_view_persistence.settings_view_states();
         let initial_values = super::settings_controls::initial_field_values(self.settings.values());
         let view = cx.new(|cx| {
             SettingsView::new_overlay(
                 window,
                 cx,
+                view_states,
                 SettingsViewRoots {
                     root: root_handle,
                     windows,

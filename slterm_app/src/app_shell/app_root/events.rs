@@ -663,6 +663,15 @@ pub(crate) fn notify_workspace_repairs(count: usize, cx: &mut App) {
     crate::notify::deliver_startup_summary(&crate::notify::Notification::ProcessAlert { text }, cx);
 }
 
+/// 设置页恢复命中当前宿主不可用页时的显式提示。
+pub(crate) fn notify_settings_page_fallback(cx: &mut App) {
+    let language = cx.global::<crate::app_shell::config::Settings>().language;
+    let text = language
+        .text(crate::i18n::Message::NotifySettingsPageFallback)
+        .to_owned();
+    crate::notify::deliver_startup_summary(&crate::notify::Notification::ProcessAlert { text }, cx);
+}
+
 pub(crate) fn notify_workspace_recovered(
     notice: crate::persistence::startup::WorkspaceRecoveryNotice,
     cx: &mut App,

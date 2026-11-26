@@ -6,6 +6,7 @@ use slterm_agents::AgentKind;
 
 use super::*;
 use crate::ai_hook::draft_host::{HooksDraft, HooksDraftKey, HooksDraftLayer, HooksDraftOwner};
+use crate::settings_state::{SettingsPageId, SettingsViewState};
 
 fn install_user_hooks_draft(root: &Entity<AppRoot>, cx: &mut TestAppContext) -> HooksDraftKey {
     let panel = PanelIdAllocator::new(31).allocate().unwrap();
@@ -1075,6 +1076,55 @@ fn settings_overlay_explicit_close_releases_instance_and_allows_reopen(cx: &mut 
 
     open_settings(&mut window);
     assert!(root.read_with(cx, |root, _| root.settings_overlay.is_some()));
+}
+
+/// 浮层选中页关闭重开与重启恢复共用同一应用级 ViewState。
+#[gpui::test]
+fn settings_overlay_page_survives_close_reopen_and_restart(cx: &mut TestAppContext) {
+    let (root, mut window, _state) = open_root(cx);
+    focus_workspace(&root, &mut window);
+    open_settings(&mut window);
+    let page = window
+        .debug_bounds("settings-page-3")
+        .expect("Session 页入口必须存在");
+    window.simulate_click(page.center(), Modifiers::default());
+    draw_frame(&mut window);
+    root.read_with(cx, |root, cx| {
+        let host = root.settings_overlay.as_ref().expect("浮层必须存在");
+        assert_eq!(host.view.read(cx).current_page(), SettingsPageId::Session);
+    });
+
+    window.simulate_keystrokes("escape");
+    window.run_until_parked();
+    open_settings(&mut window);
+    draw_frame(&mut window);
+    root.read_with(cx, |root, cx| {
+        let host = root.settings_overlay.as_ref().expect("浮层必须重新打开");
+        assert_eq!(
+            host.view.read(cx).current_page(),
+            SettingsPageId::Session,
+            "关闭重开必须恢复上次选中的页"
+        );
+    });
+
+    // 重启：启动恢复把同一 ViewKey 的状态预载进设置视图存储。
+    let persistence = AppRootPersistence::empty(None);
+    persistence.settings_view_states().restore(
+        ViewKey::AppSettingsOverlay,
+        SettingsViewState::new(SettingsPageId::Session),
+    );
+    let (root, mut window, _state) = open_root_with_persistence(cx, persistence);
+    focus_workspace(&root, &mut window);
+    open_settings(&mut window);
+    draw_frame(&mut window);
+    root.read_with(cx, |root, cx| {
+        let host = root.settings_overlay.as_ref().expect("浮层必须存在");
+        assert_eq!(
+            host.view.read(cx).current_page(),
+            SettingsPageId::Session,
+            "重启后必须恢复持久选中页"
+        );
+    });
 }
 
 #[gpui::test]
