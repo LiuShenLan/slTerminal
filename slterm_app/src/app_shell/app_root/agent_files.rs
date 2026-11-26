@@ -867,24 +867,20 @@ impl AppRoot {
 
     /// 覆盖该路径的 Agent 根只读／可写授权；根快照未就绪时为空。
     pub(super) fn agent_root_grants_for_path(&self, path: &CanonicalPath) -> Vec<PathGrant> {
-        if !self.agent_roots_loaded {
+        let Some(registry) = self.agent_root_registry.as_ref() else {
             return Vec::new();
-        }
+        };
         let mut grants = Vec::new();
-        for dir in self.agent_global_dirs.iter().flatten() {
-            if let Ok(root_path) = CanonicalPath::new(dir.path.clone())
-                && path.as_path().starts_with(root_path.as_path())
-            {
+        for (_, _, root_path) in registry.builtin_roots() {
+            if path.as_path().starts_with(root_path.as_path()) {
                 // 内置根固定只读、禁止终端。
-                grants.push(PathGrant::agent_root(root_path, false, false));
+                grants.push(PathGrant::agent_root(root_path.clone(), false, false));
             }
         }
-        for root in &self.custom_agent_roots {
-            if let Ok(root_path) = CanonicalPath::new(root.path())
-                && path.as_path().starts_with(root_path.as_path())
-            {
+        for (root, root_path) in registry.custom_roots_with_real() {
+            if path.as_path().starts_with(root_path.as_path()) {
                 grants.push(PathGrant::agent_root(
-                    root_path,
+                    root_path.clone(),
                     root.capabilities().allows_write(),
                     root.capabilities().allows_terminal(),
                 ));
@@ -941,19 +937,27 @@ impl AppRoot {
         if !self.agent_roots_loaded {
             return Vec::new();
         }
+        let Some(registry) = self.agent_root_registry.as_ref() else {
+            return Vec::new();
+        };
         let mut roots = self
             .agent_global_dirs
             .iter()
             .flatten()
             .filter_map(|dir| {
-                let path = CanonicalPath::new(dir.path.clone()).ok()?;
+                let lexical = CanonicalPath::new(dir.path.clone()).ok()?;
+                let path = registry
+                    .builtin_real(dir.root_id)
+                    .cloned()
+                    .unwrap_or(lexical);
                 Some((dir.root_id, dir.display_name.clone(), path))
             })
             .collect::<Vec<_>>();
-        roots.extend(self.custom_agent_roots.iter().filter_map(|root| {
-            let path = CanonicalPath::new(root.path()).ok()?;
-            Some((root.id(), root.display_name().to_owned(), path))
-        }));
+        roots.extend(
+            registry
+                .custom_roots_with_real()
+                .map(|(root, real)| (root.id(), root.display_name().to_owned(), real.clone())),
+        );
         roots
     }
 
@@ -970,19 +974,32 @@ impl AppRoot {
                 move || {
                     let loading = executor.spawn(async move {
                         let dirs = crate::agent_dirs::agent_global_dirs();
-                        let roots =
-                            crate::agent_root_service::load_agent_roots().unwrap_or_default();
-                        (dirs, roots)
+                        let (roots, read_error) =
+                            match crate::agent_root_service::load_agent_roots() {
+                                Ok(roots) => (roots, None),
+                                Err(error) => (Vec::new(), Some(error)),
+                            };
+                        let (registry, build_error) =
+                            crate::agent_root_service::build_agent_root_registry(&dirs, &roots);
+                        let error = read_error.or(build_error);
+                        if error.is_some() {
+                            // 错误类别已作为显式状态保留；这里只记脱敏诊断。
+                            log::warn!("agent root settings unavailable; keeping builtin roots");
+                        }
+                        (dirs, roots, registry, error)
                     });
                     cx.spawn(async move |this, cx| {
-                        let (dirs, roots) = loading.await;
+                        let (dirs, roots, registry, error) = loading.await;
                         let _ = this.update(cx, |root, cx| {
                             // 已注入或更早完成的快照优先，迟到回投不得覆盖。
                             if root.agent_roots_loaded {
                                 return;
                             }
                             root.agent_global_dirs = Some(dirs);
-                            root.custom_agent_roots = roots;
+                            root.custom_agent_roots =
+                                if error.is_some() { Vec::new() } else { roots };
+                            root.agent_root_registry = Some(registry);
+                            root.agent_roots_error = error;
                             root.agent_roots_loaded = true;
                             root.sync_agent_files_roots_after_load(cx);
                             cx.notify();

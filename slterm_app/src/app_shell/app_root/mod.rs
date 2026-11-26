@@ -267,6 +267,11 @@ pub(crate) struct AppRoot {
     agent_global_dirs: Option<Vec<crate::agent_dirs::AgentGlobalDir>>,
     /// 自定义 Agent 根配置快照（与 `agent_global_dirs` 同批加载）。
     custom_agent_roots: Vec<slterm_settings::AgentRoot>,
+    /// 内置与自定义共用的真实目录查重与能力视图；加载失败时只保留内置根。
+    agent_root_registry: Option<crate::agent_root_service::AgentRootRegistry>,
+    /// 自定义根加载／查重失败的显式状态；不得伪装为空配置。
+    #[allow(dead_code)] // 消费点归 AgentRoot 设置页错误条。
+    agent_roots_error: Option<crate::agent_root_service::AgentRootLoadError>,
     /// 根快照是否已由后台加载完成；未完成时 Agent 树与授权保持空集。
     agent_roots_loaded: bool,
     system_open: Arc<dyn Fn(CanonicalPath) + Send + Sync>,
@@ -379,7 +384,7 @@ impl AppRoot {
         dirs: Vec<crate::agent_dirs::AgentGlobalDir>,
     ) {
         self.agent_global_dirs = Some(dirs);
-        self.agent_roots_loaded = true;
+        self.rebuild_agent_root_registry_for_test();
     }
 
     /// 测试注入自定义 Agent 根配置；与内置目录快照同批生效。
@@ -388,6 +393,15 @@ impl AppRoot {
         roots: Vec<slterm_settings::AgentRoot>,
     ) {
         self.custom_agent_roots = roots;
+        self.rebuild_agent_root_registry_for_test();
+    }
+
+    fn rebuild_agent_root_registry_for_test(&mut self) {
+        let dirs = self.agent_global_dirs.clone().unwrap_or_default();
+        let (registry, error) =
+            crate::agent_root_service::build_agent_root_registry(&dirs, &self.custom_agent_roots);
+        self.agent_root_registry = Some(registry);
+        self.agent_roots_error = error;
         self.agent_roots_loaded = true;
     }
 }
@@ -575,6 +589,8 @@ impl AppRoot {
             ),
             agent_global_dirs: None,
             custom_agent_roots: Vec::new(),
+            agent_root_registry: None,
+            agent_roots_error: None,
             agent_roots_loaded: false,
             system_open: Arc::new(|path| {
                 crate::platform::file_operations::open_in_system(path.as_path());

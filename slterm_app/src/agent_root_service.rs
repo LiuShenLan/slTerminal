@@ -17,6 +17,8 @@ use crate::platform::project_paths::ProjectPathResolver;
 pub(crate) enum AgentRootRegistryError {
     /// 同一真实目录已登记为另一个根（返回既有根身份）。
     DuplicateRealPath(AgentRootId),
+    /// 真实目录已由内置根占用；内置根没有可返回的自定义身份。
+    DuplicateBuiltin,
     /// 身份已被占用。
     DuplicateIdentity,
     UnknownRoot,
@@ -83,9 +85,47 @@ pub(crate) fn save_agent_roots_at(path: &Path, roots: &[AgentRoot]) -> std::io::
     )
 }
 
+/// 生产加载：内置与自定义共用同一真实目录查重。自定义解析或身份冲突时
+/// 保留已登记的内置根并返回显式错误，不让损坏配置静默变成空根集合。
+pub(crate) fn build_agent_root_registry(
+    dirs: &[crate::agent_dirs::AgentGlobalDir],
+    roots: &[AgentRoot],
+) -> (AgentRootRegistry, Option<AgentRootLoadError>) {
+    let mut registry = AgentRootRegistry::new(Arc::new(
+        crate::platform::project_paths::SystemProjectPathResolver,
+    ));
+    for dir in dirs {
+        if !dir.exists {
+            // 缺失目录保留展示占位，但不参与真实目录查重或授权。
+            continue;
+        }
+        let Ok(lexical) = CanonicalPath::new(dir.path.clone()) else {
+            continue;
+        };
+        match registry.add_builtin(dir.root_id, dir.display_name.clone(), &lexical) {
+            Ok(_) | Err(AgentRootRegistryError::Unresolved) => {}
+            Err(_) => return (registry, Some(AgentRootLoadError::Invalid)),
+        }
+    }
+    for root in roots {
+        let result = CanonicalPath::new(root.path())
+            .map_err(|_| AgentRootLoadError::Invalid)
+            .and_then(|lexical| {
+                registry
+                    .register(root.clone(), &lexical)
+                    .map(|_| ())
+                    .map_err(|_| AgentRootLoadError::Invalid)
+            });
+        if result.is_err() {
+            return (registry, Some(AgentRootLoadError::Invalid));
+        }
+    }
+    (registry, None)
+}
+
 pub(crate) struct AgentRootRegistry {
     resolver: Arc<dyn ProjectPathResolver>,
-    builtin: Vec<CanonicalPath>,
+    builtin: Vec<(AgentRootId, String, CanonicalPath)>,
     roots: Vec<(AgentRoot, CanonicalPath)>,
 }
 
@@ -101,13 +141,18 @@ impl AgentRootRegistry {
     /// 登记内置根的真实目录；同样参与查重，但不可删除或改路径。
     pub(crate) fn add_builtin(
         &mut self,
+        id: AgentRootId,
+        name: String,
         lexical: &CanonicalPath,
     ) -> Result<CanonicalPath, AgentRootRegistryError> {
         let real = self.resolve(lexical)?;
-        if let Some(existing) = self.roots.iter().find(|(_, root)| *root == real) {
-            return Err(AgentRootRegistryError::DuplicateRealPath(existing.0.id()));
+        if let Some((_, _, existing)) = self.builtin.iter().find(|(_, _, path)| *path == real) {
+            return Ok(existing.clone());
         }
-        self.builtin.push(real.clone());
+        if self.find_owner(&real).is_some() {
+            return Err(AgentRootRegistryError::DuplicateBuiltin);
+        }
+        self.builtin.push((id, name, real.clone()));
         Ok(real)
     }
 
@@ -121,6 +166,9 @@ impl AgentRootRegistry {
             return Err(AgentRootRegistryError::DuplicateIdentity);
         }
         let real = self.resolve(lexical)?;
+        if self.builtin.iter().any(|(_, _, path)| *path == real) {
+            return Err(AgentRootRegistryError::DuplicateBuiltin);
+        }
         if let Some(existing) = self.find_owner(&real) {
             return Err(AgentRootRegistryError::DuplicateRealPath(existing));
         }
@@ -156,8 +204,8 @@ impl AgentRootRegistry {
         {
             return Err(AgentRootRegistryError::DuplicateRealPath(existing));
         }
-        if self.builtin.contains(&real) {
-            return Err(AgentRootRegistryError::DuplicateRealPath(id));
+        if self.builtin.iter().any(|(_, _, path)| *path == real) {
+            return Err(AgentRootRegistryError::DuplicateBuiltin);
         }
         let registered = new_root.id();
         self.roots[index] = (new_root, real);
@@ -195,13 +243,40 @@ impl AgentRootRegistry {
         self.roots.iter().map(|(root, _)| root)
     }
 
-    /// 覆盖该路径的全部根能力并集：读恒可，写与终端逐项取或。
+    /// 自定义根与已解析的真实目录；授权只按真实目录判定。
+    pub(crate) fn custom_roots_with_real(
+        &self,
+    ) -> impl Iterator<Item = (&AgentRoot, &CanonicalPath)> {
+        self.roots.iter().map(|(root, real)| (root, real))
+    }
+
+    /// 内置根身份对应的真实目录；缺失或无登记时为 None。
+    pub(crate) fn builtin_real(&self, id: AgentRootId) -> Option<&CanonicalPath> {
+        self.builtin
+            .iter()
+            .find(|(root_id, _, _)| *root_id == id)
+            .map(|(_, _, real)| real)
+    }
+
+    /// 内置根的稳定身份、展示名与真实目录；顺序与注册顺序一致。
+    pub(crate) fn builtin_roots(
+        &self,
+    ) -> impl Iterator<Item = (AgentRootId, &str, &CanonicalPath)> {
+        self.builtin
+            .iter()
+            .map(|(id, name, real)| (*id, name.as_str(), real))
+    }
+
+    /// 覆盖该路径的全部根能力并集：读恒可（含内置根），写与终端逐项取或。
     /// 撤销任一根后并集按剩余根重算；无根覆盖返回 None。
     pub(crate) fn capability_union_at(
         &self,
         path: &CanonicalPath,
     ) -> Option<slterm_settings::AgentRootCapabilities> {
-        let mut covered = false;
+        let mut covered = self
+            .builtin
+            .iter()
+            .any(|(_, _, real)| path.as_path().starts_with(real.as_path()));
         let mut union = slterm_settings::AgentRootCapabilities::READ_ONLY;
         for (root, real) in &self.roots {
             if !path.as_path().starts_with(real.as_path()) {
@@ -305,6 +380,70 @@ mod tests {
         std::fs::write(&path, original).unwrap();
         assert!(load_agent_roots_at(&path).is_err());
         assert_eq!(std::fs::read(&path).unwrap(), original);
+    }
+
+    /// 内置根的真实目录同样参与查重：重复内置或自定义别名都必须拒绝。
+    #[test]
+    fn builtin_roots_participate_in_real_path_deduplication() {
+        let temp = tempfile::tempdir().unwrap();
+        let real = temp.path().join("agent-home");
+        std::fs::create_dir(&real).unwrap();
+        let alias = temp.path().join("agent-alias");
+        create_junction(&alias, &real);
+        let mut registry = AgentRootRegistry::new(resolver());
+        registry
+            .add_builtin(id(9), "内置".into(), &CanonicalPath::new(&real).unwrap())
+            .unwrap();
+
+        assert_eq!(
+            registry.add_builtin(
+                id(8),
+                "重复内置".into(),
+                &CanonicalPath::new(&alias).unwrap(),
+            ),
+            Ok(registry
+                .builtin_roots()
+                .next()
+                .expect("内置根已登记")
+                .2
+                .clone()),
+            "builtin 别名只保留一个真实根"
+        );
+        assert_eq!(registry.builtin_roots().count(), 1);
+        assert_eq!(
+            registry.register(root(1, &alias), &CanonicalPath::new(&alias).unwrap(),),
+            Err(AgentRootRegistryError::DuplicateBuiltin)
+        );
+        let union = registry
+            .capability_union_at(&CanonicalPath::new(real.join("nested")).unwrap())
+            .expect("内置根必须参与能力并集");
+        assert!(!union.write && !union.terminal, "内置根固定只读且禁终端");
+    }
+
+    /// 生产加载：自定义根与内置根真实目录冲突时保留内置根并显式报错。
+    #[test]
+    fn production_registry_keeps_builtin_roots_when_custom_root_duplicates() {
+        let temp = tempfile::tempdir().unwrap();
+        let real = temp.path().join("builtin-home");
+        std::fs::create_dir(&real).unwrap();
+        let alias = temp.path().join("custom-alias");
+        create_junction(&alias, &real);
+        let builtin = crate::agent_dirs::AgentGlobalDir {
+            cli_id: "claude".to_owned(),
+            root_id: id(9),
+            display_name: "内置".to_owned(),
+            path: real.clone(),
+            exists: true,
+        };
+
+        let (registry, error) = build_agent_root_registry(&[builtin], &[root(1, &alias)]);
+
+        assert_eq!(error, Some(AgentRootLoadError::Invalid));
+        assert_eq!(registry.builtin_roots().count(), 1);
+        assert!(
+            registry.custom_roots().next().is_none(),
+            "冲突的自定义根不得登记"
+        );
     }
 
     /// 新根默认可读但写与终端分别拒绝；开启写不隐含终端能力。
