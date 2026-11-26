@@ -295,6 +295,11 @@ impl<R: Read + Send + 'static> UnblockedReader<R> {
         self.queue.watermark()
     }
 
+    /// 读取线程已结束（EOF、BrokenPipe 或读取错误）并关闭输出队列。
+    pub fn is_closed(&self) -> bool {
+        self.queue.is_closed()
+    }
+
     pub fn read_before(
         &mut self,
         watermark: crate::tty::OutputWatermark,
@@ -513,6 +518,22 @@ mod tests {
             rest.extend_from_slice(&buf[..read]);
         }
         assert_eq!(rest, b"cdefg");
+    }
+
+    /// EOF/读取错误关闭队列后，事件循环必须能观察到传输已关闭。
+    #[test]
+    fn reader_reports_output_closed_after_eof() {
+        let mut reader = UnblockedReader::new(std::io::empty());
+        let start = Instant::now();
+        while !reader.is_closed() {
+            assert!(
+                start.elapsed() < Duration::from_secs(2),
+                "EOF 后读取端必须报告输出已关闭"
+            );
+            std::thread::yield_now();
+        }
+        let mut buf = [0u8; 8];
+        assert_eq!(reader.read(&mut buf).unwrap(), 0);
     }
 
     #[test]

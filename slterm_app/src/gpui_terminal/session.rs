@@ -314,6 +314,9 @@ fn local_options_with_refresh(
         ..Default::default()
     };
     options.explicit_command = explicit_command;
+    // 子进程退出后继续排空已读输出：退出前的最后输出必须进入最终帧，
+    // 不能因显示 worker 停止解析而丢失。
+    options.drain_on_exit = true;
     // 注册表快照合并(MACHINE+USER 环境),成功时置 env_is_complete；失败则
     // 保留增量环境，由 ConPTY 合并原生父环境并按排除名过滤旧端点。
     if let Err(error) = refresh(&mut options) {
@@ -497,6 +500,14 @@ mod local_options_tests {
         let shell = options.shell.expect("shell 应保留");
         assert_eq!(shell.program(), "cmd", "非显式通道应原样保留裸名");
         assert!(!options.explicit_command, "标记不得置位");
+    }
+
+    /// 子进程退出后仍须排空已读输出：本地启动必须开启退出排空。
+    #[test]
+    fn local_options_drain_output_before_exit() {
+        let options =
+            local_options(None, false, pane(), None).expect("默认 shell 启动选项必须可构造");
+        assert!(options.drain_on_exit, "退出边界必须排空已读输出");
     }
 
     #[test]

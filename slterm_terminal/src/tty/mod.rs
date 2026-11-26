@@ -194,6 +194,14 @@ pub trait EventedPty: EventedReadWrite {
         self.reader().read(buf)
     }
 
+    /// 输出传输是否已关闭（读取线程 EOF 或读取错误）。
+    ///
+    /// 子进程退出后输出关闭是正常事实；在子进程事件之前观察到关闭时，
+    /// 事件循环给予短暂宽限等待退出事件，超时才报告传输故障。
+    fn output_closed(&self) -> bool {
+        false
+    }
+
     /// 窗口外 DSR 查询剥离门控（DA1/DSR 接管族，event_loop 读侧消费）。
     /// Windows ConPTY 后端按 OS build 预计算覆写：Win10 家族 = true（键
     /// 事件输入下 CPR 应答即 F3 毒键，剥离不答）；其他后端默认 false

@@ -912,6 +912,241 @@ fn strip_and_answer_eof_pending_flush() {
     assert!(sp.take_pending_query().is_empty(), "冲刷后无残留");
 }
 
+/// 子进程退出事件到达时，已读入队列的输出必须先解析完再发布最终帧。
+#[cfg(windows)]
+#[test]
+fn child_exit_drains_queued_output_before_final_frame() {
+    use std::sync::{Arc, Mutex};
+
+    use polling::os::iocp::{CompletionPacket, PollerIocpExt};
+
+    #[derive(Clone, Default)]
+    struct Collector(Arc<Mutex<Vec<&'static str>>>);
+
+    impl EventListener for Collector {
+        fn send_event(&self, event: Event) {
+            if let Event::ChildExit(_) = event {
+                self.0.lock().unwrap().push("exit");
+            }
+        }
+    }
+
+    struct ExitPty {
+        bytes: Vec<u8>,
+        position: usize,
+        posted: bool,
+        reader: io::Empty,
+        writer: io::Sink,
+    }
+
+    impl tty::EventedReadWrite for ExitPty {
+        type Reader = io::Empty;
+        type Writer = io::Sink;
+
+        unsafe fn register(
+            &mut self,
+            poll: &Arc<Poller>,
+            mut interest: polling::Event,
+            _: polling::PollMode,
+        ) -> io::Result<()> {
+            if !self.posted {
+                self.posted = true;
+                interest.key = tty::PTY_CHILD_EVENT_TOKEN;
+                let _ = poll.post(CompletionPacket::new(interest));
+            }
+            Ok(())
+        }
+
+        fn reregister(
+            &mut self,
+            _: &Arc<Poller>,
+            _: polling::Event,
+            _: polling::PollMode,
+        ) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn deregister(&mut self, _: &Arc<Poller>) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn reader(&mut self) -> &mut Self::Reader {
+            &mut self.reader
+        }
+
+        fn writer(&mut self) -> &mut Self::Writer {
+            &mut self.writer
+        }
+    }
+
+    impl event::OnResize for ExitPty {
+        fn on_resize(&mut self, _: WindowSize) {}
+    }
+
+    impl tty::EventedPty for ExitPty {
+        fn next_child_event(&mut self) -> Option<tty::ChildEvent> {
+            use std::os::windows::process::ExitStatusExt as _;
+            Some(tty::ChildEvent::Exited(Some(
+                std::process::ExitStatus::from_raw(0),
+            )))
+        }
+
+        fn read_before(
+            &mut self,
+            _watermark: tty::OutputWatermark,
+            buf: &mut [u8],
+        ) -> io::Result<usize> {
+            let remaining = self.bytes.len() - self.position;
+            let count = remaining.min(buf.len());
+            buf[..count].copy_from_slice(&self.bytes[self.position..self.position + count]);
+            self.position += count;
+            Ok(count)
+        }
+    }
+
+    let listener = Collector::default();
+    let terminal = Arc::new(FairMutex::new(Term::new(
+        Config::default(),
+        &TermSize::new(40, 4),
+        listener.clone(),
+    )));
+    let pty = ExitPty {
+        bytes: b"drained-tail".to_vec(),
+        position: 0,
+        posted: false,
+        reader: io::empty(),
+        writer: io::sink(),
+    };
+    let event_loop = EventLoop::new(terminal, listener.clone(), pty, true).unwrap();
+    let handle = event_loop.spawn();
+    // 先等退出事实送达（Shutdown 会先于未处理事件被通道排空消费）。
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while listener.0.lock().unwrap().is_empty() {
+        assert!(std::time::Instant::now() < deadline, "退出事实必须送达应用");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let (event_loop, _state) = handle.join().expect("worker 不得 panic");
+
+    assert_eq!(*listener.0.lock().unwrap(), ["exit"]);
+    let terminal = event_loop.terminal.lock();
+    assert!(
+        terminal.scrollback_text().contains("drained-tail"),
+        "退出前已读入队列的输出必须在最终帧之前解析"
+    );
+}
+
+/// 读取端先失效而子进程事件永不到达时，宽限耗尽必须转为传输故障。
+#[cfg(windows)]
+#[test]
+fn output_closed_without_child_exit_reports_transport_failure() {
+    use std::sync::{Arc, Mutex};
+
+    use polling::os::iocp::{CompletionPacket, PollerIocpExt};
+
+    #[derive(Clone, Default)]
+    struct Collector(Arc<Mutex<Vec<String>>>);
+
+    impl EventListener for Collector {
+        fn send_event(&self, event: Event) {
+            if let Event::PtyFailure(reason) = event {
+                self.0.lock().unwrap().push(reason);
+            }
+        }
+    }
+
+    struct ClosedPty {
+        posted: bool,
+        reader: io::Empty,
+        writer: io::Sink,
+    }
+
+    impl tty::EventedReadWrite for ClosedPty {
+        type Reader = io::Empty;
+        type Writer = io::Sink;
+
+        unsafe fn register(
+            &mut self,
+            poll: &Arc<Poller>,
+            mut interest: polling::Event,
+            _: polling::PollMode,
+        ) -> io::Result<()> {
+            if !self.posted {
+                self.posted = true;
+                interest.key = tty::PTY_READ_WRITE_TOKEN;
+                let _ = poll.post(CompletionPacket::new(interest));
+            }
+            Ok(())
+        }
+
+        fn reregister(
+            &mut self,
+            _: &Arc<Poller>,
+            _: polling::Event,
+            _: polling::PollMode,
+        ) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn deregister(&mut self, _: &Arc<Poller>) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn reader(&mut self) -> &mut Self::Reader {
+            &mut self.reader
+        }
+
+        fn writer(&mut self) -> &mut Self::Writer {
+            &mut self.writer
+        }
+    }
+
+    impl event::OnResize for ClosedPty {
+        fn on_resize(&mut self, _: WindowSize) {}
+    }
+
+    impl tty::EventedPty for ClosedPty {
+        fn next_child_event(&mut self) -> Option<tty::ChildEvent> {
+            None
+        }
+
+        fn output_closed(&self) -> bool {
+            true
+        }
+
+        fn read_before(
+            &mut self,
+            _watermark: tty::OutputWatermark,
+            _buf: &mut [u8],
+        ) -> io::Result<usize> {
+            Ok(0)
+        }
+    }
+
+    let listener = Collector::default();
+    let terminal = Arc::new(FairMutex::new(Term::new(
+        Config::default(),
+        &TermSize::new(40, 4),
+        listener.clone(),
+    )));
+    let pty = ClosedPty {
+        posted: false,
+        reader: io::empty(),
+        writer: io::sink(),
+    };
+    let event_loop = EventLoop::new(terminal, listener.clone(), pty, false).unwrap();
+    let handle = event_loop.spawn();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while listener.0.lock().unwrap().is_empty() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "输出关闭且无退出事件时必须报告传输故障"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let (_, _) = handle.join().expect("worker 不得 panic");
+    assert_eq!(listener.0.lock().unwrap().len(), 1);
+}
+
 /// 名额泄漏回归守卫：裸 `JoinHandle` drop = detach，线程返回值
 /// (EventLoop 含 Pty) 永存、名额泄漏。`EventLoopHandle` 的 Drop
 /// 兜底 shutdown+join——不显式 join 时 Pty 也必须随返回值析构。

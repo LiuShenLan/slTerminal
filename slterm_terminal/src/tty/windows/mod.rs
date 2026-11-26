@@ -224,6 +224,10 @@ impl EventedPty for Pty {
         self.conout.read_before(watermark, buf)
     }
 
+    fn output_closed(&self) -> bool {
+        self.conout.is_closed()
+    }
+
     fn strip_dsr_queries(&self) -> bool {
         self.strip_dsr
     }

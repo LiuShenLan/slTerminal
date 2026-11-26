@@ -36,6 +36,11 @@ const MAX_LOCKED_READ: usize = u16::MAX as usize;
 /// conhost 的内部整理（缓冲区塌缩/重锚）和 shell 的 resize 反应留时间。
 const ALIGN_DELAY: Duration = Duration::from_millis(120);
 
+/// 输出传输关闭后等待子进程退出事件的宽限。正常退出时输出 EOF 与退出
+/// 事件的到达顺序不固定；超过该宽限仍无退出事件，说明读取端先失效而
+/// 子进程仍存活，必须转为传输故障，避免终端永久停留在运行态。
+const OUTPUT_CLOSED_GRACE: Duration = Duration::from_secs(2);
+
 /// Resize diagnostics are opt-in because PTY reads are a hot path. The trace
 /// records the local grid state at the exact stream boundaries where bytes are
 /// parsed or a resize is committed (`SLTERM_RESIZE_TRACE=1`).
@@ -1025,10 +1030,15 @@ where
             'event_loop: loop {
                 // Wakeup the event loop when a synchronized update timeout or
                 // the pending ConPTY align deadline was reached.
-                let deadline = match (state.stream.next_sync_timeout(), state.align_at) {
-                    (Some(sync), Some(align)) => Some(sync.min(align)),
-                    (sync, align) => sync.or(align),
-                };
+                let transport_deadline = state.output_closed_at.map(|at| at + OUTPUT_CLOSED_GRACE);
+                let deadline = [
+                    state.stream.next_sync_timeout(),
+                    state.align_at,
+                    transport_deadline,
+                ]
+                .into_iter()
+                .flatten()
+                .min();
                 let timeout = deadline.map(|at| at.saturating_duration_since(Instant::now()));
 
                 events.clear();
@@ -1050,6 +1060,19 @@ where
                 if state.align_at.is_some_and(|at| Instant::now() >= at) {
                     state.align_at = None;
                     self.realign_to_conpty("align", None, &mut state);
+                }
+
+                // 读取线程先于子进程事件失效（EOF/读取错误/BrokenPipe）：
+                // 先记下关闭时刻并继续轮询退出事件；宽限耗尽仍无退出事件
+                // 才把传输关闭转成故障，避免终端永久停留在运行态。
+                if pty_active && state.output_closed_at.is_none() && self.pty.output_closed() {
+                    state.output_closed_at = Some(Instant::now());
+                }
+                if let Some(closed_at) = state.output_closed_at
+                    && Instant::now() >= closed_at + OUTPUT_CLOSED_GRACE
+                {
+                    failure = Some("PTY output closed without a child exit event".to_owned());
+                    break 'event_loop;
                 }
 
                 // Handle synchronized update timeout. The align deadline can
@@ -1162,7 +1185,20 @@ where
                                     self.event_proxy.send_event(Event::ChildExit(status));
                                 }
                                 if self.drain_on_exit {
-                                    let _ = self.pty_read(&mut state, &mut buf);
+                                    // 已读入队列的输出必须在最终帧之前全部解析；
+                                    // 队列读取是非阻塞的，读到 0 即排空。
+                                    loop {
+                                        match self.pty_read(&mut state, &mut buf) {
+                                            Ok(0) => break,
+                                            Ok(_) => continue,
+                                            Err(error) => {
+                                                crate::pty_trace(&format!(
+                                                    "pty drain after exit failed: {error}"
+                                                ));
+                                                break;
+                                            }
+                                        }
+                                    }
                                 }
                                 // DA1/DSR 接管 EOF 冲刷：扣尾防裂留下的残片是
                                 // 不完整转义序列，EOF 时永远没有后续字节来拼——
@@ -1414,6 +1450,9 @@ pub struct State {
     /// ConPTY 光标对账的死线：resize 提交后 `ALIGN_DELAY` 触发，见
     /// `conpty_cursor_probe`。
     align_at: Option<Instant>,
+    /// 首次观察到输出传输关闭的时刻；`OUTPUT_CLOSED_GRACE` 内仍无子进程
+    /// 退出事件则报告传输故障。
+    output_closed_at: Option<Instant>,
 }
 
 impl State {
