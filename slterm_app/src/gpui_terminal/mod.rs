@@ -27,6 +27,15 @@ gpui::actions!(slterm_terminal, [TerminalTab, TerminalBackTab]);
 
 pub(crate) const KEY_CONTEXT: &str = "SltermTerminal";
 
+/// 当前窗口是否存在进行中的 IME 组合。命令派发前的拦截器据此屏蔽
+/// 全局键绑定，避免组合期间误触命令打断 IME。
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct ImeComposition {
+    pub active: bool,
+}
+
+impl gpui::Global for ImeComposition {}
+
 /// 终端 pane 标识：全工作区唯一、终生不复用。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct PaneId(pub u64);

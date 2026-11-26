@@ -214,6 +214,8 @@ pub(crate) struct AppRoot {
     window_geometry: Option<crate::windowing::geometry::WindowGeometry>,
     window_geometry_save_task: Option<gpui::Task<()>>,
     window_geometry_subscription: Option<gpui::Subscription>,
+    /// IME 组合期按键拦截：命令派发前停止传播，字符输入仍走事件路径。
+    _ime_interceptor: Subscription,
     machine_key: String,
     /// 更新安装的关闭守卫；关闭完成前不留下安装预约。
     update_install: Option<crate::update_download::handoff::UpdateInstallGuard>,
@@ -512,6 +514,14 @@ impl AppRoot {
             window_geometry: None,
             window_geometry_save_task: None,
             window_geometry_subscription: None,
+            _ime_interceptor: cx.intercept_keystrokes(|_, _, cx| {
+                if cx
+                    .try_global::<crate::gpui_terminal::ImeComposition>()
+                    .is_some_and(|state| state.active)
+                {
+                    cx.stop_propagation();
+                }
+            }),
             machine_key: crate::platform::machine::machine_key(),
             update_install: None,
             side_view_roots_generation: None,

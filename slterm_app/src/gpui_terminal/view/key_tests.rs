@@ -503,6 +503,38 @@ fn alt_f4_propagates_to_the_host_window(cx: &mut TestAppContext) {
 
 /// IME 组合中(marked_text 非空)全键放行:不编码、不拦截——GPUI
 /// Windows 在 stop_propagation 后跳过 TranslateMessage,组合必须保住。
+/// 组合态必须同步到全局命令闸门：命令派发前即可拦截。
+#[gpui::test]
+fn marked_text_toggles_the_ime_command_gate(cx: &mut TestAppContext) {
+    let (terminal, mut window, _rx, _registry) = open(cx);
+    assert!(!cx.update(|cx| {
+        cx.try_global::<crate::gpui_terminal::ImeComposition>()
+            .is_some_and(|state| state.active)
+    }));
+    terminal.update_in(&mut window, |view, window, cx| {
+        gpui::EntityInputHandler::replace_and_mark_text_in_range(
+            view, None, "ni", None, window, cx,
+        );
+    });
+    assert!(
+        cx.update(|cx| {
+            cx.try_global::<crate::gpui_terminal::ImeComposition>()
+                .is_some_and(|state| state.active)
+        }),
+        "组合开始必须打开命令闸门"
+    );
+    terminal.update_in(&mut window, |view, window, cx| {
+        gpui::EntityInputHandler::replace_and_mark_text_in_range(view, None, "", None, window, cx);
+    });
+    assert!(
+        !cx.update(|cx| {
+            cx.try_global::<crate::gpui_terminal::ImeComposition>()
+                .is_some_and(|state| state.active)
+        }),
+        "组合结束必须关闭命令闸门"
+    );
+}
+
 #[gpui::test]
 fn marked_text_keeps_all_keys_off_the_wire(cx: &mut TestAppContext) {
     let (terminal, mut window, rx, _registry) = open(cx);

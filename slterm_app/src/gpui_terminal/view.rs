@@ -594,6 +594,20 @@ impl TerminalView {
         !self.has_live_worker()
     }
 
+    /// 组合态单一写点：字段与全局 IME 闸门同步，命令拦截器只读全局。
+    fn set_marked_text(&mut self, text: Option<String>, cx: &mut Context<'_, Self>) {
+        self.marked_text = text;
+        let active = self.marked_text.is_some();
+        let mut state = cx
+            .try_global::<super::ImeComposition>()
+            .copied()
+            .unwrap_or_default();
+        if state.active != active {
+            state.active = active;
+            cx.set_global(state);
+        }
+    }
+
     #[cfg(all(test, feature = "gpui-test-support"))]
     pub(crate) const fn has_error(&self) -> bool {
         self.error.is_some()
@@ -1172,7 +1186,9 @@ impl gpui::EntityInputHandler for TerminalView {
     }
 
     fn unmark_text(&mut self, _window: &mut Window, cx: &mut Context<'_, Self>) {
-        if self.marked_text.take().is_some() {
+        let had_marked = self.marked_text.is_some();
+        self.set_marked_text(None, cx);
+        if had_marked {
             self.restart_cursor_blink(cx);
         } else {
             cx.notify();
@@ -1187,12 +1203,13 @@ impl gpui::EntityInputHandler for TerminalView {
         cx: &mut Context<'_, Self>,
     ) {
         if self.terminal_search.is_some() {
-            self.marked_text = None;
+            self.set_marked_text(None, cx);
             self.terminal_search_input(text, cx);
             cx.notify();
             return;
         }
-        let had_marked_text = self.marked_text.take().is_some();
+        let had_marked_text = self.marked_text.is_some();
+        self.set_marked_text(None, cx);
         if !text.is_empty() && self.exited.is_none() {
             self.note_text_input(text, cx);
             self.write_user_text(text.to_owned(), false, text.as_bytes().to_vec(), cx);
@@ -1218,7 +1235,7 @@ impl gpui::EntityInputHandler for TerminalView {
         if self.marked_text == marked_text {
             cx.notify();
         } else {
-            self.marked_text = marked_text;
+            self.set_marked_text(marked_text, cx);
             self.restart_cursor_blink(cx);
         }
     }

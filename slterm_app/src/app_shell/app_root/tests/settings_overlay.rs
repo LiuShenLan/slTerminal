@@ -326,6 +326,32 @@ fn settings_overlay_controls_write_runtime_values_and_queue(cx: &mut TestAppCont
     assert_eq!(runtime_speed, global_speed, "全局快照必须与运行值同源");
 }
 
+/// IME 组合期间全局键绑定在派发前被拦截，组合结束才恢复命令。
+#[gpui::test]
+fn ime_composition_blocks_global_command_dispatch(cx: &mut TestAppContext) {
+    let (root, mut window, _state) = open_root(cx);
+    focus_workspace(&root, &mut window);
+    cx.update(|cx| {
+        cx.set_global(crate::gpui_terminal::ImeComposition { active: true });
+    });
+    window.simulate_keystrokes("ctrl-,");
+    draw_frame(&mut window);
+    assert!(
+        root.read_with(cx, |root, _| root.settings_overlay.is_none()),
+        "组合期间不得派发全局命令"
+    );
+    cx.update(|cx| {
+        cx.set_global(crate::gpui_terminal::ImeComposition { active: false });
+    });
+    focus_workspace(&root, &mut window);
+    window.simulate_keystrokes("ctrl-,");
+    draw_frame(&mut window);
+    assert!(
+        root.read_with(cx, |root, _| root.settings_overlay.is_some()),
+        "组合结束后命令必须恢复"
+    );
+}
+
 /// 活动栏固定底部配置按钮与 Ctrl+, 共用同一设置入口。
 #[gpui::test]
 fn activity_bar_settings_button_opens_the_settings_overlay(cx: &mut TestAppContext) {
