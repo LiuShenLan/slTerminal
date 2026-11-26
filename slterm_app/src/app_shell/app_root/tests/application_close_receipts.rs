@@ -428,6 +428,7 @@ fn application_global_receipt_validates_identity_attempt_and_disconnect(cx: &mut
                 outcome_unknown: false,
                 needs_recollect: false,
                 window: window_handle,
+                persist_intent: true,
             });
             root.close_in_progress = true;
             let task = cx.spawn(async move |_, _| std::future::pending::<()>().await);
@@ -607,19 +608,18 @@ fn recovery_disconnected_global_worker_is_fail_closed(cx: &mut TestAppContext) {
 
     assert!(!window.simulate_close());
     window.run_until_parked();
-    let attempt = root.read_with(cx, |root, _| {
-        let recovery = root.recovery_global_close.as_ref().unwrap();
-        assert!(recovery.outcome_unknown);
+    let phase = root.read_with(cx, |root, _| {
+        let close = root.application_close.as_ref().unwrap();
+        assert!(close.outcome_unknown);
         assert!(!root.close_in_progress);
         assert!(!root.close_completed);
-        recovery.attempt
+        close.coordinator.phase()
     });
     assert!(!window.simulate_close());
     root.read_with(cx, |root, _| {
-        assert_eq!(
-            root.recovery_global_close.as_ref().unwrap().attempt,
-            attempt
-        );
+        let close = root.application_close.as_ref().unwrap();
+        assert!(close.outcome_unknown);
+        assert_eq!(close.coordinator.phase(), phase);
         assert!(!root.close_completed);
     });
     runtime.shutdown(ControlPlaneCleanup::Succeeded).unwrap();
@@ -653,7 +653,7 @@ fn application_recovery_failure_flushes_without_close_intent(cx: &mut TestAppCon
     window.run_until_parked();
     root.read_with(cx, |root, _| {
         assert!(root.close_completed);
-        assert!(root.application_close.is_none());
+        assert!(root.application_close.is_some());
     });
     runtime.shutdown(ControlPlaneCleanup::Succeeded).unwrap();
     assert_eq!(
@@ -697,8 +697,7 @@ fn application_recovery_failure_uses_global_close_without_intent(cx: &mut TestAp
 
     root.read_with(cx, |root, _| {
         assert!(root.close_completed);
-        assert!(root.application_close.is_none());
-        assert!(root.recovery_global_close.is_some());
+        assert!(root.application_close.is_some());
     });
     assert!(
         WorkspaceDatabase::open(&paths)
@@ -720,4 +719,79 @@ fn application_recovery_failure_uses_global_close_without_intent(cx: &mut TestAp
         global.join().unwrap(),
         crate::app_shell::global_close::GlobalCloseSummary::Completed
     );
+}
+
+/// 恢复失败会话中的显式 Save 决定必须真实落盘，运行 PTY 必须停止后才关窗。
+#[gpui::test]
+fn recovery_failure_app_close_saves_documents_and_stops_terminals(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let file = temp.path().join("note.txt");
+    std::fs::write(&file, "old").unwrap();
+    let file = CanonicalPath::new(file).unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let (events, _event_rx) = std::sync::mpsc::sync_channel(64);
+    let runtime = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
+    let persistence =
+        AppRootPersistence::load_with_previous_run(&paths, Some(runtime.client()), None);
+    let (root, mut window, state) = open_root_with_persistence(cx, persistence);
+    add_project(&root, &mut window, PROJECT_A, temp.path().to_str().unwrap());
+    let panel = new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_A);
+    super::documents::open_document(&root, &mut window, PROJECT_A, GROUP_A, file.clone());
+    window.simulate_input("draft ");
+    window.run_until_parked();
+    let document = root.read_with(cx, |root, _| {
+        assert!(
+            root.documents
+                .session(root.documents.ids().next().unwrap())
+                .unwrap()
+                .is_dirty()
+        );
+        root.documents.ids().next().unwrap()
+    });
+    root.update(cx, |root, _| root.project_snapshot_recovery_failed = true);
+
+    let result = window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.start_application_close_with_decisions(
+                std::collections::BTreeMap::from([(
+                    document,
+                    slterm_workspace::CloseDecision::Save,
+                )]),
+                true,
+                window,
+                cx,
+            )
+        })
+    });
+    assert!(matches!(
+        result,
+        Ok(
+            super::super::application_close::ApplicationCloseStart::Started
+                | super::super::application_close::ApplicationCloseStart::Completed
+        )
+    ));
+    window.run_until_parked();
+    flush_when_ready(&runtime.client());
+    window.run_until_parked();
+
+    assert_eq!(
+        std::fs::read_to_string(file.as_path()).unwrap(),
+        "draft old"
+    );
+    assert!(matches!(
+        state.borrow().sessions[&panel.sequence()].try_recv(),
+        Ok(Msg::Shutdown)
+    ));
+    root.read_with(cx, |root, _| assert!(root.close_completed));
+    let fault = rusqlite::Connection::open(paths.workspace_db_path()).unwrap();
+    assert_eq!(
+        fault
+            .query_row("SELECT COUNT(*) FROM close_intents", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
+        0,
+        "恢复失败会话不得登记持久关闭意图"
+    );
+    runtime.shutdown(ControlPlaneCleanup::Succeeded).unwrap();
 }

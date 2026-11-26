@@ -107,13 +107,8 @@ impl AppRoot {
                             slterm_workspace::CloseStage::StopServices,
                         )
                 });
-                let recovery_global = self.recovery_global_close.is_some();
-                if self.global_close.is_some() && (application_global || recovery_global) {
-                    if application_global {
-                        self.start_application_global_close(cx);
-                    } else {
-                        self.start_recovery_global_close(cx);
-                    }
+                if self.global_close.is_some() && application_global {
+                    self.start_application_global_close(cx);
                 } else {
                     self.close_in_progress = false;
                     self.close_completed = true;

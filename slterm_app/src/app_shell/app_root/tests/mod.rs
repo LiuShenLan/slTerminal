@@ -893,6 +893,7 @@ fn terminal_command_definitions_preserve_reserved_interrupt() {
             (CommandId::SplitRight, "ctrl-shift-d", None),
             (CommandId::SplitDown, "ctrl-shift-s", None),
             (CommandId::CloseActiveTerminal, "ctrl-shift-w", None),
+            (CommandId::CloseActivePanel, "ctrl-w", None),
             (CommandId::ReconnectTerminal, "ctrl-shift-r", None),
         ]
     );

@@ -1137,6 +1137,7 @@ fn close_retry_reconciles_side_view_with_project_recovery_barrier(cx: &mut TestA
             root.handle_shell_event(SltermShellEvent::TrayQuit, window, cx)
         });
     });
+    window.run_until_parked();
     root.read_with(cx, |root, _| {
         assert!(!root.close_in_progress);
         assert!(!root.close_completed);
