@@ -13,7 +13,7 @@ use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
-use slterm_settings::ThemeName;
+use slterm_settings::{ThemeId, ThemeName};
 
 use super::document::{DocumentError, MAX_DOCUMENT_BYTES, ThemeDocument, builtin_documents};
 
@@ -66,6 +66,7 @@ pub enum StoreError {
     InvalidDocument(String),
     NotFound(String),
     BuiltinReadOnly(String),
+    NameConflict(String),
     Busy,
     Conflict {
         expected: Option<u64>,
@@ -87,6 +88,9 @@ impl fmt::Display for StoreError {
             Self::InvalidDocument(message) => write!(f, "invalid stored theme: {message}"),
             Self::NotFound(id) => write!(f, "theme not found: {id}"),
             Self::BuiltinReadOnly(id) => write!(f, "built-in theme is read-only: {id}"),
+            Self::NameConflict(name) => {
+                write!(f, "theme name is already in use: {name}")
+            }
             Self::Busy => f.write_str("theme library is busy; retry the operation"),
             Self::Conflict { expected, actual } => {
                 write!(
@@ -149,8 +153,7 @@ impl ThemeLibraryStore {
     }
 
     /// 某自定义主题的精确路径(诊断/测试共用同一构造规则)。
-    pub fn path_for(&self, id: &str) -> Result<PathBuf, StoreError> {
-        validate_id(id)?;
+    pub fn path_for(&self, id: ThemeId) -> Result<PathBuf, StoreError> {
         Ok(self.root.join(format!("{id}{THEME_FILE_SUFFIX}")))
     }
 
@@ -181,16 +184,12 @@ impl ThemeLibraryStore {
             let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
                 continue;
             };
-            let Some(id) = file_name.strip_suffix(THEME_FILE_SUFFIX) else {
+            let Some(id) = file_name
+                .strip_suffix(THEME_FILE_SUFFIX)
+                .and_then(|stem| stem.parse::<ThemeId>().ok())
+            else {
                 continue;
             };
-            if let Err(error) = validate_id(id) {
-                snapshot.diagnostics.push(StoreDiagnostic {
-                    path,
-                    message: error.to_string(),
-                });
-                continue;
-            }
             let file_type = match entry.file_type() {
                 Ok(file_type) => file_type,
                 Err(error) => {
@@ -232,16 +231,17 @@ impl ThemeLibraryStore {
         Ok(snapshot)
     }
 
-    /// 按 id 或显示名加载;内置主题可直接命中。
+    /// 按稳定身份加载自定义主题;内置主题按显示名命中。
     pub fn load(&self, id: &str) -> Result<ThemeDocument, StoreError> {
         if let Some(document) = builtin_documents()
             .into_iter()
-            .find(|document| document.id() == Some(id) || document.name() == id)
+            .find(|document| document.name() == id)
         {
             return Ok(document);
         }
-        let path = self.path_for(id)?;
-        read_document(&path, id)?.ok_or_else(|| StoreError::NotFound(id.to_owned()))
+        let theme_id = parse_id(id)?;
+        let path = self.path_for(theme_id)?;
+        read_document(&path, theme_id)?.ok_or_else(|| StoreError::NotFound(id.to_owned()))
     }
 
     /// 条件保存:修订/快照不匹配即 `Conflict`,绝不清默覆盖。
@@ -262,9 +262,9 @@ impl ThemeLibraryStore {
         if document.is_builtin() {
             return Err(StoreError::BuiltinReadOnly(document.name().to_owned()));
         }
-        let id = document
-            .id()
-            .ok_or_else(|| StoreError::InvalidDocument("custom themes require an id".to_owned()))?;
+        let id = document.theme_id().ok_or_else(|| {
+            StoreError::InvalidDocument("custom themes require a UUIDv7 id".to_owned())
+        })?;
         let path = self.path_for(id)?;
         if let Some(source) = import_source {
             self.reject_import_source_locks(source, &path)?;
@@ -296,7 +296,7 @@ impl ThemeLibraryStore {
             }
             RevisionPrecondition::Any => actual,
             RevisionPrecondition::Unchanged(expected_document) => {
-                if expected_document.id() != Some(id) {
+                if expected_document.theme_id() != Some(id) {
                     return Err(StoreError::InvalidDocument(
                         "unchanged precondition belongs to another theme id".to_owned(),
                     ));
@@ -317,7 +317,7 @@ impl ThemeLibraryStore {
             });
         }
         let revision = expected.map_or(1, |revision| revision.saturating_add(1));
-        let stored = document.with_id_and_revision(id.to_owned(), revision);
+        let stored = document.with_id_and_revision(id, revision);
         let bytes = stored.to_json_bytes()?;
         if bytes.len() > MAX_DOCUMENT_BYTES {
             return Err(StoreError::Document(DocumentError::TooLarge {
@@ -339,9 +339,14 @@ impl ThemeLibraryStore {
             .find(|document| document.name() == theme.prompt_name())
             .ok_or_else(|| StoreError::NotFound(theme.prompt_name().to_owned()))?;
         let snapshot = self.list()?;
-        let name = unique_name(name, &snapshot)?;
-        let id = self.unique_id(&name, &snapshot)?;
-        let candidate = builtin.fork(id, name)?;
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(StoreError::InvalidDocument(
+                "theme name must not be empty".to_owned(),
+            ));
+        }
+        reject_name_conflict(name, &snapshot)?;
+        let candidate = builtin.fork(fresh_theme_id(), name)?;
         self.save(&candidate, RevisionPrecondition::Absent)
     }
 
@@ -357,8 +362,31 @@ impl ThemeLibraryStore {
         source: Option<&Path>,
     ) -> Result<ThemeDocument, StoreError> {
         let snapshot = self.list()?;
-        let name = unique_name(document.name(), &snapshot)?;
-        let id = self.unique_id(&name, &snapshot)?;
+        let name = document.name().trim();
+        if name.is_empty() {
+            return Err(StoreError::InvalidDocument(
+                "theme name must not be empty".to_owned(),
+            ));
+        }
+        // 同身份 = 同一主题：明确冲突并零写入；否则保留来源身份（跨机恢复），
+        // 无身份的手写主题由 application 注入新的 UUIDv7。
+        let id = match document.theme_id() {
+            Some(id) => {
+                if let Some(existing) = snapshot
+                    .custom
+                    .iter()
+                    .find(|stored| stored.theme_id() == Some(id))
+                {
+                    return Err(StoreError::Conflict {
+                        expected: None,
+                        actual: Some(existing.revision()),
+                    });
+                }
+                id
+            }
+            None => fresh_theme_id(),
+        };
+        reject_name_conflict(name, &snapshot)?;
         let candidate = document.with_name(name)?.with_id_and_revision(id, 0);
         self.save_internal(&candidate, RevisionPrecondition::Absent, source)
     }
@@ -380,14 +408,15 @@ impl ThemeLibraryStore {
     pub fn delete(&self, id: &str, expected_revision: u64) -> Result<(), StoreError> {
         if builtin_documents()
             .into_iter()
-            .any(|document| document.id() == Some(id) || document.name() == id)
+            .any(|document| document.name() == id)
         {
             return Err(StoreError::BuiltinReadOnly(id.to_owned()));
         }
-        let path = self.path_for(id)?;
+        let theme_id = parse_id(id)?;
+        let path = self.path_for(theme_id)?;
         let _global_lock = self.acquire_global_lock()?;
         let _target_lock = self.acquire_target_lock(&path)?;
-        let current = read_document(&path, id)?;
+        let current = read_document(&path, theme_id)?;
         let Some(document) = current else {
             return Err(StoreError::Conflict {
                 expected: Some(expected_revision),
@@ -448,10 +477,10 @@ impl ThemeLibraryStore {
             let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
                 continue;
             };
-            let Some(id) = file_name.strip_suffix(THEME_FILE_SUFFIX) else {
-                continue;
-            };
-            if validate_id(id).is_err()
+            let valid_id = file_name
+                .strip_suffix(THEME_FILE_SUFFIX)
+                .is_some_and(|stem| stem.parse::<ThemeId>().is_ok());
+            if !valid_id
                 || entry
                     .file_type()
                     .map_err(|error| io_error(&path, error))?
@@ -463,34 +492,9 @@ impl ThemeLibraryStore {
         }
         Ok(count)
     }
-
-    fn unique_id(&self, name: &str, snapshot: &ThemeLibrarySnapshot) -> Result<String, StoreError> {
-        let base = slug(name);
-        for suffix in 1..=MAX_CUSTOM_THEMES + 1 {
-            let candidate = if suffix == 1 {
-                base.clone()
-            } else {
-                format!("{base}-{suffix}")
-            };
-            if validate_id(&candidate).is_err() {
-                continue;
-            }
-            if snapshot
-                .custom
-                .iter()
-                .all(|document| document.id() != Some(candidate.as_str()))
-                && !self.path_for(&candidate)?.exists()
-            {
-                return Ok(candidate);
-            }
-        }
-        Err(StoreError::Limit {
-            limit: MAX_CUSTOM_THEMES,
-        })
-    }
 }
 
-fn read_document(path: &Path, expected_id: &str) -> Result<Option<ThemeDocument>, StoreError> {
+fn read_document(path: &Path, expected_id: ThemeId) -> Result<Option<ThemeDocument>, StoreError> {
     let Some(bytes) = read_document_file(path)? else {
         return Ok(None);
     };
@@ -500,7 +504,7 @@ fn read_document(path: &Path, expected_id: &str) -> Result<Option<ThemeDocument>
             "custom theme files cannot be marked builtin".to_owned(),
         ));
     }
-    if document.id() != Some(expected_id) {
+    if document.theme_id() != Some(expected_id) {
         return Err(StoreError::InvalidDocument(format!(
             "document id {:?} does not match file id {expected_id}",
             document.id()
@@ -601,76 +605,26 @@ fn reject_symlink(path: &Path) -> Result<(), StoreError> {
     }
 }
 
-fn validate_id(id: &str) -> Result<(), StoreError> {
-    if id.is_empty()
-        || id.len() > 128
-        || !id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || b"_-".contains(&byte))
-    {
-        return Err(StoreError::InvalidId(id.to_owned()));
+fn fresh_theme_id() -> ThemeId {
+    let uuid = uuid::Uuid::now_v7();
+    ThemeId::from_bytes(*uuid.as_bytes()).expect("UUIDv7 字节一定合法")
+}
+
+fn parse_id(id: &str) -> Result<ThemeId, StoreError> {
+    id.parse().map_err(|_| StoreError::InvalidId(id.to_owned()))
+}
+
+/// 显示名与内置/自定义主题冲突即拒绝：不自动改名，避免静默复制。
+fn reject_name_conflict(name: &str, snapshot: &ThemeLibrarySnapshot) -> Result<(), StoreError> {
+    let occupied = snapshot
+        .builtins
+        .iter()
+        .chain(snapshot.custom.iter())
+        .any(|document| document.name().eq_ignore_ascii_case(name));
+    if occupied {
+        return Err(StoreError::NameConflict(name.to_owned()));
     }
     Ok(())
-}
-
-const MAX_THEME_NAME_BYTES: usize = 128;
-
-/// 显示名去重:大小写不敏感;冲突时追加 ` (2)`、` (3)`…;长名先截断
-/// 再拼后缀,防截断后碰撞。
-fn unique_name(requested: &str, snapshot: &ThemeLibrarySnapshot) -> Result<String, StoreError> {
-    let base = requested.trim();
-    let base = if base.is_empty() {
-        "Imported theme"
-    } else {
-        base
-    };
-    let occupied = |name: &str| {
-        snapshot
-            .builtins
-            .iter()
-            .chain(snapshot.custom.iter())
-            .any(|document| document.name().eq_ignore_ascii_case(name))
-    };
-    for suffix_number in 0..=(MAX_CUSTOM_THEMES + 1) {
-        let suffix = if suffix_number == 0 {
-            String::new()
-        } else {
-            format!(" ({})", suffix_number + 1)
-        };
-        let base_budget = MAX_THEME_NAME_BYTES.saturating_sub(suffix.len());
-        let candidate = format!("{}{}", truncate_name(base, base_budget), suffix);
-        if !candidate.is_empty() && !occupied(&candidate) {
-            return Ok(candidate);
-        }
-    }
-    Err(StoreError::Limit {
-        limit: MAX_CUSTOM_THEMES,
-    })
-}
-
-fn truncate_name(value: &str, max_bytes: usize) -> String {
-    let mut end = value.len().min(max_bytes);
-    while !value.is_char_boundary(end) {
-        end -= 1;
-    }
-    value[..end].to_owned()
-}
-
-fn slug(value: &str) -> String {
-    let mut output = String::new();
-    for character in value.chars() {
-        if character.is_ascii_alphanumeric() || character == '-' || character == '_' {
-            output.push(character.to_ascii_lowercase());
-        } else if !output.ends_with('-') {
-            output.push('-');
-        }
-    }
-    let output = output.trim_matches('-');
-    if output.is_empty() {
-        "theme".to_owned()
-    } else {
-        output.chars().take(128).collect()
-    }
 }
 
 fn io_error(path: &Path, source: io::Error) -> StoreError {
@@ -711,32 +665,33 @@ mod store_tests {
     fn first_save_forks_and_revisions_increment() {
         let (_directory, store) = fixture();
         let forked = store.fork_builtin(ThemeName::Nord, "My Nord").unwrap();
-        assert_eq!(forked.id(), Some("my-nord"));
+        let id = forked.theme_id().unwrap();
         assert_eq!(forked.revision(), 1);
         assert!(!forked.is_builtin());
-        assert!(store.path_for("my-nord").unwrap().exists());
+        assert!(store.path_for(id).unwrap().exists());
 
         let updated = forked
             .with_name("My Nord 2")
             .unwrap()
-            .with_id_and_revision("my-nord", 1);
+            .with_id_and_revision(id, 1);
         let stored = store
             .save(&updated, RevisionPrecondition::Unchanged(forked.clone()))
             .unwrap();
         assert_eq!(stored.revision(), 2);
-        assert_eq!(store.load("my-nord").unwrap().revision(), 2);
-        assert_eq!(store.load("my-nord").unwrap().name(), "My Nord 2");
+        assert_eq!(store.load(&id.to_string()).unwrap().revision(), 2);
+        assert_eq!(store.load(&id.to_string()).unwrap().name(), "My Nord 2");
     }
 
     #[test]
     fn external_edits_are_never_silently_overwritten() {
         let (_directory, store) = fixture();
         let forked = store.fork_builtin(ThemeName::Nord, "Guarded").unwrap();
+        let id = forked.theme_id().unwrap();
         // 外部写入者把文件改成修订 2(同 id)。
         let external = forked
             .with_name("Guarded external")
             .unwrap()
-            .with_id_and_revision("guarded", 2);
+            .with_id_and_revision(id, 2);
         store
             .save(&external, RevisionPrecondition::Exact(1))
             .unwrap();
@@ -763,10 +718,13 @@ mod store_tests {
                 actual: Some(2)
             }
         ));
-        assert_eq!(store.load("guarded").unwrap().name(), "Guarded external");
+        assert_eq!(
+            store.load(&id.to_string()).unwrap().name(),
+            "Guarded external"
+        );
 
         // 外部编辑后再读出的快照允许继续保存。
-        let current = store.load("guarded").unwrap();
+        let current = store.load(&id.to_string()).unwrap();
         let next = current.with_name("Guarded next").unwrap();
         let stored = store
             .save(&next, RevisionPrecondition::Unchanged(current))
@@ -790,21 +748,77 @@ mod store_tests {
                 actual: Some(1)
             }
         ));
-        assert_eq!(store.load("mint-copy").unwrap().revision(), 1);
+        assert_eq!(
+            store
+                .load(&forked.theme_id().unwrap().to_string())
+                .unwrap()
+                .revision(),
+            1
+        );
     }
 
     #[test]
-    fn names_and_ids_are_disambiguated_on_import() {
+    fn import_rejects_a_display_name_conflict_without_writing() {
         let (_directory, store) = fixture();
         let builtin = super::super::document::builtin_document(ThemeName::Nord).unwrap();
-        let first = store.import(&builtin).unwrap();
-        let second = store.import(&builtin).unwrap();
-        // 内置目录已占用 "Nord":导入第一次就消歧,第二次继续顺延。
-        assert_eq!(first.name(), "Nord (2)");
-        assert_eq!(second.name(), "Nord (3)");
-        assert_ne!(first.id(), second.id());
-        assert_eq!(first.id(), Some("nord-2"));
-        assert_eq!(second.id(), Some("nord-3"));
+        // 内置目录已占用 "Nord":导入同名主题必须明确拒绝，不能自动改名。
+        let error = store.import(&builtin).unwrap_err();
+        assert!(
+            matches!(error, StoreError::NameConflict(ref name) if name == "Nord"),
+            "同名导入必须拒绝: {error}"
+        );
+        assert!(store.list().unwrap().custom.is_empty(), "冲突导入零写入");
+    }
+
+    fn identified_document(id: &str, name: &str) -> ThemeDocument {
+        let mut definition = ThemeDefinition::from_builtin(ThemeName::Nord);
+        definition.name = name.to_owned();
+        super::super::document::from_definition(&definition)
+            .unwrap()
+            .with_id_and_revision(id.parse().unwrap(), 0)
+    }
+
+    #[test]
+    fn import_rejects_an_identity_that_already_exists() {
+        let (_directory, store) = fixture();
+        let id = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b";
+        let first = identified_document(id, "Identity One");
+        let stored = store.import(&first).unwrap();
+        assert_eq!(stored.id(), Some(id));
+        let again = identified_document(id, "Identity Two");
+        let error = store.import(&again).unwrap_err();
+        assert!(
+            matches!(
+                error,
+                StoreError::Conflict {
+                    actual: Some(1),
+                    ..
+                }
+            ),
+            "相同身份必须拒绝: {error}"
+        );
+        assert_eq!(store.list().unwrap().custom.len(), 1, "冲突导入零写入");
+        assert_eq!(store.load(id).unwrap().name(), "Identity One");
+    }
+
+    #[test]
+    fn fork_assigns_a_uuid_v7_identity_independent_from_the_name() {
+        use std::str::FromStr as _;
+
+        let (_directory, store) = fixture();
+        let forked = store.fork_builtin(ThemeName::Nord, "My Nord").unwrap();
+        let id = forked.id().expect("自定义主题必须有身份");
+        assert!(
+            slterm_settings::ThemeId::from_str(id).is_ok(),
+            "新身份必须是 UUIDv7: {id}"
+        );
+        assert_eq!(forked.name(), "My Nord");
+        assert!(
+            store
+                .path_for(slterm_settings::ThemeId::from_str(id).unwrap())
+                .unwrap()
+                .exists()
+        );
     }
 
     /// 完整主题才可导入；缺项、未知字段与非法色值全部零写入。
@@ -849,25 +863,18 @@ mod store_tests {
             accepted.is_empty(),
             "缺项、未知字段与非法色值主题不得导入: {accepted:?}"
         );
-        assert!(
-            !store
-                .path_for("broken")
-                .map(|path| path.exists())
-                .unwrap_or(true),
-            "失败导入不得留下主题文件"
-        );
-
+        let imported_id = imported.theme_id().unwrap().to_string();
         assert_eq!(
-            resolve_theme_deletion(Some("complete"), "complete"),
+            resolve_theme_deletion(Some(&imported_id), &imported_id),
             ThemeDeletion::RequiresReplacement,
             "删除当前使用中的主题必须先另选"
         );
         assert_eq!(
-            resolve_theme_deletion(Some("complete"), "other"),
+            resolve_theme_deletion(Some(&imported_id), "other"),
             ThemeDeletion::Delete
         );
         assert_eq!(
-            resolve_theme_deletion(None, "complete"),
+            resolve_theme_deletion(None, &imported_id),
             ThemeDeletion::Delete
         );
     }
@@ -875,11 +882,12 @@ mod store_tests {
     #[test]
     fn json_file_import_uses_the_existing_store_path() {
         let (directory, store) = fixture();
+        let id = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b";
         let mut definition = ThemeDefinition::from_builtin(ThemeName::Nord);
         definition.name = "External".to_owned();
         let source = super::super::document::from_definition(&definition)
             .unwrap()
-            .with_id_and_revision("external-id", 9);
+            .with_id_and_revision(id.parse().unwrap(), 9);
         let bytes = source.to_json_bytes().unwrap();
         let path = directory.path().join("source.json");
         fs::write(&path, &bytes).unwrap();
@@ -887,10 +895,20 @@ mod store_tests {
         let imported = store.import_json_file(&path).unwrap();
 
         assert_eq!(imported.name(), "External");
-        assert_eq!(imported.id(), Some("external"));
+        assert_eq!(imported.id(), Some(id), "跨机恢复保留来源身份");
         assert_eq!(imported.revision(), 1);
-        assert_eq!(store.load("external").unwrap(), imported);
-        assert_eq!(fs::read(path).unwrap(), bytes, "导入不得改写来源文件");
+        assert_eq!(store.load(id).unwrap(), imported);
+        assert_eq!(fs::read(&path).unwrap(), bytes, "导入不得改写来源文件");
+        // 同身份重导 = 冲突；零写入且不改名。
+        let error = store.import_json_file(&path).unwrap_err();
+        assert!(matches!(
+            error,
+            StoreError::Conflict {
+                actual: Some(1),
+                ..
+            }
+        ));
+        assert_eq!(store.list().unwrap().custom.len(), 1);
     }
 
     #[test]
@@ -953,8 +971,16 @@ mod store_tests {
     fn json_file_import_rejects_target_lock_source() {
         let (_directory, store) = fixture();
         fs::create_dir_all(&store.root).unwrap();
-        let path = store.root.join("external.slterm-theme.json.slterm-lock");
-        let bytes = import_source_bytes("External");
+        let id = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b";
+        let target = store.path_for(id.parse().unwrap()).unwrap();
+        let path = crate::atomic_file::lock_path(&target);
+        let mut definition = ThemeDefinition::from_builtin(ThemeName::Nord);
+        definition.name = "External".to_owned();
+        let bytes = super::super::document::from_definition(&definition)
+            .unwrap()
+            .with_id_and_revision(id.parse().unwrap(), 0)
+            .to_json_bytes()
+            .unwrap();
         fs::write(&path, &bytes).unwrap();
 
         let result = store.import_json_file(&path);
@@ -964,7 +990,7 @@ mod store_tests {
             "来源与目标锁重合时必须拒绝导入"
         );
         assert_eq!(fs::read(&path).unwrap(), bytes, "来源内容必须保持不变");
-        assert!(!store.path_for("external").unwrap().exists());
+        assert!(!target.exists());
         assert!(store.list().unwrap().custom.is_empty());
     }
 
@@ -992,8 +1018,13 @@ mod store_tests {
     #[test]
     fn delete_requires_the_observed_revision() {
         let (_directory, store) = fixture();
-        store.fork_builtin(ThemeName::Nord, "Deletable").unwrap();
-        let error = store.delete("deletable", 99).unwrap_err();
+        let id = store
+            .fork_builtin(ThemeName::Nord, "Deletable")
+            .unwrap()
+            .theme_id()
+            .unwrap()
+            .to_string();
+        let error = store.delete(&id, 99).unwrap_err();
         assert!(matches!(
             error,
             StoreError::Conflict {
@@ -1001,11 +1032,8 @@ mod store_tests {
                 actual: Some(1)
             }
         ));
-        store.delete("deletable", 1).unwrap();
-        assert!(matches!(
-            store.load("deletable"),
-            Err(StoreError::NotFound(_))
-        ));
+        store.delete(&id, 1).unwrap();
+        assert!(matches!(store.load(&id), Err(StoreError::NotFound(_))));
     }
 
     #[test]

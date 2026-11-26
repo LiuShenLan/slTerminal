@@ -101,7 +101,8 @@ mod preferences_tests {
     #[test]
     fn applying_a_theme_writes_only_theme_keys_and_keeps_personal_appearance() {
         let (_directory, path, store) = fixture();
-        let definition = ThemeDefinition::from_builtin(ThemeName::Nord);
+        let mut definition = ThemeDefinition::from_builtin(ThemeName::Nord);
+        definition.name = "Custom".to_owned();
         let document = store
             .import(&from_definition(&definition).unwrap())
             .unwrap();
@@ -136,7 +137,8 @@ mod preferences_tests {
     #[test]
     fn absent_theme_options_preserve_personal_settings() {
         let (_directory, path, store) = fixture();
-        let definition = ThemeDefinition::from_builtin(ThemeName::Nord);
+        let mut definition = ThemeDefinition::from_builtin(ThemeName::Nord);
+        definition.name = "Custom".to_owned();
         let document = store
             .import(&from_definition(&definition).unwrap())
             .unwrap();
@@ -160,7 +162,8 @@ mod preferences_tests {
     #[test]
     fn stale_preference_revision_cannot_overwrite_an_external_edit() {
         let (_directory, path, store) = fixture();
-        let definition = ThemeDefinition::from_builtin(ThemeName::Nord);
+        let mut definition = ThemeDefinition::from_builtin(ThemeName::Nord);
+        definition.name = "Custom".to_owned();
         let document = store
             .import(&from_definition(&definition).unwrap())
             .unwrap();

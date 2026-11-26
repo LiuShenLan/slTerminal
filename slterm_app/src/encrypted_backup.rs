@@ -476,10 +476,8 @@ fn add_themes(root: &Path, entries: &mut Vec<BackupEntry>) -> Result<(), String>
 }
 
 fn is_valid_theme_id(id: &str) -> bool {
-    // 主题库 id 校验单点复用(store::validate_id),不复制第二份规则。
-    crate::theme_library::ThemeLibraryStore::new(Path::new("."))
-        .path_for(id)
-        .is_ok()
+    // 身份规则单点 = ThemeId 解析（UUIDv7），不复制第二份规则。
+    id.parse::<slterm_settings::ThemeId>().is_ok()
 }
 
 /// 先鉴权后落盘:完整解密校验通过才允许写任何文件。
@@ -666,7 +664,7 @@ mod encrypted_backup_tests {
                 },
                 BackupEntry {
                     category: BackupCategory::Themes,
-                    name: "themes/nord-copy.slterm-theme.json".into(),
+                    name: "themes/018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b.slterm-theme.json".into(),
                     bytes: theme_bytes(),
                 },
             ],
@@ -721,7 +719,9 @@ mod encrypted_backup_tests {
         let settings = br#"{"appearance":{"theme":"Nord"}}"#.to_vec();
         fs::write(paths.config_root().join("settings.json"), &settings).unwrap();
         fs::create_dir_all(paths.config_root().join("themes")).unwrap();
-        let theme_path = paths.config_root().join("themes/user.slterm-theme.json");
+        let theme_path = paths
+            .config_root()
+            .join("themes/018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2c.slterm-theme.json");
         fs::write(&theme_path, theme_bytes()).unwrap();
 
         let mut packet = seal(&full_archive(), PASSPHRASE).unwrap();
@@ -789,7 +789,9 @@ mod encrypted_backup_tests {
         fs::write(paths.local_root().join("workspace.db"), b"sqlite").unwrap();
         fs::create_dir_all(paths.config_root().join("themes")).unwrap();
         fs::write(
-            paths.config_root().join("themes/copy.slterm-theme.json"),
+            paths
+                .config_root()
+                .join("themes/018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b.slterm-theme.json"),
             theme_bytes(),
         )
         .unwrap();
@@ -882,7 +884,7 @@ mod encrypted_backup_tests {
         for marker in [
             b"settings.json".as_slice(),
             b"session.json".as_slice(),
-            b"themes/nord-copy.slterm-theme.json".as_slice(),
+            b"themes/018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b.slterm-theme.json".as_slice(),
         ] {
             assert!(
                 plaintext
@@ -994,8 +996,9 @@ mod encrypted_backup_tests {
         .unwrap();
         fs::create_dir(root.join("themes")).unwrap();
         fs::write(
-            root.join("themes")
-                .join(format!("nord-copy{THEME_FILE_SUFFIX}")),
+            root.join("themes").join(format!(
+                "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b{THEME_FILE_SUFFIX}"
+            )),
             theme_bytes(),
         )
         .unwrap();
@@ -1024,7 +1027,7 @@ mod encrypted_backup_tests {
             HashSet::from([
                 "settings.json",
                 "session.json",
-                "themes/nord-copy.slterm-theme.json"
+                "themes/018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b.slterm-theme.json"
             ])
         );
 
@@ -1066,7 +1069,7 @@ mod encrypted_backup_tests {
         fs::write(
             paths
                 .config_root()
-                .join("themes/nord-copy.slterm-theme.json"),
+                .join("themes/018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b.slterm-theme.json"),
             theme_bytes(),
         )
         .unwrap();
@@ -1085,7 +1088,9 @@ mod encrypted_backup_tests {
         )
         .unwrap();
         fs::write(
-            paths.local_root().join("themes/wrong.slterm-theme.json"),
+            paths
+                .local_root()
+                .join("themes/018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2c.slterm-theme.json"),
             theme_bytes(),
         )
         .unwrap();
@@ -1116,7 +1121,7 @@ mod encrypted_backup_tests {
             HashSet::from([
                 "settings.json",
                 "session.json",
-                "themes/nord-copy.slterm-theme.json",
+                "themes/018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b.slterm-theme.json",
             ])
         );
         let entry = |name: &str| {
@@ -1141,7 +1146,11 @@ mod encrypted_backup_tests {
         let directory = tempfile::tempdir().unwrap();
         let themes = directory.path().join("themes");
         fs::create_dir_all(&themes).unwrap();
-        fs::write(themes.join("bad.slterm-theme.json"), "{ not a theme }").unwrap();
+        fs::write(
+            themes.join("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b.slterm-theme.json"),
+            "{ not a theme }",
+        )
+        .unwrap();
         let selection = BackupSelection::from_categories([BackupCategory::Themes]);
         let error = collect_from(&single_root_paths(directory.path()), selection)
             .expect_err("非法主题必须中止备份");
@@ -1287,7 +1296,7 @@ mod encrypted_backup_tests {
         assert!(
             directory
                 .path()
-                .join("themes/nord-copy.slterm-theme.json")
+                .join("themes/018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b.slterm-theme.json")
                 .is_file()
         );
 

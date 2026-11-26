@@ -10,7 +10,7 @@
 use std::fmt;
 
 use serde_json::{Map, Value, json};
-use slterm_settings::{Rgb8, Rgba8, ThemeDefinition, ThemeName};
+use slterm_settings::{Rgb8, Rgba8, ThemeDefinition, ThemeId, ThemeName};
 
 /// 当前主题文档 schema 版本;不匹配即拒收(升级走新版本号)。
 pub const SCHEMA_VERSION: u64 = 1;
@@ -118,6 +118,11 @@ impl ThemeDocument {
 
     pub fn id(&self) -> Option<&str> {
         self.value.get("id").and_then(Value::as_str)
+    }
+
+    /// 已解析的稳定身份;内置目录种子没有持久身份。
+    pub fn theme_id(&self) -> Option<ThemeId> {
+        self.id().and_then(|id| id.parse().ok())
     }
 
     pub fn revision(&self) -> u64 {
@@ -229,10 +234,10 @@ impl ThemeDocument {
         Self::from_value(value)
     }
 
-    pub fn with_id_and_revision(&self, id: impl Into<String>, revision: u64) -> Self {
+    pub fn with_id_and_revision(&self, id: ThemeId, revision: u64) -> Self {
         let mut value = self.value.clone();
         if let Some(object) = value.as_object_mut() {
-            object.insert("id".to_owned(), Value::String(id.into()));
+            object.insert("id".to_owned(), Value::String(id.to_string()));
             object.insert("revision".to_owned(), Value::Number(revision.into()));
             object.insert("builtin".to_owned(), Value::Bool(false));
         }
@@ -248,14 +253,10 @@ impl ThemeDocument {
     /// 首次保存恒 fork 的载体:复制定义与未知字段,换身份/名字并记下
     /// 基于哪份文档;修订号从 0 起(由 store 落盘时分配 1)。
     #[allow(dead_code)] // 消费点 = 主题库 fork_builtin 与编辑器保存路径的替代入口。
-    pub fn fork(
-        &self,
-        id: impl Into<String>,
-        name: impl Into<String>,
-    ) -> Result<Self, DocumentError> {
+    pub fn fork(&self, id: ThemeId, name: impl Into<String>) -> Result<Self, DocumentError> {
         let mut value = self.value.clone();
         if let Some(object) = value.as_object_mut() {
-            object.insert("id".to_owned(), Value::String(id.into()));
+            object.insert("id".to_owned(), Value::String(id.to_string()));
             object.insert("revision".to_owned(), Value::Number(0.into()));
             object.insert("builtin".to_owned(), Value::Bool(false));
             object.insert("name".to_owned(), Value::String(name.into()));
@@ -305,12 +306,11 @@ pub fn builtin_documents() -> Vec<ThemeDocument> {
         .collect()
 }
 
-/// 内置主题的种子文档:身份 = `builtin-<slug>`,只读。
+/// 内置主题的种子文档:只读目录项,没有持久身份(身份只属于库内主题)。
 pub fn builtin_document(theme: ThemeName) -> Result<ThemeDocument, DocumentError> {
     let definition = ThemeDefinition::from_builtin(theme);
     let mut document = from_definition(&definition)?;
     let mut value = document.to_value();
-    value["id"] = Value::String(format!("builtin-{}", slug(theme.prompt_name())));
     value["builtin"] = Value::Bool(true);
     value["revision"] = Value::Number(0.into());
     value["metadata"]["origin"] = Value::String("builtin".to_owned());
@@ -681,17 +681,9 @@ fn validate_name(name: &str) -> Result<(), DocumentError> {
 }
 
 fn validate_id(id: &str) -> Result<(), DocumentError> {
-    if id.is_empty()
-        || id.len() > 128
-        || !id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || b"_-".contains(&byte))
-    {
-        return Err(DocumentError::Invalid(
-            "id contains unsupported characters".to_owned(),
-        ));
-    }
-    Ok(())
+    id.parse::<ThemeId>()
+        .map(|_| ())
+        .map_err(|error| DocumentError::Invalid(format!("id must be a canonical UUIDv7: {error}")))
 }
 
 fn reject_unknown_fields(
@@ -833,25 +825,10 @@ fn rgb_from_rgba(value: Rgba8) -> Rgb8 {
     [value[0], value[1], value[2]]
 }
 
-fn slug(value: &str) -> String {
-    let mut slug = String::new();
-    for character in value.chars() {
-        if character.is_ascii_alphanumeric() || character == '-' || character == '_' {
-            slug.push(character.to_ascii_lowercase());
-        } else if !slug.ends_with('-') {
-            slug.push('-');
-        }
-    }
-    let slug = slug.trim_matches('-');
-    if slug.is_empty() {
-        "theme".to_owned()
-    } else {
-        slug.to_owned()
-    }
-}
-
 #[cfg(test)]
 mod document_tests {
+    use std::str::FromStr as _;
+
     use super::*;
 
     #[test]
@@ -918,7 +895,11 @@ mod document_tests {
             .iter()
             .find(|document| document.name() == "Linear")
             .expect("默认主题必须在目录内");
-        assert_eq!(linear.id(), Some("builtin-linear"));
+        assert_eq!(
+            linear.id(),
+            None,
+            "内置主题是可重建的目录种子，没有持久身份"
+        );
         assert!(linear.is_builtin());
         assert!(
             documents
@@ -993,10 +974,36 @@ mod document_tests {
     }
 
     #[test]
+    fn theme_identity_is_uuid_v7_and_independent_from_display_name() {
+        let definition = ThemeDefinition::from_builtin(ThemeName::Nord);
+        let value = from_definition(&definition).unwrap().to_value();
+        // 显示名派生 slug 不再是合法身份。
+        let mut slugged = value.clone();
+        slugged["id"] = json!("my-nord");
+        assert!(
+            ThemeDocument::from_value(slugged).is_err(),
+            "主题身份必须是 UUIDv7，不能是显示名 slug"
+        );
+        let mut identified = value;
+        let id = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b";
+        identified["id"] = json!(id);
+        let document = ThemeDocument::from_value(identified).unwrap();
+        assert_eq!(document.id(), Some(id));
+        assert_eq!(document.name(), definition.name, "显示名与身份分离");
+        assert_eq!(
+            slterm_settings::ThemeId::from_str(id).unwrap().to_string(),
+            id
+        );
+    }
+
+    #[test]
     fn forks_get_a_fresh_identity_and_keep_the_source_name() {
         let builtin = builtin_document(ThemeName::Nord).unwrap();
-        let fork = builtin.fork("my-nord", "My Nord").unwrap();
-        assert_eq!(fork.id(), Some("my-nord"));
+        let id = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b";
+        let fork = builtin
+            .fork(ThemeId::from_str(id).unwrap(), "My Nord")
+            .unwrap();
+        assert_eq!(fork.id(), Some(id));
         assert_eq!(fork.revision(), 0);
         assert!(!fork.is_builtin());
         assert_eq!(fork.to_value()["metadata"]["based_on"], "Nord");

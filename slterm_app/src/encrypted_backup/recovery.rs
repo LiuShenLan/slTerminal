@@ -320,7 +320,9 @@ mod recovery_tests {
             .expect("内置主题文档非空")
             .to_json_bytes()
             .expect("内置主题文档可序列化");
-        let theme_path = paths.config_root().join("themes/copy.slterm-theme.json");
+        let theme_path = paths
+            .config_root()
+            .join("themes/018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b.slterm-theme.json");
         fs::write(&theme_path, &theme).unwrap();
 
         let archive = collect_from(
