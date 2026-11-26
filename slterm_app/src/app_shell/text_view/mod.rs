@@ -1,7 +1,7 @@
 mod editor;
 pub(crate) use editor::{
     DocumentEditRequest, DocumentEditResponse, DocumentEditSink, DocumentTextEvent,
-    DocumentTextSnapshot, DocumentTextView,
+    DocumentTextSnapshot, DocumentTextView, GitMark, GitMarkKind,
 };
 #[allow(dead_code)] // 消费点 = 专用视图布局缓存。
 mod layout;

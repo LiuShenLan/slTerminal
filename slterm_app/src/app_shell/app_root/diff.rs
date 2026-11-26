@@ -34,6 +34,34 @@ pub(crate) struct DiffOpenRequest {
 pub(super) type DiffHeadResult =
     Result<(GitShowSnapshot, Option<slterm_document::DiffBinding>), GitError>;
 
+/// 工作区行标：与导航位置同源，但保留增／改／删语义。
+pub(super) fn diff_change_marks(
+    diff: &DiffSnapshot,
+) -> Vec<(usize, crate::app_shell::text_view::GitMarkKind)> {
+    use crate::app_shell::text_view::GitMarkKind;
+    let mut marks = Vec::new();
+    let mut in_change = false;
+    let mut last_worktree = 0;
+    for pair in diff.pairs().unwrap_or(&[]) {
+        if let Some(line) = &pair.worktree {
+            last_worktree = line.index;
+        }
+        if pair.kind == DiffPairKind::Equal {
+            in_change = false;
+        } else if !in_change {
+            let kind = match pair.kind {
+                DiffPairKind::Insert => GitMarkKind::Added,
+                DiffPairKind::Delete => GitMarkKind::Deleted,
+                DiffPairKind::Replace => GitMarkKind::Modified,
+                DiffPairKind::Equal => unreachable!("相等配对已在上方处理"),
+            };
+            marks.push((last_worktree, kind));
+            in_change = true;
+        }
+    }
+    marks
+}
+
 pub(super) fn diff_change_locations(diff: &DiffSnapshot) -> Vec<(usize, usize)> {
     let mut locations = Vec::new();
     let mut in_change = false;

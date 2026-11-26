@@ -6,7 +6,7 @@ use slterm_document::{
 };
 use slterm_workspace::{PanelId, ProjectId, ViewKey};
 
-use super::diff::{DiffOpenRequest, diff_change_locations};
+use super::diff::{DiffOpenRequest, diff_change_marks};
 use super::panel_host::PanelContent;
 use super::task_service::{CancellationToken, TaskId};
 use super::{AppRoot, commands::AppRootError};
@@ -178,9 +178,9 @@ impl AppRoot {
                 .snapshot
                 .as_ref()
                 .map_or_else(Vec::new, |(_, _, diff)| {
-                    diff_change_locations(diff)
+                    diff_change_marks(diff)
                         .into_iter()
-                        .map(|(_, worktree)| worktree)
+                        .map(|(line, kind)| crate::app_shell::text_view::GitMark { line, kind })
                         .collect()
                 });
             editor.update(cx, |view, cx| view.set_git_marks(marks, cx));

@@ -118,7 +118,7 @@
 | 分页只读视图不实现换行，且与软换行 Editor 共用滚动坐标单位 | 待修 |
 | 分页页读取失败后永久停留 Loading | 已修：失败页显示底部提示条与显式重试，点击清空失败抑制并重新读取同一页（提交 2a991217）；测试 `paged_view_explicit_retry_reruns_failed_pages`、`paged_view_does_not_retry_failed_pages_on_every_frame` |
 | 外部快照与撤销/重做把滚动位置重置到顶部 | 已修：`apply_snapshot` 只复位选区与瞬态范围，滚动行/列保留，越界由 `adopt_snapshot` 夹紧（提交 9971ced8）；测试 `external_snapshot_keeps_the_current_scroll_position` |
-| Git 行标丢失增改删语义，颜色与越界防护不满足合同 | 待修 |
+| Git 行标丢失增改删语义，颜色与越界防护不满足合同 | 已修：`GitMark{line,kind}` 保留增／改／删，新增与修改使用 success／warning 语义色、删除用细条，绘制前过滤越界行；测试 `diff_marks_classify_insert_replace_and_delete`、`out_of_range_git_marks_are_ignored_during_painting`、`editor_git_marks_coalesce_latest_text` |
 | reveal_line 在软换行下把逻辑行当显示行 | 已修：软换行下 `reveal_logical_line` 经 wrap 索引换算显示行，索引未就绪登记待揭示行，索引完成回投消费（提交 c8a844d9）；测试 `reveal_line_targets_the_display_row_under_soft_wrap`、`reveal_line_waits_for_the_wrap_index_before_scrolling` |
 | 未知扩展名的文本文件在读取前被拒绝 | 已修：`viewable_file` 仅拒绝已知二进制扩展名，未知/无扩展名按纯文本尝试，NUL 与编码在真实读取后裁决（提交 8a3bb0de）；测试 `viewable_file_maps_known_source_extensions_case_insensitively`、`openable_in_app_routes_known_binaries_and_accepts_unknown_text`、`unknown_extension_utf8_opens_as_plain_text_and_binary_is_rejected` |
 | 分页恢复占位是无出口面板 | 待修 |

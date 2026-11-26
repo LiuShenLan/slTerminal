@@ -305,7 +305,7 @@ pub(crate) struct DocumentTextView {
     automatic_language: LanguageId,
     allow_language_override: bool,
     language_override: Option<LanguageId>,
-    git_marks: Vec<usize>,
+    git_marks: Vec<GitMark>,
     language_revision: u64,
     theme_revision: u64,
     theme_fingerprint: Option<ThemeFingerprint>,
@@ -337,6 +337,20 @@ pub(crate) struct DocumentTextView {
     painted_cursors: Rc<RefCell<Vec<(usize, usize)>>>,
     #[cfg(test)]
     painted_content_mask: Rc<RefCell<Option<gpui::ContentMask<Pixels>>>>,
+}
+
+/// Git 行标语义：新增、修改、删除（删除行落在其后的工作区行）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GitMarkKind {
+    Added,
+    Modified,
+    Deleted,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct GitMark {
+    pub(crate) line: usize,
+    pub(crate) kind: GitMarkKind,
 }
 
 impl DocumentTextView {
@@ -398,7 +412,7 @@ impl DocumentTextView {
     }
 
     /// Git 行标只是最新 core 差分的展示投影，不进入正文或阅读状态。
-    pub(crate) fn set_git_marks(&mut self, marks: Vec<usize>, cx: &mut Context<'_, Self>) {
+    pub(crate) fn set_git_marks(&mut self, marks: Vec<GitMark>, cx: &mut Context<'_, Self>) {
         if self.git_marks == marks {
             return;
         }
@@ -567,8 +581,11 @@ impl DocumentTextView {
     }
 
     #[cfg(all(test, feature = "gpui-test-support"))]
-    pub(crate) fn git_marks_for_test(&self) -> Vec<usize> {
-        self.git_marks.clone()
+    pub(crate) fn git_marks_for_test(&self) -> Vec<(usize, GitMarkKind)> {
+        self.git_marks
+            .iter()
+            .map(|mark| (mark.line, mark.kind))
+            .collect()
     }
 
     #[cfg(all(test, feature = "gpui-test-support"))]
@@ -1505,10 +1522,17 @@ impl DocumentTextView {
 
     fn git_markers(&self, cx: &mut Context<'_, Self>) -> Vec<gpui::AnyElement> {
         let scroll_line = self.clamped_scroll_line();
+        let last_line = self.text.len_lines(LineType::LF).saturating_sub(1);
         self.git_marks
             .iter()
-            .filter_map(|line| {
-                let line = *line;
+            .filter(|mark| mark.line <= last_line)
+            .filter_map(|mark| {
+                let line = mark.line;
+                let (color, width) = match mark.kind {
+                    GitMarkKind::Added => (cx.theme().success_foreground, 4.0),
+                    GitMarkKind::Modified => (cx.theme().warning_foreground, 4.0),
+                    GitMarkKind::Deleted => (cx.theme().danger, 2.0),
+                };
                 let row = if self.wrap {
                     let byte = self.text.line_to_byte_idx(line, LineType::LF);
                     self.wrap_position(byte)?.row.checked_sub(scroll_line)?
@@ -1524,9 +1548,9 @@ impl DocumentTextView {
                         .absolute()
                         .left(px(0.0))
                         .top(px(row as f32 * 20.0))
-                        .w(px(4.0))
+                        .w(px(width))
                         .h(px(20.0))
-                        .bg(cx.theme().accent)
+                        .bg(color)
                         .cursor_pointer()
                         .on_mouse_down(
                             MouseButton::Left,

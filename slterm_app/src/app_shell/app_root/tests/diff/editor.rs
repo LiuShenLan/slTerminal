@@ -81,7 +81,13 @@ fn editor_git_marks_reset_with_text_state(cx: &mut TestAppContext) {
             .unwrap()
     });
     window.update(|_, cx| {
-        editor.update(cx, |view, cx| view.set_git_marks(vec![1, 3], cx));
+        editor.update(cx, |view, cx| view.set_git_marks(
+                vec![
+                    crate::app_shell::text_view::GitMark { line: 1, kind: crate::app_shell::text_view::GitMarkKind::Modified },
+                    crate::app_shell::text_view::GitMark { line: 3, kind: crate::app_shell::text_view::GitMarkKind::Added },
+                ],
+                cx,
+            ));
     });
     window.update(|window, cx| {
         editor.update(cx, |view, cx| {
@@ -139,7 +145,7 @@ fn editor_git_marks_coalesce_latest_text(cx: &mut TestAppContext) {
 
     assert_eq!(
         editor.read_with(cx, |view, _| view.git_marks_for_test()),
-        vec![2],
+        vec![(2, crate::app_shell::text_view::GitMarkKind::Modified)],
         "连续编辑只能采纳最新 TextStateId 的差分行标"
     );
 }
@@ -653,3 +659,64 @@ fn diff_save_uses_capability_union(cx: &mut TestAppContext) {
     }));
 }
 
+
+/// 行标保留新增／修改／删除语义，而不是压平成单一强调色行号。
+#[gpui::test]
+fn diff_marks_classify_insert_replace_and_delete(cx: &mut TestAppContext) {
+    use crate::app_shell::text_view::GitMarkKind;
+    let _ = cx;
+    let text_state = slterm_document::TextStateId::from_uuid(uuid::Uuid::now_v7()).unwrap();
+    let commit = <slterm_document::CommitId as std::str::FromStr>::from_str("0123456789abcdef0123456789abcdef01234567")
+        .unwrap();
+    let classify = |head: &str, worktree: &str| {
+        let input = slterm_document::DiffInput::git(
+            std::sync::Arc::from(head.as_bytes()),
+            std::sync::Arc::from(worktree.as_bytes()),
+            slterm_document::DiffWhitespaceMode::Exact,
+            text_state,
+            commit.clone(),
+            1,
+        );
+        let diff = slterm_document::compute_diff(&input).unwrap();
+        crate::app_shell::app_root::diff::diff_change_marks(&diff)
+    };
+
+    let marks = classify("a\nb\nc\n", "a\nB\nc\nd\n");
+    assert!(marks.contains(&(1, GitMarkKind::Modified)), "{marks:?}");
+    assert!(marks.contains(&(3, GitMarkKind::Added)), "{marks:?}");
+
+    let marks = classify("a\nb\nc\n", "a\nc\n");
+    assert!(
+        marks.iter().any(|(_, kind)| *kind == GitMarkKind::Deleted),
+        "纯删除必须保留删除语义: {marks:?}"
+    );
+}
+
+/// 越界旧行号不得进入软换行定位或触发 panic。
+#[gpui::test]
+fn out_of_range_git_marks_are_ignored_during_painting(cx: &mut TestAppContext) {
+    let (_temp, repository, _binding) = super::gitshow::repository();
+    let (root, mut window, _) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, repository.to_str().unwrap());
+    let file =
+        CanonicalPath::new(dunce::canonicalize(repository.join("first.txt")).unwrap()).unwrap();
+    super::documents::open_document(&root, &mut window, PROJECT_A, GROUP_A, file);
+    let editor = root.read_with(cx, |root, cx| {
+        root.projects[&project_id(PROJECT_A)]
+            .read(cx)
+            .panels
+            .values()
+            .find_map(|panel| panel.editor().cloned())
+            .unwrap()
+    });
+    editor.update(cx, |view, cx| {
+        view.set_git_marks(
+            vec![crate::app_shell::text_view::GitMark {
+                line: usize::MAX - 1,
+                kind: crate::app_shell::text_view::GitMarkKind::Added,
+            }],
+            cx,
+        );
+    });
+    draw_frame(&mut window);
+}
