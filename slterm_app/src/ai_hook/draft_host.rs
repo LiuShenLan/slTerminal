@@ -188,6 +188,20 @@ impl HooksDraftHost {
             .any(|(key, draft)| key.layer.project() == Some(project) && draft.dirty())
     }
 
+    /// 面板销毁时释放该面板的全部层级草稿，避免键指向已销毁的 PanelId。
+    pub(crate) fn clear_panel(&mut self, panel: PanelId) -> Vec<HooksDraftKey> {
+        let mut cleared = Vec::new();
+        self.drafts.retain(|(key, _)| {
+            if key.panel == panel {
+                cleared.push(*key);
+                false
+            } else {
+                true
+            }
+        });
+        cleared
+    }
+
     /// 项目专属草稿随项目移除清理；User 草稿保留，不因项目存亡丢失。
     pub(crate) fn clear_project(&mut self, project: ProjectId) -> Vec<HooksDraftKey> {
         let mut cleared = Vec::new();
@@ -296,6 +310,29 @@ mod tests {
         assert!(applied, "正文未变时必须采用磁盘规范文本");
         assert!(!draft.dirty());
         assert_eq!(draft.text(), "{\n  \"Stop\": []\n}");
+    }
+
+    /// 面板销毁只释放该面板的草稿，其他面板与 User 层不受影响。
+    #[test]
+    fn clear_panel_removes_only_that_panel_drafts() {
+        let mut host = HooksDraftHost::default();
+        let closing = panel(11);
+        let survivor = panel(12);
+        let closing_key = HooksDraftKey {
+            panel: closing,
+            agent: AgentKind::Claude,
+            layer: HooksDraftLayer::Project(project(PROJECT_A)),
+        };
+        let survivor_key = HooksDraftKey {
+            panel: survivor,
+            ..closing_key
+        };
+        host.insert(closing_key, draft(r#"{"Stop":[]}"#));
+        host.insert(survivor_key, draft(r#"{"Stop":[]}"#));
+        let cleared = host.clear_panel(closing);
+        assert_eq!(cleared, vec![closing_key]);
+        assert!(host.get(closing_key).is_none());
+        assert!(host.get(survivor_key).is_some());
     }
 
     /// 非法 JSON 保留最后合法模型并禁用保存；修正后恢复可保存。

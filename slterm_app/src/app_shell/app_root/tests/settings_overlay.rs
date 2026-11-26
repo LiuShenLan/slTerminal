@@ -708,6 +708,68 @@ fn hooks_page_loads_saves_external_guard_and_discards(cx: &mut TestAppContext) {
     });
 }
 
+/// 关闭 Settings 面板必须释放该面板的 Hooks 草稿与文档，不留下孤儿键。
+#[gpui::test]
+fn closing_settings_panel_releases_hooks_drafts(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let claude_dir = temp.path().join("claude");
+    std::fs::create_dir_all(&claude_dir).unwrap();
+    std::fs::write(claude_dir.join("settings.json"), br#"{"hooks":{}}"#).unwrap();
+    let project_dir = temp.path().join("project");
+    std::fs::create_dir_all(&project_dir).unwrap();
+
+    let (root, mut window, _state) = open_root(cx);
+    root.update(cx, |root, _| {
+        root.replace_hooks_claude_dir_for_test(claude_dir)
+    });
+    add_project(&root, &mut window, PROJECT_A, project_dir.to_str().unwrap());
+    focus_workspace(&root, &mut window);
+    open_settings(&mut window);
+    draw_frame(&mut window);
+    let page = window.debug_bounds("settings-page-6").unwrap();
+    window.simulate_click(page.center(), Modifiers::default());
+    draw_frame(&mut window);
+    window.run_until_parked();
+    draw_frame(&mut window);
+
+    let panel = settings_panel(&root, cx, project_id(PROJECT_A)).expect("设置面板必须存在");
+    root.read_with(cx, |root, _| {
+        assert!(
+            root.hook_drafts.keys().iter().any(|key| key.panel == panel),
+            "前置：Hooks 页必须已载入草稿"
+        );
+    });
+
+    window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.close_view_from_request(
+                ViewKey::Settings {
+                    project_id: project_id(PROJECT_A),
+                },
+                BTreeMap::new(),
+                window,
+                cx,
+            )
+            .expect("设置面板必须可关闭");
+        });
+    });
+    let deadline = Instant::now() + std::time::Duration::from_secs(10);
+    while settings_panel(&root, cx, project_id(PROJECT_A)).is_some() {
+        assert!(Instant::now() < deadline, "设置面板必须完成关闭");
+        window.run_until_parked();
+    }
+    root.read_with(cx, |root, _| {
+        assert!(
+            !root.hook_drafts.keys().iter().any(|key| key.panel == panel),
+            "面板销毁后不得保留孤儿草稿"
+        );
+        assert!(
+            !root.hooks_state_has_panel_entries(panel),
+            "面板销毁后不得保留 Hooks 文档或诊断"
+        );
+    });
+}
+
 /// 项目根在编辑期间被删除：Project 层禁用、保存拒绝且不得重建配置目录。
 #[gpui::test]
 fn hooks_project_root_loss_disables_layers_and_never_recreates_config(cx: &mut TestAppContext) {

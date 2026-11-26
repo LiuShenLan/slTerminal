@@ -708,6 +708,30 @@ impl AppRoot {
         }
     }
 
+    /// 清理草稿键对应的文档与诊断；调用方负责移除草稿本身。
+    pub(super) fn forget_hooks_draft_keys(&mut self, keys: &[HooksDraftKey]) {
+        for key in keys {
+            self.hooks_editor.documents.remove(key);
+            self.hooks_editor.errors.remove(key);
+        }
+        if !keys.is_empty() {
+            self.hooks_generation = self.hooks_generation.wrapping_add(1);
+        }
+    }
+
+    /// 面板销毁：释放该面板全部层级草稿与文档，避免孤儿键指向失效 PanelId。
+    pub(super) fn discard_panel_hooks_for_close(
+        &mut self,
+        panel: slterm_workspace::PanelId,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let keys = self.hook_drafts.clear_panel(panel);
+        self.forget_hooks_draft_keys(&keys);
+        if !keys.is_empty() {
+            cx.notify();
+        }
+    }
+
     /// 丢弃：移除草稿与文档后重新载入磁盘现状。
     /// 非交互项目移除前丢弃该项目草稿：只清内存，不再发起重载。
     pub(super) fn discard_project_hooks_drafts_for_close(
@@ -715,11 +739,8 @@ impl AppRoot {
         project: ProjectId,
         cx: &mut Context<'_, Self>,
     ) {
-        for key in self.hook_drafts.clear_project(project) {
-            self.hooks_editor.documents.remove(&key);
-            self.hooks_editor.errors.remove(&key);
-        }
-        self.hooks_generation = self.hooks_generation.wrapping_add(1);
+        let keys = self.hook_drafts.clear_project(project);
+        self.forget_hooks_draft_keys(&keys);
         cx.notify();
     }
 
@@ -745,6 +766,16 @@ impl AppRoot {
         self.hooks_generation = self.hooks_generation.wrapping_add(1);
         self.request_hooks_draft(key, cx);
         cx.notify();
+    }
+
+    /// 测试观测：该面板是否仍持有 Hooks 文档或诊断。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(super) fn hooks_state_has_panel_entries(&self, panel: slterm_workspace::PanelId) -> bool {
+        self.hooks_editor
+            .documents
+            .keys()
+            .chain(self.hooks_editor.errors.keys())
+            .any(|key| key.panel == panel)
     }
 
     #[cfg(test)]

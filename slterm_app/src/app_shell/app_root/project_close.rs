@@ -547,8 +547,9 @@ impl AppRoot {
         self.side_view_persistence
             .editor_view_states()
             .remove_project(id);
-        // 项目已从快照移除：项目专属 Hooks 草稿随同一提交清理，User 草稿保留。
-        self.hook_drafts.clear_project(id);
+        // 项目已从快照移除：项目专属 Hooks 草稿与文档随同一提交清理，User 草稿保留。
+        let hooks_keys = self.hook_drafts.clear_project(id);
+        self.forget_hooks_draft_keys(&hooks_keys);
         self.commit_project_snapshot(candidate, cx);
         if was_active && let Some(next_active) = next_active {
             self.restore_project_panels(next_active, window, cx);

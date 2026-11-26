@@ -1535,6 +1535,10 @@ impl AppRoot {
                 }
             });
         }
+        // 面板销毁同时释放其 Hooks 草稿与文档，避免孤儿键指向失效 PanelId。
+        for panel_id in &panel_ids {
+            self.discard_panel_hooks_for_close(*panel_id, cx);
+        }
         cx.notify();
     }
 }
