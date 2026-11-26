@@ -643,7 +643,10 @@ fn init(cx: &mut App) {
     // 组件库必须只初始化一次,否则全局 action、菜单和主题状态重复注册。
     gpui_component::init(cx);
     // 读一次快照装全局:无热应用;渲染路径不得重复读盘。
-    let settings = config::Settings::load();
+    let (settings, settings_warning) = config::Settings::load_with_warning();
+    cx.set_global(crate::settings_state::SettingsLoadState {
+        warning: settings_warning,
+    });
     // 组件库 locale 与自有文案分层:组件内置文案跟解析后的 UiLanguage。
     gpui_component::set_locale(settings.language.gpui_component_locale());
     // 通知投递不读盘:语言只随壳快照热应用。

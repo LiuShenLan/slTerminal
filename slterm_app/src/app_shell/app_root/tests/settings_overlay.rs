@@ -49,6 +49,34 @@ fn settings_panel(
     })
 }
 
+/// 加载降级、单字段回退与写盘失败都必须在设置页出现可见状态条。
+#[gpui::test]
+fn settings_status_surfaces_load_fallback_and_save_failure(cx: &mut TestAppContext) {
+    let (root, mut window, _state) = open_root(cx);
+    root.update(cx, |root, _| {
+        root.settings_load_warning =
+            Some(crate::settings_state::SettingsLoadWarning::UnsupportedVersion(9));
+        root.settings.set_auto(
+            "ui_font_size",
+            slterm_settings::json::Value::Number(16.0),
+            Instant::now(),
+        );
+        root.settings.finish_save(
+            &[],
+            Err(std::io::Error::other("injected settings write failure")),
+            Instant::now(),
+        );
+    });
+    focus_workspace(&root, &mut window);
+    open_settings(&mut window);
+    draw_frame(&mut window);
+
+    assert!(
+        window.debug_bounds("settings-status").is_some(),
+        "设置页必须显示加载降级与写失败状态"
+    );
+}
+
 /// 无项目浮层 Hooks 页使用 Overlay 草稿键，关闭浮层即释放草稿。
 #[gpui::test]
 fn app_overlay_hooks_page_uses_overlay_draft_and_releases_it_on_close(cx: &mut TestAppContext) {

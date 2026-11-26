@@ -704,9 +704,74 @@ enum SettingsViewEvent {
 
 impl EventEmitter<SettingsViewEvent> for SettingsView {}
 
+impl SettingsView {
+    /// 设置页可见状态：加载降级、单字段回退与写盘失败都必须显式提示。
+    fn status_messages(&self, cx: &App) -> Vec<String> {
+        let language = cx.global::<crate::app_shell::config::Settings>().language;
+        let mut messages = Vec::new();
+        let Some(root) = self.root.upgrade() else {
+            return messages;
+        };
+        let root = root.read(cx);
+        match root.settings_load_warning {
+            Some(crate::settings_state::SettingsLoadWarning::Corrupted) => {
+                messages.push(
+                    language
+                        .text(crate::i18n::Message::SettingsStatusCorrupted)
+                        .to_owned(),
+                );
+            }
+            Some(crate::settings_state::SettingsLoadWarning::UnsupportedVersion(version)) => {
+                let version = version.to_string();
+                messages.push(language.format(
+                    crate::i18n::Message::SettingsStatusUnsupportedVersion,
+                    &[("version", &version)],
+                ));
+            }
+            Some(crate::settings_state::SettingsLoadWarning::ReadFailed) => {
+                messages.push(
+                    language
+                        .text(crate::i18n::Message::SettingsStatusReadFailed)
+                        .to_owned(),
+                );
+            }
+            None => {}
+        }
+        let registry = SettingsRegistry::new();
+        let invalid = registry
+            .fields()
+            .iter()
+            .filter(|definition| {
+                matches!(
+                    registry
+                        .recover(root.settings.values(), definition.key)
+                        .map(|recovery| recovery.status),
+                    Some(slterm_settings::keys::SettingRecoveryStatus::Invalid)
+                )
+            })
+            .count();
+        if invalid > 0 {
+            let count = invalid.to_string();
+            messages.push(language.format(
+                crate::i18n::Message::SettingsStatusInvalidFields,
+                &[("count", &count)],
+            ));
+        }
+        if root.settings.persist_failed() {
+            messages.push(
+                language
+                    .text(crate::i18n::Message::SettingsStatusSaveFailed)
+                    .to_owned(),
+            );
+        }
+        messages
+    }
+}
+
 impl Render for SettingsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
         let language = cx.global::<crate::app_shell::config::Settings>().language;
+        let status_messages = self.status_messages(cx);
         let selected = self.selected_page;
         let page_list = SettingsPageId::ALL
             .into_iter()
@@ -773,6 +838,22 @@ impl Render for SettingsView {
                         )
                     }),
             )
+            .when(!status_messages.is_empty(), |element| {
+                element.child(
+                    div()
+                        .debug_selector(|| "settings-status".to_owned())
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .px_4()
+                        .py_2()
+                        .border_b_1()
+                        .border_color(cx.theme().danger.opacity(0.4))
+                        .children(status_messages.into_iter().map(|message| {
+                            div().text_xs().text_color(cx.theme().danger).child(message)
+                        })),
+                )
+            })
             .child(
                 div()
                     .flex()

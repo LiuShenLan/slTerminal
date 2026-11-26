@@ -331,6 +331,7 @@ pub(crate) struct AppRoot {
     hook_drafts: crate::ai_hook::draft_host::HooksDraftHost,
     /// 设置运行值与唯一写队列：项目 Settings 与无项目浮层共享。
     settings: crate::settings_state::SettingsStore,
+    settings_load_warning: Option<crate::settings_state::SettingsLoadWarning>,
     /// AgentHooks 页的安装状态快照；None = 尚未探测。
     agent_integrations: Option<Vec<crate::ai_hook::integrations::AgentIntegration>>,
     agent_hooks_inspecting: bool,
@@ -508,6 +509,9 @@ impl AppRoot {
             });
             projects.insert(project_id, project);
         }
+        let settings_load_warning = cx
+            .try_global::<crate::settings_state::SettingsLoadState>()
+            .and_then(|state| state.warning);
         let mut root = Self {
             snapshot,
             snapshot_generation: 0,
@@ -621,6 +625,7 @@ impl AppRoot {
             settings: crate::settings_state::SettingsStore::new(
                 crate::settings_store::load_raw_settings_lenient(),
             ),
+            settings_load_warning,
             agent_integrations: None,
             agent_hooks_inspecting: false,
             agent_hooks_error: false,

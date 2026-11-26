@@ -204,9 +204,12 @@
       "reset_done": "已恢复默认设置",
       "operation_failed": "设置操作失败：{error}",
       "invalid_value": "该值不被接受",
-      "save_failed": "设置保存失败",
+      "save_failed": "设置保存失败；本次修改只在当前运行生效，重启后可能丢失。",
       "theme_imported": "已导入主题「{name}」",
-      "theme_import_failed": "主题导入失败：{error}"
+      "theme_import_failed": "主题导入失败：{error}",
+      "unsupported_version": "设置由更高版本（{version}）写入；当前使用默认值，且不会覆盖原文件。",
+      "invalid_fields": "{count} 项设置的持久值无效，已回退默认值。",
+      "read_failed": "设置读取失败；本次运行使用默认值。"
     },
     "application": {
       "group": "应用",

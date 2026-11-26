@@ -204,9 +204,12 @@
       "reset_done": "Defaults restored",
       "operation_failed": "Settings operation failed: {error}",
       "invalid_value": "Value not accepted",
-      "save_failed": "Failed to save settings",
+      "save_failed": "Settings failed to save; changes apply to this run only and may be lost after restart.",
       "theme_imported": "Imported theme \"{name}\"",
-      "theme_import_failed": "Theme import failed: {error}"
+      "theme_import_failed": "Theme import failed: {error}",
+      "unsupported_version": "Settings were written by a newer version ({version}); defaults are active and the original file will not be overwritten.",
+      "invalid_fields": "{count} setting(s) were reset to defaults because their stored values were invalid.",
+      "read_failed": "Settings could not be read; defaults are active for this run."
     },
     "application": {
       "group": "Application",

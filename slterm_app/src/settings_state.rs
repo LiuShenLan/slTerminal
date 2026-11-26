@@ -21,6 +21,25 @@ use slterm_workspace::{
 
 use crate::persistence::workspace_writer::WorkspaceWriterClient;
 
+/// 启动读取设置时需要用户可见的降级事实。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SettingsLoadWarning {
+    /// 主文件损坏，已从备份或默认值恢复；原文件已隔离保留。
+    Corrupted,
+    /// 文件由更高版本写入；当前使用默认值且写通道拒绝覆盖。
+    UnsupportedVersion(u64),
+    /// 权限／IO 读取失败；当前运行使用默认值。
+    ReadFailed,
+}
+
+/// 启动读取状态；独立全局避免第二次读盘丢失损坏／高版本事实。
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct SettingsLoadState {
+    pub(crate) warning: Option<SettingsLoadWarning>,
+}
+
+impl gpui::Global for SettingsLoadState {}
+
 /// 设置页的封闭页面集合；Hooks 页只经有 CLI 编辑能力的宿主提供。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

@@ -107,23 +107,34 @@ impl Settings {
     /// 生产入口:读 settings.json 并折算为消费视图。读取失败(权限/IO)
     /// 不把故障升级成启动失败——记录告警后回默认值,损坏三态的主文件
     /// quarantine 已在读通道内完成。
-    pub fn load() -> Self {
+    /// 启动加载同时返回用户可见降级事实；只读取一次，避免二次读盘丢失损坏分类。
+    pub fn load_with_warning() -> (Self, Option<crate::settings_state::SettingsLoadWarning>) {
         match crate::settings_store::load_settings() {
             Ok(result) => {
-                if let Some(version) = result.unsupported_version {
+                let warning = if let Some(version) = result.unsupported_version {
                     log::warn!(
                         "settings.json 版本 {version} 高于当前程序支持；使用默认值且不会覆盖原文件"
                     );
-                }
-                if result.corrupted {
+                    Some(crate::settings_state::SettingsLoadWarning::UnsupportedVersion(version))
+                } else if result.corrupted {
                     log::warn!("settings.json 损坏,已回退备份或默认值");
-                }
+                    Some(crate::settings_state::SettingsLoadWarning::Corrupted)
+                } else {
+                    None
+                };
                 // 启动是冷路径：允许读盘解析主题并预载缓存。
-                Self::from_runtime_with_theme_root(&RuntimeSettings::from_raw(&result.data), None)
+                let settings = Self::from_runtime_with_theme_root(
+                    &RuntimeSettings::from_raw(&result.data),
+                    None,
+                );
+                (settings, warning)
             }
             Err(error) => {
                 log::warn!("读取设置失败,使用默认值: {error}");
-                Self::default()
+                (
+                    Self::default(),
+                    Some(crate::settings_state::SettingsLoadWarning::ReadFailed),
+                )
             }
         }
     }

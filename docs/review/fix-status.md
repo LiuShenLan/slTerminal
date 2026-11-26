@@ -58,7 +58,7 @@
 | 主题身份不是 ThemeId/UUIDv7，导入冲突被自动改名 | 已修：自定义主题身份改为 `ThemeId`（UUIDv7），显示名与身份分离；内置主题无可持久身份；同身份/同名导入明确拒绝且零写入（提交 de837f97）；测试 `theme_identity_is_uuid_v7_and_independent_from_display_name`、`import_rejects_a_display_name_conflict_without_writing`、`import_rejects_an_identity_that_already_exists`、`fork_assigns_a_uuid_v7_identity_independent_from_the_name` |
 | ANSI 16–255 被持久化成第二份色表 | 已修：主题只保存 ANSI 0–15，16–255 统一经 `xterm_indexed_color` 派生，文档不再写 `terminal.indexed`（提交 997bdcc6）；测试 `extended_indexed_colors_are_derived_not_persisted`、`indexed_colors_are_derived_from_the_single_xterm_formula`、`resolve_indexed_falls_back_to_cube_and_grayscale` |
 | 设置损坏分流缺“高版本”和“权限/IO 只读重试” | 部分修复：新增 `settings_version` 字段，高版本读取标记 `unsupported_version` 且写通道拒绝覆盖（不隔离）；测试 `higher_settings_version_is_read_only_and_never_overwritten`、`settings_writes_stamp_the_current_version`。权限/IO 回退默认仍保留启动可用性，用户可见反馈归“设置写失败/损坏无用户可见反馈”条目 |
-| 设置写失败、损坏与单字段回退没有用户可见反馈 | 待修 |
+| 设置写失败、损坏与单字段回退没有用户可见反馈 | 已修：启动设置只读一次并把损坏／高版本／读取失败写入 `SettingsLoadState` 全局；设置页聚合加载降级、单字段 `Invalid` 回退计数与持久的写失败标记，渲染可见状态条；`save_failed` 文案明确本次运行生效、重启可能丢失；测试 `settings_status_surfaces_load_fallback_and_save_failure`、`higher_settings_version_is_read_only_and_never_overwritten` |
 | 恢复默认旁路统一设置写通道、审计与保存锁 | 已修：`settings_store::restore_default_settings_at` 共用保存锁、审计事件与 1MB 上限；测试 `settings_import_and_reset_preserve_secrets` |
 | AgentCatalog 适配器声明未被消费，CLI 名单多源 | 待修 |
 | Hooks 事件目录远小于 featureSpec 的 Claude 事件集合 | 已修：`HookEvent` 扩为 31 项全表，编辑器校验与 `hook_events()` 使用 `CLAUDE_EVENT_CATALOG`，安装器仍只注入 10 项订阅子集；测试 `legal_catalog_events_save_even_when_not_installed`、`claude_event_catalog_covers_the_full_feature_spec`（提交 21eb93f7） |
