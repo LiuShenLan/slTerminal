@@ -55,7 +55,7 @@
 
 ### 关闭与读取安全
 
-- `app.close`、`panel.close`、`project.remove` 和更新安装复用 CloseCoordinator；调用方必须显式提供 Document、Hooks 和运行终端处置策略，缺少决策返回 decision_required。
+- `app.close`、`panel.close`、`project.remove` 和更新安装复用 CloseCoordinator；调用方必须显式提供 Document 与 Hooks 处置策略，缺少决策返回 decision_required。运行终端不提供保留策略：非交互关闭按作用域停止目标 PTY，等待、保留或取消需由交互界面完成。
 - 关闭开始冻结新写，完成或明确终止在途请求；读请求只能访问当前仍获授权的资源。关闭服务撤销监听、端点记录和线程，不留孤儿。
 - 终端读取使用不可变缓冲快照和分页游标，响应不超过 1 MiB；新输出使旧游标或 revision 失效。Git diff、Agent read 等可能超限的读取也使用有界页面与游标续读，不能把截断内容伪装成完整结果。读取不返回凭据、剪贴板或未授权文件内容。
 - 破坏操作使用专属版本／指纹前置条件，不使用通用 `force:true`；审计只记录允许字段与哈希，不记录正文或 token。

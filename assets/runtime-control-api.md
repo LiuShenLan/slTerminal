@@ -16,7 +16,7 @@
 - 终端与 Agent：`terminal.input` 原样写 PTY，`terminal.execute` 只接受单行并追加一次回车；写目标由稳定 `terminal_id` 与 `generation` 共同定位，`terminal.read`／`terminal.wait` 与 `agent.read`／`agent.wait` 使用分页游标与 revision。Agent 身份由同一 PTY 映射派生，写方法必须同时匹配 `agent_id + terminal_id + generation`。
 - 布局与面板：Project／PanelGroup／Panel 方法只使用稳定身份与规范 ViewKey JSON 文本；`panel.open_file`、`panel.save` 与 `panel.close` 复用同一 Document 打开、保存与关闭链，完成回执在落定后发送。
 - Git：`git.status`／`git.diff` 只读；`git.rollback`／`git.delete` 是带 `expected` 前置条件的破坏写，`git.open_diff`／`git.open_deleted` 只接受与当前状态映射一致的条目；所有仓库读取与写盘都在连接线程内后台执行。
-- 非交互关闭：`app.close`、`panel.close` 与 `project.remove` 必须显式提供 Document／Hooks 处置策略；缺少策略时返回 `decision_required`，不弹模态、不自动丢弃。`app.focus` 只前置主窗口。
+- 非交互关闭：`app.close`、`panel.close` 与 `project.remove` 必须显式提供 Document／Hooks 处置策略；缺少策略时返回 `decision_required`，不弹模态、不自动丢弃。运行终端没有保留策略：关闭按作用域停止目标 PTY，等待、保留或取消只由交互界面提供。`app.focus` 只前置主窗口。
 - 响应的 `result` 与 `error` 必须恰好一个存在。标准 JSON-RPC 数值码与封闭 `error.data.code` 不得混用。
 
 ## 验收与测试
