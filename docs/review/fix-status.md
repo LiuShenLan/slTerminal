@@ -28,7 +28,7 @@
 | 启动恢复对缺失/不可解码的干净 Document 不建面板 | 已修：新增 `DocumentRecoveryKind::Unavailable` 占位与 typed 文案，未知 Document 不再 `continue` 丢面板，可由页签关闭入口移除；测试 `missing_clean_document_restores_unavailable_placeholder` |
 | Agent 根路径变更（同 id）沿用旧 ViewState | 已修：`agent_files_sync` 把「同 id 不同路径」视为移除并重登记，旧持久分区、展开目录与当前行一并清理；测试改走真实同步入口 `agent_root_path_change_resets_state_and_authorization` |
 | 授权代次在生产路径恒为零 | 已修：新增进程级 `app_shell::authorization` 代次单源，项目移除／重定位与 Agent 根变更推进代次；Document 保存、关闭保存、Explorer 重命名、Git 回滚/删除与各 PathPolicy 判定均读取真实代次，执行前重读最新值；测试 `project_relocation_advances_the_authorization_generation`、`agent_root_path_change_resets_state_and_authorization` |
-| GitShow 非法 UTF-8 的合同冲突 | 需裁决 |
+| GitShow 非法 UTF-8 的合同冲突 | 已裁决为显式编码错误：非法 UTF-8 不生成替换字符伪文本，只显示错误与系统打开；featureSpec 与 git 模块合同同步 |
 
 ## 设置、主题、导航与 Agent
 
@@ -280,7 +280,7 @@
 | README、CHANGELOG 与发布说明的用户能力清单停留在旧栈 | 待修 |
 | 被排除的图片面板实现仍编译存在 | 待修 |
 | featureSpec 未覆盖已实现的壁纸与屏幕检测 | 待修 |
-| Mermaid 终态在 featureSpec、devPlan 与进度之间构成合同冲突 | 需裁决 |
+| Mermaid 终态在 featureSpec、devPlan 与进度之间构成合同冲突 | 已裁决为延期：featureSpec 与验收场景明确当前只显示普通代码块，静态图实现另行评审；traceability 的延期状态不再与 featureSpec 冲突 |
 | devPlan core crate 依赖方向与实际策略相反 | 待修 |
 | devPlan Runtime 方法表写错 operation.get/wait | 待修 |
 | 进度与追溯文档保留测试通过计数、过期状态锚与计划期自述 | 待修 |
