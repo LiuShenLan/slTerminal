@@ -36,13 +36,16 @@ impl fmt::Display for DocumentCloseError {
 
 impl std::error::Error for DocumentCloseError {}
 
-/// 按 Document 去重收集；返回对象直接进入统一 CloseIntent<CloseTarget>。
-pub fn collect_document_close(
+struct ClosingScope {
+    unique: Vec<ViewKey>,
+    all_views: Vec<ViewKey>,
+    documents: BTreeSet<DocumentId>,
+}
+
+fn closing_scope(
     snapshot: &ProjectSnapshot,
-    registry: &DocumentRegistry,
     closing: &[ViewKey],
-    decisions: &BTreeMap<DocumentId, CloseDecision>,
-) -> Result<Vec<CloseObject<CloseTarget>>, DocumentCloseError> {
+) -> Result<ClosingScope, DocumentCloseError> {
     let mut unique = Vec::new();
     for view in closing {
         if unique.contains(view) {
@@ -59,15 +62,62 @@ pub fn collect_document_close(
     if unique.iter().any(|view| !all_views.contains(view)) {
         return Err(DocumentCloseError::ViewNotFound);
     }
-    let closing_documents = unique
+    let documents = unique
         .iter()
         .filter_map(view_document)
         .collect::<BTreeSet<_>>();
-    if let Some(id) = decisions.keys().find(|id| !closing_documents.contains(id)) {
+    Ok(ClosingScope {
+        unique,
+        all_views,
+        documents,
+    })
+}
+
+fn has_external_reference(scope: &ClosingScope, id: DocumentId) -> bool {
+    scope
+        .all_views
+        .iter()
+        .any(|view| view_document(view) == Some(id) && !scope.unique.contains(view))
+}
+
+/// 关闭集合中必须取得 Save／Discard 决定的最后引用脏 Document。
+///
+/// 与 [`collect_document_close`] 共用同一引用与脏态判据：集合外仍有引用或
+/// 正文干净都不进入决定面；占位视图没有运行会话，不承载可保存正文，跳过。
+pub fn last_reference_dirty_documents(
+    snapshot: &ProjectSnapshot,
+    registry: &DocumentRegistry,
+    closing: &[ViewKey],
+) -> Result<Vec<DocumentId>, DocumentCloseError> {
+    let scope = closing_scope(snapshot, closing)?;
+    let mut required = Vec::new();
+    for id in &scope.documents {
+        let Some(session) = registry.session(*id) else {
+            continue;
+        };
+        if !has_external_reference(&scope, *id) && session.is_dirty() {
+            required.push(*id);
+        }
+    }
+    Ok(required)
+}
+
+/// 按 Document 去重收集；返回对象直接进入统一 CloseIntent<CloseTarget>。
+pub fn collect_document_close(
+    snapshot: &ProjectSnapshot,
+    registry: &DocumentRegistry,
+    closing: &[ViewKey],
+    decisions: &BTreeMap<DocumentId, CloseDecision>,
+) -> Result<Vec<CloseObject<CloseTarget>>, DocumentCloseError> {
+    let scope = closing_scope(snapshot, closing)?;
+    if let Some(id) = decisions.keys().find(|id| !scope.documents.contains(id)) {
         return Err(DocumentCloseError::UnexpectedDecision(*id));
     }
+    let unique = &scope.unique;
+    let all_views = &scope.all_views;
 
-    closing_documents
+    scope
+        .documents
         .into_iter()
         .map(|id| {
             let session = registry
@@ -310,6 +360,39 @@ mod tests {
         let effect = coordinator.collected(attempt, intent).unwrap();
 
         assert!(matches!(effect, CloseEffect::Save { .. }));
+    }
+
+    /// 决定面只收最后引用且脏的 Document；共享引用与干净正文都不进入。
+    #[test]
+    fn last_reference_decisions_skip_shared_and_clean_documents() {
+        use super::last_reference_dirty_documents;
+
+        let snapshot = snapshot();
+        let registry = documents(true);
+        let (editor, markdown) = views();
+        let (id, _, _) = ids();
+
+        assert_eq!(
+            last_reference_dirty_documents(&snapshot, &registry, std::slice::from_ref(&editor))
+                .unwrap(),
+            Vec::<DocumentId>::new(),
+            "集合外仍有引用时不得要求决定"
+        );
+        assert_eq!(
+            last_reference_dirty_documents(
+                &snapshot,
+                &registry,
+                &[editor.clone(), markdown.clone()]
+            )
+            .unwrap(),
+            vec![id]
+        );
+        assert!(
+            last_reference_dirty_documents(&snapshot, &documents(false), &[editor, markdown])
+                .unwrap()
+                .is_empty(),
+            "干净正文不得进入决定面"
+        );
     }
 
     #[test]

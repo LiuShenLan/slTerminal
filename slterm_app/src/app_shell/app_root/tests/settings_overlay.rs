@@ -1409,22 +1409,17 @@ fn dirty_hooks_drafts_block_panel_close(cx: &mut TestAppContext) {
             )
         })
     });
-    assert!(matches!(result, Err(AppRootError::HooksDraftPending)));
+    assert!(result.is_ok(), "脏草稿必须先进入统一决定面");
+    assert!(root.read_with(cx, |root, _| root.close_decision.is_some()));
     assert!(settings_panel(&root, cx, project_id(PROJECT_A)).is_some());
     root.read_with(cx, |root, _| {
         assert!(root.hook_drafts.get(panel_key).is_some());
     });
 
-    root.update(cx, |root, cx| {
-        root.discard_hooks_owner_for_close(HooksDraftOwner::Panel(panel), cx);
-    });
     window.update(|window, cx| {
         root.update(cx, |root, cx| {
-            root.close_view_from_request(
-                ViewKey::Settings {
-                    project_id: project_id(PROJECT_A),
-                },
-                BTreeMap::new(),
+            root.resolve_close_decision(
+                crate::app_shell::app_root::close_decision::CloseDecisionChoice::Discard,
                 window,
                 cx,
             )
@@ -1432,6 +1427,10 @@ fn dirty_hooks_drafts_block_panel_close(cx: &mut TestAppContext) {
         });
     });
     window.run_until_parked();
+    assert!(settings_panel(&root, cx, project_id(PROJECT_A)).is_none());
+    root.read_with(cx, |root, _| {
+        assert!(root.hook_drafts.get(panel_key).is_none());
+    });
 }
 
 /// 应用级设置浮层存在脏 Hooks 草稿时，Escape 关闭必须被拒绝。
@@ -1457,12 +1456,20 @@ fn dirty_hooks_drafts_block_overlay_close(cx: &mut TestAppContext) {
         root.read_with(cx, |root, _| root.settings_overlay.is_some()),
         "脏 Hooks 草稿不得被浮层关闭静默丢弃"
     );
-    root.update(cx, |root, cx| {
-        root.discard_hooks_owner_for_close(HooksDraftOwner::Overlay, cx);
+    assert!(root.read_with(cx, |root, _| root.close_decision.is_some()));
+    window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.resolve_close_decision(
+                crate::app_shell::app_root::close_decision::CloseDecisionChoice::Discard,
+                window,
+                cx,
+            )
+            .unwrap();
+        });
     });
-    window.simulate_keystrokes("escape");
     window.run_until_parked();
     assert!(root.read_with(cx, |root, _| root.settings_overlay.is_none()));
+    assert!(root.read_with(cx, |root, _| root.hook_drafts.get(key).is_none()));
 }
 
 /// 应用关闭遇到任何脏 Hooks 草稿必须拒绝并保持窗口。

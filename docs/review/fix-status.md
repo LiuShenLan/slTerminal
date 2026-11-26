@@ -6,13 +6,13 @@
 
 | 问题 | 状态 |
 |---|---|
-| 交互式关闭没有保存/丢弃/取消决定入口 | 待修 |
+| 交互式关闭没有保存/丢弃/取消决定入口 | 已修：新增 AppRoot 模态关闭决定面（保存／丢弃／取消），窗口关闭、组内关闭其他／全部、单面板关闭、项目移除与设置浮层关闭在存在最后引用脏 Document 或脏 Hooks 草稿时先取得显式处置，再回到既有 `start_application_close_with_decisions`／批量关闭／`remove_project_with_decisions` 链；Hooks 草稿只能丢弃或取消，保存仍须在 Hooks 页显式完成；新增 core `last_reference_dirty_documents` 与 `collect_document_close` 共用引用与脏态判据；测试 `application_close_saves_or_cancels_through_the_decision_surface`、`integration_last_reference_close`、`dirty_hooks_drafts_block_panel_close`、`dirty_hooks_drafts_block_overlay_close`、`project_remove_requires_hooks_drafts_resolved`、`last_reference_decisions_skip_shared_and_clean_documents` |
 | Commit 永久删除确认把任意失败升级为绕过执行体的强删 | 已修：永久删除经 `plan_delete_permanent` + `execute` 复用同一身份/父目录/链接/授权复核；`RecycleUnavailable` 单独分类，只有回收站失败可升级确认（提交 cd140797）；测试 `permanent_retry_is_offered_only_for_recycle_unavailable`、`permanent_delete_never_bypasses_the_shared_operation_executor`、`recycle_unavailable_is_distinct_from_other_delete_failures` |
 | 未暂存删除回滚删除任意同内容未跟踪文件 | 已修：镜像候选限定同父目录且位于项目写根内，删除改经 `plan_delete`/`execute` 复核身份与授权（提交 f87962bf）；测试 `unstaged_delete_rollback_never_removes_same_content_files_outside_the_parent`、`unstaged_delete_rollback_keeps_mirrors_outside_the_write_root`、`commit_unstaged_rename_rollback` |
 | 文件树 watcher 未接线 | 已修：AppRoot 按已打开的 Explorer／Commit／AgentFiles 登记 `WatcherService` 根，侧栏不可见时暂停 OS watch；`FsPending::dirs` 经 200ms／1s 合并后回投，Explorer 只重读受影响目录（含父目录），Commit 重取状态，Agent 根重新同步；测试 `explorer_directory_events_refresh_the_visible_tree`、`explorer_watcher_follows_sidebar_visibility`、`watcher_burst_coalesces_for_two_hundred_milliseconds` |
 | 外部冲突与另存为没有生产落点 | 待修 |
 | 恢复失败分支跳过局部关闭段，已收集决定被丢弃 | 已修：恢复失败会话复用 `ApplicationClose` 状态机，`persist_intent=false` 时仍执行 Save、StopPty、Cleanup 与全局 flush，只跳过持久关闭意图；测试 `recovery_failure_app_close_saves_documents_and_stops_terminals` |
-| Hooks 草稿未进入应用退出与面板关闭守卫 | 已修：应用退出、单面板／批量关闭与设置浮层关闭遇到脏草稿均拒绝并提示先保存或丢弃；面板/所有者销毁取消在途载入／保存，迟到回执按所有者存活复核且不复活草稿；Runtime 面板关闭映射 `decision_required`；测试 `dirty_hooks_drafts_block_panel_close`、`dirty_hooks_drafts_block_overlay_close`、`dirty_hooks_drafts_block_application_close`、`hooks_load_receipt_never_resurrects_a_destroyed_owner` |
+| Hooks 草稿未进入应用退出与面板关闭守卫 | 已修：应用退出、单面板／批量关闭、项目移除与设置浮层关闭遇到脏草稿先进入统一关闭决定面（丢弃或取消，保存须在 Hooks 页显式完成）；面板/所有者销毁取消在途载入／保存，迟到回执按所有者存活复核且不复活草稿；Runtime 面板关闭映射 `decision_required`；测试 `dirty_hooks_drafts_block_panel_close`、`dirty_hooks_drafts_block_overlay_close`、`dirty_hooks_drafts_block_application_close`、`hooks_load_receipt_never_resurrects_a_destroyed_owner` |
 | 项目移除 Save 阶段没有代次重收集，失配后永久失败 | 已修：`needs_recollect` 标记 RevisionMismatch，显式重试经 `recollect_project_close` 以最新代次和新决定重建意图（提交 4bfe0605）；测试 `project_remove_save_revision_mismatch_recollects_with_new_decisions` |
 | 关闭保存授权漏掉 AgentRoot 能力并集 | 已修：`document_close_grants` 复用 `document_grants`，关闭保存叠加可写 AgentRoot（提交 599debed）；测试 `agent_root_capability_union_and_revoke` |
 | 页签缺少脏标记、CLI 状态与单面板关闭入口 | 已修：页签投影共享 Document 脏标记与 AgentHub 状态（工作=实心圆／阻塞=实心方／完成=空心圆），每页签带关闭按钮；新增 `CloseActivePanel`（`ctrl-w`）复用批量关闭链（提交 e9c59e61 及形状区分补充）；测试 `tab_bar_projects_dirty_status_and_closes_a_single_panel`、`close_active_panel_command_closes_a_focused_editor` |

@@ -44,9 +44,27 @@ impl AppRoot {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> bool {
-        // 交互式关闭没有 Hooks 决定面：有脏草稿时保持窗口，要求先保存或丢弃。
+        // Hooks 草稿没有自动保存通道：只要存在未提交编辑就先进入决定面。
         if self.hook_drafts.dirty_drafts().next().is_some() {
-            super::events::notify_hooks_draft_close_pending(cx);
+            let closing = self
+                .snapshot
+                .registry()
+                .projects()
+                .iter()
+                .flat_map(|project| project.layout().view_keys())
+                .collect::<Vec<_>>();
+            let dirty_documents = self.dirty_documents_for_views(&closing).unwrap_or_default();
+            if let Err(error) = self.open_close_decision(
+                super::close_decision::CloseDecisionScope::Application,
+                dirty_documents,
+                Vec::new(),
+                true,
+                window,
+                cx,
+            ) {
+                log::warn!("应用关闭决定面打开失败: {error:?}");
+                super::events::notify_hooks_draft_close_pending(cx);
+            }
             return false;
         }
         match self.start_application_close_with_decisions(Default::default(), true, window, cx) {
@@ -55,16 +73,29 @@ impl AppRoot {
             Ok(ApplicationCloseStart::Rejected) => false,
             Err(error) => {
                 log::warn!("application close requires document decisions: {error}");
-                let count = self
-                    .documents
-                    .ids()
-                    .filter(|id| {
-                        self.documents
-                            .session(*id)
-                            .is_some_and(|session| session.is_dirty())
-                    })
-                    .count();
-                super::events::notify_application_close_decision_required(count, cx);
+                let closing = self
+                    .snapshot
+                    .registry()
+                    .projects()
+                    .iter()
+                    .flat_map(|project| project.layout().view_keys())
+                    .collect::<Vec<_>>();
+                let dirty_documents = self.dirty_documents_for_views(&closing).unwrap_or_default();
+                let hooks_dirty = self.hook_drafts.dirty_drafts().next().is_some();
+                if let Err(open_error) = self.open_close_decision(
+                    super::close_decision::CloseDecisionScope::Application,
+                    dirty_documents.clone(),
+                    Vec::new(),
+                    hooks_dirty,
+                    window,
+                    cx,
+                ) {
+                    log::warn!("应用关闭决定面打开失败: {open_error:?}");
+                    super::events::notify_application_close_decision_required(
+                        dirty_documents.len(),
+                        cx,
+                    );
+                }
                 false
             }
         }

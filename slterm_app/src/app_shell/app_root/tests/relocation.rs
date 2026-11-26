@@ -176,18 +176,21 @@ fn project_remove_requires_hooks_drafts_resolved(cx: &mut TestAppContext) {
             root.remove_project(project_id(PROJECT_A), window, cx)
         })
     });
-    assert!(
-        matches!(blocked, Err(AppRootError::HooksDraftPending)),
-        "项目专属未提交草稿必须拒绝移除: {blocked:?}"
-    );
+    assert!(blocked.is_ok(), "项目专属未提交草稿必须先进入决定面");
+    assert!(root.read_with(cx, |root, _| root.close_decision.is_some()));
     root.read_with(cx, |root, _| {
         assert!(
             root.snapshot
                 .registry()
                 .project(project_id(PROJECT_A))
                 .is_some(),
-            "拒绝后项目关系必须保持"
+            "决定面打开时项目关系必须保持"
         );
+    });
+    window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.cancel_close_decision(window, cx).unwrap()
+        });
     });
 
     root.update(cx, |root, _| {

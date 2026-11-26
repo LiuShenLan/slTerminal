@@ -1078,14 +1078,22 @@ impl AppRoot {
         Ok(())
     }
 
-    fn close_settings_overlay(
+    pub(super) fn close_settings_overlay(
         &mut self,
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Result<(), AppRootError> {
         if self.hook_drafts.owner_has_dirty(HooksDraftOwner::Overlay) {
-            super::events::notify_hooks_draft_close_pending(cx);
-            return Err(AppRootError::HooksDraftPending);
+            // 脏草稿先进入统一决定面；丢弃后再次关闭即正常释放浮层。
+            self.open_close_decision(
+                super::close_decision::CloseDecisionScope::SettingsOverlay,
+                Vec::new(),
+                Vec::new(),
+                true,
+                window,
+                cx,
+            )?;
+            return Ok(());
         }
         let Some(host) = self.settings_overlay.take() else {
             return Ok(());

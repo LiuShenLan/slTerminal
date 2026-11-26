@@ -42,7 +42,7 @@ pub(super) struct LocalTerminalBatchClose {
 }
 
 #[derive(Clone, Copy)]
-enum GroupCloseMode {
+pub(super) enum GroupCloseMode {
     Others,
     All,
 }
@@ -80,7 +80,7 @@ impl AppRoot {
         )
     }
 
-    fn close_group_from_request(
+    pub(super) fn close_group_from_request(
         &mut self,
         group_id: PanelGroupId,
         mode: GroupCloseMode,
@@ -126,6 +126,32 @@ impl AppRoot {
         if matches!(mode, GroupCloseMode::Others) {
             self.panel_for_view(project_id, &active, cx)?;
         }
+        // 交互路径缺显式决定：先经统一决定面取得处置，再回到同一关闭链。
+        if document_decisions.is_empty() {
+            let dirty_documents = self.dirty_documents_for_views(&closing)?;
+            let mut hooks_panels = Vec::new();
+            for view in &closing {
+                if let Ok(panel) = self.panel_for_view(project_id, view, cx) {
+                    hooks_panels.push(panel);
+                }
+            }
+            let hooks_panels = self.dirty_hooks_panels(hooks_panels);
+            if !dirty_documents.is_empty() || !hooks_panels.is_empty() {
+                let others_only = matches!(mode, GroupCloseMode::Others);
+                self.open_close_decision(
+                    super::close_decision::CloseDecisionScope::Group {
+                        group_id,
+                        others_only,
+                    },
+                    dirty_documents,
+                    hooks_panels.clone(),
+                    !hooks_panels.is_empty(),
+                    window,
+                    cx,
+                )?;
+                return Ok(());
+            }
+        }
 
         self.begin_views_close(
             project_id,
@@ -162,6 +188,24 @@ impl AppRoot {
             return Err(AppRootError::ProjectNotActive);
         }
         let group_id = self.group_for_view(project_id, &view)?;
+        if document_decisions.is_empty() {
+            let dirty_documents = self.dirty_documents_for_views(std::slice::from_ref(&view))?;
+            let hooks_panels = self
+                .panel_for_view(project_id, &view, cx)
+                .map(|panel| self.dirty_hooks_panels([panel]))
+                .unwrap_or_default();
+            if !dirty_documents.is_empty() || !hooks_panels.is_empty() {
+                self.open_close_decision(
+                    super::close_decision::CloseDecisionScope::View { view },
+                    dirty_documents,
+                    hooks_panels.clone(),
+                    !hooks_panels.is_empty(),
+                    window,
+                    cx,
+                )?;
+                return Ok(());
+            }
+        }
         self.begin_views_close(
             project_id,
             group_id,

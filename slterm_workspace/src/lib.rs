@@ -30,7 +30,9 @@ pub use close::{
 pub use diff_binding::{
     DiffBindingError, diff_binding_from_canonical_json, diff_binding_to_canonical_json,
 };
-pub use document_close::{DocumentCloseError, collect_document_close};
+pub use document_close::{
+    DocumentCloseError, collect_document_close, last_reference_dirty_documents,
+};
 pub use identity::{PanelGroupId, ProjectId, StableIdError, TerminalId};
 pub use panel::{PanelId, PanelIdAllocator, PanelIdExhausted};
 pub use project_layout::{

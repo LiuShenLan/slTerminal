@@ -1294,21 +1294,24 @@ fn integration_last_reference_close(cx: &mut TestAppContext) {
     );
     activate_project(&root, &mut window, PROJECT_B);
     let before = root.read_with(cx, |root, _| root.snapshot().clone());
-    assert!(matches!(
-        execute_batch(
-            &root,
-            &mut window,
-            CommandId::CloseAllViews,
-            group_id(GROUP_B),
-        ),
-        Err(AppRootError::DocumentClose(
-            slterm_workspace::DocumentCloseError::MissingDecision(missing)
-        )) if missing == id
-    ));
+    // 最后引用且有脏正文：先打开决定面，不建立任何关闭意图。
+    execute_batch(
+        &root,
+        &mut window,
+        CommandId::CloseAllViews,
+        group_id(GROUP_B),
+    )
+    .unwrap();
+    assert!(root.read_with(cx, |root, _| root.close_decision.is_some()));
     assert_eq!(
         root.read_with(cx, |root, _| root.snapshot().clone()),
         before
     );
+    window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.cancel_close_decision(window, cx).unwrap()
+        });
+    });
     assert_eq!(
         root.read_with(cx, |root, cx| {
             let view = ViewKey::Editor {

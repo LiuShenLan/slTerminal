@@ -4,6 +4,7 @@ mod agent_files;
 mod application_close;
 mod batch_close;
 pub(crate) mod close_coordinator;
+mod close_decision;
 mod command_registry;
 mod commands;
 mod commit;
@@ -330,6 +331,8 @@ pub(crate) struct AppRoot {
     layout_menu: Option<LayoutMenu>,
     tab_list_menu: Option<TabListMenu>,
     language_selector_menu: Option<language_selector::LanguageSelectorMenu>,
+    /// 关闭决定面：脏 Document 与 Hooks 草稿的唯一交互处置入口。
+    close_decision: Option<close_decision::PendingCloseDecision>,
     settings_overlay: Option<settings_overlay::SettingsOverlayHost>,
     side_view_persistence: AppRootPersistence,
     /// Hooks 草稿只按「面板实例＋CLI＋层级」隔离存活；项目移除与根重定位前守卫。
@@ -635,6 +638,7 @@ impl AppRoot {
             layout_menu: None,
             tab_list_menu: None,
             language_selector_menu: None,
+            close_decision: None,
             settings_overlay: None,
             side_view_persistence: persistence,
             hook_drafts: crate::ai_hook::draft_host::HooksDraftHost::default(),

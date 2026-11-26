@@ -36,6 +36,25 @@ impl AppRoot {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Result<(), AppRootError> {
+        // 交互移除先经统一决定面处置脏正文与 Hooks 草稿。
+        let project_views = self
+            .snapshot
+            .registry()
+            .project(id)
+            .map(|project| project.layout().view_keys())
+            .unwrap_or_default();
+        let dirty_documents = self.dirty_documents_for_views(&project_views)?;
+        let hooks_dirty = self.hook_drafts.project_has_drafts(id);
+        if !dirty_documents.is_empty() || hooks_dirty {
+            return self.open_close_decision(
+                super::close_decision::CloseDecisionScope::Project { project_id: id },
+                dirty_documents,
+                Vec::new(),
+                hooks_dirty,
+                window,
+                cx,
+            );
+        }
         self.remove_project_with_decisions(id, Default::default(), false, window, cx)
     }
 

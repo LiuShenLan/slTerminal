@@ -475,6 +475,75 @@ fn application_close_requires_decision_when_autosave_is_disabled(cx: &mut TestAp
         .unwrap();
 }
 
+/// 交互关闭经决定面取消或保存；两条路径都不绕过统一关闭链。
+#[gpui::test]
+fn application_close_saves_or_cancels_through_the_decision_surface(cx: &mut TestAppContext) {
+    use crate::app_shell::app_root::close_decision::CloseDecisionChoice;
+
+    let mut fixture = application_markdown_fixture(cx, false);
+    assert!(!fixture.window.simulate_close());
+    assert!(
+        fixture
+            .root
+            .read_with(cx, |root, _| root.close_decision.is_some())
+    );
+    draw_frame(&mut fixture.window);
+    for selector in [
+        "close-decision-dialog",
+        "close-decision-save",
+        "close-decision-discard",
+        "close-decision-cancel",
+    ] {
+        assert!(
+            fixture.window.debug_bounds(selector).is_some(),
+            "决定面必须渲染 {selector}"
+        );
+    }
+    fixture.window.update(|window, cx| {
+        fixture
+            .root
+            .update(cx, |root, cx| root.cancel_close_decision(window, cx))
+            .unwrap();
+    });
+    assert!(
+        fixture
+            .root
+            .read_with(cx, |root, _| root.close_decision.is_none())
+    );
+    assert!(!fixture.root.read_with(cx, |root, _| root.close_completed));
+    assert_eq!(std::fs::read_to_string(&fixture.source).unwrap(), "old\n");
+    assert!(fixture.root.read_with(cx, |root, _| {
+        root.documents.session(fixture.document).unwrap().is_dirty()
+    }));
+
+    assert!(!fixture.window.simulate_close());
+    assert!(
+        fixture
+            .root
+            .read_with(cx, |root, _| root.close_decision.is_some())
+    );
+    fixture.window.update(|window, cx| {
+        fixture
+            .root
+            .update(cx, |root, cx| {
+                root.resolve_close_decision(CloseDecisionChoice::Save, window, cx)
+            })
+            .unwrap();
+    });
+    fixture.window.run_until_parked();
+    assert_eq!(
+        std::fs::read_to_string(&fixture.source).unwrap(),
+        "local old\n"
+    );
+    assert!(fixture.root.read_with(cx, |root, _| root.close_completed));
+    drop(fixture.root);
+    cx.update(|_| {});
+    fixture
+        .runtime
+        .shutdown(ControlPlaneCleanup::Succeeded)
+        .unwrap();
+}
+
 #[gpui::test]
 fn application_exit_commits_intent_and_stops_pty_before_window_destroy(cx: &mut TestAppContext) {
     let temp = tempfile::tempdir().unwrap();
