@@ -872,11 +872,20 @@
       ]
     },
     "MethodKind": {
-      "description": "方法读写类别：查询无副作用，写操作必须携带幂等语义。",
-      "type": "string",
-      "enum": [
-        "query",
-        "mutation"
+      "description": "方法副作用类别：查询无副作用，写操作改变应用事实，连接级方法改变连接生命周期。",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "query",
+            "mutation"
+          ]
+        },
+        {
+          "description": "注册或结束连接级状态（例如事件订阅）；不能在同一普通请求循环中重试。",
+          "type": "string",
+          "const": "connection"
+        }
       ]
     },
     "MutationParams": {

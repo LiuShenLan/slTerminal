@@ -1350,6 +1350,13 @@ fn describe_lists_the_method_registry_with_contract_hashes() {
     assert_eq!(runtime_describe.scopes, [ControlScope::Runtime]);
     assert_eq!(runtime_describe.kind, MethodKind::Query);
     assert!(runtime_describe.idempotent);
+    let subscribe = describe
+        .methods
+        .iter()
+        .find(|method| method.method == "events.subscribe")
+        .unwrap();
+    assert_eq!(subscribe.kind, MethodKind::Connection);
+    assert!(!subscribe.idempotent, "订阅连接不得宣称可安全重试");
     let encoded = serde_json::to_value(&describe).unwrap();
     assert_eq!(encoded["methods"][1]["kind"], "query");
     assert_eq!(encoded["methods"][1]["scopes"][0], "runtime");

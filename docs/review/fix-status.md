@@ -220,7 +220,7 @@
 | 快照不暴露布局树与分割几何，resize 路径不可推导且视口由客户端自报 | 待修 |
 | 等待操作不能因客户端断开而取消 | 已修：`terminal.wait`／`agent.wait` 与 `operation.wait` 每轮非阻塞探测连接 EOF，断开即返回 Closing 并停止轮询；测试 `runtime_operation_wait_cancels_when_the_client_disconnects` |
 | `runtime_token_absent_from_materials` 锚只覆盖诊断材料 | 待修 |
-| 注册表 kind/idempotent 语义与真实副作用不符 | 待修 |
+| 注册表 kind/idempotent 语义与真实副作用不符 | 已修：新增 `MethodKind::Connection`，`events.subscribe`／`events.unsubscribe` 登记为连接级且不可重试，`instance.handover` 取消幂等声明；describe 与 schema 同步暴露；测试 `connection_methods_and_handover_do_not_claim_retry_safety`、`describe_lists_the_method_registry_with_contract_hashes` |
 | 握手后的解析失败直接断开连接 | 已修：认证后协议解析失败在可取到 `id` 时返回封闭 `InvalidRequest` 并保留连接，无法解析 `id` 才断开；首包认证仍不返回协议预言机；测试 `local_control_authenticated_parse_failure_keeps_the_connection` |
 | 分页与响应预算按原始字节估算 | 待修 |
 | 分页游标不绑定资源身份，也接受非 UTF-8 字符边界偏移 | 已修：`ReadCursor` v2 绑定资源身份散列（终端＋agent 身份、Git 项目＋路径），偏移落在 UTF-8 续字节立即失效；测试 `cursors_are_bound_to_resource_identity_and_character_boundaries`、`stale_generation_or_revision_invalidates_the_cursor` |

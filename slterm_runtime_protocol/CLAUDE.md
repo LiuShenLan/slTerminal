@@ -6,7 +6,7 @@
 
 - **旧协议不回流**：不得恢复 Runtime v1 方法、独立 handover schema、token 环境变量或端口文件凭据。原因：目标协议统一由 LocalControlServer 与 v2 schema 承载。边界：crate 边界保留不等于提供兼容入口。
 - **不预实现目标协议**：没有对应实现任务时不得先加占位 DTO、空方法族或序列化壳。新增协议以 `docs/devPlan/design/runtime.md` 为合同。
-- **方法注册表单源**：线缆方法名、可用作用域、读写类别、幂等语义与参数／结果 schema 只在本 crate 的方法注册表登记；hello 能力摘要与 `runtime.describe` 的方法清单都由注册表派生，schema 入口按方法遍历。原因：路由、capabilities、describe 与 schema 漂移会让客户端观察到不存在的合同。边界：注册表只登记真实可用方法，作用域集合表达方法合同的可用面，服务端的认证与开放面仍由各作用域策略决定；新增方法先登记注册表，再接线服务器与生成资产。
+- **方法注册表单源**：线缆方法名、可用作用域、副作用类别、重试语义与参数／结果 schema 只在本 crate 的方法注册表登记；hello 能力摘要与 `runtime.describe` 的方法清单都由注册表派生，schema 入口按方法遍历。原因：路由、capabilities、describe 与 schema 漂移会让客户端观察到不存在的合同。边界：注册表只登记真实可用方法，作用域集合表达方法合同的可用面，服务端的认证与开放面仍由各作用域策略决定；新增方法先登记注册表，再接线服务器与生成资产。事件订阅／退订登记为连接级类别，handover 没有幂等键，二者不得宣称可安全重试。
 - **操作状态只前进**：只允许 `Queued → Running` 与 `Running → Succeeded｜Failed｜Cancelled｜OutcomeUnknown`。原因：跳过执行或终态复活会破坏幂等查询与恢复事实。边界：`OutcomeUnknown` 是可查询终态，不自动重发；持久化与恢复由所属服务实现。`runtime.operation_get`/`runtime.operation_wait` 的线缆视图只含身份、状态、结果与错误；写请求参数散列只经本 crate 的 `params_sha256`，客户端与服务端共用同一推导。
 - **面板身份与布局参数**：Panel 与 PanelGroup 方法不暴露运行期 `PanelId`；视图身份使用规范 ViewKey JSON 文本，组身份使用稳定 `PanelGroupId` 文本。拆分参数带封闭方向、比例与逻辑视口；resize 带从根到分割节点的布尔路径。原因：PanelId 不属于持久身份，暴露后客户端可伪造运行实例。边界：路径、项目归属、空组与几何约束由 application 的布局转换裁定，schema 只保证结构与非空/有限值。
 - **应用聚焦与关闭**：`app.focus` 无参数；`app.close` 携带可选 `documents`（`save｜discard`）与 `hooks`（仅 `discard`，保存需要交互确认，不在线缆内）。两者都是写方法（结果 `OperationResource`）。缺少策略且存在脏 Document 或 Hooks 草稿时返回 `decision_required`，由调用方以新 `mutation_id` 重试；服务端不得弹模态或自动丢弃。原因：非交互关闭必须由调用方作出显式决定。边界：真实保存、关闭协调与最终退出由 application 复用 CloseCoordinator；`app.close` 的成功表示关闭已被接受并开始推进，进程退出与连接断开仍可能发生。

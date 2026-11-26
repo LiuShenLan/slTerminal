@@ -8,13 +8,15 @@ use serde::{Deserialize, Serialize};
 use crate::protocol::ControlMethod;
 use crate::protocol::ControlScope;
 
-/// 方法读写类别：查询无副作用，写操作必须携带幂等语义。
+/// 方法副作用类别：查询无副作用，写操作改变应用事实，连接级方法改变连接生命周期。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum MethodKind {
     Query,
     Mutation,
+    /// 注册或结束连接级状态（例如事件订阅）；不能在同一普通请求循环中重试。
+    Connection,
 }
 
 /// 单个方法的线缆身份、可用作用域与 schema 入口。
@@ -23,7 +25,7 @@ pub struct MethodSpec {
     /// 允许的作用域；hello 同时服务 Runtime 与 handover 两个作用域。
     pub scopes: &'static [ControlScope],
     pub kind: MethodKind,
-    /// 写操作在相同幂等键与参数下可安全重试。
+    /// 相同幂等键与参数可安全重试；无幂等键或连接级方法必须为 false。
     pub idempotent: bool,
     #[cfg(feature = "schema")]
     pub params_schema: fn() -> schemars::Schema,
@@ -366,8 +368,8 @@ pub static METHODS: &[MethodSpec] = &[
     MethodSpec {
         method: ControlMethod::RuntimeEventsSubscribe,
         scopes: &[ControlScope::Runtime],
-        kind: MethodKind::Query,
-        idempotent: true,
+        kind: MethodKind::Connection,
+        idempotent: false,
         #[cfg(feature = "schema")]
         params_schema: events_subscribe_params_schema,
         #[cfg(feature = "schema")]
@@ -376,8 +378,8 @@ pub static METHODS: &[MethodSpec] = &[
     MethodSpec {
         method: ControlMethod::RuntimeEventsUnsubscribe,
         scopes: &[ControlScope::Runtime],
-        kind: MethodKind::Query,
-        idempotent: true,
+        kind: MethodKind::Connection,
+        idempotent: false,
         #[cfg(feature = "schema")]
         params_schema: empty_params_schema,
         #[cfg(feature = "schema")]
@@ -777,7 +779,7 @@ pub static METHODS: &[MethodSpec] = &[
         method: ControlMethod::InstanceHandover,
         scopes: &[ControlScope::Handover],
         kind: MethodKind::Mutation,
-        idempotent: true,
+        idempotent: false,
         #[cfg(feature = "schema")]
         params_schema: handover_params_schema,
         #[cfg(feature = "schema")]
@@ -813,7 +815,7 @@ pub fn allows(method: ControlMethod, scope: ControlScope) -> bool {
 
 #[cfg(test)]
 mod method_tests {
-    use super::{METHODS, MethodKind, allows, lookup, method_names, methods_for};
+    use super::{METHODS, MethodKind, allows, lookup, method_names, method_spec, methods_for};
     use crate::ControlScope;
     use crate::protocol::{ControlMethod, HandoverMethod, HelloMethod};
 
@@ -1005,6 +1007,22 @@ mod method_tests {
             handover_methods,
             vec![ControlMethod::RuntimeHello, ControlMethod::InstanceHandover]
         );
+    }
+
+    /// 连接级方法与 handover 不得被 describe 宣传为可安全重试。
+    #[test]
+    fn connection_methods_and_handover_do_not_claim_retry_safety() {
+        for method in [
+            ControlMethod::RuntimeEventsSubscribe,
+            ControlMethod::RuntimeEventsUnsubscribe,
+        ] {
+            let spec = method_spec(method);
+            assert_eq!(spec.kind, MethodKind::Connection, "{method:?}");
+            assert!(!spec.idempotent, "{method:?} 不得宣称可安全重试");
+        }
+        let handover = method_spec(ControlMethod::InstanceHandover);
+        assert_eq!(handover.kind, MethodKind::Mutation);
+        assert!(!handover.idempotent, "handover 没有幂等键，不得宣称可重试");
     }
 
     #[cfg(feature = "schema")]
