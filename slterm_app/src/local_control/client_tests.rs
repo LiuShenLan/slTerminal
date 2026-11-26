@@ -37,8 +37,9 @@ fn credential(value: &str) -> SecretBytes {
 }
 
 fn hello_response() -> HelloResponse {
-    let (protocol_sha256, schema_sha256) = crate::local_control::service::runtime_contract_hashes();
+    let (schema_sha256, protocol_sha256) = crate::local_control::service::runtime_contract_hashes();
     HelloResponse::new("store", "stream", 7, protocol_sha256, schema_sha256)
+        .for_scope(ControlScope::Handover)
 }
 
 fn start_real_server(

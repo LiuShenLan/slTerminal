@@ -1673,8 +1673,7 @@ fn runtime_describe_returns_registry_and_contract_hashes() {
             "git.open_diff",
             "git.open_deleted",
             "app.focus",
-            "app.close",
-            "instance.handover"
+            "app.close"
         ]
     );
     assert_eq!(calls.load(Ordering::SeqCst), 0);
@@ -1839,5 +1838,25 @@ fn runtime_connection_rejects_handover_method_after_handshake() {
 
     assert_eq!(read_line(&mut stream), "", "Runtime 连接不得执行 handover");
     assert_eq!(calls.load(Ordering::SeqCst), 0);
+    server.shutdown().unwrap();
+}
+
+/// Runtime 握手能力不暴露 handover 方法。
+#[test]
+fn runtime_hello_capabilities_exclude_handover() {
+    let (mut server, _calls) = start_dual_scope_server();
+    let mut stream = connect(&server);
+    write_json(
+        &mut stream,
+        &hello_scoped("sk-test-runtime", ControlScope::Runtime),
+    );
+    let reply: JsonRpcResponse<HelloResponse> =
+        serde_json::from_str(&read_line(&mut stream)).unwrap();
+    let hello = match reply {
+        JsonRpcResponse::Result { result, .. } => result,
+        JsonRpcResponse::Error { error, .. } => panic!("hello 必须成功: {error:?}"),
+    };
+    assert!(!hello.capabilities.methods.contains("instance.handover"));
+    assert!(hello.capabilities.methods.contains("runtime.snapshot"));
     server.shutdown().unwrap();
 }

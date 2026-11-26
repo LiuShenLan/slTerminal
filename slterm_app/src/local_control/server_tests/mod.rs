@@ -12,14 +12,15 @@ use slterm_runtime_protocol::{
     AgentWaitRequest, ControlScope, Credential, DocumentResource, EmptyParams,
     EventsSubscribeParams, EventsSubscribedResponse, HandoverMethod, HandoverParams,
     HandoverRequest, HandoverResponse, HelloMethod, HelloParams, HelloRequest, HelloResponse,
-    JsonRpcError, JsonRpcErrorData, JsonRpcId, JsonRpcRequest, OperationQueryParams,
-    OperationResource, OperationStatus, OperationWaitParams, PanelGroupResource,
-    PanelGroupSplitParams, PanelGroupSplitRequest, PanelOpenSettingsParams, ProjectActivateParams,
-    ProjectActivateRequest, ProjectResource, RuntimeEvent, RuntimeMethod, RuntimeRequest,
-    SnapshotResources, SplitDirectionWire, TerminalCloseParams, TerminalCloseRequest,
-    TerminalExecuteParams, TerminalExecuteRequest, TerminalInputParams, TerminalInputRequest,
-    TerminalReadRequest, TerminalReconnectParams, TerminalReconnectRequest, TerminalRenameParams,
-    TerminalRenameRequest, TerminalResource, TerminalWaitRequest, ViewResource, ViewportSize,
+    JsonRpcError, JsonRpcErrorData, JsonRpcId, JsonRpcRequest, JsonRpcResponse,
+    OperationQueryParams, OperationResource, OperationStatus, OperationWaitParams,
+    PanelGroupResource, PanelGroupSplitParams, PanelGroupSplitRequest, PanelOpenSettingsParams,
+    ProjectActivateParams, ProjectActivateRequest, ProjectResource, RuntimeEvent, RuntimeMethod,
+    RuntimeRequest, SnapshotResources, SplitDirectionWire, TerminalCloseParams,
+    TerminalCloseRequest, TerminalExecuteParams, TerminalExecuteRequest, TerminalInputParams,
+    TerminalInputRequest, TerminalReadRequest, TerminalReconnectParams, TerminalReconnectRequest,
+    TerminalRenameParams, TerminalRenameRequest, TerminalResource, TerminalWaitRequest,
+    ViewResource, ViewportSize,
 };
 
 use super::LocalControlServer;
@@ -517,5 +518,27 @@ fn local_control_authenticated_parse_failure_keeps_the_connection() {
     write_json(&mut stream, &focus());
     assert!(read_line(&mut stream).contains("accepted"));
     assert_eq!(calls.load(Ordering::SeqCst), 1);
+    server.shutdown().unwrap();
+}
+
+/// 握手能力摘要按连接作用域过滤：handover 只看到移交方法。
+#[test]
+fn handover_hello_capabilities_are_scoped() {
+    let (mut server, _calls) = start_server();
+    let mut stream = connect(&server);
+    write_json(&mut stream, &hello("sk-test"));
+    let reply: JsonRpcResponse<HelloResponse> =
+        serde_json::from_str(&read_line(&mut stream)).unwrap();
+    let hello = match reply {
+        JsonRpcResponse::Result { result, .. } => result,
+        JsonRpcResponse::Error { error, .. } => panic!("hello 必须成功: {error:?}"),
+    };
+    assert_eq!(
+        hello.capabilities.methods,
+        std::collections::BTreeSet::from([
+            "instance.handover".to_owned(),
+            "runtime.hello".to_owned(),
+        ])
+    );
     server.shutdown().unwrap();
 }

@@ -38,7 +38,7 @@ fn hello_params_schema() -> schemars::Schema {
 
 #[cfg(feature = "schema")]
 fn hello_result_schema() -> schemars::Schema {
-    schemars::schema_for!(crate::protocol::HelloResponse)
+    schemars::schema_for!(crate::HelloResponse)
 }
 
 #[cfg(feature = "schema")]
@@ -58,7 +58,7 @@ fn empty_params_schema() -> schemars::Schema {
 
 #[cfg(feature = "schema")]
 fn describe_result_schema() -> schemars::Schema {
-    schemars::schema_for!(crate::protocol::DescribeResponse)
+    schemars::schema_for!(crate::DescribeResponse)
 }
 
 #[cfg(feature = "schema")]

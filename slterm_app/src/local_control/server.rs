@@ -13,20 +13,21 @@ use serde::Serialize;
 use slterm_runtime_protocol::{
     AgentCloseParams, AgentForkParams, AgentGetRequest, AgentInputParams, AgentListResponse,
     AgentReadRequest, AgentResource, AgentResumeParams, AgentStartParams, AgentWaitRequest,
-    AppCloseParams, AppFocusParams, ClientRequest, ControlScope, Credential, DescribeResponse,
-    DomainErrorCode, EventNotification, EventsSubscribeParams, EventsUnsubscribedResponse,
-    GitDeleteParams, GitDiffRequest, GitDiffResponse, GitOpenDeletedParams, GitOpenDiffParams,
-    GitRollbackParams, GitStatusRequest, GitStatusResponse, HandoverParams, HandoverResponse,
-    HelloResponse, JsonRpcError, JsonRpcErrorData, JsonRpcId, JsonRpcResponse,
-    OPERATION_WAIT_LIMIT_MS, OperationQueryParams, OperationResource, OperationWaitParams,
-    PanelActivateParams, PanelCloseParams, PanelGroupMergeParams, PanelGroupResizeParams,
-    PanelGroupSplitParams, PanelMoveParams, PanelOpenFileParams, PanelOpenSettingsParams,
-    PanelSaveParams, ProjectActivateParams, ProjectListResponse, ProjectRemoveParams,
-    ProjectRenameParams, ProjectReorderParams, RuntimeEvent, RuntimeMethod, RuntimeRequest,
-    RuntimeResult, SnapshotResources, SnapshotResponse, SplitDirectionWire, TerminalCloseParams,
-    TerminalCreateParams, TerminalExecuteParams, TerminalInputParams, TerminalReadRequest,
-    TerminalReadResponse, TerminalReconnectParams, TerminalRenameParams, TerminalWaitRequest,
-    TerminalWaitResponse, ViewportSize, parse_client_request,
+    AppCloseParams, AppFocusParams, ClientRequest, ControlMethod, ControlScope, Credential,
+    DescribeResponse, DomainErrorCode, EventNotification, EventsSubscribeParams,
+    EventsUnsubscribedResponse, GitDeleteParams, GitDiffRequest, GitDiffResponse,
+    GitOpenDeletedParams, GitOpenDiffParams, GitRollbackParams, GitStatusRequest,
+    GitStatusResponse, HandoverParams, HandoverResponse, HelloResponse, JsonRpcError,
+    JsonRpcErrorData, JsonRpcId, JsonRpcResponse, OPERATION_WAIT_LIMIT_MS, OperationQueryParams,
+    OperationResource, OperationWaitParams, PanelActivateParams, PanelCloseParams,
+    PanelGroupMergeParams, PanelGroupResizeParams, PanelGroupSplitParams, PanelMoveParams,
+    PanelOpenFileParams, PanelOpenSettingsParams, PanelSaveParams, ProjectActivateParams,
+    ProjectListResponse, ProjectRemoveParams, ProjectRenameParams, ProjectReorderParams,
+    RuntimeEvent, RuntimeMethod, RuntimeRequest, RuntimeResult, SnapshotResources,
+    SnapshotResponse, SplitDirectionWire, TerminalCloseParams, TerminalCreateParams,
+    TerminalExecuteParams, TerminalInputParams, TerminalReadRequest, TerminalReadResponse,
+    TerminalReconnectParams, TerminalRenameParams, TerminalWaitRequest, TerminalWaitResponse,
+    ViewportSize, parse_client_request,
 };
 use slterm_split::SplitDirection;
 use slterm_workspace::{LogicalSize, PanelGroupId, ProjectId, ViewKey};
@@ -454,6 +455,7 @@ fn handle_connection<F>(
     if !authorized {
         return;
     }
+    let hello = hello.for_scope(scope);
     if write_json(
         &mut stream,
         &JsonRpcResponse::result(request.id, hello.clone()),
@@ -506,13 +508,36 @@ fn handle_connection<F>(
                 if scope != ControlScope::Runtime {
                     return;
                 }
+                // 路由与能力摘要共用方法注册表作用域；未登记或不匹配即拒绝，
+                // 不依赖请求枚举变体形成第二套作用域真值。
+                let method_name = match serde_json::to_value(request.method) {
+                    Ok(serde_json::Value::String(name)) => name,
+                    _ => return,
+                };
+                if !slterm_runtime_protocol::lookup(&method_name)
+                    .is_some_and(|spec| spec.scopes.contains(&ControlScope::Runtime))
+                {
+                    if write_json(
+                        &mut stream,
+                        &JsonRpcResponse::<RuntimeResult>::error(
+                            request.id,
+                            invalid_request_error(),
+                        ),
+                    )
+                    .is_err()
+                    {
+                        return;
+                    }
+                    continue;
+                }
                 let response = match request.method {
                     // describe 只读方法注册表与握手同一散列，不需要回前台。
                     RuntimeMethod::Describe => JsonRpcResponse::result(
                         request.id,
-                        RuntimeResult::Describe(DescribeResponse::current(
+                        RuntimeResult::Describe(DescribeResponse::for_scope(
                             hello.protocol_sha256.clone(),
                             hello.schema_sha256.clone(),
+                            scope,
                         )),
                     ),
                     // 事件环接入前，revision 固定为握手起点；Hub 切片接管实时代次。
@@ -1286,7 +1311,12 @@ fn handle_connection<F>(
                 }
             }
             ClientRequest::Handover(request) => {
-                if scope != ControlScope::Handover {
+                if scope != ControlScope::Handover
+                    || !slterm_runtime_protocol::allows(
+                        ControlMethod::InstanceHandover,
+                        ControlScope::Handover,
+                    )
+                {
                     return;
                 }
                 let response = match callback(request.params) {
