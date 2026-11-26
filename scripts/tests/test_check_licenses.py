@@ -40,16 +40,16 @@ class LicenseNoticeTests(unittest.TestCase):
                     for package in packages
                 ],
             },
-            {"id": "slterm-hook", "deps": []},
+            {"id": "slterm_hook", "deps": []},
         ]
         nodes.extend({"id": package["id"], "deps": []} for package in packages)
         return {
             "packages": packages
             + [
                 self.package("slterm", source=None),
-                self.package("slterm-hook", source=None),
+                self.package("slterm_hook", source=None),
             ],
-            "workspace_members": ["slterm", "slterm-hook"],
+            "workspace_members": ["slterm", "slterm_hook"],
             "resolve": {"nodes": nodes},
         }
 
@@ -189,6 +189,38 @@ class LicenseNoticeTests(unittest.TestCase):
             check_licenses.render_notices(
                 metadata, extra_documents=(("dav1d-sys", native),)
             )
+
+    def test_missing_root_package_fails_instead_of_silently_skipping(self):
+        metadata = self.metadata([])
+        metadata["packages"] = [
+            package
+            for package in metadata["packages"]
+            if package["name"] != "slterm_hook"
+        ]
+        with self.assertRaisesRegex(check_licenses.LicenseAuditError, "slterm_hook"):
+            check_licenses.production_packages(metadata)
+
+    def test_bundled_assets_require_asset_license_and_copyright_holder(self):
+        asset = self.root / "font.ttf"
+        asset.write_bytes(b"font")
+        license_path = self.root / "LICENSE-FONT"
+        license_path.write_text("Copyright Demo Authors", encoding="utf-8")
+        with mock.patch.object(
+            check_licenses,
+            "BUNDLED_ASSETS",
+            (("演示字体", asset, license_path, "Demo Authors"),),
+        ):
+            check_licenses.check_bundled_assets()
+            license_path.write_text("wrong holder", encoding="utf-8")
+            with self.assertRaisesRegex(
+                check_licenses.LicenseAuditError, "Demo Authors"
+            ):
+                check_licenses.check_bundled_assets()
+            asset.unlink()
+            with self.assertRaisesRegex(
+                check_licenses.LicenseAuditError, "资产不存在"
+            ):
+                check_licenses.check_bundled_assets()
 
     def test_write_and_check_use_the_same_deterministic_content(self):
         package = self.package("demo")

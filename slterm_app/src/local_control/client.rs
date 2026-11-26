@@ -105,7 +105,7 @@ pub(crate) fn handover(
 
     let deadline = Instant::now() + TOTAL_TIMEOUT;
     let mut stream = TcpStream::connect_timeout(&record.endpoint, remaining(deadline)?)?;
-    let mut buffer = Vec::new();
+    let mut buffer = Zeroizing::new(Vec::new());
     write_json(&mut stream, &hello, deadline)?;
     drop(hello);
     let response: JsonRpcResponse<HelloResponse> =
@@ -147,7 +147,7 @@ fn server_error(error: JsonRpcError) -> HandoverError {
 
 fn read_response<T: DeserializeOwned>(
     stream: &mut TcpStream,
-    buffer: &mut Vec<u8>,
+    buffer: &mut Zeroizing<Vec<u8>>,
     deadline: Instant,
     expected_id: &JsonRpcId,
 ) -> Result<JsonRpcResponse<T>, HandoverError> {
@@ -195,7 +195,7 @@ fn write_json<T: Serialize>(
 
 fn read_json<T: DeserializeOwned>(
     stream: &mut TcpStream,
-    buffer: &mut Vec<u8>,
+    buffer: &mut Zeroizing<Vec<u8>>,
     deadline: Instant,
 ) -> Result<T, HandoverError> {
     let frame = read_frame(stream, buffer, deadline)?;
@@ -204,10 +204,10 @@ fn read_json<T: DeserializeOwned>(
 
 fn read_frame(
     stream: &mut TcpStream,
-    buffer: &mut Vec<u8>,
+    buffer: &mut Zeroizing<Vec<u8>>,
     deadline: Instant,
-) -> Result<Vec<u8>, HandoverError> {
-    let mut chunk = [0_u8; 1024];
+) -> Result<Zeroizing<Vec<u8>>, HandoverError> {
+    let mut chunk = Zeroizing::new([0_u8; 1024]);
     let mut scanned = 0;
     loop {
         if let Some(newline) = find_newline_since(buffer, scanned) {
@@ -215,7 +215,7 @@ fn read_frame(
             if newline > RESPONSE_BUDGET {
                 return Err(HandoverError::ResponseTooLarge);
             }
-            return Ok(buffer.drain(..=newline).collect());
+            return Ok(Zeroizing::new(buffer.drain(..=newline).collect()));
         }
         // 换行是单字节分隔符；下一轮只需扫描新追加的后缀。
         scanned = buffer.len();
@@ -223,7 +223,7 @@ fn read_frame(
             return Err(HandoverError::ResponseTooLarge);
         }
         stream.set_read_timeout(Some(remaining(deadline)?))?;
-        match stream.read(&mut chunk) {
+        match stream.read(&mut chunk[..]) {
             Ok(0) => {
                 return Err(
                     io::Error::new(io::ErrorKind::UnexpectedEof, "控制面响应提前结束").into(),

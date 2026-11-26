@@ -15,22 +15,23 @@ MIT License, ttf-parser 0.25.1 under the MIT OR Apache-2.0 License, and
 ab_glyph_rasterizer 0.1.10 under the Apache-2.0 License.
 
 The bundled AI-CLI screen-state evidence in
-slterm_app/src/agent_detection derives from Herdr
+slterm_agent_detection/*.toml derives from Herdr
 (github.com/AmrDeveloper/herdr), distributed under the Apache License 2.0.
 
 The embedded Latin Modern Math font is distributed under the GUST Font
 License 1.0. Its complete license text is included as
 licenses/LICENSE-LATIN-MODERN-MATH.
 
-The SSH Bash login-startup replay in slterm_app/res/shell/bashrc adapts
-the source-observation startup logic by l0ng-ai (revision 4da3868,
-shell_integration.rs).
-Copyright 2026 l0ng-ai, Apache License 2.0 (full text below). slTerminal's
-adaptation uses its own shell lifecycle markers and guarded prompt hooks.
+The embedded Maple Mono font is distributed under the SIL Open Font
+License 1.1.
+Copyright 2022 The Maple Mono Project Authors
+(https://github.com/subframe7536/maple-font).
+Its complete license text is included as licenses/LICENSE-MAPLE-MONO.
 
 The Windows installed-shell detection (registry lookup order and the
 shell brand icon artwork) derives from Tabby (github.com/Eugeny/tabby),
 distributed under the MIT License, whose text is reproduced below.
+Copyright (c) 2017 Tabby Developers.
 
 The Cursor and GitHub Copilot settings icons are adapted from LobeHub's
 @lobehub/icons-static-svg 1.95.0 (github.com/lobehub/lobe-icons),
@@ -47,10 +48,17 @@ identify the tools without implying endorsement.
 The bundled conpty.dll and OpenConsole.exe come from the Windows
 Terminal project (github.com/microsoft/terminal), distributed under the
 MIT License.
+Copyright (c) Microsoft Corporation. All rights reserved.
+The complete license text is included as licenses/LICENSE-CONPTY.
 
 The Windows x64 and ARM64 runtimes are pinned to the Microsoft.Windows.Console.ConPTY
-NuGet package 1.24.260710001 from Microsoft. Archive and individual redistributable
-hashes, architecture and source URL are verified by scripts/prepare-windows-runtime.ps1.
+NuGet package 1.24.260710001 from Microsoft. The vendored x64 binaries embedded in
+the product are pinned by SHA256 in scripts/check_bundled_runtime.py, which runs in CI
+and the release chain; architecture and source URL are recorded in
+scripts/prepare-windows-runtime.ps1.
+
+SQLite is embedded through libsqlite3-sys with the bundled SQLite source.
+The complete public-domain notice is included as licenses/LICENSE-SQLITE.
 
 The GPUI interface layer is built with gpui 0.2.2 and gpui_platform 0.1.0,
 developed by Zed Industries (github.com/zed-industries/zed), and with

@@ -49,6 +49,8 @@ try {
         if ((Get-FileHash $dll -Algorithm SHA256).Hash -ne $originalHash) {
             throw 'A runtime for the other architecture was reused.'
         }
+    } else {
+        Write-Output 'windows-runtime.tests.ps1: SKIP other-architecture repair (no -ArchivePath; registered conditional skip)'
     }
     Write-Output "windows-runtime.tests.ps1: PASS ($Architecture pinned files, reuse, repair, rejected archives)"
 } finally { Remove-Item -LiteralPath $root -Recurse -Force }

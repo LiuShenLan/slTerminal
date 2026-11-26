@@ -214,6 +214,21 @@ function Invoke-FreshnessSelfTest {
         Write-BuildStamp $buildRoot (Get-SourceDigest $roots)
         Assert-FreshBinaries -Binaries @($binary) -SourceRoots $roots
 
+        # 非 .rs 构建输入（字体/i18n/脚本/内嵌资产）必须同样参与摘要。
+        $asset = Join-Path $sourceRoot 'asset.bin'
+        [IO.File]::WriteAllText($asset, 'asset-v1')
+        Write-BuildStamp $buildRoot (Get-SourceDigest $roots)
+        Assert-FreshBinaries -Binaries @($binary) -SourceRoots $roots
+        [IO.File]::WriteAllText($asset, 'asset-v2')
+        $rejected = $false
+        try { Assert-FreshBinaries -Binaries @($binary) -SourceRoots $roots }
+        catch {
+            if ($_.Exception.Message -notlike '*源码摘要与构建戳不一致*') { throw }
+            $rejected = $true
+        }
+        if (-not $rejected) { throw '非 .rs 构建输入变更未被摘要判据拒绝' }
+        Write-BuildStamp $buildRoot (Get-SourceDigest $roots)
+
         # 旧构建目录(无 stamp)回退 mtime 判据。
         Remove-Item -LiteralPath (Get-BuildStampPath $buildRoot) -Force
         (Get-Item -LiteralPath $binary).LastWriteTimeUtc = [DateTime]::UtcNow.AddDays(-1)
@@ -225,6 +240,34 @@ function Invoke-FreshnessSelfTest {
             $rejected = $true
         }
         if (-not $rejected) { throw 'stamp 缺失时 mtime 回退判据失效' }
+    } finally {
+        Remove-Item -LiteralPath $root -Recurse -Force
+    }
+}
+
+# 发布说明自测:SHA256 块只由 SHA256SUMS 派生,替换原子且不留临时文件。
+function Invoke-ReleaseNotesSelfTest {
+    $root = Join-Path $repoRoot "target/notes-selftest-$([guid]::NewGuid().ToString('N'))"
+    New-Item -ItemType Directory -Path $root -Force | Out-Null
+    try {
+        $hashA = 'a' * 64
+        $hashB = 'b' * 64
+        [IO.File]::WriteAllText(
+            (Join-Path $root 'SHA256SUMS'),
+            "$hashA  slTerminal-v9.9.9-windows-x64-setup.exe`n$hashB  slTerminal-v9.9.9-windows-x64.zip`n",
+            [Text.UTF8Encoding]::new($false))
+        $note = Join-Path $root 'v9.9.9.md'
+        [IO.File]::WriteAllText($note, "# v`n`n**SHA256**`n`nstale-block`n",
+            [Text.UTF8Encoding]::new($false))
+        & (Join-Path $repoRoot 'scripts/sync-release-notes.ps1') `
+            -Version '9.9.9' -Directory $root -NotePath $note
+        $updated = Get-Content -Raw -LiteralPath $note
+        if ($updated.Contains('stale-block')) { throw '旧 SHA256 块未被替换' }
+        if (-not $updated.Contains("``$hashA``") -or -not $updated.Contains("``$hashB``")) {
+            throw '发布说明缺少派生哈希'
+        }
+        $leftover = @(Get-ChildItem -LiteralPath $root -Filter '*.tmp-*')
+        if ($leftover.Count -ne 0) { throw '发布说明同步留下临时文件' }
     } finally {
         Remove-Item -LiteralPath $root -Recurse -Force
     }
@@ -259,45 +302,57 @@ function Invoke-ManifestSelfTest {
         throw "CLI logo 包内路径不匹配:`n$($details -join "`n")"
     }
 
-    $wildcard = 'Source: "{#RepoRoot}\docs\featureSpec\assets\cli-svg\*.svg"; DestDir: "{app}\assets\cli-svg"; Flags: ignoreversion'
-    $installer = Get-Content -Raw -LiteralPath (Join-Path $repoRoot 'scripts/installer.iss')
-    if (-not $installer.Contains($wildcard)) {
-        throw "installer.iss 缺少 CLI logo 收录行:$wildcard"
+    # 安装器 [Files] 必须与共享清单展开结果全等（多一件少一件都红）。
+    $installerPath = Join-Path $repoRoot 'scripts/installer.iss'
+    $installed = [System.Collections.Generic.List[string]]::new()
+    $inFiles = $false
+    foreach ($raw in Get-Content -LiteralPath $installerPath) {
+        $line = $raw.Trim()
+        if ($line -match '^\[(.+)\]$') {
+            $inFiles = $Matches[1] -eq 'Files'
+            continue
+        }
+        if (-not $inFiles -or -not $line.StartsWith('Source:')) { continue }
+        $match = [regex]::Match($line,
+            'Source:\s*"\{#(?<root>RepoRoot|BuildRoot)\}\\(?<source>[^"]+)";\s*' +
+            'DestDir:\s*"\{app\}(?:\\(?<dest>[^"]*))?"')
+        if (-not $match.Success) {
+            throw "无法解析安装器文件行:$line"
+        }
+        $source = $match.Groups['source'].Value.Replace('\', '/')
+        $dest = $match.Groups['dest'].Value.Replace('\', '/')
+        if ($source.Contains('*')) {
+            $directory = Split-Path $source -Parent
+            $filter = Split-Path $source -Leaf
+            $files = @(Get-ChildItem -LiteralPath (Join-Path $repoRoot $directory) -File -Filter $filter)
+            foreach ($file in $files) {
+                $installed.Add("$dest/$($file.Name)")
+            }
+        } else {
+            $name = Split-Path $source -Leaf
+            $installed.Add($(if ($dest) { "$dest/$name" } else { $name }))
+        }
     }
-
-    $requiredNotices = @(
-        [pscustomobject]@{
-            PackagePath = 'licenses/THIRD-PARTY-CRATE-NOTICES'
-            RepoPath = 'licenses/THIRD-PARTY-CRATE-NOTICES'
-            InstallerName = 'licenses\THIRD-PARTY-CRATE-NOTICES'
-        },
-        [pscustomobject]@{
-            PackagePath = 'licenses/LICENSE-DAV1D'
-            RepoPath = 'licenses/LICENSE-DAV1D'
-            InstallerName = 'licenses\LICENSE-DAV1D'
-        }
-    )
-    foreach ($notice in $requiredNotices) {
-        $expectedSource = Join-Path $repoRoot $notice.RepoPath
-        $matched = @($sources | Where-Object {
-            $_.PackagePath -eq $notice.PackagePath -and $_.Source -eq $expectedSource
-        })
-        if ($matched.Count -ne 1) {
-            throw "共享清单缺少许可条目:$($notice.PackagePath)"
-        }
-        $line = "Source: `"{#RepoRoot}\$($notice.InstallerName)`"; DestDir: `"{app}\licenses`"; Flags: ignoreversion"
-        if (-not $installer.Contains($line)) {
-            throw "installer.iss 缺少许可收录行:$line"
-        }
+    $expectedPaths = @($sources | ForEach-Object { $_.PackagePath } | Sort-Object)
+    $installedPaths = @($installed | Sort-Object -Unique)
+    $difference = @(Compare-Object -ReferenceObject $expectedPaths -DifferenceObject $installedPaths)
+    if ($difference.Count -ne 0) {
+        $details = $difference | ForEach-Object { "$($_.SideIndicator) $($_.InputObject)" }
+        throw "安装器 [Files] 与共享清单不全等:`n$($details -join "`n")"
     }
 
     $release = Get-Content -Raw -LiteralPath (Join-Path $repoRoot 'scripts/release.ps1')
-    if (-not $release.Contains('check_licenses.py') -or
-        -not $release.Contains('第三方许可核验失败')) {
-        throw '正式发布缺少许可核验或原生命令失败检查'
-    }
-    if (-not $release.Contains('& $testPath -Version $Version -Directory $OutputDirectory')) {
-        throw '发布钉测试未接收版本与隔离产物目录'
+    foreach ($required in @(
+            'check_licenses.py',
+            'check_bundled_runtime.py',
+            'package-release.tests.ps1',
+            '-SelfTest',
+            '-Version $Version -Directory $OutputDirectory',
+            'sync-release-notes.ps1'
+        )) {
+        if (-not $release.Contains($required)) {
+            throw "正式发布缺少步骤:$required"
+        }
     }
 }
 
@@ -315,7 +370,8 @@ if ($SelfTest) {
     Invoke-ManifestSelfTest
     Invoke-BudgetSelfTest
     Invoke-FreshnessSelfTest
-    Write-Output 'package-release.tests.ps1: SELFTEST PASS (native static link, profile pin, workspace/manifest, budget boundary, missing asset, freshness digest)'
+    Invoke-ReleaseNotesSelfTest
+    Write-Output 'package-release.tests.ps1: SELFTEST PASS (native static link, profile pin, workspace/manifest, budget boundary, missing asset, freshness digest, release notes hashes)'
     return
 }
 

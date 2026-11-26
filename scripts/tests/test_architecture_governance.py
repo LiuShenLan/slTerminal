@@ -29,7 +29,7 @@ class GovernanceTests(unittest.TestCase):
                 (ROOT / crate / "Cargo.toml").read_text(encoding="utf-8")
             )
             excluded.append(package["package"]["name"])
-        command = "cargo test --release --workspace"
+        command = "cargo test --locked --release --workspace"
         command += "".join(f" --exclude {package}" for package in excluded)
         command += " -- --test-threads=1"
         workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
@@ -39,6 +39,15 @@ class GovernanceTests(unittest.TestCase):
             "CI 必须按架构层执行 core release 串行测试",
         )
 
+    def test_ci_runs_license_runtime_and_dependency_audit(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        for step in (
+            "python scripts/check_licenses.py",
+            "python scripts/check_bundled_runtime.py",
+            "cargo audit",
+            "Assert-Dav1dStatic",
+        ):
+            self.assertIn(step, workflow, f"CI 必须包含 {step}")
 
     def test_ci_architecture_gate_compares_against_the_change_base(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")

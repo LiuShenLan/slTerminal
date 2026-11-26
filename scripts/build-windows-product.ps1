@@ -42,6 +42,11 @@ $script:SourceRoots = @(
 ) + @(
     (Join-Path $script:RepoRoot 'slterm_agent_detection'),
     (Join-Path $script:RepoRoot 'vendor/dav1d-sys'),
+    (Join-Path $script:RepoRoot 'vendor/tree-sitter-json5'),
+    (Join-Path $script:RepoRoot 'vendor/tree-sitter-dockerfile'),
+    (Join-Path $script:RepoRoot 'slterm_terminal/vendor/conpty'),
+    (Join-Path $script:RepoRoot 'assets/runtime-api-v2.schema.json'),
+    (Join-Path $script:RepoRoot 'rust-toolchain.toml'),
     (Join-Path $script:RepoRoot 'Cargo.toml'),
     (Join-Path $script:RepoRoot 'Cargo.lock'),
     (Join-Path $script:RepoRoot '.cargo/config.toml')
@@ -65,7 +70,10 @@ $script:PackageEntries = @(
     [pscustomobject]@{ PackagePath = 'licenses/THIRD-PARTY-NOTICES'; RepoPath = 'THIRD-PARTY-NOTICES' }
     [pscustomobject]@{ PackagePath = 'licenses/THIRD-PARTY-CRATE-NOTICES'; RepoPath = 'licenses/THIRD-PARTY-CRATE-NOTICES' }
     [pscustomobject]@{ PackagePath = 'licenses/LICENSE-DAV1D'; RepoPath = 'licenses/LICENSE-DAV1D' }
+    [pscustomobject]@{ PackagePath = 'licenses/LICENSE-SQLITE'; RepoPath = 'licenses/LICENSE-SQLITE' }
     [pscustomobject]@{ PackagePath = 'licenses/LICENSE-LATIN-MODERN-MATH'; RepoPath = 'licenses/LICENSE-LATIN-MODERN-MATH' }
+    [pscustomobject]@{ PackagePath = 'licenses/LICENSE-MAPLE-MONO'; RepoPath = 'licenses/LICENSE-MAPLE-MONO' }
+    [pscustomobject]@{ PackagePath = 'licenses/LICENSE-CONPTY'; RepoPath = 'licenses/LICENSE-CONPTY' }
 )
 
 # 目录条目:受控展开——只允许在此登记,展开后逐个进入包内清单。
@@ -138,7 +146,8 @@ function Get-NewestSourceTime([string[]] $Roots) {
         }
         $item = Get-Item -LiteralPath $root
         if ($item.PSIsContainer) {
-            $files = Get-ChildItem -LiteralPath $root -Recurse -File -Include '*.rs', '*.toml'
+            $files = Get-ChildItem -LiteralPath $root -Recurse -File |
+                Where-Object { $_.FullName -notmatch '[\\/]\.git[\\/]' }
         } else {
             $files = @($item)
         }
@@ -151,9 +160,9 @@ function Get-NewestSourceTime([string[]] $Roots) {
     return $newest
 }
 
-# 源码内容摘要:全部参与构建的 .rs/.toml + 根 Cargo.lock 的路径+内容哈希,
-# 汇总成单一 SHA256。判据用内容而非 mtime——仅改注释也会变 mtime,但 cargo
-# 不重链接,拿时间戳比较会假红。
+# 构建输入摘要:全部登记输入文件（含字体、i18n、hook 脚本、内嵌 schema、
+# vendor 原生源与 ConPTY 二进制）的路径+内容哈希,汇总成单一 SHA256。
+# 判据按完整输入清单而非文件后缀,避免非 .rs 资产改动漏过新鲜度检查。
 function Get-SourceDigest([string[]] $Roots) {
     $entries = [System.Collections.Generic.List[object]]::new()
     foreach ($root in $Roots) {
@@ -162,7 +171,8 @@ function Get-SourceDigest([string[]] $Roots) {
         }
         $item = Get-Item -LiteralPath $root
         if ($item.PSIsContainer) {
-            $files = Get-ChildItem -LiteralPath $root -Recurse -File -Include '*.rs', '*.toml'
+            $files = Get-ChildItem -LiteralPath $root -Recurse -File |
+                Where-Object { $_.FullName -notmatch '[\\/]\.git[\\/]' }
         } else {
             $files = @($item)
         }

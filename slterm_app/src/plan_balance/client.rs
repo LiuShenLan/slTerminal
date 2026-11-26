@@ -106,10 +106,12 @@ impl PlanBalanceClient {
         let token = secret
             .into_string()
             .ok_or(PlanBalanceError::MissingCredential)?;
+        // 请求头在可清零缓冲中组装，避免 token 明文副本残留在普通 String。
+        let authorization = zeroize::Zeroizing::new(format!("Bearer {}", token.as_str()));
         let mut response = self
             .agent
             .get(&self.endpoint(source))
-            .header("Authorization", &format!("Bearer {}", token.as_str()))
+            .header("Authorization", authorization.as_str())
             .call()
             .map_err(|error| match error {
                 ureq::Error::StatusCode(status) => PlanBalanceError::Status(status),

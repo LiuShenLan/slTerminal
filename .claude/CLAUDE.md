@@ -83,7 +83,7 @@ workspace 成员、ownership、类型锚点、错误信封、数据目录与命�
 - 定向测试：`cargo test -p <crate> --test lib_tests <filter> -- --test-threads=1`。
 - 静态检查：`cargo clippy --workspace --all-targets`；`cargo clippy -p slterm --all-targets --features gpui-test-support`；`cargo fmt --all -- --check`。
 - Runtime 合同门禁：`cargo test -p slterm_runtime_protocol --features schema --test lib_tests -- --test-threads=1`（CI 与发布前置强制执行）。
-- 门禁：`python scripts/check_architecture.py`；`python scripts/check_doc_policy.py full`；`python scripts/check_traceability.py`；`python scripts/check_brand_regress.py staged`。
+- 门禁：`python scripts/check_architecture.py`；`python scripts/check_doc_policy.py full`；`python scripts/check_traceability.py`；`python scripts/check_licenses.py`；`python scripts/check_bundled_runtime.py`；`python scripts/check_brand_regress.py staged`。
 - 脚本门禁自测：`python -m unittest discover -s scripts/tests -p "test_*.py"`。
 - git hooks 启用（一次性）：`git config core.hooksPath .githooks`。
 - 完整命令矩阵见 `.claude/docs/operations/commands.md`。

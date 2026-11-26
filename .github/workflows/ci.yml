@@ -47,27 +47,35 @@ jobs:
 
       - name: Clippy 全工作区
         shell: pwsh
-        run: cargo clippy --workspace --all-targets
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
       - name: Clippy slterm 虚拟窗口测试支持
         shell: pwsh
-        run: cargo clippy -p slterm --all-targets --features gpui-test-support
+        run: cargo clippy --locked -p slterm --all-targets --features gpui-test-support -- -D warnings
 
       - name: 工作区测试
         shell: pwsh
-        run: cargo test --workspace -- --test-threads=1
+        run: cargo test --locked --workspace -- --test-threads=1
 
       - name: Runtime 线缆合同门禁
         shell: pwsh
-        run: cargo test -p slterm_runtime_protocol --features schema --test lib_tests -- --test-threads=1
+        run: cargo test --locked -p slterm_runtime_protocol --features schema --test lib_tests -- --test-threads=1
 
       - name: core 发布模式测试
         shell: pwsh
-        run: cargo test --release --workspace --exclude slterm --exclude slterm_hook -- --test-threads=1
+        run: cargo test --locked --release --workspace --exclude slterm --exclude slterm_hook -- --test-threads=1
 
       - name: slterm 虚拟窗口测试
         shell: pwsh
-        run: cargo test -p slterm --test lib_tests --features gpui-test-support -- --test-threads=1
+        run: cargo test --locked -p slterm --test lib_tests --features gpui-test-support -- --test-threads=1
+
+      - name: 发布口径构建与静态链接审计
+        shell: pwsh
+        run: |
+          cargo build --locked --release -p slterm --bin slterm -p slterm_hook --bin slterm-hook
+          if ($LASTEXITCODE -ne 0) { throw "release 构建失败(exit $LASTEXITCODE)" }
+          . ./scripts/build-windows-product.ps1 -LibraryOnly
+          Assert-Dav1dStatic -BinaryPath ./target/release/slterm.exe
 
       - name: 架构门禁
         shell: pwsh
@@ -88,9 +96,29 @@ jobs:
         shell: pwsh
         run: python scripts/check_traceability.py
 
+      - name: 许可清单核验
+        shell: pwsh
+        run: python scripts/check_licenses.py
+
+      - name: 随包运行时核验
+        shell: pwsh
+        run: python scripts/check_bundled_runtime.py
+
+      - name: 依赖审计
+        shell: pwsh
+        run: |
+          cargo install cargo-audit --locked --version 0.22.2
+          if ($LASTEXITCODE -ne 0) { throw "cargo-audit 安装失败(exit $LASTEXITCODE)" }
+          cargo audit
+          if ($LASTEXITCODE -ne 0) { throw "依赖审计失败(exit $LASTEXITCODE)" }
+
       - name: 品牌回流门禁
         shell: pwsh
         run: python scripts/check_brand_regress.py full
+
+      - name: 随包运行时准备测试
+        shell: pwsh
+        run: pwsh -NoProfile -File scripts/tests/windows-runtime.tests.ps1
 
       - name: 脚本门禁自测
         shell: pwsh

@@ -1,0 +1,5 @@
+# 依赖审计策略：漏洞（vulnerability）必须修复并在门禁中阻断。
+# unmaintained／unsound／yanked 告警默认不阻断，但必须按可达性分类；
+# 确需忽略的公告只允许登记在 [advisories].ignore，并写明原因与替代缓解。
+[advisories]
+ignore = []

@@ -285,7 +285,7 @@ fn local_control_frame_budget_excludes_next_frame_prefix() {
     input.push(b'\n');
     input.extend_from_slice(next_prefix);
     let mut reader = ChunkedReader::new(input, 1023);
-    let mut buffer = Vec::new();
+    let mut buffer = zeroize::Zeroizing::new(Vec::new());
 
     let frame = super::server::read_frame(
         &mut reader,
@@ -296,7 +296,7 @@ fn local_control_frame_budget_excludes_next_frame_prefix() {
     .unwrap()
     .unwrap();
     assert_eq!(frame.len(), 128 * 1024 - 1);
-    assert_eq!(buffer, next_prefix);
+    assert_eq!(buffer.as_slice(), next_prefix);
 }
 
 #[test]
@@ -473,7 +473,7 @@ fn local_control_request_deadline_expires_without_waiting() {
     let _ = listener.accept().unwrap();
     let error = super::server::read_frame(
         &mut stream,
-        &mut Vec::new(),
+        &mut zeroize::Zeroizing::new(Vec::new()),
         std::time::Instant::now(),
         &AtomicBool::new(false),
     )

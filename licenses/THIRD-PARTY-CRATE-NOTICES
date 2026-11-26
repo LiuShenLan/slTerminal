@@ -16763,7 +16763,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 =====================================================================
-Package: cookie 0.18.2
+Package: cookie 0.18.3
 Source: registry+https://github.com/rust-lang/crates.io-index
 License: MIT OR Apache-2.0
 
@@ -19856,7 +19856,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 =====================================================================
-Package: ctutils 0.4.3
+Package: ctutils 0.4.4
 Source: registry+https://github.com/rust-lang/crates.io-index
 License: Apache-2.0 OR MIT
 
@@ -28863,7 +28863,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 =====================================================================
-Package: form_urlencoded 1.2.2
+Package: form_urlencoded 1.2.3
 Source: registry+https://github.com/rust-lang/crates.io-index
 License: MIT OR Apache-2.0
 
@@ -65421,7 +65421,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 =====================================================================
-Package: rustls-webpki 0.103.15
+Package: rustls-webpki 0.103.16
 Source: registry+https://github.com/rust-lang/crates.io-index
 License: ISC
 
@@ -87874,7 +87874,7 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 =====================================================================
-Package: url 2.5.8
+Package: url 2.5.9
 Source: registry+https://github.com/rust-lang/crates.io-index
 License: MIT OR Apache-2.0
 
@@ -91664,7 +91664,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 =====================================================================
-Package: webpki-roots 1.0.9
+Package: webpki-roots 1.0.10
 Source: registry+https://github.com/rust-lang/crates.io-index
 License: CDLA-Permissive-2.0
 

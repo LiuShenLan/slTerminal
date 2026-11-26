@@ -105,9 +105,12 @@ Source: "{#RepoRoot}\assets\runtime-control-api.md"; DestDir: "{app}\assets"; Fl
 Source: "{#RepoRoot}\docs\featureSpec\assets\cli-svg\*.svg"; DestDir: "{app}\assets\cli-svg"; Flags: ignoreversion
 Source: "{#RepoRoot}\LICENSE"; DestDir: "{app}\licenses"; Flags: ignoreversion
 Source: "{#RepoRoot}\licenses\LICENSE-LATIN-MODERN-MATH"; DestDir: "{app}\licenses"; Flags: ignoreversion
+Source: "{#RepoRoot}\licenses\LICENSE-MAPLE-MONO"; DestDir: "{app}\licenses"; Flags: ignoreversion
+Source: "{#RepoRoot}\licenses\LICENSE-CONPTY"; DestDir: "{app}\licenses"; Flags: ignoreversion
 Source: "{#RepoRoot}\THIRD-PARTY-NOTICES"; DestDir: "{app}\licenses"; Flags: ignoreversion
 Source: "{#RepoRoot}\licenses\THIRD-PARTY-CRATE-NOTICES"; DestDir: "{app}\licenses"; Flags: ignoreversion
 Source: "{#RepoRoot}\licenses\LICENSE-DAV1D"; DestDir: "{app}\licenses"; Flags: ignoreversion
+Source: "{#RepoRoot}\licenses\LICENSE-SQLITE"; DestDir: "{app}\licenses"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#AppDisplayName}"; Filename: "{app}\slterm.exe"; IconFilename: "{app}\assets\app-icon.ico"; WorkingDir: "{%USERPROFILE}"; AppUserModelID: "{#AppUserModelId}"

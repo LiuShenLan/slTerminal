@@ -31,6 +31,7 @@ use slterm_runtime_protocol::{
 };
 use slterm_split::SplitDirection;
 use slterm_workspace::{PanelGroupId, ProjectId, ViewKey};
+use zeroize::Zeroizing;
 
 use super::events::Subscription;
 use super::mutations::{RuntimeMutation, RuntimeMutationRequest};
@@ -433,7 +434,7 @@ fn handle_connection<F>(
     {
         return;
     }
-    let mut buffer = Vec::new();
+    let mut buffer = Zeroizing::new(Vec::new());
     let Some(frame) = read_frame(
         &mut stream,
         &mut buffer,
@@ -1620,7 +1621,7 @@ fn stream_subscription(
             events_done_for_thread.store(true, Ordering::SeqCst);
         })?;
     let result = (|| -> io::Result<()> {
-        let mut buffer = Vec::new();
+        let mut buffer = Zeroizing::new(Vec::new());
         loop {
             match read_frame(
                 stream,
@@ -1839,17 +1840,17 @@ fn credential_matches(expected: &SecretBytes, actual: &Credential) -> bool {
 
 pub(super) fn read_frame<R: Read>(
     reader: &mut R,
-    buffer: &mut Vec<u8>,
+    buffer: &mut Zeroizing<Vec<u8>>,
     deadline: Instant,
     shutdown: &AtomicBool,
-) -> io::Result<Option<Vec<u8>>> {
-    let mut chunk = [0_u8; 1024];
+) -> io::Result<Option<Zeroizing<Vec<u8>>>> {
+    let mut chunk = Zeroizing::new([0_u8; 1024]);
     loop {
         if shutdown.load(Ordering::SeqCst) {
             return Ok(None);
         }
         if let Some(newline) = buffer.iter().position(|byte| *byte == b'\n') {
-            return Ok(Some(buffer.drain(..=newline).collect()));
+            return Ok(Some(Zeroizing::new(buffer.drain(..=newline).collect())));
         }
         if Instant::now() >= deadline {
             return Err(io::Error::new(
@@ -1857,12 +1858,12 @@ pub(super) fn read_frame<R: Read>(
                 "control request timed out",
             ));
         }
-        match reader.read(&mut chunk) {
+        match reader.read(&mut chunk[..]) {
             Ok(0) => {
                 if buffer.is_empty() {
                     return Ok(None);
                 }
-                return Ok(Some(std::mem::take(buffer)));
+                return Ok(Some(Zeroizing::new(std::mem::take(&mut **buffer))));
             }
             Ok(count) => {
                 buffer.extend_from_slice(&chunk[..count]);

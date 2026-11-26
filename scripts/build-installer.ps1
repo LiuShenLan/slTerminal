@@ -59,8 +59,8 @@ function Get-ProductVersion {
 if ([string]::IsNullOrWhiteSpace($Version)) {
     $Version = Get-ProductVersion
 }
-if ($Version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$') {
-    throw "版本号格式非法:$Version"
+if ($Version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') {
+    throw "版本号必须是三数值段:$Version"
 }
 
 # 版本号数字段 = 四段纯数字(安装器 VersionInfoVersion)。

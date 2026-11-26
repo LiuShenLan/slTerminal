@@ -14,10 +14,37 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 NOTICE_PATH = ROOT / "licenses" / "THIRD-PARTY-CRATE-NOTICES"
 TARGET = "x86_64-pc-windows-msvc"
-ROOT_PACKAGES = {"slterm", "slterm-hook"}
+ROOT_PACKAGES = {"slterm", "slterm_hook"}
 NATIVE_DOCUMENTS = (
     ("dav1d-sys", ROOT / "licenses" / "LICENSE-DAV1D"),
     ("libsqlite3-sys", ROOT / "licenses" / "LICENSE-SQLITE"),
+)
+# 随包二进制/字体资产及其许可文本；许可能力不能只沿 Cargo 依赖图覆盖。
+BUNDLED_ASSETS = (
+    (
+        "Latin Modern Math 字体",
+        ROOT / "slterm_app" / "assets" / "fonts" / "LatinModernMath.otf",
+        ROOT / "licenses" / "LICENSE-LATIN-MODERN-MATH",
+        "GUST",
+    ),
+    (
+        "Maple Mono 字体",
+        ROOT / "slterm_app" / "assets" / "fonts" / "MapleMonoNormal-NF-CN-Regular.ttf",
+        ROOT / "licenses" / "LICENSE-MAPLE-MONO",
+        "Maple Mono Project Authors",
+    ),
+    (
+        "ConPTY 运行时",
+        ROOT / "slterm_terminal" / "vendor" / "conpty" / "conpty.dll",
+        ROOT / "licenses" / "LICENSE-CONPTY",
+        "Microsoft Corporation",
+    ),
+    (
+        "OpenConsole 运行时",
+        ROOT / "slterm_terminal" / "vendor" / "conpty" / "OpenConsole.exe",
+        ROOT / "licenses" / "LICENSE-CONPTY",
+        "Microsoft Corporation",
+    ),
 )
 TEXT_PREFIXES = ("license", "licence", "copying", "notice", "copyright")
 
@@ -45,8 +72,13 @@ def production_packages(metadata: dict) -> list[dict]:
         for package in packages.values()
         if package["name"] in ROOT_PACKAGES
     ]
-    if not pending:
-        raise LicenseAuditError("生产依赖图缺少应用或 hook 根包")
+    missing_roots = ROOT_PACKAGES - {
+        package["name"] for package in packages.values()
+    }
+    if missing_roots:
+        raise LicenseAuditError(
+            f"生产依赖图缺少根包：{', '.join(sorted(missing_roots))}"
+        )
     seen = set()
     while pending:
         package_id = pending.pop()
@@ -73,6 +105,18 @@ def production_packages(metadata: dict) -> list[dict]:
             package["source"] or "path",
         ),
     )
+
+
+def check_bundled_assets() -> None:
+    """随包资产必须有真实文件、非空许可文本与对应版权持有者。"""
+    for name, asset, license_path, holder in BUNDLED_ASSETS:
+        if not asset.is_file():
+            raise LicenseAuditError(f"{name} 资产不存在：{asset}")
+        if not license_path.is_file():
+            raise LicenseAuditError(f"{name} 缺少许可文本：{license_path}")
+        text = license_path.read_text(encoding="utf-8")
+        if holder not in text:
+            raise LicenseAuditError(f"{name} 许可文本缺少版权行：{holder}")
 
 
 def text_files(root: Path) -> list[Path]:
@@ -122,12 +166,15 @@ def license_files(package: dict) -> list[Path]:
         if files:
             return files
         raise LicenseAuditError(f"{package['name']} 缺少可定位许可文本")
+    # 只检查 Git checkout 根（.git 所在层），不向文件系统祖先扩张；
+    # 否则用户目录中的任意 LICENSE 会被误当成包许可。
     for parent in root.parents:
+        if not (parent / ".git").exists():
+            continue
         files = select_checkout_files(package, text_files(parent))
         if files:
             return files
-        if (parent / ".git").exists():
-            break
+        break
     files = snapshot_license_files(package)
     if files:
         return files
@@ -254,6 +301,7 @@ def main() -> int:
     parser.add_argument("--write", action="store_true", help="原子更新随包许可清单")
     arguments = parser.parse_args()
     try:
+        check_bundled_assets()
         metadata = load_metadata()
         if arguments.write:
             write_notice(metadata, NOTICE_PATH, NATIVE_DOCUMENTS)

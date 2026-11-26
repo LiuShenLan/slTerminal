@@ -4,7 +4,7 @@
 
 ## 决策与红线
 
-- **上游锚**：`dav1d-sys 0.8.3`，对应 `rust-av/dav1d-rs` commit `9f62f346c6841d1af4ab3eb8267c73041c8c4ee6`。升级必须同步完整源码与许可，不保留无审查的差异。
+- **上游锚**：`dav1d-sys 0.8.3`，对应 `rust-av/dav1d-rs` commit `9f62f346c6841d1af4ab3eb8267c73041c8c4ee6`。原生 dav1d `1.5.0` 的审计 commit 为 `32cf02af50f32af108a3b281c452788dccdac648`，`build.rs` 在 clone/fetch 后强制校验 HEAD；tag 漂移即构建失败。升级必须同步完整源码、许可与审计 commit，不保留无审查的差异。
 - **补丁边界**：只在 Meson setup 增加 `--vsenv`，防止 PATH 中的 MinGW 与 MSVC Rust 目标混链；FFI、crate 版本和 dav1d 上游版本不变。
 - **许可**：保留上游 MIT `LICENSE`；dav1d 原生 BSD 文本继续经生产许可生成器收录，仓内路径包不得被排除。
 

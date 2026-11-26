@@ -1,7 +1,7 @@
 #Requires -Version 7
 [CmdletBinding()]
 param(
-    [string] $Version = 'unreleased',
+    [string] $Version,
     [ValidateSet('release')][string] $Configuration = 'release',
     [ValidateSet('x64', 'arm64')][string] $Architecture = 'x64',
     # 仅限脚本自测/发布彩排;正式发布必须全新构建。
@@ -26,8 +26,18 @@ $TargetDirectory = $requestedTarget
 if ($Architecture -ne 'x64') {
     throw 'arm64 参数形态已保留,但首发构建只支持 x64。'
 }
-if ($Version -notmatch '^[0-9A-Za-z][0-9A-Za-z.+-]*$') {
-    throw "版本号含非法字符:$Version"
+function Get-ProductVersion {
+    $manifest = Get-Content -Raw -LiteralPath (Join-Path $script:RepoRoot 'slterm_app/Cargo.toml')
+    if ($manifest -notmatch '(?m)^\s*version\s*=\s*"([^"]+)"') {
+        throw 'slterm_app/Cargo.toml 缺少 version 字段'
+    }
+    return $Matches[1]
+}
+if ([string]::IsNullOrWhiteSpace($Version)) {
+    $Version = Get-ProductVersion
+}
+if ($Version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') {
+    throw "版本号必须是三数值段:$Version"
 }
 if ([string]::IsNullOrWhiteSpace($TargetDirectory)) {
     $TargetDirectory = $script:DefaultTargetDirectory

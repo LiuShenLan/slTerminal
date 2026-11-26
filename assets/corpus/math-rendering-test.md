@@ -4,40 +4,22 @@
 
 ## 正文选区可读性
 
-回答阅读器与 Markdown 文本组件的选区绘制在文字上方。之前主题适配直接复用
-列表选中背景：在 MintLight、Nord 等主题中，这个背景不透明，会遮住已经绘制的
-字形。主题适配现在保留原色相，并遵循 gpui-component 对文字选区的 0.3 不透明度（alpha）
-上限；更透明的主题保持原值。列表、侧栏的实色选中背景不受影响。
+回答阅读器与 Markdown 文本组件的选区绘制在文字上方。主题适配保留原色相，
+并遵循 gpui-component 对文字选区的 0.3 不透明度（alpha）上限；更透明的主题
+保持原值。列表、侧栏的实色选中背景不受影响。
 
-验证时，在 MintLight 和 Nord 中分别拖选下面这句正文，检查选中后文字仍可读、
+人工验证：在 Linear 与 Nord 中分别拖选下面这句正文，检查选中后文字仍可读、
 布局不移动，复制得到的内容与所选文字一致；再缩窄窗口检查换行后的选择。
 
 alpha beta gamma delta
 
-自动回归覆盖全部内置主题的选区颜色和透明度、主题 token 同步，以及真实
-TextView 控件在深浅主题与宽窄布局下的鼠标拖选、键盘复制。另在 Windows 200%
-缩放下对 MintLight 宽布局、Nord 窄布局做了原生窗口对照，修复前后的截图仅裁剪
-标题栏与留白，未重绘内容：
+自动回归覆盖主题选区派生（`fresh_terminal_derives_cursor_and_selection_from_palette_slots`）
+以及真实 TextView 的鼠标拖选、键盘扩选与复制
+（`mouse_click_drag_and_shift_click_control_selection`、
+`keyboard_moves_by_graphemes_and_shift_extends_selection`）。原生窗口观感
+仍需构建产物人工核验；本文件不提供截图基线。
 
-![阅读器选区修复前后对照，修复后文字仍然可读](screenshots/reader-selection-opacity.png)
-
-原生预览可通过默认忽略的 `native_reader_selection_preview` 测试复核：先将
-`SLTERM_SELECTION_QA_DIR` 设置为新的绝对输出目录，按需设置
-`SLTERM_SELECTION_QA_THEME`（默认 MintLight）和 `SLTERM_SELECTION_QA_WIDTH`
-（默认 480），然后运行：
-
-```text
-cargo test --locked -p slterm --bin slterm --features gpui-test-support native_reader_selection_preview -- --ignored --nocapture --test-threads=1
-```
-
-测试只对自己的原生 TextView 窗口分发选择事件，不启动终端或 AI 会话、不改系统
-剪贴板。输出目录出现 `ready.json` 后可截图，写入 `capture-complete` 文件即可
-结束预览；没有信号时最多等待约一分钟后退出。
-
-虚拟窗口测试不等同于完整产品验收；Linux/macOS 原生窗口、其他缩放和真实答案
-内容仍需对应平台检查。本修复不改变
-LaTeX 解析、公式选择时的源码回退、剪贴板格式或终端网格的配色；没有新增依赖
-或逐帧计算，颜色只在主题应用时适配。
+选区适配不改变 LaTeX 解析、公式选择时的源码回退、剪贴板格式或终端网格配色。
 
 ## 1. 行内公式
 

@@ -68,6 +68,7 @@
   - `slterm_app/src/atomic_file.rs::replacement_preserves_an_explicit_target_acl`
 - **真实 Windows 凭据管理器**：未设 `SLTERM_TEST_CREDENTIAL_STORE=1` 时跳过；无凭据库的机器/服务账户会失败。
   - `secrets.rs::credential_three_operations_round_trip_through_windows_manager`：三原语往返 + 覆盖写 + 幂等删除。兜底 = 内存后端契约用例 + `SecretBytes` 类型边界/日志边界/借出白名单扫描 + 源码门禁（凭据后端仅门面可达）。
+- **Windows 运行时准备测试的跨架构修复分支**：`scripts/tests/windows-runtime.tests.ps1` 未传 `-ArchivePath` 时显式打印 SKIP，只跳过“错误架构 DLL 被替换”一段；下载/哈希/复用/损坏归档拒绝仍执行。兜底 = `scripts/check_bundled_runtime.py` 固定随包 x64 二进制 SHA256 与 PE 架构，CI 常驻运行。
 
 本地开发机（已开开发者模式）为真实覆盖来源；环境不满足时上述分支覆盖记为「不确定」，不得虚构通过。
 

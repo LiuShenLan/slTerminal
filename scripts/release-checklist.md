@@ -16,8 +16,11 @@
 - 执行 `pwsh -File scripts/release.ps1 -Version <X.Y.Z>`，确认全链通过；正式路径不得使用 `-SkipBuild` / `-AllowStale`。
 - 确认 `dist/` 仅含安装器、便携 zip 与 `SHA256SUMS`。
 - 确认两个产物的文件名、大小与 `SHA256SUMS` 一致，哈希由 `verify-release.ps1` 复算，未手抄。
+- 确认 `scripts/sync-release-notes.ps1 -Version <X.Y.Z>` 复跑后版本说明无差异；版本说明 SHA256 块与 `SHA256SUMS` 同源，不要求两种格式逐字节相等。
 - 确认构建产物、安装后 exe、zip 解压 exe 三处 `slterm.exe --version` 输出一致。
 - 确认 setup.exe 为 PE 文件（MZ 魔数）且静默安装退出码为 0。
+- 确认 `licenses/` 含 Maple Mono OFL、ConPTY、SQLite、dav1d 与 Latin Modern Math 文本；`python scripts/check_licenses.py` 与 `python scripts/check_bundled_runtime.py` 在发布机复跑通过。
+- 签名边界：本版不提供 Authenticode 签名；确认发布说明或发布记录已登记 SmartScreen 与“仅哈希校验、不证明发布者身份”的风险。
 
 ### 安装器
 
@@ -31,14 +34,14 @@
 
 - 在干净 Win10 或另一台 PC 完成安装 → 启动 → 退出 → 卸载全流程。
 - 确认 zip 解压后直接运行 `slterm.exe` 可启动，文件集与打包清单全等。
-- 确认卸载后 HKCU 卸载项、App Paths、开始菜单/桌面/Startup 快捷方式无残留；安装目录锁文件残留属已知边界，必要时人工清理。
-- 确认卸载后 AI CLI hook 清理行为与当前实现一致；`setup-ai --remove` 未实现的已知边界不得误报为成功。
+- 确认卸载后 HKCU 卸载项、App Paths、开始菜单/桌面/Startup 快捷方式与 `.slterm-update*` 残留无遗留；安装目录本身仅在仍有用户文件时保留。
+- 确认卸载运行 `setup-ai --remove`，AI CLI hook 清理失败时安装器不把失败误报为成功。
 
 ### 更新链
 
 - 确认 GitHub Release 已挂同版本资产，更新链能发现并校验 setup.exe。
 - 确认从历史版本启动时，更新提示为「需手动重装」且不自动下载。
-- 确认 release notes 末尾 SHA256 块与 `dist/SHA256SUMS` 逐字节一致。
+- 确认 release notes 末尾 SHA256 块由 `sync-release-notes.ps1` 从 `dist/SHA256SUMS` 派生且无差异。
 
 ## 操作
 

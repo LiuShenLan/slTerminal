@@ -4,22 +4,25 @@
 
 ## 决策与红线
 
-- **单一发布入口**：正式发布只走 `scripts/release.ps1 -Version <X.Y.Z>`，依次执行许可核验 → 共享构建 → Inno 安装器 → 便携 zip → 钉测试 → `verify-release`，逐失败即停。原因：发布步骤必须同源、可复现、不可跳步。边界：正式路径禁止 `-SkipBuild`/`-AllowStale`；两者只允许出现在脚本自测与发布彩排，且必须在命令中显式出现。
+- **单一发布入口**：正式发布只走 `scripts/release.ps1 -Version <X.Y.Z>`，依次执行许可与随包运行时核验 → 发布自测 → 共享构建 → Inno 安装器 → 便携 zip → 产物钉测试 → `verify-release` → 发布说明哈希同步，逐失败即停。原因：发布步骤必须同源、可复现、不可跳步。边界：正式路径禁止 `-SkipBuild`/`-AllowStale`；两者只允许出现在脚本自测与发布彩排，且必须在命令中显式出现。
 - **共享构建与 feature 图**：`scripts/build-windows-product.ps1` 以隔离的 `CARGO_TARGET_DIR` 显式构建 `slterm` 与 `slterm-hook`；安装器与便携 zip 使用同一构建产物与同一 feature 图。原因：两个产物必须同代。边界：不得从已有 `target/` 或旧 `dist/` 复用产物。
-- **清单即合同**：包内文件集唯一真值源 = `build-windows-product.ps1` 的 `PackageEntries`；`package-release.ps1` 的 staging/zip 全等校验与 `installer.iss` 的 `[Files]` 必须同步，多一件少一件都红。原因：包内文件集是外部可见合同。边界：新增/删除包内文件必须同时改三处。
-- **新鲜度判据**：共享构建在构建前对 `SourceRoots` 中的 `.rs`/`.toml` 与根 `Cargo.lock` 按路径和内容生成摘要，成功后写入 `.build-stamp`；打包前重算比对，不一致即拒绝。缺构建戳的旧目录回退为二进制与最新源码的 mtime 比较。原因：仅改注释后 Cargo 可能不重链接，内容摘要可在重新执行共享构建后对齐，避免 mtime 假红；构建期间的源码变化也不会漏判。边界：新增 workspace 成员或构建输入必须登记 `SourceRoots`；mtime 仅是旧目录回退路径。
+- **清单即合同**：包内文件集唯一真值源 = `build-windows-product.ps1` 的 `PackageEntries`；`package-release.ps1` 的 staging/zip 全等校验与 `installer.iss` 的 `[Files]` 必须同步，多一件少一件都红。原因：包内文件集是外部可见合同。边界：`package-release.tests.ps1 -SelfTest` 解析安装器 `[Files]`（含通配展开）并与共享清单做集合全等，新增/删除包内文件必须同时改两处并由自测拦截。
+- **新鲜度判据**：共享构建在构建前对 `SourceRoots` 登记的全部构建输入（源码、字体、i18n、hook 脚本、内嵌 schema、vendor 原生源与 ConPTY 二进制）按路径和内容生成摘要，成功后写入 `.build-stamp`；打包前重算比对，不一致即拒绝。缺构建戳的旧目录回退为二进制与最新输入的 mtime 比较。原因：按后缀猜测会漏掉非 `.rs` 资产；内容摘要可在重新执行共享构建后对齐，避免 mtime 假红。边界：新增 workspace 成员或构建输入必须登记 `SourceRoots`；mtime 仅是旧目录回退路径。
+- **SHA256 单一来源**：`verify-release.ps1` 生成的 `SHA256SUMS` 是唯一真值源；`scripts/sync-release-notes.ps1` 在发布链末尾据此重写版本说明的 SHA256 块，禁止手抄。原因：发布正文与校验文件必须同源，格式差异不得靠人眼比对。边界：人工清单只要求运行同步脚本后无差异，不要求 Markdown 列表与校验文件逐字节相等。
+- **签名边界**：首发不提供 Authenticode 签名；`verify-release` 只验证资产名、体积下限、PE 魔数与 SHA256，不证明发布者身份。原因：签名证书是发布机外部材料，未进入当前合同。边界：SmartScreen 警告与更新链仅依赖哈希的风险必须在发布清单登记；引入证书前不得把哈希校验描述成签名。
 - **版本与产物命名**：版本缺省回读 `slterm_app/Cargo.toml`；版本线续 `0.3.0`，更新链对 `< 0.3.0` 一律视为需手动重装。产物固定为 `slTerminal-v<version>-windows-x64-setup.exe` / `slTerminal-v<version>-windows-x64.zip`，`scripts/verify-release.ps1` 生成 `SHA256SUMS`。原因：资产命名与版本线是更新链的外部契约。边界：`verify-release` 校验资产名集合、1 MiB 下限、PE 魔数与 semver；任何重建都必须重新生成 SHA256。
 - **安装器形态**：Inno Setup，用户级安装（`PrivilegesRequired=lowest`），`MinVersion=10.0.17763`；生产 AppId `{D9D92995-C831-4610-87BC-4B82B43B3E71}` 与夹具 AppId `{45EED1CD-AE5E-4D5C-84F2-8D1949722E9E}` 一经钉死永不变更；夹具模式必须隔离 AppId、AppName、输出名与注册表键。原因：AppId 是续装/升级/卸载标识，变更会割裂用户安装基。边界：中文翻译文件 `ChineseSimplified.isl` 固定上游提交 + SHA256，缺失或哈希不符时下载后仍不符则拒绝构建。
 - **体积门禁**：release profile 冷代码 `opt-level = "s"`、thin LTO、单 codegen unit、strip；热路径清单（resvg/rustybuzz/taffy/ttf-parser/smol/gpui/gpui-component/slterm_terminal/image + `slterm` O3/16 CU）钉回 O3。预算值钉在 `scripts/tests/package-release.tests.ps1`；超预算即红。原因：依赖增长会静默吃掉发布包体积。边界：收紧预算永远合法；放宽须在提交信息说明原因；改动 profile 体积相关数值或钉包清单必须重跑钉测试。
-- **合规四落点**：仓库根 `LICENSE` 全文 / workspace `Cargo.toml` 的 `license = "GPL-3.0"` 与成员 `license.workspace = true` / 安装器 `LicenseFile` / 应用内关于页；`licenses/` 与 `THIRD-PARTY-NOTICES` 随包。生产 crate 与原生源许可由 `scripts/check_licenses.py` 按 Windows x64 正常及构建依赖图生成，缺文本或清单过期即拒绝发布；registry 包缺失文本只接受仓内精确版本上游快照。原因：GPL-3.0 与第三方再分发义务必须机械闭合。边界：开发依赖不进入生产清单；真实凭据禁入任何打包输入。
+- **合规四落点**：仓库根 `LICENSE` 全文 / workspace `Cargo.toml` 的 `license = "GPL-3.0"` 与成员 `license.workspace = true` / 安装器 `LicenseFile` / 应用内关于页；`licenses/` 与 `THIRD-PARTY-NOTICES` 随包。生产 crate 与原生源许可由 `scripts/check_licenses.py` 按 Windows x64 正常及构建依赖图生成，缺文本或清单过期即拒绝；内嵌字体与 ConPTY 二进制按资产清单校验许可文本与版权行；随包 ConPTY 二进制再由 `scripts/check_bundled_runtime.py` 固定 SHA256 与 x64 PE。registry 包缺失文本只接受仓内精确版本上游快照。原因：GPL-3.0 与第三方再分发义务必须机械闭合，资产不能只靠 Cargo 图覆盖。边界：开发依赖不进入生产清单；真实凭据禁入任何打包输入。
 - **发布脚本版本**：全部 `.ps1` 首行 `#Requires -Version 7`；PowerShell 5.1 下不保证解析语义。原因：脚本使用了 7 的语法与语义。边界：发布机必须安装 PowerShell 7。
 - **人工核验**：`scripts/release-checklist.md` 是发布人工核验清单；命令成功不等于发布核验完成。原因：安装向导外观、干净环境、更新链发现等只能人工观察。边界：未完成人工项不得以本机自动化结果替代。
 
 ## 验收与测试
 
-- 钉测试：`pwsh -File scripts/tests/package-release.tests.ps1`（profile 钉值、清单、新鲜度、体积预算）；`pwsh -File scripts/tests/windows-runtime.tests.ps1`（随包运行时校验）。
+- 钉测试：`pwsh -File scripts/tests/package-release.tests.ps1 -SelfTest`（原生静态链接、profile 钉值、安装器全等清单、新鲜度含非 `.rs` 输入、体积预算、发布说明哈希同步）；`pwsh -File scripts/tests/windows-runtime.tests.ps1`（随包运行时准备，跨架构分支无归档时显式 SKIP 并登记豁免）。
+- 许可与随包二进制：`python scripts/check_licenses.py`、`python scripts/check_bundled_runtime.py`；CI 常驻执行。
 - 发布：`pwsh -File scripts/release.ps1 -Version <X.Y.Z>`。
-- 发布核验：`scripts/verify-release.ps1` 独立复跑；资产名集合、1 MiB 下限、PE 魔数与 SHA256SUMS 复算一致。
+- 发布核验：`scripts/verify-release.ps1` 独立复跑；资产名集合、1 MiB 下限、PE 魔数与 SHA256SUMS 复算一致；`scripts/sync-release-notes.ps1 -Version <X.Y.Z>` 复跑后版本说明无差异。
 - 2026-10-18 首发本机核验证据：
   - 环境：Windows 11 Pro build 26300，PowerShell 7.6.7。
   - 安装器 `slTerminal-v0.3.0-windows-x64-setup.exe`：17,901,111 字节（17.07 MiB），SHA256 `e0411229b44f20083ac74d222276c5405faa1e536bc8faa2f2d3d7045329d567`。
@@ -27,9 +30,10 @@
   - 体积预算按实测 + 15% 钉为 setup 19.63 MiB / zip 25.54 MiB。
   - 便携 zip 解压后文件集与 `PackageEntries` 全等；GUI 启动存活、正常关窗退出、无孤儿进程。
   - 生产 AppId 静默安装成功，落点 `%LOCALAPPDATA%\Programs\slTerminal`；卸载后卸载项、App Paths 与快捷方式无残留。
-  - 已知边界：安装目录可能残留 `.slterm-update.slterm-lock`，导致目录本身保留；`setup-ai --remove` 子命令不存在，卸载 hook 清理为 no-op；开始菜单快捷方式落在 `Programs\(Default)` 组。
+  - 当前卸载事实：安装器 `[UninstallRun]` 调用 `setup-ai --remove` 并在 `[UninstallDelete]` 清理 `.slterm-update*` 残留；开始菜单组由 `DefaultGroupName` 显式指定。以上为当前脚本事实，历史证据中的旧边界不再适用。
   - 用户数据 `%APPDATA%\slterm` 与 ConPTY 提取缓存 `%LOCALAPPDATA%\slterm\conpty` 在卸载后保留，属预期。
 - 2026-11-26 阶段回归证据：`package-release.tests.ps1` PASS（profile 钉值与体积预算未漂移；实测 setup 17.12 MiB、zip 22.35 MiB，均低于预算）与 `windows-runtime.tests.ps1` PASS（x64 钉文件、复用、修复与拒绝归档）。本机未安装 Inno Setup，安装器重建与真实安装／更新链复验按豁免留待发布机执行；2026-10-18／10-26 实机证据仍为最新安装器形态证据，新包体的实机核验不得以本次钉测试结果冒充。
+- 哈希口径：历史证据按日期保留原构建哈希；当前 `release-notes` 的 SHA256 块只由 `sync-release-notes.ps1` 从对应 `dist/SHA256SUMS` 派生。复现或重建包体后必须重跑同步脚本，不能沿用旧块。
 - 2026-11-26 debug 构建产物运行矩阵（隔离双数据根）：真实窗口出现后启动第二实例，第二实例经单实例移交退出码 0 且首实例存活；关窗后首实例退出码 0，工作区库 `workspace_meta` 落盘 `clean_shutdown=1` 且 `run_id` 与 `store_epoch` 有效，无残留 `slterm` 进程。安装器、发布包实机安装与更新链仍按 `scripts/release-checklist.md` 留待发布机。
 - 2026-10-26 依赖基线本机核验证据：
   - 环境：Windows 11 Pro build 26300，PowerShell 7.6.8，Inno Setup 6.7.3。

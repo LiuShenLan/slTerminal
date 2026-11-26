@@ -237,33 +237,33 @@
 
 | 问题 | 状态 |
 |---|---|
-| 内嵌 Maple Mono 字体缺少 OFL 许可与版权文本 | 待修 |
-| 发布说明哈希与当前 dist 及打包证据不一致 | 待修 |
-| 许可审计根包名与实际 workspace 包名不一致 | 待修 |
-| 手工 THIRD-PARTY-NOTICES 缺版权行且引用不存在路径 | 待修 |
-| dav1d 原生源从可变 tag 克隆，审计 commit 未进入构建 | 待修 |
-| 构建新鲜度摘要漏掉非 .rs/.toml 构建输入 | 待修 |
-| 随包 ConPTY 运行时的校验与实际嵌入二进制脱节 | 待修 |
-| release.ps1 的钉测试只执行体积与 profile | 待修 |
-| “清单即合同”没有机械化全等检查 | 待修 |
-| CI 不执行许可清单核验 | 待修 |
-| CI 未按发布口径验证（无 --locked、无 release 构建、无 dumpbin） | 待修 |
+| 内嵌 Maple Mono 字体缺少 OFL 许可与版权文本 | 已修：新增 `licenses/LICENSE-MAPLE-MONO`（上游 OFL 1.1 全文与版权行）与 `LICENSE-CONPTY`、`LICENSE-SQLITE` 随包；`check_licenses.py` 增加内嵌字体/运行时资产清单校验（文件、非空许可、版权持有者） |
+| 发布说明哈希与当前 dist 及打包证据不一致 | 已修：新增 `sync-release-notes.ps1` 由 `dist/SHA256SUMS` 派生版本说明 SHA256 块并原子替换，发布链末尾执行；当前 0.3.0 说明已同步到 dist 哈希；生产包测试覆盖派生与临时文件清理 |
+| 许可审计根包名与实际 workspace 包名不一致 | 已修：`ROOT_PACKAGES` 改为真实 `slterm_hook`，缺少任一根包即报错；单测夹具改用真实包名并新增缺根用例 |
+| 手工 THIRD-PARTY-NOTICES 缺版权行且引用不存在路径 | 已修：补 Microsoft／Tabby 版权行与 Maple Mono、ConPTY、SQLite 许可落点；Herdr 归因改指 `slterm_agent_detection/*.toml`，删除已不存在的 SSH Bash 段落与 `prepare-windows-runtime` 哈希声明 |
+| dav1d 原生源从可变 tag 克隆，审计 commit 未进入构建 | 已修：`build.rs` 固定 `32cf02af50f32af108a3b281c452788dccdac648`，缓存命中审计 commit 时离线复用，clone/fetch 后强制 `rev-parse HEAD` 校验；tag 漂移或缓存被替换即构建失败 |
+| 构建新鲜度摘要漏掉非 .rs/.toml 构建输入 | 已修：摘要与 mtime 回退改为对 `SourceRoots` 全部文件（除 `.git`）取哈希，新增 vendor tree-sitter、`vendor/conpty`、内嵌 schema 与工具链登记；自测新增非 `.rs` 资产变更拒绝用例 |
+| 随包 ConPTY 运行时的校验与实际嵌入二进制脱节 | 已修：新增 `check_bundled_runtime.py` 固定 `vendor/conpty` 两个二进制 SHA256 与 x64 PE，并校验许可；CI 与发布链常驻；`windows-runtime.tests.ps1` 无归档时显式打印 SKIP 并登记豁免 |
+| release.ps1 的钉测试只执行体积与 profile | 已修：发布链构建前运行 `package-release.tests.ps1 -SelfTest`，构建后运行产物钉测试；删除不存在的 `installer.tests.ps1` 探测；新增发布说明哈希自测 |
+| “清单即合同”没有机械化全等检查 | 已修：清单自测解析 `installer.iss` `[Files]`（含通配展开、DestDir 映射）并与共享清单 `PackagePath` 集合全等比较，新增许可文件同步进两处 |
+| CI 不执行许可清单核验 | 已修：CI 新增 `check_licenses.py` 与 `check_bundled_runtime.py` 步骤；根门禁清单与命令矩阵同步 |
+| CI 未按发布口径验证（无 --locked、无 release 构建、无 dumpbin） | 已修：CI 全部 cargo 步骤加 `--locked`；新增 release 构建 `slterm`／`slterm-hook` 并调用 `Assert-Dav1dStatic` 审计 `target/release/slterm.exe` |
 | 架构门禁未使用 --base | 已修：CI 检出完整历史，PR 用 `base.sha`、push 用 `before` 传入 `check_architecture.py --base`，零基线回退全量；测试 `test_ci_architecture_gate_compares_against_the_change_base` |
-| 版本校验与默认值跨脚本不一致 | 待修 |
-| 发布产物无签名链 | 待修 |
+| 版本校验与默认值跨脚本不一致 | 已修：`package-release.ps1` 与 `build-installer.ps1` 改为缺省回读 `slterm_app/Cargo.toml` 且只接受三数值段，与 `release.ps1`／`verify-release.ps1` 同一契约；删除 `unreleased` 默认 |
+| 发布产物无签名链 | 已裁决为不签名：首发不提供 Authenticode，`verify-release` 只验证资产名、体积、PE 魔数与 SHA256；签名边界与 SmartScreen／仅哈希风险写入打包决策与发布清单，不把哈希校验描述成签名 |
 | i18n 合同只约束目录占位符 | 已修：生成器输出 `Message::placeholders()` 与 `Message::ALL`；`format` 在 debug 构建校验参数名集合完全一致，合同测试用声明占位符遍历全部消息与语言并断言无残留 `{name}`；测试 `every_message_formats_with_its_declared_placeholders` |
-| 数学语料引用不存在的测试、主题与截图 | 待修 |
+| 数学语料引用不存在的测试、主题与截图 | 已修：语料开头改用 Linear／Nord 与真实选区测试锚（`fresh_terminal_derives_cursor_and_selection_from_palette_slots` 等），删除不存在的 `native_reader_selection_preview`、`SLTERM_SELECTION_QA_*`、MintLight 与截图引用 |
 
 ## 安全、凭据与依赖
 
 | 问题 | 状态 |
 |---|---|
 | Git 读取未统一遵守有界执行、禁网与凭据提示约束 | 已修：`command` 统一设置 `GIT_TERMINAL_PROMPT=0`/`GIT_NO_LAZY_FETCH=1`/`GIT_ALLOW_PROTOCOL=file`；`head_file`/`verify_head`/`file_hunks` 改走有界带 deadline 执行体；测试 `every_git_command_disables_prompts_lazy_fetch_and_network` |
-| 生产 TLS 栈命中 emSign 弃用中间证书公告 | 待修 |
+| 生产 TLS 栈命中 emSign 弃用中间证书公告 | 已修：`rustls-webpki` 升到 0.103.16、`webpki-roots` 升到 1.0.10；同时升级 `cookie` 0.18.3、`ctutils` 0.4.4、`url` 2.5.9，`cargo audit` 漏洞数为零（仅保留告警） |
 | 加密备份 AAD 范围与恢复时序合同冲突 | 已裁决：AAD 统一为完整头部（魔数｜盐｜nonce），旧版仅魔数 AAD 包明确拒绝，测试 `legacy_magic_only_aad_packet_is_rejected`；删除运行期即时 `restore`／`restore_selected`／`undo` 写通道，恢复只经 `stage_restore` 与启动维护期，撤回实现必须复用同一维护请求时序 |
-| 依赖审计未进入 CI 常驻门禁 | 待修 |
+| 依赖审计未进入 CI 常驻门禁 | 已修：CI 安装固定 `cargo-audit 0.22.2` 并运行 `cargo audit`，漏洞阻断、告警放行；新增 `audit.toml` 声明忽略登记格式；当前审计漏洞为零 |
 | 诊断脱敏词表与备份敏感键表不一致 | 已修：脱敏键集合与备份敏感键表对齐，授权头额外吞掉方案词后的凭据；测试 `redaction_covers_credential_shapes` |
-| 凭据明文副本没有全程清零 | 待修 |
+| 凭据明文副本没有全程清零 | 已修：控制面服务端／客户端读取缓冲、帧与 1 KiB 分块改为 `Zeroizing`；套餐请求 `Authorization` 头在 `Zeroizing<String>` 中组装，解析后随作用域释放清零 |
 | AI hook 解析在 debug 日志输出整条事件 | 已修：只记录 source/kind/pane，正文与 session_file 不进入日志 |
 | 更新下载 .part 打开跟随预置链接 | 已修：先移除既有项再 `create_new` 独占创建 |
 | 凭据 Win32 FFI 调用缺少逐块 SAFETY 不变量 | 已修：CredReadW/CredFree/CredWriteW/CredDeleteW 调用点补齐 SAFETY 不变量注释 |
