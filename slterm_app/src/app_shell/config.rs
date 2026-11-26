@@ -20,6 +20,18 @@ const DEFAULT_FONT_SIZE_PX: f32 = 15.0;
 /// 回滚行数(裁决值)。
 const SCROLLING_HISTORY: usize = 10_000;
 
+static REDUCED_MOTION: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// 启动链在读取设置前写入系统动画偏好；测试与未初始化路径默认不减少动效。
+pub(crate) fn set_reduced_motion(reduced: bool) {
+    REDUCED_MOTION.store(reduced, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// 闪烁默认值：用户显式设置优先；否则跟随系统减少动效。
+fn cursor_blink_enabled(explicit: Option<bool>, reduced_motion: bool) -> bool {
+    explicit.unwrap_or(!reduced_motion)
+}
+
 /// 应用运行期全局设置;设置页提交后整体替换并扇出到各终端视图。
 #[derive(Clone)]
 pub struct Settings {
@@ -34,6 +46,8 @@ pub struct Settings {
     pub palette: Palette,
     /// 编辑器语义槽(源码态/gutter/diff 的配色单源)。
     pub editor_theme: EditorThemeTokens,
+    /// 光标闪烁；形状固定竖线。系统减少动效时默认关闭，用户显式设置优先。
+    pub cursor_blink: bool,
     /// 选区完成即复制。
     pub copy_on_select: bool,
     /// 全局 Document 自动保存；视图层不得另设开关。
@@ -152,6 +166,10 @@ impl Settings {
             ligatures: runtime.ligatures.enabled(None),
             editor_theme: editor_theme::editor_theme_tokens(runtime.theme.reviewed_palette(), &ui),
             palette,
+            cursor_blink: cursor_blink_enabled(
+                runtime.cursor_blink,
+                REDUCED_MOTION.load(std::sync::atomic::Ordering::Relaxed),
+            ),
             copy_on_select: runtime.copy_on_select,
             document_autosave: runtime.document_autosave,
             osc52_unfocused: runtime.osc52_unfocused,
@@ -187,10 +205,15 @@ impl Settings {
     /// ConPTY resize 后会静默重锚主屏，网格必须保持同语义
     /// (`conpty_resize`)；`kitty_keyboard` 开增强键报。
     pub fn term_config(&self) -> slterm_terminal::term::Config {
+        use vte::ansi::{CursorShape, CursorStyle};
         slterm_terminal::term::Config {
             scrolling_history: SCROLLING_HISTORY,
             conpty_resize: true,
             kitty_keyboard: true,
+            default_cursor_style: CursorStyle {
+                shape: CursorShape::Beam,
+                blinking: self.cursor_blink,
+            },
             ..Default::default()
         }
     }
@@ -462,6 +485,33 @@ mod config_tests {
     fn term_config_carries_the_anchored_scrollback() {
         // 回滚 10000 行是产品裁决值,不是库默认巧合——钉字面量。
         assert_eq!(Settings::default().term_config().scrolling_history, 10000);
+    }
+
+    #[test]
+    fn cursor_blink_prefers_the_explicit_setting_over_reduced_motion() {
+        assert!(cursor_blink_enabled(None, false));
+        assert!(!cursor_blink_enabled(None, true));
+        assert!(cursor_blink_enabled(Some(true), true));
+        assert!(!cursor_blink_enabled(Some(false), false));
+    }
+
+    #[test]
+    fn term_config_uses_a_beam_cursor_with_the_effective_blink() {
+        use vte::ansi::CursorShape;
+
+        let settings = Settings {
+            cursor_blink: false,
+            ..Settings::default()
+        };
+        let config = settings.term_config();
+        assert_eq!(config.default_cursor_style.shape, CursorShape::Beam);
+        assert!(!config.default_cursor_style.blinking);
+
+        let settings = Settings {
+            cursor_blink: true,
+            ..Settings::default()
+        };
+        assert!(settings.term_config().default_cursor_style.blinking);
     }
 
     #[test]

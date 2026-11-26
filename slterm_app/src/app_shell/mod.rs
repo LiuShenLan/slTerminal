@@ -487,6 +487,8 @@ fn run_shell_once(initial_cwd: Option<PathBuf>) -> startup_diagnostics::ShellRun
     // 后台任务运行时复位:静态初值即注册表默认值,这里显式
     // 再对齐一次,保证同进程重启测试/后续配置载入从确定态出发。
     crate::background_tasks::reset_defaults();
+    // 光标闪烁默认值跟随系统减少动效；必须在设置快照构建前写入。
+    config::set_reduced_motion(crate::platform::animation::reduced_motion());
     // 安装守卫只阻止与安装事务并发的常驻启动；旧 session 移交恢复已删除。
     match crate::update_download::handoff::installation_in_progress() {
         Ok(true) => {

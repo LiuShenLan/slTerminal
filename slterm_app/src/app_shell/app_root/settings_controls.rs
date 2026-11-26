@@ -157,18 +157,6 @@ const SCROLLBACK_LINES: &[ChoiceOption] = &[
     literal("100000"),
 ];
 
-const CURSOR_SHAPES: &[ChoiceOption] = &[
-    option("block", Message::SettingsOptionsBlock),
-    option("beam", Message::SettingsOptionsBar),
-    option("underline", Message::SettingsOptionsUnderline),
-    option("hollow", Message::SettingsOptionsHollow),
-];
-
-const CURSOR_MOTIONS: &[ChoiceOption] = &[
-    option("off", Message::SettingsOptionsCursorMotionOff),
-    option("smooth", Message::SettingsOptionsSmooth),
-];
-
 const NEW_TAB_POSITIONS: &[ChoiceOption] = &[
     option("after_current", Message::SettingsOptionsAfterCurrent),
     option("end", Message::SettingsOptionsEndOfList),
@@ -532,28 +520,12 @@ pub(super) static FIELDS: &[SettingsFieldUi] = &[
         Toggle,
     ),
     field(
-        "cursor_shape",
-        SettingsPageId::Interaction,
-        Message::SettingsInteractionCursor,
-        Message::SettingsInteractionCursorShape,
-        None,
-        Choice(CURSOR_SHAPES),
-    ),
-    field(
         "cursor_blink",
         SettingsPageId::Interaction,
         Message::SettingsInteractionCursor,
         Message::SettingsInteractionCursorBlink,
         None,
         Toggle,
-    ),
-    field(
-        "cursor_motion",
-        SettingsPageId::Interaction,
-        Message::SettingsInteractionCursor,
-        Message::SettingsInteractionCursorMotion,
-        None,
-        Choice(CURSOR_MOTIONS),
     ),
     field(
         "new_tab_position",
@@ -815,8 +787,9 @@ mod settings_control_tests {
         keys
     }
 
-    /// 主题编辑器宿主管理的键：不进标量字段行，但必须在注册表内。
-    const EDITOR_MANAGED: [&str; 1] = ["custom_theme"];
+    /// 宿主管理或已退休的键：不进标量字段行，但注册表仍保留旧值。
+    /// 光标形状固定竖线、平滑移动不在行为真值内，旧键不再暴露。
+    const EDITOR_MANAGED: [&str; 3] = ["custom_theme", "cursor_shape", "cursor_motion"];
 
     #[test]
     fn every_setting_field_in_displayed_domains_has_exactly_one_control() {

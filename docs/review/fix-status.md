@@ -142,7 +142,7 @@
 | Ctrl+Enter 未发送 LF，行镜像把修饰 Enter 当作提交 | 已修：`encode_for_program` 对 Ctrl+Enter 恒发 LF，行镜像 control 分支已使镜像失效；测试 `ctrl_enter_always_sends_lf` |
 | 键盘选区扩展未实现，Shift+PageUp/PageDown/Home/End 语义相反 | 已修：`SelectionCommand::Extend(SelectionMotion)` 由 worker 按光标/既有锚点移动端点，方向键、翻页与 Home/End 不再编码进 PTY；端点自动滚入视口，备用屏夹在当前画面；测试 `keyboard_extension_moves_endpoint_with_inclusive_cells`、`keyboard_extension_in_alt_screen_stays_in_current_screen`、`page_extension_scrolls_endpoint_into_view`、`shift_arrow_extends_selection_without_pty_write`、`shift_pageup_extends_selection_into_scrollback`、`shift_paging_extends_selection_and_alt_screen_stays_local` |
 | Ctrl+Shift+A 同时被终端全选与侧栏 Agent 文件占用 | 已修：终端独占 `Ctrl+Shift+A` 全选（`SelectionCommand::SelectAll` 覆盖回滚与屏幕，尾部空白不产生尾随换行，零 PTY 写入）；侧栏 Agent 文件改绑 `Ctrl+Shift+I`，命令目录新增保留键断言；测试 `select_all_covers_scrollback_and_screen`、`ctrl_shift_a_selects_all_terminal_text_without_pty_write`、`side_view_shortcut_bindings_cover_all_registered_views` |
-| 光标形状、闪烁与相关设置不符合行为真值 | 待修 |
+| 光标形状、闪烁与相关设置不符合行为真值 | 已修：终端 Config 固定 `CursorShape::Beam`，闪烁取 `cursor_blink` 显式值或系统减少动效的相反值；启动链在设置快照前写入动画偏好；形状与平滑移动控件及文案移除，旧键保留但不再暴露；测试 `cursor_blink_prefers_the_explicit_setting_over_reduced_motion`、`term_config_uses_a_beam_cursor_with_the_effective_blink`、`every_setting_field_in_displayed_domains_has_exactly_one_control` |
 | 主题、字体、字号、连字与复制/补全外观设置不热应用 | 已修：`reload_settings_snapshot` 向全部项目（含隐藏）的既有终端扇出 `apply_settings`；字号/字体/连字更新并触发结构 resize，调色板替换后按亮暗翻转发送 `SetColorScheme`，复制/补全/ghost 字段同步；测试 `terminal_views_hot_apply_settings_snapshot` |
 | 真实 ConPTY 验收场景覆盖不足 | 待修 |
 | 测试语义与生产路径断裂 | 待修 |

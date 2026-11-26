@@ -437,9 +437,7 @@
       "paste_confirm": "Confirm pastes",
       "paste_confirm_description": "Confirms newlines, elevated commands and control characters.",
       "panel_resize": "Drag to resize the sidebar",
-      "cursor_shape": "Cursor shape",
       "cursor_blink": "Cursor blink",
-      "cursor_motion": "Smooth cursor motion",
       "new_tab_position": "New tab position",
       "vcs_display": "Sidebar version control",
       "dim_inactive": "Dim inactive panes",
@@ -505,13 +503,7 @@
       "passphrase_too_short": "The backup passphrase must be at least 8 characters."
     },
     "options": {
-      "block": "Block",
       "follow_system": "Follow system",
-      "bar": "Bar",
-      "underline": "Underline",
-      "hollow": "Hollow",
-      "cursor_motion_off": "Off",
-      "smooth": "Smooth",
       "slide": "Slide",
       "instant": "Instant",
       "standard": "Standard",

@@ -437,9 +437,7 @@
       "paste_confirm": "粘贴前确认",
       "paste_confirm_description": "换行/提权命令/控制字符先确认。",
       "panel_resize": "拖拽调节侧栏宽度",
-      "cursor_shape": "光标形状",
       "cursor_blink": "光标闪烁",
-      "cursor_motion": "平滑光标",
       "new_tab_position": "新标签位置",
       "vcs_display": "侧栏版本控制",
       "dim_inactive": "压暗非聚焦分屏",
@@ -505,13 +503,7 @@
       "passphrase_too_short": "备份口令至少需要 8 个字符。"
     },
     "options": {
-      "block": "实心框",
       "follow_system": "跟随系统",
-      "bar": "条形",
-      "underline": "下划线",
-      "hollow": "空心框",
-      "cursor_motion_off": "关闭",
-      "smooth": "平滑",
       "slide": "滑动",
       "instant": "立即",
       "standard": "标准",
