@@ -27,6 +27,10 @@ pub(crate) const AUTO_UPDATE_CHECK: &str = "autoUpdateCheck";
 pub(crate) const AUTO_UPDATE_DOWNLOAD: &str = "autoUpdateDownload";
 /// 套餐余额周期查询；调度与导航视图可见性无关。
 pub(crate) const PLAN_BALANCE: &str = "planBalance";
+/// 套餐周期契约单源；注册表与套餐服务共同引用。
+pub(crate) const PLAN_BALANCE_INTERVAL_MIN_SEC: u64 = 30;
+pub(crate) const PLAN_BALANCE_INTERVAL_DEFAULT_SEC: u64 = 60;
+pub(crate) const PLAN_BALANCE_INTERVAL_MAX_SEC: u64 = 3_600;
 
 /// 任务触发形态。周期/一次性/事件驱动共用同一生命周期与失败策略,
 /// 只有驱动方决定何时调用。
@@ -130,9 +134,9 @@ pub(crate) static TASKS: &[TaskDef] = &[
     TaskDef {
         task_id: PLAN_BALANCE,
         title: "套餐余额查询",
-        interval_min: 60,
-        interval_max: 3600,
-        interval_default: 300,
+        interval_min: PLAN_BALANCE_INTERVAL_MIN_SEC,
+        interval_max: PLAN_BALANCE_INTERVAL_MAX_SEC,
+        interval_default: PLAN_BALANCE_INTERVAL_DEFAULT_SEC,
         enabled_default: true,
         executor: None,
         schedule: TaskSchedule::Interval,
@@ -144,7 +148,7 @@ static RUNTIME_STORE: [TaskRuntime; 4] = [
     TaskRuntime::new(true, 1),
     TaskRuntime::new(true, 12),
     TaskRuntime::new(true, 0),
-    TaskRuntime::new(true, 300),
+    TaskRuntime::new(true, PLAN_BALANCE_INTERVAL_DEFAULT_SEC),
 ];
 
 /// 运行时内存配置(与 [`TASKS`] 同序;静态初值 = 注册表默认值)。
@@ -420,6 +424,24 @@ mod background_task_tests {
         let download = &TASKS[2];
         assert_eq!(download.schedule, TaskSchedule::OnDemand);
         assert!(download.executor.is_none());
+
+        // 套餐周期契约单源：注册表与服务常量必须一致。
+        let plan = &TASKS[3];
+        assert_eq!(plan.interval_min, 30);
+        assert_eq!(plan.interval_default, 60);
+        assert_eq!(plan.interval_max, 3_600);
+        assert_eq!(
+            crate::plan_balance::service::MIN_PERIOD.as_secs(),
+            plan.interval_min
+        );
+        assert_eq!(
+            crate::plan_balance::service::DEFAULT_PERIOD.as_secs(),
+            plan.interval_default
+        );
+        assert_eq!(
+            crate::plan_balance::service::MAX_PERIOD.as_secs(),
+            plan.interval_max
+        );
 
         for (def, runtime) in TASKS.iter().zip(RUNTIMES.iter()) {
             assert_eq!(runtime.enabled.load(Ordering::Relaxed), def.enabled_default);

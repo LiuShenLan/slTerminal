@@ -7,12 +7,15 @@ use std::time::{Duration, SystemTime};
 
 use super::{PlanBalanceInfo, PlanBalanceSource};
 
-/// 默认调度周期。
-pub(crate) const DEFAULT_PERIOD: Duration = Duration::from_secs(60);
+/// 默认调度周期；契约值唯一来源 = 后台任务注册表。
+pub(crate) const DEFAULT_PERIOD: Duration =
+    Duration::from_secs(crate::background_tasks::PLAN_BALANCE_INTERVAL_DEFAULT_SEC);
 /// 周期配置下限。
-pub(crate) const MIN_PERIOD: Duration = Duration::from_secs(30);
+pub(crate) const MIN_PERIOD: Duration =
+    Duration::from_secs(crate::background_tasks::PLAN_BALANCE_INTERVAL_MIN_SEC);
 /// 周期配置上限。
-pub(crate) const MAX_PERIOD: Duration = Duration::from_secs(3_600);
+pub(crate) const MAX_PERIOD: Duration =
+    Duration::from_secs(crate::background_tasks::PLAN_BALANCE_INTERVAL_MAX_SEC);
 /// 手动全量刷新冷却（从实际发起时间起算）。
 pub(crate) const MANUAL_COOLDOWN: Duration = Duration::from_secs(5);
 /// 单次请求自身超时：超时前且未错过周期时保持查询中。

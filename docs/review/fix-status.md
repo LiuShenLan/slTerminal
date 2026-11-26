@@ -199,7 +199,7 @@
 | 合同冲突：静默启动的触发范围 | 已裁决为仅登录自启：CLI 增加隐藏 `--autostart` 标记，安装器启动项与 `set_launch_at_login` 写入该参数；手工启动即使设置开启也显示窗口；测试 `autostart_flag_is_the_only_silent_start_intent`、`manual_launch_never_starts_hidden`、`silent_start_falls_back_to_a_visible_window_without_a_usable_tray` |
 | 诊断脱敏不覆盖真实 Runtime token 形态 | 已修：`redact` 增加恰好 64 位小写 hex 的裸凭据识别（更长 hex 段不截断），验收 token 改为真实 64 位 hex 假值并覆盖键值、Bearer、裸值三种形态；测试 `runtime_token_absent_from_materials`、`redaction_covers_credential_shapes` |
 | 追溯矩阵把服务层或注册表层用例标成运行态集成 | 待修 |
-| 套餐周期契约与后台任务注册表不一致 | 待修 |
+| 套餐周期契约与后台任务注册表不一致 | 已修：新增 `PLAN_BALANCE_INTERVAL_MIN_SEC/DEFAULT_SEC/MAX_SEC` 单源，注册表元数据与运行时默认值、`plan_balance::service` 的 `MIN/DEFAULT/MAX_PERIOD` 全部引用同一常量；注册表锁定测试跨层断言服务常量与注册表边界一致；测试 `registry_metadata_is_locked`、`plan_balance_settings_commit_and_visibility` |
 | Runtime `git.diff` 路径校验放过盘符绝对路径/符号链接，工作区读取越过仓库根 | 已修：协议拒绝冒号/控制字符（盘符、ADS），应用层对规范位置做仓库根包含检查；测试 `git_diff_requires_a_safe_repository_relative_path`、`git_diff_snapshot_rejects_targets_outside_the_worktree` |
 | 快照 revision 固定为握手起点，事件续传进入不可恢复 resync 循环 | 已修：`RuntimeCallbacks` 增加事件环末尾 revision 回调，`EventHub` 原子维护最新发布 revision，`runtime.snapshot` 返回该值；测试 `event_hub_latest_revision_tracks_published_events`、`runtime_snapshot_returns_injected_resources_with_hello_generation` |
 | 非交互关闭在保存、停止或清理落定前返回 Succeeded | 已修：`app.close` 回执改由 `ApplicationClose.runtime_completion` 持有，最终冲刷成功后才发送；保存失败回 NotReady 并保持现场，未知结果放弃回执；测试 `runtime_app_close_reports_save_failure_and_keeps_scene`、`integration_runtime_noninteractive_close` |
