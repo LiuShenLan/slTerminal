@@ -138,6 +138,8 @@ pub(crate) type GitDiffCallback = Arc<
 /// Runtime 作用域的应用回调集合。
 pub(crate) struct RuntimeCallbacks {
     pub(crate) snapshot: SnapshotCallback,
+    /// 事件环当前末尾 revision；快照与事件订阅必须共用同一代次。
+    pub(crate) event_revision: Arc<dyn Fn() -> u64 + Send + Sync>,
     pub(crate) operation: OperationQueryCallback,
     pub(crate) events: EventSubscribeCallback,
     pub(crate) mutation: MutationCallback,
@@ -167,6 +169,7 @@ impl LocalControlServer {
             hello,
             on_handover,
             RuntimeCallbacks {
+                event_revision: Arc::new(|| 0),
                 snapshot: Arc::new(not_ready_snapshot),
                 operation: Arc::new(not_ready_operation),
                 events: Arc::new(not_ready_events),
@@ -519,7 +522,7 @@ fn handle_connection<F>(
                             RuntimeResult::Snapshot(SnapshotResponse {
                                 store_epoch: hello.store_epoch.clone(),
                                 stream_epoch: hello.stream_epoch.clone(),
-                                revision: hello.revision,
+                                revision: (runtime.event_revision)(),
                                 resources,
                             }),
                         ),

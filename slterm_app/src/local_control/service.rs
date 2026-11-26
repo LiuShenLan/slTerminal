@@ -478,6 +478,10 @@ impl LocalControlService {
             hello,
             on_handover,
             RuntimeCallbacks {
+                event_revision: {
+                    let event_hub = Arc::clone(&event_hub);
+                    Arc::new(move || event_hub.latest_revision())
+                },
                 snapshot: on_snapshot,
                 operation: on_operation,
                 events: on_events,

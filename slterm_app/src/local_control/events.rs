@@ -5,7 +5,7 @@
 
 use std::collections::VecDeque;
 use std::io;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -121,6 +121,7 @@ impl EventRing {
 pub(crate) struct EventHub {
     commands: SyncSender<HubCommand>,
     shutdown: Arc<AtomicBool>,
+    latest_revision: Arc<AtomicU64>,
     thread: Mutex<Option<JoinHandle<()>>>,
 }
 
@@ -132,18 +133,32 @@ impl EventHub {
         let (commands, receiver) = mpsc::sync_channel(HUB_COMMAND_CAPACITY);
         let shutdown = Arc::new(AtomicBool::new(false));
         let shutdown_for_thread = Arc::clone(&shutdown);
+        let latest_revision = Arc::new(AtomicU64::new(0));
+        let latest_revision_for_thread = Arc::clone(&latest_revision);
         let store_epoch = store_epoch.into();
         let stream_epoch = stream_epoch.into();
         let thread = std::thread::Builder::new()
             .name("slterm-runtime-events".to_owned())
             .spawn(move || {
-                event_hub_loop(receiver, store_epoch, stream_epoch, shutdown_for_thread)
+                event_hub_loop(
+                    receiver,
+                    store_epoch,
+                    stream_epoch,
+                    shutdown_for_thread,
+                    latest_revision_for_thread,
+                )
             })?;
         Ok(Self {
             commands,
             shutdown,
+            latest_revision,
             thread: Mutex::new(Some(thread)),
         })
+    }
+
+    /// 事件环当前末尾 revision；快照与订阅确认共用该值。
+    pub(crate) fn latest_revision(&self) -> u64 {
+        self.latest_revision.load(Ordering::SeqCst)
     }
 
     /// 非阻塞发布；命令队列满时丢弃并返回 false，不反压状态更新。
@@ -196,6 +211,7 @@ fn event_hub_loop(
     store_epoch: String,
     stream_epoch: String,
     shutdown: Arc<AtomicBool>,
+    latest_revision: Arc<AtomicU64>,
 ) {
     let mut ring = EventRing::new(store_epoch, stream_epoch);
     let mut subscribers: Vec<SyncSender<RuntimeEvent>> = Vec::new();
@@ -206,6 +222,7 @@ fn event_hub_loop(
         match receiver.recv_timeout(HUB_POLL) {
             Ok(HubCommand::Publish(event)) => {
                 let revision = ring.publish(event.clone());
+                latest_revision.store(revision, Ordering::SeqCst);
                 deliver_event(&mut subscribers, RuntimeEvent { revision, ..event });
             }
             Ok(HubCommand::Subscribe { params, response }) => {
@@ -261,4 +278,31 @@ fn hub_unavailable_error() -> JsonRpcError {
 
 fn control_error(domain: DomainErrorCode, numeric: i32, message: &'static str) -> JsonRpcError {
     JsonRpcError::new(numeric, message, Some(JsonRpcErrorData { code: domain }))
+}
+
+#[cfg(test)]
+mod latest_revision_tests {
+    use super::*;
+
+    #[test]
+    fn event_hub_latest_revision_tracks_published_events() {
+        let hub = EventHub::start("store", "stream").unwrap();
+        assert_eq!(hub.latest_revision(), 0);
+        assert!(hub.publish(RuntimeEvent {
+            revision: 0,
+            kind: "test.event".to_owned(),
+            resource: "r".to_owned(),
+            generation: 1,
+        }));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while hub.latest_revision() == 0 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "事件发布未推进 revision"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(hub.latest_revision(), 1);
+        hub.shutdown().unwrap();
+    }
 }

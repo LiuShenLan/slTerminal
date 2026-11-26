@@ -36,6 +36,7 @@ where
             Ok(HandoverResponse::accepted())
         },
         crate::local_control::server::RuntimeCallbacks {
+            event_revision: Arc::new(|| 7),
             snapshot: Arc::new(on_snapshot),
             operation: Arc::new(|_| Ok(None)),
             events: Arc::new(|_| {
@@ -116,6 +117,7 @@ where
             Ok(HandoverResponse::accepted())
         },
         crate::local_control::server::RuntimeCallbacks {
+            event_revision: Arc::new(|| 7),
             snapshot: Arc::new(|| Ok(SnapshotResources::default())),
             operation: Arc::new(on_operation),
             events: Arc::new(|_| {
@@ -196,6 +198,7 @@ where
             Ok(HandoverResponse::accepted())
         },
         crate::local_control::server::RuntimeCallbacks {
+            event_revision: Arc::new(|| 7),
             snapshot: Arc::new(|| Ok(sample_resources())),
             operation: Arc::new(|_| Ok(None)),
             events: Arc::new(|_| {
@@ -877,6 +880,7 @@ where
             Ok(HandoverResponse::accepted())
         },
         crate::local_control::server::RuntimeCallbacks {
+            event_revision: Arc::new(|| 7),
             snapshot: Arc::new(|| Ok(SnapshotResources::default())),
             operation: Arc::new(|_| Ok(None)),
             events: Arc::new(|_| {
@@ -996,6 +1000,7 @@ where
             Ok(HandoverResponse::accepted())
         },
         crate::local_control::server::RuntimeCallbacks {
+            event_revision: Arc::new(|| 7),
             snapshot: Arc::new(|| Ok(SnapshotResources::default())),
             operation: Arc::new(|_| Ok(None)),
             events: Arc::new(|_| {
@@ -1231,6 +1236,7 @@ where
             Ok(HandoverResponse::accepted())
         },
         crate::local_control::server::RuntimeCallbacks {
+            event_revision: Arc::new(|| 7),
             snapshot: Arc::new(|| Ok(SnapshotResources::default())),
             operation: Arc::new(|_| Ok(None)),
             events: Arc::new(|_| {
@@ -1361,6 +1367,7 @@ where
             Ok(HandoverResponse::accepted())
         },
         crate::local_control::server::RuntimeCallbacks {
+            event_revision: Arc::new(|| 7),
             snapshot: Arc::new(|| Ok(SnapshotResources::default())),
             operation: Arc::new(|_| Ok(None)),
             events: Arc::new(on_events),
@@ -1649,7 +1656,10 @@ fn runtime_snapshot_returns_injected_resources_with_hello_generation() {
 
     assert_eq!(value["result"]["store_epoch"], "store");
     assert_eq!(value["result"]["stream_epoch"], "stream");
-    assert_eq!(value["result"]["revision"], 7);
+    assert_eq!(
+        value["result"]["revision"], 7,
+        "快照 revision 必须来自事件环回调而不是 hello 固定值"
+    );
     let resources = &value["result"]["resources"];
     assert_eq!(resources["projects"][0]["display_name"], "Repo");
     assert_eq!(resources["terminals"][0]["run_intent"], "launch");
