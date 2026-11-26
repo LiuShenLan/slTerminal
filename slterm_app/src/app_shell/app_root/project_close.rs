@@ -4,7 +4,7 @@ use gpui::{App, Context, Entity, Window};
 use slterm_document::DocumentId;
 use slterm_workspace::{
     CloseAttempt, CloseCoordinator, CloseDecision, CloseEffect, CloseIntent, CloseObject,
-    ClosePhase, CloseScope, CloseStage, ProjectId, ProjectSnapshot,
+    ClosePhase, CloseScope, CloseStage, ProjectId, ProjectSnapshot, ViewKey,
 };
 
 use super::commands::AppRootError;
@@ -23,6 +23,8 @@ pub(super) struct LocalProjectClose {
     pub(super) persisted: PersistedCloseIntent,
     pub(super) stop_observation: Option<PtyStopObservation>,
     pub(super) outcome_unknown: bool,
+    /// Save 阶段代次失配：显式重试必须先经 Collect 重收集。
+    pub(super) needs_recollect: bool,
     pub(super) window: gpui::AnyWindowHandle,
 }
 
@@ -50,7 +52,7 @@ impl AppRoot {
             return match close.coordinator.phase() {
                 ClosePhase::Running(_) => Err(AppRootError::ProjectCloseRunning),
                 ClosePhase::Failed(_) => {
-                    self.retry_project_close(id, cx)?;
+                    self.retry_project_close(id, &document_decisions, cx)?;
                     Ok(())
                 }
                 ClosePhase::Idle | ClosePhase::Completed => Err(AppRootError::ProjectCloseState),
@@ -137,6 +139,7 @@ impl AppRoot {
                 persisted: registration,
                 stop_observation: None,
                 outcome_unknown: false,
+                needs_recollect: false,
                 window: window.window_handle(),
             },
         );
@@ -235,7 +238,11 @@ impl AppRoot {
         });
         self.tasks.complete(TaskId::ProjectClose(id));
         if let Err(failures) = result {
+            let needs_recollect = failures
+                .iter()
+                .any(|failure| failure.is_revision_mismatch());
             if let Some(close) = self.project_closes.get_mut(&id) {
+                close.needs_recollect = needs_recollect;
                 let _ = close.coordinator.fail(attempt);
             }
             log::warn!("项目移除前的 Document 保存失败: {} 项", failures.len());
@@ -269,20 +276,131 @@ impl AppRoot {
     fn retry_project_close(
         &mut self,
         id: ProjectId,
+        document_decisions: &std::collections::BTreeMap<DocumentId, CloseDecision>,
         cx: &mut Context<'_, Self>,
     ) -> Result<(), AppRootError> {
+        let (needs_recollect, outcome_unknown) = {
+            let close = self
+                .project_closes
+                .get(&id)
+                .ok_or(AppRootError::MissingPanel)?;
+            (close.needs_recollect, close.outcome_unknown)
+        };
+        if outcome_unknown {
+            return Err(AppRootError::ProjectCloseOutcomeUnknown);
+        }
+        if needs_recollect {
+            self.recollect_project_close(id, document_decisions, cx)?;
+        } else {
+            self.project_closes
+                .get_mut(&id)
+                .ok_or(AppRootError::MissingPanel)?
+                .coordinator
+                .retry()
+                .map_err(|_| AppRootError::ProjectCloseState)?;
+        }
+        self.drive_project_close(id, cx)
+    }
+
+    /// Save 阶段代次失配：从最新 Document 代次与新决定重建意图并重新提交。
+    fn recollect_project_close(
+        &mut self,
+        id: ProjectId,
+        document_decisions: &std::collections::BTreeMap<DocumentId, CloseDecision>,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<(), AppRootError> {
+        let (previous, scope, store_epoch, close_id) = {
+            let close = self
+                .project_closes
+                .get(&id)
+                .ok_or(AppRootError::MissingPanel)?;
+            (
+                close
+                    .coordinator
+                    .intent()
+                    .cloned()
+                    .ok_or(AppRootError::ProjectCloseState)?,
+                close
+                    .coordinator
+                    .scope()
+                    .cloned()
+                    .ok_or(AppRootError::ProjectCloseState)?,
+                close.persisted.store_epoch.clone(),
+                close.persisted.close_id.clone(),
+            )
+        };
+        let closing = self
+            .snapshot
+            .registry()
+            .project(id)
+            .map(|project| project.layout().view_keys())
+            .unwrap_or_default();
+        let all_views = self
+            .snapshot
+            .registry()
+            .projects()
+            .iter()
+            .flat_map(|project| project.layout().view_keys())
+            .collect::<Vec<_>>();
+        // 仍有效的原决定保留；已变干净或存在项目外引用的对象不再携带旧决定。
+        let mut decisions = document_decisions.clone();
+        for object in previous.objects() {
+            let slterm_workspace::CloseTarget::Document(target_document) = object.id else {
+                continue;
+            };
+            if decisions.contains_key(&target_document)
+                || !matches!(
+                    object.decision,
+                    CloseDecision::Save | CloseDecision::Discard
+                )
+            {
+                continue;
+            }
+            let has_external_reference = all_views.iter().any(|view| match view {
+                ViewKey::Editor { document_id, .. }
+                | ViewKey::Markdown { document_id, .. }
+                | ViewKey::Diff { document_id, .. } => {
+                    *document_id == target_document && !closing.contains(view)
+                }
+                _ => false,
+            });
+            if !has_external_reference
+                && self
+                    .documents
+                    .session(target_document)
+                    .is_some_and(|session| session.is_dirty())
+            {
+                decisions.insert(target_document, object.decision);
+            }
+        }
+        let mut objects = self.collect_document_close_with_autosave(&closing, &decisions, cx)?;
+        objects.extend(
+            previous
+                .objects()
+                .filter(|object| matches!(object.id, slterm_workspace::CloseTarget::Terminal(_)))
+                .cloned(),
+        );
+        let fingerprint = close_fingerprint(&close_id, &scope, &store_epoch, &objects);
+        let intent =
+            CloseIntent::new(objects, fingerprint).map_err(|_| AppRootError::ProjectCloseState)?;
         let close = self
             .project_closes
             .get_mut(&id)
             .ok_or(AppRootError::MissingPanel)?;
-        if close.outcome_unknown {
-            return Err(AppRootError::ProjectCloseOutcomeUnknown);
-        }
+        let CloseEffect::Collect { attempt } = close
+            .coordinator
+            .recollect()
+            .map_err(|_| AppRootError::ProjectCloseState)?
+        else {
+            return Err(AppRootError::ProjectCloseState);
+        };
         close
             .coordinator
-            .retry()
+            .collected(attempt, intent.clone())
             .map_err(|_| AppRootError::ProjectCloseState)?;
-        self.drive_project_close(id, cx)
+        close.persisted.intent = intent;
+        close.needs_recollect = false;
+        Ok(())
     }
 
     fn start_project_commit(

@@ -137,8 +137,10 @@ impl TerminalView {
         cx: &mut Context<'_, Self>,
     ) -> Self {
         // 额度预检必须先于真实 PTY 创建；拒绝时保留恢复面板与错误，
-        // 不解析 shell、不创建 ConPTY。
-        let startup = match registry.borrow().preflight_launch(terminal_id) {
+        // 不解析 shell、不创建 ConPTY。预检借用必须先释放，绑定新会话
+        // 时同一 RefCell 需要独占借用。
+        let preflight = registry.borrow().preflight_launch(terminal_id);
+        let startup = match preflight {
             Ok(()) => {
                 let (prepared, spawned) = Self::prepare(
                     pane_id,

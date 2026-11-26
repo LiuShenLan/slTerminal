@@ -24,6 +24,113 @@ pub(super) fn remove_project(
     })
 }
 
+/// Save 阶段代次失配必须重收集：显式重试带入的新决定生效，不复活旧意图。
+#[gpui::test]
+fn project_remove_save_revision_mismatch_recollects_with_new_decisions(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let (events, _event_rx) = std::sync::mpsc::sync_channel(64);
+    let runtime = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
+    let persistence =
+        AppRootPersistence::load_with_previous_run(&paths, Some(runtime.client()), None);
+    let (root, mut window, _state) = open_root_with_persistence(cx, persistence);
+    let project_dir = temp.path().join("recollect-project");
+    std::fs::create_dir(&project_dir).unwrap();
+    let file = project_dir.join("editor.txt");
+    std::fs::write(
+        &file, "old
+",
+    )
+    .unwrap();
+    let file = CanonicalPath::new(dunce::canonicalize(&file).unwrap()).unwrap();
+    add_project(&root, &mut window, PROJECT_A, project_dir.to_str().unwrap());
+    super::documents::open_document(&root, &mut window, PROJECT_A, GROUP_A, file);
+    let editor = root.read_with(cx, |root, cx| {
+        root.projects[&project_id(PROJECT_A)]
+            .read(cx)
+            .panels
+            .values()
+            .find_map(|panel| panel.editor().cloned())
+            .unwrap()
+    });
+    let document = root.read_with(cx, |root, _| {
+        root.snapshot()
+            .documents()
+            .find_map(|(id, location)| {
+                location
+                    .canonical_path()
+                    .as_path()
+                    .starts_with(&project_dir)
+                    .then_some(id)
+            })
+            .unwrap()
+    });
+    window.update(|window, cx| {
+        editor.update(cx, |view, cx| {
+            gpui::EntityInputHandler::replace_text_in_range(view, None, "first ", window, cx);
+        });
+    });
+    window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.remove_project_with_decisions(
+                project_id(PROJECT_A),
+                std::collections::BTreeMap::from([(
+                    document,
+                    slterm_workspace::CloseDecision::Save,
+                )]),
+                window,
+                cx,
+            )
+            .unwrap();
+        });
+    });
+    // 保存请求已按旧代次捕获；保存期间再次编辑使写后复核失配。
+    window.update(|window, cx| {
+        editor.update(cx, |view, cx| {
+            gpui::EntityInputHandler::replace_text_in_range(view, None, "second ", window, cx);
+        });
+    });
+    window.run_until_parked();
+    root.read_with(cx, |root, _| {
+        let close = &root.project_closes[&project_id(PROJECT_A)];
+        assert_eq!(
+            close.coordinator.phase(),
+            ClosePhase::Failed(CloseStage::Save),
+            "代次失配必须停在 Save 失败"
+        );
+        assert!(close.needs_recollect, "代次失配必须标记重收集");
+    });
+
+    window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.remove_project_with_decisions(
+                project_id(PROJECT_A),
+                std::collections::BTreeMap::from([(
+                    document,
+                    slterm_workspace::CloseDecision::Discard,
+                )]),
+                window,
+                cx,
+            )
+            .unwrap();
+        });
+    });
+    window.run_until_parked();
+    root.read_with(cx, |root, _| {
+        let close = &root.project_closes[&project_id(PROJECT_A)];
+        assert!(!close.needs_recollect);
+        assert_ne!(
+            close.coordinator.phase(),
+            ClosePhase::Failed(CloseStage::Save),
+            "重收集后不得再次停在同一代次失配"
+        );
+    });
+
+    drop(root);
+    cx.update(|_| {});
+    runtime.shutdown(ControlPlaneCleanup::Succeeded).unwrap();
+}
+
 #[gpui::test]
 fn project_remove_commits_intent_before_destroy(cx: &mut TestAppContext) {
     let temp = tempfile::tempdir().unwrap();
