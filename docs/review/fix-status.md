@@ -134,7 +134,7 @@
 | 帧唤醒标记与最新帧存储存在丢失竞态 | 待修 |
 | 子进程退出时未排空已读输出 | 已修：本地启动开启 `drain_on_exit`，退出边界循环排空队列后才发布最终帧；测试 `local_options_drain_output_before_exit`、`child_exit_drains_queued_output_before_final_frame` |
 | 读取线程 EOF 或读取错误不会转成退出/故障事件 | 已修：`EventedPty::output_closed` 暴露读取端关闭，宽限 2 秒内无子进程退出事件即报告 `PtyFailure`；测试 `reader_reports_output_closed_after_eof`、`output_closed_without_child_exit_reports_transport_failure` |
-| OSC 原始缓冲无界，嗅探上限在分发后才生效 | 待修 |
+| OSC 原始缓冲无界，嗅探上限在分发后才生效 | 已修：`OscGate` 在进入 VT 解析器前把 OSC 负载限制在 24 MiB（覆盖内联图片 base64 上界），超限丢弃负载、保留终止符；测试 `osc_gate_bounds_unterminated_payload_and_recovers_after_terminator`、`osc_gate_keeps_st_terminator_across_chunk_boundaries` |
 | 运行时设置未作用到终端核心 | 待修 |
 | 搜索的帧驱动重查会重置导航位置并形成搜索风暴 | 待修 |
 | 退出后键盘复制、搜索与回滚全部失效 | 待修 |

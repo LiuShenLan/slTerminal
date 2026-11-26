@@ -177,6 +177,9 @@ pub struct StreamProcessor {
     /// 跨块查询前缀残片扣留（≤3 字节：ESC / ESC[ / ESC[0 / ESC[6）——
     /// 半条序列不送 parser，下块拼回，EOF 时冲刷不丢字节。
     pending_query: Vec<u8>,
+    /// OSC 原始负载闸门：解析器内部会累积整条 OSC，超长未终止负载
+    /// 必须在进入解析器前截断。
+    osc_gate: crate::osc_cwd::OscGate,
 }
 
 impl StreamProcessor {
@@ -268,7 +271,8 @@ impl StreamProcessor {
             // Titles and shell identity/cwd reports must retain wire order:
             // coalescing a remote cwd past a parent prompt would attribute that
             // directory to the parent shell's completion history.
-            self.advance(terminal, &bytes[advanced..offset]);
+            let filtered = self.osc_gate.filter(&bytes[advanced..offset]);
+            self.advance(terminal, &filtered);
             advanced = offset;
             match event {
                 OscEvent::Cwd(cwd) => event_proxy.send_event(Event::CwdReport(cwd)),
@@ -317,7 +321,8 @@ impl StreamProcessor {
                 }
             }
         }
-        self.advance(terminal, &bytes[advanced..]);
+        let filtered = self.osc_gate.filter(&bytes[advanced..]);
+        self.advance(terminal, &filtered);
     }
 }
 

@@ -86,6 +86,108 @@ enum Phase {
     OscEsc,
 }
 
+/// OSC 原始负载的硬上限。vte 0.15 在 std 特性下把整个 OSC 负载累积在
+/// 内部缓冲中，无终止符的超大 OSC 会让该缓冲无界增长；超限后丢弃剩余
+/// 负载，只把终止符交给解析器以退出 OSC 状态。
+///
+/// 上限取内联图片最大负载（12 MiB）的 base64 膨胀上界之上，保证合法
+/// 图片不被截断。
+const MAX_OSC_BYTES: usize = 24 * 1024 * 1024;
+
+/// 送入 VT 解析器之前的 OSC 长度闸门；其余字节原样通过。
+pub(crate) struct OscGate {
+    phase: Phase,
+    limit: usize,
+    payload: usize,
+    oversize: bool,
+}
+
+impl Default for OscGate {
+    fn default() -> Self {
+        Self::with_limit(MAX_OSC_BYTES)
+    }
+}
+
+impl OscGate {
+    pub(crate) fn with_limit(limit: usize) -> Self {
+        Self {
+            phase: Phase::Ground,
+            limit,
+            payload: 0,
+            oversize: false,
+        }
+    }
+
+    /// 过滤一块输出：超限 OSC 的负载被丢弃，终止符保留。
+    pub(crate) fn filter(&mut self, bytes: &[u8]) -> Vec<u8> {
+        let mut output = Vec::with_capacity(bytes.len());
+        for &byte in bytes {
+            match self.phase {
+                Phase::Ground => {
+                    output.push(byte);
+                    if byte == 0x1b {
+                        self.phase = Phase::Esc;
+                    }
+                }
+                Phase::Esc => {
+                    output.push(byte);
+                    match byte {
+                        b']' => {
+                            self.phase = Phase::Osc;
+                            self.payload = 0;
+                            self.oversize = false;
+                        }
+                        0x1b => {}
+                        _ => self.phase = Phase::Ground,
+                    }
+                }
+                Phase::Osc => match byte {
+                    0x07 => {
+                        output.push(byte);
+                        self.phase = Phase::Ground;
+                    }
+                    0x1b => {
+                        output.push(byte);
+                        self.phase = Phase::OscEsc;
+                    }
+                    _ => self.push_payload(byte, &mut output),
+                },
+                Phase::OscEsc => match byte {
+                    // ST 或 BEL 都会终止 OSC；ESC 本身属于负载，两个字节
+                    // 都保留，解析器才能正常退出 OSC 状态。
+                    b'\\' | 0x07 => {
+                        output.push(byte);
+                        self.phase = Phase::Ground;
+                    }
+                    0x1b => {
+                        // 第一个 ESC 属于负载，第二个重新开始 ST 判定。
+                        self.push_payload(0x1b, &mut output);
+                        output.push(byte);
+                    }
+                    _ => {
+                        self.push_payload(0x1b, &mut output);
+                        self.push_payload(byte, &mut output);
+                        self.phase = Phase::Osc;
+                    }
+                },
+            }
+        }
+        output
+    }
+
+    fn push_payload(&mut self, byte: u8, output: &mut Vec<u8>) {
+        if self.oversize {
+            return;
+        }
+        if self.payload >= self.limit {
+            self.oversize = true;
+            return;
+        }
+        self.payload += 1;
+        output.push(byte);
+    }
+}
+
 /// Streaming OSC 7 / 9;9 / 133;A sniffer. Feed it every PTY byte; it returns
 /// the recognized events, each tagged with the offset just past its
 /// terminator (the `parser.advance` split point).
@@ -800,6 +902,42 @@ mod tests {
                 }
             )]
         ));
+    }
+
+    /// 超长未终止 OSC 必须有硬上限：超限负载丢弃，终止符仍交给解析器
+    /// 以便退出 OSC 状态，后续普通文本恢复解析。
+    #[test]
+    fn osc_gate_bounds_unterminated_payload_and_recovers_after_terminator() {
+        let mut gate = OscGate::with_limit(8);
+        assert_eq!(gate.filter(b"plain"), b"plain");
+
+        let mut output = gate.filter(b"\x1b]1337;");
+        output.extend(gate.filter(b"0123456789"));
+        output.extend(gate.filter(b"\x07"));
+        assert_eq!(
+            output, b"\x1b]1337;012\x07",
+            "上限内的负载与 BEL 终止符必须保留，超限部分丢弃"
+        );
+        assert_eq!(gate.filter(b"after"), b"after");
+    }
+
+    /// 字符串终止符（ESC \\）跨块时仍必须保留并正确回到普通状态。
+    #[test]
+    fn osc_gate_keeps_st_terminator_across_chunk_boundaries() {
+        let mut gate = OscGate::with_limit(4);
+        let mut output = Vec::new();
+        for chunk in [
+            b"\x1b".as_slice(),
+            b"]",
+            b"7;xy",
+            b"zz",
+            b"\x1b",
+            b"\\",
+            b"ok",
+        ] {
+            output.extend(gate.filter(chunk));
+        }
+        assert_eq!(output, b"\x1b]7;xy\x1b\\ok");
     }
 
     #[test]
