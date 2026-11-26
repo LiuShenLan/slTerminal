@@ -28,7 +28,7 @@
 
 | 资源 | 方法 |
 |---|---|
-| 元能力 | `runtime.hello`、`runtime.describe`、`runtime.snapshot`、`events.subscribe`、`events.unsubscribe`、`operation.get`、`operation.wait`、`app.focus`、`app.close` |
+| 元能力 | `runtime.hello`、`runtime.describe`、`runtime.snapshot`、`events.subscribe`、`events.unsubscribe`、`runtime.operation_get`、`runtime.operation_wait`、`app.focus`、`app.close` |
 | Project | `project.list`、`project.activate`、`project.rename`、`project.reorder`、`project.remove` |
 | PanelGroup | `panel_group.split`、`panel_group.merge`、`panel_group.resize` |
 | Panel | `panel.open_file`、`panel.open_settings`、`panel.activate`、`panel.move`、`panel.save`、`panel.close` |
@@ -46,12 +46,12 @@
 
 ### 写操作与幂等
 
-- 每个写请求携带 client_id、mutation_id、规范参数散列和可选 expected_revision；服务器重新计算参数散列，失配拒绝。资源代次、授权代次和 store_epoch 在执行前复核。
+- 每个写请求携带 client_id、mutation_id 和可选 expected_revision；服务端对解析后的封闭意图生成方法级规范投影与参数散列，同一 mutation_id 下散列相同才返回原 Operation，不同则 `mutation_conflict`。线缆不携带客户端散列，避免第二份投影真值。资源代次、授权代次和 store_epoch 在执行前复核。
 - Operation 先持久登记再派发，保存 store_epoch、operation_id、client_id、mutation_id、method、参数散列、资源代次、状态、结果／错误和可选 journal_id。
 - 状态为 `Queued → Running → Succeeded｜Failed｜Cancelled｜OutcomeUnknown`。相同幂等键与参数返回原 Operation，同键不同参数为 mutation_conflict；Operation 不自动过期。
 - `decision_required` 是结构化失败终态，调用方修正策略后使用新 mutation_id。脏关闭未指定保存／丢弃策略时返回该错误，不弹模态、不自动丢弃。
 - 纯数据库操作按事务结果与提交指纹判定；多步骤操作由所属 Journal 专门恢复器对账。终端输入、进程写入及无法证明副作用的操作中断后标为 OutcomeUnknown，绝不自动重发。
-- `operation.get` 与 `operation.wait` 可跨断线查询；等待受 600 秒上限和关闭状态约束。结果不明必须可查询，不要求客户端盲目重放。
+- `runtime.operation_get` 与 `runtime.operation_wait` 可跨断线查询；等待受 600 秒上限和关闭状态约束。结果不明必须可查询，不要求客户端盲目重放。
 
 ### 关闭与读取安全
 
