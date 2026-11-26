@@ -33,6 +33,12 @@ pub(crate) fn write_current_user(path: &Path, contents: &[u8]) -> io::Result<Fil
     })
 }
 
+/// 创建只许当前用户访问的目录；已存在目录的宽 ACL 也必须收敛。
+pub(crate) fn create_dir_current_user(path: &Path) -> io::Result<()> {
+    std::fs::create_dir_all(path)?;
+    restrict_to_current_user(path)
+}
+
 fn write_with_acl(
     path: &Path,
     contents: &[u8],
@@ -468,63 +474,80 @@ pub(crate) fn remove_if_matches(
     Ok(())
 }
 
+/// 读取 DACL 的 SDDL 字符串（仅测试断言用）。
+#[cfg(test)]
+pub(crate) fn dacl_sddl(path: &Path) -> Option<String> {
+    use std::os::windows::ffi::OsStrExt;
+    use std::ptr;
+
+    use windows_sys::Win32::Foundation::{ERROR_SUCCESS, LocalFree};
+    use windows_sys::Win32::Security::Authorization::{
+        ConvertSecurityDescriptorToStringSecurityDescriptorW, GetNamedSecurityInfoW,
+        SDDL_REVISION_1, SE_FILE_OBJECT,
+    };
+    use windows_sys::Win32::Security::{DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR};
+
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let mut descriptor: PSECURITY_DESCRIPTOR = ptr::null_mut();
+    let read = unsafe {
+        GetNamedSecurityInfoW(
+            wide.as_ptr(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            ptr::null_mut(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            &mut descriptor,
+        )
+    };
+    if read != ERROR_SUCCESS {
+        return None;
+    }
+    let mut text: *mut u16 = ptr::null_mut();
+    let mut length = 0u32;
+    let converted = unsafe {
+        ConvertSecurityDescriptorToStringSecurityDescriptorW(
+            descriptor,
+            SDDL_REVISION_1,
+            DACL_SECURITY_INFORMATION,
+            &mut text,
+            &mut length,
+        )
+    };
+    unsafe { LocalFree(descriptor) };
+    if converted == 0 {
+        return None;
+    }
+    let value =
+        unsafe { String::from_utf16_lossy(std::slice::from_raw_parts(text, length as usize)) };
+    unsafe { LocalFree(text as _) };
+    Some(value)
+}
+
 #[cfg(test)]
 mod atomic_file_tests {
-    use std::path::Path;
-
     use super::{
-        copy_target_acl, file_identity, remove_if_matches, try_lifetime_lock, try_lock, write,
-        write_with_acl,
+        copy_target_acl, dacl_sddl, file_identity, remove_if_matches, try_lifetime_lock, try_lock,
+        write, write_with_acl,
     };
 
-    /// 读取 DACL 的 SDDL 字符串(仅测试断言用)。
-    fn dacl_sddl(path: &Path) -> Option<String> {
-        use std::os::windows::ffi::OsStrExt;
-        use std::ptr;
-
-        use windows_sys::Win32::Foundation::{ERROR_SUCCESS, LocalFree};
-        use windows_sys::Win32::Security::Authorization::{
-            ConvertSecurityDescriptorToStringSecurityDescriptorW, GetNamedSecurityInfoW,
-            SDDL_REVISION_1, SE_FILE_OBJECT,
-        };
-        use windows_sys::Win32::Security::{DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR};
-
-        let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
-        let mut descriptor: PSECURITY_DESCRIPTOR = ptr::null_mut();
-        let read = unsafe {
-            GetNamedSecurityInfoW(
-                wide.as_ptr(),
-                SE_FILE_OBJECT,
-                DACL_SECURITY_INFORMATION,
-                ptr::null_mut(),
-                ptr::null_mut(),
-                ptr::null_mut(),
-                ptr::null_mut(),
-                &mut descriptor,
-            )
-        };
-        if read != ERROR_SUCCESS {
-            return None;
-        }
-        let mut text: *mut u16 = ptr::null_mut();
-        let mut length = 0u32;
-        let converted = unsafe {
-            ConvertSecurityDescriptorToStringSecurityDescriptorW(
-                descriptor,
-                SDDL_REVISION_1,
-                DACL_SECURITY_INFORMATION,
-                &mut text,
-                &mut length,
-            )
-        };
-        unsafe { LocalFree(descriptor) };
-        if converted == 0 {
-            return None;
-        }
-        let value =
-            unsafe { String::from_utf16_lossy(std::slice::from_raw_parts(text, length as usize)) };
-        unsafe { LocalFree(text as _) };
-        Some(value)
+    #[test]
+    fn current_user_directory_cuts_inheritance_and_has_one_ace() {
+        let temp = tempfile::tempdir().unwrap();
+        let directory = temp.path().join("private").join("nested");
+        super::create_dir_current_user(&directory).unwrap();
+        assert!(directory.is_dir());
+        let dacl = dacl_sddl(&directory).expect("读取目录 DACL");
+        let (control, aces) = dacl.split_once('(').expect("SDDL 必须包含 ACE");
+        assert!(
+            matches!(control, "D:P" | "D:PAI"),
+            "目录必须禁止继承: {dacl}"
+        );
+        assert!(
+            aces.starts_with("A;") && !aces.contains(")("),
+            "只能有一条显式 ACE: {dacl}"
+        );
     }
 
     #[test]

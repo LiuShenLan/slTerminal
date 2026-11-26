@@ -107,6 +107,12 @@ pub(crate) fn stage_restore(
     let request_id = uuid::Uuid::now_v7().to_string();
     let relative = format!("maintenance/{request_id}/staged.restore");
     let path = local_path(paths, &relative)?;
+    let maintenance_root = local_path(paths, "maintenance")?;
+    crate::atomic_file::create_dir_current_user(&maintenance_root)
+        .map_err(|error| format!("创建维护目录失败: {error}"))?;
+    let request_directory = path.parent().ok_or("暂存路径无效")?;
+    crate::atomic_file::create_dir_current_user(request_directory)
+        .map_err(|error| format!("创建暂存目录失败: {error}"))?;
     let plaintext = Zeroizing::new(
         serde_json::to_vec(&StagedRestore { entries })
             .map_err(|error| format!("序列化暂存材料失败: {error}"))?,
@@ -132,7 +138,7 @@ pub(crate) fn stage_restore(
     store
         .register_maintenance_request(&request)
         .map_err(|error| format!("登记维护请求失败: {error}"))?;
-    if let Err(error) = crate::atomic_file::write(&path, &payload) {
+    if let Err(error) = crate::atomic_file::write_current_user(&path, &payload) {
         let cleanup = store.discard_prepared_maintenance_request(&request.request_id);
         return Err(match cleanup {
             Ok(()) => format!("写入暂存材料失败: {error}"),
@@ -431,6 +437,16 @@ mod maintenance_restore_tests {
         AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap()
     }
 
+    fn assert_current_user_only(path: &std::path::Path) {
+        let dacl = crate::atomic_file::dacl_sddl(path).expect("读取 DACL");
+        let (control, aces) = dacl.split_once('(').expect("SDDL 必须包含 ACE");
+        assert!(matches!(control, "D:P" | "D:PAI"), "必须禁止继承: {dacl}");
+        assert!(
+            aces.starts_with("A;") && !aces.contains(")("),
+            "唯一显式 ACE: {dacl}"
+        );
+    }
+
     fn theme_bytes() -> Vec<u8> {
         crate::theme_library::builtin_documents()
             .first()
@@ -641,7 +657,11 @@ mod maintenance_restore_tests {
         let mut candidate = archive();
         candidate.entries[0].bytes = br#"{"appearance":{"font_family":"SecretMarker"}}"#.to_vec();
         let request = stage_restore(&mut store, &paths, &candidate, selection()).unwrap();
-        let staged = fs::read(paths.local_root().join(&request.staged_path)).unwrap();
+        let staged_path = paths.local_root().join(&request.staged_path);
+        assert_current_user_only(&staged_path);
+        assert_current_user_only(staged_path.parent().unwrap());
+        assert_current_user_only(&paths.local_root().join("maintenance"));
+        let staged = fs::read(&staged_path).unwrap();
         assert!(
             !staged
                 .windows("SecretMarker".len())

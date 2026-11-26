@@ -62,10 +62,11 @@ pub(super) fn write_point(
         return Err("恢复点文件名无效".to_owned());
     }
     let directory = restore_path(paths.local_root(), "backup-recovery")?;
-    fs::create_dir_all(&directory).map_err(|error| format!("创建恢复点目录失败: {error}"))?;
+    crate::atomic_file::create_dir_current_user(&directory)
+        .map_err(|error| format!("创建恢复点目录失败: {error}"))?;
     let path = directory.join(name);
     let packet = encode_point(originals)?;
-    crate::atomic_file::write(&path, &packet)
+    crate::atomic_file::write_current_user(&path, &packet)
         .map_err(|error| format!("保存恢复点失败: {error}"))?;
     Ok(path)
 }
@@ -122,6 +123,16 @@ mod recovery_tests {
     use super::*;
 
     const PASSPHRASE: &str = "correct horse";
+
+    fn assert_current_user_only(path: &Path) {
+        let dacl = crate::atomic_file::dacl_sddl(path).expect("读取 DACL");
+        let (control, aces) = dacl.split_once('(').expect("SDDL 必须包含 ACE");
+        assert!(matches!(control, "D:P" | "D:PAI"), "必须禁止继承: {dacl}");
+        assert!(
+            aces.starts_with("A;") && !aces.contains(")("),
+            "唯一显式 ACE: {dacl}"
+        );
+    }
 
     fn split_paths(root: &Path) -> AppPaths {
         AppPaths::new(root.join("config"), root.join("local")).unwrap()
@@ -209,6 +220,8 @@ mod recovery_tests {
         let entry = &archive().entries[0];
         let original = read_original(&paths, entry).unwrap();
         let path = write_point(&paths, "point.slterm-recovery", &[original]).unwrap();
+        assert_current_user_only(&path);
+        assert_current_user_only(path.parent().unwrap());
         let packet = fs::read(&path).unwrap();
         // DPAPI 报文无固定魔数；加密性由「不含明文 + 篡改拒绝」两条断言锁定。
         assert!(
