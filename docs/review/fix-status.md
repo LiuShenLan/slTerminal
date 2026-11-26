@@ -210,7 +210,7 @@
 | Hooks 草稿在决定齐备前被丢弃 | 已修：Runtime `app.close`／`project.remove` 先收集文档决定、预检并通过关闭登记后才按 `Discard` 清理草稿；项目移除以显式 `allow_hooks_discard` 跳过交互守卫（提交 c2b50b9d）；测试 `runtime_hooks_discard_waits_for_complete_document_decisions`、`runtime_project_hooks_discard_waits_for_document_decisions`、`runtime_project_remove_honors_discard_and_save_policies` |
 | 合同冲突：app.close 回执语义与“保存失败返回失败”冲突 | 需裁决 |
 | 合同冲突：非交互关闭缺少运行终端处置策略 | 需裁决 |
-| 控制面一次 join 失败被永久重放 | 待修 |
+| 控制面一次 join 失败被永久重放 | 已修：资源已回收后的重复 `shutdown` 只记录历史 join 错误并返回成功，首次错误仍在首次关闭返回；测试 `local_control_shutdown_replays_worker_join_failure` 更新为断言重复关闭成功 |
 | 随包 schema 未覆盖多数方法的请求结构，method 与 params/result 无关联校验 | 待修 |
 | Runtime 合同测试不在任何固定门禁内 | 待修 |
 | Runtime 双进程 conformance 与事件断线矩阵缺失 | 待修 |

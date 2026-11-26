@@ -267,10 +267,12 @@ impl LocalControlServer {
 
     fn stop(&mut self) -> io::Result<()> {
         if self.shutdown.swap(true, Ordering::SeqCst) {
-            return match &self.termination_error {
-                Some(error) => Err(io::Error::new(error.kind(), error.to_string())),
-                None => Ok(()),
-            };
+            // 首次关闭已取走并回收全部资源；历史 join 失败只记录一次，
+            // 不把重复关闭永久判为失败，否则正常退出无法重试完成。
+            if let Some(error) = &self.termination_error {
+                log::warn!("control plane previously failed during shutdown: {error}");
+            }
+            return Ok(());
         }
         let mut first_error = None;
         if let Some(accept) = self.accept.take()

@@ -386,8 +386,8 @@ fn local_control_shutdown_replays_worker_join_failure() {
         assert!(shutdown.join().unwrap().is_err());
     });
     assert!(
-        server.shutdown().is_err(),
-        "后续 shutdown 必须保留首次 join 终止错误"
+        server.shutdown().is_ok(),
+        "资源已回收后重复 shutdown 必须成功，历史 join 错误只记录日志"
     );
     assert_eq!(server.active_workers(), 0);
 }
