@@ -687,14 +687,20 @@ fn publish_taskbar_update(progress: Option<crate::taskbar::TaskProgress>, hwnd: 
 }
 
 /// 通知类别 → 任务栏信号：失败最高，等待输入其次，完成清理等待与错误。
-fn taskbar_signals(notification: &Notification) -> &'static [crate::taskbar::TaskbarSignal] {
+fn taskbar_signals(
+    notification: &Notification,
+    pane: PaneId,
+) -> Vec<crate::taskbar::TaskbarSignal> {
     use crate::taskbar::TaskbarSignal;
     if notification.is_failure() {
-        &[TaskbarSignal::ErrorRaised]
+        vec![TaskbarSignal::ErrorRaised(pane)]
     } else if notification.is_attention() {
-        &[TaskbarSignal::AttentionRaised]
+        vec![TaskbarSignal::AttentionRaised(pane)]
     } else {
-        &[TaskbarSignal::AttentionCleared, TaskbarSignal::ErrorCleared]
+        vec![
+            TaskbarSignal::AttentionCleared(pane),
+            TaskbarSignal::ErrorCleared(pane),
+        ]
     }
 }
 
@@ -704,7 +710,7 @@ pub(crate) fn set_foreground(focused: bool) {
     if focused {
         // 重新聚焦清理等待提示；错误保留到解决或关闭。
         apply_taskbar_signal(
-            crate::taskbar::TaskbarSignal::AttentionCleared,
+            crate::taskbar::TaskbarSignal::AttentionClearedAll,
             crate::windowing::focus::published_hwnd(),
         );
     }
@@ -835,8 +841,8 @@ fn deliver_with(
     drop(funnel);
     let hwnd = crate::windowing::focus::window_hwnd(cx);
     // 任务栏状态与桌面/任务栏闪烁开关独立:类别决定优先级,开关只管投递通道。
-    for signal in taskbar_signals(notification) {
-        apply_taskbar_signal(*signal, hwnd);
+    for signal in taskbar_signals(notification, pane_id) {
+        apply_taskbar_signal(signal, hwnd);
     }
     if plan.flash {
         // 闪烁先行:节流只挡系统 toast,不挡任务栏提示。
@@ -1193,39 +1199,42 @@ mod notification_tests {
 
         // 类别映射：失败最高，等待输入其次，完成清理等待与错误。
         assert_eq!(
-            taskbar_signals(&ai_turn("claude", None, true)),
-            &[TaskbarSignal::AttentionRaised]
+            taskbar_signals(&ai_turn("claude", None, true), PaneId(1)),
+            vec![TaskbarSignal::AttentionRaised(PaneId(1))]
         );
         assert_eq!(
-            taskbar_signals(&ai_issue(None, AiTurnOutcome::Failed)),
-            &[TaskbarSignal::ErrorRaised]
+            taskbar_signals(&ai_issue(None, AiTurnOutcome::Failed), PaneId(1)),
+            vec![TaskbarSignal::ErrorRaised(PaneId(1))]
         );
         assert_eq!(
-            taskbar_signals(&ai_turn("claude", None, false)),
-            &[TaskbarSignal::AttentionCleared, TaskbarSignal::ErrorCleared]
+            taskbar_signals(&ai_turn("claude", None, false), PaneId(1)),
+            vec![
+                TaskbarSignal::AttentionCleared(PaneId(1)),
+                TaskbarSignal::ErrorCleared(PaneId(1)),
+            ]
         );
 
-        apply_taskbar_signal(TaskbarSignal::AttentionRaised, Some(1));
+        apply_taskbar_signal(TaskbarSignal::AttentionRaised(PaneId(1)), Some(1));
         assert_eq!(
             windows.take_taskbar_progress(),
             vec![TaskProgress::Paused(None)],
             "等待输入只染色不编百分比"
         );
-        apply_taskbar_signal(TaskbarSignal::ErrorRaised, Some(1));
+        apply_taskbar_signal(TaskbarSignal::ErrorRaised(PaneId(1)), Some(1));
         assert_eq!(
             windows.take_taskbar_progress(),
             vec![TaskProgress::Error(None)]
         );
-        apply_taskbar_signal(TaskbarSignal::AttentionCleared, Some(1));
+        apply_taskbar_signal(TaskbarSignal::AttentionCleared(PaneId(1)), Some(1));
         assert!(
             windows.take_taskbar_progress().is_empty(),
             "错误优先，低优先级变化不投递"
         );
-        apply_taskbar_signal(TaskbarSignal::ErrorCleared, Some(1));
+        apply_taskbar_signal(TaskbarSignal::ErrorCleared(PaneId(1)), Some(1));
         assert_eq!(windows.take_taskbar_progress(), vec![TaskProgress::None]);
 
         // 重新聚焦清理等待提示；任务栏进度与闪烁/桌面开关独立。
-        apply_taskbar_signal(TaskbarSignal::AttentionRaised, Some(1));
+        apply_taskbar_signal(TaskbarSignal::AttentionRaised(PaneId(1)), Some(1));
         assert_eq!(
             windows.take_taskbar_progress(),
             vec![TaskProgress::Paused(None)]

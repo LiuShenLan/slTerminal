@@ -18,6 +18,8 @@
 //! 进度 > 工作不确定 > 清除。信号态只染色不伪造百分比,高优先级由派生结果
 //! 保证不被低优先级覆盖。退出时任务栏按钮随窗口销毁自然消失。
 
+use std::collections::BTreeSet;
+
 use crate::gpui_terminal::PaneId;
 
 /// 任务栏能画出来的进度形态(ConEmu 9;4 状态码的五态模型)。
@@ -83,12 +85,14 @@ impl TaskProgress {
 /// 与 OSC 进度共享同一条任务栏;优先级由 [`TaskbarState::progress`] 派生。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TaskbarSignal {
-    WorkStarted,
-    WorkFinished,
-    AttentionRaised,
-    AttentionCleared,
-    ErrorRaised,
-    ErrorCleared,
+    WorkStarted(PaneId),
+    WorkFinished(PaneId),
+    AttentionRaised(PaneId),
+    AttentionCleared(PaneId),
+    /// 窗口重新聚焦：所有等待输入来源都已被用户看到，错误不受影响。
+    AttentionClearedAll,
+    ErrorRaised(PaneId),
+    ErrorCleared(PaneId),
 }
 
 /// 任务栏进度的进程级路由状态(单窗单实例只有一条进度条)。
@@ -104,9 +108,9 @@ pub(crate) enum TaskbarSignal {
 pub(crate) struct TaskbarState {
     /// 当前 OSC 进度及其来源 pane;`None` = 无 OSC 进度。
     current: Option<(PaneId, TaskProgress)>,
-    busy: bool,
-    attention: bool,
-    error: bool,
+    busy: BTreeSet<PaneId>,
+    attention: BTreeSet<PaneId>,
+    error: BTreeSet<PaneId>,
     /// 上一次实际投递的形态,用于信号层去重。
     applied: TaskProgress,
 }
@@ -115,40 +119,57 @@ impl TaskbarState {
     pub(crate) const fn new() -> Self {
         Self {
             current: None,
-            busy: false,
-            attention: false,
-            error: false,
+            busy: BTreeSet::new(),
+            attention: BTreeSet::new(),
+            error: BTreeSet::new(),
             applied: TaskProgress::None,
         }
     }
 
     /// 当前应显示的形态(优先级派生,不存储覆盖)。
     pub(crate) fn progress(&self) -> TaskProgress {
-        if self.error {
+        if !self.error.is_empty() {
             return TaskProgress::Error(None);
         }
-        if self.attention {
+        if !self.attention.is_empty() {
             return TaskProgress::Paused(None);
         }
         if let Some((_, progress)) = self.current {
             return progress;
         }
-        if self.busy {
+        if !self.busy.is_empty() {
             return TaskProgress::Indeterminate;
         }
         TaskProgress::None
     }
 
-    /// 应用一条 Agent 状态信号;返回需要投递的变化。
+    /// 应用一条 Agent 状态信号;按 pane 独立记账，返回需要投递的变化。
     pub(crate) fn apply_signal(&mut self, signal: TaskbarSignal) -> Option<TaskProgress> {
         match signal {
-            TaskbarSignal::WorkStarted => self.busy = true,
-            TaskbarSignal::WorkFinished => self.busy = false,
-            TaskbarSignal::AttentionRaised => self.attention = true,
-            TaskbarSignal::AttentionCleared => self.attention = false,
-            TaskbarSignal::ErrorRaised => self.error = true,
-            TaskbarSignal::ErrorCleared => self.error = false,
+            TaskbarSignal::WorkStarted(pane) => {
+                self.busy.insert(pane);
+            }
+            TaskbarSignal::WorkFinished(pane) => {
+                self.busy.remove(&pane);
+            }
+            TaskbarSignal::AttentionRaised(pane) => {
+                self.attention.insert(pane);
+            }
+            TaskbarSignal::AttentionCleared(pane) => {
+                self.attention.remove(&pane);
+            }
+            TaskbarSignal::AttentionClearedAll => self.attention.clear(),
+            TaskbarSignal::ErrorRaised(pane) => {
+                self.error.insert(pane);
+            }
+            TaskbarSignal::ErrorCleared(pane) => {
+                self.error.remove(&pane);
+            }
         }
+        self.changed_progress()
+    }
+
+    fn changed_progress(&mut self) -> Option<TaskProgress> {
         let next = self.progress();
         if next == self.applied {
             return None;
@@ -160,9 +181,9 @@ impl TaskbarState {
     /// 退出或取消：清空全部来源并返回清除边。
     pub(crate) fn clear(&mut self) -> Option<TaskProgress> {
         self.current = None;
-        self.busy = false;
-        self.attention = false;
-        self.error = false;
+        self.busy.clear();
+        self.attention.clear();
+        self.error.clear();
         if self.applied == TaskProgress::None {
             return None;
         }
@@ -188,13 +209,18 @@ impl TaskbarState {
     /// 清除边:只有当前显示的来源 pane 自己收尾才清。返回 `Some(TaskProgress)`
     /// 表示需要投递的形态;别的 pane 的收尾返回 `None`,不投递。
     pub(crate) fn clear_for(&mut self, pane: PaneId) -> Option<TaskProgress> {
+        let mut touched = false;
         if self.current.is_some_and(|(source, _)| source == pane) {
             self.current = None;
-            let next = self.progress();
-            self.applied = next;
-            return Some(next);
+            touched = true;
         }
-        None
+        touched |= self.busy.remove(&pane);
+        touched |= self.attention.remove(&pane);
+        touched |= self.error.remove(&pane);
+        if !touched {
+            return None;
+        }
+        self.changed_progress()
     }
 }
 
@@ -399,28 +425,34 @@ mod taskbar_tests {
         assert_eq!(state.progress(), TaskProgress::None);
 
         assert_eq!(
-            state.apply_signal(TaskbarSignal::WorkStarted),
+            state.apply_signal(TaskbarSignal::WorkStarted(PaneId(1))),
             Some(TaskProgress::Indeterminate),
             "工作信号只给不确定进度,不编百分比"
         );
         assert_eq!(
-            state.apply_signal(TaskbarSignal::AttentionRaised),
+            state.apply_signal(TaskbarSignal::AttentionRaised(PaneId(1))),
             Some(TaskProgress::Paused(None)),
             "等待输入暂停态高于工作进度"
         );
         assert_eq!(
-            state.apply_signal(TaskbarSignal::ErrorRaised),
+            state.apply_signal(TaskbarSignal::ErrorRaised(PaneId(1))),
             Some(TaskProgress::Error(None)),
             "错误最高且不伪造百分比"
         );
 
         // 高优先级不被低优先级覆盖。
-        assert_eq!(state.apply_signal(TaskbarSignal::WorkFinished), None);
-        assert_eq!(state.apply_signal(TaskbarSignal::AttentionCleared), None);
+        assert_eq!(
+            state.apply_signal(TaskbarSignal::WorkFinished(PaneId(1))),
+            None
+        );
+        assert_eq!(
+            state.apply_signal(TaskbarSignal::AttentionCleared(PaneId(1))),
+            None
+        );
         assert_eq!(state.progress(), TaskProgress::Error(None));
 
         assert_eq!(
-            state.apply_signal(TaskbarSignal::ErrorCleared),
+            state.apply_signal(TaskbarSignal::ErrorCleared(PaneId(1))),
             Some(TaskProgress::None)
         );
 
@@ -429,14 +461,17 @@ mod taskbar_tests {
             state.observe(PaneId(1), TaskProgress::Value(42)),
             Some(TaskProgress::Value(42))
         );
-        assert_eq!(state.apply_signal(TaskbarSignal::WorkStarted), None);
         assert_eq!(
-            state.apply_signal(TaskbarSignal::ErrorRaised),
+            state.apply_signal(TaskbarSignal::WorkStarted(PaneId(1))),
+            None
+        );
+        assert_eq!(
+            state.apply_signal(TaskbarSignal::ErrorRaised(PaneId(1))),
             Some(TaskProgress::Error(None)),
             "错误信号不接管 OSC 百分比"
         );
         assert_eq!(
-            state.apply_signal(TaskbarSignal::ErrorCleared),
+            state.apply_signal(TaskbarSignal::ErrorCleared(PaneId(1))),
             Some(TaskProgress::Value(42)),
             "错误解除后回到真实进度"
         );
@@ -447,27 +482,70 @@ mod taskbar_tests {
         assert_eq!(state.clear(), None, "重复清空不重复投递");
     }
 
+    /// 一个 pane 的完成只清除自己的等待/错误，不得抹掉其他 pane 的来源。
+    #[test]
+    fn pane_completion_only_clears_its_own_signals() {
+        let first = PaneId(1);
+        let second = PaneId(2);
+        let mut state = TaskbarState::new();
+
+        assert_eq!(
+            state.apply_signal(TaskbarSignal::ErrorRaised(first)),
+            Some(TaskProgress::Error(None))
+        );
+        assert_eq!(
+            state.apply_signal(TaskbarSignal::AttentionRaised(second)),
+            None,
+            "错误态最高，第二来源不改变显示"
+        );
+        assert_eq!(
+            state.apply_signal(TaskbarSignal::AttentionCleared(second)),
+            None,
+            "第二个 pane 的等待清除不得影响第一个 pane 的错误"
+        );
+        assert_eq!(
+            state.apply_signal(TaskbarSignal::ErrorCleared(second)),
+            None,
+            "非来源 pane 的完成不得清除错误"
+        );
+        assert_eq!(
+            state.progress(),
+            TaskProgress::Error(None),
+            "第一个 pane 的错误必须保留"
+        );
+        assert_eq!(
+            state.apply_signal(TaskbarSignal::ErrorCleared(first)),
+            Some(TaskProgress::None)
+        );
+    }
+
     /// 重复信号幂等,不会造成计数漂移或残留。
     #[test]
     fn duplicate_signals_are_idempotent() {
         let mut state = TaskbarState::new();
         assert_eq!(
-            state.apply_signal(TaskbarSignal::ErrorRaised),
+            state.apply_signal(TaskbarSignal::ErrorRaised(PaneId(1))),
             Some(TaskProgress::Error(None))
         );
-        assert_eq!(state.apply_signal(TaskbarSignal::ErrorRaised), None);
         assert_eq!(
-            state.apply_signal(TaskbarSignal::ErrorCleared),
+            state.apply_signal(TaskbarSignal::ErrorRaised(PaneId(1))),
+            None
+        );
+        assert_eq!(
+            state.apply_signal(TaskbarSignal::ErrorCleared(PaneId(1))),
             Some(TaskProgress::None)
         );
 
         assert_eq!(
-            state.apply_signal(TaskbarSignal::AttentionRaised),
+            state.apply_signal(TaskbarSignal::AttentionRaised(PaneId(1))),
             Some(TaskProgress::Paused(None))
         );
-        assert_eq!(state.apply_signal(TaskbarSignal::AttentionRaised), None);
         assert_eq!(
-            state.apply_signal(TaskbarSignal::AttentionCleared),
+            state.apply_signal(TaskbarSignal::AttentionRaised(PaneId(1))),
+            None
+        );
+        assert_eq!(
+            state.apply_signal(TaskbarSignal::AttentionCleared(PaneId(1))),
             Some(TaskProgress::None)
         );
     }

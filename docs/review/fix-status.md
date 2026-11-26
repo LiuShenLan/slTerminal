@@ -192,7 +192,7 @@
 | 系统关机与注销不走统一关闭链 | 待修 |
 | 通知前台状态从未写入 | 已修：`AppRoot::observe_focus` 经 `observe_window_activation` 把真实窗口激活态写入 `notify::set_foreground`，注册时先同步一次；测试 `window_activation_updates_notification_foreground` |
 | 应用内错误不可见，错误类别不进入任务栏错误态 | 待修 |
-| 任务栏聚合没有资源身份 | 待修 |
+| 任务栏聚合没有资源身份 | 已修：`TaskbarSignal` 携带 `PaneId`，`TaskbarState` 以集合分别维护 busy/attention/error，完成与清除只移除自身 pane；窗口聚焦只清全部等待态，错误保留；测试 `pane_completion_only_clears_its_own_signals`、`integration_notification_taskbar`、`clear_edges_only_touch_their_own_source_pane` |
 | 更新预约在崩溃或知情放弃关闭时仍保留 | 待修 |
 | 启动安装依赖已退役的 session.json，恢复票没有消费方 | 待修 |
 | 托盘可用性判定早于建窗，失败后没有恢复节拍 | 待修 |
