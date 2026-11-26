@@ -346,12 +346,19 @@ impl GitOpenIntent {
 }
 
 /// 复核状态映射后把打开请求交给前台；打开只复用 Commit 的同一打开链。
+/// 打开执行结果：回执落定才是成功，投递后超时或断连只能证明结果不明。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GitOpenOutcome {
+    Completed,
+    Unknown,
+}
+
 pub(crate) fn execute_git_open(
     intent: GitOpenIntent,
     target: &crate::app_shell::GitOpenTarget,
     events: &std::sync::mpsc::SyncSender<crate::app_shell::SltermShellEvent>,
     reply_timeout: std::time::Duration,
-) -> Result<(), JsonRpcError> {
+) -> Result<GitOpenOutcome, JsonRpcError> {
     use crate::app_shell::RuntimeGitOpenKind;
     use crate::app_shell::app_root::{CommitOpenKind, open_kind_for_status};
 
@@ -399,15 +406,10 @@ pub(crate) fn execute_git_open(
         expected,
     )?;
     match receipt.recv_timeout(reply_timeout) {
-        Ok(result) => result,
-        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(control_error(
-            DomainErrorCode::NotReady,
-            -32001,
-            "git open not ready",
-        )),
-        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-            Err(control_error(DomainErrorCode::Closing, -32004, "closing"))
-        }
+        Ok(result) => result.map(|()| GitOpenOutcome::Completed),
+        // 事件已经进入壳通道；无法取消或证明未执行，只能标记结果不明。
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Ok(GitOpenOutcome::Unknown),
     }
 }
 

@@ -18,8 +18,8 @@ use super::credentials::load_or_create_at;
 use super::discovery::{DiscoveryGuard, endpoint_path, publish_at};
 use super::events::EventHub;
 use super::git::{
-    GitOpenIntent, GitWriteIntent, execute_git_open, execute_git_write, git_diff_snapshot,
-    git_error_to_rpc, git_status_response,
+    GitOpenIntent, GitOpenOutcome, GitWriteIntent, execute_git_open, execute_git_write,
+    git_diff_snapshot, git_error_to_rpc, git_status_response,
 };
 use super::operations::{
     DispatchOutcome, DispatchRequest, OperationDispatcher, operation_resource, writer_error,
@@ -439,10 +439,7 @@ impl LocalControlService {
                                     "mutation target missing",
                                 )),
                             };
-                            match result {
-                                Ok(()) => DispatchOutcome::Succeeded(serde_json::json!({})),
-                                Err(error) => DispatchOutcome::Failed(error_value(error)),
-                            }
+                            git_open_dispatch_outcome(result)
                         }
                         Ok(Ok(RuntimeMutationReply::Git(target))) => {
                             let result = match git_write {
@@ -575,6 +572,19 @@ impl Drop for LocalControlService {
     fn drop(&mut self) {
         // 正常退出必须先在 GPUI 外显式 shutdown；Drop 只尽力回收。
         let _ = self.shutdown();
+    }
+}
+
+/// 打开回执落定才可报告成功；投递后超时或断连只能报告结果不明。
+pub(super) fn git_open_dispatch_outcome(
+    result: Result<GitOpenOutcome, JsonRpcError>,
+) -> DispatchOutcome {
+    match result {
+        Ok(GitOpenOutcome::Completed) => DispatchOutcome::Succeeded(serde_json::json!({})),
+        Ok(GitOpenOutcome::Unknown) => {
+            DispatchOutcome::OutcomeUnknown(serde_json::json!({"code": "outcome_unknown"}))
+        }
+        Err(error) => DispatchOutcome::Failed(error_value(error)),
     }
 }
 

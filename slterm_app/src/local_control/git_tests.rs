@@ -493,6 +493,45 @@ fn git_open_requires_matching_status_mapping() {
     worker.join().unwrap().expect("前台接受后必须成功");
 }
 
+/// 打开事件已投递但回执超时：结果不可证明，必须报告 Unknown 而不是失败。
+#[test]
+fn git_open_timeout_reports_unknown_outcome() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    use crate::app_shell::{GitOpenTarget, SltermShellEvent};
+
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("repo");
+    init_repo(&root);
+    commit_file(&root, "modified.txt", "one\n");
+    std::fs::write(root.join("modified.txt"), "one\ntwo\n").unwrap();
+    let target = GitOpenTarget {
+        project_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b".parse().unwrap(),
+        root: CanonicalPath::new(&root).unwrap(),
+        git: Arc::new(GitFacade::default()),
+    };
+    let (events, receiver) = mpsc::sync_channel(1);
+
+    let outcome = execute_git_open(
+        GitOpenIntent::Diff {
+            path: "modified.txt".to_owned(),
+        },
+        &target,
+        &events,
+        Duration::from_millis(50),
+    )
+    .expect("事件已投递后超时属于结果不明");
+    assert_eq!(outcome, super::git::GitOpenOutcome::Unknown);
+    assert!(
+        matches!(
+            receiver.try_recv(),
+            Ok(SltermShellEvent::RuntimeGitOpen { .. })
+        ),
+        "超时前必须已投递打开事件"
+    );
+}
+
 /// Runtime 状态根必须是真实 worktree 根，而不是包含它的项目根。
 #[test]
 fn git_status_reports_the_repository_worktree_root() {

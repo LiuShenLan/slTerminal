@@ -469,6 +469,17 @@ fn service_shutdown_attempts_both_failures_and_returns_first_error() {
     assert_eq!(error.to_string(), "injected server shutdown failure");
 }
 
+/// 打开回执超时是结果不明，不得写成可重试的失败。
+#[test]
+fn git_open_unknown_outcome_is_not_reported_as_failure() {
+    let outcome =
+        super::service::git_open_dispatch_outcome(Ok(super::git::GitOpenOutcome::Unknown));
+    assert!(matches!(
+        outcome,
+        super::operations::DispatchOutcome::OutcomeUnknown(_)
+    ));
+}
+
 /// 发布失败时 server 与事件环回收失败都必须进入同一错误，不能只报一个。
 #[test]
 fn publish_failure_combines_every_cleanup_error() {
