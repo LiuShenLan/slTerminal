@@ -918,6 +918,58 @@
         "result"
       ]
     },
+    "LayoutNodeResource": {
+      "description": "分割树节点；布尔路径即沿 first=false／second=true 的走法。",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "group_id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "group"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "group_id"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "direction": {
+              "$ref": "#/$defs/SplitDirectionWire"
+            },
+            "first": {
+              "$ref": "#/$defs/LayoutNodeResource"
+            },
+            "kind": {
+              "type": "string",
+              "const": "split"
+            },
+            "ratio": {
+              "type": "number",
+              "format": "float"
+            },
+            "second": {
+              "$ref": "#/$defs/LayoutNodeResource"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "direction",
+            "ratio",
+            "first",
+            "second"
+          ]
+        }
+      ]
+    },
     "MethodDescriptor": {
       "description": "`runtime.describe` 的单个方法合同：与注册表共用同一事实。",
       "type": "object",
@@ -1448,16 +1500,12 @@
         "ratio": {
           "type": "number",
           "format": "float"
-        },
-        "viewport": {
-          "$ref": "#/$defs/ViewportSize"
         }
       },
       "additionalProperties": false,
       "required": [
         "path",
-        "ratio",
-        "viewport"
+        "ratio"
       ]
     },
     "PanelGroupResource": {
@@ -1489,7 +1537,7 @@
       ]
     },
     "PanelGroupSplitRequest": {
-      "description": "从源视图拆分新组；`view` 是规范 ViewKey JSON 文本。",
+      "description": "从源视图拆分新组；`view` 是规范 ViewKey JSON 文本。\n\n最小空间由服务端前台真实内容视口裁定，客户端不提供视口。",
       "type": "object",
       "properties": {
         "direction": {
@@ -1504,9 +1552,6 @@
         },
         "view": {
           "type": "string"
-        },
-        "viewport": {
-          "$ref": "#/$defs/ViewportSize"
         }
       },
       "additionalProperties": false,
@@ -1514,8 +1559,7 @@
         "view",
         "target_group",
         "direction",
-        "ratio",
-        "viewport"
+        "ratio"
       ]
     },
     "PanelMoveRequest": {
@@ -1546,6 +1590,29 @@
       "properties": {
         "project_id": {
           "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "project_id"
+      ]
+    },
+    "ProjectLayoutResource": {
+      "description": "项目的分割树；`root` 为空表示空布局。",
+      "type": "object",
+      "properties": {
+        "project_id": {
+          "type": "string"
+        },
+        "root": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LayoutNodeResource"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false,
@@ -1896,7 +1963,7 @@
       ]
     },
     "SnapshotResources": {
-      "description": "同一代次资源模型：项目、面板组、终端与 Document。",
+      "description": "同一代次资源模型：项目、面板组、布局树、终端与 Document。",
       "type": "object",
       "properties": {
         "documents": {
@@ -1909,6 +1976,12 @@
           "type": "array",
           "items": {
             "$ref": "#/$defs/PanelGroupResource"
+          }
+        },
+        "layouts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProjectLayoutResource"
           }
         },
         "projects": {
@@ -1928,6 +2001,7 @@
       "required": [
         "projects",
         "groups",
+        "layouts",
         "terminals",
         "documents"
       ]
@@ -2178,25 +2252,6 @@
       "required": [
         "kind",
         "key"
-      ]
-    },
-    "ViewportSize": {
-      "description": "布局操作使用的逻辑像素尺寸。",
-      "type": "object",
-      "properties": {
-        "height": {
-          "type": "number",
-          "format": "float"
-        },
-        "width": {
-          "type": "number",
-          "format": "float"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "width",
-        "height"
       ]
     }
   }

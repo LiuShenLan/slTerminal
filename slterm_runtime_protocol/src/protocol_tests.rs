@@ -14,12 +14,12 @@ use crate::protocol::{
     ProjectRemoveRequest, ProjectRenameRequest, ProjectReorderRequest, ProtocolError, RuntimeEvent,
     RuntimeMethod, RuntimeRequest, SplitDirectionWire, TerminalCloseRequest, TerminalCreateRequest,
     TerminalExecuteRequest, TerminalInputRequest, TerminalReadRequest, TerminalReconnectRequest,
-    TerminalRenameRequest, TerminalWaitRequest, ViewportSize, params_sha256, parse_client_request,
+    TerminalRenameRequest, TerminalWaitRequest, params_sha256, parse_client_request,
 };
 use crate::{
-    DescribeResponse, DocumentResource, HelloResponse, MethodKind, OperationStatus,
-    PanelGroupResource, ProjectResource, SnapshotResources, SnapshotResponse, TerminalResource,
-    TerminalRunIntent, ViewKind, ViewResource,
+    DescribeResponse, DocumentResource, HelloResponse, LayoutNodeResource, MethodKind,
+    OperationStatus, PanelGroupResource, ProjectLayoutResource, ProjectResource, SnapshotResources,
+    SnapshotResponse, TerminalResource, TerminalRunIntent, ViewKind, ViewResource,
 };
 
 #[cfg(feature = "schema")]
@@ -562,10 +562,6 @@ fn panel_methods_validate_layout_identities_and_bounds() {
                 target_group: group.to_owned(),
                 direction: SplitDirectionWire::LeftRight,
                 ratio: 0.5,
-                viewport: ViewportSize {
-                    width: 800.0,
-                    height: 600.0,
-                },
             },
         ),
         project_mutation(
@@ -580,10 +576,6 @@ fn panel_methods_validate_layout_identities_and_bounds() {
             PanelGroupResizeRequest {
                 path: vec![true, false],
                 ratio: 0.25,
-                viewport: ViewportSize {
-                    width: 800.0,
-                    height: 600.0,
-                },
             },
         ),
         project_mutation(
@@ -613,13 +605,13 @@ fn panel_methods_validate_layout_identities_and_bounds() {
         // 空视图
         serde_json::json!({"jsonrpc":"2.0","id":1,"method":"panel.activate","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"view":""}}}),
         // ratio 越界
-        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"panel_group.split","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"view":"v","target_group":"g","direction":"left_right","ratio":1.5,"viewport":{"width":800.0,"height":600.0}}}}),
-        // viewport 非正
-        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"panel_group.resize","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"path":[true],"ratio":0.5,"viewport":{"width":0.0,"height":600.0}}}}),
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"panel_group.split","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"view":"v","target_group":"g","direction":"left_right","ratio":1.5}}}),
         // path 为空
-        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"panel_group.resize","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"path":[],"ratio":0.5,"viewport":{"width":800.0,"height":600.0}}}}),
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"panel_group.resize","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"path":[],"ratio":0.5}}}),
         // 未知方向
-        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"panel_group.split","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"view":"v","target_group":"g","direction":"diagonal","ratio":0.5,"viewport":{"width":800.0,"height":600.0}}}}),
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"panel_group.split","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"view":"v","target_group":"g","direction":"diagonal","ratio":0.5}}}),
+        // 客户端自报视口已退役，最小空间只按前台真实内容区判定
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"panel_group.split","params":{"client_id":"c","mutation_id":"m","expected_revision":null,"request":{"view":"v","target_group":"g","direction":"left_right","ratio":0.5,"viewport":{"width":800.0,"height":600.0}}}}),
     ] {
         assert!(
             parse_client_request(invalid.to_string().as_bytes()).is_err(),
@@ -1390,6 +1382,7 @@ fn sample_snapshot() -> SnapshotResponse {
         stream_epoch: "stream".to_owned(),
         revision: 3,
         resources: SnapshotResources {
+            layouts: vec![],
             projects: vec![ProjectResource {
                 project_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b".to_owned(),
                 display_name: "Repo".to_owned(),
@@ -1470,6 +1463,45 @@ fn closed_resource_text_fields_reject_unknown_values() {
         "unstaged": false,
     });
     assert!(serde_json::from_value::<GitStatusEntry>(entry).is_err());
+}
+
+/// 布局树必须能从快照推导 resize 的布尔路径与分割几何。
+#[test]
+fn snapshot_layout_tree_round_trips_and_rejects_unknown_nodes() {
+    let layout = ProjectLayoutResource {
+        project_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b".to_owned(),
+        root: Some(LayoutNodeResource::Split {
+            direction: SplitDirectionWire::LeftRight,
+            ratio: 0.4,
+            first: Box::new(LayoutNodeResource::Group {
+                group_id: "g-a".to_owned(),
+            }),
+            second: Box::new(LayoutNodeResource::Split {
+                direction: SplitDirectionWire::TopBottom,
+                ratio: 0.6,
+                first: Box::new(LayoutNodeResource::Group {
+                    group_id: "g-b".to_owned(),
+                }),
+                second: Box::new(LayoutNodeResource::Group {
+                    group_id: "g-c".to_owned(),
+                }),
+            }),
+        }),
+    };
+    let encoded = serde_json::to_value(&layout).unwrap();
+    assert_eq!(encoded["root"]["kind"], "split");
+    assert_eq!(encoded["root"]["direction"], "left_right");
+    assert_eq!(encoded["root"]["second"]["kind"], "split");
+    assert_eq!(
+        serde_json::from_value::<ProjectLayoutResource>(encoded).unwrap(),
+        layout
+    );
+
+    let unknown = serde_json::json!({
+        "project_id": "p",
+        "root": {"kind": "grid"},
+    });
+    assert!(serde_json::from_value::<ProjectLayoutResource>(unknown).is_err());
 }
 
 #[test]

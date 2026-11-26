@@ -705,16 +705,9 @@ pub enum SplitDirectionWire {
     TopBottom,
 }
 
-/// 布局操作使用的逻辑像素尺寸。
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(deny_unknown_fields)]
-pub struct ViewportSize {
-    pub width: f32,
-    pub height: f32,
-}
-
 /// 从源视图拆分新组；`view` 是规范 ViewKey JSON 文本。
+///
+/// 最小空间由服务端前台真实内容视口裁定，客户端不提供视口。
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -723,7 +716,6 @@ pub struct PanelGroupSplitRequest {
     pub target_group: String,
     pub direction: SplitDirectionWire,
     pub ratio: f32,
-    pub viewport: ViewportSize,
 }
 
 /// 合并两个稳定组；顺序由布局转换裁定。
@@ -742,7 +734,6 @@ pub struct PanelGroupMergeRequest {
 pub struct PanelGroupResizeRequest {
     pub path: Vec<bool>,
     pub ratio: f32,
-    pub viewport: ViewportSize,
 }
 
 /// 激活视图；`view` 是规范 ViewKey JSON 文本。
@@ -1213,7 +1204,6 @@ fn runtime_request_is_valid(request: &RuntimeRequest) -> bool {
                         && present(&request.view)
                         && present(&request.target_group)
                         && valid_ratio(request.ratio)
-                        && valid_viewport(request.viewport)
                 })
         }
         RuntimeMethod::PanelGroupMerge => {
@@ -1233,7 +1223,6 @@ fn runtime_request_is_valid(request: &RuntimeRequest) -> bool {
                     params.has_valid_envelope()
                         && !request.path.is_empty()
                         && valid_ratio(request.ratio)
-                        && valid_viewport(request.viewport)
                 })
         }
         RuntimeMethod::PanelActivate => request
@@ -1513,13 +1502,6 @@ fn valid_ratio(ratio: f32) -> bool {
     ratio.is_finite() && (0.0..=1.0).contains(&ratio)
 }
 
-fn valid_viewport(viewport: ViewportSize) -> bool {
-    viewport.width.is_finite()
-        && viewport.height.is_finite()
-        && viewport.width > 0.0
-        && viewport.height > 0.0
-}
-
 /// 当前已实现的客户端请求；新增方法必须显式扩展封闭集合。
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -1722,7 +1704,7 @@ pub struct OperationResource {
 }
 
 /// Runtime 方法的封闭结果集合；服务端按方法构造。
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(untagged)]
 pub enum RuntimeResult {

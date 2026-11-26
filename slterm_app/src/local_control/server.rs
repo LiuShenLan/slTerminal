@@ -27,10 +27,10 @@ use slterm_runtime_protocol::{
     SnapshotResponse, SplitDirectionWire, TerminalCloseParams, TerminalCreateParams,
     TerminalExecuteParams, TerminalInputParams, TerminalReadRequest, TerminalReadResponse,
     TerminalReconnectParams, TerminalRenameParams, TerminalWaitRequest, TerminalWaitResponse,
-    ViewportSize, parse_client_request,
+    parse_client_request,
 };
 use slterm_split::SplitDirection;
-use slterm_workspace::{LogicalSize, PanelGroupId, ProjectId, ViewKey};
+use slterm_workspace::{PanelGroupId, ProjectId, ViewKey};
 
 use super::events::Subscription;
 use super::mutations::{RuntimeMutation, RuntimeMutationRequest};
@@ -1012,7 +1012,6 @@ fn handle_connection<F>(
                                     target_group,
                                     direction: split_direction(params.request.direction),
                                     ratio: params.request.ratio,
-                                    viewport: logical_viewport(params.request.viewport),
                                 }
                             })
                         });
@@ -1060,7 +1059,6 @@ fn handle_connection<F>(
                             Ok(RuntimeMutation::PanelGroupResize {
                                 path: params.request.path,
                                 ratio: params.request.ratio,
-                                viewport: logical_viewport(params.request.viewport),
                             }),
                         )
                     }
@@ -1555,13 +1553,6 @@ fn split_direction(direction: SplitDirectionWire) -> SplitDirection {
     match direction {
         SplitDirectionWire::LeftRight => SplitDirection::LeftRight,
         SplitDirectionWire::TopBottom => SplitDirection::TopBottom,
-    }
-}
-
-fn logical_viewport(viewport: ViewportSize) -> LogicalSize {
-    LogicalSize {
-        width: viewport.width,
-        height: viewport.height,
     }
 }
 

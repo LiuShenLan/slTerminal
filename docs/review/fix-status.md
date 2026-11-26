@@ -221,7 +221,7 @@
 | 事件面只发布项目激活 | 待修 |
 | 路由与能力摘要不按方法注册表作用域执行 | 已修：server 路由以注册表 `lookup(...).scopes` 复核 Runtime／Handover 方法，hello 能力与 describe 按已认证作用域经 `for_scope` 收窄；测试 `handover_hello_capabilities_are_scoped`、`runtime_hello_capabilities_exclude_handover`、`runtime_describe_returns_registry_and_contract_hashes` |
 | `GitStatusResponse.root` 返回项目根而不是仓库根 | 已修：状态 DTO 根取 `StatusSnapshot.worktree_root`，缺省才回退项目根；测试 `git_status_reports_the_repository_worktree_root` |
-| 快照不暴露布局树与分割几何，resize 路径不可推导且视口由客户端自报 | 待修 |
+| 快照不暴露布局树与分割几何，resize 路径不可推导且视口由客户端自报 | 已修：快照新增 `ProjectLayoutResource`／`LayoutNodeResource` 分割树（方向、比例、组身份，空布局为 null），resize 布尔路径可从树推导；split／resize 线缆删除客户端视口，AppRoot 使用前台真实内容视口校验最小空间；测试 `snapshot_layout_tree_round_trips_and_rejects_unknown_nodes`、`runtime_snapshot_returns_workspace_resources_and_identity`、`panel_methods_validate_layout_identities_and_bounds` |
 | 等待操作不能因客户端断开而取消 | 已修：`terminal.wait`／`agent.wait` 与 `operation.wait` 每轮非阻塞探测连接 EOF，断开即返回 Closing 并停止轮询；测试 `runtime_operation_wait_cancels_when_the_client_disconnects` |
 | `runtime_token_absent_from_materials` 锚只覆盖诊断材料 | 待修 |
 | 注册表 kind/idempotent 语义与真实副作用不符 | 已修：新增 `MethodKind::Connection`，`events.subscribe`／`events.unsubscribe` 登记为连接级且不可重试，`instance.handover` 取消幂等声明；describe 与 schema 同步暴露；测试 `connection_methods_and_handover_do_not_claim_retry_safety`、`describe_lists_the_method_registry_with_contract_hashes` |

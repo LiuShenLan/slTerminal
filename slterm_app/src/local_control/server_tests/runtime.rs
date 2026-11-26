@@ -244,10 +244,6 @@ fn panel_split_request(view: &str) -> RuntimeRequest {
                 target_group: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0a2a".to_owned(),
                 direction: SplitDirectionWire::LeftRight,
                 ratio: 0.5,
-                viewport: ViewportSize {
-                    width: 800.0,
-                    height: 600.0,
-                },
             },
         },
     )
@@ -986,6 +982,7 @@ fn runtime_terminal_read_pages_snapshot_and_rejects_stale_cursor() {
 #[test]
 fn runtime_snapshot_over_budget_returns_structured_error_and_keeps_connection() {
     let resources = SnapshotResources {
+        layouts: vec![],
         documents: (0..2_000)
             .map(|index| DocumentResource {
                 document_id: format!("document-{index}"),
@@ -1640,6 +1637,7 @@ fn runtime_operation_wait_cancels_when_the_client_disconnects() {
 
 fn sample_resources() -> SnapshotResources {
     SnapshotResources {
+        layouts: vec![],
         projects: vec![ProjectResource {
             project_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b".to_owned(),
             display_name: "Repo".to_owned(),

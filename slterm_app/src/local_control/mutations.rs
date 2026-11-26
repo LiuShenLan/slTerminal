@@ -7,7 +7,7 @@ use slterm_runtime_protocol::{
     CloseDocumentsPolicy, CloseHooksPolicy, GitDeleteExpected, GitRollbackExpected,
 };
 use slterm_split::SplitDirection;
-use slterm_workspace::{LogicalSize, PanelGroupId, ProjectId, TerminalId, ViewKey};
+use slterm_workspace::{PanelGroupId, ProjectId, TerminalId, ViewKey};
 
 /// 当前可执行的写意图；新增方法必须先接入真实命令再登记。
 ///
@@ -36,7 +36,6 @@ pub(crate) enum RuntimeMutation {
         target_group: PanelGroupId,
         direction: SplitDirection,
         ratio: f32,
-        viewport: LogicalSize,
     },
     PanelGroupMerge {
         source_group: PanelGroupId,
@@ -45,7 +44,6 @@ pub(crate) enum RuntimeMutation {
     PanelGroupResize {
         path: Vec<bool>,
         ratio: f32,
-        viewport: LogicalSize,
     },
     PanelActivate {
         view: ViewKey,
@@ -216,13 +214,11 @@ impl RuntimeMutation {
                 target_group,
                 direction,
                 ratio,
-                viewport,
             } => Ok(serde_json::json!({
                 "view": view.to_canonical_json().map_err(|_| ())?,
                 "target_group": target_group.to_string(),
                 "direction": split_direction_text(*direction),
                 "ratio": ratio,
-                "viewport": viewport_value(*viewport),
             })),
             Self::PanelGroupMerge {
                 source_group,
@@ -231,14 +227,9 @@ impl RuntimeMutation {
                 "source_group": source_group.to_string(),
                 "target_group": target_group.to_string(),
             })),
-            Self::PanelGroupResize {
-                path,
-                ratio,
-                viewport,
-            } => Ok(serde_json::json!({
+            Self::PanelGroupResize { path, ratio } => Ok(serde_json::json!({
                 "path": path,
                 "ratio": ratio,
-                "viewport": viewport_value(*viewport),
             })),
             Self::PanelActivate { view } => {
                 Ok(serde_json::json!({"view": view.to_canonical_json().map_err(|_| ())?}))
@@ -394,10 +385,6 @@ fn split_direction_text(direction: SplitDirection) -> &'static str {
         SplitDirection::LeftRight => "left_right",
         SplitDirection::TopBottom => "top_bottom",
     }
-}
-
-fn viewport_value(viewport: LogicalSize) -> serde_json::Value {
-    serde_json::json!({"width": viewport.width, "height": viewport.height})
 }
 
 /// server 投递给派发器的写请求。

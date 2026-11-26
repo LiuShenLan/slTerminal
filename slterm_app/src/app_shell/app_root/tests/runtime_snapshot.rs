@@ -39,6 +39,14 @@ fn runtime_snapshot_returns_workspace_resources_and_identity(cx: &mut TestAppCon
     assert!(snapshot.projects[0].active);
     assert_eq!(snapshot.groups.len(), 1);
     assert_eq!(snapshot.groups[0].group_id, group_id(GROUP_A).to_string());
+    assert_eq!(snapshot.layouts.len(), 1);
+    assert_eq!(
+        snapshot.layouts[0].root,
+        Some(slterm_runtime_protocol::LayoutNodeResource::Group {
+            group_id: group_id(GROUP_A).to_string(),
+        }),
+        "快照必须暴露可推导 resize 路径的布局树"
+    );
     assert_eq!(snapshot.groups[0].views.len(), 1);
     assert_eq!(
         snapshot.groups[0].views[0].kind,

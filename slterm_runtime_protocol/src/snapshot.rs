@@ -83,19 +83,45 @@ pub struct DocumentResource {
     pub path: String,
 }
 
-/// 同一代次资源模型：项目、面板组、终端与 Document。
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// 项目的分割树；`root` 为空表示空布局。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct ProjectLayoutResource {
+    pub project_id: String,
+    pub root: Option<LayoutNodeResource>,
+}
+
+/// 分割树节点；布尔路径即沿 first=false／second=true 的走法。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum LayoutNodeResource {
+    Group {
+        group_id: String,
+    },
+    Split {
+        direction: crate::SplitDirectionWire,
+        ratio: f32,
+        first: Box<LayoutNodeResource>,
+        second: Box<LayoutNodeResource>,
+    },
+}
+
+/// 同一代次资源模型：项目、面板组、布局树、终端与 Document。
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct SnapshotResources {
     pub projects: Vec<ProjectResource>,
     pub groups: Vec<PanelGroupResource>,
+    pub layouts: Vec<ProjectLayoutResource>,
     pub terminals: Vec<TerminalResource>,
     pub documents: Vec<DocumentResource>,
 }
 
 /// `runtime.snapshot` 的不可变资源快照与世代。
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct SnapshotResponse {

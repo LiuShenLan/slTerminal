@@ -3,7 +3,7 @@
 use std::sync::mpsc;
 
 use slterm_runtime_protocol::{DomainErrorCode, JsonRpcError};
-use slterm_workspace::{LogicalSize, ViewKey};
+use slterm_workspace::ViewKey;
 
 use super::*;
 use crate::app_shell::RuntimeMutationReply;
@@ -138,10 +138,6 @@ fn runtime_panel_mutations_reuse_layout_commands(cx: &mut TestAppContext) {
             target_group: group_id(GROUP_A),
             direction: slterm_split::SplitDirection::LeftRight,
             ratio: 0.5,
-            viewport: LogicalSize {
-                width: 1200.0,
-                height: 800.0,
-            },
         },
     )
     .expect("拆分视图必须成功");

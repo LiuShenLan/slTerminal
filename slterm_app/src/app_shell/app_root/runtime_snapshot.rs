@@ -3,11 +3,12 @@
 use gpui::{App, Context, Entity, Window};
 use slterm_path::CanonicalPath;
 use slterm_runtime_protocol::{
-    AgentResource, AgentState, DocumentResource, DomainErrorCode, JsonRpcError, PanelGroupResource,
-    ProjectResource, SnapshotResources, TerminalResource, TerminalRunIntent, ViewKind,
-    ViewResource,
+    AgentResource, AgentState, DocumentResource, DomainErrorCode, JsonRpcError, LayoutNodeResource,
+    PanelGroupResource, ProjectLayoutResource, ProjectResource, SnapshotResources,
+    SplitDirectionWire, TerminalResource, TerminalRunIntent, ViewKind, ViewResource,
 };
-use slterm_workspace::{RunIntent, ViewKey, ViewKeyKind};
+use slterm_split::{SplitDirection, SplitTree};
+use slterm_workspace::{PanelGroupId, RunIntent, ViewKey, ViewKeyKind};
 
 use crate::ai_agents::AgentStatus;
 use crate::gpui_terminal::PaneId;
@@ -494,7 +495,6 @@ impl AppRoot {
                 target_group,
                 direction,
                 ratio,
-                viewport,
             } => self
                 .execute_command(
                     CommandId::SplitView,
@@ -505,7 +505,7 @@ impl AppRoot {
                         target_group,
                         direction,
                         ratio,
-                        viewport,
+                        viewport: self.project_viewport(window),
                     }),
                     window,
                     cx,
@@ -529,11 +529,7 @@ impl AppRoot {
                 )
                 .map(|_| ())
                 .map_err(runtime_mutation_error),
-            RuntimeMutation::PanelGroupResize {
-                path,
-                ratio,
-                viewport,
-            } => self
+            RuntimeMutation::PanelGroupResize { path, ratio } => self
                 .execute_command(
                     CommandId::ResizeSplit,
                     CommandSource::Application,
@@ -541,7 +537,7 @@ impl AppRoot {
                     Some(CommandParameters::ResizeSplit {
                         path,
                         ratio,
-                        viewport,
+                        viewport: self.project_viewport(window),
                     }),
                     window,
                     cx,
@@ -1070,6 +1066,7 @@ impl AppRoot {
         let active = registry.active();
         let mut projects = Vec::with_capacity(registry.projects().len());
         let mut groups = Vec::new();
+        let mut layouts = Vec::with_capacity(registry.projects().len());
         for project in registry.projects() {
             let project_id = project.id().to_string();
             projects.push(ProjectResource {
@@ -1079,6 +1076,10 @@ impl AppRoot {
                 active: active == Some(project.id()),
             });
             let layout = project.layout();
+            layouts.push(ProjectLayoutResource {
+                project_id: project_id.clone(),
+                root: layout.tree().map(layout_node_resource),
+            });
             for group_id in layout.group_ids() {
                 let group = layout.group(group_id).ok_or_else(snapshot_encoding_error)?;
                 let mut views = Vec::with_capacity(group.views().len());
@@ -1138,6 +1139,7 @@ impl AppRoot {
         Ok(SnapshotResources {
             projects,
             groups,
+            layouts,
             terminals,
             documents,
         })
@@ -1161,6 +1163,29 @@ fn runtime_agent_state(status: AgentStatus) -> AgentState {
         AgentStatus::Blocked => AgentState::Blocked,
         AgentStatus::Done => AgentState::Done,
         AgentStatus::Unknown => AgentState::Unknown,
+    }
+}
+
+fn layout_node_resource(node: &SplitTree<PanelGroupId>) -> LayoutNodeResource {
+    match node {
+        SplitTree::Leaf(group_id) => LayoutNodeResource::Group {
+            group_id: group_id.to_string(),
+        },
+        SplitTree::Split {
+            direction,
+            ratio,
+            first,
+            second,
+            ..
+        } => LayoutNodeResource::Split {
+            direction: match direction {
+                SplitDirection::LeftRight => SplitDirectionWire::LeftRight,
+                SplitDirection::TopBottom => SplitDirectionWire::TopBottom,
+            },
+            ratio: *ratio,
+            first: Box::new(layout_node_resource(first)),
+            second: Box::new(layout_node_resource(second)),
+        },
     }
 }
 

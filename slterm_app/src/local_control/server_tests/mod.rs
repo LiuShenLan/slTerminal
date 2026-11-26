@@ -20,7 +20,7 @@ use slterm_runtime_protocol::{
     TerminalCloseRequest, TerminalExecuteParams, TerminalExecuteRequest, TerminalInputParams,
     TerminalInputRequest, TerminalReadRequest, TerminalReconnectParams, TerminalReconnectRequest,
     TerminalRenameParams, TerminalRenameRequest, TerminalResource, TerminalWaitRequest,
-    ViewResource, ViewportSize,
+    ViewResource,
 };
 
 use super::LocalControlServer;
