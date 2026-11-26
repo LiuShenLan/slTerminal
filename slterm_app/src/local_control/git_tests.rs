@@ -502,8 +502,10 @@ fn git_status_reports_the_repository_worktree_root() {
     init_repo(&repository);
     let project_root = CanonicalPath::new(dunce::canonicalize(&project).unwrap()).unwrap();
     let worktree = CanonicalPath::new(dunce::canonicalize(&repository).unwrap()).unwrap();
-    let mut status = crate::git::StatusSnapshot::default();
-    status.worktree_root = Some(ResolvedPath::new(worktree.clone(), None));
+    let status = crate::git::StatusSnapshot {
+        worktree_root: Some(ResolvedPath::new(worktree.clone(), None)),
+        ..crate::git::StatusSnapshot::default()
+    };
     let response = git_status_response(
         "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b".parse().unwrap(),
         &project_root,
