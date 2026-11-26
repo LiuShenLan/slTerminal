@@ -41,9 +41,9 @@ pub(crate) enum TaskId {
     AgentHooksInspect,
     /// 单个 agent 的 hook 安装/卸载后台执行。
     AgentHookApply(slterm_settings::AgentHook),
-    /// Hooks 编辑器的磁盘载入与保存。
-    HooksDraftLoad(slterm_workspace::PanelId),
-    HooksDraftSave(slterm_workspace::PanelId),
+    /// Hooks 编辑器的磁盘载入与保存；身份含面板、CLI 与层级。
+    HooksDraftLoad(crate::ai_hook::draft_host::HooksDraftKey),
+    HooksDraftSave(crate::ai_hook::draft_host::HooksDraftKey),
     #[allow(dead_code)] // 消费点归 Diff 固定 HEAD 后台读取。
     DiffHead(slterm_workspace::PanelId),
     MarkdownLink(uuid::Uuid),
@@ -347,6 +347,47 @@ mod tests {
             assert_eq!(duplicate, Err(TaskError::Duplicate(id)));
             assert!(!constructed.get(), "重复注册不得消费替代任务或资源");
             assert!(service.is_registered(id));
+        });
+    }
+
+    /// Hooks 草稿任务身份必须含完整草稿键：同一面板的不同层级可并行载入／保存，
+    /// 否则切层载入会被误判为重复任务而静默丢弃。
+    #[gpui::test]
+    fn hooks_draft_task_identity_includes_layer_and_agent(cx: &mut TestAppContext) {
+        use crate::ai_hook::draft_host::{HooksDraftKey, HooksDraftLayer};
+        use slterm_agents::AgentKind;
+        use slterm_workspace::{PanelIdAllocator, ProjectId};
+
+        cx.update(|cx| {
+            let mut service = TaskService::new();
+            let panel = PanelIdAllocator::new(1).allocate().unwrap();
+            let project = ProjectId::from_uuid(uuid::Uuid::now_v7()).unwrap();
+            let user_key = HooksDraftKey {
+                panel,
+                agent: AgentKind::Claude,
+                layer: HooksDraftLayer::User,
+            };
+            let project_key = HooksDraftKey {
+                panel,
+                agent: AgentKind::Claude,
+                layer: HooksDraftLayer::Project(project),
+            };
+            for key in [user_key, project_key] {
+                service
+                    .register(
+                        TaskId::HooksDraftLoad(key),
+                        CancellationToken::new(),
+                        cx.spawn(async move |_| std::future::pending::<()>().await),
+                    )
+                    .unwrap();
+            }
+            assert!(service.is_registered(TaskId::HooksDraftLoad(user_key)));
+            assert!(service.is_registered(TaskId::HooksDraftLoad(project_key)));
+            service.complete(TaskId::HooksDraftLoad(user_key));
+            assert!(
+                service.is_registered(TaskId::HooksDraftLoad(project_key)),
+                "结算一层不得移除另一层的在途任务"
+            );
         });
     }
 }

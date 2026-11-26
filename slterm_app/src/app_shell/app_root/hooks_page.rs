@@ -511,7 +511,7 @@ impl AppRoot {
                 .await;
             let _ = this.update(cx, |root, cx| {
                 root.hooks_editor.loading.remove(&key);
-                root.tasks.complete(TaskId::HooksDraftLoad(key.panel));
+                root.tasks.complete(TaskId::HooksDraftLoad(key));
                 match loaded {
                     Ok(document) => {
                         let text = document.editable_json();
@@ -534,9 +534,9 @@ impl AppRoot {
                 cx.notify();
             });
         });
-        if let Err(error) =
-            self.tasks
-                .register(TaskId::HooksDraftLoad(key.panel), cancellation, task)
+        if let Err(error) = self
+            .tasks
+            .register(TaskId::HooksDraftLoad(key), cancellation, task)
         {
             self.hooks_editor.loading.remove(&key);
             log::warn!("Hooks 载入任务注册失败: {error:?}");
@@ -586,7 +586,7 @@ impl AppRoot {
                 })
                 .await;
             let _ = this.update(cx, |root, cx| {
-                root.tasks.complete(TaskId::HooksDraftSave(key.panel));
+                root.tasks.complete(TaskId::HooksDraftSave(key));
                 match result {
                     Ok(reloaded) => match reloaded.baseline() {
                         Some(baseline) => {
@@ -614,9 +614,9 @@ impl AppRoot {
                 cx.notify();
             });
         });
-        if let Err(error) =
-            self.tasks
-                .register(TaskId::HooksDraftSave(key.panel), cancellation, task)
+        if let Err(error) = self
+            .tasks
+            .register(TaskId::HooksDraftSave(key), cancellation, task)
         {
             log::warn!("Hooks 保存任务注册失败: {error:?}");
         }
