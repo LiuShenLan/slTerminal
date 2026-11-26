@@ -8,43 +8,106 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum HookEvent {
     SessionStart,
+    SessionEnd,
+    Setup,
     UserPromptSubmit,
-    Notification,
-    PermissionRequest,
+    UserPromptExpansion,
     PreToolUse,
+    PermissionRequest,
+    PermissionDenied,
     PostToolUse,
     PostToolUseFailure,
+    PostToolBatch,
+    Notification,
+    MessageDisplay,
+    SubagentStart,
+    SubagentStop,
+    TaskCreated,
+    TaskCompleted,
+    TeammateIdle,
+    PreCompact,
+    PostCompact,
     Stop,
     StopFailure,
-    SessionEnd,
+    ConfigChange,
+    CwdChanged,
+    FileChanged,
+    InstructionsLoaded,
+    DirectoryAdded,
+    WorktreeCreate,
+    WorktreeRemove,
+    Elicitation,
+    ElicitationResult,
 }
 
 impl HookEvent {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 31] = [
         Self::SessionStart,
+        Self::SessionEnd,
+        Self::Setup,
         Self::UserPromptSubmit,
-        Self::Notification,
-        Self::PermissionRequest,
+        Self::UserPromptExpansion,
         Self::PreToolUse,
+        Self::PermissionRequest,
+        Self::PermissionDenied,
         Self::PostToolUse,
         Self::PostToolUseFailure,
+        Self::PostToolBatch,
+        Self::Notification,
+        Self::MessageDisplay,
+        Self::SubagentStart,
+        Self::SubagentStop,
+        Self::TaskCreated,
+        Self::TaskCompleted,
+        Self::TeammateIdle,
+        Self::PreCompact,
+        Self::PostCompact,
         Self::Stop,
         Self::StopFailure,
-        Self::SessionEnd,
+        Self::ConfigChange,
+        Self::CwdChanged,
+        Self::FileChanged,
+        Self::InstructionsLoaded,
+        Self::DirectoryAdded,
+        Self::WorktreeCreate,
+        Self::WorktreeRemove,
+        Self::Elicitation,
+        Self::ElicitationResult,
     ];
 
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::SessionStart => "SessionStart",
+            Self::SessionEnd => "SessionEnd",
+            Self::Setup => "Setup",
             Self::UserPromptSubmit => "UserPromptSubmit",
-            Self::Notification => "Notification",
-            Self::PermissionRequest => "PermissionRequest",
+            Self::UserPromptExpansion => "UserPromptExpansion",
             Self::PreToolUse => "PreToolUse",
+            Self::PermissionRequest => "PermissionRequest",
+            Self::PermissionDenied => "PermissionDenied",
             Self::PostToolUse => "PostToolUse",
             Self::PostToolUseFailure => "PostToolUseFailure",
+            Self::PostToolBatch => "PostToolBatch",
+            Self::Notification => "Notification",
+            Self::MessageDisplay => "MessageDisplay",
+            Self::SubagentStart => "SubagentStart",
+            Self::SubagentStop => "SubagentStop",
+            Self::TaskCreated => "TaskCreated",
+            Self::TaskCompleted => "TaskCompleted",
+            Self::TeammateIdle => "TeammateIdle",
+            Self::PreCompact => "PreCompact",
+            Self::PostCompact => "PostCompact",
             Self::Stop => "Stop",
             Self::StopFailure => "StopFailure",
-            Self::SessionEnd => "SessionEnd",
+            Self::ConfigChange => "ConfigChange",
+            Self::CwdChanged => "CwdChanged",
+            Self::FileChanged => "FileChanged",
+            Self::InstructionsLoaded => "InstructionsLoaded",
+            Self::DirectoryAdded => "DirectoryAdded",
+            Self::WorktreeCreate => "WorktreeCreate",
+            Self::WorktreeRemove => "WorktreeRemove",
+            Self::Elicitation => "Elicitation",
+            Self::ElicitationResult => "ElicitationResult",
         }
     }
 
@@ -77,11 +140,47 @@ impl HookEvent {
             Self::Stop | Self::StopFailure => &["stop_hook_active"],
             Self::SessionStart => &["source"],
             Self::SessionEnd => &["reason"],
+            _ => &[],
         }
     }
 }
 
-/// 安装器订阅的 Claude 事件白名单；注入器与编辑器共用同一顺序。
+/// 编辑器与 schema 认的完整 Claude 事件目录（featureSpec 全表）。
+pub const CLAUDE_EVENT_CATALOG: [&str; 31] = [
+    HookEvent::SessionStart.as_str(),
+    HookEvent::SessionEnd.as_str(),
+    HookEvent::Setup.as_str(),
+    HookEvent::UserPromptSubmit.as_str(),
+    HookEvent::UserPromptExpansion.as_str(),
+    HookEvent::PreToolUse.as_str(),
+    HookEvent::PermissionRequest.as_str(),
+    HookEvent::PermissionDenied.as_str(),
+    HookEvent::PostToolUse.as_str(),
+    HookEvent::PostToolUseFailure.as_str(),
+    HookEvent::PostToolBatch.as_str(),
+    HookEvent::Notification.as_str(),
+    HookEvent::MessageDisplay.as_str(),
+    HookEvent::SubagentStart.as_str(),
+    HookEvent::SubagentStop.as_str(),
+    HookEvent::TaskCreated.as_str(),
+    HookEvent::TaskCompleted.as_str(),
+    HookEvent::TeammateIdle.as_str(),
+    HookEvent::PreCompact.as_str(),
+    HookEvent::PostCompact.as_str(),
+    HookEvent::Stop.as_str(),
+    HookEvent::StopFailure.as_str(),
+    HookEvent::ConfigChange.as_str(),
+    HookEvent::CwdChanged.as_str(),
+    HookEvent::FileChanged.as_str(),
+    HookEvent::InstructionsLoaded.as_str(),
+    HookEvent::DirectoryAdded.as_str(),
+    HookEvent::WorktreeCreate.as_str(),
+    HookEvent::WorktreeRemove.as_str(),
+    HookEvent::Elicitation.as_str(),
+    HookEvent::ElicitationResult.as_str(),
+];
+
+/// 安装器订阅的 Claude 事件白名单；注入器只注入该子集，顺序固定。
 pub const CLAUDE_EVENTS: [&str; 10] = [
     HookEvent::SessionStart.as_str(),
     HookEvent::UserPromptSubmit.as_str(),
@@ -167,10 +266,57 @@ mod tests {
         assert_eq!(HookEvent::parse("stop"), None, "事件名大小写严格");
     }
 
+    /// 编辑器目录覆盖 featureSpec 全表，且已含未安装订阅的事件。
+    #[test]
+    fn claude_event_catalog_covers_the_full_feature_spec() {
+        let expected = [
+            "SessionStart",
+            "SessionEnd",
+            "Setup",
+            "UserPromptSubmit",
+            "UserPromptExpansion",
+            "PreToolUse",
+            "PermissionRequest",
+            "PermissionDenied",
+            "PostToolUse",
+            "PostToolUseFailure",
+            "PostToolBatch",
+            "Notification",
+            "MessageDisplay",
+            "SubagentStart",
+            "SubagentStop",
+            "TaskCreated",
+            "TaskCompleted",
+            "TeammateIdle",
+            "PreCompact",
+            "PostCompact",
+            "Stop",
+            "StopFailure",
+            "ConfigChange",
+            "CwdChanged",
+            "FileChanged",
+            "InstructionsLoaded",
+            "DirectoryAdded",
+            "WorktreeCreate",
+            "WorktreeRemove",
+            "Elicitation",
+            "ElicitationResult",
+        ];
+        assert_eq!(CLAUDE_EVENT_CATALOG, expected);
+        for event in CLAUDE_EVENT_CATALOG {
+            assert!(HookEvent::parse(event).is_some(), "{event} 不在事件目录");
+        }
+        for installed in CLAUDE_EVENTS {
+            assert!(
+                CLAUDE_EVENT_CATALOG.contains(&installed),
+                "{installed} 必须仍在编辑器目录内"
+            );
+        }
+    }
+
     /// Claude 订阅白名单与事件目录同源且顺序固定。
     #[test]
     fn claude_events_derive_from_catalog() {
-        assert_eq!(CLAUDE_EVENTS.len(), HookEvent::ALL.len());
         for name in CLAUDE_EVENTS {
             assert!(HookEvent::parse(name).is_some(), "{name} 不在事件目录");
         }

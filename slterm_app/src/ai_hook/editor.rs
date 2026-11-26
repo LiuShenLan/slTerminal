@@ -16,14 +16,14 @@ use sha2::{Digest as _, Sha256};
 
 use crate::i18n::{Message, UiLanguage};
 
-use super::{CLAUDE_EVENTS, DraftWriteGuard, draft_write_guard};
+use super::{CLAUDE_EVENT_CATALOG, DraftWriteGuard, draft_write_guard};
 
 /// handler 矩阵单源在 `slterm_hooks`；校验与表单共用同一类型锚点。
 pub(crate) use slterm_hooks::HookHandlerType;
 
-/// 编辑器可选事件(与安装器订阅白名单同源)。
+/// 编辑器可选事件：完整 Claude 事件目录，含未安装订阅的合法事件。
 pub(crate) fn hook_events() -> &'static [&'static str] {
-    &CLAUDE_EVENTS
+    &CLAUDE_EVENT_CATALOG
 }
 
 /// 结构化表单字段(文本输入或布尔开关);键名与 hooks JSON 一致。
@@ -501,10 +501,10 @@ fn group_is_installer_owned(group: &Value) -> Option<bool> {
 fn validate_editable(hooks: &Value) -> Result<(), HooksEditError> {
     let events = hooks.as_object().ok_or(HooksEditError::HooksNotObject)?;
     for (event, groups) in events {
-        if !CLAUDE_EVENTS.contains(&event.as_str()) {
+        if !CLAUDE_EVENT_CATALOG.contains(&event.as_str()) {
             return Err(HooksEditError::EventNameInvalid {
                 event: event.clone(),
-                allowed: CLAUDE_EVENTS.join(" / "),
+                allowed: CLAUDE_EVENT_CATALOG.join(" / "),
             });
         }
         let groups = groups
@@ -1064,6 +1064,45 @@ mod editor_tests {
         }
     }
 
+    /// 事件目录必须覆盖 featureSpec 全表；未安装订阅的合法事件仍可编辑保存。
+    #[test]
+    fn legal_catalog_events_save_even_when_not_installed() {
+        let (_directory, path) = fixture();
+        write(&path, r#"{"hooks":{}}"#);
+        let mut document = HooksDocument::load_at(&path).unwrap();
+        for event in [
+            "Setup",
+            "UserPromptExpansion",
+            "PermissionDenied",
+            "PostToolBatch",
+            "MessageDisplay",
+            "SubagentStart",
+            "SubagentStop",
+            "TaskCreated",
+            "TaskCompleted",
+            "TeammateIdle",
+            "PreCompact",
+            "PostCompact",
+            "ConfigChange",
+            "CwdChanged",
+            "FileChanged",
+            "InstructionsLoaded",
+            "DirectoryAdded",
+            "WorktreeCreate",
+            "WorktreeRemove",
+            "Elicitation",
+            "ElicitationResult",
+        ] {
+            let hooks = serde_json::json!({
+                event: [{"hooks": [{"type": "command", "command": "echo ok"}]}]
+            });
+            document
+                .save_editable(&hooks.to_string())
+                .unwrap_or_else(|error| panic!("{event}: {error}"));
+            document = document.reload().unwrap();
+        }
+    }
+
     /// 事件类型各一条合法 handler 必须通过校验(必填字段齐全)。
     #[test]
     fn every_handler_type_passes_validation_with_required_fields() {
@@ -1178,6 +1217,7 @@ mod editor_tests {
 
 #[cfg(test)]
 mod dual_track_tests {
+    use super::super::CLAUDE_EVENTS;
     use super::*;
     use slterm_settings::AgentHook;
 

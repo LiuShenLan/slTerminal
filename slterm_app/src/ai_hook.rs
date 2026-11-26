@@ -117,8 +117,8 @@ fn is_helper_shell_command(command: &str, source: &str) -> bool {
 /// 重解析整行——那正是上游 #80 炸掉的形态。
 const HELPER_ARGS: [&str; 1] = ["claude"];
 
-/// 我们订阅的 claude hook 事件；白名单单源在 `slterm_hooks`。
-pub(crate) use slterm_hooks::CLAUDE_EVENTS;
+/// 我们订阅的 claude hook 事件与编辑器完整目录；白名单单源在 `slterm_hooks`。
+pub(crate) use slterm_hooks::{CLAUDE_EVENT_CATALOG, CLAUDE_EVENTS};
 
 /// 卸载器入口(`setup-ai --remove`):移除全部 AI CLI 的 hook 注入。
 pub(crate) use local::claude_config_dir;
