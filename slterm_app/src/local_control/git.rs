@@ -19,7 +19,14 @@ pub(crate) fn git_status_response(
     root: &CanonicalPath,
     snapshot: &StatusSnapshot,
 ) -> Result<GitStatusResponse, JsonRpcError> {
-    let root_text = root.as_path().to_str().ok_or_else(|| {
+    // root 是项目根；仓库可位于项目内子目录，状态条目的相对路径以真实
+    // worktree 根为准。
+    let repository_root = snapshot
+        .worktree_root
+        .as_ref()
+        .map(|root| root.canonical_path())
+        .unwrap_or(root);
+    let root_text = repository_root.as_path().to_str().ok_or_else(|| {
         control_error(
             DomainErrorCode::NotReady,
             -32001,

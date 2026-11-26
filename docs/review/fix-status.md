@@ -216,7 +216,7 @@
 | Runtime 双进程 conformance 与事件断线矩阵缺失 | 待修 |
 | 事件面只发布项目激活 | 待修 |
 | 路由与能力摘要不按方法注册表作用域执行 | 待修 |
-| `GitStatusResponse.root` 返回项目根而不是仓库根 | 待修 |
+| `GitStatusResponse.root` 返回项目根而不是仓库根 | 已修：状态 DTO 根取 `StatusSnapshot.worktree_root`，缺省才回退项目根；测试 `git_status_reports_the_repository_worktree_root` |
 | 快照不暴露布局树与分割几何，resize 路径不可推导且视口由客户端自报 | 待修 |
 | 等待操作不能因客户端断开而取消 | 待修 |
 | `runtime_token_absent_from_materials` 锚只覆盖诊断材料 | 待修 |

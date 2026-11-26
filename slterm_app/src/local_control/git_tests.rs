@@ -5,11 +5,12 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 
-use slterm_path::CanonicalPath;
+use slterm_path::{CanonicalPath, ResolvedPath};
 use slterm_runtime_protocol::{DomainErrorCode, GitDeleteExpected, GitRollbackExpected};
 
 use super::git::{
     GitOpenIntent, GitWriteIntent, execute_git_open, execute_git_write, git_diff_snapshot,
+    git_status_response,
 };
 use crate::app_shell::file_operation_service::{FileOperationService, RecycleBin};
 use crate::app_shell::{GitWriteTarget, RuntimeGitDiffTarget};
@@ -490,4 +491,28 @@ fn git_open_requires_matching_status_mapping() {
         _ => panic!("必须是 Git 打开事件"),
     }
     worker.join().unwrap().expect("前台接受后必须成功");
+}
+
+/// Runtime 状态根必须是真实 worktree 根，而不是包含它的项目根。
+#[test]
+fn git_status_reports_the_repository_worktree_root() {
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("project");
+    let repository = project.join("nested-repo");
+    init_repo(&repository);
+    let project_root = CanonicalPath::new(dunce::canonicalize(&project).unwrap()).unwrap();
+    let worktree = CanonicalPath::new(dunce::canonicalize(&repository).unwrap()).unwrap();
+    let mut status = crate::git::StatusSnapshot::default();
+    status.worktree_root = Some(ResolvedPath::new(worktree.clone(), None));
+    let response = git_status_response(
+        "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b".parse().unwrap(),
+        &project_root,
+        &status,
+    )
+    .unwrap();
+    assert_eq!(
+        response.root,
+        worktree.as_path().to_str().unwrap(),
+        "状态根必须指向真实仓库 worktree"
+    );
 }
