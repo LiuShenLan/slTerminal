@@ -207,6 +207,12 @@ fn client_focus_succeeds_against_real_loopback_server() {
 fn client_serializes_every_handover_intent_through_dto() {
     let (mut server, received) = start_real_server(TEST_CREDENTIAL);
     let record = record(server.endpoint());
+    // NewTerminal 的显式路径由服务端解析真实目标；夹具必须是真实目录。
+    let directory = tempfile::tempdir().unwrap();
+    let root = dunce::canonicalize(directory.path()).unwrap();
+    std::fs::create_dir(root.join("src")).unwrap();
+    let project_root = root.to_str().unwrap().to_owned();
+    let src = root.join("src").to_str().unwrap().to_owned();
     let cases = [
         HandoverParams::Focus,
         HandoverParams::OpenProject {
@@ -216,8 +222,8 @@ fn client_serializes_every_handover_intent_through_dto() {
             path: "D:/work/project/README.md".to_owned(),
         },
         HandoverParams::NewTerminal {
-            project_root: Some("D:/work/project".to_owned()),
-            cwd: Some("D:/work/project/src".to_owned()),
+            project_root: Some(project_root.clone()),
+            cwd: Some(src),
         },
         HandoverParams::NewTerminal {
             project_root: None,

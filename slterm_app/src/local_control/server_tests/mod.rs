@@ -466,6 +466,54 @@ fn local_control_handshake_times_out_after_five_seconds() {
 }
 
 #[test]
+fn terminal_paths_resolve_real_targets_and_reject_non_directories() {
+    let temp = tempfile::tempdir().unwrap();
+    let inside = temp.path().join("inside");
+    std::fs::create_dir(&inside).unwrap();
+    let resolved =
+        super::server::resolve_terminal_path(Some(inside.to_string_lossy().into_owned()))
+            .unwrap()
+            .expect("目录必须解析成功");
+    assert_eq!(
+        std::path::Path::new(&resolved),
+        dunce::canonicalize(&inside).unwrap().as_path()
+    );
+
+    let file = temp.path().join("file.txt");
+    std::fs::write(&file, "x").unwrap();
+    assert!(
+        super::server::resolve_terminal_path(Some(file.to_string_lossy().into_owned())).is_err(),
+        "普通文件不是终端 cwd"
+    );
+    assert!(
+        super::server::resolve_terminal_path(Some("D:/missing/terminal/cwd".to_owned())).is_err(),
+        "不存在的目录必须拒绝"
+    );
+    assert_eq!(super::server::resolve_terminal_path(None).unwrap(), None);
+
+    // 项目根内联接必须解析到真实目标，后续由 AppRoot 与项目根比较。
+    let outside = temp.path().join("outside");
+    std::fs::create_dir(&outside).unwrap();
+    let junction = temp.path().join("junction");
+    let status = std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(&junction)
+        .arg(&outside)
+        .status()
+        .unwrap();
+    assert!(status.success(), "测试需要可创建目录联接");
+    let resolved =
+        super::server::resolve_terminal_path(Some(junction.to_string_lossy().into_owned()))
+            .unwrap()
+            .expect("联接必须解析成功");
+    assert_eq!(
+        std::path::Path::new(&resolved),
+        dunce::canonicalize(&outside).unwrap().as_path(),
+        "联接不得以词法路径通过授权"
+    );
+}
+
+#[test]
 fn local_control_request_deadline_expires_without_waiting() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();

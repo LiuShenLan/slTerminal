@@ -58,8 +58,7 @@ fn commit_file(root: &Path, name: &str, contents: &str) {
 }
 
 fn git(root: &Path, args: &[&str]) {
-    let status = Command::new("git")
-        .current_dir(root)
+    let status = crate::git::command(root)
         .args(args)
         .status()
         .expect("必须可运行 git");
@@ -303,8 +302,7 @@ fn git_write_delete_covers_untracked_and_staged_added() {
     )
     .expect("暂存新增必须可删除");
     assert!(!root.join("added.txt").exists());
-    let status = Command::new("git")
-        .current_dir(&root)
+    let status = crate::git::command(&root)
         .args(["status", "--porcelain"])
         .output()
         .unwrap();

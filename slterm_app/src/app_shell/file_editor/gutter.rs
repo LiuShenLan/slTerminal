@@ -136,7 +136,6 @@ pub(crate) fn read_for_path(path: &Path) -> GitGutter {
 #[cfg(test)]
 mod gutter_tests {
     use super::*;
-    use std::process::Command;
 
     /// 纯映射:新增/修改/删除行号与升序去重。
     #[test]
@@ -301,9 +300,8 @@ mod gutter_tests {
     }
 
     fn git_run(root: &Path, args: &[&str]) {
-        let mut command = Command::new("git");
-        command.arg("-C").arg(root).args(args);
-        crate::platform::process::hidden_command(&mut command)
+        crate::git::command(root)
+            .args(args)
             .output()
             .expect("run git");
     }

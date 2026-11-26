@@ -100,6 +100,31 @@ pub(crate) fn command(cwd: &Path) -> Command {
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_NO_LAZY_FETCH", "1")
         .env("GIT_ALLOW_PROTOCOL", "file");
+    // 测试构建隔离开发机全局 Git 配置：签名、全局 hooks 与行尾转换不得影响夹具。
+    #[cfg(test)]
+    {
+        let config =
+            std::env::temp_dir().join(format!("slterm-git-test-config-{}", std::process::id()));
+        if !config.exists() {
+            // 只需确保空配置文件存在，内容与长度一律不动。
+            let _ = std::fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(false)
+                .open(&config);
+        }
+        command
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", &config)
+            // 配置经环境注入，不改变 argv 前缀（argv 形状由测试锁定）。
+            .env("GIT_CONFIG_COUNT", "3")
+            .env("GIT_CONFIG_KEY_0", "commit.gpgsign")
+            .env("GIT_CONFIG_VALUE_0", "false")
+            .env("GIT_CONFIG_KEY_1", "core.hooksPath")
+            .env("GIT_CONFIG_VALUE_1", "")
+            .env("GIT_CONFIG_KEY_2", "core.autocrlf")
+            .env("GIT_CONFIG_VALUE_2", "false");
+    }
     crate::platform::process::hidden_command(&mut command);
     command
 }

@@ -190,6 +190,20 @@ class LicenseNoticeTests(unittest.TestCase):
                 metadata, extra_documents=(("dav1d-sys", native),)
             )
 
+    def test_git_package_ignores_licenses_outside_the_checkout_root(self):
+        parent = self.root / "parent"
+        parent.mkdir()
+        (parent / "LICENSE-STRAY").write_text("stray license", encoding="utf-8")
+        checkout = parent / "checkout"
+        nested = checkout / "crate"
+        nested.mkdir(parents=True)
+        package = self.package("git-stray", source="git+https://example.invalid/repo")
+        package["manifest_path"] = str(nested / "Cargo.toml")
+        with mock.patch.object(check_licenses, "ROOT", self.root):
+            # 无 .git 的祖先目录不得被当成许可来源；应回退快照并因缺失而失败。
+            with self.assertRaisesRegex(check_licenses.LicenseAuditError, "git-stray"):
+                check_licenses.render_notices(self.metadata([package]))
+
     def test_missing_root_package_fails_instead_of_silently_skipping(self):
         metadata = self.metadata([])
         metadata["packages"] = [

@@ -197,11 +197,7 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn git_output(cwd: &std::path::Path, args: &[&str]) -> String {
-        let mut command = std::process::Command::new("git");
-        command.current_dir(cwd).args(args);
-        let output = crate::platform::process::hidden_command(&mut command)
-            .output()
-            .unwrap();
+        let output = crate::git::command(cwd).args(args).output().unwrap();
         assert!(
             output.status.success(),
             "git {args:?}: {}",

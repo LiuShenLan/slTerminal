@@ -205,10 +205,10 @@ mod vcs_tests {
     }
 
     fn run_git(root: &Path, args: &[&str]) {
-        let mut command = std::process::Command::new("git");
-        command.arg("-C").arg(root).args(args);
-        crate::platform::process::hidden_command(&mut command);
-        let output = command.output().expect("run git");
+        let output = crate::git::command(root)
+            .args(args)
+            .output()
+            .expect("run git");
         assert!(
             output.status.success(),
             "git {args:?} 失败: {}",

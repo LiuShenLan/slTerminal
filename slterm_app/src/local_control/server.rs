@@ -10,6 +10,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
+use slterm_path::CanonicalPath;
 use slterm_runtime_protocol::{
     AgentCloseParams, AgentForkParams, AgentGetRequest, AgentInputParams, AgentListResponse,
     AgentReadRequest, AgentResource, AgentResumeParams, AgentStartParams, AgentWaitRequest,
@@ -1227,16 +1228,20 @@ fn handle_connection<F>(
                         let Some(params) = request.parse::<TerminalCreateParams>() else {
                             return;
                         };
+                        let mutation = resolve_terminal_path(params.request.project_root).and_then(
+                            |project_root| {
+                                resolve_terminal_path(params.request.cwd).map(|cwd| {
+                                    RuntimeMutation::TerminalCreate { project_root, cwd }
+                                })
+                            },
+                        );
                         respond_mutation(
                             &runtime,
                             request.id,
                             params.client_id,
                             params.mutation_id,
                             params.expected_revision,
-                            Ok(RuntimeMutation::TerminalCreate {
-                                project_root: params.request.project_root,
-                                cwd: params.request.cwd,
-                            }),
+                            mutation,
                         )
                     }
                     RuntimeMethod::PanelOpenSettings => {
@@ -1320,7 +1325,30 @@ fn handle_connection<F>(
                 {
                     return;
                 }
-                let response = match callback(request.params) {
+                // 显式 cwd／项目根在连接线程解析真实目标，前台只比较规范路径。
+                let params = match request.params {
+                    HandoverParams::NewTerminal { project_root, cwd } => {
+                        let resolved = resolve_terminal_path(project_root).and_then(|root| {
+                            resolve_terminal_path(cwd).map(|cwd| HandoverParams::NewTerminal {
+                                project_root: root,
+                                cwd,
+                            })
+                        });
+                        match resolved {
+                            Ok(params) => params,
+                            Err(error) => {
+                                let response =
+                                    JsonRpcResponse::<HandoverResponse>::error(request.id, error);
+                                if write_json(&mut stream, &response).is_err() {
+                                    return;
+                                }
+                                continue;
+                            }
+                        }
+                    }
+                    other => other,
+                };
+                let response = match callback(params) {
                     Ok(result) if result.is_accepted() => {
                         JsonRpcResponse::result(request.id, result)
                     }
@@ -1519,6 +1547,27 @@ fn write_protocol_error(stream: &mut TcpStream, frame: &[u8]) -> io::Result<()> 
         stream,
         &JsonRpcResponse::<RuntimeResult>::error(id, invalid_request_error()),
     )
+}
+
+/// 显式终端路径在连接线程内解析真实目标并确认目录；越界判断仍由 AppRoot
+/// 用解析后的规范路径与项目根比较。GPU 前台不做文件系统解析。
+pub(super) fn resolve_terminal_path(raw: Option<String>) -> Result<Option<String>, JsonRpcError> {
+    use crate::platform::document_paths::{DocumentPathResolver, SystemDocumentPathResolver};
+
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let lexical = CanonicalPath::new(raw).map_err(|_| invalid_request_error())?;
+    let resolved = SystemDocumentPathResolver
+        .resolve(&lexical)
+        .map_err(|_| invalid_request_error())?;
+    let path = resolved.canonical_path().as_path();
+    if !path.is_dir() {
+        return Err(invalid_request_error());
+    }
+    path.to_str()
+        .map(|text| Some(text.to_owned()))
+        .ok_or_else(invalid_request_error)
 }
 
 fn invalid_request_error() -> JsonRpcError {
