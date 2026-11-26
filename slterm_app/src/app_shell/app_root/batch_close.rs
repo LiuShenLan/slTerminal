@@ -240,6 +240,14 @@ impl AppRoot {
                 });
             }
         }
+        // Hooks 草稿必须先经页面保存或丢弃，不能随面板销毁静默丢失。
+        if panels.iter().any(|(_, panel)| {
+            self.hook_drafts
+                .owner_has_dirty(crate::ai_hook::draft_host::HooksDraftOwner::Panel(*panel))
+        }) {
+            super::events::notify_hooks_draft_close_pending(cx);
+            return Err(AppRootError::HooksDraftPending);
+        }
         // 授权或身份替换占位没有可编辑 Session；只随布局关闭，不伪造保存对象。
         let documents_to_close = closing
             .iter()

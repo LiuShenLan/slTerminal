@@ -959,6 +959,10 @@ impl AppRoot {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Result<(), AppRootError> {
+        if self.hook_drafts.owner_has_dirty(HooksDraftOwner::Overlay) {
+            super::events::notify_hooks_draft_close_pending(cx);
+            return Err(AppRootError::HooksDraftPending);
+        }
         let Some(host) = self.settings_overlay.take() else {
             return Ok(());
         };

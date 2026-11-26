@@ -340,6 +340,7 @@
       "hooks_user_warning": "Hooks can execute arbitrary commands. Save only content you trust.",
       "hooks_saved_restart": "Saved. Restart the matching CLI session for changes to take effect.",
       "hooks_reload": "Reload",
+      "hooks_close_pending": "Unsaved Hooks edits. Save or discard them before closing.",
       "hooks_document_not_loaded": "The hooks document is not loaded yet.",
       "hooks_baseline_missing": "Could not read the file baseline after saving.",
       "hooks_config_dir_unavailable": "The Claude config directory could not be resolved.",

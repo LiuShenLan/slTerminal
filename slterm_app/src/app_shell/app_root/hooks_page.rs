@@ -8,8 +8,8 @@ use std::path::PathBuf;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AnyElement, Context, InteractiveElement as _, IntoElement, MouseButton, ParentElement as _,
-    SharedString, Styled as _, Window, div, px,
+    AnyElement, App, Context, InteractiveElement as _, IntoElement, MouseButton,
+    ParentElement as _, SharedString, Styled as _, Window, div, px,
 };
 use gpui_component::ActiveTheme as _;
 use gpui_component::input::Input;
@@ -634,6 +634,9 @@ impl AppRoot {
             let _ = this.update(cx, |root, cx| {
                 root.hooks_editor.loading.remove(&key);
                 root.tasks.complete(TaskId::HooksDraftLoad(key));
+                if !root.hooks_draft_owner_alive(key.owner, cx) {
+                    return;
+                }
                 match loaded {
                     Ok(document) => {
                         let text = document.editable_json();
@@ -744,6 +747,9 @@ impl AppRoot {
                 .await;
             let _ = this.update(cx, |root, cx| {
                 root.tasks.complete(TaskId::HooksDraftSave(key));
+                if !root.hooks_draft_owner_alive(key.owner, cx) {
+                    return;
+                }
                 match result {
                     Ok(reloaded) => match reloaded.baseline() {
                         Some(baseline) => {
@@ -786,11 +792,25 @@ impl AppRoot {
     /// 清理草稿键对应的文档与诊断；调用方负责移除草稿本身。
     pub(super) fn forget_hooks_draft_keys(&mut self, keys: &[HooksDraftKey]) {
         for key in keys {
+            // 面板或所有者销毁后，在途载入／保存不得再改动其草稿或文档。
+            self.tasks.cancel(TaskId::HooksDraftLoad(*key));
+            self.tasks.cancel(TaskId::HooksDraftSave(*key));
             self.hooks_editor.documents.remove(key);
             self.hooks_editor.errors.remove(key);
         }
         if !keys.is_empty() {
             self.hooks_generation = self.hooks_generation.wrapping_add(1);
+        }
+    }
+
+    /// 面板或浮层销毁后，迟到回执不得复活草稿。
+    fn hooks_draft_owner_alive(&self, owner: HooksDraftOwner, cx: &App) -> bool {
+        match owner {
+            HooksDraftOwner::Overlay => self.settings_overlay.is_some(),
+            HooksDraftOwner::Panel(panel) => self
+                .projects
+                .values()
+                .any(|project| project.read(cx).panels.contains_key(&panel)),
         }
     }
 

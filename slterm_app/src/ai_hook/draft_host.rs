@@ -204,6 +204,13 @@ impl HooksDraftHost {
             .any(|(key, draft)| key.layer.project() == Some(project) && draft.dirty())
     }
 
+    /// 该所有者是否仍有未提交草稿。
+    pub(crate) fn owner_has_dirty(&self, owner: HooksDraftOwner) -> bool {
+        self.drafts
+            .iter()
+            .any(|(key, draft)| key.owner == owner && draft.dirty())
+    }
+
     /// 所有者销毁时释放其全部层级草稿。
     pub(crate) fn clear_owner(&mut self, owner: HooksDraftOwner) -> Vec<HooksDraftKey> {
         let mut cleared = Vec::new();

@@ -1187,6 +1187,7 @@ fn agent_command_unsupported() -> JsonRpcError {
 fn runtime_mutation_error(error: AppRootError) -> JsonRpcError {
     match error {
         AppRootError::Closing => closing_error(),
+        AppRootError::HooksDraftPending => decision_required_error(),
         AppRootError::Focus(FocusError::ModalActive) => {
             control_error(DomainErrorCode::Unauthorized, -32002, "modal active")
         }

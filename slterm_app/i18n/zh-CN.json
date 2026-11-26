@@ -340,6 +340,7 @@
       "hooks_user_warning": "Hooks 可执行任意命令；仅保存你信任的内容。",
       "hooks_saved_restart": "已保存；重启对应 CLI 会话后生效。",
       "hooks_reload": "重新加载",
+      "hooks_close_pending": "Hooks 仍有未保存的编辑；请先保存或丢弃再关闭。",
       "hooks_document_not_loaded": "Hooks 文档尚未加载。",
       "hooks_baseline_missing": "保存后无法读取文件基线。",
       "hooks_config_dir_unavailable": "无法解析 Claude 配置目录。",

@@ -1239,3 +1239,153 @@ fn settings_field_writes_use_the_windows_integration_port(cx: &mut TestAppContex
     });
     assert!(windows.tray_enabled(), "托盘启用必须经端口");
 }
+
+/// 项目设置面板存在脏 Hooks 草稿时必须拒绝关闭并保留现场。
+#[gpui::test]
+fn dirty_hooks_drafts_block_panel_close(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let claude_dir = temp.path().join("claude");
+    std::fs::create_dir_all(&claude_dir).unwrap();
+    std::fs::write(claude_dir.join("settings.json"), br#"{"hooks":{}}"#).unwrap();
+    let project_dir = temp.path().join("project");
+    std::fs::create_dir_all(&project_dir).unwrap();
+
+    let (root, mut window, _state) = open_root(cx);
+    root.update(cx, |root, _| {
+        root.replace_hooks_claude_dir_for_test(claude_dir)
+    });
+    add_project(&root, &mut window, PROJECT_A, project_dir.to_str().unwrap());
+    focus_workspace(&root, &mut window);
+    open_settings(&mut window);
+    draw_frame(&mut window);
+    let page = window.debug_bounds("settings-page-6").unwrap();
+    window.simulate_click(page.center(), Modifiers::default());
+    draw_frame(&mut window);
+    window.run_until_parked();
+    draw_frame(&mut window);
+
+    let panel = settings_panel(&root, cx, project_id(PROJECT_A)).expect("设置面板必须存在");
+    let panel_key = root.update(cx, |root, _| {
+        let key = root
+            .hook_drafts
+            .keys()
+            .into_iter()
+            .find(|key| key.panel() == Some(panel))
+            .expect("Hooks 页必须载入草稿");
+        root.hook_drafts
+            .get_mut(key)
+            .expect("草稿必须存在")
+            .set_text(r#"{"Stop":[{"hooks":[{"type":"command","command":"edited"}]}]}"#);
+        key
+    });
+    let result = window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.close_view_from_request(
+                ViewKey::Settings {
+                    project_id: project_id(PROJECT_A),
+                },
+                BTreeMap::new(),
+                window,
+                cx,
+            )
+        })
+    });
+    assert!(matches!(result, Err(AppRootError::HooksDraftPending)));
+    assert!(settings_panel(&root, cx, project_id(PROJECT_A)).is_some());
+    root.read_with(cx, |root, _| {
+        assert!(root.hook_drafts.get(panel_key).is_some());
+    });
+
+    root.update(cx, |root, cx| {
+        root.discard_hooks_owner_for_close(HooksDraftOwner::Panel(panel), cx);
+    });
+    window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.close_view_from_request(
+                ViewKey::Settings {
+                    project_id: project_id(PROJECT_A),
+                },
+                BTreeMap::new(),
+                window,
+                cx,
+            )
+            .expect("丢弃草稿后面板必须可关闭");
+        });
+    });
+    window.run_until_parked();
+}
+
+/// 应用级设置浮层存在脏 Hooks 草稿时，Escape 关闭必须被拒绝。
+#[gpui::test]
+fn dirty_hooks_drafts_block_overlay_close(cx: &mut TestAppContext) {
+    let (root, mut window, _state) = open_root(cx);
+    focus_workspace(&root, &mut window);
+    open_settings(&mut window);
+    assert!(root.read_with(cx, |root, _| root.settings_overlay.is_some()));
+    let key = HooksDraftKey {
+        owner: HooksDraftOwner::Overlay,
+        agent: AgentKind::Claude,
+        layer: HooksDraftLayer::User,
+    };
+    root.update(cx, |root, _| {
+        let mut draft = HooksDraft::loaded(None, "{}".to_owned(), serde_json::json!({}));
+        draft.set_text(r#"{"Stop":[]}"#);
+        root.hook_drafts.insert(key, draft);
+    });
+    window.simulate_keystrokes("escape");
+    window.run_until_parked();
+    assert!(
+        root.read_with(cx, |root, _| root.settings_overlay.is_some()),
+        "脏 Hooks 草稿不得被浮层关闭静默丢弃"
+    );
+    root.update(cx, |root, cx| {
+        root.discard_hooks_owner_for_close(HooksDraftOwner::Overlay, cx);
+    });
+    window.simulate_keystrokes("escape");
+    window.run_until_parked();
+    assert!(root.read_with(cx, |root, _| root.settings_overlay.is_none()));
+}
+
+/// 应用关闭遇到任何脏 Hooks 草稿必须拒绝并保持窗口。
+#[gpui::test]
+fn dirty_hooks_drafts_block_application_close(cx: &mut TestAppContext) {
+    let (root, mut window, _state) = open_root(cx);
+    focus_workspace(&root, &mut window);
+    let key = HooksDraftKey {
+        owner: HooksDraftOwner::Overlay,
+        agent: AgentKind::Claude,
+        layer: HooksDraftLayer::User,
+    };
+    root.update(cx, |root, _| {
+        let mut draft = HooksDraft::loaded(None, "{}".to_owned(), serde_json::json!({}));
+        draft.set_text(r#"{"Stop":[]}"#);
+        root.hook_drafts.insert(key, draft);
+    });
+    assert!(!window.simulate_close());
+    assert!(!root.read_with(cx, |root, _| root.close_completed));
+    assert!(!root.read_with(cx, |root, _| root.close_in_progress));
+}
+
+/// 所有者已销毁时不存在的面板不得由迟到载入回执复活草稿。
+#[gpui::test]
+fn hooks_load_receipt_never_resurrects_a_destroyed_owner(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let claude_dir = temp.path().join("claude");
+    std::fs::create_dir_all(&claude_dir).unwrap();
+    std::fs::write(claude_dir.join("settings.json"), br#"{"hooks":{}}"#).unwrap();
+    let (root, window, _state) = open_root(cx);
+    root.update(cx, |root, _| {
+        root.replace_hooks_claude_dir_for_test(claude_dir)
+    });
+    let key = HooksDraftKey {
+        owner: HooksDraftOwner::Panel(PanelIdAllocator::new(77).allocate().unwrap()),
+        agent: AgentKind::Claude,
+        layer: HooksDraftLayer::User,
+    };
+    root.update(cx, |root, cx| root.request_hooks_draft(key, cx));
+    window.run_until_parked();
+    root.read_with(cx, |root, _| {
+        assert!(root.hook_drafts.get(key).is_none(), "迟到载入不得复活草稿");
+        assert!(!root.hooks_state_has_panel_entries(key.panel().unwrap()));
+    });
+}

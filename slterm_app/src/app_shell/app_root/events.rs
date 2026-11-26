@@ -630,6 +630,14 @@ fn application_close_decision_text(count: usize, language: crate::i18n::UiLangua
     )
 }
 
+pub(crate) fn notify_hooks_draft_close_pending(cx: &mut App) {
+    let language = cx.global::<crate::app_shell::config::Settings>().language;
+    let text = language
+        .text(crate::i18n::Message::SettingsAgentsHooksClosePending)
+        .to_owned();
+    crate::notify::deliver_startup_summary(&crate::notify::Notification::ProcessAlert { text }, cx);
+}
+
 pub(crate) fn notify_application_close_decision_required(count: usize, cx: &mut App) {
     let language = cx.global::<crate::app_shell::config::Settings>().language;
     let text = application_close_decision_text(count, language);

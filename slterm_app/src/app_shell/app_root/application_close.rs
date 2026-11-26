@@ -42,6 +42,11 @@ impl AppRoot {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> bool {
+        // 交互式关闭没有 Hooks 决定面：有脏草稿时保持窗口，要求先保存或丢弃。
+        if self.hook_drafts.dirty_drafts().next().is_some() {
+            super::events::notify_hooks_draft_close_pending(cx);
+            return false;
+        }
         match self.start_application_close_with_decisions(Default::default(), true, window, cx) {
             Ok(ApplicationCloseStart::Completed) => true,
             Ok(ApplicationCloseStart::Started | ApplicationCloseStart::Deferred) => false,

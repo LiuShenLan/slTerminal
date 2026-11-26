@@ -12,7 +12,7 @@
 | 文件树 watcher 未接线 | 待修 |
 | 外部冲突与另存为没有生产落点 | 待修 |
 | 恢复失败分支跳过局部关闭段，已收集决定被丢弃 | 已修：恢复失败会话复用 `ApplicationClose` 状态机，`persist_intent=false` 时仍执行 Save、StopPty、Cleanup 与全局 flush，只跳过持久关闭意图；测试 `recovery_failure_app_close_saves_documents_and_stops_terminals` |
-| Hooks 草稿未进入应用退出与面板关闭守卫 | 待修 |
+| Hooks 草稿未进入应用退出与面板关闭守卫 | 已修：应用退出、单面板／批量关闭与设置浮层关闭遇到脏草稿均拒绝并提示先保存或丢弃；面板/所有者销毁取消在途载入／保存，迟到回执按所有者存活复核且不复活草稿；Runtime 面板关闭映射 `decision_required`；测试 `dirty_hooks_drafts_block_panel_close`、`dirty_hooks_drafts_block_overlay_close`、`dirty_hooks_drafts_block_application_close`、`hooks_load_receipt_never_resurrects_a_destroyed_owner` |
 | 项目移除 Save 阶段没有代次重收集，失配后永久失败 | 已修：`needs_recollect` 标记 RevisionMismatch，显式重试经 `recollect_project_close` 以最新代次和新决定重建意图（提交 4bfe0605）；测试 `project_remove_save_revision_mismatch_recollects_with_new_decisions` |
 | 关闭保存授权漏掉 AgentRoot 能力并集 | 已修：`document_close_grants` 复用 `document_grants`，关闭保存叠加可写 AgentRoot（提交 599debed）；测试 `agent_root_capability_union_and_revoke` |
 | 页签缺少脏标记、CLI 状态与单面板关闭入口 | 已修：页签投影共享 Document 脏标记与 AgentHub 状态（工作=实心圆／阻塞=实心方／完成=空心圆），每页签带关闭按钮；新增 `CloseActivePanel`（`ctrl-w`）复用批量关闭链（提交 e9c59e61 及形状区分补充）；测试 `tab_bar_projects_dirty_status_and_closes_a_single_panel`、`close_active_panel_command_closes_a_focused_editor` |
