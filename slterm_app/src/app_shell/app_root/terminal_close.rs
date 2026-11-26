@@ -801,6 +801,7 @@ impl AppRoot {
             self.remove_editor_git(*panel_id);
             self.tasks
                 .remove_view_refresh(super::task_service::ViewTaskOwner::Panel(*panel_id));
+            self.forget_panel_runtime(*panel_id, cx);
             let focus_token = self.panel_focus.get(panel_id).map(|focus| focus.token());
             if let Some(token) = focus_token
                 && let Err(error) = self.focus_manager.unregister(token)
@@ -824,18 +825,24 @@ impl AppRoot {
         });
     }
 
+    /// 面板退出运行面：AgentHub 关联与 pane 级任务栏进度一并清理；
+    /// 单终端、批量与项目移除三条销毁链共用本入口。
+    pub(super) fn forget_panel_runtime(
+        &mut self,
+        panel_id: slterm_workspace::PanelId,
+        cx: &mut App,
+    ) {
+        let pane = crate::gpui_terminal::PaneId(panel_id.sequence());
+        self.agents.remove(pane);
+        crate::notify::clear_taskbar_for(pane, crate::windowing::focus::window_hwnd(cx));
+    }
+
     fn destroy_closed_terminal(&mut self, id: TerminalId, cx: &mut Context<'_, Self>) {
         let Some(close) = self.terminal_closes.remove(&id) else {
             return;
         };
+        self.forget_panel_runtime(close.panel_id, cx);
         if let Some(project) = self.projects.get(&close.record.project_id()) {
-            self.agents
-                .remove(crate::gpui_terminal::PaneId(close.panel_id.sequence()));
-            // 面板关闭即清自己的任务栏进度,不留残条。
-            crate::notify::clear_taskbar_for(
-                crate::gpui_terminal::PaneId(close.panel_id.sequence()),
-                crate::windowing::focus::window_hwnd(cx),
-            );
             project.update(cx, |project, _| {
                 project.panels.remove(&close.panel_id);
                 if project.focused_panel == Some(close.panel_id) {

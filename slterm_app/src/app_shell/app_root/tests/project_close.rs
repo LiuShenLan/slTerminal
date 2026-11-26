@@ -203,6 +203,12 @@ fn project_remove_commits_intent_before_destroy(cx: &mut TestAppContext) {
                 .update(cx, |view, _| view.replace_state_for_test(nav_state.clone()));
         });
     });
+    root.update(cx, |root, _| {
+        root.agents
+            .register(crate::gpui_terminal::PaneId(panel_a.sequence()));
+        root.agents
+            .register(crate::gpui_terminal::PaneId(panel_b.sequence()));
+    });
     let (_, _, weak_b) = panel_entity(&root, cx, PROJECT_B, TERMINAL_B);
     let focus_a = root.read_with(cx, |root, cx| {
         root.terminal_panel(project_id(PROJECT_A), terminal_id(TERMINAL_A), cx)
@@ -243,6 +249,18 @@ fn project_remove_commits_intent_before_destroy(cx: &mut TestAppContext) {
         assert!(!root.projects.contains_key(&project_id(PROJECT_B)));
         assert!(root.project_closes.is_empty());
         assert_eq!(root.panel_count(project_id(PROJECT_A), cx), 1);
+        assert!(
+            root.agents
+                .host(crate::gpui_terminal::PaneId(panel_b.sequence()))
+                .is_none(),
+            "项目移除必须清理该项目面板的 AgentHub 关联"
+        );
+        assert!(
+            root.agents
+                .host(crate::gpui_terminal::PaneId(panel_a.sequence()))
+                .is_some(),
+            "其他项目面板的 AgentHub 关联不得被误删"
+        );
     });
     assert!(matches!(
         state.borrow().sessions[&panel_b.sequence()].try_recv(),

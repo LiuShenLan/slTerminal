@@ -137,6 +137,12 @@ fn integration_batch_close(cx: &mut TestAppContext) {
         .unwrap();
     let first_entity = panel_entity(&root, cx, PROJECT_A, TERMINAL_A);
     let kept_entity = panel_entity(&root, cx, PROJECT_A, TERMINAL_B);
+    root.update(cx, |root, _| {
+        root.agents
+            .register(crate::gpui_terminal::PaneId(first.sequence()));
+        root.agents
+            .register(crate::gpui_terminal::PaneId(kept.sequence()));
+    });
     let neighbor_entity = panel_entity(&root, cx, PROJECT_A, TERMINAL_C);
     let kept_focus = window.update(|window, cx| window.focused(cx));
 
@@ -167,6 +173,20 @@ fn integration_batch_close(cx: &mut TestAppContext) {
         }]
     );
     assert!(first_entity.2.upgrade().is_none());
+    root.read_with(cx, |root, _| {
+        assert!(
+            root.agents
+                .host(crate::gpui_terminal::PaneId(first.sequence()))
+                .is_none(),
+            "批量关闭必须清理 AgentHub 关联"
+        );
+        assert!(
+            root.agents
+                .host(crate::gpui_terminal::PaneId(kept.sequence()))
+                .is_some(),
+            "保留面板的 AgentHub 关联不得被误删"
+        );
+    });
     assert_eq!(
         panel_entity(&root, cx, PROJECT_A, TERMINAL_B).1,
         kept_entity.1

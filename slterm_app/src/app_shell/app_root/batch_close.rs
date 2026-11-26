@@ -1535,8 +1535,9 @@ impl AppRoot {
                 }
             });
         }
-        // 面板销毁同时释放其 Hooks 草稿与文档，避免孤儿键指向失效 PanelId。
+        // 面板销毁同时释放 Hooks 草稿、文档、AgentHub 关联与任务栏进度。
         for panel_id in &panel_ids {
+            self.forget_panel_runtime(*panel_id, cx);
             self.discard_panel_hooks_for_close(*panel_id, cx);
         }
         cx.notify();

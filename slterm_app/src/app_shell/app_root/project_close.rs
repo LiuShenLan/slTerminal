@@ -591,8 +591,7 @@ impl AppRoot {
             self.remove_editor_git(panel_id);
             self.tasks
                 .remove_view_refresh(super::task_service::ViewTaskOwner::Panel(panel_id));
-            self.agents
-                .remove(crate::gpui_terminal::PaneId(panel_id.sequence()));
+            self.forget_panel_runtime(panel_id, cx);
             if let Some(registration) = self.panel_focus.remove(&panel_id)
                 && let Err(error) = self.focus_manager.unregister(registration.token())
             {
