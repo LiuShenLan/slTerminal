@@ -28,6 +28,8 @@ pub(crate) enum SltermShellEvent {
     WorkspaceWriteFailed,
     /// Hook 安装自愈失败；只携带封闭类别，前台按语言呈现。
     AiHookAlert(crate::ai_hook::HookFailureKind),
+    /// 命名管道 hook 事件；前台按 pane 所有权门路由到 AgentHub。
+    AiHookEvents(Vec<crate::ai_hook::AiHookEvent>),
     /// 启动时副本恢复或双损隔离已完成；只携带封闭通知类型。
     WorkspaceRecovered(crate::persistence::startup::WorkspaceRecoveryNotice),
     /// 第二实例意图与一次性完成回执；AppRoot 前台消费，真实完成后答复。

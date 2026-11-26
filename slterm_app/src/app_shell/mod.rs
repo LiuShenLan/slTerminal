@@ -586,6 +586,34 @@ fn run_shell_once(
             "ai-hook-guard",
         );
     });
+    // 命名管道是 hook 事件唯一权威通道：服务线程只做阻塞 I/O，泵线程把有界
+    // 批次投进壳事件队列，pane 所有权校验与仲裁都在 GPUI 前台完成。
+    let (hook_rx, pipe_server) = crate::ai_hook::spawn_gpui_server();
+    let hook_events_tx = shell_tx.clone();
+    let hook_pump = std::thread::Builder::new()
+        .name("slterm-ai-hook-pump".into())
+        .spawn(move || {
+            while let Ok(first) = hook_rx.recv() {
+                let mut batch = vec![first];
+                while batch.len() < 64 {
+                    match hook_rx.try_recv() {
+                        Ok(event) => batch.push(event),
+                        Err(_) => break,
+                    }
+                }
+                match hook_events_tx.try_send(SltermShellEvent::AiHookEvents(batch)) {
+                    Ok(()) => {}
+                    Err(mpsc::TrySendError::Full(_)) => {
+                        log::warn!("ai-hook event queue full; dropping a hook batch")
+                    }
+                    Err(mpsc::TrySendError::Disconnected(_)) => break,
+                }
+            }
+        })
+        .map_err(|error| log::warn!("ai_hook: failed to spawn event pump: {error}"))
+        .ok();
+    let mut pipe_server = Some(pipe_server);
+    let mut hook_pump = hook_pump;
     // 托盘命令回调:托盘线程只经此把用户动作送回壳事件队列。
     crate::tray::init_gpui({
         let shell_events = shell_tx.clone();
@@ -628,6 +656,12 @@ fn run_shell_once(
             },
         );
     });
+    // 窗口结束后先停管道服务（阻塞 accept/read 线程），接收端随之关闭，
+    // 再 join 泵线程；不留孤儿线程。
+    drop(pipe_server.take());
+    if let Some(handle) = hook_pump.take() {
+        let _ = handle.join();
+    }
     // 正常路径已在窗口销毁前完成全局段；异常返回由断连兜底回收。
     match global_close.join() {
         Ok(global_close::GlobalCloseSummary::Completed) => {}

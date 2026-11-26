@@ -204,6 +204,14 @@ impl AppRoot {
                 }
                 cx.notify();
             }
+            SltermShellEvent::AiHookEvents(events) => {
+                if !self.close_in_progress
+                    && self.application_close.is_none()
+                    && !self.close_completed
+                {
+                    self.on_ai_hook_events(events, cx);
+                }
+            }
             SltermShellEvent::WorkspaceRecovered(notice) => {
                 notify_workspace_recovered(notice, cx);
                 cx.notify();

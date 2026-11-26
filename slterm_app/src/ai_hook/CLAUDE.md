@@ -5,6 +5,7 @@
 ## 决策与红线
 
 - **命名管道 = hook 事件唯一权威通道**：`slterm-hook` 把原始载荷经命名管道转发给宿主；旧信号文件事件通道退役。原因：轮询延迟与丢失窗口不可接受。边界：宿主解析 JSON，helper 不重编码。
+- **生产入口与 pane 归属**：启动链创建唯一 `PipeServer`，泵线程只做有界批次转发，事件经壳队列进入 GPUI 前台；前台先把内核给出的 `client_pid` 绑定到目标 pane 当前 PTY 进程树，未证明归属的事件只记计数并丢弃。原因：pane 号是路由提示而非身份，迟到或同机伪造事件不得改写活跃状态。边界：管道服务与泵线程随窗口结束显式停止并 join；事件批次有界，队列满丢弃批次而不反压前台。
 - **statusline 用量信号分通道保留**：信号文件介质保留（app 本地数据根），与 hook 管道分通道；桥接脚本节流后写 ContextUsage，并透传用户原 statusline。
 - **流键收窄**：`AiHookStreamKey` = source + session + pane + agent_pid + bridge_instance；`remote_process` 维度随 SSH/远程砍除。
 - **`AgentSession.source` 宽松落盘、严格消费**：持久化保留 hook 原报字符串；恢复注入时经 `AgentKind::parse` 归一，不归一即不可恢复。原因：未知 CLI 的事件不应被静默丢弃，但恢复必须只作用于已知 agent。

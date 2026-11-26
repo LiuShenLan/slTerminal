@@ -71,9 +71,9 @@
 
 | 问题 | 状态 |
 |---|---|
-| 生产环境没有 hook 事件入口 | 待修 |
+| 生产环境没有 hook 事件入口 | 已修：启动链创建 `PipeServer` 并设置管道/helper 环境，泵线程把有界批次投为 `AiHookEvents` 壳事件；AppRoot 门控后经 `AgentHub` 仲裁、通知漏斗与快照会话身份提交，窗口结束后停管道并 join 泵线程；测试 `ai_hook_events_require_pane_process_ownership` |
 | 打开 Hooks 页留下无法清除的草稿，使项目移除/根重定位永久报 HooksDraftPending | 已修：`project_has_drafts` 只统计绑定该项目且 `dirty()` 的草稿，干净草稿不阻塞（提交 bbf3f69b）；测试 `hooks_project_guard_ignores_user_layer_and_clears_project_drafts`、`navigation_relocation_guards_and_reassigns_history`、`project_remove_requires_hooks_drafts_resolved` |
-| 管道事件不校验 pane 归属与 PTY 代次 | 待修 |
+| 管道事件不校验 pane 归属与 PTY 代次 | 已修：前台把内核 `client_pid` 与目标 pane 当前 PTY 的进程身份做进程树归属校验，未证明归属的事件只记丢弃计数；旧代次进程树不再连接到新 PTY，迟到事件自然失效；测试 `descendant_check_binds_the_client_to_the_pane_process_tree`、`ai_hook_events_require_pane_process_ownership` |
 | 注入/卸载没有 Journal 与启动恢复器 | 待修 |
 | 危险命令确认没有生产链路 | 待修 |
 | GUI 编辑模式与事件树/handler 表单不存在 | 待修 |

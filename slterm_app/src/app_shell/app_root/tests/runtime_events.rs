@@ -50,6 +50,75 @@ fn runtime_events_visibility_and_generation(cx: &mut TestAppContext) {
     );
 }
 
+/// hook 事件必须来自目标 pane 的 PTY 进程树；伪造 client_pid 只被丢弃。
+#[gpui::test]
+fn ai_hook_events_require_pane_process_ownership(cx: &mut TestAppContext) {
+    let (root, mut window, _state) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, "D:/work/a");
+    new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_A);
+    let (pane, pid) = cx.update(|cx| {
+        let root = root.read(cx);
+        let terminal_id = root
+            .snapshot()
+            .registry()
+            .project(project_id(PROJECT_A))
+            .unwrap()
+            .layout()
+            .view_keys()
+            .into_iter()
+            .find_map(|view| match view {
+                ViewKey::Terminal { terminal_id, .. } => Some(terminal_id),
+                _ => None,
+            })
+            .unwrap();
+        let panel_id = root.projects[&project_id(PROJECT_A)]
+            .read(cx)
+            .panels
+            .keys()
+            .copied()
+            .find(|panel| root.terminal_identity(*panel, cx) == Some(terminal_id))
+            .unwrap();
+        let target = root.terminals.borrow().target(terminal_id).unwrap();
+        let identity = root.terminals.borrow().process_identity(target).unwrap();
+        (
+            crate::gpui_terminal::PaneId(panel_id.sequence()),
+            identity.pid().get(),
+        )
+    });
+
+    let hook = |client_pid: u32| {
+        let envelope = format!(
+            "slterm-hook/1 source=claude pane={}
+{{\"hook_event_name\":\"UserPromptSubmit\",\"session_id\":\"session-a\"}}",
+            pane.0
+        );
+        let mut event = crate::ai_hook::parse_envelope(envelope.as_bytes()).expect("信封可解析");
+        event.client_pid = Some(client_pid);
+        event
+    };
+    window.update(|_window, cx| {
+        root.update(cx, |root, cx| {
+            root.on_ai_hook_events(vec![hook(u32::MAX - 1)], cx);
+        });
+    });
+    assert_eq!(
+        root.read_with(cx, |root, _| root.agents.host(pane).unwrap().status()),
+        crate::ai_agents::AgentStatus::Unknown,
+        "伪造 pane 归属不得改写状态"
+    );
+
+    window.update(|_window, cx| {
+        root.update(cx, |root, cx| {
+            root.on_ai_hook_events(vec![hook(pid)], cx);
+        });
+    });
+    assert_eq!(
+        root.read_with(cx, |root, _| root.agents.host(pane).unwrap().status()),
+        crate::ai_agents::AgentStatus::Working,
+        "来自 pane 进程树的事件必须被接受"
+    );
+}
+
 #[gpui::test]
 fn runtime_events_are_suppressed_after_close_starts(cx: &mut TestAppContext) {
     let (root, _window, _state) = open_root(cx);

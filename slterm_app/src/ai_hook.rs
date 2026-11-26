@@ -126,8 +126,7 @@ pub(crate) use slterm_hooks::{CLAUDE_EVENT_CATALOG, CLAUDE_EVENTS};
 pub(crate) use local::claude_config_dir;
 pub(crate) use local::settings::remove_all as remove_all_hooks;
 
-// 管道服务仅由独立集成测试启动；生产接入归后续 Agent 协调器。
-#[cfg(test)]
+/// 命名管道服务入口；生产由启动链持有，测试使用同一实现。
 pub use windows::spawn_gpui_server;
 
 #[cfg(test)]

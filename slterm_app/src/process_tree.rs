@@ -88,6 +88,38 @@ pub(crate) fn nearest_agent_ancestor(pid: u32) -> Option<(u32, String)> {
     with_cached_snapshot(|processes| resolve_agent_ancestor(processes, pid)).flatten()
 }
 
+/// `pid` 是否等于或位于 `ancestor` 的进程树内（含祖先链深度上限）。
+pub(crate) fn is_descendant(pid: u32, ancestor: u32) -> bool {
+    if pid == ancestor {
+        return true;
+    }
+    with_cached_snapshot(|processes| resolve_descendant(processes, pid, ancestor)).unwrap_or(false)
+}
+
+fn resolve_descendant(
+    processes: &std::collections::HashMap<u32, (u32, String)>,
+    pid: u32,
+    ancestor: u32,
+) -> bool {
+    if pid == ancestor {
+        return true;
+    }
+    let mut current = pid;
+    for _ in 0..MAX_ANCESTRY_DEPTH {
+        let Some((parent, _)) = processes.get(&current) else {
+            return false;
+        };
+        if *parent == ancestor {
+            return true;
+        }
+        if *parent == 0 || *parent == current {
+            return false;
+        }
+        current = *parent;
+    }
+    false
+}
+
 /// [`nearest_agent_ancestor`] 的纯函数内核。
 fn resolve_agent_ancestor(
     processes: &std::collections::HashMap<u32, (u32, String)>,
@@ -118,6 +150,20 @@ mod tests {
         rows.iter()
             .map(|&(pid, parent, exe)| (pid, (parent, exe.to_owned())))
             .collect()
+    }
+
+    #[test]
+    fn descendant_check_binds_the_client_to_the_pane_process_tree() {
+        let processes = named_table(&[
+            (100, 4, "pwsh.exe"),
+            (200, 100, "claude.exe"),
+            (300, 200, "cmd.exe"),
+            (400, 300, "slterm-hook.exe"),
+        ]);
+        assert!(super::resolve_descendant(&processes, 400, 100));
+        assert!(super::resolve_descendant(&processes, 100, 100));
+        assert!(!super::resolve_descendant(&processes, 400, 999));
+        assert!(!super::resolve_descendant(&processes, 999, 100));
     }
 
     /// hook helper 的父进程往往不是 agent 本身:Windows 上 claude 通过
