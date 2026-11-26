@@ -324,6 +324,21 @@ impl WorkspaceDatabase {
         })
     }
 
+    /// 撤销尚未获得材料的 Prepared 请求；只允许该状态，避免删除已应用事实。
+    pub(crate) fn discard_prepared_maintenance_request(
+        &mut self,
+        request_id: &str,
+    ) -> Result<(), MaintenanceStoreError> {
+        let removed = self.database.connection.execute(
+            "DELETE FROM maintenance_requests WHERE request_id = ?1 AND status = ?2",
+            params![request_id, MaintenanceRequestStatus::Prepared.as_str()],
+        )?;
+        if removed != 1 {
+            return Err(MaintenanceStoreError::Conflict);
+        }
+        Ok(())
+    }
+
     pub(crate) fn record_recovery_point(
         &mut self,
         record: &RecoveryPointRecord,

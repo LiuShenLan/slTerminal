@@ -80,10 +80,10 @@ fn remove_file(path: &Path) -> Result<(), String> {
     }
 }
 
-/// 运行期入口：全量校验所选类别 → 原子暂存 → 登记 Prepared 请求。
+/// 运行期入口：全量校验所选类别 → 加密并登记 Prepared 请求 → 原子写暂存。
 ///
 /// 口令与解密明文不落盘；暂存内容经导入侧敏感键复验，外部含凭据字段的
-/// 归档整单拒绝。
+/// 归档整单拒绝。先有 owner 行再有材料，失败时显式撤销 owner。
 pub(crate) fn stage_restore(
     store: &mut WorkspaceDatabase,
     paths: &AppPaths,
@@ -114,8 +114,6 @@ pub(crate) fn stage_restore(
     // 暂存件不得以明文携带解密条目：与恢复点同一 DPAPI CurrentUser 保护。
     let payload = crate::platform::dpapi::protect(&plaintext)
         .map_err(|error| format!("加密暂存材料失败: {error}"))?;
-    crate::atomic_file::write(&path, &payload)
-        .map_err(|error| format!("写入暂存材料失败: {error}"))?;
     let epoch = store
         .metadata()
         .map_err(|error| format!("读取工作区世代失败: {error}"))?
@@ -129,10 +127,17 @@ pub(crate) fn stage_restore(
         store_epoch: epoch,
         staged_path: relative,
     };
-    if let Err(error) = store.register_maintenance_request(&request) {
-        // 登记失败时暂存材料不再有 owner，立即清理。
-        let _ = fs::remove_file(&path);
-        return Err(format!("登记维护请求失败: {error}"));
+    // owner 行先落定，材料随后写入：崩溃只留下可判定的 Prepared 缺失材料，
+    // 不会产生无主文件；写失败时显式撤掉该 owner。
+    store
+        .register_maintenance_request(&request)
+        .map_err(|error| format!("登记维护请求失败: {error}"))?;
+    if let Err(error) = crate::atomic_file::write(&path, &payload) {
+        let cleanup = store.discard_prepared_maintenance_request(&request.request_id);
+        return Err(match cleanup {
+            Ok(()) => format!("写入暂存材料失败: {error}"),
+            Err(cleanup) => format!("写入暂存材料失败: {error}; 撤销维护请求失败: {cleanup}"),
+        });
     }
     Ok(request)
 }
@@ -361,9 +366,8 @@ impl BackupRestoreRecoverer {
         store: &mut WorkspaceDatabase,
         request: &MaintenanceRequest,
     ) -> Result<(), String> {
-        store
-            .clear_recovery_points(&request.request_id)
-            .map_err(|error| format!("清理恢复点登记失败: {error}"))?;
+        // 先删材料再清登记：删文件失败时登记仍在，留下可判定的阻断事实；
+        // 反过来会在清理失败后丢失材料身份。
         remove_file(&local_path(
             &self.paths,
             &point_relative(&request.request_id),
@@ -373,6 +377,9 @@ impl BackupRestoreRecoverer {
         if let Some(parent) = staged.parent() {
             let _ = fs::remove_dir(parent);
         }
+        store
+            .clear_recovery_points(&request.request_id)
+            .map_err(|error| format!("清理恢复点登记失败: {error}"))?;
         Ok(())
     }
 }
@@ -585,6 +592,45 @@ mod maintenance_restore_tests {
             store.register_journal(stale),
             Err(JournalError::StoreEpochConflict)
         ));
+    }
+
+    /// 撤销 owner 只允许未开始的 Prepared 请求。
+    #[test]
+    fn discard_prepared_request_never_removes_started_material() {
+        let temp = tempfile::tempdir().unwrap();
+        let (paths, mut store) = setup(&temp);
+        let first = stage_restore(&mut store, &paths, &archive(), selection()).unwrap();
+        store
+            .discard_prepared_maintenance_request(&first.request_id)
+            .unwrap();
+        assert!(
+            store
+                .maintenance_request(&first.request_id)
+                .unwrap()
+                .is_none(),
+            "Prepared 请求可撤销"
+        );
+
+        let second = stage_restore(&mut store, &paths, &archive(), selection()).unwrap();
+        store
+            .transition_maintenance_request(
+                &second.request_id,
+                MaintenanceRequestStatus::Prepared,
+                MaintenanceRequestStatus::Applying,
+            )
+            .unwrap();
+        assert!(
+            store
+                .discard_prepared_maintenance_request(&second.request_id)
+                .is_err(),
+            "已开始应用的事实不得删除"
+        );
+        assert!(
+            store
+                .maintenance_request(&second.request_id)
+                .unwrap()
+                .is_some()
+        );
     }
 
     /// 暂存件以 DPAPI 保护，不得在磁盘上泄露解密条目。
