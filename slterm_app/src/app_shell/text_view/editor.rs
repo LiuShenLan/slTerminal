@@ -1,4 +1,5 @@
 mod construct;
+mod scroll;
 
 use std::borrow::Cow;
 use std::cell::RefCell;
@@ -267,7 +268,9 @@ fn schedule_wrap_index(
             }
             *view.wrap_index.borrow_mut() = Some(index);
             *completed_build.borrow_mut() = None;
-            if std::mem::take(&mut view.wrap_reveal_cursor) {
+            if let Some(line) = view.wrap_reveal_line.take() {
+                view.reveal_logical_line(line);
+            } else if std::mem::take(&mut view.wrap_reveal_cursor) {
                 view.ensure_cursor_visible();
             }
             cx.notify();
@@ -320,6 +323,8 @@ pub(crate) struct DocumentTextView {
     wrap_build: SharedWrapBuild,
     caret_affinity: super::wrap::CaretAffinity,
     wrap_reveal_cursor: bool,
+    /// 索引未就绪时待揭示的逻辑行；索引完成后换算为显示行。
+    wrap_reveal_line: Option<usize>,
     wheel_remainder: f32,
     mouse_anchor: Option<usize>,
     focus: FocusHandle,
@@ -403,8 +408,7 @@ impl DocumentTextView {
 
     /// Diff 导航只改变当前定位，不写持久阅读状态。
     pub(crate) fn reveal_line(&mut self, line: usize, cx: &mut Context<'_, Self>) {
-        self.scroll_line = line.min(self.text.len_lines(LineType::LF).saturating_sub(1));
-        self.scroll_column = 0;
+        self.reveal_logical_line(line);
         cx.notify();
     }
 
@@ -498,6 +502,7 @@ impl DocumentTextView {
         self.mouse_anchor = None;
         self.caret_affinity = super::wrap::CaretAffinity::AfterWrap;
         self.scroll_column = 0;
+        self.wrap_reveal_line = None;
         if self.wrap {
             // 首次检查点只能使用确定有效的显示行 0，不能混入旧逻辑行。
             self.scroll_line = 0;
@@ -654,6 +659,7 @@ impl DocumentTextView {
         self.git_marks.clear();
         self.mouse_anchor = None;
         self.caret_affinity = super::wrap::CaretAffinity::AfterWrap;
+        self.wrap_reveal_line = None;
         self.invalidate_wrap_index();
         let previous_scroll_line = self.scroll_line;
         if !self.wrap {
@@ -1139,57 +1145,6 @@ impl DocumentTextView {
                 .with_wrap(self.wrap)
                 .with_language_override(self.language_override),
         );
-    }
-
-    fn ensure_cursor_visible(&mut self) {
-        if self.wrap && self.wrap_index.borrow().is_none() {
-            self.wrap_reveal_cursor = true;
-            return;
-        }
-        let previous = (self.scroll_line, self.scroll_column);
-        let Some(metrics) = self.metrics() else {
-            return;
-        };
-        let row = if self.wrap {
-            let Some(position) = self.wrap_position(self.selection.head) else {
-                return;
-            };
-            position.row
-        } else {
-            self.text
-                .byte_to_line_idx(self.selection.head, LineType::LF)
-        };
-        let visible_rows = (metrics.bounds.size.height / metrics.line_height)
-            .floor()
-            .max(1.0) as usize;
-        if row < self.scroll_line {
-            self.scroll_line = row;
-        } else if row >= self.scroll_line.saturating_add(visible_rows) {
-            self.scroll_line = row.saturating_add(1).saturating_sub(visible_rows);
-        }
-        if self.wrap {
-            self.scroll_column = 0;
-        } else {
-            let map = DisplayMap::new(4);
-            let Some(range) = RopeTextSource::new(&self.text, map).line_byte_range(row) else {
-                return;
-            };
-            let line_start = range.start;
-            let Some(column) =
-                map.column_at_rope(self.text.slice(range), self.selection.head - line_start)
-            else {
-                return;
-            };
-            let visible_columns = metrics.visible_whole_columns();
-            if column < self.scroll_column {
-                self.scroll_column = column;
-            } else if column > self.scroll_column.saturating_add(visible_columns) {
-                self.scroll_column = column - visible_columns;
-            }
-        }
-        if previous != (self.scroll_line, self.scroll_column) {
-            self.persist_view_state();
-        }
     }
 
     fn byte_for_point(&self, point: Point<Pixels>) -> Option<usize> {

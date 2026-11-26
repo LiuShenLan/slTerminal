@@ -155,6 +155,7 @@ impl DocumentTextView {
             wrap_build: Rc::default(),
             caret_affinity: CaretAffinity::AfterWrap,
             wrap_reveal_cursor: false,
+            wrap_reveal_line: None,
             wheel_remainder: 0.0,
             mouse_anchor: None,
             focus: cx.focus_handle().tab_stop(true),

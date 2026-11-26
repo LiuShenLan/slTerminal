@@ -154,6 +154,66 @@ impl Render for Host {
 }
 
 /// 外部快照与撤销/重做不因选区复位把滚动位置拉回顶部。
+/// 软换行下 reveal_line 必须换算为显示行，不能把逻辑行号当滚动行。
+#[gpui::test]
+fn reveal_line_targets_the_display_row_under_soft_wrap(cx: &mut TestAppContext) {
+    let host = cx.update(|cx| {
+        cx.new(|cx| {
+            Host::new(
+                "abcdefgh
+xyz
+",
+                false,
+                cx,
+            )
+        })
+    });
+    let view = host.read_with(cx, |host, _| host.view.clone());
+    view.update(cx, |view, cx| {
+        view.wrap = true;
+        view.invalidate_wrap_index();
+        let index = super::super::wrap::SoftWrapIndex::new(&view.text, view.text_state, 4);
+        let byte = view.text.line_to_byte_idx(1, ropey::LineType::LF);
+        let expected = index.position(byte).expect("逻辑行必须有显示位置").row;
+        assert!(expected > 1, "前置：目标行必须已被前一行换行下推");
+        *view.wrap_index.borrow_mut() = Some(index);
+        view.reveal_line(1, cx);
+        assert_eq!(
+            view.scroll_state_for_test().0,
+            expected,
+            "滚动行必须是显示行"
+        );
+    });
+}
+
+/// 索引未就绪时 reveal_line 只登记待揭示逻辑行，索引完成后换算。
+#[gpui::test]
+fn reveal_line_waits_for_the_wrap_index_before_scrolling(cx: &mut TestAppContext) {
+    let host = cx.update(|cx| {
+        cx.new(|cx| {
+            Host::new(
+                "abcdefgh
+xyz
+",
+                false,
+                cx,
+            )
+        })
+    });
+    let view = host.read_with(cx, |host, _| host.view.clone());
+    view.update(cx, |view, cx| {
+        view.wrap = true;
+        view.invalidate_wrap_index();
+        view.reveal_line(1, cx);
+        assert_eq!(
+            view.scroll_state_for_test().0,
+            0,
+            "索引未就绪不得按逻辑行滚动"
+        );
+        assert_eq!(view.wrap_reveal_line, Some(1), "必须保留待揭示行");
+    });
+}
+
 #[gpui::test]
 fn external_snapshot_keeps_the_current_scroll_position(cx: &mut TestAppContext) {
     let text = (0..50)
