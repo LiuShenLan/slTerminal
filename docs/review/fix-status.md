@@ -223,7 +223,7 @@
 | 注册表 kind/idempotent 语义与真实副作用不符 | 待修 |
 | 握手后的解析失败直接断开连接 | 已修：认证后协议解析失败在可取到 `id` 时返回封闭 `InvalidRequest` 并保留连接，无法解析 `id` 才断开；首包认证仍不返回协议预言机；测试 `local_control_authenticated_parse_failure_keeps_the_connection` |
 | 分页与响应预算按原始字节估算 | 待修 |
-| 分页游标不绑定资源身份，也接受非 UTF-8 字符边界偏移 | 待修 |
+| 分页游标不绑定资源身份，也接受非 UTF-8 字符边界偏移 | 已修：`ReadCursor` v2 绑定资源身份散列（终端＋agent 身份、Git 项目＋路径），偏移落在 UTF-8 续字节立即失效；测试 `cursors_are_bound_to_resource_identity_and_character_boundaries`、`stale_generation_or_revision_invalidates_the_cursor` |
 | Handover 客户端不核对 hello 协议版本与合同散列 | 待修 |
 | git.open_diff/git.open_deleted 超时按失败处理但打开可能仍完成 | 待修 |
 | agent.start/resume/fork 在提示符注入前报告成功 | 待修 |

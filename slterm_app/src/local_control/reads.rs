@@ -31,13 +31,26 @@ pub(crate) struct TerminalTextSnapshot {
 /// 资源代次与输出 revision；任一变化都使旧游标失效。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ReadGeneration {
+    /// 稳定资源身份散列；不同终端／路径不得互换游标。
+    pub resource: u64,
     pub generation: u64,
     pub revision: u64,
+}
+
+/// 稳定资源身份散列；只用于游标绑定，不承载路径或正文。
+pub(crate) fn resource_token(value: &str) -> u64 {
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in value.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
 }
 
 /// 游标只由服务端生成与解释，客户端不得构造或跨代次复用。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ReadCursor {
+    resource: u64,
     generation: u64,
     revision: u64,
     offset: usize,
@@ -45,12 +58,16 @@ struct ReadCursor {
 
 impl ReadCursor {
     fn encode(self) -> String {
-        format!("v1:{}:{}:{}", self.generation, self.revision, self.offset)
+        format!(
+            "v2:{}:{}:{}:{}",
+            self.resource, self.generation, self.revision, self.offset
+        )
     }
 
     fn parse(text: &str) -> Result<Self, ReadError> {
         let mut parts = text.split(':');
-        let (Some("v1"), Some(generation), Some(revision), Some(offset), None) = (
+        let (Some("v2"), Some(resource), Some(generation), Some(revision), Some(offset), None) = (
+            parts.next(),
             parts.next(),
             parts.next(),
             parts.next(),
@@ -60,6 +77,7 @@ impl ReadCursor {
             return Err(ReadError::StaleCursor);
         };
         Ok(Self {
+            resource: resource.parse().map_err(|_| ReadError::StaleCursor)?,
             generation: generation.parse().map_err(|_| ReadError::StaleCursor)?,
             revision: revision.parse().map_err(|_| ReadError::StaleCursor)?,
             offset: offset.parse().map_err(|_| ReadError::StaleCursor)?,
@@ -91,9 +109,11 @@ pub(crate) fn read_page(
         None => 0,
         Some(text) => {
             let cursor = ReadCursor::parse(text)?;
-            if cursor.generation != current.generation
+            if cursor.resource != current.resource
+                || cursor.generation != current.generation
                 || cursor.revision != current.revision
                 || cursor.offset > bytes.len()
+                || (cursor.offset < bytes.len() && (bytes[cursor.offset] & 0xC0) == 0x80)
             {
                 return Err(ReadError::StaleCursor);
             }
@@ -130,6 +150,7 @@ pub(crate) fn read_page(
         bytes: bytes[offset..end].to_vec(),
         next_cursor: Some(
             ReadCursor {
+                resource: current.resource,
                 generation: current.generation,
                 revision: current.revision,
                 offset: end,

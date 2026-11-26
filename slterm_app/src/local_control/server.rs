@@ -35,7 +35,7 @@ use super::events::Subscription;
 use super::mutations::{RuntimeMutation, RuntimeMutationRequest};
 use super::reads::{
     PAGE_BUDGET_BYTES, ReadError, ReadGeneration, TerminalReadTarget, TerminalTextSnapshot,
-    read_page,
+    read_page, resource_token,
 };
 use crate::secrets::SecretBytes;
 
@@ -1399,6 +1399,7 @@ fn respond_git_diff(
     match read_page(
         snapshot.text.as_bytes(),
         ReadGeneration {
+            resource: resource_token(&format!("git:{project_id}:{path}")),
             generation: 0,
             revision: snapshot.revision,
         },
@@ -1676,6 +1677,10 @@ fn respond_read(
     agent_id: Option<String>,
     cursor: Option<&str>,
 ) -> JsonRpcResponse<RuntimeResult> {
+    let cursor_resource = resource_token(&format!(
+        "terminal:{terminal_id_text}:{}",
+        agent_id.as_deref().unwrap_or("")
+    ));
     let target = match parse_terminal_id(terminal_id_text) {
         Ok(terminal_id) => TerminalReadTarget {
             terminal_id,
@@ -1691,6 +1696,7 @@ fn respond_read(
     match read_page(
         snapshot.text.as_bytes(),
         ReadGeneration {
+            resource: cursor_resource,
             generation: snapshot.generation,
             revision: snapshot.revision,
         },

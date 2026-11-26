@@ -1,9 +1,10 @@
 //! Runtime 有界读取：页面预算、游标续读、字符边界与代次失效。
 
-use super::reads::{PAGE_BUDGET_BYTES, ReadError, ReadGeneration, read_page};
+use super::reads::{PAGE_BUDGET_BYTES, ReadError, ReadGeneration, read_page, resource_token};
 
 fn generation() -> ReadGeneration {
     ReadGeneration {
+        resource: resource_token("terminal:a"),
         generation: 3,
         revision: 7,
     }
@@ -56,12 +57,19 @@ fn stale_generation_or_revision_invalidates_the_cursor() {
 
     for changed in [
         ReadGeneration {
+            resource: resource_token("terminal:a"),
             generation: 4,
             revision: 7,
         },
         ReadGeneration {
+            resource: resource_token("terminal:a"),
             generation: 3,
             revision: 8,
+        },
+        ReadGeneration {
+            resource: resource_token("terminal:b"),
+            generation: 3,
+            revision: 7,
         },
     ] {
         assert_eq!(
@@ -69,7 +77,15 @@ fn stale_generation_or_revision_invalidates_the_cursor() {
             Err(ReadError::StaleCursor)
         );
     }
-    for invalid in ["", "v1", "v1:3:7", "v1:3:7:x", "v2:3:7:0", "v1:3:7:999"] {
+    for invalid in [
+        "",
+        "v2",
+        "v2:0:3:7",
+        "v2:0:3:7:x",
+        "v1:0:3:7:0",
+        "v2:0:3:7:999",
+        "v2:1:3:7:1",
+    ] {
         assert_eq!(
             read_page(text.as_bytes(), generation(), Some(invalid), 4),
             Err(ReadError::StaleCursor),
@@ -92,4 +108,52 @@ fn truncation_is_explicit_and_never_claims_complete_output() {
     let empty = read_page(b"", generation(), None, PAGE_BUDGET_BYTES).unwrap();
     assert!(empty.bytes.is_empty());
     assert!(empty.next_cursor.is_none());
+}
+
+/// 资源身份不同的游标不得复用；字符中段偏移必须失效。
+#[test]
+fn cursors_are_bound_to_resource_identity_and_character_boundaries() {
+    let text = "中文";
+    let token = resource_token("terminal:a");
+    let mid = format!("v2:{token}:0:0:1");
+    assert_eq!(
+        read_page(
+            text.as_bytes(),
+            ReadGeneration {
+                resource: token,
+                generation: 0,
+                revision: 0,
+            },
+            Some(&mid),
+            1,
+        ),
+        Err(ReadError::StaleCursor),
+        "字符中段偏移必须失效"
+    );
+    let first = read_page(
+        text.as_bytes(),
+        ReadGeneration {
+            resource: token,
+            generation: 0,
+            revision: 0,
+        },
+        None,
+        4,
+    )
+    .unwrap();
+    let cursor = first.next_cursor.unwrap();
+    assert_eq!(
+        read_page(
+            text.as_bytes(),
+            ReadGeneration {
+                resource: resource_token("terminal:b"),
+                generation: 0,
+                revision: 0,
+            },
+            Some(&cursor),
+            4,
+        ),
+        Err(ReadError::StaleCursor),
+        "不同资源不得复用游标"
+    );
 }
