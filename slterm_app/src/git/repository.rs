@@ -16,7 +16,8 @@ use crate::platform::{
 };
 
 const REPOSITORY_TIMEOUT: Duration = Duration::from_secs(3);
-const REPOSITORY_OUTPUT_LIMIT: usize = 1024 * 1024;
+/// 单次仓库命令合并输出预算；head_file 等按调用方 limit 叠加该余量读取。
+pub(super) const REPOSITORY_OUTPUT_LIMIT: usize = 1024 * 1024;
 
 const STATUS_CACHE_TTL: Duration = Duration::from_millis(500);
 

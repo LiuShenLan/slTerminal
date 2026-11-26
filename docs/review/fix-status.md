@@ -254,7 +254,7 @@
 
 | 问题 | 状态 |
 |---|---|
-| Git 读取未统一遵守有界执行、禁网与凭据提示约束 | 待修 |
+| Git 读取未统一遵守有界执行、禁网与凭据提示约束 | 已修：`command` 统一设置 `GIT_TERMINAL_PROMPT=0`/`GIT_NO_LAZY_FETCH=1`/`GIT_ALLOW_PROTOCOL=file`；`head_file`/`verify_head`/`file_hunks` 改走有界带 deadline 执行体；测试 `every_git_command_disables_prompts_lazy_fetch_and_network` |
 | 生产 TLS 栈命中 emSign 弃用中间证书公告 | 待修 |
 | 加密备份 AAD 范围与恢复时序合同冲突 | 需裁决 |
 | 依赖审计未进入 CI 常驻门禁 | 待修 |

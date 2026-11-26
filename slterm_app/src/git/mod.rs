@@ -13,9 +13,8 @@
 //! 只读消费面的短 TTL 缓存见 [`status_cached`]/[`repository_root_cached`]。
 
 use std::collections::HashMap;
-use std::io::Read as _;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -95,6 +94,12 @@ impl std::error::Error for GitError {}
 pub(crate) fn command(cwd: &Path) -> Command {
     let mut command = Command::new("git");
     command.arg("--no-optional-locks").arg("-C").arg(cwd);
+    // 禁网与凭据提示不变量：git 读取不得弹凭据、不得懒抓取缺失对象、
+    // 不得使用任何传输协议；写操作同样不需要网络。
+    command
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_NO_LAZY_FETCH", "1")
+        .env("GIT_ALLOW_PROTOCOL", "file");
     crate::platform::process::hidden_command(&mut command);
     command
 }
@@ -231,58 +236,39 @@ pub(crate) fn head_file(path: &Path, limit: usize) -> Result<(Vec<u8>, bool), Gi
     verify_head(&root)?;
     let spec = format!("HEAD:{relative}");
     // 预检只判对象存在性;识别不出原因时仍归「不在 HEAD」默认臂。
-    let precheck = command(&root)
-        .args(["cat-file", "-e", &spec])
-        .output()
-        .map_err(|error| GitError::Unavailable(format!("无法运行 git: {error}")))?;
+    let mut precheck = repository::repository_command(&root);
+    precheck.args(["cat-file", "-e", &spec]);
+    let precheck = repository::run_repository(precheck)?;
     if !precheck.status.success() {
         let stderr = String::from_utf8_lossy(&precheck.stderr);
         return Err(classify_git_failure(&stderr)
             .unwrap_or_else(|| GitError::NotInHead(format!("文件在 HEAD 中不存在: {relative}"))));
     }
-    let mut child = command(&root)
-        .args(["show", &spec])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| GitError::Unavailable(format!("无法运行 git: {error}")))?;
-    let mut stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| GitError::Command("无法打开 git show 管道".to_owned()))?;
-    let mut bytes = Vec::new();
-    stdout
-        .by_ref()
-        .take(limit.saturating_add(1) as u64)
-        .read_to_end(&mut bytes)
-        .map_err(|error| GitError::Command(format!("读取 HEAD 字节失败: {error}")))?;
-    let truncated = bytes.len() > limit;
-    if truncated {
-        bytes.truncate(limit);
-    }
-    // 截断时子进程仍可能往管道写:先杀再收尸;stdout 句柄在此前已 drop。
-    drop(stdout);
-    if truncated {
-        let _ = child.kill();
-    }
-    let output = child
-        .wait_with_output()
-        .map_err(|error| GitError::Command(format!("等待 git show 失败: {error}")))?;
-    if !truncated && !output.status.success() {
+    // 有界读取与 deadline 由统一执行体提供；读取预算在调用方上限之外
+    // 追加仓库输出余量，超出 limit 的部分用于判定截断。
+    let mut show = repository::repository_command(&root);
+    show.args(["show", &spec]);
+    let output = repository::run_repository_with_limit(
+        show,
+        limit.saturating_add(repository::REPOSITORY_OUTPUT_LIMIT),
+    )?;
+    if !output.status.success() {
         // 预检通过后 show 仍失败(如读取中途对象损坏):同一分类臂收口。
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(classify_git_failure(&stderr)
             .unwrap_or_else(|| GitError::NotInHead(format!("文件在 HEAD 中不存在: {relative}"))));
     }
+    let truncated = output.stdout.len() > limit;
+    let mut bytes = output.stdout;
+    bytes.truncate(limit);
     Ok((bytes, truncated))
 }
 
 /// HEAD 可解析性(尚无提交 = `UnbornBranch` 的 CLI 等价物)。
 fn verify_head(root: &Path) -> Result<(), GitError> {
-    let output = command(root)
-        .args(["rev-parse", "--verify", "--quiet", "HEAD"])
-        .output()
-        .map_err(|error| GitError::Unavailable(format!("无法运行 git: {error}")))?;
+    let mut command = repository::repository_command(root);
+    command.args(["rev-parse", "--verify", "--quiet", "HEAD"]);
+    let output = repository::run_repository(command)?;
     if output.status.success() {
         Ok(())
     } else {
@@ -660,19 +646,17 @@ pub(crate) fn file_hunks(root: &Path, relative: &str) -> Result<Vec<FileHunk>, G
     if verify_head(root).is_err() {
         return Ok(Vec::new());
     }
-    let output = command(root)
-        .arg("--literal-pathspecs")
-        .args([
-            "diff",
-            "--unified=0",
-            "--no-color",
-            "--no-ext-diff",
-            "HEAD",
-            "--",
-            relative,
-        ])
-        .output()
-        .map_err(|error| GitError::Unavailable(format!("无法运行 git: {error}")))?;
+    let mut command = repository::repository_command(root);
+    command.args([
+        "diff",
+        "--unified=0",
+        "--no-color",
+        "--no-ext-diff",
+        "HEAD",
+        "--",
+        relative,
+    ]);
+    let output = repository::run_repository(command)?;
     if !output.status.success() {
         return Err(command_failure(root, "diff", &output.stderr));
     }
@@ -1002,6 +986,33 @@ mod git_tests {
             file_status_from_snapshot(&snapshot, "nested/two.txt"),
             Some(FileStatus::Untracked)
         );
+    }
+
+    /// 所有 git 子进程统一禁网：不等待凭据提示、不懒抓取缺失对象、
+    /// 不允许任何传输协议。
+    #[test]
+    fn every_git_command_disables_prompts_lazy_fetch_and_network() {
+        let command = command(Path::new("."));
+        let environment: Vec<(String, Option<String>)> = command
+            .get_envs()
+            .map(|(key, value)| {
+                (
+                    key.to_string_lossy().into_owned(),
+                    value.map(|value| value.to_string_lossy().into_owned()),
+                )
+            })
+            .collect();
+        for expected in [
+            ("GIT_TERMINAL_PROMPT", "0"),
+            ("GIT_NO_LAZY_FETCH", "1"),
+            ("GIT_ALLOW_PROTOCOL", "file"),
+        ] {
+            assert!(
+                environment.contains(&(expected.0.to_owned(), Some(expected.1.to_owned()))),
+                "git 子进程必须设置 {}: {environment:?}",
+                expected.0
+            );
+        }
     }
 
     /// HEAD 字节 ≠ 工作区字节:gitshow 数据面读的是已提交内容。
