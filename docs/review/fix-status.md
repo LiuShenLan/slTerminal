@@ -37,7 +37,7 @@
 | 设置中心页面集合与导航结构未按规格实现 | 待修 |
 | 设置中心缺少导入、导出、备份、诊断、更新、Runtime、AgentRoot 与套餐凭据入口 | 待修 |
 | 自定义主题库没有设置界面，主题选择只列内置主题 | 待修 |
-| 主题文档仍强制承载排版、卡片几何、背景图与效果字段 | 待修 |
+| 主题文档仍强制承载排版、卡片几何、背景图与效果字段 | 已修：`ThemeDefinition` 删除 typography/layout/effects，文档只收颜色与 ANSI；旧区段按未知字段拒绝，应用桥只写主题键（提交 40b4a59b）；测试 `pure_color_documents_are_accepted_without_non_color_sections`、`generated_documents_carry_only_colors_and_ansi`、`legacy_non_color_sections_are_rejected_as_unknown_fields`、`applying_a_theme_writes_only_theme_keys_and_keeps_personal_appearance` |
 | 最终排除项仍在设置页暴露 | 待修 |
 | WCAG 对比度校验与提示残留，合同互相矛盾 | 已修：删除 `validate_wcag`/阈值/建议色/`wcag_violations`/内置对比度测试与 i18n 承诺；源扫描守卫 `theme_sources_do_not_validate_contrast`，模块文档同步为“不做对比度校验或提示” |
 | 设置页大量控件没有生产消费方 | 待修 |
