@@ -252,6 +252,44 @@ fn runtime_agent_read_and_wait_require_matching_identity(cx: &mut TestAppContext
     );
 }
 
+/// agent.start 必须注入 AgentCatalog 官方入口名而不是内部 slug：
+/// Cursor 的 slug 是 cursor，启动命令必须是 agent。
+#[gpui::test]
+fn runtime_agent_start_injects_catalog_builtin_command(cx: &mut TestAppContext) {
+    let (root, mut window, _state) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, "D:/work/a");
+    dispatch_mutation(
+        &root,
+        &mut window,
+        crate::local_control::RuntimeMutation::AgentStart {
+            kind: "cursor".to_owned(),
+            project_root: None,
+            cwd: None,
+        },
+    )
+    .expect("启动 Cursor 必须成功");
+
+    let command = root.read_with(cx, |root, cx| {
+        let terminal_id = root
+            .snapshot()
+            .terminals()
+            .next()
+            .expect("必须创建终端记录")
+            .id();
+        let (_, view) = root
+            .terminal_panel(project_id(PROJECT_A), terminal_id, cx)
+            .expect("终端面板必须存在");
+        view.read(cx)
+            .pending_agent_command_for_test()
+            .map(str::to_owned)
+    });
+    assert_eq!(
+        command.as_deref(),
+        Some("agent"),
+        "必须注入 AgentCatalog 入口名而非 slug"
+    );
+}
+
 /// 锚：start/resume/fork 各建一个终端；未知 CLI 与不支持的动作明确拒绝。
 #[gpui::test]
 fn runtime_agent_start_resume_and_fork_create_terminals(cx: &mut TestAppContext) {

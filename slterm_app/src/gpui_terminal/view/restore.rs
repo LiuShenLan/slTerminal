@@ -24,7 +24,7 @@ fn resume_delay(shell: Option<&str>) -> Duration {
 }
 
 pub(crate) struct PendingResume {
-    command: String,
+    pub(super) command: String,
     /// 丢弃即取消；提示符提前就绪时不保留迟到写入。
     _timeout: gpui::Task<()>,
 }

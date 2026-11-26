@@ -541,6 +541,14 @@ impl TerminalView {
         self.process_event(event, cx);
     }
 
+    /// 测试专用:读取尚未注入的 Agent 命令原文。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn pending_agent_command_for_test(&self) -> Option<&str> {
+        self.pending_resume
+            .as_ref()
+            .map(|pending| pending.command.as_str())
+    }
+
     /// `Exited` 只对宿主发一次;重复的退出信号(ChildExit 之后必然跟 Exit)
     /// 只更新文案。
     fn mark_exited(&mut self, message: String, cx: &mut Context<'_, Self>) {

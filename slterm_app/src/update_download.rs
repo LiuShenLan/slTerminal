@@ -384,9 +384,16 @@ fn download_with_job(
         return Err("安装包超过 512 MiB 安全上限".to_owned());
     }
 
+    // 预置链接防护：先移除既有 `.part` 再独占创建，下载写入不得跟随
+    // 他人预置的符号链接/目录联接指向别处。
+    match std::fs::symlink_metadata(partial_path) {
+        Ok(_) => std::fs::remove_file(partial_path)
+            .map_err(|error| format!("无法清理旧更新临时文件:{error}"))?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(format!("无法检查更新临时文件:{error}")),
+    }
     let mut output = OpenOptions::new()
-        .create(true)
-        .truncate(true)
+        .create_new(true)
         .write(true)
         .open(partial_path)
         .map_err(|error| format!("无法创建更新临时文件:{error}"))?;

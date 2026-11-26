@@ -167,12 +167,30 @@ pub(crate) fn redact(line: &str) -> String {
     let mut rest = line;
     loop {
         let lower = rest.to_ascii_lowercase();
+        // 键名集合与备份敏感键表对齐：两套安全输出通道不得口径漂移。
         let (index, key_len) = [
             ("sk-", 0usize),
             ("bearer ", 0usize),
             ("token=", "token=".len()),
             ("token: ", "token: ".len()),
             ("token\":", "token\":".len()),
+            ("access_token=", "access_token=".len()),
+            ("access_token: ", "access_token: ".len()),
+            ("refresh_token=", "refresh_token=".len()),
+            ("refresh_token: ", "refresh_token: ".len()),
+            ("api_key=", "api_key=".len()),
+            ("api_key: ", "api_key: ".len()),
+            ("api-key=", "api-key=".len()),
+            ("apikey=", "apikey=".len()),
+            ("authorization=", "authorization=".len()),
+            ("authorization: ", "authorization: ".len()),
+            ("authorization\":", "authorization\":".len()),
+            ("client_secret=", "client_secret=".len()),
+            ("client_secret: ", "client_secret: ".len()),
+            ("cookie=", "cookie=".len()),
+            ("cookie: ", "cookie: ".len()),
+            ("private_key=", "private_key=".len()),
+            ("private_key: ", "private_key: ".len()),
             ("secret=", "secret=".len()),
             ("secret: ", "secret: ".len()),
             ("password=", "password=".len()),
@@ -198,22 +216,50 @@ pub(crate) fn redact(line: &str) -> String {
         if key_len == 0 {
             // `Bearer ` 后的凭据原样吞到分隔符。
             out.push_str(&rest[..index + "bearer ".len()]);
-            let (prefix, end) = consume_secret(rest, index + "bearer ".len(), false);
+            let (prefix, end) = consume_secret(rest, index + "bearer ".len(), false, 0);
             out.push_str(&prefix);
             rest = &rest[end..];
             continue;
         }
         out.push_str(&rest[..index + key_len]);
-        let (prefix, end) = consume_secret(rest, index + key_len, true);
+        // 授权头形如 `Authorization: Basic <token>`：凭据在第二个 token。
+        let extra_tokens = usize::from(lower[index..].starts_with("authorization"));
+        let (prefix, end) = consume_secret(rest, index + key_len, true, extra_tokens);
         out.push_str(&prefix);
         rest = &rest[end..];
     }
     out
 }
 
-/// 从 `start` 起跳过空白与引号后吞掉一个值；返回（前缀分隔文本, 值结束位置）。
-fn consume_secret(line: &str, start: usize, keep_prefix: bool) -> (String, usize) {
+/// 从 `start` 起跳过空白与引号后吞掉一个值；`extra_tokens` 额外吞掉
+/// 若干以空白分隔的 token（授权头的方案词之后才是凭据）。
+/// 返回（前缀分隔文本, 值结束位置）。
+fn consume_secret(
+    line: &str,
+    start: usize,
+    keep_prefix: bool,
+    extra_tokens: usize,
+) -> (String, usize) {
     let mut prefix = String::new();
+    let value_start = skip_separators(line, start, &mut prefix);
+    let mut end = skip_token(line, value_start);
+    for _ in 0..extra_tokens {
+        let next = skip_separators(line, end, &mut String::new());
+        if next == end {
+            break;
+        }
+        end = skip_token(line, next);
+    }
+    if keep_prefix {
+        prefix.push_str("[redacted]");
+        (prefix, end)
+    } else {
+        ("[redacted]".to_owned(), end)
+    }
+}
+
+/// 跳过空白与引号；`prefix` 收集应保留在输出中的分隔字符。
+fn skip_separators(line: &str, start: usize, prefix: &mut String) -> usize {
     let mut cursor = start;
     while cursor < line.len() {
         let ch = line[cursor..].chars().next().expect("char boundary");
@@ -224,21 +270,19 @@ fn consume_secret(line: &str, start: usize, keep_prefix: bool) -> (String, usize
             break;
         }
     }
-    let value_start = cursor;
-    let mut end = value_start;
-    for (offset, ch) in line[value_start..].char_indices() {
+    cursor
+}
+
+/// 吞掉一个非分隔 token；返回 token 结束位置。
+fn skip_token(line: &str, start: usize) -> usize {
+    let mut end = start;
+    for (offset, ch) in line[start..].char_indices() {
         if ch.is_whitespace() || matches!(ch, '"' | '\'' | ',' | ';' | '}') {
-            end = value_start + offset;
-            break;
+            return start + offset;
         }
-        end = value_start + offset + ch.len_utf8();
+        end = start + offset + ch.len_utf8();
     }
-    if keep_prefix {
-        prefix.push_str("[redacted]");
-        (prefix, end)
-    } else {
-        ("[redacted]".to_owned(), end)
-    }
+    end
 }
 
 #[cfg(test)]
@@ -309,6 +353,18 @@ mod diagnostics_tests {
         );
         assert!(!redact("Bearer sk-test-bearer").contains("sk-test-bearer"));
         assert_eq!(redact("secret: hunter2"), "secret: [redacted]");
+        // 与备份敏感键表对齐的键名形态。
+        assert_eq!(redact("api_key=sk-live-abc"), "api_key=[redacted]");
+        assert_eq!(
+            redact("Authorization: Basic dXNlcjpwYXNz"),
+            "Authorization: [redacted]"
+        );
+        assert_eq!(redact("cookie=sessionid=abc"), "cookie=[redacted]");
+        assert_eq!(redact("private_key: MIIBVA"), "private_key: [redacted]");
+        assert_eq!(
+            redact(r#"{"authorization":"Bearer abc"}"#),
+            r#"{"authorization":"[redacted]"}"#
+        );
     }
 
     /// 导出经原子写落盘，内容是完整 DTO 且不含非白名单类别。

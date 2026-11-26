@@ -532,11 +532,7 @@ mod tests {
             "根 1".to_owned(),
             second.to_string_lossy().into_owned(),
         )
-        .unwrap()
-        .with_capabilities(slterm_settings::AgentRootCapabilities {
-            write: true,
-            terminal: false,
-        });
+        .unwrap();
         let change = registry
             .change_path(id(1), moved, &CanonicalPath::new(&second).unwrap())
             .unwrap();
@@ -544,7 +540,10 @@ mod tests {
         assert_eq!(change.registered, id(3));
         assert!(registry.find(id(1)).is_none(), "旧身份必须撤销");
         let registered = registry.find(id(3)).unwrap();
-        assert!(registered.capabilities().allows_write());
+        assert!(
+            !registered.capabilities().allows_write(),
+            "改路径不得沿用旧根写能力"
+        );
         assert_eq!(
             registry.real_path(id(3)).unwrap().as_path(),
             dunce::canonicalize(&second).unwrap()

@@ -50,9 +50,9 @@
 | Hooks 页只实现 Claude JSON 子集，缺少 GUI、事件目录、外部监听、托管只读与保存提示 | 待修 |
 | 浮层不持久化 ViewState，失效页回退未接线 | 待修 |
 | 真实目录查重漏掉内置根，生产路径绕过 Registry | 待修 |
-| 改路径沿用旧根能力 | 待修 |
-| agent.start 注入 slug 而不是 AgentCatalog 内置命令 | 待修 |
-| Claude 无原生会话 ID 时仍生成 `--continue` | 待修 |
+| 改路径沿用旧根能力 | 已修：`AgentRoot::with_path` 把新根重置为默认只读；测试 `agent_root_path_change_requires_new_identity`、`agent_root_path_change_service_semantics` |
+| agent.start 注入 slug 而不是 AgentCatalog 内置命令 | 已修：改注入 `kind.catalog().builtin_command`；测试 `runtime_agent_start_injects_catalog_builtin_command` |
+| Claude 无原生会话 ID 时仍生成 `--continue` | 已修：无原生会话 ID 一律返回 None；测试 `resume_commands_require_catalog_capability_and_safe_identity` |
 | 撤销状态在恢复成功前被置为 Undone | 待修 |
 | quarantine_batch 不先持久化清单，部分失败丢失材料身份 | 待修 |
 | 主题身份不是 ThemeId/UUIDv7，导入冲突被自动改名 | 待修 |
@@ -258,10 +258,10 @@
 | 生产 TLS 栈命中 emSign 弃用中间证书公告 | 待修 |
 | 加密备份 AAD 范围与恢复时序合同冲突 | 需裁决 |
 | 依赖审计未进入 CI 常驻门禁 | 待修 |
-| 诊断脱敏词表与备份敏感键表不一致 | 待修 |
+| 诊断脱敏词表与备份敏感键表不一致 | 已修：脱敏键集合与备份敏感键表对齐，授权头额外吞掉方案词后的凭据；测试 `redaction_covers_credential_shapes` |
 | 凭据明文副本没有全程清零 | 待修 |
 | AI hook 解析在 debug 日志输出整条事件 | 已修：只记录 source/kind/pane，正文与 session_file 不进入日志 |
-| 更新下载 .part 打开跟随预置链接 | 待修 |
+| 更新下载 .part 打开跟随预置链接 | 已修：先移除既有项再 `create_new` 独占创建 |
 | 凭据 Win32 FFI 调用缺少逐块 SAFETY 不变量 | 已修：CredReadW/CredFree/CredWriteW/CredDeleteW 调用点补齐 SAFETY 不变量注释 |
 
 ## 测试质量、文档与计划证据

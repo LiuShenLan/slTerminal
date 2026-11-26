@@ -31,8 +31,9 @@ impl AgentSession {
             // Pi 的 pid- 前缀是进程身份，不是可恢复会话身份。
             Some(id) if agent == AgentKind::Pi && id.starts_with("pid-") => None,
             Some(id) => agent.resume_command(id),
-            None if agent == AgentKind::Claude => Some("claude --continue".to_owned()),
-            _ => None,
+            // 没有原生会话 ID 就没有可恢复对象：Claude 的 `--continue`
+            // 恢复的是 cwd 最近会话，可能属于另一会话，禁止作为降级。
+            None => None,
         }
     }
 }
@@ -190,8 +191,9 @@ mod session_tests {
             Some("claude --resume abc-123")
         );
         assert_eq!(
-            agent("claude", None).resume_command().as_deref(),
-            Some("claude --continue")
+            agent("claude", None).resume_command(),
+            None,
+            "无原生会话 ID 时不得用 --continue 恢复 cwd 最近会话"
         );
         assert_eq!(
             agent("codex", Some("abc-123")).resume_command().as_deref(),

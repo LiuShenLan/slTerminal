@@ -73,13 +73,15 @@ impl AgentRoot {
     }
 
     /// 改路径按撤销旧根＋登记新根处理：必须由调用方提供新身份。
+    ///
+    /// 新根回到默认只读：旧路径上的写与终端授权不得随路径迁移。
     pub fn with_path(&self, id: AgentRootId, path: String) -> Result<Self, AgentRootError> {
         validate_path(&path)?;
         Ok(Self {
             id,
             display_name: self.display_name.clone(),
             path,
-            capabilities: self.capabilities,
+            capabilities: AgentRootCapabilities::READ_ONLY,
         })
     }
 
@@ -270,15 +272,23 @@ mod tests {
     /// 改路径必须换身份：旧根撤销、新根登记由调用方按两个 id 完成。
     #[test]
     fn agent_root_path_change_requires_new_identity() {
-        let root =
-            AgentRoot::custom(root_id(), "工作区".to_owned(), r"C:\work".to_owned()).unwrap();
+        let root = AgentRoot::custom(root_id(), "工作区".to_owned(), r"C:\work".to_owned())
+            .unwrap()
+            .with_capabilities(AgentRootCapabilities {
+                write: true,
+                terminal: true,
+            });
         let moved = root
             .with_path(second_root_id(), r"D:\work".to_owned())
             .unwrap();
         assert_ne!(moved.id(), root.id());
         assert_eq!(moved.path(), r"D:\work");
         assert_eq!(moved.display_name(), root.display_name());
-        assert_eq!(moved.capabilities(), root.capabilities());
+        assert_eq!(
+            moved.capabilities(),
+            AgentRootCapabilities::READ_ONLY,
+            "改路径 = 撤销旧根 + 登记新根，新根必须回到默认只读"
+        );
         assert!(root.with_path(root_id(), "relative".to_owned()).is_err());
     }
 

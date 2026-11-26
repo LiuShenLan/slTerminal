@@ -655,7 +655,13 @@ impl AppRoot {
             } => {
                 let kind =
                     crate::ai_agents::AgentKind::parse(&kind).ok_or_else(invalid_request_error)?;
-                self.start_agent_terminal(kind.slug().to_owned(), project_root, cwd, window, cx)
+                self.start_agent_terminal(
+                    kind.catalog().builtin_command.to_owned(),
+                    project_root,
+                    cwd,
+                    window,
+                    cx,
+                )
             }
             RuntimeMutation::AgentResume {
                 source,
