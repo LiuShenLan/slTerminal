@@ -38,6 +38,14 @@ if ($LASTEXITCODE -ne 0) {
     throw "第三方许可核验失败(exit $LASTEXITCODE)"
 }
 
+# Runtime schema 资产是随包合同;发布前必须与生成器逐字节一致。
+Write-Host '=== 核验 Runtime 线缆合同 ===' -ForegroundColor Cyan
+& cargo test --manifest-path (Join-Path $repoRoot 'Cargo.toml') `
+    -p slterm_runtime_protocol --features schema --test lib_tests -- --test-threads=1
+if ($LASTEXITCODE -ne 0) {
+    throw "Runtime 线缆合同核验失败(exit $LASTEXITCODE)"
+}
+
 # 1. 共享构建:安装器与 zip 同源同 feature 图。
 & (Join-Path $PSScriptRoot 'build-windows-product.ps1') `
     -Configuration $Configuration -TargetDirectory $TargetDirectory

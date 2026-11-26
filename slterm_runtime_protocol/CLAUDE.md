@@ -33,6 +33,7 @@
 ## 验收与测试
 
 - 定向测试：`cargo test -p slterm_runtime_protocol --test lib_tests -- --test-threads=1`；禁止 `--lib` 或裸 filter 直打默认 lib target。
+- 合同门禁：`cargo test -p slterm_runtime_protocol --features schema --test lib_tests -- --test-threads=1` 逐字节核对随包 schema 资产与生成器，CI 与发布前置强制执行；资产必须由生成器产出，不手改。
 - 旧 Runtime 与独立 handover 资产退役由 `scripts/tests/test_runtime_retirement.py` 机械守卫。
 - 测试分层与隔离规则见 `.claude/docs/testing/strategy.md`。
 

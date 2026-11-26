@@ -12,6 +12,7 @@
 - **虚拟窗口测试**：`cargo test -p slterm --test lib_tests --features gpui-test-support -- --test-threads=1`。
 - **平台/真机测试**：`cargo test -p slterm_terminal --test pty_integration_tests -- --test-threads=1`；`cargo test -p slterm --test windows_console_startup -- --test-threads=1`。
 - **静态检查**：`cargo clippy --workspace --all-targets`；`cargo clippy -p slterm --all-targets --features gpui-test-support`；`cargo fmt --all -- --check`。
+- **Runtime 合同门禁**：`cargo test -p slterm_runtime_protocol --features schema --test lib_tests -- --test-threads=1`；逐字节核对随包 schema 资产与生成器，CI 与发布前置均强制执行。
 - **架构门禁**：`python scripts/check_architecture.py`。
 - **文档策略门禁**：`python scripts/check_doc_policy.py full`；提交前可用 `staged`。
 - **禁名门禁**：`python scripts/check_brand_regress.py staged`；提交信息与推送由 `.githooks/` 三钩扫描。

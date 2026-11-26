@@ -212,7 +212,7 @@
 | 合同冲突：非交互关闭缺少运行终端处置策略 | 需裁决 |
 | 控制面一次 join 失败被永久重放 | 已修：资源已回收后的重复 `shutdown` 只记录历史 join 错误并返回成功，首次错误仍在首次关闭返回；测试 `local_control_shutdown_replays_worker_join_failure` 更新为断言重复关闭成功 |
 | 随包 schema 未覆盖多数方法的请求结构，method 与 params/result 无关联校验 | 待修 |
-| Runtime 合同测试不在任何固定门禁内 | 待修 |
+| Runtime 合同测试不在任何固定门禁内 | 已修：CI 与 `release.ps1` 前置强制执行 `cargo test -p slterm_runtime_protocol --features schema --test lib_tests`，逐字节核对随包 schema 资产、生成器重建与真实请求校验；命令矩阵与协议 CLAUDE.md 同步 |
 | Runtime 双进程 conformance 与事件断线矩阵缺失 | 待修 |
 | 事件面只发布项目激活 | 待修 |
 | 路由与能力摘要不按方法注册表作用域执行 | 已修：server 路由以注册表 `lookup(...).scopes` 复核 Runtime／Handover 方法，hello 能力与 describe 按已认证作用域经 `for_scope` 收窄；测试 `handover_hello_capabilities_are_scoped`、`runtime_hello_capabilities_exclude_handover`、`runtime_describe_returns_registry_and_contract_hashes` |
