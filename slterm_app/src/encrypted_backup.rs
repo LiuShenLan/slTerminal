@@ -15,14 +15,15 @@
 //! 恢复序:先完整鉴权(`open`)→ `validate_archive` 全量校验 → 才允许
 //! 任何落盘。校验任何一条不过整单拒写,半份不可信报文零副作用。
 //!
-//! 类别清单与敏感键剥除表按键域终态重定:设置/会话/自定义
-//! 主题/命令历史/目录历史五类;凭据值永不入包。
+//! 类别与条目只来自登记白名单：设置类别只投影 `SettingsRegistry` 中
+//! 「可导出且非敏感」的字段，并包含合法自定义主题文档。未知命名空间、
+//! 未登记字段、会话原文、学习历史与工作区物理文件都不存在入包通道；
+//! 凭据值永不入包。
 //!
-//! 消费点:设置页安全分区的加密备份导出已接(类别选择 + masked 口令 +
-//! 后台整单收集/密封/原子写,失败明示)。运行期不提供整包或选择性恢复的
-//! 直接写入口:恢复只经 [`maintenance::stage_restore`] 暂存并登记维护请求,
-//! 由启动维护期应用与回滚;撤回 UI 尚未接线,实现时必须复用同一维护请求
-//! 时序,不得新增运行期写盘通道。
+//! 消费点:收集/密封/维护期恢复的生产入口尚未接入设置页；运行期也不提供
+//! 整包或选择性恢复的直接写入口。恢复只经 [`maintenance::stage_restore`]
+//! 暂存并登记维护请求，由启动维护期应用与回滚；撤回实现必须复用同一维护
+//! 请求时序,不得新增运行期写盘通道。
 
 use std::collections::HashSet;
 use std::fs;
@@ -32,7 +33,6 @@ use std::path::{Component, Path, PathBuf};
 use aes_gcm::aead::{Aead, Payload};
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use slterm_path::AppPaths;
 use zeroize::Zeroizing;
 
@@ -54,71 +54,30 @@ const MAX_ARCHIVE_PLAINTEXT_BYTES: usize = 64 * 1024 * 1024;
 /// 自定义主题文件名后缀(与主题库持久化规则同源)。
 const THEME_FILE_SUFFIX: &str = ".slterm-theme.json";
 
-/// 敏感键字面量表(按 06 键域终态重定)。
-///
-/// 键域终态不含任何凭据键——凭据值只允许存在于 Windows 凭据管理器。
-/// 本表是导出清洗与导入复验共用的第二道防线:手改文档塞入的凭据字段一律
-/// 在进出备份两面被剥除/拒绝。比较口径 = 去首尾空白后 ASCII 小写精确匹配。
-const SENSITIVE_KEYS: &[&str] = &[
-    "access_token",
-    "accesstoken",
-    "api_key",
-    "api-key",
-    "apikey",
-    "auth_token",
-    "authtoken",
-    "authorization",
-    "client_secret",
-    "clientsecret",
-    "credential",
-    "credentials",
-    "password",
-    "passwd",
-    "private_key",
-    "privatekey",
-    "refresh_token",
-    "refreshtoken",
-    "secret",
-    "session_token",
-    "sessiontoken",
-    "token",
-];
-
-/// 备份类别(已裁:按 06 键域终态重定;凭据域值永不入包)。
+/// 备份类别(与设计类别集合同源;凭据域值永不入包)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum BackupCategory {
-    /// `settings.json`(导出侧剥敏感键,导入侧复验)。
+    /// 应用设置与自定义主题；条目只含登记导出字段与合法主题文档。
     Settings,
-    /// `session.json` 会话快照。
-    Session,
-    /// 自定义主题文档(`themes/*.slterm-theme.json`)。
-    Themes,
 }
 
 /// 类别根归属是备份收集、恢复与撤回共用的唯一寻址规则。
 fn category_root(paths: &AppPaths, category: BackupCategory) -> &Path {
     match category {
-        BackupCategory::Settings | BackupCategory::Themes => paths.config_root(),
-        BackupCategory::Session => paths.local_root(),
+        BackupCategory::Settings => paths.config_root(),
     }
 }
 
-/// 类别选择集;默认仅设置一项(保守默认思想随上游基线)。
+/// 类别选择集;设置类别包含应用设置与自定义主题。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct BackupSelection {
     pub settings: bool,
-    pub session: bool,
-    pub themes: bool,
 }
 
 impl Default for BackupSelection {
     fn default() -> Self {
-        Self {
-            settings: true,
-            session: false,
-            themes: false,
-        }
+        Self { settings: true }
     }
 }
 
@@ -128,28 +87,20 @@ impl BackupSelection {
     }
 
     pub(crate) fn set(&mut self, category: BackupCategory, enabled: bool) {
-        *match category {
-            BackupCategory::Settings => &mut self.settings,
-            BackupCategory::Session => &mut self.session,
-            BackupCategory::Themes => &mut self.themes,
-        } = enabled;
+        match category {
+            BackupCategory::Settings => self.settings = enabled,
+        }
     }
 
     /// 读取单类别选中态(UI 开关渲染与 `set` 共用同一字段映射)。
     pub(crate) fn get(self, category: BackupCategory) -> bool {
         match category {
             BackupCategory::Settings => self.settings,
-            BackupCategory::Session => self.session,
-            BackupCategory::Themes => self.themes,
         }
     }
 
     pub(crate) fn from_categories(categories: impl IntoIterator<Item = BackupCategory>) -> Self {
-        let mut selection = Self {
-            settings: false,
-            session: false,
-            themes: false,
-        };
+        let mut selection = Self { settings: false };
         for category in categories {
             selection.set(category, true);
         }
@@ -157,13 +108,9 @@ impl BackupSelection {
     }
 
     pub(crate) fn categories(self) -> impl Iterator<Item = BackupCategory> {
-        [
-            (self.settings, BackupCategory::Settings),
-            (self.session, BackupCategory::Session),
-            (self.themes, BackupCategory::Themes),
-        ]
-        .into_iter()
-        .filter_map(|(selected, category)| selected.then_some(category))
+        [(self.settings, BackupCategory::Settings)]
+            .into_iter()
+            .filter_map(|(selected, category)| selected.then_some(category))
     }
 }
 
@@ -330,17 +277,16 @@ fn collect_from(paths: &AppPaths, selection: BackupSelection) -> Result<BackupAr
     for category in selection.categories() {
         let root = category_root(paths, category);
         match category {
-            BackupCategory::Settings => add_file(
-                root,
-                category,
-                "settings.json",
-                &mut entries,
-                filter_settings,
-            )?,
-            BackupCategory::Session => {
-                add_file(root, category, "session.json", &mut entries, identity)?
+            BackupCategory::Settings => {
+                add_file(
+                    root,
+                    category,
+                    "settings.json",
+                    &mut entries,
+                    filter_settings,
+                )?;
+                add_themes(root, category, &mut entries)?;
             }
-            BackupCategory::Themes => add_themes(root, &mut entries)?,
         }
     }
     Ok(BackupArchive {
@@ -352,53 +298,68 @@ fn collect_from(paths: &AppPaths, selection: BackupSelection) -> Result<BackupAr
     })
 }
 
-fn identity(bytes: Vec<u8>) -> Result<Vec<u8>, String> {
-    Ok(bytes)
-}
-
-/// 导出侧敏感键剥除(递归,任意深度);文档必须是 JSON 对象。
-///
-/// 键域终态没有凭据键,本函数只对手改/未知字段生效;解析失败视为不可信
-/// 内容,拒绝进入备份而不是原样携带。
-fn filter_sensitive_document(bytes: Vec<u8>) -> Result<Vec<u8>, String> {
-    let value: Value = serde_json::from_slice(&bytes)
-        .map_err(|error| format!("备份文档不是合法 JSON: {error}"))?;
-    if !value.is_object() {
-        return Err("备份文档根必须是 JSON 对象".to_owned());
-    }
-    let filtered = strip_sensitive_keys(value);
-    serde_json::to_vec(&filtered).map_err(|error| format!("序列化备份文档失败: {error}"))
-}
-
-/// `settings.json` 专用导出清洗:语义同 [`filter_sensitive_document`]。
+/// 导出侧设置投影：只保留注册表登记为可导出且非敏感的字段，
+/// 未知命名空间、未登记字段与敏感键一律不入包；结构按段重建。
 fn filter_settings(bytes: Vec<u8>) -> Result<Vec<u8>, String> {
-    filter_sensitive_document(bytes)
-}
-
-/// 导入侧复验:文档可解析且不含任何敏感键(与导出清洗同一张表)。
-fn document_is_sanitized(bytes: &[u8]) -> bool {
-    match serde_json::from_slice::<Value>(bytes) {
-        Ok(value) if value.is_object() => strip_sensitive_keys(value.clone()) == value,
-        Ok(_) | Err(_) => false,
+    use slterm_settings::json::Value as SettingsValue;
+    let tree = slterm_settings::json::parse(&bytes)
+        .map_err(|error| format!("备份设置文档不是合法 JSON: {error}"))?;
+    if !matches!(tree, SettingsValue::Object(_)) {
+        return Err("备份设置文档根必须是 JSON 对象".to_owned());
     }
-}
-
-fn strip_sensitive_keys(value: Value) -> Value {
-    match value {
-        Value::Object(map) => Value::Object(
-            map.into_iter()
-                .filter(|(key, _)| !is_sensitive_key(key))
-                .map(|(key, value)| (key, strip_sensitive_keys(value)))
-                .collect(),
-        ),
-        Value::Array(items) => Value::Array(items.into_iter().map(strip_sensitive_keys).collect()),
-        other => other,
+    let raw = slterm_settings::RawSettings::from_json_bytes(&bytes);
+    // 段 → 登记导出字段；未知段与未登记键没有入口。
+    let mut segments: std::collections::BTreeMap<&'static str, Vec<(String, SettingsValue)>> =
+        std::collections::BTreeMap::new();
+    for def in slterm_settings::keys::KEYS
+        .iter()
+        .filter(|def| def.exportable && !def.sensitive)
+    {
+        let Some(value) = raw.persisted_value(def.key) else {
+            continue;
+        };
+        if matches!(value, SettingsValue::Null) || !(def.validator)(value) {
+            return Err(format!("备份设置字段未通过校验: {}", def.key));
+        }
+        segments
+            .entry(def.domain.segment())
+            .or_default()
+            .push((def.key.to_owned(), value.clone()));
     }
+    let mut root = SettingsValue::empty_object();
+    for (segment, members) in segments {
+        root.set(segment, SettingsValue::Object(members));
+    }
+    Ok(slterm_settings::json::to_string_pretty(&root).into_bytes())
 }
 
-fn is_sensitive_key(key: &str) -> bool {
-    let normalized = key.trim().to_ascii_lowercase();
-    SENSITIVE_KEYS.contains(&normalized.as_str())
+/// 导入侧复验：设置文档只能包含登记导出字段，未知段/键与敏感字段整单拒绝。
+fn settings_document_is_exportable(bytes: &[u8]) -> bool {
+    use slterm_settings::json::Value as SettingsValue;
+    let Ok(SettingsValue::Object(root)) = slterm_settings::json::parse(bytes) else {
+        return false;
+    };
+    root.into_iter().all(|(segment, values)| {
+        let Some(domain) = slterm_settings::keys::SettingsDomain::ALL
+            .into_iter()
+            .find(|domain| domain.segment() == segment)
+        else {
+            return false;
+        };
+        let SettingsValue::Object(values) = values else {
+            return false;
+        };
+        values.into_iter().all(|(key, value)| {
+            let Some(def) = slterm_settings::keys::lookup(&key) else {
+                return false;
+            };
+            def.domain == domain
+                && def.exportable
+                && !def.sensitive
+                && !matches!(value, SettingsValue::Null)
+                && (def.validator)(&value)
+        })
+    })
 }
 
 /// 读取白名单文件并施加变换;缺失静默跳过(该类别本机尚无文件)。
@@ -410,6 +371,15 @@ fn add_file(
     transform: fn(Vec<u8>) -> Result<Vec<u8>, String>,
 ) -> Result<(), String> {
     let path = root.join(name);
+    // 白名单目标必须是普通文件；符号链接/junction 不得把根外内容带入包内。
+    match fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            return Err(format!("备份文件不是普通文件: {name}"));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(format!("读取备份文件元数据 {name} 失败: {error}")),
+    }
     let bytes = match fs::read(&path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
@@ -426,7 +396,11 @@ fn add_file(
 /// 收集自定义主题文档:只认 `themes/` 下合法 id + 固定后缀的普通文件;
 /// 符号链接跳过(安全边界)。坏文档整单失败:静默跳过会让备份缺件
 /// 而用户误以为完整。
-fn add_themes(root: &Path, entries: &mut Vec<BackupEntry>) -> Result<(), String> {
+fn add_themes(
+    root: &Path,
+    category: BackupCategory,
+    entries: &mut Vec<BackupEntry>,
+) -> Result<(), String> {
     let directory = root.join("themes");
     let read_dir = match fs::read_dir(&directory) {
         Ok(read_dir) => read_dir,
@@ -473,7 +447,7 @@ fn add_themes(root: &Path, entries: &mut Vec<BackupEntry>) -> Result<(), String>
             return Err(format!("主题文件不是有效文档,备份中止: {}", path.display()));
         }
         entries.push(BackupEntry {
-            category: BackupCategory::Themes,
+            category,
             name: format!("themes/{file_name}"),
             bytes,
         });
@@ -542,10 +516,9 @@ fn validate_archive(archive: &BackupArchive) -> Result<(), String> {
         safe_path(Path::new("."), &entry.name)?;
         let allowed = match entry.category {
             BackupCategory::Settings => {
-                entry.name == "settings.json" && document_is_sanitized(&entry.bytes)
+                (entry.name == "settings.json" && settings_document_is_exportable(&entry.bytes))
+                    || theme_entry_allowed(&entry.name, &entry.bytes)
             }
-            BackupCategory::Session => entry.name == "session.json" && is_json_object(&entry.bytes),
-            BackupCategory::Themes => theme_entry_allowed(&entry.name, &entry.bytes),
         };
         if !allowed {
             return Err(format!(
@@ -555,10 +528,6 @@ fn validate_archive(archive: &BackupArchive) -> Result<(), String> {
         }
     }
     Ok(())
-}
-
-fn is_json_object(bytes: &[u8]) -> bool {
-    matches!(serde_json::from_slice::<Value>(bytes), Ok(Value::Object(_)))
 }
 
 fn theme_entry_allowed(name: &str, bytes: &[u8]) -> bool {
@@ -581,6 +550,7 @@ mod encrypted_backup_tests {
 
     const PASSPHRASE: &str = "correct horse";
     const SHORT_PASSPHRASE: &str = "short";
+    const THEME_NAME: &str = "themes/018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b.slterm-theme.json";
 
     fn single_root_paths(root: &Path) -> AppPaths {
         AppPaths::new(root, root).unwrap()
@@ -616,11 +586,7 @@ mod encrypted_backup_tests {
         BackupArchive {
             manifest: BackupManifest {
                 version: ARCHIVE_VERSION,
-                categories: vec![
-                    BackupCategory::Settings,
-                    BackupCategory::Session,
-                    BackupCategory::Themes,
-                ],
+                categories: vec![BackupCategory::Settings],
             },
             entries: vec![
                 BackupEntry {
@@ -629,13 +595,8 @@ mod encrypted_backup_tests {
                     bytes: br#"{"appearance":{"theme":"Nord"}}"#.to_vec(),
                 },
                 BackupEntry {
-                    category: BackupCategory::Session,
-                    name: "session.json".into(),
-                    bytes: br#"{"version":1}"#.to_vec(),
-                },
-                BackupEntry {
-                    category: BackupCategory::Themes,
-                    name: "themes/018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b.slterm-theme.json".into(),
+                    category: BackupCategory::Settings,
+                    name: THEME_NAME.into(),
                     bytes: theme_bytes(),
                 },
             ],
@@ -651,33 +612,24 @@ mod encrypted_backup_tests {
         );
         assert!(!selection.is_empty());
 
-        let empty = BackupSelection {
-            settings: false,
-            ..selection
-        };
+        let empty = BackupSelection { settings: false };
         assert!(empty.is_empty());
     }
 
     #[test]
     fn selection_set_and_from_categories_agree() {
-        let mut selection = BackupSelection {
-            settings: false,
-            ..BackupSelection::default()
-        };
-        selection.set(BackupCategory::Session, true);
-        selection.set(BackupCategory::Themes, true);
-        assert!(selection.get(BackupCategory::Session));
+        let mut selection = BackupSelection { settings: false };
+        assert!(!selection.get(BackupCategory::Settings));
+        selection.set(BackupCategory::Settings, true);
+        assert!(selection.get(BackupCategory::Settings));
         assert_eq!(
             selection.categories().collect::<Vec<_>>(),
-            vec![BackupCategory::Session, BackupCategory::Themes]
+            vec![BackupCategory::Settings]
         );
         assert_eq!(
-            BackupSelection::from_categories([BackupCategory::Session, BackupCategory::Themes]),
+            BackupSelection::from_categories([BackupCategory::Settings]),
             selection
         );
-        selection.set(BackupCategory::Session, false);
-        assert!(!selection.session);
-        assert!(!selection.get(BackupCategory::Session));
     }
 
     /// 篡改包在鉴权阶段失败，目标目录零写入。
@@ -690,9 +642,7 @@ mod encrypted_backup_tests {
         let settings = br#"{"appearance":{"theme":"Nord"}}"#.to_vec();
         fs::write(paths.config_root().join("settings.json"), &settings).unwrap();
         fs::create_dir_all(paths.config_root().join("themes")).unwrap();
-        let theme_path = paths
-            .config_root()
-            .join("themes/018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2c.slterm-theme.json");
+        let theme_path = paths.config_root().join(THEME_NAME);
         fs::write(&theme_path, theme_bytes()).unwrap();
 
         let mut packet = seal(&full_archive(), PASSPHRASE).unwrap();
@@ -710,7 +660,7 @@ mod encrypted_backup_tests {
         assert_eq!(fs::read(&theme_path).unwrap(), theme_bytes());
     }
 
-    /// 凭据值永不入包：导出剥除敏感键，打开后的归档也不含凭据值。
+    /// 凭据值永不入包：未登记段与敏感字段在导出投影中直接不存在。
     #[test]
     fn backup_export_never_carries_credentials() {
         let directory = tempfile::tempdir().unwrap();
@@ -730,24 +680,20 @@ mod encrypted_backup_tests {
             .find(|entry| entry.name == "settings.json")
             .expect("设置类别必须入包");
         let text = String::from_utf8_lossy(&settings.bytes);
-        assert!(!text.contains("sk-test-secret"), "敏感键值必须从导出中剥除");
-        assert!(!text.contains("\"token\"") && !text.contains("\"password\""));
+        assert!(!text.contains("sk-test-secret"), "敏感值必须从导出中剥除");
+        assert!(!text.contains("handmade"), "未知命名空间不得导出");
+        assert!(!text.contains("\"token\""));
 
         let packet = seal(&archive, PASSPHRASE).unwrap();
         let opened = open(&packet, PASSPHRASE).unwrap();
-        assert_eq!(opened, archive, "打开只还原已剥除的归档内容");
+        assert_eq!(opened, archive, "打开只还原已投影的归档内容");
         let opened_text = String::from_utf8_lossy(&opened.entries[0].bytes);
-        assert!(
-            !opened_text.contains("sk-test-secret"),
-            "归档任何路径都不得携带凭据值"
-        );
+        assert!(!opened_text.contains("sk-test-secret"));
     }
 
-    /// 类别排除：物理库与凭据域材料永不进入任何备份包。
+    /// 工作区物理文件与学习历史永不进入设置类别。
     #[test]
-    fn backup_workspace_category_exclusions() {
-        use BackupCategory::{Session, Settings, Themes};
-
+    fn backup_excludes_local_workspace_and_credentials() {
         let directory = tempfile::tempdir().unwrap();
         let paths = split_paths(directory.path());
         fs::create_dir_all(paths.config_root()).unwrap();
@@ -759,46 +705,21 @@ mod encrypted_backup_tests {
         .unwrap();
         fs::write(paths.local_root().join("session.json"), br#"{"version":1}"#).unwrap();
         fs::write(paths.local_root().join("workspace.db"), b"sqlite").unwrap();
-        fs::create_dir_all(paths.config_root().join("themes")).unwrap();
-        fs::write(
-            paths
-                .config_root()
-                .join("themes/018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b.slterm-theme.json"),
-            theme_bytes(),
-        )
-        .unwrap();
+        fs::write(paths.local_root().join("history.jsonl"), b"cmd").unwrap();
+        fs::write(paths.local_root().join("learning.db"), b"learning").unwrap();
 
-        let archive = collect_from(
-            &paths,
-            BackupSelection::from_categories([Settings, Session, Themes]),
-        )
-        .unwrap();
-        let names = archive
+        let archive = collect_from(&paths, BackupSelection::default()).unwrap();
+        let names: HashSet<_> = archive
             .entries
             .iter()
             .map(|entry| entry.name.as_str())
-            .collect::<Vec<_>>();
-        assert!(names.contains(&"settings.json"));
-        assert!(names.contains(&"session.json"));
-        assert!(names.iter().any(|name| name.starts_with("themes/")));
-        for name in names {
-            assert!(
-                !name.contains("workspace.db") && !name.ends_with(".db"),
-                "物理数据库不得进入备份：{name}"
-            );
-            for forbidden in ["credential", "secret", "token"] {
-                assert!(
-                    !name.to_ascii_lowercase().contains(forbidden),
-                    "凭据域材料不得进入备份：{name}"
-                );
-            }
-        }
+            .collect();
+        assert_eq!(names, HashSet::from(["settings.json"]));
     }
 
-    /// 归档 DTO 拒绝未知字段；空类别集/零条目不得解封成功。
     #[test]
     fn archive_rejects_unknown_fields_and_empty_selection() {
-        let archive = full_archive();
+        let archive = archive();
         let mut value = serde_json::to_value(&archive).unwrap();
         value["extra"] = serde_json::json!(1);
         assert!(
@@ -807,23 +728,31 @@ mod encrypted_backup_tests {
         );
         let mut entry_extra = serde_json::to_value(&archive).unwrap();
         entry_extra["entries"][0]["extra"] = serde_json::json!(1);
-        assert!(serde_json::from_value::<BackupArchive>(entry_extra).is_err());
-
-        let mut empty = archive;
-        empty.entries.clear();
-        empty.manifest.categories.clear();
-        assert!(validate_archive(&empty).is_err(), "空归档不得视为有效备份");
+        assert!(
+            serde_json::from_value::<BackupArchive>(entry_extra).is_err(),
+            "条目 DTO 必须拒绝未知字段"
+        );
+        let empty = BackupArchive {
+            manifest: BackupManifest {
+                version: ARCHIVE_VERSION,
+                categories: Vec::new(),
+            },
+            entries: Vec::new(),
+        };
+        assert!(validate_archive(&empty).is_err());
+        assert!(
+            collect_from(
+                &single_root_paths(tempfile::tempdir().unwrap().path()),
+                BackupSelection { settings: false },
+            )
+            .is_err()
+        );
     }
 
-    /// 归档明文双向硬上限 64 MiB：密封与解封都在解析前拒绝。
     #[test]
     fn archive_plaintext_is_bounded_to_64_mib() {
-        let oversized = vec![0u8; MAX_ARCHIVE_PLAINTEXT_BYTES + 1];
-        assert!(
-            encrypt_bytes(&oversized, PASSPHRASE)
-                .unwrap_err()
-                .contains("64 MiB")
-        );
+        let oversized = vec![b'a'; MAX_ARCHIVE_PLAINTEXT_BYTES + 1];
+        assert!(encrypt_bytes(&oversized, PASSPHRASE).is_err());
 
         let mut packet = Vec::new();
         packet.extend_from_slice(MAGIC);
@@ -835,40 +764,16 @@ mod encrypted_backup_tests {
         assert!(
             decrypt_bytes(&packet, PASSPHRASE)
                 .unwrap_err()
-                .contains("64 MiB"),
-            "超限密文必须在解密前拒绝"
+                .contains("64 MiB")
         );
     }
 
     #[test]
     fn seal_open_round_trips_every_category() {
-        let original = full_archive();
-        let plaintext = serde_json::to_vec(&original).expect("序列化");
-        let packet = seal(&original, PASSPHRASE).expect("密封");
-        assert_eq!(&packet[..8], MAGIC);
-        assert_eq!(
-            packet.len(),
-            MAGIC.len() + SALT_LEN + NONCE_LEN + plaintext.len() + 16,
-            "布局 = 魔数|盐|nonce|密文(含 16 字节 GCM tag)"
-        );
-        assert_eq!(open(&packet, PASSPHRASE).expect("解封"), original);
-        // 每个类别的明文标记都只能以密文形态存在。
-        for marker in [
-            b"settings.json".as_slice(),
-            b"session.json".as_slice(),
-            b"themes/018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b.slterm-theme.json".as_slice(),
-        ] {
-            assert!(
-                plaintext
-                    .windows(marker.len())
-                    .any(|window| window == marker),
-                "测试标记不在明文归档中: {marker:?}"
-            );
-            assert!(
-                !packet.windows(marker.len()).any(|window| window == marker),
-                "密文泄露明文标记: {marker:?}"
-            );
-        }
+        let archive = full_archive();
+        assert!(validate_archive(&archive).is_ok());
+        let packet = seal(&archive, PASSPHRASE).unwrap();
+        assert_eq!(open(&packet, PASSPHRASE).unwrap(), archive);
     }
 
     #[test]
@@ -878,23 +783,19 @@ mod encrypted_backup_tests {
         assert!(open(&packet, SHORT_PASSPHRASE).is_err());
         assert!(seal(&archive(), SHORT_PASSPHRASE).is_err());
 
-        // 魔数错位(改一个字节)。
         let mut bad_magic = packet.clone();
         bad_magic[0] = b'X';
         assert!(open(&bad_magic, PASSPHRASE).is_err());
 
-        // 密文改一字节。
         let mut bad_ciphertext = packet.clone();
         let last = bad_ciphertext.len() - 1;
         bad_ciphertext[last] ^= 0x01;
         assert!(open(&bad_ciphertext, PASSPHRASE).is_err());
 
-        // 盐改一字节 → 派生密钥不同。
         let mut bad_salt = packet.clone();
         bad_salt[MAGIC.len()] ^= 0x01;
         assert!(open(&bad_salt, PASSPHRASE).is_err());
 
-        // 截断:去尾一字节 / 只剩头部。
         assert!(open(&packet[..packet.len() - 1], PASSPHRASE).is_err());
         assert!(open(&packet[..MAGIC.len() + SALT_LEN + NONCE_LEN], PASSPHRASE).is_err());
         assert!(open(&[], PASSPHRASE).is_err());
@@ -963,18 +864,15 @@ mod encrypted_backup_tests {
 
     #[test]
     fn unsupported_archive_version_is_rejected_on_both_sides() {
-        let mut future = archive();
-        future.manifest.version = ARCHIVE_VERSION + 1;
-        assert!(seal(&future, PASSPHRASE).is_err());
-
-        // 手工加密一个未来版本归档:open 必须在反序列化后拒绝。
-        let plaintext = serde_json::to_vec(&future).unwrap();
-        let packet = encrypt_bytes(&plaintext, PASSPHRASE).unwrap();
-        assert!(open(&packet, PASSPHRASE).is_err());
+        let mut archive = archive();
+        archive.manifest.version = ARCHIVE_VERSION + 1;
+        assert!(seal(&archive, PASSPHRASE).is_err());
+        assert!(validate_archive(&archive).is_err());
     }
 
+    /// 导出只收登记且非敏感的字段；未知段、未登记键与敏感键都不存在。
     #[test]
-    fn collection_uses_allowlist_and_strips_sensitive_keys() {
+    fn collection_uses_registry_export_allowlist() {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path();
         fs::write(
@@ -983,6 +881,7 @@ mod encrypted_backup_tests {
               "appearance": {
                 "theme": "Nord",
                 "api_key": "sk-test-settings-secret",
+                "custom_theme": "acme-dark",
                 "nested": {"Access_Token": "sk-test-nested-secret"}
               },
               "system": {"terminal_proxy": true},
@@ -992,47 +891,21 @@ mod encrypted_backup_tests {
         .unwrap();
         fs::write(root.join("session.json"), r#"{"version":1}"#).unwrap();
         fs::write(root.join("history.jsonl"), "{\"cmd\":\"ls\"}\n").unwrap();
-        fs::write(
-            root.join("directory_history.json"),
-            r#"{"version":1,"entries":[]}"#,
-        )
-        .unwrap();
         fs::create_dir(root.join("themes")).unwrap();
-        fs::write(
-            root.join("themes").join(format!(
-                "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b{THEME_FILE_SUFFIX}"
-            )),
-            theme_bytes(),
-        )
-        .unwrap();
-        // 坏主题的硬失败路径由 `invalid_theme_documents_abort_the_backup`
-        // 单独覆盖;本用例只验证合法白名单与敏感键剥除。
-        // 清单外敏感面:AI 会话库/未知文件/日志/恢复点目录,一律不得入包。
+        fs::write(root.join(THEME_NAME), theme_bytes()).unwrap();
         fs::write(root.join("learning.db"), b"private-learning-data").unwrap();
-        fs::write(root.join("ai_sessions.json"), "{\"sessions\":[]}").unwrap();
-        fs::write(root.join("obsolete.txt"), "enabled=true").unwrap();
-        fs::write(root.join("slterm_debug.log"), "log").unwrap();
-        fs::create_dir(root.join("backup-recovery")).unwrap();
 
-        let selection = BackupSelection::from_categories([
-            BackupCategory::Settings,
-            BackupCategory::Session,
-            BackupCategory::Themes,
-        ]);
-        let archive = collect_from(&single_root_paths(root), selection).expect("收集");
+        let archive = collect_from(
+            &single_root_paths(root),
+            BackupSelection::from_categories([BackupCategory::Settings]),
+        )
+        .expect("收集");
         let names: HashSet<_> = archive
             .entries
             .iter()
             .map(|entry| entry.name.as_str())
             .collect();
-        assert_eq!(
-            names,
-            HashSet::from([
-                "settings.json",
-                "session.json",
-                "themes/018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b.slterm-theme.json"
-            ])
-        );
+        assert_eq!(names, HashSet::from(["settings.json", THEME_NAME]));
 
         let settings = archive
             .entries
@@ -1042,15 +915,16 @@ mod encrypted_backup_tests {
         let settings_text = String::from_utf8(settings.bytes.clone()).unwrap();
         assert!(!settings_text.contains("sk-test-settings-secret"));
         assert!(!settings_text.contains("sk-test-nested-secret"));
+        assert!(!settings_text.contains("Access_Token"));
+        assert!(!settings_text.contains("handmade"), "未知命名空间不得入包");
+        assert!(
+            !settings_text.contains("custom_theme"),
+            "未登记导出的主题引用不得入包"
+        );
         assert!(settings_text.contains("Nord"));
         assert!(settings_text.contains("terminal_proxy"));
-        assert!(settings_text.contains("keep"), "未知段原样保留");
-        assert!(
-            !settings_text.contains("Access_Token"),
-            "大小写变体同样剥除"
-        );
+        assert!(validate_archive(&archive).is_ok());
 
-        // 整个归档密封后仍不含任何假凭据。
         let packet = seal(&archive, PASSPHRASE).expect("密封");
         for secret in ["sk-test-settings-secret", "sk-test-nested-secret"] {
             assert!(
@@ -1062,34 +936,15 @@ mod encrypted_backup_tests {
         }
     }
 
+    /// 主题只从配置根收集；本地根同名文件是诱饵。
     #[test]
-    fn collection_scopes_categories_across_split_roots() {
+    fn collection_reads_settings_and_themes_only_from_config_root() {
         let directory = tempfile::tempdir().unwrap();
         let paths = split_paths(directory.path());
         fs::create_dir_all(paths.config_root().join("themes")).unwrap();
         fs::create_dir_all(paths.local_root().join("themes")).unwrap();
         fs::write(paths.settings_path(), br#"{"appearance":{"theme":"Nord"}}"#).unwrap();
-        fs::write(
-            paths
-                .config_root()
-                .join("themes/018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b.slterm-theme.json"),
-            theme_bytes(),
-        )
-        .unwrap();
-        fs::write(paths.local_root().join("session.json"), br#"{"version":1}"#).unwrap();
-        fs::write(paths.local_root().join("history.jsonl"), b"local-history\n").unwrap();
-        fs::write(
-            paths.local_root().join("directory_history.json"),
-            br#"{"version":1,"entries":[]}"#,
-        )
-        .unwrap();
-
-        // 另一根的同名文件都是诱饵，不得替代本类别所属根的内容。
-        fs::write(
-            paths.local_root().join("settings.json"),
-            br#"{"appearance":{"theme":"Linear"}}"#,
-        )
-        .unwrap();
+        fs::write(paths.config_root().join(THEME_NAME), theme_bytes()).unwrap();
         fs::write(
             paths
                 .local_root()
@@ -1097,21 +952,16 @@ mod encrypted_backup_tests {
             theme_bytes(),
         )
         .unwrap();
-        fs::write(paths.config_root().join("session.json"), b"config-decoy").unwrap();
-        fs::write(paths.config_root().join("history.jsonl"), b"config-decoy").unwrap();
         fs::write(
-            paths.config_root().join("directory_history.json"),
-            b"config-decoy",
+            paths.local_root().join("settings.json"),
+            br#"{"appearance":{"theme":"Linear"}}"#,
         )
         .unwrap();
+        fs::write(paths.local_root().join("session.json"), br#"{"version":1}"#).unwrap();
 
         let archive = collect_from(
             &paths,
-            BackupSelection::from_categories([
-                BackupCategory::Settings,
-                BackupCategory::Session,
-                BackupCategory::Themes,
-            ]),
+            BackupSelection::from_categories([BackupCategory::Settings]),
         )
         .unwrap();
         let names: HashSet<_> = archive
@@ -1119,28 +969,17 @@ mod encrypted_backup_tests {
             .iter()
             .map(|entry| entry.name.as_str())
             .collect();
-        assert_eq!(
-            names,
-            HashSet::from([
-                "settings.json",
-                "session.json",
-                "themes/018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b.slterm-theme.json",
-            ])
-        );
-        let entry = |name: &str| {
-            &archive
-                .entries
-                .iter()
-                .find(|entry| entry.name == name)
-                .unwrap()
-                .bytes
-        };
+        assert_eq!(names, HashSet::from(["settings.json", THEME_NAME]));
+        let settings = archive
+            .entries
+            .iter()
+            .find(|entry| entry.name == "settings.json")
+            .unwrap();
         assert!(
-            String::from_utf8(entry("settings.json").clone())
+            String::from_utf8(settings.bytes.clone())
                 .unwrap()
                 .contains("Nord")
         );
-        assert_eq!(entry("session.json"), br#"{"version":1}"#);
     }
 
     /// 防复发:非法主题文档必须整单失败,不得静默缺件。
@@ -1154,19 +993,21 @@ mod encrypted_backup_tests {
             "{ not a theme }",
         )
         .unwrap();
-        let selection = BackupSelection::from_categories([BackupCategory::Themes]);
-        let error = collect_from(&single_root_paths(directory.path()), selection)
-            .expect_err("非法主题必须中止备份");
+        let error = collect_from(
+            &single_root_paths(directory.path()),
+            BackupSelection::from_categories([BackupCategory::Settings]),
+        )
+        .expect_err("非法主题必须中止备份");
         assert!(error.contains("主题"), "{error}");
     }
 
     #[test]
-    fn collection_rejects_empty_selection_and_unparseable_settings() {
+    fn collection_rejects_empty_selection_unparseable_or_non_file_settings() {
         let directory = tempfile::tempdir().unwrap();
         assert!(
             collect_from(
                 &single_root_paths(directory.path()),
-                BackupSelection::from_categories([])
+                BackupSelection { settings: false },
             )
             .is_err()
         );
@@ -1174,119 +1015,88 @@ mod encrypted_backup_tests {
         assert!(
             collect_from(
                 &single_root_paths(directory.path()),
-                BackupSelection::default()
+                BackupSelection::from_categories([BackupCategory::Settings]),
             )
-            .is_err()
+            .is_err(),
+            "损坏设置不得静默跳过或原样入包"
         );
-        // 可解析但根非对象:设置文档合同是对象,四态读取会判损坏,备份拒收。
-        fs::write(directory.path().join("settings.json"), "[1, 2, 3]").unwrap();
+        fs::remove_file(directory.path().join("settings.json")).unwrap();
+        fs::create_dir(directory.path().join("settings.json")).unwrap();
         assert!(
             collect_from(
                 &single_root_paths(directory.path()),
-                BackupSelection::default()
+                BackupSelection::from_categories([BackupCategory::Settings]),
             )
-            .is_err()
+            .is_err(),
+            "非普通文件不得作为备份输入"
         );
     }
 
     #[test]
-    fn registered_setting_keys_never_collide_with_the_sensitive_table() {
-        for def in slterm_settings::keys::KEYS {
-            assert!(
-                !is_sensitive_key(def.key),
-                "注册键 {} 与敏感键剥除表冲突",
-                def.key
-            );
-        }
-        assert!(is_sensitive_key("api_key"));
-    }
-
-    #[test]
-    fn sensitive_key_matching_normalizes_case_hyphens_and_padding() {
-        for key in ["API_KEY", "ApiKey", "api-key", "  token  ", "Authorization"] {
-            assert!(is_sensitive_key(key), "未命中敏感键: {key}");
-        }
-        for key in ["theme", "terminal_proxy"] {
-            assert!(!is_sensitive_key(key), "误伤普通键: {key}");
-        }
-    }
-
-    #[test]
-    fn import_validation_rejects_unsanitized_settings_before_writing() {
-        let archive = BackupArchive {
+    fn import_validation_rejects_unknown_or_sensitive_settings() {
+        let unknown = BackupArchive {
             manifest: BackupManifest {
                 version: ARCHIVE_VERSION,
                 categories: vec![BackupCategory::Settings],
             },
+            entries: vec![BackupEntry {
+                category: BackupCategory::Settings,
+                name: "settings.json".into(),
+                bytes: br#"{"appearance":{"theme":"Nord"},"handmade":{"token":"sk-test-import"}}"#
+                    .to_vec(),
+            }],
+        };
+        assert!(validate_archive(&unknown).is_err(), "未知段必须拒绝");
+
+        let sensitive = BackupArchive {
             entries: vec![BackupEntry {
                 category: BackupCategory::Settings,
                 name: "settings.json".into(),
                 bytes: br#"{"appearance":{"api_key":"sk-test-import"}}"#.to_vec(),
             }],
+            ..unknown
         };
-        let directory = tempfile::tempdir().unwrap();
-        assert!(validate_archive(&archive).is_err());
-        assert!(
-            !directory.path().join("settings.json").exists(),
-            "导入复验失败必须在落盘前拒绝"
-        );
-        assert!(seal(&archive, PASSPHRASE).is_err(), "导出侧同样拒收");
+        assert!(validate_archive(&sensitive).is_err(), "未登记键必须拒绝");
+        assert!(seal(&sensitive, PASSPHRASE).is_err(), "导出侧同样拒收");
+
+        let hidden = BackupArchive {
+            entries: vec![BackupEntry {
+                category: BackupCategory::Settings,
+                name: "settings.json".into(),
+                bytes: br#"{"appearance":{"custom_theme":"acme"}}"#.to_vec(),
+            }],
+            ..archive()
+        };
+        assert!(validate_archive(&hidden).is_err(), "非导出字段必须拒绝");
+
+        assert!(validate_archive(&archive()).is_ok());
     }
 
     #[test]
     fn archive_validation_rejects_path_traversal_duplicates_and_unknown_names() {
-        let directory = tempfile::tempdir().unwrap();
         let traversal = BackupArchive {
-            manifest: BackupManifest {
-                version: ARCHIVE_VERSION,
-                categories: vec![BackupCategory::Settings],
-            },
             entries: vec![BackupEntry {
                 category: BackupCategory::Settings,
                 name: "../outside.json".into(),
                 bytes: b"{}".to_vec(),
             }],
+            ..archive()
         };
         assert!(validate_archive(&traversal).is_err());
-        assert!(
-            !directory
-                .path()
-                .parent()
-                .unwrap()
-                .join("outside.json")
-                .exists()
-        );
 
-        let unsigned_name = BackupArchive {
-            manifest: BackupManifest {
-                version: ARCHIVE_VERSION,
-                categories: vec![BackupCategory::Session],
-            },
+        let wrong_name = BackupArchive {
             entries: vec![BackupEntry {
-                category: BackupCategory::Session,
-                name: "settings.json".into(),
+                category: BackupCategory::Settings,
+                name: "session.json".into(),
                 bytes: b"{}".to_vec(),
             }],
+            ..archive()
         };
-        assert!(validate_archive(&unsigned_name).is_err());
+        assert!(validate_archive(&wrong_name).is_err());
 
         let mut duplicate = archive();
         duplicate.entries.push(duplicate.entries[0].clone());
         assert!(validate_archive(&duplicate).is_err());
-        assert!(!directory.path().join("settings.json").exists());
-
-        let unlisted_category = BackupArchive {
-            manifest: BackupManifest {
-                version: ARCHIVE_VERSION,
-                categories: vec![BackupCategory::Session],
-            },
-            entries: vec![BackupEntry {
-                category: BackupCategory::Settings,
-                name: "settings.json".into(),
-                bytes: b"{}".to_vec(),
-            }],
-        };
-        assert!(validate_archive(&unlisted_category).is_err());
     }
 
     #[test]
@@ -1308,16 +1118,16 @@ mod encrypted_backup_tests {
 
     #[test]
     fn summary_counts_files_and_bytes_per_category() {
-        let summary = full_archive().summary();
-        assert_eq!(summary.len(), 3);
-        let settings = summary
+        let archive = full_archive();
+        let summary = archive.summary();
+        assert_eq!(summary.len(), 1);
+        assert_eq!(summary[0].category, BackupCategory::Settings);
+        assert_eq!(summary[0].files, 2);
+        let expected = archive
+            .entries
             .iter()
-            .find(|item| item.category == BackupCategory::Settings)
-            .unwrap();
-        assert_eq!(settings.files, 1);
-        assert_eq!(
-            settings.bytes,
-            br#"{"appearance":{"theme":"Nord"}}"#.len() as u64
-        );
+            .map(|entry| entry.bytes.len())
+            .sum::<usize>();
+        assert_eq!(summary[0].bytes, expected as u64);
     }
 }

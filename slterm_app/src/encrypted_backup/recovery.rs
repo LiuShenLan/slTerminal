@@ -128,14 +128,14 @@ mod recovery_tests {
     }
 
     fn selection() -> BackupSelection {
-        BackupSelection::from_categories([BackupCategory::Settings, BackupCategory::Session])
+        BackupSelection::from_categories([BackupCategory::Settings])
     }
 
     fn archive() -> BackupArchive {
         BackupArchive {
             manifest: BackupManifest {
                 version: ARCHIVE_VERSION,
-                categories: vec![BackupCategory::Settings, BackupCategory::Session],
+                categories: vec![BackupCategory::Settings],
             },
             entries: vec![
                 BackupEntry {
@@ -144,9 +144,13 @@ mod recovery_tests {
                     bytes: br#"{"appearance":{"theme":"Nord"}}"#.to_vec(),
                 },
                 BackupEntry {
-                    category: BackupCategory::Session,
-                    name: "session.json".into(),
-                    bytes: br#"{"version":1}"#.to_vec(),
+                    category: BackupCategory::Settings,
+                    name: "themes/018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b.slterm-theme.json".into(),
+                    bytes: crate::theme_library::builtin_documents()
+                        .first()
+                        .expect("内置主题文档非空")
+                        .to_json_bytes()
+                        .expect("内置主题文档可序列化"),
                 },
             ],
         }
@@ -164,7 +168,18 @@ mod recovery_tests {
             br#"{"appearance":{"theme":"Linear"}}"#,
         )
         .unwrap();
-        fs::write(paths.local_root().join("session.json"), br#"{"version":0}"#).unwrap();
+        fs::create_dir_all(paths.config_root().join("themes")).unwrap();
+        fs::write(
+            paths
+                .config_root()
+                .join("themes/018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b.slterm-theme.json"),
+            crate::theme_library::builtin_documents()
+                .first()
+                .expect("内置主题文档非空")
+                .to_json_bytes()
+                .expect("内置主题文档可序列化"),
+        )
+        .unwrap();
         fs::create_dir_all(paths.config_root().join("themes")).unwrap();
         write_theme(&paths);
 
@@ -236,17 +251,29 @@ mod recovery_tests {
             },
             OriginalFile {
                 target: RestoreTarget {
-                    category: BackupCategory::Session,
-                    name: "session.json".into(),
+                    category: BackupCategory::Settings,
+                    name: "themes/018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b.slterm-theme.json".into(),
                 },
                 bytes: None,
                 after: None,
             },
         ];
-        fs::write(paths.local_root().join("session.json"), b"created").unwrap();
+        fs::create_dir_all(paths.config_root().join("themes")).unwrap();
+        fs::write(
+            paths
+                .config_root()
+                .join("themes/018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b.slterm-theme.json"),
+            b"created",
+        )
+        .unwrap();
         write_originals(&paths, &originals).unwrap();
         assert_eq!(fs::read(paths.settings_path()).unwrap(), b"before");
-        assert!(!paths.local_root().join("session.json").exists());
+        assert!(
+            !paths
+                .config_root()
+                .join("themes/018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b.slterm-theme.json")
+                .exists()
+        );
     }
 
     fn write_theme(paths: &AppPaths) {

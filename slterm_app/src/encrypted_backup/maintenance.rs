@@ -41,8 +41,6 @@ struct StagedRestore {
 const fn category_key(category: BackupCategory) -> &'static str {
     match category {
         BackupCategory::Settings => "settings",
-        BackupCategory::Session => "session",
-        BackupCategory::Themes => "themes",
     }
 }
 
@@ -412,10 +410,18 @@ mod maintenance_restore_tests {
     const EPOCH: &str = "epoch-1";
     const OLD_SETTINGS: &[u8] = br#"{"appearance":{"theme":"Linear"}}"#;
     const NEW_SETTINGS: &[u8] = br#"{"appearance":{"theme":"Nord"}}"#;
-    const NEW_SESSION: &[u8] = br#"{"version":1}"#;
+    const NEW_THEME: &str = "themes/018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b.slterm-theme.json";
 
     fn fixture(temp: &TempDir) -> AppPaths {
         AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap()
+    }
+
+    fn theme_bytes() -> Vec<u8> {
+        crate::theme_library::builtin_documents()
+            .first()
+            .expect("内置主题文档非空")
+            .to_json_bytes()
+            .expect("内置主题文档可序列化")
     }
 
     fn begin_run(store: &mut WorkspaceDatabase) {
@@ -435,7 +441,7 @@ mod maintenance_restore_tests {
         BackupArchive {
             manifest: BackupManifest {
                 version: super::super::ARCHIVE_VERSION,
-                categories: vec![BackupCategory::Settings, BackupCategory::Session],
+                categories: vec![BackupCategory::Settings],
             },
             entries: vec![
                 BackupEntry {
@@ -444,16 +450,16 @@ mod maintenance_restore_tests {
                     bytes: NEW_SETTINGS.to_vec(),
                 },
                 BackupEntry {
-                    category: BackupCategory::Session,
-                    name: "session.json".into(),
-                    bytes: NEW_SESSION.to_vec(),
+                    category: BackupCategory::Settings,
+                    name: NEW_THEME.into(),
+                    bytes: theme_bytes(),
                 },
             ],
         }
     }
 
     fn selection() -> BackupSelection {
-        BackupSelection::from_categories([BackupCategory::Settings, BackupCategory::Session])
+        BackupSelection::from_categories([BackupCategory::Settings])
     }
 
     fn maintenance(
@@ -526,8 +532,8 @@ mod maintenance_restore_tests {
         );
         assert_eq!(fs::read(paths.settings_path()).unwrap(), NEW_SETTINGS);
         assert_eq!(
-            fs::read(paths.local_root().join("session.json")).unwrap(),
-            NEW_SESSION
+            fs::read(paths.config_root().join(NEW_THEME)).unwrap(),
+            theme_bytes()
         );
         assert_eq!(
             store
@@ -589,8 +595,8 @@ mod maintenance_restore_tests {
             },
             OriginalFile {
                 target: RestoreTarget {
-                    category: BackupCategory::Session,
-                    name: "session.json".into(),
+                    category: BackupCategory::Settings,
+                    name: NEW_THEME.into(),
                 },
                 bytes: None,
                 after: None,
@@ -605,7 +611,7 @@ mod maintenance_restore_tests {
             MaintenanceOutcome::Ready
         );
         assert_eq!(fs::read(paths.settings_path()).unwrap(), OLD_SETTINGS);
-        assert!(!paths.local_root().join("session.json").exists());
+        assert!(!paths.config_root().join(NEW_THEME).exists());
         assert_eq!(
             store
                 .maintenance_request(&request.request_id)
@@ -636,13 +642,13 @@ mod maintenance_restore_tests {
         let (paths, mut store) = setup(&temp);
         let request = stage_restore(&mut store, &paths, &archive(), selection()).unwrap();
 
-        *super::MAINTENANCE_APPLY_FAILPOINT.lock().unwrap() = Some("session.json".into());
+        *super::MAINTENANCE_APPLY_FAILPOINT.lock().unwrap() = Some(NEW_THEME.into());
         let result = maintenance(&mut store, &paths);
         *super::MAINTENANCE_APPLY_FAILPOINT.lock().unwrap() = None;
 
         assert!(matches!(result, Err(MaintenanceError::Request(_))));
         assert_eq!(fs::read(paths.settings_path()).unwrap(), OLD_SETTINGS);
-        assert!(!paths.local_root().join("session.json").exists());
+        assert!(!paths.config_root().join(NEW_THEME).exists());
         assert_eq!(
             store
                 .maintenance_request(&request.request_id)
@@ -702,7 +708,7 @@ mod maintenance_restore_tests {
 
         assert!(maintenance(&mut store, &paths).is_err());
         assert_eq!(fs::read(paths.settings_path()).unwrap(), OLD_SETTINGS);
-        assert!(!paths.local_root().join("session.json").exists());
+        assert!(!paths.config_root().join(NEW_THEME).exists());
         assert_eq!(
             store
                 .maintenance_request(&request.request_id)

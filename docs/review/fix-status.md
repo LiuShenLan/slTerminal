@@ -161,7 +161,7 @@
 | 备份恢复在 store_epoch 轮换与 Applied 之间崩溃会永久阻断启动 | 待修 |
 | 双损隔离部分失败或中断后，重试以空工作区正常启动 | 待修 |
 | 备份明文没有 64 MiB 上限 | 已修：密封与解封双向 64 MiB 硬上限，解封在派生密钥前拒绝超限包；测试 `archive_plaintext_is_bounded_to_64_mib` |
-| 设置导出使用敏感键黑名单而不是登记字段白名单，Session 原文完全未过滤 | 待修 |
+| 设置导出使用敏感键黑名单而不是登记字段白名单，Session 原文完全未过滤 | 已修：设置类别改为 `SettingsRegistry` 导出白名单投影，未知段/未登记/敏感字段在导出与导入复验两侧一致拒绝；删除 Session／Themes 类别，主题并入设置类别，Session 原文与学习历史不再存在入包通道；所有收集目标要求根内普通文件；测试 `collection_uses_registry_export_allowlist`、`import_validation_rejects_unknown_or_sensitive_settings`、`backup_excludes_local_workspace_and_credentials`、`collection_rejects_empty_selection_unparseable_or_non_file_settings` |
 | 恢复点与暂存目录没有当前用户 ACL 限制 | 待修 |
 | 暂存明文先于 owner 落盘，清理先清行后删文件 | 待修 |
 | 即时恢复在指纹回写失败时已写盘却返回失败 | 已修：整条运行期即时恢复通道删除，落盘、恢复点采样与回滚只在启动维护期执行，不再存在写完目标后补记指纹的失败分支 |
