@@ -94,7 +94,7 @@
 
 | 问题 | 状态 |
 |---|---|
-| SVG 清洗重建 XML 时未转义属性值 | 待修 |
+| SVG 清洗重建 XML 时未转义属性值 | 已核验无需修复：`push_attribute` 接收 `(&str, &str)` 时由 quick-xml 的 `From` 转换转义属性值；报告引用的 FIXME 位于底层 `push_attr`，调用路径不经过它。新增回归守卫 `attribute_values_are_escaped_so_reparsing_preserves_the_attribute_set` |
 | 同一规范路径的外部重载在身份变化时覆写其他 Document 身份索引 | 待修 |
 | 可编辑 Document 缺行尾切换、编码重开与手动只读活体通道 | 待修 |
 | 查找与替换只实现字面量查找和全部替换，且没有生产接线 | 待修 |

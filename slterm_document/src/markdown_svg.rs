@@ -293,6 +293,53 @@ mod tests {
     }
 
     #[test]
+    fn attribute_values_are_escaped_so_reparsing_preserves_the_attribute_set() {
+        // 单引号属性内的字面双引号在重建时必须转义；否则重建文本会多出
+        // 一个白名单从未检查过的属性。
+        let source =
+            r#"<svg xmlns="http://www.w3.org/2000/svg"><rect fill='#fff" onload="alert(1)'/></svg>"#;
+        let sanitized = SanitizedSvg::parse(source).expect("单引号属性是合法 XML");
+        let mut reader = Reader::from_str(sanitized.as_str());
+        let mut rect_attributes: Option<Vec<(String, String)>> = None;
+        loop {
+            match reader.read_event().expect("重建输出必须是合法 XML") {
+                Event::Start(start) | Event::Empty(start)
+                    if start.local_name().as_ref() == b"rect" =>
+                {
+                    let attributes = start
+                        .attributes()
+                        .map(|attribute| {
+                            let attribute = attribute.expect("属性必须可解析");
+                            let key = String::from_utf8(attribute.key.as_ref().to_vec()).unwrap();
+                            let value = attribute
+                                .decoded_and_normalized_value(
+                                    XmlVersion::Implicit1_0,
+                                    reader.decoder(),
+                                )
+                                .expect("属性值必须可解码")
+                                .into_owned();
+                            (key, value)
+                        })
+                        .collect();
+                    rect_attributes = Some(attributes);
+                    break;
+                }
+                Event::Eof => break,
+                _ => {}
+            }
+        }
+        assert_eq!(
+            rect_attributes,
+            Some(vec![("fill".to_owned(), r#"#fff" onload="alert(1)"#.to_owned())]),
+            "重建不得引入新属性，原值必须完整保留"
+        );
+        assert!(
+            !sanitized.as_str().contains(r#"onload="alert(1)"#),
+            "注入形态不得以属性语法出现在重建输出中"
+        );
+    }
+
+    #[test]
     fn svg_budgets_and_malformed_documents_fail_closed() {
         let attributes = (0..65)
             .map(|index| format!("data-value-{index}=\"x\""))
