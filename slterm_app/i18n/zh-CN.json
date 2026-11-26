@@ -531,7 +531,7 @@
       "colors": "颜色",
       "background": "背景色",
       "foreground": "前景色",
-      "foreground_description": "取色推荐：原色恒第一，冷/暖候选满足 WCAG AA。",
+      "foreground_description": "取色推荐：原色恒第一，另附冷/暖候选。",
       "accent": "强调色",
       "cursor": "光标色",
       "typography": "排版与特效",

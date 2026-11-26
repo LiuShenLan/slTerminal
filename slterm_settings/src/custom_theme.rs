@@ -106,52 +106,6 @@ impl ThemeDefinition {
         }
     }
 
-    /// 保存前 WCAG 校验(仅暗色组合):终端正文与 UI 正文/次要文字按
-    /// AA 普通文本 4.5:1,强调与语义槽按大文本/非文本 3:1。主题编辑器
-    /// 保存路径消费;不达标的组合拒绝落盘,用户颜色不被静默改写。
-    pub fn validate_wcag(&self) -> Result<(), ThemeContrastError> {
-        let check = |slot: &'static str,
-                     foreground: Rgb8,
-                     background: Rgb8,
-                     minimum: f64|
-         -> Result<(), ThemeContrastError> {
-            let ratio = wcag_contrast_ratio(foreground, background);
-            if ratio + f64::EPSILON < minimum {
-                return Err(ThemeContrastError {
-                    slot,
-                    ratio,
-                    minimum,
-                });
-            }
-            Ok(())
-        };
-
-        check(
-            "terminal.foreground",
-            self.terminal.foreground,
-            self.terminal.background,
-            WCAG_TEXT_CONTRAST,
-        )?;
-        let ui = self.resolved_ui();
-        check(
-            "ui.foreground",
-            ui.foreground,
-            ui.background,
-            WCAG_TEXT_CONTRAST,
-        )?;
-        check("ui.muted", ui.muted, ui.background, WCAG_TEXT_CONTRAST)?;
-        for (slot, color) in [
-            ("ui.accent", ui.accent),
-            ("ui.error", ui.error),
-            ("ui.success", ui.success),
-            ("ui.warning", ui.warning),
-            ("ui.info", ui.info),
-        ] {
-            check(slot, color, ui.background, WCAG_GRAPHICS_CONTRAST)?;
-        }
-        Ok(())
-    }
-
     /// 返回副本:终端默认文字色改写。
     pub fn with_terminal_foreground(&self, foreground: Rgb8) -> Self {
         let mut theme = self.clone();
@@ -631,104 +585,6 @@ fn mix_rgb(left: Rgb8, right: Rgb8, weight: f32) -> Rgb8 {
     })
 }
 
-/// 返回原色 + 冷/暖两个可读候选。
-///
-/// 第一项永远是 `original`——用户颜色绝不静默改写,候选只供建议。后两项
-/// 按 WCAG 2 AA 普通文本 4.5:1 阈值对给定不透明底色校验。合成/半透明
-/// 表面的实际渲染结果仍由调用方校验。
-pub fn foreground_recommendations(background: Rgb8, original: Rgb8) -> [Rgb8; 3] {
-    [
-        original,
-        readable_tint(background, [100, 178, 224]),
-        readable_tint(background, [235, 164, 76]),
-    ]
-}
-
-/// WCAG AA 普通文本对比度下限。
-pub const WCAG_TEXT_CONTRAST: f64 = 4.5;
-/// WCAG AA 大文本/非文本图形对比度下限。
-pub const WCAG_GRAPHICS_CONTRAST: f64 = 3.0;
-
-/// 主题保存路径的对比度拒绝原因:哪个槽位、实测比值、要求下限。
-/// 仅暗色组合校验(产品定位),亮暗混合不在此表达。
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct ThemeContrastError {
-    pub slot: &'static str,
-    pub ratio: f64,
-    pub minimum: f64,
-}
-
-impl fmt::Display for ThemeContrastError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{} contrast {:.2}:1 is below the required {:.1}:1",
-            self.slot, self.ratio, self.minimum
-        )
-    }
-}
-
-impl std::error::Error for ThemeContrastError {}
-
-/// 两个不透明 sRGB 色的 WCAG 相对对比度。
-pub fn wcag_contrast_ratio(foreground: Rgb8, background: Rgb8) -> f64 {
-    let a = relative_luminance(foreground);
-    let b = relative_luminance(background);
-    (a.max(b) + 0.05) / (a.min(b) + 0.05)
-}
-
-/// 不透明前景/背景对是否达到 WCAG AA 普通文本阈值。
-pub fn meets_wcag_aa(foreground: Rgb8, background: Rgb8) -> bool {
-    wcag_contrast_ratio(foreground, background) >= 4.5
-}
-
-fn readable_tint(background: Rgb8, tint: Rgb8) -> Rgb8 {
-    let white = [255; 3];
-    let black = [0; 3];
-    let endpoint =
-        if wcag_contrast_ratio(white, background) >= wcag_contrast_ratio(black, background) {
-            white
-        } else {
-            black
-        };
-
-    if meets_wcag_aa(tint, background) {
-        return tint;
-    }
-    // 向对比度更优的端点逐步混合,在对比度下限内尽量保留请求的冷/暖色相。
-    for step in 1..=255u16 {
-        let candidate = blend_rgb(tint, endpoint, step as u8);
-        if meets_wcag_aa(candidate, background) {
-            return candidate;
-        }
-    }
-    endpoint
-}
-
-fn blend_rgb(from: Rgb8, to: Rgb8, amount: u8) -> Rgb8 {
-    let amount = u16::from(amount);
-    let mut result = [0; 3];
-    for index in 0..3 {
-        let from = u16::from(from[index]);
-        let to = u16::from(to[index]);
-        result[index] = ((from * (255 - amount) + to * amount + 127) / 255) as u8;
-    }
-    result
-}
-
-/// 相对亮度:WCAG 2 公式(sRGB 线性化 + 0.2126/0.7152/0.0722 加权)。
-fn relative_luminance(color: Rgb8) -> f64 {
-    let linear = |channel: u8| {
-        let channel = f64::from(channel) / 255.0;
-        if channel <= 0.04045 {
-            channel / 12.92
-        } else {
-            ((channel + 0.055) / 1.055).powf(2.4)
-        }
-    };
-    linear(color[0]) * 0.2126 + linear(color[1]) * 0.7152 + linear(color[2]) * 0.0722
-}
-
 #[cfg(test)]
 mod custom_theme_tests {
     use super::*;
@@ -971,90 +827,20 @@ mod custom_theme_tests {
 }
 
 #[cfg(test)]
-mod wcag_tests {
-    use super::*;
-
+mod no_contrast_gate_tests {
+    /// 主题合同：不做对比度校验、提示或自动回退；实现与模块文档都不得
+    /// 保留门槛承诺。
     #[test]
-    fn contrast_ratio_anchors_black_on_white_at_twenty_one_to_one() {
-        let ratio = wcag_contrast_ratio([0, 0, 0], [255, 255, 255]);
-        assert!((ratio - 21.0).abs() < 0.01, "{ratio}");
-        assert_eq!(wcag_contrast_ratio([1, 2, 3], [1, 2, 3]), 1.0);
-        // 前景/背景对称。
-        assert_eq!(
-            wcag_contrast_ratio([255, 255, 255], [0, 0, 0]),
-            wcag_contrast_ratio([0, 0, 0], [255, 255, 255])
-        );
-    }
-
-    #[test]
-    fn meets_wcag_aa_uses_the_four_point_five_threshold() {
-        assert!(meets_wcag_aa([0, 0, 0], [255, 255, 255]));
-        assert!(!meets_wcag_aa([120, 120, 120], [127, 127, 127]));
-        // 白底灰度从黑向亮扫:首个不达标灰阶与最后达标灰阶相邻跨线。
-        let background = [255, 255, 255];
-        let mut level = 0u8;
-        while meets_wcag_aa([level, level, level], background) {
-            level += 1;
-        }
-        assert!(meets_wcag_aa([level - 1, level - 1, level - 1], background));
-        assert!(!meets_wcag_aa([level, level, level], background));
-    }
-
-    #[test]
-    fn save_path_accepts_the_builtin_catalog_and_rejects_low_contrast_pairs() {
-        for name in ThemeName::BUILTIN {
-            let definition = ThemeDefinition::from_builtin(name);
+    fn theme_sources_do_not_validate_contrast() {
+        let needle = concat!("wc", "ag");
+        for (name, source) in [
+            ("custom_theme.rs", include_str!("custom_theme.rs")),
+            ("themes.rs", include_str!("themes.rs")),
+        ] {
             assert!(
-                definition.validate_wcag().is_ok(),
-                "{}: {:?}",
-                name.prompt_name(),
-                definition.validate_wcag()
+                !source.to_ascii_lowercase().contains(needle),
+                "{name} 不得保留对比度门槛实现或承诺"
             );
         }
-        // 前景压成底色:正文槽 1:1,保存路径必须拒绝并指出槽位。
-        let mut broken = ThemeDefinition::from_builtin(ThemeName::Linear);
-        broken.terminal.foreground = broken.terminal.background;
-        let error = broken.validate_wcag().expect_err("1:1 must be rejected");
-        assert_eq!(error.slot, "terminal.foreground");
-        assert!((error.ratio - 1.0).abs() < 1e-9);
-        assert_eq!(error.minimum, WCAG_TEXT_CONTRAST);
-        // 显式 UI 面的语义槽同样受检(派生面不绕过)。
-        let mut broken_ui = ThemeDefinition::from_builtin(ThemeName::Nord);
-        broken_ui.ui = broken_ui.resolved_ui().with_derive(false);
-        broken_ui.ui.error = broken_ui.ui.background;
-        let error = broken_ui
-            .validate_wcag()
-            .expect_err("semantic slot must be checked");
-        assert_eq!(error.slot, "ui.error");
-        assert_eq!(error.minimum, WCAG_GRAPHICS_CONTRAST);
-        assert!(!error.to_string().is_empty());
-    }
-
-    #[test]
-    fn recommendations_keep_original_and_meet_wcag_for_solid_backgrounds() {
-        for background in [[0, 0, 0], [15, 17, 26], [255, 255, 255], [127, 127, 127]] {
-            let recommendations = foreground_recommendations(background, [1, 2, 3]);
-            assert_eq!(recommendations[0], [1, 2, 3], "原色永远第一");
-            assert!(
-                meets_wcag_aa(recommendations[1], background),
-                "{background:?} cool"
-            );
-            assert!(
-                meets_wcag_aa(recommendations[2], background),
-                "{background:?} warm"
-            );
-        }
-    }
-
-    #[test]
-    fn readable_tint_keeps_compliant_colors_untouched() {
-        // 已达标的颜色原样返回,不向端点漂移。
-        let tint = [240, 240, 240];
-        assert_eq!(readable_tint([10, 10, 12], tint), tint);
-        // 两端点择优:深底向白端点收敛,浅底向黑端点收敛。
-        let dark = readable_tint([10, 10, 12], [20, 20, 20]);
-        let light = readable_tint([250, 250, 250], [240, 240, 240]);
-        assert!(meets_wcag_aa(dark, [10, 10, 12]));
-        assert!(meets_wcag_aa(light, [250, 250, 250]));
     }
 }

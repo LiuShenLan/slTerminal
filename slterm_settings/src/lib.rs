@@ -23,9 +23,8 @@ mod custom_theme;
 mod identity;
 pub use cursor_motion::CursorMotion;
 pub use custom_theme::{
-    IndexedPalette, TerminalThemeColors, ThemeContrastError, ThemeDefinition, ThemeEffects,
-    ThemeLayout, ThemeTypography, ThemeUiColors, ThemeValidationError, WCAG_GRAPHICS_CONTRAST,
-    WCAG_TEXT_CONTRAST, foreground_recommendations, meets_wcag_aa, wcag_contrast_ratio,
+    IndexedPalette, TerminalThemeColors, ThemeDefinition, ThemeEffects, ThemeLayout,
+    ThemeTypography, ThemeUiColors, ThemeValidationError,
 };
 pub use identity::{AgentRootId, StableIdError, ThemeId};
 pub mod diagnostics;

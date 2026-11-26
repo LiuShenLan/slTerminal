@@ -18,11 +18,11 @@
 ## 验收与测试
 
 - 定向测试：`cargo test -p slterm-settings --test lib_tests <filter> -- --test-threads=1`；禁止 `--lib` 或裸 filter 直打默认 lib target。
-- JSON 往返、键注册表完备性、宽容读取语义、显式路径严格读取与 WCAG 边界是必测面。
+- JSON 往返、键注册表完备性、宽容读取语义与显式路径严格读取是必测面。
 - 测试分层与隔离规则见 `.claude/docs/testing/strategy.md`。
 
 ## 操作
 
 - 修改设置键：先在 `keys` 注册表登记完整字段元数据，再改值模型与读写转换；同步补往返、校验与缺省回退测试。
-- 新增主题：加入内置目录 + 调色板，并通过语义槽 WCAG 校验。
+- 新增主题：加入内置目录 + 调色板；不做对比度校验或提示。
 - 文件读写 API 必须显式接收设置路径；数据根解析只在 application 启动入口。

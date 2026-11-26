@@ -11,7 +11,7 @@
   |---|---|---|
   | `slterm_app`（lib+bin `slterm`） | GPUI 壳、workspace/tab/pane 生命周期、设置 UI 与写通道、平台适配、AI 集成、文件/编辑器、i18n、打包入口 | 不承载 VT/PTY 解析；不把业务逻辑塞进渲染层；不绕过领域通道直写磁盘/凭据 |
   | `slterm_terminal` | 网格、VT 解析、PTY 行为、输入编码、选择与回放、渲染快照 | 不依赖产品视图、窗口状态或 GPUI 类型 |
-  | `slterm_settings` | 设置值模型、JSON 值与键注册表、主题色表与 WCAG 校验 | 零生产依赖；不持数据根权威或写通道硬机制 |
+  | `slterm_settings` | 设置值模型、JSON 值与键注册表、主题色表 | 零生产依赖；不持数据根权威或写通道硬机制 |
   | `slterm_path` | 不可变 `AppPaths`、路径与授权纯规则 | 不读取环境、不执行 I/O、不依赖 UI |
   | `slterm_split` | 分屏树、几何切割、拖拽比例与导航纯函数 | 零生产依赖；不出现 UI 框架类型 |
   | `slterm_completions` | 补全匹配引擎与来源合同 | core 层；不依赖 app 或渲染包 |

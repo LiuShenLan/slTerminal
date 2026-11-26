@@ -531,7 +531,7 @@
       "colors": "Colors",
       "background": "Background",
       "foreground": "Foreground",
-      "foreground_description": "Recommendations keep the original first; cool/warm candidates meet WCAG AA.",
+      "foreground_description": "Recommendations keep the original first, followed by cool/warm candidates.",
       "accent": "Accent",
       "cursor": "Cursor",
       "typography": "Typography and effects",
