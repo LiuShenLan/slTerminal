@@ -87,7 +87,7 @@
 | statusline 用量桥接与信号通道整体缺失 | 待修 |
 | 追溯矩阵与进度把未接线的生产链记为已自动化/已验收 | 待修 |
 | Hooks 页面错误文案硬编码中文 | 已修：编辑域返回封闭 `HooksEditError`，页面包装 `HooksPageError`，渲染经 `hooks_error_text` 查询 typed `Message`，新增中英文诊断键（提交 5ab9a661）；测试 `save_rejects_unknown_events_and_invalid_handlers_without_writing`、`hooks_save_backup_failure_keeps_original_untouched`、`hooks_page_loads_saves_external_guard_and_discards` |
-| 项目根不可访问时未禁用 Project/Local | 待修 |
+| 项目根不可访问时未禁用 Project/Local | 已修：载入与保存前在后台校验真实层根目录，缺失时 Project／Local pill 禁用、显示原因并拒绝写盘（提交 e971c4ae）；测试 `hooks_project_root_loss_disables_layers_and_never_recreates_config`、`hooks_missing_user_config_dir_is_reported_without_creating_it` |
 | Hooks 外部修改监听与重新加载缺失 | 待修 |
 
 ## Document、Markdown 与文本视图
