@@ -164,7 +164,7 @@
 | 设置导出使用敏感键黑名单而不是登记字段白名单，Session 原文完全未过滤 | 待修 |
 | 恢复点与暂存目录没有当前用户 ACL 限制 | 待修 |
 | 暂存明文先于 owner 落盘，清理先清行后删文件 | 待修 |
-| 即时恢复在指纹回写失败时已写盘却返回失败 | 待修 |
+| 即时恢复在指纹回写失败时已写盘却返回失败 | 已修：整条运行期即时恢复通道删除，落盘、恢复点采样与回滚只在启动维护期执行，不再存在写完目标后补记指纹的失败分支 |
 | 撤回只返回单一错误，逐项结果不可见，成功后恢复点不失效 | 待修 |
 | 备份恢复、应用、回滚与撤回没有审计/恢复日志，设置写绕过 settings_store | 待修 |
 | 审计成功事件在 Warn 级日志过滤下被丢弃 | 已修：`level_allowed` 让 audit target 恒放行；测试 `audit_records_bypass_the_warn_level_gate` |
@@ -260,7 +260,7 @@
 |---|---|
 | Git 读取未统一遵守有界执行、禁网与凭据提示约束 | 已修：`command` 统一设置 `GIT_TERMINAL_PROMPT=0`/`GIT_NO_LAZY_FETCH=1`/`GIT_ALLOW_PROTOCOL=file`；`head_file`/`verify_head`/`file_hunks` 改走有界带 deadline 执行体；测试 `every_git_command_disables_prompts_lazy_fetch_and_network` |
 | 生产 TLS 栈命中 emSign 弃用中间证书公告 | 待修 |
-| 加密备份 AAD 范围与恢复时序合同冲突 | 需裁决 |
+| 加密备份 AAD 范围与恢复时序合同冲突 | 已裁决：AAD 统一为完整头部（魔数｜盐｜nonce），旧版仅魔数 AAD 包明确拒绝，测试 `legacy_magic_only_aad_packet_is_rejected`；删除运行期即时 `restore`／`restore_selected`／`undo` 写通道，恢复只经 `stage_restore` 与启动维护期，撤回实现必须复用同一维护请求时序 |
 | 依赖审计未进入 CI 常驻门禁 | 待修 |
 | 诊断脱敏词表与备份敏感键表不一致 | 已修：脱敏键集合与备份敏感键表对齐，授权头额外吞掉方案词后的凭据；测试 `redaction_covers_credential_shapes` |
 | 凭据明文副本没有全程清零 | 待修 |

@@ -5,9 +5,10 @@
 //! 来源文件(`~/.claude/settings.json`)永不读写进出备份;清单外文件不存在
 //! 「顺手带上」的通道,导入导出同一道边界。
 //!
-//! 格式:`SLTMBK01 | salt(16) | nonce(12) | ciphertext`。魔数同时作
-//! AES-256-GCM 的 AAD,格式身份与密文认证绑死——魔数不符即
-//! 「非本应用备份」一票拒解。密钥派生 = Argon2id v0x13,m=19456 KiB、
+//! 格式:`SLTMBK01 | salt(16) | nonce(12) | ciphertext`。完整头部
+//! (魔数｜盐｜nonce)同时作 AES-256-GCM 的 AAD,格式身份、KDF 参数与
+//! nonce 都由认证标签显式绑定——魔数不符即「非本应用备份」一票拒解,
+//! 不接受旧版仅魔数 AAD 的包。密钥派生 = Argon2id v0x13,m=19456 KiB、
 //! t=2、p=1(契约数值随上游基线)。派生密钥、解密明文与恢复点明文全程
 //! `Zeroizing`;解密失败消息不回显口令或任何派生材料。
 //!
@@ -18,8 +19,10 @@
 //! 主题/命令历史/目录历史五类;凭据值永不入包。
 //!
 //! 消费点:设置页安全分区的加密备份导出已接(类别选择 + masked 口令 +
-//! 后台整单收集/密封/原子写,失败明示);恢复与撤回 UI 尚未接线,其生产接缝
-//! 保持 [`restore`]/[`recovery::restore_selected`]/[`recovery::undo`]。
+//! 后台整单收集/密封/原子写,失败明示)。运行期不提供整包或选择性恢复的
+//! 直接写入口:恢复只经 [`maintenance::stage_restore`] 暂存并登记维护请求,
+//! 由启动维护期应用与回滚;撤回 UI 尚未接线,实现时必须复用同一维护请求
+//! 时序,不得新增运行期写盘通道。
 
 use std::collections::HashSet;
 use std::fs;
@@ -259,19 +262,22 @@ fn encrypt_bytes(plaintext: &[u8], passphrase: &str) -> Result<Vec<u8>, String> 
     getrandom::fill(&mut salt).map_err(|error| format!("系统随机源失败: {error}"))?;
     getrandom::fill(&mut nonce).map_err(|error| format!("系统随机源失败: {error}"))?;
     let key = Zeroizing::new(derive_key(passphrase, &salt)?);
+    // 完整头部入 AAD：格式身份、盐与 nonce 都由认证标签显式绑定，
+    // 不依赖 KDF／GCM 的隐式性质；未来追加头部字段时无需改认证口径。
+    let mut header = Vec::with_capacity(MAGIC.len() + SALT_LEN + NONCE_LEN);
+    header.extend_from_slice(MAGIC);
+    header.extend_from_slice(&salt);
+    header.extend_from_slice(&nonce);
     let ciphertext = Aes256Gcm::new((&*key).into())
         .encrypt(
             &Nonce::try_from(&nonce[..]).map_err(|_| "备份 nonce 无效".to_owned())?,
             Payload {
                 msg: plaintext,
-                aad: MAGIC,
+                aad: &header,
             },
         )
         .map_err(|_| "备份加密失败".to_owned())?;
-    let mut output = Vec::with_capacity(MAGIC.len() + SALT_LEN + NONCE_LEN + ciphertext.len());
-    output.extend_from_slice(MAGIC);
-    output.extend_from_slice(&salt);
-    output.extend_from_slice(&nonce);
+    let mut output = header;
     output.extend_from_slice(&ciphertext);
     Ok(output)
 }
@@ -304,7 +310,7 @@ fn decrypt_bytes(packet: &[u8], passphrase: &str) -> Result<Zeroizing<Vec<u8>>, 
             &Nonce::try_from(nonce).map_err(|_| "备份 nonce 无效".to_owned())?,
             Payload {
                 msg: &packet[header_len..],
-                aad: MAGIC,
+                aad: &packet[..header_len],
             },
         )
         .map_err(|_| "备份认证失败: 口令错误或文件已被篡改".to_owned())?;
@@ -478,41 +484,6 @@ fn add_themes(root: &Path, entries: &mut Vec<BackupEntry>) -> Result<(), String>
 fn is_valid_theme_id(id: &str) -> bool {
     // 身份规则单点 = ThemeId 解析（UUIDv7），不复制第二份规则。
     id.parse::<slterm_settings::ThemeId>().is_ok()
-}
-
-/// 先鉴权后落盘:完整解密校验通过才允许写任何文件。
-pub(crate) fn restore(packet: &[u8], passphrase: &str) -> Result<(), String> {
-    restore_at(crate::platform::dirs::app_paths(), packet, passphrase)
-}
-
-/// 显式双根入口(测试注入与工作区导入共用);鉴权失败时零 IO。
-fn restore_at(paths: &AppPaths, packet: &[u8], passphrase: &str) -> Result<(), String> {
-    let archive = open(packet, passphrase)?;
-    restore_to(paths, &archive)
-}
-
-/// 测试注入的恢复故障点(仅在测试构建存在);`None` = 关闭,
-/// `Some(name)` = 写该条目前注入失败。
-#[cfg(test)]
-static RESTORE_FAILPOINT: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
-
-fn restore_to(paths: &AppPaths, archive: &BackupArchive) -> Result<(), String> {
-    validate_archive(archive)?;
-    let restore_paths = archive
-        .entries
-        .iter()
-        .map(|entry| restore_path(category_root(paths, entry.category), &entry.name))
-        .collect::<Result<Vec<_>, _>>()?;
-    for (entry, path) in archive.entries.iter().zip(restore_paths) {
-        #[cfg(test)]
-        if RESTORE_FAILPOINT.lock().expect("恢复故障点锁").as_deref() == Some(entry.name.as_str())
-        {
-            return Err("恢复故障注入".to_owned());
-        }
-        crate::atomic_file::write(&path, &entry.bytes)
-            .map_err(|error| format!("恢复 {} 失败: {error}", entry.name))?;
-    }
-    Ok(())
 }
 
 /// 归档名 → 目标路径:空名/绝对路径/非 Normal 分量(含 `..`)一律拒。
@@ -728,7 +699,7 @@ mod encrypted_backup_tests {
         let last = packet.len() - 1;
         packet[last] ^= 0xff;
         assert!(
-            restore_at(&paths, &packet, PASSPHRASE).is_err(),
+            open(&packet, PASSPHRASE).is_err(),
             "篡改包必须在鉴权阶段拒绝"
         );
         assert_eq!(
@@ -739,9 +710,9 @@ mod encrypted_backup_tests {
         assert_eq!(fs::read(&theme_path).unwrap(), theme_bytes());
     }
 
-    /// 恢复不还原凭据：导出剥除敏感键，恢复后文件与凭据域均不含凭据值。
+    /// 凭据值永不入包：导出剥除敏感键，打开后的归档也不含凭据值。
     #[test]
-    fn backup_restore_does_not_restore_credentials() {
+    fn backup_export_never_carries_credentials() {
         let directory = tempfile::tempdir().unwrap();
         let paths = split_paths(directory.path());
         fs::create_dir_all(paths.config_root()).unwrap();
@@ -763,11 +734,12 @@ mod encrypted_backup_tests {
         assert!(!text.contains("\"token\"") && !text.contains("\"password\""));
 
         let packet = seal(&archive, PASSPHRASE).unwrap();
-        restore_at(&paths, &packet, PASSPHRASE).unwrap();
-        let restored = fs::read_to_string(paths.config_root().join("settings.json")).unwrap();
+        let opened = open(&packet, PASSPHRASE).unwrap();
+        assert_eq!(opened, archive, "打开只还原已剥除的归档内容");
+        let opened_text = String::from_utf8_lossy(&opened.entries[0].bytes);
         assert!(
-            !restored.contains("sk-test-secret"),
-            "恢复不得把凭据值写回任何文件"
+            !opened_text.contains("sk-test-secret"),
+            "归档任何路径都不得携带凭据值"
         );
     }
 
@@ -926,6 +898,37 @@ mod encrypted_backup_tests {
         assert!(open(&packet[..packet.len() - 1], PASSPHRASE).is_err());
         assert!(open(&packet[..MAGIC.len() + SALT_LEN + NONCE_LEN], PASSPHRASE).is_err());
         assert!(open(&[], PASSPHRASE).is_err());
+    }
+
+    #[test]
+    fn legacy_magic_only_aad_packet_is_rejected() {
+        // 旧口径只把魔数作 AAD；当前合同要求完整头部（魔数｜盐｜nonce）入 AAD，
+        // 旧包必须作为格式不符被拒绝，避免两套认证范围并存。
+        let mut salt = [0; SALT_LEN];
+        let mut nonce = [0; NONCE_LEN];
+        getrandom::fill(&mut salt).unwrap();
+        getrandom::fill(&mut nonce).unwrap();
+        let key = Zeroizing::new(derive_key(PASSPHRASE, &salt).unwrap());
+        let plaintext = serde_json::to_vec(&archive()).unwrap();
+        let ciphertext = Aes256Gcm::new((&*key).into())
+            .encrypt(
+                &Nonce::try_from(&nonce[..]).unwrap(),
+                Payload {
+                    msg: &plaintext,
+                    aad: MAGIC,
+                },
+            )
+            .unwrap();
+        let mut packet = Vec::new();
+        packet.extend_from_slice(MAGIC);
+        packet.extend_from_slice(&salt);
+        packet.extend_from_slice(&nonce);
+        packet.extend_from_slice(&ciphertext);
+        let error = open(&packet, PASSPHRASE).unwrap_err();
+        assert!(
+            error.contains("认证失败"),
+            "旧的魔数-only AAD 包必须被拒绝: {error}"
+        );
     }
 
     #[test]
@@ -1209,7 +1212,7 @@ mod encrypted_backup_tests {
     }
 
     #[test]
-    fn restore_rejects_unsanitized_settings_before_writing() {
+    fn import_validation_rejects_unsanitized_settings_before_writing() {
         let archive = BackupArchive {
             manifest: BackupManifest {
                 version: ARCHIVE_VERSION,
@@ -1222,7 +1225,7 @@ mod encrypted_backup_tests {
             }],
         };
         let directory = tempfile::tempdir().unwrap();
-        assert!(restore_to(&single_root_paths(directory.path()), &archive).is_err());
+        assert!(validate_archive(&archive).is_err());
         assert!(
             !directory.path().join("settings.json").exists(),
             "导入复验失败必须在落盘前拒绝"
@@ -1231,7 +1234,7 @@ mod encrypted_backup_tests {
     }
 
     #[test]
-    fn restore_rejects_path_traversal_duplicates_and_unknown_names() {
+    fn archive_validation_rejects_path_traversal_duplicates_and_unknown_names() {
         let directory = tempfile::tempdir().unwrap();
         let traversal = BackupArchive {
             manifest: BackupManifest {
@@ -1244,7 +1247,7 @@ mod encrypted_backup_tests {
                 bytes: b"{}".to_vec(),
             }],
         };
-        assert!(restore_to(&single_root_paths(directory.path()), &traversal).is_err());
+        assert!(validate_archive(&traversal).is_err());
         assert!(
             !directory
                 .path()
@@ -1265,11 +1268,11 @@ mod encrypted_backup_tests {
                 bytes: b"{}".to_vec(),
             }],
         };
-        assert!(restore_to(&single_root_paths(directory.path()), &unsigned_name).is_err());
+        assert!(validate_archive(&unsigned_name).is_err());
 
         let mut duplicate = archive();
         duplicate.entries.push(duplicate.entries[0].clone());
-        assert!(restore_to(&single_root_paths(directory.path()), &duplicate).is_err());
+        assert!(validate_archive(&duplicate).is_err());
         assert!(!directory.path().join("settings.json").exists());
 
         let unlisted_category = BackupArchive {
@@ -1283,74 +1286,19 @@ mod encrypted_backup_tests {
                 bytes: b"{}".to_vec(),
             }],
         };
-        assert!(restore_to(&single_root_paths(directory.path()), &unlisted_category).is_err());
+        assert!(validate_archive(&unlisted_category).is_err());
     }
 
     #[test]
-    fn restore_to_writes_every_category_and_packet_restore_round_trips() {
-        let directory = tempfile::tempdir().unwrap();
-        let original = full_archive();
-        restore_to(&single_root_paths(directory.path()), &original).expect("恢复");
-        assert!(directory.path().join("settings.json").is_file());
-        assert!(directory.path().join("session.json").is_file());
-        assert!(
-            directory
-                .path()
-                .join("themes/018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b.slterm-theme.json")
-                .is_file()
-        );
-
-        // 整包往返:open 后的归档与 restore_to 的落盘字节一致。
-        let packet = seal(&original, PASSPHRASE).unwrap();
-        let opened = open(&packet, PASSPHRASE).unwrap();
-        let second = tempfile::tempdir().unwrap();
-        restore_to(&single_root_paths(second.path()), &opened).unwrap();
-        for entry in &opened.entries {
-            assert_eq!(
-                fs::read(second.path().join(&entry.name)).unwrap(),
-                entry.bytes
-            );
-        }
-    }
-
-    #[test]
-    fn restore_scopes_every_category_across_split_roots() {
-        let directory = tempfile::tempdir().unwrap();
-        let paths = split_paths(directory.path());
-        let archive = full_archive();
-        restore_to(&paths, &archive).unwrap();
-
-        for entry in &archive.entries {
-            let (expected_root, other_root) = match entry.category {
-                BackupCategory::Settings | BackupCategory::Themes => {
-                    (paths.config_root(), paths.local_root())
-                }
-                BackupCategory::Session => (paths.local_root(), paths.config_root()),
-            };
-            assert_eq!(
-                fs::read(expected_root.join(&entry.name)).ok(),
-                Some(entry.bytes.clone()),
-                "{} 必须写入类别所属根",
-                entry.name
-            );
-            assert!(
-                !other_root.join(&entry.name).exists(),
-                "{} 不得写入另一数据根",
-                entry.name
-            );
-        }
-    }
-
-    #[test]
-    fn restore_rejects_authentication_failure_without_side_effects() {
+    fn open_rejects_authentication_failure_without_side_effects() {
         let packet = seal(&full_archive(), PASSPHRASE).unwrap();
         let directory = tempfile::tempdir().unwrap();
-        // 显式根入口证明鉴权先于任何落盘:错口令/篡改都在零 IO 下拒绝。
-        assert!(restore_at(&single_root_paths(directory.path()), &packet, "wrong horse").is_err());
+        // 鉴权失败在打开阶段即拒绝，不进入任何落盘路径。
+        assert!(open(&packet, "wrong horse").is_err());
         let mut tampered = packet;
         let last = tampered.len() - 1;
         tampered[last] ^= 0xFF;
-        assert!(restore_at(&single_root_paths(directory.path()), &tampered, PASSPHRASE).is_err());
+        assert!(open(&tampered, PASSPHRASE).is_err());
         let names: Vec<_> = fs::read_dir(directory.path())
             .unwrap()
             .map(|entry| entry.unwrap().file_name())

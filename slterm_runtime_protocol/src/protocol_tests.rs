@@ -2,7 +2,7 @@
 
 use crate::protocol::{
     AgentCloseRequest, AgentForkRequest, AgentGetRequest, AgentInputRequest, AgentReadRequest,
-    AgentResource, AgentResumeRequest, AgentStartRequest, AgentState, AgentWaitRequest,
+    AgentResource, AgentResumeRequest, AgentStartRequest, AgentWaitRequest,
     AppFocusParams, ClientRequest, ControlMessage, ControlMethod, ControlScope, Credential,
     DiscoverOutput, DiscoveryRecord, DomainErrorCode, EmptyParams, GitDeleteExpected,
     GitDeleteParams, GitDeleteRequest, GitDiffRequest, GitRollbackExpected, GitRollbackParams,
