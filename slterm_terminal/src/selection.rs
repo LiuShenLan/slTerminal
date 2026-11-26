@@ -9,7 +9,8 @@ use std::cmp::min;
 use std::mem;
 use std::ops::{Bound, Range, RangeBounds};
 
-use crate::grid::{Dimensions, GridCell, Indexed};
+use crate::event::EventListener;
+use crate::grid::{Dimensions, GridCell, Indexed, Scroll};
 use crate::index::{Boundary, Column, Line, Point, Side};
 use crate::term::Term;
 use crate::term::cell::{Cell, Flags, LineLength};
@@ -101,11 +102,25 @@ pub enum SelectionType {
     Lines,
 }
 
+/// 键盘扩选方向；语义按网格行列与可视页计算，不依赖前台布局。
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum SelectionMotion {
+    Left,
+    Right,
+    Up,
+    Down,
+    PageUp,
+    PageDown,
+    Home,
+    End,
+}
+
 /// 前端发往所属 worker 的选区命令；不共享或锁定实时网格。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SelectionCommand {
     Set(Option<Selection>),
     Update { point: Point, side: Side },
+    Extend(SelectionMotion),
     SelectAll,
     Clear,
 }
@@ -450,6 +465,90 @@ impl<T> Term<T> {
     }
 }
 
+impl<T: EventListener> Term<T> {
+    /// 键盘扩选：无有效选区时从光标起选，否则移动端点。
+    ///
+    /// 端点按网格行列移动并在真实边界内夹紧；移动后把端点滚入视口，
+    /// 备用屏没有回滚，自然被限制在当前画面。
+    pub fn extend_selection(&mut self, motion: SelectionMotion) {
+        let (top_line, bottom_line, last_column, screen_lines, cursor) = {
+            let grid = self.grid();
+            (
+                grid.topmost_line(),
+                grid.bottommost_line(),
+                grid.last_column(),
+                grid.screen_lines() as i32,
+                grid.cursor.point,
+            )
+        };
+
+        let (anchor_point, mut point) = match self.selection.as_ref() {
+            Some(selection) if !selection.is_empty() => {
+                (selection.region.start.point, selection.region.end.point)
+            }
+            _ => (cursor, cursor),
+        };
+
+        match motion {
+            SelectionMotion::Left => {
+                if point.column.0 > 0 {
+                    point.column -= 1;
+                } else if point.line > top_line {
+                    point.line -= 1;
+                    point.column = last_column;
+                }
+            }
+            SelectionMotion::Right => {
+                if point.column < last_column {
+                    point.column += 1;
+                } else if point.line < bottom_line {
+                    point.line += 1;
+                    point.column = Column(0);
+                }
+            }
+            SelectionMotion::Up => point.line -= 1,
+            SelectionMotion::Down => point.line += 1,
+            SelectionMotion::PageUp => point.line -= screen_lines,
+            SelectionMotion::PageDown => point.line += screen_lines,
+            SelectionMotion::Home => point.column = Column(0),
+            SelectionMotion::End => point.column = last_column,
+        }
+        point.line = Line(point.line.0.clamp(top_line.0, bottom_line.0));
+        point.column = min(point.column, last_column);
+
+        if point == anchor_point {
+            self.selection = None;
+            return;
+        }
+
+        // 先滚动再落选区：scroll_display 在 vi 模式下会按 vi 光标重算旧选区，
+        // 顺序反过来会覆盖本次键盘扩选。
+        let display_offset = self.grid().display_offset() as i32;
+        let visible_top = -display_offset;
+        let visible_bottom = visible_top + screen_lines - 1;
+        if point.line.0 < visible_top {
+            self.scroll_display(Scroll::Delta(visible_top - point.line.0));
+        } else if point.line.0 > visible_bottom {
+            self.scroll_display(Scroll::Delta(-(point.line.0 - visible_bottom)));
+        }
+
+        // 锚点始终留在 region.start；端点跨越锚点时翻转两侧的排除语义，
+        // 保证 [下界, 上界] 两端格子都计入。
+        let (start_side, end_side) = if point >= anchor_point {
+            (Side::Left, Side::Right)
+        } else {
+            (Side::Right, Side::Left)
+        };
+        self.selection = Some(Selection {
+            ty: SelectionType::Simple,
+            region: Range {
+                start: Anchor::new(anchor_point, start_side),
+                end: Anchor::new(point, end_side),
+            },
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -520,6 +619,76 @@ mod tests {
         selection.update(Point::new(Line(0), Column(1)), Side::Left);
 
         assert_eq!(selection.to_range(&term(1, 2)), None);
+    }
+
+    /// 键盘扩选从光标起选，端点按格子移动并在回到锚点时清空。
+    #[test]
+    fn keyboard_extension_moves_endpoint_with_inclusive_cells() {
+        use crate::event::VoidListener;
+        use crate::event_loop::StreamProcessor;
+
+        let mut term = Term::new(Config::default(), &TermSize::new(4, 2), VoidListener);
+        let mut stream = StreamProcessor::default();
+        stream.feed(&mut term, &VoidListener, b"abc");
+
+        term.extend_selection(SelectionMotion::Left);
+        assert_eq!(term.selection_to_string().as_deref(), Some("c"));
+        term.extend_selection(SelectionMotion::Left);
+        assert_eq!(term.selection_to_string().as_deref(), Some("bc"));
+        term.extend_selection(SelectionMotion::Right);
+        assert_eq!(term.selection_to_string().as_deref(), Some("c"));
+        term.extend_selection(SelectionMotion::Right);
+        assert!(term.selection.is_none(), "回到锚点必须收缩为空选区");
+
+        // 末列右移换到下一行行首；End 只夹到当前行末列，不越出网格。
+        term.extend_selection(SelectionMotion::Right);
+        assert_eq!(
+            term.selection.as_ref().unwrap().region.end.point,
+            Point::new(Line(1), Column(0))
+        );
+        term.extend_selection(SelectionMotion::End);
+        assert_eq!(
+            term.selection.as_ref().unwrap().region.end.point,
+            Point::new(Line(1), Column(3))
+        );
+    }
+
+    /// 备用屏没有回滚：反复扩选夹在当前画面，不产生滚动偏移。
+    #[test]
+    fn keyboard_extension_in_alt_screen_stays_in_current_screen() {
+        use crate::event::VoidListener;
+        use crate::event_loop::StreamProcessor;
+
+        let mut term = Term::new(Config::default(), &TermSize::new(20, 3), VoidListener);
+        let mut stream = StreamProcessor::default();
+        stream.feed(&mut term, &VoidListener, b"\x1b[?1049htop\r\nmid\r\nbot");
+
+        for _ in 0..4 {
+            term.extend_selection(SelectionMotion::Up);
+        }
+        term.extend_selection(SelectionMotion::Home);
+        term.extend_selection(SelectionMotion::PageUp);
+        assert_eq!(term.grid().display_offset(), 0, "备用屏不得进入回滚");
+        assert_eq!(term.selection_to_string().as_deref(), Some("top\nmid\nbot"));
+    }
+
+    /// 翻页扩选把端点滚入视口，且不改变 PTY 状态。
+    #[test]
+    fn page_extension_scrolls_endpoint_into_view() {
+        use crate::event::VoidListener;
+        use crate::event_loop::StreamProcessor;
+
+        let mut term = Term::new(Config::default(), &TermSize::new(20, 3), VoidListener);
+        let mut stream = StreamProcessor::default();
+        for i in 0..10 {
+            stream.feed(&mut term, &VoidListener, format!("line {i}\r\n").as_bytes());
+        }
+        assert_eq!(term.grid().display_offset(), 0);
+
+        term.extend_selection(SelectionMotion::PageUp);
+        assert!(term.grid().display_offset() > 0, "端点必须滚入视口");
+        let text = term.selection_to_string().expect("翻页扩选必须形成选区");
+        assert!(text.contains("line 7"), "{text:?}");
     }
 
     /// Test adjacent cell selection from right to left.

@@ -257,6 +257,89 @@ fn ctrl_shift_a_selects_all_terminal_text_without_pty_write(cx: &mut TestAppCont
     assert!(!text.ends_with('\n'), "全选不得凭空追加尾随换行");
 }
 
+/// Shift+方向键从光标扩选：只发选择命令，不把修饰键序列写进 PTY。
+#[gpui::test]
+fn shift_arrow_extends_selection_without_pty_write(cx: &mut TestAppContext) {
+    let (terminal, mut window, rx, _registry) = open(cx);
+    terminal.update(&mut window, |view, _| feed(view, b"abc"));
+    let modifiers = Modifiers {
+        shift: true,
+        ..Default::default()
+    };
+
+    let propagate = press(&mut window, key("left", modifiers));
+    assert!(!propagate, "扩选键必须先于编码器消费");
+    let mut commands = Vec::new();
+    while let Ok(command) = rx.try_recv() {
+        commands.push(command);
+    }
+    assert!(
+        matches!(
+            commands.as_slice(),
+            [Msg::Select(
+                slterm_terminal::selection::SelectionCommand::Extend(
+                    slterm_terminal::selection::SelectionMotion::Left
+                )
+            )]
+        ),
+        "扩选路径只允许一条选择命令: {commands:?}"
+    );
+    terminal.update(&mut window, |view, _| {
+        for command in &commands {
+            view.apply_test_worker_command(command);
+        }
+    });
+    assert_eq!(
+        terminal.read_with(&window, |view, _| view.selected_text().map(str::to_owned)),
+        Some("c".to_owned())
+    );
+}
+
+/// Shift+PageUp 扩选并滚动到较早内容，仍不写 PTY。
+#[gpui::test]
+fn shift_pageup_extends_selection_into_scrollback(cx: &mut TestAppContext) {
+    let (terminal, mut window, rx, _registry) = open(cx);
+    terminal.update(&mut window, |view, _| {
+        let mut buf = Vec::new();
+        for i in 0..40 {
+            buf.extend_from_slice(format!("line {i:02}\r\n").as_bytes());
+        }
+        feed(view, &buf);
+    });
+    let modifiers = Modifiers {
+        shift: true,
+        ..Default::default()
+    };
+
+    let propagate = press(&mut window, key("pageup", modifiers));
+    assert!(!propagate);
+    let mut commands = Vec::new();
+    while let Ok(command) = rx.try_recv() {
+        commands.push(command);
+    }
+    assert!(
+        matches!(
+            commands.as_slice(),
+            [Msg::Select(
+                slterm_terminal::selection::SelectionCommand::Extend(
+                    slterm_terminal::selection::SelectionMotion::PageUp
+                )
+            )]
+        ),
+        "翻页扩选只允许一条选择命令: {commands:?}"
+    );
+    terminal.update(&mut window, |view, _| {
+        for command in &commands {
+            view.apply_test_worker_command(command);
+        }
+    });
+    let text = terminal
+        .read_with(&window, |view, _| view.selected_text().map(str::to_owned))
+        .expect("翻页扩选必须形成选区");
+    assert!(text.contains("line 16"), "{text:?}");
+    assert!(!text.contains('\u{1b}'), "不得把编码序列当作正文: {text:?}");
+}
+
 /// 默认语义(待沉淀,按默认实现):无选区的 ctrl+shift+c
 /// 静默吞——剪贴板不动、PTY 零字节、不冒泡、无反馈。
 #[gpui::test]
@@ -487,21 +570,27 @@ line two
             },
         ),
     );
-    let mut saw_scroll = false;
+    let mut saw_extend = false;
     while let Ok(msg) = rx.try_recv() {
-        if matches!(msg, Msg::Scroll(_)) {
-            saw_scroll = true;
+        if matches!(
+            msg,
+            Msg::Select(slterm_terminal::selection::SelectionCommand::Extend(
+                slterm_terminal::selection::SelectionMotion::PageUp
+            ))
+        ) {
+            saw_extend = true;
         }
     }
-    assert!(saw_scroll, "退出后回滚必须可用");
+    assert!(saw_extend, "退出后键盘扩选与回滚必须可用");
 
     let _ = press(&mut window, key("a", Modifiers::default()));
     assert!(pty_bytes(&rx).is_empty(), "退出后不得向 PTY 写输入");
 }
 
-/// shift+pageup 仅主屏:本地翻页,零字节下发;备用屏则透传编码序列。
+/// Shift+PageUp/PageDown 扩选：主屏可进入回滚，备用屏被限制在当前画面，
+/// 两个路径都不写 PTY。
 #[gpui::test]
-fn shift_pageup_scrolls_main_screen_but_reaches_alt_screen_encoded(cx: &mut TestAppContext) {
+fn shift_paging_extends_selection_and_alt_screen_stays_local(cx: &mut TestAppContext) {
     let (terminal, mut window, rx, _registry) = open(cx);
     // 40 行输出灌出回滚(屏幕 24 行)。
     terminal.update(&mut window, |view, _| {
@@ -519,15 +608,27 @@ fn shift_pageup_scrolls_main_screen_but_reaches_alt_screen_encoded(cx: &mut Test
     assert!(!propagate);
     assert!(matches!(
         rx.try_recv(),
-        Ok(Msg::Scroll(slterm_terminal::grid::Scroll::PageUp))
+        Ok(Msg::Select(
+            slterm_terminal::selection::SelectionCommand::Extend(
+                slterm_terminal::selection::SelectionMotion::PageUp
+            )
+        ))
     ));
-    assert!(pty_bytes(&rx).is_empty(), "翻页不打扰子进程");
+    assert!(pty_bytes(&rx).is_empty(), "扩选不打扰子进程");
 
-    // 备用屏(less/vim 一类):不拦截,修饰翻页序列透传给应用。
+    // 备用屏(less/vim 一类):扩选仍归本地，但只能落在当前画面。
     terminal.update(&mut window, |view, _| feed(view, b"\x1b[?1049h"));
     let propagate = press(&mut window, key("pagedown", modifiers));
-    assert!(!propagate, "编码键同样消费,只是改走 PTY");
-    assert_eq!(pty_bytes(&rx), b"\x1b[6;2~".to_vec());
+    assert!(!propagate, "扩选键必须由本地消费");
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(Msg::Select(
+            slterm_terminal::selection::SelectionCommand::Extend(
+                slterm_terminal::selection::SelectionMotion::PageDown
+            )
+        ))
+    ));
+    assert!(pty_bytes(&rx).is_empty(), "备用屏扩选同样不得写 PTY");
 }
 
 /// alt+f4 是原生窗口快捷键:终端不编码、不拦截,交给 DefWindowProc。

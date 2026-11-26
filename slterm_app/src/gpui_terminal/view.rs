@@ -1026,9 +1026,7 @@ impl TerminalView {
                 }
                 // 应用级快捷键(新建/关闭 Tab、分屏、缩放等):不编码、不拦截,
                 // 让按键冒泡到 workspace 的 action 绑定。少写一个键位,症状就是
-                // 「快捷键没反应」外加一串 CSI 序列被打进 PTY——下面的回滚翻页
-                // 分支只吃**不带 ctrl** 的 shift+pageup,所以 ctrl+shift 这一组
-                // 必须在这里放行。
+                // 「快捷键没反应」外加一串 CSI 序列被打进 PTY。
                 "t" | "w" | "b" | "p" | "d" | "s" | "g" | "o" | "enter" | "pageup" | "pagedown" => {
                     return;
                 }
@@ -1041,20 +1039,26 @@ impl TerminalView {
         }
         let mode = self.term_mode();
 
-        // 回滚快捷键(仅主屏):Shift+PageUp/PageDown 翻页、Shift+Home/End
-        // 到顶/到底;备用屏下不拦截,交给编码器把带修饰的键序发给应用
-        // (less 自己处理 Shift+PageUp)。
-        if mods.shift && !mods.control && !mods.alt && !mode.contains(TermMode::ALT_SCREEN) {
-            let scroll = match ks.key.as_str() {
-                "pageup" => Some(Scroll::PageUp),
-                "pagedown" => Some(Scroll::PageDown),
-                "home" => Some(Scroll::Top),
-                "end" => Some(Scroll::Bottom),
+        // Shift 扩选：方向键、翻页与行首尾都只移动 worker 选区端点，
+        // 不写 PTY；备用屏无回滚，端点会被夹在当前画面内。
+        if mods.shift && !mods.control && !mods.alt {
+            let motion = match ks.key.as_str() {
+                "left" => Some(slterm_terminal::selection::SelectionMotion::Left),
+                "right" => Some(slterm_terminal::selection::SelectionMotion::Right),
+                "up" => Some(slterm_terminal::selection::SelectionMotion::Up),
+                "down" => Some(slterm_terminal::selection::SelectionMotion::Down),
+                "pageup" => Some(slterm_terminal::selection::SelectionMotion::PageUp),
+                "pagedown" => Some(slterm_terminal::selection::SelectionMotion::PageDown),
+                "home" => Some(slterm_terminal::selection::SelectionMotion::Home),
+                "end" => Some(slterm_terminal::selection::SelectionMotion::End),
                 _ => None,
             };
-            if let Some(scroll) = scroll {
-                if let Err(error) = self.send_worker_command(Msg::Scroll(scroll)) {
-                    log::warn!("终端回滚命令发送失败: {error}");
+            if let Some(motion) = motion {
+                self.selection_cleared = false;
+                if let Err(error) = self.send_worker_command(Msg::Select(
+                    slterm_terminal::selection::SelectionCommand::Extend(motion),
+                )) {
+                    log::warn!("终端扩选命令发送失败: {error}");
                 }
                 cx.notify();
                 cx.stop_propagation();
