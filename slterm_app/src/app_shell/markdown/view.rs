@@ -58,6 +58,17 @@ pub(crate) enum MarkdownViewEvent {
 
 impl EventEmitter<MarkdownViewEvent> for MarkdownView {}
 
+/// 渲染态键盘滚动的步进粒度。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum KeyboardScroll {
+    LineUp,
+    LineDown,
+    PageUp,
+    PageDown,
+    Top,
+    Bottom,
+}
+
 /// 两态只持同一份 Session 快照；渲染态没有源码编辑入口。
 pub(crate) struct MarkdownView {
     document_id: DocumentId,
@@ -78,6 +89,7 @@ pub(crate) struct MarkdownView {
     formula_failures: HashSet<[u8; 32]>,
     formula_tasks: HashMap<[u8; 32], (u64, Task<()>)>,
     next_resource_id: u64,
+    focused_link: Option<MarkdownLink>,
     mode: MarkdownMode,
     allow_large_document: bool,
     outline: bool,
@@ -164,6 +176,7 @@ impl MarkdownView {
             formula_failures: HashSet::new(),
             formula_tasks: HashMap::new(),
             next_resource_id: 0,
+            focused_link: None,
             mode: restored.mode(),
             allow_large_document: false,
             outline: restored.outline_visible(),
@@ -336,6 +349,7 @@ impl MarkdownView {
         self.image_failures.clear();
         self.formula_failures.clear();
         self.selection = None;
+        self.focused_link = None;
         if let Some(search) = &mut self.search {
             search.matches.clear();
             search.active = None;
@@ -411,6 +425,84 @@ impl MarkdownView {
             item_ix: block.index(),
             offset_in_item: px(0.0),
         });
+    }
+
+    /// 键盘滚动只在渲染态生效；源码态交给内嵌编辑器。
+    fn scroll_keyboard(&mut self, command: KeyboardScroll, cx: &mut Context<'_, Self>) {
+        if self.effective_mode() != MarkdownRenderDecision::Progressive {
+            cx.propagate();
+            return;
+        }
+        let viewport = f32::from(self.scroll.viewport_bounds().size.height);
+        let line = 56.0_f32;
+        let page = (viewport - line).max(line);
+        match command {
+            KeyboardScroll::LineUp => self.scroll.scroll_by(px(-line)),
+            KeyboardScroll::LineDown => self.scroll.scroll_by(px(line)),
+            KeyboardScroll::PageUp => self.scroll.scroll_by(px(-page)),
+            KeyboardScroll::PageDown => self.scroll.scroll_by(px(page)),
+            KeyboardScroll::Top => self.scroll.scroll_to(gpui::ListOffset {
+                item_ix: 0,
+                offset_in_item: px(0.0),
+            }),
+            KeyboardScroll::Bottom => self.scroll.scroll_to_end(),
+        }
+        self.persist_state();
+        cx.notify();
+    }
+
+    /// 在渲染态按文档顺序移动链接焦点，并把目标块带入视口。
+    fn move_link_focus(&mut self, forward: bool, cx: &mut Context<'_, Self>) {
+        if self.effective_mode() != MarkdownRenderDecision::Progressive {
+            cx.propagate();
+            return;
+        }
+        let next = self.document.as_ref().and_then(|document| {
+            let links = document.links();
+            if links.is_empty() {
+                return None;
+            }
+            let current = self
+                .focused_link
+                .as_ref()
+                .and_then(|focused| links.iter().position(|link| link == focused));
+            let index = match current {
+                Some(index) if forward => (index + 1) % links.len(),
+                Some(index) => (index + links.len() - 1) % links.len(),
+                None if forward => 0,
+                None => links.len() - 1,
+            };
+            Some(links[index].clone())
+        });
+        let Some(link) = next else {
+            self.focused_link = None;
+            cx.notify();
+            return;
+        };
+        self.focused_link = Some(link.clone());
+        self.scroll_to_block(link.block());
+        self.persist_state();
+        cx.notify();
+    }
+
+    fn open_focused_link(&mut self, cx: &mut Context<'_, Self>) {
+        if self.effective_mode() != MarkdownRenderDecision::Progressive {
+            cx.propagate();
+            return;
+        }
+        let Some(link) = self.focused_link.clone() else {
+            cx.propagate();
+            return;
+        };
+        cx.emit(MarkdownViewEvent::OpenLink(link));
+    }
+
+    fn clear_link_focus(&mut self, cx: &mut Context<'_, Self>) {
+        if self.focused_link.take().is_some() {
+            cx.notify();
+        } else {
+            cx.propagate();
+        }
     }
 
     pub(crate) fn scroll_to_anchor(

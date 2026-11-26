@@ -22,7 +22,17 @@ gpui::actions!(
         MarkdownZoomIn,
         MarkdownZoomOut,
         MarkdownZoomReset,
-        RenderLargeMarkdown
+        RenderLargeMarkdown,
+        ScrollMarkdownUp,
+        ScrollMarkdownDown,
+        ScrollMarkdownPageUp,
+        ScrollMarkdownPageDown,
+        ScrollMarkdownTop,
+        ScrollMarkdownBottom,
+        MarkdownNextLink,
+        MarkdownPreviousLink,
+        MarkdownOpenLink,
+        MarkdownClearLinkFocus
     ]
 );
 
@@ -30,7 +40,18 @@ pub(crate) fn init(cx: &mut gpui::App) {
     use gpui::KeyBinding;
     cx.bind_keys([
         KeyBinding::new("ctrl-/", ToggleMarkdownMode, Some("MarkdownView")),
+        KeyBinding::new("ctrl-shift-o", ToggleMarkdownOutline, Some("MarkdownView")),
         KeyBinding::new("ctrl-f", FindMarkdown, Some("MarkdownView")),
+        KeyBinding::new("up", ScrollMarkdownUp, Some("MarkdownView")),
+        KeyBinding::new("down", ScrollMarkdownDown, Some("MarkdownView")),
+        KeyBinding::new("pageup", ScrollMarkdownPageUp, Some("MarkdownView")),
+        KeyBinding::new("pagedown", ScrollMarkdownPageDown, Some("MarkdownView")),
+        KeyBinding::new("home", ScrollMarkdownTop, Some("MarkdownView")),
+        KeyBinding::new("end", ScrollMarkdownBottom, Some("MarkdownView")),
+        KeyBinding::new("alt-down", MarkdownNextLink, Some("MarkdownView")),
+        KeyBinding::new("alt-up", MarkdownPreviousLink, Some("MarkdownView")),
+        KeyBinding::new("alt-enter", MarkdownOpenLink, Some("MarkdownView")),
+        KeyBinding::new("escape", MarkdownClearLinkFocus, Some("MarkdownView")),
         KeyBinding::new("enter", FindNextMarkdown, Some("MarkdownSearch")),
         KeyBinding::new("shift-enter", FindPreviousMarkdown, Some("MarkdownSearch")),
         KeyBinding::new("escape", CloseMarkdownSearch, Some("MarkdownSearch")),

@@ -20,12 +20,14 @@ use slterm_document::{
 use super::super::formula::logical_formula_size;
 use super::super::progressive::{MarkdownBlockOutcome, MarkdownRenderDecision};
 use super::super::{
-    CloseMarkdownSearch, FindMarkdown, FindNextMarkdown, FindPreviousMarkdown, MarkdownZoomIn,
-    MarkdownZoomOut, MarkdownZoomReset, RenderLargeMarkdown, ToggleMarkdownMode,
-    ToggleMarkdownOutline,
+    CloseMarkdownSearch, FindMarkdown, FindNextMarkdown, FindPreviousMarkdown,
+    MarkdownClearLinkFocus, MarkdownNextLink, MarkdownOpenLink, MarkdownPreviousLink,
+    MarkdownZoomIn, MarkdownZoomOut, MarkdownZoomReset, RenderLargeMarkdown, ScrollMarkdownBottom,
+    ScrollMarkdownDown, ScrollMarkdownPageDown, ScrollMarkdownPageUp, ScrollMarkdownTop,
+    ScrollMarkdownUp, ToggleMarkdownMode, ToggleMarkdownOutline,
 };
 use super::selection::{LayoutSegment, highlight_selected_runs};
-use super::{MarkdownView, MarkdownViewEvent};
+use super::{KeyboardScroll, MarkdownView, MarkdownViewEvent};
 use crate::app_shell::config::Settings;
 use crate::app_shell::text_view::MarkdownMode;
 use crate::i18n::Message;
@@ -70,6 +72,36 @@ pub(super) fn render_markdown(
         }))
         .on_action(cx.listener(|view, _: &ToggleMarkdownOutline, _, cx| {
             view.toggle_outline(cx);
+        }))
+        .on_action(cx.listener(|view, _: &ScrollMarkdownUp, _, cx| {
+            view.scroll_keyboard(KeyboardScroll::LineUp, cx);
+        }))
+        .on_action(cx.listener(|view, _: &ScrollMarkdownDown, _, cx| {
+            view.scroll_keyboard(KeyboardScroll::LineDown, cx);
+        }))
+        .on_action(cx.listener(|view, _: &ScrollMarkdownPageUp, _, cx| {
+            view.scroll_keyboard(KeyboardScroll::PageUp, cx);
+        }))
+        .on_action(cx.listener(|view, _: &ScrollMarkdownPageDown, _, cx| {
+            view.scroll_keyboard(KeyboardScroll::PageDown, cx);
+        }))
+        .on_action(cx.listener(|view, _: &ScrollMarkdownTop, _, cx| {
+            view.scroll_keyboard(KeyboardScroll::Top, cx);
+        }))
+        .on_action(cx.listener(|view, _: &ScrollMarkdownBottom, _, cx| {
+            view.scroll_keyboard(KeyboardScroll::Bottom, cx);
+        }))
+        .on_action(cx.listener(|view, _: &MarkdownNextLink, _, cx| {
+            view.move_link_focus(true, cx);
+        }))
+        .on_action(cx.listener(|view, _: &MarkdownPreviousLink, _, cx| {
+            view.move_link_focus(false, cx);
+        }))
+        .on_action(cx.listener(|view, _: &MarkdownOpenLink, _, cx| {
+            view.open_focused_link(cx);
+        }))
+        .on_action(cx.listener(|view, _: &MarkdownClearLinkFocus, _, cx| {
+            view.clear_link_focus(cx);
         }))
         .on_action(cx.listener(|view, _: &FindMarkdown, window, cx| {
             view.open_search(window, cx);
@@ -211,7 +243,11 @@ fn render_toolbar(
         .child(
             Button::new("markdown-toggle-outline")
                 .icon(IconName::PanelRight)
-                .tooltip(language.text(Message::EditorOutline))
+                .tooltip_with_action(
+                    language.text(Message::EditorOutline),
+                    &ToggleMarkdownOutline,
+                    Some("MarkdownView"),
+                )
                 .ghost()
                 .on_click(cx.listener(|view, _, _, cx| view.toggle_outline(cx))),
         )
@@ -616,6 +652,10 @@ fn rich_text(
         block.visible_range().start
     };
     let math_color = cx.global::<Settings>().editor_theme.foreground;
+    let focused_link = owner
+        .update(cx, |view, _| view.focused_link.clone())
+        .ok()
+        .flatten();
     let scale_factor = window.scale_factor();
     for inline in inlines {
         if inline.kind() == MarkdownInlineKind::Image {
@@ -686,6 +726,9 @@ fn rich_text(
                 .iter()
                 .find(|link| link.block() == block.id() && link.url() == url)
             {
+                if focused_link.as_ref() == Some(link) {
+                    run.background_color = Some(cx.theme().selection);
+                }
                 link_ranges.push(start..text.len());
                 links.push(link.clone());
             }

@@ -10,7 +10,7 @@ use slterm_path::{CanonicalPath, ResolvedPath};
 use slterm_workspace::{ProjectId, ViewKey};
 use uuid::Uuid;
 
-use super::{MarkdownRenderServices, MarkdownView};
+use super::{MarkdownRenderServices, MarkdownView, MarkdownViewEvent};
 use crate::app_shell::text_view::{
     DocumentEditRequest, DocumentEditResponse, DocumentTextSnapshot, DocumentViewStateBinding,
     EditorViewStateStore,
@@ -106,6 +106,25 @@ fn markdown_source_render_share_document(cx: &mut TestAppContext) {
         assert_eq!(view.rendered_text_for_test(), "New\nOld");
         assert_eq!(view.rendered_revision_for_test(), 1);
     });
+}
+
+/// 等待后台解析完成并经持续绘制把文档投影交给视图。
+fn draw_until_document_ready(
+    view: &gpui::Entity<MarkdownView>,
+    visual: &mut gpui::VisualTestContext,
+) {
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    for _ in 0..20 {
+        visual.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+        visual.run_until_parked();
+        if view.read_with(visual, |view, _| view.document.is_some()) {
+            return;
+        }
+    }
+    panic!("文档投影必须就绪");
 }
 
 fn resource_view(cx: &mut TestAppContext) -> (gpui::Entity<MarkdownView>, gpui::VisualTestContext) {
@@ -470,4 +489,101 @@ fn markdown_outline_is_hierarchical_overlay_without_shrinking_content(cx: &mut T
         "三级标题必须比二级标题缩进更深"
     );
     assert_eq!(sibling.origin.x, child.origin.x, "同级标题必须保持同一缩进");
+}
+
+/// 渲染态必须能用键盘切换大纲、滚动和激活链接。
+#[gpui::test]
+fn markdown_render_mode_is_keyboard_operable(cx: &mut TestAppContext) {
+    let source = format!(
+        "# Top
+
+[first](https://example.com/a)
+
+## Child
+
+[second](https://example.com/b)
+
+{}",
+        (0..80)
+            .map(|index| format!(
+                "paragraph {index}
+
+"
+            ))
+            .collect::<String>()
+    );
+    let (view, mut visual) = view_for_source(cx, &source);
+    draw_until_document_ready(&view, &mut visual);
+    visual.update(|window, cx| {
+        view.read(cx).focus_handle(cx).focus(window, cx);
+    });
+
+    visual.update(|window, cx| {
+        window.draw(cx).clear(cx);
+    });
+    assert!(visual.debug_bounds("markdown-outline").is_some());
+    visual.simulate_keystrokes("ctrl-shift-o");
+    visual.update(|window, cx| {
+        window.draw(cx).clear(cx);
+    });
+    assert!(
+        visual.debug_bounds("markdown-outline").is_none(),
+        "Ctrl+Shift+O 必须切换大纲"
+    );
+    visual.simulate_keystrokes("ctrl-shift-o");
+    visual.update(|window, cx| {
+        window.draw(cx).clear(cx);
+    });
+    assert!(visual.debug_bounds("markdown-outline").is_some());
+
+    let start = view.read_with(&visual, |view, _| view.reading_top_for_test());
+    visual.simulate_keystrokes("down");
+    let after_line = view.read_with(&visual, |view, _| view.reading_top_for_test());
+    assert!(after_line > start, "方向键必须滚动渲染正文");
+    visual.simulate_keystrokes("pagedown");
+    let after_page = view.read_with(&visual, |view, _| view.reading_top_for_test());
+    assert!(after_page > after_line, "PageDown 必须按页滚动");
+    visual.simulate_keystrokes("end");
+    let after_end = view.read_with(&visual, |view, _| view.reading_top_for_test());
+    assert!(after_end > after_page, "End 必须滚动到底部");
+    visual.simulate_keystrokes("home");
+    assert_eq!(
+        view.read_with(&visual, |view, _| view.reading_top_for_test()),
+        (0, 0),
+        "Home 必须回到顶部"
+    );
+
+    let opened = Rc::new(RefCell::new(Vec::new()));
+    let sink = opened.clone();
+    let _subscription = cx.update(|cx| {
+        cx.subscribe(&view, move |_, event: &MarkdownViewEvent, _| {
+            if let MarkdownViewEvent::OpenLink(link) = event {
+                sink.borrow_mut().push(link.url().to_owned());
+            }
+        })
+    });
+    visual.simulate_keystrokes("alt-down");
+    visual.simulate_keystrokes("alt-enter");
+    assert_eq!(
+        opened.borrow().as_slice(),
+        ["https://example.com/a".to_owned()],
+        "Alt+↓/Alt+Enter 必须聚焦并激活首个链接"
+    );
+    visual.simulate_keystrokes("alt-down");
+    visual.simulate_keystrokes("alt-enter");
+    assert_eq!(
+        opened.borrow().as_slice(),
+        [
+            "https://example.com/a".to_owned(),
+            "https://example.com/b".to_owned()
+        ],
+        "再次 Alt+↓ 必须前进到下一个链接"
+    );
+    visual.simulate_keystrokes("alt-up");
+    visual.simulate_keystrokes("alt-enter");
+    assert_eq!(
+        opened.borrow().last().map(String::as_str),
+        Some("https://example.com/a"),
+        "Alt+↑ 必须回到上一个链接"
+    );
 }
