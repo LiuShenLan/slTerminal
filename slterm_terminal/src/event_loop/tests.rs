@@ -28,6 +28,27 @@ fn command_channel_is_bounded_and_preserves_fifo() {
     }
 }
 
+/// 空输入不是命令：发送端必须拒绝入队，避免空写卡住写队列。
+#[test]
+fn empty_input_never_enters_the_command_channel() {
+    let (sender, receiver) = EventLoopSender::standalone().expect("独立命令通道必须可创建");
+    sender
+        .try_send(Msg::Input(Cow::Borrowed(b"")))
+        .expect("空输入无副作用地接受");
+    assert!(receiver.try_recv().is_err(), "空输入不得占用命令队列");
+}
+
+/// 防御纵深：即使空项已进入写队列（旧路径或测试注入），状态机也必须跳过它继续前进。
+#[test]
+fn write_state_skips_empty_entries() {
+    let mut state = State::default();
+    state.write_list.push_back(Cow::Borrowed(b""));
+    state.write_list.push_back(Cow::Borrowed(b"ok"));
+    state.ensure_next();
+    let current = state.take_current().expect("非空项必须成为当前写目标");
+    assert_eq!(current.remaining_bytes(), b"ok");
+}
+
 #[test]
 fn notifier_reports_input_and_resize_backpressure() {
     let (sender, _receiver) = EventLoopSender::standalone().expect("独立命令通道必须可创建");

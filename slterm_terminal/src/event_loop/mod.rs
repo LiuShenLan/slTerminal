@@ -745,7 +745,12 @@ where
         let mut resize: Option<PendingResize> = None;
         while let Some(msg) = self.rx.recv() {
             match msg {
-                Msg::Input(input) => state.write_list.push_back(input),
+                Msg::Input(input) => {
+                    // 防御纵深：旧路径或测试注入的空项也不得进入写队列。
+                    if !input.is_empty() {
+                        state.write_list.push_back(input);
+                    }
+                }
                 Msg::Resize(window_size) => {
                     resize = Some(PendingResize {
                         window_size,
@@ -1363,7 +1368,11 @@ impl EventLoopSender {
     }
 
     /// 阻塞发送只供后台关闭路径使用；前台命令必须走 `try_send`。
+    /// 空输入不是命令：无副作用地接受，不占用队列。
     pub fn send(&self, msg: Msg) -> Result<(), EventLoopSendError> {
+        if is_empty_input(&msg) {
+            return Ok(());
+        }
         self.sender
             .send(msg)
             .map_err(|_| EventLoopSendError::Disconnected)?;
@@ -1372,12 +1381,21 @@ impl EventLoopSender {
 
     /// 非阻塞发送命令；满载和断连都明确返回，不丢弃后伪报成功。
     pub fn try_send(&self, msg: Msg) -> Result<(), EventLoopSendError> {
+        if is_empty_input(&msg) {
+            return Ok(());
+        }
         self.sender.try_send(msg).map_err(|error| match error {
             TrySendError::Full(_) => EventLoopSendError::QueueFull,
             TrySendError::Disconnected(_) => EventLoopSendError::Disconnected,
         })?;
         self.poller.notify().map_err(EventLoopSendError::Io)
     }
+}
+
+/// 空输入写不出任何字节：不得进入写队列，否则 `write(&[])` 的 `Ok(0)`
+/// 会被当作背压而永久卡住后续输入。
+fn is_empty_input(msg: &Msg) -> bool {
+    matches!(msg, Msg::Input(bytes) if bytes.is_empty())
 }
 
 /// All of the mutable state needed to run the event loop.
@@ -1408,7 +1426,21 @@ impl State {
 
     #[inline]
     fn goto_next(&mut self) {
-        self.writing = self.write_list.pop_front().map(Writing::new);
+        // 空项写不出任何字节：直接跳过，避免 `write(&[])` 的 `Ok(0)`
+        // 被当作背压永久停在同一项。
+        loop {
+            match self.write_list.pop_front() {
+                Some(item) if item.is_empty() => continue,
+                Some(item) => {
+                    self.writing = Some(Writing::new(item));
+                    break;
+                }
+                None => {
+                    self.writing = None;
+                    break;
+                }
+            }
+        }
     }
 
     #[inline]
