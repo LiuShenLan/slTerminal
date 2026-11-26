@@ -212,7 +212,7 @@
 | Operation 停在 Queued/Running 后没有恢复路径 | 已修：状态机新增 `Queued → Failed`；启动维护在 Journal 与维护请求后调用 `reconcile_interrupted_operations`，当前世代 Queued 收敛 Failed、Running 收敛 OutcomeUnknown，旧世代与终态不改写；测试 `interrupted_operations_are_reconciled_only_in_the_current_epoch`、`maintenance_reconciles_interrupted_operations` |
 | 项目、布局、面板与终端写 Operation 在持久快照提交前报告成功 | 待修 |
 | Hooks 草稿在决定齐备前被丢弃 | 已修：Runtime `app.close`／`project.remove` 先收集文档决定、预检并通过关闭登记后才按 `Discard` 清理草稿；项目移除以显式 `allow_hooks_discard` 跳过交互守卫（提交 c2b50b9d）；测试 `runtime_hooks_discard_waits_for_complete_document_decisions`、`runtime_project_hooks_discard_waits_for_document_decisions`、`runtime_project_remove_honors_discard_and_save_policies` |
-| 合同冲突：app.close 回执语义与“保存失败返回失败”冲突 | 需裁决 |
+| 合同冲突：app.close 回执语义与“保存失败返回失败”冲突 | 已裁决为完成语义：成功回执只在全部保存、PTY 停止与本地持久冲刷落定后发送，保存失败回 NotReady 并保持窗口与脏正文，结果不明放弃回执映射 OutcomeUnknown；`app.close` 派发等待上限 120 秒；测试 `runtime_app_close_reports_save_failure_and_keeps_scene`、`integration_runtime_noninteractive_close` |
 | 合同冲突：非交互关闭缺少运行终端处置策略 | 已裁决为终端不进入非交互策略：线缆只保留 Document／Hooks 决定，关闭按作用域停止目标 PTY，等待／保留／取消只由交互界面提供；设计、featureSpec、随包 API、协议与应用文档同步 |
 | 控制面一次 join 失败被永久重放 | 已修：资源已回收后的重复 `shutdown` 只记录历史 join 错误并返回成功，首次错误仍在首次关闭返回；测试 `local_control_shutdown_replays_worker_join_failure` 更新为断言重复关闭成功 |
 | 随包 schema 未覆盖多数方法的请求结构，method 与 params/result 无关联校验 | 已修：schema 生成器遍历方法注册表，把每个方法的 `params`／`result` schema 汇入根 `$defs`，并生成 `$defs.MethodContracts` 方法名到合同的封闭映射；`RuntimeRequest` 用逐方法 `oneOf` 绑定方法名与参数结构；测试 `packaged_schema_covers_every_registered_method_contract`、`packaged_schema_binds_each_method_to_its_params` 逐方法核对并拒绝错误配对 |

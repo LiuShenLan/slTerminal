@@ -159,6 +159,92 @@ fn runtime_close_requires_decision(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn runtime_app_close_reports_save_failure_and_keeps_scene(cx: &mut TestAppContext) {
+    let (temp, _paths, runtime, root, mut window) = root_with_writer(cx);
+    let project_root = temp.path().join("project");
+    std::fs::create_dir(&project_root).unwrap();
+    let file = project_root.join("notes.txt");
+    std::fs::write(
+        &file, "old
+",
+    )
+    .unwrap();
+    add_project(
+        &root,
+        &mut window,
+        PROJECT_A,
+        project_root.to_str().unwrap(),
+    );
+    let canonical = CanonicalPath::new(dunce::canonicalize(&file).unwrap()).unwrap();
+    super::documents::open_document(&root, &mut window, PROJECT_A, GROUP_A, canonical);
+    let view = editor_view(&root, cx);
+    let editor = root.read_with(cx, |root, cx| {
+        root.projects[&project_id(PROJECT_A)]
+            .read(cx)
+            .panels
+            .values()
+            .find_map(|panel| panel.editor().cloned())
+            .unwrap()
+    });
+    window.update(|window, cx| {
+        editor.update(cx, |view, cx| {
+            let length = view.input_text_for_test().len();
+            gpui::EntityInputHandler::replace_text_in_range(
+                view,
+                Some(0..length),
+                "draft
+",
+                window,
+                cx,
+            );
+        });
+    });
+    // 外部修改使条件保存失败：关闭必须在保存阶段回失败并保持现场。
+    std::fs::write(
+        &file,
+        "external
+",
+    )
+    .unwrap();
+
+    let Err(error) = dispatch_runtime_mutation(
+        &root,
+        &mut window,
+        crate::local_control::RuntimeMutation::AppClose {
+            documents: Some(CloseDocumentsPolicy::Save),
+            hooks: None,
+        },
+    ) else {
+        panic!("保存失败不得回执成功");
+    };
+    assert_eq!(
+        error.data.as_ref().map(|data| data.code),
+        Some(DomainErrorCode::NotReady)
+    );
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        "external
+"
+    );
+    assert!(view_exists(&root, cx, &view), "失败关闭必须保留面板");
+    assert!(
+        root.read_with(cx, |root, _| root.documents.ids().any(|id| {
+            root.documents
+                .session(id)
+                .is_some_and(|session| session.is_dirty())
+        })),
+        "失败关闭必须保留脏正文"
+    );
+    assert!(!root.read_with(cx, |root, _| root.close_completed));
+
+    drop(root);
+    cx.update(|_| {});
+    runtime
+        .shutdown(ControlPlaneCleanup::Succeeded)
+        .expect("writer 必须正常关闭");
+}
+
+#[gpui::test]
 fn runtime_app_close_save_policy_without_writer_is_structurally_rejected(cx: &mut TestAppContext) {
     let (_temp, root, mut window, file) = dirty_document(cx);
 
@@ -532,14 +618,12 @@ fn integration_runtime_noninteractive_close(cx: &mut TestAppContext) {
         Ok(crate::app_shell::RuntimeMutationReply::Done(Ok(()))) => {}
         _ => panic!("显式策略必须被接受"),
     }
-    let deadline = Instant::now() + Duration::from_secs(15);
-    while !root.read_with(cx, |root, _| root.close_completed) {
-        assert!(Instant::now() < deadline, "应用关闭必须完成");
-        if !cx.executor().tick() {
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        window.run_until_parked();
-    }
+    // 成功回执只在保存与最终冲刷落定后发送；测试根无全局 client，
+    // 收到回执时本地关闭必须已完成。
+    assert!(
+        root.read_with(cx, |root, _| root.close_completed),
+        "成功回执必须晚于关闭落定"
+    );
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "old\n");
     runtime
         .shutdown(ControlPlaneCleanup::Succeeded)

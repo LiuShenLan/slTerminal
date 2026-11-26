@@ -45,6 +45,8 @@ pub(super) const HANDOVER_REPLY_TIMEOUT: Duration = Duration::from_secs(4);
 pub(super) const SNAPSHOT_REPLY_TIMEOUT: Duration = Duration::from_secs(2);
 /// 普通写意图在壳内执行的完成回执上限；与 handover 的 4 秒一致。
 const MUTATION_REPLY_TIMEOUT: Duration = Duration::from_secs(4);
+/// `app.close` 回执等待保存、PTY 回收与最终冲刷；成功只在本地关闭落定后发送。
+const APP_CLOSE_REPLY_TIMEOUT: Duration = Duration::from_secs(120);
 /// Agent 启动回执覆盖首个真实提示符注入；视图超时为 10 秒，另留余量。
 const AGENT_MUTATION_REPLY_TIMEOUT: Duration = Duration::from_secs(12);
 const PROTOCOL_DOMAIN: &[u8] = b"slterm-runtime-v2";
@@ -414,6 +416,7 @@ impl LocalControlService {
                 | super::mutations::RuntimeMutation::AgentFork { .. } => {
                     AGENT_MUTATION_REPLY_TIMEOUT
                 }
+                super::mutations::RuntimeMutation::AppClose { .. } => APP_CLOSE_REPLY_TIMEOUT,
                 _ => MUTATION_REPLY_TIMEOUT,
             };
             dispatcher.dispatch(

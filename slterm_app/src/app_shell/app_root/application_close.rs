@@ -34,6 +34,8 @@ pub(super) struct ApplicationClose {
     pub(super) window: gpui::AnyWindowHandle,
     /// 恢复失败会话不写关闭意图，只在本进程内推进同一关闭状态机。
     pub(super) persist_intent: bool,
+    /// Runtime `app.close` 的回执：保存与最终冲刷落定后才答复。
+    pub(super) runtime_completion: Option<super::runtime_snapshot::RuntimeMutationCompletion>,
 }
 
 impl AppRoot {
@@ -171,6 +173,7 @@ impl AppRoot {
             needs_recollect: false,
             window: window.window_handle(),
             persist_intent,
+            runtime_completion: None,
         });
         self.close_in_progress = true;
         self.sidebar_drag = None;
@@ -199,6 +202,43 @@ impl AppRoot {
             self.advance_ephemeral_commit(cx);
         }
         Ok(ApplicationCloseStart::Started)
+    }
+
+    /// Runtime 关闭回执成功：只在保存与最终冲刷全部落定后调用。
+    pub(super) fn finish_runtime_close_success(&mut self) {
+        let Some(mut completion) = self
+            .application_close
+            .as_mut()
+            .and_then(|close| close.runtime_completion.take())
+        else {
+            return;
+        };
+        completion.send(crate::app_shell::RuntimeMutationReply::Done(Ok(())));
+    }
+
+    /// Runtime 关闭回执已知失败：窗口与未保存正文仍保持现场。
+    pub(super) fn finish_runtime_close_failure(&mut self) {
+        let Some(mut completion) = self
+            .application_close
+            .as_mut()
+            .and_then(|close| close.runtime_completion.take())
+        else {
+            return;
+        };
+        completion.send_error(super::runtime_snapshot::not_ready_error(
+            "application close failed",
+        ));
+    }
+
+    /// Runtime 关闭结果不明：放弃回执，让 Operation 进入可查询的 outcome_unknown。
+    pub(super) fn abandon_runtime_close(&mut self) {
+        if let Some(completion) = self
+            .application_close
+            .as_mut()
+            .and_then(|close| close.runtime_completion.take())
+        {
+            completion.abandon();
+        }
     }
 
     fn has_inflight_document_work(&self) -> bool {
@@ -357,6 +397,7 @@ impl AppRoot {
             .is_some_and(|close| close.needs_recollect)
             && !self.recollect_application_close(cx)
         {
+            self.finish_runtime_close_failure();
             self.application_close = None;
             self.close_in_progress = false;
             self.side_view_persistence
@@ -403,6 +444,7 @@ impl AppRoot {
         let response = match writer.commit_close_intent(&snapshot, &registration) {
             Ok(response) => response,
             Err(error) => {
+                self.finish_runtime_close_failure();
                 self.application_close = None;
                 self.close_in_progress = false;
                 self.side_view_persistence
@@ -459,6 +501,7 @@ impl AppRoot {
                 self.drive_application_close(cx);
             }
             Ok(Err(error)) => {
+                self.finish_runtime_close_failure();
                 self.application_close = None;
                 self.close_in_progress = false;
                 self.side_view_persistence
@@ -628,6 +671,7 @@ impl AppRoot {
                     .any(|failure| failure.is_revision_mismatch());
                 let _ = close.coordinator.fail(attempt);
             }
+            self.finish_runtime_close_failure();
             self.close_in_progress = false;
             self.side_view_persistence
                 .resume_checkpoint_for_close_retry(&self.side_views, cx);
@@ -734,6 +778,7 @@ impl AppRoot {
         close.stop_observation = Some(observation);
         if observation == PtyStopObservation::Panicked {
             let _ = close.coordinator.fail(attempt);
+            self.finish_runtime_close_failure();
             self.close_in_progress = false;
             log::warn!("application PTY worker terminated abnormally");
             cx.notify();
@@ -796,6 +841,7 @@ impl AppRoot {
                 if let Some(close) = self.application_close.as_mut() {
                     let _ = close.coordinator.fail(attempt);
                 }
+                self.finish_runtime_close_failure();
                 self.close_in_progress = false;
                 log::warn!("application close advance request failed: {error}");
                 super::events::notify_workspace_write_failed(cx);
@@ -871,6 +917,7 @@ impl AppRoot {
                 if let Some(close) = self.application_close.as_mut() {
                     let _ = close.coordinator.fail(attempt);
                 }
+                self.finish_runtime_close_failure();
                 self.close_in_progress = false;
                 log::warn!("application close advancement failed: {error}");
                 super::events::notify_workspace_write_failed(cx);
@@ -902,6 +949,7 @@ impl AppRoot {
                 if let Some(close) = self.application_close.as_mut() {
                     let _ = close.coordinator.fail(attempt);
                 }
+                self.finish_runtime_close_failure();
                 self.close_in_progress = false;
                 log::warn!("application global close request queue full");
                 return;
@@ -999,11 +1047,13 @@ impl AppRoot {
                 if let Some(close) = self.application_close.as_mut() {
                     let _ = close.coordinator.fail(attempt);
                 }
+                self.finish_runtime_close_failure();
                 self.close_in_progress = false;
                 log::warn!("application control plane cleanup failed");
             }
             Ok(Err(GlobalCloseError::Writer(error))) => {
                 log::warn!("application global writer shutdown failed: {error}");
+                self.finish_runtime_close_failure();
                 self.fail_application_close_unknown(attempt);
                 super::events::notify_workspace_write_failed(cx);
             }
@@ -1016,6 +1066,7 @@ impl AppRoot {
     }
 
     fn fail_application_close_unknown(&mut self, attempt: CloseAttempt) {
+        self.abandon_runtime_close();
         if let Some(close) = self.application_close.as_mut() {
             close.outcome_unknown = true;
             let _ = close.coordinator.fail(attempt);

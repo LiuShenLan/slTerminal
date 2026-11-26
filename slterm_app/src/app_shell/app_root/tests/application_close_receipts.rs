@@ -429,6 +429,7 @@ fn application_global_receipt_validates_identity_attempt_and_disconnect(cx: &mut
                 needs_recollect: false,
                 window: window_handle,
                 persist_intent: true,
+                runtime_completion: None,
             });
             root.close_in_progress = true;
             let task = cx.spawn(async move |_, _| std::future::pending::<()>().await);

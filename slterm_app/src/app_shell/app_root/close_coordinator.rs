@@ -33,6 +33,7 @@ impl AppRoot {
         ) {
             Ok(reconcile_required) => reconcile_required,
             Err(error) => {
+                self.finish_runtime_close_failure();
                 self.close_in_progress = false;
                 self.side_view_persistence
                     .resume_checkpoint_for_close_retry(&self.side_views, cx);
@@ -45,6 +46,7 @@ impl AppRoot {
         let response = match client.flush() {
             Ok(response) => response,
             Err(error) => {
+                self.finish_runtime_close_failure();
                 self.close_in_progress = false;
                 self.side_view_persistence
                     .resume_checkpoint_for_close_retry(&self.side_views, cx);
@@ -67,6 +69,7 @@ impl AppRoot {
             .tasks
             .register(TaskId::CloseFlush, cancellation, completion)
         {
+            self.finish_runtime_close_failure();
             self.close_in_progress = false;
             self.side_view_persistence
                 .resume_checkpoint_for_close_retry(&self.side_views, cx);
@@ -107,6 +110,8 @@ impl AppRoot {
                             slterm_workspace::CloseStage::StopServices,
                         )
                 });
+                // 保存与最终冲刷均已落定：此时才允许回执 Runtime 关闭成功。
+                self.finish_runtime_close_success();
                 if self.global_close.is_some() && application_global {
                     self.start_application_global_close(cx);
                 } else {
@@ -116,6 +121,7 @@ impl AppRoot {
                 }
             }
             _ => {
+                self.finish_runtime_close_failure();
                 self.close_in_progress = false;
                 self.side_view_persistence
                     .resume_checkpoint_for_close_retry(&self.side_views, cx);

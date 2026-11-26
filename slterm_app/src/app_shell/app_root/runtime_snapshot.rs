@@ -81,6 +81,9 @@ impl AppRoot {
             | RuntimeMutation::AgentFork { .. } => {
                 self.start_runtime_agent(mutation, completion, window, cx)
             }
+            RuntimeMutation::AppClose { documents, hooks } => {
+                self.start_runtime_application_close(documents, hooks, completion, window, cx)
+            }
             mutation => RuntimeMutationDispatch::Reply(
                 self.execute_runtime_mutation(mutation, window, cx)
                     .map(|()| RuntimeMutationReply::Done(Ok(()))),
@@ -309,21 +312,22 @@ impl AppRoot {
             .map_err(runtime_mutation_error)
     }
 
-    /// 非交互应用关闭：策略齐备才登记关闭，缺少决定只返回结构化错误。
+    /// 非交互应用关闭：策略齐备才登记关闭；成功回执延迟到保存与本地清理落定。
     fn start_runtime_application_close(
         &mut self,
         documents: Option<slterm_runtime_protocol::CloseDocumentsPolicy>,
         hooks: Option<slterm_runtime_protocol::CloseHooksPolicy>,
+        completion: &std::sync::mpsc::SyncSender<Result<RuntimeMutationReply, JsonRpcError>>,
         window: &mut Window,
         cx: &mut Context<'_, Self>,
-    ) -> Result<(), JsonRpcError> {
+    ) -> RuntimeMutationDispatch {
         if self.close_in_progress || self.application_close.is_some() || self.close_completed {
-            return Err(closing_error());
+            return RuntimeMutationDispatch::Reply(Err(closing_error()));
         }
         let discard_hooks = match hooks {
             Some(slterm_runtime_protocol::CloseHooksPolicy::Discard) => true,
             None if self.hook_drafts.dirty_drafts().next().is_some() => {
-                return Err(decision_required_error());
+                return RuntimeMutationDispatch::Reply(Err(decision_required_error()));
             }
             None => false,
         };
@@ -349,25 +353,43 @@ impl AppRoot {
             }
             None => std::collections::BTreeMap::new(),
         };
-        match self.start_application_close_with_decisions(decisions, false, window, cx) {
-            Ok(
-                super::application_close::ApplicationCloseStart::Completed
-                | super::application_close::ApplicationCloseStart::Started,
-            ) => {
+        let start = match self.start_application_close_with_decisions(decisions, false, window, cx)
+        {
+            Ok(start) => start,
+            Err(slterm_workspace::DocumentCloseError::MissingDecision(_)) => {
+                return RuntimeMutationDispatch::Reply(Err(decision_required_error()));
+            }
+            Err(_) => {
+                return RuntimeMutationDispatch::Reply(Err(not_ready_error(
+                    "application close not ready",
+                )));
+            }
+        };
+        match start {
+            super::application_close::ApplicationCloseStart::Completed => {
+                // 无 writer 的同步完成路径没有后续阶段；由分派器直接回执成功。
+                if discard_hooks {
+                    self.discard_all_hooks_drafts_for_close(cx);
+                }
+                RuntimeMutationDispatch::Reply(Ok(RuntimeMutationReply::Done(Ok(()))))
+            }
+            super::application_close::ApplicationCloseStart::Started => {
                 // 关闭已登记后才丢弃草稿；拒绝或等待路径保持现场。
                 if discard_hooks {
                     self.discard_all_hooks_drafts_for_close(cx);
                 }
-                Ok(())
+                let Some(close) = self.application_close.as_mut() else {
+                    return RuntimeMutationDispatch::Reply(Err(not_ready_error(
+                        "application close not ready",
+                    )));
+                };
+                close.runtime_completion = Some(RuntimeMutationCompletion::new(completion.clone()));
+                RuntimeMutationDispatch::Deferred
             }
-            Ok(
-                super::application_close::ApplicationCloseStart::Deferred
-                | super::application_close::ApplicationCloseStart::Rejected,
-            ) => Err(not_ready_error("application close not ready")),
-            Err(slterm_workspace::DocumentCloseError::MissingDecision(_)) => {
-                Err(decision_required_error())
+            super::application_close::ApplicationCloseStart::Deferred
+            | super::application_close::ApplicationCloseStart::Rejected => {
+                RuntimeMutationDispatch::Reply(Err(not_ready_error("application close not ready")))
             }
-            Err(_) => Err(not_ready_error("application close not ready")),
         }
     }
 
@@ -696,16 +718,15 @@ impl AppRoot {
                 cx.notify();
                 Ok(())
             }
-            RuntimeMutation::AppClose { documents, hooks } => {
-                self.start_runtime_application_close(documents, hooks, window, cx)
-            }
-            // Git 破坏写与打开由 handle_runtime_mutation 分流到目标解析，不到达这里。
+            // Git 破坏写、打开、面板打开／保存与 app.close 由 handle_runtime_mutation
+            // 分流到目标解析或延迟回执，不到达这里。
             RuntimeMutation::GitRollback { .. }
             | RuntimeMutation::GitDelete { .. }
             | RuntimeMutation::GitOpenDiff { .. }
             | RuntimeMutation::GitOpenDeleted { .. }
             | RuntimeMutation::PanelOpenFile { .. }
-            | RuntimeMutation::PanelSave { .. } => Err(invalid_request_error()),
+            | RuntimeMutation::PanelSave { .. }
+            | RuntimeMutation::AppClose { .. } => Err(invalid_request_error()),
         }
     }
 
@@ -1216,12 +1237,12 @@ pub(super) enum RuntimeMutationDispatch {
 }
 
 /// 异步写意图完成回执守卫：正常发送后不重复；释放时未发送即回执 Closing。
-struct RuntimeMutationCompletion {
+pub(super) struct RuntimeMutationCompletion {
     completion: Option<std::sync::mpsc::SyncSender<Result<RuntimeMutationReply, JsonRpcError>>>,
 }
 
 impl RuntimeMutationCompletion {
-    fn new(
+    pub(super) fn new(
         completion: std::sync::mpsc::SyncSender<Result<RuntimeMutationReply, JsonRpcError>>,
     ) -> Self {
         Self {
@@ -1229,10 +1250,22 @@ impl RuntimeMutationCompletion {
         }
     }
 
-    fn send(&mut self, reply: RuntimeMutationReply) {
+    pub(super) fn send(&mut self, reply: RuntimeMutationReply) {
         if let Some(completion) = self.completion.take() {
             let _ = completion.try_send(Ok(reply));
         }
+    }
+
+    /// 已知失败：明确回执错误。
+    pub(super) fn send_error(&mut self, error: JsonRpcError) {
+        if let Some(completion) = self.completion.take() {
+            let _ = completion.try_send(Err(error));
+        }
+    }
+
+    /// 结果不明：放弃回执，让派发器按通道断开映射 outcome_unknown。
+    pub(super) fn abandon(mut self) {
+        self.completion.take();
     }
 }
 
@@ -1252,7 +1285,7 @@ fn invalid_request_error() -> JsonRpcError {
     control_error(DomainErrorCode::InvalidRequest, -32000, "invalid request")
 }
 
-fn not_ready_error(message: &'static str) -> JsonRpcError {
+pub(super) fn not_ready_error(message: &'static str) -> JsonRpcError {
     control_error(DomainErrorCode::NotReady, -32001, message)
 }
 
