@@ -252,6 +252,78 @@ impl WorkspaceDatabase {
         })
     }
 
+    /// 维护期应用成功后的唯一提交点：更换 `store_epoch` 与
+    /// `Applying → Applied` 在同一 Immediate 事务内完成。
+    ///
+    /// 两个事实必须原子落定：先轮换世代再单独推进终态会留下
+    /// 「请求仍为 Applying、当前世代已更换」的不可恢复窗口。
+    pub(crate) fn complete_maintenance_apply(
+        &mut self,
+        request_id: &str,
+        run_id: &str,
+        expected_store_epoch: &str,
+        replacement_store_epoch: &str,
+    ) -> Result<MaintenanceRequest, MaintenanceStoreError> {
+        if request_id.is_empty()
+            || run_id.is_empty()
+            || expected_store_epoch.is_empty()
+            || replacement_store_epoch.is_empty()
+            || expected_store_epoch == replacement_store_epoch
+        {
+            return Err(MaintenanceStoreError::InvalidRequest);
+        }
+        let transaction = self
+            .database
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current = read_request(
+            &transaction,
+            "SELECT request_id, kind, status, staged_fingerprint, store_epoch, staged_path \
+             FROM maintenance_requests WHERE request_id = ?1",
+            [request_id],
+        )?
+        .ok_or(MaintenanceStoreError::NotFound)?;
+        if current.status != MaintenanceRequestStatus::Applying {
+            return Err(MaintenanceStoreError::Conflict);
+        }
+        let (current_run, current_epoch): (String, String) = transaction
+            .query_row(
+                "SELECT run_id, store_epoch FROM workspace_meta WHERE singleton = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?
+            .ok_or(MaintenanceStoreError::EpochConflict)?;
+        if current_run != run_id || current_epoch != expected_store_epoch {
+            return Err(MaintenanceStoreError::EpochConflict);
+        }
+        let rotated = transaction.execute(
+            "UPDATE workspace_meta SET store_epoch = ?1 \
+             WHERE singleton = 1 AND run_id = ?2 AND store_epoch = ?3",
+            params![replacement_store_epoch, run_id, expected_store_epoch],
+        )?;
+        if rotated != 1 {
+            return Err(MaintenanceStoreError::EpochConflict);
+        }
+        let applied = transaction.execute(
+            "UPDATE maintenance_requests SET status = ?1 \
+             WHERE request_id = ?2 AND status = ?3",
+            params![
+                MaintenanceRequestStatus::Applied.as_str(),
+                request_id,
+                MaintenanceRequestStatus::Applying.as_str()
+            ],
+        )?;
+        if applied != 1 {
+            return Err(MaintenanceStoreError::Conflict);
+        }
+        transaction.commit()?;
+        Ok(MaintenanceRequest {
+            status: MaintenanceRequestStatus::Applied,
+            ..current
+        })
+    }
+
     pub(crate) fn record_recovery_point(
         &mut self,
         record: &RecoveryPointRecord,

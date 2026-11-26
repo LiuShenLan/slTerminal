@@ -236,24 +236,20 @@ impl BackupRestoreRecoverer {
         }
 
         // 应用成功才更换世代：旧 Journal／Operation 写从此失效。
+        // 轮换与 `Applied` 必须原子提交，否则中间崩溃会让重启看到
+        // 「请求 Applying + 当前世代已更换」而永久阻断。
         let metadata = store
             .metadata()
             .map_err(|error| format!("读取工作区运行事实失败: {error}"))?
             .ok_or("工作区运行元数据缺失")?;
         store
-            .rotate_store_epoch(
+            .complete_maintenance_apply(
+                &request.request_id,
                 &metadata.run.run_id,
                 &request.store_epoch,
                 &uuid::Uuid::now_v7().to_string(),
             )
-            .map_err(|error| format!("更换工作区世代失败: {error}"))?;
-        store
-            .transition_maintenance_request(
-                &request.request_id,
-                MaintenanceRequestStatus::Applying,
-                MaintenanceRequestStatus::Applied,
-            )
-            .map_err(|error| format!("完成维护请求失败: {error}"))?;
+            .map_err(|error| format!("完成维护应用失败: {error}"))?;
         self.cleanup(store, request)
     }
 
@@ -577,6 +573,68 @@ mod maintenance_restore_tests {
             store.register_journal(stale),
             Err(JournalError::StoreEpochConflict)
         ));
+    }
+
+    /// 世代轮换与 Applied 在同一事务提交；错误旧世代不得留下半提交事实。
+    #[test]
+    fn apply_completion_rotates_and_transitions_atomically() {
+        let temp = tempfile::tempdir().unwrap();
+        let (paths, mut store) = setup(&temp);
+        let request = stage_restore(&mut store, &paths, &archive(), selection()).unwrap();
+        store
+            .transition_maintenance_request(
+                &request.request_id,
+                MaintenanceRequestStatus::Prepared,
+                MaintenanceRequestStatus::Applying,
+            )
+            .unwrap();
+        let before = store.metadata().unwrap().unwrap();
+        assert!(
+            store
+                .complete_maintenance_apply(
+                    &request.request_id,
+                    &before.run.run_id,
+                    "wrong-epoch",
+                    "epoch-after",
+                )
+                .is_err(),
+            "旧世代不符必须拒绝"
+        );
+        let unchanged = store.metadata().unwrap().unwrap();
+        assert_eq!(
+            unchanged.store_epoch, before.store_epoch,
+            "失败不得轮换世代"
+        );
+        assert_eq!(
+            store
+                .maintenance_request(&request.request_id)
+                .unwrap()
+                .unwrap()
+                .status,
+            MaintenanceRequestStatus::Applying,
+            "失败不得推进终态"
+        );
+
+        store
+            .complete_maintenance_apply(
+                &request.request_id,
+                &before.run.run_id,
+                &request.store_epoch,
+                "epoch-after",
+            )
+            .expect("原子提交应用完成");
+        assert_eq!(
+            store.metadata().unwrap().unwrap().store_epoch,
+            "epoch-after"
+        );
+        assert_eq!(
+            store
+                .maintenance_request(&request.request_id)
+                .unwrap()
+                .unwrap()
+                .status,
+            MaintenanceRequestStatus::Applied
+        );
     }
 
     #[test]
