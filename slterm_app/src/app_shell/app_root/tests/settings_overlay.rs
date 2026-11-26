@@ -306,6 +306,30 @@ fn settings_overlay_controls_write_runtime_values_and_queue(cx: &mut TestAppCont
     assert_eq!(runtime_speed, global_speed, "全局快照必须与运行值同源");
 }
 
+/// 活动栏固定底部配置按钮与 Ctrl+, 共用同一设置入口。
+#[gpui::test]
+fn activity_bar_settings_button_opens_the_settings_overlay(cx: &mut TestAppContext) {
+    let (root, mut window, _state) = open_root(cx);
+    draw_frame(&mut window);
+    let button = window
+        .debug_bounds("app-root-settings-button")
+        .expect("活动栏必须有固定底部配置按钮");
+    window.simulate_click(button.center(), Modifiers::default());
+    draw_frame(&mut window);
+    assert!(
+        window.debug_bounds("settings-page-content").is_some(),
+        "点击配置按钮必须打开设置浮层"
+    );
+    // 键盘入口复用同一浮层：再次触发不创建第二个实体。
+    focus_workspace(&root, &mut window);
+    window.simulate_keystrokes("ctrl-,");
+    draw_frame(&mut window);
+    assert!(
+        window.debug_bounds("settings-page-content").is_some(),
+        "Ctrl+, 必须聚焦既有设置浮层"
+    );
+}
+
 /// 自定义主题提交在后台预载；后续无关字段热应用只查缓存，不读主题文件。
 #[gpui::test]
 fn custom_theme_hot_apply_uses_the_background_preloaded_cache(cx: &mut TestAppContext) {

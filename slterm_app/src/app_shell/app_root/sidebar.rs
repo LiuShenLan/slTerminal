@@ -731,6 +731,44 @@ impl AppRoot {
             .child(self.render_side_button_group(SideSlot::Upper, cx))
             .child(div().flex_1().min_h_0())
             .child(self.render_side_button_group(SideSlot::Lower, cx))
+            // 固定底部配置按钮：不参与视图排序、换区或隐藏，与 Ctrl+, 共用
+            // 同一 OpenSettings 命令入口。
+            .child(self.render_settings_button(cx))
+            .into_any_element()
+    }
+
+    fn render_settings_button(&self, cx: &Context<'_, Self>) -> AnyElement {
+        div()
+            .id("app-root-settings-button")
+            .debug_selector(|| "app-root-settings-button".to_owned())
+            .mt_1()
+            .size(px(34.0))
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded_md()
+            .hover(|button| button.bg(cx.theme().list_hover))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| {
+                    if let Err(error) = this.execute_command(
+                        CommandId::OpenSettings,
+                        CommandSource::Pointer,
+                        CommandTarget::Focused,
+                        None,
+                        window,
+                        cx,
+                    ) {
+                        log::warn!("打开设置浮层命令失败: {error}");
+                    }
+                }),
+            )
+            .child(
+                Icon::new(IconName::Settings)
+                    .size(px(15.0))
+                    .text_color(cx.theme().muted_foreground),
+            )
             .into_any_element()
     }
 
