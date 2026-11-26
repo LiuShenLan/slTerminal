@@ -135,7 +135,7 @@
 | 子进程退出时未排空已读输出 | 已修：本地启动开启 `drain_on_exit`，退出边界循环排空队列后才发布最终帧；测试 `local_options_drain_output_before_exit`、`child_exit_drains_queued_output_before_final_frame` |
 | 读取线程 EOF 或读取错误不会转成退出/故障事件 | 已修：`EventedPty::output_closed` 暴露读取端关闭，宽限 2 秒内无子进程退出事件即报告 `PtyFailure`；测试 `reader_reports_output_closed_after_eof`、`output_closed_without_child_exit_reports_transport_failure` |
 | OSC 原始缓冲无界，嗅探上限在分发后才生效 | 已修：`OscGate` 在进入 VT 解析器前把 OSC 负载限制在 24 MiB（覆盖内联图片 base64 上界），超限丢弃负载、保留终止符；测试 `osc_gate_bounds_unterminated_payload_and_recovers_after_terminator`、`osc_gate_keeps_st_terminator_across_chunk_boundaries` |
-| 运行时设置未作用到终端核心 | 待修 |
+| 运行时设置未作用到终端核心 | 修复中：`scrollback_lines` 已进入 `term_config`，字号默认改为 14 且注册表只接受 8–32 整数、设置页步进同步；光标与外观热应用见相邻行。仍缺 shell／startup_directory 进入启动链，ConPTY 输入模式、环境刷新与 terminal_proxy 进入 `local_options` |
 | 搜索的帧驱动重查会重置导航位置并形成搜索风暴 | 已修：新帧刷新保留选中项且不滚动，在途请求跳过重排；测试 `frame_driven_search_refresh_preserves_selection`（提交 ac25b809） |
 | 退出后键盘复制、搜索与回滚全部失效 | 已修：退出后保留复制/搜索/回滚，粘贴与编码路径关闭；测试 `exited_terminal_keeps_copy_and_scroll_but_rejects_input` |
 | 一次瞬态操作错误会替换并永久遮住终端画面 | 已修：超限粘贴与 Agent 注入失败的 `notice` 瞬态提示不再替换终端元素，可点击关闭（提交 ba269cdb）；测试 `oversized_paste_keeps_terminal_visible_with_dismissible_notice`、`dangerous_paste_confirmation_does_not_leak_or_write_early` |

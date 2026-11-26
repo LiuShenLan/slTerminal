@@ -893,7 +893,7 @@ impl RuntimeSettings {
             font_family_cjk: raw.value("font_family_cjk").map(str::to_owned),
             ui_font_family: raw.value("ui_font_family").map(str::to_owned),
             ui_font_size_px: raw.f32("ui_font_size").map(|size| size.clamp(10.0, 24.0)),
-            font_size_px: raw.f32("font_size").map(|size| size.clamp(4.0, 96.0)),
+            font_size_px: raw.f32("font_size"),
             ctrl_wheel_font_zoom: raw.bool_or_default("ctrl_wheel_font_zoom"),
             ligatures: Ligatures::from_settings(raw.value_or_default("ligatures"))
                 .unwrap_or_default(),
@@ -1108,7 +1108,7 @@ mod runtime_settings_tests {
     "font_family_cjk": "Microsoft YaHei",
     "ui_font_family": "Arial",
     "ui_font_size": 18,
-    "font_size": 16.3,
+    "font_size": 16,
     "density": "compact",
     "tab_reveal": "instant",
     "tab_close_visible": false,
@@ -1183,7 +1183,7 @@ mod runtime_settings_tests {
         assert_eq!(settings.ui_font_family.as_deref(), Some("Arial"));
         assert_eq!(settings.ui_font_size_px, Some(18.0));
         // font_size 键存逻辑像素,不做 pt 换算。
-        assert_eq!(settings.font_size_px, Some(16.3));
+        assert_eq!(settings.font_size_px, Some(16.0));
         assert_eq!(settings.density, DensityName::Compact);
         assert_eq!(settings.tab_reveal, TabRevealName::Instant);
         assert!(!settings.tab_close_visible);

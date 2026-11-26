@@ -392,8 +392,8 @@ pub(super) static FIELDS: &[SettingsFieldUi] = &[
         Message::SettingsAppearanceFontSize,
         Some(Message::SettingsAppearanceFontSizeDescription),
         Stepper {
-            min: 4.0,
-            max: 96.0,
+            min: 8.0,
+            max: 32.0,
             step: 1.0,
         },
     ),

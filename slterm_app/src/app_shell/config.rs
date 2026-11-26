@@ -15,10 +15,8 @@ use crate::i18n::{LanguagePreference, UiLanguage};
 use crate::theme_library::ThemeLibraryStore;
 use slterm_settings::{BlurMode, RawSettings, RuntimeSettings, ThemeUiColors};
 
-/// 默认字号:11.25pt × 4/3 = 15px(与上游配置缺省同链)。
-const DEFAULT_FONT_SIZE_PX: f32 = 15.0;
-/// 回滚行数(裁决值)。
-const SCROLLING_HISTORY: usize = 10_000;
+/// 默认字号：行为真值 14 逻辑像素。
+const DEFAULT_FONT_SIZE_PX: f32 = 14.0;
 
 static REDUCED_MOTION: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -48,6 +46,8 @@ pub struct Settings {
     pub editor_theme: EditorThemeTokens,
     /// 光标闪烁；形状固定竖线。系统减少动效时默认关闭，用户显式设置优先。
     pub cursor_blink: bool,
+    /// 新建终端的历史容量；只影响之后创建的逻辑终端。
+    pub scrollback_lines: usize,
     /// 选区完成即复制。
     pub copy_on_select: bool,
     /// 全局 Document 自动保存；视图层不得另设开关。
@@ -170,6 +170,7 @@ impl Settings {
                 runtime.cursor_blink,
                 REDUCED_MOTION.load(std::sync::atomic::Ordering::Relaxed),
             ),
+            scrollback_lines: runtime.scrollback_lines,
             copy_on_select: runtime.copy_on_select,
             document_autosave: runtime.document_autosave,
             osc52_unfocused: runtime.osc52_unfocused,
@@ -207,7 +208,7 @@ impl Settings {
     pub fn term_config(&self) -> slterm_terminal::term::Config {
         use vte::ansi::{CursorShape, CursorStyle};
         slterm_terminal::term::Config {
-            scrolling_history: SCROLLING_HISTORY,
+            scrolling_history: self.scrollback_lines,
             conpty_resize: true,
             kitty_keyboard: true,
             default_cursor_style: CursorStyle {
@@ -291,7 +292,7 @@ mod config_tests {
         ] {
             assert_eq!(family, crate::app_shell::assets::REQUIRED_FONT_FAMILY);
         }
-        assert_eq!(settings.font_size_px, 15.0);
+        assert_eq!(settings.font_size_px, 14.0);
         assert!(settings.ligatures);
         assert!(!settings.copy_on_select);
         assert_eq!(settings.scroll_speed, 1.0);
@@ -485,6 +486,11 @@ mod config_tests {
     fn term_config_carries_the_anchored_scrollback() {
         // 回滚 10000 行是产品裁决值,不是库默认巧合——钉字面量。
         assert_eq!(Settings::default().term_config().scrolling_history, 10000);
+        let settings = Settings {
+            scrollback_lines: 5000,
+            ..Settings::default()
+        };
+        assert_eq!(settings.term_config().scrolling_history, 5000);
     }
 
     #[test]

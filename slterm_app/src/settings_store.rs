@@ -697,7 +697,7 @@ mod settings_store_tests {
             &path,
             &[
                 ("theme", Value::String("Nord".into())),
-                ("font_size", Value::Number(16.5)),
+                ("font_size", Value::Number(16.0)),
                 ("scrollback_lines", Value::Number(50000.0)),
                 ("bell", Value::String("audible".into())),
                 ("restore_session", Value::Bool(false)),
@@ -710,7 +710,7 @@ mod settings_store_tests {
         let raw = RawSettings::from_json_bytes(&std::fs::read(&path).unwrap());
         let settings = RuntimeSettings::from_raw(&raw);
         assert_eq!(settings.theme, ThemeName::Nord);
-        assert_eq!(settings.font_size_px, Some(16.5));
+        assert_eq!(settings.font_size_px, Some(16.0));
         assert_eq!(settings.scrollback_lines, 50_000);
         assert_eq!(settings.bell, BellModeName::Audible);
         assert!(!settings.restore_session);

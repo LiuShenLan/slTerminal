@@ -369,6 +369,28 @@ const fn optional_number(
     )
 }
 
+const fn optional_number_validated(
+    key: &'static str,
+    domain: SettingsDomain,
+    search_terms: &'static str,
+    validator: fn(&Value) -> bool,
+) -> SettingsKeyDef {
+    entry(
+        key,
+        domain,
+        search_terms,
+        SettingsValueType::Number,
+        SettingsDefault::Unset,
+        validator,
+    )
+}
+
+fn valid_font_size(value: &Value) -> bool {
+    value
+        .as_f64()
+        .is_some_and(|size| size.is_finite() && size.fract() == 0.0 && (8.0..=32.0).contains(&size))
+}
+
 const fn integer(
     key: &'static str,
     domain: SettingsDomain,
@@ -513,7 +535,12 @@ pub static KEYS: &[SettingsKeyDef] = &[
         SettingsDomain::Appearance,
         "ui size 界面字号",
     ),
-    optional_number("font_size", SettingsDomain::Appearance, "font size 字号"),
+    optional_number_validated(
+        "font_size",
+        SettingsDomain::Appearance,
+        "font size 字号",
+        valid_font_size,
+    ),
     text(
         "density",
         SettingsDomain::Appearance,
