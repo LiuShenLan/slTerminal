@@ -43,7 +43,7 @@
 | 设置页大量控件没有生产消费方 | 待修 |
 | 设置保存状态与失败不可见；文本/颜色控件跨视图不同步且缺少路径校验 | 待修 |
 | 根重定位实现为 dead code，缺少真实路径查重与决定守卫 | 待修 |
-| 重复 Settings 恢复不按规格保留首个并提示 | 部分修复：宽容解码按首次出现保留重复视图，整库不再因重复 Settings 解码失败；测试 `lossy_recovery_filters_unknown_views_collapses_empty_groups_and_dedupes`、`startup_filters_unknown_and_duplicate_views`。恢复提示面仍待接线 |
+| 重复 Settings 恢复不按规格保留首个并提示 | 已修：宽容解码按首次出现保留重复视图，整库不再因重复 Settings 解码失败；恢复警告计数进入 `AppRoot` 首帧后的聚合提示（`notify_workspace_repairs`，只含计数、不含路径）；测试 `lossy_recovery_filters_unknown_views_collapses_empty_groups_and_dedupes`、`startup_filters_unknown_and_duplicate_views`、`workspace_repair_notice_states_the_skipped_item_count` |
 | 主题下拉选择不清除 custom_theme | 已修：`theme_field_followups` 在选择内置主题时清除 `custom_theme`；测试 `theme_field_followups_clear_only_for_builtin_theme_selection`、`builtin_theme_selection_clears_custom_theme_override` |
 | Runtime v2 快照没有设置界面，快照测试未覆盖资源边界 | 待修 |
 | 测试主要覆盖引擎函数与 DTO，未覆盖页面场景 | 待修 |
