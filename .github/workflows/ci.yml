@@ -84,6 +84,10 @@ jobs:
         shell: pwsh
         run: python scripts/check_doc_policy.py full
 
+      - name: 追溯例名门禁
+        shell: pwsh
+        run: python scripts/check_traceability.py
+
       - name: 品牌回流门禁
         shell: pwsh
         run: python scripts/check_brand_regress.py full

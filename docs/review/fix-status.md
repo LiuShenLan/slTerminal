@@ -272,7 +272,7 @@
 
 | 问题 | 状态 |
 |---|---|
-| 追溯矩阵引用不存在的测试例名 | 待修 |
+| 追溯矩阵引用不存在的测试例名 | 已修：8 个失效锚改为真实例名（`integration_encrypted_backup_round_trips_without_touching_disk`、`interrupted_apply_is_rolled_back_on_restart`、`maintenance_restore_leaves_credentials_and_unlisted_files_untouched`、`integration_commit_rollback`、`agent_root_default_capabilities`、`path_file_identity_deduplicates_document` 等），硬链接别名补真实 AppRoot 用例 `path_file_identity_deduplicates_document`；新增 `scripts/check_traceability.py` 门禁与自测 `test_traceability.py`，已自动化行锚点必须解析到源码唯一测试函数 |
 | 部分矩阵例名存在，但覆盖的不是声明场景 | 待修 |
 | 全量验收锚以源码字符串和局部状态代替跨域行为 | 待修 |
 | 测试豁免表含失效设计路径、目标态待实现项与超范围无障碍项 | 待修 |
@@ -289,7 +289,7 @@
 | “全部阶段验收完成”与安装器、发布包实机待办矛盾 | 待修 |
 | 旧实现与最终排除面未清理 | 待修 |
 | 进度表用同一提交充当多个阶段锚 | 待修 |
-| 追溯矩阵存在同名测试与重复行 | 待修 |
+| 追溯矩阵存在同名测试与重复行 | 已修：删除跨域重复行与设置／工作区重复锚；服务层同名例改名为 `registry_aliases_resolve_to_the_same_document_by_file_identity`、`paged_reload_is_read_only_for_clean_and_conflicts_for_dirty`、`snapshot_recovery_runs_after_layout_reconciliation`、`outside_snapshot_recovery_marks_requires_authorization`、`application_exit_coordinator_allows_abandon_after_final_commit_failure`、`final_commit_failure_sets_old_state_abandon_warning` 与三个 crate 的 `*_stable_id_errors_describe_the_rejection`；门禁强制全仓测试例名唯一 |
 | 计划行为切片没有可核销例名 | 待修 |
 
 ## 跨域补充

@@ -505,3 +505,46 @@ fn open_file_handover_late_focus_failure_restores_project_and_focus(cx: &mut Tes
         Some(terminal_focus)
     );
 }
+
+/// 同一真实文件的不同词法路径（硬链接）必须复用同一 Document 与面板。
+#[gpui::test]
+fn path_file_identity_deduplicates_document(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let project_root = temp.path().join("project");
+    std::fs::create_dir(&project_root).unwrap();
+    let file = project_root.join("file.txt");
+    let alias = project_root.join("alias.txt");
+    std::fs::write(&file, "shared\n").unwrap();
+    std::fs::hard_link(&file, &alias).unwrap();
+    let (root, mut window, _state) = open_root(cx);
+    add_project(
+        &root,
+        &mut window,
+        PROJECT_A,
+        project_root.to_str().unwrap(),
+    );
+
+    super::documents::open_document(
+        &root,
+        &mut window,
+        PROJECT_A,
+        GROUP_A,
+        CanonicalPath::new(dunce::canonicalize(&file).unwrap()).unwrap(),
+    );
+    super::documents::open_document(
+        &root,
+        &mut window,
+        PROJECT_A,
+        GROUP_A,
+        CanonicalPath::new(dunce::canonicalize(&alias).unwrap()).unwrap(),
+    );
+
+    root.read_with(cx, |root, cx| {
+        assert_eq!(root.documents.len(), 1, "文件身份必须唯一");
+        assert_eq!(
+            root.panel_count(project_id(PROJECT_A), cx),
+            1,
+            "同一真实文件的别名不得创建第二个面板"
+        );
+    });
+}

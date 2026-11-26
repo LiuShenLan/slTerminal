@@ -15,6 +15,7 @@
 - **Runtime 合同门禁**：`cargo test -p slterm_runtime_protocol --features schema --test lib_tests -- --test-threads=1`；逐字节核对随包 schema 资产与生成器，CI 与发布前置均强制执行。
 - **架构门禁**：`python scripts/check_architecture.py`。
 - **文档策略门禁**：`python scripts/check_doc_policy.py full`；提交前可用 `staged`。
+- **追溯例名门禁**：`python scripts/check_traceability.py`；校验追溯矩阵锚点存在、矩阵内不重复与全仓测试例名唯一。
 - **禁名门禁**：`python scripts/check_brand_regress.py staged`；提交信息与推送由 `.githooks/` 三钩扫描。
 - **git hooks 启用**：`git config core.hooksPath .githooks`（一次性）。
 - **脚本门禁自测**：`python -m unittest discover -s scripts/tests -p "test_*.py"`。

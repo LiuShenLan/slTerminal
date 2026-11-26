@@ -318,7 +318,7 @@ mod registry_tests {
     }
 
     #[test]
-    fn integration_document_global_identity() {
+    fn registry_aliases_resolve_to_the_same_document_by_file_identity() {
         let mut registry = DocumentRegistry::new();
         let first = registry
             .open(

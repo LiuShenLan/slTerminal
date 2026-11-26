@@ -203,7 +203,7 @@ mod identity_tests {
 
     /// 解析错误提供明确原因并实现标准错误接口。
     #[test]
-    fn stable_id_errors_describe_the_rejection() {
+    fn settings_stable_id_errors_describe_the_rejection() {
         fn require_error<T: std::error::Error>() {}
         require_error::<StableIdError>();
         assert_eq!(

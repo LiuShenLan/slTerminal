@@ -17,11 +17,12 @@
 - **禁名门禁**：本目录所有脚本与 iss 内的产品名只允许 `slTerminal` / `slterm`；提交前跑 `python scripts/check_brand_regress.py staged`。
 - **PowerShell 7**：本目录全部 `.ps1` 首行声明 `#Requires -Version 7`；5.1 下不保证解析语义，报错应明确指向版本而非晦涩语法错误。
 - **文档策略门禁**：新增/修改脚本不得在注释中引用过程编号、文档名或行号；提交前跑 `python scripts/check_doc_policy.py staged`。
+- **追溯例名门禁**：追溯矩阵 `已自动化` 行的目标锚点必须解析到源码中唯一的 `#[test]`／`#[gpui::test]` 函数；矩阵内同一锚点不得跨行复用；全仓测试例名不得同名。原因：例名是验收证据的定位符，缺失或重名会让核销与定向过滤不可复现。
 
 ## 验收与测试
 
 - 钉测试（安装器参数化/清单/新鲜度/体积预算）归测试层脚本族，存在时由 `release.ps1` 自动执行；单跑入口 `scripts/tests/package-release.tests.ps1`。
-- 架构门禁：`python scripts/check_architecture.py [--base <commit>]`；CI 对 PR/push 传入变更基线，拒绝新增或增长债务。禁名门禁：`python scripts/check_brand_regress.py staged`；文档策略：`python scripts/check_doc_policy.py full`。
+- 架构门禁：`python scripts/check_architecture.py [--base <commit>]`；CI 对 PR/push 传入变更基线，拒绝新增或增长债务。禁名门禁：`python scripts/check_brand_regress.py staged`；文档策略：`python scripts/check_doc_policy.py full`；追溯例名：`python scripts/check_traceability.py`。
 - 脚本门禁自测：`python -m unittest discover -s scripts/tests -p "test_*.py"`。
 - 发布链、体积预算与合规细节见 `.claude/docs/release/packaging.md`。
 

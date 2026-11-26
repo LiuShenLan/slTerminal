@@ -599,7 +599,7 @@ fn snapshot_at_encoding(
 }
 
 #[test]
-fn startup_reconciles_layout_before_snapshot() {
+fn snapshot_recovery_runs_after_layout_reconciliation() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("project");
     std::fs::create_dir(&root).unwrap();
@@ -1049,7 +1049,7 @@ fn outside_snapshot_restores_without_disk_read() {
 }
 
 #[test]
-fn outside_document_restart_requires_authorization() {
+fn outside_snapshot_recovery_marks_requires_authorization() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("project");
     std::fs::create_dir(&root).unwrap();

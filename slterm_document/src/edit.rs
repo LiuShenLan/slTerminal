@@ -1424,7 +1424,7 @@ mod tests {
     }
 
     #[test]
-    fn editor_large_file_dirty_preserves_buffer() {
+    fn paged_reload_is_read_only_for_clean_and_conflicts_for_dirty() {
         fn paged_body() -> crate::DocumentBody {
             let total = crate::EDITABLE_LIMIT_BYTES + 1;
             let mut ranges = Vec::new();

@@ -1,11 +1,11 @@
 # 需求—设计—测试追溯
 
-> 将 featureSpec 所有者与验收场景映射到目标设计和测试锚；实现回归场景独立分区，不借追溯新增产品契约。目标例名是实施计划，不代表测试已经存在或通过。
+> 将 featureSpec 所有者与验收场景映射到目标设计和测试锚；实现回归场景独立分区，不借追溯新增产品契约。`已自动化` 行的目标例名必须指向源码中唯一的真实测试函数；`待实现` 与 `延期` 行可登记目标名，但不得计入验收。
 
 ## 决策与红线
 
 - 每条场景保留独立核销行；实现后填入真实测试例名、执行证据或已登记豁免，不能以全量测试全绿替代逐条核销。
-- 状态取 `待实现`、`已自动化`、`人工豁免`、`延期`。状态锚为 2026-11-16 的最近矩阵核销提交；此后只凭新鲜证据更新，不把初始计划状态写成当前事实。
+- 状态取 `待实现`、`已自动化`、`人工豁免`、`延期`。状态锚为 2026-11-27 的最近矩阵核销提交；此后只凭新鲜证据更新，不把初始计划状态写成当前事实。
 - 场景名使用领域语言，不引入阶段号、条目号或测试分层编号；源码引符号名，测试引例名。
 - 正式验收场景只来自 featureSpec；实现回归场景依据所有者设计和既有行为单独登记，不构成新的产品需求。
 - 开发顺序只由 [实施计划](plan.md) 拥有。每个 `待实现` 场景在那里恰好有一个最终核销主责切片；`已自动化` 场景只作回归锚，`延期` 场景不进入本轮序列。
@@ -15,6 +15,7 @@
 ## 验收与测试
 
 - 每次阶段验收检查本表涉及场景是否有真实例名和新鲜输出；计划锚不得直接改写成通过结论。
+- 例名解析门禁：`python scripts/check_traceability.py` 校验 `已自动化` 行锚点存在、矩阵内锚点不重复、全仓测试例名唯一。
 - 最终核销同时检查排除项、敏感数据边界、跨域单点和人工豁免；任一未决场景都阻塞全量验收。
 - 进度记录只引用本表已核验条目，不在这里追加流水账或问题清单。
 
@@ -81,11 +82,9 @@
 | 新建 cwd | [终端](design/terminal.md)、[工作区](design/workspace.md) | `integration_new_terminal_cwd` | 已自动化 |
 | 单实例与 Runtime | [Runtime](design/runtime.md)、[生命周期](design/lifecycle.md)、[工作区](design/workspace.md) | `integration_single_instance_runtime_parity` | 已自动化 |
 | Runtime 非交互关闭 | [Runtime](design/runtime.md)、[生命周期](design/lifecycle.md) | `integration_runtime_noninteractive_close` | 已自动化 |
-| Runtime 凭据 | [Runtime](design/runtime.md)、[设置与恢复](design/settings-recovery.md) | `integration_runtime_credential_boundaries` | 已自动化 |
 | 补全可信边界 | [终端](design/terminal.md) | `integration_completion_trust_boundary` | 已自动化 |
 | 本地学习数据 | [终端](design/terminal.md)、[持久化](design/persistence.md) | `integration_local_learning_data` | 已自动化 |
 | 终端搜索 | [终端](design/terminal.md) | `integration_terminal_search` | 已自动化 |
-| Commit 回滚 | [文件与 Git](design/files-git.md) | `integration_commit_rollback` | 已自动化 |
 | Git 与 Document | [文件与 Git](design/files-git.md)、[Document](design/document.md) | `integration_git_document` | 已自动化 |
 | 历史删除撤销 | [Agent](design/agents.md)、[生命周期](design/lifecycle.md) | `integration_history_delete_undo` | 已自动化 |
 | 套餐凭据 | [Windows](design/windows.md)、[设置与恢复](design/settings-recovery.md) | `integration_plan_credentials` | 已自动化 |
@@ -93,7 +92,7 @@
 | 自定义主题 | [设置与恢复](design/settings-recovery.md) | `integration_custom_theme` | 已自动化 |
 | Markdown 与 Mermaid | [Markdown](design/markdown.md)、[Document](design/document.md) | `integration_markdown_mermaid_final` | 延期 |
 | 设置单例 | [设置与恢复](design/settings-recovery.md)、[工作区](design/workspace.md)、[Hooks](design/hooks.md) | `integration_settings_singleton` | 已自动化 |
-| 加密备份 | [设置与恢复](design/settings-recovery.md)、[持久化](design/persistence.md)、[生命周期](design/lifecycle.md) | `integration_encrypted_backup` | 已自动化 |
+| 加密备份 | [设置与恢复](design/settings-recovery.md)、[持久化](design/persistence.md)、[生命周期](design/lifecycle.md) | `integration_encrypted_backup_round_trips_without_touching_disk` | 已自动化 |
 | 更新 | [Windows](design/windows.md)、[生命周期](design/lifecycle.md) | `integration_update` | 已自动化 |
 | 通知与任务栏 | [Windows](design/windows.md) | `integration_notification_taskbar` | 已自动化 |
 | 语言 | [Windows](design/windows.md) | `integration_language` | 已自动化 |
@@ -105,12 +104,12 @@
 
 | 验收场景 | 目标测试例名 | 状态 |
 |---|---|---|
-| 仅选工作区类别时排除设置及永久排除内容 | `backup_workspace_category_exclusions` | 已自动化 |
+| 仅选工作区类别时排除设置及永久排除内容 | `backup_workspace_category_exclusions` | 待实现 |
 | 条目篡改或口令错误时整包拒绝且零写入 | `backup_tamper_rejected_zero_write` | 已自动化 |
-| 恢复中断后可由恢复点回滚 | `backup_interrupted_restore_rolls_back` | 已自动化 |
-| 恢复后修改对象时撤回保留冲突项 | `backup_undo_fingerprint_conflict` | 已自动化 |
+| 恢复中断后可由恢复点回滚 | `interrupted_apply_is_rolled_back_on_restart` | 已自动化 |
+| 恢复后修改对象时撤回保留冲突项 | `backup_undo_fingerprint_conflict` | 待实现 |
 | 跨机恢复未完成重定位前不读正文或启动 PTY | `backup_cross_machine_requires_relocation` | 已自动化 |
-| 目标机缺凭据时不从包内提取凭据 | `backup_restore_does_not_restore_credentials` | 已自动化 |
+| 目标机缺凭据时不从包内提取凭据 | `maintenance_restore_leaves_credentials_and_unlisted_files_untouched` | 已自动化 |
 
 ### 跨域约定
 
@@ -209,11 +208,11 @@
 |---|---|---|
 | 多项目切换只改变可见性、恢复实际最后焦点且实例与进程不重建 | `workspace_project_switch_preserves_instances`、`focus_project_switch_restores_memory`、`focus_project_switch_snapshots_actual_focus` | 已自动化 |
 | 共享 Document 只有最后引用关闭才触发内容守卫 | `document_last_reference_close_guard` | 已自动化 |
-| 批量保存失败取消关闭并保留全部 Panel 与 PTY | `workspace_batch_save_failure_cancels_close`、`document_batch_close_partial_save` | 已自动化 |
+| 批量保存失败取消关闭并保留全部 Panel 与 PTY | `workspace_batch_save_failure_cancels_close` | 已自动化 |
 | 项目移除先完成守卫与删除意图再销毁资源 | `project_remove_commits_intent_before_destroy` | 已自动化 |
 | 激活项目不关闭无项目浮层或其 Hooks 草稿 | `app_settings_overlay_keeps_hooks_draft` | 已自动化 |
 | 移交显式 cwd 未授权时拒绝且不改投项目 | `handover_rejects_unauthorized_cwd` | 已自动化 |
-| 最终退出提交失败后允许知情放弃状态 | `close_final_commit_failure_allows_explicit_abandon`、`application_global_abandon_closes_without_clean_shutdown` | 已自动化 |
+| 最终退出提交失败后允许知情放弃状态 | `close_final_commit_failure_allows_explicit_abandon`、`application_exit_coordinator_allows_abandon_after_final_commit_failure`、`application_global_abandon_closes_without_clean_shutdown` | 已自动化 |
 | 异常启动先布局后对账且不重复 Panel 或 PTY | `workspace_startup_layout_before_snapshots` | 已自动化 |
 | 启动维护失败只提供脱敏诊断与显式重试 | `diagnostic_messages_are_localized_and_sanitized`、`retry_button_returns_retry_without_starting_workspace`、`closing_diagnostic_returns_exit`、`retry_loop_reenters_same_startup_with_original_cwd`、`diagnostic_init_excludes_settings_recovery_and_background_effects`、`open_failure_requests_quit` | 已自动化 |
 
@@ -315,7 +314,6 @@
 | 套餐不读取 CLI 凭据且专用 token 不回显 | `settings_plan_token_not_cli_credentials` | 已自动化 |
 | 后台周期提交后按新周期运行且隐藏仍查询 | `settings_plan_schedule_commit_and_visibility` | 已自动化 |
 | 自定义根真实目录重复拒绝且删除立即撤销授权 | `agent_root_duplicate_and_revocation` | 已自动化 |
-| AgentRoot 默认只读且写与终端分别拒绝 | `agent_root_default_capabilities` | 已自动化 |
 | Hooks 外部修改时不覆盖文件或静默丢草稿 | `hooks_external_modification_guard` | 已自动化 |
 | 注入提交后清理失败显示已提交与重试 | `hooks_post_commit_cleanup_failure_is_visible` | 已自动化 |
 | 导入拒绝凭据／高版本且恢复默认不删凭据 Hooks | `settings_import_and_reset_preserve_secrets` | 已自动化 |
@@ -326,7 +324,7 @@
 
 | 验收场景 | 目标测试例名 | 状态 |
 |---|---|---|
-| staged 与 unstaged 并存时回滚保留 staged 差异 | `commit_rollback_preserves_staged_changes` | 已自动化 |
+| staged 与 unstaged 并存时回滚保留 staged 差异 | `integration_commit_rollback` | 已自动化 |
 | 纯 staged、staged rename 和 conflict 禁用通用回滚 | `commit_rollback_disabled_shapes` | 已自动化 |
 | 未暂存 deleted 从索引版本恢复而非 HEAD | `commit_deleted_restores_index_version` | 已自动化 |
 | 未暂存 rename 恢复旧路径并清除新路径且不改索引 | `commit_unstaged_rename_rollback` | 已自动化 |
@@ -377,7 +375,7 @@
 
 | 验收场景 | 目标测试例名 | 状态 |
 |---|---|---|
-| 新 AgentRoot 默认可读但写入和终端分别拒绝 | `agent_files_default_capabilities` | 已自动化 |
+| 新 AgentRoot 默认可读但写入和终端分别拒绝 | `agent_root_default_capabilities` | 已自动化 |
 | 开启写入不隐含终端 cwd 能力 | `agent_files_write_does_not_imply_terminal` | 已自动化 |
 | 链接别名指向同一真实目录时不形成重复根 | `agent_root_real_directory_dedup` | 已自动化 |
 | 删除根后 Document 保留且既有 PTY 不被强杀 | `agent_root_delete_preserves_document_and_pty` | 已自动化 |

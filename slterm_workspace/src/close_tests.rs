@@ -481,7 +481,7 @@ fn final_commit_in_progress_rejects_abandon() {
 }
 
 #[test]
-fn close_final_commit_failure_allows_explicit_abandon() {
+fn application_exit_coordinator_allows_abandon_after_final_commit_failure() {
     let mut coordinator = drive_to_clean_shutdown(CloseScope::ApplicationExit);
     coordinator.fail(current(&coordinator)).unwrap();
 
@@ -500,7 +500,7 @@ fn close_final_commit_failure_allows_explicit_abandon() {
 }
 
 #[test]
-fn close_abandon_warns_about_old_state() {
+fn final_commit_failure_sets_old_state_abandon_warning() {
     let mut coordinator = drive_to_clean_shutdown(CloseScope::ApplicationExit);
     coordinator.fail(current(&coordinator)).unwrap();
 
