@@ -69,6 +69,14 @@ impl PanelHost {
     }
 
     #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn paged(&self) -> Option<&Entity<PagedTextView>> {
+        match &self.content {
+            PanelContent::Paged(view) => Some(view),
+            _ => None,
+        }
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
     pub(crate) fn editor(&self) -> Option<&Entity<DocumentTextView>> {
         match &self.content {
             PanelContent::Editor(editor) => Some(&editor.view),

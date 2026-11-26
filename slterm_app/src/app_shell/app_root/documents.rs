@@ -263,17 +263,24 @@ impl AppRoot {
         cx: &mut Context<'_, Self>,
     ) {
         if let Some(id) = self.documents.existing(&resolved.location) {
-            self.finish_document_open(
-                request,
-                Ok(OpenedDocument {
-                    id,
-                    outcome: DocumentOpenOutcome::Existing,
-                    body: None,
-                }),
-                window,
-                cx,
-            );
-            return;
+            let needs_paged_body = self
+                .documents
+                .session(id)
+                .is_some_and(|session| session.paged().is_some())
+                && !self.paged_documents.contains_key(&id);
+            if !needs_paged_body {
+                self.finish_document_open(
+                    request,
+                    Ok(OpenedDocument {
+                        id,
+                        outcome: DocumentOpenOutcome::Existing,
+                        body: None,
+                    }),
+                    window,
+                    cx,
+                );
+                return;
+            }
         }
         self.start_document_read(request, resolved, window, cx);
     }
@@ -426,6 +433,9 @@ impl AppRoot {
         self.ensure_not_closing()?;
         self.ensure_project_snapshot_command_allowed()?;
         self.ensure_project_snapshot_recovery_allowed()?;
+        if let Some(OpenedDocumentBody::Paged(document)) = &opened.body {
+            self.paged_documents.insert(opened.id, document.clone());
+        }
         let project_id = request.project_id;
         let activate_project =
             request.activate_on_open && self.snapshot.registry().active() != Some(project_id);
@@ -472,6 +482,25 @@ impl AppRoot {
             candidate.with_opened_document(project_id, target_group, opened.id, location)?;
 
         if let Ok(panel_id) = self.panel_for_view(project_id, &view, cx) {
+            let is_recovery_placeholder = self.projects.get(&project_id).is_some_and(|project| {
+                project
+                    .read(cx)
+                    .panels
+                    .get(&panel_id)
+                    .is_some_and(|panel| matches!(panel.content, PanelContent::Recovery(_)))
+            });
+            if is_recovery_placeholder {
+                // 重新打开同一文件时把恢复占位替换为真实视图，占位不是死端。
+                let paged = match opened.body {
+                    Some(OpenedDocumentBody::Paged(document)) => {
+                        self.paged_documents.insert(opened.id, document.clone());
+                        Some(document)
+                    }
+                    None => self.paged_documents.get(&opened.id).cloned(),
+                    Some(OpenedDocumentBody::Editable(_)) => None,
+                };
+                self.replace_recovery_panel(project_id, panel_id, view.clone(), paged, window, cx)?;
+            }
             let token = self
                 .panel_focus
                 .get(&panel_id)
@@ -806,6 +835,49 @@ impl AppRoot {
         } else {
             self.build_source_content(&target, document_id, window, cx)
         }
+    }
+
+    /// 用真实正文视图替换恢复占位：复用同一 PanelId／ViewKey 与内容构造器。
+    fn replace_recovery_panel(
+        &mut self,
+        project_id: ProjectId,
+        panel_id: PanelId,
+        view: ViewKey,
+        paged: Option<std::sync::Arc<crate::app_shell::paged_document::PagedDocument>>,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<(), AppRootError> {
+        let document_id = match &view {
+            ViewKey::Editor { document_id, .. }
+            | ViewKey::Markdown { document_id, .. }
+            | ViewKey::Diff { document_id, .. } => *document_id,
+            _ => return Err(AppRootError::MissingPanel),
+        };
+        let (content, focus) =
+            self.build_external_content(project_id, view, document_id, paged.as_ref(), window, cx)?;
+        let parent = self.project_focus_token(project_id, cx)?;
+        let registration = self.focus_manager.register(
+            &focus,
+            parent,
+            Some(project_id),
+            self.snapshot.registry().active() == Some(project_id),
+        )?;
+        let project = self
+            .projects
+            .get(&project_id)
+            .cloned()
+            .ok_or(ProjectRegistryError::ProjectNotFound)?;
+        project.update(cx, |project, _| {
+            let panel = project
+                .panels
+                .get_mut(&panel_id)
+                .expect("恢复占位面板必须存活到替换");
+            panel.content = content;
+        });
+        if let Some(previous) = self.panel_focus.insert(panel_id, registration) {
+            let _ = self.focus_manager.unregister(previous.token());
+        }
+        Ok(())
     }
 
     fn focus_panel_for_open(

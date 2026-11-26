@@ -251,10 +251,12 @@ impl DocumentOpenService {
         loaded: LoadedDocument,
     ) -> io::Result<OpenedDocument> {
         if let Some(id) = registry.existing(&loaded.location) {
+            // 分页恢复占位没有读取端口；重新读取的 Paged 正文必须交给安装链重建视图。
+            let keep_body = matches!(loaded.body, OpenedDocumentBody::Paged(_));
             return Ok(OpenedDocument {
                 id,
                 outcome: DocumentOpenOutcome::Existing,
-                body: None,
+                body: keep_body.then_some(loaded.body),
             });
         }
         let id = DocumentId::from_uuid(Uuid::now_v7()).expect("系统生成的 DocumentId 必须为 v7");

@@ -121,7 +121,7 @@
 | Git 行标丢失增改删语义，颜色与越界防护不满足合同 | 已修：`GitMark{line,kind}` 保留增／改／删，新增与修改使用 success／warning 语义色、删除用细条，绘制前过滤越界行；测试 `diff_marks_classify_insert_replace_and_delete`、`out_of_range_git_marks_are_ignored_during_painting`、`editor_git_marks_coalesce_latest_text` |
 | reveal_line 在软换行下把逻辑行当显示行 | 已修：软换行下 `reveal_logical_line` 经 wrap 索引换算显示行，索引未就绪登记待揭示行，索引完成回投消费（提交 c8a844d9）；测试 `reveal_line_targets_the_display_row_under_soft_wrap`、`reveal_line_waits_for_the_wrap_index_before_scrolling` |
 | 未知扩展名的文本文件在读取前被拒绝 | 已修：`viewable_file` 仅拒绝已知二进制扩展名，未知/无扩展名按纯文本尝试，NUL 与编码在真实读取后裁决（提交 8a3bb0de）；测试 `viewable_file_maps_known_source_extensions_case_insensitively`、`openable_in_app_routes_known_binaries_and_accepts_unknown_text`、`unknown_extension_utf8_opens_as_plain_text_and_binary_is_rejected` |
-| 分页恢复占位是无出口面板 | 待修 |
+| 分页恢复占位是无出口面板 | 已修：重新打开命中 `PanelContent::Recovery` 时按真实文件重读分页正文并用同一内容构造器替换占位（复用 PanelId/ViewKey）；已有分页 Document 缺读取端口时重新读取 Paged 正文；测试 `paged_document_restart_has_explicit_placeholder` |
 | 布局缓存没有容量或可见窗口回收 | 待修 |
 
 ## 终端核心与 GPUI 终端

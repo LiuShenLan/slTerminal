@@ -313,6 +313,24 @@ fn paged_document_restart_has_explicit_placeholder(cx: &mut TestAppContext) {
         1
     );
     assert!(window.debug_bounds("document-recovery-paged").is_some());
+
+    // 从文件树重新打开同一文件：占位必须被真实分页视图替换，而不是只还焦。
+    let canonical = CanonicalPath::new(dunce::canonicalize(&file).unwrap()).unwrap();
+    super::documents::open_document(&root, &mut window, PROJECT_A, GROUP_A, canonical);
+    window.run_until_parked();
+    draw_frame(&mut window);
+    assert!(
+        window.debug_bounds("document-recovery-paged").is_none(),
+        "重新打开必须替换恢复占位"
+    );
+    root.read_with(cx, |root, cx| {
+        let project = root.projects[&project_id(PROJECT_A)].read(cx);
+        assert_eq!(project.panels.len(), 1, "替换必须复用同一 Panel");
+        assert!(
+            project.panels.values().any(|panel| panel.paged().is_some()),
+            "占位必须替换为真实分页视图"
+        );
+    });
 }
 
 #[gpui::test]
