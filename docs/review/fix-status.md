@@ -204,7 +204,7 @@
 | 快照 revision 固定为握手起点，事件续传进入不可恢复 resync 循环 | 已修：`RuntimeCallbacks` 增加事件环末尾 revision 回调，`EventHub` 原子维护最新发布 revision，`runtime.snapshot` 返回该值；测试 `event_hub_latest_revision_tracks_published_events`、`runtime_snapshot_returns_injected_resources_with_hello_generation` |
 | 非交互关闭在保存、停止或清理落定前返回 Succeeded | 待修 |
 | 事件环移除滞后订阅后，订阅连接保持静默 | 已修：订阅事件写线程在事件源结束（滞后移除／发送端关闭／写失败）置完成标记，连接线程 1 秒读超时内检测并关闭连接，客户端收到 EOF；测试 `runtime_subscription_closes_when_the_event_source_ends` |
-| expected_revision 在线上端到端未生效 | 待修 |
+| expected_revision 在线上端到端未生效 | 已修：service 将线缆 `expected_revision` 与事件环当前末尾 revision 原样投影到 `DispatchRequest`，派发器在登记前拒绝失配；测试 `wire_expected_revision_reaches_the_dispatcher_projection` |
 | Operation 停在 Queued/Running 后没有恢复路径 | 待修 |
 | 项目、布局、面板与终端写 Operation 在持久快照提交前报告成功 | 待修 |
 | Hooks 草稿在决定齐备前被丢弃 | 已修：Runtime `app.close`／`project.remove` 先收集文档决定、预检并通过关闭登记后才按 `Discard` 清理草稿；项目移除以显式 `allow_hooks_discard` 跳过交互守卫（提交 c2b50b9d）；测试 `runtime_hooks_discard_waits_for_complete_document_decisions`、`runtime_project_hooks_discard_waits_for_document_decisions`、`runtime_project_remove_honors_discard_and_save_policies` |

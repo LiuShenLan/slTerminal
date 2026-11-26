@@ -383,6 +383,7 @@ impl LocalControlService {
                 metadata.store_epoch.clone(),
             ))
         });
+        let revision_hub = Arc::clone(&event_hub);
         let on_mutation: MutationCallback = Arc::new(move |request| {
             let Some(dispatcher) = &dispatcher else {
                 return Err(control_error(
@@ -391,7 +392,6 @@ impl LocalControlService {
                     "mutation not ready",
                 ));
             };
-            let method = request.mutation.method();
             let params = request.mutation.params_value().map_err(|_| {
                 control_error(
                     DomainErrorCode::InvalidRequest,
@@ -402,15 +402,18 @@ impl LocalControlService {
             // Git 破坏写与打开只在前台解析目标；阻塞读写仍归本连接线程。
             let git_write = GitWriteIntent::from_mutation(&request.mutation);
             let git_open = GitOpenIntent::from_mutation(&request.mutation);
+            let client_id = request.client_id.clone();
+            let mutation_id = request.mutation_id.clone();
+            let expected_revision = request.expected_revision;
+            let method = request.mutation.method();
             dispatcher.dispatch(
                 DispatchRequest {
-                    client_id: &request.client_id,
-                    mutation_id: &request.mutation_id,
+                    client_id: &client_id,
+                    mutation_id: &mutation_id,
                     method,
                     params: &params,
-                    // 资源代次由执行体在提交前复核，派发器不重复猜测。
-                    expected_revision: None,
-                    current_revision: 0,
+                    expected_revision,
+                    current_revision: revision_hub.latest_revision(),
                     resource_generations: BTreeMap::new(),
                 },
                 || match try_send_runtime_mutation(&mutation_events, request.mutation) {
@@ -621,6 +624,24 @@ pub(crate) fn runtime_contract_hashes() -> (String, String) {
     protocol.update(RUNTIME_SCHEMA);
     let protocol = protocol.finalize();
     (hex(&schema), hex(&protocol))
+}
+
+/// 线缆写请求到派发输入的单一投影：expected_revision 与当前事件代次必须
+/// 原样进入派发器，不能在生产路径被吞成 None。
+pub(crate) fn mutation_dispatch_request<'a>(
+    request: &'a crate::local_control::mutations::RuntimeMutationRequest,
+    params: &'a serde_json::Value,
+    current_revision: u64,
+) -> DispatchRequest<'a> {
+    DispatchRequest {
+        client_id: &request.client_id,
+        mutation_id: &request.mutation_id,
+        method: request.mutation.method(),
+        params,
+        expected_revision: request.expected_revision,
+        current_revision,
+        resource_generations: BTreeMap::new(),
+    }
 }
 
 fn hex(bytes: &[u8]) -> String {

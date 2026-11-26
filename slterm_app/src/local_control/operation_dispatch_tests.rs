@@ -8,6 +8,7 @@ use serde_json::json;
 use slterm_runtime_protocol::{DomainErrorCode, JsonRpcError, OperationStatus};
 
 use super::operations::{DispatchOutcome, DispatchRequest, OperationDispatcher};
+use super::service::mutation_dispatch_request;
 use crate::persistence::metadata::RunMarker;
 use crate::persistence::workspace::WorkspaceDatabase;
 use crate::persistence::workspace_writer::WorkspaceWriter;
@@ -216,5 +217,32 @@ fn failed_execution_persists_structured_error() {
         .unwrap();
     assert_eq!(waited.status, OperationStatus::Failed);
 
+    fixture.writer.shutdown().unwrap();
+}
+
+/// 线缆 expected_revision 必须原样进入派发器并在登记前拒绝过期意图。
+#[test]
+fn wire_expected_revision_reaches_the_dispatcher_projection() {
+    let fixture = fixture();
+    let mutation = crate::local_control::mutations::RuntimeMutationRequest {
+        client_id: "client-runtime".to_owned(),
+        mutation_id: "mutation-wire-revision".to_owned(),
+        expected_revision: Some(4),
+        mutation: crate::local_control::mutations::RuntimeMutation::AppFocus,
+    };
+    let params = mutation.mutation.params_value().unwrap();
+    let dispatch = mutation_dispatch_request(&mutation, &params, 5);
+    assert_eq!(dispatch.expected_revision, Some(4));
+    assert_eq!(dispatch.current_revision, 5);
+    let executions = AtomicUsize::new(0);
+    let error = fixture
+        .dispatcher
+        .dispatch(dispatch, || {
+            executions.fetch_add(1, Ordering::SeqCst);
+            DispatchOutcome::Succeeded(json!({}))
+        })
+        .expect_err("线缆过期代次必须拒绝");
+    assert_domain(&error, DomainErrorCode::RevisionConflict);
+    assert_eq!(executions.load(Ordering::SeqCst), 0);
     fixture.writer.shutdown().unwrap();
 }
