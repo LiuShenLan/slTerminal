@@ -2,6 +2,9 @@
 //!
 //! 完成时间提交后才启动 5 秒绝对撤销期限；批次之间期限彼此独立。
 //! 悬停、聚焦、关闭视图、退出或重启都不延长也不提前永久化。
+//! 撤销只有 [`HistoryQuarantine::undo_batch`] 一个执行入口：文件恢复成功后才
+//! 推进为已撤销；预检阻断或文件失败进入待处理，保留材料并允许不限原窗口重试，
+//! 待处理状态跨重启保留且永不自动永久化。
 //! 文件复制、来源删除与启动对账由后续接线消费本状态机。
 
 use std::io;
@@ -17,13 +20,23 @@ pub(crate) const UNDO_WINDOW: Duration = Duration::from_secs(5);
 pub(crate) struct QuarantineBatchId(pub(crate) uuid::Uuid);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum BatchStatus {
+pub(crate) enum BatchStatus {
     /// 副本尚未完整校验并移除来源。
     Prepared,
     /// 完成时间已提交，进入撤销窗口。
     Completed,
+    /// 撤销失败或预检阻断；材料保留，可不限原窗口重试。
+    NeedsAttention,
     /// 已按当前批次整体撤销；材料由撤销流程保留或恢复。
     Undone,
+}
+
+/// 跨重启的批次状态事实；完成时间缺失或待处理必须显式保留。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PersistedBatch {
+    pub(crate) id: QuarantineBatchId,
+    pub(crate) status: BatchStatus,
+    pub(crate) completed_at: Option<SystemTime>,
 }
 
 /// 未完成批次的持久阶段；完成提交前的异常退出从这里继续。
@@ -134,6 +147,31 @@ pub(crate) enum UndoRestoreOutcome {
     Blocked(Vec<UndoBlockage>),
 }
 
+/// 单次撤销尝试的完整结论；状态推进与文件恢复在同一入口闭合。
+#[derive(Debug)]
+pub(crate) enum UndoAttempt {
+    /// 未达到执行条件（未完成、已撤销、已到期或未知批次）。
+    Rejected(UndoDecision),
+    /// 全部恢复且状态已推进为已撤销。
+    Restored,
+    /// 预检阻断且状态已进入待处理；材料保留供重试。
+    Blocked(Vec<UndoBlockage>),
+    /// 文件副作用失败且状态已进入待处理；已创建的部分来源保留。
+    Failed(io::Error),
+}
+
+impl PartialEq for UndoAttempt {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Rejected(left), Self::Rejected(right)) => left == right,
+            (Self::Restored, Self::Restored) => true,
+            (Self::Blocked(left), Self::Blocked(right)) => left == right,
+            (Self::Failed(left), Self::Failed(right)) => left.kind() == right.kind(),
+            _ => false,
+        }
+    }
+}
+
 fn sha256(bytes: &[u8]) -> [u8; 32] {
     Sha256::digest(bytes).into()
 }
@@ -142,9 +180,7 @@ fn sha256(bytes: &[u8]) -> [u8; 32] {
 ///
 /// 预检失败返回 [`UndoRestoreOutcome::Blocked`] 且零写入；恢复阶段错误
 /// 按 `Err` 上抛，已创建的部分来源保留（与副本构成双份材料）供人工处理。
-pub(crate) fn restore_quarantine_batch(
-    material: &QuarantineBatchMaterial,
-) -> io::Result<UndoRestoreOutcome> {
+fn restore_quarantine_batch(material: &QuarantineBatchMaterial) -> io::Result<UndoRestoreOutcome> {
     let mut blockages = Vec::new();
     for (index, entry) in material.entries.iter().enumerate() {
         if precheck_undo_target(entry.source.exists()) == UndoTargetDecision::ExternalTarget {
@@ -319,34 +355,41 @@ impl HistoryQuarantine {
         }
     }
 
-    /// 持久事实：批次身份与已提交的完成时间；缺失完成时间的批次重启后进入待处理。
-    pub(crate) fn persisted_windows(&self) -> Vec<(QuarantineBatchId, Option<SystemTime>)> {
+    /// 持久事实：批次身份、状态与已提交的完成时间；待处理状态不得丢失。
+    pub(crate) fn persisted_windows(&self) -> Vec<PersistedBatch> {
         self.batches
             .iter()
-            .map(|(id, batch)| (*id, batch.completed_at))
+            .map(|(id, batch)| PersistedBatch {
+                id: *id,
+                status: batch.status,
+                completed_at: batch.completed_at,
+            })
             .collect()
     }
 
-    /// 重启恢复：完成时间缺失的批次进入 NeedsAttention，不伪装为可撤销或已到期。
-    pub(crate) fn from_persisted(windows: &[(QuarantineBatchId, Option<SystemTime>)]) -> Self {
+    /// 重启恢复：待处理与已撤销状态原样保留；缺完成时间不得伪装为可撤销或已到期。
+    pub(crate) fn from_persisted(windows: &[PersistedBatch]) -> Self {
         let mut service = Self::new();
-        for (id, completed_at) in windows {
-            let status = match completed_at {
-                Some(_) => BatchStatus::Completed,
-                None => BatchStatus::Prepared,
+        for window in windows {
+            // 完成状态必须有完成时间；缺失时降级为未完成，不能伪装可撤销。
+            let status = if window.status == BatchStatus::Completed && window.completed_at.is_none()
+            {
+                BatchStatus::Prepared
+            } else {
+                window.status
             };
             service.batches.insert(
-                *id,
+                window.id,
                 QuarantineBatch {
                     status,
-                    completed_at: *completed_at,
+                    completed_at: window.completed_at,
                 },
             );
         }
         service
     }
 
-    /// 已到期且已完成、尚未收割的批次身份；调用方负责显式清理与永久化。
+    /// 已到期且仍可撤销的完成批次身份；待处理批次永不自动永久化。
     pub(crate) fn expired(&self, now: SystemTime) -> Vec<QuarantineBatchId> {
         self.batches
             .iter()
@@ -356,28 +399,82 @@ impl HistoryQuarantine {
             .collect()
     }
 
-    /// 撤销点击：重新检查状态与绝对期限，全部通过才允许恢复并标记已撤销。
-    pub(crate) fn try_begin_undo(
-        &mut self,
-        id: QuarantineBatchId,
-        now: SystemTime,
-    ) -> UndoDecision {
+    /// 撤销点击的只读预检：不改变状态；通过后必须走 [`Self::undo_batch`]。
+    pub(crate) fn check_undo(&self, id: QuarantineBatchId, now: SystemTime) -> UndoDecision {
         let Some(status) = self.batches.get(&id).map(|batch| batch.status) else {
             return UndoDecision::Unknown;
         };
         match status {
             BatchStatus::Prepared => UndoDecision::NotCompleted,
             BatchStatus::Undone => UndoDecision::AlreadyUndone,
+            // 待处理批次保留材料，可在原窗口后继续显式重试。
+            BatchStatus::NeedsAttention => UndoDecision::Allowed,
             BatchStatus::Completed => {
                 if !self.undoable(id, now) {
                     return UndoDecision::Expired;
                 }
-                if let Some(batch) = self.batches.get_mut(&id) {
-                    batch.status = BatchStatus::Undone;
-                }
                 UndoDecision::Allowed
             }
         }
+    }
+
+    /// 撤销的唯一执行入口：先检查状态与期限，再恢复文件，最后按真实结局推进状态。
+    ///
+    /// 预检或文件恢复失败进入待处理态，保留全部材料供重试；绝不在副作用前
+    /// 标记已撤销。成功后才推进为 `Undone`。
+    pub(crate) fn undo_batch(
+        &mut self,
+        material: &QuarantineBatchMaterial,
+        now: SystemTime,
+    ) -> UndoAttempt {
+        match self.check_undo(material.id, now) {
+            UndoDecision::Allowed => {}
+            decision => return UndoAttempt::Rejected(decision),
+        }
+        match restore_quarantine_batch(material) {
+            Ok(UndoRestoreOutcome::Restored) => {
+                self.complete_undo(material.id);
+                UndoAttempt::Restored
+            }
+            Ok(UndoRestoreOutcome::Blocked(blockages)) => {
+                self.fail_undo(material.id);
+                UndoAttempt::Blocked(blockages)
+            }
+            Err(error) => {
+                self.fail_undo(material.id);
+                UndoAttempt::Failed(error)
+            }
+        }
+    }
+
+    /// 恢复成功后的状态推进；只接受仍在撤销流程中的批次。
+    pub(crate) fn complete_undo(&mut self, id: QuarantineBatchId) -> bool {
+        let Some(batch) = self.batches.get_mut(&id) else {
+            return false;
+        };
+        if !matches!(
+            batch.status,
+            BatchStatus::Completed | BatchStatus::NeedsAttention
+        ) {
+            return false;
+        }
+        batch.status = BatchStatus::Undone;
+        true
+    }
+
+    /// 恢复失败后的状态推进：保留完成时间与材料，进入不限原窗口的待处理态。
+    pub(crate) fn fail_undo(&mut self, id: QuarantineBatchId) -> bool {
+        let Some(batch) = self.batches.get_mut(&id) else {
+            return false;
+        };
+        if !matches!(
+            batch.status,
+            BatchStatus::Completed | BatchStatus::NeedsAttention
+        ) {
+            return false;
+        }
+        batch.status = BatchStatus::NeedsAttention;
+        true
     }
 }
 
@@ -415,17 +512,26 @@ mod tests {
         }
     }
 
+    /// 构造已完成且处于撤销窗口内的批次服务。
+    fn undo_ready(material: &QuarantineBatchMaterial) -> HistoryQuarantine {
+        let mut service = HistoryQuarantine::new();
+        assert!(service.start_batch(material.id));
+        assert!(service.complete_batch(material.id, at(100)));
+        service
+    }
+
     /// 目标外部新增、副本缺失或指纹不符时零恢复并保留全部材料。
     #[test]
     fn quarantine_undo_rejects_external_target_at_file_level() {
         let directory = tempfile::tempdir().unwrap();
         let material = stage_material(directory.path(), &[("a.txt", "old-a"), ("b.txt", "old-b")]);
 
+        let mut service = undo_ready(&material);
         std::fs::write(directory.path().join("a.txt"), "external").unwrap();
-        let outcome = restore_quarantine_batch(&material).unwrap();
+        let outcome = service.undo_batch(&material, at(104));
         assert_eq!(
             outcome,
-            UndoRestoreOutcome::Blocked(vec![UndoBlockage {
+            UndoAttempt::Blocked(vec![UndoBlockage {
                 entry: 0,
                 reason: UndoBlockReason::TargetExists,
             }]),
@@ -444,10 +550,10 @@ mod tests {
 
         std::fs::remove_file(directory.path().join("a.txt")).unwrap();
         std::fs::write(&material.entries[1].copy, "tampered").unwrap();
-        let outcome = restore_quarantine_batch(&material).unwrap();
+        let outcome = service.undo_batch(&material, at(104));
         assert_eq!(
             outcome,
-            UndoRestoreOutcome::Blocked(vec![UndoBlockage {
+            UndoAttempt::Blocked(vec![UndoBlockage {
                 entry: 1,
                 reason: UndoBlockReason::CopyCorrupted,
             }]),
@@ -456,10 +562,10 @@ mod tests {
         assert!(!directory.path().join("a.txt").exists(), "拒绝时零恢复");
 
         std::fs::remove_file(&material.entries[1].copy).unwrap();
-        let outcome = restore_quarantine_batch(&material).unwrap();
+        let outcome = service.undo_batch(&material, at(104));
         assert_eq!(
             outcome,
-            UndoRestoreOutcome::Blocked(vec![UndoBlockage {
+            UndoAttempt::Blocked(vec![UndoBlockage {
                 entry: 1,
                 reason: UndoBlockReason::CopyMissing,
             }]),
@@ -468,8 +574,8 @@ mod tests {
 
         std::fs::write(&material.entries[1].copy, "old-b").unwrap();
         assert_eq!(
-            restore_quarantine_batch(&material).unwrap(),
-            UndoRestoreOutcome::Restored
+            service.undo_batch(&material, at(104)),
+            UndoAttempt::Restored
         );
         assert_eq!(
             std::fs::read_to_string(directory.path().join("a.txt")).unwrap(),
@@ -513,12 +619,12 @@ mod tests {
         assert!(service.start_batch(material.id));
         assert!(service.complete_batch(material.id, at(100)));
         assert_eq!(
-            service.try_begin_undo(material.id, at(104)),
+            service.check_undo(material.id, at(104)),
             UndoDecision::Allowed
         );
         assert_eq!(
-            restore_quarantine_batch(&material).unwrap(),
-            UndoRestoreOutcome::Restored,
+            service.undo_batch(&material, at(104)),
+            UndoAttempt::Restored,
             "窗口内撤销必须恢复全部来源"
         );
         assert_eq!(
@@ -526,13 +632,20 @@ mod tests {
             b"one",
             "恢复内容必须来自隔离副本"
         );
+        assert_eq!(
+            service.undo_batch(&material, at(104)),
+            UndoAttempt::Rejected(UndoDecision::AlreadyUndone),
+            "成功撤销后不得再次恢复"
+        );
 
         let material = quarantine_batch(&store, batch(13), &items).unwrap();
+        assert!(service.start_batch(material.id));
+        assert!(service.complete_batch(material.id, at(100)));
         std::fs::write(&sources[0].0, b"external").unwrap();
-        let outcome = restore_quarantine_batch(&material).unwrap();
+        let outcome = service.undo_batch(&material, at(104));
         assert_eq!(
             outcome,
-            UndoRestoreOutcome::Blocked(vec![UndoBlockage {
+            UndoAttempt::Blocked(vec![UndoBlockage {
                 entry: 0,
                 reason: UndoBlockReason::TargetExists,
             }])
@@ -540,6 +653,12 @@ mod tests {
         assert_eq!(std::fs::read(&sources[0].0).unwrap(), b"external");
         assert!(!sources[1].0.exists(), "整批拒绝时不得部分恢复");
         assert!(material.entries.iter().all(|entry| entry.copy.exists()));
+        // 失败批次进入待处理，窗口过后仍可重试，不自动永久化。
+        assert_eq!(
+            service.check_undo(material.id, at(10_000)),
+            UndoDecision::Allowed
+        );
+        assert!(!service.expired(at(10_000)).contains(&material.id));
     }
 
     fn at(seconds: u64) -> SystemTime {
@@ -698,7 +817,7 @@ mod tests {
             "拒绝预检不得消耗撤销窗口"
         );
         assert_eq!(
-            service.try_begin_undo(batch(7), at(102)),
+            service.check_undo(batch(7), at(102)),
             UndoDecision::Allowed,
             "外部目标消失后仍可在窗口内撤销"
         );
@@ -710,17 +829,18 @@ mod tests {
         let mut service = HistoryQuarantine::new();
         assert!(service.start_batch(batch(4)));
         assert_eq!(
-            service.try_begin_undo(batch(4), at(100)),
+            service.check_undo(batch(4), at(100)),
             UndoDecision::NotCompleted,
             "未完成批次不得撤销"
         );
         assert!(service.complete_batch(batch(4), at(100)));
-        assert_eq!(
-            service.try_begin_undo(batch(4), at(104)),
-            UndoDecision::Allowed
+        assert_eq!(service.check_undo(batch(4), at(104)), UndoDecision::Allowed);
+        assert!(
+            service.complete_undo(batch(4)),
+            "只有恢复成功后才推进为已撤销"
         );
         assert_eq!(
-            service.try_begin_undo(batch(4), at(104)),
+            service.check_undo(batch(4), at(104)),
             UndoDecision::AlreadyUndone,
             "重复点击不得再次恢复"
         );
@@ -732,7 +852,7 @@ mod tests {
         assert!(service.start_batch(batch(5)));
         assert!(service.complete_batch(batch(5), at(100)));
         assert_eq!(
-            service.try_begin_undo(batch(5), at(105)),
+            service.check_undo(batch(5), at(105)),
             UndoDecision::Expired,
             "点击时超过绝对期限必须拒绝"
         );
@@ -740,9 +860,46 @@ mod tests {
             !service.undoable(batch(5), at(105)),
             "到期判定与撤销检查必须一致"
         );
+        assert_eq!(service.check_undo(batch(6), at(100)), UndoDecision::Unknown);
+    }
+
+    /// 恢复失败进入待处理并可跨重启重试；撤销状态绝不在副作用前推进。
+    #[test]
+    fn quarantine_undo_failure_state_survives_restart_and_allows_retry() {
+        let mut service = HistoryQuarantine::new();
+        assert!(service.start_batch(batch(14)));
+        assert!(service.complete_batch(batch(14), at(100)));
         assert_eq!(
-            service.try_begin_undo(batch(6), at(100)),
-            UndoDecision::Unknown
+            service.check_undo(batch(14), at(104)),
+            UndoDecision::Allowed
+        );
+        // 预检或文件恢复失败：不得提前标记已撤销。
+        assert!(service.fail_undo(batch(14)));
+        assert_eq!(
+            service.check_undo(batch(14), at(104)),
+            UndoDecision::Allowed,
+            "失败批次必须保留重试能力"
+        );
+        assert!(
+            !service.expired(at(10_000)).contains(&batch(14)),
+            "待处理批次不得因期限到达被永久化"
+        );
+        assert!(
+            service.check_undo(batch(14), at(10_000)) == UndoDecision::Allowed,
+            "待处理批次在窗口后仍可重试"
+        );
+
+        let windows = service.persisted_windows();
+        let mut restored = HistoryQuarantine::from_persisted(&windows);
+        assert_eq!(
+            restored.check_undo(batch(14), at(10_000)),
+            UndoDecision::Allowed,
+            "待处理状态必须跨重启保留"
+        );
+        assert!(restored.complete_undo(batch(14)));
+        assert_eq!(
+            restored.check_undo(batch(14), at(10_000)),
+            UndoDecision::AlreadyUndone
         );
     }
 

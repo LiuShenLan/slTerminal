@@ -109,7 +109,9 @@ mod tests {
     /// 导航瞬态不进入持久状态；未到期隔离批次重启后按原期限恢复。
     #[test]
     fn navigation_transient_and_quarantine_restore() {
-        use crate::history_quarantine::{HistoryQuarantine, QuarantineBatchId};
+        use crate::history_quarantine::{
+            BatchStatus, HistoryQuarantine, PersistedBatch, QuarantineBatchId,
+        };
         use slterm_sidebar::{SideViewState, side_view_state_schema};
         use slterm_workspace::{SideViewId, ViewStateRegistry};
         use std::time::{Duration, SystemTime};
@@ -135,7 +137,11 @@ mod tests {
             0x01, 0x9b, 0x76, 0xda, 0xa8, 0x01, 0x70, 0x00, 0x80, 0, 0, 0, 0, 0, 0, 0,
         ]));
         let completed = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
-        let restored = HistoryQuarantine::from_persisted(&[(id, Some(completed))]);
+        let restored = HistoryQuarantine::from_persisted(&[PersistedBatch {
+            id,
+            status: BatchStatus::Completed,
+            completed_at: Some(completed),
+        }]);
         assert!(
             restored.undoable(id, completed + Duration::from_secs(4)),
             "未到期隔离批次按规则恢复为可撤销"

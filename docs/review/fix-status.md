@@ -53,7 +53,7 @@
 | 改路径沿用旧根能力 | 已修：`AgentRoot::with_path` 把新根重置为默认只读；测试 `agent_root_path_change_requires_new_identity`、`agent_root_path_change_service_semantics` |
 | agent.start 注入 slug 而不是 AgentCatalog 内置命令 | 已修：改注入 `kind.catalog().builtin_command`；测试 `runtime_agent_start_injects_catalog_builtin_command` |
 | Claude 无原生会话 ID 时仍生成 `--continue` | 已修：无原生会话 ID 一律返回 None；测试 `resume_commands_require_catalog_capability_and_safe_identity` |
-| 撤销状态在恢复成功前被置为 Undone | 待修 |
+| 撤销状态在恢复成功前被置为 Undone | 已修：`check_undo` 只做只读预检，`undo_batch` 合并文件恢复与状态推进，成功才置 `Undone`；阻断或 I/O 失败进入 `NeedsAttention`，保留材料、不限原窗口重试且跨重启保留，`expired` 永不收割待处理批次；测试 `quarantine_undo_rechecks_deadline`、`quarantine_undo_failure_state_survives_restart_and_allows_retry`、`quarantine_undo_rejects_external_target_at_file_level` |
 | quarantine_batch 不先持久化清单，部分失败丢失材料身份 | 待修 |
 | 主题身份不是 ThemeId/UUIDv7，导入冲突被自动改名 | 已修：自定义主题身份改为 `ThemeId`（UUIDv7），显示名与身份分离；内置主题无可持久身份；同身份/同名导入明确拒绝且零写入（提交 de837f97）；测试 `theme_identity_is_uuid_v7_and_independent_from_display_name`、`import_rejects_a_display_name_conflict_without_writing`、`import_rejects_an_identity_that_already_exists`、`fork_assigns_a_uuid_v7_identity_independent_from_the_name` |
 | ANSI 16–255 被持久化成第二份色表 | 已修：主题只保存 ANSI 0–15，16–255 统一经 `xterm_indexed_color` 派生，文档不再写 `terminal.indexed`（提交 997bdcc6）；测试 `extended_indexed_colors_are_derived_not_persisted`、`indexed_colors_are_derived_from_the_single_xterm_formula`、`resolve_indexed_falls_back_to_cube_and_grayscale` |
@@ -202,7 +202,7 @@
 | 套餐周期契约与后台任务注册表不一致 | 待修 |
 | Runtime `git.diff` 路径校验放过盘符绝对路径/符号链接，工作区读取越过仓库根 | 已修：协议拒绝冒号/控制字符（盘符、ADS），应用层对规范位置做仓库根包含检查；测试 `git_diff_requires_a_safe_repository_relative_path`、`git_diff_snapshot_rejects_targets_outside_the_worktree` |
 | 快照 revision 固定为握手起点，事件续传进入不可恢复 resync 循环 | 已修：`RuntimeCallbacks` 增加事件环末尾 revision 回调，`EventHub` 原子维护最新发布 revision，`runtime.snapshot` 返回该值；测试 `event_hub_latest_revision_tracks_published_events`、`runtime_snapshot_returns_injected_resources_with_hello_generation` |
-| 非交互关闭在保存、停止或清理落定前返回 Succeeded | 待修 |
+| 非交互关闭在保存、停止或清理落定前返回 Succeeded | 已修：`app.close` 回执改由 `ApplicationClose.runtime_completion` 持有，最终冲刷成功后才发送；保存失败回 NotReady 并保持现场，未知结果放弃回执；测试 `runtime_app_close_reports_save_failure_and_keeps_scene`、`integration_runtime_noninteractive_close` |
 | 事件环移除滞后订阅后，订阅连接保持静默 | 已修：订阅事件写线程在事件源结束（滞后移除／发送端关闭／写失败）置完成标记，连接线程 1 秒读超时内检测并关闭连接，客户端收到 EOF；测试 `runtime_subscription_closes_when_the_event_source_ends` |
 | expected_revision 在线上端到端未生效 | 已修：service 将线缆 `expected_revision` 与事件环当前末尾 revision 原样投影到 `DispatchRequest`，派发器在登记前拒绝失配；测试 `wire_expected_revision_reaches_the_dispatcher_projection` |
 | `publish_discovery` 发布失败时双清理只报一个错误 | 已修：server 与事件环回收都必定尝试，错误逐项并入发布根因信封并保留发布 kind；测试 `publish_failure_combines_every_cleanup_error`、`service_publish_failure_reports_real_server_cleanup_failure` |
