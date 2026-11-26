@@ -64,6 +64,18 @@ pub(crate) struct LayoutCache {
     misses: usize,
 }
 
+/// 缓存容量上限：前台只保留最近视口附近的行，远距离滚动淘汰旧行。
+const LAYOUT_CACHE_CAPACITY: usize = 2048;
+/// 超过容量时保留插入行两侧的窗口。
+const LAYOUT_CACHE_RADIUS: usize = 512;
+
+fn prune_layout_rows<V>(lines: &mut HashMap<usize, V>, center: usize) {
+    if lines.len() <= LAYOUT_CACHE_CAPACITY {
+        return;
+    }
+    lines.retain(|row, _| row.abs_diff(center) <= LAYOUT_CACHE_RADIUS);
+}
+
 impl LayoutCache {
     /// 返回是否沿用同一布局键；任一维度变化都清空旧行。
     pub(crate) fn activate(&mut self, key: TextLayoutKey) -> bool {
@@ -88,6 +100,7 @@ impl LayoutCache {
 
     pub(crate) fn insert(&mut self, row: usize, line: ShapedLine) {
         self.lines.insert(row, line);
+        prune_layout_rows(&mut self.lines, row);
     }
 
     #[cfg(test)]
@@ -200,5 +213,33 @@ mod tests {
             assert!(!cache.activate(variant));
             assert!(cache.lines.is_empty());
         }
+    }
+}
+
+#[cfg(test)]
+mod layout_cache_tests {
+    use super::*;
+
+    /// 超过容量后只保留插入行附近的窗口；正常规模不淘汰。
+    #[test]
+    fn layout_cache_pruning_keeps_only_the_window_around_the_visible_row() {
+        let mut lines = HashMap::new();
+        for row in 0..LAYOUT_CACHE_CAPACITY {
+            lines.insert(row, row);
+        }
+        prune_layout_rows(&mut lines, LAYOUT_CACHE_CAPACITY - 1);
+        assert_eq!(lines.len(), LAYOUT_CACHE_CAPACITY, "容量内不得淘汰");
+
+        for row in LAYOUT_CACHE_CAPACITY..LAYOUT_CACHE_CAPACITY + 1000 {
+            lines.insert(row, row);
+        }
+        prune_layout_rows(&mut lines, LAYOUT_CACHE_CAPACITY + 999);
+        assert!(
+            lines.len() <= LAYOUT_CACHE_RADIUS * 2 + 1,
+            "淘汰后必须回到有界窗口: {}",
+            lines.len()
+        );
+        assert!(lines.contains_key(&(LAYOUT_CACHE_CAPACITY + 999)));
+        assert!(!lines.contains_key(&0), "远离视口的旧行必须淘汰");
     }
 }
