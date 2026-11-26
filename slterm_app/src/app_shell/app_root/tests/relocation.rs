@@ -67,8 +67,8 @@ fn clean_draft() -> HooksDraft {
     )
 }
 
-/// 冲突与 Project／Local 草稿必须先解决；User 草稿不阻塞；重定位后历史按
-/// 最新词法根重算，既有终端 cwd 保持。
+/// 冲突与 Project／Local 未提交草稿必须先解决；干净草稿与 User 草稿不阻塞；
+/// 重定位后历史按最新词法根重算，既有终端 cwd 保持。
 #[gpui::test]
 fn navigation_relocation_guards_and_reassigns_history(cx: &mut TestAppContext) {
     let (root, mut window, state) = open_root(cx);
@@ -96,25 +96,26 @@ fn navigation_relocation_guards_and_reassigns_history(cx: &mut TestAppContext) {
     assert_eq!(project_root(&root, cx, project_id(PROJECT_A)), old_root);
 
     let panel = PanelIdAllocator::new(7).allocate().unwrap();
+    let local_key = draft_key(panel, HooksDraftLayer::Local(project_id(PROJECT_A)));
     root.update(cx, |root, _| {
-        root.hook_drafts.insert(
-            draft_key(panel, HooksDraftLayer::Project(project_id(PROJECT_A))),
-            clean_draft(),
-        );
-        root.hook_drafts.insert(
-            draft_key(panel, HooksDraftLayer::Local(project_id(PROJECT_A))),
-            clean_draft(),
-        );
+        let mut dirty = clean_draft();
+        dirty.set_text(r#"{"Stop":[{"hooks":[{"type":"command","command":"edited"}]}]}"#);
+        root.hook_drafts.insert(local_key, dirty);
     });
     let blocked = relocate(&root, &mut window, project_id(PROJECT_A), new_root.clone());
     assert!(
         matches!(blocked, Err(AppRootError::HooksDraftPending)),
-        "Project／Local 草稿未解决必须拒绝: {blocked:?}"
+        "未提交的 Project／Local 草稿必须拒绝: {blocked:?}"
     );
     assert_eq!(project_root(&root, cx, project_id(PROJECT_A)), old_root);
 
     root.update(cx, |root, _| {
         root.hook_drafts.clear_project(project_id(PROJECT_A));
+        root.hook_drafts.insert(
+            draft_key(panel, HooksDraftLayer::Project(project_id(PROJECT_A))),
+            clean_draft(),
+        );
+        root.hook_drafts.insert(local_key, clean_draft());
         root.hook_drafts
             .insert(draft_key(panel, HooksDraftLayer::User), clean_draft());
     });
@@ -138,17 +139,17 @@ fn navigation_relocation_guards_and_reassigns_history(cx: &mut TestAppContext) {
     assert_eq!(state.borrow().attempts, 1, "重定位不得重建 PTY");
 }
 
-/// 项目移除同样要求绑定该项目的 Hooks 草稿先解决；User 草稿不阻塞。
+/// 项目移除同样要求绑定该项目的未提交 Hooks 草稿先解决；干净草稿与 User 草稿不阻塞。
 #[gpui::test]
 fn project_remove_requires_hooks_drafts_resolved(cx: &mut TestAppContext) {
     let (root, mut window, _) = open_root(cx);
     add_project(&root, &mut window, PROJECT_A, "C:/work/remove");
     let panel = PanelIdAllocator::new(8).allocate().unwrap();
+    let local_key = draft_key(panel, HooksDraftLayer::Local(project_id(PROJECT_A)));
     root.update(cx, |root, _| {
-        root.hook_drafts.insert(
-            draft_key(panel, HooksDraftLayer::Local(project_id(PROJECT_A))),
-            clean_draft(),
-        );
+        let mut dirty = clean_draft();
+        dirty.set_text(r#"{"Stop":[{"hooks":[{"type":"command","command":"edited"}]}]}"#);
+        root.hook_drafts.insert(local_key, dirty);
     });
     let blocked = window.update(|window, cx| {
         root.update(cx, |root, cx| {
@@ -157,7 +158,7 @@ fn project_remove_requires_hooks_drafts_resolved(cx: &mut TestAppContext) {
     });
     assert!(
         matches!(blocked, Err(AppRootError::HooksDraftPending)),
-        "项目专属草稿未解决必须拒绝移除: {blocked:?}"
+        "项目专属未提交草稿必须拒绝移除: {blocked:?}"
     );
     root.read_with(cx, |root, _| {
         assert!(
@@ -171,6 +172,7 @@ fn project_remove_requires_hooks_drafts_resolved(cx: &mut TestAppContext) {
 
     root.update(cx, |root, _| {
         root.hook_drafts.clear_project(project_id(PROJECT_A));
+        root.hook_drafts.insert(local_key, clean_draft());
         root.hook_drafts
             .insert(draft_key(panel, HooksDraftLayer::User), clean_draft());
     });
@@ -181,7 +183,7 @@ fn project_remove_requires_hooks_drafts_resolved(cx: &mut TestAppContext) {
     });
     assert!(
         !matches!(attempted, Err(AppRootError::HooksDraftPending)),
-        "User 草稿不得阻塞项目移除: {attempted:?}"
+        "干净草稿与 User 草稿不得阻塞项目移除: {attempted:?}"
     );
 }
 

@@ -180,11 +180,12 @@ impl HooksDraftHost {
             .map(|(key, draft)| (*key, draft))
     }
 
-    /// 项目移除与根重定位守卫：绑定该项目的 Project／Local 草稿未清空前拒绝。
+    /// 项目移除与根重定位守卫：绑定该项目且存在未提交编辑的草稿才拒绝；
+    /// 与磁盘一致的干净草稿不承载用户数据，不得阻塞项目操作。
     pub(crate) fn project_has_drafts(&self, project: ProjectId) -> bool {
         self.drafts
             .iter()
-            .any(|(key, _)| key.layer.project() == Some(project))
+            .any(|(key, draft)| key.layer.project() == Some(project) && draft.dirty())
     }
 
     /// 项目专属草稿随项目移除清理；User 草稿保留，不因项目存亡丢失。
@@ -337,7 +338,14 @@ mod tests {
 
         host.insert(project_key, draft(r#"{"Stop":[]}"#));
         host.insert(local_key, draft(r#"{"Stop":[]}"#));
-        assert!(host.project_has_drafts(project_a));
+        assert!(
+            !host.project_has_drafts(project_a),
+            "与磁盘一致的草稿不得阻塞项目操作"
+        );
+        host.get_mut(project_key)
+            .unwrap()
+            .set_text(r#"{"Stop":[{"hooks":[{"type":"command","command":"x"}]}]}"#);
+        assert!(host.project_has_drafts(project_a), "未提交编辑必须阻塞");
         assert!(!host.project_has_drafts(project_b));
 
         let mut cleared = host.clear_project(project_a);
