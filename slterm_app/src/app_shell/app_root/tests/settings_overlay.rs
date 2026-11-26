@@ -609,6 +609,26 @@ fn hooks_page_loads_saves_external_guard_and_discards(cx: &mut TestAppContext) {
         );
     });
 
+    // 保存期间继续编辑：迟到回执不得覆盖新文本。
+    let in_flight = r#"{"Stop":[{"hooks":[{"type":"command","command":"echo slow"}]}]}"#;
+    root.update(cx, |root, cx| {
+        root.update_hooks_draft_text(key, in_flight, cx)
+    });
+    root.update(cx, |root, cx| root.save_hooks_draft_for(key, cx));
+    let newer = r#"{"Stop":[{"hooks":[{"type":"command","command":"echo newer"}]}]}"#;
+    root.update(cx, |root, cx| root.update_hooks_draft_text(key, newer, cx));
+    window.run_until_parked();
+    draw_frame(&mut window);
+    root.read_with(cx, |root, _| {
+        let draft = root.hook_drafts.get(key).unwrap();
+        assert_eq!(
+            draft.text(),
+            newer,
+            "保存回执不得覆盖保存期间继续输入的文本"
+        );
+        assert!(draft.dirty(), "保存期间的编辑必须保持脏态以待再次保存");
+    });
+
     // 外部修改守卫：保存前重读，文件保持外部内容且草稿保留。
     root.update(cx, |root, cx| {
         root.update_hooks_draft_text(key, r#"{"Stop":[]}"#, cx)

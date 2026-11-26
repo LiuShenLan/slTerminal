@@ -571,7 +571,8 @@ impl AppRoot {
             cx.notify();
             return;
         };
-        let text = draft.text().to_owned();
+        let submitted = draft.text().to_owned();
+        let text = submitted.clone();
         let cancellation = CancellationToken::new();
         let task = cx.spawn(async move |this, cx| {
             let result = cx
@@ -590,14 +591,16 @@ impl AppRoot {
                 match result {
                     Ok(reloaded) => match reloaded.baseline() {
                         Some(baseline) => {
-                            let text = reloaded.editable_json();
-                            let model = reloaded.editable_value().clone();
+                            let saved_text = reloaded.editable_json();
+                            let saved_model = reloaded.editable_value().clone();
                             root.hooks_editor.documents.insert(key, reloaded);
-                            if let Some(draft) = root.hook_drafts.get_mut(key) {
-                                draft.mark_saved(baseline, text, model);
-                            }
+                            let applied = root.hook_drafts.get_mut(key).is_some_and(|draft| {
+                                draft.finish_save(&submitted, baseline, saved_text, saved_model)
+                            });
                             root.hooks_editor.errors.remove(&key);
-                            root.hooks_generation = root.hooks_generation.wrapping_add(1);
+                            if applied {
+                                root.hooks_generation = root.hooks_generation.wrapping_add(1);
+                            }
                         }
                         None => {
                             root.hooks_editor

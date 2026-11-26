@@ -68,13 +68,26 @@ impl HooksDraft {
         }
     }
 
-    /// 保存成功：基线、已保存文本与最后合法模型一起前移，草稿回到干净态。
-    pub(crate) fn mark_saved(&mut self, baseline: [u8; 32], text: String, model: Value) {
+    /// 保存成功回执结算：只有提交文本仍是当前文本时才替换为磁盘规范文本并回到干净态；
+    /// 保存期间的新编辑保留正文、模型与诊断，只推进基线，避免迟到回执覆盖新输入。
+    /// 返回是否替换了正文（调用方据此决定是否同步编辑区）。
+    pub(crate) fn finish_save(
+        &mut self,
+        submitted: &str,
+        baseline: [u8; 32],
+        saved_text: String,
+        saved_model: Value,
+    ) -> bool {
         self.baseline = Some(baseline);
-        self.saved_text = text.clone();
-        self.text = text;
-        self.model = model;
+        if self.text != submitted {
+            self.saved_text = saved_text;
+            return false;
+        }
+        self.saved_text = saved_text.clone();
+        self.text = saved_text;
+        self.model = saved_model;
         self.diagnostic = None;
+        true
     }
 
     pub(crate) fn baseline(&self) -> Option<[u8; 32]> {
@@ -248,6 +261,40 @@ mod tests {
 
         let reopened = host.get(key_user).map(|draft| draft.text().to_owned());
         assert_eq!(reopened.as_deref(), Some(r#"{"Stop":[]}"#));
+    }
+
+    /// 保存回执结算：提交后未再编辑才采用磁盘规范文本；期间的新编辑保留正文与脏态。
+    #[test]
+    fn save_receipt_keeps_edits_made_while_the_save_was_in_flight() {
+        let mut draft = draft(r#"{"Stop":[]}"#);
+        let submitted = draft.text().to_owned();
+        draft.set_text(r#"{"Stop":[{"hooks":[{"type":"command","command":"newer"}]}]}"#);
+        let edited = draft.text().to_owned();
+        let applied = draft.finish_save(
+            &submitted,
+            [7; 32],
+            "{\n  \"Stop\": []\n}".to_owned(),
+            serde_json::json!({"Stop": []}),
+        );
+        assert!(!applied, "迟到回执不得替换保存期间的新编辑");
+        assert_eq!(draft.text(), edited);
+        assert!(draft.dirty(), "新编辑必须保持脏态以便再次保存");
+        assert_eq!(
+            draft.baseline(),
+            Some([7; 32]),
+            "基线必须前移到刚写入的版本"
+        );
+
+        let submitted = draft.text().to_owned();
+        let applied = draft.finish_save(
+            &submitted,
+            [9; 32],
+            "{\n  \"Stop\": []\n}".to_owned(),
+            serde_json::json!({"Stop": []}),
+        );
+        assert!(applied, "正文未变时必须采用磁盘规范文本");
+        assert!(!draft.dirty());
+        assert_eq!(draft.text(), "{\n  \"Stop\": []\n}");
     }
 
     /// 非法 JSON 保留最后合法模型并禁用保存；修正后恢复可保存。
