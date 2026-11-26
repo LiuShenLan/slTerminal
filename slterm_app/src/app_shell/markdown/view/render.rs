@@ -17,6 +17,7 @@ use slterm_document::{
     MarkdownListItem, MarkdownStructure,
 };
 
+use super::super::formula::logical_formula_size;
 use super::super::progressive::{MarkdownBlockOutcome, MarkdownRenderDecision};
 use super::super::{
     CloseMarkdownSearch, FindMarkdown, FindNextMarkdown, FindPreviousMarkdown, MarkdownZoomIn,
@@ -364,7 +365,15 @@ fn render_block(
                 .ok()
                 .flatten();
             base.child(if let Some(image) = image {
+                // 位图按设备像素生成，显示宽度除回窗口 scale，避免高 DPI 放大。
+                let pixels = image.size(0);
+                let (width, _) = logical_formula_size(
+                    i32::from(pixels.width) as f32,
+                    i32::from(pixels.height) as f32,
+                    scale,
+                );
                 gpui::img(image)
+                    .w(px(width))
                     .max_w_full()
                     .object_fit(gpui::ObjectFit::Contain)
                     .into_any_element()
@@ -710,8 +719,16 @@ fn rich_text(
         container = container.child(content);
     }
     for image in formulas {
+        // 行内公式同样按窗口 scale 校正逻辑宽度。
+        let pixels = image.size(0);
+        let (width, _) = logical_formula_size(
+            i32::from(pixels.width) as f32,
+            i32::from(pixels.height) as f32,
+            scale_factor,
+        );
         container = container.child(
             gpui::img(image)
+                .w(px(width))
                 .object_fit(gpui::ObjectFit::Contain)
                 .into_any_element(),
         );

@@ -14,6 +14,25 @@ use crate::math::{
 
 const FORMULA_CACHE_BYTES: usize = 24 * 1024 * 1024;
 
+/// 设备像素位图 → 逻辑显示尺寸。
+///
+/// 位图按「窗口 scale × 阅读 zoom」光栅化，而 GPUI 的 `RenderImage` 固定以
+/// 1.0 的 scale factor 呈现；呈现层必须把窗口 scale 除回来，否则高 DPI 下
+/// 公式会按缩放因子被放大。阅读 zoom 已经体现在位图里，逻辑尺寸也要保留
+/// 它，故只除窗口 scale。
+pub(crate) fn logical_formula_size(
+    pixel_width: f32,
+    pixel_height: f32,
+    scale_factor: f32,
+) -> (f32, f32) {
+    let scale = if scale_factor.is_finite() && scale_factor > 0.0 {
+        scale_factor
+    } else {
+        1.0
+    };
+    (pixel_width / scale, pixel_height / scale)
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct FormulaRequest {
     source: String,
@@ -207,6 +226,17 @@ mod tests {
 
     fn request() -> FormulaRequest {
         FormulaRequest::new("x+1", false, 18.0, 1.0, 1.0, 0, [10, 20, 30])
+    }
+
+    #[test]
+    fn formula_logical_size_undoes_window_scale_but_keeps_reading_zoom() {
+        // raster = 窗口 1.5 × zoom 2.0：300×150 设备像素对应 200×100 逻辑像素。
+        assert_eq!(logical_formula_size(300.0, 150.0, 1.5), (200.0, 100.0));
+        assert_eq!(logical_formula_size(40.0, 20.0, 1.0), (40.0, 20.0));
+        // 非法 scale 不得产生 NaN/Inf 或零尺寸。
+        assert_eq!(logical_formula_size(8.0, 4.0, 0.0), (8.0, 4.0));
+        assert_eq!(logical_formula_size(8.0, 4.0, f32::NAN), (8.0, 4.0));
+        assert_eq!(logical_formula_size(8.0, 4.0, f32::INFINITY), (8.0, 4.0));
     }
 
     #[test]
