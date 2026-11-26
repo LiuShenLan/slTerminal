@@ -14,6 +14,8 @@ pub(crate) enum DocumentRecoveryKind {
     Authorization,
     Paged,
     Replaced,
+    /// 文件缺失或无法解码的干净 Document：保留可关闭占位，不静默丢面板。
+    Unavailable,
 }
 
 pub(crate) struct DocumentRecoveryView {
@@ -45,6 +47,10 @@ impl Render for DocumentRecoveryView {
             DocumentRecoveryKind::Replaced => (
                 "document-recovery-replaced",
                 Message::EditorReplacedRecovery,
+            ),
+            DocumentRecoveryKind::Unavailable => (
+                "document-recovery-unavailable",
+                Message::EditorRecoveryUnavailable,
             ),
         };
         div()

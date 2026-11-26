@@ -500,7 +500,13 @@ impl AppRoot {
                             cx,
                         )
                     } else {
-                        continue;
+                        // 文件缺失或不可解码也保留明确占位；面板可由关闭入口移除。
+                        self.restore_recovery_panel(
+                            project_id,
+                            view,
+                            super::document_recovery::DocumentRecoveryKind::Unavailable,
+                            cx,
+                        )
                     };
                     if let Err(error) = result {
                         log::warn!("恢复 Document 面板失败: {error}");

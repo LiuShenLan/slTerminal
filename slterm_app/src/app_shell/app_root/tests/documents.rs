@@ -333,6 +333,60 @@ fn paged_document_restart_has_explicit_placeholder(cx: &mut TestAppContext) {
     });
 }
 
+/// 文件在关闭期间缺失且没有干净快照：恢复必须保留可关闭占位，不静默丢面板。
+#[gpui::test]
+fn missing_clean_document_restores_unavailable_placeholder(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let project_root = temp.path().join("project");
+    std::fs::create_dir(&project_root).unwrap();
+    let file = project_root.join("gone.txt");
+    std::fs::write(
+        &file, "disk
+",
+    )
+    .unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let document =
+        slterm_document::DocumentId::from_str("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2a").unwrap();
+    let location = slterm_path::ResolvedPath::new(
+        CanonicalPath::new(dunce::canonicalize(&file).unwrap()).unwrap(),
+        Some(crate::atomic_file::file_identity(&std::fs::File::open(&file).unwrap()).unwrap()),
+    );
+    let mut projects = slterm_workspace::ProjectRegistry::new();
+    projects
+        .add_project(
+            project_id(PROJECT_A),
+            CanonicalPath::new(dunce::canonicalize(&project_root).unwrap()).unwrap(),
+        )
+        .unwrap();
+    let layout = ProjectSnapshot::restore(projects, Vec::new())
+        .unwrap()
+        .with_opened_document(project_id(PROJECT_A), group_id(GROUP_A), document, location)
+        .unwrap()
+        .0;
+    WorkspaceDatabase::open(&paths)
+        .unwrap()
+        .save_project_snapshot(&layout)
+        .unwrap();
+    std::fs::remove_file(&file).unwrap();
+
+    let persistence = AppRootPersistence::load(&paths, None);
+    let (root, mut window, _) = open_root_with_persistence(cx, persistence);
+    draw_frame(&mut window);
+
+    assert_eq!(
+        root.read_with(cx, |root, cx| root.panel_count(project_id(PROJECT_A), cx)),
+        1,
+        "缺失的干净 Document 仍必须保留面板"
+    );
+    assert!(
+        window
+            .debug_bounds("document-recovery-unavailable")
+            .is_some(),
+        "必须显示明确的不可用占位"
+    );
+}
+
 #[gpui::test]
 fn startup_reconciles_layout_before_snapshot(cx: &mut TestAppContext) {
     let temp = tempfile::tempdir().unwrap();

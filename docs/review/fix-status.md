@@ -25,7 +25,7 @@
 | 浮层已打开时设置入口改开项目面板 | 已修：`settings_overlay` 存在时入口只还焦浮层，项目面板只在浮层关闭后的下一次入口使用（提交 44112ce5）；测试 `integration_settings_singleton` |
 | Commit/Explorer 数据根切换时在途状态读取被丢弃或错投 | 待修 |
 | 项目重定位与导航历史恢复没有生产入口 | 待修 |
-| 启动恢复对缺失/不可解码的干净 Document 不建面板 | 待修 |
+| 启动恢复对缺失/不可解码的干净 Document 不建面板 | 已修：新增 `DocumentRecoveryKind::Unavailable` 占位与 typed 文案，未知 Document 不再 `continue` 丢面板，可由页签关闭入口移除；测试 `missing_clean_document_restores_unavailable_placeholder` |
 | Agent 根路径变更（同 id）沿用旧 ViewState | 已修：`agent_files_sync` 把「同 id 不同路径」视为移除并重登记，旧持久分区、展开目录与当前行一并清理；测试改走真实同步入口 `agent_root_path_change_resets_state_and_authorization` |
 | 授权代次在生产路径恒为零 | 待修 |
 | GitShow 非法 UTF-8 的合同冲突 | 需裁决 |
