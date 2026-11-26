@@ -131,7 +131,7 @@
 | 存活上限预检发生在真实 PTY 创建之后 | 已修：`TerminalRegistry::preflight_launch` 在解析 shell／创建 ConPTY 之前判定重复与额度；`launch`/`restore_launch` 均先预检。测试 `launch_capacity_is_checked_before_spawning_a_real_pty` |
 | 空 `Msg::Input` 永久卡住写队列 | 已修：发送端拒绝空输入 + 状态机跳过空项；测试 `empty_input_never_enters_the_command_channel`、`write_state_skips_empty_entries` |
 | 重连期间旧 worker 仍可注入退出事件或显示命令 | 待修 |
-| 帧唤醒标记与最新帧存储存在丢失竞态 | 待修 |
+| 帧唤醒标记与最新帧存储存在丢失竞态 | 已修：最新帧与唤醒位合并为同一 `WakeState` 锁，接收端取帧时原子清除标记，发送端新帧可重新入队；测试 `frame_written_between_take_and_ack_is_not_lost`、`frame_events_coalesce_to_latest_without_losing_semantic_events` |
 | 子进程退出时未排空已读输出 | 已修：本地启动开启 `drain_on_exit`，退出边界循环排空队列后才发布最终帧；测试 `local_options_drain_output_before_exit`、`child_exit_drains_queued_output_before_final_frame` |
 | 读取线程 EOF 或读取错误不会转成退出/故障事件 | 已修：`EventedPty::output_closed` 暴露读取端关闭，宽限 2 秒内无子进程退出事件即报告 `PtyFailure`；测试 `reader_reports_output_closed_after_eof`、`output_closed_without_child_exit_reports_transport_failure` |
 | OSC 原始缓冲无界，嗅探上限在分发后才生效 | 已修：`OscGate` 在进入 VT 解析器前把 OSC 负载限制在 24 MiB（覆盖内联图片 base64 上界），超限丢弃负载、保留终止符；测试 `osc_gate_bounds_unterminated_payload_and_recovers_after_terminator`、`osc_gate_keeps_st_terminator_across_chunk_boundaries` |

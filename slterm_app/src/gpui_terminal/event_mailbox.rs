@@ -3,11 +3,10 @@
 //! 因果链:PTY 输出爆发期每字节都可能触发 Wakeup,若全量入队,UI 线程会被
 //! 重绘请求淹没;Wakeup 语义本就是「有输出待渲染」的布尔事实,合并到一条不
 //! 丢信息。其余事件(Exit/Title/CommandStart…)携带语义,必须全保留。
-//! 唤醒位在处理**前**清零(见 `acknowledge`):UI 处理期间到达的新输出必须
-//! 能再入队一次重绘,哪怕落在非活动 tab 上。
+//! 唤醒位与最新帧由同一把锁原子交换：接收端取帧时清除标记，UI 处理期间
+//! 到达的新输出仍能再入队一次重绘，哪怕落在非活动 tab 上。
 
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
@@ -19,14 +18,50 @@ use slterm_terminal::render::TerminalFrame;
 /// 两个最大事件批次的容量；worker 满载时等待，不丢弃语义事件。
 const EVENT_CHANNEL_CAPACITY: usize = 256;
 
+/// 最新帧与待唤醒标记必须由同一把锁保护：接收端取帧时一并清除标记，
+/// 不会留下「帧已更新但唤醒已被旧标记吃掉」的窗口。
 #[derive(Clone, Default)]
-struct FrameState(Arc<Mutex<Option<Arc<TerminalFrame>>>>);
+struct WakeState(Arc<Mutex<WakeStateInner>>);
+
+#[derive(Default)]
+struct WakeStateInner {
+    wake_pending: bool,
+    frame: Option<Arc<TerminalFrame>>,
+}
+
+impl WakeState {
+    /// 保存最新帧；返回 true 表示需要向通道投递一条 Wakeup。
+    fn enqueue_frame(&self, frame: Arc<TerminalFrame>) -> bool {
+        let mut state = self.0.lock().unwrap();
+        state.frame = Some(frame);
+        !std::mem::replace(&mut state.wake_pending, true)
+    }
+
+    /// 无帧刷新；返回 true 表示需要向通道投递一条 Wakeup。
+    fn enqueue_wakeup(&self) -> bool {
+        let mut state = self.0.lock().unwrap();
+        !std::mem::replace(&mut state.wake_pending, true)
+    }
+
+    /// 取最新帧并同时清除唤醒标记，允许后续新帧重新入队。
+    fn take_wakeup(&self) -> Option<Arc<TerminalFrame>> {
+        let mut state = self.0.lock().unwrap();
+        state.wake_pending = false;
+        state.frame.take()
+    }
+
+    /// 通道断连时撤销本次唤醒；接收端已不存在，只保持状态自洽。
+    fn cancel_wakeup(&self) {
+        let mut state = self.0.lock().unwrap();
+        state.wake_pending = false;
+        state.frame = None;
+    }
+}
 
 #[derive(Clone)]
 pub(super) struct EventSender {
     sender: mpsc::Sender<Event>,
-    wake_pending: Arc<AtomicBool>,
-    frame: FrameState,
+    wake: WakeState,
     pub(super) native_prompt: NativePromptState,
 }
 
@@ -43,26 +78,19 @@ pub(super) struct NativePrompt {
 
 pub(crate) struct EventReceiver {
     receiver: mpsc::Receiver<Event>,
-    wake_pending: Arc<AtomicBool>,
-    frame: FrameState,
+    wake: WakeState,
 }
 
 pub(super) fn channel() -> (EventSender, EventReceiver) {
     let (sender, receiver) = mpsc::channel(EVENT_CHANNEL_CAPACITY);
-    let wake_pending = Arc::new(AtomicBool::new(false));
-    let frame = FrameState::default();
+    let wake = WakeState::default();
     (
         EventSender {
             sender,
-            wake_pending: wake_pending.clone(),
-            frame: frame.clone(),
+            wake: wake.clone(),
             native_prompt: NativePromptState::default(),
         },
-        EventReceiver {
-            receiver,
-            wake_pending,
-            frame,
-        },
+        EventReceiver { receiver, wake },
     )
 }
 
@@ -153,44 +181,44 @@ impl EventSender {
         }
         let event = match event {
             Event::Frame(frame) => {
-                *self.frame.0.lock().unwrap() = Some(frame);
+                if !self.wake.enqueue_frame(frame) {
+                    return;
+                }
+                Event::Wakeup
+            }
+            Event::Wakeup => {
+                if !self.wake.enqueue_wakeup() {
+                    return;
+                }
                 Event::Wakeup
             }
             event => event,
         };
         let wake = matches!(event, Event::Wakeup);
-        if wake && self.wake_pending.swap(true, Ordering::AcqRel) {
-            return;
-        }
         if futures::executor::block_on(self.sender.clone().send(event)).is_err() && wake {
-            self.wake_pending.store(false, Ordering::Release);
-            self.frame.0.lock().unwrap().take();
+            self.wake.cancel_wakeup();
         }
     }
 }
 
 impl EventReceiver {
     fn latest_event(&self, event: Event) -> Event {
-        if matches!(event, Event::Wakeup)
-            && let Some(frame) = self.frame.0.lock().unwrap().take()
-        {
-            return Event::Frame(frame);
+        if matches!(event, Event::Wakeup) {
+            return match self.wake.take_wakeup() {
+                Some(frame) => Event::Frame(frame),
+                None => Event::Wakeup,
+            };
         }
         event
     }
 
-    fn acknowledge(&self, event: &Event) {
-        if matches!(event, Event::Wakeup | Event::Frame(_)) {
-            // 处理前清零:UI 工作期间到达的输出必须仍能排进下一次重绘。
-            self.wake_pending.store(false, Ordering::Release);
-        }
-    }
+    /// 旧两阶段接口的兼容占位：取帧时已原子清除唤醒位。
+    #[cfg(test)]
+    fn acknowledge(&self, _event: &Event) {}
 
     pub(super) fn try_recv(&mut self) -> Result<Event, mpsc::TryRecvError> {
         let event = self.receiver.try_recv()?;
-        let event = self.latest_event(event);
-        self.acknowledge(&event);
-        Ok(event)
+        Ok(self.latest_event(event))
     }
 }
 
@@ -198,11 +226,7 @@ impl Stream for EventReceiver {
     type Item = Event;
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Event>> {
         match Pin::new(&mut self.receiver).poll_next(cx) {
-            Poll::Ready(Some(event)) => {
-                let event = self.latest_event(event);
-                self.acknowledge(&event);
-                Poll::Ready(Some(event))
-            }
+            Poll::Ready(Some(event)) => Poll::Ready(Some(self.latest_event(event))),
             result => result,
         }
     }
@@ -313,6 +337,42 @@ mod mailbox_tests {
         assert_eq!(latest.revision(), 2);
         assert!(matches!(receiver.try_recv(), Ok(Event::CommandStart)));
         assert!(receiver.try_recv().is_err());
+    }
+
+    /// 取帧与清唤醒位之间的新帧不得被已存在的唤醒标记吞掉。
+    #[test]
+    fn frame_written_between_take_and_ack_is_not_lost() {
+        use crate::gpui_terminal::session::GridSize;
+        use slterm_terminal::event::VoidListener;
+        use slterm_terminal::render::TerminalFrame;
+        use slterm_terminal::term::{Config, Term};
+
+        fn frame(revision: u64) -> Event {
+            let term = Term::new(
+                Config::default(),
+                &GridSize {
+                    columns: 80,
+                    screen_lines: 24,
+                },
+                VoidListener,
+            );
+            Event::Frame(Arc::new(TerminalFrame::capture(&term, revision)))
+        }
+
+        let (sender, mut receiver) = channel();
+        sender.send(Event::Wakeup);
+        let queued = receiver.receiver.try_recv().expect("唤醒事件必须已入队");
+        let event = receiver.latest_event(queued);
+
+        // 旧实现正是在这两步之间漏帧：新帧写入时旧唤醒位仍为真，
+        // 不再投递新 Wakeup，随后 acknowledge 把唤醒位清零。
+        sender.send(frame(41));
+        receiver.acknowledge(&event);
+
+        let Event::Frame(latest) = receiver.try_recv().expect("新帧必须仍可被消费") else {
+            panic!("新帧不得被吞掉");
+        };
+        assert_eq!(latest.revision(), 41);
     }
 
     #[test]
