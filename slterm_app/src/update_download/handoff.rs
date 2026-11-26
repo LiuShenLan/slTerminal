@@ -19,7 +19,7 @@
 //! 由整模块 dead_code 豁免兜住。
 #![allow(dead_code)]
 
-use std::io::{self, Read as _};
+use std::io::{self, ErrorKind, Read as _};
 use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::sync::Mutex;
@@ -496,10 +496,14 @@ pub(super) fn failure_unseen(root: &Path, executable: Option<&Path>, prompt_stat
     }
 }
 
-/// 更新安装的关闭守卫：预约先落盘，关闭未完成时由 Drop 撤销预约。
+const INSTALL_CONFIRMED_FILE: &str = "updates/install-next.json";
+const INSTALL_PENDING_FILE: &str = "updates/install-pending.json";
+
+/// 更新安装的关闭守卫：待定预约先落盘，关闭未完成时由 Drop 撤销。
 ///
-/// 只有统一关闭的最终状态提交完成（[`Self::install_scheduled`]）才保留预约；
-/// 关闭被取消、失败或 AppRoot 销毁时自动写回 `null`，下次启动不安装。
+/// 只有统一关闭的最终状态提交完成（[`Self::install_scheduled`]）才把
+/// 待定文件原子提升为可执行的确认预约；关闭被取消、失败、知情放弃或
+/// 进程中断时确认文件不存在，下次启动不安装。
 pub(crate) struct UpdateInstallGuard {
     root: PathBuf,
     armed: bool,
@@ -508,15 +512,28 @@ pub(crate) struct UpdateInstallGuard {
 impl UpdateInstallGuard {
     /// 排定下次启动安装并持有守卫；预约失败不产生守卫。
     pub(crate) fn arm(root: &Path, asset: &UpdateAsset) -> Result<Self, String> {
-        schedule_at(root, asset)?;
+        let data = armed_asset_bytes(asset)?;
+        let confirmed = root.join(INSTALL_CONFIRMED_FILE);
+        match std::fs::remove_file(&confirmed) {
+            Ok(()) => {}
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("撤销旧更新预约失败: {error}")),
+        }
+        crate::atomic_file::write(&root.join(INSTALL_PENDING_FILE), &data)
+            .map_err(|error| error.to_string())?;
         Ok(Self {
             root: root.to_owned(),
             armed: true,
         })
     }
 
-    /// 统一关闭完成（最终状态提交成功）：保留预约并解除守卫。
+    /// 统一关闭完成（最终状态提交成功）：待定预约原子提升为确认预约。
     pub(crate) fn install_scheduled(mut self) {
+        let pending = self.root.join(INSTALL_PENDING_FILE);
+        let confirmed = self.root.join(INSTALL_CONFIRMED_FILE);
+        if let Err(error) = crate::atomic_file::replace(&pending, &confirmed) {
+            log::warn!("确认更新安装预约失败: {error}");
+        }
         self.armed = false;
     }
 }
@@ -526,20 +543,15 @@ impl Drop for UpdateInstallGuard {
         if !self.armed {
             return;
         }
-        if let Err(error) =
-            crate::atomic_file::write(&self.root.join("updates/install-next.json"), b"null")
-        {
-            log::warn!("撤销更新安装预约失败: {error}");
+        match std::fs::remove_file(self.root.join(INSTALL_PENDING_FILE)) {
+            Ok(()) => {}
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => log::warn!("撤销待定更新安装预约失败: {error}"),
         }
     }
 }
 
-/// 预约下次启动安装(不授予安装权限;`apply_scheduled` 启动早期消费)。
-pub(crate) fn schedule(asset: &UpdateAsset) -> Result<(), String> {
-    schedule_at(crate::platform::dirs::local_dir(), asset)
-}
-
-pub(crate) fn schedule_at(root: &Path, asset: &UpdateAsset) -> Result<(), String> {
+fn armed_asset_bytes(asset: &UpdateAsset) -> Result<Vec<u8>, String> {
     crate::platform::distribution::require_direct_update()?;
     if crate::platform::elevation::requires_isolation() {
         return Err("请在普通权限的 slTerminal 窗口中预约更新".into());
@@ -548,8 +560,14 @@ pub(crate) fn schedule_at(root: &Path, asset: &UpdateAsset) -> Result<(), String
     if !matches!(super::status(asset), super::DownloadStatus::Ready { .. }) {
         return Err("安装包尚未就绪,无法预约安装".to_owned());
     }
-    let data = serde_json::to_vec(asset).map_err(|error| error.to_string())?;
-    crate::atomic_file::write(&root.join("updates/install-next.json"), &data)
+    serde_json::to_vec(asset).map_err(|error| error.to_string())
+}
+
+/// 测试专用低层确认写入；生产预约必须经 [`UpdateInstallGuard`]。
+#[cfg(test)]
+fn schedule_at(root: &Path, asset: &UpdateAsset) -> Result<(), String> {
+    let data = armed_asset_bytes(asset)?;
+    crate::atomic_file::write(&root.join(INSTALL_CONFIRMED_FILE), &data)
         .map_err(|error| error.to_string())
 }
 
@@ -566,11 +584,17 @@ pub(crate) fn apply_scheduled_at(paths: &PreparePaths) -> bool {
     if crate::platform::distribution::current().externally_managed() {
         return false;
     }
+    // 未确认的待定预约不是安装授权；启动时清除，只有确认文件可被消费。
+    if let Err(error) = std::fs::remove_file(paths.root.join(INSTALL_PENDING_FILE))
+        && error.kind() != ErrorKind::NotFound
+    {
+        log::warn!("清理待定更新安装预约失败: {error}");
+    }
     // 早于首个 Inno 安装基的当前版本不允许自动安装。
     if crate::update_check::requires_manual_reinstall(env!("CARGO_PKG_VERSION")) {
         return false;
     }
-    let path = paths.root.join("updates/install-next.json");
+    let path = paths.root.join(INSTALL_CONFIRMED_FILE);
     let Some(asset) = read_json::<UpdateAsset>(&path) else {
         return false;
     };

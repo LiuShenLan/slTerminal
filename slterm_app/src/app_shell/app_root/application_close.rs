@@ -112,7 +112,8 @@ impl AppRoot {
             }
             self.close_in_progress = true;
             self.close_completed = true;
-            self.finish_update_install();
+            // 无 writer 的完成路径没有最终持久提交，不得保留安装预约。
+            self.cancel_update_install();
             window.remove_window();
             return Ok(ApplicationCloseStart::Completed);
         };
@@ -941,11 +942,15 @@ impl AppRoot {
         }
         self.tasks.complete(TaskId::CloseFlush);
         match result {
-            Ok(Ok(_)) => {
+            Ok(Ok(outcome)) => {
                 let window = recovery.window;
                 self.close_in_progress = false;
                 self.close_completed = true;
-                self.finish_update_install();
+                if outcome == crate::app_shell::FinalShutdownOutcome::Completed {
+                    self.finish_update_install();
+                } else {
+                    self.cancel_update_install();
+                }
                 let _ = window.update(cx, |_, window, _| window.remove_window());
             }
             Ok(Err(GlobalCloseError::ControlPlaneCleanupFailed)) => {
@@ -1030,7 +1035,11 @@ impl AppRoot {
                     .window;
                 self.close_in_progress = false;
                 self.close_completed = true;
-                self.finish_update_install();
+                if outcome == crate::app_shell::FinalShutdownOutcome::Completed {
+                    self.finish_update_install();
+                } else {
+                    self.cancel_update_install();
+                }
                 let _ = window.update(cx, |_, window, _| window.remove_window());
             }
             Ok(Err(GlobalCloseError::ControlPlaneCleanupFailed)) => {

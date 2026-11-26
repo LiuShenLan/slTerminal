@@ -341,26 +341,52 @@ fn update_install_uses_close_guard() {
     let body = b"MZclose guard fixture";
     let asset = installer_asset(body);
     stage_ready_package(root.path(), &asset, body);
-    let arm_path = root.path().join("updates/install-next.json");
+    let pending_path = root.path().join("updates/install-pending.json");
+    let confirmed_path = root.path().join("updates/install-next.json");
 
-    // 关闭未完成（守卫提前释放）：预约必须撤销。
+    // 关闭未完成（守卫提前释放）：待定预约必须删除，确认预约不得出现。
     {
         let _guard = UpdateInstallGuard::arm(root.path(), &asset).unwrap();
         let armed: UpdateAsset =
-            serde_json::from_slice(&std::fs::read(&arm_path).unwrap()).unwrap();
+            serde_json::from_slice(&std::fs::read(&pending_path).unwrap()).unwrap();
         assert_eq!(armed, asset);
+        assert!(
+            !confirmed_path.exists(),
+            "最终提交前不得出现可执行的安装预约"
+        );
     }
-    assert_eq!(
-        std::fs::read(&arm_path).unwrap(),
-        b"null",
-        "取消或失败的关闭必须撤销预约"
-    );
+    assert!(!pending_path.exists(), "取消或失败的关闭必须撤销待定预约");
+    assert!(!confirmed_path.exists(), "取消或失败的关闭不得保留安装意图");
 
-    // 关闭完成：预约保留到下次启动。
+    // 关闭完成：待定预约原子提升为确认预约，删除待定文件。
     let guard = UpdateInstallGuard::arm(root.path(), &asset).unwrap();
     guard.install_scheduled();
-    let armed: UpdateAsset = serde_json::from_slice(&std::fs::read(&arm_path).unwrap()).unwrap();
+    let armed: UpdateAsset =
+        serde_json::from_slice(&std::fs::read(&confirmed_path).unwrap()).unwrap();
     assert_eq!(armed, asset);
+    assert!(!pending_path.exists(), "确认后不得留下待定副本");
+}
+
+/// 崩溃或中断留下的待定预约不是安装授权：启动只读确认文件并清理待定项。
+#[test]
+fn pending_update_reservation_is_not_consumed_at_startup() {
+    let root = tempfile::tempdir().unwrap();
+    let body = b"MZpending reservation fixture";
+    let asset = installer_asset(body);
+    stage_ready_package(root.path(), &asset, body);
+    let pending_path = root.path().join("updates/install-pending.json");
+    let data = serde_json::to_vec(&asset).unwrap();
+    std::fs::write(&pending_path, data).unwrap();
+
+    let paths = PreparePaths {
+        root: root.path().to_owned(),
+        executable: std::env::current_exe().unwrap(),
+        installation: root.path().join("installation"),
+        config_directory: root.path().join("config"),
+    };
+    assert!(!apply_scheduled_at(&paths), "只有确认预约才允许启动安装");
+    assert!(!pending_path.exists(), "启动必须清理未确认的待定预约");
+    assert!(!root.path().join("updates/install-next.json").exists());
 }
 
 #[test]
