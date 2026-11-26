@@ -113,7 +113,7 @@ Source: "{#RepoRoot}\licenses\LICENSE-DAV1D"; DestDir: "{app}\licenses"; Flags: 
 Name: "{group}\{#AppDisplayName}"; Filename: "{app}\slterm.exe"; IconFilename: "{app}\assets\app-icon.ico"; WorkingDir: "{%USERPROFILE}"; AppUserModelID: "{#AppUserModelId}"
 Name: "{group}\{cm:UninstallProgram,{#AppDisplayName}}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#AppDisplayName}"; Filename: "{app}\slterm.exe"; IconFilename: "{app}\assets\app-icon.ico"; WorkingDir: "{%USERPROFILE}"; AppUserModelID: "{#AppUserModelId}"; Tasks: desktopicon
-Name: "{userstartup}\{#AppDisplayName}"; Filename: "{app}\slterm.exe"; IconFilename: "{app}\assets\app-icon.ico"; WorkingDir: "{%USERPROFILE}"; AppUserModelID: "{#AppUserModelId}"; Tasks: autostart
+Name: "{userstartup}\{#AppDisplayName}"; Filename: "{app}\slterm.exe"; Parameters: "--autostart"; IconFilename: "{app}\assets\app-icon.ico"; WorkingDir: "{%USERPROFILE}"; AppUserModelID: "{#AppUserModelId}"; Tasks: autostart
 
 [Registry]
 #ifdef AcceptanceFixture

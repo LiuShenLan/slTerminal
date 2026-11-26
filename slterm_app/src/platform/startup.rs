@@ -177,7 +177,8 @@ fn current_shortcut() -> std::io::Result<Shortcut> {
     let executable = std::env::current_exe()?;
     Ok(Shortcut {
         target: executable.clone(),
-        arguments: String::new(),
+        // 登录自启标记：普通手工启动不带该参数，静默分支不参与。
+        arguments: "--autostart".to_owned(),
         working_directory: super::dirs::home_dir(),
         icon: Some(executable),
     })

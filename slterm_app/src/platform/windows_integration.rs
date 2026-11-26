@@ -79,11 +79,11 @@ impl LoginStartReport {
 ///
 /// 托盘不可用时隐藏窗口会让窗口无入口，因此宁可正常显示。
 pub(crate) fn start_hidden_with(
-    restore_tabs: bool,
+    autostart: bool,
     settings_allow: bool,
     windows: &dyn WindowsIntegration,
 ) -> bool {
-    restore_tabs && settings_allow && windows.tray_available()
+    autostart && settings_allow && windows.tray_available()
 }
 
 /// 设置页需要展示的 Windows 实际状态说明。

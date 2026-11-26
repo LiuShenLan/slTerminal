@@ -438,17 +438,18 @@ fn frozen_startup_paths(
 /// 本次启动是否静默。
 ///
 /// 设置两条件(`silent_start && tray`)由 [`config::Settings::start_hidden`]
-/// 单点判定;显式 CLI 目录启动恒不静默——用户主动发起时把窗口藏起来没有意义。
-/// 托盘不可用时同样不隐藏:隐藏窗口没有恢复入口。启动路径顺带把托盘设置
-/// 交给端口,使可用性判定基于本次真实运行而非设置值。
+/// 单点判定：只有登录自启且设置允许、托盘可用时才静默。
+///
+/// 手工启动不携带 `--autostart`，即使设置开启也显示窗口；启动路径顺带把
+/// 托盘设置交给端口，使可用性判定基于本次真实运行而非设置值。
 fn starts_hidden(
-    restore_tabs: bool,
+    autostart: bool,
     settings: &config::Settings,
     windows: &dyn crate::platform::windows_integration::WindowsIntegration,
 ) -> bool {
     windows.set_tray_enabled(settings.tray);
     crate::platform::windows_integration::start_hidden_with(
-        restore_tabs,
+        autostart,
         settings.start_hidden(),
         windows,
     )
@@ -467,8 +468,8 @@ fn tray_command_event(command: crate::tray::GpuiTrayCommand) -> SltermShellEvent
 /// 装配序(因果链照上游):assets → QuitMode → run 闭包内 init → open_window。
 /// 关窗即退出(跨领域不变量 5):`QuitMode::LastWindowClosed` + 无 mux 驻留臂,
 /// 最后一窗关闭 = 进程退出。
-pub fn run_shell(initial_cwd: Option<PathBuf>) {
-    run_shell_loop(initial_cwd, run_shell_once);
+pub fn run_shell(initial_cwd: Option<PathBuf>, autostart: bool) {
+    run_shell_loop(initial_cwd, |cwd| run_shell_once(cwd, autostart));
 }
 
 /// 用户显式重试才重新进入启动链；原始 cwd 在每轮保持不变。
@@ -483,7 +484,10 @@ fn run_shell_loop(
     }
 }
 
-fn run_shell_once(initial_cwd: Option<PathBuf>) -> startup_diagnostics::ShellRunOutcome {
+fn run_shell_once(
+    initial_cwd: Option<PathBuf>,
+    autostart: bool,
+) -> startup_diagnostics::ShellRunOutcome {
     // 后台任务运行时复位:静态初值即注册表默认值,这里显式
     // 再对齐一次,保证同进程重启测试/后续配置载入从确定态出发。
     crate::background_tasks::reset_defaults();
@@ -588,13 +592,10 @@ fn run_shell_once(initial_cwd: Option<PathBuf>) -> startup_diagnostics::ShellRun
     });
     application.run(move |cx| {
         init(cx);
-        // 静默启动:仅无显式 CLI 目录时参与;窗口以隐藏
-        // 形态创建,托盘「显示」经 focus facade 回窗。
-        let start_hidden = starts_hidden(
-            regular_start,
-            cx.global::<config::Settings>(),
-            windows.as_ref(),
-        );
+        // 静默启动：只有登录自启标记参与；窗口以隐藏形态创建，
+        // 托盘「显示」经 focus facade 回窗。
+        let start_hidden =
+            starts_hidden(autostart, cx.global::<config::Settings>(), windows.as_ref());
         windowing::open_initial_window(
             cx,
             windowing::InitialWindowSpec {
@@ -713,16 +714,16 @@ mod shell_event_tests {
         crate::app_shell::config::Settings::from_runtime(&runtime)
     }
 
-    /// 显式 CLI 启动(`--working-directory`/`-e`)恒不静默;无显式参数
-    /// 的常规启动才允许设置两条件生效,并且启动路径把托盘设置交给端口。
+    /// 手动启动不带登录自启标记，即使设置两条件成立也不隐藏；
+    /// 只有安装器／启动项写入 `--autostart` 才进入静默分支。
     #[test]
-    fn explicit_cli_launch_never_starts_hidden() {
+    fn manual_launch_never_starts_hidden() {
         let settings = silent_settings();
         let windows = FakeWindowsIntegration::default();
-        assert!(starts_hidden(true, &settings, &windows), "常规启动可静默");
+        assert!(starts_hidden(true, &settings, &windows), "登录自启可静默");
         assert!(
             !starts_hidden(false, &settings, &windows),
-            "显式 CLI 启动不得隐藏"
+            "手工启动不得隐藏"
         );
         assert!(windows.tray_enabled(), "启动路径必须应用托盘设置");
     }

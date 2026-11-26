@@ -26,6 +26,10 @@ pub struct Cli {
     #[arg(long, value_name = "DIRECTORY")]
     pub working_directory: Option<PathBuf>,
 
+    /// 登录自启标记；只有安装器／启动项写入，手工启动不携带。
+    #[arg(long, hide = true)]
+    pub autostart: bool,
+
     #[command(subcommand)]
     pub subcommands: Option<Subcommands>,
 }
@@ -234,6 +238,7 @@ fn run_setup_ai(options: SetupAiOptions) -> i32 {
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct StartupOptions {
     pub working_directory: Option<PathBuf>,
+    pub autostart: bool,
 }
 
 impl Cli {
@@ -241,6 +246,7 @@ impl Cli {
     pub fn startup_options(self) -> StartupOptions {
         StartupOptions {
             working_directory: self.working_directory.map(repair_context_menu_dir),
+            autostart: self.autostart,
         }
     }
 }
@@ -296,6 +302,12 @@ mod cli_tests {
             let options = parse_args(args).unwrap().startup_options();
             assert_eq!(options.working_directory, Some(PathBuf::from("D:/work")));
         }
+    }
+
+    #[test]
+    fn autostart_flag_is_the_only_silent_start_intent() {
+        assert!(!parse([]).unwrap().startup_options().autostart);
+        assert!(parse(["--autostart"]).unwrap().startup_options().autostart);
     }
 
     #[test]

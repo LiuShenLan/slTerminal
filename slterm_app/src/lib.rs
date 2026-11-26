@@ -227,7 +227,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         .filter(|path| path.is_dir())
         .and_then(|path| std::path::absolute(path).ok());
 
-    app_shell::run_shell(initial_cwd);
+    app_shell::run_shell(initial_cwd, options.autostart);
     Ok(())
 }
 

@@ -196,7 +196,7 @@
 | 更新预约在崩溃或知情放弃关闭时仍保留 | 已修：预约拆为 `install-pending.json` 待定态与 `install-next.json` 确认态；`arm` 只写待定，统一关闭 `Completed` 才原子提升，Abandoned／失败／无 writer／取消删除待定，启动清理待定且只消费确认；测试 `update_install_uses_close_guard`、`pending_update_reservation_is_not_consumed_at_startup` |
 | 启动安装依赖已退役的 session.json，恢复票没有消费方 | 待修 |
 | 托盘可用性判定早于建窗，失败后没有恢复节拍 | 待修 |
-| 合同冲突：静默启动的触发范围 | 需裁决 |
+| 合同冲突：静默启动的触发范围 | 已裁决为仅登录自启：CLI 增加隐藏 `--autostart` 标记，安装器启动项与 `set_launch_at_login` 写入该参数；手工启动即使设置开启也显示窗口；测试 `autostart_flag_is_the_only_silent_start_intent`、`manual_launch_never_starts_hidden`、`silent_start_falls_back_to_a_visible_window_without_a_usable_tray` |
 | 诊断脱敏不覆盖真实 Runtime token 形态 | 已修：`redact` 增加恰好 64 位小写 hex 的裸凭据识别（更长 hex 段不截断），验收 token 改为真实 64 位 hex 假值并覆盖键值、Bearer、裸值三种形态；测试 `runtime_token_absent_from_materials`、`redaction_covers_credential_shapes` |
 | 追溯矩阵把服务层或注册表层用例标成运行态集成 | 待修 |
 | 套餐周期契约与后台任务注册表不一致 | 待修 |
