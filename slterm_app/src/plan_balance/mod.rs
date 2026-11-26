@@ -93,29 +93,41 @@ impl PlanBalanceSource {
     /// 固定来源全集；顺序稳定，供调度与展示共用。
     pub(crate) const ALL: [Self; 2] = [Self::DeepSeek, Self::Kimi];
 
-    pub(crate) const fn credential_target(self) -> &'static str {
-        match self {
-            Self::DeepSeek => "slterm/plan-balance/deepseek",
-            Self::Kimi => "slterm/plan-balance/kimi",
+    /// 凭据目标绑定本地数据根的无损散列：不同数据根不得共享套餐 token。
+    pub(crate) fn credential_target(self, local_root: &std::path::Path) -> String {
+        use std::fmt::Write as _;
+        let source = match self {
+            Self::DeepSeek => "deepseek",
+            Self::Kimi => "kimi",
+        };
+        let hash = crate::platform::dirs::stable_path_hash(local_root);
+        let mut target = format!("slterm/plan-balance/{source}/");
+        for byte in hash {
+            write!(&mut target, "{byte:02x}").expect("凭据目标格式化失败");
         }
+        target
     }
 }
 
 /// 凭据只经凭据域读取；请求组装方拿到的是即用即焚句柄，不进入日志或 DTO。
 pub(crate) struct PlanBalanceCredentials {
     store: std::sync::Arc<dyn crate::secrets::CredentialStore>,
+    local_root: std::path::PathBuf,
 }
 
 impl PlanBalanceCredentials {
-    pub(crate) fn new(store: std::sync::Arc<dyn crate::secrets::CredentialStore>) -> Self {
-        Self { store }
+    pub(crate) fn new(
+        store: std::sync::Arc<dyn crate::secrets::CredentialStore>,
+        local_root: std::path::PathBuf,
+    ) -> Self {
+        Self { store, local_root }
     }
 
     pub(crate) fn load(
         &self,
         source: PlanBalanceSource,
     ) -> std::io::Result<Option<crate::secrets::SecretBytes>> {
-        self.store.load(source.credential_target())
+        self.store.load(&source.credential_target(&self.local_root))
     }
 }
 
@@ -173,11 +185,25 @@ mod credential_tests {
         for source in [PlanBalanceSource::DeepSeek, PlanBalanceSource::Kimi] {
             assert!(
                 source
-                    .credential_target()
+                    .credential_target(std::path::Path::new("C:/slterm-local-root"))
                     .starts_with("slterm/plan-balance/"),
                 "套餐凭据必须使用专用命名空间而非 CLI 凭据"
             );
         }
+    }
+
+    /// 不同本地数据根必须产生不同凭据目标，避免共享套餐 token。
+    #[test]
+    fn plan_balance_targets_are_scoped_to_the_local_data_root() {
+        let first =
+            PlanBalanceSource::DeepSeek.credential_target(std::path::Path::new("C:/data/first"));
+        let second =
+            PlanBalanceSource::DeepSeek.credential_target(std::path::Path::new("C:/data/second"));
+        let kimi = PlanBalanceSource::Kimi.credential_target(std::path::Path::new("C:/data/first"));
+        assert_ne!(first, second, "不同数据根不得共享套餐凭据");
+        assert_ne!(first, kimi, "不同来源必须使用各自目标");
+        assert!(first.starts_with("slterm/plan-balance/deepseek/"));
+        assert!(kimi.starts_with("slterm/plan-balance/kimi/"));
     }
 
     /// 套餐只使用专用 Windows 凭据目标，材料不含 token。
@@ -187,14 +213,17 @@ mod credential_tests {
             targets: Mutex::new(Vec::new()),
             secret: Some(b"sk-test-plan-balance".to_vec()),
         });
-        let credentials = PlanBalanceCredentials::new(store.clone());
+        let root = std::path::PathBuf::from("C:/slterm-plan-test-root");
+        let credentials = PlanBalanceCredentials::new(store.clone(), root.clone());
         let secret = credentials
             .load(PlanBalanceSource::DeepSeek)
             .unwrap()
             .expect("专用目标必须提供凭据");
         assert_eq!(
             store.targets.lock().unwrap().as_slice(),
-            ["slterm/plan-balance/deepseek"],
+            [PlanBalanceSource::DeepSeek
+                .credential_target(&root)
+                .as_str()],
             "只允许读取来源专用凭据目标"
         );
         assert_eq!(secret.as_bytes(), b"sk-test-plan-balance");
@@ -207,7 +236,7 @@ mod credential_tests {
         assert!(kimi.is_some());
         assert_eq!(
             store.targets.lock().unwrap().last().map(String::as_str),
-            Some("slterm/plan-balance/kimi"),
+            Some(PlanBalanceSource::Kimi.credential_target(&root).as_str()),
             "不同来源必须使用各自目标"
         );
     }

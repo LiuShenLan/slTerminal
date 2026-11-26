@@ -210,6 +210,16 @@ fn decode_settings_view_state(
 pub(crate) const AUTO_SAVE_DELAY: Duration = Duration::from_secs(2);
 
 /// 全局设置运行值与唯一待写队列；由 AppRoot 持有，视图只持订阅身份。
+/// 字段提交的联动清除规则：选择内置主题时清除自定义主题覆盖，
+/// 否则 `resolve_theme` 仍优先加载旧的自定义主题。
+pub(crate) fn theme_field_followups(key: &str) -> &'static [&'static str] {
+    if key == "theme" {
+        &["custom_theme"]
+    } else {
+        &[]
+    }
+}
+
 pub(crate) struct SettingsStore {
     values: RawSettings,
     pending: BTreeMap<String, Value>,
@@ -250,6 +260,17 @@ impl SettingsStore {
         }
         self.values = self.values.with_updates(&[(key, value.clone())]);
         self.pending.insert(key.to_owned(), value);
+        self.last_edit = Some(now);
+        true
+    }
+
+    /// 清除可选字段：写入 Null 表示回到缺省，立即生效并进入待写。
+    pub(crate) fn clear_auto(&mut self, key: &'static str, now: Instant) -> bool {
+        if keys::lookup(key).is_none() {
+            return false;
+        }
+        self.values = self.values.with_updates(&[(key, Value::Null)]);
+        self.pending.insert(key.to_owned(), Value::Null);
         self.last_edit = Some(now);
         true
     }
@@ -444,6 +465,33 @@ mod tests {
             Ok(())
         };
         (writes, Box::new(write))
+    }
+
+    /// 字段提交的联动清除规则：选择内置主题时清除自定义主题覆盖。
+    #[test]
+    fn theme_field_followups_clear_only_for_builtin_theme_selection() {
+        assert_eq!(theme_field_followups("theme"), &["custom_theme"]);
+        assert!(theme_field_followups("font_size").is_empty());
+    }
+
+    /// 选择内置主题必须清除自定义主题覆盖，否则旧 custom_theme 继续生效。
+    #[test]
+    fn builtin_theme_selection_clears_custom_theme_override() {
+        let mut store = SettingsStore::new(RawSettings::from_json_bytes(
+            br#"{"appearance":{"theme":"Linear","custom_theme":"my-night"}}"#,
+        ));
+        assert_eq!(store.runtime().custom_theme.as_deref(), Some("my-night"));
+        let now = Instant::now();
+        assert!(store.set_auto("theme", Value::String("Nord".to_owned()), now));
+        for key in theme_field_followups("theme") {
+            assert!(store.clear_auto(key, now));
+        }
+        assert_eq!(store.runtime().custom_theme, None);
+        assert_eq!(
+            store.values().value("theme"),
+            Some("Nord"),
+            "内置主题选择必须生效"
+        );
     }
 
     /// 后台写盘：在途不重复启动；写入期间的新编辑保留；失败退避后重试。

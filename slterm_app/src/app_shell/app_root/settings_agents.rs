@@ -33,6 +33,12 @@ const AGENT_NAMES: [(&str, &str); 9] = [
     ("grok", "Grok"),
 ];
 
+/// 每行开关按 `AGENTS` 自身顺序读取对应设置键；不得用 `AgentHook::ALL`
+/// 的下标对齐（两者顺序不同，从 Cursor 起会显示与点击错位）。
+fn agent_row_states(values: &slterm_settings::RawSettings) -> [bool; 9] {
+    AGENTS.map(|agent| agent.enabled(values))
+}
+
 fn agent_state_message(integration: Option<&AgentIntegration>) -> Message {
     let Some(integration) = integration else {
         return Message::SettingsAgentsChecking;
@@ -75,7 +81,7 @@ pub(super) fn render_agent_hooks_page(
         integrations = root.agent_integrations.clone();
         inspecting = root.agent_hooks_inspecting;
         failed = root.agent_hooks_error;
-        enabled = AgentHook::ALL.map(|hook| hook.enabled(root.settings.values()));
+        enabled = agent_row_states(root.settings.values());
     }
 
     let rows = AGENTS
@@ -322,5 +328,32 @@ impl AppRoot {
     ) {
         self.agent_hooks_inspect_for_test = Some(inspect);
         self.agent_hook_apply_for_test = Some(apply);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 行开关必须按 AGENTS 顺序读取各自设置键：Cursor 在 AGENTS 排第 4，
+    /// 在 AgentHook::ALL 中排第 8，用 ALL 下标会显示/点击错位。
+    #[test]
+    fn agent_row_states_follow_agents_order_not_all_order() {
+        let raw = slterm_settings::RawSettings::from_json_bytes(
+            br#"{"agent_hooks":{"slterm_ai_hooks_cursor":true}}"#,
+        );
+        let states = agent_row_states(&raw);
+        assert!(states[3], "Cursor 行必须读取自己的设置键");
+        assert!(
+            !states[7],
+            "Cursor 的开启不得按 AgentHook::ALL 下标落到第 8 行"
+        );
+        // Claude/Codex 走全局兜底默认开启，Cursor 显式开启。
+        assert_eq!(
+            states.iter().filter(|enabled| **enabled).count(),
+            3,
+            "默认两行加显式开启一行"
+        );
+        assert_eq!(AGENTS[3], AgentHook::Cursor);
     }
 }

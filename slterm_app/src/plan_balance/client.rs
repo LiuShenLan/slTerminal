@@ -235,7 +235,10 @@ mod client_tests {
 
     fn client(store: Arc<dyn CredentialStore>, endpoint: &str) -> PlanBalanceClient {
         PlanBalanceClient::for_test(
-            crate::plan_balance::PlanBalanceCredentials::new(store),
+            crate::plan_balance::PlanBalanceCredentials::new(
+                store,
+                std::path::PathBuf::from("C:/slterm-plan-test-root"),
+            ),
             endpoint,
             Duration::from_secs(2),
         )

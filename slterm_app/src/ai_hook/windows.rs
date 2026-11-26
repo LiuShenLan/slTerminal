@@ -261,7 +261,13 @@ fn dispatch(buf: &[u8], client_pid: Option<u32>, sink: &impl Fn(AiHookEvent) -> 
     event.agent_pid = client_pid
         .and_then(crate::process_tree::nearest_agent_ancestor)
         .map(|(pid, _)| pid);
-    log::debug!("ai_hook: {event:?}");
+    // 只记录非敏感分类字段：事件正文与 session_file 不得进入任何日志。
+    log::debug!(
+        "ai_hook event: source={} kind={:?} pane={:?}",
+        event.source,
+        event.kind,
+        event.pane
+    );
     if sink(event) {
         Dispatch::Delivered
     } else {

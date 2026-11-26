@@ -490,8 +490,19 @@ fn read_root_text(path: &Path) -> Result<RootRead, String> {
             let baseline = Some(Sha256::digest(&bytes).into());
             let text = String::from_utf8(bytes)
                 .map_err(|_| "配置文件不是合法 UTF-8，拒绝编辑".to_owned())?;
-            let root = serde_json::from_str(&text)
-                .map_err(|error| format!("配置文件 JSON 损坏，拒绝编辑: {error}"))?;
+            // 与草稿解析共用严格解析：重复键不得静默覆盖，否则加载结果
+            // 与文件语义不一致，保存后旧组永久消失。
+            let root = super::draft::parse_hooks_json(&text).map_err(|error| match error {
+                super::draft::DraftParseError::InvalidUtf8 => {
+                    "配置文件不是合法 UTF-8，拒绝编辑".to_owned()
+                }
+                super::draft::DraftParseError::InvalidJson(message) => {
+                    format!("配置文件 JSON 损坏，拒绝编辑: {message}")
+                }
+                super::draft::DraftParseError::DuplicateKey(key) => {
+                    format!("配置文件含重复键 {key}，拒绝编辑")
+                }
+            })?;
             Ok((root, baseline, Some(text)))
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok((json!({}), None, None)),
@@ -722,6 +733,19 @@ mod editor_tests {
 
     fn read(path: &Path) -> Value {
         serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    /// 加载路径必须与草稿解析同样拒绝重复键：后写静默覆盖前写会让用户
+    /// 看到与文件内容不一致的语义，保存后旧组被永久吞掉。
+    #[test]
+    fn load_rejects_duplicate_keys_instead_of_silently_overwriting() {
+        let (_directory, path) = fixture();
+        write(
+            &path,
+            r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"a"}]}]},"hooks":{"SessionStart":[]}}"#,
+        );
+        let error = HooksDocument::load_at(&path).unwrap_err();
+        assert!(error.contains("重复键"), "实际: {error}");
     }
 
     #[test]

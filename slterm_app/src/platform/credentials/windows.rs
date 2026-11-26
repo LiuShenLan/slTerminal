@@ -55,6 +55,8 @@ fn copy_credential_blob(blob: *const u8, size: u32) -> io::Result<Vec<u8>> {
 pub(crate) fn load_secret(target_name: &str) -> io::Result<Option<Vec<u8>>> {
     let target = wide(target_name);
     let mut raw = null_mut();
+    // SAFETY: target 是 NUL 结尾 UTF-16 缓冲区且在整个调用期间存活；
+    // raw 是存活的局部输出指针，失败时保持 null，不会泄漏或双重释放。
     if let Err(error) =
         unsafe { CredReadW(PCWSTR(target.as_ptr()), CRED_TYPE_GENERIC, None, &mut raw) }
     {
@@ -68,6 +70,8 @@ pub(crate) fn load_secret(target_name: &str) -> io::Result<Option<Vec<u8>>> {
         let credential = &*raw;
         copy_credential_blob(credential.CredentialBlob, credential.CredentialBlobSize)
     };
+    // SAFETY: raw 由上方 CredReadW 成功返回，恰好释放一次；blob 已复制，
+    // 释放后不再解引用该指针。
     unsafe { CredFree(raw as *const c_void) };
     // 仅 ERROR_NOT_FOUND 是 None；成功读取的空 blob 仍是 Some(empty)。
     result.map(Some)
@@ -98,6 +102,9 @@ pub(crate) fn save_secret(target_name: &str, username: &str, secret: &[u8]) -> i
         TargetAlias: PWSTR::null(),
         UserName: PWSTR(user.as_mut_ptr()),
     };
+    // SAFETY: CREDENTIALW 由 windows crate 以 repr(C) 定义；TargetName/
+    // CredentialBlob/UserName 均指向调用期间存活的缓冲区，blob 长度与指针
+    // 一致，Flags=0 表示普通写入。
     let result = unsafe { CredWriteW(&credential, 0) };
     // 无论成败都擦除本地明文缓冲;系统调用已完成,指针不再被使用。
     blob.fill(0);
@@ -109,6 +116,7 @@ pub(crate) fn save_secret(target_name: &str, username: &str, secret: &[u8]) -> i
 /// 删除凭据;不存在视为成功(幂等)。
 pub(crate) fn delete_secret(target_name: &str) -> io::Result<()> {
     let target = wide(target_name);
+    // SAFETY: target 是 NUL 结尾 UTF-16 缓冲区且在整个调用期间存活。
     match unsafe { CredDeleteW(PCWSTR(target.as_ptr()), CRED_TYPE_GENERIC, None) } {
         Ok(()) => Ok(()),
         Err(error) if is_not_found(&error) => Ok(()),

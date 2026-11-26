@@ -26,7 +26,9 @@ use super::panel_host::PanelContent;
 use super::settings_controls::{
     FIELDS, SettingsControl, SettingsFieldUi, fields_for_page, typed_value,
 };
-use crate::settings_state::{SettingsPageId, SettingsViewState, SettingsViewStateStore};
+use crate::settings_state::{
+    SettingsPageId, SettingsViewState, SettingsViewStateStore, theme_field_followups,
+};
 
 pub(super) struct SettingsView {
     pub(super) focus_handle: gpui::FocusHandle,
@@ -985,6 +987,10 @@ impl AppRoot {
         };
         if !accepted {
             return;
+        }
+        // 联动清除：选择内置主题即撤销自定义主题覆盖，否则旧主题继续生效。
+        for followup in theme_field_followups(key) {
+            self.settings.clear_auto(followup, now);
         }
         match key {
             "launch_at_login" => {

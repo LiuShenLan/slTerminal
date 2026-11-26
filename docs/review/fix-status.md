@@ -44,7 +44,7 @@
 | 设置保存状态与失败不可见；文本/颜色控件跨视图不同步且缺少路径校验 | 待修 |
 | 根重定位实现为 dead code，缺少真实路径查重与决定守卫 | 待修 |
 | 重复 Settings 恢复不按规格保留首个并提示 | 待修 |
-| 主题下拉选择不清除 custom_theme | 待修 |
+| 主题下拉选择不清除 custom_theme | 已修：`theme_field_followups` 在选择内置主题时清除 `custom_theme`；测试 `theme_field_followups_clear_only_for_builtin_theme_selection`、`builtin_theme_selection_clears_custom_theme_override` |
 | Runtime v2 快照没有设置界面，快照测试未覆盖资源边界 | 待修 |
 | 测试主要覆盖引擎函数与 DTO，未覆盖页面场景 | 待修 |
 | Hooks 页只实现 Claude JSON 子集，缺少 GUI、事件目录、外部监听、托管只读与保存提示 | 待修 |
@@ -63,7 +63,7 @@
 | AgentCatalog 适配器声明未被消费，CLI 名单多源 | 待修 |
 | Hooks 事件目录远小于 featureSpec 的 Claude 事件集合 | 待修 |
 | 设置热应用在 GPUI 前台同步读取自定义主题文件 | 待修 |
-| 套餐凭据目标不含本地根稳定散列 | 待修 |
+| 套餐凭据目标不含本地根稳定散列 | 已修：`credential_target(local_root)` 绑定 `stable_path_hash`；测试 `plan_balance_targets_are_scoped_to_the_local_data_root` |
 | 普通设置导入、导出与恢复默认只有内存纯函数 | 待修 |
 | Agent 基础配置、AgentRoot 管理与 Agent 文件操作面未实现 | 待修 |
 
@@ -78,9 +78,9 @@
 | 危险命令确认没有生产链路 | 待修 |
 | GUI 编辑模式与事件树/handler 表单不存在 | 待修 |
 | Hooks 编辑保存绕过审计与 PathPolicy | 待修 |
-| 加载路径不检测重复键 | 待修 |
+| 加载路径不检测重复键 | 已修：加载/保存重读共用严格解析，重复键拒绝编辑；测试 `load_rejects_duplicate_keys_instead_of_silently_overwriting` |
 | config_guard 没有生产调用点 | 待修 |
-| AgentHooks 开关状态按 AgentHook::ALL 顺序索引 AGENTS 行 | 待修 |
+| AgentHooks 开关状态按 AgentHook::ALL 顺序索引 AGENTS 行 | 已修：行开关按 `AGENTS` 自身顺序读取设置键；测试 `agent_row_states_follow_agents_order_not_all_order` |
 | 保存进行中继续编辑会被保存回执静默覆盖 | 待修 |
 | Hooks 层默认与切换错误 | 待修 |
 | Hooks 草稿任务身份只含面板 | 待修 |
@@ -260,9 +260,9 @@
 | 依赖审计未进入 CI 常驻门禁 | 待修 |
 | 诊断脱敏词表与备份敏感键表不一致 | 待修 |
 | 凭据明文副本没有全程清零 | 待修 |
-| AI hook 解析在 debug 日志输出整条事件 | 待修 |
+| AI hook 解析在 debug 日志输出整条事件 | 已修：只记录 source/kind/pane，正文与 session_file 不进入日志 |
 | 更新下载 .part 打开跟随预置链接 | 待修 |
-| 凭据 Win32 FFI 调用缺少逐块 SAFETY 不变量 | 待修 |
+| 凭据 Win32 FFI 调用缺少逐块 SAFETY 不变量 | 已修：CredReadW/CredFree/CredWriteW/CredDeleteW 调用点补齐 SAFETY 不变量注释 |
 
 ## 测试质量、文档与计划证据
 
