@@ -573,6 +573,15 @@ fn run_shell_once(
     crate::platform::notifications::prepare();
     // 通知与设置页共用同一 Windows 集成端口：任务栏进度只经端口落平台。
     crate::notify::install_windows_integration(windows.clone());
+    // 设置域自愈：按授权安装/修复 CLI hooks，失败类别经同一壳事件队列回前台。
+    let hook_alert_tx = shell_tx.clone();
+    let _config_guard = crate::ai_hook::spawn_config_guard_with(move |kind| {
+        try_send_shell_event(
+            &hook_alert_tx,
+            SltermShellEvent::AiHookAlert(kind),
+            "ai-hook-guard",
+        );
+    });
     // 托盘命令回调:托盘线程只经此把用户动作送回壳事件队列。
     crate::tray::init_gpui({
         let shell_events = shell_tx.clone();

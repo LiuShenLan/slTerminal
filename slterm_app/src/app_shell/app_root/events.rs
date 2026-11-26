@@ -195,6 +195,15 @@ impl AppRoot {
                 notify_workspace_write_failed(cx);
                 cx.notify();
             }
+            SltermShellEvent::AiHookAlert(kind) => {
+                if !self.close_in_progress
+                    && self.application_close.is_none()
+                    && !self.close_completed
+                {
+                    notify_ai_hook_failure(kind, cx);
+                }
+                cx.notify();
+            }
             SltermShellEvent::WorkspaceRecovered(notice) => {
                 notify_workspace_recovered(notice, cx);
                 cx.notify();
@@ -630,6 +639,30 @@ fn application_close_decision_text(count: usize, language: crate::i18n::UiLangua
     )
 }
 
+/// hook 自愈失败只呈现封闭类别与 CLI 显示名，不携带命令或配置正文。
+fn ai_hook_alert_text(
+    kind: crate::ai_hook::HookFailureKind,
+    language: crate::i18n::UiLanguage,
+) -> String {
+    use crate::i18n::Message;
+    match kind {
+        crate::ai_hook::HookFailureKind::Install { agent } => {
+            let display = slterm_agents::AgentKind::parse(&agent)
+                .map_or(agent, |kind| kind.display_name().to_owned());
+            language.format(Message::NotifyHookInstallFailed, &[("agent", &display)])
+        }
+        crate::ai_hook::HookFailureKind::Settings => language
+            .text(Message::NotifyHookSettingsUnreadable)
+            .to_owned(),
+    }
+}
+
+pub(crate) fn notify_ai_hook_failure(kind: crate::ai_hook::HookFailureKind, cx: &mut App) {
+    let language = cx.global::<crate::app_shell::config::Settings>().language;
+    let text = ai_hook_alert_text(kind, language);
+    crate::notify::deliver_startup_summary(&crate::notify::Notification::ProcessAlert { text }, cx);
+}
+
 pub(crate) fn notify_hooks_draft_close_pending(cx: &mut App) {
     let language = cx.global::<crate::app_shell::config::Settings>().language;
     let text = language
@@ -678,9 +711,10 @@ pub(crate) fn notify_document_save_state(
 #[cfg(test)]
 mod document_save_notice_tests {
     use super::{
-        application_close_decision_text, document_save_error_text, document_save_state_text,
-        workspace_repair_text,
+        ai_hook_alert_text, application_close_decision_text, document_save_error_text,
+        document_save_state_text, workspace_repair_text,
     };
+    use crate::ai_hook::HookFailureKind;
     use crate::i18n::{Message, UiLanguage};
     use crate::text_document::SaveError;
 
@@ -692,6 +726,28 @@ mod document_save_notice_tests {
         assert!(!en.contains("C:"), "提示不得携带路径: {en}");
         let zh = workspace_repair_text(3, UiLanguage::ZhCn);
         assert!(zh.contains('3'), "必须显示条目数: {zh}");
+    }
+
+    #[test]
+    fn ai_hook_alert_uses_display_name_and_no_synthetic_command() {
+        let install = HookFailureKind::Install {
+            agent: "claude".to_owned(),
+        };
+        let en = ai_hook_alert_text(install.clone(), UiLanguage::EnUs);
+        assert_eq!(
+            en,
+            UiLanguage::EnUs.format(
+                Message::NotifyHookInstallFailed,
+                &[("agent", "Claude Code")]
+            )
+        );
+        let zh = ai_hook_alert_text(install, UiLanguage::ZhCn);
+        assert!(zh.contains("Claude Code"), "中文提示同样带显示名: {zh}");
+        assert!(!en.contains("slterm-hook") && !zh.contains("slterm-hook"));
+        assert_eq!(
+            ai_hook_alert_text(HookFailureKind::Settings, UiLanguage::EnUs),
+            UiLanguage::EnUs.text(Message::NotifyHookSettingsUnreadable)
+        );
     }
 
     #[test]

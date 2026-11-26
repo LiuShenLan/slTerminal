@@ -26,6 +26,8 @@ pub(crate) enum SltermShellEvent {
     TrayQuit,
     /// 工作区状态后台写失败；不携带路径、SQL 或状态正文。
     WorkspaceWriteFailed,
+    /// Hook 安装自愈失败；只携带封闭类别，前台按语言呈现。
+    AiHookAlert(crate::ai_hook::HookFailureKind),
     /// 启动时副本恢复或双损隔离已完成；只携带封闭通知类型。
     WorkspaceRecovered(crate::persistence::startup::WorkspaceRecoveryNotice),
     /// 第二实例意图与一次性完成回执；AppRoot 前台消费，真实完成后答复。

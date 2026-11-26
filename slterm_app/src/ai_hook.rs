@@ -41,6 +41,8 @@ pub use event::{
 #[allow(unused_imports)] // 能力表消费点归通知漏斗 / runtime 快照。
 pub use event::{AiHookCapabilities, capabilities_for};
 pub(crate) use lifecycle::AgentActivity;
+/// 设置域启动链持有该守卫；失败边只经封闭类别回到壳前台呈现。
+pub(crate) use local::config_guard::{HookFailureKind, spawn_config_guard_with};
 pub use ordering::GateVerdict;
 pub(crate) use ordering::{accept_for_pane, reorder_batch};
 pub(crate) use protocol::parse_envelope;

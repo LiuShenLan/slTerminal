@@ -11,7 +11,7 @@ use super::{CLAUDE_EVENTS, HELPER_ARGS, is_helper_executable, is_helper_shell_co
 
 mod codex_hooks;
 mod codex_notify;
-mod config_guard;
+pub(super) mod config_guard;
 mod cursor;
 mod extended;
 mod kimi;

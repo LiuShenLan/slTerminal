@@ -79,7 +79,7 @@
 | GUI 编辑模式与事件树/handler 表单不存在 | 待修 |
 | Hooks 编辑保存绕过审计与 PathPolicy | 已修：新增 `hook_editor_write` 审计包装（主文件与备份均审计，提交 eb1c71e4）；保存前经真实规范位置包含校验与 `HooksWrite` 精确文件 grant 的 `PathPolicy` 判定（提交 3346cdf9）；测试 `saving_hooks_emits_audit_event_without_content`、`hook_editor_write_emits_audit_event_without_content`、`save_rejects_target_outside_the_authorized_root_without_writing` |
 | 加载路径不检测重复键 | 已修：加载/保存重读共用严格解析，重复键拒绝编辑；测试 `load_rejects_duplicate_keys_instead_of_silently_overwriting` |
-| config_guard 没有生产调用点 | 待修 |
+| config_guard 没有生产调用点 | 已修：`run_shell_once` 在通知初始化后启动 `spawn_config_guard_with`，守卫随 `application.run` 生命周期持有并在 Drop join；失败类别经 `AiHookAlert` 壳事件回前台按 typed 文案呈现（`ai_hook_alert_uses_display_name_and_no_synthetic_command`）；豁免表改为真实 CLI 配置与 watcher 的人工验收边界 |
 | AgentHooks 开关状态按 AgentHook::ALL 顺序索引 AGENTS 行 | 已修：行开关按 `AGENTS` 自身顺序读取设置键；测试 `agent_row_states_follow_agents_order_not_all_order` |
 | 保存进行中继续编辑会被保存回执静默覆盖 | 已修：`HooksDraft::finish_save` 以提交文本比对结算，期间编辑保留正文与脏态、只推进基线；任务身份按完整草稿键隔离（提交 29094491）；测试 `save_receipt_keeps_edits_made_while_the_save_was_in_flight`、`hooks_page_loads_saves_external_guard_and_discards` |
 | Hooks 层默认与切换错误 | 已修：项目面板重建视图恒回 User 层，`available_hooks_layers` 按视图身份恒给三层，User↔Project 可往返（提交 94ca8256）；测试 `hooks_page_loads_saves_external_guard_and_discards` |
