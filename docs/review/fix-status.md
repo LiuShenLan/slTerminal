@@ -56,7 +56,7 @@
 | 撤销状态在恢复成功前被置为 Undone | 待修 |
 | quarantine_batch 不先持久化清单，部分失败丢失材料身份 | 待修 |
 | 主题身份不是 ThemeId/UUIDv7，导入冲突被自动改名 | 待修 |
-| ANSI 16–255 被持久化成第二份色表 | 待修 |
+| ANSI 16–255 被持久化成第二份色表 | 已修：主题只保存 ANSI 0–15，16–255 统一经 `xterm_indexed_color` 派生，文档不再写 `terminal.indexed`（提交 997bdcc6）；测试 `extended_indexed_colors_are_derived_not_persisted`、`indexed_colors_are_derived_from_the_single_xterm_formula`、`resolve_indexed_falls_back_to_cube_and_grayscale` |
 | 设置损坏分流缺“高版本”和“权限/IO 只读重试” | 部分修复：新增 `settings_version` 字段，高版本读取标记 `unsupported_version` 且写通道拒绝覆盖（不隔离）；测试 `higher_settings_version_is_read_only_and_never_overwritten`、`settings_writes_stamp_the_current_version`。权限/IO 回退默认仍保留启动可用性，用户可见反馈归“设置写失败/损坏无用户可见反馈”条目 |
 | 设置写失败、损坏与单字段回退没有用户可见反馈 | 待修 |
 | 恢复默认旁路统一设置写通道、审计与保存锁 | 已修：`settings_store::restore_default_settings_at` 共用保存锁、审计事件与 1MB 上限；测试 `settings_import_and_reset_preserve_secrets` |
