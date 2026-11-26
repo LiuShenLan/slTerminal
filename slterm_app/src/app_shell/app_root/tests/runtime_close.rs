@@ -618,3 +618,130 @@ fn runtime_project_hooks_discard_waits_for_document_decisions(cx: &mut TestAppCo
         "失败的移除不得丢弃草稿"
     );
 }
+
+/// 共享 Document 仍被其他项目引用时，panel.close 的显式策略不得把该文档
+/// 视为本次关闭的最后引用；否则整单会被核心判为集合外引用而拒绝。
+#[gpui::test]
+fn runtime_panel_close_ignores_documents_shared_outside_the_closing_view(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let project_a_root = temp.path().to_path_buf();
+    let project_b_root = temp.path().join("nested");
+    std::fs::create_dir(&project_b_root).unwrap();
+    let file = project_b_root.join("shared.txt");
+    std::fs::write(&file, "old\n").unwrap();
+    let canonical = CanonicalPath::new(dunce::canonicalize(&file).unwrap()).unwrap();
+
+    let (root, mut window, _) = open_root(cx);
+    add_project(
+        &root,
+        &mut window,
+        PROJECT_A,
+        project_a_root.to_str().unwrap(),
+    );
+    add_project(
+        &root,
+        &mut window,
+        PROJECT_B,
+        project_b_root.to_str().unwrap(),
+    );
+    activate_project(&root, &mut window, PROJECT_A);
+    super::documents::open_document(&root, &mut window, PROJECT_A, GROUP_A, canonical.clone());
+    activate_project(&root, &mut window, PROJECT_B);
+    super::documents::open_document(&root, &mut window, PROJECT_B, GROUP_B, canonical.clone());
+    let (view_a, editor_a) = root.read_with(cx, |root, cx| {
+        let views = root
+            .snapshot
+            .registry()
+            .projects()
+            .iter()
+            .flat_map(|project| project.layout().view_keys())
+            .collect::<Vec<_>>();
+        let view_a = views
+            .iter()
+            .find(|view| matches!(view, ViewKey::Editor { project_id: owner, .. } if *owner == project_id(PROJECT_A)))
+            .cloned()
+            .expect("项目 A 必须有编辑器视图");
+        let editor = root.projects[&project_id(PROJECT_A)]
+            .read(cx)
+            .panels
+            .values()
+            .find_map(|panel| panel.editor().cloned())
+            .expect("项目 A 必须有编辑器实体");
+        assert!(
+            root.snapshot.documents().count() == 1,
+            "同一规范路径必须复用同一 Document"
+        );
+        (view_a, editor)
+    });
+    window.update(|window, cx| {
+        editor_a.update(cx, |view, cx| {
+            let length = view.input_text_for_test().len();
+            gpui::EntityInputHandler::replace_text_in_range(
+                view,
+                Some(0..length),
+                "dirty\n",
+                window,
+                cx,
+            );
+        });
+    });
+    activate_project(&root, &mut window, PROJECT_A);
+    root.read_with(cx, |root, _| {
+        assert!(
+            root.snapshot
+                .documents()
+                .any(|(id, _)| root.documents.session(id).is_some_and(|s| s.is_dirty())),
+            "前置：共享文档必须为脏"
+        );
+        let references = root
+            .snapshot
+            .registry()
+            .projects()
+            .iter()
+            .flat_map(|project| project.layout().view_keys())
+            .filter(|view| {
+                matches!(
+                    view,
+                    ViewKey::Editor { document_id, .. }
+                        if Some(*document_id)
+                            == root
+                                .snapshot
+                                .documents()
+                                .find(|(id, _)| root.documents.session(*id).is_some())
+                                .map(|(id, _)| id)
+                )
+            })
+            .count();
+        assert_eq!(references, 2, "前置：必须有两个项目引用同一 Document");
+    });
+
+    match dispatch_runtime_mutation(
+        &root,
+        &mut window,
+        crate::local_control::RuntimeMutation::PanelClose {
+            view: view_a.clone(),
+            documents: Some(CloseDocumentsPolicy::Discard),
+        },
+    ) {
+        Ok(crate::app_shell::RuntimeMutationReply::Done(Ok(()))) => {}
+        _ => panic!("共享文档不得使面板关闭被拒"),
+    }
+    window.run_until_parked();
+    assert!(
+        root.read_with(cx, |root, _| {
+            !root
+                .snapshot
+                .registry()
+                .project(project_id(PROJECT_A))
+                .unwrap()
+                .layout()
+                .view_keys()
+                .contains(&view_a)
+        }),
+        "目标面板必须关闭"
+    );
+    root.read_with(cx, |root, _| {
+        assert_eq!(root.snapshot.documents().count(), 1, "共享文档必须保留");
+    });
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "old\n");
+}

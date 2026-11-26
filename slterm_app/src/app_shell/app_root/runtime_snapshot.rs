@@ -142,6 +142,35 @@ impl AppRoot {
         RuntimeMutationDispatch::Deferred
     }
 
+    /// 显式关闭策略只作用于「最后引用在关闭集合内」的脏文档；
+    /// 集合外仍有引用的共享文档不产生决定，避免整单被拒。
+    fn last_reference_decisions(
+        &self,
+        closing: &[slterm_workspace::ViewKey],
+        document_ids: impl Iterator<Item = slterm_document::DocumentId>,
+        decision: slterm_workspace::CloseDecision,
+    ) -> std::collections::BTreeMap<slterm_document::DocumentId, slterm_workspace::CloseDecision>
+    {
+        let outside = self
+            .snapshot
+            .registry()
+            .projects()
+            .iter()
+            .flat_map(|project| project.layout().view_keys())
+            .filter(|view| !closing.iter().any(|candidate| candidate == view))
+            .filter_map(|view| view_document_id(&view))
+            .collect::<std::collections::BTreeSet<_>>();
+        document_ids
+            .filter(|id| !outside.contains(id))
+            .filter(|id| {
+                self.documents
+                    .session(*id)
+                    .is_some_and(|session| session.is_dirty())
+            })
+            .map(|id| (id, decision))
+            .collect()
+    }
+
     /// 非交互项目移除：Hooks 草稿与项目范围 Document 都需要显式决定。
     fn start_runtime_project_remove(
         &mut self,
@@ -178,15 +207,11 @@ impl AppRoot {
                         slterm_workspace::CloseDecision::Discard
                     }
                 };
-                for document_id in views.iter().filter_map(view_document_id) {
-                    if self
-                        .documents
-                        .session(document_id)
-                        .is_some_and(|session| session.is_dirty())
-                    {
-                        decisions.insert(document_id, decision);
-                    }
-                }
+                decisions.extend(self.last_reference_decisions(
+                    &views,
+                    views.iter().filter_map(view_document_id),
+                    decision,
+                ));
             }
             None => match self.collect_document_close_with_autosave(
                 &views,
@@ -249,15 +274,11 @@ impl AppRoot {
                         slterm_workspace::CloseDecision::Discard
                     }
                 };
-                for document_id in document_ids {
-                    if self
-                        .documents
-                        .session(document_id)
-                        .is_some_and(|session| session.is_dirty())
-                    {
-                        decisions.insert(document_id, decision);
-                    }
-                }
+                decisions.extend(self.last_reference_decisions(
+                    std::slice::from_ref(&view),
+                    document_ids.iter().copied(),
+                    decision,
+                ));
             }
             None => {
                 match self.collect_document_close_with_autosave(
