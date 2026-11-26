@@ -10,6 +10,7 @@ use crate::persistence::maintenance_request::{
     MaintenanceRequest, MaintenanceRequestStatus, MaintenanceStoreError,
 };
 use crate::persistence::metadata::MetadataError;
+use crate::persistence::operation::OperationError;
 use crate::persistence::workspace::WorkspaceDatabase;
 
 /// 启动维护阶段；顺序即对账顺序。
@@ -38,6 +39,7 @@ pub(crate) enum MaintenanceError {
     Metadata(MetadataError),
     Store(MaintenanceStoreError),
     Request(MaintenanceRequestError),
+    Operation(OperationError),
 }
 
 impl fmt::Display for MaintenanceError {
@@ -49,6 +51,7 @@ impl fmt::Display for MaintenanceError {
             Self::Metadata(_) => "启动运行世代检查失败",
             Self::Store(_) => "启动维护请求对账失败",
             Self::Request(_) => "启动维护请求恢复失败",
+            Self::Operation(_) => "启动 Operation 对账失败",
         })
     }
 }
@@ -62,6 +65,7 @@ impl std::error::Error for MaintenanceError {
             Self::Metadata(error) => Some(error),
             Self::Store(error) => Some(error),
             Self::Request(error) => Some(error),
+            Self::Operation(error) => Some(error),
         }
     }
 }
@@ -87,6 +91,12 @@ impl From<DatabaseError> for MaintenanceError {
 impl From<MetadataError> for MaintenanceError {
     fn from(error: MetadataError) -> Self {
         Self::Metadata(error)
+    }
+}
+
+impl From<OperationError> for MaintenanceError {
+    fn from(error: OperationError) -> Self {
+        Self::Operation(error)
     }
 }
 
@@ -224,6 +234,8 @@ impl<'a> MaintenanceRunner<'a> {
         if requests != MaintenanceOutcome::Ready {
             return Ok(requests);
         }
+        // Journal 与维护请求终结后，剩余中间态 Operation 只能收敛为可查询终态。
+        self.store.reconcile_interrupted_operations()?;
         if !self.store.unfinished_close_intents()?.is_empty() {
             return Ok(MaintenanceOutcome::NeedsAttention {
                 stage: MaintenanceStage::CloseIntents,
@@ -373,7 +385,9 @@ mod tests {
         MaintenanceRequestStatus, MaintenanceStoreError,
     };
     use crate::persistence::metadata::RunMarker;
+    use crate::persistence::operation::OperationRegistration;
     use crate::persistence::workspace::WorkspaceDatabase;
+    use slterm_runtime_protocol::OperationStatus;
 
     const EPOCH: &str = "epoch-startup";
 
@@ -493,6 +507,54 @@ mod tests {
             .unwrap();
 
         assert_eq!(outcome, MaintenanceOutcome::Ready);
+    }
+
+    /// 启动维护把崩溃遗留的 Operation 中间态收敛为可查询终态。
+    #[test]
+    fn maintenance_reconciles_interrupted_operations() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut store = WorkspaceDatabase::open(&fixture(&temp)).unwrap();
+        begin_run(&mut store);
+        for (operation_id, mutation_id) in [
+            ("operation-queued", "mutation-q"),
+            ("operation-running", "mutation-r"),
+        ] {
+            store
+                .register_operation(OperationRegistration {
+                    operation_id: operation_id.into(),
+                    store_epoch: EPOCH.into(),
+                    client_id: "client-startup".into(),
+                    mutation_id: mutation_id.into(),
+                    method: "panel.save".into(),
+                    params_dto_version: 1,
+                    params_hash: [7; 32],
+                    resource_generations: Default::default(),
+                })
+                .unwrap();
+        }
+        store
+            .transition_operation("operation-running", OperationStatus::Running, None, None)
+            .unwrap();
+
+        let recoverers = JournalRecovererRegistry::default();
+        let requests = MaintenanceRequestRecovererRegistry::default();
+        let outcome = MaintenanceRunner::new(&mut store, EPOCH, &recoverers, &requests)
+            .run()
+            .unwrap();
+
+        assert_eq!(outcome, MaintenanceOutcome::Ready);
+        assert_eq!(
+            store.operation("operation-queued").unwrap().unwrap().status,
+            OperationStatus::Failed
+        );
+        assert_eq!(
+            store
+                .operation("operation-running")
+                .unwrap()
+                .unwrap()
+                .status,
+            OperationStatus::OutcomeUnknown
+        );
     }
 
     #[test]

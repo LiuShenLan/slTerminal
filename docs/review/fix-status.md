@@ -209,7 +209,7 @@
 | `runtime discover --json` 是手工 JSON，不在随包 schema／DTO | 已修：协议新增 `DiscoverOutput`（端点记录 + Runtime 凭据），Debug 脱敏，CLI 只经该 DTO 序列化；schema 资产包含字段合同；测试 `discover_output_round_trips_and_redacts_debug`、`packaged_schema_includes_the_discover_output_contract` |
 | 合同冲突：local_control 与设计文档保留旧能力、旧错误与旧命名 | 已修：删除“仅开放握手”“OpenFile 仍拒绝”“不存在 unknown_operation”“事件环接入前”等过时真值；设计方法表统一为 `runtime.operation_get`／`runtime.operation_wait`，snapshot revision 与事件环同源 |
 | 合同冲突：写请求参数散列没有客户端值 | 已裁决为服务端推导：线缆不携带客户端散列，服务端按解析后的封闭意图生成方法级规范投影与散列，同键同散列返回原 Operation，同键异散列 `mutation_conflict`；设计文档与协议 CLAUDE.md 同步 |
-| Operation 停在 Queued/Running 后没有恢复路径 | 待修 |
+| Operation 停在 Queued/Running 后没有恢复路径 | 已修：状态机新增 `Queued → Failed`；启动维护在 Journal 与维护请求后调用 `reconcile_interrupted_operations`，当前世代 Queued 收敛 Failed、Running 收敛 OutcomeUnknown，旧世代与终态不改写；测试 `interrupted_operations_are_reconciled_only_in_the_current_epoch`、`maintenance_reconciles_interrupted_operations` |
 | 项目、布局、面板与终端写 Operation 在持久快照提交前报告成功 | 待修 |
 | Hooks 草稿在决定齐备前被丢弃 | 已修：Runtime `app.close`／`project.remove` 先收集文档决定、预检并通过关闭登记后才按 `Discard` 清理草稿；项目移除以显式 `allow_hooks_discard` 跳过交互守卫（提交 c2b50b9d）；测试 `runtime_hooks_discard_waits_for_complete_document_decisions`、`runtime_project_hooks_discard_waits_for_document_decisions`、`runtime_project_remove_honors_discard_and_save_policies` |
 | 合同冲突：app.close 回执语义与“保存失败返回失败”冲突 | 需裁决 |

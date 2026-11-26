@@ -38,6 +38,7 @@ impl OperationStatus {
         if matches!(
             (self, next),
             (Self::Queued, Self::Running)
+                | (Self::Queued, Self::Failed)
                 | (Self::Running, Self::Succeeded)
                 | (Self::Running, Self::Failed)
                 | (Self::Running, Self::Cancelled)
@@ -82,7 +83,7 @@ impl std::error::Error for InvalidOperationTransition {}
 mod operation_tests {
     use super::*;
 
-    /// 全矩阵只接受 Queued→Running 与 Running→四种终态。
+    /// 全矩阵只接受 Queued→Running／Failed 与 Running→四种终态。
     #[test]
     fn operation_status_accepts_only_the_declared_forward_edges() {
         for from in OperationStatus::ALL {
@@ -90,6 +91,7 @@ mod operation_tests {
                 let allowed = matches!(
                     (from, to),
                     (OperationStatus::Queued, OperationStatus::Running)
+                        | (OperationStatus::Queued, OperationStatus::Failed)
                         | (OperationStatus::Running, OperationStatus::Succeeded)
                         | (OperationStatus::Running, OperationStatus::Failed)
                         | (OperationStatus::Running, OperationStatus::Cancelled)

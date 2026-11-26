@@ -258,6 +258,59 @@ impl WorkspaceDatabase {
         operation.error = error;
         Ok(operation)
     }
+
+    /// 启动维护对账：当前世代的 Queued 收敛为 Failed，Running 收敛为 OutcomeUnknown。
+    ///
+    /// 旧世代记录保留原样；终态不改写。返回本次推进的记录数。
+    pub(crate) fn reconcile_interrupted_operations(&mut self) -> Result<usize, OperationError> {
+        let transaction = self
+            .database
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let pending = {
+            let mut statement = transaction.prepare(
+                "SELECT operation_id, store_epoch, status FROM runtime_operations \
+                 WHERE status IN ('queued', 'running')",
+            )?;
+            let rows = statement.query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+        let mut reconciled = 0;
+        for (operation_id, store_epoch, status_text) in pending {
+            if !store_epoch_is_current(&transaction, &store_epoch)? {
+                continue;
+            }
+            let status = parse_status(&status_text)?;
+            let (next, error_json) = match status {
+                OperationStatus::Queued => (
+                    OperationStatus::Failed,
+                    serde_json::json!({"code": "interrupted_before_dispatch"}).to_string(),
+                ),
+                OperationStatus::Running => (
+                    OperationStatus::OutcomeUnknown,
+                    serde_json::json!({"code": "outcome_unknown"}).to_string(),
+                ),
+                _ => continue,
+            };
+            let changed = transaction.execute(
+                "UPDATE runtime_operations SET status = ?2, result_json = NULL, error_json = ?3 \
+                 WHERE operation_id = ?1 AND status = ?4",
+                params![operation_id, status_name(next), error_json, status_text],
+            )?;
+            if changed != 1 {
+                return Err(OperationError::CorruptRecord);
+            }
+            reconciled += 1;
+        }
+        transaction.commit()?;
+        Ok(reconciled)
+    }
 }
 
 pub(super) fn attach_operation_journal(
@@ -482,6 +535,66 @@ mod operation_tests {
         assert_eq!(loaded.result, None);
         assert_eq!(loaded.error, None);
         assert_eq!(loaded.journal_id, None);
+    }
+
+    /// 启动对账把当前世代的中间态收敛为可查询终态；旧世代与终态不改写。
+    #[test]
+    fn interrupted_operations_are_reconciled_only_in_the_current_epoch() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = fixture(&temp);
+        let mut store = WorkspaceDatabase::open(&paths).unwrap();
+        begin_run(&mut store, "epoch-a");
+        store
+            .register_operation(registration("operation-old", "epoch-a", "mutation-old"))
+            .unwrap();
+        rotate_epoch(&mut store, "epoch-a", "epoch-b");
+
+        store
+            .register_operation(registration("operation-queued", "epoch-b", "mutation-q"))
+            .unwrap();
+        store
+            .register_operation(registration("operation-running", "epoch-b", "mutation-r"))
+            .unwrap();
+        store
+            .transition_operation("operation-running", OperationStatus::Running, None, None)
+            .unwrap();
+        store
+            .register_operation(registration("operation-done", "epoch-b", "mutation-d"))
+            .unwrap();
+        store
+            .transition_operation("operation-done", OperationStatus::Running, None, None)
+            .unwrap();
+        store
+            .transition_operation(
+                "operation-done",
+                OperationStatus::Succeeded,
+                Some(serde_json::json!({})),
+                None,
+            )
+            .unwrap();
+
+        assert_eq!(store.reconcile_interrupted_operations().unwrap(), 2);
+        assert_eq!(
+            store.operation("operation-queued").unwrap().unwrap().status,
+            OperationStatus::Failed
+        );
+        assert_eq!(
+            store
+                .operation("operation-running")
+                .unwrap()
+                .unwrap()
+                .status,
+            OperationStatus::OutcomeUnknown
+        );
+        assert_eq!(
+            store.operation("operation-done").unwrap().unwrap().status,
+            OperationStatus::Succeeded
+        );
+        assert_eq!(
+            store.operation("operation-old").unwrap().unwrap().status,
+            OperationStatus::Queued,
+            "旧世代记录必须保留原样"
+        );
     }
 
     #[test]
