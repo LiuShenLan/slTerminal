@@ -1729,6 +1729,8 @@ pub enum DomainErrorCode {
     StaleCursor,
     /// 对外 Agent 身份没有匹配关联。
     UnknownAgent,
+    /// 编码后的响应超过单帧预算；请求必须缩小范围或改用分页读取。
+    ResponseTooLarge,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

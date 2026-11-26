@@ -982,6 +982,75 @@ fn runtime_terminal_read_pages_snapshot_and_rejects_stale_cursor() {
     server.shutdown().unwrap();
 }
 
+/// 无界列表超过响应预算时必须返回结构化错误并保留连接。
+#[test]
+fn runtime_snapshot_over_budget_returns_structured_error_and_keeps_connection() {
+    let resources = SnapshotResources {
+        documents: (0..2_000)
+            .map(|index| DocumentResource {
+                document_id: format!("document-{index}"),
+                path: format!("D:/work/{}", "a".repeat(1024)),
+            })
+            .collect(),
+        ..SnapshotResources::default()
+    };
+    let (mut server, _calls) = start_dual_scope_server_with_snapshot(move || Ok(resources.clone()));
+    let mut stream = connect(&server);
+    stream.set_read_timeout(Some(TEST_TIMEOUT)).unwrap();
+    write_json(
+        &mut stream,
+        &hello_scoped("sk-test-runtime", ControlScope::Runtime),
+    );
+    assert!(read_line(&mut stream).contains("store"));
+
+    write_json(&mut stream, &runtime_request(RuntimeMethod::Snapshot));
+    let reply: serde_json::Value = serde_json::from_str(&read_line(&mut stream)).unwrap();
+    assert_eq!(reply["error"]["data"]["code"], "response_too_large");
+
+    write_json(&mut stream, &runtime_request(RuntimeMethod::Describe));
+    let reply: serde_json::Value = serde_json::from_str(&read_line(&mut stream)).unwrap();
+    assert_eq!(reply["result"]["methods"][0]["method"], "runtime.hello");
+    server.shutdown().unwrap();
+}
+
+/// 控制字符按 JSON 最坏六倍转义后仍不得突破响应预算或断开连接。
+#[test]
+fn runtime_terminal_read_control_characters_stay_within_response_budget() {
+    let terminal = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2d";
+    let text = "\u{1}".repeat(crate::local_control::reads::PAGE_BUDGET_BYTES);
+    let (mut server, _calls) = start_dual_scope_server_with_read(move |_| {
+        Ok(crate::local_control::reads::TerminalTextSnapshot {
+            generation: 3,
+            revision: 5,
+            text: text.clone(),
+        })
+    });
+    let mut stream = connect(&server);
+    stream.set_read_timeout(Some(TEST_TIMEOUT)).unwrap();
+    write_json(
+        &mut stream,
+        &hello_scoped("sk-test-runtime", ControlScope::Runtime),
+    );
+    assert!(read_line(&mut stream).contains("store"));
+
+    write_json(&mut stream, &terminal_read_request(terminal, 3, None));
+    let reply: serde_json::Value = serde_json::from_str(&read_line(&mut stream)).unwrap();
+    assert_eq!(
+        reply["result"]["data"].as_str().unwrap().len(),
+        crate::local_control::reads::PAGE_BUDGET_BYTES
+    );
+    assert!(reply["result"]["next_cursor"].is_null());
+
+    // 连接必须保留：非法身份应返回结构化错误而不是静默断开。
+    write_json(
+        &mut stream,
+        &terminal_read_request("not-a-terminal-id", 3, None),
+    );
+    let reply: serde_json::Value = serde_json::from_str(&read_line(&mut stream)).unwrap();
+    assert_eq!(reply["error"]["data"]["code"], "invalid_request");
+    server.shutdown().unwrap();
+}
+
 fn start_dual_scope_server_with_agents<A>(on_agents: A) -> (LocalControlServer, Arc<AtomicUsize>)
 where
     A: Fn() -> Result<Vec<slterm_runtime_protocol::AgentResource>, JsonRpcError>

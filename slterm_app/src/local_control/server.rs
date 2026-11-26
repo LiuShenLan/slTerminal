@@ -530,6 +530,7 @@ fn handle_connection<F>(
                     }
                     continue;
                 }
+                let response_id = request.id.clone();
                 let response = match request.method {
                     // describe 只读方法注册表与握手同一散列，不需要回前台。
                     RuntimeMethod::Describe => JsonRpcResponse::result(
@@ -1306,6 +1307,7 @@ fn handle_connection<F>(
                         )
                     }
                 };
+                let response = enforce_response_budget(response, response_id);
                 if write_json(&mut stream, &response).is_err() {
                     return;
                 }
@@ -1454,6 +1456,29 @@ fn respond_git_diff(
         },
         Err(ReadError::StaleCursor) => JsonRpcResponse::error(id, stale_cursor_error()),
     }
+}
+
+/// 编码后超限的运行时响应降级为封闭错误；连接保留，客户端可缩小请求重试。
+fn enforce_response_budget<T: Serialize>(
+    response: JsonRpcResponse<T>,
+    id: JsonRpcId,
+) -> JsonRpcResponse<T> {
+    let fits = serde_json::to_vec(&response).is_ok_and(|encoded| encoded.len() <= RESPONSE_BUDGET);
+    if fits {
+        response
+    } else {
+        JsonRpcResponse::error(id, response_too_large_error())
+    }
+}
+
+fn response_too_large_error() -> JsonRpcError {
+    JsonRpcError::new(
+        -32008,
+        "response too large",
+        Some(JsonRpcErrorData {
+            code: DomainErrorCode::ResponseTooLarge,
+        }),
+    )
 }
 
 fn unknown_agent_error() -> JsonRpcError {

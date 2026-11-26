@@ -259,6 +259,11 @@
           "description": "对外 Agent 身份没有匹配关联。",
           "type": "string",
           "const": "unknown_agent"
+        },
+        {
+          "description": "编码后的响应超过单帧预算；请求必须缩小范围或改用分页读取。",
+          "type": "string",
+          "const": "response_too_large"
         }
       ]
     },

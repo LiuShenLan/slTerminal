@@ -7,9 +7,9 @@ use slterm_workspace::TerminalId;
 
 /// 单页正文预算：低于 1 MiB 响应上限，为 JSON 封装与转义留出裕度。
 ///
-/// 终端文本经 `serde_json` 编码后引号、反斜杠与换行会翻倍；384 KiB 正文
-/// 在现实最坏 2 倍转义后仍低于 1 MiB 响应上限，不会因极限页面断开连接。
-pub(crate) const PAGE_BUDGET_BYTES: usize = 384 * 1024;
+/// `serde_json` 对控制字符输出 `\u00XX`，最坏每字节膨胀六倍；160 KiB 正文
+/// 编码后仍低于 1 MiB，减去响应信封后不会因极限页面断开连接。
+pub(crate) const PAGE_BUDGET_BYTES: usize = 160 * 1024;
 
 /// 终端读取目标：稳定身份、PTY 代次与可选 Agent 身份；都由前台复核。
 #[derive(Clone, Debug, PartialEq, Eq)]
