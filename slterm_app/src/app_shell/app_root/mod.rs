@@ -88,6 +88,7 @@ gpui::actions!(
         AdjustSplitUp,
         AdjustSplitDown,
         CloseActiveTerminal,
+        CloseActivePanel,
         ReconnectTerminal,
         FocusNextPanel,
         FocusPreviousPanel,

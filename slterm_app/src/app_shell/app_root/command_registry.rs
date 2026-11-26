@@ -20,11 +20,11 @@ use super::{
     AdjustSidebarRatioDown, AdjustSidebarRatioDownLarge, AdjustSidebarRatioUp,
     AdjustSidebarRatioUpLarge, AdjustSidebarWidthLeft, AdjustSidebarWidthLeftLarge,
     AdjustSidebarWidthRight, AdjustSidebarWidthRightLarge, AdjustSplitDown, AdjustSplitLeft,
-    AdjustSplitRight, AdjustSplitUp, AppRoot, CloseActiveTerminal, FocusActivityBar,
-    FocusFirstSideButton, FocusLastSideButton, FocusNextPanel, FocusNextSideButton,
-    FocusPreviousPanel, FocusPreviousSideButton, NewTerminal, OpenLayoutMenu, OpenSettings,
-    OpenSideButtonMenu, ReconnectTerminal, ResetSidebarRatio, ResetSidebarWidth, SplitDown,
-    SplitRight, ToggleSidebar,
+    AdjustSplitRight, AdjustSplitUp, AppRoot, CloseActivePanel, CloseActiveTerminal,
+    FocusActivityBar, FocusFirstSideButton, FocusLastSideButton, FocusNextPanel,
+    FocusNextSideButton, FocusPreviousPanel, FocusPreviousSideButton, NewTerminal, OpenLayoutMenu,
+    OpenSettings, OpenSideButtonMenu, ReconnectTerminal, ResetSidebarRatio, ResetSidebarWidth,
+    SplitDown, SplitRight, ToggleSidebar,
     commands::AppRootError,
     focus_manager::FocusError,
     sidebar::{SideButtonCommand, SideButtonNavigation, SidebarGeometryCommand},
@@ -37,6 +37,7 @@ pub(crate) enum CommandId {
     SplitRight,
     SplitDown,
     CloseActiveTerminal,
+    CloseActivePanel,
     ReconnectTerminal,
     CloseOtherViews,
     CloseAllViews,
@@ -200,7 +201,7 @@ const APPLICATION_DEFINITIONS: [CommandDefinition; 1] = [CommandDefinition {
     action: || Box::new(OpenSettings),
 }];
 
-const TERMINAL_DEFINITIONS: [CommandDefinition; 5] = [
+const TERMINAL_DEFINITIONS: [CommandDefinition; 6] = [
     CommandDefinition {
         id: CommandId::NewTerminal,
         target: CommandTarget::Focused,
@@ -228,6 +229,13 @@ const TERMINAL_DEFINITIONS: [CommandDefinition; 5] = [
         keystroke: "ctrl-shift-w",
         context: None,
         action: || Box::new(CloseActiveTerminal),
+    },
+    CommandDefinition {
+        id: CommandId::CloseActivePanel,
+        target: CommandTarget::Focused,
+        keystroke: "ctrl-w",
+        context: None,
+        action: || Box::new(CloseActivePanel),
     },
     CommandDefinition {
         id: CommandId::ReconnectTerminal,
@@ -549,6 +557,7 @@ impl CommandRegistry {
                 | CommandId::SplitRight
                 | CommandId::SplitDown
                 | CommandId::CloseActiveTerminal
+                | CommandId::CloseActivePanel
                 | CommandId::ReconnectTerminal
                 | CommandId::CloseOtherViews
                 | CommandId::CloseAllViews
@@ -761,6 +770,14 @@ impl CommandRegistry {
             (CommandId::CloseActiveTerminal, None) => root
                 .close_focused_terminal_from_request(window, cx)
                 .map(CommandOutcome::TerminalClosed),
+            (CommandId::CloseActivePanel, None) => {
+                let view = context
+                    .focused_view
+                    .clone()
+                    .ok_or(AppRootError::MissingPanel)?;
+                root.close_view_from_request(view, BTreeMap::new(), window, cx)?;
+                Ok(CommandOutcome::Completed)
+            }
             (CommandId::ReconnectTerminal, None) => root
                 .reconnect_focused_terminal_from_request(window, cx)
                 .map(|()| CommandOutcome::Completed),

@@ -1832,3 +1832,115 @@ fn batch_cleanup_failure_retries_without_rejoining_members(cx: &mut TestAppConte
     );
     runtime.shutdown(ControlPlaneCleanup::Succeeded).unwrap();
 }
+
+/// 页签投影共享 Document 脏态与 CLI 状态，并提供单面板关闭入口。
+#[gpui::test]
+fn tab_bar_projects_dirty_status_and_closes_a_single_panel(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let file = temp.path().join("tab-note.txt");
+    std::fs::write(&file, "body\n").unwrap();
+    let file = CanonicalPath::new(dunce::canonicalize(&file).unwrap()).unwrap();
+    let (root, mut window, _) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, temp.path().to_str().unwrap());
+    let terminal = new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_A);
+    let (_, editor) = open_editor(&root, &mut window, cx, file);
+    window.update(|window, cx| {
+        editor.update(cx, |view, cx| {
+            gpui::EntityInputHandler::replace_text_in_range(view, None, "dirty", window, cx);
+        });
+    });
+    let pane = crate::gpui_terminal::PaneId(terminal.sequence());
+    root.update(cx, |root, _| {
+        root.agents.register(pane);
+        root.agents.command_started(pane, Some("claude"));
+    });
+    draw_frame(&mut window);
+
+    let views = group_views(&root, cx, group_id(GROUP_A));
+    let terminal_index = views
+        .iter()
+        .position(|view| matches!(view, ViewKey::Terminal { .. }))
+        .expect("终端页签必须存在");
+    let editor_index = views
+        .iter()
+        .position(|view| matches!(view, ViewKey::Editor { .. }))
+        .expect("编辑器页签必须存在");
+    assert!(
+        window
+            .debug_bounds(Box::leak(
+                format!("app-root-tab-status-{terminal_index}").into_boxed_str()
+            ))
+            .is_some(),
+        "工作态终端页签必须显示 CLI 状态徽标"
+    );
+    assert!(
+        window
+            .debug_bounds(Box::leak(
+                format!("app-root-tab-dirty-{editor_index}").into_boxed_str()
+            ))
+            .is_some(),
+        "脏 Document 页签必须显示脏标记"
+    );
+
+    let close_selector = format!("app-root-tab-close-{terminal_index}");
+    let close = window
+        .debug_bounds(Box::leak(close_selector.into_boxed_str()))
+        .expect("每个页签必须渲染关闭入口");
+    window.simulate_click(close.center(), Modifiers::default());
+    window.run_until_parked();
+    draw_frame(&mut window);
+
+    let remaining = group_views(&root, cx, group_id(GROUP_A));
+    assert!(
+        remaining
+            .iter()
+            .all(|view| !matches!(view, ViewKey::Terminal { .. })),
+        "页签关闭入口必须只关闭目标面板: {remaining:?}"
+    );
+    assert!(
+        remaining
+            .iter()
+            .any(|view| matches!(view, ViewKey::Editor { .. })),
+        "其他面板不得被连带关闭"
+    );
+}
+
+/// 单面板关闭命令复用批量关闭链：聚焦编辑器可直接关闭，不要求终端。
+#[gpui::test]
+fn close_active_panel_command_closes_a_focused_editor(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let file = temp.path().join("close-me.txt");
+    std::fs::write(&file, "body\n").unwrap();
+    let file = CanonicalPath::new(dunce::canonicalize(&file).unwrap()).unwrap();
+    let (root, mut window, _) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, temp.path().to_str().unwrap());
+    new_terminal(&root, &mut window, PROJECT_A, GROUP_A, TERMINAL_A);
+    let (document, _) = open_editor(&root, &mut window, cx, file);
+    draw_frame(&mut window);
+
+    let outcome = window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.execute_command(
+                CommandId::CloseActivePanel,
+                CommandSource::Keyboard,
+                CommandTarget::Focused,
+                None,
+                window,
+                cx,
+            )
+        })
+    });
+    assert!(
+        matches!(outcome, Ok(CommandOutcome::Completed)),
+        "聚焦编辑器必须可被单面板关闭命令关闭: {outcome:?}"
+    );
+    window.run_until_parked();
+    let views = group_views(&root, cx, group_id(GROUP_A));
+    assert!(
+        views.iter().all(|view| !matches!(
+            view,
+            ViewKey::Editor { document_id, .. } if *document_id == document
+        )),
+        "目标编辑器页签必须被移除: {views:?}"
+    );
+}

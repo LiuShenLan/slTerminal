@@ -1,12 +1,13 @@
 //! 面板组页签：布局顺序、完整列表与横向滚动的运行期接线。
 
+use gpui::prelude::FluentBuilder as _;
 use gpui::{
     AnyElement, App, Context, DismissEvent, Focusable as _, InteractiveElement as _, IntoElement,
     ParentElement as _, Pixels, Point, Styled as _, WeakEntity, Window, anchored, deferred, div,
     px,
 };
 use gpui_component::{
-    IconName, Sizable as _,
+    ActiveTheme as _, IconName, Sizable as _,
     button::{Button, ButtonVariants as _},
     menu::{PopupMenu, PopupMenuItem},
     tab::{Tab, TabBar},
@@ -105,8 +106,76 @@ impl AppRoot {
             .clone();
         let clicked_views = views.clone();
         let root = cx.weak_entity();
-        let tabs = views.into_iter().map(|view| {
+        let click_root = root.clone();
+        let tabs = views.into_iter().enumerate().map(|(index, view)| {
             let mut tab = Tab::new().label(self.tab_title(&view, cx));
+            // CLI 状态来自 AgentHub 仲裁器；只有工作/阻塞需要徽标。
+            let status_color = match &view {
+                ViewKey::Terminal { terminal_id, .. } => {
+                    match self.terminal_agent_status(*terminal_id, cx) {
+                        crate::ai_agents::AgentStatus::Working => Some(cx.theme().accent),
+                        crate::ai_agents::AgentStatus::Blocked => Some(cx.theme().danger),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            };
+            if let Some(color) = status_color {
+                tab = tab.prefix(
+                    div()
+                        .w(px(6.0))
+                        .h(px(6.0))
+                        .rounded_full()
+                        .bg(color)
+                        .debug_selector(move || format!("app-root-tab-status-{index}")),
+                );
+            }
+            // 共享 Document 脏态直接投影到页签，并提供单面板关闭入口。
+            let dirty = match &view {
+                ViewKey::Editor { document_id, .. }
+                | ViewKey::Markdown { document_id, .. }
+                | ViewKey::Diff { document_id, .. } => self
+                    .documents
+                    .session(*document_id)
+                    .is_some_and(|session| session.is_dirty()),
+                _ => false,
+            };
+            let close_root = root.clone();
+            let close_view = view.clone();
+            let close_selector = format!("app-root-tab-close-{index}");
+            let close_button = Button::new(format!("tab-close-{index}"))
+                .ghost()
+                .xsmall()
+                .label("×")
+                .debug_selector(move || close_selector.clone())
+                .on_click(move |_, window, cx| {
+                    let _ = close_root.update(cx, |root, cx| {
+                        if let Err(error) = root.close_view_from_request(
+                            close_view.clone(),
+                            Default::default(),
+                            window,
+                            cx,
+                        ) {
+                            log::warn!("页签关闭面板失败: {error}");
+                        }
+                    });
+                });
+            let suffix = div()
+                .flex()
+                .items_center()
+                .gap_1()
+                .when(dirty, |element| {
+                    element.child(
+                        div()
+                            .w(px(6.0))
+                            .h(px(6.0))
+                            .rounded_full()
+                            .bg(cx.theme().foreground)
+                            .debug_selector(move || format!("app-root-tab-dirty-{index}")),
+                    )
+                })
+                .child(close_button);
+            tab = tab.suffix(suffix);
             if let ViewKey::Terminal { terminal_id, .. } = view {
                 let selector = format!("app-root-tab-{terminal_id}");
                 tab = tab.child(
@@ -145,7 +214,7 @@ impl AppRoot {
                         let Some(view) = clicked_views.get(*index).cloned() else {
                             return;
                         };
-                        let _ = root.update(cx, |root, cx| {
+                        let _ = click_root.update(cx, |root, cx| {
                             if let Err(error) = root.activate_view(view, window, cx) {
                                 log::warn!("页签激活视图失败: {error}");
                             }

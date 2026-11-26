@@ -15,9 +15,9 @@ use super::command_registry::{
 use super::project_view::ProjectView;
 use super::{
     ActivateAgentFiles, ActivateCommit, ActivateExplorer, ActivateNav, AdjustSplitDown,
-    AdjustSplitLeft, AdjustSplitRight, AdjustSplitUp, AppRoot, CloseActiveTerminal,
-    FocusActivityBar, FocusNextPanel, FocusPreviousPanel, NewTerminal, OpenLayoutMenu,
-    OpenSettings, SplitDown, SplitRight, ToggleSidebar,
+    AdjustSplitLeft, AdjustSplitRight, AdjustSplitUp, AppRoot, CloseActivePanel,
+    CloseActiveTerminal, FocusActivityBar, FocusNextPanel, FocusPreviousPanel, NewTerminal,
+    OpenLayoutMenu, OpenSettings, SplitDown, SplitRight, ToggleSidebar,
 };
 
 impl AppRoot {
@@ -397,6 +397,18 @@ impl Render for AppRoot {
                     cx,
                 ) {
                     log::warn!("聚焦活动栏命令失败: {error}");
+                }
+            }))
+            .on_action(cx.listener(|this, _: &CloseActivePanel, window, cx| {
+                if let Err(error) = this.execute_command(
+                    CommandId::CloseActivePanel,
+                    CommandSource::Keyboard,
+                    CommandTarget::Focused,
+                    None,
+                    window,
+                    cx,
+                ) {
+                    log::warn!("关闭当前面板命令失败: {error}");
                 }
             }))
             .on_action(cx.listener(|this, _: &CloseActiveTerminal, window, cx| {
