@@ -220,6 +220,9 @@ pub struct Term<T> {
     /// Proxy for sending events to the event loop.
     event_proxy: T,
 
+    /// 网格显示代次；重连接管时递增，旧 worker 的显示命令与退出通知据此失效。
+    display_epoch: u64,
+
     /// Current title of the window.
     title: Option<String>,
 
@@ -391,6 +394,7 @@ impl<T> Term<T> {
             inactive_grid,
             scroll_region,
             event_proxy,
+            display_epoch: 0,
             damage,
             // 默认按暗底起步：Slterm 的默认主题是深色，宿主在首次
             // `set_color_scheme` 前不会有订阅方，值不会被读到。
@@ -490,38 +494,6 @@ impl<T> Term<T> {
             self.cursor_blinking_override = None;
             self.mark_fully_damaged();
         }
-    }
-
-    /// 记录当前默认背景是暗还是亮，并在有 DECSET 2031 订阅时通知子进程。
-    ///
-    /// 宿主在终端 palette 热应用时调用（主题切换、跟随系统翻转、用户改
-    /// `background=`）。值没变就什么都不做：热应用路径每次设置改动都会整体走一
-    /// 遍，无条件上报会把重复字节塞进 PTY，落在 shell 提示符上就是一串垃圾。
-    pub fn set_color_scheme(&mut self, is_dark: bool)
-    where
-        T: EventListener,
-    {
-        if self.color_scheme_dark == is_dark {
-            return;
-        }
-        self.color_scheme_dark = is_dark;
-        self.report_color_scheme();
-    }
-
-    /// 发 `CSI ? 997 ; 1 n`（暗）/ `CSI ? 997 ; 2 n`（亮）。    ///
-    /// 编号来自 color-palette-update-notifications 提案；主流终端实现采用
-    /// 同一套应答格式。没订阅就不发——这个序列对没要求过它的程序来说是
-    /// 不认识的输入。
-    fn report_color_scheme(&mut self)
-    where
-        T: EventListener,
-    {
-        if !self.mode.contains(TermMode::COLOR_SCHEME_UPDATES) {
-            return;
-        }
-        let value = if self.color_scheme_dark { 1 } else { 2 };
-        self.event_proxy
-            .send_event(Event::PtyWrite(format!("\x1b[?997;{value}n")));
     }
 
     /// Set new options for the [`Term`].

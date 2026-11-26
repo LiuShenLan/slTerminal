@@ -72,6 +72,128 @@ fn notifier_reports_input_and_resize_backpressure() {
     ));
 }
 
+/// 重连接管后旧 worker 的显示命令不得写入共享网格，退出事件也不得
+/// 经替换后的代理进入新会话通道。
+#[test]
+fn stale_worker_after_reconnect_cannot_mutate_grid_or_reach_new_proxy() {
+    use std::sync::{Arc, Mutex};
+
+    use crate::index::{Column, Line, Point, Side};
+    use crate::selection::{Selection, SelectionCommand, SelectionType};
+
+    #[derive(Clone, Default)]
+    struct Collector(Arc<Mutex<Vec<&'static str>>>);
+
+    impl EventListener for Collector {
+        fn send_event(&self, event: Event) {
+            if matches!(event, Event::Exit) {
+                self.0.lock().unwrap().push("exit");
+            }
+        }
+    }
+
+    struct IdlePty {
+        reader: io::Empty,
+        writer: io::Sink,
+    }
+
+    impl tty::EventedReadWrite for IdlePty {
+        type Reader = io::Empty;
+        type Writer = io::Sink;
+
+        unsafe fn register(
+            &mut self,
+            _: &Arc<Poller>,
+            _: polling::Event,
+            _: polling::PollMode,
+        ) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn reregister(
+            &mut self,
+            _: &Arc<Poller>,
+            _: polling::Event,
+            _: polling::PollMode,
+        ) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn deregister(&mut self, _: &Arc<Poller>) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn reader(&mut self) -> &mut Self::Reader {
+            &mut self.reader
+        }
+
+        fn writer(&mut self) -> &mut Self::Writer {
+            &mut self.writer
+        }
+    }
+
+    impl event::OnResize for IdlePty {
+        fn on_resize(&mut self, _: WindowSize) {}
+    }
+
+    impl tty::EventedPty for IdlePty {
+        fn next_child_event(&mut self) -> Option<tty::ChildEvent> {
+            None
+        }
+
+        fn read_before(&mut self, _: tty::OutputWatermark, _: &mut [u8]) -> io::Result<usize> {
+            Ok(0)
+        }
+    }
+
+    let old_proxy = Collector::default();
+    let new_proxy = Collector::default();
+    let terminal = Arc::new(FairMutex::new(Term::new(
+        Config::default(),
+        &TermSize::new(20, 2),
+        old_proxy.clone(),
+    )));
+    let mut event_loop = EventLoop::new(
+        terminal.clone(),
+        old_proxy.clone(),
+        IdlePty {
+            reader: io::empty(),
+            writer: io::sink(),
+        },
+        false,
+    )
+    .unwrap();
+    let sender = event_loop.channel();
+    let selection = Selection::new(
+        SelectionType::Simple,
+        Point::new(Line(0), Column(0)),
+        Side::Left,
+    );
+    sender
+        .try_send(Msg::Select(SelectionCommand::Set(Some(selection))))
+        .unwrap();
+
+    // 新 worker 接管：替换代理并推进网格代次；旧 worker 的排队命令仍到达。
+    {
+        let mut terminal = terminal.lock();
+        terminal.replace_event_proxy(new_proxy.clone());
+        terminal.begin_reconnect();
+    }
+    let mut state = State::default();
+    event_loop.drain_recv_channel(&mut state).unwrap();
+    assert!(
+        terminal.lock().selection.is_none(),
+        "旧代次显示命令不得写入重连后的网格"
+    );
+
+    event_loop.notify_exit();
+    assert_eq!(*old_proxy.0.lock().unwrap(), ["exit"]);
+    assert!(
+        new_proxy.0.lock().unwrap().is_empty(),
+        "旧 worker 退出事件不得进入新会话通道"
+    );
+}
+
 #[test]
 fn display_commands_are_applied_inside_the_worker() {
     use crate::index::{Column, Line, Point, Side};

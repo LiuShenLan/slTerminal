@@ -703,6 +703,7 @@ pub struct EventLoop<T: tty::EventedPty, U: EventListener> {
     tx: SyncSender<Msg>,
     terminal: Arc<FairMutex<Term<U>>>,
     event_proxy: U,
+    display_epoch: u64,
     drain_on_exit: bool,
 }
 
@@ -720,6 +721,7 @@ where
     ) -> io::Result<EventLoop<T, U>> {
         let (tx, rx) = mpsc::sync_channel(COMMAND_CHANNEL_CAPACITY);
         let poll = Poller::new()?.into();
+        let display_epoch = terminal.lock().display_epoch();
         Ok(EventLoop {
             poll,
             pty,
@@ -727,8 +729,20 @@ where
             rx: PeekableReceiver::new(rx),
             terminal,
             event_proxy,
+            display_epoch,
             drain_on_exit,
         })
+    }
+
+    /// 重连接管完成后同步当前网格代次；此后旧代次命令与退出通知都被忽略。
+    pub fn adopt_terminal_display_epoch(&mut self) {
+        self.display_epoch = self.terminal.lock().display_epoch();
+    }
+
+    /// 退出事件只能进入本 worker 创建时的订阅通道，不得经 Term 当前代理
+    /// 泄漏到重连后的新会话。
+    fn notify_exit(&self) {
+        self.event_proxy.send_event(Event::Exit);
     }
 
     pub fn channel(&self) -> EventLoopSender {
@@ -786,7 +800,10 @@ where
                 | Msg::Select(_)
                 | Msg::SearchLiteral { .. }
                 | Msg::SetColorScheme(_) => {
-                    if apply_display_command(&mut self.terminal.lock(), &msg) {
+                    let mut terminal = self.terminal.lock();
+                    if terminal.display_epoch() == self.display_epoch
+                        && apply_display_command(&mut terminal, &msg)
+                    {
                         state.display_dirty = true;
                     }
                 }
@@ -927,6 +944,11 @@ where
                 }),
             };
 
+            // 新 worker 已接管网格：旧代次读到的输出直接丢弃，不再解析。
+            if terminal.display_epoch() != self.display_epoch {
+                break;
+            }
+
             state
                 .stream
                 .feed(&mut **terminal, &self.event_proxy, &stripped);
@@ -1037,6 +1059,10 @@ where
             let mut pty_active = true;
 
             'event_loop: loop {
+                // 重连接管后旧 worker 立即停手：不再读 PTY、改网格或发布事件。
+                if self.terminal.lock().display_epoch() != self.display_epoch {
+                    break 'event_loop;
+                }
                 // Wakeup the event loop when a synchronized update timeout or
                 // the pending ConPTY align deadline was reached.
                 let transport_deadline = state.output_closed_at.map(|at| at + OUTPUT_CLOSED_GRACE);
@@ -1111,6 +1137,9 @@ where
                     output_watermark,
                 }) = pending_resize
                 {
+                    if self.terminal.lock().display_epoch() != self.display_epoch {
+                        break 'event_loop;
+                    }
                     // A resize is a stream boundary, not a UI-side property.
                     // Drain everything already readable while the grid still
                     // has the old geometry; otherwise old-width absolute CUP
@@ -1190,6 +1219,9 @@ where
                             if let Some(tty::ChildEvent::Exited(status)) =
                                 self.pty.next_child_event()
                             {
+                                if self.terminal.lock().display_epoch() != self.display_epoch {
+                                    break 'event_loop;
+                                }
                                 if let Some(status) = status {
                                     self.event_proxy.send_event(Event::ChildExit(status));
                                 }
@@ -1223,7 +1255,7 @@ where
                                         .feed(&mut *terminal, &self.event_proxy, &pending);
                                     drop(terminal);
                                 }
-                                self.terminal.lock().exit();
+                                self.notify_exit();
                                 self.publish_frame(&mut state);
                                 let _ = self.pty.deregister(&self.poll);
                                 pty_active = false;
@@ -1275,7 +1307,7 @@ where
             // The child-exit and shutdown paths leave `failure` unset.
             if let Some(reason) = failure {
                 self.event_proxy.send_event(Event::PtyFailure(reason));
-                self.terminal.lock().exit();
+                self.notify_exit();
                 self.publish_frame(&mut state);
             }
 

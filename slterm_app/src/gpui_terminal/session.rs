@@ -419,12 +419,15 @@ fn spawn_on_term(
         .ok_or_else(|| std::io::Error::other("PTY 未提供子进程 PID 与创建时间"))?;
 
     let native_prompt = proxy.events.native_prompt.clone();
-    let event_loop = EventLoop::new(Arc::clone(&term), proxy.clone(), pty, options.drain_on_exit)?;
+    let mut event_loop =
+        EventLoop::new(Arc::clone(&term), proxy.clone(), pty, options.drain_on_exit)?;
     if reconnect {
         // EventLoop 创建已全部可失败步骤；此后不再让失败破坏旧画面。
         let mut terminal = term.lock();
         terminal.replace_event_proxy(proxy);
         terminal.begin_reconnect();
+        drop(terminal);
+        event_loop.adopt_terminal_display_epoch();
     }
     let notifier = Notifier(event_loop.channel());
     let event_loop = event_loop.spawn();

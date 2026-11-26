@@ -8,6 +8,8 @@ impl<T> Term<T> {
     where
         T: EventListener,
     {
+        // 先推进代次：旧 worker 的显示命令、输出解析与退出通知从此失效。
+        self.display_epoch = self.display_epoch.wrapping_add(1);
         if self.mode.contains(TermMode::ALT_SCREEN) {
             self.swap_alt();
         }
@@ -40,5 +42,10 @@ impl<T> Term<T> {
     /// 重连后终端语义事件只能进入新 worker 的订阅通道。
     pub fn replace_event_proxy(&mut self, event_proxy: T) {
         self.event_proxy = event_proxy;
+    }
+
+    /// 当前网格显示代次；旧 worker 在重连后据此拒绝写入。
+    pub fn display_epoch(&self) -> u64 {
+        self.display_epoch
     }
 }

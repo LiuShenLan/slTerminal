@@ -14,4 +14,4 @@ root slterm_workspace
 root slterm_sidebar
 root slterm_agents
 root slterm_hooks
-slterm_terminal/src/term/mod.rs 2714
+slterm_terminal/src/term/mod.rs 2686
