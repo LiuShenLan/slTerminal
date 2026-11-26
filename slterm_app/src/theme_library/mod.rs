@@ -3,6 +3,7 @@
 //! `document` 拥有版本化 JSON 信封,`store` 拥有自定义主题文件与单文件导入。
 //! 设置 crate 仍是运行时定义值的唯一权威;本层只做格式与持久化。
 
+pub(crate) mod cache;
 pub(crate) mod document;
 pub(crate) mod preferences;
 mod store;

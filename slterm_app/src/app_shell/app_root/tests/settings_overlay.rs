@@ -306,6 +306,65 @@ fn settings_overlay_controls_write_runtime_values_and_queue(cx: &mut TestAppCont
     assert_eq!(runtime_speed, global_speed, "全局快照必须与运行值同源");
 }
 
+/// 自定义主题提交在后台预载；后续无关字段热应用只查缓存，不读主题文件。
+#[gpui::test]
+fn custom_theme_hot_apply_uses_the_background_preloaded_cache(cx: &mut TestAppContext) {
+    let (root, window, _state) = open_root(cx);
+    let directory = tempfile::tempdir().unwrap();
+    let themes = directory.path().join("themes");
+    let store = crate::theme_library::ThemeLibraryStore::new(&themes);
+    let mut definition =
+        slterm_settings::ThemeDefinition::from_builtin(slterm_settings::ThemeName::Nord);
+    definition.name = "Cached".to_owned();
+    definition.terminal.background = [0x11, 0x22, 0x33];
+    let document = store
+        .import(&crate::theme_library::from_definition(&definition).unwrap())
+        .unwrap();
+    let id = document.id().unwrap().to_owned();
+    let theme_id = document.theme_id().unwrap();
+    root.update(cx, |root, _| {
+        root.theme_root_for_test = Some(themes.clone())
+    });
+    root.update(cx, |root, cx| {
+        root.apply_settings_field(
+            "custom_theme",
+            slterm_settings::json::Value::String(id.clone()),
+            cx,
+        );
+    });
+    window.run_until_parked();
+    let background = cx.update(|cx| {
+        cx.global::<crate::app_shell::config::Settings>()
+            .palette
+            .background
+    });
+    assert_eq!(
+        background,
+        crate::gpui_terminal::colors::from_rgb8([0x11, 0x22, 0x33]),
+        "后台预载完成后快照必须采用自定义主题"
+    );
+
+    // 主题文件在外部消失后，改无关字段不得回读文件，缓存继续生效。
+    std::fs::remove_file(store.path_for(theme_id).unwrap()).unwrap();
+    root.update(cx, |root, cx| {
+        root.apply_settings_field(
+            "scroll_speed",
+            slterm_settings::json::Value::Number(1.5),
+            cx,
+        );
+    });
+    let background = cx.update(|cx| {
+        cx.global::<crate::app_shell::config::Settings>()
+            .palette
+            .background
+    });
+    assert_eq!(
+        background,
+        crate::gpui_terminal::colors::from_rgb8([0x11, 0x22, 0x33]),
+        "热应用不得重新读取主题文件"
+    );
+}
+
 /// AgentHooks 页：状态快照与授权开关只经注入端口，不触碰真实用户配置。
 #[gpui::test]
 fn agent_hooks_page_renders_status_and_toggles_through_injected_ports(cx: &mut TestAppContext) {

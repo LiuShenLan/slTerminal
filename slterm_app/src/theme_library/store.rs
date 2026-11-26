@@ -328,6 +328,7 @@ impl ThemeLibraryStore {
         // 持锁后复查:符号链接换入不能被原子替换成普通主题文件。
         reject_symlink(&path)?;
         crate::atomic_file::write(&path, &bytes).map_err(|error| io_error(&path, error))?;
+        super::cache::invalidate();
         Ok(stored)
     }
 
@@ -429,7 +430,9 @@ impl ThemeLibraryStore {
                 actual: Some(document.revision()),
             });
         }
-        fs::remove_file(&path).map_err(|error| io_error(&path, error))
+        fs::remove_file(&path).map_err(|error| io_error(&path, error))?;
+        super::cache::invalidate();
+        Ok(())
     }
 
     fn reject_import_source_locks(&self, source: &Path, target: &Path) -> Result<(), StoreError> {

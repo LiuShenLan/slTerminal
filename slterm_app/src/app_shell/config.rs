@@ -104,7 +104,8 @@ impl Settings {
                 if result.corrupted {
                     log::warn!("settings.json 损坏,已回退备份或默认值");
                 }
-                Self::from_runtime(&RuntimeSettings::from_raw(&result.data))
+                // 启动是冷路径：允许读盘解析主题并预载缓存。
+                Self::from_runtime_with_theme_root(&RuntimeSettings::from_raw(&result.data), None)
             }
             Err(error) => {
                 log::warn!("读取设置失败,使用默认值: {error}");
@@ -113,20 +114,25 @@ impl Settings {
         }
     }
 
-    /// 宽容解析后的运行时设置 → 壳消费视图。字体四族共用同一字族链
-    /// (粗体/斜体字族键不在字体键白名单);字号缺省 = 15px;连字 Theme 档
-    /// 在主题 typography 落地前按「开」处理(与 `Ligatures::enabled(None)`
-    /// 同语义)。
+    /// 热应用入口:宽容解析后的运行时设置 → 壳消费视图,自定义主题只查
+    /// 预载缓存。字体四族共用同一字族链(粗体/斜体字族键不在字体键
+    /// 白名单);字号缺省 = 15px,连字按「开」处理。
     pub fn from_runtime(runtime: &RuntimeSettings) -> Self {
-        Self::from_runtime_with_theme_root(runtime, None)
+        let (palette, ui) = resolve_theme_cached(runtime);
+        Self::snapshot(runtime, palette, ui)
     }
 
-    /// 同 [`Self::from_runtime`],但主题库根显式指定(测试 tempdir 与
-    /// 设置页显式路径注入;生产传 None = 默认数据目录)。
+    /// 冷路径:显式主题库根解析自定义主题并预载缓存。启动入口与测试
+    /// 注入使用;热应用必须走 [`Self::from_runtime`] 的缓存查询。
     pub fn from_runtime_with_theme_root(
         runtime: &RuntimeSettings,
         theme_root: Option<&Path>,
     ) -> Self {
+        let (palette, ui) = resolve_theme_cold(runtime, theme_root);
+        Self::snapshot(runtime, palette, ui)
+    }
+
+    fn snapshot(runtime: &RuntimeSettings, palette: Palette, ui: ThemeUiColors) -> Self {
         let family = runtime
             .font_family
             .as_deref()
@@ -134,7 +140,6 @@ impl Settings {
             .filter(|family| !family.is_empty())
             .map(str::to_owned)
             .unwrap_or_else(|| crate::app_shell::assets::REQUIRED_FONT_FAMILY.to_owned());
-        let (palette, ui) = resolve_theme(runtime, theme_root);
         // 材质只由用户设置拥有;主题不再提供材质或视效缺省。
         let opacity = runtime.opacity.clamp(0.0, 1.0);
         let blur = runtime.blur;
@@ -191,14 +196,28 @@ impl Settings {
     }
 }
 
-/// 主题选择与应用流(仅暗色):自定义主题经主题库解析,失败回内置主题;
-/// `theme_foreground` 是显式前景覆盖,作用于终端正文。主题解析失败不把
-/// 启动/热应用升级成故障——回退内置目录默认(的 linear)。
-///
-/// 返回(终端调色板, UI 语义槽):编辑器的 `EditorThemeTokens` 从同一
-/// 分支装配,主题切换时消费方与终端同步热应用。主题只携带颜色,
-/// 不参与材质、字体或效果。
-fn resolve_theme(runtime: &RuntimeSettings, theme_root: Option<&Path>) -> (Palette, ThemeUiColors) {
+/// 热应用解析:只查进程内预载缓存,任何字段提交都不读主题文件。
+/// 未预载时回退内置主题,等待冷路径安装后再次重建快照。
+fn resolve_theme_cached(runtime: &RuntimeSettings) -> (Palette, ThemeUiColors) {
+    if let Some(id) = runtime.custom_theme.as_deref() {
+        if let Some(definition) = crate::theme_library::cache::get(id) {
+            let ui = definition.resolved_ui();
+            return (
+                Palette::from_definition(&definition, runtime.theme_foreground),
+                ui,
+            );
+        }
+        log::warn!("自定义主题 {id} 尚未预载,暂用内置主题");
+    }
+    resolve_builtin(runtime)
+}
+
+/// 冷路径解析:启动与显式主题库操作允许读盘;成功即安装缓存。
+/// 解析失败不把启动/热应用升级成故障——回退内置目录默认(的 linear)。
+fn resolve_theme_cold(
+    runtime: &RuntimeSettings,
+    theme_root: Option<&Path>,
+) -> (Palette, ThemeUiColors) {
     if let Some(id) = runtime.custom_theme.as_deref() {
         let store = theme_root.map_or_else(ThemeLibraryStore::default, ThemeLibraryStore::new);
         match store.load(id).and_then(|document| {
@@ -207,6 +226,7 @@ fn resolve_theme(runtime: &RuntimeSettings, theme_root: Option<&Path>) -> (Palet
                 .map_err(crate::theme_library::StoreError::Document)
         }) {
             Ok(definition) => {
+                crate::theme_library::cache::install(id, definition.clone());
                 let ui = definition.resolved_ui();
                 return (
                     Palette::from_definition(&definition, runtime.theme_foreground),
@@ -218,6 +238,10 @@ fn resolve_theme(runtime: &RuntimeSettings, theme_root: Option<&Path>) -> (Palet
             }
         }
     }
+    resolve_builtin(runtime)
+}
+
+fn resolve_builtin(runtime: &RuntimeSettings) -> (Palette, ThemeUiColors) {
     (
         Palette::from_term_theme(runtime.theme.term_theme(), runtime.theme_foreground),
         // 内置主题的 UI 语义槽 = 评审过的 ReviewedPalette 镜像。
@@ -382,6 +406,32 @@ mod config_tests {
                 slterm_settings::ThemeName::Linear.term_theme().background
             )
         );
+    }
+
+    /// 热应用只查预载缓存：任何字段提交都不得在 GPUI 前台读主题文件。
+    #[test]
+    fn hot_snapshot_uses_the_cached_custom_theme_definition_without_disk_io() {
+        let id = "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b";
+        let mut definition =
+            slterm_settings::ThemeDefinition::from_builtin(slterm_settings::ThemeName::Nord);
+        definition.terminal.background = [0x11, 0x22, 0x33];
+        crate::theme_library::cache::install(id, definition);
+        let parsed = runtime(&format!(r#"{{"appearance": {{"custom_theme": "{id}"}}}}"#));
+        let settings = Settings::from_runtime(&parsed);
+        assert_eq!(
+            settings.palette.background,
+            crate::gpui_terminal::colors::from_rgb8([0x11, 0x22, 0x33])
+        );
+        // 改其他字段再次重建快照：仍然只读缓存，不重新解析主题文件。
+        let changed = runtime(&format!(
+            r#"{{"appearance": {{"custom_theme": "{id}", "scroll_speed": 1.5}}}}"#
+        ));
+        let settings = Settings::from_runtime(&changed);
+        assert_eq!(
+            settings.palette.background,
+            crate::gpui_terminal::colors::from_rgb8([0x11, 0x22, 0x33])
+        );
+        crate::theme_library::cache::invalidate();
     }
 
     /// 静默启动两条件进入壳视图:silent_start 单独不隐藏(无托盘 =

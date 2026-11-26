@@ -342,6 +342,8 @@ pub(crate) struct AppRoot {
     hooks_generation: u64,
     #[cfg(test)]
     hooks_claude_dir_for_test: Option<std::path::PathBuf>,
+    #[cfg(test)]
+    theme_root_for_test: Option<std::path::PathBuf>,
     learning: crate::learning::LearningService,
     launcher: Box<dyn TerminalPanelLauncher>,
     project_paths: Arc<dyn ProjectPathResolver>,
@@ -617,6 +619,8 @@ impl AppRoot {
             hooks_generation: 0,
             #[cfg(test)]
             hooks_claude_dir_for_test: None,
+            #[cfg(test)]
+            theme_root_for_test: None,
             learning: crate::learning::LearningService::memory_only(),
             launcher,
             project_paths: Arc::new(SystemProjectPathResolver),

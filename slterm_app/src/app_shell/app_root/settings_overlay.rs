@@ -1004,8 +1004,70 @@ impl AppRoot {
                 .set_tray_enabled(matches!(value, Value::Bool(true))),
             _ => {}
         }
+        let theme_commit = match (key, &value) {
+            ("custom_theme", Value::String(id)) => Some(id.clone()),
+            _ => None,
+        };
+        if let Some(id) = theme_commit {
+            self.reload_theme_definition(id, cx);
+        } else {
+            self.reload_settings_snapshot(cx);
+        }
+        cx.notify();
+    }
+
+    /// 自定义主题的冷路径预载：读盘与解析只在后台执行，完成后安装缓存
+    /// 并重建快照；前台提交路径不做任何主题文件 I/O。
+    fn reload_theme_definition(&mut self, id: String, cx: &mut Context<'_, Self>) {
+        let store = self.theme_store();
+        let cancellation = super::task_service::CancellationToken::new();
+        let task = cx.spawn(async move |this, cx| {
+            let load_id = id.clone();
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    store.load(&load_id).and_then(|document| {
+                        document
+                            .resolve()
+                            .map_err(crate::theme_library::StoreError::Document)
+                    })
+                })
+                .await;
+            let _ = this.update(cx, |root, cx| {
+                root.finish_theme_load(id, result, cx);
+            });
+        });
+        if let Err(error) =
+            self.tasks
+                .register(super::task_service::TaskId::ThemeLoad, cancellation, task)
+        {
+            log::warn!("主题预载任务注册失败: {error:?}");
+            self.reload_settings_snapshot(cx);
+        }
+    }
+
+    fn finish_theme_load(
+        &mut self,
+        id: String,
+        result: Result<slterm_settings::ThemeDefinition, crate::theme_library::StoreError>,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.tasks.complete(super::task_service::TaskId::ThemeLoad);
+        match result {
+            Ok(definition) => crate::theme_library::cache::install(&id, definition),
+            Err(error) => log::warn!("主题 {id} 预载失败: {error}"),
+        }
         self.reload_settings_snapshot(cx);
         cx.notify();
+    }
+
+    /// 主题库根：生产走默认数据目录；测试注入隔离根，不触碰真实 home。
+    fn theme_store(&self) -> crate::theme_library::ThemeLibraryStore {
+        #[cfg(test)]
+        if let Some(root) = &self.theme_root_for_test {
+            return crate::theme_library::ThemeLibraryStore::new(root);
+        }
+        crate::theme_library::ThemeLibraryStore::default()
     }
 
     /// 运行值 → 全局设置快照 + 主题/语言/托盘/后台任务即时生效。

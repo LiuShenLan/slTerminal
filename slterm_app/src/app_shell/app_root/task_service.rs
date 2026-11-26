@@ -12,6 +12,8 @@ pub(crate) enum TaskId {
     ShellEvents,
     /// 设置去抖批量的后台写盘；前台只提交快照与结算回执。
     SettingsSave,
+    /// 自定义主题定义的冷路径预载；热应用只查缓存。
+    ThemeLoad,
     CloseFlush,
     TerminalClose(slterm_workspace::TerminalId),
     TerminalReclaim(crate::gpui_terminal::registry::TerminalTarget),
