@@ -116,7 +116,7 @@
 | 本地编码检测与编码重开在实际打开链中不存在 | 待修 |
 | 追溯矩阵的自动化证据层级与场景不一致 | 待修 |
 | 分页只读视图不实现换行，且与软换行 Editor 共用滚动坐标单位 | 待修 |
-| 分页页读取失败后永久停留 Loading | 待修 |
+| 分页页读取失败后永久停留 Loading | 已修：失败页显示底部提示条与显式重试，点击清空失败抑制并重新读取同一页（提交 2a991217）；测试 `paged_view_explicit_retry_reruns_failed_pages`、`paged_view_does_not_retry_failed_pages_on_every_frame` |
 | 外部快照与撤销/重做把滚动位置重置到顶部 | 待修 |
 | Git 行标丢失增改删语义，颜色与越界防护不满足合同 | 待修 |
 | reveal_line 在软换行下把逻辑行当显示行 | 待修 |
