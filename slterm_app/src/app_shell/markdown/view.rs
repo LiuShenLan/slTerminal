@@ -248,14 +248,10 @@ impl MarkdownView {
                         .as_ref()
                         .and_then(|document| document.resolve_anchor(&fragment))
                 {
-                    view.scroll_to_block(block);
+                    view.scroll_to_block(block, cx);
                 }
-                let initial = view
-                    .document
-                    .as_ref()
-                    .map_or(0, |document| document.blocks().len().min(32));
                 view.refresh_search(cx);
-                view.schedule_blocks(0..initial, cx);
+                view.schedule_from_scroll_top(cx);
                 cx.notify();
             });
         }));
@@ -420,11 +416,35 @@ impl MarkdownView {
         cx.notify();
     }
 
-    pub(crate) fn scroll_to_block(&mut self, block: slterm_document::BlockId) {
+    pub(crate) fn scroll_to_block(
+        &mut self,
+        block: slterm_document::BlockId,
+        cx: &mut Context<'_, Self>,
+    ) {
         self.scroll.scroll_to(gpui::ListOffset {
             item_ix: block.index(),
             offset_in_item: px(0.0),
         });
+        self.schedule_block_window(block.index(), cx);
+    }
+
+    /// 程序化滚动不触发列表滚动回调，必须显式调度目标窗口。
+    fn schedule_block_window(&mut self, start: usize, cx: &mut Context<'_, Self>) {
+        let Some(document) = self.document.clone() else {
+            return;
+        };
+        let count = document.blocks().len();
+        if count == 0 {
+            return;
+        }
+        let start = start.min(count - 1);
+        let end = start.saturating_add(32).min(count);
+        self.schedule_blocks(start..end, cx);
+    }
+
+    fn schedule_from_scroll_top(&mut self, cx: &mut Context<'_, Self>) {
+        let start = self.scroll.logical_scroll_top().item_ix;
+        self.schedule_block_window(start, cx);
     }
 
     /// 键盘滚动只在渲染态生效；源码态交给内嵌编辑器。
@@ -447,6 +467,7 @@ impl MarkdownView {
             }),
             KeyboardScroll::Bottom => self.scroll.scroll_to_end(),
         }
+        self.schedule_from_scroll_top(cx);
         self.persist_state();
         cx.notify();
     }
@@ -480,7 +501,7 @@ impl MarkdownView {
             return;
         };
         self.focused_link = Some(link.clone());
-        self.scroll_to_block(link.block());
+        self.scroll_to_block(link.block(), cx);
         self.persist_state();
         cx.notify();
     }
@@ -509,22 +530,29 @@ impl MarkdownView {
         &mut self,
         target: Option<slterm_document::BlockId>,
         revision: u64,
+        cx: &mut Context<'_, Self>,
     ) {
         if self.revision != revision {
             return;
         }
         self.pending_fragment = None;
         if let Some(block) = target {
-            self.scroll_to_block(block);
+            self.scroll_to_block(block, cx);
         } else {
             self.scroll.scroll_to(gpui::ListOffset {
                 item_ix: 0,
                 offset_in_item: px(0.0),
             });
+            self.schedule_from_scroll_top(cx);
         }
     }
 
-    pub(crate) fn scroll_to_fragment(&mut self, fragment: &str, revision: u64) {
+    pub(crate) fn scroll_to_fragment(
+        &mut self,
+        fragment: &str,
+        revision: u64,
+        cx: &mut Context<'_, Self>,
+    ) {
         if self.revision != revision {
             return;
         }
@@ -534,7 +562,7 @@ impl MarkdownView {
                 .as_ref()
                 .and_then(|document| document.resolve_anchor(fragment))
             {
-                self.scroll_to_block(block);
+                self.scroll_to_block(block, cx);
             }
         } else {
             self.pending_fragment = Some((revision, fragment.to_owned()));

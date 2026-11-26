@@ -89,7 +89,7 @@ impl MarkdownView {
                     search.matches.first().map(|matched| matched.block())
                 };
                 if let Some(target) = target {
-                    view.scroll_to_block(target);
+                    view.scroll_to_block(target, cx);
                 }
                 cx.notify();
             });
@@ -115,7 +115,7 @@ impl MarkdownView {
             search.matches.get(next).map(|matched| matched.block())
         });
         if let Some(target) = target {
-            self.scroll_to_block(target);
+            self.scroll_to_block(target, cx);
         }
         cx.notify();
     }

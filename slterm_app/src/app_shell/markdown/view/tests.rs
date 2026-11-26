@@ -587,3 +587,75 @@ fn markdown_render_mode_is_keyboard_operable(cx: &mut TestAppContext) {
         "Alt+↑ 必须回到上一个链接"
     );
 }
+
+/// 程序化跳转与阅读位置恢复必须把目标块带入渲染调度。
+#[gpui::test]
+fn markdown_programmatic_jump_and_restore_schedule_target_blocks(cx: &mut TestAppContext) {
+    let source = format!(
+        "{}[tail](https://example.com/tail)\n\n{}",
+        (0..40)
+            .map(|index| format!("paragraph {index}\n\n"))
+            .collect::<String>(),
+        (0..40)
+            .map(|index| format!("after {index}\n\n"))
+            .collect::<String>()
+    );
+    let (view, mut visual) = view_for_source(cx, &source);
+    draw_until_document_ready(&view, &mut visual);
+    visual.update(|window, cx| {
+        view.read(cx).focus_handle(cx).focus(window, cx);
+    });
+    visual.simulate_keystrokes("alt-down");
+    let mut jumped = false;
+    for _ in 0..20 {
+        visual.run_until_parked();
+        visual.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+        jumped = view.read_with(&visual, |view, _| {
+            let Some(document) = view.document.as_ref() else {
+                return false;
+            };
+            let Some(link) = document.links().first() else {
+                return false;
+            };
+            view.renderer.outcome(link.block()).is_some()
+        });
+        if jumped {
+            break;
+        }
+    }
+    assert!(jumped, "链接跳转必须调度目标块渲染");
+
+    // 恢复阅读位置到尚未渲染的块，重新解析后同样必须调度该块。
+    view.update(cx, |view, _| view.set_reading_for_test(40, 0));
+    visual.update(|window, cx| {
+        view.update(cx, |view, cx| view.toggle_mode_for_test(window, cx));
+        view.update(cx, |view, cx| view.toggle_mode_for_test(window, cx));
+    });
+    let mut restored = false;
+    for _ in 0..20 {
+        visual.run_until_parked();
+        visual.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+        restored = view.read_with(&visual, |view, _| {
+            let Some(document) = view.document.as_ref() else {
+                return false;
+            };
+            document
+                .blocks()
+                .get(40)
+                .is_some_and(|block| view.renderer.outcome(block.id()).is_some())
+        });
+        if restored {
+            break;
+        }
+    }
+    assert!(restored, "阅读位置恢复必须调度目标块渲染");
+    assert_eq!(
+        view.read_with(&visual, |view, _| view.reading_top_for_test()),
+        (40, 0),
+        "恢复位置必须停在持久化的块"
+    );
+}

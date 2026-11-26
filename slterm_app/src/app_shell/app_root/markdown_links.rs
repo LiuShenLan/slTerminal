@@ -100,7 +100,7 @@ impl AppRoot {
         cx: &mut Context<'_, Self>,
     ) {
         for view in self.markdown_views(document_id, cx) {
-            view.update(cx, |view, _| view.scroll_to_anchor(target, revision));
+            view.update(cx, |view, cx| view.scroll_to_anchor(target, revision, cx));
         }
     }
 
@@ -121,7 +121,9 @@ impl AppRoot {
             return;
         };
         for view in self.markdown_views(document_id, cx) {
-            view.update(cx, |view, _| view.scroll_to_fragment(fragment, revision));
+            view.update(cx, |view, cx| {
+                view.scroll_to_fragment(fragment, revision, cx)
+            });
         }
     }
 

@@ -853,8 +853,8 @@ fn render_outline(view: &MarkdownView, cx: &mut Context<'_, MarkdownView>) -> An
                     .debug_selector(move || format!("markdown-heading-{index}"))
                     .label(heading.text().to_owned())
                     .ghost()
-                    .on_click(cx.listener(move |view, _, _, _| {
-                        view.scroll_to_block(block);
+                    .on_click(cx.listener(move |view, _, _, cx| {
+                        view.scroll_to_block(block, cx);
                     })),
             ),
         );
