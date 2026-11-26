@@ -26,11 +26,17 @@ fn settings_path() -> PathBuf {
     crate::platform::dirs::app_paths().settings_path()
 }
 
-/// settings.json 读侧三态结果。`corrupted = true` 表示数据来自 .bak 或
-/// 默认回退(损坏原件已隔离),设置页据此显示警示条(消费)。
+/// 当前设置文件格式版本；写入时落盘，读取时拒绝更高版本。
+pub(crate) const CURRENT_SETTINGS_VERSION: u64 = 1;
+const SETTINGS_VERSION_KEY: &str = "settings_version";
+
+/// settings.json 读侧结果。`corrupted = true` 表示数据来自 .bak 或
+/// 默认回退(损坏原件已隔离)；`unsupported_version` 表示文件由更新版本
+/// 的程序写入，读取回退默认值且写通道拒绝覆盖。
 pub(crate) struct LoadResult {
     pub(crate) data: RawSettings,
     pub(crate) corrupted: bool,
+    pub(crate) unsupported_version: Option<u64>,
 }
 
 /// 保存锁:串行化「读-合并-写」全程,消除并发 persist 的 Windows 句柄
@@ -71,6 +77,7 @@ pub(crate) fn load_settings_at(path: &Path) -> io::Result<LoadResult> {
             return Ok(LoadResult {
                 data: RawSettings::default(),
                 corrupted: false,
+                unsupported_version: None,
             });
         }
         Err(error) => {
@@ -81,12 +88,41 @@ pub(crate) fn load_settings_at(path: &Path) -> io::Result<LoadResult> {
         }
     };
     match json::parse(&bytes) {
-        Ok(Value::Object(_)) => Ok(LoadResult {
-            data: RawSettings::from_json_bytes(&bytes),
-            corrupted: false,
-        }),
+        Ok(ref value @ Value::Object(_)) => match settings_version(value) {
+            SettingsVersion::Valid(version) if version > CURRENT_SETTINGS_VERSION => {
+                Ok(LoadResult {
+                    data: RawSettings::default(),
+                    corrupted: false,
+                    unsupported_version: Some(version),
+                })
+            }
+            SettingsVersion::Missing | SettingsVersion::Valid(_) => Ok(LoadResult {
+                data: RawSettings::from_json_bytes(&bytes),
+                corrupted: false,
+                unsupported_version: None,
+            }),
+            // 版本字段存在但不是非负整数：视为损坏。
+            SettingsVersion::Invalid => Ok(recover_corrupted(path)),
+        },
         // 解析失败或根非对象都算损坏:设置文档的根形态是对象。
         Ok(_) | Err(_) => Ok(recover_corrupted(path)),
+    }
+}
+
+/// 根级版本字段的三态：缺失、合法非负整数、非法（按损坏处理）。
+enum SettingsVersion {
+    Missing,
+    Valid(u64),
+    Invalid,
+}
+
+fn settings_version(tree: &Value) -> SettingsVersion {
+    match tree.get(SETTINGS_VERSION_KEY) {
+        None => SettingsVersion::Missing,
+        Some(Value::Number(number)) if *number >= 0.0 && number.fract() == 0.0 => {
+            SettingsVersion::Valid(*number as u64)
+        }
+        Some(_) => SettingsVersion::Invalid,
     }
 }
 
@@ -188,7 +224,28 @@ pub(crate) fn restore_default_settings_at(path: &Path) -> io::Result<Option<std:
 /// 持锁后的读-合并-写主体。
 fn save_merged_locked(path: &Path, updates: &[(&str, Value)]) -> io::Result<()> {
     let existing = read_existing(path)?;
-    let merged = slterm_settings::apply_updates(&existing, updates);
+    match settings_version(&existing) {
+        SettingsVersion::Valid(version) if version > CURRENT_SETTINGS_VERSION => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "设置文件版本 {version} 高于当前程序支持的 {CURRENT_SETTINGS_VERSION}，拒绝覆盖"
+                ),
+            ));
+        }
+        SettingsVersion::Invalid => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "设置文件版本字段非法，拒绝覆盖".to_owned(),
+            ));
+        }
+        SettingsVersion::Missing | SettingsVersion::Valid(_) => {}
+    }
+    let mut merged = slterm_settings::apply_updates(&existing, updates);
+    merged.set(
+        SETTINGS_VERSION_KEY,
+        Value::Number(CURRENT_SETTINGS_VERSION as f64),
+    );
     let text = json::to_string_pretty(&merged);
     if text.len() > MAX_PERSIST_BYTES {
         return Err(io::Error::new(
@@ -257,12 +314,14 @@ fn recover_corrupted(path: &Path) -> LoadResult {
         return LoadResult {
             data: RawSettings::default(),
             corrupted: true,
+            unsupported_version: None,
         };
     }
     let Some(backup) = read_backup_tree(path) else {
         return LoadResult {
             data: RawSettings::default(),
             corrupted: true,
+            unsupported_version: None,
         };
     };
     // 备份数据重整为 pretty 形态重建主文件;损坏原件已在 quarantine 中保留。
@@ -276,6 +335,7 @@ fn recover_corrupted(path: &Path) -> LoadResult {
     LoadResult {
         data: RawSettings::from_json_bytes(text.as_bytes()),
         corrupted: true,
+        unsupported_version: None,
     }
 }
 
@@ -409,6 +469,48 @@ mod settings_store_tests {
             }
         });
         assert_eq!(PEAK.load(Ordering::SeqCst), 1, "保存锁必须串行化外部写路径");
+    }
+
+    /// 高版本设置文件：读取标记不支持，写通道拒绝覆盖且不隔离。
+    #[test]
+    fn higher_settings_version_is_read_only_and_never_overwritten() {
+        let (directory, path) = fixture();
+        write_json(
+            &path,
+            r#"{"settings_version": 99, "appearance":{"theme":"Nord"}}"#,
+        );
+        let loaded = load_settings_at(&path).unwrap();
+        assert!(!loaded.corrupted);
+        assert_eq!(loaded.unsupported_version, Some(99));
+        assert!(
+            quarantine_files(directory.path()).is_empty(),
+            "高版本文件不得被隔离"
+        );
+
+        let error = save_settings_blocking_at(&path, &[("theme", Value::String("Linear".into()))])
+            .unwrap_err();
+        assert!(error.to_string().contains("版本"), "{error}");
+        assert!(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("\"settings_version\": 99"),
+            "拒绝覆盖必须保留原文件"
+        );
+    }
+
+    /// 写入补当前版本字段；无版本字段的旧文件按当前版本读取。
+    #[test]
+    fn settings_writes_stamp_the_current_version() {
+        let (_directory, path) = fixture();
+        write_json(&path, r#"{"appearance":{"theme":"Nord"}}"#);
+        save_settings_blocking_at(&path, &[("theme", Value::String("Linear".into()))]).unwrap();
+        assert!(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("\"settings_version\": 1"),
+            "写通道必须补当前版本字段"
+        );
+        assert_eq!(load_settings_at(&path).unwrap().unsupported_version, None);
     }
 
     #[test]

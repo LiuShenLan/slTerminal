@@ -43,7 +43,7 @@
 | 设置页大量控件没有生产消费方 | 待修 |
 | 设置保存状态与失败不可见；文本/颜色控件跨视图不同步且缺少路径校验 | 待修 |
 | 根重定位实现为 dead code，缺少真实路径查重与决定守卫 | 待修 |
-| 重复 Settings 恢复不按规格保留首个并提示 | 待修 |
+| 重复 Settings 恢复不按规格保留首个并提示 | 部分修复：宽容解码按首次出现保留重复视图，整库不再因重复 Settings 解码失败；测试 `lossy_recovery_filters_unknown_views_collapses_empty_groups_and_dedupes`、`startup_filters_unknown_and_duplicate_views`。恢复提示面仍待接线 |
 | 主题下拉选择不清除 custom_theme | 已修：`theme_field_followups` 在选择内置主题时清除 `custom_theme`；测试 `theme_field_followups_clear_only_for_builtin_theme_selection`、`builtin_theme_selection_clears_custom_theme_override` |
 | Runtime v2 快照没有设置界面，快照测试未覆盖资源边界 | 待修 |
 | 测试主要覆盖引擎函数与 DTO，未覆盖页面场景 | 待修 |
@@ -57,7 +57,7 @@
 | quarantine_batch 不先持久化清单，部分失败丢失材料身份 | 待修 |
 | 主题身份不是 ThemeId/UUIDv7，导入冲突被自动改名 | 待修 |
 | ANSI 16–255 被持久化成第二份色表 | 待修 |
-| 设置损坏分流缺“高版本”和“权限/IO 只读重试” | 待修 |
+| 设置损坏分流缺“高版本”和“权限/IO 只读重试” | 部分修复：新增 `settings_version` 字段，高版本读取标记 `unsupported_version` 且写通道拒绝覆盖（不隔离）；测试 `higher_settings_version_is_read_only_and_never_overwritten`、`settings_writes_stamp_the_current_version`。权限/IO 回退默认仍保留启动可用性，用户可见反馈归“设置写失败/损坏无用户可见反馈”条目 |
 | 设置写失败、损坏与单字段回退没有用户可见反馈 | 待修 |
 | 恢复默认旁路统一设置写通道、审计与保存锁 | 已修：`settings_store::restore_default_settings_at` 共用保存锁、审计事件与 1MB 上限；测试 `settings_import_and_reset_preserve_secrets` |
 | AgentCatalog 适配器声明未被消费，CLI 名单多源 | 待修 |
@@ -173,7 +173,7 @@
 | 布局或快照领域恢复失败时静默以空工作区开窗 | 待修 |
 | 未完成关闭意图、NeedsAttention 维护请求与遗留恢复点只有阻断 | 待修 |
 | 更高版本数据库先以读写连接打开 | 待修 |
-| 设置 IO/权限失败回退默认值，设置文件没有高版本判定 | 待修 |
+| 设置 IO/权限失败回退默认值，设置文件没有高版本判定 | 部分修复：高版本判定与写拒绝已实现（同 settings_store 版本字段）；IO/权限仍回退默认值以保启动可用，设置页警示面待接线 |
 | 追溯矩阵把函数级、未接线或不同场景的测试当成已自动化验收锚 | 待修 |
 | 崩溃与边界测试缺少关键窗口 | 待修 |
 | 快照存储运行期遇任意损坏文件即阻断全部新写入 | 待修 |
@@ -293,7 +293,7 @@
 | 问题 | 状态 |
 |---|---|
 | 显式终端 cwd 只做词法包含校验，未解析真实目标 | 待修 |
-| 工作区布局恢复没有未知 ViewKey 过滤与重复视图归一 | 待修 |
+| 工作区布局恢复没有未知 ViewKey 过滤与重复视图归一 | 已修：新增 `ProjectLayout::from_canonical_json_lossy`，恢复链过滤未知视图类型、重复视图保留首个、空组塌缩并重排树；测试 `lossy_recovery_filters_unknown_views_collapses_empty_groups_and_dedupes`、`startup_filters_unknown_and_duplicate_views` |
 | AppRoot 后台 Agent 根加载不可注入，虚拟窗口用例读取真实 home | 待修 |
 | 共享编辑（Diff/Markdown）缺少可见性门控与取消协议 | 待修 |
 | 历史隔离到期清理、ZIP 导出与永久删除未实现 | 待修 |

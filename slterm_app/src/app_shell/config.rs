@@ -100,6 +100,11 @@ impl Settings {
     pub fn load() -> Self {
         match crate::settings_store::load_settings() {
             Ok(result) => {
+                if let Some(version) = result.unsupported_version {
+                    log::warn!(
+                        "settings.json 版本 {version} 高于当前程序支持；使用默认值且不会覆盖原文件"
+                    );
+                }
                 if result.corrupted {
                     log::warn!("settings.json 损坏,已回退备份或默认值");
                 }

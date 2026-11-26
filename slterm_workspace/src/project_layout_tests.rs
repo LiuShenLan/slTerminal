@@ -818,6 +818,48 @@ fn project_layout_dto_distinguishes_envelope_failures() {
     }
 }
 
+/// 恢复宽容解码：未知视图类型逐项剔除，空组塌缩，重复视图保留首个；
+/// 信封/版本/结构错误仍整体失败。
+#[test]
+fn lossy_recovery_filters_unknown_views_collapses_empty_groups_and_dedupes() {
+    let (_, json) = two_group_dto_fixture();
+    let strict: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+    // 未知视图类型：剔除后组的其余成员保留。
+    let mut unknown_view = strict["groups"][1]["views"][1].clone();
+    unknown_view["kind"] = serde_json::json!("future_view");
+    let mut unknown = strict.clone();
+    unknown["groups"][1]["views"][1] = unknown_view.clone();
+    let layout =
+        ProjectLayout::from_canonical_json_lossy(&unknown.to_string()).expect("未知视图必须可剔除");
+    assert_eq!(
+        layout.view_keys().len(),
+        3,
+        "未知视图剔除后保留其余三个视图"
+    );
+
+    // 重复视图：保留布局中首次出现的位置。
+    let mut duplicate = strict.clone();
+    duplicate["groups"][1]["views"][1] = duplicate["groups"][0]["views"][0].clone();
+    let layout =
+        ProjectLayout::from_canonical_json_lossy(&duplicate.to_string()).expect("重复视图必须归一");
+    assert_eq!(layout.view_keys().len(), 3, "重复视图只保留首个");
+
+    // 组内视图全部未知：组塌缩，树重排为剩余单组。
+    let mut collapsed = strict;
+    collapsed["groups"][1]["views"] = serde_json::json!([unknown_view]);
+    let layout =
+        ProjectLayout::from_canonical_json_lossy(&collapsed.to_string()).expect("空组必须塌缩");
+    assert_eq!(layout.group_ids(), vec![group_id(1)]);
+    assert!(layout.tree().is_some(), "剩余组必须成为树根");
+
+    // 信封错误不可宽容。
+    assert_eq!(
+        ProjectLayout::from_canonical_json_lossy(r#"{"kind":"future_layout","version":1}"#),
+        Err(LayoutDtoError::UnknownKind)
+    );
+}
+
 #[test]
 fn project_layout_dto_rejects_invalid_domain_references() {
     let (_, json) = two_group_dto_fixture();

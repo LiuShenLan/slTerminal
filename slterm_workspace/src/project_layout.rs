@@ -197,6 +197,23 @@ impl ProjectLayout {
         dto.into_domain()
     }
 
+    /// 恢复专用宽容解码：与严格解码共用信封与结构校验；未知视图类型
+    /// 逐项剔除、重复视图保留首个、空组塌缩，树按剩余组重排。
+    /// 信封、版本、结构与其余领域错误仍整体失败。
+    pub fn from_canonical_json_lossy(text: &str) -> Result<Self, LayoutDtoError> {
+        let envelope: ProjectLayoutEnvelope =
+            serde_json::from_str(text).map_err(|_| LayoutDtoError::InvalidStructure)?;
+        if envelope.version != PROJECT_LAYOUT_DTO_VERSION {
+            return Err(LayoutDtoError::UnsupportedVersion);
+        }
+        if envelope.kind != PROJECT_LAYOUT_KIND {
+            return Err(LayoutDtoError::UnknownKind);
+        }
+        let dto: ProjectLayoutDto =
+            serde_json::from_str(text).map_err(|_| LayoutDtoError::InvalidStructure)?;
+        dto.into_domain_lossy()
+    }
+
     /// 返回布局所属项目。
     pub const fn project_id(&self) -> ProjectId {
         self.project_id
@@ -608,6 +625,73 @@ struct ProjectLayoutDto {
 }
 
 impl ProjectLayoutDto {
+    /// 宽容领域转换：只对视图成员做过滤与去重，其余保持严格。
+    fn into_domain_lossy(self) -> Result<ProjectLayout, LayoutDtoError> {
+        let project_id = self
+            .project_id
+            .parse()
+            .map_err(|_| LayoutDtoError::InvalidStructure)?;
+        let tree = self.tree.ok_or(LayoutDtoError::InvalidStructure)?;
+        let mut seen: Vec<ViewKey> = Vec::new();
+        let mut groups = BTreeMap::new();
+        for group in self.groups {
+            let PanelGroupDto {
+                group_id,
+                active,
+                views,
+            } = group;
+            let group_id = group_id
+                .parse()
+                .map_err(|_| LayoutDtoError::InvalidStructure)?;
+            if groups.contains_key(&group_id) {
+                return Err(LayoutError::DuplicateGroup.into());
+            }
+            let mut kept = Vec::new();
+            for raw in views {
+                match ViewKey::from_canonical_json(raw.get()) {
+                    Ok(view) => {
+                        if !seen.contains(&view) {
+                            seen.push(view.clone());
+                            kept.push(view);
+                        }
+                    }
+                    // 恢复过滤未知视图类型（面板封闭枚举的向前兼容）。
+                    Err(ViewKeyError::UnknownKind) => {}
+                    Err(error) => return Err(LayoutDtoError::ViewKey(error)),
+                }
+            }
+            if kept.is_empty() {
+                continue;
+            }
+            let active = match ViewKey::from_canonical_json(active.get()) {
+                Ok(view) if kept.contains(&view) => view,
+                Ok(_) | Err(ViewKeyError::UnknownKind) => kept[0].clone(),
+                Err(error) => return Err(LayoutDtoError::ViewKey(error)),
+            };
+            groups.insert(group_id, PanelGroup::new(kept, active)?);
+        }
+        let rebuilt_tree = match tree {
+            Some(tree) => {
+                let mut tree_ids = BTreeSet::new();
+                let domain = tree.into_domain(&mut tree_ids)?;
+                let kept_ids: BTreeSet<_> = groups.keys().copied().collect();
+                if tree_ids == kept_ids {
+                    Some(domain)
+                } else {
+                    groups.keys().next().copied().map(SplitTree::leaf)
+                }
+            }
+            None => groups.keys().next().copied().map(SplitTree::leaf),
+        };
+        let layout = ProjectLayout {
+            project_id,
+            tree: rebuilt_tree,
+            groups,
+        };
+        layout.validate()?;
+        Ok(layout)
+    }
+
     fn into_domain(self) -> Result<ProjectLayout, LayoutDtoError> {
         let project_id = self
             .project_id
