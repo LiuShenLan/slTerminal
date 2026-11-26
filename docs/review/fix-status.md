@@ -72,7 +72,7 @@
 | 问题 | 状态 |
 |---|---|
 | 生产环境没有 hook 事件入口 | 待修 |
-| 打开 Hooks 页留下无法清除的草稿，使项目移除/根重定位永久报 HooksDraftPending | 待修 |
+| 打开 Hooks 页留下无法清除的草稿，使项目移除/根重定位永久报 HooksDraftPending | 已修：`project_has_drafts` 只统计绑定该项目且 `dirty()` 的草稿，干净草稿不阻塞（提交 bbf3f69b）；测试 `hooks_project_guard_ignores_user_layer_and_clears_project_drafts`、`navigation_relocation_guards_and_reassigns_history`、`project_remove_requires_hooks_drafts_resolved` |
 | 管道事件不校验 pane 归属与 PTY 代次 | 待修 |
 | 注入/卸载没有 Journal 与启动恢复器 | 待修 |
 | 危险命令确认没有生产链路 | 待修 |
