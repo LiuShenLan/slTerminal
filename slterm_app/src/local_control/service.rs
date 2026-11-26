@@ -543,23 +543,14 @@ impl LocalControlService {
             Ok(discovery) => discovery,
             Err(publish_error) => {
                 self.closed = true;
-                // 保留发布根因与 kind；server 与 hub 回收失败都必须一并可观察。
-                let server_cleanup = self.server.shutdown().err();
-                if let Err(hub_error) = self.event_hub.shutdown()
-                    && server_cleanup.is_none()
-                {
-                    return Err(io::Error::new(
-                        publish_error.kind(),
-                        format!("{publish_error}; 控制面事件环回收失败: {hub_error}"),
-                    ));
-                }
-                return match server_cleanup {
-                    None => Err(publish_error),
-                    Some(cleanup_error) => Err(io::Error::new(
-                        publish_error.kind(),
-                        format!("{publish_error}; 控制面 server 回收失败: {cleanup_error}"),
-                    )),
-                };
+                // 两个回收动作都必定尝试；发布根因与 kind 保留，回收错误逐项追加。
+                let server_cleanup = self.server.shutdown();
+                let hub_cleanup = self.event_hub.shutdown();
+                return Err(combine_publish_failure(
+                    publish_error,
+                    server_cleanup,
+                    hub_cleanup,
+                ));
             }
         };
         self.discovery = Some(discovery);
@@ -585,6 +576,22 @@ impl Drop for LocalControlService {
         // 正常退出必须先在 GPUI 外显式 shutdown；Drop 只尽力回收。
         let _ = self.shutdown();
     }
+}
+
+/// 发布失败的错误信封：保留发布根因与 kind，并逐项并入两个回收错误。
+pub(super) fn combine_publish_failure(
+    publish_error: io::Error,
+    server_cleanup: io::Result<()>,
+    hub_cleanup: io::Result<()>,
+) -> io::Error {
+    let mut message = publish_error.to_string();
+    if let Err(error) = server_cleanup {
+        message.push_str(&format!("; 控制面 server 回收失败: {error}"));
+    }
+    if let Err(error) = hub_cleanup {
+        message.push_str(&format!("; 控制面事件环回收失败: {error}"));
+    }
+    io::Error::new(publish_error.kind(), message)
 }
 
 pub(super) fn shutdown_components(

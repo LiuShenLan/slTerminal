@@ -469,6 +469,23 @@ fn service_shutdown_attempts_both_failures_and_returns_first_error() {
     assert_eq!(error.to_string(), "injected server shutdown failure");
 }
 
+/// 发布失败时 server 与事件环回收失败都必须进入同一错误，不能只报一个。
+#[test]
+fn publish_failure_combines_every_cleanup_error() {
+    let publish_error = io::Error::new(io::ErrorKind::PermissionDenied, "publish root cause");
+    let error = super::service::combine_publish_failure(
+        publish_error,
+        Err(io::Error::other("listener cleanup failed")),
+        Err(io::Error::other("event hub cleanup failed")),
+    );
+
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    let message = error.to_string();
+    assert!(message.contains("publish root cause"), "{message}");
+    assert!(message.contains("listener cleanup failed"), "{message}");
+    assert!(message.contains("event hub cleanup failed"), "{message}");
+}
+
 #[test]
 fn service_publish_failure_reports_real_server_cleanup_failure() {
     let temp = tempfile::tempdir().unwrap();
