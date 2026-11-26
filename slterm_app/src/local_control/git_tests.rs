@@ -111,6 +111,61 @@ fn git_diff_snapshot_reads_head_against_worktree() {
     assert!(snapshot.text.contains("+fresh"), "{}", snapshot.text);
 }
 
+/// 应用层纵深：即使绕过协议校验，工作区读取也不得越过仓库根。
+#[test]
+fn git_diff_snapshot_rejects_targets_outside_the_worktree() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("repo");
+    std::fs::create_dir(&root).unwrap();
+    git(&root, &["init", "--quiet"]);
+    git(&root, &["config", "user.email", "test@example.com"]);
+    git(&root, &["config", "user.name", "test"]);
+    std::fs::write(root.join("a.txt"), "one\n").unwrap();
+    git(&root, &["add", "a.txt"]);
+    git(&root, &["commit", "--quiet", "-m", "init"]);
+    let outside = temp.path().join("outside.txt");
+    std::fs::write(&outside, "secret\n").unwrap();
+
+    let target = |path: String| RuntimeGitDiffTarget {
+        project_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2b".parse().unwrap(),
+        root: CanonicalPath::new(&root).unwrap(),
+        path,
+        git: Arc::new(GitFacade::default()),
+    };
+
+    // 盘符绝对路径在 Windows 上会替换 join 基路径。
+    let absolute = outside.to_string_lossy().replace('\\', "/");
+    assert!(
+        git_diff_snapshot(&target(absolute)).is_err(),
+        "仓库根外绝对路径必须拒绝"
+    );
+
+    // 仓库内目录联接指向根外另一个仓库时不得跟随读取其内容。
+    let other = temp.path().join("other");
+    std::fs::create_dir(&other).unwrap();
+    git(&other, &["init", "--quiet"]);
+    git(&other, &["config", "user.email", "test@example.com"]);
+    git(&other, &["config", "user.name", "test"]);
+    std::fs::write(other.join("secret.txt"), "secret\n").unwrap();
+    git(&other, &["add", "secret.txt"]);
+    git(&other, &["commit", "--quiet", "-m", "other"]);
+    let junction = root.join("escape");
+    let status = Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(&junction)
+        .arg(&other)
+        .status()
+        .expect("必须可运行 cmd mklink");
+    assert!(status.success(), "目录联接必须可创建");
+    assert!(
+        git_diff_snapshot(&target("escape/secret.txt".to_owned())).is_err(),
+        "经目录联接逃逸仓库根的读取必须拒绝"
+    );
+
+    // 正常仓库内路径仍可读取。
+    assert!(git_diff_snapshot(&target("a.txt".to_owned())).is_ok());
+}
+
 fn rollback_intent(path: &str, expected: GitRollbackExpected) -> GitWriteIntent {
     GitWriteIntent::Rollback {
         path: path.to_owned(),

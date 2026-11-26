@@ -84,6 +84,23 @@ pub(crate) fn git_diff_snapshot(
         .map_err(git_error_to_rpc)?;
     let worktree_root = binding.worktree_root().canonical_path();
     let path = worktree_root.as_path().join(&target.path);
+    // 纵深防御：协议层已拒绝盘符绝对路径等形态，但仓库内符号链接／目录联接
+    // 仍可把读取带出仓库根（甚至指向另一个仓库）。规范位置必须仍在绑定
+    // 仓库根之内；不存在的目标按空内容处理，但其父链同样不得逃逸。
+    match dunce::canonicalize(&path) {
+        Ok(canonical) if canonical.starts_with(worktree_root.as_path()) => {}
+        Ok(_) => return Err(diff_unavailable()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let Some(parent) = path.parent() else {
+                return Err(diff_unavailable());
+            };
+            match dunce::canonicalize(parent) {
+                Ok(parent) if parent.starts_with(worktree_root.as_path()) => {}
+                _ => return Err(diff_unavailable()),
+            }
+        }
+        Err(_) => return Err(diff_unavailable()),
+    }
     let head_text = match git::head_file(&path, MAX_BYTES) {
         Ok((bytes, false)) => decode_text(bytes)?,
         Ok((_, true)) => return Err(diff_too_large()),

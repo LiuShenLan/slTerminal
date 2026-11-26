@@ -1352,9 +1352,17 @@ fn runtime_request_is_valid(request: &RuntimeRequest) -> bool {
     }
 }
 
-/// 仓库相对路径：非空、无 NUL、不以分隔符开头且不含 `.`/`..` 组件。
+/// 仓库相对路径：非空、无 NUL／控制字符／冒号、不以分隔符开头，且每段都是
+/// 普通组件（非空、非 `.`／`..`）。
+///
+/// 拒绝冒号同时排除盘符绝对路径（`C:/...`，`Path::join` 在 Windows 上会整体
+/// 替换仓库根）、盘符相对路径（`C:file`）与备用数据流（`file:stream`）。
 fn valid_repo_relative_path(path: &str) -> bool {
-    if path.is_empty() || path.starts_with('/') || path.contains(['\0', '\\']) {
+    if path.is_empty()
+        || path.starts_with('/')
+        || path.contains(['\0', '\\', ':'])
+        || path.chars().any(char::is_control)
+    {
         return false;
     }
     path.split('/')

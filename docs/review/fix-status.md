@@ -200,7 +200,7 @@
 | 诊断脱敏不覆盖真实 Runtime token 形态 | 待修 |
 | 追溯矩阵把服务层或注册表层用例标成运行态集成 | 待修 |
 | 套餐周期契约与后台任务注册表不一致 | 待修 |
-| Runtime `git.diff` 路径校验放过盘符绝对路径/符号链接，工作区读取越过仓库根 | 待修 |
+| Runtime `git.diff` 路径校验放过盘符绝对路径/符号链接，工作区读取越过仓库根 | 已修：协议拒绝冒号/控制字符（盘符、ADS），应用层对规范位置做仓库根包含检查；测试 `git_diff_requires_a_safe_repository_relative_path`、`git_diff_snapshot_rejects_targets_outside_the_worktree` |
 | 快照 revision 固定为握手起点，事件续传进入不可恢复 resync 循环 | 待修 |
 | 非交互关闭在保存、停止或清理落定前返回 Succeeded | 待修 |
 | 事件环移除滞后订阅后，订阅连接保持静默 | 待修 |

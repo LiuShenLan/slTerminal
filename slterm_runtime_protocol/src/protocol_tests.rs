@@ -961,6 +961,15 @@ fn git_diff_requires_a_safe_repository_relative_path() {
         serde_json::json!({"jsonrpc":"2.0","id":1,"method":"git.diff","params":{"project_id":null,"path":"../escape","cursor":null}}),
         serde_json::json!({"jsonrpc":"2.0","id":1,"method":"git.diff","params":{"project_id":null,"path":"/absolute","cursor":null}}),
         serde_json::json!({"jsonrpc":"2.0","id":1,"method":"git.diff","params":{"project_id":null,"path":"a\\\\b","cursor":null}}),
+        // 盘符绝对路径与盘符相对路径：`join` 在 Windows 上会整体替换仓库根。
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"git.diff","params":{"project_id":null,"path":"C:/Windows/win.ini","cursor":null}}),
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"git.diff","params":{"project_id":null,"path":"c:relative.txt","cursor":null}}),
+        // 备用数据流与其他冒号形态不属于仓库相对路径。
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"git.diff","params":{"project_id":null,"path":"file.txt:stream","cursor":null}}),
+        // 双斜杠开头的 UNC 形态。
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"git.diff","params":{"project_id":null,"path":"//server/share/x","cursor":null}}),
+        // 控制字符不得进入路径。
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"git.diff","params":{"project_id":null,"path":"a\\u0001b","cursor":null}}),
         serde_json::json!({"jsonrpc":"2.0","id":1,"method":"git.diff","params":{"project_id":"  ","path":"a.txt","cursor":null}}),
         serde_json::json!({"jsonrpc":"2.0","id":1,"method":"git.diff","params":{"project_id":null,"path":"a.txt","cursor":""}}),
     ] {
