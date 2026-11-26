@@ -854,7 +854,7 @@ fn handle_connection<F>(
                         )
                     }
                     RuntimeMethod::OperationWait => {
-                        match wait_operation(&runtime, &request, &shutdown) {
+                        match wait_operation(&runtime, &request, &shutdown, &stream) {
                             Ok(resource) => JsonRpcResponse::result(
                                 request.id,
                                 RuntimeResult::Operation(resource),
@@ -1118,7 +1118,7 @@ fn handle_connection<F>(
                         )
                     }
                     RuntimeMethod::AgentWait => {
-                        match wait_terminal(&runtime, &request, &shutdown) {
+                        match wait_terminal(&runtime, &request, &shutdown, &stream) {
                             Ok(resource) => JsonRpcResponse::result(
                                 request.id,
                                 RuntimeResult::TerminalWait(resource),
@@ -1127,7 +1127,7 @@ fn handle_connection<F>(
                         }
                     }
                     RuntimeMethod::TerminalWait => {
-                        match wait_terminal(&runtime, &request, &shutdown) {
+                        match wait_terminal(&runtime, &request, &shutdown, &stream) {
                             Ok(resource) => JsonRpcResponse::result(
                                 request.id,
                                 RuntimeResult::TerminalWait(resource),
@@ -1609,6 +1609,7 @@ fn wait_terminal(
     runtime: &RuntimeCallbacks,
     request: &RuntimeRequest,
     shutdown: &AtomicBool,
+    stream: &TcpStream,
 ) -> Result<TerminalWaitResponse, JsonRpcError> {
     let Some(target) = parse_wait_target(request) else {
         return Err(not_ready_error("terminal wait params missing"));
@@ -1616,7 +1617,7 @@ fn wait_terminal(
     let timeout_ms = target.timeout_ms.unwrap_or(OPERATION_WAIT_LIMIT_MS);
     let deadline = Instant::now() + Duration::from_millis(timeout_ms);
     loop {
-        if shutdown.load(Ordering::SeqCst) {
+        if shutdown.load(Ordering::SeqCst) || client_disconnected(stream) {
             return Err(closing_error());
         }
         let revision = (runtime.wait_status)(TerminalStatusTarget {
@@ -1725,6 +1726,7 @@ fn wait_operation(
     runtime: &RuntimeCallbacks,
     request: &RuntimeRequest,
     shutdown: &AtomicBool,
+    stream: &TcpStream,
 ) -> Result<OperationResource, JsonRpcError> {
     let Some(params) = request.parse::<OperationWaitParams>() else {
         return Err(not_ready_error("operation wait params missing"));
@@ -1732,7 +1734,7 @@ fn wait_operation(
     let timeout_ms = params.timeout_ms.unwrap_or(OPERATION_WAIT_LIMIT_MS);
     let deadline = Instant::now() + Duration::from_millis(timeout_ms);
     loop {
-        if shutdown.load(Ordering::SeqCst) {
+        if shutdown.load(Ordering::SeqCst) || client_disconnected(stream) {
             return Err(closing_error());
         }
         match (runtime.operation)(&params.operation_id) {
@@ -1745,6 +1747,24 @@ fn wait_operation(
             return Err(not_ready_error("operation wait timed out"));
         }
         std::thread::sleep(OPERATION_WAIT_POLL);
+    }
+}
+
+/// 非阻塞探测客户端是否已断开；不读走后续请求数据。
+fn client_disconnected(stream: &TcpStream) -> bool {
+    let mut probe = [0_u8; 1];
+    match stream.peek(&mut probe) {
+        Ok(0) => true,
+        Ok(_) => false,
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut | io::ErrorKind::Interrupted
+            ) =>
+        {
+            false
+        }
+        Err(_) => true,
     }
 }
 

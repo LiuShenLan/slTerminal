@@ -1486,6 +1486,41 @@ fn runtime_operation_wait_polls_until_terminal_then_returns_result() {
     server.shutdown().unwrap();
 }
 
+/// 客户端断开后等待必须立即结束，不能继续占用连接直到超时。
+#[test]
+fn runtime_operation_wait_cancels_when_the_client_disconnects() {
+    let polls = Arc::new(AtomicUsize::new(0));
+    let polls_by_callback = Arc::clone(&polls);
+    let (mut server, _calls) = start_dual_scope_server_with_operation(move |_| {
+        polls_by_callback.fetch_add(1, Ordering::SeqCst);
+        Ok(Some(operation_resource(OperationStatus::Running)))
+    });
+    let mut stream = connect(&server);
+    stream.set_read_timeout(Some(TEST_TIMEOUT)).unwrap();
+    write_json(
+        &mut stream,
+        &hello_scoped("sk-test-runtime", ControlScope::Runtime),
+    );
+    assert!(read_line(&mut stream).contains("store"));
+    write_json(&mut stream, &operation_wait("operation-a", 5_000));
+    std::thread::sleep(Duration::from_millis(200));
+    let started = std::time::Instant::now();
+    stream.shutdown(std::net::Shutdown::Write).unwrap();
+    let _ = read_line(&mut stream);
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "客户端断开后等待必须快速结束"
+    );
+    let before = polls.load(Ordering::SeqCst);
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(
+        polls.load(Ordering::SeqCst),
+        before,
+        "等待结束后不得继续轮询"
+    );
+    server.shutdown().unwrap();
+}
+
 fn sample_resources() -> SnapshotResources {
     SnapshotResources {
         projects: vec![ProjectResource {

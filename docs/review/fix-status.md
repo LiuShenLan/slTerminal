@@ -218,7 +218,7 @@
 | 路由与能力摘要不按方法注册表作用域执行 | 待修 |
 | `GitStatusResponse.root` 返回项目根而不是仓库根 | 已修：状态 DTO 根取 `StatusSnapshot.worktree_root`，缺省才回退项目根；测试 `git_status_reports_the_repository_worktree_root` |
 | 快照不暴露布局树与分割几何，resize 路径不可推导且视口由客户端自报 | 待修 |
-| 等待操作不能因客户端断开而取消 | 待修 |
+| 等待操作不能因客户端断开而取消 | 已修：`terminal.wait`／`agent.wait` 与 `operation.wait` 每轮非阻塞探测连接 EOF，断开即返回 Closing 并停止轮询；测试 `runtime_operation_wait_cancels_when_the_client_disconnects` |
 | `runtime_token_absent_from_materials` 锚只覆盖诊断材料 | 待修 |
 | 注册表 kind/idempotent 语义与真实副作用不符 | 待修 |
 | 握手后的解析失败直接断开连接 | 已修：认证后协议解析失败在可取到 `id` 时返回封闭 `InvalidRequest` 并保留连接，无法解析 `id` 才断开；首包认证仍不返回协议预言机；测试 `local_control_authenticated_parse_failure_keeps_the_connection` |
