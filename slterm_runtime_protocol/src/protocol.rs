@@ -35,6 +35,48 @@ impl DiscoveryRecord {
     }
 }
 
+/// `runtime discover --json` 的唯一输出合同：端点记录加上 Runtime 凭据。
+///
+/// 只用于 CLI 输出，不进入端点文件；Debug 永远脱敏，JSON 是唯一泄露 token 的通道。
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct DiscoverOutput {
+    pub protocol_version: u32,
+    pub endpoint: SocketAddr,
+    pub run_id: String,
+    pub process_id: u32,
+    pub process_created_at_ms: u64,
+    pub runtime_token: Credential,
+}
+
+impl DiscoverOutput {
+    pub fn new(record: DiscoveryRecord, runtime_token: Credential) -> Self {
+        Self {
+            protocol_version: record.protocol_version,
+            endpoint: record.endpoint,
+            run_id: record.run_id,
+            process_id: record.process_id,
+            process_created_at_ms: record.process_created_at_ms,
+            runtime_token,
+        }
+    }
+}
+
+impl fmt::Debug for DiscoverOutput {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("DiscoverOutput")
+            .field("protocol_version", &self.protocol_version)
+            .field("endpoint", &self.endpoint)
+            .field("run_id", &self.run_id)
+            .field("process_id", &self.process_id)
+            .field("process_created_at_ms", &self.process_created_at_ms)
+            .field("runtime_token", &"[redacted]")
+            .finish()
+    }
+}
+
 /// 发现记录不符合当前版本或本机运行身份合同。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct InvalidDiscovery;
@@ -1841,6 +1883,7 @@ pub enum ControlMessage {
     EventNotification(EventNotification),
     Error(JsonRpcErrorResponse),
     Discovery(DiscoveryRecord),
+    DiscoverOutput(DiscoverOutput),
 }
 
 /// 解析失败只返回封闭分类，不回显请求行、参数或凭据。

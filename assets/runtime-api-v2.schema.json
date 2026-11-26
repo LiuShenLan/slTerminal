@@ -29,6 +29,9 @@
     },
     {
       "$ref": "#/$defs/DiscoveryRecord"
+    },
+    {
+      "$ref": "#/$defs/DiscoverOutput"
     }
   ],
   "$defs": {
@@ -150,6 +153,45 @@
         "protocol_sha256",
         "schema_sha256",
         "methods"
+      ]
+    },
+    "DiscoverOutput": {
+      "description": "`runtime discover --json` 的唯一输出合同：端点记录加上 Runtime 凭据。\n\n只用于 CLI 输出，不进入端点文件；Debug 永远脱敏，JSON 是唯一泄露 token 的通道。",
+      "type": "object",
+      "properties": {
+        "endpoint": {
+          "type": "string"
+        },
+        "process_created_at_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "process_id": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "protocol_version": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "runtime_token": {
+          "$ref": "#/$defs/Credential"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "protocol_version",
+        "endpoint",
+        "run_id",
+        "process_id",
+        "process_created_at_ms",
+        "runtime_token"
       ]
     },
     "DiscoveryRecord": {

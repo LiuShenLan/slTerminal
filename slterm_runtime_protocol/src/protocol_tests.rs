@@ -3,16 +3,16 @@
 use crate::protocol::{
     AgentCloseRequest, AgentForkRequest, AgentGetRequest, AgentInputRequest, AgentReadRequest,
     AgentResumeRequest, AgentStartRequest, AgentWaitRequest, AppFocusParams, ClientRequest,
-    ControlMessage, ControlMethod, ControlScope, Credential, DiscoveryRecord, DocumentResource,
-    DomainErrorCode, EmptyParams, GitDeleteExpected, GitDeleteParams, GitDeleteRequest,
-    GitDiffRequest, GitRollbackExpected, GitRollbackParams, GitRollbackRequest, GitStatusRequest,
-    HandoverMethod, HandoverParams, HandoverRequest, HelloMethod, HelloParams, HelloRequest,
-    JsonRpcError, JsonRpcErrorData, JsonRpcId, JsonRpcRequest, JsonRpcResponse, MutationParams,
-    OperationQueryParams, OperationResource, OperationWaitParams, PanelActivateRequest,
-    PanelGroupMergeRequest, PanelGroupResizeRequest, PanelGroupResource, PanelGroupSplitRequest,
-    PanelMoveRequest, ProjectActivateRequest, ProjectRemoveRequest, ProjectRenameRequest,
-    ProjectReorderRequest, ProjectResource, ProtocolError, RuntimeMethod, RuntimeRequest,
-    SnapshotResources, SnapshotResponse, SplitDirectionWire, TerminalCloseRequest,
+    ControlMessage, ControlMethod, ControlScope, Credential, DiscoverOutput, DiscoveryRecord,
+    DocumentResource, DomainErrorCode, EmptyParams, GitDeleteExpected, GitDeleteParams,
+    GitDeleteRequest, GitDiffRequest, GitRollbackExpected, GitRollbackParams, GitRollbackRequest,
+    GitStatusRequest, HandoverMethod, HandoverParams, HandoverRequest, HelloMethod, HelloParams,
+    HelloRequest, JsonRpcError, JsonRpcErrorData, JsonRpcId, JsonRpcRequest, JsonRpcResponse,
+    MutationParams, OperationQueryParams, OperationResource, OperationWaitParams,
+    PanelActivateRequest, PanelGroupMergeRequest, PanelGroupResizeRequest, PanelGroupResource,
+    PanelGroupSplitRequest, PanelMoveRequest, ProjectActivateRequest, ProjectRemoveRequest,
+    ProjectRenameRequest, ProjectReorderRequest, ProjectResource, ProtocolError, RuntimeMethod,
+    RuntimeRequest, SnapshotResources, SnapshotResponse, SplitDirectionWire, TerminalCloseRequest,
     TerminalCreateRequest, TerminalExecuteRequest, TerminalInputRequest, TerminalReadRequest,
     TerminalReconnectRequest, TerminalRenameRequest, TerminalResource, TerminalWaitRequest,
     ViewResource, ViewportSize, params_sha256, parse_client_request,
@@ -69,6 +69,24 @@ fn discovery_round_trip_contains_only_non_sensitive_metadata() {
             "protocol_version",
             "run_id"
         ]
+    );
+}
+
+/// CLI 发现输出是独立 DTO：字段固定、token 只出现在 JSON，Debug 不泄露。
+#[test]
+fn discover_output_round_trips_and_redacts_debug() {
+    let token = "sk-test-discover-token";
+    let output = DiscoverOutput::new(discovery_record(), Credential::new(token));
+    let encoded = serde_json::to_value(&output).unwrap();
+    assert_eq!(encoded["protocol_version"], 2);
+    assert_eq!(encoded["endpoint"], "127.0.0.1:4242");
+    assert_eq!(encoded["run_id"], "run-test");
+    assert_eq!(encoded["runtime_token"], token);
+    let decoded: DiscoverOutput = serde_json::from_value(encoded).unwrap();
+    assert_eq!(decoded, output);
+    assert!(
+        !format!("{output:?}").contains(token),
+        "发现输出不得在 Debug 中泄露 token"
     );
 }
 
@@ -1428,6 +1446,19 @@ fn packaged_schema() -> String {
 #[test]
 fn generated_schema_matches_the_packaged_asset() {
     assert_eq!(crate::schema::runtime_api_schema_json(), packaged_schema());
+}
+
+#[cfg(feature = "schema")]
+#[test]
+fn packaged_schema_includes_the_discover_output_contract() {
+    let schema: serde_json::Value = serde_json::from_str(&packaged_schema()).unwrap();
+    let properties = &schema["$defs"]["DiscoverOutput"]["properties"];
+    assert_eq!(properties["runtime_token"]["$ref"], "#/$defs/Credential");
+    assert_eq!(schema["$defs"]["Credential"]["type"], "string");
+    assert_eq!(
+        properties["endpoint"]["type"], "string",
+        "端点必须保留地址字符串合同"
+    );
 }
 
 #[cfg(feature = "schema")]

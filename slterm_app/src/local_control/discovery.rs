@@ -66,15 +66,12 @@ pub(crate) fn discover_json_at(
     let token = token
         .into_string()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Runtime 凭据不是有效 UTF-8"))?;
-    let output = serde_json::json!({
-        "protocol_version": record.protocol_version,
-        "endpoint": record.endpoint.to_string(),
-        "run_id": record.run_id,
-        "process_id": record.process_id,
-        "process_created_at_ms": record.process_created_at_ms,
-        "runtime_token": token.as_str(),
-    });
-    Ok(output.to_string())
+    let output = slterm_runtime_protocol::DiscoverOutput::new(
+        record,
+        slterm_runtime_protocol::Credential::new(token.as_str()),
+    );
+    serde_json::to_string(&output)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
 }
 
 /// 非 JSON 摘要读取：只返回非敏感端点元数据，绝不携带 token。
