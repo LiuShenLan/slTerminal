@@ -566,6 +566,8 @@ fn hooks_page_loads_saves_external_guard_and_discards(cx: &mut TestAppContext) {
         "settings-hooks-save",
         "settings-hooks-discard",
         "settings-hooks-layer-user",
+        "settings-hooks-layer-project",
+        "settings-hooks-layer-local",
     ] {
         assert!(
             window
@@ -574,6 +576,26 @@ fn hooks_page_loads_saves_external_guard_and_discards(cx: &mut TestAppContext) {
             "Hooks 页必须渲染 {selector}"
         );
     }
+    // 项目面板重建视图默认回 User 层；User 草稿来自注入的 Claude 目录。
+    let user_key = HooksDraftKey {
+        panel,
+        agent: slterm_agents::AgentKind::Claude,
+        layer: HooksDraftLayer::User,
+    };
+    root.read_with(cx, |root, _| {
+        let draft = root.hook_drafts.get(user_key).expect("User 层草稿必须载入");
+        assert!(
+            draft.text().contains("echo user"),
+            "默认层必须是 User 层文件: {}",
+            draft.text()
+        );
+    });
+
+    // 切到项目层后使用项目文件草稿。
+    let project_layer = window.debug_bounds("settings-hooks-layer-project").unwrap();
+    window.simulate_click(project_layer.center(), Modifiers::default());
+    window.run_until_parked();
+    draw_frame(&mut window);
     root.read_with(cx, |root, _| {
         let draft = root.hook_drafts.get(key).expect("Project 层草稿必须载入");
         assert!(
@@ -664,11 +686,6 @@ fn hooks_page_loads_saves_external_guard_and_discards(cx: &mut TestAppContext) {
     window.simulate_click(user_layer.center(), Modifiers::default());
     window.run_until_parked();
     draw_frame(&mut window);
-    let user_key = HooksDraftKey {
-        panel,
-        agent: slterm_agents::AgentKind::Claude,
-        layer: HooksDraftLayer::User,
-    };
     root.read_with(cx, |root, _| {
         let draft = root.hook_drafts.get(user_key).expect("User 层草稿必须载入");
         assert!(
@@ -676,6 +693,18 @@ fn hooks_page_loads_saves_external_guard_and_discards(cx: &mut TestAppContext) {
             "User 层草稿必须来自注入的 Claude 目录: {}",
             draft.text()
         );
+    });
+
+    // 切到 User 后项目层入口必须仍在，且可切回项目层。
+    let project_layer = window
+        .debug_bounds("settings-hooks-layer-project")
+        .expect("切到 User 后 Project 层 pill 必须仍然可用");
+    window.simulate_click(project_layer.center(), Modifiers::default());
+    window.run_until_parked();
+    draw_frame(&mut window);
+    root.read_with(cx, |root, _| {
+        let draft = root.hook_drafts.get(key).expect("项目层草稿必须仍可恢复");
+        assert_eq!(draft.text(), "{}", "项目层丢弃后重新载入磁盘现状");
     });
 }
 

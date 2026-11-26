@@ -385,20 +385,16 @@ impl SettingsView {
         })
     }
 
-    /// 可选择的层：项目面板提供三层，应用级浮层只有 User。
+    /// 可选择的层：项目面板恒提供三层，应用级浮层只有 User。
+    /// 可选集合只看视图身份，不随当前层收缩，保证可往返切换。
     pub(super) fn available_hooks_layers(&self) -> Vec<HooksDraftLayer> {
-        match self.hooks_layer_value() {
-            HooksDraftLayer::User => vec![HooksDraftLayer::User],
-            HooksDraftLayer::Project(project) => vec![
+        match self.hooks_project() {
+            Some(project) => vec![
                 HooksDraftLayer::User,
                 HooksDraftLayer::Project(project),
                 HooksDraftLayer::Local(project),
             ],
-            HooksDraftLayer::Local(project) => vec![
-                HooksDraftLayer::User,
-                HooksDraftLayer::Project(project),
-                HooksDraftLayer::Local(project),
-            ],
+            None => vec![HooksDraftLayer::User],
         }
     }
 

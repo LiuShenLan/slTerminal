@@ -99,12 +99,8 @@ impl SettingsView {
             .and_then(|store| store.state(&view_key))
             .map(|state| state.selected_page())
             .unwrap_or(SettingsPageId::Appearance);
-        let hooks_layer = match &view_key {
-            ViewKey::Settings { project_id } => {
-                crate::ai_hook::draft_host::HooksDraftLayer::Project(*project_id)
-            }
-            _ => crate::ai_hook::draft_host::HooksDraftLayer::User,
-        };
+        // 重建视图（关闭重开、重启）恒回 User 层；项目／Local 层由用户显式切换。
+        let hooks_layer = crate::ai_hook::draft_host::HooksDraftLayer::User;
         let mut inputs = BTreeMap::new();
         let mut input_subscriptions = Vec::new();
         for field in FIELDS {
@@ -160,6 +156,14 @@ impl SettingsView {
             hooks_input_subscription: Some(hooks_input_subscription),
             hooks_sync_key: None,
             hooks_synced_generation: 0,
+        }
+    }
+
+    /// Hooks 层可绑定的项目：仅项目 Settings 面板提供 Project／Local 层。
+    pub(super) fn hooks_project(&self) -> Option<ProjectId> {
+        match &self.view_key {
+            ViewKey::Settings { project_id } => Some(*project_id),
+            _ => None,
         }
     }
 
