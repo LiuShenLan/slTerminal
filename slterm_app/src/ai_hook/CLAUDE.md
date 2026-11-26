@@ -9,7 +9,7 @@
 - **statusline 用量信号分通道保留**：信号文件介质保留（app 本地数据根），与 hook 管道分通道；桥接脚本节流后写 ContextUsage，并透传用户原 statusline。
 - **流键收窄**：`AiHookStreamKey` = source + session + pane + agent_pid + bridge_instance；`remote_process` 维度随 SSH/远程砍除。
 - **`AgentSession.source` 宽松落盘、严格消费**：持久化保留 hook 原报字符串；恢复注入时经 `AgentKind::parse` 归一，不归一即不可恢复。原因：未知 CLI 的事件不应被静默丢弃，但恢复必须只作用于已知 agent。
-- **`AgentKind` 封闭集**：内置 agent 身份是封闭枚举，屏幕规则随仓；新增 agent = 枚举 + 规则 + 必要的安装器/目录表登记，不裁剪既有集。
+- **`AgentKind` 封闭集**：内置 agent 身份是封闭枚举，屏幕规则随仓；新增 agent = 枚举 + 规则 + 必要的安装器/目录表登记，不裁剪既有集。Hooks 设置名单与内置启动命令只从 `AgentCatalog` 派生，设置域按 slug 映射，不另维护顺序表。
 - **安装权威**：claude/kimi/codex/pi/opencode 按各自配置形态安装；codex 支持 `--chain` 串联原 notifier；managed 文件带归属指纹，`config_guard` 监视防外部改写。
 - **审查门**：statusline 键在安装器审查门落地；审查词表演化登记到安全审计域。审查门只覆盖 statusline 键，hooks 数组的 command 字段由 marker/归属指纹兜底。
 - **自愈授权与失败提示**：授权只经 `AgentHook`/SettingsRegistry；失败提示只含 `Install`/`Settings` 类别与 agent，进程内冷却 5 秒，空失败不占冷却，不携带命令或配置正文。

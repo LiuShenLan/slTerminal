@@ -54,6 +54,41 @@ impl AgentHook {
         }
     }
 
+    /// 稳定 CLI slug（与 `AgentKind` 的持久 slug 同形）。
+    pub const fn slug(self) -> &'static str {
+        match self {
+            Self::Claude => "claude",
+            Self::Codex => "codex",
+            Self::OpenCode => "opencode",
+            Self::Pi => "pi",
+            Self::Copilot => "copilot",
+            Self::Grok => "grok",
+            Self::OhMyPi => "omp",
+            Self::Cursor => "cursor",
+            Self::Kimi => "kimi",
+        }
+    }
+
+    /// 设置页短显示名；不得用作身份。
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Claude => "Claude",
+            Self::Codex => "Codex",
+            Self::OpenCode => "OpenCode",
+            Self::Pi => "Pi",
+            Self::Copilot => "Copilot",
+            Self::Grok => "Grok",
+            Self::OhMyPi => "Oh My Pi",
+            Self::Cursor => "Cursor",
+            Self::Kimi => "Kimi",
+        }
+    }
+
+    /// slug → 设置域 hook 身份；未知 slug 返回 None。
+    pub fn from_slug(slug: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|agent| agent.slug() == slug)
+    }
+
     /// 每 agent 独立键 → 全局键兜底 → 默认。
     pub fn enabled(self, raw: &RawSettings) -> bool {
         let legacy_default = Self::DEFAULT.contains(&self);

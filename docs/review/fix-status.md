@@ -60,7 +60,7 @@
 | 设置损坏分流缺“高版本”和“权限/IO 只读重试” | 部分修复：新增 `settings_version` 字段，高版本读取标记 `unsupported_version` 且写通道拒绝覆盖（不隔离）；测试 `higher_settings_version_is_read_only_and_never_overwritten`、`settings_writes_stamp_the_current_version`。权限/IO 回退默认仍保留启动可用性，用户可见反馈归“设置写失败/损坏无用户可见反馈”条目 |
 | 设置写失败、损坏与单字段回退没有用户可见反馈 | 已修：启动设置只读一次并把损坏／高版本／读取失败写入 `SettingsLoadState` 全局；设置页聚合加载降级、单字段 `Invalid` 回退计数与持久的写失败标记，渲染可见状态条；`save_failed` 文案明确本次运行生效、重启可能丢失；测试 `settings_status_surfaces_load_fallback_and_save_failure`、`higher_settings_version_is_read_only_and_never_overwritten` |
 | 恢复默认旁路统一设置写通道、审计与保存锁 | 已修：`settings_store::restore_default_settings_at` 共用保存锁、审计事件与 1MB 上限；测试 `settings_import_and_reset_preserve_secrets` |
-| AgentCatalog 适配器声明未被消费，CLI 名单多源 | 待修 |
+| AgentCatalog 适配器声明未被消费，CLI 名单多源 | 部分修复：`hooks_adapter` 与 `builtin_command` 已有生产消费（设置页 Hooks 名单与 `agents()` 均由 catalog 派生，启动命令走 catalog）；`AgentHook` 增加 slug/label 并对齐集合；测试 `catalog_hooks_match_the_settings_hook_enum`、`agent_row_states_follow_catalog_order_not_all_order`。`history_adapter` 仍待历史扫描生产入口接线 |
 | Hooks 事件目录远小于 featureSpec 的 Claude 事件集合 | 已修：`HookEvent` 扩为 31 项全表，编辑器校验与 `hook_events()` 使用 `CLAUDE_EVENT_CATALOG`，安装器仍只注入 10 项订阅子集；测试 `legal_catalog_events_save_even_when_not_installed`、`claude_event_catalog_covers_the_full_feature_spec`（提交 21eb93f7） |
 | 设置热应用在 GPUI 前台同步读取自定义主题文件 | 已修：主题定义预载缓存 + `ThemeLoad` 后台任务，启动/显式提交走冷路径读盘，字段提交后的快照重建只查缓存，库写入/删除主动失效（提交 b83926fe）；测试 `hot_snapshot_uses_the_cached_custom_theme_definition_without_disk_io`、`custom_theme_hot_apply_uses_the_background_preloaded_cache`、`cache_hits_only_the_installed_identity_and_clears_on_invalidate` |
 | 套餐凭据目标不含本地根稳定散列 | 已修：`credential_target(local_root)` 绑定 `stable_path_hash`；测试 `plan_balance_targets_are_scoped_to_the_local_data_root` |

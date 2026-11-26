@@ -6,17 +6,14 @@ use std::path::{Path, PathBuf};
 use slterm_settings::AgentHook;
 
 /// 设置页展示顺序;`AgentHook::ALL` 是应用顺序,两表语义不同,不合并。
-pub(crate) const AGENTS: [AgentHook; 9] = [
-    AgentHook::Claude,
-    AgentHook::Codex,
-    AgentHook::OpenCode,
-    AgentHook::Cursor,
-    AgentHook::Kimi,
-    AgentHook::Pi,
-    AgentHook::OhMyPi,
-    AgentHook::Copilot,
-    AgentHook::Grok,
-];
+/// Hooks 能力名单唯一来源 = `AgentCatalog` 声明的适配器；设置域只按 slug 映射。
+pub(crate) fn agents() -> Vec<AgentHook> {
+    crate::ai_agents::AgentKind::ALL
+        .into_iter()
+        .filter(|kind| kind.catalog().hooks_adapter.is_some())
+        .filter_map(|kind| AgentHook::from_slug(kind.slug()))
+        .collect()
+}
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct HookInspection {
@@ -54,7 +51,7 @@ pub(crate) struct ClaudeProbe<'a> {
 pub(crate) fn inspect_with(claude: Option<ClaudeProbe<'_>>) -> Vec<AgentIntegration> {
     let dirs = executable_directories();
     let probe = claude.as_ref();
-    AGENTS
+    agents()
         .into_iter()
         .map(|agent| {
             let mut executable = find_executable(agent, &dirs);

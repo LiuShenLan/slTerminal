@@ -17,26 +17,15 @@ use slterm_settings::json::Value;
 use super::AppRoot;
 use super::settings_overlay::SettingsView;
 use super::task_service::{CancellationToken, TaskId};
-use crate::ai_hook::integrations::{AGENTS, AgentIntegration, HookInspection};
+use crate::ai_hook::integrations::{AgentIntegration, HookInspection, agents};
 use crate::i18n::Message;
 
-/// 展示顺序与显示名同 `ai_hook::integrations::AGENTS`。
-const AGENT_NAMES: [(&str, &str); 9] = [
-    ("claude", "Claude"),
-    ("codex", "Codex"),
-    ("opencode", "OpenCode"),
-    ("cursor", "Cursor"),
-    ("kimi", "Kimi"),
-    ("pi", "Pi"),
-    ("omp", "Oh My Pi"),
-    ("copilot", "Copilot"),
-    ("grok", "Grok"),
-];
-
-/// 每行开关按 `AGENTS` 自身顺序读取对应设置键；不得用 `AgentHook::ALL`
-/// 的下标对齐（两者顺序不同，从 Cursor 起会显示与点击错位）。
-fn agent_row_states(values: &slterm_settings::RawSettings) -> [bool; 9] {
-    AGENTS.map(|agent| agent.enabled(values))
+/// 每行开关按同一 catalog 派生顺序读取对应设置键。
+fn agent_row_states(values: &slterm_settings::RawSettings) -> Vec<bool> {
+    agents()
+        .into_iter()
+        .map(|agent| agent.enabled(values))
+        .collect()
 }
 
 fn agent_state_message(integration: Option<&AgentIntegration>) -> Message {
@@ -75,7 +64,7 @@ pub(super) fn render_agent_hooks_page(
     let mut integrations: Option<Vec<AgentIntegration>> = None;
     let mut inspecting = false;
     let mut failed = false;
-    let mut enabled = [false; 9];
+    let mut enabled = Vec::new();
     if let Some(root) = root_entity.as_ref() {
         let root = root.read(cx);
         integrations = root.agent_integrations.clone();
@@ -84,11 +73,12 @@ pub(super) fn render_agent_hooks_page(
         enabled = agent_row_states(root.settings.values());
     }
 
-    let rows = AGENTS
+    let rows = agents()
         .into_iter()
-        .zip(AGENT_NAMES)
         .enumerate()
-        .map(|(index, (agent, (slug, name)))| {
+        .map(|(index, agent)| {
+            let slug = agent.slug();
+            let name = agent.label();
             let integration = integrations
                 .as_ref()
                 .and_then(|list| list.iter().find(|entry| entry.agent == agent));
@@ -335,25 +325,39 @@ impl AppRoot {
 mod tests {
     use super::*;
 
-    /// 行开关必须按 AGENTS 顺序读取各自设置键：Cursor 在 AGENTS 排第 4，
-    /// 在 AgentHook::ALL 中排第 8，用 ALL 下标会显示/点击错位。
+    /// 行开关按 catalog 派生顺序读取各自设置键，不依赖 AgentHook::ALL 下标。
     #[test]
-    fn agent_row_states_follow_agents_order_not_all_order() {
+    fn agent_row_states_follow_catalog_order_not_all_order() {
         let raw = slterm_settings::RawSettings::from_json_bytes(
             br#"{"agent_hooks":{"slterm_ai_hooks_cursor":true}}"#,
         );
         let states = agent_row_states(&raw);
-        assert!(states[3], "Cursor 行必须读取自己的设置键");
-        assert!(
-            !states[7],
-            "Cursor 的开启不得按 AgentHook::ALL 下标落到第 8 行"
-        );
+        let cursor = agents()
+            .into_iter()
+            .position(|agent| agent == AgentHook::Cursor)
+            .expect("Cursor 必须有 hooks 适配器");
+        assert!(states[cursor], "Cursor 行必须读取自己的设置键");
         // Claude/Codex 走全局兜底默认开启，Cursor 显式开启。
         assert_eq!(
             states.iter().filter(|enabled| **enabled).count(),
             3,
             "默认两行加显式开启一行"
         );
-        assert_eq!(AGENTS[3], AgentHook::Cursor);
+    }
+
+    /// 设置域 Hooks 名单与 AgentCatalog 的适配器声明集合完全一致。
+    #[test]
+    fn catalog_hooks_match_the_settings_hook_enum() {
+        let catalog = agents();
+        let expected = crate::ai_agents::AgentKind::ALL
+            .into_iter()
+            .filter(|kind| kind.catalog().hooks_adapter.is_some())
+            .count();
+        assert_eq!(catalog.len(), expected);
+        let mut catalog_slugs: Vec<_> = catalog.iter().map(|agent| agent.slug()).collect();
+        let mut settings_slugs: Vec<_> = AgentHook::ALL.iter().map(|agent| agent.slug()).collect();
+        catalog_slugs.sort_unstable();
+        settings_slugs.sort_unstable();
+        assert_eq!(catalog_slugs, settings_slugs);
     }
 }
