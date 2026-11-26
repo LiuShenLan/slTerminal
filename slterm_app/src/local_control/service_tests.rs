@@ -254,13 +254,16 @@ fn service_preserves_structured_closing_receipt() {
     });
 
     let error = handover_once(&path, temp.path(), &store).expect_err("Closing 必须失败");
-    assert!(matches!(
-        error,
-        HandoverError::Server {
-            code: -32004,
-            domain: Some(DomainErrorCode::Closing),
-        }
-    ));
+    assert!(
+        matches!(
+            error,
+            HandoverError::Server {
+                code: -32004,
+                domain: Some(DomainErrorCode::Closing),
+            }
+        ),
+        "unexpected handover error: {error:?}"
+    );
     foreground.join().unwrap();
     service.shutdown().unwrap();
 }
@@ -282,13 +285,16 @@ fn service_maps_dropped_completion_sender_to_closing() {
     });
 
     let error = handover_once(&path, temp.path(), &store).expect_err("回执断连必须失败");
-    assert!(matches!(
-        error,
-        HandoverError::Server {
-            code: -32004,
-            domain: Some(DomainErrorCode::Closing),
-        }
-    ));
+    assert!(
+        matches!(
+            error,
+            HandoverError::Server {
+                code: -32004,
+                domain: Some(DomainErrorCode::Closing),
+            }
+        ),
+        "unexpected handover error: {error:?}"
+    );
     foreground.join().unwrap();
     service.shutdown().unwrap();
 }
@@ -303,13 +309,16 @@ fn service_maps_disconnected_event_receiver_to_closing() {
     let mut service = start_service(&path, &store, events);
 
     let error = handover_once(&path, temp.path(), &store).expect_err("事件接收端断开必须失败");
-    assert!(matches!(
-        error,
-        HandoverError::Server {
-            code: -32004,
-            domain: Some(DomainErrorCode::Closing),
-        }
-    ));
+    assert!(
+        matches!(
+            error,
+            HandoverError::Server {
+                code: -32004,
+                domain: Some(DomainErrorCode::Closing),
+            }
+        ),
+        "unexpected handover error: {error:?}"
+    );
     service.shutdown().unwrap();
 }
 
