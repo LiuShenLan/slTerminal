@@ -33,6 +33,14 @@ pub(crate) type SideViewWriteBarriers = Rc<RefCell<BTreeSet<SideViewId>>>;
 /// 普通队列拒收的关闭状态；只由持久化 owner 在退出时经终态队列补交。
 type SideViewPendingFinalStates = Rc<RefCell<BTreeMap<SideViewId, ViewState>>>;
 
+/// 领域恢复失败分类；生产组合据此进入只读诊断，不得以空工作区静默开窗。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DomainRecoveryFailure {
+    Database,
+    Project,
+    Snapshot,
+}
+
 /// AppRoot 持有的启动恢复与持久化依赖；各实体仍独占自己的强类型状态。
 pub(crate) struct AppRootPersistence {
     cache: SideViewStateCache,
@@ -49,7 +57,7 @@ pub(crate) struct AppRootPersistence {
     recovered_documents: slterm_document::DocumentRegistry,
     document_recoverer:
         Option<crate::persistence::document_snapshot::recovery::DocumentSnapshotRecoverer>,
-    project_snapshot_recovery_failed: bool,
+    domain_recovery_failure: Option<DomainRecoveryFailure>,
     store_epoch: Option<String>,
     pending_final_sidebar: Option<SidebarState>,
     /// 按机器恢复的窗口几何；只交付一次给开窗链。
@@ -83,7 +91,7 @@ impl AppRootPersistence {
                     .write_barriers
                     .borrow_mut()
                     .extend(SideViewId::ALL);
-                persistence.project_snapshot_recovery_failed = true;
+                persistence.domain_recovery_failure = Some(DomainRecoveryFailure::Database);
                 persistence.recovery_warning_count += 1;
                 return persistence;
             }
@@ -118,7 +126,14 @@ impl AppRootPersistence {
             }
             Err(error) => {
                 // 恢复失败只保留原记录；没有显式编辑时不得回写空快照。
-                persistence.project_snapshot_recovery_failed = true;
+                persistence.domain_recovery_failure = Some(match error {
+                    crate::persistence::startup::recovery::StartupRecoveryError::Project(_) => {
+                        DomainRecoveryFailure::Project
+                    }
+                    crate::persistence::startup::recovery::StartupRecoveryError::Snapshot(_) => {
+                        DomainRecoveryFailure::Snapshot
+                    }
+                });
                 persistence.recovery_warning_count += 1;
                 log::warn!("could not restore project snapshot: {error}");
             }
@@ -270,7 +285,7 @@ impl AppRootPersistence {
             recovered_project_snapshot: None,
             recovered_documents: slterm_document::DocumentRegistry::new(),
             document_recoverer: None,
-            project_snapshot_recovery_failed: false,
+            domain_recovery_failure: None,
             store_epoch: None,
             pending_final_sidebar: None,
             recovered_window_geometry: None,
@@ -295,7 +310,12 @@ impl AppRootPersistence {
     }
 
     pub(super) fn project_snapshot_recovery_failed(&self) -> bool {
-        self.project_snapshot_recovery_failed
+        self.domain_recovery_failure.is_some()
+    }
+
+    /// 生产组合只在此分类存在时进入只读诊断；None 才允许打开正常工作区。
+    pub(crate) fn domain_recovery_failure(&self) -> Option<DomainRecoveryFailure> {
+        self.domain_recovery_failure
     }
 
     pub(super) fn take_project_snapshot(&mut self) -> ProjectSnapshot {
@@ -437,7 +457,7 @@ impl AppRootPersistence {
         if self.sidebar_has_explicit_edit {
             record_submission(writer.save_final_sidebar_state(host.state()));
         }
-        if !self.project_snapshot_recovery_failed {
+        if self.domain_recovery_failure.is_none() {
             record_submission(writer.save_final_project_snapshot(snapshot));
         }
         for (key, state) in self.editor_views.final_states() {
@@ -944,6 +964,11 @@ mod side_view_state_persistence_tests {
         let persistence = AppRootPersistence::load(&paths, None);
 
         assert!(persistence.project_snapshot_recovery_failed());
+        assert_eq!(
+            persistence.domain_recovery_failure(),
+            Some(DomainRecoveryFailure::Project),
+            "布局恢复失败必须分类为 Project，供生产组合进入诊断"
+        );
         assert!(
             persistence.recovery_warning_count() >= 1,
             "快照恢复失败必须计入聚合提示"

@@ -70,8 +70,8 @@ use crate::persistence::workspace_writer::WorkspaceWriterClient;
 use crate::platform::project_paths::{ProjectPathResolver, SystemProjectPathResolver};
 
 use focus_manager::{FocusManager, FocusRegistration, FocusSubscriptions};
-pub(crate) use side_view::AppRootPersistence;
 use side_view::SideView;
+pub(crate) use side_view::{AppRootPersistence, DomainRecoveryFailure};
 use side_view_host::SideViewHost;
 use task_service::TaskService;
 

@@ -1121,6 +1121,50 @@ fn corrupt_snapshot_is_quarantined_without_blocking_recovery() {
     assert!(store.read(snapshot.document_id()).unwrap().is_none());
 }
 
+/// 快照位置与布局位置漂移（外部改名后崩溃）不得拖垮整次恢复：正文保留并标记冲突。
+#[test]
+fn snapshot_location_drift_restores_draft_with_conflict_instead_of_failing() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("project");
+    std::fs::create_dir(&root).unwrap();
+    let old = temp.path().join("old.txt");
+    let new = root.join("new.txt");
+    std::fs::write(&new, "other\n").unwrap();
+    let snapshot = snapshot_at('a', &old, "disk", "draft");
+    let new_location = ResolvedPath::new(
+        CanonicalPath::new(dunce::canonicalize(&new).unwrap()).unwrap(),
+        Some(crate::atomic_file::file_identity(&std::fs::File::open(&new).unwrap()).unwrap()),
+    );
+    let layout = recovered_layout(&root, snapshot.document_id(), new_location.clone());
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let mut store = DocumentSnapshotStore::new(&paths);
+    store
+        .write(&snapshot, &protected(&[snapshot.document_id()]))
+        .unwrap();
+    let mut recoverer = super::recovery::DocumentSnapshotRecoverer::new(&paths);
+
+    SnapshotRecoverer::recover(&mut recoverer, &layout).unwrap();
+
+    let registry = recoverer.take_registry();
+    let session = registry.session(snapshot.document_id()).unwrap();
+    assert_eq!(
+        session.text().unwrap().to_string(),
+        "draft",
+        "漂移位置的快照正文必须保留"
+    );
+    assert_eq!(
+        session.location().canonical_path(),
+        new_location.canonical_path(),
+        "正文必须重绑布局当前位置"
+    );
+    assert_eq!(
+        session.external_conflict().map(|conflict| conflict.kind()),
+        Some(slterm_document::ExternalConflictKind::Modified),
+        "磁盘基线不可信时必须标记冲突而不是允许直接保存"
+    );
+    assert!(recoverer.orphans().is_empty());
+}
+
 #[test]
 fn integration_session_grant_restore() {
     let temp = tempfile::tempdir().unwrap();

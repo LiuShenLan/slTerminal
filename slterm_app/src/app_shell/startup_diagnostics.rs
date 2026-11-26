@@ -13,6 +13,7 @@ use gpui_component::{
 };
 
 use super::config::Settings;
+use crate::app_shell::app_root::DomainRecoveryFailure;
 use crate::i18n::{Message, UiLanguage};
 use crate::persistence::startup::MaintenanceStage;
 use crate::persistence::workspace_writer::WorkspaceWriterError;
@@ -24,18 +25,25 @@ pub(crate) enum ShellRunOutcome {
     RetryStartup,
 }
 
+/// 诊断窗的唯一失败源；领域恢复失败与维护失败共用只读分支。
+#[derive(Debug)]
+pub(crate) enum StartupFailure {
+    Writer(WorkspaceWriterError),
+    Domain(DomainRecoveryFailure),
+}
+
 pub(crate) struct StartupDiagnosticView {
-    error: WorkspaceWriterError,
+    failure: StartupFailure,
     outcome: Rc<Cell<ShellRunOutcome>>,
 }
 
 impl StartupDiagnosticView {
     fn new(
-        error: WorkspaceWriterError,
+        failure: StartupFailure,
         outcome: Rc<Cell<ShellRunOutcome>>,
         _cx: &mut Context<'_, Self>,
     ) -> Self {
-        Self { error, outcome }
+        Self { failure, outcome }
     }
 
     fn retry(&self, window: &mut Window) {
@@ -68,7 +76,7 @@ impl Render for StartupDiagnosticView {
                     .max_w(px(560.0))
                     .text_center()
                     .text_color(cx.theme().muted_foreground)
-                    .child(diagnostic_message(&self.error, language)),
+                    .child(diagnostic_message(&self.failure, language)),
             )
             .child(
                 div()
@@ -96,7 +104,25 @@ fn install_window_close(window: &mut Window, cx: &mut App) {
     window.on_window_should_close(cx, |_, _| true);
 }
 
-fn diagnostic_message(error: &WorkspaceWriterError, language: UiLanguage) -> String {
+fn diagnostic_message(failure: &StartupFailure, language: UiLanguage) -> String {
+    let error = match failure {
+        StartupFailure::Writer(error) => error,
+        StartupFailure::Domain(DomainRecoveryFailure::Database) => {
+            return language
+                .text(Message::StartupDiagnosticsDatabaseUnavailable)
+                .to_owned();
+        }
+        StartupFailure::Domain(DomainRecoveryFailure::Project) => {
+            return language
+                .text(Message::StartupDiagnosticsProjectRecoveryFailed)
+                .to_owned();
+        }
+        StartupFailure::Domain(DomainRecoveryFailure::Snapshot) => {
+            return language
+                .text(Message::StartupDiagnosticsSnapshotRecoveryFailed)
+                .to_owned();
+        }
+    };
     if let WorkspaceWriterError::MaintenanceNeedsAttention(stage) = error {
         let stage = match stage {
             MaintenanceStage::Journal => Message::StartupDiagnosticsStageJournal,
@@ -150,6 +176,15 @@ fn handle_open_result<E: std::fmt::Display>(
 
 /// 诊断窗不创建 writer、控制面或 PTY；重试只关闭本窗，由外层重新进入启动链。
 pub(crate) fn run(error: WorkspaceWriterError) -> ShellRunOutcome {
+    run_failure(StartupFailure::Writer(error))
+}
+
+/// 领域恢复失败与维护失败共用同一只读诊断与重试链。
+pub(crate) fn run_domain(failure: DomainRecoveryFailure) -> ShellRunOutcome {
+    run_failure(StartupFailure::Domain(failure))
+}
+
+fn run_failure(failure: StartupFailure) -> ShellRunOutcome {
     let outcome = Rc::new(Cell::new(ShellRunOutcome::Exit));
     let view_outcome = outcome.clone();
     let application = gpui_platform::application()
@@ -162,7 +197,7 @@ pub(crate) fn run(error: WorkspaceWriterError) -> ShellRunOutcome {
         let result = cx.open_window(options, move |window, cx| {
             window.set_window_title(crate::brand::NAME);
             install_window_close(window, cx);
-            let view = cx.new(|cx| StartupDiagnosticView::new(error, view_outcome.clone(), cx));
+            let view = cx.new(|cx| StartupDiagnosticView::new(failure, view_outcome.clone(), cx));
             cx.new(|cx| Root::new(view, window, cx))
         });
         handle_open_result(
@@ -185,14 +220,15 @@ mod tests {
     };
     use gpui_component::Root;
 
-    use super::{ShellRunOutcome, StartupDiagnosticView, diagnostic_message};
+    use super::{ShellRunOutcome, StartupDiagnosticView, StartupFailure, diagnostic_message};
+    use crate::app_shell::app_root::DomainRecoveryFailure;
     use crate::i18n::UiLanguage;
     use crate::persistence::startup::MaintenanceStage;
     use crate::persistence::workspace_writer::WorkspaceWriterError;
 
     fn open_diagnostic(
         cx: &mut TestAppContext,
-        error: WorkspaceWriterError,
+        failure: StartupFailure,
     ) -> (
         Entity<StartupDiagnosticView>,
         VisualTestContext,
@@ -208,7 +244,7 @@ mod tests {
         let window_size = cx.update(|cx| gpui::Bounds::maximized(None, cx).size);
         let window = cx.open_window(window_size, |window, cx| {
             super::install_window_close(window, cx);
-            let view = cx.new(|cx| StartupDiagnosticView::new(error, outcome.clone(), cx));
+            let view = cx.new(|cx| StartupDiagnosticView::new(failure, outcome.clone(), cx));
             slot = Some(view.clone());
             Root::new(view, window, cx)
         });
@@ -223,8 +259,9 @@ mod tests {
 
     #[test]
     fn diagnostic_messages_are_localized_and_sanitized() {
-        let attention =
-            WorkspaceWriterError::MaintenanceNeedsAttention(MaintenanceStage::CloseIntents);
+        let attention = StartupFailure::Writer(WorkspaceWriterError::MaintenanceNeedsAttention(
+            MaintenanceStage::CloseIntents,
+        ));
         assert_eq!(
             diagnostic_message(&attention, UiLanguage::ZhCn),
             "启动维护需要人工处理：关闭意图"
@@ -234,8 +271,25 @@ mod tests {
             "Startup maintenance needs attention: close intents"
         );
         assert_eq!(
-            diagnostic_message(&WorkspaceWriterError::Stopped, UiLanguage::ZhCn),
+            diagnostic_message(
+                &StartupFailure::Writer(WorkspaceWriterError::Stopped),
+                UiLanguage::ZhCn
+            ),
             "启动维护未完成，未启动终端或后台写入。"
+        );
+        assert_eq!(
+            diagnostic_message(
+                &StartupFailure::Domain(DomainRecoveryFailure::Snapshot),
+                UiLanguage::ZhCn
+            ),
+            "Document 恢复未能完成。原始记录与草稿保持原样；请处理损坏数据后重试。"
+        );
+        assert_eq!(
+            diagnostic_message(
+                &StartupFailure::Domain(DomainRecoveryFailure::Project),
+                UiLanguage::EnUs
+            ),
+            "The saved workspace layout could not be restored. Original records are kept unchanged; retry after resolving the corrupt data."
         );
     }
 
@@ -243,7 +297,9 @@ mod tests {
     fn retry_button_returns_retry_without_starting_workspace(cx: &mut TestAppContext) {
         let (view, mut window, outcome) = open_diagnostic(
             cx,
-            WorkspaceWriterError::MaintenanceNeedsAttention(MaintenanceStage::Journal),
+            StartupFailure::Writer(WorkspaceWriterError::MaintenanceNeedsAttention(
+                MaintenanceStage::Journal,
+            )),
         );
         let weak = view.downgrade();
         let retry = window.debug_bounds("startup-diagnostics-retry").unwrap();
@@ -312,7 +368,8 @@ mod tests {
 
     #[gpui::test]
     fn closing_diagnostic_returns_exit(cx: &mut TestAppContext) {
-        let (view, mut window, outcome) = open_diagnostic(cx, WorkspaceWriterError::Stopped);
+        let (view, mut window, outcome) =
+            open_diagnostic(cx, StartupFailure::Writer(WorkspaceWriterError::Stopped));
         let weak = view.downgrade();
 
         assert!(window.simulate_close());

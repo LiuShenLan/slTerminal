@@ -633,6 +633,9 @@
     "stage_close_intents": "关闭意图",
     "stage_snapshots": "快照索引",
     "stage_history_quarantine": "历史隔离",
+    "database_unavailable": "无法打开工作区记录。原始文件未被改动；请重启或检查文件权限后重试。",
+    "project_recovery_failed": "无法恢复已保存的工作区布局。原始记录保持原样；请处理损坏数据后重试。",
+    "snapshot_recovery_failed": "Document 恢复未能完成。原始记录与草稿保持原样；请处理损坏数据后重试。",
     "retry": "重试启动",
     "exit": "退出"
   }

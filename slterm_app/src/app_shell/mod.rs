@@ -245,6 +245,19 @@ impl WorkspaceWriterRuntime {
         })
     }
 
+    /// 领域恢复失败：不得开窗；显式停止 writer 并 join 转发线程，不留孤儿。
+    fn abort_startup(self) {
+        let Self {
+            writer,
+            failure_forwarder,
+            ..
+        } = self;
+        if let Err(error) = writer.shutdown() {
+            log::warn!("workspace writer shutdown after domain recovery failure failed: {error}");
+        }
+        let _ = failure_forwarder.join();
+    }
+
     fn client(&self) -> crate::persistence::workspace_writer::WorkspaceWriterClient {
         self.client.clone()
     }
@@ -542,6 +555,12 @@ fn run_shell_once(
         Some(workspace_writer_client),
         previous_run,
     );
+    // 布局或快照领域恢复失败不得以空工作区静默开窗：回收 writer 后进入同一只读诊断与重试链。
+    if let Some(failure) = side_view_persistence.domain_recovery_failure() {
+        log::warn!("workspace domain recovery failed: {failure:?}");
+        workspace_writer.abort_startup();
+        return startup_diagnostics::run_domain(failure);
+    }
     // 本机窗口几何在开窗前只交付一次；损坏或无记录回退默认尺寸。
     let window_geometry = side_view_persistence.take_window_geometry();
     // 学习库独立于工作区库；损坏或高版本只暂停持久学习，不覆盖原文件。
@@ -1441,6 +1460,55 @@ mod shell_event_tests {
         let finished = observer_metadata(&paths);
         assert_eq!(finished.run.run_id, started.run.run_id);
         assert!(!finished.clean_shutdown);
+    }
+
+    /// 领域恢复失败必须关闭 writer 并等待转发线程，不得留下孤儿或伪造正常退出。
+    #[test]
+    fn abort_startup_stops_writer_and_joins_forwarder() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+        let (events, _event_rx) = mpsc::sync_channel(super::SHELL_EVENT_CAPACITY);
+        let mut runtime = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
+        let started = observer_metadata(&paths);
+        let (forwarder_started_tx, forwarder_started_rx) = mpsc::sync_channel(1);
+        let (release_forwarder_tx, release_forwarder_rx) = mpsc::sync_channel(1);
+        let (forwarder_finished_tx, forwarder_finished_rx) = mpsc::sync_channel(1);
+        let gated_forwarder = std::thread::spawn(move || {
+            forwarder_started_tx.send(()).unwrap();
+            release_forwarder_rx.recv().unwrap();
+            forwarder_finished_tx.send(()).unwrap();
+        });
+        let original_forwarder = std::mem::replace(&mut runtime.failure_forwarder, gated_forwarder);
+        forwarder_started_rx
+            .recv_timeout(Duration::from_secs(3))
+            .expect("闩门 forwarder 必须启动");
+        let (abort_done_tx, abort_done_rx) = mpsc::sync_channel(1);
+        let abort = std::thread::spawn(move || {
+            runtime.abort_startup();
+            abort_done_tx.send(()).unwrap();
+        });
+
+        let premature = abort_done_rx.recv_timeout(Duration::from_millis(100));
+        assert!(
+            matches!(premature, Err(mpsc::RecvTimeoutError::Timeout)),
+            "释放前 abort 不得返回"
+        );
+        release_forwarder_tx.send(()).unwrap();
+        forwarder_finished_rx
+            .recv_timeout(Duration::from_secs(3))
+            .expect("释放后闩门 forwarder 必须完成");
+        abort_done_rx
+            .recv_timeout(Duration::from_secs(3))
+            .expect("abort 必须完成");
+        abort.join().unwrap();
+        original_forwarder
+            .join()
+            .expect("writer 关闭失败通道后原 forwarder 必须自然回收");
+
+        let observer = WorkspaceDatabase::open(&paths).unwrap();
+        let finished = observer.metadata().unwrap().unwrap();
+        assert_eq!(finished.run.run_id, started.run.run_id);
+        assert!(!finished.clean_shutdown, "领域恢复失败不得写正常退出");
     }
 
     /// 每次启动必须保留上一运行退出事实，且不得改变既有工作区世代。

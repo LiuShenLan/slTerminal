@@ -228,13 +228,24 @@ impl DocumentSnapshotRecoverer {
         for (id, location) in layout.documents() {
             let grants = crate::app_shell::documents::document_project_grants(layout, id);
             let snapshot = snapshots.remove(&id);
-            if let Some(snapshot) = &snapshot
+            if let Some(snapshot) = snapshot.as_ref()
                 && snapshot.location().canonical_path() != location.canonical_path()
             {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "快照位置与布局记录不一致",
-                ));
+                // 位置漂移（外部改名后崩溃等）：正文归同一 Document，但旧磁盘基线
+                // 已不可信；重绑布局当前位置并以冲突恢复，不让单个材料拖垮整次恢复。
+                let metadata = DocumentMetadata {
+                    encoding: snapshot.encoding().clone(),
+                    read_only: false,
+                };
+                self.restore_snapshot_at(
+                    snapshot.clone(),
+                    location.clone(),
+                    Arc::default(),
+                    metadata,
+                    false,
+                    Some(DocumentConflict::modified_paged(location.clone())),
+                )?;
+                continue;
             }
             if grants.is_empty() || !automatically_authorized(location, &grants) {
                 self.requires_authorization.insert(id);
