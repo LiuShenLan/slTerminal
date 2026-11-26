@@ -213,6 +213,10 @@ impl WorkspaceWriterRuntime {
         if let MaintenanceOutcome::NeedsAttention { stage } = maintenance {
             return Err(WorkspaceWriterError::MaintenanceNeedsAttention(stage));
         }
+        // 维护成功即刷新灾难副本，副本不得停留在旧世代。
+        if let Err(error) = store.refresh_disaster_copy(paths) {
+            log::warn!("workspace disaster copy refresh failed at startup: {error}");
+        }
         drop(store);
         // 单实例锁保证此时没有另一实例的存活中转句柄；过期清理失败不阻断工作区。
         let _ = cleanup_temp();

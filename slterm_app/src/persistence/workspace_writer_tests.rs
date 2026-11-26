@@ -387,6 +387,21 @@ fn workspace_writer_close_commit_returns_committed_receipt() {
     writer.shutdown().unwrap();
 }
 
+/// 正常关闭在最终冲刷后刷新灾难副本，副本可独立打开且含最后快照。
+#[test]
+fn workspace_writer_shutdown_refreshes_the_disaster_copy() {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = fixture(&temp);
+    let writer = WorkspaceWriter::start(paths.clone()).unwrap();
+    let client = writer.client();
+    let expected = project_snapshot("disaster-copy-latest");
+    client.save_project_snapshot(&expected).unwrap();
+    writer.shutdown().unwrap();
+
+    let mut copy = WorkspaceDatabase::open_path(&paths.workspace_disaster_copy_path()).unwrap();
+    assert_eq!(copy.load_project_snapshot().unwrap(), expected);
+}
+
 #[test]
 fn workspace_writer_close_commit_supersedes_pending_project_snapshot() {
     let temp = tempfile::tempdir().unwrap();

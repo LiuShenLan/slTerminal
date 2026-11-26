@@ -988,6 +988,12 @@ fn run(
             Command::Shutdown { response } => {
                 let report =
                     write_pending(&mut store, &mut pending, &failures, true, &final_states);
+                // 正常关闭后刷新灾难副本：全部待写已落定，副本代表最新事实。
+                if report.failed == 0
+                    && let Err(error) = store.refresh_disaster_copy(&paths)
+                {
+                    log::warn!("workspace disaster copy refresh failed: {error}");
+                }
                 let _ = response.send(report);
                 return;
             }

@@ -159,6 +159,29 @@ impl WorkspaceDatabase {
     pub(crate) fn backup_to_new(&self, destination: &Path) -> Result<(), DatabaseError> {
         self.database.backup_to_new(destination)
     }
+
+    /// 刷新灾难副本：先备份到新临时库，成功后原子替换正式副本。
+    ///
+    /// 目标旧副本不得被 SQLite 直接覆盖；失败只清理临时材料，保留旧副本。
+    pub(crate) fn refresh_disaster_copy(&self, paths: &AppPaths) -> Result<(), DatabaseError> {
+        let temporary = paths.local_root().join(format!(
+            ".workspace-backup-refresh-{}.db",
+            uuid::Uuid::now_v7()
+        ));
+        let result = (|| {
+            self.backup_to_new(&temporary)?;
+            crate::atomic_file::replace(&temporary, &paths.workspace_disaster_copy_path())
+                .map_err(DatabaseError::Io)
+        })();
+        if result.is_err() {
+            for suffix in ["", "-wal", "-shm"] {
+                let mut path = temporary.as_os_str().to_owned();
+                path.push(suffix);
+                let _ = std::fs::remove_file(std::path::PathBuf::from(path));
+            }
+        }
+        result
+    }
 }
 
 #[cfg(test)]
