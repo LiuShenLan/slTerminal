@@ -119,16 +119,22 @@ impl TerminalRegistry {
         Ok(())
     }
 
+    /// 启动前置闸门：重复身份与存活额度都必须在任何真实 PTY 创建之前
+    /// 判定，调用方据此避免"先 spawn 再拒绝"的额外进程与前台等待。
+    pub fn preflight_launch(&self, terminal_id: TerminalId) -> Result<(), RegistryError> {
+        if self.entries.contains_key(&terminal_id) {
+            return Err(RegistryError::DuplicateTerminal);
+        }
+        self.ensure_live_capacity()
+    }
+
     /// 只有工厂成功后才公布新代次；重复 TerminalId 不执行工厂。
     pub fn launch(
         &mut self,
         terminal_id: TerminalId,
         factory: impl FnOnce() -> std::io::Result<TerminalSession>,
     ) -> Result<TerminalTarget, RegistryError> {
-        if self.entries.contains_key(&terminal_id) {
-            return Err(RegistryError::DuplicateTerminal);
-        }
-        self.ensure_live_capacity()?;
+        self.preflight_launch(terminal_id)?;
         let session = factory().map_err(RegistryError::Launch)?;
         let generation = PtyGeneration(1);
         let process = session.process_identity();

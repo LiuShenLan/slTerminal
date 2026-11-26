@@ -128,7 +128,7 @@
 
 | 问题 | 状态 |
 |---|---|
-| 存活上限预检发生在真实 PTY 创建之后 | 待修 |
+| 存活上限预检发生在真实 PTY 创建之后 | 已修：`TerminalRegistry::preflight_launch` 在解析 shell／创建 ConPTY 之前判定重复与额度；`launch`/`restore_launch` 均先预检。测试 `launch_capacity_is_checked_before_spawning_a_real_pty` |
 | 空 `Msg::Input` 永久卡住写队列 | 已修：发送端拒绝空输入 + 状态机跳过空项；测试 `empty_input_never_enters_the_command_channel`、`write_state_skips_empty_entries` |
 | 重连期间旧 worker 仍可注入退出事件或显示命令 | 待修 |
 | 帧唤醒标记与最新帧存储存在丢失竞态 | 待修 |

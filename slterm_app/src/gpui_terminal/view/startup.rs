@@ -95,6 +95,12 @@ impl TerminalView {
                 "终端已有存活 worker",
             ));
         }
+        // 存活额度与重复身份必须先于真实 PTY 创建判定：拒绝路径不得
+        // 解析 shell、创建 ConPTY 或在 GPUI 前台 join 刚 spawn 的 worker。
+        registry
+            .borrow()
+            .preflight_launch(terminal_id)
+            .map_err(std::io::Error::other)?;
         let (prepared, spawned) =
             Self::prepare(pane_id, spawn_grid, launch, window, cx, true, None);
         let spawned = spawned.expect("启动构造必须执行 PTY 创建")?;
@@ -130,25 +136,36 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Self {
-        let (prepared, spawned) = Self::prepare(
-            pane_id,
-            options.spawn_grid,
-            launch,
-            window,
-            cx,
-            true,
-            options.recovery_root,
-        );
-        let spawned = spawned.expect("恢复 Launch 必须执行一次 PTY 创建");
-        let startup = match spawned {
-            Ok(spawned) => match Self::bind_spawned(registry, terminal_id, spawned) {
-                Ok(bound) => SessionStartup::Spawn(Ok(bound)),
-                Err(error) => SessionStartup::Spawn(Err(error)),
-            },
-            Err(error) => SessionStartup::Spawn(Err(
-                crate::gpui_terminal::registry::RegistryError::Launch(error),
-            )),
+        // 额度预检必须先于真实 PTY 创建；拒绝时保留恢复面板与错误，
+        // 不解析 shell、不创建 ConPTY。
+        let startup = match registry.borrow().preflight_launch(terminal_id) {
+            Ok(()) => {
+                let (prepared, spawned) = Self::prepare(
+                    pane_id,
+                    options.spawn_grid,
+                    launch,
+                    window,
+                    cx,
+                    true,
+                    options.recovery_root,
+                );
+                let spawned = spawned.expect("恢复 Launch 必须执行一次 PTY 创建");
+                let startup = match spawned {
+                    Ok(spawned) => match Self::bind_spawned(registry, terminal_id, spawned) {
+                        Ok(bound) => SessionStartup::Spawn(Ok(bound)),
+                        Err(error) => SessionStartup::Spawn(Err(error)),
+                    },
+                    Err(error) => SessionStartup::Spawn(Err(
+                        crate::gpui_terminal::registry::RegistryError::Launch(error),
+                    )),
+                };
+                return Self::from_prepared(prepared, startup, window, cx);
+            }
+            Err(error) => SessionStartup::Spawn(Err(error)),
         };
+        let (prepared, spawned) =
+            Self::prepare(pane_id, options.spawn_grid, launch, window, cx, false, None);
+        debug_assert!(spawned.is_none(), "额度拒绝不得创建 PTY");
         Self::from_prepared(prepared, startup, window, cx)
     }
 
@@ -610,6 +627,52 @@ mod startup_tests {
             });
         });
         terminal.read_with(cx, |view, _| assert_eq!(view.title, "我的终端"));
+    }
+
+    /// 存活额度拒绝必须先于真实 PTY 创建：额满时错误必须是上限错误，
+    /// 而不是"PTY 启动失败"（后者证明工厂已经被执行）。
+    #[gpui::test]
+    fn launch_capacity_is_checked_before_spawning_a_real_pty(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            cx.set_global(Settings::default());
+            crate::app_shell::theme::apply_dark_theme(cx);
+        });
+        let mut registry = crate::gpui_terminal::registry::TerminalRegistry::default();
+        for index in 0..slterm_terminal::tty::MAX_PTY_SESSIONS {
+            let terminal_id = slterm_workspace::TerminalId::from_str(&format!(
+                "018f2f7c-8f5a-7c3d-9e2b-{index:012x}"
+            ))
+            .unwrap();
+            registry
+                .launch(terminal_id, || {
+                    Ok::<_, std::io::Error>(crate::gpui_terminal::session::test_session().0)
+                })
+                .unwrap();
+        }
+        let registry = Rc::new(RefCell::new(registry));
+        let rejected_id = slterm_workspace::TerminalId::from_str(&format!(
+            "018f2f7c-8f5a-7c3d-9e2b-{:012x}",
+            slterm_terminal::tty::MAX_PTY_SESSIONS
+        ))
+        .unwrap();
+        let (_root, _window) = cx.add_window_view(|window, cx| {
+            let result = TerminalView::launch(
+                PaneId(1),
+                rejected_id,
+                &registry,
+                (80, 24),
+                missing_shell_launch(),
+                window,
+                cx,
+            );
+            let error = result.err().expect("额满时必须拒绝创建");
+            assert!(
+                error.to_string().contains("上限"),
+                "额度拒绝必须先于 PTY 创建；实际错误：{error}"
+            );
+            StartupHarness
+        });
     }
 
     /// 显式创建失败必须向上返回错误，而不是伪装成可挂载的终端。
