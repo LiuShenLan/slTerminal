@@ -583,7 +583,8 @@ impl DocumentTextView {
         self.selection = TextSelection { anchor: 0, head: 0 };
         self.marked_range = None;
         self.preferred_column = None;
-        self.ensure_cursor_visible();
+        // 撤销/重做与外部快照只复位瞬态范围：滚动行/列保留当前阅读位置，
+        // 越界行已由 adopt_snapshot 按新正文夹紧；不得把视口拉回光标（顶部）。
         self.schedule_syntax_poll(cx);
         cx.notify();
     }
@@ -954,7 +955,8 @@ impl DocumentTextView {
         self.selection = TextSelection { anchor: 0, head: 0 };
         self.marked_range = None;
         self.preferred_column = None;
-        self.ensure_cursor_visible();
+        // 撤销/重做与外部快照只复位瞬态范围：滚动行/列保留当前阅读位置，
+        // 越界行已由 adopt_snapshot 按新正文夹紧；不得把视口拉回光标（顶部）。
         self.schedule_syntax_poll(cx);
         cx.notify();
     }

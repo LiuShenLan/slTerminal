@@ -153,6 +153,45 @@ impl Render for Host {
     }
 }
 
+/// 外部快照与撤销/重做不因选区复位把滚动位置拉回顶部。
+#[gpui::test]
+fn external_snapshot_keeps_the_current_scroll_position(cx: &mut TestAppContext) {
+    let text = (0..50)
+        .map(|index| {
+            format!(
+                "line {index}
+"
+            )
+        })
+        .collect::<String>();
+    let host = cx.update(|cx| cx.new(|cx| Host::new(&text, false, cx)));
+    let view = host.read_with(cx, |host, _| host.view.clone());
+    view.update(cx, |view, _| {
+        view.set_scroll_for_test(20, 3);
+        *view.layout.borrow_mut() = Some(LayoutMetrics {
+            bounds: Bounds {
+                origin: gpui::point(px(0.0), px(0.0)),
+                size: gpui::size(px(120.0), px(100.0)),
+            },
+            cell_width: px(8.0),
+            line_height: px(20.0),
+        });
+    });
+
+    cx.update(|cx| {
+        host.update(cx, |host, cx| {
+            let registry = host.registry.borrow();
+            let session = registry.session(host.id).unwrap();
+            host.view
+                .update(cx, |view, cx| view.apply_snapshot(session, cx));
+        });
+    });
+
+    let (line, column, _, _) = view.read_with(cx, |view, _| view.scroll_state_for_test());
+    assert_eq!(line, 20, "外部快照不得把滚动行重置到顶部");
+    assert_eq!(column, 3, "外部快照不得丢弃滚动列");
+}
+
 #[gpui::test]
 fn extreme_restored_scroll_does_not_overflow_editor_painting_or_hit_testing(
     cx: &mut TestAppContext,
