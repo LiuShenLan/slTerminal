@@ -610,7 +610,7 @@ fn error_value(error: JsonRpcError) -> serde_json::Value {
 }
 
 /// Runtime 合同散列唯一推导点：协议散列覆盖域分隔前缀与同一 schema 原始字节。
-fn runtime_contract_hashes() -> (String, String) {
+pub(crate) fn runtime_contract_hashes() -> (String, String) {
     let schema = Sha256::digest(RUNTIME_SCHEMA);
     let mut protocol = Sha256::new();
     protocol.update(PROTOCOL_DOMAIN);

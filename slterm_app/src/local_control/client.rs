@@ -32,6 +32,7 @@ pub(crate) enum HandoverError {
     InvalidResponse,
     ResponseTooLarge,
     MissingHandoverCapability,
+    ContractMismatch,
     HandoverRejected,
     Server {
         code: i32,
@@ -50,6 +51,7 @@ impl fmt::Display for HandoverError {
             Self::MissingHandoverCapability => {
                 formatter.write_str("控制面未声明 instance.handover 能力")
             }
+            Self::ContractMismatch => formatter.write_str("控制面协议合同散列与本实例不一致"),
             Self::HandoverRejected => formatter.write_str("控制面未接受移交"),
             Self::Server { code, domain } => {
                 write!(
@@ -112,6 +114,10 @@ pub(crate) fn handover(
         JsonRpcResponse::Result { result, .. } => result,
         JsonRpcResponse::Error { error, .. } => return Err(server_error(error)),
     };
+    let (protocol_sha256, schema_sha256) = crate::local_control::service::runtime_contract_hashes();
+    if hello.protocol_sha256 != protocol_sha256 || hello.schema_sha256 != schema_sha256 {
+        return Err(HandoverError::ContractMismatch);
+    }
     if !hello
         .capabilities
         .methods

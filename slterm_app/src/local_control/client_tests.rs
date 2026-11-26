@@ -37,7 +37,8 @@ fn credential(value: &str) -> SecretBytes {
 }
 
 fn hello_response() -> HelloResponse {
-    HelloResponse::new("store", "stream", 7, "protocol-hash", "schema-hash")
+    let (protocol_sha256, schema_sha256) = crate::local_control::service::runtime_contract_hashes();
+    HelloResponse::new("store", "stream", 7, protocol_sha256, schema_sha256)
 }
 
 fn start_real_server(
@@ -500,4 +501,17 @@ fn client_invalid_endpoint_or_credential_does_not_connect() {
         listener.accept(),
         Err(ref error) if error.kind() == io::ErrorKind::WouldBlock
     ));
+}
+
+/// hello 的合同散列必须与本实例一致，失配时不得发送 handover。
+#[test]
+fn client_rejects_a_contract_hash_mismatch_before_handover() {
+    let result = call_fake(|mut stream| {
+        let request = read_hello(&mut stream);
+        let mut hello = hello_response();
+        hello.schema_sha256 = "wrong-schema".to_owned();
+        write_json(&mut stream, &JsonRpcResponse::result(request.id, hello));
+        expect_connection_closed(&mut stream);
+    });
+    assert!(matches!(result, Err(HandoverError::ContractMismatch)));
 }
