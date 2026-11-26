@@ -570,6 +570,20 @@ pub(crate) fn notify_terminal_cwd_fallback(cx: &mut App) {
     );
 }
 
+fn workspace_repair_text(count: usize, language: crate::i18n::UiLanguage) -> String {
+    language.format(
+        crate::i18n::Message::NotifyWorkspaceRepairs,
+        &[("count", &count.to_string())],
+    )
+}
+
+/// 启动恢复跳过或修复条目后的聚合提示；不含路径或具体条目。
+pub(crate) fn notify_workspace_repairs(count: usize, cx: &mut App) {
+    let language = cx.global::<crate::app_shell::config::Settings>().language;
+    let text = workspace_repair_text(count, language);
+    crate::notify::deliver_startup_summary(&crate::notify::Notification::ProcessAlert { text }, cx);
+}
+
 pub(crate) fn notify_workspace_recovered(
     notice: crate::persistence::startup::WorkspaceRecoveryNotice,
     cx: &mut App,
@@ -657,9 +671,20 @@ pub(crate) fn notify_document_save_state(
 mod document_save_notice_tests {
     use super::{
         application_close_decision_text, document_save_error_text, document_save_state_text,
+        workspace_repair_text,
     };
     use crate::i18n::{Message, UiLanguage};
     use crate::text_document::SaveError;
+
+    /// 启动恢复聚合提示带计数且不插入路径或具体条目。
+    #[test]
+    fn workspace_repair_notice_states_the_skipped_item_count() {
+        let en = workspace_repair_text(3, UiLanguage::EnUs);
+        assert!(en.contains('3'), "必须显示条目数: {en}");
+        assert!(!en.contains("C:"), "提示不得携带路径: {en}");
+        let zh = workspace_repair_text(3, UiLanguage::ZhCn);
+        assert!(zh.contains('3'), "必须显示条目数: {zh}");
+    }
 
     #[test]
     fn application_close_decision_notice_preserves_document_count() {

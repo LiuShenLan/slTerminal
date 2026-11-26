@@ -54,6 +54,8 @@ pub(crate) struct AppRootPersistence {
     pending_final_sidebar: Option<SidebarState>,
     /// 按机器恢复的窗口几何；只交付一次给开窗链。
     recovered_window_geometry: Option<crate::windowing::geometry::WindowGeometry>,
+    /// 启动恢复中被跳过或修复的条目数；只作聚合提示，不含路径。
+    recovery_warning_count: usize,
 }
 
 impl AppRootPersistence {
@@ -82,6 +84,7 @@ impl AppRootPersistence {
                     .borrow_mut()
                     .extend(SideViewId::ALL);
                 persistence.project_snapshot_recovery_failed = true;
+                persistence.recovery_warning_count += 1;
                 return persistence;
             }
         };
@@ -116,6 +119,7 @@ impl AppRootPersistence {
             Err(error) => {
                 // 恢复失败只保留原记录；没有显式编辑时不得回写空快照。
                 persistence.project_snapshot_recovery_failed = true;
+                persistence.recovery_warning_count += 1;
                 log::warn!("could not restore project snapshot: {error}");
             }
         }
@@ -143,6 +147,7 @@ impl AppRootPersistence {
                             match serde_json::from_value::<MarkdownViewState>(state) {
                                 Ok(state) => persistence.editor_views.restore_markdown(key, state),
                                 Err(error) => {
+                                    persistence.recovery_warning_count += 1;
                                     log::warn!("could not decode Markdown ViewState: {error}");
                                 }
                             }
@@ -151,6 +156,7 @@ impl AppRootPersistence {
                             match serde_json::from_value::<DiffViewState>(state) {
                                 Ok(state) => persistence.editor_views.restore_diff(key, state),
                                 Err(error) => {
+                                    persistence.recovery_warning_count += 1;
                                     log::warn!("could not decode Diff ViewState: {error}");
                                 }
                             }
@@ -158,6 +164,7 @@ impl AppRootPersistence {
                         _ => match serde_json::from_value::<EditorViewState>(state) {
                             Ok(state) => persistence.editor_views.restore(key, state),
                             Err(error) => {
+                                persistence.recovery_warning_count += 1;
                                 log::warn!("could not decode Editor ViewState: {error}");
                             }
                         },
@@ -165,6 +172,7 @@ impl AppRootPersistence {
                 }
                 Ok(None) => {}
                 Err(error) => {
+                    persistence.recovery_warning_count += 1;
                     log::warn!("could not restore Document ViewState: {error}");
                 }
             }
@@ -185,18 +193,21 @@ impl AppRootPersistence {
                     ) {
                         Ok(state) => persistence.settings_views.restore(key, state),
                         Err(error) => {
+                            persistence.recovery_warning_count += 1;
                             log::warn!("could not decode Settings ViewState: {error}");
                         }
                     }
                 }
                 Ok(None) => {}
                 Err(error) => {
+                    persistence.recovery_warning_count += 1;
                     log::warn!("could not restore Settings ViewState: {error}");
                 }
             }
         }
         match store.sidebar_state() {
             Ok(Some(recovery)) => {
+                persistence.recovery_warning_count += recovery.warnings.len();
                 if !recovery.warnings.is_empty() {
                     log::warn!(
                         "sidebar organization recovered with {} repair(s)",
@@ -208,6 +219,7 @@ impl AppRootPersistence {
             Ok(None) => {}
             Err(error) => {
                 // 未发生显式组织编辑时不写回默认态，保留原始记录供诊断。
+                persistence.recovery_warning_count += 1;
                 log::warn!("could not restore sidebar organization: {error}");
             }
         }
@@ -219,18 +231,25 @@ impl AppRootPersistence {
                         persistence.cache.borrow_mut().insert(id, state);
                     }
                     Err(error) => {
+                        persistence.recovery_warning_count += 1;
                         log::warn!("could not decode SideView ViewState: {error:?}");
                         persistence.write_barriers.borrow_mut().insert(id);
                     }
                 },
                 Ok(None) => {}
                 Err(error) => {
+                    persistence.recovery_warning_count += 1;
                     log::warn!("could not restore SideView ViewState: {error}");
                     persistence.write_barriers.borrow_mut().insert(id);
                 }
             }
         }
         persistence
+    }
+
+    /// 启动恢复中被跳过或修复的条目数；只在首次构图提示一次。
+    pub(crate) const fn recovery_warning_count(&self) -> usize {
+        self.recovery_warning_count
     }
 
     pub(crate) fn empty(writer: Option<WorkspaceWriterClient>) -> Self {
@@ -255,6 +274,7 @@ impl AppRootPersistence {
             store_epoch: None,
             pending_final_sidebar: None,
             recovered_window_geometry: None,
+            recovery_warning_count: 0,
         }
     }
 
@@ -898,6 +918,10 @@ mod side_view_state_persistence_tests {
         let persistence = AppRootPersistence::load(&paths, None);
 
         assert!(persistence.project_snapshot_recovery_failed());
+        assert!(
+            persistence.recovery_warning_count() >= 1,
+            "快照恢复失败必须计入聚合提示"
+        );
     }
 
     #[test]
@@ -922,6 +946,7 @@ mod side_view_state_persistence_tests {
             .to_view_state(&registry)
             .unwrap();
         assert_eq!(restored, persisted);
+        assert_eq!(persistence.recovery_warning_count(), 0, "正常恢复不得提示");
         assert!(
             !persistence
                 .write_barriers
@@ -953,6 +978,10 @@ mod side_view_state_persistence_tests {
         drop(connection);
 
         let persistence = AppRootPersistence::load(&paths, None);
+        assert!(
+            persistence.recovery_warning_count() >= 1,
+            "解码失败必须计入聚合提示"
+        );
         assert!(!persistence.cache.borrow().contains_key(&SideViewId::Nav));
         assert!(
             persistence

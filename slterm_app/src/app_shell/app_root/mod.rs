@@ -639,6 +639,12 @@ impl AppRoot {
         root.reconcile_fs_watch();
         root.reconcile_split_dividers(cx);
         root.reconcile_tab_scrolls(None);
+        let repair_count = root.side_view_persistence.recovery_warning_count();
+        if repair_count > 0 {
+            cx.defer(move |cx| {
+                events::notify_workspace_repairs(repair_count, cx);
+            });
+        }
         root
     }
 

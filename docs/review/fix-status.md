@@ -19,7 +19,7 @@
 | Runtime 关闭策略覆盖非最后引用文档 | 待修 |
 | 无项目浮层 Hooks 页没有草稿键 | 待修 |
 | IME 组合期间全局命令仍经 GPUI 键位层派发 | 已修：组合态同步至全局 `ImeComposition`，AppRoot 的 keystroke interceptor 在绑定派发前拦截（提交 420d0044）；测试 `marked_text_toggles_the_ime_command_gate`、`ime_composition_blocks_global_command_dispatch`、`marked_text_keeps_all_keys_off_the_wire` |
-| 布局与侧栏恢复警告只写日志 | 待修 |
+| 布局与侧栏恢复警告只写日志 | 已修：`AppRootPersistence` 聚合恢复跳过／修复计数（快照、侧栏、Editor/Markdown/Diff/Settings/SideView ViewState），AppRoot 首帧经 `notify_workspace_repairs` 以 typed i18n 提示，提示不含路径；测试 `side_view_load_marks_corrupt_state_write_barrier`、`side_view_load_restores_existing_private_state`、`workspace_repair_notice_states_the_skipped_item_count` |
 | 批量/项目关闭遗留 pane 级任务栏与 AgentHub 清理 | 待修 |
 | 活动栏缺少固定底部配置按钮 | 已修：活动栏固定底部 `app-root-settings-button` 复用 `OpenSettings` 命令与唯一浮层，不参与视图组织（提交 d72c614a）；测试 `activity_bar_settings_button_opens_the_settings_overlay` |
 | 浮层已打开时设置入口改开项目面板 | 已修：`settings_overlay` 存在时入口只还焦浮层，项目面板只在浮层关闭后的下一次入口使用（提交 44112ce5）；测试 `integration_settings_singleton` |
