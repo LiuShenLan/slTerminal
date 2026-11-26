@@ -287,6 +287,83 @@ pub(crate) fn insert_json_field(
     Ok(())
 }
 
+/// Hooks 文档读写的封闭失败类别；UI 文案由 typed `Message` 映射，
+/// 编辑域不产出可直接显示的自然语言。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum HooksEditError {
+    ConfigDirUnavailable,
+    ConfigDirMissing,
+    RootNotObject,
+    HooksNotObject,
+    EventNotArray(String),
+    MatcherShapeInvalid(String),
+    MatcherNotObject(String),
+    MatcherHooksMissing(String),
+    HandlerNotObject(String),
+    HandlerTypeInvalid { event: String, allowed: String },
+    HandlerFieldEmpty { event: String, field: &'static str },
+    EventNameInvalid { event: String, allowed: String },
+    JsonSyntax(String),
+    InvalidUtf8,
+    DuplicateKey(String),
+    ExternalModified,
+    LockBusy,
+    BackupFailed(String),
+    Io(String),
+    Serialize(String),
+}
+
+impl std::fmt::Display for HooksEditError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ConfigDirUnavailable => {
+                formatter.write_str("claude config directory unavailable")
+            }
+            Self::ConfigDirMissing => formatter.write_str("claude config directory missing"),
+            Self::RootNotObject => formatter.write_str("config root is not an object"),
+            Self::HooksNotObject => formatter.write_str("hooks subtree is not an object"),
+            Self::EventNotArray(event) => write!(formatter, "event {event} is not an array"),
+            Self::MatcherShapeInvalid(event) => {
+                write!(formatter, "event {event} matcher group is invalid")
+            }
+            Self::MatcherNotObject(event) => {
+                write!(formatter, "event {event} matcher group is not an object")
+            }
+            Self::MatcherHooksMissing(event) => {
+                write!(formatter, "event {event} matcher group lacks hooks")
+            }
+            Self::HandlerNotObject(event) => {
+                write!(formatter, "event {event} handler is not an object")
+            }
+            Self::HandlerTypeInvalid { event, allowed } => {
+                write!(
+                    formatter,
+                    "event {event} handler type invalid (allowed: {allowed})"
+                )
+            }
+            Self::HandlerFieldEmpty { event, field } => {
+                write!(formatter, "event {event} handler field {field} is empty")
+            }
+            Self::EventNameInvalid { event, allowed } => {
+                write!(
+                    formatter,
+                    "event {event} is not allowed (allowed: {allowed})"
+                )
+            }
+            Self::JsonSyntax(detail) => write!(formatter, "hooks json syntax error: {detail}"),
+            Self::InvalidUtf8 => formatter.write_str("hooks file is not valid utf-8"),
+            Self::DuplicateKey(key) => write!(formatter, "hooks file contains duplicate key {key}"),
+            Self::ExternalModified => formatter.write_str("hooks file changed on disk"),
+            Self::LockBusy => formatter.write_str("hooks file is busy"),
+            Self::BackupFailed(detail) => write!(formatter, "hooks backup failed: {detail}"),
+            Self::Io(detail) => write!(formatter, "hooks io failed: {detail}"),
+            Self::Serialize(detail) => write!(formatter, "hooks serialize failed: {detail}"),
+        }
+    }
+}
+
+impl std::error::Error for HooksEditError {}
+
 /// 一份 hooks 编辑文档:可编辑子树 + 安装器认领组只读快照。
 ///
 /// `editable` / `owned` 都是「事件名 → matcher 组数组」对象,只在有组的
@@ -304,39 +381,36 @@ pub(crate) struct HooksDocument {
 impl HooksDocument {
     /// 生产路径:claude 用户层 settings.json。目录不存在(未装 Claude)时
     /// 拒绝进入编辑,不为用户 scaffold 配置树。
-    pub(crate) fn load_user() -> Result<Self, String> {
-        let dir = super::local::claude_config_dir()
-            .ok_or_else(|| "无法解析 Claude 配置目录".to_owned())?;
+    pub(crate) fn load_user() -> Result<Self, HooksEditError> {
+        let dir = super::local::claude_config_dir().ok_or(HooksEditError::ConfigDirUnavailable)?;
         if !dir.is_dir() {
-            return Err("Claude 配置目录不存在;先启动一次 Claude,然后刷新".to_owned());
+            return Err(HooksEditError::ConfigDirMissing);
         }
         Self::load_at(&dir.join("settings.json"))
     }
 
     /// 显式路径加载(设置页注入端与测试 tempdir 假 home)。
-    pub(crate) fn load_at(path: &Path) -> Result<Self, String> {
+    pub(crate) fn load_at(path: &Path) -> Result<Self, HooksEditError> {
         let (root, baseline) = read_root_with_fingerprint(path)?;
-        let root = root
-            .as_object()
-            .ok_or_else(|| "配置文件根必须是 JSON 对象".to_owned())?;
+        let root = root.as_object().ok_or(HooksEditError::RootNotObject)?;
         let hooks = match root.get("hooks") {
             None => serde_json::Map::new(),
             Some(hooks) => hooks
                 .as_object()
                 .cloned()
-                .ok_or_else(|| "hooks 子树必须是 JSON 对象".to_owned())?,
+                .ok_or(HooksEditError::HooksNotObject)?,
         };
         let mut editable = serde_json::Map::new();
         let mut owned = serde_json::Map::new();
         for (event, groups) in hooks {
             let groups = groups
                 .as_array()
-                .ok_or_else(|| format!("事件 {event} 的值必须是数组"))?;
+                .ok_or_else(|| HooksEditError::EventNotArray(event.clone()))?;
             let mut editable_groups = Vec::new();
             let mut owned_groups = Vec::new();
             for group in groups {
                 if group_is_installer_owned(group)
-                    .ok_or_else(|| format!("事件 {event} 的 matcher 组形态非法"))?
+                    .ok_or_else(|| HooksEditError::MatcherShapeInvalid(event.clone()))?
                 {
                     owned_groups.push(group.clone());
                 } else {
@@ -402,15 +476,15 @@ impl HooksDocument {
 
     /// 提交编辑:解析 → 校验 → 锁内重读并比较基线指纹 → 与磁盘现状合并
     /// (认领组原样保留) → 原子写。任何失败零写盘，草稿由调用方保留。
-    pub(crate) fn save_editable(&self, raw: &str) -> Result<(), String> {
-        let editable: Value =
-            serde_json::from_str(raw).map_err(|error| format!("hooks JSON 语法错误: {error}"))?;
+    pub(crate) fn save_editable(&self, raw: &str) -> Result<(), HooksEditError> {
+        let editable: Value = serde_json::from_str(raw)
+            .map_err(|error| HooksEditError::JsonSyntax(error.to_string()))?;
         validate_editable(&editable)?;
         write_editable_at(&self.path, self.baseline, &editable)
     }
 
     /// 保存成功后重读(认领组可能因安装器并发自愈而变化)。
-    pub(crate) fn reload(&self) -> Result<Self, String> {
+    pub(crate) fn reload(&self) -> Result<Self, HooksEditError> {
         Self::load_at(&self.path)
     }
 }
@@ -424,45 +498,43 @@ fn group_is_installer_owned(group: &Value) -> Option<bool> {
 
 /// 语义校验(纯函数):事件名白名单 + 事件类型矩阵的必填字段。
 /// 未知 type、缺失/空白必填字段与形态非法一律拒绝。
-fn validate_editable(hooks: &Value) -> Result<(), String> {
-    let events = hooks
-        .as_object()
-        .ok_or_else(|| "hooks 必须是 JSON 对象".to_owned())?;
+fn validate_editable(hooks: &Value) -> Result<(), HooksEditError> {
+    let events = hooks.as_object().ok_or(HooksEditError::HooksNotObject)?;
     for (event, groups) in events {
         if !CLAUDE_EVENTS.contains(&event.as_str()) {
-            return Err(format!(
-                "非法 hook 事件名: {event}(仅允许: {})",
-                CLAUDE_EVENTS.join(" / ")
-            ));
+            return Err(HooksEditError::EventNameInvalid {
+                event: event.clone(),
+                allowed: CLAUDE_EVENTS.join(" / "),
+            });
         }
         let groups = groups
             .as_array()
-            .ok_or_else(|| format!("事件 {event} 的值必须是数组"))?;
+            .ok_or_else(|| HooksEditError::EventNotArray(event.clone()))?;
         for group in groups {
             let group = group
                 .as_object()
-                .ok_or_else(|| format!("事件 {event} 的 matcher 组必须是对象"))?;
+                .ok_or_else(|| HooksEditError::MatcherNotObject(event.clone()))?;
             let handlers = group
                 .get("hooks")
                 .and_then(Value::as_array)
-                .ok_or_else(|| format!("事件 {event} 的 matcher 组缺少 hooks 数组"))?;
+                .ok_or_else(|| HooksEditError::MatcherHooksMissing(event.clone()))?;
             for handler in handlers {
                 let handler = handler
                     .as_object()
-                    .ok_or_else(|| format!("事件 {event} 的 handler 必须是对象"))?;
+                    .ok_or_else(|| HooksEditError::HandlerNotObject(event.clone()))?;
                 let Some(kind) = handler
                     .get("type")
                     .and_then(Value::as_str)
                     .and_then(HookHandlerType::parse)
                 else {
-                    let allowed = HookHandlerType::ALL
-                        .iter()
-                        .map(|kind| kind.as_str())
-                        .collect::<Vec<_>>()
-                        .join(" / ");
-                    return Err(format!(
-                        "事件 {event} 的 handler type 非法(仅允许: {allowed})"
-                    ));
+                    return Err(HooksEditError::HandlerTypeInvalid {
+                        event: event.clone(),
+                        allowed: HookHandlerType::ALL
+                            .iter()
+                            .map(|kind| kind.as_str())
+                            .collect::<Vec<_>>()
+                            .join(" / "),
+                    });
                 };
                 for field in kind.required_fields() {
                     let value = handler
@@ -470,7 +542,10 @@ fn validate_editable(hooks: &Value) -> Result<(), String> {
                         .and_then(Value::as_str)
                         .unwrap_or_default();
                     if value.trim().is_empty() {
-                        return Err(format!("事件 {event} 的 handler {field} 必须为非空字符串"));
+                        return Err(HooksEditError::HandlerFieldEmpty {
+                            event: event.clone(),
+                            field,
+                        });
                     }
                 }
             }
@@ -484,33 +559,30 @@ type RootRead = (Value, Option<[u8; 32]>, Option<String>);
 
 /// 读根对象、完整文件指纹与原文:缺失 = 首次创建(空对象、无基线、无原文);
 /// 损坏/IO 错误向上传播，不当空配置。
-fn read_root_text(path: &Path) -> Result<RootRead, String> {
+fn read_root_text(path: &Path) -> Result<RootRead, HooksEditError> {
     match std::fs::read(path) {
         Ok(bytes) => {
             let baseline = Some(Sha256::digest(&bytes).into());
-            let text = String::from_utf8(bytes)
-                .map_err(|_| "配置文件不是合法 UTF-8，拒绝编辑".to_owned())?;
+            let text = String::from_utf8(bytes).map_err(|_| HooksEditError::InvalidUtf8)?;
             // 与草稿解析共用严格解析：重复键不得静默覆盖，否则加载结果
             // 与文件语义不一致，保存后旧组永久消失。
             let root = super::draft::parse_hooks_json(&text).map_err(|error| match error {
-                super::draft::DraftParseError::InvalidUtf8 => {
-                    "配置文件不是合法 UTF-8，拒绝编辑".to_owned()
-                }
+                super::draft::DraftParseError::InvalidUtf8 => HooksEditError::InvalidUtf8,
                 super::draft::DraftParseError::InvalidJson(message) => {
-                    format!("配置文件 JSON 损坏，拒绝编辑: {message}")
+                    HooksEditError::JsonSyntax(message)
                 }
                 super::draft::DraftParseError::DuplicateKey(key) => {
-                    format!("配置文件含重复键 {key}，拒绝编辑")
+                    HooksEditError::DuplicateKey(key)
                 }
             })?;
             Ok((root, baseline, Some(text)))
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok((json!({}), None, None)),
-        Err(error) => Err(error.to_string()),
+        Err(error) => Err(HooksEditError::Io(error.to_string())),
     }
 }
 
-fn read_root_with_fingerprint(path: &Path) -> Result<(Value, Option<[u8; 32]>), String> {
+fn read_root_with_fingerprint(path: &Path) -> Result<(Value, Option<[u8; 32]>), HooksEditError> {
     read_root_text(path).map(|(root, baseline, _)| (root, baseline))
 }
 
@@ -521,49 +593,46 @@ fn write_editable_at(
     path: &Path,
     baseline: Option<[u8; 32]>,
     editable: &Value,
-) -> Result<(), String> {
+) -> Result<(), HooksEditError> {
     let _lock = crate::atomic_file::try_lock(path)
-        .map_err(|error| error.to_string())?
-        .ok_or_else(|| "hooks 配置文件正被另一个操作占用，请稍后重试".to_owned())?;
+        .map_err(|error| HooksEditError::Io(error.to_string()))?
+        .ok_or(HooksEditError::LockBusy)?;
     let (mut root, current, original_text) = read_root_text(path)?;
     if draft_write_guard(baseline, current) == DraftWriteGuard::ExternalModified {
-        return Err("hooks 配置文件已被外部修改，请重新加载后再保存".to_owned());
+        return Err(HooksEditError::ExternalModified);
     }
-    let object = root
-        .as_object_mut()
-        .ok_or_else(|| "配置文件根必须是 JSON 对象".to_owned())?;
+    let object = root.as_object_mut().ok_or(HooksEditError::RootNotObject)?;
     let hooks = object.entry("hooks").or_insert_with(|| json!({}));
     let hooks = hooks
         .as_object_mut()
-        .ok_or_else(|| "hooks 子树必须是 JSON 对象".to_owned())?;
+        .ok_or(HooksEditError::HooksNotObject)?;
     for (event, groups) in hooks.iter_mut() {
         let groups = groups
             .as_array_mut()
-            .ok_or_else(|| format!("事件 {event} 的值必须是数组"))?;
+            .ok_or_else(|| HooksEditError::EventNotArray(event.clone()))?;
         // 安装器认领组原位保留;旧用户组整段让位给本次编辑结果。
         groups.retain(|group| group_is_installer_owned(group).unwrap_or(true));
     }
     hooks.retain(|_, groups| !groups.as_array().is_some_and(Vec::is_empty));
-    let events = editable
-        .as_object()
-        .ok_or_else(|| "hooks 必须是 JSON 对象".to_owned())?;
+    let events = editable.as_object().ok_or(HooksEditError::HooksNotObject)?;
     for (event, groups) in events {
         let groups = groups
             .as_array()
-            .ok_or_else(|| format!("事件 {event} 的值必须是数组"))?;
+            .ok_or_else(|| HooksEditError::EventNotArray(event.clone()))?;
         let current = hooks.entry(event.clone()).or_insert_with(|| json!([]));
         let current = current
             .as_array_mut()
-            .ok_or_else(|| format!("事件 {event} 的值必须是数组"))?;
+            .ok_or_else(|| HooksEditError::EventNotArray(event.clone()))?;
         current.extend(groups.iter().cloned());
     }
     let text = replace_hooks_subtree(original_text.as_deref(), &root)?;
     if let Some(original) = &original_text {
         let backup = backup_path(path);
         crate::atomic_file::write(&backup, original.as_bytes())
-            .map_err(|error| format!("hooks 配置备份失败，保留草稿: {error}"))?;
+            .map_err(|error| HooksEditError::BackupFailed(error.to_string()))?;
     }
-    crate::atomic_file::write(path, text.as_bytes()).map_err(|error| error.to_string())
+    crate::atomic_file::write(path, text.as_bytes())
+        .map_err(|error| HooksEditError::Io(error.to_string()))
 }
 
 /// 与 settings_store 同名的 `.bak` 上一代备份。
@@ -578,13 +647,14 @@ fn backup_path(path: &Path) -> PathBuf {
 
 /// 只替换根对象中 hooks 值的字节范围；缺失时在根对象闭合前追加，
 /// 其余字节（键序、空白、其他字段）一律原样保留。
-fn replace_hooks_subtree(original: Option<&str>, root: &Value) -> Result<String, String> {
+fn replace_hooks_subtree(original: Option<&str>, root: &Value) -> Result<String, HooksEditError> {
     let hooks = root.get("hooks").cloned().unwrap_or_else(|| json!({}));
-    let subtree = serde_json::to_string_pretty(&hooks).map_err(|error| error.to_string())?;
+    let subtree = serde_json::to_string_pretty(&hooks)
+        .map_err(|error| HooksEditError::Serialize(error.to_string()))?;
     let Some(original) = original else {
         return Ok(format!("{{\"hooks\":{subtree}}}\n"));
     };
-    let scan = scan_root_object(original).ok_or_else(|| "配置文件根必须是 JSON 对象".to_owned())?;
+    let scan = scan_root_object(original).ok_or(HooksEditError::RootNotObject)?;
     if let Some(range) = scan.hooks {
         return Ok(format!(
             "{}{}{}",
@@ -745,7 +815,10 @@ mod editor_tests {
             r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"a"}]}]},"hooks":{"SessionStart":[]}}"#,
         );
         let error = HooksDocument::load_at(&path).unwrap_err();
-        assert!(error.contains("重复键"), "实际: {error}");
+        assert!(
+            matches!(error, HooksEditError::DuplicateKey(ref key) if key == "hooks"),
+            "实际: {error}"
+        );
     }
 
     #[test]
@@ -901,7 +974,10 @@ mod editor_tests {
         let error = document
             .save_editable(r#"{"Stop":[{"hooks":[{"type":"command","command":"x"}]}]}"#)
             .unwrap_err();
-        assert!(error.contains("备份失败"), "错误必须点明备份失败: {error}");
+        assert!(
+            matches!(error, HooksEditError::BackupFailed(_)),
+            "错误必须是备份失败类别: {error}"
+        );
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
             original,
@@ -921,7 +997,10 @@ mod editor_tests {
         let error = document
             .save_editable(r#"{"Stop":[{"hooks":[{"type":"command","command":"stale"}]}]}"#)
             .unwrap_err();
-        assert!(error.contains("外部修改"), "错误必须点明外部修改: {error}");
+        assert!(
+            matches!(error, HooksEditError::ExternalModified),
+            "错误必须是外部修改类别: {error}"
+        );
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
             external,
@@ -932,7 +1011,10 @@ mod editor_tests {
         let error = document
             .save_editable(r#"{"Stop":[{"hooks":[{"type":"command","command":"stale"}]}]}"#)
             .unwrap_err();
-        assert!(error.contains("外部修改"), "外部删除同样拒绝: {error}");
+        assert!(
+            matches!(error, HooksEditError::ExternalModified),
+            "外部删除同样拒绝: {error}"
+        );
         assert!(!path.exists(), "被外部删除的文件不得被静默重建");
 
         write(&path, external);
@@ -949,31 +1031,35 @@ mod editor_tests {
         write(&path, r#"{"hooks":{}}"#);
         let before = std::fs::read(&path).unwrap();
         let document = HooksDocument::load_at(&path).unwrap();
-        for (invalid, needle) in [
+        type ErrorMatcher = fn(&HooksEditError) -> bool;
+        let cases: [(Value, ErrorMatcher); 6] = [
             (
                 json!({"NotAnEvent": [{"hooks": [{"type": "command", "command": "x"}]}]}),
-                "非法 hook 事件名",
+                |error| matches!(error, HooksEditError::EventNameInvalid { event, .. } if event == "NotAnEvent"),
             ),
             (
                 json!({"Stop": [{"hooks": [{"type": "webhook", "url": "https://x"}]}]}),
-                "handler type 非法",
+                |error| matches!(error, HooksEditError::HandlerTypeInvalid { .. }),
             ),
             (
                 json!({"Stop": [{"hooks": [{"type": "command", "command": "   "}]}]}),
-                "command 必须为非空字符串",
+                |error| matches!(error, HooksEditError::HandlerFieldEmpty { field, .. } if *field == "command"),
             ),
-            (
-                json!({"Stop": [{"hooks": [{"command": "x"}]}]}),
-                "handler type 非法",
-            ),
+            (json!({"Stop": [{"hooks": [{"command": "x"}]}]}), |error| {
+                matches!(error, HooksEditError::HandlerTypeInvalid { .. })
+            }),
             (
                 json!({"Stop": [{"hooks": [{"type": "command"}]}]}),
-                "command 必须为非空字符串",
+                |error| matches!(error, HooksEditError::HandlerFieldEmpty { field, .. } if *field == "command"),
             ),
-            (json!({"Stop": {"hooks": []}}), "值必须是数组"),
-        ] {
+            (
+                json!({"Stop": {"hooks": []}}),
+                |error| matches!(error, HooksEditError::EventNotArray(event) if event == "Stop"),
+            ),
+        ];
+        for (invalid, expected) in cases {
             let error = document.save_editable(&invalid.to_string()).unwrap_err();
-            assert!(error.contains(needle), "错误必须点明原因: {error}");
+            assert!(expected(&error), "错误类别不符: {error}");
             assert_eq!(std::fs::read(&path).unwrap(), before, "校验失败不得落盘");
         }
     }
@@ -1052,7 +1138,7 @@ mod editor_tests {
             let hooks = json!({"Stop": [{"hooks": [handler]}]});
             let error = validate_editable(&hooks).unwrap_err();
             assert!(
-                error.contains(field) && error.contains("必须为非空字符串"),
+                matches!(&error, HooksEditError::HandlerFieldEmpty { field: empty, .. } if *empty == field),
                 "错误必须点明缺失字段 {field}: {error}"
             );
         }
@@ -1068,7 +1154,10 @@ mod editor_tests {
         ] {
             let hooks = json!({"Stop": [{"hooks": [handler]}]});
             let error = validate_editable(&hooks).unwrap_err();
-            assert!(error.contains("handler type 非法"), "{error}");
+            assert!(
+                matches!(error, HooksEditError::HandlerTypeInvalid { .. }),
+                "{error}"
+            );
         }
     }
 
@@ -1077,7 +1166,10 @@ mod editor_tests {
         let (_directory, path) = fixture();
         write(&path, "broken JSON");
         let error = HooksDocument::load_at(&path).unwrap_err();
-        assert!(error.contains("损坏"), "{error}");
+        assert!(
+            matches!(error, HooksEditError::JsonSyntax(_)),
+            "损坏 JSON 必须映射语法错误类别: {error}"
+        );
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "broken JSON");
         write(&path, r#"["not", "an", "object"]"#);
         assert!(HooksDocument::load_at(&path).is_err());

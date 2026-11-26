@@ -21,15 +21,122 @@ use super::settings_overlay::SettingsView;
 use super::task_service::{CancellationToken, TaskId};
 use crate::ai_hook::draft::DraftParseError;
 use crate::ai_hook::draft_host::{HooksDraft, HooksDraftKey, HooksDraftLayer};
-use crate::ai_hook::editor::HooksDocument;
+use crate::ai_hook::editor::{HooksDocument, HooksEditError};
 use crate::i18n::Message;
+
+/// Hooks 页失败类别：页面上下文失败或编辑域封闭失败。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum HooksPageError {
+    ProjectMissing,
+    ConfigDirUnavailable,
+    DocumentNotLoaded,
+    BaselineMissing,
+    Edit(HooksEditError),
+}
+
+fn hooks_edit_error_text(language: crate::i18n::UiLanguage, error: &HooksEditError) -> String {
+    use Message::{
+        SettingsAgentsHooksBackupFailed, SettingsAgentsHooksConfigDirMissing,
+        SettingsAgentsHooksConfigDirUnavailable, SettingsAgentsHooksDuplicateKey,
+        SettingsAgentsHooksEventNameInvalid, SettingsAgentsHooksEventNotArray,
+        SettingsAgentsHooksExternalModified, SettingsAgentsHooksHandlerFieldEmpty,
+        SettingsAgentsHooksHandlerNotObject, SettingsAgentsHooksHandlerTypeInvalid,
+        SettingsAgentsHooksInvalidJson, SettingsAgentsHooksInvalidUtf8,
+        SettingsAgentsHooksIoFailed, SettingsAgentsHooksLockBusy,
+        SettingsAgentsHooksMatcherHooksMissing, SettingsAgentsHooksMatcherNotObject,
+        SettingsAgentsHooksMatcherShapeInvalid, SettingsAgentsHooksRootNotObject,
+        SettingsAgentsHooksSerializeFailed, SettingsAgentsHooksSubtreeNotObject,
+    };
+    match error {
+        HooksEditError::ConfigDirUnavailable => language
+            .text(SettingsAgentsHooksConfigDirUnavailable)
+            .to_owned(),
+        HooksEditError::ConfigDirMissing => language
+            .text(SettingsAgentsHooksConfigDirMissing)
+            .to_owned(),
+        HooksEditError::RootNotObject => language.text(SettingsAgentsHooksRootNotObject).to_owned(),
+        HooksEditError::HooksNotObject => language
+            .text(SettingsAgentsHooksSubtreeNotObject)
+            .to_owned(),
+        HooksEditError::EventNotArray(event) => {
+            language.format(SettingsAgentsHooksEventNotArray, &[("event", event)])
+        }
+        HooksEditError::MatcherShapeInvalid(event) => {
+            language.format(SettingsAgentsHooksMatcherShapeInvalid, &[("event", event)])
+        }
+        HooksEditError::MatcherNotObject(event) => {
+            language.format(SettingsAgentsHooksMatcherNotObject, &[("event", event)])
+        }
+        HooksEditError::MatcherHooksMissing(event) => {
+            language.format(SettingsAgentsHooksMatcherHooksMissing, &[("event", event)])
+        }
+        HooksEditError::HandlerNotObject(event) => {
+            language.format(SettingsAgentsHooksHandlerNotObject, &[("event", event)])
+        }
+        HooksEditError::HandlerTypeInvalid { event, allowed } => language.format(
+            SettingsAgentsHooksHandlerTypeInvalid,
+            &[("event", event), ("allowed", allowed)],
+        ),
+        HooksEditError::HandlerFieldEmpty { event, field } => language.format(
+            SettingsAgentsHooksHandlerFieldEmpty,
+            &[("event", event), ("field", field)],
+        ),
+        HooksEditError::EventNameInvalid { event, allowed } => language.format(
+            SettingsAgentsHooksEventNameInvalid,
+            &[("event", event), ("allowed", allowed)],
+        ),
+        HooksEditError::JsonSyntax(detail) => {
+            language.format(SettingsAgentsHooksInvalidJson, &[("detail", detail)])
+        }
+        HooksEditError::InvalidUtf8 => language.text(SettingsAgentsHooksInvalidUtf8).to_owned(),
+        HooksEditError::DuplicateKey(key) => {
+            language.format(SettingsAgentsHooksDuplicateKey, &[("key", key)])
+        }
+        HooksEditError::ExternalModified => language
+            .text(SettingsAgentsHooksExternalModified)
+            .to_owned(),
+        HooksEditError::LockBusy => language.text(SettingsAgentsHooksLockBusy).to_owned(),
+        HooksEditError::BackupFailed(detail) => {
+            language.format(SettingsAgentsHooksBackupFailed, &[("detail", detail)])
+        }
+        HooksEditError::Io(detail) => {
+            language.format(SettingsAgentsHooksIoFailed, &[("detail", detail)])
+        }
+        HooksEditError::Serialize(detail) => {
+            language.format(SettingsAgentsHooksSerializeFailed, &[("detail", detail)])
+        }
+    }
+}
+
+/// 封闭错误类别 → typed 文案；前台渲染只经此入口。
+fn hooks_error_text(language: crate::i18n::UiLanguage, error: &HooksPageError) -> String {
+    use Message::{
+        SettingsAgentsHooksBaselineMissing, SettingsAgentsHooksConfigDirUnavailable,
+        SettingsAgentsHooksDocumentNotLoaded, SettingsAgentsHooksProjectMissing,
+    };
+    match error {
+        HooksPageError::ProjectMissing => {
+            language.text(SettingsAgentsHooksProjectMissing).to_owned()
+        }
+        HooksPageError::ConfigDirUnavailable => language
+            .text(SettingsAgentsHooksConfigDirUnavailable)
+            .to_owned(),
+        HooksPageError::DocumentNotLoaded => language
+            .text(SettingsAgentsHooksDocumentNotLoaded)
+            .to_owned(),
+        HooksPageError::BaselineMissing => {
+            language.text(SettingsAgentsHooksBaselineMissing).to_owned()
+        }
+        HooksPageError::Edit(error) => hooks_edit_error_text(language, error),
+    }
+}
 
 /// Hooks 编辑器宿主状态：文档（带基线）、在途载入与失败诊断。
 #[derive(Default)]
 pub(super) struct HooksEditorState {
     documents: BTreeMap<HooksDraftKey, HooksDocument>,
     loading: BTreeSet<HooksDraftKey>,
-    errors: BTreeMap<HooksDraftKey, String>,
+    errors: BTreeMap<HooksDraftKey, HooksPageError>,
 }
 
 fn layer_label(layer: HooksDraftLayer) -> Message {
@@ -76,7 +183,7 @@ pub(super) fn render_hooks_page(
     let mut draft_diagnostic: Option<DraftParseError> = None;
     let mut saveable = false;
     let mut dirty = false;
-    let mut error: Option<String> = None;
+    let mut error: Option<HooksPageError> = None;
     let mut owned = 0usize;
     let mut generation = 0u64;
     if let (Some(root), Some(key)) = (root_entity.as_ref(), key) {
@@ -176,13 +283,13 @@ pub(super) fn render_hooks_page(
                     )),
             )
         })
-        .when_some(error, |element, message| {
+        .when_some(error, |element, error| {
             element.child(
                 div()
                     .text_xs()
                     .text_color(cx.theme().danger)
                     .debug_selector(|| "settings-hooks-error".to_owned())
-                    .child(message),
+                    .child(hooks_error_text(language, &error)),
             )
         })
         .child(
@@ -352,15 +459,15 @@ impl AppRoot {
         }
     }
 
-    fn hooks_claude_dir(&self) -> Result<PathBuf, String> {
+    fn hooks_claude_dir(&self) -> Result<PathBuf, HooksPageError> {
         #[cfg(test)]
         if let Some(dir) = &self.hooks_claude_dir_for_test {
             return Ok(dir.clone());
         }
-        crate::ai_hook::claude_config_dir().ok_or_else(|| "无法解析 Claude 配置目录".to_owned())
+        crate::ai_hook::claude_config_dir().ok_or(HooksPageError::ConfigDirUnavailable)
     }
 
-    fn hooks_layer_path(&self, layer: HooksDraftLayer) -> Result<PathBuf, String> {
+    fn hooks_layer_path(&self, layer: HooksDraftLayer) -> Result<PathBuf, HooksPageError> {
         match layer {
             HooksDraftLayer::User => Ok(self.hooks_claude_dir()?.join("settings.json")),
             HooksDraftLayer::Project(project) => {
@@ -368,7 +475,7 @@ impl AppRoot {
                     .snapshot
                     .registry()
                     .project(project)
-                    .ok_or_else(|| "项目不存在".to_owned())?;
+                    .ok_or(HooksPageError::ProjectMissing)?;
                 Ok(project.root().as_path().join(".claude/settings.json"))
             }
             HooksDraftLayer::Local(project) => {
@@ -376,7 +483,7 @@ impl AppRoot {
                     .snapshot
                     .registry()
                     .project(project)
-                    .ok_or_else(|| "项目不存在".to_owned())?;
+                    .ok_or(HooksPageError::ProjectMissing)?;
                 Ok(project.root().as_path().join(".claude/settings.local.json"))
             }
         }
@@ -419,7 +526,9 @@ impl AppRoot {
                         root.hooks_generation = root.hooks_generation.wrapping_add(1);
                     }
                     Err(message) => {
-                        root.hooks_editor.errors.insert(key, message);
+                        root.hooks_editor
+                            .errors
+                            .insert(key, HooksPageError::Edit(message));
                     }
                 }
                 cx.notify();
@@ -458,7 +567,7 @@ impl AppRoot {
         let Some(document) = self.hooks_editor.documents.get(&key).cloned() else {
             self.hooks_editor
                 .errors
-                .insert(key, "Hooks 文档尚未加载".to_owned());
+                .insert(key, HooksPageError::DocumentNotLoaded);
             cx.notify();
             return;
         };
@@ -493,11 +602,13 @@ impl AppRoot {
                         None => {
                             root.hooks_editor
                                 .errors
-                                .insert(key, "保存后无法读取文件基线".to_owned());
+                                .insert(key, HooksPageError::BaselineMissing);
                         }
                     },
                     Err(message) => {
-                        root.hooks_editor.errors.insert(key, message);
+                        root.hooks_editor
+                            .errors
+                            .insert(key, HooksPageError::Edit(message));
                     }
                 }
                 cx.notify();
