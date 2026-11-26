@@ -109,26 +109,42 @@ impl AppRoot {
         let click_root = root.clone();
         let tabs = views.into_iter().enumerate().map(|(index, view)| {
             let mut tab = Tab::new().label(self.tab_title(&view, cx));
-            // CLI 状态来自 AgentHub 仲裁器；只有工作/阻塞需要徽标。
-            let status_color = match &view {
+            // CLI 状态来自 AgentHub 仲裁器；工作=实心圆、阻塞=实心方、完成=空心圆，
+            // 形状与颜色双重区分（不只靠颜色）。
+            let status = match &view {
                 ViewKey::Terminal { terminal_id, .. } => {
-                    match self.terminal_agent_status(*terminal_id, cx) {
-                        crate::ai_agents::AgentStatus::Working => Some(cx.theme().accent),
-                        crate::ai_agents::AgentStatus::Blocked => Some(cx.theme().danger),
-                        _ => None,
-                    }
+                    Some(self.terminal_agent_status(*terminal_id, cx))
                 }
                 _ => None,
             };
-            if let Some(color) = status_color {
-                tab = tab.prefix(
+            let status_badge = match status {
+                Some(crate::ai_agents::AgentStatus::Working) => Some(
                     div()
                         .w(px(6.0))
                         .h(px(6.0))
                         .rounded_full()
-                        .bg(color)
-                        .debug_selector(move || format!("app-root-tab-status-{index}")),
-                );
+                        .bg(cx.theme().accent),
+                ),
+                Some(crate::ai_agents::AgentStatus::Blocked) => Some(
+                    div()
+                        .w(px(6.0))
+                        .h(px(6.0))
+                        .rounded_sm()
+                        .bg(cx.theme().danger),
+                ),
+                Some(crate::ai_agents::AgentStatus::Done) => Some(
+                    div()
+                        .w(px(6.0))
+                        .h(px(6.0))
+                        .rounded_full()
+                        .border_1()
+                        .border_color(cx.theme().foreground),
+                ),
+                _ => None,
+            };
+            if let Some(badge) = status_badge {
+                tab = tab
+                    .prefix(badge.debug_selector(move || format!("app-root-tab-status-{index}")));
             }
             // 共享 Document 脏态直接投影到页签，并提供单面板关闭入口。
             let dirty = match &view {
