@@ -10,10 +10,7 @@
 use std::fmt;
 
 use serde_json::{Map, Value, json};
-use slterm_settings::{
-    BlurMode, CursorShapeName, MAX_PANE_CARD_DIVIDER, MAX_PANE_CARD_GUTTER, MAX_PANE_CARD_RADIUS,
-    Rgb8, Rgba8, ThemeDefinition, ThemeName,
-};
+use slterm_settings::{Rgb8, Rgba8, ThemeDefinition, ThemeName};
 
 /// 当前主题文档 schema 版本;不匹配即拒收(升级走新版本号)。
 pub const SCHEMA_VERSION: u64 = 1;
@@ -210,92 +207,6 @@ impl ThemeDocument {
         definition.ui.info =
             optional_color(ui, "info")?.unwrap_or(definition.terminal.palette.colors[14]);
 
-        let typography = object(&self.value, "typography")?;
-        // 这些字段属于共享模型,即使排版覆盖关闭也要无损往返:
-        // 显式 `ligatures: false` 与 UI 字体选择不因开关而丢失。
-        definition.typography.ligatures = required_bool(typography, "ligatures")?;
-        definition.typography.ui_font_family = optional_string(typography, "ui_font_family")?;
-        definition.typography.ui_font_size =
-            optional_number(typography, "ui_font_size")?.map(|value| value as f32);
-        if typography
-            .get("enabled")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-        {
-            definition.typography.font_family = optional_string(typography, "font_family")?;
-            definition.typography.font_size =
-                optional_number(typography, "font_size")?.map(|value| value as f32);
-            definition.typography.font_weight =
-                optional_number(typography, "font_weight")?.map(|value| value as u16);
-            definition.typography.line_height =
-                optional_number(typography, "line_height")?.map(|value| value as f32);
-            definition.typography.letter_spacing =
-                optional_number(typography, "letter_spacing")?.map(|value| value as f32);
-        }
-
-        let layout = object(&self.value, "layout")?;
-        definition.layout.card.radius = number(layout, "radius")? as f32;
-        definition.layout.card.gutter = number(layout, "gutter")? as f32;
-        definition.layout.card.divider = number(layout, "divider_width")? as f32;
-        definition.layout.card.shadow = layout
-            .get("shadow")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-        definition.layout.padding_x =
-            optional_number(layout, "padding_x")?.map(|value| value as f32);
-        definition.layout.padding_y =
-            optional_number(layout, "padding_y")?.map(|value| value as f32);
-
-        let effects = object(&self.value, "effects")?;
-        definition.effects.opacity = effects
-            .get("opacity")
-            .filter(|value| !value.is_null())
-            .map(|_| number(effects, "opacity").map(|value| value as f32 / 100.0))
-            .transpose()?;
-        // null/缺失 = 跟随内置默认(开启);显式布尔值权威。
-        definition.effects.veil = effects.get("veil").and_then(Value::as_bool);
-        definition.effects.blur = match effects.get("blur") {
-            None | Some(Value::Null) => None,
-            Some(value) => Some(
-                BlurMode::from_settings(value.as_str().ok_or_else(|| {
-                    DocumentError::Invalid("effects.blur must be a string or null".to_owned())
-                })?)
-                .ok_or_else(|| DocumentError::Invalid("effects.blur is invalid".to_owned()))?,
-            ),
-        };
-        definition.effects.cursor_shape = match effects.get("cursor_shape") {
-            None | Some(Value::Null) => None,
-            Some(value) => Some(
-                CursorShapeName::from_settings(value.as_str().ok_or_else(|| {
-                    DocumentError::Invalid(
-                        "effects.cursor_shape must be a string or null".to_owned(),
-                    )
-                })?)
-                .ok_or_else(|| {
-                    DocumentError::Invalid("effects.cursor_shape is invalid".to_owned())
-                })?,
-            ),
-        };
-        definition.effects.background_image = effects
-            .get("background_image")
-            .and_then(Value::as_str)
-            .map(str::to_owned);
-        definition.effects.background_image_opacity = effects
-            .get("background_image_opacity")
-            .filter(|value| !value.is_null())
-            .map(|_| number(effects, "background_image_opacity").map(|value| value as f32 / 100.0))
-            .transpose()?;
-        definition.effects.background_image_fit = effects
-            .get("background_image_fit")
-            .and_then(Value::as_str)
-            .map(str::to_owned);
-        definition.effects.background_image_alignment = effects
-            .get("background_image_alignment")
-            .and_then(Value::as_str)
-            .map(str::to_owned);
-        definition.effects.background_image_cover_chrome = effects
-            .get("background_image_cover_chrome")
-            .and_then(Value::as_bool);
         definition
             .validate()
             .map_err(|error| DocumentError::Invalid(error.to_string()))?;
@@ -311,7 +222,7 @@ impl ThemeDocument {
     pub fn with_definition(&self, definition: &ThemeDefinition) -> Result<Self, DocumentError> {
         let replacement = from_definition(definition)?;
         let mut value = self.value.clone();
-        for key in ["name", "terminal", "ui", "typography", "layout", "effects"] {
+        for key in ["name", "terminal", "ui"] {
             if let Some(next) = replacement.value.get(key) {
                 if let Some(current) = value.get_mut(key) {
                     merge_value(current, next);
@@ -489,44 +400,6 @@ pub fn from_definition(definition: &ThemeDefinition) -> Result<ThemeDocument, Do
             "danger": format_hex_rgb(ui.error),
             "info": format_hex_rgb(ui.info),
         },
-        "typography": {
-            "enabled": definition.typography.font_family.is_some()
-                || definition.typography.font_size.is_some()
-                || definition.typography.font_weight.is_some()
-                || definition.typography.line_height.is_some()
-                || definition.typography.letter_spacing.is_some()
-                || definition.typography.ui_font_family.is_some()
-                || definition.typography.ui_font_size.is_some()
-                || !definition.typography.ligatures,
-            "font_family": definition.typography.font_family.as_deref(),
-            "font_size": definition.typography.font_size,
-            "font_weight": definition.typography.font_weight,
-            "line_height": definition.typography.line_height,
-            "letter_spacing": definition.typography.letter_spacing,
-            "ligatures": definition.typography.ligatures,
-            "ui_font_family": definition.typography.ui_font_family.as_deref(),
-            "ui_font_size": definition.typography.ui_font_size,
-        },
-        "layout": {
-            "padding_x": definition.layout.padding_x,
-            "padding_y": definition.layout.padding_y,
-            "radius": definition.layout.card.radius,
-            "gutter": definition.layout.card.gutter,
-            "shadow": definition.layout.card.shadow,
-            "divider_width": definition.layout.card.divider,
-        },
-        "effects": {
-            "material": if definition.effects.blur.is_some_and(BlurMode::enabled) { "glass" } else { "solid" },
-            "blur": definition.effects.blur.map(BlurMode::settings_value),
-            "opacity": definition.effects.opacity.map(|value| value * 100.0),
-            "veil": definition.effects.veil,
-            "background_image": definition.effects.background_image.as_deref(),
-            "background_image_opacity": definition.effects.background_image_opacity.map(|value| value * 100.0),
-            "background_image_fit": definition.effects.background_image_fit.as_deref(),
-            "background_image_alignment": definition.effects.background_image_alignment.as_deref(),
-            "background_image_cover_chrome": definition.effects.background_image_cover_chrome,
-            "cursor_shape": definition.effects.cursor_shape.map(CursorShapeName::settings_value),
-        },
         "metadata": { "base": definition.base.prompt_name() },
         "extensions": {},
     });
@@ -548,9 +421,6 @@ fn validate_and_normalize(value: &mut Value) -> Result<(), DocumentError> {
             "id",
             "terminal",
             "ui",
-            "typography",
-            "layout",
-            "effects",
             "metadata",
             "extensions",
         ],
@@ -581,12 +451,6 @@ fn validate_and_normalize(value: &mut Value) -> Result<(), DocumentError> {
             .ok_or_else(|| missing("terminal"))?,
     )?;
     validate_ui(root.get_mut("ui").ok_or_else(|| missing("ui"))?)?;
-    validate_typography(
-        root.get("typography")
-            .ok_or_else(|| missing("typography"))?,
-    )?;
-    validate_layout(root.get("layout").ok_or_else(|| missing("layout"))?)?;
-    validate_effects(root.get("effects").ok_or_else(|| missing("effects"))?)?;
     for key in ["metadata", "extensions"] {
         if let Some(value) = root.get(key)
             && !value.is_object()
@@ -693,147 +557,6 @@ fn validate_ui(value: &mut Value) -> Result<(), DocumentError> {
     ] {
         if !object.contains_key(key) {
             return Err(missing(&format!("ui.{key}")));
-        }
-    }
-    Ok(())
-}
-
-fn validate_typography(value: &Value) -> Result<(), DocumentError> {
-    let object = value
-        .as_object()
-        .ok_or_else(|| DocumentError::Invalid("typography must be an object".to_owned()))?;
-    reject_unknown_fields(
-        object,
-        &[
-            "enabled",
-            "font_family",
-            "ui_font_family",
-            "font_size",
-            "ui_font_size",
-            "font_weight",
-            "line_height",
-            "letter_spacing",
-            "ligatures",
-        ],
-        "typography",
-    )?;
-    required_bool(object, "enabled")?;
-    required_bool(object, "ligatures")?;
-    optional_string_with_limit(object, "font_family", 256)?;
-    optional_string_with_limit(object, "ui_font_family", 256)?;
-    optional_bounded_number(object, "font_size", 4.0, 96.0)?;
-    optional_bounded_number(object, "ui_font_size", 10.0, 20.0)?;
-    optional_bounded_integer(object, "font_weight", 100, 900)?;
-    optional_bounded_number(object, "line_height", 0.5, 3.0)?;
-    if object.contains_key("letter_spacing") && !object["letter_spacing"].is_null() {
-        optional_bounded_number(object, "letter_spacing", 0.0, 8.0)?;
-    }
-    Ok(())
-}
-
-fn validate_layout(value: &Value) -> Result<(), DocumentError> {
-    let object = value
-        .as_object()
-        .ok_or_else(|| DocumentError::Invalid("layout must be an object".to_owned()))?;
-    reject_unknown_fields(
-        object,
-        &[
-            "padding_x",
-            "padding_y",
-            "radius",
-            "gutter",
-            "shadow",
-            "divider_width",
-        ],
-        "layout",
-    )?;
-    optional_bounded_number(object, "padding_x", 0.0, 48.0)?;
-    optional_bounded_number(object, "padding_y", 0.0, 40.0)?;
-    bounded_number(object, "radius", 0.0, f64::from(MAX_PANE_CARD_RADIUS))?;
-    bounded_number(object, "gutter", 0.0, f64::from(MAX_PANE_CARD_GUTTER))?;
-    bounded_number(
-        object,
-        "divider_width",
-        0.0,
-        f64::from(MAX_PANE_CARD_DIVIDER),
-    )
-}
-
-fn validate_effects(value: &Value) -> Result<(), DocumentError> {
-    let object = value
-        .as_object()
-        .ok_or_else(|| DocumentError::Invalid("effects must be an object".to_owned()))?;
-    reject_unknown_fields(
-        object,
-        &[
-            "material",
-            "blur",
-            "opacity",
-            "veil",
-            "background_image",
-            "background_image_opacity",
-            "background_image_fit",
-            "background_image_alignment",
-            "background_image_cover_chrome",
-            "cursor_shape",
-        ],
-        "effects",
-    )?;
-    let material = required_string(object, "material", 16)?;
-    if !matches!(material, "solid" | "glass") {
-        return Err(DocumentError::Invalid(
-            "effects.material must be solid or glass".to_owned(),
-        ));
-    }
-    if object.contains_key("opacity") && !object["opacity"].is_null() {
-        bounded_number(object, "opacity", 0.0, 100.0)?;
-    }
-    if let Some(blur) = object.get("blur")
-        && !blur.is_null()
-    {
-        let blur = blur.as_str().ok_or_else(|| {
-            DocumentError::Invalid("effects.blur must be a string or null".to_owned())
-        })?;
-        if BlurMode::from_settings(blur).is_none() {
-            return Err(DocumentError::Invalid("effects.blur is invalid".to_owned()));
-        }
-    }
-    // null = 继承用户壁纸;空路径 = 显式移除。其它特效字符串保持非空契约。
-    if !object
-        .get("background_image")
-        .is_some_and(|value| value.as_str() == Some(""))
-    {
-        optional_string_with_limit(object, "background_image", 4096)?;
-    }
-    optional_string_with_limit(object, "background_image_fit", 64)?;
-    optional_string_with_limit(object, "background_image_alignment", 64)?;
-    optional_bounded_number(object, "background_image_opacity", 0.0, 100.0)?;
-    if let Some(value) = object.get("background_image_cover_chrome")
-        && !value.is_null()
-        && !value.is_boolean()
-    {
-        return Err(DocumentError::Invalid(
-            "effects.background_image_cover_chrome must be boolean or null".to_owned(),
-        ));
-    }
-    if let Some(value) = object.get("veil")
-        && !value.is_null()
-        && !value.is_boolean()
-    {
-        return Err(DocumentError::Invalid(
-            "effects.veil must be boolean or null".to_owned(),
-        ));
-    }
-    if let Some(cursor_shape) = object.get("cursor_shape")
-        && !cursor_shape.is_null()
-    {
-        let cursor_shape = cursor_shape.as_str().ok_or_else(|| {
-            DocumentError::Invalid("effects.cursor_shape must be a string or null".to_owned())
-        })?;
-        if CursorShapeName::from_settings(cursor_shape).is_none() {
-            return Err(DocumentError::Invalid(
-                "effects.cursor_shape is invalid".to_owned(),
-            ));
         }
     }
     Ok(())
@@ -1177,6 +900,40 @@ mod document_tests {
     use super::*;
 
     #[test]
+    fn pure_color_documents_are_accepted_without_non_color_sections() {
+        let mut value = builtin_document(ThemeName::Nord).unwrap().to_value();
+        let object = value.as_object_mut().unwrap();
+        object.remove("typography");
+        object.remove("layout");
+        object.remove("effects");
+        let document = ThemeDocument::from_value(value).expect("纯颜色主题必须可导入");
+        assert_eq!(document.definition().unwrap().name, "Nord");
+    }
+
+    #[test]
+    fn generated_documents_carry_only_colors_and_ansi() {
+        let document = builtin_document(ThemeName::Linear).unwrap();
+        let value = document.to_value();
+        for legacy in ["typography", "layout", "effects"] {
+            assert!(
+                value.get(legacy).is_none(),
+                "主题文档不得携带非颜色区段 {legacy}"
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_non_color_sections_are_rejected_as_unknown_fields() {
+        let mut value = builtin_document(ThemeName::Nord).unwrap().to_value();
+        value["typography"] = json!({ "enabled": false, "ligatures": true });
+        let error = ThemeDocument::from_value(value).unwrap_err();
+        assert!(
+            error.to_string().contains("typography"),
+            "旧非颜色区段必须按未知字段拒绝: {error}"
+        );
+    }
+
+    #[test]
     fn builtins_produce_one_valid_document_per_catalog_entry() {
         let documents = builtin_documents();
         assert_eq!(documents.len(), ThemeName::BUILTIN.len());
@@ -1235,29 +992,15 @@ mod document_tests {
     #[test]
     fn definition_round_trips_through_the_envelope_losslessly() {
         let mut source = ThemeDefinition::from_builtin(ThemeName::CatppuccinMocha);
-        source.typography.letter_spacing = Some(2.5);
-        source.typography.font_weight = Some(600);
-        source.layout.card.radius = 18.0;
-        source.layout.card.gutter = 10.0;
-        source.layout.card.divider = 2.0;
-        source.layout.padding_x = Some(12.0);
-        source.layout.padding_y = Some(6.0);
-        source.effects.blur = Some(BlurMode::Acrylic);
-        source.effects.veil = Some(false);
+        source.terminal.cursor = Some([1, 2, 3]);
+        source.terminal.selection_background = Some([4, 5, 6]);
+        source.ui.selection = [9, 8, 7, 0x40];
         let document = from_definition(&source).unwrap();
         let decoded = document.definition().unwrap();
         assert_eq!(decoded.name, source.name);
         assert_eq!(decoded.base, source.base);
         assert_eq!(decoded.terminal, source.terminal);
         assert_eq!(decoded.ui, source.ui);
-        assert_eq!(decoded.typography, source.typography);
-        assert_eq!(decoded.layout, source.layout);
-        assert_eq!(decoded.effects, source.effects);
-        assert_eq!(
-            document.to_value()["typography"]["enabled"].as_bool(),
-            Some(true),
-            "非空排版字段必须自动开启 typography.enabled"
-        );
         assert_eq!(
             document.color("terminal", "background"),
             Some(source.terminal.background)
@@ -1270,32 +1013,6 @@ mod document_tests {
         let updated = document.with_definition(&edited).unwrap();
         assert_eq!(updated.definition().unwrap().terminal.foreground, [1, 2, 3]);
         assert_eq!(updated.to_value()["extensions"]["vendor"]["x"], 1);
-    }
-
-    /// 非聚焦 pane 压暗开关经文档往返;缺省 null 保持「未设置」语义。
-    #[test]
-    fn pane_veil_round_trips_absent_and_explicit_values() {
-        let mut definition = ThemeDefinition::from_builtin(ThemeName::Nord);
-        let document = from_definition(&definition).unwrap();
-        assert_eq!(document.to_value()["effects"]["veil"], Value::Null);
-        assert_eq!(document.definition().unwrap().effects.veil, None);
-
-        for veil in [false, true] {
-            definition.effects.veil = Some(veil);
-            let document = from_definition(&definition).unwrap();
-            assert_eq!(document.to_value()["effects"]["veil"].as_bool(), Some(veil));
-            let bytes = document.to_json_bytes().unwrap();
-            let decoded = ThemeDocument::from_json_bytes(&bytes).unwrap();
-            assert_eq!(decoded.definition().unwrap().effects.veil, Some(veil));
-        }
-
-        // 非布尔值是信封错误,不静默折算成默认值。
-        let mut value = from_definition(&definition).unwrap().to_value();
-        value["effects"]["veil"] = json!("off");
-        assert!(matches!(
-            ThemeDocument::from_value(value),
-            Err(DocumentError::Invalid(message)) if message.contains("effects.veil")
-        ));
     }
 
     #[test]

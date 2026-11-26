@@ -6,10 +6,7 @@
 
 use core::fmt;
 
-use crate::{
-    BlurMode, CursorShapeName, ExactTermColors, MAX_PANE_CARD_DIVIDER, MAX_PANE_CARD_GUTTER,
-    MAX_PANE_CARD_RADIUS, Rgb8, Rgba8, ThemeCardGeometry, ThemeName, format_hex_rgb, parse_hex_rgb,
-};
+use crate::{ExactTermColors, Rgb8, Rgba8, ThemeName, format_hex_rgb, parse_hex_rgb};
 
 /// 完整用户主题。`base` 记录起点内置主题快照的元数据,不建运行时继承链;
 /// 克隆定义自含全部字符串与数组。
@@ -19,9 +16,6 @@ pub struct ThemeDefinition {
     pub base: ThemeName,
     pub terminal: TerminalThemeColors,
     pub ui: ThemeUiColors,
-    pub typography: ThemeTypography,
-    pub layout: ThemeLayout,
-    pub effects: ThemeEffects,
 }
 
 impl ThemeDefinition {
@@ -57,13 +51,6 @@ impl ThemeDefinition {
                 palette: indexed,
             },
             ui: ThemeUiColors::from_palette(palette),
-            typography: ThemeTypography::default(),
-            layout: ThemeLayout {
-                card: base.card_geometry(),
-                padding_x: None,
-                padding_y: None,
-            },
-            effects: ThemeEffects::default(),
         }
     }
 
@@ -84,9 +71,6 @@ impl ThemeDefinition {
         if self.name.chars().any(char::is_control) {
             return Err(ThemeValidationError::NameContainsControlCharacter);
         }
-        self.typography.validate()?;
-        self.layout.validate()?;
-        self.effects.validate()?;
         Ok(())
     }
 
@@ -336,169 +320,7 @@ impl ThemeUiColors {
     }
 }
 
-/// 可选排版覆盖;`None` 保留用户全局设置(「显式值权威」同构)。
-#[derive(Clone, Debug, PartialEq)]
-pub struct ThemeTypography {
-    pub font_family: Option<String>,
-    pub font_size: Option<f32>,
-    pub line_height: Option<f32>,
-    pub letter_spacing: Option<f32>,
-    pub font_weight: Option<u16>,
-    /// 终端文本塑形是否可用连字。内置主题保持既有开启默认;导入文档
-    /// 可显式关闭且不在 JSON 边界丢失该选择。
-    pub ligatures: bool,
-    /// 可选 UI/chrome 字体覆盖;值模型保留它使导入导出往返无损。
-    pub ui_font_family: Option<String>,
-    pub ui_font_size: Option<f32>,
-}
-
-impl Default for ThemeTypography {
-    fn default() -> Self {
-        Self {
-            font_family: None,
-            font_size: None,
-            line_height: None,
-            letter_spacing: None,
-            font_weight: None,
-            ligatures: true,
-            ui_font_family: None,
-            ui_font_size: None,
-        }
-    }
-}
-
-impl ThemeTypography {
-    fn validate(&self) -> Result<(), ThemeValidationError> {
-        if self.font_family.as_deref().is_some_and(|family| {
-            family.trim().is_empty()
-                || family.len() > MAX_FONT_FAMILY_BYTES
-                || family.chars().any(char::is_control)
-        }) {
-            return Err(ThemeValidationError::InvalidFontFamily);
-        }
-        if self.ui_font_family.as_deref().is_some_and(|family| {
-            family.trim().is_empty()
-                || family.len() > MAX_FONT_FAMILY_BYTES
-                || family.chars().any(char::is_control)
-        }) {
-            return Err(ThemeValidationError::InvalidUiFontFamily);
-        }
-        if self
-            .font_size
-            .is_some_and(|size| !size.is_finite() || !(4.0..=96.0).contains(&size))
-        {
-            return Err(ThemeValidationError::InvalidFontSize);
-        }
-        if self.line_height.is_some_and(|line_height| {
-            !line_height.is_finite() || !(0.5..=3.0).contains(&line_height)
-        }) {
-            return Err(ThemeValidationError::InvalidLineHeight);
-        }
-        if self
-            .letter_spacing
-            .is_some_and(|spacing| !spacing.is_finite() || !(0.0..=8.0).contains(&spacing))
-        {
-            return Err(ThemeValidationError::InvalidLetterSpacing);
-        }
-        if self
-            .font_weight
-            .is_some_and(|weight| !(100..=900).contains(&weight))
-        {
-            return Err(ThemeValidationError::InvalidFontWeight);
-        }
-        if self
-            .ui_font_size
-            .is_some_and(|size| !size.is_finite() || !(10.0..=20.0).contains(&size))
-        {
-            return Err(ThemeValidationError::InvalidUiFontSize);
-        }
-        Ok(())
-    }
-}
-
-/// 属于主题而非用户窗口尺寸的布局值。
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct ThemeLayout {
-    pub card: ThemeCardGeometry,
-    pub padding_x: Option<f32>,
-    pub padding_y: Option<f32>,
-}
-
-impl ThemeLayout {
-    fn validate(&self) -> Result<(), ThemeValidationError> {
-        let card = self.card;
-        if !card.radius.is_finite() || !(0.0..=MAX_PANE_CARD_RADIUS).contains(&card.radius) {
-            return Err(ThemeValidationError::InvalidLayoutRadius);
-        }
-        if !card.gutter.is_finite() || !(0.0..=MAX_PANE_CARD_GUTTER).contains(&card.gutter) {
-            return Err(ThemeValidationError::InvalidLayoutGutter);
-        }
-        if !card.divider.is_finite() || !(0.0..=MAX_PANE_CARD_DIVIDER).contains(&card.divider) {
-            return Err(ThemeValidationError::InvalidLayoutDivider);
-        }
-        if self
-            .padding_x
-            .is_some_and(|padding| !padding.is_finite() || !(0.0..=48.0).contains(&padding))
-        {
-            return Err(ThemeValidationError::InvalidLayoutPaddingX);
-        }
-        if self
-            .padding_y
-            .is_some_and(|padding| !padding.is_finite() || !(0.0..=40.0).contains(&padding))
-        {
-            return Err(ThemeValidationError::InvalidLayoutPaddingY);
-        }
-        Ok(())
-    }
-}
-
-/// 可选视觉特效;路径与 fit/alignment 是渲染层负责的原文值。
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct ThemeEffects {
-    pub opacity: Option<f32>,
-    pub blur: Option<BlurMode>,
-    /// 非聚焦窗格是否绘制压暗层;`None` = 跟随内置默认(开启)。
-    pub veil: Option<bool>,
-    pub cursor_shape: Option<CursorShapeName>,
-    pub background_image: Option<String>,
-    pub background_image_opacity: Option<f32>,
-    pub background_image_fit: Option<String>,
-    pub background_image_alignment: Option<String>,
-    pub background_image_cover_chrome: Option<bool>,
-}
-
-impl ThemeEffects {
-    fn validate(&self) -> Result<(), ThemeValidationError> {
-        if self
-            .opacity
-            .is_some_and(|opacity| !opacity.is_finite() || !(0.0..=1.0).contains(&opacity))
-        {
-            return Err(ThemeValidationError::InvalidOpacity);
-        }
-        if self
-            .background_image_opacity
-            .is_some_and(|opacity| !opacity.is_finite() || !(0.0..=1.0).contains(&opacity))
-        {
-            return Err(ThemeValidationError::InvalidBackgroundImageOpacity);
-        }
-        for value in [
-            self.background_image.as_deref(),
-            self.background_image_fit.as_deref(),
-            self.background_image_alignment.as_deref(),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            if value.chars().any(char::is_control) {
-                return Err(ThemeValidationError::InvalidEffectText);
-            }
-        }
-        Ok(())
-    }
-}
-
 const MAX_THEME_NAME_BYTES: usize = 128;
-const MAX_FONT_FAMILY_BYTES: usize = 256;
 
 /// 主题不能安全应用或导出的原因。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -506,21 +328,6 @@ pub enum ThemeValidationError {
     EmptyName,
     NameTooLong,
     NameContainsControlCharacter,
-    InvalidFontFamily,
-    InvalidFontSize,
-    InvalidLineHeight,
-    InvalidLetterSpacing,
-    InvalidFontWeight,
-    InvalidUiFontFamily,
-    InvalidUiFontSize,
-    InvalidLayoutRadius,
-    InvalidLayoutGutter,
-    InvalidLayoutDivider,
-    InvalidLayoutPaddingX,
-    InvalidLayoutPaddingY,
-    InvalidOpacity,
-    InvalidBackgroundImageOpacity,
-    InvalidEffectText,
 }
 
 impl fmt::Display for ThemeValidationError {
@@ -529,27 +336,6 @@ impl fmt::Display for ThemeValidationError {
             Self::EmptyName => "theme name is empty",
             Self::NameTooLong => "theme name is too long",
             Self::NameContainsControlCharacter => "theme name contains a control character",
-            Self::InvalidFontFamily => {
-                "font family is empty, too long, or contains a control character"
-            }
-            Self::InvalidFontSize => "font size must be finite and between 4 and 96",
-            Self::InvalidLineHeight => "line height must be finite and between 0.5 and 3",
-            Self::InvalidLetterSpacing => "letter spacing must be finite and between 0 and 8",
-            Self::InvalidFontWeight => "font weight must be between 100 and 900",
-            Self::InvalidUiFontFamily => {
-                "UI font family is empty, too long, or contains a control character"
-            }
-            Self::InvalidUiFontSize => "UI font size must be finite and between 10 and 20",
-            Self::InvalidLayoutRadius => "card radius is outside the shared pane range",
-            Self::InvalidLayoutGutter => "card gutter is outside the shared pane range",
-            Self::InvalidLayoutDivider => "card divider is outside the shared pane range",
-            Self::InvalidLayoutPaddingX => "horizontal layout padding is outside the theme range",
-            Self::InvalidLayoutPaddingY => "vertical layout padding is outside the theme range",
-            Self::InvalidOpacity => "opacity must be finite and between 0 and 1",
-            Self::InvalidBackgroundImageOpacity => {
-                "background image opacity must be finite and between 0 and 1"
-            }
-            Self::InvalidEffectText => "effect text contains a control character",
         };
         f.write_str(message)
     }
@@ -747,74 +533,6 @@ mod custom_theme_tests {
             (
                 |theme| theme.name = "a\u{7}".into(),
                 ThemeValidationError::NameContainsControlCharacter,
-            ),
-            (
-                |theme| theme.typography.font_family = Some("  ".into()),
-                ThemeValidationError::InvalidFontFamily,
-            ),
-            (
-                |theme| theme.typography.font_size = Some(2.0),
-                ThemeValidationError::InvalidFontSize,
-            ),
-            (
-                |theme| theme.typography.font_size = Some(f32::NAN),
-                ThemeValidationError::InvalidFontSize,
-            ),
-            (
-                |theme| theme.typography.line_height = Some(4.0),
-                ThemeValidationError::InvalidLineHeight,
-            ),
-            (
-                |theme| theme.typography.letter_spacing = Some(9.0),
-                ThemeValidationError::InvalidLetterSpacing,
-            ),
-            (
-                |theme| theme.typography.font_weight = Some(50),
-                ThemeValidationError::InvalidFontWeight,
-            ),
-            (
-                |theme| theme.typography.ui_font_family = Some(String::new()),
-                ThemeValidationError::InvalidUiFontFamily,
-            ),
-            (
-                |theme| theme.typography.ui_font_size = Some(30.0),
-                ThemeValidationError::InvalidUiFontSize,
-            ),
-            (
-                |theme| theme.layout.card.radius = 99.0,
-                ThemeValidationError::InvalidLayoutRadius,
-            ),
-            (
-                |theme| theme.layout.card.gutter = 99.0,
-                ThemeValidationError::InvalidLayoutGutter,
-            ),
-            (
-                |theme| theme.layout.card.divider = 99.0,
-                ThemeValidationError::InvalidLayoutDivider,
-            ),
-            (
-                |theme| theme.layout.padding_x = Some(49.0),
-                ThemeValidationError::InvalidLayoutPaddingX,
-            ),
-            (
-                |theme| theme.layout.padding_y = Some(41.0),
-                ThemeValidationError::InvalidLayoutPaddingY,
-            ),
-            (
-                |theme| theme.effects.opacity = Some(f32::NAN),
-                ThemeValidationError::InvalidOpacity,
-            ),
-            (
-                |theme| theme.effects.opacity = Some(1.5),
-                ThemeValidationError::InvalidOpacity,
-            ),
-            (
-                |theme| theme.effects.background_image_opacity = Some(-0.1),
-                ThemeValidationError::InvalidBackgroundImageOpacity,
-            ),
-            (
-                |theme| theme.effects.background_image_fit = Some("a\nb".into()),
-                ThemeValidationError::InvalidEffectText,
             ),
         ];
         for (mutate, expected) in cases {

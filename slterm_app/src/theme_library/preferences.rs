@@ -63,8 +63,9 @@ pub(crate) fn custom_theme_updates(
             DocumentError::Invalid("applying a custom theme requires a saved library id".to_owned())
         })?;
     let definition = document.definition()?;
-    let card = definition.layout.card;
-    let mut updates = vec![
+    // 主题只应用身份、基础主题与显式前景覆盖;字体、字号、材质、卡片几何、
+    // 光标形状与壁纸始终由用户设置拥有。
+    let updates = vec![
         ("custom_theme", Value::String(id.to_owned())),
         (
             "theme",
@@ -74,48 +75,7 @@ pub(crate) fn custom_theme_updates(
             "theme_foreground",
             foreground.map_or(Value::Null, |color| Value::String(format_hex_rgb(color))),
         ),
-        ("pane_card_radius", Value::Number(f64::from(card.radius))),
-        ("pane_card_gutter", Value::Number(f64::from(card.gutter))),
-        ("pane_card_shadow", Value::Bool(card.shadow)),
-        ("pane_card_divider", Value::Number(f64::from(card.divider))),
     ];
-    if let Some(family) = definition.typography.font_family {
-        updates.push(("font_family", Value::String(family)));
-    }
-    if let Some(size) = definition.typography.font_size {
-        updates.push(("font_size", Value::Number(f64::from(size))));
-    }
-    if let Some(opacity) = definition.effects.opacity {
-        updates.push(("opacity", Value::Number(f64::from(opacity))));
-    }
-    if let Some(blur) = definition.effects.blur {
-        updates.push(("blur", Value::String(blur.settings_value().to_owned())));
-    }
-    if let Some(shape) = definition.effects.cursor_shape {
-        updates.push((
-            "cursor_shape",
-            Value::String(shape.settings_value().to_owned()),
-        ));
-    }
-    if let Some(path) = definition.effects.background_image {
-        // 显式空路径 = 移除壁纸;None = 保留个人偏好(纯配色主题)。
-        updates.push(("background_image", Value::String(path)));
-    }
-    if let Some(opacity) = definition.effects.background_image_opacity {
-        updates.push((
-            "background_image_opacity",
-            Value::Number(f64::from(opacity)),
-        ));
-    }
-    if let Some(fit) = definition.effects.background_image_fit {
-        updates.push(("background_image_fit", Value::String(fit)));
-    }
-    if let Some(alignment) = definition.effects.background_image_alignment {
-        updates.push(("background_image_alignment", Value::String(alignment)));
-    }
-    if let Some(cover) = definition.effects.background_image_cover_chrome {
-        updates.push(("background_image_cover_chrome", Value::Bool(cover)));
-    }
     Ok(updates)
 }
 
@@ -139,27 +99,24 @@ mod preferences_tests {
     }
 
     #[test]
-    fn applying_a_theme_replaces_the_matching_personal_overrides_together() {
+    fn applying_a_theme_writes_only_theme_keys_and_keeps_personal_appearance() {
         let (_directory, path, store) = fixture();
-        let mut definition = ThemeDefinition::from_builtin(ThemeName::Nord);
-        definition.terminal.foreground = [0xdd, 0xcc, 0xbb];
-        definition.typography.font_size = Some(18.0);
-        definition.typography.font_family = Some("Cascadia Code".to_owned());
-        definition.effects.opacity = Some(0.7);
-        definition.effects.blur = Some(slterm_settings::BlurMode::Acrylic);
-        definition.layout.card.radius = 12.0;
-        definition.layout.card.gutter = 8.0;
+        let definition = ThemeDefinition::from_builtin(ThemeName::Nord);
         let document = store
             .import(&from_definition(&definition).unwrap())
             .unwrap();
-        let updates = custom_theme_updates(&document, None).unwrap();
-
-        let document_path = store.path_for(document.id().unwrap()).unwrap();
         std::fs::write(
             &path,
-            r##"{"appearance":{"font_size":14,"font_family":"Old Font","opacity":1,"blur":"none","pane_card_radius":0,"theme_foreground":"#ffffff"}}"##,
+            r##"{"appearance":{"font_size":14,"font_family":"Old Font","opacity":0.5,"blur":"none","pane_card_radius":2,"theme_foreground":"#ffffff"}}"##,
         )
         .unwrap();
+        let foreground = [0xf0, 0xd0, 0xa0];
+        let updates = custom_theme_updates(&document, Some(foreground)).unwrap();
+        assert_eq!(
+            updates.iter().map(|(key, _)| *key).collect::<Vec<_>>(),
+            ["custom_theme", "theme", "theme_foreground"],
+            "主题应用不得改写字体、材质、卡片几何或其他非颜色键"
+        );
         let revision = load_at(&path).unwrap();
         let revision = save_at(&path, &revision, &updates).unwrap();
         assert_eq!(load_at(&path).unwrap(), revision);
@@ -167,14 +124,13 @@ mod preferences_tests {
         let runtime = runtime(&path);
         assert_eq!(runtime.custom_theme.as_deref(), document.id());
         assert_eq!(runtime.theme, ThemeName::Nord);
-        assert_eq!(runtime.theme_foreground, None);
-        assert_eq!(runtime.font_size_px, Some(18.0));
-        assert_eq!(runtime.font_family.as_deref(), Some("Cascadia Code"));
-        assert_eq!(runtime.opacity, 0.7);
-        assert_eq!(runtime.blur, slterm_settings::BlurMode::Acrylic);
-        assert_eq!(runtime.pane_card_radius, Some(12.0));
-        assert_eq!(runtime.pane_card_gutter, Some(8.0));
-        assert!(document_path.exists());
+        assert_eq!(runtime.theme_foreground, Some(foreground));
+        // 个人外观值逐项保留。
+        assert_eq!(runtime.font_size_px, Some(14.0));
+        assert_eq!(runtime.font_family.as_deref(), Some("Old Font"));
+        assert!((runtime.opacity - 0.5).abs() < 1e-6);
+        assert_eq!(runtime.blur, slterm_settings::BlurMode::None);
+        assert_eq!(runtime.pane_card_radius, Some(2.0));
     }
 
     #[test]
