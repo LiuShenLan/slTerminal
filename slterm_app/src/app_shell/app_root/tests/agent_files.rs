@@ -337,6 +337,26 @@ fn agent_root_capability_union_and_revoke(cx: &mut TestAppContext) {
             "可写 Agent 根必须提供保存授权"
         );
     });
+    // 关闭保存必须复用同一能力并集，而不是只从项目根派生授权。
+    let close_intent = slterm_workspace::CloseIntent::new(
+        vec![slterm_workspace::CloseObject {
+            id: slterm_workspace::CloseTarget::Document(document),
+            generation: 0,
+            decision: slterm_workspace::CloseDecision::Save,
+        }],
+        [1; 32],
+    )
+    .unwrap();
+    root.read_with(cx, |root, _| {
+        let grants = root.document_close_grants(&close_intent);
+        let grants = grants
+            .get(&document)
+            .expect("关闭意图中的文档必须有授权集合");
+        assert!(
+            PathPolicy::authorize(&write_request, &resolved, grants, 0).is_ok(),
+            "批量/项目/应用关闭保存必须叠加可写 Agent 根"
+        );
+    });
 
     root.update(cx, |root, _| {
         root.replace_custom_agent_roots_for_test(Vec::new());
@@ -346,6 +366,16 @@ fn agent_root_capability_union_and_revoke(cx: &mut TestAppContext) {
         assert!(
             PathPolicy::authorize(&write_request, &resolved, &grants, 0).is_err(),
             "撤销可写根后保存必须失去写授权"
+        );
+    });
+    root.read_with(cx, |root, _| {
+        let grants = root.document_close_grants(&close_intent);
+        let grants = grants
+            .get(&document)
+            .expect("关闭意图中的文档必须有授权集合");
+        assert!(
+            PathPolicy::authorize(&write_request, &resolved, grants, 0).is_err(),
+            "撤销可写根后关闭保存同样失去授权"
         );
     });
 }

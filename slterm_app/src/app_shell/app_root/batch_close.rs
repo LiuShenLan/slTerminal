@@ -977,24 +977,8 @@ impl AppRoot {
                 CloseTarget::Document(id) if object.decision == CloseDecision::Save => Some(id),
                 _ => None,
             })
-            .map(|id| {
-                let grants = self
-                    .snapshot
-                    .registry()
-                    .projects()
-                    .iter()
-                    .filter(|project| {
-                        project.layout().view_keys().iter().any(|view| match view {
-                            ViewKey::Editor { document_id, .. }
-                            | ViewKey::Markdown { document_id, .. }
-                            | ViewKey::Diff { document_id, .. } => *document_id == id,
-                            _ => false,
-                        })
-                    })
-                    .map(|project| slterm_path::PathGrant::project_root(project.root().clone()))
-                    .collect();
-                (id, grants)
-            })
+            // 关闭保存与普通保存共用同一能力并集（项目根 + 可写 AgentRoot）。
+            .map(|id| (id, self.document_grants(id)))
             .collect()
     }
 
