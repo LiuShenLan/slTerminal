@@ -86,7 +86,7 @@
 | Hooks 草稿任务身份只含面板 | 待修 |
 | statusline 用量桥接与信号通道整体缺失 | 待修 |
 | 追溯矩阵与进度把未接线的生产链记为已自动化/已验收 | 待修 |
-| Hooks 页面错误文案硬编码中文 | 待修 |
+| Hooks 页面错误文案硬编码中文 | 已修：编辑域返回封闭 `HooksEditError`，页面包装 `HooksPageError`，渲染经 `hooks_error_text` 查询 typed `Message`，新增中英文诊断键（提交 5ab9a661）；测试 `save_rejects_unknown_events_and_invalid_handlers_without_writing`、`hooks_save_backup_failure_keeps_original_untouched`、`hooks_page_loads_saves_external_guard_and_discards` |
 | 项目根不可访问时未禁用 Project/Local | 待修 |
 | Hooks 外部修改监听与重新加载缺失 | 待修 |
 
