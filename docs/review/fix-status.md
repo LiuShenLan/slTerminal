@@ -172,7 +172,7 @@
 | 根外 Document 的会话重授权没有生产调用点 | 待修 |
 | 布局或快照领域恢复失败时静默以空工作区开窗 | 待修 |
 | 未完成关闭意图、NeedsAttention 维护请求与遗留恢复点只有阻断 | 待修 |
-| 更高版本数据库先以读写连接打开 | 待修 |
+| 更高版本数据库先以读写连接打开 | 已修：既有库先经 `SQLITE_OPEN_READ_ONLY` 探测版本，高版本直接保留只读连接（提交 c8290344）；测试 `higher_version_wal_database_is_opened_read_only_without_touching_data_files`、`workspace_higher_version_is_query_only_and_not_downgraded` |
 | 设置 IO/权限失败回退默认值，设置文件没有高版本判定 | 部分修复：高版本判定与写拒绝已实现（同 settings_store 版本字段）；IO/权限仍回退默认值以保启动可用，设置页警示面待接线 |
 | 追溯矩阵把函数级、未接线或不同场景的测试当成已自动化验收锚 | 待修 |
 | 崩溃与边界测试缺少关键窗口 | 待修 |
