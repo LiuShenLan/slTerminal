@@ -49,7 +49,7 @@
 | 测试主要覆盖引擎函数与 DTO，未覆盖页面场景 | 待修 |
 | Hooks 页只实现 Claude JSON 子集，缺少 GUI、事件目录、外部监听、托管只读与保存提示 | 待修 |
 | 浮层不持久化 ViewState，失效页回退未接线 | 待修 |
-| 真实目录查重漏掉内置根，生产路径绕过 Registry | 已修：`AgentRootRegistry` 内置根纳入真实目录查重与能力并集（重复 builtin 收敛为单根，自定义别名冲突拒绝）；生产后台加载用 `build_agent_root_registry` 构建同一 registry，树与授权只按已解析真实目录计算，加载／解析／冲突错误作为显式 `agent_roots_error` 保留并只保留内置根，不再 `unwrap_or_default` 静默清空；测试 `builtin_roots_participate_in_real_path_deduplication`、`production_registry_keeps_builtin_roots_when_custom_root_duplicates`、`agent_root_real_directory_dedup`、`agent_files_open_reuses_document` |
+| 真实目录查重漏掉内置根，生产路径绕过 Registry | 已修（提交 a44e20df）：`AgentRootRegistry` 内置根纳入真实目录查重与能力并集（重复 builtin 收敛为单根，自定义别名冲突拒绝）；生产后台加载用 `build_agent_root_registry` 构建同一 registry，树与授权只按已解析真实目录计算，加载／解析／冲突错误作为显式 `agent_roots_error` 保留并只保留内置根，不再 `unwrap_or_default` 静默清空；测试 `builtin_roots_participate_in_real_path_deduplication`、`production_registry_keeps_builtin_roots_when_custom_root_duplicates`、`agent_root_real_directory_dedup`、`agent_files_open_reuses_document` |
 | 改路径沿用旧根能力 | 已修：`AgentRoot::with_path` 把新根重置为默认只读；测试 `agent_root_path_change_requires_new_identity`、`agent_root_path_change_service_semantics` |
 | agent.start 注入 slug 而不是 AgentCatalog 内置命令 | 已修：改注入 `kind.catalog().builtin_command`；测试 `runtime_agent_start_injects_catalog_builtin_command` |
 | Claude 无原生会话 ID 时仍生成 `--continue` | 已修：无原生会话 ID 一律返回 None；测试 `resume_commands_require_catalog_capability_and_safe_identity` |
