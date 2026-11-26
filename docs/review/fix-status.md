@@ -83,7 +83,7 @@
 | AgentHooks 开关状态按 AgentHook::ALL 顺序索引 AGENTS 行 | 已修：行开关按 `AGENTS` 自身顺序读取设置键；测试 `agent_row_states_follow_agents_order_not_all_order` |
 | 保存进行中继续编辑会被保存回执静默覆盖 | 待修 |
 | Hooks 层默认与切换错误 | 待修 |
-| Hooks 草稿任务身份只含面板 | 待修 |
+| Hooks 草稿任务身份只含面板 | 已修：`TaskId::HooksDraftLoad/Save` 改携完整 `HooksDraftKey`（提交 5a9fb9e1）；测试 `hooks_draft_task_identity_includes_layer_and_agent` |
 | statusline 用量桥接与信号通道整体缺失 | 待修 |
 | 追溯矩阵与进度把未接线的生产链记为已自动化/已验收 | 待修 |
 | Hooks 页面错误文案硬编码中文 | 已修：编辑域返回封闭 `HooksEditError`，页面包装 `HooksPageError`，渲染经 `hooks_error_text` 查询 typed `Message`，新增中英文诊断键（提交 5ab9a661）；测试 `save_rejects_unknown_events_and_invalid_handlers_without_writing`、`hooks_save_backup_failure_keeps_original_untouched`、`hooks_page_loads_saves_external_guard_and_discards` |
