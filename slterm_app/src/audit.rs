@@ -112,6 +112,8 @@ pub(crate) fn record(event: AuditEvent<'_>) {
 const OP_SETTINGS_WRITE: &str = "settings_write";
 /// user 层 settings.json 写入的操作类别。
 const OP_USER_SETTINGS_WRITE: &str = "user_settings_write";
+/// 恢复默认设置的操作类别。
+const OP_SETTINGS_RESET: &str = "settings_reset";
 /// 归属对账不一致的操作类别。
 const OP_HOOK_HASH_MISMATCH: &str = "hook_hash_mismatch";
 
@@ -146,6 +148,24 @@ fn write_audited(
     };
     record(AuditEvent::new(operation, source, audit_result).with_path(path));
     result
+}
+
+/// 恢复默认设置写盘：实际原子写在 `slterm_settings` 内，本包装只记
+/// 审计事件；调用方必须已持设置保存锁。
+pub(crate) fn audit_settings_reset(path: &Path, ok: bool) {
+    let result = if ok {
+        AuditResult::Ok
+    } else {
+        AuditResult::Error
+    };
+    record(
+        AuditEvent::new(
+            OP_SETTINGS_RESET,
+            "settings_store::restore_default_settings_at",
+            result,
+        )
+        .with_path(path),
+    );
 }
 
 /// 磁盘 hook 文件指纹与内嵌模板不一致(被编辑/被替换)。

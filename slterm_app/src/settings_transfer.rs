@@ -151,9 +151,7 @@ mod tests {
     /// 导入不触碰凭据与 Hooks 授权；恢复默认同样保留这些事实。
     #[test]
     fn settings_import_and_reset_preserve_secrets() {
-        use slterm_settings::{
-            AgentHook, RawSettings, RuntimeSettings, restore_default_settings_at,
-        };
+        use slterm_settings::{AgentHook, RawSettings, RuntimeSettings};
 
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("settings.json");
@@ -187,7 +185,16 @@ mod tests {
             "未知命名空间必须原样保留"
         );
 
-        restore_default_settings_at(&path).unwrap().unwrap();
+        let captured = crate::audit::test_support::capture_events();
+        crate::settings_store::restore_default_settings_at(&path)
+            .unwrap()
+            .unwrap();
+        let audit_text = captured.text();
+        assert!(
+            audit_text.contains("operation=\"settings_reset\"")
+                && audit_text.contains("result=\"ok\""),
+            "恢复默认必须经审计通道留痕: {audit_text}"
+        );
         let after_reset = RawSettings::try_load_at(&path).unwrap();
         for agent in AgentHook::ALL {
             assert!(

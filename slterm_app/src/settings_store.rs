@@ -165,6 +165,26 @@ pub(crate) fn with_save_lock<T>(operation: impl FnOnce() -> T) -> T {
     operation()
 }
 
+/// 恢复默认设置：与保存通道共用同一把锁，并在写后记审计事件。
+pub(crate) fn restore_default_settings_at(path: &Path) -> io::Result<Option<std::path::PathBuf>> {
+    with_save_lock(|| {
+        // 与保存通道同一大小上限：恢复默认不得把超限文件原样重写放大。
+        match std::fs::metadata(path) {
+            Ok(metadata) if metadata.len() > MAX_PERSIST_BYTES as u64 => {
+                crate::audit::audit_settings_reset(path, false);
+                return Err(io::Error::new(
+                    io::ErrorKind::FileTooLarge,
+                    "设置文件超过 1MB 上限，拒绝恢复默认",
+                ));
+            }
+            _ => {}
+        }
+        let result = slterm_settings::restore_default_settings_at(path);
+        crate::audit::audit_settings_reset(path, result.is_ok());
+        result
+    })
+}
+
 /// 持锁后的读-合并-写主体。
 fn save_merged_locked(path: &Path, updates: &[(&str, Value)]) -> io::Result<()> {
     let existing = read_existing(path)?;

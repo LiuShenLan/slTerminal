@@ -59,7 +59,7 @@
 | ANSI 16–255 被持久化成第二份色表 | 待修 |
 | 设置损坏分流缺“高版本”和“权限/IO 只读重试” | 待修 |
 | 设置写失败、损坏与单字段回退没有用户可见反馈 | 待修 |
-| 恢复默认旁路统一设置写通道、审计与保存锁 | 待修 |
+| 恢复默认旁路统一设置写通道、审计与保存锁 | 已修：`settings_store::restore_default_settings_at` 共用保存锁、审计事件与 1MB 上限；测试 `settings_import_and_reset_preserve_secrets` |
 | AgentCatalog 适配器声明未被消费，CLI 名单多源 | 待修 |
 | Hooks 事件目录远小于 featureSpec 的 Claude 事件集合 | 待修 |
 | 设置热应用在 GPUI 前台同步读取自定义主题文件 | 待修 |
