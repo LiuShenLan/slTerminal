@@ -36,7 +36,7 @@ impl AppRoot {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Result<(), AppRootError> {
-        self.remove_project_with_decisions(id, Default::default(), window, cx)
+        self.remove_project_with_decisions(id, Default::default(), false, window, cx)
     }
 
     /// 带显式 Document 处置的项目移除；保存阶段先于删除意图提交。
@@ -44,6 +44,7 @@ impl AppRoot {
         &mut self,
         id: ProjectId,
         document_decisions: std::collections::BTreeMap<DocumentId, CloseDecision>,
+        allow_hooks_discard: bool,
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) -> Result<(), AppRootError> {
@@ -58,7 +59,9 @@ impl AppRoot {
                 ClosePhase::Idle | ClosePhase::Completed => Err(AppRootError::ProjectCloseState),
             };
         }
-        if self.hook_drafts.project_has_drafts(id) {
+        // Runtime 显式丢弃策略在收集决定与预检全部通过后由调用方落地；
+        // 交互路径没有决定，脏草稿保持阻断。
+        if self.hook_drafts.project_has_drafts(id) && !allow_hooks_discard {
             return Err(AppRootError::HooksDraftPending);
         }
         if !self.project_closes.is_empty()

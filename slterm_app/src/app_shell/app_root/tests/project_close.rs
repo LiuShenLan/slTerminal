@@ -78,6 +78,7 @@ fn project_remove_save_revision_mismatch_recollects_with_new_decisions(cx: &mut 
                     document,
                     slterm_workspace::CloseDecision::Save,
                 )]),
+                false,
                 window,
                 cx,
             )
@@ -109,6 +110,7 @@ fn project_remove_save_revision_mismatch_recollects_with_new_decisions(cx: &mut 
                     document,
                     slterm_workspace::CloseDecision::Discard,
                 )]),
+                false,
                 window,
                 cx,
             )

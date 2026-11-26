@@ -160,14 +160,13 @@ impl AppRoot {
             .project(project_id)
             .map(|project| project.layout().view_keys())
             .ok_or_else(invalid_request_error)?;
-        if self.hook_drafts.project_has_drafts(project_id) {
-            match hooks {
-                Some(slterm_runtime_protocol::CloseHooksPolicy::Discard) => {
-                    self.discard_project_hooks_drafts_for_close(project_id, cx);
-                }
-                None => return Err(decision_required_error()),
+        let discard_hooks = match hooks {
+            Some(slterm_runtime_protocol::CloseHooksPolicy::Discard) => true,
+            None if self.hook_drafts.project_has_drafts(project_id) => {
+                return Err(decision_required_error());
             }
-        }
+            None => false,
+        };
         let mut decisions = std::collections::BTreeMap::new();
         match documents {
             Some(policy) => {
@@ -201,8 +200,13 @@ impl AppRoot {
                 Err(_) => return Err(invalid_request_error()),
             },
         }
-        self.remove_project_with_decisions(project_id, decisions, window, cx)
-            .map_err(runtime_mutation_error)
+        self.remove_project_with_decisions(project_id, decisions, discard_hooks, window, cx)
+            .map_err(runtime_mutation_error)?;
+        // 决定齐备且关闭已登记后才丢弃草稿；失败路径保持现场。
+        if discard_hooks {
+            self.discard_project_hooks_drafts_for_close(project_id, cx);
+        }
+        Ok(())
     }
 
     /// 单面板非交互关闭：只关闭目标视图，脏 Document 需要显式决定。
@@ -284,14 +288,13 @@ impl AppRoot {
         if self.close_in_progress || self.application_close.is_some() || self.close_completed {
             return Err(closing_error());
         }
-        if !self.hook_drafts.is_empty() {
-            match hooks {
-                Some(slterm_runtime_protocol::CloseHooksPolicy::Discard) => {
-                    self.discard_all_hooks_drafts_for_close(cx);
-                }
-                None => return Err(decision_required_error()),
+        let discard_hooks = match hooks {
+            Some(slterm_runtime_protocol::CloseHooksPolicy::Discard) => true,
+            None if self.hook_drafts.dirty_drafts().next().is_some() => {
+                return Err(decision_required_error());
             }
-        }
+            None => false,
+        };
         let decisions = match documents {
             Some(policy) => {
                 let decision = match policy {
@@ -317,12 +320,18 @@ impl AppRoot {
         match self.start_application_close_with_decisions(decisions, false, window, cx) {
             Ok(
                 super::application_close::ApplicationCloseStart::Completed
-                | super::application_close::ApplicationCloseStart::Started
-                | super::application_close::ApplicationCloseStart::Deferred,
-            ) => Ok(()),
-            Ok(super::application_close::ApplicationCloseStart::Rejected) => {
-                Err(not_ready_error("application close not ready"))
+                | super::application_close::ApplicationCloseStart::Started,
+            ) => {
+                // 关闭已登记后才丢弃草稿；拒绝或等待路径保持现场。
+                if discard_hooks {
+                    self.discard_all_hooks_drafts_for_close(cx);
+                }
+                Ok(())
             }
+            Ok(
+                super::application_close::ApplicationCloseStart::Deferred
+                | super::application_close::ApplicationCloseStart::Rejected,
+            ) => Err(not_ready_error("application close not ready")),
             Err(slterm_workspace::DocumentCloseError::MissingDecision(_)) => {
                 Err(decision_required_error())
             }

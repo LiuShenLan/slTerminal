@@ -3,7 +3,9 @@
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use slterm_runtime_protocol::{CloseDocumentsPolicy, DomainErrorCode, JsonRpcError};
+use slterm_runtime_protocol::{
+    CloseDocumentsPolicy, CloseHooksPolicy, DomainErrorCode, JsonRpcError,
+};
 
 use super::*;
 
@@ -37,6 +39,27 @@ fn dispatch_runtime_mutation(
             Err(mpsc::TryRecvError::Disconnected) => panic!("回执通道断开"),
         }
     }
+}
+
+/// 插入脏 Hooks 草稿；Project／Local 层需要项目身份。
+fn insert_dirty_hooks_draft(
+    root: &Entity<AppRoot>,
+    cx: &mut TestAppContext,
+    layer: crate::ai_hook::draft_host::HooksDraftLayer,
+) -> crate::ai_hook::draft_host::HooksDraftKey {
+    use crate::ai_hook::draft_host::{HooksDraft, HooksDraftKey};
+    let panel = PanelIdAllocator::new(91).allocate().unwrap();
+    let key = HooksDraftKey {
+        panel,
+        agent: slterm_agents::AgentKind::Claude,
+        layer,
+    };
+    root.update(cx, |root, _| {
+        let mut draft = HooksDraft::loaded(None, "{}".to_owned(), serde_json::json!({}));
+        draft.set_text(r#"{"Stop":[{"hooks":[{"type":"command","command":"edited"}]}]}"#);
+        root.hook_drafts.insert(key, draft);
+    });
+    key
 }
 
 fn dirty_document(
@@ -521,4 +544,77 @@ fn integration_runtime_noninteractive_close(cx: &mut TestAppContext) {
     runtime
         .shutdown(ControlPlaneCleanup::Succeeded)
         .expect("writer 必须正常关闭");
+}
+
+/// Runtime 关闭：决定不齐备时 Hooks 草稿必须保持现场，齐备后才按策略丢弃。
+#[gpui::test]
+fn runtime_hooks_discard_waits_for_complete_document_decisions(cx: &mut TestAppContext) {
+    use crate::ai_hook::draft_host::HooksDraftLayer;
+
+    let (_temp, root, mut window, _file) = dirty_document(cx);
+    let key = insert_dirty_hooks_draft(&root, cx, HooksDraftLayer::User);
+
+    let Err(error) = dispatch_runtime_mutation(
+        &root,
+        &mut window,
+        crate::local_control::RuntimeMutation::AppClose {
+            documents: None,
+            hooks: Some(CloseHooksPolicy::Discard),
+        },
+    ) else {
+        panic!("缺少文档决定必须拒绝");
+    };
+    assert_eq!(
+        error.data.as_ref().map(|data| data.code),
+        Some(DomainErrorCode::DecisionRequired)
+    );
+    root.read_with(cx, |root, _| {
+        let draft = root.hook_drafts.get(key).expect("失败的关闭不得丢弃草稿");
+        assert!(draft.dirty(), "草稿必须保持未提交状态");
+    });
+
+    match dispatch_runtime_mutation(
+        &root,
+        &mut window,
+        crate::local_control::RuntimeMutation::AppClose {
+            documents: Some(CloseDocumentsPolicy::Discard),
+            hooks: Some(CloseHooksPolicy::Discard),
+        },
+    ) {
+        Ok(crate::app_shell::RuntimeMutationReply::Done(Ok(()))) => {}
+        _ => panic!("决定齐备后必须接受关闭"),
+    }
+    assert!(
+        root.read_with(cx, |root, _| root.hook_drafts.get(key).is_none()),
+        "关闭登记成功后必须丢弃草稿"
+    );
+}
+
+/// Runtime 项目移除：文档决定缺失时同样不得提前丢弃项目草稿。
+#[gpui::test]
+fn runtime_project_hooks_discard_waits_for_document_decisions(cx: &mut TestAppContext) {
+    use crate::ai_hook::draft_host::HooksDraftLayer;
+
+    let (_temp, root, mut window, _file) = dirty_document(cx);
+    let key = insert_dirty_hooks_draft(&root, cx, HooksDraftLayer::Project(project_id(PROJECT_A)));
+
+    let Err(error) = dispatch_runtime_mutation(
+        &root,
+        &mut window,
+        crate::local_control::RuntimeMutation::ProjectRemove {
+            project_id: project_id(PROJECT_A),
+            documents: None,
+            hooks: Some(CloseHooksPolicy::Discard),
+        },
+    ) else {
+        panic!("缺少文档决定必须拒绝");
+    };
+    assert_eq!(
+        error.data.as_ref().map(|data| data.code),
+        Some(DomainErrorCode::DecisionRequired)
+    );
+    assert!(
+        root.read_with(cx, |root, _| root.hook_drafts.get(key).is_some()),
+        "失败的移除不得丢弃草稿"
+    );
 }
