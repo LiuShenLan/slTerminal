@@ -77,7 +77,7 @@
 | 注入/卸载没有 Journal 与启动恢复器 | 待修 |
 | 危险命令确认没有生产链路 | 待修 |
 | GUI 编辑模式与事件树/handler 表单不存在 | 待修 |
-| Hooks 编辑保存绕过审计与 PathPolicy | 待修 |
+| Hooks 编辑保存绕过审计与 PathPolicy | 已修：新增 `hook_editor_write` 审计包装（主文件与备份均审计，提交 eb1c71e4）；保存前经真实规范位置包含校验与 `HooksWrite` 精确文件 grant 的 `PathPolicy` 判定（提交 3346cdf9）；测试 `saving_hooks_emits_audit_event_without_content`、`hook_editor_write_emits_audit_event_without_content`、`save_rejects_target_outside_the_authorized_root_without_writing` |
 | 加载路径不检测重复键 | 已修：加载/保存重读共用严格解析，重复键拒绝编辑；测试 `load_rejects_duplicate_keys_instead_of_silently_overwriting` |
 | config_guard 没有生产调用点 | 待修 |
 | AgentHooks 开关状态按 AgentHook::ALL 顺序索引 AGENTS 行 | 已修：行开关按 `AGENTS` 自身顺序读取设置键；测试 `agent_row_states_follow_agents_order_not_all_order` |
