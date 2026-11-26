@@ -546,7 +546,7 @@ fn run_shell_once(
             Err(error) => {
                 // 维护失败只开放只读诊断；不得加载领域状态或启动控制面。
                 log::warn!("workspace writer startup failed: {error}");
-                return startup_diagnostics::run(error);
+                return startup_diagnostics::run(error, app_paths.clone());
             }
         };
     // 首帧前恢复视图私有状态与上一运行退出事实；读取或解码失败只设置对应写屏障。
@@ -559,7 +559,7 @@ fn run_shell_once(
     if let Some(failure) = side_view_persistence.domain_recovery_failure() {
         log::warn!("workspace domain recovery failed: {failure:?}");
         workspace_writer.abort_startup();
-        return startup_diagnostics::run_domain(failure);
+        return startup_diagnostics::run_domain(failure, app_paths.clone());
     }
     // 本机窗口几何在开窗前只交付一次；损坏或无记录回退默认尺寸。
     let window_geometry = side_view_persistence.take_window_geometry();

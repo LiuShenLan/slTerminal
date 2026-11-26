@@ -12,6 +12,8 @@ use gpui_component::{
     button::{Button, ButtonVariants as _},
 };
 
+use slterm_path::AppPaths;
+
 use super::config::Settings;
 use crate::app_shell::app_root::DomainRecoveryFailure;
 use crate::i18n::{Message, UiLanguage};
@@ -32,30 +34,182 @@ pub(crate) enum StartupFailure {
     Domain(DomainRecoveryFailure),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AbandonState {
+    Idle,
+    Confirm,
+    Running,
+    Failed,
+}
+
 pub(crate) struct StartupDiagnosticView {
     failure: StartupFailure,
+    paths: Option<AppPaths>,
     outcome: Rc<Cell<ShellRunOutcome>>,
+    abandon: AbandonState,
+    abandon_task: Option<gpui::Task<()>>,
 }
 
 impl StartupDiagnosticView {
     fn new(
         failure: StartupFailure,
+        paths: Option<AppPaths>,
         outcome: Rc<Cell<ShellRunOutcome>>,
         _cx: &mut Context<'_, Self>,
     ) -> Self {
-        Self { failure, outcome }
+        Self {
+            failure,
+            paths,
+            outcome,
+            abandon: AbandonState::Idle,
+            abandon_task: None,
+        }
     }
 
     fn retry(&self, window: &mut Window) {
         self.outcome.set(ShellRunOutcome::RetryStartup);
         window.remove_window();
     }
+
+    fn abandon_stage(&self) -> Option<MaintenanceStage> {
+        match &self.failure {
+            StartupFailure::Writer(WorkspaceWriterError::MaintenanceNeedsAttention(stage)) => {
+                Some(*stage)
+            }
+            _ => None,
+        }
+    }
+
+    fn abandon_clicked(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        match self.abandon {
+            AbandonState::Idle | AbandonState::Failed => {
+                self.abandon = AbandonState::Confirm;
+                cx.notify();
+            }
+            AbandonState::Confirm => self.start_abandon(window, cx),
+            AbandonState::Running => {}
+        }
+    }
+
+    /// 归档与删除在后台执行；成功后关闭诊断窗，由外层重走同一启动链。
+    fn start_abandon(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        let (Some(paths), Some(stage)) = (self.paths.clone(), self.abandon_stage()) else {
+            return;
+        };
+        self.abandon = AbandonState::Running;
+        cx.notify();
+        let executor = cx.background_executor().clone();
+        let window_handle = window.window_handle();
+        self.abandon_task = Some(cx.spawn(async move |this, cx| {
+            let result = executor
+                .spawn(async move {
+                    crate::persistence::startup::abandon_maintenance_blockers(&paths, stage)
+                })
+                .await;
+            let _ = window_handle.update(cx, |_, window, cx| {
+                let _ = this.update(cx, |view, cx| match result {
+                    Ok(_) => {
+                        view.outcome.set(ShellRunOutcome::RetryStartup);
+                        window.remove_window();
+                    }
+                    Err(_) => {
+                        view.abandon = AbandonState::Failed;
+                        cx.notify();
+                    }
+                });
+            });
+        }));
+    }
+}
+
+impl StartupDiagnosticView {
+    fn abandon_controls(
+        &mut self,
+        language: &UiLanguage,
+        cx: &mut Context<'_, Self>,
+    ) -> gpui::AnyElement {
+        match self.abandon {
+            AbandonState::Idle => Button::new("startup-diagnostics-abandon")
+                .debug_selector(|| "startup-diagnostics-abandon".to_owned())
+                .label(language.text(Message::StartupDiagnosticsAbandon))
+                .ghost()
+                .on_click(cx.listener(|this, _, window, cx| this.abandon_clicked(window, cx)))
+                .into_any_element(),
+            AbandonState::Confirm => div()
+                .flex()
+                .flex_col()
+                .items_center()
+                .gap_2()
+                .child(
+                    div()
+                        .max_w(px(560.0))
+                        .text_center()
+                        .text_color(cx.theme().danger)
+                        .debug_selector(|| "startup-diagnostics-abandon-warning".to_owned())
+                        .child(language.text(Message::StartupDiagnosticsAbandonWarning)),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .gap(px(12.0))
+                        .child(
+                            Button::new("startup-diagnostics-abandon-confirm")
+                                .debug_selector(|| "startup-diagnostics-abandon-confirm".to_owned())
+                                .label(language.text(Message::StartupDiagnosticsAbandonConfirm))
+                                .primary()
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.abandon_clicked(window, cx)
+                                })),
+                        )
+                        .child(
+                            Button::new("startup-diagnostics-abandon-cancel")
+                                .debug_selector(|| "startup-diagnostics-abandon-cancel".to_owned())
+                                .label(language.text(Message::StartupDiagnosticsCancel))
+                                .ghost()
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.abandon = AbandonState::Idle;
+                                    cx.notify();
+                                })),
+                        ),
+                )
+                .into_any_element(),
+            AbandonState::Running => div()
+                .text_color(cx.theme().muted_foreground)
+                .debug_selector(|| "startup-diagnostics-abandon-running".to_owned())
+                .child(language.text(Message::StartupDiagnosticsAbandonRunning))
+                .into_any_element(),
+            AbandonState::Failed => div()
+                .flex()
+                .flex_col()
+                .items_center()
+                .gap_2()
+                .child(
+                    div()
+                        .max_w(px(560.0))
+                        .text_center()
+                        .text_color(cx.theme().danger)
+                        .debug_selector(|| "startup-diagnostics-abandon-failed".to_owned())
+                        .child(language.text(Message::StartupDiagnosticsAbandonFailed)),
+                )
+                .child(
+                    Button::new("startup-diagnostics-abandon")
+                        .debug_selector(|| "startup-diagnostics-abandon".to_owned())
+                        .label(language.text(Message::StartupDiagnosticsAbandon))
+                        .ghost()
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.abandon_clicked(window, cx)),
+                        ),
+                )
+                .into_any_element(),
+        }
+    }
 }
 
 impl Render for StartupDiagnosticView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
         let language = cx.global::<Settings>().language;
-        div()
+        let running = self.abandon == AbandonState::Running;
+        let mut view = div()
             .size_full()
             .flex()
             .flex_col()
@@ -77,26 +231,32 @@ impl Render for StartupDiagnosticView {
                     .text_center()
                     .text_color(cx.theme().muted_foreground)
                     .child(diagnostic_message(&self.failure, language)),
-            )
-            .child(
-                div()
-                    .flex()
-                    .gap(px(12.0))
-                    .child(
-                        Button::new("startup-diagnostics-retry")
-                            .debug_selector(|| "startup-diagnostics-retry".to_owned())
-                            .label(language.text(Message::StartupDiagnosticsRetry))
-                            .primary()
-                            .on_click(cx.listener(|this, _, window, _| this.retry(window))),
-                    )
-                    .child(
-                        Button::new("startup-diagnostics-exit")
-                            .debug_selector(|| "startup-diagnostics-exit".to_owned())
-                            .label(language.text(Message::StartupDiagnosticsExit))
-                            .ghost()
-                            .on_click(cx.listener(|_, _, window, _| window.remove_window())),
-                    ),
-            )
+            );
+        if self.abandon_stage().is_some() && self.paths.is_some() {
+            view = view.child(self.abandon_controls(&language, cx));
+        }
+        if running {
+            return view;
+        }
+        view.child(
+            div()
+                .flex()
+                .gap(px(12.0))
+                .child(
+                    Button::new("startup-diagnostics-retry")
+                        .debug_selector(|| "startup-diagnostics-retry".to_owned())
+                        .label(language.text(Message::StartupDiagnosticsRetry))
+                        .primary()
+                        .on_click(cx.listener(|this, _, window, _| this.retry(window))),
+                )
+                .child(
+                    Button::new("startup-diagnostics-exit")
+                        .debug_selector(|| "startup-diagnostics-exit".to_owned())
+                        .label(language.text(Message::StartupDiagnosticsExit))
+                        .ghost()
+                        .on_click(cx.listener(|_, _, window, _| window.remove_window())),
+                ),
+        )
     }
 }
 
@@ -175,16 +335,16 @@ fn handle_open_result<E: std::fmt::Display>(
 }
 
 /// 诊断窗不创建 writer、控制面或 PTY；重试只关闭本窗，由外层重新进入启动链。
-pub(crate) fn run(error: WorkspaceWriterError) -> ShellRunOutcome {
-    run_failure(StartupFailure::Writer(error))
+pub(crate) fn run(error: WorkspaceWriterError, paths: AppPaths) -> ShellRunOutcome {
+    run_failure(StartupFailure::Writer(error), paths)
 }
 
 /// 领域恢复失败与维护失败共用同一只读诊断与重试链。
-pub(crate) fn run_domain(failure: DomainRecoveryFailure) -> ShellRunOutcome {
-    run_failure(StartupFailure::Domain(failure))
+pub(crate) fn run_domain(failure: DomainRecoveryFailure, paths: AppPaths) -> ShellRunOutcome {
+    run_failure(StartupFailure::Domain(failure), paths)
 }
 
-fn run_failure(failure: StartupFailure) -> ShellRunOutcome {
+fn run_failure(failure: StartupFailure, paths: AppPaths) -> ShellRunOutcome {
     let outcome = Rc::new(Cell::new(ShellRunOutcome::Exit));
     let view_outcome = outcome.clone();
     let application = gpui_platform::application()
@@ -197,7 +357,9 @@ fn run_failure(failure: StartupFailure) -> ShellRunOutcome {
         let result = cx.open_window(options, move |window, cx| {
             window.set_window_title(crate::brand::NAME);
             install_window_close(window, cx);
-            let view = cx.new(|cx| StartupDiagnosticView::new(failure, view_outcome.clone(), cx));
+            let view = cx.new(|cx| {
+                StartupDiagnosticView::new(failure, Some(paths), view_outcome.clone(), cx)
+            });
             cx.new(|cx| Root::new(view, window, cx))
         });
         handle_open_result(
@@ -234,6 +396,18 @@ mod tests {
         VisualTestContext,
         Rc<Cell<ShellRunOutcome>>,
     ) {
+        open_diagnostic_with(cx, failure, None)
+    }
+
+    fn open_diagnostic_with(
+        cx: &mut TestAppContext,
+        failure: StartupFailure,
+        paths: Option<slterm_path::AppPaths>,
+    ) -> (
+        Entity<StartupDiagnosticView>,
+        VisualTestContext,
+        Rc<Cell<ShellRunOutcome>>,
+    ) {
         cx.update(|cx| {
             gpui_component::init(cx);
             cx.set_global(crate::app_shell::config::Settings::default());
@@ -244,7 +418,7 @@ mod tests {
         let window_size = cx.update(|cx| gpui::Bounds::maximized(None, cx).size);
         let window = cx.open_window(window_size, |window, cx| {
             super::install_window_close(window, cx);
-            let view = cx.new(|cx| StartupDiagnosticView::new(failure, outcome.clone(), cx));
+            let view = cx.new(|cx| StartupDiagnosticView::new(failure, paths, outcome.clone(), cx));
             slot = Some(view.clone());
             Root::new(view, window, cx)
         });
@@ -380,5 +554,80 @@ mod tests {
         drop(view);
         cx.update(|_| {});
         weak.assert_released();
+    }
+
+    /// 显式放弃必须二次确认、先归档再删除，并在完成后请求重试启动。
+    #[gpui::test]
+    fn abandon_unfinished_close_intent_archives_then_retries(cx: &mut TestAppContext) {
+        use crate::persistence::close::{CloseCommitStatus, PersistedCloseIntent};
+        use crate::persistence::metadata::RunMarker;
+        use crate::persistence::workspace::WorkspaceDatabase;
+        use slterm_workspace::{CloseIntent, CloseScope};
+
+        const EPOCH: &str = "epoch-diagnostic-abandon";
+        let temp = tempfile::tempdir().unwrap();
+        let paths =
+            slterm_path::AppPaths::new(temp.path().join("config"), temp.path().join("local"))
+                .unwrap();
+        {
+            let mut store = WorkspaceDatabase::open(&paths).unwrap();
+            store
+                .begin_run(
+                    EPOCH,
+                    RunMarker {
+                        run_id: "run-diagnostic".into(),
+                        process_id: 1,
+                        process_created_at_ms: 1,
+                    },
+                )
+                .unwrap();
+            store
+                .register_close_intent(&PersistedCloseIntent {
+                    close_id: "close-diagnostic".into(),
+                    scope: CloseScope::ApplicationExit,
+                    store_epoch: EPOCH.into(),
+                    intent: CloseIntent::new(Vec::new(), [7; 32]).unwrap(),
+                    commit_status: CloseCommitStatus::Collected,
+                })
+                .unwrap();
+        }
+        let (view, mut window, outcome) = open_diagnostic_with(
+            cx,
+            StartupFailure::Writer(WorkspaceWriterError::MaintenanceNeedsAttention(
+                MaintenanceStage::CloseIntents,
+            )),
+            Some(paths.clone()),
+        );
+
+        let abandon = window
+            .debug_bounds("startup-diagnostics-abandon")
+            .expect("维护阻断必须提供放弃入口");
+        window.simulate_click(abandon.center(), Modifiers::default());
+        window.run_until_parked();
+        window.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+        assert!(
+            window
+                .debug_bounds("startup-diagnostics-abandon-warning")
+                .is_some(),
+            "放弃前必须展示不可撤销警告"
+        );
+        let confirm = window
+            .debug_bounds("startup-diagnostics-abandon-confirm")
+            .unwrap();
+        window.simulate_click(confirm.center(), Modifiers::default());
+        window.run_until_parked();
+
+        assert_eq!(outcome.get(), ShellRunOutcome::RetryStartup);
+        let mut store = WorkspaceDatabase::open(&paths).unwrap();
+        assert!(store.unfinished_close_intents().unwrap().is_empty());
+        let archive = std::fs::read_dir(paths.local_root().join("recovery-abandon"))
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "db"))
+            .count();
+        assert_eq!(archive, 1, "删除前必须留有整库诊断副本");
+        drop(view);
     }
 }

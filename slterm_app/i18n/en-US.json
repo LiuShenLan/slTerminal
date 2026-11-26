@@ -636,6 +636,12 @@
     "database_unavailable": "Workspace records could not be opened. Original files are unchanged; retry after restarting or checking file permissions.",
     "project_recovery_failed": "The saved workspace layout could not be restored. Original records are kept unchanged; retry after resolving the corrupt data.",
     "snapshot_recovery_failed": "Document recovery could not complete. Original records and drafts are kept unchanged; retry after resolving the corrupt data.",
+    "abandon": "Abandon unfinished state…",
+    "abandon_warning": "The unfinished operation will be abandoned, not completed. A full diagnostic copy of the workspace database is kept locally; this cannot be undone.",
+    "abandon_confirm": "Abandon and retry",
+    "abandon_running": "Abandoning unfinished state…",
+    "abandon_failed": "Could not abandon the unfinished state. Keep the data directory and contact the maintainer.",
+    "cancel": "Cancel",
     "retry": "Retry startup",
     "exit": "Exit"
   }
