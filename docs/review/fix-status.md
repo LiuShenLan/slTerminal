@@ -21,7 +21,7 @@
 | IME 组合期间全局命令仍经 GPUI 键位层派发 | 待修 |
 | 布局与侧栏恢复警告只写日志 | 待修 |
 | 批量/项目关闭遗留 pane 级任务栏与 AgentHub 清理 | 待修 |
-| 活动栏缺少固定底部配置按钮 | 待修 |
+| 活动栏缺少固定底部配置按钮 | 已修：活动栏固定底部 `app-root-settings-button` 复用 `OpenSettings` 命令与唯一浮层，不参与视图组织（提交 d72c614a）；测试 `activity_bar_settings_button_opens_the_settings_overlay` |
 | 浮层已打开时设置入口改开项目面板 | 待修 |
 | Commit/Explorer 数据根切换时在途状态读取被丢弃或错投 | 待修 |
 | 项目重定位与导航历史恢复没有生产入口 | 待修 |
