@@ -1532,6 +1532,94 @@ fn generated_schema_matches_the_packaged_asset() {
     assert_eq!(crate::schema::runtime_api_schema_json(), packaged_schema());
 }
 
+/// 每个登记方法都必须有随包 params／result 合同，方法专用请求定义不得缺失。
+/// 方法名必须与参数结构绑定；同构参数不得让错误方法通过 schema。
+#[cfg(feature = "schema")]
+#[test]
+fn packaged_schema_binds_each_method_to_its_params() {
+    let schema: serde_json::Value = serde_json::from_str(&packaged_schema()).unwrap();
+    let validator = jsonschema::validator_for(&schema).unwrap();
+
+    let describe = serde_json::to_value(runtime_request(RuntimeMethod::Describe)).unwrap();
+    validator.validate(&describe).unwrap();
+
+    let mismatched = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "runtime.describe",
+        "params": {
+            "client_id": "client",
+            "mutation_id": "mutation",
+            "expected_revision": null,
+            "request": {"terminal_id": "t", "generation": 1}
+        }
+    });
+    assert!(
+        validator.validate(&mismatched).is_err(),
+        "runtime.describe 不得接受写请求参数"
+    );
+
+    let read = serde_json::to_value(RuntimeRequest::new(
+        JsonRpcId::Number(2),
+        RuntimeMethod::TerminalRead,
+        TerminalReadRequest {
+            terminal_id: "018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2d".to_owned(),
+            generation: 1,
+            cursor: None,
+        },
+    ))
+    .unwrap();
+    validator.validate(&read).unwrap();
+}
+
+#[cfg(feature = "schema")]
+#[test]
+fn packaged_schema_covers_every_registered_method_contract() {
+    let schema: serde_json::Value = serde_json::from_str(&packaged_schema()).unwrap();
+    let contracts = &schema["$defs"]["MethodContracts"]["properties"];
+    for spec in crate::METHODS {
+        let method = spec.method.as_str();
+        let contract = &contracts[method];
+        assert!(
+            contract["properties"]["params"].is_object(),
+            "{method} 缺少参数合同"
+        );
+        assert!(
+            contract["properties"]["result"].is_object(),
+            "{method} 缺少结果合同"
+        );
+    }
+    for definition in [
+        "TerminalReadRequest",
+        "TerminalWaitRequest",
+        "TerminalCloseRequest",
+        "TerminalReconnectRequest",
+        "TerminalRenameRequest",
+        "AgentInputRequest",
+        "AgentCloseRequest",
+        "AgentReadRequest",
+        "AgentWaitRequest",
+        "AgentStartRequest",
+        "AgentResumeRequest",
+        "AgentForkRequest",
+        "GitStatusRequest",
+        "GitDiffRequest",
+        "GitRollbackRequest",
+        "GitDeleteRequest",
+        "GitOpenDiffRequest",
+        "GitOpenDeletedRequest",
+        "PanelOpenFileRequest",
+        "PanelSaveRequest",
+        "PanelCloseRequest",
+        "AppCloseRequest",
+    ] {
+        assert!(
+            schema["$defs"].get(definition).is_some(),
+            "随包 schema 缺少方法请求定义 {definition}"
+        );
+    }
+}
+
 #[cfg(feature = "schema")]
 #[test]
 fn packaged_schema_includes_the_discover_output_contract() {

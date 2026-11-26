@@ -215,7 +215,7 @@
 | 合同冲突：app.close 回执语义与“保存失败返回失败”冲突 | 需裁决 |
 | 合同冲突：非交互关闭缺少运行终端处置策略 | 需裁决 |
 | 控制面一次 join 失败被永久重放 | 已修：资源已回收后的重复 `shutdown` 只记录历史 join 错误并返回成功，首次错误仍在首次关闭返回；测试 `local_control_shutdown_replays_worker_join_failure` 更新为断言重复关闭成功 |
-| 随包 schema 未覆盖多数方法的请求结构，method 与 params/result 无关联校验 | 待修 |
+| 随包 schema 未覆盖多数方法的请求结构，method 与 params/result 无关联校验 | 已修：schema 生成器遍历方法注册表，把每个方法的 `params`／`result` schema 汇入根 `$defs`，并生成 `$defs.MethodContracts` 方法名到合同的封闭映射；`RuntimeRequest` 用逐方法 `oneOf` 绑定方法名与参数结构；测试 `packaged_schema_covers_every_registered_method_contract`、`packaged_schema_binds_each_method_to_its_params` 逐方法核对并拒绝错误配对 |
 | Runtime 合同测试不在任何固定门禁内 | 已修：CI 与 `release.ps1` 前置强制执行 `cargo test -p slterm_runtime_protocol --features schema --test lib_tests`，逐字节核对随包 schema 资产、生成器重建与真实请求校验；命令矩阵与协议 CLAUDE.md 同步 |
 | Runtime 双进程 conformance 与事件断线矩阵缺失 | 待修 |
 | 事件面只发布项目激活 | 待修 |

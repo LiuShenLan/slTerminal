@@ -11,6 +11,7 @@
 - 合同散列均以随包 `runtime-api-v2.schema.json` 的原始字节为输入，输出 64 个小写 ASCII hex：`schema_sha256 = SHA-256(schema_bytes)`；`protocol_sha256 = SHA-256(b"slterm-runtime-v2" || schema_bytes)`。域分隔前缀后不得补 NUL、换行或其他分隔符，两个散列必须使用同一份字节且不得改动 schema 字段。
 - handover 回执在服务端 worker 中有界等待，生产上限 4 秒；超时返回数值码 `-32001` 与领域码 `not_ready`，回执发送端断开返回 `-32004` 与 `closing`，事件投递 helper 的 QueueFull 等错误保持原数值码和领域码。
 - `instance.handover` 只接受仅聚焦、打开既有项目、打开文件和新建终端。打开或新建不得隐式创建项目；路径与 cwd 必须重新经过 PathPolicy 和命令目录校验，显式 cwd 未授权或无效时拒绝，不回退到活跃项目。
+- 随包 schema 的 `$defs.MethodContracts` 由方法注册表生成，逐方法给出 `params` 与 `result` 合同；`RuntimeRequest` 用逐方法 `oneOf` 把方法名与参数结构绑定，错误配对的请求在 schema 层拒绝。新增方法必须同时出现在该映射与根 `$defs` 的具名请求／结果定义中，不得手改资产。
 - 写方法只接受 `MutationParams` 信封并返回 `OperationResource`；`runtime.operation_get`／`runtime.operation_wait` 只读持久记录，相同幂等键与参数不重跑，`decision_required` 与 `outcome_unknown` 都是可查询终态。
 - 终端与 Agent：`terminal.input` 原样写 PTY，`terminal.execute` 只接受单行并追加一次回车；写目标由稳定 `terminal_id` 与 `generation` 共同定位，`terminal.read`／`terminal.wait` 与 `agent.read`／`agent.wait` 使用分页游标与 revision。Agent 身份由同一 PTY 映射派生，写方法必须同时匹配 `agent_id + terminal_id + generation`。
 - 布局与面板：Project／PanelGroup／Panel 方法只使用稳定身份与规范 ViewKey JSON 文本；`panel.open_file`、`panel.save` 与 `panel.close` 复用同一 Document 打开、保存与关闭链，完成回执在落定后发送。

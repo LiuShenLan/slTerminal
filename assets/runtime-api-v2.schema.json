@@ -1,59 +1,147 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "ControlMessage",
-  "description": "当前请求、响应与发现记录的根集合，schema 与各领域 DTO 共用此边界。",
-  "anyOf": [
-    {
-      "$ref": "#/$defs/JsonRpcRequest"
-    },
-    {
-      "$ref": "#/$defs/JsonRpcRequest2"
-    },
-    {
-      "$ref": "#/$defs/RuntimeRequest"
-    },
-    {
-      "$ref": "#/$defs/JsonRpcResult"
-    },
-    {
-      "$ref": "#/$defs/JsonRpcResult2"
-    },
-    {
-      "$ref": "#/$defs/JsonRpcResult3"
-    },
-    {
-      "$ref": "#/$defs/EventNotification"
-    },
-    {
-      "$ref": "#/$defs/JsonRpcErrorResponse"
-    },
-    {
-      "$ref": "#/$defs/DiscoveryRecord"
-    },
-    {
-      "$ref": "#/$defs/DiscoverOutput"
-    }
-  ],
   "$defs": {
-    "AgentListResponse": {
-      "description": "agent.list 与 agent.get 共用的关联集合；空集合表示没有匹配。",
-      "type": "object",
+    "AgentCloseRequest": {
+      "additionalProperties": false,
+      "description": "关闭 Agent 关联的终端；身份与代次必须同时匹配。",
       "properties": {
-        "agents": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/AgentResource"
-          }
+        "agent_id": {
+          "type": "string"
+        },
+        "generation": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "terminal_id": {
+          "type": "string"
         }
       },
+      "required": [
+        "agent_id",
+        "terminal_id",
+        "generation"
+      ],
+      "type": "object"
+    },
+    "AgentForkRequest": {
       "additionalProperties": false,
+      "description": "从已有原生会话创建独立分支，原会话不变。",
+      "properties": {
+        "cwd": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "project_root": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "session_id"
+      ],
+      "type": "object"
+    },
+    "AgentGetRequest": {
+      "additionalProperties": false,
+      "description": "按对外 Agent 身份查询关联。",
+      "properties": {
+        "agent_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "agent_id"
+      ],
+      "title": "AgentGetRequest",
+      "type": "object"
+    },
+    "AgentInputRequest": {
+      "additionalProperties": false,
+      "description": "Agent 写方法的目标：对外身份 + TerminalId + PTY 代次唯一定位。",
+      "properties": {
+        "agent_id": {
+          "type": "string"
+        },
+        "data": {
+          "type": "string"
+        },
+        "generation": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "terminal_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "agent_id",
+        "terminal_id",
+        "generation",
+        "data"
+      ],
+      "type": "object"
+    },
+    "AgentListResponse": {
+      "additionalProperties": false,
+      "description": "agent.list 与 agent.get 共用的关联集合；空集合表示没有匹配。",
+      "properties": {
+        "agents": {
+          "items": {
+            "$ref": "#/$defs/AgentResource"
+          },
+          "type": "array"
+        }
+      },
       "required": [
         "agents"
-      ]
+      ],
+      "type": "object"
+    },
+    "AgentReadRequest": {
+      "additionalProperties": false,
+      "description": "Agent 关联终端的分页读取；目标身份与代次必须同时匹配。",
+      "properties": {
+        "agent_id": {
+          "type": "string"
+        },
+        "cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "generation": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "terminal_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "agent_id",
+        "terminal_id",
+        "generation"
+      ],
+      "title": "AgentReadRequest",
+      "type": "object"
     },
     "AgentResource": {
+      "additionalProperties": false,
       "description": "活跃 Agent 关联：一个对外身份可关联多个终端。\n\n有原生会话 ID 时 `agent_id = kind:native_session_id`，否则按\n`kind@terminal_id`；写方法必须再提供 TerminalId 与 PTY 代次唯一定位。",
-      "type": "object",
       "properties": {
         "agent_id": {
           "type": "string"
@@ -72,86 +160,213 @@
           "type": "string"
         },
         "status": {
-          "description": "封闭运行状态；新增值必须先登记协议。",
-          "$ref": "#/$defs/AgentState"
+          "$ref": "#/$defs/AgentState",
+          "description": "封闭运行状态；新增值必须先登记协议。"
         },
         "terminal_id": {
           "type": "string"
         }
       },
-      "additionalProperties": false,
       "required": [
         "agent_id",
         "terminal_id",
         "project_id",
         "kind",
         "status"
-      ]
+      ],
+      "type": "object"
+    },
+    "AgentResumeRequest": {
+      "additionalProperties": false,
+      "description": "恢复已有原生会话：会话身份必须由 AgentCatalog 校验后构造命令。",
+      "properties": {
+        "cwd": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "project_root": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session_file": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source"
+      ],
+      "type": "object"
+    },
+    "AgentStartRequest": {
+      "additionalProperties": false,
+      "description": "在目标项目新建终端并启动指定 CLI；不隐式创建项目。",
+      "properties": {
+        "cwd": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "type": "string"
+        },
+        "project_root": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "type": "object"
     },
     "AgentState": {
       "description": "Agent 会话状态的封闭线缆枚举。",
-      "type": "string",
       "enum": [
         "idle",
         "working",
         "blocked",
         "done",
         "unknown"
-      ]
+      ],
+      "type": "string"
+    },
+    "AgentWaitRequest": {
+      "additionalProperties": false,
+      "description": "等待 Agent 关联终端的输出 revision 超过 `since_revision`。",
+      "properties": {
+        "agent_id": {
+          "type": "string"
+        },
+        "generation": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "since_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "terminal_id": {
+          "type": "string"
+        },
+        "timeout_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "agent_id",
+        "terminal_id",
+        "generation",
+        "since_revision"
+      ],
+      "title": "AgentWaitRequest",
+      "type": "object"
+    },
+    "AppCloseRequest": {
+      "additionalProperties": false,
+      "description": "应用关闭：缺省策略不写入任何决定，必要时返回 `decision_required`。",
+      "properties": {
+        "documents": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CloseDocumentsPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hooks": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CloseHooksPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
     },
     "Capabilities": {
+      "additionalProperties": false,
       "description": "当前客户端可调用的方法集合。",
-      "type": "object",
       "properties": {
         "methods": {
-          "type": "array",
           "items": {
             "type": "string"
           },
+          "type": "array",
           "uniqueItems": true
         }
       },
-      "additionalProperties": false,
       "required": [
         "methods"
-      ]
+      ],
+      "type": "object"
     },
     "CloseDocumentsPolicy": {
       "description": "关闭集合中 Document 的处置策略。",
-      "type": "string",
       "enum": [
         "save",
         "discard"
-      ]
+      ],
+      "type": "string"
     },
     "CloseHooksPolicy": {
       "description": "非交互关闭可用的 Hooks 草稿处置；保存需要交互确认，不在线缆内。",
-      "type": "string",
       "enum": [
         "discard"
-      ]
+      ],
+      "type": "string"
     },
     "ControlScope": {
       "description": "Runtime 与 handover 使用独立授权的同名作用域。",
-      "type": "string",
       "enum": [
         "runtime",
         "handover"
-      ]
+      ],
+      "type": "string"
     },
     "Credential": {
       "description": "线缆凭据只参与序列化与认证比较，调试输出永远脱敏。",
       "type": "string"
     },
     "DescribeResponse": {
+      "additionalProperties": false,
       "description": "`runtime.describe` 返回方法注册与当前合同散列。",
-      "type": "object",
       "properties": {
         "methods": {
-          "type": "array",
           "items": {
             "$ref": "#/$defs/MethodDescriptor"
-          }
+          },
+          "type": "array"
         },
         "protocol_sha256": {
           "type": "string"
@@ -160,34 +375,34 @@
           "type": "string"
         }
       },
-      "additionalProperties": false,
       "required": [
         "protocol_sha256",
         "schema_sha256",
         "methods"
-      ]
+      ],
+      "type": "object"
     },
     "DiscoverOutput": {
+      "additionalProperties": false,
       "description": "`runtime discover --json` 的唯一输出合同：端点记录加上 Runtime 凭据。\n\n只用于 CLI 输出，不进入端点文件；Debug 永远脱敏，JSON 是唯一泄露 token 的通道。",
-      "type": "object",
       "properties": {
         "endpoint": {
           "type": "string"
         },
         "process_created_at_ms": {
-          "type": "integer",
           "format": "uint64",
-          "minimum": 0
+          "minimum": 0,
+          "type": "integer"
         },
         "process_id": {
-          "type": "integer",
           "format": "uint32",
-          "minimum": 0
+          "minimum": 0,
+          "type": "integer"
         },
         "protocol_version": {
-          "type": "integer",
           "format": "uint32",
-          "minimum": 0
+          "minimum": 0,
+          "type": "integer"
         },
         "run_id": {
           "type": "string"
@@ -196,7 +411,6 @@
           "$ref": "#/$defs/Credential"
         }
       },
-      "additionalProperties": false,
       "required": [
         "protocol_version",
         "endpoint",
@@ -204,49 +418,50 @@
         "process_id",
         "process_created_at_ms",
         "runtime_token"
-      ]
+      ],
+      "type": "object"
     },
     "DiscoveryRecord": {
+      "additionalProperties": false,
       "description": "本机控制面发现记录；认证材料只经凭据门面独立获取。",
-      "type": "object",
       "properties": {
         "endpoint": {
           "type": "string"
         },
         "process_created_at_ms": {
-          "type": "integer",
           "format": "uint64",
-          "minimum": 0
+          "minimum": 0,
+          "type": "integer"
         },
         "process_id": {
-          "type": "integer",
           "format": "uint32",
-          "minimum": 0
+          "minimum": 0,
+          "type": "integer"
         },
         "protocol_version": {
-          "type": "integer",
-          "format": "uint32",
           "enum": [
             2
           ],
-          "minimum": 0
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
         },
         "run_id": {
           "type": "string"
         }
       },
-      "additionalProperties": false,
       "required": [
         "protocol_version",
         "endpoint",
         "run_id",
         "process_id",
         "process_created_at_ms"
-      ]
+      ],
+      "type": "object"
     },
     "DocumentResource": {
+      "additionalProperties": false,
       "description": "快照中的 Document 位置元数据；不含正文。",
-      "type": "object",
       "properties": {
         "document_id": {
           "type": "string"
@@ -255,112 +470,112 @@
           "type": "string"
         }
       },
-      "additionalProperties": false,
       "required": [
         "document_id",
         "path"
-      ]
+      ],
+      "type": "object"
     },
     "DomainErrorCode": {
       "description": "结构化领域错误码，不与 JSON-RPC 数值码混用。",
       "oneOf": [
         {
-          "type": "string",
           "enum": [
             "not_ready",
             "unauthorized",
             "queue_full",
             "closing",
             "invalid_request"
-          ]
+          ],
+          "type": "string"
         },
         {
+          "const": "mutation_conflict",
           "description": "幂等键已绑定其他方法、参数版本或参数散列。",
-          "type": "string",
-          "const": "mutation_conflict"
+          "type": "string"
         },
         {
+          "const": "revision_conflict",
           "description": "`expected_revision` 与执行前复核的资源代次不一致。",
-          "type": "string",
-          "const": "revision_conflict"
+          "type": "string"
         },
         {
+          "const": "decision_required",
           "description": "破坏操作缺少显式处置策略；调用方须使用新 mutation_id 重试。",
-          "type": "string",
-          "const": "decision_required"
+          "type": "string"
         },
         {
+          "const": "outcome_unknown",
           "description": "副作用无法证明；Operation 为可查询终态，禁止自动重发。",
-          "type": "string",
-          "const": "outcome_unknown"
+          "type": "string"
         },
         {
+          "const": "unknown_operation",
           "description": "查询的操作标识不存在。",
-          "type": "string",
-          "const": "unknown_operation"
+          "type": "string"
         },
         {
+          "const": "resync_required",
           "description": "事件续传三元组不匹配或历史缺口；客户端必须重新快照后订阅。",
-          "type": "string",
-          "const": "resync_required"
+          "type": "string"
         },
         {
+          "const": "stale_cursor",
           "description": "分页游标非法、越界或资源代次／revision 已变化；客户端必须重新读取。",
-          "type": "string",
-          "const": "stale_cursor"
+          "type": "string"
         },
         {
+          "const": "unknown_agent",
           "description": "对外 Agent 身份没有匹配关联。",
-          "type": "string",
-          "const": "unknown_agent"
+          "type": "string"
         },
         {
+          "const": "response_too_large",
           "description": "编码后的响应超过单帧预算；请求必须缩小范围或改用分页读取。",
-          "type": "string",
-          "const": "response_too_large"
+          "type": "string"
         }
       ]
     },
     "EmptyParams": {
+      "additionalProperties": false,
       "description": "无参数的 Runtime 方法；未知字段一律拒绝。",
-      "type": "object",
-      "additionalProperties": false
+      "type": "object"
     },
     "EventNotification": {
+      "additionalProperties": false,
       "description": "服务器到客户端的事件通知；客户端不得回复，连接只承载订阅事件。",
-      "type": "object",
       "properties": {
         "jsonrpc": {
-          "type": "string",
           "enum": [
             "2.0"
-          ]
+          ],
+          "type": "string"
         },
         "method": {
-          "type": "string",
           "enum": [
             "events.event"
-          ]
+          ],
+          "type": "string"
         },
         "params": {
           "$ref": "#/$defs/RuntimeEvent"
         }
       },
-      "additionalProperties": false,
       "required": [
         "jsonrpc",
         "method",
         "params"
-      ]
+      ],
+      "type": "object"
     },
     "EventsSubscribeParams": {
+      "additionalProperties": false,
       "description": "事件续传三元组：世代与起点必须同时匹配事件环，否则要求重新快照。",
-      "type": "object",
       "properties": {
         "since_revision": {
-          "type": "integer",
           "format": "uint64",
-          "minimum": 0
+          "minimum": 0,
+          "type": "integer"
         },
         "store_epoch": {
           "type": "string"
@@ -369,40 +584,105 @@
           "type": "string"
         }
       },
-      "additionalProperties": false,
       "required": [
         "store_epoch",
         "stream_epoch",
         "since_revision"
-      ]
+      ],
+      "type": "object"
     },
     "EventsSubscribedResponse": {
+      "additionalProperties": false,
       "description": "订阅确认：返回事件流身份与该订阅看到的当前末尾 revision。",
-      "type": "object",
       "properties": {
         "revision": {
-          "type": "integer",
           "format": "uint64",
-          "minimum": 0
+          "minimum": 0,
+          "type": "integer"
         },
         "stream_epoch": {
           "type": "string"
         }
       },
-      "additionalProperties": false,
       "required": [
         "stream_epoch",
         "revision"
-      ]
+      ],
+      "type": "object"
     },
     "EventsUnsubscribedResponse": {
+      "additionalProperties": false,
       "description": "取消订阅的确认；订阅身份绑定连接，不另行分配。",
-      "type": "object",
-      "additionalProperties": false
+      "type": "object"
+    },
+    "GitDeleteExpected": {
+      "description": "删除前置形态：未跟踪文件或已暂存新增。",
+      "enum": [
+        "untracked",
+        "staged_added"
+      ],
+      "type": "string"
+    },
+    "GitDeleteRequest": {
+      "additionalProperties": false,
+      "description": "受限删除：`expected` 是专用前置条件，`permanent` 是显式处置策略。",
+      "properties": {
+        "expected": {
+          "$ref": "#/$defs/GitDeleteExpected",
+          "description": "调用方观察到的条目形态；执行前必须复核一致。"
+        },
+        "path": {
+          "description": "仓库相对路径，使用 `/` 分隔。",
+          "type": "string"
+        },
+        "permanent": {
+          "default": false,
+          "description": "跳过回收站直接永久删除；缺省走回收站。",
+          "type": "boolean"
+        },
+        "project_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "path",
+        "expected"
+      ],
+      "type": "object"
+    },
+    "GitDiffRequest": {
+      "additionalProperties": false,
+      "description": "读取单个仓库相对路径的 HEAD 与工作区差异；游标只由服务端生成。",
+      "properties": {
+        "cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "description": "仓库相对路径，使用 `/` 分隔。",
+          "type": "string"
+        },
+        "project_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "title": "GitDiffRequest",
+      "type": "object"
     },
     "GitDiffResponse": {
+      "additionalProperties": false,
       "description": "Git diff 页面；`next_cursor` 存在即表示尾部仍有内容。",
-      "type": "object",
       "properties": {
         "data": {
           "type": "string"
@@ -420,22 +700,94 @@
           "type": "string"
         },
         "revision": {
-          "type": "integer",
           "format": "uint64",
-          "minimum": 0
+          "minimum": 0,
+          "type": "integer"
         }
       },
-      "additionalProperties": false,
       "required": [
         "project_id",
         "path",
         "revision",
         "data"
-      ]
+      ],
+      "type": "object"
+    },
+    "GitOpenDeletedRequest": {
+      "additionalProperties": false,
+      "description": "打开固定版本：目标必须是当前映射为删除的条目。",
+      "properties": {
+        "path": {
+          "description": "仓库相对路径，使用 `/` 分隔。",
+          "type": "string"
+        },
+        "project_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "GitOpenDiffRequest": {
+      "additionalProperties": false,
+      "description": "打开共享 Diff：目标必须是当前映射为差异的条目（modified／renamed／conflict）。",
+      "properties": {
+        "path": {
+          "description": "仓库相对路径，使用 `/` 分隔。",
+          "type": "string"
+        },
+        "project_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "GitRollbackExpected": {
+      "description": "回滚前置形态：只允许放弃精确的未暂存修改或删除。",
+      "enum": [
+        "modified",
+        "deleted"
+      ],
+      "type": "string"
+    },
+    "GitRollbackRequest": {
+      "additionalProperties": false,
+      "description": "放弃未暂存更改并恢复索引版本；`expected` 是专用前置条件。",
+      "properties": {
+        "expected": {
+          "$ref": "#/$defs/GitRollbackExpected",
+          "description": "调用方观察到的未暂存形态；执行前必须复核一致。"
+        },
+        "path": {
+          "description": "仓库相对路径，使用 `/` 分隔。",
+          "type": "string"
+        },
+        "project_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "path",
+        "expected"
+      ],
+      "type": "object"
     },
     "GitStatusCode": {
       "description": "Git porcelain v2 的 XY 状态字符封闭域。",
-      "type": "string",
       "enum": [
         ".",
         "M",
@@ -447,11 +799,12 @@
         "U",
         "?",
         "!"
-      ]
+      ],
+      "type": "string"
     },
     "GitStatusEntry": {
+      "additionalProperties": false,
       "description": "单个工作区条目的 porcelain v2 状态。",
-      "type": "object",
       "properties": {
         "conflict": {
           "type": "boolean"
@@ -482,7 +835,6 @@
           "$ref": "#/$defs/GitStatusCode"
         }
       },
-      "additionalProperties": false,
       "required": [
         "path",
         "index",
@@ -491,30 +843,45 @@
         "ignored",
         "staged",
         "unstaged"
-      ]
+      ],
+      "type": "object"
+    },
+    "GitStatusRequest": {
+      "additionalProperties": false,
+      "description": "项目仓库状态查询；`project_id` 缺省时使用活跃项目。",
+      "properties": {
+        "project_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "title": "GitStatusRequest",
+      "type": "object"
     },
     "GitStatusResponse": {
+      "additionalProperties": false,
       "description": "项目仓库状态：分支、上游与完整条目集，不含正文。",
-      "type": "object",
       "properties": {
         "ahead": {
-          "type": "integer",
           "format": "uint32",
-          "minimum": 0
+          "minimum": 0,
+          "type": "integer"
         },
         "behind": {
-          "type": "integer",
           "format": "uint32",
-          "minimum": 0
+          "minimum": 0,
+          "type": "integer"
         },
         "branch": {
           "type": "string"
         },
         "entries": {
-          "type": "array",
           "items": {
             "$ref": "#/$defs/GitStatusEntry"
-          }
+          },
+          "type": "array"
         },
         "head": {
           "type": "string"
@@ -532,7 +899,6 @@
           ]
         }
       },
-      "additionalProperties": false,
       "required": [
         "project_id",
         "root",
@@ -541,67 +907,68 @@
         "ahead",
         "behind",
         "entries"
-      ]
+      ],
+      "type": "object"
     },
     "HandoverMethod": {
       "description": "单实例移交只接受 instance.handover。",
-      "type": "string",
       "enum": [
         "instance.handover"
-      ]
+      ],
+      "type": "string"
     },
     "HandoverParams": {
       "description": "第二实例结构化意图；路径授权由应用层 PathPolicy 复核。",
       "oneOf": [
         {
-          "type": "object",
+          "additionalProperties": false,
           "properties": {
             "kind": {
-              "type": "string",
-              "const": "focus"
+              "const": "focus",
+              "type": "string"
             }
           },
-          "additionalProperties": false,
           "required": [
             "kind"
-          ]
+          ],
+          "type": "object"
         },
         {
-          "type": "object",
+          "additionalProperties": false,
           "properties": {
             "kind": {
-              "type": "string",
-              "const": "open_project"
+              "const": "open_project",
+              "type": "string"
             },
             "project_root": {
               "type": "string"
             }
           },
-          "additionalProperties": false,
           "required": [
             "kind",
             "project_root"
-          ]
+          ],
+          "type": "object"
         },
         {
-          "type": "object",
+          "additionalProperties": false,
           "properties": {
             "kind": {
-              "type": "string",
-              "const": "open_file"
+              "const": "open_file",
+              "type": "string"
             },
             "path": {
               "type": "string"
             }
           },
-          "additionalProperties": false,
           "required": [
             "kind",
             "path"
-          ]
+          ],
+          "type": "object"
         },
         {
-          "type": "object",
+          "additionalProperties": false,
           "properties": {
             "cwd": {
               "type": [
@@ -610,8 +977,8 @@
               ]
             },
             "kind": {
-              "type": "string",
-              "const": "new_terminal"
+              "const": "new_terminal",
+              "type": "string"
             },
             "project_root": {
               "type": [
@@ -620,39 +987,39 @@
               ]
             }
           },
-          "additionalProperties": false,
           "required": [
             "kind"
-          ]
+          ],
+          "type": "object"
         }
       ]
     },
     "HandoverResponse": {
+      "additionalProperties": false,
       "description": "单实例移交已接受的确认；拒绝必须使用结构化错误而非 accepted=false。",
-      "type": "object",
       "properties": {
         "accepted": {
-          "type": "boolean",
           "enum": [
             true
-          ]
+          ],
+          "type": "boolean"
         }
       },
-      "additionalProperties": false,
       "required": [
         "accepted"
-      ]
+      ],
+      "type": "object"
     },
     "HelloMethod": {
       "description": "首包只接受 Runtime hello。",
-      "type": "string",
       "enum": [
         "runtime.hello"
-      ]
+      ],
+      "type": "string"
     },
     "HelloParams": {
+      "additionalProperties": false,
       "description": "runtime.hello 的认证与协议协商参数。",
-      "type": "object",
       "properties": {
         "client_id": {
           "type": "string"
@@ -661,28 +1028,28 @@
           "$ref": "#/$defs/Credential"
         },
         "protocol_version": {
-          "type": "integer",
-          "format": "uint32",
           "enum": [
             2
           ],
-          "minimum": 0
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
         },
         "scope": {
           "$ref": "#/$defs/ControlScope"
         }
       },
-      "additionalProperties": false,
       "required": [
         "protocol_version",
         "client_id",
         "credential",
         "scope"
-      ]
+      ],
+      "type": "object"
     },
     "HelloResponse": {
+      "additionalProperties": false,
       "description": "hello 握手返回的世代、事件起点与合同散列。",
-      "type": "object",
       "properties": {
         "capabilities": {
           "$ref": "#/$defs/Capabilities"
@@ -691,9 +1058,9 @@
           "type": "string"
         },
         "revision": {
-          "type": "integer",
           "format": "uint64",
-          "minimum": 0
+          "minimum": 0,
+          "type": "integer"
         },
         "schema_sha256": {
           "type": "string"
@@ -705,7 +1072,6 @@
           "type": "string"
         }
       },
-      "additionalProperties": false,
       "required": [
         "store_epoch",
         "stream_epoch",
@@ -713,14 +1079,15 @@
         "protocol_sha256",
         "schema_sha256",
         "capabilities"
-      ]
+      ],
+      "type": "object"
     },
     "JsonRpcError": {
-      "type": "object",
+      "additionalProperties": false,
       "properties": {
         "code": {
-          "type": "integer",
-          "format": "int32"
+          "format": "int32",
+          "type": "integer"
         },
         "data": {
           "anyOf": [
@@ -736,27 +1103,27 @@
           "type": "string"
         }
       },
-      "additionalProperties": false,
       "required": [
         "code",
         "message"
-      ]
+      ],
+      "type": "object"
     },
     "JsonRpcErrorData": {
-      "type": "object",
+      "additionalProperties": false,
       "properties": {
         "code": {
           "$ref": "#/$defs/DomainErrorCode"
         }
       },
-      "additionalProperties": false,
       "required": [
         "code"
-      ]
+      ],
+      "type": "object"
     },
     "JsonRpcErrorResponse": {
+      "additionalProperties": false,
       "description": "通用错误响应的静态形状，不包含任何 result 字段。",
-      "type": "object",
       "properties": {
         "error": {
           "$ref": "#/$defs/JsonRpcError"
@@ -765,43 +1132,43 @@
           "$ref": "#/$defs/JsonRpcId"
         },
         "jsonrpc": {
-          "type": "string",
           "enum": [
             "2.0"
-          ]
+          ],
+          "type": "string"
         }
       },
-      "additionalProperties": false,
       "required": [
         "jsonrpc",
         "id",
         "error"
-      ]
+      ],
+      "type": "object"
     },
     "JsonRpcId": {
-      "description": "JSON-RPC 请求标识；通知与空标识不属于本协议。",
       "anyOf": [
         {
           "type": "string"
         },
         {
-          "type": "integer",
-          "format": "int64"
+          "format": "int64",
+          "type": "integer"
         }
-      ]
+      ],
+      "description": "JSON-RPC 请求标识；通知与空标识不属于本协议。"
     },
     "JsonRpcRequest": {
+      "additionalProperties": false,
       "description": "带封闭方法类型的 JSON-RPC 请求信封。",
-      "type": "object",
       "properties": {
         "id": {
           "$ref": "#/$defs/JsonRpcId"
         },
         "jsonrpc": {
-          "type": "string",
           "enum": [
             "2.0"
-          ]
+          ],
+          "type": "string"
         },
         "method": {
           "$ref": "#/$defs/HelloMethod"
@@ -810,26 +1177,26 @@
           "$ref": "#/$defs/HelloParams"
         }
       },
-      "additionalProperties": false,
       "required": [
         "jsonrpc",
         "id",
         "method",
         "params"
-      ]
+      ],
+      "type": "object"
     },
     "JsonRpcRequest2": {
+      "additionalProperties": false,
       "description": "带封闭方法类型的 JSON-RPC 请求信封。",
-      "type": "object",
       "properties": {
         "id": {
           "$ref": "#/$defs/JsonRpcId"
         },
         "jsonrpc": {
-          "type": "string",
           "enum": [
             "2.0"
-          ]
+          ],
+          "type": "string"
         },
         "method": {
           "$ref": "#/$defs/HandoverMethod"
@@ -838,108 +1205,108 @@
           "$ref": "#/$defs/HandoverParams"
         }
       },
-      "additionalProperties": false,
       "required": [
         "jsonrpc",
         "id",
         "method",
         "params"
-      ]
+      ],
+      "type": "object"
     },
     "JsonRpcResult": {
+      "additionalProperties": false,
       "description": "hello 成功响应的静态形状，与通用错误响应严格分离。",
-      "type": "object",
       "properties": {
         "id": {
           "$ref": "#/$defs/JsonRpcId"
         },
         "jsonrpc": {
-          "type": "string",
           "enum": [
             "2.0"
-          ]
+          ],
+          "type": "string"
         },
         "result": {
           "$ref": "#/$defs/HelloResponse"
         }
       },
-      "additionalProperties": false,
       "required": [
         "jsonrpc",
         "id",
         "result"
-      ]
+      ],
+      "type": "object"
     },
     "JsonRpcResult2": {
+      "additionalProperties": false,
       "description": "hello 成功响应的静态形状，与通用错误响应严格分离。",
-      "type": "object",
       "properties": {
         "id": {
           "$ref": "#/$defs/JsonRpcId"
         },
         "jsonrpc": {
-          "type": "string",
           "enum": [
             "2.0"
-          ]
+          ],
+          "type": "string"
         },
         "result": {
           "$ref": "#/$defs/HandoverResponse"
         }
       },
-      "additionalProperties": false,
       "required": [
         "jsonrpc",
         "id",
         "result"
-      ]
+      ],
+      "type": "object"
     },
     "JsonRpcResult3": {
+      "additionalProperties": false,
       "description": "hello 成功响应的静态形状，与通用错误响应严格分离。",
-      "type": "object",
       "properties": {
         "id": {
           "$ref": "#/$defs/JsonRpcId"
         },
         "jsonrpc": {
-          "type": "string",
           "enum": [
             "2.0"
-          ]
+          ],
+          "type": "string"
         },
         "result": {
           "$ref": "#/$defs/RuntimeResult"
         }
       },
-      "additionalProperties": false,
       "required": [
         "jsonrpc",
         "id",
         "result"
-      ]
+      ],
+      "type": "object"
     },
     "LayoutNodeResource": {
       "description": "分割树节点；布尔路径即沿 first=false／second=true 的走法。",
       "oneOf": [
         {
-          "type": "object",
+          "additionalProperties": false,
           "properties": {
             "group_id": {
               "type": "string"
             },
             "kind": {
-              "type": "string",
-              "const": "group"
+              "const": "group",
+              "type": "string"
             }
           },
-          "additionalProperties": false,
           "required": [
             "kind",
             "group_id"
-          ]
+          ],
+          "type": "object"
         },
         {
-          "type": "object",
+          "additionalProperties": false,
           "properties": {
             "direction": {
               "$ref": "#/$defs/SplitDirectionWire"
@@ -948,31 +1315,3012 @@
               "$ref": "#/$defs/LayoutNodeResource"
             },
             "kind": {
-              "type": "string",
-              "const": "split"
+              "const": "split",
+              "type": "string"
             },
             "ratio": {
-              "type": "number",
-              "format": "float"
+              "format": "float",
+              "type": "number"
             },
             "second": {
               "$ref": "#/$defs/LayoutNodeResource"
             }
           },
-          "additionalProperties": false,
           "required": [
             "kind",
             "direction",
             "ratio",
             "first",
             "second"
-          ]
+          ],
+          "type": "object"
         }
       ]
     },
+    "MethodContracts": {
+      "additionalProperties": false,
+      "description": "方法名到参数与结果 schema 的封闭映射；新增方法必须同步注册表。",
+      "properties": {
+        "agent.close": {
+          "additionalProperties": false,
+          "description": "agent.close",
+          "properties": {
+            "params": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
+              "properties": {
+                "client_id": {
+                  "type": "string"
+                },
+                "expected_revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "mutation_id": {
+                  "type": "string"
+                },
+                "request": {
+                  "$ref": "#/$defs/AgentCloseRequest"
+                }
+              },
+              "required": [
+                "client_id",
+                "mutation_id",
+                "request"
+              ],
+              "title": "MutationParams",
+              "type": "object"
+            },
+            "result": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "持久 Operation 的查询视图；结果不明同样可查询且不自动重发。",
+              "properties": {
+                "error": true,
+                "operation_id": {
+                  "type": "string"
+                },
+                "result": true,
+                "status": {
+                  "$ref": "#/$defs/OperationStatus"
+                }
+              },
+              "required": [
+                "operation_id",
+                "status"
+              ],
+              "title": "OperationResource",
+              "type": "object"
+            }
+          },
+          "required": [
+            "params",
+            "result"
+          ],
+          "type": "object"
+        },
+        "agent.fork": {
+          "additionalProperties": false,
+          "description": "agent.fork",
+          "properties": {
+            "params": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
+              "properties": {
+                "client_id": {
+                  "type": "string"
+                },
+                "expected_revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "mutation_id": {
+                  "type": "string"
+                },
+                "request": {
+                  "$ref": "#/$defs/AgentForkRequest"
+                }
+              },
+              "required": [
+                "client_id",
+                "mutation_id",
+                "request"
+              ],
+              "title": "MutationParams",
+              "type": "object"
+            },
+            "result": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "持久 Operation 的查询视图；结果不明同样可查询且不自动重发。",
+              "properties": {
+                "error": true,
+                "operation_id": {
+                  "type": "string"
+                },
+                "result": true,
+                "status": {
+                  "$ref": "#/$defs/OperationStatus"
+                }
+              },
+              "required": [
+                "operation_id",
+                "status"
+              ],
+              "title": "OperationResource",
+              "type": "object"
+            }
+          },
+          "required": [
+            "params",
+            "result"
+          ],
+          "type": "object"
+        },
+        "agent.get": {
+          "additionalProperties": false,
+          "description": "agent.get",
+          "properties": {
+            "params": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "按对外 Agent 身份查询关联。",
+              "properties": {
+                "agent_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "agent_id"
+              ],
+              "title": "AgentGetRequest",
+              "type": "object"
+            },
+            "result": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "agent.list 与 agent.get 共用的关联集合；空集合表示没有匹配。",
+              "properties": {
+                "agents": {
+                  "items": {
+                    "$ref": "#/$defs/AgentResource"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "agents"
+              ],
+              "title": "AgentListResponse",
+              "type": "object"
+            }
+          },
+          "required": [
+            "params",
+            "result"
+          ],
+          "type": "object"
+        },
+        "agent.input": {
+          "additionalProperties": false,
+          "description": "agent.input",
+          "properties": {
+            "params": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
+              "properties": {
+                "client_id": {
+                  "type": "string"
+                },
+                "expected_revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "mutation_id": {
+                  "type": "string"
+                },
+                "request": {
+                  "$ref": "#/$defs/AgentInputRequest"
+                }
+              },
+              "required": [
+                "client_id",
+                "mutation_id",
+                "request"
+              ],
+              "title": "MutationParams",
+              "type": "object"
+            },
+            "result": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "持久 Operation 的查询视图；结果不明同样可查询且不自动重发。",
+              "properties": {
+                "error": true,
+                "operation_id": {
+                  "type": "string"
+                },
+                "result": true,
+                "status": {
+                  "$ref": "#/$defs/OperationStatus"
+                }
+              },
+              "required": [
+                "operation_id",
+                "status"
+              ],
+              "title": "OperationResource",
+              "type": "object"
+            }
+          },
+          "required": [
+            "params",
+            "result"
+          ],
+          "type": "object"
+        },
+        "agent.list": {
+          "additionalProperties": false,
+          "description": "agent.list",
+          "properties": {
+            "params": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "无参数的 Runtime 方法；未知字段一律拒绝。",
+              "title": "EmptyParams",
+              "type": "object"
+            },
+            "result": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "agent.list 与 agent.get 共用的关联集合；空集合表示没有匹配。",
+              "properties": {
+                "agents": {
+                  "items": {
+                    "$ref": "#/$defs/AgentResource"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "agents"
+              ],
+              "title": "AgentListResponse",
+              "type": "object"
+            }
+          },
+          "required": [
+            "params",
+            "result"
+          ],
+          "type": "object"
+        },
+        "agent.read": {
+          "additionalProperties": false,
+          "description": "agent.read",
+          "properties": {
+            "params": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "Agent 关联终端的分页读取；目标身份与代次必须同时匹配。",
+              "properties": {
+                "agent_id": {
+                  "type": "string"
+                },
+                "cursor": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "generation": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "terminal_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "agent_id",
+                "terminal_id",
+                "generation"
+              ],
+              "title": "AgentReadRequest",
+              "type": "object"
+            },
+            "result": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "终端输出页面；`next_cursor` 存在即表示尾部仍有内容。",
+              "properties": {
+                "data": {
+                  "type": "string"
+                },
+                "generation": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "next_cursor": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "terminal_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "terminal_id",
+                "generation",
+                "revision",
+                "data"
+              ],
+              "title": "TerminalReadResponse",
+              "type": "object"
+            }
+          },
+          "required": [
+            "params",
+            "result"
+          ],
+          "type": "object"
+        },
+        "agent.resume": {
+          "additionalProperties": false,
+          "description": "agent.resume",
+          "properties": {
+            "params": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
+              "properties": {
+                "client_id": {
+                  "type": "string"
+                },
+                "expected_revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "mutation_id": {
+                  "type": "string"
+                },
+                "request": {
+                  "$ref": "#/$defs/AgentResumeRequest"
+                }
+              },
+              "required": [
+                "client_id",
+                "mutation_id",
+                "request"
+              ],
+              "title": "MutationParams",
+              "type": "object"
+            },
+            "result": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "持久 Operation 的查询视图；结果不明同样可查询且不自动重发。",
+              "properties": {
+                "error": true,
+                "operation_id": {
+                  "type": "string"
+                },
+                "result": true,
+                "status": {
+                  "$ref": "#/$defs/OperationStatus"
+                }
+              },
+              "required": [
+                "operation_id",
+                "status"
+              ],
+              "title": "OperationResource",
+              "type": "object"
+            }
+          },
+          "required": [
+            "params",
+            "result"
+          ],
+          "type": "object"
+        },
+        "agent.start": {
+          "additionalProperties": false,
+          "description": "agent.start",
+          "properties": {
+            "params": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
+              "properties": {
+                "client_id": {
+                  "type": "string"
+                },
+                "expected_revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "mutation_id": {
+                  "type": "string"
+                },
+                "request": {
+                  "$ref": "#/$defs/AgentStartRequest"
+                }
+              },
+              "required": [
+                "client_id",
+                "mutation_id",
+                "request"
+              ],
+              "title": "MutationParams",
+              "type": "object"
+            },
+            "result": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "持久 Operation 的查询视图；结果不明同样可查询且不自动重发。",
+              "properties": {
+                "error": true,
+                "operation_id": {
+                  "type": "string"
+                },
+                "result": true,
+                "status": {
+                  "$ref": "#/$defs/OperationStatus"
+                }
+              },
+              "required": [
+                "operation_id",
+                "status"
+              ],
+              "title": "OperationResource",
+              "type": "object"
+            }
+          },
+          "required": [
+            "params",
+            "result"
+          ],
+          "type": "object"
+        },
+        "agent.wait": {
+          "additionalProperties": false,
+          "description": "agent.wait",
+          "properties": {
+            "params": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "等待 Agent 关联终端的输出 revision 超过 `since_revision`。",
+              "properties": {
+                "agent_id": {
+                  "type": "string"
+                },
+                "generation": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "since_revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "terminal_id": {
+                  "type": "string"
+                },
+                "timeout_ms": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "agent_id",
+                "terminal_id",
+                "generation",
+                "since_revision"
+              ],
+              "title": "AgentWaitRequest",
+              "type": "object"
+            },
+            "result": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "等待结果：`revision` 一定大于请求的 `since_revision`。",
+              "properties": {
+                "generation": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "terminal_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "terminal_id",
+                "generation",
+                "revision"
+              ],
+              "title": "TerminalWaitResponse",
+              "type": "object"
+            }
+          },
+          "required": [
+            "params",
+            "result"
+          ],
+          "type": "object"
+        },
+        "app.close": {
+          "additionalProperties": false,
+          "description": "app.close",
+          "properties": {
+            "params": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
+              "properties": {
+                "client_id": {
+                  "type": "string"
+                },
+                "expected_revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "mutation_id": {
+                  "type": "string"
+                },
+                "request": {
+                  "$ref": "#/$defs/AppCloseRequest"
+                }
+              },
+              "required": [
+                "client_id",
+                "mutation_id",
+                "request"
+              ],
+              "title": "MutationParams",
+              "type": "object"
+            },
+            "result": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "持久 Operation 的查询视图；结果不明同样可查询且不自动重发。",
+              "properties": {
+                "error": true,
+                "operation_id": {
+                  "type": "string"
+                },
+                "result": true,
+                "status": {
+                  "$ref": "#/$defs/OperationStatus"
+                }
+              },
+              "required": [
+                "operation_id",
+                "status"
+              ],
+              "title": "OperationResource",
+              "type": "object"
+            }
+          },
+          "required": [
+            "params",
+            "result"
+          ],
+          "type": "object"
+        },
+        "app.focus": {
+          "additionalProperties": false,
+          "description": "app.focus",
+          "properties": {
+            "params": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
+              "properties": {
+                "client_id": {
+                  "type": "string"
+                },
+                "expected_revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "mutation_id": {
+                  "type": "string"
+                },
+                "request": {
+                  "$ref": "#/$defs/EmptyParams"
+                }
+              },
+              "required": [
+                "client_id",
+                "mutation_id",
+                "request"
+              ],
+              "title": "MutationParams",
+              "type": "object"
+            },
+            "result": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "持久 Operation 的查询视图；结果不明同样可查询且不自动重发。",
+              "properties": {
+                "error": true,
+                "operation_id": {
+                  "type": "string"
+                },
+                "result": true,
+                "status": {
+                  "$ref": "#/$defs/OperationStatus"
+                }
+              },
+              "required": [
+                "operation_id",
+                "status"
+              ],
+              "title": "OperationResource",
+              "type": "object"
+            }
+          },
+          "required": [
+            "params",
+            "result"
+          ],
+          "type": "object"
+        },
+        "events.subscribe": {
+          "additionalProperties": false,
+          "description": "events.subscribe",
+          "properties": {
+            "params": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "事件续传三元组：世代与起点必须同时匹配事件环，否则要求重新快照。",
+              "properties": {
+                "since_revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "store_epoch": {
+                  "type": "string"
+                },
+                "stream_epoch": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "store_epoch",
+                "stream_epoch",
+                "since_revision"
+              ],
+              "title": "EventsSubscribeParams",
+              "type": "object"
+            },
+            "result": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "订阅确认：返回事件流身份与该订阅看到的当前末尾 revision。",
+              "properties": {
+                "revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "stream_epoch": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "stream_epoch",
+                "revision"
+              ],
+              "title": "EventsSubscribedResponse",
+              "type": "object"
+            }
+          },
+          "required": [
+            "params",
+            "result"
+          ],
+          "type": "object"
+        },
+        "events.unsubscribe": {
+          "additionalProperties": false,
+          "description": "events.unsubscribe",
+          "properties": {
+            "params": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "无参数的 Runtime 方法；未知字段一律拒绝。",
+              "title": "EmptyParams",
+              "type": "object"
+            },
+            "result": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "取消订阅的确认；订阅身份绑定连接，不另行分配。",
+              "title": "EventsUnsubscribedResponse",
+              "type": "object"
+            }
+          },
+          "required": [
+            "params",
+            "result"
+          ],
+          "type": "object"
+        },
+        "git.delete": {
+          "additionalProperties": false,
+          "description": "git.delete",
+          "properties": {
+            "params": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
+              "properties": {
+                "client_id": {
+                  "type": "string"
+                },
+                "expected_revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "mutation_id": {
+                  "type": "string"
+                },
+                "request": {
+                  "$ref": "#/$defs/GitDeleteRequest"
+                }
+              },
+              "required": [
+                "client_id",
+                "mutation_id",
+                "request"
+              ],
+              "title": "MutationParams",
+              "type": "object"
+            },
+            "result": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "持久 Operation 的查询视图；结果不明同样可查询且不自动重发。",
+              "properties": {
+                "error": true,
+                "operation_id": {
+                  "type": "string"
+                },
+                "result": true,
+                "status": {
+                  "$ref": "#/$defs/OperationStatus"
+                }
+              },
+              "required": [
+                "operation_id",
+                "status"
+              ],
+              "title": "OperationResource",
+              "type": "object"
+            }
+          },
+          "required": [
+            "params",
+            "result"
+          ],
+          "type": "object"
+        },
+        "git.diff": {
+          "additionalProperties": false,
+          "description": "git.diff",
+          "properties": {
+            "params": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "读取单个仓库相对路径的 HEAD 与工作区差异；游标只由服务端生成。",
+              "properties": {
+                "cursor": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "path": {
+                  "description": "仓库相对路径，使用 `/` 分隔。",
+                  "type": "string"
+                },
+                "project_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "path"
+              ],
+              "title": "GitDiffRequest",
+              "type": "object"
+            },
+            "result": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "Git diff 页面；`next_cursor` 存在即表示尾部仍有内容。",
+              "properties": {
+                "data": {
+                  "type": "string"
+                },
+                "next_cursor": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "path": {
+                  "type": "string"
+                },
+                "project_id": {
+                  "type": "string"
+                },
+                "revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "project_id",
+                "path",
+                "revision",
+                "data"
+              ],
+              "title": "GitDiffResponse",
+              "type": "object"
+            }
+          },
+          "required": [
+            "params",
+            "result"
+          ],
+          "type": "object"
+        },
+        "git.open_deleted": {
+          "additionalProperties": false,
+          "description": "git.open_deleted",
+          "properties": {
+            "params": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
+              "properties": {
+                "client_id": {
+                  "type": "string"
+                },
+                "expected_revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "mutation_id": {
+                  "type": "string"
+                },
+                "request": {
+                  "$ref": "#/$defs/GitOpenDeletedRequest"
+                }
+              },
+              "required": [
+                "client_id",
+                "mutation_id",
+                "request"
+              ],
+              "title": "MutationParams",
+              "type": "object"
+            },
+            "result": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "持久 Operation 的查询视图；结果不明同样可查询且不自动重发。",
+              "properties": {
+                "error": true,
+                "operation_id": {
+                  "type": "string"
+                },
+                "result": true,
+                "status": {
+                  "$ref": "#/$defs/OperationStatus"
+                }
+              },
+              "required": [
+                "operation_id",
+                "status"
+              ],
+              "title": "OperationResource",
+              "type": "object"
+            }
+          },
+          "required": [
+            "params",
+            "result"
+          ],
+          "type": "object"
+        },
+        "git.open_diff": {
+          "additionalProperties": false,
+          "description": "git.open_diff",
+          "properties": {
+            "params": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
+              "properties": {
+                "client_id": {
+                  "type": "string"
+                },
+                "expected_revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "mutation_id": {
+                  "type": "string"
+                },
+                "request": {
+                  "$ref": "#/$defs/GitOpenDiffRequest"
+                }
+              },
+              "required": [
+                "client_id",
+                "mutation_id",
+                "request"
+              ],
+              "title": "MutationParams",
+              "type": "object"
+            },
+            "result": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "持久 Operation 的查询视图；结果不明同样可查询且不自动重发。",
+              "properties": {
+                "error": true,
+                "operation_id": {
+                  "type": "string"
+                },
+                "result": true,
+                "status": {
+                  "$ref": "#/$defs/OperationStatus"
+                }
+              },
+              "required": [
+                "operation_id",
+                "status"
+              ],
+              "title": "OperationResource",
+              "type": "object"
+            }
+          },
+          "required": [
+            "params",
+            "result"
+          ],
+          "type": "object"
+        },
+        "git.rollback": {
+          "additionalProperties": false,
+          "description": "git.rollback",
+          "properties": {
+            "params": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
+              "properties": {
+                "client_id": {
+                  "type": "string"
+                },
+                "expected_revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "mutation_id": {
+                  "type": "string"
+                },
+                "request": {
+                  "$ref": "#/$defs/GitRollbackRequest"
+                }
+              },
+              "required": [
+                "client_id",
+                "mutation_id",
+                "request"
+              ],
+              "title": "MutationParams",
+              "type": "object"
+            },
+            "result": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "持久 Operation 的查询视图；结果不明同样可查询且不自动重发。",
+              "properties": {
+                "error": true,
+                "operation_id": {
+                  "type": "string"
+                },
+                "result": true,
+                "status": {
+                  "$ref": "#/$defs/OperationStatus"
+                }
+              },
+              "required": [
+                "operation_id",
+                "status"
+              ],
+              "title": "OperationResource",
+              "type": "object"
+            }
+          },
+          "required": [
+            "params",
+            "result"
+          ],
+          "type": "object"
+        },
+        "git.status": {
+          "additionalProperties": false,
+          "description": "git.status",
+          "properties": {
+            "params": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "项目仓库状态查询；`project_id` 缺省时使用活跃项目。",
+              "properties": {
+                "project_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "title": "GitStatusRequest",
+              "type": "object"
+            },
+            "result": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "项目仓库状态：分支、上游与完整条目集，不含正文。",
+              "properties": {
+                "ahead": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "behind": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "branch": {
+                  "type": "string"
+                },
+                "entries": {
+                  "items": {
+                    "$ref": "#/$defs/GitStatusEntry"
+                  },
+                  "type": "array"
+                },
+                "head": {
+                  "type": "string"
+                },
+                "project_id": {
+                  "type": "string"
+                },
+                "root": {
+                  "type": "string"
+                },
+                "upstream": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "project_id",
+                "root",
+                "branch",
+                "head",
+                "ahead",
+                "behind",
+                "entries"
+              ],
+              "title": "GitStatusResponse",
+              "type": "object"
+            }
+          },
+          "required": [
+            "params",
+            "result"
+          ],
+          "type": "object"
+        },
+        "instance.handover": {
+          "additionalProperties": false,
+          "description": "instance.handover",
+          "properties": {
+            "params": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "description": "第二实例结构化意图；路径授权由应用层 PathPolicy 复核。",
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "const": "focus",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "const": "open_project",
+                      "type": "string"
+                    },
+                    "project_root": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "project_root"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "const": "open_file",
+                      "type": "string"
+                    },
+                    "path": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "path"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "cwd": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "kind": {
+                      "const": "new_terminal",
+                      "type": "string"
+                    },
+                    "project_root": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ],
+                  "type": "object"
+                }
+              ],
+              "title": "HandoverParams"
+            },
+            "result": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "单实例移交已接受的确认；拒绝必须使用结构化错误而非 accepted=false。",
+              "properties": {
+                "accepted": {
+                  "enum": [
+                    true
+                  ],
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "accepted"
+              ],
+              "title": "HandoverResponse",
+              "type": "object"
+            }
+          },
+          "required": [
+            "params",
+            "result"
+          ],
+          "type": "object"
+        },
+        "panel.activate": {
+          "additionalProperties": false,
+          "description": "panel.activate",
+          "properties": {
+            "params": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
+              "properties": {
+                "client_id": {
+                  "type": "string"
+                },
+                "expected_revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "mutation_id": {
+                  "type": "string"
+                },
+                "request": {
+                  "$ref": "#/$defs/PanelActivateRequest"
+                }
+              },
+              "required": [
+                "client_id",
+                "mutation_id",
+                "request"
+              ],
+              "title": "MutationParams",
+              "type": "object"
+            },
+            "result": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "持久 Operation 的查询视图；结果不明同样可查询且不自动重发。",
+              "properties": {
+                "error": true,
+                "operation_id": {
+                  "type": "string"
+                },
+                "result": true,
+                "status": {
+                  "$ref": "#/$defs/OperationStatus"
+                }
+              },
+              "required": [
+                "operation_id",
+                "status"
+              ],
+              "title": "OperationResource",
+              "type": "object"
+            }
+          },
+          "required": [
+            "params",
+            "result"
+          ],
+          "type": "object"
+        },
+        "panel.close": {
+          "additionalProperties": false,
+          "description": "panel.close",
+          "properties": {
+            "params": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
+              "properties": {
+                "client_id": {
+                  "type": "string"
+                },
+                "expected_revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "mutation_id": {
+                  "type": "string"
+                },
+                "request": {
+                  "$ref": "#/$defs/PanelCloseRequest"
+                }
+              },
+              "required": [
+                "client_id",
+                "mutation_id",
+                "request"
+              ],
+              "title": "MutationParams",
+              "type": "object"
+            },
+            "result": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "持久 Operation 的查询视图；结果不明同样可查询且不自动重发。",
+              "properties": {
+                "error": true,
+                "operation_id": {
+                  "type": "string"
+                },
+                "result": true,
+                "status": {
+                  "$ref": "#/$defs/OperationStatus"
+                }
+              },
+              "required": [
+                "operation_id",
+                "status"
+              ],
+              "title": "OperationResource",
+              "type": "object"
+            }
+          },
+          "required": [
+            "params",
+            "result"
+          ],
+          "type": "object"
+        },
+        "panel.move": {
+          "additionalProperties": false,
+          "description": "panel.move",
+          "properties": {
+            "params": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
+              "properties": {
+                "client_id": {
+                  "type": "string"
+                },
+                "expected_revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "mutation_id": {
+                  "type": "string"
+                },
+                "request": {
+                  "$ref": "#/$defs/PanelMoveRequest"
+                }
+              },
+              "required": [
+                "client_id",
+                "mutation_id",
+                "request"
+              ],
+              "title": "MutationParams",
+              "type": "object"
+            },
+            "result": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "持久 Operation 的查询视图；结果不明同样可查询且不自动重发。",
+              "properties": {
+                "error": true,
+                "operation_id": {
+                  "type": "string"
+                },
+                "result": true,
+                "status": {
+                  "$ref": "#/$defs/OperationStatus"
+                }
+              },
+              "required": [
+                "operation_id",
+                "status"
+              ],
+              "title": "OperationResource",
+              "type": "object"
+            }
+          },
+          "required": [
+            "params",
+            "result"
+          ],
+          "type": "object"
+        },
+        "panel.open_file": {
+          "additionalProperties": false,
+          "description": "panel.open_file",
+          "properties": {
+            "params": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
+              "properties": {
+                "client_id": {
+                  "type": "string"
+                },
+                "expected_revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "mutation_id": {
+                  "type": "string"
+                },
+                "request": {
+                  "$ref": "#/$defs/PanelOpenFileRequest"
+                }
+              },
+              "required": [
+                "client_id",
+                "mutation_id",
+                "request"
+              ],
+              "title": "MutationParams",
+              "type": "object"
+            },
+            "result": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "持久 Operation 的查询视图；结果不明同样可查询且不自动重发。",
+              "properties": {
+                "error": true,
+                "operation_id": {
+                  "type": "string"
+                },
+                "result": true,
+                "status": {
+                  "$ref": "#/$defs/OperationStatus"
+                }
+              },
+              "required": [
+                "operation_id",
+                "status"
+              ],
+              "title": "OperationResource",
+              "type": "object"
+            }
+          },
+          "required": [
+            "params",
+            "result"
+          ],
+          "type": "object"
+        },
+        "panel.open_settings": {
+          "additionalProperties": false,
+          "description": "panel.open_settings",
+          "properties": {
+            "params": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
+              "properties": {
+                "client_id": {
+                  "type": "string"
+                },
+                "expected_revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "mutation_id": {
+                  "type": "string"
+                },
+                "request": {
+                  "$ref": "#/$defs/EmptyParams"
+                }
+              },
+              "required": [
+                "client_id",
+                "mutation_id",
+                "request"
+              ],
+              "title": "MutationParams",
+              "type": "object"
+            },
+            "result": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "持久 Operation 的查询视图；结果不明同样可查询且不自动重发。",
+              "properties": {
+                "error": true,
+                "operation_id": {
+                  "type": "string"
+                },
+                "result": true,
+                "status": {
+                  "$ref": "#/$defs/OperationStatus"
+                }
+              },
+              "required": [
+                "operation_id",
+                "status"
+              ],
+              "title": "OperationResource",
+              "type": "object"
+            }
+          },
+          "required": [
+            "params",
+            "result"
+          ],
+          "type": "object"
+        },
+        "panel.save": {
+          "additionalProperties": false,
+          "description": "panel.save",
+          "properties": {
+            "params": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
+              "properties": {
+                "client_id": {
+                  "type": "string"
+                },
+                "expected_revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "mutation_id": {
+                  "type": "string"
+                },
+                "request": {
+                  "$ref": "#/$defs/PanelSaveRequest"
+                }
+              },
+              "required": [
+                "client_id",
+                "mutation_id",
+                "request"
+              ],
+              "title": "MutationParams",
+              "type": "object"
+            },
+            "result": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "持久 Operation 的查询视图；结果不明同样可查询且不自动重发。",
+              "properties": {
+                "error": true,
+                "operation_id": {
+                  "type": "string"
+                },
+                "result": true,
+                "status": {
+                  "$ref": "#/$defs/OperationStatus"
+                }
+              },
+              "required": [
+                "operation_id",
+                "status"
+              ],
+              "title": "OperationResource",
+              "type": "object"
+            }
+          },
+          "required": [
+            "params",
+            "result"
+          ],
+          "type": "object"
+        },
+        "panel_group.merge": {
+          "additionalProperties": false,
+          "description": "panel_group.merge",
+          "properties": {
+            "params": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
+              "properties": {
+                "client_id": {
+                  "type": "string"
+                },
+                "expected_revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "mutation_id": {
+                  "type": "string"
+                },
+                "request": {
+                  "$ref": "#/$defs/PanelGroupMergeRequest"
+                }
+              },
+              "required": [
+                "client_id",
+                "mutation_id",
+                "request"
+              ],
+              "title": "MutationParams",
+              "type": "object"
+            },
+            "result": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "持久 Operation 的查询视图；结果不明同样可查询且不自动重发。",
+              "properties": {
+                "error": true,
+                "operation_id": {
+                  "type": "string"
+                },
+                "result": true,
+                "status": {
+                  "$ref": "#/$defs/OperationStatus"
+                }
+              },
+              "required": [
+                "operation_id",
+                "status"
+              ],
+              "title": "OperationResource",
+              "type": "object"
+            }
+          },
+          "required": [
+            "params",
+            "result"
+          ],
+          "type": "object"
+        },
+        "panel_group.resize": {
+          "additionalProperties": false,
+          "description": "panel_group.resize",
+          "properties": {
+            "params": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
+              "properties": {
+                "client_id": {
+                  "type": "string"
+                },
+                "expected_revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "mutation_id": {
+                  "type": "string"
+                },
+                "request": {
+                  "$ref": "#/$defs/PanelGroupResizeRequest"
+                }
+              },
+              "required": [
+                "client_id",
+                "mutation_id",
+                "request"
+              ],
+              "title": "MutationParams",
+              "type": "object"
+            },
+            "result": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "持久 Operation 的查询视图；结果不明同样可查询且不自动重发。",
+              "properties": {
+                "error": true,
+                "operation_id": {
+                  "type": "string"
+                },
+                "result": true,
+                "status": {
+                  "$ref": "#/$defs/OperationStatus"
+                }
+              },
+              "required": [
+                "operation_id",
+                "status"
+              ],
+              "title": "OperationResource",
+              "type": "object"
+            }
+          },
+          "required": [
+            "params",
+            "result"
+          ],
+          "type": "object"
+        },
+        "panel_group.split": {
+          "additionalProperties": false,
+          "description": "panel_group.split",
+          "properties": {
+            "params": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
+              "properties": {
+                "client_id": {
+                  "type": "string"
+                },
+                "expected_revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "mutation_id": {
+                  "type": "string"
+                },
+                "request": {
+                  "$ref": "#/$defs/PanelGroupSplitRequest"
+                }
+              },
+              "required": [
+                "client_id",
+                "mutation_id",
+                "request"
+              ],
+              "title": "MutationParams",
+              "type": "object"
+            },
+            "result": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "持久 Operation 的查询视图；结果不明同样可查询且不自动重发。",
+              "properties": {
+                "error": true,
+                "operation_id": {
+                  "type": "string"
+                },
+                "result": true,
+                "status": {
+                  "$ref": "#/$defs/OperationStatus"
+                }
+              },
+              "required": [
+                "operation_id",
+                "status"
+              ],
+              "title": "OperationResource",
+              "type": "object"
+            }
+          },
+          "required": [
+            "params",
+            "result"
+          ],
+          "type": "object"
+        },
+        "project.activate": {
+          "additionalProperties": false,
+          "description": "project.activate",
+          "properties": {
+            "params": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
+              "properties": {
+                "client_id": {
+                  "type": "string"
+                },
+                "expected_revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "mutation_id": {
+                  "type": "string"
+                },
+                "request": {
+                  "$ref": "#/$defs/ProjectActivateRequest"
+                }
+              },
+              "required": [
+                "client_id",
+                "mutation_id",
+                "request"
+              ],
+              "title": "MutationParams",
+              "type": "object"
+            },
+            "result": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "持久 Operation 的查询视图；结果不明同样可查询且不自动重发。",
+              "properties": {
+                "error": true,
+                "operation_id": {
+                  "type": "string"
+                },
+                "result": true,
+                "status": {
+                  "$ref": "#/$defs/OperationStatus"
+                }
+              },
+              "required": [
+                "operation_id",
+                "status"
+              ],
+              "title": "OperationResource",
+              "type": "object"
+            }
+          },
+          "required": [
+            "params",
+            "result"
+          ],
+          "type": "object"
+        },
+        "project.list": {
+          "additionalProperties": false,
+          "description": "project.list",
+          "properties": {
+            "params": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "无参数的 Runtime 方法；未知字段一律拒绝。",
+              "title": "EmptyParams",
+              "type": "object"
+            },
+            "result": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "`project.list`：按导航顺序返回项目摘要；与 snapshot 的项目资源同构。",
+              "properties": {
+                "projects": {
+                  "items": {
+                    "$ref": "#/$defs/ProjectResource"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "projects"
+              ],
+              "title": "ProjectListResponse",
+              "type": "object"
+            }
+          },
+          "required": [
+            "params",
+            "result"
+          ],
+          "type": "object"
+        },
+        "project.remove": {
+          "additionalProperties": false,
+          "description": "project.remove",
+          "properties": {
+            "params": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
+              "properties": {
+                "client_id": {
+                  "type": "string"
+                },
+                "expected_revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "mutation_id": {
+                  "type": "string"
+                },
+                "request": {
+                  "$ref": "#/$defs/ProjectRemoveRequest"
+                }
+              },
+              "required": [
+                "client_id",
+                "mutation_id",
+                "request"
+              ],
+              "title": "MutationParams",
+              "type": "object"
+            },
+            "result": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "持久 Operation 的查询视图；结果不明同样可查询且不自动重发。",
+              "properties": {
+                "error": true,
+                "operation_id": {
+                  "type": "string"
+                },
+                "result": true,
+                "status": {
+                  "$ref": "#/$defs/OperationStatus"
+                }
+              },
+              "required": [
+                "operation_id",
+                "status"
+              ],
+              "title": "OperationResource",
+              "type": "object"
+            }
+          },
+          "required": [
+            "params",
+            "result"
+          ],
+          "type": "object"
+        },
+        "project.rename": {
+          "additionalProperties": false,
+          "description": "project.rename",
+          "properties": {
+            "params": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
+              "properties": {
+                "client_id": {
+                  "type": "string"
+                },
+                "expected_revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "mutation_id": {
+                  "type": "string"
+                },
+                "request": {
+                  "$ref": "#/$defs/ProjectRenameRequest"
+                }
+              },
+              "required": [
+                "client_id",
+                "mutation_id",
+                "request"
+              ],
+              "title": "MutationParams",
+              "type": "object"
+            },
+            "result": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "持久 Operation 的查询视图；结果不明同样可查询且不自动重发。",
+              "properties": {
+                "error": true,
+                "operation_id": {
+                  "type": "string"
+                },
+                "result": true,
+                "status": {
+                  "$ref": "#/$defs/OperationStatus"
+                }
+              },
+              "required": [
+                "operation_id",
+                "status"
+              ],
+              "title": "OperationResource",
+              "type": "object"
+            }
+          },
+          "required": [
+            "params",
+            "result"
+          ],
+          "type": "object"
+        },
+        "project.reorder": {
+          "additionalProperties": false,
+          "description": "project.reorder",
+          "properties": {
+            "params": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
+              "properties": {
+                "client_id": {
+                  "type": "string"
+                },
+                "expected_revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "mutation_id": {
+                  "type": "string"
+                },
+                "request": {
+                  "$ref": "#/$defs/ProjectReorderRequest"
+                }
+              },
+              "required": [
+                "client_id",
+                "mutation_id",
+                "request"
+              ],
+              "title": "MutationParams",
+              "type": "object"
+            },
+            "result": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "持久 Operation 的查询视图；结果不明同样可查询且不自动重发。",
+              "properties": {
+                "error": true,
+                "operation_id": {
+                  "type": "string"
+                },
+                "result": true,
+                "status": {
+                  "$ref": "#/$defs/OperationStatus"
+                }
+              },
+              "required": [
+                "operation_id",
+                "status"
+              ],
+              "title": "OperationResource",
+              "type": "object"
+            }
+          },
+          "required": [
+            "params",
+            "result"
+          ],
+          "type": "object"
+        },
+        "runtime.describe": {
+          "additionalProperties": false,
+          "description": "runtime.describe",
+          "properties": {
+            "params": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "无参数的 Runtime 方法；未知字段一律拒绝。",
+              "title": "EmptyParams",
+              "type": "object"
+            },
+            "result": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "`runtime.describe` 返回方法注册与当前合同散列。",
+              "properties": {
+                "methods": {
+                  "items": {
+                    "$ref": "#/$defs/MethodDescriptor"
+                  },
+                  "type": "array"
+                },
+                "protocol_sha256": {
+                  "type": "string"
+                },
+                "schema_sha256": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "protocol_sha256",
+                "schema_sha256",
+                "methods"
+              ],
+              "title": "DescribeResponse",
+              "type": "object"
+            }
+          },
+          "required": [
+            "params",
+            "result"
+          ],
+          "type": "object"
+        },
+        "runtime.hello": {
+          "additionalProperties": false,
+          "description": "runtime.hello",
+          "properties": {
+            "params": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "runtime.hello 的认证与协议协商参数。",
+              "properties": {
+                "client_id": {
+                  "type": "string"
+                },
+                "credential": {
+                  "$ref": "#/$defs/Credential"
+                },
+                "protocol_version": {
+                  "enum": [
+                    2
+                  ],
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "scope": {
+                  "$ref": "#/$defs/ControlScope"
+                }
+              },
+              "required": [
+                "protocol_version",
+                "client_id",
+                "credential",
+                "scope"
+              ],
+              "title": "HelloParams",
+              "type": "object"
+            },
+            "result": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "hello 握手返回的世代、事件起点与合同散列。",
+              "properties": {
+                "capabilities": {
+                  "$ref": "#/$defs/Capabilities"
+                },
+                "protocol_sha256": {
+                  "type": "string"
+                },
+                "revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "schema_sha256": {
+                  "type": "string"
+                },
+                "store_epoch": {
+                  "type": "string"
+                },
+                "stream_epoch": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "store_epoch",
+                "stream_epoch",
+                "revision",
+                "protocol_sha256",
+                "schema_sha256",
+                "capabilities"
+              ],
+              "title": "HelloResponse",
+              "type": "object"
+            }
+          },
+          "required": [
+            "params",
+            "result"
+          ],
+          "type": "object"
+        },
+        "runtime.operation_get": {
+          "additionalProperties": false,
+          "description": "runtime.operation_get",
+          "properties": {
+            "params": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "按操作标识查询持久结果；operation.get 与 operation.wait 共用身份。",
+              "properties": {
+                "operation_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "operation_id"
+              ],
+              "title": "OperationQueryParams",
+              "type": "object"
+            },
+            "result": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "持久 Operation 的查询视图；结果不明同样可查询且不自动重发。",
+              "properties": {
+                "error": true,
+                "operation_id": {
+                  "type": "string"
+                },
+                "result": true,
+                "status": {
+                  "$ref": "#/$defs/OperationStatus"
+                }
+              },
+              "required": [
+                "operation_id",
+                "status"
+              ],
+              "title": "OperationResource",
+              "type": "object"
+            }
+          },
+          "required": [
+            "params",
+            "result"
+          ],
+          "type": "object"
+        },
+        "runtime.operation_wait": {
+          "additionalProperties": false,
+          "description": "runtime.operation_wait",
+          "properties": {
+            "params": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "有界等待：超时缺省为服务端上限，显式值不得超过 600 秒。",
+              "properties": {
+                "operation_id": {
+                  "type": "string"
+                },
+                "timeout_ms": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "operation_id"
+              ],
+              "title": "OperationWaitParams",
+              "type": "object"
+            },
+            "result": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "持久 Operation 的查询视图；结果不明同样可查询且不自动重发。",
+              "properties": {
+                "error": true,
+                "operation_id": {
+                  "type": "string"
+                },
+                "result": true,
+                "status": {
+                  "$ref": "#/$defs/OperationStatus"
+                }
+              },
+              "required": [
+                "operation_id",
+                "status"
+              ],
+              "title": "OperationResource",
+              "type": "object"
+            }
+          },
+          "required": [
+            "params",
+            "result"
+          ],
+          "type": "object"
+        },
+        "runtime.snapshot": {
+          "additionalProperties": false,
+          "description": "runtime.snapshot",
+          "properties": {
+            "params": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "无参数的 Runtime 方法；未知字段一律拒绝。",
+              "title": "EmptyParams",
+              "type": "object"
+            },
+            "result": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "`runtime.snapshot` 的不可变资源快照与世代。",
+              "properties": {
+                "resources": {
+                  "$ref": "#/$defs/SnapshotResources"
+                },
+                "revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "store_epoch": {
+                  "type": "string"
+                },
+                "stream_epoch": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "store_epoch",
+                "stream_epoch",
+                "revision",
+                "resources"
+              ],
+              "title": "SnapshotResponse",
+              "type": "object"
+            }
+          },
+          "required": [
+            "params",
+            "result"
+          ],
+          "type": "object"
+        },
+        "terminal.close": {
+          "additionalProperties": false,
+          "description": "terminal.close",
+          "properties": {
+            "params": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
+              "properties": {
+                "client_id": {
+                  "type": "string"
+                },
+                "expected_revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "mutation_id": {
+                  "type": "string"
+                },
+                "request": {
+                  "$ref": "#/$defs/TerminalCloseRequest"
+                }
+              },
+              "required": [
+                "client_id",
+                "mutation_id",
+                "request"
+              ],
+              "title": "MutationParams",
+              "type": "object"
+            },
+            "result": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "持久 Operation 的查询视图；结果不明同样可查询且不自动重发。",
+              "properties": {
+                "error": true,
+                "operation_id": {
+                  "type": "string"
+                },
+                "result": true,
+                "status": {
+                  "$ref": "#/$defs/OperationStatus"
+                }
+              },
+              "required": [
+                "operation_id",
+                "status"
+              ],
+              "title": "OperationResource",
+              "type": "object"
+            }
+          },
+          "required": [
+            "params",
+            "result"
+          ],
+          "type": "object"
+        },
+        "terminal.create": {
+          "additionalProperties": false,
+          "description": "terminal.create",
+          "properties": {
+            "params": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
+              "properties": {
+                "client_id": {
+                  "type": "string"
+                },
+                "expected_revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "mutation_id": {
+                  "type": "string"
+                },
+                "request": {
+                  "$ref": "#/$defs/TerminalCreateRequest"
+                }
+              },
+              "required": [
+                "client_id",
+                "mutation_id",
+                "request"
+              ],
+              "title": "MutationParams",
+              "type": "object"
+            },
+            "result": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "持久 Operation 的查询视图；结果不明同样可查询且不自动重发。",
+              "properties": {
+                "error": true,
+                "operation_id": {
+                  "type": "string"
+                },
+                "result": true,
+                "status": {
+                  "$ref": "#/$defs/OperationStatus"
+                }
+              },
+              "required": [
+                "operation_id",
+                "status"
+              ],
+              "title": "OperationResource",
+              "type": "object"
+            }
+          },
+          "required": [
+            "params",
+            "result"
+          ],
+          "type": "object"
+        },
+        "terminal.execute": {
+          "additionalProperties": false,
+          "description": "terminal.execute",
+          "properties": {
+            "params": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
+              "properties": {
+                "client_id": {
+                  "type": "string"
+                },
+                "expected_revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "mutation_id": {
+                  "type": "string"
+                },
+                "request": {
+                  "$ref": "#/$defs/TerminalExecuteRequest"
+                }
+              },
+              "required": [
+                "client_id",
+                "mutation_id",
+                "request"
+              ],
+              "title": "MutationParams",
+              "type": "object"
+            },
+            "result": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "持久 Operation 的查询视图；结果不明同样可查询且不自动重发。",
+              "properties": {
+                "error": true,
+                "operation_id": {
+                  "type": "string"
+                },
+                "result": true,
+                "status": {
+                  "$ref": "#/$defs/OperationStatus"
+                }
+              },
+              "required": [
+                "operation_id",
+                "status"
+              ],
+              "title": "OperationResource",
+              "type": "object"
+            }
+          },
+          "required": [
+            "params",
+            "result"
+          ],
+          "type": "object"
+        },
+        "terminal.input": {
+          "additionalProperties": false,
+          "description": "terminal.input",
+          "properties": {
+            "params": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
+              "properties": {
+                "client_id": {
+                  "type": "string"
+                },
+                "expected_revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "mutation_id": {
+                  "type": "string"
+                },
+                "request": {
+                  "$ref": "#/$defs/TerminalInputRequest"
+                }
+              },
+              "required": [
+                "client_id",
+                "mutation_id",
+                "request"
+              ],
+              "title": "MutationParams",
+              "type": "object"
+            },
+            "result": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "持久 Operation 的查询视图；结果不明同样可查询且不自动重发。",
+              "properties": {
+                "error": true,
+                "operation_id": {
+                  "type": "string"
+                },
+                "result": true,
+                "status": {
+                  "$ref": "#/$defs/OperationStatus"
+                }
+              },
+              "required": [
+                "operation_id",
+                "status"
+              ],
+              "title": "OperationResource",
+              "type": "object"
+            }
+          },
+          "required": [
+            "params",
+            "result"
+          ],
+          "type": "object"
+        },
+        "terminal.read": {
+          "additionalProperties": false,
+          "description": "terminal.read",
+          "properties": {
+            "params": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "终端输出分页读取；游标只由服务端生成，客户端不得构造。",
+              "properties": {
+                "cursor": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "generation": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "terminal_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "terminal_id",
+                "generation"
+              ],
+              "title": "TerminalReadRequest",
+              "type": "object"
+            },
+            "result": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "终端输出页面；`next_cursor` 存在即表示尾部仍有内容。",
+              "properties": {
+                "data": {
+                  "type": "string"
+                },
+                "generation": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "next_cursor": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "terminal_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "terminal_id",
+                "generation",
+                "revision",
+                "data"
+              ],
+              "title": "TerminalReadResponse",
+              "type": "object"
+            }
+          },
+          "required": [
+            "params",
+            "result"
+          ],
+          "type": "object"
+        },
+        "terminal.reconnect": {
+          "additionalProperties": false,
+          "description": "terminal.reconnect",
+          "properties": {
+            "params": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
+              "properties": {
+                "client_id": {
+                  "type": "string"
+                },
+                "expected_revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "mutation_id": {
+                  "type": "string"
+                },
+                "request": {
+                  "$ref": "#/$defs/TerminalReconnectRequest"
+                }
+              },
+              "required": [
+                "client_id",
+                "mutation_id",
+                "request"
+              ],
+              "title": "MutationParams",
+              "type": "object"
+            },
+            "result": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "持久 Operation 的查询视图；结果不明同样可查询且不自动重发。",
+              "properties": {
+                "error": true,
+                "operation_id": {
+                  "type": "string"
+                },
+                "result": true,
+                "status": {
+                  "$ref": "#/$defs/OperationStatus"
+                }
+              },
+              "required": [
+                "operation_id",
+                "status"
+              ],
+              "title": "OperationResource",
+              "type": "object"
+            }
+          },
+          "required": [
+            "params",
+            "result"
+          ],
+          "type": "object"
+        },
+        "terminal.rename": {
+          "additionalProperties": false,
+          "description": "terminal.rename",
+          "properties": {
+            "params": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
+              "properties": {
+                "client_id": {
+                  "type": "string"
+                },
+                "expected_revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "mutation_id": {
+                  "type": "string"
+                },
+                "request": {
+                  "$ref": "#/$defs/TerminalRenameRequest"
+                }
+              },
+              "required": [
+                "client_id",
+                "mutation_id",
+                "request"
+              ],
+              "title": "MutationParams",
+              "type": "object"
+            },
+            "result": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "持久 Operation 的查询视图；结果不明同样可查询且不自动重发。",
+              "properties": {
+                "error": true,
+                "operation_id": {
+                  "type": "string"
+                },
+                "result": true,
+                "status": {
+                  "$ref": "#/$defs/OperationStatus"
+                }
+              },
+              "required": [
+                "operation_id",
+                "status"
+              ],
+              "title": "OperationResource",
+              "type": "object"
+            }
+          },
+          "required": [
+            "params",
+            "result"
+          ],
+          "type": "object"
+        },
+        "terminal.wait": {
+          "additionalProperties": false,
+          "description": "terminal.wait",
+          "properties": {
+            "params": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "等待终端输出推进到 `since_revision` 之后；超时映射 NotReady。",
+              "properties": {
+                "generation": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "since_revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "terminal_id": {
+                  "type": "string"
+                },
+                "timeout_ms": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "terminal_id",
+                "generation",
+                "since_revision"
+              ],
+              "title": "TerminalWaitRequest",
+              "type": "object"
+            },
+            "result": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "additionalProperties": false,
+              "description": "等待结果：`revision` 一定大于请求的 `since_revision`。",
+              "properties": {
+                "generation": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "terminal_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "terminal_id",
+                "generation",
+                "revision"
+              ],
+              "title": "TerminalWaitResponse",
+              "type": "object"
+            }
+          },
+          "required": [
+            "params",
+            "result"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "agent.close",
+        "agent.fork",
+        "agent.get",
+        "agent.input",
+        "agent.list",
+        "agent.read",
+        "agent.resume",
+        "agent.start",
+        "agent.wait",
+        "app.close",
+        "app.focus",
+        "events.subscribe",
+        "events.unsubscribe",
+        "git.delete",
+        "git.diff",
+        "git.open_deleted",
+        "git.open_diff",
+        "git.rollback",
+        "git.status",
+        "instance.handover",
+        "panel.activate",
+        "panel.close",
+        "panel.move",
+        "panel.open_file",
+        "panel.open_settings",
+        "panel.save",
+        "panel_group.merge",
+        "panel_group.resize",
+        "panel_group.split",
+        "project.activate",
+        "project.list",
+        "project.remove",
+        "project.rename",
+        "project.reorder",
+        "runtime.describe",
+        "runtime.hello",
+        "runtime.operation_get",
+        "runtime.operation_wait",
+        "runtime.snapshot",
+        "terminal.close",
+        "terminal.create",
+        "terminal.execute",
+        "terminal.input",
+        "terminal.read",
+        "terminal.reconnect",
+        "terminal.rename",
+        "terminal.wait"
+      ],
+      "type": "object"
+    },
     "MethodDescriptor": {
+      "additionalProperties": false,
       "description": "`runtime.describe` 的单个方法合同：与注册表共用同一事实。",
-      "type": "object",
       "properties": {
         "idempotent": {
           "type": "boolean"
@@ -984,51 +4332,51 @@
           "type": "string"
         },
         "scopes": {
-          "type": "array",
           "items": {
             "$ref": "#/$defs/ControlScope"
-          }
+          },
+          "type": "array"
         }
       },
-      "additionalProperties": false,
       "required": [
         "method",
         "scopes",
         "kind",
         "idempotent"
-      ]
+      ],
+      "type": "object"
     },
     "MethodKind": {
       "description": "方法副作用类别：查询无副作用，写操作改变应用事实，连接级方法改变连接生命周期。",
       "oneOf": [
         {
-          "type": "string",
           "enum": [
             "query",
             "mutation"
-          ]
+          ],
+          "type": "string"
         },
         {
+          "const": "connection",
           "description": "注册或结束连接级状态（例如事件订阅）；不能在同一普通请求循环中重试。",
-          "type": "string",
-          "const": "connection"
+          "type": "string"
         }
       ]
     },
     "MutationParams": {
+      "additionalProperties": false,
       "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
-      "type": "object",
       "properties": {
         "client_id": {
           "type": "string"
         },
         "expected_revision": {
+          "format": "uint64",
+          "minimum": 0,
           "type": [
             "integer",
             "null"
-          ],
-          "format": "uint64",
-          "minimum": 0
+          ]
         },
         "mutation_id": {
           "type": "string"
@@ -1037,27 +4385,27 @@
           "$ref": "#/$defs/ProjectActivateRequest"
         }
       },
-      "additionalProperties": false,
       "required": [
         "client_id",
         "mutation_id",
         "request"
-      ]
+      ],
+      "type": "object"
     },
     "MutationParams10": {
+      "additionalProperties": false,
       "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
-      "type": "object",
       "properties": {
         "client_id": {
           "type": "string"
         },
         "expected_revision": {
+          "format": "uint64",
+          "minimum": 0,
           "type": [
             "integer",
             "null"
-          ],
-          "format": "uint64",
-          "minimum": 0
+          ]
         },
         "mutation_id": {
           "type": "string"
@@ -1066,27 +4414,27 @@
           "$ref": "#/$defs/EmptyParams"
         }
       },
-      "additionalProperties": false,
       "required": [
         "client_id",
         "mutation_id",
         "request"
-      ]
+      ],
+      "type": "object"
     },
     "MutationParams11": {
+      "additionalProperties": false,
       "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
-      "type": "object",
       "properties": {
         "client_id": {
           "type": "string"
         },
         "expected_revision": {
+          "format": "uint64",
+          "minimum": 0,
           "type": [
             "integer",
             "null"
-          ],
-          "format": "uint64",
-          "minimum": 0
+          ]
         },
         "mutation_id": {
           "type": "string"
@@ -1095,27 +4443,27 @@
           "$ref": "#/$defs/TerminalCreateRequest"
         }
       },
-      "additionalProperties": false,
       "required": [
         "client_id",
         "mutation_id",
         "request"
-      ]
+      ],
+      "type": "object"
     },
     "MutationParams12": {
+      "additionalProperties": false,
       "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
-      "type": "object",
       "properties": {
         "client_id": {
           "type": "string"
         },
         "expected_revision": {
+          "format": "uint64",
+          "minimum": 0,
           "type": [
             "integer",
             "null"
-          ],
-          "format": "uint64",
-          "minimum": 0
+          ]
         },
         "mutation_id": {
           "type": "string"
@@ -1124,27 +4472,27 @@
           "$ref": "#/$defs/TerminalInputRequest"
         }
       },
-      "additionalProperties": false,
       "required": [
         "client_id",
         "mutation_id",
         "request"
-      ]
+      ],
+      "type": "object"
     },
     "MutationParams13": {
+      "additionalProperties": false,
       "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
-      "type": "object",
       "properties": {
         "client_id": {
           "type": "string"
         },
         "expected_revision": {
+          "format": "uint64",
+          "minimum": 0,
           "type": [
             "integer",
             "null"
-          ],
-          "format": "uint64",
-          "minimum": 0
+          ]
         },
         "mutation_id": {
           "type": "string"
@@ -1153,27 +4501,27 @@
           "$ref": "#/$defs/TerminalExecuteRequest"
         }
       },
-      "additionalProperties": false,
       "required": [
         "client_id",
         "mutation_id",
         "request"
-      ]
+      ],
+      "type": "object"
     },
     "MutationParams2": {
+      "additionalProperties": false,
       "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
-      "type": "object",
       "properties": {
         "client_id": {
           "type": "string"
         },
         "expected_revision": {
+          "format": "uint64",
+          "minimum": 0,
           "type": [
             "integer",
             "null"
-          ],
-          "format": "uint64",
-          "minimum": 0
+          ]
         },
         "mutation_id": {
           "type": "string"
@@ -1182,27 +4530,27 @@
           "$ref": "#/$defs/ProjectRenameRequest"
         }
       },
-      "additionalProperties": false,
       "required": [
         "client_id",
         "mutation_id",
         "request"
-      ]
+      ],
+      "type": "object"
     },
     "MutationParams3": {
+      "additionalProperties": false,
       "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
-      "type": "object",
       "properties": {
         "client_id": {
           "type": "string"
         },
         "expected_revision": {
+          "format": "uint64",
+          "minimum": 0,
           "type": [
             "integer",
             "null"
-          ],
-          "format": "uint64",
-          "minimum": 0
+          ]
         },
         "mutation_id": {
           "type": "string"
@@ -1211,27 +4559,27 @@
           "$ref": "#/$defs/ProjectReorderRequest"
         }
       },
-      "additionalProperties": false,
       "required": [
         "client_id",
         "mutation_id",
         "request"
-      ]
+      ],
+      "type": "object"
     },
     "MutationParams4": {
+      "additionalProperties": false,
       "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
-      "type": "object",
       "properties": {
         "client_id": {
           "type": "string"
         },
         "expected_revision": {
+          "format": "uint64",
+          "minimum": 0,
           "type": [
             "integer",
             "null"
-          ],
-          "format": "uint64",
-          "minimum": 0
+          ]
         },
         "mutation_id": {
           "type": "string"
@@ -1240,27 +4588,27 @@
           "$ref": "#/$defs/ProjectRemoveRequest"
         }
       },
-      "additionalProperties": false,
       "required": [
         "client_id",
         "mutation_id",
         "request"
-      ]
+      ],
+      "type": "object"
     },
     "MutationParams5": {
+      "additionalProperties": false,
       "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
-      "type": "object",
       "properties": {
         "client_id": {
           "type": "string"
         },
         "expected_revision": {
+          "format": "uint64",
+          "minimum": 0,
           "type": [
             "integer",
             "null"
-          ],
-          "format": "uint64",
-          "minimum": 0
+          ]
         },
         "mutation_id": {
           "type": "string"
@@ -1269,27 +4617,27 @@
           "$ref": "#/$defs/PanelGroupSplitRequest"
         }
       },
-      "additionalProperties": false,
       "required": [
         "client_id",
         "mutation_id",
         "request"
-      ]
+      ],
+      "type": "object"
     },
     "MutationParams6": {
+      "additionalProperties": false,
       "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
-      "type": "object",
       "properties": {
         "client_id": {
           "type": "string"
         },
         "expected_revision": {
+          "format": "uint64",
+          "minimum": 0,
           "type": [
             "integer",
             "null"
-          ],
-          "format": "uint64",
-          "minimum": 0
+          ]
         },
         "mutation_id": {
           "type": "string"
@@ -1298,27 +4646,27 @@
           "$ref": "#/$defs/PanelGroupMergeRequest"
         }
       },
-      "additionalProperties": false,
       "required": [
         "client_id",
         "mutation_id",
         "request"
-      ]
+      ],
+      "type": "object"
     },
     "MutationParams7": {
+      "additionalProperties": false,
       "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
-      "type": "object",
       "properties": {
         "client_id": {
           "type": "string"
         },
         "expected_revision": {
+          "format": "uint64",
+          "minimum": 0,
           "type": [
             "integer",
             "null"
-          ],
-          "format": "uint64",
-          "minimum": 0
+          ]
         },
         "mutation_id": {
           "type": "string"
@@ -1327,27 +4675,27 @@
           "$ref": "#/$defs/PanelGroupResizeRequest"
         }
       },
-      "additionalProperties": false,
       "required": [
         "client_id",
         "mutation_id",
         "request"
-      ]
+      ],
+      "type": "object"
     },
     "MutationParams8": {
+      "additionalProperties": false,
       "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
-      "type": "object",
       "properties": {
         "client_id": {
           "type": "string"
         },
         "expected_revision": {
+          "format": "uint64",
+          "minimum": 0,
           "type": [
             "integer",
             "null"
-          ],
-          "format": "uint64",
-          "minimum": 0
+          ]
         },
         "mutation_id": {
           "type": "string"
@@ -1356,27 +4704,27 @@
           "$ref": "#/$defs/PanelActivateRequest"
         }
       },
-      "additionalProperties": false,
       "required": [
         "client_id",
         "mutation_id",
         "request"
-      ]
+      ],
+      "type": "object"
     },
     "MutationParams9": {
+      "additionalProperties": false,
       "description": "写请求信封：幂等键与客户端身份是必填，期望代次可选。",
-      "type": "object",
       "properties": {
         "client_id": {
           "type": "string"
         },
         "expected_revision": {
+          "format": "uint64",
+          "minimum": 0,
           "type": [
             "integer",
             "null"
-          ],
-          "format": "uint64",
-          "minimum": 0
+          ]
         },
         "mutation_id": {
           "type": "string"
@@ -1385,29 +4733,29 @@
           "$ref": "#/$defs/PanelMoveRequest"
         }
       },
-      "additionalProperties": false,
       "required": [
         "client_id",
         "mutation_id",
         "request"
-      ]
+      ],
+      "type": "object"
     },
     "OperationQueryParams": {
+      "additionalProperties": false,
       "description": "按操作标识查询持久结果；operation.get 与 operation.wait 共用身份。",
-      "type": "object",
       "properties": {
         "operation_id": {
           "type": "string"
         }
       },
-      "additionalProperties": false,
       "required": [
         "operation_id"
-      ]
+      ],
+      "type": "object"
     },
     "OperationResource": {
+      "additionalProperties": false,
       "description": "持久 Operation 的查询视图；结果不明同样可查询且不自动重发。",
-      "type": "object",
       "properties": {
         "error": true,
         "operation_id": {
@@ -1418,15 +4766,14 @@
           "$ref": "#/$defs/OperationStatus"
         }
       },
-      "additionalProperties": false,
       "required": [
         "operation_id",
         "status"
-      ]
+      ],
+      "type": "object"
     },
     "OperationStatus": {
       "description": "Runtime 写操作的持久生命周期状态。",
-      "type": "string",
       "enum": [
         "queued",
         "running",
@@ -1434,45 +4781,70 @@
         "failed",
         "cancelled",
         "outcome_unknown"
-      ]
+      ],
+      "type": "string"
     },
     "OperationWaitParams": {
+      "additionalProperties": false,
       "description": "有界等待：超时缺省为服务端上限，显式值不得超过 600 秒。",
-      "type": "object",
       "properties": {
         "operation_id": {
           "type": "string"
         },
         "timeout_ms": {
+          "format": "uint64",
+          "minimum": 0,
           "type": [
             "integer",
             "null"
-          ],
-          "format": "uint64",
-          "minimum": 0
+          ]
         }
       },
-      "additionalProperties": false,
       "required": [
         "operation_id"
-      ]
+      ],
+      "type": "object"
     },
     "PanelActivateRequest": {
+      "additionalProperties": false,
       "description": "激活视图；`view` 是规范 ViewKey JSON 文本。",
-      "type": "object",
       "properties": {
         "view": {
           "type": "string"
         }
       },
-      "additionalProperties": false,
       "required": [
         "view"
-      ]
+      ],
+      "type": "object"
+    },
+    "PanelCloseRequest": {
+      "additionalProperties": false,
+      "description": "关闭单个面板；`documents` 缺省时脏 Document 会返回 `decision_required`。",
+      "properties": {
+        "documents": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CloseDocumentsPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "view": {
+          "description": "规范 ViewKey JSON 文本。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "view"
+      ],
+      "type": "object"
     },
     "PanelGroupMergeRequest": {
+      "additionalProperties": false,
       "description": "合并两个稳定组；顺序由布局转换裁定。",
-      "type": "object",
       "properties": {
         "source_group": {
           "type": "string"
@@ -1481,36 +4853,36 @@
           "type": "string"
         }
       },
-      "additionalProperties": false,
       "required": [
         "source_group",
         "target_group"
-      ]
+      ],
+      "type": "object"
     },
     "PanelGroupResizeRequest": {
+      "additionalProperties": false,
       "description": "调整分割比例；`path` 是从根到分割节点的布尔路径。",
-      "type": "object",
       "properties": {
         "path": {
-          "type": "array",
           "items": {
             "type": "boolean"
-          }
+          },
+          "type": "array"
         },
         "ratio": {
-          "type": "number",
-          "format": "float"
+          "format": "float",
+          "type": "number"
         }
       },
-      "additionalProperties": false,
       "required": [
         "path",
         "ratio"
-      ]
+      ],
+      "type": "object"
     },
     "PanelGroupResource": {
+      "additionalProperties": false,
       "description": "快照中的面板组；`views` 按持久顺序，`active_view` 为组内激活视图。",
-      "type": "object",
       "properties": {
         "active_view": {
           "type": "string"
@@ -1522,30 +4894,30 @@
           "type": "string"
         },
         "views": {
-          "type": "array",
           "items": {
             "$ref": "#/$defs/ViewResource"
-          }
+          },
+          "type": "array"
         }
       },
-      "additionalProperties": false,
       "required": [
         "project_id",
         "group_id",
         "views",
         "active_view"
-      ]
+      ],
+      "type": "object"
     },
     "PanelGroupSplitRequest": {
+      "additionalProperties": false,
       "description": "从源视图拆分新组；`view` 是规范 ViewKey JSON 文本。\n\n最小空间由服务端前台真实内容视口裁定，客户端不提供视口。",
-      "type": "object",
       "properties": {
         "direction": {
           "$ref": "#/$defs/SplitDirectionWire"
         },
         "ratio": {
-          "type": "number",
-          "format": "float"
+          "format": "float",
+          "type": "number"
         },
         "target_group": {
           "type": "string"
@@ -1554,52 +4926,78 @@
           "type": "string"
         }
       },
-      "additionalProperties": false,
       "required": [
         "view",
         "target_group",
         "direction",
         "ratio"
-      ]
+      ],
+      "type": "object"
     },
     "PanelMoveRequest": {
+      "additionalProperties": false,
       "description": "将视图移动到目标组指定位置。",
-      "type": "object",
       "properties": {
         "target_group": {
           "type": "string"
         },
         "target_index": {
-          "type": "integer",
           "format": "uint64",
-          "minimum": 0
+          "minimum": 0,
+          "type": "integer"
         },
         "view": {
           "type": "string"
         }
       },
-      "additionalProperties": false,
       "required": [
         "view",
         "target_group",
         "target_index"
-      ]
+      ],
+      "type": "object"
+    },
+    "PanelOpenFileRequest": {
+      "additionalProperties": false,
+      "description": "打开文件到文本面板；`path` 是绝对 OS 路径，类型与授权由 application 裁定。",
+      "properties": {
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "PanelSaveRequest": {
+      "additionalProperties": false,
+      "description": "保存视图绑定的 Document；`view` 是规范 ViewKey JSON 文本。",
+      "properties": {
+        "view": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "view"
+      ],
+      "type": "object"
     },
     "ProjectActivateRequest": {
-      "type": "object",
+      "additionalProperties": false,
       "properties": {
         "project_id": {
           "type": "string"
         }
       },
-      "additionalProperties": false,
       "required": [
         "project_id"
-      ]
+      ],
+      "type": "object"
     },
     "ProjectLayoutResource": {
+      "additionalProperties": false,
       "description": "项目的分割树；`root` 为空表示空布局。",
-      "type": "object",
       "properties": {
         "project_id": {
           "type": "string"
@@ -1615,32 +5013,31 @@
           ]
         }
       },
-      "additionalProperties": false,
       "required": [
         "project_id"
-      ]
+      ],
+      "type": "object"
     },
     "ProjectListResponse": {
+      "additionalProperties": false,
       "description": "`project.list`：按导航顺序返回项目摘要；与 snapshot 的项目资源同构。",
-      "type": "object",
       "properties": {
         "projects": {
-          "type": "array",
           "items": {
             "$ref": "#/$defs/ProjectResource"
-          }
+          },
+          "type": "array"
         }
       },
-      "additionalProperties": false,
       "required": [
         "projects"
-      ]
+      ],
+      "type": "object"
     },
     "ProjectRemoveRequest": {
-      "type": "object",
+      "additionalProperties": false,
       "properties": {
         "documents": {
-          "description": "项目范围内 Document 的处置策略；缺省时脏 Document 触发 `decision_required`。",
           "anyOf": [
             {
               "$ref": "#/$defs/CloseDocumentsPolicy"
@@ -1649,10 +5046,10 @@
               "type": "null"
             }
           ],
-          "default": null
+          "default": null,
+          "description": "项目范围内 Document 的处置策略；缺省时脏 Document 触发 `decision_required`。"
         },
         "hooks": {
-          "description": "项目 Hooks 草稿的处置策略；缺省时草稿触发 `decision_required`。",
           "anyOf": [
             {
               "$ref": "#/$defs/CloseHooksPolicy"
@@ -1661,19 +5058,20 @@
               "type": "null"
             }
           ],
-          "default": null
+          "default": null,
+          "description": "项目 Hooks 草稿的处置策略；缺省时草稿触发 `decision_required`。"
         },
         "project_id": {
           "type": "string"
         }
       },
-      "additionalProperties": false,
       "required": [
         "project_id"
-      ]
+      ],
+      "type": "object"
     },
     "ProjectRenameRequest": {
-      "type": "object",
+      "additionalProperties": false,
       "properties": {
         "name": {
           "type": "string"
@@ -1682,33 +5080,33 @@
           "type": "string"
         }
       },
-      "additionalProperties": false,
       "required": [
         "project_id",
         "name"
-      ]
+      ],
+      "type": "object"
     },
     "ProjectReorderRequest": {
-      "type": "object",
+      "additionalProperties": false,
       "properties": {
         "new_index": {
-          "type": "integer",
           "format": "uint64",
-          "minimum": 0
+          "minimum": 0,
+          "type": "integer"
         },
         "project_id": {
           "type": "string"
         }
       },
-      "additionalProperties": false,
       "required": [
         "project_id",
         "new_index"
-      ]
+      ],
+      "type": "object"
     },
     "ProjectResource": {
+      "additionalProperties": false,
       "description": "快照中的项目资源身份与元数据。",
-      "type": "object",
       "properties": {
         "active": {
           "type": "boolean"
@@ -1723,27 +5121,27 @@
           "type": "string"
         }
       },
-      "additionalProperties": false,
       "required": [
         "project_id",
         "display_name",
         "root",
         "active"
-      ]
+      ],
+      "type": "object"
     },
     "RuntimeEvent": {
+      "additionalProperties": false,
       "description": "轻量事件：资源身份、代次与必要元数据；终端正文只经分页读取。",
-      "type": "object",
       "properties": {
         "generation": {
           "description": "资源代次；旧代次事件不覆盖新代次状态。",
-          "type": "integer",
           "format": "uint64",
-          "minimum": 0
+          "minimum": 0,
+          "type": "integer"
         },
         "kind": {
-          "description": "封闭事件类型；新增值必须先登记协议与发布点。",
-          "$ref": "#/$defs/RuntimeEventKind"
+          "$ref": "#/$defs/RuntimeEventKind",
+          "description": "封闭事件类型；新增值必须先登记协议与发布点。"
         },
         "resource": {
           "description": "资源身份文本（稳定 ID 或规范 ViewKey JSON）。",
@@ -1751,47 +5149,46 @@
         },
         "revision": {
           "description": "单调 revision；缺口只能以重新快照补偿。",
-          "type": "integer",
           "format": "uint64",
-          "minimum": 0
+          "minimum": 0,
+          "type": "integer"
         }
       },
-      "additionalProperties": false,
       "required": [
         "revision",
         "kind",
         "resource",
         "generation"
-      ]
+      ],
+      "type": "object"
     },
     "RuntimeEventKind": {
       "description": "Runtime 事件类型的封闭线缆枚举。",
       "oneOf": [
         {
+          "const": "project.activated",
           "description": "项目激活 [resource=project id]。",
-          "type": "string",
-          "const": "project.activated"
+          "type": "string"
         },
         {
+          "const": "panel.activated",
           "description": "面板激活 [resource=规范 ViewKey JSON]。",
-          "type": "string",
-          "const": "panel.activated"
+          "type": "string"
         },
         {
+          "const": "panel.closed",
           "description": "面板关闭 [resource=规范 ViewKey JSON]。",
-          "type": "string",
-          "const": "panel.closed"
+          "type": "string"
         },
         {
+          "const": "terminal.output",
           "description": "终端输出代次推进 [resource=terminal id]。",
-          "type": "string",
-          "const": "terminal.output"
+          "type": "string"
         }
       ]
     },
     "RuntimeMethod": {
       "description": "认证后的 Runtime 方法；写方法族由后续切片逐个接入。",
-      "type": "string",
       "enum": [
         "runtime.describe",
         "runtime.snapshot",
@@ -1838,10 +5235,10 @@
         "git.open_deleted",
         "app.focus",
         "app.close"
-      ]
+      ],
+      "type": "string"
     },
     "RuntimeParams": {
-      "description": "Runtime 方法参数形状的 schema 汇总；运行时不参与分派。",
       "anyOf": [
         {
           "$ref": "#/$defs/EmptyParams"
@@ -1894,38 +5291,498 @@
         {
           "$ref": "#/$defs/MutationParams13"
         }
-      ]
+      ],
+      "description": "Runtime 方法参数形状的 schema 汇总；运行时不参与分派。"
     },
     "RuntimeRequest": {
+      "additionalProperties": false,
       "description": "认证后的 Runtime 请求：信封先携带方法名，参数再按方法二次解析。\n\n这样同构参数（例如同为 `{project_id}` 的两个写方法）不会在 untagged\n反序列化中互相吞并；业务语义只由 `method` 决定。",
-      "type": "object",
+      "oneOf": [
+        {
+          "properties": {
+            "method": {
+              "const": "runtime.hello"
+            },
+            "params": {
+              "$ref": "#/$defs/MethodContracts/properties/runtime.hello/properties/params"
+            }
+          }
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "runtime.describe"
+            },
+            "params": {
+              "$ref": "#/$defs/MethodContracts/properties/runtime.describe/properties/params"
+            }
+          }
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "runtime.snapshot"
+            },
+            "params": {
+              "$ref": "#/$defs/MethodContracts/properties/runtime.snapshot/properties/params"
+            }
+          }
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "runtime.operation_get"
+            },
+            "params": {
+              "$ref": "#/$defs/MethodContracts/properties/runtime.operation_get/properties/params"
+            }
+          }
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "runtime.operation_wait"
+            },
+            "params": {
+              "$ref": "#/$defs/MethodContracts/properties/runtime.operation_wait/properties/params"
+            }
+          }
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "events.subscribe"
+            },
+            "params": {
+              "$ref": "#/$defs/MethodContracts/properties/events.subscribe/properties/params"
+            }
+          }
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "events.unsubscribe"
+            },
+            "params": {
+              "$ref": "#/$defs/MethodContracts/properties/events.unsubscribe/properties/params"
+            }
+          }
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "project.list"
+            },
+            "params": {
+              "$ref": "#/$defs/MethodContracts/properties/project.list/properties/params"
+            }
+          }
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "project.activate"
+            },
+            "params": {
+              "$ref": "#/$defs/MethodContracts/properties/project.activate/properties/params"
+            }
+          }
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "project.rename"
+            },
+            "params": {
+              "$ref": "#/$defs/MethodContracts/properties/project.rename/properties/params"
+            }
+          }
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "project.reorder"
+            },
+            "params": {
+              "$ref": "#/$defs/MethodContracts/properties/project.reorder/properties/params"
+            }
+          }
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "project.remove"
+            },
+            "params": {
+              "$ref": "#/$defs/MethodContracts/properties/project.remove/properties/params"
+            }
+          }
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "panel_group.split"
+            },
+            "params": {
+              "$ref": "#/$defs/MethodContracts/properties/panel_group.split/properties/params"
+            }
+          }
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "panel_group.merge"
+            },
+            "params": {
+              "$ref": "#/$defs/MethodContracts/properties/panel_group.merge/properties/params"
+            }
+          }
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "panel_group.resize"
+            },
+            "params": {
+              "$ref": "#/$defs/MethodContracts/properties/panel_group.resize/properties/params"
+            }
+          }
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "panel.activate"
+            },
+            "params": {
+              "$ref": "#/$defs/MethodContracts/properties/panel.activate/properties/params"
+            }
+          }
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "panel.move"
+            },
+            "params": {
+              "$ref": "#/$defs/MethodContracts/properties/panel.move/properties/params"
+            }
+          }
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "panel.open_settings"
+            },
+            "params": {
+              "$ref": "#/$defs/MethodContracts/properties/panel.open_settings/properties/params"
+            }
+          }
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "panel.open_file"
+            },
+            "params": {
+              "$ref": "#/$defs/MethodContracts/properties/panel.open_file/properties/params"
+            }
+          }
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "panel.save"
+            },
+            "params": {
+              "$ref": "#/$defs/MethodContracts/properties/panel.save/properties/params"
+            }
+          }
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "panel.close"
+            },
+            "params": {
+              "$ref": "#/$defs/MethodContracts/properties/panel.close/properties/params"
+            }
+          }
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "terminal.create"
+            },
+            "params": {
+              "$ref": "#/$defs/MethodContracts/properties/terminal.create/properties/params"
+            }
+          }
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "terminal.input"
+            },
+            "params": {
+              "$ref": "#/$defs/MethodContracts/properties/terminal.input/properties/params"
+            }
+          }
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "terminal.execute"
+            },
+            "params": {
+              "$ref": "#/$defs/MethodContracts/properties/terminal.execute/properties/params"
+            }
+          }
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "terminal.read"
+            },
+            "params": {
+              "$ref": "#/$defs/MethodContracts/properties/terminal.read/properties/params"
+            }
+          }
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "terminal.wait"
+            },
+            "params": {
+              "$ref": "#/$defs/MethodContracts/properties/terminal.wait/properties/params"
+            }
+          }
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "terminal.close"
+            },
+            "params": {
+              "$ref": "#/$defs/MethodContracts/properties/terminal.close/properties/params"
+            }
+          }
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "terminal.reconnect"
+            },
+            "params": {
+              "$ref": "#/$defs/MethodContracts/properties/terminal.reconnect/properties/params"
+            }
+          }
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "terminal.rename"
+            },
+            "params": {
+              "$ref": "#/$defs/MethodContracts/properties/terminal.rename/properties/params"
+            }
+          }
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "agent.list"
+            },
+            "params": {
+              "$ref": "#/$defs/MethodContracts/properties/agent.list/properties/params"
+            }
+          }
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "agent.get"
+            },
+            "params": {
+              "$ref": "#/$defs/MethodContracts/properties/agent.get/properties/params"
+            }
+          }
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "agent.input"
+            },
+            "params": {
+              "$ref": "#/$defs/MethodContracts/properties/agent.input/properties/params"
+            }
+          }
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "agent.close"
+            },
+            "params": {
+              "$ref": "#/$defs/MethodContracts/properties/agent.close/properties/params"
+            }
+          }
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "agent.read"
+            },
+            "params": {
+              "$ref": "#/$defs/MethodContracts/properties/agent.read/properties/params"
+            }
+          }
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "agent.wait"
+            },
+            "params": {
+              "$ref": "#/$defs/MethodContracts/properties/agent.wait/properties/params"
+            }
+          }
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "agent.start"
+            },
+            "params": {
+              "$ref": "#/$defs/MethodContracts/properties/agent.start/properties/params"
+            }
+          }
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "agent.resume"
+            },
+            "params": {
+              "$ref": "#/$defs/MethodContracts/properties/agent.resume/properties/params"
+            }
+          }
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "agent.fork"
+            },
+            "params": {
+              "$ref": "#/$defs/MethodContracts/properties/agent.fork/properties/params"
+            }
+          }
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "git.status"
+            },
+            "params": {
+              "$ref": "#/$defs/MethodContracts/properties/git.status/properties/params"
+            }
+          }
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "git.diff"
+            },
+            "params": {
+              "$ref": "#/$defs/MethodContracts/properties/git.diff/properties/params"
+            }
+          }
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "git.rollback"
+            },
+            "params": {
+              "$ref": "#/$defs/MethodContracts/properties/git.rollback/properties/params"
+            }
+          }
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "git.delete"
+            },
+            "params": {
+              "$ref": "#/$defs/MethodContracts/properties/git.delete/properties/params"
+            }
+          }
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "git.open_diff"
+            },
+            "params": {
+              "$ref": "#/$defs/MethodContracts/properties/git.open_diff/properties/params"
+            }
+          }
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "git.open_deleted"
+            },
+            "params": {
+              "$ref": "#/$defs/MethodContracts/properties/git.open_deleted/properties/params"
+            }
+          }
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "app.focus"
+            },
+            "params": {
+              "$ref": "#/$defs/MethodContracts/properties/app.focus/properties/params"
+            }
+          }
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "app.close"
+            },
+            "params": {
+              "$ref": "#/$defs/MethodContracts/properties/app.close/properties/params"
+            }
+          }
+        }
+      ],
       "properties": {
         "id": {
           "$ref": "#/$defs/JsonRpcId"
         },
         "jsonrpc": {
-          "type": "string",
           "enum": [
             "2.0"
-          ]
+          ],
+          "type": "string"
         },
         "method": {
           "$ref": "#/$defs/RuntimeMethod"
         },
-        "params": {
-          "$ref": "#/$defs/RuntimeParams"
-        }
+        "params": {}
       },
-      "additionalProperties": false,
       "required": [
         "jsonrpc",
         "id",
         "method",
         "params"
-      ]
+      ],
+      "type": "object"
     },
     "RuntimeResult": {
-      "description": "Runtime 方法的封闭结果集合；服务端按方法构造。",
       "anyOf": [
         {
           "$ref": "#/$defs/DescribeResponse"
@@ -1960,63 +5817,64 @@
         {
           "$ref": "#/$defs/GitDiffResponse"
         }
-      ]
+      ],
+      "description": "Runtime 方法的封闭结果集合；服务端按方法构造。"
     },
     "SnapshotResources": {
+      "additionalProperties": false,
       "description": "同一代次资源模型：项目、面板组、布局树、终端与 Document。",
-      "type": "object",
       "properties": {
         "documents": {
-          "type": "array",
           "items": {
             "$ref": "#/$defs/DocumentResource"
-          }
+          },
+          "type": "array"
         },
         "groups": {
-          "type": "array",
           "items": {
             "$ref": "#/$defs/PanelGroupResource"
-          }
+          },
+          "type": "array"
         },
         "layouts": {
-          "type": "array",
           "items": {
             "$ref": "#/$defs/ProjectLayoutResource"
-          }
+          },
+          "type": "array"
         },
         "projects": {
-          "type": "array",
           "items": {
             "$ref": "#/$defs/ProjectResource"
-          }
+          },
+          "type": "array"
         },
         "terminals": {
-          "type": "array",
           "items": {
             "$ref": "#/$defs/TerminalResource"
-          }
+          },
+          "type": "array"
         }
       },
-      "additionalProperties": false,
       "required": [
         "projects",
         "groups",
         "layouts",
         "terminals",
         "documents"
-      ]
+      ],
+      "type": "object"
     },
     "SnapshotResponse": {
+      "additionalProperties": false,
       "description": "`runtime.snapshot` 的不可变资源快照与世代。",
-      "type": "object",
       "properties": {
         "resources": {
           "$ref": "#/$defs/SnapshotResources"
         },
         "revision": {
-          "type": "integer",
           "format": "uint64",
-          "minimum": 0
+          "minimum": 0,
+          "type": "integer"
         },
         "store_epoch": {
           "type": "string"
@@ -2025,25 +5883,44 @@
           "type": "string"
         }
       },
-      "additionalProperties": false,
       "required": [
         "store_epoch",
         "stream_epoch",
         "revision",
         "resources"
-      ]
+      ],
+      "type": "object"
     },
     "SplitDirectionWire": {
       "description": "封闭拆分方向；与布局树的轴向一一对应。",
-      "type": "string",
       "enum": [
         "left_right",
         "top_bottom"
-      ]
+      ],
+      "type": "string"
+    },
+    "TerminalCloseRequest": {
+      "additionalProperties": false,
+      "description": "关闭终端：代次必须与快照中的当前 PTY 代次一致（无 worker 时为零）。",
+      "properties": {
+        "generation": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "terminal_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "terminal_id",
+        "generation"
+      ],
+      "type": "object"
     },
     "TerminalCreateRequest": {
+      "additionalProperties": false,
       "description": "新建终端：Shell 固定为应用默认，只开放目标项目与工作目录选择。",
-      "type": "object",
       "properties": {
         "cwd": {
           "type": [
@@ -2058,65 +5935,91 @@
           ]
         }
       },
-      "additionalProperties": false
+      "type": "object"
     },
     "TerminalExecuteRequest": {
+      "additionalProperties": false,
       "description": "可信 Shell 行执行：只接受单行命令，服务端追加一次回车。",
-      "type": "object",
       "properties": {
         "command": {
           "type": "string"
         },
         "generation": {
-          "type": "integer",
           "format": "uint64",
-          "minimum": 0
+          "minimum": 0,
+          "type": "integer"
         },
         "terminal_id": {
           "type": "string"
         }
       },
-      "additionalProperties": false,
       "required": [
         "terminal_id",
         "generation",
         "command"
-      ]
+      ],
+      "type": "object"
     },
     "TerminalInputRequest": {
+      "additionalProperties": false,
       "description": "原始输入：显式写入 PTY，不追加回车，也不模拟键盘事件。",
-      "type": "object",
       "properties": {
         "data": {
           "type": "string"
         },
         "generation": {
-          "type": "integer",
           "format": "uint64",
-          "minimum": 0
+          "minimum": 0,
+          "type": "integer"
         },
         "terminal_id": {
           "type": "string"
         }
       },
-      "additionalProperties": false,
       "required": [
         "terminal_id",
         "generation",
         "data"
-      ]
+      ],
+      "type": "object"
+    },
+    "TerminalReadRequest": {
+      "additionalProperties": false,
+      "description": "终端输出分页读取；游标只由服务端生成，客户端不得构造。",
+      "properties": {
+        "cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "generation": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "terminal_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "terminal_id",
+        "generation"
+      ],
+      "title": "TerminalReadRequest",
+      "type": "object"
     },
     "TerminalReadResponse": {
+      "additionalProperties": false,
       "description": "终端输出页面；`next_cursor` 存在即表示尾部仍有内容。",
-      "type": "object",
       "properties": {
         "data": {
           "type": "string"
         },
         "generation": {
-          "type": "integer",
           "format": "uint64",
-          "minimum": 0
+          "minimum": 0,
+          "type": "integer"
         },
         "next_cursor": {
           "type": [
@@ -2125,46 +6028,84 @@
           ]
         },
         "revision": {
-          "type": "integer",
           "format": "uint64",
-          "minimum": 0
+          "minimum": 0,
+          "type": "integer"
         },
         "terminal_id": {
           "type": "string"
         }
       },
-      "additionalProperties": false,
       "required": [
         "terminal_id",
         "generation",
         "revision",
         "data"
-      ]
+      ],
+      "type": "object"
+    },
+    "TerminalReconnectRequest": {
+      "additionalProperties": false,
+      "description": "重连已退出终端：代次必须与快照中的当前 PTY 代次一致（无 worker 时为零）。",
+      "properties": {
+        "generation": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "terminal_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "terminal_id",
+        "generation"
+      ],
+      "type": "object"
+    },
+    "TerminalRenameRequest": {
+      "additionalProperties": false,
+      "description": "更新终端自定义标题；`None` 表示清除，空白与超过 128 字符拒绝。",
+      "properties": {
+        "terminal_id": {
+          "type": "string"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "terminal_id"
+      ],
+      "type": "object"
     },
     "TerminalResource": {
+      "additionalProperties": false,
       "description": "快照中的逻辑终端；不含 PTY、输出或回滚正文。",
-      "type": "object",
       "properties": {
         "cwd": {
           "type": "string"
         },
         "generation": {
           "description": "当前 PTY 代次；零表示没有存活 worker（持久化 Exited）。",
-          "type": "integer",
           "format": "uint64",
-          "minimum": 0
+          "minimum": 0,
+          "type": "integer"
         },
         "number": {
-          "type": "integer",
           "format": "uint64",
-          "minimum": 0
+          "minimum": 0,
+          "type": "integer"
         },
         "project_id": {
           "type": "string"
         },
         "run_intent": {
-          "description": "封闭运行意图；新增值必须先登记协议。",
-          "$ref": "#/$defs/TerminalRunIntent"
+          "$ref": "#/$defs/TerminalRunIntent",
+          "description": "封闭运行意图；新增值必须先登记协议。"
         },
         "shell": {
           "type": "string"
@@ -2179,7 +6120,6 @@
           ]
         }
       },
-      "additionalProperties": false,
       "required": [
         "terminal_id",
         "project_id",
@@ -2188,44 +6128,78 @@
         "shell",
         "run_intent",
         "generation"
-      ]
+      ],
+      "type": "object"
     },
     "TerminalRunIntent": {
       "description": "终端持久运行意图的线缆枚举。",
-      "type": "string",
       "enum": [
         "launch",
         "exited"
-      ]
+      ],
+      "type": "string"
     },
-    "TerminalWaitResponse": {
-      "description": "等待结果：`revision` 一定大于请求的 `since_revision`。",
-      "type": "object",
+    "TerminalWaitRequest": {
+      "additionalProperties": false,
+      "description": "等待终端输出推进到 `since_revision` 之后；超时映射 NotReady。",
       "properties": {
         "generation": {
-          "type": "integer",
           "format": "uint64",
-          "minimum": 0
+          "minimum": 0,
+          "type": "integer"
+        },
+        "since_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "terminal_id": {
+          "type": "string"
+        },
+        "timeout_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "terminal_id",
+        "generation",
+        "since_revision"
+      ],
+      "title": "TerminalWaitRequest",
+      "type": "object"
+    },
+    "TerminalWaitResponse": {
+      "additionalProperties": false,
+      "description": "等待结果：`revision` 一定大于请求的 `since_revision`。",
+      "properties": {
+        "generation": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
         },
         "revision": {
-          "type": "integer",
           "format": "uint64",
-          "minimum": 0
+          "minimum": 0,
+          "type": "integer"
         },
         "terminal_id": {
           "type": "string"
         }
       },
-      "additionalProperties": false,
       "required": [
         "terminal_id",
         "generation",
         "revision"
-      ]
+      ],
+      "type": "object"
     },
     "ViewKind": {
       "description": "视图类型的线缆枚举；与持久 ViewKey 注册点使用同一文本。",
-      "type": "string",
       "enum": [
         "terminal",
         "editor",
@@ -2235,11 +6209,12 @@
         "settings",
         "side_view",
         "app_settings_overlay"
-      ]
+      ],
+      "type": "string"
     },
     "ViewResource": {
+      "additionalProperties": false,
       "description": "视图身份：封闭类型与规范 ViewKey JSON 文本。",
-      "type": "object",
       "properties": {
         "key": {
           "type": "string"
@@ -2248,11 +6223,46 @@
           "$ref": "#/$defs/ViewKind"
         }
       },
-      "additionalProperties": false,
       "required": [
         "kind",
         "key"
-      ]
+      ],
+      "type": "object"
     }
-  }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "anyOf": [
+    {
+      "$ref": "#/$defs/JsonRpcRequest"
+    },
+    {
+      "$ref": "#/$defs/JsonRpcRequest2"
+    },
+    {
+      "$ref": "#/$defs/RuntimeRequest"
+    },
+    {
+      "$ref": "#/$defs/JsonRpcResult"
+    },
+    {
+      "$ref": "#/$defs/JsonRpcResult2"
+    },
+    {
+      "$ref": "#/$defs/JsonRpcResult3"
+    },
+    {
+      "$ref": "#/$defs/EventNotification"
+    },
+    {
+      "$ref": "#/$defs/JsonRpcErrorResponse"
+    },
+    {
+      "$ref": "#/$defs/DiscoveryRecord"
+    },
+    {
+      "$ref": "#/$defs/DiscoverOutput"
+    }
+  ],
+  "description": "当前请求、响应与发现记录的根集合，schema 与各领域 DTO 共用此边界。",
+  "title": "ControlMessage"
 }
