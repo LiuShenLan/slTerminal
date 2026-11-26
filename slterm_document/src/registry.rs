@@ -250,10 +250,23 @@ impl DocumentRegistry {
         self.paths.insert(path, id);
     }
 
+    /// 文件身份已归属的聚合；调用方在重绑前用它拒绝冲突目标。
+    pub(crate) fn identity_owner(&self, identity: FileIdentity) -> Option<DocumentId> {
+        self.identities.get(&identity).copied()
+    }
+
     pub(crate) fn refresh_identity(&mut self, id: DocumentId, identity: Option<FileIdentity>) {
         self.identities.retain(|_, owner| *owner != id);
         if let Some(identity) = identity {
-            self.identities.insert(identity, id);
+            // 身份唯一索引不得改写其他聚合；调用方应在变更前拒绝冲突，
+            // 这里保留最后一道防御，冲突时只是不建立本聚合的索引。
+            if self
+                .identities
+                .get(&identity)
+                .is_none_or(|owner| *owner == id)
+            {
+                self.identities.insert(identity, id);
+            }
         }
     }
 

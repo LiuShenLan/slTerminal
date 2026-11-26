@@ -221,6 +221,15 @@ impl DocumentRegistry {
         {
             return Err(SaveTransactionError::TargetOccupied);
         }
+        // 普通保存替换文件后也可能取得另一聚合已占用的身份；提交前拒绝，
+        // 不得改写身份唯一索引。
+        if let Some(identity) = receipt.location.file_identity()
+            && self
+                .identity_owner(identity)
+                .is_some_and(|owner| owner != id)
+        {
+            return Err(SaveTransactionError::TargetOccupied);
+        }
         let session = self
             .session_mut(id)
             .ok_or(SaveTransactionError::DocumentNotFound(id))?;

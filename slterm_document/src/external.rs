@@ -301,6 +301,13 @@ impl DocumentRegistry {
                         _ => return Err(ExternalChangeError::IdentityMismatch),
                     }
                 }
+                if let Some(identity) = location.file_identity()
+                    && self
+                        .identity_owner(identity)
+                        .is_some_and(|owner| owner != id)
+                {
+                    return Err(ExternalChangeError::TargetOccupied);
+                }
                 let session = self.sessions_mut(id)?;
                 if session.is_dirty() || session.is_saving() || session.external_conflict.is_some()
                 {

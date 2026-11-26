@@ -765,6 +765,46 @@ mod tests {
         registry.fail_save(id, 2).unwrap();
     }
 
+    /// 普通保存取得其他聚合已占用的文件身份时零状态提交。
+    #[test]
+    fn in_place_save_rejects_identity_owned_by_another_document() {
+        use slterm_path::FileIdentity;
+
+        let (mut registry, id, _) = document("0", false);
+        let other_id: DocumentId = DOCUMENT_OTHER.parse().unwrap();
+        let identity = FileIdentity { volume: 3, file: 5 };
+        let other_location = slterm_path::ResolvedPath::new(
+            CanonicalPath::new("D:/work/other.txt").unwrap(),
+            Some(identity),
+        );
+        registry
+            .open(
+                other_id,
+                other_location.clone(),
+                Rope::from_str("other"),
+                state(STATE_B),
+                std::sync::Arc::from(b"other".as_slice()),
+                DocumentMetadata::default(),
+            )
+            .unwrap();
+
+        let request = registry.begin_save(id, 0).unwrap();
+        assert_eq!(
+            registry.complete_save(crate::DocumentSaveReceipt::new(
+                request,
+                std::sync::Arc::from(b"0".as_slice()),
+                Some(identity),
+            )),
+            Err(crate::SaveTransactionError::TargetOccupied)
+        );
+        assert!(registry.session(id).unwrap().is_saving());
+        assert_eq!(
+            registry.session(id).unwrap().location().file_identity(),
+            None
+        );
+        assert_eq!(registry.existing(&other_location), Some(other_id));
+    }
+
     #[test]
     fn in_place_save_completion_rejects_external_relocation() {
         let (mut registry, id, _) = document("0", false);
@@ -954,6 +994,58 @@ mod tests {
                 .kind(),
             crate::ExternalConflictKind::Deleted
         );
+    }
+
+    /// 外部重载取得另一 Document 已占用的文件身份时必须拒绝，不得改写身份索引。
+    #[test]
+    fn external_reload_rejects_identity_owned_by_another_document() {
+        use slterm_path::FileIdentity;
+
+        let (mut registry, id, _) = document("old", false);
+        let other_id: DocumentId = DOCUMENT_OTHER.parse().unwrap();
+        let identity = FileIdentity {
+            volume: 7,
+            file: 11,
+        };
+        registry
+            .open(
+                other_id,
+                slterm_path::ResolvedPath::new(
+                    CanonicalPath::new("D:/work/other.txt").unwrap(),
+                    Some(identity),
+                ),
+                Rope::from_str("other"),
+                state(STATE_B),
+                std::sync::Arc::from(b"other".as_slice()),
+                DocumentMetadata::default(),
+            )
+            .unwrap();
+
+        let request = registry.external_request(id, 0).unwrap();
+        let location = slterm_path::ResolvedPath::new(
+            CanonicalPath::new("D:/work/file.txt").unwrap(),
+            Some(identity),
+        );
+        assert_eq!(
+            registry.apply_external(
+                crate::DocumentExternalChange::Reload {
+                    request,
+                    content: crate::DocumentBody::Editable(Rope::from_str("outside")),
+                    disk_baseline: std::sync::Arc::from(b"outside".as_slice()),
+                    metadata: DocumentMetadata::default(),
+                    location: location.clone(),
+                    new_state: state(STATE_C),
+                },
+                Instant::now(),
+            ),
+            Err(crate::ExternalChangeError::TargetOccupied)
+        );
+        assert_eq!(text(&registry, id), "old");
+        assert_eq!(
+            registry.session(id).unwrap().location().file_identity(),
+            None
+        );
+        assert_eq!(registry.existing(&location), Some(other_id));
     }
 
     #[test]
