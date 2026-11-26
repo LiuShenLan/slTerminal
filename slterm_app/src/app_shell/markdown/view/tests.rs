@@ -395,3 +395,79 @@ fn markdown_revision_change_releases_view_resource_bitmaps(cx: &mut TestAppConte
         });
     });
 }
+
+/// 大纲必须是按标题层级缩进的浮层，且不改变正文可用宽度。
+#[gpui::test]
+fn markdown_outline_is_hierarchical_overlay_without_shrinking_content(cx: &mut TestAppContext) {
+    let (view, mut visual) =
+        view_for_source(cx, "# Top\n\n## Child\n\n### Grand\n\n## Sibling\n\ntext\n");
+    visual.run_until_parked();
+    visual.refresh().unwrap();
+    // 解析在后台完成；持续绘制直到文档投影就绪。
+    for _ in 0..20 {
+        visual.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+        visual.run_until_parked();
+        if view.read_with(&visual, |view, _| view.document.is_some()) {
+            break;
+        }
+    }
+    assert!(
+        view.read_with(&visual, |view, _| view.document.is_some()),
+        "文档投影必须就绪"
+    );
+
+    let content_with_outline = visual
+        .debug_bounds("markdown-content")
+        .expect("正文区域必须可定位");
+    let outline = visual
+        .debug_bounds("markdown-outline")
+        .expect("大纲必须渲染为浮层");
+    assert_eq!(
+        outline.origin.x + outline.size.width,
+        content_with_outline.origin.x + content_with_outline.size.width,
+        "大纲浮层应贴靠正文右侧"
+    );
+
+    visual.update(|window, cx| {
+        view.update(cx, |view, cx| view.toggle_outline_for_test(cx));
+        window.draw(cx).clear(cx);
+    });
+    let content_without_outline = visual
+        .debug_bounds("markdown-content")
+        .expect("关闭大纲后正文仍须可定位");
+    assert!(
+        (f32::from(content_without_outline.size.width)
+            - f32::from(content_with_outline.size.width))
+        .abs()
+            <= 1.0,
+        "大纲浮层不得挤占正文宽度"
+    );
+
+    visual.update(|window, cx| {
+        view.update(cx, |view, cx| view.toggle_outline_for_test(cx));
+        window.draw(cx).clear(cx);
+    });
+    let top = visual
+        .debug_bounds("markdown-heading-0")
+        .expect("一级标题必须可定位");
+    let child = visual
+        .debug_bounds("markdown-heading-1")
+        .expect("二级标题必须可定位");
+    let grand = visual
+        .debug_bounds("markdown-heading-2")
+        .expect("三级标题必须可定位");
+    let sibling = visual
+        .debug_bounds("markdown-heading-3")
+        .expect("同级标题必须可定位");
+    assert!(
+        child.origin.x > top.origin.x,
+        "二级标题必须比一级标题缩进更深"
+    );
+    assert!(
+        grand.origin.x > child.origin.x,
+        "三级标题必须比二级标题缩进更深"
+    );
+    assert_eq!(sibling.origin.x, child.origin.x, "同级标题必须保持同一缩进");
+}

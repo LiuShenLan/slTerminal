@@ -109,7 +109,7 @@
 | 已加载的远程图片再次点击仍发起新请求 | 已修：已加载或有在途任务时重复点击不再重启请求；测试 `repeated_image_click_does_not_restart_requests` |
 | 渲染查找在前台按匹配数乘块数扫描 | 已修：`find_literal` 用单向前进的块游标把匹配映射到所属块；Markdown 搜索移到后台执行，回执按查询与代次对账，过期结果不覆盖当前输入；测试 `literal_search_maps_each_match_to_its_own_block`、`markdown_rendered_search_navigates_visible_matches` |
 | 每次滚动在前台复制整篇文档文本 | 已修：`ProgressiveMarkdownRenderer::schedule` 接收 `&Rope`，按块 `source_range.try_slice` 只取可见块文本；测试 `same_revision_scroll_keeps_rendered_outcomes` 及渐进渲染组 |
-| 大纲无层级且常驻挤占内容区 | 待修 |
+| 大纲无层级且常驻挤占内容区 | 已修：大纲按 `MarkdownHeading::depth` 逐级缩进，同级标题对齐；大纲改为贴靠正文右侧的绝对定位浮层，不再作为内容行兄弟列分配宽度；测试 `markdown_outline_is_hierarchical_overlay_without_shrinking_content` |
 | 渲染态缺少键盘滚动、大纲与链接激活 | 待修 |
 | 安全与授权关键路径只有服务/投影测试 | 待修 |
 | Editor 面板规定能力未实现 | 待修 |

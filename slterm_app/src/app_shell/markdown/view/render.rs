@@ -114,14 +114,22 @@ pub(super) fn render_markdown(
         )
         .child(render_toolbar(view, decision, cx))
         .child(
-            h_flex()
+            div()
+                .relative()
                 .flex_1()
                 .min_h_0()
                 .min_w_0()
-                .child(div().flex_1().min_w_0().h_full().child(content))
+                .child(
+                    div()
+                        .id("markdown-content")
+                        .debug_selector(|| "markdown-content".to_owned())
+                        .size_full()
+                        .min_w_0()
+                        .child(content),
+                )
                 .when(
                     decision == MarkdownRenderDecision::Progressive && view.outline,
-                    |row| row.child(render_outline(view, cx)),
+                    |host| host.child(render_outline(view, cx)),
                 ),
         );
     if decision == MarkdownRenderDecision::Forbidden {
@@ -794,21 +802,31 @@ fn render_outline(view: &MarkdownView, cx: &mut Context<'_, MarkdownView>) -> An
     }
     for (index, heading) in document.outline().iter().enumerate() {
         let block = heading.block();
+        // 按标题深度缩进，让大纲保留文档层级。
+        let indent = f32::from(heading.depth().saturating_sub(1)) * 12.0;
         headings = headings.child(
-            Button::new(("markdown-heading", index))
-                .label(heading.text().to_owned())
-                .ghost()
-                .on_click(cx.listener(move |view, _, _, _| {
-                    view.scroll_to_block(block);
-                }))
-                .into_any_element(),
+            div().pl(px(indent)).child(
+                Button::new(("markdown-heading", index))
+                    .debug_selector(move || format!("markdown-heading-{index}"))
+                    .label(heading.text().to_owned())
+                    .ghost()
+                    .on_click(cx.listener(move |view, _, _, _| {
+                        view.scroll_to_block(block);
+                    })),
+            ),
         );
     }
+    // 大纲是覆盖在正文右侧的浮层，不参与内容行宽分配。
     v_flex()
         .id("markdown-outline")
+        .debug_selector(|| "markdown-outline".to_owned())
+        .absolute()
+        .top(px(0.0))
+        .right(px(0.0))
+        .bottom(px(0.0))
         .w(px(240.0))
-        .h_full()
         .flex_shrink_0()
+        .bg(cx.theme().background)
         .border_l_1()
         .border_color(cx.theme().border)
         .child(
