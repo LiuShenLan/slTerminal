@@ -281,6 +281,50 @@
         assert_eq!(failed, 2);
     }
 
+    /// 失败页不得逐帧自动重试，但必须给出可见提示与显式重试入口。
+    #[gpui::test]
+    fn paged_view_explicit_retry_reruns_failed_pages(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            crate::app_shell::theme::apply_dark_theme(cx);
+        });
+        let cache = Rc::new(RefCell::new(DocumentPageCache::new()));
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let recorded = requests.clone();
+        let reader: PageReader = Arc::new(move |page| {
+            recorded.lock().unwrap().push(page);
+            Err(io::Error::new(io::ErrorKind::PermissionDenied, "读取失败"))
+        });
+        let window = cx.add_window(|_, cx| Host::new(cache.clone(), reader, cx));
+        let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.run_until_parked();
+        visual.refresh().unwrap();
+        visual.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+        visual.run_until_parked();
+        visual.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+        let banner = visual
+            .debug_bounds("paged-page-retry")
+            .expect("失败页必须显示重试入口");
+        visual.simulate_click(banner.center(), gpui::Modifiers::default());
+        visual.run_until_parked();
+        visual.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+        visual.run_until_parked();
+
+        let mut requests = requests.lock().unwrap().clone();
+        requests.sort_unstable();
+        assert_eq!(requests, vec![0, 0, 1, 1], "显式重试必须重新读取失败页");
+        let failed = window
+            .update(cx, |host, _, cx| host.view.read(cx).failed_pages.len())
+            .unwrap();
+        assert_eq!(failed, 2, "再次失败后仍保留可见失败态");
+    }
+
     #[gpui::test]
     fn paged_view_scrolls_to_request_a_later_page(cx: &mut TestAppContext) {
         cx.update(|cx| {

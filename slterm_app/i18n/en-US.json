@@ -12,6 +12,10 @@
     "large": "Large fixed version; shown read-only.",
     "open_system": "Open with system default"
   },
+  "paged": {
+    "page_failed": "Some file content could not be loaded.",
+    "retry": "Retry"
+  },
   "editor": {
     "read_failed": "Could not read the file: {error}",
     "image_loading": "Loading image…",

@@ -12,6 +12,10 @@
     "large": "固定版本较大，已只读展示。",
     "open_system": "使用系统默认程序打开"
   },
+  "paged": {
+    "page_failed": "部分文件内容加载失败。",
+    "retry": "重试"
+  },
   "editor": {
     "read_failed": "无法读取文件：{error}",
     "image_loading": "正在加载图片…",

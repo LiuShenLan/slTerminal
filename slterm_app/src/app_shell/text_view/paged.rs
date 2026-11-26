@@ -8,8 +8,8 @@ use std::sync::mpsc::{SyncSender, sync_channel};
 use gpui::{
     App, ContentMask, Context, Entity, FocusHandle, Focusable, Font, InteractiveElement as _,
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, Render,
-    ScrollWheelEvent, ShapedLine, Styled as _, Task, TextAlign, TextRun, Window, canvas, div, fill,
-    point, px, size,
+    ScrollWheelEvent, ShapedLine, StatefulInteractiveElement as _, Styled as _, Task, TextAlign,
+    TextRun, Window, canvas, div, fill, point, px, size,
 };
 use gpui_component::ActiveTheme as _;
 use gpui_component::input::{
@@ -27,7 +27,9 @@ use super::metrics::DisplayMap;
 use super::source::{PagedTextSource, TextSelection, VisibleLine, VisibleRow};
 use super::view_state::{EditorViewState, EditorViewStateLease, EditorViewStateStore};
 use super::{SelectDown, SelectLeft, SelectRight, SelectUp};
+use crate::app_shell::config::Settings;
 use crate::app_shell::paged_document::{PageReader, PagedReaderChunks};
+use crate::i18n::Message;
 
 #[derive(Clone, Copy)]
 struct PagedCursor {
@@ -805,6 +807,20 @@ impl PagedTextView {
             .collect()
     }
 
+    /// 用户显式重试：清空失败抑制并重新请求失败页；不做逐帧自动重试。
+    pub(crate) fn retry_failed_pages(&mut self, cx: &mut Context<'_, Self>) {
+        if self.closed || self.failed_pages.is_empty() {
+            return;
+        }
+        let pages = std::mem::take(&mut self.failed_pages)
+            .into_iter()
+            .collect::<Vec<_>>();
+        let requests = self.claim_pages(&pages);
+        let tasks = Self::spawn_page_requests(&cx.entity(), requests, cx);
+        self.tasks.extend(tasks);
+        cx.notify();
+    }
+
     /// 缺页读取由 foreground Task 持有；Drop 会级联取消等待中的后台读取。
     fn request_pages(view: &Entity<Self>, pages: Vec<usize>, cx: &mut App) {
         let requests = view.update(cx, |view, _| {
@@ -881,6 +897,13 @@ impl Render for PagedTextView {
         let accent = theme.accent;
         let background = theme.background;
         let font_size = theme.mono_font_size;
+        let banner_background = theme.muted;
+        let banner_foreground = theme.warning_foreground;
+        let language = cx
+            .try_global::<Settings>()
+            .map_or(crate::i18n::UiLanguage::EnUs, |settings| settings.language);
+        let page_failed = language.text(Message::PagedPageFailed);
+        let retry_label = language.text(Message::PagedRetry);
         let fingerprint = ThemeFingerprint {
             foreground,
             accent: theme.accent,
@@ -1073,8 +1096,30 @@ impl Render for PagedTextView {
         .size_full()
         .overflow_hidden()
         .bg(background);
-        div()
-            .key_context("DocumentText")
+        let mut root = div().relative().size_full().child(content);
+        if !self.failed_pages.is_empty() {
+            let view = cx.entity();
+            root = root.child(
+                div()
+                    .id("paged-page-retry")
+                    .debug_selector(|| "paged-page-retry".to_string())
+                    .absolute()
+                    .bottom_0()
+                    .left_0()
+                    .right_0()
+                    .px_3()
+                    .py_1()
+                    .bg(banner_background)
+                    .text_color(banner_foreground)
+                    .text_sm()
+                    .cursor_pointer()
+                    .child(format!("{page_failed} {retry_label}"))
+                    .on_click(move |_, _, cx| {
+                        view.update(cx, |view, cx| view.retry_failed_pages(cx));
+                    }),
+            );
+        }
+        root.key_context("DocumentText")
             .track_focus(&self.focus)
             .size_full()
             .on_action(cx.listener(|view, _: &MoveLeft, _, cx| {
@@ -1205,7 +1250,6 @@ impl Render for PagedTextView {
             .on_scroll_wheel(cx.listener(|view, event: &ScrollWheelEvent, _, cx| {
                 view.scroll_wheel(event, cx);
             }))
-            .child(content)
     }
 }
 
