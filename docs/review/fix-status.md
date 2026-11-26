@@ -22,7 +22,7 @@
 | 布局与侧栏恢复警告只写日志 | 待修 |
 | 批量/项目关闭遗留 pane 级任务栏与 AgentHub 清理 | 待修 |
 | 活动栏缺少固定底部配置按钮 | 已修：活动栏固定底部 `app-root-settings-button` 复用 `OpenSettings` 命令与唯一浮层，不参与视图组织（提交 d72c614a）；测试 `activity_bar_settings_button_opens_the_settings_overlay` |
-| 浮层已打开时设置入口改开项目面板 | 待修 |
+| 浮层已打开时设置入口改开项目面板 | 已修：`settings_overlay` 存在时入口只还焦浮层，项目面板只在浮层关闭后的下一次入口使用（提交 44112ce5）；测试 `integration_settings_singleton` |
 | Commit/Explorer 数据根切换时在途状态读取被丢弃或错投 | 待修 |
 | 项目重定位与导航历史恢复没有生产入口 | 待修 |
 | 启动恢复对缺失/不可解码的干净 Document 不建面板 | 待修 |
