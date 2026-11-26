@@ -934,6 +934,7 @@ impl AppRoot {
             return;
         };
         view.update(cx, |view, cx| view.agent_files_sync(roots, cx));
+        self.reconcile_fs_watch();
     }
 
     pub(super) fn agent_files_roots(&self) -> Vec<(AgentRootId, String, CanonicalPath)> {

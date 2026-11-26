@@ -1,5 +1,6 @@
 //! AppRoot 的真实 watcher 消费与 Document 外部变化闭环。
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -14,6 +15,8 @@ use super::AppRoot;
 use super::panel_host::PanelContent;
 use super::task_service::{CancellationToken, TaskId};
 use crate::app_shell::document_external::{DocumentExternalResult, DocumentExternalService};
+use slterm_sidebar::FileTreeRoot;
+use slterm_workspace::SideViewId;
 
 impl AppRoot {
     /// 全部项目根、存活 Document 与在途改名目标共用同一 watcher。
@@ -41,8 +44,132 @@ impl AppRoot {
         );
         files.sort();
         files.dedup();
+        let desired = self.watch_candidates();
+        let now = Instant::now();
+        for root in self.watcher_service.keys() {
+            if !desired.contains_key(&root) {
+                self.watcher_service.unregister(&root);
+            }
+        }
+        for (root, (path, visible)) in &desired {
+            if self
+                .watcher_service
+                .registered_path(root)
+                .is_none_or(|registered| registered != path)
+            {
+                self.watcher_service
+                    .register(root.clone(), path.clone(), *visible);
+            } else {
+                self.watcher_service.set_visible(root, *visible, now);
+            }
+        }
+        let roots = desired
+            .values()
+            .filter(|(_, visible)| *visible)
+            .map(|(path, _)| path.as_path().to_path_buf())
+            .collect();
         if let Some(watch) = &mut self.fs_watch {
-            watch.retain(Vec::new(), files);
+            watch.retain(roots, files);
+        }
+    }
+
+    /// 已打开侧栏视图的监听根；可见性单独传递，隐藏时保留登记但暂停 OS watch。
+    fn watch_candidates(&self) -> BTreeMap<FileTreeRoot, (CanonicalPath, bool)> {
+        let mut candidates = BTreeMap::new();
+        let sidebar_visible = self.side_views.state().is_visible();
+        let active = self.active_ready_root();
+        if let Some((project_id, root)) = &active {
+            let explorer_visible = sidebar_visible && self.side_view_visible(SideViewId::Explorer);
+            let commit_visible = sidebar_visible && self.side_view_visible(SideViewId::Commit);
+            if self.side_views.instance(SideViewId::Explorer).is_some()
+                || self.side_views.instance(SideViewId::Commit).is_some()
+            {
+                candidates.insert(
+                    FileTreeRoot::Project(*project_id),
+                    (root.clone(), explorer_visible || commit_visible),
+                );
+            }
+        }
+        if self.side_views.instance(SideViewId::AgentFiles).is_some() {
+            let visible = sidebar_visible && self.side_view_visible(SideViewId::AgentFiles);
+            for (root_id, _, path) in self.agent_files_roots() {
+                candidates.insert(FileTreeRoot::Agent(root_id), (path, visible));
+            }
+        }
+        candidates
+    }
+
+    fn active_ready_root(&self) -> Option<(slterm_workspace::ProjectId, CanonicalPath)> {
+        let project_id = self.snapshot.registry().active()?;
+        let project = self.snapshot.registry().project(project_id)?;
+        (project.root_status() == slterm_workspace::ProjectRootStatus::Ready)
+            .then(|| (project_id, project.root().clone()))
+    }
+
+    fn side_view_visible(&self, view: SideViewId) -> bool {
+        let state = self.side_views.state();
+        state.is_visible() && state.button_is_visible(view) && state.open_slot(view).is_some()
+    }
+
+    /// 目录复核回投：Explorer 只重读受影响目录，Commit 重取状态，Agent 根重新同步。
+    fn refresh_watched_roots(
+        &mut self,
+        ready: Vec<FileTreeRoot>,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let active = self.active_ready_root();
+        let mut refreshed = false;
+        for root in ready {
+            let paths = self.watcher_service.take_dirty(&root);
+            match root {
+                FileTreeRoot::Project(project_id)
+                    if active
+                        .as_ref()
+                        .is_some_and(|(active_id, _)| *active_id == project_id) =>
+                {
+                    let active_root = active.as_ref().map(|(_, root)| root.clone());
+                    if self.side_view_visible(SideViewId::Explorer) {
+                        let Some(explorer) =
+                            self.side_views.instance(SideViewId::Explorer).cloned()
+                        else {
+                            continue;
+                        };
+                        let mut directories = BTreeSet::new();
+                        for path in &paths {
+                            directories.insert(path.clone());
+                            if let Some(parent) = path.as_path().parent()
+                                && let Ok(parent) = CanonicalPath::new(parent.to_path_buf())
+                            {
+                                directories.insert(parent);
+                            }
+                        }
+                        if directories.is_empty()
+                            && let Some(root) = active_root
+                        {
+                            directories.insert(root);
+                        }
+                        for directory in directories {
+                            explorer.update(cx, |view, cx| {
+                                view.explorer_refresh_directory(&directory, cx);
+                            });
+                            refreshed = true;
+                        }
+                    }
+                    if self.side_view_visible(SideViewId::Commit) {
+                        self.refresh_commit_view_for_project(project_id, window, cx);
+                        refreshed = true;
+                    }
+                }
+                FileTreeRoot::Agent(_) if self.side_view_visible(SideViewId::AgentFiles) => {
+                    self.sync_agent_files_roots_after_load(cx);
+                    refreshed = true;
+                }
+                _ => {}
+            }
+        }
+        if refreshed {
+            cx.notify();
         }
     }
 
@@ -56,6 +183,14 @@ impl AppRoot {
             .as_mut()
             .map(|watch| watch.take_pending())
             .unwrap_or_default();
+        let now = Instant::now();
+        for dir in pending.dirs {
+            if let Ok(path) = CanonicalPath::new(dir) {
+                self.watcher_service.on_path_event(&path, now);
+            }
+        }
+        let ready = self.watcher_service.poll(now);
+        self.refresh_watched_roots(ready, window, cx);
         for path in pending.files {
             let Some(document_id) = self
                 .document_relocation_aliases

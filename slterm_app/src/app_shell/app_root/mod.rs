@@ -290,6 +290,7 @@ pub(crate) struct AppRoot {
     last_document_relocation_targets: BTreeMap<slterm_document::DocumentId, CanonicalPath>,
     document_relocation_aliases: BTreeMap<std::path::PathBuf, slterm_document::DocumentId>,
     fs_watch: Option<crate::app_shell::fs_watch::FsWatchHandle>,
+    watcher_service: crate::app_shell::watcher_service::WatcherService,
     pending_document_saves: std::collections::BTreeSet<slterm_document::DocumentId>,
     /// 关闭在途工作期间挂起的应用关闭所携带的 Document 决定。
     pending_application_close_decisions:
@@ -592,6 +593,7 @@ impl AppRoot {
             last_document_relocation_targets: BTreeMap::new(),
             document_relocation_aliases: BTreeMap::new(),
             fs_watch: crate::app_shell::fs_watch::FsWatchHandle::new(),
+            watcher_service: crate::app_shell::watcher_service::WatcherService::new(),
             pending_document_saves: std::collections::BTreeSet::new(),
             pending_application_close_decisions: BTreeMap::new(),
             runtime_save_waiters: BTreeMap::new(),
@@ -671,6 +673,7 @@ impl AppRoot {
         self.reconcile_split_dividers(cx);
         self.reconcile_tab_scrolls(Some(&previous));
         self.sync_project_visibility(cx);
+        self.reconcile_fs_watch();
         if self.project_snapshot_recovery_failed {
             return;
         }

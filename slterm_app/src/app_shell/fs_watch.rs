@@ -151,6 +151,12 @@ impl FsWatchHandle {
         !state.files.is_empty() || !state.tree_roots.is_empty()
     }
 
+    /// 测试注入目录事件；真实分类与树根过滤由 FsWatch 单元测试覆盖。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn inject_dir_event_for_test(&self, path: PathBuf) {
+        lock_state(&self.state).dirty_dirs.insert(path);
+    }
+
     #[cfg(test)]
     pub(crate) fn tracks_file(&self, path: &std::path::Path) -> bool {
         lock_state(&self.state).files.contains(path)

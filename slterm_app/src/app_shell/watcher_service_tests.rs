@@ -27,7 +27,15 @@ fn watcher_burst_coalesces_for_two_hundred_milliseconds() {
         now + Duration::from_millis(100),
     );
     assert!(service.poll(now + Duration::from_millis(199)).is_empty());
-    assert_eq!(service.poll(now + Duration::from_millis(300)), vec![root]);
+    assert_eq!(
+        service.poll(now + Duration::from_millis(300)),
+        vec![root.clone()]
+    );
+    assert_eq!(
+        service.take_dirty(&root),
+        vec![path("D:/work/project/a.txt"), path("D:/work/project/b.txt")],
+        "复核必须携带本轮合并的脏路径"
+    );
     assert!(service.poll(now + Duration::from_millis(301)).is_empty());
 }
 
@@ -95,10 +103,14 @@ fn watcher_root_replacement_drops_old_path_events() {
     let now = Instant::now();
     service.register(root.clone(), path("D:/work/old"), true);
     service.on_path_event(&path("D:/work/old/a.txt"), now);
-    service.register(root, path("D:/work/new"), true);
+    service.register(root.clone(), path("D:/work/new"), true);
 
     service.on_path_event(&path("D:/work/old/stale.txt"), now);
     assert!(service.poll(now + Duration::from_millis(200)).is_empty());
+    assert!(
+        service.take_dirty(&root).is_empty(),
+        "根替换必须丢弃旧路径事件"
+    );
     assert_eq!(service.visible_roots(), vec![path("D:/work/new")]);
 }
 

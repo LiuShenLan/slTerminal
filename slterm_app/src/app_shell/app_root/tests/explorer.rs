@@ -425,3 +425,93 @@ fn explorer_repo_root_does_not_expand_tree_root(cx: &mut TestAppContext) {
         assert!(view.explorer_status_entries() > 0, "仓库状态必须真实读取");
     });
 }
+
+/// 可见 Explorer 根必须登记目录监听，并把目录事件合并回投为树刷新。
+#[gpui::test]
+fn explorer_directory_events_refresh_the_visible_tree(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let project_root = temp.path().join("project");
+    std::fs::create_dir(&project_root).unwrap();
+    let (root, mut window, _) = open_root(cx);
+    add_project(
+        &root,
+        &mut window,
+        PROJECT_A,
+        project_root.to_str().unwrap(),
+    );
+    open_explorer(&root, &mut window, cx);
+    draw_frame(&mut window);
+    let project_root = CanonicalPath::new(dunce::canonicalize(&project_root).unwrap()).unwrap();
+    std::fs::write(project_root.as_path().join("new.txt"), "new").unwrap();
+
+    root.read_with(cx, |root, _| {
+        assert!(
+            root.watcher_service
+                .visible_roots()
+                .iter()
+                .any(|root_path| root_path == &project_root),
+            "可见 Explorer 根必须登记目录监听: {:?}",
+            root.watcher_service.visible_roots()
+        );
+        let watch = root.fs_watch.as_ref().expect("文件监听必须存在");
+        watch.inject_dir_event_for_test(project_root.as_path().to_path_buf());
+    });
+    window.update(|window, cx| {
+        root.update(cx, |root, cx| root.poll_fs_watch(window, cx));
+    });
+    std::thread::sleep(std::time::Duration::from_millis(210));
+    window.update(|window, cx| {
+        root.update(cx, |root, cx| root.poll_fs_watch(window, cx));
+    });
+    window.run_until_parked();
+    draw_frame(&mut window);
+    assert!(
+        window.debug_bounds("explorer-row-new.txt").is_some(),
+        "目录事件必须刷新可见 Explorer 树"
+    );
+}
+
+/// 侧栏隐藏时暂停树根监听，重新可见恢复登记并只复核一次。
+#[gpui::test]
+fn explorer_watcher_follows_sidebar_visibility(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let project_root = temp.path().join("project");
+    std::fs::create_dir(&project_root).unwrap();
+    let canonical = CanonicalPath::new(dunce::canonicalize(&project_root).unwrap()).unwrap();
+    let (root, mut window, _) = open_root(cx);
+    add_project(
+        &root,
+        &mut window,
+        PROJECT_A,
+        project_root.to_str().unwrap(),
+    );
+    open_explorer(&root, &mut window, cx);
+    draw_frame(&mut window);
+    root.read_with(cx, |root, _| {
+        assert_eq!(
+            root.watcher_service.visible_roots(),
+            vec![canonical.clone()]
+        );
+    });
+
+    window.simulate_keystrokes("ctrl-shift-b");
+    window.run_until_parked();
+    draw_frame(&mut window);
+    root.read_with(cx, |root, _| {
+        assert!(
+            root.watcher_service.visible_roots().is_empty(),
+            "侧栏隐藏必须暂停目录监听"
+        );
+    });
+
+    window.simulate_keystrokes("ctrl-shift-b");
+    window.run_until_parked();
+    draw_frame(&mut window);
+    root.read_with(cx, |root, _| {
+        assert_eq!(
+            root.watcher_service.visible_roots(),
+            vec![canonical],
+            "侧栏重新可见必须恢复同一根监听"
+        );
+    });
+}
