@@ -13,7 +13,7 @@
 | 外部冲突与另存为没有生产落点 | 待修 |
 | 恢复失败分支跳过局部关闭段，已收集决定被丢弃 | 待修 |
 | Hooks 草稿未进入应用退出与面板关闭守卫 | 待修 |
-| 项目移除 Save 阶段没有代次重收集，失配后永久失败 | 待修 |
+| 项目移除 Save 阶段没有代次重收集，失配后永久失败 | 已修：`needs_recollect` 标记 RevisionMismatch，显式重试经 `recollect_project_close` 以最新代次和新决定重建意图（提交 4bfe0605）；测试 `project_remove_save_revision_mismatch_recollects_with_new_decisions` |
 | 关闭保存授权漏掉 AgentRoot 能力并集 | 已修：`document_close_grants` 复用 `document_grants`，关闭保存叠加可写 AgentRoot（提交 599debed）；测试 `agent_root_capability_union_and_revoke` |
 | 页签缺少脏标记、CLI 状态与单面板关闭入口 | 待修 |
 | Runtime 关闭策略覆盖非最后引用文档 | 待修 |
