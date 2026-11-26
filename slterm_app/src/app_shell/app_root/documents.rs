@@ -43,6 +43,22 @@ pub(super) struct DocumentOpenRequest {
     session_read_grant: Option<PathGrant>,
     /// 打开方附加的只读来源（如 Agent 根能力）；打开与保存授权并集共用。
     pub(super) read_grants: Vec<PathGrant>,
+    /// 用户显式选择的编码重开；None = BOM 与本地检测。
+    encoding: Option<slterm_document::DocumentEncoding>,
+}
+
+impl DocumentOpenRequest {
+    /// 进入编码选择面：清除上一次显式编码，保留路径、授权与落点事实。
+    pub(super) fn prepare_for_encoding_prompt(&mut self) {
+        self.encoding = None;
+        self.completion = None;
+    }
+
+    /// 编码选择面选定的重开：同一请求换编码重新进读取链。
+    pub(super) fn reopen_with_encoding(&mut self, encoding: slterm_document::DocumentEncoding) {
+        self.encoding = Some(encoding);
+        self.completion = None;
+    }
 }
 
 /// 一次面板安装的落点与焦点语义，避免各视图拆开传递开关。
@@ -78,6 +94,11 @@ fn runtime_save_error(closing: bool) -> JsonRpcError {
 
 fn document_open_io(error: io::Error) -> AppRootError {
     AppRootError::DocumentOpen(DocumentOpenError::Io(error))
+}
+
+/// 编码歧义（未知或所选编码不合法）可由用户显式选择；二进制与其他失败不可。
+fn encoding_reopen_supported(error: &DocumentOpenError) -> bool {
+    matches!(error, DocumentOpenError::Io(error) if error.kind() == io::ErrorKind::Unsupported)
 }
 
 impl AppRoot {
@@ -166,6 +187,7 @@ impl AppRoot {
             markdown_fragment: None,
             session_read_grant: None,
             read_grants: Vec::new(),
+            encoding: None,
         })
     }
 
@@ -317,10 +339,11 @@ impl AppRoot {
         let service = self.document_open_service.clone();
         let executor = cx.background_executor().clone();
         let window_handle = window.window_handle();
+        let requested_encoding = request.encoding;
         self.tasks
             .register_with(TaskId::DocumentOpen, CancellationToken::new(), move || {
                 let reading = executor.spawn(async move {
-                    let result = service.load(resolved);
+                    let result = service.load(resolved, requested_encoding);
                     (request, result)
                 });
                 cx.spawn(async move |this, cx| {
@@ -387,11 +410,13 @@ impl AppRoot {
             return;
         }
         let completion = request.completion.take();
+        // 交互式打开才有编码选择面；handover 与 Runtime 必须保留唯一回执。
+        let promptable = completion.is_none();
         let opened_path = request.path.clone();
-        let session_read_grant = request.session_read_grant.take();
         let markdown_fragment = request.markdown_fragment.take();
         let outcome = match result {
             Ok(opened) => {
+                let session_read_grant = request.session_read_grant.take();
                 let id = opened.id;
                 let is_new = opened.outcome == DocumentOpenOutcome::Opened;
                 let installed = self.install_opened_document(request, opened, window, cx);
@@ -406,7 +431,17 @@ impl AppRoot {
                 }
                 installed
             }
-            Err(error) => Err(AppRootError::DocumentOpen(error)),
+            Err(error) => {
+                // 编码重开保留 Markdown 锚点，重新打开后仍落到同一片段。
+                request.markdown_fragment = markdown_fragment;
+                if promptable
+                    && encoding_reopen_supported(&error)
+                    && let Err(open_error) = self.open_encoding_prompt(request, window, cx)
+                {
+                    log::warn!("编码选择面打开失败: {open_error}");
+                }
+                Err(AppRootError::DocumentOpen(error))
+            }
         };
         // 在途期间的项目关闭提交也必须与返回后的聚合表对账。
         self.reconcile_document_registry(cx);

@@ -22,6 +22,8 @@
     "image_decode_failed": "Could not decode the image: {error}",
     "truncated": "File exceeds 8 MB; showing a truncated read-only prefix.",
     "invalid_encoding": "File is not valid UTF-8; opened read-only.",
+    "encoding_open_title": "Could not determine the file encoding",
+    "encoding_open_detail": "Choose an encoding to reopen this file. No editor panel is created until the content decodes cleanly.",
     "read_only": "Read-only",
     "language_auto": "Automatic",
     "wrap": "Wrap",

@@ -72,6 +72,8 @@ impl AppRoot {
             }
             return Ok(());
         }
+        // 关闭决定优先于编码选择：先收合编码面，避免两层模态争抢焦点。
+        self.cancel_encoding_prompt(window, cx)?;
         let focus_handle = cx.focus_handle();
         let registration = self.focus_manager.register(
             &focus_handle,

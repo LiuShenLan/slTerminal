@@ -8,6 +8,7 @@ mod close_decision;
 mod command_registry;
 mod commands;
 mod commit;
+mod encoding_prompt;
 pub(crate) use commit::{CommitOpenKind, open_kind_for_status};
 #[allow(dead_code)] // 消费点归 Editor 行标、Diff 启动恢复与可见性接线。
 mod diff;
@@ -342,6 +343,8 @@ pub(crate) struct AppRoot {
     language_selector_menu: Option<language_selector::LanguageSelectorMenu>,
     /// 关闭决定面：脏 Document 与 Hooks 草稿的唯一交互处置入口。
     close_decision: Option<close_decision::PendingCloseDecision>,
+    /// 未知编码打开失败的显式编码重开面；保存待重试的同一打开请求。
+    encoding_prompt: Option<encoding_prompt::PendingEncodingPrompt>,
     settings_overlay: Option<settings_overlay::SettingsOverlayHost>,
     side_view_persistence: AppRootPersistence,
     /// Hooks 草稿只按「面板实例＋CLI＋层级」隔离存活；项目移除与根重定位前守卫。
@@ -653,6 +656,7 @@ impl AppRoot {
             tab_list_menu: None,
             language_selector_menu: None,
             close_decision: None,
+            encoding_prompt: None,
             settings_overlay: None,
             side_view_persistence: persistence,
             hook_drafts: crate::ai_hook::draft_host::HooksDraftHost::default(),

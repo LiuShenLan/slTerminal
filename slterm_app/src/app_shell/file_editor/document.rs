@@ -101,12 +101,21 @@ impl Document {
 
     /// 有界载入:上限检查先于解码;只读属性/截断/非法编码进入快照合同。
     pub(crate) fn load(path: &Path) -> std::io::Result<Self> {
-        Self::load_with_read(path, document_io::read_prefix)
+        Self::load_with_encoding(path, None)
+    }
+
+    /// 显式编码重开：BOM 仍优先，未知编码以可重试类别返回。
+    pub(crate) fn load_with_encoding(
+        path: &Path,
+        encoding: Option<slterm_document::DocumentEncoding>,
+    ) -> std::io::Result<Self> {
+        Self::load_with_read(path, encoding, document_io::read_prefix)
     }
 
     /// 读取端口只用于故障注入；正文、身份与长度仍来自同一真实文件句柄。
     fn load_with_read(
         path: &Path,
+        encoding: Option<slterm_document::DocumentEncoding>,
         read: impl FnOnce(&mut fs::File, u64, usize) -> std::io::Result<(Vec<u8>, bool)>,
     ) -> std::io::Result<Self> {
         let target = dunce::canonicalize(path)?;
@@ -125,12 +134,17 @@ impl Document {
         if file.metadata()?.len() != metadata.len() {
             return Err(std::io::Error::other("文件在读取期间改变了长度"));
         }
-        let content = DocumentContent::decode(bytes, metadata.len(), None);
-        if matches!(content, DocumentContent::Unavailable(_)) {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "内容不是可建立的文本编辑基线",
-            ));
+        let content = DocumentContent::decode(bytes, metadata.len(), encoding);
+        if let DocumentContent::Unavailable(reason) = content {
+            // 编码歧义可由用户显式选择编码后重试；二进制内容没有这种恢复路径。
+            let kind = match reason {
+                slterm_document::ContentUnavailable::Binary => std::io::ErrorKind::InvalidData,
+                slterm_document::ContentUnavailable::UnknownEncoding
+                | slterm_document::ContentUnavailable::InvalidEncoding => {
+                    std::io::ErrorKind::Unsupported
+                }
+            };
+            return Err(std::io::Error::new(kind, "内容不是可建立的文本编辑基线"));
         }
         Ok(Self {
             snapshot: TextSnapshot::from_content(
@@ -342,7 +356,7 @@ mod document_tests {
         let path = dir.path().join("growing.txt");
         fs::write(&path, vec![b'x'; EDITABLE_LIMIT_BYTES as usize]).unwrap();
 
-        let result = Document::load_with_read(&path, |file, declared, limit| {
+        let result = Document::load_with_read(&path, None, |file, declared, limit| {
             let read = document_io::read_prefix(file, declared, limit)?;
             let mut append = fs::OpenOptions::new().append(true).open(&path)?;
             std::io::Write::write_all(&mut append, b"y")?;

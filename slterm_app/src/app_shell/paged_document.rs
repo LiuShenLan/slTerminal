@@ -66,7 +66,9 @@ impl PagedDocument {
             let decoded = if start == 0 {
                 match DocumentContent::decode(bytes.clone(), total_bytes, Some(encoding)) {
                     DocumentContent::Editable(text) | DocumentContent::Paged(text) => text.text,
-                    DocumentContent::Unavailable(_) => return Err(invalid_encoding()),
+                    DocumentContent::Unavailable(reason) => {
+                        return Err(unavailable_encoding(reason));
+                    }
                 }
             } else {
                 encoding
@@ -91,7 +93,7 @@ impl PagedDocument {
             return Err(changed_source());
         }
         verify_identity(&file, location)?;
-        let index = PageIndex::new(total_bytes, ranges).map_err(|_| invalid_encoding())?;
+        let index = PageIndex::new(total_bytes, ranges).map_err(|_| invalid_page_index())?;
         let line_index = PagedLineIndex::from_page_stats(&line_stats);
         Ok(Self {
             location: location.clone(),
@@ -339,8 +341,22 @@ fn verify_identity(file: &std::fs::File, expected: &ResolvedPath) -> io::Result<
     Ok(())
 }
 
+fn unavailable_encoding(reason: slterm_document::ContentUnavailable) -> io::Error {
+    // 二进制内容没有编码重开路径；未知或非法编码允许用户显式选择后重试。
+    let kind = match reason {
+        slterm_document::ContentUnavailable::Binary => io::ErrorKind::InvalidData,
+        slterm_document::ContentUnavailable::UnknownEncoding
+        | slterm_document::ContentUnavailable::InvalidEncoding => io::ErrorKind::Unsupported,
+    };
+    io::Error::new(kind, "分页源不是完整合法的文本编码")
+}
+
 fn invalid_encoding() -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, "分页源不是完整合法的文本编码")
+    io::Error::new(io::ErrorKind::Unsupported, "分页源不是完整合法的文本编码")
+}
+
+fn invalid_page_index() -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, "分页源无法建立页索引")
 }
 
 fn changed_source() -> io::Error {

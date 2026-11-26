@@ -96,7 +96,7 @@
 |---|---|
 | SVG 清洗重建 XML 时未转义属性值 | 已核验无需修复：`push_attribute` 接收 `(&str, &str)` 时由 quick-xml 的 `From` 转换转义属性值；报告引用的 FIXME 位于底层 `push_attr`，调用路径不经过它。新增回归守卫 `attribute_values_are_escaped_so_reparsing_preserves_the_attribute_set` |
 | 同一规范路径的外部重载在身份变化时覆写其他 Document 身份索引 | 已修：外部重载与普通保存提交前经 `identity_owner` 拒绝其他聚合已占用的身份，`refresh_identity` 只补建本聚合索引、绝不改写其他 owner；测试 `external_reload_rejects_identity_owned_by_another_document`、`in_place_save_rejects_identity_owned_by_another_document` |
-| 可编辑 Document 缺行尾切换、编码重开与手动只读活体通道 | 修复中：行尾切换与手动只读已实现（core `set_line_ending`／`set_manual_read_only`，保存基线记录 `saved_encoding`，Editor 底栏按钮经统一事件写入共享 Document 并广播只读/编码元数据；测试 `line_ending_change_is_a_revertible_document_modification`、`manual_read_only_requires_clean_editable_text_and_blocks_edits`、`editor_line_ending_and_manual_read_only_are_live`）；编码重开入口仍待接线 |
+| 可编辑 Document 缺行尾切换、编码重开与手动只读活体通道 | 已修：core 提供 `set_line_ending`／`set_manual_read_only` 与 `saved_encoding` 基线，Editor 底栏按钮经统一事件写入共享 Document 并广播只读/编码元数据；不可解码打开失败进入唯一编码选择面，选定编码后复用同一读取链重开（可编辑与分页均覆盖），二进制内容不进入该面；测试 `line_ending_change_is_a_revertible_document_modification`、`manual_read_only_requires_clean_editable_text_and_blocks_edits`、`editor_line_ending_and_manual_read_only_are_live`、`unknown_encoding_prompts_for_explicit_reopen`、`wrong_encoding_keeps_prompt_and_cancel_leaves_layout_unchanged`、`binary_content_is_rejected_without_encoding_prompt`、`oversized_gbk_file_reopens_as_paged_through_explicit_encoding` |
 | 查找与替换只实现字面量查找和全部替换，且没有生产接线 | 待修 |
 | 本地图片路径在授权前被解析，UNC 可自动触发 SMB 认证 | 已修：`PathGrant::lexically_covers` 纯词法预检先于解析，未授权目标（含 UNC）不触碰文件系统；测试 `lexical_precheck_covers_subtree_and_exact_scope_without_io`、`authorization_precedes_resolution_and_unc_never_resolves_without_grant` |
 | 行内公式与行内图片被移出文本流 | 待修 |
@@ -113,7 +113,7 @@
 | 渲染态缺少键盘滚动、大纲与链接激活 | 已修：新增 `Ctrl+Shift+O` 大纲开关、方向键／PageUp／PageDown／Home／End 渲染滚动、`Alt+↑`／`Alt+↓` 链接焦点循环与 `Alt+Enter` 激活；焦点链接以选区色标识，大纲按钮经 Tab 可达并在工具提示展示快捷键；测试 `markdown_render_mode_is_keyboard_operable` |
 | 安全与授权关键路径只有服务/投影测试 | 待修 |
 | Editor 面板规定能力未实现 | 待修 |
-| 本地编码检测与编码重开在实际打开链中不存在 | 待修 |
+| 本地编码检测与编码重开在实际打开链中不存在 | 已修：保留 core「显式编码」决策，真实打开链在未知/非法编码失败时打开唯一编码选择面，用户选定后经同一 `DocumentOpenService::load` 以显式编码重开，可编辑与超限分页分支都覆盖；二进制内容不提供编码重开。测试 `unknown_encoding_prompts_for_explicit_reopen`、`wrong_encoding_keeps_prompt_and_cancel_leaves_layout_unchanged`、`binary_content_is_rejected_without_encoding_prompt`、`oversized_gbk_file_reopens_as_paged_through_explicit_encoding` |
 | 追溯矩阵的自动化证据层级与场景不一致 | 待修 |
 | 分页只读视图不实现换行，且与软换行 Editor 共用滚动坐标单位 | 待修 |
 | 分页页读取失败后永久停留 Loading | 已修：失败页显示底部提示条与显式重试，点击清空失败抑制并重新读取同一页（提交 2a991217）；测试 `paged_view_explicit_retry_reruns_failed_pages`、`paged_view_does_not_retry_failed_pages_on_every_frame` |

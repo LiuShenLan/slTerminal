@@ -224,19 +224,28 @@ impl DocumentOpenService {
     }
 
     /// 只在后台读取已授权位置；不接触或移走 Registry。
-    pub(crate) fn load(&self, resolved: ResolvedDocument) -> io::Result<LoadedDocument> {
+    pub(crate) fn load(
+        &self,
+        resolved: ResolvedDocument,
+        encoding: Option<slterm_document::DocumentEncoding>,
+    ) -> io::Result<LoadedDocument> {
         let location = resolved.location;
         let initial_bytes = std::fs::metadata(location.canonical_path().as_path())?.len();
         let body = if initial_bytes > EDITABLE_LIMIT_BYTES {
-            let document = Arc::new(PagedDocument::open(&location, None)?);
+            let document = Arc::new(PagedDocument::open(&location, encoding)?);
             if document.index().total_bytes() != initial_bytes {
                 return Err(io::Error::other("文件在打开期间改变了长度"));
             }
             OpenedDocumentBody::Paged(document)
         } else {
-            let document = Document::load(location.canonical_path().as_path())?.with_write_context(
-                DocumentWriteContext::new(resolved.grants.clone(), 0, 0, self.resolver.clone()),
-            );
+            let document =
+                Document::load_with_encoding(location.canonical_path().as_path(), encoding)?
+                    .with_write_context(DocumentWriteContext::new(
+                        resolved.grants.clone(),
+                        0,
+                        0,
+                        self.resolver.clone(),
+                    ));
             if document.location() != &location {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
@@ -308,7 +317,7 @@ impl DocumentOpenService {
         lexical: &CanonicalPath,
     ) -> Result<OpenedDocument, DocumentOpenError> {
         let resolved = self.resolve(project_root, lexical)?;
-        let loaded = self.load(resolved)?;
+        let loaded = self.load(resolved, None)?;
         Self::register(registry, loaded).map_err(DocumentOpenError::Io)
     }
 }
@@ -862,6 +871,8 @@ mod documents_tests {
         assert!(registry.is_empty());
     }
 
+    /// 真实打开链：GBK 只有在显式编码下建立正文；未知/非法编码统一映射为
+    /// 可重开的 Unsupported，二进制则不可重开。
     #[test]
     fn editor_encoding_and_binary_routing() {
         let temp = tempfile::tempdir().unwrap();
@@ -872,23 +883,34 @@ mod documents_tests {
         std::fs::write(&gbk, [0xd6, 0xd0, 0xce, 0xc4]).unwrap();
         std::fs::write(&invalid, [0xff]).unwrap();
         std::fs::write(&binary, b"text\0binary").unwrap();
-        let content = slterm_document::DocumentContent::decode(
-            std::fs::read(&gbk).unwrap(),
-            4,
-            Some(slterm_document::DocumentEncoding::Gbk),
-        );
-        assert!(matches!(
-            content,
-            slterm_document::DocumentContent::Editable(text) if text.text == "中文"
-        ));
-
         let service = DocumentOpenService::default();
+        let gbk = CanonicalPath::new(gbk).unwrap();
         let mut registry = DocumentRegistry::new();
+
+        let loaded = service
+            .load(
+                service.resolve(&root, &gbk).unwrap(),
+                Some(slterm_document::DocumentEncoding::Gbk),
+            )
+            .unwrap();
+        let opened = DocumentOpenService::register(&mut registry, loaded).unwrap();
+        let session = registry.session(opened.id).unwrap();
+        assert_eq!(session.text().unwrap().to_string(), "中文");
+        assert_eq!(
+            session.encoding().encoding,
+            slterm_document::DocumentEncoding::Gbk
+        );
+
+        let auto = service
+            .load(service.resolve(&root, &gbk).unwrap(), None)
+            .err()
+            .expect("自动识别不得接受非 UTF-8 内容");
+        assert_eq!(auto.kind(), io::ErrorKind::Unsupported);
         for path in [invalid, binary] {
             let result = service.open(&mut registry, &root, &CanonicalPath::new(path).unwrap());
             assert!(result.is_err());
-            assert!(registry.is_empty());
         }
+        assert_eq!(registry.len(), 1, "失败打开不得建立额外 Document");
     }
 
     #[test]

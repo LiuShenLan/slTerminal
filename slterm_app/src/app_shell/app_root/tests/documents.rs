@@ -9,6 +9,7 @@ include!("documents/open_file.rs");
 include!("documents/recovery.rs");
 include!("documents/snapshots.rs");
 include!("documents/metadata.rs");
+include!("documents/encoding.rs");
 
 pub(super) fn open_document(
     root: &Entity<AppRoot>,

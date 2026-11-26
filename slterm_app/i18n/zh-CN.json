@@ -22,6 +22,8 @@
     "image_decode_failed": "图片解码失败：{error}",
     "truncated": "文件超过 8 MB，已截断为只读前缀。",
     "invalid_encoding": "文件不是有效 UTF-8，已只读打开。",
+    "encoding_open_title": "无法确定文件编码",
+    "encoding_open_detail": "选择编码重新打开文件。内容完整解码前不会创建编辑面板。",
     "read_only": "只读",
     "language_auto": "自动",
     "wrap": "自动换行",
