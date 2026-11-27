@@ -356,6 +356,8 @@ pub(crate) struct AppRoot {
     hook_drafts: crate::ai_hook::draft_host::HooksDraftHost,
     /// 设置运行值与唯一写队列：项目 Settings 与无项目浮层共享。
     settings: crate::settings_state::SettingsStore,
+    /// 当前可见的 Markdown／Diff 派生视图；隐藏面板暂停共享编辑重算。
+    visible_document_derived_views: Vec<slterm_workspace::ViewKey>,
     /// 设置运行值世代：任一视图提交或保存回执推进，驱动跨视图控件回填。
     settings_revision: u64,
     settings_load_warning: Option<crate::settings_state::SettingsLoadWarning>,
@@ -555,6 +557,7 @@ impl AppRoot {
         let settings_load_warning = cx
             .try_global::<crate::settings_state::SettingsLoadState>()
             .and_then(|state| state.warning);
+        let visible_document_derived_views = Self::visible_document_derived_view_keys_in(&snapshot);
         let mut root = Self {
             snapshot,
             snapshot_generation: 0,
@@ -675,6 +678,7 @@ impl AppRoot {
             settings: crate::settings_state::SettingsStore::new(
                 crate::settings_store::load_raw_settings_lenient(),
             ),
+            visible_document_derived_views,
             settings_revision: 0,
             settings_load_warning,
             in_app_notices: Vec::new(),
@@ -732,6 +736,7 @@ impl AppRoot {
         self.reconcile_tab_scrolls(Some(&previous));
         self.sync_project_visibility(cx);
         self.reconcile_fs_watch();
+        self.reconcile_document_derived_views(cx);
         if self.project_snapshot_recovery_failed {
             return;
         }

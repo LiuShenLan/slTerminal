@@ -228,6 +228,17 @@ fn diff_edit_shared_document(cx: &mut TestAppContext) {
         editor.read_with(cx, |view, _| view.input_text_for_test()),
         "from diff\n"
     );
+    // 非激活 Markdown 不消费共享编辑；激活后用最新正文刷新一次。
+    let markdown_key = ViewKey::Markdown {
+        project_id: project_id(PROJECT_A),
+        document_id: document,
+    };
+    window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.activate_view(markdown_key, window, cx).unwrap();
+        });
+    });
+    draw_frame(&mut window);
     assert_eq!(
         markdown.read_with(cx, |view, cx| view.input_text_for_test(cx)),
         "from diff\n"
@@ -372,10 +383,24 @@ fn document_shared_across_projects(cx: &mut TestAppContext) {
     activate_project(&root, &mut window, PROJECT_A);
     window.simulate_keystrokes("ctrl-z");
     assert_eq!(
-        diff.read_with(cx, |view, app| view.shared_text_for_test(app)),
-        "fixed first\n"
+        root.read_with(cx, |root, _| {
+            root.documents
+                .session(document)
+                .unwrap()
+                .text()
+                .unwrap()
+                .to_string()
+        }),
+        "fixed first\n",
+        "撤销必须落到唯一 Document"
     );
     activate_project(&root, &mut window, PROJECT_B);
+    draw_frame(&mut window);
+    assert_eq!(
+        diff.read_with(cx, |view, app| view.shared_text_for_test(app)),
+        "fixed first\n",
+        "重新可见的 Diff 必须采纳最新正文"
+    );
     window.simulate_keystrokes("ctrl-y");
     assert_eq!(
         editor.read_with(cx, |view, _| view.input_text_for_test()),
@@ -525,10 +550,23 @@ fn integration_git_document(cx: &mut TestAppContext) {
     });
     window.simulate_keystrokes("ctrl-z");
     assert_eq!(
-        diff.read_with(cx, |view, app| view.shared_text_for_test(app)),
+        root.read_with(cx, |root, _| {
+            root.documents
+                .session(document)
+                .unwrap()
+                .text()
+                .unwrap()
+                .to_string()
+        }),
         "one\nchanged\nthree\nfour\n"
     );
     activate_project(&root, &mut window, PROJECT_B);
+    draw_frame(&mut window);
+    assert_eq!(
+        diff.read_with(cx, |view, app| view.shared_text_for_test(app)),
+        "one\nchanged\nthree\nfour\n",
+        "重新可见的 Diff 必须采纳最新正文"
+    );
     window.simulate_keystrokes("ctrl-y");
     assert_eq!(
         editor.read_with(cx, |view, _| view.input_text_for_test()),

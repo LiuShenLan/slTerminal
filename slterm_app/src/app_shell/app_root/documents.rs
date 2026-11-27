@@ -75,6 +75,12 @@ enum DocumentEditPanel {
     Diff(gpui::Entity<super::diff::DiffView>),
 }
 
+/// 可见转换时需要刷新或取消的共享正文派生视图。
+enum DocumentDerivedEntity {
+    Markdown(gpui::Entity<MarkdownView>),
+    Diff(gpui::Entity<super::diff::DiffView>),
+}
+
 /// 显式保存路径：普通条件保存或用户在冲突决定面确认的覆盖保存。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum DocumentSaveMode {
@@ -1311,6 +1317,7 @@ impl AppRoot {
                     }
                 }
             }
+            let visible_derived = self.visible_document_derived_views.clone();
             let views = self
                 .projects
                 .values()
@@ -1330,10 +1337,15 @@ impl AppRoot {
                                 {
                                     Some(DocumentEditPanel::Editor(editor.view.clone()))
                                 }
-                                PanelContent::Markdown(markdown) => {
+                                // 隐藏的 Markdown／Diff 不消费共享编辑；可见转换时统一刷新。
+                                PanelContent::Markdown(markdown)
+                                    if visible_derived.contains(&panel.view_key) =>
+                                {
                                     Some(DocumentEditPanel::Markdown(markdown.view.clone()))
                                 }
-                                PanelContent::Diff(diff) => {
+                                PanelContent::Diff(diff)
+                                    if visible_derived.contains(&panel.view_key) =>
+                                {
                                     Some(DocumentEditPanel::Diff(diff.clone()))
                                 }
                                 _ => None,
@@ -1379,6 +1391,112 @@ impl AppRoot {
         }
         self.refresh_editor_git_for_document(document_id, cx);
         Ok(response)
+    }
+
+    /// 当前可见的 Markdown／Diff 派生视图：活跃项目内每个组的 active 视图。
+    fn visible_document_derived_view_keys(&self) -> Vec<ViewKey> {
+        Self::visible_document_derived_view_keys_in(&self.snapshot)
+    }
+
+    /// 快照内的可见派生视图键；构造期与运行期共用同一判定。
+    pub(super) fn visible_document_derived_view_keys_in(
+        snapshot: &slterm_workspace::ProjectSnapshot,
+    ) -> Vec<ViewKey> {
+        let mut keys = Vec::new();
+        let Some(active) = snapshot.registry().active() else {
+            return keys;
+        };
+        let Some(project) = snapshot.registry().project(active) else {
+            return keys;
+        };
+        let layout = project.layout();
+        for group_id in layout.group_ids() {
+            let Some(view_key) = layout
+                .group(group_id)
+                .map(slterm_workspace::PanelGroup::active)
+            else {
+                continue;
+            };
+            if matches!(view_key, ViewKey::Markdown { .. } | ViewKey::Diff { .. })
+                && !keys.contains(view_key)
+            {
+                keys.push(view_key.clone());
+            }
+        }
+        keys
+    }
+
+    fn document_derived_entity(&self, key: &ViewKey, cx: &App) -> Option<DocumentDerivedEntity> {
+        for project in self.projects.values() {
+            let project = project.read(cx);
+            for panel in project.panels.values() {
+                if &panel.view_key != key {
+                    continue;
+                }
+                match &panel.content {
+                    PanelContent::Markdown(markdown) => {
+                        return Some(DocumentDerivedEntity::Markdown(markdown.view.clone()));
+                    }
+                    PanelContent::Diff(diff) => {
+                        return Some(DocumentDerivedEntity::Diff(diff.clone()));
+                    }
+                    _ => return None,
+                }
+            }
+        }
+        None
+    }
+
+    /// 可见性转换：隐藏时取消在途重算，重新可见只投递一次最新正文。
+    pub(super) fn reconcile_document_derived_views(&mut self, cx: &mut App) {
+        let desired = self.visible_document_derived_view_keys();
+        let shown = desired
+            .iter()
+            .filter(|key| !self.visible_document_derived_views.contains(key))
+            .cloned()
+            .collect::<Vec<_>>();
+        let hidden = self
+            .visible_document_derived_views
+            .iter()
+            .filter(|key| !desired.contains(key))
+            .cloned()
+            .collect::<Vec<_>>();
+        self.visible_document_derived_views = desired;
+        for key in hidden {
+            if let Some(entity) = self.document_derived_entity(&key, cx) {
+                match entity {
+                    DocumentDerivedEntity::Markdown(view) => {
+                        view.update(cx, |view, _| view.cancel_pending());
+                    }
+                    DocumentDerivedEntity::Diff(view) => {
+                        view.update(cx, |view, _| view.cancel_pending());
+                    }
+                }
+            }
+        }
+        for key in shown {
+            let Some(document_id) = super::runtime_snapshot::view_document_id(&key) else {
+                continue;
+            };
+            let Some(session) = self.documents.session(document_id).cloned() else {
+                continue;
+            };
+            if let Some(entity) = self.document_derived_entity(&key, cx) {
+                match entity {
+                    DocumentDerivedEntity::Markdown(view) => {
+                        view.update(cx, |view, cx| view.apply_snapshot(&session, cx));
+                    }
+                    DocumentDerivedEntity::Diff(view) => {
+                        view.update(cx, |view, cx| view.refresh_shared(&session, cx));
+                    }
+                }
+            }
+        }
+    }
+
+    /// 共享编辑只向可见派生视图广播；隐藏面板由可见转换统一刷新。
+    fn document_derived_view_visible(&self, key: &ViewKey) -> bool {
+        self.visible_document_derived_views.contains(key)
     }
 
     /// HTML 系统打开只读取当前磁盘位置，不触发保存；平台调用留在后台任务。

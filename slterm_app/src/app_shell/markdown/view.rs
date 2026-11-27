@@ -216,6 +216,22 @@ impl MarkdownView {
         )
     }
 
+    /// 面板隐藏时停止派生解析；在途任务丢弃即取消，可见后由 AppRoot 重新投递最新快照。
+    pub(crate) fn cancel_pending(&mut self) {
+        self.parse_task = None;
+        self.render_task = None;
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn revision_for_test(&self) -> u64 {
+        self.revision
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn text_for_test(&self) -> String {
+        self.text.to_string()
+    }
+
     fn schedule_parse(&mut self, cx: &mut Context<'_, Self>) {
         if self.effective_mode() != MarkdownRenderDecision::Progressive {
             return;

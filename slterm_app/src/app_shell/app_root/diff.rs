@@ -216,6 +216,29 @@ impl DiffView {
         cx.notify();
     }
 
+    /// 隐藏时取消在途差分并推进代次；可见后由 AppRoot 用最新快照重新调度。
+    pub(crate) fn cancel_pending(&mut self) {
+        self.diff_generation = self.diff_generation.wrapping_add(1);
+        self.diff_task = None;
+    }
+
+    /// 可见转换：先同步右侧正文，再按当前设置重新调度差分。
+    pub(crate) fn refresh_shared(
+        &mut self,
+        session: &slterm_document::DocumentSession,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.right
+            .update(cx, |view, cx| view.apply_snapshot(session, cx));
+        self.schedule_diff(cx);
+        cx.notify();
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn diff_task_pending_for_test(&self) -> bool {
+        self.diff_task.is_some()
+    }
+
     fn schedule_diff(&mut self, cx: &mut Context<'_, Self>) {
         let Some(head) = self.head.clone() else {
             return;
