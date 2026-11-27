@@ -142,7 +142,6 @@ mod tests {
     #[test]
     fn resume_delay_is_shell_specific_and_bounded() {
         use crate::app_shell::app_root::navigation::RestoreShell;
-        use std::time::Duration;
 
         for shell in ["cmd.exe", "C:/Windows/System32/CMD.EXE"] {
             assert_eq!(restore_shell_from_program(Some(shell)), RestoreShell::Cmd);
