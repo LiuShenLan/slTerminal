@@ -75,7 +75,8 @@ pub use repository::{
 };
 pub use save::{DocumentSaveReceipt, DocumentSaveRequest, SaveTransactionError};
 pub use search::{
-    DocumentSearchResult, DocumentTextRequest, SearchError, SearchMatch, TextChunk, TextChunks,
+    DocumentSearchResult, DocumentTextRequest, SearchError, SearchMatch, SearchOptions, TextChunk,
+    TextChunks,
 };
 pub use syntax::{
     SyntaxHighlighter, SyntaxSpan, SyntaxTree, SyntaxWorker, SyntaxWorkerError, syntax_input_edit,

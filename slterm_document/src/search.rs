@@ -13,6 +13,15 @@ pub enum SearchError {
     ChunkOffsetMismatch,
     OffsetExhausted,
     InvalidTextRange,
+    InvalidPattern,
+}
+
+/// 查找选项；默认不区分大小写、非整词、字面量。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SearchOptions {
+    pub case_sensitive: bool,
+    pub whole_word: bool,
+    pub regex: bool,
 }
 
 /// 解码后 UTF-8 文本中的一个连续块；偏移用于跨块结果对账。
@@ -115,16 +124,68 @@ impl DocumentTextRequest {
         }
     }
 
+    /// 兼容入口：区分大小写的纯字面量查找。
     pub fn search(
         &self,
         pattern: &str,
         chunks: impl IntoIterator<Item = Result<TextChunk, SearchError>>,
         cancellation: &Receiver<()>,
     ) -> Result<DocumentSearchResult, SearchError> {
-        let mut matches = Vec::new();
+        self.search_with_options(
+            pattern,
+            SearchOptions {
+                case_sensitive: true,
+                ..SearchOptions::default()
+            },
+            chunks,
+            cancellation,
+        )
+    }
+
+    /// 按选项查找；大小写、整词与正则路径共享同一请求身份。
+    pub fn search_with_options(
+        &self,
+        pattern: &str,
+        options: SearchOptions,
+        chunks: impl IntoIterator<Item = Result<TextChunk, SearchError>>,
+        cancellation: &Receiver<()>,
+    ) -> Result<DocumentSearchResult, SearchError> {
         if pattern.is_empty() {
-            return Ok(self.result(matches));
+            return Ok(self.result(Vec::new()));
         }
+        if !options.regex && options.case_sensitive && !options.whole_word {
+            return self.search_literal_streaming(pattern, chunks, cancellation);
+        }
+        let text = self.copy(chunks, cancellation)?;
+        let mut source = if options.regex {
+            pattern.to_owned()
+        } else {
+            regex::escape(pattern)
+        };
+        if options.whole_word {
+            source = format!(r"\b(?:{source})\b");
+        }
+        let regex = regex::RegexBuilder::new(&source)
+            .case_insensitive(!options.case_sensitive)
+            .build()
+            .map_err(|_| SearchError::InvalidPattern)?;
+        let mut matches = Vec::new();
+        for matched in regex.find_iter(&text) {
+            check_cancelled(cancellation)?;
+            matches.push(SearchMatch {
+                range: matched.range(),
+            });
+        }
+        Ok(self.result(matches))
+    }
+
+    fn search_literal_streaming(
+        &self,
+        pattern: &str,
+        chunks: impl IntoIterator<Item = Result<TextChunk, SearchError>>,
+        cancellation: &Receiver<()>,
+    ) -> Result<DocumentSearchResult, SearchError> {
+        let mut matches = Vec::new();
         let mut pending = String::new();
         let mut pending_offset = 0;
         let mut nonoverlap_before: usize = 0;
@@ -319,7 +380,8 @@ mod tests {
     use slterm_path::{CanonicalPath, ResolvedPath};
 
     use crate::{
-        DocumentId, DocumentMetadata, DocumentRegistry, SearchError, TextChunk, TextStateId,
+        DocumentId, DocumentMetadata, DocumentRegistry, SearchError, SearchOptions, TextChunk,
+        TextStateId,
     };
 
     fn request() -> crate::DocumentTextRequest {
@@ -419,6 +481,87 @@ mod tests {
                 .collect::<Vec<_>>();
             assert_eq!(actual, expected, "逐字符切块: {text:?}，模式 {pattern:?}");
         }
+    }
+
+    #[test]
+    fn search_options_apply_case_word_and_regex() {
+        let id = DocumentId::from_str("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2a").unwrap();
+        let text = "Alpha alpha alphabet\nbeta ALPHA";
+        let mut registry = DocumentRegistry::new();
+        registry
+            .open(
+                id,
+                ResolvedPath::new(CanonicalPath::new("D:/work/search.txt").unwrap(), None),
+                Rope::from_str(text),
+                TextStateId::from_str("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0f2a").unwrap(),
+                std::sync::Arc::from(text.as_bytes()),
+                DocumentMetadata::default(),
+            )
+            .unwrap();
+        let request = registry.text_request(id, 41).unwrap();
+        let (_cancel, cancellation) = sync_channel(1);
+        let ranges = |options| {
+            request
+                .search_with_options("alpha", options, request.chunks().unwrap(), &cancellation)
+                .unwrap()
+                .matches()
+                .iter()
+                .map(|matched| matched.range())
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(
+            ranges(SearchOptions::default()),
+            [0..5, 6..11, 12..17, 26..31],
+            "默认不区分大小写，字面量可命中词内"
+        );
+        assert_eq!(
+            ranges(SearchOptions {
+                whole_word: true,
+                ..SearchOptions::default()
+            }),
+            [0..5, 6..11, 26..31],
+            "整词只命中完整单词"
+        );
+        assert_eq!(
+            ranges(SearchOptions {
+                case_sensitive: true,
+                ..SearchOptions::default()
+            }),
+            [6..11, 12..17],
+            "区分大小写只命中同形文本"
+        );
+        assert_eq!(
+            request
+                .search_with_options(
+                    r"a\w+",
+                    SearchOptions {
+                        regex: true,
+                        ..SearchOptions::default()
+                    },
+                    request.chunks().unwrap(),
+                    &cancellation,
+                )
+                .unwrap()
+                .matches()
+                .iter()
+                .map(|matched| matched.range())
+                .collect::<Vec<_>>(),
+            [0..5, 6..11, 12..20, 26..31],
+            "正则选项必须把模式按正则解释"
+        );
+        assert_eq!(
+            request.search_with_options(
+                "(",
+                SearchOptions {
+                    regex: true,
+                    ..SearchOptions::default()
+                },
+                request.chunks().unwrap(),
+                &cancellation,
+            ),
+            Err(SearchError::InvalidPattern)
+        );
     }
 
     #[test]
