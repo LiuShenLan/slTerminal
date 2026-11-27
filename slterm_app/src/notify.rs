@@ -42,8 +42,7 @@ pub(crate) enum AlertSeverity {
 /// `AgentKind::parse`(CLI profile 单点),避免按散文猜来源。
 #[derive(Debug, Clone)]
 pub(crate) enum Notification {
-    /// BEL:AI CLI 回合完成的主信号(OSC/BEL 上抛接线后消费)。
-    #[allow(dead_code)] // 消费点 = BEL 上抛接线;当前生产源 = hook/恢复。
+    /// BEL:AI CLI 回合完成的主信号。
     Bell { program: Option<String> },
     /// OSC 133;C/D 跟踪的命令完成(被 hook 覆盖时不再通知)。
     CommandDone {
@@ -57,7 +56,6 @@ pub(crate) enum Notification {
         exit_code: i32,
     },
     /// OSC 9 自由文本(Claude Code 等 iTerm2 通知通道)。
-    #[allow(dead_code)] // 消费点 = OSC 9 上抛接线;当前生产源 = hook/恢复。
     Text {
         body: String,
         program: Option<String>,

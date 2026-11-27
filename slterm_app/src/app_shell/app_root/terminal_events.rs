@@ -192,6 +192,13 @@ impl AppRoot {
                     );
                 }
             }
+            TerminalViewEvent::Notification(notification) => {
+                crate::notify::deliver_gpui(
+                    notification,
+                    crate::gpui_terminal::PaneId(panel_id.sequence()),
+                    cx,
+                );
+            }
             TerminalViewEvent::UserInput(_) | TerminalViewEvent::CommandSubmitted(_) => {}
         }
     }

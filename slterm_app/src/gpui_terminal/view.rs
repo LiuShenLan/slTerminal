@@ -96,6 +96,23 @@ fn restart_cursor_blink_phase(cursor_visible: &mut bool, cursor_blink_epoch: &mu
     *cursor_blink_epoch
 }
 
+/// BEL／OSC 9 终端事件 → 通知漏斗；其他事件不产生通知。
+fn notification_for_event(
+    event: &TermEvent,
+    program: Option<&str>,
+) -> Option<crate::notify::Notification> {
+    match event {
+        TermEvent::Bell => Some(crate::notify::Notification::Bell {
+            program: program.map(str::to_owned),
+        }),
+        TermEvent::Notify(text) => Some(crate::notify::Notification::Text {
+            body: text.clone(),
+            program: program.map(str::to_owned),
+        }),
+        _ => None,
+    }
+}
+
 /// 终端视图对宿主(Workspace)暴露的状态变化。白集;
 /// FocusRequested/RequestClose/Bell/Notification/Progress/菜单等臂归各自
 /// 分模块回填。
@@ -119,6 +136,8 @@ pub enum TerminalViewEvent {
     /// 的聚焦 pane」路由到任务栏。
     #[allow(dead_code)] // 任务栏路由归 Windows 协调器。
     ProgressChanged(crate::taskbar::TaskProgress),
+    /// BEL 与 OSC 9 通知：宿主按 pane 投递唯一通知漏斗。
+    Notification(crate::notify::Notification),
 }
 
 /// 会话种类。只剩本地 shell:上游 `Ssh` 变体消亡(按理想
@@ -523,9 +542,14 @@ impl TerminalView {
                 self.running_program = None;
                 cx.emit(TerminalViewEvent::CommandFinished);
             }
-            TermEvent::Notify(_) => {}
-            // 视觉闪烁与声音归通知域。
-            TermEvent::Bell => {}
+            // BEL 与 OSC 9 都进入唯一通知漏斗；程序名只作来源分类。
+            TermEvent::Notify(_) | TermEvent::Bell => {
+                if let Some(notification) =
+                    notification_for_event(&event, self.running_program.as_deref())
+                {
+                    cx.emit(TerminalViewEvent::Notification(notification));
+                }
+            }
             // OSC 9;4:程序自报任务进度。解析层不收窄状态码,宽容映射收在
             // 消费层(`taskbar::TaskProgress::from_osc`):规范外码归清除。
             // 视图不持有进度镜像——去重与清除状态机都在工作区;这里再存
@@ -1170,6 +1194,33 @@ mod term_ownership_tests {
                 );
             }
         }
+    }
+
+    /// BEL 与 OSC 9 进入同一通知漏斗；其他事件不产生通知。
+    #[test]
+    fn bell_and_osc9_feed_the_notification_funnel() {
+        let bell = super::notification_for_event(&super::TermEvent::Bell, Some("claude"))
+            .expect("BEL 必须产生通知");
+        assert!(matches!(
+            bell,
+            crate::notify::Notification::Bell {
+                program: Some(program)
+            } if program == "claude"
+        ));
+        let text = super::notification_for_event(
+            &super::TermEvent::Notify("done".to_owned()),
+            Some("codex"),
+        )
+        .expect("OSC 9 必须产生通知");
+        assert!(matches!(
+            text,
+            crate::notify::Notification::Text { body, program: Some(program) }
+                if body == "done" && program == "codex"
+        ));
+        assert!(
+            super::notification_for_event(&super::TermEvent::Exit, Some("claude")).is_none(),
+            "其他终端事件不得产生通知"
+        );
     }
 }
 
