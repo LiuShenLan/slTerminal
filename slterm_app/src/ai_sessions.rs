@@ -11,6 +11,8 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
+use slterm_path::CanonicalPath;
+
 use crate::ai_agents::AgentKind;
 
 /// 每个会话文件最多读多少字节找标题。
@@ -29,6 +31,8 @@ pub struct AiSession {
     pub title: String,
     /// 副信息:claude 是项目目录(编码过);codex 是会话的 cwd。
     pub project: String,
+    /// 会话记录的 cwd；缺失或非绝对路径时为 None，历史归属不得猜测。
+    pub cwd: Option<CanonicalPath>,
     pub modified: SystemTime,
     path: PathBuf,
 }
@@ -80,6 +84,7 @@ impl AiSession {
                 if let Some(title) = claude_title(&head) {
                     self.title = title;
                 }
+                self.cwd = claude_cwd(&head);
             }
             AgentKind::Codex => {
                 let (title, cwd) = codex_details(&head);
@@ -87,6 +92,7 @@ impl AiSession {
                     self.title = title;
                 }
                 if let Some(cwd) = cwd {
+                    self.cwd = CanonicalPath::new(&cwd).ok();
                     self.project = cwd;
                 }
             }
@@ -173,6 +179,7 @@ fn scan_claude(home: &Path) -> Vec<AiSession> {
             };
             out.push(AiSession {
                 source: AgentKind::Claude,
+                cwd: None,
                 id,
                 title: String::new(),
                 project: project_label.clone(),
@@ -217,6 +224,7 @@ fn scan_codex(home: &Path) -> Vec<AiSession> {
             };
             out.push(AiSession {
                 source: AgentKind::Codex,
+                cwd: None,
                 id,
                 title: String::new(),
                 project: String::new(),
@@ -310,6 +318,21 @@ fn claude_title(head: &str) -> Option<String> {
                 }
             }
             _ => {}
+        }
+    }
+    None
+}
+
+/// claude jsonl 顶层 `cwd` 是归属的唯一来源；编码过的项目目录名不可逆推。
+fn claude_cwd(head: &str) -> Option<CanonicalPath> {
+    for line in head.lines() {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if let Some(cwd) = value.get("cwd").and_then(|cwd| cwd.as_str())
+            && let Ok(path) = CanonicalPath::new(cwd)
+        {
+            return Some(path);
         }
     }
     None
@@ -420,6 +443,7 @@ mod session_scan_tests {
             id: id.to_owned(),
             title: String::new(),
             project: project.to_owned(),
+            cwd: None,
             modified: UNIX_EPOCH + Duration::from_secs(seconds),
             path: PathBuf::from("native.jsonl"),
         }
@@ -615,6 +639,59 @@ mod session_scan_tests {
         assert!(head.len() <= HEAD_BYTES, "超过 64KB 头部预算");
         assert_eq!(claude_title(&head), Some("头部标题".to_owned()));
         assert!(!head.contains("尾部标题"));
+    }
+
+    /// 历史归属必须使用会话记录的真实 cwd，而不是编码过的目录名。
+    #[test]
+    fn native_scan_reads_the_recorded_cwd() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let project = home.join(".claude").join("projects").join("D--project");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(
+            project.join("native-cwd.jsonl"),
+            "{\"type\":\"summary\",\"summary\":\"带目录\",\"cwd\":\"C:/work/app\"}
+",
+        )
+        .unwrap();
+        let _home = HomeEnvGuard::set(&home);
+
+        let sessions = scan(8);
+        let session = sessions
+            .iter()
+            .find(|session| session.id == "native-cwd")
+            .expect("扫描必须发现原生会话");
+        assert_eq!(
+            session.cwd,
+            Some(CanonicalPath::new("C:/work/app").unwrap())
+        );
+    }
+
+    #[test]
+    fn codex_scan_reads_cwd_from_session_meta() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let day = home
+            .join(".codex")
+            .join("sessions")
+            .join("2026")
+            .join("08")
+            .join("01");
+        std::fs::create_dir_all(&day).unwrap();
+        std::fs::write(
+            day.join("rollout-2026-08-01T12-30-00-0199a213-c2a4-7cf5-8f6b-d746fbb6e86c.jsonl"),
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"s\",\"cwd\":\"D:/proj\"}}
+",
+        )
+        .unwrap();
+        let _home = HomeEnvGuard::set(&home);
+
+        let sessions = scan(8);
+        let session = sessions
+            .iter()
+            .find(|session| session.source == AgentKind::Codex)
+            .expect("扫描必须发现 codex 会话");
+        assert_eq!(session.cwd, Some(CanonicalPath::new("D:/proj").unwrap()));
     }
 
     #[test]
