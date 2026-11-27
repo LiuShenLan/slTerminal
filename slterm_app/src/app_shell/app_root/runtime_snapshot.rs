@@ -1234,7 +1234,7 @@ fn runtime_view_kind(kind: ViewKeyKind) -> ViewKind {
     }
 }
 
-fn path_text(path: &CanonicalPath) -> Result<String, JsonRpcError> {
+pub(super) fn path_text(path: &CanonicalPath) -> Result<String, JsonRpcError> {
     path.as_path()
         .to_str()
         .map(str::to_owned)
