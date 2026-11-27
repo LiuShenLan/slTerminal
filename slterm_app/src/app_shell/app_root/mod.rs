@@ -50,6 +50,7 @@ mod settings_overlay;
 mod settings_page_header;
 mod settings_reset;
 mod settings_runtime_panel;
+mod settings_shell;
 mod settings_shortcuts_page;
 mod settings_tasks_page;
 mod side_view;
@@ -426,6 +427,8 @@ pub(crate) struct AppRoot {
     launcher: Box<dyn TerminalPanelLauncher>,
     project_paths: Arc<dyn ProjectPathResolver>,
     shell: CanonicalPath,
+    /// 已应用的默认 Shell 设置值；变更时才重新解析探测链。
+    resolved_shell_setting: Option<String>,
 }
 
 #[cfg(all(test, feature = "gpui-test-support"))]
@@ -614,6 +617,7 @@ impl AppRoot {
                     cx.stop_propagation();
                 }
             }),
+            resolved_shell_setting: None,
             machine_key: crate::platform::machine::machine_key(),
             update_install: None,
             side_view_roots_generation: None,

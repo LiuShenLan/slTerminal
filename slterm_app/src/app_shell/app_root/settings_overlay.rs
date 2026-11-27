@@ -1735,6 +1735,7 @@ impl AppRoot {
         let settings = crate::app_shell::config::Settings::from_runtime(&runtime);
         let language = settings.language;
         let tray = settings.tray;
+        self.refresh_shell_from_settings(&settings, cx);
         self.apply_settings_to_terminal_views(&settings, cx);
         cx.set_global(settings);
         gpui_component::set_locale(language.gpui_component_locale());

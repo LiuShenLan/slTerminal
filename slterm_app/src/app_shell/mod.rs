@@ -444,7 +444,22 @@ fn shutdown_local_control_service(
 fn frozen_startup_paths(
     initial_cwd: Option<PathBuf>,
 ) -> std::io::Result<(CanonicalPath, CanonicalPath)> {
-    let shell = slterm_terminal::tty::resolve_shell(None)?;
+    // 启动链在 GPUI 前读取一次设置：默认 Shell 覆盖必须参与真实探测。
+    let (settings, _warning) = config::Settings::load_with_warning();
+    let user_shell = settings.shell.as_deref();
+    let shell = match slterm_terminal::tty::resolve_shell(user_shell) {
+        Ok(shell) => shell,
+        Err(error) if user_shell.is_some() => {
+            log::warn!("配置的 Shell 不可用，回退默认探测链: {error}");
+            slterm_terminal::tty::resolve_shell(None)?
+        }
+        Err(error) => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                error.to_string(),
+            ));
+        }
+    };
     let shell = CanonicalPath::new(PathBuf::from(shell.program()))
         .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
     let root = match initial_cwd {
@@ -1869,5 +1884,44 @@ mod shell_event_tests {
             tray_command_event(GpuiTrayCommand::Quit),
             SltermShellEvent::TrayQuit
         ));
+    }
+}
+
+#[cfg(test)]
+mod startup_shell_tests {
+    use slterm_settings::json::Value;
+
+    use super::frozen_startup_paths;
+
+    /// 启动 Shell 跟随设置；无效设置回退默认探测链（由 resolve 自身失败路径覆盖）。
+    #[test]
+    fn startup_shell_follows_settings_and_restores_original_file() {
+        let settings_path = crate::platform::dirs::app_paths().settings_path();
+        let original = std::fs::read(&settings_path).ok();
+        let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_owned());
+        let powershell = format!(r"{system_root}\System32\WindowsPowerShell\v1.0\powershell.exe");
+        assert!(
+            std::path::Path::new(&powershell).is_file(),
+            "测试依赖真实系统 PowerShell: {powershell}"
+        );
+        crate::settings_store::save_settings_blocking(&[(
+            "shell",
+            Value::String(powershell.clone()),
+        )])
+        .unwrap();
+
+        let (shell, _root) = frozen_startup_paths(None).unwrap();
+        assert_eq!(
+            shell.as_path().file_name().and_then(|name| name.to_str()),
+            Some("powershell.exe"),
+            "启动 Shell 必须采用设置中的真实程序"
+        );
+
+        match original {
+            Some(bytes) => std::fs::write(&settings_path, bytes).unwrap(),
+            None => {
+                let _ = std::fs::remove_file(&settings_path);
+            }
+        }
     }
 }

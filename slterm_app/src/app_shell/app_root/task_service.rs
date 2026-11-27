@@ -32,6 +32,8 @@ pub(crate) enum TaskId {
     Cleanup,
     /// Runtime 状态刷新：后台读取非敏感发现记录。
     RuntimeStatus,
+    /// 默认 Shell 设置热解析：后台真实探测链。
+    ShellResolve,
     /// 更新安装包下载：后台流式下载与校验。
     UpdateDownload,
     /// 设置页手动检查更新：后台联网，前台只结算结果。

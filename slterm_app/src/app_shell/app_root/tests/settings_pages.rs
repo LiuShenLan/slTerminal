@@ -1000,3 +1000,45 @@ fn settings_application_page_shows_runtime_status_and_endpoint(cx: &mut TestAppC
     });
     let _ = std::fs::remove_file(&endpoint_path);
 }
+
+/// 默认 Shell 设置热应用：后续新建终端采用设置程序。
+#[gpui::test]
+fn settings_shell_hot_applies_to_future_terminals(cx: &mut TestAppContext) {
+    let (root, mut window, _state) = open_root(cx);
+    let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_owned());
+    let powershell = format!(r"{system_root}\System32\WindowsPowerShell\v1.0\powershell.exe");
+    window.update(|_window, cx| {
+        root.update(cx, |root, cx| {
+            root.apply_settings_field("shell", Value::String(powershell.clone()), cx);
+        });
+    });
+    for _ in 0..120 {
+        window.run_until_parked();
+        cx.run_until_parked();
+        if root.read_with(cx, |root, _| {
+            root.resolved_shell_setting.as_deref() == Some(powershell.as_str())
+        }) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    root.read_with(cx, |root, _| {
+        assert_eq!(
+            root.resolved_shell_setting.as_deref(),
+            Some(powershell.as_str()),
+            "设置值必须成为已应用的默认 Shell"
+        );
+        assert_eq!(
+            root.shell
+                .as_path()
+                .file_name()
+                .and_then(|name| name.to_str()),
+            Some("powershell.exe")
+        );
+    });
+    window.update(|_window, cx| {
+        root.update(cx, |root, cx| {
+            root.apply_settings_field("shell", Value::Null, cx);
+        });
+    });
+}

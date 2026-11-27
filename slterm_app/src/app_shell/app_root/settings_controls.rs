@@ -173,27 +173,6 @@ const WALLPAPER_ALIGNMENTS: &[ChoiceOption] = &[
     ),
 ];
 
-const DENSITIES: &[ChoiceOption] = &[
-    option("compact", Message::SettingsOptionsDensityCompact),
-    option("standard", Message::SettingsOptionsStandard),
-    option("loose", Message::SettingsOptionsDensityLoose),
-];
-
-const CELL_WIDTHS: &[ChoiceOption] = &[
-    option("compact", Message::SettingsOptionsCellWidthCompact),
-    option("relaxed", Message::SettingsOptionsRelaxed),
-];
-
-const TAB_REVEALS: &[ChoiceOption] = &[
-    option("slide", Message::SettingsOptionsSlide),
-    option("instant", Message::SettingsOptionsInstant),
-];
-
-const VCS_DISPLAYS: &[ChoiceOption] = &[
-    option("auto", Message::SettingsOptionsAutoDetect),
-    option("git", Message::SettingsOptionsGitOnly),
-];
-
 const LIGATURE_MODES: &[ChoiceOption] = &[
     option("on", Message::SettingsOptionsLigaturesOn),
     option("off", Message::SettingsOptionsLigaturesOff),
@@ -208,11 +187,6 @@ const SCROLLBACK_LINES: &[ChoiceOption] = &[
     literal("20000"),
     literal("50000"),
     literal("100000"),
-];
-
-const NEW_TAB_POSITIONS: &[ChoiceOption] = &[
-    option("after_current", Message::SettingsOptionsAfterCurrent),
-    option("end", Message::SettingsOptionsEndOfList),
 ];
 
 const BELL_MODES: &[ChoiceOption] = &[
@@ -355,88 +329,12 @@ pub(super) static FIELDS: &[SettingsFieldUi] = &[
         Toggle,
     ),
     field(
-        "density",
-        SettingsPageId::Appearance,
-        Message::SettingsAppearanceDisplay,
-        Message::SettingsAppearanceDensity,
-        None,
-        Choice(DENSITIES),
-    ),
-    field(
-        "cell_width_mode",
-        SettingsPageId::Appearance,
-        Message::SettingsAppearanceDisplay,
-        Message::SettingsAppearanceCellWidth,
-        None,
-        Choice(CELL_WIDTHS),
-    ),
-    field(
-        "tab_reveal",
-        SettingsPageId::Appearance,
-        Message::SettingsAppearanceDisplay,
-        Message::SettingsAppearanceTabReveal,
-        None,
-        Choice(TAB_REVEALS),
-    ),
-    field(
-        "tab_close_visible",
-        SettingsPageId::Appearance,
-        Message::SettingsAppearanceDisplay,
-        Message::SettingsAppearanceTabClose,
-        Some(Message::SettingsAppearanceTabCloseDescription),
-        Toggle,
-    ),
-    field(
-        "cjk_bold_regular",
-        SettingsPageId::Appearance,
-        Message::SettingsAppearanceDisplay,
-        Message::SettingsAppearanceCjkBold,
-        None,
-        Toggle,
-    ),
-    field(
-        "vcs_display",
-        SettingsPageId::Appearance,
-        Message::SettingsAppearanceDisplay,
-        Message::SettingsAppearanceVcsDisplay,
-        None,
-        Choice(VCS_DISPLAYS),
-    ),
-    field(
         "font_family",
         SettingsPageId::Appearance,
         Message::SettingsAppearanceFonts,
         Message::SettingsAppearanceFontFamily,
         Some(Message::SettingsAppearanceFontFamilyDescription),
         Text,
-    ),
-    field(
-        "font_family_cjk",
-        SettingsPageId::Appearance,
-        Message::SettingsAppearanceFonts,
-        Message::SettingsAppearanceFontFamilyCjk,
-        None,
-        Text,
-    ),
-    field(
-        "ui_font_family",
-        SettingsPageId::Appearance,
-        Message::SettingsAppearanceFonts,
-        Message::SettingsAppearanceUiFontFamily,
-        None,
-        Text,
-    ),
-    field(
-        "ui_font_size",
-        SettingsPageId::Appearance,
-        Message::SettingsAppearanceFonts,
-        Message::SettingsAppearanceUiFontSize,
-        None,
-        Stepper {
-            min: 8.0,
-            max: 24.0,
-            step: 1.0,
-        },
     ),
     field(
         "font_size",
@@ -497,14 +395,6 @@ pub(super) static FIELDS: &[SettingsFieldUi] = &[
         Toggle,
     ),
     field(
-        "panel_resize",
-        SettingsPageId::Terminal,
-        Message::SettingsInteractionMouse,
-        Message::SettingsInteractionPanelResize,
-        None,
-        Toggle,
-    ),
-    field(
         "document_autosave",
         SettingsPageId::Terminal,
         Message::SettingsInteractionMouse,
@@ -521,42 +411,10 @@ pub(super) static FIELDS: &[SettingsFieldUi] = &[
         Toggle,
     ),
     field(
-        "ctrl_wheel_font_zoom",
-        SettingsPageId::Terminal,
-        Message::SettingsInteractionMouse,
-        Message::SettingsInteractionCtrlWheelZoom,
-        None,
-        Toggle,
-    ),
-    field(
         "cursor_blink",
         SettingsPageId::Terminal,
         Message::SettingsInteractionCursor,
         Message::SettingsInteractionCursorBlink,
-        None,
-        Toggle,
-    ),
-    field(
-        "new_tab_position",
-        SettingsPageId::Terminal,
-        Message::SettingsInteractionTabs,
-        Message::SettingsInteractionNewTabPosition,
-        None,
-        Choice(NEW_TAB_POSITIONS),
-    ),
-    field(
-        "focus_follows_mouse",
-        SettingsPageId::Terminal,
-        Message::SettingsInteractionTabs,
-        Message::SettingsInteractionFocusFollows,
-        None,
-        Toggle,
-    ),
-    field(
-        "dim_inactive_panes",
-        SettingsPageId::Terminal,
-        Message::SettingsInteractionTabs,
-        Message::SettingsInteractionDimInactive,
         None,
         Toggle,
     ),
@@ -622,14 +480,6 @@ pub(super) static FIELDS: &[SettingsFieldUi] = &[
         SettingsPageId::Terminal,
         Message::SettingsAdvancedSession,
         Message::SettingsAdvancedResumeAi,
-        None,
-        Toggle,
-    ),
-    field(
-        "keep_session",
-        SettingsPageId::Terminal,
-        Message::SettingsAdvancedSession,
-        Message::SettingsAdvancedKeepSession,
         None,
         Toggle,
     ),
@@ -704,14 +554,6 @@ pub(super) static FIELDS: &[SettingsFieldUi] = &[
         Message::SettingsAdvancedUpdates,
         Message::SettingsAdvancedDownloadUpdates,
         Some(Message::SettingsAdvancedDownloadUpdatesDescription),
-        Toggle,
-    ),
-    field(
-        "ai_toasts",
-        SettingsPageId::Application,
-        Message::SettingsAdvancedUpdates,
-        Message::SettingsProfilesAiToasts,
-        None,
         Toggle,
     ),
     field(
@@ -798,9 +640,30 @@ mod settings_control_tests {
     /// 光标形状固定竖线、平滑移动不在行为真值内，旧键不再暴露。
     const EDITOR_MANAGED: [&str; 3] = ["custom_theme", "cursor_shape", "cursor_motion"];
 
-    /// 最终排除项不得出现在真实字段表；密度按规格给紧凑／标准／宽松三档。
+    /// 旧上游无消费点键：注册表保留旧值以兼容导入，设置页不再暴露。
+    /// 界面字体与界面字号没有真实消费方，随其余旧键一并退休。
+    const RETIRED: [&str; 16] = [
+        "density",
+        "cell_width_mode",
+        "tab_reveal",
+        "tab_close_visible",
+        "cjk_bold_regular",
+        "vcs_display",
+        "font_family_cjk",
+        "panel_resize",
+        "ctrl_wheel_font_zoom",
+        "new_tab_position",
+        "focus_follows_mouse",
+        "dim_inactive_panes",
+        "keep_session",
+        "ai_toasts",
+        "ui_font_family",
+        "ui_font_size",
+    ];
+
+    /// 最终排除项与无消费点旧键不得出现在真实字段表。
     #[test]
-    fn excluded_appearance_fields_are_absent_and_density_has_three_levels() {
+    fn retired_and_excluded_fields_are_absent_from_the_settings_table() {
         const EXCLUDED: [&str; 5] = [
             "cursor_shape",
             "pane_card_radius",
@@ -814,21 +677,19 @@ mod settings_control_tests {
                 "排除项 {} 不得出现在设置页字段表",
                 field.key
             );
+            assert!(
+                !RETIRED.contains(&field.key),
+                "无消费点旧键 {} 不得出现在设置页字段表",
+                field.key
+            );
         }
-        let density = FIELDS
-            .iter()
-            .find(|field| field.key == "density")
-            .expect("密度字段必须存在");
-        let SettingsControl::Choice(options) = &density.control else {
-            panic!("密度字段必须是选择控件");
-        };
-        assert_eq!(
-            options
-                .iter()
-                .map(|option| option.value)
-                .collect::<Vec<_>>(),
-            ["compact", "standard", "loose"]
-        );
+        let registry = SettingsRegistry::new();
+        for key in RETIRED {
+            assert!(
+                registry.lookup(key).is_some(),
+                "{key} 必须仍在注册表以兼容旧值"
+            );
+        }
     }
 
     #[test]
@@ -846,6 +707,7 @@ mod settings_control_tests {
                         | SettingsDomain::Session
                         | SettingsDomain::System
                 ) && !EDITOR_MANAGED.contains(&def.key)
+                    && !RETIRED.contains(&def.key)
             })
             .map(|def| def.key)
             .collect();

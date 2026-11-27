@@ -48,6 +48,8 @@ pub struct Settings {
     pub cursor_blink: bool,
     /// 新建终端的历史容量；只影响之后创建的逻辑终端。
     pub scrollback_lines: usize,
+    /// 默认 Shell 的用户覆盖；None = 启动时按真实探测链确定。
+    pub shell: Option<String>,
     /// 选区完成即复制。
     pub copy_on_select: bool,
     /// 全局 Document 自动保存；视图层不得另设开关。
@@ -187,6 +189,7 @@ impl Settings {
                 REDUCED_MOTION.load(std::sync::atomic::Ordering::Relaxed),
             ),
             scrollback_lines: runtime.scrollback_lines,
+            shell: runtime.shell.clone(),
             copy_on_select: runtime.copy_on_select,
             document_autosave: runtime.document_autosave,
             osc52_unfocused: runtime.osc52_unfocused,
