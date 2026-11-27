@@ -592,6 +592,16 @@
       "save_and_apply": "Save and apply",
       "saved": "Saved",
       "unsaved": "Unsaved"
+    },
+    "tasks": {
+      "agent_screen_watchdog": "Screen watchdog and tray snapshot",
+      "auto_update_check": "Automatic update check",
+      "auto_update_download": "Background update download",
+      "plan_balance": "Plan balance query",
+      "interval": "Every {seconds} s",
+      "startup_delay": "{seconds} s after startup",
+      "on_demand": "On demand",
+      "enabled": "Enabled"
     }
   },
   "notify": {

@@ -592,6 +592,16 @@
       "save_and_apply": "保存并应用",
       "saved": "已保存",
       "unsaved": "未保存"
+    },
+    "tasks": {
+      "agent_screen_watchdog": "屏幕看门狗与托盘快照",
+      "auto_update_check": "自动更新检查",
+      "auto_update_download": "后台下载更新",
+      "plan_balance": "套餐余量查询",
+      "interval": "每 {seconds} 秒",
+      "startup_delay": "启动后 {seconds} 秒",
+      "on_demand": "按需",
+      "enabled": "启用"
     }
   },
   "notify": {

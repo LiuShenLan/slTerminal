@@ -169,6 +169,47 @@ pub(crate) fn interval_sec(task_id: &str) -> u64 {
     runtime(task_id).map_or(0, |runtime| runtime.interval_sec.load(Ordering::Relaxed))
 }
 
+/// 当前运行期是否启用；未知任务视为未启用。
+pub(crate) fn enabled(task_id: &str) -> bool {
+    runtime(task_id).is_some_and(|runtime| runtime.enabled.load(Ordering::Relaxed))
+}
+
+/// 后台任务段更新：保留其他任务与其他字段，只改目标任务的 enabled／interval。
+pub(crate) fn segment_with_task_config(
+    current: Option<&slterm_settings::json::Value>,
+    task_id: &str,
+    enabled: Option<bool>,
+    interval_sec: Option<u64>,
+) -> slterm_settings::json::Value {
+    use slterm_settings::json::Value;
+
+    let mut entries = match current {
+        Some(Value::Object(entries)) => entries.clone(),
+        _ => Vec::new(),
+    };
+    let index = entries.iter().position(|(key, _)| key == task_id);
+    let mut fields = match index.map(|index| &entries[index].1) {
+        Some(Value::Object(fields)) => fields.clone(),
+        _ => Vec::new(),
+    };
+    let mut set = |name: &str, value: Value| match fields.iter_mut().find(|(key, _)| key == name) {
+        Some((_, slot)) => *slot = value,
+        None => fields.push((name.to_owned(), value)),
+    };
+    if let Some(enabled) = enabled {
+        set("enabled", Value::Bool(enabled));
+    }
+    if let Some(interval_sec) = interval_sec {
+        set("interval", Value::Number(interval_sec as f64));
+    }
+    let config = Value::Object(fields);
+    match index {
+        Some(index) => entries[index].1 = config,
+        None => entries.push((task_id.to_owned(), config)),
+    }
+    Value::Object(entries)
+}
+
 /// 一次性启动任务的延迟(Once 任务的 `interval_sec` 即延迟秒数)。
 pub(crate) fn startup_delay(task_id: &str) -> Duration {
     Duration::from_secs(interval_sec(task_id))
@@ -383,6 +424,75 @@ mod background_task_tests {
 
     fn watchdog_runtime() -> &'static super::TaskRuntime {
         super::runtime(AGENT_SCREEN_WATCHDOG).expect("看门狗已注册")
+    }
+
+    /// 后台任务段：只更新目标任务，其他任务与字段原样保留。
+    #[test]
+    fn segment_update_preserves_other_tasks_and_fields() {
+        use slterm_settings::json::Value;
+
+        let current = Value::Object(vec![
+            (
+                AGENT_SCREEN_WATCHDOG.to_owned(),
+                Value::Object(vec![
+                    ("enabled".to_owned(), Value::Bool(false)),
+                    ("interval".to_owned(), Value::Number(2.0)),
+                ]),
+            ),
+            (
+                PLAN_BALANCE.to_owned(),
+                Value::Object(vec![
+                    ("enabled".to_owned(), Value::Bool(true)),
+                    ("interval".to_owned(), Value::Number(60.0)),
+                ]),
+            ),
+        ]);
+
+        let updated =
+            super::segment_with_task_config(Some(&current), PLAN_BALANCE, Some(false), Some(120));
+        let Value::Object(entries) = updated else {
+            panic!("段必须是对象");
+        };
+        let watchdog = entries
+            .iter()
+            .find(|(key, _)| key == AGENT_SCREEN_WATCHDOG)
+            .map(|(_, value)| value)
+            .expect("其他任务必须保留");
+        assert_eq!(
+            watchdog.get("enabled").and_then(|value| value.as_bool()),
+            Some(false)
+        );
+        assert_eq!(
+            watchdog.get("interval").and_then(|value| value.as_f64()),
+            Some(2.0)
+        );
+        let plan = entries
+            .iter()
+            .find(|(key, _)| key == PLAN_BALANCE)
+            .map(|(_, value)| value)
+            .expect("目标任务必须存在");
+        assert_eq!(
+            plan.get("enabled").and_then(|value| value.as_bool()),
+            Some(false)
+        );
+        assert_eq!(
+            plan.get("interval").and_then(|value| value.as_f64()),
+            Some(120.0)
+        );
+
+        let fresh = super::segment_with_task_config(None, PLAN_BALANCE, Some(true), None);
+        let Value::Object(entries) = fresh else {
+            panic!("空段也必须生成对象");
+        };
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0]
+                .1
+                .get("enabled")
+                .and_then(|value| value.as_bool()),
+            Some(true)
+        );
+        assert!(entries[0].1.get("interval").is_none());
     }
 
     /// 注册表键集/边界/触发形态/同序默认值一次性锁死。

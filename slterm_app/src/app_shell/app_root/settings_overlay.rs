@@ -604,6 +604,9 @@ impl SettingsView {
         if self.selected_page == SettingsPageId::Hooks {
             return super::hooks_page::render_hooks_page(self, window, cx);
         }
+        if self.selected_page == SettingsPageId::BackgroundTasks {
+            return self.render_background_tasks_page(cx);
+        }
         let values = self.field_values(cx);
         let mut children: Vec<AnyElement> = Vec::new();
         let mut current_section = None;
@@ -648,6 +651,110 @@ impl SettingsView {
             .flex_col()
             .gap_1()
             .children(children)
+            .into_any_element()
+    }
+
+    /// 后台任务页：任务清单来自注册表，启停立即提交，周期显示当前运行值。
+    fn render_background_tasks_page(&self, cx: &Context<'_, Self>) -> AnyElement {
+        let language = cx.global::<crate::app_shell::config::Settings>().language;
+        let mut rows = div()
+            .id("settings-background-tasks")
+            .debug_selector(|| "settings-background-tasks".to_owned())
+            .flex()
+            .flex_col()
+            .gap_2();
+        for def in crate::background_tasks::TASKS {
+            let task_id = def.task_id;
+            let enabled = crate::background_tasks::enabled(task_id);
+            let interval = crate::background_tasks::interval_sec(task_id);
+            let title = match task_id {
+                crate::background_tasks::AGENT_SCREEN_WATCHDOG => {
+                    crate::i18n::Message::SettingsTasksAgentScreenWatchdog
+                }
+                crate::background_tasks::AUTO_UPDATE_CHECK => {
+                    crate::i18n::Message::SettingsTasksAutoUpdateCheck
+                }
+                crate::background_tasks::AUTO_UPDATE_DOWNLOAD => {
+                    crate::i18n::Message::SettingsTasksAutoUpdateDownload
+                }
+                crate::background_tasks::PLAN_BALANCE => {
+                    crate::i18n::Message::SettingsTasksPlanBalance
+                }
+                _ => continue,
+            };
+            let schedule = match def.schedule {
+                crate::background_tasks::TaskSchedule::Interval => language.format(
+                    crate::i18n::Message::SettingsTasksInterval,
+                    &[("seconds", &interval.to_string())],
+                ),
+                crate::background_tasks::TaskSchedule::Once => language.format(
+                    crate::i18n::Message::SettingsTasksStartupDelay,
+                    &[("seconds", &interval.to_string())],
+                ),
+                crate::background_tasks::TaskSchedule::OnDemand => language
+                    .text(crate::i18n::Message::SettingsTasksOnDemand)
+                    .to_owned(),
+            };
+            let root = self.root.clone();
+            rows = rows.child(
+                div()
+                    .id(gpui::ElementId::Name(
+                        format!("settings-task-{task_id}").into(),
+                    ))
+                    .debug_selector(move || format!("settings-task-{task_id}"))
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .justify_between()
+                    .gap_3()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .child(div().text_sm().child(language.text(title)))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(schedule),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .id(gpui::ElementId::Name(
+                                format!("settings-task-toggle-{task_id}").into(),
+                            ))
+                            .debug_selector(move || format!("settings-task-toggle-{task_id}"))
+                            .w(px(40.0))
+                            .h(px(20.0))
+                            .rounded_full()
+                            .cursor_pointer()
+                            .bg(if enabled {
+                                cx.theme().accent
+                            } else {
+                                cx.theme().muted_foreground
+                            })
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |_view, _, _, cx| {
+                                    let _ = root.update(cx, |root, cx| {
+                                        root.apply_background_task_field(
+                                            task_id,
+                                            Some(!enabled),
+                                            None,
+                                            cx,
+                                        );
+                                    });
+                                }),
+                            ),
+                    ),
+            );
+        }
+        div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(rows)
             .into_any_element()
     }
 
@@ -1523,6 +1630,46 @@ impl AppRoot {
         } else {
             self.reload_settings_snapshot(cx);
         }
+        self.bump_settings_revision();
+        self.notify_settings_views(cx);
+        cx.notify();
+    }
+
+    /// 后台任务配置：只经外部段整段写回，并立即热应用到运行期原子量。
+    pub(super) fn apply_background_task_field(
+        &mut self,
+        task_id: &'static str,
+        enabled: Option<bool>,
+        interval_sec: Option<u64>,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(def) = crate::background_tasks::find(task_id) else {
+            return;
+        };
+        if enabled.is_none() && interval_sec.is_none() {
+            return;
+        }
+        if let Some(sec) = interval_sec
+            && !(def.interval_min..=def.interval_max).contains(&sec)
+        {
+            return;
+        }
+        let segment = crate::background_tasks::segment_with_task_config(
+            self.settings
+                .values()
+                .external_value(slterm_settings::keys::BACKGROUND_TASKS_SEGMENT),
+            task_id,
+            enabled,
+            interval_sec,
+        );
+        let now = Instant::now();
+        if !self.settings.queue_explicit(
+            &[(slterm_settings::keys::BACKGROUND_TASKS_SEGMENT, segment)],
+            now,
+        ) {
+            return;
+        }
+        crate::background_tasks::apply_settings(self.settings.values());
         self.bump_settings_revision();
         self.notify_settings_views(cx);
         cx.notify();

@@ -1858,3 +1858,53 @@ fn settings_navigation_groups_and_filters_pages(cx: &mut TestAppContext) {
     );
     assert!(window.debug_bounds("settings-page-appearance").is_some());
 }
+
+/// 后台任务页：任务行来自注册表，启停立即生效并写入外部段。
+#[gpui::test]
+fn settings_background_tasks_toggle_applies_and_persists(cx: &mut TestAppContext) {
+    crate::background_tasks::reset_for_test();
+    let (root, mut window, _state) = open_root(cx);
+    focus_workspace(&root, &mut window);
+    open_settings(&mut window);
+    draw_frame(&mut window);
+
+    let page = window
+        .debug_bounds("settings-page-background-tasks")
+        .unwrap();
+    window.simulate_click(page.center(), Modifiers::default());
+    draw_frame(&mut window);
+    assert!(window.debug_bounds("settings-background-tasks").is_some());
+    assert!(
+        window
+            .debug_bounds("settings-task-toggle-planBalance")
+            .is_some(),
+        "注册表任务必须逐行渲染"
+    );
+
+    let before = crate::background_tasks::enabled(crate::background_tasks::PLAN_BALANCE);
+    let toggle = window
+        .debug_bounds("settings-task-toggle-planBalance")
+        .unwrap();
+    window.simulate_click(toggle.center(), Modifiers::default());
+    draw_frame(&mut window);
+
+    assert_eq!(
+        crate::background_tasks::enabled(crate::background_tasks::PLAN_BALANCE),
+        !before,
+        "启停必须立即热应用"
+    );
+    root.read_with(cx, |root, _| {
+        let segment = root
+            .settings
+            .values()
+            .external_value(slterm_settings::keys::BACKGROUND_TASKS_SEGMENT)
+            .expect("外部段必须写入");
+        let plan = segment
+            .get(crate::background_tasks::PLAN_BALANCE)
+            .expect("目标任务必须存在");
+        assert_eq!(
+            plan.get("enabled").and_then(|value| value.as_bool()),
+            Some(!before)
+        );
+    });
+}

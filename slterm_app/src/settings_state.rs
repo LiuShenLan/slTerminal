@@ -386,7 +386,10 @@ impl SettingsStore {
 
     /// 显式字段（授权开关）：只入队并立即到期，真实写盘仍走后台批量。
     pub(crate) fn queue_explicit(&mut self, updates: &[(&str, Value)], now: Instant) -> bool {
-        if updates.iter().any(|(key, _)| keys::lookup(key).is_none()) {
+        if updates
+            .iter()
+            .any(|(key, _)| keys::lookup(key).is_none() && !keys::is_external_segment(key))
+        {
             return false;
         }
         self.values = self.values.with_updates(updates);
