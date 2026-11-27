@@ -299,7 +299,7 @@
 | 显式终端 cwd 只做词法包含校验，未解析真实目标 | 已修：Runtime `terminal.create` 与 handover `NewTerminal` 在连接线程经 `resolve_terminal_path` 解析真实目录（拒绝文件/不存在/非 Unicode），联接解析为目标真实路径后再由 AppRoot 与项目根比较；测试 `terminal_paths_resolve_real_targets_and_reject_non_directories` |
 | 工作区布局恢复没有未知 ViewKey 过滤与重复视图归一 | 已修：新增 `ProjectLayout::from_canonical_json_lossy`，恢复链过滤未知视图类型、重复视图保留首个、空组塌缩并重排树；测试 `lossy_recovery_filters_unknown_views_collapses_empty_groups_and_dedupes`、`startup_filters_unknown_and_duplicate_views` |
 | AppRoot 后台 Agent 根加载不可注入，虚拟窗口用例读取真实 home | 已修：虚拟窗口测试根构造时预置空 Agent 根快照并置 `agent_roots_loaded`，后台加载在测试中显式禁用；专用用例继续经 `replace_agent_global_dirs_for_test` 注入临时根；测试 `test_root_preloads_empty_agent_roots` |
-| 共享编辑（Diff/Markdown）缺少可见性门控与取消协议 | 待修 |
+| 共享编辑（Diff/Markdown）缺少可见性门控与取消协议 | 已修：共享 Document 编辑只广播给活跃项目内各组的 active Markdown／Diff；隐藏面板保留最后可见正文并丢弃解析／差分任务（Task 替换即取消），可见转换在快照提交后对账，新可见面板只采纳一次最新正文并重新调度；Rope Editor 仍接收全部编辑（提交 6072ff26）；测试 `hidden_markdown_defers_shared_edits_until_visible`、`diff_edit_shared_document`、`document_shared_across_projects`、`integration_git_document`、`markdown_mode_toggle_uses_shared_draft_without_disk_reload` |
 | 历史隔离到期清理、ZIP 导出与永久删除未实现 | 待修 |
 | 脚本自测依赖共享 %TEMP% | 已修：`check_licenses.license_files` 只检查 `.git` 所在 checkout 根，不再向文件系统祖先遍历拾取无关 LICENSE；新增 `test_git_package_ignores_licenses_outside_the_checkout_root` 回归用例 |
 | Git 测试夹具未隔离全局配置 | 已修：测试构建的 `git::command` 经环境注入 `GIT_CONFIG_NOSYSTEM=1`、空全局配置、`commit.gpgsign=false`、空 `core.hooksPath` 与 `core.autocrlf=false`，不改 argv 前缀；local_control、补全、gutter、文件树夹具统一改走同一入口 |
