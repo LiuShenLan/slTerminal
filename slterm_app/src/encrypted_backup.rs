@@ -38,6 +38,7 @@ use zeroize::Zeroizing;
 
 pub(crate) mod maintenance;
 pub(crate) mod recovery;
+pub(crate) mod workspace;
 
 /// 备份格式魔数(已裁:去品牌,8 字节,同时作 AAD)。
 const MAGIC: &[u8; 8] = b"SLTMBK01";
@@ -60,12 +61,16 @@ const THEME_FILE_SUFFIX: &str = ".slterm-theme.json";
 pub(crate) enum BackupCategory {
     /// 应用设置与自定义主题；条目只含登记导出字段与合法主题文档。
     Settings,
+    /// 工作区逻辑投影：项目、布局、终端元数据、Document 位置与侧栏／几何。
+    Workspace,
 }
 
-/// 类别根归属是备份收集、恢复与撤回共用的唯一寻址规则。
+/// 文件类别的根归属是收集、恢复与撤回共用的唯一寻址规则；
+/// 工作区类别没有文件根，由逻辑投影条目承载。
 fn category_root(paths: &AppPaths, category: BackupCategory) -> &Path {
     match category {
         BackupCategory::Settings => paths.config_root(),
+        BackupCategory::Workspace => paths.local_root(),
     }
 }
 
@@ -73,11 +78,15 @@ fn category_root(paths: &AppPaths, category: BackupCategory) -> &Path {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct BackupSelection {
     pub settings: bool,
+    pub workspace: bool,
 }
 
 impl Default for BackupSelection {
     fn default() -> Self {
-        Self { settings: true }
+        Self {
+            settings: true,
+            workspace: true,
+        }
     }
 }
 
@@ -89,6 +98,7 @@ impl BackupSelection {
     pub(crate) fn set(&mut self, category: BackupCategory, enabled: bool) {
         match category {
             BackupCategory::Settings => self.settings = enabled,
+            BackupCategory::Workspace => self.workspace = enabled,
         }
     }
 
@@ -96,11 +106,15 @@ impl BackupSelection {
     pub(crate) fn get(self, category: BackupCategory) -> bool {
         match category {
             BackupCategory::Settings => self.settings,
+            BackupCategory::Workspace => self.workspace,
         }
     }
 
     pub(crate) fn from_categories(categories: impl IntoIterator<Item = BackupCategory>) -> Self {
-        let mut selection = Self { settings: false };
+        let mut selection = Self {
+            settings: false,
+            workspace: false,
+        };
         for category in categories {
             selection.set(category, true);
         }
@@ -108,9 +122,12 @@ impl BackupSelection {
     }
 
     pub(crate) fn categories(self) -> impl Iterator<Item = BackupCategory> {
-        [(self.settings, BackupCategory::Settings)]
-            .into_iter()
-            .filter_map(|(selected, category)| selected.then_some(category))
+        [
+            (self.settings, BackupCategory::Settings),
+            (self.workspace, BackupCategory::Workspace),
+        ]
+        .into_iter()
+        .filter_map(|(selected, category)| selected.then_some(category))
     }
 }
 
@@ -264,20 +281,27 @@ fn decrypt_bytes(packet: &[u8], passphrase: &str) -> Result<Zeroizing<Vec<u8>>, 
     Ok(Zeroizing::new(plaintext))
 }
 
-/// 按选择集收集双数据根的白名单文件。
-pub(crate) fn collect(selection: BackupSelection) -> Result<BackupArchive, String> {
-    collect_from(crate::platform::dirs::app_paths(), selection)
+/// 按选择集收集双数据根的白名单文件与运行态工作区投影。
+pub(crate) fn collect(
+    selection: BackupSelection,
+    workspace: Option<&workspace::WorkspaceBackup>,
+) -> Result<BackupArchive, String> {
+    collect_from(crate::platform::dirs::app_paths(), selection, workspace)
 }
 
-fn collect_from(paths: &AppPaths, selection: BackupSelection) -> Result<BackupArchive, String> {
+fn collect_from(
+    paths: &AppPaths,
+    selection: BackupSelection,
+    workspace: Option<&workspace::WorkspaceBackup>,
+) -> Result<BackupArchive, String> {
     if selection.is_empty() {
         return Err("至少选择一个备份类别".to_owned());
     }
     let mut entries = Vec::new();
     for category in selection.categories() {
-        let root = category_root(paths, category);
         match category {
             BackupCategory::Settings => {
+                let root = category_root(paths, category);
                 add_file(
                     root,
                     category,
@@ -286,6 +310,19 @@ fn collect_from(paths: &AppPaths, selection: BackupSelection) -> Result<BackupAr
                     filter_settings,
                 )?;
                 add_themes(root, category, &mut entries)?;
+            }
+            BackupCategory::Workspace => {
+                let payload = workspace.ok_or_else(|| "工作区类别缺少运行态快照".to_owned())?;
+                let bytes = serde_json::to_vec(payload)
+                    .map_err(|error| format!("工作区投影编码失败: {error}"))?;
+                if bytes.len() > MAX_ARCHIVE_PLAINTEXT_BYTES {
+                    return Err("工作区投影超过 64 MiB 上限".to_owned());
+                }
+                entries.push(BackupEntry {
+                    category,
+                    name: workspace::WORKSPACE_ENTRY_NAME.to_owned(),
+                    bytes,
+                });
             }
         }
     }
@@ -521,6 +558,11 @@ fn validate_archive(archive: &BackupArchive) -> Result<(), String> {
                     && settings_document_is_exportable(&entry.bytes))
                     || theme_entry_allowed(&entry.name, &entry.bytes)
             }
+            BackupCategory::Workspace => {
+                entry.name == workspace::WORKSPACE_ENTRY_NAME
+                    && entry.bytes.len() <= MAX_ARCHIVE_PLAINTEXT_BYTES
+                    && workspace::decode_workspace(&entry.bytes).is_ok()
+            }
         };
         if !allowed {
             return Err(format!(
@@ -606,21 +648,27 @@ mod encrypted_backup_tests {
     }
 
     #[test]
-    fn defaults_only_select_settings() {
+    fn defaults_select_settings_and_workspace() {
         let selection = BackupSelection::default();
         assert_eq!(
             selection.categories().collect::<Vec<_>>(),
-            vec![BackupCategory::Settings]
+            vec![BackupCategory::Settings, BackupCategory::Workspace]
         );
         assert!(!selection.is_empty());
 
-        let empty = BackupSelection { settings: false };
+        let empty = BackupSelection {
+            settings: false,
+            workspace: false,
+        };
         assert!(empty.is_empty());
     }
 
     #[test]
     fn selection_set_and_from_categories_agree() {
-        let mut selection = BackupSelection { settings: false };
+        let mut selection = BackupSelection {
+            settings: false,
+            workspace: false,
+        };
         assert!(!selection.get(BackupCategory::Settings));
         selection.set(BackupCategory::Settings, true);
         assert!(selection.get(BackupCategory::Settings));
@@ -675,7 +723,12 @@ mod encrypted_backup_tests {
         )
         .unwrap();
 
-        let archive = collect_from(&paths, BackupSelection::default()).unwrap();
+        let archive = collect_from(
+            &paths,
+            BackupSelection::from_categories([BackupCategory::Settings]),
+            None,
+        )
+        .unwrap();
         let settings = archive
             .entries
             .iter()
@@ -710,7 +763,12 @@ mod encrypted_backup_tests {
         )
         .unwrap();
 
-        let archive = collect_from(&paths, BackupSelection::default()).unwrap();
+        let archive = collect_from(
+            &paths,
+            BackupSelection::from_categories([BackupCategory::Settings]),
+            None,
+        )
+        .unwrap();
         assert!(
             !serde_json::to_string(&archive).unwrap().contains(token),
             "未登记字段携带的 Runtime token 不得入包"
@@ -740,7 +798,12 @@ mod encrypted_backup_tests {
         fs::write(paths.local_root().join("history.jsonl"), b"cmd").unwrap();
         fs::write(paths.local_root().join("learning.db"), b"learning").unwrap();
 
-        let archive = collect_from(&paths, BackupSelection::default()).unwrap();
+        let archive = collect_from(
+            &paths,
+            BackupSelection::from_categories([BackupCategory::Settings]),
+            None,
+        )
+        .unwrap();
         let names: HashSet<_> = archive
             .entries
             .iter()
@@ -775,7 +838,11 @@ mod encrypted_backup_tests {
         assert!(
             collect_from(
                 &single_root_paths(tempfile::tempdir().unwrap().path()),
-                BackupSelection { settings: false },
+                BackupSelection {
+                    settings: false,
+                    workspace: false
+                },
+                None,
             )
             .is_err()
         );
@@ -930,6 +997,7 @@ mod encrypted_backup_tests {
         let archive = collect_from(
             &single_root_paths(root),
             BackupSelection::from_categories([BackupCategory::Settings]),
+            None,
         )
         .expect("收集");
         let names: HashSet<_> = archive
@@ -994,6 +1062,7 @@ mod encrypted_backup_tests {
         let archive = collect_from(
             &paths,
             BackupSelection::from_categories([BackupCategory::Settings]),
+            None,
         )
         .unwrap();
         let names: HashSet<_> = archive
@@ -1028,6 +1097,7 @@ mod encrypted_backup_tests {
         let error = collect_from(
             &single_root_paths(directory.path()),
             BackupSelection::from_categories([BackupCategory::Settings]),
+            None,
         )
         .expect_err("非法主题必须中止备份");
         assert!(error.contains("主题"), "{error}");
@@ -1039,7 +1109,11 @@ mod encrypted_backup_tests {
         assert!(
             collect_from(
                 &single_root_paths(directory.path()),
-                BackupSelection { settings: false },
+                BackupSelection {
+                    settings: false,
+                    workspace: false
+                },
+                None,
             )
             .is_err()
         );
@@ -1048,6 +1122,7 @@ mod encrypted_backup_tests {
             collect_from(
                 &single_root_paths(directory.path()),
                 BackupSelection::from_categories([BackupCategory::Settings]),
+                None,
             )
             .is_err(),
             "损坏设置不得静默跳过或原样入包"
@@ -1058,6 +1133,7 @@ mod encrypted_backup_tests {
             collect_from(
                 &single_root_paths(directory.path()),
                 BackupSelection::from_categories([BackupCategory::Settings]),
+                None,
             )
             .is_err(),
             "非普通文件不得作为备份输入"

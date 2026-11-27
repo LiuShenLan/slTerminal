@@ -154,7 +154,7 @@
 | 问题 | 状态 |
 |---|---|
 | Document 崩溃快照只有恢复器，没有生产写入与删除链路 | 已修：启动链在 GPUI 外启动 `DocumentSnapshotWriter` 并把 client 与本次 `run_id` 注入 AppRoot；编辑事务落定后按会话脏态排队最新正文（保护集 = 当前打开且脏的 Document），保存清脏、撤销回干净基线与关闭 Save 结算后排队删除，关闭意图越过 `StateCommitted` 后按 Intent 删除最后引用快照，最终冲刷在窗口销毁后由启动作用域 shutdown；测试 `document_edits_write_and_clear_crash_snapshots` 及既有写线程/恢复器用例 |
-| 加密备份没有工作区类别，跨机重定位与逻辑工作区导出不存在 | 待修 |
+| 加密备份没有工作区类别，跨机重定位与逻辑工作区导出不存在 | 修复中：新增 `BackupCategory::Workspace` 与 `workspace.json` 逻辑投影（项目、规范布局 JSON、终端元数据、Document 位置、ViewState 持久 JSON、侧栏与按机器几何），导出不复制物理库；恢复经唯一快照写通道且跨机几何不应用；测试 `projection_uses_canonical_dtos_without_physical_files`、`workspace_only_selection_excludes_settings_credentials_and_physical_files`、`restore_rebuilds_snapshot_and_applies_geometry_only_same_machine`；生产入口与维护期写入随 158 接线 |
 | 加密备份没有生产入口、预览、原子导出、跨重启恢复点与撤回 | 待修 |
 | stage_restore 把解密后的备份条目明文写盘 | 已修：staged 材料先序列化为 `Zeroizing` 明文再经 DPAPI CurrentUser 保护，磁盘与指纹只绑定密文；维护期解密后应用，解密失败阻断且不落盘；测试 `staged_restore_is_dpapi_protected_and_carries_no_plaintext` |
 | 灾难副本从未生成与刷新 | 已修：`refresh_disaster_copy` 先 Online Backup 到新临时库再原子替换正式副本；正常关闭在最终冲刷成功后刷新，启动维护成功后刷新，失败只清理临时材料并保留旧副本；测试 `workspace_writer_shutdown_refreshes_the_disaster_copy` |

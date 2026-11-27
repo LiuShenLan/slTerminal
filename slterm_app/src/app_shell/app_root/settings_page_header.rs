@@ -37,12 +37,7 @@ impl SettingsView {
                 }),
             )
             .child(language.text(crate::i18n::Message::SettingsResetPage));
-        let mut row = div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap_3()
-            .child(reset);
+        let mut row = div().flex().flex_row().items_center().gap_3().child(reset);
         if page == SettingsPageId::Application {
             let check_root = self.root.clone();
             row = row.child(

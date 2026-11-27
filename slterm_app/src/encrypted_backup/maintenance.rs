@@ -43,6 +43,7 @@ struct StagedRestore {
 const fn category_key(category: BackupCategory) -> &'static str {
     match category {
         BackupCategory::Settings => "settings",
+        BackupCategory::Workspace => "workspace",
     }
 }
 
@@ -285,6 +286,16 @@ impl BackupRestoreRecoverer {
                     request,
                     &originals,
                     "应用故障注入".to_owned(),
+                );
+            }
+            if entry.category == BackupCategory::Workspace {
+                // 工作区条目在维护期的写库恢复归后续切片；接入前明确拒绝，
+                // 不得把逻辑投影当文件写到本地根。
+                return self.roll_back_after_failure(
+                    store,
+                    request,
+                    &originals,
+                    "维护期工作区恢复尚未接入".to_owned(),
                 );
             }
             let target = restore_path(category_root(&self.paths, entry.category), &entry.name)?;
