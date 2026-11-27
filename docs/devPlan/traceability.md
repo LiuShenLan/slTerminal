@@ -54,9 +54,9 @@
 
 | 验收场景 | 目标测试例名 | 状态 |
 |---|---|---|
-| 所有者判据可观察、可复现且不依赖内部状态 | `acceptance_user_contract_observable` | 已自动化 |
-| 最终排除项没有隐藏入口或迁移占位 | `acceptance_excluded_surface_absent` | 已自动化 |
-| 跨域集成不存在第二缓冲、授权或关闭通道 | `integration_single_authority_channels` | 已自动化 |
+| 所有者判据可观察、可复现且不依赖内部状态 | `acceptance_user_contract_observable`、`application_close_saves_or_cancels_through_the_decision_surface`、`runtime_app_close_reports_save_failure_and_keeps_scene` | 已自动化 |
+| 最终排除项没有隐藏入口或迁移占位 | `acceptance_excluded_surface_absent`、`retired_and_excluded_fields_are_absent_from_the_settings_table` | 已自动化 |
+| 跨域集成不存在第二缓冲、授权或关闭通道 | `integration_single_authority_channels`、`runtime_panel_open_file_reuses_the_document_open_chain`、`runtime_git_open_reuses_the_commit_open_chain`、`runtime_project_mutations_reuse_existing_commands`、`runtime_panel_mutations_reuse_layout_commands` | 已自动化 |
 | 平台或第三方能力缺失按边界降级或失败 | `integration_platform_boundary_failure` | 已自动化 |
 | 不可自动化面有豁免、兜底和人工记录 | `acceptance_exemptions_registered` | 已自动化 |
 
@@ -122,7 +122,7 @@
 | 模态触发控件销毁后按链还焦 | `focus_modal_fallback_after_owner_destroy` | 已自动化 |
 | 重新可见只合并复核且丢弃过期结果 | `visibility_coalesces_refresh_and_drops_stale` | 已自动化 |
 | 隐藏后显式保存或文件操作结果仍可查询 | `operation_result_survives_view_hidden` | 已自动化 |
-| 日志、错误、备份和诊断不含敏感正文或凭据 | `sensitive_material_excluded_from_outputs` | 已自动化 |
+| 日志、错误、备份和诊断不含敏感正文或凭据 | `sensitive_material_excluded_from_outputs`、`redaction_covers_credential_shapes` | 已自动化 |
 | 性能数值具有测量条件或属于契约数值 | `performance_claims_have_conditions` | 已自动化 |
 
 ### Runtime v2

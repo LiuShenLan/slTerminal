@@ -244,14 +244,47 @@ mod acceptance_tests {
             text.contains("| 复审结论/登记锚点 |"),
             "豁免表必须声明结论列"
         );
-        assert!(
-            text.matches("| 保留 |").count() >= 10,
-            "保留项必须有兜底登记"
-        );
-        assert!(
-            text.contains("人工验收") || text.contains("人工核验"),
-            "保留项必须有兜底或人工记录"
-        );
+        let mut rows = 0;
+        let mut retained = 0;
+        for line in text.lines() {
+            let line = line.trim();
+            if !line.starts_with('|') || line.contains("---") {
+                continue;
+            }
+            let cells = line
+                .trim_matches('|')
+                .split('|')
+                .map(str::trim)
+                .collect::<Vec<_>>();
+            if cells.first() == Some(&"项目") {
+                continue;
+            }
+            assert_eq!(cells.len(), 5, "豁免行必须五列: {line}");
+            assert!(
+                cells[1].contains('`') || cells[1].contains('/'),
+                "豁免行必须指向真实归属模块: {line}"
+            );
+            assert!(!cells[3].is_empty(), "豁免行必须有当前兜底层级: {line}");
+            let conclusion = cells[4];
+            assert!(
+                ["保留", "改写", "上报", "删除"]
+                    .iter()
+                    .any(|word| conclusion.contains(word)),
+                "豁免行必须有封闭复审结论: {line}"
+            );
+            if conclusion.contains("保留") {
+                retained += 1;
+                assert!(
+                    cells[3].contains("人工")
+                        || cells[3].contains('`')
+                        || cells[3].contains("_tests"),
+                    "保留项必须有自动化或人工兜底锚点: {line}"
+                );
+            }
+            rows += 1;
+        }
+        assert!(retained >= 10, "保留项必须有兜底登记");
+        assert!(rows >= retained, "豁免行必须逐行核验");
     }
 
     /// 锚：性能数值必须带测量条件，或明确属于契约数值。
@@ -291,6 +324,16 @@ mod acceptance_tests {
             "触发",
             "测试验证",
             "后保存",
+            // 契约阈值与证据锚：默认值、范围、前后界、资产指纹与调度节拍。
+            "默认",
+            "范围",
+            "前",
+            "后",
+            "每",
+            "停止",
+            "SHA256",
+            "字节",
+            "启用",
         ];
         fn has_measurement(line: &str) -> bool {
             MEASURE_UNITS.iter().any(|unit| {
@@ -317,11 +360,10 @@ mod acceptance_tests {
         }
         fn scan_file(path: &Path, violations: &mut Vec<String>) {
             let text = std::fs::read_to_string(path).unwrap_or_default();
-            let mut dated_section = false;
             for (index, line) in text.lines().enumerate() {
-                dated_section |= contains_date_anchor(line);
+                // 日期锚只豁免同一行的实测数值；不得让一个日期豁免后续全部行。
                 if has_measurement(line)
-                    && !dated_section
+                    && !contains_date_anchor(line)
                     && !CONDITION_WORDS.iter().any(|word| line.contains(word))
                 {
                     violations.push(format!("{}:{} {}", path.display(), index + 1, line.trim()));
@@ -344,7 +386,12 @@ mod acceptance_tests {
 
         let repo = crate_root().join("..");
         let mut violations = Vec::new();
-        for relative in [".claude/docs", "docs/devPlan", "release-notes"] {
+        for relative in [
+            ".claude/docs",
+            "docs/devPlan",
+            "docs/featureSpec",
+            "release-notes",
+        ] {
             scan_tree(&repo.join(relative), &mut violations);
         }
         for relative in ["CONTEXT.md", "README.md"] {
@@ -370,7 +417,11 @@ mod acceptance_tests {
             crate::diagnostics::DiagnosticSnapshot::current(false, false),
         );
         report.push_event(&format!("runtime handshake token={token}"));
-        assert!(!report.to_json().contains(token));
+        let bare = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        report.push_event(&format!("runtime token {bare}"));
+        let material = report.to_json();
+        assert!(!material.contains(token));
+        assert!(!material.contains(bare), "裸 64 位 hex 凭据必须脱敏");
 
         let capture = crate::audit::test_support::capture_events();
         crate::audit::record(
