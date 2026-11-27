@@ -1677,7 +1677,7 @@ impl AppRoot {
 
     /// 自定义主题的冷路径预载：读盘与解析只在后台执行，完成后安装缓存
     /// 并重建快照；前台提交路径不做任何主题文件 I/O。
-    fn reload_theme_definition(&mut self, id: String, cx: &mut Context<'_, Self>) {
+    pub(super) fn reload_theme_definition(&mut self, id: String, cx: &mut Context<'_, Self>) {
         let store = self.theme_store();
         let cancellation = super::task_service::CancellationToken::new();
         let task = cx.spawn(async move |this, cx| {
@@ -1721,7 +1721,7 @@ impl AppRoot {
     }
 
     /// 主题库根：生产走默认数据目录；测试注入隔离根，不触碰真实 home。
-    fn theme_store(&self) -> crate::theme_library::ThemeLibraryStore {
+    pub(super) fn theme_store(&self) -> crate::theme_library::ThemeLibraryStore {
         #[cfg(test)]
         if let Some(root) = &self.theme_root_for_test {
             return crate::theme_library::ThemeLibraryStore::new(root);

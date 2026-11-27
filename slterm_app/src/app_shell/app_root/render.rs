@@ -470,6 +470,7 @@ impl Render for AppRoot {
             .children(self.render_cleanup_dialog(cx))
             .children(self.render_diagnostics_dialog(cx))
             .children(self.render_backup_dialog(cx))
+            .children(self.render_theme_library_dialog(cx))
             .children(self.render_settings_overlay(cx))
             .children(self.render_close_decision(cx))
             .children(self.render_save_conflict(cx))

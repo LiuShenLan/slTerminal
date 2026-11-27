@@ -53,6 +53,7 @@ mod settings_runtime_panel;
 mod settings_shell;
 mod settings_shortcuts_page;
 mod settings_tasks_page;
+mod settings_theme_library;
 mod side_view;
 pub(crate) use side_view::workspace_view_state_registry;
 mod side_view_host;
@@ -289,6 +290,8 @@ pub(crate) struct AppRoot {
     diagnostics_dialog: Option<settings_diagnostics::DiagnosticsDialog>,
     /// 清理对话框：分类候选预览与逐项执行结果。
     cleanup_dialog: Option<settings_cleanup::CleanupDialog>,
+    /// 主题库对话框：内置与自定义主题的列表、导入、改名与删除。
+    theme_library_dialog: Option<settings_theme_library::ThemeLibraryDialog>,
     /// Runtime 只读状态：应用页展示可用性与非敏感端点。
     runtime_status: settings_runtime_panel::RuntimeStatus,
     update_prompt: Option<update_prompt::UpdatePrompt>,
@@ -650,6 +653,7 @@ impl AppRoot {
             backup_dialog: None,
             diagnostics_dialog: None,
             cleanup_dialog: None,
+            theme_library_dialog: None,
             runtime_status: settings_runtime_panel::RuntimeStatus::default(),
             update_prompt: None,
             project_relocation_in_flight: None,

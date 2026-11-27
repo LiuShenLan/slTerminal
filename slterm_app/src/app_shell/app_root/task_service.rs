@@ -42,6 +42,14 @@ pub(crate) enum TaskId {
     SettingsLoad,
     /// 自定义主题定义的冷路径预载；热应用只查缓存。
     ThemeLoad,
+    /// 主题库列表：后台扫描内置与自定义主题文档。
+    ThemeLibraryList,
+    /// 主题库导入：后台选择单文件 JSON 并完整校验入库。
+    ThemeLibraryImport,
+    /// 主题库重命名：后台按修订前置条件写入。
+    ThemeLibraryRename,
+    /// 主题库删除：后台按修订前置条件删除。
+    ThemeLibraryDelete,
     CloseFlush,
     TerminalClose(slterm_workspace::TerminalId),
     TerminalReclaim(crate::gpui_terminal::registry::TerminalTarget),

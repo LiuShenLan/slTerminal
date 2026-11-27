@@ -404,8 +404,38 @@ impl ThemeLibraryStore {
         self.import_internal(&document, Some(path))
     }
 
+    /// 重命名自定义主题：显示名冲突与过期修订都拒绝并零写入。
+    pub fn rename(
+        &self,
+        id: &str,
+        name: &str,
+        expected_revision: u64,
+    ) -> Result<ThemeDocument, StoreError> {
+        let theme_id = parse_id(id)?;
+        let path = self.path_for(theme_id)?;
+        let current = read_document(&path, theme_id)?.ok_or(StoreError::Conflict {
+            expected: Some(expected_revision),
+            actual: None,
+        })?;
+        let actual = Some(current.revision());
+        if current.revision() != expected_revision {
+            return Err(StoreError::Conflict {
+                expected: Some(expected_revision),
+                actual,
+            });
+        }
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(StoreError::InvalidDocument(
+                "theme name must not be empty".to_owned(),
+            ));
+        }
+        reject_name_conflict(name, &self.list()?)?;
+        let renamed = current.with_name(name)?;
+        self.save(&renamed, RevisionPrecondition::Exact(expected_revision))
+    }
+
     /// 条件删除:修订不匹配拒绝(外部编辑不可被静默删掉)。
-    #[allow(dead_code)] // 消费点 = 主题库管理 UI(测试已用)。
     pub fn delete(&self, id: &str, expected_revision: u64) -> Result<(), StoreError> {
         if builtin_documents()
             .into_iter()
@@ -733,6 +763,47 @@ mod store_tests {
             .save(&next, RevisionPrecondition::Unchanged(current))
             .unwrap();
         assert_eq!(stored.revision(), 3);
+    }
+
+    /// 重命名复用库内冲突与修订规则：未变名不写、冲突零写入、过期修订拒绝。
+    #[test]
+    fn rename_rejects_name_conflicts_and_stale_revisions() {
+        let (_directory, store) = fixture();
+        let first = custom_document(&store, "First");
+        let second = custom_document(&store, "Second");
+        let first_id = first.theme_id().unwrap().to_string();
+        let second_id = second.theme_id().unwrap().to_string();
+
+        let renamed = store.rename(&first_id, "First renamed", 1).unwrap();
+        assert_eq!(renamed.name(), "First renamed");
+        assert_eq!(renamed.revision(), 2);
+        assert_eq!(
+            store.load(&first_id).unwrap().name(),
+            "First renamed",
+            "重命名必须落盘"
+        );
+
+        let error = store.rename(&first_id, "second", 2).unwrap_err();
+        assert!(matches!(error, StoreError::NameConflict(_)));
+        assert_eq!(
+            store.load(&first_id).unwrap().name(),
+            "First renamed",
+            "冲突零写入"
+        );
+
+        let error = store.rename(&second_id, "Other", 9).unwrap_err();
+        assert!(matches!(
+            error,
+            StoreError::Conflict {
+                expected: Some(9),
+                actual: Some(1)
+            }
+        ));
+        assert!(
+            store.rename("Nord", "不存在的内置", 1).is_err(),
+            "内置主题不可改名"
+        );
+        assert!(store.rename(&second_id, "   ", 1).is_err(), "空名拒绝");
     }
 
     #[test]
