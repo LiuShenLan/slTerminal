@@ -24,6 +24,10 @@ pub(crate) enum TaskId {
     ProjectOpen(uuid::Uuid),
     /// 项目根重定位：后台目录选择、真实解析与前台事务回执同属一份所有权。
     ProjectRelocation(slterm_workspace::ProjectId),
+    /// 导航历史扫描：后台读取 CLI 原生档案，前台只接收归属结果。
+    NavHistoryScan,
+    /// 导航历史恢复：后台复核真实 cwd 与项目根后回前台建终端。
+    NavHistoryRestore,
     #[allow(dead_code)] // 消费点 = Document 后台真实打开队列。
     DocumentOpen,
     DocumentExternal(slterm_document::DocumentId),

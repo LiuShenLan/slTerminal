@@ -7,7 +7,6 @@ use slterm_workspace::{PanelId, ProjectId, ProjectSnapshot};
 /// 历史 cwd → 词法最深项目根；只比较路径组件，不访问文件系统。
 ///
 /// 目录暂时不可访问不改变归属；空、相对或无匹配 cwd 返回 None（未归属）。
-#[allow(dead_code)] // 消费点归导航历史视图。
 pub(super) fn deepest_project_for_cwd<'a>(
     roots: impl Iterator<Item = (ProjectId, &'a CanonicalPath)>,
     cwd: &CanonicalPath,
@@ -20,7 +19,6 @@ pub(super) fn deepest_project_for_cwd<'a>(
 
 /// 历史恢复的落点：保存 cwd 失效时只在已确定项目内回退项目根。
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[allow(dead_code)] // 消费点归历史恢复任务。
 pub(super) enum RestoreCwd {
     Saved(CanonicalPath),
     /// 保存 cwd 不可用，已回退到项目根；调用方必须提示而非静默。
@@ -28,14 +26,12 @@ pub(super) enum RestoreCwd {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(dead_code)] // 消费点归历史恢复任务。
 pub(super) enum RestoreCwdError {
     /// 保存 cwd 与项目根都不可用：明确失败，不改用其他目录。
     Unavailable,
 }
 
 /// 纯判定：cwd 有效用 cwd；cwd 失效且项目根有效回退项目根；否则失败。
-#[allow(dead_code)] // 消费点归历史恢复任务。
 pub(super) fn resolve_restore_cwd(
     saved: &CanonicalPath,
     saved_available: bool,

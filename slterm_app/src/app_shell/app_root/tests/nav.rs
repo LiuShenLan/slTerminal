@@ -221,3 +221,133 @@ fn nav_project_menu_relocation_cancel_keeps_root(cx: &mut TestAppContext) {
         assert!(root.project_relocation_in_flight.is_none());
     });
 }
+
+/// 导航历史扫描：会话 cwd 词法归属到最深项目根。
+#[gpui::test]
+fn nav_history_scan_attributes_sessions_to_projects(cx: &mut TestAppContext) {
+    use crate::platform::windows_integration::FakeWindowsIntegration;
+    use std::sync::Arc;
+
+    let temp = tempfile::tempdir().unwrap();
+    let project_dir = temp.path().join("project");
+    std::fs::create_dir_all(&project_dir).unwrap();
+    let home = temp.path().join("home");
+    let claude = home.join(".claude").join("projects").join("D--project");
+    std::fs::create_dir_all(&claude).unwrap();
+    std::fs::write(
+        claude.join("history-session.jsonl"),
+        serde_json::json!({
+            "type": "summary",
+            "summary": "历史任务",
+            "cwd": project_dir.to_str().unwrap(),
+        })
+        .to_string()
+            + "\n",
+    )
+    .unwrap();
+    let _home = crate::ai_sessions::HomeEnvGuard::set(&home);
+    let windows = Arc::new(FakeWindowsIntegration::default());
+    let (root, mut window) = open_root_with_windows(cx, AppRootPersistence::empty(None), windows);
+    add_project(&root, &mut window, PROJECT_A, project_dir.to_str().unwrap());
+    for _ in 0..6 {
+        window.run_until_parked();
+        cx.run_until_parked();
+    }
+
+    let _view = open_nav(&root, &mut window, cx);
+    draw_frame(&mut window);
+    assert!(
+        window.debug_bounds("nav-history").is_some(),
+        "历史行必须出现在导航树中"
+    );
+    root.read_with(cx, |root, _| {
+        let row = root
+            .nav_history
+            .iter()
+            .find(|row| row.title == "历史任务")
+            .expect("扫描必须发现历史会话");
+        assert_eq!(row.project, Some(project_id(PROJECT_A)));
+        assert_eq!(
+            row.cwd.as_ref().map(|cwd| cwd.as_path()),
+            Some(project_dir.as_path())
+        );
+        assert!(row.resume.is_some(), "可恢复会话必须带恢复命令");
+    });
+}
+
+/// 历史恢复生产入口：已归属会话在目标项目建终端并注入恢复命令。
+#[gpui::test]
+fn nav_history_restore_opens_terminal_with_resume_command(cx: &mut TestAppContext) {
+    use crate::platform::windows_integration::FakeWindowsIntegration;
+    use std::sync::Arc;
+
+    let temp = tempfile::tempdir().unwrap();
+    let project_dir = temp.path().join("project");
+    std::fs::create_dir_all(&project_dir).unwrap();
+    let home = temp.path().join("home");
+    let claude = home.join(".claude").join("projects").join("D--project");
+    std::fs::create_dir_all(&claude).unwrap();
+    std::fs::write(
+        claude.join("restore-session.jsonl"),
+        serde_json::json!({
+            "type": "summary",
+            "summary": "恢复目标",
+            "cwd": project_dir.to_str().unwrap(),
+        })
+        .to_string()
+            + "\n",
+    )
+    .unwrap();
+    let _home = crate::ai_sessions::HomeEnvGuard::set(&home);
+    let windows = Arc::new(FakeWindowsIntegration::default());
+    let (root, mut window) = open_root_with_windows(cx, AppRootPersistence::empty(None), windows);
+    add_project(&root, &mut window, PROJECT_A, project_dir.to_str().unwrap());
+    for _ in 0..6 {
+        window.run_until_parked();
+        cx.run_until_parked();
+    }
+    let index = root.read_with(cx, |root, _| {
+        root.nav_history
+            .iter()
+            .position(|row| row.title == "恢复目标")
+            .expect("扫描必须发现历史会话")
+    });
+
+    window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.handle_nav_restore_history(index, window, cx).unwrap();
+        });
+    });
+    for _ in 0..6 {
+        window.run_until_parked();
+        cx.run_until_parked();
+    }
+
+    root.read_with(cx, |root, cx| {
+        assert_eq!(
+            root.snapshot().registry().active(),
+            Some(project_id(PROJECT_A))
+        );
+        let terminals = root
+            .snapshot()
+            .terminals()
+            .filter(|terminal| terminal.project_id() == project_id(PROJECT_A))
+            .collect::<Vec<_>>();
+        assert_eq!(terminals.len(), 1, "恢复必须创建终端");
+        assert_eq!(
+            terminals[0].cwd().as_path(),
+            project_dir.as_path(),
+            "历史 cwd 可用时必须沿用"
+        );
+        let terminal_id = terminals[0].id();
+        let (_, view) = root
+            .terminal_panel(project_id(PROJECT_A), terminal_id, cx)
+            .expect("恢复终端面板必须存在");
+        view.read_with(cx, |view, _| {
+            assert!(
+                view.has_pending_agent_command_for_test(),
+                "恢复命令必须在提示符或超时后注入"
+            );
+        });
+    });
+}

@@ -380,36 +380,39 @@ fn codex_details(head: &str) -> (Option<String>, Option<String>) {
     (title, cwd)
 }
 
+/// 进程级 home 覆盖守卫：测试固定串行，失败路径也还原环境。
+#[cfg(test)]
+pub(crate) struct HomeEnvGuard {
+    saved: [(&'static str, Option<std::ffi::OsString>); 2],
+}
+
+#[cfg(test)]
+impl HomeEnvGuard {
+    pub(crate) fn set(home: &Path) -> Self {
+        let saved = ["USERPROFILE", "HOME"].map(|name| (name, std::env::var_os(name)));
+        for (name, _) in &saved {
+            unsafe { std::env::set_var(name, home) };
+        }
+        Self { saved }
+    }
+}
+
+#[cfg(test)]
+impl Drop for HomeEnvGuard {
+    fn drop(&mut self) {
+        for (name, value) in &self.saved {
+            match value {
+                Some(value) => unsafe { std::env::set_var(name, value) },
+                None => unsafe { std::env::remove_var(name) },
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod session_scan_tests {
     use super::*;
     use std::time::UNIX_EPOCH;
-
-    struct HomeEnvGuard {
-        saved: [(&'static str, Option<std::ffi::OsString>); 2],
-    }
-
-    impl HomeEnvGuard {
-        fn set(home: &Path) -> Self {
-            let saved = ["USERPROFILE", "HOME"].map(|name| (name, std::env::var_os(name)));
-            // 环境变量是进程级;测试固定串行,守卫在断言失败时也还原。
-            for (name, _) in &saved {
-                unsafe { std::env::set_var(name, home) };
-            }
-            Self { saved }
-        }
-    }
-
-    impl Drop for HomeEnvGuard {
-        fn drop(&mut self) {
-            for (name, value) in &self.saved {
-                match value {
-                    Some(value) => unsafe { std::env::set_var(name, value) },
-                    None => unsafe { std::env::remove_var(name) },
-                }
-            }
-        }
-    }
 
     struct FileRestoreGuard {
         path: PathBuf,

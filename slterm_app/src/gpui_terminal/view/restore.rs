@@ -27,6 +27,12 @@ pub(crate) struct PendingResume {
 }
 
 impl TerminalView {
+    /// 测试观察点：待注入的 Agent 命令是否存在。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn has_pending_agent_command_for_test(&self) -> bool {
+        self.pending_resume.is_some()
+    }
+
     /// 只有恢复与显式重连调用；普通新建不从历史状态派生命令。
     pub(crate) fn schedule_agent_resume(
         &mut self,
