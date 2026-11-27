@@ -178,7 +178,7 @@
 | 崩溃与边界测试缺少关键窗口 | 待修 |
 | 快照存储运行期遇任意损坏文件即阻断全部新写入 | 已修：写入路径忽略旁路损坏文件，留待启动隔离；测试 `unrelated_corrupt_snapshot_does_not_block_writes` |
 | 快照文件名与头身份不一致时被当作损坏 | 已修：扫描以信封头身份为准，写成功清除旧位置残留；测试 `snapshot_header_identity_wins_over_file_name` |
-| snapshot_index 与历史隔离表没有生产写入 | 待修 |
+| snapshot_index 与历史隔离表没有生产写入 | 已修（提交 2271f990）：按审查允许的终态删除 `snapshot_index`、`quarantine_batches`、`quarantine_items` 三张无生产写入的表与 `MaintenanceStage::Snapshots`／`HistoryQuarantine` 空维护阶段，维护顺序收敛为 Journal、维护请求／恢复点、关闭意图；删表不影响既有级联与主键约束覆盖，i18n 诊断阶段键与 devPlan 设计表清单同步删除；历史隔离持久清单留待该功能接线时随真实写入点建立；测试 `workspace_text_primary_keys_reject_null`、`workspace_recovery_metadata_is_not_implicitly_cascaded`、`every_material_table_blocks_without_modifying_facts`、`stage_order_short_circuits_before_querying_later_tables` |
 | 备份归档 DTO 接受未知字段，空类别集也能解封成功 | 已修：DTO 加 `deny_unknown_fields`，空类别集/零条目拒绝；测试 `archive_rejects_unknown_fields_and_empty_selection` |
 
 ## Windows 平台、更新、套餐、通知与 Runtime
