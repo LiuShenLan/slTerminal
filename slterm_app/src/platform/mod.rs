@@ -41,6 +41,8 @@ pub(crate) mod process_snapshot;
 pub(crate) mod project_paths;
 // 另存为目标的原生选择；只在后台执行体调用。
 pub(crate) mod save_dialog;
+// 系统关机/注销守卫：取消本次会话结束并转交统一关闭链。
+pub(crate) mod session_end;
 #[allow(dead_code)] // 登录启动设置归 Windows 与发布阶段。
 pub(crate) mod startup;
 pub(crate) mod windows_integration;

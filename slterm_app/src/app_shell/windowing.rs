@@ -124,6 +124,8 @@ fn request_control_plane_open(client: super::global_close::GlobalCloseClient) {
 /// 首个窗口的完整启动参数：开窗只消费这一份冻结输入。
 pub(crate) struct InitialWindowSpec {
     pub(crate) shell_rx: mpsc::Receiver<SltermShellEvent>,
+    /// 系统会话结束守卫与壳事件泵共用同一有界通道。
+    pub(crate) shell_events: mpsc::SyncSender<SltermShellEvent>,
     pub(crate) initial_root: CanonicalPath,
     pub(crate) shell: CanonicalPath,
     pub(crate) services: AppRootServices,
@@ -135,6 +137,7 @@ pub(crate) struct InitialWindowSpec {
 pub(crate) fn open_initial_window(cx: &mut App, initial: InitialWindowSpec) {
     let InitialWindowSpec {
         shell_rx,
+        shell_events,
         initial_root,
         shell,
         services,
@@ -152,6 +155,21 @@ pub(crate) fn open_initial_window(cx: &mut App, initial: InitialWindowSpec) {
         window.set_window_title(brand::NAME);
         // HWND 发布单点:任务栏闪烁/进度经 facade 查询。
         crate::windowing::focus::publish_window(window);
+        // 系统关机/注销取消本次会话结束并投递统一关闭链；保存完成后进程退出。
+        if let Some(hwnd) = crate::windowing::focus::published_hwnd() {
+            let session_events = shell_events.clone();
+            if let Err(error) =
+                crate::platform::session_end::install_session_end_guard(hwnd, move || {
+                    crate::app_shell::try_send_shell_event(
+                        &session_events,
+                        SltermShellEvent::SessionEndRequested,
+                        "session-end",
+                    );
+                })
+            {
+                log::warn!("系统会话结束守卫安装失败: {error}");
+            }
+        }
         let root = cx.new(|cx| AppRoot::new(PanelIdAllocator::new(1), shell, services, cx));
         let close_root = root.downgrade();
         window.on_window_should_close(cx, move |window, cx| {

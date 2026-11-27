@@ -251,7 +251,7 @@ impl AppRoot {
                 ));
                 cx.notify();
             }
-            SltermShellEvent::TrayQuit => {
+            SltermShellEvent::TrayQuit | SltermShellEvent::SessionEndRequested => {
                 let _ = self.request_close(window, cx);
             }
             SltermShellEvent::WorkspaceWriteFailed => {

@@ -1573,3 +1573,23 @@ fn close_flush_reconciles_exited_generation(cx: &mut TestAppContext) {
         "旧代次 flush 成功后必须重新提交 Exited 快照"
     );
 }
+
+/// 系统关机/注销事件与托盘退出复用同一条统一关闭链。
+#[gpui::test]
+fn session_end_uses_the_same_close_chain_as_tray_quit(cx: &mut TestAppContext) {
+    let (root, mut window, _) = open_root(cx);
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        window.update(|window, cx| {
+            root.update(cx, |root, cx| {
+                root.handle_shell_event(SltermShellEvent::SessionEndRequested, window, cx)
+            });
+        });
+        window.run_until_parked();
+        if root.read_with(cx, |root, _| root.close_completed) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    panic!("SessionEndRequested 必须走统一关闭链");
+}

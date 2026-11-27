@@ -24,6 +24,8 @@ pub(crate) enum SltermShellEvent {
     NotificationChoice { pane_id: PaneId },
     /// 托盘「退出」:与关窗同一条退出链(终局快照 + 退出)。
     TrayQuit,
+    /// 系统关机/注销守卫投递：复用与托盘退出相同的统一关闭链。
+    SessionEndRequested,
     /// 工作区状态后台写失败；不携带路径、SQL 或状态正文。
     WorkspaceWriteFailed,
     /// Hook 安装自愈失败；只携带封闭类别，前台按语言呈现。

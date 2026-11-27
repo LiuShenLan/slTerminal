@@ -669,6 +669,7 @@ fn run_shell_once(
             cx,
             windowing::InitialWindowSpec {
                 shell_rx,
+                shell_events: shell_tx,
                 initial_root,
                 shell,
                 services: app_root::AppRootServices {
