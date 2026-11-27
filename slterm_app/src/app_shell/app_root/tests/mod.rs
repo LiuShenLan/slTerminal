@@ -42,6 +42,7 @@ mod terminal_cwd;
 mod terminal_reconnect;
 mod terminal_restore;
 mod tray_snapshot;
+mod update_prompt;
 mod view_tasks;
 mod window_geometry;
 

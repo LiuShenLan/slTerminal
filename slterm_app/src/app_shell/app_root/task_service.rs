@@ -16,6 +16,8 @@ pub(crate) enum TaskId {
     SettingsExport,
     /// 普通设置导入：后台选择与预检、确认后写盘。
     SettingsImport,
+    /// 更新安装包下载：后台流式下载与校验。
+    UpdateDownload,
     /// 读取失败后的显式重试：后台重读设置文件并重建快照。
     SettingsLoad,
     /// 自定义主题定义的冷路径预载；热应用只查缓存。

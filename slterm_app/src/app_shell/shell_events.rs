@@ -28,6 +28,8 @@ pub(crate) enum SltermShellEvent {
     SessionEndRequested,
     /// 工作区状态后台写失败；不携带路径、SQL 或状态正文。
     WorkspaceWriteFailed,
+    /// 更新检查结果；只在前台决定提示、下载或跳过。
+    UpdateAvailable(crate::update_check::UpdateCheckResult),
     /// Hook 安装自愈失败；只携带封闭类别，前台按语言呈现。
     AiHookAlert(crate::ai_hook::HookFailureKind),
     /// 命名管道 hook 事件；前台按 pane 所有权门路由到 AgentHub。

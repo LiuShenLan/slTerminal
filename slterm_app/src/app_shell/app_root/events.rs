@@ -261,6 +261,14 @@ impl AppRoot {
                 notify_workspace_write_failed(cx);
                 cx.notify();
             }
+            SltermShellEvent::UpdateAvailable(result) => {
+                if !self.close_in_progress
+                    && self.application_close.is_none()
+                    && !self.close_completed
+                {
+                    self.on_update_available(result, window, cx);
+                }
+            }
             SltermShellEvent::AiHookAlert(kind) => {
                 if !self.close_in_progress
                     && self.application_close.is_none()

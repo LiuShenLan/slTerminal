@@ -465,6 +465,7 @@ impl Render for AppRoot {
             .children(self.render_nav_project_menu())
             .children(self.render_nav_restore_confirm(cx))
             .children(self.render_settings_import(cx))
+            .children(self.render_update_prompt(cx))
             .children(self.render_in_app_notices(cx))
             .children(self.render_settings_overlay(cx))
             .children(self.render_close_decision(cx))

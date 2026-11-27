@@ -58,6 +58,7 @@ mod terminal_events;
 #[cfg(all(test, feature = "gpui-test-support"))]
 mod tests;
 mod update_install;
+mod update_prompt;
 mod window_geometry;
 
 use std::cell::RefCell;
@@ -275,6 +276,7 @@ pub(crate) struct AppRoot {
     nav_history_generation: u64,
     nav_restore_confirm: Option<nav::NavRestoreConfirm>,
     settings_import: Option<settings_import::PendingSettingsImport>,
+    update_prompt: Option<update_prompt::UpdatePrompt>,
     /// 重定位事务在途：候选根尚未被事务确认，其他快照命令不得覆盖。
     project_relocation_in_flight: Option<ProjectId>,
     /// 已选定新根、等待 Hooks 草稿处置的重定位目标。
@@ -627,6 +629,7 @@ impl AppRoot {
             nav_history_generation: 0,
             nav_restore_confirm: None,
             settings_import: None,
+            update_prompt: None,
             project_relocation_in_flight: None,
             pending_project_relocation: None,
             panel_ids,
