@@ -34,7 +34,7 @@
 
 | 问题 | 状态 |
 |---|---|
-| 设置中心页面集合与导航结构未按规格实现 | 待修 |
+| 设置中心页面集合与导航结构未按规格实现 | 修复中（提交 45a205c7、4032c0dd、689d67c9、91641392、e38ce399、fdc01262）：页面模型收敛为全局组（快捷键、后台定时任务、外观、终端、应用）与 Agent 组（基础配置、Hooks），导航分组／折叠／过滤与稳定 slug 选择器已实现；后台任务页接入注册表启停与热应用；页级与全局恢复默认（跳过授权类键）；快捷键页只读接入统一命令目录并按上下文分组、合并多绑定；导入／导出／预览确认接线且写盘成功才采纳运行值。剩余：快捷键录制／覆盖／冲突与 keybind 持久、后台任务周期文本编辑、页内视图参数与浮层／项目页区分、编辑器与文件树／补全键位并入目录 |
 | 设置中心缺少导入、导出、备份、诊断、更新、Runtime、AgentRoot 与套餐凭据入口 | 待修 |
 | 自定义主题库没有设置界面，主题选择只列内置主题 | 待修 |
 | 主题文档仍强制承载排版、卡片几何、背景图与效果字段 | 已修：`ThemeDefinition` 删除 typography/layout/effects，文档只收颜色与 ANSI；旧区段按未知字段拒绝，应用桥只写主题键（提交 40b4a59b）；测试 `pure_color_documents_are_accepted_without_non_color_sections`、`generated_documents_carry_only_colors_and_ansi`、`legacy_non_color_sections_are_rejected_as_unknown_fields`、`applying_a_theme_writes_only_theme_keys_and_keeps_personal_appearance` |
@@ -64,7 +64,7 @@
 | Hooks 事件目录远小于 featureSpec 的 Claude 事件集合 | 已修：`HookEvent` 扩为 31 项全表，编辑器校验与 `hook_events()` 使用 `CLAUDE_EVENT_CATALOG`，安装器仍只注入 10 项订阅子集；测试 `legal_catalog_events_save_even_when_not_installed`、`claude_event_catalog_covers_the_full_feature_spec`（提交 21eb93f7） |
 | 设置热应用在 GPUI 前台同步读取自定义主题文件 | 已修：主题定义预载缓存 + `ThemeLoad` 后台任务，启动/显式提交走冷路径读盘，字段提交后的快照重建只查缓存，库写入/删除主动失效（提交 b83926fe）；测试 `hot_snapshot_uses_the_cached_custom_theme_definition_without_disk_io`、`custom_theme_hot_apply_uses_the_background_preloaded_cache`、`cache_hits_only_the_installed_identity_and_clears_on_invalidate` |
 | 套餐凭据目标不含本地根稳定散列 | 已修：`credential_target(local_root)` 绑定 `stable_path_hash`；测试 `plan_balance_targets_are_scoped_to_the_local_data_root` |
-| 普通设置导入、导出与恢复默认只有内存纯函数 | 待修 |
+| 普通设置导入、导出与恢复默认只有内存纯函数 | 已修（提交 e38ce399、fdc01262）：导出经白名单投影生成版本化信封并由后台原生目标选择后原子写；导入后台选择文件、1 MiB 上限读取、解析与版本／登记／导出资格／字段校验，预览确认后经设置存储原子写与 `.bak` 备份落盘，写盘成功才采纳运行值；恢复本页／全部默认接入生产 UI 并同步平台键。测试 `export_json_round_trips_and_rejects_malformed_documents`、`settings_export_writes_versioned_envelope`、`settings_import_previews_and_applies_after_write`、`settings_page_reset_restores_field_defaults`、`settings_restore_all_resets_fields_and_tasks` |
 | Agent 基础配置、AgentRoot 管理与 Agent 文件操作面未实现 | 待修 |
 
 ## Hooks 与 hook 桥
