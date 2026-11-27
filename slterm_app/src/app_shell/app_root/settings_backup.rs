@@ -1,6 +1,7 @@
-//! 设置页加密备份导出：类别选择、口令、后台收集与原子写。
+//! 设置页加密备份：导出（类别、口令、后台原子写）与恢复登记。
 //!
-//! 设置取运行态白名单投影，工作区经唯一写线程收集持久事实；口令只在
+//! 设置取运行态白名单投影，工作区经唯一写线程收集持久事实；恢复只做
+//! 选择、解密预览与维护请求登记，实际替换在启动维护期执行。口令只在
 //! 本次任务内存中存在，失败与成功都不进入日志或通知正文。
 
 use gpui::{
@@ -17,13 +18,30 @@ use super::task_service::{CancellationToken, TaskId};
 use crate::encrypted_backup::workspace::{
     WorkspaceCapture, WorkspaceGeometryBackup, WorkspaceViewStateBackup, capture_workspace,
 };
-use crate::encrypted_backup::{BackupCategory, BackupSelection, MIN_PASSPHRASE_CHARS};
+use crate::encrypted_backup::{
+    BackupArchive, BackupCategory, BackupSelection, MIN_PASSPHRASE_CHARS,
+};
 use crate::i18n::Message;
 
-/// 导出任务的口令最小长度与文案同源；只在本次任务内存中存在。
+/// 恢复文件读取上限：与归档明文上限一致。
+const MAX_BACKUP_BYTES: u64 = 64 * 1024 * 1024;
+
+enum RestorePhase {
+    None,
+    Picking,
+    Passphrase(Vec<u8>),
+    Opening,
+    Preview(BackupArchive),
+    Staging,
+    Staged,
+}
+
 pub(super) struct BackupDialog {
     selection: BackupSelection,
+    /// 恢复预览中的类别选择；只允许归档实际包含的类别。
+    restore_selection: BackupSelection,
     passphrase: Entity<InputState>,
+    phase: RestorePhase,
     focus_handle: FocusHandle,
     registration: FocusRegistration,
     busy: bool,
@@ -62,7 +80,9 @@ impl AppRoot {
         let passphrase = cx.new(|cx| InputState::new(window, cx));
         self.backup_dialog = Some(BackupDialog {
             selection: BackupSelection::default(),
+            restore_selection: BackupSelection::from_categories([]),
             passphrase,
+            phase: RestorePhase::None,
             focus_handle,
             registration,
             busy: false,
@@ -88,7 +108,7 @@ impl AppRoot {
         Ok(())
     }
 
-    /// 类别切换保持至少一个选中，避免空备份。
+    /// 类别切换保持至少一个选中；恢复预览时改恢复选择集。
     pub(super) fn toggle_backup_category(
         &mut self,
         category: BackupCategory,
@@ -97,14 +117,40 @@ impl AppRoot {
         let Some(dialog) = self.backup_dialog.as_mut() else {
             return;
         };
-        let next = !dialog.selection.get(category);
-        let mut candidate = dialog.selection;
-        candidate.set(category, next);
+        let in_preview = matches!(dialog.phase, RestorePhase::Preview(_));
+        if in_preview {
+            let allowed = match &dialog.phase {
+                RestorePhase::Preview(archive) => archive.manifest.categories.contains(&category),
+                _ => false,
+            };
+            if !allowed {
+                return;
+            }
+        }
+        let current = if in_preview {
+            dialog.restore_selection
+        } else {
+            dialog.selection
+        };
+        let mut candidate = current;
+        candidate.set(category, !current.get(category));
         if candidate.is_empty() {
             return;
         }
-        dialog.selection = candidate;
+        if in_preview {
+            dialog.restore_selection = candidate;
+        } else {
+            dialog.selection = candidate;
+        }
         dialog.error = None;
+        cx.notify();
+    }
+
+    fn set_backup_error(&mut self, message: Message, cx: &mut Context<'_, Self>) {
+        if let Some(dialog) = self.backup_dialog.as_mut() {
+            dialog.busy = false;
+            dialog.error = Some(message);
+        }
         cx.notify();
     }
 
@@ -113,7 +159,7 @@ impl AppRoot {
         let Some(dialog) = self.backup_dialog.as_ref() else {
             return;
         };
-        if dialog.busy {
+        if dialog.busy || !matches!(dialog.phase, RestorePhase::None) {
             return;
         }
         if self.ensure_not_closing().is_err() {
@@ -123,17 +169,11 @@ impl AppRoot {
         let selection = dialog.selection;
         let passphrase = passphrase_input.read(cx).value().to_string();
         if passphrase.chars().count() < MIN_PASSPHRASE_CHARS {
-            if let Some(dialog) = self.backup_dialog.as_mut() {
-                dialog.error = Some(Message::BackupPassphraseShort);
-            }
-            cx.notify();
+            self.set_backup_error(Message::BackupPassphraseShort, cx);
             return;
         }
         let Some(writer) = self.project_writer.clone() else {
-            if let Some(dialog) = self.backup_dialog.as_mut() {
-                dialog.error = Some(Message::BackupUnavailable);
-            }
-            cx.notify();
+            self.set_backup_error(Message::BackupUnavailable, cx);
             return;
         };
         let settings = crate::settings_transfer::export_json(
@@ -236,6 +276,259 @@ impl AppRoot {
         }
     }
 
+    /// 恢复第一步：后台选择并读取备份文件，口令稍后单独输入。
+    pub(super) fn start_restore_pick(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        let Some(dialog) = self.backup_dialog.as_ref() else {
+            return;
+        };
+        if dialog.busy || !matches!(dialog.phase, RestorePhase::None) {
+            return;
+        }
+        if self.ensure_not_closing().is_err() {
+            return;
+        }
+        let windows = self.windows.clone();
+        let owner = crate::windowing::focus::window_hwnd(cx);
+        let executor = cx.background_executor().clone();
+        let window_handle = window.window_handle();
+        let task = TaskId::BackupRestore;
+        if let Some(dialog) = self.backup_dialog.as_mut() {
+            dialog.phase = RestorePhase::Picking;
+            dialog.error = None;
+        }
+        cx.notify();
+        let registration = self
+            .tasks
+            .register_with(task, CancellationToken::new(), move || {
+                let loaded = executor.spawn(async move {
+                    let Some(path) = windows
+                        .pick_open_file(owner, None)
+                        .map_err(|error| format!("选择备份文件失败: {error}"))?
+                    else {
+                        return Ok(None);
+                    };
+                    let metadata = std::fs::metadata(&path)
+                        .map_err(|error| format!("读取备份文件元数据失败: {error}"))?;
+                    if metadata.len() > MAX_BACKUP_BYTES {
+                        return Err("备份文件超过大小上限".to_owned());
+                    }
+                    std::fs::read(&path)
+                        .map(Some)
+                        .map_err(|error| format!("读取备份文件失败: {error}"))
+                });
+                cx.spawn(async move |this, cx| {
+                    let loaded = loaded.await;
+                    let _ = window_handle.update(cx, |_, window, cx| {
+                        let _ = this.update(cx, |root, cx| {
+                            root.tasks.complete(task);
+                            root.finish_restore_pick(loaded, window, cx);
+                        });
+                    });
+                })
+            });
+        if registration.is_err() {
+            log::debug!("备份恢复选择任务未登记");
+        }
+    }
+
+    fn finish_restore_pick(
+        &mut self,
+        loaded: Result<Option<Vec<u8>>, String>,
+        _window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if self.ensure_not_closing().is_err() {
+            return;
+        }
+        let Some(dialog) = self.backup_dialog.as_mut() else {
+            return;
+        };
+        match loaded {
+            Ok(Some(bytes)) => {
+                dialog.phase = RestorePhase::Passphrase(bytes);
+                dialog.error = None;
+            }
+            Ok(None) => dialog.phase = RestorePhase::None,
+            Err(error) => {
+                log::warn!("备份文件读取失败: {error}");
+                dialog.phase = RestorePhase::None;
+                dialog.error = Some(Message::BackupRestoreFailed);
+            }
+        }
+        cx.notify();
+    }
+
+    /// 恢复第二步：后台用口令解密并全量校验，成功后进入预览。
+    pub(super) fn start_restore_open(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        let Some(dialog) = self.backup_dialog.as_ref() else {
+            return;
+        };
+        let RestorePhase::Passphrase(bytes) = &dialog.phase else {
+            return;
+        };
+        let bytes = bytes.clone();
+        let passphrase = dialog.passphrase.read(cx).value().to_string();
+        if passphrase.chars().count() < MIN_PASSPHRASE_CHARS {
+            self.set_backup_error(Message::BackupPassphraseShort, cx);
+            return;
+        }
+        if self.ensure_not_closing().is_err() {
+            return;
+        }
+        let executor = cx.background_executor().clone();
+        let window_handle = window.window_handle();
+        let task = TaskId::BackupRestore;
+        if let Some(dialog) = self.backup_dialog.as_mut() {
+            dialog.phase = RestorePhase::Opening;
+            dialog.error = None;
+        }
+        cx.notify();
+        let registration = self
+            .tasks
+            .register_with(task, CancellationToken::new(), move || {
+                let opened = executor
+                    .spawn(async move { crate::encrypted_backup::open(&bytes, &passphrase) });
+                cx.spawn(async move |this, cx| {
+                    let opened = opened.await;
+                    let _ = window_handle.update(cx, |_, window, cx| {
+                        let _ = this.update(cx, |root, cx| {
+                            root.tasks.complete(task);
+                            root.finish_restore_open(opened, window, cx);
+                        });
+                    });
+                })
+            });
+        if registration.is_err() {
+            log::debug!("备份恢复解密任务未登记");
+        }
+    }
+
+    fn finish_restore_open(
+        &mut self,
+        opened: Result<BackupArchive, String>,
+        _window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if self.ensure_not_closing().is_err() {
+            return;
+        }
+        let Some(dialog) = self.backup_dialog.as_mut() else {
+            return;
+        };
+        match opened {
+            Ok(archive) => {
+                dialog.restore_selection =
+                    BackupSelection::from_categories(archive.manifest.categories.iter().copied());
+                dialog.phase = RestorePhase::Preview(archive);
+                dialog.error = None;
+            }
+            Err(error) => {
+                log::warn!("备份解密或校验失败: {error}");
+                dialog.phase = RestorePhase::None;
+                dialog.error = Some(Message::BackupRestoreFailed);
+            }
+        }
+        cx.notify();
+    }
+
+    /// 恢复第三步：关闭预检通过后经唯一写线程登记维护请求。
+    pub(super) fn confirm_restore_stage(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let Some(dialog) = self.backup_dialog.as_ref() else {
+            return;
+        };
+        let RestorePhase::Preview(archive) = &dialog.phase else {
+            return;
+        };
+        let archive = archive.clone();
+        let selection = dialog.restore_selection;
+        if selection.is_empty() {
+            self.set_backup_error(Message::BackupRestoreFailed, cx);
+            return;
+        }
+        if self.ensure_not_closing().is_err() {
+            return;
+        }
+        // 关闭预检：存在未保存正文或 Hooks 草稿时拒绝登记，先让用户处理。
+        let views = self
+            .snapshot
+            .registry()
+            .projects()
+            .iter()
+            .flat_map(|project| project.layout().view_keys())
+            .collect::<Vec<_>>();
+        let dirty_documents = self.dirty_documents_for_views(&views).unwrap_or_default();
+        let dirty_hooks = self.hook_drafts.dirty_drafts().next().is_some();
+        if !dirty_documents.is_empty() || dirty_hooks {
+            self.set_backup_error(Message::EditorCloseTitle, cx);
+            return;
+        }
+        let Some(writer) = self.project_writer.clone() else {
+            self.set_backup_error(Message::BackupUnavailable, cx);
+            return;
+        };
+        let executor = cx.background_executor().clone();
+        let window_handle = window.window_handle();
+        let task = TaskId::BackupRestore;
+        if let Some(dialog) = self.backup_dialog.as_mut() {
+            dialog.phase = RestorePhase::Staging;
+            dialog.error = None;
+        }
+        cx.notify();
+        let registration = self
+            .tasks
+            .register_with(task, CancellationToken::new(), move || {
+                let staged = executor.spawn(async move {
+                    writer
+                        .stage_backup_restore(&archive, selection)
+                        .map_err(|error| format!("登记维护请求失败: {error}"))?
+                        .recv_timeout(std::time::Duration::from_secs(15))
+                        .map_err(|_| "登记维护请求超时".to_owned())?
+                });
+                cx.spawn(async move |this, cx| {
+                    let staged = staged.await;
+                    let _ = window_handle.update(cx, |_, window, cx| {
+                        let _ = this.update(cx, |root, cx| {
+                            root.tasks.complete(task);
+                            root.finish_restore_stage(staged, window, cx);
+                        });
+                    });
+                })
+            });
+        if registration.is_err() {
+            log::debug!("备份恢复登记任务未登记");
+        }
+    }
+
+    fn finish_restore_stage(
+        &mut self,
+        staged: Result<crate::persistence::maintenance_request::MaintenanceRequest, String>,
+        _window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if self.ensure_not_closing().is_err() {
+            return;
+        }
+        let Some(dialog) = self.backup_dialog.as_mut() else {
+            return;
+        };
+        match staged {
+            Ok(_request) => {
+                dialog.phase = RestorePhase::Staged;
+                dialog.error = None;
+            }
+            Err(error) => {
+                log::warn!("备份恢复登记失败: {error}");
+                dialog.phase = RestorePhase::None;
+                dialog.error = Some(Message::BackupRestoreFailed);
+            }
+        }
+        cx.notify();
+    }
+
     #[cfg(all(test, feature = "gpui-test-support"))]
     pub(super) fn set_backup_passphrase_for_test(
         &mut self,
@@ -250,16 +543,21 @@ impl AppRoot {
         }
     }
 
-    /// 备份导出面：类别、固定排除说明、口令与导出动作。
+    /// 备份面：类别、固定排除说明、口令，以及导出或恢复动作。
     pub(super) fn render_backup_dialog(&self, cx: &Context<'_, Self>) -> Option<AnyElement> {
         let dialog = self.backup_dialog.as_ref()?;
         let language = cx.global::<crate::app_shell::config::Settings>().language;
+        let in_preview = matches!(dialog.phase, RestorePhase::Preview(_));
         let mut categories = div().flex().flex_col().gap_2();
         for (category, label) in [
             (BackupCategory::Settings, Message::BackupCategorySettings),
             (BackupCategory::Workspace, Message::BackupCategoryWorkspace),
         ] {
-            let selected = dialog.selection.get(category);
+            let selected = if in_preview {
+                dialog.restore_selection.get(category)
+            } else {
+                dialog.selection.get(category)
+            };
             let slug = match category {
                 BackupCategory::Settings => "settings",
                 BackupCategory::Workspace => "workspace",
@@ -332,6 +630,32 @@ impl AppRoot {
                             .child(language.text(Message::BackupPassphraseHint)),
                     ),
             );
+        let busy = dialog.busy
+            || matches!(
+                dialog.phase,
+                RestorePhase::Picking | RestorePhase::Opening | RestorePhase::Staging
+            );
+        match &dialog.phase {
+            RestorePhase::Preview(_) => {
+                body = body.child(
+                    div()
+                        .debug_selector(|| "backup-restore-preview".to_owned())
+                        .text_xs()
+                        .text_color(cx.theme().accent)
+                        .child(language.text(Message::BackupRestorePreview)),
+                );
+            }
+            RestorePhase::Staged => {
+                body = body.child(
+                    div()
+                        .debug_selector(|| "backup-restore-staged".to_owned())
+                        .text_xs()
+                        .text_color(cx.theme().accent)
+                        .child(language.text(Message::BackupRestoreStaged)),
+                );
+            }
+            _ => {}
+        }
         if let Some(error) = dialog.error {
             body = body.child(
                 div()
@@ -340,7 +664,6 @@ impl AppRoot {
                     .child(language.text(error)),
             );
         }
-        let busy = dialog.busy;
         let mut actions = div()
             .flex()
             .flex_row()
@@ -371,23 +694,98 @@ impl AppRoot {
                     .text_color(cx.theme().muted_foreground)
                     .child(language.text(Message::BackupExporting)),
             );
-        } else {
+        } else if matches!(dialog.phase, RestorePhase::Staged) {
             actions = actions.child(
                 div()
-                    .id("backup-export")
-                    .debug_selector(|| "backup-export".to_owned())
+                    .id("backup-close")
+                    .debug_selector(|| "backup-close".to_owned())
                     .cursor_pointer()
                     .px_2()
                     .text_xs()
                     .text_color(cx.theme().accent)
-                    .child(language.text(Message::BackupExport))
+                    .child(language.text(Message::EditorCancel))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|root, _, window, cx| {
-                            root.start_backup_export(window, cx);
+                            if let Err(error) = root.close_backup_dialog(window, cx) {
+                                log::warn!("备份对话框关闭失败: {error:?}");
+                            }
                         }),
                     ),
             );
+        } else {
+            match &dialog.phase {
+                RestorePhase::None => {
+                    actions = actions.child(
+                        div()
+                            .id("backup-restore")
+                            .debug_selector(|| "backup-restore".to_owned())
+                            .cursor_pointer()
+                            .px_2()
+                            .text_xs()
+                            .child(language.text(Message::BackupRestore))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|root, _, window, cx| {
+                                    root.start_restore_pick(window, cx);
+                                }),
+                            ),
+                    );
+                    actions = actions.child(
+                        div()
+                            .id("backup-export")
+                            .debug_selector(|| "backup-export".to_owned())
+                            .cursor_pointer()
+                            .px_2()
+                            .text_xs()
+                            .text_color(cx.theme().accent)
+                            .child(language.text(Message::BackupExport))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|root, _, window, cx| {
+                                    root.start_backup_export(window, cx);
+                                }),
+                            ),
+                    );
+                }
+                RestorePhase::Passphrase(_) => {
+                    actions = actions.child(
+                        div()
+                            .id("backup-restore-confirm")
+                            .debug_selector(|| "backup-restore-confirm".to_owned())
+                            .cursor_pointer()
+                            .px_2()
+                            .text_xs()
+                            .text_color(cx.theme().accent)
+                            .child(language.text(Message::BackupRestore))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|root, _, window, cx| {
+                                    root.start_restore_open(window, cx);
+                                }),
+                            ),
+                    );
+                }
+                RestorePhase::Preview(_) => {
+                    actions = actions.child(
+                        div()
+                            .id("backup-restore-confirm")
+                            .debug_selector(|| "backup-restore-confirm".to_owned())
+                            .cursor_pointer()
+                            .px_2()
+                            .text_xs()
+                            .text_color(cx.theme().accent)
+                            .child(language.text(Message::BackupRestore))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|root, _, window, cx| {
+                                    root.confirm_restore_stage(window, cx);
+                                }),
+                            ),
+                    );
+                }
+                _ => {}
+            }
         }
         body = body.child(actions);
         let dialog_element = div()

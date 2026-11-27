@@ -505,3 +505,118 @@ fn backup_export_rejects_short_passphrase_and_writes_archive(cx: &mut TestAppCon
         "成功后关闭对话框"
     );
 }
+
+/// 加密备份恢复：选择文件、口令预览、登记维护请求并提示重启生效。
+#[gpui::test]
+fn backup_restore_previews_and_stages_maintenance_request(cx: &mut TestAppContext) {
+    use crate::encrypted_backup::{BackupArchive, BackupCategory, BackupEntry, BackupManifest};
+    use crate::persistence::metadata::RunMarker;
+    use crate::persistence::workspace::WorkspaceDatabase;
+    use crate::persistence::workspace_writer::WorkspaceWriter;
+    use crate::platform::windows_integration::FakeWindowsIntegration;
+    use std::sync::Arc;
+
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    {
+        let mut store = WorkspaceDatabase::open(&paths).unwrap();
+        store
+            .begin_run(
+                "epoch-backup-ui",
+                RunMarker {
+                    run_id: "run-backup-ui".to_owned(),
+                    process_id: 3,
+                    process_created_at_ms: 5,
+                },
+            )
+            .unwrap();
+    }
+    let archive = BackupArchive {
+        manifest: BackupManifest {
+            version: 1,
+            categories: vec![BackupCategory::Settings],
+        },
+        entries: vec![BackupEntry {
+            category: BackupCategory::Settings,
+            name: "settings.json".to_owned(),
+            bytes: br#"{"appearance":{"theme":"Nord"}}"#.to_vec(),
+        }],
+    };
+    let packet = crate::encrypted_backup::seal(&archive, "correct horse").unwrap();
+    let target = temp.path().join("restore.sltmbk");
+    std::fs::write(&target, &packet).unwrap();
+    let writer = WorkspaceWriter::start(paths.clone()).unwrap();
+    let windows = Arc::new(FakeWindowsIntegration::default());
+    windows.set_open_file_target(Some(target));
+    let persistence = AppRootPersistence::load(&paths, Some(writer.client()));
+    let (root, mut window) = open_root_with_windows(cx, persistence, windows);
+    focus_workspace(&root, &mut window);
+    open_settings(&mut window);
+    draw_frame(&mut window);
+    let page = window.debug_bounds("settings-page-application").unwrap();
+    window.simulate_click(page.center(), Modifiers::default());
+    draw_frame(&mut window);
+    let open = window.debug_bounds("settings-open-backup").unwrap();
+    window.simulate_click(open.center(), Modifiers::default());
+    draw_frame(&mut window);
+
+    let restore = window.debug_bounds("backup-restore").unwrap();
+    window.simulate_click(restore.center(), Modifiers::default());
+    for _ in 0..80 {
+        window.run_until_parked();
+        cx.run_until_parked();
+        if window.debug_bounds("backup-restore-confirm").is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.set_backup_passphrase_for_test("correct horse", window, cx);
+        });
+    });
+    let confirm = window.debug_bounds("backup-restore-confirm").unwrap();
+    window.simulate_click(confirm.center(), Modifiers::default());
+    for _ in 0..80 {
+        window.run_until_parked();
+        cx.run_until_parked();
+        if window.debug_bounds("backup-restore-preview").is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    draw_frame(&mut window);
+    assert!(
+        window.debug_bounds("backup-restore-preview").is_some(),
+        "口令正确后必须显示恢复预览"
+    );
+
+    let confirm = window.debug_bounds("backup-restore-confirm").unwrap();
+    window.simulate_click(confirm.center(), Modifiers::default());
+    for _ in 0..80 {
+        window.run_until_parked();
+        cx.run_until_parked();
+        if window.debug_bounds("backup-restore-staged").is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    draw_frame(&mut window);
+    assert!(
+        window.debug_bounds("backup-restore-staged").is_some(),
+        "登记成功必须提示下次启动生效"
+    );
+    let observer = WorkspaceDatabase::open(&paths).unwrap();
+    let request = observer
+        .unfinished_maintenance_requests()
+        .unwrap()
+        .into_iter()
+        .find(|request| request.kind == "backup.restore")
+        .expect("必须登记维护请求");
+    assert_eq!(
+        request.status,
+        crate::persistence::maintenance_request::MaintenanceRequestStatus::Prepared
+    );
+    drop(observer);
+    drop(writer);
+}

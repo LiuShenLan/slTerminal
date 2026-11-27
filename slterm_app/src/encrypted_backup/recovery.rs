@@ -18,7 +18,7 @@ pub(super) struct RestoreTarget {
     pub(super) name: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(super) struct OriginalFile {
     pub(super) target: RestoreTarget,
     /// None = 恢复前该文件不存在;撤回时删除,而不是留下恢复新建的文件。

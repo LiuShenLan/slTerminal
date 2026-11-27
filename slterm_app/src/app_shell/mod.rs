@@ -188,8 +188,10 @@ impl WorkspaceWriterRuntime {
             crate::app_shell::paste_journal::PASTE_JOURNAL_KIND,
             &paste_recoverer as &dyn JournalRecoverer,
         )]);
-        let backup_recoverer =
-            crate::encrypted_backup::maintenance::BackupRestoreRecoverer::new(paths.clone());
+        let backup_recoverer = crate::encrypted_backup::maintenance::BackupRestoreRecoverer::new(
+            paths.clone(),
+            crate::app_shell::app_root::workspace_view_state_registry(),
+        );
         let request_recoverers = MaintenanceRequestRecovererRegistry::from([(
             crate::encrypted_backup::maintenance::BACKUP_RESTORE_KIND,
             &backup_recoverer as &dyn MaintenanceRequestRecoverer,

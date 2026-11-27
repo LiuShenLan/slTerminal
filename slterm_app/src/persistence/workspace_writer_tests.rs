@@ -1420,6 +1420,62 @@ fn workspace_writer_drop_flushes_pending_state() {
     assert_eq!(read_position(&observer), Some((11, 0)));
 }
 
+/// 运行期备份恢复登记经唯一写线程完成，材料与请求同批落定。
+#[test]
+fn writer_stages_backup_restore_request() {
+    use std::time::Duration;
+
+    let temp = tempfile::tempdir().unwrap();
+    let paths = fixture(&temp);
+    {
+        let mut store = WorkspaceDatabase::open(&paths).unwrap();
+        store
+            .begin_run(
+                "epoch-backup-stage",
+                RunMarker {
+                    run_id: "run-backup-stage".to_owned(),
+                    process_id: 9,
+                    process_created_at_ms: 11,
+                },
+            )
+            .unwrap();
+    }
+    let writer = WorkspaceWriter::start(paths.clone()).unwrap();
+    let client = writer.client();
+    let archive = crate::encrypted_backup::BackupArchive {
+        manifest: crate::encrypted_backup::BackupManifest {
+            version: 1,
+            categories: vec![crate::encrypted_backup::BackupCategory::Settings],
+        },
+        entries: vec![crate::encrypted_backup::BackupEntry {
+            category: crate::encrypted_backup::BackupCategory::Settings,
+            name: "settings.json".to_owned(),
+            bytes: br#"{"appearance":{"theme":"Nord"}}"#.to_vec(),
+        }],
+    };
+    let selection = crate::encrypted_backup::BackupSelection::from_categories([
+        crate::encrypted_backup::BackupCategory::Settings,
+    ]);
+    let request = client
+        .stage_backup_restore(&archive, selection)
+        .unwrap()
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        request.status,
+        crate::persistence::maintenance_request::MaintenanceRequestStatus::Prepared
+    );
+    let observer = WorkspaceDatabase::open(&paths).unwrap();
+    assert!(
+        observer
+            .maintenance_request(&request.request_id)
+            .unwrap()
+            .is_some()
+    );
+    writer.shutdown().unwrap();
+}
+
 /// 工作区备份收集：统一从写线程读取持久事实，几何按机器匹配。
 #[test]
 fn workspace_backup_collection_reads_persisted_facts_on_the_writer() {

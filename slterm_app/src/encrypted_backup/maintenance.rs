@@ -9,6 +9,7 @@ use std::collections::{BTreeSet, HashSet};
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -17,6 +18,10 @@ use zeroize::Zeroizing;
 
 use super::recovery::{
     OriginalFile, RestoreTarget, decode_point, read_original, write_originals, write_point,
+};
+use super::workspace::{
+    WORKSPACE_ENTRY_NAME, WorkspaceCapture, WorkspaceGeometryBackup, WorkspaceViewStateBackup,
+    capture_workspace, decode_workspace, restore_workspace,
 };
 use super::{
     ARCHIVE_VERSION, BackupArchive, BackupCategory, BackupEntry, BackupManifest, BackupSelection,
@@ -27,6 +32,8 @@ use crate::persistence::maintenance_request::{
 };
 use crate::persistence::startup::{MaintenanceRequestError, MaintenanceRequestRecoverer};
 use crate::persistence::workspace::WorkspaceDatabase;
+use crate::persistence::workspace_writer::collect_workspace_parts;
+use slterm_workspace::ViewStateRegistry;
 
 /// 备份恢复维护请求的 kind；只有本模块恢复器解释 staged 材料。
 pub(crate) const BACKUP_RESTORE_KIND: &str = "backup.restore";
@@ -160,6 +167,14 @@ pub(crate) fn stage_restore(
     Ok(request)
 }
 
+fn audit_backup_without_path(operation: &'static str, result: crate::audit::AuditResult) {
+    crate::audit::record(crate::audit::AuditEvent::new(
+        operation,
+        "encrypted_backup::maintenance",
+        result,
+    ));
+}
+
 fn audit_backup(operation: &'static str, path: &Path, result: crate::audit::AuditResult) {
     crate::audit::record(
         crate::audit::AuditEvent::new(operation, "encrypted_backup::maintenance", result)
@@ -193,11 +208,65 @@ fn write_backup_entry(target: &Path, entry: &BackupEntry) -> Result<(), String> 
 /// 启动维护期恢复器：Prepared 应用，Applying 中断回滚，其他交由人工处理。
 pub(crate) struct BackupRestoreRecoverer {
     paths: AppPaths,
+    /// 工作区恢复的 ViewState 完整注册表；由 application 组合点注入。
+    registry: Arc<ViewStateRegistry>,
 }
 
 impl BackupRestoreRecoverer {
-    pub(crate) fn new(paths: AppPaths) -> Self {
-        Self { paths }
+    pub(crate) fn new(paths: AppPaths, registry: Arc<ViewStateRegistry>) -> Self {
+        Self { paths, registry }
+    }
+
+    /// 采集当前工作区逻辑投影，作为恢复点原值或比对材料。
+    fn capture_current_workspace(&self, store: &mut WorkspaceDatabase) -> Result<Vec<u8>, String> {
+        let machine_key = crate::platform::machine::machine_key();
+        let parts = collect_workspace_parts(store, &machine_key)?;
+        let payload = capture_workspace(WorkspaceCapture {
+            snapshot: &parts.snapshot,
+            view_states: parts
+                .view_states
+                .into_iter()
+                .map(|(view_key, state)| WorkspaceViewStateBackup { view_key, state })
+                .collect(),
+            sidebar: parts.sidebar,
+            geometry: parts
+                .window_geometry
+                .map(|geometry| WorkspaceGeometryBackup {
+                    machine_key: machine_key.clone(),
+                    geometry,
+                }),
+            source_machine: &machine_key,
+        })?;
+        serde_json::to_vec(&payload).map_err(|error| format!("工作区恢复点编码失败: {error}"))
+    }
+
+    /// 回滚工作区对象：恢复点原值经同一快照写通道写回。
+    fn restore_workspace_originals(
+        &self,
+        store: &mut WorkspaceDatabase,
+        originals: &[OriginalFile],
+    ) -> Result<(), String> {
+        let machine_key = crate::platform::machine::machine_key();
+        for original in originals
+            .iter()
+            .filter(|original| original.target.category == BackupCategory::Workspace)
+        {
+            let Some(bytes) = original.bytes.as_deref() else {
+                return Err("工作区恢复点缺少原值".to_owned());
+            };
+            let payload = decode_workspace(bytes)?;
+            restore_workspace(store, &payload, &machine_key, &self.registry)?;
+        }
+        Ok(())
+    }
+
+    fn write_file_originals(&self, originals: &[OriginalFile]) -> Result<(), String> {
+        let files = originals
+            .iter()
+            .filter(|original| original.target.category != BackupCategory::Workspace)
+            .cloned()
+            .collect::<Vec<_>>();
+        write_originals(&self.paths, &files)
     }
 
     fn apply(
@@ -236,12 +305,24 @@ impl BackupRestoreRecoverer {
         if let Err(error) = validate_archive(&archive) {
             return self.block(store, request, &error);
         }
-        // 原现场必须在任何目标写入之前落定并加密保存。
-        let originals = archive
-            .entries
-            .iter()
-            .map(|entry| read_original(&self.paths, entry))
-            .collect::<Result<Vec<_>, _>>()?;
+        // 原现场必须在任何目标写入之前落定并加密保存；
+        // 工作区对象以逻辑投影采样，文件类别读取目标现场。
+        let mut originals = Vec::with_capacity(archive.entries.len());
+        for entry in &archive.entries {
+            if entry.category == BackupCategory::Workspace {
+                let bytes = self.capture_current_workspace(store)?;
+                originals.push(OriginalFile {
+                    target: RestoreTarget {
+                        category: entry.category,
+                        name: WORKSPACE_ENTRY_NAME.to_owned(),
+                    },
+                    bytes: Some(bytes),
+                    after: None,
+                });
+            } else {
+                originals.push(read_original(&self.paths, entry)?);
+            }
+        }
         store
             .clear_recovery_points(&request.request_id)
             .map_err(|error| format!("清理恢复点登记失败: {error}"))?;
@@ -289,14 +370,27 @@ impl BackupRestoreRecoverer {
                 );
             }
             if entry.category == BackupCategory::Workspace {
-                // 工作区条目在维护期的写库恢复归后续切片；接入前明确拒绝，
-                // 不得把逻辑投影当文件写到本地根。
-                return self.roll_back_after_failure(
-                    store,
-                    request,
-                    &originals,
-                    "维护期工作区恢复尚未接入".to_owned(),
-                );
+                match decode_workspace(&entry.bytes).and_then(|payload| {
+                    restore_workspace(
+                        store,
+                        &payload,
+                        &crate::platform::machine::machine_key(),
+                        &self.registry,
+                    )
+                }) {
+                    Ok(()) => audit_backup_without_path(
+                        "backup_restore_apply",
+                        crate::audit::AuditResult::Ok,
+                    ),
+                    Err(error) => {
+                        audit_backup_without_path(
+                            "backup_restore_apply",
+                            crate::audit::AuditResult::Error,
+                        );
+                        return self.roll_back_after_failure(store, request, &originals, error);
+                    }
+                }
+                continue;
             }
             let target = restore_path(category_root(&self.paths, entry.category), &entry.name)?;
             match write_backup_entry(&target, entry) {
@@ -353,7 +447,10 @@ impl BackupRestoreRecoverer {
         originals: &[OriginalFile],
         failure: String,
     ) -> Result<(), String> {
-        match write_originals(&self.paths, originals) {
+        match self
+            .restore_workspace_originals(store, originals)
+            .and_then(|()| self.write_file_originals(originals))
+        {
             Ok(()) => {
                 store
                     .transition_maintenance_request(
@@ -409,7 +506,10 @@ impl BackupRestoreRecoverer {
         if expected != actual {
             return self.block(store, request, "恢复点集合与登记事实不一致");
         }
-        if let Err(error) = write_originals(&self.paths, &originals) {
+        if let Err(error) = self
+            .restore_workspace_originals(store, &originals)
+            .and_then(|()| self.write_file_originals(&originals))
+        {
             return self.block(store, request, &format!("中断恢复回滚失败: {error}"));
         }
         store
@@ -508,6 +608,8 @@ mod maintenance_restore_tests {
         MaintenanceRequestRecoverer, MaintenanceRequestRecovererRegistry, MaintenanceRunner,
     };
     use crate::persistence::workspace::WorkspaceDatabase;
+    use slterm_workspace::ViewStateRegistry;
+    use std::sync::Arc;
 
     const EPOCH: &str = "epoch-1";
     const OLD_SETTINGS: &[u8] = br#"{"appearance":{"theme":"Linear"}}"#;
@@ -578,7 +680,10 @@ mod maintenance_restore_tests {
         store: &mut WorkspaceDatabase,
         paths: &AppPaths,
     ) -> Result<MaintenanceOutcome, MaintenanceError> {
-        let recoverer = BackupRestoreRecoverer::new(paths.clone());
+        let recoverer = BackupRestoreRecoverer::new(
+            paths.clone(),
+            Arc::new(ViewStateRegistry::new(&[]).unwrap()),
+        );
         let journals = JournalRecovererRegistry::default();
         let requests = MaintenanceRequestRecovererRegistry::from([(
             BACKUP_RESTORE_KIND,
@@ -586,6 +691,64 @@ mod maintenance_restore_tests {
         )]);
         let epoch = store.metadata().unwrap().unwrap().store_epoch;
         MaintenanceRunner::new(store, &epoch, &journals, &requests).run()
+    }
+
+    fn named_snapshot(name: &str) -> slterm_workspace::ProjectSnapshot {
+        use std::str::FromStr as _;
+        let project_id =
+            slterm_workspace::ProjectId::from_str("018f2f7c-8f5a-7c3d-9e2b-4a6f8c1d0e2a").unwrap();
+        let mut registry = slterm_workspace::ProjectRegistry::new();
+        registry
+            .add_project(
+                project_id,
+                slterm_path::CanonicalPath::new("D:/work/a").unwrap(),
+            )
+            .unwrap();
+        registry.rename_project(project_id, name).unwrap();
+        slterm_workspace::ProjectSnapshot::restore(registry, Vec::new()).unwrap()
+    }
+
+    fn workspace_archive(store: &mut WorkspaceDatabase) -> BackupArchive {
+        use crate::encrypted_backup::workspace::{
+            WORKSPACE_ENTRY_NAME, WorkspaceCapture, WorkspaceGeometryBackup,
+            WorkspaceViewStateBackup, capture_workspace,
+        };
+        let machine_key = crate::platform::machine::machine_key();
+        let parts =
+            crate::persistence::workspace_writer::collect_workspace_parts(store, &machine_key)
+                .unwrap();
+        let payload = capture_workspace(WorkspaceCapture {
+            snapshot: &parts.snapshot,
+            view_states: parts
+                .view_states
+                .into_iter()
+                .map(|(view_key, state)| WorkspaceViewStateBackup { view_key, state })
+                .collect(),
+            sidebar: parts.sidebar,
+            geometry: parts
+                .window_geometry
+                .map(|geometry| WorkspaceGeometryBackup {
+                    machine_key: machine_key.clone(),
+                    geometry,
+                }),
+            source_machine: &machine_key,
+        })
+        .unwrap();
+        BackupArchive {
+            manifest: BackupManifest {
+                version: super::super::ARCHIVE_VERSION,
+                categories: vec![BackupCategory::Workspace],
+            },
+            entries: vec![BackupEntry {
+                category: BackupCategory::Workspace,
+                name: WORKSPACE_ENTRY_NAME.to_owned(),
+                bytes: serde_json::to_vec(&payload).unwrap(),
+            }],
+        }
+    }
+
+    fn workspace_selection() -> BackupSelection {
+        BackupSelection::from_categories([BackupCategory::Workspace])
     }
 
     fn setup(temp: &TempDir) -> (AppPaths, WorkspaceDatabase) {
@@ -1113,5 +1276,63 @@ mod maintenance_restore_tests {
                 .status,
             MaintenanceRequestStatus::Applied
         );
+    }
+    /// 工作区类别经维护期写入同一快照通道，失败回滚恢复原投影。
+    #[test]
+    fn staged_workspace_restore_replaces_projects_sidebar_and_geometry() {
+        let source_temp = tempfile::tempdir().unwrap();
+        let (source_paths, mut source) = setup(&source_temp);
+        source
+            .save_project_snapshot(&named_snapshot("from-backup"))
+            .unwrap();
+        let mut sidebar = slterm_sidebar::SidebarState::default();
+        sidebar.set_width(333);
+        source.save_sidebar_state(&sidebar).unwrap();
+        source
+            .save_window_geometry(
+                &crate::platform::machine::machine_key(),
+                &crate::windowing::geometry::WindowGeometry {
+                    x: 41.0,
+                    y: 42.0,
+                    width: 900.0,
+                    height: 640.0,
+                    maximized: false,
+                    display: None,
+                },
+            )
+            .unwrap();
+        let archive = workspace_archive(&mut source);
+
+        let target_temp = tempfile::tempdir().unwrap();
+        let (target_paths, mut target) = setup(&target_temp);
+        target
+            .save_project_snapshot(&named_snapshot("local-old"))
+            .unwrap();
+        let request =
+            stage_restore(&mut target, &target_paths, &archive, workspace_selection()).unwrap();
+        assert_eq!(request.status, MaintenanceRequestStatus::Prepared);
+
+        let outcome = maintenance(&mut target, &target_paths).unwrap();
+        assert_eq!(outcome, MaintenanceOutcome::Ready);
+        let restored = target.load_project_snapshot().unwrap();
+        assert_eq!(
+            restored.registry().projects()[0].display_name(),
+            "from-backup"
+        );
+        assert_eq!(target.sidebar_state().unwrap().unwrap().state.width(), 333);
+        let geometry = target
+            .window_geometry(&crate::platform::machine::machine_key())
+            .unwrap()
+            .expect("同机几何随工作区恢复");
+        assert_eq!(geometry.x, 41.0);
+        assert_eq!(
+            target
+                .maintenance_request(&request.request_id)
+                .unwrap()
+                .unwrap()
+                .status,
+            MaintenanceRequestStatus::Applied
+        );
+        let _ = source_paths;
     }
 }

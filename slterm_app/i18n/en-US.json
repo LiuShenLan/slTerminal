@@ -23,16 +23,16 @@
     "truncated": "File exceeds 8 MB; showing a truncated read-only prefix.",
     "invalid_encoding": "File is not valid UTF-8; opened read-only.",
     "encoding_open_title": "Could not determine the file encoding",
-    "encoding_open_detail": "Choose an encoding to reopen this file; no panel is created until content decodes.",
+    "encoding_open_detail": "Choose an encoding to reopen; no panel is created before decoding.",
     "read_only": "Read-only",
     "language_auto": "Automatic",
     "wrap": "Wrap",
     "open_system": "Open with system default",
-    "reauthorization_required": "This file is outside the project root or access was revoked. Reauthorize it before reading disk content.",
+    "reauthorization_required": "The file is outside the project root or access was revoked; reauthorize before reading disk.",
     "reauthorize": "Reauthorize",
     "reauthorization_failed": "Could not reauthorize this file. It remains unreadable.",
     "paged_recovery_required": "Large documents open only in the read-only paged view; a prefix is never an editable body.",
-    "replaced_recovery": "The original file identity was replaced. The old record was not merged and no former body snapshot is available.",
+    "replaced_recovery": "The file identity was replaced; the old record was not merged and no former body snapshot exists.",
     "recovery_unavailable": "The saved file is missing or undecodable. Close this panel or reopen the file.",
     "close_title": "Unsaved changes",
     "save": "Save",
@@ -221,7 +221,7 @@
       "saved": "Settings saved",
       "theme_imported": "Imported theme \"{name}\"",
       "theme_import_failed": "Theme import failed: {error}",
-      "unsupported_version": "Settings were written by a newer version ({version}); defaults are active and the original file is kept.",
+      "unsupported_version": "Settings come from a newer version ({version}); defaults are active and the original file is kept.",
       "invalid_fields": "{count} setting(s) were reset to defaults because their stored values were invalid.",
       "read_failed": "Settings could not be read; defaults are active for this run."
     },
@@ -239,7 +239,7 @@
       "again": "Click again to confirm",
       "action": "Restore defaults",
       "group": "Reset",
-      "description": "Restores factory values for registered settings; unknown keys and agent authorizations remain; previous settings are backed up."
+      "description": "Restores factory values; unknown keys and agent authorizations remain, previous settings are backed up."
     },
     "appearance": {
       "fonts": "Fonts and typography",
@@ -318,7 +318,7 @@
     },
     "agents": {
       "integration_group": "AI CLI integrations",
-      "description": "Install lifecycle hooks for detected AI CLIs; the editor below only edits your own handlers.",
+      "description": "Install lifecycle hooks for detected AI CLIs; the editor below only edits your handlers.",
       "refresh": "Refresh",
       "checking": "Checking...",
       "installed": "Installed",
@@ -561,9 +561,9 @@
     "theme_editor": {
       "group": "Theme editor",
       "template": "Template",
-      "template_description": "Switching a template replaces only the draft; source and applied runtime stay untouched.",
+      "template_description": "Switching templates replaces only the draft; applied runtime stays untouched.",
       "name": "Name",
-      "name_description": "The first save always creates a new theme and never overwrites built-in or existing library themes.",
+      "name_description": "First save creates a new theme; built-in and library themes are never overwritten.",
       "colors": "Colors",
       "background": "Background",
       "foreground": "Foreground",
@@ -667,8 +667,8 @@
     "recovery_side_view_state_repaired": "Some side view states could not be restored; affected views use defaults.",
     "workspace_write_failed": "Workspace state could not be saved. Recent project or layout changes may not be restored.",
     "workspace_restored_from_backup": "The workspace database was corrupt and restored from a valid copy; the original was kept.",
-    "workspace_isolated": "The workspace database and its copy were unrecoverable. Originals were isolated; an empty workspace was opened.",
-    "workspace_repairs": "Some workspace state was not fully restored ({count} item(s) skipped or repaired). Invalid entries were ignored.",
+    "workspace_isolated": "The workspace database and its copy were unrecoverable; originals were isolated and an empty workspace opened.",
+    "workspace_repairs": "Some workspace state was not restored ({count} item(s) skipped or repaired).",
     "settings_page_fallback": "The saved settings page is unavailable; showing the first available page.",
     "terminal_cwd_fallback": "A saved terminal directory was unavailable. The terminal was started at its project root.",
     "hook_install_failed": "Could not install AI CLI hooks for {agent}",
@@ -701,7 +701,7 @@
     "project_recovery_failed": "The saved layout could not be restored. Records are unchanged; retry after fixing the corrupt data.",
     "snapshot_recovery_failed": "Document recovery did not complete. Records and drafts are unchanged; retry after resolving the corrupt data.",
     "abandon": "Abandon unfinished state…",
-    "abandon_warning": "The unfinished operation will be abandoned, not completed. A diagnostic copy of the workspace database is kept; this cannot be undone.",
+    "abandon_warning": "Abandons the unfinished operation. A diagnostic copy of the workspace database is kept; this cannot be undone.",
     "abandon_confirm": "Abandon and retry",
     "abandon_running": "Abandoning unfinished state…",
     "abandon_failed": "Could not abandon the unfinished state. Keep the data directory and contact the maintainer.",
@@ -733,6 +733,10 @@
     "export_failed": "Backup failed.",
     "excluded": "Never included: credentials, Hooks, sessions, history, logs, and files outside the workspace.",
     "unavailable": "Workspace persistence unavailable; backup disabled.",
-    "passphrase_short": "Passphrase needs at least 8 characters."
+    "passphrase_short": "Passphrase needs at least 8 characters.",
+    "restore": "Restore…",
+    "restore_staged": "Restore prepared; it applies on next launch.",
+    "restore_preview": "Restore preview",
+    "restore_failed": "Backup file or passphrase is invalid."
   }
 }

@@ -176,6 +176,13 @@ enum Command {
         machine_key: String,
         response: SyncSender<Result<WorkspaceBackupParts, String>>,
     },
+    /// 运行期登记加密备份恢复：唯一写线程执行暂存与维护请求登记。
+    StageBackupRestore {
+        archive: Box<crate::encrypted_backup::BackupArchive>,
+        selection: crate::encrypted_backup::BackupSelection,
+        response:
+            SyncSender<Result<crate::persistence::maintenance_request::MaintenanceRequest, String>>,
+    },
     RegisterOperation {
         registration: Box<OperationRegistration>,
         response: SyncSender<Result<RegistrationOutcome, OperationError>>,
@@ -550,6 +557,29 @@ impl WorkspaceWriterClient {
         Ok(result)
     }
 
+    /// 非阻塞登记备份恢复维护请求；调用方只能在后台等待独立回执。
+    pub(crate) fn stage_backup_restore(
+        &self,
+        archive: &crate::encrypted_backup::BackupArchive,
+        selection: crate::encrypted_backup::BackupSelection,
+    ) -> Result<
+        Receiver<Result<crate::persistence::maintenance_request::MaintenanceRequest, String>>,
+        WorkspaceWriterError,
+    > {
+        let (response, result) = mpsc::sync_channel(1);
+        self.commands
+            .try_send(Command::StageBackupRestore {
+                archive: Box::new(archive.clone()),
+                selection,
+                response,
+            })
+            .map_err(|error| match error {
+                TrySendError::Full(_) => WorkspaceWriterError::QueueFull,
+                TrySendError::Disconnected(_) => WorkspaceWriterError::Stopped,
+            })?;
+        Ok(result)
+    }
+
     /// 非阻塞请求一次实际冲刷；结果由后台线程等待，失败可重试。
     pub(crate) fn flush(&self) -> Result<Receiver<WorkspaceFlushReport>, WorkspaceWriterError> {
         let (response, result) = mpsc::sync_channel(1);
@@ -907,6 +937,16 @@ fn run(
                 write_pending(&mut store, &mut pending, &failures, true, &final_states);
                 let _ = response.send(collect_workspace_parts(&mut store, &machine_key));
             }
+            Command::StageBackupRestore {
+                archive,
+                selection,
+                response,
+            } => {
+                write_pending(&mut store, &mut pending, &failures, true, &final_states);
+                let _ = response.send(crate::encrypted_backup::maintenance::stage_restore(
+                    &mut store, &paths, &archive, selection,
+                ));
+            }
             Command::SaveProjectSnapshot { snapshot } => {
                 pending.project_snapshot = Some(PendingProjectSnapshot {
                     snapshot: *snapshot,
@@ -1136,7 +1176,7 @@ fn drain_final_states(final_states: &FinalStateReceivers, pending: &mut PendingW
 
 /// 写到期项或全部项；失败项保留最新副本并取消定时器，等后续修改或显式冲刷重试。
 /// 读取工作区备份所需的全部持久事实；几何只按请求机器读取。
-fn collect_workspace_parts(
+pub(crate) fn collect_workspace_parts(
     store: &mut WorkspaceDatabase,
     machine_key: &str,
 ) -> Result<WorkspaceBackupParts, String> {

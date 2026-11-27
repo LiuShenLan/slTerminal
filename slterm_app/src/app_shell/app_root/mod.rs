@@ -50,6 +50,7 @@ mod settings_reset;
 mod settings_shortcuts_page;
 mod settings_tasks_page;
 mod side_view;
+pub(crate) use side_view::workspace_view_state_registry;
 mod side_view_host;
 mod sidebar;
 mod snapshot;

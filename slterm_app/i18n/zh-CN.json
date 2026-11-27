@@ -23,16 +23,16 @@
     "truncated": "文件超过 8 MB，已截断为只读前缀。",
     "invalid_encoding": "文件不是有效 UTF-8，已只读打开。",
     "encoding_open_title": "无法确定文件编码",
-    "encoding_open_detail": "选择编码重新打开文件；内容解码前不创建面板。",
+    "encoding_open_detail": "选择编码重新打开；解码前不创建面板。",
     "read_only": "只读",
     "language_auto": "自动",
     "wrap": "自动换行",
     "open_system": "使用系统默认程序打开",
-    "reauthorization_required": "文件在项目根外或访问已撤销。读取磁盘内容前需重新授权。",
+    "reauthorization_required": "文件在项目根外或访问已撤销；读取磁盘前需重新授权。",
     "reauthorize": "重新授权",
     "reauthorization_failed": "重新授权失败，文件仍不可读取。",
     "paged_recovery_required": "大文档只在只读分页视图打开；前缀不得作为可编辑正文。",
-    "replaced_recovery": "原文件身份已被替换。旧记录未合并进新 Document，也没有旧正文快照。",
+    "replaced_recovery": "文件身份已被替换；旧记录未合并，也没有旧正文快照。",
     "recovery_unavailable": "保存的文件缺失或无法解码。请关闭面板或重新打开文件。",
     "close_title": "未保存的更改",
     "save": "保存",
@@ -221,7 +221,7 @@
       "saved": "设置已保存",
       "theme_imported": "已导入主题「{name}」",
       "theme_import_failed": "主题导入失败：{error}",
-      "unsupported_version": "设置由更高版本写入（{version}）；当前使用默认值，原文件不会覆盖。",
+      "unsupported_version": "设置来自更高版本（{version}）；当前使用默认值，原文件保留。",
       "invalid_fields": "{count} 项设置的持久值无效，已回退默认值。",
       "read_failed": "设置读取失败；本次运行使用默认值。"
     },
@@ -239,7 +239,7 @@
       "again": "再次点击确认重置",
       "action": "恢复默认设置",
       "group": "重置",
-      "description": "恢复已登记设置的出厂值；未知键与 Agent 授权保留；恢复前先备份原设置。"
+      "description": "恢复出厂值；未知键与 Agent 授权保留，原设置已备份。"
     },
     "appearance": {
       "fonts": "字体与排版",
@@ -318,7 +318,7 @@
     },
     "agents": {
       "integration_group": "AI CLI 接入",
-      "description": "为检测到的 AI CLI 安装生命周期钩子；下方编辑器只修改你自己的 handler。",
+      "description": "为检测到的 AI CLI 安装生命周期钩子；下方只编辑你的 handler。",
       "refresh": "刷新",
       "checking": "检查中…",
       "installed": "已安装",
@@ -561,9 +561,9 @@
     "theme_editor": {
       "group": "主题编辑器",
       "template": "模板",
-      "template_description": "切换模板只替换草稿；来源与已应用运行态不受影响。",
+      "template_description": "切换模板只替换草稿；已应用态不变。",
       "name": "名称",
-      "name_description": "首次保存恒新建主题，不覆盖内置或库内既有主题。",
+      "name_description": "首次保存创建新主题；不覆盖内置与库中主题。",
       "colors": "颜色",
       "background": "背景色",
       "foreground": "前景色",
@@ -667,8 +667,8 @@
     "recovery_side_view_state_repaired": "部分侧栏视图状态无法恢复，受影响视图使用默认状态。",
     "workspace_write_failed": "无法保存工作区状态，最近的项目或布局更改可能无法恢复。",
     "workspace_restored_from_backup": "工作区库损坏，已从有效副本恢复；原件已保留。",
-    "workspace_isolated": "工作区库与其副本均不可恢复。原件已隔离保留；已打开空工作区。",
-    "workspace_repairs": "部分工作区状态未完全恢复（跳过或修复 {count} 项）；无效条目已忽略。",
+    "workspace_isolated": "工作区库及副本均不可恢复；原件已隔离，已打开空工作区。",
+    "workspace_repairs": "部分工作区状态未完全恢复（跳过或修复 {count} 项）。",
     "settings_page_fallback": "保存的设置页不可用；已显示首个可用页。",
     "terminal_cwd_fallback": "终端保存的目录不可用，已回退到所属项目根目录启动。",
     "hook_install_failed": "无法为 {agent} 安装 AI CLI hook",
@@ -701,7 +701,7 @@
     "project_recovery_failed": "无法恢复已保存的布局。原始记录保持原样；请处理损坏数据后重试。",
     "snapshot_recovery_failed": "文档恢复未完成。记录与草稿保持原样；请处理损坏数据后重试。",
     "abandon": "放弃未完成状态…",
-    "abandon_warning": "未完成操作将被放弃而非完成；工作区库诊断副本保留在本地，不可撤销。",
+    "abandon_warning": "放弃未完成操作。工作区库诊断副本保留在本地；不可撤销。",
     "abandon_confirm": "放弃并重新启动",
     "abandon_running": "正在放弃未完成状态…",
     "abandon_failed": "无法放弃未完成状态。请保留数据目录并联系维护者。",
@@ -733,6 +733,10 @@
     "export_failed": "备份失败。",
     "excluded": "永不包含：凭据、Hooks、会话、历史、日志与工作区外文件。",
     "unavailable": "工作区持久化不可用，无法备份。",
-    "passphrase_short": "口令至少需要 8 个字符。"
+    "passphrase_short": "口令至少需要 8 个字符。",
+    "restore": "恢复…",
+    "restore_staged": "恢复已准备，下次启动生效。",
+    "restore_preview": "恢复预览",
+    "restore_failed": "备份文件或口令无效。"
   }
 }
