@@ -241,7 +241,7 @@ mod recovery_tests {
         fs::create_dir_all(paths.config_root().join("themes")).unwrap();
         write_theme(&paths);
 
-        let archive = collect_from(&paths, selection(), None).unwrap();
+        let archive = collect_from(&paths, selection(), None, None).unwrap();
         let packet = seal(&archive, PASSPHRASE).unwrap();
         let opened = open(&packet, PASSPHRASE).unwrap();
         assert_eq!(opened, archive);

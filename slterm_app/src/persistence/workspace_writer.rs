@@ -124,6 +124,15 @@ impl fmt::Display for WorkspaceWriterError {
 
 impl std::error::Error for WorkspaceWriterError {}
 
+/// 工作区备份收集结果：写线程内从持久事实读取，供加密备份逻辑投影。
+#[derive(Clone, Debug)]
+pub(crate) struct WorkspaceBackupParts {
+    pub snapshot: ProjectSnapshot,
+    pub view_states: Vec<(String, String)>,
+    pub sidebar: Option<String>,
+    pub window_geometry: Option<WindowGeometry>,
+}
+
 enum Command {
     SaveViewState {
         key_json: String,
@@ -161,6 +170,11 @@ enum Command {
     QueryOperation {
         operation_id: String,
         response: SyncSender<Result<Option<Operation>, OperationError>>,
+    },
+    /// 工作区备份收集：先冲刷去抖状态，再读取全部持久事实。
+    CollectWorkspaceParts {
+        machine_key: String,
+        response: SyncSender<Result<WorkspaceBackupParts, String>>,
     },
     RegisterOperation {
         registration: Box<OperationRegistration>,
@@ -518,6 +532,24 @@ impl WorkspaceWriterClient {
             })
     }
 
+    /// 非阻塞请求工作区备份收集；调用方只能在后台等待独立回执。
+    pub(crate) fn collect_workspace_parts(
+        &self,
+        machine_key: &str,
+    ) -> Result<Receiver<Result<WorkspaceBackupParts, String>>, WorkspaceWriterError> {
+        let (response, result) = mpsc::sync_channel(1);
+        self.commands
+            .try_send(Command::CollectWorkspaceParts {
+                machine_key: machine_key.to_owned(),
+                response,
+            })
+            .map_err(|error| match error {
+                TrySendError::Full(_) => WorkspaceWriterError::QueueFull,
+                TrySendError::Disconnected(_) => WorkspaceWriterError::Stopped,
+            })?;
+        Ok(result)
+    }
+
     /// 非阻塞请求一次实际冲刷；结果由后台线程等待，失败可重试。
     pub(crate) fn flush(&self) -> Result<Receiver<WorkspaceFlushReport>, WorkspaceWriterError> {
         let (response, result) = mpsc::sync_channel(1);
@@ -867,6 +899,14 @@ fn run(
                     },
                 );
             }
+            Command::CollectWorkspaceParts {
+                machine_key,
+                response,
+            } => {
+                // 先冲刷去抖与终态，收集结果与最新持久事实一致。
+                write_pending(&mut store, &mut pending, &failures, true, &final_states);
+                let _ = response.send(collect_workspace_parts(&mut store, &machine_key));
+            }
             Command::SaveProjectSnapshot { snapshot } => {
                 pending.project_snapshot = Some(PendingProjectSnapshot {
                     snapshot: *snapshot,
@@ -1095,6 +1135,34 @@ fn drain_final_states(final_states: &FinalStateReceivers, pending: &mut PendingW
 }
 
 /// 写到期项或全部项；失败项保留最新副本并取消定时器，等后续修改或显式冲刷重试。
+/// 读取工作区备份所需的全部持久事实；几何只按请求机器读取。
+fn collect_workspace_parts(
+    store: &mut WorkspaceDatabase,
+    machine_key: &str,
+) -> Result<WorkspaceBackupParts, String> {
+    let snapshot = store
+        .load_project_snapshot()
+        .map_err(|error| format!("读取项目快照失败: {error}"))?;
+    let view_states = store
+        .all_view_states()
+        .map_err(|error| format!("读取 ViewState 失败: {error}"))?;
+    let sidebar = store
+        .sidebar_state()
+        .map_err(|error| format!("读取侧栏状态失败: {error}"))?
+        .map(|recovery| recovery.state.to_canonical_json())
+        .transpose()
+        .map_err(|error| format!("侧栏状态编码失败: {error}"))?;
+    let window_geometry = store
+        .window_geometry(machine_key)
+        .map_err(|error| format!("读取窗口几何失败: {error}"))?;
+    Ok(WorkspaceBackupParts {
+        snapshot,
+        view_states,
+        sidebar,
+        window_geometry,
+    })
+}
+
 fn write_pending(
     store: &mut WorkspaceDatabase,
     pending: &mut PendingWrites,

@@ -39,6 +39,28 @@ impl SettingsView {
             .child(language.text(crate::i18n::Message::SettingsResetPage));
         let mut row = div().flex().flex_row().items_center().gap_3().child(reset);
         if page == SettingsPageId::Application {
+            let backup_root = self.root.clone();
+            row = row.child(
+                div()
+                    .id("settings-open-backup")
+                    .debug_selector(|| "settings-open-backup".to_owned())
+                    .pb_1()
+                    .px_2()
+                    .text_xs()
+                    .cursor_pointer()
+                    .text_color(cx.theme().muted_foreground)
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |_view, _, window, cx| {
+                            let _ = backup_root.update(cx, |root, cx| {
+                                if let Err(error) = root.open_backup_dialog(window, cx) {
+                                    log::warn!("备份对话框打开失败: {error:?}");
+                                }
+                            });
+                        }),
+                    )
+                    .child(language.text(crate::i18n::Message::BackupOpen)),
+            );
             let check_root = self.root.clone();
             row = row.child(
                 div()

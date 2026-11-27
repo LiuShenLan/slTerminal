@@ -102,6 +102,20 @@ impl WorkspaceDatabase {
         view_state_in(&self.database.connection, key, registry)
     }
 
+    /// 读取全部视图的持久规范 JSON，供工作区备份逻辑投影使用。
+    ///
+    /// 调用方只在后台写线程或维护期调用；返回原文，不在此解码。
+    pub(crate) fn all_view_states(&self) -> Result<Vec<(String, String)>, ViewStateStoreError> {
+        let mut statement = self
+            .database
+            .connection
+            .prepare("SELECT view_key, state_json FROM view_states ORDER BY view_key")?;
+        let rows = statement.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
     /// 删除一个逻辑视图的持久状态，不影响同作用域的其他视图。
     pub(crate) fn delete_view_state(&mut self, key: &ViewKey) -> Result<bool, ViewStateStoreError> {
         let key_json = key.to_canonical_json()?;

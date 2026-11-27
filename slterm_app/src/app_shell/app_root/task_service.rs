@@ -16,6 +16,8 @@ pub(crate) enum TaskId {
     SettingsExport,
     /// 普通设置导入：后台选择与预检、确认后写盘。
     SettingsImport,
+    /// 加密备份导出：后台收集、密封、目标选择与原子写。
+    BackupExport,
     /// 更新安装包下载：后台流式下载与校验。
     UpdateDownload,
     /// 设置页手动检查更新：后台联网，前台只结算结果。

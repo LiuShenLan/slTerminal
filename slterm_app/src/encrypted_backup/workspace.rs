@@ -459,6 +459,7 @@ mod workspace_backup_tests {
             crate::encrypted_backup::BackupSelection::from_categories([
                 crate::encrypted_backup::BackupCategory::Workspace,
             ]),
+            None,
             Some(&payload),
         )
         .unwrap();

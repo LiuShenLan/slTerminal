@@ -1419,3 +1419,55 @@ fn workspace_writer_drop_flushes_pending_state() {
 
     assert_eq!(read_position(&observer), Some((11, 0)));
 }
+
+/// 工作区备份收集：统一从写线程读取持久事实，几何按机器匹配。
+#[test]
+fn workspace_backup_collection_reads_persisted_facts_on_the_writer() {
+    use std::time::Duration;
+
+    let temp = tempfile::tempdir().unwrap();
+    let paths = fixture(&temp);
+    let writer = WorkspaceWriter::start(paths).unwrap();
+    let client = writer.client();
+    client
+        .save_project_snapshot(&project_snapshot("collected"))
+        .unwrap();
+    client.save_view_state(&key(), &state(9)).unwrap();
+    let sidebar = SidebarState::default();
+    client.save_sidebar_state(&sidebar).unwrap();
+    let geometry = WindowGeometry {
+        x: 7.0,
+        y: 8.0,
+        width: 900.0,
+        height: 600.0,
+        maximized: false,
+        display: None,
+    };
+    client.save_window_geometry("machine-a", &geometry).unwrap();
+    let flushed = client.flush().unwrap().recv().unwrap();
+    assert_eq!(flushed.failed, 0);
+
+    let parts = client
+        .collect_workspace_parts("machine-a")
+        .unwrap()
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        parts.snapshot.registry().projects()[0].display_name(),
+        "collected"
+    );
+    assert_eq!(parts.view_states.len(), 1);
+    assert!(parts.view_states[0].0.contains("side_view"));
+    assert!(parts.sidebar.is_some());
+    assert_eq!(parts.window_geometry.unwrap().x, 7.0);
+
+    let other = client
+        .collect_workspace_parts("machine-b")
+        .unwrap()
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+    assert!(other.window_geometry.is_none(), "跨机几何不得收集");
+    writer.shutdown().unwrap();
+}

@@ -15,6 +15,8 @@
 - **恢复序**：完整鉴权 → 全量校验 → 才允许落盘；任一条不过整单拒写。原因：半份不可信报文不得产生副作用。
 - **维护期应用与回滚**：运行期只把所选类别投影为 DPAPI CurrentUser 加密的 staged 材料并登记 `backup.restore` 维护请求（先登记 owner 行、后原子写材料，写失败撤销 Prepared owner；指纹绑定密文、口令与解密明文不落盘；`maintenance/`、请求目录、恢复点目录与文件均收敛为当前用户显式 DACL 并切断继承）；应用在启动维护期进行：先采原现场并写 DPAPI 恢复点 → `Applying` → 逐项写入（设置经 `settings_store` 合并，其余原子写）→ 成功才在同一 Immediate 事务内轮换 `store_epoch` 并置 `Applied` → 清理恢复点与 staged：先删材料再清登记，删除失败保留可判定的阻断事实。暂存、逐项应用、恢复点、提交、回滚与清理都只经 `audit` 记录 operation/path/source/result。任一项写入失败立即全回滚并置 `RolledBack`；回滚失败或材料不可信（指纹/内容/恢复点集合不符）置 `NeedsAttention` 并保留材料。重启遇到 `Applying` 只按恢复点回滚、不重放未知副作用。原因：恢复必须一次要么完整生效要么回到原位，且旧世代写在恢复后必须全部失效。边界：staged 内容与恢复点行必须双向一致；清理失败保留阻断事实，不得静默忽略。
 
+- **导出入口**：设置「应用」页的备份对话框只发起任务；设置类别取运行态 `settings_transfer` 白名单投影，工作区类别经 `WorkspaceWriterClient::collect_workspace_parts` 在唯一写线程先冲刷去抖状态再读取项目快照、ViewState、侧栏与几何。密封与用户目标选择都在后台，写盘只经 `atomic_file`；口令只在本次任务内存中存在。原因：导出必须反映最新生效事实，且不得在前台等待数据库或口令处理之外的文件操作。边界：无 writer 时明确不可用，不降级读取库文件；收集结果与归档条目同批校验，失败零写入。
+
 ## 验收与测试
 
 - 定向测试：`cargo test -p slterm --test lib_tests <filter> -- --test-threads=1`；禁止 `--lib` 或裸 filter 直打默认 lib target。

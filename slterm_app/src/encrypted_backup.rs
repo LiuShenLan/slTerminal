@@ -284,14 +284,21 @@ fn decrypt_bytes(packet: &[u8], passphrase: &str) -> Result<Zeroizing<Vec<u8>>, 
 /// 按选择集收集双数据根的白名单文件与运行态工作区投影。
 pub(crate) fn collect(
     selection: BackupSelection,
+    settings: Option<&[u8]>,
     workspace: Option<&workspace::WorkspaceBackup>,
 ) -> Result<BackupArchive, String> {
-    collect_from(crate::platform::dirs::app_paths(), selection, workspace)
+    collect_from(
+        crate::platform::dirs::app_paths(),
+        selection,
+        settings,
+        workspace,
+    )
 }
 
 fn collect_from(
     paths: &AppPaths,
     selection: BackupSelection,
+    settings: Option<&[u8]>,
     workspace: Option<&workspace::WorkspaceBackup>,
 ) -> Result<BackupArchive, String> {
     if selection.is_empty() {
@@ -302,13 +309,24 @@ fn collect_from(
         match category {
             BackupCategory::Settings => {
                 let root = category_root(paths, category);
-                add_file(
-                    root,
-                    category,
-                    "settings.json",
-                    &mut entries,
-                    filter_settings,
-                )?;
+                // 运行态投影优先：导出反映本次运行已生效的设置。
+                match settings {
+                    Some(bytes) => {
+                        let filtered = filter_settings(bytes.to_vec())?;
+                        entries.push(BackupEntry {
+                            category,
+                            name: "settings.json".to_owned(),
+                            bytes: filtered,
+                        });
+                    }
+                    None => add_file(
+                        root,
+                        category,
+                        "settings.json",
+                        &mut entries,
+                        filter_settings,
+                    )?,
+                }
                 add_themes(root, category, &mut entries)?;
             }
             BackupCategory::Workspace => {
@@ -727,6 +745,7 @@ mod encrypted_backup_tests {
             &paths,
             BackupSelection::from_categories([BackupCategory::Settings]),
             None,
+            None,
         )
         .unwrap();
         let settings = archive
@@ -767,6 +786,7 @@ mod encrypted_backup_tests {
             &paths,
             BackupSelection::from_categories([BackupCategory::Settings]),
             None,
+            None,
         )
         .unwrap();
         assert!(
@@ -801,6 +821,7 @@ mod encrypted_backup_tests {
         let archive = collect_from(
             &paths,
             BackupSelection::from_categories([BackupCategory::Settings]),
+            None,
             None,
         )
         .unwrap();
@@ -842,6 +863,7 @@ mod encrypted_backup_tests {
                     settings: false,
                     workspace: false
                 },
+                None,
                 None,
             )
             .is_err()
@@ -998,6 +1020,7 @@ mod encrypted_backup_tests {
             &single_root_paths(root),
             BackupSelection::from_categories([BackupCategory::Settings]),
             None,
+            None,
         )
         .expect("收集");
         let names: HashSet<_> = archive
@@ -1063,6 +1086,7 @@ mod encrypted_backup_tests {
             &paths,
             BackupSelection::from_categories([BackupCategory::Settings]),
             None,
+            None,
         )
         .unwrap();
         let names: HashSet<_> = archive
@@ -1098,6 +1122,7 @@ mod encrypted_backup_tests {
             &single_root_paths(directory.path()),
             BackupSelection::from_categories([BackupCategory::Settings]),
             None,
+            None,
         )
         .expect_err("非法主题必须中止备份");
         assert!(error.contains("主题"), "{error}");
@@ -1114,6 +1139,7 @@ mod encrypted_backup_tests {
                     workspace: false
                 },
                 None,
+                None,
             )
             .is_err()
         );
@@ -1122,6 +1148,7 @@ mod encrypted_backup_tests {
             collect_from(
                 &single_root_paths(directory.path()),
                 BackupSelection::from_categories([BackupCategory::Settings]),
+                None,
                 None,
             )
             .is_err(),
@@ -1133,6 +1160,7 @@ mod encrypted_backup_tests {
             collect_from(
                 &single_root_paths(directory.path()),
                 BackupSelection::from_categories([BackupCategory::Settings]),
+                None,
                 None,
             )
             .is_err(),

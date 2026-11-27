@@ -40,6 +40,7 @@ mod runtime_snapshot;
 mod runtime_snapshot_persist;
 mod save_conflict;
 mod settings_agents;
+mod settings_backup;
 mod settings_controls;
 mod settings_export;
 mod settings_import;
@@ -277,6 +278,8 @@ pub(crate) struct AppRoot {
     nav_history_generation: u64,
     nav_restore_confirm: Option<nav::NavRestoreConfirm>,
     settings_import: Option<settings_import::PendingSettingsImport>,
+    /// 加密备份导出对话框：类别、口令与导出进度。
+    backup_dialog: Option<settings_backup::BackupDialog>,
     update_prompt: Option<update_prompt::UpdatePrompt>,
     /// 重定位事务在途：候选根尚未被事务确认，其他快照命令不得覆盖。
     project_relocation_in_flight: Option<ProjectId>,
@@ -630,6 +633,7 @@ impl AppRoot {
             nav_history_generation: 0,
             nav_restore_confirm: None,
             settings_import: None,
+            backup_dialog: None,
             update_prompt: None,
             project_relocation_in_flight: None,
             pending_project_relocation: None,

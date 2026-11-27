@@ -397,3 +397,111 @@ fn settings_task_interval_accepts_valid_and_rejects_out_of_range(cx: &mut TestAp
         );
     });
 }
+
+/// 设置「应用」页提供加密备份入口，类别与口令面可见。
+#[gpui::test]
+fn settings_application_page_offers_backup_dialog(cx: &mut TestAppContext) {
+    let (root, mut window, _state) = open_root(cx);
+    focus_workspace(&root, &mut window);
+    open_settings(&mut window);
+    draw_frame(&mut window);
+    assert!(window.debug_bounds("settings-open-backup").is_none());
+
+    let page = window.debug_bounds("settings-page-application").unwrap();
+    window.simulate_click(page.center(), Modifiers::default());
+    draw_frame(&mut window);
+    let open = window.debug_bounds("settings-open-backup").unwrap();
+    window.simulate_click(open.center(), Modifiers::default());
+    draw_frame(&mut window);
+    assert!(window.debug_bounds("backup-dialog").is_some());
+    assert!(window.debug_bounds("backup-category-settings").is_some());
+    assert!(window.debug_bounds("backup-category-workspace").is_some());
+    assert!(window.debug_bounds("backup-export").is_some());
+
+    window.simulate_keystrokes("escape");
+    draw_frame(&mut window);
+    assert!(window.debug_bounds("backup-dialog").is_none());
+}
+
+/// 加密备份导出：短口令拒绝，合法口令写出可解封归档。
+#[gpui::test]
+fn backup_export_rejects_short_passphrase_and_writes_archive(cx: &mut TestAppContext) {
+    use crate::persistence::workspace_writer::WorkspaceWriter;
+    use crate::platform::windows_integration::FakeWindowsIntegration;
+    use std::sync::Arc;
+
+    let temp = tempfile::tempdir().unwrap();
+    let target = temp.path().join("workspace.sltmbk");
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let writer = WorkspaceWriter::start(paths.clone()).unwrap();
+    let windows = Arc::new(FakeWindowsIntegration::default());
+    windows.set_save_target(Some(target.clone()));
+    let persistence = AppRootPersistence::load(&paths, Some(writer.client()));
+    let (root, mut window) = open_root_with_windows(cx, persistence, windows);
+    focus_workspace(&root, &mut window);
+    open_settings(&mut window);
+    draw_frame(&mut window);
+    let page = window.debug_bounds("settings-page-application").unwrap();
+    window.simulate_click(page.center(), Modifiers::default());
+    draw_frame(&mut window);
+    let open = window.debug_bounds("settings-open-backup").unwrap();
+    window.simulate_click(open.center(), Modifiers::default());
+    draw_frame(&mut window);
+
+    window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.set_backup_passphrase_for_test("short", window, cx);
+        });
+    });
+    let export = window.debug_bounds("backup-export").unwrap();
+    window.simulate_click(export.center(), Modifiers::default());
+    draw_frame(&mut window);
+    assert!(!target.exists(), "短口令不得写盘");
+    assert!(window.debug_bounds("backup-dialog").is_some());
+
+    window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.set_backup_passphrase_for_test("correct horse", window, cx);
+        });
+    });
+    let export = window.debug_bounds("backup-export").unwrap();
+    window.simulate_click(export.center(), Modifiers::default());
+    for _ in 0..80 {
+        window.run_until_parked();
+        cx.run_until_parked();
+        if target.exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    let bytes = std::fs::read(&target).expect("备份目标必须写盘");
+    let archive = crate::encrypted_backup::open(&bytes, "correct horse").expect("归档可解封");
+    assert!(
+        archive
+            .manifest
+            .categories
+            .contains(&crate::encrypted_backup::BackupCategory::Settings)
+    );
+    assert!(
+        archive
+            .manifest
+            .categories
+            .contains(&crate::encrypted_backup::BackupCategory::Workspace)
+    );
+    let workspace_entry = archive
+        .entries
+        .iter()
+        .find(|entry| entry.name == crate::encrypted_backup::workspace::WORKSPACE_ENTRY_NAME)
+        .expect("工作区条目必须存在");
+    let workspace =
+        crate::encrypted_backup::workspace::decode_workspace(&workspace_entry.bytes).unwrap();
+    assert_eq!(
+        workspace.source_machine,
+        crate::platform::machine::machine_key()
+    );
+    draw_frame(&mut window);
+    assert!(
+        window.debug_bounds("backup-dialog").is_none(),
+        "成功后关闭对话框"
+    );
+}
