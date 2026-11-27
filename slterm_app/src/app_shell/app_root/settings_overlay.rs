@@ -1302,6 +1302,58 @@ impl Render for SettingsView {
                             .child(div().flex_grow(1.0))
                             .child(
                                 div()
+                                    .id("settings-import")
+                                    .debug_selector(|| "settings-import".to_owned())
+                                    .mx_2()
+                                    .mb_1()
+                                    .px_2()
+                                    .py_1()
+                                    .text_xs()
+                                    .cursor_pointer()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|view, _, window, cx| {
+                                            let root = view.root.clone();
+                                            let _ = root.update(cx, |root, cx| {
+                                                root.start_import_settings(window, cx);
+                                            });
+                                        }),
+                                    )
+                                    .child(
+                                        cx.global::<crate::app_shell::config::Settings>()
+                                            .language
+                                            .text(crate::i18n::Message::SettingsImport),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .id("settings-export")
+                                    .debug_selector(|| "settings-export".to_owned())
+                                    .mx_2()
+                                    .mb_1()
+                                    .px_2()
+                                    .py_1()
+                                    .text_xs()
+                                    .cursor_pointer()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|view, _, window, cx| {
+                                            let root = view.root.clone();
+                                            let _ = root.update(cx, |root, cx| {
+                                                root.start_export_settings(window, cx);
+                                            });
+                                        }),
+                                    )
+                                    .child(
+                                        cx.global::<crate::app_shell::config::Settings>()
+                                            .language
+                                            .text(crate::i18n::Message::SettingsExport),
+                                    ),
+                            )
+                            .child(
+                                div()
                                     .id("settings-restore-all")
                                     .debug_selector(|| "settings-restore-all".to_owned())
                                     .mx_2()

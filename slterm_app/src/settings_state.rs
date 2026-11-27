@@ -340,6 +340,16 @@ impl SettingsStore {
         &self.values
     }
 
+    /// 导入写盘成功后采纳同一批更新：覆盖内存值与待写，不再二次写盘。
+    pub(crate) fn adopt_imported(&mut self, updates: &[(&'static str, Value)]) {
+        self.values = self.values.with_updates(updates);
+        for (key, _) in updates {
+            self.pending.remove(*key);
+        }
+        self.saved_once = true;
+        self.persist_failed = false;
+    }
+
     /// 自动保存字段：立即生效并进入待写；未知键拒绝（控件只来自注册表）。
     pub(crate) fn set_auto(&mut self, key: &'static str, value: Value, now: Instant) -> bool {
         if keys::lookup(key).is_none() {

@@ -205,7 +205,7 @@
       "terminal": "终端",
       "agent_basic": "基础配置",
       "group_global": "全局",
-      "nav_search": "过滤设置"
+      "nav_search": "过滤"
     },
     "status": {
       "corrupted": "配置文件损坏，已回退到备份或默认值；损坏原件已保留。",
@@ -594,7 +594,7 @@
       "unsaved": "未保存"
     },
     "tasks": {
-      "agent_screen_watchdog": "屏幕看门狗与托盘快照",
+      "agent_screen_watchdog": "屏幕看门狗",
       "auto_update_check": "自动更新检查",
       "auto_update_download": "后台下载更新",
       "plan_balance": "套餐余量查询",
@@ -603,7 +603,7 @@
       "on_demand": "按需",
       "enabled": "启用"
     },
-    "reset_page": "恢复本页默认",
+    "reset_page": "恢复本页",
     "shortcuts": {
       "group_global": "全局",
       "group_terminal": "终端",
@@ -640,7 +640,12 @@
       "adjust_sidebar_ratio_down_large": "大幅下移侧栏分隔",
       "reset_sidebar_ratio": "重置侧栏比例"
     },
-    "restore_all": "恢复所有设置默认"
+    "restore_all": "全部恢复",
+    "export": "导出设置",
+    "import": "导入设置",
+    "import_preview_title": "导入设置？",
+    "import_preview_detail": "更新 {count} 项设置？上一代文件保留为备份。",
+    "import_confirm": "导入"
   },
   "notify": {
     "bell": "终端响铃",
@@ -664,7 +669,11 @@
     "settings_page_fallback": "上次的设置页在当前宿主不可用，已显示首个可用页。",
     "terminal_cwd_fallback": "终端保存的目录不可用，已回退到所属项目根目录启动。",
     "hook_install_failed": "无法为 {agent} 安装 AI CLI hook",
-    "hook_settings_unreadable": "无法读取 AI hook 设置，自愈已跳过"
+    "hook_settings_unreadable": "无法读取 AI hook 设置，自愈已跳过",
+    "settings_exported": "已导出。",
+    "settings_export_failed": "导出失败。",
+    "settings_imported": "已导入。",
+    "settings_import_failed": "导入失败。"
   },
   "tray": {
     "show_window": "显示 {app}",

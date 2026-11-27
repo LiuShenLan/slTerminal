@@ -642,6 +642,58 @@ pub(crate) fn notify_workspace_write_failed(cx: &mut App) {
     );
 }
 
+pub(crate) fn notify_settings_imported(cx: &mut App) {
+    let language = cx.global::<crate::app_shell::config::Settings>().language;
+    crate::notify::deliver_process_alert(
+        &crate::notify::Notification::ProcessAlert {
+            text: language
+                .text(crate::i18n::Message::NotifySettingsImported)
+                .to_owned(),
+            severity: crate::notify::AlertSeverity::Info,
+        },
+        cx,
+    );
+}
+
+pub(crate) fn notify_settings_import_failed(cx: &mut App) {
+    let language = cx.global::<crate::app_shell::config::Settings>().language;
+    crate::notify::deliver_process_alert(
+        &crate::notify::Notification::ProcessAlert {
+            text: language
+                .text(crate::i18n::Message::NotifySettingsImportFailed)
+                .to_owned(),
+            severity: crate::notify::AlertSeverity::Error,
+        },
+        cx,
+    );
+}
+
+pub(crate) fn notify_settings_exported(cx: &mut App) {
+    let language = cx.global::<crate::app_shell::config::Settings>().language;
+    crate::notify::deliver_process_alert(
+        &crate::notify::Notification::ProcessAlert {
+            text: language
+                .text(crate::i18n::Message::NotifySettingsExported)
+                .to_owned(),
+            severity: crate::notify::AlertSeverity::Info,
+        },
+        cx,
+    );
+}
+
+pub(crate) fn notify_settings_export_failed(cx: &mut App) {
+    let language = cx.global::<crate::app_shell::config::Settings>().language;
+    crate::notify::deliver_process_alert(
+        &crate::notify::Notification::ProcessAlert {
+            text: language
+                .text(crate::i18n::Message::NotifySettingsExportFailed)
+                .to_owned(),
+            severity: crate::notify::AlertSeverity::Error,
+        },
+        cx,
+    );
+}
+
 pub(crate) fn notify_project_relocation_failed(cx: &mut App) {
     let language = cx.global::<crate::app_shell::config::Settings>().language;
     crate::notify::deliver_process_alert(

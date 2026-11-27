@@ -54,6 +54,18 @@ pub(crate) trait WindowsIntegration: Send + Sync {
         suggested: &Path,
     ) -> std::io::Result<Option<PathBuf>>;
 
+    /// 文件选择的原生入口；取消返回 None。只能在后台执行体调用。
+    fn pick_open_file(
+        &self,
+        _owner: Option<isize>,
+        _start: Option<&Path>,
+    ) -> std::io::Result<Option<PathBuf>> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "平台不支持文件选择",
+        ))
+    }
+
     /// 目录选择的原生入口；取消返回 None。只能在后台执行体调用。
     fn pick_folder(
         &self,
@@ -238,6 +250,14 @@ impl WindowsIntegration for SystemWindowsIntegration {
         start: Option<&Path>,
     ) -> std::io::Result<Option<PathBuf>> {
         crate::platform::folder_dialog::pick_folder(owner, start)
+    }
+
+    fn pick_open_file(
+        &self,
+        owner: Option<isize>,
+        start: Option<&Path>,
+    ) -> std::io::Result<Option<PathBuf>> {
+        crate::platform::folder_dialog::pick_open_file(owner, start)
     }
 }
 
@@ -447,6 +467,7 @@ struct FakeState {
     taskbar_progress: Vec<crate::taskbar::TaskProgress>,
     save_target: Option<PathBuf>,
     folder_target: Option<PathBuf>,
+    open_file_target: Option<PathBuf>,
 }
 
 #[cfg(test)]
@@ -462,6 +483,7 @@ impl Default for FakeState {
             taskbar_progress: Vec::new(),
             save_target: None,
             folder_target: None,
+            open_file_target: None,
         }
     }
 }
@@ -490,6 +512,11 @@ impl FakeWindowsIntegration {
     /// 设定目录选择的固定答案；None = 用户取消。
     pub(crate) fn set_folder_target(&self, target: Option<PathBuf>) {
         self.lock().folder_target = target;
+    }
+
+    /// 设定文件选择的固定答案；None = 用户取消。
+    pub(crate) fn set_open_file_target(&self, target: Option<PathBuf>) {
+        self.lock().open_file_target = target;
     }
 
     pub(crate) fn set_actual_state(&self, state: LoginStartState) {
@@ -583,5 +610,13 @@ impl WindowsIntegration for FakeWindowsIntegration {
         _start: Option<&Path>,
     ) -> std::io::Result<Option<PathBuf>> {
         Ok(self.lock().folder_target.clone())
+    }
+
+    fn pick_open_file(
+        &self,
+        _owner: Option<isize>,
+        _start: Option<&Path>,
+    ) -> std::io::Result<Option<PathBuf>> {
+        Ok(self.lock().open_file_target.clone())
     }
 }

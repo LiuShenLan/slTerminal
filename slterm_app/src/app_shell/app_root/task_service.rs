@@ -12,6 +12,10 @@ pub(crate) enum TaskId {
     ShellEvents,
     /// 设置去抖批量的后台写盘；前台只提交快照与结算回执。
     SettingsSave,
+    /// 普通设置导出：后台选择目标并原子写版本化信封。
+    SettingsExport,
+    /// 普通设置导入：后台选择与预检、确认后写盘。
+    SettingsImport,
     /// 读取失败后的显式重试：后台重读设置文件并重建快照。
     SettingsLoad,
     /// 自定义主题定义的冷路径预载；热应用只查缓存。

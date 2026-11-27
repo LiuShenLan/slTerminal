@@ -23,6 +23,8 @@ pub(crate) enum SettingsImportError {
     UnknownKey(String),
     NotExportable(String),
     InvalidValue(String),
+    /// 文件不是可解析的导出信封。
+    Malformed,
 }
 
 /// 导出当前生效值中属于导出白名单的字段；缺失键不合成默认值。
@@ -39,6 +41,124 @@ pub(crate) fn export_settings(raw: &RawSettings) -> SettingsExport {
         version: SETTINGS_EXPORT_VERSION,
         settings,
     }
+}
+
+/// 导出信封序列化：稳定键序与合法 JSON，数值按最短表示输出。
+pub(crate) fn export_json(export: &SettingsExport) -> String {
+    let mut out = String::from(
+        "{
+  \"version\": ",
+    );
+    out.push_str(&export.version.to_string());
+    out.push_str(
+        ",
+  \"settings\": {",
+    );
+    for (index, (key, value)) in export.settings.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        out.push_str(
+            "
+    ",
+        );
+        out.push_str(&json_string(key));
+        out.push_str(": ");
+        push_json_value(&mut out, value);
+    }
+    if !export.settings.is_empty() {
+        out.push_str(
+            "
+  ",
+        );
+    }
+    out.push_str(
+        "}
+}
+",
+    );
+    out
+}
+
+/// 导出信封解析：只接受当前结构；字段值随后仍须经导入校验。
+pub(crate) fn parse_export(bytes: &[u8]) -> Result<SettingsExport, SettingsImportError> {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct WireExport {
+        version: u32,
+        settings: BTreeMap<String, serde_json::Value>,
+    }
+    let wire: WireExport =
+        serde_json::from_slice(bytes).map_err(|_| SettingsImportError::Malformed)?;
+    let mut settings = BTreeMap::new();
+    for (key, value) in wire.settings {
+        settings.insert(key, json_to_value(value)?);
+    }
+    Ok(SettingsExport {
+        version: wire.version,
+        settings,
+    })
+}
+
+fn json_string(text: &str) -> String {
+    serde_json::to_string(text).expect("字符串必须可序列化")
+}
+
+fn push_json_value(out: &mut String, value: &Value) {
+    match value {
+        Value::Null => out.push_str("null"),
+        Value::Bool(flag) => out.push_str(if *flag { "true" } else { "false" }),
+        Value::Number(number) => {
+            let number = serde_json::Number::from_f64(*number).expect("设置数值不得为 NaN 或无穷");
+            out.push_str(&number.to_string());
+        }
+        Value::String(text) => out.push_str(&json_string(text)),
+        Value::Array(items) => {
+            out.push('[');
+            for (index, item) in items.iter().enumerate() {
+                if index > 0 {
+                    out.push_str(", ");
+                }
+                push_json_value(out, item);
+            }
+            out.push(']');
+        }
+        Value::Object(entries) => {
+            out.push('{');
+            for (index, (key, item)) in entries.iter().enumerate() {
+                if index > 0 {
+                    out.push_str(", ");
+                }
+                out.push_str(&json_string(key));
+                out.push_str(": ");
+                push_json_value(out, item);
+            }
+            out.push('}');
+        }
+    }
+}
+
+fn json_to_value(value: serde_json::Value) -> Result<Value, SettingsImportError> {
+    Ok(match value {
+        serde_json::Value::Null => Value::Null,
+        serde_json::Value::Bool(flag) => Value::Bool(flag),
+        serde_json::Value::Number(number) => {
+            Value::Number(number.as_f64().ok_or(SettingsImportError::Malformed)?)
+        }
+        serde_json::Value::String(text) => Value::String(text),
+        serde_json::Value::Array(items) => Value::Array(
+            items
+                .into_iter()
+                .map(json_to_value)
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+        serde_json::Value::Object(entries) => Value::Object(
+            entries
+                .into_iter()
+                .map(|(key, value)| Ok((key, json_to_value(value)?)))
+                .collect::<Result<Vec<_>, SettingsImportError>>()?,
+        ),
+    })
 }
 
 /// 导入校验：版本、登记、导出资格与字段校验全部通过才返回更新项。
@@ -71,6 +191,27 @@ mod tests {
 
     fn raw(text: &str) -> RawSettings {
         RawSettings::from_json_bytes(text.as_bytes())
+    }
+
+    /// 导出信封稳定序列化后可原样解析；错误结构被拒绝。
+    #[test]
+    fn export_json_round_trips_and_rejects_malformed_documents() {
+        let source = raw(
+            r#"{"appearance":{"theme":"Nord","font_size":14.0},"system":{"desktop_notifications":false}}"#,
+        );
+        let export = export_settings(&source);
+        let json = export_json(&export);
+        let parsed = parse_export(json.as_bytes()).unwrap();
+        assert_eq!(parsed, export);
+        assert!(json.contains("\"version\": 1"));
+        assert_eq!(
+            parse_export(b"{not json"),
+            Err(SettingsImportError::Malformed)
+        );
+        assert_eq!(
+            parse_export(br#"{"version":1,"settings":{},"extra":true}"#),
+            Err(SettingsImportError::Malformed)
+        );
     }
 
     /// 导出只含白名单；未知版本、未知键、未导出键与非法值全部拒绝。

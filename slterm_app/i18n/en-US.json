@@ -205,7 +205,7 @@
       "terminal": "Terminal",
       "agent_basic": "Basic Configuration",
       "group_global": "Global",
-      "nav_search": "Filter settings"
+      "nav_search": "Filter"
     },
     "status": {
       "corrupted": "The settings file was corrupted; backup or defaults were loaded and the original kept.",
@@ -594,16 +594,16 @@
       "unsaved": "Unsaved"
     },
     "tasks": {
-      "agent_screen_watchdog": "Screen watchdog and tray snapshot",
-      "auto_update_check": "Automatic update check",
-      "auto_update_download": "Background update download",
-      "plan_balance": "Plan balance query",
+      "agent_screen_watchdog": "Screen watchdog",
+      "auto_update_check": "Update check",
+      "auto_update_download": "Update download",
+      "plan_balance": "Plan balance",
       "interval": "Every {seconds} s",
       "startup_delay": "{seconds} s after startup",
       "on_demand": "On demand",
       "enabled": "Enabled"
     },
-    "reset_page": "Reset page to defaults",
+    "reset_page": "Reset page",
     "shortcuts": {
       "group_global": "Global",
       "group_terminal": "Terminal",
@@ -640,7 +640,12 @@
       "adjust_sidebar_ratio_down_large": "Move sidebar divider down a lot",
       "reset_sidebar_ratio": "Reset sidebar ratio"
     },
-    "restore_all": "Reset all settings"
+    "restore_all": "Reset all",
+    "export": "Export settings",
+    "import": "Import settings",
+    "import_preview_title": "Import settings?",
+    "import_preview_detail": "Update {count} settings? The previous file is kept as a backup.",
+    "import_confirm": "Import"
   },
   "notify": {
     "bell": "Terminal bell",
@@ -664,7 +669,11 @@
     "settings_page_fallback": "The saved settings page is unavailable in this context; showing the first available page.",
     "terminal_cwd_fallback": "A saved terminal directory was unavailable. The terminal was started at its project root.",
     "hook_install_failed": "Could not install AI CLI hooks for {agent}",
-    "hook_settings_unreadable": "AI hook settings could not be read; self-healing was skipped"
+    "hook_settings_unreadable": "AI hook settings could not be read; self-healing was skipped",
+    "settings_exported": "Exported.",
+    "settings_export_failed": "Export failed.",
+    "settings_imported": "Imported.",
+    "settings_import_failed": "Import failed."
   },
   "tray": {
     "show_window": "Show {app}",

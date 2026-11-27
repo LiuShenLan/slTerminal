@@ -2,6 +2,7 @@
 
 use slterm_settings::json::Value;
 
+use super::nav::open_root_with_windows;
 use super::*;
 
 fn open_settings(window: &mut VisualTestContext) {
@@ -232,5 +233,107 @@ fn settings_restore_all_resets_fields_and_tasks(cx: &mut TestAppContext) {
     assert_eq!(
         crate::background_tasks::interval_sec(crate::background_tasks::PLAN_BALANCE),
         60
+    );
+}
+
+/// 导出设置：后台选择目标并写出可解析的版本化信封。
+#[gpui::test]
+fn settings_export_writes_versioned_envelope(cx: &mut TestAppContext) {
+    use crate::platform::windows_integration::FakeWindowsIntegration;
+    use std::sync::Arc;
+
+    let temp = tempfile::tempdir().unwrap();
+    let target = temp.path().join("settings-export.json");
+    let windows = Arc::new(FakeWindowsIntegration::default());
+    windows.set_save_target(Some(target.clone()));
+    let (root, mut window) = open_root_with_windows(cx, AppRootPersistence::empty(None), windows);
+    focus_workspace(&root, &mut window);
+    open_settings(&mut window);
+    draw_frame(&mut window);
+    root.update(cx, |root, cx| {
+        root.apply_settings_field("theme", Value::String("Nord".to_owned()), cx);
+    });
+    draw_frame(&mut window);
+
+    let export = window.debug_bounds("settings-export").unwrap();
+    window.simulate_click(export.center(), Modifiers::default());
+    for _ in 0..6 {
+        window.run_until_parked();
+        cx.run_until_parked();
+    }
+
+    let bytes = std::fs::read(&target).expect("导出目标必须写盘");
+    let parsed = crate::settings_transfer::parse_export(&bytes).expect("导出信封必须可解析");
+    assert_eq!(
+        parsed.version,
+        crate::settings_transfer::SETTINGS_EXPORT_VERSION
+    );
+    assert_eq!(
+        parsed.settings.get("theme"),
+        Some(&Value::String("Nord".to_owned())),
+        "导出必须包含当前生效的非敏感字段"
+    );
+}
+
+/// 导入设置：预检后先预览，确认写盘成功才应用运行值。
+#[gpui::test]
+fn settings_import_previews_and_applies_after_write(cx: &mut TestAppContext) {
+    use crate::platform::windows_integration::FakeWindowsIntegration;
+    use std::sync::Arc;
+
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("settings-import.json");
+    let export = crate::settings_transfer::SettingsExport {
+        version: crate::settings_transfer::SETTINGS_EXPORT_VERSION,
+        settings: std::collections::BTreeMap::from([(
+            "theme".to_owned(),
+            Value::String("Nord".to_owned()),
+        )]),
+    };
+    std::fs::write(&source, crate::settings_transfer::export_json(&export)).unwrap();
+    let windows = Arc::new(FakeWindowsIntegration::default());
+    windows.set_open_file_target(Some(source));
+    let (root, mut window) = open_root_with_windows(cx, AppRootPersistence::empty(None), windows);
+    focus_workspace(&root, &mut window);
+    open_settings(&mut window);
+    draw_frame(&mut window);
+
+    let import = window.debug_bounds("settings-import").unwrap();
+    window.simulate_click(import.center(), Modifiers::default());
+    for _ in 0..6 {
+        window.run_until_parked();
+        cx.run_until_parked();
+    }
+    draw_frame(&mut window);
+    assert!(
+        window.debug_bounds("settings-import-preview").is_some(),
+        "确认前必须显示导入预览"
+    );
+    root.read_with(cx, |root, _| {
+        assert_eq!(
+            root.settings.values().persisted_value("theme"),
+            None,
+            "确认前不得改变运行值"
+        );
+    });
+
+    let confirm = window.debug_bounds("settings-import-confirm").unwrap();
+    window.simulate_click(confirm.center(), Modifiers::default());
+    for _ in 0..6 {
+        window.run_until_parked();
+        cx.run_until_parked();
+    }
+    draw_frame(&mut window);
+
+    root.read_with(cx, |root, _| {
+        assert_eq!(
+            root.settings.values().persisted_value("theme"),
+            Some(&Value::String("Nord".to_owned())),
+            "写盘成功后必须应用导入值"
+        );
+    });
+    assert!(
+        window.debug_bounds("settings-import-preview").is_none(),
+        "确认后预览必须收合"
     );
 }

@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance, CoTaskMemFree};
 use windows::Win32::UI::Shell::{
-    FOS_FORCEFILESYSTEM, FOS_PICKFOLDERS, FileOpenDialog, IFileOpenDialog, IShellItem,
-    SHCreateItemFromParsingName, SIGDN_FILESYSPATH,
+    FOS_FILEMUSTEXIST, FOS_FORCEFILESYSTEM, FOS_PICKFOLDERS, FileOpenDialog, IFileOpenDialog,
+    IShellItem, SHCreateItemFromParsingName, SIGDN_FILESYSPATH,
 };
 use windows::core::HSTRING;
 
@@ -58,6 +58,51 @@ pub(crate) fn pick_folder(
         let text = name
             .to_string()
             .map_err(|_| io::Error::other("目录路径不是有效 Unicode"))?;
+        CoTaskMemFree(Some(name.0 as *const _));
+        Ok(Some(PathBuf::from(text)))
+    }
+}
+
+/// 用户选定的既有文件；`None` = 取消。
+pub(crate) fn pick_open_file(
+    owner: Option<isize>,
+    start: Option<&Path>,
+) -> io::Result<Option<PathBuf>> {
+    let _apartment = ComApartment::initialize()?;
+    // SAFETY: 调用线程已初始化 STA；owner 是仍存活的主窗句柄或空值。
+    unsafe {
+        let dialog: IFileOpenDialog = CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER)
+            .map_err(|error| com_error(error.code(), "打开文件对话框"))?;
+        let options = dialog
+            .GetOptions()
+            .map_err(|error| com_error(error.code(), "打开文件对话框"))?;
+        dialog
+            .SetOptions(options | FOS_FORCEFILESYSTEM | FOS_FILEMUSTEXIST)
+            .map_err(|error| com_error(error.code(), "打开文件对话框"))?;
+        if let Some(start) = start {
+            let folder: windows::core::Result<IShellItem> =
+                SHCreateItemFromParsingName(&HSTRING::from(start.as_os_str()), None);
+            if let Ok(folder) = folder {
+                let _ = dialog.SetFolder(&folder);
+            }
+        }
+        let hwnd = owner.map(|handle| HWND(handle as *mut _));
+        if let Err(error) = dialog.Show(hwnd) {
+            return if is_cancelled(error.code()) {
+                Ok(None)
+            } else {
+                Err(com_error(error.code(), "打开文件对话框"))
+            };
+        }
+        let item = dialog
+            .GetResult()
+            .map_err(|error| com_error(error.code(), "打开文件对话框"))?;
+        let name = item
+            .GetDisplayName(SIGDN_FILESYSPATH)
+            .map_err(|error| com_error(error.code(), "打开文件对话框"))?;
+        let text = name
+            .to_string()
+            .map_err(|_| io::Error::other("文件路径不是有效 Unicode"))?;
         CoTaskMemFree(Some(name.0 as *const _));
         Ok(Some(PathBuf::from(text)))
     }
