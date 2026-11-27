@@ -8,6 +8,7 @@ use ropey::LineType;
 use slterm_document::{DocumentId, DocumentSession, EditTransactionError, LanguageId};
 use slterm_workspace::ViewKey;
 
+use super::super::metrics::MAX_DISPLAY_COLUMNS_PER_BYTE;
 use super::super::source::TextSelection;
 use super::super::syntax::DocumentSyntax;
 use super::super::view_state::{DocumentViewStateBinding, EditorViewStateStore};
@@ -127,6 +128,17 @@ impl DocumentTextView {
         } else {
             restored_logical_line.min(snapshot.text.len_lines(LineType::LF) - 1)
         };
+        // 显示列不可能超过源字节数的 4 倍；坏记录不得以 usize::MAX 进入绘制。
+        let scroll_column = if wrap {
+            0
+        } else {
+            restored.scroll_column().min(
+                snapshot
+                    .text
+                    .len()
+                    .saturating_mul(MAX_DISPLAY_COLUMNS_PER_BYTE),
+            )
+        };
         let wrap_reveal_line = (wrap && restored_logical_line > 0).then_some(restored_logical_line);
         let mut view = Self {
             document_id,
@@ -160,7 +172,7 @@ impl DocumentTextView {
             preferred_column: None,
             marked_range: None,
             scroll_line,
-            scroll_column: if wrap { 0 } else { restored.scroll_column() },
+            scroll_column,
             wrap,
             wrap_index: Rc::default(),
             wrap_build: Rc::default(),

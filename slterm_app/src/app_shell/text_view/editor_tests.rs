@@ -281,6 +281,9 @@ fn extreme_restored_scroll_does_not_overflow_editor_painting_or_hit_testing(
     });
     let view = window.update(cx, |host, _, _| host.view.clone()).unwrap();
     view.update(cx, |view, _| {
+        let (line, column, _, _) = view.scroll_state_for_test();
+        assert_eq!(line, 0, "恢复行必须夹到真实行范围");
+        assert_eq!(column, 3 * 4, "恢复列必须夹到显示列上界，而不是 usize::MAX");
         *view.layout.borrow_mut() = Some(LayoutMetrics {
             bounds: Bounds::default(),
             cell_width: px(8.0),

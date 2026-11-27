@@ -23,7 +23,7 @@ use slterm_document::{
 use slterm_workspace::ViewKey;
 
 use super::layout::{FontMetricsKey, LayoutCache, LayoutMetrics, TextLayoutKey, ThemeFingerprint};
-use super::metrics::DisplayMap;
+use super::metrics::{DisplayMap, MAX_DISPLAY_COLUMNS_PER_BYTE};
 use super::source::{PagedTextSource, TextSelection, VisibleLine, VisibleRow};
 use super::view_state::{EditorViewState, EditorViewStateLease, EditorViewStateStore};
 use super::{SelectDown, SelectLeft, SelectRight, SelectUp};
@@ -190,6 +190,14 @@ impl PagedTextView {
             super::view_state::ScrollUnit::DisplayRow => 0,
         };
         let scroll_line = restored_line.min(source.line_index().line_count().saturating_sub(1));
+        // 恢复列是首可见显示列；显示宽度不超过源 UTF-8 字节数的 4 倍，
+        // 先按全文上界夹紧，避免 usize::MAX 之类的坏记录进入绘制与命中测试。
+        let scroll_column = restored.scroll_column().min(
+            source
+                .line_index()
+                .total_utf8_bytes()
+                .saturating_mul(MAX_DISPLAY_COLUMNS_PER_BYTE),
+        );
         Self {
             document_id,
             view_lease,
@@ -219,7 +227,7 @@ impl PagedTextView {
             tasks: BTreeMap::new(),
             closed: false,
             scroll_line,
-            scroll_column: restored.scroll_column(),
+            scroll_column,
             wheel_remainder: 0.0,
             layout: Rc::default(),
             layout_cache: Rc::default(),

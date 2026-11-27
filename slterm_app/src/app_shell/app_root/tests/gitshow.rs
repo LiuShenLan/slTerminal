@@ -5,6 +5,7 @@ use gpui::{Entity, Focusable as _, TestAppContext};
 use slterm_document::{RepoPath, RepositoryBinding};
 use slterm_path::{CanonicalPath, PathGrant};
 
+use super::super::diff::DiffOpenRequest;
 use super::super::git_show::{GitShowOpenRequest, GitShowView};
 use super::super::panel_host::PanelContent;
 use super::*;
@@ -132,6 +133,100 @@ fn gitshow_duplicate_view_focuses(cx: &mut TestAppContext) {
         window.focused(cx).is_some_and(|actual| actual == focus)
     });
     assert!(focused);
+}
+
+/// 普通打开只复用 Editor/Markdown 身份，不得成对去重 Diff 或 GitShow 面板。
+#[gpui::test]
+fn ordinary_open_keeps_diff_and_gitshow_panels(cx: &mut TestAppContext) {
+    let (_temp, repository, binding) = repository();
+    let (root, mut window, _) = open_root(cx);
+    add_project(&root, &mut window, PROJECT_A, repository.to_str().unwrap());
+    let shared =
+        CanonicalPath::new(dunce::canonicalize(repository.join("shared.md")).unwrap()).unwrap();
+    super::documents::open_document(&root, &mut window, PROJECT_A, GROUP_A, shared.clone());
+    draw_frame(&mut window);
+    let document = root.read_with(cx, |root, _| {
+        root.snapshot()
+            .documents()
+            .find_map(|(id, location)| (location.canonical_path() == &shared).then_some(id))
+            .unwrap()
+    });
+
+    window
+        .update(|window, cx| {
+            root.update(cx, |root, cx| {
+                root.open_diff(
+                    DiffOpenRequest {
+                        project_id: project_id(PROJECT_A),
+                        target_group: Some(group_id(GROUP_A)),
+                        document_id: document,
+                        binding: binding.clone(),
+                        path: RepoPath::from_str("shared.md").unwrap(),
+                        focus: false,
+                        target_line: None,
+                    },
+                    window,
+                    cx,
+                )
+            })
+        })
+        .unwrap();
+    let gitshow = open(&root, &mut window, &binding, "shared.md");
+    draw_frame(&mut window);
+
+    super::documents::open_document(&root, &mut window, PROJECT_A, GROUP_A, shared);
+    draw_frame(&mut window);
+
+    let (markdown, diff, gitshow_panels, active) = root.read_with(cx, |root, cx| {
+        let project = root.projects[&project_id(PROJECT_A)].read(cx);
+        let mut markdown = 0;
+        let mut diff = 0;
+        let mut gitshow_panels = 0;
+        for panel in project.panels.values() {
+            match &panel.content {
+                PanelContent::Markdown(_) => markdown += 1,
+                PanelContent::Diff(_) => diff += 1,
+                PanelContent::GitShow(_) => gitshow_panels += 1,
+                _ => {}
+            }
+        }
+        let active = root
+            .snapshot()
+            .registry()
+            .project(project_id(PROJECT_A))
+            .unwrap()
+            .layout()
+            .group(group_id(GROUP_A))
+            .unwrap()
+            .active()
+            .clone();
+        (markdown, diff, gitshow_panels, active)
+    });
+    assert_eq!(
+        (markdown, diff, gitshow_panels),
+        (1, 1, 1),
+        "普通打开必须新增/复用 Markdown，同时保留 Diff 与 GitShow"
+    );
+    assert!(
+        matches!(&active, ViewKey::Markdown { .. }),
+        "激活必须是 Markdown"
+    );
+    assert_eq!(
+        root.read_with(cx, |root, _| root
+            .snapshot()
+            .registry()
+            .project(project_id(PROJECT_A))
+            .unwrap()
+            .layout()
+            .group(group_id(GROUP_A))
+            .unwrap()
+            .views()
+            .iter()
+            .filter(|view| matches!(view, ViewKey::GitShow { .. }))
+            .count()),
+        1,
+        "GitShow 面板身份不得被普通打开替换: {gitshow:?}"
+    );
 }
 
 #[gpui::test]

@@ -863,6 +863,68 @@ fn dirty_external_rename_and_edit_preserve_local_text_and_conflict(cx: &mut Test
     );
 }
 
+/// 脏 Editor 遇到超限外部增长：保留本地草稿、Editor 面板与保存出口，
+/// 只建立冲突，不切换为分页占位。
+#[gpui::test]
+fn dirty_editor_external_growth_preserves_buffer_and_panel(cx: &mut TestAppContext) {
+    let (_temp, root, mut window, document, editor, source, _target) =
+        open_watched_editor(cx, "old");
+    window.update(|window, cx| {
+        editor.update(cx, |view, cx| {
+            gpui::EntityInputHandler::replace_text_in_range(view, None, "local ", window, cx);
+        });
+    });
+    let mut bytes = b"outside\n".to_vec();
+    bytes.resize(slterm_document::EDITABLE_LIMIT_BYTES as usize + 1, b'x');
+    std::fs::write(&source, bytes).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !root.read_with(cx, |root, _| {
+        root.documents
+            .session(document)
+            .unwrap()
+            .external_conflict()
+            .is_some()
+    }) {
+        window.executor().advance_clock(std::time::Duration::from_millis(121));
+        window.run_until_parked();
+        assert!(
+            std::time::Instant::now() < deadline,
+            "脏 Editor 超限外部增长未建立冲突"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    assert_eq!(
+        editor.read_with(cx, |view, _| view.input_text_for_test()),
+        "local old",
+        "外部超限增长不得覆盖脏缓冲"
+    );
+    let session = root.read_with(cx, |root, _| {
+        let session = root.documents.session(document).unwrap();
+        (
+            session.text().map(|text| text.to_string()),
+            session.paged().is_some(),
+        )
+    });
+    assert_eq!(session.0.as_deref(), Some("local old"));
+    assert!(!session.1, "脏正文不得切成分页只读");
+    root.read_with(cx, |root, cx| {
+        let project = root.projects[&project_id(PROJECT_A)].read(cx);
+        let panel = project
+            .panels
+            .values()
+            .find(|panel| panel.editor() == Some(&editor))
+            .expect("Editor 面板必须保留");
+        assert_eq!(
+            panel.view_key,
+            ViewKey::Editor {
+                project_id: project_id(PROJECT_A),
+                document_id: document,
+            }
+        );
+    });
+}
+
 #[gpui::test]
 fn dirty_external_edit_after_rename_conflict_refreshes_alias(cx: &mut TestAppContext) {
     let (_temp, root, mut window, document, editor, source, target) =

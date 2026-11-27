@@ -120,6 +120,12 @@ pub(crate) fn rope_next_grapheme_boundary(text: &Rope, byte: usize) -> Option<us
     rope_ceil_grapheme_boundary(text, probe)
 }
 
+/// 单个 UTF-8 字节可能占据的最大显示列数（Tab 展开上限为 4 列）。
+///
+/// 用于恢复滚动位置时对不可信列值做保守上界夹紧：显示宽度不会超过
+/// 源字节数的该倍数，避免 `usize::MAX` 之类坏记录进入绘制与命中测试。
+pub(crate) const MAX_DISPLAY_COLUMNS_PER_BYTE: usize = 4;
+
 /// 单行文本的字素簇与显示列映射；输入不包含内部换行。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct DisplayMap {

@@ -141,7 +141,7 @@
             super::super::view_state::EditorViewState::new(3, 4).with_wrap(true),
         );
         let cache = Rc::new(RefCell::new(DocumentPageCache::new()));
-        let reader: PageReader = Arc::new(|_| Ok("unused\n".to_owned()));
+        let reader: PageReader = Arc::new(|_| Ok("0\n1\n2\n3\n4\n".to_owned()));
         let view = cx.update(|cx| {
             make_view_with_store(
                 cache,
@@ -161,6 +161,37 @@
             super::super::view_state::ScrollUnit::LogicalLine
         );
         assert_eq!(states.state(&key).scroll_line(), 3);
+        let persisted = serde_json::to_value(states.state(&key)).unwrap();
+        let mut persisted_keys = persisted
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        persisted_keys.sort_unstable();
+        assert_eq!(
+            persisted_keys,
+            ["scroll_column", "scroll_line", "scroll_unit", "wrap"],
+            "持久 DTO 不得携带选区、光标或待续动作"
+        );
+
+        // 渲染必须真正采用恢复行，而不是只把字段存回内存。
+        let window = cx.add_window(|_, _| Host { view: view.clone() });
+        let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.run_until_parked();
+        for _ in 0..2 {
+            visual.refresh().unwrap();
+            visual.update(|window, cx| {
+                window.draw(cx).clear(cx);
+            });
+            visual.run_until_parked();
+        }
+        let painted = view.read_with(cx, |view, _| view.painted_lines_for_test());
+        assert_eq!(
+            painted.first().map(|row| row.0),
+            Some(3),
+            "绘制首行必须来自恢复位置: {painted:?}"
+        );
     }
 
     /// Paged 没有全文换行索引：显示行记录退回顶部，不把显示行当逻辑行。
@@ -227,6 +258,14 @@
         let view =
             cx.update(|cx| make_view_with_store(cache, reader, source_for(&["abc"]), states, cx));
         view.update(cx, |view, _| {
+            // 恢复列必须先夹到源字节换算的显示列上界；否则绘制与命中测试
+            // 拿到 usize::MAX 只是碰巧不溢出。
+            assert_eq!(view.scroll_state_for_test().0, 0);
+            assert_eq!(
+                view.scroll_state_for_test().1,
+                3 * 4,
+                "恢复列必须夹到显示列上界"
+            );
             *view.layout.borrow_mut() = Some(super::super::layout::LayoutMetrics {
                 bounds: gpui::Bounds::default(),
                 cell_width: px(8.0),
