@@ -354,6 +354,8 @@ pub(crate) struct AppRoot {
     hook_drafts: crate::ai_hook::draft_host::HooksDraftHost,
     /// 设置运行值与唯一写队列：项目 Settings 与无项目浮层共享。
     settings: crate::settings_state::SettingsStore,
+    /// 设置运行值世代：任一视图提交或保存回执推进，驱动跨视图控件回填。
+    settings_revision: u64,
     settings_load_warning: Option<crate::settings_state::SettingsLoadWarning>,
     /// AgentHooks 页的安装状态快照；None = 尚未探测。
     agent_integrations: Option<Vec<crate::ai_hook::integrations::AgentIntegration>>,
@@ -667,6 +669,7 @@ impl AppRoot {
             settings: crate::settings_state::SettingsStore::new(
                 crate::settings_store::load_raw_settings_lenient(),
             ),
+            settings_revision: 0,
             settings_load_warning,
             agent_integrations: None,
             agent_hooks_inspecting: false,

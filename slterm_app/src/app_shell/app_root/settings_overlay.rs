@@ -8,8 +8,8 @@ use std::time::Instant;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AnyElement, App, AppContext as _, Context, Entity, EventEmitter, InteractiveElement as _,
-    IntoElement, KeyDownEvent, MouseButton, ParentElement as _, Render,
+    AnyElement, App, AppContext as _, Context, Entity, EventEmitter, Focusable as _,
+    InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton, ParentElement as _, Render,
     StatefulInteractiveElement as _, Styled as _, Subscription, WeakEntity, Window, div, px,
     relative,
 };
@@ -26,7 +26,8 @@ use super::commands::AppRootError;
 use super::focus_manager::{FocusRegistration, FocusToken};
 use super::panel_host::PanelContent;
 use super::settings_controls::{
-    FIELDS, SettingsControl, SettingsFieldUi, fields_for_page, typed_value,
+    FIELDS, PathRule, SettingsControl, SettingsFieldUi, fields_for_page, path_rule, path_shape_ok,
+    path_target_allowed, typed_value,
 };
 use crate::settings_state::{
     SettingsPageId, SettingsViewState, SettingsViewStateStore, theme_field_followups,
@@ -50,6 +51,15 @@ pub(super) struct SettingsView {
     input_subscriptions: Vec<Subscription>,
     /// 校验失败瞬态标记：只在本次视图内提示，不进入持久状态。
     invalid_fields: BTreeMap<&'static str, Instant>,
+    /// 已回填的运行值世代；与 AppRoot 世代不同即在下一次绘制同步控件。
+    synced_settings_revision: u64,
+    /// 切页等显式动作要求下一次绘制强制回填，清除未提交文本。
+    force_input_sync: bool,
+    /// 程序化 set_value 期间抑制 InputEvent::Change，避免回写循环。
+    syncing_inputs: bool,
+    /// 路径字段的后台真实目标检查；新输入替换旧任务，迟到结果按代次丢弃。
+    path_checks: BTreeMap<&'static str, PathCheck>,
+    next_path_check: u64,
     /// 稳定面板身份；项目设置面板安装后绑定，Hooks 草稿键据此隔离。
     panel_id: Option<slterm_workspace::PanelId>,
     hooks_layer: crate::ai_hook::draft_host::HooksDraftLayer,
@@ -59,6 +69,12 @@ pub(super) struct SettingsView {
     hooks_input_subscription: Option<Subscription>,
     hooks_sync_key: Option<crate::ai_hook::draft_host::HooksDraftKey>,
     hooks_synced_generation: u64,
+}
+
+/// 单个路径字段的后台检查身份；任务释放即取消，代次拦截迟到回执。
+struct PathCheck {
+    generation: u64,
+    _task: gpui::Task<()>,
 }
 
 /// 设置视图的共享运行根与平台端口：构造参数聚合，避免位置参数继续膨胀。
@@ -169,6 +185,11 @@ impl SettingsView {
             inputs,
             input_subscriptions,
             invalid_fields: BTreeMap::new(),
+            synced_settings_revision: 0,
+            force_input_sync: false,
+            syncing_inputs: false,
+            path_checks: BTreeMap::new(),
+            next_path_check: 0,
             panel_id: None,
             hooks_layer,
             hooks_input: Some(hooks_input),
@@ -210,6 +231,8 @@ impl SettingsView {
             return;
         }
         self.selected_page = page;
+        // 切页清除上一页未提交的非法文本：下一次绘制从运行值回填全部控件。
+        self.force_input_sync = true;
         // AgentHooks 页首次进入才探测安装状态：探测是阻塞 I/O，只在后台执行。
         if page == SettingsPageId::AgentHooks
             && let Some(root) = self.root.upgrade()
@@ -262,6 +285,10 @@ impl SettingsView {
 
     /// 控件提交：注册表校验是唯一闸门；非法值只显示瞬态提示。
     fn commit_field(&mut self, key: &'static str, value: Value, cx: &mut Context<'_, Self>) {
+        if let Some(rule) = path_rule(key) {
+            self.commit_path_field(key, value, rule, cx);
+            return;
+        }
         let registry = SettingsRegistry::new();
         if registry.validate(key, &value) != Some(true) {
             self.invalid_fields.insert(key, Instant::now());
@@ -275,6 +302,74 @@ impl SettingsView {
         cx.notify();
     }
 
+    /// 路径字段：先做无 I/O 形状校验，再在后台确认真实目标存在且类型匹配。
+    fn commit_path_field(
+        &mut self,
+        key: &'static str,
+        value: Value,
+        rule: PathRule,
+        cx: &mut Context<'_, Self>,
+    ) {
+        // 新输入取代旧检查；被替换任务的迟到回执由代次丢弃。
+        self.path_checks.remove(key);
+        let Some(text) = value.as_str().map(str::to_owned) else {
+            self.invalid_fields.insert(key, Instant::now());
+            cx.notify();
+            return;
+        };
+        if !path_shape_ok(&text, rule) {
+            self.invalid_fields.insert(key, Instant::now());
+            cx.notify();
+            return;
+        }
+        self.next_path_check = self.next_path_check.wrapping_add(1);
+        let generation = self.next_path_check;
+        let executor = cx.background_executor().clone();
+        let check_text = text.clone();
+        let task = cx.spawn(async move |this, cx| {
+            let allowed = executor
+                .spawn(async move { path_target_allowed(&check_text, rule) })
+                .await;
+            let _ = this.update(cx, |view, cx| {
+                view.finish_path_check(key, generation, text, allowed, cx);
+            });
+        });
+        self.path_checks.insert(
+            key,
+            PathCheck {
+                generation,
+                _task: task,
+            },
+        );
+        cx.notify();
+    }
+
+    /// 后台目标检查回执：只有最新代次可清除非法标记并写入运行值。
+    fn finish_path_check(
+        &mut self,
+        key: &'static str,
+        generation: u64,
+        text: String,
+        allowed: bool,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if self.path_checks.get(key).map(|check| check.generation) != Some(generation) {
+            return;
+        }
+        self.path_checks.remove(key);
+        if allowed {
+            self.invalid_fields.remove(key);
+            if let Some(root) = self.root.upgrade() {
+                root.update(cx, |root, cx| {
+                    root.apply_settings_field(key, Value::String(text), cx);
+                });
+            }
+        } else {
+            self.invalid_fields.insert(key, Instant::now());
+        }
+        cx.notify();
+    }
+
     fn on_input_change(
         &mut self,
         key: &'static str,
@@ -282,8 +377,51 @@ impl SettingsView {
         _window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
+        if self.syncing_inputs {
+            // 程序化回填不是用户编辑，不得再次提交。
+            return;
+        }
         let text = input.read(cx).value().to_string();
         self.commit_field(key, Value::String(text), cx);
+    }
+
+    /// 运行值世代变化或切页后回填文本控件；聚焦中的输入保留用户编辑。
+    fn sync_inputs_from_runtime(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        let Some(root) = self.root.upgrade() else {
+            return;
+        };
+        let (revision, updates) = {
+            let root = root.read(cx);
+            let registry = SettingsRegistry::new();
+            let updates = self
+                .inputs
+                .keys()
+                .map(|key| {
+                    let value = registry
+                        .recover(root.settings.values(), key)
+                        .and_then(|recovery| recovery.value);
+                    (*key, text_field_value(value.as_ref()))
+                })
+                .collect::<Vec<_>>();
+            (root.settings_revision, updates)
+        };
+        self.synced_settings_revision = revision;
+        self.force_input_sync = false;
+        self.syncing_inputs = true;
+        for (key, text) in updates {
+            let Some(input) = self.inputs.get(key) else {
+                continue;
+            };
+            let current = input.read(cx).value().to_string();
+            let focused = window
+                .focused(cx)
+                .is_some_and(|handle| handle == input.read(cx).focus_handle(cx));
+            if current != text && !focused {
+                input.update(cx, |state, cx| state.set_value(text, window, cx));
+                self.invalid_fields.remove(key);
+            }
+        }
+        self.syncing_inputs = false;
     }
 
     /// Hooks JSON 编辑只写内存草稿；非法文本保留最后合法模型。
@@ -336,6 +474,64 @@ impl SettingsView {
 
     pub(super) fn hooks_input(&self) -> Option<&Entity<InputState>> {
         self.hooks_input.as_ref()
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(super) fn input_value_for_test(&self, key: &str, cx: &App) -> Option<String> {
+        self.inputs
+            .get(key)
+            .map(|input| input.read(cx).value().to_string())
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(super) fn field_invalid_for_test(&self, key: &str) -> bool {
+        self.invalid_fields.contains_key(key)
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(super) fn status_messages_for_test(&self, cx: &App) -> Vec<String> {
+        self.status_messages(cx)
+    }
+
+    /// 测试把真实键盘焦点交给字段输入框；生产路径由鼠标命中或键盘导航送焦。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(super) fn focus_input_for_test(
+        &self,
+        key: &str,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if let Some(input) = self.inputs.get(key) {
+            let handle = input.read(cx).focus_handle(cx);
+            handle.focus(window, cx);
+        }
+    }
+
+    /// 测试直接以文本走与输入框相同的提交路径。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(super) fn commit_text_for_test(
+        &mut self,
+        key: &'static str,
+        text: &str,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.commit_field(key, Value::String(text.to_owned()), cx);
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(super) fn input_is_focused_for_test(&self, key: &str, window: &Window, cx: &App) -> bool {
+        self.inputs
+            .get(key)
+            .is_some_and(|input| input.read(cx).focus_handle(cx).is_focused(window))
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(super) fn select_page_for_test(
+        &mut self,
+        page: SettingsPageId,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.select_page(page, cx);
     }
 
     /// 输入框内容是否已经对应当前草稿键与同步代次。
@@ -780,6 +976,18 @@ impl SettingsView {
                     .text(crate::i18n::Message::SettingsStatusSaveFailed)
                     .to_owned(),
             );
+        } else if root.settings.is_saving() || root.settings.pending_len() > 0 {
+            messages.push(
+                language
+                    .text(crate::i18n::Message::SettingsStatusSaving)
+                    .to_owned(),
+            );
+        } else if root.settings.has_saved() {
+            messages.push(
+                language
+                    .text(crate::i18n::Message::SettingsStatusSaved)
+                    .to_owned(),
+            );
         }
         messages
     }
@@ -787,12 +995,24 @@ impl SettingsView {
 
 impl Render for SettingsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
+        let revision = self
+            .root
+            .upgrade()
+            .map(|root| root.read(cx).settings_revision);
+        if self.force_input_sync || revision.is_some_and(|rev| rev != self.synced_settings_revision)
+        {
+            self.sync_inputs_from_runtime(window, cx);
+        }
         let language = cx.global::<crate::app_shell::config::Settings>().language;
         let status_messages = self.status_messages(cx);
         let retry_read = self.root.upgrade().is_some_and(|root| {
             root.read(cx).settings_load_warning
                 == Some(crate::settings_state::SettingsLoadWarning::ReadFailed)
         });
+        let retry_save = self
+            .root
+            .upgrade()
+            .is_some_and(|root| root.read(cx).settings.persist_failed());
         let selected = self.selected_page;
         let page_list = SettingsPageId::ALL
             .into_iter()
@@ -886,6 +1106,26 @@ impl Render for SettingsView {
                                             if let Some(root) = view.root.upgrade() {
                                                 root.update(cx, |root, cx| {
                                                     root.retry_settings_load(cx)
+                                                });
+                                            }
+                                        }),
+                                    )
+                                    .child(language.text(crate::i18n::Message::PagedRetry)),
+                            )
+                        })
+                        .when(retry_save, |element| {
+                            element.child(
+                                div()
+                                    .debug_selector(|| "settings-retry-save".to_owned())
+                                    .text_xs()
+                                    .text_color(cx.theme().accent)
+                                    .cursor_pointer()
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|view, _, _, cx| {
+                                            if let Some(root) = view.root.upgrade() {
+                                                root.update(cx, |root, cx| {
+                                                    root.retry_settings_save(cx)
                                                 });
                                             }
                                         }),
@@ -1164,6 +1404,8 @@ impl AppRoot {
         } else {
             self.reload_settings_snapshot(cx);
         }
+        self.bump_settings_revision();
+        self.notify_settings_views(cx);
         cx.notify();
     }
 
@@ -1235,6 +1477,32 @@ impl AppRoot {
         crate::background_tasks::apply_settings(self.settings.values());
         crate::app_shell::theme::apply_dark_theme(cx);
         cx.refresh_windows();
+    }
+
+    /// 运行值世代推进后通知全部设置视图重绘；控件回填发生在各自绘制帧。
+    pub(super) fn notify_settings_views(&self, cx: &mut Context<'_, Self>) {
+        let mut views = Vec::new();
+        if let Some(host) = &self.settings_overlay {
+            views.push(host.view.clone());
+        }
+        for project in self.projects.values() {
+            for panel in project.read(cx).panels.values() {
+                if let PanelContent::Settings(view) = &panel.content {
+                    views.push(view.clone());
+                }
+            }
+        }
+        // 延迟到效果周期：提交可能正发生在某个设置视图自身的更新中，
+        // 同步重入该实体会触发 GPUI 的重复更新断言。
+        cx.defer(move |cx| {
+            for view in views {
+                view.update(cx, |_, cx| cx.notify());
+            }
+        });
+    }
+
+    fn bump_settings_revision(&mut self) {
+        self.settings_revision = self.settings_revision.wrapping_add(1);
     }
 
     /// 设置快照提交后向全部既有终端扇出一次，隐藏项目同样更新；
@@ -1314,6 +1582,8 @@ impl AppRoot {
                     warning: self.settings_load_warning,
                 });
                 self.reload_settings_snapshot(cx);
+                self.bump_settings_revision();
+                self.notify_settings_views(cx);
             }
             Err(error) => {
                 log::warn!("重读设置失败: {error}");
@@ -1321,6 +1591,13 @@ impl AppRoot {
                     Some(crate::settings_state::SettingsLoadWarning::ReadFailed);
             }
         }
+        cx.notify();
+    }
+
+    /// 保存失败后的显式重试：同一待写批次立即到期，由下一节拍走同一后台写盘链。
+    pub(super) fn retry_settings_save(&mut self, cx: &mut Context<'_, Self>) {
+        self.settings.retry_pending(Instant::now());
+        self.notify_settings_views(cx);
         cx.notify();
     }
 
@@ -1347,6 +1624,8 @@ impl AppRoot {
                 root.settings.finish_save(&written, result, Instant::now());
                 root.tasks
                     .complete(super::task_service::TaskId::SettingsSave);
+                root.bump_settings_revision();
+                root.notify_settings_views(cx);
                 cx.notify();
             });
         });

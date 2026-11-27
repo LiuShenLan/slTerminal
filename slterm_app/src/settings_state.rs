@@ -246,6 +246,8 @@ pub(crate) struct SettingsStore {
     persist_failed: bool,
     /// 后台写盘在途标记：同一时刻只允许一批，避免前台重复启动任务。
     in_flight: bool,
+    /// 本次运行至少成功落盘过一次；状态条据此显示「已保存」。
+    saved_once: bool,
     subscribers: BTreeSet<u64>,
     next_subscriber: u64,
 }
@@ -258,6 +260,7 @@ impl SettingsStore {
             last_edit: None,
             persist_failed: false,
             in_flight: false,
+            saved_once: false,
             subscribers: BTreeSet::new(),
             next_subscriber: 0,
         }
@@ -384,6 +387,7 @@ impl SettingsStore {
                     }
                 }
                 self.persist_failed = false;
+                self.saved_once = true;
                 if self.pending.is_empty() {
                     self.last_edit = None;
                 }
@@ -393,6 +397,24 @@ impl SettingsStore {
                 self.last_edit = Some(now);
             }
         }
+    }
+
+    /// 保存失败后的显式重试：同一待写批次立即重新到期；失败标记保留到成功回执。
+    pub(crate) fn retry_pending(&mut self, now: Instant) {
+        if self.pending.is_empty() || self.in_flight {
+            return;
+        }
+        self.last_edit = Some(now.checked_sub(AUTO_SAVE_DELAY).unwrap_or(now));
+    }
+
+    /// 后台批次是否在途：设置页状态条据此显示保存中。
+    pub(crate) fn is_saving(&self) -> bool {
+        self.in_flight
+    }
+
+    /// 本次运行是否已有成功落盘；失败不伪造已保存。
+    pub(crate) fn has_saved(&self) -> bool {
+        self.saved_once && !self.persist_failed
     }
 
     /// 自动保存时机：距最后一次编辑满 [`AUTO_SAVE_DELAY`] 且有可写项。
@@ -600,6 +622,37 @@ mod tests {
             .begin_save(t0 + Duration::from_millis(6_200))
             .expect("退避到期必须重试");
         store.finish_save(&recovered, Ok(()), t0 + Duration::from_millis(6_200));
+        assert!(!store.persist_failed());
+        assert_eq!(store.pending_len(), 0);
+    }
+
+    /// 显式重试把失败批次立即重新到期，失败标记保留到成功回执。
+    #[test]
+    fn retry_pending_makes_the_failed_batch_due_again() {
+        let mut store = store();
+        let t0 = Instant::now();
+        assert!(store.set_auto("theme", Value::String("Nord".to_owned()), t0));
+        let batch = store
+            .begin_save(t0 + AUTO_SAVE_DELAY)
+            .expect("到期必须返回待写快照");
+        store.finish_save(
+            &batch,
+            Err(io::Error::other("disk full")),
+            t0 + AUTO_SAVE_DELAY,
+        );
+        assert!(
+            store
+                .begin_save(t0 + Duration::from_millis(2_100))
+                .is_none(),
+            "失败后必须处于退避窗口"
+        );
+        store.retry_pending(t0 + Duration::from_millis(2_100));
+        assert!(store.persist_failed(), "重试未成功前不得清除失败标记");
+        let retried = store
+            .begin_save(t0 + Duration::from_millis(2_100))
+            .expect("显式重试必须让同一批次立即到期");
+        assert_eq!(retried, batch);
+        store.finish_save(&retried, Ok(()), t0 + Duration::from_millis(2_100));
         assert!(!store.persist_failed());
         assert_eq!(store.pending_len(), 0);
     }

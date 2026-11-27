@@ -3,6 +3,8 @@
 use std::time::Instant;
 
 use slterm_agents::AgentKind;
+use slterm_settings::SettingsRegistry;
+use slterm_settings::json::Value;
 
 use super::*;
 use crate::ai_hook::draft_host::{HooksDraft, HooksDraftKey, HooksDraftLayer, HooksDraftOwner};
@@ -1514,4 +1516,295 @@ fn hooks_load_receipt_never_resurrects_a_destroyed_owner(cx: &mut TestAppContext
         assert!(root.hook_drafts.get(key).is_none(), "迟到载入不得复活草稿");
         assert!(!root.hooks_state_has_panel_entries(key.panel().unwrap()));
     });
+}
+
+/// 保存状态可见：待写批次显示保存中，成功回执后显示已保存，失败保留失败提示。
+#[gpui::test]
+fn settings_status_reports_saving_then_saved(cx: &mut TestAppContext) {
+    let (root, mut window, _state) = open_root(cx);
+    focus_workspace(&root, &mut window);
+    open_settings(&mut window);
+    draw_frame(&mut window);
+    let view = root.read_with(cx, |root, _| {
+        root.settings_overlay
+            .as_ref()
+            .expect("浮层必须存在")
+            .view
+            .clone()
+    });
+    let language = cx.update(|cx| cx.global::<crate::app_shell::config::Settings>().language);
+    let saving = language
+        .text(crate::i18n::Message::SettingsStatusSaving)
+        .to_owned();
+    let saved = language
+        .text(crate::i18n::Message::SettingsStatusSaved)
+        .to_owned();
+    let failed = language
+        .text(crate::i18n::Message::SettingsStatusSaveFailed)
+        .to_owned();
+
+    root.update(cx, |root, cx| {
+        root.apply_settings_field("font_family", Value::String("StatusFont".to_owned()), cx);
+    });
+    draw_frame(&mut window);
+    let messages = view.read_with(cx, |view, cx| view.status_messages_for_test(cx));
+    assert_eq!(messages, vec![saving], "待写批次必须显示保存中");
+
+    root.update(cx, |root, cx| {
+        let now = Instant::now();
+        let due = now + std::time::Duration::from_secs(5);
+        let entries = root.settings.begin_save(due).expect("到期批次必须启动");
+        root.settings.finish_save(&entries, Ok(()), due);
+        root.notify_settings_views(cx);
+    });
+    draw_frame(&mut window);
+    let messages = view.read_with(cx, |view, cx| view.status_messages_for_test(cx));
+    assert_eq!(messages, vec![saved], "成功回执必须显示已保存");
+
+    root.update(cx, |root, cx| {
+        root.apply_settings_field("font_family", Value::String("FailFont".to_owned()), cx);
+        let now = Instant::now();
+        let due = now + std::time::Duration::from_secs(5);
+        let entries = root.settings.begin_save(due).expect("到期批次必须启动");
+        root.settings
+            .finish_save(&entries, Err(std::io::Error::other("disk full")), due);
+        root.notify_settings_views(cx);
+    });
+    draw_frame(&mut window);
+    let messages = view.read_with(cx, |view, cx| view.status_messages_for_test(cx));
+    assert_eq!(
+        messages,
+        vec![failed],
+        "失败回执必须显示保存失败，不得伪造已保存"
+    );
+}
+
+/// 文本控件跟随全局运行值；切页清除上一页未提交的非法文本。
+#[gpui::test]
+fn settings_text_inputs_follow_runtime_and_page_switch_clears_invalid_text(
+    cx: &mut TestAppContext,
+) {
+    let (root, mut window, _state) = open_root(cx);
+    focus_workspace(&root, &mut window);
+    open_settings(&mut window);
+    draw_frame(&mut window);
+    let view = root.read_with(cx, |root, _| {
+        root.settings_overlay
+            .as_ref()
+            .expect("浮层必须存在")
+            .view
+            .clone()
+    });
+    let original = view
+        .read_with(cx, |view, cx| view.input_value_for_test("background", cx))
+        .expect("颜色字段必须有文本输入");
+
+    // 其他提交入口写入运行值后，浮层文本控件必须回填同一值。
+    root.update(cx, |root, cx| {
+        root.apply_settings_field("font_family", Value::String("RuntimeFont".to_owned()), cx);
+    });
+    draw_frame(&mut window);
+    assert_eq!(
+        view.read_with(cx, |view, cx| view.input_value_for_test("font_family", cx)),
+        Some("RuntimeFont".to_owned()),
+        "程序化变更后文本控件必须回填运行值"
+    );
+
+    // 在颜色输入框键入非法文本：控件标记非法，运行值不变。
+    let runtime_before = root.read_with(cx, |root, _| {
+        SettingsRegistry::new()
+            .recover(root.settings.values(), "background")
+            .and_then(|recovery| recovery.value)
+    });
+    assert!(
+        window
+            .debug_bounds("settings-field-background-input")
+            .is_some(),
+        "颜色输入框必须渲染"
+    );
+    window.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.focus_input_for_test("background", window, cx);
+            assert!(
+                view.input_is_focused_for_test("background", window, cx),
+                "字段输入框必须获得键盘焦点"
+            );
+        });
+    });
+    draw_frame(&mut window);
+    assert!(
+        window.update(|window, cx| {
+            view.read(cx)
+                .input_is_focused_for_test("background", window, cx)
+        }),
+        "绘制后焦点不得被焦点管理器误恢复"
+    );
+    window.simulate_input("zzz");
+    draw_frame(&mut window);
+    let invalid_text = view
+        .read_with(cx, |view, cx| view.input_value_for_test("background", cx))
+        .expect("颜色字段必须有文本输入");
+    assert_ne!(invalid_text, original, "键入必须改变输入框文本");
+    assert!(
+        view.read_with(cx, |view, _| view.field_invalid_for_test("background")),
+        "非法文本必须标记字段无效"
+    );
+    let runtime = root.read_with(cx, |root, _| {
+        SettingsRegistry::new()
+            .recover(root.settings.values(), "background")
+            .and_then(|recovery| recovery.value)
+    });
+    assert_eq!(runtime, runtime_before, "非法文本不得改写运行值");
+
+    // 切走再切回：强制回填运行值并清除非法标记。
+    focus_workspace(&root, &mut window);
+    view.update(cx, |view, cx| {
+        view.select_page_for_test(SettingsPageId::Session, cx)
+    });
+    draw_frame(&mut window);
+    view.update(cx, |view, cx| {
+        view.select_page_for_test(SettingsPageId::Appearance, cx)
+    });
+    draw_frame(&mut window);
+    assert_eq!(
+        view.read_with(cx, |view, cx| view.input_value_for_test("background", cx)),
+        Some(original),
+        "切页必须从运行值回填控件"
+    );
+    assert!(
+        !view.read_with(cx, |view, _| view.field_invalid_for_test("background")),
+        "切页必须清除上一页的非法标记"
+    );
+}
+
+/// 路径类设置只接受绝对路径，并须真实存在且类型匹配后才写入运行值。
+#[gpui::test]
+fn settings_path_fields_require_existing_absolute_targets(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let exe = temp.path().join("fake-shell.exe");
+    std::fs::write(&exe, b"MZ").unwrap();
+    let startup = temp.path().join("startup");
+    std::fs::create_dir(&startup).unwrap();
+    let image = temp.path().join("wallpaper.png");
+    std::fs::write(&image, b"png").unwrap();
+    let plain_file = temp.path().join("plain.txt");
+    std::fs::write(&plain_file, b"text").unwrap();
+    let missing = temp.path().join("missing.exe");
+    let text = |path: &std::path::Path| path.to_string_lossy().into_owned();
+
+    let (root, mut window, _state) = open_root(cx);
+    focus_workspace(&root, &mut window);
+    open_settings(&mut window);
+    draw_frame(&mut window);
+    let view = root.read_with(cx, |root, _| {
+        root.settings_overlay
+            .as_ref()
+            .expect("浮层必须存在")
+            .view
+            .clone()
+    });
+    let runtime_value = |key: &str| {
+        root.read_with(cx, |root, _| {
+            SettingsRegistry::new()
+                .recover(root.settings.values(), key)
+                .and_then(|recovery| recovery.value)
+        })
+    };
+    let commit = |window: &mut VisualTestContext, key: &'static str, value: &str| {
+        window.update(|_, cx| {
+            view.update(cx, |view, cx| view.commit_text_for_test(key, value, cx));
+        });
+    };
+    let invalid = || view.read_with(cx, |view, _| view.field_invalid_for_test("shell"));
+
+    commit(&mut window, "shell", "pwsh.exe");
+    assert!(invalid(), "相对路径必须立即标记非法");
+    assert_eq!(runtime_value("shell"), None, "相对路径不得写入运行值");
+
+    commit(&mut window, "shell", &text(&missing));
+    draw_frame(&mut window);
+    assert!(invalid(), "不存在的路径必须在真实检查后标记非法");
+    assert_eq!(runtime_value("shell"), None, "不存在的路径不得写入运行值");
+
+    commit(&mut window, "shell", &text(&exe));
+    draw_frame(&mut window);
+    assert!(!invalid(), "存在的可执行文件必须清除非法标记");
+    assert_eq!(
+        runtime_value("shell"),
+        Some(Value::String(text(&exe))),
+        "存在的可执行文件必须写入运行值"
+    );
+
+    let invalid_startup = || {
+        view.read_with(cx, |view, _| {
+            view.field_invalid_for_test("startup_directory")
+        })
+    };
+    commit(&mut window, "startup_directory", &text(&plain_file));
+    draw_frame(&mut window);
+    assert!(invalid_startup(), "普通文件不得作为启动目录");
+    assert_eq!(runtime_value("startup_directory"), None);
+    commit(&mut window, "startup_directory", &text(&startup));
+    draw_frame(&mut window);
+    assert!(!invalid_startup(), "存在的目录必须清除非法标记");
+    assert_eq!(
+        runtime_value("startup_directory"),
+        Some(Value::String(text(&startup))),
+        "存在的目录必须写入运行值"
+    );
+
+    let invalid_image = || {
+        view.read_with(cx, |view, _| {
+            view.field_invalid_for_test("background_image")
+        })
+    };
+    commit(&mut window, "background_image", &text(&startup));
+    draw_frame(&mut window);
+    assert!(invalid_image(), "目录不得作为背景图片");
+    assert_eq!(runtime_value("background_image"), None);
+    commit(&mut window, "background_image", &text(&image));
+    draw_frame(&mut window);
+    assert!(!invalid_image(), "存在的图片文件必须清除非法标记");
+    assert_eq!(
+        runtime_value("background_image"),
+        Some(Value::String(text(&image))),
+        "存在的图片文件必须写入运行值"
+    );
+}
+
+/// 保存失败必须给出显式重试入口，重试把同一待写批次立即重新到期。
+#[gpui::test]
+fn settings_save_failure_offers_explicit_retry(cx: &mut TestAppContext) {
+    let (root, mut window, _state) = open_root(cx);
+    focus_workspace(&root, &mut window);
+    open_settings(&mut window);
+    draw_frame(&mut window);
+    root.update(cx, |root, cx| {
+        root.apply_settings_field("font_family", Value::String("RetryFont".to_owned()), cx);
+        let now = Instant::now();
+        let due = now + std::time::Duration::from_secs(5);
+        let entries = root.settings.begin_save(due).expect("到期批次必须启动");
+        root.settings
+            .finish_save(&entries, Err(std::io::Error::other("disk full")), due);
+        root.notify_settings_views(cx);
+    });
+    draw_frame(&mut window);
+    let retry = window
+        .debug_bounds("settings-retry-save")
+        .expect("保存失败必须提供重试入口");
+    window.simulate_click(retry.center(), Modifiers::default());
+    draw_frame(&mut window);
+    let entries = root.update(cx, |root, _| {
+        root.settings
+            .begin_save(Instant::now())
+            .expect("点击重试后同一批次必须立即到期")
+    });
+    root.update(cx, |root, _| {
+        root.settings.finish_save(&entries, Ok(()), Instant::now());
+    });
+    draw_frame(&mut window);
+    assert!(
+        window.debug_bounds("settings-retry-save").is_none(),
+        "成功回执后不得继续显示保存失败重试"
+    );
 }

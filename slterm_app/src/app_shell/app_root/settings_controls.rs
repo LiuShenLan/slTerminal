@@ -47,6 +47,58 @@ pub(super) struct SettingsFieldUi {
     pub control: SettingsControl,
 }
 
+/// 路径类文本字段的真实目标约束；注册表只校验类型与非空，语义在这里。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PathRule {
+    /// 自定义 Shell：绝对路径且为 Windows 可执行文件。
+    ShellExecutable,
+    /// 启动目录：绝对路径且为真实目录。
+    Directory,
+    /// 背景图片：绝对路径且为真实文件。
+    File,
+}
+
+/// 字段键 → 路径规则；非路径字段返回 `None`。
+pub(super) fn path_rule(key: &str) -> Option<PathRule> {
+    match key {
+        "shell" => Some(PathRule::ShellExecutable),
+        "startup_directory" => Some(PathRule::Directory),
+        "background_image" => Some(PathRule::File),
+        _ => None,
+    }
+}
+
+/// 无需 I/O 的形状校验：绝对路径；Shell 还要求可执行扩展名。
+pub(super) fn path_shape_ok(text: &str, rule: PathRule) -> bool {
+    let path = std::path::Path::new(text);
+    if !path.is_absolute() {
+        return false;
+    }
+    match rule {
+        PathRule::ShellExecutable => path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| {
+                matches!(
+                    extension.to_ascii_lowercase().as_str(),
+                    "exe" | "com" | "bat" | "cmd"
+                )
+            }),
+        PathRule::Directory | PathRule::File => true,
+    }
+}
+
+/// 真实目标校验；只允许在后台执行体调用。
+pub(super) fn path_target_allowed(text: &str, rule: PathRule) -> bool {
+    let Ok(metadata) = std::fs::metadata(text) else {
+        return false;
+    };
+    match rule {
+        PathRule::Directory => metadata.is_dir(),
+        PathRule::ShellExecutable | PathRule::File => metadata.is_file(),
+    }
+}
+
 /// 选项值 → 注册表类型对应的 JSON 值；数值型选项按字面量解析。
 pub(super) fn typed_value(def: &SettingsKeyDef, option_value: &str) -> Value {
     match def.value_type {

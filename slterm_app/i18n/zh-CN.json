@@ -216,6 +216,8 @@
       "operation_failed": "设置操作失败：{error}",
       "invalid_value": "该值不被接受",
       "save_failed": "设置保存失败；本次修改只在当前运行生效，重启后可能丢失。",
+      "saving": "正在保存设置…",
+      "saved": "设置已保存",
       "theme_imported": "已导入主题「{name}」",
       "theme_import_failed": "主题导入失败：{error}",
       "unsupported_version": "设置由更高版本（{version}）写入；当前使用默认值，且不会覆盖原文件。",

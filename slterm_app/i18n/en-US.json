@@ -216,6 +216,8 @@
       "operation_failed": "Settings operation failed: {error}",
       "invalid_value": "Value not accepted",
       "save_failed": "Settings failed to save; changes apply to this run only and may be lost after restart.",
+      "saving": "Saving settings…",
+      "saved": "Settings saved",
       "theme_imported": "Imported theme \"{name}\"",
       "theme_import_failed": "Theme import failed: {error}",
       "unsupported_version": "Settings were written by a newer version ({version}); defaults are active and the original file will not be overwritten.",
