@@ -642,3 +642,32 @@ fn formula_source_paint_keeps_plain_grid_text_and_pointer_mapping(cx: &mut TestA
         );
     });
 }
+
+/// 提交命令必须取消在途补全，迟到回执不得再产生 ghost 或弹窗候选。
+#[gpui::test]
+fn commit_line_cancels_inflight_completion(cx: &mut TestAppContext) {
+    let (terminal, mut window, _rx, _registry) = open(cx, CompletionStyle::Popup, true);
+    type_text(&terminal, &mut window, "git checkout feature-");
+    assert!(
+        terminal.read_with(&window, |view, _| view.suggestion_task.is_some()),
+        "输入后必须先登记在途补全任务"
+    );
+
+    terminal.update_in(&mut window, |view, _, cx| view.commit_line(cx));
+
+    assert!(
+        terminal.read_with(&window, |view, _| view.suggestion_task.is_none()),
+        "提交命令必须取消在途补全"
+    );
+    window.run_until_parked();
+    terminal.read_with(&window, |view, _| {
+        assert!(
+            view.suggest.suggestion.is_empty(),
+            "提交后不得再出现 ghost 候选"
+        );
+        assert!(
+            view.suggest.completion_items.is_empty(),
+            "提交后不得再填充弹窗候选"
+        );
+    });
+}

@@ -147,7 +147,7 @@
 | 真实 ConPTY 验收场景覆盖不足 | 待修 |
 | 测试语义与生产路径断裂 | 待修 |
 | 项目脚本与 workspace 有界预算缺少真实测试 | 已修：超限夹具改为超过 1 MiB 的合法 JSON 并断言其可解析，证明降级来自字节预算；workspace 发现抽出可注入 `WorkspaceBudget` 与时钟，逐维验证字节／目录／包／截止时间超限均降级为空且中途到期不回填，生产常量由用例锁定；删除无调用者的 `finish_catalog`。测试 `oversized_manifest_and_relative_cwd_fail_closed`、`workspace_budget_limits_degrade_to_empty`、`workspace_deadline_is_checked_mid_scan`、`production_budget_uses_declared_limits` |
-| 可信边界与旧代丢弃的验收测试不足 | 待修 |
+| 可信边界与旧代丢弃的验收测试不足 | 修复中：提交命令现在显式取消在途补全并清空候选，测试 `commit_line_cancels_inflight_completion`（移除取消即失败）；备用屏可信边界、旧 key/revision 迟到结果、提示符代次变化取消与 `Request` 代次身份仍需补测／对齐 |
 
 ## 持久化、崩溃恢复与加密备份
 

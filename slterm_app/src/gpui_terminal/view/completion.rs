@@ -340,6 +340,8 @@ impl TerminalView {
     /// Enter 只建立待决执行；历史写入由 CommandStart→CommandDone 闭合。
     pub(super) fn commit_line(&mut self, _cx: &mut Context<'_, Self>) {
         self.shell_line.submit();
+        // 提交后该行不再可编辑；在途请求必须取消，迟到回执不得再显示候选。
+        self.suggestion_task = None;
         if let Some(session) = &self.completion_session {
             session.invalidate();
         }
