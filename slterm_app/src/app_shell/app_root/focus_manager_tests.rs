@@ -1,4 +1,3 @@
-
 use std::{cell::Cell, ops::Range, rc::Rc};
 
 use gpui::{

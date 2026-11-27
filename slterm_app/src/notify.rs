@@ -30,6 +30,14 @@ use crate::app_shell::SltermShellEvent;
 use crate::i18n::{Message, UiLanguage};
 use crate::platform::notifications::{ToastAction, ToastActivation};
 
+/// 进程级提示优先级；`Error` 进入任务栏错误态并保留到用户关闭。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AlertSeverity {
+    Info,
+    Warning,
+    Error,
+}
+
 /// 一条值得注意的事件。漏斗不认事件文本里的关键字:来源标注一律问
 /// `AgentKind::parse`(CLI profile 单点),避免按散文猜来源。
 #[derive(Debug, Clone)]
@@ -68,9 +76,12 @@ pub(crate) enum Notification {
     },
     /// 启动期一次性汇总(恢复结果等,/):走漏斗但豁免前台门控。
     RecoverySummary { text: String },
-    /// 进程级提示:无 pane 归属、无动作按钮;走启动汇总通道豁免
-    /// 前台门控。文本必须由领域类别生成,不得携带技术化合成命令。
-    ProcessAlert { text: String },
+    /// 进程级提示:无 pane 归属、无动作按钮。文本必须由领域类别生成,
+    /// 不得携带技术化合成命令；严重度决定任务栏错误态与应用内保留。
+    ProcessAlert {
+        text: String,
+        severity: AlertSeverity,
+    },
 }
 
 impl Notification {
@@ -154,6 +165,10 @@ impl Notification {
                     outcome: AiTurnOutcome::Failed | AiTurnOutcome::Incomplete,
                     ..
                 }
+                | Self::ProcessAlert {
+                    severity: AlertSeverity::Error,
+                    ..
+                }
         )
     }
 
@@ -220,7 +235,7 @@ impl Notification {
                 Some(program) => (program.clone(), body.clone()),
                 None => (crate::brand::NAME.to_owned(), body.clone()),
             },
-            Self::RecoverySummary { text } | Self::ProcessAlert { text } => {
+            Self::RecoverySummary { text } | Self::ProcessAlert { text, .. } => {
                 (crate::brand::NAME.to_owned(), text.clone())
             }
             Self::AiTurn {
@@ -606,6 +621,73 @@ static WINDOWS_INTEGRATION: Mutex<
 /// 任务栏状态与 OSC 进度共享一条进度条；全局单实例。
 static TASKBAR_STATE: Mutex<Option<crate::taskbar::TaskbarState>> = Mutex::new(None);
 
+/// 应用内通知保留上限；超出时淘汰最旧条目。
+pub(crate) const IN_APP_NOTICE_LIMIT: usize = 8;
+
+/// 应用内通知保留面：与系统 toast 独立，桌面开关关闭时仍可见。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct InAppNotice {
+    pub(crate) id: u64,
+    pub(crate) text: String,
+    pub(crate) severity: AlertSeverity,
+}
+
+#[derive(Default)]
+struct InAppStore {
+    next_id: u64,
+    notices: Vec<InAppNotice>,
+}
+
+static IN_APP_NOTICES: Mutex<InAppStore> = Mutex::new(InAppStore {
+    next_id: 1,
+    notices: Vec::new(),
+});
+
+/// 进程级提示进入应用内保留面；系统 toast 与前台门控不参与该判定。
+fn record_in_app(notification: &Notification) {
+    let Notification::ProcessAlert { text, severity } = notification else {
+        return;
+    };
+    let mut store = IN_APP_NOTICES
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    if store
+        .notices
+        .iter()
+        .any(|notice| notice.text == *text && notice.severity == *severity)
+    {
+        return;
+    }
+    let id = store.next_id;
+    store.next_id = store.next_id.wrapping_add(1);
+    store.notices.push(InAppNotice {
+        id,
+        text: text.clone(),
+        severity: *severity,
+    });
+    while store.notices.len() > IN_APP_NOTICE_LIMIT {
+        store.notices.remove(0);
+    }
+}
+
+/// 壳事件泵排出新增应用内通知；展示与关闭归 AppRoot。
+pub(crate) fn drain_in_app_notices() -> Vec<InAppNotice> {
+    let mut store = IN_APP_NOTICES
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    std::mem::take(&mut store.notices)
+}
+
+#[cfg(test)]
+pub(crate) fn reset_in_app_notices_for_test() {
+    *IN_APP_NOTICES
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = InAppStore {
+        next_id: 1,
+        notices: Vec::new(),
+    };
+}
+
 /// 启动链注册 Windows 集成端口（任务栏投递与设置页共用同一实例）。
 pub(crate) fn install_windows_integration(
     windows: Arc<dyn crate::platform::windows_integration::WindowsIntegration>,
@@ -696,6 +778,12 @@ fn taskbar_signals(
         vec![TaskbarSignal::ErrorRaised(pane)]
     } else if notification.is_attention() {
         vec![TaskbarSignal::AttentionRaised(pane)]
+    } else if matches!(
+        notification,
+        Notification::ProcessAlert { .. } | Notification::RecoverySummary { .. }
+    ) {
+        // 进程级提示没有对应 pane 的解决事实；低优先级不得清除既有错误或等待态。
+        Vec::new()
     } else {
         vec![
             TaskbarSignal::AttentionCleared(pane),
@@ -792,6 +880,11 @@ pub(crate) fn deliver_startup_summary(notification: &Notification, cx: &App) {
     deliver_with(notification, PaneId(0), None, true, cx);
 }
 
+/// 运行期进程级提示：前台聚焦时保持安静，但应用内保留与任务栏错误态照常。
+pub(crate) fn deliver_process_alert(notification: &Notification, cx: &App) {
+    deliver_with(notification, PaneId(0), None, false, cx);
+}
+
 /// 单一投递入口:前台门控 → 节流计划 → 闪烁先行 → 系统 toast。
 /// `confirmation` = 权限确认的 (request_id, 候选标签),动作按钮直达
 /// confirmation 链(确认语义归安全半程)。HWND 查询经
@@ -817,6 +910,8 @@ fn deliver_with(
         .get_or_init(|| Mutex::new(Funnel::new()))
         .lock()
         .unwrap_or_else(|poison| poison.into_inner());
+    // 应用内保留面先于一切门控：桌面关闭、窗口聚焦都不影响错误可见性。
+    record_in_app(notification);
     let request = confirmation.as_ref().map(|confirmation| confirmation.0);
     let switches = delivery_switches(cx);
     let plan = if startup_summary {
@@ -1347,6 +1442,7 @@ mod notification_tests {
     fn process_alert_uses_the_brand_title_and_is_not_ai_sourced() {
         let notification = Notification::ProcessAlert {
             text: "Claude Code 的 hook 安装失败".into(),
+            severity: AlertSeverity::Info,
         };
         let (title, body) = notification.raw_toast_text();
         assert_eq!(title, crate::brand::NAME);
@@ -1359,6 +1455,48 @@ mod notification_tests {
         let plan = funnel.plan_startup(&notification, PaneId(0), true, None, Instant::now());
         assert!(plan.toast.is_some(), "进程级提示必须穿透前台门控");
         assert!(!plan.flash);
+    }
+
+    /// 错误级进程提示进入任务栏错误态；低优先级提示不得清除既有错误或等待态。
+    #[test]
+    fn process_alert_error_maps_to_failure_and_taskbar_error_only() {
+        let error = Notification::ProcessAlert {
+            text: "设置保存失败".into(),
+            severity: AlertSeverity::Error,
+        };
+        assert!(error.is_failure());
+        assert_eq!(
+            taskbar_signals(&error, PaneId(0)),
+            vec![crate::taskbar::TaskbarSignal::ErrorRaised(PaneId(0))]
+        );
+        for severity in [AlertSeverity::Info, AlertSeverity::Warning] {
+            let notice = Notification::ProcessAlert {
+                text: "启动摘要".into(),
+                severity,
+            };
+            assert!(!notice.is_failure());
+            assert!(
+                taskbar_signals(&notice, PaneId(0)).is_empty(),
+                "低优先级提示不得清空错误或等待态"
+            );
+        }
+    }
+
+    /// 应用内保留面与桌面开关、前台门控无关；同一文本只保留一份。
+    #[test]
+    fn in_app_notices_survive_disabled_desktop_toasts() {
+        reset_in_app_notices_for_test();
+        let error = Notification::ProcessAlert {
+            text: "文档保存失败".into(),
+            severity: AlertSeverity::Error,
+        };
+        record_in_app(&error);
+        record_in_app(&error);
+        let drained = drain_in_app_notices();
+        assert_eq!(drained.len(), 1, "同一文本不得重复保留");
+        assert_eq!(drained[0].severity, AlertSeverity::Error);
+        assert_eq!(drained[0].text, "文档保存失败");
+        assert!(drain_in_app_notices().is_empty(), "排空后不得重投");
     }
 
     /// pane 级同键窗口:同 pane+attention+request 3s 内只放一条;不同

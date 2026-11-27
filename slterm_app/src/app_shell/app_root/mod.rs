@@ -23,6 +23,7 @@ mod focus_manager;
 pub(crate) mod git_changes;
 mod git_show;
 mod hooks_page;
+mod in_app_notices;
 pub(crate) mod keymap;
 mod language_selector;
 mod layout;
@@ -357,6 +358,8 @@ pub(crate) struct AppRoot {
     /// 设置运行值世代：任一视图提交或保存回执推进，驱动跨视图控件回填。
     settings_revision: u64,
     settings_load_warning: Option<crate::settings_state::SettingsLoadWarning>,
+    /// 应用内通知保留面：错误与警告与系统 toast 独立，关闭只由用户显式操作。
+    in_app_notices: Vec<crate::notify::InAppNotice>,
     /// AgentHooks 页的安装状态快照；None = 尚未探测。
     agent_integrations: Option<Vec<crate::ai_hook::integrations::AgentIntegration>>,
     agent_hooks_inspecting: bool,
@@ -671,6 +674,7 @@ impl AppRoot {
             ),
             settings_revision: 0,
             settings_load_warning,
+            in_app_notices: Vec::new(),
             agent_integrations: None,
             agent_hooks_inspecting: false,
             agent_hooks_error: false,

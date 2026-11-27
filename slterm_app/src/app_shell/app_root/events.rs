@@ -147,6 +147,7 @@ impl AppRoot {
                                     root.resume_pending_application_close(cx);
                                     root.poll_document_autosave(cx);
                                     root.poll_settings_save(cx);
+                                    root.poll_in_app_notices(cx);
                                     if tray_tick.is_multiple_of(8) {
                                         root.poll_tray(cx);
                                     }
@@ -627,11 +628,12 @@ fn closing_snapshot_error() -> JsonRpcError {
 
 pub(crate) fn notify_workspace_write_failed(cx: &mut App) {
     let language = cx.global::<crate::app_shell::config::Settings>().language;
-    crate::notify::deliver_startup_summary(
+    crate::notify::deliver_process_alert(
         &crate::notify::Notification::ProcessAlert {
             text: language
                 .text(crate::i18n::Message::NotifyWorkspaceWriteFailed)
                 .to_owned(),
+            severity: crate::notify::AlertSeverity::Error,
         },
         cx,
     );
@@ -639,11 +641,12 @@ pub(crate) fn notify_workspace_write_failed(cx: &mut App) {
 
 pub(crate) fn notify_terminal_cwd_fallback(cx: &mut App) {
     let language = cx.global::<crate::app_shell::config::Settings>().language;
-    crate::notify::deliver_startup_summary(
+    crate::notify::deliver_process_alert(
         &crate::notify::Notification::ProcessAlert {
             text: language
                 .text(crate::i18n::Message::NotifyTerminalCwdFallback)
                 .to_owned(),
+            severity: crate::notify::AlertSeverity::Warning,
         },
         cx,
     );
@@ -660,7 +663,13 @@ fn workspace_repair_text(count: usize, language: crate::i18n::UiLanguage) -> Str
 pub(crate) fn notify_workspace_repairs(count: usize, cx: &mut App) {
     let language = cx.global::<crate::app_shell::config::Settings>().language;
     let text = workspace_repair_text(count, language);
-    crate::notify::deliver_startup_summary(&crate::notify::Notification::ProcessAlert { text }, cx);
+    crate::notify::deliver_startup_summary(
+        &crate::notify::Notification::ProcessAlert {
+            text,
+            severity: crate::notify::AlertSeverity::Warning,
+        },
+        cx,
+    );
 }
 
 /// 设置页恢复命中当前宿主不可用页时的显式提示。
@@ -669,7 +678,13 @@ pub(crate) fn notify_settings_page_fallback(cx: &mut App) {
     let text = language
         .text(crate::i18n::Message::NotifySettingsPageFallback)
         .to_owned();
-    crate::notify::deliver_startup_summary(&crate::notify::Notification::ProcessAlert { text }, cx);
+    crate::notify::deliver_startup_summary(
+        &crate::notify::Notification::ProcessAlert {
+            text,
+            severity: crate::notify::AlertSeverity::Warning,
+        },
+        cx,
+    );
 }
 
 pub(crate) fn notify_workspace_recovered(
@@ -688,6 +703,7 @@ pub(crate) fn notify_workspace_recovered(
     crate::notify::deliver_startup_summary(
         &crate::notify::Notification::ProcessAlert {
             text: language.text(message).to_owned(),
+            severity: crate::notify::AlertSeverity::Warning,
         },
         cx,
     );
@@ -739,7 +755,13 @@ fn ai_hook_alert_text(
 pub(crate) fn notify_ai_hook_failure(kind: crate::ai_hook::HookFailureKind, cx: &mut App) {
     let language = cx.global::<crate::app_shell::config::Settings>().language;
     let text = ai_hook_alert_text(kind, language);
-    crate::notify::deliver_startup_summary(&crate::notify::Notification::ProcessAlert { text }, cx);
+    crate::notify::deliver_process_alert(
+        &crate::notify::Notification::ProcessAlert {
+            text,
+            severity: crate::notify::AlertSeverity::Error,
+        },
+        cx,
+    );
 }
 
 pub(crate) fn notify_hooks_draft_close_pending(cx: &mut App) {
@@ -747,19 +769,37 @@ pub(crate) fn notify_hooks_draft_close_pending(cx: &mut App) {
     let text = language
         .text(crate::i18n::Message::SettingsAgentsHooksClosePending)
         .to_owned();
-    crate::notify::deliver_startup_summary(&crate::notify::Notification::ProcessAlert { text }, cx);
+    crate::notify::deliver_process_alert(
+        &crate::notify::Notification::ProcessAlert {
+            text,
+            severity: crate::notify::AlertSeverity::Warning,
+        },
+        cx,
+    );
 }
 
 pub(crate) fn notify_application_close_decision_required(count: usize, cx: &mut App) {
     let language = cx.global::<crate::app_shell::config::Settings>().language;
     let text = application_close_decision_text(count, language);
-    crate::notify::deliver_startup_summary(&crate::notify::Notification::ProcessAlert { text }, cx);
+    crate::notify::deliver_process_alert(
+        &crate::notify::Notification::ProcessAlert {
+            text,
+            severity: crate::notify::AlertSeverity::Warning,
+        },
+        cx,
+    );
 }
 
 pub(crate) fn notify_document_save_error(error: &crate::text_document::SaveError, cx: &mut App) {
     let language = cx.global::<crate::app_shell::config::Settings>().language;
     let text = document_save_error_text(error, language);
-    crate::notify::deliver_startup_summary(&crate::notify::Notification::ProcessAlert { text }, cx);
+    crate::notify::deliver_process_alert(
+        &crate::notify::Notification::ProcessAlert {
+            text,
+            severity: crate::notify::AlertSeverity::Error,
+        },
+        cx,
+    );
 }
 
 fn document_save_state_text(
@@ -784,7 +824,13 @@ pub(crate) fn notify_document_save_state(
 ) {
     let language = cx.global::<crate::app_shell::config::Settings>().language;
     let text = document_save_state_text(error, language);
-    crate::notify::deliver_startup_summary(&crate::notify::Notification::ProcessAlert { text }, cx);
+    crate::notify::deliver_process_alert(
+        &crate::notify::Notification::ProcessAlert {
+            text,
+            severity: crate::notify::AlertSeverity::Error,
+        },
+        cx,
+    );
 }
 
 #[cfg(test)]

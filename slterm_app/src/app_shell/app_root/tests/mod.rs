@@ -11,6 +11,7 @@ mod documents;
 mod explorer;
 mod gitshow;
 mod handover;
+mod in_app_notices;
 mod language;
 mod layout;
 mod local_close;
@@ -370,6 +371,8 @@ fn open_root_with_persistence_and_size_configured(
 ) {
     cx.update(|cx| {
         gpui_component::init(cx);
+        // 每个测试实例独立：进程级通知存储不得把前一用例的通知带进新窗口。
+        crate::notify::reset_in_app_notices_for_test();
         cx.set_global(crate::app_shell::config::Settings::default());
         crate::app_shell::theme::apply_dark_theme(cx);
         super::keymap::register(cx);

@@ -462,6 +462,7 @@ impl Render for AppRoot {
                     .child(self.render_active_project(cx)),
             )
             .children(self.render_sidebar_drag_overlay(cx))
+            .children(self.render_in_app_notices(cx))
             .children(self.render_settings_overlay(cx))
             .children(self.render_close_decision(cx))
             .children(self.render_save_conflict(cx))
