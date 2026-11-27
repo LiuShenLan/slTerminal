@@ -40,12 +40,26 @@ fn dispatch_mutation(
             );
         });
     });
-    // Agent 回执延迟到提示符注入超时落定；推进虚拟时钟让注入发生。
+    // Agent 回执延迟到提示符注入与快照提交落定；推进虚拟时钟让注入发生。
     window
         .executor()
         .advance_clock(std::time::Duration::from_secs(11));
-    window.run_until_parked();
-    match response.try_recv().expect("AppRoot 必须返回写意图回执") {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let reply = loop {
+        window.update(|_, cx| {
+            root.update(cx, |root, cx| root.poll_snapshot_replies(cx));
+        });
+        window.run_until_parked();
+        if let Ok(reply) = response.try_recv() {
+            break reply;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "AppRoot 必须返回写意图回执"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    };
+    match reply {
         Ok(crate::app_shell::RuntimeMutationReply::Done(result)) => result,
         Ok(crate::app_shell::RuntimeMutationReply::Git(_))
         | Ok(crate::app_shell::RuntimeMutationReply::GitOpen(_)) => {
@@ -308,9 +322,20 @@ fn runtime_agent_start_injects_catalog_builtin_command(cx: &mut TestAppContext) 
     window
         .executor()
         .advance_clock(std::time::Duration::from_secs(11));
-    window.run_until_parked();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let reply = loop {
+        window.update(|_, cx| {
+            root.update(cx, |root, cx| root.poll_snapshot_replies(cx));
+        });
+        window.run_until_parked();
+        if let Ok(reply) = response.try_recv() {
+            break reply;
+        }
+        assert!(std::time::Instant::now() < deadline, "注入落定后必须回执");
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    };
     assert!(matches!(
-        response.try_recv().expect("注入落定后必须回执"),
+        reply,
         Ok(crate::app_shell::RuntimeMutationReply::Done(Ok(())))
     ));
 }

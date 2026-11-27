@@ -56,6 +56,9 @@ fn dispatch_runtime_mutation(
     });
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
+        window.update(|_, cx| {
+            root.update(cx, |root, cx| root.poll_snapshot_replies(cx));
+        });
         window.run_until_parked();
         match response.try_recv() {
             Ok(reply) => return reply,

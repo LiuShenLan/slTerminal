@@ -36,6 +36,7 @@ mod project_view;
 mod projects;
 mod render;
 mod runtime_snapshot;
+mod runtime_snapshot_persist;
 mod save_conflict;
 mod settings_agents;
 mod settings_controls;
@@ -360,6 +361,8 @@ pub(crate) struct AppRoot {
     settings_load_warning: Option<crate::settings_state::SettingsLoadWarning>,
     /// 应用内通知保留面：错误与警告与系统 toast 独立，关闭只由用户显式操作。
     in_app_notices: Vec<crate::notify::InAppNotice>,
+    /// Runtime 写操作的持久提交等待队列；成功回执只由事务回执结算。
+    pending_snapshot_replies: Vec<runtime_snapshot_persist::PendingSnapshotReply>,
     /// AgentHooks 页的安装状态快照；None = 尚未探测。
     agent_integrations: Option<Vec<crate::ai_hook::integrations::AgentIntegration>>,
     agent_hooks_inspecting: bool,
@@ -675,6 +678,7 @@ impl AppRoot {
             settings_revision: 0,
             settings_load_warning,
             in_app_notices: Vec::new(),
+            pending_snapshot_replies: Vec::new(),
             agent_integrations: None,
             agent_hooks_inspecting: false,
             agent_hooks_error: false,

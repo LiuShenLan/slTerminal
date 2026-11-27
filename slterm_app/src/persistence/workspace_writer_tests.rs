@@ -716,6 +716,41 @@ fn workspace_writer_flushes_terminal_metadata_with_project_snapshot() {
     writer.shutdown().unwrap();
 }
 
+/// 立即提交回执只在事务提交后返回，并覆盖同代去抖副本。
+#[test]
+fn immediate_project_snapshot_commit_acknowledges_after_the_transaction() {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = fixture(&temp);
+    let mut observer = WorkspaceDatabase::open(&paths).unwrap();
+    let writer = WorkspaceWriter::start(paths).unwrap();
+    let client = writer.client();
+
+    let expected = project_snapshot("immediate");
+    let receipt = client.commit_project_snapshot(&expected).unwrap();
+    receipt
+        .recv_timeout(Duration::from_secs(5))
+        .expect("回执不得断连")
+        .expect("回执必须携带真实事务结果");
+    assert_eq!(observer.load_project_snapshot().unwrap(), expected);
+
+    client
+        .save_project_snapshot(&project_snapshot("debounced"))
+        .unwrap();
+    let newer = project_snapshot("newer");
+    let receipt = client.commit_project_snapshot(&newer).unwrap();
+    receipt
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap();
+    assert_eq!(writer.flush().unwrap(), WorkspaceFlushReport::default());
+    assert_eq!(
+        observer.load_project_snapshot().unwrap(),
+        newer,
+        "旧去抖副本不得在立即提交后反写"
+    );
+    writer.shutdown().unwrap();
+}
+
 #[test]
 fn workspace_writer_debounces_project_snapshot_to_latest() {
     let temp = tempfile::tempdir().unwrap();

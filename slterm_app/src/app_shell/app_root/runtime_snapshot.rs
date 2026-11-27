@@ -84,10 +84,20 @@ impl AppRoot {
             RuntimeMutation::AppClose { documents, hooks } => {
                 self.start_runtime_application_close(documents, hooks, completion, window, cx)
             }
-            mutation => RuntimeMutationDispatch::Reply(
-                self.execute_runtime_mutation(mutation, window, cx)
-                    .map(|()| RuntimeMutationReply::Done(Ok(()))),
-            ),
+            mutation => {
+                let persist = runtime_mutation_persists_snapshot(&mutation);
+                match self.execute_runtime_mutation(mutation, window, cx) {
+                    Ok(()) if persist => self.defer_until_snapshot_persisted(
+                        RuntimeMutationReply::Done(Ok(())),
+                        completion,
+                        cx,
+                    ),
+                    Ok(()) => {
+                        RuntimeMutationDispatch::Reply(Ok(RuntimeMutationReply::Done(Ok(()))))
+                    }
+                    Err(error) => RuntimeMutationDispatch::Reply(Err(error)),
+                }
+            }
         }
     }
 
@@ -109,7 +119,7 @@ impl AppRoot {
                 return RuntimeMutationDispatch::Reply(Err(open_file_handover_error(error)));
             }
         };
-        let mut completion = RuntimeMutationCompletion::new(completion.clone());
+        let result_tx = self.begin_deferred_snapshot_reply(completion);
         self.queue_document_open(
             request,
             Some(Box::new(move |result, _window, _cx| {
@@ -117,7 +127,7 @@ impl AppRoot {
                     Ok(()) => RuntimeMutationReply::Done(Ok(())),
                     Err(error) => RuntimeMutationReply::Done(Err(open_file_handover_error(error))),
                 };
-                completion.send(reply);
+                let _ = result_tx.try_send(Ok(reply));
             })),
             window,
             cx,
@@ -855,6 +865,7 @@ impl AppRoot {
                 )));
             }
         };
+        let result_tx = self.begin_deferred_snapshot_reply(&completion);
         let callback: crate::gpui_terminal::AgentCommandCompletion = Box::new(move |outcome| {
             let reply = match outcome {
                 crate::gpui_terminal::AgentCommandOutcome::Injected => {
@@ -865,7 +876,7 @@ impl AppRoot {
                 }
             };
             // 发送端断开由服务端按结果不明处理，不伪造失败或成功。
-            let _ = completion.try_send(Ok(reply));
+            let _ = result_tx.try_send(Ok(reply));
         });
         view.update(cx, |view, cx| {
             view.schedule_agent_command(command, Some(callback), cx);
@@ -1230,6 +1241,27 @@ fn path_text(path: &CanonicalPath) -> Result<String, JsonRpcError> {
         .ok_or_else(snapshot_encoding_error)
 }
 
+/// 同步写意图是否改变需要持久化的项目快照。
+///
+/// 输入／聚焦只触达运行态或外部文件；关闭链与异步打开另有完成回执。
+fn runtime_mutation_persists_snapshot(mutation: &RuntimeMutation) -> bool {
+    matches!(
+        mutation,
+        RuntimeMutation::ProjectActivate { .. }
+            | RuntimeMutation::ProjectRename { .. }
+            | RuntimeMutation::ProjectReorder { .. }
+            | RuntimeMutation::PanelGroupSplit { .. }
+            | RuntimeMutation::PanelGroupMerge { .. }
+            | RuntimeMutation::PanelGroupResize { .. }
+            | RuntimeMutation::PanelActivate { .. }
+            | RuntimeMutation::PanelMove { .. }
+            | RuntimeMutation::PanelOpenSettings
+            | RuntimeMutation::TerminalCreate { .. }
+            | RuntimeMutation::TerminalReconnect { .. }
+            | RuntimeMutation::TerminalRename { .. }
+    )
+}
+
 /// 写意图处理结果：立即回执，或已移交异步完成回调。
 pub(super) enum RuntimeMutationDispatch {
     Reply(Result<RuntimeMutationReply, JsonRpcError>),
@@ -1277,7 +1309,7 @@ impl Drop for RuntimeMutationCompletion {
     }
 }
 
-fn closing_error() -> JsonRpcError {
+pub(super) fn closing_error() -> JsonRpcError {
     control_error(DomainErrorCode::Closing, -32004, "closing")
 }
 

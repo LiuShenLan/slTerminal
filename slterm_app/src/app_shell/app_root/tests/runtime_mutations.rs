@@ -601,3 +601,99 @@ fn runtime_project_mutations_are_rejected_while_closing(cx: &mut TestAppContext)
         Some(DomainErrorCode::Closing)
     );
 }
+
+/// Runtime 写成功只在项目快照事务提交后回执；回执后数据库可见同一事实。
+#[gpui::test]
+fn runtime_mutation_success_waits_for_the_project_snapshot_commit(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let (events, _event_rx) = std::sync::mpsc::sync_channel(64);
+    let runtime = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
+    let persistence =
+        AppRootPersistence::load_with_previous_run(&paths, Some(runtime.client()), None);
+    let (root, mut window, _state) = open_root_with_persistence(cx, persistence);
+    add_project(&root, &mut window, PROJECT_A, "D:/work/a");
+    let project = project_id(PROJECT_A);
+
+    let (completion, response) = mpsc::sync_channel(1);
+    window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.handle_shell_event(
+                SltermShellEvent::RuntimeMutation {
+                    mutation: RuntimeMutation::ProjectRename {
+                        project_id: project,
+                        name: "persisted".to_owned(),
+                    },
+                    completion,
+                },
+                window,
+                cx,
+            );
+        });
+    });
+    assert!(
+        response.try_recv().is_err(),
+        "内存提交后不得在事务回执前回复成功"
+    );
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let reply = loop {
+        window.update(|_, cx| {
+            root.update(cx, |root, cx| root.poll_snapshot_replies(cx));
+        });
+        window.run_until_parked();
+        if let Ok(reply) = response.try_recv() {
+            break reply;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "项目快照事务必须在截止前回执"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    };
+    match reply.expect("写意图必须成功") {
+        RuntimeMutationReply::Done(result) => result.expect("事务提交后必须成功"),
+        _ => panic!("普通写意图不得返回 Git 目标"),
+    }
+
+    let mut observer = WorkspaceDatabase::open(&paths).unwrap();
+    let stored = observer.load_project_snapshot().unwrap();
+    assert_eq!(
+        stored
+            .registry()
+            .project(project)
+            .expect("项目必须已持久化")
+            .display_name(),
+        "persisted",
+        "回执后数据库必须已是同一事实"
+    );
+    runtime.shutdown(ControlPlaneCleanup::Succeeded).unwrap();
+}
+
+/// 写线程已停止时，内存提交不得伪装成功。
+#[gpui::test]
+fn runtime_mutation_fails_when_the_snapshot_writer_is_stopped(cx: &mut TestAppContext) {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = AppPaths::new(temp.path().join("config"), temp.path().join("local")).unwrap();
+    let (events, _event_rx) = std::sync::mpsc::sync_channel(64);
+    let runtime = WorkspaceWriterRuntime::start_at(&paths, events).unwrap();
+    let persistence =
+        AppRootPersistence::load_with_previous_run(&paths, Some(runtime.client()), None);
+    let (root, mut window, _state) = open_root_with_persistence(cx, persistence);
+    add_project(&root, &mut window, PROJECT_A, "D:/work/a");
+    runtime.shutdown(ControlPlaneCleanup::Succeeded).unwrap();
+
+    let error = dispatch_mutation(
+        &root,
+        &mut window,
+        RuntimeMutation::ProjectRename {
+            project_id: project_id(PROJECT_A),
+            name: "lost".to_owned(),
+        },
+    )
+    .expect_err("写线程停止后不得报告成功");
+    assert_eq!(
+        error.data.as_ref().map(|data| data.code),
+        Some(DomainErrorCode::NotReady)
+    );
+}

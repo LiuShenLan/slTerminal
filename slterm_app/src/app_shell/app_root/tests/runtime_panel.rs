@@ -29,12 +29,16 @@ fn dispatch_runtime_mutation(
 }
 
 fn wait_reply(
+    root: &Entity<AppRoot>,
     receiver: &mpsc::Receiver<Result<crate::app_shell::RuntimeMutationReply, JsonRpcError>>,
     window: &mut VisualTestContext,
     label: &str,
 ) -> Result<crate::app_shell::RuntimeMutationReply, JsonRpcError> {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
+        window.update(|_, cx| {
+            root.update(cx, |root, cx| root.poll_snapshot_replies(cx));
+        });
         window.run_until_parked();
         match receiver.try_recv() {
             Ok(reply) => return reply,
@@ -75,7 +79,7 @@ fn runtime_panel_open_file_reuses_the_document_open_chain(cx: &mut TestAppContex
                 .to_owned(),
         },
     );
-    expect_done(wait_reply(&receiver, &mut window, "open_file"));
+    expect_done(wait_reply(&root, &receiver, &mut window, "open_file"));
     assert!(
         root.read_with(cx, |root, cx| {
             root.projects[&project_id(PROJECT_A)]
@@ -95,7 +99,7 @@ fn runtime_panel_open_file_reuses_the_document_open_chain(cx: &mut TestAppContex
             path: "notes.txt".to_owned(),
         },
     );
-    let Err(error) = wait_reply(&receiver, &mut window, "invalid open_file") else {
+    let Err(error) = wait_reply(&root, &receiver, &mut window, "invalid open_file") else {
         panic!("相对路径必须拒绝");
     };
     assert_eq!(
@@ -117,7 +121,7 @@ fn runtime_panel_open_file_reuses_the_document_open_chain(cx: &mut TestAppContex
                 .to_owned(),
         },
     );
-    let Err(error) = wait_reply(&receiver, &mut window, "unauthorized open_file") else {
+    let Err(error) = wait_reply(&root, &receiver, &mut window, "unauthorized open_file") else {
         panic!("项目根外路径必须拒绝");
     };
     assert_eq!(
@@ -183,7 +187,7 @@ fn runtime_panel_save_waits_for_the_document_save_chain(cx: &mut TestAppContext)
         },
     );
     // 回执必须等到真实保存落定：完成时磁盘与脏态都已经更新。
-    expect_done(wait_reply(&receiver, &mut window, "panel.save"));
+    expect_done(wait_reply(&root, &receiver, &mut window, "panel.save"));
     assert_eq!(
         std::fs::read_to_string(&file).unwrap(),
         "saved draft\n",
@@ -203,7 +207,7 @@ fn runtime_panel_save_waits_for_the_document_save_chain(cx: &mut TestAppContext)
             },
         },
     );
-    let Err(error) = wait_reply(&receiver, &mut window, "invalid save") else {
+    let Err(error) = wait_reply(&root, &receiver, &mut window, "invalid save") else {
         panic!("非文本视图必须拒绝");
     };
     assert_eq!(
@@ -222,7 +226,7 @@ fn runtime_panel_save_waits_for_the_document_save_chain(cx: &mut TestAppContext)
             },
         },
     );
-    let Err(error) = wait_reply(&receiver, &mut window, "closing save") else {
+    let Err(error) = wait_reply(&root, &receiver, &mut window, "closing save") else {
         panic!("关闭中必须拒绝");
     };
     assert_eq!(

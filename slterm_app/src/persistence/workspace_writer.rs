@@ -135,6 +135,11 @@ enum Command {
     SaveProjectSnapshot {
         snapshot: Box<ProjectSnapshot>,
     },
+    /// Runtime 写操作：跳过去抖立即提交事务，回执携带真实提交结果。
+    CommitProjectSnapshot {
+        snapshot: Box<ProjectSnapshot>,
+        response: SyncSender<Result<(), ProjectStoreError>>,
+    },
     CommitCloseIntent {
         snapshot: Box<ProjectSnapshot>,
         registration: Box<PersistedCloseIntent>,
@@ -242,6 +247,27 @@ impl WorkspaceWriterClient {
                 TrySendError::Full(_) => WorkspaceWriterError::QueueFull,
                 TrySendError::Disconnected(_) => WorkspaceWriterError::Stopped,
             })
+    }
+
+    /// 非阻塞请求立即提交项目快照；事务结果经容量 1 回执返回。
+    ///
+    /// 供 Runtime 写操作把成功回执推迟到真实持久提交之后；普通 UI 修改
+    /// 仍走 [`Self::save_project_snapshot`] 的 2 秒去抖。
+    pub(crate) fn commit_project_snapshot(
+        &self,
+        snapshot: &ProjectSnapshot,
+    ) -> Result<Receiver<Result<(), ProjectStoreError>>, WorkspaceWriterError> {
+        let (response, result) = mpsc::sync_channel(1);
+        self.commands
+            .try_send(Command::CommitProjectSnapshot {
+                snapshot: Box::new(snapshot.clone()),
+                response,
+            })
+            .map_err(|error| match error {
+                TrySendError::Full(_) => WorkspaceWriterError::QueueFull,
+                TrySendError::Disconnected(_) => WorkspaceWriterError::Stopped,
+            })?;
+        Ok(result)
     }
 
     /// 非阻塞提交项目快照与关闭意图的原子组合事务，实际结果只经独立回执返回。
@@ -848,6 +874,12 @@ fn run(
                     snapshot: *snapshot,
                     due: Some(Instant::now() + PROJECT_SNAPSHOT_DEBOUNCE),
                 });
+            }
+            Command::CommitProjectSnapshot { snapshot, response } => {
+                // 立即事务覆盖同代去抖副本；回执只在事务提交或失败后发送。
+                pending.project_snapshot = None;
+                let result = store.save_project_snapshot(&snapshot);
+                let _ = response.send(result);
             }
             Command::CommitCloseIntent {
                 snapshot,

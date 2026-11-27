@@ -142,7 +142,10 @@ impl AppRoot {
                                         break;
                                     }
                                 }
-                                if !root.close_completed {
+                                if root.close_completed {
+                                    root.fail_pending_snapshot_replies();
+                                } else {
+                                    root.poll_snapshot_replies(cx);
                                     root.poll_fs_watch(window, cx);
                                     root.resume_pending_application_close(cx);
                                     root.poll_document_autosave(cx);
