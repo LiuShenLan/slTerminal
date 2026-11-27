@@ -443,6 +443,8 @@ pub(crate) struct AppRoot {
     agent_hooks_inspecting: bool,
     /// 安装/卸载失败的脱敏标记；成功后清除。
     agent_hooks_error: bool,
+    /// statusline 桥接写入的最近一次上下文用量。
+    agent_hook_usage: Option<crate::ai_hook::ContextUsage>,
     #[cfg(test)]
     agent_hooks_inspect_for_test: Option<AgentHooksInspectPort>,
     #[cfg(test)]
@@ -797,6 +799,7 @@ impl AppRoot {
             agent_integrations: None,
             agent_hooks_inspecting: false,
             agent_hooks_error: false,
+            agent_hook_usage: None,
             #[cfg(test)]
             agent_hooks_inspect_for_test: None,
             #[cfg(test)]

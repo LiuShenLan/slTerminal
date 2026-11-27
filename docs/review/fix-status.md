@@ -84,7 +84,7 @@
 | 保存进行中继续编辑会被保存回执静默覆盖 | 已修：`HooksDraft::finish_save` 以提交文本比对结算，期间编辑保留正文与脏态、只推进基线；任务身份按完整草稿键隔离（提交 29094491）；测试 `save_receipt_keeps_edits_made_while_the_save_was_in_flight`、`hooks_page_loads_saves_external_guard_and_discards` |
 | Hooks 层默认与切换错误 | 已修：项目面板重建视图恒回 User 层，`available_hooks_layers` 按视图身份恒给三层，User↔Project 可往返（提交 94ca8256）；测试 `hooks_page_loads_saves_external_guard_and_discards` |
 | Hooks 草稿任务身份只含面板 | 已修：`TaskId::HooksDraftLoad/Save` 改携完整 `HooksDraftKey`（提交 5a9fb9e1）；测试 `hooks_draft_task_identity_includes_layer_and_agent` |
-| statusline 用量桥接与信号通道整体缺失 | 待修 |
+| statusline 用量桥接与信号通道整体缺失 | 已修：仅对既有 command 型 `statusLine` 安装托管脚本与 marker，脚本真实透传原命令输出并节流写本地 `statusline-context.json`；卸载按 marker 恢复完整原 statusLine 后清理脚本、marker 与信号，用户替换时零覆盖。新增 `ContextUsage` 读取与 AgentHooks 页用量展示（后台读取，不伪造百分比）。测试 `generated_script_passes_through_and_writes_context_usage`、`bridge_wraps_and_restores_the_original_command`、`installer_uninstall_restores_statusline_and_cleans_materials`、`user_replacement_is_never_overwritten_or_restored`、`context_usage_requires_valid_signal`、`agent_hooks_page_renders_status_and_toggles_through_injected_ports`（新增用量行断言） |
 | 追溯矩阵与进度把未接线的生产链记为已自动化/已验收 | 待修 |
 | Hooks 页面错误文案硬编码中文 | 已修：编辑域返回封闭 `HooksEditError`，页面包装 `HooksPageError`，渲染经 `hooks_error_text` 查询 typed `Message`，新增中英文诊断键（提交 5ab9a661）；测试 `save_rejects_unknown_events_and_invalid_handlers_without_writing`、`hooks_save_backup_failure_keeps_original_untouched`、`hooks_page_loads_saves_external_guard_and_discards` |
 | 项目根不可访问时未禁用 Project/Local | 已修：载入与保存前在后台校验真实层根目录，缺失时 Project／Local pill 禁用、显示原因并拒绝写盘（提交 e971c4ae）；测试 `hooks_project_root_loss_disables_layers_and_never_recreates_config`、`hooks_missing_user_config_dir_is_reported_without_creating_it` |

@@ -398,6 +398,7 @@
       "hook_confirm_title": "Existing commands need confirmation",
       "hook_confirm_hint": "Installing rewrites or preserves these configured commands; they are written only after you confirm.",
       "hook_confirm_cancel": "Cancel",
+      "context_usage": "Context usage: {percent}% ({used}/{total} tokens)",
       "restart": "Restart the CLI after changing hook installation.",
       "apply_failed": "Hook installation failed; see logs for the redacted category.",
       "refresh_state": "Refresh hook status",

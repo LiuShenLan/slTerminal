@@ -47,6 +47,7 @@ pub(crate) use local::hook_journal::{
     HOOK_JOURNAL_DIR, HOOKS_INSTALL_KIND, HOOKS_UNINSTALL_KIND, HookJournalPort,
     HooksJournalRecoverer,
 };
+pub(crate) use local::statusline::{ContextUsage, signal_path as statusline_signal_path};
 pub use ordering::GateVerdict;
 pub(crate) use ordering::{accept_for_pane, reorder_batch};
 pub(crate) use protocol::parse_envelope;

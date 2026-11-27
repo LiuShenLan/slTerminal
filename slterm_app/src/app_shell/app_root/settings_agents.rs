@@ -78,6 +78,7 @@ pub(super) fn render_agent_hooks_page(
     let mut failed = false;
     let mut enabled = Vec::new();
     let mut confirmations = Vec::new();
+    let mut usage = None;
     if let Some(root) = root_entity.as_ref() {
         let root = root.read(cx);
         integrations = root.agent_integrations.clone();
@@ -85,7 +86,26 @@ pub(super) fn render_agent_hooks_page(
         failed = root.agent_hooks_error;
         enabled = agent_row_states(root.settings.values());
         confirmations = root.agent_hook_confirmations.clone();
+        usage = root.agent_hook_usage.clone();
     }
+    let usage_block = usage.map(|usage| {
+        let percent = usage
+            .used_percentage
+            .unwrap_or_else(|| 100.0 * usage.used_tokens as f64 / usage.total_tokens as f64);
+        let percent = format!("{percent:.0}");
+        let used = usage.used_tokens.to_string();
+        let total = usage.total_tokens.to_string();
+        div()
+            .pb_2()
+            .text_xs()
+            .text_color(cx.theme().muted_foreground)
+            .debug_selector(|| "settings-agent-usage".to_owned())
+            .child(language.format(
+                Message::SettingsAgentsContextUsage,
+                &[("percent", &percent), ("used", &used), ("total", &total)],
+            ))
+            .into_any_element()
+    });
     let confirmation_blocks = confirmations
         .into_iter()
         .map(|confirmation| {
@@ -320,6 +340,7 @@ pub(super) fn render_agent_hooks_page(
                 .text_color(cx.theme().muted_foreground)
                 .child(language.text(Message::SettingsAgentsDescription)),
         )
+        .children(usage_block)
         .when(failed, |element| {
             element.child(
                 div()
@@ -382,12 +403,19 @@ impl AppRoot {
         self.agent_hooks_inspecting = true;
         let cancellation = CancellationToken::new();
         let task = cx.spawn(async move |this, cx| {
-            let integrations = cx
+            let signal = crate::ai_hook::statusline_signal_path();
+            let (integrations, usage) = cx
                 .background_executor()
-                .spawn(async { crate::ai_hook::integrations::inspect() })
+                .spawn(async move {
+                    (
+                        crate::ai_hook::integrations::inspect(),
+                        crate::ai_hook::ContextUsage::read(&signal),
+                    )
+                })
                 .await;
             let _ = this.update(cx, |root, cx| {
                 root.agent_integrations = Some(integrations);
+                root.agent_hook_usage = usage;
                 root.agent_hooks_inspecting = false;
                 root.tasks.complete(TaskId::AgentHooksInspect);
                 cx.notify();
@@ -599,6 +627,15 @@ impl AppRoot {
     ) {
         self.agent_hooks_inspect_for_test = Some(inspect);
         self.agent_hook_apply_for_test = Some(apply);
+    }
+
+    #[cfg(test)]
+    #[allow(dead_code)] // 消费点 = gpui 功能测试；非 UI 测试构建不引用注入端口。
+    pub(crate) fn set_agent_hook_usage_for_test(
+        &mut self,
+        usage: Option<crate::ai_hook::ContextUsage>,
+    ) {
+        self.agent_hook_usage = usage;
     }
 
     #[cfg(test)]

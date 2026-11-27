@@ -675,7 +675,14 @@ fn agent_hooks_page_renders_status_and_toggles_through_injected_ports(cx: &mut T
 
     let (root, mut window, _state) = open_root(cx);
     root.update(cx, |root, _| {
-        root.replace_agent_hooks_for_test(inspect, apply)
+        root.replace_agent_hooks_for_test(inspect, apply);
+        root.set_agent_hook_usage_for_test(Some(crate::ai_hook::ContextUsage {
+            used_percentage: Some(42.0),
+            used_tokens: 84_000,
+            total_tokens: 200_000,
+            updated_at_ms: 1,
+            session_id: Some("s".to_owned()),
+        }));
     });
     focus_workspace(&root, &mut window);
     open_settings(&mut window);
@@ -684,6 +691,10 @@ fn agent_hooks_page_renders_status_and_toggles_through_injected_ports(cx: &mut T
     let page = window.debug_bounds("settings-page-agent-basic").unwrap();
     window.simulate_click(page.center(), Modifiers::default());
     draw_frame(&mut window);
+    assert!(
+        window.debug_bounds("settings-agent-usage").is_some(),
+        "AgentHooks 页必须展示 statusline 上下文用量"
+    );
     for slug in ["claude", "codex"] {
         assert!(
             window

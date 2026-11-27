@@ -398,6 +398,7 @@
       "hook_confirm_title": "检测到需要确认的既有命令",
       "hook_confirm_hint": "安装会重写或保留以下配置命令；确认后才写入。",
       "hook_confirm_cancel": "取消",
+      "context_usage": "上下文用量：{percent}%（{used}/{total} tokens）",
       "restart": "更改钩子安装后请重启对应 CLI。",
       "apply_failed": "钩子安装失败，请查看日志中的脱敏类别。",
       "refresh_state": "刷新钩子状态",

