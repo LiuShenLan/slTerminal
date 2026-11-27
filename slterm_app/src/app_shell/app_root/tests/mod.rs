@@ -12,6 +12,7 @@ mod documents;
 mod explorer;
 mod gitshow;
 mod handover;
+mod hooks_page;
 mod in_app_notices;
 mod language;
 mod layout;
@@ -48,7 +49,6 @@ mod tray_snapshot;
 mod update_prompt;
 mod view_tasks;
 mod window_geometry;
-
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};

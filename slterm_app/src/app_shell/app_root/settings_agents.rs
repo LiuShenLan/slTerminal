@@ -482,6 +482,7 @@ impl AppRoot {
                 self.agent_hook_confirmations
                     .retain(|confirmation| confirmation.hook != hook);
                 self.request_agent_hooks_inspect(cx);
+                self.refresh_user_hooks_after_install(cx);
             }
             Ok(ApplyOutcome::NeedsConfirmation(commands)) => {
                 self.agent_hooks_error = false;
@@ -555,6 +556,7 @@ impl AppRoot {
             Ok(()) => {
                 self.agent_hooks_error = false;
                 self.request_agent_hooks_inspect(cx);
+                self.refresh_user_hooks_after_install(cx);
             }
             Err(_) => self.agent_hooks_error = true,
         }

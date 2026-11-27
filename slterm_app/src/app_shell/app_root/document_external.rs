@@ -42,6 +42,7 @@ impl AppRoot {
                 })
                 .map(|(path, _)| path.clone()),
         );
+        files.extend(self.hooks_watch_files());
         files.sort();
         files.dedup();
         let desired = self.watch_candidates();
@@ -192,6 +193,11 @@ impl AppRoot {
         let ready = self.watcher_service.poll(now);
         self.refresh_watched_roots(ready, window, cx);
         for path in pending.files {
+            for key in self.hooks_keys_for_path(&path) {
+                if self.hooks_key_visible(key, cx) {
+                    self.check_hooks_external(key, cx);
+                }
+            }
             let Some(document_id) = self
                 .document_relocation_aliases
                 .get(&path)

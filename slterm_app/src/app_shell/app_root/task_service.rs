@@ -104,6 +104,7 @@ pub(crate) enum TaskId {
     /// Hooks 编辑器的磁盘载入与保存；身份含面板、CLI 与层级。
     HooksDraftLoad(crate::ai_hook::draft_host::HooksDraftKey),
     HooksDraftSave(crate::ai_hook::draft_host::HooksDraftKey),
+    HooksDraftExternalCheck(crate::ai_hook::draft_host::HooksDraftKey),
     #[allow(dead_code)] // 消费点归 Diff 固定 HEAD 后台读取。
     DiffHead(slterm_workspace::PanelId),
     MarkdownLink(uuid::Uuid),

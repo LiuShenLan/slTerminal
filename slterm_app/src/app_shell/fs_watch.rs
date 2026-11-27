@@ -157,6 +157,12 @@ impl FsWatchHandle {
         lock_state(&self.state).dirty_dirs.insert(path);
     }
 
+    /// 测试注入文件事件；只进入既有 pending 通道，不伪造 OS watcher。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn inject_file_event_for_test(&self, path: PathBuf) {
+        lock_state(&self.state).dirty_files.insert(path);
+    }
+
     #[cfg(test)]
     pub(crate) fn tracks_file(&self, path: &std::path::Path) -> bool {
         lock_state(&self.state).files.contains(path)

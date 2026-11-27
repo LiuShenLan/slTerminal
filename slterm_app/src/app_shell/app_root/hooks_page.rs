@@ -4,7 +4,7 @@
 //! `HooksDocument` 在锁内重读并比较基线指纹，外部修改零写入。
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
@@ -148,6 +148,10 @@ pub(super) struct HooksEditorState {
     unavailable_roots: BTreeSet<ProjectId>,
     /// 最近一次成功保存的草稿键；用于「重启 CLI 生效」提示。
     saved_hint: Option<HooksDraftKey>,
+    /// 后台复核发现磁盘已变化且草稿未保存的键。
+    external_modified: BTreeSet<HooksDraftKey>,
+    /// 在途外部修改复核，合并同一文件的重复事件。
+    external_checks: BTreeSet<HooksDraftKey>,
 }
 
 fn layer_label(layer: HooksDraftLayer) -> Message {
@@ -445,7 +449,7 @@ pub(super) fn render_hooks_page(
                                 else {
                                     return;
                                 };
-                                root.update(cx, |root, cx| root.discard_hooks_draft_for(key, cx));
+                                root.update(cx, |root, cx| root.reload_hooks_draft_for(key, cx));
                             }),
                         )
                         .child(language.text(Message::SettingsAgentsHooksReload)),
@@ -592,6 +596,145 @@ impl AppRoot {
         }
     }
 
+    /// 已载入 Hooks 层的真实文件路径；watcher 只登记存在的文件。
+    pub(super) fn hooks_watch_files(&self) -> Vec<PathBuf> {
+        self.hooks_editor
+            .documents
+            .keys()
+            .filter_map(|key| self.hooks_layer_path(key.layer).ok())
+            .filter(|path| path.is_file())
+            .collect()
+    }
+
+    /// 外部事件只在 Hooks 页可见且所属项目活跃时处理；隐藏期间保留登记。
+    pub(super) fn hooks_key_visible(&self, key: HooksDraftKey, cx: &App) -> bool {
+        match key.owner {
+            HooksDraftOwner::Overlay => self.settings_overlay.as_ref().is_some_and(|host| {
+                host.view.read(cx).current_page() == crate::settings_state::SettingsPageId::Hooks
+            }),
+            HooksDraftOwner::Panel(panel) => {
+                let active = self.snapshot.registry().active();
+                self.projects.iter().any(|(project_id, project)| {
+                    Some(*project_id) == active
+                        && project.read(cx).panels.get(&panel).is_some_and(|host| {
+                            match &host.content {
+                                super::panel_host::PanelContent::Settings(view) => {
+                                    view.read(cx).current_page()
+                                        == crate::settings_state::SettingsPageId::Hooks
+                                }
+                                _ => false,
+                            }
+                        })
+                })
+            }
+        }
+    }
+
+    pub(super) fn hooks_keys_for_path(&self, path: &Path) -> Vec<HooksDraftKey> {
+        self.hooks_editor
+            .documents
+            .keys()
+            .filter(|key| {
+                self.hooks_layer_path(key.layer)
+                    .is_ok_and(|layer| layer == path)
+            })
+            .copied()
+            .collect()
+    }
+
+    /// watcher 命中：后台重读真实文件，只有基线变化才标记外部修改。
+    pub(super) fn check_hooks_external(&mut self, key: HooksDraftKey, cx: &mut Context<'_, Self>) {
+        let Some(document) = self.hooks_editor.documents.get(&key).cloned() else {
+            return;
+        };
+        if !self.hooks_editor.external_checks.insert(key) {
+            return;
+        }
+        let cancellation = CancellationToken::new();
+        let task = cx.spawn(async move |this, cx| {
+            let reloaded = cx
+                .background_executor()
+                .spawn(async move { document.reload() })
+                .await;
+            let _ = this.update(cx, |root, cx| {
+                root.tasks.complete(TaskId::HooksDraftExternalCheck(key));
+                root.hooks_editor.external_checks.remove(&key);
+                if !root.hooks_draft_owner_alive(key.owner, cx) {
+                    return;
+                }
+                let current = root
+                    .hooks_editor
+                    .documents
+                    .get(&key)
+                    .and_then(HooksDocument::baseline);
+                let changed = match &reloaded {
+                    Ok(reloaded) => reloaded.baseline() != current,
+                    Err(_) => true,
+                };
+                if changed {
+                    root.hooks_editor.external_modified.insert(key);
+                    root.hooks_editor
+                        .errors
+                        .insert(key, HooksPageError::Edit(HooksEditError::ExternalModified));
+                } else {
+                    root.hooks_editor.external_modified.remove(&key);
+                    if matches!(
+                        root.hooks_editor.errors.get(&key),
+                        Some(HooksPageError::Edit(HooksEditError::ExternalModified))
+                    ) {
+                        root.hooks_editor.errors.remove(&key);
+                    }
+                }
+                cx.notify();
+            });
+        });
+        if let Err(error) =
+            self.tasks
+                .register(TaskId::HooksDraftExternalCheck(key), cancellation, task)
+        {
+            self.hooks_editor.external_checks.remove(&key);
+            log::warn!("Hooks 外部修改复核注册失败: {error:?}");
+        }
+    }
+
+    /// 非破坏性重新载入：只有干净草稿才按磁盘重建，脏草稿保留。
+    pub(super) fn reload_hooks_draft_for(
+        &mut self,
+        key: HooksDraftKey,
+        cx: &mut Context<'_, Self>,
+    ) {
+        if self.hook_drafts.get(key).is_some_and(|draft| draft.dirty()) {
+            return;
+        }
+        self.hooks_editor.external_modified.remove(&key);
+        self.forget_hooks_draft_keys(&[key]);
+        self.hook_drafts.discard(key);
+        self.request_hooks_draft(key, cx);
+        cx.notify();
+    }
+
+    /// 安装/卸载完成后：User 层已载入文档重读；脏草稿只标记外部修改。
+    pub(super) fn refresh_user_hooks_after_install(&mut self, cx: &mut Context<'_, Self>) {
+        let keys = self
+            .hooks_editor
+            .documents
+            .keys()
+            .filter(|key| key.layer == HooksDraftLayer::User)
+            .copied()
+            .collect::<Vec<_>>();
+        for key in keys {
+            if self.hook_drafts.get(key).is_some_and(|draft| draft.dirty()) {
+                self.hooks_editor.external_modified.insert(key);
+                self.hooks_editor
+                    .errors
+                    .insert(key, HooksPageError::Edit(HooksEditError::ExternalModified));
+            } else {
+                self.reload_hooks_draft_for(key, cx);
+            }
+        }
+        cx.notify();
+    }
+
     /// 后台载入层文件；已载入或载入中为空操作。
     pub(super) fn request_hooks_draft(&mut self, key: HooksDraftKey, cx: &mut Context<'_, Self>) {
         if self.hook_drafts.get(key).is_some() || self.hooks_editor.loading.contains(&key) {
@@ -644,11 +787,13 @@ impl AppRoot {
                         let baseline = document.baseline();
                         root.hooks_editor.documents.insert(key, document);
                         root.hooks_editor.errors.remove(&key);
+                        root.hooks_editor.external_modified.remove(&key);
                         if root.hook_drafts.get(key).is_none() {
                             root.hook_drafts
                                 .insert(key, HooksDraft::loaded(baseline, text, model));
                         }
                         root.hooks_generation = root.hooks_generation.wrapping_add(1);
+                        root.reconcile_fs_watch();
                     }
                     Err(error) => {
                         root.note_hooks_layer_failure(key, &error);
@@ -760,6 +905,7 @@ impl AppRoot {
                                 draft.finish_save(&submitted, baseline, saved_text, saved_model)
                             });
                             root.hooks_editor.errors.remove(&key);
+                            root.hooks_editor.external_modified.remove(&key);
                             if applied {
                                 // 保存成功即清除草稿；继续编辑会从磁盘基线重建。
                                 root.hook_drafts.discard(key);
@@ -795,11 +941,15 @@ impl AppRoot {
             // 面板或所有者销毁后，在途载入／保存不得再改动其草稿或文档。
             self.tasks.cancel(TaskId::HooksDraftLoad(*key));
             self.tasks.cancel(TaskId::HooksDraftSave(*key));
+            self.tasks.cancel(TaskId::HooksDraftExternalCheck(*key));
             self.hooks_editor.documents.remove(key);
             self.hooks_editor.errors.remove(key);
+            self.hooks_editor.external_modified.remove(key);
+            self.hooks_editor.external_checks.remove(key);
         }
         if !keys.is_empty() {
             self.hooks_generation = self.hooks_generation.wrapping_add(1);
+            self.reconcile_fs_watch();
         }
     }
 
@@ -855,7 +1005,10 @@ impl AppRoot {
         }
         self.hooks_editor.documents.clear();
         self.hooks_editor.errors.clear();
+        self.hooks_editor.external_modified.clear();
+        self.hooks_editor.external_checks.clear();
         self.hooks_generation = self.hooks_generation.wrapping_add(1);
+        self.reconcile_fs_watch();
         cx.notify();
     }
 
@@ -867,12 +1020,21 @@ impl AppRoot {
         self.hook_drafts.discard(key);
         self.hooks_editor.documents.remove(&key);
         self.hooks_editor.errors.remove(&key);
+        self.hooks_editor.external_modified.remove(&key);
+        self.hooks_editor.external_checks.remove(&key);
         if self.hooks_editor.saved_hint == Some(key) {
             self.hooks_editor.saved_hint = None;
         }
         self.hooks_generation = self.hooks_generation.wrapping_add(1);
+        self.reconcile_fs_watch();
         self.request_hooks_draft(key, cx);
         cx.notify();
+    }
+
+    /// 测试观测：该草稿键是否已被 watcher 标记为外部修改。
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(super) fn hooks_external_modified_for_test(&self, key: HooksDraftKey) -> bool {
+        self.hooks_editor.external_modified.contains(&key)
     }
 
     /// 测试观测：该面板是否仍持有 Hooks 文档或诊断。
