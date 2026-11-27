@@ -27,7 +27,7 @@
 | 项目重定位与导航历史恢复没有生产入口 | 待修 |
 | 启动恢复对缺失/不可解码的干净 Document 不建面板 | 已修：新增 `DocumentRecoveryKind::Unavailable` 占位与 typed 文案，未知 Document 不再 `continue` 丢面板，可由页签关闭入口移除；测试 `missing_clean_document_restores_unavailable_placeholder` |
 | Agent 根路径变更（同 id）沿用旧 ViewState | 已修：`agent_files_sync` 把「同 id 不同路径」视为移除并重登记，旧持久分区、展开目录与当前行一并清理；测试改走真实同步入口 `agent_root_path_change_resets_state_and_authorization` |
-| 授权代次在生产路径恒为零 | 已修：新增进程级 `app_shell::authorization` 代次单源，项目移除／重定位与 Agent 根变更推进代次；Document 保存、关闭保存、Explorer 重命名、Git 回滚/删除与各 PathPolicy 判定均读取真实代次，执行前重读最新值；测试 `project_relocation_advances_the_authorization_generation`、`agent_root_path_change_resets_state_and_authorization` |
+| 授权代次在生产路径恒为零 | 已修：新增进程级 `app_shell::authorization` 代次单源，项目移除／重定位与 Agent 根变更推进代次；重命名与排序不改变根路径，不再误推进代次或打断在途保存；Document 保存、关闭保存、Explorer 重命名、Git 回滚/删除与各 PathPolicy 判定均读取真实代次，执行前重读最新值；测试 `project_relocation_advances_the_authorization_generation`、`project_rename_and_reorder_keep_the_authorization_generation`、`agent_root_path_change_resets_state_and_authorization` |
 | GitShow 非法 UTF-8 的合同冲突 | 已裁决为显式编码错误：非法 UTF-8 不生成替换字符伪文本，只显示错误与系统打开；featureSpec 与 git 模块合同同步 |
 
 ## 设置、主题、导航与 Agent
@@ -54,7 +54,7 @@
 | agent.start 注入 slug 而不是 AgentCatalog 内置命令 | 已修：改注入 `kind.catalog().builtin_command`；测试 `runtime_agent_start_injects_catalog_builtin_command` |
 | Claude 无原生会话 ID 时仍生成 `--continue` | 已修：无原生会话 ID 一律返回 None；测试 `resume_commands_require_catalog_capability_and_safe_identity` |
 | 撤销状态在恢复成功前被置为 Undone | 已修：`check_undo` 只做只读预检，`undo_batch` 合并文件恢复与状态推进，成功才置 `Undone`；阻断或 I/O 失败进入 `NeedsAttention`，保留材料、不限原窗口重试且跨重启保留，`expired` 永不收割待处理批次；测试 `quarantine_undo_rechecks_deadline`、`quarantine_undo_failure_state_survives_restart_and_allows_retry`、`quarantine_undo_rejects_external_target_at_file_level` |
-| quarantine_batch 不先持久化清单，部分失败丢失材料身份 | 待修 |
+| quarantine_batch 不先持久化清单，部分失败丢失材料身份 | 已修：`quarantine_batch_with` 经可注入 I/O 端口先原子写入不可变清单（版本／批次／顺序／来源与副本路径／指纹），全部副本校验通过后才逐项删除来源；任一副本失败不删除任何来源，部分删除返回逐项阶段与已产生副本，清单可经 `load_manifest` 由启动对账读取。测试 `quarantine_manifest_is_persisted_before_touching_sources`、`quarantine_manifest_failure_touches_no_source`、`quarantine_copy_failure_keeps_all_sources_and_reports_items`、`quarantine_remove_failure_reports_completed_and_failed_items`、`quarantine_manifest_round_trips_for_startup_reconciliation` |
 | 主题身份不是 ThemeId/UUIDv7，导入冲突被自动改名 | 已修：自定义主题身份改为 `ThemeId`（UUIDv7），显示名与身份分离；内置主题无可持久身份；同身份/同名导入明确拒绝且零写入（提交 de837f97）；测试 `theme_identity_is_uuid_v7_and_independent_from_display_name`、`import_rejects_a_display_name_conflict_without_writing`、`import_rejects_an_identity_that_already_exists`、`fork_assigns_a_uuid_v7_identity_independent_from_the_name` |
 | ANSI 16–255 被持久化成第二份色表 | 已修：主题只保存 ANSI 0–15，16–255 统一经 `xterm_indexed_color` 派生，文档不再写 `terminal.indexed`（提交 997bdcc6）；测试 `extended_indexed_colors_are_derived_not_persisted`、`indexed_colors_are_derived_from_the_single_xterm_formula`、`resolve_indexed_falls_back_to_cube_and_grayscale` |
 | 设置损坏分流缺“高版本”和“权限/IO 只读重试” | 已修：设置文件带 `settings_version`，高版本回退默认值且写通道拒绝覆盖；权限/锁/IO 读取失败保留启动可用性但以 `ReadFailed` 警示，设置页提供后台重试入口，重读值先铺底、本轮待写编辑覆盖其上，写通道仍从磁盘读-合并-写且读失败即拒绝，不覆盖原文件；测试 `higher_settings_version_is_read_only_and_never_overwritten`、`settings_writes_stamp_the_current_version`、`settings_read_failure_offers_retry_and_adopts_loaded_values`、`adopting_loaded_settings_preserves_pending_edits` |

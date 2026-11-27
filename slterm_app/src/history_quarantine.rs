@@ -122,6 +122,134 @@ pub(crate) struct QuarantineBatchMaterial {
     pub(crate) entries: Vec<QuarantineEntry>,
 }
 
+/// 隔离批次的逐项失败阶段；失败项保留来源与副本供重试或导出。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum QuarantineFailurePhase {
+    Read,
+    FingerprintMismatch,
+    CopyWrite,
+    CopyVerify,
+    SourceRemove,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct QuarantineItemFailure {
+    pub(crate) entry_index: usize,
+    pub(crate) source: PathBuf,
+    pub(crate) phase: QuarantineFailurePhase,
+    pub(crate) kind: io::ErrorKind,
+}
+
+/// 批次执行结果：`material` 只含已删除来源（撤销集合），`staged` 含全部已校验副本。
+#[derive(Clone, Debug)]
+pub(crate) struct QuarantineBatchOutcome {
+    pub(crate) material: QuarantineBatchMaterial,
+    pub(crate) staged: Vec<QuarantineEntry>,
+    pub(crate) status: BatchStatus,
+    pub(crate) manifest_path: PathBuf,
+    pub(crate) failures: Vec<QuarantineItemFailure>,
+}
+
+/// 隔离清单的持久格式；清单一次写入，不做原地更新。
+pub(crate) const QUARANTINE_MANIFEST_VERSION: u32 = 1;
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct QuarantineManifest {
+    version: u32,
+    batch_id: String,
+    items: Vec<QuarantineManifestItem>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct QuarantineManifestItem {
+    order: usize,
+    source: Vec<u16>,
+    copy: Vec<u16>,
+    fingerprint: Vec<u8>,
+}
+
+fn path_to_wide(path: &Path) -> Vec<u16> {
+    use std::os::windows::ffi::OsStrExt as _;
+    path.as_os_str().encode_wide().collect()
+}
+
+fn path_from_wide(units: &[u16]) -> PathBuf {
+    use std::os::windows::ffi::OsStringExt as _;
+    PathBuf::from(std::ffi::OsString::from_wide(units))
+}
+
+/// 启动对账读取的批次清单；清单只读且不推断完成状态。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LoadedQuarantineManifest {
+    pub(crate) batch_id: QuarantineBatchId,
+    pub(crate) entries: Vec<QuarantineEntry>,
+}
+
+pub(crate) fn load_manifest(path: &Path) -> io::Result<LoadedQuarantineManifest> {
+    let bytes = std::fs::read(path)?;
+    let manifest: QuarantineManifest = serde_json::from_slice(&bytes)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    if manifest.version != QUARANTINE_MANIFEST_VERSION {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "隔离清单版本不受支持",
+        ));
+    }
+    let batch_id = uuid::Uuid::parse_str(&manifest.batch_id)
+        .map(QuarantineBatchId)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    let mut items = manifest.items;
+    items.sort_by_key(|item| item.order);
+    let entries = items
+        .into_iter()
+        .map(|item| {
+            let fingerprint: [u8; 32] = item
+                .fingerprint
+                .try_into()
+                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "隔离清单指纹长度无效"))?;
+            Ok(QuarantineEntry {
+                source: path_from_wide(&item.source),
+                copy: path_from_wide(&item.copy),
+                source_fingerprint: fingerprint,
+            })
+        })
+        .collect::<io::Result<Vec<_>>>()?;
+    Ok(LoadedQuarantineManifest { batch_id, entries })
+}
+
+/// 隔离批次的文件 I/O 端口；真实实现走原子写与真实删除，测试可注入失败。
+pub(crate) trait QuarantineIo {
+    fn ensure_store(&mut self, store: &Path) -> io::Result<()>;
+    fn read(&mut self, path: &Path) -> io::Result<Vec<u8>>;
+    fn write_copy(&mut self, path: &Path, bytes: &[u8]) -> io::Result<()>;
+    fn remove_source(&mut self, path: &Path) -> io::Result<()>;
+    fn write_manifest(&mut self, path: &Path, bytes: &[u8]) -> io::Result<()>;
+}
+
+pub(crate) struct SystemQuarantineIo;
+
+impl QuarantineIo for SystemQuarantineIo {
+    fn ensure_store(&mut self, store: &Path) -> io::Result<()> {
+        std::fs::create_dir_all(store)
+    }
+
+    fn read(&mut self, path: &Path) -> io::Result<Vec<u8>> {
+        std::fs::read(path)
+    }
+
+    fn write_copy(&mut self, path: &Path, bytes: &[u8]) -> io::Result<()> {
+        crate::atomic_file::write(path, bytes)
+    }
+
+    fn remove_source(&mut self, path: &Path) -> io::Result<()> {
+        std::fs::remove_file(path)
+    }
+
+    fn write_manifest(&mut self, path: &Path, bytes: &[u8]) -> io::Result<()> {
+        crate::atomic_file::write(path, bytes)
+    }
+}
+
 /// 单项目撤销预检失败原因；任一失败即整批零恢复。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum UndoBlockReason {
@@ -230,53 +358,136 @@ fn restore_entry(entry: &QuarantineEntry) -> io::Result<()> {
     Ok(())
 }
 
-/// 执行删除的隔离阶段：写副本并校验 → 全批复核来源指纹后删除来源。
+/// 执行删除的隔离阶段：先原子持久化不可变清单，再写副本并校验，
+/// 全部副本完整后才逐项删除来源。
 ///
-/// 副本写入或校验失败时不删除任何来源；返回材料供撤销与到期清理。
+/// 任一副本失败时不删除任何来源；部分删除失败逐项报告，已删来源进入撤销集合。
 pub(crate) fn quarantine_batch(
     store: &Path,
     id: QuarantineBatchId,
     items: &[(PathBuf, [u8; 32])],
-) -> io::Result<QuarantineBatchMaterial> {
-    std::fs::create_dir_all(store)?;
-    let mut entries = Vec::with_capacity(items.len());
-    for (index, (source, fingerprint)) in items.iter().enumerate() {
-        let bytes = std::fs::read(source)?;
-        if sha256(&bytes) != *fingerprint {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "来源指纹与确认删除时不一致",
-            ));
-        }
+) -> io::Result<QuarantineBatchOutcome> {
+    quarantine_batch_with(store, id, items, &mut SystemQuarantineIo)
+}
+
+pub(crate) fn quarantine_batch_with(
+    store: &Path,
+    id: QuarantineBatchId,
+    items: &[(PathBuf, [u8; 32])],
+    io: &mut dyn QuarantineIo,
+) -> io::Result<QuarantineBatchOutcome> {
+    io.ensure_store(store)?;
+    // 清单在任何副作用前落盘：崩溃后可按来源/副本事实逐项对账。
+    let mut planned = Vec::with_capacity(items.len());
+    for (order, (source, fingerprint)) in items.iter().enumerate() {
         let file_name = source
             .file_name()
             .and_then(|name| name.to_str())
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "来源缺少有效名称"))?;
-        let copy = store.join(format!("{}-{index}-{file_name}", id.0));
-        crate::atomic_file::write(&copy, &bytes)?;
-        if sha256(&std::fs::read(&copy)?) != *fingerprint {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "隔离副本校验失败",
-            ));
-        }
-        entries.push(QuarantineEntry {
+        let copy = store.join(format!("{}-{order}-{file_name}", id.0));
+        planned.push(QuarantineEntry {
             source: source.clone(),
             copy,
             source_fingerprint: *fingerprint,
         });
     }
-    for entry in &entries {
-        let bytes = std::fs::read(&entry.source)?;
-        if sha256(&bytes) != entry.source_fingerprint {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "来源在隔离期间被外部修改",
-            ));
+    let manifest = QuarantineManifest {
+        version: QUARANTINE_MANIFEST_VERSION,
+        batch_id: id.0.to_string(),
+        items: planned
+            .iter()
+            .enumerate()
+            .map(|(order, entry)| QuarantineManifestItem {
+                order,
+                source: path_to_wide(&entry.source),
+                copy: path_to_wide(&entry.copy),
+                fingerprint: entry.source_fingerprint.to_vec(),
+            })
+            .collect(),
+    };
+    let manifest_path = store.join(format!("{}.manifest.json", id.0));
+    let bytes = serde_json::to_vec(&manifest)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    io.write_manifest(&manifest_path, &bytes)?;
+
+    let mut staged = Vec::with_capacity(planned.len());
+    let mut failures = Vec::new();
+    for (index, entry) in planned.iter().enumerate() {
+        match stage_copy(io, entry) {
+            Ok(()) => staged.push(entry.clone()),
+            Err((phase, kind)) => failures.push(QuarantineItemFailure {
+                entry_index: index,
+                source: entry.source.clone(),
+                phase,
+                kind,
+            }),
         }
-        std::fs::remove_file(&entry.source)?;
     }
-    Ok(QuarantineBatchMaterial { id, entries })
+    // 副本完整后才允许移除来源；任一副本失败时整批来源保持不变。
+    if !failures.is_empty() {
+        return Ok(QuarantineBatchOutcome {
+            material: QuarantineBatchMaterial {
+                id,
+                entries: Vec::new(),
+            },
+            staged,
+            status: BatchStatus::NeedsAttention,
+            manifest_path,
+            failures,
+        });
+    }
+    let mut entries = Vec::with_capacity(staged.len());
+    for (index, entry) in staged.iter().enumerate() {
+        match io.remove_source(&entry.source) {
+            Ok(()) => entries.push(entry.clone()),
+            Err(error) => failures.push(QuarantineItemFailure {
+                entry_index: index,
+                source: entry.source.clone(),
+                phase: QuarantineFailurePhase::SourceRemove,
+                kind: error.kind(),
+            }),
+        }
+    }
+    let status = if failures.is_empty() {
+        BatchStatus::Completed
+    } else {
+        BatchStatus::NeedsAttention
+    };
+    Ok(QuarantineBatchOutcome {
+        material: QuarantineBatchMaterial { id, entries },
+        staged,
+        status,
+        manifest_path,
+        failures,
+    })
+}
+
+/// 单项副本阶段：读取来源、校验指纹、原子写副本并回读校验。
+fn stage_copy(
+    io: &mut dyn QuarantineIo,
+    entry: &QuarantineEntry,
+) -> Result<(), (QuarantineFailurePhase, io::ErrorKind)> {
+    let bytes = io
+        .read(&entry.source)
+        .map_err(|error| (QuarantineFailurePhase::Read, error.kind()))?;
+    if sha256(&bytes) != entry.source_fingerprint {
+        return Err((
+            QuarantineFailurePhase::FingerprintMismatch,
+            io::ErrorKind::InvalidData,
+        ));
+    }
+    io.write_copy(&entry.copy, &bytes)
+        .map_err(|error| (QuarantineFailurePhase::CopyWrite, error.kind()))?;
+    let written = io
+        .read(&entry.copy)
+        .map_err(|error| (QuarantineFailurePhase::CopyVerify, error.kind()))?;
+    if sha256(&written) != entry.source_fingerprint {
+        return Err((
+            QuarantineFailurePhase::CopyVerify,
+            io::ErrorKind::InvalidData,
+        ));
+    }
+    Ok(())
 }
 
 /// 撤销点击的重新检查结论；只有 `Allowed` 才可执行恢复动作。
@@ -488,6 +699,86 @@ mod tests {
         Sha256::digest(bytes).into()
     }
 
+    /// 内存隔离端口：记录调用顺序并按索引注入复制／删除失败。
+    #[derive(Default)]
+    struct FakeQuarantineIo {
+        files: std::sync::Mutex<std::collections::BTreeMap<PathBuf, Vec<u8>>>,
+        calls: Vec<String>,
+        fail_manifest: bool,
+        fail_copy_index: Option<usize>,
+        fail_remove_index: Option<usize>,
+        copy_count: usize,
+        remove_count: usize,
+    }
+
+    impl FakeQuarantineIo {
+        fn insert(&self, path: PathBuf, bytes: Vec<u8>) {
+            self.files.lock().unwrap().insert(path, bytes);
+        }
+
+        fn contains(&self, path: &Path) -> bool {
+            self.files.lock().unwrap().contains_key(path)
+        }
+
+        fn read_raw(&self, path: &Path) -> Option<Vec<u8>> {
+            self.files.lock().unwrap().get(path).cloned()
+        }
+
+        fn fail_copy_index(&mut self, index: usize) {
+            self.fail_copy_index = Some(index);
+        }
+
+        fn fail_remove_index(&mut self, index: usize) {
+            self.fail_remove_index = Some(index);
+        }
+    }
+
+    impl QuarantineIo for FakeQuarantineIo {
+        fn ensure_store(&mut self, _store: &Path) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn read(&mut self, path: &Path) -> io::Result<Vec<u8>> {
+            self.files
+                .lock()
+                .unwrap()
+                .get(path)
+                .cloned()
+                .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "missing"))
+        }
+
+        fn write_copy(&mut self, path: &Path, bytes: &[u8]) -> io::Result<()> {
+            let index = self.copy_count;
+            self.copy_count += 1;
+            self.calls.push(format!("copy:{}", path.display()));
+            if self.fail_copy_index == Some(index) {
+                return Err(io::Error::other("copy failed"));
+            }
+            self.insert(path.to_path_buf(), bytes.to_vec());
+            Ok(())
+        }
+
+        fn remove_source(&mut self, path: &Path) -> io::Result<()> {
+            let index = self.remove_count;
+            self.remove_count += 1;
+            self.calls.push(format!("remove:{}", path.display()));
+            if self.fail_remove_index == Some(index) {
+                return Err(io::Error::other("remove failed"));
+            }
+            self.files.lock().unwrap().remove(path);
+            Ok(())
+        }
+
+        fn write_manifest(&mut self, path: &Path, bytes: &[u8]) -> io::Result<()> {
+            self.calls.push("manifest".to_owned());
+            if self.fail_manifest {
+                return Err(io::Error::other("manifest failed"));
+            }
+            self.insert(path.to_path_buf(), bytes.to_vec());
+            Ok(())
+        }
+    }
+
     fn stage_material(
         directory: &std::path::Path,
         items: &[(&str, &str)],
@@ -591,6 +882,189 @@ mod tests {
         );
     }
 
+    /// 清单必须先落盘，之后才允许复制副本或删除来源。
+    #[test]
+    fn quarantine_manifest_is_persisted_before_touching_sources() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = directory.path().join("quarantine");
+        let sources = [
+            (directory.path().join("one.jsonl"), b"one".to_vec()),
+            (directory.path().join("two.jsonl"), b"two".to_vec()),
+        ];
+        let mut io = FakeQuarantineIo::default();
+        for (path, bytes) in &sources {
+            io.insert(path.clone(), bytes.clone());
+        }
+        let items = sources
+            .iter()
+            .map(|(path, bytes)| (path.clone(), sha(bytes)))
+            .collect::<Vec<_>>();
+
+        let outcome = quarantine_batch_with(&store, batch(30), &items, &mut io).unwrap();
+
+        assert_eq!(outcome.status, BatchStatus::Completed);
+        assert_eq!(
+            io.calls.first().map(String::as_str),
+            Some("manifest"),
+            "批次清单必须先于任何副本写入或来源删除"
+        );
+        let manifest = io
+            .read_raw(&outcome.manifest_path)
+            .expect("清单必须真实存在");
+        let manifest: serde_json::Value = serde_json::from_slice(&manifest).unwrap();
+        assert_eq!(manifest["version"], 1);
+        assert_eq!(manifest["batch_id"], batch(30).0.to_string());
+        assert_eq!(manifest["items"].as_array().unwrap().len(), 2);
+        assert_eq!(manifest["items"][0]["order"], 0);
+        assert_eq!(
+            manifest["items"][0]["fingerprint"]
+                .as_array()
+                .unwrap()
+                .len(),
+            32
+        );
+        assert_eq!(outcome.material.entries.len(), 2);
+        assert!(outcome.failures.is_empty());
+    }
+
+    /// 任一副本失败时不得删除任何来源，并返回逐项失败与已产生材料。
+    #[test]
+    fn quarantine_copy_failure_keeps_all_sources_and_reports_items() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = directory.path().join("quarantine");
+        let sources = [
+            (directory.path().join("one.jsonl"), b"one".to_vec()),
+            (directory.path().join("two.jsonl"), b"two".to_vec()),
+        ];
+        let mut io = FakeQuarantineIo::default();
+        for (path, bytes) in &sources {
+            io.insert(path.clone(), bytes.clone());
+        }
+        io.fail_copy_index(1);
+        let items = sources
+            .iter()
+            .map(|(path, bytes)| (path.clone(), sha(bytes)))
+            .collect::<Vec<_>>();
+
+        let outcome = quarantine_batch_with(&store, batch(31), &items, &mut io).unwrap();
+
+        assert_eq!(outcome.status, BatchStatus::NeedsAttention);
+        assert!(
+            outcome.material.entries.is_empty(),
+            "失败批次不属于撤销集合"
+        );
+        assert_eq!(
+            outcome.staged.len(),
+            1,
+            "已校验副本属于已产生材料，必须返回"
+        );
+        assert_eq!(outcome.failures.len(), 1);
+        assert_eq!(outcome.failures[0].phase, QuarantineFailurePhase::CopyWrite);
+        assert!(
+            !io.calls.iter().any(|call| call.starts_with("remove:")),
+            "任一副本失败时不得删除来源"
+        );
+        for (path, _) in &sources {
+            assert!(io.contains(path), "来源必须保留: {}", path.display());
+        }
+        assert!(io.read_raw(&outcome.manifest_path).is_some());
+    }
+
+    /// 清单必须可被启动对账原样读取：批次、顺序与来源/副本指纹完整。
+    #[test]
+    fn quarantine_manifest_round_trips_for_startup_reconciliation() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = directory.path().join("quarantine");
+        let sources = [
+            (directory.path().join("one.jsonl"), b"one".to_vec()),
+            (directory.path().join("two.jsonl"), b"two".to_vec()),
+        ];
+        for (path, bytes) in &sources {
+            std::fs::write(path, bytes).unwrap();
+        }
+        let items = sources
+            .iter()
+            .map(|(path, bytes)| (path.clone(), sha(bytes)))
+            .collect::<Vec<_>>();
+        let outcome = quarantine_batch(&store, batch(34), &items).unwrap();
+
+        let loaded = load_manifest(&outcome.manifest_path).unwrap();
+
+        assert_eq!(loaded.batch_id, batch(34));
+        assert_eq!(loaded.entries, outcome.material.entries);
+    }
+
+    /// 清单落盘失败必须零副作用：不复制、不删除任何来源。
+    #[test]
+    fn quarantine_manifest_failure_touches_no_source() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = directory.path().join("quarantine");
+        let sources = [(directory.path().join("one.jsonl"), b"one".to_vec())];
+        let mut io = FakeQuarantineIo::default();
+        for (path, bytes) in &sources {
+            io.insert(path.clone(), bytes.clone());
+        }
+        io.fail_manifest = true;
+        let items = sources
+            .iter()
+            .map(|(path, bytes)| (path.clone(), sha(bytes)))
+            .collect::<Vec<_>>();
+
+        let result = quarantine_batch_with(&store, batch(33), &items, &mut io);
+
+        assert!(result.is_err());
+        assert!(
+            io.calls.iter().all(|call| call == "manifest"),
+            "清单失败后不得写副本或删除来源: {:?}",
+            io.calls
+        );
+        assert!(io.contains(&sources[0].0));
+    }
+
+    /// 副本全部校验后删除来源中途失败：已删项属于撤销集合，失败项保留来源与待处理态。
+    #[test]
+    fn quarantine_remove_failure_reports_completed_and_failed_items() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = directory.path().join("quarantine");
+        let sources = [
+            (directory.path().join("one.jsonl"), b"one".to_vec()),
+            (directory.path().join("two.jsonl"), b"two".to_vec()),
+        ];
+        let mut io = FakeQuarantineIo::default();
+        for (path, bytes) in &sources {
+            io.insert(path.clone(), bytes.clone());
+        }
+        io.fail_remove_index(1);
+        let items = sources
+            .iter()
+            .map(|(path, bytes)| (path.clone(), sha(bytes)))
+            .collect::<Vec<_>>();
+
+        let outcome = quarantine_batch_with(&store, batch(32), &items, &mut io).unwrap();
+
+        assert_eq!(outcome.status, BatchStatus::NeedsAttention);
+        assert_eq!(
+            outcome.material.entries.len(),
+            1,
+            "只有已删来源进入撤销集合"
+        );
+        assert_eq!(outcome.failures.len(), 1);
+        assert_eq!(
+            outcome.failures[0].phase,
+            QuarantineFailurePhase::SourceRemove
+        );
+        assert!(!io.contains(&sources[0].0), "成功项来源已删除");
+        assert!(io.contains(&sources[1].0), "失败项来源必须保留");
+        assert!(
+            outcome
+                .material
+                .entries
+                .iter()
+                .all(|entry| io.contains(&entry.copy)),
+            "已产生副本必须保留"
+        );
+    }
+
     /// 端到端：删除形成批次 → 完成窗口内撤销恢复；窗口内外部重建时整批拒绝。
     #[test]
     fn integration_history_delete_undo() {
@@ -608,7 +1082,10 @@ mod tests {
             .map(|(path, bytes)| (path.clone(), sha(bytes)))
             .collect::<Vec<_>>();
 
-        let material = quarantine_batch(&store, batch(12), &items).unwrap();
+        let outcome = quarantine_batch(&store, batch(12), &items).unwrap();
+        assert_eq!(outcome.status, BatchStatus::Completed);
+        assert!(outcome.failures.is_empty());
+        let material = outcome.material;
         for (path, _) in &sources {
             assert!(!path.exists(), "成功隔离后来源必须删除");
         }
@@ -638,7 +1115,9 @@ mod tests {
             "成功撤销后不得再次恢复"
         );
 
-        let material = quarantine_batch(&store, batch(13), &items).unwrap();
+        let material = quarantine_batch(&store, batch(13), &items)
+            .unwrap()
+            .material;
         assert!(service.start_batch(material.id));
         assert!(service.complete_batch(material.id, at(100)));
         std::fs::write(&sources[0].0, b"external").unwrap();
