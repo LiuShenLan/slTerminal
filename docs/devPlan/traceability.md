@@ -315,7 +315,7 @@
 | 后台周期提交后按新周期运行且隐藏仍查询 | `settings_plan_schedule_commit_and_visibility`、`settings_task_interval_accepts_valid_and_rejects_out_of_range`、`settings_background_tasks_toggle_applies_and_persists` | 已自动化 |
 | 自定义根真实目录重复拒绝且删除立即撤销授权 | `agent_root_duplicate_and_revocation` | 已自动化 |
 | Hooks 外部修改时不覆盖文件或静默丢草稿 | `hooks_external_modification_guard` | 已自动化 |
-| 注入提交后清理失败显示已提交与重试 | `hooks_post_commit_cleanup_failure_is_visible` | 已自动化 |
+| 注入提交后清理失败显示已提交与重试 | `hooks_post_commit_cleanup_failure_is_visible`、`agent_hooks_cleanup_failure_offers_cleanup_only_retry`、`cleanup_reports_leftover_materials_instead_of_swallowing_errors` | 已自动化 |
 | 导入拒绝凭据／高版本且恢复默认不删凭据 Hooks | `settings_import_and_reset_preserve_secrets` | 已自动化 |
 
 ### Commit

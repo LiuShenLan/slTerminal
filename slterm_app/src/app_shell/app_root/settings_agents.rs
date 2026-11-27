@@ -18,7 +18,7 @@ use super::AppRoot;
 use super::settings_overlay::SettingsView;
 use super::task_service::{CancellationToken, TaskId};
 use crate::ai_hook::integrations::{AgentIntegration, ApplyOutcome, HookInspection, agents};
-use crate::ai_hook::{HOOK_JOURNAL_DIR, HookJournalPort};
+use crate::ai_hook::{HOOK_JOURNAL_DIR, HookCommitState, HookJournalPort};
 use crate::i18n::Message;
 
 /// 安装审查门命中后的待确认原文；命令只进入 UI，不进入日志或通知。
@@ -78,6 +78,7 @@ pub(super) fn render_agent_hooks_page(
     let mut failed = false;
     let mut enabled = Vec::new();
     let mut confirmations = Vec::new();
+    let mut cleanup_failures = Vec::new();
     let mut usage = None;
     if let Some(root) = root_entity.as_ref() {
         let root = root.read(cx);
@@ -86,6 +87,7 @@ pub(super) fn render_agent_hooks_page(
         failed = root.agent_hooks_error;
         enabled = agent_row_states(root.settings.values());
         confirmations = root.agent_hook_confirmations.clone();
+        cleanup_failures = root.agent_hook_cleanup_failures.iter().copied().collect();
         usage = root.agent_hook_usage.clone();
     }
     let usage_block = usage.map(|usage| {
@@ -207,6 +209,65 @@ pub(super) fn render_agent_hooks_page(
                                         });
                                     }),
                                 ),
+                        ),
+                )
+                .into_any_element()
+        })
+        .collect::<Vec<_>>();
+    let cleanup_blocks = cleanup_failures
+        .into_iter()
+        .map(|hook| {
+            let slug = hook.slug();
+            let retry_root = view.root.clone();
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap_3()
+                .mb_2()
+                .p_2()
+                .rounded_md()
+                .border_1()
+                .border_color(cx.theme().warning)
+                .debug_selector(move || format!("settings-agent-hook-cleanup-{slug}"))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().warning)
+                                .child(language.text(Message::SettingsAgentsCleanupPending)),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(hook.label()),
+                        ),
+                )
+                .child(
+                    div()
+                        .id(SharedString::from(format!(
+                            "settings-agent-hook-cleanup-retry-{slug}"
+                        )))
+                        .debug_selector(move || format!("settings-agent-hook-cleanup-retry-{slug}"))
+                        .text_xs()
+                        .cursor_pointer()
+                        .text_color(cx.theme().accent)
+                        .child(language.text(Message::SettingsAgentsCleanupRetry))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |_view, _, _, cx| {
+                                let Some(root_handle) = retry_root.upgrade() else {
+                                    return;
+                                };
+                                root_handle.update(cx, |root, cx| {
+                                    root.retry_agent_hook_cleanup(hook, cx);
+                                });
+                            }),
                         ),
                 )
                 .into_any_element()
@@ -352,6 +413,7 @@ pub(super) fn render_agent_hooks_page(
             )
         })
         .children(confirmation_blocks)
+        .children(cleanup_blocks)
         .child(
             div()
                 .id("settings-agents-refresh")
@@ -471,7 +533,8 @@ impl AppRoot {
         }
         #[cfg(test)]
         if let Some(apply) = self.agent_hook_apply_for_test {
-            let result = apply(hook, enabled).map(|()| ApplyOutcome::Applied);
+            let result =
+                apply(hook, enabled).map(|()| ApplyOutcome::Applied(HookCommitState::Committed));
             self.finish_agent_hook_apply(hook, restore_enabled, result, journal, cx);
             return;
         }
@@ -505,10 +568,11 @@ impl AppRoot {
     ) {
         self.tasks.complete(TaskId::AgentHookApply(hook));
         match result {
-            Ok(ApplyOutcome::Applied) => {
+            Ok(ApplyOutcome::Applied(state)) => {
                 self.agent_hooks_error = false;
                 self.agent_hook_confirmations
                     .retain(|confirmation| confirmation.hook != hook);
+                self.record_hook_commit_state(hook, state);
                 self.request_agent_hooks_inspect(cx);
                 self.refresh_user_hooks_after_install(cx);
             }
@@ -576,13 +640,14 @@ impl AppRoot {
     fn finish_agent_hook_apply_confirmed(
         &mut self,
         hook: AgentHook,
-        result: Result<(), String>,
+        result: Result<HookCommitState, String>,
         cx: &mut Context<'_, Self>,
     ) {
         self.tasks.complete(TaskId::AgentHookApply(hook));
         match result {
-            Ok(()) => {
+            Ok(state) => {
                 self.agent_hooks_error = false;
+                self.record_hook_commit_state(hook, state);
                 self.request_agent_hooks_inspect(cx);
                 self.refresh_user_hooks_after_install(cx);
             }
@@ -590,6 +655,48 @@ impl AppRoot {
         }
         self.reload_settings_snapshot(cx);
         cx.notify();
+    }
+
+    fn record_hook_commit_state(&mut self, hook: AgentHook, state: HookCommitState) {
+        if state == HookCommitState::CommittedCleanupFailed {
+            self.agent_hook_cleanup_failures.insert(hook);
+        } else {
+            self.agent_hook_cleanup_failures.remove(&hook);
+        }
+    }
+
+    /// 已提交但材料清理失败：只重试清理，不重写配置。
+    pub(super) fn retry_agent_hook_cleanup(&mut self, hook: AgentHook, cx: &mut Context<'_, Self>) {
+        #[cfg(test)]
+        if let Some(cleanup) = self.agent_hook_cleanup_for_test {
+            if cleanup(hook) {
+                self.agent_hook_cleanup_failures.remove(&hook);
+            }
+            self.reload_settings_snapshot(cx);
+            cx.notify();
+            return;
+        }
+        let cancellation = CancellationToken::new();
+        let task = cx.spawn(async move |this, cx| {
+            let clean = cx
+                .background_executor()
+                .spawn(async move { crate::ai_hook::integrations::retry_cleanup(hook) })
+                .await;
+            let _ = this.update(cx, |root, cx| {
+                root.tasks.complete(TaskId::AgentHookCleanup(hook));
+                if clean {
+                    root.agent_hook_cleanup_failures.remove(&hook);
+                }
+                root.reload_settings_snapshot(cx);
+                cx.notify();
+            });
+        });
+        if let Err(error) = self
+            .tasks
+            .register(TaskId::AgentHookCleanup(hook), cancellation, task)
+        {
+            log::warn!("agent hook 清理重试任务注册失败: {error:?}");
+        }
     }
 
     /// 取消确认：零安装，设置值回退到命中审查门之前。
@@ -643,10 +750,16 @@ impl AppRoot {
     pub(crate) fn replace_agent_hook_confirmation_for_test(
         &mut self,
         outcome: fn(AgentHook, bool) -> Result<ApplyOutcome, String>,
-        confirm: fn(AgentHook) -> Result<(), String>,
+        confirm: fn(AgentHook) -> Result<HookCommitState, String>,
     ) {
         self.agent_hook_outcome_for_test = Some(outcome);
         self.agent_hook_confirm_for_test = Some(confirm);
+    }
+
+    #[cfg(test)]
+    #[allow(dead_code)] // 消费点 = gpui 功能测试；非 UI 测试构建不引用注入端口。
+    pub(crate) fn set_agent_hook_cleanup_for_test(&mut self, cleanup: fn(AgentHook) -> bool) {
+        self.agent_hook_cleanup_for_test = Some(cleanup);
     }
 }
 

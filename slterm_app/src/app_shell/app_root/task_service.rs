@@ -101,6 +101,8 @@ pub(crate) enum TaskId {
     AgentHooksInspect,
     /// 单个 agent 的 hook 安装/卸载后台执行。
     AgentHookApply(slterm_settings::AgentHook),
+    /// 单个 agent 提交后材料清理的显式重试。
+    AgentHookCleanup(slterm_settings::AgentHook),
     /// Hooks 编辑器的磁盘载入与保存；身份含面板、CLI 与层级。
     HooksDraftLoad(crate::ai_hook::draft_host::HooksDraftKey),
     HooksDraftSave(crate::ai_hook::draft_host::HooksDraftKey),

@@ -340,7 +340,7 @@ fn remove_hooks() -> std::io::Result<bool> {
 pub(super) fn remove_claude_hooks_at(dir: &Path) -> std::io::Result<bool> {
     let path = dir.join("settings.json");
     if !path.exists() {
-        statusline::cleanup_materials(dir);
+        let _ = statusline::cleanup_materials(dir);
         return Ok(false);
     }
     let _lock = crate::atomic_file::try_lock(&path)?
@@ -363,7 +363,7 @@ pub(super) fn remove_claude_hooks_at(dir: &Path) -> std::io::Result<bool> {
             "ai_hook::remove_claude_hooks",
         )?;
     }
-    statusline::cleanup_materials(dir);
+    let _ = statusline::cleanup_materials(dir);
     Ok(changed)
 }
 

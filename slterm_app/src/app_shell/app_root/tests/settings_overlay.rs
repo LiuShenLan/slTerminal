@@ -761,12 +761,16 @@ fn agent_hooks_confirmation_gates_apply_and_cancel_reverts(cx: &mut TestAppConte
         if enabled {
             Ok(ApplyOutcome::NeedsConfirmation(vec![COMMAND.to_owned()]))
         } else {
-            Ok(ApplyOutcome::Applied)
+            Ok(ApplyOutcome::Applied(
+                crate::ai_hook::HookCommitState::Committed,
+            ))
         }
     }
-    fn confirm(hook: slterm_settings::AgentHook) -> Result<(), String> {
+    fn confirm(
+        hook: slterm_settings::AgentHook,
+    ) -> Result<crate::ai_hook::HookCommitState, String> {
         CONFIRMED.lock().unwrap().push(hook);
-        Ok(())
+        Ok(crate::ai_hook::HookCommitState::Committed)
     }
     OUTCOMES.lock().unwrap().clear();
     CONFIRMED.lock().unwrap().clear();
@@ -1677,5 +1681,87 @@ fn settings_save_failure_offers_explicit_retry(cx: &mut TestAppContext) {
     assert!(
         window.debug_bounds("settings-retry-save").is_none(),
         "成功回执后不得继续显示保存失败重试"
+    );
+}
+
+/// 提交后清理失败：保留已提交事实，只提供清理重试，不重写配置。
+#[gpui::test]
+fn agent_hooks_cleanup_failure_offers_cleanup_only_retry(cx: &mut TestAppContext) {
+    use crate::ai_hook::HookCommitState;
+    use crate::ai_hook::integrations::ApplyOutcome;
+
+    static APPLIES: std::sync::Mutex<Vec<(slterm_settings::AgentHook, bool)>> =
+        std::sync::Mutex::new(Vec::new());
+    static CLEANUPS: std::sync::Mutex<Vec<slterm_settings::AgentHook>> =
+        std::sync::Mutex::new(Vec::new());
+    fn inspect() -> Vec<crate::ai_hook::integrations::AgentIntegration> {
+        use crate::ai_hook::integrations::{AgentIntegration, HookInspection};
+        vec![AgentIntegration {
+            agent: slterm_settings::AgentHook::Claude,
+            executable: Some(std::path::PathBuf::from("claude")),
+            inspection: HookInspection {
+                available: true,
+                installed: true,
+                enabled: true,
+                ..HookInspection::default()
+            },
+        }]
+    }
+    fn outcome(hook: slterm_settings::AgentHook, enabled: bool) -> Result<ApplyOutcome, String> {
+        APPLIES.lock().unwrap().push((hook, enabled));
+        Ok(ApplyOutcome::Applied(
+            HookCommitState::CommittedCleanupFailed,
+        ))
+    }
+    fn cleanup(hook: slterm_settings::AgentHook) -> bool {
+        CLEANUPS.lock().unwrap().push(hook);
+        true
+    }
+    APPLIES.lock().unwrap().clear();
+    CLEANUPS.lock().unwrap().clear();
+
+    let (root, mut window, _state) = open_root(cx);
+    root.update(cx, |root, _| {
+        root.replace_agent_hooks_for_test(inspect, |_, _| Ok(()));
+        root.replace_agent_hook_confirmation_for_test(outcome, |_| Ok(HookCommitState::Committed));
+        root.set_agent_hook_cleanup_for_test(cleanup);
+    });
+    focus_workspace(&root, &mut window);
+    open_settings(&mut window);
+    draw_frame(&mut window);
+    let page = window.debug_bounds("settings-page-agent-basic").unwrap();
+    window.simulate_click(page.center(), Modifiers::default());
+    draw_frame(&mut window);
+
+    let toggle = window.debug_bounds("settings-agent-claude-toggle").unwrap();
+    window.simulate_click(toggle.center(), Modifiers::default());
+    draw_frame(&mut window);
+    assert!(
+        window
+            .debug_bounds("settings-agent-hook-cleanup-claude")
+            .is_some(),
+        "清理失败必须显示已提交与重试提示"
+    );
+    let retry = window
+        .debug_bounds("settings-agent-hook-cleanup-retry-claude")
+        .unwrap();
+    window.simulate_click(retry.center(), Modifiers::default());
+    draw_frame(&mut window);
+
+    assert_eq!(
+        CLEANUPS.lock().unwrap().as_slice(),
+        [slterm_settings::AgentHook::Claude],
+        "重试只走清理端口"
+    );
+    assert_eq!(
+        APPLIES.lock().unwrap().as_slice(),
+        [(slterm_settings::AgentHook::Claude, false)],
+        "清理重试不得重新安装或卸载"
+    );
+    assert!(
+        window
+            .debug_bounds("settings-agent-hook-cleanup-claude")
+            .is_none(),
+        "清理成功后提示必须消失"
     );
 }

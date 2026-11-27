@@ -243,20 +243,43 @@ pub(super) fn restore(dir: &Path, root: &mut Value) -> bool {
     changed
 }
 
-/// 设置文件已提交后清理脚本、marker 与信号；失败只留材料供下次重试。
-pub(super) fn cleanup_materials(dir: &Path) {
+/// 设置文件已提交后清理脚本、marker 与信号；尽力删除全部材料并返回首个
+/// 失败，供设置页保留「已提交但清理未完成」的重试事实。
+pub(super) fn cleanup_materials(dir: &Path) -> std::io::Result<()> {
     let signal = marker(dir).and_then(|owned| {
         owned
             .get("signal")
             .and_then(Value::as_str)
             .map(PathBuf::from)
     });
-    let _ = std::fs::remove_file(marker_path(dir));
-    let _ = std::fs::remove_file(script_path(dir));
-    if let Some(signal) = signal {
-        let _ = std::fs::remove_file(signal);
+    let mut first_error = None;
+    for path in [marker_path(dir), script_path(dir), signal_path()] {
+        remove_if_present(&path, &mut first_error);
     }
-    let _ = std::fs::remove_file(signal_path());
+    if let Some(signal) = signal {
+        remove_if_present(&signal, &mut first_error);
+    }
+    match first_error {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
+}
+
+fn remove_if_present(path: &Path, first_error: &mut Option<std::io::Error>) {
+    match std::fs::remove_file(path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            if first_error.is_none() {
+                *first_error = Some(error);
+            }
+        }
+    }
+}
+
+/// 脚本或 marker 仍然存在即视为清理未完成；信号缺少 marker 时无法定位。
+pub(super) fn materials_present(dir: &Path) -> bool {
+    marker_path(dir).exists() || script_path(dir).exists()
 }
 
 #[cfg(test)]
@@ -416,6 +439,25 @@ mod tests {
             first,
             "1 秒内重复渲染不得重写信号"
         );
+    }
+
+    #[test]
+    fn cleanup_reports_leftover_materials_instead_of_swallowing_errors() {
+        let temp = tempfile::tempdir().unwrap();
+        let dir = super::tests::dir(&temp);
+        let script = script_path(&dir);
+        std::fs::create_dir_all(&script).unwrap();
+        std::fs::write(script.join("occupied"), b"x").unwrap();
+
+        assert!(
+            cleanup_materials(&dir).is_err(),
+            "无法删除的材料必须显式失败"
+        );
+        assert!(materials_present(&dir), "残留材料必须可检测");
+
+        std::fs::remove_dir_all(&script).unwrap();
+        assert!(cleanup_materials(&dir).is_ok());
+        assert!(!materials_present(&dir));
     }
 
     #[test]

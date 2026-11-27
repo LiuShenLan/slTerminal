@@ -249,7 +249,12 @@ type AgentHookOutcomePort = fn(
 
 /// 测试注入的确认后重试端口；生产恒走后台真实安装。
 #[cfg(test)]
-type AgentHookConfirmPort = fn(slterm_settings::AgentHook) -> Result<(), String>;
+type AgentHookConfirmPort =
+    fn(slterm_settings::AgentHook) -> Result<crate::ai_hook::HookCommitState, String>;
+
+/// 测试注入的只清理端口；返回 true = 已无残留。
+#[cfg(test)]
+type AgentHookCleanupPort = fn(slterm_settings::AgentHook) -> bool;
 
 pub(crate) struct AppRoot {
     snapshot: ProjectSnapshot,
@@ -316,6 +321,8 @@ pub(crate) struct AppRoot {
     plan_balance_dialog: Option<settings_plan_balance::PlanBalanceDialog>,
     /// AgentHooks 安装审查门命中的待确认原文；按 agent 分别保留。
     agent_hook_confirmations: Vec<settings_agents::AgentHookConfirmation>,
+    /// 已提交但材料清理失败、等待只重试清理的 agent。
+    agent_hook_cleanup_failures: std::collections::BTreeSet<slterm_settings::AgentHook>,
     #[cfg(all(test, feature = "gpui-test-support"))]
     plan_balance_store_for_test:
         Option<std::sync::Arc<dyn crate::secrets::CredentialStore + Send + Sync>>,
@@ -456,6 +463,9 @@ pub(crate) struct AppRoot {
     agent_hook_outcome_for_test: Option<AgentHookOutcomePort>,
     #[cfg(test)]
     agent_hook_confirm_for_test: Option<AgentHookConfirmPort>,
+    /// 测试注入的只清理入口；生产走真实桥接材料清理。
+    #[cfg(test)]
+    agent_hook_cleanup_for_test: Option<AgentHookCleanupPort>,
     /// Hooks 编辑器的文档、在途载入与失败诊断。
     hooks_editor: hooks_page::HooksEditorState,
     /// 草稿文本同步代次：载入/保存/丢弃后自增，驱动编辑器回填。
@@ -706,6 +716,7 @@ impl AppRoot {
             plan_balance: None,
             plan_balance_dialog: None,
             agent_hook_confirmations: Vec::new(),
+            agent_hook_cleanup_failures: std::collections::BTreeSet::new(),
             #[cfg(all(test, feature = "gpui-test-support"))]
             plan_balance_store_for_test: None,
             #[cfg(all(test, feature = "gpui-test-support"))]
@@ -813,6 +824,8 @@ impl AppRoot {
             agent_hook_outcome_for_test: None,
             #[cfg(test)]
             agent_hook_confirm_for_test: None,
+            #[cfg(test)]
+            agent_hook_cleanup_for_test: None,
             hooks_editor: hooks_page::HooksEditorState::default(),
             hooks_generation: 0,
             #[cfg(test)]

@@ -399,6 +399,8 @@
       "hook_confirm_hint": "Installing rewrites or preserves these configured commands; they are written only after you confirm.",
       "hook_confirm_cancel": "Cancel",
       "context_usage": "Context usage: {percent}% ({used}/{total} tokens)",
+      "cleanup_pending": "Hook configuration committed, but temporary statusline files could not be removed. Retry cleanup; configuration will not be rewritten.",
+      "cleanup_retry": "Retry cleanup",
       "restart": "Restart the CLI after changing hook installation.",
       "apply_failed": "Hook installation failed; see logs for the redacted category.",
       "refresh_state": "Refresh hook status",

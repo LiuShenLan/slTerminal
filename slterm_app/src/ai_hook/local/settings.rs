@@ -331,7 +331,7 @@ pub(crate) fn apply_and_verify_with(
     enabled: bool,
     confirmed: bool,
     journal: Option<&super::hook_journal::HookJournalPort>,
-) -> io::Result<()> {
+) -> io::Result<crate::ai_hook::HookCommitState> {
     apply_with_confirmation(agent, enabled, confirmed, journal)?;
     let state = inspect(agent);
     if let Some(error) = state.error {
@@ -342,7 +342,30 @@ pub(crate) fn apply_and_verify_with(
             "Hook configuration could not be verified. Check file permissions and configuration, then retry.",
         ));
     }
-    Ok(())
+    // 卸载已提交后，脚本/marker 清理失败必须保留「已提交」事实并允许只重试清理。
+    let cleanup_ok = enabled || cleanup_after_commit(agent);
+    Ok(if cleanup_ok {
+        crate::ai_hook::HookCommitState::Committed
+    } else {
+        crate::ai_hook::HookCommitState::CommittedCleanupFailed
+    })
+}
+
+/// 提交后清理桥接材料；返回 true = 已无残留。
+pub(crate) fn cleanup_after_commit(agent: AgentHook) -> bool {
+    if agent != AgentHook::Claude {
+        return true;
+    }
+    let Some(dir) = claude_config_dir() else {
+        return true;
+    };
+    let _ = statusline::cleanup_materials(&dir);
+    !statusline::materials_present(&dir)
+}
+
+/// 设置页「只重试清理」入口；不重写任何配置。
+pub(crate) fn retry_cleanup(agent: AgentHook) -> bool {
+    cleanup_after_commit(agent)
 }
 
 pub(super) fn apply(agent: AgentHook, enabled: bool) -> io::Result<()> {

@@ -81,7 +81,8 @@ pub(crate) fn executable(agent: AgentHook) -> Option<PathBuf> {
 /// 安装核对结果：命中审查门时必须先取得用户对原文的确认。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ApplyOutcome {
-    Applied,
+    /// 已提交；`HookCommitState` 区分清理是否仍需重试。
+    Applied(crate::ai_hook::HookCommitState),
     NeedsConfirmation(Vec<String>),
 }
 
@@ -97,8 +98,8 @@ pub(crate) fn apply_enabled_outcome(
             return Ok(ApplyOutcome::NeedsConfirmation(commands));
         }
     }
-    apply_enabled_confirmed(hook, enabled, journal.as_ref())?;
-    Ok(ApplyOutcome::Applied)
+    let state = apply_enabled_confirmed(hook, enabled, journal.as_ref())?;
+    Ok(ApplyOutcome::Applied(state))
 }
 
 /// 用户已确认命中的原命令后重试(恒放行审查门)。
@@ -106,9 +107,14 @@ pub(crate) fn apply_enabled_confirmed(
     hook: AgentHook,
     enabled: bool,
     journal: Option<&HookJournalPort>,
-) -> Result<(), String> {
+) -> Result<crate::ai_hook::HookCommitState, String> {
     super::local::settings::apply_and_verify_with(hook, enabled, true, journal)
         .map_err(|error| error.to_string())
+}
+
+/// 只重试提交后的材料清理，不重写配置。
+pub(crate) fn retry_cleanup(hook: AgentHook) -> bool {
+    super::local::settings::retry_cleanup(hook)
 }
 
 /// 待确认的 statusLine 原文(无命中 → None)。
