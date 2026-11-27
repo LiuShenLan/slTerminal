@@ -669,12 +669,20 @@ impl SettingsView {
         let header = self.render_page_header(self.selected_page, cx);
         let runtime_panel = (self.selected_page == SettingsPageId::Application)
             .then(|| super::settings_runtime_panel::render_runtime_panel(&self.root, cx));
+        let plan_balance_panel = (self.selected_page == SettingsPageId::Application)
+            .then(|| {
+                self.root
+                    .upgrade()
+                    .map(|root| root.read(cx).render_plan_balance_summary(cx))
+            })
+            .flatten();
         div()
             .flex()
             .flex_col()
             .gap_1()
             .child(header)
             .children(runtime_panel)
+            .children(plan_balance_panel)
             .children(children)
             .into_any_element()
     }

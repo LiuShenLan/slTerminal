@@ -19,6 +19,7 @@ mod local_close;
 mod local_close_receipts;
 mod nav;
 mod navigation;
+mod plan_balance_ui;
 mod project_close;
 mod project_close_preflight;
 mod project_close_receipts;

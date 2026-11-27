@@ -49,6 +49,7 @@ mod settings_export;
 mod settings_import;
 mod settings_overlay;
 mod settings_page_header;
+mod settings_plan_balance;
 mod settings_reset;
 mod settings_runtime_panel;
 mod settings_shell;
@@ -295,6 +296,15 @@ pub(crate) struct AppRoot {
     theme_library_dialog: Option<settings_theme_library::ThemeLibraryDialog>,
     /// AgentRoot 管理对话框：自定义根增删、改名、换目录与能力开关。
     agent_roots_dialog: Option<settings_agent_roots::AgentRootsDialog>,
+    /// 套餐余量运行期协调器：状态机、凭据端口与注册表订阅。
+    plan_balance: Option<settings_plan_balance::PlanBalanceRuntime>,
+    /// 套餐凭据与结果对话框。
+    plan_balance_dialog: Option<settings_plan_balance::PlanBalanceDialog>,
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    plan_balance_store_for_test:
+        Option<std::sync::Arc<dyn crate::secrets::CredentialStore + Send + Sync>>,
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    plan_balance_fetch_for_test: Option<settings_plan_balance::PlanBalanceFetchHook>,
     /// 测试注入的自定义根保存端口；生产走统一设置写通道。
     #[cfg(all(test, feature = "gpui-test-support"))]
     agent_roots_save_for_test: Option<settings_agent_roots::AgentRootsSaveHook>,
@@ -669,6 +679,12 @@ impl AppRoot {
             cleanup_dialog: None,
             theme_library_dialog: None,
             agent_roots_dialog: None,
+            plan_balance: None,
+            plan_balance_dialog: None,
+            #[cfg(all(test, feature = "gpui-test-support"))]
+            plan_balance_store_for_test: None,
+            #[cfg(all(test, feature = "gpui-test-support"))]
+            plan_balance_fetch_for_test: None,
             #[cfg(all(test, feature = "gpui-test-support"))]
             agent_roots_save_for_test: None,
             runtime_status: settings_runtime_panel::RuntimeStatus::default(),
@@ -781,6 +797,7 @@ impl AppRoot {
         root.reconcile_fs_watch();
         root.reconcile_split_dividers(cx);
         root.reconcile_tab_scrolls(None);
+        root.start_plan_balance_runtime(cx);
         let repair_count = root.side_view_persistence.recovery_warning_count();
         if repair_count > 0 {
             cx.defer(move |cx| {

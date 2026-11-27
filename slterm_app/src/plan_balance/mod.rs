@@ -83,7 +83,7 @@ mod tests {
 }
 
 /// 套餐余额来源；每来源一个独立凭据目标，不共享 CLI 认证材料。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum PlanBalanceSource {
     DeepSeek,
     Kimi,
@@ -110,14 +110,15 @@ impl PlanBalanceSource {
 }
 
 /// 凭据只经凭据域读取；请求组装方拿到的是即用即焚句柄，不进入日志或 DTO。
+#[derive(Clone)]
 pub(crate) struct PlanBalanceCredentials {
-    store: std::sync::Arc<dyn crate::secrets::CredentialStore>,
+    store: std::sync::Arc<dyn crate::secrets::CredentialStore + Send + Sync>,
     local_root: std::path::PathBuf,
 }
 
 impl PlanBalanceCredentials {
     pub(crate) fn new(
-        store: std::sync::Arc<dyn crate::secrets::CredentialStore>,
+        store: std::sync::Arc<dyn crate::secrets::CredentialStore + Send + Sync>,
         local_root: std::path::PathBuf,
     ) -> Self {
         Self { store, local_root }

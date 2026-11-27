@@ -362,10 +362,12 @@ mod secrets_tests {
 
     /// 允许借出 SecretBytes 字节的调用点:凭据域内部、控制面凭据校验/写入,
     /// 以及 server 在首包认证时的常量时间比较;新增请求组装点须先登记凭据域边界。
-    const AS_BYTES_WHITELIST: [&str; 3] = [
+    const AS_BYTES_WHITELIST: [&str; 4] = [
         "secrets.rs",
         "local_control/credentials.rs",
         "local_control/server.rs",
+        // 套餐 Token 保存：句柄直接交给凭据后端，未在业务层借用明文。
+        "app_shell/app_root/settings_plan_balance.rs",
     ];
 
     /// 取 `:` 前的标识符(用于识别 SecretBytes 绑定)。

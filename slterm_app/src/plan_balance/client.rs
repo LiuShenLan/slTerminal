@@ -235,7 +235,7 @@ mod client_tests {
         response
     }
 
-    fn client(store: Arc<dyn CredentialStore>, endpoint: &str) -> PlanBalanceClient {
+    fn client(store: Arc<dyn CredentialStore + Send + Sync>, endpoint: &str) -> PlanBalanceClient {
         PlanBalanceClient::for_test(
             crate::plan_balance::PlanBalanceCredentials::new(
                 store,

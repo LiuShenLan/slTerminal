@@ -52,6 +52,16 @@ pub(crate) enum TaskId {
     ThemeLibraryDelete,
     /// AgentRoot 编辑：后台目录选择、真实目录查重与统一设置写盘。
     AgentRootsSave,
+    /// 套餐余量调度拍：前台按注册表周期驱动。
+    PlanBalance,
+    /// 单来源套餐查询：后台网络请求与回执。
+    PlanBalanceFetch(crate::plan_balance::PlanBalanceSource),
+    /// 套餐凭据存在性检查：后台只读凭据域。
+    PlanBalanceCredentials,
+    /// 套餐凭据保存：后台写入凭据域。
+    PlanBalanceTokenSave,
+    /// 套餐凭据删除：后台删除凭据域条目。
+    PlanBalanceTokenDelete,
     CloseFlush,
     TerminalClose(slterm_workspace::TerminalId),
     TerminalReclaim(crate::gpui_terminal::registry::TerminalTarget),
