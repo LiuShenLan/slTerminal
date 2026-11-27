@@ -5,9 +5,9 @@
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AnyElement, Context, DismissEvent, Focusable as _, InteractiveElement as _, IntoElement,
-    MouseButton, ParentElement as _, StatefulInteractiveElement as _, Styled as _, Window,
-    anchored, deferred, div, point, px,
+    AnyElement, Context, DismissEvent, FocusHandle, Focusable as _, InteractiveElement as _,
+    IntoElement, MouseButton, ParentElement as _, StatefulInteractiveElement as _, Styled as _,
+    Window, anchored, deferred, div, point, px,
 };
 use gpui_component::ActiveTheme as _;
 use gpui_component::menu::{PopupMenu, PopupMenuItem};
@@ -41,6 +41,15 @@ pub(super) struct NavHistoryRow {
 pub(super) struct NavRuntime {
     pub(super) projects: Vec<NavProjectRow>,
     sessions: Vec<NavHistoryRow>,
+}
+
+/// 未归属会话创建项目前的显式确认；只描述目标根，不预建项目或终端。
+pub(super) struct NavRestoreConfirm {
+    row: usize,
+    cwd: CanonicalPath,
+    resume: Option<String>,
+    focus_handle: FocusHandle,
+    registration: super::focus_manager::FocusRegistration,
 }
 
 impl NavRuntime {
@@ -519,8 +528,18 @@ impl AppRoot {
             return Err(super::commands::AppRootError::MissingPanel);
         };
         let Some(project_id) = row.project else {
-            // 未归属会话不得静默落到活跃项目：确认面尚未接线。
-            return Err(super::commands::AppRootError::MissingPanel);
+            let Some(cwd) = row.cwd.clone() else {
+                return Err(super::commands::AppRootError::MissingPanel);
+            };
+            match navigation::resolve_restore_project(None, &cwd) {
+                navigation::RestoreProject::RequiresConfirmation(root) => {
+                    self.open_nav_restore_confirm(index, root, row.resume.clone(), window, cx)?;
+                }
+                navigation::RestoreProject::Reuse(_) => {
+                    unreachable!("未归属会话不能复用既有项目")
+                }
+            }
+            return Ok(());
         };
         let Some(saved) = row.cwd.clone() else {
             return Err(super::commands::AppRootError::MissingPanel);
@@ -574,6 +593,223 @@ impl AppRoot {
             log::debug!("导航历史恢复任务未登记");
         }
         Ok(())
+    }
+
+    fn open_nav_restore_confirm(
+        &mut self,
+        row: usize,
+        cwd: CanonicalPath,
+        resume: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<(), super::commands::AppRootError> {
+        if self.nav_restore_confirm.is_some() {
+            return Ok(());
+        }
+        let focus_handle = cx.focus_handle();
+        let registration = self.focus_manager.register(
+            &focus_handle,
+            self.focus_manager.workspace_token(),
+            None,
+            true,
+        )?;
+        if let Err(error) = self.focus_manager.open_modal(
+            self.focus_manager.workspace_token(),
+            self.focus_manager.workspace_token(),
+            registration.token(),
+            window,
+            cx,
+        ) {
+            let _ = self.focus_manager.unregister(registration.token());
+            return Err(error.into());
+        }
+        self.nav_restore_confirm = Some(NavRestoreConfirm {
+            row,
+            cwd,
+            resume,
+            focus_handle,
+            registration,
+        });
+        cx.notify();
+        Ok(())
+    }
+
+    pub(super) fn cancel_nav_restore_confirm(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<(), super::commands::AppRootError> {
+        let Some(confirm) = self.nav_restore_confirm.take() else {
+            return Ok(());
+        };
+        let close = self.focus_manager.close_modal(window, cx);
+        let unregister = self.focus_manager.unregister(confirm.registration.token());
+        cx.notify();
+        close?;
+        unregister?;
+        Ok(())
+    }
+
+    /// 确认后经统一项目打开 FIFO 创建项目，完成回执里再建终端并注入恢复命令。
+    pub(super) fn accept_nav_restore_confirm(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<(), super::commands::AppRootError> {
+        let Some(confirm) = self.nav_restore_confirm.take() else {
+            return Ok(());
+        };
+        let close = self.focus_manager.close_modal(window, cx);
+        let unregister = self.focus_manager.unregister(confirm.registration.token());
+        cx.notify();
+        close?;
+        unregister?;
+        let cwd = confirm.cwd;
+        let target = cwd.clone();
+        let resume = confirm.resume;
+        self.open_project_with_completion(cwd, window, cx, move |result, root, window, cx| {
+            let Ok(project_id) = result else {
+                log::warn!("未归属会话创建项目失败");
+                super::events::notify_project_relocation_failed(cx);
+                return;
+            };
+            let Some(window) = window else {
+                return;
+            };
+            let panel = match root.new_terminal_from_request(
+                root.shell.clone(),
+                Some(
+                    root.snapshot
+                        .registry()
+                        .project(project_id)
+                        .expect("项目必须存在")
+                        .root()
+                        .clone(),
+                ),
+                Some(target.clone()),
+                window,
+                cx,
+            ) {
+                Ok(panel) => panel,
+                Err(error) => {
+                    log::warn!("未归属会话恢复建终端失败: {error}");
+                    super::events::notify_project_relocation_failed(cx);
+                    return;
+                }
+            };
+            let Some(command) = resume else {
+                return;
+            };
+            let Some(terminal_id) = root.terminal_identity(panel, cx) else {
+                return;
+            };
+            if let Some((_, view)) = root.terminal_panel(project_id, terminal_id, cx) {
+                view.update(cx, |view, cx| {
+                    view.schedule_agent_command(command, None, cx);
+                });
+            }
+        });
+        Ok(())
+    }
+
+    /// 未归属确认面：遮罩拦截背景命中，Escape 等同取消。
+    pub(super) fn render_nav_restore_confirm(&self, cx: &Context<'_, Self>) -> Option<AnyElement> {
+        let confirm = self.nav_restore_confirm.as_ref()?;
+        let _ = confirm.row;
+        let language = cx.global::<crate::app_shell::config::Settings>().language;
+        let detail = language.format(
+            Message::NavRestoreConfirmDetail,
+            &[("root", &confirm.cwd.as_path().display().to_string())],
+        );
+        let dialog = div()
+            .debug_selector(|| "nav-restore-confirm".to_owned())
+            .track_focus(&confirm.focus_handle)
+            .on_key_down(cx.listener(|root, event: &gpui::KeyDownEvent, window, cx| {
+                if event.keystroke.key == "escape"
+                    && let Err(error) = root.cancel_nav_restore_confirm(window, cx)
+                {
+                    log::warn!("导航恢复确认取消失败: {error:?}");
+                }
+            }))
+            .w(px(420.0))
+            .p_4()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .bg(cx.theme().background)
+            .border_1()
+            .border_color(cx.theme().border)
+            .text_color(cx.theme().foreground)
+            .child(
+                div()
+                    .text_sm()
+                    .child(language.text(Message::NavRestoreConfirmTitle)),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(detail),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .justify_end()
+                    .gap_2()
+                    .child(
+                        div()
+                            .id("nav-restore-cancel")
+                            .debug_selector(|| "nav-restore-cancel".to_owned())
+                            .cursor_pointer()
+                            .px_2()
+                            .child(language.text(Message::EditorCancel))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|root, _, window, cx| {
+                                    if let Err(error) = root.cancel_nav_restore_confirm(window, cx)
+                                    {
+                                        log::warn!("导航恢复确认取消失败: {error:?}");
+                                    }
+                                }),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .id("nav-restore-accept")
+                            .debug_selector(|| "nav-restore-accept".to_owned())
+                            .cursor_pointer()
+                            .px_2()
+                            .child(language.text(Message::NavRestoreConfirmAccept))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|root, _, window, cx| {
+                                    if let Err(error) = root.accept_nav_restore_confirm(window, cx)
+                                    {
+                                        log::warn!("导航恢复确认失败: {error:?}");
+                                    }
+                                }),
+                            ),
+                    ),
+            );
+        Some(
+            div()
+                .absolute()
+                .inset_0()
+                .occlude()
+                .bg(cx.theme().background.opacity(0.7))
+                .child(
+                    div()
+                        .absolute()
+                        .top(px(120.0))
+                        .left_0()
+                        .right_0()
+                        .flex()
+                        .justify_center()
+                        .child(dialog),
+                )
+                .into_any_element(),
+        )
     }
 
     #[allow(clippy::too_many_arguments)]

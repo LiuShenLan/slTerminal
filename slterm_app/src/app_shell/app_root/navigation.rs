@@ -75,15 +75,13 @@ pub(crate) fn restore_shell_from_program(program: Option<&str>) -> RestoreShell 
 
 pub(crate) fn restore_injection_timeout(shell: RestoreShell) -> std::time::Duration {
     match shell {
-        RestoreShell::PowerShell => std::time::Duration::from_secs(10),
+        RestoreShell::PowerShell | RestoreShell::Other => std::time::Duration::from_secs(10),
         RestoreShell::Cmd => std::time::Duration::from_millis(500),
-        RestoreShell::Other => std::time::Duration::from_millis(500),
     }
 }
 
 /// 历史恢复的项目落点：未归属时必须先展示目标根并取得交互确认。
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[allow(dead_code)] // 消费点归历史恢复任务与导航视图。
 pub(super) enum RestoreProject {
     /// 已词法归属既有项目，直接复用。
     Reuse(ProjectId),
@@ -91,7 +89,6 @@ pub(super) enum RestoreProject {
     RequiresConfirmation(CanonicalPath),
 }
 
-#[allow(dead_code)] // 消费点归历史恢复任务与导航视图。
 pub(super) fn resolve_restore_project(
     attributed: Option<ProjectId>,
     unowned_root: &CanonicalPath,
@@ -215,7 +212,8 @@ mod tests {
         );
         assert_eq!(
             restore_injection_timeout(RestoreShell::Other),
-            Duration::from_millis(500)
+            Duration::from_secs(10),
+            "未知程序按上限等待，不得过早注入"
         );
         assert_eq!(
             restore_shell_from_program(Some("C:/Program Files/PowerShell/7/pwsh.exe")),

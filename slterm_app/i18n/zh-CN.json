@@ -656,6 +656,9 @@
     "relocate_pending_title": "重定位项目根？",
     "relocate_hooks_pending": "该项目有未提交的 Hooks 草稿；重定位前必须先丢弃。",
     "relocate_discard": "丢弃草稿并重定位",
-    "relocate_failed": "项目根重定位失败。"
+    "relocate_failed": "项目根重定位失败。",
+    "restore_confirm_title": "为该会话创建项目？",
+    "restore_confirm_detail": "目标根：{root}",
+    "restore_confirm_accept": "创建项目并恢复"
   }
 }

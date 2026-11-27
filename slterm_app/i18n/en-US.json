@@ -656,6 +656,9 @@
     "relocate_pending_title": "Relocate project root?",
     "relocate_hooks_pending": "This project has unsaved Hooks drafts; discard them before relocating.",
     "relocate_discard": "Discard drafts and relocate",
-    "relocate_failed": "The project root could not be relocated."
+    "relocate_failed": "The project root could not be relocated.",
+    "restore_confirm_title": "Create a project for this session?",
+    "restore_confirm_detail": "Target root: {root}",
+    "restore_confirm_accept": "Create project and resume"
   }
 }

@@ -268,6 +268,7 @@ pub(crate) struct AppRoot {
     /// 导航历史行：扫描结果与词法归属，不进入持久状态。
     nav_history: Vec<nav::NavHistoryRow>,
     nav_history_generation: u64,
+    nav_restore_confirm: Option<nav::NavRestoreConfirm>,
     /// 重定位事务在途：候选根尚未被事务确认，其他快照命令不得覆盖。
     project_relocation_in_flight: Option<ProjectId>,
     /// 已选定新根、等待 Hooks 草稿处置的重定位目标。
@@ -618,6 +619,7 @@ impl AppRoot {
             nav_project_menu: None,
             nav_history: Vec::new(),
             nav_history_generation: 0,
+            nav_restore_confirm: None,
             project_relocation_in_flight: None,
             pending_project_relocation: None,
             panel_ids,

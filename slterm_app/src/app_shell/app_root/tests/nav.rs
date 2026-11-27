@@ -351,3 +351,143 @@ fn nav_history_restore_opens_terminal_with_resume_command(cx: &mut TestAppContex
         });
     });
 }
+
+fn scan_unowned_session(
+    cx: &mut TestAppContext,
+) -> (Entity<AppRoot>, VisualTestContext, tempfile::TempDir) {
+    use crate::platform::windows_integration::FakeWindowsIntegration;
+    use std::sync::Arc;
+
+    let temp = tempfile::tempdir().unwrap();
+    let project_dir = temp.path().join("project");
+    let unowned = temp.path().join("unowned");
+    std::fs::create_dir_all(&project_dir).unwrap();
+    std::fs::create_dir_all(&unowned).unwrap();
+    let home = temp.path().join("home");
+    let claude = home.join(".claude").join("projects").join("D--unowned");
+    std::fs::create_dir_all(&claude).unwrap();
+    std::fs::write(
+        claude.join("unowned-session.jsonl"),
+        serde_json::json!({
+            "type": "summary",
+            "summary": "未归属任务",
+            "cwd": unowned.to_str().unwrap(),
+        })
+        .to_string()
+            + "\n",
+    )
+    .unwrap();
+    let home_guard = crate::ai_sessions::HomeEnvGuard::set(&home);
+    let windows = Arc::new(FakeWindowsIntegration::default());
+    let (root, mut window) = open_root_with_windows(cx, AppRootPersistence::empty(None), windows);
+    add_project(&root, &mut window, PROJECT_A, project_dir.to_str().unwrap());
+    for _ in 0..6 {
+        window.run_until_parked();
+        cx.run_until_parked();
+    }
+    drop(home_guard);
+    (root, window, temp)
+}
+
+/// 未归属会话必须先显示目标根确认，不得静默落到活跃项目。
+#[gpui::test]
+fn unowned_history_requires_explicit_confirmation(cx: &mut TestAppContext) {
+    let (root, mut window, _temp) = scan_unowned_session(cx);
+    let index = root.read_with(cx, |root, _| {
+        root.nav_history
+            .iter()
+            .position(|row| row.title == "未归属任务")
+            .expect("扫描必须发现未归属会话")
+    });
+    let projects_before = root.read_with(cx, |root, _| root.snapshot().registry().projects().len());
+    let terminals_before = root.read_with(cx, |root, _| root.snapshot().terminals().count());
+
+    window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.handle_nav_restore_history(index, window, cx).unwrap();
+        });
+    });
+    draw_frame(&mut window);
+    assert!(
+        root.read_with(cx, |root, _| root.nav_restore_confirm.is_some()),
+        "未归属会话必须打开确认面"
+    );
+    assert!(
+        window.debug_bounds("nav-restore-confirm").is_some(),
+        "确认面必须真实绘制"
+    );
+    assert_eq!(
+        root.read_with(cx, |root, _| root.snapshot().registry().projects().len()),
+        projects_before,
+        "确认前不得创建项目"
+    );
+    assert_eq!(
+        root.read_with(cx, |root, _| root.snapshot().terminals().count()),
+        terminals_before,
+        "确认前不得创建终端"
+    );
+
+    window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.cancel_nav_restore_confirm(window, cx).unwrap();
+        });
+    });
+    assert!(root.read_with(cx, |root, _| root.nav_restore_confirm.is_none()));
+    assert_eq!(
+        root.read_with(cx, |root, _| root.snapshot().registry().projects().len()),
+        projects_before,
+        "取消不得创建项目"
+    );
+}
+
+/// 确认后才创建项目与终端，并注入恢复命令。
+#[gpui::test]
+fn unowned_history_confirm_creates_project_and_terminal(cx: &mut TestAppContext) {
+    let (root, mut window, temp) = scan_unowned_session(cx);
+    let unowned = temp.path().join("unowned");
+    let index = root.read_with(cx, |root, _| {
+        root.nav_history
+            .iter()
+            .position(|row| row.title == "未归属任务")
+            .expect("扫描必须发现未归属会话")
+    });
+    window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.handle_nav_restore_history(index, window, cx).unwrap();
+        });
+    });
+    window.update(|window, cx| {
+        root.update(cx, |root, cx| {
+            root.accept_nav_restore_confirm(window, cx).unwrap();
+        });
+    });
+    for _ in 0..8 {
+        window.run_until_parked();
+        cx.run_until_parked();
+    }
+
+    root.read_with(cx, |root, cx| {
+        let project = root
+            .snapshot()
+            .registry()
+            .projects()
+            .iter()
+            .find(|project| project.root().as_path() == unowned.as_path())
+            .expect("确认后必须创建目标根项目");
+        let terminal = root
+            .snapshot()
+            .terminals()
+            .find(|terminal| terminal.project_id() == project.id())
+            .expect("确认后必须创建终端");
+        assert_eq!(terminal.cwd().as_path(), unowned.as_path());
+        let (_, view) = root
+            .terminal_panel(project.id(), terminal.id(), cx)
+            .expect("恢复终端面板必须存在");
+        view.read_with(cx, |view, _| {
+            assert!(
+                view.has_pending_agent_command_for_test(),
+                "未归属恢复同样必须注入恢复命令"
+            );
+        });
+    });
+}

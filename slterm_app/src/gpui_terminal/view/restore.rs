@@ -174,7 +174,7 @@ mod tests {
             );
             assert_eq!(
                 restore_injection_timeout(RestoreShell::Other),
-                Duration::from_millis(500)
+                Duration::from_secs(10)
             );
         }
     }
