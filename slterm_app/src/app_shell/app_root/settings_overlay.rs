@@ -1298,7 +1298,34 @@ impl Render for SettingsView {
                                     .py_1()
                                     .child(Input::new(&self.nav_filter)),
                             )
-                            .child(page_list),
+                            .child(page_list)
+                            .child(div().flex_grow(1.0))
+                            .child(
+                                div()
+                                    .id("settings-restore-all")
+                                    .debug_selector(|| "settings-restore-all".to_owned())
+                                    .mx_2()
+                                    .mb_1()
+                                    .px_2()
+                                    .py_1()
+                                    .text_xs()
+                                    .cursor_pointer()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|_view, _, _, cx| {
+                                            let root = _view.root.clone();
+                                            let _ = root.update(cx, |root, cx| {
+                                                root.restore_all_settings_defaults(cx);
+                                            });
+                                        }),
+                                    )
+                                    .child(
+                                        cx.global::<crate::app_shell::config::Settings>()
+                                            .language
+                                            .text(crate::i18n::Message::SettingsRestoreAll),
+                                    ),
+                            ),
                     )
                     .child(
                         div()
@@ -1558,35 +1585,6 @@ impl AppRoot {
         cx.notify();
     }
 
-    /// 页级恢复默认：字段回到注册表缺省，平台键同步落地。
-    pub(super) fn restore_settings_page_defaults(
-        &mut self,
-        page: SettingsPageId,
-        cx: &mut Context<'_, Self>,
-    ) {
-        let now = Instant::now();
-        let mut changed = false;
-        for field in fields_for_page(page) {
-            changed |= self.settings.clear_auto(field.key, now);
-            if field.key == "launch_at_login" {
-                let default = SettingsRegistry::new()
-                    .lookup(field.key)
-                    .and_then(|def| def.default_value());
-                let enabled = default.is_some_and(|value| matches!(value, Value::Bool(true)));
-                if let Err(error) = self.windows.set_login_start(enabled) {
-                    log::warn!("恢复开机启动默认值失败: {error}");
-                }
-            }
-        }
-        if !changed {
-            return;
-        }
-        self.reload_settings_snapshot(cx);
-        self.bump_settings_revision();
-        self.notify_settings_views(cx);
-        cx.notify();
-    }
-
     /// 后台任务配置：只经外部段整段写回，并立即热应用到运行期原子量。
     pub(super) fn apply_background_task_field(
         &mut self,
@@ -1719,7 +1717,7 @@ impl AppRoot {
         });
     }
 
-    fn bump_settings_revision(&mut self) {
+    pub(super) fn bump_settings_revision(&mut self) {
         self.settings_revision = self.settings_revision.wrapping_add(1);
     }
 

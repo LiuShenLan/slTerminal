@@ -639,7 +639,8 @@
       "adjust_sidebar_ratio_up_large": "大幅上移侧栏分隔",
       "adjust_sidebar_ratio_down_large": "大幅下移侧栏分隔",
       "reset_sidebar_ratio": "重置侧栏比例"
-    }
+    },
+    "restore_all": "恢复所有设置默认"
   },
   "notify": {
     "bell": "终端响铃",

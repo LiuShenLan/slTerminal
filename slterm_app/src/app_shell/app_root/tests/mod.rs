@@ -33,6 +33,7 @@ mod runtime_parity;
 mod runtime_reads;
 mod runtime_snapshot;
 mod settings_overlay;
+mod settings_pages;
 mod shared_edits;
 mod sidebar;
 mod tabs;

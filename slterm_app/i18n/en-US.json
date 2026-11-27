@@ -639,7 +639,8 @@
       "adjust_sidebar_ratio_up_large": "Move sidebar divider up a lot",
       "adjust_sidebar_ratio_down_large": "Move sidebar divider down a lot",
       "reset_sidebar_ratio": "Reset sidebar ratio"
-    }
+    },
+    "restore_all": "Reset all settings"
   },
   "notify": {
     "bell": "Terminal bell",
