@@ -271,17 +271,18 @@
 | 导航移除项目经统一守卫与删除意图 | `navigation_project_remove_uses_workspace_guard` | 已自动化 |
 | 根重定位检查冲突与 Hooks 且保持既有 PTY cwd | `navigation_relocation_guards_and_reassigns_history` | 已自动化 |
 | 嵌套或暂不可访问根仍按词法最深匹配归属 | `navigation_history_lexical_deepest_match` | 已自动化 |
-| 未归属历史恢复新项目前先确认目标根 | `navigation_unowned_restore_requires_project_confirmation` | 已自动化 |
-| 历史 cwd 失效可回退且注入失败不重复建终端 | `navigation_restore_fallback_and_injection_retry` | 已自动化 |
-| 连续删除的隔离批次期限彼此独立 | `quarantine_batches_have_independent_deadlines` | 已自动化 |
-| 撤销点击时重新检查绝对期限与批次状态 | `quarantine_undo_rechecks_deadline` | 已自动化 |
-| 删除后重启仍保留未到期撤销窗口 | `quarantine_restart_preserves_undo_window` | 已自动化 |
-| 完成提交前异常退出先对账来源与副本 | `quarantine_startup_reconciles_incomplete_batch` | 已自动化 |
-| 撤销目标外部新增或修改时不覆盖且保留材料 | `quarantine_undo_rejects_external_target` | 已自动化 |
+| 未归属历史恢复新项目前先确认目标根 | `navigation_unowned_restore_requires_project_confirmation`、`unowned_history_requires_explicit_confirmation`、`unowned_history_confirm_creates_project_and_terminal` | 已自动化 |
+| 历史 cwd 失效可回退且注入失败不重复建终端 | `navigation_restore_fallback_and_injection_retry`、`nav_history_restore_opens_terminal_with_resume_command`、`explicit_agent_injection_reports_failure_without_a_worker` | 已自动化 |
+| 连续删除的隔离批次期限彼此独立 | `quarantine_batches_have_independent_deadlines` | 待实现 |
+| 撤销点击时重新检查绝对期限与批次状态 | `quarantine_undo_rechecks_deadline` | 待实现 |
+| 删除后重启仍保留未到期撤销窗口 | `quarantine_restart_preserves_undo_window` | 待实现 |
+| 完成提交前异常退出先对账来源与副本 | `quarantine_startup_reconciles_incomplete_batch` | 待实现 |
+| 撤销目标外部新增或修改时不覆盖且保留材料 | `quarantine_undo_rejects_external_target` | 待实现 |
 | 套餐只使用专用 Windows 凭据且材料不含 token | `plan_balance_uses_dedicated_credential` | 已自动化 |
 | 导航隐藏时套餐继续调度且退出后停止 | `plan_balance_runs_while_navigation_hidden`、`plan_balance_auto_tick_runs_without_navigation_and_stops_on_exit` | 已自动化 |
-| 错过完整周期后才标记套餐结果过期 | `plan_balance_stale_after_full_period` | 已自动化 |
-| 导航瞬态清除而未到期隔离批次按规则恢复 | `navigation_transient_and_quarantine_restore` | 已自动化 |
+| 错过完整周期后才标记套餐结果过期 | `plan_balance_stale_after_full_period_and_loading_rules`、`plan_balance_stale_is_visible_from_the_settings_page` | 已自动化 |
+| 导航搜索与选中态清除且滚动／展开按规则恢复 | `side_view_load_restores_existing_private_state`、`side_view_drop_saves_and_reopen_restores_persistent_state` | 已自动化 |
+| 未到期隔离批次按规则恢复 | `navigation_transient_and_quarantine_restore` | 待实现 |
 
 ### 侧栏框架
 

@@ -273,7 +273,7 @@
 | 问题 | 状态 |
 |---|---|
 | 追溯矩阵引用不存在的测试例名 | 已修：8 个失效锚改为真实例名（`integration_encrypted_backup_round_trips_without_touching_disk`、`interrupted_apply_is_rolled_back_on_restart`、`maintenance_restore_leaves_credentials_and_unlisted_files_untouched`、`integration_commit_rollback`、`agent_root_default_capabilities`、`path_file_identity_deduplicates_document` 等），硬链接别名补真实 AppRoot 用例 `path_file_identity_deduplicates_document`；新增 `scripts/check_traceability.py` 门禁与自测 `test_traceability.py`，已自动化行锚点必须解析到源码唯一测试函数 |
-| 部分矩阵例名存在，但覆盖的不是声明场景 | 待修 |
+| 部分矩阵例名存在，但覆盖的不是声明场景 | 已修：导航未归属确认与恢复改引产品级 `unowned_history_requires_explicit_confirmation`、`unowned_history_confirm_creates_project_and_terminal`、`nav_history_restore_opens_terminal_with_resume_command`；套餐过期改引服务层完整规则 `plan_balance_stale_after_full_period_and_loading_rules` 与 AppRoot／设置页产品级 `plan_balance_stale_is_visible_from_the_settings_page`（注入时钟，保留旧结果、标记 stale）；导航瞬态／滚动恢复改引 `side_view_load_restores_existing_private_state`、`side_view_drop_saves_and_reopen_restores_persistent_state`；设置页恢复用例已改用当前页面模型（Terminal／Appearance／Hooks）并断言失效页回退；未接线的历史隔离批次行从「已自动化」降为「待实现」 |
 | 全量验收锚以源码字符串和局部状态代替跨域行为 | 待修 |
 | 测试豁免表含失效设计路径、目标态待实现项与超范围无障碍项 | 已修：失效例名改为真实锚（`spawn_lock_serializes_capacity_check_and_reservation` 等），删除已退役 restore ticket 与不存在数学用例；观感段改用现行 featureSpec／design 路径与真实兜底例名，删除范围外的读屏无障碍行；追溯矩阵新增“人工豁免场景”分区引用豁免行 |
 | 架构总览与常驻规则仍使用旧栈数据名、类型名与已取消的校验 | 已修：根规则改指真实类型 `PanelContent`/`ViewKeyKind`/`ProjectLayout`；overview ownership 表补齐全部 workspace 成员，数据文件改为实际的 `settings.json`／`workspace.db`／`workspace.backup.db`／`learning.db`／`themes/` 等 |

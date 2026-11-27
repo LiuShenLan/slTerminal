@@ -307,3 +307,73 @@ fn plan_balance_auto_tick_runs_without_navigation_and_stops_on_exit(cx: &mut Tes
         "窗口销毁后自动调度必须停止"
     );
 }
+
+struct ManualClock(std::sync::Mutex<std::time::SystemTime>);
+
+impl crate::plan_balance::service::Clock for ManualClock {
+    fn now(&self) -> std::time::SystemTime {
+        *self.0.lock().unwrap()
+    }
+}
+
+/// 错过完整周期后，运行期视图同时保留旧结果并标记过期；设置页消费同一视图。
+#[gpui::test]
+fn plan_balance_stale_is_visible_from_the_settings_page(cx: &mut TestAppContext) {
+    let start = Duration::from_secs(1_000);
+    let clock = Arc::new(ManualClock(Mutex::new(std::time::UNIX_EPOCH + start)));
+    let store = Arc::new(MemoryCredentialStore::default());
+    let target = PlanBalanceSource::DeepSeek.credential_target(std::path::Path::new(""));
+    store.store(&target, b"sk-test-plan-token").unwrap();
+    let (root, mut window, _state) = open_root(cx);
+    root.update(cx, |root, _| {
+        root.set_plan_balance_store_for_test(store);
+        root.set_plan_balance_clock_for_test(clock.clone());
+        root.set_plan_balance_fetch_for_test(Arc::new(|_| {
+            Ok(PlanBalanceInfo {
+                frozen: false,
+                amount: Some(AmountInfo {
+                    value: "7.00".to_owned(),
+                    currency: "CNY".to_owned(),
+                }),
+                windows: None,
+            })
+        }));
+    });
+    root.update(cx, |root, cx| {
+        root.restart_plan_balance_runtime_for_test(cx)
+    });
+    wait_until(&root, &mut window, cx, |root| {
+        root.plan_balance_configured(PlanBalanceSource::DeepSeek)
+    });
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        window
+            .executor()
+            .advance_clock(Duration::from_millis(1_100));
+        window.run_until_parked();
+        cx.run_until_parked();
+        if root.read_with(cx, |root, _| {
+            root.plan_balance_view(PlanBalanceSource::DeepSeek)
+                .is_some_and(|view| view.result.is_some())
+        }) {
+            break;
+        }
+        assert!(Instant::now() < deadline, "套餐首次查询未在节拍内完成");
+        std::thread::sleep(Duration::from_millis(25));
+    }
+
+    *clock.0.lock().unwrap() = std::time::UNIX_EPOCH + start + Duration::from_secs(61);
+    let view = root
+        .read_with(cx, |root, _| {
+            root.plan_balance_view(PlanBalanceSource::DeepSeek)
+        })
+        .unwrap();
+    assert!(view.stale, "错过完整周期必须标记过期");
+    assert!(view.result.is_some(), "过期只标记状态，不得清空旧结果");
+
+    open_plan_balance(&root, &mut window);
+    assert!(
+        window.debug_bounds("settings-plan-balance").is_some(),
+        "设置页必须消费同一过期视图"
+    );
+}

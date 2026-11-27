@@ -328,6 +328,8 @@ pub(crate) struct AppRoot {
         Option<std::sync::Arc<dyn crate::secrets::CredentialStore + Send + Sync>>,
     #[cfg(all(test, feature = "gpui-test-support"))]
     plan_balance_fetch_for_test: Option<settings_plan_balance::PlanBalanceFetchHook>,
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    plan_balance_clock_for_test: Option<std::sync::Arc<dyn crate::plan_balance::service::Clock>>,
     /// 测试注入的自定义根保存端口；生产走统一设置写通道。
     #[cfg(all(test, feature = "gpui-test-support"))]
     agent_roots_save_for_test: Option<settings_agent_roots::AgentRootsSaveHook>,
@@ -721,6 +723,8 @@ impl AppRoot {
             plan_balance_store_for_test: None,
             #[cfg(all(test, feature = "gpui-test-support"))]
             plan_balance_fetch_for_test: None,
+            #[cfg(all(test, feature = "gpui-test-support"))]
+            plan_balance_clock_for_test: None,
             #[cfg(all(test, feature = "gpui-test-support"))]
             agent_roots_save_for_test: None,
             runtime_status: settings_runtime_panel::RuntimeStatus::default(),

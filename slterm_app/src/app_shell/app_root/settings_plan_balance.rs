@@ -20,7 +20,9 @@ use super::focus_manager::FocusRegistration;
 use super::task_service::{CancellationToken, TaskId};
 use crate::i18n::Message;
 use crate::plan_balance::client::{PlanBalanceClient, PlanBalanceError};
-use crate::plan_balance::service::{FetchToken, PlanBalanceService, PlanBalanceView, SystemClock};
+use crate::plan_balance::service::{
+    Clock, FetchToken, PlanBalanceService, PlanBalanceView, SystemClock,
+};
 use crate::plan_balance::{PlanBalanceCredentials, PlanBalanceInfo, PlanBalanceSource};
 use crate::secrets::CredentialStore;
 
@@ -32,6 +34,7 @@ pub(super) struct PlanBalanceRuntime {
     local_root: std::path::PathBuf,
     configured: [bool; 2],
     configured_refresh_pending: bool,
+    clock: Arc<dyn Clock>,
     _subscription: crate::background_tasks::TaskSubscription,
 }
 
@@ -123,8 +126,16 @@ impl AppRoot {
                     .to_path_buf()
             }
         };
+        #[cfg(all(test, feature = "gpui-test-support"))]
+        let clock = self
+            .plan_balance_clock_for_test
+            .clone()
+            .unwrap_or_else(|| Arc::new(SystemClock));
+        #[cfg(not(all(test, feature = "gpui-test-support")))]
+        let clock: Arc<dyn Clock> = Arc::new(SystemClock);
         self.plan_balance = Some(PlanBalanceRuntime {
-            service: PlanBalanceService::new(Arc::new(SystemClock)),
+            service: PlanBalanceService::new(clock.clone()),
+            clock,
             credentials: PlanBalanceCredentials::new(store.clone(), local_root.clone()),
             store,
             local_root,
@@ -202,7 +213,7 @@ impl AppRoot {
             crate::background_tasks::PLAN_BALANCE,
         ));
         runtime.service.apply_settings(enabled, Some(period));
-        let now = SystemTime::now();
+        let now = runtime.clock.now();
         let due = runtime.service.due(now);
         let configured = runtime.configured;
         let mut tokens = Vec::new();
@@ -229,6 +240,10 @@ impl AppRoot {
         let fetch_override = self.plan_balance_fetch_for_test.clone();
         #[cfg(not(all(test, feature = "gpui-test-support")))]
         let fetch_override: Option<PlanBalanceFetchHook> = None;
+        let clock = self
+            .plan_balance
+            .as_ref()
+            .map(|runtime| runtime.clock.clone());
         let fetched = cx.background_spawn(async move {
             match fetch_override {
                 Some(fetch) => fetch(source),
@@ -238,7 +253,7 @@ impl AppRoot {
         let id = TaskId::PlanBalanceFetch(source);
         let task = cx.spawn(async move |this, cx| {
             let result = fetched.await;
-            let now = SystemTime::now();
+            let now = clock.map_or_else(SystemTime::now, |clock| clock.now());
             let _ = this.update(cx, |root, cx| {
                 root.tasks.complete(id);
                 if let Some(runtime) = root.plan_balance.as_mut() {
@@ -263,6 +278,11 @@ impl AppRoot {
     #[cfg(all(test, feature = "gpui-test-support"))]
     pub(crate) fn set_plan_balance_fetch_for_test(&mut self, fetch: PlanBalanceFetchHook) {
         self.plan_balance_fetch_for_test = Some(fetch);
+    }
+
+    #[cfg(all(test, feature = "gpui-test-support"))]
+    pub(crate) fn set_plan_balance_clock_for_test(&mut self, clock: Arc<dyn Clock>) {
+        self.plan_balance_clock_for_test = Some(clock);
     }
 
     /// 测试：替换凭据/查询端后重建协调器（旧订阅与调度任务一并回收）。
@@ -550,7 +570,7 @@ impl AppRoot {
     /// 单来源只读视图；未启动运行期时返回 None。
     pub(super) fn plan_balance_view(&self, source: PlanBalanceSource) -> Option<PlanBalanceView> {
         let runtime = self.plan_balance.as_ref()?;
-        Some(runtime.service.view(source, SystemTime::now()))
+        Some(runtime.service.view(source, runtime.clock.now()))
     }
 
     pub(super) fn plan_balance_configured(&self, source: PlanBalanceSource) -> bool {
